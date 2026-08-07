@@ -15,16 +15,17 @@ const BROWSE_LINKS = [
 ];
 
 function ParrotMark() {
-  return (
-    <img src="/brand/ggparrot-mark.svg" alt="" width="28" height="28" />
-  );
+  return <img src="/brand/ggparrot-sal-mark.png" alt="" width="42" height="42" />;
 }
 
 export function BrandLink({ onClick, className = "" }) {
   return (
     <NavLink to="/" onClick={onClick} className={`site-brand text-slate-900 ${className}`} aria-label="껄무새 메인">
       <span className="site-brand-mark" aria-hidden="true"><ParrotMark /></span>
-      <span className="brand-word">껄무새</span>
+      <span className="brand-word">
+        <strong>껄무새</strong>
+        <small className="num">GGPARROT</small>
+      </span>
     </NavLink>
   );
 }

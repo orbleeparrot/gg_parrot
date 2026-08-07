@@ -199,6 +199,7 @@ function RouteLoading() {
 export default function App() {
   const { pathname } = useLocation();
   const isHome = pathname === "/";
+  const isNews = pathname === "/news";
   const authShell = ["/login", "/forgot", "/reset"].includes(pathname);
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const menuButtonRef = useRef(null);
@@ -228,7 +229,11 @@ export default function App() {
         <main
           id="main-content"
           tabIndex={-1}
-          className={isHome ? "home-main" : "max-w-6xl mx-auto px-5 sm:px-6 py-6 sm:py-8"}
+          className={isHome
+            ? "home-main"
+            : isNews
+              ? "news-main py-6 sm:py-8"
+              : "max-w-6xl mx-auto px-5 sm:px-6 py-6 sm:py-8"}
         >
           <RouteChangeEffects />
           <Suspense fallback={<RouteLoading />}>

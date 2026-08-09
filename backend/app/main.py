@@ -10,7 +10,7 @@ import os
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from fastapi import FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -45,6 +45,7 @@ from . import points as points_mod
 from . import account as account_mod
 from . import challenge as challenge_mod
 from . import runner as runner_mod
+from . import user_macros as user_macros_mod
 from fastapi import Depends
 from .db import User
 # [차후 도입] 고래 동향 — app/whales.py 는 그대로 두고 라우트만 꺼둡니다.
@@ -193,6 +194,11 @@ class BundleRequest(BaseModel):
     macro: Macro
 
 
+class UserMacroSaveRequest(BaseModel):
+    macro: Macro
+    name: str = ""
+
+
 # --- 매크로 실행기(로컬 exe) 연동 모델 ---------------------------------
 class RunnerStartRequest(BaseModel):
     symbol: str
@@ -222,6 +228,15 @@ class RunnerStoppedRequest(BaseModel):
 
 class RunnerStopRequest(BaseModel):
     mode: str  # stop_only | close_and_stop
+
+
+class RunnerLaunchTicketCreateRequest(BaseModel):
+    user_macro_id: int
+    testnet: Literal[True] = True
+
+
+class RunnerLaunchTicketClaimRequest(BaseModel):
+    ticket: str
 
 
 class LeaderboardRegisterRequest(BaseModel):
@@ -291,8 +306,36 @@ def me_dashboard(user: User = Depends(auth_mod.current_user)) -> dict:
     return d
 
 
+@app.get("/api/me/macros")
+def me_macros(user: User = Depends(auth_mod.current_user)) -> dict:
+    """Stable macro snapshots owned by the logged-in account."""
+    return user_macros_mod.list_macros(user.id)
+
+
+@app.get("/api/me/macros/{macro_id}")
+def me_macro_get(macro_id: int, user: User = Depends(auth_mod.current_user)) -> dict:
+    return user_macros_mod.get_macro(user.id, macro_id)
+
+
+@app.post("/api/me/macros")
+def me_macro_save(req: UserMacroSaveRequest, user: User = Depends(auth_mod.current_user)) -> dict:
+    """Validate and save an uploaded/builder macro into the account library."""
+    return {"item": user_macros_mod.save_upload(user.id, req.macro, req.name)}
+
+
+@app.post("/api/me/macros/from-leaderboard/{entry_id}")
+def me_macro_from_leaderboard(
+    entry_id: int,
+    user: User = Depends(auth_mod.current_user),
+) -> dict:
+    return {"item": user_macros_mod.save_from_leaderboard(user.id, entry_id)}
+
+
 @app.post("/api/macros")
-def create_macro(macro: Macro) -> dict:
+def create_macro(
+    macro: Macro,
+    account: Optional[User] = Depends(auth_mod.optional_user),
+) -> dict:
     """Store a macro, generate share_slug, and snapshot a representative backtest."""
     macro.macro_id = str(uuid.uuid4())
     macro.created_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -332,9 +375,20 @@ def create_macro(macro: Macro) -> dict:
         session.add(row)
         session.commit()
 
+    user_macro = None
+    if account is not None:
+        user_macro = user_macros_mod.save_snapshot(
+            account.id,
+            macro,
+            source_type="builder",
+            source_ref=slug,
+            created_at=macro.created_at,
+        )
+
     return {
         "macro": macro.model_dump(mode="json"),
         "share_slug": slug,
+        "user_macro": user_macro,
         "human_summary": summary,
         "result": result.model_dump(),
         "explanation": explain_result(macro, result).model_dump(),
@@ -667,6 +721,14 @@ async def leaderboard_register(
         human_summary=human_summary(macro),
         paper_session_id=info["session_id"],
     )
+    if account is not None:
+        user_macros_mod.save_snapshot(
+            account.id,
+            macro,
+            source_type="created",
+            source_ref=str(entry["id"]),
+            created_at=entry.get("created_at", ""),
+        )
     return {"entry": entry, "disclaimer": "paper (simulated) trading; reference only"}
 
 
@@ -687,7 +749,16 @@ def leaderboard_list(user_id: str = "", account: Optional[User] = Depends(auth_m
 def leaderboard_unlock(entry_id: int, account: User = Depends(auth_mod.current_user)) -> dict:
     """Spend points to reveal+copy an entry's macro; 70% goes to its creator."""
     try:
-        return leaderboard_mod.unlock_entry(account, entry_id)
+        result = leaderboard_mod.unlock_entry(account, entry_id)
+        macro_data = result.get("entry", {}).get("macro")
+        if macro_data:
+            result["user_macro"] = user_macros_mod.save_snapshot(
+                account.id,
+                Macro.model_validate(macro_data),
+                source_type="leaderboard",
+                source_ref=str(entry_id),
+            )
+        return result
     except leaderboard_mod.UnlockError as exc:
         raise HTTPException(status_code=exc.status, detail=exc.message)
     except points_mod.InsufficientPoints as exc:
@@ -953,6 +1024,15 @@ def _runner_user(x_runner_key: Optional[str] = Header(default=None)) -> User:
 
 
 # 실행기용 -------------------------------------------------------------
+@app.post("/api/runner/launch-tickets/claim")
+def runner_launch_ticket_claim(
+    req: RunnerLaunchTicketClaimRequest,
+    response: Response,
+) -> dict:
+    response.headers["Cache-Control"] = "no-store"
+    return runner_mod.claim_launch_ticket(req.ticket)
+
+
 @app.post("/api/runner/start")
 def runner_start(req: RunnerStartRequest, user: User = Depends(_runner_user)) -> dict:
     return runner_mod.start_session(user, req.model_dump())
@@ -970,6 +1050,26 @@ def runner_stopped(req: RunnerStoppedRequest, user: User = Depends(_runner_user)
 
 
 # 마이페이지용 ---------------------------------------------------------
+@app.post("/api/me/runner/launch-tickets")
+def runner_launch_ticket_create(
+    req: RunnerLaunchTicketCreateRequest,
+    response: Response,
+    user: User = Depends(auth_mod.current_user),
+) -> dict:
+    response.headers["Cache-Control"] = "no-store"
+    return runner_mod.create_launch_ticket(user.id, req.user_macro_id, req.testnet)
+
+
+@app.get("/api/me/runner/launch-tickets/{launch_id}")
+def runner_launch_ticket_get(
+    launch_id: int,
+    response: Response,
+    user: User = Depends(auth_mod.current_user),
+) -> dict:
+    response.headers["Cache-Control"] = "no-store"
+    return runner_mod.launch_ticket_status(user.id, launch_id)
+
+
 @app.get("/api/me/runner/key")
 def runner_key_get(user: User = Depends(auth_mod.current_user)) -> dict:
     return runner_mod.get_or_create_key(user.id)
@@ -996,7 +1096,7 @@ def runner_request_stop(
 # 빌드한 exe 를 RUNNER_EXE_PATH 에 두면 서비스에서 바로 내려받게 한다. 없으면
 # 다운로드 페이지가 '준비 중' 으로 표시된다(available:false).
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-_RUNNER_EXE_NAME = "껄무새매크로실행기.exe"
+_RUNNER_EXE_NAME = "ggparrot-runner.exe"
 _RUNNER_EXE_PATH = os.environ.get("RUNNER_EXE_PATH") or os.path.join(
     _REPO_ROOT, "runner", "dist", _RUNNER_EXE_NAME
 )
@@ -1005,6 +1105,21 @@ _RUNNER_EXE_PATH = os.environ.get("RUNNER_EXE_PATH") or os.path.join(
 # 외부 배포 링크(GitHub Releases 등). 설정하면 서버에 파일을 두지 않아도 이 링크로
 # 내려받게 한다. 없으면 서버의 로컬 exe(_RUNNER_EXE_PATH)로 폴백한다.
 _RUNNER_DOWNLOAD_URL = os.environ.get("RUNNER_DOWNLOAD_URL", "").strip()
+_RUNNER_SUPPORTS_LAUNCH = os.environ.get("RUNNER_SUPPORTS_LAUNCH", "").strip().lower() in {
+    "1", "true", "yes",
+}
+_RUNNER_LAUNCH_SCHEME = "ggparrot" if _RUNNER_SUPPORTS_LAUNCH else ""
+_RUNNER_MIN_VERSION = (
+    os.environ.get("RUNNER_MIN_VERSION", "2").strip() or "2"
+) if _RUNNER_SUPPORTS_LAUNCH else ""
+
+
+def _runner_launch_capabilities() -> dict:
+    return {
+        "supports_launch": _RUNNER_SUPPORTS_LAUNCH,
+        "launch_scheme": _RUNNER_LAUNCH_SCHEME,
+        "min_runner_version": _RUNNER_MIN_VERSION,
+    }
 
 
 @app.get("/api/runner/download/info")
@@ -1017,6 +1132,7 @@ def runner_download_info() -> dict:
             "size": 0,  # 외부 링크라 크기 미상
             "version": os.environ.get("RUNNER_EXE_VERSION", ""),
             "url": _RUNNER_DOWNLOAD_URL,
+            **_runner_launch_capabilities(),
         }
     exists = os.path.isfile(_RUNNER_EXE_PATH)
     return {
@@ -1025,6 +1141,7 @@ def runner_download_info() -> dict:
         "size": os.path.getsize(_RUNNER_EXE_PATH) if exists else 0,
         "version": os.environ.get("RUNNER_EXE_VERSION", ""),
         "url": "",
+        **_runner_launch_capabilities(),
     }
 
 
@@ -1059,6 +1176,8 @@ if os.path.isdir(_DIST):
 
     @app.get("/{full_path:path}")
     def spa_fallback(full_path: str, request: Request):
+        if full_path == "api" or full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="API endpoint not found")
         candidate = os.path.join(_DIST, full_path)
         if full_path and os.path.isfile(candidate):
             return FileResponse(candidate)

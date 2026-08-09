@@ -21,6 +21,7 @@ export default function Leaderboard() {
   const uid = getUserId();
   const navigate = useNavigate();
   const location = useLocation();
+  const quickRunMode = new URLSearchParams(location.search).get("from") === "quick-run";
   const registeredId = location.state?.registeredId || null;
   const justRegistered = !!location.state?.justRegistered;
   useAuth(); // re-render on login/logout so gating reflects the current account
@@ -103,7 +104,8 @@ export default function Leaderboard() {
 
   async function unlock(entry) {
     if (!isLoggedIn()) {
-      navigate("/login?mode=signup&next=%2Fleaderboard");
+      const next = quickRunMode ? "%2Fleaderboard%3Ffrom%3Dquick-run" : "%2Fleaderboard";
+      navigate(`/login?mode=signup&next=${next}`);
       return;
     }
     setError("");
@@ -113,10 +115,34 @@ export default function Leaderboard() {
       if (d.points_balance != null) {
         updateAuthUser({ ...getAuthUser(), points_balance: d.points_balance });
       }
+      if (quickRunMode && d.user_macro?.id) {
+        navigate("/runner", { state: { selectedMacroId: d.user_macro.id } });
+        return;
+      }
       await load(); // reveal the now-unlocked macro
     } catch (e) {
       setError(String(e.message || e));
     } finally {
+      setUnlocking(0);
+    }
+  }
+
+  async function useForQuickRun(entry) {
+    if (!isLoggedIn()) {
+      navigate("/login?next=%2Fleaderboard%3Ffrom%3Dquick-run");
+      return;
+    }
+    setError("");
+    setUnlocking(entry.id);
+    try {
+      if (!entry.for_sale) {
+        const saved = await api.saveMyMacro(entry.macro, `리더보드 · ${entry.symbol}`);
+        navigate("/runner", { state: { selectedMacroId: saved.item.id } });
+        return;
+      }
+      navigate("/runner", { state: { selectedSourceRef: entry.id } });
+    } catch (e) {
+      setError(String(e.message || e));
       setUnlocking(0);
     }
   }
@@ -129,6 +155,17 @@ export default function Leaderboard() {
         description="실시간 모의(페이퍼) 수익률과 좋아요로 겨루는 오늘의 보드예요. 좋아요·수익률은 참고용이고 매수 추천이 아니에요."
         actions={<SimBadge className="lg:hidden" />}
       />
+
+      {quickRunMode ? (
+        <div className="leaderboard-quick-run-callout" role="status">
+          <div>
+            <span className="num">QUICK RUN / 01</span>
+            <strong>빠른 실행에 연결할 매크로를 골라요.</strong>
+            <p>내 것 또는 이미 언락한 전략은 바로 선택할 수 있어요.</p>
+          </div>
+          <button type="button" onClick={() => navigate("/runner")} className="btn btn-m btn-secondary">빠른 실행으로 돌아가기</button>
+        </div>
+      ) : null}
 
       {justRegistered ? (
         <div className="notice-good mb-5 t-small text-slate-700" role="status">
@@ -237,15 +274,16 @@ export default function Leaderboard() {
                     className="btn btn-s btn-secondary font-bold"
                     title="포인트를 써서 매크로 공개+복사 (창작자에게 70% 적립)"
                   >
-                    {unlocking === e.id ? "여는 중…" : <>언락 <span className="num">{e.unlock_price}P</span></>}
+                    {unlocking === e.id ? "여는 중…" : quickRunMode ? <>언락 후 사용 · <span className="num">{e.unlock_price}P</span></> : <>언락 <span className="num">{e.unlock_price}P</span></>}
                   </button>
                 ) : (
                   <button
-                    onClick={() => copyToBuilder(e)}
+                    onClick={() => quickRunMode ? useForQuickRun(e) : copyToBuilder(e)}
+                    disabled={unlocking === e.id}
                     className="btn btn-s btn-secondary"
-                    title="이 매크로를 빌더로 복사"
+                    title={quickRunMode ? "이 매크로를 빠른 실행에 연결" : "이 매크로를 빌더로 복사"}
                   >
-                    빌더로 복사
+                    {quickRunMode ? (unlocking === e.id ? "저장 중…" : "이 매크로 사용") : "빌더로 복사"}
                   </button>
                 )}
                 {(e.is_owner || (e.is_mine && !e.for_sale)) && (

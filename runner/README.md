@@ -16,6 +16,28 @@
   - **청산 후 종료**: 보유 포지션을 시장가로 정리한 뒤 종료
 - 거래소 API 키/시크릿은 **서버로 전송되지 않습니다**. 서버로 가는 건 회원 키 + 구동 상태뿐입니다.
 
+## 웹 빠른 연결 (Windows)
+
+Windows용 단일 exe를 파일에서 평소처럼 한 번 실행하면, 실행기는 현재 사용자 전용
+고정 경로인 `%LOCALAPPDATA%\GGParrot\ggparrot-runner.exe`에 자신을 복사하고
+`ggparrot://` 링크 처리기를 등록합니다. HKCU(현재 사용자)에만 등록하므로 관리자
+권한은 필요하지 않습니다. 이 준비가 실패해도 파일 선택을 포함한 기존 기능은 그대로
+사용할 수 있습니다.
+
+사이트의 **실행기에서 계속** 버튼은 다음 한 가지 형태의 링크만 실행기에 전달합니다.
+
+```text
+ggparrot://launch?v=1&ticket=<일회용 43자 티켓>
+```
+
+- 티켓은 짧은 시간 동안 한 번만 사용할 수 있으며 실행기가 서버에서 매크로와 껄무새
+  계정 연결값을 받는 데만 씁니다.
+- 매크로 JSON, 껄무새 회원 키, 바이낸스 API Key/Secret은 링크에 넣지 않습니다.
+- 웹에서 연결된 매크로는 **테스트넷**으로 준비됩니다. 바이낸스 키 입력칸은 항상
+  비어 있고, 사용자가 실행기에서 직접 `매크로 시작`을 누르기 전에는 주문하지 않습니다.
+- 브라우저 링크가 안 열리면 내려받은 exe를 직접 한 번 실행한 뒤 사이트에서 다시
+  시도하세요.
+
 ## 개발자: 실행/빌드
 ```bash
 # 소스로 바로 실행(테스트)
@@ -28,11 +50,20 @@ pyinstaller --onefile --noconsole --name ggparrot-runner macro_runner.py
 # 결과물: dist/ggparrot-runner.exe
 ```
 
+프로토콜 파서 회귀 테스트는 저장소 루트에서 표준 라이브러리만으로 실행할 수 있습니다.
+
+```bash
+python -m unittest runner.test_macro_runner_protocol
+```
+
 ### 배포 (GitHub Releases 권장)
 1. 위에서 만든 `dist/ggparrot-runner.exe` 를 레포의 **Releases** 에 첨부해 publish
-2. 첨부 파일의 다운로드 링크를 복사 (예: `.../releases/download/runner-v1/ggparrot-runner.exe`)
+2. 첨부 파일의 다운로드 링크를 복사 (예: `.../releases/download/runner-v2/ggparrot-runner.exe`)
 3. 백엔드 환경변수 `RUNNER_DOWNLOAD_URL` 에 그 링크를 설정
    → 다운로드 페이지 버튼이 자동으로 그 링크로 연결됨(서버에 파일을 둘 필요 없음)
+4. 새 바이너리에서 `ggparrot://` 연결을 Windows에서 검증한 뒤에만
+   `RUNNER_SUPPORTS_LAUNCH=true` 와 `RUNNER_MIN_VERSION=2` 를 설정
+   → 기존 실행기에는 작동하지 않는 **실행기 열기** 버튼이 노출되지 않음
 - 레포가 **비공개면** 링크로 로그인 없이 못 받으니, 레포를 공개로 하거나 exe 전용 공개 레포를 쓰세요.
 - 서버에 직접 파일을 두려면 대신 `RUNNER_EXE_PATH` 를 그 경로로 설정하세요.
 

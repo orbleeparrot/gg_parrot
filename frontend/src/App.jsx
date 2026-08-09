@@ -174,7 +174,7 @@ function RouteChangeEffects() {
       : pathname.startsWith("/mypage")
       ? "내 활동"
       : pathname.startsWith("/runner")
-      ? "매크로 실행기"
+      ? "빠른 실행"
       : pathname.startsWith("/login")
       ? "로그인"
       : "껄무새";
@@ -200,6 +200,7 @@ export default function App() {
   const { pathname } = useLocation();
   const isHome = pathname === "/";
   const isNews = pathname === "/news";
+  const isRunner = pathname === "/runner";
   const authShell = ["/login", "/forgot", "/reset"].includes(pathname);
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const menuButtonRef = useRef(null);
@@ -233,6 +234,8 @@ export default function App() {
             ? "home-main"
             : isNews
               ? "news-main py-6 sm:py-8"
+              : isRunner
+                ? "runner-main"
               : "max-w-6xl mx-auto px-5 sm:px-6 py-6 sm:py-8"}
         >
           <RouteChangeEffects />
@@ -256,13 +259,13 @@ export default function App() {
             </Routes>
           </Suspense>
         </main>
-        {isHome ? null : (
+        {isHome || isRunner ? null : (
           <footer className="max-w-6xl mx-auto px-5 sm:px-6 pb-6 pt-2 sm:py-8 t-caption text-slate-500">
             웹 화면은 실제 주문을 보내지 않아요. 백테스트·모의 결과는 투자 조언이 아니며,
             내려받은 실행 파일의 사용 책임은 사용자에게 있어요.
           </footer>
         )}
-        {isHome || authShell ? null : <HotCoinsMarquee />}
+        {isHome || isRunner || authShell ? null : <HotCoinsMarquee />}
       </div>
     </div>
   );

@@ -6,7 +6,7 @@ import { SectionTitle, EmptyRow } from "./Page.jsx";
 // 내 매크로 실행 현황 — 실행기(exe)가 올리는 세션을 실시간으로 보여주고,
 // 원격 종료(매크로만 / 청산 후)를 요청한다.
 
-function KeyRow() {
+export function RunnerKeyPanel() {
   const [data, setData] = useState(null);
   const [revealed, setRevealed] = useState(false);
   const [err, setErr] = useState("");
@@ -141,7 +141,12 @@ function SessionCard({ s, onStop, busy }) {
   );
 }
 
-export default function RunnerSessions() {
+export default function RunnerSessions({
+  showKey = true,
+  showRunnerLink = true,
+  embedded = false,
+  title = "내 매크로 실행 현황",
+}) {
   const [data, setData] = useState(null);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
@@ -183,13 +188,15 @@ export default function RunnerSessions() {
   const count = active.length;
 
   return (
-    <section className="pt-6 border-t border-slate-200 space-y-4">
+    <section className={`${embedded ? "runner-session-board" : "pt-6 border-t border-slate-200"} space-y-4`}>
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <SectionTitle count={count} className="mb-0">내 매크로 실행 현황</SectionTitle>
-        <Link to="/runner" className="btn btn-s btn-secondary">매크로 실행기 내려받기</Link>
+        <SectionTitle count={count} className="mb-0">{title}</SectionTitle>
+        {showRunnerLink ? (
+          <Link to="/runner" className="btn btn-s btn-secondary">빠른 실행 열기</Link>
+        ) : null}
       </div>
 
-      <KeyRow />
+      {showKey ? <RunnerKeyPanel /> : null}
 
       {err && <div className="t-small text-red-600">오류: {err}</div>}
 

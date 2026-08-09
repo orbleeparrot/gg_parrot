@@ -105,7 +105,8 @@ def test_launch_ticket_create_claim_and_status_contract():
     assert payload["launch_url"].startswith("ggparrot://launch?")
 
     query = parse_qs(urlsplit(payload["launch_url"]).query)
-    assert query["v"] == ["1"]
+    assert query["v"] == ["2"]
+    assert query["env"] == ["production"]
     ticket = query["ticket"][0]
 
     # Only the digest is durable; the bearer itself never enters the DB row.
@@ -148,6 +149,21 @@ def test_launch_ticket_create_claim_and_status_contract():
     replay = client.post("/api/runner/launch-tickets/claim", json={"ticket": ticket})
     assert replay.status_code == 409
     assert replay.headers["cache-control"] == "no-store"
+
+
+def test_launch_ticket_uses_fixed_local_environment_for_loopback_web():
+    token = _signup()
+    saved = _save_macro(token)
+    loopback = TestClient(app, base_url="http://localhost")
+    created = loopback.post(
+        "/api/me/runner/launch-tickets",
+        json={"user_macro_id": saved["id"], "testnet": True},
+        headers=_auth(token),
+    )
+    assert created.status_code == 200, created.text
+    query = parse_qs(urlsplit(created.json()["launch_url"]).query)
+    assert query["v"] == ["2"]
+    assert query["env"] == ["local"]
 
 
 def test_launch_ticket_enforces_macro_ownership_and_testnet():

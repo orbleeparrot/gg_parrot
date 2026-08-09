@@ -1050,14 +1050,26 @@ def runner_stopped(req: RunnerStoppedRequest, user: User = Depends(_runner_user)
 
 
 # 마이페이지용 ---------------------------------------------------------
+def _runner_launch_environment(request: Request) -> str:
+    """Map only loopback web origins to the runner's fixed local API target."""
+    host = (request.url.hostname or "").strip().lower()
+    return "local" if host in {"localhost", "127.0.0.1", "::1"} else "production"
+
+
 @app.post("/api/me/runner/launch-tickets")
 def runner_launch_ticket_create(
     req: RunnerLaunchTicketCreateRequest,
+    request: Request,
     response: Response,
     user: User = Depends(auth_mod.current_user),
 ) -> dict:
     response.headers["Cache-Control"] = "no-store"
-    return runner_mod.create_launch_ticket(user.id, req.user_macro_id, req.testnet)
+    return runner_mod.create_launch_ticket(
+        user.id,
+        req.user_macro_id,
+        req.testnet,
+        _runner_launch_environment(request),
+    )
 
 
 @app.get("/api/me/runner/launch-tickets/{launch_id}")
@@ -1102,15 +1114,19 @@ _RUNNER_EXE_PATH = os.environ.get("RUNNER_EXE_PATH") or os.path.join(
 )
 
 
-# 외부 배포 링크(GitHub Releases 등). 설정하면 서버에 파일을 두지 않아도 이 링크로
-# 내려받게 한다. 없으면 서버의 로컬 exe(_RUNNER_EXE_PATH)로 폴백한다.
-_RUNNER_DOWNLOAD_URL = os.environ.get("RUNNER_DOWNLOAD_URL", "").strip()
-_RUNNER_SUPPORTS_LAUNCH = os.environ.get("RUNNER_SUPPORTS_LAUNCH", "").strip().lower() in {
+# runner-v3 adds a fixed localhost claim target while keeping the production
+# target pinned inside the binary. It is the canonical local/prod fallback.
+_RUNNER_V3_URL = "https://github.com/orbleeparrot/gg_parrot/releases/download/runner-v3/ggparrot-runner.exe"
+_RUNNER_DOWNLOAD_URL = os.environ.get("RUNNER_DOWNLOAD_URL", "").strip() or _RUNNER_V3_URL
+_RUNNER_SUPPORT_DEFAULT = "true" if "/runner-v3/" in _RUNNER_DOWNLOAD_URL else "false"
+_RUNNER_SUPPORTS_LAUNCH = os.environ.get(
+    "RUNNER_SUPPORTS_LAUNCH", _RUNNER_SUPPORT_DEFAULT
+).strip().lower() in {
     "1", "true", "yes",
 }
 _RUNNER_LAUNCH_SCHEME = "ggparrot" if _RUNNER_SUPPORTS_LAUNCH else ""
 _RUNNER_MIN_VERSION = (
-    os.environ.get("RUNNER_MIN_VERSION", "2").strip() or "2"
+    os.environ.get("RUNNER_MIN_VERSION", "3").strip() or "3"
 ) if _RUNNER_SUPPORTS_LAUNCH else ""
 
 

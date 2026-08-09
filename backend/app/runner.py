@@ -129,10 +129,17 @@ def _ticket_error(status_code: int, detail: str) -> HTTPException:
     )
 
 
-def create_launch_ticket(user_id: int, user_macro_id: int, testnet: bool = True) -> dict:
+def create_launch_ticket(
+    user_id: int,
+    user_macro_id: int,
+    testnet: bool = True,
+    launch_environment: str = "production",
+) -> dict:
     """Create a 120-second, single-use runner launch ticket for an owned macro."""
     if testnet is not True:
         raise _ticket_error(422, "빠른 실행 연결은 테스트넷으로만 시작할 수 있어요.")
+    if launch_environment not in {"production", "local"}:
+        raise _ticket_error(422, "지원하지 않는 실행기 연결 환경이에요.")
 
     now = datetime.now(timezone.utc)
     expires = now + timedelta(seconds=LAUNCH_TICKET_TTL_SECONDS)
@@ -157,7 +164,10 @@ def create_launch_ticket(user_id: int, user_macro_id: int, testnet: bool = True)
         db.refresh(row)
         return {
             "launch_id": row.id,
-            "launch_url": f"ggparrot://launch?v=1&ticket={raw_ticket}",
+            "launch_url": (
+                "ggparrot://launch?v=2"
+                f"&env={launch_environment}&ticket={raw_ticket}"
+            ),
             "expires_at": row.expires_at,
             "status": "ready",
         }

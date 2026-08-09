@@ -49,21 +49,24 @@ try:  # package import (tests) / direct script import (PyInstaller build)
     from .protocol import (
         PROTOCOL_CLAIM_PATH,
         PROTOCOL_SCHEME,
+        ProtocolLaunch,
         ProtocolLaunchError,
-        parse_protocol_args,
+        parse_protocol_launch,
     )
 except ImportError:
     from protocol import (
         PROTOCOL_CLAIM_PATH,
         PROTOCOL_SCHEME,
+        ProtocolLaunch,
         ProtocolLaunchError,
-        parse_protocol_args,
+        parse_protocol_launch,
     )
 
 # ==================================================================
 #  설정
 # ==================================================================
 SERVER_BASE = os.environ.get("GGP_SERVER_BASE", "https://gg-parrot.onrender.com").rstrip("/")
+LOCAL_SERVER_BASE = "http://127.0.0.1:8000"
 MAX_ORDER_USDT = float(os.environ.get("MAX_ORDER_USDT", "100"))   # 1회 주문 상한(USDT)
 ORDER_CAP_BASIS = os.environ.get("ORDER_CAP_BASIS", "notional").lower()  # notional | margin
 DEFAULT_TP_PCT = 3.0
@@ -307,8 +310,8 @@ def _pnl_pct(entry, price, side) -> float:
 #  서버 연동 클라이언트 (회원 키로 인증; API 키는 절대 안 보냄)
 # ==================================================================
 class ServerClient:
-    def __init__(self, runner_key: str) -> None:
-        self.base = SERVER_BASE
+    def __init__(self, runner_key: str, *, base: str = SERVER_BASE) -> None:
+        self.base = base.rstrip("/")
         self.key = runner_key.strip()
         self.session_id = None
         self._headers = {"X-Runner-Key": self.key, "Content-Type": "application/json"}
@@ -622,7 +625,7 @@ class RunnerApp:
         self,
         root: tk.Tk,
         *,
-        protocol_ticket: str | None = None,
+        protocol_launch: ProtocolLaunch | None = None,
         register_protocol: bool = False,
         startup_warning: str = "",
     ) -> None:
@@ -634,15 +637,16 @@ class RunnerApp:
         self.api_key = tk.StringVar(value="")
         self.api_secret = tk.StringVar(value="")
         self.member_key = tk.StringVar(value=os.environ.get("GGP_MEMBER_KEY", ""))
+        self.server_base = SERVER_BASE
         self._build()
         if startup_warning:
             self._log(startup_warning)
         if register_protocol:
             self.root.after(0, self._begin_protocol_registration)
-        if protocol_ticket:
+        if protocol_launch:
             # Let Tk render its first frame before any launch work begins.  The
-            # actual HTTPS claim runs on a worker thread below.
-            self.root.after(0, self._begin_protocol_claim, protocol_ticket)
+            # actual HTTP(S) claim runs on a worker thread below.
+            self.root.after(0, self._begin_protocol_claim, protocol_launch)
 
     # --- 화면 구성 ----------------------------------------------
     def _build(self) -> None:
@@ -749,7 +753,7 @@ class RunnerApp:
         self.macro_summary.config(
             text=f"{macro['symbol']} · {market} · {side}{' · '+str(lev)+'배' if lev>1 else ''}\n{summary}")
 
-    def _begin_protocol_claim(self, ticket: str) -> None:
+    def _begin_protocol_claim(self, launch: ProtocolLaunch) -> None:
         """Claim a browser launch ticket without blocking Tk's event loop."""
 
         if requests is None:
@@ -761,7 +765,7 @@ class RunnerApp:
         self._log("웹에서 선택한 매크로를 안전하게 연결하고 있어요.")
         threading.Thread(
             target=self._claim_protocol_ticket,
-            args=(ticket,),
+            args=(launch,),
             daemon=True,
             name="ggparrot-launch-claim",
         ).start()
@@ -783,11 +787,16 @@ class RunnerApp:
                 "브라우저 빠른 연결을 준비하지 못했지만 실행기는 그대로 사용할 수 있어요.",
             )
 
-    def _claim_protocol_ticket(self, ticket: str) -> None:
+    def _claim_protocol_ticket(self, launch: ProtocolLaunch) -> None:
+        claim_base = (
+            LOCAL_SERVER_BASE
+            if launch.environment == "local"
+            else SERVER_BASE
+        )
         try:
             response = requests.post(
-                f"{SERVER_BASE}{PROTOCOL_CLAIM_PATH}",
-                json={"ticket": ticket},
+                f"{claim_base}{PROTOCOL_CLAIM_PATH}",
+                json={"ticket": launch.ticket},
                 timeout=15,
             )
             response.raise_for_status()
@@ -807,9 +816,20 @@ class RunnerApp:
             # be copied into the GUI log.
             self.root.after(0, self._protocol_claim_failed)
             return
-        self.root.after(0, self._apply_protocol_claim, macro, runner_key)
+        self.root.after(
+            0,
+            self._apply_protocol_claim,
+            macro,
+            runner_key,
+            claim_base,
+        )
 
-    def _apply_protocol_claim(self, macro: dict, runner_key: str) -> None:
+    def _apply_protocol_claim(
+        self,
+        macro: dict,
+        runner_key: str,
+        claim_base: str,
+    ) -> None:
         try:
             self._apply_macro(macro, "웹에서 연결한 내 매크로")
         except ValueError:
@@ -822,6 +842,7 @@ class RunnerApp:
         self.api_key.set("")
         self.api_secret.set("")
         self.member_key.set(runner_key.strip())
+        self.server_base = claim_base
         self.live.set(False)
         self._on_live_toggle()
         self.pick_btn.config(state="normal")
@@ -864,7 +885,7 @@ class RunnerApp:
                 f"({self.macro.get('symbol')} · {side})\n계속할까요?"):
                 return
 
-        server = ServerClient(self.member_key.get())
+        server = ServerClient(self.member_key.get(), base=self.server_base)
         side = str(self.macro.get("position_side", "long")).lower()
         lev = max(1, int(self.macro.get("leverage", 1) or 1))
         payload = {
@@ -942,11 +963,11 @@ class RunnerApp:
 
 def main() -> None:
     args = sys.argv[1:]
-    protocol_ticket = None
+    protocol_launch = None
     startup_warning = ""
     protocol_requested = "--protocol" in args
     try:
-        protocol_ticket = parse_protocol_args(args)
+        protocol_launch = parse_protocol_launch(args)
     except ProtocolLaunchError:
         # Never echo the malformed URI: it can contain secrets supplied by an
         # untrusted page.  Open the ordinary UI and explain the safe recovery.
@@ -961,8 +982,8 @@ def main() -> None:
         pass
     RunnerApp(
         root,
-        protocol_ticket=protocol_ticket,
-        register_protocol=not protocol_requested and protocol_ticket is None,
+        protocol_launch=protocol_launch,
+        register_protocol=not protocol_requested and protocol_launch is None,
         startup_warning=startup_warning,
     )
     root.mainloop()

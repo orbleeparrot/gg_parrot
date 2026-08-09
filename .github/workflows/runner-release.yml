@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag (for example runner-v2)"
+        description: "Release tag (for example runner-v3)"
         required: true
-        default: "runner-v2"
+        default: "runner-v3"
 
 permissions:
   contents: write

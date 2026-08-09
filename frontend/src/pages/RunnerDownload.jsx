@@ -8,7 +8,7 @@ import { getUserId } from "../lib/user.js";
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const RUNNER_OPENED_STORAGE_KEY = "ggparrot:runner-opened";
-const OFFICIAL_RUNNER_DOWNLOAD_URL = "https://github.com/orbleeparrot/gg_parrot/releases/download/runner-v2/ggparrot-runner.exe";
+const OFFICIAL_RUNNER_DOWNLOAD_URL = "https://github.com/orbleeparrot/gg_parrot/releases/download/runner-v3/ggparrot-runner.exe";
 
 const CHAPTERS = ["매크로 연결", "실행기 준비", "계정 연결", "실행"];
 
@@ -106,6 +106,12 @@ function leaderboardReturn(item) {
 
 function missingLeaderboardImportRoute(error) {
   return error?.status === 404 || error?.status === 405;
+}
+
+function missingRunnerLaunchRoute(error) {
+  return error?.status === 404
+    || error?.status === 405
+    || (error?.status === 200 && error?.code === "NON_JSON_RESPONSE");
 }
 
 function withLeaderboardPerformance(item, entry) {
@@ -349,12 +355,15 @@ export default function RunnerDownload() {
   const step = signedIn && selected ? requestedStep : 0;
   const copy = COPY[step];
   const downloadChecked = downloadInfo != null || !!downloadError;
-  const supportsLaunch = downloadInfo?.supports_launch === true;
   const officialRunnerFallback = downloadChecked && !downloadInfo?.available && !!OFFICIAL_RUNNER_DOWNLOAD_URL;
   const runnerAvailable = !!downloadInfo?.available || officialRunnerFallback;
   const downloadUrl = downloadInfo?.available
     ? downloadInfo.url || api.runnerDownloadUrl
     : OFFICIAL_RUNNER_DOWNLOAD_URL;
+  const launchCapabilityWasReported = downloadInfo != null
+    && Object.prototype.hasOwnProperty.call(downloadInfo, "supports_launch");
+  const supportsLaunch = downloadInfo?.supports_launch === true
+    || (!launchCapabilityWasReported && /\/runner-v3\//.test(downloadUrl));
   const downloadIsExternal = /^https?:\/\//i.test(downloadUrl);
   const runnerDownloadState = !downloadChecked
     ? "loading"
@@ -469,7 +478,6 @@ export default function RunnerDownload() {
       setLaunchPhase("unsupported");
       return undefined;
     }
-
     let alive = true;
     setLaunchPhase("preparing");
     api.runnerLaunchTicketIssue(selected.id, true)
@@ -484,10 +492,13 @@ export default function RunnerDownload() {
       })
       .catch((error) => {
         if (!alive) return;
+        if (missingRunnerLaunchRoute(error)) {
+          setLaunchError("현재 연결된 백엔드가 실행기 열기 API를 아직 지원하지 않아요.");
+          setLaunchPhase("unsupported");
+          return;
+        }
         setLaunchError(
-          error?.code === "NON_JSON_RESPONSE"
-            ? "서버가 아직 빠른 실행 연결을 지원하지 않아요."
-            : String(error.message || error),
+          String(error.message || error),
         );
         setLaunchPhase("error");
       });
@@ -872,7 +883,7 @@ export default function RunnerDownload() {
         {downloadStarted && !runnerReady ? (
           <div className="runner-wizard-runner-notice" role="status">
             <strong>다운로드 목록에서 파일을 허용한 뒤 한 번 열어 주세요.</strong>
-            <p>브라우저가 ‘확인되지 않은 다운로드’로 막으면 GitHub의 껄무새 runner-v2 파일인지 확인한 뒤 유지·다운로드 계속을 선택해요.</p>
+            <p>브라우저가 ‘확인되지 않은 다운로드’로 막으면 GitHub의 껄무새 runner-v3 파일인지 확인한 뒤 유지·다운로드 계속을 선택해요.</p>
           </div>
         ) : !runnerReady && ["unavailable", "error"].includes(runnerDownloadState) ? (
           <div className="runner-wizard-runner-notice" role={runnerDownloadState === "error" ? "alert" : "status"}>

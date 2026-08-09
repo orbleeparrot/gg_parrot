@@ -24,14 +24,17 @@ Windows용 단일 exe를 파일에서 평소처럼 한 번 실행하면, 실행�
 권한은 필요하지 않습니다. 이 준비가 실패해도 파일 선택을 포함한 기존 기능은 그대로
 사용할 수 있습니다.
 
-사이트의 **실행기에서 계속** 버튼은 다음 한 가지 형태의 링크만 실행기에 전달합니다.
+사이트의 **실행기 열기** 버튼은 다음 두 계약만 실행기에 전달합니다.
 
 ```text
-ggparrot://launch?v=1&ticket=<일회용 43자 티켓>
+ggparrot://launch?v=1&ticket=<일회용 43자 티켓>                       # 기존 운영 호환
+ggparrot://launch?v=2&env=production|local&ticket=<일회용 43자 티켓> # runner-v3
 ```
 
 - 티켓은 짧은 시간 동안 한 번만 사용할 수 있으며 실행기가 서버에서 매크로와 껄무새
   계정 연결값을 받는 데만 씁니다.
+- `production`은 공식 HTTPS 서버, `local`은 `127.0.0.1:8000`에만 연결됩니다. URI로
+  임의 서버·호스트·포트를 전달할 수 없습니다.
 - 매크로 JSON, 껄무새 회원 키, 바이낸스 API Key/Secret은 링크에 넣지 않습니다.
 - 웹에서 연결된 매크로는 **테스트넷**으로 준비됩니다. 바이낸스 키 입력칸은 항상
   비어 있고, 사용자가 실행기에서 직접 `매크로 시작`을 누르기 전에는 주문하지 않습니다.
@@ -58,11 +61,11 @@ python -m unittest runner.test_macro_runner_protocol
 
 ### 배포 (GitHub Releases 권장)
 1. 위에서 만든 `dist/ggparrot-runner.exe` 를 레포의 **Releases** 에 첨부해 publish
-2. 첨부 파일의 다운로드 링크를 복사 (예: `.../releases/download/runner-v2/ggparrot-runner.exe`)
+2. 첨부 파일의 다운로드 링크를 복사 (예: `.../releases/download/runner-v3/ggparrot-runner.exe`)
 3. 백엔드 환경변수 `RUNNER_DOWNLOAD_URL` 에 그 링크를 설정
    → 다운로드 페이지 버튼이 자동으로 그 링크로 연결됨(서버에 파일을 둘 필요 없음)
 4. 새 바이너리에서 `ggparrot://` 연결을 Windows에서 검증한 뒤에만
-   `RUNNER_SUPPORTS_LAUNCH=true` 와 `RUNNER_MIN_VERSION=2` 를 설정
+   `RUNNER_SUPPORTS_LAUNCH=true` 와 `RUNNER_MIN_VERSION=3` 을 설정
    → 기존 실행기에는 작동하지 않는 **실행기 열기** 버튼이 노출되지 않음
 - 레포가 **비공개면** 링크로 로그인 없이 못 받으니, 레포를 공개로 하거나 exe 전용 공개 레포를 쓰세요.
 - 서버에 직접 파일을 두려면 대신 `RUNNER_EXE_PATH` 를 그 경로로 설정하세요.

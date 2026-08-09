@@ -6,10 +6,17 @@ SQLite(테스트)로 돈다.
 """
 from __future__ import annotations
 
+import hashlib
 import secrets
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+from urllib.parse import parse_qs, urlsplit
 
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
+from app import runner as runner_mod
+from app.db import RunnerLaunchTicket, get_session
 from app.main import app
 
 client = TestClient(app)
@@ -31,6 +38,24 @@ def _signup() -> str:
 
 def _auth(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
+
+
+def _save_macro(token: str, symbol: str = "BTCUSDT") -> dict:
+    macro = {
+        "symbol": symbol,
+        "rule_type": "A",
+        "position_side": "long",
+        "params": {"take_profit_pct": 3.0, "initial_capital": 1000000},
+        "risk": {"invest_ratio": 0.5, "stop_loss_pct": 2.0},
+        "period": {"preset": "3m"},
+    }
+    response = client.post(
+        "/api/me/macros",
+        json={"macro": macro, "name": "빠른 실행 테스트"},
+        headers=_auth(token),
+    )
+    assert response.status_code == 200, response.text
+    return response.json()["item"]
 
 
 # --- 회원 키 ------------------------------------------------------------
@@ -60,6 +85,165 @@ def test_start_requires_valid_key():
                     headers={"X-Runner-Key": ""}).status_code == 401
     r = client.post("/api/runner/start", json={"symbol": "BTCUSDT"}, headers={"X-Runner-Key": "nope"})
     assert r.status_code == 401
+
+
+# --- 브라우저 -> 로컬 실행기 1회용 티켓 -------------------------------
+def test_launch_ticket_create_claim_and_status_contract():
+    token = _signup()
+    saved = _save_macro(token)
+
+    created = client.post(
+        "/api/me/runner/launch-tickets",
+        json={"user_macro_id": saved["id"], "testnet": True},
+        headers=_auth(token),
+    )
+    assert created.status_code == 200, created.text
+    assert created.headers["cache-control"] == "no-store"
+    payload = created.json()
+    assert payload["status"] == "ready"
+    assert payload["expires_at"]
+    assert payload["launch_url"].startswith("ggparrot://launch?")
+
+    query = parse_qs(urlsplit(payload["launch_url"]).query)
+    assert query["v"] == ["1"]
+    ticket = query["ticket"][0]
+
+    # Only the digest is durable; the bearer itself never enters the DB row.
+    with get_session() as db:
+        row = db.get(RunnerLaunchTicket, payload["launch_id"])
+        assert row is not None
+        assert row.token_hash == hashlib.sha256(ticket.encode("ascii")).hexdigest()
+        assert ticket not in row.token_hash
+        assert not hasattr(row, "ticket")
+
+    ready = client.get(
+        f"/api/me/runner/launch-tickets/{payload['launch_id']}",
+        headers=_auth(token),
+    )
+    assert ready.status_code == 200
+    assert ready.headers["cache-control"] == "no-store"
+    assert ready.json()["status"] == "ready"
+
+    claimed = client.post(
+        "/api/runner/launch-tickets/claim",
+        json={"ticket": ticket},
+    )
+    assert claimed.status_code == 200, claimed.text
+    assert claimed.headers["cache-control"] == "no-store"
+    body = claimed.json()
+    assert body["launch_id"] == payload["launch_id"]
+    assert body["user_macro_id"] == saved["id"]
+    assert body["name"] == "빠른 실행 테스트"
+    assert body["symbol"] == "BTCUSDT"
+    assert body["macro"]["symbol"] == "BTCUSDT"
+    assert body["runner_key"].startswith("ggp_")
+    assert body["testnet"] is True
+
+    after = client.get(
+        f"/api/me/runner/launch-tickets/{payload['launch_id']}",
+        headers=_auth(token),
+    )
+    assert after.json()["status"] == "claimed"
+
+    replay = client.post("/api/runner/launch-tickets/claim", json={"ticket": ticket})
+    assert replay.status_code == 409
+    assert replay.headers["cache-control"] == "no-store"
+
+
+def test_launch_ticket_enforces_macro_ownership_and_testnet():
+    owner = _signup()
+    stranger = _signup()
+    saved = _save_macro(owner, "ETHUSDT")
+
+    denied = client.post(
+        "/api/me/runner/launch-tickets",
+        json={"user_macro_id": saved["id"], "testnet": True},
+        headers=_auth(stranger),
+    )
+    assert denied.status_code == 404
+    assert denied.headers["cache-control"] == "no-store"
+
+    live = client.post(
+        "/api/me/runner/launch-tickets",
+        json={"user_macro_id": saved["id"], "testnet": False},
+        headers=_auth(owner),
+    )
+    assert live.status_code == 422
+
+    made = client.post(
+        "/api/me/runner/launch-tickets",
+        json={"user_macro_id": saved["id"], "testnet": True},
+        headers=_auth(owner),
+    ).json()
+    hidden = client.get(
+        f"/api/me/runner/launch-tickets/{made['launch_id']}",
+        headers=_auth(stranger),
+    )
+    assert hidden.status_code == 404
+    assert hidden.headers["cache-control"] == "no-store"
+
+
+def test_launch_ticket_expires_and_cannot_be_claimed():
+    token = _signup()
+    saved = _save_macro(token)
+    created = client.post(
+        "/api/me/runner/launch-tickets",
+        json={"user_macro_id": saved["id"], "testnet": True},
+        headers=_auth(token),
+    ).json()
+    ticket = parse_qs(urlsplit(created["launch_url"]).query)["ticket"][0]
+
+    with get_session() as db:
+        row = db.get(RunnerLaunchTicket, created["launch_id"])
+        row.expires_ms = 0
+        db.add(row)
+        db.commit()
+
+    status = client.get(
+        f"/api/me/runner/launch-tickets/{created['launch_id']}",
+        headers=_auth(token),
+    )
+    assert status.json()["status"] == "expired"
+    claim = client.post("/api/runner/launch-tickets/claim", json={"ticket": ticket})
+    assert claim.status_code == 410
+    assert claim.headers["cache-control"] == "no-store"
+
+
+def test_launch_ticket_claim_is_atomic_under_concurrency():
+    token = _signup()
+    saved = _save_macro(token)
+    created = client.post(
+        "/api/me/runner/launch-tickets",
+        json={"user_macro_id": saved["id"], "testnet": True},
+        headers=_auth(token),
+    ).json()
+    ticket = parse_qs(urlsplit(created["launch_url"]).query)["ticket"][0]
+    gate = Barrier(2)
+
+    def attempt():
+        gate.wait()
+        try:
+            runner_mod.claim_launch_ticket(ticket)
+            return 200
+        except HTTPException as exc:
+            return exc.status_code
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        statuses = sorted(pool.map(lambda _: attempt(), range(2)))
+    assert statuses == [200, 409]
+
+
+def test_runner_download_info_advertises_launch_capability_safely():
+    response = client.get("/api/runner/download/info")
+    assert response.status_code == 200
+    info = response.json()
+    assert isinstance(info["supports_launch"], bool)
+    if info["supports_launch"]:
+        assert info["launch_scheme"] == "ggparrot"
+        assert info["min_runner_version"]
+    else:
+        assert info["launch_scheme"] == ""
+        assert info["min_runner_version"] == ""
 
 
 # --- 세션 수명주기 + 원격 종료 -----------------------------------------

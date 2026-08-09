@@ -3,9 +3,9 @@ import { Link, NavLink, useLocation } from "react-router-dom";
 
 const PRIMARY_LINKS = [
   { to: "/", label: "홈", description: "서비스 소개", icon: "home", end: true },
-  { to: "/builder", label: "매크로 빌더", description: "조건 만들기와 검증", icon: "builder", matches: ["/builder", "/s/"] },
+  { to: "/runner", label: "빠른 실행", description: "준비부터 실행 확인까지", icon: "runner", matches: ["/runner"] },
+  { to: "/builder", label: "직접 만들기", description: "조건 설계와 검증", icon: "builder", matches: ["/builder", "/s/"] },
   { to: "/leaderboard", label: "리더보드", description: "오늘의 모의 수익률", icon: "leaderboard", matches: ["/leaderboard", "/gallery"] },
-  { to: "/runner", label: "매크로 실행기", description: "내 PC에서 실거래 실행", icon: "runner", matches: ["/runner"] },
 ];
 
 const BROWSE_LINKS = [
@@ -75,7 +75,6 @@ function NavigationContents({ onNavigate, tabIndex }) {
   const { pathname, search } = useLocation();
   const params = new URLSearchParams(search);
   const tour = pathname === "/" ? params.get("tour") || "" : "";
-  const guideRunning = pathname === "/" && params.get("guide") === "1";
 
   return (
     <>
@@ -86,13 +85,13 @@ function NavigationContents({ onNavigate, tabIndex }) {
       </nav>
       <div className="site-sidebar-bottom">
         <Link
-          to="/?guide=1&tour=build"
+          to="/runner"
           onClick={onNavigate}
           tabIndex={tabIndex}
-          className={`site-quick-start ${guideRunning ? "is-running" : ""}`}
+          className="site-quick-start"
         >
-          <span className="num">QUICK START</span>
-          <strong>{guideRunning ? "빠른 시작 진행 중" : "첫 매크로 함께 만들기"}</strong>
+          <span className="num">QUICK RUN</span>
+          <strong>내 매크로 바로 실행</strong>
           <span aria-hidden="true">→</span>
         </Link>
         <p>모든 결과는 모의 계산이며<br />투자 조언이 아니에요.</p>

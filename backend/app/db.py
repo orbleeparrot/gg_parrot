@@ -152,6 +152,30 @@ class MacroUnlock(SQLModel, table=True):
     created_at: str
 
 
+class UserMacro(SQLModel, table=True):
+    """A normalized macro snapshot owned by one account.
+
+    Leaderboard rows can be edited or deleted after another user unlocks them,
+    so quick-run must never keep reading the seller's live row. This table is
+    the stable account library used by the runner flow. Exchange credentials
+    are deliberately not part of this model.
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(index=True)
+    name: str = ""
+    symbol: str = Field(index=True)
+    rule_type: str = ""
+    position_side: str = "long"
+    macro_json: str
+    human_summary: str = ""
+    source_type: str = Field(index=True)  # created | leaderboard | upload | builder
+    source_ref: str = Field(default="", index=True)
+    schema_version: str = "1"
+    created_at: str
+    updated_at: str
+
+
 class RunnerKey(SQLModel, table=True):
     """계정당 1개의 '껄무새 회원 키'. 매크로 실행기(로컬 exe)가 이 불투명 토큰으로
     서버에 자신을 인증한다. API 키/시크릿은 절대 서버로 오지 않는다 — 오직 이 키와
@@ -162,6 +186,24 @@ class RunnerKey(SQLModel, table=True):
     user_id: int = Field(index=True, unique=True)  # one key per account
     key: str = Field(index=True, unique=True)  # 불투명 토큰 (예: "ggp_xxxxx")
     created_at: str
+
+
+class RunnerLaunchTicket(SQLModel, table=True):
+    """Short-lived, single-use handoff from the signed-in web app to the runner.
+
+    Only a SHA-256 digest is persisted. The raw bearer ticket exists briefly in
+    the create response/``ggparrot://`` URI and is never written to the database.
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(index=True)
+    user_macro_id: int = Field(index=True)
+    token_hash: str = Field(index=True, unique=True)
+    testnet: bool = True
+    created_at: str
+    expires_at: str
+    expires_ms: int = Field(index=True)
+    claimed_at: str = ""
 
 
 class RunSession(SQLModel, table=True):

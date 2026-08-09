@@ -869,7 +869,12 @@ export default function RunnerDownload() {
           {runnerAvailable && downloadInfo?.version ? <div><dt>버전</dt><dd className="num">v{downloadInfo.version}</dd></div> : null}
           {runnerAvailable && downloadInfo?.size ? <div><dt>파일 크기</dt><dd className="num">{fmtSize(downloadInfo.size)}</dd></div> : null}
         </dl>
-        {!runnerReady && ["unavailable", "error"].includes(runnerDownloadState) ? (
+        {downloadStarted && !runnerReady ? (
+          <div className="runner-wizard-runner-notice" role="status">
+            <strong>다운로드 목록에서 파일을 허용한 뒤 한 번 열어 주세요.</strong>
+            <p>브라우저가 ‘확인되지 않은 다운로드’로 막으면 GitHub의 껄무새 runner-v2 파일인지 확인한 뒤 유지·다운로드 계속을 선택해요.</p>
+          </div>
+        ) : !runnerReady && ["unavailable", "error"].includes(runnerDownloadState) ? (
           <div className="runner-wizard-runner-notice" role={runnerDownloadState === "error" ? "alert" : "status"}>
             <strong>{runnerDownloadState === "error" ? "서버 응답을 받지 못했어요." : "이 서버에 실행기 다운로드 주소가 아직 설정되지 않았어요."}</strong>
             <p>실행기가 이미 있다면 바로 이어가고, 없다면 계정 연결과 매크로 준비를 먼저 끝낼 수 있어요.</p>

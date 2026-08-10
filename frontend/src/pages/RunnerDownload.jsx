@@ -6,7 +6,6 @@ import { getAuthUser, updateAuthUser, useAuth } from "../lib/auth.js";
 import { RULE_TYPES } from "../lib/macro.js";
 import { getUserId } from "../lib/user.js";
 
-const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const OFFICIAL_RUNNER_VERSION = "4";
 const RUNNER_OPENED_STORAGE_KEY = "ggparrot:runner-opened-version";
 const LEGACY_RUNNER_OPENED_STORAGE_KEY = "ggparrot:runner-opened";
@@ -201,30 +200,20 @@ function MacroSummary({ item, compact = false }) {
   );
 }
 
-function LibraryActions({ leaderboardOpen = false, onLeaderboard, onUpload, uploadBusy }) {
+function LibraryActions({ leaderboardOpen = false, onLeaderboard }) {
   return (
     <footer className="runner-wizard-library-actions">
       <button type="button" onClick={onLeaderboard} className="btn btn-m btn-secondary">
         {leaderboardOpen ? "내 매크로로 돌아가기" : "리더보드에서 가져오기"}
       </button>
-      <button type="button" onClick={onUpload} disabled={uploadBusy} className="btn btn-m btn-secondary">
-        {uploadBusy ? "계정에 저장 중…" : "파일에서 가져오기"}
-      </button>
+      <Link to="/builder" className="btn btn-m btn-secondary">내 매크로 직접 만들기</Link>
     </footer>
   );
 }
 
-function MacroPicker({ items, selected, onSelect, onLeaderboard, onUpload, uploadBusy, uploadError, fileInputRef, onFileChange }) {
+function MacroPicker({ items, selected, onSelect, onLeaderboard }) {
   return (
     <div className="runner-wizard-library">
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept=".json,.ggm.json,application/json"
-        onChange={onFileChange}
-        className="sr-only"
-        aria-label="껄무새 매크로 파일 가져오기"
-      />
       <div className="runner-wizard-macro-list" role="radiogroup" aria-label="내 매크로 목록">
         {items.map((item) => {
           const active = selected?.id === item.id;
@@ -258,46 +247,28 @@ function MacroPicker({ items, selected, onSelect, onLeaderboard, onUpload, uploa
           );
         })}
       </div>
-      {uploadError ? <p className="runner-wizard-library-message runner-wizard-error" role="alert">{uploadError}</p> : null}
-      <LibraryActions onLeaderboard={onLeaderboard} onUpload={onUpload} uploadBusy={uploadBusy} />
+      <LibraryActions onLeaderboard={onLeaderboard} />
     </div>
   );
 }
 
-function EmptyLibrary({ onLeaderboard, onUpload, uploadBusy, uploadError, libraryNotice, fileInputRef, onFileChange }) {
+function EmptyLibrary({ onLeaderboard, libraryNotice }) {
   return (
     <div className="runner-wizard-library is-empty">
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept=".json,.ggm.json,application/json"
-        onChange={onFileChange}
-        className="sr-only"
-        aria-label="껄무새 매크로 파일 업로드"
-      />
       <div className="runner-wizard-empty-library">
         <div className="runner-wizard-empty-mark num">0</div>
         <h2>아직 연결할 매크로가 없어요.</h2>
-        <p>리더보드에서 고르거나 가지고 있는 매크로 파일을 가져와요.</p>
+        <p>리더보드에서 고르거나 직접 만들기에서 새 매크로를 설계해요.</p>
         {libraryNotice ? <p className="runner-wizard-library-notice" role="status">{libraryNotice}</p> : null}
       </div>
-      {uploadError ? <p className="runner-wizard-library-message runner-wizard-error" role="alert">{uploadError}</p> : null}
-      <LibraryActions onLeaderboard={onLeaderboard} onUpload={onUpload} uploadBusy={uploadBusy} />
+      <LibraryActions onLeaderboard={onLeaderboard} />
     </div>
   );
 }
 
-function InlineLeaderboard({ items, ownedItems, selectedId, busy, error, importingId, onImport, onBack, onUpload, uploadBusy, uploadError, fileInputRef, onFileChange }) {
+function InlineLeaderboard({ items, ownedItems, selectedId, busy, error, importingId, onImport, onBack }) {
   return (
     <div className="runner-wizard-library">
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept=".json,.ggm.json,application/json"
-        onChange={onFileChange}
-        className="sr-only"
-        aria-label="껄무새 매크로 파일 가져오기"
-      />
       <div className="runner-wizard-leaderboard-list" aria-label="오늘의 리더보드 매크로">
         {busy ? <div className="runner-wizard-inline-state" role="status">오늘의 수익률을 불러오고 있어요…</div> : null}
         {!busy && items.length === 0 ? <div className="runner-wizard-inline-state">오늘 등록된 매크로가 아직 없어요.</div> : null}
@@ -338,8 +309,7 @@ function InlineLeaderboard({ items, ownedItems, selectedId, busy, error, importi
         }) : null}
       </div>
       {error ? <p className="runner-wizard-library-message runner-wizard-error" role="alert">{error}</p> : null}
-      {uploadError ? <p className="runner-wizard-library-message runner-wizard-error" role="alert">{uploadError}</p> : null}
-      <LibraryActions leaderboardOpen onLeaderboard={onBack} onUpload={onUpload} uploadBusy={uploadBusy} />
+      <LibraryActions leaderboardOpen onLeaderboard={onBack} />
     </div>
   );
 }
@@ -361,7 +331,6 @@ export default function RunnerDownload() {
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const headingRef = useRef(null);
-  const fileInputRef = useRef(null);
   const performanceHintsRef = useRef(new Map());
   const [library, setLibrary] = useState([]);
   const [libraryBusy, setLibraryBusy] = useState(false);
@@ -372,8 +341,6 @@ export default function RunnerDownload() {
   const [leaderboardBusy, setLeaderboardBusy] = useState(false);
   const [leaderboardError, setLeaderboardError] = useState("");
   const [importingLeaderboardId, setImportingLeaderboardId] = useState(0);
-  const [uploadBusy, setUploadBusy] = useState(false);
-  const [uploadError, setUploadError] = useState("");
   const [downloadInfo, setDownloadInfo] = useState(null);
   const [downloadError, setDownloadError] = useState("");
   const [runnerReady, setRunnerReady] = useState(() => (
@@ -683,45 +650,6 @@ export default function RunnerDownload() {
     moveTo(STEP_RUNNER);
   }
 
-  async function importFile(file) {
-    setUploadError("");
-    if (!file) return;
-    if (file.size > MAX_FILE_BYTES) {
-      setUploadError("2MB 이하의 껄무새 매크로 파일을 선택해 주세요.");
-      return;
-    }
-    setUploadBusy(true);
-    try {
-      const macro = JSON.parse(await file.text());
-      if (!macro || typeof macro !== "object" || !macro.symbol || !macro.rule_type || !macro.params) {
-        throw new Error("invalid macro");
-      }
-      const name = file.name.replace(/\.ggm\.json$|\.json$/i, "");
-      const data = await api.saveMyMacro(macro, name);
-      const item = data.item;
-      setLibrary((current) => [item, ...current.filter((row) => row.id !== item.id)]);
-      setSelectedId(item.id);
-      setLibraryView("mine");
-    } catch (error) {
-      const message = String(error.message || error);
-      setUploadError(
-        message === "invalid macro"
-          ? "껄무새에서 받은 .ggm.json 파일인지 확인해 주세요."
-          : error?.code === "NON_JSON_RESPONSE"
-            ? "계정 저장 기능이 아직 서버에 연결되지 않았어요. 백엔드를 새로고침한 뒤 다시 시도해 주세요."
-            : `매크로를 저장하지 못했어요: ${message}`,
-      );
-    } finally {
-      setUploadBusy(false);
-    }
-  }
-
-  function onFileChange(event) {
-    const file = event.target.files?.[0];
-    void importFile(file);
-    event.target.value = "";
-  }
-
   async function importLeaderboardMacro(entry) {
     if (importingLeaderboardId) return;
     setLeaderboardError("");
@@ -867,11 +795,6 @@ export default function RunnerDownload() {
             importingId={importingLeaderboardId}
             onImport={importLeaderboardMacro}
             onBack={() => setLibraryView("mine")}
-            onUpload={() => fileInputRef.current?.click()}
-            uploadBusy={uploadBusy}
-            uploadError={uploadError}
-            fileInputRef={fileInputRef}
-            onFileChange={onFileChange}
           />
         </Workspace>
       );
@@ -881,12 +804,7 @@ export default function RunnerDownload() {
         <Workspace title="내 매크로" status="0개" bodyClassName="is-library">
           <EmptyLibrary
             onLeaderboard={() => setLibraryView("leaderboard")}
-            onUpload={() => fileInputRef.current?.click()}
-            uploadBusy={uploadBusy}
-            uploadError={uploadError}
             libraryNotice={libraryError}
-            fileInputRef={fileInputRef}
-            onFileChange={onFileChange}
           />
         </Workspace>
       );
@@ -898,11 +816,6 @@ export default function RunnerDownload() {
           selected={selected}
           onSelect={setSelectedId}
           onLeaderboard={() => setLibraryView("leaderboard")}
-          onUpload={() => fileInputRef.current?.click()}
-          uploadBusy={uploadBusy}
-          uploadError={uploadError}
-          fileInputRef={fileInputRef}
-          onFileChange={onFileChange}
         />
       </Workspace>
     );

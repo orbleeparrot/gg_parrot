@@ -3,7 +3,8 @@ import { Link } from "react-router-dom";
 import { api } from "../api.js";
 import { SectionTitle, EmptyRow } from "./Page.jsx";
 import CandleChart from "./CandleChart.jsx";
-import { entryPriceOverlay } from "../lib/indicators.js";
+import { computeSessionOverlay } from "../lib/indicators.js";
+import { RULE_TYPES } from "../lib/macro.js";
 
 // 내 매크로 실행 현황 — 실행기(exe)가 올리는 세션을 실시간으로 보여주고,
 // 원격 종료(매크로만 / 청산 후)를 요청한다.
@@ -75,12 +76,16 @@ function SessionCard({ s, onStop, busy }) {
   const stopped = s.status !== "running";
   const up = (s.unrealized_pct ?? 0) >= 0;
   const realUp = (s.realized_pnl ?? 0) >= 0;
-  // 실행 중인 세션엔 종목 실시간 차트를 붙이고, 보유 중이면 내 평단을 선으로 표시.
+  // 실행 중인 세션엔 종목 실시간 차트를 붙이고, 빌더와 동일한 전략 보조지표(볼린저·
+  // 이동평균·RSI 등)를 실행 중인 매크로 조건 그대로 그린다. 보유 중이면 내 평단도 표시.
   const [chartOpen, setChartOpen] = useState(true);
   const hasEntry = s.in_position && (s.entry_price ?? 0) > 0;
-  const entryOverlay = useCallback(
-    () => (hasEntry ? entryPriceOverlay(s.entry_price, s.position_side) : null),
-    [hasEntry, s.entry_price, s.position_side]
+  const hasMacro = !!s.macro?.rule_type;
+  const ruleLabel = hasMacro ? RULE_TYPES[s.macro.rule_type]?.label : "";
+  const chartInterval = s.macro?.candle_interval || "5m";
+  const overlay = useCallback(
+    (candles) => computeSessionOverlay(s.macro, hasEntry ? s.entry_price : null, s.position_side, candles),
+    [s.macro, hasEntry, s.entry_price, s.position_side]
   );
 
   return (
@@ -151,6 +156,7 @@ function SessionCard({ s, onStop, busy }) {
           >
             <span className="t-small font-semibold text-slate-700">
               실시간 차트
+              {hasMacro && <span className="ml-2 t-caption text-slate-500">{ruleLabel}</span>}
               {hasEntry ? (
                 <span className="ml-2 t-caption text-indigo-800 num">내 평단 {P(s.entry_price)}</span>
               ) : (
@@ -162,8 +168,8 @@ function SessionCard({ s, onStop, busy }) {
           {chartOpen && (
             <CandleChart
               symbol={s.symbol}
-              defaultInterval="5m"
-              overlay={hasEntry ? entryOverlay : null}
+              defaultInterval={chartInterval}
+              overlay={overlay}
             />
           )}
         </div>

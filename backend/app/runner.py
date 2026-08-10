@@ -16,6 +16,7 @@
 """
 from __future__ import annotations
 
+import json
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -110,6 +111,17 @@ def start_session(user: User, payload: dict) -> dict:
     market = str(payload.get("market", "")).lower()
     if market not in ("spot", "futures"):
         market = "futures" if (side == "short" or leverage > 1) else "spot"
+    # 실행 중인 매크로 원문 — 마이페이지 실시간 차트에 전략 보조지표를 그리는 데 쓴다.
+    # 예전 실행기는 보내지 않으므로 없으면 빈 문자열로 둔다(차트는 평단선만 그림).
+    macro_json = ""
+    macro = payload.get("macro")
+    if isinstance(macro, dict):
+        try:
+            dumped = json.dumps(macro, ensure_ascii=False)
+            if len(dumped) <= 20000:  # 방어적 상한(정상 매크로는 ~1KB)
+                macro_json = dumped
+        except (TypeError, ValueError):
+            macro_json = ""
     now = _now_iso()
     with get_session() as db:
         row = RunSession(
@@ -120,6 +132,7 @@ def start_session(user: User, payload: dict) -> dict:
             market=market,
             testnet=bool(payload.get("testnet", True)),
             human_summary=str(payload.get("human_summary", ""))[:300],
+            macro_json=macro_json,
             status="running",
             stop_mode="",
             started_at=now,
@@ -184,6 +197,12 @@ def _session_view(row: RunSession) -> dict:
         connected = (datetime.now(timezone.utc) - hb).total_seconds() <= STALE_SECONDS
     # 실행기가 종료 명령을 받아 정리 중인 상태(플래그는 섰지만 아직 확정 보고 전).
     stopping = row.status == "running" and row.stop_mode in _STOP_MODES
+    macro = None
+    if getattr(row, "macro_json", ""):
+        try:
+            macro = json.loads(row.macro_json)
+        except (TypeError, ValueError):
+            macro = None
     return {
         "session_id": row.id,
         "symbol": row.symbol,
@@ -192,6 +211,7 @@ def _session_view(row: RunSession) -> dict:
         "market": row.market,
         "testnet": row.testnet,
         "human_summary": row.human_summary,
+        "macro": macro,
         "status": row.status,
         "stopping": stopping,
         "stop_mode": row.stop_mode,

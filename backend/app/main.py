@@ -201,6 +201,9 @@ class RunnerStartRequest(BaseModel):
     market: str = ""  # spot | futures | "" (서버가 방향/레버리지로 결정)
     testnet: bool = True
     human_summary: str = ""
+    # 실행 중인 매크로 원문(선택) — 마이페이지 실시간 차트에 전략 보조지표를 그리는
+    # 데 쓴다. 거래소 키/시크릿은 포함되지 않는다. 예전 실행기는 보내지 않는다.
+    macro: Optional[dict] = None
 
 
 class RunnerHeartbeatRequest(BaseModel):

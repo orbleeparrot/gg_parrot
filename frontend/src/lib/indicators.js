@@ -141,6 +141,38 @@ export function entryPriceOverlay(entryPrice, side) {
   };
 }
 
+// 저장된 매크로 JSON({rule_type, position_side, params, risk})을 computeStrategyOverlay
+// 가 읽는 평평한 form 으로 편다. params 키가 곧 form 키이고, 손절은 risk 에 있다.
+function flattenMacro(macro, sideFallback) {
+  if (!macro || !macro.rule_type) return null;
+  const risk = macro.risk || {};
+  return {
+    rule_type: macro.rule_type,
+    position_side: macro.position_side || sideFallback || "long",
+    ...(macro.params || {}),
+    use_stop_loss: risk.stop_loss_pct != null,
+    stop_loss_pct: risk.stop_loss_pct ?? 0,
+  };
+}
+
+// 마이페이지 실행 세션용 — 빌더와 똑같은 전략 보조지표에 내 평단선을 얹어 합친다.
+// macro 가 없으면(옛 실행기 세션) 평단선만, 포지션이 없으면 전략 보조지표만 그린다.
+export function computeSessionOverlay(macro, entryPrice, side, candles) {
+  const form = flattenMacro(macro, side);
+  const base = form ? computeStrategyOverlay(form, candles) : null;
+  const entry = entryPriceOverlay(entryPrice, side || macro?.position_side);
+  if (!base && !entry) return null;
+  return {
+    legend: [...(base?.legend || []), ...(entry?.legend || [])],
+    priceLines: [...(base?.priceLines || []), ...(entry?.priceLines || [])],
+    series: base?.series || [],
+    bands: base?.bands || [],
+    markers: base?.markers || [],
+    rsi: base?.rsi || null,
+    note: [base?.note, entry?.note].filter(Boolean).join(" "),
+  };
+}
+
 // --- 매매 방식별 보조지표 ----------------------------------------------
 // form 은 빌더 폼(또는 저장된 매크로 params 를 펼친 것)과 같은 키를 쓴다.
 export function computeStrategyOverlay(form, candles) {

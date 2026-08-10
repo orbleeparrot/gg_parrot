@@ -183,6 +183,10 @@ class RunSession(SQLModel, table=True):
     market: str = ""  # spot | futures
     testnet: bool = True  # 실거래 여부: False = 메인넷(실제 자금)
     human_summary: str = ""
+    # 실행 중인 매크로 원문(JSON 문자열). 마이페이지 실시간 차트에 전략 보조지표
+    # (볼린저·이동평균·RSI 등)를 빌더와 동일하게 그리기 위해 실행기가 함께 올린다.
+    # 예전 실행기가 만든 세션엔 비어 있을 수 있어 프런트는 없으면 평단선만 그린다.
+    macro_json: str = ""
     # 수명주기: running -> stopped(정상) | error
     status: str = Field(default="running", index=True)
     # 마이페이지가 요청한 종료 방식: "" (계속) | "stop_only" | "close_and_stop"
@@ -313,6 +317,9 @@ def _migrate() -> None:
         "macrorow": {
             "rep_leverage": "ALTER TABLE macrorow ADD COLUMN rep_leverage INTEGER DEFAULT 1",
         },
+        "runsession": {
+            "macro_json": "ALTER TABLE runsession ADD COLUMN macro_json TEXT DEFAULT ''",
+        },
     }
     with _engine.connect() as conn:
         for table, cols in added.items():
@@ -325,12 +332,27 @@ def _migrate() -> None:
         conn.commit()
 
 
+def _migrate_pg() -> None:
+    """Postgres: create_all does not ALTER existing tables either, so add columns
+    introduced after a table first shipped. `ADD COLUMN IF NOT EXISTS` makes this
+    idempotent and safe on every startup."""
+    stmts = [
+        "ALTER TABLE runsession ADD COLUMN IF NOT EXISTS macro_json TEXT DEFAULT ''",
+    ]
+    with _engine.connect() as conn:
+        for ddl in stmts:
+            conn.exec_driver_sql(ddl)
+        conn.commit()
+
+
 def init_db() -> None:
     SQLModel.metadata.create_all(_engine)
-    # _migrate uses SQLite PRAGMA and only patches pre-existing SQLite tables.
-    # On a fresh Postgres, create_all already builds every table with all columns.
+    # create_all never ALTERs a pre-existing table, so patch late-added columns on
+    # both backends: SQLite via PRAGMA checks, Postgres via ADD COLUMN IF NOT EXISTS.
     if _is_sqlite():
         _migrate()
+    else:
+        _migrate_pg()
 
 
 def get_session() -> Session:

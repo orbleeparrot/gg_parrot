@@ -201,8 +201,15 @@ function Chart({ candles, symbol, hover, setHover, onPan }) {
   );
 }
 
-export default function CandleChart({ symbol, defaultInterval = "1m" }) {
-  const [interval, setInterval_] = useState(defaultInterval);
+export default function CandleChart({
+  symbol,
+  defaultInterval = "1m",
+  interval: controlledInterval,
+  onIntervalChange,
+  onLoadState,
+  compact = false,
+}) {
+  const [localInterval, setLocalInterval] = useState(defaultInterval);
   const [candles, setCandles] = useState(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -210,6 +217,14 @@ export default function CandleChart({ symbol, defaultInterval = "1m" }) {
   const [anchor, setAnchor] = useState(null); // null = pinned to live edge
   const [hover, setHover] = useState(null);
   const timer = useRef(null);
+  const loadStateRef = useRef(onLoadState);
+  loadStateRef.current = onLoadState;
+  const interval = controlledInterval ?? localInterval;
+
+  const changeInterval = (value) => {
+    if (controlledInterval == null) setLocalInterval(value);
+    onIntervalChange?.(value);
+  };
 
   // --- polling loop ---
   useEffect(() => {
@@ -218,15 +233,29 @@ export default function CandleChart({ symbol, defaultInterval = "1m" }) {
     let refreshMs = 3000;
 
     async function load(showSpinner) {
-      if (showSpinner) setLoading(true);
+      if (showSpinner) {
+        setLoading(true);
+        loadStateRef.current?.({ status: "loading", symbol, interval, error: "" });
+      }
       try {
         const d = await api.candles(symbol, interval, BUFFER);
         if (!alive) return;
-        setCandles(d.candles || []);
+        const nextCandles = d.candles || [];
+        setCandles(nextCandles);
         setError("");
+        loadStateRef.current?.({
+          status: nextCandles.length > 0 ? "ready" : "error",
+          symbol,
+          interval,
+          error: nextCandles.length > 0 ? "" : "표시할 시세가 없어요.",
+        });
         if (d.refresh_seconds) refreshMs = Math.max(2000, d.refresh_seconds * 1000);
       } catch (e) {
-        if (alive) setError(String(e.message || e));
+        if (alive) {
+          const message = String(e.message || e);
+          setError(message);
+          loadStateRef.current?.({ status: "error", symbol, interval, error: message });
+        }
       } finally {
         if (alive && showSpinner) setLoading(false);
       }
@@ -337,22 +366,26 @@ export default function CandleChart({ symbol, defaultInterval = "1m" }) {
         </div>
 
         <div className="flex items-center gap-2">
-          <button onClick={() => applyZoom(zoom * 1.35)} disabled={zoom >= maxZoom} className={btn} title="축소 (더 많은 봉)" aria-label="차트 축소">
-            −
-          </button>
-          <span className="t-caption text-slate-700 num w-14 text-center">{Math.min(zoom, total)}봉</span>
-          <button onClick={() => applyZoom(zoom * 0.7)} disabled={zoom <= MIN_ZOOM} className={btn} title="확대 (봉 자세히)" aria-label="차트 확대">
-            +
-          </button>
-          {!live && (
-            <button onClick={() => setAnchor(null)} className="btn btn-s btn-secondary" title="최신 봉으로 이동">
-              최신
-            </button>
-          )}
+          {!compact ? (
+            <>
+              <button onClick={() => applyZoom(zoom * 1.35)} disabled={zoom >= maxZoom} className={btn} title="축소 (더 많은 봉)" aria-label="차트 축소">
+                −
+              </button>
+              <span className="t-caption text-slate-700 num w-14 text-center">{Math.min(zoom, total)}봉</span>
+              <button onClick={() => applyZoom(zoom * 0.7)} disabled={zoom <= MIN_ZOOM} className={btn} title="확대 (봉 자세히)" aria-label="차트 확대">
+                +
+              </button>
+              {!live && (
+                <button onClick={() => setAnchor(null)} className="btn btn-s btn-secondary" title="최신 봉으로 이동">
+                  최신
+                </button>
+              )}
+            </>
+          ) : null}
           <select
             value={interval}
             aria-label="차트 봉 간격"
-            onChange={(e) => setInterval_(e.target.value)}
+            onChange={(e) => changeInterval(e.target.value)}
             className="field field-sm w-auto"
           >
             {INTERVALS.map((o) => (
@@ -385,7 +418,7 @@ export default function CandleChart({ symbol, defaultInterval = "1m" }) {
         </div>
       )}
 
-      {!error && view.length > 0 && (
+      {!compact && !error && view.length > 0 && (
         <div className="mt-2 space-y-1 t-caption text-slate-500">
           <div className="flex items-center justify-between gap-3 num text-slate-700">
             <span>{fullTime(view[0].t)}</span>

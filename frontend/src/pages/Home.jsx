@@ -5,28 +5,18 @@ import {
   dismissJourney,
   readJourneyState,
 } from "../lib/journey.js";
+import { GUIDE_CHAPTERS } from "../lib/guideFlow.js";
 import { lockBodyScroll } from "../lib/bodyScrollLock.js";
 
 const StartGuide = lazy(() => import("./Start.jsx"));
 const FOCUSABLE =
   'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
-const GUIDE_CHAPTERS = [
-  "매크로 빌드",
-  "조건 설정",
-  "백테스트",
-  "페이퍼 트레이딩",
-  "리더보드 등록",
-  "채팅·게시판",
-  "코인동향",
-  "사용 가이드",
-];
-
 const PRODUCT_STEPS = [
   {
     number: "01",
-    title: "규칙을 만들어요",
-    body: "종목과 A–K 전략을 고르고, 손절·기간·비용까지 한 번 정해요.",
+    title: "차트를 먼저 찾아요",
+    body: "원하는 종목을 검색하고 실시간 차트를 본 뒤 A–K 전략과 조건을 정해요.",
   },
   {
     number: "02",
@@ -240,8 +230,8 @@ export default function Home() {
               <mark>매매하고 검증해요.</mark>
             </h1>
             <p className="home-hero-description text-slate-600">
-              종목과 조건을 고르면 과거 데이터 검증부터 페이퍼 트레이딩, 오늘의 리더보드까지
-              하나의 설정으로 이어져요. 코드를 몰라도 괜찮아요.
+              원하는 종목의 실시간 차트를 먼저 보고 조건을 정하면, 과거 데이터 검증부터
+              페이퍼 트레이딩과 오늘의 리더보드까지 하나의 설정으로 이어져요.
             </p>
             <div className="home-hero-actions">
               {hasUsedGuide ? (
@@ -295,7 +285,7 @@ export default function Home() {
               입력은 한 번, 검증은 끝까지.
             </h2>
             <p className="mt-4 t-body text-slate-600 measure">
-              화면마다 설정을 다시 옮기지 않아요. 빌더에서 만든 동일한 규칙이 검증과 등록까지 이어져요.
+              화면마다 설정을 다시 옮기지 않아요. 검색한 차트의 종목과 봉 간격, 조건이 검증과 등록까지 이어져요.
             </p>
           </div>
           <ol className="home-workflow-list">
@@ -316,7 +306,7 @@ export default function Home() {
               설명만 읽지 말고,<br />직접 등록까지 해보세요.
             </h2>
             <p className="mt-4 t-body text-slate-600 measure">
-              실제 백테스트와 페이퍼 트레이딩을 실행하고, 마지막에는 내가 만든 매크로를 리더보드에 등록해요.
+              원하는 종목의 실시간 차트를 확인하며 조건을 정하고, 실제 백테스트와 페이퍼 트레이딩을 거쳐 리더보드에 등록해요.
             </p>
             <button
               type="button"
@@ -328,7 +318,7 @@ export default function Home() {
               {guideLabel}
             </button>
           </div>
-          <ol className="home-guide-chapters" aria-label="빠른 가이드 8단계">
+          <ol className="home-guide-chapters" aria-label={`빠른 가이드 ${GUIDE_CHAPTERS.length}단계`}>
             {GUIDE_CHAPTERS.map((chapter, index) => (
               <li key={chapter}>
                 <span className="num">{String(index + 1).padStart(2, "0")}</span>

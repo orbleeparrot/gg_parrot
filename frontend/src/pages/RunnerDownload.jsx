@@ -10,15 +10,57 @@ const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const OFFICIAL_RUNNER_VERSION = "4";
 const RUNNER_OPENED_STORAGE_KEY = "ggparrot:runner-opened-version";
 const LEGACY_RUNNER_OPENED_STORAGE_KEY = "ggparrot:runner-opened";
+const BINANCE_KEY_GUIDE_STORAGE_PREFIX = "ggparrot:binance-testnet-key-ready:v1";
 const OFFICIAL_RUNNER_DOWNLOAD_URL = "https://github.com/orbleeparrot/gg_parrot/releases/download/runner-v4/ggparrot-runner.exe";
 
-const CHAPTERS = ["매크로 연결", "실행기 준비", "계정 연결", "실행"];
+const STEP_MACRO = 0;
+const STEP_API_KEY = 1;
+const STEP_RUNNER = 2;
+const STEP_ACCOUNT = 3;
+const STEP_LAUNCH = 4;
+
+const CHAPTERS = ["매크로 연결", "API 키 준비", "실행기 준비", "계정 연결", "실행"];
+const LAST_STEP = CHAPTERS.length - 1;
+
+const BINANCE_TESTNET_GUIDES = {
+  spot: {
+    market: "현물",
+    environment: "Spot Testnet",
+    url: "https://testnet.binance.vision/",
+    domain: "testnet.binance.vision",
+    linkLabel: "Spot Testnet 열기",
+    steps: [
+      ["GitHub 계정으로 로그인", "Log In with GitHub을 누르고 binance-exchange 접근을 허용해요."],
+      ["HMAC 키 만들기", "Generate HMAC_SHA256 Key를 선택해 API Key와 Secret Key를 만들어요."],
+      ["거래 권한 확인", "TRADE 권한이 켜져 있는지 확인해요. 출금 권한은 빠른 실행에 필요하지 않아요."],
+      ["두 키를 바로 보관", "Secret Key는 다시 보이지 않으니 비밀번호 관리자에 임시 보관해요. 메신저나 스크린샷에는 남기지 않아요."],
+    ],
+  },
+  futures: {
+    market: "선물",
+    environment: "Futures Demo",
+    url: "https://demo.binance.com/en/my/settings/api-management",
+    domain: "demo.binance.com",
+    linkLabel: "Futures Demo API 만들기",
+    steps: [
+      ["데모 계정으로 로그인", "로그인 뒤 Futures Demo의 API Management 화면으로 돌아와요."],
+      ["API Management에서 키 만들기", "API Management → Create API를 누르고 알아보기 쉬운 이름을 입력해요."],
+      ["선물 거래 권한 확인", "Demo Futures 거래 권한이 켜져 있는지 확인해요. 출금 권한은 필요하지 않아요."],
+      ["두 키를 바로 보관", "API Key와 Secret Key는 비밀번호 관리자에 임시 보관해요. 메신저나 스크린샷에는 남기지 않아요."],
+    ],
+  },
+};
 
 const COPY = [
   {
     eyebrow: "내 계정에서 시작",
     title: <>내 매크로를 골라<br /><span>바로 연결해요.</span></>,
     description: "리더보드에 등록했거나 언락한 매크로, 직접 가져온 매크로가 내 계정에 보관돼요. 파일부터 찾을 필요 없이 여기서 하나만 고르면 돼요.",
+  },
+  {
+    eyebrow: "실행 전에 한 번만",
+    title: <>바이낸스 키를<br /><span>먼저 준비해요.</span></>,
+    description: "처음이라면 실제 돈이 들지 않는 테스트넷부터 시작해요. 선택한 매크로에 맞는 공식 발급 화면과 순서를 바로 안내해 드려요.",
   },
   {
     eyebrow: "내 PC에 한 번만",
@@ -76,9 +118,12 @@ function fmtSize(bytes) {
 }
 
 function macroMarket(macro) {
-  if (macro.market === "spot") return "현물";
-  if (macro.market === "futures") return "선물";
-  return macro.position_side === "short" || Number(macro.leverage || 1) > 1 ? "선물" : "현물";
+  return runnerExecutionMarket(macro) === "futures" ? "선물" : "현물";
+}
+
+function runnerExecutionMarket(macro = {}) {
+  const leverage = Number(macro.leverage || 1);
+  return macro.position_side === "short" || leverage > 1 ? "futures" : "spot";
 }
 
 function performanceView(item) {
@@ -335,6 +380,8 @@ export default function RunnerDownload() {
     window.localStorage.getItem(RUNNER_OPENED_STORAGE_KEY) === OFFICIAL_RUNNER_VERSION
   ));
   const [downloadStarted, setDownloadStarted] = useState(false);
+  const [apiKeyChecked, setApiKeyChecked] = useState(false);
+  const [apiKeyPrepared, setApiKeyPrepared] = useState(false);
   const [launchTicket, setLaunchTicket] = useState(null);
   const [launchPhase, setLaunchPhase] = useState("idle");
   const [launchAttempt, setLaunchAttempt] = useState(0);
@@ -346,7 +393,7 @@ export default function RunnerDownload() {
 
   const signedIn = !!(token && user);
   const stepParam = Number(searchParams.get("step") || 1);
-  const requestedStep = Number.isFinite(stepParam) ? Math.min(3, Math.max(0, stepParam - 1)) : 0;
+  const requestedStep = Number.isFinite(stepParam) ? Math.min(LAST_STEP, Math.max(0, stepParam - 1)) : STEP_MACRO;
   const preferredSourceRef = location.state?.selectedSourceRef ? String(location.state.selectedSourceRef) : "";
   const selected = useMemo(() => (
     library.find((item) => item.id === selectedId)
@@ -354,7 +401,11 @@ export default function RunnerDownload() {
     || library[0]
     || null
   ), [library, preferredSourceRef, selectedId]);
-  const step = signedIn && selected ? requestedStep : 0;
+  const executionMarket = runnerExecutionMarket(selected?.macro);
+  const keyGuide = BINANCE_TESTNET_GUIDES[executionMarket];
+  const apiKeyGuideStorageKey = `${BINANCE_KEY_GUIDE_STORAGE_PREFIX}:${executionMarket}`;
+  const gatedStep = requestedStep > STEP_API_KEY && !apiKeyPrepared ? STEP_API_KEY : requestedStep;
+  const step = signedIn && selected ? gatedStep : STEP_MACRO;
   const copy = COPY[step];
   const downloadChecked = downloadInfo != null || !!downloadError;
   const officialRunnerFallback = downloadChecked && !downloadInfo?.available && !!OFFICIAL_RUNNER_DOWNLOAD_URL;
@@ -391,6 +442,12 @@ export default function RunnerDownload() {
       : downloadError
         ? "error"
         : "unavailable";
+
+  useEffect(() => {
+    const acknowledged = window.localStorage.getItem(apiKeyGuideStorageKey) === "acknowledged";
+    setApiKeyChecked(acknowledged);
+    setApiKeyPrepared(acknowledged);
+  }, [apiKeyGuideStorageKey]);
 
   function mergePerformanceHints(items) {
     return items.map((item) => {
@@ -483,7 +540,7 @@ export default function RunnerDownload() {
   }, []);
 
   useEffect(() => {
-    if (step !== 3 || !signedIn || !selected?.id) return undefined;
+    if (step !== STEP_LAUNCH || !signedIn || !selected?.id) return undefined;
 
     setLaunchTicket(null);
     setLaunchError("");
@@ -525,7 +582,7 @@ export default function RunnerDownload() {
   }, [downloadChecked, launchAttempt, selected?.id, signedIn, step, supportsLaunch]);
 
   useEffect(() => {
-    if (step !== 3 || launchPhase !== "opening" || !launchTicket?.launch_id) return undefined;
+    if (step !== STEP_LAUNCH || launchPhase !== "opening" || !launchTicket?.launch_id) return undefined;
     let alive = true;
     let pollTimer = 0;
     let pollFailures = 0;
@@ -616,7 +673,14 @@ export default function RunnerDownload() {
     window.localStorage.removeItem(LEGACY_RUNNER_OPENED_STORAGE_KEY);
     window.localStorage.setItem(RUNNER_OPENED_STORAGE_KEY, OFFICIAL_RUNNER_VERSION);
     setRunnerReady(true);
-    if (advance) moveTo(2);
+    if (advance) moveTo(STEP_ACCOUNT);
+  }
+
+  function completeApiKeyGuide() {
+    if (!apiKeyChecked) return;
+    window.localStorage.setItem(apiKeyGuideStorageKey, "acknowledged");
+    setApiKeyPrepared(true);
+    moveTo(STEP_RUNNER);
   }
 
   async function importFile(file) {
@@ -932,6 +996,66 @@ export default function RunnerDownload() {
     );
   }
 
+  function renderApiKeyScene() {
+    return (
+      <Workspace title={`Binance ${keyGuide.environment}`} status="테스트넷 · 가짜 자금">
+        <div className="runner-wizard-api-intro">
+          <div className="runner-wizard-api-market" aria-hidden="true">API</div>
+          <div>
+            <small>선택한 매크로 · {selected?.symbol}</small>
+            <h2>{keyGuide.market} 테스트넷 키가 필요해요.</h2>
+            <p>실거래 키가 아니라 연습용 키를 만들어요. 현물과 선물 키는 서로 바꿔 쓸 수 없어요.</p>
+          </div>
+          <a
+            href={keyGuide.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="btn btn-m btn-secondary runner-wizard-api-link"
+          >
+            {keyGuide.linkLabel} <span aria-hidden="true">↗</span>
+          </a>
+          <span className="runner-wizard-api-domain">공식 페이지 · {keyGuide.domain} · 새 탭</span>
+        </div>
+
+        <ol className="runner-wizard-api-steps" aria-label={`${keyGuide.market} 테스트넷 API 키 발급 순서`}>
+          {keyGuide.steps.map(([title, description], index) => (
+            <li key={title}>
+              <span className="num">{String(index + 1).padStart(2, "0")}</span>
+              <div>
+                <strong>{title}</strong>
+                <p>{description}</p>
+              </div>
+            </li>
+          ))}
+        </ol>
+
+        <div className="runner-wizard-api-security" role="note">
+          <strong>이 웹에는 키를 붙여넣지 마세요.</strong>
+          <p>API Key와 Secret Key는 다음에 열리는 내 PC의 실행기 창에만 직접 입력해요. 빠른 실행에는 출금 권한도 필요하지 않아요. 실행기를 닫으면 키 입력값도 저장되지 않아요.</p>
+        </div>
+
+        <label className={`runner-wizard-api-check ${apiKeyChecked ? "is-checked" : ""}`}>
+          <input
+            type="checkbox"
+            checked={apiKeyChecked}
+            onChange={(event) => {
+              const checked = event.target.checked;
+              setApiKeyChecked(checked);
+              if (!checked) {
+                window.localStorage.removeItem(apiKeyGuideStorageKey);
+                setApiKeyPrepared(false);
+              }
+            }}
+          />
+          <span>
+            <strong>{keyGuide.market} 테스트넷의 API Key와 Secret Key를 준비했어요.</strong>
+            <small>실제 키 유효성은 실행기에서 연결할 때 확인해요.</small>
+          </span>
+        </label>
+      </Workspace>
+    );
+  }
+
   function renderAccountScene() {
     return (
       <Workspace title="껄무새 계정" status={`${user?.username || ""} 로그인됨`}>
@@ -1088,7 +1212,7 @@ export default function RunnerDownload() {
           </div>
           <div className="runner-wizard-launch-callout">
             <span className="num">01</span>
-            <div><strong>바이낸스 테스트넷 API 키를 실행기에 입력해요.</strong><p>키는 이 웹이나 껄무새 서버로 전송되지 않아요.</p></div>
+            <div><strong>앞에서 준비한 {keyGuide.market} 테스트넷 키를 실행기에 입력해요.</strong><p>실행기 로그에 ‘연결 성공’이 나타나야 거래소 인증까지 끝난 거예요.</p></div>
           </div>
           <div className="runner-wizard-launch-callout">
             <span className="num">02</span>
@@ -1124,19 +1248,39 @@ export default function RunnerDownload() {
     );
   }
 
-  const scene = step === 0 ? renderMacroScene() : step === 1 ? renderRunnerScene() : step === 2 ? renderAccountScene() : renderLaunchScene();
+  const scene = step === STEP_MACRO
+    ? renderMacroScene()
+    : step === STEP_API_KEY
+      ? renderApiKeyScene()
+      : step === STEP_RUNNER
+        ? renderRunnerScene()
+        : step === STEP_ACCOUNT
+          ? renderAccountScene()
+          : renderLaunchScene();
 
   function renderPrimaryAction() {
-    if (step === 0) {
+    if (step === STEP_MACRO) {
       if (!signedIn) {
         return <Link to="/login?next=%2Frunner" className="btn btn-l btn-primary runner-wizard-next">로그인하고 내 매크로 보기</Link>;
       }
       if (libraryView === "leaderboard") return <p className="runner-wizard-footer-note">목록에서 가져올 매크로를 선택해요.</p>;
       if (!selected) return <p className="runner-wizard-footer-note">위에서 매크로를 찾거나 업로드하면 다음 단계가 열려요.</p>;
-      return <button type="button" onClick={() => moveTo(1)} className="btn btn-l btn-primary runner-wizard-next">이 매크로 연결하기</button>;
+      return <button type="button" onClick={() => moveTo(STEP_API_KEY)} className="btn btn-l btn-primary runner-wizard-next">이 매크로 연결하기</button>;
     }
-    if (step === 1) {
-      if (runnerReady) return <button type="button" onClick={() => moveTo(2)} className="btn btn-l btn-primary runner-wizard-next">계정 연결로 계속</button>;
+    if (step === STEP_API_KEY) {
+      return (
+        <button
+          type="button"
+          onClick={completeApiKeyGuide}
+          disabled={!apiKeyChecked}
+          className="btn btn-l btn-primary runner-wizard-next"
+        >
+          {apiKeyChecked ? "키 준비 완료 · 실행기 준비로 계속" : "키를 준비한 뒤 확인해 주세요"}
+        </button>
+      );
+    }
+    if (step === STEP_RUNNER) {
+      if (runnerReady) return <button type="button" onClick={() => moveTo(STEP_ACCOUNT)} className="btn btn-l btn-primary runner-wizard-next">계정 연결로 계속</button>;
       if (downloadStarted) {
         return (
           <button type="button" onClick={() => confirmRunnerReady({ advance: true })} className="btn btn-l btn-primary runner-wizard-next">
@@ -1146,7 +1290,7 @@ export default function RunnerDownload() {
       }
       if (runnerDownloadState === "loading") return <button type="button" disabled className="btn btn-l btn-primary runner-wizard-next">실행기 확인 중…</button>;
       if (!runnerAvailable) {
-        return <button type="button" onClick={() => moveTo(2)} className="btn btn-l btn-primary runner-wizard-next">계정 연결 먼저 하기</button>;
+        return <button type="button" onClick={() => moveTo(STEP_ACCOUNT)} className="btn btn-l btn-primary runner-wizard-next">계정 연결 먼저 하기</button>;
       }
       return (
         <a
@@ -1161,8 +1305,8 @@ export default function RunnerDownload() {
         </a>
       );
     }
-    if (step === 2) {
-      return <button type="button" onClick={() => moveTo(3)} className="btn btn-l btn-primary runner-wizard-next">자동 연결로 계속</button>;
+    if (step === STEP_ACCOUNT) {
+      return <button type="button" onClick={() => moveTo(STEP_LAUNCH)} className="btn btn-l btn-primary runner-wizard-next">자동 연결로 계속</button>;
     }
     if (["idle", "checking", "preparing"].includes(launchPhase)) {
       return <button type="button" disabled className="btn btn-l btn-primary runner-wizard-next">실행기 연결 준비 중…</button>;
@@ -1197,11 +1341,11 @@ export default function RunnerDownload() {
     <div className="runner-wizard">
       <section className="runner-wizard-progress" aria-label="빠른 실행 진행률">
         <div>
-          <span className="num">{String(step + 1).padStart(2, "0")} / 04</span>
+          <span className="num">{String(step + 1).padStart(2, "0")} / {String(CHAPTERS.length).padStart(2, "0")}</span>
           <strong>{CHAPTERS[step]}</strong>
         </div>
-        <div className="runner-wizard-progress-track" role="progressbar" aria-valuemin="1" aria-valuemax="4" aria-valuenow={step + 1}>
-          <span style={{ width: `${((step + 1) / 4) * 100}%` }} />
+        <div className="runner-wizard-progress-track" role="progressbar" aria-valuemin="1" aria-valuemax={CHAPTERS.length} aria-valuenow={step + 1}>
+          <span style={{ width: `${((step + 1) / CHAPTERS.length) * 100}%` }} />
         </div>
         <ol aria-hidden="true">
           {CHAPTERS.map((chapter, index) => (
@@ -1215,9 +1359,13 @@ export default function RunnerDownload() {
           <p>{copy.eyebrow}</p>
           <h1 id="runner-wizard-title" ref={headingRef} tabIndex={-1}>{copy.title}</h1>
           <p>{copy.description}</p>
-          {step === 0 && signedIn ? <small><strong>{user.username}</strong> 계정의 저장된 매크로를 보고 있어요.</small> : null}
+          {step === STEP_MACRO && signedIn ? <small><strong>{user.username}</strong> 계정의 저장된 매크로를 보고 있어요.</small> : null}
         </div>
-        <div className={`runner-wizard-work ${step === 0 && signedIn ? "is-library" : ""}`.trim()}>{scene}</div>
+        <div
+          className={`runner-wizard-work ${step === STEP_MACRO && signedIn ? "is-library" : ""} ${step === STEP_API_KEY ? "is-api" : ""}`.trim()}
+        >
+          {scene}
+        </div>
       </section>
 
       <footer className="runner-wizard-footer">

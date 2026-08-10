@@ -18,6 +18,7 @@ import {
   validate,
   withTypeDefaults,
 } from "../lib/macro.js";
+import { computeStrategyOverlay } from "../lib/indicators.js";
 import {
   completeJourney,
   isJourneyComplete,
@@ -39,9 +40,14 @@ function periodLabelOf(macro) {
   ] || macro.period?.preset || "";
 }
 
-function ChartDisclosure({ symbols }) {
+function ChartDisclosure({ symbols, form }) {
   const [open, setOpen] = useState(false);
   const contentId = useId();
+
+  // 실시간 차트에 지금 매크로 설정 그대로 보조지표를 얹는다(예: 볼린저 상·하단
+  // 밴드와 매수·매도 구간). form 이 바뀌면 오버레이도 즉시 따라간다.
+  const overlay = useCallback((candles) => computeStrategyOverlay(form, candles), [form]);
+  const ruleLabel = RULE_TYPES[form.rule_type]?.label || "";
 
   if (symbols.length === 0) return null;
   return (
@@ -54,7 +60,7 @@ function ChartDisclosure({ symbols }) {
         aria-controls={contentId}
       >
         <span>
-          <span className="t-label text-slate-900">실시간 차트</span>
+          <span className="t-label text-slate-900">실시간 차트 · 보조지표</span>
           <span className="ml-2 t-caption text-slate-500 num">
             {symbols.length === 1 ? symbols[0] : `${symbols.length}개 종목`}
           </span>
@@ -63,7 +69,12 @@ function ChartDisclosure({ symbols }) {
       </button>
       {open ? (
         <div id={contentId} className="pb-5 space-y-6">
-          {symbols.map((symbol) => <CandleChart key={symbol} symbol={symbol} />)}
+          <p className="t-small text-slate-500">
+            지금 고른 <b className="text-slate-700">{ruleLabel}</b> 설정을 실시간 차트 위에 그려요. 매수·매도 자리를 눈으로 확인해 보세요.
+          </p>
+          {symbols.map((symbol) => (
+            <CandleChart key={symbol} symbol={symbol} defaultInterval={form.candle_interval || "1m"} overlay={overlay} />
+          ))}
         </div>
       ) : null}
     </section>
@@ -503,7 +514,7 @@ export default function Studio() {
             {busy ? "백테스트 결과를 계산하고 있어요." : resultIsFresh ? "백테스트 결과가 준비됐어요." : ""}
           </div>
 
-          <ChartDisclosure symbols={chartSymbols} />
+          <ChartDisclosure symbols={chartSymbols} form={form} />
 
           {!result && !busy ? (
             <div className="py-14 text-center border-b border-slate-200">

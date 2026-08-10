@@ -13,6 +13,11 @@ import { fmtPrice, quoteOf } from "../lib/format.js";
 // `zoom` bars ending at `anchor`. `anchor === null` means "pinned to the live
 // edge" — new bars keep scrolling in. Panning back sets an explicit anchor so
 // incoming data can't yank the view away while the user is inspecting.
+//
+// Overlays: an optional `overlay` prop (a function `(candles) => spec`, see
+// lib/indicators.js) draws strategy helpers — bands, moving averages, limit
+// lines, signal markers, an RSI subpane — on top of the candles so beginners
+// can see where a macro would buy and sell.
 const BUFFER = 300; // bars fetched (server clamps at CHART_MAX_LIMIT)
 const MIN_ZOOM = 10; // fewest bars on screen (max detail)
 const DEFAULT_ZOOM = 80;
@@ -64,7 +69,64 @@ function BarReadout({ bar, quote }) {
   );
 }
 
-function Chart({ candles, symbol, hover, setHover, onPan }) {
+// A colored swatch + label. Marker legends draw a small triangle instead of a bar.
+function LegendItem({ item }) {
+  return (
+    <span className="inline-flex items-center gap-1.5 t-caption text-slate-600">
+      {item.kind === "buy" || item.kind === "sell" ? (
+        <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+          {item.kind === "buy" ? (
+            <path d="M5 1 L9 9 L1 9 Z" fill={item.color} />
+          ) : (
+            <path d="M5 9 L1 1 L9 1 Z" fill={item.color} />
+          )}
+        </svg>
+      ) : (
+        <span
+          className="inline-block w-3.5 h-0"
+          style={{ borderTop: `2px ${item.dash ? "dashed" : "solid"} ${item.color}` }}
+        />
+      )}
+      {item.label}
+    </span>
+  );
+}
+
+// Build polyline segments from a null-gapped values array (breaks at nulls).
+function segments(values, cx, y) {
+  const out = [];
+  let cur = [];
+  for (let i = 0; i < values.length; i++) {
+    const v = values[i];
+    if (v == null || !Number.isFinite(v)) {
+      if (cur.length > 1) out.push(cur);
+      cur = [];
+    } else {
+      cur.push(`${cx(i)},${y(v)}`);
+    }
+  }
+  if (cur.length > 1) out.push(cur);
+  return out;
+}
+
+// Filled path between two null-gapped series (the contiguous defined tail).
+function bandPath(upper, lower, cx, y) {
+  const n = upper.length;
+  let i0 = -1;
+  for (let i = 0; i < n; i++) {
+    if (upper[i] != null && lower[i] != null) {
+      i0 = i;
+      break;
+    }
+  }
+  if (i0 < 0) return null;
+  let d = `M ${cx(i0)} ${y(upper[i0])}`;
+  for (let i = i0 + 1; i < n; i++) if (upper[i] != null) d += ` L ${cx(i)} ${y(upper[i])}`;
+  for (let i = n - 1; i >= i0; i--) if (lower[i] != null) d += ` L ${cx(i)} ${y(lower[i])}`;
+  return d + " Z";
+}
+
+function Chart({ candles, symbol, hover, setHover, onPan, overlay }) {
   const W = 720;
   const H = 260;
   const pad = { l: 6, r: 6, t: 10, b: 10 };
@@ -72,8 +134,18 @@ function Chart({ candles, symbol, hover, setHover, onPan }) {
   const svgRef = useRef(null);
   const drag = useRef(null);
 
-  const hi = Math.max(...candles.map((k) => k.h));
-  const lo = Math.min(...candles.map((k) => k.l));
+  // Overlay values widen the price scale so bands/lines never clip.
+  const extra = [];
+  if (overlay) {
+    overlay.series?.forEach((s) => s.values.forEach((v) => v != null && Number.isFinite(v) && extra.push(v)));
+    overlay.bands?.forEach((b) => {
+      b.upper.forEach((v) => v != null && Number.isFinite(v) && extra.push(v));
+      b.lower.forEach((v) => v != null && Number.isFinite(v) && extra.push(v));
+    });
+    overlay.priceLines?.forEach((p) => Number.isFinite(p.price) && extra.push(p.price));
+  }
+  const hi = Math.max(...candles.map((k) => k.h), ...extra);
+  const lo = Math.min(...candles.map((k) => k.l), ...extra);
   const span = hi - lo || hi * 0.001 || 1;
   const top = hi + span * 0.08; // breathing room so wicks never touch the frame
   const bot = lo - span * 0.08;
@@ -134,6 +206,20 @@ function Chart({ candles, symbol, hover, setHover, onPan }) {
     if (d && !d.panned && e.pointerType !== "mouse") setHover(indexAt(e));
   }
 
+  // Right-edge tags for price lines. Stagger vertically when two labels collide.
+  const priceTags = [];
+  if (overlay?.priceLines) {
+    const placed = [];
+    for (const line of overlay.priceLines) {
+      if (!line.label || !Number.isFinite(line.price)) continue;
+      let ty = y(line.price);
+      if (ty < pad.t + 6 || ty > H - pad.b - 2) continue; // off-scale: skip tag (line still draws)
+      while (placed.some((p) => Math.abs(p - ty) < 11)) ty -= 11;
+      placed.push(ty);
+      priceTags.push({ ty, label: line.label, color: line.color });
+    }
+  }
+
   return (
     <svg
       ref={svgRef}
@@ -166,6 +252,12 @@ function Chart({ candles, symbol, hover, setHover, onPan }) {
         <line key={i} x1={pad.l} x2={W - pad.r} y1={y(v)} y2={y(v)} stroke="rgb(var(--chart-grid))" strokeWidth="1" />
       ))}
 
+      {/* overlay: shaded bands sit under the candles */}
+      {overlay?.bands?.map((b, bi) => {
+        const d = bandPath(b.upper, b.lower, cx, y);
+        return d ? <path key={`band-${bi}`} d={d} fill={b.fill} stroke="none" /> : null;
+      })}
+
       {candles.map((k, i) => {
         const rise = k.c >= k.o;
         const color = rise ? UP : DOWN;
@@ -187,6 +279,52 @@ function Chart({ candles, symbol, hover, setHover, onPan }) {
         );
       })}
 
+      {/* overlay: moving-average / band / trailing lines drawn over the candles */}
+      {overlay?.series?.map((s) =>
+        segments(s.values, cx, y).map((pts, si) => (
+          <polyline
+            key={`${s.id}-${si}`}
+            points={pts.join(" ")}
+            fill="none"
+            stroke={s.color}
+            strokeWidth={s.width || 1.25}
+            strokeDasharray={s.dash || undefined}
+            strokeLinejoin="round"
+            opacity="0.95"
+          />
+        ))
+      )}
+
+      {/* overlay: horizontal price lines (limit orders, grid rungs, my avg cost…) */}
+      {overlay?.priceLines?.map((line, li) =>
+        Number.isFinite(line.price) ? (
+          <line
+            key={`pl-${li}`}
+            x1={pad.l}
+            x2={W - pad.r}
+            y1={y(line.price)}
+            y2={y(line.price)}
+            stroke={line.color}
+            strokeWidth="1.25"
+            strokeDasharray={line.dash || undefined}
+            opacity="0.9"
+          />
+        ) : null
+      )}
+
+      {/* overlay: buy/sell signal triangles anchored to the bar's low/high */}
+      {overlay?.markers?.map((m, mi) => {
+        const k = candles[m.index];
+        if (!k) return null;
+        const x = cx(m.index);
+        if (m.kind === "buy") {
+          const yy = y(k.l) + 9;
+          return <path key={`mk-${mi}`} d={`M ${x} ${yy - 7} L ${x + 4} ${yy} L ${x - 4} ${yy} Z`} fill={UP} />;
+        }
+        const yy = y(k.h) - 9;
+        return <path key={`mk-${mi}`} d={`M ${x} ${yy + 7} L ${x + 4} ${yy} L ${x - 4} ${yy} Z`} fill={DOWN} />;
+      })}
+
       {/* crosshair on the inspected bar */}
       {hover != null && candles[hover] && (
         <g pointerEvents="none">
@@ -197,11 +335,64 @@ function Chart({ candles, symbol, hover, setHover, onPan }) {
 
       {/* Current price is written at full UI size in the heading/readout. */}
       <line x1={pad.l} x2={W - pad.r} y1={y(last.c)} y2={y(last.c)} stroke={up ? UP : DOWN} strokeWidth="1" strokeDasharray="3 3" opacity="0.7" />
+
+      {/* right-edge tags for the labeled price lines */}
+      {priceTags.map((t, ti) => (
+        <g key={`tag-${ti}`} pointerEvents="none">
+          <text
+            x={W - pad.r - 3}
+            y={t.ty - 2}
+            textAnchor="end"
+            className="num"
+            style={{ fontSize: "9px", fontWeight: 700, fill: t.color, paintOrder: "stroke", stroke: "rgb(var(--c-surface))", strokeWidth: 3 }}
+          >
+            {t.label}
+          </text>
+        </g>
+      ))}
     </svg>
   );
 }
 
-export default function CandleChart({ symbol, defaultInterval = "1m" }) {
+// Small standalone oscillator pane (RSI) drawn under the main chart.
+function RsiPane({ values, entry, exit }) {
+  const W = 720;
+  const H = 70;
+  const pad = { l: 6, r: 6, t: 6, b: 6 };
+  const n = values.length;
+  const slot = (W - pad.l - pad.r) / n;
+  const cx = (i) => pad.l + slot * (i + 0.5);
+  const y = (v) => pad.t + (1 - v / 100) * (H - pad.t - pad.b);
+  const pts = [];
+  let cur = [];
+  for (let i = 0; i < n; i++) {
+    if (values[i] == null) {
+      if (cur.length > 1) pts.push(cur);
+      cur = [];
+    } else cur.push(`${cx(i)},${y(values[i])}`);
+  }
+  if (cur.length > 1) pts.push(cur);
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto mt-1" role="img" aria-label="RSI 보조 지표">
+      {/* 과매수/과매도 영역 음영 */}
+      <rect x={pad.l} y={pad.t} width={W - pad.l - pad.r} height={y(exit) - pad.t} fill="rgba(200,30,51,0.06)" />
+      <rect x={pad.l} y={y(entry)} width={W - pad.l - pad.r} height={H - pad.b - y(entry)} fill="rgba(0,119,56,0.06)" />
+      <line x1={pad.l} x2={W - pad.r} y1={y(exit)} y2={y(exit)} stroke={DOWN} strokeWidth="1" strokeDasharray="4 3" opacity="0.8" />
+      <line x1={pad.l} x2={W - pad.r} y1={y(entry)} y2={y(entry)} stroke={UP} strokeWidth="1" strokeDasharray="4 3" opacity="0.8" />
+      {pts.map((seg, si) => (
+        <polyline key={si} points={seg.join(" ")} fill="none" stroke="rgb(99 102 241)" strokeWidth="1.5" strokeLinejoin="round" />
+      ))}
+      <text x={pad.l + 2} y={y(exit) - 3} style={{ fontSize: "8px", fill: DOWN }} className="num">
+        과매수 {exit}
+      </text>
+      <text x={pad.l + 2} y={y(entry) + 9} style={{ fontSize: "8px", fill: UP }} className="num">
+        과매도 {entry}
+      </text>
+    </svg>
+  );
+}
+
+export default function CandleChart({ symbol, defaultInterval = "1m", overlay = null, title }) {
   const [interval, setInterval_] = useState(defaultInterval);
   const [candles, setCandles] = useState(null);
   const [error, setError] = useState("");
@@ -252,12 +443,34 @@ export default function CandleChart({ symbol, defaultInterval = "1m" }) {
 
   const total = candles?.length || 0;
   const maxZoom = Math.max(MIN_ZOOM, total);
-  const view = useMemo(() => {
-    if (!total) return [];
+  // Full-buffer overlay so indicators (BB, MA…) have their warm-up history.
+  const overlayFull = useMemo(
+    () => (overlay && candles && candles.length ? overlay(candles) : null),
+    [overlay, candles]
+  );
+  const window_ = useMemo(() => {
+    if (!total) return { start: 0, end: 0, bars: [] };
     const z = Math.min(zoom, total);
     const end = anchor == null ? total : Math.max(z, Math.min(anchor, total));
-    return candles.slice(end - z, end);
+    return { start: end - z, end, bars: candles.slice(end - z, end) };
   }, [candles, total, zoom, anchor]);
+  const view = window_.bars;
+
+  // Slice the overlay arrays to the visible window; remap marker indices.
+  const viewOverlay = useMemo(() => {
+    if (!overlayFull) return null;
+    const { start, end } = window_;
+    const sliceVals = (a) => (a ? a.slice(start, end) : a);
+    return {
+      priceLines: overlayFull.priceLines,
+      series: overlayFull.series?.map((s) => ({ ...s, values: sliceVals(s.values) })),
+      bands: overlayFull.bands?.map((b) => ({ ...b, upper: sliceVals(b.upper), lower: sliceVals(b.lower) })),
+      rsi: overlayFull.rsi ? { ...overlayFull.rsi, values: sliceVals(overlayFull.rsi.values) } : null,
+      markers: (overlayFull.markers || [])
+        .map((m) => ({ ...m, index: m.index - start }))
+        .filter((m) => m.index >= 0 && m.index < end - start),
+    };
+  }, [overlayFull, window_]);
 
   const live = anchor == null; // following the newest bar
 
@@ -317,7 +530,7 @@ export default function CandleChart({ symbol, defaultInterval = "1m" }) {
     <div className="pt-4 border-t border-slate-200">
       <div className="flex items-center justify-between flex-wrap gap-2 mb-2">
         <div className="flex items-baseline gap-2">
-          <h3 className="t-title text-slate-900"><span className="num">{symbol}</span></h3>
+          <h3 className="t-title text-slate-900"><span className="num">{title || symbol}</span></h3>
           {last && (
             <>
               <span className="t-h4 num text-slate-900">{fmtPrice(last.c)}</span>
@@ -367,6 +580,15 @@ export default function CandleChart({ symbol, defaultInterval = "1m" }) {
         <BarReadout bar={inspected} quote={quote} />
       </div>
 
+      {/* 보조지표 범례 */}
+      {viewOverlay && overlayFull?.legend?.length > 0 && (
+        <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+          {overlayFull.legend.map((item, i) => (
+            <LegendItem key={i} item={item} />
+          ))}
+        </div>
+      )}
+
       {error && (
         <div className="notice-warn py-6 t-small text-slate-700">
           차트를 불러오지 못했어요: {error}
@@ -381,8 +603,16 @@ export default function CandleChart({ symbol, defaultInterval = "1m" }) {
 
       {!error && view.length > 0 && (
         <div ref={plotRef}>
-          <Chart candles={view} symbol={symbol} hover={hover} setHover={setHover} onPan={pan} />
+          <Chart candles={view} symbol={symbol} hover={hover} setHover={setHover} onPan={pan} overlay={viewOverlay} />
+          {viewOverlay?.rsi && (
+            <RsiPane values={viewOverlay.rsi.values} entry={viewOverlay.rsi.entry} exit={viewOverlay.rsi.exit} />
+          )}
         </div>
+      )}
+
+      {/* 초보자용 한 줄 설명 */}
+      {!error && view.length > 0 && overlayFull?.note && (
+        <div className="mt-2 notice t-small text-slate-700">💡 {overlayFull.note}</div>
       )}
 
       {!error && view.length > 0 && (
@@ -397,6 +627,9 @@ export default function CandleChart({ symbol, defaultInterval = "1m" }) {
             {live ? "마지막 봉은 진행 중 (실시간 갱신)" : "과거 구간 보는 중"} · 바이낸스 공개 시세
           </span>
           </div>
+          {overlayFull && (
+            <div className="text-slate-400">보조지표는 학습을 돕는 참고 표시예요. 실제 체결·수익을 보장하지 않아요.</div>
+          )}
         </div>
       )}
     </div>

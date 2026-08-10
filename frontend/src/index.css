@@ -5208,6 +5208,28 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   margin-top: 12px;
 }
 
+.runner-wizard-launch-diagnostic {
+  margin-top: 14px;
+  padding: 13px 14px;
+  border-left: 3px solid rgb(var(--c-brand));
+  background: rgb(var(--c-brand) / 0.08);
+}
+
+.runner-wizard-launch-diagnostic strong {
+  color: rgb(var(--c-slate-900));
+  font-size: 13px;
+  line-height: 1.45;
+  font-weight: 760;
+}
+
+.runner-wizard-launch-diagnostic p {
+  margin-top: 4px;
+  color: rgb(var(--c-slate-600));
+  font-size: 12px;
+  line-height: 1.55;
+  font-weight: 600;
+}
+
 .runner-wizard-manual-link {
   margin-top: 14px;
   padding: 0;

@@ -53,6 +53,11 @@ try:  # package import (tests) / direct script import (PyInstaller build)
         ProtocolLaunchError,
         parse_protocol_launch,
     )
+    from .installation import (
+        RUNNER_VERSION,
+        files_identical,
+        protocol_install_target,
+    )
 except ImportError:
     from protocol import (
         PROTOCOL_CLAIM_PATH,
@@ -60,6 +65,11 @@ except ImportError:
         ProtocolLaunch,
         ProtocolLaunchError,
         parse_protocol_launch,
+    )
+    from installation import (
+        RUNNER_VERSION,
+        files_identical,
+        protocol_install_target,
     )
 
 # ==================================================================
@@ -73,9 +83,7 @@ DEFAULT_TP_PCT = 3.0
 MAX_RETRIES = 3
 POLL_SECONDS = 5.0
 
-APP_TITLE = "껄무새 매크로 실행기"
-
-_STABLE_EXE_PARTS = ("GGParrot", "ggparrot-runner.exe")
+APP_TITLE = f"껄무새 매크로 실행기 v{RUNNER_VERSION}"
 
 
 def _install_protocol_handler_for_current_user() -> bool:
@@ -93,17 +101,25 @@ def _install_protocol_handler_for_current_user() -> bool:
         return False
 
     source = Path(sys.executable).resolve()
-    stable = Path(local_app_data).joinpath(*_STABLE_EXE_PARTS)
-    staged = stable.with_name(f".{stable.name}.new")
+    # Never overwrite the old, possibly running, fixed-path runner.  Each
+    # release owns an immutable directory and the registry is switched only
+    # after the new executable has been copied and verified completely.
+    stable = protocol_install_target(local_app_data)
+    staged = stable.with_name(f".{stable.name}.{os.getpid()}.new")
     try:
         stable.parent.mkdir(parents=True, exist_ok=True)
         same_path = os.path.normcase(str(source)) == os.path.normcase(str(stable.resolve()))
         if not same_path:
-            # Stage then replace so a partial copy can never become the shell
-            # handler.  An already-running old stable binary can make replace
-            # fail on Windows; that is intentionally non-fatal.
-            shutil.copy2(source, staged)
-            os.replace(staged, stable)
+            if not stable.exists() or not files_identical(source, stable):
+                # Stage then replace so a partial copy can never become the
+                # shell handler. Old release directories are never modified
+                # or deleted, so an in-use v2/v3 executable cannot block v4.
+                shutil.copy2(source, staged)
+                if not files_identical(source, staged):
+                    return False
+                os.replace(staged, stable)
+            if not files_identical(source, stable):
+                return False
 
         import winreg
 
@@ -638,6 +654,7 @@ class RunnerApp:
         self.api_secret = tk.StringVar(value="")
         self.member_key = tk.StringVar(value=os.environ.get("GGP_MEMBER_KEY", ""))
         self.server_base = SERVER_BASE
+        self._protocol_registration_thread: threading.Thread | None = None
         self._build()
         if startup_warning:
             self._log(startup_warning)
@@ -654,8 +671,19 @@ class RunnerApp:
         self.root.geometry("640x680")
         pad = dict(padx=12, pady=6)
 
-        head = ttk.Label(self.root, text="🦜 껄무새 매크로 실행기", font=("맑은 고딕", 15, "bold"))
-        head.pack(anchor="w", **pad)
+        head = ttk.Frame(self.root)
+        head.pack(fill="x", **pad)
+        ttk.Label(
+            head,
+            text="🦜 껄무새 매크로 실행기",
+            font=("맑은 고딕", 15, "bold"),
+        ).pack(side="left")
+        ttk.Label(
+            head,
+            text=f"v{RUNNER_VERSION}",
+            foreground="#666",
+            font=("맑은 고딕", 10, "bold"),
+        ).pack(side="left", padx=(8, 0), pady=(4, 0))
 
         # ① 매크로 파일
         f1 = ttk.LabelFrame(self.root, text="① 매크로 파일 (.ggm.json)")
@@ -773,19 +801,40 @@ class RunnerApp:
     def _begin_protocol_registration(self) -> None:
         """Install the per-user URI handler off the Tk main thread."""
 
-        threading.Thread(
+        self.status_lbl.config(text=f"v{RUNNER_VERSION} 연결 준비 중…", foreground="#c60")
+        self._log(f"브라우저 빠른 연결을 v{RUNNER_VERSION}로 준비하고 있어요.")
+        self._protocol_registration_thread = threading.Thread(
             target=self._register_protocol_worker,
-            daemon=True,
+            # Registration must finish even if the user closes the first
+            # launch window immediately after opening the downloaded runner.
+            daemon=False,
             name="ggparrot-protocol-install",
-        ).start()
+        )
+        self._protocol_registration_thread.start()
 
     def _register_protocol_worker(self) -> None:
-        if not _install_protocol_handler_for_current_user():
+        success = _install_protocol_handler_for_current_user()
+        try:
             self.root.after(
                 0,
-                self._log,
-                "브라우저 빠른 연결을 준비하지 못했지만 실행기는 그대로 사용할 수 있어요.",
+                self._finish_protocol_registration,
+                success,
             )
+        except (RuntimeError, tk.TclError):
+            # The non-daemon worker still completed the durable registration;
+            # there is simply no longer a Tk window in which to report it.
+            pass
+
+    def _finish_protocol_registration(self, success: bool) -> None:
+        if success:
+            self.status_lbl.config(
+                text=f"브라우저 연결 준비됨 · v{RUNNER_VERSION}",
+                foreground="#0a0",
+            )
+            self._log(f"브라우저 빠른 연결 준비가 끝났어요. (v{RUNNER_VERSION})")
+            return
+        self.status_lbl.config(text="브라우저 연결 준비 실패", foreground="#c00")
+        self._log("브라우저 빠른 연결을 준비하지 못했지만 실행기는 그대로 사용할 수 있어요.")
 
     def _claim_protocol_ticket(self, launch: ProtocolLaunch) -> None:
         claim_base = (

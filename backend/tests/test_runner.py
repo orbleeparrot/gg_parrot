@@ -102,9 +102,14 @@ def test_launch_ticket_create_claim_and_status_contract():
     payload = created.json()
     assert payload["status"] == "ready"
     assert payload["expires_at"]
-    assert payload["launch_url"].startswith("ggparrot://launch?")
+    # Include the slash Windows CreateUri adds for an authority with an empty
+    # path, so the browser and runner agree on one canonical URI shape.
+    assert payload["launch_url"].startswith("ggparrot://launch/?")
 
-    query = parse_qs(urlsplit(payload["launch_url"]).query)
+    parsed_launch = urlsplit(payload["launch_url"])
+    assert parsed_launch.netloc == "launch"
+    assert parsed_launch.path == "/"
+    query = parse_qs(parsed_launch.query)
     assert query["v"] == ["2"]
     assert query["env"] == ["production"]
     ticket = query["ticket"][0]
@@ -161,7 +166,10 @@ def test_launch_ticket_uses_fixed_local_environment_for_loopback_web():
         headers=_auth(token),
     )
     assert created.status_code == 200, created.text
-    query = parse_qs(urlsplit(created.json()["launch_url"]).query)
+    parsed_launch = urlsplit(created.json()["launch_url"])
+    assert parsed_launch.netloc == "launch"
+    assert parsed_launch.path == "/"
+    query = parse_qs(parsed_launch.query)
     assert query["v"] == ["2"]
     assert query["env"] == ["local"]
 
@@ -257,6 +265,9 @@ def test_runner_download_info_advertises_launch_capability_safely():
     if info["supports_launch"]:
         assert info["launch_scheme"] == "ggparrot"
         assert info["min_runner_version"]
+        if "/runner-v4/" in info["url"]:
+            assert int(info["min_runner_version"]) >= 4
+            assert int(info["version"]) >= 4
     else:
         assert info["launch_scheme"] == ""
         assert info["min_runner_version"] == ""

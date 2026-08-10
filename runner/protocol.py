@@ -12,10 +12,13 @@ from typing import Literal
 PROTOCOL_SCHEME = "ggparrot"
 PROTOCOL_CLAIM_PATH = "/api/runner/launch-tickets/claim"
 _PROTOCOL_V1_URI_RE = re.compile(
-    r"^ggparrot://launch\?v=1&ticket=([A-Za-z0-9_-]{43})$"
+    r"^ggparrot://launch/?\?v=1&ticket=([A-Za-z0-9_-]{43})$"
 )
 _PROTOCOL_V2_URI_RE = re.compile(
-    r"^ggparrot://launch\?v=2&env=(local|production)&ticket=([A-Za-z0-9_-]{43})$"
+    # Windows CreateUri canonicalizes an authority-only custom URI by adding
+    # exactly one root-path slash (``ggparrot://launch/?...``).  Accept that
+    # browser/OS normalization, but no other path or query shape.
+    r"^ggparrot://launch/?\?v=2&env=(local|production)&ticket=([A-Za-z0-9_-]{43})$"
 )
 
 

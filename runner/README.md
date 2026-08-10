@@ -19,17 +19,22 @@
 ## 웹 빠른 연결 (Windows)
 
 Windows용 단일 exe를 파일에서 평소처럼 한 번 실행하면, 실행기는 현재 사용자 전용
-고정 경로인 `%LOCALAPPDATA%\GGParrot\ggparrot-runner.exe`에 자신을 복사하고
+릴리스 경로인 `%LOCALAPPDATA%\GGParrot\runner-v4\ggparrot-runner.exe`에 자신을 복사하고
 `ggparrot://` 링크 처리기를 등록합니다. HKCU(현재 사용자)에만 등록하므로 관리자
 권한은 필요하지 않습니다. 이 준비가 실패해도 파일 선택을 포함한 기존 기능은 그대로
-사용할 수 있습니다.
+사용할 수 있습니다. 이전 릴리스는 덮어쓰거나 지우지 않으므로 실행 중인 구버전이
+있어도 v4 복사와 등록을 막지 않습니다. 창의 상태와 로그에서 v4 등록 완료를 확인할
+수 있습니다.
 
 사이트의 **실행기 열기** 버튼은 다음 두 계약만 실행기에 전달합니다.
 
 ```text
 ggparrot://launch?v=1&ticket=<일회용 43자 티켓>                       # 기존 운영 호환
-ggparrot://launch?v=2&env=production|local&ticket=<일회용 43자 티켓> # runner-v3
+ggparrot://launch/?v=2&env=production|local&ticket=<일회용 43자 티켓> # runner-v4
 ```
+
+Windows가 authority 뒤에 빈 루트 경로를 보충한 `ggparrot://launch/?...`도 같은
+요청으로 받습니다. 그 외 경로, 추가 인자, 임의 서버·호스트·포트는 계속 거부합니다.
 
 - 티켓은 짧은 시간 동안 한 번만 사용할 수 있으며 실행기가 서버에서 매크로와 껄무새
   계정 연결값을 받는 데만 씁니다.
@@ -56,16 +61,16 @@ pyinstaller --onefile --noconsole --name ggparrot-runner macro_runner.py
 프로토콜 파서 회귀 테스트는 저장소 루트에서 표준 라이브러리만으로 실행할 수 있습니다.
 
 ```bash
-python -m unittest runner.test_macro_runner_protocol
+python -m unittest discover -s runner -p 'test_*.py'
 ```
 
 ### 배포 (GitHub Releases 권장)
 1. 위에서 만든 `dist/ggparrot-runner.exe` 를 레포의 **Releases** 에 첨부해 publish
-2. 첨부 파일의 다운로드 링크를 복사 (예: `.../releases/download/runner-v3/ggparrot-runner.exe`)
+2. 첨부 파일의 다운로드 링크를 복사 (예: `.../releases/download/runner-v4/ggparrot-runner.exe`)
 3. 백엔드 환경변수 `RUNNER_DOWNLOAD_URL` 에 그 링크를 설정
    → 다운로드 페이지 버튼이 자동으로 그 링크로 연결됨(서버에 파일을 둘 필요 없음)
 4. 새 바이너리에서 `ggparrot://` 연결을 Windows에서 검증한 뒤에만
-   `RUNNER_SUPPORTS_LAUNCH=true` 와 `RUNNER_MIN_VERSION=3` 을 설정
+   `RUNNER_SUPPORTS_LAUNCH=true` 와 `RUNNER_MIN_VERSION=4` 를 설정
    → 기존 실행기에는 작동하지 않는 **실행기 열기** 버튼이 노출되지 않음
 - 레포가 **비공개면** 링크로 로그인 없이 못 받으니, 레포를 공개로 하거나 exe 전용 공개 레포를 쓰세요.
 - 서버에 직접 파일을 두려면 대신 `RUNNER_EXE_PATH` 를 그 경로로 설정하세요.

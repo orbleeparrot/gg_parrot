@@ -7,8 +7,10 @@ import { RULE_TYPES } from "../lib/macro.js";
 import { getUserId } from "../lib/user.js";
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
-const RUNNER_OPENED_STORAGE_KEY = "ggparrot:runner-opened";
-const OFFICIAL_RUNNER_DOWNLOAD_URL = "https://github.com/orbleeparrot/gg_parrot/releases/download/runner-v3/ggparrot-runner.exe";
+const OFFICIAL_RUNNER_VERSION = "4";
+const RUNNER_OPENED_STORAGE_KEY = "ggparrot:runner-opened-version";
+const LEGACY_RUNNER_OPENED_STORAGE_KEY = "ggparrot:runner-opened";
+const OFFICIAL_RUNNER_DOWNLOAD_URL = "https://github.com/orbleeparrot/gg_parrot/releases/download/runner-v4/ggparrot-runner.exe";
 
 const CHAPTERS = ["매크로 연결", "실행기 준비", "계정 연결", "실행"];
 
@@ -330,7 +332,7 @@ export default function RunnerDownload() {
   const [downloadInfo, setDownloadInfo] = useState(null);
   const [downloadError, setDownloadError] = useState("");
   const [runnerReady, setRunnerReady] = useState(() => (
-    window.localStorage.getItem(RUNNER_OPENED_STORAGE_KEY) === "true"
+    window.localStorage.getItem(RUNNER_OPENED_STORAGE_KEY) === OFFICIAL_RUNNER_VERSION
   ));
   const [downloadStarted, setDownloadStarted] = useState(false);
   const [launchTicket, setLaunchTicket] = useState(null);
@@ -357,13 +359,30 @@ export default function RunnerDownload() {
   const downloadChecked = downloadInfo != null || !!downloadError;
   const officialRunnerFallback = downloadChecked && !downloadInfo?.available && !!OFFICIAL_RUNNER_DOWNLOAD_URL;
   const runnerAvailable = !!downloadInfo?.available || officialRunnerFallback;
-  const downloadUrl = downloadInfo?.available
+  const reportedDownloadUrl = downloadInfo?.available
     ? downloadInfo.url || api.runnerDownloadUrl
     : OFFICIAL_RUNNER_DOWNLOAD_URL;
+  // A v3 handler can be registered and open successfully, but Windows may
+  // normalize the URI to /launch/ and that build rejects it before claiming
+  // the ticket. Always offer v4 when a stale backend still advertises v1-v3.
+  const reportedRunnerIsOutdated = /\/runner-v(?:1|2|3)\//i.test(reportedDownloadUrl);
+  const downloadUrl = reportedRunnerIsOutdated
+    ? OFFICIAL_RUNNER_DOWNLOAD_URL
+    : reportedDownloadUrl;
   const launchCapabilityWasReported = downloadInfo != null
     && Object.prototype.hasOwnProperty.call(downloadInfo, "supports_launch");
   const supportsLaunch = downloadInfo?.supports_launch === true
-    || (!launchCapabilityWasReported && /\/runner-v3\//.test(downloadUrl));
+    || (!launchCapabilityWasReported && /\/runner-v4\//.test(downloadUrl));
+  const requiredRunnerVersion = String(
+    reportedRunnerIsOutdated
+      ? OFFICIAL_RUNNER_VERSION
+      : downloadInfo?.min_runner_version || OFFICIAL_RUNNER_VERSION,
+  );
+  const displayedRunnerVersion = String(
+    reportedRunnerIsOutdated
+      ? OFFICIAL_RUNNER_VERSION
+      : downloadInfo?.version || (/\/runner-v4\//.test(downloadUrl) ? OFFICIAL_RUNNER_VERSION : ""),
+  );
   const downloadIsExternal = /^https?:\/\//i.test(downloadUrl);
   const runnerDownloadState = !downloadChecked
     ? "loading"
@@ -592,7 +611,10 @@ export default function RunnerDownload() {
   }
 
   function confirmRunnerReady({ advance = false } = {}) {
-    window.localStorage.setItem(RUNNER_OPENED_STORAGE_KEY, "true");
+    // The old boolean cannot distinguish a v1-v3 handler from v4. Record the
+    // acknowledged release so a stale registration is never called ready.
+    window.localStorage.removeItem(LEGACY_RUNNER_OPENED_STORAGE_KEY);
+    window.localStorage.setItem(RUNNER_OPENED_STORAGE_KEY, OFFICIAL_RUNNER_VERSION);
     setRunnerReady(true);
     if (advance) moveTo(2);
   }
@@ -877,13 +899,14 @@ export default function RunnerDownload() {
                       : "다운로드 정보 없음"}
             </dd>
           </div>
-          {runnerAvailable && downloadInfo?.version ? <div><dt>버전</dt><dd className="num">v{downloadInfo.version}</dd></div> : null}
+          {runnerAvailable && displayedRunnerVersion ? <div><dt>다운로드 버전</dt><dd className="num">v{displayedRunnerVersion}</dd></div> : null}
+          {supportsLaunch ? <div><dt>자동 연결 최소 버전</dt><dd className="num">v{requiredRunnerVersion}</dd></div> : null}
           {runnerAvailable && downloadInfo?.size ? <div><dt>파일 크기</dt><dd className="num">{fmtSize(downloadInfo.size)}</dd></div> : null}
         </dl>
         {downloadStarted && !runnerReady ? (
           <div className="runner-wizard-runner-notice" role="status">
             <strong>다운로드 목록에서 파일을 허용한 뒤 한 번 열어 주세요.</strong>
-            <p>브라우저가 ‘확인되지 않은 다운로드’로 막으면 GitHub의 껄무새 runner-v3 파일인지 확인한 뒤 유지·다운로드 계속을 선택해요.</p>
+            <p>브라우저가 ‘확인되지 않은 다운로드’로 막으면 GitHub의 껄무새 runner-v4 파일인지 확인한 뒤 유지·다운로드 계속을 선택해요.</p>
           </div>
         ) : !runnerReady && ["unavailable", "error"].includes(runnerDownloadState) ? (
           <div className="runner-wizard-runner-notice" role={runnerDownloadState === "error" ? "alert" : "status"}>
@@ -988,9 +1011,13 @@ export default function RunnerDownload() {
           <div className="runner-wizard-launch-panel is-warning" role="alert">
             <span className="runner-wizard-launch-mark" aria-hidden="true">!</span>
             <div>
-              <h2>자동 연결에 응답이 없어요.</h2>
-              <p>{launchError || "새 연결을 만들거나 최신 실행기로 다시 시도해 주세요."}</p>
+              <h2>실행기는 열렸지만 자동 연결되지 않았어요.</h2>
+              <p>{launchError || "열려 있는 실행기를 모두 닫고 runner-v4를 한 번 실행한 뒤 새 연결을 만들어 주세요."}</p>
             </div>
+          </div>
+          <div className="runner-wizard-launch-diagnostic" role="status">
+            <strong>실행기 로그에 ‘올바르지 않은 웹 연결 요청’이 보이나요?</strong>
+            <p>runner-v3 이하에서 생기는 주소 호환 문제예요. runner-v4를 받아 한 번 열면 브라우저 연결이 새 버전으로 다시 등록돼요.</p>
           </div>
           <div className="runner-wizard-launch-actions">
             <button type="button" onClick={retryLaunchTicket} className="btn btn-m btn-secondary">새 연결 준비하기</button>
@@ -1025,8 +1052,8 @@ export default function RunnerDownload() {
           </div>
           {showLaunchRecovery ? (
             <div className="runner-wizard-launch-recovery">
-              <strong>실행기가 열리지 않았나요?</strong>
-              <p>브라우저는 앱이 실제로 열렸는지 알 수 없어요. 아래 방법 중 하나로 이어가세요.</p>
+              <strong>실행기는 열렸는데 매크로가 비어 있나요?</strong>
+              <p>실행기 로그에 ‘올바르지 않은 웹 연결 요청’이 보이면 열려 있는 실행기를 모두 닫고 runner-v4를 한 번 실행해 연결 등록을 갱신하세요.</p>
               <div className="runner-wizard-launch-actions">
                 <a href={launchTicket?.launch_url} onClick={beginLaunchWait} className="btn btn-m btn-secondary">다시 열기</a>
                 <a
@@ -1036,7 +1063,7 @@ export default function RunnerDownload() {
                   rel={downloadIsExternal ? "noopener noreferrer" : undefined}
                   className="btn btn-m btn-ghost"
                 >
-                  최신 실행기 받기
+                  runner-v4 받기
                 </a>
                 <button type="button" onClick={() => void downloadManualMacroFile()} disabled={manualDownloadBusy} className="btn btn-m btn-ghost">
                   {manualDownloadBusy ? "파일 준비 중…" : "수동으로 연결하기"}

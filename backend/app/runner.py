@@ -165,7 +165,7 @@ def create_launch_ticket(
         return {
             "launch_id": row.id,
             "launch_url": (
-                "ggparrot://launch?v=2"
+                "ggparrot://launch/?v=2"
                 f"&env={launch_environment}&ticket={raw_ticket}"
             ),
             "expires_at": row.expires_at,

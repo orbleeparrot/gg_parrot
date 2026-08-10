@@ -1114,11 +1114,12 @@ _RUNNER_EXE_PATH = os.environ.get("RUNNER_EXE_PATH") or os.path.join(
 )
 
 
-# runner-v3 adds a fixed localhost claim target while keeping the production
-# target pinned inside the binary. It is the canonical local/prod fallback.
-_RUNNER_V3_URL = "https://github.com/orbleeparrot/gg_parrot/releases/download/runner-v3/ggparrot-runner.exe"
-_RUNNER_DOWNLOAD_URL = os.environ.get("RUNNER_DOWNLOAD_URL", "").strip() or _RUNNER_V3_URL
-_RUNNER_SUPPORT_DEFAULT = "true" if "/runner-v3/" in _RUNNER_DOWNLOAD_URL else "false"
+# runner-v4 accepts the Windows CreateUri-normalized ``ggparrot://launch/``
+# path while keeping the v2 local/production ticket contract. Older releases
+# can open from Chrome yet reject the normalized URI before contacting us.
+_RUNNER_V4_URL = "https://github.com/orbleeparrot/gg_parrot/releases/download/runner-v4/ggparrot-runner.exe"
+_RUNNER_DOWNLOAD_URL = os.environ.get("RUNNER_DOWNLOAD_URL", "").strip() or _RUNNER_V4_URL
+_RUNNER_SUPPORT_DEFAULT = "true" if "/runner-v4/" in _RUNNER_DOWNLOAD_URL else "false"
 _RUNNER_SUPPORTS_LAUNCH = os.environ.get(
     "RUNNER_SUPPORTS_LAUNCH", _RUNNER_SUPPORT_DEFAULT
 ).strip().lower() in {
@@ -1126,8 +1127,15 @@ _RUNNER_SUPPORTS_LAUNCH = os.environ.get(
 }
 _RUNNER_LAUNCH_SCHEME = "ggparrot" if _RUNNER_SUPPORTS_LAUNCH else ""
 _RUNNER_MIN_VERSION = (
-    os.environ.get("RUNNER_MIN_VERSION", "3").strip() or "3"
+    os.environ.get("RUNNER_MIN_VERSION", "4").strip() or "4"
 ) if _RUNNER_SUPPORTS_LAUNCH else ""
+_RUNNER_EXE_VERSION = os.environ.get("RUNNER_EXE_VERSION", "").strip()
+if "/runner-v4/" in _RUNNER_DOWNLOAD_URL:
+    # The immutable release tag is the source of truth even if one deployment
+    # variable was updated later than the others.
+    _RUNNER_EXE_VERSION = "4"
+    if _RUNNER_SUPPORTS_LAUNCH:
+        _RUNNER_MIN_VERSION = "4"
 
 
 def _runner_launch_capabilities() -> dict:
@@ -1146,7 +1154,7 @@ def runner_download_info() -> dict:
             "available": True,
             "filename": _RUNNER_EXE_NAME,
             "size": 0,  # 외부 링크라 크기 미상
-            "version": os.environ.get("RUNNER_EXE_VERSION", ""),
+            "version": _RUNNER_EXE_VERSION,
             "url": _RUNNER_DOWNLOAD_URL,
             **_runner_launch_capabilities(),
         }
@@ -1155,7 +1163,7 @@ def runner_download_info() -> dict:
         "available": exists,
         "filename": _RUNNER_EXE_NAME,
         "size": os.path.getsize(_RUNNER_EXE_PATH) if exists else 0,
-        "version": os.environ.get("RUNNER_EXE_VERSION", ""),
+        "version": _RUNNER_EXE_VERSION,
         "url": "",
         **_runner_launch_capabilities(),
     }

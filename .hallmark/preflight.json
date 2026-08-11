@@ -1,0 +1,48 @@
+{
+  "scanned_at": "2026-08-11",
+  "design_system": {
+    "file": "DESIGN.md",
+    "status": "locked",
+    "genre": "modern-minimal technical product"
+  },
+  "font_stack": {
+    "body": "Pretendard Variable",
+    "numeric": "JetBrains Mono Variable",
+    "source": "frontend/src/index.css:6-70"
+  },
+  "palette": {
+    "format": "RGB triplet CSS custom properties mapped through Tailwind",
+    "modes": ["light", "dark"],
+    "accent": "single Binance yellow",
+    "source": "frontend/src/index.css:72-261"
+  },
+  "motion": {
+    "stance": "motion-cut",
+    "library": null,
+    "implementation": "CSS transitions and short scene animations",
+    "source": "frontend/package.json:11-21; DESIGN.md:383-386"
+  },
+  "spacing": {
+    "scale": "4-point",
+    "gutter_token": "--site-gutter",
+    "source": "DESIGN.md:222-237"
+  },
+  "framework": {
+    "ui": "React 18",
+    "router": "React Router 6",
+    "build": "Vite 6",
+    "css": "Tailwind CSS 3 plus shared index.css",
+    "source": "frontend/package.json:11-21"
+  },
+  "preserve": [
+    "DESIGN.md typography and palette",
+    "single yellow primary action",
+    "sidebar information architecture",
+    "existing routes, data flow, and component ownership"
+  ],
+  "introduce": [
+    "consistent header utility grammar",
+    "explicit current, hover, focus, and pressed states",
+    "Hallmark anti-slop and responsive verification"
+  ]
+}

@@ -1,7 +1,6 @@
 export const GUIDE_CHAPTERS = Object.freeze([
   "매크로 빌드",
   "종목검색",
-  "실시간 차트 확인",
   "조건 설정",
   "백테스트",
   "페이퍼 트레이딩",

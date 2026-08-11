@@ -6,11 +6,11 @@ import { getAuthUser, updateAuthUser, useAuth } from "../lib/auth.js";
 import { RULE_TYPES } from "../lib/macro.js";
 import { getUserId } from "../lib/user.js";
 
-const OFFICIAL_RUNNER_VERSION = "4";
+const OFFICIAL_RUNNER_VERSION = "5";
 const RUNNER_OPENED_STORAGE_KEY = "ggparrot:runner-opened-version";
 const LEGACY_RUNNER_OPENED_STORAGE_KEY = "ggparrot:runner-opened";
 const BINANCE_KEY_GUIDE_STORAGE_PREFIX = "ggparrot:binance-testnet-key-ready:v1";
-const OFFICIAL_RUNNER_DOWNLOAD_URL = "https://github.com/orbleeparrot/gg_parrot/releases/download/runner-v4/ggparrot-runner.exe";
+const OFFICIAL_RUNNER_DOWNLOAD_URL = "https://github.com/orbleeparrot/gg_parrot/releases/download/runner-v5/ggparrot-runner.exe";
 
 const STEP_MACRO = 0;
 const STEP_API_KEY = 1;
@@ -52,9 +52,9 @@ const BINANCE_TESTNET_GUIDES = {
 
 const COPY = [
   {
-    eyebrow: "내 계정에서 시작",
-    title: <>내 매크로를 골라<br /><span>바로 연결해요.</span></>,
-    description: "리더보드에 등록했거나 언락한 매크로, 직접 가져온 매크로가 내 계정에 보관돼요. 파일부터 찾을 필요 없이 여기서 하나만 고르면 돼요.",
+    eyebrow: "비트코인 매크로 실행",
+    title: <>비트코인 매크로,<br /><span>고르고 바로 실행해요.</span></>,
+    description: "내 계정의 매크로나 리더보드 전략을 고르면 테스트넷 준비부터 실행기 연결과 실행 확인까지 한 화면씩 이어져요.",
   },
   {
     eyebrow: "실행 전에 한 번만",
@@ -326,7 +326,7 @@ function Workspace({ title, status, bodyClassName = "", children }) {
   );
 }
 
-export default function RunnerDownload() {
+export default function RunnerDownload({ embedded = false, onExit }) {
   const { token, user } = useAuth();
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -380,17 +380,16 @@ export default function RunnerDownload() {
   const reportedDownloadUrl = downloadInfo?.available
     ? downloadInfo.url || api.runnerDownloadUrl
     : OFFICIAL_RUNNER_DOWNLOAD_URL;
-  // A v3 handler can be registered and open successfully, but Windows may
-  // normalize the URI to /launch/ and that build rejects it before claiming
-  // the ticket. Always offer v4 when a stale backend still advertises v1-v3.
-  const reportedRunnerIsOutdated = /\/runner-v(?:1|2|3)\//i.test(reportedDownloadUrl);
+  // v4 and older builds create a new window for every web activation. Always
+  // offer v5 when a stale backend still advertises an older immutable asset.
+  const reportedRunnerIsOutdated = /\/runner-v(?:1|2|3|4)\//i.test(reportedDownloadUrl);
   const downloadUrl = reportedRunnerIsOutdated
     ? OFFICIAL_RUNNER_DOWNLOAD_URL
     : reportedDownloadUrl;
   const launchCapabilityWasReported = downloadInfo != null
     && Object.prototype.hasOwnProperty.call(downloadInfo, "supports_launch");
   const supportsLaunch = downloadInfo?.supports_launch === true
-    || (!launchCapabilityWasReported && /\/runner-v4\//.test(downloadUrl));
+    || (!launchCapabilityWasReported && /\/runner-v5\//.test(downloadUrl));
   const requiredRunnerVersion = String(
     reportedRunnerIsOutdated
       ? OFFICIAL_RUNNER_VERSION
@@ -399,7 +398,7 @@ export default function RunnerDownload() {
   const displayedRunnerVersion = String(
     reportedRunnerIsOutdated
       ? OFFICIAL_RUNNER_VERSION
-      : downloadInfo?.version || (/\/runner-v4\//.test(downloadUrl) ? OFFICIAL_RUNNER_VERSION : ""),
+      : downloadInfo?.version || (/\/runner-v5\//.test(downloadUrl) ? OFFICIAL_RUNNER_VERSION : ""),
   );
   const downloadIsExternal = /^https?:\/\//i.test(downloadUrl);
   const runnerDownloadState = !downloadChecked
@@ -455,7 +454,7 @@ export default function RunnerDownload() {
           setLibraryError(
             primaryError?.status === 401
               ? "로그인이 만료됐을 수 있어요. 다시 로그인하거나 아래 방법으로 매크로를 선택해 주세요."
-              : "계정 목록을 확인하지 못했지만, 아래에서 리더보드나 파일로 시작할 수 있어요.",
+            : "계정 목록을 확인하지 못했지만, 아래에서 리더보드를 찾거나 직접 만들 수 있어요.",
           );
         }
       } finally {
@@ -635,7 +634,7 @@ export default function RunnerDownload() {
   }
 
   function confirmRunnerReady({ advance = false } = {}) {
-    // The old boolean cannot distinguish a v1-v3 handler from v4. Record the
+    // The old boolean cannot distinguish an older handler from v5. Record the
     // acknowledged release so a stale registration is never called ready.
     window.localStorage.removeItem(LEGACY_RUNNER_OPENED_STORAGE_KEY);
     window.localStorage.setItem(RUNNER_OPENED_STORAGE_KEY, OFFICIAL_RUNNER_VERSION);
@@ -883,7 +882,7 @@ export default function RunnerDownload() {
         {downloadStarted && !runnerReady ? (
           <div className="runner-wizard-runner-notice" role="status">
             <strong>다운로드 목록에서 파일을 허용한 뒤 한 번 열어 주세요.</strong>
-            <p>브라우저가 ‘확인되지 않은 다운로드’로 막으면 GitHub의 껄무새 runner-v4 파일인지 확인한 뒤 유지·다운로드 계속을 선택해요.</p>
+            <p>브라우저가 ‘확인되지 않은 다운로드’로 막으면 GitHub의 껄무새 runner-v5 파일인지 확인한 뒤 유지·다운로드 계속을 선택해요.</p>
           </div>
         ) : !runnerReady && ["unavailable", "error"].includes(runnerDownloadState) ? (
           <div className="runner-wizard-runner-notice" role={runnerDownloadState === "error" ? "alert" : "status"}>
@@ -1049,12 +1048,12 @@ export default function RunnerDownload() {
             <span className="runner-wizard-launch-mark" aria-hidden="true">!</span>
             <div>
               <h2>실행기는 열렸지만 자동 연결되지 않았어요.</h2>
-              <p>{launchError || "열려 있는 실행기를 모두 닫고 runner-v4를 한 번 실행한 뒤 새 연결을 만들어 주세요."}</p>
+              <p>{launchError || "열려 있는 구버전 실행기를 닫고 runner-v5를 한 번 실행한 뒤 새 연결을 만들어 주세요."}</p>
             </div>
           </div>
           <div className="runner-wizard-launch-diagnostic" role="status">
             <strong>실행기 로그에 ‘올바르지 않은 웹 연결 요청’이 보이나요?</strong>
-            <p>runner-v3 이하에서 생기는 주소 호환 문제예요. runner-v4를 받아 한 번 열면 브라우저 연결이 새 버전으로 다시 등록돼요.</p>
+            <p>runner-v4 이하는 웹 연결마다 새 창을 열어요. runner-v5를 받아 한 번 열면, 다음부터는 이미 열린 실행기가 앞으로 나와요.</p>
           </div>
           <div className="runner-wizard-launch-actions">
             <button type="button" onClick={retryLaunchTicket} className="btn btn-m btn-secondary">새 연결 준비하기</button>
@@ -1090,7 +1089,7 @@ export default function RunnerDownload() {
           {showLaunchRecovery ? (
             <div className="runner-wizard-launch-recovery">
               <strong>실행기는 열렸는데 매크로가 비어 있나요?</strong>
-              <p>실행기 로그에 ‘올바르지 않은 웹 연결 요청’이 보이면 열려 있는 실행기를 모두 닫고 runner-v4를 한 번 실행해 연결 등록을 갱신하세요.</p>
+              <p>웹에서 열 때 새 실행기가 계속 나오면 열려 있는 구버전을 닫고 runner-v5를 한 번 실행해 연결 등록을 갱신하세요.</p>
               <div className="runner-wizard-launch-actions">
                 <a href={launchTicket?.launch_url} onClick={beginLaunchWait} className="btn btn-m btn-secondary">다시 열기</a>
                 <a
@@ -1100,7 +1099,7 @@ export default function RunnerDownload() {
                   rel={downloadIsExternal ? "noopener noreferrer" : undefined}
                   className="btn btn-m btn-ghost"
                 >
-                  runner-v4 받기
+                  runner-v5 받기
                 </a>
                 <button type="button" onClick={() => void downloadManualMacroFile()} disabled={manualDownloadBusy} className="btn btn-m btn-ghost">
                   {manualDownloadBusy ? "파일 준비 중…" : "수동으로 연결하기"}
@@ -1174,10 +1173,11 @@ export default function RunnerDownload() {
   function renderPrimaryAction() {
     if (step === STEP_MACRO) {
       if (!signedIn) {
-        return <Link to="/login?next=%2Frunner" className="btn btn-l btn-primary runner-wizard-next">로그인하고 내 매크로 보기</Link>;
+        const next = encodeURIComponent("/?run=1&step=1");
+        return <Link to={`/login?next=${next}`} className="btn btn-l btn-primary runner-wizard-next">로그인하고 내 매크로 보기</Link>;
       }
       if (libraryView === "leaderboard") return <p className="runner-wizard-footer-note">목록에서 가져올 매크로를 선택해요.</p>;
-      if (!selected) return <p className="runner-wizard-footer-note">위에서 매크로를 찾거나 업로드하면 다음 단계가 열려요.</p>;
+      if (!selected) return <p className="runner-wizard-footer-note">리더보드에서 가져오거나 직접 만든 매크로를 선택하면 다음 단계가 열려요.</p>;
       return <button type="button" onClick={() => moveTo(STEP_API_KEY)} className="btn btn-l btn-primary runner-wizard-next">이 매크로 연결하기</button>;
     }
     if (step === STEP_API_KEY) {
@@ -1251,9 +1251,15 @@ export default function RunnerDownload() {
   }
 
   return (
-    <div className="runner-wizard">
+    <div className={`runner-wizard ${embedded ? "is-embedded" : ""}`.trim()}>
       <section className="runner-wizard-progress" aria-label="빠른 실행 진행률">
-        <div>
+        {embedded ? (
+          <div className="runner-wizard-modebar">
+            <strong>매크로 바로 만들기</strong>
+            <button type="button" onClick={onExit}>시작 화면으로</button>
+          </div>
+        ) : null}
+        <div className="runner-wizard-progress-meta">
           <span className="num">{String(step + 1).padStart(2, "0")} / {String(CHAPTERS.length).padStart(2, "0")}</span>
           <strong>{CHAPTERS[step]}</strong>
         </div>

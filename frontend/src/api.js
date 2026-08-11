@@ -219,10 +219,10 @@ export const api = {
     }),
   runnerLaunchTicketStatus: (launchId) =>
     req(`/api/me/runner/launch-tickets/${encodeURIComponent(launchId)}`),
-  runnerLaunchTicketClaim: (ticket) =>
+  runnerLaunchTicketClaim: (ticket, runnerVersion = "5") =>
     req("/api/runner/launch-tickets/claim", {
       method: "POST",
-      body: JSON.stringify({ ticket }),
+      body: JSON.stringify({ ticket, runner_version: runnerVersion }),
     }),
   // mode: "stop_only"(매크로만) | "close_and_stop"(청산 후 종료)
   runnerRequestStop: (sessionId, mode) =>

@@ -240,6 +240,7 @@ class RunnerLaunchTicketCreateRequest(BaseModel):
 
 class RunnerLaunchTicketClaimRequest(BaseModel):
     ticket: str
+    runner_version: str = ""
 
 
 class LeaderboardRegisterRequest(BaseModel):
@@ -1033,6 +1034,26 @@ def runner_launch_ticket_claim(
     response: Response,
 ) -> dict:
     response.headers["Cache-Control"] = "no-store"
+    current = req.runner_version.strip()
+    required = _RUNNER_MIN_VERSION or "5"
+    try:
+        supported = (
+            current.isascii()
+            and current.isdigit()
+            and required.isascii()
+            and required.isdigit()
+            and len(current) <= 6
+            and len(required) <= 6
+            and int(current) >= int(required)
+        )
+    except ValueError:
+        supported = False
+    if not supported:
+        raise HTTPException(
+            status_code=426,
+            detail=f"실행기 v{required} 이상으로 업데이트해 주세요.",
+            headers={"Cache-Control": "no-store"},
+        )
     return runner_mod.claim_launch_ticket(req.ticket)
 
 
@@ -1117,12 +1138,11 @@ _RUNNER_EXE_PATH = os.environ.get("RUNNER_EXE_PATH") or os.path.join(
 )
 
 
-# runner-v4 accepts the Windows CreateUri-normalized ``ggparrot://launch/``
-# path while keeping the v2 local/production ticket contract. Older releases
-# can open from Chrome yet reject the normalized URI before contacting us.
-_RUNNER_V4_URL = "https://github.com/orbleeparrot/gg_parrot/releases/download/runner-v4/ggparrot-runner.exe"
-_RUNNER_DOWNLOAD_URL = os.environ.get("RUNNER_DOWNLOAD_URL", "").strip() or _RUNNER_V4_URL
-_RUNNER_SUPPORT_DEFAULT = "true" if "/runner-v4/" in _RUNNER_DOWNLOAD_URL else "false"
+# runner-v5 keeps the strict launch-ticket contract and adds single-instance
+# activation, so a web click reuses and foregrounds an existing runner window.
+_RUNNER_V5_URL = "https://github.com/orbleeparrot/gg_parrot/releases/download/runner-v5/ggparrot-runner.exe"
+_RUNNER_DOWNLOAD_URL = os.environ.get("RUNNER_DOWNLOAD_URL", "").strip() or _RUNNER_V5_URL
+_RUNNER_SUPPORT_DEFAULT = "true" if "/runner-v5/" in _RUNNER_DOWNLOAD_URL else "false"
 _RUNNER_SUPPORTS_LAUNCH = os.environ.get(
     "RUNNER_SUPPORTS_LAUNCH", _RUNNER_SUPPORT_DEFAULT
 ).strip().lower() in {
@@ -1130,15 +1150,15 @@ _RUNNER_SUPPORTS_LAUNCH = os.environ.get(
 }
 _RUNNER_LAUNCH_SCHEME = "ggparrot" if _RUNNER_SUPPORTS_LAUNCH else ""
 _RUNNER_MIN_VERSION = (
-    os.environ.get("RUNNER_MIN_VERSION", "4").strip() or "4"
+    os.environ.get("RUNNER_MIN_VERSION", "5").strip() or "5"
 ) if _RUNNER_SUPPORTS_LAUNCH else ""
 _RUNNER_EXE_VERSION = os.environ.get("RUNNER_EXE_VERSION", "").strip()
-if "/runner-v4/" in _RUNNER_DOWNLOAD_URL:
+if "/runner-v5/" in _RUNNER_DOWNLOAD_URL:
     # The immutable release tag is the source of truth even if one deployment
     # variable was updated later than the others.
-    _RUNNER_EXE_VERSION = "4"
+    _RUNNER_EXE_VERSION = "5"
     if _RUNNER_SUPPORTS_LAUNCH:
-        _RUNNER_MIN_VERSION = "4"
+        _RUNNER_MIN_VERSION = "5"
 
 
 def _runner_launch_capabilities() -> dict:

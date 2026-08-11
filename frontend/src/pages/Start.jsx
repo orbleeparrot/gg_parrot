@@ -4,7 +4,6 @@ import {
   AssetScene,
   BacktestScene,
   BuildScene,
-  ChartScene,
   CommunityScene,
   ConditionWorkbench,
   GuideScene,
@@ -51,28 +50,27 @@ function createScreens(form) {
   const ruleType = form.rule_type;
   const fields = getConditionFields(ruleType, form);
   const setup = [
-    { id: "strategy", kind: "strategy", chapter: 4 },
+    { id: "strategy", kind: "strategy", chapter: 3 },
     ...fields.map((field) => ({
       id: `condition-${ruleType}-${field.key}`,
       kind: "condition",
-      chapter: 4,
+      chapter: 3,
       field,
     })),
-    { id: "risk", kind: "risk", chapter: 4 },
-    { id: "period", kind: "period", chapter: 4 },
+    { id: "risk", kind: "risk", chapter: 3 },
+    { id: "period", kind: "period", chapter: 3 },
   ].map((screen, index, all) => ({ ...screen, substep: index + 1, substepTotal: all.length }));
 
   return [
     { id: "build", kind: "build", chapter: 1 },
     { id: "asset", kind: "asset", chapter: 2 },
-    { id: "chart", kind: "chart", chapter: 3 },
     ...setup,
-    { id: "backtest", kind: "backtest", chapter: 5 },
-    { id: "paper", kind: "paper", chapter: 6 },
-    { id: "register", kind: "register", chapter: 7 },
-    { id: "community", kind: "community", chapter: 8 },
-    { id: "news", kind: "news", chapter: 9 },
-    { id: "guide", kind: "guide", chapter: 10 },
+    { id: "backtest", kind: "backtest", chapter: 4 },
+    { id: "paper", kind: "paper", chapter: 5 },
+    { id: "register", kind: "register", chapter: 6 },
+    { id: "community", kind: "community", chapter: 7 },
+    { id: "news", kind: "news", chapter: 8 },
+    { id: "guide", kind: "guide", chapter: 9 },
   ];
 }
 
@@ -90,35 +88,29 @@ function copyFor(screen) {
         title: title("원하는 ", "코인 차트", "부터 찾아요."),
         description: "직접 종목 코드를 검색하거나 대표 종목을 고르세요. 여기서 고른 종목이 차트와 이후 모든 조건에 그대로 이어져요.",
       };
-    case "chart":
-      return {
-        eyebrow: "실시간 차트 확인",
-        title: title("조건을 정하기 전에 ", "가격 흐름", "을 먼저 봐요."),
-        description: "검색한 종목의 실제 실시간 캔들 차트를 확인해요. 봉 간격을 바꾸고 고가·저가·현재가를 살펴본 뒤 이 흐름에 맞는 조건을 정해요.",
-      };
     case "strategy":
       return {
         eyebrow: "조건 설정",
         title: title("가격을 어떻게 볼지 ", "전략", "을 골라요."),
-        description: "오른쪽에 검색한 종목의 차트를 계속 띄워두었어요. 가격 흐름과 작동 방식을 함께 보며 A–K 전략 중 하나를 골라요.",
+        description: "왼쪽에 검색한 종목의 차트를 계속 띄워두었어요. 가격 흐름과 작동 방식을 함께 보며 A–K 전략 중 하나를 골라요.",
       };
     case "condition":
       return {
         eyebrow: "조건 설정",
         title: title("이번에는 ", screen.field.label, "을 정해요."),
-        description: "오른쪽 차트와 비교하면서 한 화면에서 숫자나 선택지 하나만 정해요. 다음 화면으로 넘어가도 차트와 앞에서 고른 값은 유지돼요.",
+        description: "왼쪽 차트와 비교하면서 한 화면에서 숫자나 선택지 하나만 정해요. 다음 화면으로 넘어가도 차트와 앞에서 고른 값은 유지돼요.",
       };
     case "risk":
       return {
         eyebrow: "조건 설정",
         title: title("수익보다 먼저 ", "손실의 끝", "을 정해요."),
-        description: "차트의 변동폭을 참고해 손실의 끝을 정해요. 손절은 한 번의 잘못된 판단이 커지는 것을 제한하는 규칙이에요.",
+        description: "왼쪽 차트의 변동폭을 참고해 손실의 끝을 정해요. 손절은 한 번의 잘못된 판단이 커지는 것을 제한하는 규칙이에요.",
       };
     case "period":
       return {
         eyebrow: "조건 설정",
         title: title("어느 ", "과거 구간", "에서 확인할지 정해요."),
-        description: "차트의 봉 간격과 함께 과거 구간을 정해요. 짧은 기간과 긴 기간은 서로 다른 결과를 보여줄 수 있어요.",
+        description: "왼쪽 차트의 봉 간격과 함께 과거 구간을 정해요. 짧은 기간과 긴 기간은 서로 다른 결과를 보여줄 수 있어요.",
       };
     case "backtest":
       return {
@@ -172,7 +164,6 @@ function normalizeGuideSymbol(value) {
 
 function workspaceLabel(screen) {
   if (screen.kind === "asset") return "종목 검색";
-  if (screen.kind === "chart") return "실시간 차트";
   if (screen.kind === "backtest") return "백테스트 결과";
   if (screen.kind === "paper") return "페이퍼 트레이딩";
   if (screen.kind === "register") return "리더보드 등록";
@@ -185,7 +176,6 @@ function workspaceLabel(screen) {
 
 function workspaceStatus(screen) {
   if (["backtest", "paper", "register"].includes(screen.kind)) return null;
-  if (screen.kind === "chart") return "바이낸스 공개 시세";
   if (["community", "news"].includes(screen.kind)) return "화면 목업";
   if (screen.kind === "guide") return "실제 문서";
   return "설정 유지됨";
@@ -205,7 +195,7 @@ function HeroScene({
   boardLoading,
   boardError,
   onOpenRegister,
-  chartLoadState,
+  searchState,
 }) {
   switch (screen.kind) {
     case "build":
@@ -216,12 +206,10 @@ function HeroScene({
           form={form}
           setForm={setForm}
           error={validationError}
-          searchError={chartLoadState.searchError}
-          busy={chartLoadState.searchBusy}
+          searchError={searchState.searchError}
+          busy={searchState.searchBusy}
         />
       );
-    case "chart":
-      return <ChartScene form={form} setForm={setForm} onLoadState={chartLoadState.onLoadState} />;
     case "strategy":
     case "condition":
     case "risk":
@@ -259,14 +247,10 @@ function HeroScene({
   }
 }
 
-function actionLabel(screen, backtest, paperController, paperReady, registrationReady, searchBusy, chartStatus) {
+function actionLabel(screen, backtest, paperController, paperReady, registrationReady, searchBusy) {
   switch (screen.kind) {
     case "build": return "종목 검색하기";
-    case "asset": return searchBusy ? "종목 확인 중…" : "실시간 차트 확인";
-    case "chart":
-      if (chartStatus === "error") return "차트를 확인할 수 없어요";
-      if (chartStatus !== "ready") return "차트 불러오는 중…";
-      return "이 차트로 조건 설정하기";
+    case "asset": return searchBusy ? "종목 확인 중…" : "차트 보며 조건 정하기";
     case "strategy": return "전략 조건 정하기";
     case "condition": return "다음 조건 정하기";
     case "risk": return "테스트 기간 정하기";
@@ -326,7 +310,6 @@ export default function Start({ onNestedDialogChange }) {
   const [resumeError, setResumeError] = useState("");
   const [symbolSearchBusy, setSymbolSearchBusy] = useState(false);
   const [symbolSearchError, setSymbolSearchError] = useState("");
-  const [chartLoad, setChartLoad] = useState({ symbol: "", interval: "", status: "idle", error: "" });
   const headingRef = useRef(null);
   const workRef = useRef(null);
   const resumeHandledRef = useRef(false);
@@ -339,17 +322,6 @@ export default function Start({ onNestedDialogChange }) {
     onNestedDialogChange?.(nextOpen);
     setRegisterOpen(nextOpen);
   }, [onNestedDialogChange]);
-
-  const handleChartLoadState = useCallback((next) => {
-    setChartLoad((current) => (
-      current.symbol === next.symbol &&
-      current.interval === next.interval &&
-      current.status === next.status &&
-      current.error === next.error
-        ? current
-        : next
-    ));
-  }, []);
 
   const syncRegisteredBoard = useCallback((entry, key, mode, showLoading = false) => {
     const requestId = ++boardRequestIdRef.current;
@@ -387,7 +359,12 @@ export default function Start({ onNestedDialogChange }) {
     () => createScreens(form),
     [form.rule_type, form.exit_mode]
   );
-  const requestedId = searchParams.get("tour") || "build";
+  const rawRequestedId = searchParams.get("tour") || "build";
+  const hasExactRequestedScreen = screens.some((candidate) => candidate.id === rawRequestedId);
+  const requestedId =
+    rawRequestedId === "chart" || (!hasExactRequestedScreen && rawRequestedId.startsWith("condition-"))
+      ? "strategy"
+      : rawRequestedId;
   const requestedIndex = screens.findIndex((candidate) => candidate.id === requestedId);
   const currentIndex = requestedIndex >= 0 ? requestedIndex : 0;
   const screen = screens[currentIndex];
@@ -411,10 +388,6 @@ export default function Start({ onNestedDialogChange }) {
     stopOnUnmount: true,
   });
   const validationError = screenError(screen, form);
-  const chartReady =
-    chartLoad.status === "ready" &&
-    chartLoad.symbol === normalizeGuideSymbol(form.symbol) &&
-    chartLoad.interval === form.candle_interval;
   const paperReady =
     backtest.resultIsFresh &&
     paperController.startedKey === backtest.testedKey &&
@@ -432,6 +405,9 @@ export default function Start({ onNestedDialogChange }) {
   const boardError = boardStateIsCurrent && registeredBoardState.error;
   const chapterName = CHAPTERS[screen.chapter - 1];
   const progress = (screen.chapter / CHAPTERS.length) * 100;
+  const chapterTargets = CHAPTERS.map((_, index) => (
+    screens.find((candidate) => candidate.chapter === index + 1)
+  ));
 
   useEffect(() => {
     saveHeroDraft(macro);
@@ -472,12 +448,17 @@ export default function Start({ onNestedDialogChange }) {
   }, [registeredEntry?.id, registrationReady, screen.kind]);
 
   useEffect(() => {
+    if (rawRequestedId !== requestedId) {
+      const next = new URLSearchParams(searchKey);
+      next.set("tour", requestedId);
+      setSearchParams(next, { replace: true });
+      return;
+    }
     if (requestedIndex >= 0 || requestedId === "build") return;
     const next = new URLSearchParams(searchKey);
-    if (requestedId.startsWith("condition-")) next.set("tour", "strategy");
-    else next.delete("tour");
+    next.delete("tour");
     setSearchParams(next, { replace: true });
-  }, [requestedId, requestedIndex, searchKey, setSearchParams]);
+  }, [rawRequestedId, requestedId, requestedIndex, searchKey, setSearchParams]);
 
   useEffect(() => {
     if (!resumeRegistration || resumeHandledRef.current) return;
@@ -591,7 +572,7 @@ export default function Start({ onNestedDialogChange }) {
 
   async function advance() {
     if (screen.kind === "guide") {
-      navigate("/guide");
+      navigate("/?help=start");
       return;
     }
     if (validationError || !nextScreen) return;
@@ -685,12 +666,11 @@ export default function Start({ onNestedDialogChange }) {
   const footerDisabled =
     !!validationError ||
     symbolSearchBusy ||
-    (screen.kind === "chart" && !chartReady) ||
     (screen.kind === "backtest" && backtest.currentBusy) ||
     (screen.kind === "paper" && (!paperReady || paperController.busy)) ||
     (screen.kind === "register" && !registrationReady);
-  const stageIsOutput = ["chart", "backtest", "paper"].includes(screen.kind) || (screen.kind === "register" && !registrationReady);
-  const stageIsShowcase = screen.chapter === 4 || ["community", "news", "guide"].includes(screen.kind) || (screen.kind === "register" && registrationReady);
+  const stageIsOutput = ["backtest", "paper"].includes(screen.kind) || (screen.kind === "register" && !registrationReady);
+  const stageIsShowcase = screen.chapter === 3 || ["community", "news", "guide"].includes(screen.kind) || (screen.kind === "register" && registrationReady);
   const showWorkspaceContext = ["strategy", "condition", "risk", "period", "backtest", "paper", "register"].includes(screen.kind) && !registrationReady;
 
   return (
@@ -698,7 +678,15 @@ export default function Start({ onNestedDialogChange }) {
       <section className="hero-progress-band" aria-label="시작 가이드 진행률">
         <div className="hero-progress-meta">
           <span className="t-caption text-slate-700 num">{String(screen.chapter).padStart(2, "0")} / {String(CHAPTERS.length).padStart(2, "0")}</span>
-          <span className="t-caption text-slate-500">{chapterName}</span>
+          <button
+            type="button"
+            className="hero-progress-current-button t-caption"
+            onClick={() => goTo(chapterTargets[screen.chapter - 1])}
+            disabled={!chapterTargets[screen.chapter - 1] || paperController.busy || backtest.busy || resumePhase === "restoring"}
+            title={`${chapterName} 처음으로`}
+          >
+            {chapterName}
+          </button>
         </div>
         <div
           className="hero-tour-progress-track"
@@ -712,19 +700,28 @@ export default function Start({ onNestedDialogChange }) {
         </div>
         <ol
           className="hero-progress-chapters"
-          aria-hidden="true"
+          aria-label="가이드 단계 바로가기"
           style={{ gridTemplateColumns: `repeat(${CHAPTERS.length}, minmax(0, 1fr))` }}
         >
           {CHAPTERS.map((chapter, index) => (
             <li key={chapter} className={index + 1 === screen.chapter ? "is-current" : index + 1 < screen.chapter ? "is-done" : ""}>
-              {chapter}
+              <button
+                type="button"
+                className="hero-progress-chapter-button"
+                onClick={() => goTo(chapterTargets[index])}
+                disabled={!chapterTargets[index] || paperController.busy || backtest.busy || resumePhase === "restoring"}
+                aria-current={index + 1 === screen.chapter ? "step" : undefined}
+                title={`${index + 1}. ${chapter}`}
+              >
+                {chapter}
+              </button>
             </li>
           ))}
         </ol>
       </section>
 
       <section
-        key={screen.chapter === 4 ? "condition-workbench" : screen.id}
+        key={screen.chapter === 3 ? "condition-workbench" : screen.id}
         className={
           "hero-tour-stage hero-stage-enter " +
           (stageIsOutput ? "hero-stage-output " : "") +
@@ -742,7 +739,7 @@ export default function Start({ onNestedDialogChange }) {
             <HeroTitle value={copy.title} />
           </h1>
           <p className="mt-5 t-body text-slate-600 measure">{copy.description}</p>
-          {screen.chapter === 4 ? (
+          {screen.chapter === 3 ? (
             <p className="mt-5 t-caption text-slate-500">
               빠른 시작에 필요한 대표 조건만 정하고 있어요. A–K의 모든 위험·비용·데이터 설정은 전체 빌더에 그대로 있어요.
             </p>
@@ -781,10 +778,9 @@ export default function Start({ onNestedDialogChange }) {
                 boardLoading={boardLoading}
                 boardError={boardError}
                 onOpenRegister={openRegister}
-                chartLoadState={{
+                searchState={{
                   searchBusy: symbolSearchBusy,
                   searchError: symbolSearchError,
-                  onLoadState: handleChartLoadState,
                 }}
               />
             </div>
@@ -815,7 +811,7 @@ export default function Start({ onNestedDialogChange }) {
               <p className="hero-tour-action-note" role="status">위에서 실제 등록을 완료하면 다음 안내가 열려요.</p>
             ) : (
               <button type="button" onClick={advance} disabled={footerDisabled} className="btn btn-l btn-primary hero-tour-next">
-                {actionLabel(screen, backtest, paperController, paperReady, registrationReady, symbolSearchBusy, chartLoad.status)}
+                {actionLabel(screen, backtest, paperController, paperReady, registrationReady, symbolSearchBusy)}
               </button>
             )}
           </div>

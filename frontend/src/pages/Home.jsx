@@ -1,90 +1,77 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import {
   beginJourney,
   dismissJourney,
-  readJourneyState,
 } from "../lib/journey.js";
-import { GUIDE_CHAPTERS } from "../lib/guideFlow.js";
 import { lockBodyScroll } from "../lib/bodyScrollLock.js";
 
 const StartGuide = lazy(() => import("./Start.jsx"));
+const RunnerFlow = lazy(() => import("./RunnerDownload.jsx"));
+const GuidePage = lazy(() => import("./Guide.jsx"));
 const FOCUSABLE =
   'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
-const PRODUCT_STEPS = [
-  {
-    number: "01",
-    title: "차트를 먼저 찾아요",
-    body: "원하는 종목을 검색하고 실시간 차트를 본 뒤 A–K 전략과 조건을 정해요.",
-  },
-  {
-    number: "02",
-    title: "과거와 현재로 검증해요",
-    body: "서버 백테스트와 페이퍼 트레이딩이 같은 설정을 이어받아 동작해요.",
-  },
-  {
-    number: "03",
-    title: "결과를 공개하고 비교해요",
-    body: "검증한 설정만 오늘의 리더보드에 등록하고 채팅과 게시판에서 이야기해요.",
-  },
-];
-
-function preloadGuide() {
-  void import("./Start.jsx");
-}
-
-function ProductPreview() {
+function HomeEntryHero({ onRun, onGuide }) {
   return (
-    <div className="home-product-preview" aria-label="껄무새 제품 흐름 예시">
-      <div className="home-preview-topline">
-        <span className="t-caption num text-slate-500">MACRO / 01</span>
-        <span className="badge badge-flat">실제 주문 없음</span>
+    <section className="home-entry-hero" aria-labelledby="home-entry-title">
+      <div className="home-entry-copy">
+        <h1 id="home-entry-title">
+          비트코인 매크로가 하고 싶다면, <span>껄무새</span>에서 시작하세요.
+        </h1>
+        <p className="home-entry-description">
+          전략을 고르는 것부터 테스트넷 실행까지 한 단계씩 안내해요.
+          처음이어도 괜찮아요. 코드를 몰라도 바로 시작할 수 있어요.
+        </p>
+        <ol className="home-entry-flow" aria-label="매크로 실행 흐름">
+          <li><span className="num">01</span>매크로 선택</li>
+          <li><span className="num">02</span>키·실행기 준비</li>
+          <li><span className="num">03</span>테스트넷 실행</li>
+        </ol>
+        <p className="home-entry-note">웹의 백테스트와 모의 결과는 투자 조언이 아니에요.</p>
       </div>
-      <div className="home-preview-rule">
-        <div>
-          <span className="t-caption text-slate-500">선택한 규칙</span>
-          <p className="mt-2 t-h4 text-slate-900">SOL · 정기 분할매수</p>
+
+      <nav className="home-entry-choices" aria-labelledby="home-entry-choice-title">
+        <div className="home-entry-choice-heading">
+          <h2 id="home-entry-choice-title">어떻게 시작할까요?</h2>
         </div>
-        <span className="num t-small text-slate-700">C</span>
-      </div>
-      <p className="home-preview-sentence text-slate-700">
-        <span className="num font-bold text-slate-900">7일</span>마다
-        <span className="num font-bold text-slate-900"> 100 USDT</span>씩 나누어 사고,
-        <span className="num font-bold text-slate-900"> -3%</span>에서 손실을 제한해요.
-      </p>
-      <ol className="home-preview-pipeline" aria-label="제품 실행 단계">
-        <li className="is-complete">
-          <span className="num">01</span>
-          <span><strong>백테스트</strong><small>실제 서버 계산</small></span>
-          <span className="home-preview-status">확인</span>
-        </li>
-        <li>
-          <span className="num">02</span>
-          <span><strong>페이퍼 트레이딩</strong><small>현재 시세 모의 실행</small></span>
-          <span className="home-preview-status">다음</span>
-        </li>
-        <li>
-          <span className="num">03</span>
-          <span><strong>리더보드</strong><small>오늘의 결과 등록</small></span>
-          <span className="home-preview-status">대기</span>
-        </li>
-      </ol>
-      <div className="home-preview-foot">
-        <span>제품 흐름 예시</span>
-        <span className="num">A–K · 11가지 전략</span>
-      </div>
-    </div>
+        <button
+          type="button"
+          data-home-entry-primary
+          onClick={onRun}
+          className="home-entry-choice is-primary"
+        >
+          <span><strong>매크로 바로 만들기</strong><small>내 매크로나 리더보드 전략을 골라 바로 실행해요.</small></span>
+          <span aria-hidden="true">→</span>
+        </button>
+        <button
+          type="button"
+          data-home-guide-trigger
+          aria-haspopup="dialog"
+          onClick={onGuide}
+          className="home-entry-choice"
+        >
+          <span><strong>처음부터 안내</strong><small>첫 사용자라면 종목 검색부터 등록까지 직접 따라가요.</small></span>
+          <span aria-hidden="true">→</span>
+        </button>
+        <Link to="/builder" className="home-entry-choice">
+          <span><strong>매크로 직접 만들기</strong><small>A–K 전략과 모든 조건을 직접 설계하고 검증해요.</small></span>
+          <span aria-hidden="true">→</span>
+        </Link>
+      </nav>
+    </section>
   );
 }
 
 export default function Home() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [journeyState, setJourneyState] = useState(readJourneyState);
+  const location = useLocation();
+  const navigate = useNavigate();
   const [nestedDialogOpen, setNestedDialogOpen] = useState(false);
   const backgroundRef = useRef(null);
   const dialogRef = useRef(null);
   const previousFocusRef = useRef(null);
+  const previousRunnerOpenRef = useRef(false);
   const nestedDialogRef = useRef(false);
   nestedDialogRef.current = nestedDialogOpen;
 
@@ -92,39 +79,77 @@ export default function Home() {
   const legacyTour = searchParams.has("tour");
   const resumeRegistration = searchParams.get("resume") === "hero-register";
   const guideOpen = explicitGuide || legacyTour || resumeRegistration;
-  const hasUsedGuide = !!(
-    journeyState.started_at || journeyState.dismissed_at || journeyState.completed_at
-  );
-  const guideLabel = journeyState.completed_at
-    ? "가이드 다시 보기"
-    : hasUsedGuide
-    ? "가이드 이어보기"
-    : "가이드로 첫 매크로 만들기";
+  const helpSection = searchParams.get("help") || "";
+  const docsOpen = !guideOpen && !!helpSection;
+  const overlayOpen = guideOpen || docsOpen;
+  const runnerOpen = searchParams.get("run") === "1" || searchParams.has("step");
+  const helpReturnTo = typeof location.state?.helpReturnTo === "string"
+    ? location.state.helpReturnTo
+    : "";
 
-  const openGuide = useCallback(() => {
-    beginJourney();
-    setJourneyState(readJourneyState());
+  const openRunner = useCallback(() => {
     setSearchParams((current) => {
       const next = new URLSearchParams(current);
-      next.set("guide", "1");
-      next.set(
-        "tour",
-        !journeyState.completed_at && journeyState.last_tour
-          ? journeyState.last_tour
-          : "build"
-      );
+      next.set("run", "1");
+      next.set("step", "1");
+      next.delete("help");
+      next.delete("guide");
+      next.delete("tour");
       next.delete("resume");
       return next;
     });
-  }, [journeyState.completed_at, journeyState.last_tour, setSearchParams]);
+  }, [setSearchParams]);
 
-  const closeGuide = useCallback(() => {
-    dismissJourney();
-    setJourneyState(readJourneyState());
+  const closeRunner = useCallback(() => {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.delete("run");
+      next.delete("step");
+      next.delete("help");
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
+
+  const openGuide = useCallback(() => {
+    beginJourney();
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.set("guide", "1");
+      next.set("tour", "build");
+      next.delete("help");
+      next.delete("resume");
+      return next;
+    });
+  }, [setSearchParams]);
+
+  const closeOverlay = useCallback(() => {
+    if (guideOpen) {
+      dismissJourney();
+    }
+    if (
+      docsOpen
+      && helpReturnTo.startsWith("/")
+      && !helpReturnTo.startsWith("//")
+    ) {
+      navigate(helpReturnTo, { replace: true });
+      return;
+    }
     setSearchParams((current) => {
       const next = new URLSearchParams(current);
       next.delete("guide");
       next.delete("tour");
+      next.delete("resume");
+      next.delete("help");
+      return next;
+    }, { replace: true });
+  }, [docsOpen, guideOpen, helpReturnTo, navigate, setSearchParams]);
+
+  const restartGuide = useCallback(() => {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.set("guide", "1");
+      next.set("tour", "build");
+      next.delete("help");
       next.delete("resume");
       return next;
     }, { replace: true });
@@ -132,26 +157,46 @@ export default function Home() {
 
   useEffect(() => {
     document.title = guideOpen
-      ? "빠른 시작 가이드 · 껄무새"
-      : "껄무새 · 매매 규칙을 만들고 검증해요";
-  }, [guideOpen]);
+      ? "껄무새 가이드라인"
+      : docsOpen
+        ? "사용 방법 · 껄무새"
+        : runnerOpen
+          ? "매크로 바로 만들기 · 껄무새"
+          : "비트코인 매크로 · 껄무새";
+  }, [docsOpen, guideOpen, runnerOpen]);
 
   useEffect(() => {
     if (guideOpen) beginJourney();
-    setJourneyState(readJourneyState());
   }, [guideOpen]);
 
   useEffect(() => {
+    const wasRunnerOpen = previousRunnerOpenRef.current;
+    previousRunnerOpenRef.current = runnerOpen;
+    if (!wasRunnerOpen || runnerOpen) return undefined;
+    const frame = window.requestAnimationFrame(() => {
+      document.querySelector("[data-home-entry-primary]")?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [runnerOpen]);
+
+  useEffect(() => {
     const background = backgroundRef.current;
-    const shellChrome = Array.from(document.querySelectorAll(".site-header, .site-sidebar, .site-mobile-drawer"));
-    const chromeState = shellChrome.map((element) => ({
+    const shellControls = Array.from(document.querySelectorAll([
+      ".site-header .site-mobile-menu-button",
+      ".site-header .market-context-topbar",
+      ".site-header .site-header-utility",
+      ".site-sidebar .site-side-nav",
+      ".site-sidebar .site-sidebar-bottom",
+      ".site-mobile-drawer",
+    ].join(", ")));
+    const chromeState = shellControls.map((element) => ({
       element,
       inert: element.inert,
       ariaHidden: element.getAttribute("aria-hidden"),
     }));
-    if (background) background.inert = guideOpen;
-    if (guideOpen) {
-      shellChrome.forEach((element) => {
+    if (background) background.inert = overlayOpen;
+    if (overlayOpen) {
+      shellControls.forEach((element) => {
         element.inert = true;
         element.setAttribute("aria-hidden", "true");
       });
@@ -164,10 +209,11 @@ export default function Home() {
         else element.setAttribute("aria-hidden", ariaHidden);
       });
     };
-  }, [guideOpen]);
+  }, [overlayOpen]);
 
   useEffect(() => {
-    if (!guideOpen) return undefined;
+    if (!overlayOpen) return undefined;
+    document.documentElement.classList.add("has-onboarding-overlay");
     previousFocusRef.current = document.activeElement;
     const unlockBodyScroll = lockBodyScroll();
     const frame = window.requestAnimationFrame(() => dialogRef.current?.focus({ preventScroll: true }));
@@ -176,7 +222,7 @@ export default function Home() {
       if (nestedDialogRef.current) return;
       if (event.key === "Escape") {
         event.preventDefault();
-        closeGuide();
+        closeOverlay();
         return;
       }
       if (event.key !== "Tab") return;
@@ -206,135 +252,33 @@ export default function Home() {
     return () => {
       window.cancelAnimationFrame(frame);
       document.removeEventListener("keydown", onKeyDown);
+      document.documentElement.classList.remove("has-onboarding-overlay");
       unlockBodyScroll();
       const previous = previousFocusRef.current;
       const fallback = previous?.isConnected && previous !== document.body
         ? previous
-        : document.querySelector('[data-home-guide-trigger="hero"]');
+        : document.querySelector("[data-home-entry-primary], [data-home-guide-trigger]");
       window.requestAnimationFrame(() => fallback?.focus?.({ preventScroll: true }));
     };
-  }, [closeGuide, guideOpen]);
+  }, [closeOverlay, overlayOpen]);
 
   return (
     <>
       <div
         ref={backgroundRef}
-        className="home-page"
-        aria-hidden={guideOpen ? "true" : undefined}
+        className={`home-start-page ${runnerOpen ? "is-runner" : "is-entry"}`}
+        aria-hidden={overlayOpen ? "true" : undefined}
       >
-        <section className="home-hero" aria-labelledby="home-hero-title">
-          <div className="home-hero-copy">
-            <p className="home-eyebrow">코딩 없이 만드는 코인 매매 규칙</p>
-            <h1 id="home-hero-title" className="home-hero-title text-slate-900">
-              감 대신 규칙으로<br />
-              <mark>매매하고 검증해요.</mark>
-            </h1>
-            <p className="home-hero-description text-slate-600">
-              원하는 종목의 실시간 차트를 먼저 보고 조건을 정하면, 과거 데이터 검증부터
-              페이퍼 트레이딩과 오늘의 리더보드까지 하나의 설정으로 이어져요.
-            </p>
-            <div className="home-hero-actions">
-              {hasUsedGuide ? (
-                <>
-                  <Link to="/builder" className="btn btn-xl btn-primary">매크로 바로 만들기</Link>
-                  <button
-                    type="button"
-                    data-home-guide-trigger="hero"
-                    onClick={openGuide}
-                    onPointerEnter={preloadGuide}
-                    onFocus={preloadGuide}
-                    className="btn btn-xl btn-secondary"
-                  >
-                    {guideLabel}
-                  </button>
-                </>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    data-home-guide-trigger="hero"
-                    onClick={openGuide}
-                    onPointerEnter={preloadGuide}
-                    onFocus={preloadGuide}
-                    className="btn btn-xl btn-primary"
-                  >
-                    {guideLabel}
-                  </button>
-                  <Link to="/builder" className="btn btn-xl btn-secondary">빌더 바로 열기</Link>
-                </>
-              )}
-            </div>
-            <p className="home-hero-note text-slate-500">
-              웹 화면은 실제 주문을 보내지 않아요. 백테스트와 모의 결과는 투자 조언이 아니에요.
-            </p>
-          </div>
-          <ProductPreview />
-        </section>
-
-        <section className="home-fact-strip" aria-label="껄무새 핵심 기능">
-          <div><strong className="num">11</strong><span>A–K 전체 전략</span></div>
-          <div><strong>서버 계산</strong><span>백테스트 결과</span></div>
-          <div><strong>현재 시세</strong><span>페이퍼 트레이딩</span></div>
-          <div><strong>매일 집계</strong><span>리더보드·채팅</span></div>
-        </section>
-
-        <section className="home-workflow" aria-labelledby="home-workflow-title">
-          <div className="home-section-intro">
-            <p className="home-eyebrow">하나의 규칙, 하나의 흐름</p>
-            <h2 id="home-workflow-title" className="t-h2 text-slate-900">
-              입력은 한 번, 검증은 끝까지.
-            </h2>
-            <p className="mt-4 t-body text-slate-600 measure">
-              화면마다 설정을 다시 옮기지 않아요. 검색한 차트의 종목과 봉 간격, 조건이 검증과 등록까지 이어져요.
-            </p>
-          </div>
-          <ol className="home-workflow-list">
-            {PRODUCT_STEPS.map((step) => (
-              <li key={step.number}>
-                <span className="num home-workflow-number">{step.number}</span>
-                <h3 className="t-h4 text-slate-900">{step.title}</h3>
-                <p className="t-small text-slate-600">{step.body}</p>
-              </li>
-            ))}
-          </ol>
-        </section>
-
-        <section className="home-guide-invite" aria-labelledby="home-guide-title">
-          <div>
-            <p className="home-eyebrow">직접 따라 하는 빠른 시작</p>
-            <h2 id="home-guide-title" className="t-h2 text-slate-900">
-              설명만 읽지 말고,<br />직접 등록까지 해보세요.
-            </h2>
-            <p className="mt-4 t-body text-slate-600 measure">
-              원하는 종목의 실시간 차트를 확인하며 조건을 정하고, 실제 백테스트와 페이퍼 트레이딩을 거쳐 리더보드에 등록해요.
-            </p>
-            <button
-              type="button"
-              onClick={openGuide}
-              onPointerEnter={preloadGuide}
-              onFocus={preloadGuide}
-              className="mt-7 btn btn-l btn-primary"
-            >
-              {guideLabel}
-            </button>
-          </div>
-          <ol className="home-guide-chapters" aria-label={`빠른 가이드 ${GUIDE_CHAPTERS.length}단계`}>
-            {GUIDE_CHAPTERS.map((chapter, index) => (
-              <li key={chapter}>
-                <span className="num">{String(index + 1).padStart(2, "0")}</span>
-                <span>{chapter}</span>
-              </li>
-            ))}
-          </ol>
-        </section>
-
-        <footer className="home-footer t-caption text-slate-500">
-          <span>껄무새 · GGparrot</span>
-          <span>모든 결과는 모의 계산이며 수익을 보장하지 않아요.</span>
-        </footer>
+        {runnerOpen ? (
+          <Suspense fallback={<div className="home-start-loading t-small text-slate-600" role="status">매크로 화면 불러오는 중…</div>}>
+            <RunnerFlow embedded onExit={closeRunner} />
+          </Suspense>
+        ) : (
+          <HomeEntryHero onRun={openRunner} onGuide={openGuide} />
+        )}
       </div>
 
-      {guideOpen ? (
+      {overlayOpen ? (
         <div className="onboarding-layer">
           <section
             ref={dialogRef}
@@ -342,21 +286,34 @@ export default function Home() {
             aria-modal={nestedDialogOpen ? undefined : "true"}
             aria-labelledby="onboarding-dialog-title"
             tabIndex={-1}
-            className="onboarding-dialog"
+            className={`onboarding-dialog ${docsOpen ? "is-docs" : ""}`.trim()}
           >
             <header className="onboarding-dialog-bar">
-              <div className="min-w-0">
-                <p className="t-caption num text-slate-500">GGPARROT / QUICK START</p>
-                <p id="onboarding-dialog-title" className="t-label text-slate-900">직접 따라 하는 빠른 시작</p>
-              </div>
-              <button type="button" onClick={closeGuide} className="onboarding-close" aria-label="빠른 시작 가이드 닫기">
-                <span className="hidden sm:inline">나중에 이어보기</span>
+              {guideOpen ? (
+                <button
+                  type="button"
+                  className="onboarding-dialog-title-button min-w-0"
+                  onClick={restartGuide}
+                  aria-label="껄무새 가이드라인 첫 화면으로 이동"
+                  title="가이드 처음으로"
+                >
+                  <span id="onboarding-dialog-title" className="t-title text-slate-900">껄무새 가이드라인</span>
+                </button>
+              ) : (
+                <span id="onboarding-dialog-title" className="t-title text-slate-900">사용 방법</span>
+              )}
+              <button type="button" onClick={closeOverlay} className="onboarding-close" aria-label={guideOpen ? "껄무새 가이드라인 닫기" : "사용 방법 닫기"}>
+                <span className="hidden sm:inline">{guideOpen ? "나중에 이어보기" : "닫기"}</span>
                 <span aria-hidden="true">×</span>
               </button>
             </header>
-            <div className="onboarding-tour-viewport">
-              <Suspense fallback={<div className="onboarding-loading t-small text-slate-600" role="status">가이드 불러오는 중…</div>}>
-                <StartGuide onNestedDialogChange={setNestedDialogOpen} />
+            <div className={`onboarding-tour-viewport ${docsOpen ? "is-docs" : ""}`.trim()}>
+              <Suspense fallback={<div className="onboarding-loading t-small text-slate-600" role="status">화면 불러오는 중…</div>}>
+                {guideOpen ? (
+                  <StartGuide onNestedDialogChange={setNestedDialogOpen} />
+                ) : (
+                  <GuidePage embedded initialSection={helpSection || "start"} />
+                )}
               </Suspense>
             </div>
           </section>

@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import shutil
 import sys
 import threading
@@ -58,6 +59,11 @@ try:  # package import (tests) / direct script import (PyInstaller build)
         files_identical,
         protocol_install_target,
     )
+    from .single_instance import (
+        InstanceCommand,
+        RunnerSingleInstance,
+        SingleInstanceError,
+    )
 except ImportError:
     from protocol import (
         PROTOCOL_CLAIM_PATH,
@@ -70,6 +76,11 @@ except ImportError:
         RUNNER_VERSION,
         files_identical,
         protocol_install_target,
+    )
+    from single_instance import (
+        InstanceCommand,
+        RunnerSingleInstance,
+        SingleInstanceError,
     )
 
 # ==================================================================
@@ -84,6 +95,76 @@ MAX_RETRIES = 3
 POLL_SECONDS = 5.0
 
 APP_TITLE = f"껄무새 매크로 실행기 v{RUNNER_VERSION}"
+
+
+def _bring_window_to_front(root: tk.Tk) -> None:
+    """Restore and foreground the already-running Tk window, best effort."""
+
+    try:
+        root.deiconify()
+        root.update_idletasks()
+        root.lift()
+        # Windows may refuse a direct SetForegroundWindow depending on which
+        # process owns foreground permission. A short topmost pulse still
+        # makes the user-requested existing window visible without leaving it
+        # pinned above other apps.
+        root.attributes("-topmost", True)
+
+        def release_topmost() -> None:
+            try:
+                root.attributes("-topmost", False)
+            except tk.TclError:
+                pass
+
+        root.after(180, release_topmost)
+        root.focus_force()
+    except tk.TclError:
+        return
+
+    if sys.platform != "win32":
+        return
+    try:
+        from ctypes import c_int, windll, wintypes
+
+        user32 = windll.user32
+        user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+        user32.GetAncestor.restype = wintypes.HWND
+        user32.GetLastActivePopup.argtypes = [wintypes.HWND]
+        user32.GetLastActivePopup.restype = wintypes.HWND
+        user32.ShowWindowAsync.argtypes = [wintypes.HWND, c_int]
+        user32.ShowWindowAsync.restype = wintypes.BOOL
+        user32.BringWindowToTop.argtypes = [wintypes.HWND]
+        user32.BringWindowToTop.restype = wintypes.BOOL
+        user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+        user32.SetForegroundWindow.restype = wintypes.BOOL
+        hwnd = int(root.winfo_id())
+        hwnd = int(user32.GetAncestor(hwnd, 2) or hwnd)  # GA_ROOT
+        user32.ShowWindowAsync(hwnd, 9)  # SW_RESTORE
+        popup = int(user32.GetLastActivePopup(hwnd) or hwnd)
+        user32.BringWindowToTop(popup)
+        user32.SetForegroundWindow(popup)
+    except Exception:
+        # Tk's lift/topmost path above is the portable fallback.
+        pass
+
+
+def _show_native_runner_error(message: str) -> None:
+    """Show a pre-Tk error in the noconsole Windows executable."""
+
+    if sys.platform == "win32":
+        try:
+            from ctypes import windll
+
+            windll.user32.MessageBoxW(0, message, APP_TITLE, 0x10)  # MB_ICONERROR
+            return
+        except Exception:
+            pass
+    # This path is useful only for source-mode diagnostics; the released
+    # executable has no console and uses the MessageBox above.
+    try:
+        print(message, file=sys.stderr)
+    except Exception:
+        pass
 
 
 def _install_protocol_handler_for_current_user() -> bool:
@@ -113,7 +194,7 @@ def _install_protocol_handler_for_current_user() -> bool:
             if not stable.exists() or not files_identical(source, stable):
                 # Stage then replace so a partial copy can never become the
                 # shell handler. Old release directories are never modified
-                # or deleted, so an in-use v2/v3 executable cannot block v4.
+                # or deleted, so an in-use older executable cannot block v5.
                 shutil.copy2(source, staged)
                 if not files_identical(source, staged):
                     return False
@@ -654,8 +735,10 @@ class RunnerApp:
         self.api_secret = tk.StringVar(value="")
         self.member_key = tk.StringVar(value=os.environ.get("GGP_MEMBER_KEY", ""))
         self.server_base = SERVER_BASE
+        self._protocol_claim_busy = False
         self._protocol_registration_thread: threading.Thread | None = None
         self._build()
+        self.root.protocol("WM_DELETE_WINDOW", self._on_window_close)
         if startup_warning:
             self._log(startup_warning)
         if register_protocol:
@@ -784,6 +867,17 @@ class RunnerApp:
     def _begin_protocol_claim(self, launch: ProtocolLaunch) -> None:
         """Claim a browser launch ticket without blocking Tk's event loop."""
 
+        if self.bot is not None:
+            self._log("현재 매크로가 실행 중이에요. 종료한 뒤 사이트에서 다시 연결해 주세요.")
+            try:
+                self.root.bell()
+            except tk.TclError:
+                pass
+            return
+        if self._protocol_claim_busy:
+            self._log("이미 웹 매크로를 연결하고 있어요. 잠시만 기다려 주세요.")
+            return
+        self._protocol_claim_busy = True
         if requests is None:
             self._protocol_claim_failed()
             return
@@ -845,7 +939,7 @@ class RunnerApp:
         try:
             response = requests.post(
                 f"{claim_base}{PROTOCOL_CLAIM_PATH}",
-                json={"ticket": launch.ticket},
+                json={"ticket": launch.ticket, "runner_version": RUNNER_VERSION},
                 timeout=15,
             )
             response.raise_for_status()
@@ -879,6 +973,14 @@ class RunnerApp:
         runner_key: str,
         claim_base: str,
     ) -> None:
+        self._protocol_claim_busy = False
+        if self.bot is not None:
+            # The request was accepted while idle, but a local start may have
+            # completed before the network response arrived. Never replace
+            # the strategy/account fields underneath an active bot.
+            self._log("매크로가 실행 중이어서 새 웹 연결을 적용하지 않았어요.")
+            self._set_running(True)
+            return
         try:
             self._apply_macro(macro, "웹에서 연결한 내 매크로")
         except ValueError:
@@ -898,20 +1000,48 @@ class RunnerApp:
         self.start_btn.config(state="normal")
         self.status_lbl.config(text="웹 연결됨 · 시작 전", foreground="#0a0")
         self._log("웹 매크로와 껄무새 계정을 연결했어요. 테스트넷 설정을 확인한 뒤 직접 시작해 주세요.")
-        try:
-            self.root.deiconify()
-            self.root.lift()
-            self.root.focus_force()
-        except tk.TclError:
-            pass
+        _bring_window_to_front(self.root)
 
     def _protocol_claim_failed(self) -> None:
-        self.pick_btn.config(state="normal")
-        self.start_btn.config(state="normal")
+        self._protocol_claim_busy = False
+        running = self.bot is not None
+        self.pick_btn.config(state="disabled" if running else "normal")
+        self.start_btn.config(state="disabled" if running else "normal")
         self.status_lbl.config(text="웹 연결 실패", foreground="#c00")
         self._log("웹 연결 요청을 확인하지 못했어요. 사이트로 돌아가 다시 시도해 주세요.")
 
+    def handle_external_activation(self, launch: ProtocolLaunch | None) -> None:
+        """Handle a second executable invocation inside the existing UI."""
+
+        _bring_window_to_front(self.root)
+        if launch is None:
+            return
+        if self.bot is not None:
+            self._log("현재 매크로가 실행 중이에요. 종료한 뒤 사이트에서 새로 연결해 주세요.")
+            try:
+                self.root.bell()
+            except tk.TclError:
+                pass
+            return
+        self._begin_protocol_claim(launch)
+
+    def _on_window_close(self) -> None:
+        if self.bot is not None:
+            _bring_window_to_front(self.root)
+            messagebox.showwarning(
+                APP_TITLE,
+                "매크로가 실행 중이에요.\n'매크로만 종료' 또는 '청산 후 종료'를 먼저 눌러 주세요.",
+            )
+            return
+        self.root.destroy()
+
     def _start(self) -> None:
+        if self.bot is not None:
+            messagebox.showwarning(APP_TITLE, "이미 매크로가 실행 중이에요.")
+            return
+        if self._protocol_claim_busy:
+            messagebox.showwarning(APP_TITLE, "웹 매크로 연결이 끝날 때까지 잠시만 기다려 주세요.")
+            return
         if requests is None:
             messagebox.showerror(APP_TITLE, "'requests' 모듈이 필요해요. requirements 설치 후 실행하세요.")
             return
@@ -1009,6 +1139,7 @@ class RunnerApp:
 
     def _set_running(self, running: bool) -> None:
         self.start_btn.config(state="disabled" if running else "normal")
+        self.pick_btn.config(state="disabled" if running else "normal")
         self.stop_btn.config(state="normal" if running else "disabled")
         self.close_btn.config(state="normal" if running else "disabled")
 
@@ -1025,6 +1156,48 @@ def main() -> None:
         # untrusted page.  Open the ordinary UI and explain the safe recovery.
         startup_warning = "올바르지 않은 웹 연결 요청은 무시했어요. 사이트에서 다시 시도해 주세요."
 
+    instance: RunnerSingleInstance | None = None
+    # The Windows shell must create a short-lived process to deliver a custom
+    # URI. v5 forwards that request through an authenticated named pipe and
+    # exits before Tk is constructed, leaving exactly one visible runner.
+    if sys.platform == "win32" and getattr(sys, "frozen", False):
+        try:
+            instance = RunnerSingleInstance.acquire()
+        except SingleInstanceError:
+            _show_native_runner_error(
+                "실행기 연결 통로를 준비하지 못했어요. 열려 있는 실행기를 모두 닫은 뒤 다시 열어 주세요."
+            )
+            return
+
+        if instance is not None and not instance.is_primary:
+            # A user may manually reopen v5 after an older executable has
+            # overwritten the HKCU protocol handler. Repair registration even
+            # though this helper process will hand off to the existing v5 UI.
+            registration_repaired = True
+            if not protocol_requested:
+                registration_repaired = _install_protocol_handler_for_current_user()
+            command = (
+                InstanceCommand.launch_protocol(protocol_launch)
+                if protocol_launch is not None
+                else InstanceCommand.activate()
+            )
+            try:
+                acknowledgement = instance.handoff(command)
+            except SingleInstanceError:
+                _show_native_runner_error(
+                    "이미 열린 실행기에 연결하지 못했어요. 기존 창을 직접 확인하거나 모든 실행기를 닫은 뒤 다시 열어 주세요."
+                )
+                return
+            if not acknowledgement.accepted:
+                _show_native_runner_error(
+                    "이미 열린 실행기가 새 요청을 받을 수 없어요. 잠시 후 다시 시도해 주세요."
+                )
+            elif not registration_repaired:
+                _show_native_runner_error(
+                    "기존 실행기 창은 열었지만 웹 연결 등록을 갱신하지 못했어요. 모든 실행기를 닫은 뒤 v5를 다시 열어 주세요."
+                )
+            return
+
     root = tk.Tk()
     try:
         # 고해상도 화면 선명하게 (Windows)
@@ -1032,13 +1205,33 @@ def main() -> None:
         windll.shcore.SetProcessDpiAwareness(1)
     except Exception:
         pass
-    RunnerApp(
+    app = RunnerApp(
         root,
         protocol_launch=protocol_launch,
         register_protocol=not protocol_requested and protocol_launch is None,
         startup_warning=startup_warning,
     )
-    root.mainloop()
+
+    if instance is not None:
+        def drain_instance_commands() -> None:
+            while True:
+                try:
+                    command = instance.get_command_nowait()
+                except queue.Empty:
+                    break
+                app.handle_external_activation(command.launch)
+            try:
+                root.after(80, drain_instance_commands)
+            except tk.TclError:
+                pass
+
+        root.after(0, drain_instance_commands)
+
+    try:
+        root.mainloop()
+    finally:
+        if instance is not None:
+            instance.close()
 
 
 if __name__ == "__main__":

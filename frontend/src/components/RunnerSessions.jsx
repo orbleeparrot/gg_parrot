@@ -236,7 +236,7 @@ export default function RunnerSessions({
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <SectionTitle count={count} className="mb-0">{title}</SectionTitle>
         {showRunnerLink ? (
-          <Link to="/runner" className="btn btn-s btn-secondary">빠른 실행 열기</Link>
+          <Link to="/?run=1&step=1" className="btn btn-s btn-secondary">매크로 바로 만들기</Link>
         ) : null}
       </div>
 

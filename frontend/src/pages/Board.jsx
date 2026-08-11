@@ -177,7 +177,7 @@ export default function Board() {
   }
 
   return (
-    <div className="max-w-3xl mx-auto">
+    <div className="max-w-3xl">
       <PageHeader
         eyebrow="전략·질문·정보"
         title="껄무새 게시판"

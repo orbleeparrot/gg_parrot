@@ -194,35 +194,9 @@ export function AssetScene({ form, setForm, error, searchError = "", busy = fals
           </button>
         ))}
       </div>
-      <p id={helpId} className="mt-5 t-small text-slate-500">종목 코드를 검색하거나 대표 종목을 고르세요. 다음 화면에서 이 종목의 실제 실시간 차트를 확인해요.</p>
+      <p id={helpId} className="mt-5 t-small text-slate-500">종목 코드를 검색하거나 대표 종목을 고르세요. 다음 화면부터 이 종목의 실시간 차트를 왼쪽에 두고 조건을 정해요.</p>
       {error || searchError ? <p id={errorId} className="mt-2 t-small text-red-600" role="alert">{error || searchError}</p> : null}
     </div>
-  );
-}
-
-export function ChartScene({ form, setForm, onLoadState }) {
-  const symbol = (form.symbol || "").trim().toUpperCase();
-  return (
-    <section className="hero-live-output" aria-label={`${symbol} 실시간 차트 확인`}>
-      <div className="flex items-start justify-between gap-4 pb-4 border-b border-slate-200 flex-wrap">
-        <div>
-          <div className="t-caption text-slate-500">검색한 종목</div>
-          <h2 className="mt-1 t-title text-slate-900 num">{symbol}</h2>
-        </div>
-        <span className="badge badge-flat">바이낸스 공개 시세 · 실시간 갱신</span>
-      </div>
-      <Suspense fallback={<SceneLoading label="실시간 차트 불러오는 중…" />}>
-        <CandleChart
-          symbol={symbol}
-          interval={form.candle_interval}
-          onIntervalChange={(value) => setForm((current) => ({ ...current, candle_interval: value }))}
-          onLoadState={onLoadState}
-        />
-      </Suspense>
-      <p className="mt-4 pt-4 border-t border-slate-200 t-small text-slate-600">
-        봉 간격을 바꾸고 가격 흐름을 살펴보세요. 선택한 봉 간격은 이후 조건과 백테스트에도 그대로 적용돼요.
-      </p>
-    </section>
   );
 }
 

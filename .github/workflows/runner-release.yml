@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag (for example runner-v4)"
+        description: "Release tag (for example runner-v5)"
         required: true
-        default: "runner-v4"
+        default: "runner-v5"
 
 permissions:
   contents: write
@@ -27,6 +27,20 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: runner/requirements.txt
+
+      - name: Validate immutable runner release tag
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $tag = "${{ inputs.tag }}"
+          } else {
+            $tag = "${{ github.ref_name }}"
+          }
+          $expected = python -c "from runner.installation import RUNNER_RELEASE; print(RUNNER_RELEASE)"
+          if ($tag -ne $expected) {
+            throw "Release tag '$tag' does not match runner source '$expected'."
+          }
+          "RUNNER_RELEASE_TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Install runner build dependencies
         run: python -m pip install -r runner/requirements.txt pyinstaller
@@ -57,13 +71,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
-            $tag = "${{ inputs.tag }}"
-          } else {
-            $tag = "${{ github.ref_name }}"
+          gh release view $env:RUNNER_RELEASE_TAG *> $null
+          if ($LASTEXITCODE -eq 0) {
+            throw "Release '$env:RUNNER_RELEASE_TAG' already exists; immutable runner assets are never overwritten."
           }
-          gh release view $tag *> $null
-          if ($LASTEXITCODE -ne 0) {
-            gh release create $tag --target "${{ github.sha }}" --title $tag --generate-notes
-          }
-          gh release upload $tag runner/dist/ggparrot-runner.exe runner/dist/SHA256SUMS.txt --clobber
+          gh release create $env:RUNNER_RELEASE_TAG --target "${{ github.sha }}" --title $env:RUNNER_RELEASE_TAG --generate-notes
+          gh release upload $env:RUNNER_RELEASE_TAG runner/dist/ggparrot-runner.exe runner/dist/SHA256SUMS.txt

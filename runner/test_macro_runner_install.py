@@ -13,15 +13,15 @@ from runner.installation import (
 
 
 class ProtocolInstallPathTests(unittest.TestCase):
-    def test_v4_uses_release_specific_path_instead_of_locked_legacy_path(self) -> None:
+    def test_v5_uses_release_specific_path_instead_of_locked_legacy_path(self) -> None:
         local_app_data = Path("C:/Users/test/AppData/Local")
         target = protocol_install_target(str(local_app_data))
 
-        self.assertEqual(RUNNER_VERSION, "4")
-        self.assertEqual(RUNNER_RELEASE, "runner-v4")
+        self.assertEqual(RUNNER_VERSION, "5")
+        self.assertEqual(RUNNER_RELEASE, "runner-v5")
         self.assertEqual(
             target,
-            local_app_data / "GGParrot" / "runner-v4" / "ggparrot-runner.exe",
+            local_app_data / "GGParrot" / "runner-v5" / "ggparrot-runner.exe",
         )
         self.assertNotEqual(
             target,
@@ -32,8 +32,8 @@ class ProtocolInstallPathTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "downloaded.exe"
             installed = Path(tmp) / "installed.exe"
-            source.write_bytes(b"official runner v4")
-            installed.write_bytes(b"official runner v4")
+            source.write_bytes(b"official runner v5")
+            installed.write_bytes(b"official runner v5")
             self.assertTrue(files_identical(source, installed))
 
             installed.write_bytes(b"different runner")

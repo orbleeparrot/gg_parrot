@@ -289,8 +289,8 @@ export function PaperPanelView({ macro, valErr, onRegister, controller }) {
           <button onClick={downloadMacro} disabled={!!valErr} className="btn btn-m btn-secondary">
             매크로 파일 내려받기 (.ggm.json)
           </button>
-          <Link to="/runner" className="t-small font-semibold text-slate-900 underline underline-offset-4 decoration-slate-300 hover:decoration-slate-900">
-            매크로 실행기 받기·사용법 →
+          <Link to="/?run=1&step=1" className="t-small font-semibold text-slate-900 underline underline-offset-4 decoration-slate-300 hover:decoration-slate-900">
+            빠른 실행 열기·사용법 →
           </Link>
         </div>
       </div>

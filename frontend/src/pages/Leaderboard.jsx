@@ -116,7 +116,7 @@ export default function Leaderboard() {
         updateAuthUser({ ...getAuthUser(), points_balance: d.points_balance });
       }
       if (quickRunMode && d.user_macro?.id) {
-        navigate("/runner", { state: { selectedMacroId: d.user_macro.id } });
+        navigate("/?run=1&step=1", { state: { selectedMacroId: d.user_macro.id } });
         return;
       }
       await load(); // reveal the now-unlocked macro
@@ -137,10 +137,10 @@ export default function Leaderboard() {
     try {
       if (!entry.for_sale) {
         const saved = await api.saveMyMacro(entry.macro, `리더보드 · ${entry.symbol}`);
-        navigate("/runner", { state: { selectedMacroId: saved.item.id } });
+        navigate("/?run=1&step=1", { state: { selectedMacroId: saved.item.id } });
         return;
       }
-      navigate("/runner", { state: { selectedSourceRef: entry.id } });
+      navigate("/?run=1&step=1", { state: { selectedSourceRef: entry.id } });
     } catch (e) {
       setError(String(e.message || e));
       setUnlocking(0);
@@ -163,7 +163,7 @@ export default function Leaderboard() {
             <strong>빠른 실행에 연결할 매크로를 골라요.</strong>
             <p>내 것 또는 이미 언락한 전략은 바로 선택할 수 있어요.</p>
           </div>
-          <button type="button" onClick={() => navigate("/runner")} className="btn btn-m btn-secondary">빠른 실행으로 돌아가기</button>
+          <button type="button" onClick={() => navigate("/?run=1&step=1")} className="btn btn-m btn-secondary">매크로 선택으로 돌아가기</button>
         </div>
       ) : null}
 

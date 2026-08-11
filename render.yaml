@@ -17,3 +17,11 @@ services:
       # 미러 호스트를 사용(동일한 공개 시세). 로컬은 이 변수 없이 기본 호스트 사용.
       - key: BINANCE_API_BASE
         value: "https://data-api.binance.vision"
+      - key: RUNNER_DOWNLOAD_URL
+        value: "https://github.com/orbleeparrot/gg_parrot/releases/download/runner-v5/ggparrot-runner.exe"
+      - key: RUNNER_EXE_VERSION
+        value: "5"
+      - key: RUNNER_SUPPORTS_LAUNCH
+        value: "true"
+      - key: RUNNER_MIN_VERSION
+        value: "5"

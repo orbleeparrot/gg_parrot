@@ -156,13 +156,13 @@ export default function BoardPost() {
     }
   }
 
-  if (err) return <div className="max-w-3xl mx-auto t-small text-red-600">오류: {err}</div>;
-  if (!post) return <div className="max-w-3xl mx-auto t-small text-slate-500">불러오는 중…</div>;
+  if (err) return <div className="max-w-3xl t-small text-red-600">오류: {err}</div>;
+  if (!post) return <div className="max-w-3xl t-small text-slate-500">불러오는 중…</div>;
 
   const isMine = user && user.id === post.author_user_id;
 
   return (
-    <div className="max-w-3xl mx-auto">
+    <div className="max-w-3xl">
       <Link to="/board" className="t-small font-semibold text-slate-700 hover:text-slate-900">← 목록으로</Link>
 
       <article className="mt-4 pb-5 border-b border-slate-200">

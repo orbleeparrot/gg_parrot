@@ -77,10 +77,6 @@ export default function HotCoinsMarquee() {
             {group(true)}
           </div>
         </div>
-
-        <div className="shrink-0 hidden md:block px-4 t-caption leading-tight text-slate-500 max-w-[13rem]">
-          급등 종목은 참고용이며 투자 조언이 아닙니다. 급등 코인은 변동성·손실 위험이 큽니다.
-        </div>
       </div>
     </div>
   );

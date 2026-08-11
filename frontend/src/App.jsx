@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
-import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { Link, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import Home from "./pages/Home.jsx";
 import { api } from "./api.js";
 import { useAuth, clearAuth, getToken, updateAuthUser } from "./lib/auth.js";
@@ -17,8 +17,6 @@ const Studio = lazy(() => import("./pages/Studio.jsx"));
 const Leaderboard = lazy(() => import("./pages/Leaderboard.jsx"));
 const Auth = lazy(() => import("./pages/Auth.jsx"));
 const MyPage = lazy(() => import("./pages/MyPage.jsx"));
-const RunnerDownload = lazy(() => import("./pages/RunnerDownload.jsx"));
-const Guide = lazy(() => import("./pages/Guide.jsx"));
 const News = lazy(() => import("./pages/News.jsx"));
 const Board = lazy(() => import("./pages/Board.jsx"));
 const BoardPost = lazy(() => import("./pages/BoardPost.jsx"));
@@ -51,6 +49,15 @@ function useDismissibleMenu(open, setOpen, rootRef, triggerRef, routeKey) {
 }
 
 function TopBar({ hasSidebar, onOpenNavigation, menuButtonRef }) {
+  const { pathname, search } = useLocation();
+  const helpOpen = pathname === "/" && new URLSearchParams(search).has("help");
+  const docsParams = new URLSearchParams(pathname === "/" ? search : "");
+  docsParams.set("help", "start");
+  docsParams.delete("guide");
+  docsParams.delete("tour");
+  docsParams.delete("resume");
+  const docsTo = `/?${docsParams.toString()}`;
+
   return (
     <header className="site-header glass">
       <div className="site-header-inner">
@@ -71,6 +78,18 @@ function TopBar({ hasSidebar, onOpenNavigation, menuButtonRef }) {
         </div>
         {hasSidebar ? <MarketContext /> : <div className="site-auth-shell-label">안전하게 계정 연결하기</div>}
         <div className="site-header-utility">
+          {hasSidebar ? (
+            <Link
+              to={docsTo}
+              state={pathname === "/" ? undefined : { helpReturnTo: pathname + search }}
+              className="site-help-link"
+              aria-haspopup="dialog"
+              aria-expanded={helpOpen}
+              aria-current={helpOpen ? "page" : undefined}
+            >
+              사용 방법
+            </Link>
+          ) : null}
           <ThemeToggle />
           <AuthNav />
         </div>
@@ -136,9 +155,15 @@ function AuthNav() {
         aria-controls="site-account-menu"
         aria-label={`계정 메뉴 · ${user.username} · ${(user.points_balance ?? 0).toLocaleString()}포인트`}
       >
+        <svg className="site-account-compact-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+          <circle cx="12" cy="8" r="3.25" />
+          <path d="M5.75 19c.8-3.2 2.88-4.8 6.25-4.8s5.45 1.6 6.25 4.8" />
+        </svg>
         <span className="site-account-name">{user.username}</span>
         <span className="num font-bold text-indigo-800">{(user.points_balance ?? 0).toLocaleString()}P</span>
-        <span aria-hidden="true">{open ? "↑" : "↓"}</span>
+        <svg className="site-account-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+          <path d={open ? "m4 10 4-4 4 4" : "m4 6 4 4 4-4"} />
+        </svg>
       </button>
       {open ? (
         <div id="site-account-menu" className="site-account-panel">
@@ -174,7 +199,7 @@ function RouteChangeEffects() {
       : pathname.startsWith("/mypage")
       ? "내 활동"
       : pathname.startsWith("/runner")
-      ? "매크로 실행기"
+      ? "빠른 실행"
       : pathname.startsWith("/login")
       ? "로그인"
       : "껄무새";
@@ -196,9 +221,37 @@ function RouteLoading() {
   );
 }
 
+function LegacyStartRedirect({ view }) {
+  const location = useLocation();
+  const params = new URLSearchParams(location.search);
+  if (view === "help") {
+    params.set("help", "start");
+    params.delete("step");
+    params.delete("run");
+  } else {
+    params.delete("help");
+    params.set("run", "1");
+    if (!params.has("step")) params.set("step", "1");
+  }
+  params.delete("guide");
+  params.delete("tour");
+  params.delete("resume");
+  const query = params.toString();
+  return (
+    <Navigate
+      to={{ pathname: "/", search: query ? `?${query}` : "" }}
+      replace
+      state={location.state}
+    />
+  );
+}
+
 export default function App() {
   const { pathname } = useLocation();
   const isHome = pathname === "/";
+  const isLegacyStart = pathname === "/runner" || pathname === "/guide";
+  const isStart = isHome || isLegacyStart;
+  const isNews = pathname === "/news";
   const authShell = ["/login", "/forgot", "/reset"].includes(pathname);
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const menuButtonRef = useRef(null);
@@ -209,7 +262,7 @@ export default function App() {
   }, [pathname]);
 
   return (
-    <div className={`${isHome ? "home-shell" : "min-h-screen"} ${authShell ? "site-auth-layout" : "site-product-layout"}`}>
+    <div className={`${isStart ? "home-shell" : "min-h-screen"} ${authShell ? "site-auth-layout" : "site-product-layout"}`}>
       <a href="#main-content" className="skip-link">본문으로 건너뛰기</a>
       {authShell ? null : (
         <SiteNavigation mobileOpen={mobileNavigationOpen} onClose={closeMobileNavigation} triggerRef={menuButtonRef} />
@@ -228,7 +281,13 @@ export default function App() {
         <main
           id="main-content"
           tabIndex={-1}
-          className={isHome ? "home-main" : "max-w-6xl mx-auto px-5 sm:px-6 py-6 sm:py-8"}
+          // 통합 시작 화면은 자체 전면 레이아웃이라 게터를 두지 않는다.
+          // 나머지 본문 화면은 코인동향까지 포함해 전부 같은 게터(.site-main)를 쓴다.
+          className={isStart
+            ? "home-main"
+            : isNews
+                ? "site-main news-main py-6 sm:py-8"
+                : "site-main py-6 sm:py-8"}
         >
           <RouteChangeEffects />
           <Suspense fallback={<RouteLoading />}>
@@ -237,8 +296,8 @@ export default function App() {
               <Route path="/builder" element={<Studio />} />
               <Route path="/s/:slug" element={<Studio />} />
               <Route path="/mypage" element={<MyPage />} />
-              <Route path="/runner" element={<RunnerDownload />} />
-              <Route path="/guide" element={<Guide />} />
+              <Route path="/runner" element={<LegacyStartRedirect view="runner" />} />
+              <Route path="/guide" element={<LegacyStartRedirect view="help" />} />
               <Route path="/news" element={<News />} />
               <Route path="/board" element={<Board />} />
               <Route path="/board/:id" element={<BoardPost />} />
@@ -251,13 +310,13 @@ export default function App() {
             </Routes>
           </Suspense>
         </main>
-        {isHome ? null : (
-          <footer className="max-w-6xl mx-auto px-5 sm:px-6 pb-6 pt-2 sm:py-8 t-caption text-slate-500">
+        {isStart ? null : (
+          <footer className="site-main pb-6 pt-2 sm:py-8 t-caption text-slate-500">
             웹 화면은 실제 주문을 보내지 않아요. 백테스트·모의 결과는 투자 조언이 아니며,
             내려받은 실행 파일의 사용 책임은 사용자에게 있어요.
           </footer>
         )}
-        {isHome || authShell ? null : <HotCoinsMarquee />}
+        {isStart || authShell ? null : <HotCoinsMarquee />}
       </div>
     </div>
   );

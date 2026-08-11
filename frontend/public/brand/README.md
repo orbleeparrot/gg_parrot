@@ -8,6 +8,8 @@
 - `ggparrot-mark.svg` / `.png`: 정사각형 심볼. SVG가 원본이다.
 - `ggparrot-logo.svg` / `.png`: 심볼 + 한글 워드마크 가로형. 워드마크는 폰트 의존성이 없는 벡터 패스다.
 - `ggparrot-logo-preview.png`: 밝은 배경에서 확인하는 공유용 미리보기다.
+- `ggparrot-sal-mark.png`: 현재 서비스 헤더에서 사용하는 빨간 `살` 정사각형 심볼이다.
+- `ggparrot-sal-logo-source.png`: `살` 심볼과 워드마크가 함께 있는 제공 원본이다.
 - `/favicon.svg`, `/favicon-32x32.png`, `/apple-touch-icon.png`: 브라우저·홈 화면 아이콘.
 
 ## 색

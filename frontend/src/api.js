@@ -4,22 +4,36 @@ import { getToken } from "./lib/auth.js";
 
 const BASE = "";
 
+async function jsonBody(res) {
+  const text = await res.text();
+  if (!text) return {};
+  try {
+    return JSON.parse(text);
+  } catch (_) {
+    const error = new Error("서버가 API 대신 페이지를 반환했어요.");
+    error.status = res.status;
+    error.code = "NON_JSON_RESPONSE";
+    throw error;
+  }
+}
+
 async function req(path, opts = {}) {
   const token = getToken();
   const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
   if (token) headers["Authorization"] = `Bearer ${token}`;
   const res = await fetch(BASE + path, { ...opts, headers });
+  const body = await jsonBody(res);
   if (!res.ok) {
-    let detail = res.statusText;
-    try {
-      const body = await res.json();
-      detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
-    } catch (_) {}
+    const detail = typeof body.detail === "string"
+      ? body.detail
+      : body.detail != null
+        ? JSON.stringify(body.detail)
+        : res.statusText;
     const error = new Error(detail);
     error.status = res.status;
     throw error;
   }
-  return res.json();
+  return body;
 }
 
 // multipart/form-data 요청 (파일 업로드). Content-Type은 브라우저가 boundary와
@@ -29,17 +43,18 @@ async function reqForm(path, formData) {
   const headers = {};
   if (token) headers["Authorization"] = `Bearer ${token}`;
   const res = await fetch(BASE + path, { method: "POST", headers, body: formData });
+  const body = await jsonBody(res);
   if (!res.ok) {
-    let detail = res.statusText;
-    try {
-      const body = await res.json();
-      detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
-    } catch (_) {}
+    const detail = typeof body.detail === "string"
+      ? body.detail
+      : body.detail != null
+        ? JSON.stringify(body.detail)
+        : res.statusText;
     const error = new Error(detail);
     error.status = res.status;
     throw error;
   }
-  return res.json();
+  return body;
 }
 
 export const api = {
@@ -50,6 +65,15 @@ export const api = {
     req("/api/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
   me: () => req("/api/auth/me"),
   myDashboard: () => req("/api/me/dashboard"),
+  myMacros: () => req("/api/me/macros"),
+  myMacro: (id) => req(`/api/me/macros/${id}`),
+  saveMyMacro: (macro, name = "") =>
+    req("/api/me/macros", {
+      method: "POST",
+      body: JSON.stringify({ macro, name }),
+    }),
+  saveLeaderboardMacro: (entryId) =>
+    req(`/api/me/macros/from-leaderboard/${entryId}`, { method: "POST" }),
   forgotPassword: (email) =>
     req("/api/auth/forgot", { method: "POST", body: JSON.stringify({ email }) }),
   resetPassword: (token, password) =>
@@ -188,6 +212,18 @@ export const api = {
   runnerKey: () => req("/api/me/runner/key"),
   runnerKeyRegenerate: () => req("/api/me/runner/key/regenerate", { method: "POST" }),
   runnerSessions: () => req("/api/me/runner/sessions"),
+  runnerLaunchTicketIssue: (userMacroId, testnet = true) =>
+    req("/api/me/runner/launch-tickets", {
+      method: "POST",
+      body: JSON.stringify({ user_macro_id: userMacroId, testnet: !!testnet }),
+    }),
+  runnerLaunchTicketStatus: (launchId) =>
+    req(`/api/me/runner/launch-tickets/${encodeURIComponent(launchId)}`),
+  runnerLaunchTicketClaim: (ticket, runnerVersion = "5") =>
+    req("/api/runner/launch-tickets/claim", {
+      method: "POST",
+      body: JSON.stringify({ ticket, runner_version: runnerVersion }),
+    }),
   // mode: "stop_only"(매크로만) | "close_and_stop"(청산 후 종료)
   runnerRequestStop: (sessionId, mode) =>
     req(`/api/me/runner/sessions/${sessionId}/request-stop`, {

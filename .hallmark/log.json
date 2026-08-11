@@ -1,0 +1,10 @@
+[
+  {
+    "date": "2026-08-11",
+    "scope": "app-shell",
+    "macrostructure": "system shell with guided modal and document surface",
+    "theme": "locked GGparrot light/dark modern-minimal",
+    "enrichment": "none",
+    "brief": "Audit and unify header utilities, sidebar navigation, guide dialog, focus states, and small-screen behavior"
+  }
+]

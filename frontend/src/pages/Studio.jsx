@@ -10,6 +10,7 @@ import RegisterMacroModal from "../components/RegisterMacroModal.jsx";
 import JourneySteps from "../components/JourneySteps.jsx";
 import { PageHeader } from "../components/Page.jsx";
 import { api } from "../api.js";
+import { useAuth } from "../lib/auth.js";
 import {
   RULE_TYPES,
   buildMacro,
@@ -26,6 +27,8 @@ import {
   readHeroDraft,
   takeRegistrationDraft,
 } from "../lib/journey.js";
+
+const MAX_MACRO_FILE_BYTES = 2 * 1024 * 1024;
 
 function macroKey(macro) {
   return JSON.stringify(macro);
@@ -82,6 +85,7 @@ function ChartDisclosure({ symbols, form }) {
 }
 
 export default function Studio() {
+  const { token } = useAuth();
   const { slug } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
@@ -115,6 +119,10 @@ export default function Studio() {
   const [guideOpen, setGuideOpen] = useState(
     () => searchParams.get("guide") === "1"
   );
+  const [fileImportBusy, setFileImportBusy] = useState(false);
+  const [fileImportError, setFileImportError] = useState("");
+  const [fileImportSuccess, setFileImportSuccess] = useState("");
+  const macroFileInputRef = useRef(null);
   const requestIdRef = useRef(0);
   const lastAttemptKeyRef = useRef("");
   const aiRequestIdRef = useRef(0);
@@ -366,6 +374,72 @@ export default function Studio() {
     }
   }
 
+  async function registerMacroFile(file) {
+    setFileImportError("");
+    setFileImportSuccess("");
+    if (!file) return;
+    if (!token) {
+      setFileImportError("내 매크로에 등록하려면 먼저 로그인해 주세요.");
+      return;
+    }
+    if (file.size > MAX_MACRO_FILE_BYTES) {
+      setFileImportError("2MB 이하의 껄무새 매크로 파일을 선택해 주세요.");
+      return;
+    }
+
+    setFileImportBusy(true);
+    try {
+      const rawMacro = JSON.parse(await file.text());
+      if (!rawMacro || typeof rawMacro !== "object" || !rawMacro.symbol || !rawMacro.rule_type || !rawMacro.params) {
+        throw new Error("INVALID_MACRO_FILE");
+      }
+      const importedForm = macroToForm(rawMacro);
+      const validationError = validate(importedForm);
+      if (validationError) throw new Error(validationError);
+
+      const macro = buildMacro(importedForm);
+      const name = file.name.replace(/\.ggm\.json$|\.json$/i, "") || `${macro.symbol} 매크로`;
+      const data = await api.saveMyMacro(macro, name);
+      const savedMacro = data?.item?.macro || macro;
+
+      requestIdRef.current += 1;
+      aiRequestIdRef.current += 1;
+      lastAttemptKeyRef.current = "";
+      setForm(macroToForm(savedMacro));
+      setTestedMacro(null);
+      setResult(null);
+      setPerSymbol([]);
+      setExplanation(null);
+      setAiBusy(false);
+      setAiError("");
+      setSummary("");
+      setDataSource("");
+      setPeriodLabel("");
+      setShare(null);
+      setLoadedFrom(`내 매크로 등록 완료 · ${data?.item?.name || name}`);
+      setError("");
+      setGuideOpen(true);
+      setFileImportSuccess("내 매크로에 등록하고 아래 조건 편집기에 불러왔어요. 백테스트로 설정을 다시 확인해 주세요.");
+    } catch (reason) {
+      const message = String(reason.message || reason);
+      setFileImportError(
+        message === "INVALID_MACRO_FILE" || reason instanceof SyntaxError
+          ? "껄무새에서 받은 .ggm.json 파일인지 확인해 주세요."
+          : reason?.status === 401
+            ? "로그인이 만료됐어요. 다시 로그인한 뒤 등록해 주세요."
+            : `매크로 파일을 등록하지 못했어요: ${message}`,
+      );
+    } finally {
+      setFileImportBusy(false);
+    }
+  }
+
+  function onMacroFileChange(event) {
+    const file = event.target.files?.[0];
+    void registerMacroFile(file);
+    event.target.value = "";
+  }
+
   async function enrichExplanation() {
     if (aiBusy || !result || !testedMacro) return;
     const macro = testedMacro;
@@ -413,6 +487,39 @@ export default function Studio() {
         description="종목과 거래 조건을 정하고, 과거 데이터로 확인한 뒤 같은 설정을 리더보드에 등록할 수 있어요."
         actions={<SimBadge />}
       />
+
+      {!slug ? (
+        <section className="mb-7 border-y border-slate-200" aria-labelledby="macro-file-import-title">
+          <input
+            ref={macroFileInputRef}
+            type="file"
+            accept=".json,.ggm.json,application/json"
+            onChange={onMacroFileChange}
+            className="sr-only"
+            aria-label="껄무새 매크로 파일 등록"
+          />
+          <div className="py-4 flex items-center justify-between gap-4 flex-wrap">
+            <div>
+              <h2 id="macro-file-import-title" className="t-label text-slate-900">가지고 있는 매크로 파일이 있나요?</h2>
+              <p className="mt-1 t-small text-slate-700">파일을 내 매크로에 등록하고, 아래 조건 편집기에서 바로 이어서 수정할 수 있어요.</p>
+            </div>
+            {token ? (
+              <button
+                type="button"
+                onClick={() => macroFileInputRef.current?.click()}
+                disabled={fileImportBusy || busy}
+                className="btn btn-m btn-secondary"
+              >
+                {fileImportBusy ? "파일 등록 중…" : "매크로 파일 등록"}
+              </button>
+            ) : (
+              <Link to="/login?next=%2Fbuilder" className="btn btn-m btn-secondary">로그인 후 파일 등록</Link>
+            )}
+          </div>
+          {fileImportError ? <p className="pb-4 t-small text-red-600" role="alert">{fileImportError}</p> : null}
+          {fileImportSuccess ? <p className="pb-4 t-small text-green-700" role="status">{fileImportSuccess}</p> : null}
+        </section>
+      ) : null}
 
       <section className="mb-8 border-y border-slate-200" aria-labelledby="studio-guide-title">
         <button

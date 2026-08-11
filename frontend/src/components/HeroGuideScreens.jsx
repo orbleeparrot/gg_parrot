@@ -6,6 +6,7 @@ const PaperPanelView = lazy(() =>
   import("./PaperPanel.jsx").then((module) => ({ default: module.PaperPanelView }))
 );
 const GuidePage = lazy(() => import("../pages/Guide.jsx"));
+const CandleChart = lazy(() => import("./CandleChart.jsx"));
 
 function SceneLoading({ label }) {
   return <div className="py-10 t-small text-slate-500" role="status">{label}</div>;
@@ -157,21 +158,25 @@ export function BuildScene({ form }) {
   );
 }
 
-export function AssetScene({ form, setForm, error }) {
+export function AssetScene({ form, setForm, error, searchError = "", busy = false }) {
   const choices = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT"];
   const helpId = "hero-symbol-help";
   const errorId = "hero-symbol-error";
   return (
     <div className="hero-form-block">
-      <label htmlFor="hero-symbol" className="block t-small font-semibold text-slate-700 mb-2">거래 종목</label>
+      <label htmlFor="hero-symbol" className="block t-small font-semibold text-slate-700 mb-2">차트로 확인할 종목 검색</label>
       <input
         id="hero-symbol"
+        type="search"
         className="field t-title num"
         value={form.symbol}
+        placeholder="예: BTCUSDT"
+        enterKeyHint="search"
         onChange={(event) => setForm((current) => ({ ...current, symbol: event.target.value.toUpperCase() }))}
         onBlur={() => setForm((current) => ({ ...current, symbol: current.symbol.trim().toUpperCase() }))}
-        aria-invalid={!!error}
-        aria-describedby={[helpId, error ? errorId : ""].filter(Boolean).join(" ")}
+        aria-invalid={!!(error || searchError)}
+        aria-describedby={[helpId, error || searchError ? errorId : ""].filter(Boolean).join(" ")}
+        disabled={busy}
         autoComplete="off"
         spellCheck="false"
       />
@@ -182,14 +187,15 @@ export function AssetScene({ form, setForm, error }) {
             type="button"
             className={"chip num " + (form.symbol === symbol ? "border-slate-300 bg-slate-100 text-slate-900" : "")}
             aria-pressed={form.symbol === symbol}
+            disabled={busy}
             onClick={() => setForm((current) => ({ ...current, symbol }))}
           >
             {symbol.replace("USDT", "")}
           </button>
         ))}
       </div>
-      <p id={helpId} className="mt-5 t-small text-slate-500">전체 빌더에서는 최대 5개 종목을 쉼표로 나눠 함께 시험할 수도 있어요.</p>
-      {error ? <p id={errorId} className="mt-2 t-small text-red-600" role="alert">{error}</p> : null}
+      <p id={helpId} className="mt-5 t-small text-slate-500">종목 코드를 검색하거나 대표 종목을 고르세요. 다음 화면부터 이 종목의 실시간 차트를 왼쪽에 두고 조건을 정해요.</p>
+      {error || searchError ? <p id={errorId} className="mt-2 t-small text-red-600" role="alert">{error || searchError}</p> : null}
     </div>
   );
 }
@@ -346,6 +352,43 @@ export function PeriodScene({ form, setForm, error }) {
       </select>
       <p id={helpId} className="mt-4 t-small text-slate-500">한 기간에서 좋았다는 이유만으로 미래 결과가 보장되지는 않아요. 전체 빌더에서는 날짜를 직접 지정할 수 있어요.</p>
       {error ? <p id={errorId} className="mt-2 t-small text-red-600" role="alert">{error}</p> : null}
+    </div>
+  );
+}
+
+function ConditionEditor({ screen, form, setForm, error }) {
+  if (screen.kind === "strategy") return <StrategyScene form={form} setForm={setForm} />;
+  if (screen.kind === "condition") {
+    return <ConditionScene field={screen.field} form={form} setForm={setForm} error={error} />;
+  }
+  if (screen.kind === "risk") return <RiskScene form={form} setForm={setForm} error={error} />;
+  return <PeriodScene form={form} setForm={setForm} error={error} />;
+}
+
+export function ConditionWorkbench({ screen, form, setForm, error }) {
+  const symbol = (form.symbol || "").trim().toUpperCase();
+  return (
+    <div className="grid gap-7 xl:grid-cols-2 items-start">
+      <section className="min-w-0" aria-label={`${symbol} 조건 참고 차트`}>
+        <div className="flex items-center justify-between gap-3 pb-3 border-b border-slate-200 flex-wrap">
+          <div>
+            <div className="t-caption text-slate-500">조건 참고 차트</div>
+            <h2 className="mt-1 t-title text-slate-900 num">{symbol}</h2>
+          </div>
+          <span className="t-caption text-slate-500">봉 간격도 조건에 반영돼요</span>
+        </div>
+        <Suspense fallback={<SceneLoading label="조건 참고 차트 불러오는 중…" />}>
+          <CandleChart
+            symbol={symbol}
+            interval={form.candle_interval}
+            onIntervalChange={(value) => setForm((current) => ({ ...current, candle_interval: value }))}
+            compact
+          />
+        </Suspense>
+      </section>
+      <div key={screen.id} className="min-w-0 xl:border-l xl:border-slate-200 xl:pl-7">
+        <ConditionEditor screen={screen} form={form} setForm={setForm} error={error} />
+      </div>
     </div>
   );
 }

@@ -1,0 +1,79 @@
+name: Windows runner release
+
+on:
+  push:
+    tags:
+      - "runner-v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (for example runner-v5)"
+        required: true
+        default: "runner-v5"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: runner/requirements.txt
+
+      - name: Validate immutable runner release tag
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $tag = "${{ inputs.tag }}"
+          } else {
+            $tag = "${{ github.ref_name }}"
+          }
+          $expected = python -c "from runner.installation import RUNNER_RELEASE; print(RUNNER_RELEASE)"
+          if ($tag -ne $expected) {
+            throw "Release tag '$tag' does not match runner source '$expected'."
+          }
+          "RUNNER_RELEASE_TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Install runner build dependencies
+        run: python -m pip install -r runner/requirements.txt pyinstaller
+
+      - name: Run runner protocol tests
+        run: python -m unittest discover -s runner -p "test_*.py"
+
+      - name: Build Windows executable
+        working-directory: runner
+        run: pyinstaller --clean --onefile --noconsole --name ggparrot-runner macro_runner.py
+
+      - name: Write SHA-256 checksum
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash runner/dist/ggparrot-runner.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  ggparrot-runner.exe" | Set-Content runner/dist/SHA256SUMS.txt
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ggparrot-runner-windows
+          path: |
+            runner/dist/ggparrot-runner.exe
+            runner/dist/SHA256SUMS.txt
+
+      - name: Publish GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view $env:RUNNER_RELEASE_TAG *> $null
+          if ($LASTEXITCODE -eq 0) {
+            throw "Release '$env:RUNNER_RELEASE_TAG' already exists; immutable runner assets are never overwritten."
+          }
+          gh release create $env:RUNNER_RELEASE_TAG --target "${{ github.sha }}" --title $env:RUNNER_RELEASE_TAG --generate-notes
+          gh release upload $env:RUNNER_RELEASE_TAG runner/dist/ggparrot-runner.exe runner/dist/SHA256SUMS.txt

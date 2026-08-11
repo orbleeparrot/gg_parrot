@@ -757,12 +757,18 @@ export default function Guide({ embedded = false, initialSection = "start" }) {
 
   return (
     <div className={embedded ? "guide-embedded" : ""}>
-      <PageHeader
-        eyebrow="용어부터 전략까지"
-        title="사용 가이드"
-        description="궁금한 단어를 검색하거나, 매매 방식 A~K의 작동 원리를 그림과 함께 확인해요."
-        headingAs={embedded ? "h2" : "h1"}
-      />
+      {embedded ? (
+        <p className="guide-embedded-intro t-small text-slate-600">
+          궁금한 단어를 검색하거나 매매 방식 A–K의 작동 원리를 확인해요.
+        </p>
+      ) : (
+        <PageHeader
+          eyebrow="용어부터 전략까지"
+          title="사용 가이드"
+          description="궁금한 단어를 검색하거나, 매매 방식 A~K의 작동 원리를 그림과 함께 확인해요."
+          headingAs="h1"
+        />
+      )}
       <div className="grid md:grid-cols-[230px_1fr] gap-4 md:gap-6">
       {/* sidebar */}
       <aside className={(embedded ? "md:sticky md:top-0 " : "md:sticky md:top-20 ") + "self-start"}>
@@ -795,7 +801,7 @@ export default function Guide({ embedded = false, initialSection = "start" }) {
                 setTocOpen(false);
               }}
               className={
-                "w-full text-left rounded-[10px] t-small " +
+                "w-full min-h-[44px] text-left rounded-[10px] t-small " +
                 (s.sub ? "pl-6 pr-3 py-2 " : "px-3 py-3 ") +
                 (active && active.id === s.id
                   ? "bg-brand text-brand-ink font-bold"

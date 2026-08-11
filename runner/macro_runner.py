@@ -21,8 +21,8 @@
 ──────────────────────────────────────────────────────────────────────
 빌드(단일 exe) — 개발자용
   pip install -r requirements.txt pyinstaller
-  pyinstaller --onefile --noconsole --name "껄무새매크로실행기" macro_runner.py
-  → dist/껄무새매크로실행기.exe
+  pyinstaller --onefile --noconsole --name ggparrot-runner macro_runner.py
+  → dist/ggparrot-runner.exe
 
 서버 주소는 환경변수 GGP_SERVER_BASE 로 바꿀 수 있다(기본: 배포 서버).
 """
@@ -30,9 +30,13 @@ from __future__ import annotations
 
 import json
 import os
+import queue
+import shutil
+import sys
 import threading
 import time
 from decimal import Decimal, ROUND_DOWN
+from pathlib import Path
 
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -42,17 +46,190 @@ try:
 except ImportError:  # 사용자에게 친절히 안내
     requests = None
 
+try:  # package import (tests) / direct script import (PyInstaller build)
+    from .protocol import (
+        PROTOCOL_CLAIM_PATH,
+        PROTOCOL_SCHEME,
+        ProtocolLaunch,
+        ProtocolLaunchError,
+        parse_protocol_launch,
+    )
+    from .installation import (
+        RUNNER_VERSION,
+        files_identical,
+        protocol_install_target,
+    )
+    from .single_instance import (
+        InstanceCommand,
+        RunnerSingleInstance,
+        SingleInstanceError,
+    )
+except ImportError:
+    from protocol import (
+        PROTOCOL_CLAIM_PATH,
+        PROTOCOL_SCHEME,
+        ProtocolLaunch,
+        ProtocolLaunchError,
+        parse_protocol_launch,
+    )
+    from installation import (
+        RUNNER_VERSION,
+        files_identical,
+        protocol_install_target,
+    )
+    from single_instance import (
+        InstanceCommand,
+        RunnerSingleInstance,
+        SingleInstanceError,
+    )
+
 # ==================================================================
 #  설정
 # ==================================================================
 SERVER_BASE = os.environ.get("GGP_SERVER_BASE", "https://gg-parrot.onrender.com").rstrip("/")
+LOCAL_SERVER_BASE = "http://127.0.0.1:8000"
 MAX_ORDER_USDT = float(os.environ.get("MAX_ORDER_USDT", "100"))   # 1회 주문 상한(USDT)
 ORDER_CAP_BASIS = os.environ.get("ORDER_CAP_BASIS", "notional").lower()  # notional | margin
 DEFAULT_TP_PCT = 3.0
 MAX_RETRIES = 3
 POLL_SECONDS = 5.0
 
-APP_TITLE = "껄무새 매크로 실행기"
+APP_TITLE = f"껄무새 매크로 실행기 v{RUNNER_VERSION}"
+
+
+def _bring_window_to_front(root: tk.Tk) -> None:
+    """Restore and foreground the already-running Tk window, best effort."""
+
+    try:
+        root.deiconify()
+        root.update_idletasks()
+        root.lift()
+        # Windows may refuse a direct SetForegroundWindow depending on which
+        # process owns foreground permission. A short topmost pulse still
+        # makes the user-requested existing window visible without leaving it
+        # pinned above other apps.
+        root.attributes("-topmost", True)
+
+        def release_topmost() -> None:
+            try:
+                root.attributes("-topmost", False)
+            except tk.TclError:
+                pass
+
+        root.after(180, release_topmost)
+        root.focus_force()
+    except tk.TclError:
+        return
+
+    if sys.platform != "win32":
+        return
+    try:
+        from ctypes import c_int, windll, wintypes
+
+        user32 = windll.user32
+        user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+        user32.GetAncestor.restype = wintypes.HWND
+        user32.GetLastActivePopup.argtypes = [wintypes.HWND]
+        user32.GetLastActivePopup.restype = wintypes.HWND
+        user32.ShowWindowAsync.argtypes = [wintypes.HWND, c_int]
+        user32.ShowWindowAsync.restype = wintypes.BOOL
+        user32.BringWindowToTop.argtypes = [wintypes.HWND]
+        user32.BringWindowToTop.restype = wintypes.BOOL
+        user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+        user32.SetForegroundWindow.restype = wintypes.BOOL
+        hwnd = int(root.winfo_id())
+        hwnd = int(user32.GetAncestor(hwnd, 2) or hwnd)  # GA_ROOT
+        user32.ShowWindowAsync(hwnd, 9)  # SW_RESTORE
+        popup = int(user32.GetLastActivePopup(hwnd) or hwnd)
+        user32.BringWindowToTop(popup)
+        user32.SetForegroundWindow(popup)
+    except Exception:
+        # Tk's lift/topmost path above is the portable fallback.
+        pass
+
+
+def _show_native_runner_error(message: str) -> None:
+    """Show a pre-Tk error in the noconsole Windows executable."""
+
+    if sys.platform == "win32":
+        try:
+            from ctypes import windll
+
+            windll.user32.MessageBoxW(0, message, APP_TITLE, 0x10)  # MB_ICONERROR
+            return
+        except Exception:
+            pass
+    # This path is useful only for source-mode diagnostics; the released
+    # executable has no console and uses the MessageBox above.
+    try:
+        print(message, file=sys.stderr)
+    except Exception:
+        pass
+
+
+def _install_protocol_handler_for_current_user() -> bool:
+    """Copy a frozen Windows build to a stable path and register its URI verb.
+
+    Registration is per-user (HKCU), so it neither requires elevation nor
+    changes another Windows account.  Every failure is contained: protocol
+    convenience must never prevent the ordinary runner UI from opening.
+    """
+
+    if sys.platform != "win32" or not getattr(sys, "frozen", False):
+        return True
+    local_app_data = os.environ.get("LOCALAPPDATA", "").strip()
+    if not local_app_data:
+        return False
+
+    source = Path(sys.executable).resolve()
+    # Never overwrite the old, possibly running, fixed-path runner.  Each
+    # release owns an immutable directory and the registry is switched only
+    # after the new executable has been copied and verified completely.
+    stable = protocol_install_target(local_app_data)
+    staged = stable.with_name(f".{stable.name}.{os.getpid()}.new")
+    try:
+        stable.parent.mkdir(parents=True, exist_ok=True)
+        same_path = os.path.normcase(str(source)) == os.path.normcase(str(stable.resolve()))
+        if not same_path:
+            if not stable.exists() or not files_identical(source, stable):
+                # Stage then replace so a partial copy can never become the
+                # shell handler. Old release directories are never modified
+                # or deleted, so an in-use older executable cannot block v5.
+                shutil.copy2(source, staged)
+                if not files_identical(source, staged):
+                    return False
+                os.replace(staged, stable)
+            if not files_identical(source, stable):
+                return False
+
+        import winreg
+
+        protocol_root = rf"Software\Classes\{PROTOCOL_SCHEME}"
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, protocol_root) as key:
+            winreg.SetValueEx(
+                key, None, 0, winreg.REG_SZ, "URL:GGParrot Runner Protocol"
+            )
+            winreg.SetValueEx(key, "URL Protocol", 0, winreg.REG_SZ, "")
+        with winreg.CreateKey(
+            winreg.HKEY_CURRENT_USER, protocol_root + r"\DefaultIcon"
+        ) as key:
+            winreg.SetValueEx(key, None, 0, winreg.REG_SZ, f'"{stable}",0')
+        with winreg.CreateKey(
+            winreg.HKEY_CURRENT_USER, protocol_root + r"\shell\open\command"
+        ) as key:
+            command = f'"{stable}" --protocol "%1"'
+            winreg.SetValueEx(key, None, 0, winreg.REG_SZ, command)
+        return True
+    except Exception:
+        # Do not print paths or command-line values in a noconsole build.  The
+        # caller shows only a generic, non-sensitive warning inside the app.
+        return False
+    finally:
+        try:
+            if staged.exists():
+                staged.unlink()
+        except OSError:
+            pass
 
 
 # ==================================================================
@@ -230,8 +407,8 @@ def _pnl_pct(entry, price, side) -> float:
 #  서버 연동 클라이언트 (회원 키로 인증; API 키는 절대 안 보냄)
 # ==================================================================
 class ServerClient:
-    def __init__(self, runner_key: str) -> None:
-        self.base = SERVER_BASE
+    def __init__(self, runner_key: str, *, base: str = SERVER_BASE) -> None:
+        self.base = base.rstrip("/")
         self.key = runner_key.strip()
         self.session_id = None
         self._headers = {"X-Runner-Key": self.key, "Content-Type": "application/json"}
@@ -541,7 +718,14 @@ class BotThread(threading.Thread):
 #  GUI
 # ==================================================================
 class RunnerApp:
-    def __init__(self, root: tk.Tk) -> None:
+    def __init__(
+        self,
+        root: tk.Tk,
+        *,
+        protocol_launch: ProtocolLaunch | None = None,
+        register_protocol: bool = False,
+        startup_warning: str = "",
+    ) -> None:
         self.root = root
         self.bot: BotThread | None = None
         self.macro: dict | None = None
@@ -550,7 +734,19 @@ class RunnerApp:
         self.api_key = tk.StringVar(value="")
         self.api_secret = tk.StringVar(value="")
         self.member_key = tk.StringVar(value=os.environ.get("GGP_MEMBER_KEY", ""))
+        self.server_base = SERVER_BASE
+        self._protocol_claim_busy = False
+        self._protocol_registration_thread: threading.Thread | None = None
         self._build()
+        self.root.protocol("WM_DELETE_WINDOW", self._on_window_close)
+        if startup_warning:
+            self._log(startup_warning)
+        if register_protocol:
+            self.root.after(0, self._begin_protocol_registration)
+        if protocol_launch:
+            # Let Tk render its first frame before any launch work begins.  The
+            # actual HTTP(S) claim runs on a worker thread below.
+            self.root.after(0, self._begin_protocol_claim, protocol_launch)
 
     # --- 화면 구성 ----------------------------------------------
     def _build(self) -> None:
@@ -558,15 +754,27 @@ class RunnerApp:
         self.root.geometry("640x680")
         pad = dict(padx=12, pady=6)
 
-        head = ttk.Label(self.root, text="🦜 껄무새 매크로 실행기", font=("맑은 고딕", 15, "bold"))
-        head.pack(anchor="w", **pad)
+        head = ttk.Frame(self.root)
+        head.pack(fill="x", **pad)
+        ttk.Label(
+            head,
+            text="🦜 껄무새 매크로 실행기",
+            font=("맑은 고딕", 15, "bold"),
+        ).pack(side="left")
+        ttk.Label(
+            head,
+            text=f"v{RUNNER_VERSION}",
+            foreground="#666",
+            font=("맑은 고딕", 10, "bold"),
+        ).pack(side="left", padx=(8, 0), pady=(4, 0))
 
         # ① 매크로 파일
         f1 = ttk.LabelFrame(self.root, text="① 매크로 파일 (.ggm.json)")
         f1.pack(fill="x", **pad)
         row = ttk.Frame(f1); row.pack(fill="x", padx=8, pady=8)
         ttk.Entry(row, textvariable=self.macro_path, state="readonly").pack(side="left", fill="x", expand=True)
-        ttk.Button(row, text="파일 선택", command=self._pick_file).pack(side="left", padx=(8, 0))
+        self.pick_btn = ttk.Button(row, text="파일 선택", command=self._pick_file)
+        self.pick_btn.pack(side="left", padx=(8, 0))
         self.macro_summary = ttk.Label(f1, text="아직 선택 안 됨", foreground="#666")
         self.macro_summary.pack(anchor="w", padx=8, pady=(0, 8))
 
@@ -633,19 +841,207 @@ class RunnerApp:
         except Exception as exc:
             messagebox.showerror(APP_TITLE, f"매크로 파일을 읽지 못했어요:\n{exc}")
             return
-        if not macro.get("symbol"):
-            messagebox.showerror(APP_TITLE, "올바른 매크로 파일이 아니에요(symbol 없음).")
+        try:
+            self._apply_macro(macro, path)
+        except ValueError:
+            messagebox.showerror(APP_TITLE, "올바른 껄무새 매크로 파일이 아니에요.")
             return
-        self.macro = macro
-        self.macro_path.set(path)
+
+    def _apply_macro(self, macro: dict, source_label: str) -> None:
+        """Apply either a local file or a claimed web macro to the same UI."""
+
+        if not isinstance(macro, dict) or not str(macro.get("symbol", "")).strip():
+            raise ValueError("invalid macro")
+        try:
+            lev = max(1, int(macro.get("leverage", 1) or 1))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("invalid macro leverage") from exc
+        self.macro = dict(macro)
+        self.macro_path.set(source_label)
         side = str(macro.get("position_side", "long"))
-        lev = int(macro.get("leverage", 1) or 1)
         market = _decide_market(side.lower(), lev)
         summary = macro.get("human_summary", "") or f"{macro['symbol']} · {side}"
         self.macro_summary.config(
             text=f"{macro['symbol']} · {market} · {side}{' · '+str(lev)+'배' if lev>1 else ''}\n{summary}")
 
+    def _begin_protocol_claim(self, launch: ProtocolLaunch) -> None:
+        """Claim a browser launch ticket without blocking Tk's event loop."""
+
+        if self.bot is not None:
+            self._log("현재 매크로가 실행 중이에요. 종료한 뒤 사이트에서 다시 연결해 주세요.")
+            try:
+                self.root.bell()
+            except tk.TclError:
+                pass
+            return
+        if self._protocol_claim_busy:
+            self._log("이미 웹 매크로를 연결하고 있어요. 잠시만 기다려 주세요.")
+            return
+        self._protocol_claim_busy = True
+        if requests is None:
+            self._protocol_claim_failed()
+            return
+        self.status_lbl.config(text="웹 연결 확인 중…", foreground="#c60")
+        self.start_btn.config(state="disabled")
+        self.pick_btn.config(state="disabled")
+        self._log("웹에서 선택한 매크로를 안전하게 연결하고 있어요.")
+        threading.Thread(
+            target=self._claim_protocol_ticket,
+            args=(launch,),
+            daemon=True,
+            name="ggparrot-launch-claim",
+        ).start()
+
+    def _begin_protocol_registration(self) -> None:
+        """Install the per-user URI handler off the Tk main thread."""
+
+        self.status_lbl.config(text=f"v{RUNNER_VERSION} 연결 준비 중…", foreground="#c60")
+        self._log(f"브라우저 빠른 연결을 v{RUNNER_VERSION}로 준비하고 있어요.")
+        self._protocol_registration_thread = threading.Thread(
+            target=self._register_protocol_worker,
+            # Registration must finish even if the user closes the first
+            # launch window immediately after opening the downloaded runner.
+            daemon=False,
+            name="ggparrot-protocol-install",
+        )
+        self._protocol_registration_thread.start()
+
+    def _register_protocol_worker(self) -> None:
+        success = _install_protocol_handler_for_current_user()
+        try:
+            self.root.after(
+                0,
+                self._finish_protocol_registration,
+                success,
+            )
+        except (RuntimeError, tk.TclError):
+            # The non-daemon worker still completed the durable registration;
+            # there is simply no longer a Tk window in which to report it.
+            pass
+
+    def _finish_protocol_registration(self, success: bool) -> None:
+        if success:
+            self.status_lbl.config(
+                text=f"브라우저 연결 준비됨 · v{RUNNER_VERSION}",
+                foreground="#0a0",
+            )
+            self._log(f"브라우저 빠른 연결 준비가 끝났어요. (v{RUNNER_VERSION})")
+            return
+        self.status_lbl.config(text="브라우저 연결 준비 실패", foreground="#c00")
+        self._log("브라우저 빠른 연결을 준비하지 못했지만 실행기는 그대로 사용할 수 있어요.")
+
+    def _claim_protocol_ticket(self, launch: ProtocolLaunch) -> None:
+        claim_base = (
+            LOCAL_SERVER_BASE
+            if launch.environment == "local"
+            else SERVER_BASE
+        )
+        try:
+            response = requests.post(
+                f"{claim_base}{PROTOCOL_CLAIM_PATH}",
+                json={"ticket": launch.ticket, "runner_version": RUNNER_VERSION},
+                timeout=15,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            macro = payload.get("macro") if isinstance(payload, dict) else None
+            runner_key = payload.get("runner_key") if isinstance(payload, dict) else None
+            if (
+                not isinstance(macro, dict)
+                or not str(macro.get("symbol", "")).strip()
+                or not isinstance(runner_key, str)
+                or not runner_key.strip()
+            ):
+                raise ValueError("invalid launch response")
+        except Exception:
+            # Do not surface exception text: HTTP/proxy errors occasionally
+            # include request data, and launch tickets/account keys must never
+            # be copied into the GUI log.
+            self.root.after(0, self._protocol_claim_failed)
+            return
+        self.root.after(
+            0,
+            self._apply_protocol_claim,
+            macro,
+            runner_key,
+            claim_base,
+        )
+
+    def _apply_protocol_claim(
+        self,
+        macro: dict,
+        runner_key: str,
+        claim_base: str,
+    ) -> None:
+        self._protocol_claim_busy = False
+        if self.bot is not None:
+            # The request was accepted while idle, but a local start may have
+            # completed before the network response arrived. Never replace
+            # the strategy/account fields underneath an active bot.
+            self._log("매크로가 실행 중이어서 새 웹 연결을 적용하지 않았어요.")
+            self._set_running(True)
+            return
+        try:
+            self._apply_macro(macro, "웹에서 연결한 내 매크로")
+        except ValueError:
+            self._protocol_claim_failed()
+            return
+
+        # A web launch may only prepare the form.  Exchange credentials never
+        # arrive through the URI/server, testnet is restored explicitly, and
+        # _start() is intentionally not called here.
+        self.api_key.set("")
+        self.api_secret.set("")
+        self.member_key.set(runner_key.strip())
+        self.server_base = claim_base
+        self.live.set(False)
+        self._on_live_toggle()
+        self.pick_btn.config(state="normal")
+        self.start_btn.config(state="normal")
+        self.status_lbl.config(text="웹 연결됨 · 시작 전", foreground="#0a0")
+        self._log("웹 매크로와 껄무새 계정을 연결했어요. 테스트넷 설정을 확인한 뒤 직접 시작해 주세요.")
+        _bring_window_to_front(self.root)
+
+    def _protocol_claim_failed(self) -> None:
+        self._protocol_claim_busy = False
+        running = self.bot is not None
+        self.pick_btn.config(state="disabled" if running else "normal")
+        self.start_btn.config(state="disabled" if running else "normal")
+        self.status_lbl.config(text="웹 연결 실패", foreground="#c00")
+        self._log("웹 연결 요청을 확인하지 못했어요. 사이트로 돌아가 다시 시도해 주세요.")
+
+    def handle_external_activation(self, launch: ProtocolLaunch | None) -> None:
+        """Handle a second executable invocation inside the existing UI."""
+
+        _bring_window_to_front(self.root)
+        if launch is None:
+            return
+        if self.bot is not None:
+            self._log("현재 매크로가 실행 중이에요. 종료한 뒤 사이트에서 새로 연결해 주세요.")
+            try:
+                self.root.bell()
+            except tk.TclError:
+                pass
+            return
+        self._begin_protocol_claim(launch)
+
+    def _on_window_close(self) -> None:
+        if self.bot is not None:
+            _bring_window_to_front(self.root)
+            messagebox.showwarning(
+                APP_TITLE,
+                "매크로가 실행 중이에요.\n'매크로만 종료' 또는 '청산 후 종료'를 먼저 눌러 주세요.",
+            )
+            return
+        self.root.destroy()
+
     def _start(self) -> None:
+        if self.bot is not None:
+            messagebox.showwarning(APP_TITLE, "이미 매크로가 실행 중이에요.")
+            return
+        if self._protocol_claim_busy:
+            messagebox.showwarning(APP_TITLE, "웹 매크로 연결이 끝날 때까지 잠시만 기다려 주세요.")
+            return
         if requests is None:
             messagebox.showerror(APP_TITLE, "'requests' 모듈이 필요해요. requirements 설치 후 실행하세요.")
             return
@@ -668,7 +1064,7 @@ class RunnerApp:
                 f"({self.macro.get('symbol')} · {side})\n계속할까요?"):
                 return
 
-        server = ServerClient(self.member_key.get())
+        server = ServerClient(self.member_key.get(), base=self.server_base)
         side = str(self.macro.get("position_side", "long")).lower()
         lev = max(1, int(self.macro.get("leverage", 1) or 1))
         payload = {
@@ -743,11 +1139,65 @@ class RunnerApp:
 
     def _set_running(self, running: bool) -> None:
         self.start_btn.config(state="disabled" if running else "normal")
+        self.pick_btn.config(state="disabled" if running else "normal")
         self.stop_btn.config(state="normal" if running else "disabled")
         self.close_btn.config(state="normal" if running else "disabled")
 
 
 def main() -> None:
+    args = sys.argv[1:]
+    protocol_launch = None
+    startup_warning = ""
+    protocol_requested = "--protocol" in args
+    try:
+        protocol_launch = parse_protocol_launch(args)
+    except ProtocolLaunchError:
+        # Never echo the malformed URI: it can contain secrets supplied by an
+        # untrusted page.  Open the ordinary UI and explain the safe recovery.
+        startup_warning = "올바르지 않은 웹 연결 요청은 무시했어요. 사이트에서 다시 시도해 주세요."
+
+    instance: RunnerSingleInstance | None = None
+    # The Windows shell must create a short-lived process to deliver a custom
+    # URI. v5 forwards that request through an authenticated named pipe and
+    # exits before Tk is constructed, leaving exactly one visible runner.
+    if sys.platform == "win32" and getattr(sys, "frozen", False):
+        try:
+            instance = RunnerSingleInstance.acquire()
+        except SingleInstanceError:
+            _show_native_runner_error(
+                "실행기 연결 통로를 준비하지 못했어요. 열려 있는 실행기를 모두 닫은 뒤 다시 열어 주세요."
+            )
+            return
+
+        if instance is not None and not instance.is_primary:
+            # A user may manually reopen v5 after an older executable has
+            # overwritten the HKCU protocol handler. Repair registration even
+            # though this helper process will hand off to the existing v5 UI.
+            registration_repaired = True
+            if not protocol_requested:
+                registration_repaired = _install_protocol_handler_for_current_user()
+            command = (
+                InstanceCommand.launch_protocol(protocol_launch)
+                if protocol_launch is not None
+                else InstanceCommand.activate()
+            )
+            try:
+                acknowledgement = instance.handoff(command)
+            except SingleInstanceError:
+                _show_native_runner_error(
+                    "이미 열린 실행기에 연결하지 못했어요. 기존 창을 직접 확인하거나 모든 실행기를 닫은 뒤 다시 열어 주세요."
+                )
+                return
+            if not acknowledgement.accepted:
+                _show_native_runner_error(
+                    "이미 열린 실행기가 새 요청을 받을 수 없어요. 잠시 후 다시 시도해 주세요."
+                )
+            elif not registration_repaired:
+                _show_native_runner_error(
+                    "기존 실행기 창은 열었지만 웹 연결 등록을 갱신하지 못했어요. 모든 실행기를 닫은 뒤 v5를 다시 열어 주세요."
+                )
+            return
+
     root = tk.Tk()
     try:
         # 고해상도 화면 선명하게 (Windows)
@@ -755,8 +1205,33 @@ def main() -> None:
         windll.shcore.SetProcessDpiAwareness(1)
     except Exception:
         pass
-    RunnerApp(root)
-    root.mainloop()
+    app = RunnerApp(
+        root,
+        protocol_launch=protocol_launch,
+        register_protocol=not protocol_requested and protocol_launch is None,
+        startup_warning=startup_warning,
+    )
+
+    if instance is not None:
+        def drain_instance_commands() -> None:
+            while True:
+                try:
+                    command = instance.get_command_nowait()
+                except queue.Empty:
+                    break
+                app.handle_external_activation(command.launch)
+            try:
+                root.after(80, drain_instance_commands)
+            except tk.TclError:
+                pass
+
+        root.after(0, drain_instance_commands)
+
+    try:
+        root.mainloop()
+    finally:
+        if instance is not None:
+            instance.close()
 
 
 if __name__ == "__main__":

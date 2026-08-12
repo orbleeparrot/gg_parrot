@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api.js";
 import { setAuth } from "../lib/auth.js";
+import GoogleSignInButton from "../components/GoogleSignInButton.jsx";
 import {
   clearAuthReturn,
   recallAuthReturn,
@@ -24,12 +25,44 @@ export default function Auth() {
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [googleClientId, setGoogleClientId] = useState("");
 
   const isSignup = mode === "signup";
 
   useEffect(() => {
     rememberAuthReturn(next);
   }, [next]);
+
+  // 구글 로그인 사용 가능 여부·client_id 를 서버에서 런타임으로 받아온다(빌드 환경변수 불필요).
+  useEffect(() => {
+    let alive = true;
+    api.googleConfig()
+      .then((cfg) => {
+        if (alive && cfg?.enabled && cfg.client_id) setGoogleClientId(cfg.client_id);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const onGoogleCredential = useCallback(
+    async (credential) => {
+      setBusy(true);
+      setError("");
+      try {
+        const data = await api.googleAuth(credential);
+        setAuth(data.token, data.user);
+        clearAuthReturn();
+        navigate(next, { replace: true });
+      } catch (err) {
+        setError(String(err.message || err));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [navigate, next]
+  );
 
   async function submit(e) {
     e.preventDefault();
@@ -86,6 +119,24 @@ export default function Auth() {
             {busy ? "처리 중…" : isSignup ? "가입하기" : "로그인"}
           </button>
         </form>
+
+        {googleClientId && (
+          <>
+            <div className="flex items-center gap-3 my-5" aria-hidden="true">
+              <span className="h-px flex-1 bg-slate-200" />
+              <span className="t-caption text-slate-400">또는</span>
+              <span className="h-px flex-1 bg-slate-200" />
+            </div>
+            <GoogleSignInButton
+              clientId={googleClientId}
+              text={isSignup ? "signup_with" : "signin_with"}
+              onCredential={onGoogleCredential}
+            />
+            <p className="mt-3 t-caption text-slate-500 text-center">
+              구글 계정으로 {isSignup ? "가입" : "로그인"}하면 별도 비밀번호 없이 바로 시작해요.
+            </p>
+          </>
+        )}
 
         {!isSignup && (
           <div className="mt-4 text-center">

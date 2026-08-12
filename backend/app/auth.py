@@ -14,6 +14,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+import httpx
 import jwt
 from fastapi import Header, HTTPException
 from sqlmodel import select
@@ -29,6 +30,12 @@ _JWT_ALGO = "HS256"
 _TOKEN_TTL_HOURS = int(os.environ.get("SESSION_TTL_HOURS", "168"))  # 7 days
 _RESET_TTL_MIN = int(os.environ.get("RESET_TTL_MINUTES", "30"))
 _FRONTEND_BASE_URL = os.environ.get("FRONTEND_BASE_URL", "").rstrip("/")
+
+# Google 간편 로그인(Google Identity Services). 설정되지 않으면 기능이 꺼진 채
+# 이메일/비밀번호만 동작한다(프런트가 config 로 켬/끔을 확인).
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
+_GOOGLE_ISSUERS = {"accounts.google.com", "https://accounts.google.com"}
+_GOOGLE_TOKENINFO_URL = "https://oauth2.googleapis.com/tokeninfo"
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _USERNAME_RE = re.compile(r"^[A-Za-z0-9_가-힣]{2,20}$")
@@ -116,6 +123,86 @@ def login(email: str, password: str) -> dict:
 def get_user_by_id(user_id: int) -> Optional[User]:
     with get_session() as db:
         return db.get(User, user_id)
+
+
+# --- Google 간편 로그인 -------------------------------------------------
+def google_enabled() -> bool:
+    return bool(GOOGLE_CLIENT_ID)
+
+
+def _verify_google_credential(credential: str) -> dict:
+    """Google ID 토큰(GIS credential)을 검증하고 클레임을 돌려준다.
+
+    Google 의 tokeninfo 엔드포인트가 서명·만료를 검증하므로, 우리는 대상(aud)이
+    우리 클라이언트 ID 인지, 발급자·이메일 확인 여부만 추가로 확인한다.
+    """
+    if not GOOGLE_CLIENT_ID:
+        raise AuthError(503, "구글 로그인이 아직 설정되지 않았어요. (서버에 GOOGLE_CLIENT_ID 필요)")
+    credential = (credential or "").strip()
+    if not credential:
+        raise AuthError(400, "구글 인증 정보가 비어 있어요.")
+    try:
+        resp = httpx.get(_GOOGLE_TOKENINFO_URL, params={"id_token": credential}, timeout=10.0)
+    except httpx.HTTPError:
+        raise AuthError(502, "구글 인증 서버에 연결하지 못했어요. 잠시 후 다시 시도해 주세요.")
+    if resp.status_code != 200:
+        raise AuthError(401, "구글 인증에 실패했어요. 다시 시도해 주세요.")
+    info = resp.json()
+    if info.get("aud") != GOOGLE_CLIENT_ID:
+        raise AuthError(401, "이 앱을 위한 구글 인증이 아니에요.")
+    if info.get("iss") not in _GOOGLE_ISSUERS:
+        raise AuthError(401, "구글 인증 발급자가 올바르지 않아요.")
+    email = (info.get("email") or "").strip().lower()
+    if not email:
+        raise AuthError(401, "구글 계정에서 이메일을 가져오지 못했어요.")
+    if str(info.get("email_verified", "")).lower() not in ("true", "1"):
+        raise AuthError(401, "이메일이 확인되지 않은 구글 계정이에요.")
+    return info
+
+
+def _unique_username(db, base: str) -> str:
+    """공개 아이디 규칙([A-Za-z0-9_가-힣]{2,20})에 맞춘 유일한 아이디를 만든다."""
+    cleaned = re.sub(r"[^A-Za-z0-9_가-힣]", "", base or "")[:20]
+    if len(cleaned) < 2:
+        cleaned = (cleaned + "user")[:20]
+    candidate = cleaned
+    n = 0
+    while db.exec(select(User).where(User.username == candidate)).first():
+        n += 1
+        suffix = str(n)
+        candidate = cleaned[: 20 - len(suffix)] + suffix
+    return candidate
+
+
+def google_auth(credential: str) -> dict:
+    """구글 ID 토큰으로 로그인(없으면 자동 가입).
+
+    같은 이메일 계정이 이미 있으면 그대로 로그인 — 구글은 같은 지갑으로 들어가는
+    또 하나의 경로일 뿐이다. 새 이메일이면 계정을 만들고(비밀번호 해시는 비워 둬서
+    비밀번호 로그인은 재설정 전까지 막힘) 이메일 가입과 동일한 스타터 포인트를 준다.
+    """
+    info = _verify_google_credential(credential)
+    email = info["email"].strip().lower()
+    with get_session() as db:
+        user = db.exec(select(User).where(User.email == email)).first()
+        if user is not None:
+            return {"token": make_token(user.id), "user": user_view(user)}
+        username = _unique_username(db, info.get("name") or email.split("@")[0])
+        user = User(
+            email=email,
+            username=username,
+            password_hash="",  # 외부(구글) 인증 — 로컬 비밀번호 없음
+            points_balance=0,
+            created_at=_now().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+        # 스타터 지급 — 이메일 가입과 동일하게 원장에 함께 기록.
+        points_mod.apply(db, user, points_mod.SIGNUP_GRANT, "signup_grant")
+        db.commit()
+        db.refresh(user)
+        return {"token": make_token(user.id), "user": user_view(user)}
 
 
 # --- password reset -----------------------------------------------------

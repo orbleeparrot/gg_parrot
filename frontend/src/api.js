@@ -63,6 +63,10 @@ export const api = {
     req("/api/auth/signup", { method: "POST", body: JSON.stringify({ email, username, password }) }),
   login: (email, password) =>
     req("/api/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
+  // 구글 간편 로그인: 서버가 켜졌는지 + client_id 확인 후, GIS 가 준 credential 로 로그인/가입.
+  googleConfig: () => req("/api/auth/google/config"),
+  googleAuth: (credential) =>
+    req("/api/auth/google", { method: "POST", body: JSON.stringify({ credential }) }),
   me: () => req("/api/auth/me"),
   myDashboard: () => req("/api/me/dashboard"),
   myMacros: () => req("/api/me/macros"),

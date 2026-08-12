@@ -176,6 +176,10 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class GoogleAuthRequest(BaseModel):
+    credential: str  # Google Identity Services 가 준 ID 토큰(JWT)
+
+
 class ForgotRequest(BaseModel):
     email: str
 
@@ -283,6 +287,18 @@ def auth_signup(req: SignupRequest) -> dict:
 @app.post("/api/auth/login")
 def auth_login(req: LoginRequest) -> dict:
     return auth_mod.login(req.email, req.password)
+
+
+@app.get("/api/auth/google/config")
+def auth_google_config() -> dict:
+    """프런트가 구글 버튼을 켤지·어떤 client_id 로 초기화할지 알려준다(런타임)."""
+    return {"enabled": auth_mod.google_enabled(), "client_id": auth_mod.GOOGLE_CLIENT_ID}
+
+
+@app.post("/api/auth/google")
+def auth_google(req: GoogleAuthRequest) -> dict:
+    """구글 간편 로그인/회원가입 — ID 토큰 검증 후 세션 토큰 발급."""
+    return auth_mod.google_auth(req.credential)
 
 
 @app.post("/api/auth/forgot")

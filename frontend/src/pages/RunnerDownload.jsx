@@ -1255,7 +1255,7 @@ export default function RunnerDownload({ embedded = false, onExit }) {
       <section className="runner-wizard-progress" aria-label="빠른 실행 진행률">
         {embedded ? (
           <div className="runner-wizard-modebar">
-            <strong>매크로 바로 만들기</strong>
+            <strong>매크로 만들기 가이드</strong>
             <button type="button" onClick={onExit}>시작 화면으로</button>
           </div>
         ) : null}

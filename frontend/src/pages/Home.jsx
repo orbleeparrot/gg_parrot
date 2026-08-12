@@ -17,7 +17,7 @@ function HomeEntryHero({ onRun, onGuide }) {
     <section className="home-entry-hero" aria-labelledby="home-entry-title">
       <div className="home-entry-copy">
         <h1 id="home-entry-title">
-          비트코인 매크로가 하고 싶다면, <span>껄무새</span>에서 시작하세요.
+          쉽게 시작하는 코인 매크로 커뮤니티 <span>껄무새</span>
         </h1>
         <p className="home-entry-description">
           전략을 고르는 것부터 테스트넷 실행까지 한 단계씩 안내해요.
@@ -41,7 +41,7 @@ function HomeEntryHero({ onRun, onGuide }) {
           onClick={onRun}
           className="home-entry-choice is-primary"
         >
-          <span><strong>매크로 바로 만들기</strong><small>내 매크로나 리더보드 전략을 골라 바로 실행해요.</small></span>
+          <span><strong>매크로 만들기 가이드</strong><small>안내해드리는 순서에 따라 내 매크로나 리더보드 전략을 골라 바로 실행해요.</small></span>
           <span aria-hidden="true">→</span>
         </button>
         <button
@@ -161,7 +161,7 @@ export default function Home() {
       : docsOpen
         ? "사용 방법 · 껄무새"
         : runnerOpen
-          ? "매크로 바로 만들기 · 껄무새"
+          ? "매크로 만들기 가이드 · 껄무새"
           : "비트코인 매크로 · 껄무새";
   }, [docsOpen, guideOpen, runnerOpen]);
 

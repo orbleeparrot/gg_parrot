@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 
 const PRIMARY_LINKS = [
-  { to: "/", label: "매크로 바로 만들기", description: "내게 맞는 시작 방식 선택", icon: "runner", end: true },
+  { to: "/", label: "홈", description: "내게 맞는 시작 방식 선택", icon: "runner", end: true },
   { to: "/builder", label: "직접 만들기", description: "모든 조건 직접 설정", icon: "builder", matches: ["/builder", "/s/"] },
 ];
 

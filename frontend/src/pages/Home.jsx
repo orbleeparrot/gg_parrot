@@ -5,6 +5,7 @@ import {
   dismissJourney,
 } from "../lib/journey.js";
 import { lockBodyScroll } from "../lib/bodyScrollLock.js";
+import { isLoggedIn } from "../lib/auth.js";
 
 const StartGuide = lazy(() => import("./Start.jsx"));
 const RunnerFlow = lazy(() => import("./RunnerDownload.jsx"));
@@ -20,14 +21,15 @@ function HomeEntryHero({ onLeaderboard, onGuide }) {
           쉽게 시작하는 코인 매크로 커뮤니티 <span>껄무새</span>
         </h1>
         <p className="home-entry-description">
-          전략을 고르는 것부터 테스트넷 실행까지 한 단계씩 안내해요.
-          처음이어도 괜찮아요. 코드를 몰라도 바로 시작할 수 있어요.
+          코린이도 코드 없이 매크로를 만들고, 테스트넷 모의투자로 겨뤄요.
+          실시간 채팅과 게시판에서 전략을 나누며 투자와 자연스럽게 친해지는 커뮤니티예요.
         </p>
-        <ol className="home-entry-flow" aria-label="매크로 실행 흐름">
-          <li><span className="num">01</span>매크로 선택</li>
-          <li><span className="num">02</span>키·실행기 준비</li>
-          <li><span className="num">03</span>테스트넷 실행</li>
-        </ol>
+        <ul className="home-entry-highlights" aria-label="껄무새에서 할 수 있는 것">
+          <li><strong>코드 없이 매크로</strong><span>종목·전략·조건만 골라 바로 완성해요.</span></li>
+          <li><strong>모의투자 경쟁</strong><span>테스트넷 수익률로 리더보드에서 겨뤄요.</span></li>
+          <li><strong>실시간 채팅</strong><span>결과를 함께 보며 바로 묻고 답해요.</span></li>
+          <li><strong>게시판 소통</strong><span>전략과 후기를 글·답글로 나눠요.</span></li>
+        </ul>
         <p className="home-entry-note">웹의 백테스트와 모의 결과는 투자 조언이 아니에요.</p>
       </div>
 
@@ -101,6 +103,14 @@ export default function Home() {
   // 홈 '리더보드' 갈림길 — 실행 플로우를 리더보드 선택 화면에서 바로 연다.
   const openLeaderboardRun = useCallback(() => openRunner("leaderboard"), [openRunner]);
 
+  // 로그아웃 상태에서 홈 진입 버튼을 누르면 바로 로그인 화면으로 보낸다.
+  const requireLogin = useCallback((nextPath) => {
+    const params = new URLSearchParams();
+    params.set("next", nextPath);
+    params.set("notice", "로그인 후 이용할 수 있어요.");
+    navigate(`/login?${params.toString()}`);
+  }, [navigate]);
+
   const closeRunner = useCallback(() => {
     setSearchParams((current) => {
       const next = new URLSearchParams(current);
@@ -122,6 +132,17 @@ export default function Home() {
       return next;
     });
   }, [setSearchParams]);
+
+  // 리더보드·직접 만들기 진입은 로그인 필수 — 로그아웃이면 로그인 화면으로 보낸다.
+  const startLeaderboard = useCallback(() => {
+    if (!isLoggedIn()) { requireLogin("/?run=1&step=1&view=leaderboard"); return; }
+    openLeaderboardRun();
+  }, [openLeaderboardRun, requireLogin]);
+
+  const startGuide = useCallback(() => {
+    if (!isLoggedIn()) { requireLogin("/?guide=1&tour=build"); return; }
+    openGuide();
+  }, [openGuide, requireLogin]);
 
   const closeOverlay = useCallback(() => {
     if (guideOpen) {
@@ -275,7 +296,7 @@ export default function Home() {
             <RunnerFlow embedded onExit={closeRunner} />
           </Suspense>
         ) : (
-          <HomeEntryHero onLeaderboard={openLeaderboardRun} onGuide={openGuide} />
+          <HomeEntryHero onLeaderboard={startLeaderboard} onGuide={startGuide} />
         )}
       </div>
 

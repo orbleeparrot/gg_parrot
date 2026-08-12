@@ -21,6 +21,21 @@ const STEP_LAUNCH = 4;
 const CHAPTERS = ["매크로 연결", "API 키 준비", "실행기 준비", "연결·실행"];
 const LAST_STEP = CHAPTERS.length - 1;
 
+// '직접 만들기' 가이드(flow=build)로 넘어오면 실행 마법사도 빌드~연결·실행 8단계
+// 진행바로 이어서 보여준다. 앞 5단계(빌드~페이퍼)는 이미 마친 상태로 표시된다.
+const BUILD_FLOW_CHAPTERS = [
+  "매크로 빌드",
+  "종목검색",
+  "조건 설정",
+  "백테스트",
+  "페이퍼 트레이딩",
+  "API 키 준비",
+  "실행기 준비",
+  "연결·실행",
+];
+// STEP_API_KEY(1) → 8단계 중 6번째(index 5)에 대응한다.
+const BUILD_FLOW_OFFSET = 4;
+
 const BINANCE_TESTNET_GUIDES = {
   spot: {
     market: "현물",
@@ -375,6 +390,10 @@ export default function RunnerDownload({ embedded = false, onExit }) {
   const gatedStep = requestedStep > STEP_API_KEY && !apiKeyPrepared ? STEP_API_KEY : requestedStep;
   const step = signedIn && selected ? gatedStep : STEP_MACRO;
   const copy = COPY[step];
+  // 직접 만들기 가이드에서 이어진 경우(flow=build) 8단계 통합 진행바를 쓴다.
+  const buildFlow = searchParams.get("flow") === "build";
+  const progressChapters = buildFlow ? BUILD_FLOW_CHAPTERS : CHAPTERS;
+  const progressIndex = buildFlow ? step + BUILD_FLOW_OFFSET : step;
   const downloadChecked = downloadInfo != null || !!downloadError;
   const officialRunnerFallback = downloadChecked && !downloadInfo?.available && !!OFFICIAL_RUNNER_DOWNLOAD_URL;
   const runnerAvailable = !!downloadInfo?.available || officialRunnerFallback;
@@ -1333,15 +1352,15 @@ export default function RunnerDownload({ embedded = false, onExit }) {
           </div>
         ) : null}
         <div className="runner-wizard-progress-meta">
-          <span className="num">{String(step + 1).padStart(2, "0")} / {String(CHAPTERS.length).padStart(2, "0")}</span>
-          <strong>{CHAPTERS[step]}</strong>
+          <span className="num">{String(progressIndex + 1).padStart(2, "0")} / {String(progressChapters.length).padStart(2, "0")}</span>
+          <strong>{progressChapters[progressIndex]}</strong>
         </div>
-        <div className="runner-wizard-progress-track" role="progressbar" aria-valuemin="1" aria-valuemax={CHAPTERS.length} aria-valuenow={step + 1}>
-          <span style={{ width: `${((step + 1) / CHAPTERS.length) * 100}%` }} />
+        <div className="runner-wizard-progress-track" role="progressbar" aria-valuemin="1" aria-valuemax={progressChapters.length} aria-valuenow={progressIndex + 1}>
+          <span style={{ width: `${((progressIndex + 1) / progressChapters.length) * 100}%` }} />
         </div>
         <ol aria-hidden="true">
-          {CHAPTERS.map((chapter, index) => (
-            <li key={chapter} className={index === step ? "is-current" : index < step ? "is-done" : ""}>{chapter}</li>
+          {progressChapters.map((chapter, index) => (
+            <li key={chapter} className={index === progressIndex ? "is-current" : index < progressIndex ? "is-done" : ""}>{chapter}</li>
           ))}
         </ol>
       </section>

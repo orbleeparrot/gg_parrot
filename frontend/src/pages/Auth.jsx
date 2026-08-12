@@ -19,6 +19,7 @@ export default function Auth() {
   const [params] = useSearchParams();
   const requestedNext = safeLocalPath(params.get("next") || "");
   const next = requestedNext || recallAuthReturn("/leaderboard");
+  const notice = (params.get("notice") || "").slice(0, 120);
   const [mode, setMode] = useState(params.get("mode") === "signup" ? "signup" : "login");
   const [email, setEmail] = useState("");
   const [username, setUsername] = useState("");
@@ -87,6 +88,11 @@ export default function Auth() {
       {/* 폼은 상자를 유지하는 §1-3 예외 — 화면 전체가 하나의 입력 흐름이다. */}
       <div className="form-surface border border-slate-200 p-6">
         <div className="text-2xl mb-1" aria-hidden>🦜</div>
+        {notice ? (
+          <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 t-small text-amber-800" role="status">
+            {notice}
+          </div>
+        ) : null}
         <h1 className="t-h2 text-slate-900 mb-1">{isSignup ? "회원가입" : "로그인"}</h1>
         <p className="t-small text-slate-700 mb-6">
           {isSignup

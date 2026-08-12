@@ -19,6 +19,7 @@ import { RULE_TYPES, buildMacro, defaultForm, macroToForm, validate } from "../l
 import { GUIDE_CHAPTERS as CHAPTERS } from "../lib/guideFlow.js";
 import { api } from "../api.js";
 import { getUserId } from "../lib/user.js";
+import { isLoggedIn } from "../lib/auth.js";
 import {
   completeJourney,
   peekRegistrationDraft,
@@ -67,10 +68,6 @@ function createScreens(form) {
     ...setup,
     { id: "backtest", kind: "backtest", chapter: 4 },
     { id: "paper", kind: "paper", chapter: 5 },
-    { id: "register", kind: "register", chapter: 6 },
-    { id: "community", kind: "community", chapter: 7 },
-    { id: "news", kind: "news", chapter: 8 },
-    { id: "guide", kind: "guide", chapter: 9 },
   ];
 }
 
@@ -263,7 +260,7 @@ function actionLabel(screen, backtest, paperController, paperReady, registration
       return "이 조건으로 백테스트";
     case "paper":
       if (paperController.busy) return "세션 처리 중…";
-      return paperReady ? "세션을 마치고 등록하기" : "페이퍼 세션을 시작해 주세요";
+      return paperReady ? "세션을 마치고 실행 준비하기" : "페이퍼 세션을 시작해 주세요";
     case "register": return registrationReady ? "리더보드 채팅·게시판 보기" : "등록을 완료해 주세요";
     case "community": return "코인동향 보기";
     case "news": return "마지막 안내 보기";
@@ -570,12 +567,38 @@ export default function Start({ onNestedDialogChange }) {
     setSearchParams(next, { replace: true });
   }
 
-  async function advance() {
-    if (screen.kind === "guide") {
-      navigate("/?help=start");
+  // 페이퍼까지 마친 매크로를 내 라이브러리에 저장하고, 리더보드 흐름과 동일하게
+  // 실행 마법사의 'API 키 준비'(step=2)로 이어 붙인다. 저장은 로그인이 필요하다.
+  async function handoffToRunner() {
+    const runnable = backtest.testedMacro || macro;
+    const symbol = String(runnable?.symbol || "").split(",")[0].trim().toUpperCase();
+    if (!isLoggedIn()) {
+      // 로그인 후 페이퍼 단계로 돌아와 이어서 실행 준비를 진행한다.
+      navigate(`/login?next=${encodeURIComponent("/?guide=1&tour=paper")}&notice=${encodeURIComponent("로그인 후 이용할 수 있어요.")}`);
       return;
     }
-    if (validationError || !nextScreen) return;
+    try {
+      const saved = await api.saveMyMacro(runnable, `${symbol || "BTCUSDT"} 매크로`);
+      completeJourney();
+      // flow=build → 실행 마법사가 '매크로 빌드~연결·실행' 8단계 진행바로 이어서 표시한다.
+      navigate("/?run=1&step=2&flow=build", { state: { selectedMacroId: saved.item.id } });
+    } catch (reason) {
+      setResumeError(`매크로를 저장하지 못했어요: ${String(reason.message || reason)}`);
+    }
+  }
+
+  async function advance() {
+    if (validationError) return;
+
+    if (screen.kind === "paper") {
+      if (!paperReady) return;
+      const stopped = await paperController.stop();
+      if (!stopped) return;
+      await handoffToRunner();
+      return;
+    }
+
+    if (!nextScreen) return;
 
     if (screen.kind === "asset") {
       const symbol = normalizeGuideSymbol(form.symbol);
@@ -613,13 +636,6 @@ export default function Start({ onNestedDialogChange }) {
       }
       return;
     }
-    if (screen.kind === "paper") {
-      if (!paperReady) return;
-      const stopped = await paperController.stop();
-      if (!stopped) return;
-      setRegistrationMode(paperController.mode);
-    }
-    if (screen.kind === "register" && !registrationReady) return;
     goTo(nextScreen);
   }
 

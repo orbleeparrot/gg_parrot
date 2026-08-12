@@ -44,7 +44,7 @@ function periodLabelOf(macro) {
 }
 
 function ChartDisclosure({ symbols, form }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
   const contentId = useId();
 
   // 실시간 차트에 지금 매크로 설정 그대로 보조지표를 얹는다(예: 볼린저 상·하단

@@ -660,6 +660,28 @@ export default function RunnerDownload({ embedded = false, onExit }) {
     moveTo(STEP_RUNNER);
   }
 
+  // '연결·실행으로 계속'을 누르면 실행기(exe)를 바로 열고 다음 화면으로 넘어간다.
+  // 일회성 연결 티켓을 발급받아 실행기 프로토콜(launch_url)로 여는 방식이며,
+  // 자동 열기에 실패해도 아래 수동 연결 단계로 계속 진행한다.
+  async function openRunnerAndContinue() {
+    moveTo(STEP_ACCOUNT);
+    if (!supportsLaunch || !selected?.id) return;
+    try {
+      const data = await api.runnerLaunchTicketIssue(selected.id, true);
+      const url = data?.launch_url;
+      if (typeof url === "string" && url) {
+        // 커스텀 프로토콜은 앵커 클릭으로 여는 편이 안정적이다(사용자 제스처 유지).
+        const opener = document.createElement("a");
+        opener.href = url;
+        document.body.appendChild(opener);
+        opener.click();
+        opener.remove();
+      }
+    } catch (_) {
+      /* 실행기 자동 열기에 실패해도 수동 연결 단계에서 이어갈 수 있다 */
+    }
+  }
+
   async function importLeaderboardMacro(entry) {
     if (importingLeaderboardId) return;
     setLeaderboardError("");
@@ -1238,7 +1260,13 @@ export default function RunnerDownload({ embedded = false, onExit }) {
       );
     }
     if (step === STEP_RUNNER) {
-      if (runnerReady) return <button type="button" onClick={() => moveTo(STEP_ACCOUNT)} className="btn btn-l btn-primary runner-wizard-next">연결·실행으로 계속</button>;
+      if (runnerReady) {
+        return (
+          <button type="button" onClick={() => void openRunnerAndContinue()} className="btn btn-l btn-primary runner-wizard-next">
+            {supportsLaunch ? "실행기 켜고 연결·실행으로 계속" : "연결·실행으로 계속"}
+          </button>
+        );
+      }
       if (downloadStarted) {
         return (
           <button type="button" onClick={() => confirmRunnerReady({ advance: true })} className="btn btn-l btn-primary runner-wizard-next">

@@ -1,5 +1,6 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { RULE_TYPES, withTypeDefaults } from "../lib/macro.js";
+import { computeStrategyOverlay } from "../lib/indicators.js";
 
 const ResultView = lazy(() => import("./ResultView.jsx"));
 const PaperPanelView = lazy(() =>
@@ -24,6 +25,22 @@ const STRATEGY_COPY = {
   I: "전날 변동폭을 기준으로 강한 돌파를 따라가요.",
   J: "짧은 이동평균과 긴 이동평균의 교차를 따라가요.",
   K: "하락하면 롱을 줄이고 숏으로 전환해 방어해요.",
+};
+
+// 왼쪽 차트에 그려지는 보조장치를 초보자가 읽는 법(전략별). indicators.js 가 실제로
+// 그리는 선·마커·보조창과 짝을 이룬다.
+const INDICATOR_GUIDE = {
+  A: "지금 가격을 기준으로 익절선(초록)과 손절선(빨강)이 표시돼요. 두 선 사이에서 언제 이익을 확정하고 언제 손실을 끊을지 눈으로 가늠해요.",
+  B: "매수 지정가(초록)와 매도 지정가(빨강) 두 선이 표시돼요. 가격이 아래 선까지 내려오면 사고, 위 선까지 오르면 팔아요.",
+  C: "정해진 간격마다 같은 금액으로 계속 사는 방식이라 특정 가격을 노리지 않아요. 그래서 매수·매도선 없이 가격 흐름만 참고해요.",
+  D: "가격 범위를 나눈 격자선이 표시돼요. 가운데보다 아래 칸(초록)은 매수 자리, 위 칸(빨강)은 매도 자리예요.",
+  E: "고점을 따라 내려오는 트레일링 스탑선(빨강)이 표시돼요. 이익이 나는 동안 선이 올라가고, 가격이 그 선까지 밀리면 정리해요.",
+  F: "차트 아래에 RSI 보조창이 생겨요. 과매도(초록) 구간으로 내려오면 매수, 과매수(빨강) 구간으로 오르면 매도 신호(▲▼)가 표시돼요.",
+  G: "상단·하단 밴드와 중앙선(이동평균)이 표시돼요. 하단 밴드 근처가 매수 구간, 중앙선·상단이 매도 구간이고 ▲매수·▼매도 마커도 함께 떠요.",
+  H: "첫 매수선과 아래로 이어지는 추가매수 단계선(초록)이 표시되고, 평단 대비 익절선(빨강)이 위에 떠요. 내릴수록 더 사서 평단을 낮추는 그림이에요.",
+  I: "전날 변동폭을 기준으로 한 돌파 매수선(주황 계단선)이 표시돼요. 가격이 그 선을 위로 뚫으면 ▲매수 마커가 떠요.",
+  J: "단기 이동평균(주황)과 장기 이동평균(인디고) 두 선이 표시돼요. 단기선이 장기선을 위로 뚫으면 ▲매수(골든크로스), 아래로 뚫으면 ▼매도(데드크로스)예요.",
+  K: "현재가와 방어 시작선(빨강)이 표시돼요. 가격이 그 선까지 내려오면 롱 일부를 팔고 숏으로 방어를 시작해요.",
 };
 
 const select = (key, label, question, options, help) => ({
@@ -201,7 +218,6 @@ export function AssetScene({ form, setForm, error, searchError = "", busy = fals
 }
 
 export function StrategyScene({ form, setForm }) {
-  const recommended = ["A", "C", "J"];
   const choose = (value) => setForm((current) => {
     const next = withTypeDefaults(current, value);
     // H's default safety-order ladder needs 6.3M at worst. The quick guide does
@@ -221,20 +237,9 @@ export function StrategyScene({ form, setForm }) {
       </select>
       <p className="mt-4 t-body text-slate-600">{STRATEGY_COPY[form.rule_type]}</p>
       <div className="mt-5 border-t border-slate-200 pt-4">
-        <div className="t-caption text-slate-500 mb-2">처음이라면</div>
-        <div className="flex flex-wrap gap-2">
-          {recommended.map((key) => (
-            <button
-              key={key}
-              type="button"
-              className={"chip " + (form.rule_type === key ? "border-slate-300 bg-slate-100 text-slate-900" : "")}
-              aria-pressed={form.rule_type === key}
-              onClick={() => choose(key)}
-            >
-              {RULE_TYPES[key].label}
-            </button>
-          ))}
-        </div>
+        <div className="t-caption text-slate-500 mb-2">차트에서 보이는 보조장치</div>
+        <p className="t-small text-slate-700">{INDICATOR_GUIDE[form.rule_type] || INDICATOR_GUIDE.A}</p>
+        <p className="mt-2 t-caption text-slate-400">왼쪽 차트에 이 선·마커가 함께 그려져요. 보조장치는 학습을 돕는 참고 표시예요.</p>
       </div>
     </div>
   );
@@ -367,12 +372,14 @@ function ConditionEditor({ screen, form, setForm, error }) {
 
 export function ConditionWorkbench({ screen, form, setForm, error }) {
   const symbol = (form.symbol || "").trim().toUpperCase();
+  // 지금 고른 전략 조건 그대로 보조지표(볼린저·이동평균·RSI 등)를 차트에 얹는다.
+  const overlay = useCallback((candles) => computeStrategyOverlay(form, candles), [form]);
   return (
     <div className="grid gap-7 xl:grid-cols-2 items-start">
       <section className="min-w-0" aria-label={`${symbol} 조건 참고 차트`}>
         <div className="flex items-center justify-between gap-3 pb-3 border-b border-slate-200 flex-wrap">
           <div>
-            <div className="t-caption text-slate-500">조건 참고 차트</div>
+            <div className="t-caption text-slate-500">조건 참고 차트 · 보조지표</div>
             <h2 className="mt-1 t-title text-slate-900 num">{symbol}</h2>
           </div>
           <span className="t-caption text-slate-500">봉 간격도 조건에 반영돼요</span>
@@ -382,6 +389,7 @@ export function ConditionWorkbench({ screen, form, setForm, error }) {
             symbol={symbol}
             interval={form.candle_interval}
             onIntervalChange={(value) => setForm((current) => ({ ...current, candle_interval: value }))}
+            overlay={overlay}
             compact
           />
         </Suspense>
@@ -395,6 +403,12 @@ export function ConditionWorkbench({ screen, form, setForm, error }) {
 
 export function BacktestScene({ form, backtest }) {
   const hasResult = !!backtest.result;
+  const chartSymbol = String(backtest.testedMacro?.symbol || form.symbol || "")
+    .split(",")[0]
+    .trim()
+    .toUpperCase();
+  // 결과와 같은 조건을 실시간 차트에 그대로 얹어 보조지표까지 보여준다.
+  const overlay = useCallback((candles) => computeStrategyOverlay(form, candles), [form]);
 
   return (
     <section className="hero-live-output" aria-label="실제 백테스트 결과">
@@ -405,6 +419,20 @@ export function BacktestScene({ form, backtest }) {
         </div>
         <span className="badge badge-flat">기존 빌더와 같은 결과</span>
       </div>
+
+      {chartSymbol ? (
+        <div className="mt-6">
+          <div className="t-caption text-slate-500 mb-1">내 조건이 반영된 실시간 차트 · 보조지표</div>
+          <Suspense fallback={<SceneLoading label="차트 불러오는 중…" />}>
+            <CandleChart
+              symbol={chartSymbol}
+              defaultInterval={form.candle_interval || "1m"}
+              overlay={overlay}
+              compact
+            />
+          </Suspense>
+        </div>
+      ) : null}
 
       <div className="sr-only" role="status" aria-live="polite">
         {backtest.currentBusy

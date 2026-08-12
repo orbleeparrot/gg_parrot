@@ -261,7 +261,7 @@ function EmptyLibrary({ onLeaderboard, libraryNotice }) {
   );
 }
 
-function InlineLeaderboard({ items, ownedItems, selectedId, busy, error, importingId, onImport, onBack }) {
+function InlineLeaderboard({ items, ownedItems, busy, error, importingId, onImport }) {
   return (
     <div className="runner-wizard-library">
       <div className="runner-wizard-leaderboard-list" aria-label="오늘의 리더보드 매크로">
@@ -273,7 +273,6 @@ function InlineLeaderboard({ items, ownedItems, selectedId, busy, error, importi
             ["created", "leaderboard"].includes(row.source_type)
             && String(row.source_ref) === String(item.id)
           ));
-          const ownedAndSelected = owned && owned.id === selectedId;
           return (
             <div key={item.id} className="runner-wizard-leaderboard-row">
               <span className="runner-wizard-leaderboard-rank num">{String(index + 1).padStart(2, "0")}</span>
@@ -287,13 +286,13 @@ function InlineLeaderboard({ items, ownedItems, selectedId, busy, error, importi
                 <button
                   type="button"
                   onClick={() => onImport(item)}
-                  disabled={importingId === item.id || ownedAndSelected}
+                  disabled={importingId === item.id}
                   className="btn btn-s btn-secondary"
                 >
                   {importingId === item.id
                     ? "가져오는 중…"
                     : owned
-                      ? ownedAndSelected ? "선택됨" : "선택"
+                      ? "실행 준비"
                       : item.locked
                         ? `언락 · ${Number(item.unlock_price || 0).toLocaleString()}P`
                         : item.for_sale ? "가져오기" : "무료 가져오기"}
@@ -304,7 +303,6 @@ function InlineLeaderboard({ items, ownedItems, selectedId, busy, error, importi
         }) : null}
       </div>
       {error ? <p className="runner-wizard-library-message runner-wizard-error" role="alert">{error}</p> : null}
-      <LibraryActions leaderboardOpen onLeaderboard={onBack} />
     </div>
   );
 }
@@ -674,6 +672,7 @@ export default function RunnerDownload({ embedded = false, onExit }) {
       if (imported) {
         setSelectedId(imported.id);
         setLibraryView("mine");
+        moveTo(STEP_API_KEY);
         return;
       }
       let unlockedSnapshot = null;
@@ -755,6 +754,7 @@ export default function RunnerDownload({ embedded = false, onExit }) {
       setLibrary(nextLibrary);
       setSelectedId(selectedItem.id);
       setLibraryView("mine");
+      moveTo(STEP_API_KEY);
     } catch (error) {
       const errorText = String(error.message || error);
       setLeaderboardError(
@@ -801,12 +801,10 @@ export default function RunnerDownload({ embedded = false, onExit }) {
           <InlineLeaderboard
             items={leaderboardItems}
             ownedItems={library}
-            selectedId={selected?.id}
             busy={leaderboardBusy}
             error={leaderboardError}
             importingId={importingLeaderboardId}
             onImport={importLeaderboardMacro}
-            onBack={() => setLibraryView("mine")}
           />
         </Workspace>
       );

@@ -49,7 +49,7 @@ function HomeEntryHero({ onLeaderboard, onGuide }) {
           data-home-guide-trigger
           aria-haspopup="dialog"
           onClick={onGuide}
-          className="home-entry-choice"
+          className="home-entry-choice is-primary"
         >
           <span><strong>직접 만들기</strong><small>안내를 따라 종목 검색부터 전략·조건·백테스트·등록까지 순서대로 내 매크로를 만들어요.</small></span>
           <span aria-hidden="true">→</span>

@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
-import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import {
   beginJourney,
   dismissJourney,
@@ -12,7 +12,7 @@ const GuidePage = lazy(() => import("./Guide.jsx"));
 const FOCUSABLE =
   'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
-function HomeEntryHero({ onRun, onGuide }) {
+function HomeEntryHero({ onLeaderboard, onGuide }) {
   return (
     <section className="home-entry-hero" aria-labelledby="home-entry-title">
       <div className="home-entry-copy">
@@ -38,10 +38,10 @@ function HomeEntryHero({ onRun, onGuide }) {
         <button
           type="button"
           data-home-entry-primary
-          onClick={onRun}
+          onClick={onLeaderboard}
           className="home-entry-choice is-primary"
         >
-          <span><strong>매크로 만들기 가이드</strong><small>안내해드리는 순서에 따라 내 매크로나 리더보드 전략을 골라 바로 실행해요.</small></span>
+          <span><strong>리더보드</strong><small>커뮤니티 인기 전략을 골라 바로 실행해요. 마음에 드는 매크로를 그대로 실행기로 돌릴 수 있어요.</small></span>
           <span aria-hidden="true">→</span>
         </button>
         <button
@@ -51,13 +51,9 @@ function HomeEntryHero({ onRun, onGuide }) {
           onClick={onGuide}
           className="home-entry-choice"
         >
-          <span><strong>처음부터 안내</strong><small>첫 사용자라면 종목 검색부터 등록까지 직접 따라가요.</small></span>
+          <span><strong>직접 만들기</strong><small>안내를 따라 종목 검색부터 전략·조건·백테스트·등록까지 순서대로 내 매크로를 만들어요.</small></span>
           <span aria-hidden="true">→</span>
         </button>
-        <Link to="/builder" className="home-entry-choice">
-          <span><strong>매크로 직접 만들기</strong><small>A–K 전략과 모든 조건을 직접 설계하고 검증해요.</small></span>
-          <span aria-hidden="true">→</span>
-        </Link>
       </nav>
     </section>
   );
@@ -87,11 +83,13 @@ export default function Home() {
     ? location.state.helpReturnTo
     : "";
 
-  const openRunner = useCallback(() => {
+  const openRunner = useCallback((view) => {
     setSearchParams((current) => {
       const next = new URLSearchParams(current);
       next.set("run", "1");
       next.set("step", "1");
+      if (view) next.set("view", view);
+      else next.delete("view");
       next.delete("help");
       next.delete("guide");
       next.delete("tour");
@@ -99,6 +97,9 @@ export default function Home() {
       return next;
     });
   }, [setSearchParams]);
+
+  // 홈 '리더보드' 갈림길 — 실행 플로우를 리더보드 선택 화면에서 바로 연다.
+  const openLeaderboardRun = useCallback(() => openRunner("leaderboard"), [openRunner]);
 
   const closeRunner = useCallback(() => {
     setSearchParams((current) => {
@@ -274,7 +275,7 @@ export default function Home() {
             <RunnerFlow embedded onExit={closeRunner} />
           </Suspense>
         ) : (
-          <HomeEntryHero onRun={openRunner} onGuide={openGuide} />
+          <HomeEntryHero onLeaderboard={openLeaderboardRun} onGuide={openGuide} />
         )}
       </div>
 

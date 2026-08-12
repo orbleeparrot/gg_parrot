@@ -18,7 +18,7 @@ const STEP_RUNNER = 2;
 const STEP_ACCOUNT = 3;
 const STEP_LAUNCH = 4;
 
-const CHAPTERS = ["매크로 연결", "API 키 준비", "실행기 준비", "계정 연결", "실행"];
+const CHAPTERS = ["매크로 연결", "API 키 준비", "실행기 준비", "연결·실행"];
 const LAST_STEP = CHAPTERS.length - 1;
 
 const BINANCE_TESTNET_GUIDES = {
@@ -67,14 +67,9 @@ const COPY = [
     description: "껄무새 실행기는 내 PC에서 주문을 처리해요. 바이낸스 키는 웹이나 껄무새 서버로 보내지 않아요.",
   },
   {
-    eyebrow: "껄무새 계정 연결",
-    title: <>웹에서 고른 매크로를<br /><span>내 실행기와 이어줘요.</span></>,
-    description: "회원 키를 복사할 필요 없이, 실행기를 열 때 지금 로그인한 계정과 선택한 매크로를 자동으로 연결해요.",
-  },
-  {
-    eyebrow: "테스트넷으로 먼저",
-    title: <>실행기에서 시작하고<br /><span>이 화면에서 확인해요.</span></>,
-    description: "실행기 열기를 누르면 계정과 매크로가 한 번에 전달돼요. 연결이 확인되면 이 화면에서 바로 알려드려요.",
+    eyebrow: "실행기에 직접 연결",
+    title: <>매크로 파일과 회원 키를<br /><span>실행기에 넣어요.</span></>,
+    description: "매크로 파일을 내려받아 실행기에서 열고, 껄무새 회원 키를 복사해 붙여넣은 뒤 실행기에서 매크로를 시작해요. 연결되면 아래 실행 현황이 자동으로 갱신돼요.",
   },
 ];
 
@@ -336,7 +331,10 @@ export default function RunnerDownload({ embedded = false, onExit }) {
   const [libraryBusy, setLibraryBusy] = useState(false);
   const [libraryError, setLibraryError] = useState("");
   const [selectedId, setSelectedId] = useState(location.state?.selectedMacroId || null);
-  const [libraryView, setLibraryView] = useState("mine");
+  // 홈 '리더보드' 갈림길로 들어오면(view=leaderboard) 리더보드 선택 화면부터 연다.
+  const [libraryView, setLibraryView] = useState(
+    searchParams.get("view") === "leaderboard" ? "leaderboard" : "mine"
+  );
   const [leaderboardItems, setLeaderboardItems] = useState([]);
   const [leaderboardBusy, setLeaderboardBusy] = useState(false);
   const [leaderboardError, setLeaderboardError] = useState("");
@@ -357,6 +355,11 @@ export default function RunnerDownload({ embedded = false, onExit }) {
   const [launchError, setLaunchError] = useState("");
   const [manualDownloadBusy, setManualDownloadBusy] = useState(false);
   const [manualDownloadError, setManualDownloadError] = useState("");
+  // 껄무새 회원 키(계정 연결용) — 실행 마법사에서 복사해 실행기 ④번 칸에 붙여넣는다.
+  const [memberKey, setMemberKey] = useState("");
+  const [memberKeyError, setMemberKeyError] = useState("");
+  const [memberKeyRevealed, setMemberKeyRevealed] = useState(false);
+  const [memberKeyCopied, setMemberKeyCopied] = useState(false);
 
   const signedIn = !!(token && user);
   const stepParam = Number(searchParams.get("step") || 1);
@@ -504,6 +507,16 @@ export default function RunnerDownload({ embedded = false, onExit }) {
       });
     return () => { alive = false; };
   }, []);
+
+  // 회원 키는 로그인하면 미리 받아 둔다(연결 단계에서 바로 복사 가능).
+  useEffect(() => {
+    if (!signedIn) return undefined;
+    let alive = true;
+    api.runnerKey()
+      .then((d) => { if (alive) setMemberKey(d?.key || ""); })
+      .catch((e) => { if (alive) setMemberKeyError(String(e.message || e)); });
+    return () => { alive = false; };
+  }, [signedIn]);
 
   useEffect(() => {
     if (step !== STEP_LAUNCH || !signedIn || !selected?.id) return undefined;
@@ -968,26 +981,60 @@ export default function RunnerDownload({ embedded = false, onExit }) {
     );
   }
 
+  async function copyMemberKey() {
+    if (!memberKey) return;
+    try {
+      await navigator.clipboard.writeText(memberKey);
+      setMemberKeyCopied(true);
+      setTimeout(() => setMemberKeyCopied(false), 1500);
+    } catch (_) {
+      /* clipboard 차단 시 조용히 무시 — 사용자는 '보기'로 직접 복사 가능 */
+    }
+  }
+
   function renderAccountScene() {
+    const masked = memberKey
+      ? memberKey.slice(0, 8) + "•".repeat(Math.max(0, memberKey.length - 12)) + memberKey.slice(-4)
+      : "";
     return (
-      <Workspace title="껄무새 계정" status={`${user?.username || ""} 로그인됨`}>
-        <div className="runner-wizard-account-summary">
-          <span className="runner-wizard-account-mark" aria-hidden="true">{(user?.username || "나").charAt(0)}</span>
-          <div>
-            <small>현재 웹 계정</small>
-            <strong>{user?.username}</strong>
-            <p>실행 현황과 원격 종료가 이 계정에 기록돼요.</p>
+      <Workspace title="실행기에 연결" status={`${user?.username || ""} 로그인됨`}>
+        <div className="space-y-4">
+          {/* ① 매크로 파일 */}
+          <div className="flex items-start justify-between gap-3 flex-wrap">
+            <div className="min-w-0">
+              <strong className="t-label text-slate-900">① 매크로 파일 내려받기</strong>
+              <p className="mt-1 t-small text-slate-700">선택한 매크로를 <span className="num">.ggm.json</span> 파일로 받아 실행기의 <b>①번 칸</b>에서 열어요.</p>
+            </div>
+            <button type="button" onClick={() => void downloadManualMacroFile()} disabled={manualDownloadBusy || !selected?.macro} className="btn btn-m btn-secondary shrink-0">
+              {manualDownloadBusy ? "파일 준비 중…" : "매크로 파일 받기"}
+            </button>
           </div>
-          <span className="runner-wizard-connected">연결됨</span>
-        </div>
-        <div className="runner-wizard-auto-connect">
-          <span className="runner-wizard-auto-connect-mark" aria-hidden="true">✓</span>
-          <div>
-            <strong>실행기를 열면 계정이 자동으로 연결돼요.</strong>
-            <p>다음 화면에서 만든 일회성 연결 정보가 이 계정과 선택한 매크로를 실행기에 안전하게 전달해요.</p>
+          {manualDownloadError ? <p className="t-small text-red-600" role="alert">파일을 준비하지 못했어요: {manualDownloadError}</p> : null}
+
+          {/* ② 회원 키 복사 */}
+          <div className="pt-4 border-t border-slate-200">
+            <strong className="t-label text-slate-900">② 껄무새 회원 키 복사</strong>
+            <p className="mt-1 t-small text-slate-700">아래 키를 복사해 실행기 <b>④번 칸</b>에 붙여넣어요. 계정 연결용이고, <b>거래소 API 키가 아니에요.</b></p>
+            {memberKeyError ? (
+              <p className="mt-2 t-small text-red-600" role="alert">키를 불러오지 못했어요: {memberKeyError}</p>
+            ) : memberKey ? (
+              <div className="mt-2 flex items-center gap-2 flex-wrap">
+                <code className="num text-slate-900 bg-slate-100 px-2 py-1 rounded break-all">{memberKeyRevealed ? memberKey : masked}</code>
+                <button type="button" onClick={() => setMemberKeyRevealed((v) => !v)} className="btn btn-s btn-secondary">{memberKeyRevealed ? "숨기기" : "보기"}</button>
+                <button type="button" onClick={copyMemberKey} className="btn btn-s btn-primary">{memberKeyCopied ? "복사됨!" : "회원 키 복사"}</button>
+              </div>
+            ) : (
+              <p className="mt-2 t-small text-slate-500">회원 키 불러오는 중…</p>
+            )}
+          </div>
+
+          {/* ③ 실행기에서 시작 */}
+          <div className="pt-4 border-t border-slate-200">
+            <strong className="t-label text-slate-900">③ 실행기에서 시작</strong>
+            <p className="mt-1 t-small text-slate-700">실행기에 바이낸스 <b>테스트넷 API 키/시크릿</b>을 입력하고 <b>매크로 시작</b>을 눌러요. 거래소 키는 내 PC 실행기에서만 쓰고 웹·서버로 보내지 않아요.</p>
           </div>
         </div>
-        <p className="runner-wizard-security-note">일회성 연결 정보에는 바이낸스 API Key와 Secret이 포함되지 않아요. 거래소 키는 내 PC의 실행기에서만 입력해요.</p>
+        <p className="runner-wizard-security-note">껄무새 회원 키는 서버 상태 확인·원격 종료에만 쓰여요. 실행 현황은 <b>{user?.username}</b> 계정에 기록돼요.</p>
       </Workspace>
     );
   }
@@ -1193,7 +1240,7 @@ export default function RunnerDownload({ embedded = false, onExit }) {
       );
     }
     if (step === STEP_RUNNER) {
-      if (runnerReady) return <button type="button" onClick={() => moveTo(STEP_ACCOUNT)} className="btn btn-l btn-primary runner-wizard-next">계정 연결로 계속</button>;
+      if (runnerReady) return <button type="button" onClick={() => moveTo(STEP_ACCOUNT)} className="btn btn-l btn-primary runner-wizard-next">연결·실행으로 계속</button>;
       if (downloadStarted) {
         return (
           <button type="button" onClick={() => confirmRunnerReady({ advance: true })} className="btn btn-l btn-primary runner-wizard-next">
@@ -1203,7 +1250,7 @@ export default function RunnerDownload({ embedded = false, onExit }) {
       }
       if (runnerDownloadState === "loading") return <button type="button" disabled className="btn btn-l btn-primary runner-wizard-next">실행기 확인 중…</button>;
       if (!runnerAvailable) {
-        return <button type="button" onClick={() => moveTo(STEP_ACCOUNT)} className="btn btn-l btn-primary runner-wizard-next">계정 연결 먼저 하기</button>;
+        return <button type="button" onClick={() => moveTo(STEP_ACCOUNT)} className="btn btn-l btn-primary runner-wizard-next">연결·실행 먼저 하기</button>;
       }
       return (
         <a
@@ -1219,7 +1266,7 @@ export default function RunnerDownload({ embedded = false, onExit }) {
       );
     }
     if (step === STEP_ACCOUNT) {
-      return <button type="button" onClick={() => moveTo(STEP_LAUNCH)} className="btn btn-l btn-primary runner-wizard-next">자동 연결로 계속</button>;
+      return <p className="runner-wizard-footer-note">위 순서대로 실행기에 파일·회원 키를 넣고 ‘매크로 시작’을 누르면 아래 실행 현황이 자동으로 갱신돼요.</p>;
     }
     if (["idle", "checking", "preparing"].includes(launchPhase)) {
       return <button type="button" disabled className="btn btn-l btn-primary runner-wizard-next">실행기 연결 준비 중…</button>;

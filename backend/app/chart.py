@@ -34,6 +34,10 @@ MAX_LIMIT = int(os.environ.get("CHART_MAX_LIMIT", "300"))
 
 # (symbol, interval, limit, market) -> (payload, expires_at)
 _cache: dict[tuple[str, str, int, str], tuple[dict, float]] = {}
+_LIVE_REFRESH_SECONDS = 3.0
+# The latest two bars use a separate, short cache.  A 1d chart may refresh its
+# 300-bar history only once a minute, but its open candle still has to move.
+_live_cache: dict[tuple[str, str, str], tuple[dict, float]] = {}
 
 
 def supported_intervals() -> list[str]:
@@ -86,4 +90,50 @@ def get_candles(
         "disclaimer": "public market data; reference only",
     }
     _cache[key] = (payload, time.time() + _INTERVALS[interval])
+    return {**payload, "cached": False}
+
+
+def get_live_candles(
+    symbol: str,
+    interval: str = DEFAULT_INTERVAL,
+    market: str = "spot",
+) -> dict:
+    """Return only the latest two candles on a fixed live cadence.
+
+    Keeping this separate from :func:`get_candles` avoids downloading the full
+    chart buffer every few seconds while still updating the open bar and
+    detecting a newly-opened bar for long intervals such as 1d.
+    """
+    symbol = (symbol or "").upper().strip()
+    if not symbol:
+        raise NoSpotDataError("종목(symbol)을 입력하세요.")
+    if interval not in _INTERVALS:
+        interval = DEFAULT_INTERVAL
+    if market not in ("spot", "futures"):
+        market = "spot"
+
+    key = (symbol, interval, market)
+    hit = _live_cache.get(key)
+    now = time.time()
+    if hit and hit[1] > now:
+        return {**hit[0], "cached": True}
+
+    try:
+        candles = get_recent_klines(symbol, interval=interval, limit=2, market=market)
+    except NoSpotDataError:
+        raise
+    except Exception:
+        if hit:
+            return {**hit[0], "cached": True, "stale": True}
+        raise NoSpotDataError("실시간 시세를 불러오지 못했습니다. 잠시 후 다시 시도하세요.")
+
+    payload = {
+        "symbol": symbol,
+        "interval": interval,
+        "market": market,
+        "candles": candles,
+        "server_time": int(now * 1000),
+        "refresh_seconds": _LIVE_REFRESH_SECONDS,
+    }
+    _live_cache[key] = (payload, now + _LIVE_REFRESH_SECONDS)
     return {**payload, "cached": False}

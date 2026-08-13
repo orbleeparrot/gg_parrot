@@ -4,10 +4,9 @@ import { fmtPrice, quoteOf } from "../lib/format.js";
 
 // Dependency-free SVG candlestick chart (same approach as EquityChart).
 //
-// One polling loop is enough: Binance returns the still-forming bar with live
-// high/low/close, so refetching on the cadence the server advertises (3s for 1m
-// bars) both settles closed bars and animates the open one. The server cache
-// collapses concurrent viewers into one upstream call per window.
+// Full history and the moving edge use separate polling loops. Long intervals
+// can keep their 300-bar history on a slower cadence, while the latest two bars
+// are merged every few seconds so even a 1d chart still behaves live.
 //
 // Zoom/pan model: we always hold up to BUFFER bars and render a window of
 // `zoom` bars ending at `anchor`. `anchor === null` means "pinned to the live
@@ -21,6 +20,13 @@ import { fmtPrice, quoteOf } from "../lib/format.js";
 const BUFFER = 300; // bars fetched (server clamps at CHART_MAX_LIMIT)
 const MIN_ZOOM = 10; // fewest bars on screen (max detail)
 const DEFAULT_ZOOM = 80;
+
+function mergeLiveCandles(history, latest) {
+  if (!Array.isArray(history) || !history.length || !Array.isArray(latest) || !latest.length) return history;
+  const merged = new Map(history.map((bar) => [bar.t, bar]));
+  latest.forEach((bar) => merged.set(bar.t, bar));
+  return Array.from(merged.values()).sort((a, b) => a.t - b.t).slice(-BUFFER);
+}
 
 const INTERVALS = [
   { value: "1m", label: "1분" },
@@ -42,29 +48,28 @@ function fullTime(ms) {
 }
 
 // --- inspector panel: OHLC of the hovered (or latest) bar ---------------
-function BarReadout({ bar, quote }) {
+function BarReadout({ bar }) {
   if (!bar) return null;
   const rise = bar.c >= bar.o;
   const pct = bar.o ? ((bar.c - bar.o) / bar.o) * 100 : 0;
   const cell = (label, v) => (
-    <span className="whitespace-nowrap">
+    <span className="candle-ohlc-cell whitespace-nowrap">
       <span className="text-slate-500">{label}</span>{" "}
       <span className="num font-semibold text-slate-900">{fmtPrice(v)}</span>
     </span>
   );
   return (
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 t-caption">
-      <span className="text-slate-700 num">{fullTime(bar.t)}</span>
+    <div className="candle-ohlc flex flex-wrap items-center gap-x-3 gap-y-1 t-caption">
+      <span className="candle-ohlc-time text-slate-700 num">{fullTime(bar.t)}</span>
       {cell("시", bar.o)}
       {cell("고", bar.h)}
       {cell("저", bar.l)}
       {cell("종", bar.c)}
-      <span className={"font-bold num " + (rise ? "text-green-600" : "text-red-600")}>
+      <span className={"candle-ohlc-change font-bold num " + (rise ? "text-green-600" : "text-red-600")}>
         {rise ? "+" : ""}
         {pct.toFixed(2)}%
       </span>
       {!bar.closed && <span className="badge badge-flat">진행 중</span>}
-      <span className="text-slate-500">{quote}</span>
     </div>
   );
 }
@@ -126,9 +131,9 @@ function bandPath(upper, lower, cx, y) {
   return d + " Z";
 }
 
-function Chart({ candles, symbol, hover, setHover, onPan, overlay }) {
+function Chart({ candles, symbol, hover, setHover, onPan, overlay, expanded = false }) {
   const W = 720;
-  const H = 260;
+  const H = expanded ? 350 : 260;
   const pad = { l: 6, r: 6, t: 10, b: 10 };
   const n = candles.length;
   const svgRef = useRef(null);
@@ -394,11 +399,15 @@ function RsiPane({ values, entry, exit }) {
 
 export default function CandleChart({
   symbol,
+  market = "spot",
   defaultInterval = "1m",
   interval: controlledInterval,
   onIntervalChange,
   onLoadState,
+  onData,
   compact = false,
+  expanded = false,
+  minimal = false,
   overlay = null,
   title,
 }) {
@@ -410,8 +419,12 @@ export default function CandleChart({
   const [anchor, setAnchor] = useState(null); // null = pinned to live edge
   const [hover, setHover] = useState(null);
   const timer = useRef(null);
+  const liveTimer = useRef(null);
+  const candlesRef = useRef(null);
   const loadStateRef = useRef(onLoadState);
   loadStateRef.current = onLoadState;
+  const dataRef = useRef(onData);
+  dataRef.current = onData;
   const interval = controlledInterval ?? localInterval;
 
   const changeInterval = (value) => {
@@ -431,10 +444,19 @@ export default function CandleChart({
         loadStateRef.current?.({ status: "loading", symbol, interval, error: "" });
       }
       try {
-        const d = await api.candles(symbol, interval, BUFFER);
+        const d = await api.candles(symbol, interval, BUFFER, market);
         if (!alive) return;
         const nextCandles = d.candles || [];
+        candlesRef.current = nextCandles;
         setCandles(nextCandles);
+        dataRef.current?.({
+          symbol,
+          market,
+          interval,
+          candles: nextCandles,
+          serverTime: d.server_time,
+          stale: !!d.stale,
+        });
         setError("");
         loadStateRef.current?.({
           status: nextCandles.length > 0 ? "ready" : "error",
@@ -454,6 +476,7 @@ export default function CandleChart({
       }
     }
 
+    candlesRef.current = null;
     setCandles(null);
     setAnchor(null); // a new symbol/interval always starts at the live edge
     setHover(null);
@@ -470,7 +493,50 @@ export default function CandleChart({
       alive = false;
       clearTimeout(timer.current);
     };
-  }, [symbol, interval]);
+  }, [symbol, interval, market]);
+
+  // Keep the in-progress candle moving independently from the full-buffer
+  // refresh. Failures here deliberately keep the last good chart on screen;
+  // the history loop remains responsible for user-visible load errors.
+  useEffect(() => {
+    if (!symbol) return undefined;
+    let alive = true;
+    let refreshMs = 3000;
+
+    const arm = () => {
+      liveTimer.current = window.setTimeout(async () => {
+        if (!document.hidden) {
+          try {
+            const d = await api.liveCandles(symbol, interval, market);
+            if (!alive) return;
+            const merged = mergeLiveCandles(candlesRef.current, d.candles || []);
+            if (merged && merged !== candlesRef.current) {
+              candlesRef.current = merged;
+              setCandles(merged);
+              dataRef.current?.({
+                symbol,
+                market,
+                interval,
+                candles: merged,
+                serverTime: d.server_time,
+                stale: !!d.stale,
+              });
+            }
+            if (d.refresh_seconds) refreshMs = Math.max(2000, d.refresh_seconds * 1000);
+          } catch (_) {
+            // A transient live-edge failure must not blank an otherwise valid chart.
+          }
+        }
+        if (alive) arm();
+      }, refreshMs);
+    };
+
+    arm();
+    return () => {
+      alive = false;
+      window.clearTimeout(liveTimer.current);
+    };
+  }, [symbol, interval, market]);
 
   const total = candles?.length || 0;
   const maxZoom = Math.max(MIN_ZOOM, total);
@@ -531,16 +597,16 @@ export default function CandleChart({
 
   // Wheel zoom must be a NON-passive native listener: React registers onWheel
   // as passive, so preventDefault() there is ignored and the page scrolls too.
-  // At the zoom limits we deliberately don't preventDefault, letting the page
-  // scroll on past instead of trapping the cursor over the chart.
+  // While the pointer is over the plot, the wheel belongs to chart zoom only.
+  // Browser/page zoom shortcuts remain untouched for accessibility.
   const plotRef = useRef(null);
   useEffect(() => {
     const el = plotRef.current;
     if (!el) return;
     const onWheel = (e) => {
-      const zoomingIn = e.deltaY < 0;
-      if ((zoomingIn && zoom <= MIN_ZOOM) || (!zoomingIn && zoom >= maxZoom)) return;
+      if (e.ctrlKey || e.metaKey || e.deltaY === 0) return;
       e.preventDefault();
+      const zoomingIn = e.deltaY < 0;
       applyZoom(zoom * (zoomingIn ? 0.85 : 1.18));
     };
     el.addEventListener("wheel", onWheel, { passive: false });
@@ -558,29 +624,29 @@ export default function CandleChart({
 
   // 차트도 카드에 담지 않는다 — 캔버스 위에 그리고 구획은 괘선으로만(§1-3).
   return (
-    <div className="pt-4 border-t border-slate-200">
-      <div className="flex items-center justify-between flex-wrap gap-2 mb-2">
-        <div className="flex items-baseline gap-2">
-          <h3 className="t-title text-slate-900"><span className="num">{title || symbol}</span></h3>
+    <div className={`candle-chart pt-4 border-t border-slate-200 ${minimal ? "is-minimal" : ""}`}>
+      <div className="candle-chart-toolbar flex items-center justify-between flex-wrap gap-2 mb-2">
+        <div className="candle-chart-market">
+          <h3 className="candle-chart-symbol t-title text-slate-900"><span className="num">{title || symbol}</span></h3>
           {last && (
-            <>
-              <span className="t-h4 num text-slate-900">{fmtPrice(last.c)}</span>
-              <span className="t-caption text-slate-500">{quote}</span>
-              <span className={"t-label font-bold num " + (up ? "text-green-600" : "text-red-600")}>
+            <div className="candle-chart-price-row">
+              <strong className="candle-chart-current num text-slate-900">{fmtPrice(last.c)}</strong>
+              <span className="candle-chart-quote t-caption text-slate-500">{quote}</span>
+              <span className={"candle-chart-change t-label font-bold num " + (up ? "text-green-600" : "text-red-600")}>
                 {up ? "+" : ""}
                 {changePct.toFixed(2)}%
               </span>
-            </>
-          )}
-          {live && last && !last.closed && (
-            <span className="flex items-center gap-1 t-caption font-bold text-red-600">
-              <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse motion-reduce:animate-none" />
-              LIVE
-            </span>
+              {live && !last.closed && (
+                <span className="candle-chart-live flex items-center gap-1 t-caption font-bold text-red-600">
+                  <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse motion-reduce:animate-none" />
+                  LIVE
+                </span>
+              )}
+            </div>
           )}
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="candle-chart-controls flex items-center gap-2">
           {!compact ? (
             <>
               <button onClick={() => applyZoom(zoom * 1.35)} disabled={zoom >= maxZoom} className={btn} title="축소 (더 많은 봉)" aria-label="차트 축소">
@@ -611,8 +677,8 @@ export default function CandleChart({
       </div>
 
       {/* OHLC read-out: hovered bar, or the latest one when not hovering */}
-      <div className="mb-2 min-h-[20px]">
-        <BarReadout bar={inspected} quote={quote} />
+      <div className="candle-chart-readout mb-2 min-h-[20px]">
+        <BarReadout bar={inspected} />
       </div>
 
       {/* 보조지표 범례 */}
@@ -638,7 +704,7 @@ export default function CandleChart({
 
       {!error && view.length > 0 && (
         <div ref={plotRef}>
-          <Chart candles={view} symbol={symbol} hover={hover} setHover={setHover} onPan={pan} overlay={viewOverlay} />
+          <Chart candles={view} symbol={symbol} hover={hover} setHover={setHover} onPan={pan} overlay={viewOverlay} expanded={expanded} />
           {viewOverlay?.rsi && (
             <RsiPane values={viewOverlay.rsi.values} entry={viewOverlay.rsi.entry} exit={viewOverlay.rsi.exit} />
           )}
@@ -646,11 +712,18 @@ export default function CandleChart({
       )}
 
       {/* 초보자용 한 줄 설명 */}
-      {!compact && !error && view.length > 0 && overlayFull?.note && (
-        <div className="mt-2 notice t-small text-slate-700">💡 {overlayFull.note}</div>
+      {!minimal && !compact && !error && view.length > 0 && overlayFull?.note && (
+        <div className="mt-2 notice t-small text-slate-700">{overlayFull.note}</div>
       )}
 
-      {!compact && !error && view.length > 0 && (
+      {minimal && !error && view.length > 0 ? (
+        <div className="candle-chart-range num">
+          <span>{fullTime(view[0].t)}</span>
+          <span>{fullTime(view[view.length - 1].t)}</span>
+        </div>
+      ) : null}
+
+      {!minimal && !compact && !error && view.length > 0 && (
         <div className="mt-2 space-y-1 t-caption text-slate-500">
           <div className="flex items-center justify-between gap-3 num text-slate-700">
             <span>{fullTime(view[0].t)}</span>

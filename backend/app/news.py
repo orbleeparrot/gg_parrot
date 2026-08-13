@@ -24,6 +24,7 @@ import httpx
 _GOOGLE_NEWS = "https://news.google.com/rss/search"
 _HTTP_TIMEOUT = 10.0
 _MAX_ITEMS = 8
+_COIN_CACHE_SECONDS = max(60, int(os.environ.get("COIN_NEWS_CACHE_SECONDS", "300")))
 
 # 시장·규제 전반 쿼리. Google News 검색 연산자 when:2d 로 최근 이틀로 제한.
 _MARKET_QUERY = "암호화폐 OR 가상자산 OR 비트코인 규제 OR 동향 when:2d"
@@ -53,6 +54,9 @@ _DISCLAIMER = (
 
 # 일 1회 캐시: key -> (envelope, kst_date_str). 인스턴스 재시작 시 재생성(허용).
 _cache: dict[str, tuple[dict, str]] = {}
+# 종목 뉴스는 에이전트 화면에서 자동 확인하므로 시장 일일 브리핑과 분리한다.
+# 전역 5분 TTL로 Google RSS 호출을 억제하면서도 장중 새 헤드라인을 반영한다.
+_coin_cache: dict[str, tuple[dict, float]] = {}
 
 
 def _kst_now() -> datetime:
@@ -224,16 +228,16 @@ def get_coin_news(symbol: str) -> dict:
     if not base:
         return _envelope([], overview=None, label="코인 뉴스", query="")
     name = _COIN_KO.get(base, base)
-    day = _kst_date()
     ckey = f"coin:{base}"
-    hit = _cache.get(ckey)
-    if hit and hit[1] == day:
+    hit = _coin_cache.get(ckey)
+    if hit and hit[1] > time.time():
         return hit[0]
     query = f"{name} 코인 when:7d"
     items = _fetch_news(query, limit=6)
     env = _envelope(items, overview=None, label=f"{name} 뉴스", query=query)
     env["symbol"] = base
     env["coin_name"] = name
+    env["refresh_seconds"] = _COIN_CACHE_SECONDS
     if items:
-        _cache[ckey] = (env, day)
+        _coin_cache[ckey] = (env, time.time() + _COIN_CACHE_SECONDS)
     return env

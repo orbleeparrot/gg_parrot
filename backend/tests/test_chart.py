@@ -17,8 +17,10 @@ from app.data import NoSpotDataError
 @pytest.fixture(autouse=True)
 def _clear_cache():
     chart_mod._cache.clear()
+    chart_mod._live_cache.clear()
     yield
     chart_mod._cache.clear()
+    chart_mod._live_cache.clear()
 
 
 def _fake_candles(n=3, closed_last=False):
@@ -168,3 +170,22 @@ def test_payload_advertises_refresh_and_marks_open_bar(monkeypatch):
     assert d["refresh_seconds"] > 0
     assert d["candles"][-1]["closed"] is False  # the bar still forming
     assert all(k["closed"] for k in d["candles"][:-1])
+
+
+def test_live_edge_uses_two_candles_and_short_cache(monkeypatch):
+    seen = {"calls": 0, "limit": None}
+
+    def fake(symbol, interval, limit, market):
+        seen["calls"] += 1
+        seen["limit"] = limit
+        return _fake_candles(n=2, closed_last=False)
+
+    _patch(monkeypatch, fake)
+    first = chart_mod.get_live_candles("btcusdt", interval="1d")
+    second = chart_mod.get_live_candles("BTCUSDT", interval="1d")
+
+    assert seen == {"calls": 1, "limit": 2}
+    assert first["cached"] is False and second["cached"] is True
+    assert first["symbol"] == "BTCUSDT"
+    assert first["refresh_seconds"] == chart_mod._LIVE_REFRESH_SECONDS
+    assert first["candles"][-1]["closed"] is False

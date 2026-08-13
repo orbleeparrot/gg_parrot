@@ -166,10 +166,17 @@ export const api = {
   whaleActivity: () => req("/api/whale-activity"),
 
   // 실시간 봉차트용 최근 캔들 (서버 캐시; 마지막 봉은 진행 중이라 closed=false)
-  candles: (symbol, interval, limit) =>
+  candles: (symbol, interval, limit, market = "spot") =>
     req(
       `/api/candles?symbol=${encodeURIComponent(symbol)}` +
-        `&interval=${encodeURIComponent(interval || "1m")}&limit=${limit || 120}`
+        `&interval=${encodeURIComponent(interval || "1m")}&limit=${limit || 120}` +
+        `&market=${encodeURIComponent(market === "futures" ? "futures" : "spot")}`
+    ),
+  liveCandles: (symbol, interval, market = "spot") =>
+    req(
+      `/api/candles/live?symbol=${encodeURIComponent(symbol)}` +
+        `&interval=${encodeURIComponent(interval || "1m")}` +
+        `&market=${encodeURIComponent(market === "futures" ? "futures" : "spot")}`
     ),
 
   // 오늘의 리더보드 (daily KST paper-return board)

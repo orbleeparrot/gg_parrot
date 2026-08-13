@@ -53,3 +53,32 @@ def test_clean_title_without_matching_source():
 
 def test_limit_is_respected():
     assert len(news._parse_rss(_RSS, limit=1)) == 1
+
+
+def test_coin_news_reuses_short_ttl_cache_and_refreshes_after_expiry(monkeypatch):
+    news._coin_cache.clear()
+    calls = []
+    item = {
+        "title": "비트코인 새 소식",
+        "source": "테스트 매체",
+        "url": "https://news.example.com/btc",
+        "published": "2026-08-12T05:00:00+00:00",
+        "published_display": "10분 전",
+    }
+
+    def fake_fetch(query, *, limit):
+        calls.append((query, limit))
+        return [item]
+
+    monkeypatch.setattr(news, "_fetch_news", fake_fetch)
+    first = news.get_coin_news("BTCUSDT")
+    second = news.get_coin_news("BTCUSDT")
+
+    assert first == second
+    assert first["refresh_seconds"] == news._COIN_CACHE_SECONDS
+    assert len(calls) == 1
+
+    payload, _expires_at = news._coin_cache["coin:BTC"]
+    news._coin_cache["coin:BTC"] = (payload, 0)
+    news.get_coin_news("BTCUSDT")
+    assert len(calls) == 2

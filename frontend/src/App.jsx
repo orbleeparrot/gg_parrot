@@ -17,6 +17,7 @@ const Studio = lazy(() => import("./pages/Studio.jsx"));
 const Leaderboard = lazy(() => import("./pages/Leaderboard.jsx"));
 const Auth = lazy(() => import("./pages/Auth.jsx"));
 const MyPage = lazy(() => import("./pages/MyPage.jsx"));
+const Agents = lazy(() => import("./pages/Agents.jsx"));
 const News = lazy(() => import("./pages/News.jsx"));
 const Board = lazy(() => import("./pages/Board.jsx"));
 const BoardPost = lazy(() => import("./pages/BoardPost.jsx"));
@@ -170,6 +171,9 @@ function AuthNav() {
           <button type="button" onClick={() => { setOpen(false); navigate("/mypage"); }}>
             <strong>내 활동</strong><span>등록한 매크로와 포인트</span>
           </button>
+          <button type="button" onClick={() => { setOpen(false); navigate("/agents"); }}>
+            <strong>내 에이전트</strong><span>매크로 실행과 상태 관리</span>
+          </button>
           <button type="button" onClick={() => { setOpen(false); clearAuth(); navigate("/"); }}>
             <strong>로그아웃</strong><span>이 브라우저에서 계정 연결 끊기</span>
           </button>
@@ -198,6 +202,8 @@ function RouteChangeEffects() {
       ? "사용 가이드"
       : pathname.startsWith("/mypage")
       ? "내 활동"
+      : pathname.startsWith("/agents")
+      ? "내 에이전트"
       : pathname.startsWith("/runner")
       ? "빠른 실행"
       : pathname.startsWith("/login")
@@ -252,6 +258,7 @@ export default function App() {
   const isLegacyStart = pathname === "/runner" || pathname === "/guide";
   const isStart = isHome || isLegacyStart;
   const isNews = pathname === "/news";
+  const isAgents = pathname === "/agents";
   const authShell = ["/login", "/forgot", "/reset"].includes(pathname);
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const menuButtonRef = useRef(null);
@@ -285,7 +292,9 @@ export default function App() {
           // 나머지 본문 화면은 코인동향까지 포함해 전부 같은 게터(.site-main)를 쓴다.
           className={isStart
             ? "home-main"
-            : isNews
+            : isAgents
+                ? "site-main agent-main"
+                : isNews
                 ? "site-main news-main py-6 sm:py-8"
                 : "site-main py-6 sm:py-8"}
         >
@@ -296,6 +305,7 @@ export default function App() {
               <Route path="/builder" element={<Studio />} />
               <Route path="/s/:slug" element={<Studio />} />
               <Route path="/mypage" element={<MyPage />} />
+              <Route path="/agents" element={<Agents />} />
               <Route path="/runner" element={<LegacyStartRedirect view="runner" />} />
               <Route path="/guide" element={<LegacyStartRedirect view="help" />} />
               <Route path="/news" element={<News />} />
@@ -310,13 +320,13 @@ export default function App() {
             </Routes>
           </Suspense>
         </main>
-        {isStart ? null : (
+        {isStart || isAgents ? null : (
           <footer className="site-main pb-6 pt-2 sm:py-8 t-caption text-slate-500">
             웹 화면은 실제 주문을 보내지 않아요. 백테스트·모의 결과는 투자 조언이 아니며,
             내려받은 실행 파일의 사용 책임은 사용자에게 있어요.
           </footer>
         )}
-        {isStart || authShell ? null : <HotCoinsMarquee />}
+        {isStart || authShell || isAgents ? null : <HotCoinsMarquee />}
       </div>
     </div>
   );

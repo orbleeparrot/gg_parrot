@@ -9,19 +9,22 @@ import { RULE_TYPES } from "../lib/macro.js";
 // 내 매크로 실행 현황 — 실행기(exe)가 올리는 세션을 실시간으로 보여주고,
 // 원격 종료(매크로만 / 청산 후)를 요청한다.
 
-export function RunnerKeyPanel() {
+export function RunnerKeyPanel({ enabled = true }) {
   const [data, setData] = useState(null);
   const [revealed, setRevealed] = useState(false);
   const [err, setErr] = useState("");
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
+    if (!enabled) return undefined;
     let alive = true;
     api.runnerKey()
       .then((d) => alive && setData(d))
       .catch((e) => alive && setErr(String(e.message || e)));
     return () => { alive = false; };
-  }, []);
+  }, [enabled]);
+
+  if (!enabled) return null;
 
   async function regen() {
     if (!window.confirm("새 키를 발급하면 기존 키는 즉시 무효화돼요. 실행기에 새 키를 다시 입력해야 해요. 계속할까요?"))
@@ -168,6 +171,7 @@ function SessionCard({ s, onStop, busy }) {
           {chartOpen && (
             <CandleChart
               symbol={s.symbol}
+              market={s.market}
               defaultInterval={chartInterval}
               overlay={overlay}
             />

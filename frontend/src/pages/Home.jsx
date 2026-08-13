@@ -41,8 +41,11 @@ function HomeEntryHero({ onLeaderboard, onGuide }) {
           onClick={onLeaderboard}
           className="home-entry-choice is-primary"
         >
-          <span><strong>리더보드</strong><small>커뮤니티 인기 전략을 골라 바로 실행해요. 마음에 드는 매크로를 그대로 실행기로 돌릴 수 있어요.</small></span>
-          <span aria-hidden="true">→</span>
+          <span className="home-entry-choice-art" aria-hidden="true">
+            <img src="/brand/navigation/ggparrot-nav-leaderboard.png" alt="" width="88" height="88" draggable="false" />
+          </span>
+          <span className="home-entry-choice-copy"><strong>리더보드</strong><small>커뮤니티 인기 전략을 골라 바로 실행해요. 마음에 드는 매크로를 그대로 실행기로 돌릴 수 있어요.</small></span>
+          <span className="home-entry-choice-arrow" aria-hidden="true">→</span>
         </button>
         <button
           type="button"
@@ -51,8 +54,11 @@ function HomeEntryHero({ onLeaderboard, onGuide }) {
           onClick={onGuide}
           className="home-entry-choice"
         >
-          <span><strong>직접 만들기</strong><small>안내를 따라 종목 검색부터 전략·조건·백테스트·등록까지 순서대로 내 매크로를 만들어요.</small></span>
-          <span aria-hidden="true">→</span>
+          <span className="home-entry-choice-art" aria-hidden="true">
+            <img src="/brand/navigation/ggparrot-nav-builder.png" alt="" width="88" height="88" draggable="false" />
+          </span>
+          <span className="home-entry-choice-copy"><strong>직접 만들기</strong><small>안내를 따라 종목 검색부터 전략·조건·백테스트·등록까지 순서대로 내 매크로를 만들어요.</small></span>
+          <span className="home-entry-choice-arrow" aria-hidden="true">→</span>
         </button>
       </nav>
     </section>

@@ -6,5 +6,12 @@
     "theme": "locked GGparrot light/dark modern-minimal",
     "enrichment": "none",
     "brief": "Audit and unify header utilities, sidebar navigation, guide dialog, focus states, and small-screen behavior"
+  },
+  {
+    "date": "2026-08-13",
+    "macrostructure": "Workbench split",
+    "theme": "DESIGN.md locked",
+    "enrichment": "none",
+    "brief": "자연 높이 실시간 차트와 구독 등급이 표시되는 에이전트 발화 기록"
   }
 ]

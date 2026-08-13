@@ -610,6 +610,21 @@ def candles(
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+@app.get("/api/candles/live")
+def live_candles(
+    symbol: str,
+    interval: str = chart_mod.DEFAULT_INTERVAL,
+    market: str = "spot",
+) -> dict:
+    """Latest two public candles for the chart's moving live edge."""
+    try:
+        return chart_mod.get_live_candles(symbol, interval=interval, market=market)
+    except NoSpotDataError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @app.get("/api/hot-coins")
 def hot_coins(limit: int = 10) -> dict:
     """'오늘의 경주마' — surging + actively-traded USDT coins (Binance 24h).

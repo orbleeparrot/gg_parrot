@@ -10,32 +10,6 @@ import { ErrorNote, Loading } from "../components/Page.jsx";
 import { RunnerKeyPanel } from "../components/RunnerSessions.jsx";
 
 const NEWS_POLL_MS = 5 * 60 * 1000;
-function orderedJson(value) {
-  if (Array.isArray(value)) return value.map(orderedJson);
-  if (value && typeof value === "object") {
-    return Object.keys(value).sort().reduce((result, key) => {
-      result[key] = orderedJson(value[key]);
-      return result;
-    }, {});
-  }
-  return value;
-}
-
-function macroSignature(macro) {
-  if (!macro || typeof macro !== "object") return "";
-  try {
-    return JSON.stringify(orderedJson(macro));
-  } catch (_) {
-    return "";
-  }
-}
-
-function performanceLabel(performance) {
-  const value = performance?.return_pct;
-  if (!Number.isFinite(value)) return "집계 전";
-  const prefix = performance.kind === "backtest" ? "백테스트" : "모의";
-  return `${prefix} ${value >= 0 ? "+" : ""}${value.toFixed(2)}%`;
-}
 
 function executionMarket(macro, session) {
   if (session?.market === "futures" || session?.market === "spot") return session.market;
@@ -44,32 +18,50 @@ function executionMarket(macro, session) {
   return "spot";
 }
 
+function ruleLabel(macro) {
+  return RULE_TYPES[macro?.rule_type]?.label || macro?.rule_type || "매크로";
+}
+
+// 셀렉트 옵션 라벨: 실행 중 세션을 종목·전략·(테스트넷) 기준으로 표기한다.
+function sessionOptionLabel(session) {
+  const prefix = session.connected ? "" : "응답대기 · ";
+  const net = session.testnet ? " · 테스트넷" : "";
+  return `${prefix}${session.symbol} · ${ruleLabel(session.macro)}${net}`;
+}
+
+function statusText(session) {
+  if (session.stopping) return "종료 처리 중…";
+  if (session.in_position) {
+    const pct = Number(session.unrealized_pct ?? 0);
+    return `보유 중 · 평가손익 ${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`;
+  }
+  return session.connected ? "실행 중 · 무포지션" : "응답 확인 중";
+}
+
 function MacroDock({
-  items,
+  sessions,
   selected,
-  currentSession,
-  runningIds,
   busy,
   connectionOpen,
   onConnectionToggle,
   onChange,
   onStop,
 }) {
-  const running = currentSession?.status === "running";
-  const connected = running && currentSession.connected;
   const macro = selected.macro || {};
   const interval = macro.candle_interval || "1d";
-  const market = executionMarket(macro, currentSession);
+  const market = executionMarket(macro, selected);
+  const connected = selected.connected;
+  const stopping = selected.stopping;
 
   return (
-    <section className="agent-macro-dock" aria-label="내 매크로 선택과 실행">
+    <section className="agent-macro-dock" aria-label="실행 중 매크로 선택과 종료">
       <label className="agent-macro-dock-picker">
-        <span>내 매크로</span>
+        <span>실행 중 매크로</span>
         <span className="agent-macro-select-wrap">
-          <select value={selected.id} onChange={(event) => onChange(event.target.value)}>
-            {items.map((item) => (
-              <option key={item.id} value={item.id}>
-                {runningIds.has(String(item.id)) ? "실행 중 · " : ""}{item.name} · {item.symbol}
+          <select value={String(selected.session_id)} onChange={(event) => onChange(event.target.value)}>
+            {sessions.map((session) => (
+              <option key={session.session_id} value={String(session.session_id)}>
+                {sessionOptionLabel(session)}
               </option>
             ))}
           </select>
@@ -78,15 +70,15 @@ function MacroDock({
       </label>
 
       <div className="agent-macro-dock-summary">
-        <strong><b className="num">{selected.symbol}</b> {selected.name}</strong>
+        <strong><b className="num">{selected.symbol}</b> {ruleLabel(macro)}</strong>
         <span>
-          {RULE_TYPES[selected.rule_type]?.label || selected.rule_type} · <b className="num">{interval}</b> · {market === "futures" ? `선물 ${macro.leverage || 1}배` : "현물"}
+          <b className="num">{interval}</b> · {market === "futures" ? `선물 ${macro.leverage || selected.leverage || 1}배` : "현물"} · {selected.position_side === "short" ? "숏" : "롱"}
         </span>
       </div>
 
-      <div className="agent-macro-dock-status" aria-label={`실행 상태: ${connected ? "실행 중" : running ? "응답 확인 중" : "실행 대기"}`}>
-        <i className={`agent-live-dot ${connected ? "is-running" : running ? "is-checking" : ""}`} aria-hidden="true" />
-        <span>{connected ? "실행 중" : running ? "응답 확인 중" : performanceLabel(selected.performance)}</span>
+      <div className="agent-macro-dock-status" aria-label={`실행 상태: ${statusText(selected)}`}>
+        <i className={`agent-live-dot ${connected ? "is-running" : "is-checking"}`} aria-hidden="true" />
+        <span>{statusText(selected)}</span>
       </div>
 
       <div className="agent-macro-dock-actions">
@@ -100,18 +92,8 @@ function MacroDock({
             <RunnerKeyPanel enabled={connectionOpen} />
           </div>
         </details>
-        {running ? (
-          <details className="agent-run-menu">
-            <summary className="btn btn-m btn-secondary">실행 관리</summary>
-            <div className="agent-run-popover">
-              <strong>실행 중인 매크로</strong>
-              <button type="button" disabled={busy || currentSession.stopping} onClick={() => onStop("stop_only")} className="btn btn-m btn-secondary">매크로만 종료</button>
-              <button type="button" disabled={busy || currentSession.stopping} onClick={() => onStop("close_and_stop")} className="btn btn-m btn-danger">청산 후 종료</button>
-            </div>
-          </details>
-        ) : (
-          <Link to="/?run=1&step=1" state={{ selectedMacroId: selected.id }} className="btn btn-m btn-primary">매크로 실행</Link>
-        )}
+        <button type="button" disabled={busy || stopping} onClick={() => onStop("stop_only")} className="btn btn-m btn-secondary">매크로만 종료</button>
+        <button type="button" disabled={busy || stopping} onClick={() => onStop("close_and_stop")} className="btn btn-m btn-danger">청산 후 종료</button>
       </div>
     </section>
   );
@@ -129,13 +111,13 @@ function WorkspaceTabs({ selected, onSelect }) {
 function EmptyLibrary() {
   return (
     <section className="agent-empty">
-      <p className="t-caption text-slate-500">연결할 매크로 없음</p>
-      <h2 className="t-h3 text-slate-900">먼저 내 계정에 매크로를 추가해 주세요.</h2>
+      <p className="t-caption text-slate-500">실행 중 매크로 없음</p>
+      <h2 className="t-h3 text-slate-900">지금 실행기에서 구동 중인 매크로가 없어요.</h2>
       <p className="t-small text-slate-700 measure">
-        리더보드의 매크로를 가져오거나 직접 만든 매크로를 저장하면 이 화면에서 하나씩 선택해 관리할 수 있어요.
+        껄무새 매크로 실행기에 매크로 파일(.ggm.json)을 넣고 시작하면, 이 화면에서 실시간 차트와 함께 상태를 확인하고 바로 종료할 수 있어요.
       </p>
       <div className="agent-empty-actions">
-        <Link to="/leaderboard" className="btn btn-l btn-primary">리더보드 둘러보기</Link>
+        <Link to="/?run=1&step=1" className="btn btn-l btn-primary">실행 가이드 보기</Link>
         <Link to="/builder" className="btn btn-l btn-secondary">직접 만들기</Link>
       </div>
     </section>
@@ -146,7 +128,6 @@ export default function Agents() {
   const { token } = useAuth();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [macros, setMacros] = useState(null);
   const [sessions, setSessions] = useState(null);
   const [chartSnapshot, setChartSnapshot] = useState(null);
   const [news, setNews] = useState({ status: "idle", symbol: "", data: null, error: "" });
@@ -199,11 +180,10 @@ export default function Agents() {
       return undefined;
     }
     let alive = true;
-    Promise.all([api.myMacros(), api.runnerSessions()])
-      .then(([macroData, sessionData]) => {
+    api.runnerSessions()
+      .then((data) => {
         if (!alive) return;
-        setMacros(Array.isArray(macroData?.items) ? macroData.items : []);
-        setSessions(sessionData);
+        setSessions(data);
         setError("");
       })
       .catch((reason) => {
@@ -222,36 +202,19 @@ export default function Agents() {
     return () => window.clearTimeout(sessionTimer.current);
   }, [loadSessions, token]);
 
-  const sessionIndex = useMemo(() => {
-    const index = new Map();
-    const all = [...(sessions?.active || []), ...(sessions?.recent || [])];
-    all.forEach((session) => {
-      const signature = macroSignature(session.macro);
-      if (!signature) return;
-      if (!index.has(signature)) index.set(signature, []);
-      index.get(signature).push(session);
-    });
-    return index;
-  }, [sessions]);
-
-  const selectedId = searchParams.get("macro");
-  const activeSignatures = useMemo(
-    () => new Set((sessions?.active || []).map((session) => macroSignature(session.macro)).filter(Boolean)),
-    [sessions],
-  );
+  // 선택의 소스는 '실행기에서 실제 구동 중인 세션'이다. 저장된 매크로 라이브러리가
+  // 아니라 러너가 보고하는 active 세션을 그대로 쓰므로 실행 정보와 항상 일치한다.
+  const activeSessions = useMemo(() => sessions?.active || [], [sessions]);
+  const selectedId = searchParams.get("session");
   const selected = useMemo(() => {
-    if (!macros?.length) return null;
-    const requested = macros.find((item) => String(item.id) === selectedId);
-    if (requested) return requested;
-    const activeSession = (sessions?.active || []).find((session) => session.status === "running");
-    const activeSignature = macroSignature(activeSession?.macro);
-    return macros.find((item) => activeSignature && macroSignature(item.macro) === activeSignature) || macros[0];
-  }, [macros, selectedId, sessions]);
+    if (!activeSessions.length) return null;
+    return activeSessions.find((session) => String(session.session_id) === selectedId) || activeSessions[0];
+  }, [activeSessions, selectedId]);
 
   useEffect(() => {
-    if (!selected || String(selected.id) === selectedId) return;
+    if (!selected || String(selected.session_id) === selectedId) return;
     const next = new URLSearchParams(searchParams);
-    next.set("macro", String(selected.id));
+    next.set("session", String(selected.session_id));
     setSearchParams(next, { replace: true });
   }, [searchParams, selected, selectedId, setSearchParams]);
 
@@ -269,41 +232,35 @@ export default function Agents() {
       newsRequest.current += 1;
       window.clearTimeout(newsTimer.current);
     };
-  }, [loadNews, selected?.id, selected?.symbol]);
+  }, [loadNews, selected?.session_id, selected?.symbol]);
 
-  const runningIds = useMemo(() => {
-    return new Set((macros || []).filter((item) => activeSignatures.has(macroSignature(item.macro))).map((item) => String(item.id)));
-  }, [activeSignatures, macros]);
-
-  const selectedSessions = selected ? (sessionIndex.get(macroSignature(selected.macro)) || []) : [];
-  const currentSession = selectedSessions.find((session) => session.status === "running") || selectedSessions[0] || null;
   const macro = selected?.macro || null;
   const interval = macro?.candle_interval || "1d";
-  const market = executionMarket(macro, currentSession);
+  const market = executionMarket(macro, selected);
   const activeChart = chartSnapshot?.symbol === selected?.symbol ? chartSnapshot : null;
   const activeNews = news.symbol === selected?.symbol ? news : { status: "idle", data: null, error: "" };
 
   const chartOverlay = useCallback((candles) => computeSessionOverlay(
     macro,
-    currentSession?.in_position ? currentSession.entry_price : null,
-    currentSession?.position_side || macro?.position_side,
+    selected?.in_position ? selected.entry_price : null,
+    selected?.position_side || macro?.position_side,
     candles,
-  ), [currentSession?.entry_price, currentSession?.in_position, currentSession?.position_side, macro]);
+  ), [macro, selected?.entry_price, selected?.in_position, selected?.position_side]);
 
-  function changeMacro(id) {
+  function changeSession(id) {
     const next = new URLSearchParams(searchParams);
-    next.set("macro", String(id));
+    next.set("session", String(id));
     setSearchParams(next);
     setMobilePane("chart");
   }
 
   async function stopSession(mode) {
-    if (!currentSession) return;
+    if (!selected) return;
     const label = mode === "close_and_stop" ? "청산 후 종료" : "매크로만 종료";
     if (!window.confirm(`${label} 할까요? 실행기가 다음 확인에서 반영해요.`)) return;
     setBusy(true);
     try {
-      await api.runnerRequestStop(currentSession.session_id, mode);
+      await api.runnerRequestStop(selected.session_id, mode);
       await loadSessions();
     } catch (reason) {
       setError(String(reason.message || reason));
@@ -313,12 +270,12 @@ export default function Agents() {
   }
 
   if (!token) return null;
-  if (!macros && !error) return <Loading label="내 에이전트 화면을 준비하는 중…" />;
+  if (!sessions && !error) return <Loading label="실행 중인 매크로를 불러오는 중…" />;
 
   return (
     <div className="agent-page">
       {error ? <ErrorNote>실행 상태 오류: {error}</ErrorNote> : null}
-      {macros?.length === 0 ? <EmptyLibrary /> : null}
+      {sessions && activeSessions.length === 0 ? <EmptyLibrary /> : null}
 
       {selected ? (
         <div className="agent-workspace">
@@ -327,7 +284,7 @@ export default function Agents() {
             <section className="agent-chart-pane" aria-label={`${selected.symbol} 실시간 차트`}>
               <div className="agent-chart-stage">
                 <CandleChart
-                  key={`${selected.id}-${market}`}
+                  key={`${selected.session_id}-${market}`}
                   symbol={selected.symbol}
                   market={market}
                   defaultInterval={interval}
@@ -339,23 +296,21 @@ export default function Agents() {
               </div>
 
               <MacroDock
-                items={macros}
+                sessions={activeSessions}
                 selected={selected}
-                currentSession={currentSession}
-                runningIds={runningIds}
                 busy={busy}
                 connectionOpen={connectionSettingsOpen}
                 onConnectionToggle={setConnectionSettingsOpen}
-                onChange={changeMacro}
+                onChange={changeSession}
                 onStop={stopSession}
               />
             </section>
 
             <AgentActivityStream
-              key={selected.id}
+              key={selected.session_id}
               symbol={selected.symbol}
               macro={macro}
-              session={currentSession}
+              session={selected}
               candles={activeChart?.candles || []}
               interval={activeChart?.interval || interval}
               observedAt={activeChart?.serverTime || 0}

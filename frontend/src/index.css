@@ -476,7 +476,7 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   z-index: 4;
   display: grid;
   min-height: 82px;
-  grid-template-columns: minmax(230px, 1.15fr) minmax(180px, 1fr) minmax(120px, .55fr) auto;
+  grid-template-columns: minmax(220px, 1fr) auto auto;
   align-items: center;
   gap: 0;
   padding: 0;
@@ -517,67 +517,9 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   stroke-linejoin: round;
   pointer-events: none;
 }
-.agent-macro-dock-summary { display: grid; min-width: 0; align-content: center; }
-.agent-macro-dock-summary strong,
-.agent-macro-dock-summary span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.agent-macro-dock-summary strong { color: rgb(var(--c-slate-900)); font-size: 15px; font-weight: 750; }
-.agent-macro-dock-summary strong b { margin-right: 5px; }
-.agent-macro-dock-summary span { margin-top: 5px; color: rgb(var(--c-slate-500)); font-size: 13px; font-weight: 600; }
 .agent-macro-dock-status { display: flex; align-items: center; gap: 8px; color: rgb(var(--c-slate-700)); font-size: 13px; font-weight: 700; white-space: nowrap; }
 .agent-macro-dock-actions { display: flex; align-items: center; justify-content: flex-end; gap: 7px; white-space: nowrap; }
 .agent-macro-dock-actions .btn { min-height: 44px; padding-inline: 12px; }
-
-.agent-connection-menu { position: relative; }
-.agent-run-menu { position: relative; }
-.agent-run-menu > summary { list-style: none; cursor: pointer; }
-.agent-run-menu > summary::-webkit-details-marker { display: none; }
-.agent-connection-menu > summary {
-  display: flex;
-  min-height: 44px;
-  align-items: center;
-  padding-inline: 10px;
-  border: 1px solid transparent;
-  border-radius: 10px;
-  color: rgb(var(--c-slate-600));
-  font-size: 13px;
-  font-weight: 700;
-  cursor: pointer;
-  list-style: none;
-}
-.agent-connection-menu > summary::-webkit-details-marker { display: none; }
-.agent-connection-menu > summary:hover,
-.agent-connection-menu[open] > summary { border-color: rgb(var(--c-slate-300)); background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-900)); }
-.agent-connection-menu > summary:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
-.agent-connection-popover {
-  position: absolute;
-  right: 0;
-  bottom: calc(100% + 10px);
-  z-index: 20;
-  width: min(520px, 72vw);
-  padding: 14px;
-  border: 1px solid rgb(var(--c-slate-300));
-  border-radius: 12px;
-  background: rgb(var(--c-surface));
-  box-shadow: var(--shadow-dialog);
-  white-space: normal;
-}
-.agent-run-popover {
-  position: absolute;
-  right: 0;
-  bottom: calc(100% + 10px);
-  z-index: 20;
-  display: grid;
-  width: 210px;
-  gap: 8px;
-  padding: 12px;
-  border: 1px solid rgb(var(--c-slate-300));
-  border-radius: 12px;
-  background: rgb(var(--c-surface));
-  box-shadow: var(--shadow-dialog);
-  white-space: normal;
-}
-.agent-run-popover > strong { margin-bottom: 2px; color: rgb(var(--c-slate-900)); font-size: 13px; }
-.agent-run-popover .btn { width: 100%; }
 
 .agent-live-dot {
   display: inline-block;
@@ -894,12 +836,7 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 .agent-empty p.measure { margin-top: 12px; }
 .agent-empty-actions { display: flex; gap: 10px; margin-top: 24px; }
 
-@container macro-dock (max-width: 760px) {
-  .agent-macro-dock { grid-template-columns: minmax(200px, 1fr) auto auto; }
-  .agent-macro-dock-summary { display: none; }
-}
-
-@container macro-dock (max-width: 610px) {
+@container macro-dock (max-width: 560px) {
   .agent-macro-dock { grid-template-columns: minmax(180px, 1fr) auto; }
   .agent-macro-dock-status { display: none; }
 }
@@ -973,7 +910,6 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   .agent-macro-dock > * { min-height: 60px; }
   .agent-macro-dock > * + * { border-top: 0; border-left: 1px solid rgb(var(--c-slate-200)); }
   .agent-macro-dock-actions { display: flex; }
-  .agent-connection-menu { display: none; }
   .agent-chart-stage > div { padding-top: 4px; }
 }
 
@@ -2215,6 +2151,26 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 .site-account-root {
   display: flex;
   align-items: center;
+}
+
+.site-runnerkey-root {
+  display: flex;
+  align-items: center;
+}
+.site-runnerkey-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 70;
+  width: 360px;
+  padding: 12px;
+  border: 1px solid rgb(var(--c-slate-300));
+  border-radius: 16px;
+  background: rgb(var(--c-surface));
+  box-shadow: 0 18px 48px rgb(5 12 22 / 0.22);
+}
+@media (max-width: 767px) {
+  .site-runnerkey-panel { position: fixed; top: 72px; right: 12px; left: 12px; width: auto; }
 }
 
 .theme-switch {
@@ -6898,3 +6854,43 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
     transform: none;
   }
 }
+
+/* 사용법 안내 — 프로덕트 투어(스포트라이트 + 단계 카드) */
+.tour-root { position: fixed; inset: 0; z-index: 200; pointer-events: none; }
+.tour-dim { position: fixed; inset: 0; background: rgb(2 6 12 / 0.55); }
+.tour-spotlight {
+  position: fixed;
+  border-radius: 12px;
+  box-shadow: 0 0 0 9999px rgb(2 6 12 / 0.55);
+  outline: 2px solid rgb(var(--c-brand-line));
+  outline-offset: 2px;
+}
+.tour-card {
+  position: fixed;
+  z-index: 201;
+  width: min(340px, calc(100vw - 24px));
+  padding: 16px 16px 14px;
+  border: 1px solid rgb(var(--c-slate-300));
+  border-radius: 14px;
+  background: rgb(var(--c-surface));
+  box-shadow: 0 18px 48px rgb(5 12 22 / 0.28);
+  pointer-events: auto;
+}
+.tour-card-top { display: flex; align-items: center; justify-content: space-between; }
+.tour-card-step { color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 700; }
+.tour-card-close {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; margin: -6px -6px 0 0;
+  border: 0; border-radius: 8px; background: transparent;
+  color: rgb(var(--c-slate-500)); font-size: 20px; line-height: 1; cursor: pointer;
+}
+.tour-card-close:hover { background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-900)); }
+.tour-card-title { margin-top: 4px; color: rgb(var(--c-slate-900)); font-size: 16px; font-weight: 750; }
+.tour-card-body { margin-top: 8px; color: rgb(var(--c-slate-700)); font-size: 13px; line-height: 1.6; }
+.tour-card-actions { margin-top: 14px; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.tour-skip {
+  border: 0; background: transparent; padding: 6px 2px;
+  color: rgb(var(--c-slate-500)); font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.tour-skip:hover { color: rgb(var(--c-slate-900)); text-decoration: underline; text-underline-offset: 3px; }
+.tour-nav { display: flex; align-items: center; gap: 8px; }

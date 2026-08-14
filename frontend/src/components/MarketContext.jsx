@@ -169,7 +169,7 @@ export default function MarketContext() {
   const waterValue = water == null ? (hangang.loading ? "…" : "—") : `${water.toFixed(1)}°C`;
 
   return (
-    <div ref={rootRef} className="market-context-topbar">
+    <div ref={rootRef} className="market-context-topbar" data-tour="market-briefing">
       <button
         ref={triggerRef}
         type="button"

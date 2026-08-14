@@ -7,7 +7,7 @@ import PaperPanel from "../components/PaperPanel.jsx";
 import CandleChart from "../components/CandleChart.jsx";
 import OptimizePanel from "../components/OptimizePanel.jsx";
 import RegisterMacroModal from "../components/RegisterMacroModal.jsx";
-import JourneySteps from "../components/JourneySteps.jsx";
+import ProductTour from "../components/ProductTour.jsx";
 import { PageHeader } from "../components/Page.jsx";
 import { api } from "../api.js";
 import { useAuth } from "../lib/auth.js";
@@ -22,13 +22,56 @@ import {
 import { computeStrategyOverlay } from "../lib/indicators.js";
 import {
   completeJourney,
-  isJourneyComplete,
   peekRegistrationDraft,
   readHeroDraft,
   takeRegistrationDraft,
 } from "../lib/journey.js";
 
 const MAX_MACRO_FILE_BYTES = 2 * 1024 * 1024;
+
+// '사용법 안내' 프로덕트 투어 단계. 각 anchor 는 화면의 data-tour 요소를 가리킨다.
+const TOUR_STEPS = [
+  {
+    anchor: "market-briefing",
+    title: "시장 브리핑",
+    body: "먼저 시장 분위기를 확인해요. ‘시장 브리핑 보기’를 누르면 김치 프리미엄(국내외 가격 차이 · +김프/−역프)과 공포·탐욕 지수(0~100, 시장 심리)를 볼 수 있어요. 매매 전 참고용 지표예요.",
+  },
+  {
+    anchor: "symbol",
+    title: "종목 입력",
+    body: "확인할 코인을 정해요. 예: BTCUSDT. 여러 종목은 쉼표로 나눠 쓰면 자금을 종목 수만큼 균등하게 나눠 확인해요.",
+  },
+  {
+    anchor: "strategy",
+    title: "매매 방식 선택",
+    body: "이동평균 크로스·볼린저·RSI 등 원하는 전략을 골라요. 라벨 옆 ⓘ에 마우스를 올리면 각 매매 방식이 어떤 규칙인지 설명을 확인할 수 있어요.",
+  },
+  {
+    anchor: "chart",
+    title: "실시간 차트 · 보조지표",
+    body: "지금 고른 종목의 실시간 시세를 보여줘요. 선택한 매매 방식의 보조지표(예: 이동평균·볼린저 밴드)가 함께 그려지고, 아래 설정값을 바꾸면 보조지표도 즉시 따라 바뀌는 걸 확인할 수 있어요.",
+  },
+  {
+    anchor: "position",
+    title: "포지션",
+    body: "오를 때 버는 롱(long), 내릴 때 버는 숏(short)을 정해요. 전략에 따라 숏이 막혀 있을 수 있어요.",
+  },
+  {
+    anchor: "interval",
+    title: "봉 간격",
+    body: "지표 계산과 체결을 판정하는 캔들 단위예요. 1분·1시간·1일처럼 전략에 맞는 시간 단위를 골라요.",
+  },
+  {
+    anchor: "period",
+    title: "테스트 기간",
+    body: "과거 어느 구간의 데이터로 확인할지 정해요. 최근 1년·6개월·3개월 또는 직접 기간을 지정할 수 있어요.",
+  },
+  {
+    anchor: "leverage",
+    title: "레버리지",
+    body: "배수를 올리면 수익도 손실도 그만큼 커지고 청산 위험이 생겨요. 1배는 현물과 같아 청산이 없어요. 백테스트·모의에서만 적용돼요.",
+  },
+];
 
 function macroKey(macro) {
   return JSON.stringify(macro);
@@ -54,7 +97,7 @@ function ChartDisclosure({ symbols, form }) {
 
   if (symbols.length === 0) return null;
   return (
-    <section className="border-y border-slate-200">
+    <section className="border-y border-slate-200" data-tour="chart">
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
@@ -115,10 +158,7 @@ export default function Studio() {
       return !!draft && draft.context?.origin !== "hero";
     }
   );
-  const [journeyDone, setJourneyDone] = useState(isJourneyComplete);
-  const [guideOpen, setGuideOpen] = useState(
-    () => searchParams.get("guide") === "1"
-  );
+  const [tourOpen, setTourOpen] = useState(false);
   const [fileImportBusy, setFileImportBusy] = useState(false);
   const [fileImportError, setFileImportError] = useState("");
   const [fileImportSuccess, setFileImportSuccess] = useState("");
@@ -129,12 +169,6 @@ export default function Studio() {
   const latestTestedKeyRef = useRef("");
   const resumeRequestIdRef = useRef(0);
   const processedEntryQueryRef = useRef("");
-  const guideContentId = useId();
-  const guideRequested = searchParams.get("guide") === "1";
-
-  useEffect(() => {
-    if (guideRequested) setGuideOpen(true);
-  }, [guideRequested]);
 
   const valErr = validate(form);
   const currentMacro = useMemo(() => buildMacro(form), [form]);
@@ -283,7 +317,6 @@ export default function Studio() {
 
       setForm(restored);
       setRegistrationMode(draft.context?.mode === "replay" ? "replay" : "live");
-      setGuideOpen(true);
       setLoadedFrom("로그인 완료 · 등록 전 결과를 다시 확인하는 중");
       runBacktest(restored).then((ok) => {
         if (resumeRequestId !== resumeRequestIdRef.current || !ok) return;
@@ -302,7 +335,6 @@ export default function Studio() {
       try {
         setForm(macroToForm(heroMacro));
         setLoadedFrom("시작 가이드에서 고른 설정");
-        setGuideOpen(true);
       } catch (_) {
         setError("시작 가이드 설정을 읽지 못했어요. 조건을 다시 정해 주세요.");
       }
@@ -418,7 +450,6 @@ export default function Studio() {
       setShare(null);
       setLoadedFrom(`내 매크로 등록 완료 · ${data?.item?.name || name}`);
       setError("");
-      setGuideOpen(true);
       setFileImportSuccess("내 매크로에 등록하고 아래 조건 편집기에 불러왔어요. 백테스트로 설정을 다시 확인해 주세요.");
     } catch (reason) {
       const message = String(reason.message || reason);
@@ -464,7 +495,6 @@ export default function Studio() {
 
   function finishRegistration(entry) {
     completeJourney();
-    setJourneyDone(true);
     setRegisterOpen(false);
     navigate("/leaderboard", {
       replace: true,
@@ -476,8 +506,6 @@ export default function Studio() {
     setRegistrationMode(mode === "replay" ? "replay" : "live");
     setRegisterOpen(true);
   }
-
-  const journeyStage = journeyDone ? 3 : resultIsFresh ? 2 : busy && testedMacro ? 1 : 0;
 
   return (
     <div>
@@ -521,43 +549,16 @@ export default function Studio() {
         </section>
       ) : null}
 
-      <section className="mb-8 border-y border-slate-200" aria-labelledby="studio-guide-title">
-        <button
-          type="button"
-          onClick={() => setGuideOpen((value) => !value)}
-          className="w-full py-3 flex items-center justify-between gap-3 text-left"
-          aria-expanded={guideOpen}
-          aria-controls={guideContentId}
-        >
-          <span>
-            <span id="studio-guide-title" className="t-label text-slate-900">처음이라면 이 순서로 진행해요</span>
-            <span className="ml-2 t-caption text-slate-500 num">{Math.min(journeyStage + 1, 3)}/3</span>
-          </span>
-          <span className="t-caption text-slate-400" aria-hidden="true">{guideOpen ? "접기 ↑" : "펼치기 ↓"}</span>
-        </button>
-        {guideOpen ? (
-          <div id={guideContentId} className="pb-5">
-            <JourneySteps current={journeyStage} compact />
-            <div className="mt-4 flex items-center justify-between gap-4 flex-wrap">
-              <p className="t-small text-slate-700">
-                {journeyDone
-                  ? "등록이 끝났어요. 리더보드에서 모의 수익률이 집계돼요."
-                  : resultIsFresh
-                  ? "방금 확인한 설정이 고정됐어요. 이 설정 그대로 등록할 수 있어요."
-                  : testedMacro
-                  ? "백테스트 뒤 설정이 바뀌었어요. 바뀐 조건을 다시 확인해야 등록할 수 있어요."
-                  : "기본값으로 시작해도 돼요. 종목과 전략을 확인한 뒤 백테스트를 실행해요."}
-              </p>
-              {journeyDone ? (
-                <Link to="/leaderboard" className="btn btn-m btn-secondary">등록한 항목 보기</Link>
-              ) : resultIsFresh ? (
-                <button onClick={() => openRegistration()} className="btn btn-m btn-secondary">
-                  이 설정으로 등록
-                </button>
-              ) : null}
-            </div>
+      <section className="mb-8 border-y border-slate-200">
+        <div className="py-3 flex items-center justify-between gap-3 flex-wrap">
+          <div>
+            <span className="t-label text-slate-900">처음이신가요?</span>
+            <span className="ml-2 t-small text-slate-500">화면을 순서대로 짚어가며 사용법을 안내해 드려요.</span>
           </div>
-        ) : null}
+          <button type="button" onClick={() => setTourOpen(true)} className="btn btn-m btn-secondary">
+            사용법 안내
+          </button>
+        </div>
       </section>
 
       {hasRegistrationDraft ? (
@@ -714,6 +715,8 @@ export default function Studio() {
           onDone={finishRegistration}
         />
       ) : null}
+
+      <ProductTour steps={TOUR_STEPS} open={tourOpen} onClose={() => setTourOpen(false)} />
     </div>
   );
 }

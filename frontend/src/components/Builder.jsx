@@ -25,7 +25,7 @@ function leverageRisk(lev) {
 }
 
 // §4 자리별 적용표: 입력 라벨 14/600, 도움말 14/500 — 둘 다 '작은 글씨' 단계.
-function Field({ label, term, children, hint }) {
+function Field({ label, term, children, hint, anchor }) {
   const controlId = useId();
   const labelId = `${controlId}-label`;
   const hintId = `${controlId}-hint`;
@@ -45,6 +45,7 @@ function Field({ label, term, children, hint }) {
   return (
     <div
       className="block"
+      data-tour={anchor}
       role={directControl ? undefined : "group"}
       aria-labelledby={directControl ? undefined : labelId}
       aria-describedby={!directControl && hint ? hintId : undefined}
@@ -65,9 +66,9 @@ function Field({ label, term, children, hint }) {
 
 // 빌더의 입력 묶음. 상자로 감싸지 않고 괘선 + 제목으로만 나눈다(§1-3) —
 // 폼 상자 예외는 화면 전체를 감싸는 폼(로그인·모달)에만 적용한다.
-function Group({ title, term, children, note }) {
+function Group({ title, term, children, note, anchor }) {
   return (
-    <section className="pt-5 border-t border-slate-200">
+    <section className="pt-5 border-t border-slate-200" data-tour={anchor}>
       <div className="flex items-center text-slate-700 mb-3">
         <h3 className="t-title">{title}</h3>
         {term && <InfoTooltip term={term} />}
@@ -112,12 +113,12 @@ export default function Builder({ form, setForm }) {
   // Field builders — plain functions (invoked, not JSX components) so inputs
   // keep focus across keystrokes. They close over the current `form`.
   const num = (k, label, opts = {}) => (
-    <Field key={k} label={label} term={opts.term} hint={opts.hint}>
+    <Field key={k} label={label} term={opts.term} hint={opts.hint} anchor={opts.anchor}>
       <input className="field num" type="number" step={opts.step || "any"} value={form[k]} onChange={set(k)} />
     </Field>
   );
   const sel = (k, label, options, opts = {}) => (
-    <Field key={k} label={label} term={opts.term} hint={opts.hint}>
+    <Field key={k} label={label} term={opts.term} hint={opts.hint} anchor={opts.anchor}>
       <select className={inputCls} value={form[k]} onChange={set(k)}>
         {options.map((o) => (
           <option key={o.value} value={o.value}>{o.label}</option>
@@ -145,10 +146,10 @@ export default function Builder({ form, setForm }) {
         <p className="mt-1 t-small text-slate-500">무엇을, 어떤 규칙으로, 어느 기간에 확인할지 정해요.</p>
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 gap-y-5">
-        <Field label="종목" hint="여러 종목은 쉼표로 나눠 써요. 자금은 종목 수만큼 균등하게 나눠요.">
+        <Field label="종목" anchor="symbol" hint="여러 종목은 쉼표로 나눠 써요. 자금은 종목 수만큼 균등하게 나눠요.">
           <input className={inputCls} value={form.symbol} onChange={set("symbol")} placeholder="BTCUSDT 또는 BTCUSDT, ETHUSDT" />
         </Field>
-        <Field label="매매 방식" term={`strat_${rt}`}>
+        <Field label="매매 방식" anchor="strategy" term={`strat_${rt}`}>
           <select className={inputCls} value={rt} onChange={(e) => setForm(withTypeDefaults(form, e.target.value))}>
             {Object.entries(RULE_TYPES).map(([k, v]) => (
               <option key={k} value={k}>{v.label}</option>
@@ -160,6 +161,7 @@ export default function Builder({ form, setForm }) {
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <Field
           label="포지션"
+          anchor="position"
           hint={
             <span className="inline-flex items-center flex-wrap">
               롱 <InfoTooltip term="long" />
@@ -174,9 +176,10 @@ export default function Builder({ form, setForm }) {
         </Field>
         {sel("candle_interval", "봉 간격", CANDLE_INTERVALS, {
           term: "candle_interval",
+          anchor: "interval",
           hint: meta.indicator ? "지표 계산 기준(필수)" : "체결 판정 기준",
         })}
-        <Field label="테스트 기간" term="backtest">
+        <Field label="테스트 기간" anchor="period" term="backtest">
           <select className={inputCls} value={form.preset} onChange={set("preset")}>
             {PERIOD_PRESETS.map((p) => (
               <option key={p.value} value={p.value}>{p.label}</option>
@@ -204,6 +207,7 @@ export default function Builder({ form, setForm }) {
           <Group
             title="레버리지"
             term="leverage"
+            anchor="leverage"
             note={<span className="ml-2 t-caption text-slate-500">격리(isolated) · 백테스트·모의만</span>}
           >
             <div className="flex items-center gap-4">

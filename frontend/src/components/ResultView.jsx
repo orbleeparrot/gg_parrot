@@ -4,6 +4,8 @@ import InfoTooltip from "./InfoTooltip.jsx";
 import { fmtMoney, fmtMoneyCompact, fmtKrw } from "../lib/format.js";
 import { useUsdKrw } from "../lib/usdkrw.js";
 
+const AI_EXPLAIN_MASCOT = "/brand/navigation/ggparrot-nav-agent.png";
+
 // mascot mood -> accent color for the AI analysis card (neutral fallback).
 const MOOD_ACCENT = {
   idle: "text-slate-700",
@@ -27,7 +29,15 @@ function ParrotExplain({ explanation, onAiExplain, aiBusy, aiError }) {
     return (
       <div className="notice py-2">
         <div className="flex items-start gap-3">
-          <div className="text-2xl leading-none select-none" aria-hidden>🦜</div>
+          <img
+            src={AI_EXPLAIN_MASCOT}
+            alt=""
+            width="256"
+            height="256"
+            className="h-10 w-10 shrink-0 object-contain"
+            aria-hidden="true"
+            draggable="false"
+          />
           <div className="min-w-0 flex-1">
             <div className="t-caption text-slate-500 mb-1">껄무새 AI 해설</div>
             <div className={"t-title " + accent}>{explanation.headline}</div>
@@ -65,9 +75,20 @@ function ParrotExplain({ explanation, onAiExplain, aiBusy, aiError }) {
   return (
     <div className="pt-4 border-t border-slate-200">
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className="min-w-0">
-          <div className="t-title text-slate-900">🦜 껄무새 AI 해설</div>
-          <div className="mt-1 t-small text-slate-500">이 결과가 왜 이렇게 나왔는지 쉽게 정리해줘요</div>
+        <div className="flex min-w-0 items-center gap-3">
+          <img
+            src={AI_EXPLAIN_MASCOT}
+            alt=""
+            width="256"
+            height="256"
+            className="h-12 w-12 shrink-0 object-contain"
+            aria-hidden="true"
+            draggable="false"
+          />
+          <div className="min-w-0">
+            <div className="t-title text-slate-900">껄무새 AI 해설</div>
+            <div className="mt-1 t-small text-slate-500">이 결과가 왜 이렇게 나왔는지 쉽게 정리해줘요</div>
+          </div>
         </div>
         <button
           type="button"

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+import types
 import unittest
 from unittest.mock import Mock, patch
 
@@ -12,11 +14,23 @@ try:
 except ModuleNotFoundError as exc:
     if exc.name != "tkinter":
         raise
-    macro_runner = None
-    RunnerApp = object
+    # The identity/state tests do not construct a GUI. A tiny import stub lets
+    # them run on headless Linux CI images that omit the optional Tk package.
+    tkinter_stub = types.ModuleType("tkinter")
+    tkinter_stub.Tk = object
+    tkinter_stub.TclError = RuntimeError
+    tkinter_stub.filedialog = types.SimpleNamespace(askopenfilename=lambda **_kwargs: "")
+    tkinter_stub.messagebox = types.SimpleNamespace(
+        showwarning=lambda *_args, **_kwargs: None,
+        showerror=lambda *_args, **_kwargs: None,
+        askyesno=lambda *_args, **_kwargs: False,
+    )
+    tkinter_stub.ttk = types.SimpleNamespace()
+    sys.modules["tkinter"] = tkinter_stub
+    from runner import macro_runner
+    from runner.macro_runner import RunnerApp
 
 
-@unittest.skipIf(macro_runner is None, "Tk is not installed on this build host")
 class RunnerActivationSafetyTests(unittest.TestCase):
     def setUp(self) -> None:
         self.launch = ProtocolLaunch(
@@ -29,6 +43,7 @@ class RunnerActivationSafetyTests(unittest.TestCase):
         app = object.__new__(RunnerApp)
         app.root = Mock()
         app.bot = None
+        app.user_macro_id = None
         app._protocol_claim_busy = False
         app._log = Mock()
         app._begin_protocol_claim = Mock()
@@ -56,14 +71,21 @@ class RunnerActivationSafetyTests(unittest.TestCase):
     def test_late_claim_response_cannot_overwrite_running_macro(self) -> None:
         app = self.app()
         app.bot = object()
+        app.user_macro_id = 41
         app._protocol_claim_busy = True
-        app._apply_macro = Mock()
+        app._apply_claimed_macro = Mock()
         app._set_running = Mock()
 
-        app._apply_protocol_claim({"symbol": "BTCUSDT"}, "member-key", "https://example")
+        app._apply_protocol_claim(
+            {"symbol": "BTCUSDT"},
+            "member-key",
+            "https://example",
+            73,
+        )
 
         self.assertFalse(app._protocol_claim_busy)
-        app._apply_macro.assert_not_called()
+        self.assertIsNone(app.user_macro_id)
+        app._apply_claimed_macro.assert_not_called()
         app._set_running.assert_called_once_with(True)
 
     def test_start_guard_blocks_a_second_bot(self) -> None:
@@ -80,6 +102,7 @@ class RunnerActivationSafetyTests(unittest.TestCase):
         response.json.return_value = {
             "macro": {"symbol": "BTCUSDT"},
             "runner_key": "ggp_member",
+            "user_macro_id": 73,
         }
         fake_requests = Mock()
         fake_requests.post.return_value = response
@@ -92,6 +115,122 @@ class RunnerActivationSafetyTests(unittest.TestCase):
         self.assertEqual(sent["ticket"], self.launch.ticket)
         self.assertNotIn("api_key", sent)
         self.assertNotIn("api_secret", sent)
+        scheduled = app.root.after.call_args.args
+        self.assertEqual(scheduled[1], app._apply_protocol_claim)
+        self.assertEqual(scheduled[-1], 73)
+
+    def test_claim_remains_compatible_when_user_macro_id_is_absent(self) -> None:
+        app = self.app()
+        response = Mock()
+        response.json.return_value = {
+            "macro": {"symbol": "BTCUSDT"},
+            "runner_key": "ggp_member",
+        }
+        fake_requests = Mock()
+        fake_requests.post.return_value = response
+
+        with patch.object(macro_runner, "requests", fake_requests):
+            app._claim_protocol_ticket(self.launch)
+
+        scheduled = app.root.after.call_args.args
+        self.assertEqual(scheduled[1], app._apply_protocol_claim)
+        self.assertIsNone(scheduled[-1])
+
+    def test_manual_macro_replaces_and_clears_claimed_macro_identity(self) -> None:
+        app = self.app()
+        app.macro_path = Mock()
+        app.macro_summary = Mock()
+        app.user_macro_id = 73
+        macro = {
+            "symbol": "BTCUSDT",
+            "position_side": "long",
+            "leverage": 1,
+        }
+
+        app._apply_local_macro(macro, "manual.ggm.json")
+
+        self.assertIsNone(app.user_macro_id)
+        self.assertEqual(app.macro, macro)
+        payload = app._build_start_payload(True)
+        self.assertNotIn("user_macro_id", payload)
+
+    def test_claimed_macro_identity_is_added_to_start_payload(self) -> None:
+        app = self.app()
+        app.macro_path = Mock()
+        app.macro_summary = Mock()
+        macro = {
+            "symbol": "btcusdt",
+            "position_side": "long",
+            "leverage": 1,
+        }
+
+        app._apply_claimed_macro(macro, "웹에서 연결한 내 매크로", 73)
+        payload = app._build_start_payload(True)
+
+        self.assertEqual(app.user_macro_id, 73)
+        self.assertEqual(payload["user_macro_id"], 73)
+        self.assertEqual(payload["symbol"], "BTCUSDT")
+        self.assertNotIn("api_key", payload)
+        self.assertNotIn("api_secret", payload)
+
+    def test_start_posts_claimed_macro_identity_to_server(self) -> None:
+        app = self.app()
+        app.macro = {
+            "symbol": "BTCUSDT",
+            "position_side": "long",
+            "leverage": 1,
+        }
+        app.user_macro_id = 73
+        app.api_key = Mock()
+        app.api_key.get.return_value = "exchange-key"
+        app.api_secret = Mock()
+        app.api_secret.get.return_value = "exchange-secret"
+        app.member_key = Mock()
+        app.member_key.get.return_value = "member-key"
+        app.live = Mock()
+        app.live.get.return_value = False
+        app.server_base = "https://example.invalid"
+        app._set_running = Mock()
+        app._log_threadsafe = Mock()
+        app._status_threadsafe = Mock()
+        app._finish_threadsafe = Mock()
+
+        server = Mock()
+        server.session_id = "session-1"
+        bot = Mock()
+        with (
+            patch.object(macro_runner, "ServerClient", return_value=server),
+            patch.object(macro_runner, "BotThread", return_value=bot),
+        ):
+            app._start()
+
+        sent = server.start.call_args.args[0]
+        self.assertEqual(sent["user_macro_id"], 73)
+        self.assertNotIn("api_key", sent)
+        self.assertNotIn("api_secret", sent)
+        bot.start.assert_called_once_with()
+
+    def test_invalid_claim_clears_previous_macro_identity(self) -> None:
+        app = self.app()
+        app.macro_path = Mock()
+        app.macro_summary = Mock()
+        app.user_macro_id = 41
+
+        with self.assertRaises(ValueError):
+            app._apply_claimed_macro({"symbol": "BTCUSDT"}, "web", True)
+
+        self.assertIsNone(app.user_macro_id)
+
+    def test_failed_claim_clears_previous_macro_identity(self) -> None:
+        app = self.app()
+        app.user_macro_id = 41
+        app.pick_btn = Mock()
+        app.start_btn = Mock()
+        app.status_lbl = Mock()
+
+        app._protocol_claim_failed()
+
+        self.assertIsNone(app.user_macro_id)
 
     def test_running_state_disables_start_and_macro_replacement(self) -> None:
         app = self.app()

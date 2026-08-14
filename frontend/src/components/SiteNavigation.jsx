@@ -1,10 +1,13 @@
 import { useEffect, useRef } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 
-const PRIMARY_LINKS = [
-  { to: "/", label: "홈", description: "내게 맞는 시작 방식 선택", icon: "home", end: true },
-  { to: "/agents", label: "내 에이전트", description: "매크로 실행과 상태 확인", icon: "agent", matches: ["/agents"] },
-  { to: "/builder", label: "직접 만들기", description: "모든 조건 직접 설정", icon: "builder", matches: ["/builder", "/s/"] },
+const NAV_LINKS = [
+  { to: "/", label: "홈", icon: "home", end: true },
+  { to: "/agents", label: "내 에이전트", icon: "agent", matches: ["/agents"] },
+  { to: "/builder", label: "직접 만들기", icon: "builder", matches: ["/builder", "/s/"] },
+  { to: "/leaderboard", label: "리더보드", icon: "leaderboard", matches: ["/leaderboard", "/gallery"] },
+  { to: "/news", label: "코인동향", icon: "news", matches: ["/news"] },
+  { to: "/board", label: "게시판", icon: "board", matches: ["/board"] },
 ];
 
 const NAV_ICON_SOURCES = {
@@ -15,12 +18,6 @@ const NAV_ICON_SOURCES = {
   news: "/brand/navigation/ggparrot-nav-news.png",
   board: "/brand/navigation/ggparrot-nav-board.png",
 };
-
-const BROWSE_LINKS = [
-  { to: "/leaderboard", label: "리더보드", description: "오늘의 모의 수익률", icon: "leaderboard", matches: ["/leaderboard", "/gallery"] },
-  { to: "/news", label: "코인동향", description: "시장과 규제 뉴스", icon: "news", matches: ["/news"] },
-  { to: "/board", label: "게시판", description: "질문과 전략 후기", icon: "board", matches: ["/board"] },
-];
 
 function ParrotMark() {
   return <img src="/brand/ggparrot-sunglasses-mark.png" alt="" width="42" height="42" draggable="false" />;
@@ -57,11 +54,10 @@ function pathIsActive(pathname, link) {
   return (link.matches || [link.to]).some((prefix) => pathname === prefix || pathname.startsWith(prefix));
 }
 
-function NavigationGroup({ label, links, pathname, onNavigate, tabIndex }) {
+function NavigationList({ pathname, onNavigate, tabIndex }) {
   return (
-    <div className="site-side-group">
-      <div className="site-side-group-label">{label}</div>
-      {links.map((link) => {
+    <div className="site-side-list">
+      {NAV_LINKS.map((link) => {
         const active = pathIsActive(pathname, link);
         return (
           <NavLink
@@ -74,7 +70,7 @@ function NavigationGroup({ label, links, pathname, onNavigate, tabIndex }) {
             className={`site-side-link ${active ? "is-active" : ""}`}
           >
             <span className="site-side-icon" aria-hidden="true"><NavIcon name={link.icon} /></span>
-            <span><strong>{link.label}</strong><small>{link.description}</small></span>
+            <span className="site-side-label">{link.label}</span>
           </NavLink>
         );
       })}
@@ -89,8 +85,7 @@ function NavigationContents({ onNavigate, tabIndex }) {
     <>
       <BrandLink onClick={onNavigate} className="site-sidebar-brand" />
       <nav className="site-side-nav" aria-label="전체 페이지">
-        <NavigationGroup label="실행" links={PRIMARY_LINKS} pathname={pathname} onNavigate={onNavigate} tabIndex={tabIndex} />
-        <NavigationGroup label="둘러보기" links={BROWSE_LINKS} pathname={pathname} onNavigate={onNavigate} tabIndex={tabIndex} />
+        <NavigationList pathname={pathname} onNavigate={onNavigate} tabIndex={tabIndex} />
       </nav>
       <div className="site-sidebar-bottom">
         <p>웹 결과는 모의 계산이며<br />투자 조언이 아니에요.</p>

@@ -7,7 +7,6 @@ import { computeSessionOverlay } from "../lib/indicators.js";
 import AgentActivityStream from "../components/AgentActivityStream.jsx";
 import CandleChart from "../components/CandleChart.jsx";
 import { ErrorNote, Loading } from "../components/Page.jsx";
-import { RunnerKeyPanel } from "../components/RunnerSessions.jsx";
 
 const NEWS_POLL_MS = 5 * 60 * 1000;
 
@@ -38,18 +37,7 @@ function statusText(session) {
   return session.connected ? "실행 중 · 무포지션" : "응답 확인 중";
 }
 
-function MacroDock({
-  sessions,
-  selected,
-  busy,
-  connectionOpen,
-  onConnectionToggle,
-  onChange,
-  onStop,
-}) {
-  const macro = selected.macro || {};
-  const interval = macro.candle_interval || "1d";
-  const market = executionMarket(macro, selected);
+function MacroDock({ sessions, selected, busy, onChange, onStop }) {
   const connected = selected.connected;
   const stopping = selected.stopping;
 
@@ -69,29 +57,12 @@ function MacroDock({
         </span>
       </label>
 
-      <div className="agent-macro-dock-summary">
-        <strong><b className="num">{selected.symbol}</b> {ruleLabel(macro)}</strong>
-        <span>
-          <b className="num">{interval}</b> · {market === "futures" ? `선물 ${macro.leverage || selected.leverage || 1}배` : "현물"} · {selected.position_side === "short" ? "숏" : "롱"}
-        </span>
-      </div>
-
       <div className="agent-macro-dock-status" aria-label={`실행 상태: ${statusText(selected)}`}>
         <i className={`agent-live-dot ${connected ? "is-running" : "is-checking"}`} aria-hidden="true" />
         <span>{statusText(selected)}</span>
       </div>
 
       <div className="agent-macro-dock-actions">
-        <details
-          className="agent-connection-menu"
-          open={connectionOpen}
-          onToggle={(event) => onConnectionToggle(event.currentTarget.open)}
-        >
-          <summary>연결 설정</summary>
-          <div className="agent-connection-popover">
-            <RunnerKeyPanel enabled={connectionOpen} />
-          </div>
-        </details>
         <button type="button" disabled={busy || stopping} onClick={() => onStop("stop_only")} className="btn btn-m btn-secondary">매크로만 종료</button>
         <button type="button" disabled={busy || stopping} onClick={() => onStop("close_and_stop")} className="btn btn-m btn-danger">청산 후 종료</button>
       </div>
@@ -133,7 +104,6 @@ export default function Agents() {
   const [news, setNews] = useState({ status: "idle", symbol: "", data: null, error: "" });
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [connectionSettingsOpen, setConnectionSettingsOpen] = useState(false);
   const [mobilePane, setMobilePane] = useState("chart");
   const sessionTimer = useRef(null);
   const newsTimer = useRef(null);
@@ -299,8 +269,6 @@ export default function Agents() {
                 sessions={activeSessions}
                 selected={selected}
                 busy={busy}
-                connectionOpen={connectionSettingsOpen}
-                onConnectionToggle={setConnectionSettingsOpen}
                 onChange={changeSession}
                 onStop={stopSession}
               />

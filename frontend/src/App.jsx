@@ -10,6 +10,7 @@ import HotCoinsMarquee from "./components/HotCoinsMarquee.jsx";
 import ThemeToggle from "./components/ThemeToggle.jsx";
 import MarketContext from "./components/MarketContext.jsx";
 import SiteNavigation, { BrandLink } from "./components/SiteNavigation.jsx";
+import { RunnerKeyPanel } from "./components/RunnerSessions.jsx";
 
 // Keep the first screen small and quick. The builder, charts, guide, and
 // community screens are fetched only when their route is opened.
@@ -91,11 +92,46 @@ function TopBar({ hasSidebar, onOpenNavigation, menuButtonRef }) {
               사용 방법
             </Link>
           ) : null}
+          {hasSidebar ? <RunnerKeyNav /> : null}
           <ThemeToggle />
           <AuthNav />
         </div>
       </div>
     </header>
+  );
+}
+
+// 회원키(실행기 연동 키)를 상단바에서 바로 확인. 매크로 최초 등록 화면에서
+// 키를 어디서 얻는지 몰라 막히는 것을 막기 위해 전역에서 접근 가능하게 둔다.
+function RunnerKeyNav() {
+  const { token } = useAuth();
+  const { pathname, search } = useLocation();
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef(null);
+  const triggerRef = useRef(null);
+  useDismissibleMenu(open, setOpen, rootRef, triggerRef, pathname + search);
+
+  if (!token) return null;
+
+  return (
+    <div ref={rootRef} className="site-menu-root site-runnerkey-root">
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        className="site-help-link"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-controls="site-runnerkey-panel"
+      >
+        회원키
+      </button>
+      {open ? (
+        <div id="site-runnerkey-panel" className="site-runnerkey-panel" role="dialog" aria-label="껄무새 회원키">
+          <RunnerKeyPanel enabled={open} />
+        </div>
+      ) : null}
+    </div>
   );
 }
 

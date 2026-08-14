@@ -16,10 +16,13 @@
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
+import os
 import re
 import secrets
+import threading
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -36,12 +39,77 @@ _KST = timezone(timedelta(hours=9))
 POLL_SECONDS = 5
 # 이 시간 이상 heartbeat 가 없으면 마이페이지에서 '연결 끊김'으로 표시한다.
 STALE_SECONDS = 30
+# A websocket normally wakes on each persisted runner update. This periodic
+# snapshot also catches changes made by another process/instance or a missed
+# in-process notification.
+SESSION_STREAM_RESYNC_SECONDS = max(
+    5, min(int(os.environ.get("RUNNER_SESSION_WS_RESYNC_SECONDS", "15")), 60)
+)
 # Web -> local runner handoff tickets are deliberately short-lived bearer
 # credentials. Only their SHA-256 digest is persisted.
 LAUNCH_TICKET_TTL_SECONDS = 120
 _LAUNCH_TICKET_RE = re.compile(r"^[A-Za-z0-9_-]{43}$")
 # 활성으로 취급하는 종료 명령 값.
 _STOP_MODES = {"stop_only", "close_and_stop"}
+
+
+class _SessionStreamHub:
+    """Small per-process fan-out hub for account session snapshots.
+
+    Runner endpoints are synchronous FastAPI handlers and websocket handlers
+    are asynchronous, so notifications cross thread/event-loop boundaries via
+    ``loop.call_soon_threadsafe``. Payloads are not cached in memory: every wake
+    reads an authoritative snapshot from the database.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._next_id = 0
+        self._subscribers: dict[int, dict[int, tuple[asyncio.AbstractEventLoop, asyncio.Event]]] = {}
+
+    def subscribe(self, user_id: int) -> tuple[int, asyncio.Event]:
+        loop = asyncio.get_running_loop()
+        event = asyncio.Event()
+        with self._lock:
+            self._next_id += 1
+            subscription_id = self._next_id
+            self._subscribers.setdefault(user_id, {})[subscription_id] = (loop, event)
+        return subscription_id, event
+
+    def unsubscribe(self, user_id: int, subscription_id: int) -> None:
+        with self._lock:
+            account = self._subscribers.get(user_id)
+            if account is None:
+                return
+            account.pop(subscription_id, None)
+            if not account:
+                self._subscribers.pop(user_id, None)
+
+    def notify(self, user_id: int) -> None:
+        with self._lock:
+            subscribers = list(self._subscribers.get(user_id, {}).values())
+        for loop, event in subscribers:
+            try:
+                loop.call_soon_threadsafe(event.set)
+            except RuntimeError:
+                # The websocket loop closed between snapshotting and notifying.
+                # Its finally block will remove the stale subscription.
+                continue
+
+
+_SESSION_STREAM_HUB = _SessionStreamHub()
+
+
+def subscribe_session_stream(user_id: int) -> tuple[int, asyncio.Event]:
+    return _SESSION_STREAM_HUB.subscribe(user_id)
+
+
+def unsubscribe_session_stream(user_id: int, subscription_id: int) -> None:
+    _SESSION_STREAM_HUB.unsubscribe(user_id, subscription_id)
+
+
+def notify_sessions_changed(user_id: int) -> None:
+    _SESSION_STREAM_HUB.notify(user_id)
 
 
 def _now_iso() -> str:
@@ -260,32 +328,81 @@ def claim_launch_ticket(ticket: str) -> dict:
 # --- 실행기용: 세션 시작/하트비트/종료확정 -----------------------------
 def start_session(user: User, payload: dict) -> dict:
     """실행기가 매크로 구동을 시작할 때 세션을 만든다. session_id 를 돌려준다."""
+    symbol = str(payload.get("symbol", "")).upper()
     side = str(payload.get("position_side", "long")).lower()
     leverage = max(1, int(payload.get("leverage", 1) or 1))
     market = str(payload.get("market", "")).lower()
+    summary = str(payload.get("human_summary", ""))[:300]
     if market not in ("spot", "futures"):
         market = "futures" if (side == "short" or leverage > 1) else "spot"
     # 실행 중인 매크로 원문 — 마이페이지 실시간 차트에 전략 보조지표를 그리는 데 쓴다.
     # 예전 실행기는 보내지 않으므로 없으면 빈 문자열로 둔다(차트는 평단선만 그림).
     macro_json = ""
     macro = payload.get("macro")
+    normalized_macro: Optional[Macro] = None
     if isinstance(macro, dict):
         try:
-            dumped = json.dumps(macro, ensure_ascii=False)
+            normalized_macro = Macro.model_validate(macro)
+            dumped = normalized_macro.model_dump_json()
             if len(dumped) <= 20000:  # 방어적 상한(정상 매크로는 ~1KB)
                 macro_json = dumped
         except (TypeError, ValueError):
             macro_json = ""
+            normalized_macro = None
+
+    raw_user_macro_id = payload.get("user_macro_id")
+    user_macro_id: Optional[int] = None
+    if raw_user_macro_id is not None:
+        try:
+            user_macro_id = int(raw_user_macro_id)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="내 매크로 ID가 올바르지 않아요.")
+        if user_macro_id <= 0:
+            raise HTTPException(status_code=422, detail="내 매크로 ID가 올바르지 않아요.")
+        if normalized_macro is None:
+            raise HTTPException(
+                status_code=422,
+                detail="내 매크로 세션에는 정규화된 매크로 설정이 필요해요.",
+            )
+
     now = _now_iso()
     with get_session() as db:
+        if user_macro_id is not None:
+            stored_row = db.get(UserMacro, user_macro_id)
+            if stored_row is None or stored_row.user_id != user.id:
+                # Do not reveal whether another account owns the requested id.
+                raise HTTPException(status_code=404, detail="내 매크로를 찾을 수 없어요.")
+            try:
+                stored_macro = Macro.model_validate_json(stored_row.macro_json)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=422, detail="저장된 매크로 형식이 올바르지 않아요.")
+            if (
+                normalized_macro is None
+                or normalized_macro.model_dump(mode="json")
+                != stored_macro.model_dump(mode="json")
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="실행기가 보낸 매크로가 선택한 내 매크로와 일치하지 않아요.",
+                )
+            # An ID-bound session has one authoritative identity: the stored,
+            # normalized UserMacro. Do not let redundant runner fields drift
+            # from the macro selected by the signed-in user.
+            symbol = stored_macro.symbol
+            side = stored_macro.position_side.value
+            leverage = stored_macro.leverage
+            market = stored_macro.resolved_market()
+            summary = stored_row.human_summary[:300]
+
         row = RunSession(
             user_id=user.id,
-            symbol=str(payload.get("symbol", "")).upper(),
+            user_macro_id=user_macro_id,
+            symbol=symbol,
             position_side=side,
             leverage=leverage,
             market=market,
             testnet=bool(payload.get("testnet", True)),
-            human_summary=str(payload.get("human_summary", ""))[:300],
+            human_summary=summary,
             macro_json=macro_json,
             status="running",
             stop_mode="",
@@ -295,7 +412,9 @@ def start_session(user: User, payload: dict) -> dict:
         db.add(row)
         db.commit()
         db.refresh(row)
-        return {"session_id": row.id, "poll_seconds": POLL_SECONDS}
+        result = {"session_id": row.id, "poll_seconds": POLL_SECONDS}
+    notify_sessions_changed(user.id)
+    return result
 
 
 def heartbeat(user: User, session_id: int, snapshot: dict) -> dict:
@@ -324,7 +443,8 @@ def heartbeat(user: User, session_id: int, snapshot: dict) -> dict:
         action = row.stop_mode if row.stop_mode in _STOP_MODES else "continue"
         db.add(row)
         db.commit()
-        return {"action": action}
+    notify_sessions_changed(user.id)
+    return {"action": action}
 
 
 def mark_stopped(user: User, session_id: int, status: str = "stopped", note: str = "") -> dict:
@@ -340,7 +460,8 @@ def mark_stopped(user: User, session_id: int, status: str = "stopped", note: str
         row.in_position = bool(row.in_position and status != "stopped")  # 청산됐으면 False 로 남김
         db.add(row)
         db.commit()
-        return {"ok": True}
+    notify_sessions_changed(user.id)
+    return {"ok": True}
 
 
 # --- 마이페이지용: 목록 조회 / 종료 요청 -------------------------------
@@ -359,6 +480,7 @@ def _session_view(row: RunSession) -> dict:
             macro = None
     return {
         "session_id": row.id,
+        "user_macro_id": getattr(row, "user_macro_id", None),
         "symbol": row.symbol,
         "position_side": row.position_side,
         "leverage": row.leverage,
@@ -384,16 +506,22 @@ def _session_view(row: RunSession) -> dict:
 
 
 def list_sessions(user_id: int, limit: int = 20) -> dict:
-    """활성(running) 세션 + 최근 종료 세션. 활성 세션을 위로 정렬한다."""
+    """All active sessions plus up to ``limit`` recently ended sessions."""
+    recent_limit = max(0, min(int(limit), 100))
     with get_session() as db:
-        rows = db.exec(
+        active_rows = db.exec(
             select(RunSession)
-            .where(RunSession.user_id == user_id)
+            .where(RunSession.user_id == user_id, RunSession.status == "running")
             .order_by(RunSession.id.desc())
-            .limit(limit)
         ).all()
-    active = [_session_view(r) for r in rows if r.status == "running"]
-    recent = [_session_view(r) for r in rows if r.status != "running"]
+        recent_rows = db.exec(
+            select(RunSession)
+            .where(RunSession.user_id == user_id, RunSession.status != "running")
+            .order_by(RunSession.id.desc())
+            .limit(recent_limit)
+        ).all()
+    active = [_session_view(r) for r in active_rows]
+    recent = [_session_view(r) for r in recent_rows]
     return {"active": active, "recent": recent, "poll_seconds": POLL_SECONDS}
 
 
@@ -414,4 +542,5 @@ def request_stop(user_id: int, session_id: int, mode: str) -> dict:
         row.stop_mode = mode
         db.add(row)
         db.commit()
+    notify_sessions_changed(user_id)
     return {"ok": True, "mode": mode, "note": "실행기가 곧 반영해요(최대 몇 초 지연)."}

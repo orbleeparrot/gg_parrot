@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import re
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -29,6 +30,10 @@ SECRET_KEY = os.environ.get("SECRET_KEY") or "dev-insecure-secret-change-me-in-p
 _JWT_ALGO = "HS256"
 _TOKEN_TTL_HOURS = int(os.environ.get("SESSION_TTL_HOURS", "168"))  # 7 days
 _RESET_TTL_MIN = int(os.environ.get("RESET_TTL_MINUTES", "30"))
+_RUNNER_SESSION_STREAM_TTL_SECONDS = max(
+    15, min(int(os.environ.get("RUNNER_SESSION_STREAM_TTL_SECONDS", "60")), 300)
+)
+_RUNNER_SESSION_STREAM_PURPOSE = "runner_sessions_stream"
 _FRONTEND_BASE_URL = os.environ.get("FRONTEND_BASE_URL", "").rstrip("/")
 
 # Google 간편 로그인(Google Identity Services). 설정되지 않으면 기능이 꺼진 채
@@ -62,9 +67,47 @@ def make_token(user_id: int) -> str:
 def _decode(token: str) -> int:
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[_JWT_ALGO])
+        # Purpose-scoped tokens (password reset, websocket handoff, etc.) must
+        # never be accepted as ordinary browser sessions.
+        if payload.get("purpose") is not None:
+            raise ValueError("purpose-scoped token")
         return int(payload["sub"])
     except (jwt.PyJWTError, KeyError, ValueError):
         raise AuthError(401, "세션이 만료됐거나 유효하지 않아요. 다시 로그인해 주세요.")
+
+
+def make_runner_session_stream_token(user_id: int) -> dict:
+    """Mint a short-lived, single-purpose token for the sessions websocket.
+
+    Browser WebSocket constructors cannot set an Authorization header. The
+    signed-in page therefore exchanges its normal bearer token for this short
+    token and sends it as a websocket subprotocol. It is deliberately unusable
+    on regular HTTP endpoints.
+    """
+    now = _now()
+    expires = now + timedelta(seconds=_RUNNER_SESSION_STREAM_TTL_SECONDS)
+    payload = {
+        "sub": str(user_id),
+        "purpose": _RUNNER_SESSION_STREAM_PURPOSE,
+        "jti": secrets.token_urlsafe(12),
+        "iat": int(now.timestamp()),
+        "exp": int(expires.timestamp()),
+    }
+    return {
+        "token": jwt.encode(payload, SECRET_KEY, algorithm=_JWT_ALGO),
+        "expires_in": _RUNNER_SESSION_STREAM_TTL_SECONDS,
+    }
+
+
+def decode_runner_session_stream_token(token: str) -> int:
+    """Validate a sessions-stream token and return its account id."""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[_JWT_ALGO])
+        if payload.get("purpose") != _RUNNER_SESSION_STREAM_PURPOSE:
+            raise ValueError("wrong purpose")
+        return int(payload["sub"])
+    except (jwt.PyJWTError, KeyError, ValueError):
+        raise AuthError(401, "실시간 세션 연결 인증이 만료됐거나 유효하지 않아요.")
 
 
 def user_view(user: User) -> dict:

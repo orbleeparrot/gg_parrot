@@ -729,6 +729,9 @@ class RunnerApp:
         self.root = root
         self.bot: BotThread | None = None
         self.macro: dict | None = None
+        # Set only when the macro came from an authenticated web launch. A
+        # manually opened file has no UserMacro row to associate with a run.
+        self.user_macro_id: int | None = None
         self.macro_path = tk.StringVar(value="")
         self.live = tk.BooleanVar(value=False)   # 실거래(메인넷) 여부
         self.api_key = tk.StringVar(value="")
@@ -842,13 +845,39 @@ class RunnerApp:
             messagebox.showerror(APP_TITLE, f"매크로 파일을 읽지 못했어요:\n{exc}")
             return
         try:
-            self._apply_macro(macro, path)
+            self._apply_local_macro(macro, path)
         except ValueError:
             messagebox.showerror(APP_TITLE, "올바른 껄무새 매크로 파일이 아니에요.")
             return
 
-    def _apply_macro(self, macro: dict, source_label: str) -> None:
-        """Apply either a local file or a claimed web macro to the same UI."""
+    def _apply_local_macro(self, macro: dict, source_label: str) -> None:
+        """Apply a file-backed macro without associating it with UserMacro."""
+
+        # Clear first so a failed/manual replacement can never submit the ID
+        # of a previously claimed web macro with different strategy contents.
+        self.user_macro_id = None
+        self._render_macro_selection(macro, source_label)
+
+    def _apply_claimed_macro(
+        self,
+        macro: dict,
+        source_label: str,
+        user_macro_id: int | None,
+    ) -> None:
+        """Apply a web-claimed macro and retain its optional UserMacro ID."""
+
+        self.user_macro_id = None
+        if user_macro_id is not None and (
+            isinstance(user_macro_id, bool)
+            or not isinstance(user_macro_id, int)
+            or user_macro_id <= 0
+        ):
+            raise ValueError("invalid user macro id")
+        self._render_macro_selection(macro, source_label)
+        self.user_macro_id = user_macro_id
+
+    def _render_macro_selection(self, macro: dict, source_label: str) -> None:
+        """Validate and render macro fields shared by both selection sources."""
 
         if not isinstance(macro, dict) or not str(macro.get("symbol", "")).strip():
             raise ValueError("invalid macro")
@@ -877,6 +906,10 @@ class RunnerApp:
         if self._protocol_claim_busy:
             self._log("이미 웹 매크로를 연결하고 있어요. 잠시만 기다려 주세요.")
             return
+        # The old ID must not survive while a replacement claim is pending or
+        # after that claim fails. The old macro may remain visible, but it will
+        # then start as an unassociated/manual run rather than a wrong one.
+        self.user_macro_id = None
         self._protocol_claim_busy = True
         if requests is None:
             self._protocol_claim_failed()
@@ -946,11 +979,20 @@ class RunnerApp:
             payload = response.json()
             macro = payload.get("macro") if isinstance(payload, dict) else None
             runner_key = payload.get("runner_key") if isinstance(payload, dict) else None
+            user_macro_id = payload.get("user_macro_id") if isinstance(payload, dict) else None
             if (
                 not isinstance(macro, dict)
                 or not str(macro.get("symbol", "")).strip()
                 or not isinstance(runner_key, str)
                 or not runner_key.strip()
+                or (
+                    user_macro_id is not None
+                    and (
+                        isinstance(user_macro_id, bool)
+                        or not isinstance(user_macro_id, int)
+                        or user_macro_id <= 0
+                    )
+                )
             ):
                 raise ValueError("invalid launch response")
         except Exception:
@@ -965,6 +1007,7 @@ class RunnerApp:
             macro,
             runner_key,
             claim_base,
+            user_macro_id,
         )
 
     def _apply_protocol_claim(
@@ -972,17 +1015,23 @@ class RunnerApp:
         macro: dict,
         runner_key: str,
         claim_base: str,
+        user_macro_id: int | None = None,
     ) -> None:
         self._protocol_claim_busy = False
         if self.bot is not None:
             # The request was accepted while idle, but a local start may have
             # completed before the network response arrived. Never replace
             # the strategy/account fields underneath an active bot.
+            self.user_macro_id = None
             self._log("매크로가 실행 중이어서 새 웹 연결을 적용하지 않았어요.")
             self._set_running(True)
             return
         try:
-            self._apply_macro(macro, "웹에서 연결한 내 매크로")
+            self._apply_claimed_macro(
+                macro,
+                "웹에서 연결한 내 매크로",
+                user_macro_id,
+            )
         except ValueError:
             self._protocol_claim_failed()
             return
@@ -1004,6 +1053,7 @@ class RunnerApp:
 
     def _protocol_claim_failed(self) -> None:
         self._protocol_claim_busy = False
+        self.user_macro_id = None
         running = self.bot is not None
         self.pick_btn.config(state="disabled" if running else "normal")
         self.start_btn.config(state="disabled" if running else "normal")
@@ -1065,19 +1115,7 @@ class RunnerApp:
                 return
 
         server = ServerClient(self.member_key.get(), base=self.server_base)
-        side = str(self.macro.get("position_side", "long")).lower()
-        lev = max(1, int(self.macro.get("leverage", 1) or 1))
-        payload = {
-            "symbol": str(self.macro.get("symbol", "")).upper(),
-            "position_side": side,
-            "leverage": lev,
-            "market": _decide_market(side, lev),
-            "testnet": testnet,
-            "human_summary": self.macro.get("human_summary", ""),
-            # 매크로 원문 — 마이페이지 실시간 차트에 빌더와 동일한 전략 보조지표를
-            # 그리는 데 쓰인다. 거래소 키/시크릿은 여기에 포함되지 않는다.
-            "macro": self.macro,
-        }
+        payload = self._build_start_payload(testnet)
         try:
             server.start(payload)
         except Exception as exc:
@@ -1098,6 +1136,28 @@ class RunnerApp:
         )
         self.bot.start()
         self._set_running(True)
+
+    def _build_start_payload(self, testnet: bool) -> dict:
+        """Build the server payload without ever including exchange secrets."""
+
+        if not self.macro:
+            raise ValueError("macro is required")
+        side = str(self.macro.get("position_side", "long")).lower()
+        lev = max(1, int(self.macro.get("leverage", 1) or 1))
+        payload = {
+            "symbol": str(self.macro.get("symbol", "")).upper(),
+            "position_side": side,
+            "leverage": lev,
+            "market": _decide_market(side, lev),
+            "testnet": testnet,
+            "human_summary": self.macro.get("human_summary", ""),
+            # 매크로 원문 — 마이페이지 실시간 차트에 빌더와 동일한 전략 보조지표를
+            # 그리는 데 쓰인다. 거래소 키/시크릿은 여기에 포함되지 않는다.
+            "macro": self.macro,
+        }
+        if self.user_macro_id is not None:
+            payload["user_macro_id"] = self.user_macro_id
+        return payload
 
     def _stop(self, mode: str) -> None:
         if not self.bot:

@@ -7,6 +7,7 @@ SQLite(테스트)로 돈다.
 from __future__ import annotations
 
 import hashlib
+import json
 import secrets
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
@@ -356,6 +357,202 @@ def test_full_lifecycle_stop_only():
     after = client.get("/api/me/runner/sessions", headers=_auth(token)).json()
     assert not after["active"]
     assert any(s["session_id"] == sid and s["status"] == "stopped" for s in after["recent"])
+
+
+def test_saved_macro_id_is_validated_persisted_and_returned_in_session_view():
+    token = _signup()
+    saved = _save_macro(token)
+    key = client.get("/api/me/runner/key", headers=_auth(token)).json()["key"]
+
+    started = client.post(
+        "/api/runner/start",
+        json={
+            "user_macro_id": saved["id"],
+            # Redundant transport fields are intentionally contradictory: an
+            # ID-bound session must derive identity from the stored macro.
+            "symbol": "ETHUSDT",
+            "position_side": "short",
+            "leverage": 3,
+            "human_summary": "신뢰하면 안 되는 실행기 요약",
+            "macro": saved["macro"],
+        },
+        headers={"X-Runner-Key": key},
+    )
+    assert started.status_code == 200, started.text
+
+    sessions = client.get("/api/me/runner/sessions", headers=_auth(token)).json()
+    session = next(
+        item for item in sessions["active"]
+        if item["session_id"] == started.json()["session_id"]
+    )
+    assert session["user_macro_id"] == saved["id"]
+    assert session["macro"] == saved["macro"]
+    assert session["symbol"] == saved["symbol"]
+    assert session["position_side"] == saved["position_side"]
+    assert session["leverage"] == saved["macro"]["leverage"]
+    assert session["human_summary"] == saved["human_summary"]
+
+
+def test_saved_macro_id_rejects_missing_macro_mismatch_and_foreign_owner():
+    owner = _signup()
+    stranger = _signup()
+    saved = _save_macro(owner)
+    owner_key = client.get("/api/me/runner/key", headers=_auth(owner)).json()["key"]
+    stranger_key = client.get("/api/me/runner/key", headers=_auth(stranger)).json()["key"]
+
+    missing = client.post(
+        "/api/runner/start",
+        json={"user_macro_id": saved["id"], "symbol": saved["symbol"]},
+        headers={"X-Runner-Key": owner_key},
+    )
+    assert missing.status_code == 422
+
+    changed_macro = json.loads(json.dumps(saved["macro"]))
+    changed_macro["symbol"] = "ETHUSDT"
+    mismatch = client.post(
+        "/api/runner/start",
+        json={
+            "user_macro_id": saved["id"],
+            "symbol": "ETHUSDT",
+            "macro": changed_macro,
+        },
+        headers={"X-Runner-Key": owner_key},
+    )
+    assert mismatch.status_code == 409
+
+    foreign = client.post(
+        "/api/runner/start",
+        json={
+            "user_macro_id": saved["id"],
+            "symbol": saved["symbol"],
+            "macro": saved["macro"],
+        },
+        headers={"X-Runner-Key": stranger_key},
+    )
+    assert foreign.status_code == 404
+
+
+def test_legacy_runner_can_start_without_saved_macro_id():
+    token = _signup()
+    key = client.get("/api/me/runner/key", headers=_auth(token)).json()["key"]
+    started = client.post(
+        "/api/runner/start",
+        json={"symbol": "BTCUSDT"},
+        headers={"X-Runner-Key": key},
+    )
+    assert started.status_code == 200
+    sessions = client.get("/api/me/runner/sessions", headers=_auth(token)).json()
+    session = next(
+        item for item in sessions["active"]
+        if item["session_id"] == started.json()["session_id"]
+    )
+    assert session["user_macro_id"] is None
+
+
+def test_session_stream_token_is_scoped_and_websocket_pushes_updates():
+    token = _signup()
+    saved = _save_macro(token)
+    key = client.get("/api/me/runner/key", headers=_auth(token)).json()["key"]
+    issued = client.post(
+        "/api/me/runner/sessions/stream-token",
+        headers=_auth(token),
+    )
+    assert issued.status_code == 200
+    assert issued.headers["cache-control"] == "no-store"
+    scoped = issued.json()["token"]
+    assert 15 <= issued.json()["expires_in"] <= 300
+
+    # A purpose token cannot impersonate the normal login Bearer session.
+    ordinary = client.get("/api/auth/me", headers=_auth(scoped))
+    assert ordinary.status_code == 401
+
+    protocols = ["ggparrot.sessions.v1", f"ggp-auth.{scoped}"]
+    with client.websocket_connect(
+        "/api/me/runner/sessions/stream",
+        subprotocols=protocols,
+    ) as websocket:
+        assert websocket.accepted_subprotocol == "ggparrot.sessions.v1"
+        initial = websocket.receive_json()
+        assert initial["type"] == "sessions.snapshot"
+        assert initial["reason"] == "initial"
+
+        started = client.post(
+            "/api/runner/start",
+            json={
+                "user_macro_id": saved["id"],
+                "symbol": saved["symbol"],
+                "macro": saved["macro"],
+            },
+            headers={"X-Runner-Key": key},
+        )
+        assert started.status_code == 200, started.text
+        pushed = websocket.receive_json()
+        assert pushed["type"] == "sessions.snapshot"
+        assert pushed["reason"] == "update"
+        assert any(
+            item["session_id"] == started.json()["session_id"]
+            and item["user_macro_id"] == saved["id"]
+            for item in pushed["data"]["active"]
+        )
+
+        session_id = started.json()["session_id"]
+        heartbeat = client.post(
+            "/api/runner/heartbeat",
+            json={"session_id": session_id, "last_price": 64123.5},
+            headers={"X-Runner-Key": key},
+        )
+        assert heartbeat.status_code == 200
+        heartbeat_push = websocket.receive_json()
+        live = next(
+            item for item in heartbeat_push["data"]["active"]
+            if item["session_id"] == session_id
+        )
+        assert heartbeat_push["reason"] == "update"
+        assert live["last_price"] == 64123.5
+
+        stop = client.post(
+            f"/api/me/runner/sessions/{session_id}/request-stop",
+            json={"mode": "stop_only"},
+            headers=_auth(token),
+        )
+        assert stop.status_code == 200
+        stopping_push = websocket.receive_json()
+        stopping = next(
+            item for item in stopping_push["data"]["active"]
+            if item["session_id"] == session_id
+        )
+        assert stopping["stopping"] is True
+        assert stopping["stop_mode"] == "stop_only"
+
+        stopped = client.post(
+            "/api/runner/stopped",
+            json={"session_id": session_id, "status": "stopped"},
+            headers={"X-Runner-Key": key},
+        )
+        assert stopped.status_code == 200
+        stopped_push = websocket.receive_json()
+        assert all(item["session_id"] != session_id for item in stopped_push["data"]["active"])
+        assert any(item["session_id"] == session_id for item in stopped_push["data"]["recent"])
+
+
+def test_session_list_limit_never_hides_running_sessions():
+    token = _signup()
+    key = client.get("/api/me/runner/key", headers=_auth(token)).json()["key"]
+    session_ids = []
+    for index in range(4):
+        response = client.post(
+            "/api/runner/start",
+            json={"symbol": f"RUN{index}USDT"},
+            headers={"X-Runner-Key": key},
+        )
+        assert response.status_code == 200
+        session_ids.append(response.json()["session_id"])
+
+    limited = runner_mod.list_sessions(
+        client.get("/api/auth/me", headers=_auth(token)).json()["user"]["id"],
+        limit=1,
+    )
+    assert {item["session_id"] for item in limited["active"]}.issuperset(session_ids)
 
 
 def test_request_stop_close_and_stop_action():

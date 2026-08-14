@@ -3,6 +3,25 @@
 import { getToken } from "./lib/auth.js";
 
 const BASE = "";
+const RUNNER_SESSIONS_STREAM_PATH = "/api/me/runner/sessions/stream";
+
+function websocketUrl(path) {
+  const configuredBase = String(import.meta.env?.VITE_API_WS_BASE || "").trim();
+  if (configuredBase) {
+    const wsBase = configuredBase
+      .replace(/^http:/i, "ws:")
+      .replace(/^https:/i, "wss:")
+      .replace(/\/+$/, "");
+    return `${wsBase}${path}`;
+  }
+
+  if (import.meta.env?.DEV && typeof window !== "undefined") {
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    return `${protocol}//${window.location.host}${path}`;
+  }
+
+  return `wss://gg-parrot.onrender.com${path}`;
+}
 
 async function jsonBody(res) {
   const text = await res.text();
@@ -223,6 +242,9 @@ export const api = {
   runnerKey: () => req("/api/me/runner/key"),
   runnerKeyRegenerate: () => req("/api/me/runner/key/regenerate", { method: "POST" }),
   runnerSessions: () => req("/api/me/runner/sessions"),
+  runnerSessionsStreamToken: () =>
+    req("/api/me/runner/sessions/stream-token", { method: "POST" }),
+  runnerSessionsStreamUrl: () => websocketUrl(RUNNER_SESSIONS_STREAM_PATH),
   runnerLaunchTicketIssue: (userMacroId, testnet = true) =>
     req("/api/me/runner/launch-tickets", {
       method: "POST",

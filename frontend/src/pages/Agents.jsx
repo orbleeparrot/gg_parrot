@@ -9,6 +9,8 @@ import CandleChart from "../components/CandleChart.jsx";
 import { ErrorNote, Loading } from "../components/Page.jsx";
 
 const NEWS_POLL_MS = 5 * 60 * 1000;
+const SESSION_STREAM_PROTOCOL = "ggparrot.sessions.v1";
+const SESSION_RECONNECT_MAX_MS = 30000;
 
 function executionMarket(macro, session) {
   if (session?.market === "futures" || session?.market === "spot") return session.market;
@@ -105,16 +107,20 @@ export default function Agents() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [mobilePane, setMobilePane] = useState("chart");
-  const sessionTimer = useRef(null);
   const newsTimer = useRef(null);
   const newsRequest = useRef(0);
+  const sessionSnapshotRevision = useRef(0);
 
   const loadSessions = useCallback(async () => {
+    const revision = sessionSnapshotRevision.current;
     try {
       const data = await api.runnerSessions();
+      if (sessionSnapshotRevision.current !== revision) return;
+      sessionSnapshotRevision.current += 1;
       setSessions(data);
       setError("");
     } catch (reason) {
+      if (sessionSnapshotRevision.current !== revision) return;
       setError(String(reason.message || reason));
     }
   }, []);
@@ -150,10 +156,14 @@ export default function Agents() {
       return undefined;
     }
     let alive = true;
+    const sessionRevision = sessionSnapshotRevision.current;
     api.runnerSessions()
       .then((data) => {
         if (!alive) return;
-        setSessions(data);
+        if (sessionSnapshotRevision.current === sessionRevision) {
+          sessionSnapshotRevision.current += 1;
+          setSessions(data);
+        }
         setError("");
       })
       .catch((reason) => {
@@ -164,13 +174,68 @@ export default function Agents() {
 
   useEffect(() => {
     if (!token) return undefined;
-    const poll = () => {
-      if (!document.hidden) loadSessions();
-      sessionTimer.current = window.setTimeout(poll, 4000);
+    let stopped = false;
+    let socket = null;
+    let reconnectTimer = null;
+    let reconnectAttempt = 0;
+
+    const scheduleReconnect = () => {
+      if (stopped || reconnectTimer !== null) return;
+      const delay = Math.min(
+        SESSION_RECONNECT_MAX_MS,
+        1000 * (2 ** Math.min(reconnectAttempt, 5)),
+      );
+      reconnectAttempt = Math.min(reconnectAttempt + 1, 6);
+      reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = null;
+        connect();
+      }, delay);
     };
-    sessionTimer.current = window.setTimeout(poll, 4000);
-    return () => window.clearTimeout(sessionTimer.current);
-  }, [loadSessions, token]);
+
+    const connect = async () => {
+      try {
+        const credential = await api.runnerSessionsStreamToken();
+        if (stopped) return;
+        if (!credential?.token) throw new Error("실시간 연결 토큰이 없어요.");
+
+        const nextSocket = new WebSocket(api.runnerSessionsStreamUrl(), [
+          SESSION_STREAM_PROTOCOL,
+          `ggp-auth.${credential.token}`,
+        ]);
+        socket = nextSocket;
+
+        nextSocket.onmessage = (event) => {
+          let message;
+          try {
+            message = JSON.parse(event.data);
+          } catch (_) {
+            return;
+          }
+          if (message?.type !== "sessions.snapshot" || !message.data) return;
+          sessionSnapshotRevision.current += 1;
+          setSessions(message.data);
+          reconnectAttempt = 0;
+        };
+        nextSocket.onerror = () => nextSocket.close();
+        nextSocket.onclose = () => {
+          if (socket === nextSocket) socket = null;
+          scheduleReconnect();
+        };
+      } catch (_) {
+        scheduleReconnect();
+      }
+    };
+
+    connect();
+    return () => {
+      stopped = true;
+      if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
+      if (socket) {
+        socket.onclose = null;
+        socket.close(1000, "page closed");
+      }
+    };
+  }, [token]);
 
   // 선택의 소스는 '실행기에서 실제 구동 중인 세션'이다. 저장된 매크로 라이브러리가
   // 아니라 러너가 보고하는 active 세션을 그대로 쓰므로 실행 정보와 항상 일치한다.

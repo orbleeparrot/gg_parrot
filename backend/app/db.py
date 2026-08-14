@@ -218,6 +218,9 @@ class RunSession(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     user_id: int = Field(index=True)
+    # Stable account-library identity. Nullable for sessions created by legacy
+    # runners that only uploaded an anonymous macro JSON snapshot.
+    user_macro_id: Optional[int] = Field(default=None, index=True)
     # 실행 대상 요약 (마이페이지 표시용)
     symbol: str = ""
     position_side: str = "long"
@@ -361,6 +364,7 @@ def _migrate() -> None:
         },
         "runsession": {
             "macro_json": "ALTER TABLE runsession ADD COLUMN macro_json TEXT DEFAULT ''",
+            "user_macro_id": "ALTER TABLE runsession ADD COLUMN user_macro_id INTEGER",
         },
     }
     with _engine.connect() as conn:
@@ -371,6 +375,12 @@ def _migrate() -> None:
             for col, ddl in cols.items():
                 if col not in existing:
                     conn.exec_driver_sql(ddl)
+        # ALTER TABLE cannot add an indexed SQLModel field in SQLite. Keep the
+        # lookup index explicit for upgraded databases as well as fresh ones.
+        conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_runsession_user_macro_id "
+            "ON runsession (user_macro_id)"
+        )
         conn.commit()
 
 
@@ -380,6 +390,8 @@ def _migrate_pg() -> None:
     idempotent and safe on every startup."""
     stmts = [
         "ALTER TABLE runsession ADD COLUMN IF NOT EXISTS macro_json TEXT DEFAULT ''",
+        "ALTER TABLE runsession ADD COLUMN IF NOT EXISTS user_macro_id INTEGER",
+        "CREATE INDEX IF NOT EXISTS ix_runsession_user_macro_id ON runsession (user_macro_id)",
     ]
     with _engine.connect() as conn:
         for ddl in stmts:

@@ -5,6 +5,7 @@ historical data. Every returned result represents a PAST SIMULATION.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import uuid
@@ -12,7 +13,18 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import List, Literal, Optional
 
-from fastapi import FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile
+from fastapi import (
+    FastAPI,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -205,6 +217,10 @@ class UserMacroSaveRequest(BaseModel):
 
 # --- 매크로 실행기(로컬 exe) 연동 모델 ---------------------------------
 class RunnerStartRequest(BaseModel):
+    # Stable ID of the signed-in account's saved macro. None keeps old runners
+    # compatible; when supplied, the backend verifies ownership and exact
+    # normalized macro equality before creating the session.
+    user_macro_id: Optional[int] = None
     symbol: str
     position_side: str = "long"
     leverage: int = 1
@@ -1150,6 +1166,73 @@ def runner_key_regen(user: User = Depends(auth_mod.current_user)) -> dict:
 @app.get("/api/me/runner/sessions")
 def runner_sessions(user: User = Depends(auth_mod.current_user)) -> dict:
     return runner_mod.list_sessions(user.id)
+
+
+@app.post("/api/me/runner/sessions/stream-token")
+def runner_sessions_stream_token(
+    response: Response,
+    user: User = Depends(auth_mod.current_user),
+) -> dict:
+    """Exchange a normal login session for a short-lived WS-only token."""
+    response.headers["Cache-Control"] = "no-store"
+    return auth_mod.make_runner_session_stream_token(user.id)
+
+
+@app.websocket("/api/me/runner/sessions/stream")
+async def runner_sessions_stream(websocket: WebSocket) -> None:
+    """Push authoritative runner-session snapshots to one signed-in account.
+
+    The browser supplies two websocket subprotocols because the WebSocket API
+    cannot attach a Bearer header:
+    ``ggparrot.sessions.v1`` and ``ggp-auth.<short-lived-purpose-JWT>``.
+    Only the non-secret version protocol is echoed in the handshake.
+    """
+    protocols = list(websocket.scope.get("subprotocols") or [])
+    version_protocol = "ggparrot.sessions.v1"
+    auth_values = [p[len("ggp-auth."):] for p in protocols if p.startswith("ggp-auth.")]
+    if version_protocol not in protocols or len(auth_values) != 1 or not auth_values[0]:
+        await websocket.close(code=4401, reason="실시간 세션 연결 인증이 필요해요.")
+        return
+    try:
+        user_id = auth_mod.decode_runner_session_stream_token(auth_values[0])
+    except HTTPException:
+        await websocket.close(code=4401, reason="실시간 세션 연결 인증이 유효하지 않아요.")
+        return
+    if auth_mod.get_user_by_id(user_id) is None:
+        await websocket.close(code=4401, reason="계정을 찾을 수 없어요.")
+        return
+
+    subscription_id, changed = runner_mod.subscribe_session_stream(user_id)
+    try:
+        await websocket.accept(subprotocol=version_protocol)
+        await websocket.send_json(
+            {
+                "type": "sessions.snapshot",
+                "reason": "initial",
+                "data": await asyncio.to_thread(runner_mod.list_sessions, user_id),
+            }
+        )
+        while True:
+            try:
+                await asyncio.wait_for(
+                    changed.wait(),
+                    timeout=runner_mod.SESSION_STREAM_RESYNC_SECONDS,
+                )
+                reason = "update"
+                changed.clear()
+            except asyncio.TimeoutError:
+                reason = "resync"
+            await websocket.send_json(
+                {
+                    "type": "sessions.snapshot",
+                    "reason": reason,
+                    "data": await asyncio.to_thread(runner_mod.list_sessions, user_id),
+                }
+            )
+    except (WebSocketDisconnect, RuntimeError, OSError):
+        pass
+    finally:
+        runner_mod.unsubscribe_session_stream(user_id, subscription_id)
 
 
 @app.post("/api/me/runner/sessions/{session_id}/request-stop")

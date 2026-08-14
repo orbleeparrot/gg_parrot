@@ -41,7 +41,11 @@ export default function ProductTour({ steps, open, onClose }) {
   useLayoutEffect(() => {
     if (!step) return undefined;
     const el = document.querySelector(`[data-tour="${step.anchor}"]`);
-    if (el) el.scrollIntoView({ block: "center", behavior: "auto" });
+    if (el) {
+      // 접힌 <details> 섹션(고급 위험 관리·거래 비용)은 내용이 보이도록 펼친다.
+      if (el.tagName === "DETAILS" && !el.open) el.open = true;
+      el.scrollIntoView({ block: "center", behavior: "auto" });
+    }
     measure();
     const timer = window.setTimeout(measure, 60);
     return () => window.clearTimeout(timer);

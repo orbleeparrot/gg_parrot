@@ -254,6 +254,7 @@ export default function Builder({ form, setForm }) {
           { value: "futures", label: "선물 (USDT-M Futures)" },
         ],
         {
+          anchor: "market",
           hint:
             "실제 사용될 데이터: " +
             (form.market === "spot"
@@ -267,7 +268,7 @@ export default function Builder({ form, setForm }) {
       )}
 
       {/* rule-specific params */}
-      <Group title={<>전략 조건 · <span className="text-slate-900">{meta.label}</span></>}>
+      <Group title={<>전략 조건 · <span className="text-slate-900">{meta.label}</span></>} anchor="strategy-params">
         {rt === "A" && (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {num("take_profit_pct", "익절 기준 (%)", { term: "take_profit" })}
@@ -395,7 +396,7 @@ export default function Builder({ form, setForm }) {
       </Group>
 
       {/* common risk */}
-      <Group title="손실 제한">
+      <Group title="손실 제한" anchor="risk">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 gap-y-5">
           {num("invest_ratio_pct", "한 번에 사용할 자금 (%)", { term: "invest_ratio", hint: "시작 자금 중 한 번에 얼마를 쓸지 정해요" })}
           <Field label="손절 기준 (%)" term="stop_loss" hint={isShort && (rt === "A" || rt === "B") ? "숏은 손절이 필수예요" : "사용하지 않으려면 체크를 풀어요"}>
@@ -413,7 +414,7 @@ export default function Builder({ form, setForm }) {
       {(() => {
         const isDca = rt === "C";
         return (
-          <details className="pt-5 border-t border-slate-200">
+          <details className="pt-5 border-t border-slate-200" data-tour="advanced-risk">
             <summary className="t-label text-slate-700 cursor-pointer">고급 위험 관리</summary>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 gap-y-5 mt-4">
               <Field label="하루 최대 손실 (%)" term="daily_max_loss" hint={isDca ? "도달하면 그날 추가 매수를 멈춰요" : "도달하면 그날 거래를 멈춰요"}>
@@ -446,7 +447,7 @@ export default function Builder({ form, setForm }) {
       })()}
 
       {/* fees */}
-      <details className="pt-5 border-t border-slate-200">
+      <details className="pt-5 border-t border-slate-200" data-tour="fees">
         <summary className="t-label text-slate-700 cursor-pointer">
           거래 비용과 펀딩비
         </summary>

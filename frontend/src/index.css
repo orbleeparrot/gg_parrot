@@ -2476,6 +2476,88 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   letter-spacing: -0.025em;
 }
 
+/* 결과 확인 개인 배치 — 편집 모드에서만 블록 경계를 드러낸다. 상자를 쓰지 않는
+   원칙(§1-3)의 예외인데, 끌어 옮길 단위가 어디까지인지 보이지 않으면 드래그
+   자체가 성립하지 않기 때문이다. 편집을 끄면 점선도 손잡이도 모두 사라진다. */
+.result-block {
+  padding: 8px 12px 12px;
+  border: 1px dashed rgb(var(--c-slate-300));
+  border-radius: 12px;
+}
+
+.result-block.is-dragging { opacity: 0.45; }
+
+.result-block.is-over {
+  border-style: solid;
+  border-color: rgb(var(--c-brand-line));
+}
+
+.result-block-bar {
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid rgb(var(--c-slate-200));
+  color: rgb(var(--c-slate-500));
+  cursor: grab;
+}
+
+.result-block.is-dragging .result-block-bar { cursor: grabbing; }
+
+.result-block-grip { display: inline-flex; flex: none; }
+
+.result-block-name {
+  flex: 1;
+  min-width: 0;
+  color: rgb(var(--c-slate-700));
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.result-block-moves { display: flex; flex: none; gap: 4px; }
+
+.result-block-moves button {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgb(var(--c-slate-300));
+  border-radius: 8px;
+  color: rgb(var(--c-slate-900));
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.result-block-moves button:disabled { opacity: 0.35; }
+
+/* 지표 고정(핀). 편집 중에는 누를 수 있는 버튼, 평소엔 상태 표시만. */
+.result-pin {
+  width: 24px;
+  height: 24px;
+  margin-right: 6px;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgb(var(--c-slate-300));
+  border-radius: 7px;
+  color: rgb(var(--c-slate-500));
+}
+
+.result-pin.is-on {
+  border-color: rgb(var(--c-brand-line));
+  color: rgb(var(--c-brand-line));
+}
+
+.result-pin-mark {
+  margin-right: 6px;
+  display: inline-flex;
+  flex: none;
+  color: rgb(var(--c-slate-500));
+}
+
 /* 실행기가 윈도우 전용이라, 두 진입 버튼 위에서 미리 알려 준다. */
 .home-entry-choice-platform {
   margin: 10px 0 0;

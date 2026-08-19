@@ -1,8 +1,23 @@
+import { useState } from "react";
 import EquityChart from "./EquityChart.jsx";
 import SimBadge from "./SimBadge.jsx";
 import InfoTooltip from "./InfoTooltip.jsx";
 import { fmtMoney, fmtMoneyCompact, fmtKrw } from "../lib/format.js";
 import { useUsdKrw } from "../lib/usdkrw.js";
+import {
+  RESULT_BLOCKS,
+  DEFAULT_BLOCK_ORDER,
+  STAT_IDS,
+  loadBlockOrder,
+  saveBlockOrder,
+  loadPinnedStats,
+  savePinnedStats,
+  clearResultLayout,
+  moveWithin,
+  insertRelative,
+} from "../lib/resultLayout.js";
+
+const BLOCK_LABEL = Object.fromEntries(RESULT_BLOCKS.map((b) => [b.id, b.label]));
 
 const AI_EXPLAIN_MASCOT = "/brand/navigation/ggparrot-nav-agent.png";
 
@@ -105,10 +120,107 @@ function ParrotExplain({ explanation, onAiExplain, aiBusy, aiError }) {
 }
 
 // table-row: 상자 대신 라벨/값 2열 + 괘선. 수치는 num(고정폭)이라 세로로 맞는다.
-function Stat({ label, value, term, color = "text-slate-900", title, sub }) {
+// 핀(고정) 버튼 아이콘. 채움은 고정된 상태만.
+function PinIcon({ filled }) {
+  return (
+    <svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <path
+        d="M6 2h4v1.2l-.9.9v2.6l1.9 1.9v1.2H5v-1.2l1.9-1.9V4.1L6 3.2V2z"
+        fill={filled ? "currentColor" : "none"}
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinejoin="round"
+      />
+      <line x1="8" y1="9.8" x2="8" y2="14" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+// 드래그 손잡이(점 여섯 개). 편집 모드에서만 보인다.
+function GripIcon() {
+  return (
+    <svg width="12" height="16" viewBox="0 0 12 16" aria-hidden="true" focusable="false" fill="currentColor">
+      {[4, 8, 12].map((y) => (
+        <g key={y}>
+          <circle cx="4" cy={y} r="1.2" />
+          <circle cx="8" cy={y} r="1.2" />
+        </g>
+      ))}
+    </svg>
+  );
+}
+
+// 순서를 바꿀 수 있는 단위 하나. 편집을 끄면 손잡이도 점선도 없이 자식만
+// 그대로 내보낸다 — 평소 화면은 이 기능이 없던 때와 완전히 같다.
+function LayoutBlock({ id, editing, dragging, over, canUp, canDown, onMove, onDragState, onDropOn, children }) {
+  if (!editing) return children;
+  const label = BLOCK_LABEL[id] || id;
+  return (
+    <div
+      className={"result-block" + (dragging ? " is-dragging" : "") + (over ? " is-over" : "")}
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.effectAllowed = "move";
+        // Firefox 는 데이터가 비어 있으면 드래그를 시작하지 않는다.
+        e.dataTransfer.setData("text/plain", id);
+        onDragState(id, null);
+      }}
+      onDragEnd={() => onDragState(null, null)}
+      onDragOver={(e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        onDragState(undefined, id);
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        onDropOn(id);
+      }}
+    >
+      <div className="result-block-bar">
+        <span className="result-block-grip" aria-hidden="true"><GripIcon /></span>
+        <span className="result-block-name">{label}</span>
+        {/* 터치는 HTML5 드래그를 받지 못한다. 모바일과 키보드의 유일한 경로라 항상 둔다. */}
+        <span className="result-block-moves">
+          <button type="button" onClick={() => onMove(id, -1)} disabled={!canUp} aria-label={`${label} 위로`}>↑</button>
+          <button type="button" onClick={() => onMove(id, 1)} disabled={!canDown} aria-label={`${label} 아래로`}>↓</button>
+        </span>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+// 편집 모드에서만 핀 버튼이 붙고, 평소엔 고정된 행에 작은 표시만 남는다.
+function Stat({
+  label,
+  value,
+  term,
+  color = "text-slate-900",
+  title,
+  sub,
+  editing = false,
+  pinned = false,
+  onTogglePin,
+}) {
   return (
     <div className="table-row min-w-0">
       <div className="row-label flex items-center shrink-0">
+        {editing ? (
+          <button
+            type="button"
+            onClick={onTogglePin}
+            aria-pressed={pinned}
+            title={pinned ? "고정 해제" : "맨 위로 고정"}
+            aria-label={`${label} ${pinned ? "고정 해제" : "맨 위로 고정"}`}
+            className={"result-pin" + (pinned ? " is-on" : "")}
+          >
+            <PinIcon filled={pinned} />
+          </button>
+        ) : pinned ? (
+          <span className="result-pin-mark" title="고정된 지표" aria-label="고정된 지표">
+            <PinIcon filled />
+          </span>
+        ) : null}
         {label}
         {term && <InfoTooltip term={term} />}
       </div>
@@ -163,8 +275,14 @@ function PerSymbolTable({ rows }) {
   );
 }
 
-export default function ResultView({ result, perSymbol, explanation, onAiExplain, aiBusy, aiError, summary, dataSource, periodLabel, symbol, leverage = 1 }) {
+export default function ResultView({ result, perSymbol, explanation, onAiExplain, aiBusy, aiError, summary, dataSource, periodLabel, symbol, leverage = 1, customizable = true }) {
   const { rate: krwRate } = useUsdKrw();
+  // 배치는 브라우저에 저장돼 결과가 바뀌어도 유지된다.
+  const [order, setOrder] = useState(loadBlockOrder);
+  const [pinned, setPinned] = useState(loadPinnedStats);
+  const [editing, setEditing] = useState(false);
+  const [dragId, setDragId] = useState(null);
+  const [overId, setOverId] = useState(null);
   if (!result) return null;
   const r = result;
   const up = r.final_return_pct >= 0;
@@ -177,40 +295,81 @@ export default function ResultView({ result, perSymbol, explanation, onAiExplain
   const vsHold = bh !== null ? r.final_return_pct - bh : 0;
   const beatHold = vsHold >= 0;
 
-  return (
-    <div className="space-y-5">
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <div className="t-small text-slate-700">{summary}</div>
-        <div className="flex items-center gap-2">
-          {levered && (
-            <span className="badge badge-risk">
-              고위험 레버리지 <span className="num">{leverage}</span>배
-              <InfoTooltip term="leverage" />
-            </span>
-          )}
-          <SimBadge />
-        </div>
-      </div>
+  // --- 개인 맞춤 배치 -------------------------------------------------
+  // 종목별 표는 단일 종목이면 아예 없다. 없는 블록에 손잡이를 달면 빈 상자만 남는다.
+  const hasPerSymbol = !!(perSymbol && perSymbol.length);
+  const visibleIds = DEFAULT_BLOCK_ORDER.filter((id) => id !== "symbols" || hasPerSymbol);
+  const ordered = order.filter((id) => visibleIds.includes(id));
 
-      {/* 청산은 진짜로 끼어드는 사건이라 상자를 유지한다(§1-3 예외). */}
-      {liq > 0 && (
-        <div className="alert alert-risk">
-          <div className="t-title">
-            기간 중 <span className="num">{liq}</span>번 청산됐어요 (전액 손실)
-          </div>
-          <div className="mt-2 t-small">
-            레버리지 <span className="num">{leverage}</span>배라 청산으로 잃은 금액{" "}
-            <b className="num">{fmtMoney(r.liquidated_loss || 0, symbol)}</b>
-            {fmtKrw(r.liquidated_loss || 0, krwRate) && (
-              <span className="font-normal num"> ({fmtKrw(r.liquidated_loss || 0, krwRate)})</span>
-            )}
-            . 레버리지는 가격이 조금만 반대로 움직여도 투입 증거금을 전부 잃게 만들어요.
-            <InfoTooltip term="liquidation" />
-          </div>
-        </div>
-      )}
+  // 갱신은 전부 함수형으로. 렌더 클로저의 order 를 읽으면 ↑ 를 빠르게 두 번 눌렀을 때
+  // 두 번째 클릭이 첫 번째 결과를 못 보고 같은 값을 다시 계산해 한 칸만 움직인다.
+  const applyOrder = (compute) =>
+    setOrder((prev) => {
+      const next = compute(prev);
+      if (next !== prev) saveBlockOrder(next);
+      return next;
+    });
+  const moveBlock = (id, dir) => applyOrder((prev) => moveWithin(prev, id, dir, visibleIds));
+  const setDragState = (nextDrag, nextOver) => {
+    if (nextDrag !== undefined) setDragId(nextDrag);
+    setOverId(nextOver);
+  };
+  const dropOn = (targetId) => {
+    const src = dragId;
+    setDragId(null);
+    setOverId(null);
+    if (!src || src === targetId) return;
+    applyOrder((prev) => insertRelative(prev, src, targetId, prev.indexOf(src) < prev.indexOf(targetId)));
+  };
+  const togglePin = (id) =>
+    setPinned((prev) => {
+      const next = prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id];
+      savePinnedStats(next);
+      return next;
+    });
+  const resetLayout = () => {
+    clearResultLayout();
+    setOrder([...DEFAULT_BLOCK_ORDER]);
+    setPinned([]);
+  };
 
-      {/* stat — 상자 없는 수치: 캡션 위, 값 아래, 여백으로만 구분(§6). */}
+  const statProps = {
+    win_rate: { label: "승률", term: "win_rate", value: `${r.win_rate_pct.toFixed(1)}%` },
+    mdd: { label: "MDD (최대낙폭)", term: "mdd", value: `-${r.mdd_pct.toFixed(1)}%`, color: "text-red-600" },
+    trades: { label: "총 매매 횟수", value: r.total_trades },
+    final_equity: {
+      label: "최종 평가금액",
+      value: fmtMoneyCompact(r.final_equity, symbol),
+      title: fmtMoney(r.final_equity, symbol),
+      sub: fmtKrw(r.final_equity, krwRate),
+    },
+    sharpe: {
+      label: "샤프지수",
+      term: "sharpe",
+      value: r.sharpe != null ? r.sharpe.toFixed(2) : "—",
+      color: r.sharpe != null && r.sharpe >= 1 ? "text-green-600" : "text-slate-900",
+    },
+    profit_factor: {
+      label: "손익비 (PF)",
+      term: "profit_factor",
+      value: r.profit_factor != null ? r.profit_factor.toFixed(2) : "—",
+      color: r.profit_factor != null && r.profit_factor >= 1 ? "text-green-600" : "text-slate-900",
+    },
+    loss_streak: {
+      label: "최대 연속손절",
+      value: `${r.max_consecutive_losses || 0}회`,
+      color: (r.max_consecutive_losses || 0) >= 5 ? "text-red-600" : "text-slate-900",
+    },
+  };
+  // 고정한 지표를 위로. 두 묶음 안에서는 기본 순서를 지켜야 배치가 예측 가능하다.
+  const statOrder = [
+    ...STAT_IDS.filter((id) => pinned.includes(id)),
+    ...STAT_IDS.filter((id) => !pinned.includes(id)),
+  ];
+
+  const blocks = {
+    returns: (
+      /* stat — 상자 없는 수치: 캡션 위, 값 아래, 여백으로만 구분(§6). */
       <div className="pt-1">
         <div className="flex items-center t-caption text-slate-700 mb-1">
           백테스트 수익률 {periodLabel ? `· ${periodLabel}` : ""}
@@ -236,44 +395,101 @@ export default function ResultView({ result, perSymbol, explanation, onAiExplain
           </div>
         )}
       </div>
-
+    ),
+    stats: (
       <div className="border-t border-slate-200">
-        <Stat label="승률" term="win_rate" value={`${r.win_rate_pct.toFixed(1)}%`} />
-        <Stat label="MDD (최대낙폭)" term="mdd" value={`-${r.mdd_pct.toFixed(1)}%`} color="text-red-600" />
-        <Stat label="총 매매 횟수" value={r.total_trades} />
-        <Stat label="최종 평가금액" value={fmtMoneyCompact(r.final_equity, symbol)} title={fmtMoney(r.final_equity, symbol)} sub={fmtKrw(r.final_equity, krwRate)} />
-        <Stat
-          label="샤프지수"
-          term="sharpe"
-          value={r.sharpe != null ? r.sharpe.toFixed(2) : "—"}
-          color={r.sharpe != null && r.sharpe >= 1 ? "text-green-600" : "text-slate-900"}
-        />
-        <Stat
-          label="손익비 (PF)"
-          term="profit_factor"
-          value={r.profit_factor != null ? r.profit_factor.toFixed(2) : "—"}
-          color={r.profit_factor != null && r.profit_factor >= 1 ? "text-green-600" : "text-slate-900"}
-        />
-        <Stat
-          label="최대 연속손절"
-          value={`${r.max_consecutive_losses || 0}회`}
-          color={(r.max_consecutive_losses || 0) >= 5 ? "text-red-600" : "text-slate-900"}
-        />
+        {statOrder.map((id) => (
+          <Stat
+            key={id}
+            {...statProps[id]}
+            editing={editing}
+            pinned={pinned.includes(id)}
+            onTogglePin={() => togglePin(id)}
+          />
+        ))}
       </div>
-
-      <PerSymbolTable rows={perSymbol} />
-
+    ),
+    symbols: <PerSymbolTable rows={perSymbol} />,
+    ai: (
       <ParrotExplain
         explanation={explanation}
         onAiExplain={onAiExplain}
         aiBusy={aiBusy}
         aiError={aiError}
       />
-
+    ),
+    equity: (
       <div className="pt-2">
         <div className="t-title text-slate-900 mb-3">자산곡선 (equity curve)</div>
         <EquityChart curve={r.equity_curve} />
       </div>
+    ),
+  };
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="t-small text-slate-700">{summary}</div>
+        <div className="flex items-center gap-2">
+          {levered && (
+            <span className="badge badge-risk">
+              고위험 레버리지 <span className="num">{leverage}</span>배
+              <InfoTooltip term="leverage" />
+            </span>
+          )}
+          <SimBadge />
+          {customizable && (
+            <button type="button" onClick={() => setEditing((v) => !v)} className="btn btn-s btn-secondary">
+              {editing ? "완료" : "순서 바꾸기"}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {editing && (
+        <div className="notice flex items-center justify-between gap-3 flex-wrap t-caption text-slate-700">
+          <span>
+            블록을 끌어 옮기거나 ↑↓ 버튼으로 순서를 바꿔요. 지표 왼쪽 핀을 누르면 맨 위로 고정돼요.
+            배치는 이 브라우저에만 저장돼요.
+          </span>
+          <button type="button" onClick={resetLayout} className="btn btn-s btn-secondary">기본 배치로</button>
+        </div>
+      )}
+
+      {/* 청산은 진짜로 끼어드는 사건이라 상자를 유지한다(§1-3 예외). */}
+      {liq > 0 && (
+        <div className="alert alert-risk">
+          <div className="t-title">
+            기간 중 <span className="num">{liq}</span>번 청산됐어요 (전액 손실)
+          </div>
+          <div className="mt-2 t-small">
+            레버리지 <span className="num">{leverage}</span>배라 청산으로 잃은 금액{" "}
+            <b className="num">{fmtMoney(r.liquidated_loss || 0, symbol)}</b>
+            {fmtKrw(r.liquidated_loss || 0, krwRate) && (
+              <span className="font-normal num"> ({fmtKrw(r.liquidated_loss || 0, krwRate)})</span>
+            )}
+            . 레버리지는 가격이 조금만 반대로 움직여도 투입 증거금을 전부 잃게 만들어요.
+            <InfoTooltip term="liquidation" />
+          </div>
+        </div>
+      )}
+
+      {ordered.map((id, i) => (
+        <LayoutBlock
+          key={id}
+          id={id}
+          editing={editing}
+          dragging={dragId === id}
+          over={overId === id && !!dragId && dragId !== id}
+          canUp={i > 0}
+          canDown={i < ordered.length - 1}
+          onMove={moveBlock}
+          onDragState={setDragState}
+          onDropOn={dropOn}
+        >
+          {blocks[id]}
+        </LayoutBlock>
+      ))}
 
       {r.same_bar_sl_bars > 0 && (
         <div className="t-caption text-amber-700">

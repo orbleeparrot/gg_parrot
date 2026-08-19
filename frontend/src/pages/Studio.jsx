@@ -184,6 +184,7 @@ export default function Studio() {
     }
   );
   const [tourOpen, setTourOpen] = useState(false);
+  const [builderTab, setBuilderTab] = useState("basic"); // "basic" | "pro" (프로는 개발 중)
   const [fileImportBusy, setFileImportBusy] = useState(false);
   const [fileImportError, setFileImportError] = useState("");
   const [fileImportSuccess, setFileImportSuccess] = useState("");
@@ -580,7 +581,14 @@ export default function Studio() {
             <span className="t-label text-slate-900">처음이신가요?</span>
             <span className="ml-2 t-small text-slate-500">화면을 순서대로 짚어가며 사용법을 안내해 드려요.</span>
           </div>
-          <button type="button" onClick={() => setTourOpen(true)} className="btn btn-m btn-secondary">
+          <button
+            type="button"
+            onClick={() => {
+              setBuilderTab("basic"); // 투어가 짚는 요소는 모두 기본 빌더 안에 있다.
+              setTourOpen(true);
+            }}
+            className="btn btn-m btn-secondary"
+          >
             사용법 안내
           </button>
         </div>
@@ -607,33 +615,93 @@ export default function Studio() {
             <p className="mt-2 t-small text-slate-700">처음에는 종목과 전략만 바꾸고 나머지는 기본값으로 확인해도 돼요.</p>
           </div>
 
+          <div className="seg mb-5 max-w-full flex-wrap" role="tablist" aria-label="매크로 빌더 종류">
+            <button
+              type="button"
+              role="tab"
+              id="builder-tab-basic"
+              aria-selected={builderTab === "basic"}
+              aria-controls="builder-panel-basic"
+              onClick={() => setBuilderTab("basic")}
+              className={"seg-item " + (builderTab === "basic" ? "seg-item-on" : "")}
+            >
+              기본 매크로 빌더
+            </button>
+            <button
+              type="button"
+              role="tab"
+              id="builder-tab-pro"
+              aria-selected={builderTab === "pro"}
+              aria-controls="builder-panel-pro"
+              onClick={() => setBuilderTab("pro")}
+              className={"seg-item " + (builderTab === "pro" ? "seg-item-on" : "")}
+            >
+              프로 매크로 빌더
+              <span className="badge badge-flat ml-2">개발 예정</span>
+            </button>
+          </div>
+
           {loadedFrom ? (
             <div className="notice mb-5 t-small text-slate-700">
               불러온 매크로 · <b className="text-slate-900">{loadedFrom}</b>
             </div>
           ) : null}
 
-          <Builder form={form} setForm={setForm} />
-
-          {valErr ? <div className="mt-4 t-small text-amber-700" role="alert">{valErr}</div> : null}
-          {error ? <div className="mt-4 t-small text-red-600" role="alert">오류: {error}</div> : null}
-
-          <div className="mt-6 flex items-center gap-3 flex-wrap">
-            <button onClick={() => runBacktest(form)} disabled={busy || !!valErr}
-              className={"btn btn-l " + (resultIsFresh ? "btn-secondary" : "btn-primary")}>
-              {busy ? "결과 계산 중…" : testedMacro && !resultIsFresh ? "바뀐 조건으로 다시 테스트" : "이 조건으로 백테스트"}
-            </button>
-            <button onClick={saveAndShare} disabled={busy || !!valErr} className="btn btn-l btn-secondary">
-              저장하고 공유 링크 만들기
-            </button>
-            <label className="flex items-center gap-2 t-small text-slate-700 cursor-pointer select-none">
-              <input type="checkbox" checked={autoRun} onChange={(event) => setAutoRun(event.target.checked)} />
-              변경 뒤 자동 테스트
-            </label>
+          {/* 프로 빌더는 아직 준비 중이라 폼을 열지 않는다. 기본 빌더는 계속 마운트해
+              두어 탭을 오가도 입력한 조건이 사라지지 않게 한다. */}
+          <div
+            id="builder-panel-basic"
+            role="tabpanel"
+            aria-labelledby="builder-tab-basic"
+            hidden={builderTab !== "basic"}
+          >
+            <Builder form={form} setForm={setForm} />
           </div>
-          <p className="mt-3 t-caption text-slate-500">
-            첫 결과 뒤부터 자동 테스트가 동작해요 · <kbd className="num rounded border border-slate-300 bg-slate-100 px-1">Ctrl</kbd>+<kbd className="num rounded border border-slate-300 bg-slate-100 px-1">Enter</kbd>
-          </p>
+
+          {builderTab === "pro" ? (
+            <div
+              id="builder-panel-pro"
+              role="tabpanel"
+              aria-labelledby="builder-tab-pro"
+              className="py-14 text-center border-b border-slate-200"
+            >
+              <div className="t-title text-slate-900">프로 매크로 빌더는 준비 중이에요</div>
+              <p className="mt-2 t-small text-slate-700 measure mx-auto">
+                여러 조건을 조합하고 진입·청산 규칙을 직접 짜는 고급 빌더예요. 아직 개발 중이라
+                지금은 사용할 수 없어요. 그동안은 기본 매크로 빌더로 조건을 만들어 주세요.
+              </p>
+              <button
+                type="button"
+                onClick={() => setBuilderTab("basic")}
+                className="btn btn-m btn-secondary mt-5"
+              >
+                기본 매크로 빌더로 돌아가기
+              </button>
+            </div>
+          ) : null}
+
+          {builderTab === "basic" ? (
+            <>
+              {valErr ? <div className="mt-4 t-small text-amber-700" role="alert">{valErr}</div> : null}
+              {error ? <div className="mt-4 t-small text-red-600" role="alert">오류: {error}</div> : null}
+              <div className="mt-6 flex items-center gap-3 flex-wrap">
+                <button onClick={() => runBacktest(form)} disabled={busy || !!valErr}
+                  className={"btn btn-l " + (resultIsFresh ? "btn-secondary" : "btn-primary")}>
+                  {busy ? "결과 계산 중…" : testedMacro && !resultIsFresh ? "바뀐 조건으로 다시 테스트" : "이 조건으로 백테스트"}
+                </button>
+                <button onClick={saveAndShare} disabled={busy || !!valErr} className="btn btn-l btn-secondary">
+                  저장하고 공유 링크 만들기
+                </button>
+                <label className="flex items-center gap-2 t-small text-slate-700 cursor-pointer select-none">
+                  <input type="checkbox" checked={autoRun} onChange={(event) => setAutoRun(event.target.checked)} />
+                  변경 뒤 자동 테스트
+                </label>
+              </div>
+              <p className="mt-3 t-caption text-slate-500">
+                첫 결과 뒤부터 자동 테스트가 동작해요 · <kbd className="num rounded border border-slate-300 bg-slate-100 px-1">Ctrl</kbd>+<kbd className="num rounded border border-slate-300 bg-slate-100 px-1">Enter</kbd>
+              </p>
+            </>
+          ) : null}
         </section>
 
         <section id="backtest-result">

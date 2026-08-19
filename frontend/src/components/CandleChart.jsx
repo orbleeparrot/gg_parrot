@@ -20,6 +20,8 @@ import { fmtPrice, quoteOf } from "../lib/format.js";
 const BUFFER = 300; // bars fetched (server clamps at CHART_MAX_LIMIT)
 const MIN_ZOOM = 10; // fewest bars on screen (max detail)
 const DEFAULT_ZOOM = 80;
+const MAX_BAR_WIDTH = 48; // viewBox units — a fully zoomed-in body (W = 720)
+const OVERLAY_HEADROOM = 1.5; // candle-spans an overlay may add per side
 
 function mergeLiveCandles(history, latest) {
   if (!Array.isArray(history) || !history.length || !Array.isArray(latest) || !latest.length) return history;
@@ -149,8 +151,23 @@ function Chart({ candles, symbol, hover, setHover, onPan, overlay, expanded = fa
     });
     overlay.priceLines?.forEach((p) => Number.isFinite(p.price) && extra.push(p.price));
   }
-  const hi = Math.max(...candles.map((k) => k.h), ...extra);
-  const lo = Math.min(...candles.map((k) => k.l), ...extra);
+  // The candles own the scale. An overlay line can sit far from the last price
+  // (a limit order several percent away, my average cost from an old entry) and
+  // letting it set `hi`/`lo` flattened the bars into a ribbon — worst on 1m/5m,
+  // where 80 bars may only span a fraction of a percent. So overlays may stretch
+  // the axis by at most OVERLAY_HEADROOM candle-spans per side; beyond that the
+  // line just draws off-screen (its right-edge tag is already skipped).
+  const barHi = Math.max(...candles.map((k) => k.h));
+  const barLo = Math.min(...candles.map((k) => k.l));
+  const barSpan = barHi - barLo || barHi * 0.001 || 1;
+  const ceil = barHi + barSpan * OVERLAY_HEADROOM;
+  const floor = barLo - barSpan * OVERLAY_HEADROOM;
+  let hi = barHi;
+  let lo = barLo;
+  for (const v of extra) {
+    if (v > hi) hi = Math.min(v, ceil);
+    if (v < lo) lo = Math.max(v, floor);
+  }
   const span = hi - lo || hi * 0.001 || 1;
   const top = hi + span * 0.08; // breathing room so wicks never touch the frame
   const bot = lo - span * 0.08;
@@ -158,7 +175,10 @@ function Chart({ candles, symbol, hover, setHover, onPan, overlay, expanded = fa
 
   const plotW = W - pad.l - pad.r;
   const slot = plotW / n;
-  const bw = Math.max(1, Math.min(slot * 0.68, 22));
+  // Bodies grow with the slot so zooming in actually thickens the candles.
+  // The old 22px cap bound below ~22 visible bars, so the last stretch of
+  // zoom stopped thickening the bars and only spread them further apart.
+  const bw = Math.max(1, Math.min(slot * 0.7, MAX_BAR_WIDTH));
   const cx = (i) => pad.l + slot * (i + 0.5);
   const y = (v) => pad.t + (1 - (v - bot) / range) * (H - pad.t - pad.b);
 

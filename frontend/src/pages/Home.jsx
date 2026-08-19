@@ -41,6 +41,10 @@ function HomeEntryHero({ onLeaderboard, onGuide }) {
       <nav className="home-entry-choices" aria-labelledby="home-entry-choice-title">
         <div className="home-entry-choice-heading">
           <h2 id="home-entry-choice-title">어떻게 시작할까요?</h2>
+          <p className="home-entry-choice-platform">
+            <span className="home-entry-choice-platform-badge">Windows</span>
+            매크로 실행기는 윈도우 PC 환경에서 실행할 수 있어요. 아래 두 가지 모두 웹에서 준비하고, 실행은 내 윈도우 PC에서 이어져요.
+          </p>
         </div>
         <button
           type="button"

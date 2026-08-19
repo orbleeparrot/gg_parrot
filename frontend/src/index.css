@@ -2476,6 +2476,30 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   letter-spacing: -0.025em;
 }
 
+/* 실행기가 윈도우 전용이라, 두 진입 버튼 위에서 미리 알려 준다. */
+.home-entry-choice-platform {
+  margin: 10px 0 0;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: rgb(var(--c-slate-700));
+  font-size: 14px;
+  font-weight: 550;
+  line-height: 1.55;
+}
+
+.home-entry-choice-platform-badge {
+  flex: none;
+  padding: 3px 9px;
+  border: 1px solid rgb(var(--c-slate-300));
+  border-radius: 999px;
+  color: rgb(var(--c-slate-900));
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
 .home-entry-choice {
   width: 100%;
   min-height: 122px;

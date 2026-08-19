@@ -503,15 +503,25 @@ export default function CandleChart({
     load(true);
     const arm = () => {
       timer.current = window.setTimeout(async () => {
-        await load(false);
+        // 백그라운드 탭은 아무도 보지 않는 화면에 300봉(~29 KB)을 계속 받아간다.
+        // 라이브 루프에는 원래 있던 가드가 여기엔 빠져 있어서, 탭 하나만 열어둬도
+        // 대역폭이 무한정 새어나갔다.
+        if (!document.hidden) await load(false);
         if (alive) arm();
       }, refreshMs);
     };
     arm();
 
+    // 돌아왔을 때 다음 폴링까지 최대 봉 간격만큼 기다리지 않도록 즉시 한 번 따라잡는다.
+    const onVisibility = () => {
+      if (!document.hidden) load(false);
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+
     return () => {
       alive = false;
       clearTimeout(timer.current);
+      document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [symbol, interval, market]);
 

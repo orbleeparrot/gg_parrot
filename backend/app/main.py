@@ -26,6 +26,7 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlmodel import select
@@ -85,6 +86,15 @@ app = FastAPI(title="Coin Macro Backtest & Share (Simulation only)", lifespan=li
 # Ensure tables exist even when the app is imported without the lifespan running
 # (e.g. TestClient constructed without a context manager).
 init_db()
+
+# 응답 압축. 캔들 JSON은 같은 모양의 숫자 문자열이 300줄 반복이라 압축이 아주
+# 잘 든다 — /api/candles 실측 29,387 B -> 7,083 B (4.1배). 이게 빠져 있어서
+# 무료 대역폭 5 GB 를 태웠다. compresslevel 은 9 대신 6: 비율은 거의 같은데
+# CPU 를 훨씬 덜 쓴다(무료 인스턴스라 CPU 가 더 아깝다).
+#
+# 순서 주의 — Starlette 은 나중에 추가한 미들웨어가 바깥이다. CORS 를 뒤에 둬서
+# 가장 바깥에 두면 에러 응답에도 CORS 헤더가 확실히 붙는다.
+app.add_middleware(GZipMiddleware, minimum_size=500, compresslevel=6)
 
 app.add_middleware(
     CORSMiddleware,

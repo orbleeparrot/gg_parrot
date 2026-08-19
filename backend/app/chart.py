@@ -17,17 +17,23 @@ from typing import Optional
 
 from .data import NoSpotDataError, get_recent_klines
 
-# Supported intervals -> how long a chart response stays fresh. Bars only settle
-# once per interval, so polling much faster than this buys nothing; the frontend
-# still animates the open bar every tick using the live ticker price.
+# Supported intervals -> how long a chart response stays fresh. This value is
+# both the server cache TTL and the poll interval the client is told to use.
+#
+# The 300-bar history only changes when a bar closes, and the moving edge is
+# already served separately by /api/candles/live (325 B every 3 s). Refreshing
+# the whole history faster than the bar interval therefore re-sends ~29 KB of
+# bytes the client already has — that is what exhausted the 5 GB free tier
+# (1m at 3 s = 33.6 MB/hour per open chart). Roughly one refresh per bar, capped
+# so long intervals still correct themselves within a few minutes.
 _INTERVALS: dict[str, float] = {
-    "1m": 3.0,
-    "3m": 5.0,
-    "5m": 5.0,
-    "15m": 10.0,
-    "1h": 15.0,
-    "4h": 30.0,
-    "1d": 60.0,
+    "1m": 60.0,
+    "3m": 120.0,
+    "5m": 120.0,
+    "15m": 180.0,
+    "1h": 300.0,
+    "4h": 600.0,
+    "1d": 900.0,
 }
 DEFAULT_INTERVAL = "1m"
 MAX_LIMIT = int(os.environ.get("CHART_MAX_LIMIT", "300"))

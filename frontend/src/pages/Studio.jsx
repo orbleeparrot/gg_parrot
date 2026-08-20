@@ -554,8 +554,9 @@ export default function Studio() {
       />
 
       {/* 유틸리티 한 줄 — 파일 등록과 사용법 안내는 본문이 아니라 부속 동작이라
-          제목·설명 문단으로 두 블록을 차지할 이유가 없다. 괘선 한 줄에 버튼만 남긴다. */}
-      <section className="mb-6 border-y border-slate-200" aria-label="빌더 도구">
+          제목·설명 문단으로 두 블록을 차지할 이유가 없다. 괘선도 두지 않는다:
+          구획을 나눌 만한 내용이 아니라 버튼 두 개뿐이다. */}
+      <section className="mb-6" aria-label="빌더 도구">
         <input
           ref={macroFileInputRef}
           type="file"
@@ -564,7 +565,7 @@ export default function Studio() {
           className="sr-only"
           aria-label="껄무새 매크로 파일 등록"
         />
-        <div className="py-2 flex items-center justify-end gap-2 flex-wrap">
+        <div className="py-1 flex items-center gap-2 flex-wrap">
           {!slug ? (
             token ? (
               <button
@@ -598,8 +599,8 @@ export default function Studio() {
             사용법 안내
           </button>
         </div>
-        {fileImportError ? <p className="pb-3 t-small text-red-600" role="alert">{fileImportError}</p> : null}
-        {fileImportSuccess ? <p className="pb-3 t-small text-green-700" role="status">{fileImportSuccess}</p> : null}
+        {fileImportError ? <p className="mt-2 t-small text-red-600" role="alert">{fileImportError}</p> : null}
+        {fileImportSuccess ? <p className="mt-2 t-small text-green-700" role="status">{fileImportSuccess}</p> : null}
       </section>
 
       {hasRegistrationDraft ? (

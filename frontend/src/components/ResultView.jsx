@@ -6,18 +6,15 @@ import { fmtMoney, fmtMoneyCompact, fmtKrw } from "../lib/format.js";
 import { useUsdKrw } from "../lib/usdkrw.js";
 import {
   RESULT_BLOCKS,
-  DEFAULT_BLOCK_ORDER,
   STAT_IDS,
   loadBlockOrder,
   saveBlockOrder,
-  loadPinnedStats,
-  savePinnedStats,
+  loadStatOrder,
+  saveStatOrder,
   clearResultLayout,
   moveWithin,
   insertRelative,
 } from "../lib/resultLayout.js";
-
-const BLOCK_LABEL = Object.fromEntries(RESULT_BLOCKS.map((b) => [b.id, b.label]));
 
 const AI_EXPLAIN_MASCOT = "/brand/navigation/ggparrot-nav-agent.png";
 
@@ -119,23 +116,6 @@ function ParrotExplain({ explanation, onAiExplain, aiBusy, aiError }) {
   );
 }
 
-// table-row: 상자 대신 라벨/값 2열 + 괘선. 수치는 num(고정폭)이라 세로로 맞는다.
-// 핀(고정) 버튼 아이콘. 채움은 고정된 상태만.
-function PinIcon({ filled }) {
-  return (
-    <svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-      <path
-        d="M6 2h4v1.2l-.9.9v2.6l1.9 1.9v1.2H5v-1.2l1.9-1.9V4.1L6 3.2V2z"
-        fill={filled ? "currentColor" : "none"}
-        stroke="currentColor"
-        strokeWidth="1.2"
-        strokeLinejoin="round"
-      />
-      <line x1="8" y1="9.8" x2="8" y2="14" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-    </svg>
-  );
-}
-
 // 드래그 손잡이(점 여섯 개). 편집 모드에서만 보인다.
 function GripIcon() {
   return (
@@ -150,48 +130,63 @@ function GripIcon() {
   );
 }
 
-// 순서를 바꿀 수 있는 단위 하나. 편집을 끄면 손잡이도 점선도 없이 자식만
+// 블록과 지표 행이 똑같은 드래그 규칙을 쓴다. 여기 한 곳에만 둔다.
+function dragProps(id, onDragState, onDropOn) {
+  return {
+    draggable: true,
+    onDragStart: (e) => {
+      e.dataTransfer.effectAllowed = "move";
+      // Firefox 는 데이터가 비어 있으면 드래그를 시작조차 하지 않는다.
+      e.dataTransfer.setData("text/plain", id);
+      onDragState(id, null);
+    },
+    onDragEnd: () => onDragState(null, null),
+    onDragOver: (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      onDragState(undefined, id);
+    },
+    onDrop: (e) => {
+      e.preventDefault();
+      onDropOn(id);
+    },
+  };
+}
+
+// 터치는 HTML5 드래그 이벤트를 받지 못한다. 모바일과 키보드의 유일한 경로라
+// 드래그가 되는 곳에는 항상 같이 둔다.
+function MoveButtons({ label, canUp, canDown, onMove, className = "result-block-moves" }) {
+  return (
+    <span className={className}>
+      <button type="button" onClick={onMove.bind(null, -1)} disabled={!canUp} aria-label={`${label} 위로`}>↑</button>
+      <button type="button" onClick={onMove.bind(null, 1)} disabled={!canDown} aria-label={`${label} 아래로`}>↓</button>
+    </span>
+  );
+}
+
+// 순서를 바꿀 수 있는 블록 하나. 편집을 끄면 손잡이도 점선도 없이 자식만
 // 그대로 내보낸다 — 평소 화면은 이 기능이 없던 때와 완전히 같다.
-function LayoutBlock({ id, editing, dragging, over, canUp, canDown, onMove, onDragState, onDropOn, children }) {
+function LayoutBlock({ id, label, editing, dragging, over, canUp, canDown, onMove, onDragState, onDropOn, children }) {
   if (!editing) return children;
-  const label = BLOCK_LABEL[id] || id;
   return (
     <div
       className={"result-block" + (dragging ? " is-dragging" : "") + (over ? " is-over" : "")}
-      draggable
-      onDragStart={(e) => {
-        e.dataTransfer.effectAllowed = "move";
-        // Firefox 는 데이터가 비어 있으면 드래그를 시작하지 않는다.
-        e.dataTransfer.setData("text/plain", id);
-        onDragState(id, null);
-      }}
-      onDragEnd={() => onDragState(null, null)}
-      onDragOver={(e) => {
-        e.preventDefault();
-        e.dataTransfer.dropEffect = "move";
-        onDragState(undefined, id);
-      }}
-      onDrop={(e) => {
-        e.preventDefault();
-        onDropOn(id);
-      }}
+      {...dragProps(id, onDragState, onDropOn)}
     >
       <div className="result-block-bar">
         <span className="result-block-grip" aria-hidden="true"><GripIcon /></span>
         <span className="result-block-name">{label}</span>
-        {/* 터치는 HTML5 드래그를 받지 못한다. 모바일과 키보드의 유일한 경로라 항상 둔다. */}
-        <span className="result-block-moves">
-          <button type="button" onClick={() => onMove(id, -1)} disabled={!canUp} aria-label={`${label} 위로`}>↑</button>
-          <button type="button" onClick={() => onMove(id, 1)} disabled={!canDown} aria-label={`${label} 아래로`}>↓</button>
-        </span>
+        <MoveButtons label={label} canUp={canUp} canDown={canDown} onMove={(d) => onMove(id, d)} />
       </div>
       {children}
     </div>
   );
 }
 
-// 편집 모드에서만 핀 버튼이 붙고, 평소엔 고정된 행에 작은 표시만 남는다.
+// table-row: 상자 대신 라벨/값 2열 + 괘선. 수치는 num(고정폭)이라 세로로 맞는다.
+// 편집 모드에서는 행 자체가 드래그 대상이 되고 손잡이와 ↑↓ 가 붙는다.
 function Stat({
+  id,
   label,
   value,
   term,
@@ -199,34 +194,46 @@ function Stat({
   title,
   sub,
   editing = false,
-  pinned = false,
-  onTogglePin,
+  dragging = false,
+  over = false,
+  canUp = false,
+  canDown = false,
+  onMove,
+  onDragState,
+  onDropOn,
 }) {
+  const drag = editing ? dragProps(id, onDragState, onDropOn) : null;
   return (
-    <div className="table-row min-w-0">
-      <div className="row-label flex items-center shrink-0">
-        {editing ? (
-          <button
-            type="button"
-            onClick={onTogglePin}
-            aria-pressed={pinned}
-            title={pinned ? "고정 해제" : "맨 위로 고정"}
-            aria-label={`${label} ${pinned ? "고정 해제" : "맨 위로 고정"}`}
-            className={"result-pin" + (pinned ? " is-on" : "")}
-          >
-            <PinIcon filled={pinned} />
-          </button>
-        ) : pinned ? (
-          <span className="result-pin-mark" title="고정된 지표" aria-label="고정된 지표">
-            <PinIcon filled />
-          </span>
-        ) : null}
-        {label}
+    <div
+      className={
+        "table-row min-w-0" +
+        (editing ? " result-stat-row" : "") +
+        (dragging ? " is-dragging" : "") +
+        (over ? " is-over" : "")
+      }
+      {...(drag || {})}
+    >
+      <div className="row-label flex items-center min-w-0">
+        {editing && (
+          <span className="result-stat-grip" aria-hidden="true"><GripIcon /></span>
+        )}
+        <span className="truncate">{label}</span>
         {term && <InfoTooltip term={term} />}
       </div>
-      <div className="min-w-0 text-right">
-        <div className={"row-value truncate " + color} title={title}>{value}</div>
-        {sub && <div className="t-caption text-slate-500 truncate num" title={sub}>{sub}</div>}
+      <div className="flex items-center gap-2 min-w-0">
+        <div className="min-w-0 text-right">
+          <div className={"row-value truncate " + color} title={title}>{value}</div>
+          {sub && <div className="t-caption text-slate-500 truncate num" title={sub}>{sub}</div>}
+        </div>
+        {editing && (
+          <MoveButtons
+            label={label}
+            canUp={canUp}
+            canDown={canDown}
+            onMove={(d) => onMove(id, d)}
+            className="result-stat-moves"
+          />
+        )}
       </div>
     </div>
   );
@@ -275,11 +282,33 @@ function PerSymbolTable({ rows }) {
   );
 }
 
-export default function ResultView({ result, perSymbol, explanation, onAiExplain, aiBusy, aiError, summary, dataSource, periodLabel, symbol, leverage = 1, customizable = true }) {
+export default function ResultView({
+  result,
+  perSymbol,
+  explanation,
+  onAiExplain,
+  aiBusy,
+  aiError,
+  summary,
+  dataSource,
+  periodLabel,
+  symbol,
+  leverage = 1,
+  customizable = true,
+  // 바깥(Studio)에서 넣어주는 블록 — 실시간 차트처럼 결과 계산과 무관하게
+  // 이 열에 같이 놓이는 것들. [{ id, label, node }]
+  extraBlocks = [],
+}) {
   const { rate: krwRate } = useUsdKrw();
+  // 바깥 블록이 늘 맨 위에 오도록 기본 순서 앞에 붙인다(첫 방문 기준).
+  // extraBlocks: 바깥에서 끼워 넣는 블록 `{ id, label, node }`.
+  const knownBlockIds = [...extraBlocks.map((b) => b.id), ...RESULT_BLOCKS.map((b) => b.id)];
+  const blockLabel = Object.fromEntries(
+    [...extraBlocks, ...RESULT_BLOCKS].map((b) => [b.id, b.label])
+  );
   // 배치는 브라우저에 저장돼 결과가 바뀌어도 유지된다.
-  const [order, setOrder] = useState(loadBlockOrder);
-  const [pinned, setPinned] = useState(loadPinnedStats);
+  const [order, setOrder] = useState(() => loadBlockOrder(knownBlockIds));
+  const [statOrder, setStatOrder] = useState(loadStatOrder);
   const [editing, setEditing] = useState(false);
   const [dragId, setDragId] = useState(null);
   const [overId, setOverId] = useState(null);
@@ -298,7 +327,7 @@ export default function ResultView({ result, perSymbol, explanation, onAiExplain
   // --- 개인 맞춤 배치 -------------------------------------------------
   // 종목별 표는 단일 종목이면 아예 없다. 없는 블록에 손잡이를 달면 빈 상자만 남는다.
   const hasPerSymbol = !!(perSymbol && perSymbol.length);
-  const visibleIds = DEFAULT_BLOCK_ORDER.filter((id) => id !== "symbols" || hasPerSymbol);
+  const visibleIds = knownBlockIds.filter((id) => id !== "symbols" || hasPerSymbol);
   const ordered = order.filter((id) => visibleIds.includes(id));
 
   // 갱신은 전부 함수형으로. 렌더 클로저의 order 를 읽으면 ↑ 를 빠르게 두 번 눌렀을 때
@@ -321,16 +350,25 @@ export default function ResultView({ result, perSymbol, explanation, onAiExplain
     if (!src || src === targetId) return;
     applyOrder((prev) => insertRelative(prev, src, targetId, prev.indexOf(src) < prev.indexOf(targetId)));
   };
-  const togglePin = (id) =>
-    setPinned((prev) => {
-      const next = prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id];
-      savePinnedStats(next);
+  // 지표 행도 블록과 같은 방식으로 순서를 바꾼다(전부 보이므로 visible 목록은 전체).
+  const applyStatOrder = (compute) =>
+    setStatOrder((prev) => {
+      const next = compute(prev);
+      if (next !== prev) saveStatOrder(next);
       return next;
     });
+  const moveStat = (id, dir) => applyStatOrder((prev) => moveWithin(prev, id, dir, STAT_IDS));
+  const dropStatOn = (targetId) => {
+    const src = dragId;
+    setDragId(null);
+    setOverId(null);
+    if (!src || src === targetId) return;
+    applyStatOrder((prev) => insertRelative(prev, src, targetId, prev.indexOf(src) < prev.indexOf(targetId)));
+  };
   const resetLayout = () => {
     clearResultLayout();
-    setOrder([...DEFAULT_BLOCK_ORDER]);
-    setPinned([]);
+    setOrder([...knownBlockIds]);
+    setStatOrder([...STAT_IDS]);
   };
 
   const statProps = {
@@ -361,13 +399,8 @@ export default function ResultView({ result, perSymbol, explanation, onAiExplain
       color: (r.max_consecutive_losses || 0) >= 5 ? "text-red-600" : "text-slate-900",
     },
   };
-  // 고정한 지표를 위로. 두 묶음 안에서는 기본 순서를 지켜야 배치가 예측 가능하다.
-  const statOrder = [
-    ...STAT_IDS.filter((id) => pinned.includes(id)),
-    ...STAT_IDS.filter((id) => !pinned.includes(id)),
-  ];
-
   const blocks = {
+    ...Object.fromEntries(extraBlocks.map((b) => [b.id, b.node])),
     returns: (
       /* stat — 상자 없는 수치: 캡션 위, 값 아래, 여백으로만 구분(§6). */
       <div className="pt-1">
@@ -398,13 +431,19 @@ export default function ResultView({ result, perSymbol, explanation, onAiExplain
     ),
     stats: (
       <div className="border-t border-slate-200">
-        {statOrder.map((id) => (
+        {statOrder.map((id, i) => (
           <Stat
             key={id}
+            id={id}
             {...statProps[id]}
             editing={editing}
-            pinned={pinned.includes(id)}
-            onTogglePin={() => togglePin(id)}
+            dragging={dragId === id}
+            over={overId === id && !!dragId && dragId !== id}
+            canUp={i > 0}
+            canDown={i < statOrder.length - 1}
+            onMove={moveStat}
+            onDragState={setDragState}
+            onDropOn={dropStatOn}
           />
         ))}
       </div>
@@ -478,6 +517,7 @@ export default function ResultView({ result, perSymbol, explanation, onAiExplain
         <LayoutBlock
           key={id}
           id={id}
+          label={blockLabel[id] || id}
           editing={editing}
           dragging={dragId === id}
           over={overId === id && !!dragId && dragId !== id}

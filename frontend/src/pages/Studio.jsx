@@ -47,11 +47,6 @@ const TOUR_STEPS = [
     body: "이동평균 크로스·볼린저·RSI 등 원하는 전략을 골라요. 라벨 옆 ⓘ에 마우스를 올리면 각 매매 방식이 어떤 규칙인지 설명을 확인할 수 있어요.",
   },
   {
-    anchor: "chart",
-    title: "실시간 차트 · 보조지표",
-    body: "지금 고른 종목의 실시간 시세를 보여줘요. 선택한 매매 방식의 보조지표(예: 이동평균·볼린저 밴드)가 함께 그려지고, 아래 설정값을 바꾸면 보조지표도 즉시 따라 바뀌는 걸 확인할 수 있어요.",
-  },
-  {
     anchor: "position",
     title: "포지션",
     body: "오를 때 버는 롱(long), 내릴 때 버는 숏(short)을 정해요. 전략에 따라 숏이 막혀 있을 수 있어요.",
@@ -75,6 +70,11 @@ const TOUR_STEPS = [
     anchor: "market",
     title: "시세 데이터",
     body: "현물·선물 중 어떤 캔들로 계산할지 정해요. ‘자동’은 숏·레버리지면 선물, 그 외엔 현물을 골라요. 선물은 실제 펀딩비까지 반영할 수 있어요.",
+  },
+  {
+    anchor: "chart",
+    title: "실시간 차트 · 보조지표",
+    body: "지금 고른 종목의 실시간 시세를 보여줘요. 선택한 매매 방식의 보조지표(예: 이동평균·볼린저 밴드)가 함께 그려지고, 아래 설정값을 바꾸면 보조지표도 즉시 따라 바뀌는 걸 확인할 수 있어요.",
   },
   {
     anchor: "strategy-params",
@@ -111,6 +111,14 @@ function periodLabelOf(macro) {
   ] || macro.period?.preset || "";
 }
 
+// 빌더의 '시세 데이터'가 자동일 때 실제로 쓰일 시장. Builder 의 '실제 사용될
+// 데이터' 안내와 같은 판단이라, 참고 차트도 백테스트와 같은 캔들을 보여준다.
+function chartMarket(form) {
+  if (form.market === "spot" || form.market === "futures") return form.market;
+  const isShort = form.position_side === "short";
+  return isShort || Number(form.leverage) > 1 || form.rule_type === "K" ? "futures" : "spot";
+}
+
 function ChartDisclosure({ symbols, form }) {
   const [open, setOpen] = useState(true);
   const contentId = useId();
@@ -119,10 +127,14 @@ function ChartDisclosure({ symbols, form }) {
   // 밴드와 매수·매도 구간). form 이 바뀌면 오버레이도 즉시 따라간다.
   const overlay = useCallback((candles) => computeStrategyOverlay(form, candles), [form]);
   const ruleLabel = RULE_TYPES[form.rule_type]?.label || "";
+  const market = chartMarket(form);
 
   if (symbols.length === 0) return null;
   return (
-    <section className="border-y border-slate-200" data-tour="chart">
+    // sticky — 아래로 스크롤해 전략 조건·손실 제한을 만지는 동안에도 차트가 계속
+    // 보여야 "조절하면서 보조지표가 바뀌는 걸 본다"가 성립한다. 폼이 밑으로 비쳐
+    // 보이지 않도록 캔버스 색을 깔아 둔다.
+    <section className="builder-chart-sticky border-y border-slate-200" data-tour="chart">
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
@@ -130,21 +142,30 @@ function ChartDisclosure({ symbols, form }) {
         aria-expanded={open}
         aria-controls={contentId}
       >
-        <span>
+        <span className="min-w-0">
           <span className="t-label text-slate-900">실시간 차트 · 보조지표</span>
           <span className="ml-2 t-caption text-slate-500 num">
             {symbols.length === 1 ? symbols[0] : `${symbols.length}개 종목`}
           </span>
+          {/* 설명 문단이던 것을 헤더 한 줄로 접었다 — 스티키로 계속 붙어 있는
+              영역이라 두 줄짜리 안내가 매번 자리를 차지할 이유가 없다. */}
+          {ruleLabel ? <span className="ml-2 t-caption text-slate-500">· {ruleLabel}</span> : null}
         </span>
         <span className="t-caption text-slate-400" aria-hidden="true">{open ? "접기 ↑" : "펼치기 ↓"}</span>
       </button>
       {open ? (
-        <div id={contentId} className="pb-5 space-y-6">
-          <p className="t-small text-slate-500">
-            지금 고른 <b className="text-slate-700">{ruleLabel}</b> 설정을 실시간 차트 위에 그려요. 매수·매도 자리를 눈으로 확인해 보세요.
-          </p>
+        <div id={contentId} className="pb-4 space-y-5">
+          {/* minimal — 조작 안내·면책 문단을 접어 스티키 높이를 줄인다. 확대·축소
+              버튼은 그대로 남는다(compact 와 달리 minimal 은 컨트롤을 지우지 않는다). */}
           {symbols.map((symbol) => (
-            <CandleChart key={symbol} symbol={symbol} defaultInterval={form.candle_interval || "1m"} overlay={overlay} />
+            <CandleChart
+              key={symbol}
+              symbol={symbol}
+              market={market}
+              defaultInterval={form.candle_interval || "1m"}
+              overlay={overlay}
+              minimal
+            />
           ))}
         </div>
       ) : null}
@@ -655,7 +676,11 @@ export default function Studio() {
             aria-labelledby="builder-tab-basic"
             hidden={builderTab !== "basic"}
           >
-            <Builder form={form} setForm={setForm} />
+            <Builder
+              form={form}
+              setForm={setForm}
+              chartSlot={<ChartDisclosure symbols={chartSymbols} form={form} />}
+            />
           </div>
 
           {builderTab === "pro" ? (
@@ -714,8 +739,6 @@ export default function Studio() {
           <div className="sr-only" role="status" aria-live="polite">
             {busy ? "백테스트 결과를 계산하고 있어요." : resultIsFresh ? "백테스트 결과가 준비됐어요." : ""}
           </div>
-
-          <ChartDisclosure symbols={chartSymbols} form={form} />
 
           {!result && !busy ? (
             <div className="py-14 text-center border-b border-slate-200">

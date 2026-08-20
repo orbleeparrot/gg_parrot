@@ -81,7 +81,9 @@ function Group({ title, term, children, note, anchor }) {
 
 const inputCls = "field";
 
-export default function Builder({ form, setForm }) {
+// `chartSlot` 은 '전략 조건' 바로 위에 끼워 넣을 참고 차트다. Studio 가 넘겨준다 —
+// 폼 컴포넌트가 차트·시세 폴링까지 끌어안지 않도록 자리만 비워 둔다.
+export default function Builder({ form, setForm, chartSlot = null }) {
   const instanceId = useId().replace(/:/g, "");
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
   const setChk = (k) => (e) => setForm({ ...form, [k]: e.target.checked });
@@ -266,6 +268,12 @@ export default function Builder({ form, setForm }) {
               : "현물 캔들 (롱·1배라 자동 선택)"),
         }
       )}
+
+      {/* 참고 차트는 '전략 조건' 바로 위에 둔다. 오버레이를 실제로 움직이는 값이
+          바로 아래(익절·손절·기간·밴드 폭…)라, 값을 만지면 시선 바로 위에서
+          보조지표가 따라 움직인다. 레버리지·시세 데이터는 오버레이와 무관해서
+          그 사이에 끼우면 차트와 조절값이 갈린다. */}
+      {chartSlot}
 
       {/* rule-specific params */}
       <Group title={<>전략 조건 · <span className="text-slate-900">{meta.label}</span></>} anchor="strategy-params">

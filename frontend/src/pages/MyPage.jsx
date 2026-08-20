@@ -214,10 +214,6 @@ export default function MyPage() {
           </div>
         )}
       </Section>
-
-      <p className="t-caption text-slate-500 text-center">
-        포인트는 서비스 안에서만 쓰는 가상 재화이고, 본 서비스는 실거래·투자 자문이 아니에요.
-      </p>
     </div>
   );
 }

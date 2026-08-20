@@ -10,9 +10,7 @@ import {
   safeLocalPath,
 } from "../lib/returnPath.js";
 
-// §6 text-field. 라벨은 14/600, 도움말은 14/500 — 둘 다 '작은 글씨' 단계(§4).
 const inputCls = "field";
-const labelCls = "block t-small font-semibold text-slate-700 mb-2";
 
 export default function Auth() {
   const navigate = useNavigate();
@@ -27,6 +25,8 @@ export default function Auth() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [googleClientId, setGoogleClientId] = useState("");
+  const [googleConfigState, setGoogleConfigState] = useState("loading");
+  const [googleConfigAttempt, setGoogleConfigAttempt] = useState(0);
 
   const isSignup = mode === "signup";
 
@@ -37,15 +37,27 @@ export default function Auth() {
   // 구글 로그인 사용 가능 여부·client_id 를 서버에서 런타임으로 받아온다(빌드 환경변수 불필요).
   useEffect(() => {
     let alive = true;
+    setGoogleConfigState("loading");
     api.googleConfig()
       .then((cfg) => {
-        if (alive && cfg?.enabled && cfg.client_id) setGoogleClientId(cfg.client_id);
+        if (!alive) return;
+        if (cfg?.enabled && cfg.client_id) {
+          setGoogleClientId(cfg.client_id);
+          setGoogleConfigState("ready");
+          return;
+        }
+        setGoogleClientId("");
+        setGoogleConfigState("disabled");
       })
-      .catch(() => {});
+      .catch(() => {
+        if (!alive) return;
+        setGoogleClientId("");
+        setGoogleConfigState("error");
+      });
     return () => {
       alive = false;
     };
-  }, []);
+  }, [googleConfigAttempt]);
 
   const onGoogleCredential = useCallback(
     async (credential) => {
@@ -84,39 +96,33 @@ export default function Auth() {
   }
 
   return (
-    <div className="max-w-sm mx-auto">
-      {/* 폼은 상자를 유지하는 §1-3 예외 — 화면 전체가 하나의 입력 흐름이다. */}
-      <div className="form-surface border border-slate-200 p-6">
-        <div className="text-2xl mb-1" aria-hidden>🦜</div>
+    <div className="auth-page">
+      <div className="auth-card form-surface border border-slate-200">
+        <h1 className="t-h2 text-slate-900 text-left mb-5">{isSignup ? "회원가입" : "로그인"}</h1>
         {notice ? (
-          <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 t-small text-amber-800" role="status">
+          <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 t-small text-amber-800" role="status">
             {notice}
           </div>
         ) : null}
-        <h1 className="t-h2 text-slate-900 mb-1">{isSignup ? "회원가입" : "로그인"}</h1>
-        <p className="t-small text-slate-700 mb-6">
-          {isSignup
-            ? "가입하면 스타터 포인트를 드려요. 리더보드 매크로를 열어보거나 내 전략으로 포인트를 벌 수 있어요."
-            : "다시 오신 걸 환영해요."}
-        </p>
 
-        <form onSubmit={submit} className="space-y-4">
+        <form onSubmit={submit} className="space-y-3">
           <label className="block">
-            <span className={labelCls}>이메일</span>
+            <span className="sr-only">{isSignup ? "이메일" : "아이디"}</span>
             <input className={inputCls} type="email" value={email} onChange={(e) => setEmail(e.target.value)}
-              autoComplete="email" required />
+              placeholder={isSignup ? "이메일" : "아이디"} autoComplete="email" required />
           </label>
           {isSignup && (
             <label className="block">
-              <span className={labelCls}>아이디 (공개 표시용)</span>
+              <span className="sr-only">아이디 (공개 표시용)</span>
               <input className={inputCls} value={username} onChange={(e) => setUsername(e.target.value)}
-                placeholder="2~20자 · 한글/영문/숫자/_" autoComplete="username" required />
+                placeholder="아이디 (공개 표시용)" autoComplete="username" required />
             </label>
           )}
           <label className="block">
-            <span className={labelCls}>비밀번호</span>
+            <span className="sr-only">비밀번호</span>
             <input className={inputCls} type="password" value={password} onChange={(e) => setPassword(e.target.value)}
-              placeholder={isSignup ? "8자 이상" : ""} autoComplete={isSignup ? "new-password" : "current-password"} required />
+              placeholder={isSignup ? "비밀번호 (8자 이상)" : "비밀번호"}
+              autoComplete={isSignup ? "new-password" : "current-password"} required />
           </label>
 
           {error && <div className="t-small text-red-600" role="alert">{error}</div>}
@@ -126,26 +132,33 @@ export default function Auth() {
           </button>
         </form>
 
-        {googleClientId && (
-          <>
-            <div className="flex items-center gap-3 my-5" aria-hidden="true">
-              <span className="h-px flex-1 bg-slate-200" />
-              <span className="t-caption text-slate-400">또는</span>
-              <span className="h-px flex-1 bg-slate-200" />
-            </div>
-            <GoogleSignInButton
-              clientId={googleClientId}
-              text={isSignup ? "signup_with" : "signin_with"}
-              onCredential={onGoogleCredential}
-            />
-            <p className="mt-3 t-caption text-slate-500 text-center">
-              구글 계정으로 {isSignup ? "가입" : "로그인"}하면 별도 비밀번호 없이 바로 시작해요.
-            </p>
-          </>
+        <div className="flex items-center gap-3 my-3" aria-hidden="true">
+          <span className="h-px flex-1 bg-slate-200" />
+          <span className="t-caption text-slate-400">또는</span>
+          <span className="h-px flex-1 bg-slate-200" />
+        </div>
+        {googleClientId ? (
+          <GoogleSignInButton
+            clientId={googleClientId}
+            text={isSignup ? "signup_with" : "signin_with"}
+            onCredential={onGoogleCredential}
+          />
+        ) : (
+          <button
+            type="button"
+            className="auth-google-fallback"
+            disabled={googleConfigState === "loading"}
+            aria-busy={googleConfigState === "loading"}
+            onClick={() => setGoogleConfigAttempt((attempt) => attempt + 1)}
+          >
+            {googleConfigState === "loading"
+              ? "Google 로그인 불러오는 중"
+              : `Google 계정으로 ${isSignup ? "가입" : "로그인"}`}
+          </button>
         )}
 
         {!isSignup && (
-          <div className="mt-4 text-center">
+          <div className="mt-3 text-center">
             <button className="t-caption text-slate-500 hover:text-slate-900 underline underline-offset-4"
               onClick={() => navigate(`/forgot?next=${encodeURIComponent(next)}`)}>
               비밀번호를 잊으셨나요?
@@ -153,7 +166,7 @@ export default function Auth() {
           </div>
         )}
 
-        <div className="mt-4 t-small text-slate-700 text-center">
+        <div className="mt-3 t-small text-slate-700 text-center">
           {isSignup ? "이미 계정이 있나요?" : "계정이 없나요?"}{" "}
           <button
             className="font-bold text-slate-900 underline underline-offset-4"
@@ -163,9 +176,6 @@ export default function Auth() {
           </button>
         </div>
       </div>
-      <p className="mt-4 t-caption text-slate-500 text-center">
-        포인트는 서비스 안에서만 쓰는 가상 재화이고, 본 서비스는 실거래·투자 자문이 아니에요.
-      </p>
     </div>
   );
 }

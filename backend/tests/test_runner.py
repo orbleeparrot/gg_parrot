@@ -17,6 +17,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app import runner as runner_mod
+from app.agent_features.position_news import service as position_news_service
 from app.db import RunnerLaunchTicket, get_session
 from app.main import app
 
@@ -587,6 +588,59 @@ def test_cannot_stop_another_users_session():
     r = client.post(f"/api/me/runner/sessions/{sid}/request-stop",
                     json={"mode": "stop_only"}, headers=_auth(token_b))
     assert r.status_code == 404
+
+
+def test_position_news_uses_owned_session_symbol_and_registered_direction(monkeypatch):
+    token = _signup()
+    key = client.get("/api/me/runner/key", headers=_auth(token)).json()["key"]
+    sid = client.post(
+        "/api/runner/start",
+        json={"symbol": "ETHUSDT", "position_side": "short"},
+        headers={"X-Runner-Key": key},
+    ).json()["session_id"]
+    captured = {}
+
+    def fake_position_news(session, *, requester_id=None):
+        captured.update(session)
+        captured["requester_id"] = requester_id
+        return {"feature_key": "position_news", "context": session, "items": []}
+
+    monkeypatch.setattr(position_news_service, "get_position_news", fake_position_news)
+    response = client.get(
+        f"/api/me/agents/sessions/{sid}/position-news",
+        headers=_auth(token),
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.headers["cache-control"] == "private, no-store"
+    assert captured["symbol"] == "ETHUSDT"
+    assert captured["position_side"] == "short"
+    assert captured["requester_id"] is not None
+
+
+def test_position_news_hides_another_users_session(monkeypatch):
+    owner = _signup()
+    owner_key = client.get("/api/me/runner/key", headers=_auth(owner)).json()["key"]
+    sid = client.post(
+        "/api/runner/start",
+        json={"symbol": "BTCUSDT", "position_side": "long"},
+        headers={"X-Runner-Key": owner_key},
+    ).json()["session_id"]
+    stranger = _signup()
+    called = []
+    monkeypatch.setattr(
+        position_news_service,
+        "get_position_news",
+        lambda session, **_kwargs: called.append(session),
+    )
+
+    response = client.get(
+        f"/api/me/agents/sessions/{sid}/position-news",
+        headers=_auth(stranger),
+    )
+
+    assert response.status_code == 404
+    assert called == []
 
 
 def test_heartbeat_on_missing_session_tells_runner_to_stop():

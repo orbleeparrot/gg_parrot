@@ -78,7 +78,7 @@ function TopBar({ hasSidebar, onOpenNavigation, menuButtonRef }) {
           ) : null}
           <BrandLink className={hasSidebar ? "site-mobile-brand" : "site-auth-brand"} />
         </div>
-        {hasSidebar ? <MarketContext /> : <div className="site-auth-shell-label">안전하게 계정 연결하기</div>}
+        {hasSidebar ? <MarketContext /> : null}
         <div className="site-header-utility">
           {hasSidebar ? (
             <Link
@@ -328,7 +328,9 @@ export default function App() {
           // 나머지 본문 화면은 코인동향까지 포함해 전부 같은 게터(.site-main)를 쓴다.
           className={isStart
             ? "home-main"
-            : isAgents
+            : authShell
+              ? "site-main auth-main"
+              : isAgents
                 ? "site-main agent-main"
                 : isNews
                 ? "site-main news-main py-6 sm:py-8"
@@ -356,12 +358,6 @@ export default function App() {
             </Routes>
           </Suspense>
         </main>
-        {isStart || isAgents ? null : (
-          <footer className="site-main pb-6 pt-2 sm:py-8 t-caption text-slate-500">
-            웹 화면은 실제 주문을 보내지 않아요. 백테스트·모의 결과는 투자 조언이 아니며,
-            내려받은 실행 파일의 사용 책임은 사용자에게 있어요.
-          </footer>
-        )}
         {isStart || authShell || isAgents ? null : <HotCoinsMarquee />}
       </div>
     </div>

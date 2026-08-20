@@ -149,6 +149,9 @@ export const api = {
   newsMarket: () => req("/api/news/market"),
   // '경주마 동향' — 코인별 최신 뉴스 헤드라인
   newsCoin: (symbol) => req(`/api/news/coin/${encodeURIComponent(symbol)}`),
+  // 내 에이전트 기능 01 — 서버가 세션 소유권과 등록 매크로 방향을 확인한다.
+  agentPositionNews: (sessionId) =>
+    req(`/api/me/agents/sessions/${encodeURIComponent(sessionId)}/position-news`),
 
   // 껄무새 게시판
   boardList: (page = 1, size = 10) => req(`/api/board/posts?page=${page}&size=${size}`),

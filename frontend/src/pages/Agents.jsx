@@ -4,11 +4,11 @@ import { api } from "../api.js";
 import { useAuth } from "../lib/auth.js";
 import { RULE_TYPES } from "../lib/macro.js";
 import { computeSessionOverlay } from "../lib/indicators.js";
+import { usePositionNewsFeature } from "../features/agents/positionNews/index.js";
 import AgentActivityStream from "../components/AgentActivityStream.jsx";
 import CandleChart from "../components/CandleChart.jsx";
 import { ErrorNote, Loading } from "../components/Page.jsx";
 
-const NEWS_POLL_MS = 5 * 60 * 1000;
 const SESSION_STREAM_PROTOCOL = "ggparrot.sessions.v1";
 const SESSION_RECONNECT_MAX_MS = 30000;
 
@@ -23,14 +23,20 @@ function ruleLabel(macro) {
   return RULE_TYPES[macro?.rule_type]?.label || macro?.rule_type || "매크로";
 }
 
-// 셀렉트 옵션 라벨: 실행 중 세션을 종목·전략·(테스트넷) 기준으로 표기한다.
+// 셀렉트 옵션 라벨: 실행 중 세션과 마지막 오류를 종목·전략·환경 기준으로 표기한다.
 function sessionOptionLabel(session) {
-  const prefix = session.connected ? "" : "응답대기 · ";
+  const prefix = session.status === "error"
+    ? "오류 · "
+    : session.connected
+      ? ""
+      : "응답대기 · ";
   const net = session.testnet ? " · 테스트넷" : "";
   return `${prefix}${session.symbol} · ${ruleLabel(session.macro)}${net}`;
 }
 
 function statusText(session) {
+  if (session.status === "error") return "실행 오류";
+  if (session.status !== "running") return "실행 종료";
   if (session.stopping) return "종료 처리 중…";
   if (session.in_position) {
     const pct = Number(session.unrealized_pct ?? 0);
@@ -40,13 +46,14 @@ function statusText(session) {
 }
 
 function MacroDock({ sessions, selected, busy, onChange, onStop }) {
-  const connected = selected.connected;
+  const running = selected.status === "running";
+  const connected = running && selected.connected;
   const stopping = selected.stopping;
 
   return (
-    <section className="agent-macro-dock" aria-label="실행 중 매크로 선택과 종료">
+    <section className="agent-macro-dock" aria-label="매크로 세션 선택과 제어">
       <label className="agent-macro-dock-picker">
-        <span>실행 중 매크로</span>
+        <span className="sr-only">매크로 세션 선택</span>
         <span className="agent-macro-select-wrap">
           <select value={String(selected.session_id)} onChange={(event) => onChange(event.target.value)}>
             {sessions.map((session) => (
@@ -65,8 +72,8 @@ function MacroDock({ sessions, selected, busy, onChange, onStop }) {
       </div>
 
       <div className="agent-macro-dock-actions">
-        <button type="button" disabled={busy || stopping} onClick={() => onStop("stop_only")} className="btn btn-m btn-secondary">매크로만 종료</button>
-        <button type="button" disabled={busy || stopping} onClick={() => onStop("close_and_stop")} className="btn btn-m btn-danger">청산 후 종료</button>
+        <button type="button" disabled={busy || stopping || !running} onClick={() => onStop("stop_only")} className="btn btn-m btn-secondary">매크로만 종료</button>
+        <button type="button" disabled={busy || stopping || !running} onClick={() => onStop("close_and_stop")} className="btn btn-m btn-danger">청산 후 종료</button>
       </div>
     </section>
   );
@@ -103,12 +110,9 @@ export default function Agents() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [sessions, setSessions] = useState(null);
   const [chartSnapshot, setChartSnapshot] = useState(null);
-  const [news, setNews] = useState({ status: "idle", symbol: "", data: null, error: "" });
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [mobilePane, setMobilePane] = useState("chart");
-  const newsTimer = useRef(null);
-  const newsRequest = useRef(0);
   const sessionSnapshotRevision = useRef(0);
 
   const loadSessions = useCallback(async () => {
@@ -122,31 +126,6 @@ export default function Agents() {
     } catch (reason) {
       if (sessionSnapshotRevision.current !== revision) return;
       setError(String(reason.message || reason));
-    }
-  }, []);
-
-  const loadNews = useCallback(async (symbol) => {
-    if (!symbol) return;
-    const requestId = newsRequest.current + 1;
-    newsRequest.current = requestId;
-    setNews((current) => ({
-      status: "loading",
-      symbol,
-      data: current.symbol === symbol ? current.data : null,
-      error: "",
-    }));
-    try {
-      const data = await api.newsCoin(symbol);
-      if (newsRequest.current === requestId) setNews({ status: "ready", symbol, data, error: "" });
-    } catch (reason) {
-      if (newsRequest.current === requestId) {
-        setNews((current) => ({
-          status: "error",
-          symbol,
-          data: current.symbol === symbol ? current.data : null,
-          error: String(reason.message || reason),
-        }));
-      }
     }
   }, []);
 
@@ -238,13 +217,38 @@ export default function Agents() {
   }, [token]);
 
   // 선택의 소스는 '실행기에서 실제 구동 중인 세션'이다. 저장된 매크로 라이브러리가
-  // 아니라 러너가 보고하는 active 세션을 그대로 쓰므로 실행 정보와 항상 일치한다.
+  // 아니라 러너가 보고하는 active 세션을 그대로 쓴다. 단, 종료와 동시에 사라지는
+  // 오류 상태는 같은 매크로가 다시 실행되기 전까지 최신 1건을 함께 보존한다.
   const activeSessions = useMemo(() => sessions?.active || [], [sessions]);
+  const recentErrorSessions = useMemo(() => {
+    const activeMacroIds = new Set(
+      activeSessions
+        .map((session) => session.user_macro_id)
+        .filter((id) => id !== null && id !== undefined),
+    );
+    const seen = new Set();
+    return (sessions?.recent || []).filter((session) => {
+      if (session.status !== "error") return false;
+      if (session.user_macro_id !== null && session.user_macro_id !== undefined) {
+        if (activeMacroIds.has(session.user_macro_id) || seen.has(session.user_macro_id)) return false;
+        seen.add(session.user_macro_id);
+        return true;
+      }
+      const legacyKey = `${session.symbol}:${session.position_side}:${session.market}`;
+      if (seen.has(legacyKey)) return false;
+      seen.add(legacyKey);
+      return true;
+    });
+  }, [activeSessions, sessions]);
+  const sessionOptions = useMemo(
+    () => [...activeSessions, ...recentErrorSessions],
+    [activeSessions, recentErrorSessions],
+  );
   const selectedId = searchParams.get("session");
   const selected = useMemo(() => {
-    if (!activeSessions.length) return null;
-    return activeSessions.find((session) => String(session.session_id) === selectedId) || activeSessions[0];
-  }, [activeSessions, selectedId]);
+    if (!sessionOptions.length) return null;
+    return sessionOptions.find((session) => String(session.session_id) === selectedId) || sessionOptions[0];
+  }, [selectedId, sessionOptions]);
 
   useEffect(() => {
     if (!selected || String(selected.session_id) === selectedId) return;
@@ -253,27 +257,20 @@ export default function Agents() {
     setSearchParams(next, { replace: true });
   }, [searchParams, selected, selectedId, setSearchParams]);
 
+  const activePositionNews = usePositionNewsFeature(selected?.session_id);
+
   useEffect(() => {
-    if (!selected?.symbol) return undefined;
     setChartSnapshot(null);
-    setNews({ status: "idle", symbol: selected.symbol, data: null, error: "" });
-    loadNews(selected.symbol);
-    const poll = () => {
-      if (!document.hidden) loadNews(selected.symbol);
-      newsTimer.current = window.setTimeout(poll, NEWS_POLL_MS);
-    };
-    newsTimer.current = window.setTimeout(poll, NEWS_POLL_MS);
-    return () => {
-      newsRequest.current += 1;
-      window.clearTimeout(newsTimer.current);
-    };
-  }, [loadNews, selected?.session_id, selected?.symbol]);
+  }, [selected?.session_id]);
 
   const macro = selected?.macro || null;
   const interval = macro?.candle_interval || "1d";
   const market = executionMarket(macro, selected);
   const activeChart = chartSnapshot?.symbol === selected?.symbol ? chartSnapshot : null;
-  const activeNews = news.symbol === selected?.symbol ? news : { status: "idle", data: null, error: "" };
+  const featureStates = useMemo(
+    () => ({ position_news: activePositionNews }),
+    [activePositionNews],
+  );
 
   const chartOverlay = useCallback((candles) => computeSessionOverlay(
     macro,
@@ -310,10 +307,17 @@ export default function Agents() {
   return (
     <div className="agent-page">
       {error ? <ErrorNote>실행 상태 오류: {error}</ErrorNote> : null}
-      {sessions && activeSessions.length === 0 ? <EmptyLibrary /> : null}
+      {sessions && sessionOptions.length === 0 ? <EmptyLibrary /> : null}
 
       {selected ? (
         <div className="agent-workspace">
+          <MacroDock
+            sessions={sessionOptions}
+            selected={selected}
+            busy={busy}
+            onChange={changeSession}
+            onStop={stopSession}
+          />
           <WorkspaceTabs selected={mobilePane} onSelect={setMobilePane} />
           <div className={`agent-console is-${mobilePane}`}>
             <section className="agent-chart-pane" aria-label={`${selected.symbol} 실시간 차트`}>
@@ -329,14 +333,6 @@ export default function Agents() {
                   onData={setChartSnapshot}
                 />
               </div>
-
-              <MacroDock
-                sessions={activeSessions}
-                selected={selected}
-                busy={busy}
-                onChange={changeSession}
-                onStop={stopSession}
-              />
             </section>
 
             <AgentActivityStream
@@ -347,13 +343,11 @@ export default function Agents() {
               candles={activeChart?.candles || []}
               interval={activeChart?.interval || interval}
               observedAt={activeChart?.serverTime || 0}
-              news={activeNews.data}
-              newsState={activeNews.status}
-              onRefreshNews={() => loadNews(selected.symbol)}
+              featureStates={featureStates}
             />
           </div>
 
-          {activeNews.error ? <div className="agent-inline-error" role="status">종목 뉴스를 불러오지 못했어요. 다른 작업은 계속 갱신됩니다.</div> : null}
+          {activePositionNews.error ? <div className="agent-inline-error" role="status">포지션 맞춤 뉴스를 불러오지 못했어요. 다른 작업은 계속 갱신됩니다.</div> : null}
         </div>
       ) : null}
     </div>

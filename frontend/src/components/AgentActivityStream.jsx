@@ -1,31 +1,32 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { RULE_TYPES } from "../lib/macro.js";
-import { computeSessionOverlay } from "../lib/indicators.js";
-
-// 기능을 추가할 때 화면을 다시 나누지 않고 이 레지스트리에 렌더링 정보와
-// entitlement key만 더한다. 실제 권한은 추후 서버 응답으로 판정해야 한다.
-const AGENT_MODULES = [
-  { key: "execution", label: "실행 상태", entitlement: "agent.execution", minimumPlan: "free", availability: "live" },
-  { key: "news", label: "종목 뉴스", entitlement: "agent.news", minimumPlan: "free", availability: "live" },
-  { key: "risk", label: "위험 감시", entitlement: "agent.risk", minimumPlan: "plus", availability: "live" },
-  { key: "strategy", label: "전략 조건", entitlement: "agent.strategy_signal", minimumPlan: "pro", availability: "live" },
-  { key: "leader", label: "대장주 신호", entitlement: "agent.leader_signal", minimumPlan: "pro", availability: "planned" },
-];
-const AGENT_MODULE_MAP = new Map(AGENT_MODULES.map((module) => [module.key, module]));
-const AGENT_AVATAR_SRC = "/brand/navigation/ggparrot-nav-agent.png";
+import {
+  AGENT_MODULE_MAP,
+  AGENT_MODULES,
+  accessFor,
+  buildAgentEvents,
+} from "../features/agents/registry.js";
 const PLAN_LABELS = { free: "FREE", plus: "PLUS", pro: "PRO" };
+const SECOND_MS = 1000;
+const MINUTE_MS = 60 * SECOND_MS;
+const HOUR_MS = 60 * MINUTE_MS;
+const KST_OFFSET_MS = 9 * HOUR_MS;
+const AGENT_AVATAR_SOURCES = {
+  calm: "/brand/agent/ggparrot-agent-calm-v1.png",
+  curious: "/brand/agent/ggparrot-agent-curious-v1.png",
+  focused: "/brand/agent/ggparrot-agent-focused-v1.png",
+  warning: "/brand/agent/ggparrot-agent-warning-v1.png",
+  critical: "/brand/agent/ggparrot-agent-critical-v1.png",
+  signal: "/brand/agent/ggparrot-agent-signal-v1.png",
+};
 
-function accessFor(module, entitlements) {
-  if (!module) return "planned";
-  if (module.availability === "planned") return "planned";
-  // 아직 구독 API가 연결되지 않은 동안에는 이미 구현된 기본 기능만 연다.
-  if (!entitlements) return "enabled";
-  return entitlements?.features?.[module.entitlement]?.allowed ? "enabled" : "locked";
-}
-
-function safeNumber(value, fallback = 0) {
-  const number = Number(value);
-  return Number.isFinite(number) ? number : fallback;
+function avatarForEvent(event) {
+  if (AGENT_AVATAR_SOURCES[event.expression]) return AGENT_AVATAR_SOURCES[event.expression];
+  if (event.severity === "critical") return AGENT_AVATAR_SOURCES.critical;
+  if (event.severity === "warning" || event.severity === "watch") return AGENT_AVATAR_SOURCES.warning;
+  if (event.severity === "signal") return AGENT_AVATAR_SOURCES.signal;
+  if (event.module === "position_news") return AGENT_AVATAR_SOURCES.curious;
+  if (event.module === "risk" || event.module === "strategy") return AGENT_AVATAR_SOURCES.focused;
+  return AGENT_AVATAR_SOURCES.calm;
 }
 
 function eventTime(value, fallback = 0) {
@@ -34,157 +35,51 @@ function eventTime(value, fallback = 0) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function clock(value) {
+function absoluteActivityTime(value, fallback = "방금 확인") {
   const parsed = eventTime(value);
-  if (!parsed) return "방금 확인";
-  return new Intl.DateTimeFormat("ko-KR", {
-    month: "numeric",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(parsed);
+  if (!parsed) return fallback;
+
+  const date = new Date(parsed + KST_OFFSET_MS);
+  const twoDigits = (number) => String(number).padStart(2, "0");
+  return `${twoDigits(date.getUTCFullYear() % 100)}.${twoDigits(date.getUTCMonth() + 1)}.${twoDigits(date.getUTCDate())}. ${twoDigits(date.getUTCHours())}:${twoDigits(date.getUTCMinutes())}`;
 }
 
-function buildExecutionEvents(session, observedAt) {
-  if (!session) return [];
-  const running = session.status === "running";
-  return [{
-    id: `execution-${session.session_id}-${session.status}-${session.connected}`,
-    module: "execution",
-    severity: running && !session.connected ? "warning" : "info",
-    title: running
-      ? (session.connected ? "실행기 연결됨" : "실행기 응답 대기")
-      : (session.status === "error" ? "실행 오류" : "실행 종료"),
-    summary: running
-      ? `${session.testnet ? "테스트넷" : "실거래"} · ${session.in_position ? "포지션 보유 중" : "현재 포지션 없음"}`
-      : (session.note || "종료된 실행"),
-    occurredAt: observedAt || Date.now(),
-    sourceLabel: "실행기 상태",
-  }];
+function activityTime(value, now, fallback = "방금 확인") {
+  const parsed = eventTime(value);
+  if (!parsed) return fallback;
+
+  const elapsed = Math.max(0, now - parsed);
+  const elapsedSeconds = Math.floor(elapsed / SECOND_MS);
+  if (elapsedSeconds < 60) return `${Math.max(1, elapsedSeconds)}초 전`;
+  if (elapsedSeconds < 60 * 60) return `${Math.floor(elapsedSeconds / 60)}분 전`;
+  if (elapsedSeconds === 60 * 60) return "1시간 전";
+  return absoluteActivityTime(parsed, fallback);
 }
 
-function buildNewsEvents(news) {
-  return (news?.items || []).map((item, index) => ({
-    id: `news-${item.url || item.title || index}`,
-    module: "news",
-    severity: "info",
-    title: item.title,
-    summary: "",
-    occurredAt: item.published || 0,
-    displayTime: item.published_display || "최근 수집",
-    sourceLabel: item.source || "원문",
-    sourceUrl: item.url,
-  }));
-}
-
-function buildRiskEvents(candles, session, interval) {
-  const closed = (candles || []).filter((bar) => bar?.closed !== false && safeNumber(bar?.o) > 0);
-  if (!closed.length) return [];
-  const recent = closed.slice(-20);
-  const latest = recent[recent.length - 1];
-  const ranges = recent.map((bar) => ((safeNumber(bar.h) - safeNumber(bar.l)) / safeNumber(bar.o, 1)) * 100);
-  const averageRange = ranges.reduce((sum, value) => sum + value, 0) / ranges.length;
-  const latestChange = ((safeNumber(latest.c) - safeNumber(latest.o)) / safeNumber(latest.o, 1)) * 100;
-  const elevated = averageRange >= 2 || Math.abs(latestChange) >= 3;
-  const events = [{
-    id: `risk-volatility-${latest.t}-${interval}`,
-    module: "risk",
-    severity: elevated ? "warning" : "info",
-    title: elevated ? "변동성 확대 감지" : "변동성 점검 완료",
-    summary: `${interval} · 평균 변동폭 ${averageRange.toFixed(2)}% · 최근 봉 ${latestChange >= 0 ? "+" : ""}${latestChange.toFixed(2)}%`,
-    occurredAt: latest.t,
-    sourceLabel: "바이낸스 확정 봉",
-  }];
-
-  if (session?.status === "running" && session.in_position) {
-    const unrealized = safeNumber(session.unrealized_pct);
-    events.push({
-      id: `risk-position-${session.session_id}-${Math.round(unrealized * 10)}`,
-      module: "risk",
-      severity: unrealized <= -2 ? "critical" : unrealized < 0 ? "watch" : "info",
-      title: unrealized <= -2 ? "평가손실 주의" : "포지션 위험 점검",
-      summary: `현재 평가손익 ${unrealized >= 0 ? "+" : ""}${unrealized.toFixed(2)}%`,
-      occurredAt: Date.now(),
-      sourceLabel: "실행기 포지션",
-    });
-  }
-  return events;
-}
-
-function buildStrategyEvents(macro, candles, session, interval) {
-  const bars = candles || [];
-  if (!macro || !bars.length) return [];
-  const overlay = computeSessionOverlay(
-    macro,
-    session?.in_position ? session.entry_price : null,
-    session?.position_side || macro.position_side,
-    bars,
-  );
-  const lastClosedIndex = bars.reduce((found, bar, index) => (bar?.closed === false ? found : index), -1);
-  if (lastClosedIndex < 0) return [];
-  const recentFrom = Math.max(0, lastClosedIndex - 19);
-  const markers = (overlay?.markers || [])
-    .filter((marker) => marker.index >= recentFrom && marker.index <= lastClosedIndex)
-    .slice(-3)
-    .reverse();
-
-  if (!markers.length) {
-    const last = bars[lastClosedIndex];
-    return [{
-      id: `strategy-scan-${macro.rule_type}-${last.t}-${interval}`,
-      module: "strategy",
-      severity: "info",
-      title: "전략 조건 점검 완료",
-      summary: `${RULE_TYPES[macro.rule_type]?.label || macro.rule_type} · 최근 20개 봉 · 새 신호 없음`,
-      occurredAt: last.t,
-      sourceLabel: "전략 조건 재계산",
-    }];
-  }
-
-  return markers.map((marker) => {
-    const bar = bars[marker.index];
-    const isSell = marker.kind === "sell";
-    return {
-      id: `strategy-${macro.rule_type}-${marker.index}-${bar?.t}`,
-      module: "strategy",
-      severity: isSell ? "watch" : "signal",
-      title: marker.label || (isSell ? "매도 조건 표시" : "매수 조건 표시"),
-      summary: `${interval} 공개 캔들 기준 · 참고 신호`,
-      occurredAt: bar?.t || 0,
-      sourceLabel: "전략 조건 재계산",
-    };
-  });
-}
-
-function ModuleFilter({ selected, onSelect, entitlements }) {
+function ModuleTabs({ selected, onSelect, entitlements }) {
+  const items = [{ key: "all", label: "전체" }, ...AGENT_MODULES];
   return (
-    <label className="agent-chat-filter">
-      <span className="sr-only">에이전트 대화 종류 선택</span>
-      <select value={selected} onChange={(event) => onSelect(event.target.value)}>
-        <option value="all">전체 대화</option>
-        {AGENT_MODULES.map((module) => {
-          const access = accessFor(module, entitlements);
-          const plan = module.minimumPlan === "free" ? "" : ` · ${PLAN_LABELS[module.minimumPlan]}`;
-          const suffix = access === "planned" ? `${plan} · 준비 중` : plan;
-          return <option key={module.key} value={module.key}>{module.label}{suffix}</option>;
-        })}
-      </select>
-      <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m4 6 4 4 4-4" /></svg>
-    </label>
-  );
-}
-
-function TierBadge({ plan }) {
-  if (!plan || plan === "free") return null;
-  const label = PLAN_LABELS[plan] || String(plan).toUpperCase();
-  return (
-    <span
-      className="agent-tier-badge"
-      data-plan={plan}
-      aria-label={`${label} 구독 전용 기능`}
-    >
-      {label} 전용
-    </span>
+    <div className="agent-chat-tabs" role="group" aria-label="에이전트 대화 종류">
+      {items.map((item) => {
+        const access = item.key === "all" ? "enabled" : accessFor(item, entitlements);
+        const plan = item.minimumPlan && item.minimumPlan !== "free"
+          ? `, ${PLAN_LABELS[item.minimumPlan]} 구독 기능`
+          : "";
+        const availability = access === "planned" ? ", 준비 중" : "";
+        return (
+          <button
+            key={item.key}
+            type="button"
+            className={selected === item.key ? "is-active" : ""}
+            aria-pressed={selected === item.key}
+            aria-label={`${item.label}${plan}${availability}`}
+            onClick={() => onSelect(item.key)}
+          >
+            {item.label}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -212,39 +107,55 @@ export default function AgentActivityStream({
   session,
   candles,
   interval,
-  news,
-  newsState,
+  featureStates = {},
   observedAt,
   entitlements = null,
-  onRefreshNews,
   onUpgrade,
 }) {
   const [filter, setFilter] = useState("all");
   const [newMessageCount, setNewMessageCount] = useState(0);
   const [announcement, setAnnouncement] = useState("");
+  const [now, setNow] = useState(() => Date.now());
   const logRef = useRef(null);
   const followLatestRef = useRef(true);
   const previousIdsRef = useRef(new Set());
   const events = useMemo(() => {
-    const combined = [
-      ...buildExecutionEvents(session, observedAt),
-      ...buildNewsEvents(news),
-      ...buildRiskEvents(candles, session, interval),
-      ...buildStrategyEvents(macro, candles, session, interval),
-    ];
+    const combined = buildAgentEvents({
+      symbol,
+      macro,
+      session,
+      candles,
+      interval,
+      observedAt,
+      featureStates,
+    });
     return combined
       .filter((event) => accessFor(AGENT_MODULE_MAP.get(event.module), entitlements) === "enabled")
-      .sort((left, right) => eventTime(right.occurredAt) - eventTime(left.occurredAt))
-      .slice(0, 24);
-  }, [candles, entitlements, interval, macro, news, observedAt, session]);
+      .sort((left, right) => eventTime(right.occurredAt) - eventTime(left.occurredAt));
+  }, [candles, entitlements, featureStates, interval, macro, observedAt, session, symbol]);
 
   const selectedModule = filter === "all" ? null : AGENT_MODULE_MAP.get(filter);
   const selectedAccess = selectedModule ? accessFor(selectedModule, entitlements) : "enabled";
+  const selectedFeatureState = selectedModule ? featureStates[selectedModule.key] : null;
+  const isFeatureLoading = selectedModule
+    ? selectedFeatureState?.status === "loading"
+    : Object.values(featureStates).some((state) => state?.status === "loading");
   const visible = useMemo(() => {
     const filtered = filter === "all" ? events : events.filter((event) => event.module === filter);
-    return [...filtered].reverse();
+    return filtered.slice(0, 24).reverse();
   }, [events, filter]);
+  const hasRelativeTime = visible.some((event) => {
+    const occurredAt = eventTime(event.occurredAt);
+    const elapsedSeconds = Math.floor(Math.max(0, now - occurredAt) / SECOND_MS);
+    return occurredAt && elapsedSeconds <= HOUR_MS / SECOND_MS;
+  });
   const messageKey = visible.map((event) => event.id).join("|");
+
+  useEffect(() => {
+    if (!hasRelativeTime) return undefined;
+    const timer = window.setInterval(() => setNow(Date.now()), SECOND_MS);
+    return () => window.clearInterval(timer);
+  }, [hasRelativeTime]);
 
   useEffect(() => {
     const node = logRef.current;
@@ -289,22 +200,10 @@ export default function AgentActivityStream({
   }
 
   return (
-    <aside className="agent-chat" aria-labelledby="agent-chat-title">
+    <aside className="agent-chat" aria-label={`${symbol} 껄무새 에이전트 기록`}>
       <header className="agent-chat-head">
-        <div className="agent-chat-identity">
-          <span className="agent-chat-avatar" aria-hidden="true">
-            <img src={AGENT_AVATAR_SRC} alt="" width="44" height="44" draggable="false" decoding="async" />
-          </span>
-          <div>
-            <h2 id="agent-chat-title">껄무새 에이전트</h2>
-            <p><i className={`agent-live-dot ${newsState === "loading" ? "is-checking" : "is-running"}`} aria-hidden="true" /> <b className="num">{symbol}</b> 관찰 중</p>
-          </div>
-        </div>
         <div className="agent-chat-controls">
-          <ModuleFilter selected={filter} onSelect={selectFilter} entitlements={entitlements} />
-          <button type="button" onClick={onRefreshNews} disabled={newsState === "loading"} className="agent-chat-refresh">
-            {newsState === "loading" ? "확인 중" : "뉴스 확인"}
-          </button>
+          <ModuleTabs selected={filter} onSelect={selectFilter} entitlements={entitlements} />
         </div>
       </header>
 
@@ -315,7 +214,7 @@ export default function AgentActivityStream({
           role="log"
           tabIndex={0}
           aria-label="에이전트 관측 기록"
-          aria-busy={newsState === "loading"}
+          aria-busy={isFeatureLoading}
           onScroll={trackScroll}
         >
           {selectedModule && selectedAccess !== "enabled" ? (
@@ -330,37 +229,46 @@ export default function AgentActivityStream({
                   : event.severity === "signal"
                     ? "조건"
                     : "";
+              const plan = module?.minimumPlan || "free";
+              const planLabel = PLAN_LABELS[plan] || String(plan).toUpperCase();
+              const hasTierBadge = plan !== "free";
               return (
                 <article
                   key={event.id}
                   className={`agent-message is-${event.severity}`}
-                  data-plan={module?.minimumPlan || "free"}
+                  data-plan={plan}
                 >
                   <span className="agent-message-avatar" aria-hidden="true">
-                    <img src={AGENT_AVATAR_SRC} alt="" width="30" height="30" draggable="false" decoding="async" />
+                    <img src={avatarForEvent(event)} alt="" width="80" height="80" draggable="false" decoding="async" />
                   </span>
-                  <div className="agent-message-content">
-                    <header className="agent-message-meta">
-                      <span>{module?.label || event.module}</span>
-                      <TierBadge plan={module?.minimumPlan} />
-                      {severityLabel ? <b><i aria-hidden="true" />{severityLabel}</b> : null}
-                      <time className="num" dateTime={eventTime(event.occurredAt) ? new Date(eventTime(event.occurredAt)).toISOString() : undefined}>
-                        {event.displayTime || clock(event.occurredAt)}
+                  <div className="agent-message-bubble">
+                    {hasTierBadge ? (
+                      <span className="agent-tier-badge" data-plan={plan} aria-hidden="true">{planLabel}</span>
+                    ) : null}
+                    <span className="sr-only">
+                      {hasTierBadge ? `${planLabel} 구독 기능. ` : ""}
+                      {module?.label || event.module}{severityLabel ? `. ${severityLabel}` : ""}.
+                    </span>
+                    <p className="agent-message-primary">{event.title}</p>
+                    {event.summary ? <p className="agent-message-summary">{event.summary}</p> : null}
+                    {event.detail ? <p className="agent-message-detail">{event.detailLabel || "판단 근거"} · {event.detail}</p> : null}
+                    <footer>
+                      {event.sourceUrl ? (
+                        <a href={event.sourceUrl} target="_blank" rel="noopener noreferrer" aria-label={`${event.sourceLabel} 원문 보기, 새 창`}>
+                          {event.sourceLabel} · 원문 보기 ↗
+                        </a>
+                      ) : (
+                        <span>{event.sourceLabel}</span>
+                      )}
+                      <time
+                        className="num"
+                        dateTime={eventTime(event.occurredAt) ? new Date(eventTime(event.occurredAt)).toISOString() : undefined}
+                        aria-live="off"
+                      >
+                        <span aria-hidden="true">{activityTime(event.occurredAt, now, event.fallbackTime)}</span>
+                        <span className="sr-only">발생 시각 {absoluteActivityTime(event.occurredAt, event.fallbackTime)}</span>
                       </time>
-                    </header>
-                    <div className="agent-message-bubble">
-                      <strong>{event.title}</strong>
-                      {event.summary ? <p>{event.summary}</p> : null}
-                      <footer>
-                        {event.sourceUrl ? (
-                          <a href={event.sourceUrl} target="_blank" rel="noopener noreferrer" aria-label={`${event.sourceLabel} 원문 보기, 새 창`}>
-                            {event.sourceLabel} · 원문 보기 ↗
-                          </a>
-                        ) : (
-                          <span>{event.sourceLabel}</span>
-                        )}
-                      </footer>
-                    </div>
+                    </footer>
                   </div>
                 </article>
               );
@@ -371,7 +279,7 @@ export default function AgentActivityStream({
             </div>
           )}
 
-          {newsState === "loading" && selectedAccess === "enabled" ? (
+          {isFeatureLoading && selectedAccess === "enabled" ? (
             <div className="agent-checking" role="status">
               <i className="agent-live-dot is-checking" aria-hidden="true" />
               새 데이터를 확인하는 중…

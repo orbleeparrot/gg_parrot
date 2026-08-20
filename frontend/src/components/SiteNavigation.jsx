@@ -2,7 +2,6 @@ import { useEffect, useRef } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 
 const NAV_LINKS = [
-  { to: "/", label: "홈", icon: "home", end: true },
   { to: "/agents", label: "내 에이전트", icon: "agent", matches: ["/agents"] },
   { to: "/builder", label: "직접 만들기", icon: "builder", matches: ["/builder", "/s/"] },
   { to: "/leaderboard", label: "리더보드", icon: "leaderboard", matches: ["/leaderboard", "/gallery"] },
@@ -11,26 +10,26 @@ const NAV_LINKS = [
 ];
 
 const NAV_ICON_SOURCES = {
-  home: "/brand/navigation/ggparrot-nav-home.png",
-  agent: "/brand/navigation/ggparrot-nav-agent.png",
-  builder: "/brand/navigation/ggparrot-nav-builder.png",
-  leaderboard: "/brand/navigation/ggparrot-nav-leaderboard.png",
-  news: "/brand/navigation/ggparrot-nav-news.png",
-  board: "/brand/navigation/ggparrot-nav-board.png",
+  home: "/brand/navigation/outline/ggparrot-outline-home.png",
+  agent: "/brand/navigation/outline/ggparrot-outline-agent.png",
+  builder: "/brand/navigation/outline/ggparrot-outline-builder.png",
+  leaderboard: "/brand/navigation/outline/ggparrot-outline-leaderboard.png",
+  news: "/brand/navigation/outline/ggparrot-outline-news.png",
+  board: "/brand/navigation/outline/ggparrot-outline-board.png",
 };
 
 function ParrotMark() {
-  return <img src="/brand/ggparrot-sunglasses-mark.png" alt="" width="42" height="42" draggable="false" />;
+  return <img src="/brand/ggparrot-feather-terminal.png" alt="" width="512" height="512" draggable="false" />;
 }
 
 export function BrandLink({ onClick, className = "" }) {
   return (
     <NavLink to="/" onClick={onClick} className={`site-brand text-slate-900 ${className}`} aria-label="껄무새 메인">
-      <span className="site-brand-mark" aria-hidden="true"><ParrotMark /></span>
       <span className="brand-word">
         <strong>껄무새</strong>
         <small className="num">GGPARROT</small>
       </span>
+      <span className="site-brand-mark site-brand-feather" aria-hidden="true"><ParrotMark /></span>
     </NavLink>
   );
 }
@@ -38,13 +37,10 @@ export function BrandLink({ onClick, className = "" }) {
 function NavIcon({ name }) {
   const src = NAV_ICON_SOURCES[name] || NAV_ICON_SOURCES.home;
   return (
-    <img
-      src={src}
-      alt=""
-      width="36"
-      height="36"
-      draggable="false"
-      decoding="async"
+    <span
+      className="site-side-icon-glyph"
+      style={{ "--nav-icon": `url("${src}")` }}
+      aria-hidden="true"
     />
   );
 }

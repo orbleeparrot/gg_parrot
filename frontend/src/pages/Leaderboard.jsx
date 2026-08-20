@@ -5,6 +5,7 @@ import RegisterMacroModal from "../components/RegisterMacroModal.jsx";
 import ChatBox from "../components/ChatBox.jsx";
 import { PageHeader, EmptyState, Loading, ErrorNote } from "../components/Page.jsx";
 import { api } from "../api.js";
+import CoinIcon from "../components/CoinIcon.jsx";
 import { getUserId } from "../lib/user.js";
 import { useAuth, isLoggedIn, getAuthUser, updateAuthUser } from "../lib/auth.js";
 
@@ -207,7 +208,8 @@ export default function Leaderboard() {
         {items.map((e, idx) => {
           const r = ret(e);
           const first = idx === 0;
-          const initial = (e.username || e.nickname || "?").charAt(0);
+          // 아바타 자리를 종목 로고로 바꾼다 — 목록을 훑을 때 '누가 올렸나'보다
+          // '무슨 코인인가'가 먼저 눈에 들어와야 고르기 쉽다.
           return (
             <div
               key={e.id}
@@ -219,7 +221,7 @@ export default function Leaderboard() {
               }
             >
               <div className={"w-6 shrink-0 text-center t-h4 num " + (first ? "text-slate-900" : "text-slate-600")}>{idx + 1}</div>
-              <div className={"w-9 h-9 shrink-0 rounded-full grid place-items-center t-label font-bold " + (first ? "bg-brand text-brand-ink" : "bg-slate-100 text-slate-700")}>{initial}</div>
+              <CoinIcon symbol={e.symbol} size={36} className={"shrink-0" + (first ? " is-first" : "")} alt="" />
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-x-2 gap-y-1 flex-wrap">
                   {e.crown && <span className="badge badge-flat" title="판매·좋아요 상위">인기 셀러</span>}

@@ -2981,6 +2981,32 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   padding-bottom: calc(56px + env(safe-area-inset-bottom));
 }
 
+/* 종목 로고. 코인마다 배경이 제각각이라(흰 로고·투명 배경 섞임) 옅은 면과 얇은
+   테두리를 깔아 어떤 로고든 캔버스에서 떠 보이게 한다. */
+.coin-icon {
+  flex: none;
+  border-radius: 999px;
+  background: rgb(var(--c-slate-100));
+  object-fit: contain;
+}
+
+/* 로고를 못 받은 종목은 티커 글자로 대신한다 — 깨진 이미지 아이콘보다 낫다. */
+.coin-icon.is-fallback {
+  display: inline-grid;
+  place-items: center;
+  color: rgb(var(--c-slate-700));
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+
+/* 리더보드 1위만 브랜드색 링으로 구분한다(예전 아바타가 하던 역할). */
+.coin-icon.is-first {
+  box-shadow: 0 0 0 2px rgb(var(--c-brand));
+}
+
+.news-racer-logo { margin-right: 2px; }
+
 /* 빌더 참고 차트 — '전략 조건' 바로 위에 놓고 스크롤에 붙여 둔다. 아래로 내려가
    익절·손절·밴드 폭을 만지는 동안에도 보조지표가 계속 보여야 "조절하면서 본다"가
    성립한다. sticky 는 부모(빌더 폼) 안에서만 붙으므로 폼이 끝나면 자연스럽게 놓인다.

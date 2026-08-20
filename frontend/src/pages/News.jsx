@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api.js";
+import CoinIcon from "../components/CoinIcon.jsx";
 import NewsBriefingReader from "../components/NewsBriefingReader.jsx";
 import { AnnotatedText, TermChips } from "../components/NewsTerms.jsx";
 import { Loading, ErrorNote } from "../components/Page.jsx";
@@ -248,6 +249,7 @@ const RacerNewsBriefing = memo(function RacerNewsBriefing({ coin, rank, newsStat
           <span className="news-racer-rank" aria-label={`${rank}위`}>
             <strong className="num">{String(rank).padStart(2, "0")}</strong><small>위</small>
           </span>
+          <CoinIcon symbol={coin.symbol} size={32} className="news-racer-logo" alt="" />
           <div className="news-racer-ticker">
             <h3 id={headingId} className="num">{base}</h3>
           </div>

@@ -296,6 +296,9 @@ export default function App() {
   const isNews = pathname === "/news";
   const isAgents = pathname === "/agents";
   const authShell = ["/login", "/forgot", "/reset"].includes(pathname);
+  // '오늘의 경주마' 마퀴는 화면 아래에 고정으로 떠 있다. 띄우는 화면에서는 본문
+  // 마지막 줄이 그 밑에 깔리므로, 마퀴 높이만큼 바닥 여백을 더 준다.
+  const hasMarquee = !(isStart || authShell || isAgents);
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const menuButtonRef = useRef(null);
   const closeMobileNavigation = useCallback(() => setMobileNavigationOpen(false), []);
@@ -305,7 +308,7 @@ export default function App() {
   }, [pathname]);
 
   return (
-    <div className={`${isStart ? "home-shell" : "min-h-screen"} ${authShell ? "site-auth-layout" : "site-product-layout"}`}>
+    <div className={`${isStart ? "home-shell" : "min-h-screen"} ${authShell ? "site-auth-layout" : "site-product-layout"}${hasMarquee ? " has-site-marquee" : ""}`}>
       <a href="#main-content" className="skip-link">본문으로 건너뛰기</a>
       {authShell ? null : (
         <SiteNavigation mobileOpen={mobileNavigationOpen} onClose={closeMobileNavigation} triggerRef={menuButtonRef} />
@@ -358,7 +361,7 @@ export default function App() {
             </Routes>
           </Suspense>
         </main>
-        {isStart || authShell || isAgents ? null : <HotCoinsMarquee />}
+        {hasMarquee ? <HotCoinsMarquee /> : null}
       </div>
     </div>
   );

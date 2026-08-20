@@ -106,8 +106,14 @@ function periodLabelOf(macro) {
   ] || macro.period?.preset || "";
 }
 
-// 조건 정하기 맨 위 블록 — 차트를 정하는 설정(children)과 그 차트를 한 덩어리로
-// 묶어 스크롤에 고정한다. 설정은 늘 보이고, 차트만 접을 수 있다.
+// 조건 정하기 맨 위 블록 — '실시간 차트 · 보조지표' 한 제목 아래 차트를 정하는
+// 설정(children)과 그 차트를 묶는다. 설정은 한 번 정하면 끝이라 스크롤에 흘려
+// 보내고, 차트만 상단에 고정돼 남는다.
+//
+// 스티키를 설정까지 씌우지 않는 이유: 둘을 합치면 676px 이라 1280x720 화면에서
+// 상단바(72px)를 빼면 648px 밖에 없어 폼 편집 공간이 아예 안 남는다. 스크롤에
+// 맞춰 설정만 접는 방법도 봤지만, 접히는 순간 문서가 253px 줄어 아래 내용이
+// 통째로 튀어 오른다. 흘려보내면 고정된 뒤의 화면은 똑같으면서 그 부작용이 없다.
 function ChartDisclosure({ symbols, form, setForm, children }) {
   const [open, setOpen] = useState(true);
   const contentId = useId();
@@ -116,16 +122,17 @@ function ChartDisclosure({ symbols, form, setForm, children }) {
   // 밴드와 매수·매도 구간). form 이 바뀌면 오버레이도 즉시 따라간다.
   const overlay = useCallback((candles) => computeStrategyOverlay(form, candles), [form]);
   const ruleLabel = RULE_TYPES[form.rule_type]?.label || "";
+  const symbolLabel = symbols.length === 1 ? symbols[0] : `${symbols.length}개 종목`;
 
   return (
-    // 설정과 차트는 맨 위에 나란히 놓되 스티키는 차트에만 건다. 둘을 한 상자로
-    // 묶으면 700px 이 넘어 화면의 8할을 먹는다 — 설정은 한 번 정하면 끝이라
-    // 흘려보내고, 스크롤을 내리면 차트만 위에 남는다. 폼이 밑으로 비쳐 보이지
-    // 않도록 캔버스 색을 깔아 둔다.
     <>
+      {/* 설명 문단은 두지 않는다 — 바로 위 '조건 정하기' 설명과 두 줄이 겹쳐 쌓인다. */}
+      <h3 className="t-title text-slate-900">실시간 차트 · 보조지표</h3>
+
       {children}
 
       {symbols.length > 0 ? (
+        // 폼이 밑으로 비쳐 보이지 않도록 캔버스 색을 깔아 둔다.
         <section className="builder-chart-sticky border-t border-slate-200" data-tour="chart">
           <button
             type="button"
@@ -134,14 +141,10 @@ function ChartDisclosure({ symbols, form, setForm, children }) {
             aria-expanded={open}
             aria-controls={contentId}
           >
-            <span className="min-w-0">
-              <span className="t-label text-slate-900">실시간 차트 · 보조지표</span>
-              <span className="ml-2 t-caption text-slate-500 num">
-                {symbols.length === 1 ? symbols[0] : `${symbols.length}개 종목`}
-              </span>
-              {/* 설명 문단이던 것을 헤더 한 줄로 접었다 — 스티키로 계속 붙어 있는
-                  영역이라 두 줄짜리 안내가 매번 자리를 차지할 이유가 없다. */}
-              {ruleLabel ? <span className="ml-2 t-caption text-slate-500">· {ruleLabel}</span> : null}
+            {/* 고정된 뒤에도 무엇을 보고 있는지 남아야 해서 종목·전략을 여기 둔다. */}
+            <span className="min-w-0 t-caption text-slate-500">
+              <span className="num text-slate-900 font-bold">{symbolLabel}</span>
+              {ruleLabel ? <span className="ml-2">· {ruleLabel}</span> : null}
             </span>
             <span className="t-caption text-slate-400" aria-hidden="true">{open ? "접기 ↑" : "펼치기 ↓"}</span>
           </button>

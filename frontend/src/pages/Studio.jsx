@@ -106,7 +106,9 @@ function periodLabelOf(macro) {
   ] || macro.period?.preset || "";
 }
 
-function ChartDisclosure({ symbols, form }) {
+// 조건 정하기 맨 위 블록 — 차트를 정하는 설정(children)과 그 차트를 한 덩어리로
+// 묶어 스크롤에 고정한다. 설정은 늘 보이고, 차트만 접을 수 있다.
+function ChartDisclosure({ symbols, form, setForm, children }) {
   const [open, setOpen] = useState(true);
   const contentId = useId();
 
@@ -115,51 +117,61 @@ function ChartDisclosure({ symbols, form }) {
   const overlay = useCallback((candles) => computeStrategyOverlay(form, candles), [form]);
   const ruleLabel = RULE_TYPES[form.rule_type]?.label || "";
 
-  if (symbols.length === 0) return null;
   return (
-    // sticky — 아래로 스크롤해 전략 조건·손실 제한을 만지는 동안에도 차트가 계속
-    // 보여야 "조절하면서 보조지표가 바뀌는 걸 본다"가 성립한다. 폼이 밑으로 비쳐
-    // 보이지 않도록 캔버스 색을 깔아 둔다.
-    <section className="builder-chart-sticky border-y border-slate-200" data-tour="chart">
-      <button
-        type="button"
-        onClick={() => setOpen((value) => !value)}
-        className="w-full py-3 flex items-center justify-between gap-3 text-left"
-        aria-expanded={open}
-        aria-controls={contentId}
-      >
-        <span className="min-w-0">
-          <span className="t-label text-slate-900">실시간 차트 · 보조지표</span>
-          <span className="ml-2 t-caption text-slate-500 num">
-            {symbols.length === 1 ? symbols[0] : `${symbols.length}개 종목`}
-          </span>
-          {/* 설명 문단이던 것을 헤더 한 줄로 접었다 — 스티키로 계속 붙어 있는
-              영역이라 두 줄짜리 안내가 매번 자리를 차지할 이유가 없다. */}
-          {ruleLabel ? <span className="ml-2 t-caption text-slate-500">· {ruleLabel}</span> : null}
-        </span>
-        <span className="t-caption text-slate-400" aria-hidden="true">{open ? "접기 ↑" : "펼치기 ↓"}</span>
-      </button>
-      {open ? (
-        <div id={contentId} className="pb-4 space-y-5">
-          {/* 시장은 넘기지 않는다(= 현물). 보조지표는 rule_type·포지션·전략 조건만
-              보고 그려져 레버리지와 무관한데, 레버리지로 선물 캔들을 끌어오면
-              지표는 그대로인 채 배포 리전의 선물 차단에 걸려 차트만 사라졌다.
-              현물·선물 가격차는 이 참고용 오버레이에서 눈에 띄지도 않는다.
+    // 설정과 차트는 맨 위에 나란히 놓되 스티키는 차트에만 건다. 둘을 한 상자로
+    // 묶으면 700px 이 넘어 화면의 8할을 먹는다 — 설정은 한 번 정하면 끝이라
+    // 흘려보내고, 스크롤을 내리면 차트만 위에 남는다. 폼이 밑으로 비쳐 보이지
+    // 않도록 캔버스 색을 깔아 둔다.
+    <>
+      {children}
 
-              minimal — 조작 안내·면책 문단을 접어 스티키 높이를 줄인다. 확대·축소
-              버튼은 그대로 남는다(compact 와 달리 minimal 은 컨트롤을 지우지 않는다). */}
-          {symbols.map((symbol) => (
-            <CandleChart
-              key={symbol}
-              symbol={symbol}
-              defaultInterval={form.candle_interval || "1m"}
-              overlay={overlay}
-              minimal
-            />
-          ))}
-        </div>
+      {symbols.length > 0 ? (
+        <section className="builder-chart-sticky border-t border-slate-200" data-tour="chart">
+          <button
+            type="button"
+            onClick={() => setOpen((value) => !value)}
+            className="w-full py-2 flex items-center justify-between gap-3 text-left"
+            aria-expanded={open}
+            aria-controls={contentId}
+          >
+            <span className="min-w-0">
+              <span className="t-label text-slate-900">실시간 차트 · 보조지표</span>
+              <span className="ml-2 t-caption text-slate-500 num">
+                {symbols.length === 1 ? symbols[0] : `${symbols.length}개 종목`}
+              </span>
+              {/* 설명 문단이던 것을 헤더 한 줄로 접었다 — 스티키로 계속 붙어 있는
+                  영역이라 두 줄짜리 안내가 매번 자리를 차지할 이유가 없다. */}
+              {ruleLabel ? <span className="ml-2 t-caption text-slate-500">· {ruleLabel}</span> : null}
+            </span>
+            <span className="t-caption text-slate-400" aria-hidden="true">{open ? "접기 ↑" : "펼치기 ↓"}</span>
+          </button>
+          {open ? (
+            <div id={contentId} className="pb-3 space-y-5">
+              {/* 시장은 넘기지 않는다(= 현물). 보조지표는 rule_type·포지션·전략 조건만
+                  보고 그려져 레버리지와 무관한데, 레버리지로 선물 캔들을 끌어오면
+                  지표는 그대로인 채 배포 리전의 선물 차단에 걸려 차트만 사라졌다.
+
+                  interval 은 controlled — 위의 '봉 간격'과 차트 툴바가 같은 값을
+                  가리켜야 한다. defaultInterval 로 두면 툴바에서 바꾼 간격이
+                  매크로에 반영되지 않아 둘이 조용히 어긋난다.
+
+                  minimal — 조작 안내·면책 문단을 접어 스티키 높이를 줄인다. 확대·축소
+                  버튼은 그대로 남는다(compact 와 달리 minimal 은 컨트롤을 지우지 않는다). */}
+              {symbols.map((symbol) => (
+                <CandleChart
+                  key={symbol}
+                  symbol={symbol}
+                  interval={form.candle_interval || "1m"}
+                  onIntervalChange={(value) => setForm((f) => ({ ...f, candle_interval: value }))}
+                  overlay={overlay}
+                  minimal
+                />
+              ))}
+            </div>
+          ) : null}
+        </section>
       ) : null}
-    </section>
+    </>
   );
 }
 
@@ -667,7 +679,11 @@ export default function Studio() {
             <Builder
               form={form}
               setForm={setForm}
-              chartSlot={<ChartDisclosure symbols={chartSymbols} form={form} />}
+              chartSlot={(basicSettings) => (
+                <ChartDisclosure symbols={chartSymbols} form={form} setForm={setForm}>
+                  {basicSettings}
+                </ChartDisclosure>
+              )}
             />
           </div>
 

@@ -81,8 +81,9 @@ function Group({ title, term, children, note, anchor }) {
 
 const inputCls = "field";
 
-// `chartSlot` 은 '전략 조건' 바로 위에 끼워 넣을 참고 차트다. Studio 가 넘겨준다 —
-// 폼 컴포넌트가 차트·시세 폴링까지 끌어안지 않도록 자리만 비워 둔다.
+// `chartSlot(basicSettings)` 은 기본 설정을 감싸 참고 차트와 한 블록으로 묶는
+// 래퍼다. Studio 가 넘겨준다 — 폼 컴포넌트가 차트·시세 폴링까지 끌어안지 않도록
+// 자리만 비워 둔다. 넘어오지 않으면 기본 설정만 그대로 그린다.
 export default function Builder({ form, setForm, chartSlot = null }) {
   const instanceId = useId().replace(/:/g, "");
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
@@ -141,12 +142,10 @@ export default function Builder({ form, setForm, chartSlot = null }) {
     hint: money(form.initial_capital, form.symbol, krwRate),
   });
 
-  return (
+  // 차트를 정하는 값들 — 종목·매매 방식·포지션·봉 간격·기간. 차트 섹션 안으로
+  // 들어가 "무엇을 볼지 정하고 바로 아래에서 본다"가 한 덩어리로 읽힌다.
+  const basicSettings = (
     <div className="space-y-5">
-      <div>
-        <h3 className="t-title text-slate-900">기본 설정</h3>
-        <p className="mt-1 t-small text-slate-500">무엇을, 어떤 규칙으로, 어느 기간에 확인할지 정해요.</p>
-      </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 gap-y-5">
         <Field label="종목" anchor="symbol" hint="여러 종목은 쉼표로 나눠 써요. 자금은 종목 수만큼 균등하게 나눠요.">
           <input className={inputCls} value={form.symbol} onChange={set("symbol")} placeholder="BTCUSDT 또는 BTCUSDT, ETHUSDT" />
@@ -200,12 +199,14 @@ export default function Builder({ form, setForm, chartSlot = null }) {
           </Field>
         </div>
       )}
+    </div>
+  );
 
-      {/* 참고 차트는 '전략 조건' 바로 위에 둔다. 오버레이를 실제로 움직이는 값이
-          바로 아래(익절·손절·기간·밴드 폭…)라, 값을 만지면 시선 바로 위에서
-          보조지표가 따라 움직인다. 레버리지·시세 데이터는 오버레이와 무관해서
-          그 사이에 끼우면 차트와 조절값이 갈린다. */}
-      {chartSlot}
+  return (
+    <div className="space-y-5">
+      {/* 차트를 움직이는 설정과 차트를 한 블록으로 묶어 맨 위에 고정한다.
+          Studio 가 스티키 섹션으로 감싸므로 여기서는 자리만 만든다. */}
+      {chartSlot ? chartSlot(basicSettings) : basicSettings}
 
       {/* rule-specific params */}
       <Group title={<>전략 조건 · <span className="text-slate-900">{meta.label}</span></>} anchor="strategy-params">

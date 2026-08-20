@@ -16,32 +16,20 @@ const FOCUSABLE =
 function HomeEntryHero({ onLeaderboard, onGuide }) {
   return (
     <section
-      className="home-entry-hero"
+      className="home-entry-hero is-intro"
       aria-labelledby="home-entry-title"
       aria-roledescription="슬라이드"
       aria-label="1 / 2"
     >
       <div className="home-entry-copy">
         <h1 id="home-entry-title">
-          쉽게 시작하는 코인 매크로 커뮤니티 <span>껄무새</span>
+          코린이도<br />
+          쉽게 시작하는<br />
+          코인 매크로 <span>껄무새</span>
         </h1>
-        <p className="home-entry-description">
-          리더보드에서 마음에 드는 매크로를 골라 바로 실행하거나,
-          종목과 조건을 직접 정해 내 전략을 만들어요. 처음이어도 테스트넷 실행까지 차근차근 이어져요.
-        </p>
-        <ul className="home-entry-highlights" aria-label="껄무새에서 할 수 있는 것">
-          <li><strong>리더보드에서 선택</strong><span>다른 사용자의 전략과 모의 성과를 비교해요.</span></li>
-          <li><strong>조건 직접 설정</strong><span>종목·전략·수치를 고르면 매크로가 완성돼요.</span></li>
-          <li><strong>백테스트 확인</strong><span>과거 데이터로 수익과 위험을 먼저 살펴봐요.</span></li>
-          <li><strong>테스트넷 실행</strong><span>실제 자금 없이 내 PC 실행기로 연습해요.</span></li>
-        </ul>
-        <p className="home-entry-note">웹의 백테스트와 모의 결과는 투자 조언이 아니에요.</p>
       </div>
 
-      <nav className="home-entry-choices" aria-labelledby="home-entry-choice-title">
-        <div className="home-entry-choice-heading">
-          <h2 id="home-entry-choice-title">어떻게 시작할까요?</h2>
-        </div>
+      <nav className="home-entry-choices" aria-label="매크로 시작 방법">
         <button
           type="button"
           data-home-entry-primary
@@ -69,6 +57,21 @@ function HomeEntryHero({ onLeaderboard, onGuide }) {
           <span className="home-entry-choice-arrow" aria-hidden="true">→</span>
         </button>
       </nav>
+
+      <div className="home-entry-mascot" aria-hidden="true">
+        <picture>
+          <source srcSet="/brand/ggparrot-sunglasses-hero-v2.webp" type="image/webp" />
+          <img
+            src="/brand/ggparrot-sunglasses-hero-v2.png"
+            alt=""
+            width="1180"
+            height="1120"
+            decoding="async"
+            fetchPriority="high"
+            draggable="false"
+          />
+        </picture>
+      </div>
     </section>
   );
 }
@@ -219,7 +222,7 @@ function HomeHeroRotator({ onLeaderboard, onGuide, paused = false }) {
     if (autoRotationBlocked) return undefined;
     const timer = window.setTimeout(() => {
       selectSlide((activeSlide + 1) % 2, 1);
-    }, 8000);
+    }, 5000);
     return () => window.clearTimeout(timer);
   }, [activeSlide, autoRotationBlocked, selectSlide, timerCycle]);
 

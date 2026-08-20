@@ -58,6 +58,7 @@ from . import account as account_mod
 from . import challenge as challenge_mod
 from . import runner as runner_mod
 from . import user_macros as user_macros_mod
+from .agent_features.position_news.router import router as position_news_router
 from fastapi import Depends
 from .db import User
 # [차후 도입] 고래 동향 — app/whales.py 는 그대로 두고 라우트만 꺼둡니다.
@@ -81,6 +82,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Coin Macro Backtest & Share (Simulation only)", lifespan=lifespan)
+app.include_router(position_news_router)
 
 # Ensure tables exist even when the app is imported without the lifespan running
 # (e.g. TestClient constructed without a context manager).

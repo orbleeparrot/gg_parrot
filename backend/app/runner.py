@@ -525,6 +525,15 @@ def list_sessions(user_id: int, limit: int = 20) -> dict:
     return {"active": active, "recent": recent, "poll_seconds": POLL_SECONDS}
 
 
+def get_owned_session(user_id: int, session_id: int) -> dict:
+    """Return one authoritative session view without revealing other users' IDs."""
+    with get_session() as db:
+        row = db.get(RunSession, session_id)
+        if row is None or row.user_id != user_id:
+            raise HTTPException(status_code=404, detail="세션을 찾을 수 없어요.")
+        return _session_view(row)
+
+
 def request_stop(user_id: int, session_id: int, mode: str) -> dict:
     """마이페이지 종료 버튼: stop_mode 플래그만 세운다.
 

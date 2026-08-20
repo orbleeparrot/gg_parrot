@@ -106,14 +106,10 @@ function periodLabelOf(macro) {
   ] || macro.period?.preset || "";
 }
 
-// 조건 정하기 맨 위 블록 — '실시간 차트 · 보조지표' 한 제목 아래 차트를 정하는
-// 설정(children)과 그 차트를 묶는다. 설정은 한 번 정하면 끝이라 스크롤에 흘려
-// 보내고, 차트만 상단에 고정돼 남는다.
-//
-// 스티키를 설정까지 씌우지 않는 이유: 둘을 합치면 676px 이라 1280x720 화면에서
-// 상단바(72px)를 빼면 648px 밖에 없어 폼 편집 공간이 아예 안 남는다. 스크롤에
-// 맞춰 설정만 접는 방법도 봤지만, 접히는 순간 문서가 253px 줄어 아래 내용이
-// 통째로 튀어 오른다. 흘려보내면 고정된 뒤의 화면은 똑같으면서 그 부작용이 없다.
+// 조건 정하기 맨 위 블록 — '실시간 차트 · 보조지표' 제목 바로 아래가 차트고,
+// 기본 설정(children)은 그 밑으로 내려온다. 차트가 폼 맨 위에 있으니 스크롤을
+// 내리면 종목·매매 방식부터 손실 제한까지 모든 값이 고정된 차트 아래에서
+// 움직인다 — 무엇을 바꾸든 보조지표가 따라 변하는 게 눈에 들어온다.
 function ChartDisclosure({ symbols, form, setForm, children }) {
   const [open, setOpen] = useState(true);
   const contentId = useId();
@@ -129,11 +125,10 @@ function ChartDisclosure({ symbols, form, setForm, children }) {
       {/* 설명 문단은 두지 않는다 — 바로 위 '조건 정하기' 설명과 두 줄이 겹쳐 쌓인다. */}
       <h3 className="t-title text-slate-900">실시간 차트 · 보조지표</h3>
 
-      {children}
-
       {symbols.length > 0 ? (
-        // 폼이 밑으로 비쳐 보이지 않도록 캔버스 색을 깔아 둔다.
-        <section className="builder-chart-sticky border-t border-slate-200" data-tour="chart">
+        // 아래 폼이 비쳐 보이지 않도록 캔버스 색을 깔고, 고정됐을 때 스크롤되는
+        // 내용과의 경계가 보이도록 아래쪽에만 괘선을 둔다.
+        <section className="builder-chart-sticky pb-1 border-b border-slate-200" data-tour="chart">
           <button
             type="button"
             onClick={() => setOpen((value) => !value)}
@@ -174,6 +169,8 @@ function ChartDisclosure({ symbols, form, setForm, children }) {
           ) : null}
         </section>
       ) : null}
+
+      {children}
     </>
   );
 }

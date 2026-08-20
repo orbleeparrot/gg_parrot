@@ -47,11 +47,6 @@ const TOUR_STEPS = [
     body: "이동평균 크로스·볼린저·RSI 등 원하는 전략을 골라요. 라벨 옆 ⓘ에 마우스를 올리면 각 매매 방식이 어떤 규칙인지 설명을 확인할 수 있어요.",
   },
   {
-    anchor: "chart",
-    title: "실시간 차트 · 보조지표",
-    body: "지금 고른 종목의 실시간 시세를 보여줘요. 선택한 매매 방식의 보조지표(예: 이동평균·볼린저 밴드)가 함께 그려지고, 아래 설정값을 바꾸면 보조지표도 즉시 따라 바뀌는 걸 확인할 수 있어요.",
-  },
-  {
     anchor: "position",
     title: "포지션",
     body: "오를 때 버는 롱(long), 내릴 때 버는 숏(short)을 정해요. 전략에 따라 숏이 막혀 있을 수 있어요.",
@@ -67,14 +62,9 @@ const TOUR_STEPS = [
     body: "과거 어느 구간의 데이터로 확인할지 정해요. 최근 1년·6개월·3개월 또는 직접 기간을 지정할 수 있어요.",
   },
   {
-    anchor: "leverage",
-    title: "레버리지",
-    body: "배수를 올리면 수익도 손실도 그만큼 커지고 청산 위험이 생겨요. 1배는 현물과 같아 청산이 없어요. 백테스트·모의에서만 적용돼요.",
-  },
-  {
-    anchor: "market",
-    title: "시세 데이터",
-    body: "현물·선물 중 어떤 캔들로 계산할지 정해요. ‘자동’은 숏·레버리지면 선물, 그 외엔 현물을 골라요. 선물은 실제 펀딩비까지 반영할 수 있어요.",
+    anchor: "chart",
+    title: "실시간 차트 · 보조지표",
+    body: "지금 고른 종목의 실시간 시세를 보여줘요. 선택한 매매 방식의 보조지표(예: 이동평균·볼린저 밴드)가 함께 그려지고, 아래 설정값을 바꾸면 보조지표도 즉시 따라 바뀌는 걸 확인할 수 있어요.",
   },
   {
     anchor: "strategy-params",
@@ -95,6 +85,11 @@ const TOUR_STEPS = [
     anchor: "fees",
     title: "거래 비용과 펀딩비",
     body: "실제에 가깝게 수수료·체결 가격 차이(슬리피지)·펀딩비를 반영해요. ‘실제 펀딩비 가져오기’로 해당 기간 평균값을 자동으로 채울 수 있어요.",
+  },
+  {
+    anchor: "leverage",
+    title: "레버리지",
+    body: "배수를 올리면 수익도 손실도 그만큼 커지고 청산 위험이 생겨요. 1배는 현물과 같아 청산이 없어요. 백테스트·모의에서만 적용돼요.",
   },
 ];
 
@@ -122,7 +117,10 @@ function ChartDisclosure({ symbols, form }) {
 
   if (symbols.length === 0) return null;
   return (
-    <section className="border-y border-slate-200" data-tour="chart">
+    // sticky — 아래로 스크롤해 전략 조건·손실 제한을 만지는 동안에도 차트가 계속
+    // 보여야 "조절하면서 보조지표가 바뀌는 걸 본다"가 성립한다. 폼이 밑으로 비쳐
+    // 보이지 않도록 캔버스 색을 깔아 둔다.
+    <section className="builder-chart-sticky border-y border-slate-200" data-tour="chart">
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
@@ -130,21 +128,34 @@ function ChartDisclosure({ symbols, form }) {
         aria-expanded={open}
         aria-controls={contentId}
       >
-        <span>
+        <span className="min-w-0">
           <span className="t-label text-slate-900">실시간 차트 · 보조지표</span>
           <span className="ml-2 t-caption text-slate-500 num">
             {symbols.length === 1 ? symbols[0] : `${symbols.length}개 종목`}
           </span>
+          {/* 설명 문단이던 것을 헤더 한 줄로 접었다 — 스티키로 계속 붙어 있는
+              영역이라 두 줄짜리 안내가 매번 자리를 차지할 이유가 없다. */}
+          {ruleLabel ? <span className="ml-2 t-caption text-slate-500">· {ruleLabel}</span> : null}
         </span>
         <span className="t-caption text-slate-400" aria-hidden="true">{open ? "접기 ↑" : "펼치기 ↓"}</span>
       </button>
       {open ? (
-        <div id={contentId} className="pb-5 space-y-6">
-          <p className="t-small text-slate-500">
-            지금 고른 <b className="text-slate-700">{ruleLabel}</b> 설정을 실시간 차트 위에 그려요. 매수·매도 자리를 눈으로 확인해 보세요.
-          </p>
+        <div id={contentId} className="pb-4 space-y-5">
+          {/* 시장은 넘기지 않는다(= 현물). 보조지표는 rule_type·포지션·전략 조건만
+              보고 그려져 레버리지와 무관한데, 레버리지로 선물 캔들을 끌어오면
+              지표는 그대로인 채 배포 리전의 선물 차단에 걸려 차트만 사라졌다.
+              현물·선물 가격차는 이 참고용 오버레이에서 눈에 띄지도 않는다.
+
+              minimal — 조작 안내·면책 문단을 접어 스티키 높이를 줄인다. 확대·축소
+              버튼은 그대로 남는다(compact 와 달리 minimal 은 컨트롤을 지우지 않는다). */}
           {symbols.map((symbol) => (
-            <CandleChart key={symbol} symbol={symbol} defaultInterval={form.candle_interval || "1m"} overlay={overlay} />
+            <CandleChart
+              key={symbol}
+              symbol={symbol}
+              defaultInterval={form.candle_interval || "1m"}
+              overlay={overlay}
+              minimal
+            />
           ))}
         </div>
       ) : null}
@@ -184,6 +195,7 @@ export default function Studio() {
     }
   );
   const [tourOpen, setTourOpen] = useState(false);
+  const [builderTab, setBuilderTab] = useState("basic"); // "basic" | "pro" (프로는 개발 중)
   const [fileImportBusy, setFileImportBusy] = useState(false);
   const [fileImportError, setFileImportError] = useState("");
   const [fileImportSuccess, setFileImportSuccess] = useState("");
@@ -541,49 +553,54 @@ export default function Studio() {
         actions={<SimBadge />}
       />
 
-      {!slug ? (
-        <section className="mb-7 border-y border-slate-200" aria-labelledby="macro-file-import-title">
-          <input
-            ref={macroFileInputRef}
-            type="file"
-            accept=".json,.ggm.json,application/json"
-            onChange={onMacroFileChange}
-            className="sr-only"
-            aria-label="껄무새 매크로 파일 등록"
-          />
-          <div className="py-4 flex items-center justify-between gap-4 flex-wrap">
-            <div>
-              <h2 id="macro-file-import-title" className="t-label text-slate-900">가지고 있는 매크로 파일이 있나요?</h2>
-              <p className="mt-1 t-small text-slate-700">파일을 내 매크로에 등록하고, 아래 조건 편집기에서 바로 이어서 수정할 수 있어요.</p>
-            </div>
-            {token ? (
+      {/* 유틸리티 한 줄 — 파일 등록과 사용법 안내는 본문이 아니라 부속 동작이라
+          제목·설명 문단으로 두 블록을 차지할 이유가 없다. 괘선도 두지 않는다:
+          구획을 나눌 만한 내용이 아니라 버튼 두 개뿐이다. */}
+      <section className="mb-6" aria-label="빌더 도구">
+        <input
+          ref={macroFileInputRef}
+          type="file"
+          accept=".json,.ggm.json,application/json"
+          onChange={onMacroFileChange}
+          className="sr-only"
+          aria-label="껄무새 매크로 파일 등록"
+        />
+        <div className="py-1 flex items-center gap-2 flex-wrap">
+          {!slug ? (
+            token ? (
               <button
                 type="button"
                 onClick={() => macroFileInputRef.current?.click()}
                 disabled={fileImportBusy || busy}
-                className="btn btn-m btn-secondary"
+                className="btn btn-s btn-ghost"
+                title="가지고 있는 .ggm.json 매크로 파일을 내 매크로에 등록하고 아래에서 이어서 수정해요"
               >
                 {fileImportBusy ? "파일 등록 중…" : "매크로 파일 등록"}
               </button>
             ) : (
-              <Link to="/login?next=%2Fbuilder" className="btn btn-m btn-secondary">로그인 후 파일 등록</Link>
-            )}
-          </div>
-          {fileImportError ? <p className="pb-4 t-small text-red-600" role="alert">{fileImportError}</p> : null}
-          {fileImportSuccess ? <p className="pb-4 t-small text-green-700" role="status">{fileImportSuccess}</p> : null}
-        </section>
-      ) : null}
-
-      <section className="mb-8 border-y border-slate-200">
-        <div className="py-3 flex items-center justify-between gap-3 flex-wrap">
-          <div>
-            <span className="t-label text-slate-900">처음이신가요?</span>
-            <span className="ml-2 t-small text-slate-500">화면을 순서대로 짚어가며 사용법을 안내해 드려요.</span>
-          </div>
-          <button type="button" onClick={() => setTourOpen(true)} className="btn btn-m btn-secondary">
+              <Link
+                to="/login?next=%2Fbuilder"
+                className="btn btn-s btn-ghost"
+                title="가지고 있는 매크로 파일을 등록하려면 로그인이 필요해요"
+              >
+                로그인 후 파일 등록
+              </Link>
+            )
+          ) : null}
+          <button
+            type="button"
+            onClick={() => {
+              setBuilderTab("basic"); // 투어가 짚는 요소는 모두 기본 빌더 안에 있다.
+              setTourOpen(true);
+            }}
+            className="btn btn-s btn-ghost"
+            title="화면을 순서대로 짚어가며 사용법을 안내해 드려요"
+          >
             사용법 안내
           </button>
         </div>
+        {fileImportError ? <p className="mt-2 t-small text-red-600" role="alert">{fileImportError}</p> : null}
+        {fileImportSuccess ? <p className="mt-2 t-small text-green-700" role="status">{fileImportSuccess}</p> : null}
       </section>
 
       {hasRegistrationDraft ? (
@@ -607,33 +624,97 @@ export default function Studio() {
             <p className="mt-2 t-small text-slate-700">처음에는 종목과 전략만 바꾸고 나머지는 기본값으로 확인해도 돼요.</p>
           </div>
 
+          <div className="seg mb-5 max-w-full flex-wrap" role="tablist" aria-label="매크로 빌더 종류">
+            <button
+              type="button"
+              role="tab"
+              id="builder-tab-basic"
+              aria-selected={builderTab === "basic"}
+              aria-controls="builder-panel-basic"
+              onClick={() => setBuilderTab("basic")}
+              className={"seg-item " + (builderTab === "basic" ? "seg-item-on" : "")}
+            >
+              기본 매크로 빌더
+            </button>
+            <button
+              type="button"
+              role="tab"
+              id="builder-tab-pro"
+              aria-selected={builderTab === "pro"}
+              aria-controls="builder-panel-pro"
+              onClick={() => setBuilderTab("pro")}
+              className={"seg-item " + (builderTab === "pro" ? "seg-item-on" : "")}
+            >
+              프로 매크로 빌더
+              <span className="badge badge-flat ml-2">개발 예정</span>
+            </button>
+          </div>
+
           {loadedFrom ? (
             <div className="notice mb-5 t-small text-slate-700">
               불러온 매크로 · <b className="text-slate-900">{loadedFrom}</b>
             </div>
           ) : null}
 
-          <Builder form={form} setForm={setForm} />
-
-          {valErr ? <div className="mt-4 t-small text-amber-700" role="alert">{valErr}</div> : null}
-          {error ? <div className="mt-4 t-small text-red-600" role="alert">오류: {error}</div> : null}
-
-          <div className="mt-6 flex items-center gap-3 flex-wrap">
-            <button onClick={() => runBacktest(form)} disabled={busy || !!valErr}
-              className={"btn btn-l " + (resultIsFresh ? "btn-secondary" : "btn-primary")}>
-              {busy ? "결과 계산 중…" : testedMacro && !resultIsFresh ? "바뀐 조건으로 다시 테스트" : "이 조건으로 백테스트"}
-            </button>
-            <button onClick={saveAndShare} disabled={busy || !!valErr} className="btn btn-l btn-secondary">
-              저장하고 공유 링크 만들기
-            </button>
-            <label className="flex items-center gap-2 t-small text-slate-700 cursor-pointer select-none">
-              <input type="checkbox" checked={autoRun} onChange={(event) => setAutoRun(event.target.checked)} />
-              변경 뒤 자동 테스트
-            </label>
+          {/* 프로 빌더는 아직 준비 중이라 폼을 열지 않는다. 기본 빌더는 계속 마운트해
+              두어 탭을 오가도 입력한 조건이 사라지지 않게 한다. */}
+          <div
+            id="builder-panel-basic"
+            role="tabpanel"
+            aria-labelledby="builder-tab-basic"
+            hidden={builderTab !== "basic"}
+          >
+            <Builder
+              form={form}
+              setForm={setForm}
+              chartSlot={<ChartDisclosure symbols={chartSymbols} form={form} />}
+            />
           </div>
-          <p className="mt-3 t-caption text-slate-500">
-            첫 결과 뒤부터 자동 테스트가 동작해요 · <kbd className="num rounded border border-slate-300 bg-slate-100 px-1">Ctrl</kbd>+<kbd className="num rounded border border-slate-300 bg-slate-100 px-1">Enter</kbd>
-          </p>
+
+          {builderTab === "pro" ? (
+            <div
+              id="builder-panel-pro"
+              role="tabpanel"
+              aria-labelledby="builder-tab-pro"
+              className="py-14 text-center border-b border-slate-200"
+            >
+              <div className="t-title text-slate-900">프로 매크로 빌더는 준비 중이에요</div>
+              <p className="mt-2 t-small text-slate-700 measure mx-auto">
+                여러 조건을 조합하고 진입·청산 규칙을 직접 짜는 고급 빌더예요. 아직 개발 중이라
+                지금은 사용할 수 없어요. 그동안은 기본 매크로 빌더로 조건을 만들어 주세요.
+              </p>
+              <button
+                type="button"
+                onClick={() => setBuilderTab("basic")}
+                className="btn btn-m btn-secondary mt-5"
+              >
+                기본 매크로 빌더로 돌아가기
+              </button>
+            </div>
+          ) : null}
+
+          {builderTab === "basic" ? (
+            <>
+              {valErr ? <div className="mt-4 t-small text-amber-700" role="alert">{valErr}</div> : null}
+              {error ? <div className="mt-4 t-small text-red-600" role="alert">오류: {error}</div> : null}
+              <div className="mt-6 flex items-center gap-3 flex-wrap">
+                <button onClick={() => runBacktest(form)} disabled={busy || !!valErr}
+                  className={"btn btn-l " + (resultIsFresh ? "btn-secondary" : "btn-primary")}>
+                  {busy ? "결과 계산 중…" : testedMacro && !resultIsFresh ? "바뀐 조건으로 다시 테스트" : "이 조건으로 백테스트"}
+                </button>
+                <button onClick={saveAndShare} disabled={busy || !!valErr} className="btn btn-l btn-secondary">
+                  저장하고 공유 링크 만들기
+                </button>
+                <label className="flex items-center gap-2 t-small text-slate-700 cursor-pointer select-none">
+                  <input type="checkbox" checked={autoRun} onChange={(event) => setAutoRun(event.target.checked)} />
+                  변경 뒤 자동 테스트
+                </label>
+              </div>
+              <p className="mt-3 t-caption text-slate-500">
+                첫 결과 뒤부터 자동 테스트가 동작해요 · <kbd className="num rounded border border-slate-300 bg-slate-100 px-1">Ctrl</kbd>+<kbd className="num rounded border border-slate-300 bg-slate-100 px-1">Enter</kbd>
+              </p>
+            </>
+          ) : null}
         </section>
 
         <section id="backtest-result">
@@ -646,8 +727,6 @@ export default function Studio() {
           <div className="sr-only" role="status" aria-live="polite">
             {busy ? "백테스트 결과를 계산하고 있어요." : resultIsFresh ? "백테스트 결과가 준비됐어요." : ""}
           </div>
-
-          <ChartDisclosure symbols={chartSymbols} form={form} />
 
           {!result && !busy ? (
             <div className="py-14 text-center border-b border-slate-200">

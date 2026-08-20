@@ -34,9 +34,13 @@ export default function InfoTooltip({ term, text, placement = "top" }) {
     };
   }, [open]);
 
-  // The bubble is centred on a 16px icon, so near either screen edge it would
-  // hang off the viewport and give the whole page a horizontal scrollbar.
-  // Measure once per open and slide it back inside.
+  // The bubble is centred on a 16px icon, so near either edge it would hang off
+  // and give the whole page a horizontal scrollbar. Measure once per open and
+  // slide it back inside.
+  //
+  // 기준은 뷰포트가 아니라 본문 영역(.site-frame)이다 — 데스크톱에서는 왼쪽
+  // 232px 를 고정 사이드바가 차지하고 있어서, 뷰포트 기준으로 밀어 넣으면
+  // 사이드바 밑으로 들어가 설명이 가려진다(포지션의 롱·숏 ⓘ 가 그랬다).
   useEffect(() => {
     if (!open) {
       setShift(0);
@@ -44,10 +48,13 @@ export default function InfoTooltip({ term, text, placement = "top" }) {
     }
     const el = tipRef.current;
     if (!el) return;
-    const r = el.getBoundingClientRect();
+    const frame = ref.current?.closest(".site-frame")?.getBoundingClientRect();
     const margin = 8;
-    if (r.left < margin) setShift(margin - r.left);
-    else if (r.right > window.innerWidth - margin) setShift(window.innerWidth - margin - r.right);
+    const minLeft = Math.max(0, frame ? frame.left : 0) + margin;
+    const maxRight = Math.min(window.innerWidth, frame ? frame.right : window.innerWidth) - margin;
+    const r = el.getBoundingClientRect();
+    if (r.left < minLeft) setShift(minLeft - r.left);
+    else if (r.right > maxRight) setShift(maxRight - r.right);
   }, [open]);
 
   if (!content) return null;
@@ -95,7 +102,7 @@ export default function InfoTooltip({ term, text, placement = "top" }) {
           role="tooltip"
           style={{ transform: `translateX(calc(-50% + ${shift}px))` }}
           className={
-            "absolute left-1/2 w-56 max-w-[calc(100vw-1rem)] z-40 " +
+            "absolute left-1/2 w-56 max-w-[calc(100vw-1rem)] z-[75] " +
             posCls +
             " rounded-xl bg-surface border border-slate-300 px-3 py-3" +
             " t-caption leading-relaxed text-slate-700 shadow-xl"

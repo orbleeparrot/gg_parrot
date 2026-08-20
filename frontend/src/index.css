@@ -2974,6 +2974,165 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   letter-spacing: -0.025em;
 }
 
+/* 빌더 참고 차트 — '전략 조건' 바로 위에 놓고 스크롤에 붙여 둔다. 아래로 내려가
+   익절·손절·밴드 폭을 만지는 동안에도 보조지표가 계속 보여야 "조절하면서 본다"가
+   성립한다. sticky 는 부모(빌더 폼) 안에서만 붙으므로 폼이 끝나면 자연스럽게 놓인다.
+
+   top 은 붙박이 헤더 높이에 맞춘다 — 데스크톱 64px, 1099px 이하에서는 2단 헤더라
+   112px 로 커진다(--site-topbar-h). z-index 는 헤더(60)보다 낮게 둬서 차트가
+   헤더 밑으로 지나가게 한다. 배경을 깔지 않으면 폼이 그대로 비쳐 보인다. */
+.builder-chart-sticky {
+  position: sticky;
+  top: calc(var(--site-topbar-h, 64px) + 8px);
+  z-index: 20;
+  background: rgb(var(--c-slate-50));
+}
+
+/* 세로가 짧은 화면에서는 차트가 붙는 순간 폼이 볼 자리가 없어진다. 그런 화면은
+   그냥 같이 흐르게 둔다 — 위치(전략 조건 바로 위)만으로도 충분히 가깝다. */
+@media (max-height: 700px) {
+  .builder-chart-sticky {
+    position: static;
+  }
+}
+
+/* 결과 확인 개인 배치 — 편집 모드에서만 블록 경계를 드러낸다. 상자를 쓰지 않는
+   원칙(§1-3)의 예외인데, 끌어 옮길 단위가 어디까지인지 보이지 않으면 드래그
+   자체가 성립하지 않기 때문이다. 편집을 끄면 점선도 손잡이도 모두 사라진다. */
+.result-block {
+  padding: 8px 12px 12px;
+  border: 1px dashed rgb(var(--c-slate-300));
+  border-radius: 12px;
+}
+
+.result-block.is-dragging { opacity: 0.45; }
+
+.result-block.is-over {
+  border-style: solid;
+  border-color: rgb(var(--c-brand-line));
+}
+
+.result-block-bar {
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid rgb(var(--c-slate-200));
+  color: rgb(var(--c-slate-500));
+  cursor: grab;
+}
+
+.result-block.is-dragging .result-block-bar { cursor: grabbing; }
+
+.result-block-grip { display: inline-flex; flex: none; }
+
+.result-block-name {
+  flex: 1;
+  min-width: 0;
+  color: rgb(var(--c-slate-700));
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.result-block-moves { display: flex; flex: none; gap: 4px; }
+
+.result-block-moves button {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgb(var(--c-slate-300));
+  border-radius: 8px;
+  color: rgb(var(--c-slate-900));
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.result-block-moves button:disabled { opacity: 0.35; }
+
+/* 지표 행 드래그 — 블록과 같은 규칙이되 훨씬 가볍게. 행은 이미 괘선으로 나뉘어
+   있어서 점선 상자를 두르면 표가 아니라 목록처럼 보인다. 드롭 위치는 아래쪽
+   안쪽 그림자 한 줄로만 알린다. */
+.result-stat-row { cursor: grab; }
+.result-stat-row.is-dragging { opacity: 0.45; cursor: grabbing; }
+.result-stat-row.is-over { box-shadow: inset 0 -2px 0 rgb(var(--c-brand-line)); }
+
+.result-stat-grip {
+  margin-right: 8px;
+  display: inline-flex;
+  flex: none;
+  color: rgb(var(--c-slate-400));
+}
+
+.result-stat-moves { display: flex; flex: none; gap: 4px; }
+
+.result-stat-moves button {
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgb(var(--c-slate-300));
+  border-radius: 7px;
+  color: rgb(var(--c-slate-900));
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.result-stat-moves button:disabled { opacity: 0.35; }
+
+/* 지표 고정(핀). 편집 중에는 누를 수 있는 버튼, 평소엔 상태 표시만. */
+.result-pin {
+  width: 24px;
+  height: 24px;
+  margin-right: 6px;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgb(var(--c-slate-300));
+  border-radius: 7px;
+  color: rgb(var(--c-slate-500));
+}
+
+.result-pin.is-on {
+  border-color: rgb(var(--c-brand-line));
+  color: rgb(var(--c-brand-line));
+}
+
+.result-pin-mark {
+  margin-right: 6px;
+  display: inline-flex;
+  flex: none;
+  color: rgb(var(--c-slate-500));
+}
+
+/* 실행기가 윈도우 전용이라, 두 진입 버튼 위에서 미리 알려 준다. */
+.home-entry-choice-platform {
+  margin: 10px 0 0;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: rgb(var(--c-slate-700));
+  font-size: 14px;
+  font-weight: 550;
+  line-height: 1.55;
+}
+
+.home-entry-choice-platform-badge {
+  flex: none;
+  padding: 3px 9px;
+  border: 1px solid rgb(var(--c-slate-300));
+  border-radius: 999px;
+  color: rgb(var(--c-slate-900));
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
 .home-entry-choice {
   width: 100%;
   min-height: 122px;

@@ -81,7 +81,9 @@ function Group({ title, term, children, note, anchor }) {
 
 const inputCls = "field";
 
-export default function Builder({ form, setForm }) {
+// `chartSlot` 은 '전략 조건' 바로 위에 끼워 넣을 참고 차트다. Studio 가 넘겨준다 —
+// 폼 컴포넌트가 차트·시세 폴링까지 끌어안지 않도록 자리만 비워 둔다.
+export default function Builder({ form, setForm, chartSlot = null }) {
   const instanceId = useId().replace(/:/g, "");
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
   const setChk = (k) => (e) => setForm({ ...form, [k]: e.target.checked });
@@ -199,73 +201,11 @@ export default function Builder({ form, setForm }) {
         </div>
       )}
 
-      {/* leverage — a macro condition (backtest/paper only; C is excluded) */}
-      {rt !== "C" && (() => {
-        const lev = Math.max(1, Math.round(Number(form.leverage) || 1));
-        const risk = leverageRisk(lev);
-        return (
-          <Group
-            title="레버리지"
-            term="leverage"
-            anchor="leverage"
-            note={<span className="ml-2 t-caption text-slate-500">격리(isolated) · 백테스트·모의만</span>}
-          >
-            <div className="flex items-center gap-4">
-              <input
-                aria-label="레버리지 배수"
-                type="range" min="1" max={MAX_LEVERAGE} step="1" value={lev}
-                onChange={set("leverage")}
-                className="flex-1 accent-red-500"
-              />
-              <div className="flex items-center gap-2">
-                <input
-                  aria-label="레버리지 배수 직접 입력"
-                  className="field w-20 text-center num"
-                  type="number" min="1" max={MAX_LEVERAGE} step="1" value={form.leverage}
-                  onChange={set("leverage")}
-                />
-                <span className="t-label text-slate-700">배</span>
-              </div>
-            </div>
-            {risk ? (
-              <div className={"alert mt-3 t-small flex items-start gap-2 " + risk.cls}>
-                <span>
-                  <b>레버리지 <span className="num">{risk.n}</span>배 · {risk.level}</b> — 가격이 약{" "}
-                  <b className="num">{risk.movePct.toFixed(risk.movePct < 1 ? 2 : 1)}%</b> 반대로 움직이면{" "}
-                  <b>청산(전액 손실)</b>돼요.
-                  {lev >= 10 && " 처음이라면 특히 위험해요."}
-                  <InfoTooltip term="liquidation" />
-                </span>
-              </div>
-            ) : (
-              <div className="mt-3 t-small text-slate-500">1배 = 현물과 같아요(청산 없음). 배수를 올리면 수익도 손실도 그만큼 커지고 청산 위험이 생겨요.</div>
-            )}
-          </Group>
-        );
-      })()}
-
-      {/* price-data source (spot vs USDT-M futures) */}
-      {sel(
-        "market",
-        "시세 데이터",
-        [
-          { value: "auto", label: "자동 (숏·레버리지 → 선물, 그 외 현물)" },
-          { value: "spot", label: "현물 (spot)" },
-          { value: "futures", label: "선물 (USDT-M Futures)" },
-        ],
-        {
-          anchor: "market",
-          hint:
-            "실제 사용될 데이터: " +
-            (form.market === "spot"
-              ? "현물 캔들"
-              : form.market === "futures"
-              ? "선물 캔들 + 실제 펀딩비 반영 가능"
-              : isShort || Number(form.leverage) > 1 || rt === "K"
-              ? "선물 캔들 (숏/레버리지라 자동 선택)"
-              : "현물 캔들 (롱·1배라 자동 선택)"),
-        }
-      )}
+      {/* 참고 차트는 '전략 조건' 바로 위에 둔다. 오버레이를 실제로 움직이는 값이
+          바로 아래(익절·손절·기간·밴드 폭…)라, 값을 만지면 시선 바로 위에서
+          보조지표가 따라 움직인다. 레버리지·시세 데이터는 오버레이와 무관해서
+          그 사이에 끼우면 차트와 조절값이 갈린다. */}
+      {chartSlot}
 
       {/* rule-specific params */}
       <Group title={<>전략 조건 · <span className="text-slate-900">{meta.label}</span></>} anchor="strategy-params">
@@ -470,6 +410,51 @@ export default function Builder({ form, setForm }) {
           </span>
         </div>
       </details>
+
+      {/* leverage — a macro condition (backtest/paper only; C is excluded) */}
+      {rt !== "C" && (() => {
+        const lev = Math.max(1, Math.round(Number(form.leverage) || 1));
+        const risk = leverageRisk(lev);
+        return (
+          <Group
+            title="레버리지"
+            term="leverage"
+            anchor="leverage"
+            note={<span className="ml-2 t-caption text-slate-500">격리(isolated) · 백테스트·모의만</span>}
+          >
+            <div className="flex items-center gap-4">
+              <input
+                aria-label="레버리지 배수"
+                type="range" min="1" max={MAX_LEVERAGE} step="1" value={lev}
+                onChange={set("leverage")}
+                className="flex-1 accent-red-500"
+              />
+              <div className="flex items-center gap-2">
+                <input
+                  aria-label="레버리지 배수 직접 입력"
+                  className="field w-20 text-center num"
+                  type="number" min="1" max={MAX_LEVERAGE} step="1" value={form.leverage}
+                  onChange={set("leverage")}
+                />
+                <span className="t-label text-slate-700">배</span>
+              </div>
+            </div>
+            {risk ? (
+              <div className={"alert mt-3 t-small flex items-start gap-2 " + risk.cls}>
+                <span>
+                  <b>레버리지 <span className="num">{risk.n}</span>배 · {risk.level}</b> — 가격이 약{" "}
+                  <b className="num">{risk.movePct.toFixed(risk.movePct < 1 ? 2 : 1)}%</b> 반대로 움직이면{" "}
+                  <b>청산(전액 손실)</b>돼요.
+                  {lev >= 10 && " 처음이라면 특히 위험해요."}
+                  <InfoTooltip term="liquidation" />
+                </span>
+              </div>
+            ) : (
+              <div className="mt-3 t-small text-slate-500">1배 = 현물과 같아요(청산 없음). 배수를 올리면 수익도 손실도 그만큼 커지고 청산 위험이 생겨요.</div>
+            )}
+          </Group>
+        );
+      })()}
     </div>
   );
 }

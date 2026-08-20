@@ -75,21 +75,36 @@ def get_candles(
     if hit and hit[1] > time.time():
         return {**hit[0], "cached": True}
 
+    # 선물 호스트(fapi)는 배포 리전에서 차단될 수 있다 — 현물은 미러
+    # (BINANCE_API_BASE)로 우회하지만 선물엔 대응 미러가 없다. 그래서 선물을
+    # 못 받으면 현물로 떨어뜨린다. 백테스트(fetch_klines_for_macro)가 auto 에서
+    # 하는 것과 같은 처리로, 레버리지를 올렸다고 차트가 통째로 사라지는 것보다
+    # 기준 시세라도 보여주는 편이 낫다. 실제로 쓴 시장은 payload 의 market 이 알린다.
+    used_market = market
     try:
         candles = get_recent_klines(symbol, interval=interval, limit=limit, market=market)
-    except NoSpotDataError:
-        raise
-    except Exception:
-        # Transient upstream failure: serve the last good copy rather than
-        # blanking a chart the user is watching.
-        if hit:
-            return {**hit[0], "cached": True, "stale": True}
-        raise NoSpotDataError("시세를 불러오지 못했습니다. 잠시 후 다시 시도하세요.")
+    except Exception as first_error:
+        candles = None
+        if market == "futures":
+            try:
+                candles = get_recent_klines(symbol, interval=interval, limit=limit, market="spot")
+                used_market = "spot"
+            except Exception:
+                candles = None
+        if candles is None:
+            # Transient upstream failure: serve the last good copy rather than
+            # blanking a chart the user is watching.
+            if hit:
+                return {**hit[0], "cached": True, "stale": True}
+            if isinstance(first_error, NoSpotDataError):
+                raise
+            raise NoSpotDataError("시세를 불러오지 못했습니다. 잠시 후 다시 시도하세요.")
 
     payload = {
         "symbol": symbol,
         "interval": interval,
-        "market": market,
+        "market": used_market,
+        "requested_market": market,
         "candles": candles,
         "server_time": int(time.time() * 1000),
         "refresh_seconds": _INTERVALS[interval],
@@ -124,19 +139,31 @@ def get_live_candles(
     if hit and hit[1] > now:
         return {**hit[0], "cached": True}
 
+    # get_candles 와 같은 선물→현물 폴백. 히스토리는 현물로 떨어졌는데 움직이는
+    # 봉만 선물을 고집하면 두 시세가 섞여 캔들이 튄다.
+    used_market = market
     try:
         candles = get_recent_klines(symbol, interval=interval, limit=2, market=market)
-    except NoSpotDataError:
-        raise
-    except Exception:
-        if hit:
-            return {**hit[0], "cached": True, "stale": True}
-        raise NoSpotDataError("실시간 시세를 불러오지 못했습니다. 잠시 후 다시 시도하세요.")
+    except Exception as first_error:
+        candles = None
+        if market == "futures":
+            try:
+                candles = get_recent_klines(symbol, interval=interval, limit=2, market="spot")
+                used_market = "spot"
+            except Exception:
+                candles = None
+        if candles is None:
+            if hit:
+                return {**hit[0], "cached": True, "stale": True}
+            if isinstance(first_error, NoSpotDataError):
+                raise
+            raise NoSpotDataError("실시간 시세를 불러오지 못했습니다. 잠시 후 다시 시도하세요.")
 
     payload = {
         "symbol": symbol,
         "interval": interval,
-        "market": market,
+        "market": used_market,
+        "requested_market": market,
         "candles": candles,
         "server_time": int(now * 1000),
         "refresh_seconds": _LIVE_REFRESH_SECONDS,

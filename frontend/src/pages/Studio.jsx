@@ -62,16 +62,6 @@ const TOUR_STEPS = [
     body: "과거 어느 구간의 데이터로 확인할지 정해요. 최근 1년·6개월·3개월 또는 직접 기간을 지정할 수 있어요.",
   },
   {
-    anchor: "leverage",
-    title: "레버리지",
-    body: "배수를 올리면 수익도 손실도 그만큼 커지고 청산 위험이 생겨요. 1배는 현물과 같아 청산이 없어요. 백테스트·모의에서만 적용돼요.",
-  },
-  {
-    anchor: "market",
-    title: "시세 데이터",
-    body: "현물·선물 중 어떤 캔들로 계산할지 정해요. ‘자동’은 숏·레버리지면 선물, 그 외엔 현물을 골라요. 선물은 실제 펀딩비까지 반영할 수 있어요.",
-  },
-  {
     anchor: "chart",
     title: "실시간 차트 · 보조지표",
     body: "지금 고른 종목의 실시간 시세를 보여줘요. 선택한 매매 방식의 보조지표(예: 이동평균·볼린저 밴드)가 함께 그려지고, 아래 설정값을 바꾸면 보조지표도 즉시 따라 바뀌는 걸 확인할 수 있어요.",
@@ -95,6 +85,11 @@ const TOUR_STEPS = [
     anchor: "fees",
     title: "거래 비용과 펀딩비",
     body: "실제에 가깝게 수수료·체결 가격 차이(슬리피지)·펀딩비를 반영해요. ‘실제 펀딩비 가져오기’로 해당 기간 평균값을 자동으로 채울 수 있어요.",
+  },
+  {
+    anchor: "leverage",
+    title: "레버리지",
+    body: "배수를 올리면 수익도 손실도 그만큼 커지고 청산 위험이 생겨요. 1배는 현물과 같아 청산이 없어요. 백테스트·모의에서만 적용돼요.",
   },
 ];
 
@@ -563,56 +558,53 @@ export default function Studio() {
         actions={<SimBadge />}
       />
 
-      {!slug ? (
-        <section className="mb-7 border-y border-slate-200" aria-labelledby="macro-file-import-title">
-          <input
-            ref={macroFileInputRef}
-            type="file"
-            accept=".json,.ggm.json,application/json"
-            onChange={onMacroFileChange}
-            className="sr-only"
-            aria-label="껄무새 매크로 파일 등록"
-          />
-          <div className="py-4 flex items-center justify-between gap-4 flex-wrap">
-            <div>
-              <h2 id="macro-file-import-title" className="t-label text-slate-900">가지고 있는 매크로 파일이 있나요?</h2>
-              <p className="mt-1 t-small text-slate-700">파일을 내 매크로에 등록하고, 아래 조건 편집기에서 바로 이어서 수정할 수 있어요.</p>
-            </div>
-            {token ? (
+      {/* 유틸리티 한 줄 — 파일 등록과 사용법 안내는 본문이 아니라 부속 동작이라
+          제목·설명 문단으로 두 블록을 차지할 이유가 없다. 괘선 한 줄에 버튼만 남긴다. */}
+      <section className="mb-6 border-y border-slate-200" aria-label="빌더 도구">
+        <input
+          ref={macroFileInputRef}
+          type="file"
+          accept=".json,.ggm.json,application/json"
+          onChange={onMacroFileChange}
+          className="sr-only"
+          aria-label="껄무새 매크로 파일 등록"
+        />
+        <div className="py-2 flex items-center justify-end gap-2 flex-wrap">
+          {!slug ? (
+            token ? (
               <button
                 type="button"
                 onClick={() => macroFileInputRef.current?.click()}
                 disabled={fileImportBusy || busy}
-                className="btn btn-m btn-secondary"
+                className="btn btn-s btn-ghost"
+                title="가지고 있는 .ggm.json 매크로 파일을 내 매크로에 등록하고 아래에서 이어서 수정해요"
               >
                 {fileImportBusy ? "파일 등록 중…" : "매크로 파일 등록"}
               </button>
             ) : (
-              <Link to="/login?next=%2Fbuilder" className="btn btn-m btn-secondary">로그인 후 파일 등록</Link>
-            )}
-          </div>
-          {fileImportError ? <p className="pb-4 t-small text-red-600" role="alert">{fileImportError}</p> : null}
-          {fileImportSuccess ? <p className="pb-4 t-small text-green-700" role="status">{fileImportSuccess}</p> : null}
-        </section>
-      ) : null}
-
-      <section className="mb-8 border-y border-slate-200">
-        <div className="py-3 flex items-center justify-between gap-3 flex-wrap">
-          <div>
-            <span className="t-label text-slate-900">처음이신가요?</span>
-            <span className="ml-2 t-small text-slate-500">화면을 순서대로 짚어가며 사용법을 안내해 드려요.</span>
-          </div>
+              <Link
+                to="/login?next=%2Fbuilder"
+                className="btn btn-s btn-ghost"
+                title="가지고 있는 매크로 파일을 등록하려면 로그인이 필요해요"
+              >
+                로그인 후 파일 등록
+              </Link>
+            )
+          ) : null}
           <button
             type="button"
             onClick={() => {
               setBuilderTab("basic"); // 투어가 짚는 요소는 모두 기본 빌더 안에 있다.
               setTourOpen(true);
             }}
-            className="btn btn-m btn-secondary"
+            className="btn btn-s btn-ghost"
+            title="화면을 순서대로 짚어가며 사용법을 안내해 드려요"
           >
             사용법 안내
           </button>
         </div>
+        {fileImportError ? <p className="pb-3 t-small text-red-600" role="alert">{fileImportError}</p> : null}
+        {fileImportSuccess ? <p className="pb-3 t-small text-green-700" role="status">{fileImportSuccess}</p> : null}
       </section>
 
       {hasRegistrationDraft ? (

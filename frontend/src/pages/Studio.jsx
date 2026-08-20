@@ -106,14 +106,6 @@ function periodLabelOf(macro) {
   ] || macro.period?.preset || "";
 }
 
-// 빌더의 '시세 데이터'가 자동일 때 실제로 쓰일 시장. Builder 의 '실제 사용될
-// 데이터' 안내와 같은 판단이라, 참고 차트도 백테스트와 같은 캔들을 보여준다.
-function chartMarket(form) {
-  if (form.market === "spot" || form.market === "futures") return form.market;
-  const isShort = form.position_side === "short";
-  return isShort || Number(form.leverage) > 1 || form.rule_type === "K" ? "futures" : "spot";
-}
-
 function ChartDisclosure({ symbols, form }) {
   const [open, setOpen] = useState(true);
   const contentId = useId();
@@ -122,7 +114,6 @@ function ChartDisclosure({ symbols, form }) {
   // 밴드와 매수·매도 구간). form 이 바뀌면 오버레이도 즉시 따라간다.
   const overlay = useCallback((candles) => computeStrategyOverlay(form, candles), [form]);
   const ruleLabel = RULE_TYPES[form.rule_type]?.label || "";
-  const market = chartMarket(form);
 
   if (symbols.length === 0) return null;
   return (
@@ -150,13 +141,17 @@ function ChartDisclosure({ symbols, form }) {
       </button>
       {open ? (
         <div id={contentId} className="pb-4 space-y-5">
-          {/* minimal — 조작 안내·면책 문단을 접어 스티키 높이를 줄인다. 확대·축소
+          {/* 시장은 넘기지 않는다(= 현물). 보조지표는 rule_type·포지션·전략 조건만
+              보고 그려져 레버리지와 무관한데, 레버리지로 선물 캔들을 끌어오면
+              지표는 그대로인 채 배포 리전의 선물 차단에 걸려 차트만 사라졌다.
+              현물·선물 가격차는 이 참고용 오버레이에서 눈에 띄지도 않는다.
+
+              minimal — 조작 안내·면책 문단을 접어 스티키 높이를 줄인다. 확대·축소
               버튼은 그대로 남는다(compact 와 달리 minimal 은 컨트롤을 지우지 않는다). */}
           {symbols.map((symbol) => (
             <CandleChart
               key={symbol}
               symbol={symbol}
-              market={market}
               defaultInterval={form.candle_interval || "1m"}
               overlay={overlay}
               minimal

@@ -8,6 +8,63 @@ const HOLE_PADDING = 8;
 const GAP = 12;
 const EDGE = 12;
 
+// 화면에 붙박이로 떠 있어 대상을 가릴 수 있는 것들. 상단바와 빌더의 고정 차트가
+// 위를, '오늘의 경주마' 마퀴가 아래를 덮는다. 이걸 빼고 남는 띠 안에 대상을
+// 넣어야 스포트라이트가 실제로 그 요소를 비춘다.
+const STICKY_TOP_SELECTORS = [".site-header", ".builder-chart-sticky"];
+const STICKY_BOTTOM_SELECTORS = [".site-marquee"];
+
+// 상단에 실제로 '붙어 있는' 요소들의 아래 끝. sticky 는 고정되기 전에는 가리지
+// 않으므로, 지금 자기 top 위치에 도달한 것만 센다.
+function topObstruction(target) {
+  let bottom = 0;
+  for (const selector of STICKY_TOP_SELECTORS) {
+    for (const el of document.querySelectorAll(selector)) {
+      if (el === target || el.contains(target)) continue; // 대상 자신은 가리는 게 아니다
+      const cs = window.getComputedStyle(el);
+      if (cs.position !== "fixed" && cs.position !== "sticky") continue;
+      const r = el.getBoundingClientRect();
+      if (r.height === 0) continue;
+      const pinnedAt = parseFloat(cs.top) || 0;
+      if (r.top <= pinnedAt + 1 && r.bottom > bottom) bottom = r.bottom;
+    }
+  }
+  return bottom;
+}
+
+function bottomObstruction() {
+  let top = window.innerHeight;
+  for (const selector of STICKY_BOTTOM_SELECTORS) {
+    for (const el of document.querySelectorAll(selector)) {
+      const r = el.getBoundingClientRect();
+      if (r.height > 0 && r.top < top) top = r.top;
+    }
+  }
+  return top;
+}
+
+// 대상을 '가려지지 않는 띠' 안으로 끌어온다. scrollIntoView({block:'center'}) 는
+// 화면 정중앙에 두는데, 고정 차트가 상단 490px 를 덮고 있으면 정중앙이 곧 차트
+// 밑이라 정작 설명하는 요소가 안 보인다.
+//
+// 두 번 도는 이유: 첫 스크롤로 sticky 가 비로소 고정되면서 가리는 높이가 달라진다.
+function scrollIntoClearView(el) {
+  for (let pass = 0; pass < 2; pass += 1) {
+    const safeTop = topObstruction(el) + GAP + HOLE_PADDING;
+    const safeBottom = bottomObstruction() - EDGE;
+    const r = el.getBoundingClientRect();
+    let delta = 0;
+    if (r.top < safeTop) {
+      delta = r.top - safeTop; // 음수 — 위로 스크롤해 대상을 내린다
+    } else if (r.bottom > safeBottom) {
+      // 아래로 넘침. 단 위가 가려질 만큼은 올리지 않는다(긴 요소는 윗부분 우선).
+      delta = Math.max(0, Math.min(r.bottom - safeBottom, r.top - safeTop));
+    }
+    if (Math.abs(delta) < 1) return;
+    window.scrollBy(0, delta);
+  }
+}
+
 export default function ProductTour({ steps, open, onClose }) {
   const [index, setIndex] = useState(0);
   const [rect, setRect] = useState(null);
@@ -23,6 +80,17 @@ export default function ProductTour({ steps, open, onClose }) {
   // 열릴 때마다 첫 단계부터.
   useEffect(() => {
     if (open) setIndex(0);
+  }, [open]);
+
+  // 투어 중에는 고정 차트를 풀어 화면을 통째로 쓴다. 419px 짜리가 상단에 붙어
+  // 있으면 720px 화면에서 남는 띠가 200px 뿐이라, '거래 비용과 펀딩비' 처럼 긴
+  // 섹션은 스크롤을 어떻게 맞춰도 다 들어가지 않는다. 투어는 폼을 훑는 동안이라
+  // 차트를 붙잡아 둘 이유도 없다.
+  useEffect(() => {
+    if (!open) return undefined;
+    const root = document.documentElement;
+    root.classList.add("tour-active");
+    return () => root.classList.remove("tour-active");
   }, [open]);
 
   const measure = useCallback(() => {
@@ -44,7 +112,9 @@ export default function ProductTour({ steps, open, onClose }) {
     if (el) {
       // 접힌 <details> 섹션(고급 위험 관리·거래 비용)은 내용이 보이도록 펼친다.
       if (el.tagName === "DETAILS" && !el.open) el.open = true;
+      // 먼저 대략 화면 안으로 넣고, 붙박이 요소를 피해 자리를 잡는다.
       el.scrollIntoView({ block: "center", behavior: "auto" });
+      scrollIntoClearView(el);
     }
     measure();
     const timer = window.setTimeout(measure, 60);
@@ -71,19 +141,23 @@ export default function ProductTour({ steps, open, onClose }) {
     const vh = window.innerHeight;
     const cw = card.offsetWidth;
     const ch = card.offsetHeight;
+    // 카드도 상단바·고정 차트·마퀴 밑으로 들어가면 안 된다.
+    const anchorEl = step ? document.querySelector(`[data-tour="${step.anchor}"]`) : null;
+    const limitTop = topObstruction(anchorEl) + EDGE;
+    const limitBottom = bottomObstruction() - EDGE;
     if (!rect) {
-      setCardPos({ top: Math.max(EDGE, (vh - ch) / 2), left: Math.max(EDGE, (vw - cw) / 2) });
+      setCardPos({ top: Math.max(limitTop, (vh - ch) / 2), left: Math.max(EDGE, (vw - cw) / 2) });
       return;
     }
     const below = rect.top + rect.height + GAP;
     const above = rect.top - ch - GAP;
     let top;
-    if (below + ch <= vh - EDGE) top = below;
-    else if (above >= EDGE) top = above;
-    else top = Math.max(EDGE, Math.min(vh - ch - EDGE, below));
+    if (below + ch <= limitBottom) top = below;
+    else if (above >= limitTop) top = above;
+    else top = Math.max(limitTop, Math.min(limitBottom - ch, below));
     const left = Math.max(EDGE, Math.min(rect.left, vw - cw - EDGE));
     setCardPos({ top, left });
-  }, [open, rect, index]);
+  }, [open, rect, index, step]);
 
   // 키보드: Esc 종료, ←/→ 이동.
   useEffect(() => {

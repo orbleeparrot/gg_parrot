@@ -8122,6 +8122,10 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 }
 
 /* 사용법 안내 — 프로덕트 투어(스포트라이트 + 단계 카드) */
+/* 투어 중에는 고정 차트를 흐름에 되돌린다 — 상단에 붙은 419px 때문에 설명 대상이
+   가려지거나 화면에 다 안 들어가는 걸 막는다. */
+.tour-active .builder-chart-sticky { position: static; }
+
 .tour-root { position: fixed; inset: 0; z-index: 200; pointer-events: none; }
 .tour-dim { position: fixed; inset: 0; background: rgb(2 6 12 / 0.55); }
 .tour-spotlight {

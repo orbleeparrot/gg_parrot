@@ -4,6 +4,13 @@ from __future__ import annotations
 import os
 from typing import Optional
 
+from sqlalchemy import BigInteger
+
+# epoch 밀리초를 담는 컬럼은 반드시 BIGINT 여야 한다. SQLite 의 INTEGER 는
+# 가변 길이(최대 8바이트)라 그냥 들어가지만, Postgres 의 INTEGER 는 정확히
+# 32비트(최대 2,147,483,647)라 1.7e12 인 밀리초가 800배 초과로 터진다
+# (psycopg.errors.NumericValueOutOfRange). SQLite 로만 개발하면 안 보이고
+# Supabase 로 옮기는 순간 리더보드·채팅·게시판이 전부 500 이 된다.
 from sqlmodel import Field, Session, SQLModel, create_engine
 
 # Engine selection: DATABASE_URL (Supabase/Postgres) in prod, local SQLite otherwise.
@@ -110,7 +117,7 @@ class LeaderboardEntry(SQLModel, table=True):
     human_summary: str
     paper_session_id: Optional[int] = None
     created_at: str  # UTC ISO
-    created_ms: int = Field(index=True)  # epoch ms, for the KST day-window filter
+    created_ms: int = Field(index=True, sa_type=BigInteger)  # epoch ms
 
 
 class User(SQLModel, table=True):
@@ -139,7 +146,7 @@ class PointLedger(SQLModel, table=True):
     reason: str  # signup_grant | unlock_spend | unlock_earn | topup(future)
     ref: str = ""  # e.g. "entry:123"
     created_at: str
-    created_ms: int = Field(index=True)
+    created_ms: int = Field(index=True, sa_type=BigInteger)
 
 
 class MacroUnlock(SQLModel, table=True):
@@ -202,7 +209,7 @@ class RunnerLaunchTicket(SQLModel, table=True):
     testnet: bool = True
     created_at: str
     expires_at: str
-    expires_ms: int = Field(index=True)
+    expires_ms: int = Field(index=True, sa_type=BigInteger)
     claimed_at: str = ""
 
 
@@ -265,7 +272,7 @@ class ChatMessage(SQLModel, table=True):
     username: str
     text: str
     created_at: str  # UTC ISO
-    created_ms: int = Field(index=True)  # epoch ms, for the KST day-window filter
+    created_ms: int = Field(index=True, sa_type=BigInteger)  # epoch ms
 
 
 class LeaderboardVote(SQLModel, table=True):
@@ -327,7 +334,7 @@ class BoardPost(SQLModel, table=True):
     image_mime: str = ""  # "" | image/jpeg | image/png
     image_data: Optional[bytes] = Field(default=None)  # 원본 바이트(없으면 None)
     created_at: str  # UTC ISO
-    created_ms: int = Field(index=True)
+    created_ms: int = Field(index=True, sa_type=BigInteger)
 
 
 class BoardComment(SQLModel, table=True):
@@ -342,7 +349,7 @@ class BoardComment(SQLModel, table=True):
     password_hash: str = ""  # PBKDF2; 본인 삭제 확인용, 응답에 미포함
     text: str = ""
     created_at: str
-    created_ms: int = Field(index=True)
+    created_ms: int = Field(index=True, sa_type=BigInteger)
 
 
 def _migrate() -> None:

@@ -6,7 +6,8 @@ services:
     name: gg-parrot            # 배포 URL이 https://gg-parrot.onrender.com 이 됩니다.
     runtime: python            # 이름이 이미 쓰였다면 접미사가 붙을 수 있으니, 실제 URL을 확인 후
     rootDir: backend           # frontend/vercel.json 의 destination 도 그 URL로 맞추세요.
-    plan: free
+    plan: starter              # 무료 플랜은 15분 미사용 시 잠들고, 다음 접속 때
+                               # 30~60초 걸려 깨어난다(그 사이 화면은 무한 로딩).
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /api/health

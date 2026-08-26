@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -27,6 +28,16 @@ KST = timezone(timedelta(hours=9))
 # 👑 왕관 기준(누적, env 조정 가능): 판매량과 누적 좋아요가 모두 이 이상인 셀러.
 CROWN_MIN_SALES = int(os.environ.get("CROWN_MIN_SALES", "3"))
 CROWN_MIN_LIKES = int(os.environ.get("CROWN_MIN_LIKES", "3"))
+
+# 👑 왕관 계산은 쿼리 3번을 쓴다 — 리더보드 한 번 그리는 데 드는 왕복 6회의 절반이다.
+# 서버(Render)와 DB(Supabase)가 서로 다른 리전에 있으면 왕복 1회가 그대로 지연이라
+# 이 3회를 줄이는 효과가 크다. 왕관은 '누적' 판매·좋아요 기준이라 초 단위로 바뀌지
+# 않으므로 짧게 캐시해도 안전하다. 대가는 자격을 갓 얻은 셀러의 왕관이 최대
+# CROWN_CACHE_SECONDS 만큼 늦게 보이는 것뿐이다.
+CROWN_CACHE_SECONDS = float(os.environ.get("CROWN_CACHE_SECONDS", "180"))
+# 키는 '오늘 출품자 집합' 이라 하루에 몇 가지 조합뿐이지만, 날이 바뀌며 쌓이므로 상한을 둔다.
+_CROWN_CACHE_MAX_ENTRIES = 64
+_crown_cache: dict[frozenset, tuple[frozenset, float]] = {}
 
 
 class UnlockError(Exception):
@@ -261,10 +272,24 @@ def _unlocked_ids_for(db, viewer_user_id: Optional[int], entry_ids: list[int]) -
 
 
 def _crown_owner_ids(db, owner_ids: list[int]) -> frozenset:
-    """Owners whose ALL-TIME sales and cumulative likes both clear the crown bar."""
+    """Owners who clear the crown bar, cached — see ``CROWN_CACHE_SECONDS``."""
     owners = [o for o in {o for o in owner_ids if o is not None}]
     if not owners:
         return frozenset()
+    key = frozenset(owners)
+    hit = _crown_cache.get(key)
+    if hit and hit[1] > time.time():
+        return hit[0]
+    crowned = _compute_crown_owner_ids(db, owners)
+    if len(_crown_cache) >= _CROWN_CACHE_MAX_ENTRIES:
+        # 조합 수가 적어 통째로 비우는 편이 만료 항목만 골라내는 것보다 싸다.
+        _crown_cache.clear()
+    _crown_cache[key] = (crowned, time.time() + CROWN_CACHE_SECONDS)
+    return crowned
+
+
+def _compute_crown_owner_ids(db, owners: list[int]) -> frozenset:
+    """Owners whose ALL-TIME sales and cumulative likes both clear the crown bar."""
     # Every entry each owner has ever posted (crown is a lifetime reputation).
     entries = db.exec(
         select(LeaderboardEntry.id, LeaderboardEntry.owner_user_id).where(

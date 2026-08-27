@@ -5,12 +5,9 @@ import RunnerSessions from "../components/RunnerSessions.jsx";
 import { getAuthUser, updateAuthUser, useAuth } from "../lib/auth.js";
 import { RULE_TYPES } from "../lib/macro.js";
 import { getUserId } from "../lib/user.js";
+import { fmtSize, isRunnerOpened, markRunnerOpened, useRunnerDownload } from "../lib/runnerDownload.js";
 
-const OFFICIAL_RUNNER_VERSION = "5";
-const RUNNER_OPENED_STORAGE_KEY = "ggparrot:runner-opened-version";
-const LEGACY_RUNNER_OPENED_STORAGE_KEY = "ggparrot:runner-opened";
 const BINANCE_KEY_GUIDE_STORAGE_PREFIX = "ggparrot:binance-testnet-key-ready:v1";
-const OFFICIAL_RUNNER_DOWNLOAD_URL = "https://github.com/orbleeparrot/gg_parrot/releases/download/runner-v5/ggparrot-runner.exe";
 
 const STEP_MACRO = 0;
 const STEP_API_KEY = 1;
@@ -118,12 +115,6 @@ function legacyDashboardMacros(data) {
       macro: item.macro,
     })),
   ].filter((item) => item.macro && item.symbol);
-}
-
-function fmtSize(bytes) {
-  if (!bytes) return "";
-  const mb = bytes / (1024 * 1024);
-  return mb >= 1 ? `${mb.toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
 }
 
 function macroMarket(macro) {
@@ -352,11 +343,8 @@ export default function RunnerDownload({ embedded = false, onExit }) {
   const [leaderboardBusy, setLeaderboardBusy] = useState(false);
   const [leaderboardError, setLeaderboardError] = useState("");
   const [importingLeaderboardId, setImportingLeaderboardId] = useState(0);
-  const [downloadInfo, setDownloadInfo] = useState(null);
-  const [downloadError, setDownloadError] = useState("");
-  const [runnerReady, setRunnerReady] = useState(() => (
-    window.localStorage.getItem(RUNNER_OPENED_STORAGE_KEY) === OFFICIAL_RUNNER_VERSION
-  ));
+  const runnerDownload = useRunnerDownload();
+  const [runnerReady, setRunnerReady] = useState(isRunnerOpened);
   const [downloadStarted, setDownloadStarted] = useState(false);
   const [apiKeyChecked, setApiKeyChecked] = useState(false);
   const [apiKeyPrepared, setApiKeyPrepared] = useState(false);
@@ -394,40 +382,18 @@ export default function RunnerDownload({ embedded = false, onExit }) {
   const buildFlow = searchParams.get("flow") === "build";
   const progressChapters = buildFlow ? BUILD_FLOW_CHAPTERS : CHAPTERS;
   const progressIndex = buildFlow ? step + BUILD_FLOW_OFFSET : step;
-  const downloadChecked = downloadInfo != null || !!downloadError;
-  const officialRunnerFallback = downloadChecked && !downloadInfo?.available && !!OFFICIAL_RUNNER_DOWNLOAD_URL;
-  const runnerAvailable = !!downloadInfo?.available || officialRunnerFallback;
-  const reportedDownloadUrl = downloadInfo?.available
-    ? downloadInfo.url || api.runnerDownloadUrl
-    : OFFICIAL_RUNNER_DOWNLOAD_URL;
-  // v4 and older builds create a new window for every web activation. Always
-  // offer v5 when a stale backend still advertises an older immutable asset.
-  const reportedRunnerIsOutdated = /\/runner-v(?:1|2|3|4)\//i.test(reportedDownloadUrl);
-  const downloadUrl = reportedRunnerIsOutdated
-    ? OFFICIAL_RUNNER_DOWNLOAD_URL
-    : reportedDownloadUrl;
-  const launchCapabilityWasReported = downloadInfo != null
-    && Object.prototype.hasOwnProperty.call(downloadInfo, "supports_launch");
-  const supportsLaunch = downloadInfo?.supports_launch === true
-    || (!launchCapabilityWasReported && /\/runner-v5\//.test(downloadUrl));
-  const requiredRunnerVersion = String(
-    reportedRunnerIsOutdated
-      ? OFFICIAL_RUNNER_VERSION
-      : downloadInfo?.min_runner_version || OFFICIAL_RUNNER_VERSION,
-  );
-  const displayedRunnerVersion = String(
-    reportedRunnerIsOutdated
-      ? OFFICIAL_RUNNER_VERSION
-      : downloadInfo?.version || (/\/runner-v5\//.test(downloadUrl) ? OFFICIAL_RUNNER_VERSION : ""),
-  );
-  const downloadIsExternal = /^https?:\/\//i.test(downloadUrl);
-  const runnerDownloadState = !downloadChecked
-    ? "loading"
-    : runnerAvailable
-      ? "available"
-      : downloadError
-        ? "error"
-        : "unavailable";
+  const {
+    info: downloadInfo,
+    error: downloadError,
+    checked: downloadChecked,
+    available: runnerAvailable,
+    url: downloadUrl,
+    isExternal: downloadIsExternal,
+    supportsLaunch,
+    version: displayedRunnerVersion,
+    minVersion: requiredRunnerVersion,
+    state: runnerDownloadState,
+  } = runnerDownload;
 
   useEffect(() => {
     const acknowledged = window.localStorage.getItem(apiKeyGuideStorageKey) === "acknowledged";
@@ -512,18 +478,6 @@ export default function RunnerDownload({ embedded = false, onExit }) {
       window.clearInterval(poll);
     };
   }, [libraryView, signedIn]);
-
-  useEffect(() => {
-    let alive = true;
-    api.runnerDownloadInfo()
-      .then((data) => {
-        if (alive) setDownloadInfo(data);
-      })
-      .catch((error) => {
-        if (alive) setDownloadError(String(error.message || error));
-      });
-    return () => { alive = false; };
-  }, []);
 
   // 회원 키는 로그인하면 미리 받아 둔다(연결 단계에서 바로 복사 가능).
   useEffect(() => {
@@ -653,21 +607,8 @@ export default function RunnerDownload({ embedded = false, onExit }) {
     setLaunchAttempt((current) => current + 1);
   }
 
-  async function retryRunnerDownloadInfo() {
-    setDownloadInfo(null);
-    setDownloadError("");
-    try {
-      setDownloadInfo(await api.runnerDownloadInfo());
-    } catch (error) {
-      setDownloadError(String(error.message || error));
-    }
-  }
-
   function confirmRunnerReady({ advance = false } = {}) {
-    // The old boolean cannot distinguish an older handler from v5. Record the
-    // acknowledged release so a stale registration is never called ready.
-    window.localStorage.removeItem(LEGACY_RUNNER_OPENED_STORAGE_KEY);
-    window.localStorage.setItem(RUNNER_OPENED_STORAGE_KEY, OFFICIAL_RUNNER_VERSION);
+    markRunnerOpened();
     setRunnerReady(true);
     if (advance) moveTo(STEP_ACCOUNT);
   }
@@ -948,7 +889,7 @@ export default function RunnerDownload({ embedded = false, onExit }) {
               이 PC에서 실행기를 이미 열었어요
             </button>
             {runnerDownloadState === "error" || runnerDownloadState === "unavailable" ? (
-              <button type="button" onClick={() => void retryRunnerDownloadInfo()} className="btn btn-m btn-ghost">
+              <button type="button" onClick={() => void runnerDownload.refresh()} className="btn btn-m btn-ghost">
                 배포 상태 다시 확인
               </button>
             ) : null}

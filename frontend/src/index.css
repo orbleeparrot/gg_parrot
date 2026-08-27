@@ -2564,7 +2564,8 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 }
 
 .site-help-link:hover,
-.site-help-link[aria-expanded="true"] {
+.site-help-link[aria-expanded="true"],
+.site-help-link[aria-current="page"] {
   border-color: rgb(var(--c-slate-300));
   background: rgb(var(--c-slate-100));
 }

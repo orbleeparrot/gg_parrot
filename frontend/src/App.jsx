@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
-import { Link, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { Link, Navigate, NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import Home from "./pages/Home.jsx";
 import { api } from "./api.js";
 import { useAuth, clearAuth, getToken, updateAuthUser } from "./lib/auth.js";
@@ -24,6 +24,7 @@ const Board = lazy(() => import("./pages/Board.jsx"));
 const BoardPost = lazy(() => import("./pages/BoardPost.jsx"));
 const ForgotPassword = lazy(() => import("./pages/ForgotPassword.jsx"));
 const ResetPassword = lazy(() => import("./pages/ResetPassword.jsx"));
+const RunnerInstall = lazy(() => import("./pages/RunnerInstall.jsx"));
 
 function useDismissibleMenu(open, setOpen, rootRef, triggerRef, routeKey) {
   useEffect(() => {
@@ -91,6 +92,12 @@ function TopBar({ hasSidebar, onOpenNavigation, menuButtonRef }) {
             >
               사용 방법
             </Link>
+          ) : null}
+          {hasSidebar ? (
+            <NavLink to="/runner/install" className="site-help-link">
+              <span className="hidden sm:inline">실행기 설치</span>
+              <span className="sm:hidden">실행기</span>
+            </NavLink>
           ) : null}
           {hasSidebar ? <RunnerKeyNav /> : null}
           <ThemeToggle />
@@ -240,6 +247,8 @@ function RouteChangeEffects() {
       ? "내 활동"
       : pathname.startsWith("/agents")
       ? "내 에이전트"
+      : pathname.startsWith("/runner/install")
+      ? "실행기 설치"
       : pathname.startsWith("/runner")
       ? "빠른 실행"
       : pathname.startsWith("/login")
@@ -347,6 +356,7 @@ export default function App() {
               <Route path="/s/:slug" element={<Studio />} />
               <Route path="/mypage" element={<MyPage />} />
               <Route path="/agents" element={<Agents />} />
+              <Route path="/runner/install" element={<RunnerInstall />} />
               <Route path="/runner" element={<LegacyStartRedirect view="runner" />} />
               <Route path="/guide" element={<LegacyStartRedirect view="help" />} />
               <Route path="/news" element={<News />} />

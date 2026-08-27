@@ -337,12 +337,13 @@ function Chart({ candles, symbol, hover, setHover, onPan, overlay, expanded = fa
         ) : null
       )}
 
-      {/* overlay: buy/sell signal triangles anchored to the bar's low/high */}
+      {/* overlay: order-side triangles anchored to the bar's low/high.
+          `side` (buy/sell), not `kind` (entry/exit) — a short entry IS a sell. */}
       {overlay?.markers?.map((m, mi) => {
         const k = candles[m.index];
         if (!k) return null;
         const x = cx(m.index);
-        if (m.kind === "buy") {
+        if (m.side === "buy") {
           const yy = y(k.l) + 9;
           return <path key={`mk-${mi}`} d={`M ${x} ${yy - 7} L ${x + 4} ${yy} L ${x - 4} ${yy} Z`} fill={UP} />;
         }
@@ -380,7 +381,7 @@ function Chart({ candles, symbol, hover, setHover, onPan, overlay, expanded = fa
 }
 
 // Small standalone oscillator pane (RSI) drawn under the main chart.
-function RsiPane({ values, entry, exit }) {
+function RsiPane({ values, entry, exit, lowLabel, highLabel }) {
   const W = 720;
   const H = 70;
   const pad = { l: 6, r: 6, t: 6, b: 6 };
@@ -408,10 +409,10 @@ function RsiPane({ values, entry, exit }) {
         <polyline key={si} points={seg.join(" ")} fill="none" stroke="rgb(99 102 241)" strokeWidth="1.5" strokeLinejoin="round" />
       ))}
       <text x={pad.l + 2} y={y(exit) - 3} style={{ fontSize: "8px", fill: DOWN }} className="num">
-        과매수 {exit}
+        과매수 {exit}{highLabel ? ` · ${highLabel}` : ""}
       </text>
       <text x={pad.l + 2} y={y(entry) + 9} style={{ fontSize: "8px", fill: UP }} className="num">
-        과매도 {entry}
+        과매도 {entry}{lowLabel ? ` · ${lowLabel}` : ""}
       </text>
     </svg>
   );
@@ -736,7 +737,13 @@ export default function CandleChart({
         <div ref={plotRef}>
           <Chart candles={view} symbol={symbol} hover={hover} setHover={setHover} onPan={pan} overlay={viewOverlay} expanded={expanded} />
           {viewOverlay?.rsi && (
-            <RsiPane values={viewOverlay.rsi.values} entry={viewOverlay.rsi.entry} exit={viewOverlay.rsi.exit} />
+            <RsiPane
+              values={viewOverlay.rsi.values}
+              entry={viewOverlay.rsi.entry}
+              exit={viewOverlay.rsi.exit}
+              lowLabel={viewOverlay.rsi.lowLabel}
+              highLabel={viewOverlay.rsi.highLabel}
+            />
           )}
         </div>
       )}

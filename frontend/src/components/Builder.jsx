@@ -218,8 +218,8 @@ export default function Builder({ form, setForm, chartSlot = null }) {
         )}
         {rt === "B" && (
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            {num("buy_price", `살 가격 (${quoteOf(form.symbol)})`, { term: "limit_order" })}
-            {num("sell_price", `팔 가격 (${quoteOf(form.symbol)})`, { term: "limit_order" })}
+            {num("buy_price", `살 가격 (${quoteOf(form.symbol)})`, { term: "limit_order", hint: isShort ? "숏을 되사서 정리할 가격이에요" : undefined })}
+            {num("sell_price", `팔 가격 (${quoteOf(form.symbol)})`, { term: "limit_order", hint: isShort ? "팔아서 숏에 들어갈 가격이에요" : undefined })}
             {cap}
           </div>
         )}
@@ -260,8 +260,12 @@ export default function Builder({ form, setForm, chartSlot = null }) {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {num("rsi_period", "RSI 계산 기간", { term: "rsi", step: "1" })}
             {num("confirm_candles", "신호를 확인할 봉 수", { step: "1", hint: "연속해서 조건을 만족해야 신호로 봐요" })}
-            {num("entry_threshold", "진입할 RSI", { hint: "이 숫자 이하일 때 진입해요" })}
-            {num("exit_threshold", "정리할 RSI", { hint: "이 숫자 이상일 때 정리해요" })}
+            {num("entry_threshold", isShort ? "숏을 정리할 RSI" : "진입할 RSI", {
+              hint: isShort ? "이 숫자 이하로 내려오면 숏을 정리해요" : "이 숫자 이하일 때 진입해요",
+            })}
+            {num("exit_threshold", isShort ? "숏에 진입할 RSI" : "정리할 RSI", {
+              hint: isShort ? "이 숫자 이상일 때 팔아서 숏에 들어가요" : "이 숫자 이상일 때 정리해요",
+            })}
             {sel("exit_mode", "정리 기준", [{ value: "indicator", label: "RSI 신호" }, { value: "take_profit", label: "익절 기준" }, { value: "both", label: "둘 중 먼저" }])}
             {num("take_profit", "익절 기준 (%)", { hint: "익절 기준을 포함할 때 써요" })}
             {cap}
@@ -272,7 +276,11 @@ export default function Builder({ form, setForm, chartSlot = null }) {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {num("bb_period", "평균 계산 기간", { term: "bollinger", step: "1" })}
             {num("bb_std", "밴드 폭 (표준편차 σ)", { term: "bollinger" })}
-            {sel("strategy", "밴드를 쓰는 방식", [{ value: "reversion", label: "밴드 안으로 되돌아오기" }, { value: "breakout", label: "밴드 밖으로 돌파하기" }])}
+            {sel("strategy", "밴드를 쓰는 방식", [{ value: "reversion", label: "밴드 안으로 되돌아오기" }, { value: "breakout", label: "밴드 밖으로 돌파하기" }], {
+              hint: isShort
+                ? "숏은 방향이 반대예요 — 되돌아오기는 상단 밴드, 돌파하기는 하단 이탈에서 진입해요"
+                : undefined,
+            })}
             {sel("exit_target", "정리할 위치", [{ value: "mid", label: "가운데 선" }, { value: "opposite", label: "반대쪽 밴드" }])}
             <div className="col-span-full grid grid-cols-1 sm:grid-cols-2 gap-4 items-end">
               {chk("squeeze_filter", "변동성이 줄어든 구간만 사용", { term: "squeeze" })}
@@ -315,7 +323,9 @@ export default function Builder({ form, setForm, chartSlot = null }) {
             {num("confirm_candles", "신호를 확인할 봉 수", { step: "1" })}
             {num("fast_period", "짧은 이동평균 기간", { step: "1" })}
             {num("slow_period", "긴 이동평균 기간", { step: "1" })}
-            {sel("exit_signal", "정리 기준", [{ value: "dead_cross", label: "평균선이 아래로 교차" }, { value: "take_profit", label: "익절 기준" }, { value: "both", label: "둘 중 먼저" }])}
+            {sel("exit_signal", "정리 기준", [{ value: "dead_cross", label: isShort ? "평균선이 위로 교차" : "평균선이 아래로 교차" }, { value: "take_profit", label: "익절 기준" }, { value: "both", label: "둘 중 먼저" }], {
+              hint: isShort ? "숏은 데드크로스에서 들어가고 골든크로스에서 정리해요" : undefined,
+            })}
             {num("take_profit", "익절 기준 (%)", { hint: "익절 기준을 포함할 때 써요" })}
             {cap}
           </div>

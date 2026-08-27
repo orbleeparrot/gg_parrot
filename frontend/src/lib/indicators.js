@@ -10,7 +10,8 @@
 //   priceLines: [{ price, color, label?, dash? }] 수평 가격선(지정가·평단·격자…)
 //   series:     [{ id, color, label, values, width?, dash? }] 캔들과 평행한 선(밴드·MA)
 //   bands:      [{ upper, lower, fill }]           두 선 사이 음영(볼린저 등)
-//   markers:    [{ index, kind:'buy'|'sell', label? }] 캔들 인덱스 위 신호 삼각형
+//   markers:    [{ index, kind:'entry'|'exit', side:'buy'|'sell', label }]
+//                                                  캔들 인덱스 위 신호 삼각형
 //   rsi:        { values, entry, exit } | null      아래 보조창(오실레이터)
 //
 // series/bands/rsi 의 values 는 candles 와 길이가 같은 배열이며, 계산 불가한
@@ -111,15 +112,47 @@ export function rsi(values, period) {
   return out;
 }
 
-// a 가 b 를 위로/아래로 교차한 지점을 매수/매도 마커로. 연속 신호는 첫 봉만.
-function crossMarkers(a, b, buyLabel, sellLabel, invert = false) {
+// --- 신호 마커(진입/청산) ----------------------------------------------
+// 전략은 "지금이 진입 자리인가 청산 자리인가"만 판단하고, 그게 매수인지 매도인지는
+// 포지션 방향이 정한다. 롱 진입=매수 / 롱 청산=매도 / 숏 진입=매도 / 숏 청산=매수(커버).
+// 백엔드 엔진(engine/candles.py)도 같은 규칙으로 롱·숏 조건을 뒤집으므로, 새 전략을
+// 넣을 때는 여기서도 entry/exit 만 내면 표시는 저절로 따라온다.
+const SIGNAL_KO = {
+  long: { entry: "매수", exit: "매도" },
+  short: { entry: "숏 진입", exit: "숏 청산" },
+};
+
+// 신호가 실제로 내는 주문 방향. 숏 진입은 매도, 숏 청산(커버)은 매수다.
+export function signalSide(kind, isShort) {
+  return (kind === "entry") !== !!isShort ? "buy" : "sell";
+}
+
+export function signalLabel(kind, isShort) {
+  return SIGNAL_KO[isShort ? "short" : "long"][kind] || "";
+}
+
+// 마커 하나. cond 는 무엇을 보고 낸 신호인지(초보자용 조건 설명)다.
+function signal(index, kind, isShort, cond) {
+  const ko = signalLabel(kind, isShort);
+  return { index, kind, side: signalSide(kind, isShort), label: cond ? `${cond} · ${ko}` : ko };
+}
+
+// 범례의 삼각형 항목. kind 는 CandleChart 가 그릴 방향(buy=위, sell=아래)이다.
+function signalLegend(kind, isShort) {
+  const side = signalSide(kind, isShort);
+  return { label: signalLabel(kind, isShort), color: side === "buy" ? UP : DOWN, kind: side };
+}
+
+// a 가 b 를 위로/아래로 교차한 지점. 위로 교차는 롱 진입·숏 청산, 아래로 교차는
+// 롱 청산·숏 진입에 해당한다. 연속 신호는 첫 봉만.
+function crossSignals(a, b, isShort, upCond, downCond) {
   const out = [];
   for (let i = 1; i < a.length; i++) {
     if (a[i] == null || b[i] == null || a[i - 1] == null || b[i - 1] == null) continue;
     const upCross = a[i - 1] <= b[i - 1] && a[i] > b[i];
     const downCross = a[i - 1] >= b[i - 1] && a[i] < b[i];
-    if (upCross) out.push({ index: i, kind: invert ? "sell" : "buy", label: invert ? sellLabel : buyLabel });
-    else if (downCross) out.push({ index: i, kind: invert ? "buy" : "sell", label: invert ? buyLabel : sellLabel });
+    if (upCross) out.push(signal(i, isShort ? "exit" : "entry", isShort, upCond));
+    else if (downCross) out.push(signal(i, isShort ? "entry" : "exit", isShort, downCond));
   }
   return out;
 }
@@ -218,16 +251,25 @@ export function computeStrategyOverlay(form, candles) {
     case "B": {
       const buyP = num(form.buy_price);
       const sellP = num(form.sell_price);
+      // 두 선의 주문 방향은 그대로지만 역할이 뒤집힌다 — 롱은 아래에서 진입하고,
+      // 숏은 위에서(팔아서) 진입해 아래에서 되산다(engine/stepper.py `_should_enter`).
       const lines = [];
-      push(lines, priceLine(buyP, UP, `여기서 매수 · ${fmtPrice(buyP)}`, "5 3"));
-      push(lines, priceLine(sellP, DOWN, `여기서 매도 · ${fmtPrice(sellP)}`, "5 3"));
+      push(lines, priceLine(buyP, UP, `${isShort ? "숏 정리" : "여기서 매수"} · ${fmtPrice(buyP)}`, "5 3"));
+      push(lines, priceLine(sellP, DOWN, `${isShort ? "숏 진입" : "여기서 매도"} · ${fmtPrice(sellP)}`, "5 3"));
       return {
-        legend: [
-          { label: "매수 지정가", color: UP },
-          { label: "매도 지정가", color: DOWN },
-        ],
+        legend: isShort
+          ? [
+              { label: "숏 진입가", color: DOWN },
+              { label: "숏 청산가", color: UP },
+            ]
+          : [
+              { label: "매수 지정가", color: UP },
+              { label: "매도 지정가", color: DOWN },
+            ],
         priceLines: lines,
-        note: "가격이 매수선까지 내려오면 사고, 매도선까지 오르면 팔아요. 두 선 사이를 오갈 때 수익이 나요.",
+        note: isShort
+          ? "가격이 위쪽 선까지 오르면 팔아서 숏에 들어가고, 아래쪽 선까지 내려오면 되사서 정리해요. 두 선 사이를 오갈 때 수익이 나요."
+          : "가격이 매수선까지 내려오면 사고, 매도선까지 오르면 팔아요. 두 선 사이를 오갈 때 수익이 나요.",
       };
     }
 
@@ -294,22 +336,34 @@ export function computeStrategyOverlay(form, candles) {
       const ent = num(form.entry_threshold);
       const ext = num(form.exit_threshold);
       const r = rsi(closes, period);
-      // RSI 가 진입선 이하로 내려오면 매수, 정리선 이상으로 오르면 매도 신호.
+      // 엔진(candles.py RSISim._signal)과 같이 숏은 두 기준선의 역할이 뒤집힌다.
+      // 롱: 과매도에서 진입 → 과매수에서 청산.  숏: 과매수에서 진입 → 과매도에서 청산.
       const markers = [];
       for (let i = 1; i < r.length; i++) {
         if (r[i] == null || r[i - 1] == null) continue;
-        if (r[i - 1] > ent && r[i] <= ent) markers.push({ index: i, kind: "buy", label: "RSI 매수" });
-        else if (r[i - 1] < ext && r[i] >= ext) markers.push({ index: i, kind: "sell", label: "RSI 매도" });
+        if (r[i - 1] > ent && r[i] <= ent)
+          markers.push(signal(i, isShort ? "exit" : "entry", isShort, `RSI ${ent} 이하`));
+        else if (r[i - 1] < ext && r[i] >= ext)
+          markers.push(signal(i, isShort ? "entry" : "exit", isShort, `RSI ${ext} 이상`));
       }
       return {
         legend: [
           { label: `RSI(${period})`, color: MID },
-          { label: "매수 신호", color: UP, kind: "buy" },
-          { label: "매도 신호", color: DOWN, kind: "sell" },
+          signalLegend("entry", isShort),
+          signalLegend("exit", isShort),
         ],
         markers,
-        rsi: { values: r, entry: ent, exit: ext },
-        note: `아래 보조창이 RSI예요. ${ent} 이하로 내려오면(과매도) 매수, ${ext} 이상이면(과매수) 매도 신호로 봐요.`,
+        // 보조창의 두 기준선에도 그 자리에서 무슨 주문이 나가는지 붙여 준다.
+        rsi: {
+          values: r,
+          entry: ent,
+          exit: ext,
+          lowLabel: signalLabel(isShort ? "exit" : "entry", isShort),
+          highLabel: signalLabel(isShort ? "entry" : "exit", isShort),
+        },
+        note: isShort
+          ? `아래 보조창이 RSI예요. ${ext} 이상으로 오르면(과매수) 팔아서 숏에 들어가고, ${ent} 이하로 내려오면(과매도) 정리해요.`
+          : `아래 보조창이 RSI예요. ${ent} 이하로 내려오면(과매도) 매수, ${ext} 이상이면(과매수) 매도 신호로 봐요.`,
       };
     }
 
@@ -321,22 +375,34 @@ export function computeStrategyOverlay(form, candles) {
       const upper = mid.map((m, i) => (m == null || std[i] == null ? null : m + k * std[i]));
       const lower = mid.map((m, i) => (m == null || std[i] == null ? null : m - k * std[i]));
       const reversion = form.strategy !== "breakout";
+      // 엔진(candles.py BollingerSim._signal)과 같이 숏은 진입·청산 밴드가 뒤집힌다.
+      // 되돌림: 롱은 하단에서 사서 중앙선/상단에서 팔고, 숏은 상단에서 팔아 중앙선/하단에서 되산다.
+      // 돌파:   롱은 상단 돌파에서 진입, 숏은 하단 이탈에서 진입한다.
+      const touchUp = (i, level) =>
+        level[i] != null && level[i - 1] != null && candles[i].h >= level[i] && candles[i - 1].h < level[i - 1];
+      const touchDown = (i, level) =>
+        level[i] != null && level[i - 1] != null && candles[i].l <= level[i] && candles[i - 1].l > level[i - 1];
+      const opposite = form.exit_target === "opposite";
       const markers = [];
       for (let i = 1; i < closes.length; i++) {
         if (upper[i] == null || lower[i] == null) continue;
         if (reversion) {
-          // 하단 밴드를 건드리면 매수, 상단(또는 중앙선)에서 매도.
-          if (candles[i].l <= lower[i] && candles[i - 1].l > (lower[i - 1] ?? Infinity))
-            markers.push({ index: i, kind: "buy", label: "하단 밴드 매수" });
-          const exitAt = form.exit_target === "opposite" ? upper[i] : mid[i];
-          if (exitAt != null && candles[i].h >= exitAt && candles[i - 1].h < exitAt)
-            markers.push({ index: i, kind: "sell", label: form.exit_target === "opposite" ? "상단 밴드 매도" : "중앙선 매도" });
+          const entryBand = isShort ? upper : lower;
+          const entryHit = isShort ? touchUp(i, entryBand) : touchDown(i, entryBand);
+          if (entryHit)
+            markers.push(signal(i, "entry", isShort, isShort ? "상단 밴드 터치" : "하단 밴드 터치"));
+          const exitBand = opposite ? (isShort ? lower : upper) : mid;
+          const exitHit = isShort ? touchDown(i, exitBand) : touchUp(i, exitBand);
+          if (exitHit)
+            markers.push(
+              signal(i, "exit", isShort, opposite ? (isShort ? "하단 밴드 도달" : "상단 밴드 도달") : "중앙선 도달")
+            );
         } else {
-          // 돌파: 상단 위로 종가가 뚫으면 매수, 하단 아래로 뚫으면 매도.
+          // 돌파: 종가가 상단을 위로 뚫거나 하단을 아래로 뚫은 봉.
           if (closes[i - 1] <= upper[i - 1] && closes[i] > upper[i])
-            markers.push({ index: i, kind: "buy", label: "상단 돌파 매수" });
+            markers.push(signal(i, isShort ? "exit" : "entry", isShort, "상단 돌파"));
           if (closes[i - 1] >= lower[i - 1] && closes[i] < lower[i])
-            markers.push({ index: i, kind: "sell", label: "하단 이탈 매도" });
+            markers.push(signal(i, isShort ? "entry" : "exit", isShort, "하단 이탈"));
         }
       }
       return {
@@ -344,8 +410,8 @@ export function computeStrategyOverlay(form, candles) {
           { label: "상단 밴드", color: BAND },
           { label: "중앙선(이동평균)", color: MID },
           { label: "하단 밴드", color: BAND },
-          { label: "매수", color: UP, kind: "buy" },
-          { label: "매도", color: DOWN, kind: "sell" },
+          signalLegend("entry", isShort),
+          signalLegend("exit", isShort),
         ],
         series: [
           { id: "bb_upper", color: BAND, label: "상단 밴드", values: upper, width: 1 },
@@ -355,8 +421,12 @@ export function computeStrategyOverlay(form, candles) {
         bands: [{ upper, lower, fill: FILL }],
         markers,
         note: reversion
-          ? "가운데는 이동평균, 위아래는 변동성 밴드예요. 가격이 하단 밴드에 닿으면 매수, 중앙선·상단에서 매도해요."
-          : "가운데는 이동평균, 위아래는 변동성 밴드예요. 가격이 상단 밴드를 위로 뚫으면 매수(추세), 하단을 아래로 뚫으면 매도해요.",
+          ? isShort
+            ? `가운데는 이동평균, 위아래는 변동성 밴드예요. 가격이 상단 밴드에 닿으면 팔아서 숏에 들어가고, ${opposite ? "하단 밴드" : "중앙선"}까지 내려오면 되사서 정리해요.`
+            : `가운데는 이동평균, 위아래는 변동성 밴드예요. 가격이 하단 밴드에 닿으면 매수, ${opposite ? "상단 밴드" : "중앙선"}에서 매도해요.`
+          : isShort
+            ? "가운데는 이동평균, 위아래는 변동성 밴드예요. 가격이 하단 밴드를 아래로 뚫으면 숏에 들어가고(하락 추세), 상단을 위로 뚫으면 정리해요."
+            : "가운데는 이동평균, 위아래는 변동성 밴드예요. 가격이 상단 밴드를 위로 뚫으면 매수(추세), 하단을 아래로 뚫으면 매도해요.",
       };
     }
 
@@ -395,7 +465,7 @@ export function computeStrategyOverlay(form, candles) {
       for (let i = 1; i < candles.length; i++) {
         if (target[i] == null) continue;
         if (candles[i].h >= target[i] && candles[i - 1].h < (target[i - 1] ?? Infinity))
-          markers.push({ index: i, kind: "buy", label: "돌파 매수" });
+          markers.push(signal(i, "entry", isShort, "돌파"));
       }
       return {
         legend: [
@@ -413,20 +483,23 @@ export function computeStrategyOverlay(form, candles) {
       const useEma = form.ma_type === "EMA";
       const fast = useEma ? ema(closes, fp) : sma(closes, fp);
       const slow = useEma ? ema(closes, sp) : sma(closes, sp);
-      const markers = crossMarkers(fast, slow, "골든크로스 매수", "데드크로스 매도");
+      // 엔진(candles.py MACrossSim._signal)과 같이 숏은 데드크로스가 진입, 골든크로스가 청산.
+      const markers = crossSignals(fast, slow, isShort, "골든크로스", "데드크로스");
       return {
         legend: [
           { label: `단기 ${useEma ? "EMA" : "SMA"}(${fp})`, color: FAST },
           { label: `장기 ${useEma ? "EMA" : "SMA"}(${sp})`, color: SLOW },
-          { label: "매수", color: UP, kind: "buy" },
-          { label: "매도", color: DOWN, kind: "sell" },
+          signalLegend("entry", isShort),
+          signalLegend("exit", isShort),
         ],
         series: [
           { id: "ma_fast", color: FAST, label: "단기 이동평균", values: fast, width: 1.5 },
           { id: "ma_slow", color: SLOW, label: "장기 이동평균", values: slow, width: 1.5 },
         ],
         markers,
-        note: "단기선이 장기선을 위로 뚫으면(골든크로스) 매수, 아래로 뚫으면(데드크로스) 매도해요. 두 선이 만나는 곳이 신호예요.",
+        note: isShort
+          ? "단기선이 장기선을 아래로 뚫으면(데드크로스) 팔아서 숏에 들어가고, 위로 뚫으면(골든크로스) 되사서 정리해요. 두 선이 만나는 곳이 신호예요."
+          : "단기선이 장기선을 위로 뚫으면(골든크로스) 매수, 아래로 뚫으면(데드크로스) 매도해요. 두 선이 만나는 곳이 신호예요.",
       };
     }
 

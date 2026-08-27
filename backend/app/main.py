@@ -1254,6 +1254,14 @@ def runner_request_stop(
     return runner_mod.request_stop(user.id, session_id, req.mode)
 
 
+@app.delete("/api/me/runner/sessions/{session_id}")
+def runner_delete_session(
+    session_id: int, user: User = Depends(auth_mod.current_user)
+) -> dict:
+    """목록에서 세션을 지운다(응답이 끊겼거나 이미 끝난 세션만)."""
+    return runner_mod.delete_session(user.id, session_id)
+
+
 # 실행기(exe) 배포 파일 다운로드 -----------------------------------------
 # 빌드한 exe 를 RUNNER_EXE_PATH 에 두면 서비스에서 바로 내려받게 한다. 없으면
 # 다운로드 페이지가 '준비 중' 으로 표시된다(available:false).

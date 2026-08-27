@@ -74,9 +74,11 @@ export function RunnerKeyPanel({ enabled = true }) {
 
 const P = (n) => `${(n ?? 0).toLocaleString()}`;
 
-function SessionCard({ s, onStop, busy }) {
+function SessionCard({ s, onStop, onDelete, busy }) {
   const stopping = s.stopping;
   const stopped = s.status !== "running";
+  // 응답이 끊긴 실행과 이미 끝난 기록만 목록에서 지운다(서버도 같은 기준).
+  const removable = !(!stopped && s.connected);
   const up = (s.unrealized_pct ?? 0) >= 0;
   const realUp = (s.realized_pnl ?? 0) >= 0;
   // 실행 중인 세션엔 종목 실시간 차트를 붙이고, 빌더와 동일한 전략 보조지표(볼린저·
@@ -109,14 +111,20 @@ function SessionCard({ s, onStop, busy }) {
           {stopping && <span className="badge badge-risk">종료 처리 중…</span>}
           {stopped && <span className="badge badge-flat">{s.status === "error" ? "오류 종료" : "종료됨"}</span>}
         </div>
-        {!stopped && !stopping && (
-          <div className="flex items-center gap-2 shrink-0">
-            <button onClick={() => onStop(s.session_id, "stop_only")} disabled={busy}
-                    className="btn btn-s btn-secondary">매크로만 종료</button>
-            <button onClick={() => onStop(s.session_id, "close_and_stop")} disabled={busy}
-                    className="btn btn-s btn-danger">청산 후 종료</button>
-          </div>
-        )}
+        <div className="flex items-center gap-2 shrink-0">
+          {!stopped && !stopping && (
+            <>
+              <button onClick={() => onStop(s.session_id, "stop_only")} disabled={busy}
+                      className="btn btn-s btn-secondary">매크로만 종료</button>
+              <button onClick={() => onStop(s.session_id, "close_and_stop")} disabled={busy}
+                      className="btn btn-s btn-danger">청산 후 종료</button>
+            </>
+          )}
+          {removable && (
+            <button onClick={() => onDelete(s)} disabled={busy}
+                    className="btn btn-s btn-ghost">목록에서 삭제</button>
+          )}
+        </div>
       </div>
 
       {s.human_summary && <div className="t-small text-slate-500 truncate">{s.human_summary}</div>}
@@ -217,6 +225,20 @@ export default function RunnerSessions({
     return () => clearTimeout(timer.current);
   }, [load]);
 
+  async function onDelete(session) {
+    const label = session.status === "error" ? "오류로 끝난" : "응답이 끊긴";
+    if (!window.confirm(`${label} ${session.symbol} 세션을 목록에서 지울까요? 기록만 사라지고 거래는 건드리지 않아요.`)) return;
+    setBusy(true);
+    try {
+      await api.runnerDeleteSession(session.session_id);
+      await load();
+    } catch (e) {
+      setErr(String(e.message || e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function onStop(sessionId, mode) {
     const label = mode === "close_and_stop" ? "청산 후 종료" : "매크로만 종료";
     if (!window.confirm(`${label} 할까요? 실행기가 다음 확인에서 반영해요(최대 몇 초 지연).`)) return;
@@ -256,7 +278,7 @@ export default function RunnerSessions({
       ) : (
         <div className="divide-y divide-slate-200">
           {active.map((s) => (
-            <SessionCard key={s.session_id} s={s} onStop={onStop} busy={busy} />
+            <SessionCard key={s.session_id} s={s} onStop={onStop} onDelete={onDelete} busy={busy} />
           ))}
         </div>
       )}
@@ -266,7 +288,7 @@ export default function RunnerSessions({
           <div className="t-caption text-slate-500 mb-1">최근 종료</div>
           <div className="divide-y divide-slate-200">
             {recent.map((s) => (
-              <SessionCard key={s.session_id} s={s} onStop={onStop} busy={busy} />
+              <SessionCard key={s.session_id} s={s} onStop={onStop} onDelete={onDelete} busy={busy} />
             ))}
           </div>
         </div>

@@ -45,10 +45,13 @@ function statusText(session) {
   return session.connected ? "실행 중 · 무포지션" : "응답 확인 중";
 }
 
-function MacroDock({ sessions, selected, busy, onChange, onStop }) {
+function MacroDock({ sessions, selected, busy, onChange, onStop, onDelete }) {
   const running = selected.status === "running";
   const connected = running && selected.connected;
   const stopping = selected.stopping;
+  // 응답대기(실행 중이지만 heartbeat 끊김)와 오류·종료 항목만 목록에서 지운다.
+  // 서버도 같은 기준으로 막으므로 버튼 상태와 실제 결과가 어긋나지 않는다.
+  const removable = !connected;
 
   return (
     <section className="agent-macro-dock" aria-label="매크로 세션 선택과 제어">
@@ -74,6 +77,15 @@ function MacroDock({ sessions, selected, busy, onChange, onStop }) {
       <div className="agent-macro-dock-actions">
         <button type="button" disabled={busy || stopping || !running} onClick={() => onStop("stop_only")} className="btn btn-m btn-secondary">매크로만 종료</button>
         <button type="button" disabled={busy || stopping || !running} onClick={() => onStop("close_and_stop")} className="btn btn-m btn-danger">청산 후 종료</button>
+        <button
+          type="button"
+          disabled={busy || !removable}
+          onClick={onDelete}
+          className="btn btn-m btn-ghost"
+          title={removable ? "이 세션 기록을 목록에서 지워요" : "실행기가 응답 중이에요. 먼저 종료해 주세요."}
+        >
+          목록에서 삭제
+        </button>
       </div>
     </section>
   );
@@ -301,6 +313,24 @@ export default function Agents() {
     }
   }
 
+  async function deleteSession() {
+    if (!selected) return;
+    const label = selected.status === "error" ? "오류로 끝난" : "응답이 끊긴";
+    if (!window.confirm(`${label} ${selected.symbol} 세션을 목록에서 지울까요? 기록만 사라지고 거래는 건드리지 않아요.`)) return;
+    setBusy(true);
+    try {
+      await api.runnerDeleteSession(selected.session_id);
+      const next = new URLSearchParams(searchParams);
+      next.delete("session");
+      setSearchParams(next, { replace: true });
+      await loadSessions();
+    } catch (reason) {
+      setError(String(reason.message || reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (!token) return null;
   if (!sessions && !error) return <Loading label="실행 중인 매크로를 불러오는 중…" />;
 
@@ -317,6 +347,7 @@ export default function Agents() {
             busy={busy}
             onChange={changeSession}
             onStop={stopSession}
+            onDelete={deleteSession}
           />
           <WorkspaceTabs selected={mobilePane} onSelect={setMobilePane} />
           <div className={`agent-console is-${mobilePane}`}>

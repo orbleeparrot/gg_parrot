@@ -261,6 +261,9 @@ export const api = {
       body: JSON.stringify({ ticket, runner_version: runnerVersion }),
     }),
   // mode: "stop_only"(매크로만) | "close_and_stop"(청산 후 종료)
+  // 응답이 끊겼거나 이미 끝난 세션만 지울 수 있다(살아 있는 실행은 409).
+  runnerDeleteSession: (sessionId) =>
+    req(`/api/me/runner/sessions/${sessionId}`, { method: "DELETE" }),
   runnerRequestStop: (sessionId, mode) =>
     req(`/api/me/runner/sessions/${sessionId}/request-stop`, {
       method: "POST",

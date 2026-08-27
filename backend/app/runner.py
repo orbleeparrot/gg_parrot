@@ -465,11 +465,16 @@ def mark_stopped(user: User, session_id: int, status: str = "stopped", note: str
 
 
 # --- 마이페이지용: 목록 조회 / 종료 요청 -------------------------------
-def _session_view(row: RunSession) -> dict:
+def _is_connected(row: RunSession) -> bool:
+    """실행기가 STALE_SECONDS 안에 heartbeat 를 보냈는가."""
     hb = _parse_iso(row.last_heartbeat_at)
-    connected = False
-    if hb is not None:
-        connected = (datetime.now(timezone.utc) - hb).total_seconds() <= STALE_SECONDS
+    if hb is None:
+        return False
+    return (datetime.now(timezone.utc) - hb).total_seconds() <= STALE_SECONDS
+
+
+def _session_view(row: RunSession) -> dict:
+    connected = _is_connected(row)
     # 실행기가 종료 명령을 받아 정리 중인 상태(플래그는 섰지만 아직 확정 보고 전).
     stopping = row.status == "running" and row.stop_mode in _STOP_MODES
     macro = None
@@ -553,3 +558,27 @@ def request_stop(user_id: int, session_id: int, mode: str) -> dict:
         db.commit()
     notify_sessions_changed(user_id)
     return {"ok": True, "mode": mode, "note": "실행기가 곧 반영해요(최대 몇 초 지연)."}
+
+
+def delete_session(user_id: int, session_id: int) -> dict:
+    """세션 기록을 목록에서 지운다.
+
+    살아 있는 실행을 지우면 실행기는 계속 도는데 화면에서만 사라져 원격 종료할
+    수단이 없어진다. 그래서 heartbeat 가 아직 도착하는 running 세션은 거부하고
+    먼저 종료를 요청하게 한다. 응답이 끊긴(STALE_SECONDS 초과) running 세션과
+    종료·오류로 끝난 세션은 지울 수 있다 — 화면에서 '응답대기'·'오류'로 보이는
+    바로 그 항목들이다.
+    """
+    with get_session() as db:
+        row = db.get(RunSession, session_id)
+        if row is None or row.user_id != user_id:
+            raise HTTPException(status_code=404, detail="세션을 찾을 수 없어요.")
+        if row.status == "running" and _is_connected(row):
+            raise HTTPException(
+                status_code=409,
+                detail="실행기가 아직 응답 중이에요. 먼저 종료한 뒤 목록에서 지울 수 있어요.",
+            )
+        db.delete(row)
+        db.commit()
+    notify_sessions_changed(user_id)
+    return {"ok": True, "deleted_session_id": session_id}

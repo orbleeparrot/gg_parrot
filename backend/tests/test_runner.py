@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 
 from app import runner as runner_mod
 from app.agent_features.position_news import service as position_news_service
-from app.db import RunnerLaunchTicket, get_session
+from app.db import RunnerLaunchTicket, RunSession, get_session
 from app.main import app
 
 client = TestClient(app)
@@ -664,3 +664,76 @@ def test_macro_file_download():
     assert "attachment" in r.headers.get("content-disposition", "")
     body = r.json()
     assert body["symbol"] == "BTCUSDT" and "human_summary" in body
+
+
+# --- 목록에서 삭제 -------------------------------------------------------
+def test_delete_removes_error_session_from_recent():
+    token = _signup()
+    key = client.get("/api/me/runner/key", headers=_auth(token)).json()["key"]
+    sid = client.post(
+        "/api/runner/start",
+        json={"symbol": "BTCUSDT", "human_summary": "오류로 끝날 세션"},
+        headers={"X-Runner-Key": key},
+    ).json()["session_id"]
+    client.post(
+        "/api/runner/stopped",
+        json={"session_id": sid, "status": "error", "note": "거래소 인증 실패"},
+        headers={"X-Runner-Key": key},
+    )
+    before = client.get("/api/me/runner/sessions", headers=_auth(token)).json()
+    assert any(s["session_id"] == sid and s["status"] == "error" for s in before["recent"])
+
+    removed = client.delete(f"/api/me/runner/sessions/{sid}", headers=_auth(token))
+    assert removed.status_code == 200, removed.text
+    assert removed.json()["deleted_session_id"] == sid
+
+    after = client.get("/api/me/runner/sessions", headers=_auth(token)).json()
+    assert not any(s["session_id"] == sid for s in after["recent"] + after["active"])
+
+
+def test_delete_removes_running_session_whose_runner_stopped_answering():
+    """'응답대기' 항목 — status 는 running 인데 heartbeat 가 끊긴 세션."""
+    token = _signup()
+    key = client.get("/api/me/runner/key", headers=_auth(token)).json()["key"]
+    sid = client.post(
+        "/api/runner/start",
+        json={"symbol": "SOLUSDT"},
+        headers={"X-Runner-Key": key},
+    ).json()["session_id"]
+
+    # heartbeat 가 살아 있는 동안에는 지울 수 없다 — 먼저 종료해야 한다.
+    live = client.delete(f"/api/me/runner/sessions/{sid}", headers=_auth(token))
+    assert live.status_code == 409
+    assert client.get("/api/me/runner/sessions", headers=_auth(token)).json()["active"]
+
+    # 실행기가 응답을 멈추면 목록에 '응답대기'(connected=false)로 남는다.
+    with get_session() as db:
+        row = db.get(RunSession, sid)
+        row.last_heartbeat_at = "2020-01-01T00:00:00+00:00"
+        db.add(row)
+        db.commit()
+    stale = client.get("/api/me/runner/sessions", headers=_auth(token)).json()["active"][0]
+    assert stale["status"] == "running" and stale["connected"] is False
+
+    assert client.delete(f"/api/me/runner/sessions/{sid}", headers=_auth(token)).status_code == 200
+    assert not client.get("/api/me/runner/sessions", headers=_auth(token)).json()["active"]
+
+
+def test_delete_rejects_other_users_session():
+    owner = _signup()
+    stranger = _signup()
+    key = client.get("/api/me/runner/key", headers=_auth(owner)).json()["key"]
+    sid = client.post(
+        "/api/runner/start", json={"symbol": "BTCUSDT"}, headers={"X-Runner-Key": key},
+    ).json()["session_id"]
+    client.post(
+        "/api/runner/stopped",
+        json={"session_id": sid, "status": "stopped"},
+        headers={"X-Runner-Key": key},
+    )
+
+    assert client.delete(f"/api/me/runner/sessions/{sid}", headers=_auth(stranger)).status_code == 404
+    assert client.delete(f"/api/me/runner/sessions/{sid}").status_code in (401, 403)
+    # 남의 요청으로 사라지지 않았는지 확인.
+    kept = client.get("/api/me/runner/sessions", headers=_auth(owner)).json()
+    assert any(s["session_id"] == sid for s in kept["recent"])

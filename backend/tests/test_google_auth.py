@@ -84,6 +84,36 @@ def test_google_same_email_reuses_account(google_on):
     assert first["user"]["id"] == second["user"]["id"]
 
 
+def test_signup_explains_when_email_belongs_to_google_only_account(google_on):
+    claims = google_on()
+    auth_mod.google_auth("fake")
+
+    with pytest.raises(auth_mod.AuthError) as exc_info:
+        auth_mod.signup(
+            claims["email"],
+            "new_local_user",
+            "password123",
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == (
+        "Google 계정으로 가입된 이메일이에요. Google 로그인 또는 비밀번호 재설정을 이용해 주세요."
+    )
+
+
+def test_password_login_explains_google_only_account(google_on):
+    claims = google_on()
+    auth_mod.google_auth("fake")
+
+    with pytest.raises(auth_mod.AuthError) as exc_info:
+        auth_mod.login(claims["email"], "password123")
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == (
+        "Google 계정으로 가입된 이메일이에요. Google 로그인 또는 비밀번호 재설정을 이용해 주세요."
+    )
+
+
 def test_google_rejects_wrong_audience(google_on):
     google_on(aud="some-other-app")
     assert client.post("/api/auth/google", json={"credential": "fake"}).status_code == 401

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import SimBadge from "../components/SimBadge.jsx";
 import RegisterMacroModal from "../components/RegisterMacroModal.jsx";
@@ -8,6 +8,7 @@ import { api } from "../api.js";
 import CoinIcon from "../components/CoinIcon.jsx";
 import { getUserId } from "../lib/user.js";
 import { useAuth, isLoggedIn, getAuthUser, updateAuthUser } from "../lib/auth.js";
+import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 
 const pad = (n) => String(n).padStart(2, "0");
 const fmtCountdown = (s) => `${pad(Math.floor(s / 3600))}:${pad(Math.floor((s % 3600) / 60))}:${pad(s % 60)}`;
@@ -34,30 +35,24 @@ export default function Leaderboard() {
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState("");
   const [modal, setModal] = useState(false); // false | {edit?: entry}
-  const loadRef = useRef(null);
   const focusedRegistrationRef = useRef(false);
 
-  async function load() {
+  const load = useCallback(async (signal) => {
     try {
-      const d = await api.leaderboard(uid);
+      const d = await api.leaderboard(uid, { signal });
       setItems(d.items || []);
       setRemain(d.seconds_to_reset || 0);
       setError("");
     } catch (e) {
-      setError(String(e.message || e));
+      if (e?.name !== "AbortError") setError(String(e.message || e));
+      if (signal) throw e;
     } finally {
       setBusy(false);
     }
-  }
-  loadRef.current = load;
+  }, [uid]);
 
   // Poll live returns every 5s; tick the countdown every 1s locally.
-  useEffect(() => {
-    load();
-    const poll = setInterval(() => loadRef.current(), 5000);
-    return () => clearInterval(poll);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  useAdaptivePolling(load, { intervalMs: 5_000, maxIntervalMs: 60_000 });
   // Ensure + fetch today's AI challenge once (first call of the day generates it).
   useEffect(() => {
     api.challengeToday().then(setChallenge).catch(() => {});

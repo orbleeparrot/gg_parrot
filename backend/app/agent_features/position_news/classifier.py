@@ -11,11 +11,12 @@ import os
 import re
 from typing import Iterable
 
+from ...ai_runtime import ai_cache_key, get_ai_runtime, get_anthropic_client
+
 FEATURE_VERSION = 1
 PROMPT_VERSION = "position-news-headlines-v1"
 _DEFAULT_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-5")
 _MAX_TOKENS = max(128, int(os.environ.get("ANTHROPIC_POSITION_NEWS_MAX_TOKENS", "500")))
-_AI_TIMEOUT_SECONDS = max(3.0, float(os.environ.get("ANTHROPIC_POSITION_NEWS_TIMEOUT_SECONDS", "12")))
 
 SENTIMENTS = {"positive", "negative", "neutral", "unclear"}
 POSITION_EFFECTS = {"favorable", "unfavorable", "neutral", "unclear"}
@@ -246,10 +247,6 @@ def _extract_text(response) -> str:
 
 
 def _generate_ai_analysis(items: list[dict], coin_name: str) -> dict:
-    # Lazy import keeps the deterministic feature available when the optional
-    # SDK is absent in a lightweight development/test environment.
-    import anthropic
-
     payload = [
         {
             "index": index,
@@ -266,17 +263,25 @@ def _generate_ai_analysis(items: list[dict], coin_name: str) -> dict:
         "코드펜스 없이 JSON 객체 하나만 반환해: "
         '{"items":[{"index":0,"sentiment":"positive|negative|neutral|unclear"}]}'
     )
-    client = anthropic.Anthropic(timeout=_AI_TIMEOUT_SECONDS, max_retries=1)
-    response = client.messages.create(
-        model=os.environ.get("ANTHROPIC_MODEL", _DEFAULT_MODEL),
-        max_tokens=_MAX_TOKENS,
-        system=system,
-        messages=[{
-            "role": "user",
-            "content": f"대상: {coin_name}\n헤드라인 JSON:\n{json.dumps(payload, ensure_ascii=False)}",
-        }],
+    selected_model = os.environ.get("ANTHROPIC_MODEL", _DEFAULT_MODEL)
+    user = f"대상: {coin_name}\n헤드라인 JSON:\n{json.dumps(payload, ensure_ascii=False)}"
+    key = ai_cache_key(
+        "position-news-classifier",
+        PROMPT_VERSION,
+        selected_model,
+        {"coin_name": coin_name, "headlines": payload, "system": system, "max_tokens": _MAX_TOKENS},
     )
-    return parse_ai_analysis(_extract_text(response), len(items))
+
+    def load():
+        response = get_anthropic_client().messages.create(
+            model=selected_model,
+            max_tokens=_MAX_TOKENS,
+            system=system,
+            messages=[{"role": "user", "content": user}],
+        )
+        return parse_ai_analysis(_extract_text(response), len(items))
+
+    return get_ai_runtime().call(key, load, retries=0)[0]
 
 
 def analyze_headlines(items: list[dict], coin_name: str, *, allow_ai: bool = True) -> dict:

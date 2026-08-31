@@ -18,6 +18,8 @@ from typing import Optional
 
 import httpx
 
+from .http_runtime import SingleFlightGroup, get_http_client
+
 _FNG_URL = "https://api.alternative.me/fng/"
 
 # Upstream refreshes about once a day, so polling faster is pure waste.
@@ -35,6 +37,7 @@ _KO = {
 
 # (payload, expires_at)
 _cache: Optional[tuple[dict, float]] = None
+_refreshes = SingleFlightGroup()
 
 
 def _classify_ko(value: int, upstream: str) -> str:
@@ -54,10 +57,9 @@ def _classify_ko(value: int, upstream: str) -> str:
 
 def _fetch() -> Optional[dict]:
     try:
-        with httpx.Client(timeout=10.0) as client:
-            resp = client.get(_FNG_URL, params={"limit": 1})
-            resp.raise_for_status()
-            body = resp.json()
+        resp = get_http_client().get(_FNG_URL, params={"limit": 1}, timeout=10.0)
+        resp.raise_for_status()
+        body = resp.json()
         row = (body.get("data") or [None])[0]
         if not row:
             return None
@@ -79,7 +81,12 @@ def get_fear_greed() -> dict:
     if _cache and _cache[1] > now:
         return {**_cache[0], "cached": True}
 
-    data = _fetch()
+    if _cache:
+        data, refresh_state = _refreshes.run("fear-greed", _fetch, stale_value=None)
+    else:
+        data, refresh_state = _refreshes.run("fear-greed", _fetch)
+    if refresh_state == "stale":
+        return {**_cache[0], "cached": True, "stale": True}
     if data is None:
         # Serve the last good value rather than blanking the widget.
         if _cache:
@@ -97,7 +104,7 @@ def get_fear_greed() -> dict:
         "disclaimer": "market-wide crypto sentiment; reference only, not a trading signal",
     }
     _cache = (payload, now + CACHE_SECONDS)
-    return {**payload, "cached": False}
+    return {**payload, "cached": refresh_state == "shared"}
 
 
 def _now_iso() -> str:

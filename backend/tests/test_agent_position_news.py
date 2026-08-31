@@ -2,9 +2,6 @@
 from __future__ import annotations
 
 import json
-from concurrent.futures import ThreadPoolExecutor
-from threading import Event
-
 import pytest
 
 from app.agent_features.position_news import classifier, service
@@ -202,67 +199,112 @@ def test_payload_uses_registered_macro_direction_and_preserves_sources():
     assert "매매 지시가 아닙니다" in payload["disclaimer"]
 
 
-def test_headline_analysis_cache_is_shared_across_long_and_short(monkeypatch):
-    service._analysis_cache.clear()
-    service._analysis_locks.clear()
-    calls = []
-    news = _news_fixture()
 
-    monkeypatch.setattr(service.news_mod, "get_coin_news", lambda _symbol: news)
+def _stored_snapshot(last_success_ms=999_000):
+    return {
+        "snapshot_id": "a" * 64,
+        "news_payload": _news_fixture(),
+        "analysis": _analysis_fixture(),
+        "collection": {
+            "status": "ready",
+            "last_attempt_at": "1970-01-01T00:16:39Z",
+            "last_success_at": "1970-01-01T00:16:39Z",
+            "last_success_ms": last_success_ms,
+            "consecutive_failures": 0,
+            "last_error": "",
+        },
+    }
 
-    def fake_analyze(items, coin_name, **_kwargs):
-        calls.append((items, coin_name))
-        return _analysis_fixture()
 
-    monkeypatch.setattr(service.classifier, "analyze_headlines", fake_analyze)
+def test_request_path_reads_one_shared_snapshot_for_long_and_short(monkeypatch):
+    stored = _stored_snapshot()
+    loaded = []
+    monkeypatch.setattr(
+        service,
+        "_load_latest_snapshot",
+        lambda symbol: loaded.append(symbol) or stored,
+    )
+    monkeypatch.setattr(service.time, "time", lambda: 1_000.0)
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("request path must not fetch or analyze news")
+
+    monkeypatch.setattr(
+        service.news_mod,
+        "fetch_coin_news_for_collector",
+        forbidden,
+    )
+    monkeypatch.setattr(service.classifier, "analyze_headlines", forbidden)
+
     long_payload = service.get_position_news({
-        "session_id": 1, "symbol": "BTCUSDT", "position_side": "long",
+        "session_id": 1,
+        "symbol": "BTCUSDT",
+        "position_side": "long",
     })
     short_payload = service.get_position_news({
-        "session_id": 2, "symbol": "BTCUSDT", "position_side": "short",
+        "session_id": 2,
+        "symbol": "BTCUSDT",
+        "position_side": "short",
     })
 
-    assert len(calls) == 1
+    assert loaded == ["BTC", "BTC"]
+    assert long_payload["snapshot_id"] == "a" * 20
     assert long_payload["items"][0]["position_effect"] == "favorable"
     assert short_payload["items"][0]["position_effect"] == "unfavorable"
+    assert long_payload["collection"]["freshness"] == "fresh"
 
 
-def test_ai_cost_guard_limits_unique_uncached_analyses(monkeypatch):
-    service._user_ai_usage.clear()
-    service._global_ai_usage.clear()
+def test_request_path_keeps_snapshot_time_when_same_news_is_reobserved(monkeypatch):
+    stored = _stored_snapshot()
+    stored["collection"]["last_attempt_at"] = "2026-08-24T08:38:18Z"
+    stored["collection"]["last_success_at"] = "2026-08-24T08:38:18Z"
+    monkeypatch.setattr(
+        service,
+        "_load_latest_snapshot",
+        lambda _symbol: stored,
+    )
+
+    payload = service.get_position_news({
+        "session_id": 1,
+        "symbol": "BTCUSDT",
+        "position_side": "long",
+    })
+
+    assert payload["updated_at"] == "2026-08-19T04:57:00Z"
+    assert payload["collection"]["last_success_at"] == "2026-08-24T08:38:18Z"
 
 
-def test_identical_cold_misses_share_one_analysis(monkeypatch):
-    service._analysis_cache.clear()
-    service._analysis_locks.clear()
-    entered = Event()
-    release = Event()
-    calls = []
+def test_request_path_marks_old_shared_snapshot_stale(monkeypatch):
+    monkeypatch.setattr(
+        service,
+        "_load_latest_snapshot",
+        lambda _symbol: _stored_snapshot(last_success_ms=1),
+    )
+    monkeypatch.setattr(service.time, "time", lambda: 2_000.0)
 
-    def fake_analyze(_items, _coin_name, **_kwargs):
-        calls.append(True)
-        entered.set()
-        assert release.wait(2)
-        return _analysis_fixture()
+    payload = service.get_position_news({
+        "session_id": 1,
+        "symbol": "BTCUSDT",
+        "position_side": "long",
+    })
 
-    monkeypatch.setattr(service.classifier, "analyze_headlines", fake_analyze)
-    items = _news_fixture()["items"]
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        first = pool.submit(service._analysis_for, "BTC", "비트코인", items)
-        assert entered.wait(2)
-        second = pool.submit(service._analysis_for, "BTC", "비트코인", items)
-        release.set()
-        assert first.result(timeout=2) == second.result(timeout=2)
+    assert payload["items"]
+    assert payload["collection"]["freshness"] == "stale"
+    assert payload["collection"]["age_seconds"] == 1_999
 
-    assert len(calls) == 1
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    monkeypatch.setattr(service, "_AI_USER_MAX_ANALYSES", 1)
-    monkeypatch.setattr(service, "_AI_GLOBAL_MAX_ANALYSES", 2)
-    monkeypatch.setattr(service.time, "time", lambda: 10_000.0)
 
-    assert service._consume_ai_budget(11) is True
-    assert service._consume_ai_budget(11) is False
-    assert service._consume_ai_budget(22) is True
-    assert service._consume_ai_budget(33) is False
-    service._user_ai_usage.clear()
-    service._global_ai_usage.clear()
+def test_request_path_returns_pending_before_first_central_run(monkeypatch):
+    monkeypatch.setattr(service, "_load_latest_snapshot", lambda _symbol: None)
+
+    payload = service.get_position_news({
+        "session_id": 1,
+        "user_macro_id": 3,
+        "symbol": "ETHUSDT",
+        "position_side": "short",
+    })
+
+    assert payload["analysis_status"] == "pending"
+    assert payload["analysis_source"] == "central_collector"
+    assert payload["context"]["asset_symbol"] == "ETH"
+    assert payload["items"] == []
+    assert payload["collection"]["freshness"] == "pending"

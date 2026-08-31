@@ -23,11 +23,12 @@ import os
 import re
 import secrets
 import threading
+from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import HTTPException
-from sqlalchemy import update
+from sqlalchemy import or_, update
 from sqlmodel import select
 
 from .db import RunnerKey, RunnerLaunchTicket, RunSession, User, UserMacro, get_session
@@ -510,29 +511,36 @@ def _session_view(row: RunSession) -> dict:
     }
 
 
-def list_sessions(user_id: int, limit: int = 20) -> dict:
+def list_sessions(user_id: int, limit: int = 20, db=None) -> dict:
     """All active sessions plus up to ``limit`` recently ended sessions."""
     recent_limit = max(0, min(int(limit), 100))
-    with get_session() as db:
-        active_rows = db.exec(
-            select(RunSession)
-            .where(RunSession.user_id == user_id, RunSession.status == "running")
-            .order_by(RunSession.id.desc())
-        ).all()
-        recent_rows = db.exec(
-            select(RunSession)
+    filters = [RunSession.status == "running"]
+    if recent_limit:
+        recent_ids = (
+            select(RunSession.id)
             .where(RunSession.user_id == user_id, RunSession.status != "running")
             .order_by(RunSession.id.desc())
             .limit(recent_limit)
+        )
+        filters.append(RunSession.id.in_(recent_ids))
+    session_scope = nullcontext(db) if db is not None else get_session()
+    with session_scope as db:
+        rows = db.exec(
+            select(RunSession)
+            .where(RunSession.user_id == user_id, or_(*filters))
+            .order_by(RunSession.id.desc())
         ).all()
+    active_rows = [row for row in rows if row.status == "running"]
+    recent_rows = [row for row in rows if row.status != "running"]
     active = [_session_view(r) for r in active_rows]
     recent = [_session_view(r) for r in recent_rows]
     return {"active": active, "recent": recent, "poll_seconds": POLL_SECONDS}
 
 
-def get_owned_session(user_id: int, session_id: int) -> dict:
+def get_owned_session(user_id: int, session_id: int, db=None) -> dict:
     """Return one authoritative session view without revealing other users' IDs."""
-    with get_session() as db:
+    session_scope = nullcontext(db) if db is not None else get_session()
+    with session_scope as db:
         row = db.get(RunSession, session_id)
         if row is None or row.user_id != user_id:
             raise HTTPException(status_code=404, detail="세션을 찾을 수 없어요.")

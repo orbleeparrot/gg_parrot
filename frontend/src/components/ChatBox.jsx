@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api.js";
+import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 import { getNickname, setNickname } from "../lib/user.js";
 
 // Leaderboard chat: daily (KST) message board. Polls every ~3s. React escapes
@@ -13,21 +14,16 @@ export default function ChatBox() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const listRef = useRef(null);
-  const timer = useRef(null);
   const stickToBottomRef = useRef(true);
 
-  async function load() {
-    try {
-      const d = await api.chatList();
-      setItems(d.items || []);
-    } catch (_) {}
-  }
-
-  useEffect(() => {
-    load();
-    timer.current = setInterval(load, POLL_MS);
-    return () => clearInterval(timer.current);
+  const load = useCallback(async (signal) => {
+    const d = await api.chatList({ signal });
+    setItems(d.items || []);
   }, []);
+  const refresh = useAdaptivePolling(load, {
+    intervalMs: POLL_MS,
+    maxIntervalMs: 60_000,
+  });
 
   useEffect(() => {
     if (listRef.current && stickToBottomRef.current) {
@@ -46,7 +42,7 @@ export default function ChatBox() {
       await api.chatPost(name.trim(), text.trim());
       setText("");
       stickToBottomRef.current = true;
-      load();
+      refresh();
     } catch (err) {
       setError(String(err.message || err)); // 429 rate limit surfaces here
     } finally {

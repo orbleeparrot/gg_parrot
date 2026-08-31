@@ -59,11 +59,22 @@ def mock_paper(monkeypatch):
         returns.setdefault(sid, 0.0)
         return {"session_id": sid, "symbol": symbol, "mode": mode, "status": "running"}
 
+    async def fake_stop(sid):
+        return {"session_id": sid, "status": "stopped"}
+
     monkeypatch.setattr(paper_mod, "start_session", fake_start)
-    monkeypatch.setattr(paper_mod, "stop_session", lambda sid: {"session_id": sid, "status": "stopped"})
+    monkeypatch.setattr(paper_mod, "stop_session", fake_stop)
     monkeypatch.setattr(
-        lb.paper_mod, "get_status",
-        lambda sid: {"current_return": returns.get(sid, 0.0), "current_equity": 1e6, "status": "running"},
+        lb.paper_mod, "get_statuses",
+        lambda ids, *, db=None: {
+            sid: {
+                "current_return": returns.get(sid, 0.0),
+                "current_equity": 1e6,
+                "status": "running",
+                "mode": "live",
+            }
+            for sid in ids
+        },
     )
     return returns
 

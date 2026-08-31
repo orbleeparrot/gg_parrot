@@ -10,26 +10,55 @@ const NAV_LINKS = [
 ];
 
 const NAV_ICON_SOURCES = {
-  home: "/brand/navigation/outline/ggparrot-outline-home.png",
-  agent: "/brand/navigation/outline/ggparrot-outline-agent.png",
-  builder: "/brand/navigation/outline/ggparrot-outline-builder.png",
-  leaderboard: "/brand/navigation/outline/ggparrot-outline-leaderboard.png",
-  news: "/brand/navigation/outline/ggparrot-outline-news.png",
-  board: "/brand/navigation/outline/ggparrot-outline-board.png",
+  home: "/brand/navigation/outline/ggparrot-outline-home.svg",
+  agent: "/brand/navigation/outline/ggparrot-outline-agent.svg",
+  builder: "/brand/navigation/outline/ggparrot-outline-builder.svg",
+  leaderboard: "/brand/navigation/outline/ggparrot-outline-leaderboard.svg",
+  news: "/brand/navigation/outline/ggparrot-outline-news.svg",
+  board: "/brand/navigation/outline/ggparrot-outline-board.svg",
 };
 
-function ParrotMark() {
-  return <img src="/brand/ggparrot-feather-terminal.png" alt="" width="512" height="512" draggable="false" />;
+// 전달받은 로고 락업(116×40, 워드마크 포함). 밝은 배경용과 어두운 배경용이 따로
+// 와서 두 장을 겹쳐 두고 CSS 로 고른다 — 테마가 `.dark` 클래스로 켜지므로
+// prefers-color-scheme 미디어쿼리로는 수동 토글을 따라가지 못한다.
+function BrandLogo() {
+  return (
+    <>
+      <img
+        className="site-brand-logo is-light"
+        src="/brand/logo-ggparrot.svg"
+        alt=""
+        width="116"
+        height="40"
+        draggable="false"
+      />
+      <img
+        className="site-brand-logo is-dark"
+        src="/brand/logo-ggparrot-white.svg"
+        alt=""
+        width="116"
+        height="40"
+        draggable="false"
+      />
+      {/* 좁은 자리(모바일 상단바)에서는 가로 락업 대신 심볼만. 심볼은 단색이
+          아니라 브랜드 노랑을 품고 있어 두 테마 모두에서 그대로 쓸 수 있다. */}
+      <img
+        className="site-brand-symbol"
+        src="/brand/mark-ggparrot.svg"
+        alt=""
+        width="40"
+        height="40"
+        draggable="false"
+      />
+    </>
+  );
 }
 
 export function BrandLink({ onClick, className = "" }) {
+  // 접근 가능한 이름은 aria-label 이 갖는다(로고는 alt="" 인 장식 이미지).
   return (
     <NavLink to="/" onClick={onClick} className={`site-brand text-slate-900 ${className}`} aria-label="껄무새 메인">
-      <span className="brand-word">
-        <strong>껄무새</strong>
-        <small className="num">GGPARROT</small>
-      </span>
-      <span className="site-brand-mark site-brand-feather" aria-hidden="true"><ParrotMark /></span>
+      <BrandLogo />
     </NavLink>
   );
 }

@@ -17,7 +17,7 @@ import os
 import time
 from typing import Optional
 
-import httpx
+from .http_runtime import SingleFlightGroup, get_http_client
 
 # Env-configurable base so a US-hosted deploy can use data-api.binance.vision
 # (api.binance.com is geo-blocked from US IPs). Same public data either way.
@@ -90,15 +90,15 @@ def select_hot_coins(
 
 # Shared cache: (coins, expires_at). Keyed by limit.
 _cache: dict[int, tuple[list[dict], float]] = {}
+_refreshes = SingleFlightGroup()
 
 
 def _fetch_tickers() -> Optional[list[dict]]:
     try:
-        with httpx.Client(timeout=10.0) as client:
-            resp = client.get(_TICKER_24H)
-            resp.raise_for_status()
-            data = resp.json()
-            return data if isinstance(data, list) else None
+        resp = get_http_client().get(_TICKER_24H)
+        resp.raise_for_status()
+        data = resp.json()
+        return data if isinstance(data, list) else None
     except Exception:
         return None
 
@@ -111,7 +111,14 @@ def get_hot_coins(limit: int = 10) -> dict:
         coins = hit[0]
         return _envelope(coins, cached=True)
 
-    tickers = _fetch_tickers()
+    if hit:
+        tickers, refresh_state = _refreshes.run(
+            "binance:24h",
+            _fetch_tickers,
+            stale_value=None,
+        )
+    else:
+        tickers, refresh_state = _refreshes.run("binance:24h", _fetch_tickers)
     if tickers is None:
         # Serve a stale cache if we have one; otherwise report empty (UI hides).
         if hit:
@@ -120,7 +127,7 @@ def get_hot_coins(limit: int = 10) -> dict:
 
     coins = select_hot_coins(tickers, limit=limit)
     _cache[limit] = (coins, time.time() + CACHE_SECONDS)
-    return _envelope(coins, cached=False)
+    return _envelope(coins, cached=refresh_state == "shared")
 
 
 def _envelope(coins: list[dict], *, cached: bool, stale: bool = False, error: str | None = None) -> dict:

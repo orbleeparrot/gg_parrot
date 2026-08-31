@@ -5,6 +5,7 @@ import { SectionTitle, EmptyRow } from "./Page.jsx";
 import CandleChart from "./CandleChart.jsx";
 import { computeSessionOverlay } from "../lib/indicators.js";
 import { RULE_TYPES } from "../lib/macro.js";
+import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 
 // 내 매크로 실행 현황 — 실행기(exe)가 올리는 세션을 실시간으로 보여주고,
 // 원격 종료(매크로만 / 청산 후)를 요청한다.
@@ -206,24 +207,19 @@ export default function RunnerSessions({
   const [data, setData] = useState(null);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
-  const timer = useRef(null);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (signal) => {
     try {
-      const d = await api.runnerSessions();
+      const d = await api.runnerSessions({ signal });
       setData(d);
       setErr("");
     } catch (e) {
-      setErr(String(e.message || e));
+      if (e?.name !== "AbortError") setErr(String(e.message || e));
+      if (signal) throw e;
     }
   }, []);
 
-  useEffect(() => {
-    load();
-    const poll = () => { load(); timer.current = setTimeout(poll, 4000); };
-    timer.current = setTimeout(poll, 4000);
-    return () => clearTimeout(timer.current);
-  }, [load]);
+  useAdaptivePolling(load, { intervalMs: 4_000, maxIntervalMs: 60_000 });
 
   async function onDelete(session) {
     const label = session.status === "error" ? "오류로 끝난" : "응답이 끊긴";

@@ -25,11 +25,10 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from sqlmodel import select
+from sqlmodel import Session, select
 
 # Load backend/.env (gitignored) for local dev so secrets like GEMINI_API_KEY are
 # available before any module reads os.environ. No-op in prod (Render injects env
@@ -46,13 +45,16 @@ from . import chat as chat_mod
 from . import feargreed as feargreed_mod
 from . import hangang as hangang_mod
 from . import hotcoins as hotcoins_mod
+from . import http_runtime as http_runtime_mod
 from . import kimchi as kimchi_mod
 from . import news as news_mod
 from . import board as board_mod
 from . import leaderboard as leaderboard_mod
 from . import optimize as optimize_mod
+from . import optimize_runtime as optimize_runtime_mod
 from . import paper as paper_mod
 from . import ai_explain as ai_explain_mod
+from . import ai_runtime as ai_runtime_mod
 from . import auth as auth_mod
 from . import points as points_mod
 from . import account as account_mod
@@ -60,6 +62,7 @@ from . import challenge as challenge_mod
 from . import runner as runner_mod
 from . import user_macros as user_macros_mod
 from .agent_features.position_news.router import router as position_news_router
+from .observability import observe_application, router as observability_router
 from fastapi import Depends
 from .db import User
 # [차후 도입] 고래 동향 — app/whales.py 는 그대로 두고 라우트만 꺼둡니다.
@@ -68,8 +71,8 @@ from .card import render_card
 from .security import hash_password
 from .data import NoSpotDataError, average_daily_funding_pct, get_klines, resolve_period
 from .marketdata import fetch_klines_for_macro
-from .db import MacroRow, get_session, init_db
-from .engine import BacktestResult, Macro, Period, human_summary
+from .db import MacroRow, get_session, init_db, request_session
+from .engine import BacktestResult, Macro, Period, compact_backtest_result, human_summary
 from .engine.backtest import run_backtest
 from .engine import portfolio as portfolio_mod
 from .engine.explain import explain_result
@@ -79,11 +82,24 @@ from .realtrade import build_bundle
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    yield
+    try:
+        yield
+    finally:
+        try:
+            await paper_mod.shutdown_running_sessions()
+        finally:
+            try:
+                optimize_runtime_mod.shutdown()
+            finally:
+                try:
+                    ai_runtime_mod.close_ai_runtime()
+                finally:
+                    http_runtime_mod.close_http_runtime()
 
 
 app = FastAPI(title="Coin Macro Backtest & Share (Simulation only)", lifespan=lifespan)
 app.include_router(position_news_router)
+app.include_router(observability_router)
 
 # Ensure tables exist even when the app is imported without the lifespan running
 # (e.g. TestClient constructed without a context manager).
@@ -94,16 +110,9 @@ init_db()
 # 무료 대역폭 5 GB 를 태웠다. compresslevel 은 9 대신 6: 비율은 거의 같은데
 # CPU 를 훨씬 덜 쓴다(무료 인스턴스라 CPU 가 더 아깝다).
 #
-# 순서 주의 — Starlette 은 나중에 추가한 미들웨어가 바깥이다. CORS 를 뒤에 둬서
-# 가장 바깥에 두면 에러 응답에도 CORS 헤더가 확실히 붙는다.
+# CORS와 observability는 모든 라우트가 등록된 뒤 FastAPI 전체를 감싼다.
+# 그래야 Starlette의 최외곽 ServerErrorMiddleware가 만든 500도 두 헤더를 지난다.
 app.add_middleware(GZipMiddleware, minimum_size=500, compresslevel=6)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # dev: Vite on :5173; demo-scope only
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 
 # --- helpers ------------------------------------------------------------
@@ -347,10 +356,13 @@ def auth_me(user: User = Depends(auth_mod.current_user)) -> dict:
 
 
 @app.get("/api/me/dashboard")
-def me_dashboard(user: User = Depends(auth_mod.current_user)) -> dict:
+def me_dashboard(
+    user: User = Depends(auth_mod.current_user_in_session),
+    db: Session = Depends(request_session),
+) -> dict:
     """My-page rollup: profile+tier, created/purchased macros, sales, ledger, 내 글."""
-    d = account_mod.dashboard(user)
-    d["my_posts"] = board_mod.my_posts(user.id)
+    d = account_mod.dashboard(user, db=db)
+    d["my_posts"] = board_mod.my_posts(user.id, db=db)
     return d
 
 
@@ -438,7 +450,7 @@ def create_macro(
         "share_slug": slug,
         "user_macro": user_macro,
         "human_summary": summary,
-        "result": result.model_dump(),
+        "result": compact_backtest_result(result).model_dump(),
         "explanation": explain_result(macro, result).model_dump(),
         "data_source": source,
     }
@@ -470,7 +482,7 @@ def backtest(req: BacktestRequest) -> dict:
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {
-        "result": result.model_dump(),
+        "result": compact_backtest_result(result).model_dump(),
         "per_symbol": per_symbol,  # [] for single-symbol; portfolio breakdown otherwise
         "human_summary": human_summary(macro),
         "data_source": source,
@@ -480,12 +492,6 @@ def backtest(req: BacktestRequest) -> dict:
         "explanation": explain_result(macro, result).model_dump(),
         "disclaimer": "past simulation only; not real trading",
     }
-
-
-# AI 심화 해설 캐시: 백테스트가 결정론이라 (매크로 → 결과 → AI 텍스트)도 결정론.
-# 같은 매크로 재클릭은 LLM 재호출 없이 즉시 반환한다.
-_ai_explain_cache: dict[str, dict] = {}
-_AI_EXPLAIN_CACHE_MAX = 500
 
 
 @app.post("/api/explain/ai")
@@ -507,15 +513,12 @@ def explain_ai(req: ExplainAiRequest) -> dict:
     if not ai_explain_mod.ai_available():
         return {"explanation": explain_result(macro, result).model_dump(), "ai_available": False}
 
-    # Deterministic backtest -> macro fully determines the AI text, so cache
-    # successful results and skip the LLM on repeats. Never cache failures.
-    cache_key = macro.model_dump_json()
-    hit = _ai_explain_cache.get(cache_key)
-    if hit is not None:
-        return {"explanation": hit, "ai_available": True, "cached": True}
-
     try:
-        enriched = ai_explain_mod.generate(macro, result, per_symbol=per_symbol or None)
+        enriched, runtime_state = ai_explain_mod.generate_with_cache_status(
+            macro,
+            result,
+            per_symbol=per_symbol or None,
+        )
     except ai_explain_mod.AiError as exc:
         base = explain_result(macro, result).model_dump()
         return {"explanation": base, "ai_available": True, "ai_error": exc.user_message}
@@ -524,10 +527,10 @@ def explain_ai(req: ExplainAiRequest) -> dict:
         return {"explanation": base, "ai_available": True, "ai_error": "AI 호출에 실패했어요."}
 
     payload = enriched.model_dump()
-    if len(_ai_explain_cache) >= _AI_EXPLAIN_CACHE_MAX:
-        _ai_explain_cache.clear()
-    _ai_explain_cache[cache_key] = payload
-    return {"explanation": payload, "ai_available": True}
+    response = {"explanation": payload, "ai_available": True}
+    if runtime_state != "loaded":
+        response["cached"] = True
+    return response
 
 
 @app.post("/api/optimize")
@@ -538,7 +541,12 @@ def optimize(req: OptimizeRequest) -> dict:
     it. Refuses symbols with no real spot data (422) rather than fabricating.
     """
     try:
-        return optimize_mod.optimize_tp_sl(req.macro, req.tp_values, req.sl_values)
+        prepared = optimize_mod.prepare_optimization(req.macro, req.tp_values, req.sl_values)
+        return optimize_runtime_mod.run(prepared)
+    except optimize_runtime_mod.OptimizeBusyError as exc:
+        raise HTTPException(status_code=429, detail=str(exc), headers={"Retry-After": "3"})
+    except optimize_runtime_mod.OptimizeTimeoutError as exc:
+        raise HTTPException(status_code=504, detail=str(exc))
     except NoSpotDataError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     except ValueError as exc:
@@ -674,7 +682,7 @@ def news_market() -> dict:
 
 @app.get("/api/news/coin/{symbol}")
 def news_coin(symbol: str) -> dict:
-    """'경주마 동향' — 특정 코인의 최신 뉴스 헤드라인(요약 목록). 캐시."""
+    """'경주마 동향' — 중앙 DB 우선, 미수집·장애 시 RSS 캐시 fallback."""
     return news_mod.get_coin_news(symbol)
 
 
@@ -802,9 +810,15 @@ async def challenge_today() -> dict:
 
 
 @app.get("/api/leaderboard")
-def leaderboard_list(user_id: str = "", account: Optional[User] = Depends(auth_mod.optional_user)) -> dict:
+def leaderboard_list(
+    user_id: str = "",
+    account: Optional[User] = Depends(auth_mod.optional_user_in_session),
+    db: Session = Depends(request_session),
+) -> dict:
     return leaderboard_mod.list_entries(
-        viewer_id=user_id, viewer_user_id=account.id if account else None
+        viewer_id=user_id,
+        viewer_user_id=account.id if account else None,
+        db=db,
     )
 
 
@@ -866,7 +880,7 @@ async def leaderboard_edit(
     except NoSpotDataError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     if old.paper_session_id:
-        paper_mod.stop_session(old.paper_session_id)
+        await paper_mod.stop_session(old.paper_session_id)
     entry = leaderboard_mod.update_entry(
         entry_id,
         symbol=macro.symbol,
@@ -878,7 +892,7 @@ async def leaderboard_edit(
 
 
 @app.delete("/api/leaderboard/{entry_id}")
-def leaderboard_delete(entry_id: int, account: User = Depends(auth_mod.current_user)) -> dict:
+async def leaderboard_delete(entry_id: int, account: User = Depends(auth_mod.current_user)) -> dict:
     """Delete one of my own (account-owned) leaderboard entries."""
     entry = leaderboard_mod.get_entry(entry_id)
     if entry is None:
@@ -887,7 +901,7 @@ def leaderboard_delete(entry_id: int, account: User = Depends(auth_mod.current_u
         raise HTTPException(status_code=403, detail="내가 등록한 매크로만 삭제할 수 있어요.")
     sid = leaderboard_mod.delete_entry(entry_id)
     if sid:
-        paper_mod.stop_session(sid)
+        await paper_mod.stop_session(sid)
     return {"ok": True}
 
 
@@ -1026,8 +1040,8 @@ async def paper_start(req: PaperStartRequest) -> dict:
 
 
 @app.post("/api/paper/{session_id}/stop")
-def paper_stop(session_id: int) -> dict:
-    return paper_mod.stop_session(session_id)
+async def paper_stop(session_id: int) -> dict:
+    return await paper_mod.stop_session(session_id)
 
 
 @app.get("/api/paper/{session_id}")
@@ -1176,8 +1190,11 @@ def runner_key_regen(user: User = Depends(auth_mod.current_user)) -> dict:
 
 
 @app.get("/api/me/runner/sessions")
-def runner_sessions(user: User = Depends(auth_mod.current_user)) -> dict:
-    return runner_mod.list_sessions(user.id)
+def runner_sessions(
+    user: User = Depends(auth_mod.current_user_in_session),
+    db: Session = Depends(request_session),
+) -> dict:
+    return runner_mod.list_sessions(user.id, db=db)
 
 
 @app.post("/api/me/runner/sessions/stream-token")
@@ -1363,3 +1380,15 @@ if os.path.isdir(_DIST):
         if full_path and os.path.isfile(candidate):
             return FileResponse(candidate)
         return FileResponse(os.path.join(_DIST, "index.html"))
+
+
+# Export the complete ASGI stack. Keeping the FastAPI instance separately is
+# useful for introspection while the public ``app`` is what Uvicorn/TestClient
+# must run so uncaught framework errors retain both CORS and trace headers.
+api_app = app
+app = observe_application(
+    api_app,
+    allow_origins=["*"],  # dev: Vite on :5173; demo-scope only
+    allow_methods=["*"],
+    allow_headers=["*"],
+)

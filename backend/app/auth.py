@@ -17,12 +17,12 @@ from typing import Optional
 
 import httpx
 import jwt
-from fastapi import Header, HTTPException
-from sqlmodel import select
+from fastapi import Depends, Header, HTTPException
+from sqlmodel import Session, select
 
 from . import email_service
 from . import points as points_mod
-from .db import User, get_session
+from .db import User, get_session, request_session
 from .security import hash_password, verify_password
 
 # Dev fallback only (>=32 bytes to satisfy HS256). Deployments MUST set SECRET_KEY.
@@ -41,6 +41,10 @@ _FRONTEND_BASE_URL = os.environ.get("FRONTEND_BASE_URL", "").rstrip("/")
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
 _GOOGLE_ISSUERS = {"accounts.google.com", "https://accounts.google.com"}
 _GOOGLE_TOKENINFO_URL = "https://oauth2.googleapis.com/tokeninfo"
+_GOOGLE_ONLY_ACCOUNT_DETAIL = (
+    "Google 계정으로 가입된 이메일이에요. "
+    "Google 로그인 또는 비밀번호 재설정을 이용해 주세요."
+)
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _USERNAME_RE = re.compile(r"^[A-Za-z0-9_가-힣]{2,20}$")
@@ -132,7 +136,10 @@ def signup(email: str, username: str, password: str) -> dict:
         raise AuthError(400, "비밀번호는 8자 이상이어야 해요.")
 
     with get_session() as db:
-        if db.exec(select(User).where(User.email == email)).first():
+        existing_email = db.exec(select(User).where(User.email == email)).first()
+        if existing_email is not None and not existing_email.password_hash:
+            raise AuthError(409, _GOOGLE_ONLY_ACCOUNT_DETAIL)
+        if existing_email is not None:
             raise AuthError(409, "이미 가입된 이메일이에요.")
         if db.exec(select(User).where(User.username == username)).first():
             raise AuthError(409, "이미 사용 중인 아이디예요.")
@@ -158,6 +165,8 @@ def login(email: str, password: str) -> dict:
     email = (email or "").strip().lower()
     with get_session() as db:
         user = db.exec(select(User).where(User.email == email)).first()
+        if user is not None and not user.password_hash:
+            raise AuthError(401, _GOOGLE_ONLY_ACCOUNT_DETAIL)
         if user is None or not verify_password(password or "", user.password_hash):
             raise AuthError(401, "이메일 또는 비밀번호가 올바르지 않아요.")
         return {"token": make_token(user.id), "user": user_view(user)}
@@ -319,11 +328,37 @@ def current_user(authorization: Optional[str] = Header(default=None)) -> User:
     return user
 
 
+def current_user_in_session(
+    authorization: Optional[str] = Header(default=None),
+    db: Session = Depends(request_session),
+) -> User:
+    """Resolve auth with the request's already-open session for DB-only routes."""
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise AuthError(401, "로그인이 필요해요.")
+    user = db.get(User, _decode(authorization[7:].strip()))
+    if user is None:
+        raise AuthError(401, "계정을 찾을 수 없어요.")
+    return user
+
+
 def optional_user(authorization: Optional[str] = Header(default=None)) -> Optional[User]:
     """Like current_user but returns None instead of raising (for public+auth views)."""
     if not authorization or not authorization.lower().startswith("bearer "):
         return None
     try:
         return get_user_by_id(_decode(authorization[7:].strip()))
+    except HTTPException:
+        return None
+
+
+def optional_user_in_session(
+    authorization: Optional[str] = Header(default=None),
+    db: Session = Depends(request_session),
+) -> Optional[User]:
+    """Optional auth variant that reuses the request-scoped DB session."""
+    if not authorization or not authorization.lower().startswith("bearer "):
+        return None
+    try:
+        return db.get(User, _decode(authorization[7:].strip()))
     except HTTPException:
         return None

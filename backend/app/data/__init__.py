@@ -1,8 +1,11 @@
 from .binance import (
     NO_SPOT_MSG,
+    IncompleteMarketDataError,
     NoSpotDataError,
+    TooManyBarsError,
     average_daily_funding_pct,
     ensure_spot_available,
+    estimate_bar_count,
     get_funding_history,
     get_klines,
     get_recent_klines,
@@ -20,6 +23,9 @@ __all__ = [
     "average_daily_funding_pct",
     "resolve_period",
     "ensure_spot_available",
+    "estimate_bar_count",
     "NoSpotDataError",
+    "IncompleteMarketDataError",
+    "TooManyBarsError",
     "NO_SPOT_MSG",
 ]

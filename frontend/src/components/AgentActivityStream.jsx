@@ -11,12 +11,12 @@ const MINUTE_MS = 60 * SECOND_MS;
 const HOUR_MS = 60 * MINUTE_MS;
 const KST_OFFSET_MS = 9 * HOUR_MS;
 const AGENT_AVATAR_SOURCES = {
-  calm: "/brand/agent/ggparrot-agent-calm-v1.png",
-  curious: "/brand/agent/ggparrot-agent-curious-v1.png",
-  focused: "/brand/agent/ggparrot-agent-focused-v1.png",
-  warning: "/brand/agent/ggparrot-agent-warning-v1.png",
-  critical: "/brand/agent/ggparrot-agent-critical-v1.png",
-  signal: "/brand/agent/ggparrot-agent-signal-v1.png",
+  calm: "/brand/agent/ggparrot-agent-calm-v1.svg",
+  curious: "/brand/agent/ggparrot-agent-curious-v1.svg",
+  focused: "/brand/agent/ggparrot-agent-focused-v1.svg",
+  warning: "/brand/agent/ggparrot-agent-warning-v1.svg",
+  critical: "/brand/agent/ggparrot-agent-critical-v1.svg",
+  signal: "/brand/agent/ggparrot-agent-signal-v1.svg",
 };
 
 function avatarForEvent(event) {

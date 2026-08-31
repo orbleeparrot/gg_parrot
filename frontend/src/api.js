@@ -1,9 +1,11 @@
 // Thin API client. Relative URLs work in dev (Vite proxy) and in prod
 // (FastAPI serves the built SPA and the /api routes from one origin).
 import { getToken } from "./lib/auth.js";
+import { createRequestCoordinator } from "./lib/requestCoordinator.js";
 
 const BASE = "";
 const RUNNER_SESSIONS_STREAM_PATH = "/api/me/runner/sessions/stream";
+const getRequests = createRequestCoordinator();
 
 function websocketUrl(path) {
   const configuredBase = String(import.meta.env?.VITE_API_WS_BASE || "").trim();
@@ -40,19 +42,26 @@ async function req(path, opts = {}) {
   const token = getToken();
   const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
   if (token) headers["Authorization"] = `Bearer ${token}`;
-  const res = await fetch(BASE + path, { ...opts, headers });
-  const body = await jsonBody(res);
-  if (!res.ok) {
-    const detail = typeof body.detail === "string"
-      ? body.detail
-      : body.detail != null
-        ? JSON.stringify(body.detail)
-        : res.statusText;
-    const error = new Error(detail);
-    error.status = res.status;
-    throw error;
-  }
-  return body;
+  const method = String(opts.method || "GET").toUpperCase();
+  const { signal: callerSignal, ...fetchOptions } = opts;
+  const execute = async (signal) => {
+    const res = await fetch(BASE + path, { ...fetchOptions, method, headers, signal });
+    const body = await jsonBody(res);
+    if (!res.ok) {
+      const detail = typeof body.detail === "string"
+        ? body.detail
+        : body.detail != null
+          ? JSON.stringify(body.detail)
+          : res.statusText;
+      const error = new Error(detail);
+      error.status = res.status;
+      throw error;
+    }
+    return body;
+  };
+  if (method !== "GET") return execute(callerSignal);
+  const authScope = token || "anonymous";
+  return getRequests.run(`${authScope}:${path}`, execute, { signal: callerSignal });
 }
 
 // multipart/form-data 요청 (파일 업로드). Content-Type은 브라우저가 boundary와
@@ -87,8 +96,8 @@ export const api = {
   googleAuth: (credential) =>
     req("/api/auth/google", { method: "POST", body: JSON.stringify({ credential }) }),
   me: () => req("/api/auth/me"),
-  myDashboard: () => req("/api/me/dashboard"),
-  myMacros: () => req("/api/me/macros"),
+  myDashboard: (options = {}) => req("/api/me/dashboard", options),
+  myMacros: (options = {}) => req("/api/me/macros", options),
   myMacro: (id) => req(`/api/me/macros/${id}`),
   saveMyMacro: (macro, name = "") =>
     req("/api/me/macros", {
@@ -126,7 +135,7 @@ export const api = {
   cardUrl: (slug) => `/api/card/${slug}.png`,
 
   // kimchi premium (reference indicator; upbit vs binance×USDKRW)
-  kimchiPremium: (symbol) => req(`/api/kimchi-premium?symbol=${encodeURIComponent(symbol || "BTC")}`),
+  kimchiPremium: (symbol, options = {}) => req(`/api/kimchi-premium?symbol=${encodeURIComponent(symbol || "BTC")}`, options),
 
   // approximate USD→KRW rate (reference only) for showing 원화 next to USDT amounts
   usdKrw: () => req("/api/usdkrw"),
@@ -140,18 +149,26 @@ export const api = {
   },
 
   // 오늘의 AI 챌린지 (KST 하루 1회 생성; symbol + 🤖 이름)
-  challengeToday: () => req("/api/challenge/today"),
+  challengeToday: (options = {}) => req("/api/challenge/today", options),
 
   // '오늘의 경주마' hot coins (server-cached, shared across clients)
-  hotCoins: (limit) => req(`/api/hot-coins?limit=${limit || 10}`),
+  hotCoins: (limit, options = {}) => req(`/api/hot-coins?limit=${limit || 10}`, options),
 
   // '오늘의 코인동향' — 시장·규제 뉴스 헤드라인 + AI 중립 개요 (KST 하루 1회 캐시)
   newsMarket: () => req("/api/news/market"),
-  // '경주마 동향' — 코인별 최신 뉴스 헤드라인
+  // '경주마 동향' — 서버가 Prefect DB 우선, 미수집 티커만 RSS fallback
   newsCoin: (symbol) => req(`/api/news/coin/${encodeURIComponent(symbol)}`),
   // 내 에이전트 기능 01 — 서버가 세션 소유권과 등록 매크로 방향을 확인한다.
-  agentPositionNews: (sessionId) =>
-    req(`/api/me/agents/sessions/${encodeURIComponent(sessionId)}/position-news`),
+  agentPositionNews: (sessionId, options = {}) =>
+    req(`/api/me/agents/sessions/${encodeURIComponent(sessionId)}/position-news`, options),
+  // 저장 매크로도 실행 세션 없이 같은 공용 snapshot을 조회한다.
+  agentMacroPositionNews: (macroId, symbol = "") => {
+    const path = `/api/me/agents/macros/${encodeURIComponent(macroId)}/position-news`;
+    const query = symbol
+      ? `?symbol=${encodeURIComponent(symbol)}`
+      : "";
+    return req(`${path}${query}`);
+  },
 
   // 껄무새 게시판
   boardList: (page = 1, size = 10) => req(`/api/board/posts?page=${page}&size=${size}`),
@@ -179,10 +196,10 @@ export const api = {
     }),
 
   // 한강 수온 (server-cached proxy of the public Hangang temperature API)
-  hangangTemp: () => req("/api/hangang-temp"),
+  hangangTemp: (options = {}) => req("/api/hangang-temp", options),
 
   // 공포·탐욕 지수 (시장 전체 심리; 서버 캐시, Alternative.me 프록시)
-  fearGreed: () => req("/api/fear-greed"),
+  fearGreed: (options = {}) => req("/api/fear-greed", options),
 
   // [차후 도입] '고래 동향' — 서버 라우트가 아직 꺼져 있어 지금 호출하면 404 입니다.
   whaleActivity: () => req("/api/whale-activity"),
@@ -202,7 +219,7 @@ export const api = {
     ),
 
   // 오늘의 리더보드 (daily KST paper-return board)
-  leaderboard: (userId) => req(`/api/leaderboard?user_id=${encodeURIComponent(userId || "")}`),
+  leaderboard: (userId, options = {}) => req(`/api/leaderboard?user_id=${encodeURIComponent(userId || "")}`, options),
   leaderboardRegister: (macro, username, password, userId, mode) =>
     req("/api/leaderboard/register", {
       method: "POST",
@@ -226,7 +243,7 @@ export const api = {
     req(`/api/leaderboard/${entryId}/unlock`, { method: "POST" }),
 
   // leaderboard chat (daily KST)
-  chatList: () => req("/api/chat"),
+  chatList: (options = {}) => req("/api/chat", options),
   chatPost: (username, text) =>
     req("/api/chat", { method: "POST", body: JSON.stringify({ username, text }) }),
 
@@ -235,7 +252,7 @@ export const api = {
     req("/api/paper/start", { method: "POST", body: JSON.stringify({ macro, symbol, mode }) }),
   paperStop: (sessionId, options = {}) =>
     req(`/api/paper/${sessionId}/stop`, { method: "POST", keepalive: !!options.keepalive }),
-  paperStatus: (sessionId) => req(`/api/paper/${sessionId}`),
+  paperStatus: (sessionId, options = {}) => req(`/api/paper/${sessionId}`, options),
 
   // 매크로 실행기(exe) 다운로드
   runnerDownloadInfo: () => req("/api/runner/download/info"),
@@ -244,7 +261,7 @@ export const api = {
   // 매크로 실행기(exe) 연동 — 마이페이지용
   runnerKey: () => req("/api/me/runner/key"),
   runnerKeyRegenerate: () => req("/api/me/runner/key/regenerate", { method: "POST" }),
-  runnerSessions: () => req("/api/me/runner/sessions"),
+  runnerSessions: (options = {}) => req("/api/me/runner/sessions", options),
   runnerSessionsStreamToken: () =>
     req("/api/me/runner/sessions/stream-token", { method: "POST" }),
   runnerSessionsStreamUrl: () => websocketUrl(RUNNER_SESSIONS_STREAM_PATH),

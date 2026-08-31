@@ -5,6 +5,7 @@ __pycache__/
 venv/
 backend/app.db
 backend/cache/
+backend/supabase/.temp/
 .pytest_cache/
 
 # Secrets — API keys go in env vars / a local .env (NEVER commit real keys).
@@ -26,3 +27,6 @@ runner/*.spec
 .DS_Store
 .vscode/
 .idea/
+
+# 전달받은 브랜드 원본 묶음(배포용 사본은 frontend/public에 별도 관리)
+껄무새_이미지_20260831/

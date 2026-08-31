@@ -26,3 +26,11 @@ services:
         value: "true"
       - key: RUNNER_MIN_VERSION
         value: "5"
+      # 대시보드에서 실제 값을 입력합니다. 비밀값은 Blueprint에 커밋하지 않습니다.
+      - key: DATABASE_URL
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true
+      # Google Identity Services의 공개 OAuth 2.0 Web client ID.
+      - key: GOOGLE_CLIENT_ID
+        sync: false

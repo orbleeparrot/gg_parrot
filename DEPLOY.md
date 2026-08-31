@@ -46,3 +46,12 @@
 ## CORS
 `backend/app/main.py` 가 이미 `allow_origins=["*"]` 라 별도 설정 불필요.
 운영 시 보안을 위해 Vercel 도메인만 허용하도록 좁히는 것을 권장.
+
+## 포지션 뉴스 중앙 워커
+
+포지션 뉴스 수집은 FastAPI 요청과 분리된 Prefect worker가 담당합니다. 현재
+`render.yaml`에는 비용이 발생하는 background worker를 자동 추가하지 않았습니다.
+구조, 로컬 실행, Prefect Cloud 연결, 선택형 Render 설정은
+[backend/PREFECT_POSITION_NEWS.md](backend/PREFECT_POSITION_NEWS.md)를 참고하세요.
+
+에이전트 API는 중앙 DB만 읽으므로, 이 변경을 웹에 배포하기 전에 별도 worker와 같은 Postgres 연결을 준비하고 첫 뉴스 스냅샷이 생성되는지 확인해야 합니다. 현재 `render.yaml`만 배포하면 worker는 시작되지 않습니다.

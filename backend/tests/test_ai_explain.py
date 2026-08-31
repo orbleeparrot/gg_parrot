@@ -10,7 +10,7 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from app import ai_explain
+from app import ai_explain, ai_runtime
 from app.ai_explain import AiError
 from app.engine.backtest import BacktestResult
 from app.engine.explain import Explanation
@@ -18,6 +18,13 @@ from app.engine.schema import Macro
 from app.main import app
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _reset_ai_runtime():
+    ai_runtime.close_ai_runtime()
+    yield
+    ai_runtime.close_ai_runtime()
 
 
 def _macro():

@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -182,11 +183,18 @@ def _vote_tallies(db, entry_ids: list[int]) -> dict[int, dict]:
     return tallies
 
 
-def _live_return(session_id: Optional[int]) -> tuple[Optional[float], Optional[float], str, str]:
+_STATUS_NOT_PROVIDED = object()
+
+
+def _live_return(
+    session_id: Optional[int],
+    status=_STATUS_NOT_PROVIDED,
+) -> tuple[Optional[float], Optional[float], str, str]:
     """(return_pct, equity, status, mode) from the paper session, if any."""
     if session_id is None:
         return None, None, "none", "live"
-    status = paper_mod.get_status(session_id)
+    if status is _STATUS_NOT_PROVIDED:
+        status = paper_mod.get_status(session_id)
     if not status:
         return None, None, "none", "live"
     return (
@@ -205,8 +213,9 @@ def _entry_view(
     viewer_user_id: Optional[int] = None,
     unlocked_ids: frozenset = frozenset(),
     crown_owner_ids: frozenset = frozenset(),
+    paper_status=_STATUS_NOT_PROVIDED,
 ) -> dict:
-    ret, equity, pstatus, mode = _live_return(row.paper_session_id)
+    ret, equity, pstatus, mode = _live_return(row.paper_session_id, paper_status)
     likes = tally.get("likes", 0)
     dislikes = tally.get("dislikes", 0)
     my_vote = tally.get("by_user", {}).get(viewer_id, 0)
@@ -317,14 +326,15 @@ def _compute_crown_owner_ids(db, owners: list[int]) -> frozenset:
     )
 
 
-def list_entries(viewer_id: str = "", viewer_user_id: Optional[int] = None) -> dict:
+def list_entries(viewer_id: str = "", viewer_user_id: Optional[int] = None, db=None) -> dict:
     """Today's (KST) entries, sorted by likes-score then live return.
 
     ``viewer_user_id`` (the logged-in account) drives per-viewer unlock state and
     ownership; ``viewer_id`` (anonymous localStorage id) still drives votes.
     """
     start_ms = today_start_ms()
-    with get_session() as db:
+    session_scope = nullcontext(db) if db is not None else get_session()
+    with session_scope as db:
         rows = db.exec(
             select(LeaderboardEntry).where(LeaderboardEntry.created_ms >= start_ms)
         ).all()
@@ -332,12 +342,17 @@ def list_entries(viewer_id: str = "", viewer_user_id: Optional[int] = None) -> d
         tallies = _vote_tallies(db, entry_ids)
         unlocked_ids = _unlocked_ids_for(db, viewer_user_id, entry_ids)
         crown_ids = _crown_owner_ids(db, [r.owner_user_id for r in rows])
+        paper_statuses = paper_mod.get_statuses(
+            [r.paper_session_id for r in rows if r.paper_session_id is not None],
+            db=db,
+        )
 
     items = [
         _entry_view(
             r, tallies.get(r.id, {}),
             viewer_id=viewer_id, viewer_user_id=viewer_user_id,
             unlocked_ids=unlocked_ids, crown_owner_ids=crown_ids,
+            paper_status=paper_statuses.get(r.paper_session_id),
         )
         for r in rows
     ]

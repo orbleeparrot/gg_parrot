@@ -13,6 +13,14 @@ const GuidePage = lazy(() => import("./Guide.jsx"));
 const FOCUSABLE =
   'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
+// 히어로 캐러셀 타이밍.
+//   DWELL  = 한 장이 머무는 시간. 5초는 카피를 다 읽기 전에 넘어가 조급했다.
+//   EXIT   = 나가는 장을 DOM 에서 걷어내는 시점. index.css 의 home-hero-*
+//            애니메이션(520ms)보다 40ms 길어야 마지막 프레임이 잘리지 않는다.
+//            애니메이션 길이를 바꾸면 이 값도 같이 올려야 한다.
+const HERO_SLIDE_DWELL_MS = 10_000;
+const HERO_SLIDE_EXIT_MS = 560;
+
 function HomeEntryHero({ onLeaderboard, onGuide }) {
   return (
     <section
@@ -45,7 +53,7 @@ function HomeEntryHero({ onLeaderboard, onGuide }) {
           className="home-entry-choice is-primary"
         >
           <span className="home-entry-choice-art" aria-hidden="true">
-            <img src="/brand/navigation/ggparrot-nav-leaderboard.png" alt="" width="88" height="88" draggable="false" />
+            <img src="/brand/navigation/ggparrot-nav-leaderboard.svg" alt="" width="88" height="88" draggable="false" />
           </span>
           <span className="home-entry-choice-copy"><strong>리더보드</strong><small>커뮤니티 인기 전략을 골라 바로 실행해요. 마음에 드는 매크로를 그대로 실행기로 돌릴 수 있어요.</small></span>
           <span className="home-entry-choice-arrow" aria-hidden="true">→</span>
@@ -58,7 +66,7 @@ function HomeEntryHero({ onLeaderboard, onGuide }) {
           className="home-entry-choice"
         >
           <span className="home-entry-choice-art" aria-hidden="true">
-            <img src="/brand/navigation/ggparrot-nav-builder.png" alt="" width="88" height="88" draggable="false" />
+            <img src="/brand/navigation/ggparrot-nav-builder.svg" alt="" width="88" height="88" draggable="false" />
           </span>
           <span className="home-entry-choice-copy"><strong>직접 만들기</strong><small>안내를 따라 종목 검색부터 전략·조건·백테스트·등록까지 순서대로 내 매크로를 만들어요.</small></span>
           <span className="home-entry-choice-arrow" aria-hidden="true">→</span>
@@ -66,18 +74,19 @@ function HomeEntryHero({ onLeaderboard, onGuide }) {
       </nav>
 
       <div className="home-entry-mascot" aria-hidden="true">
-        <picture>
-          <source srcSet="/brand/ggparrot-sunglasses-hero-v2.webp" type="image/webp" />
-          <img
-            src="/brand/ggparrot-sunglasses-hero-v2.png"
-            alt=""
-            width="1180"
-            height="1120"
-            decoding="async"
-            fetchPriority="high"
-            draggable="false"
-          />
-        </picture>
+        {/* 벡터라 해상도별 사본이 필요 없다. 이전엔 480/800/1180 webp 3종 + png
+            폴백(609KB)을 두었는데, SVG 한 장(24KB)이 그보다 작고 어떤 배율에서도
+            선명하다. LCP 이미지라 eager + fetchPriority 는 유지한다. */}
+        <img
+          src="/brand/ggparrot-sunglasses-hero-v2.svg"
+          alt=""
+          width="1180"
+          height="1120"
+          decoding="async"
+          loading="eager"
+          fetchPriority="high"
+          draggable="false"
+        />
       </div>
     </section>
   );
@@ -154,7 +163,7 @@ function CommunityEntryHero() {
         <header className="home-board-preview-head">
           <span className="home-board-preview-mascot" aria-hidden="true">
             <img
-              src="/brand/navigation/ggparrot-nav-board.png"
+              src="/brand/navigation/ggparrot-nav-board.svg"
               alt=""
               width="256"
               height="256"
@@ -221,7 +230,7 @@ function HomeHeroRotator({ onLeaderboard, onGuide, paused = false }) {
 
   useEffect(() => {
     if (outgoingSlide == null) return undefined;
-    const timer = window.setTimeout(() => setOutgoingSlide(null), 560);
+    const timer = window.setTimeout(() => setOutgoingSlide(null), HERO_SLIDE_EXIT_MS);
     return () => window.clearTimeout(timer);
   }, [activeSlide, outgoingSlide]);
 
@@ -229,7 +238,7 @@ function HomeHeroRotator({ onLeaderboard, onGuide, paused = false }) {
     if (autoRotationBlocked) return undefined;
     const timer = window.setTimeout(() => {
       selectSlide((activeSlide + 1) % 2, 1);
-    }, 5000);
+    }, HERO_SLIDE_DWELL_MS);
     return () => window.clearTimeout(timer);
   }, [activeSlide, autoRotationBlocked, selectSlide, timerCycle]);
 

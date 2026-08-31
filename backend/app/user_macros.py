@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -288,8 +289,9 @@ def list_macros(user_id: int) -> dict:
         return {"items": items}
 
 
-def get_macro(user_id: int, macro_id: int) -> dict:
-    with get_session() as db:
+def get_macro(user_id: int, macro_id: int, db=None) -> dict:
+    session_scope = nullcontext(db) if db is not None else get_session()
+    with session_scope as db:
         row = db.get(UserMacro, macro_id)
         if row is None or row.user_id != user_id:
             raise HTTPException(status_code=404, detail="내 매크로를 찾을 수 없어요.")

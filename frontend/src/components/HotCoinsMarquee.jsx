@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api.js";
 import { fmtPrice } from "../lib/format.js";
+import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 
 // Poll interval (ms). Server caches the aggregate, so this is cheap. Default 45s.
 const POLL_MS = Number(import.meta.env?.VITE_HOTCOINS_POLL_MS) || 45000;
@@ -30,25 +31,12 @@ function Item({ coin, onPick, ariaHidden }) {
 export default function HotCoinsMarquee() {
   const [coins, setCoins] = useState([]);
   const navigate = useNavigate();
-  const timer = useRef(null);
 
-  useEffect(() => {
-    let alive = true;
-    async function tick() {
-      try {
-        const d = await api.hotCoins(10);
-        if (alive) setCoins(Array.isArray(d.coins) ? d.coins : []);
-      } catch (_) {
-        // network/agg error: keep last list, never break the page
-      }
-    }
-    tick();
-    timer.current = setInterval(tick, POLL_MS);
-    return () => {
-      alive = false;
-      clearInterval(timer.current);
-    };
+  const load = useCallback(async (signal) => {
+    const d = await api.hotCoins(10, { signal });
+    setCoins(Array.isArray(d.coins) ? d.coins : []);
   }, []);
+  useAdaptivePolling(load, { intervalMs: POLL_MS, maxIntervalMs: 10 * 60_000 });
 
   // Nothing to show yet -> hide the strip entirely (spec §1.4).
   if (!coins.length) return null;

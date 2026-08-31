@@ -600,9 +600,8 @@ def test_position_news_uses_owned_session_symbol_and_registered_direction(monkey
     ).json()["session_id"]
     captured = {}
 
-    def fake_position_news(session, *, requester_id=None):
+    def fake_position_news(session, *, db=None):
         captured.update(session)
-        captured["requester_id"] = requester_id
         return {"feature_key": "position_news", "context": session, "items": []}
 
     monkeypatch.setattr(position_news_service, "get_position_news", fake_position_news)
@@ -615,7 +614,6 @@ def test_position_news_uses_owned_session_symbol_and_registered_direction(monkey
     assert response.headers["cache-control"] == "private, no-store"
     assert captured["symbol"] == "ETHUSDT"
     assert captured["position_side"] == "short"
-    assert captured["requester_id"] is not None
 
 
 def test_position_news_hides_another_users_session(monkeypatch):

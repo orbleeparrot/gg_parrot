@@ -2352,6 +2352,25 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   line-height: 1;
 }
 
+/* 로고 락업 — 밝은/어두운 배경용 두 장 중 테마에 맞는 하나만 보인다.
+   문맥마다 높이만 바꾸고 가로는 비율대로 따라가게 둔다(원본 116×40). */
+.site-brand-logo {
+  display: block;
+  width: auto;
+  height: 30px;
+}
+.site-brand-logo.is-dark { display: none; }
+.dark .site-brand-logo.is-light { display: none; }
+.dark .site-brand-logo.is-dark { display: block; }
+
+.site-sidebar-brand .site-brand-logo { height: 34px; }
+.site-auth-brand .site-brand-logo { height: 32px; }
+
+/* 심볼 단독은 모바일 상단바에서만. 그 밖에서는 락업이 나온다. */
+.site-brand-symbol { display: none; }
+.site-mobile-brand .site-brand-symbol { display: block; width: auto; height: 32px; }
+.site-mobile-brand .site-brand-logo { display: none; }
+
 .site-brand-mark {
   width: 26px;
   height: 26px;
@@ -2825,6 +2844,7 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 
 .home-entry-mascot {
   width: min(100%, 660px);
+  aspect-ratio: 1180 / 1120;
   min-width: 0;
   grid-area: mascot;
   align-self: center;

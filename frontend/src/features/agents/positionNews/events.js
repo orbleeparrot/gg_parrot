@@ -29,8 +29,23 @@ export const positionNewsModule = {
     const context = data.context || {};
     const sideLabel = context.position_side === "short" ? "숏 포지션" : "롱 포지션";
     const updatedAt = data.updated_at || 0;
+    const lastCollectedAt = data.collection?.last_success_at || updatedAt;
     const overviewText = data.overview?.text || "";
     const newsItems = data.items || [];
+    const collectionStatus = data.collection?.status || "";
+    if (data.analysis_status === "pending" || collectionStatus === "pending") {
+      return [{
+        id: `position-news-pending-${context.session_id || "session"}-${context.asset_symbol || "asset"}`,
+        module: "position_news",
+        severity: "info",
+        expression: "curious",
+        title: `${context.coin_name || context.asset_symbol || "선택 종목"} 뉴스 수집 대기 중`,
+        summary: overviewText || "첫 중앙 수집이 끝나면 자동으로 표시됩니다.",
+        occurredAt: Date.now(),
+        fallbackTime: "수집 대기",
+        sourceLabel: "중앙 뉴스 수집 상태",
+      }];
+    }
     const events = overviewText ? [{
       id: `position-news-overview-${context.session_id || "session"}-${data.snapshot_id || updatedAt || "latest"}`,
       module: "position_news",
@@ -40,8 +55,8 @@ export const positionNewsModule = {
       summary: overviewText,
       detail: positionCountSummary(newsItems, sideLabel),
       detailLabel: "분류 요약",
-      occurredAt: updatedAt,
-      fallbackTime: "최근 수집",
+      occurredAt: lastCollectedAt,
+      fallbackTime: "최근 수집 확인",
       sourceLabel: "종목 헤드라인 요약 · 매매 지시 아님",
     }] : [];
 

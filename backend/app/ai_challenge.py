@@ -11,12 +11,12 @@ import json
 import os
 from typing import Optional
 
-import anthropic
-
+from .ai_runtime import ai_cache_key, get_ai_runtime, get_anthropic_client
 from .engine.schema import Macro
 
 _MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-5")
 _MAX_TOKENS = int(os.environ.get("ANTHROPIC_CHALLENGE_MAX_TOKENS", "2048"))
+_PROMPT_VERSION = "daily-challenge-v2"
 
 _SYSTEM = (
     "너는 코인 백테스트 교육 데모의 전략 생성기야. 주어진 종목으로 초보용 매크로 "
@@ -74,23 +74,35 @@ def _strip_fences(text: str) -> str:
 
 
 def _ai_propose(symbol: str) -> list[dict]:
-    client = anthropic.Anthropic()
-    resp = client.messages.create(
-        model=_MODEL,
-        max_tokens=_MAX_TOKENS,
-        system=_SYSTEM,
-        messages=[{"role": "user", "content": f"종목: {symbol}. 이 종목으로 매크로 3개를 JSON으로 제안해줘."}],
+    prompt = f"종목: {symbol}. 이 종목으로 매크로 3개를 JSON으로 제안해줘."
+    key = ai_cache_key(
+        "daily-challenge",
+        _PROMPT_VERSION,
+        _MODEL,
+        {"symbol": symbol, "system": _SYSTEM, "prompt": prompt, "max_tokens": _MAX_TOKENS},
     )
-    text = None
-    for block in resp.content:
-        if getattr(block, "type", None) == "text":
-            text = block.text
-            break
-    if not text:
-        return []
-    obj = json.loads(_strip_fences(text))
-    macros = obj.get("macros", obj if isinstance(obj, list) else [])
-    return macros if isinstance(macros, list) else []
+
+    def load():
+        response = get_anthropic_client().messages.create(
+            model=_MODEL,
+            max_tokens=_MAX_TOKENS,
+            system=_SYSTEM,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = None
+        for block in response.content:
+            if getattr(block, "type", None) == "text":
+                text = block.text
+                break
+        if not text:
+            raise ValueError("empty AI challenge response")
+        obj = json.loads(_strip_fences(text))
+        macros = obj.get("macros", obj if isinstance(obj, list) else [])
+        if not isinstance(macros, list):
+            raise ValueError("invalid AI challenge response")
+        return macros
+
+    return get_ai_runtime().call(key, load)[0]
 
 
 def generate_macros(symbol: str, n: int = 3) -> list[dict]:

@@ -18,6 +18,8 @@ from typing import Optional
 import httpx
 import pandas as pd
 
+from ..http_runtime import SingleFlightGroup, get_http_client
+
 # Base host is env-configurable so a US-hosted deploy (where api.binance.com is
 # geo-blocked) can point at the public data mirror (data-api.binance.vision),
 # which serves identical public market data. Defaults to the main host locally.
@@ -34,6 +36,22 @@ _FUT_FUNDING = f"{_FUTURES_BASE}/fapi/v1/fundingRate"
 _CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "cache")
 _DB_PATH = os.path.join(_CACHE_DIR, "market.db")
 _MS_DAY = 86_400_000
+_INTERVAL_MS = {
+    "1m": 60_000,
+    "5m": 5 * 60_000,
+    "15m": 15 * 60_000,
+    "1h": 60 * 60_000,
+    "4h": 4 * 60 * 60_000,
+    "1d": _MS_DAY,
+}
+
+# Refuse requests whose raw simulation would monopolize the web process. The
+# response curve is compacted separately, but the engine still evaluates every
+# accepted bar so strategy results remain exact.
+MAX_BACKTEST_BARS = max(
+    1_000,
+    int(os.environ.get("BACKTEST_MAX_BARS", os.environ.get("MAX_BACKTEST_BARS", "20000"))),
+)
 
 COLUMNS = ["timestamp", "open", "high", "low", "close", "volume"]
 
@@ -44,6 +62,71 @@ NO_SPOT_MSG = "이 종목은 현물 시세 데이터가 없어 시뮬레이션�
 
 class NoSpotDataError(Exception):
     """Raised when a symbol has no usable Binance spot price data."""
+
+
+class TooManyBarsError(ValueError):
+    """Raised before I/O when a requested candle window exceeds the safe cap."""
+
+
+class IncompleteMarketDataError(RuntimeError):
+    """Cached rows exist, but their requested window could not be verified."""
+
+
+def _expected_bar_count(interval: str, start_ms: int, end_ms: int) -> int:
+    interval_ms = _INTERVAL_MS.get(interval)
+    if interval_ms is None:
+        raise ValueError(f"unsupported candle interval: {interval}")
+    if end_ms <= start_ms:
+        raise ValueError("end must be after start")
+    return max(1, math.ceil((end_ms - start_ms) / interval_ms))
+
+
+def estimate_bar_count(interval: str, start_ms: int, end_ms: int) -> int:
+    """Public interval-aware bar estimate used for preflight CPU budgets."""
+    return _expected_bar_count(interval, start_ms, end_ms)
+
+
+def _cache_covers_window(
+    cached: pd.DataFrame,
+    interval: str,
+    start_ms: int,
+    end_ms: int,
+) -> bool:
+    """Return whether cached bars plausibly cover the requested interval.
+
+    Count alone is unsafe: 365 hourly rows are only about 15 days, not a year.
+    Check interval-aware count, both boundaries, and internal continuity.
+    """
+    if cached is None or len(cached) == 0:
+        return False
+    interval_ms = _INTERVAL_MS[interval]
+    expected = _expected_bar_count(interval, start_ms, end_ms)
+    if len(cached) < max(1, math.floor(expected * 0.95)):
+        return False
+
+    # Pandas 3 may store timezone-aware values at microsecond rather than
+    # nanosecond resolution, so normalize explicitly before integer conversion.
+    timestamps_ms = (
+        pd.to_datetime(cached["timestamp"], utc=True)
+        .to_numpy(dtype="datetime64[ms]")
+        .astype("int64")
+    )
+    if int(timestamps_ms[0]) > start_ms + interval_ms:
+        return False
+    if int(timestamps_ms[-1]) < end_ms - interval_ms:
+        return False
+    if len(timestamps_ms) > 1:
+        gaps = timestamps_ms[1:] - timestamps_ms[:-1]
+        if int(gaps.max()) > interval_ms:
+            return False
+    return True
+
+
+def _normalized_coverage_window(interval: str, start_ms: int, end_ms: int) -> tuple[int, int]:
+    interval_ms = _INTERVAL_MS[interval]
+    first_open = math.ceil(start_ms / interval_ms) * interval_ms
+    last_open = (end_ms // interval_ms) * interval_ms
+    return int(first_open), int(last_open)
 
 
 # --- period presets -----------------------------------------------------
@@ -74,7 +157,42 @@ def _conn() -> sqlite3.Connection:
                open REAL, high REAL, low REAL, close REAL, volume REAL,
                PRIMARY KEY (symbol, interval, open_time))"""
     )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS kline_coverage (
+               symbol TEXT, interval TEXT,
+               window_start INTEGER, window_end INTEGER,
+               checked_at_ms INTEGER,
+               PRIMARY KEY (symbol, interval, window_start, window_end))"""
+    )
     return conn
+
+
+def _coverage_verified(
+    symbol: str,
+    interval: str,
+    start_ms: int,
+    end_ms: int,
+) -> bool:
+    window_start, window_end = _normalized_coverage_window(interval, start_ms, end_ms)
+    with _conn() as conn:
+        row = conn.execute(
+            """SELECT 1 FROM kline_coverage
+               WHERE symbol=? AND interval=? AND window_start=? AND window_end=?""",
+            (symbol, interval, window_start, window_end),
+        ).fetchone()
+    return row is not None
+
+
+def _mark_coverage(symbol: str, interval: str, start_ms: int, end_ms: int) -> None:
+    """Record a successfully completed upstream window, including empty prefixes."""
+    window_start, window_end = _normalized_coverage_window(interval, start_ms, end_ms)
+    with _conn() as conn:
+        conn.execute(
+            """INSERT OR REPLACE INTO kline_coverage
+               (symbol, interval, window_start, window_end, checked_at_ms)
+               VALUES (?, ?, ?, ?, ?)""",
+            (symbol, interval, window_start, window_end, int(time.time() * 1000)),
+        )
 
 
 def _read_cache(symbol: str, interval: str, start_ms: int, end_ms: int) -> pd.DataFrame:
@@ -113,27 +231,34 @@ def _fetch_binance(
     """Page klines from ``url`` (spot or futures — the payload shape is identical)."""
     out: list[list] = []
     cursor = start_ms
-    with httpx.Client(timeout=15.0) as client:
-        while cursor < end_ms:
-            resp = client.get(
-                url,
-                params={
-                    "symbol": symbol,
-                    "interval": interval,
-                    "startTime": cursor,
-                    "endTime": end_ms,
-                    "limit": 1000,
-                },
-            )
-            resp.raise_for_status()
-            batch = resp.json()
-            if not batch:
-                break
-            out.extend(batch)
-            last_open = int(batch[-1][0])
-            cursor = last_open + _MS_DAY
-            if len(batch) < 1000:
-                break
+    client = get_http_client()
+    while cursor < end_ms:
+        resp = client.get(
+            url,
+            params={
+                "symbol": symbol,
+                "interval": interval,
+                "startTime": cursor,
+                "endTime": end_ms,
+                "limit": 1000,
+            },
+            timeout=15.0,
+        )
+        resp.raise_for_status()
+        batch = resp.json()
+        if not batch:
+            break
+        out.extend(batch)
+        last_open = int(batch[-1][0])
+        # Binance startTime is inclusive. One millisecond after the last
+        # returned open works for every supported interval and cannot skip
+        # intraday candles (the previous +1 day did).
+        next_cursor = last_open + 1
+        if next_cursor <= cursor:
+            break
+        cursor = next_cursor
+        if len(batch) < 1000:
+            break
     return out
 
 
@@ -171,10 +296,9 @@ def get_ticker_price(symbol: str) -> Optional[float]:
     Read-only public data; no auth, no account, no orders.
     """
     try:
-        with httpx.Client(timeout=8.0) as client:
-            resp = client.get(_TICKER, params={"symbol": symbol.upper()})
-            resp.raise_for_status()
-            return float(resp.json()["price"])
+        resp = get_http_client().get(_TICKER, params={"symbol": symbol.upper()}, timeout=8.0)
+        resp.raise_for_status()
+        return float(resp.json()["price"])
     except Exception:
         return None
 
@@ -183,6 +307,7 @@ def get_ticker_price(symbol: str) -> Optional[float]:
 # fetch instead of each hitting Binance (spec: read from a shared cache, don't
 # make one external call per entry).
 _price_cache: dict[str, tuple[float, float]] = {}
+_price_refreshes = SingleFlightGroup()
 
 
 def get_ticker_price_cached(symbol: str, ttl: float = 2.0) -> Optional[float]:
@@ -192,7 +317,7 @@ def get_ticker_price_cached(symbol: str, ttl: float = 2.0) -> Optional[float]:
     hit = _price_cache.get(symbol)
     if hit and hit[1] > now:
         return hit[0]
-    price = get_ticker_price(symbol)
+    price, _state = _price_refreshes.run(symbol, lambda: get_ticker_price(symbol))
     if price is not None:
         _price_cache[symbol] = (price, now + ttl)
     return price
@@ -229,25 +354,39 @@ def get_klines(
     is_fut = market == "futures"
     url = _FUT_KLINES if is_fut else _BASE
     cache_symbol = f"{symbol}#FUT" if is_fut else symbol
-    expected_days = max(1, (end_ms - start_ms) // _MS_DAY)
+    expected_bars = _expected_bar_count(interval, start_ms, end_ms)
+    if expected_bars > MAX_BACKTEST_BARS:
+        raise TooManyBarsError(
+            f"요청한 기간은 약 {expected_bars:,}개 봉입니다. "
+            f"최대 {MAX_BACKTEST_BARS:,}개까지 가능하니 기간을 줄이거나 "
+            "더 큰 캔들 간격을 선택해 주세요."
+        )
 
     cached = _read_cache(cache_symbol, interval, start_ms, end_ms)
-    # Consider the cache usable if it covers most of the window.
-    if len(cached) >= expected_days * 0.95:
+    if _coverage_verified(cache_symbol, interval, start_ms, end_ms) and len(cached) > 0:
+        return cached, "cache"
+    if _cache_covers_window(cached, interval, start_ms, end_ms):
         return cached, "cache"
 
+    fetch_error: Exception | None = None
     try:
         raw = _fetch_binance(symbol, interval, start_ms, end_ms, url=url)
         if raw:
             _write_cache(cache_symbol, interval, raw)
-            fresh = _read_cache(cache_symbol, interval, start_ms, end_ms)
-            if len(fresh) > 0:
-                return fresh, "binance-futures" if is_fut else "binance"
-    except Exception:
-        pass  # fall through to cache/synthetic
+        # A normal pagination finish verifies the requested window even when a
+        # recently listed coin has no bars near its requested start.
+        _mark_coverage(cache_symbol, interval, start_ms, end_ms)
+        fresh = _read_cache(cache_symbol, interval, start_ms, end_ms)
+        if len(fresh) > 0:
+            return fresh, "binance-futures" if is_fut else "binance"
+    except Exception as exc:
+        fetch_error = exc
 
     if len(cached) > 0:
-        return cached, "cache"
+        raise IncompleteMarketDataError(
+            "캐시된 시세가 요청 기간 전체를 포함하는지 확인하지 못했습니다. "
+            "잠시 후 다시 시도해 주세요."
+        ) from fetch_error
     if is_fut:
         raise NoSpotDataError(NO_FUT_MSG)  # futures never fabricates
     if not allow_synthetic:
@@ -275,10 +414,13 @@ def get_recent_klines(
     url = _FUT_KLINES if is_fut else _BASE
     limit = max(2, min(int(limit), 1000))
 
-    with httpx.Client(timeout=10.0) as client:
-        resp = client.get(url, params={"symbol": symbol, "interval": interval, "limit": limit})
-        resp.raise_for_status()
-        raw = resp.json()
+    resp = get_http_client().get(
+        url,
+        params={"symbol": symbol, "interval": interval, "limit": limit},
+        timeout=10.0,
+    )
+    resp.raise_for_status()
+    raw = resp.json()
     if not isinstance(raw, list) or not raw:
         raise NoSpotDataError(NO_FUT_MSG if is_fut else NO_SPOT_MSG)
 
@@ -313,22 +455,23 @@ def get_funding_history(symbol: str, start_ms: int, end_ms: int) -> list[tuple[i
     out: list[tuple[int, float]] = []
     cursor = start_ms
     try:
-        with httpx.Client(timeout=12.0) as client:
-            while cursor < end_ms:
-                resp = client.get(
-                    _FUT_FUNDING,
-                    params={"symbol": symbol, "startTime": cursor, "endTime": end_ms, "limit": 1000},
-                )
-                resp.raise_for_status()
-                batch = resp.json()
-                if not batch:
-                    break
-                for row in batch:
-                    out.append((int(row["fundingTime"]), float(row["fundingRate"])))
-                last = int(batch[-1]["fundingTime"])
-                if len(batch) < 1000:
-                    break
-                cursor = last + 1
+        client = get_http_client()
+        while cursor < end_ms:
+            resp = client.get(
+                _FUT_FUNDING,
+                params={"symbol": symbol, "startTime": cursor, "endTime": end_ms, "limit": 1000},
+                timeout=12.0,
+            )
+            resp.raise_for_status()
+            batch = resp.json()
+            if not batch:
+                break
+            for row in batch:
+                out.append((int(row["fundingTime"]), float(row["fundingRate"])))
+            last = int(batch[-1]["fundingTime"])
+            if len(batch) < 1000:
+                break
+            cursor = last + 1
     except Exception:
         return out  # partial/empty is fine; caller degrades gracefully
     return out
@@ -357,13 +500,12 @@ def ensure_spot_available(symbol: str) -> None:
     """
     symbol = symbol.upper()
     try:
-        with httpx.Client(timeout=8.0) as client:
-            resp = client.get(_TICKER, params={"symbol": symbol})
-            if resp.status_code == 200:
-                return
-            if resp.status_code == 400:
-                raise NoSpotDataError(NO_SPOT_MSG)
-            resp.raise_for_status()
+        resp = get_http_client().get(_TICKER, params={"symbol": symbol}, timeout=8.0)
+        if resp.status_code == 200:
+            return
+        if resp.status_code == 400:
+            raise NoSpotDataError(NO_SPOT_MSG)
+        resp.raise_for_status()
     except NoSpotDataError:
         raise
     except Exception:

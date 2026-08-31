@@ -16,6 +16,7 @@ import time
 from typing import Optional
 
 from .data import NoSpotDataError, get_recent_klines
+from .http_runtime import SingleFlightGroup
 
 # Supported intervals -> how long a chart response stays fresh. This value is
 # both the server cache TTL and the poll interval the client is told to use.
@@ -44,6 +45,7 @@ _LIVE_REFRESH_SECONDS = 3.0
 # The latest two bars use a separate, short cache.  A 1d chart may refresh its
 # 300-bar history only once a minute, but its open candle still has to move.
 _live_cache: dict[tuple[str, str, str], tuple[dict, float]] = {}
+_refreshes = SingleFlightGroup()
 
 
 def supported_intervals() -> list[str]:
@@ -80,25 +82,36 @@ def get_candles(
     # 못 받으면 현물로 떨어뜨린다. 백테스트(fetch_klines_for_macro)가 auto 에서
     # 하는 것과 같은 처리로, 레버리지를 올렸다고 차트가 통째로 사라지는 것보다
     # 기준 시세라도 보여주는 편이 낫다. 실제로 쓴 시장은 payload 의 market 이 알린다.
-    used_market = market
+    def load():
+        used_market = market
+        try:
+            candles = get_recent_klines(symbol, interval=interval, limit=limit, market=market)
+        except Exception as first_error:
+            candles = None
+            if market == "futures":
+                try:
+                    candles = get_recent_klines(symbol, interval=interval, limit=limit, market="spot")
+                    used_market = "spot"
+                except Exception:
+                    candles = None
+            if candles is None:
+                if isinstance(first_error, NoSpotDataError):
+                    raise
+                raise NoSpotDataError("시세를 불러오지 못했습니다. 잠시 후 다시 시도하세요.")
+        return candles, used_market
+
     try:
-        candles = get_recent_klines(symbol, interval=interval, limit=limit, market=market)
-    except Exception as first_error:
-        candles = None
-        if market == "futures":
-            try:
-                candles = get_recent_klines(symbol, interval=interval, limit=limit, market="spot")
-                used_market = "spot"
-            except Exception:
-                candles = None
-        if candles is None:
-            # Transient upstream failure: serve the last good copy rather than
-            # blanking a chart the user is watching.
-            if hit:
-                return {**hit[0], "cached": True, "stale": True}
-            if isinstance(first_error, NoSpotDataError):
-                raise
-            raise NoSpotDataError("시세를 불러오지 못했습니다. 잠시 후 다시 시도하세요.")
+        if hit:
+            loaded, refresh_state = _refreshes.run(("history", key), load, stale_value=None)
+        else:
+            loaded, refresh_state = _refreshes.run(("history", key), load)
+    except Exception:
+        if hit:
+            return {**hit[0], "cached": True, "stale": True}
+        raise
+    if refresh_state == "stale":
+        return {**hit[0], "cached": True, "stale": True}
+    candles, used_market = loaded
 
     payload = {
         "symbol": symbol,
@@ -111,7 +124,7 @@ def get_candles(
         "disclaimer": "public market data; reference only",
     }
     _cache[key] = (payload, time.time() + _INTERVALS[interval])
-    return {**payload, "cached": False}
+    return {**payload, "cached": refresh_state == "shared"}
 
 
 def get_live_candles(
@@ -141,23 +154,36 @@ def get_live_candles(
 
     # get_candles 와 같은 선물→현물 폴백. 히스토리는 현물로 떨어졌는데 움직이는
     # 봉만 선물을 고집하면 두 시세가 섞여 캔들이 튄다.
-    used_market = market
+    def load():
+        used_market = market
+        try:
+            candles = get_recent_klines(symbol, interval=interval, limit=2, market=market)
+        except Exception as first_error:
+            candles = None
+            if market == "futures":
+                try:
+                    candles = get_recent_klines(symbol, interval=interval, limit=2, market="spot")
+                    used_market = "spot"
+                except Exception:
+                    candles = None
+            if candles is None:
+                if isinstance(first_error, NoSpotDataError):
+                    raise
+                raise NoSpotDataError("실시간 시세를 불러오지 못했습니다. 잠시 후 다시 시도하세요.")
+        return candles, used_market
+
     try:
-        candles = get_recent_klines(symbol, interval=interval, limit=2, market=market)
-    except Exception as first_error:
-        candles = None
-        if market == "futures":
-            try:
-                candles = get_recent_klines(symbol, interval=interval, limit=2, market="spot")
-                used_market = "spot"
-            except Exception:
-                candles = None
-        if candles is None:
-            if hit:
-                return {**hit[0], "cached": True, "stale": True}
-            if isinstance(first_error, NoSpotDataError):
-                raise
-            raise NoSpotDataError("실시간 시세를 불러오지 못했습니다. 잠시 후 다시 시도하세요.")
+        if hit:
+            loaded, refresh_state = _refreshes.run(("live", key), load, stale_value=None)
+        else:
+            loaded, refresh_state = _refreshes.run(("live", key), load)
+    except Exception:
+        if hit:
+            return {**hit[0], "cached": True, "stale": True}
+        raise
+    if refresh_state == "stale":
+        return {**hit[0], "cached": True, "stale": True}
+    candles, used_market = loaded
 
     payload = {
         "symbol": symbol,
@@ -169,4 +195,4 @@ def get_live_candles(
         "refresh_seconds": _LIVE_REFRESH_SECONDS,
     }
     _live_cache[key] = (payload, now + _LIVE_REFRESH_SECONDS)
-    return {**payload, "cached": False}
+    return {**payload, "cached": refresh_state == "shared"}

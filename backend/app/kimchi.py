@@ -15,7 +15,7 @@ import os
 import time
 from typing import Optional
 
-import httpx
+from .http_runtime import SingleFlightGroup, get_http_client, run_parallel
 
 _UPBIT = "https://api.upbit.com/v1/ticker"
 # Env-configurable base so a US-hosted deploy can use data-api.binance.vision
@@ -37,6 +37,7 @@ FX_FALLBACK = float(os.environ.get("KIMCHI_FX_FALLBACK", "1380.0"))
 
 # component caches: key -> (value, expires_at)
 _cache: dict[str, tuple[float, float]] = {}
+_refreshes = SingleFlightGroup()
 
 
 def supported_symbols() -> list[str]:
@@ -72,48 +73,63 @@ def _store(key: str, value: float) -> float:
 
 def _upbit_price(market: str) -> Optional[float]:
     key = f"upbit:{market}"
+    hit = _cache.get(key)
     cached = _cached(key)
     if cached is not None:
         return cached
-    try:
-        with httpx.Client(timeout=8.0) as client:
-            resp = client.get(_UPBIT, params={"markets": market})
+
+    def load():
+        try:
+            resp = get_http_client().get(_UPBIT, params={"markets": market})
             resp.raise_for_status()
-            price = float(resp.json()[0]["trade_price"])
-            return _store(key, price)
-    except Exception:
-        return None
+            return _store(key, float(resp.json()[0]["trade_price"]))
+        except Exception:
+            return None
+
+    if hit:
+        return _refreshes.run(key, load, stale_value=hit[0])[0]
+    return _refreshes.run(key, load)[0]
 
 
 def _binance_price(symbol: str) -> Optional[float]:
     key = f"binance:{symbol}"
+    hit = _cache.get(key)
     cached = _cached(key)
     if cached is not None:
         return cached
-    try:
-        with httpx.Client(timeout=8.0) as client:
-            resp = client.get(_BINANCE, params={"symbol": symbol})
+
+    def load():
+        try:
+            resp = get_http_client().get(_BINANCE, params={"symbol": symbol})
             resp.raise_for_status()
-            price = float(resp.json()["price"])
-            return _store(key, price)
-    except Exception:
-        return None
+            return _store(key, float(resp.json()["price"]))
+        except Exception:
+            return None
+
+    if hit:
+        return _refreshes.run(key, load, stale_value=hit[0])[0]
+    return _refreshes.run(key, load)[0]
 
 
 def _usdkrw() -> tuple[float, bool]:
     """Return (rate, is_fallback). Falls back to a constant when the FX API fails."""
     key = "fx:USDKRW"
+    hit = _cache.get(key)
     cached = _cached(key)
     if cached is not None:
         return cached, False
-    try:
-        with httpx.Client(timeout=8.0) as client:
-            resp = client.get(_FX)
+
+    def load():
+        try:
+            resp = get_http_client().get(_FX)
             resp.raise_for_status()
-            rate = float(resp.json()["rates"]["KRW"])
-            return _store(key, rate), False
-    except Exception:
-        return FX_FALLBACK, True
+            return _store(key, float(resp.json()["rates"]["KRW"])), False
+        except Exception:
+            return FX_FALLBACK, True
+
+    if hit:
+        return _refreshes.run(key, load, stale_value=(hit[0], False))[0]
+    return _refreshes.run(key, load)[0]
 
 
 def get_premium(symbol: str = "BTC") -> dict:
@@ -127,9 +143,16 @@ def get_premium(symbol: str = "BTC") -> dict:
         coin = "BTC"
     upbit_market, binance_symbol = _MARKETS[coin]
 
-    upbit = _upbit_price(upbit_market)
-    binance = _binance_price(binance_symbol)
-    fx_rate, fx_fallback = _usdkrw()
+    sources = run_parallel(
+        {
+            "upbit": lambda: _upbit_price(upbit_market),
+            "binance": lambda: _binance_price(binance_symbol),
+            "fx": _usdkrw,
+        }
+    )
+    upbit = sources["upbit"]
+    binance = sources["binance"]
+    fx_rate, fx_fallback = sources["fx"]
 
     result: dict = {
         "symbol": coin,

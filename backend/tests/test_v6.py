@@ -102,8 +102,16 @@ def test_leaderboard_register_list_vote(monkeypatch):
 
     monkeypatch.setattr(paper_mod, "start_session", fake_start)
     monkeypatch.setattr(
-        lb.paper_mod, "get_status",
-        lambda sid: {"current_return": 3.2, "current_equity": 1032000.0, "status": "running"},
+        lb.paper_mod, "get_statuses",
+        lambda ids, *, db=None: {
+            sid: {
+                "current_return": 3.2,
+                "current_equity": 1032000.0,
+                "status": "running",
+                "mode": "live",
+            }
+            for sid in ids
+        },
     )
 
     reg = client.post(

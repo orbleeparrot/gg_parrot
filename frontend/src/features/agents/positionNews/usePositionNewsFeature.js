@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../../api.js";
+import useAdaptivePolling from "../../../hooks/useAdaptivePolling.js";
 
 const POLL_MS = 5 * 60 * 1000;
 const EMPTY_STATE = { status: "idle", sessionId: null, data: null, error: "" };
 
 export function usePositionNewsFeature(sessionId) {
   const [state, setState] = useState(EMPTY_STATE);
-  const timerRef = useRef(null);
   const requestRef = useRef(0);
 
-  const load = useCallback(async (targetSessionId) => {
+  const load = useCallback(async (targetSessionId, signal) => {
     if (!targetSessionId) return;
     const requestId = requestRef.current + 1;
     requestRef.current = requestId;
@@ -20,11 +20,12 @@ export function usePositionNewsFeature(sessionId) {
       error: "",
     }));
     try {
-      const data = await api.agentPositionNews(targetSessionId);
+      const data = await api.agentPositionNews(targetSessionId, { signal });
       if (requestRef.current === requestId) {
         setState({ status: "ready", sessionId: targetSessionId, data, error: "" });
       }
     } catch (reason) {
+      if (reason?.name === "AbortError") return;
       if (requestRef.current === requestId) {
         setState((current) => ({
           status: "error",
@@ -33,8 +34,20 @@ export function usePositionNewsFeature(sessionId) {
           error: String(reason.message || reason),
         }));
       }
+      throw reason;
     }
   }, []);
+
+  const poll = useCallback(
+    (signal) => load(sessionId, signal),
+    [load, sessionId],
+  );
+  useAdaptivePolling(poll, {
+    intervalMs: POLL_MS,
+    maxIntervalMs: 30 * 60 * 1000,
+    enabled: !!sessionId,
+    pollKey: sessionId,
+  });
 
   useEffect(() => {
     if (!sessionId) {
@@ -43,24 +56,10 @@ export function usePositionNewsFeature(sessionId) {
     }
 
     setState({ status: "idle", sessionId, data: null, error: "" });
-    load(sessionId);
-    const poll = () => {
-      if (!document.hidden) load(sessionId);
-      timerRef.current = window.setTimeout(poll, POLL_MS);
-    };
-    const refreshWhenVisible = () => {
-      if (document.hidden) return;
-      window.clearTimeout(timerRef.current);
-      poll();
-    };
-    document.addEventListener("visibilitychange", refreshWhenVisible);
-    timerRef.current = window.setTimeout(poll, POLL_MS);
     return () => {
       requestRef.current += 1;
-      document.removeEventListener("visibilitychange", refreshWhenVisible);
-      window.clearTimeout(timerRef.current);
     };
-  }, [load, sessionId]);
+  }, [sessionId]);
 
   return useMemo(() => (
     String(state.sessionId) === String(sessionId)

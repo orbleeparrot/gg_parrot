@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api.js";
 import InfoTooltip from "./InfoTooltip.jsx";
+import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 
 const KIMCHI_POLL_MS = Number(import.meta.env?.VITE_KIMCHI_POLL_MS) || 15000;
 const FEAR_GREED_POLL_MS = Number(import.meta.env?.VITE_FEARGREED_POLL_MS) || 600000;
@@ -36,78 +37,55 @@ function useMarketIndicators(symbol) {
   const [fearGreed, setFearGreed] = useState(EMPTY_STATE);
   const [hangang, setHangang] = useState(EMPTY_STATE);
 
-  useEffect(() => {
-    let alive = true;
-    let inFlight = false;
-    async function tick() {
-      if (inFlight) return;
-      inFlight = true;
-      try {
-        const data = await api.kimchiPremium(symbol);
-        if (!alive) return;
-        setKimchi({ data: data?.ok ? data : null, loading: false, error: data?.ok ? "" : data?.error || "정보 없음" });
-      } catch (reason) {
-        if (alive) setKimchi((current) => ({ ...current, loading: false, error: String(reason.message || reason) }));
-      } finally {
-        inFlight = false;
-      }
+  const loadKimchi = useCallback(async (signal) => {
+    try {
+      const data = await api.kimchiPremium(symbol, { signal });
+      setKimchi({ data: data?.ok ? data : null, loading: false, error: data?.ok ? "" : data?.error || "정보 없음" });
+    } catch (reason) {
+      if (reason?.name === "AbortError") return;
+      setKimchi((current) => ({ ...current, loading: false, error: String(reason.message || reason) }));
+      throw reason;
     }
-    setKimchi({ data: null, loading: true, error: "" });
-    void tick();
-    const timer = window.setInterval(tick, KIMCHI_POLL_MS);
-    return () => {
-      alive = false;
-      window.clearInterval(timer);
-    };
   }, [symbol]);
 
   useEffect(() => {
-    let alive = true;
-    let inFlight = false;
-    async function tick() {
-      if (inFlight) return;
-      inFlight = true;
-      try {
-        const data = await api.fearGreed();
-        if (!alive) return;
-        setFearGreed({ data: data?.ok ? data : null, loading: false, error: data?.ok ? "" : "정보 없음" });
-      } catch (reason) {
-        if (alive) setFearGreed((current) => ({ ...current, loading: false, error: String(reason.message || reason) }));
-      } finally {
-        inFlight = false;
-      }
-    }
-    void tick();
-    const timer = window.setInterval(tick, FEAR_GREED_POLL_MS);
-    return () => {
-      alive = false;
-      window.clearInterval(timer);
-    };
-  }, []);
+    setKimchi({ data: null, loading: true, error: "" });
+  }, [symbol]);
+  useAdaptivePolling(loadKimchi, {
+    intervalMs: KIMCHI_POLL_MS,
+    maxIntervalMs: 5 * 60_000,
+    pollKey: symbol,
+  });
 
-  useEffect(() => {
-    let alive = true;
-    let inFlight = false;
-    async function tick() {
-      if (inFlight) return;
-      inFlight = true;
-      try {
-        const data = await api.hangangTemp();
-        if (!alive) return;
-        setHangang({ data: data?.ok ? data : null, loading: false, error: data?.ok ? "" : "정보 없음" });
-      } catch (reason) {
-        if (alive) setHangang((current) => ({ ...current, loading: false, error: String(reason.message || reason) }));
-      } finally {
-        inFlight = false;
-      }
+  const loadFearGreed = useCallback(async (signal) => {
+    try {
+      const data = await api.fearGreed({ signal });
+      setFearGreed({ data: data?.ok ? data : null, loading: false, error: data?.ok ? "" : "정보 없음" });
+    } catch (reason) {
+      if (reason?.name === "AbortError") return;
+      setFearGreed((current) => ({ ...current, loading: false, error: String(reason.message || reason) }));
+      throw reason;
     }
-    void tick();
-    const timer = window.setInterval(tick, HANGANG_POLL_MS);
-    return () => {
-      alive = false;
-      window.clearInterval(timer);
-    };
   }, []);
+  useAdaptivePolling(loadFearGreed, {
+    intervalMs: FEAR_GREED_POLL_MS,
+    maxIntervalMs: 60 * 60_000,
+  });
+
+  const loadHangang = useCallback(async (signal) => {
+    try {
+      const data = await api.hangangTemp({ signal });
+      setHangang({ data: data?.ok ? data : null, loading: false, error: data?.ok ? "" : "정보 없음" });
+    } catch (reason) {
+      if (reason?.name === "AbortError") return;
+      setHangang((current) => ({ ...current, loading: false, error: String(reason.message || reason) }));
+      throw reason;
+    }
+  }, []);
+  useAdaptivePolling(loadHangang, {
+    intervalMs: HANGANG_POLL_MS,
+    maxIntervalMs: 60 * 60_000,
+  });
 
   return { kimchi, fearGreed, hangang };
 }

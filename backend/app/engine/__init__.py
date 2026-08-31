@@ -6,7 +6,7 @@ from .schema import (
     Risk,
     RuleType,
 )
-from .backtest import BacktestResult, run_backtest
+from .backtest import BacktestResult, compact_backtest_result, run_backtest
 from .summary import human_summary
 from .explain import Explanation, explain_result
 
@@ -18,6 +18,7 @@ __all__ = [
     "Risk",
     "RuleType",
     "BacktestResult",
+    "compact_backtest_result",
     "run_backtest",
     "human_summary",
     "Explanation",

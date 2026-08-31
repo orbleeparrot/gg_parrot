@@ -24,12 +24,19 @@ from .engine.backtest import BacktestResult
 from .engine.explain import MOODS, Explanation, explain_result
 from .engine.schema import Macro
 from .engine.summary import human_summary
+from .ai_runtime import (
+    AiBusyError,
+    ai_cache_key,
+    get_ai_runtime,
+    get_anthropic_client,
+)
 
 # Default per the claude-api guidance; override with ANTHROPIC_MODEL. For this
 # cheap, high-volume task claude-haiku-4-5 is far more cost-effective — set the
 # env var to switch without a code change.
 _DEFAULT_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-5")
 _MAX_TOKENS = int(os.environ.get("ANTHROPIC_MAX_TOKENS", "2048"))
+_PROMPT_VERSION = "backtest-explanation-v2"
 
 _SYSTEM = (
     "너는 코인 '코린이(초보)'에게 백테스트 결과를 쉽게 풀어주는 도우미 '껄무새'야. "
@@ -121,24 +128,64 @@ def _strip_fences(text: str) -> str:
     return t.strip()
 
 
-def generate(macro: Macro, result: BacktestResult, *, per_symbol=None, model: Optional[str] = None) -> Explanation:
-    """Call Claude and return an AI Explanation. Raises :class:`AiError` on failure."""
+def generate_with_cache_status(
+    macro: Macro,
+    result: BacktestResult,
+    *,
+    per_symbol=None,
+    model: Optional[str] = None,
+) -> tuple[Explanation, str]:
+    """Return an explanation and ``loaded|cached|shared`` runtime state."""
     if not os.environ.get("ANTHROPIC_API_KEY"):
         raise AiError("서버에 Anthropic 키가 설정되지 않았어요.")
-    client = anthropic.Anthropic()
     system = _SYSTEM
     if per_symbol:
         system += (
             " 이건 여러 종목을 함께 굴린 '포트폴리오' 결과야. 종목별 성과 차이(어느 코인이 "
             "끌어올리고 어느 코인이 깎아먹었는지)와 분산 효과 관점도 쉽게 짚어줘."
         )
-    try:
-        resp = client.messages.create(
-            model=model or _DEFAULT_MODEL,
+    selected_model = model or _DEFAULT_MODEL
+    facts = _facts(macro, result, per_symbol)
+    cache_key = ai_cache_key(
+        "backtest-explanation",
+        _PROMPT_VERSION,
+        selected_model,
+        {"system": system, "facts": facts, "max_tokens": _MAX_TOKENS},
+    )
+
+    def load_explanation():
+        response = get_anthropic_client().messages.create(
+            model=selected_model,
             max_tokens=_MAX_TOKENS,
             system=system,
-            messages=[{"role": "user", "content": _USER_PROMPT + _facts(macro, result, per_symbol)}],
+            messages=[{"role": "user", "content": _USER_PROMPT + facts}],
         )
+        text = _extract_text(response)
+        if not text:
+            raise AiError("AI 응답을 해석하지 못했어요.")
+        try:
+            obj = json.loads(_strip_fences(text))
+        except (json.JSONDecodeError, TypeError):
+            raise AiError("AI 응답 형식이 올바르지 않아요.")
+
+        headline = str(obj.get("headline", "")).strip()
+        points = [str(point) for point in obj.get("points", []) if str(point).strip()][:5]
+        if not headline or not points:
+            raise AiError("AI 응답이 비어 있어요.")
+        base_mood = explain_result(macro, result).mood
+        mood = obj.get("mood")
+        return Explanation(
+            mood=mood if mood in MOODS else base_mood,
+            headline=headline,
+            points=points,
+            lesson=str(obj.get("lesson", "")).strip(),
+            source="ai",
+        )
+
+    try:
+        explanation, runtime_state = get_ai_runtime().call(cache_key, load_explanation)
+    except AiBusyError:
+        raise AiError("AI 요청이 몰려 있어요. 잠시 후 다시 시도해 주세요.")
     except (anthropic.AuthenticationError, anthropic.PermissionDeniedError):
         raise AiError("Anthropic 키가 유효하지 않거나 권한이 없어요.")
     except anthropic.RateLimitError:
@@ -151,29 +198,17 @@ def generate(macro: Macro, result: BacktestResult, *, per_symbol=None, model: Op
     except anthropic.APIConnectionError:
         raise AiError("네트워크 오류로 AI 호출에 실패했어요. 잠시 후 다시 시도해 주세요.")
 
-    text = _extract_text(resp)
-    if not text:
-        raise AiError("AI 응답을 해석하지 못했어요.")
-    try:
-        obj = json.loads(_strip_fences(text))
-    except (json.JSONDecodeError, TypeError):
-        raise AiError("AI 응답 형식이 올바르지 않아요.")
+    return explanation, runtime_state
 
-    headline = str(obj.get("headline", "")).strip()
-    # ~10-line cap: headline + up to 5 points + a 1-2 line "apply" lesson.
-    points = [str(p) for p in obj.get("points", []) if str(p).strip()][:5]
-    if not headline or not points:
-        raise AiError("AI 응답이 비어 있어요.")
 
-    base_mood = explain_result(macro, result).mood
-    mood = obj.get("mood")
-    return Explanation(
-        mood=mood if mood in MOODS else base_mood,
-        headline=headline,
-        points=points,
-        lesson=str(obj.get("lesson", "")).strip(),
-        source="ai",
-    )
+def generate(macro: Macro, result: BacktestResult, *, per_symbol=None, model: Optional[str] = None) -> Explanation:
+    """Call Claude and return an AI Explanation. Raises :class:`AiError` on failure."""
+    return generate_with_cache_status(
+        macro,
+        result,
+        per_symbol=per_symbol,
+        model=model,
+    )[0]
 
 
 def enrich(macro: Macro, result: BacktestResult, base: Optional[Explanation] = None) -> Explanation:

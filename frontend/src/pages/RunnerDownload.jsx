@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { api } from "../api.js";
 import RunnerSessions from "../components/RunnerSessions.jsx";
@@ -6,6 +6,7 @@ import { getAuthUser, updateAuthUser, useAuth } from "../lib/auth.js";
 import { RULE_TYPES } from "../lib/macro.js";
 import { getUserId } from "../lib/user.js";
 import { fmtSize, isRunnerOpened, markRunnerOpened, useRunnerDownload } from "../lib/runnerDownload.js";
+import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 
 const BINANCE_KEY_GUIDE_STORAGE_PREFIX = "ggparrot:binance-testnet-key-ready:v1";
 
@@ -401,83 +402,86 @@ export default function RunnerDownload({ embedded = false, onExit }) {
     setApiKeyPrepared(acknowledged);
   }, [apiKeyGuideStorageKey]);
 
-  function mergePerformanceHints(items) {
+  const mergePerformanceHints = useCallback((items) => {
     return items.map((item) => {
       if (item.performance) return item;
       const performance = performanceHintsRef.current.get(String(item.id));
       return performance ? { ...item, performance } : item;
     });
-  }
+  }, []);
 
   useEffect(() => {
     if (!signedIn) {
       performanceHintsRef.current.clear();
       setLibrary([]);
       setLibraryError("");
-      return undefined;
+      setLibraryBusy(false);
+      return;
     }
-    let alive = true;
     setLibrary([]);
     setLibraryError("");
     setLibraryBusy(true);
-    async function loadLibrary({ background = false } = {}) {
-      try {
-        const data = await api.myMacros();
-        if (!alive) return;
-        setLibrary(mergePerformanceHints(Array.isArray(data?.items) ? data.items : []));
-        setLibraryError("");
-      } catch (primaryError) {
-        try {
-          // Compatibility path while an older backend is still running. Its
-          // dashboard already contains registered and unlocked macro JSON.
-          const dashboard = await api.myDashboard();
-          if (!alive) return;
-          setLibrary(mergePerformanceHints(legacyDashboardMacros(dashboard)));
-          setLibraryError("");
-        } catch (_) {
-          if (!alive) return;
-          if (!background) setLibrary([]);
-          setLibraryError(
-            primaryError?.status === 401
-              ? "로그인이 만료됐을 수 있어요. 다시 로그인하거나 아래 방법으로 매크로를 선택해 주세요."
-            : "계정 목록을 확인하지 못했지만, 아래에서 리더보드를 찾거나 직접 만들 수 있어요.",
-          );
-        }
-      } finally {
-        if (alive && !background) setLibraryBusy(false);
-      }
-    }
-    void loadLibrary();
-    const poll = window.setInterval(() => void loadLibrary({ background: true }), 5000);
-    return () => {
-      alive = false;
-      window.clearInterval(poll);
-    };
   }, [signedIn]);
 
-  useEffect(() => {
-    if (!signedIn || libraryView !== "leaderboard") return undefined;
-    let alive = true;
-    setLeaderboardBusy(true);
-    async function loadLeaderboard({ background = false } = {}) {
+  const loadLibrary = useCallback(async (signal) => {
+    try {
+      const data = await api.myMacros({ signal });
+      setLibrary(mergePerformanceHints(Array.isArray(data?.items) ? data.items : []));
+      setLibraryError("");
+    } catch (primaryError) {
+      if (primaryError?.name === "AbortError") throw primaryError;
       try {
-        const data = await api.leaderboard(getUserId());
-        if (!alive) return;
-        setLeaderboardItems(Array.isArray(data?.items) ? data.items : []);
-        setLeaderboardError("");
-      } catch (error) {
-        if (alive) setLeaderboardError(`리더보드를 불러오지 못했어요: ${String(error.message || error)}`);
-      } finally {
-        if (alive && !background) setLeaderboardBusy(false);
+        // Compatibility path while an older backend is still running. Its
+        // dashboard already contains registered and unlocked macro JSON.
+        const dashboard = await api.myDashboard({ signal });
+        setLibrary(mergePerformanceHints(legacyDashboardMacros(dashboard)));
+        setLibraryError("");
+      } catch (fallbackError) {
+        if (fallbackError?.name === "AbortError") throw fallbackError;
+        setLibraryError(
+          primaryError?.status === 401
+            ? "로그인이 만료됐을 수 있어요. 다시 로그인하거나 아래 방법으로 매크로를 선택해 주세요."
+            : "계정 목록을 확인하지 못했지만, 아래에서 리더보드를 찾거나 직접 만들 수 있어요.",
+        );
+        throw fallbackError;
       }
+    } finally {
+      setLibraryBusy(false);
     }
-    void loadLeaderboard();
-    const poll = window.setInterval(() => void loadLeaderboard({ background: true }), 5000);
-    return () => {
-      alive = false;
-      window.clearInterval(poll);
-    };
+  }, [mergePerformanceHints]);
+
+  useAdaptivePolling(loadLibrary, {
+    intervalMs: 5_000,
+    maxIntervalMs: 60_000,
+    enabled: signedIn,
+    pollKey: user?.id || user?.email,
+  });
+
+  useEffect(() => {
+    if (!signedIn || libraryView !== "leaderboard") return;
+    setLeaderboardBusy(true);
   }, [libraryView, signedIn]);
+
+  const loadLeaderboard = useCallback(async (signal) => {
+    try {
+      const data = await api.leaderboard(getUserId(), { signal });
+      setLeaderboardItems(Array.isArray(data?.items) ? data.items : []);
+      setLeaderboardError("");
+    } catch (error) {
+      if (error?.name === "AbortError") throw error;
+      setLeaderboardError(`리더보드를 불러오지 못했어요: ${String(error.message || error)}`);
+      throw error;
+    } finally {
+      setLeaderboardBusy(false);
+    }
+  }, []);
+
+  useAdaptivePolling(loadLeaderboard, {
+    intervalMs: 5_000,
+    maxIntervalMs: 60_000,
+    enabled: signedIn && libraryView === "leaderboard",
+    pollKey: user?.id || user?.email,
+  });
 
   // 회원 키는 로그인하면 미리 받아 둔다(연결 단계에서 바로 복사 가능).
   useEffect(() => {

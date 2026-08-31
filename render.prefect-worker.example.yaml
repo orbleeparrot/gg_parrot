@@ -1,0 +1,27 @@
+# 선택형 예시입니다. 현재 render.yaml을 이 파일로 대체하지 마세요.
+# 아래 service 항목을 실제 Blueprint에 병합하거나 Render에서 직접 생성합니다.
+services:
+  - type: worker
+    name: gg-parrot-position-news
+    runtime: python
+    rootDir: backend
+    plan: starter
+    buildCommand: pip install -r requirements-prefect.txt
+    startCommand: python -m app.workflows.position_news serve
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.7"
+      - key: POSITION_NEWS_REQUIRE_POSTGRES
+        value: "true"
+      - key: POSITION_NEWS_MAX_AI_ANALYSES_PER_DAY
+        value: "120"
+      - key: DATABASE_URL
+        sync: false
+      - key: PREFECT_API_URL
+        sync: false
+      - key: PREFECT_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: ANTHROPIC_MODEL
+        value: "claude-opus-5"

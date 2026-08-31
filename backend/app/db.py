@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import os
-from typing import Optional
+import time
+from contextlib import contextmanager
+from typing import Iterator, Optional
 
-from sqlalchemy import BigInteger
+from sqlalchemy import BigInteger, event
 
 # epoch 밀리초를 담는 컬럼은 반드시 BIGINT 여야 한다. SQLite 의 INTEGER 는
 # 가변 길이(최대 8바이트)라 그냥 들어가지만, Postgres 의 INTEGER 는 정확히
@@ -12,6 +14,8 @@ from sqlalchemy import BigInteger
 # (psycopg.errors.NumericValueOutOfRange). SQLite 로만 개발하면 안 보이고
 # Supabase 로 옮기는 순간 리더보드·채팅·게시판이 전부 500 이 된다.
 from sqlmodel import Field, Session, SQLModel, create_engine
+
+from .observability import record_timing
 
 # Engine selection: DATABASE_URL (Supabase/Postgres) in prod, local SQLite otherwise.
 # This lets us develop & test on SQLite and run durable Postgres in deployment
@@ -35,7 +39,23 @@ def _build_engine():
             url = "postgresql+psycopg://" + url[len("postgresql://"):]
         if url.startswith("postgresql+psycopg://"):
             # pool_pre_ping recycles connections Supabase drops when idle.
-            return create_engine(url, echo=False, pool_pre_ping=True)
+            connect_timeout = max(
+                1,
+                int(os.environ.get("DATABASE_CONNECT_TIMEOUT_SECONDS", "10")),
+            )
+            statement_timeout_ms = max(
+                1_000,
+                int(os.environ.get("DATABASE_STATEMENT_TIMEOUT_MS", "30000")),
+            )
+            return create_engine(
+                url,
+                echo=False,
+                pool_pre_ping=True,
+                connect_args={
+                    "connect_timeout": connect_timeout,
+                    "options": f"-c statement_timeout={statement_timeout_ms}",
+                },
+            )
         # Wrong value (e.g. the https project URL was pasted instead of the
         # Postgres connection string). Don't crash the whole app — fall back to
         # SQLite and warn loudly so the misconfig is obvious in the logs.
@@ -50,6 +70,102 @@ def _build_engine():
 
 
 _engine = _build_engine()
+
+
+def before_cursor_execute(conn, _cursor, _statement, _parameters, _context, _executemany):
+    conn.info.setdefault("ggp_query_started", []).append(time.perf_counter())
+
+
+def after_cursor_execute(conn, _cursor, _statement, _parameters, _context, _executemany):
+    starts = conn.info.get("ggp_query_started") or []
+    if not starts:
+        return
+    started = starts.pop()
+    record_timing("sql", (time.perf_counter() - started) * 1000.0)
+
+
+def handle_query_error(exception_context):
+    conn = exception_context.connection
+    starts = conn.info.get("ggp_query_started") if conn is not None else None
+    if starts:
+        started = starts.pop()
+        record_timing("sql", (time.perf_counter() - started) * 1000.0)
+
+
+event.listen(_engine, "before_cursor_execute", before_cursor_execute)
+event.listen(_engine, "after_cursor_execute", after_cursor_execute)
+event.listen(_engine, "handle_error", handle_query_error)
+
+
+class TracedSession(Session):
+    """Session whose public DB operations include checkout and transaction RTT.
+
+    Cursor events above intentionally measure only SQL execution. These outer
+    operations also cover pool checkout/pre-ping plus commit, rollback, and
+    connection release. Nested calls (for example ``commit`` -> ``flush``) are
+    folded into one span so totals are not double counted.
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._ggp_trace_depth = 0
+
+    @contextmanager
+    def _timed_db_operation(self):
+        outermost = self._ggp_trace_depth == 0
+        started = time.perf_counter() if outermost else 0.0
+        self._ggp_trace_depth += 1
+        try:
+            yield
+        finally:
+            self._ggp_trace_depth -= 1
+            if outermost:
+                record_timing("db", (time.perf_counter() - started) * 1000.0)
+
+    def exec(self, *args, **kwargs):
+        with self._timed_db_operation():
+            return super().exec(*args, **kwargs)
+
+    def execute(self, *args, **kwargs):
+        with self._timed_db_operation():
+            return super().execute(*args, **kwargs)
+
+    def get(self, *args, **kwargs):
+        with self._timed_db_operation():
+            return super().get(*args, **kwargs)
+
+    def connection(self, *args, **kwargs):
+        with self._timed_db_operation():
+            return super().connection(*args, **kwargs)
+
+    def flush(self, *args, **kwargs) -> None:
+        with self._timed_db_operation():
+            super().flush(*args, **kwargs)
+
+    def refresh(self, *args, **kwargs) -> None:
+        with self._timed_db_operation():
+            super().refresh(*args, **kwargs)
+
+    def commit(self) -> None:
+        with self._timed_db_operation():
+            super().commit()
+
+    def rollback(self) -> None:
+        if not self.in_transaction():
+            super().rollback()
+            return
+        with self._timed_db_operation():
+            super().rollback()
+
+    def close(self) -> None:
+        # A second close is a SQLAlchemy-supported no-op and should not create a
+        # synthetic DB span. An active transaction means close will roll it back
+        # and release its pooled connection, which is real DB lifecycle work.
+        if not self.in_transaction():
+            super().close()
+            return
+        with self._timed_db_operation():
+            super().close()
 
 
 def _is_sqlite() -> bool:
@@ -256,6 +372,67 @@ class RunSession(SQLModel, table=True):
     stopped_at: Optional[str] = None
 
 
+class TickerNewsSnapshot(SQLModel, table=True):
+    """One immutable, position-independent news analysis for an asset ticker.
+
+    The central collector claims a unique snapshot before invoking AI. API
+    requests only read completed rows and apply the caller's long/short mapping
+    afterwards, so users never trigger collection or model work themselves.
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    snapshot_key: str = Field(index=True, unique=True)
+    asset_symbol: str = Field(index=True)
+    coin_name: str = ""
+    query: str = ""
+    news_json: str = ""
+    analysis_json: str = ""
+    item_count: int = 0
+    processing_status: str = Field(default="pending", index=True)
+    analysis_status: str = "pending"
+    analysis_source: str = ""
+    prompt_version: str = ""
+    model: str = ""
+    collected_at: str
+    collected_ms: int = Field(sa_type=BigInteger, index=True)
+    claimed_at: str
+    claimed_ms: int = Field(sa_type=BigInteger, index=True)
+    claim_token: str = ""
+    last_observed_at: str = ""
+    last_observed_ms: int = Field(default=0, sa_type=BigInteger)
+    last_observation_seq: int = Field(default=0, sa_type=BigInteger)
+    analysis_attempts: int = 0
+    next_retry_ms: int = Field(default=0, sa_type=BigInteger)
+    completed_at: str = ""
+    completed_ms: int = Field(default=0, sa_type=BigInteger)
+
+
+class TickerNewsState(SQLModel, table=True):
+    """Mutable collection cursor and latest good snapshot for one asset."""
+
+    asset_symbol: str = Field(primary_key=True)
+    latest_snapshot_id: Optional[int] = Field(default=None, index=True)
+    observation_seq: int = Field(default=0, sa_type=BigInteger)
+    latest_observation_seq: int = Field(default=0, sa_type=BigInteger)
+    latest_observed_ms: int = Field(default=0, sa_type=BigInteger)
+    collection_status: str = Field(default="pending", index=True)
+    last_error: str = ""
+    consecutive_failures: int = 0
+    last_attempt_at: str = ""
+    last_attempt_ms: int = Field(default=0, sa_type=BigInteger)
+    last_success_at: str = ""
+    last_success_ms: int = Field(default=0, sa_type=BigInteger, index=True)
+    updated_at: str = ""
+
+
+class TickerNewsAiBudget(SQLModel, table=True):
+    """Durable global daily model-call budget shared by every worker."""
+
+    budget_date_kst: str = Field(primary_key=True)
+    used: int = 0
+    updated_at: str = ""
+
+
 class DailyChallenge(SQLModel, table=True):
     """One day's AI challenge: the chosen symbol for a KST date (idempotency key)."""
 
@@ -373,6 +550,19 @@ def _migrate() -> None:
             "macro_json": "ALTER TABLE runsession ADD COLUMN macro_json TEXT DEFAULT ''",
             "user_macro_id": "ALTER TABLE runsession ADD COLUMN user_macro_id INTEGER",
         },
+        "tickernewssnapshot": {
+            "claim_token": "ALTER TABLE tickernewssnapshot ADD COLUMN claim_token TEXT DEFAULT ''",
+            "last_observed_at": "ALTER TABLE tickernewssnapshot ADD COLUMN last_observed_at TEXT DEFAULT ''",
+            "last_observed_ms": "ALTER TABLE tickernewssnapshot ADD COLUMN last_observed_ms INTEGER DEFAULT 0",
+            "last_observation_seq": "ALTER TABLE tickernewssnapshot ADD COLUMN last_observation_seq INTEGER DEFAULT 0",
+            "analysis_attempts": "ALTER TABLE tickernewssnapshot ADD COLUMN analysis_attempts INTEGER DEFAULT 0",
+            "next_retry_ms": "ALTER TABLE tickernewssnapshot ADD COLUMN next_retry_ms INTEGER DEFAULT 0",
+        },
+        "tickernewsstate": {
+            "observation_seq": "ALTER TABLE tickernewsstate ADD COLUMN observation_seq INTEGER DEFAULT 0",
+            "latest_observation_seq": "ALTER TABLE tickernewsstate ADD COLUMN latest_observation_seq INTEGER DEFAULT 0",
+            "latest_observed_ms": "ALTER TABLE tickernewsstate ADD COLUMN latest_observed_ms INTEGER DEFAULT 0",
+        },
     }
     with _engine.connect() as conn:
         for table, cols in added.items():
@@ -399,10 +589,48 @@ def _migrate_pg() -> None:
         "ALTER TABLE runsession ADD COLUMN IF NOT EXISTS macro_json TEXT DEFAULT ''",
         "ALTER TABLE runsession ADD COLUMN IF NOT EXISTS user_macro_id INTEGER",
         "CREATE INDEX IF NOT EXISTS ix_runsession_user_macro_id ON runsession (user_macro_id)",
+        "ALTER TABLE tickernewssnapshot ADD COLUMN IF NOT EXISTS claim_token TEXT DEFAULT ''",
+        "ALTER TABLE tickernewssnapshot ADD COLUMN IF NOT EXISTS last_observed_at TEXT DEFAULT ''",
+        "ALTER TABLE tickernewssnapshot ADD COLUMN IF NOT EXISTS last_observed_ms BIGINT DEFAULT 0",
+        "ALTER TABLE tickernewssnapshot ADD COLUMN IF NOT EXISTS last_observation_seq BIGINT DEFAULT 0",
+        "ALTER TABLE tickernewssnapshot ADD COLUMN IF NOT EXISTS analysis_attempts INTEGER DEFAULT 0",
+        "ALTER TABLE tickernewssnapshot ADD COLUMN IF NOT EXISTS next_retry_ms BIGINT DEFAULT 0",
+        "ALTER TABLE tickernewsstate ADD COLUMN IF NOT EXISTS observation_seq BIGINT DEFAULT 0",
+        "ALTER TABLE tickernewsstate ADD COLUMN IF NOT EXISTS latest_observation_seq BIGINT DEFAULT 0",
+        "ALTER TABLE tickernewsstate ADD COLUMN IF NOT EXISTS latest_observed_ms BIGINT DEFAULT 0",
     ]
+    bigint_columns = {
+        "tickernewssnapshot": (
+            "collected_ms",
+            "claimed_ms",
+            "last_observed_ms",
+            "last_observation_seq",
+            "next_retry_ms",
+            "completed_ms",
+        ),
+        "tickernewsstate": (
+            "observation_seq",
+            "latest_observation_seq",
+            "latest_observed_ms",
+            "last_attempt_ms",
+            "last_success_ms",
+        ),
+    }
     with _engine.connect() as conn:
         for ddl in stmts:
             conn.exec_driver_sql(ddl)
+        for table, columns in bigint_columns.items():
+            for column in columns:
+                row = conn.exec_driver_sql(
+                    "SELECT data_type FROM information_schema.columns "
+                    f"WHERE table_schema = current_schema() AND table_name = '{table}' "
+                    f"AND column_name = '{column}'"
+                ).first()
+                if row is not None and row[0] != "bigint":
+                    conn.exec_driver_sql(
+                        f"ALTER TABLE {table} ALTER COLUMN {column} "
+                        f"TYPE BIGINT USING {column}::bigint"
+                    )
         conn.commit()
 
 
@@ -417,4 +645,15 @@ def init_db() -> None:
 
 
 def get_session() -> Session:
-    return Session(_engine)
+    return TracedSession(_engine)
+
+
+def request_session() -> Iterator[Session]:
+    """FastAPI dependency: one SQLAlchemy Session shared within one request."""
+    with get_session() as session:
+        yield session
+
+
+def database_dialect() -> str:
+    """Expose the configured store type without leaking the engine itself."""
+    return str(_engine.dialect.name)

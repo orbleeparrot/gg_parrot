@@ -16,7 +16,7 @@ import {
   insertRelative,
 } from "../lib/resultLayout.js";
 
-const AI_EXPLAIN_MASCOT = "/brand/navigation/ggparrot-nav-agent.png";
+const AI_EXPLAIN_MASCOT = "/brand/navigation/ggparrot-nav-agent.svg";
 
 // mascot mood -> accent color for the AI analysis card (neutral fallback).
 const MOOD_ACCENT = {

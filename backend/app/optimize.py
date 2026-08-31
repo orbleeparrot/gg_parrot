@@ -22,11 +22,15 @@ span the same bars a single full-period run would.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
+import hashlib
+import json
+import os
 from typing import List, Optional
 
 import pandas as pd
 
-from .data import resolve_period
+from .data import estimate_bar_count, resolve_period
 from .engine import Macro, run_backtest
 from .marketdata import fetch_klines_for_macro
 
@@ -41,10 +45,26 @@ SPLIT_RATIO = 0.7
 # split is skipped and the sweep degrades to the old single-period behaviour.
 MIN_SPLIT_BARS = 30
 
+# A grid evaluates each accepted bar many times, so its cap is deliberately
+# stricter than the ordinary one-shot backtest cap.
+OPTIMIZE_MAX_BARS = max(1_000, int(os.environ.get("OPTIMIZE_MAX_BARS", "10000")))
+
 # Only rule types that carry a take_profit_pct in params can be swept this way.
 _TP_PARAM = "take_profit_pct"
 
 UNSUPPORTED_MSG = "이 규칙 타입은 익절/손절 자동 최적화를 지원하지 않습니다 (규칙 A에서 사용하세요)."
+
+
+@dataclass(frozen=True)
+class PreparedOptimization:
+    """Network/cache preparation done in web process; CPU payload is picklable."""
+
+    macro_payload: dict
+    frame: pd.DataFrame
+    source: str
+    tp_values: List[float]
+    sl_values: List[float]
+    cache_key: str
 
 
 def _clean_axis(values: Optional[List[float]], fallback: List[float]) -> List[float]:
@@ -79,6 +99,77 @@ def _variant(macro: Macro, tp: float, sl: float) -> Macro:
     )
 
 
+def _frame_fingerprint(df: pd.DataFrame) -> str:
+    columns = ["timestamp", "open", "high", "low", "close", "volume"]
+    normalized = df.loc[:, columns].reset_index(drop=True)
+    hashed = pd.util.hash_pandas_object(normalized, index=False).to_numpy().tobytes()
+    return hashlib.sha256(hashed).hexdigest()
+
+
+def _macro_calculation_payload(macro: Macro) -> dict:
+    payload = macro.model_dump(mode="json")
+    for identity_key in ("macro_id", "share_slug", "created_at"):
+        payload.pop(identity_key, None)
+    return payload
+
+
+def prepare_optimization(
+    macro: Macro,
+    tp_values: Optional[List[float]] = None,
+    sl_values: Optional[List[float]] = None,
+) -> PreparedOptimization:
+    """Fetch once, enforce the grid budget, and build a data-aware cache key."""
+    if _TP_PARAM not in macro.params:
+        raise ValueError(UNSUPPORTED_MSG)
+
+    tps = _clean_axis(tp_values, DEFAULT_TP)
+    sls = _clean_axis(sl_values, DEFAULT_SL)
+    start_ms, end_ms = resolve_period(macro.period.preset, macro.period.start, macro.period.end)
+    estimated = estimate_bar_count(macro.candle_interval, start_ms, end_ms)
+    if estimated > OPTIMIZE_MAX_BARS:
+        raise ValueError(
+            f"최적화 기간은 약 {estimated:,}개 봉입니다. 최대 {OPTIMIZE_MAX_BARS:,}개까지 "
+            "가능하니 기간을 줄이거나 더 큰 캔들 간격을 선택해 주세요."
+        )
+
+    df, source = fetch_klines_for_macro(macro, start_ms, end_ms)
+    if len(df) > OPTIMIZE_MAX_BARS:
+        raise ValueError(
+            f"최적화 데이터가 {len(df):,}개 봉으로 최대 {OPTIMIZE_MAX_BARS:,}개를 초과했습니다."
+        )
+
+    macro_payload = _macro_calculation_payload(macro)
+    key_payload = {
+        "version": 1,
+        "macro": macro_payload,
+        "tp_values": tps,
+        "sl_values": sls,
+        "frame": _frame_fingerprint(df),
+    }
+    cache_key = hashlib.sha256(
+        json.dumps(key_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return PreparedOptimization(
+        macro_payload=macro_payload,
+        frame=df,
+        source=source,
+        tp_values=tps,
+        sl_values=sls,
+        cache_key=cache_key,
+    )
+
+
+def run_prepared_optimization(prepared: PreparedOptimization) -> dict:
+    """CPU-only grid evaluation, safe to execute in a worker process."""
+    macro = Macro.model_validate(prepared.macro_payload)
+    tps = prepared.tp_values
+    sls = prepared.sl_values
+    df = prepared.frame
+    source = prepared.source
+
+    return _run_grid(macro, df, source, tps, sls)
+
+
 def optimize_tp_sl(
     macro: Macro,
     tp_values: Optional[List[float]] = None,
@@ -89,14 +180,16 @@ def optimize_tp_sl(
     Raises ``ValueError`` when the rule type has no ``take_profit_pct`` to sweep.
     Propagates ``NoSpotDataError`` from the data layer (no synthetic fallback).
     """
-    if _TP_PARAM not in macro.params:
-        raise ValueError(UNSUPPORTED_MSG)
+    return run_prepared_optimization(prepare_optimization(macro, tp_values, sl_values))
 
-    tps = _clean_axis(tp_values, DEFAULT_TP)
-    sls = _clean_axis(sl_values, DEFAULT_SL)
 
-    start_ms, end_ms = resolve_period(macro.period.preset, macro.period.start, macro.period.end)
-    df, source = fetch_klines_for_macro(macro, start_ms, end_ms)
+def _run_grid(
+    macro: Macro,
+    df: pd.DataFrame,
+    source: str,
+    tps: List[float],
+    sls: List[float],
+) -> dict:
 
     train_df, test_df = split_period(df)
     split_on = train_df is not None

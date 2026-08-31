@@ -18,6 +18,7 @@ Execution assumptions (also documented in README):
 from __future__ import annotations
 
 import math
+import os
 from typing import List, Optional
 
 import pandas as pd
@@ -62,6 +63,75 @@ class BacktestResult(BaseModel):
     profit_factor: Optional[float] = None
     # Longest run of consecutive losing trades (a streak-risk read-out).
     max_consecutive_losses: int = 0
+
+
+BACKTEST_EQUITY_MAX_POINTS = max(
+    2,
+    int(os.environ.get("BACKTEST_EQUITY_MAX_POINTS", "1000")),
+)
+
+
+def _lttb_equity_points(curve: List[EquityPoint], limit: int) -> List[EquityPoint]:
+    """Largest-Triangle-Three-Buckets sampling using point order as the x-axis."""
+    if limit >= len(curve) or limit <= 0:
+        return list(curve)
+    if limit == 2:
+        return [curve[0], curve[-1]]
+
+    bucket_width = (len(curve) - 2) / (limit - 2)
+    sampled = [curve[0]]
+    anchor_index = 0
+
+    for bucket in range(limit - 2):
+        average_start = int(math.floor((bucket + 1) * bucket_width)) + 1
+        average_end = int(math.floor((bucket + 2) * bucket_width)) + 1
+        average_end = min(average_end, len(curve))
+        if average_start >= average_end:
+            average_x = float(len(curve) - 1)
+            average_y = curve[-1].equity
+        else:
+            count = average_end - average_start
+            average_x = sum(range(average_start, average_end)) / count
+            average_y = sum(curve[index].equity for index in range(average_start, average_end)) / count
+
+        range_start = int(math.floor(bucket * bucket_width)) + 1
+        range_end = int(math.floor((bucket + 1) * bucket_width)) + 1
+        range_end = min(range_end, len(curve) - 1)
+        anchor_y = curve[anchor_index].equity
+        largest_area = -1.0
+        selected_index = range_start
+        for index in range(range_start, max(range_start + 1, range_end)):
+            area = abs(
+                (anchor_index - average_x) * (curve[index].equity - anchor_y)
+                - (anchor_index - index) * (average_y - anchor_y)
+            )
+            if area > largest_area:
+                largest_area = area
+                selected_index = index
+        sampled.append(curve[selected_index])
+        anchor_index = selected_index
+
+    sampled.append(curve[-1])
+    return sampled
+
+
+def compact_backtest_result(
+    result: BacktestResult,
+    *,
+    max_points: Optional[int] = None,
+) -> BacktestResult:
+    """Copy a result with a bounded public equity curve.
+
+    Metrics are calculated from the full curve before this function is called.
+    Evenly spaced sampling keeps the first and final values and never mutates
+    the engine result used by portfolio aggregation or AI explanations.
+    """
+    limit = BACKTEST_EQUITY_MAX_POINTS if max_points is None else max(2, int(max_points))
+    curve = result.equity_curve
+    if len(curve) <= limit:
+        return result.model_copy(deep=True)
+    sampled = _lttb_equity_points(curve, limit)
+    return result.model_copy(update={"equity_curve": sampled}, deep=True)
 
 
 # Fill-price / execution logic lives in stepper.py (shared with paper trading).

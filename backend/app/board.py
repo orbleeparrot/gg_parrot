@@ -194,8 +194,11 @@ def delete_post(post_id: int, user_id: int) -> bool:
         return True
 
 
-def my_posts(user_id: int, limit: int = 50) -> list[dict]:
-    with get_session() as db:
+def my_posts(user_id: int, limit: int = 50, db=None) -> list[dict]:
+    from contextlib import nullcontext
+
+    session_scope = nullcontext(db) if db is not None else get_session()
+    with session_scope as db:
         rows = db.exec(
             select(BoardPost)
             .where(BoardPost.author_user_id == user_id)

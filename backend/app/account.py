@@ -7,9 +7,11 @@ theirs, and the recent points ledger. Pure DB reads — no mutations.
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
-from sqlmodel import select
+from sqlmodel import Session, select
 
 from . import points as points_mod
 from .db import LeaderboardEntry, MacroUnlock, PointLedger, User, get_session
@@ -48,8 +50,9 @@ def _tier(total_sales: int) -> dict:
     }
 
 
-def dashboard(user: User) -> dict:
-    with get_session() as db:
+def dashboard(user: User, db: Optional[Session] = None) -> dict:
+    session_scope = nullcontext(db) if db is not None else get_session()
+    with session_scope as db:
         uid = user.id
         fresh = db.get(User, uid) or user
 

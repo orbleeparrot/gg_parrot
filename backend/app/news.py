@@ -109,6 +109,10 @@ _COIN_ALIASES = {
     "HBAR": ("hedera", "hedera hashgraph"),
     "VET": ("vechain",),
     "EDEN": ("openeden", "open eden", "eden token"),
+    # Connected macros may trade assets outside the fixed `_COIN_KO` universe.
+    # Keep project aliases separate from `_COIN_KO` so BMT is collected only
+    # while a real runner session is active.
+    "BMT": ("bubblemaps",),
 }
 
 # These symbols are ordinary English words or common abbreviations. Matching
@@ -179,6 +183,14 @@ _COIN_GOOGLE_QUERIES = {
         (
             '(EDEN coin OR EDEN crypto OR EDEN token OR $EDEN OR EDEN USDT OR '
             'EDEN listing OR EDEN price) when:30d',
+            "en",
+        ),
+    ),
+    "BMT": (
+        ('(BMT 코인 OR BMT 토큰 OR 버블맵스) when:30d', "ko"),
+        (
+            '(BMT coin OR BMT crypto OR BMT token OR $BMT OR BMT USDT OR '
+            'Bubblemaps) when:30d',
             "en",
         ),
     ),
@@ -1273,14 +1285,26 @@ def _coin_news_envelope(
     if not base:
         return _envelope([], overview=None, label="코인 뉴스", query="")
     name = _COIN_KO.get(base, base)
-    queries = _COIN_GOOGLE_QUERIES.get(
-        base,
-        ((f"{name} 코인 when:7d", "ko"),),
-    )
+    queries = _COIN_GOOGLE_QUERIES.get(base)
+    if queries is None:
+        if base in _COIN_KO:
+            queries = ((f"{name} 코인 when:7d", "ko"),)
+        else:
+            # A connected macro can use an exchange ticker outside the fixed
+            # Korean-name catalogue. Search both locales and explicit crypto
+            # context instead of relying on a single Korean ticker query.
+            queries = (
+                (f"({base} 코인 OR {base} 토큰) when:30d", "ko"),
+                (
+                    f"({base} coin OR {base} crypto OR {base} token OR "
+                    f"${base} OR {base} USDT) when:30d",
+                    "en",
+                ),
+            )
     batches: list[list[dict]] = []
     failures = 0
     candidate_count = 0
-    candidate_limit = 50 if base == "EDEN" else 20
+    candidate_limit = 50 if len(queries) > 1 else 20
 
     def fetch_query(query: str, locale: str) -> tuple[list[dict], bool]:
         try:

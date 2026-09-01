@@ -1,9 +1,9 @@
 # 포지션 뉴스 중앙 수집 워커
 
-포지션 뉴스는 사용자나 매크로마다 뉴스·AI를 실행하지 않습니다. `_COIN_KO` 기본 지원 자산을 한 번 수집·분석해 공용 DB에 저장하고, API 조회 시 등록된 롱/숏 방향만 결정론적으로 적용합니다.
+포지션 뉴스는 사용자나 매크로마다 뉴스·AI를 실행하지 않습니다. `_COIN_KO` 기본 지원 자산과 실제 연결 중인 매크로 자산을 한 번 수집·분석해 공용 DB에 저장하고, API 조회 시 등록된 롱/숏 방향만 결정론적으로 적용합니다.
 
 ```text
-                  `app.news._COIN_KO` 기본 코인
+ `_COIN_KO` 기본 코인 + 최근 heartbeat가 있는 실행 세션 티커
                          │
                          ▼
               Prefect 5분 스케줄/재시도
@@ -27,7 +27,7 @@ Prefect는 오케스트레이션만 담당합니다. Prefect 캐시나 프로세
 ## 현재 계약
 
 - 수집 범위는 `app.news._COIN_KO`에 정의된 전체 기본 지원 코인을 항상 포함합니다.
-- 실행 세션이나 운영자 환경변수에 기본 목록 밖 티커가 있어도 중앙 수집 범위에 추가하지 않습니다.
+- 최근 60초 안에 heartbeat가 들어온 실행 세션의 티커도 수집합니다. DB에 `running`으로 남은 연결 끊긴 세션과 운영자 환경변수의 임의 티커는 제외합니다.
 - `BTCUSDT`, `BTCUSDC`, `BTCBUSD`는 모두 공용 자산 `BTC` 하나로 정규화됩니다.
 - 처리 대상은 DB의 `last_attempt_ms`가 오래된 티커부터 정렬해 deadline이 반복돼도 뒤쪽 티커가 굶지 않게 합니다.
 - 수집은 기본 5분 주기이며, 기사 묶음 fingerprint가 바뀐 경우에만 분석을 시도합니다.
@@ -140,6 +140,7 @@ python -m app.workflows.position_news serve
 | 환경변수 | 기본값 | 의미 |
 |---|---:|---|
 | `POSITION_NEWS_COLLECTION_SECONDS` | 300 | 수집 주기(최소 60초) |
+| `POSITION_NEWS_ACTIVE_SESSION_SECONDS` | 60 | 기본 목록 밖 실행 티커를 활성으로 인정할 heartbeat 최대 나이 |
 | `POSITION_NEWS_MAX_SCHEDULE_LAG_SECONDS` | 600 | 이보다 늦은 backlog run은 no-op |
 | `DATABASE_CONNECT_TIMEOUT_SECONDS` | 10 | Postgres 연결 timeout |
 | `DATABASE_STATEMENT_TIMEOUT_MS` | 30000 | Postgres statement timeout |

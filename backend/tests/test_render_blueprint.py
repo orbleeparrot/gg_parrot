@@ -44,4 +44,5 @@ def test_prefect_serve_pauses_schedule_when_worker_stops():
     ).read_text(encoding="utf-8")
 
     assert "pause_on_shutdown=True" in workflow
+    assert "paused=False" in workflow
     assert "pause_on_shutdown=False" not in workflow

@@ -57,6 +57,10 @@ _COINDESK_RSS = """<?xml version="1.0" encoding="UTF-8"?>
 </channel></rss>"""
 
 
+def _empty_coindesk_discovery(**_kwargs):
+    return {"items": [], "items_by_source": {}, "sources": []}
+
+
 def test_parse_extracts_fields_and_strips_source_suffix():
     items = news._parse_rss(_RSS)
     assert len(items) == 2  # 세 번째는 제목 중복 → 제거
@@ -333,6 +337,8 @@ def test_worker_merges_coindesk_rss_and_filters_each_source_by_asset(monkeypatch
             return FakeResponse()
 
     monkeypatch.setattr(news, "_coindesk_cache", None, raising=False)
+    monkeypatch.setattr(news, "_coindesk_discovery_cache", None, raising=False)
+    monkeypatch.setattr(news, "_coindesk_discovery_error_cache", None, raising=False)
     monkeypatch.setattr(news, "_fetch_news", lambda *_args, **_kwargs: google_items)
     monkeypatch.setattr(
         news,
@@ -352,14 +358,43 @@ def test_worker_merges_coindesk_rss_and_filters_each_source_by_asset(monkeypatch
     assert payload["items"][0]["categories"] == ["Finance", "Tokenization"]
     assert payload["items"][0]["feed_source"] == "coindesk_rss"
     assert payload["items"][1]["feed_source"] == "google_news_rss"
-    assert {
+    source_states = {
         source["name"]: (source["status"], source["item_count"])
         for source in payload["sources"]
+    }
+    assert {
+        name: source_states[name]
+        for name in {
+            "openeden_official_rss",
+            "coindesk_rss",
+            "google_news_rss",
+        }
     } == {
         "openeden_official_rss": ("ready", 0),
         "coindesk_rss": ("ready", 1),
         "google_news_rss": ("ready", 1),
     }
+    assert {
+        name for name in source_states if name.startswith("coindesk_section_")
+    } == {
+        "coindesk_section_markets",
+        "coindesk_section_policy",
+        "coindesk_section_tech",
+        "coindesk_section_business",
+    }
+    assert {
+        name for name in source_states if name.startswith("coindesk_topic_")
+    } == {
+        "coindesk_topic_bitcoin",
+        "coindesk_topic_ethereum",
+        "coindesk_topic_ripple",
+        "coindesk_topic_solana",
+    }
+    assert all(
+        state == ("ready", 0)
+        for name, state in source_states.items()
+        if name.startswith(("coindesk_section_", "coindesk_topic_"))
+    )
     assert calls == ["https://www.coindesk.com/arc/outboundfeeds/rss/"]
 
 
@@ -432,6 +467,11 @@ def test_eden_uses_korean_and_english_google_queries(monkeypatch):
         ][:limit]
 
     monkeypatch.setattr(news, "_fetch_news", fake_fetch)
+    monkeypatch.setattr(
+        news,
+        "_fetch_coindesk_discovery_news",
+        _empty_coindesk_discovery,
+    )
     monkeypatch.setattr(news, "_fetch_coindesk_news", lambda **_kwargs: [])
     monkeypatch.setattr(
         news,
@@ -547,6 +587,11 @@ def test_eden_includes_recent_official_openeden_rss_and_drops_old_items(monkeypa
 
     monkeypatch.setattr(news, "_openeden_cache", None, raising=False)
     monkeypatch.setattr(news, "_fetch_news", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        news,
+        "_fetch_coindesk_discovery_news",
+        _empty_coindesk_discovery,
+    )
     monkeypatch.setattr(news, "_fetch_coindesk_news", lambda **_kwargs: [])
     monkeypatch.setattr(news.httpx, "Client", lambda **_kwargs: FakeClient())
 
@@ -587,6 +632,11 @@ def test_coindesk_feed_is_shared_across_tickers_and_uses_category_tags(monkeypat
 
     monkeypatch.setattr(news, "_coindesk_cache", None, raising=False)
     monkeypatch.setattr(news, "_fetch_news", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        news,
+        "_fetch_coindesk_discovery_news",
+        _empty_coindesk_discovery,
+    )
     monkeypatch.setattr(news.httpx, "Client", lambda **_kwargs: FakeClient())
 
     bitcoin = news.fetch_coin_news_for_collector("BTC")
@@ -620,6 +670,445 @@ def test_news_merge_keeps_source_diversity_when_one_feed_exceeds_limit(monkeypat
         "coindesk_rss",
         "google_news_rss",
     ]
+
+
+def test_coindesk_discovery_fetches_requested_sections_and_topics_once(monkeypatch):
+    calls = []
+
+    def fake_fetch(query, *, limit, strict, locale):
+        calls.append((query, limit, strict, locale))
+        return [
+            {
+                "title": f"CoinDesk result for {query}",
+                "source": "CoinDesk",
+                "url": f"https://news.google.com/rss/articles/{len(calls)}",
+                "published": "2026-09-01T00:00:00+00:00",
+                "published_display": "1시간 전",
+            },
+            {
+                "title": "Unexpected publisher",
+                "source": "Other News",
+                "url": "https://news.google.com/rss/articles/other",
+                "published": "2026-09-01T00:00:00+00:00",
+                "published_display": "1시간 전",
+            },
+        ]
+
+    monkeypatch.setattr(news, "_fetch_news", fake_fetch)
+    monkeypatch.setattr(news, "_coindesk_discovery_cache", None, raising=False)
+    monkeypatch.setattr(news, "_coindesk_discovery_error_cache", None, raising=False)
+
+    first = news._fetch_coindesk_discovery_news(strict=True)
+    second = news._fetch_coindesk_discovery_news(strict=True)
+
+    expected_names = {
+        "coindesk_section_markets",
+        "coindesk_section_policy",
+        "coindesk_section_tech",
+        "coindesk_section_business",
+        "coindesk_topic_bitcoin",
+        "coindesk_topic_ethereum",
+        "coindesk_topic_ripple",
+        "coindesk_topic_solana",
+    }
+    assert {source["name"] for source in first["sources"]} == expected_names
+    assert all(source["status"] == "ready" for source in first["sources"])
+    assert all(source["fetched_count"] == 1 for source in first["sources"])
+    assert len(first["items"]) == 8
+    assert first == second
+    assert len(calls) == 8
+    assert all(
+        limit == 50 and strict and locale == "en"
+        for _, limit, strict, locale in calls
+    )
+    assert all(item["source"] == "CoinDesk" for item in first["items"])
+    assert {
+        item["feed_source"] for item in first["items"]
+    } == {
+        "coindesk_section_google_rss",
+        "coindesk_topic_google_rss",
+    }
+
+
+def test_coindesk_discovery_reuses_stale_bundle_after_refresh_failure(monkeypatch):
+    now = [100.0]
+    calls = []
+    failing = [False]
+
+    def fake_fetch(query, **_kwargs):
+        calls.append(query)
+        if failing[0]:
+            raise news.NewsFetchError("upstream unavailable")
+        return [{"title": f"CoinDesk {query}", "source": "CoinDesk"}]
+
+    monkeypatch.setattr(news.time, "time", lambda: now[0])
+    monkeypatch.setattr(news, "_fetch_news", fake_fetch)
+    monkeypatch.setattr(news, "_coindesk_discovery_cache", None, raising=False)
+    monkeypatch.setattr(news, "_coindesk_discovery_error_cache", None, raising=False)
+
+    fresh = news._fetch_coindesk_discovery_news(strict=True)
+    failing[0] = True
+    now[0] += news._COIN_CACHE_SECONDS + 1
+    stale = news._fetch_coindesk_discovery_news(strict=True)
+
+    assert stale["items"] == fresh["items"]
+    assert all(source["status"] == "stale" for source in stale["sources"])
+    assert len(calls) == 16
+
+
+def test_coindesk_discovery_failure_cache_last_for_full_collection_cycle(monkeypatch):
+    now = [100.0]
+    calls = []
+
+    def fail(query, **_kwargs):
+        calls.append(query)
+        raise news.NewsFetchError("upstream unavailable")
+
+    monkeypatch.setattr(news.time, "time", lambda: now[0])
+    monkeypatch.setattr(news, "_fetch_news", fail)
+    monkeypatch.setattr(news, "_coindesk_discovery_cache", None, raising=False)
+    monkeypatch.setattr(news, "_coindesk_discovery_error_cache", None, raising=False)
+
+    with pytest.raises(news.NewsFetchError):
+        news._fetch_coindesk_discovery_news(strict=True)
+    now[0] += 61
+    with pytest.raises(news.NewsFetchError):
+        news._fetch_coindesk_discovery_news(strict=True)
+
+    assert len(calls) == 8
+
+
+def test_coindesk_discovery_keeps_only_failed_source_stale(monkeypatch):
+    now = [100.0]
+    refresh = [False]
+    markets_query = "site:coindesk.com/markets when:30d"
+
+    def fake_fetch(query, **_kwargs):
+        if refresh[0] and query == markets_query:
+            raise news.NewsFetchError("markets unavailable")
+        prefix = "new" if refresh[0] else "old"
+        return [{"title": f"{prefix} {query}", "source": "CoinDesk"}]
+
+    monkeypatch.setattr(news.time, "time", lambda: now[0])
+    monkeypatch.setattr(news, "_fetch_news", fake_fetch)
+    monkeypatch.setattr(news, "_coindesk_discovery_cache", None, raising=False)
+    monkeypatch.setattr(news, "_coindesk_discovery_error_cache", None, raising=False)
+
+    fresh = news._fetch_coindesk_discovery_news(strict=True)
+    old_markets = fresh["items_by_source"]["coindesk_section_markets"]
+    refresh[0] = True
+    now[0] += news._COIN_CACHE_SECONDS + 1
+    partial = news._fetch_coindesk_discovery_news(strict=True)
+    sources = {source["name"]: source for source in partial["sources"]}
+
+    assert partial["items_by_source"]["coindesk_section_markets"] == old_markets
+    assert sources["coindesk_section_markets"]["status"] == "stale"
+    assert sources["coindesk_section_policy"]["status"] == "ready"
+    assert partial["items_by_source"]["coindesk_section_policy"][0][
+        "title"
+    ].startswith("new ")
+
+
+def test_coindesk_discovery_does_not_promote_never_ready_source_to_stale(monkeypatch):
+    now = [100.0]
+    markets_query = "site:coindesk.com/markets when:30d"
+
+    def fake_fetch(query, **_kwargs):
+        if query == markets_query:
+            raise news.NewsFetchError("markets unavailable")
+        return [{"title": query, "source": "CoinDesk"}]
+
+    monkeypatch.setattr(news.time, "time", lambda: now[0])
+    monkeypatch.setattr(news, "_fetch_news", fake_fetch)
+    monkeypatch.setattr(news, "_coindesk_discovery_cache", None, raising=False)
+    monkeypatch.setattr(news, "_coindesk_discovery_error_cache", None, raising=False)
+
+    first = news._fetch_coindesk_discovery_news(strict=True)
+    now[0] += news._COIN_CACHE_SECONDS + 1
+    second = news._fetch_coindesk_discovery_news(strict=True)
+
+    for payload in (first, second):
+        source = next(
+            item
+            for item in payload["sources"]
+            if item["name"] == "coindesk_section_markets"
+        )
+        assert source["status"] == "error"
+
+
+def test_coindesk_discovery_stale_bundle_has_maximum_age(monkeypatch):
+    now = [100.0]
+    failing = [False]
+
+    def fake_fetch(query, **_kwargs):
+        if failing[0]:
+            raise news.NewsFetchError("upstream unavailable")
+        return [{"title": query, "source": "CoinDesk"}]
+
+    monkeypatch.setattr(news.time, "time", lambda: now[0])
+    monkeypatch.setattr(news, "_fetch_news", fake_fetch)
+    monkeypatch.setattr(news, "_coindesk_discovery_cache", None, raising=False)
+    monkeypatch.setattr(news, "_coindesk_discovery_error_cache", None, raising=False)
+
+    news._fetch_coindesk_discovery_news(strict=True)
+    failing[0] = True
+    now[0] += news._COINDESK_DISCOVERY_MAX_STALE_SECONDS + 1
+
+    with pytest.raises(news.NewsFetchError):
+        news._fetch_coindesk_discovery_news(strict=True)
+
+
+def test_collector_merges_relevant_coindesk_discovery_source(monkeypatch):
+    xrp = {
+        "title": "Ripple prepares XRP Ledger for quantum computers",
+        "source": "CoinDesk",
+        "url": "https://news.google.com/rss/articles/xrp",
+        "published": "2026-08-29T05:48:04+00:00",
+        "published_display": "3일 전",
+        "feed_source": "coindesk_topic_google_rss",
+        "source_scope": "ripple",
+        "source_page": "https://www.coindesk.com/tag/ripple",
+    }
+    ethereum = {
+        "title": "Ethereum developers prepare a new upgrade",
+        "source": "CoinDesk",
+        "url": "https://news.google.com/rss/articles/eth",
+        "published": "2026-08-29T04:00:00+00:00",
+        "published_display": "3일 전",
+        "feed_source": "coindesk_section_google_rss",
+        "source_scope": "tech",
+        "source_page": "https://www.coindesk.com/tech",
+    }
+    discovery = {
+        "items": [xrp, ethereum],
+        "items_by_source": {
+            "coindesk_topic_ripple": [xrp],
+            "coindesk_section_tech": [ethereum],
+        },
+        "sources": [
+            {
+                "name": "coindesk_topic_ripple",
+                "source_type": "coindesk_topic_google_rss",
+                "source_page": "https://www.coindesk.com/tag/ripple",
+                "status": "ready",
+                "fetched_count": 1,
+            },
+            {
+                "name": "coindesk_section_tech",
+                "source_type": "coindesk_section_google_rss",
+                "source_page": "https://www.coindesk.com/tech",
+                "status": "ready",
+                "fetched_count": 1,
+            },
+        ],
+    }
+
+    monkeypatch.setattr(
+        news,
+        "_fetch_coindesk_discovery_news",
+        lambda **_kwargs: discovery,
+    )
+    monkeypatch.setattr(
+        news,
+        "_coin_news_envelope",
+        lambda *_args, **_kwargs: {"items": [], "candidate_count": 0, "query": "XRP"},
+    )
+    monkeypatch.setattr(news, "_fetch_coindesk_news", lambda **_kwargs: [])
+
+    payload = news.fetch_coin_news_for_collector("XRP")
+
+    assert payload["items"] == [xrp]
+    sources = {source["name"]: source for source in payload["sources"]}
+    assert sources["coindesk_topic_ripple"]["item_count"] == 1
+    assert sources["coindesk_section_tech"]["item_count"] == 0
+
+
+def test_all_supported_assets_have_english_news_aliases():
+    assert set(news._COIN_KO) <= set(news._COIN_ALIASES)
+
+
+@pytest.mark.parametrize(
+    ("symbol", "coin_name", "title"),
+    [
+        ("AVAX", "아발란체", "Avalanche launches a new subnet"),
+        ("LINK", "체인링크", "Chainlink expands its data platform"),
+        ("ADA", "에이다", "Cardano developers publish a roadmap"),
+        ("DOT", "폴카닷", "Polkadot governance approves an upgrade"),
+    ],
+)
+def test_asset_matcher_recognizes_supported_english_coin_names(
+    symbol,
+    coin_name,
+    title,
+):
+    assert news._matches_asset(
+        {"title": title, "categories": []},
+        symbol,
+        coin_name,
+    )
+
+
+@pytest.mark.parametrize(
+    ("symbol", "coin_name", "title"),
+    [
+        ("NEAR", "니어프로토콜", "Bitcoin trades near a record high"),
+        ("NEAR", "니어프로토콜", "Bitcoin near a record high"),
+        ("LINK", "체인링크", "The link between crypto and inflation"),
+        ("LINK", "체인링크", "Bitcoin link to inflation data"),
+        ("OP", "옵티미즘", "CoinDesk op-ed examines regulation"),
+        ("OP", "옵티미즘", "Bitcoin op-ed examines regulation"),
+        ("SAND", "샌드박스", "Traders draw a line in the sand"),
+        ("ETC", "이더리움클래식", "Bitcoin, ether, etc. rally together"),
+        ("ETC", "이더리움클래식", "Bitcoin etc. rally together"),
+    ],
+)
+def test_asset_matcher_rejects_ambiguous_lowercase_ticker_words(
+    symbol,
+    coin_name,
+    title,
+):
+    assert not news._matches_asset(
+        {"title": title, "categories": []},
+        symbol,
+        coin_name,
+    )
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "LINK rallies after a new oracle partnership",
+        "The link token gains exchange support",
+        "$LINK liquidity rises",
+    ],
+)
+def test_asset_matcher_accepts_explicit_ambiguous_ticker_context(title):
+    assert news._matches_asset(
+        {"title": title, "categories": []},
+        "LINK",
+        "체인링크",
+    )
+
+
+@pytest.mark.parametrize(
+    ("symbol", "coin_name", "title"),
+    [
+        ("GRT", "더그래프", "The Graph launches a new data service"),
+        ("STX", "스택스", "Stacks activates a network upgrade"),
+        ("XLM", "스텔라루멘", "Stellar expands payments access"),
+        ("MKR", "메이커", "Maker governance approves a proposal"),
+        ("IMX", "이뮤터블", "Immutable launches a gaming chain"),
+        ("SAND", "샌드박스", "Sandbox opens a creator program"),
+    ],
+)
+def test_asset_matcher_recognizes_ambiguous_canonical_project_names(
+    symbol,
+    coin_name,
+    title,
+):
+    assert news._matches_asset(
+        {"title": title, "categories": []},
+        symbol,
+        coin_name,
+    )
+
+
+@pytest.mark.parametrize(
+    ("symbol", "coin_name", "title"),
+    [
+        ("AVAX", "아발란체", "A liquidation avalanche hits crypto markets"),
+        ("OP", "옵티미즘", "Bitcoin optimism rises as traders return"),
+        ("GRT", "더그래프", "The graph shows Bitcoin volatility"),
+        ("STX", "스택스", "Bitcoin stacks up another weekly gain"),
+        ("XLM", "스텔라루멘", "Bitcoin posts stellar returns"),
+        ("MKR", "메이커", "A market maker expands liquidity"),
+        ("IMX", "이뮤터블", "Developers propose an immutable ledger"),
+        ("SAND", "샌드박스", "Regulators open a crypto sandbox"),
+    ],
+)
+def test_asset_matcher_rejects_generic_project_name_words(
+    symbol,
+    coin_name,
+    title,
+):
+    assert not news._matches_asset(
+        {"title": title, "categories": []},
+        symbol,
+        coin_name,
+    )
+
+
+@pytest.mark.parametrize(
+    ("symbol", "coin_name", "title"),
+    [
+        ("OP", "옵티미즘", "Optimism over bitcoin ETF approval grows"),
+        ("STX", "스택스", "Stacks of cash move into bitcoin ETFs"),
+        ("XLM", "스텔라루멘", "Stellar quarter for bitcoin miners"),
+        ("SAND", "샌드박스", "Sandbox testing becomes mandatory under EU rules"),
+    ],
+)
+def test_asset_matcher_rejects_title_case_generic_project_words(
+    symbol,
+    coin_name,
+    title,
+):
+    assert not news._matches_asset(
+        {"title": title, "categories": []},
+        symbol,
+        coin_name,
+    )
+
+
+@pytest.mark.parametrize(
+    ("symbol", "coin_name", "title"),
+    [
+        ("OP", "옵티미즘", "Optimism grows its developer ecosystem"),
+        ("XLM", "스텔라루멘", "Stellar gains institutional adoption"),
+        ("MKR", "메이커", "Maker of DAI proposes a governance change"),
+        ("GRT", "더그래프", "The Graph shows stronger indexing demand"),
+    ],
+)
+def test_asset_matcher_keeps_project_names_with_asset_context(
+    symbol,
+    coin_name,
+    title,
+):
+    assert news._matches_asset(
+        {"title": title, "categories": []},
+        symbol,
+        coin_name,
+    )
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        "<html><body>security checkpoint</body></html>",
+        '<feed xmlns="http://www.w3.org/2005/Atom"></feed>',
+        '<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"></rdf:RDF>',
+    ],
+)
+def test_strict_google_feed_rejects_non_rss_checkpoint(monkeypatch, document):
+    class Response:
+        text = document
+
+        @staticmethod
+        def raise_for_status():
+            return None
+
+    class Client:
+        @staticmethod
+        def get(*_args, **_kwargs):
+            return Response()
+
+    monkeypatch.setattr(news, "get_http_client", lambda: Client())
+
+    with pytest.raises(news.NewsFetchError):
+        news._fetch_news(
+            "unique-malformed-feed-query",
+            strict=True,
+            locale="en",
+        )
 
 
 @pytest.mark.parametrize(

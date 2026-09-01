@@ -1,4 +1,4 @@
-# Render Blueprint — 백엔드(FastAPI) 배포용.
+# Render Blueprint — FastAPI 웹 + Prefect 포지션 뉴스 워커 배포용.
 # Render 대시보드에서 "New +" → "Blueprint" → 이 레포(gg_parrot) 선택 시 자동 인식됩니다.
 # (수동 생성해도 됨: New Web Service → 아래 rootDir/build/start 값 그대로 입력)
 services:
@@ -6,8 +6,8 @@ services:
     name: gg-parrot            # 배포 URL이 https://gg-parrot.onrender.com 이 됩니다.
     runtime: python            # 이름이 이미 쓰였다면 접미사가 붙을 수 있으니, 실제 URL을 확인 후
     rootDir: backend           # frontend/vercel.json 의 destination 도 그 URL로 맞추세요.
-    plan: starter              # 무료 플랜은 15분 미사용 시 잠들고, 다음 접속 때
-                               # 30~60초 걸려 깨어난다(그 사이 화면은 무한 로딩).
+    plan: starter              # 유료 상시 실행 플랜. 무료 web을 선택하면 유휴 시
+                               # 잠들 수 있지만 worker에는 무료 플랜이 없습니다.
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /api/health
@@ -34,3 +34,35 @@ services:
       # Google Identity Services의 공개 OAuth 2.0 Web client ID.
       - key: GOOGLE_CLIENT_ID
         sync: false
+
+  # Prefect Cloud가 실행 이력과 스케줄을 관리하고, 실제 RSS 수집/DB 저장은
+  # 이 Render 프로세스가 수행합니다. Background Worker에는 HTTP health check가 없습니다.
+  - type: worker
+    name: gg-parrot-position-news
+    runtime: python
+    rootDir: backend
+    plan: starter
+    buildCommand: pip install -r requirements-prefect.txt
+    startCommand: python -m app.workflows.position_news serve
+    maxShutdownDelaySeconds: 300
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.7"
+      - key: POSITION_NEWS_REQUIRE_POSTGRES
+        value: "true"
+      - key: POSITION_NEWS_COLLECTION_SECONDS
+        value: "300"
+      - key: POSITION_NEWS_MAX_AI_ANALYSES_PER_DAY
+        value: "120"
+      # 웹 서비스와 정확히 같은 Supabase Session Pooler URL을 입력합니다.
+      - key: DATABASE_URL
+        sync: false
+      - key: PREFECT_API_URL
+        sync: false
+      - key: PREFECT_API_KEY
+        sync: false
+      # 선택 사항입니다. 비워 두면 규칙 기반 분석만 저장합니다.
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: ANTHROPIC_MODEL
+        value: "claude-opus-5"

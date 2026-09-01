@@ -49,9 +49,12 @@
 
 ## 포지션 뉴스 중앙 워커
 
-포지션 뉴스 수집은 FastAPI 요청과 분리된 Prefect worker가 담당합니다. 현재
-`render.yaml`에는 비용이 발생하는 background worker를 자동 추가하지 않았습니다.
-구조, 로컬 실행, Prefect Cloud 연결, 선택형 Render 설정은
+포지션 뉴스 수집은 FastAPI 요청과 분리된 Prefect worker가 담당합니다. 루트
+`render.yaml`에 `gg-parrot-position-news` Background Worker가 포함되어 있습니다.
+변경을 push한 뒤 Render Blueprint에서 **Sync Blueprint**를 실행하고, worker에
+웹과 같은 `DATABASE_URL` 및 `PREFECT_API_URL`·`PREFECT_API_KEY`를 입력합니다.
+Background Worker에는 무료 플랜과 HTTP health check가 없습니다. 구조, 로컬 실행,
+Prefect Cloud 연결, 상세 검증 절차는
 [backend/PREFECT_POSITION_NEWS.md](backend/PREFECT_POSITION_NEWS.md)를 참고하세요.
 
-에이전트 API는 중앙 DB만 읽으므로, 이 변경을 웹에 배포하기 전에 별도 worker와 같은 Postgres 연결을 준비하고 첫 뉴스 스냅샷이 생성되는지 확인해야 합니다. 현재 `render.yaml`만 배포하면 worker는 시작되지 않습니다.
+에이전트 API는 중앙 DB만 읽으므로, worker와 웹이 같은 Postgres를 사용하고 첫 뉴스 스냅샷이 생성되는지 확인해야 합니다.

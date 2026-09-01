@@ -14,7 +14,6 @@ from sqlmodel import Session, select
 
 from ... import news as news_mod
 from ...db import (
-    RunSession,
     TickerNewsAiBudget,
     TickerNewsSnapshot,
     TickerNewsState,
@@ -192,20 +191,12 @@ def _retry_delay_ms(attempts: int) -> int:
 def discover_tracked_symbols(
     db: Session | None = None,
 ) -> list[str]:
-    """Return built-in assets plus active agent assets in fair order."""
+    """Return only the built-in collection universe in fair order."""
     if db is None:
         with get_session() as owned:
             return discover_tracked_symbols(owned)
 
     assets = set(news_mod.position_news_collection_universe())
-    running_symbols = db.exec(
-        select(RunSession.symbol).where(RunSession.status == "running")
-    ).all()
-    assets.update(
-        asset
-        for symbol in running_symbols
-        if (asset := news_mod.asset_from_market_symbol(symbol))
-    )
 
     states = db.exec(
         select(TickerNewsState).where(

@@ -82,11 +82,11 @@ def test_discovery_collects_entire_builtin_coin_universe(db, monkeypatch):
     assert len(symbols) == len(universe)
 
 
-def test_discovery_adds_asset_from_running_agent_session(db):
+def test_discovery_ignores_running_assets_outside_builtin_universe(db):
     db.add(
         RunSession(
             user_id=1,
-            symbol="EDENUSDT",
+            symbol="RUN0USDT",
             position_side="long",
             status="running",
             started_at="2026-08-24T07:00:00Z",
@@ -96,8 +96,8 @@ def test_discovery_adds_asset_from_running_agent_session(db):
 
     symbols = repository.discover_tracked_symbols(db)
 
-    assert set(news_mod.position_news_collection_universe()).issubset(symbols)
-    assert "EDEN" in symbols
+    assert set(symbols) == set(news_mod.position_news_collection_universe())
+    assert "RUN0" not in symbols
 
 
 def test_discovery_prioritizes_never_attempted_then_oldest(db):

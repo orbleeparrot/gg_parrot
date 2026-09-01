@@ -7,7 +7,7 @@
      새 사실 생성 금지), 실패하면 개요 없이 헤드라인만 보여준다.
   4) 비용: KST 기준 하루 1회만 요약해 메모리에 캐시(방문마다 호출 X).
 
-Google News RSS의 한국어 검색 결과와 CoinDesk 공식 RSS를 함께 사용한다.
+Google News RSS의 한국어·CoinDesk 제한 검색 결과와 CoinDesk 공식 RSS를 함께 사용한다.
 기사 본문은 저장하지 않고 제목·매체·원문 링크·발행 시각만 다룬다.
 """
 from __future__ import annotations
@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import re
 import time
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from typing import Optional
@@ -32,6 +33,7 @@ _HTTP_TIMEOUT = 10.0
 _MAX_ITEMS = 8
 _MAX_COIN_ITEMS = 10
 _COIN_CACHE_SECONDS = max(60, int(os.environ.get("COIN_NEWS_CACHE_SECONDS", "300")))
+_COINDESK_DISCOVERY_MAX_STALE_SECONDS = 6 * 60 * 60
 _OPENEDEN_CACHE_SECONDS = 60 * 60
 _OPENEDEN_MAX_AGE_DAYS = 30
 
@@ -54,14 +56,112 @@ _COIN_KO = {
     "EDEN": "오픈에덴",
 }
 
-# 영문 RSS 제목·CoinDesk category 태그에서 자산 관련성을 판별할 때 사용한다.
-# 나머지 자산은 티커와 _COIN_KO 한글명을 기본 별칭으로 사용한다.
+# 영문 RSS 제목·CoinDesk category 태그에서 전체 지원 자산의 관련성을
+# 판별할 때 사용하는 canonical 프로젝트/네트워크 이름이다.
 _COIN_ALIASES = {
-    "BTC": ("bitcoin", "비트코인"),
-    "ETH": ("ethereum", "ether", "이더리움"),
-    "XRP": ("xrp", "ripple", "리플"),
-    "SOL": ("sol", "solana", "솔라나"),
-    "EDEN": ("openeden", "open eden", "eden token", "오픈에덴"),
+    "BTC": ("bitcoin",),
+    "ETH": ("ethereum", "ether"),
+    "XRP": ("ripple", "xrp ledger"),
+    "SOL": ("solana",),
+    "DOGE": ("dogecoin",),
+    "ADA": ("cardano",),
+    "TRX": ("tron",),
+    "AVAX": ("avalanche",),
+    "LINK": ("chainlink",),
+    "DOT": ("polkadot",),
+    "MATIC": ("polygon", "polygon pos"),
+    "SHIB": ("shiba inu",),
+    "BCH": ("bitcoin cash",),
+    "LTC": ("litecoin",),
+    "ATOM": ("cosmos", "cosmos hub"),
+    "ETC": ("ethereum classic",),
+    "APT": ("aptos",),
+    "ARB": ("arbitrum",),
+    "OP": ("optimism",),
+    "SUI": ("sui network", "sui blockchain"),
+    "PEPE": ("pepe coin", "pepe token"),
+    "USDT": ("tether",),
+    "BNB": ("bnb chain", "binance coin"),
+    "UNI": ("uniswap",),
+    "AAVE": ("aave protocol",),
+    "MKR": ("maker", "makerdao", "maker protocol"),
+    "SAND": ("sandbox", "the sandbox", "sandbox metaverse"),
+    "MANA": ("decentraland",),
+    "AXS": ("axie infinity",),
+    "GRT": ("the graph", "the graph protocol", "graph protocol"),
+    "ALGO": ("algorand",),
+    "FIL": ("filecoin",),
+    "ICP": ("internet computer",),
+    "NEAR": ("near protocol",),
+    "INJ": ("injective",),
+    "RUNE": ("thorchain",),
+    "STX": ("stacks", "stacks network", "stacks blockchain"),
+    "IMX": ("immutable", "immutable x", "immutable zk"),
+    "ONDO": ("ondo finance",),
+    "ZEC": ("zcash",),
+    "XLM": ("stellar", "stellar network", "stellar lumens"),
+    "HBAR": ("hedera", "hedera hashgraph"),
+    "VET": ("vechain",),
+    "EDEN": ("openeden", "open eden", "eden token"),
+}
+
+# These symbols are ordinary English words or common abbreviations. Matching
+# their lowercase spelling in a broad CoinDesk section feed creates false
+# positives, so they need an explicit ticker spelling or asset-specific alias.
+_AMBIGUOUS_BARE_TICKERS = frozenset({
+    "ADA",
+    "ALGO",
+    "APT",
+    "ARB",
+    "ATOM",
+    "DOT",
+    "ETC",
+    "FIL",
+    "GRT",
+    "LINK",
+    "MANA",
+    "NEAR",
+    "OP",
+    "RUNE",
+    "SAND",
+    "SOL",
+    "UNI",
+    "VET",
+})
+
+# These project names also occur as ordinary English words. Preserve the
+# publisher's capitalization and reject common non-project phrases instead of
+# matching their case-folded form across every CoinDesk section article.
+_CASE_SENSITIVE_PROJECT_ALIASES = {
+    "AVAX": ("Avalanche",),
+    "GRT": ("The Graph",),
+    "IMX": ("Immutable",),
+    "MKR": ("Maker",),
+    "OP": ("Optimism",),
+    "SAND": ("The Sandbox", "Sandbox"),
+    "STX": ("Stacks",),
+    "XLM": ("Stellar",),
+}
+_PROJECT_ALIAS_CONTEXT_PATTERNS = {
+    "AVAX": (r"\b(?:blockchain|c-chain|subnets?|validators?)\b",),
+    "GRT": (
+        r"\b(?:data service|graph protocol|indexing|query network|subgraphs?|web3 data)\b",
+    ),
+    "IMX": (r"\b(?:blockchain|games?|gaming|token|web3|zk)\b",),
+    "MKR": (r"\b(?:dai|governance|makerdao|mkr|protocol|stablecoin)\b",),
+    "OP": (
+        r"\b(?:collective|developer|ecosystem|ethereum|governance|l2|"
+        r"layer[ -]?2|mainnet|rollup|superchain)\b",
+    ),
+    "SAND": (
+        r"\b(?:creator|games?|gaming|metaverse|nft|sand token|virtual land|web3)\b",
+    ),
+    "STX": (
+        r"\b(?:bitcoin layer|blockchain|clarity|nakamoto|network|sbtc|token|upgrade)\b",
+    ),
+    "XLM": (
+        r"\b(?:adoption|anchors?|blockchain|lumens?|network|payments?|token)\b",
+    ),
 }
 
 # 영문권에서만 다뤄지는 소형 자산은 한글 검색 하나로 기사가 고갈된다.
@@ -77,6 +177,69 @@ _COIN_GOOGLE_QUERIES = {
         ),
     ),
 }
+
+# CoinDesk's HTML section/tag pages block the backend collector and their terms
+# prohibit bypassing access controls with browser automation.  Discover the same
+# public CoinDesk headlines through Google News RSS instead: four section-scoped
+# queries plus the four coin topics requested for the major tag pages.
+_COINDESK_DISCOVERY_SOURCES = (
+    (
+        "coindesk_section_markets",
+        "section",
+        "markets",
+        "site:coindesk.com/markets when:30d",
+        "https://www.coindesk.com/markets",
+    ),
+    (
+        "coindesk_section_policy",
+        "section",
+        "policy",
+        "site:coindesk.com/policy when:30d",
+        "https://www.coindesk.com/policy",
+    ),
+    (
+        "coindesk_section_tech",
+        "section",
+        "tech",
+        "site:coindesk.com/tech when:30d",
+        "https://www.coindesk.com/tech",
+    ),
+    (
+        "coindesk_section_business",
+        "section",
+        "business",
+        "site:coindesk.com/business when:30d",
+        "https://www.coindesk.com/business",
+    ),
+    (
+        "coindesk_topic_bitcoin",
+        "topic",
+        "bitcoin",
+        "site:coindesk.com (Bitcoin OR BTC) when:30d",
+        "https://www.coindesk.com/tag/bitcoin",
+    ),
+    (
+        "coindesk_topic_ethereum",
+        "topic",
+        "ethereum",
+        "site:coindesk.com (Ethereum OR Ether OR ETH) when:30d",
+        "https://www.coindesk.com/tag/ethereum",
+    ),
+    (
+        "coindesk_topic_ripple",
+        "topic",
+        "ripple",
+        "site:coindesk.com (Ripple OR XRP) when:30d",
+        "https://www.coindesk.com/tag/ripple",
+    ),
+    (
+        "coindesk_topic_solana",
+        "topic",
+        "solana",
+        "site:coindesk.com (Solana OR SOL) when:30d",
+        "https://www.coindesk.com/tag/solana",
+    ),
+)
 
 _EDEN_STRONG_TERMS = (
     "openeden",
@@ -160,6 +323,8 @@ _cache: dict[str, tuple[dict, str]] = {}
 _coin_cache: dict[str, tuple[dict, float]] = {}
 _coindesk_cache: tuple[list[dict], float] | None = None
 _coindesk_error_cache: tuple[str, float] | None = None
+_coindesk_discovery_cache: tuple[dict, float] | None = None
+_coindesk_discovery_error_cache: tuple[str, float] | None = None
 _openeden_cache: tuple[list[dict], float] | None = None
 _openeden_error_cache: tuple[str, float] | None = None
 _market_summary_retry_at = 0.0
@@ -366,8 +531,9 @@ def _parse_openeden_rss(xml_text: str) -> list[dict]:
 
 def _matches_asset(item: dict, asset_symbol: str, coin_name: str) -> bool:
     categories = item.get("categories") or []
+    title = str(item.get("title") or "")
     searchable = " ".join([
-        str(item.get("title") or ""),
+        title,
         *[str(category or "") for category in categories],
     ]).casefold()
     if asset_symbol == "EDEN":
@@ -385,9 +551,21 @@ def _matches_asset(item: dict, asset_symbol: str, coin_name: str) -> bool:
         coin_name,
         *_COIN_ALIASES.get(asset_symbol, ()),
     }
+    ticker = asset_symbol.casefold()
+    case_sensitive_aliases = _CASE_SENSITIVE_PROJECT_ALIASES.get(
+        asset_symbol,
+        (),
+    )
+    case_sensitive_normalized = {
+        alias.casefold() for alias in case_sensitive_aliases
+    }
     for alias in aliases:
         normalized = str(alias or "").strip().casefold()
         if not normalized:
+            continue
+        if normalized in case_sensitive_normalized:
+            continue
+        if normalized == ticker and asset_symbol in _AMBIGUOUS_BARE_TICKERS:
             continue
         if re.search(r"[a-z0-9]", normalized):
             if re.search(
@@ -396,6 +574,48 @@ def _matches_asset(item: dict, asset_symbol: str, coin_name: str) -> bool:
             ):
                 return True
         elif normalized in searchable:
+            return True
+    category_values = {
+        str(category).strip().casefold() for category in categories
+    }
+    context_patterns = _PROJECT_ALIAS_CONTEXT_PATTERNS.get(asset_symbol, ())
+    for alias in case_sensitive_aliases:
+        if alias.casefold() in category_values:
+            return True
+        if not re.search(
+            rf"(?<![A-Za-z0-9]){re.escape(alias)}(?![A-Za-z0-9])",
+            title,
+        ):
+            continue
+        if any(re.search(pattern, searchable) for pattern in context_patterns):
+            return True
+    if asset_symbol in _AMBIGUOUS_BARE_TICKERS:
+        explicit_ticker = re.compile(
+            rf"(?<![A-Za-z0-9])(?:\${re.escape(asset_symbol)}|"
+            rf"{re.escape(asset_symbol)})(?![A-Za-z0-9])"
+        )
+        if explicit_ticker.search(title):
+            return True
+        contextual_ticker = re.compile(
+            rf"(?:"
+            rf"(?<![a-z0-9]){re.escape(ticker)}(?![a-z0-9])"
+            rf"(?:\s+(?:coin|crypto|network|protocol|token))"
+            rf"|"
+            rf"(?<![a-z0-9])(?:coin|crypto|token)\s+"
+            rf"{re.escape(ticker)}(?![a-z0-9])"
+            rf")"
+        )
+        if contextual_ticker.search(title.casefold()):
+            return True
+        category_ticker = re.compile(
+            rf"^\$?{re.escape(asset_symbol)}"
+            rf"(?:\s+(?:coin|crypto|news|token))?$",
+            re.IGNORECASE,
+        )
+        if any(
+            category_ticker.fullmatch(str(category).strip())
+            for category in categories
+        ):
             return True
     return False
 
@@ -460,6 +680,13 @@ def _fetch_news(
         def load():
             resp = get_http_client().get(_GOOGLE_NEWS, params=params, timeout=_HTTP_TIMEOUT)
             resp.raise_for_status()
+            try:
+                root = ET.fromstring(resp.text)
+            except ET.ParseError as exc:
+                raise ValueError("Google News response is not XML") from exc
+            root_name = root.tag.rsplit("}", 1)[-1].casefold()
+            if root_name != "rss":
+                raise ValueError("Google News response is not an RSS feed")
             return _parse_rss(resp.text, limit=limit)
 
         items, _state = _rss_refreshes.run(("google", query, locale, limit), load)
@@ -468,6 +695,217 @@ def _fetch_news(
         if strict:
             raise NewsFetchError("Google News RSS 수집에 실패했습니다.") from exc
         return []
+
+
+def _combine_coindesk_discovery_items(items_by_source: dict) -> list[dict]:
+    combined = []
+    seen = set()
+    for source_name, *_rest in _COINDESK_DISCOVERY_SOURCES:
+        for item in items_by_source.get(source_name) or []:
+            key = re.sub(
+                r"\s+",
+                " ",
+                str(item.get("title") or "").strip().casefold(),
+            )
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            combined.append(item)
+    return combined
+
+
+def _stale_coindesk_discovery_payload(
+    payload: dict,
+    *,
+    now: float,
+) -> dict | None:
+    stale = deepcopy(payload)
+    items_by_source = stale.get("items_by_source") or {}
+    has_usable_source = False
+    for source in stale.get("sources") or []:
+        source_name = str(source.get("name") or "")
+        last_ready_at = source.get("last_ready_at")
+        usable = (
+            source.get("status") in {"ready", "stale"}
+            and isinstance(last_ready_at, (int, float))
+            and now - float(last_ready_at)
+            <= _COINDESK_DISCOVERY_MAX_STALE_SECONDS
+        )
+        if usable:
+            source["status"] = "stale"
+            has_usable_source = True
+            continue
+        source["status"] = "error"
+        source["fetched_count"] = 0
+        items_by_source[source_name] = []
+    if not has_usable_source:
+        return None
+    stale["items_by_source"] = items_by_source
+    stale["items"] = _combine_coindesk_discovery_items(items_by_source)
+    return stale
+
+
+def _fetch_coindesk_discovery_news(*, strict: bool = False) -> dict:
+    """Discover section/topic-scoped CoinDesk headlines via Google News RSS."""
+    global _coindesk_discovery_cache, _coindesk_discovery_error_cache
+
+    now = time.time()
+    if _coindesk_discovery_cache and _coindesk_discovery_cache[1] > now:
+        return deepcopy(_coindesk_discovery_cache[0])
+    if _coindesk_discovery_error_cache and _coindesk_discovery_error_cache[1] > now:
+        if _coindesk_discovery_cache:
+            stale = _stale_coindesk_discovery_payload(
+                _coindesk_discovery_cache[0],
+                now=now,
+            )
+            if stale is not None:
+                return stale
+        if strict:
+            raise NewsFetchError(_coindesk_discovery_error_cache[0])
+        return {"items": [], "items_by_source": {}, "sources": []}
+
+    def load() -> dict:
+        def fetch_source(descriptor):
+            name, source_kind, source_scope, query, source_page = descriptor
+            try:
+                candidates = _fetch_news(
+                    query,
+                    limit=50,
+                    strict=True,
+                    locale="en",
+                )
+            except NewsFetchError:
+                return name, [], {
+                    "name": name,
+                    "source_type": f"coindesk_{source_kind}_google_rss",
+                    "source_page": source_page,
+                    "status": "error",
+                    "fetched_count": 0,
+                }
+
+            feed_source = f"coindesk_{source_kind}_google_rss"
+            items = []
+            for raw in candidates:
+                if not str(raw.get("source") or "").casefold().startswith("coindesk"):
+                    continue
+                item = dict(raw)
+                item["feed_source"] = feed_source
+                item["source_scope"] = source_scope
+                item["source_page"] = source_page
+                items.append(item)
+            return name, items, {
+                "name": name,
+                "source_type": feed_source,
+                "source_page": source_page,
+                "status": "ready",
+                "fetched_count": len(items),
+                "last_ready_at": now,
+            }
+
+        results = run_parallel({
+            descriptor[0]: (
+                lambda descriptor=descriptor: fetch_source(descriptor)
+            )
+            for descriptor in _COINDESK_DISCOVERY_SOURCES
+        })
+        has_ready_source = any(
+            result[2]["status"] == "ready" for result in results.values()
+        )
+        previous_items = (
+            _coindesk_discovery_cache[0].get("items_by_source") or {}
+            if _coindesk_discovery_cache
+            else {}
+        )
+        previous_sources = {
+            source["name"]: source
+            for source in (
+                _coindesk_discovery_cache[0].get("sources") or []
+                if _coindesk_discovery_cache
+                else []
+            )
+        }
+        items_by_source = {}
+        sources = []
+        combined = []
+        seen = set()
+        for name, *_rest in _COINDESK_DISCOVERY_SOURCES:
+            _result_name, items, source = results[name]
+            if (
+                source["status"] == "error"
+                and has_ready_source
+                and name in previous_sources
+            ):
+                previous_source = previous_sources[name]
+                last_ready_at = previous_source.get("last_ready_at")
+                can_reuse = (
+                    previous_source.get("status") in {"ready", "stale"}
+                    and isinstance(last_ready_at, (int, float))
+                    and now - float(last_ready_at)
+                    <= _COINDESK_DISCOVERY_MAX_STALE_SECONDS
+                )
+                if can_reuse:
+                    items = deepcopy(previous_items.get(name) or [])
+                    source = deepcopy(previous_source)
+                    source["status"] = "stale"
+                    source["fetched_count"] = len(items)
+            items_by_source[name] = items
+            sources.append(source)
+            for item in items:
+                key = re.sub(
+                    r"\s+",
+                    " ",
+                    str(item.get("title") or "").strip().casefold(),
+                )
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                combined.append(item)
+        return {
+            "items": combined,
+            "items_by_source": items_by_source,
+            "sources": sources,
+        }
+
+    try:
+        stale_value = (
+            _stale_coindesk_discovery_payload(
+                _coindesk_discovery_cache[0],
+                now=now,
+            )
+            if _coindesk_discovery_cache
+            else None
+        )
+        if stale_value is not None:
+            payload, state = _rss_refreshes.run(
+                "coindesk-discovery",
+                load,
+                stale_value=stale_value,
+            )
+        else:
+            payload, state = _rss_refreshes.run("coindesk-discovery", load)
+        if state == "stale":
+            return deepcopy(payload)
+        if not any(source["status"] == "ready" for source in payload["sources"]):
+            raise NewsFetchError("CoinDesk 확장 뉴스 검색에 실패했습니다.")
+        _coindesk_discovery_cache = (payload, now + _COIN_CACHE_SECONDS)
+        _coindesk_discovery_error_cache = None
+        return deepcopy(payload)
+    except Exception as exc:
+        message = "CoinDesk 확장 뉴스 검색에 실패했습니다."
+        _coindesk_discovery_error_cache = (
+            message,
+            now + _COIN_CACHE_SECONDS,
+        )
+        if _coindesk_discovery_cache:
+            stale = _stale_coindesk_discovery_payload(
+                _coindesk_discovery_cache[0],
+                now=now,
+            )
+            if stale is not None:
+                return stale
+        if strict:
+            raise NewsFetchError(message) from exc
+        return {"items": [], "items_by_source": {}, "sources": []}
 
 
 def _fetch_coindesk_news(*, strict: bool = False) -> list[dict]:
@@ -761,6 +1199,34 @@ def fetch_coin_news_for_collector(symbol: str) -> dict:
         except NewsFetchError:
             return [], False
 
+    # This loader fans out to eight section/topic queries itself. Run it before
+    # the other independent sources so nested use of the shared executor cannot
+    # serialize or starve the outer source fan-out.
+    try:
+        coindesk_discovery = _fetch_coindesk_discovery_news(strict=True)
+        coindesk_discovery_available = True
+    except NewsFetchError:
+        coindesk_discovery = {
+            "items_by_source": {},
+            "sources": [
+                {
+                    "name": source_name,
+                    "source_type": f"coindesk_{source_kind}_google_rss",
+                    "source_page": source_page,
+                    "status": "error",
+                    "fetched_count": 0,
+                }
+                for (
+                    source_name,
+                    source_kind,
+                    _source_scope,
+                    _query,
+                    source_page,
+                ) in _COINDESK_DISCOVERY_SOURCES
+            ],
+        }
+        coindesk_discovery_available = False
+
     loaders = {
         "google": fetch_google,
         "coindesk": lambda: fetch_source(_fetch_coindesk_news),
@@ -777,7 +1243,12 @@ def fetch_coin_news_for_collector(symbol: str) -> dict:
     coindesk_raw, coindesk_available = fetched_sources["coindesk"]
     openeden_items, openeden_available = fetched_sources.get("openeden", ([], False))
 
-    if not google_available and not coindesk_available and not openeden_available:
+    if (
+        not google_available
+        and not coindesk_available
+        and not coindesk_discovery_available
+        and not openeden_available
+    ):
         raise NewsFetchError("모든 뉴스 RSS 소스 수집에 실패했습니다.")
 
     google_items = _relevant_items(
@@ -792,7 +1263,31 @@ def fetch_coin_news_for_collector(symbol: str) -> dict:
         coin_name=name,
         feed_source="coindesk_rss",
     )
-    items = _merge_news_items(openeden_items, coindesk_items, google_items)
+    discovery_batches = []
+    discovery_sources = []
+    discovery_items_by_source = coindesk_discovery.get("items_by_source") or {}
+    for source in coindesk_discovery.get("sources") or []:
+        source_name = str(source.get("name") or "")
+        source_type = str(source.get("source_type") or "coindesk_google_rss")
+        raw_items = list(discovery_items_by_source.get(source_name) or [])
+        relevant_items = _relevant_items(
+            raw_items,
+            asset_symbol=base,
+            coin_name=name,
+            feed_source=source_type,
+        )
+        discovery_batches.append(relevant_items)
+        source_report = dict(source)
+        source_report["item_count"] = len(relevant_items)
+        source_report.setdefault("fetched_count", len(raw_items))
+        discovery_sources.append(source_report)
+    discovery_items = _merge_news_items(*discovery_batches)
+    items = _merge_news_items(
+        openeden_items,
+        coindesk_items,
+        discovery_items,
+        google_items,
+    )
     env = _envelope(
         items,
         overview=None,
@@ -810,6 +1305,7 @@ def fetch_coin_news_for_collector(symbol: str) -> dict:
             "item_count": len(openeden_items),
             "fetched_count": len(openeden_items),
         })
+    sources.extend(discovery_sources)
     sources.extend([
         {
             "name": "coindesk_rss",

@@ -1,5 +1,5 @@
-# 선택형 예시입니다. 현재 render.yaml을 이 파일로 대체하지 마세요.
-# 아래 service 항목을 실제 Blueprint에 병합하거나 Render에서 직접 생성합니다.
+# 참고용 단독 worker 예시입니다. 실제 루트 render.yaml에도 같은 worker가 포함되어
+# 있으므로 Blueprint 배포 시 이 파일을 별도로 적용하지 마세요.
 services:
   - type: worker
     name: gg-parrot-position-news
@@ -8,11 +8,14 @@ services:
     plan: starter
     buildCommand: pip install -r requirements-prefect.txt
     startCommand: python -m app.workflows.position_news serve
+    maxShutdownDelaySeconds: 300
     envVars:
       - key: PYTHON_VERSION
         value: "3.12.7"
       - key: POSITION_NEWS_REQUIRE_POSTGRES
         value: "true"
+      - key: POSITION_NEWS_COLLECTION_SECONDS
+        value: "300"
       - key: POSITION_NEWS_MAX_AI_ANALYSES_PER_DAY
         value: "120"
       - key: DATABASE_URL

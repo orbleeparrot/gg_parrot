@@ -326,6 +326,11 @@ def test_news_collector_fetches_independent_sources_in_parallel(monkeypatch):
         return []
 
     monkeypatch.setattr(news, "_coin_news_envelope", google)
+    monkeypatch.setattr(
+        news,
+        "_fetch_coindesk_discovery_news",
+        lambda **_kwargs: {"items": [], "items_by_source": {}, "sources": []},
+    )
     monkeypatch.setattr(news, "_fetch_openeden_news", source)
     monkeypatch.setattr(news, "_fetch_coindesk_news", source)
     payload = news.fetch_coin_news_for_collector("EDEN")

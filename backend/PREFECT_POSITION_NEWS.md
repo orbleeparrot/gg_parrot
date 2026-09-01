@@ -8,7 +8,7 @@
                          ▼
               Prefect 5분 스케줄/재시도
                          │
- 티커별 Google RSS + CoinDesk RSS + EDEN 공식 RSS
+ 티커별 Google RSS + CoinDesk 공식/확장 RSS + EDEN 공식 RSS
                          │
        DB pending claim (동일 fingerprint 중복 방지)
                          │
@@ -32,8 +32,8 @@ Prefect는 오케스트레이션만 담당합니다. Prefect 캐시나 프로세
 - `BTCUSDT`, `BTCUSDC`, `BTCBUSD`는 모두 공용 자산 `BTC` 하나로 정규화됩니다.
 - 처리 대상은 DB의 `last_attempt_ms`가 오래된 티커부터 정렬해 deadline이 반복돼도 뒤쪽 티커가 굶지 않게 합니다.
 - 수집은 기본 5분 주기이며, 기사 묶음 fingerprint가 바뀐 경우에만 분석을 시도합니다.
-- Google News RSS는 기본적으로 티커별 한국어 검색 결과를 가져옵니다. EDEN은 한국어·영문 브랜드·영문 티커 검색을 각각 수행하고 쿼리당 최대 50개 후보를 검사합니다. CoinDesk 공식 RSS 25건은 cycle 안에서 한 번만 받아 모든 티커가 공유합니다.
-- 두 RSS 모두 제목과 feed category를 자산 별칭으로 검사해 관련 헤드라인만 저장합니다. CoinDesk 항목은 원문 URL을 그대로 사용합니다.
+- Google News RSS는 기본적으로 티커별 한국어 검색 결과를 가져옵니다. EDEN은 한국어·영문 브랜드·영문 티커 검색을 각각 수행하고 쿼리당 최대 50개 후보를 검사합니다. CoinDesk 공식 RSS 25건과 아래 8개 확장 검색 결과는 cycle 안에서 한 번만 받아 모든 티커가 공유합니다.
+- 모든 RSS 결과는 제목과 feed category를 자산 별칭으로 검사해 관련 헤드라인만 저장합니다. CoinDesk 공식 RSS는 원문 URL을 그대로 사용하고, 확장 검색은 Google News RSS 링크를 사용합니다.
 - 한 cycle의 AI 시도는 최대 12회이고, 모든 worker가 공유하는 KST 일일 DB 예산은 최대 120회입니다. 초과 티커는 규칙 기반 분석으로 저장됩니다.
 - RSS 오류·빈 응답·AI 재분석 실패는 마지막 사용 가능 스냅샷을 지우지 않습니다.
 - 에이전트 사용자 API는 RSS 또는 AI를 호출하지 않고 최신 완료 스냅샷만 읽습니다.
@@ -47,8 +47,12 @@ Prefect는 오케스트레이션만 담당합니다. Prefect 캐시나 프로세
 - EDEN Google RSS: 최근 30일 동안 `OpenEden`, `Open Eden`, `EDEN coin`, `EDEN crypto`, `EDEN token`, `$EDEN`, `EDEN USDT`, `EDEN listing`, `EDEN price`를 한국어·영문 locale에서 검색합니다. 일반 단어 `Eden`의 지명·인명·기업 동음이의어는 제목 문맥 필터로 제거합니다.
 - OpenEden 공식 RSS: `https://openeden.com/news/feed/`, 최근 30일의 공식 헤드라인을 1시간 캐시로 수집합니다.
 - CoinDesk 공식 RSS: `https://www.coindesk.com/arc/outboundfeeds/rss/`, 최신 25건
+- CoinDesk 섹션 확장 검색: Google News RSS에서 `site:coindesk.com/markets`, `/policy`, `/tech`, `/business`를 최근 30일 범위로 각각 검색합니다.
+- CoinDesk 코인 주제 확장 검색: Google News RSS에서 CoinDesk 도메인으로 제한한 `Bitcoin/BTC`, `Ethereum/Ether/ETH`, `Ripple/XRP`, `Solana/SOL`을 최근 30일 범위로 각각 검색합니다. 응답 매체가 실제 `CoinDesk`인 기사만 남깁니다.
+- 확장 검색 8개는 병렬 실행하고 결과를 5분 공유 캐시에 보관합니다. 이후 전체 지원 자산의 한글명·영문명·심볼 별칭으로 다시 필터링하므로, 예를 들어 Ripple 검색 결과가 ETH 스냅샷에 섞이지 않습니다. `NEAR`, `LINK`, `OP`, `SAND`, `ETC`처럼 일반 영단어와 겹치는 심볼은 대문자 티커·`$티커`·코인 문맥 또는 영문 전체 이름만 인정합니다.
+- 일부 확장 소스 갱신이 실패하면 그 소스만 이전 결과를 최대 6시간 `stale`로 유지합니다. 처음부터 실패한 소스나 6시간을 넘은 결과는 재사용하지 않습니다. 스냅샷의 `sources`에는 요청한 섹션/태그 참고 페이지와 소스별 상태·수집·관련 기사 수가 기록됩니다.
 - CoinDesk RSS의 `Markets`, `Policy`, `Tech`, `Finance` category와 `Bitcoin News`, `Ethereum News` 같은 태그 메타데이터를 티커 관련성 판정에 사용합니다.
-- CoinDesk 섹션·태그 HTML 페이지는 자동 수집하지 않습니다. 실행 환경에서 Vercel 보안 체크포인트가 HTTP 429를 반환하고, CoinDesk 이용약관도 허가 없는 robot/scraper 접근을 금지합니다.
+- CoinDesk 섹션·태그 HTML을 직접 자동 수집하거나 Playwright로 체크포인트를 우회하지 않습니다. 현재 CoinDesk 이용약관은 명시적 서면 허가 없는 robot/spider/scraper 자동 접근과 접근 제한 우회를 금지합니다. 대신 위의 도메인·섹션·주제 제한 RSS 검색을 사용합니다.
 - 기사 본문·RSS description/content는 저장하지 않고 제목·매체·원문 링크·발행 시각만 사용합니다.
 
 공용 결과를 소비하는 인증 API는 실행 세션용
@@ -90,11 +94,18 @@ python -m app.workflows.position_news serve
 
 ## Render 배포
 
-현재 루트 `render.yaml`은 무료 FastAPI 웹 서비스만 유지합니다. Render background worker는 유료 인스턴스이므로 자동으로 추가하지 않았습니다.
-중요: 이 브랜치의 에이전트 API는 중앙 DB만 읽습니다. worker를 생성하고 첫 스냅샷이 `ready`인 것을 확인하기 전에 웹만 먼저 배포하면 화면은 계속 `pending`으로 남습니다.
+루트 [render.yaml](../render.yaml)에 FastAPI 웹과 `gg-parrot-position-news` Background Worker가 함께 정의되어 있습니다. Background Worker는 무료 플랜이 없으므로 Blueprint 적용 화면에서 `starter` 비용을 확인해야 합니다.
 
+기존 Blueprint가 이미 연결되어 있다면 다음 순서로 생성합니다.
 
-배포할 때 [render.prefect-worker.example.yaml](../render.prefect-worker.example.yaml)의 worker 항목을 실제 Blueprint에 병합하거나 Render 대시보드에서 별도 Background Worker로 생성합니다. 예시 파일을 기존 `render.yaml`의 대체 파일로 그대로 적용하지 마세요.
+1. 이 변경을 원격 브랜치에 push합니다.
+2. Render Dashboard의 해당 Blueprint에서 **Sync Blueprint**(또는 Manual Sync)를 실행합니다.
+3. 새 `gg-parrot-position-news` 서비스에 아래 비밀값을 입력합니다.
+4. 변경 내용을 적용해 worker의 첫 deploy를 시작합니다.
+
+아직 Blueprint가 없다면 Render Dashboard에서 **New + → Blueprint**를 선택하고 이 저장소를 연결한 뒤 같은 비밀값을 입력해 Apply합니다. 직접 만들 경우 서비스 종류는 **Background Worker**, Root Directory는 `backend`, Build Command는 `pip install -r requirements-prefect.txt`, Start Command는 `python -m app.workflows.position_news serve`입니다. Background Worker는 포트를 열지 않으므로 Health Check Path를 설정하지 않습니다.
+
+중요: 에이전트 API는 중앙 DB만 읽습니다. worker를 생성하고 첫 스냅샷이 `ready`인 것을 확인하기 전에 웹만 먼저 배포하면 화면은 계속 `pending`으로 남습니다.
 
 필수 환경변수:
 
@@ -106,11 +117,20 @@ python -m app.workflows.position_news serve
 
 웹과 워커를 동시에 처음 배포하기보다, 웹 배포에서 신규 테이블 생성이 완료된 뒤 워커를 시작하는 편이 안전합니다. 현재 프로젝트는 Alembic이 아니라 `SQLModel.metadata.create_all()`을 사용하므로 이후 테이블 변경 전에는 정식 migration 도입을 권장합니다.
 
+정상 배포 확인 순서는 다음과 같습니다.
+
+1. Render worker 로그에 `Serving flow`와 deployment 생성 로그가 나타납니다.
+2. Prefect Cloud에서 `gg-parrot-position-news` deployment와 5분 간격 flow run이 보입니다.
+3. flow run이 `Completed`이고 `ticker_count`, `stored` 등의 집계가 출력됩니다.
+4. 에이전트 뉴스 API 응답이 `data_source=prefect_db`이고 `collection.last_success_at`이 갱신됩니다.
+
 관련 공식 문서:
 
 - [Prefect serve deployment](https://docs.prefect.io/v3/how-to-guides/deployment_infra/run-flows-in-local-processes)
 - [Prefect deployments](https://docs.prefect.io/v3/concepts/deployments)
 - [Render background workers](https://render.com/docs/background-workers)
+- [Render Blueprint specification](https://render.com/docs/blueprint-spec)
+- [CoinDesk Terms of Use](https://www.coindesk.com/terms)
 
 ## 주요 설정
 

@@ -531,6 +531,53 @@ def test_eden_uses_korean_and_english_google_queries(monkeypatch):
     assert google_source["fetched_count"] == 13
 
 
+def test_connected_bmt_uses_project_alias_and_broad_english_queries(monkeypatch):
+    korean = {
+        "title": "업비트, 버블맵스(BMT) USDT 마켓 상장",
+        "source": "이코노미블록",
+        "url": "https://news.example.com/bmt-ko",
+    }
+    english = {
+        "title": "What Is Bubblemaps (BMT) and What On-Chain Forensics Shows",
+        "source": "Phemex",
+        "url": "https://news.example.com/bmt-en",
+    }
+    calls = []
+
+    def fake_fetch(query, *, limit, strict, locale="ko"):
+        calls.append((query, limit, strict, locale))
+        return [korean] if locale == "ko" else [english]
+
+    monkeypatch.setattr(news, "_fetch_news", fake_fetch)
+
+    payload = news._coin_news_envelope(
+        "BMT",
+        strict=True,
+        relevant_only=True,
+    )
+
+    assert "BMT" not in news.position_news_collection_universe()
+    assert [item["title"] for item in payload["items"]] == [
+        korean["title"],
+        english["title"],
+    ]
+    assert calls == [
+        (
+            '(BMT 코인 OR BMT 토큰 OR 버블맵스) when:30d',
+            50,
+            True,
+            "ko",
+        ),
+        (
+            '(BMT coin OR BMT crypto OR BMT token OR $BMT OR BMT USDT OR '
+            'Bubblemaps) when:30d',
+            50,
+            True,
+            "en",
+        ),
+    ]
+
+
 @pytest.mark.parametrize(
     ("title", "expected"),
     [

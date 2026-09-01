@@ -14,6 +14,7 @@ from sqlmodel import Session, select
 
 from ... import news as news_mod
 from ...db import (
+    RunSession,
     TickerNewsAiBudget,
     TickerNewsSnapshot,
     TickerNewsState,
@@ -49,6 +50,16 @@ def _clock(now_ms: int | None = None) -> tuple[int, str]:
         "%Y-%m-%dT%H:%M:%SZ"
     )
     return millis, stamp
+
+
+def _iso_millis(value: str) -> int:
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return 0
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return int(parsed.timestamp() * 1000)
 
 
 def _state(db: Session, asset_symbol: str, now_iso: str) -> TickerNewsState:
@@ -197,6 +208,22 @@ def discover_tracked_symbols(
             return discover_tracked_symbols(owned)
 
     assets = set(news_mod.position_news_collection_universe())
+    now_ms = int(time.time() * 1000)
+    active_window_ms = max(
+        30,
+        int(os.environ.get("POSITION_NEWS_ACTIVE_SESSION_SECONDS", "60")),
+    ) * 1000
+    running_sessions = db.exec(
+        select(RunSession).where(RunSession.status == "running")
+    ).all()
+    assets.update(
+        asset
+        for row in running_sessions
+        if now_ms - active_window_ms
+        <= _iso_millis(row.last_heartbeat_at)
+        <= now_ms + 30_000
+        if (asset := news_mod.asset_from_market_symbol(row.symbol))
+    )
 
     states = db.exec(
         select(TickerNewsState).where(

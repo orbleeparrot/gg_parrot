@@ -82,21 +82,36 @@ def test_discovery_collects_entire_builtin_coin_universe(db, monkeypatch):
     assert len(symbols) == len(universe)
 
 
-def test_discovery_ignores_running_assets_outside_builtin_universe(db):
-    db.add(
+def test_discovery_adds_recent_running_asset_and_ignores_stale_session(
+    db,
+    monkeypatch,
+):
+    monkeypatch.setenv("POSITION_NEWS_ACTIVE_SESSION_SECONDS", "30")
+    monkeypatch.setattr(repository.time, "time", lambda: 100.0)
+    db.add_all([
+        RunSession(
+            user_id=1,
+            symbol="BMTUSDT",
+            position_side="long",
+            status="running",
+            started_at="1970-01-01T00:01:35Z",
+            last_heartbeat_at="1970-01-01T00:01:35Z",
+        ),
         RunSession(
             user_id=1,
             symbol="RUN0USDT",
             position_side="long",
             status="running",
-            started_at="2026-08-24T07:00:00Z",
-        )
-    )
+            started_at="1970-01-01T00:00:00Z",
+            last_heartbeat_at="1970-01-01T00:00:00Z",
+        ),
+    ])
     db.commit()
 
     symbols = repository.discover_tracked_symbols(db)
 
-    assert set(symbols) == set(news_mod.position_news_collection_universe())
+    assert set(news_mod.position_news_collection_universe()).issubset(symbols)
+    assert "BMT" in symbols
     assert "RUN0" not in symbols
 
 

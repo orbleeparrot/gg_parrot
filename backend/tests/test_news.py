@@ -61,6 +61,17 @@ def _empty_coindesk_discovery(**_kwargs):
     return {"items": [], "items_by_source": {}, "sources": []}
 
 
+@pytest.fixture(autouse=True)
+def _disable_real_coindesk_browser(monkeypatch):
+    """Keep unit tests offline; browser-specific tests install their own fake."""
+    monkeypatch.setattr(
+        news,
+        "_fetch_coindesk_pages_playwright",
+        lambda _descriptors: {},
+        raising=False,
+    )
+
+
 def test_parse_extracts_fields_and_strips_source_suffix():
     items = news._parse_rss(_RSS)
     assert len(items) == 2  # 세 번째는 제목 중복 → 제거
@@ -670,6 +681,108 @@ def test_news_merge_keeps_source_diversity_when_one_feed_exceeds_limit(monkeypat
         "coindesk_rss",
         "google_news_rss",
     ]
+
+
+def test_coindesk_playwright_links_keep_only_dated_articles():
+    raw_links = [
+        {
+            "href": (
+                "https://www.coindesk.com/markets/2026/09/01/"
+                "bitcoin-steady?utm_source=homepage"
+            ),
+            "title": "  Bitcoin steady above $78,000   as markets recover  ",
+            "published": "2026-09-01T04:00:00Z",
+        },
+        {
+            "href": "https://www.coindesk.com/markets",
+            "title": "Markets",
+            "published": "",
+        },
+        {
+            "href": "https://example.com/markets/2026/09/01/not-coindesk",
+            "title": "Not CoinDesk",
+            "published": "",
+        },
+        {
+            "href": "https://www.coindesk.com/markets/2026/09/01/bitcoin-steady",
+            "title": "A second card for the same Bitcoin article",
+            "published": "2026-09-01T04:00:00Z",
+        },
+    ]
+
+    items = news._parse_coindesk_browser_links(
+        raw_links,
+        source_kind="section",
+        source_scope="markets",
+        source_page="https://www.coindesk.com/markets",
+    )
+
+    assert items == [
+        {
+            "title": "Bitcoin steady above $78,000 as markets recover",
+            "source": "CoinDesk",
+            "url": (
+                "https://www.coindesk.com/markets/2026/09/01/bitcoin-steady"
+            ),
+            "published": "2026-09-01T04:00:00+00:00",
+            "published_display": "",
+            "feed_source": "coindesk_section_playwright",
+            "source_scope": "markets",
+            "source_page": "https://www.coindesk.com/markets",
+        }
+    ]
+
+
+def test_coindesk_discovery_prefers_playwright_pages(monkeypatch):
+    browser_calls = []
+
+    def browser_fetch(descriptors):
+        browser_calls.append(tuple(descriptors))
+        return {
+            name: [
+                {
+                    "title": f"Browser headline for {scope}",
+                    "source": "CoinDesk",
+                    "url": (
+                        f"https://www.coindesk.com/markets/2026/09/01/{scope}"
+                    ),
+                    "published": "2026-09-01T04:00:00+00:00",
+                    "published_display": "1시간 전",
+                    "feed_source": f"coindesk_{kind}_playwright",
+                    "source_scope": scope,
+                    "source_page": page,
+                }
+            ]
+            for name, kind, scope, _query, page in descriptors
+        }
+
+    monkeypatch.setattr(
+        news,
+        "_fetch_coindesk_pages_playwright",
+        browser_fetch,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        news,
+        "_fetch_news",
+        lambda *_args, **_kwargs: pytest.fail(
+            "Google RSS fallback must not run for a ready browser page"
+        ),
+    )
+    monkeypatch.setattr(news, "_coindesk_discovery_cache", None, raising=False)
+    monkeypatch.setattr(news, "_coindesk_discovery_error_cache", None, raising=False)
+
+    payload = news._fetch_coindesk_discovery_news(strict=True)
+
+    assert len(browser_calls) == 1
+    assert len(payload["items"]) == len(news._COINDESK_DISCOVERY_SOURCES)
+    assert all(source["status"] == "ready" for source in payload["sources"])
+    assert {
+        source["source_type"] for source in payload["sources"]
+    } == {
+        "coindesk_section_playwright",
+        "coindesk_topic_playwright",
+    }
 
 
 def test_coindesk_discovery_fetches_requested_sections_and_topics_once(monkeypatch):

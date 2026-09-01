@@ -53,6 +53,9 @@
 `render.yaml`에 `gg-parrot-position-news` Background Worker가 포함되어 있습니다.
 변경을 push한 뒤 Render Blueprint에서 **Sync Blueprint**를 실행하고, worker에
 웹과 같은 `DATABASE_URL` 및 `PREFECT_API_URL`·`PREFECT_API_KEY`를 입력합니다.
+worker는 Playwright Chromium이 포함된 Docker 이미지로 배포되며 CoinDesk 공개
+섹션·태그 페이지를 수집합니다. Blueprint 동기화 시 Python runtime에서 Docker
+runtime으로 바뀌는 변경도 함께 적용해야 합니다.
 Background Worker에는 무료 플랜과 HTTP health check가 없습니다. 구조, 로컬 실행,
 Prefect Cloud 연결, 상세 검증 절차는
 [backend/PREFECT_POSITION_NEWS.md](backend/PREFECT_POSITION_NEWS.md)를 참고하세요.

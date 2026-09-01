@@ -7,8 +7,9 @@
      새 사실 생성 금지), 실패하면 개요 없이 헤드라인만 보여준다.
   4) 비용: KST 기준 하루 1회만 요약해 메모리에 캐시(방문마다 호출 X).
 
-Google News RSS의 한국어·CoinDesk 제한 검색 결과와 CoinDesk 공식 RSS를 함께 사용한다.
-기사 본문은 저장하지 않고 제목·매체·원문 링크·발행 시각만 다룬다.
+Google News RSS, CoinDesk 공식 RSS, Playwright로 렌더링한 CoinDesk 공개
+섹션·태그 페이지를 함께 사용한다. 기사 본문은 저장하지 않고 제목·매체·원문
+링크·발행 시각만 다룬다.
 """
 from __future__ import annotations
 
@@ -19,6 +20,7 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from typing import Optional
+from urllib.parse import urlsplit, urlunsplit
 from xml.etree import ElementTree as ET
 
 import httpx
@@ -36,6 +38,10 @@ _COIN_CACHE_SECONDS = max(60, int(os.environ.get("COIN_NEWS_CACHE_SECONDS", "300
 _COINDESK_DISCOVERY_MAX_STALE_SECONDS = 6 * 60 * 60
 _OPENEDEN_CACHE_SECONDS = 60 * 60
 _OPENEDEN_MAX_AGE_DAYS = 30
+_COINDESK_ARTICLE_PATH = re.compile(
+    r"^/(?:markets|business|policy|tech)/\d{4}/\d{2}/\d{2}/[^/]+/?$",
+    re.IGNORECASE,
+)
 
 # 시장·규제 전반 쿼리. Google News 검색 연산자 when:2d 로 최근 이틀로 제한.
 _MARKET_QUERY = "암호화폐 OR 가상자산 OR 비트코인 규제 OR 동향 when:2d"
@@ -714,6 +720,143 @@ def _combine_coindesk_discovery_items(items_by_source: dict) -> list[dict]:
     return combined
 
 
+def _parse_coindesk_browser_links(
+    raw_links: list[dict],
+    *,
+    source_kind: str,
+    source_scope: str,
+    source_page: str,
+    limit: int = 25,
+) -> list[dict]:
+    """Normalize public CoinDesk article cards extracted by Playwright."""
+    items = []
+    seen = set()
+    for raw in raw_links:
+        title = re.sub(r"\s+", " ", str(raw.get("title") or "")).strip()
+        href = str(raw.get("href") or "").strip()
+        parsed = urlsplit(href)
+        if (
+            parsed.scheme != "https"
+            or str(parsed.hostname or "").casefold() not in {
+                "coindesk.com",
+                "www.coindesk.com",
+            }
+            or not _COINDESK_ARTICLE_PATH.fullmatch(parsed.path)
+            or len(title) < 15
+        ):
+            continue
+        normalized_url = urlunsplit(
+            ("https", "www.coindesk.com", parsed.path.rstrip("/"), "", "")
+        )
+        key = normalized_url.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+
+        published = str(raw.get("published") or "").strip()
+        if published:
+            try:
+                parsed_date = datetime.fromisoformat(published.replace("Z", "+00:00"))
+                if parsed_date.tzinfo is None:
+                    parsed_date = parsed_date.replace(tzinfo=timezone.utc)
+                published = parsed_date.astimezone(timezone.utc).isoformat()
+            except ValueError:
+                published = ""
+        items.append({
+            "title": title[:300],
+            "source": "CoinDesk",
+            "url": normalized_url,
+            "published": published or None,
+            "published_display": str(raw.get("published_display") or "").strip(),
+            "feed_source": f"coindesk_{source_kind}_playwright",
+            "source_scope": source_scope,
+            "source_page": source_page,
+        })
+        if len(items) >= max(1, limit):
+            break
+    return items
+
+
+def _fetch_coindesk_pages_playwright(descriptors) -> dict[str, list[dict]]:
+    """Render CoinDesk's public section/tag pages and extract article metadata."""
+    enabled = os.environ.get("COINDESK_PLAYWRIGHT_ENABLED", "true").strip().casefold()
+    if enabled in {"0", "false", "no", "off"}:
+        return {}
+    try:
+        from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return {}
+
+    timeout_ms = max(
+        3_000,
+        int(os.environ.get("COINDESK_PLAYWRIGHT_TIMEOUT_MS", "15000")),
+    )
+    extracted: dict[str, list[dict]] = {}
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(
+                headless=True,
+                args=["--disable-dev-shm-usage"],
+            )
+            try:
+                context = browser.new_context(locale="en-US", timezone_id="UTC")
+                context.set_default_timeout(timeout_ms)
+                for name, source_kind, source_scope, _query, source_page in descriptors:
+                    page = context.new_page()
+                    try:
+                        response = page.goto(
+                            source_page,
+                            wait_until="domcontentloaded",
+                            timeout=timeout_ms,
+                        )
+                        if response is None or response.status >= 400:
+                            continue
+                        try:
+                            page.wait_for_function(
+                                r"""() => Array.from(document.querySelectorAll('a[href]'))
+                                  .some(a => /\/(markets|business|policy|tech)\/\d{4}\/\d{2}\/\d{2}\//
+                                  .test(a.href))""",
+                                timeout=timeout_ms,
+                            )
+                        except PlaywrightTimeoutError:
+                            continue
+                        raw_links = page.locator("a[href]").evaluate_all(
+                            """anchors => anchors.map(anchor => {
+                              const heading = anchor.querySelector('h1,h2,h3,h4,h5,h6')
+                                || anchor.closest('h1,h2,h3,h4,h5,h6');
+                              const container = anchor.closest('article') || anchor.parentElement;
+                              const time = container ? container.querySelector('time') : null;
+                              return {
+                                href: anchor.href || '',
+                                title: (heading?.innerText
+                                  || anchor.getAttribute('aria-label')
+                                  || anchor.innerText || '').trim(),
+                                published: time?.getAttribute('datetime') || '',
+                                published_display: (time?.innerText || '').trim(),
+                              };
+                            })"""
+                        )
+                        items = _parse_coindesk_browser_links(
+                            raw_links,
+                            source_kind=source_kind,
+                            source_scope=source_scope,
+                            source_page=source_page,
+                        )
+                        if items:
+                            extracted[name] = items
+                    except Exception:
+                        continue
+                    finally:
+                        page.close()
+                context.close()
+            finally:
+                browser.close()
+    except Exception:
+        return {}
+    return extracted
+
+
 def _stale_coindesk_discovery_payload(
     payload: dict,
     *,
@@ -746,7 +889,7 @@ def _stale_coindesk_discovery_payload(
 
 
 def _fetch_coindesk_discovery_news(*, strict: bool = False) -> dict:
-    """Discover section/topic-scoped CoinDesk headlines via Google News RSS."""
+    """Use public CoinDesk pages first, with per-source Google RSS fallback."""
     global _coindesk_discovery_cache, _coindesk_discovery_error_cache
 
     now = time.time()
@@ -765,8 +908,22 @@ def _fetch_coindesk_discovery_news(*, strict: bool = False) -> dict:
         return {"items": [], "items_by_source": {}, "sources": []}
 
     def load() -> dict:
+        browser_items_by_source = _fetch_coindesk_pages_playwright(
+            _COINDESK_DISCOVERY_SOURCES
+        )
+
         def fetch_source(descriptor):
             name, source_kind, source_scope, query, source_page = descriptor
+            browser_items = list(browser_items_by_source.get(name) or [])
+            if browser_items:
+                return name, browser_items, {
+                    "name": name,
+                    "source_type": f"coindesk_{source_kind}_playwright",
+                    "source_page": source_page,
+                    "status": "ready",
+                    "fetched_count": len(browser_items),
+                    "last_ready_at": now,
+                }
             try:
                 candidates = _fetch_news(
                     query,

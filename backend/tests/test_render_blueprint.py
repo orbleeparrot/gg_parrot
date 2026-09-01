@@ -18,4 +18,3 @@ def test_render_blueprint_includes_position_news_background_worker():
 
     for key in ("DATABASE_URL", "PREFECT_API_URL", "PREFECT_API_KEY"):
         assert f"- key: {key}\n        sync: false" in worker
-

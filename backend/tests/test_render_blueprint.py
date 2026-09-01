@@ -10,11 +10,38 @@ def test_render_blueprint_includes_position_news_background_worker():
     worker = blueprint.split("  - type: worker\n", 1)[1]
 
     assert "name: gg-parrot-position-news" in worker
-    assert "rootDir: backend" in worker
-    assert "pip install -r requirements-prefect.txt" in worker
+    assert "runtime: docker" in worker
+    assert "dockerfilePath: backend/Dockerfile.prefect" in worker
+    assert "dockerContext: backend" in worker
     assert "python -m app.workflows.position_news serve" in worker
     assert "maxShutdownDelaySeconds: 300" in worker
     assert "healthCheckPath:" not in worker
+    assert 'value: "claude-haiku-4-5"' in worker
+    assert 'value: "2"' in worker
+    assert 'value: "10"' in worker
+    assert 'value: "256"' in worker
 
     for key in ("DATABASE_URL", "PREFECT_API_URL", "PREFECT_API_KEY"):
         assert f"- key: {key}\n        sync: false" in worker
+
+    dockerfile = (
+        Path(__file__).resolve().parents[1] / "Dockerfile.prefect"
+    ).read_text(encoding="utf-8")
+    requirements = (
+        Path(__file__).resolve().parents[1] / "requirements.txt"
+    ).read_text(encoding="utf-8")
+
+    assert "mcr.microsoft.com/playwright/python:v1.62.0-noble" in dockerfile
+    assert "playwright==1.62.0" in requirements
+
+
+def test_prefect_serve_pauses_schedule_when_worker_stops():
+    workflow = (
+        Path(__file__).resolve().parents[1]
+        / "app"
+        / "workflows"
+        / "position_news.py"
+    ).read_text(encoding="utf-8")
+
+    assert "pause_on_shutdown=True" in workflow
+    assert "pause_on_shutdown=False" not in workflow

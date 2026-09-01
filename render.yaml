@@ -39,21 +39,25 @@ services:
   # 이 Render 프로세스가 수행합니다. Background Worker에는 HTTP health check가 없습니다.
   - type: worker
     name: gg-parrot-position-news
-    runtime: python
-    rootDir: backend
+    runtime: docker
     plan: starter
-    buildCommand: pip install -r requirements-prefect.txt
-    startCommand: python -m app.workflows.position_news serve
+    dockerfilePath: backend/Dockerfile.prefect
+    dockerContext: backend
+    dockerCommand: python -m app.workflows.position_news serve
     maxShutdownDelaySeconds: 300
     envVars:
-      - key: PYTHON_VERSION
-        value: "3.12.7"
       - key: POSITION_NEWS_REQUIRE_POSTGRES
         value: "true"
       - key: POSITION_NEWS_COLLECTION_SECONDS
         value: "300"
+      - key: POSITION_NEWS_MAX_AI_ANALYSES_PER_RUN
+        value: "2"
       - key: POSITION_NEWS_MAX_AI_ANALYSES_PER_DAY
-        value: "120"
+        value: "10"
+      - key: COINDESK_PLAYWRIGHT_ENABLED
+        value: "true"
+      - key: COINDESK_PLAYWRIGHT_TIMEOUT_MS
+        value: "15000"
       # 웹 서비스와 정확히 같은 Supabase Session Pooler URL을 입력합니다.
       - key: DATABASE_URL
         sync: false
@@ -65,4 +69,6 @@ services:
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: ANTHROPIC_MODEL
-        value: "claude-opus-5"
+        value: "claude-haiku-4-5"
+      - key: ANTHROPIC_POSITION_NEWS_MAX_TOKENS
+        value: "256"

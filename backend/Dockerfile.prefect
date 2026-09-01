@@ -1,0 +1,15 @@
+FROM mcr.microsoft.com/playwright/python:v1.62.0-noble
+
+ENV PYTHONUNBUFFERED=1 \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+WORKDIR /app
+
+COPY requirements.txt requirements-prefect.txt ./
+RUN pip install --no-cache-dir -r requirements-prefect.txt
+
+COPY --chown=pwuser:pwuser app ./app
+
+USER pwuser
+
+CMD ["python", "-m", "app.workflows.position_news", "serve"]

@@ -236,7 +236,7 @@ def main() -> None:
     collect_position_news_flow.serve(
         name="shared-ticker-news",
         interval=timedelta(seconds=interval_seconds),
-        pause_on_shutdown=False,
+        pause_on_shutdown=True,
         limit=1,
         global_limit=1,
         tags=["agents", "position-news", "central-collector"],

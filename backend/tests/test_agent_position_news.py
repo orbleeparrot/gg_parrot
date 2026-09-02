@@ -203,6 +203,40 @@ def test_ai_enriches_and_summarizes_only_three_articles_in_one_batch(monkeypatch
     assert result["items"][3]["summary"] == ""
 
 
+def test_rate_limited_analysis_keeps_article_content_without_spending_ai(monkeypatch):
+    items = [{
+        "title": "시아코인 네트워크 업데이트",
+        "source": "테스트뉴스",
+        "url": "https://example.com/siacoin",
+    }]
+    enrichment_calls = []
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(
+        classifier.news_mod,
+        "enrich_article_excerpts",
+        lambda raw, *, limit: enrichment_calls.append((raw, limit)) or [{
+            **raw[0],
+            "excerpt": "시아 네트워크가 저장소 처리 방식을 개선한 업데이트를 발표했습니다.",
+        }],
+    )
+    monkeypatch.setattr(
+        classifier,
+        "_generate_ai_analysis",
+        lambda *_args, **_kwargs: pytest.fail("AI must not run without a reserved budget"),
+    )
+
+    result = classifier.analyze_headlines(items, "시아코인", allow_ai=False)
+
+    assert len(enrichment_calls) == 1
+    assert result["analysis_status"] == "rate_limited"
+    assert result["analysis_source"] == "rule"
+    assert result["ai"] is False
+    assert result["items"][0]["summary"] == (
+        "시아 네트워크가 저장소 처리 방식을 개선한 업데이트를 발표했습니다."
+    )
+
+
 def _news_fixture():
     return {
         "symbol": "BTC",

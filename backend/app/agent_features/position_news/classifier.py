@@ -14,7 +14,7 @@ from ... import news as news_mod
 from ...ai_runtime import ai_cache_key, get_ai_runtime, get_anthropic_client
 
 FEATURE_VERSION = 2
-PROMPT_VERSION = "position-news-article-summary-v2"
+PROMPT_VERSION = "position-news-article-summary-v3"
 _DEFAULT_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-5")
 _MAX_TOKENS = max(128, int(os.environ.get("ANTHROPIC_POSITION_NEWS_MAX_TOKENS", "500")))
 _MAX_AI_SUMMARY_ITEMS = max(
@@ -304,16 +304,25 @@ def analyze_headlines(items: list[dict], coin_name: str, *, allow_ai: bool = Tru
         "analysis_status": "ready" if items else "empty",
         "ai": False,
     }
-    if not items or not os.environ.get("ANTHROPIC_API_KEY"):
+    if not items:
         return baseline
-    if not allow_ai:
-        baseline["analysis_status"] = "rate_limited"
+    if not os.environ.get("ANTHROPIC_API_KEY"):
         return baseline
     try:
         enriched = news_mod.enrich_article_excerpts(
             items,
             limit=_MAX_AI_SUMMARY_ITEMS,
         )
+    except Exception:
+        enriched = [dict(item) for item in items]
+    for index, item in enumerate(enriched[:_MAX_AI_SUMMARY_ITEMS]):
+        excerpt = _clean_summary(item.get("excerpt") or "")
+        if excerpt:
+            baseline["items"][index]["summary"] = excerpt
+    if not allow_ai:
+        baseline["analysis_status"] = "rate_limited"
+        return baseline
+    try:
         selected = enriched[:_MAX_AI_SUMMARY_ITEMS]
         generated = _generate_ai_analysis(selected, coin_name)
     except Exception:

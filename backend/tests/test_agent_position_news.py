@@ -56,16 +56,29 @@ def test_rule_classifier_only_commits_on_clear_headline_terms():
     assert classifier.classify_headline("비트코인 정책 토론회 개최")['sentiment'] == "unclear"
 
 
-def test_ai_json_requires_every_enum_and_discards_all_freeform_text():
+def test_ai_json_requires_a_factual_summary_and_discards_other_freeform_text():
     valid = json.dumps({
         "overview": "Buy Bitcoin. 지금 손절이 필요합니다.",
         "items": [
-            {"index": 0, "sentiment": "positive", "reason": "Go long BTC."},
-            {"index": 1, "sentiment": "negative", "reason": "물타기를 고려해 보세요."},
+            {
+                "index": 0,
+                "sentiment": "positive",
+                "summary": "운용사가 비트코인 현물 ETF의 신규 자금 유입을 발표했습니다.",
+                "reason": "Go long BTC.",
+            },
+            {
+                "index": 1,
+                "sentiment": "negative",
+                "summary": "거래소가 보안 사고 이후 출금을 일시 중단했습니다.",
+                "reason": "물타기를 고려해 보세요.",
+            },
         ],
     }, ensure_ascii=False)
     parsed = classifier.parse_ai_analysis(valid, 2)
     assert [item["sentiment"] for item in parsed["items"]] == ["positive", "negative"]
+    assert parsed["items"][0]["summary"] == (
+        "운용사가 비트코인 현물 ETF의 신규 자금 유입을 발표했습니다."
+    )
     assert set(parsed) == {"items"}
     serialized = json.dumps(parsed, ensure_ascii=False)
     assert "Buy" not in serialized
@@ -73,13 +86,13 @@ def test_ai_json_requires_every_enum_and_discards_all_freeform_text():
     assert "물타기" not in serialized
 
     incomplete = json.dumps({"items": [
-        {"index": 0, "sentiment": "positive"},
+        {"index": 0, "sentiment": "positive", "summary": "첫 기사 요약입니다."},
     ]}, ensure_ascii=False)
     with pytest.raises(ValueError):
         classifier.parse_ai_analysis(incomplete, 2)
 
     invalid_enum = json.dumps({"items": [
-        {"index": 0, "sentiment": "buy_now"},
+        {"index": 0, "sentiment": "buy_now", "summary": "기사 요약입니다."},
     ]}, ensure_ascii=False)
     with pytest.raises(ValueError):
         classifier.parse_ai_analysis(invalid_enum, 1)
@@ -110,6 +123,7 @@ def test_missing_or_failed_ai_uses_safe_rule_fallback(monkeypatch):
         lambda *_args, **_kwargs: {
             "items": [{
                 "sentiment": "positive",
+                "summary": "비트코인 현물 ETF가 승인됐다는 내용입니다.",
                 "reason": "헤드라인을 자산에 긍정적인 맥락으로 분류했어요.",
                 "confidence": "medium",
             }],
@@ -125,6 +139,7 @@ def test_missing_or_failed_ai_uses_safe_rule_fallback(monkeypatch):
         lambda *_args, **_kwargs: {
             "items": [{
                 "sentiment": "negative",
+                "summary": "비트코인 현물 ETF가 승인됐다는 내용입니다.",
                 "reason": "헤드라인을 자산에 부정적인 맥락으로 분류했어요.",
                 "confidence": "medium",
             }],
@@ -141,6 +156,53 @@ def test_missing_or_failed_ai_uses_safe_rule_fallback(monkeypatch):
     assert called == []
 
 
+def test_ai_enriches_and_summarizes_only_three_articles_in_one_batch(monkeypatch):
+    items = [
+        {"title": f"기사 {index}", "source": "테스트뉴스", "url": f"https://example.com/{index}"}
+        for index in range(5)
+    ]
+    calls = []
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(
+        classifier.news_mod,
+        "enrich_article_excerpts",
+        lambda raw, *, limit: [
+            {**item, "excerpt": f"기사 {index} 본문"} for index, item in enumerate(raw)
+        ],
+    )
+
+    def fake_generate(selected, coin_name):
+        calls.append((selected, coin_name))
+        return {
+            "items": [
+                {
+                    "sentiment": "neutral",
+                    "summary": f"기사 {index}의 핵심 내용입니다.",
+                    "reason": "뚜렷한 긍정·부정 방향이 없는 기사로 분류했어요.",
+                    "confidence": "medium",
+                }
+                for index in range(len(selected))
+            ],
+        }
+
+    monkeypatch.setattr(classifier, "_generate_ai_analysis", fake_generate)
+
+    result = classifier.analyze_headlines(items, "테스트코인")
+
+    assert len(calls) == 1
+    assert calls[0][1] == "테스트코인"
+    assert [item["excerpt"] for item in calls[0][0]] == [
+        "기사 0 본문", "기사 1 본문", "기사 2 본문",
+    ]
+    assert [item["summary"] for item in result["items"][:3]] == [
+        "기사 0의 핵심 내용입니다.",
+        "기사 1의 핵심 내용입니다.",
+        "기사 2의 핵심 내용입니다.",
+    ]
+    assert result["items"][3]["summary"] == ""
+
+
 def _news_fixture():
     return {
         "symbol": "BTC",
@@ -150,12 +212,14 @@ def _news_fixture():
         "items": [
             {
                 "title": "비트코인 현물 ETF 승인",
+                "excerpt": "금융 당국이 비트코인 현물 ETF 출시를 승인했습니다.",
                 "source": "테스트뉴스",
                 "url": "https://news.example.com/positive",
                 "published": "2026-08-19T04:55:00Z",
             },
             {
                 "title": "거래소 해킹으로 출금 중단",
+                "excerpt": "거래소가 보안 사고를 확인하고 출금을 일시 중단했습니다.",
                 "source": "테스트뉴스",
                 "url": "https://news.example.com/negative",
                 "published": "2026-08-19T04:50:00Z",
@@ -168,8 +232,18 @@ def _analysis_fixture():
     return {
         "overview": "승인과 보안 사고 관련 헤드라인이 함께 확인됐어요.",
         "items": [
-            {"sentiment": "positive", "reason": "승인 소식", "confidence": "medium"},
-            {"sentiment": "negative", "reason": "해킹 사고", "confidence": "medium"},
+            {
+                "sentiment": "positive",
+                "summary": "금융 당국이 비트코인 현물 ETF 출시를 승인했습니다.",
+                "reason": "승인 소식",
+                "confidence": "medium",
+            },
+            {
+                "sentiment": "negative",
+                "summary": "거래소가 보안 사고 이후 출금을 중단했습니다.",
+                "reason": "해킹 사고",
+                "confidence": "medium",
+            },
         ],
         "analysis_status": "ready",
         "analysis_source": "rule",
@@ -193,8 +267,11 @@ def test_payload_uses_registered_macro_direction_and_preserves_sources():
     assert payload["context"]["market_symbol"] == "BTCUSDT"
     assert payload["context"]["asset_symbol"] == "BTC"
     assert [item["position_effect"] for item in payload["items"]] == ["unfavorable", "favorable"]
-    assert payload["items"][0]["position_label"] == "숏 포지션에 불리한 뉴스"
-    assert payload["items"][1]["position_label"] == "숏 포지션에 유리한 뉴스"
+    assert payload["items"][0]["summary"] == (
+        "금융 당국이 비트코인 현물 ETF 출시를 승인했습니다."
+    )
+    assert "position_label" not in payload["items"][0]
+    assert "reason" not in payload["items"][0]
     assert payload["items"][0]["url"] == "https://news.example.com/positive"
     assert "매매 지시가 아닙니다" in payload["disclaimer"]
 

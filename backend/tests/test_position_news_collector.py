@@ -133,12 +133,19 @@ def test_base_fingerprint_ignores_reordering_but_not_asset_or_headline_changes()
         {"title": "새 기사", "source": "B"},
         {"title": "첫 번째", "source": "A"},
     ]
+    changed_excerpt = [
+        {"title": "두 번째", "source": "B", "excerpt": "수정된 기사 설명"},
+        {"title": "첫 번째", "source": "A"},
+    ]
 
     assert collector.analysis_fingerprint("BTC", first) == (
         collector.analysis_fingerprint("BTC", reordered)
     )
     assert collector.analysis_fingerprint("BTC", first) != (
         collector.analysis_fingerprint("BTC", changed)
+    )
+    assert collector.analysis_fingerprint("BTC", first) != (
+        collector.analysis_fingerprint("BTC", changed_excerpt)
     )
     assert collector.analysis_fingerprint("CRVUSD", first) != (
         collector.analysis_fingerprint("CRV", first)

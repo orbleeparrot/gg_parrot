@@ -105,8 +105,9 @@ def build_position_news(
                 "published": raw.get("published"),
                 "asset_sentiment": sentiment,
                 "position_effect": effect,
-                "position_label": classifier.position_label(effect, side),
-                "reason": str(assessed.get("reason") or "")[:180],
+                "summary": str(
+                    assessed.get("summary") or raw.get("excerpt") or ""
+                )[:180],
                 "confidence": (
                     assessed.get("confidence")
                     if assessed.get("confidence") in {"low", "medium", "high"}
@@ -136,7 +137,7 @@ def build_position_news(
         ),
         "overview": {
             "text": str(analysis.get("overview") or ""),
-            "scope": "headlines_only",
+            "scope": "articles",
         },
         "snapshot_id": (
             snapshot_id[:20]

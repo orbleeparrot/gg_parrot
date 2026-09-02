@@ -36,6 +36,7 @@ _COINDESK_RSS = """<?xml version="1.0" encoding="UTF-8"?>
   <item>
     <title>OpenEden expands its tokenized Treasury platform</title>
     <link>https://www.coindesk.com/business/2026/08/25/openeden-expands</link>
+    <description><![CDATA[OpenEden added support for more tokenized U.S. Treasury products.]]></description>
     <pubDate>Tue, 25 Aug 2026 01:00:00 +0000</pubDate>
     <category>Finance</category>
     <category>Tokenization</category>
@@ -43,6 +44,7 @@ _COINDESK_RSS = """<?xml version="1.0" encoding="UTF-8"?>
   <item>
     <title>Strategy raises fresh cash through MSTR sales</title>
     <link>https://www.coindesk.com/markets/2026/08/25/strategy-raises-cash</link>
+    <description><![CDATA[Strategy raised new capital by selling shares of MSTR.]]></description>
     <pubDate>Tue, 25 Aug 2026 00:30:00 +0000</pubDate>
     <category>Markets</category>
     <category>Bitcoin News</category>
@@ -50,6 +52,7 @@ _COINDESK_RSS = """<?xml version="1.0" encoding="UTF-8"?>
   <item>
     <title>Ethereum upgrade changes wallet gas assumptions</title>
     <link>https://www.coindesk.com/tech/2026/08/25/ethereum-upgrade</link>
+    <description><![CDATA[The Ethereum upgrade changes how wallets estimate gas fees.]]></description>
     <pubDate>Tue, 25 Aug 2026 00:00:00 +0000</pubDate>
     <category>Tech</category>
     <category>Ethereum News</category>
@@ -746,6 +749,9 @@ def test_coindesk_feed_is_shared_across_tickers_and_uses_category_tags(monkeypat
     assert [item["title"] for item in ethereum["items"]] == [
         "Ethereum upgrade changes wallet gas assumptions",
     ]
+    assert bitcoin["items"][0]["excerpt"] == (
+        "Strategy raised new capital by selling shares of MSTR."
+    )
     assert calls == ["https://www.coindesk.com/arc/outboundfeeds/rss/"]
 
 
@@ -779,6 +785,7 @@ def test_coindesk_playwright_links_keep_only_dated_articles():
             ),
             "title": "  Bitcoin steady above $78,000   as markets recover  ",
             "published": "2026-09-01T04:00:00Z",
+            "excerpt": " Bitcoin held its range while broader markets recovered. ",
         },
         {
             "href": "https://www.coindesk.com/markets",
@@ -813,11 +820,44 @@ def test_coindesk_playwright_links_keep_only_dated_articles():
             ),
             "published": "2026-09-01T04:00:00+00:00",
             "published_display": "",
+            "excerpt": "Bitcoin held its range while broader markets recovered.",
             "feed_source": "coindesk_section_playwright",
             "source_scope": "markets",
             "source_page": "https://www.coindesk.com/markets",
         }
     ]
+
+
+def test_article_excerpt_enrichment_reuses_feed_text_and_fetches_only_missing(monkeypatch):
+    requested = []
+    items = [
+        {
+            "title": "CoinDesk article",
+            "url": "https://www.coindesk.com/markets/2026/09/01/article",
+            "excerpt": "  Feed-provided   article summary. ",
+        },
+        {
+            "title": "Publisher article",
+            "url": "https://news.google.com/rss/articles/redirect",
+        },
+        {
+            "title": "Fourth article",
+            "url": "https://example.com/fourth",
+        },
+    ]
+
+    def fake_fetch(targets):
+        requested.extend(targets)
+        return ["Publisher page body with the relevant facts."]
+
+    monkeypatch.setattr(news, "_fetch_article_excerpts_playwright", fake_fetch)
+
+    enriched = news.enrich_article_excerpts(items, limit=2)
+
+    assert enriched[0]["excerpt"] == "Feed-provided article summary."
+    assert enriched[1]["excerpt"] == "Publisher page body with the relevant facts."
+    assert "excerpt" not in enriched[2]
+    assert [item["title"] for item in requested] == ["Publisher article"]
 
 
 def test_coindesk_discovery_prefers_playwright_pages(monkeypatch):

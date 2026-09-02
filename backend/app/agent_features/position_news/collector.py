@@ -27,6 +27,7 @@ def analysis_fingerprint(asset_symbol: str, items: list[dict]) -> str:
             {
                 "title": str(item.get("title") or "").strip(),
                 "source": str(item.get("source") or "").strip(),
+                "excerpt": str(item.get("excerpt") or "").strip(),
             }
             for item in items
         ),

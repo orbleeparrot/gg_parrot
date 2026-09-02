@@ -37,7 +37,7 @@ test("pending position news is shown as a current collection status event", () =
   assert.equal(events[0].sourceLabel, "중앙 뉴스 수집 상태");
 });
 
-test("position news uses article headlines as titles without a summary card", () => {
+test("position news shows the article title and content summary without position labels", () => {
   const events = positionNewsModule.buildEvents({
     featureStates: {
       position_news: {
@@ -58,8 +58,7 @@ test("position news uses article headlines as titles without a summary card", ()
             url: "https://news.example.com/openeden",
             published: "2026-08-25T01:11:44Z",
             position_effect: "unclear",
-            position_label: "롱 포지션 유불리 판단이 어려운 뉴스",
-            reason: "헤드라인만으로 방향을 단정하기 어려워요.",
+            summary: "OpenEden이 토큰화 미국 국채 플랫폼의 지원 범위를 확대했다는 내용입니다.",
           }],
           analysis_status: "rate_limited",
           updated_at: "2026-08-25T00:48:37Z",
@@ -75,9 +74,13 @@ test("position news uses article headlines as titles without a summary card", ()
 
   assert.equal(events.length, 1);
   assert.equal(events[0].title, "OpenEden expands its tokenized Treasury platform");
-  assert.equal(events[0].summary, "롱 포지션 유불리 판단이 어려운 뉴스");
-  assert.equal(events[0].detail, "헤드라인만으로 방향을 단정하기 어려워요.");
+  assert.equal(
+    events[0].summary,
+    "OpenEden이 토큰화 미국 국채 플랫폼의 지원 범위를 확대했다는 내용입니다.",
+  );
+  assert.ok(!("detail" in events[0]));
   assert.equal(events[0].occurredAt, "2026-08-25T01:11:44Z");
   assert.equal(events[0].sourceLabel, "CoinDesk");
-  assert.ok(!events.some((event) => event.title.includes("최근 헤드라인 요약")));
+  const serialized = JSON.stringify(events);
+  assert.doesNotMatch(serialized, /롱 포지션|유리한 뉴스|불리한 뉴스|판단 근거|최근 헤드라인 요약/);
 });

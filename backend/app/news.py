@@ -1,18 +1,18 @@
-"""'오늘의 코인동향' — 무료 RSS 헤드라인 수집과 요약.
+"""'오늘의 코인동향' — 무료 RSS 기사 수집과 요약.
 
 정보 제공용이며 투자자문이 아니다. 설계 가드레일(사용자 합의):
   1) 중립·사실 위주: 실제 헤드라인을 그대로 링크로 보여준다(팩트).
-  2) 저작권: 기사 전문을 복제하지 않는다 — 제목·매체·시각 + '원문 링크'만.
-  3) 환각 방지: AI 개요는 '주어진 헤드라인'에서만 요약하게 하고(모델 지식으로
-     새 사실 생성 금지), 실패하면 개요 없이 헤드라인만 보여준다.
+  2) 기사 전문은 저장하지 않는다. RSS 설명문이나 실행 중 추출한 일부 본문만
+     AI 입력으로 사용하고, 저장되는 결과는 짧은 요약뿐이다.
+  3) 환각 방지: AI는 수집한 기사 내용에서만 요약하고 새 사실을 추가하지 않는다.
   4) 비용: KST 기준 하루 1회만 요약해 메모리에 캐시(방문마다 호출 X).
 
 Google News RSS, CoinDesk 공식 RSS, Playwright로 렌더링한 CoinDesk 공개
-섹션·태그 페이지를 함께 사용한다. 기사 본문은 저장하지 않고 제목·매체·원문
-링크·발행 시각만 다룬다.
+섹션·태그 페이지를 함께 사용한다.
 """
 from __future__ import annotations
 
+import html
 import os
 import re
 import time
@@ -34,6 +34,10 @@ _OPENEDEN_RSS = "https://openeden.com/news/feed/"
 _HTTP_TIMEOUT = 10.0
 _MAX_ITEMS = 8
 _MAX_COIN_ITEMS = 10
+_ARTICLE_EXCERPT_CHARS = max(
+    400,
+    min(4_000, int(os.environ.get("POSITION_NEWS_ARTICLE_EXCERPT_CHARS", "1800"))),
+)
 _COIN_CACHE_SECONDS = max(60, int(os.environ.get("COIN_NEWS_CACHE_SECONDS", "300")))
 _COINDESK_DISCOVERY_MAX_STALE_SECONDS = 6 * 60 * 60
 _OPENEDEN_CACHE_SECONDS = 60 * 60
@@ -486,12 +490,20 @@ def _parse_rss(xml_text: str, *, limit: int = _MAX_ITEMS) -> list[dict]:
     return items
 
 
+def _normalize_article_excerpt(value: str, *, limit: int = _ARTICLE_EXCERPT_CHARS) -> str:
+    """Convert publisher HTML/snippets to bounded plain text for AI input."""
+    decoded = html.unescape(str(value or ""))
+    without_tags = re.sub(r"<[^>]+>", " ", decoded)
+    normalized = re.sub(r"\s+", " ", without_tags).strip()
+    return normalized[: max(1, limit)].rstrip()
+
+
 def _parse_coindesk_rss(
     xml_text: str,
     *,
     limit: int = 25,
 ) -> list[dict]:
-    """Parse CoinDesk's official headline-link RSS without article bodies."""
+    """Parse CoinDesk's official RSS metadata and publisher description."""
     try:
         root = ET.fromstring(xml_text)
     except ET.ParseError:
@@ -520,7 +532,7 @@ def _parse_coindesk_rss(
             for category in item.findall("category")
             if str(category.text or "").strip()
         ]
-        items.append({
+        parsed_item = {
             "title": title,
             "source": "CoinDesk",
             "url": link,
@@ -532,7 +544,11 @@ def _parse_coindesk_rss(
             "published_display": _fmt_published(published_dt),
             "categories": categories,
             "feed_source": "coindesk_rss",
-        })
+        }
+        excerpt = _normalize_article_excerpt(item.findtext("description") or "")
+        if excerpt:
+            parsed_item["excerpt"] = excerpt
+        items.append(parsed_item)
         if len(items) >= limit:
             break
     return items
@@ -798,7 +814,7 @@ def _parse_coindesk_browser_links(
                 published = parsed_date.astimezone(timezone.utc).isoformat()
             except ValueError:
                 published = ""
-        items.append({
+        parsed_item = {
             "title": title[:300],
             "source": "CoinDesk",
             "url": normalized_url,
@@ -807,7 +823,11 @@ def _parse_coindesk_browser_links(
             "feed_source": f"coindesk_{source_kind}_playwright",
             "source_scope": source_scope,
             "source_page": source_page,
-        })
+        }
+        excerpt = _normalize_article_excerpt(raw.get("excerpt") or "")
+        if excerpt:
+            parsed_item["excerpt"] = excerpt
+        items.append(parsed_item)
         if len(items) >= max(1, limit):
             break
     return items
@@ -863,6 +883,7 @@ def _fetch_coindesk_pages_playwright(descriptors) -> dict[str, list[dict]]:
                                 || anchor.closest('h1,h2,h3,h4,h5,h6');
                               const container = anchor.closest('article') || anchor.parentElement;
                               const time = container ? container.querySelector('time') : null;
+                              const excerpt = container ? container.querySelector('p') : null;
                               return {
                                 href: anchor.href || '',
                                 title: (heading?.innerText
@@ -870,6 +891,7 @@ def _fetch_coindesk_pages_playwright(descriptors) -> dict[str, list[dict]]:
                                   || anchor.innerText || '').trim(),
                                 published: time?.getAttribute('datetime') || '',
                                 published_display: (time?.innerText || '').trim(),
+                                excerpt: (excerpt?.innerText || '').trim(),
                               };
                             })"""
                         )
@@ -891,6 +913,117 @@ def _fetch_coindesk_pages_playwright(descriptors) -> dict[str, list[dict]]:
     except Exception:
         return {}
     return extracted
+
+
+def _fetch_article_excerpts_playwright(items: list[dict]) -> list[str]:
+    """Resolve article URLs and read bounded body text in one browser session."""
+    if not items:
+        return []
+    enabled = os.environ.get(
+        "POSITION_NEWS_ARTICLE_PLAYWRIGHT_ENABLED",
+        "true",
+    ).strip().casefold()
+    if enabled in {"0", "false", "no", "off"}:
+        return ["" for _item in items]
+    try:
+        from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return ["" for _item in items]
+
+    timeout_ms = max(
+        3_000,
+        int(os.environ.get("POSITION_NEWS_ARTICLE_TIMEOUT_MS", "12000")),
+    )
+    excerpts = ["" for _item in items]
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(
+                headless=True,
+                args=["--disable-dev-shm-usage"],
+            )
+            try:
+                context = browser.new_context(locale="ko-KR", timezone_id="Asia/Seoul")
+                context.set_default_timeout(timeout_ms)
+
+                def block_heavy_assets(route):
+                    if route.request.resource_type in {"font", "image", "media"}:
+                        route.abort()
+                    else:
+                        route.continue_()
+
+                context.route("**/*", block_heavy_assets)
+                for index, item in enumerate(items):
+                    url = str(item.get("url") or "").strip()
+                    parsed = urlsplit(url)
+                    if parsed.scheme != "https" or not parsed.hostname:
+                        continue
+                    page = context.new_page()
+                    try:
+                        response = page.goto(
+                            url,
+                            wait_until="domcontentloaded",
+                            timeout=timeout_ms,
+                        )
+                        if response is None or response.status >= 400:
+                            continue
+                        try:
+                            page.locator("article p, main p").first.wait_for(
+                                state="attached",
+                                timeout=min(2_500, timeout_ms),
+                            )
+                        except PlaywrightTimeoutError:
+                            pass
+                        paragraphs = page.locator("article p, main p").all_inner_texts()
+                        useful = [
+                            _normalize_article_excerpt(paragraph, limit=600)
+                            for paragraph in paragraphs
+                            if len(_normalize_article_excerpt(paragraph, limit=600)) >= 30
+                        ]
+                        excerpt = _normalize_article_excerpt(" ".join(useful[:8]))
+                        if not excerpt:
+                            meta = page.locator(
+                                'meta[name="description"], meta[property="og:description"]'
+                            ).first
+                            if meta.count():
+                                excerpt = _normalize_article_excerpt(
+                                    meta.get_attribute("content") or ""
+                                )
+                        excerpts[index] = excerpt
+                    except Exception:
+                        continue
+                    finally:
+                        page.close()
+                context.close()
+            finally:
+                browser.close()
+    except Exception:
+        return excerpts
+    return excerpts
+
+
+def enrich_article_excerpts(items: list[dict], *, limit: int = 3) -> list[dict]:
+    """Return copies enriched for AI; fetched article bodies never enter snapshots."""
+    enriched = [dict(item) for item in items]
+    bounded = min(len(enriched), max(0, limit))
+    missing_indexes = []
+    for index, item in enumerate(enriched[:bounded]):
+        excerpt = _normalize_article_excerpt(item.get("excerpt") or "")
+        if excerpt:
+            item["excerpt"] = excerpt
+        else:
+            item.pop("excerpt", None)
+            missing_indexes.append(index)
+    if not missing_indexes:
+        return enriched
+
+    targets = [enriched[index] for index in missing_indexes]
+    fetched = _fetch_article_excerpts_playwright(targets)
+    for index, excerpt in zip(missing_indexes, fetched):
+        normalized = _normalize_article_excerpt(excerpt)
+        if normalized:
+            enriched[index]["excerpt"] = normalized
+    return enriched
 
 
 def _stale_coindesk_discovery_payload(

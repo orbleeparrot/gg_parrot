@@ -15,7 +15,6 @@ export const positionNewsModule = {
     if (!data) return [];
 
     const context = data.context || {};
-    const sideLabel = context.position_side === "short" ? "숏 포지션" : "롱 포지션";
     const updatedAt = data.updated_at || 0;
     const overviewText = data.overview?.text || "";
     const newsItems = data.items || [];
@@ -42,9 +41,8 @@ export const positionNewsModule = {
         module: "position_news",
         severity: presentation.severity,
         expression: presentation.expression,
-        title: item.title || `${sideLabel} 관련 뉴스`,
-        summary: item.position_label || `${sideLabel} 유불리 판단이 어려운 뉴스`,
-        detail: item.reason || "",
+        title: item.title || "관련 뉴스",
+        summary: item.summary || "",
         occurredAt: item.published || updatedAt,
         fallbackTime: "최근 수집",
         sourceLabel: item.source || "원문",

@@ -54,10 +54,16 @@ services:
         value: "2"
       - key: POSITION_NEWS_MAX_AI_ANALYSES_PER_DAY
         value: "10"
+      - key: POSITION_NEWS_MAX_AI_SUMMARY_ITEMS
+        value: "3"
       - key: COINDESK_PLAYWRIGHT_ENABLED
         value: "true"
       - key: COINDESK_PLAYWRIGHT_TIMEOUT_MS
         value: "15000"
+      - key: POSITION_NEWS_ARTICLE_PLAYWRIGHT_ENABLED
+        value: "true"
+      - key: POSITION_NEWS_ARTICLE_TIMEOUT_MS
+        value: "12000"
       # 웹 서비스와 정확히 같은 Supabase Session Pooler URL을 입력합니다.
       - key: DATABASE_URL
         sync: false

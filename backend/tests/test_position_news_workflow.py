@@ -25,6 +25,20 @@ class Submitter:
         return Immediate(self.function(*args))
 
 
+class ForbiddenSubmitter:
+    def submit(self, *_args, **_kwargs):
+        raise AssertionError("inactive collection must not submit source or AI tasks")
+
+
+class RecordingPruner:
+    def __init__(self):
+        self.calls = []
+
+    def submit(self, retention_days):
+        self.calls.append(retention_days)
+        return Immediate(0)
+
+
 def _payload(symbol):
     return {
         "symbol": symbol,
@@ -81,6 +95,23 @@ def test_flow_uses_base_tickers_and_separates_model_stage(
     assert allowed == [("BTC", True), ("ETH", False)]
     assert summary["stored"] == 2
     assert summary["ai_budget_used"] == 1
+
+
+def test_flow_with_no_active_tickers_skips_source_and_ai_but_prunes(monkeypatch):
+    prune = RecordingPruner()
+    monkeypatch.setattr(workflow, "_schedule_lag_seconds", lambda: 0.0)
+    monkeypatch.setattr(workflow, "discover_tickers_task", lambda: [])
+    monkeypatch.setattr(workflow, "fetch_ticker_news_task", ForbiddenSubmitter())
+    monkeypatch.setattr(workflow, "process_ticker_news_task", ForbiddenSubmitter())
+    monkeypatch.setattr(workflow, "record_fetch_error_task", ForbiddenSubmitter())
+    monkeypatch.setattr(workflow, "prune_snapshots_task", prune)
+
+    summary = workflow.collect_position_news_flow.fn()
+
+    assert summary["ticker_count"] == 0
+    assert summary["ai_budget_used"] == 0
+    assert summary["items"] == []
+    assert prune.calls == [30]
 
 
 def test_prefect_retry_and_timeout_metadata():

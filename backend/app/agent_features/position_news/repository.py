@@ -202,12 +202,12 @@ def _retry_delay_ms(attempts: int) -> int:
 def discover_tracked_symbols(
     db: Session | None = None,
 ) -> list[str]:
-    """Return only the built-in collection universe in fair order."""
+    """Return canonical assets backed by a live runner heartbeat."""
     if db is None:
         with get_session() as owned:
             return discover_tracked_symbols(owned)
 
-    assets = set(news_mod.position_news_collection_universe())
+    assets: set[str] = set()
     now_ms = int(time.time() * 1000)
     active_window_ms = max(
         30,

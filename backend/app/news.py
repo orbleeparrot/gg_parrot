@@ -59,7 +59,7 @@ _COIN_KO = {
     "FIL": "파일코인", "ICP": "인터넷컴퓨터", "NEAR": "니어프로토콜", "INJ": "인젝티브",
     "RUNE": "토르체인", "STX": "스택스", "IMX": "이뮤터블", "ONDO": "온도파이낸스",
     "ZEC": "지캐시", "XLM": "스텔라루멘", "HBAR": "헤데라", "VET": "비체인",
-    "EDEN": "오픈에덴",
+    "SC": "시아코인", "EDEN": "오픈에덴",
 }
 
 # 영문 RSS 제목·CoinDesk category 태그에서 전체 지원 자산의 관련성을
@@ -108,6 +108,7 @@ _COIN_ALIASES = {
     "XLM": ("stellar", "stellar network", "stellar lumens"),
     "HBAR": ("hedera", "hedera hashgraph"),
     "VET": ("vechain",),
+    "SC": ("siacoin", "sia coin", "sia network", "sia blockchain"),
     "EDEN": ("openeden", "open eden", "eden token"),
     # Connected macros may trade assets outside the fixed `_COIN_KO` universe.
     # Keep project aliases separate from `_COIN_KO` so BMT is collected only
@@ -134,10 +135,16 @@ _AMBIGUOUS_BARE_TICKERS = frozenset({
     "OP",
     "RUNE",
     "SAND",
+    "SC",
     "SOL",
     "UNI",
     "VET",
 })
+
+# Even uppercase spelling is ambiguous for these tickers. For example, SC is
+# also used by banks, subcutaneous medicines, and sweepstakes-casino credits.
+# Require a project name, crypto context, market pair, or trusted category.
+_CONTEXT_REQUIRED_TICKERS = frozenset({"SC"})
 
 # These project names also occur as ordinary English words. Preserve the
 # publisher's capitalization and reject common non-project phrases instead of
@@ -191,6 +198,14 @@ _COIN_GOOGLE_QUERIES = {
         (
             '(BMT coin OR BMT crypto OR BMT token OR $BMT OR BMT USDT OR '
             'Bubblemaps) when:30d',
+            "en",
+        ),
+    ),
+    "SC": (
+        ('(시아코인 OR "SC 코인" OR SCUSDT) when:30d', "ko"),
+        (
+            '(Siacoin OR "Sia coin" OR "Sia network" OR '
+            '"Sia blockchain" OR SCUSDT) when:30d',
             "en",
         ),
     ),
@@ -608,12 +623,13 @@ def _matches_asset(item: dict, asset_symbol: str, coin_name: str) -> bool:
         if any(re.search(pattern, searchable) for pattern in context_patterns):
             return True
     if asset_symbol in _AMBIGUOUS_BARE_TICKERS:
-        explicit_ticker = re.compile(
-            rf"(?<![A-Za-z0-9])(?:\${re.escape(asset_symbol)}|"
-            rf"{re.escape(asset_symbol)})(?![A-Za-z0-9])"
-        )
-        if explicit_ticker.search(title):
-            return True
+        if asset_symbol not in _CONTEXT_REQUIRED_TICKERS:
+            explicit_ticker = re.compile(
+                rf"(?<![A-Za-z0-9])(?:\${re.escape(asset_symbol)}|"
+                rf"{re.escape(asset_symbol)})(?![A-Za-z0-9])"
+            )
+            if explicit_ticker.search(title):
+                return True
         contextual_ticker = re.compile(
             rf"(?:"
             rf"(?<![a-z0-9]){re.escape(ticker)}(?![a-z0-9])"
@@ -625,6 +641,14 @@ def _matches_asset(item: dict, asset_symbol: str, coin_name: str) -> bool:
         )
         if contextual_ticker.search(title.casefold()):
             return True
+        if asset_symbol in _CONTEXT_REQUIRED_TICKERS:
+            market_pair = re.compile(
+                rf"(?<![A-Za-z0-9]){re.escape(asset_symbol)}"
+                rf"(?:BUSD|BTC|ETH|KRW|USD|USDC|USDT)(?![A-Za-z0-9])",
+                re.IGNORECASE,
+            )
+            if market_pair.search(title):
+                return True
         category_ticker = re.compile(
             rf"^\$?{re.escape(asset_symbol)}"
             rf"(?:\s+(?:coin|crypto|news|token))?$",
@@ -1517,19 +1541,18 @@ def get_coin_news(symbol: str) -> dict:
     base = asset_from_market_symbol(symbol)
     if not base:
         return _envelope([], overview=None, label="코인 뉴스", query="")
-    if base in position_news_collection_universe():
-        try:
-            stored = _load_latest_coin_snapshot(base)
-        except Exception:
-            # The public briefing remains available during a transient DB
-            # outage. Authenticated agent reads intentionally stay DB-only.
-            stored = None
-        if stored is not None and isinstance(stored.get("news_payload"), dict):
-            env = dict(stored["news_payload"])
-            env["data_source"] = "prefect_db"
-            env["snapshot_id"] = str(stored.get("snapshot_id") or "")
-            env["collection"] = dict(stored.get("collection") or {})
-            return env
+    try:
+        stored = _load_latest_coin_snapshot(base)
+    except Exception:
+        # The public briefing remains available during a transient DB
+        # outage. Authenticated agent reads intentionally stay DB-only.
+        stored = None
+    if stored is not None and isinstance(stored.get("news_payload"), dict):
+        env = dict(stored["news_payload"])
+        env["data_source"] = "prefect_db"
+        env["snapshot_id"] = str(stored.get("snapshot_id") or "")
+        env["collection"] = dict(stored.get("collection") or {})
+        return env
     ckey = f"coin:{base}"
     hit = _coin_cache.get(ckey)
     if hit and hit[1] > time.time():

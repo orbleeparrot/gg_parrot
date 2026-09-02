@@ -220,31 +220,38 @@ def test_coin_news_prefers_central_snapshot_for_collected_asset(monkeypatch):
     assert payload["collection"]["status"] == "ready"
 
 
-def test_coin_news_uses_rss_cache_for_uncollected_asset(monkeypatch):
+def test_coin_news_reuses_active_snapshot_outside_fixed_universe(monkeypatch):
     news._coin_cache.clear()
     item = {
-        "title": "미지원 티커의 새 소식",
+        "title": "활성 수집기가 저장한 버블맵스 소식",
         "source": "테스트 매체",
-        "url": "https://news.example.com/crv",
+        "url": "https://news.example.com/bmt",
         "published": "2026-08-24T04:00:00+00:00",
         "published_display": "10분 전",
     }
+    loaded = []
 
-    def unexpected_db(_symbol):
-        raise AssertionError("수집 대상이 아닌 티커는 DB를 조회하면 안 됩니다")
+    def fake_load(symbol):
+        loaded.append(symbol)
+        return {
+            "snapshot_id": "bmt-shared-snapshot",
+            "news_payload": {"symbol": "BMT", "items": [item]},
+            "collection": {"status": "ready"},
+        }
 
-    monkeypatch.setattr(news, "_load_latest_coin_snapshot", unexpected_db)
-    monkeypatch.setattr(
-        news,
-        "_fetch_news",
-        lambda _query, *, limit, **_kwargs: [item],
-    )
+    def unexpected_rss(*_args, **_kwargs):
+        raise AssertionError("활성 수집 스냅샷이 있으면 RSS를 다시 호출하면 안 됩니다")
 
-    payload = news.get_coin_news("CRVUSDT")
+    monkeypatch.setattr(news, "_load_latest_coin_snapshot", fake_load)
+    monkeypatch.setattr(news, "_fetch_news", unexpected_rss)
 
-    assert payload["symbol"] == "CRV"
+    payload = news.get_coin_news("BMTUSDT")
+
+    assert loaded == ["BMT"]
+    assert payload["symbol"] == "BMT"
     assert payload["items"] == [item]
-    assert payload["data_source"] == "rss_cache"
+    assert payload["data_source"] == "prefect_db"
+    assert payload["snapshot_id"] == "bmt-shared-snapshot"
 
 
 def test_coin_news_falls_back_to_rss_when_central_store_is_unavailable(monkeypatch):
@@ -571,6 +578,39 @@ def test_connected_bmt_uses_project_alias_and_broad_english_queries(monkeypatch)
         (
             '(BMT coin OR BMT crypto OR BMT token OR $BMT OR BMT USDT OR '
             'Bubblemaps) when:30d',
+            50,
+            True,
+            "en",
+        ),
+    ]
+
+
+def test_siacoin_uses_project_name_instead_of_bare_sc_queries(monkeypatch):
+    calls = []
+
+    def fake_fetch(query, *, limit, strict, locale="ko"):
+        calls.append((query, limit, strict, locale))
+        return []
+
+    monkeypatch.setattr(news, "_fetch_news", fake_fetch)
+
+    payload = news._coin_news_envelope(
+        "SC",
+        strict=True,
+        relevant_only=True,
+    )
+
+    assert payload["coin_name"] == "시아코인"
+    assert calls == [
+        (
+            '(시아코인 OR "SC 코인" OR SCUSDT) when:30d',
+            50,
+            True,
+            "ko",
+        ),
+        (
+            '(Siacoin OR "Sia coin" OR "Sia network" OR '
+            '"Sia blockchain" OR SCUSDT) when:30d',
             50,
             True,
             "en",
@@ -1147,6 +1187,41 @@ def test_asset_matcher_accepts_explicit_ambiguous_ticker_context(title):
         {"title": title, "categories": []},
         "LINK",
         "체인링크",
+    )
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "SC제일·씨티 외국계銀 2분기 순익 ‘껑충’⋯비이자이익이 견인",
+        "알테오젠, 키트루다SC 판매 마일스톤 2500만달러 첫 수령",
+        "Stake.us Promo Code: COVERSBONUS for $55 Free SC + 550K GC",
+        "PlayFame bonus: Get 500K GC, 250 SC & 250 Free Spins",
+    ],
+)
+def test_siacoin_matcher_rejects_unqualified_sc_abbreviation(title):
+    assert not news._matches_asset(
+        {"title": title, "categories": []},
+        "SC",
+        "시아코인",
+    )
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Siacoin storage network ships a protocol upgrade",
+        "Sia network adds a new storage provider",
+        "SC coin rallies after an exchange listing",
+        "$SC token volume rises after the upgrade",
+        "SCUSDT futures volume reaches a monthly high",
+    ],
+)
+def test_siacoin_matcher_accepts_project_or_crypto_context(title):
+    assert news._matches_asset(
+        {"title": title, "categories": []},
+        "SC",
+        "시아코인",
     )
 
 

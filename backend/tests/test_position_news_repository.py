@@ -18,8 +18,6 @@ from app.db import (
     TickerNewsSnapshot,
     TickerNewsState,
 )
-from app import news as news_mod
-
 
 @pytest.fixture
 def db_engine(tmp_path):
@@ -71,18 +69,16 @@ def _analysis(status="ready"):
     }
 
 
-def test_discovery_collects_entire_builtin_coin_universe(db, monkeypatch):
+def test_discovery_is_empty_without_live_sessions(db, monkeypatch):
     monkeypatch.setenv("POSITION_NEWS_PINNED_TICKERS", "00FAKE")
     monkeypatch.setenv("POSITION_NEWS_ALLOWED_ASSETS", "CRV")
 
     symbols = repository.discover_tracked_symbols(db)
 
-    universe = news_mod.position_news_collection_universe()
-    assert set(symbols) == set(universe)
-    assert len(symbols) == len(universe)
+    assert symbols == []
 
 
-def test_discovery_adds_recent_running_asset_and_ignores_stale_session(
+def test_discovery_deduplicates_live_sessions_and_ignores_inactive_sessions(
     db,
     monkeypatch,
 ):
@@ -98,33 +94,74 @@ def test_discovery_adds_recent_running_asset_and_ignores_stale_session(
             last_heartbeat_at="1970-01-01T00:01:35Z",
         ),
         RunSession(
-            user_id=1,
+            user_id=2,
+            symbol="BMTUSDC",
+            position_side="short",
+            status="running",
+            started_at="1970-01-01T00:01:35Z",
+            last_heartbeat_at="1970-01-01T00:01:35Z",
+        ),
+        RunSession(
+            user_id=3,
+            symbol="ETHUSDT",
+            position_side="long",
+            status="running",
+            started_at="1970-01-01T00:01:30Z",
+            last_heartbeat_at="1970-01-01T00:01:30Z",
+        ),
+        RunSession(
+            user_id=4,
             symbol="RUN0USDT",
             position_side="long",
             status="running",
             started_at="1970-01-01T00:00:00Z",
             last_heartbeat_at="1970-01-01T00:00:00Z",
         ),
+        RunSession(
+            user_id=5,
+            symbol="SOLUSDT",
+            position_side="long",
+            status="stopped",
+            started_at="1970-01-01T00:01:35Z",
+            last_heartbeat_at="1970-01-01T00:01:35Z",
+            stopped_at="1970-01-01T00:01:36Z",
+        ),
     ])
     db.commit()
 
     symbols = repository.discover_tracked_symbols(db)
 
-    assert set(news_mod.position_news_collection_universe()).issubset(symbols)
-    assert "BMT" in symbols
-    assert "RUN0" not in symbols
+    assert set(symbols) == {"BMT", "ETH"}
+    assert symbols.count("BMT") == 1
 
 
-def test_discovery_prioritizes_never_attempted_then_oldest(db):
+def test_discovery_prioritizes_oldest_active_asset(db, monkeypatch):
+    monkeypatch.setattr(repository.time, "time", lambda: 1.0)
+    db.add_all([
+        RunSession(
+            user_id=1,
+            symbol="BTCUSDT",
+            position_side="long",
+            status="running",
+            started_at="1970-01-01T00:00:00Z",
+            last_heartbeat_at="1970-01-01T00:00:00Z",
+        ),
+        RunSession(
+            user_id=2,
+            symbol="ETHUSDT",
+            position_side="long",
+            status="running",
+            started_at="1970-01-01T00:00:00Z",
+            last_heartbeat_at="1970-01-01T00:00:00Z",
+        ),
+    ])
     db.add(TickerNewsState(asset_symbol="BTC", last_attempt_ms=500))
     db.add(TickerNewsState(asset_symbol="ETH", last_attempt_ms=100))
     db.commit()
 
     symbols = repository.discover_tracked_symbols(db)
 
-    universe = news_mod.position_news_collection_universe()
-    never_attempted = sorted(set(universe) - {"BTC", "ETH"})
-    assert symbols == never_attempted + ["ETH", "BTC"]
+    assert symbols == ["ETH", "BTC"]
 
 
 def test_claim_analyze_once_and_read_latest_snapshot(db):
@@ -670,14 +707,14 @@ def test_concurrent_daily_budget_never_exceeds_shared_limit(db_engine):
     assert sum(reservations) == 4
 
 
-def test_discovery_ignores_operator_assets_outside_builtin_universe(db, monkeypatch):
+def test_discovery_ignores_operator_assets_without_live_sessions(db, monkeypatch):
     monkeypatch.setenv("POSITION_NEWS_ALLOWED_ASSETS", "00fake,CRVUSD")
 
     symbols = repository.discover_tracked_symbols(db)
 
     assert "00FAKE" not in symbols
     assert "CRVUSD" not in symbols
-    assert set(symbols) == set(news_mod.position_news_collection_universe())
+    assert symbols == []
 
 
 def test_late_old_failure_cannot_mark_newer_success_as_error(db):

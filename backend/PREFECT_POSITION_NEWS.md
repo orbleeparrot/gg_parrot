@@ -1,9 +1,9 @@
 # 포지션 뉴스 중앙 수집 워커
 
-포지션 뉴스는 사용자나 매크로마다 뉴스·AI를 실행하지 않습니다. `_COIN_KO` 기본 지원 자산과 실제 연결 중인 매크로 자산을 한 번 수집·분석해 공용 DB에 저장하고, API 조회 시 등록된 롱/숏 방향만 결정론적으로 적용합니다.
+포지션 뉴스는 사용자나 매크로마다 뉴스·AI를 실행하지 않습니다. 실제 실행 중인 매크로의 티커만 한 번 수집·분석해 공용 DB에 저장하고, 같은 티커를 실행하는 모든 사용자가 스냅샷을 공유합니다. API 조회 시에만 등록된 롱/숏 방향을 결정론적으로 적용합니다.
 
 ```text
- `_COIN_KO` 기본 코인 + 최근 heartbeat가 있는 실행 세션 티커
+       최근 heartbeat가 있는 실행 세션 티커
                          │
                          ▼
               Prefect 5분 스케줄/재시도
@@ -26,8 +26,10 @@ Prefect는 오케스트레이션만 담당합니다. Prefect 캐시나 프로세
 
 ## 현재 계약
 
-- 수집 범위는 `app.news._COIN_KO`에 정의된 전체 기본 지원 코인을 항상 포함합니다.
-- 최근 60초 안에 heartbeat가 들어온 실행 세션의 티커도 수집합니다. DB에 `running`으로 남은 연결 끊긴 세션과 운영자 환경변수의 임의 티커는 제외합니다.
+- 최근 60초 안에 heartbeat가 들어온 `running` 세션의 티커만 수집합니다. 활성 세션이 없으면 RSS·Playwright·AI 호출은 0회입니다.
+- 같은 티커의 활성 세션이 여러 사용자에게 있어도 canonical asset 하나로 중복 제거해 cycle당 한 번만 수집합니다.
+- 마지막 세션이 종료되거나 heartbeat lease가 만료되면 다음 cycle부터 해당 티커 수집을 중단합니다. 기존 스냅샷은 retention 정책에 따라 남습니다.
+- DB에 `running`으로 남은 연결 끊긴 세션과 운영자 환경변수의 임의 티커는 제외합니다.
 - `BTCUSDT`, `BTCUSDC`, `BTCBUSD`는 모두 공용 자산 `BTC` 하나로 정규화됩니다.
 - 처리 대상은 DB의 `last_attempt_ms`가 오래된 티커부터 정렬해 deadline이 반복돼도 뒤쪽 티커가 굶지 않게 합니다.
 - 수집은 기본 5분 주기이며, 기사 묶음 fingerprint가 바뀐 경우에만 분석을 시도합니다.
@@ -36,7 +38,7 @@ Prefect는 오케스트레이션만 담당합니다. Prefect 캐시나 프로세
 - 한 cycle의 AI 시도는 최대 2회이고, 모든 worker가 공유하는 KST 일일 DB 예산은 최대 10회입니다. 초과 티커는 규칙 기반 분석으로 저장됩니다.
 - RSS 오류·빈 응답·AI 재분석 실패는 마지막 사용 가능 스냅샷을 지우지 않습니다.
 - 에이전트 사용자 API는 RSS 또는 AI를 호출하지 않고 최신 완료 스냅샷만 읽습니다.
-- 공개 `/api/news/coin/{symbol}`도 기본 지원 코인은 같은 최신 완료 스냅샷을 우선 읽습니다. 스냅샷이 아직 없거나 DB 조회가 일시적으로 실패한 경우와 기본 지원 목록 밖의 티커에만 기존 프로세스 RSS 캐시를 fallback으로 사용합니다.
+- 공개 `/api/news/coin/{symbol}`는 활성 매크로가 만든 최신 스냅샷이 있으면 재사용하고, 없으면 기존 프로세스 RSS 캐시를 fallback으로 사용합니다. 공개 뉴스 조회가 중앙 수집 대상을 활성화하지는 않습니다.
 - API 응답은 마지막 성공 후 15분이 지나면 `collection.freshness=stale`로 표시합니다.
 - AI 입력에는 헤드라인·매체·자산명만 들어갑니다. 사용자, 매크로, 포지션 방향은 전달하지 않습니다.
 
@@ -140,7 +142,7 @@ python -m app.workflows.position_news serve
 | 환경변수 | 기본값 | 의미 |
 |---|---:|---|
 | `POSITION_NEWS_COLLECTION_SECONDS` | 300 | 수집 주기(최소 60초) |
-| `POSITION_NEWS_ACTIVE_SESSION_SECONDS` | 60 | 기본 목록 밖 실행 티커를 활성으로 인정할 heartbeat 최대 나이 |
+| `POSITION_NEWS_ACTIVE_SESSION_SECONDS` | 60 | 실행 티커를 활성으로 인정할 heartbeat 최대 나이 |
 | `POSITION_NEWS_MAX_SCHEDULE_LAG_SECONDS` | 600 | 이보다 늦은 backlog run은 no-op |
 | `DATABASE_CONNECT_TIMEOUT_SECONDS` | 10 | Postgres 연결 timeout |
 | `DATABASE_STATEMENT_TIMEOUT_MS` | 30000 | Postgres statement timeout |

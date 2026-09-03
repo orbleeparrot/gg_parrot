@@ -1,6 +1,7 @@
 """오늘의 코인동향 — RSS 파서(순수 함수) 검증. 네트워크/AI는 테스트하지 않는다."""
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timedelta, timezone
 from email.utils import format_datetime
 
@@ -229,6 +230,335 @@ def test_coin_news_prefers_central_snapshot_for_collected_asset(monkeypatch):
     assert payload["collection"]["status"] == "ready"
 
 
+def test_coin_news_translates_english_snapshot_titles_and_keeps_original(monkeypatch):
+    news._coin_cache.clear()
+    english = "Robinhood's new crypto network sends Arbitrum's token soaring"
+    korean = "로빈후드의 새 암호화폐 네트워크에 아비트럼 토큰 급등"
+    monkeypatch.setenv("ANTHROPIC_NEWS_TRANSLATION_API_KEY", "test-key")
+    monkeypatch.setattr(news, "_title_translation_cache", {}, raising=False)
+    monkeypatch.setattr(news, "_title_translation_budget", ("", 0), raising=False)
+    monkeypatch.setattr(
+        news,
+        "_request_korean_title_translations",
+        lambda titles: {english: korean} if titles == [english] else {},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        news,
+        "_load_latest_coin_snapshot",
+        lambda _symbol: {
+            "snapshot_id": "arb-snapshot",
+            "news_payload": {
+                "symbol": "ARB",
+                "items": [
+                    {"title": english, "source": "CoinDesk"},
+                    {"title": "아비트럼 24시간 28% 급등", "source": "서울신문"},
+                ],
+            },
+            "collection": {"status": "ready"},
+        },
+    )
+
+    payload = news.get_coin_news("ARBUSDT")
+
+    assert payload["items"][0]["title"] == korean
+    assert payload["items"][0]["original_title"] == english
+    assert payload["items"][1]["title"] == "아비트럼 24시간 28% 급등"
+    assert "original_title" not in payload["items"][1]
+
+
+def test_title_translation_batches_only_untranslated_titles_and_reuses_cache(monkeypatch):
+    calls = []
+    english = "MUBARAK jumps as BNB Chain meme rally broadens"
+    korean = "BNB 체인 밈코인 강세에 무바라크 급등"
+    monkeypatch.setenv("ANTHROPIC_NEWS_TRANSLATION_API_KEY", "test-key")
+    monkeypatch.setattr(news, "_title_translation_cache", {}, raising=False)
+    monkeypatch.setattr(news, "_title_translation_budget", ("", 0), raising=False)
+
+    def translate(titles):
+        calls.append(titles)
+        return {english: korean}
+
+    monkeypatch.setattr(
+        news,
+        "_request_korean_title_translations",
+        translate,
+        raising=False,
+    )
+    localize = getattr(news, "_localize_coin_news_items", lambda items: items)
+    items = [
+        {"title": english, "source": "Crypto News"},
+        {"title": "무바라크 관련 국내 뉴스", "source": "국내 매체"},
+    ]
+
+    first = localize(items)
+    second = localize(items)
+
+    assert calls == [[english]]
+    assert first[0]["title"] == korean
+    assert second[0]["title"] == korean
+    assert items[0]["title"] == english
+
+
+def test_title_translation_retries_only_items_missing_from_a_partial_batch(monkeypatch):
+    first = "Arbitrum token soars"
+    second = "MUBARAK jumps as BNB Chain meme rally broadens"
+    calls = []
+    monkeypatch.setenv("ANTHROPIC_NEWS_TRANSLATION_API_KEY", "test-key")
+    monkeypatch.setattr(news, "_title_translation_cache", {})
+
+    def translate(titles):
+        calls.append(titles)
+        if titles == [first, second]:
+            return {first: "아비트럼 토큰 급등"}
+        if titles == [second]:
+            return {second: "BNB 체인 밈 랠리에 MUBARAK 급등"}
+        return {}
+
+    monkeypatch.setattr(news, "_request_korean_title_translations", translate)
+
+    localized = news._localize_coin_news_items([
+        {"title": first},
+        {"title": second},
+    ])
+
+    assert calls == [[first, second], [second]]
+    assert [item["title"] for item in localized] == [
+        "아비트럼 토큰 급등",
+        "BNB 체인 밈 랠리에 MUBARAK 급등",
+    ]
+
+
+def test_title_translation_applies_after_normalizing_source_whitespace(monkeypatch):
+    raw = "Arbitrum   token\nsoars"
+    normalized = "Arbitrum token soars"
+    korean = "아비트럼 토큰 급등"
+    monkeypatch.setenv("ANTHROPIC_NEWS_TRANSLATION_API_KEY", "test-key")
+    monkeypatch.setattr(news, "_title_translation_cache", {normalized: korean})
+
+    localized = news._localize_coin_news_items([{"title": raw}])
+
+    assert localized == [{"title": korean, "original_title": normalized}]
+
+
+def test_title_translation_without_api_key_returns_originals(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_NEWS_TRANSLATION_API_KEY", raising=False)
+    monkeypatch.setattr(
+        news,
+        "_request_korean_title_translations",
+        lambda _titles: (_ for _ in ()).throw(AssertionError("AI must not run")),
+        raising=False,
+    )
+    localize = getattr(news, "_localize_coin_news_items", lambda items: items)
+    item = {"title": "Arbitrum token rises", "source": "CoinDesk"}
+
+    assert localize([item]) == [item]
+
+
+def test_title_translation_parser_accepts_fenced_json_and_stable_ids():
+    parser = getattr(news, "_parse_korean_title_translations", lambda *_args: {})
+    title = "Arbitrum token soars"
+    title_id = hashlib.sha256(title.encode("utf-8")).hexdigest()[:16]
+    translated = parser(
+        f'```json\n{{"items":[{{"id":"{title_id}",'
+        '"title_ko":"아비트럼 토큰 급등"}]}\n```',
+        [title],
+    )
+
+    assert translated == {title: "아비트럼 토큰 급등"}
+
+
+@pytest.mark.parametrize(
+    "translated_title",
+    [
+        "BTC 가격 $80,000 근처, ARB 28% 급등",
+        "비트코인 가격 $78,000 근처, OP 28% 급등",
+    ],
+)
+def test_title_translation_parser_rejects_changed_numbers_or_tickers(
+    translated_title,
+):
+    original = "BTC price near $78,000 as ARB jumps 28%"
+    title_id = hashlib.sha256(original.encode("utf-8")).hexdigest()[:16]
+    payload = (
+        '{"items":[{"id":"'
+        + title_id
+        + '","title_ko":"'
+        + translated_title
+        + '"}]}'
+    )
+
+    assert news._parse_korean_title_translations(payload, [original]) == {}
+
+
+@pytest.mark.parametrize("translated_title", ["BTC 3% 상승", "BTC +3% 상승"])
+def test_title_translation_parser_rejects_lost_or_reversed_numeric_sign(
+    translated_title,
+):
+    original = "BTC drops -3%"
+    title_id = hashlib.sha256(original.encode("utf-8")).hexdigest()[:16]
+    payload = (
+        '{"items":[{"id":"'
+        + title_id
+        + '","title_ko":"'
+        + translated_title
+        + '"}]}'
+    )
+
+    assert news._parse_korean_title_translations(payload, [original]) == {}
+
+
+def test_title_translation_parser_accepts_equivalent_compact_usd_amount():
+    original = "Trader nets $521K profit"
+    title_id = hashlib.sha256(original.encode("utf-8")).hexdigest()[:16]
+    payload = (
+        '{"items":[{"id":"'
+        + title_id
+        + '","title_ko":"트레이더가 521,000달러 수익 달성"}]}'
+    )
+
+    assert news._parse_korean_title_translations(payload, [original]) == {
+        original: "트레이더가 521,000달러 수익 달성",
+    }
+
+
+def test_title_translation_parser_accepts_equivalent_usd_code_and_word():
+    original = "BTC nears USD 78,000"
+    title_id = hashlib.sha256(original.encode("utf-8")).hexdigest()[:16]
+    payload = (
+        '{"items":[{"id":"'
+        + title_id
+        + '","title_ko":"BTC 78,000달러 근접"}]}'
+    )
+
+    assert news._parse_korean_title_translations(payload, [original]) == {
+        original: "BTC 78,000달러 근접",
+    }
+
+
+def test_title_translation_daily_budget_caps_each_process(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("ANTHROPIC_NEWS_TRANSLATION_API_KEY", "translation-key")
+    monkeypatch.setattr(news, "_TITLE_TRANSLATION_MAX_CALLS_PER_DAY", 2)
+    monkeypatch.setattr(news, "_title_translation_budget", ("", 0))
+    monkeypatch.setattr(news, "_kst_date", lambda: "2026-09-03")
+
+    assert news._reserve_title_translation_call() is True
+    assert news._reserve_title_translation_call() is True
+    assert news._reserve_title_translation_call() is False
+    assert news._title_translation_budget == ("2026-09-03", 2)
+
+
+def test_title_translation_budget_uses_durable_namespace_with_postgres(monkeypatch):
+    calls = []
+    monkeypatch.setenv("ANTHROPIC_NEWS_TRANSLATION_API_KEY", "translation-key")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://example.invalid/db")
+
+    def reserve(*, daily_limit):
+        calls.append(daily_limit)
+        return True
+
+    monkeypatch.setattr(
+        news,
+        "_reserve_durable_title_translation_budget",
+        reserve,
+        raising=False,
+    )
+
+    assert news._reserve_title_translation_call() is True
+    assert calls == [news._TITLE_TRANSLATION_MAX_CALLS_PER_DAY]
+
+
+def test_title_translation_uses_only_the_dedicated_api_key(monkeypatch):
+    captured = []
+    requests = []
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("ANTHROPIC_NEWS_TRANSLATION_API_KEY", "translation-key")
+
+    class Block:
+        type = "text"
+        title = "Arbitrum token soars"
+        title_id = hashlib.sha256(title.encode("utf-8")).hexdigest()[:16]
+        text = (
+            '{"items":[{"id":"'
+            + title_id
+            + '","title_ko":"아비트럼 토큰 급등"}]}'
+        )
+
+    class Messages:
+        def create(self, **kwargs):
+            requests.append(kwargs)
+            return type("Response", (), {"content": [Block()]})()
+
+    class Client:
+        messages = Messages()
+
+    def fake_client(**kwargs):
+        captured.append(kwargs)
+        return Client()
+
+    class Runtime:
+        def call(self, _key, loader, **_kwargs):
+            return loader(), "loaded"
+
+    monkeypatch.setattr(news, "get_anthropic_client", fake_client)
+    monkeypatch.setattr(news, "get_ai_runtime", lambda: Runtime())
+
+    translated = news._request_korean_title_translations(
+        ["Arbitrum token soars"],
+    )
+
+    assert translated == {"Arbitrum token soars": "아비트럼 토큰 급등"}
+    assert captured == [{"api_key": "translation-key"}]
+    assert "표기를 원문 문자열 그대로" in requests[0]["system"]
+
+
+def test_title_translation_budget_is_charged_only_for_actual_api_load(monkeypatch):
+    title = "Arbitrum token soars"
+    title_id = hashlib.sha256(title.encode("utf-8")).hexdigest()[:16]
+    monkeypatch.setenv("ANTHROPIC_NEWS_TRANSLATION_API_KEY", "translation-key")
+    monkeypatch.setattr(news, "_title_translation_budget", ("", 0))
+    monkeypatch.setattr(news, "_kst_date", lambda: "2026-09-03")
+    api_calls = []
+
+    class Block:
+        type = "text"
+        text = (
+            '{"items":[{"id":"'
+            + title_id
+            + '","title_ko":"아비트럼 토큰 급등"}]}'
+        )
+
+    class Messages:
+        def create(self, **_kwargs):
+            api_calls.append(True)
+            return type("Response", (), {"content": [Block()]})()
+
+    class Runtime:
+        cached = None
+
+        def call(self, _key, loader, **_kwargs):
+            if self.cached is None:
+                self.cached = loader()
+                return self.cached, "loaded"
+            return self.cached, "cached"
+
+    runtime = Runtime()
+    monkeypatch.setattr(
+        news,
+        "get_anthropic_client",
+        lambda **_kwargs: type("Client", (), {"messages": Messages()})(),
+    )
+    monkeypatch.setattr(news, "get_ai_runtime", lambda: runtime)
+
+    assert news._request_korean_title_translations([title])
+    assert news._request_korean_title_translations([title])
+    assert len(api_calls) == 1
+    assert news._title_translation_budget == ("2026-09-03", 1)
+
+
 def test_coin_news_reuses_active_snapshot_outside_fixed_universe(monkeypatch):
     news._coin_cache.clear()
     item = {
@@ -286,8 +616,43 @@ def test_coin_news_falls_back_to_rss_when_central_store_is_unavailable(monkeypat
     payload = news.get_coin_news("BTCUSDT")
 
     assert payload["symbol"] == "BTC"
-    assert payload["items"] == [item]
+    assert [entry["title"] for entry in payload["items"]] == [item["title"]]
+    assert payload["items"][0]["feed_source"] == "google_news_rss"
     assert payload["data_source"] == "rss_cache"
+
+
+def test_public_coin_news_fallback_filters_unrelated_broad_search_results(monkeypatch):
+    news._coin_cache.clear()
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_NEWS_TRANSLATION_API_KEY", raising=False)
+    monkeypatch.setattr(news, "_load_latest_coin_snapshot", lambda _symbol: None)
+
+    def fake_fetch(_query, **_kwargs):
+        return [
+            {
+                "title": "DeepOceanCrypto creator insights",
+                "source": "Binance",
+                "url": "https://example.com/unrelated",
+            },
+            {
+                "title": "MUBARAK jumps 26% as BNB Chain meme rally broadens",
+                "source": "Crypto News",
+                "url": "https://example.com/mubarak",
+            },
+            {
+                "title": "Chump Coin price today and market cap",
+                "source": "CoinMarketCap",
+                "url": "https://example.com/chump",
+            },
+        ]
+
+    monkeypatch.setattr(news, "_fetch_news", fake_fetch)
+
+    payload = news.get_coin_news("MUBARAKUSDT")
+
+    assert [item["title"] for item in payload["items"]] == [
+        "MUBARAK jumps 26% as BNB Chain meme rally broadens",
+    ]
 
 
 @pytest.mark.parametrize(
@@ -1530,6 +1895,38 @@ def test_siacoin_matcher_accepts_project_or_crypto_context(title):
         {"title": title, "categories": []},
         "SC",
         "시아코인",
+    )
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Naser Taher receives award from Sheikh Nahyan bin Mubarak Al Nahyan",
+        "Eid Adha Mubarak: Celebrate Eid and share 65,000 USDT in Eidiya",
+    ],
+)
+def test_mubarak_matcher_rejects_person_name_and_greeting_noise(title):
+    assert not news._matches_asset(
+        {"title": title, "categories": []},
+        "MUBARAK",
+        "MUBARAK",
+    )
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "MUBARAK jumps 26% as BNB Chain meme rally broadens",
+        "Mubarak jumps 26% as BNB Chain meme rally broadens",
+        "Binance will list Mubarak (MUBARAK) with Seed Tag",
+        "What Is Mubarak Meme Coin?",
+    ],
+)
+def test_mubarak_matcher_accepts_explicit_token_context(title):
+    assert news._matches_asset(
+        {"title": title, "categories": []},
+        "MUBARAK",
+        "MUBARAK",
     )
 
 

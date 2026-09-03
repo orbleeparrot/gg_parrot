@@ -178,13 +178,49 @@ class AiCallRuntime:
 _client_lock = threading.Lock()
 _client = None
 _client_factory = None
+_keyed_clients: dict[str, tuple[object, object]] = {}
 _runtime: AiCallRuntime | None = None
 
 
-def get_anthropic_client():
+def _anthropic_client_options() -> dict:
+    return {
+        "timeout": max(
+            1.0,
+            float(
+                os.environ.get(
+                    "AI_TIMEOUT_SECONDS",
+                    os.environ.get(
+                        "ANTHROPIC_POSITION_NEWS_TIMEOUT_SECONDS",
+                        "15",
+                    ),
+                )
+            ),
+        ),
+        "max_retries": 0,
+    }
+
+
+def get_anthropic_client(*, api_key: str | None = None):
     global _client, _client_factory
     factory = anthropic.Anthropic
+    explicit_key = str(api_key or "").strip()
     with _client_lock:
+        if explicit_key:
+            cache_key = hashlib.sha256(explicit_key.encode("utf-8")).hexdigest()
+            cached = _keyed_clients.get(cache_key)
+            if cached is not None and cached[0] is factory:
+                return cached[1]
+            if cached is not None:
+                try:
+                    cached[1].close()
+                except Exception:
+                    pass
+            client = factory(
+                api_key=explicit_key,
+                **_anthropic_client_options(),
+            )
+            _keyed_clients[cache_key] = (factory, client)
+            return client
         if _client is not None and _client_factory is factory:
             return _client
         if _client is not None:
@@ -192,18 +228,7 @@ def get_anthropic_client():
                 _client.close()
             except Exception:
                 pass
-        _client = factory(
-            timeout=max(
-                1.0,
-                float(
-                    os.environ.get(
-                        "AI_TIMEOUT_SECONDS",
-                        os.environ.get("ANTHROPIC_POSITION_NEWS_TIMEOUT_SECONDS", "15"),
-                    )
-                ),
-            ),
-            max_retries=0,
-        )
+        _client = factory(**_anthropic_client_options())
         _client_factory = factory
         return _client
 
@@ -222,11 +247,18 @@ def close_ai_runtime() -> None:
         client = _client
         _client = None
         _client_factory = None
+        keyed_clients = [entry[1] for entry in _keyed_clients.values()]
+        _keyed_clients.clear()
         runtime = _runtime
         _runtime = None
     if client is not None:
         try:
             client.close()
+        except Exception:
+            pass
+    for keyed_client in keyed_clients:
+        try:
+            keyed_client.close()
         except Exception:
             pass
     if runtime is not None:

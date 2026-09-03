@@ -652,6 +652,27 @@ def test_daily_ai_budget_is_durable_and_resets_on_next_kst_day(db):
     )
 
 
+def test_daily_ai_budget_namespaces_have_independent_limits(db):
+    assert repository.reserve_ai_budget(
+        daily_limit=1,
+        namespace="position_analysis",
+        now_ms=0,
+        db=db,
+    )
+    assert repository.reserve_ai_budget(
+        daily_limit=1,
+        namespace="position_analysis",
+        now_ms=1,
+        db=db,
+    ) is False
+    assert repository.reserve_ai_budget(
+        daily_limit=1,
+        namespace="title_translation",
+        now_ms=1,
+        db=db,
+    )
+
+
 def test_concurrent_stale_reclaim_grants_one_fenced_owner(db, db_engine):
     initial = repository.claim_snapshot(
         asset_symbol="XRP",

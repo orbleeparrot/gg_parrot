@@ -7,7 +7,26 @@ def test_render_blueprint_includes_position_news_background_worker():
     ).read_text(encoding="utf-8")
 
     assert "  - type: worker\n" in blueprint
+    web = blueprint.split("  - type: web\n", 1)[1].split("  - type: worker\n", 1)[0]
     worker = blueprint.split("  - type: worker\n", 1)[1]
+
+    assert '- key: ANTHROPIC_NEWS_TRANSLATION_API_KEY\n        sync: false' in web
+    assert (
+        '- key: ANTHROPIC_NEWS_TRANSLATION_MODEL\n'
+        '        value: "claude-haiku-4-5"'
+        in web
+    )
+    assert '- key: ANTHROPIC_API_KEY\n' not in web
+    assert '- key: ANTHROPIC_MODEL\n' not in web
+    assert '- key: NEWS_TITLE_TRANSLATION_ENABLED\n        value: "true"' in web
+    assert (
+        '- key: NEWS_TITLE_TRANSLATION_MAX_CALLS_PER_DAY\n        value: "20"'
+        in web
+    )
+    assert (
+        '- key: ANTHROPIC_NEWS_TRANSLATION_MAX_TOKENS\n        value: "1024"'
+        in web
+    )
 
     assert "name: gg-parrot-position-news" in worker
     assert "runtime: docker" in worker

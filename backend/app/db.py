@@ -426,7 +426,7 @@ class TickerNewsState(SQLModel, table=True):
 
 
 class TickerNewsAiBudget(SQLModel, table=True):
-    """Durable global daily model-call budget shared by every worker."""
+    """Durable namespaced daily model-call budget shared by every instance."""
 
     budget_date_kst: str = Field(primary_key=True)
     used: int = 0

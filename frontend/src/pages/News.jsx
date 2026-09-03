@@ -8,7 +8,6 @@ import { Loading, ErrorNote } from "../components/Page.jsx";
 
 const COIN_NEWS_CONCURRENCY = 3;
 const RACER_NEWS_ROTATE_MS = 5_000;
-const coinNewsRequests = new Map();
 const compactVolumeFormatter = new Intl.NumberFormat("ko-KR", {
   notation: "compact",
   maximumFractionDigits: 1,
@@ -36,16 +35,8 @@ function errorMessage(reason) {
   return reason instanceof Error ? reason.message : String(reason);
 }
 
-function requestCoinNews(symbol, refresh = false) {
-  if (refresh) coinNewsRequests.delete(symbol);
-  if (!coinNewsRequests.has(symbol)) {
-    const request = api.newsCoin(symbol).catch((reason) => {
-      if (coinNewsRequests.get(symbol) === request) coinNewsRequests.delete(symbol);
-      throw reason;
-    });
-    coinNewsRequests.set(symbol, request);
-  }
-  return coinNewsRequests.get(symbol);
+function requestCoinNews(symbol) {
+  return api.newsCoin(symbol);
 }
 
 function useCoinNewsBriefings(coins) {
@@ -117,7 +108,7 @@ function useCoinNewsBriefings(coins) {
     }));
 
     try {
-      const data = await requestCoinNews(symbol, true);
+      const data = await requestCoinNews(symbol);
       if (generationRef.current !== generation) return;
       setNewsBySymbol((current) => ({
         ...current,

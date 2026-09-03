@@ -20,6 +20,10 @@ def test_render_blueprint_includes_position_news_background_worker():
     assert 'value: "2"' in worker
     assert 'value: "10"' in worker
     assert 'value: "256"' in worker
+    assert (
+        '- key: POSITION_NEWS_COLLECTION_SECONDS\n        value: "60"'
+        in worker
+    )
 
     for key in ("DATABASE_URL", "PREFECT_API_URL", "PREFECT_API_KEY"):
         assert f"- key: {key}\n        sync: false" in worker

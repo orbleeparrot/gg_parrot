@@ -10,17 +10,22 @@ def test_render_blueprint_includes_position_news_background_worker():
     web = blueprint.split("  - type: web\n", 1)[1].split("  - type: worker\n", 1)[0]
     worker = blueprint.split("  - type: worker\n", 1)[1]
 
-    assert '- key: ANTHROPIC_NEWS_TRANSLATION_API_KEY\n        sync: false' in web
+    assert '- key: ANTHROPIC_API_KEY\n        sync: false' in web
     assert (
-        '- key: ANTHROPIC_NEWS_TRANSLATION_MODEL\n'
+        '- key: ANTHROPIC_MODEL\n'
         '        value: "claude-haiku-4-5"'
         in web
     )
-    assert '- key: ANTHROPIC_API_KEY\n' not in web
-    assert '- key: ANTHROPIC_MODEL\n' not in web
+    assert 'ANTHROPIC_NEWS_TRANSLATION_API_KEY' not in blueprint
+    assert 'ANTHROPIC_NEWS_TRANSLATION_MODEL' not in blueprint
     assert '- key: NEWS_TITLE_TRANSLATION_ENABLED\n        value: "true"' in web
     assert (
         '- key: NEWS_TITLE_TRANSLATION_MAX_CALLS_PER_DAY\n        value: "20"'
+        in web
+    )
+    assert '- key: AI_EXPLAIN_MAX_CALLS_PER_DAY\n        value: "20"' in web
+    assert (
+        '- key: NEWS_MARKET_SUMMARY_MAX_CALLS_PER_DAY\n        value: "3"'
         in web
     )
     assert (
@@ -46,6 +51,15 @@ def test_render_blueprint_includes_position_news_background_worker():
 
     for key in ("DATABASE_URL", "PREFECT_API_URL", "PREFECT_API_KEY"):
         assert f"- key: {key}\n        sync: false" in worker
+
+    env_example = (
+        Path(__file__).resolve().parents[1] / ".env.example"
+    ).read_text(encoding="utf-8")
+    assert "ANTHROPIC_API_KEY=" in env_example
+    assert "ANTHROPIC_MODEL=" in env_example
+    assert "NEWS_MARKET_SUMMARY_MAX_CALLS_PER_DAY=3" in env_example
+    assert "ANTHROPIC_NEWS_TRANSLATION_API_KEY" not in env_example
+    assert "ANTHROPIC_NEWS_TRANSLATION_MODEL" not in env_example
 
     dockerfile = (
         Path(__file__).resolve().parents[1] / "Dockerfile.prefect"

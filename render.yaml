@@ -34,12 +34,16 @@ services:
       # Google Identity Services의 공개 OAuth 2.0 Web client ID.
       - key: GOOGLE_CLIENT_ID
         sync: false
-      # 코인동향 영문 제목은 한 종목의 제목을 한 번에 번역하고 결과를 캐시합니다.
-      # DB에 저장되는 전역 호출 상한으로 익명 요청에 의한 과금을 제한합니다.
-      - key: ANTHROPIC_NEWS_TRANSLATION_API_KEY
+      # 기존 Anthropic 설정을 AI 요약과 코인동향 제목 번역이 함께 사용합니다.
+      # 제목은 한 종목씩 묶어 번역하고 DB 전역 호출 상한과 캐시를 적용합니다.
+      - key: ANTHROPIC_API_KEY
         sync: false
-      - key: ANTHROPIC_NEWS_TRANSLATION_MODEL
+      - key: ANTHROPIC_MODEL
         value: "claude-haiku-4-5"
+      - key: AI_EXPLAIN_MAX_CALLS_PER_DAY
+        value: "20"
+      - key: NEWS_MARKET_SUMMARY_MAX_CALLS_PER_DAY
+        value: "3"
       - key: NEWS_TITLE_TRANSLATION_ENABLED
         value: "true"
       - key: NEWS_TITLE_TRANSLATION_MAX_CALLS_PER_DAY

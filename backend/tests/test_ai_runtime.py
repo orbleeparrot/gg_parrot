@@ -189,6 +189,32 @@ def test_shared_anthropic_client_has_timeout_and_sdk_retries_disabled(monkeypatc
     ai_runtime.close_ai_runtime()
 
 
+def test_explicit_api_key_client_is_isolated_and_reused(monkeypatch):
+    created = []
+
+    class Client:
+        def __init__(self, **kwargs):
+            created.append(kwargs)
+
+        def close(self):
+            pass
+
+    ai_runtime.close_ai_runtime()
+    monkeypatch.setattr(ai_runtime.anthropic, "Anthropic", Client)
+
+    default = ai_runtime.get_anthropic_client()
+    translation = ai_runtime.get_anthropic_client(api_key="translation-key")
+
+    assert translation is ai_runtime.get_anthropic_client(
+        api_key="translation-key",
+    )
+    assert translation is not default
+    assert len(created) == 2
+    assert "api_key" not in created[0]
+    assert created[1]["api_key"] == "translation-key"
+    ai_runtime.close_ai_runtime()
+
+
 def test_all_ai_callers_use_the_guarded_runtime():
     for module in (ai_explain, ai_challenge, news, classifier):
         source = getsource(module)

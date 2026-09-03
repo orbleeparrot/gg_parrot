@@ -243,16 +243,18 @@ def discover_tracked_symbols(
 def reserve_ai_budget(
     *,
     daily_limit: int,
+    namespace: str = "",
     now_ms: int | None = None,
     db: Session | None = None,
 ) -> bool:
-    """Atomically reserve one KST-day model call across all worker instances."""
+    """Atomically reserve one namespaced KST-day call across all instances."""
     if daily_limit <= 0:
         return False
     if db is None:
         with get_session() as owned:
             return reserve_ai_budget(
                 daily_limit=daily_limit,
+                namespace=namespace,
                 now_ms=now_ms,
                 db=owned,
             )
@@ -262,11 +264,13 @@ def reserve_ai_budget(
         millis / 1000,
         timezone.utc,
     ).astimezone(timezone(timedelta(hours=9))).strftime("%Y-%m-%d")
+    budget_namespace = str(namespace or "").strip()
+    budget_key = f"{budget_namespace}:{day}" if budget_namespace else day
 
     result = db.exec(
         update(TickerNewsAiBudget)
         .where(
-            TickerNewsAiBudget.budget_date_kst == day,
+            TickerNewsAiBudget.budget_date_kst == budget_key,
             TickerNewsAiBudget.used < daily_limit,
         )
         .values(
@@ -282,7 +286,7 @@ def reserve_ai_budget(
     try:
         db.add(
             TickerNewsAiBudget(
-                budget_date_kst=day,
+                budget_date_kst=budget_key,
                 used=1,
                 updated_at=now_iso,
             )
@@ -295,7 +299,7 @@ def reserve_ai_budget(
     result = db.exec(
         update(TickerNewsAiBudget)
         .where(
-            TickerNewsAiBudget.budget_date_kst == day,
+            TickerNewsAiBudget.budget_date_kst == budget_key,
             TickerNewsAiBudget.used < daily_limit,
         )
         .values(

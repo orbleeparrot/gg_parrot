@@ -8,6 +8,7 @@ from email.utils import format_datetime
 import pytest
 
 from app import news
+from app.agent_features.position_news import repository
 
 _RSS = """<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0"><channel>
@@ -180,6 +181,87 @@ def test_market_news_retries_transient_ai_summary_without_refetching_headlines(m
     assert len(summary_calls) == 2
 
 
+def test_market_summary_daily_budget_caps_each_process(monkeypatch):
+    reserve = getattr(news, "_reserve_market_summary_call", None)
+    assert reserve is not None
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(news, "_MARKET_SUMMARY_MAX_CALLS_PER_DAY", 2)
+    monkeypatch.setattr(news, "_market_summary_budget", ("", 0))
+    monkeypatch.setattr(news, "_kst_date", lambda: "2026-09-03")
+
+    assert reserve() is True
+    assert reserve() is True
+    assert reserve() is False
+    assert news._market_summary_budget == ("2026-09-03", 2)
+
+
+def test_durable_market_summary_budget_uses_its_own_namespace(monkeypatch):
+    calls = []
+
+    def reserve_ai_budget(**kwargs):
+        calls.append(kwargs)
+        return True
+
+    monkeypatch.setattr(repository, "reserve_ai_budget", reserve_ai_budget)
+    reserve = getattr(news, "_reserve_durable_market_summary_budget", None)
+    assert reserve is not None
+
+    assert reserve(daily_limit=3) is True
+    assert calls == [{"daily_limit": 3, "namespace": "market_news_summary"}]
+
+
+def test_market_summary_budget_fails_closed_when_database_is_unavailable(monkeypatch):
+    reserve = getattr(news, "_reserve_market_summary_call", None)
+    assert reserve is not None
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://example.invalid/db")
+    monkeypatch.setattr(
+        news,
+        "_reserve_durable_market_summary_budget",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("db down")),
+    )
+
+    assert reserve() is False
+
+
+def test_market_summary_does_not_call_anthropic_when_budget_is_exhausted(monkeypatch):
+    api_calls = []
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(
+        news,
+        "_reserve_market_summary_call",
+        lambda: False,
+        raising=False,
+    )
+
+    class Messages:
+        def create(self, **_kwargs):
+            api_calls.append(True)
+            return type(
+                "Response",
+                (),
+                {"content": [type("Block", (), {"type": "text", "text": "요약"})()]},
+            )()
+
+    class Runtime:
+        def call(self, _key, loader, **_kwargs):
+            return loader(), "loaded"
+
+    monkeypatch.setattr(
+        news,
+        "get_anthropic_client",
+        lambda: type("Client", (), {"messages": Messages()})(),
+    )
+    monkeypatch.setattr(news, "get_ai_runtime", lambda: Runtime())
+
+    assert news._summarize(
+        [{"title": "비트코인 시장 뉴스", "source": "테스트"}],
+        label="시장",
+    ) is None
+    assert api_calls == []
+
+
 def test_coin_news_prefers_central_snapshot_for_collected_asset(monkeypatch):
     item = {
         "title": "중앙 수집기가 저장한 비트코인 소식",
@@ -234,7 +316,7 @@ def test_coin_news_translates_english_snapshot_titles_and_keeps_original(monkeyp
     news._coin_cache.clear()
     english = "Robinhood's new crypto network sends Arbitrum's token soaring"
     korean = "로빈후드의 새 암호화폐 네트워크에 아비트럼 토큰 급등"
-    monkeypatch.setenv("ANTHROPIC_NEWS_TRANSLATION_API_KEY", "test-key")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     monkeypatch.setattr(news, "_title_translation_cache", {}, raising=False)
     monkeypatch.setattr(news, "_title_translation_budget", ("", 0), raising=False)
     monkeypatch.setattr(
@@ -271,7 +353,7 @@ def test_title_translation_batches_only_untranslated_titles_and_reuses_cache(mon
     calls = []
     english = "MUBARAK jumps as BNB Chain meme rally broadens"
     korean = "BNB 체인 밈코인 강세에 무바라크 급등"
-    monkeypatch.setenv("ANTHROPIC_NEWS_TRANSLATION_API_KEY", "test-key")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     monkeypatch.setattr(news, "_title_translation_cache", {}, raising=False)
     monkeypatch.setattr(news, "_title_translation_budget", ("", 0), raising=False)
 
@@ -304,7 +386,7 @@ def test_title_translation_retries_only_items_missing_from_a_partial_batch(monke
     first = "Arbitrum token soars"
     second = "MUBARAK jumps as BNB Chain meme rally broadens"
     calls = []
-    monkeypatch.setenv("ANTHROPIC_NEWS_TRANSLATION_API_KEY", "test-key")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     monkeypatch.setattr(news, "_title_translation_cache", {})
 
     def translate(titles):
@@ -333,7 +415,7 @@ def test_title_translation_applies_after_normalizing_source_whitespace(monkeypat
     raw = "Arbitrum   token\nsoars"
     normalized = "Arbitrum token soars"
     korean = "아비트럼 토큰 급등"
-    monkeypatch.setenv("ANTHROPIC_NEWS_TRANSLATION_API_KEY", "test-key")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     monkeypatch.setattr(news, "_title_translation_cache", {normalized: korean})
 
     localized = news._localize_coin_news_items([{"title": raw}])
@@ -341,19 +423,21 @@ def test_title_translation_applies_after_normalizing_source_whitespace(monkeypat
     assert localized == [{"title": korean, "original_title": normalized}]
 
 
-def test_title_translation_without_api_key_returns_originals(monkeypatch):
+def test_title_translation_ignores_legacy_key_without_shared_api_key(monkeypatch):
+    calls = []
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.delenv("ANTHROPIC_NEWS_TRANSLATION_API_KEY", raising=False)
+    monkeypatch.setenv("ANTHROPIC_NEWS_TRANSLATION_API_KEY", "ignored-old-key")
     monkeypatch.setattr(
         news,
         "_request_korean_title_translations",
-        lambda _titles: (_ for _ in ()).throw(AssertionError("AI must not run")),
+        lambda titles: calls.append(titles) or {},
         raising=False,
     )
     localize = getattr(news, "_localize_coin_news_items", lambda items: items)
     item = {"title": "Arbitrum token rises", "source": "CoinDesk"}
 
     assert localize([item]) == [item]
+    assert calls == []
 
 
 def test_title_translation_parser_accepts_fenced_json_and_stable_ids():
@@ -438,9 +522,8 @@ def test_title_translation_parser_accepts_equivalent_usd_code_and_word():
 
 
 def test_title_translation_daily_budget_caps_each_process(monkeypatch):
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("DATABASE_URL", raising=False)
-    monkeypatch.setenv("ANTHROPIC_NEWS_TRANSLATION_API_KEY", "translation-key")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "shared-key")
     monkeypatch.setattr(news, "_TITLE_TRANSLATION_MAX_CALLS_PER_DAY", 2)
     monkeypatch.setattr(news, "_title_translation_budget", ("", 0))
     monkeypatch.setattr(news, "_kst_date", lambda: "2026-09-03")
@@ -453,7 +536,7 @@ def test_title_translation_daily_budget_caps_each_process(monkeypatch):
 
 def test_title_translation_budget_uses_durable_namespace_with_postgres(monkeypatch):
     calls = []
-    monkeypatch.setenv("ANTHROPIC_NEWS_TRANSLATION_API_KEY", "translation-key")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "shared-key")
     monkeypatch.setenv("DATABASE_URL", "postgresql://example.invalid/db")
 
     def reserve(*, daily_limit):
@@ -471,11 +554,14 @@ def test_title_translation_budget_uses_durable_namespace_with_postgres(monkeypat
     assert calls == [news._TITLE_TRANSLATION_MAX_CALLS_PER_DAY]
 
 
-def test_title_translation_uses_only_the_dedicated_api_key(monkeypatch):
+def test_title_translation_reuses_shared_anthropic_client_and_model(monkeypatch):
     captured = []
     requests = []
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.setenv("ANTHROPIC_NEWS_TRANSLATION_API_KEY", "translation-key")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "shared-key")
+    monkeypatch.setenv("ANTHROPIC_MODEL", "shared-haiku")
+    monkeypatch.setenv("ANTHROPIC_NEWS_TRANSLATION_API_KEY", "ignored-old-key")
+    monkeypatch.setenv("ANTHROPIC_NEWS_TRANSLATION_MODEL", "ignored-old-model")
 
     class Block:
         type = "text"
@@ -495,8 +581,8 @@ def test_title_translation_uses_only_the_dedicated_api_key(monkeypatch):
     class Client:
         messages = Messages()
 
-    def fake_client(**kwargs):
-        captured.append(kwargs)
+    def fake_client():
+        captured.append("shared")
         return Client()
 
     class Runtime:
@@ -511,14 +597,16 @@ def test_title_translation_uses_only_the_dedicated_api_key(monkeypatch):
     )
 
     assert translated == {"Arbitrum token soars": "아비트럼 토큰 급등"}
-    assert captured == [{"api_key": "translation-key"}]
+    assert captured == ["shared"]
+    assert requests[0]["model"] == "shared-haiku"
     assert "표기를 원문 문자열 그대로" in requests[0]["system"]
 
 
 def test_title_translation_budget_is_charged_only_for_actual_api_load(monkeypatch):
     title = "Arbitrum token soars"
     title_id = hashlib.sha256(title.encode("utf-8")).hexdigest()[:16]
-    monkeypatch.setenv("ANTHROPIC_NEWS_TRANSLATION_API_KEY", "translation-key")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "shared-key")
     monkeypatch.setattr(news, "_title_translation_budget", ("", 0))
     monkeypatch.setattr(news, "_kst_date", lambda: "2026-09-03")
     api_calls = []
@@ -549,7 +637,7 @@ def test_title_translation_budget_is_charged_only_for_actual_api_load(monkeypatc
     monkeypatch.setattr(
         news,
         "get_anthropic_client",
-        lambda **_kwargs: type("Client", (), {"messages": Messages()})(),
+        lambda: type("Client", (), {"messages": Messages()})(),
     )
     monkeypatch.setattr(news, "get_ai_runtime", lambda: runtime)
 
@@ -624,7 +712,6 @@ def test_coin_news_falls_back_to_rss_when_central_store_is_unavailable(monkeypat
 def test_public_coin_news_fallback_filters_unrelated_broad_search_results(monkeypatch):
     news._coin_cache.clear()
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.delenv("ANTHROPIC_NEWS_TRANSLATION_API_KEY", raising=False)
     monkeypatch.setattr(news, "_load_latest_coin_snapshot", lambda _symbol: None)
 
     def fake_fetch(_query, **_kwargs):

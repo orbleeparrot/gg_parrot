@@ -11,6 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import ai_explain, ai_runtime
+from app.agent_features.position_news import repository
 from app.ai_explain import AiError
 from app.engine.backtest import BacktestResult
 from app.engine.explain import Explanation
@@ -21,7 +22,9 @@ client = TestClient(app)
 
 
 @pytest.fixture(autouse=True)
-def _reset_ai_runtime():
+def _reset_ai_runtime(monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(ai_explain, "_daily_budget", ("", 0), raising=False)
     ai_runtime.close_ai_runtime()
     yield
     ai_runtime.close_ai_runtime()
@@ -135,6 +138,98 @@ def test_generic_failure_falls_back_in_enrich(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
     _patch_anthropic(monkeypatch, RuntimeError("boom"))
     assert ai_explain.enrich(_macro(), _result()).source == "rule"
+
+
+def test_ai_explain_daily_budget_caps_each_process(monkeypatch):
+    reserve = getattr(ai_explain, "_reserve_ai_explain_call", None)
+    assert reserve is not None
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(ai_explain, "_MAX_CALLS_PER_DAY", 2)
+    monkeypatch.setattr(ai_explain, "_daily_budget", ("", 0))
+    monkeypatch.setattr(ai_explain, "_kst_date", lambda: "2026-09-03")
+
+    assert reserve() is True
+    assert reserve() is True
+    assert reserve() is False
+    assert ai_explain._daily_budget == ("2026-09-03", 2)
+
+
+def test_ai_explain_budget_uses_durable_namespace_with_postgres(monkeypatch):
+    calls = []
+    reserve = getattr(ai_explain, "_reserve_ai_explain_call", None)
+    assert reserve is not None
+    monkeypatch.setenv("DATABASE_URL", "postgresql://example.invalid/db")
+    monkeypatch.setattr(ai_explain, "_MAX_CALLS_PER_DAY", 7)
+    monkeypatch.setattr(
+        ai_explain,
+        "_reserve_durable_ai_explain_budget",
+        lambda *, daily_limit: calls.append(daily_limit) or True,
+        raising=False,
+    )
+
+    assert reserve() is True
+    assert calls == [7]
+
+
+def test_durable_ai_explain_budget_uses_its_own_namespace(monkeypatch):
+    calls = []
+
+    def reserve_ai_budget(**kwargs):
+        calls.append(kwargs)
+        return True
+
+    monkeypatch.setattr(repository, "reserve_ai_budget", reserve_ai_budget)
+
+    assert ai_explain._reserve_durable_ai_explain_budget(daily_limit=7) is True
+    assert calls == [{"daily_limit": 7, "namespace": "ai_explain"}]
+
+
+def test_ai_explain_budget_fails_closed_when_shared_database_is_unavailable(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://example.invalid/db")
+    monkeypatch.setattr(
+        ai_explain,
+        "_reserve_durable_ai_explain_budget",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("db down")),
+    )
+
+    assert ai_explain._reserve_ai_explain_call() is False
+
+
+def test_ai_explain_budget_is_charged_only_for_uncached_api_load(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    reservations = []
+    monkeypatch.setattr(
+        ai_explain,
+        "_reserve_ai_explain_call",
+        lambda: reservations.append(True) or True,
+        raising=False,
+    )
+    _patch_anthropic(monkeypatch, _good_json())
+
+    first, first_state = ai_explain.generate_with_cache_status(_macro(), _result())
+    second, second_state = ai_explain.generate_with_cache_status(_macro(), _result())
+
+    assert first.source == second.source == "ai"
+    assert (first_state, second_state) == ("loaded", "cached")
+    assert reservations == [True]
+
+
+def test_ai_explain_rejects_uncached_call_when_daily_budget_is_exhausted(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setattr(
+        ai_explain,
+        "_reserve_ai_explain_call",
+        lambda: False,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        ai_explain,
+        "get_anthropic_client",
+        lambda: (_ for _ in ()).throw(AssertionError("Anthropic must not run")),
+    )
+
+    with pytest.raises(AiError, match="사용할 수 있는 AI 심화 분석 횟수"):
+        ai_explain.generate(_macro(), _result())
 
 
 def test_endpoint_reports_ai_unavailable_without_key(monkeypatch):

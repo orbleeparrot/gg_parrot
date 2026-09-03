@@ -399,6 +399,10 @@ _GOOGLE_LOCALES = {
 _ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-5")
 _SUMMARY_PROMPT_VERSION = "market-news-summary-v2"
 _MARKET_SUMMARY_RETRY_SECONDS = 30.0
+_MARKET_SUMMARY_MAX_CALLS_PER_DAY = max(
+    0,
+    int(os.environ.get("NEWS_MARKET_SUMMARY_MAX_CALLS_PER_DAY", "3")),
+)
 
 _DISCLAIMER = (
     "정보 제공용이며 투자자문이 아닙니다. 요약은 AI가 생성했을 수 있으니 "
@@ -420,6 +424,8 @@ _openeden_error_cache: tuple[str, float] | None = None
 _title_translation_cache: dict[str, str] = {}
 _title_translation_lock = threading.Lock()
 _title_translation_budget: tuple[str, int] = ("", 0)
+_market_summary_budget_lock = threading.Lock()
+_market_summary_budget: tuple[str, int] = ("", 0)
 _market_summary_retry_at = 0.0
 _rss_refreshes = SingleFlightGroup()
 
@@ -1587,6 +1593,41 @@ def _fetch_openeden_news(*, strict: bool = False) -> list[dict]:
         return []
 
 
+def _reserve_durable_market_summary_budget(*, daily_limit: int) -> bool:
+    from .agent_features.position_news.repository import reserve_ai_budget
+
+    return reserve_ai_budget(
+        daily_limit=daily_limit,
+        namespace="market_news_summary",
+    )
+
+
+def _reserve_market_summary_call() -> bool:
+    global _market_summary_budget
+    if (
+        not os.environ.get("ANTHROPIC_API_KEY")
+        or _MARKET_SUMMARY_MAX_CALLS_PER_DAY <= 0
+    ):
+        return False
+    if os.environ.get("DATABASE_URL"):
+        try:
+            return _reserve_durable_market_summary_budget(
+                daily_limit=_MARKET_SUMMARY_MAX_CALLS_PER_DAY,
+            )
+        except Exception:
+            return False
+    day = _kst_date()
+    with _market_summary_budget_lock:
+        budget_day, used = _market_summary_budget
+        if budget_day != day:
+            used = 0
+        if used >= _MARKET_SUMMARY_MAX_CALLS_PER_DAY:
+            _market_summary_budget = (day, used)
+            return False
+        _market_summary_budget = (day, used + 1)
+        return True
+
+
 def _summarize(items: list[dict], *, label: str) -> Optional[str]:
     """헤드라인만 근거로 한 중립 개요(3~4줄). 실패하면 None(개요 생략)."""
     if not items or not os.environ.get("ANTHROPIC_API_KEY"):
@@ -1613,6 +1654,8 @@ def _summarize(items: list[dict], *, label: str) -> Optional[str]:
         )
 
         def load():
+            if not _reserve_market_summary_call():
+                raise RuntimeError("market news summary daily budget exhausted")
             response = get_anthropic_client().messages.create(
                 model=_ANTHROPIC_MODEL,
                 max_tokens=600,
@@ -1670,9 +1713,7 @@ def _reserve_durable_title_translation_budget(*, daily_limit: int) -> bool:
 
 
 def _title_translation_api_key() -> str:
-    return str(
-        os.environ.get("ANTHROPIC_NEWS_TRANSLATION_API_KEY") or ""
-    ).strip()
+    return str(os.environ.get("ANTHROPIC_API_KEY") or "").strip()
 
 
 def _normalize_news_title(title: object) -> str:
@@ -1786,12 +1827,11 @@ def _parse_korean_title_translations(text: str, titles: list[str]) -> dict[str, 
 def _request_korean_title_translations(titles: list[str]) -> dict[str, str]:
     if not titles:
         return {}
-    api_key = _title_translation_api_key()
-    if not api_key:
+    if not _title_translation_api_key():
         return {}
     selected_model = os.environ.get(
-        "ANTHROPIC_NEWS_TRANSLATION_MODEL",
-        "claude-haiku-4-5",
+        "ANTHROPIC_MODEL",
+        _ANTHROPIC_MODEL,
     )
     articles = [
         {"id": _title_translation_id(title), "title": title[:300]}
@@ -1814,7 +1854,7 @@ def _request_korean_title_translations(titles: list[str]) -> dict[str, str]:
     def load():
         if not _reserve_title_translation_call():
             raise RuntimeError("title translation daily budget exhausted")
-        response = get_anthropic_client(api_key=api_key).messages.create(
+        response = get_anthropic_client().messages.create(
             model=selected_model,
             max_tokens=_TITLE_TRANSLATION_MAX_TOKENS,
             system=system,

@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import anthropic
@@ -36,7 +38,13 @@ from .ai_runtime import (
 # env var to switch without a code change.
 _DEFAULT_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-5")
 _MAX_TOKENS = int(os.environ.get("ANTHROPIC_MAX_TOKENS", "2048"))
+_MAX_CALLS_PER_DAY = max(
+    0,
+    int(os.environ.get("AI_EXPLAIN_MAX_CALLS_PER_DAY", "20")),
+)
 _PROMPT_VERSION = "backtest-explanation-v2"
+_daily_budget_lock = threading.Lock()
+_daily_budget: tuple[str, int] = ("", 0)
 
 _SYSTEM = (
     "너는 코인 '코린이(초보)'에게 백테스트 결과를 쉽게 풀어주는 도우미 '껄무새'야. "
@@ -66,6 +74,46 @@ class AiError(Exception):
     def __init__(self, user_message: str) -> None:
         super().__init__(user_message)
         self.user_message = user_message
+
+
+def _kst_date() -> str:
+    return datetime.now(
+        timezone(timedelta(hours=9)),
+    ).date().isoformat()
+
+
+def _reserve_durable_ai_explain_budget(*, daily_limit: int) -> bool:
+    from .agent_features.position_news.repository import reserve_ai_budget
+
+    return reserve_ai_budget(
+        daily_limit=daily_limit,
+        namespace="ai_explain",
+    )
+
+
+def _reserve_ai_explain_call() -> bool:
+    global _daily_budget
+    if _MAX_CALLS_PER_DAY <= 0:
+        return False
+    if os.environ.get("DATABASE_URL"):
+        try:
+            return _reserve_durable_ai_explain_budget(
+                daily_limit=_MAX_CALLS_PER_DAY,
+            )
+        except Exception:
+            # A configured shared database owns the global budget. Fail closed
+            # instead of multiplying paid calls when that database is down.
+            return False
+    day = _kst_date()
+    with _daily_budget_lock:
+        budget_day, used = _daily_budget
+        if budget_day != day:
+            used = 0
+        if used >= _MAX_CALLS_PER_DAY:
+            _daily_budget = (day, used)
+            return False
+        _daily_budget = (day, used + 1)
+        return True
 
 
 def ai_available() -> bool:
@@ -154,6 +202,8 @@ def generate_with_cache_status(
     )
 
     def load_explanation():
+        if not _reserve_ai_explain_call():
+            raise AiError("오늘 사용할 수 있는 AI 심화 분석 횟수를 모두 사용했어요.")
         response = get_anthropic_client().messages.create(
             model=selected_model,
             max_tokens=_MAX_TOKENS,

@@ -73,6 +73,12 @@ def _disable_real_coindesk_browser(monkeypatch):
         lambda _descriptors: {},
         raising=False,
     )
+    monkeypatch.setattr(
+        news,
+        "_fetch_coindesk_asset_archive_news",
+        lambda *_args, **_kwargs: [],
+        raising=False,
+    )
 
 
 def test_parse_extracts_fields_and_strips_source_suffix():
@@ -303,7 +309,8 @@ def test_coin_news_falls_back_to_rss_when_central_store_is_unavailable(monkeypat
         ("PAXUSDUSDT", "PAXUSD"),
         ("A" * 15 + "USDT", "A" * 15),
         ("../BTCUSDT", ""),
-        ("A", ""),
+        ("TUSDT", "T"),
+        ("A", "A"),
     ],
 )
 def test_asset_from_market_symbol_strips_one_quote_at_ingress(market_symbol, expected):
@@ -318,6 +325,59 @@ def test_worker_fetch_surfaces_network_failure(monkeypatch):
     assert news._fetch_news("BTC", strict=False) == []
     with pytest.raises(news.NewsFetchError):
         news._fetch_news("BTC", strict=True)
+
+
+def test_single_letter_asset_searches_current_and_five_year_archive(monkeypatch):
+    calls = []
+
+    def fake_fetch(query, *, limit, strict, locale):
+        calls.append((query, locale))
+        if "when:5y" not in query:
+            return []
+        return [{
+            "title": "Threshold Network expands tBTC infrastructure",
+            "source": "Archive News",
+            "url": "https://news.example.com/threshold-2025",
+            "published": "2025-09-25T07:00:00+00:00",
+            "published_display": "",
+        }]
+
+    monkeypatch.setattr(news, "_fetch_news", fake_fetch)
+
+    payload = news._coin_news_envelope("T", strict=True, relevant_only=True)
+
+    assert payload["coin_name"] == "쓰레스홀드"
+    assert [item["title"] for item in payload["items"]] == [
+        "Threshold Network expands tBTC infrastructure",
+    ]
+    assert any("when:30d" in query for query, _locale in calls)
+    assert any("when:5y" in query for query, _locale in calls)
+
+
+def test_unknown_active_asset_falls_back_to_five_year_search(monkeypatch):
+    calls = []
+
+    def fake_fetch(query, *, limit, strict, locale):
+        calls.append((query, locale))
+        if "when:5y" not in query:
+            return []
+        return [{
+            "title": "XYZ token launched its storage network in 2025",
+            "source": "Archive News",
+            "url": "https://news.example.com/xyz-2025",
+            "published": "2025-04-21T07:00:00+00:00",
+            "published_display": "",
+        }]
+
+    monkeypatch.setattr(news, "_fetch_news", fake_fetch)
+
+    payload = news._coin_news_envelope("XYZ", strict=True, relevant_only=True)
+
+    assert [item["title"] for item in payload["items"]] == [
+        "XYZ token launched its storage network in 2025",
+    ]
+    assert any("when:30d" in query for query, _locale in calls)
+    assert any("when:5y" in query for query, _locale in calls)
 
 
 def test_worker_merges_coindesk_rss_and_filters_each_source_by_asset(monkeypatch):
@@ -372,13 +432,13 @@ def test_worker_merges_coindesk_rss_and_filters_each_source_by_asset(monkeypatch
     payload = news.fetch_coin_news_for_collector("EDEN")
 
     assert [item["title"] for item in payload["items"]] == [
-        "OpenEden expands its tokenized Treasury platform",
         "오픈에덴, 토큰화 국채 상품 확대",
+        "OpenEden expands its tokenized Treasury platform",
     ]
-    assert payload["items"][0]["source"] == "CoinDesk"
-    assert payload["items"][0]["categories"] == ["Finance", "Tokenization"]
-    assert payload["items"][0]["feed_source"] == "coindesk_rss"
-    assert payload["items"][1]["feed_source"] == "google_news_rss"
+    assert payload["items"][1]["source"] == "CoinDesk"
+    assert payload["items"][1]["categories"] == ["Finance", "Tokenization"]
+    assert payload["items"][1]["feed_source"] == "coindesk_rss"
+    assert payload["items"][0]["feed_source"] == "google_news_rss"
     source_states = {
         source["name"]: (source["status"], source["item_count"])
         for source in payload["sources"]
@@ -507,8 +567,8 @@ def test_eden_uses_korean_and_english_google_queries(monkeypatch):
     assert [item["title"] for item in payload["items"]] == [
         korean["title"],
         dealroom["title"],
-        ticker_market["title"],
         market["title"],
+        ticker_market["title"],
     ]
     assert payload["query"] == (
         '(OpenEden OR 오픈에덴 OR "EDEN 코인") when:30d | '
@@ -776,6 +836,25 @@ def test_news_merge_keeps_source_diversity_when_one_feed_exceeds_limit(monkeypat
     ]
 
 
+def test_final_news_list_is_sorted_newest_first_with_undated_items_last():
+    unsorted = [
+        {"title": "2023 article", "published": "2023-05-11T13:10:00+00:00"},
+        {"title": "undated article", "published": None},
+        {"title": "2026 article", "published": "2026-09-02T22:12:43+00:00"},
+        {"title": "2025 article", "published": "2025-07-07T15:00:00+00:00"},
+    ]
+    sorter = getattr(news, "_sort_news_items_newest_first", lambda items: items)
+
+    sorted_items = sorter(unsorted)
+
+    assert [item["title"] for item in sorted_items] == [
+        "2026 article",
+        "2025 article",
+        "2023 article",
+        "undated article",
+    ]
+
+
 def test_coindesk_playwright_links_keep_only_dated_articles():
     raw_links = [
         {
@@ -826,6 +905,195 @@ def test_coindesk_playwright_links_keep_only_dated_articles():
             "source_page": "https://www.coindesk.com/markets",
         }
     ]
+
+
+def test_coindesk_search_link_uses_article_path_date_when_card_has_no_time():
+    items = news._parse_coindesk_browser_links(
+        [{
+            "href": (
+                "https://www.coindesk.com/markets/2025/07/07/"
+                "threshold-tbtc-debuts-on-sui"
+            ),
+            "title": "Threshold's Bitcoin Backed tBTC Debuts on Sui",
+            "published": "",
+        }],
+        source_kind="asset_search",
+        source_scope="T",
+        source_page="https://www.coindesk.com/search/",
+    )
+
+    assert items[0]["published"] == "2025-07-07T00:00:00+00:00"
+
+
+def test_coindesk_asset_archive_uses_project_aliases_and_filters_noise(monkeypatch):
+    searched = []
+
+    def fake_search(terms):
+        searched.extend(terms)
+        return [
+            {
+                "title": "Threshold Network Goes Live With Wormhole",
+                "source": "CoinDesk",
+                "url": "https://www.coindesk.com/tech/2023/05/11/threshold-wormhole",
+                "published": "2023-05-11T00:00:00+00:00",
+            },
+            {
+                "title": "Threshold's Bitcoin Backed tBTC Debuts on Sui",
+                "source": "CoinDesk",
+                "url": "https://www.coindesk.com/markets/2025/07/07/threshold-tbtc",
+                "published": "2025-07-07T00:00:00+00:00",
+            },
+            {
+                "title": "Sentinel Network Reports HitBTC Breach",
+                "source": "CoinDesk",
+                "url": "https://www.coindesk.com/markets/2021/08/20/hitbtc-breach",
+                "published": "2021-08-20T00:00:00+00:00",
+            },
+        ]
+
+    monkeypatch.setattr(
+        news,
+        "_search_coindesk_asset_archive_playwright",
+        fake_search,
+        raising=False,
+    )
+    loader = getattr(news, "_load_coindesk_asset_archive", lambda *_args: [])
+
+    items = loader("T", "쓰레스홀드")
+
+    assert searched == ["tbtc", "threshold network"]
+    assert [item["title"] for item in items] == [
+        "Threshold Network Goes Live With Wormhole",
+        "Threshold's Bitcoin Backed tBTC Debuts on Sui",
+    ]
+
+
+def test_coindesk_search_wait_passes_token_as_keyword_only_argument():
+    calls = []
+
+    class FakePage:
+        def wait_for_function(self, expression, *, arg, timeout):
+            calls.append((expression, arg, timeout))
+
+    wait = getattr(news, "_wait_for_coindesk_asset_results", lambda *_args: None)
+    wait(FakePage(), "tbtc", 12_000)
+
+    assert len(calls) == 1
+    assert calls[0][1:] == ("tbtc", 12_000)
+
+
+def test_coindesk_search_wait_timeout_allows_current_dom_to_be_parsed():
+    class SlowPage:
+        def wait_for_function(self, _expression, *, arg, timeout):
+            raise RuntimeError(f"timeout for {arg} after {timeout}")
+
+    assert news._wait_for_coindesk_asset_results(
+        SlowPage(),
+        "tbtc",
+        12_000,
+    ) is False
+
+
+def test_empty_coindesk_archive_uses_short_retry_cache_window():
+    ttl = getattr(
+        news,
+        "_coindesk_asset_archive_cache_seconds",
+        lambda _items: news._COINDESK_DISCOVERY_MAX_STALE_SECONDS,
+    )
+
+    assert ttl([]) == news._COIN_CACHE_SECONDS
+    assert ttl([{"title": "Threshold Network archive article"}]) == (
+        news._COINDESK_DISCOVERY_MAX_STALE_SECONDS
+    )
+
+
+def test_collector_uses_asset_archive_when_current_coindesk_has_no_match(monkeypatch):
+    archive_calls = []
+    archive_item = {
+        "title": "Threshold's Bitcoin Backed tBTC Debuts on Sui",
+        "source": "CoinDesk",
+        "url": "https://www.coindesk.com/markets/2025/07/07/threshold-tbtc",
+        "published": "2025-07-07T00:00:00+00:00",
+        "feed_source": "coindesk_asset_search_playwright",
+    }
+    monkeypatch.setattr(
+        news,
+        "_fetch_coindesk_discovery_news",
+        _empty_coindesk_discovery,
+    )
+    monkeypatch.setattr(news, "_fetch_coindesk_news", lambda **_kwargs: [])
+    monkeypatch.setattr(
+        news,
+        "_coin_news_envelope",
+        lambda *_args, **_kwargs: {
+            "symbol": "T",
+            "coin_name": "쓰레스홀드",
+            "items": [],
+            "candidate_count": 0,
+            "query": "",
+        },
+    )
+    monkeypatch.setattr(
+        news,
+        "_fetch_coindesk_asset_archive_news",
+        lambda asset, coin_name, **_kwargs: (
+            archive_calls.append((asset, coin_name)) or [archive_item]
+        ),
+    )
+
+    payload = news.fetch_coin_news_for_collector("T")
+
+    assert archive_calls == [("T", "쓰레스홀드")]
+    assert payload["items"] == [archive_item]
+    archive_source = next(
+        source for source in payload["sources"]
+        if source["name"] == "coindesk_asset_archive"
+    )
+    assert archive_source["status"] == "ready"
+    assert archive_source["item_count"] == 1
+
+
+def test_collector_merges_archive_even_when_current_coindesk_has_a_match(monkeypatch):
+    current = {
+        "title": "Threshold Network announces a Bitcoin integration",
+        "source": "CoinDesk",
+        "url": "https://www.coindesk.com/tech/2026/09/01/threshold-current",
+        "published": "2026-09-01T00:00:00+00:00",
+    }
+    archived = {
+        "title": "Threshold's Bitcoin Backed tBTC Debuts on Sui",
+        "source": "CoinDesk",
+        "url": "https://www.coindesk.com/markets/2025/07/07/threshold-tbtc",
+        "published": "2025-07-07T00:00:00+00:00",
+    }
+    archive_calls = []
+    monkeypatch.setattr(
+        news,
+        "_fetch_coindesk_discovery_news",
+        _empty_coindesk_discovery,
+    )
+    monkeypatch.setattr(news, "_fetch_coindesk_news", lambda **_kwargs: [current])
+    monkeypatch.setattr(
+        news,
+        "_coin_news_envelope",
+        lambda *_args, **_kwargs: {"items": [], "candidate_count": 0, "query": ""},
+    )
+    monkeypatch.setattr(
+        news,
+        "_fetch_coindesk_asset_archive_news",
+        lambda asset, coin_name, **_kwargs: (
+            archive_calls.append((asset, coin_name)) or [archived]
+        ),
+    )
+
+    payload = news.fetch_coin_news_for_collector("T")
+
+    assert archive_calls == [("T", "쓰레스홀드")]
+    assert [item["title"] for item in payload["items"]] == [
+        current["title"],
+        archived["title"],
+    ]
+    assert payload["items"][0]["feed_source"] == "coindesk_rss"
 
 
 def test_article_excerpt_enrichment_reuses_feed_text_and_fetches_only_missing(monkeypatch):
@@ -1314,6 +1582,37 @@ def test_asset_matcher_rejects_generic_project_name_words(
 
 
 @pytest.mark.parametrize(
+    "title",
+    [
+        "Table Trac (TBTC) awards stock options to its CEO",
+        "Threshold Network GARCH Model for time series analysis",
+    ],
+)
+def test_threshold_matcher_rejects_stock_ticker_and_academic_noise(title):
+    assert not news._matches_asset(
+        {"title": title, "categories": []},
+        "T",
+        "쓰레스홀드",
+    )
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Threshold Network expands Bitcoin-backed tBTC to Sui",
+        "Bitcoin-on-Ethereum Token tBTC relaunches",
+        "쓰레스홀드 네트워크, tBTC 앱 업그레이드 공개",
+    ],
+)
+def test_threshold_matcher_keeps_project_specific_news(title):
+    assert news._matches_asset(
+        {"title": title, "categories": []},
+        "T",
+        "쓰레스홀드",
+    )
+
+
+@pytest.mark.parametrize(
     ("symbol", "coin_name", "title"),
     [
         ("OP", "옵티미즘", "Optimism over bitcoin ETF approval grows"),
@@ -1389,6 +1688,8 @@ def test_strict_google_feed_rejects_non_rss_checkpoint(monkeypatch, document):
 @pytest.mark.parametrize(
     "symbol",
     [
+        "A",
+        "T",
         "BTC",
         "BUSD",
         "TUSD",
@@ -1407,6 +1708,6 @@ def test_canonical_asset_symbol_preserves_valid_base_and_is_idempotent(symbol):
     assert news.canonical_asset_symbol(once) == once
 
 
-@pytest.mark.parametrize("symbol", ["A", "A" * 16, "../BTC", "BTC-USDT"])
+@pytest.mark.parametrize("symbol", ["A" * 16, "../BTC", "BTC-USDT"])
 def test_canonical_asset_symbol_rejects_out_of_bounds_or_unsafe_base(symbol):
     assert news.canonical_asset_symbol(symbol) == ""

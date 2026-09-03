@@ -49,7 +49,7 @@ services:
       - key: POSITION_NEWS_REQUIRE_POSTGRES
         value: "true"
       - key: POSITION_NEWS_COLLECTION_SECONDS
-        value: "300"
+        value: "60"
       - key: POSITION_NEWS_MAX_AI_ANALYSES_PER_RUN
         value: "2"
       - key: POSITION_NEWS_MAX_AI_ANALYSES_PER_DAY

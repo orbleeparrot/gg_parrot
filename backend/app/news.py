@@ -52,6 +52,7 @@ _MARKET_QUERY = "암호화폐 OR 가상자산 OR 비트코인 규제 OR 동향 w
 
 # 코린이가 아는 흔한 티커의 한글명 — 한국어 뉴스 적중률을 높인다. 없으면 티커 그대로.
 _COIN_KO = {
+    "T": "쓰레스홀드",
     "BTC": "비트코인", "ETH": "이더리움", "XRP": "리플", "SOL": "솔라나",
     "DOGE": "도지코인", "ADA": "에이다", "TRX": "트론", "AVAX": "아발란체",
     "LINK": "체인링크", "DOT": "폴카닷", "MATIC": "폴리곤", "SHIB": "시바이누",
@@ -69,6 +70,7 @@ _COIN_KO = {
 # 영문 RSS 제목·CoinDesk category 태그에서 전체 지원 자산의 관련성을
 # 판별할 때 사용하는 canonical 프로젝트/네트워크 이름이다.
 _COIN_ALIASES = {
+    "T": ("tbtc", "threshold network"),
     "BTC": ("bitcoin",),
     "ETH": ("ethereum", "ether"),
     "XRP": ("ripple", "xrp ledger"),
@@ -124,6 +126,7 @@ _COIN_ALIASES = {
 # their lowercase spelling in a broad CoinDesk section feed creates false
 # positives, so they need an explicit ticker spelling or asset-specific alias.
 _AMBIGUOUS_BARE_TICKERS = frozenset({
+    "T",
     "ADA",
     "ALGO",
     "APT",
@@ -148,12 +151,13 @@ _AMBIGUOUS_BARE_TICKERS = frozenset({
 # Even uppercase spelling is ambiguous for these tickers. For example, SC is
 # also used by banks, subcutaneous medicines, and sweepstakes-casino credits.
 # Require a project name, crypto context, market pair, or trusted category.
-_CONTEXT_REQUIRED_TICKERS = frozenset({"SC"})
+_CONTEXT_REQUIRED_TICKERS = frozenset({"SC", "T"})
 
 # These project names also occur as ordinary English words. Preserve the
 # publisher's capitalization and reject common non-project phrases instead of
 # matching their case-folded form across every CoinDesk section article.
 _CASE_SENSITIVE_PROJECT_ALIASES = {
+    "T": ("Threshold Network", "tBTC"),
     "AVAX": ("Avalanche",),
     "GRT": ("The Graph",),
     "IMX": ("Immutable",),
@@ -163,7 +167,15 @@ _CASE_SENSITIVE_PROJECT_ALIASES = {
     "STX": ("Stacks",),
     "XLM": ("Stellar",),
 }
+# These mixed-case token names are distinctive on their own. A word boundary
+# still rejects unrelated strings such as HitBTC and stBTC.
+_STRONG_CASE_SENSITIVE_PROJECT_ALIASES = {
+    "T": frozenset({"tBTC"}),
+}
 _PROJECT_ALIAS_CONTEXT_PATTERNS = {
+    "T": (
+        r"\b(?:bitcoin|blockchain|crypto|dao|defi|token|wormhole)\b",
+    ),
     "AVAX": (r"\b(?:blockchain|c-chain|subnets?|validators?)\b",),
     "GRT": (
         r"\b(?:data service|graph protocol|indexing|query network|subgraphs?|web3 data)\b",
@@ -188,6 +200,20 @@ _PROJECT_ALIAS_CONTEXT_PATTERNS = {
 # 영문권에서만 다뤄지는 소형 자산은 한글 검색 하나로 기사가 고갈된다.
 # EDEN은 검증된 브랜드/티커 표현만 사용해 일반적인 'Eden' 동명이인 오탐을 막는다.
 _COIN_GOOGLE_QUERIES = {
+    "T": (
+        ('(쓰레스홀드 OR "쓰레스홀드 코인" OR TUSDT) when:30d', "ko"),
+        (
+            '("Threshold Network" OR "Threshold token" OR tBTC OR TUSDT) '
+            'when:30d',
+            "en",
+        ),
+        ('(쓰레스홀드 OR "쓰레스홀드 코인" OR TUSDT) when:5y', "ko"),
+        (
+            '("Threshold Network" OR "Threshold token" OR tBTC OR TUSDT) '
+            'when:5y',
+            "en",
+        ),
+    ),
     "EDEN": (
         ('(OpenEden OR 오픈에덴 OR "EDEN 코인") when:30d', "ko"),
         ('(OpenEden OR "Open Eden") when:30d', "en"),
@@ -215,10 +241,9 @@ _COIN_GOOGLE_QUERIES = {
     ),
 }
 
-# CoinDesk's HTML section/tag pages block the backend collector and their terms
-# prohibit bypassing access controls with browser automation.  Discover the same
-# public CoinDesk headlines through Google News RSS instead: four section-scoped
-# queries plus the four coin topics requested for the major tag pages.
+# CoinDesk current headlines come from the official RSS plus rendered public
+# section/tag pages. Google News RSS remains the per-source fallback, while an
+# active ticker also gets a rendered CoinDesk archive search below.
 _COINDESK_DISCOVERY_SOURCES = (
     (
         "coindesk_section_markets",
@@ -362,6 +387,7 @@ _coindesk_cache: tuple[list[dict], float] | None = None
 _coindesk_error_cache: tuple[str, float] | None = None
 _coindesk_discovery_cache: tuple[dict, float] | None = None
 _coindesk_discovery_error_cache: tuple[str, float] | None = None
+_coindesk_asset_archive_cache: dict[str, tuple[list[dict], float]] = {}
 _openeden_cache: tuple[list[dict], float] | None = None
 _openeden_error_cache: tuple[str, float] | None = None
 _market_summary_retry_at = 0.0
@@ -378,12 +404,12 @@ _MARKET_QUOTES = ("FDUSD", "USDT", "BUSD", "USDC", "TUSD", "USD")
 def canonical_asset_symbol(symbol: str) -> str:
     """Validate an already-derived asset ticker without stripping suffixes."""
     value = str(symbol or "").strip().upper()
-    return value if re.fullmatch(r"[A-Z0-9]{2,15}", value) else ""
+    return value if re.fullmatch(r"[A-Z0-9]{1,15}", value) else ""
 
 
 def canonical_market_symbol(symbol: str) -> str:
     value = str(symbol or "").strip().upper()
-    return value if re.fullmatch(r"[A-Z0-9]{2,21}", value) else ""
+    return value if re.fullmatch(r"[A-Z0-9]{1,21}", value) else ""
 
 
 def asset_from_market_symbol(symbol: str) -> str:
@@ -636,6 +662,11 @@ def _matches_asset(item: dict, asset_symbol: str, coin_name: str) -> bool:
             title,
         ):
             continue
+        if alias in _STRONG_CASE_SENSITIVE_PROJECT_ALIASES.get(
+            asset_symbol,
+            frozenset(),
+        ):
+            return True
         if any(re.search(pattern, searchable) for pattern in context_patterns):
             return True
     if asset_symbol in _AMBIGUOUS_BARE_TICKERS:
@@ -658,9 +689,14 @@ def _matches_asset(item: dict, asset_symbol: str, coin_name: str) -> bool:
         if contextual_ticker.search(title.casefold()):
             return True
         if asset_symbol in _CONTEXT_REQUIRED_TICKERS:
+            pair_quotes = (
+                "BUSD|ETH|KRW|USDC|USDT"
+                if len(asset_symbol) == 1
+                else "BUSD|BTC|ETH|KRW|USD|USDC|USDT"
+            )
             market_pair = re.compile(
                 rf"(?<![A-Za-z0-9]){re.escape(asset_symbol)}"
-                rf"(?:BUSD|BTC|ETH|KRW|USD|USDC|USDT)(?![A-Za-z0-9])",
+                rf"(?:{pair_quotes})(?![A-Za-z0-9])",
                 re.IGNORECASE,
             )
             if market_pair.search(title):
@@ -721,6 +757,22 @@ def _merge_news_items(*sources: list[dict]) -> list[dict]:
         if not advanced:
             break
     return merged
+
+
+def _sort_news_items_newest_first(items: list[dict]) -> list[dict]:
+    def published_timestamp(item: dict) -> float:
+        value = str(item.get("published") or "").strip()
+        if not value:
+            return float("-inf")
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return float("-inf")
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.timestamp()
+
+    return sorted(items, key=published_timestamp, reverse=True)
 
 
 # ---------------------------------------------------------------------------
@@ -814,6 +866,18 @@ def _parse_coindesk_browser_links(
                 published = parsed_date.astimezone(timezone.utc).isoformat()
             except ValueError:
                 published = ""
+        if not published:
+            path_parts = parsed.path.strip("/").split("/")
+            if len(path_parts) >= 5:
+                try:
+                    published = datetime(
+                        int(path_parts[1]),
+                        int(path_parts[2]),
+                        int(path_parts[3]),
+                        tzinfo=timezone.utc,
+                    ).isoformat()
+                except (ValueError, IndexError):
+                    published = ""
         parsed_item = {
             "title": title[:300],
             "source": "CoinDesk",
@@ -913,6 +977,167 @@ def _fetch_coindesk_pages_playwright(descriptors) -> dict[str, list[dict]]:
     except Exception:
         return {}
     return extracted
+
+
+def _coindesk_asset_search_terms(asset_symbol: str, coin_name: str) -> list[str]:
+    """Build precise project-name searches; never search a one-letter ticker."""
+    aliases = _COIN_ALIASES.get(asset_symbol, ())
+    candidates = list(aliases) if aliases else [coin_name]
+    terms = []
+    seen = set()
+    for candidate in candidates:
+        term = re.sub(r"\s+", " ", str(candidate or "")).strip().casefold()
+        if len(term) < 2 or term in seen:
+            continue
+        seen.add(term)
+        terms.append(term)
+    return terms[:3]
+
+
+def _wait_for_coindesk_asset_results(page, token: str, timeout_ms: int) -> bool:
+    try:
+        page.wait_for_function(
+            r"""token => Array.from(document.querySelectorAll('a[href]'))
+              .some(a => (a.innerText || '').toLowerCase().includes(token)
+                && /\/(markets|business|policy|tech)\/\d{4}\/\d{2}\/\d{2}\//
+                  .test(a.href))""",
+            arg=token,
+            timeout=timeout_ms,
+        )
+    except Exception:
+        return False
+    return True
+
+
+def _search_coindesk_asset_archive_playwright(search_terms: list[str]) -> list[dict]:
+    """Search CoinDesk's rendered archive for one active asset."""
+    if not search_terms:
+        return []
+    enabled = os.environ.get("COINDESK_PLAYWRIGHT_ENABLED", "true").strip().casefold()
+    if enabled in {"0", "false", "no", "off"}:
+        return []
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return []
+
+    timeout_ms = max(
+        3_000,
+        int(os.environ.get("COINDESK_PLAYWRIGHT_TIMEOUT_MS", "15000")),
+    )
+    collected = []
+    seen = set()
+    search_page = "https://www.coindesk.com/search/"
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(
+                headless=True,
+                args=["--disable-dev-shm-usage"],
+            )
+            try:
+                context = browser.new_context(locale="en-US", timezone_id="UTC")
+                context.set_default_timeout(timeout_ms)
+                for term in search_terms:
+                    page = context.new_page()
+                    try:
+                        response = page.goto(
+                            search_page,
+                            wait_until="domcontentloaded",
+                            timeout=timeout_ms,
+                        )
+                        if response is None or response.status >= 400:
+                            continue
+                        search_box = page.locator('input[placeholder*="Search"]').first
+                        search_box.fill(term)
+                        search_box.press("Enter")
+                        token = term.split()[0]
+                        _wait_for_coindesk_asset_results(
+                            page,
+                            token,
+                            timeout_ms,
+                        )
+                        raw_links = page.locator("a[href]").evaluate_all(
+                            """anchors => anchors.map(anchor => {
+                              const container = anchor.closest('article')
+                                || anchor.closest('li') || anchor.parentElement;
+                              const time = container ? container.querySelector('time') : null;
+                              const excerpt = container ? container.querySelector('p') : null;
+                              return {
+                                href: anchor.href || '',
+                                title: (anchor.innerText || '').trim(),
+                                published: time?.getAttribute('datetime') || '',
+                                published_display: (time?.innerText || '').trim(),
+                                excerpt: (excerpt?.innerText || '').trim(),
+                              };
+                            })"""
+                        )
+                        parsed_items = _parse_coindesk_browser_links(
+                            raw_links,
+                            source_kind="asset_search",
+                            source_scope=term,
+                            source_page=search_page,
+                            limit=25,
+                        )
+                        for item in parsed_items:
+                            key = str(item.get("url") or "").casefold()
+                            if not key or key in seen:
+                                continue
+                            seen.add(key)
+                            collected.append(item)
+                    except Exception:
+                        continue
+                    finally:
+                        page.close()
+                context.close()
+            finally:
+                browser.close()
+    except Exception:
+        return []
+    return collected
+
+
+def _load_coindesk_asset_archive(asset_symbol: str, coin_name: str) -> list[dict]:
+    terms = _coindesk_asset_search_terms(asset_symbol, coin_name)
+    candidates = _search_coindesk_asset_archive_playwright(terms)
+    return _relevant_items(
+        candidates,
+        asset_symbol=asset_symbol,
+        coin_name=coin_name,
+        feed_source="coindesk_asset_search_playwright",
+    )
+
+
+def _coindesk_asset_archive_cache_seconds(items: list[dict]) -> int:
+    """Retry transient empty search pages soon; retain successful archives."""
+    return (
+        _COINDESK_DISCOVERY_MAX_STALE_SECONDS
+        if items
+        else _COIN_CACHE_SECONDS
+    )
+
+
+def _fetch_coindesk_asset_archive_news(
+    asset_symbol: str,
+    coin_name: str,
+    *,
+    strict: bool = False,
+) -> list[dict]:
+    """Cache active-asset CoinDesk archive results across collection cycles."""
+    now = time.time()
+    cached = _coindesk_asset_archive_cache.get(asset_symbol)
+    if cached and cached[1] > now:
+        return [dict(item) for item in cached[0]]
+    try:
+        items = _load_coindesk_asset_archive(asset_symbol, coin_name)
+    except Exception as exc:
+        if strict:
+            raise NewsFetchError("CoinDesk 티커 아카이브 검색에 실패했습니다.") from exc
+        return []
+    _coindesk_asset_archive_cache[asset_symbol] = (
+        items,
+        now + _coindesk_asset_archive_cache_seconds(items),
+    )
+    return [dict(item) for item in items]
 
 
 def _fetch_article_excerpts_playwright(items: list[dict]) -> list[str]:
@@ -1457,6 +1682,12 @@ def _coin_news_envelope(
                     f"${base} OR {base} USDT) when:30d",
                     "en",
                 ),
+                (f"({base} 코인 OR {base} 토큰) when:5y", "ko"),
+                (
+                    f"({base} coin OR {base} crypto OR {base} token OR "
+                    f"${base} OR {base} USDT) when:5y",
+                    "en",
+                ),
             )
     batches: list[list[dict]] = []
     failures = 0
@@ -1502,7 +1733,7 @@ def _coin_news_envelope(
         )
     if strict and failures == len(queries):
         raise NewsFetchError("Google News RSS 수집에 실패했습니다.")
-    items = _merge_news_items(*batches)
+    items = _sort_news_items_newest_first(_merge_news_items(*batches))
     query_label = " | ".join(query for query, _locale in queries)
     env = _envelope(
         items,
@@ -1620,11 +1851,27 @@ def fetch_coin_news_for_collector(symbol: str) -> dict:
         source_report.setdefault("fetched_count", len(raw_items))
         discovery_sources.append(source_report)
     discovery_items = _merge_news_items(*discovery_batches)
-    items = _merge_news_items(
-        openeden_items,
-        coindesk_items,
-        discovery_items,
-        google_items,
+    archive_items = []
+    archive_available = False
+    archive_attempted = bool(_coindesk_asset_search_terms(base, name))
+    if archive_attempted:
+        try:
+            archive_items = _fetch_coindesk_asset_archive_news(
+                base,
+                name,
+                strict=True,
+            )
+            archive_available = True
+        except NewsFetchError:
+            archive_available = False
+    items = _sort_news_items_newest_first(
+        _merge_news_items(
+            openeden_items,
+            coindesk_items,
+            discovery_items,
+            archive_items,
+            google_items,
+        )
     )
     env = _envelope(
         items,
@@ -1642,6 +1889,13 @@ def fetch_coin_news_for_collector(symbol: str) -> dict:
             "status": "ready" if openeden_available else "error",
             "item_count": len(openeden_items),
             "fetched_count": len(openeden_items),
+        })
+    if archive_attempted:
+        sources.append({
+            "name": "coindesk_asset_archive",
+            "status": "ready" if archive_available else "error",
+            "item_count": len(archive_items),
+            "fetched_count": len(archive_items),
         })
     sources.extend(discovery_sources)
     sources.extend([

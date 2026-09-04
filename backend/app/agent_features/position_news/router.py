@@ -10,6 +10,8 @@ from ... import user_macros as user_macros_mod
 from ...db import User, request_session
 from ...engine import Macro
 from ...news import (
+    NewsTranslationBusyError,
+    NewsTranslationError,
     asset_from_market_symbol,
     canonical_asset_symbol,
     canonical_market_symbol,
@@ -30,6 +32,10 @@ def position_news(
     session = runner_mod.get_owned_session(user.id, session_id, db=db)
     try:
         return service.get_position_news(session, db=db)
+    except NewsTranslationBusyError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except NewsTranslationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -92,13 +98,18 @@ def macro_position_news(
     else:
         selected_symbol = members[0]
 
-    return service.get_position_news(
-        {
-            "session_id": None,
-            "user_macro_id": saved["id"],
-            "symbol": selected_symbol,
-            "position_side": macro.position_side.value,
-            "in_position": False,
-        },
-        db=db,
-    )
+    try:
+        return service.get_position_news(
+            {
+                "session_id": None,
+                "user_macro_id": saved["id"],
+                "symbol": selected_symbol,
+                "position_side": macro.position_side.value,
+                "in_position": False,
+            },
+            db=db,
+        )
+    except NewsTranslationBusyError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except NewsTranslationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc

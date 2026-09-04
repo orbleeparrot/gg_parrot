@@ -28,7 +28,7 @@ _DISCLAIMER = (
 def _article_id(item: dict) -> str:
     identity = "|".join(
         (
-            str(item.get("title") or ""),
+            str(item.get("original_title") or item.get("title") or ""),
             str(item.get("source") or ""),
         )
     ).strip("|")
@@ -100,6 +100,11 @@ def build_position_news(
             {
                 "id": _article_id(raw),
                 "title": str(raw.get("title") or ""),
+                **(
+                    {"original_title": str(raw.get("original_title"))}
+                    if raw.get("original_title")
+                    else {}
+                ),
                 "source": str(raw.get("source") or ""),
                 "url": str(raw.get("url") or ""),
                 "published": raw.get("published"),
@@ -201,7 +206,7 @@ def _load_latest_snapshot(symbol: str, db: Session | None = None) -> dict | None
 
 
 def get_position_news(session: dict, db: Session | None = None) -> dict:
-    """Read the central snapshot only; never fetch RSS or invoke AI here."""
+    """Read the central snapshot and localize its deduplicated titles."""
     asset = news_mod.asset_from_market_symbol(str(session.get("symbol") or ""))
     # Preserve the one-argument seam used by small unit fakes when no request
     # session is supplied; authenticated routes pass their shared session.
@@ -209,9 +214,13 @@ def get_position_news(session: dict, db: Session | None = None) -> dict:
     if stored is None:
         return build_pending_position_news(session)
 
+    localized_news = dict(stored["news_payload"])
+    localized_news["items"] = news_mod._localize_coin_news_items(
+        list(localized_news.get("items") or [])
+    )
     payload = build_position_news(
         session,
-        stored["news_payload"],
+        localized_news,
         stored["analysis"],
         snapshot_id=str(stored.get("snapshot_id") or ""),
     )

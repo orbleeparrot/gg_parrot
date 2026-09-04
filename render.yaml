@@ -35,21 +35,21 @@ services:
       - key: GOOGLE_CLIENT_ID
         sync: false
       # 기존 Anthropic 설정을 AI 요약과 코인동향 제목 번역이 함께 사용합니다.
-      # 제목은 한 종목씩 묶어 번역하고 DB 전역 호출 상한과 캐시를 적용합니다.
+      # 중복 제목은 Postgres 캐시를 재사용하고, 새 영문 제목은 전부 번역합니다.
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: ANTHROPIC_MODEL
         value: "claude-haiku-4-5"
+      # 코인동향은 시장 1건 + 종목 2건만 동시에 요청하고, AI 포화 시에는
+      # 웹 요청 스레드를 오래 점유하지 않도록 짧게 대기한 뒤 재시도 응답을 줍니다.
+      - key: AI_ACQUIRE_TIMEOUT_SECONDS
+        value: "1"
       - key: AI_EXPLAIN_MAX_CALLS_PER_DAY
         value: "20"
       - key: NEWS_MARKET_SUMMARY_MAX_CALLS_PER_DAY
         value: "3"
-      - key: NEWS_TITLE_TRANSLATION_ENABLED
-        value: "true"
-      - key: NEWS_TITLE_TRANSLATION_MAX_CALLS_PER_DAY
-        value: "20"
       - key: ANTHROPIC_NEWS_TRANSLATION_MAX_TOKENS
-        value: "1024"
+        value: "2048"
 
   # Prefect Cloud가 실행 이력과 스케줄을 관리하고, 실제 RSS 수집/DB 저장은
   # 이 Render 프로세스가 수행합니다. Background Worker에는 HTTP health check가 없습니다.

@@ -18,16 +18,18 @@ def test_render_blueprint_includes_position_news_background_worker():
     )
     assert 'ANTHROPIC_NEWS_TRANSLATION_API_KEY' not in blueprint
     assert 'ANTHROPIC_NEWS_TRANSLATION_MODEL' not in blueprint
-    assert 'NEWS_TITLE_TRANSLATION_ENABLED' not in blueprint
-    assert 'NEWS_TITLE_TRANSLATION_MAX_CALLS_PER_DAY' not in blueprint
+    assert '- key: NEWS_TITLE_TRANSLATION_ENABLED\n        value: "true"' in web
+    assert (
+        '- key: NEWS_TITLE_TRANSLATION_MAX_CALLS_PER_DAY\n        value: "20"'
+        in web
+    )
     assert '- key: AI_EXPLAIN_MAX_CALLS_PER_DAY\n        value: "20"' in web
-    assert '- key: AI_ACQUIRE_TIMEOUT_SECONDS\n        value: "1"' in web
     assert (
         '- key: NEWS_MARKET_SUMMARY_MAX_CALLS_PER_DAY\n        value: "3"'
         in web
     )
     assert (
-        '- key: ANTHROPIC_NEWS_TRANSLATION_MAX_TOKENS\n        value: "2048"'
+        '- key: ANTHROPIC_NEWS_TRANSLATION_MAX_TOKENS\n        value: "1024"'
         in web
     )
 
@@ -56,9 +58,6 @@ def test_render_blueprint_includes_position_news_background_worker():
     assert "ANTHROPIC_API_KEY=" in env_example
     assert "ANTHROPIC_MODEL=" in env_example
     assert "NEWS_MARKET_SUMMARY_MAX_CALLS_PER_DAY=3" in env_example
-    assert "AI_ACQUIRE_TIMEOUT_SECONDS=1" in env_example
-    assert "NEWS_TITLE_TRANSLATION_ENABLED" not in env_example
-    assert "NEWS_TITLE_TRANSLATION_MAX_CALLS_PER_DAY" not in env_example
     assert "ANTHROPIC_NEWS_TRANSLATION_API_KEY" not in env_example
     assert "ANTHROPIC_NEWS_TRANSLATION_MODEL" not in env_example
 
@@ -71,15 +70,6 @@ def test_render_blueprint_includes_position_news_background_worker():
 
     assert "mcr.microsoft.com/playwright/python:v1.62.0-noble" in dockerfile
     assert "playwright==1.62.0" in requirements
-
-    news_page = (
-        Path(__file__).resolve().parents[2]
-        / "frontend"
-        / "src"
-        / "pages"
-        / "News.jsx"
-    ).read_text(encoding="utf-8")
-    assert "const COIN_NEWS_CONCURRENCY = 2;" in news_page
 
 
 def test_prefect_serve_pauses_schedule_when_worker_stops():

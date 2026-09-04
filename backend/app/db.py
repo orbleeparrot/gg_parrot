@@ -25,10 +25,7 @@ _DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
 
 
 def _sqlite_engine():
-    # 테스트는 SQLITE_PATH 로 임시 파일을 지정해 개발용 app.db 와도 분리한다.
-    path = os.environ.get("SQLITE_PATH", "").strip() or os.path.join(
-        os.path.dirname(os.path.dirname(__file__)), "app.db"
-    )
+    path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "app.db")
     return create_engine(f"sqlite:///{path}", echo=False)
 
 
@@ -441,24 +438,6 @@ class TickerNewsAiBudget(SQLModel, table=True):
     updated_at: str = ""
 
 
-class NewsTitleTranslation(SQLModel, table=True):
-    """One shared translation per normalized news title.
-
-    The public endpoints translate only after source items have been deduplicated.
-    Keeping that result in Postgres prevents a deploy or a second web instance from
-    paying to translate the same headline again.
-    """
-
-    title_hash: str = Field(primary_key=True)
-    original_title: str
-    translated_title: str = ""
-    processing_status: str = Field(default="ready", index=True)
-    claim_token: str = ""
-    claimed_ms: int = Field(default=0, sa_type=BigInteger, index=True)
-    updated_at: str = ""
-    updated_ms: int = Field(default=0, sa_type=BigInteger, index=True)
-
-
 class DailyChallenge(SQLModel, table=True):
     """One day's AI challenge: the chosen symbol for a KST date (idempotency key)."""
 
@@ -466,10 +445,6 @@ class DailyChallenge(SQLModel, table=True):
     date_kst: str = Field(index=True, unique=True)  # YYYY-MM-DD (KST)
     symbol: str
     created_at: str
-    status: str = "ready"
-    claim_token: str = ""
-    claimed_ms: int = Field(default=0, sa_type=BigInteger)
-    last_error: str = ""
 
 
 class LeaderboardCarryover(SQLModel, table=True):
@@ -604,17 +579,6 @@ def _migrate() -> None:
             "latest_observation_seq": "ALTER TABLE tickernewsstate ADD COLUMN latest_observation_seq INTEGER DEFAULT 0",
             "latest_observed_ms": "ALTER TABLE tickernewsstate ADD COLUMN latest_observed_ms INTEGER DEFAULT 0",
         },
-        "newstitletranslation": {
-            "processing_status": "ALTER TABLE newstitletranslation ADD COLUMN processing_status TEXT DEFAULT 'ready'",
-            "claim_token": "ALTER TABLE newstitletranslation ADD COLUMN claim_token TEXT DEFAULT ''",
-            "claimed_ms": "ALTER TABLE newstitletranslation ADD COLUMN claimed_ms INTEGER DEFAULT 0",
-        },
-        "dailychallenge": {
-            "status": "ALTER TABLE dailychallenge ADD COLUMN status TEXT DEFAULT 'ready'",
-            "claim_token": "ALTER TABLE dailychallenge ADD COLUMN claim_token TEXT DEFAULT ''",
-            "claimed_ms": "ALTER TABLE dailychallenge ADD COLUMN claimed_ms INTEGER DEFAULT 0",
-            "last_error": "ALTER TABLE dailychallenge ADD COLUMN last_error TEXT DEFAULT ''",
-        },
     }
     with _engine.connect() as conn:
         for table, cols in added.items():
@@ -629,14 +593,6 @@ def _migrate() -> None:
         conn.exec_driver_sql(
             "CREATE INDEX IF NOT EXISTS ix_runsession_user_macro_id "
             "ON runsession (user_macro_id)"
-        )
-        conn.exec_driver_sql(
-            "CREATE INDEX IF NOT EXISTS ix_newstitletranslation_processing_status "
-            "ON newstitletranslation (processing_status)"
-        )
-        conn.exec_driver_sql(
-            "CREATE INDEX IF NOT EXISTS ix_newstitletranslation_claimed_ms "
-            "ON newstitletranslation (claimed_ms)"
         )
         conn.commit()
 
@@ -660,27 +616,6 @@ def _migrate_pg() -> None:
         "ALTER TABLE tickernewsstate ADD COLUMN IF NOT EXISTS latest_observed_ms BIGINT DEFAULT 0",
         "ALTER TABLE leaderboardentry ADD COLUMN IF NOT EXISTS streak_days INTEGER DEFAULT 1",
         "ALTER TABLE leaderboardentry ADD COLUMN IF NOT EXISTS first_created_ms BIGINT",
-        "ALTER TABLE newstitletranslation ADD COLUMN IF NOT EXISTS processing_status TEXT DEFAULT 'ready'",
-        "ALTER TABLE newstitletranslation ADD COLUMN IF NOT EXISTS claim_token TEXT DEFAULT ''",
-        "ALTER TABLE newstitletranslation ADD COLUMN IF NOT EXISTS claimed_ms BIGINT DEFAULT 0",
-        "CREATE INDEX IF NOT EXISTS ix_newstitletranslation_processing_status ON newstitletranslation (processing_status)",
-        "CREATE INDEX IF NOT EXISTS ix_newstitletranslation_claimed_ms ON newstitletranslation (claimed_ms)",
-        "ALTER TABLE dailychallenge ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'ready'",
-        "ALTER TABLE dailychallenge ADD COLUMN IF NOT EXISTS claim_token TEXT DEFAULT ''",
-        "ALTER TABLE dailychallenge ADD COLUMN IF NOT EXISTS claimed_ms BIGINT DEFAULT 0",
-        "ALTER TABLE dailychallenge ADD COLUMN IF NOT EXISTS last_error TEXT DEFAULT ''",
-        "ALTER TABLE newstitletranslation ENABLE ROW LEVEL SECURITY",
-        "REVOKE ALL PRIVILEGES ON TABLE newstitletranslation FROM PUBLIC",
-        (
-            "DO $$ BEGIN "
-            "IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN "
-            "REVOKE ALL PRIVILEGES ON TABLE newstitletranslation FROM anon; "
-            "END IF; "
-            "IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN "
-            "REVOKE ALL PRIVILEGES ON TABLE newstitletranslation FROM authenticated; "
-            "END IF; "
-            "END $$"
-        ),
     ]
     bigint_columns = {
         "tickernewssnapshot": (

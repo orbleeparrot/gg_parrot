@@ -6,8 +6,7 @@ import NewsBriefingReader from "../components/NewsBriefingReader.jsx";
 import { AnnotatedText, TermChips } from "../components/NewsTerms.jsx";
 import { Loading, ErrorNote } from "../components/Page.jsx";
 
-const COIN_NEWS_CONCURRENCY = 2;
-const NEWS_BUSY_RETRY_DELAYS_MS = [400, 1_200, 2_400];
+const COIN_NEWS_CONCURRENCY = 3;
 const RACER_NEWS_ROTATE_MS = 5_000;
 const compactVolumeFormatter = new Intl.NumberFormat("ko-KR", {
   notation: "compact",
@@ -36,29 +35,8 @@ function errorMessage(reason) {
   return reason instanceof Error ? reason.message : String(reason);
 }
 
-function wait(milliseconds) {
-  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
-}
-
-async function requestNewsWithBusyRetry(load) {
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      return await load();
-    } catch (reason) {
-      if (reason?.status !== 429 || attempt >= NEWS_BUSY_RETRY_DELAYS_MS.length) {
-        throw reason;
-      }
-      await wait(NEWS_BUSY_RETRY_DELAYS_MS[attempt]);
-    }
-  }
-}
-
 function requestCoinNews(symbol) {
-  return requestNewsWithBusyRetry(() => api.newsCoin(symbol));
-}
-
-function requestMarketNews() {
-  return requestNewsWithBusyRetry(() => api.newsMarket());
+  return api.newsCoin(symbol);
 }
 
 function useCoinNewsBriefings(coins) {
@@ -393,7 +371,7 @@ export default function News() {
   useEffect(() => {
     let alive = true;
 
-    requestMarketNews()
+    api.newsMarket()
       .then((response) => {
         if (alive) setMarket(response);
       })

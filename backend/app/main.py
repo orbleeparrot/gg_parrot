@@ -677,13 +677,23 @@ def news_market() -> dict:
 
     Google News RSS(무료) 기반. KST 하루 1회만 요약해 캐시(정보 제공용, 자문 아님).
     """
-    return news_mod.get_market_news()
+    try:
+        return news_mod.get_market_news()
+    except news_mod.NewsTranslationBusyError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except news_mod.NewsTranslationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.get("/api/news/coin/{symbol}")
 def news_coin(symbol: str) -> dict:
     """'경주마 동향' — 중앙 DB 우선, 미수집·장애 시 RSS 캐시 fallback."""
-    return news_mod.get_coin_news(symbol)
+    try:
+        return news_mod.get_coin_news(symbol)
+    except news_mod.NewsTranslationBusyError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except news_mod.NewsTranslationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 # [차후 도입] '고래 동향' — 온체인 상위 지갑 매수/매도 흐름 (참고 지표).
@@ -818,6 +828,9 @@ async def leaderboard_list(
     # 첫 요청이 그날의 이월(어제 상위 N등 → 오늘 보드)을 처리한다. 스케줄러 없이
     # 초기화되는 보드와 같은 방식이라 배포에 별도 크론이 필요 없다.
     await leaderboard_mod.ensure_today_carryover()
+    # 실행 가이드의 "리더보드에서 가져오기"도 이 API만 호출하므로, 사용자가
+    # 리더보드 페이지를 먼저 열지 않아도 오늘의 AI 엔트리가 준비되어야 한다.
+    await challenge_mod.ensure_today()
     return leaderboard_mod.list_entries(
         viewer_id=user_id,
         viewer_user_id=account.id if account else None,

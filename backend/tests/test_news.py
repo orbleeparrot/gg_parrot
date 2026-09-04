@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import datetime, timedelta, timezone
 from email.utils import format_datetime
 
 import pytest
 
 from app import news
+from app.ai_runtime import AiBusyError
 from app.agent_features.position_news import repository
 
 _RSS = """<?xml version="1.0" encoding="UTF-8"?>
@@ -318,7 +320,6 @@ def test_coin_news_translates_english_snapshot_titles_and_keeps_original(monkeyp
     korean = "로빈후드의 새 암호화폐 네트워크에 아비트럼 토큰 급등"
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     monkeypatch.setattr(news, "_title_translation_cache", {}, raising=False)
-    monkeypatch.setattr(news, "_title_translation_budget", ("", 0), raising=False)
     monkeypatch.setattr(
         news,
         "_request_korean_title_translations",
@@ -352,10 +353,9 @@ def test_coin_news_translates_english_snapshot_titles_and_keeps_original(monkeyp
 def test_title_translation_batches_only_untranslated_titles_and_reuses_cache(monkeypatch):
     calls = []
     english = "MUBARAK jumps as BNB Chain meme rally broadens"
-    korean = "BNB 체인 밈코인 강세에 무바라크 급등"
+    korean = "BNB 체인 밈코인 강세에 MUBARAK 급등"
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     monkeypatch.setattr(news, "_title_translation_cache", {}, raising=False)
-    monkeypatch.setattr(news, "_title_translation_budget", ("", 0), raising=False)
 
     def translate(titles):
         calls.append(titles)
@@ -370,6 +370,7 @@ def test_title_translation_batches_only_untranslated_titles_and_reuses_cache(mon
     localize = getattr(news, "_localize_coin_news_items", lambda items: items)
     items = [
         {"title": english, "source": "Crypto News"},
+        {"title": english, "source": "CoinDesk"},
         {"title": "무바라크 관련 국내 뉴스", "source": "국내 매체"},
     ]
 
@@ -378,6 +379,7 @@ def test_title_translation_batches_only_untranslated_titles_and_reuses_cache(mon
 
     assert calls == [[english]]
     assert first[0]["title"] == korean
+    assert first[1]["title"] == korean
     assert second[0]["title"] == korean
     assert items[0]["title"] == english
 
@@ -423,21 +425,17 @@ def test_title_translation_applies_after_normalizing_source_whitespace(monkeypat
     assert localized == [{"title": korean, "original_title": normalized}]
 
 
-def test_title_translation_ignores_legacy_key_without_shared_api_key(monkeypatch):
-    calls = []
+def test_title_translation_requires_shared_api_key_for_uncached_english(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setenv("ANTHROPIC_NEWS_TRANSLATION_API_KEY", "ignored-old-key")
+    monkeypatch.setattr(news, "_title_translation_cache", {})
     monkeypatch.setattr(
-        news,
-        "_request_korean_title_translations",
-        lambda titles: calls.append(titles) or {},
-        raising=False,
+        news, "_load_durable_title_translations", lambda _titles: {}
     )
-    localize = getattr(news, "_localize_coin_news_items", lambda items: items)
     item = {"title": "Arbitrum token rises", "source": "CoinDesk"}
 
-    assert localize([item]) == [item]
-    assert calls == []
+    with pytest.raises(news.NewsTranslationError, match="번역"):
+        news._localize_coin_news_items([item])
 
 
 def test_title_translation_parser_accepts_fenced_json_and_stable_ids():
@@ -471,6 +469,130 @@ def test_title_translation_parser_rejects_changed_numbers_or_tickers(
         + '","title_ko":"'
         + translated_title
         + '"}]}'
+    )
+
+    assert news._parse_korean_title_translations(payload, [original]) == {}
+
+
+@pytest.mark.parametrize(
+    "partial",
+    [
+        "번역: Arbitrum token soars",
+        "Arbitrum token 급등",
+        "Bitcoin Price Soars After ETF Approval 관련 소식",
+    ],
+)
+def test_title_translation_parser_rejects_partial_english_output(partial):
+    original = (
+        "Bitcoin Price Soars After ETF Approval"
+        if partial.startswith("Bitcoin Price")
+        else "Arbitrum token soars"
+    )
+    title_id = hashlib.sha256(original.encode("utf-8")).hexdigest()[:16]
+    payload = json.dumps(
+        {"items": [{"id": title_id, "title_ko": partial}]},
+        ensure_ascii=False,
+    )
+
+    assert news._parse_korean_title_translations(payload, [original]) == {}
+
+
+def test_title_translation_parser_rejects_hyphenated_english_prose():
+    original = "Bitcoin sees record-breaking rally"
+    translated = "비트코인 record-breaking 랠리"
+    title_id = hashlib.sha256(original.encode("utf-8")).hexdigest()[:16]
+    payload = json.dumps(
+        {"items": [{"id": title_id, "title_ko": translated}]},
+        ensure_ascii=False,
+    )
+
+    assert news._parse_korean_title_translations(payload, [original]) == {}
+
+
+def test_title_translation_parser_allows_one_embedded_proper_name():
+    original = "OpenAI enters bitcoin market"
+    title_id = hashlib.sha256(original.encode("utf-8")).hexdigest()[:16]
+    payload = json.dumps(
+        {
+            "items": [
+                {"id": title_id, "title_ko": "OpenAI가 비트코인 시장에 진출"},
+            ],
+        },
+        ensure_ascii=False,
+    )
+
+    assert news._parse_korean_title_translations(payload, [original]) == {
+        original: "OpenAI가 비트코인 시장에 진출",
+    }
+
+
+@pytest.mark.parametrize(
+    ("original", "translated"),
+    [
+        (
+            "Robinhood partners with Arbitrum",
+            "Robinhood와 Arbitrum 협력",
+        ),
+        (
+            "DeepOceanCrypto(@Square-Creator-33c80ad80571)'s insights",
+            "DeepOceanCrypto(@Square-Creator-33c80ad80571)의 인사이트",
+        ),
+    ],
+)
+def test_title_translation_parser_allows_original_proper_names_and_handles(
+    original,
+    translated,
+):
+    title_id = hashlib.sha256(original.encode("utf-8")).hexdigest()[:16]
+    payload = json.dumps(
+        {"items": [{"id": title_id, "title_ko": translated}]},
+        ensure_ascii=False,
+    )
+
+    assert news._parse_korean_title_translations(payload, [original]) == {
+        original: translated,
+    }
+
+
+@pytest.mark.parametrize(
+    ("original", "translated"),
+    [
+        ("BITCOIN PRICE SURGES", "비트코인 가격 급등"),
+        ("BTC ETF APPROVAL", "BTC ETF 승인"),
+        ("XYZ token surges", "XYZ 토큰 급등"),
+        ("XYZ TOKEN SURGES", "XYZ 토큰 급등"),
+        (
+            "IBM joins EU inquiry led by DOJ",
+            "IBM이 EU 및 DOJ 주도 조사에 참여",
+        ),
+        (
+            "Stake.us Promo Code: COVERSBONUS",
+            "Stake.us 프로모션 코드: COVERSBONUS",
+        ),
+    ],
+)
+def test_title_translation_parser_handles_uppercase_headlines_and_identifiers(
+    original,
+    translated,
+):
+    title_id = hashlib.sha256(original.encode("utf-8")).hexdigest()[:16]
+    payload = json.dumps(
+        {"items": [{"id": title_id, "title_ko": translated}]},
+        ensure_ascii=False,
+    )
+
+    assert news._parse_korean_title_translations(payload, [original]) == {
+        original: translated,
+    }
+
+
+def test_title_translation_parser_rejects_uppercase_prose_with_korean_suffix():
+    original = "BITCOIN PRICE SURGES"
+    translated = "BITCOIN PRICE SURGES 관련 소식"
+    title_id = hashlib.sha256(original.encode("utf-8")).hexdigest()[:16]
+    payload = json.dumps(
+        {"items": [{"id": title_id, "title_ko": translated}]},
+        ensure_ascii=False,
     )
 
     assert news._parse_korean_title_translations(payload, [original]) == {}
@@ -521,42 +643,10 @@ def test_title_translation_parser_accepts_equivalent_usd_code_and_word():
     }
 
 
-def test_title_translation_daily_budget_caps_each_process(monkeypatch):
-    monkeypatch.delenv("DATABASE_URL", raising=False)
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "shared-key")
-    monkeypatch.setattr(news, "_TITLE_TRANSLATION_MAX_CALLS_PER_DAY", 2)
-    monkeypatch.setattr(news, "_title_translation_budget", ("", 0))
-    monkeypatch.setattr(news, "_kst_date", lambda: "2026-09-03")
-
-    assert news._reserve_title_translation_call() is True
-    assert news._reserve_title_translation_call() is True
-    assert news._reserve_title_translation_call() is False
-    assert news._title_translation_budget == ("2026-09-03", 2)
-
-
-def test_title_translation_budget_uses_durable_namespace_with_postgres(monkeypatch):
-    calls = []
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "shared-key")
-    monkeypatch.setenv("DATABASE_URL", "postgresql://example.invalid/db")
-
-    def reserve(*, daily_limit):
-        calls.append(daily_limit)
-        return True
-
-    monkeypatch.setattr(
-        news,
-        "_reserve_durable_title_translation_budget",
-        reserve,
-        raising=False,
-    )
-
-    assert news._reserve_title_translation_call() is True
-    assert calls == [news._TITLE_TRANSLATION_MAX_CALLS_PER_DAY]
-
-
 def test_title_translation_reuses_shared_anthropic_client_and_model(monkeypatch):
     captured = []
     requests = []
+    runtime_options = []
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "shared-key")
     monkeypatch.setenv("ANTHROPIC_MODEL", "shared-haiku")
@@ -586,7 +676,8 @@ def test_title_translation_reuses_shared_anthropic_client_and_model(monkeypatch)
         return Client()
 
     class Runtime:
-        def call(self, _key, loader, **_kwargs):
+        def call(self, _key, loader, **kwargs):
+            runtime_options.append(kwargs)
             return loader(), "loaded"
 
     monkeypatch.setattr(news, "get_anthropic_client", fake_client)
@@ -600,15 +691,14 @@ def test_title_translation_reuses_shared_anthropic_client_and_model(monkeypatch)
     assert captured == ["shared"]
     assert requests[0]["model"] == "shared-haiku"
     assert "표기를 원문 문자열 그대로" in requests[0]["system"]
+    assert runtime_options == [{"retries": 0}]
 
 
-def test_title_translation_budget_is_charged_only_for_actual_api_load(monkeypatch):
+def test_title_translation_reuses_ai_runtime_cache(monkeypatch):
     title = "Arbitrum token soars"
     title_id = hashlib.sha256(title.encode("utf-8")).hexdigest()[:16]
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "shared-key")
-    monkeypatch.setattr(news, "_title_translation_budget", ("", 0))
-    monkeypatch.setattr(news, "_kst_date", lambda: "2026-09-03")
     api_calls = []
 
     class Block:
@@ -644,7 +734,392 @@ def test_title_translation_budget_is_charged_only_for_actual_api_load(monkeypatc
     assert news._request_korean_title_translations([title])
     assert news._request_korean_title_translations([title])
     assert len(api_calls) == 1
-    assert news._title_translation_budget == ("2026-09-03", 1)
+
+
+def test_title_translation_does_not_consume_a_daily_budget(monkeypatch):
+    title = "Arbitrum token soars"
+    title_id = hashlib.sha256(title.encode("utf-8")).hexdigest()[:16]
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "shared-key")
+
+    def forbidden_budget_reservation():
+        raise AssertionError("title translation must not use a daily budget")
+
+    monkeypatch.setattr(
+        news,
+        "_reserve_title_translation_call",
+        forbidden_budget_reservation,
+        raising=False,
+    )
+
+    class Messages:
+        def create(self, **_kwargs):
+            block = type(
+                "Block",
+                (),
+                {
+                    "type": "text",
+                    "text": (
+                        '{"items":[{"id":"'
+                        + title_id
+                        + '","title_ko":"아비트럼 토큰 급등"}]}'
+                    ),
+                },
+            )()
+            return type("Response", (), {"content": [block]})()
+
+    class Runtime:
+        def call(self, _key, loader, **_kwargs):
+            return loader(), "loaded"
+
+    monkeypatch.setattr(
+        news,
+        "get_anthropic_client",
+        lambda: type("Client", (), {"messages": Messages()})(),
+    )
+    monkeypatch.setattr(news, "get_ai_runtime", lambda: Runtime())
+
+    assert news._request_korean_title_translations([title]) == {
+        title: "아비트럼 토큰 급등",
+    }
+
+
+def test_more_than_twenty_deduplicated_titles_are_all_translated(monkeypatch):
+    suffixes = [
+        "alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf",
+        "hotel", "india", "juliet", "kilo", "lima", "mike", "november",
+        "oscar", "papa", "quebec", "romeo", "sierra", "tango", "uniform",
+    ]
+    korean_suffixes = [
+        "가", "나", "다", "라", "마", "바", "사", "아", "자", "차", "카",
+        "타", "파", "하", "거", "너", "더", "러", "머", "버", "서",
+    ]
+    titles = [f"market update {suffix}" for suffix in suffixes]
+    translations = {
+        title: f"시장 동향 번역 {suffix}"
+        for title, suffix in zip(titles, korean_suffixes)
+    }
+    calls = []
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "shared-key")
+    monkeypatch.setattr(news, "_title_translation_cache", {})
+    monkeypatch.setattr(
+        news,
+        "_request_korean_title_translations",
+        lambda batch: calls.append(list(batch))
+        or {title: translations[title] for title in batch},
+    )
+
+    localized = news._localize_coin_news_items(
+        [{"title": title} for title in titles]
+    )
+
+    assert calls == [titles]
+    assert [item["title"] for item in localized] == list(translations.values())
+
+
+def test_title_translation_raises_instead_of_returning_english(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "shared-key")
+    monkeypatch.setattr(news, "_title_translation_cache", {})
+    monkeypatch.setattr(
+        news,
+        "_load_durable_title_translations",
+        lambda _titles: {},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        news,
+        "_request_korean_title_translations",
+        lambda _titles: {},
+    )
+
+    with pytest.raises(RuntimeError, match="번역"):
+        news._localize_coin_news_items([
+            {"title": "Arbitrum token soars", "source": "CoinDesk"},
+        ])
+
+
+def test_title_translation_marks_only_preflight_capacity_failure_safe_to_retry(
+    monkeypatch,
+):
+    monkeypatch.setattr(news, "_title_translation_cache", {})
+    monkeypatch.setattr(
+        news,
+        "_request_korean_title_translations",
+        lambda _titles: (_ for _ in ()).throw(AiBusyError("busy")),
+    )
+
+    with pytest.raises(news.NewsTranslationBusyError):
+        news._translate_claimed_titles(["Arbitrum token soars"])
+
+
+def test_invalid_durable_translation_is_retranslated_not_exposed(monkeypatch):
+    english = "BTC price holds near $70,000"
+    korean = "BTC 가격 $70,000 부근 유지"
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "shared-key")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://cache.example/db")
+    monkeypatch.setattr(news, "_title_translation_cache", {})
+    monkeypatch.setattr(
+        news,
+        "_load_durable_title_translations",
+        lambda _titles: {english: english},
+    )
+    monkeypatch.setattr(
+        news,
+        "_request_korean_title_translations",
+        lambda titles: {english: korean} if titles == [english] else {},
+    )
+    monkeypatch.setattr(
+        news,
+        "_claim_durable_title_translations",
+        lambda titles, **_kwargs: {
+            "claimed": titles,
+            "waiting": [],
+            "cached": {},
+            "claim_token": "claim",
+        },
+    )
+    monkeypatch.setattr(
+        news,
+        "_store_durable_title_translations",
+        lambda _items, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        news,
+        "_renew_durable_title_translation_claims",
+        lambda _titles, **_kwargs: None,
+    )
+
+    localized = news._localize_coin_news_items([{"title": english}])
+
+    assert localized == [{"title": korean, "original_title": english}]
+
+
+def test_mixed_korean_prefix_does_not_leave_english_headline(monkeypatch):
+    mixed = "[속보] Bitcoin surges as ETF inflows rise"
+    korean = "[속보] ETF 자금 유입 증가에 비트코인 급등"
+    calls = []
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "shared-key")
+    monkeypatch.setattr(news, "_title_translation_cache", {})
+    monkeypatch.setattr(
+        news,
+        "_request_korean_title_translations",
+        lambda titles: calls.append(titles) or {mixed: korean},
+    )
+
+    localized = news._localize_coin_news_items([{"title": mixed}])
+
+    assert calls == [[mixed]]
+    assert localized == [{"title": korean, "original_title": mixed}]
+
+
+def test_short_mixed_title_does_not_leave_english_word(monkeypatch):
+    mixed = "[속보] Bitcoin 급등"
+    korean = "[속보] 비트코인 급등"
+    calls = []
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "shared-key")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(news, "_title_translation_cache", {})
+    monkeypatch.setattr(
+        news,
+        "_request_korean_title_translations",
+        lambda titles: calls.append(titles) or {mixed: korean},
+    )
+
+    localized = news._localize_coin_news_items([{"title": mixed}])
+
+    assert calls == [[mixed]]
+    assert localized == [{"title": korean, "original_title": mixed}]
+
+
+def test_localizing_an_already_translated_proper_name_is_idempotent(monkeypatch):
+    english = "Robinhood launches a new crypto network"
+    korean = "Robinhood가 새 암호화폐 네트워크를 출시"
+    calls = []
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "shared-key")
+    monkeypatch.setattr(news, "_title_translation_cache", {})
+
+    def translate(titles):
+        calls.append(list(titles))
+        return {english: korean} if titles == [english] else {}
+
+    monkeypatch.setattr(news, "_request_korean_title_translations", translate)
+
+    first = news._localize_coin_news_items([{"title": english}])
+    second = news._localize_coin_news_items(first)
+
+    assert first == second == [{"title": korean, "original_title": english}]
+    assert calls == [[english]]
+
+
+@pytest.mark.parametrize(
+    "korean_title",
+    [
+        "OpenAI가 신제품 발표",
+        "DeepOceanCrypto 인사이트 공개",
+        "Robinhood와 IBM 협력 발표",
+    ],
+)
+def test_korean_title_with_only_proper_names_does_not_call_translation(
+    monkeypatch,
+    korean_title,
+):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "shared-key")
+    monkeypatch.setattr(news, "_title_translation_cache", {})
+    monkeypatch.setattr(
+        news,
+        "_request_korean_title_translations",
+        lambda _titles: (_ for _ in ()).throw(
+            AssertionError("already-Korean title must not be translated")
+        ),
+    )
+
+    assert news._localize_coin_news_items([{"title": korean_title}]) == [
+        {"title": korean_title},
+    ]
+
+
+def test_mixed_korean_title_with_hyphenated_english_prose_is_translated(
+    monkeypatch,
+):
+    mixed = "온체인 record-breaking 급등"
+    korean = "온체인 기록적인 급등"
+    calls = []
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "shared-key")
+    monkeypatch.setattr(news, "_title_translation_cache", {})
+    monkeypatch.setattr(
+        news,
+        "_request_korean_title_translations",
+        lambda titles: calls.append(titles) or {mixed: korean},
+    )
+
+    localized = news._localize_coin_news_items([{"title": mixed}])
+
+    assert calls == [[mixed]]
+    assert localized == [{"title": korean, "original_title": mixed}]
+
+
+def test_title_localization_has_a_final_no_english_fallback_guard(monkeypatch):
+    english = "Arbitrum token soars"
+    monkeypatch.setattr(news, "_title_translation_cache", {})
+    monkeypatch.setattr(news, "_ensure_title_translations", lambda _titles: None)
+
+    with pytest.raises(news.NewsTranslationError, match="번역"):
+        news._localize_coin_news_items([{"title": english}])
+
+
+def test_claimed_translation_renews_lease_before_every_paid_call(monkeypatch):
+    first = "Arbitrum token soars"
+    second = "Bitcoin price rises"
+    calls = []
+    renewals = []
+    monkeypatch.setattr(news, "_title_translation_cache", {})
+    monkeypatch.setattr(
+        news,
+        "_renew_durable_title_translation_claims",
+        lambda titles, **kwargs: renewals.append((list(titles), kwargs["claim_token"])),
+        raising=False,
+    )
+
+    def translate(titles):
+        calls.append(list(titles))
+        if titles == [first, second]:
+            return {first: "아비트럼 토큰 급등"}
+        return {second: "비트코인 가격 상승"}
+
+    monkeypatch.setattr(news, "_request_korean_title_translations", translate)
+    monkeypatch.setattr(
+        news,
+        "_store_durable_title_translations",
+        lambda _items, **_kwargs: None,
+    )
+
+    news._translate_claimed_titles([first, second], claim_token="claim-1")
+
+    assert calls == [[first, second], [second]]
+    assert renewals == [
+        ([first, second], "claim-1"),
+        ([second], "claim-1"),
+    ]
+
+
+def test_title_translation_reuses_durable_cache_after_memory_reset(monkeypatch):
+    english = "Arbitrum token soars"
+    korean = "아비트럼 토큰 급등"
+    durable = {}
+    api_calls = []
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "shared-key")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://cache.example/db")
+    monkeypatch.setattr(news, "_title_translation_cache", {})
+    monkeypatch.setattr(
+        news,
+        "_load_durable_title_translations",
+        lambda titles: {title: durable[title] for title in titles if title in durable},
+    )
+    monkeypatch.setattr(
+        news,
+        "_store_durable_title_translations",
+        lambda translations, **_kwargs: durable.update(translations),
+    )
+    monkeypatch.setattr(
+        news,
+        "_claim_durable_title_translations",
+        lambda titles, **_kwargs: {
+            "claimed": titles,
+            "waiting": [],
+            "cached": {},
+            "claim_token": "claim",
+        },
+    )
+    monkeypatch.setattr(
+        news,
+        "_renew_durable_title_translation_claims",
+        lambda _titles, **_kwargs: None,
+    )
+
+    def translate(titles):
+        api_calls.append(titles)
+        return {english: korean}
+
+    monkeypatch.setattr(news, "_request_korean_title_translations", translate)
+
+    first = news._localize_coin_news_items([{"title": english}])
+    monkeypatch.setattr(news, "_title_translation_cache", {})
+    second = news._localize_coin_news_items([{"title": english}])
+
+    assert first == second == [{"title": korean, "original_title": english}]
+    assert api_calls == [[english]]
+
+
+def test_market_news_localizes_titles_before_summary_and_cache(monkeypatch):
+    news._cache.clear()
+    english = "Arbitrum token soars"
+    korean = "아비트럼 토큰 급등"
+    summarized = []
+    monkeypatch.setattr(
+        news,
+        "_fetch_news",
+        lambda _query: [{"title": english, "source": "CoinDesk"}],
+    )
+    monkeypatch.setattr(
+        news,
+        "_localize_coin_news_items",
+        lambda items: [{**items[0], "title": korean, "original_title": english}],
+    )
+
+    def summarize(items, *, label):
+        summarized.extend(item["title"] for item in items)
+        return f"{label} 요약"
+
+    monkeypatch.setattr(news, "_summarize", summarize)
+
+    payload = news.get_market_news()
+
+    assert summarized == [korean]
+    assert payload["items"][0]["title"] == korean
+    assert news._cache["market"][0]["items"][0]["title"] == korean
 
 
 def test_coin_news_reuses_active_snapshot_outside_fixed_universe(monkeypatch):
@@ -711,8 +1186,17 @@ def test_coin_news_falls_back_to_rss_when_central_store_is_unavailable(monkeypat
 
 def test_public_coin_news_fallback_filters_unrelated_broad_search_results(monkeypatch):
     news._coin_cache.clear()
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(news, "_title_translation_cache", {})
     monkeypatch.setattr(news, "_load_latest_coin_snapshot", lambda _symbol: None)
+    monkeypatch.setattr(
+        news,
+        "_request_korean_title_translations",
+        lambda titles: {
+            title: "BNB 체인 밈코인 랠리 확산에 MUBARAK 26% 급등"
+            for title in titles
+        },
+    )
 
     def fake_fetch(_query, **_kwargs):
         return [
@@ -738,7 +1222,7 @@ def test_public_coin_news_fallback_filters_unrelated_broad_search_results(monkey
     payload = news.get_coin_news("MUBARAKUSDT")
 
     assert [item["title"] for item in payload["items"]] == [
-        "MUBARAK jumps 26% as BNB Chain meme rally broadens",
+        "BNB 체인 밈코인 랠리 확산에 MUBARAK 26% 급등",
     ]
 
 
@@ -2195,3 +2679,118 @@ def test_canonical_asset_symbol_preserves_valid_base_and_is_idempotent(symbol):
 @pytest.mark.parametrize("symbol", ["A" * 16, "../BTC", "BTC-USDT"])
 def test_canonical_asset_symbol_rejects_out_of_bounds_or_unsafe_base(symbol):
     assert news.canonical_asset_symbol(symbol) == ""
+
+
+def test_plain_summary_text_strips_markdown_but_keeps_lines():
+    raw = (
+        "# 📰 오늘의 코인 시장 흐름\n\n"
+        "**가격:** 비트코인이 78,600달러를 넘었습니다.\n\n"
+        "- **규제:** 미국은 `클래리티법` 확대를 추진합니다.\n"
+        "*참고* [원문](https://x.test) 보기"
+    )
+    assert news._plain_summary_text(raw) == (
+        "📰 오늘의 코인 시장 흐름\n"
+        "가격: 비트코인이 78,600달러를 넘었습니다.\n"
+        "규제: 미국은 클래리티법 확대를 추진합니다.\n"
+        "참고 원문 보기"
+    )
+    assert news._plain_summary_text(None) == ""
+    plain = "비트코인 +3.2%.\n규제 이슈는 없었습니다."
+    assert news._plain_summary_text(plain) == plain
+
+
+def test_market_summary_returns_plain_text_even_when_model_uses_markdown(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(news, "_reserve_market_summary_call", lambda: True, raising=False)
+
+    class Messages:
+        def create(self, **_kwargs):
+            block = type("Block", (), {"type": "text", "text": "# 제목\n\n**가격:** 상승"})()
+            return type("Response", (), {"content": [block]})()
+
+    class Runtime:
+        def call(self, _key, loader, **_kwargs):
+            return loader(), "loaded"
+
+    monkeypatch.setattr(
+        news, "get_anthropic_client", lambda: type("Client", (), {"messages": Messages()})()
+    )
+    monkeypatch.setattr(news, "get_ai_runtime", lambda: Runtime())
+
+    assert news._summarize(
+        [{"title": "비트코인 시장 뉴스", "source": "테스트"}], label="시장"
+    ) == "제목\n가격: 상승"
+
+
+# --- 운영 장애(#17 배포)에서 실제로 503을 낸 제목들 ------------------------------
+def _stub_translation(monkeypatch, mapping):
+    """모델 응답을 흉내 낸다. mapping 에 없는 제목은 '동일 문장'을 돌려준다."""
+    monkeypatch.setattr(news, "_title_translation_cache", {})
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    calls = []
+
+    def fake(titles):
+        calls.append(list(titles))
+        out = {t: mapping.get(t, t) for t in titles}
+        valid = {t: v for t, v in out.items() if news._valid_title_translation(t, v)}
+        if not valid:
+            raise ValueError("title translation response had no valid items")
+        return valid
+
+    monkeypatch.setattr(news, "_request_korean_title_translations", fake)
+    return calls
+
+
+def test_korean_title_with_stray_english_token_keeps_original(monkeypatch):
+    # 운영 캐시에 error 로 남았던 실제 제목 — "vs" 하나 때문에 번역 대상이 되고,
+    # 모델이 같은 문장을 돌려주면 검증이 거부해 코인 뉴스 전체가 503이 됐다.
+    korean = "비트코인 vs 지캐시…양자컴퓨터·프라이버시 경쟁 시작됐다"
+    dbiz = "[D-BIZ 암호화폐 뉴스] 지자체·결제망 수준 속도 도달하나… 지캐시(ZEC), 개인 거래 생성 시간 '200밀리초' 단축"
+    _stub_translation(monkeypatch, {})
+    items = news._localize_coin_news_items([{"title": korean}, {"title": dbiz}])
+    assert [it["title"] for it in items] == [korean, dbiz]
+    assert all("original_title" not in it for it in items)
+
+
+def test_unresolved_korean_title_does_not_block_english_titles_in_same_batch(monkeypatch):
+    english = "Zcash private transactions could go from three-second waits to under 200 milliseconds"
+    korean = "비트코인 vs 지캐시…양자컴퓨터·프라이버시 경쟁 시작됐다"
+    _stub_translation(monkeypatch, {english: "지캐시 개인 거래, 3초 대기에서 200밀리초 미만으로 단축될 수도"})
+    items = news._localize_coin_news_items([{"title": english}, {"title": korean}])
+    assert items[0]["title"].startswith("지캐시 개인 거래") and items[0]["original_title"] == english
+    assert items[1]["title"] == korean
+
+
+def test_pure_english_title_that_cannot_be_translated_still_fails_closed(monkeypatch):
+    english = "Circle Internet Group Tokenized bStocks Price (CRCLB/USD) Today | Live Price, Market Cap & Chart"
+    _stub_translation(monkeypatch, {})  # 모델이 영문을 그대로 돌려줌
+    with pytest.raises(news.NewsTranslationError):
+        news._localize_coin_news_items([{"title": english}])
+
+
+def test_fact_check_accepts_numbers_spelled_out_in_source():
+    # 운영 캐시에 error 로 남았던 순수 영문 제목들 — 정상 번역이 검증에서 거부되고 있었다.
+    ok = [
+        ("Zcash private transactions could go from three-second waits to under 200 milliseconds",
+         "지캐시 개인 거래, 3초 대기에서 200밀리초 미만으로 단축될 수도"),
+        ("Zcash private transactions could go from three-second waits to under 200 milliseconds",
+         "지캐시 개인 거래, 3초 대기에서 200ms 미만으로 단축 가능성"),
+        ("Bitcoin price analysis: September has typically been a weak month",
+         "비트코인 가격 분석: 9월은 통상 약세였던 달"),
+        ("Bitcoin tops $78,600 as Fed signals five billion in purchases",
+         "연준이 50억 매입을 시사하자 비트코인 7만8600달러 돌파"),
+        ("Bitcoin rises 5% in Q3", "비트코인 3분기에 5% 상승"),
+    ]
+    for original, translated in ok:
+        assert news._valid_title_translation(original, translated), (original, translated)
+
+
+def test_fact_check_still_rejects_invented_or_dropped_numbers():
+    bad = [
+        ("Bitcoin rises 5%", "비트코인 5% 상승, 10% 목표"),          # 10 은 원문에 없다
+        ("Bitcoin tops $78,600", "비트코인 달러 돌파"),                 # 78,600 이 사라졌다
+        ("Bitcoin tops $78,600", "비트코인 7만8600원 돌파"),            # 통화가 바뀌었다
+        ("Ripple rises 5% as XRP ETF nears", "리플 5% 상승"),            # 티커가 사라졌다
+    ]
+    for original, translated in bad:
+        assert not news._valid_title_translation(original, translated), (original, translated)

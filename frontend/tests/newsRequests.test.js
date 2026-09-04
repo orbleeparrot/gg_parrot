@@ -11,3 +11,10 @@ test("coin news responses are not cached forever across page revisits", () => {
   assert.doesNotMatch(newsPage, /coinNewsRequests/);
   assert.match(newsPage, /api\.newsCoin\(symbol\)/);
 });
+
+test("busy translation requests use bounded browser-side retry", () => {
+  assert.match(newsPage, /const COIN_NEWS_CONCURRENCY = 2;/);
+  assert.match(newsPage, /reason\?\.status !== 429/);
+  assert.match(newsPage, /requestNewsWithBusyRetry/);
+  assert.match(newsPage, /requestMarketNews/);
+});

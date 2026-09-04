@@ -14,6 +14,7 @@ from sqlmodel import Session, SQLModel, create_engine, select
 
 from app.agent_features.position_news import repository
 from app.db import (
+    NewsTitleTranslation,
     RunSession,
     TickerNewsSnapshot,
     TickerNewsState,
@@ -667,10 +668,80 @@ def test_daily_ai_budget_namespaces_have_independent_limits(db):
     ) is False
     assert repository.reserve_ai_budget(
         daily_limit=1,
-        namespace="title_translation",
+        namespace="another_analysis",
         now_ms=1,
         db=db,
     )
+
+
+def test_title_translations_are_persisted_and_reused_by_original_title(db):
+    translations = {
+        "Arbitrum token soars": "아비트럼 토큰 급등",
+        "Bitcoin holds $70,000": "비트코인 $70,000 유지",
+    }
+
+    repository.store_title_translations(translations, now_ms=1_000, db=db)
+
+    assert repository.get_title_translations(
+        ["Arbitrum token soars", "missing title", "Bitcoin holds $70,000"],
+        db=db,
+    ) == translations
+
+
+def test_title_translation_claim_prevents_a_second_worker_from_claiming(db_engine):
+    title = "Arbitrum token soars"
+    with Session(db_engine) as first_db:
+        first = repository.claim_title_translations(
+            [title],
+            now_ms=1_000,
+            db=first_db,
+        )
+    with Session(db_engine) as second_db:
+        second = repository.claim_title_translations(
+            [title],
+            now_ms=1_001,
+            db=second_db,
+        )
+
+    assert first["claimed"] == [title]
+    assert first["waiting"] == []
+    assert first["claim_token"]
+    assert second["claimed"] == []
+    assert second["waiting"] == [title]
+
+    with Session(db_engine) as first_db:
+        repository.store_title_translations(
+            {title: "아비트럼 토큰 급등"},
+            claim_token=first["claim_token"],
+            now_ms=1_002,
+            db=first_db,
+        )
+    with Session(db_engine) as second_db:
+        assert repository.get_title_translations([title], db=second_db) == {
+            title: "아비트럼 토큰 급등",
+        }
+
+
+def test_title_translation_claim_renewal_is_token_fenced(db):
+    title = "Arbitrum token soars"
+    claim = repository.claim_title_translations([title], now_ms=1_000, db=db)
+
+    assert repository.renew_title_translation_claims(
+        [title],
+        claim_token="not-the-owner",
+        now_ms=2_000,
+        db=db,
+    ) is False
+    assert repository.renew_title_translation_claims(
+        [title],
+        claim_token=claim["claim_token"],
+        now_ms=3_000,
+        db=db,
+    ) is True
+
+    row = db.get(NewsTitleTranslation, repository._title_hash(title))
+    assert row is not None
+    assert row.claimed_ms == 3_000
 
 
 def test_concurrent_stale_reclaim_grants_one_fenced_owner(db, db_engine):

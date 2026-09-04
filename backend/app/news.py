@@ -21,6 +21,7 @@ import os
 import re
 import threading
 import time
+import logging
 from collections import Counter
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
@@ -400,6 +401,8 @@ _GOOGLE_LOCALES = {
 
 # 요약(개요)은 Anthropic 키가 있을 때만. 시장 페이지에 하루 1회.
 _ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-5")
+logger = logging.getLogger(__name__)
+
 _SUMMARY_PROMPT_VERSION = "market-news-summary-v3"
 _MARKET_SUMMARY_RETRY_SECONDS = 30.0
 _MARKET_SUMMARY_MAX_CALLS_PER_DAY = max(
@@ -1833,7 +1836,7 @@ _NUMBER_UNIT_ABBREVIATIONS = r"(?:ms|km|kg|mg|hz|khz|mhz|ghz|kb|mb|gb|tb|bps|bp|
 _NUMBER_TOKEN = re.compile(
     r"(?<![A-Za-z0-9])(?P<sign>[+-]?)(?P<currency>[$€£₩]?)"
     r"(?P<body>(?:\d[\d,]*(?:\.\d+)?[조억만천]?)+)"
-    r"(?P<suffix>%|[KMBkmb](?![A-Za-z0-9]))?"
+    r"(?P<suffix>%|[KMBkmb](?![A-Za-z0-9])|\s?(?:thousand|million|billion|trillion)(?![A-Za-z0-9]))?"
     rf"(?=$|[^A-Za-z0-9]|{_NUMBER_UNIT_ABBREVIATIONS}(?![A-Za-z0-9]))",
     re.IGNORECASE,
 )
@@ -1884,6 +1887,10 @@ def _translation_fact_tokens(
         "K": Decimal(1_000),
         "M": Decimal(1_000_000),
         "B": Decimal(1_000_000_000),
+        "THOUSAND": Decimal(1_000),
+        "MILLION": Decimal(1_000_000),
+        "BILLION": Decimal(1_000_000_000),
+        "TRILLION": Decimal(10**12),
     }
     numbers = []
     for match in _NUMBER_TOKEN.finditer(value):
@@ -1902,7 +1909,7 @@ def _translation_fact_tokens(
             amount = -amount
         unit = "%" if suffix == "%" else "number"
         if unit == "number":
-            amount *= multipliers.get(suffix.upper(), Decimal(1))
+            amount *= multipliers.get(suffix.strip().upper(), Decimal(1))
         numbers.append((format(amount.normalize(), "f"), unit))
     numbers.sort()
     fiat_codes = {"CNY", "EUR", "GBP", "JPY", "KRW", "USD"}
@@ -2423,7 +2430,12 @@ def _localize_coin_news_items(items: list[dict]) -> list[dict]:
     optional = [title for title in titles if title not in required]
 
     if required:
-        _ensure_title_translations(required)
+        try:
+            _ensure_title_translations(required)
+        except NewsTranslationError as exc:
+            # 번역 실패로 코인 뉴스 전체를 503 으로 막지 않는다. 두 번의 배포에서 검증기
+            # 구멍 하나가 종목 전체 장애로 번졌다 — 실패한 제목만 원문으로 남기고 기록한다.
+            logger.warning("뉴스 제목 번역 실패 — 원문을 그대로 내보낸다: %s", exc)
     if optional:
         try:
             _ensure_title_translations(optional)
@@ -2441,8 +2453,10 @@ def _localize_coin_news_items(items: list[dict]) -> list[dict]:
         if not _valid_title_translation(title, translations.get(title, ""))
     ]
     if unresolved:
-        raise NewsTranslationError(
-            f"영문 뉴스 제목 {len(unresolved)}건을 번역하지 못했습니다. 잠시 후 다시 시도해 주세요."
+        logger.warning(
+            "영문 뉴스 제목 %d건을 번역하지 못해 원문을 그대로 내보낸다: %s",
+            len(unresolved),
+            unresolved[:3],
         )
     for index, item in enumerate(localized):
         source = source_titles_by_index.get(index, "")

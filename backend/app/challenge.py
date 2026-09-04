@@ -11,8 +11,13 @@ unique DailyChallenge row), and the daily KST filter retires it automatically.
 from __future__ import annotations
 
 import asyncio
+import os
+import time
+import uuid
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import update
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 
 from . import ai_challenge
@@ -30,6 +35,11 @@ AI_NAME = "껄무새봇"  # family name, for the UI banner / API summary
 
 _KST = timezone(timedelta(hours=9))
 _lock = asyncio.Lock()
+_CLAIM_LEASE_MS = max(
+    30,
+    int(os.environ.get("DAILY_CHALLENGE_CLAIM_LEASE_SECONDS", "120")),
+) * 1000
+_CLAIM_POLL_SECONDS = 0.25
 
 
 def bot_name(index: int) -> str:
@@ -43,7 +53,140 @@ def _today_kst() -> str:
 
 def _existing(date_kst: str) -> DailyChallenge | None:
     with get_session() as db:
-        return db.exec(select(DailyChallenge).where(DailyChallenge.date_kst == date_kst)).first()
+        return db.exec(
+            select(DailyChallenge).where(
+                DailyChallenge.date_kst == date_kst,
+                DailyChallenge.status == "ready",
+            )
+        ).first()
+
+
+def _claim_daily_challenge(
+    date_kst: str,
+    *,
+    now_ms: int | None = None,
+) -> dict[str, str]:
+    """Claim the day before market/AI/paper work across all web processes."""
+    millis = int(now_ms if now_ms is not None else time.time() * 1000)
+    now_iso = datetime.fromtimestamp(millis / 1000, timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    claim_token = uuid.uuid4().hex
+    with get_session() as db:
+        row = db.exec(
+            select(DailyChallenge).where(DailyChallenge.date_kst == date_kst)
+        ).first()
+        if row is None:
+            try:
+                db.add(DailyChallenge(
+                    date_kst=date_kst,
+                    symbol="",
+                    created_at=now_iso,
+                    status="pending",
+                    claim_token=claim_token,
+                    claimed_ms=millis,
+                ))
+                db.commit()
+                return {"status": "claimed", "claim_token": claim_token}
+            except IntegrityError:
+                db.rollback()
+                row = db.exec(
+                    select(DailyChallenge).where(
+                        DailyChallenge.date_kst == date_kst
+                    )
+                ).first()
+
+        if row is None:
+            return {"status": "waiting", "claim_token": ""}
+        if row.status == "ready":
+            return {"status": "ready", "claim_token": ""}
+        if (
+            row.status == "pending"
+            and int(row.claimed_ms or 0) > millis - _CLAIM_LEASE_MS
+        ):
+            return {"status": "waiting", "claim_token": ""}
+
+        previous_token = row.claim_token
+        previous_claimed_ms = int(row.claimed_ms or 0)
+        result = db.exec(
+            update(DailyChallenge)
+            .where(
+                DailyChallenge.date_kst == date_kst,
+                DailyChallenge.status != "ready",
+                DailyChallenge.claim_token == previous_token,
+                DailyChallenge.claimed_ms == previous_claimed_ms,
+            )
+            .values(
+                status="pending",
+                claim_token=claim_token,
+                claimed_ms=millis,
+                last_error="",
+            )
+        )
+        claimed = result.rowcount == 1
+        db.commit()
+        return {
+            "status": "claimed" if claimed else "waiting",
+            "claim_token": claim_token if claimed else "",
+        }
+
+
+def _complete_daily_challenge(
+    date_kst: str,
+    *,
+    claim_token: str,
+    symbol: str,
+    now_ms: int | None = None,
+) -> None:
+    millis = int(now_ms if now_ms is not None else time.time() * 1000)
+    now_iso = datetime.fromtimestamp(millis / 1000, timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    with get_session() as db:
+        result = db.exec(
+            update(DailyChallenge)
+            .where(
+                DailyChallenge.date_kst == date_kst,
+                DailyChallenge.status == "pending",
+                DailyChallenge.claim_token == claim_token,
+            )
+            .values(
+                symbol=symbol,
+                created_at=now_iso,
+                status="ready",
+                claim_token="",
+                claimed_ms=0,
+                last_error="",
+            )
+        )
+        if result.rowcount != 1:
+            db.rollback()
+            raise RuntimeError("daily challenge claim was superseded")
+        db.commit()
+
+
+def _fail_daily_challenge(
+    date_kst: str,
+    *,
+    claim_token: str,
+    error: BaseException,
+) -> None:
+    with get_session() as db:
+        db.exec(
+            update(DailyChallenge)
+            .where(
+                DailyChallenge.date_kst == date_kst,
+                DailyChallenge.status == "pending",
+                DailyChallenge.claim_token == claim_token,
+            )
+            .values(
+                status="error",
+                claim_token="",
+                claimed_ms=0,
+                last_error=str(error)[:200],
+            )
+        )
+        db.commit()
 
 
 def _pick_symbol() -> str:
@@ -65,41 +208,60 @@ async def ensure_today() -> None:
     if _existing(date_kst):
         return
     async with _lock:
-        if _existing(date_kst):
-            return
-        symbol = await asyncio.to_thread(_pick_symbol)
-        macro_dicts = await asyncio.to_thread(ai_challenge.generate_macros, symbol, 3)
+        while True:
+            claim = await asyncio.to_thread(_claim_daily_challenge, date_kst)
+            if claim["status"] == "ready":
+                return
+            if claim["status"] == "claimed":
+                break
+            await asyncio.sleep(_CLAIM_POLL_SECONDS)
 
-        created = 0
-        for md in macro_dicts:
-            try:
-                macro = Macro(**md)
-                info = await paper_mod.start_session(macro, macro.symbol, "live")
-            except Exception:
-                continue  # skip a symbol/macro that can't start a paper session
-            # Number by entries actually created, so a skipped macro can't leave
-            # a gap (1·2·3 rather than 1·3).
-            leaderboard_mod.create_entry(
-                user_id="ai",
-                username=bot_name(created + 1),
-                password_hash="",
-                owner_user_id=None,  # free/visible so users can learn from it
-                is_ai=True,
-                symbol=macro.symbol,
-                macro_json=macro.model_dump_json(),
-                human_summary=human_summary(macro),
-                paper_session_id=info["session_id"],
+        claim_token = claim["claim_token"]
+        try:
+            symbol = await asyncio.to_thread(_pick_symbol)
+            macro_dicts = await asyncio.to_thread(
+                ai_challenge.generate_macros,
+                symbol,
+                3,
             )
-            created += 1
 
-        # Record the day even if 0 started (avoids hammering a failing source).
-        with get_session() as db:
-            if not db.exec(select(DailyChallenge).where(DailyChallenge.date_kst == date_kst)).first():
-                db.add(DailyChallenge(
-                    date_kst=date_kst, symbol=symbol,
-                    created_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                ))
-                db.commit()
+            created = 0
+            for md in macro_dicts:
+                try:
+                    macro = Macro(**md)
+                    info = await paper_mod.start_session(macro, macro.symbol, "live")
+                except Exception:
+                    continue  # skip a symbol/macro that can't start a paper session
+                # Number by entries actually created, so a skipped macro can't leave
+                # a gap (1·2·3 rather than 1·3).
+                leaderboard_mod.create_entry(
+                    user_id="ai",
+                    username=bot_name(created + 1),
+                    password_hash="",
+                    owner_user_id=None,  # free/visible so users can learn from it
+                    is_ai=True,
+                    symbol=macro.symbol,
+                    macro_json=macro.model_dump_json(),
+                    human_summary=human_summary(macro),
+                    paper_session_id=info["session_id"],
+                )
+                created += 1
+
+            # Mark ready even if 0 started, avoiding a retry storm on a bad source.
+            await asyncio.to_thread(
+                _complete_daily_challenge,
+                date_kst,
+                claim_token=claim_token,
+                symbol=symbol,
+            )
+        except BaseException as exc:
+            await asyncio.to_thread(
+                _fail_daily_challenge,
+                date_kst,
+                claim_token=claim_token,
+                error=exc,
+            )
+            raise
 
 
 async def get_today() -> dict:

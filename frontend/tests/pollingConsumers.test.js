@@ -22,3 +22,16 @@ for (const relativePath of consumers) {
     }
   });
 }
+
+test("position news retries only preflight AI capacity responses promptly", () => {
+  const source = readFileSync(
+    new URL(
+      "../src/features/agents/positionNews/usePositionNewsFeature.js",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.match(source, /POSITION_NEWS_BUSY_RETRY_DELAYS_MS/);
+  assert.match(source, /reason\?\.status !== 429/);
+  assert.match(source, /requestPositionNewsWithBusyRetry/);
+});

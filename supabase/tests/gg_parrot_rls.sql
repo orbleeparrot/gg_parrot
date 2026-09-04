@@ -14,6 +14,7 @@ declare
     'leaderboardvote',
     'macrorow',
     'macrounlock',
+    'newstitletranslation',
     'papersession',
     'papertrade',
     'pointledger',

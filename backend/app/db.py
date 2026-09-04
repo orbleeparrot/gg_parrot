@@ -25,7 +25,10 @@ _DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
 
 
 def _sqlite_engine():
-    path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "app.db")
+    # 테스트는 SQLITE_PATH 로 임시 파일을 지정해 개발용 app.db 와도 분리한다.
+    path = os.environ.get("SQLITE_PATH", "").strip() or os.path.join(
+        os.path.dirname(os.path.dirname(__file__)), "app.db"
+    )
     return create_engine(f"sqlite:///{path}", echo=False)
 
 

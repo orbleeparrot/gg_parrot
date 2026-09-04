@@ -47,7 +47,7 @@ services:
       - key: AI_EXPLAIN_MAX_CALLS_PER_DAY
         value: "20"
       - key: NEWS_MARKET_SUMMARY_MAX_CALLS_PER_DAY
-        value: "3"
+        value: "8"
       - key: ANTHROPIC_NEWS_TRANSLATION_MAX_TOKENS
         value: "2048"
 

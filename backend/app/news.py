@@ -407,7 +407,7 @@ _SUMMARY_PROMPT_VERSION = "market-news-summary-v3"
 _MARKET_SUMMARY_RETRY_SECONDS = 30.0
 _MARKET_SUMMARY_MAX_CALLS_PER_DAY = max(
     0,
-    int(os.environ.get("NEWS_MARKET_SUMMARY_MAX_CALLS_PER_DAY", "3")),
+    int(os.environ.get("NEWS_MARKET_SUMMARY_MAX_CALLS_PER_DAY", "6")),
 )
 
 _DISCLAIMER = (
@@ -2480,6 +2480,39 @@ def _envelope(items: list[dict], *, overview: Optional[str], label: str, query: 
     }
 
 
+def _market_summary_key(day: str) -> str:
+    return f"market_news_summary:{day}"
+
+
+def _load_durable_market_summary(day: str) -> Optional[str]:
+    """그날 요약이 Postgres 에 있으면 모델을 부르지 않는다 — 재배포마다 결제하지 않게."""
+    if not os.environ.get("DATABASE_URL"):
+        return None
+    try:
+        from .agent_features.position_news.repository import load_market_news_summary
+
+        stored = load_market_news_summary(
+            _market_summary_key(day), prompt_version=_SUMMARY_PROMPT_VERSION
+        )
+    except Exception:
+        return None
+    text = _plain_summary_text(stored) if stored else ""
+    return text or None
+
+
+def _store_durable_market_summary(day: str, overview: str) -> None:
+    if not os.environ.get("DATABASE_URL") or not overview:
+        return
+    try:
+        from .agent_features.position_news.repository import store_market_news_summary
+
+        store_market_news_summary(
+            _market_summary_key(day), overview, prompt_version=_SUMMARY_PROMPT_VERSION
+        )
+    except Exception:
+        logger.warning("시장 요약을 저장하지 못했다 — 다음 재시작 때 다시 결제한다", exc_info=True)
+
+
 def get_market_news() -> dict:
     """시장·규제 전반 동향 — 헤드라인 + AI 중립 개요. KST 하루 1회 캐시."""
     global _market_summary_retry_at
@@ -2503,7 +2536,11 @@ def get_market_news() -> dict:
         )
         if not needs_summary or now < _market_summary_retry_at:
             return cached
-        overview = _summarize(cached["items"], label="코인 시장·규제")
+        overview = _load_durable_market_summary(day)
+        if overview is None:
+            overview = _summarize(cached["items"], label="코인 시장·규제")
+            if overview is not None:
+                _store_durable_market_summary(day, overview)
         if overview is None:
             _market_summary_retry_at = now + _MARKET_SUMMARY_RETRY_SECONDS
             return cached
@@ -2517,7 +2554,13 @@ def get_market_news() -> dict:
         _market_summary_retry_at = 0.0
         return refreshed
     items = _localize_coin_news_items(_fetch_news(_MARKET_QUERY))
-    overview = _summarize(items, label="코인 시장·규제") if items else None
+    overview = None
+    if items:
+        overview = _load_durable_market_summary(day)
+        if overview is None:
+            overview = _summarize(items, label="코인 시장·규제")
+            if overview is not None:
+                _store_durable_market_summary(day, overview)
     env = _envelope(items, overview=overview, label="코인 시장·규제 동향", query=_MARKET_QUERY)
     if items:  # 빈 결과는 캐시하지 않음(일시적 실패일 수 있음)
         _cache["market"] = (env, day)

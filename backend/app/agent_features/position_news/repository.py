@@ -15,6 +15,7 @@ from sqlmodel import Session, select
 
 from ... import news as news_mod
 from ...db import (
+    MarketNewsSummary,
     NewsTitleTranslation,
     RunSession,
     TickerNewsAiBudget,
@@ -1198,3 +1199,58 @@ def assert_worker_database() -> None:
         raise RuntimeError(
             "중앙 뉴스 워커는 웹 서버와 같은 Postgres DATABASE_URL이 필요합니다."
         )
+
+
+def load_market_news_summary(
+    summary_key: str,
+    *,
+    prompt_version: str = "",
+    db: Session | None = None,
+) -> str | None:
+    """그날 시장 요약을 배포·인스턴스 사이에서 재사용한다. 프롬프트가 바뀌면 무시한다."""
+    if db is None:
+        with get_session() as owned:
+            return load_market_news_summary(
+                summary_key, prompt_version=prompt_version, db=owned
+            )
+    row = db.get(MarketNewsSummary, str(summary_key or "").strip())
+    if row is None or not row.overview:
+        return None
+    if prompt_version and row.prompt_version != prompt_version:
+        return None
+    return row.overview
+
+
+def store_market_news_summary(
+    summary_key: str,
+    overview: str,
+    *,
+    prompt_version: str = "",
+    now_ms: int | None = None,
+    db: Session | None = None,
+) -> None:
+    """Upsert the day's market overview so a restart does not pay for it again."""
+    if db is None:
+        with get_session() as owned:
+            store_market_news_summary(
+                summary_key,
+                overview,
+                prompt_version=prompt_version,
+                now_ms=now_ms,
+                db=owned,
+            )
+            return
+    key = str(summary_key or "").strip()
+    text = str(overview or "").strip()
+    if not key or not text:
+        return
+    millis, now_iso = _clock(now_ms)
+    row = db.get(MarketNewsSummary, key)
+    if row is None:
+        row = MarketNewsSummary(summary_key=key)
+        db.add(row)
+    row.overview = text
+    row.prompt_version = prompt_version
+    row.updated_at = now_iso
+    row.updated_ms = millis
+    db.commit()

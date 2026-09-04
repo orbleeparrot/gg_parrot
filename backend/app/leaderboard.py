@@ -5,11 +5,22 @@ appears on a board sorted by likes. The board is a *today-only* view: entries ar
 filtered to the current KST calendar day, so at KST 00:00 the board naturally
 resets without any scheduler (spec §3.4, "조회 시 오늘 것만 필터").
 
+The reset is not total: the previous board day's top ``KEEP_TOP_N`` entries are
+carried into today so a winner has to defend its place. A carried entry keeps its
+ORIGINAL paper session — the competition is the macro's own return measured from
+the moment it was registered, so nothing about it is reset or restarted. If the
+macro's own rules ended it (target hit, stop-loss, max holding time), that final
+return is the number it defends with; ending on purpose is part of the strategy.
+Carrying is lazy and idempotent like the daily AI challenge — the first
+``/api/leaderboard`` request of a KST day runs it (see
+:func:`ensure_today_carryover`).
+
 KST is a fixed +09:00 offset (no DST), so we use ``timezone(timedelta(hours=9))``
 instead of ``zoneinfo`` to avoid a tz-database dependency on Windows.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import time
@@ -17,14 +28,29 @@ from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 
 from . import paper as paper_mod
 from . import points as points_mod
-from .db import LeaderboardEntry, LeaderboardVote, MacroUnlock, User, get_session
+from .db import (
+    LeaderboardCarryover,
+    LeaderboardEntry,
+    LeaderboardVote,
+    MacroUnlock,
+    User,
+    get_session,
+)
 from .security import verify_password
 
 KST = timezone(timedelta(hours=9))
+DAY_MS = 24 * 60 * 60 * 1000
+
+# 매일 초기화해도 상위 몇 등까지는 다음 날 보드로 이월할지(=방어전에 들어갈 인원).
+KEEP_TOP_N = int(os.environ.get("LEADERBOARD_KEEP_TOP", "3"))
+# 아무도 보드를 열지 않은 조용한 날이 끼면 '어제'가 비어 있을 수 있다. 그럴 땐 글이
+# 있던 마지막 날의 상위권을 이월하되, 몇 달 묵은 보드까지 되살리지는 않도록 막는다.
+CARRYOVER_LOOKBACK_DAYS = int(os.environ.get("LEADERBOARD_CARRYOVER_LOOKBACK_DAYS", "7"))
 
 # 👑 왕관 기준(누적, env 조정 가능): 판매량과 누적 좋아요가 모두 이 이상인 셀러.
 CROWN_MIN_SALES = int(os.environ.get("CROWN_MIN_SALES", "3"))
@@ -74,6 +100,22 @@ def seconds_to_reset() -> int:
 
 def _kst_hhmm(created_ms: int) -> str:
     return datetime.fromtimestamp(created_ms / 1000, KST).strftime("%H:%M")
+
+
+def _kst_mmdd(created_ms: int) -> str:
+    return datetime.fromtimestamp(created_ms / 1000, KST).strftime("%m/%d")
+
+
+def _today_kst() -> str:
+    return _now_utc().astimezone(KST).strftime("%Y-%m-%d")
+
+
+def _kst_day_start_ms(ms: int) -> int:
+    """KST midnight of the day ``ms`` falls in (the board day an entry belongs to)."""
+    day = datetime.fromtimestamp(ms / 1000, KST).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    return int(day.timestamp() * 1000)
 
 
 # --- entries ------------------------------------------------------------
@@ -227,6 +269,8 @@ def _entry_view(
     is_owner = has_owner and viewer_user_id is not None and row.owner_user_id == viewer_user_id
     unlocked = (not has_owner) or is_owner or (row.id in unlocked_ids)
 
+    streak = max(1, int(row.streak_days or 1))
+
     macro = None
     summary = ""
     if unlocked:
@@ -256,6 +300,12 @@ def _entry_view(
         "my_vote": my_vote,
         "created_at": row.created_at,
         "created_kst": _kst_hhmm(row.created_ms),
+        # 방어전: 상위권으로 살아남아 오늘 보드까지 이어진 매크로는 며칠째인지 센다.
+        # 1 = 오늘 등록(방어 아님), 2 이상 = "N일째 순위권 방어중". 이월돼도 수익률은
+        # 등록 시점부터 그대로 이어지므로 first_created_kst 가 실제 등록일이다.
+        "streak_days": streak,
+        "defending": streak > 1,
+        "first_created_kst": _kst_mmdd(row.first_created_ms or row.created_ms),
         "is_mine": row.user_id == viewer_id,
         "is_ai": bool(row.is_ai),  # 🤖 daily-challenge bot
         # marketplace fields
@@ -356,19 +406,148 @@ def list_entries(viewer_id: str = "", viewer_user_id: Optional[int] = None, db=N
         )
         for r in rows
     ]
-    # v7: default sort is live RETURN desc; tie-break by earliest registration.
-    # Stable two-pass: sort by created_at asc first, then by return desc so equal
-    # returns keep the earlier entry on top; entries with no return yet sink last.
-    items.sort(key=lambda e: e["created_at"])
-    items.sort(
-        key=lambda e: (e["return_pct"] is not None, e["return_pct"] if e["return_pct"] is not None else 0.0),
-        reverse=True,
-    )
+    _sort_board(items, key=lambda e: (e["return_pct"], e["created_at"]))
     return {
         "items": items,
         "seconds_to_reset": seconds_to_reset(),
-        "note": "수익률/좋아요는 참고용이며 투자 조언이 아닙니다. 매일 KST 00:00 초기화됩니다.",
+        "keep_top": KEEP_TOP_N,
+        "note": (
+            "수익률/좋아요는 참고용이며 투자 조언이 아닙니다. 매일 KST 00:00 초기화되며, "
+            f"상위 {KEEP_TOP_N}등은 다음 날 보드로 이어집니다."
+        ),
     }
+
+
+def _sort_board(rows: list, *, key) -> None:
+    """Sort a board in place: live RETURN desc, tie-break by earliest registration.
+
+    ``key`` maps one element to ``(return_pct, created_at)``. Stable two-pass:
+    sort by created_at asc first, then by return desc so equal returns keep the
+    earlier entry on top; entries with no return yet sink last.
+    """
+    rows.sort(key=lambda e: key(e)[1])
+    rows.sort(
+        key=lambda e: (key(e)[0] is not None, key(e)[0] if key(e)[0] is not None else 0.0),
+        reverse=True,
+    )
+
+
+# --- daily carry-over: 상위 N등은 다음 날 보드로 --------------------------
+# 이월은 새 행을 만들지 않고 기존 행의 '보드 날짜'(created_ms)를 오늘 자정으로 민다.
+# 그래야 엔트리 id·좋아요·언락 기록은 물론 페이퍼 세션과 누적 수익률까지 그대로
+# 이어져, 순위가 '등록 시점부터의 순수 매크로 수익률' 경쟁으로 남는다.
+_carryover_lock = asyncio.Lock()
+_carryover_done_date: Optional[str] = None
+
+
+def _claim_carryover(date_kst: str) -> bool:
+    """Insert the day's marker row first, so only one caller does the work.
+
+    Claim-before-work (not after): if the work half-fails we must not run again
+    on the same day — the already-moved entries would no longer be in the
+    previous day's window, so a rerun would carry the *next* three as well.
+    """
+    with get_session() as db:
+        exists = db.exec(
+            select(LeaderboardCarryover).where(LeaderboardCarryover.date_kst == date_kst)
+        ).first()
+        if exists is not None:
+            return False
+        db.add(LeaderboardCarryover(
+            date_kst=date_kst, carried=0,
+            created_at=_now_utc().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        ))
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()  # another worker claimed the same day
+            return False
+    return True
+
+
+def _record_carried(date_kst: str, carried: int) -> None:
+    with get_session() as db:
+        row = db.exec(
+            select(LeaderboardCarryover).where(LeaderboardCarryover.date_kst == date_kst)
+        ).first()
+        if row is None:
+            return
+        row.carried = carried
+        db.add(row)
+        db.commit()
+
+
+def _carry_previous_day_top() -> int:
+    """Move the previous board day's top-N onto today's board. Returns how many.
+
+    Only the *board day* moves. ``paper_session_id`` is untouched on purpose: the
+    session keeps running (or keeps its final number if the macro's own rules
+    already closed it), so a defending entry's return is still measured from its
+    registration. ``created_at``/``first_created_ms`` stay truthful for the same
+    reason — and the older ``created_at`` is what breaks ties in its favour.
+    """
+    today_ms = today_start_ms()
+    floor_ms = today_ms - CARRYOVER_LOOKBACK_DAYS * DAY_MS
+    with get_session() as db:
+        last = db.exec(
+            select(LeaderboardEntry)
+            .where(
+                LeaderboardEntry.created_ms < today_ms,
+                LeaderboardEntry.created_ms >= floor_ms,
+            )
+            .order_by(LeaderboardEntry.created_ms.desc())
+        ).first()
+        if last is None:
+            return 0  # 되돌아볼 범위에 보드가 없다 — 이월할 것도 없다
+        day_start = _kst_day_start_ms(last.created_ms)
+        rows = db.exec(
+            select(LeaderboardEntry).where(
+                LeaderboardEntry.created_ms >= day_start,
+                LeaderboardEntry.created_ms < day_start + DAY_MS,
+            )
+        ).all()
+        statuses = paper_mod.get_statuses(
+            [r.paper_session_id for r in rows if r.paper_session_id is not None], db=db
+        )
+        ranked = [
+            (r, _live_return(r.paper_session_id, statuses.get(r.paper_session_id))[0])
+            for r in rows
+        ]
+        _sort_board(ranked, key=lambda t: (t[1], t[0].created_at))
+
+        carried = 0
+        for row, _ in ranked[:KEEP_TOP_N]:
+            if row.first_created_ms is None:
+                row.first_created_ms = row.created_ms  # 원 등록 시각을 한 번만 보관
+            row.streak_days = max(1, int(row.streak_days or 1)) + 1
+            row.created_ms = today_ms  # 보드 날짜만 오늘로
+            db.add(row)
+            carried += 1
+        db.commit()
+    return carried
+
+
+async def ensure_today_carryover() -> int:
+    """Carry the previous board day's top-N into today. Lazy, once per KST day.
+
+    Mirrors the daily AI challenge: the first request of the day does the work,
+    guarded by an in-process lock and a unique ``LeaderboardCarryover`` row, so
+    no scheduler is needed. Returns how many entries survived.
+    """
+    global _carryover_done_date
+    today = _today_kst()
+    if _carryover_done_date == today:
+        return 0
+    async with _carryover_lock:
+        if _carryover_done_date == today:
+            return 0
+        if not _claim_carryover(today):
+            _carryover_done_date = today
+            return 0
+        carried = await asyncio.to_thread(_carry_previous_day_top)
+        await asyncio.to_thread(_record_carried, today, carried)
+        _carryover_done_date = today
+        return carried
 
 
 def vote(entry_id: int, user_id: str, value: int) -> dict:

@@ -177,6 +177,9 @@
     --badge-ai-fg: #6b5205;
     --badge-risk-bg: #fde8ea;
     --badge-risk-fg: #a11827;
+    /* 순위권 방어 — 초록은 등락색이라 못 쓴다(§2-1). 브랜드 옆에서 튀지 않는 청록. */
+    --badge-streak-bg: #d9f0ee;
+    --badge-streak-fg: #0a5c56;
 
     /* Optimizer heat-map swatches (red→green). The cell label is slate-800,
        so the swatch must sit opposite it in each theme. */
@@ -282,6 +285,8 @@
     --badge-ai-fg: #fcd535;
     --badge-risk-bg: rgba(246, 70, 93, 0.18);
     --badge-risk-fg: #ff8f9f;
+    --badge-streak-bg: rgba(45, 212, 191, 0.16);
+    --badge-streak-fg: #5eead4;
   }
 }
 
@@ -1349,6 +1354,7 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   }
   .badge-ai   { background: var(--badge-ai-bg); color: var(--badge-ai-fg); }
   .badge-risk { background: var(--badge-risk-bg); color: var(--badge-risk-fg); }
+  .badge-streak { background: var(--badge-streak-bg); color: var(--badge-streak-fg); }
   .badge-mine { @apply bg-indigo-50 text-indigo-800; }
   .badge-flat { @apply bg-slate-100 text-slate-900; }
 

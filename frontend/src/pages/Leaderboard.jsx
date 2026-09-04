@@ -146,9 +146,9 @@ export default function Leaderboard() {
   return (
     <div>
       <PageHeader
-        eyebrow="매일 KST 00:00 초기화"
+        eyebrow="매일 KST 00:00 초기화 · 상위 3등은 방어전"
         title="오늘의 리더보드"
-        description="실시간 모의(페이퍼) 수익률과 좋아요로 겨루는 오늘의 보드예요. 좋아요·수익률은 참고용이고 매수 추천이 아니에요."
+        description="실시간 모의(페이퍼) 수익률과 좋아요로 겨루는 오늘의 보드예요. 자정에 초기화되지만 상위 3등은 등록한 때부터의 수익률을 그대로 들고 다음 날로 이어져 방어전을 치러요. 좋아요·수익률은 참고용이고 매수 추천이 아니에요."
         actions={<SimBadge className="lg:hidden" />}
       />
 
@@ -174,7 +174,7 @@ export default function Leaderboard() {
         <div className="t-small text-slate-700">
           리더보드 초기화까지{" "}
           <span className="t-title num text-slate-900">{fmtCountdown(remain)}</span>{" "}
-          <span className="text-slate-500">남음 (매일 KST 00:00 초기화)</span>
+          <span className="text-slate-500">남음 (상위 3등은 수익률까지 그대로 다음 날로 이어져요)</span>
         </div>
         <button onClick={() => navigate("/builder?guide=1")} className="btn btn-m btn-primary">
           매크로 만들기
@@ -230,7 +230,15 @@ export default function Leaderboard() {
                       고위험 · {e.macro.leverage}배
                     </span>
                   )}
-                  <span className="t-caption text-slate-500">· 오늘 {e.created_kst} 등록</span>
+                  {/* 초기화를 넘기고 살아남은 매크로 — 며칠째 버티는지가 곧 실력이다. */}
+                  {e.defending && (
+                    <span className="badge badge-streak" title={`${e.first_created_kst} 등록 이후 초기화 없이 상위권을 지키는 중 · 수익률도 그때부터 이어져요`}>
+                      {e.streak_days}일째 순위권 방어중
+                    </span>
+                  )}
+                  <span className="t-caption text-slate-500">
+                    {e.defending ? `· ${e.first_created_kst} 등록` : `· 오늘 ${e.created_kst} 등록`}
+                  </span>
                 </div>
                 {e.locked ? (
                   <div className="mt-1 t-small text-slate-500 truncate">잠김 · 언락하면 전략과 설정이 공개돼요</div>

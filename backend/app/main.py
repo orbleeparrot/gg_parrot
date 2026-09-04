@@ -810,11 +810,14 @@ async def challenge_today() -> dict:
 
 
 @app.get("/api/leaderboard")
-def leaderboard_list(
+async def leaderboard_list(
     user_id: str = "",
     account: Optional[User] = Depends(auth_mod.optional_user_in_session),
     db: Session = Depends(request_session),
 ) -> dict:
+    # 첫 요청이 그날의 이월(어제 상위 N등 → 오늘 보드)을 처리한다. 스케줄러 없이
+    # 초기화되는 보드와 같은 방식이라 배포에 별도 크론이 필요 없다.
+    await leaderboard_mod.ensure_today_carryover()
     return leaderboard_mod.list_entries(
         viewer_id=user_id,
         viewer_user_id=account.id if account else None,

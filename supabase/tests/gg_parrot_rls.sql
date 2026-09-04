@@ -9,6 +9,7 @@ declare
     'boardpost',
     'chatmessage',
     'dailychallenge',
+    'leaderboardcarryover',
     'leaderboardentry',
     'leaderboardvote',
     'macrorow',

@@ -234,6 +234,11 @@ class LeaderboardEntry(SQLModel, table=True):
     paper_session_id: Optional[int] = None
     created_at: str  # UTC ISO
     created_ms: int = Field(index=True, sa_type=BigInteger)  # epoch ms
+    # 매일 KST 00:00 초기화 때 상위 N등은 다음 날 보드로 이월된다(leaderboard.py).
+    # 이월은 created_ms 를 그날 자정으로 밀어 오늘 필터에 다시 걸리게 하는 방식이라,
+    # 원래 등록 시각은 first_created_ms 에 한 번만 보관한다(이월 전 None).
+    streak_days: int = Field(default=1)  # 보드에 연속으로 남은 일수(1 = 오늘 등록)
+    first_created_ms: Optional[int] = Field(default=None, sa_type=BigInteger)
 
 
 class User(SQLModel, table=True):
@@ -442,6 +447,15 @@ class DailyChallenge(SQLModel, table=True):
     created_at: str
 
 
+class LeaderboardCarryover(SQLModel, table=True):
+    """Idempotency record: one row per KST date whose top-N carry-over already ran."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    date_kst: str = Field(index=True, unique=True)  # the day carried INTO (YYYY-MM-DD)
+    carried: int = 0  # how many entries survived into that day
+    created_at: str
+
+
 class ChatMessage(SQLModel, table=True):
     """One leaderboard chat message (daily KST board; reference only)."""
 
@@ -538,6 +552,8 @@ def _migrate() -> None:
             "password_hash": "ALTER TABLE leaderboardentry ADD COLUMN password_hash TEXT DEFAULT ''",
             "owner_user_id": "ALTER TABLE leaderboardentry ADD COLUMN owner_user_id INTEGER",
             "is_ai": "ALTER TABLE leaderboardentry ADD COLUMN is_ai INTEGER DEFAULT 0",
+            "streak_days": "ALTER TABLE leaderboardentry ADD COLUMN streak_days INTEGER DEFAULT 1",
+            "first_created_ms": "ALTER TABLE leaderboardentry ADD COLUMN first_created_ms INTEGER",
         },
         "papersession": {
             "liquidations": "ALTER TABLE papersession ADD COLUMN liquidations INTEGER DEFAULT 0",
@@ -598,6 +614,8 @@ def _migrate_pg() -> None:
         "ALTER TABLE tickernewsstate ADD COLUMN IF NOT EXISTS observation_seq BIGINT DEFAULT 0",
         "ALTER TABLE tickernewsstate ADD COLUMN IF NOT EXISTS latest_observation_seq BIGINT DEFAULT 0",
         "ALTER TABLE tickernewsstate ADD COLUMN IF NOT EXISTS latest_observed_ms BIGINT DEFAULT 0",
+        "ALTER TABLE leaderboardentry ADD COLUMN IF NOT EXISTS streak_days INTEGER DEFAULT 1",
+        "ALTER TABLE leaderboardentry ADD COLUMN IF NOT EXISTS first_created_ms BIGINT",
     ]
     bigint_columns = {
         "tickernewssnapshot": (

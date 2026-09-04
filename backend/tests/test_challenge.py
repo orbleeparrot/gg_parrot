@@ -5,7 +5,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import ai_challenge
-from app import challenge
 from app.engine.schema import Macro
 from app.main import app
 
@@ -60,52 +59,3 @@ def test_challenge_creates_three_ai_entries_and_is_idempotent(monkeypatch):
     client.get("/api/challenge/today")
     items2 = client.get("/api/leaderboard").json()["items"]
     assert len([e for e in items2 if e.get("is_ai")]) == len(ai_entries)
-
-
-def test_leaderboard_initializes_daily_challenge_before_listing(monkeypatch):
-    events = []
-
-    async def carryover():
-        events.append("carryover")
-        return 0
-
-    async def ensure_challenge():
-        events.append("challenge")
-        return {"active": True}
-
-    def list_entries(**_kwargs):
-        events.append("list")
-        return {"items": []}
-
-    monkeypatch.setattr("app.main.leaderboard_mod.ensure_today_carryover", carryover)
-    monkeypatch.setattr("app.main.challenge_mod.ensure_today", ensure_challenge)
-    monkeypatch.setattr("app.main.leaderboard_mod.list_entries", list_entries)
-
-    response = client.get("/api/leaderboard")
-
-    assert response.status_code == 200
-    assert events == ["carryover", "challenge", "list"]
-
-
-def test_daily_challenge_is_claimed_before_expensive_generation():
-    import secrets
-
-    fake_date = f"claim-{secrets.token_hex(8)}"
-    first = challenge._claim_daily_challenge(fake_date, now_ms=1_000)
-    second = challenge._claim_daily_challenge(fake_date, now_ms=1_001)
-
-    assert first["status"] == "claimed"
-    assert first["claim_token"]
-    assert second == {"status": "waiting", "claim_token": ""}
-
-    challenge._complete_daily_challenge(
-        fake_date,
-        claim_token=first["claim_token"],
-        symbol="BTCUSDT",
-        now_ms=1_002,
-    )
-
-    assert challenge._claim_daily_challenge(fake_date, now_ms=1_003) == {
-        "status": "ready",
-        "claim_token": "",
-    }

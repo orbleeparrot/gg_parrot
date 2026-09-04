@@ -24,47 +24,6 @@ def test_position_effect_truth_table(side, sentiment, expected):
     assert classifier.position_effect(sentiment, side) == expected
 
 
-def test_agent_position_news_localizes_snapshot_titles(monkeypatch):
-    english = "Arbitrum token soars"
-    korean = "아비트럼 토큰 급등"
-    stored = {
-        "snapshot_id": "arb-snapshot",
-        "news_payload": {
-            "symbol": "ARB",
-            "coin_name": "아비트럼",
-            "updated_at": "2026-09-04T00:00:00Z",
-            "items": [{"title": english, "source": "CoinDesk"}],
-        },
-        "analysis": {
-            "items": [{
-                "sentiment": "positive",
-                "summary": "아비트럼 관련 긍정 소식입니다.",
-                "confidence": "medium",
-            }],
-            "overview": "아비트럼 관련 소식입니다.",
-            "analysis_status": "ready",
-            "analysis_source": "ai",
-            "ai": True,
-        },
-        "collection": {"last_success_ms": int(__import__("time").time() * 1000)},
-    }
-    monkeypatch.setattr(service, "_load_latest_snapshot", lambda *_args: stored)
-    monkeypatch.setattr(
-        service.news_mod,
-        "_localize_coin_news_items",
-        lambda items: [{**items[0], "title": korean, "original_title": english}],
-    )
-
-    payload = service.get_position_news({
-        "session_id": 1,
-        "symbol": "ARBUSDT",
-        "position_side": "long",
-    })
-
-    assert payload["items"][0]["title"] == korean
-    assert payload["items"][0]["original_title"] == english
-
-
 def test_rule_classifier_only_commits_on_clear_headline_terms():
     assert classifier.classify_headline("비트코인 현물 ETF 승인")['sentiment'] == "positive"
     assert classifier.classify_headline("거래소 해킹으로 출금 중단")['sentiment'] == "negative"

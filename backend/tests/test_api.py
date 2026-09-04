@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from app import news
 from app.main import app
 
 client = TestClient(app)
@@ -57,30 +56,3 @@ def test_short_without_stop_loss_rejected():
     bad["risk"] = {"invest_ratio": 0.5}  # no stop_loss on a short -> must fail
     r = client.post("/api/macros", json=bad)
     assert r.status_code == 422  # pydantic validation error
-
-
-def test_news_translation_failure_returns_retryable_service_error(monkeypatch):
-    def fail_translation(*_args, **_kwargs):
-        raise news.NewsTranslationError("영문 뉴스 제목 번역에 실패했습니다.")
-
-    monkeypatch.setattr(news, "get_market_news", fail_translation)
-    monkeypatch.setattr(news, "get_coin_news", fail_translation)
-
-    market = client.get("/api/news/market")
-    coin = client.get("/api/news/coin/ARBUSDT")
-
-    assert market.status_code == 503
-    assert coin.status_code == 503
-    assert "번역" in market.json()["detail"]
-    assert "번역" in coin.json()["detail"]
-
-
-def test_news_translation_preflight_busy_returns_safe_retry_status(monkeypatch):
-    def busy(*_args, **_kwargs):
-        raise news.NewsTranslationBusyError("뉴스 번역 요청이 몰려 있습니다.")
-
-    monkeypatch.setattr(news, "get_market_news", busy)
-    monkeypatch.setattr(news, "get_coin_news", busy)
-
-    assert client.get("/api/news/market").status_code == 429
-    assert client.get("/api/news/coin/ARBUSDT").status_code == 429

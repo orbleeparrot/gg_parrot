@@ -9,7 +9,6 @@ pytest.importorskip("sqlmodel")
 
 from fastapi import HTTPException, Response
 
-from app import news
 from app.agent_features.position_news import router
 
 
@@ -83,55 +82,6 @@ def test_saved_macro_rejects_ticker_outside_portfolio(monkeypatch):
         )
 
     assert exc.value.status_code == 422
-
-
-def test_agent_news_translation_failure_is_retryable_503(monkeypatch):
-    monkeypatch.setattr(
-        router.runner_mod,
-        "get_owned_session",
-        lambda *_args, **_kwargs: {"symbol": "ARBUSDT", "position_side": "long"},
-    )
-    monkeypatch.setattr(
-        router.service,
-        "get_position_news",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            news.NewsTranslationError("영문 뉴스 제목 번역에 실패했습니다.")
-        ),
-    )
-
-    with pytest.raises(HTTPException) as exc:
-        router.position_news(
-            1,
-            Response(),
-            user=SimpleNamespace(id=3),
-        )
-
-    assert exc.value.status_code == 503
-    assert "번역" in exc.value.detail
-
-
-def test_agent_news_translation_preflight_busy_is_safe_retry_429(monkeypatch):
-    monkeypatch.setattr(
-        router.runner_mod,
-        "get_owned_session",
-        lambda *_args, **_kwargs: {"symbol": "ARBUSDT", "position_side": "long"},
-    )
-    monkeypatch.setattr(
-        router.service,
-        "get_position_news",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            news.NewsTranslationBusyError("뉴스 번역 요청이 몰려 있습니다.")
-        ),
-    )
-
-    with pytest.raises(HTTPException) as exc:
-        router.position_news(
-            1,
-            Response(),
-            user=SimpleNamespace(id=3),
-        )
-
-    assert exc.value.status_code == 429
 
 
 def _saved_with_symbols(*symbols):

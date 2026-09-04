@@ -82,7 +82,7 @@ class AiCallRuntime:
             float(
                 acquire_timeout_seconds
                 if acquire_timeout_seconds is not None
-                else os.environ.get("AI_ACQUIRE_TIMEOUT_SECONDS", "1")
+                else os.environ.get("AI_ACQUIRE_TIMEOUT_SECONDS", "0.1")
             ),
         )
         capacity = max(

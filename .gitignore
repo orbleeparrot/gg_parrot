@@ -30,3 +30,4 @@ runner/*.spec
 
 # 전달받은 브랜드 원본 묶음(배포용 사본은 frontend/public에 별도 관리)
 껄무새_이미지_20260831/
+supabase/.temp/

@@ -84,6 +84,14 @@ def test_distinct_ai_call_is_rejected_when_capacity_is_full():
         assert first.result(timeout=1)[0] == "first"
 
 
+def test_default_ai_queue_fails_fast_instead_of_exhausting_request_threads(monkeypatch):
+    monkeypatch.delenv("AI_ACQUIRE_TIMEOUT_SECONDS", raising=False)
+
+    runtime = ai_runtime.AiCallRuntime()
+
+    assert runtime._acquire_timeout <= 1
+
+
 def test_transient_failure_retries_once_but_permanent_failure_does_not():
     sleeps = []
     runtime = ai_runtime.AiCallRuntime(

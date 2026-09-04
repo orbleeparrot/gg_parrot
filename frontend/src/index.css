@@ -5420,6 +5420,8 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   font-size: 14px;
   line-height: 1.65;
   font-weight: 500;
+  /* 요약은 '3~4줄'을 줄바꿈으로 나눠 온다. pre-line 이 없으면 전부 한 덩어리로 붙는다. */
+  white-space: pre-line;
 }
 
 .news-briefing-disclaimer {

@@ -2810,3 +2810,48 @@ def test_fact_check_still_rejects_invented_or_dropped_numbers():
     ]
     for original, translated in bad:
         assert not news._valid_title_translation(original, translated), (original, translated)
+
+
+# --- 시장 요약을 하루 단위로 Postgres 에 저장 — 재배포마다 결제하지 않게 ------------
+def _seed_market_cache_without_overview(monkeypatch, items):
+    day = news._kst_date()
+    env = news._envelope(items, overview=None, label="코인 시장·규제 동향", query=news._MARKET_QUERY)
+    monkeypatch.setattr(news, "_cache", {"market": (env, day)})
+    monkeypatch.setattr(news, "_market_summary_retry_at", 0.0)
+    return day
+
+
+def test_market_summary_reuses_stored_day_summary_without_calling_model(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    day = _seed_market_cache_without_overview(
+        monkeypatch, [{"title": "비트코인 시장 뉴스", "source": "테스트"}]
+    )
+    monkeypatch.setattr(
+        news, "_load_durable_market_summary", lambda d: "저장된 요약" if d == day else None
+    )
+
+    def must_not_call(*_args, **_kwargs):
+        raise AssertionError("저장된 요약이 있으면 모델을 부르면 안 된다")
+
+    monkeypatch.setattr(news, "_summarize", must_not_call)
+
+    result = news.get_market_news()
+
+    assert result["overview"] == "저장된 요약"
+    assert result["ai"] is True
+
+
+def test_market_summary_is_stored_for_the_day_after_generation(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    day = _seed_market_cache_without_overview(
+        monkeypatch, [{"title": "비트코인 시장 뉴스", "source": "테스트"}]
+    )
+    monkeypatch.setattr(news, "_load_durable_market_summary", lambda _d: None)
+    monkeypatch.setattr(news, "_summarize", lambda *_a, **_k: "새 요약")
+    stored = []
+    monkeypatch.setattr(
+        news, "_store_durable_market_summary", lambda d, o: stored.append((d, o))
+    )
+
+    assert news.get_market_news()["overview"] == "새 요약"
+    assert stored == [(day, "새 요약")]

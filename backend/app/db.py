@@ -441,6 +441,20 @@ class TickerNewsAiBudget(SQLModel, table=True):
     updated_at: str = ""
 
 
+class MarketNewsSummary(SQLModel, table=True):
+    """KST 하루치 시장·규제 요약 하나.
+
+    프로세스 메모리에만 두면 Render 재배포·재시작마다 다시 결제한다. 2026-09-04 에는
+    배포 네 번으로 일일 예산(3회)이 바닥나 자정까지 요약이 비었다.
+    """
+
+    summary_key: str = Field(primary_key=True)
+    overview: str = ""
+    prompt_version: str = ""
+    updated_at: str = ""
+    updated_ms: int = Field(default=0, sa_type=BigInteger)
+
+
 class NewsTitleTranslation(SQLModel, table=True):
     """One shared translation per normalized news title.
 

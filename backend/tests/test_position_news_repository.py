@@ -942,3 +942,17 @@ def test_snapshot_write_paths_lock_state_before_snapshot(
         if statement.startswith("update tickernewssnapshot")
     )
     assert state_select < snapshot_update
+
+
+def test_market_news_summary_round_trip_and_prompt_version_guard():
+    engine = create_engine("sqlite://")
+    SQLModel.metadata.create_all(engine)
+    key = "market_news_summary:2026-09-04"
+    with Session(engine) as db:
+        assert repository.load_market_news_summary(key, db=db) is None
+        repository.store_market_news_summary(key, "오늘 요약", prompt_version="v3", now_ms=1_000, db=db)
+        assert repository.load_market_news_summary(key, prompt_version="v3", db=db) == "오늘 요약"
+        # 프롬프트가 바뀌면 옛 요약을 쓰지 않는다
+        assert repository.load_market_news_summary(key, prompt_version="v4", db=db) is None
+        repository.store_market_news_summary(key, "고친 요약", prompt_version="v4", now_ms=2_000, db=db)
+        assert repository.load_market_news_summary(key, prompt_version="v4", db=db) == "고친 요약"

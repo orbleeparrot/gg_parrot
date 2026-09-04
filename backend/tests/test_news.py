@@ -2720,3 +2720,77 @@ def test_market_summary_returns_plain_text_even_when_model_uses_markdown(monkeyp
     assert news._summarize(
         [{"title": "비트코인 시장 뉴스", "source": "테스트"}], label="시장"
     ) == "제목\n가격: 상승"
+
+
+# --- 운영 장애(#17 배포)에서 실제로 503을 낸 제목들 ------------------------------
+def _stub_translation(monkeypatch, mapping):
+    """모델 응답을 흉내 낸다. mapping 에 없는 제목은 '동일 문장'을 돌려준다."""
+    monkeypatch.setattr(news, "_title_translation_cache", {})
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    calls = []
+
+    def fake(titles):
+        calls.append(list(titles))
+        out = {t: mapping.get(t, t) for t in titles}
+        valid = {t: v for t, v in out.items() if news._valid_title_translation(t, v)}
+        if not valid:
+            raise ValueError("title translation response had no valid items")
+        return valid
+
+    monkeypatch.setattr(news, "_request_korean_title_translations", fake)
+    return calls
+
+
+def test_korean_title_with_stray_english_token_keeps_original(monkeypatch):
+    # 운영 캐시에 error 로 남았던 실제 제목 — "vs" 하나 때문에 번역 대상이 되고,
+    # 모델이 같은 문장을 돌려주면 검증이 거부해 코인 뉴스 전체가 503이 됐다.
+    korean = "비트코인 vs 지캐시…양자컴퓨터·프라이버시 경쟁 시작됐다"
+    dbiz = "[D-BIZ 암호화폐 뉴스] 지자체·결제망 수준 속도 도달하나… 지캐시(ZEC), 개인 거래 생성 시간 '200밀리초' 단축"
+    _stub_translation(monkeypatch, {})
+    items = news._localize_coin_news_items([{"title": korean}, {"title": dbiz}])
+    assert [it["title"] for it in items] == [korean, dbiz]
+    assert all("original_title" not in it for it in items)
+
+
+def test_unresolved_korean_title_does_not_block_english_titles_in_same_batch(monkeypatch):
+    english = "Zcash private transactions could go from three-second waits to under 200 milliseconds"
+    korean = "비트코인 vs 지캐시…양자컴퓨터·프라이버시 경쟁 시작됐다"
+    _stub_translation(monkeypatch, {english: "지캐시 개인 거래, 3초 대기에서 200밀리초 미만으로 단축될 수도"})
+    items = news._localize_coin_news_items([{"title": english}, {"title": korean}])
+    assert items[0]["title"].startswith("지캐시 개인 거래") and items[0]["original_title"] == english
+    assert items[1]["title"] == korean
+
+
+def test_pure_english_title_that_cannot_be_translated_still_fails_closed(monkeypatch):
+    english = "Circle Internet Group Tokenized bStocks Price (CRCLB/USD) Today | Live Price, Market Cap & Chart"
+    _stub_translation(monkeypatch, {})  # 모델이 영문을 그대로 돌려줌
+    with pytest.raises(news.NewsTranslationError):
+        news._localize_coin_news_items([{"title": english}])
+
+
+def test_fact_check_accepts_numbers_spelled_out_in_source():
+    # 운영 캐시에 error 로 남았던 순수 영문 제목들 — 정상 번역이 검증에서 거부되고 있었다.
+    ok = [
+        ("Zcash private transactions could go from three-second waits to under 200 milliseconds",
+         "지캐시 개인 거래, 3초 대기에서 200밀리초 미만으로 단축될 수도"),
+        ("Zcash private transactions could go from three-second waits to under 200 milliseconds",
+         "지캐시 개인 거래, 3초 대기에서 200ms 미만으로 단축 가능성"),
+        ("Bitcoin price analysis: September has typically been a weak month",
+         "비트코인 가격 분석: 9월은 통상 약세였던 달"),
+        ("Bitcoin tops $78,600 as Fed signals five billion in purchases",
+         "연준이 50억 매입을 시사하자 비트코인 7만8600달러 돌파"),
+        ("Bitcoin rises 5% in Q3", "비트코인 3분기에 5% 상승"),
+    ]
+    for original, translated in ok:
+        assert news._valid_title_translation(original, translated), (original, translated)
+
+
+def test_fact_check_still_rejects_invented_or_dropped_numbers():
+    bad = [
+        ("Bitcoin rises 5%", "비트코인 5% 상승, 10% 목표"),          # 10 은 원문에 없다
+        ("Bitcoin tops $78,600", "비트코인 달러 돌파"),                 # 78,600 이 사라졌다
+        ("Bitcoin tops $78,600", "비트코인 7만8600원 돌파"),            # 통화가 바뀌었다
+        ("Ripple rises 5% as XRP ETF nears", "리플 5% 상승"),            # 티커가 사라졌다
+    ]
+    for original, translated in bad:
+        assert not news._valid_title_translation(original, translated), (original, translated)

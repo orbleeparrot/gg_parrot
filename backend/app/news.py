@@ -21,6 +21,7 @@ import os
 import re
 import threading
 import time
+from collections import Counter
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
@@ -1756,6 +1757,8 @@ _TITLE_TRANSLATION_UPPER_TERMS = frozenset(_COIN_ALIASES) | {
     "USD",
 }
 _TITLE_TRANSLATION_UPPER_PROSE = {
+    # 분기 표기는 티커가 아니다 — "Q3 earnings"는 "3분기 실적"으로 옮겨야 맞다.
+    "Q1", "Q2", "Q3", "Q4",
     "AFTER",
     "AND",
     "BEFORE",
@@ -1817,6 +1820,60 @@ def _translation_protected_upper_tokens(value: str) -> tuple[str, ...]:
     return tuple(sorted(protected))
 
 
+# 한국어 수 단위와 복합수(7만8600 = 78,600). 번역문이 "$78,600"을 "7만8600달러"로
+# 옮겨도 같은 사실로 읽어야 한다.
+_KO_NUMBER_UNITS = {
+    "조": Decimal(10**12),
+    "억": Decimal(10**8),
+    "만": Decimal(10**4),
+    "천": Decimal(10**3),
+}
+# 숫자 뒤에 붙는 단위 약어(200ms, 5km)는 숫자의 일부로 본다 — 영문 산문이 아니다.
+_NUMBER_UNIT_ABBREVIATIONS = r"(?:ms|km|kg|mg|hz|khz|mhz|ghz|kb|mb|gb|tb|bps|bp|tps|mph|x)"
+_NUMBER_TOKEN = re.compile(
+    r"(?<![A-Za-z0-9])(?P<sign>[+-]?)(?P<currency>[$€£₩]?)"
+    r"(?P<body>(?:\d[\d,]*(?:\.\d+)?[조억만천]?)+)"
+    r"(?P<suffix>%|[KMBkmb](?![A-Za-z0-9]))?"
+    rf"(?=$|[^A-Za-z0-9]|{_NUMBER_UNIT_ABBREVIATIONS}(?![A-Za-z0-9]))",
+    re.IGNORECASE,
+)
+# 원문에 글자로 적힌 수 — 번역문이 이를 숫자로 옮기는 것은 사실 변조가 아니다.
+# ("three-second" → 3초, "September" → 9월, "five billion" → 50억)
+_IMPLIED_NUMBER_WORDS = {
+    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+    "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12,
+    "thirteen": 13, "fourteen": 14, "fifteen": 15, "sixteen": 16, "seventeen": 17,
+    "eighteen": 18, "nineteen": 19, "twenty": 20, "thirty": 30, "forty": 40,
+    "fifty": 50, "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90,
+    "hundred": 100, "thousand": 1_000, "million": 10**6, "billion": 10**9,
+    "trillion": 10**12, "dozen": 12,
+    "first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5, "sixth": 6,
+    "seventh": 7, "eighth": 8, "ninth": 9, "tenth": 10, "eleventh": 11, "twelfth": 12,
+    "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
+    "july": 7, "august": 8, "september": 9, "october": 10, "november": 11,
+    "december": 12, "q1": 1, "q2": 2, "q3": 3, "q4": 4,
+}
+_SCALE_WORDS = {100, 1_000, 10**6, 10**9, 10**12}
+
+
+def _implied_number_facts(value: str) -> set[tuple[str, str]]:
+    words = re.findall(r"[a-z]+\d?", str(value or "").casefold())
+    implied: set[int] = set()
+    for index, word in enumerate(words):
+        amount = _IMPLIED_NUMBER_WORDS.get(word)
+        if amount is None:
+            continue
+        implied.add(amount)
+        following = _IMPLIED_NUMBER_WORDS.get(words[index + 1]) if index + 1 < len(words) else None
+        if following is None:
+            continue
+        if 20 <= amount <= 90 and 1 <= following <= 9:
+            implied.add(amount + following)  # twenty-five
+        if following in _SCALE_WORDS:
+            implied.add(amount * following)  # five billion
+    return {(format(Decimal(amount).normalize(), "f"), "number") for amount in implied}
+
+
 def _translation_fact_tokens(
     value: str,
     *,
@@ -1829,15 +1886,16 @@ def _translation_fact_tokens(
         "B": Decimal(1_000_000_000),
     }
     numbers = []
-    number_pattern = re.compile(
-        r"(?<![A-Za-z0-9])(?P<sign>[+-]?)(?P<currency>[$€£₩]?)"
-        r"(?P<number>\d[\d,]*(?:\.\d+)?)(?P<suffix>%|[KMBkmb])?"
-        r"(?![A-Za-z0-9])"
-    )
-    for match in number_pattern.finditer(value):
+    for match in _NUMBER_TOKEN.finditer(value):
         suffix = str(match.group("suffix") or "")
         try:
-            amount = Decimal(match.group("number").replace(",", ""))
+            amount = Decimal(0)
+            for digits, ko_unit in re.findall(
+                r"(\d[\d,]*(?:\.\d+)?)([조억만천]?)", match.group("body")
+            ):
+                amount += Decimal(digits.replace(",", "")) * _KO_NUMBER_UNITS.get(
+                    ko_unit, Decimal(1)
+                )
         except InvalidOperation:
             continue
         if match.group("sign") == "-":
@@ -1888,18 +1946,37 @@ def _translation_fact_tokens(
 
 
 def _translation_preserves_facts(original: str, translated: str) -> bool:
+    """원문의 사실(수치·티커·통화)이 번역문에 그대로 있어야 한다.
+
+    예전엔 숫자 다중집합의 완전 일치를 요구해서 "three-second"→"3초",
+    "September"→"9월"처럼 글자로 적힌 수를 숫자로 옮긴 정상 번역이 전부 거부됐고,
+    운영에서 순수 영문 제목들이 번역 실패로 남았다. 규칙은 두 방향으로 나눈다:
+    원문의 숫자는 하나도 사라지면 안 되고(누락 금지), 번역문에 새로 나타난 숫자는
+    원문의 숫자 단어·서수·월 이름에서 온 것만 허용한다(창작 금지).
+    """
     protected_upper = set(_translation_protected_upper_tokens(original))
-    return _translation_fact_tokens(
-        original,
-        protected_upper=protected_upper,
-    ) == _translation_fact_tokens(
-        translated,
-        protected_upper=protected_upper,
+    original_numbers, original_tickers, original_currencies = _translation_fact_tokens(
+        original, protected_upper=protected_upper
     )
+    translated_numbers, translated_tickers, translated_currencies = _translation_fact_tokens(
+        translated, protected_upper=protected_upper
+    )
+    if original_tickers != translated_tickers or original_currencies != translated_currencies:
+        return False
+    source = Counter(original_numbers)
+    target = Counter(translated_numbers)
+    if source - target:
+        return False  # 원문 수치가 번역에서 사라졌다
+    implied = _implied_number_facts(original)
+    return all(token in implied for token in (target - source).elements())
 
 
 def _translation_has_untranslated_prose(original: str, value: str) -> bool:
-    remaining = value
+    # 숫자에 붙은 단위 약어(200ms, 5km)는 영문 산문이 아니다. 아래에서 원문의 숫자
+    # 식별자를 먼저 지우면 "ms"만 남아 산문으로 잡히므로 그 전에 걷어낸다.
+    remaining = re.sub(
+        rf"(?<=\d)\s?{_NUMBER_UNIT_ABBREVIATIONS}(?![A-Za-z0-9])", "", value, flags=re.IGNORECASE
+    )
     # Handles and identifier-like names can contain lowercase fragments split
     # by punctuation. If the exact identifier existed in the source, remove it
     # before prose detection so it is preserved without weakening validation.
@@ -2196,7 +2273,13 @@ def _translate_claimed_titles(titles: list[str], *, claim_token: str = "") -> No
                 [title],
                 claim_token=claim_token,
             )
-            fetched = _request_korean_title_translations([title])
+            try:
+                fetched = _request_korean_title_translations([title])
+            except ValueError:
+                # 이 제목 하나를 못 푼 것이다. 배치 실패와 같은 규칙으로 넘기고,
+                # 필수 여부는 호출자(_localize_coin_news_items)가 가른다 —
+                # 실제로 건별 ValueError 가 위로 새어 코인 뉴스 전체가 503이 됐다.
+                continue
             fetched = {
                 original: value
                 for original, value in fetched.items()
@@ -2223,12 +2306,12 @@ def _translate_claimed_titles(titles: list[str], *, claim_token: str = "") -> No
 
     missing = _missing_title_translations(titles)
     if missing:
+        # 해결 못 한 제목의 claim 만 풀어 다음 요청이 바로 다시 잡게 한다.
+        # 필수(순수 외국어) 제목이면 호출자가 503 으로 올리고, 한국어가 섞인 제목이면
+        # 원문을 그대로 둔다 — "번역 실패" 한 건이 종목 뉴스 전체를 가리면 안 된다.
         _release_durable_title_translation_claims(
             missing,
             claim_token=claim_token,
-        )
-        raise NewsTranslationError(
-            f"영문 뉴스 제목 {len(missing)}건을 번역하지 못했습니다. 잠시 후 다시 시도해 주세요."
         )
 
 
@@ -2332,7 +2415,20 @@ def _localize_coin_news_items(items: list[dict]) -> list[dict]:
     if not titles:
         return localized
 
-    _ensure_title_translations(titles)
+    # 한글이 전혀 없는 제목만 번역이 '필수'다 — 영문 헤드라인을 그대로 내보내지 않는다는
+    # 약속은 여기에만 걸린다. 한글 제목에 "vs"·"D-BIZ"·"ZEC" 같은 영문 조각이 섞인 경우는
+    # '선택'이다: 시도는 하되 모델이 같은 문장을 돌려주거나 실패하면 원문을 둔다.
+    # 운영에서 이 구분이 없어, 한국어 제목 한 건 때문에 코인 뉴스 10건이 전부 503이 됐다.
+    required = [title for title in titles if not re.search(r"[가-힣]", title)]
+    optional = [title for title in titles if title not in required]
+
+    if required:
+        _ensure_title_translations(required)
+    if optional:
+        try:
+            _ensure_title_translations(optional)
+        except NewsTranslationError:
+            pass
 
     with _title_translation_lock:
         translations = {
@@ -2341,7 +2437,7 @@ def _localize_coin_news_items(items: list[dict]) -> list[dict]:
         }
     unresolved = [
         title
-        for title in titles
+        for title in required
         if not _valid_title_translation(title, translations.get(title, ""))
     ]
     if unresolved:

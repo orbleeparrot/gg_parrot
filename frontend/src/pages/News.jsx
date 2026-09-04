@@ -216,17 +216,15 @@ function MarketBriefing({ market, loading, error }) {
             rotateMs={5_000}
           />
 
-          <div className="news-market-summary">
-            <div className="news-market-summary-head">
-              <span>{market.ai && market.overview ? "AI 요약" : "오늘의 맥락"}</span>
-              {market.as_of ? <time className="num">{market.as_of} KST</time> : null}
-            </div>
-            {market.overview ? (
+          {market.overview ? (
+            <div className="news-market-summary">
+              <div className="news-market-summary-head">
+                <span>AI 요약</span>
+                {market.as_of ? <time className="num">{market.as_of} KST</time> : null}
+              </div>
               <p><AnnotatedText text={market.overview} /></p>
-            ) : (
-              <p>요약 대신 위 실제 헤드라인을 순서대로 확인해 보세요.</p>
-            )}
-          </div>
+            </div>
+          ) : null}
 
           <TermChips texts={[market.overview, ...(market.items || []).map((item) => item.title)]} />
           {market.disclaimer ? <Disclaimer text={market.disclaimer} /> : null}
@@ -424,10 +422,8 @@ export default function News() {
     <div className="news-briefing-page">
       <header className="news-page-head">
         <span className="news-page-eyebrow">MARKET NEWSROOM</span>
-        <div className="news-page-title-row">
-          <h1>오늘의 코인동향</h1>
-          {market?.as_of ? <time className="news-page-asof num">기준 {market.as_of} · KST</time> : null}
-        </div>
+        <h1 className="news-page-title">오늘의 코인동향</h1>
+        {market?.as_of ? <time className="news-page-asof num">기준 {market.as_of} · KST</time> : null}
         <p className="news-page-description">시장·규제와 활발히 움직이는 코인을 두 개의 브리핑으로 나눠 읽어요.</p>
         <p className="news-page-disclaimer">경주마 선정과 뉴스는 참고용이며 투자 권유가 아니에요.</p>
       </header>

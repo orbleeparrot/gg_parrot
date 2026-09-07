@@ -828,9 +828,38 @@ def _is_news_article_candidate(item: dict) -> bool:
     ):
         return False
     title = str(item.get("title") or "")
+    source = str(item.get("source") or "").strip().casefold()
+    if (source == "cme group" or host == "cmegroup.com") and re.fullmatch(
+        r"(?:CME Group\s+)?Bitcoin Futures(?:\s+and\s+Options)?", title.strip(), re.IGNORECASE
+    ):
+        return False
+    # Google News also indexes exchange community posts containing a trading
+    # entry/stop setup. They must not become news or spend translation budget.
+    if (source == "binance" or host == "binance.com") and re.search(
+        r"\b(?:long|short)\s+(?:scenario|setup|signal)\b.*\b(?:entry|stop|tp|sl)\b",
+        title, re.IGNORECASE | re.DOTALL,
+    ):
+        return False
+    if source == "binance" or host == "binance.com":
+        if re.search(r"^[\d.,]+\s+[A-Z0-9]+/[A-Z0-9]+\s+(?:현물 거래|spot trad(?:e|ing))\b",
+                     title, re.IGNORECASE):
+            return False
+        if re.search(r"^[A-Z0-9]+/(?:USDT|USDC|BTC|ETH)\s+is going to pump\b", title, re.IGNORECASE):
+            return False
+        if re.search(r"^\$[A-Z0-9]+\s+[A-Z0-9]+\s+is showing (?:bearish|bullish) movement", title, re.IGNORECASE):
+            return False
+    if source == "moomoo" and re.fullmatch(r"\$?[\w .-]+\s*\([A-Z0-9]+\.(?:CC|US|HK)\)\$?", title.strip()):
+        return False
+    if source == "indmoney" and re.search(r"\bDividend History, Yield & Record Date$", title, re.IGNORECASE):
+        return False
+    if source == "mshale" and re.search(r"\bRb Leipzig\s+\([A-Za-z0-9]{8,16}\)$", title, re.IGNORECASE):
+        return False
+    if source == "kucoin" and title.startswith("INSIGHTS⚡️"):
+        return False
     # Search engines can match a project name used by a concert venue. Such
     # listings are neither token news nor worth a paid translation request.
     if re.search(r"\bat\s+.{0,60}\b(?:theat(?:er|re)|concert hall|music hall)\b|"
+                 r"\bkids showcase talent at\b|"
                  r"\bobituary\s*\(\d{4}\)|\bbuilding\s+.{0,40}\s+to bring their family home\b", title, re.IGNORECASE) and not re.search(
         r"\b(?:crypto|token|blockchain|nft|bitcoin|ethereum)\b|암호화폐|토큰", title, re.IGNORECASE
     ):
@@ -1872,6 +1901,7 @@ _TITLE_TRANSLATION_UPPER_TERMS = frozenset(_COIN_ALIASES) | {
     "USD",
 }
 _TITLE_TRANSLATION_UPPER_PROSE = {
+    "THIS",
     # 분기 표기는 티커가 아니다 — "Q3 earnings"는 "3분기 실적"으로 옮겨야 맞다.
     "Q1", "Q2", "Q3", "Q4",
     "AFTER",
@@ -1947,7 +1977,10 @@ _KO_NUMBER_UNITS = {
 _NUMBER_UNIT_ABBREVIATIONS = r"(?:ms|km|kg|mg|hz|khz|mhz|ghz|kb|mb|gb|tb|bps|bp|tps|mph|x)"
 _NUMBER_TOKEN = re.compile(
     r"(?<![A-Za-z0-9])(?P<sign>[+-]?)(?P<currency>[$€£₩]?)"
-    r"(?P<body>(?:\d[\d,]*(?:\.\d+)?[조억만천]?)+)"
+    # Whitespace joins amount components only when both sides have Korean
+    # magnitude units. "3억 2000만" is one amount; "3억 5%" is two facts.
+    r"(?P<body>(?:\d[\d,]*(?:\.\d+)?[조억만천]\s+(?=\d[\d,]*(?:\.\d+)?[조억만천]))*"
+    r"(?:\d[\d,]*(?:\.\d+)?[조억만천]?)+)"
     r"(?P<suffix>%|[KMBkmb](?![A-Za-z0-9])|\s?(?:thousand|million|billion|trillion)(?![A-Za-z0-9]))?"
     rf"(?=$|[^A-Za-z0-9]|{_NUMBER_UNIT_ABBREVIATIONS}(?![A-Za-z0-9]))",
     re.IGNORECASE,
@@ -2044,7 +2077,9 @@ def _translation_fact_tokens(
     currencies = set()
     # A cashtag ($WLD) identifies a token; it is not a USD-denominated amount.
     if re.search(r"\$(?![A-Za-z])", value) or re.search(r"\b(?:dollars?|usd)\b", lowered) or re.search(
-        r"(?<![가-힣])달러(?![가-힣])",
+        # A numeric amount can attach its currency to a Korean magnitude or
+        # grammatical particle: "3.2억달러", "320만 달러로".
+        r"\d[\d,.\s조억만천]*달러|(?<![가-힣])달러(?![가-힣])",
         value,
     ):
         currencies.add("USD")

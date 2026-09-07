@@ -306,3 +306,70 @@ def test_rolling_deployment_does_not_pause_new_worker_schedule(monkeypatch):
     assert options["version"] == "revision-under-test"
     assert options["interval"].total_seconds() == 60
     assert options["limit"] == options["global_limit"] == 1
+
+
+def test_enrichment_task_fails_visibly_with_retained_rss_payload(monkeypatch):
+    payload = {**_payload("BTC"), "browser_enrichment": {
+        "status": "error", "source_count": 8, "successful_sources": 0},
+        "sources": [{"name": "public-browser-source", "status": "error", "error": "TimeoutError"}]}
+    monkeypatch.setattr(workflow.collector, "enrich_payload", lambda *_: payload)
+    with pytest.raises(workflow.BrowserEnrichmentUnavailable, match="Playwright 전체 소스") as failure:
+        workflow.enrich_ticker_news_task.fn("BTC", _payload("BTC"))
+    assert failure.value.payload == payload
+    assert failure.value.payload["items"] == _payload("BTC")["items"]
+
+
+@pytest.mark.parametrize("status,successful", [("partial", 3), ("disabled", 0)])
+def test_partial_or_disabled_browser_does_not_fail_task(monkeypatch, caplog, status, successful):
+    payload = {**_payload("BTC"), "browser_enrichment": {
+        "status": status, "source_count": 8, "successful_sources": successful}}
+    monkeypatch.setattr(workflow.collector, "enrich_payload", lambda *_: payload)
+    assert workflow.enrich_ticker_news_task.fn("BTC", _payload("BTC")) == payload
+    if status == "partial":
+        assert "성공 3/8" in caplog.text
+    else:
+        assert not caplog.records
+
+
+def test_flow_processes_rss_once_before_failing_browser_outage(monkeypatch):
+    monkeypatch.setenv("POSITION_NEWS_BROWSER_ENRICHMENT_ENABLED", "true")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key")
+    monkeypatch.setattr(workflow, "_schedule_lag_seconds", lambda: 0.0)
+    monkeypatch.setattr(workflow, "discover_tickers_task", lambda: ["BTC"])
+    payload = _payload("BTC")
+    events = []
+    monkeypatch.setattr(workflow, "fetch_ticker_news_task", Submitter(lambda _: payload))
+    monkeypatch.setattr(workflow, "publish_initial_news_task", Submitter(
+        lambda *_: events.append("rss_published") or {"status": "stored", "used_ai_budget": False}))
+    failed_payload = {**payload, "browser_enrichment": {
+        "status": "error", "source_count": 8, "successful_sources": 0}}
+    def browser(*_):
+        events.append("browser_failed")
+        raise workflow.BrowserEnrichmentUnavailable("Playwright sources unavailable", failed_payload)
+    monkeypatch.setattr(workflow, "enrich_ticker_news_task", Submitter(browser))
+    def process(symbol, received, allow_ai):
+        assert symbol == "BTC" and received == failed_payload and allow_ai is True
+        events.append("final_processed")
+        return {"asset_symbol": symbol, "status": "stored", "used_ai_budget": True, "browser_status": "error"}
+    monkeypatch.setattr(workflow, "process_ticker_news_task", Submitter(process))
+    monkeypatch.setattr(workflow.repository, "finish_collection", lambda *_: events.append("lease_released"))
+    monkeypatch.setattr(workflow, "prune_snapshots_task", Submitter(lambda _: events.append("pruned") or 0))
+    with pytest.raises(workflow.BrowserEnrichmentUnavailable, match="RSS 결과를 유지") as failure:
+        workflow.collect_position_news_flow.fn()
+    assert events == ["rss_published", "browser_failed", "final_processed", "lease_released", "pruned"]
+    summary = failure.value.payload["summary"]
+    assert summary["stored"] == 1
+    assert summary["ai_budget_used"] == 1
+    assert summary["browser_failed_tickers"] == ["BTC"]
+    assert summary["browser_failed_count"] == 1
+    assert summary["run_status"] == "browser_unavailable"
+
+
+def test_effective_browser_concurrency_matches_render_default_and_bounds(monkeypatch):
+    monkeypatch.delenv("POSITION_NEWS_BROWSER_CONCURRENCY", raising=False)
+    monkeypatch.delenv("RENDER", raising=False)
+    assert workflow.effective_config()["browser_concurrency"] == 3
+    monkeypatch.setenv("RENDER", "true")
+    assert workflow.effective_config()["browser_concurrency"] == 1
+    monkeypatch.setenv("POSITION_NEWS_BROWSER_CONCURRENCY", "9")
+    assert workflow.effective_config()["browser_concurrency"] == 4

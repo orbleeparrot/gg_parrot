@@ -20,6 +20,8 @@ services:
         value: "true"
       - key: POSITION_NEWS_BROWSER_BUDGET_SECONDS
         value: "35"
+      - key: POSITION_NEWS_BROWSER_CONCURRENCY
+        value: "1"
       - key: POSITION_NEWS_TRANSLATION_MAX_CALLS_PER_DAY
         value: "10"
       - key: POSITION_NEWS_MAX_AI_ANALYSES_PER_RUN

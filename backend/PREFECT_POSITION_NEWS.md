@@ -80,3 +80,5 @@ POSITION_NEWS_REQUIRE_POSTGRES=true
 전체 구조는 [에이전트 실행 구조](../docs/agent-runtime.md), Render 설정은 루트 `render.yaml`과 `render.prefect-worker.example.yaml`을 참고하세요.
 
 브라우저 공개 페이지 캐시는 `BrowserNewsPageCache`에 최대 512개 저장합니다. Prefect의 다음 subprocess도 만료 전 결과를 재사용하며 성공은 15분, 빈 결과·실패는 5분 후 갱신합니다. 배치 조회·원자적 upsert를 사용하고 만료 시간을 조회 시 연장하지 않습니다.
+
+Render 기본 브라우저 동시성은 1입니다. 공개 섹션·태그는 JavaScript 없이 읽고 검색 페이지에만 활성화합니다. 소스 오류에는 driver 시작/브라우저 시작/탐색/추출 단계를 기록합니다. 모든 브라우저 소스가 실패하면 RSS와 최종 분석은 보존하되 enrichment 태스크와 flow를 Failed로 표시합니다.

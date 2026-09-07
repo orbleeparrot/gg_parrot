@@ -3022,3 +3022,58 @@ def test_browser_cache_batches_only_missing_pages_into_durable_storage(monkeypat
     assert len(writes[0]) == len(pages) - 1
     now_ms = news.time.time() * 1000
     assert all(now_ms < expires_ms <= now_ms + 301_000 for _result, expires_ms in writes[0].values())
+
+
+def test_render_browser_defaults_to_one_tab_but_honors_override(monkeypatch):
+    monkeypatch.setenv('RENDER', 'true')
+    monkeypatch.delenv('POSITION_NEWS_BROWSER_CONCURRENCY', raising=False)
+    assert news._browser_concurrency() == 1
+    monkeypatch.setenv('POSITION_NEWS_BROWSER_CONCURRENCY', '2')
+    assert news._browser_concurrency() == 2
+    monkeypatch.delenv('POSITION_NEWS_BROWSER_CONCURRENCY')
+    monkeypatch.delenv('RENDER')
+    assert news._browser_concurrency() == 3
+
+
+def test_browser_error_keeps_phase_and_short_safe_message():
+    error = news._browser_error(RuntimeError('BrowserType.launch: token=secret failed\nCall log: private details'),
+                                'browser_launch')
+    assert error['phase'] == 'browser_launch'
+    assert 'secret' not in error['message'] and 'private details' not in error['message']
+    assert len(news._browser_error(RuntimeError('x' * 300), 'navigation')['message']) == 160
+    timeout = news._browser_error(TimeoutError(), 'driver_start', budget_seconds=35)
+    assert timeout['message'] == 'Browser batch deadline (35s) exceeded'
+
+
+def test_browser_source_reports_diagnostic_phase_and_message(monkeypatch):
+    monkeypatch.setenv('POSITION_NEWS_BROWSER_ENRICHMENT_ENABLED', 'true')
+    monkeypatch.setattr(news, '_cached_browser_pages', lambda pages: {
+        news._browser_page_key(page): news._browser_error(TimeoutError(), 'driver_start', budget_seconds=35)
+        for page in pages
+    })
+    result = news.enrich_coin_news_for_collector('ENA', {'items': []})
+    assert all(source['phase'] == 'driver_start' for source in result['sources'])
+    assert all(source['message'] == 'Browser batch deadline (35s) exceeded' for source in result['sources'])
+
+
+@pytest.mark.parametrize('failed_phase', ['driver_start', 'browser_launch'])
+def test_browser_batch_reports_the_actual_startup_failure_phase(monkeypatch, failed_phase):
+    from playwright import async_api
+    class Driver:
+        @property
+        def chromium(self):
+            return self
+        async def launch(self, **_kwargs):
+            raise RuntimeError('Chromium launch failed')
+        async def stop(self):
+            pass
+    class Manager:
+        async def start(self):
+            if failed_phase == 'driver_start':
+                raise RuntimeError('Playwright driver start failed')
+            return Driver()
+    monkeypatch.setattr(async_api, 'async_playwright', lambda: Manager())
+    pages = news._browser_news_pages('ENA', 'ENA')[:1]
+    result = news._fetch_browser_page_batch(pages, budget_seconds=1)
+    assert result[news._browser_page_key(pages[0])]['phase'] == failed_phase
+    assert result[news._browser_page_key(pages[0])]['status'] == 'error'

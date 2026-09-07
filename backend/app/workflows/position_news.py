@@ -18,6 +18,7 @@ except ImportError:
 from prefect import flow, get_run_logger, serve, task
 from prefect.exceptions import MissingContextError
 from prefect.runtime import flow_run
+from prefect.types.entrypoint import EntrypointType
 
 from .. import news as news_mod
 from ..agent_features.position_news import collector, repository
@@ -423,6 +424,7 @@ def main() -> None:
     print(json.dumps({"configuration": effective_config()}, ensure_ascii=False))
     collection_deployment = collect_position_news_flow.to_deployment(
         name="shared-ticker-news",
+        entrypoint_type=EntrypointType.MODULE_PATH,
         parameters={"browser_budget_seconds": 90},
         interval=timedelta(seconds=interval_seconds),
         paused=False,
@@ -435,12 +437,17 @@ def main() -> None:
     )
     probe_deployment = coindesk_source_probe_flow.to_deployment(
         name="coindesk-source-probe",
+        entrypoint_type=EntrypointType.MODULE_PATH,
         parameters={"browser_budget_seconds": 90},
         version=os.environ.get("RENDER_GIT_COMMIT") or None,
         concurrency_limit=1,
         tags=["agents", "position-news", "source-diagnostics"],
         description="수동 실행 전용: CoinDesk 4개 섹션과 4개 코인 태그의 HTTP·수집·더보기 진단",
     )
+    # `python -m` defines the startup flows in __main__. Use their importable
+    # package paths explicitly so Prefect subprocesses retain relative imports.
+    collection_deployment.entrypoint = "app.workflows.position_news.collect_position_news_flow"
+    probe_deployment.entrypoint = "app.workflows.position_news.coindesk_source_probe_flow"
     # During rolling deploys the old runner must not pause the new schedule.
     # One shared process slot also prevents probes competing with collection.
     serve(collection_deployment, probe_deployment, limit=1, pause_on_shutdown=False)

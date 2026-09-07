@@ -123,6 +123,9 @@ def test_cryptoslate_xrp_uses_verified_publisher_slug():
 @pytest.mark.parametrize("title,source", [
     ("Bitcoin Futures", "CME Group"),
     ("$CHIP 🟢 LONG SCENARIO 🎯 Entry: $0.0515–0.0520 🛡️ Stop | LuckyStar", "Binance"),
+    ("1.217 ORCA/USDC 현물 거래 | 암호화폐, 주식 및 원자재", "Binance"),
+    ("Orca/usdt is going to pump today", "Binance"),
+    ("$Celestia (TIA.CC)$", "Moomoo"),
 ])
 def test_live_google_results_exclude_products_and_community_trade_setups(title, source):
     assert not news._is_news_article_candidate({"title": title, "source": source,

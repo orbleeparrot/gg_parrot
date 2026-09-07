@@ -3492,3 +3492,29 @@ def test_korean_publisher_labels_do_not_consume_translation_budget(monkeypatch, 
 ])
 def test_real_numeric_identifier_and_abbreviated_month_translations(source, translated):
     assert news._valid_title_translation(source, translated)
+
+
+@pytest.mark.parametrize("source, translated", [
+    ("Fund raises $320 million", "펀드, 3억 2000만 달러 조달"),
+    ("Fund raises $320M", "펀드, 3.2억달러 조달"),
+    ("Fund grows to $3.2M", "펀드 규모가 320만 달러로 증가"),
+    ("Fund raises $1.23 trillion", "펀드, 1조 2300억 달러 조달"),
+    ("Fund raises $320M and gains 5%", "펀드, 3억 2000만 달러 조달 및 5% 상승"),
+])
+def test_translation_accepts_spaced_korean_amounts_and_currency_particles(source, translated):
+    assert news._valid_title_translation(source, translated)
+
+
+@pytest.mark.parametrize("source, translated", [
+    ("Fund raises $320M", "펀드, 3억 3000만 달러 조달"),
+    ("Fund raises $320M", "펀드, 3억2000만 원 조달"),
+    ("Fund raises $300M and gains 5%", "펀드, 3억5달러 조달"),
+    ("Fund raises $300M in 2026", "펀드, 3억2026달러 조달"),
+])
+def test_translation_spaced_amounts_still_reject_changed_facts(source, translated):
+    assert not news._valid_title_translation(source, translated)
+
+
+def test_spaced_korean_amount_does_not_absorb_independent_percent_or_year():
+    assert news._translation_fact_tokens("3억 5%") [0] == (("300000000", "number"), ("5", "%"))
+    assert news._translation_fact_tokens("3억 2026년") [0] == (("2026", "number"), ("300000000", "number"))

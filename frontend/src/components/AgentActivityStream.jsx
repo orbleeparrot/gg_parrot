@@ -5,6 +5,7 @@ import {
   accessFor,
 } from "../features/agents/registry.js";
 import { advanceActivityTimeline, emptyActivityTimeline } from "../features/agents/activityTimeline.js";
+import RunResultScreen from "./RunResultScreen.jsx";
 const PLAN_LABELS = { free: "FREE", plus: "PLUS", pro: "PRO" };
 const EMPTY_FEATURE_STATES = {};
 const SECOND_MS = 1000;
@@ -114,6 +115,8 @@ export default function AgentActivityStream({
   onUpgrade,
 }) {
   const [filter, setFilter] = useState("all");
+  // 실행이 끝나면 결과 화면이 기본이고, 기록은 원할 때만 연다.
+  const [showLog, setShowLog] = useState(false);
   const [newMessageCount, setNewMessageCount] = useState(0);
   const [announcement, setAnnouncement] = useState("");
   const [now, setNow] = useState(() => Date.now());
@@ -206,11 +209,23 @@ export default function AgentActivityStream({
     node.focus({ preventScroll: true });
   }
 
+  const ended = !!session && session.status !== "running";
+  if (ended && !showLog) {
+    return (
+      <aside className="agent-chat" aria-label={`${symbol} 실행 결과`}>
+        <RunResultScreen session={session} onShowLog={() => setShowLog(true)} />
+      </aside>
+    );
+  }
+
   return (
     <aside className="agent-chat" aria-label={`${symbol} 껄무새 에이전트 기록`}>
       <header className="agent-chat-head">
-        <div className="agent-chat-controls">
+        <div className={`agent-chat-controls${ended ? " has-result" : ""}`}>
           <ModuleTabs selected={filter} onSelect={selectFilter} entitlements={entitlements} />
+          {ended ? (
+            <button type="button" className="btn btn-s btn-secondary" onClick={() => setShowLog(false)}>결과 보기</button>
+          ) : null}
         </div>
       </header>
 

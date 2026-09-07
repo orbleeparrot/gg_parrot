@@ -14,6 +14,14 @@ services:
         value: "true"
       - key: POSITION_NEWS_COLLECTION_SECONDS
         value: "300"
+      - key: POSITION_NEWS_SCHEDULE_SECONDS
+        value: "60"
+      - key: POSITION_NEWS_BROWSER_ENRICHMENT_ENABLED
+        value: "true"
+      - key: POSITION_NEWS_BROWSER_BUDGET_SECONDS
+        value: "35"
+      - key: POSITION_NEWS_TRANSLATION_MAX_CALLS_PER_DAY
+        value: "10"
       - key: POSITION_NEWS_MAX_AI_ANALYSES_PER_RUN
         value: "2"
       - key: POSITION_NEWS_MAX_AI_ANALYSES_PER_DAY
@@ -33,4 +41,4 @@ services:
       - key: ANTHROPIC_MODEL
         value: "claude-haiku-4-5"
       - key: ANTHROPIC_POSITION_NEWS_MAX_TOKENS
-        value: "256"
+        value: "512"

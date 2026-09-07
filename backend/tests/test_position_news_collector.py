@@ -71,7 +71,7 @@ class FakeRepository:
             return False
         row["analysis"] = analysis
         row["completed"] = True
-        row["claim_token"] = ""
+        row["claim_token"] = claim_token if _kwargs.get("keep_claim") else ""
         return True
 
     def fail_snapshot(self, snapshot_id, error, *, claim_token, **_kwargs):
@@ -86,7 +86,19 @@ class FakeRepository:
     def mark_collection_outcome(self, asset, status, **kwargs):
         self.outcomes.append((asset, status, kwargs.get("error", "")))
 
-    def discover_tracked_symbols(self):
+    def claim_collection(self, *_args, **_kwargs):
+        return "collection-token"
+
+    def finish_collection(self, *_args, **_kwargs):
+        return True
+
+    def renew_collection(self, *_args, **_kwargs):
+        return True
+
+    def get_title_translations(self, *_args, **_kwargs):
+        return {}
+
+    def discover_tracked_symbols(self, **_kwargs):
         return []
 
     def prune_snapshots(self, **_kwargs):

@@ -214,6 +214,10 @@ def test_position_news_snapshot_lookup_reuses_callers_session(monkeypatch):
         return None
 
     monkeypatch.setattr(position_news_service, "_load_latest_snapshot", load)
+    from app.agent_features.position_news import repository
+    collection_lookups = []
+    monkeypatch.setattr(repository, "get_collection_state", lambda symbol, db:
+                        collection_lookups.append((symbol, db)) or None)
 
     payload = position_news_service.get_position_news(
         {
@@ -227,3 +231,4 @@ def test_position_news_snapshot_lookup_reuses_callers_session(monkeypatch):
 
     assert payload["analysis_status"] == "pending"
     assert observed == [("EDEN", shared_db)]
+    assert collection_lookups == [("EDEN", shared_db)]

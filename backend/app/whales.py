@@ -29,6 +29,9 @@ IMPORTANT CAVEATS (surfaced in the UI, do not remove):
 from __future__ import annotations
 
 import os
+import math
+import threading
+from copy import deepcopy
 import time
 from datetime import datetime, timezone
 from typing import Iterable, Optional
@@ -37,6 +40,81 @@ import httpx
 from sqlmodel import select
 
 from .db import WhaleHolderBalance, WhaleObservation, get_session
+from .http_runtime import SingleFlightGroup, get_http_client
+
+
+# Public large fills are observable for any supported trading pair. They do
+# not identify wallet owners or imply a change in a named investor's holdings.
+_large_trade_cache = {}
+_large_trade_lock = threading.Lock()
+_large_trade_flights = SingleFlightGroup()
+
+
+def _fetch_aggregate_trades(symbol, market):
+    futures = market == "futures"
+    base = os.environ.get("BINANCE_FAPI_BASE", "https://fapi.binance.com") if futures else os.environ.get("BINANCE_API_BASE", "https://api.binance.com")
+    path = "/fapi/v1/aggTrades" if futures else "/api/v3/aggTrades"
+    response = get_http_client().get(base.rstrip("/") + path, params={"symbol": symbol, "limit": 500}, timeout=8)
+    response.raise_for_status()
+    rows = response.json()
+    if not isinstance(rows, list):
+        raise ValueError("invalid aggregate trades response")
+    return rows
+
+
+def get_large_trade_activity(symbol: str, market: str = "spot") -> dict:
+    from .news import canonical_market_symbol
+    symbol = canonical_market_symbol(symbol)
+    market = "futures" if market == "futures" else "spot"
+    quote = next((value for value in ("USDT", "USDC") if symbol.endswith(value) and len(symbol) > len(value)), "")
+    threshold = max(1000, float(os.environ.get("AGENT_LARGE_TRADE_MIN_QUOTE", "100000")))
+    base = {
+        "feature_key": "whale_activity", "symbol": symbol, "market": market,
+        "status": "unavailable", "items": [], "stale": False,
+        "threshold_quote": threshold, "quote_asset": quote, "sampled_trades": 0,
+        "refresh_seconds": 30,
+        "disclaimer": "최근 최대 500건 중 10분 이내 대규모 체결 표본입니다. 전체 거래나 특정 고래의 보유량을 뜻하지 않습니다.",
+    }
+    if not symbol or not quote:
+        return base
+    key = (symbol, market)
+    def load():
+        now = time.time()
+        with _large_trade_lock:
+            hit = _large_trade_cache.get(key)
+        if hit and hit[1] > now:
+            return deepcopy(hit[0])
+        payload = {**base, "observed_at": datetime.fromtimestamp(now, timezone.utc).isoformat(),
+                   "window_start": datetime.fromtimestamp(now - 600, timezone.utc).isoformat()}
+        try:
+            rows = _fetch_aggregate_trades(symbol, market)
+            items = {}
+            for row in rows:
+                try:
+                    price, quantity = float(row["p"]), float(row["q"])
+                    notional = price * quantity
+                    timestamp = int(row["T"])
+                    if (not math.isfinite(notional) or price <= 0 or quantity <= 0
+                        or notional < threshold or not (now - 600) * 1000 <= timestamp <= (now + 5) * 1000
+                        or not isinstance(row.get("m"), bool)):
+                        continue
+                    identity = f"{market}:{symbol}:{int(row['a'])}"
+                    items[identity] = {"id": identity, "price": price, "quantity": quantity,
+                        "notional": notional, "side": "sell" if row["m"] else "buy",
+                        "occurred_at": datetime.fromtimestamp(timestamp / 1000, timezone.utc).isoformat()}
+                except (ValueError, TypeError, KeyError, OverflowError):
+                    continue
+            payload.update(status="ready" if items else "empty", sampled_trades=len(rows),
+                           items=sorted(items.values(), key=lambda item: item["occurred_at"], reverse=True)[:30])
+        except Exception:
+            if hit and now - hit[2] < 120:
+                payload = {**hit[0], "stale": True, "status": "unavailable"}
+        with _large_trade_lock:
+            _large_trade_cache[key] = (payload, now + 30, hit[2] if payload["stale"] else now)
+            while len(_large_trade_cache) > 512:
+                _large_trade_cache.pop(next(iter(_large_trade_cache)))
+        return deepcopy(payload)
+    return _large_trade_flights.run(key, load)[0]
 
 # --- supported coins ----------------------------------------------------
 # `symbol` is the Binance pair the builder uses, so clicking a coin can prefill it.

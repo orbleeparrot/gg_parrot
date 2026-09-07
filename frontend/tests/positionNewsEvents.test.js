@@ -3,6 +3,22 @@ import test from "node:test";
 
 import { positionNewsModule } from "../src/features/agents/positionNews/events.js";
 
+test("successful empty collection is distinct from waiting or a failed request", () => {
+  const [event] = positionNewsModule.buildEvents({ featureStates: { position_news: {
+    data: { context: { asset_symbol: "NEW" }, items: [], analysis_status: "empty", collection: { status: "ready" } },
+  } } });
+  assert.ok(event);
+  assert.match(event.title, /관련 뉴스 없음/);
+});
+
+test("failed news requests are visible inside the activity stream", () => {
+  const [event] = positionNewsModule.buildEvents({ featureStates: { position_news: {
+    status: "error", error: "offline", data: null,
+  } } });
+  assert.ok(event);
+  assert.match(event.title, /뉴스.*연결/);
+});
+
 test("pending position news is shown as a current collection status event", () => {
   const before = Date.now();
   const events = positionNewsModule.buildEvents({

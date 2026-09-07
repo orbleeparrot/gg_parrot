@@ -21,6 +21,20 @@ from . import service
 router = APIRouter(prefix="/api/me/agents", tags=["agent-features"])
 
 
+@router.get("/sessions/{session_id}/whale-activity")
+def whale_activity(session_id: int, response: Response,
+                   user: User = Depends(auth_mod.current_user_in_session),
+                   db: Session = Depends(request_session)) -> dict:
+    from ...whales import get_large_trade_activity
+    response.headers["Cache-Control"] = "private, no-store"
+    session = runner_mod.get_owned_session(user.id, session_id, db=db)
+    # Release the request's read transaction before potentially waiting on I/O.
+    db.rollback()
+    if session["status"] != "running" or not session["connected"]:
+        return {"feature_key": "whale_activity", "status": "stopped", "items": []}
+    return get_large_trade_activity(session["symbol"], session["market"])
+
+
 @router.get("/sessions/{session_id}/position-news")
 def position_news(
     session_id: int,

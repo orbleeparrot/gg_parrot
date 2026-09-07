@@ -7,13 +7,14 @@
      AI 입력으로 사용하고, 저장되는 결과는 짧은 요약뿐이다.
   3) 환각 방지: AI는 수집한 기사 내용에서만 요약하고 새 사실을 추가하지 않는다.
   4) 비용: 중복 제거 뒤 제목을 번역하고, 결과를 메모리와 Postgres에 캐시해
-     같은 제목을 다시 과금 호출하지 않는다. 제목 번역 자체는 일일 제한이 없다.
+     같은 제목을 다시 과금 호출하지 않는다. 번역 호출에도 DB 일일 예산을 적용한다.
 
 Google News RSS, CoinDesk 공식 RSS, Playwright로 렌더링한 CoinDesk 공개
 섹션·태그 페이지를 함께 사용한다.
 """
 from __future__ import annotations
 
+import asyncio
 import html
 import hashlib
 import json
@@ -68,7 +69,7 @@ _TITLE_TRANSLATION_WAIT_SECONDS = max(
 )
 _TITLE_TRANSLATION_POLL_SECONDS = 0.1
 _COINDESK_ARTICLE_PATH = re.compile(
-    r"^/(?:markets|business|policy|tech)/\d{4}/\d{2}/\d{2}/[^/]+/?$",
+    r"^/(?:markets|business|policy|tech|web3|finance)/\d{4}/\d{2}/\d{2}/[^/]+/?$",
     re.IGNORECASE,
 )
 
@@ -434,6 +435,9 @@ _market_summary_budget_lock = threading.Lock()
 _market_summary_budget: tuple[str, int] = ("", 0)
 _market_summary_retry_at = 0.0
 _rss_refreshes = SingleFlightGroup()
+_coin_refreshes = SingleFlightGroup()
+_browser_page_cache: dict[str, tuple[dict, float]] = {}
+_browser_collection_lock = threading.Lock()
 
 
 class NewsFetchError(RuntimeError):
@@ -1191,96 +1195,98 @@ def _fetch_coindesk_asset_archive_news(
 
 
 def _fetch_article_excerpts_playwright(items: list[dict]) -> list[str]:
-    """Resolve article URLs and read bounded body text in one browser session."""
-    if not items:
-        return []
-    enabled = os.environ.get(
-        "POSITION_NEWS_ARTICLE_PLAYWRIGHT_ENABLED",
-        "true",
-    ).strip().casefold()
-    if enabled in {"0", "false", "no", "off"}:
-        return ["" for _item in items]
-    try:
-        from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
-        from playwright.sync_api import sync_playwright
-    except ImportError:
-        return ["" for _item in items]
-
-    timeout_ms = max(
-        3_000,
-        int(os.environ.get("POSITION_NEWS_ARTICLE_TIMEOUT_MS", "12000")),
-    )
+    """Read at most three optional article excerpts within one 20-second batch."""
     excerpts = ["" for _item in items]
-    try:
-        with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(
-                headless=True,
-                args=["--disable-dev-shm-usage"],
-            )
-            try:
-                context = browser.new_context(locale="ko-KR", timezone_id="Asia/Seoul")
-                context.set_default_timeout(timeout_ms)
+    if not items or os.environ.get("POSITION_NEWS_ARTICLE_PLAYWRIGHT_ENABLED", "true").strip().casefold() in {
+        "0", "false", "no", "off"
+    }:
+        return excerpts
 
-                def block_heavy_assets(route):
-                    if route.request.resource_type in {"font", "image", "media"}:
-                        route.abort()
+    async def run():
+        from playwright.async_api import async_playwright
+
+        browser = driver = None
+        semaphore = asyncio.Semaphore(2)
+        page_timeout_ms = min(10_000, max(3_000, int(os.environ.get(
+            "POSITION_NEWS_ARTICLE_TIMEOUT_MS", "8000"))))
+        try:
+            async with asyncio.timeout(20):
+                driver = await async_playwright().start()
+                options = {"headless": True, "args": ["--disable-dev-shm-usage"], "timeout": 10_000}
+                executable = os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH", "").strip()
+                if executable:
+                    options["executable_path"] = executable
+                browser = await driver.chromium.launch(**options)
+                context = await browser.new_context(locale="ko-KR", timezone_id="Asia/Seoul")
+                context.set_default_timeout(page_timeout_ms)
+
+                async def block_heavy_assets(route):
+                    if route.request.resource_type in {"font", "image", "media", "stylesheet"}:
+                        await route.abort()
                     else:
-                        route.continue_()
+                        await route.continue_()
 
-                context.route("**/*", block_heavy_assets)
-                for index, item in enumerate(items):
+                await context.route("**/*", block_heavy_assets)
+
+                async def read(index, item):
                     url = str(item.get("url") or "").strip()
                     parsed = urlsplit(url)
                     if parsed.scheme != "https" or not parsed.hostname:
-                        continue
-                    page = context.new_page()
-                    try:
-                        response = page.goto(
-                            url,
-                            wait_until="domcontentloaded",
-                            timeout=timeout_ms,
-                        )
-                        if response is None or response.status >= 400:
-                            continue
+                        return
+                    async with semaphore:
+                        page = await context.new_page()
                         try:
-                            page.locator("article p, main p").first.wait_for(
-                                state="attached",
-                                timeout=min(2_500, timeout_ms),
-                            )
-                        except PlaywrightTimeoutError:
+                            response = await page.goto(url, wait_until="domcontentloaded", timeout=page_timeout_ms)
+                            if response is None or response.status >= 400:
+                                return
+                            try:
+                                await page.locator("article p, main p").first.wait_for(
+                                    state="attached", timeout=2_000)
+                            except Exception:
+                                pass
+                            paragraphs = await page.locator("article p, main p").all_inner_texts()
+                            useful = [
+                                _normalize_article_excerpt(paragraph, limit=600)
+                                for paragraph in paragraphs
+                                if len(_normalize_article_excerpt(paragraph, limit=600)) >= 30
+                            ]
+                            excerpt = _normalize_article_excerpt(" ".join(useful[:8]))
+                            if not excerpt:
+                                meta = page.locator('meta[name="description"], meta[property="og:description"]').first
+                                if await meta.count():
+                                    excerpt = _normalize_article_excerpt(await meta.get_attribute("content") or "")
+                            excerpts[index] = excerpt
+                        except Exception:
                             pass
-                        paragraphs = page.locator("article p, main p").all_inner_texts()
-                        useful = [
-                            _normalize_article_excerpt(paragraph, limit=600)
-                            for paragraph in paragraphs
-                            if len(_normalize_article_excerpt(paragraph, limit=600)) >= 30
-                        ]
-                        excerpt = _normalize_article_excerpt(" ".join(useful[:8]))
-                        if not excerpt:
-                            meta = page.locator(
-                                'meta[name="description"], meta[property="og:description"]'
-                            ).first
-                            if meta.count():
-                                excerpt = _normalize_article_excerpt(
-                                    meta.get_attribute("content") or ""
-                                )
-                        excerpts[index] = excerpt
-                    except Exception:
-                        continue
-                    finally:
-                        page.close()
-                context.close()
-            finally:
-                browser.close()
+                        finally:
+                            await page.close()
+
+                await asyncio.gather(*(read(index, item) for index, item in enumerate(items[:3])))
+        except Exception:
+            pass
+        finally:
+            if browser is not None:
+                try:
+                    await asyncio.wait_for(browser.close(), timeout=2)
+                except Exception:
+                    pass
+            if driver is not None:
+                try:
+                    await asyncio.wait_for(driver.stop(), timeout=2)
+                except Exception:
+                    pass
+
+    try:
+        asyncio.run(run())
     except Exception:
-        return excerpts
+        pass
     return excerpts
 
 
 def enrich_article_excerpts(items: list[dict], *, limit: int = 3) -> list[dict]:
     """Return copies enriched for AI; fetched article bodies never enter snapshots."""
     enriched = [dict(item) for item in items]
-    bounded = min(len(enriched), max(0, limit))
+    bounded = min(3, len(enriched), max(0, limit))
     missing_indexes = []
     for index, item in enumerate(enriched[:bounded]):
         excerpt = _normalize_article_excerpt(item.get("excerpt") or "")
@@ -2134,6 +2140,12 @@ def _request_korean_title_translations(titles: list[str]) -> dict[str, str]:
     )
 
     def load():
+        from .agent_features.position_news.repository import reserve_ai_budget
+        if not reserve_ai_budget(
+            daily_limit=max(0, int(os.environ.get("NEWS_TRANSLATION_MAX_CALLS_PER_DAY", "20"))),
+            namespace="news_title_translation",
+        ):
+            raise NewsTranslationError("오늘의 공용 번역 예산을 모두 사용해 원문을 표시합니다.")
         response = get_anthropic_client().messages.create(
             model=selected_model,
             max_tokens=_TITLE_TRANSLATION_MAX_TOKENS,
@@ -2264,8 +2276,8 @@ def _translate_claimed_titles(titles: list[str], *, claim_token: str = "") -> No
         try:
             fetched = _request_korean_title_translations(titles)
         except ValueError:
-            # Malformed batch output is retried per title below. Network, key,
-            # rate-limit and queue failures should fail the request immediately.
+            # Keep partial/malformed translations as original text. One batch
+            # must never fan out into a paid request for every missing title.
             fetched = {}
         fetched = {
             title: value
@@ -2275,25 +2287,6 @@ def _translate_claimed_titles(titles: list[str], *, claim_token: str = "") -> No
         _remember_title_translations(fetched)
         _store_durable_title_translations(fetched, claim_token=claim_token)
 
-        for title in _missing_title_translations(titles):
-            _renew_durable_title_translation_claims(
-                [title],
-                claim_token=claim_token,
-            )
-            try:
-                fetched = _request_korean_title_translations([title])
-            except ValueError:
-                # 이 제목 하나를 못 푼 것이다. 배치 실패와 같은 규칙으로 넘기고,
-                # 필수 여부는 호출자(_localize_coin_news_items)가 가른다 —
-                # 실제로 건별 ValueError 가 위로 새어 코인 뉴스 전체가 503이 됐다.
-                continue
-            fetched = {
-                original: value
-                for original, value in fetched.items()
-                if original == title and _valid_title_translation(original, value)
-            }
-            _remember_title_translations(fetched)
-            _store_durable_title_translations(fetched, claim_token=claim_token)
     except AiBusyError as exc:
         _release_durable_title_translation_claims(
             titles,
@@ -2586,7 +2579,11 @@ def _coin_news_envelope(
     queries = _COIN_GOOGLE_QUERIES.get(base)
     if queries is None:
         if base in _COIN_KO:
-            queries = ((f"{name} 코인 when:7d", "ko"),)
+            project = (_COIN_ALIASES.get(base) or (base,))[0]
+            queries = (
+                (f"{name} 코인 when:7d", "ko"),
+                (f'("{project}" OR {base}) (crypto OR token OR blockchain) when:7d', "en"),
+            )
         else:
             # A connected macro can use an exchange ticker outside the fixed
             # Korean-name catalogue. Search both locales and explicit crypto
@@ -2622,31 +2619,26 @@ def _coin_news_envelope(
         except NewsFetchError:
             return [], True
 
-    if len(queries) == 1:
-        fetched = {0: fetch_query(*queries[0])}
-    else:
-        fetched = run_parallel(
-            {
-                index: (lambda query=query, locale=locale: fetch_query(query, locale))
-                for index, (query, locale) in enumerate(queries)
-            }
-        )
-    for index in range(len(queries)):
-        candidates, failed = fetched[index]
-        if failed:
-            failures += 1
-            continue
-        candidate_count += len(candidates)
-        batches.append(
-            _relevant_items(
-                candidates,
-                asset_symbol=base,
-                coin_name=name,
-                feed_source="google_news_rss",
-            )
-            if relevant_only
-            else candidates
-        )
+    # Recent results first. Historical fallback only when both locales are empty.
+    recent_queries = [(q, locale) for q, locale in queries if "when:5y" not in q]
+    archive_queries = [(q, locale) for q, locale in queries if "when:5y" in q]
+    attempted_queries = []
+    for group in (recent_queries, archive_queries):
+        if batches and any(batches):
+            break
+        fetched = run_parallel({
+            index: (lambda query=query, locale=locale: fetch_query(query, locale))
+            for index, (query, locale) in enumerate(group)
+        })
+        attempted_queries.extend(group)
+        for candidates, failed in fetched.values():
+            if failed:
+                failures += 1
+                continue
+            candidate_count += len(candidates)
+            batches.append(_relevant_items(candidates, asset_symbol=base,
+                coin_name=name, feed_source="google_news_rss") if relevant_only else candidates)
+    queries = attempted_queries
     if strict and failures == len(queries):
         raise NewsFetchError("Google News RSS 수집에 실패했습니다.")
     items = _sort_news_items_newest_first(_merge_news_items(*batches))
@@ -2662,6 +2654,318 @@ def _coin_news_envelope(
     env["refresh_seconds"] = _COIN_CACHE_SECONDS
     env["candidate_count"] = candidate_count
     return env
+
+
+def _browser_news_pages(asset_symbol: str, coin_name: str) -> list[dict]:
+    """Public indexes are shared by all tickers; archive searches use project aliases."""
+    pages = [
+        {"name": name, "publisher": "CoinDesk", "kind": kind,
+         "scope": scope, "url": url}
+        for name, kind, scope, _query, url in _COINDESK_DISCOVERY_SOURCES
+        if kind == "section"
+    ]
+    pages.extend([
+        {"name": "decrypt_news", "publisher": "Decrypt", "kind": "section",
+         "scope": "news", "url": "https://decrypt.co/news"},
+        {"name": "cryptoslate_news", "publisher": "CryptoSlate", "kind": "section",
+         "scope": "news", "url": "https://cryptoslate.com/"},
+    ])
+    terms = _coindesk_asset_search_terms(asset_symbol, coin_name)
+    for index, term in enumerate(terms[:2]):
+        pages.append({
+            "name": f"coindesk_asset_search_{index}", "publisher": "CoinDesk",
+            "kind": "asset_search", "scope": term,
+            "url": "https://www.coindesk.com/search/", "search_term": term,
+        })
+    if terms:
+        tag = re.sub(r"[^a-z0-9]+", "-", terms[0]).strip("-")
+        if tag:
+            pages.append({
+                "name": "coindesk_asset_topic", "publisher": "CoinDesk",
+                "kind": "topic", "scope": terms[0],
+                "url": f"https://www.coindesk.com/tag/{tag}",
+            })
+    return pages
+
+
+def _parse_public_browser_links(raw_links: list[dict], descriptor: dict) -> list[dict]:
+    publisher = descriptor["publisher"]
+    if publisher == "CoinDesk":
+        return _parse_coindesk_browser_links(
+            raw_links, source_kind=descriptor["kind"], source_scope=descriptor["scope"],
+            source_page=descriptor["url"], limit=50,
+        )
+    host = "decrypt.co" if publisher == "Decrypt" else "cryptoslate.com"
+    path_pattern = (r"/\d{4,}/[^/]+/?" if publisher == "Decrypt"
+                    else r"/[^/]*-[^/]+/?")
+    items, seen = [], set()
+    for raw in raw_links:
+        title = re.sub(r"\s+", " ", str(raw.get("title") or "")).strip()
+        parsed = urlsplit(str(raw.get("href") or ""))
+        if (parsed.scheme != "https" or parsed.hostname not in {host, "www." + host}
+                or not re.fullmatch(path_pattern, parsed.path) or len(title) < 15):
+            continue
+        url = urlunsplit(("https", host, parsed.path.rstrip("/"), "", ""))
+        if url in seen:
+            continue
+        seen.add(url)
+        published = str(raw.get("published") or "").strip()
+        try:
+            parsed_date = datetime.fromisoformat(published.replace("Z", "+00:00"))
+            published = parsed_date.replace(tzinfo=parsed_date.tzinfo or timezone.utc).isoformat()
+        except ValueError:
+            # Missing publication dates stay unknown; collection time is not a
+            # substitute for publication time, especially on archive pages.
+            published = None
+        item = {
+            "title": title[:300], "source": publisher, "url": url,
+            "published": published,
+            "published_display": str(raw.get("published_display") or "")[:80],
+            "feed_source": f"{publisher.lower()}_{descriptor['kind']}_playwright",
+            "source_scope": descriptor["scope"], "source_page": descriptor["url"],
+        }
+        excerpt = _normalize_article_excerpt(raw.get("excerpt") or "")
+        if excerpt:
+            item["excerpt"] = excerpt
+        items.append(item)
+        if len(items) == 50:
+            break
+    return items
+
+
+_BROWSER_LINKS_SCRIPT = """anchors => anchors.map(anchor => {
+  const heading = anchor.querySelector('h1,h2,h3,h4,h5,h6')
+    || anchor.closest('h1,h2,h3,h4,h5,h6');
+  const container = anchor.closest('article') || anchor.closest('li')
+    || anchor.closest('[class*="post-card"]') || anchor.parentElement;
+  const time = container?.querySelector('time');
+  return {
+    href: anchor.href || '',
+    title: (heading?.innerText || anchor.getAttribute('aria-label')
+      || anchor.innerText || '').trim(),
+    published: time?.getAttribute('datetime') || '',
+    published_display: (time?.innerText || '').trim(),
+    excerpt: (container?.querySelector('p')?.innerText || '').trim(),
+  };
+})"""
+
+
+def _fetch_browser_page_batch(descriptors: list[dict], *, budget_seconds: float) -> dict:
+    """One browser, bounded concurrent tabs and a deadline for the entire batch."""
+    async def run():
+        from playwright.async_api import async_playwright
+
+        results = {}
+        browser = driver = None
+        page_timeout_ms = min(15_000, max(3_000, int(os.environ.get(
+            "POSITION_NEWS_BROWSER_PAGE_TIMEOUT_MS", "10000"))))
+        concurrency = min(4, max(1, int(os.environ.get(
+            "POSITION_NEWS_BROWSER_CONCURRENCY", "3"))))
+        semaphore = asyncio.Semaphore(concurrency)
+        try:
+            async with asyncio.timeout(budget_seconds):
+                driver = await async_playwright().start()
+                launch_options = {"headless": True, "args": ["--disable-dev-shm-usage"],
+                                  "timeout": min(15_000, budget_seconds * 1000)}
+                executable = os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH", "").strip()
+                if executable:
+                    launch_options["executable_path"] = executable
+                browser = await driver.chromium.launch(**launch_options)
+                context = await browser.new_context(locale="en-US", timezone_id="UTC")
+                context.set_default_timeout(page_timeout_ms)
+
+                async def route_request(route):
+                    if route.request.resource_type in {"image", "media", "font", "stylesheet"}:
+                        await route.abort()
+                    else:
+                        await route.continue_()
+
+                await context.route("**/*", route_request)
+
+                async def fetch(descriptor):
+                    async with semaphore:
+                        page = await context.new_page()
+                        key = _browser_page_key(descriptor)
+                        try:
+                            response = await page.goto(descriptor["url"],
+                                wait_until="domcontentloaded", timeout=page_timeout_ms)
+                            if response is None or response.status >= 400:
+                                results[key] = {"items": [], "status": "error", "error": "http_error"}
+                                return
+                            term = descriptor.get("search_term")
+                            if term:
+                                # CoinDesk renders an interactive input before
+                                # React attaches its search handlers. Filling
+                                # it immediately can silently do nothing.
+                                try:
+                                    await page.wait_for_load_state(
+                                        "networkidle", timeout=min(5_000, page_timeout_ms))
+                                except Exception:
+                                    pass
+                                search_box = page.locator('input[placeholder*="Search"]').first
+                                await search_box.fill(term)
+                                await search_box.press("Enter")
+                                try:
+                                    await page.wait_for_function(
+                                        r"""token => Array.from(document.querySelectorAll('a[href]'))
+                                        .some(a => (a.innerText || '').toLowerCase().includes(token)
+                                          && /\/(markets|business|policy|tech|web3|finance)\/\d{4}\//.test(a.href))""",
+                                        arg=term.split()[0], timeout=min(5_000, page_timeout_ms))
+                                except Exception:
+                                    pass
+                            raw = await page.locator("a[href]").evaluate_all(_BROWSER_LINKS_SCRIPT)
+                            items = _parse_public_browser_links(raw, descriptor)
+                            results[key] = {"items": items, "status": "ready" if items else "empty"}
+                        except Exception as exc:
+                            results[key] = {"items": [], "status": "error", "error": type(exc).__name__}
+                        finally:
+                            await page.close()
+
+                await asyncio.gather(*(fetch(descriptor) for descriptor in descriptors))
+        except Exception as exc:
+            for descriptor in descriptors:
+                results.setdefault(_browser_page_key(descriptor), {
+                    "items": [], "status": "error", "error": type(exc).__name__})
+        finally:
+            if browser is not None:
+                try:
+                    await asyncio.wait_for(browser.close(), timeout=2)
+                except Exception:
+                    pass
+            if driver is not None:
+                try:
+                    await asyncio.wait_for(driver.stop(), timeout=2)
+                except Exception:
+                    pass
+        return results
+
+    return asyncio.run(run())
+
+
+def _browser_page_key(descriptor: dict) -> str:
+    return descriptor["url"] + "|" + str(descriptor.get("search_term") or "")
+
+
+def _cached_browser_pages(descriptors: list[dict]) -> dict:
+    """Cache successful and empty/error pages across ticker jobs in this worker."""
+    now = time.time()
+    results = {}
+    if not _browser_collection_lock.acquire(timeout=0.5):
+        for descriptor in descriptors:
+            key = _browser_page_key(descriptor)
+            hit = _browser_page_cache.get(key)
+            results[key] = deepcopy(hit[0]) if hit and hit[1] > now else {
+                "items": [], "status": "error", "error": "browser_busy"}
+        return results
+    try:
+        missing = []
+        for descriptor in descriptors:
+            key = _browser_page_key(descriptor)
+            hit = _browser_page_cache.get(key)
+            if hit and hit[1] > now:
+                results[key] = {**deepcopy(hit[0]), "cached": True}
+            else:
+                missing.append(descriptor)
+        if missing:
+            budget = min(90.0, max(5.0, float(os.environ.get(
+                "POSITION_NEWS_BROWSER_BUDGET_SECONDS", "35"))))
+            try:
+                fetched = _fetch_browser_page_batch(missing, budget_seconds=budget)
+            except Exception as exc:
+                fetched = {_browser_page_key(page): {"items": [], "status": "error",
+                           "error": type(exc).__name__} for page in missing}
+            for descriptor in missing:
+                key = _browser_page_key(descriptor)
+                result = fetched.get(key) or {"items": [], "status": "error", "error": "timeout"}
+                ttl = (max(60, int(os.environ.get("POSITION_NEWS_BROWSER_CACHE_SECONDS", "900")))
+                       if result.get("status") == "ready" else 300)
+                _browser_page_cache[key] = (deepcopy(result), time.time() + ttl)
+                results[key] = result
+            while len(_browser_page_cache) > 512:
+                _browser_page_cache.pop(next(iter(_browser_page_cache)))
+        return results
+    finally:
+        _browser_collection_lock.release()
+
+
+def enrich_coin_news_for_collector(symbol: str, rss_payload: dict) -> dict:
+    """Expand an already-published RSS snapshot using public rendered pages.
+
+    This worker-only phase never translates or invokes AI. Source failures are
+    reported alongside the usable RSS items instead of erasing the first result.
+    """
+    payload = deepcopy(rss_payload)
+    if os.environ.get("POSITION_NEWS_BROWSER_ENRICHMENT_ENABLED", "true").lower() in {
+        "0", "false", "no", "off"
+    }:
+        payload["browser_enrichment"] = {"status": "disabled", "added_count": 0}
+        return payload
+    base = canonical_asset_symbol(symbol)
+    if not base:
+        return payload
+    name = _COIN_KO.get(base, base)
+    descriptors = _browser_news_pages(base, name)
+    if os.environ.get("COINDESK_PLAYWRIGHT_ENABLED", "true").lower() in {"0", "false", "no", "off"}:
+        descriptors = [page for page in descriptors if page["publisher"] != "CoinDesk"]
+    started = time.monotonic()
+    results = _cached_browser_pages(descriptors)
+    candidates = list(payload.get("items") or [])
+    original_keys = {(str(item.get("url") or ""), str(item.get("title") or "")) for item in candidates}
+    sources = list(payload.get("sources") or [])
+    successful = 0
+    now = datetime.now(timezone.utc)
+    max_age_days = min(365, max(1, int(os.environ.get(
+        "POSITION_NEWS_BROWSER_MAX_AGE_DAYS", "30"))))
+    cutoff = now - timedelta(days=max_age_days)
+    for descriptor in descriptors:
+        result = results[_browser_page_key(descriptor)]
+        feed_source = f"{descriptor['publisher'].lower()}_{descriptor['kind']}_playwright"
+        items = _relevant_items(result.get("items") or [], asset_symbol=base,
+                               coin_name=name, feed_source=feed_source)
+        current_items = []
+        for item in items:
+            try:
+                published = datetime.fromisoformat(str(item.get("published") or "").replace("Z", "+00:00"))
+                published = published.replace(tzinfo=published.tzinfo or timezone.utc)
+            except ValueError:
+                continue
+            if cutoff <= published <= now + timedelta(days=1):
+                current_items.append(item)
+        excluded_count = len(items) - len(current_items)
+        items = current_items
+        candidates.extend(items)
+        successful += result.get("status") in {"ready", "empty"}
+        sources.append({
+            "name": descriptor["name"], "source_type": feed_source,
+            "source_page": descriptor["url"], "status": result["status"],
+            "fetched_count": len(result.get("items") or []), "item_count": len(items),
+            "excluded_age_or_date_count": excluded_count,
+            "cached": bool(result.get("cached")),
+            **({"error": result["error"]} if result.get("error") else {}),
+        })
+    # Sort before capping so old archive matches cannot displace recent RSS.
+    merged, seen_titles, seen_urls = [], set(), set()
+    for item in _sort_news_items_newest_first(candidates):
+        title = re.sub(r"\s+", " ", str(item.get("title") or "")).strip().casefold()
+        url = str(item.get("url") or "").split("?")[0].rstrip("/")
+        if not title or title in seen_titles or (url and url in seen_urls):
+            continue
+        seen_titles.add(title)
+        if url:
+            seen_urls.add(url)
+        merged.append(item)
+        if len(merged) == _MAX_COIN_ITEMS:
+            break
+    payload["items"] = merged
+    payload["sources"] = sources
+    payload["browser_enrichment"] = {
+        "status": "ready" if successful == len(descriptors) else "partial" if successful else "error",
+        "added_count": sum((str(item.get("url") or ""), str(item.get("title") or ""))
+                           not in original_keys for item in merged),
+        "source_count": len(descriptors), "successful_sources": successful,
+        "elapsed_ms": round((time.monotonic() - started) * 1000),
+    }
+    return payload
 
 
 def fetch_coin_news_for_collector(symbol: str) -> dict:
@@ -2684,34 +2988,7 @@ def fetch_coin_news_for_collector(symbol: str) -> dict:
         except NewsFetchError:
             return [], False
 
-    # This loader fans out to eight section/topic queries itself. Run it before
-    # the other independent sources so nested use of the shared executor cannot
-    # serialize or starve the outer source fan-out.
-    try:
-        coindesk_discovery = _fetch_coindesk_discovery_news(strict=True)
-        coindesk_discovery_available = True
-    except NewsFetchError:
-        coindesk_discovery = {
-            "items_by_source": {},
-            "sources": [
-                {
-                    "name": source_name,
-                    "source_type": f"coindesk_{source_kind}_google_rss",
-                    "source_page": source_page,
-                    "status": "error",
-                    "fetched_count": 0,
-                }
-                for (
-                    source_name,
-                    source_kind,
-                    _source_scope,
-                    _query,
-                    source_page,
-                ) in _COINDESK_DISCOVERY_SOURCES
-            ],
-        }
-        coindesk_discovery_available = False
-
+    # Initial snapshots must not wait for a browser; enrichment is a separate phase.
     loaders = {
         "google": fetch_google,
         "coindesk": lambda: fetch_source(_fetch_coindesk_news),
@@ -2728,14 +3005,6 @@ def fetch_coin_news_for_collector(symbol: str) -> dict:
     coindesk_raw, coindesk_available = fetched_sources["coindesk"]
     openeden_items, openeden_available = fetched_sources.get("openeden", ([], False))
 
-    if (
-        not google_available
-        and not coindesk_available
-        and not coindesk_discovery_available
-        and not openeden_available
-    ):
-        raise NewsFetchError("모든 뉴스 RSS 소스 수집에 실패했습니다.")
-
     google_items = _relevant_items(
         google_raw,
         asset_symbol=base,
@@ -2748,46 +3017,10 @@ def fetch_coin_news_for_collector(symbol: str) -> dict:
         coin_name=name,
         feed_source="coindesk_rss",
     )
-    discovery_batches = []
-    discovery_sources = []
-    discovery_items_by_source = coindesk_discovery.get("items_by_source") or {}
-    for source in coindesk_discovery.get("sources") or []:
-        source_name = str(source.get("name") or "")
-        source_type = str(source.get("source_type") or "coindesk_google_rss")
-        raw_items = list(discovery_items_by_source.get(source_name) or [])
-        relevant_items = _relevant_items(
-            raw_items,
-            asset_symbol=base,
-            coin_name=name,
-            feed_source=source_type,
-        )
-        discovery_batches.append(relevant_items)
-        source_report = dict(source)
-        source_report["item_count"] = len(relevant_items)
-        source_report.setdefault("fetched_count", len(raw_items))
-        discovery_sources.append(source_report)
-    discovery_items = _merge_news_items(*discovery_batches)
-    archive_items = []
-    archive_available = False
-    archive_attempted = bool(_coindesk_asset_search_terms(base, name))
-    if archive_attempted:
-        try:
-            archive_items = _fetch_coindesk_asset_archive_news(
-                base,
-                name,
-                strict=True,
-            )
-            archive_available = True
-        except NewsFetchError:
-            archive_available = False
+    if not google_available and not coindesk_available and not openeden_available:
+        raise NewsFetchError("모든 뉴스 RSS 소스 수집에 실패했습니다.")
     items = _sort_news_items_newest_first(
-        _merge_news_items(
-            openeden_items,
-            coindesk_items,
-            discovery_items,
-            archive_items,
-            google_items,
-        )
+        _merge_news_items(openeden_items, coindesk_items, google_items)
     )
     env = _envelope(
         items,
@@ -2806,14 +3039,6 @@ def fetch_coin_news_for_collector(symbol: str) -> dict:
             "item_count": len(openeden_items),
             "fetched_count": len(openeden_items),
         })
-    if archive_attempted:
-        sources.append({
-            "name": "coindesk_asset_archive",
-            "status": "ready" if archive_available else "error",
-            "item_count": len(archive_items),
-            "fetched_count": len(archive_items),
-        })
-    sources.extend(discovery_sources)
     sources.extend([
         {
             "name": "coindesk_rss",
@@ -2852,21 +3077,20 @@ def get_coin_news(symbol: str) -> dict:
         stored = None
     if stored is not None and isinstance(stored.get("news_payload"), dict):
         env = dict(stored["news_payload"])
-        env["items"] = _localize_coin_news_items(list(env.get("items") or []))
         env["data_source"] = "prefect_db"
         env["snapshot_id"] = str(stored.get("snapshot_id") or "")
         env["collection"] = dict(stored.get("collection") or {})
         return env
     ckey = f"coin:{base}"
-    hit = _coin_cache.get(ckey)
-    if hit and hit[1] > time.time():
-        env = dict(hit[0])
+    def load():
+        hit = _coin_cache.get(ckey)
+        if hit and hit[1] > time.time():
+            return deepcopy(hit[0])
+        env = _coin_news_envelope(base, strict=False, relevant_only=True)
         env["items"] = _localize_coin_news_items(list(env.get("items") or []))
-        _coin_cache[ckey] = (env, hit[1])
-        return env
-    env = _coin_news_envelope(base, strict=False, relevant_only=True)
-    env["items"] = _localize_coin_news_items(list(env.get("items") or []))
-    env["data_source"] = "rss_cache"
-    if env.get("items"):
-        _coin_cache[ckey] = (env, time.time() + _COIN_CACHE_SECONDS)
-    return env
+        env["data_source"] = "rss_cache"
+        _coin_cache[ckey] = (env, time.time() + (_COIN_CACHE_SECONDS if env.get("items") else 60))
+        while len(_coin_cache) > 512:
+            _coin_cache.pop(next(iter(_coin_cache)))
+        return deepcopy(env)
+    return _coin_refreshes.run(ckey, load)[0]

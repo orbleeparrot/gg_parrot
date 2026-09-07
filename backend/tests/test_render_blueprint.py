@@ -23,7 +23,7 @@ def test_render_blueprint_includes_position_news_background_worker():
     assert '- key: AI_EXPLAIN_MAX_CALLS_PER_DAY\n        value: "20"' in web
     assert '- key: AI_ACQUIRE_TIMEOUT_SECONDS\n        value: "1"' in web
     assert (
-        '- key: NEWS_MARKET_SUMMARY_MAX_CALLS_PER_DAY\n        value: "3"'
+        '- key: NEWS_MARKET_SUMMARY_MAX_CALLS_PER_DAY\n        value: "8"'
         in web
     )
     assert (
@@ -41,9 +41,9 @@ def test_render_blueprint_includes_position_news_background_worker():
     assert 'value: "claude-haiku-4-5"' in worker
     assert 'value: "2"' in worker
     assert 'value: "10"' in worker
-    assert 'value: "256"' in worker
+    assert 'value: "512"' in worker
     assert (
-        '- key: POSITION_NEWS_COLLECTION_SECONDS\n        value: "60"'
+        '- key: POSITION_NEWS_COLLECTION_SECONDS\n        value: "300"'
         in worker
     )
 
@@ -82,7 +82,7 @@ def test_render_blueprint_includes_position_news_background_worker():
     assert "const COIN_NEWS_CONCURRENCY = 2;" in news_page
 
 
-def test_prefect_serve_pauses_schedule_when_worker_stops():
+def test_prefect_rolling_deploy_preserves_the_new_workers_schedule():
     workflow = (
         Path(__file__).resolve().parents[1]
         / "app"
@@ -90,6 +90,6 @@ def test_prefect_serve_pauses_schedule_when_worker_stops():
         / "position_news.py"
     ).read_text(encoding="utf-8")
 
-    assert "pause_on_shutdown=True" in workflow
+    assert "pause_on_shutdown=False" in workflow
     assert "paused=False" in workflow
-    assert "pause_on_shutdown=False" not in workflow
+    assert "pause_on_shutdown=True" not in workflow

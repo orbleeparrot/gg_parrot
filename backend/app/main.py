@@ -62,6 +62,7 @@ from . import challenge as challenge_mod
 from . import runner as runner_mod
 from . import user_macros as user_macros_mod
 from .agent_features.position_news.router import router as position_news_router
+from .agent_features.position_news import runtime as position_news_runtime
 from .observability import observe_application, router as observability_router
 from fastapi import Depends
 from .db import User
@@ -82,9 +83,11 @@ from .realtrade import build_bundle
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    position_news_runtime.start()
     try:
         yield
     finally:
+        await position_news_runtime.stop()
         try:
             await paper_mod.shutdown_running_sessions()
         finally:
@@ -255,6 +258,7 @@ class RunnerStartRequest(BaseModel):
 
 class RunnerHeartbeatRequest(BaseModel):
     session_id: int
+    position_uncertain: bool = False
     in_position: bool = False
     last_price: float = 0.0
     entry_price: float = 0.0
@@ -268,6 +272,7 @@ class RunnerStoppedRequest(BaseModel):
     session_id: int
     status: str = "stopped"  # stopped | error
     note: str = ""
+    snapshot: Optional[dict] = None
 
 
 class RunnerStopRequest(BaseModel):
@@ -311,7 +316,8 @@ class ChatPostRequest(BaseModel):
 # --- endpoints ----------------------------------------------------------
 @app.get("/api/health")
 def health() -> dict:
-    return {"ok": True, "disclaimer": "past simulation only; no live trading"}
+    return {"ok": True, "version": os.environ.get("RENDER_GIT_COMMIT", "local"),
+            "disclaimer": "past simulation only; no live trading"}
 
 
 # --- auth / account ----------------------------------------------------
@@ -1124,7 +1130,7 @@ def runner_launch_ticket_claim(
 ) -> dict:
     response.headers["Cache-Control"] = "no-store"
     current = req.runner_version.strip()
-    required = _RUNNER_MIN_VERSION or "5"
+    required = _RUNNER_MIN_VERSION or "6"
     try:
         supported = (
             current.isascii()
@@ -1159,7 +1165,7 @@ def runner_heartbeat(req: RunnerHeartbeatRequest, user: User = Depends(_runner_u
 
 @app.post("/api/runner/stopped")
 def runner_stopped(req: RunnerStoppedRequest, user: User = Depends(_runner_user)) -> dict:
-    return runner_mod.mark_stopped(user, req.session_id, req.status, req.note)
+    return runner_mod.mark_stopped(user, req.session_id, req.status, req.note, snapshot=req.snapshot)
 
 
 # 마이페이지용 ---------------------------------------------------------
@@ -1243,7 +1249,7 @@ async def runner_sessions_stream(websocket: WebSocket) -> None:
     except HTTPException:
         await websocket.close(code=4401, reason="실시간 세션 연결 인증이 유효하지 않아요.")
         return
-    if auth_mod.get_user_by_id(user_id) is None:
+    if await asyncio.to_thread(auth_mod.get_user_by_id, user_id) is None:
         await websocket.close(code=4401, reason="계정을 찾을 수 없어요.")
         return
 
@@ -1305,27 +1311,27 @@ _RUNNER_EXE_PATH = os.environ.get("RUNNER_EXE_PATH") or os.path.join(
 )
 
 
-# runner-v5 keeps the strict launch-ticket contract and adds single-instance
-# activation, so a web click reuses and foregrounds an existing runner window.
-_RUNNER_V5_URL = "https://github.com/orbleeparrot/gg_parrot/releases/download/runner-v5/ggparrot-runner.exe"
-_RUNNER_DOWNLOAD_URL = os.environ.get("RUNNER_DOWNLOAD_URL", "").strip() or _RUNNER_V5_URL
-_RUNNER_SUPPORT_DEFAULT = "true" if "/runner-v5/" in _RUNNER_DOWNLOAD_URL else "false"
+# v6 adds confirmed fills and authoritative final position reporting.
+_RUNNER_V6_URL = "https://github.com/orbleeparrot/gg_parrot/releases/download/runner-v6/ggparrot-runner.exe"
+_RUNNER_DOWNLOAD_URL = os.environ.get("RUNNER_DOWNLOAD_URL", "").strip() or _RUNNER_V6_URL
+# Upgrade stale official release configuration after the immutable v6 asset is published.
+if _RUNNER_DOWNLOAD_URL in {
+    _RUNNER_V6_URL.replace("runner-v6", f"runner-v{version}") for version in range(1, 6)
+}:
+    _RUNNER_DOWNLOAD_URL = _RUNNER_V6_URL
+_RUNNER_SUPPORT_DEFAULT = "true" if _RUNNER_DOWNLOAD_URL == _RUNNER_V6_URL else "false"
 _RUNNER_SUPPORTS_LAUNCH = os.environ.get(
     "RUNNER_SUPPORTS_LAUNCH", _RUNNER_SUPPORT_DEFAULT
-).strip().lower() in {
-    "1", "true", "yes",
-}
+).strip().lower() in {"1", "true", "yes"}
 _RUNNER_LAUNCH_SCHEME = "ggparrot" if _RUNNER_SUPPORTS_LAUNCH else ""
 _RUNNER_MIN_VERSION = (
-    os.environ.get("RUNNER_MIN_VERSION", "5").strip() or "5"
+    os.environ.get("RUNNER_MIN_VERSION", "6").strip() or "6"
 ) if _RUNNER_SUPPORTS_LAUNCH else ""
 _RUNNER_EXE_VERSION = os.environ.get("RUNNER_EXE_VERSION", "").strip()
-if "/runner-v5/" in _RUNNER_DOWNLOAD_URL:
-    # The immutable release tag is the source of truth even if one deployment
-    # variable was updated later than the others.
-    _RUNNER_EXE_VERSION = "5"
+if _RUNNER_DOWNLOAD_URL == _RUNNER_V6_URL:
+    _RUNNER_EXE_VERSION = "6"
     if _RUNNER_SUPPORTS_LAUNCH:
-        _RUNNER_MIN_VERSION = "5"
+        _RUNNER_MIN_VERSION = "6"
 
 
 def _runner_launch_capabilities() -> dict:

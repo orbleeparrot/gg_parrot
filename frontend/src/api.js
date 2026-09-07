@@ -159,6 +159,8 @@ export const api = {
   // '경주마 동향' — 서버가 Prefect DB 우선, 미수집 티커만 RSS fallback
   newsCoin: (symbol) => req(`/api/news/coin/${encodeURIComponent(symbol)}`),
   // 내 에이전트 기능 01 — 서버가 세션 소유권과 등록 매크로 방향을 확인한다.
+  agentWhaleActivity: (sessionId, options = {}) =>
+    req(`/api/me/agents/sessions/${sessionId}/whale-activity`, options),
   agentPositionNews: (sessionId, options = {}) =>
     req(`/api/me/agents/sessions/${encodeURIComponent(sessionId)}/position-news`, options),
   // 저장 매크로도 실행 세션 없이 같은 공용 snapshot을 조회한다.

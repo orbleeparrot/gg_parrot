@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../../api.js";
 import useAdaptivePolling from "../../../hooks/useAdaptivePolling.js";
 
-const POLL_MS = 5 * 60 * 1000;
+const POLL_MS = 3000;
 const POSITION_NEWS_BUSY_RETRY_DELAYS_MS = [400, 1_200, 2_400];
 const EMPTY_STATE = { status: "idle", sessionId: null, data: null, error: "" };
 
@@ -44,7 +44,7 @@ async function requestPositionNewsWithBusyRetry(sessionId, signal) {
   }
 }
 
-export function usePositionNewsFeature(sessionId) {
+export function usePositionNewsFeature(sessionId, running = true) {
   const [state, setState] = useState(EMPTY_STATE);
   const requestRef = useRef(0);
 
@@ -63,6 +63,7 @@ export function usePositionNewsFeature(sessionId) {
       if (requestRef.current === requestId) {
         setState({ status: "ready", sessionId: targetSessionId, data, error: "" });
       }
+      return { nextPollMs: !running ? null : data?.analysis_status === "pending" ? 3000 : 30000 };
     } catch (reason) {
       if (reason?.name === "AbortError") return;
       if (requestRef.current === requestId) {
@@ -75,7 +76,7 @@ export function usePositionNewsFeature(sessionId) {
       }
       throw reason;
     }
-  }, []);
+  }, [running]);
 
   const poll = useCallback(
     (signal) => load(sessionId, signal),
@@ -83,9 +84,9 @@ export function usePositionNewsFeature(sessionId) {
   );
   useAdaptivePolling(poll, {
     intervalMs: POLL_MS,
-    maxIntervalMs: 30 * 60 * 1000,
+    maxIntervalMs: 30000,
     enabled: !!sessionId,
-    pollKey: sessionId,
+    pollKey: `${sessionId}:${running}`,
   });
 
   useEffect(() => {

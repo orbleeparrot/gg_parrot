@@ -46,8 +46,10 @@ export function createAdaptivePoller({
     running = true;
     controller = new AbortController();
     let aborted = false;
+    let nextPollMs;
     try {
-      await task({ signal: controller.signal });
+      const result = await task({ signal: controller.signal });
+      nextPollMs = result?.nextPollMs;
       failures = 0;
     } catch (reason) {
       aborted = isAbortError(reason) || controller.signal.aborted;
@@ -58,7 +60,9 @@ export function createAdaptivePoller({
     } finally {
       running = false;
       controller = null;
-      if (active && visible) schedule(aborted ? 0 : retryDelay());
+      if (active && visible && nextPollMs !== null) {
+        schedule(aborted ? 0 : Number.isFinite(nextPollMs) ? nextPollMs : retryDelay());
+      }
     }
   };
 

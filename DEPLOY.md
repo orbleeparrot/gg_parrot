@@ -1,7 +1,7 @@
 # 배포 가이드 (Vercel 프론트 + Render 백엔드)
 
 프론트(React/Vite)는 **Vercel**, 백엔드(FastAPI)는 **Render**에 올립니다.
-앱 기능 코드는 수정하지 않았고, 연결용 설정 파일 2개만 추가돼 있습니다.
+매크로 실행 상태는 웹 API가, 뉴스 보강은 Prefect와 Playwright 워커가 처리합니다.
 
 ```
 브라우저 ──▶ gg-parrot.vercel.app (프론트, Vercel)
@@ -12,7 +12,7 @@
 ## 1) 백엔드 → Render
 
 1. https://render.com 로그인 → **New +** → **Blueprint**
-2. GitHub 레포 `RHOHEEJAE/gg_parrot` 연결 → `render.yaml` 자동 인식 → **Apply**
+2. GitHub 레포 `orbleeparrot/gg_parrot` 연결 → `render.yaml` 자동 인식 → **Apply**
    - (수동으로 하려면: **New Web Service** →
      Root Directory `backend`,
      Build `pip install -r requirements.txt`,
@@ -49,7 +49,7 @@
 
 ## 포지션 뉴스 중앙 워커
 
-포지션 뉴스 수집은 FastAPI 요청과 분리된 Prefect worker가 담당합니다. 루트
+웹은 새 티커의 RSS를 즉시 저장하고, Prefect worker는 Playwright 공개 페이지 수집과 AI 보강을 담당합니다. 루트
 `render.yaml`에 `gg-parrot-position-news` Background Worker가 포함되어 있습니다.
 변경을 push한 뒤 Render Blueprint에서 **Sync Blueprint**를 실행하고, worker에
 웹과 같은 `DATABASE_URL` 및 `PREFECT_API_URL`·`PREFECT_API_KEY`를 입력합니다.
@@ -60,4 +60,4 @@ Background Worker에는 무료 플랜과 HTTP health check가 없습니다. 구�
 Prefect Cloud 연결, 상세 검증 절차는
 [backend/PREFECT_POSITION_NEWS.md](backend/PREFECT_POSITION_NEWS.md)를 참고하세요.
 
-에이전트 API는 중앙 DB만 읽으므로, worker와 웹이 같은 Postgres를 사용하고 첫 뉴스 스냅샷이 생성되는지 확인해야 합니다.
+에이전트 API는 중앙 DB만 읽습니다. 웹과 worker가 같은 Postgres를 사용하는지, Prefect의 `shared-ticker-news`가 일시정지되지 않았는지, 배포 버전과 RSS → 초기 저장 → 브라우저 → 최종 저장 태스크를 확인합니다. `pause_on_shutdown=False`로 롤링 배포 시 기존 worker가 새 스케줄을 정지하는 문제를 방지합니다.

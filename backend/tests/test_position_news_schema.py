@@ -28,6 +28,8 @@ _EXPECTED_BIGINT_COLUMNS = {
         "latest_observed_ms",
         "last_attempt_ms",
         "last_success_ms",
+        "collection_claimed_ms",
+        "next_collection_ms",
     },
 }
 

@@ -327,10 +327,17 @@ def collect_position_news_flow(browser_budget_seconds: float | None = None) -> d
                     repository.finish_collection(asset_symbol, leases.pop(asset_symbol))
 
         for asset_symbol, news_payload, initial in pending:
-            if time.monotonic() - started >= max_cycle_seconds:
+            elapsed = time.monotonic() - started
+            if elapsed >= max_cycle_seconds:
                 results.append({**(initial or {"asset_symbol": asset_symbol, "status": "skipped",
                                                "used_ai_budget": False}),
                                 "reason": "cycle_deadline", "browser_status": "deferred"})
+                repository.finish_collection(asset_symbol, leases.pop(asset_symbol), next_delay_seconds=60)
+                continue
+            if expand and max_cycle_seconds - elapsed < config["browser_budget_seconds"] + 15:
+                results.append({**(initial or {"asset_symbol": asset_symbol, "status": "skipped",
+                                               "used_ai_budget": False}),
+                                "reason": "browser_budget_deferred", "browser_status": "deferred"})
                 repository.finish_collection(asset_symbol, leases.pop(asset_symbol), next_delay_seconds=60)
                 continue
             if not repository.renew_collection(asset_symbol, leases[asset_symbol]):

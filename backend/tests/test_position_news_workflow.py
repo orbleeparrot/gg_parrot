@@ -555,3 +555,43 @@ def test_main_flow_passes_budget_through_task_and_collector_after_initial_rss(mo
     summary = workflow.collect_position_news_flow.fn(browser_budget_seconds=requested)
     assert summary["configuration"]["browser_budget_seconds"] == expected
     assert events == ["rss", "published", "browser", "processed"]
+
+
+@pytest.mark.parametrize("elapsed,deferred", [(230, True), (135.001, True), (135, False)])
+def test_flow_reserves_full_browser_budget_and_processing_time_after_initial_rss(monkeypatch, elapsed, deferred):
+    monkeypatch.setenv("POSITION_NEWS_MAX_CYCLE_SECONDS", "240")
+    monkeypatch.setenv("POSITION_NEWS_BROWSER_ENRICHMENT_ENABLED", "true")
+    monkeypatch.setattr(workflow, "_schedule_lag_seconds", lambda: 0)
+    monkeypatch.setattr(workflow, "discover_tickers_task", lambda: ["BTC"])
+    clock, events, releases = [0], [], []
+    monkeypatch.setattr(workflow.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(workflow, "fetch_ticker_news_task", Submitter(lambda symbol: _payload(symbol)))
+    initial = {"asset_symbol": "BTC", "status": "stored", "used_ai_budget": False, "snapshot_key": "published-rss"}
+    def publish(*_):
+        events.append("rss_published")
+        clock[0] = elapsed
+        return initial
+    monkeypatch.setattr(workflow, "publish_initial_news_task", Submitter(publish))
+    def browser(symbol, payload, budget):
+        assert not deferred and budget == 90
+        events.append("browser")
+        return payload
+    def process(symbol, payload, allow_ai):
+        assert not deferred
+        events.append("processed")
+        return initial
+    monkeypatch.setattr(workflow, "enrich_ticker_news_task", Submitter(browser))
+    monkeypatch.setattr(workflow, "process_ticker_news_task", Submitter(process))
+    monkeypatch.setattr(workflow.repository, "finish_collection",
+                        lambda symbol, token, **kwargs: releases.append((symbol, token, kwargs)))
+    monkeypatch.setattr(workflow, "prune_snapshots_task", Submitter(lambda _: 0))
+    result = workflow.collect_position_news_flow.fn(browser_budget_seconds=90)
+    assert result["stored"] == 1 and result["items"][0]["snapshot_key"] == "published-rss"
+    if deferred:
+        assert events == ["rss_published"]
+        assert result["items"][0]["reason"] == "browser_budget_deferred"
+        assert result["items"][0]["browser_status"] == "deferred"
+        assert releases == [("BTC", "token", {"next_delay_seconds": 60})]
+    else:
+        assert events == ["rss_published", "browser", "processed"]
+        assert releases == [("BTC", "token", {})]

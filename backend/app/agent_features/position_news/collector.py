@@ -31,10 +31,14 @@ def _localize_collected_payload(payload: dict, repo, now_ms=None) -> dict:
     claimed = []
     translations = {}
     try:
-        translations = repo.get_title_translations(titles)
+        cached = repo.get_title_translations(titles)
+        rejected = [title for title, value in cached.items()
+                    if not news_mod._valid_title_translation(title, value)]
+        translations = {title: news_mod._normalize_title_translation(title, value)
+                        for title, value in cached.items() if title not in rejected}
         missing = [title for title in titles if title not in translations]
         if missing and os.environ.get("ANTHROPIC_API_KEY"):
-            claim = repo.claim_title_translations(missing, now_ms=now_ms)
+            claim = repo.claim_title_translations(missing, rejected_titles=rejected, now_ms=now_ms)
             translations.update(claim.get("cached") or {})
             claimed = claim.get("claimed") or []
             token = claim.get("claim_token") or ""
@@ -43,12 +47,14 @@ def _localize_collected_payload(payload: dict, repo, now_ms=None) -> dict:
                 namespace="position_news_translation", now_ms=now_ms,
             ):
                 translated = news_mod._request_korean_title_translations(claimed)
-                translated = {title: value for title, value in translated.items()
+                translated = {title: news_mod._normalize_title_translation(title, value)
+                              for title, value in translated.items()
                               if title in claimed and news_mod._valid_title_translation(title, value)}
                 repo.store_title_translations(translated, claim_token=token, now_ms=now_ms)
                 translations.update(translated)
-    except Exception:
-        logging.getLogger(__name__).warning("Ticker title translation unavailable; retaining original titles")
+    except Exception as exc:
+        logging.getLogger(__name__).warning("Ticker title translation unavailable (%s); retaining original titles",
+                                           type(exc).__name__)
     finally:
         if token:
             repo.release_title_translation_claims(claimed, claim_token=token)

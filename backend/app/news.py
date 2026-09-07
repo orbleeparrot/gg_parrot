@@ -40,6 +40,10 @@ from .ai_runtime import AiBusyError, ai_cache_key, get_ai_runtime, get_anthropic
 _GOOGLE_NEWS = "https://news.google.com/rss/search"
 _COINDESK_RSS = "https://www.coindesk.com/arc/outboundfeeds/rss/"
 _OPENEDEN_RSS = "https://openeden.com/news/feed/"
+_EXTRA_RSS_SOURCES = {
+    "decrypt_rss": ("Decrypt", "https://decrypt.co/feed"),
+    "cryptoslate_rss": ("CryptoSlate", "https://cryptoslate.com/feed/"),
+}
 _HTTP_TIMEOUT = 10.0
 _MAX_ITEMS = 8
 _MAX_COIN_ITEMS = 10
@@ -51,7 +55,9 @@ _COIN_CACHE_SECONDS = max(60, int(os.environ.get("COIN_NEWS_CACHE_SECONDS", "300
 _COINDESK_DISCOVERY_MAX_STALE_SECONDS = 6 * 60 * 60
 _OPENEDEN_CACHE_SECONDS = 60 * 60
 _OPENEDEN_MAX_AGE_DAYS = 30
-_TITLE_TRANSLATION_PROMPT_VERSION = "coin-news-title-ko-v1"
+_TITLE_TRANSLATION_PROMPT_VERSION = "coin-news-title-ko-v2"
+_TITLE_TRANSLATION_BATCH_SIZE = 10
+_TITLE_TRANSLATION_RETRY_SECONDS = 300
 _TITLE_TRANSLATION_MAX_TOKENS = max(
     256,
     min(
@@ -436,6 +442,7 @@ _coindesk_asset_archive_cache: dict[str, tuple[list[dict], float]] = {}
 _openeden_cache: tuple[list[dict], float] | None = None
 _openeden_error_cache: tuple[str, float] | None = None
 _title_translation_cache: dict[str, str] = {}
+_title_translation_retry_at: dict[str, float] = {}
 _title_translation_lock = threading.Lock()
 _title_translation_work_lock = threading.Lock()
 _market_summary_budget_lock = threading.Lock()
@@ -445,6 +452,7 @@ _rss_refreshes = SingleFlightGroup()
 _coin_refreshes = SingleFlightGroup()
 _browser_page_cache: dict[str, tuple[dict, float]] = {}
 _browser_collection_lock = threading.Lock()
+_publisher_rss_cache: dict[str, tuple[list[dict], float]] = {}
 
 
 class NewsFetchError(RuntimeError):
@@ -820,10 +828,19 @@ def _is_news_article_candidate(item: dict) -> bool:
     ):
         return False
     title = str(item.get("title") or "")
+    # Search engines can match a project name used by a concert venue. Such
+    # listings are neither token news nor worth a paid translation request.
+    if re.search(r"\bat\s+.{0,60}\b(?:theat(?:er|re)|concert hall|music hall)\b|"
+                 r"\bobituary\s*\(\d{4}\)|\bbuilding\s+.{0,40}\s+to bring their family home\b", title, re.IGNORECASE) and not re.search(
+        r"\b(?:crypto|token|blockchain|nft|bitcoin|ethereum)\b|암호화폐|토큰", title, re.IGNORECASE
+    ):
+        return False
     return not bool(re.search(
         r"\bprice\s*,?\s*charts?\s*,?\s*(?:and\s*)?market\s*cap\b|"
         r"\bprice\s+today\b.{0,50}\b(?:live|chart|market\s*cap)\b|"
         r"\blive\s+price\s+and\s+chart\b|"
+        r"\blive\s+charts?\s*,?\s*(?:and\s+)?market\s*cap\b|"
+        r"\bperpetual\s+chart\s*\|\s*binance futures\b|"
         r"가격.{0,12}차트.{0,16}시가총액|"
         r"\b[A-Z0-9]{2,10}\s+to\s+[A-Z0-9]{2,10}\s+(?:converter|conversion)\b",
         title, re.IGNORECASE,
@@ -1796,6 +1813,33 @@ def _title_translation_id(title: str) -> str:
     return hashlib.sha256(title.encode("utf-8")).hexdigest()[:16]
 
 
+# Translation vocabulary is independent of the list of actively tracked assets.
+# Without these names, title-case headlines such as "Worldcoin Price Prediction"
+# were rejected even after the rest of the headline had been translated.
+_TITLE_KOREAN_PROJECT_NAMES = {
+    **{alias: _COIN_KO[symbol] for symbol, aliases in _COIN_ALIASES.items()
+       if symbol in _COIN_KO for alias in aliases
+       if re.fullmatch(r"[A-Za-z][A-Za-z .-]*", alias)},
+    "jupiter": "주피터", "worldcoin": "월드코인", "ethena": "에테나",
+    "bittensor": "비텐서", "celestia": "셀레스티아", "raydium": "레이디움",
+    "orca": "오르카", "fetch.ai": "페치에이아이", "layerzero": "레이어제로",
+    "aster": "아스터", "zama": "자마", "boundless": "바운들리스",
+    "artificial superintelligence alliance": "인공초지능 얼라이언스",
+}
+
+
+def _normalize_title_translation(original: str, translated: object) -> str:
+    value = _normalize_news_title(translated)
+    for name, korean in sorted(_TITLE_KOREAN_PROJECT_NAMES.items(), key=lambda pair: -len(pair[0])):
+        # Only replace a project name that was present in the source. Uppercase
+        # tickers, including ORCA and T, must retain their exact spelling.
+        pattern = rf"(?<![A-Za-z0-9]){re.escape(name)}(?![A-Za-z0-9])"
+        if re.search(pattern, original, re.IGNORECASE):
+            value = re.sub(pattern, lambda match: match[0] if match[0].isupper() else korean,
+                           value, flags=re.IGNORECASE)
+    return value
+
+
 _TITLE_TRANSLATION_UPPER_TERMS = frozenset(_COIN_ALIASES) | {
     "AI",
     "AML",
@@ -1923,6 +1967,8 @@ _IMPLIED_NUMBER_WORDS = {
     "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
     "july": 7, "august": 8, "september": 9, "october": 10, "november": 11,
     "december": 12, "q1": 1, "q2": 2, "q3": 3, "q4": 4,
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "jun": 6, "jul": 7,
+    "aug": 8, "sep": 9, "sept": 9, "oct": 10, "nov": 11, "dec": 12,
 }
 _SCALE_WORDS = {100, 1_000, 10**6, 10**9, 10**12}
 
@@ -1996,7 +2042,8 @@ def _translation_fact_tokens(
     ))
     lowered = value.casefold()
     currencies = set()
-    if "$" in value or re.search(r"\b(?:dollars?|usd)\b", lowered) or re.search(
+    # A cashtag ($WLD) identifies a token; it is not a USD-denominated amount.
+    if re.search(r"\$(?![A-Za-z])", value) or re.search(r"\b(?:dollars?|usd)\b", lowered) or re.search(
         r"(?<![가-힣])달러(?![가-힣])",
         value,
     ):
@@ -2060,6 +2107,7 @@ def _translation_has_untranslated_prose(original: str, value: str) -> bool:
             identifier.startswith("@")
             or any(char.isdigit() for char in identifier)
             or any(char in identifier for char in "._")
+            or re.fullmatch(r"[A-Z]+(?:-[A-Z]+)+", identifier)
         ):
             remaining = remaining.replace(identifier, "")
 
@@ -2075,7 +2123,7 @@ def _translation_has_untranslated_prose(original: str, value: str) -> bool:
         for aliases in _COIN_ALIASES.values()
         for alias in aliases
         if re.fullmatch(r"[A-Za-z]+", alias)
-    }
+    } | set(_TITLE_KOREAN_PROJECT_NAMES)
     preservable_names = {
         word
         for word in original_words
@@ -2087,7 +2135,15 @@ def _translation_has_untranslated_prose(original: str, value: str) -> bool:
         )
     }
     protected_upper = set(_translation_protected_upper_tokens(original))
+    for token in protected_upper:
+        # Keep alphanumeric identifiers whole (USD1), including when the source
+        # attached an English suffix such as "USD1-settled".
+        remaining = re.sub(rf"(?<![A-Za-z0-9]){re.escape(token)}(?![A-Za-z0-9])", "", remaining)
     for word in re.findall(r"[A-Za-z]+", remaining):
+        if re.search(r"[가-힣]", original) and (word.casefold() == "vs" or len(word) == 1):
+            # Korean publications use these as a comparison marker or a brand
+            # prefix; retrying an already-Korean headline wastes the daily cap.
+            continue
         if re.search(r"[a-z]", word):
             if word not in preservable_names:
                 return True
@@ -2163,7 +2219,7 @@ def _parse_korean_title_translations(text: str, titles: list[str]) -> dict[str, 
         original = titles_by_id.get(str(raw.get("id") or "").strip())
         if original is None:
             continue
-        title_ko = re.sub(r"\s+", " ", str(raw.get("title_ko") or "")).strip()
+        title_ko = _normalize_title_translation(original, raw.get("title_ko"))
         if not _valid_title_translation(original, title_ko):
             continue
         translated[original] = title_ko
@@ -2306,7 +2362,7 @@ def _renew_durable_title_translation_claims(
 
 def _remember_title_translations(translations: dict[str, str]) -> None:
     valid = {
-        original: _normalize_news_title(translated)
+        original: _normalize_title_translation(original, translated)
         for original, translated in translations.items()
         if _valid_title_translation(original, translated)
     }
@@ -2314,6 +2370,8 @@ def _remember_title_translations(translations: dict[str, str]) -> None:
         return
     with _title_translation_lock:
         _title_translation_cache.update(valid)
+        for title in valid:
+            _title_translation_retry_at.pop(title, None)
         while len(_title_translation_cache) > _TITLE_TRANSLATION_CACHE_MAX_ENTRIES:
             _title_translation_cache.pop(next(iter(_title_translation_cache)))
 
@@ -2328,6 +2386,28 @@ def _missing_title_translations(titles: list[str]) -> list[str]:
 
 
 def _translate_claimed_titles(titles: list[str], *, claim_token: str = "") -> None:
+    # Public endpoints normally serve ten items. Bound larger callers as well:
+    # an oversized JSON response used to be cut off by the 2048-token limit,
+    # discarding every translation in the paid batch.
+    for offset in range(0, len(titles), _TITLE_TRANSLATION_BATCH_SIZE):
+        try:
+            _translate_title_batch(titles[offset:offset + _TITLE_TRANSLATION_BATCH_SIZE],
+                                   claim_token=claim_token)
+        except NewsTranslationError:
+            _release_durable_title_translation_claims(titles[offset + _TITLE_TRANSLATION_BATCH_SIZE:],
+                                                     claim_token=claim_token)
+            raise
+
+
+def _defer_title_translations(titles: list[str]) -> None:
+    with _title_translation_lock:
+        _title_translation_retry_at.update({title: time.time() + _TITLE_TRANSLATION_RETRY_SECONDS
+                                            for title in titles})
+        while len(_title_translation_retry_at) > _TITLE_TRANSLATION_CACHE_MAX_ENTRIES:
+            _title_translation_retry_at.pop(next(iter(_title_translation_retry_at)))
+
+
+def _translate_title_batch(titles: list[str], *, claim_token: str = "") -> None:
     if not titles:
         return
     try:
@@ -2358,6 +2438,7 @@ def _translate_claimed_titles(titles: list[str], *, claim_token: str = "") -> No
             "뉴스 번역 요청이 몰려 있습니다. 잠시 후 자동으로 다시 시도합니다."
         ) from exc
     except Exception as exc:
+        _defer_title_translations(titles)
         _release_durable_title_translation_claims(
             titles,
             claim_token=claim_token,
@@ -2368,9 +2449,7 @@ def _translate_claimed_titles(titles: list[str], *, claim_token: str = "") -> No
 
     missing = _missing_title_translations(titles)
     if missing:
-        # 해결 못 한 제목의 claim 만 풀어 다음 요청이 바로 다시 잡게 한다.
-        # 필수(순수 외국어) 제목이면 호출자가 503 으로 올리고, 한국어가 섞인 제목이면
-        # 원문을 그대로 둔다 — "번역 실패" 한 건이 종목 뉴스 전체를 가리면 안 된다.
+        _defer_title_translations(missing)
         _release_durable_title_translation_claims(
             missing,
             claim_token=claim_token,
@@ -2392,6 +2471,8 @@ def _ensure_title_translations(titles: list[str]) -> None:
     ]
     _remember_title_translations(valid_durable)
     missing = _missing_title_translations(titles)
+    with _title_translation_lock:
+        missing = [title for title in missing if _title_translation_retry_at.get(title, 0) <= time.time()]
     if not missing:
         return
 
@@ -2399,7 +2480,7 @@ def _ensure_title_translations(titles: list[str]) -> None:
         # Local/SQLite mode has no cross-process coordinator. Serialize cache
         # misses so overlapping request batches still translate each title once.
         with _title_translation_work_lock:
-            pending = _missing_title_translations(titles)
+            pending = _missing_title_translations(missing)
             _translate_claimed_titles(pending)
         return
 
@@ -2460,6 +2541,7 @@ def _localize_coin_news_items(items: list[dict]) -> list[dict]:
             # Cached envelopes already contain localized items. Trust them only
             # after the same validation used for new AI output, then keep the
             # operation idempotent even when a proper name remains in English.
+            item["title"] = _normalize_title_translation(original, current)
             continue
         source = (
             original
@@ -2484,18 +2566,12 @@ def _localize_coin_news_items(items: list[dict]) -> list[dict]:
     required = [title for title in titles if not re.search(r"[가-힣]", title)]
     optional = [title for title in titles if title not in required]
 
-    if required:
-        try:
-            _ensure_title_translations(required)
-        except NewsTranslationError as exc:
-            # 번역 실패로 코인 뉴스 전체를 503 으로 막지 않는다. 두 번의 배포에서 검증기
-            # 구멍 하나가 종목 전체 장애로 번졌다 — 실패한 제목만 원문으로 남기고 기록한다.
-            logger.warning("뉴스 제목 번역 실패 — 원문을 그대로 내보낸다: %s", exc)
-    if optional:
-        try:
-            _ensure_title_translations(optional)
-        except NewsTranslationError:
-            pass
+    try:
+        # Mixed Korean and English headlines share one paid batch. Previously
+        # every coin could spend two of the twenty daily calls here.
+        _ensure_title_translations(required + optional)
+    except NewsTranslationError as exc:
+        logger.warning("뉴스 제목 번역 실패 — 원문을 그대로 내보낸다: %s", exc)
 
     with _title_translation_lock:
         translations = {
@@ -2520,6 +2596,16 @@ def _localize_coin_news_items(items: list[dict]) -> list[dict]:
             item["original_title"] = source
             item["title"] = translated
     return localized
+
+
+def _localize_news_payload(payload: dict) -> dict:
+    candidates = [item for item in payload.get("items") or []
+                  if _is_news_article_candidate({**item, "title": item.get("original_title") or item.get("title")})]
+    result = {**payload, "items": _localize_coin_news_items(candidates)}
+    pending = sum(1 for item in result["items"]
+                  if not re.search(r"[가-힣]", str(item.get("title") or "")))
+    result["translation"] = {"status": "partial" if pending else "ready", "pending_count": pending}
+    return result
 
 
 def _envelope(items: list[dict], *, overview: Optional[str], label: str, query: str) -> dict:
@@ -2756,7 +2842,7 @@ def _browser_news_pages(asset_symbol: str, coin_name: str) -> list[dict]:
             pages.append({
                 "name": "cryptoslate_asset_topic", "publisher": "CryptoSlate",
                 "kind": "topic", "scope": terms[0],
-                "url": f"https://cryptoslate.com/news/{tag}/",
+                "url": f"https://cryptoslate.com/news/{'xrp' if asset_symbol == 'XRP' else tag}/",
             })
     return _prioritize_browser_pages(pages)
 
@@ -3256,6 +3342,9 @@ def _cached_browser_pages(descriptors: list[dict], *, budget_seconds: float | No
                     continue
                 ttl = (max(60, int(os.environ.get("POSITION_NEWS_BROWSER_CACHE_SECONDS", "900")))
                        if result.get("status") == "ready" else 300)
+                if result.get("http_status") == 404:
+                    # A missing publisher tag is not a transient browser error.
+                    ttl = 24 * 60 * 60
                 expires_at = result.get("retry_at") or time.time() + ttl
                 _browser_page_cache[key] = (deepcopy(result), expires_at)
                 durable_entries[key] = (result, int(expires_at * 1000))
@@ -3290,6 +3379,19 @@ def enrich_coin_news_for_collector(symbol: str, rss_payload: dict, *, browser_bu
         return payload
     name = _COIN_KO.get(base, base)
     descriptors = _browser_news_pages(base, name)
+    sources = list(payload.get("sources") or [])
+    api_available = any(source.get("name") == "coindesk_news_api"
+                        and source.get("status") in {"ready", "empty"} for source in sources)
+    if api_available:
+        # The official ticker query replaces CoinDesk's expensive HTML discovery.
+        # A legitimate empty API result is not a reason to spend another browser batch.
+        replaced = [page for page in descriptors if page["publisher"] == "CoinDesk"]
+        sources.extend({"name": page["name"], "publisher": "CoinDesk",
+                        "source_type": f"coindesk_{page['kind']}_playwright",
+                        "source_page": page["url"], "status": "replaced",
+                        "replaced_by": "coindesk_news_api", "attempted": False,
+                        "item_count": 0} for page in replaced)
+        descriptors = [page for page in descriptors if page["publisher"] != "CoinDesk"]
     if os.environ.get("COINDESK_PLAYWRIGHT_ENABLED", "true").lower() in {"0", "false", "no", "off"}:
         descriptors = [page for page in descriptors if page["publisher"] != "CoinDesk"]
     started = time.monotonic()
@@ -3297,7 +3399,6 @@ def enrich_coin_news_for_collector(symbol: str, rss_payload: dict, *, browser_bu
                _cached_browser_pages(descriptors, budget_seconds=browser_budget_seconds))
     candidates = list(payload.get("items") or [])
     original_keys = {(str(item.get("url") or ""), str(item.get("title") or "")) for item in candidates}
-    sources = list(payload.get("sources") or [])
     successful = 0
     incomplete = 0
     now = datetime.now(timezone.utc)
@@ -3350,8 +3451,52 @@ def enrich_coin_news_for_collector(symbol: str, rss_payload: dict, *, browser_bu
     return payload
 
 
+def _fetch_shared_publisher_rss(source_name: str, *, strict: bool = True) -> list[dict]:
+    """Share free publisher feed metadata across tickers and worker processes."""
+    publisher, url = _EXTRA_RSS_SOURCES[source_name]
+    key = f"publisher-rss-v1|{source_name}"
+
+    def load():
+        now = time.time()
+        hit = _publisher_rss_cache.get(key)
+        if hit and hit[1] > now:
+            return deepcopy(hit[0])
+        saved = _load_durable_browser_pages([key]).get(key) or {}
+        if saved.get("status") == "ready" and saved.get("expires_at", 0) > now:
+            items = saved.get("items") or []
+            _publisher_rss_cache[key] = (items, saved["expires_at"])
+            return deepcopy(items)
+        if saved.get("status") == "error":
+            raise NewsFetchError(f"{publisher} RSS 재시도 대기 중")
+        try:
+            response = get_http_client().get(url, timeout=_HTTP_TIMEOUT)
+            response.raise_for_status()
+            # Retain only feed metadata; article bodies are never stored here.
+            items = _parse_rss(response.text, limit=100)
+            if not items:
+                raise NewsFetchError(f"{publisher} RSS에 유효한 기사가 없습니다")
+            for item in items:
+                item.update(source=publisher, feed_source=source_name)
+            expires_at = now + _COIN_CACHE_SECONDS
+            _publisher_rss_cache[key] = (items, expires_at)
+            _store_durable_browser_pages({key: ({"status": "ready", "items": items,
+                "expires_at": expires_at}, int(expires_at * 1000))})
+            return deepcopy(items)
+        except Exception as exc:
+            _store_durable_browser_pages({key: ({"status": "error"}, int((now + 60) * 1000))})
+            raise NewsFetchError(f"{publisher} RSS 수집에 실패했습니다") from exc
+
+    try:
+        return _rss_refreshes.run(key, load)[0]
+    except NewsFetchError:
+        if strict:
+            raise
+        return []
+
+
 def fetch_coin_news_for_collector(symbol: str) -> dict:
-    """Fetch and merge ticker-relevant items from every configured RSS source."""
+    """Merge RSS and configured official API results before browser enrichment."""
+    from . import coindesk_api
     base = canonical_asset_symbol(symbol)
     if not base:
         return _envelope([], overview=None, label="코인 뉴스", query="")
@@ -3375,6 +3520,13 @@ def fetch_coin_news_for_collector(symbol: str) -> dict:
         "google": fetch_google,
         "coindesk": lambda: fetch_source(_fetch_coindesk_news),
     }
+    if coindesk_api.configuration()["enabled"]:
+        search_terms = _coindesk_asset_search_terms(base, name)
+        loaders["coindesk_api"] = lambda: coindesk_api.fetch_news(search_terms[0] if search_terms else base)
+    if os.environ.get("POSITION_NEWS_EXTRA_RSS_ENABLED", "true").lower() not in {"0", "false", "no", "off"}:
+        for source_name in _EXTRA_RSS_SOURCES:
+            loaders[source_name] = lambda source_name=source_name: fetch_source(
+                lambda **kwargs: _fetch_shared_publisher_rss(source_name, **kwargs))
     if base == "EDEN":
         loaders["openeden"] = lambda: fetch_source(_fetch_openeden_news)
     fetched_sources = run_parallel(loaders)
@@ -3386,6 +3538,35 @@ def fetch_coin_news_for_collector(symbol: str) -> dict:
     google_query = str(google_payload.get("query") or query)
     coindesk_raw, coindesk_available = fetched_sources["coindesk"]
     openeden_items, openeden_available = fetched_sources.get("openeden", ([], False))
+    api_payload = fetched_sources.get("coindesk_api", {})
+    api_source = dict(api_payload.get("source") or {})
+    api_available = api_source.get("status") in {"ready", "empty"}
+    api_items = _relevant_items(api_payload.get("items") or [], asset_symbol=base,
+                               coin_name=name, feed_source="coindesk_news_api")
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=min(365, max(1, int(os.environ.get(
+        "POSITION_NEWS_BROWSER_MAX_AGE_DAYS", "30")))))
+    current_api_items = []
+    for item in api_items:
+        try:
+            stamp = datetime.fromisoformat(str(item.get("published") or "").replace("Z", "+00:00"))
+            stamp = stamp.replace(tzinfo=stamp.tzinfo or timezone.utc)
+        except ValueError:
+            continue
+        if cutoff <= stamp <= now + timedelta(days=1):
+            current_api_items.append(item)
+    if api_source:
+        api_source["item_count"] = len(current_api_items)
+        api_source["excluded_count"] = len(api_payload.get("items") or []) - len(current_api_items)
+    extra_items, extra_sources = [], []
+    for source_name in _EXTRA_RSS_SOURCES:
+        if source_name not in fetched_sources:
+            continue
+        raw, available = fetched_sources[source_name]
+        relevant = _relevant_items(raw, asset_symbol=base, coin_name=name, feed_source=source_name)
+        extra_items.extend(relevant)
+        extra_sources.append({"name": source_name, "status": "ready" if available else "error",
+                              "fetched_count": len(raw), "item_count": len(relevant)})
 
     google_items = _relevant_items(
         google_raw,
@@ -3399,10 +3580,11 @@ def fetch_coin_news_for_collector(symbol: str) -> dict:
         coin_name=name,
         feed_source="coindesk_rss",
     )
-    if not google_available and not coindesk_available and not openeden_available:
-        raise NewsFetchError("모든 뉴스 RSS 소스 수집에 실패했습니다.")
+    if (not google_available and not coindesk_available and not openeden_available and not api_available
+            and not any(source["status"] == "ready" for source in extra_sources)):
+        raise NewsFetchError("모든 뉴스 RSS/API 소스 수집에 실패했습니다.")
     items = _sort_news_items_newest_first(
-        _merge_news_items(openeden_items, coindesk_items, google_items)
+        _merge_news_items(openeden_items, current_api_items, coindesk_items, google_items, extra_items)
     )
     env = _envelope(
         items,
@@ -3435,6 +3617,9 @@ def fetch_coin_news_for_collector(symbol: str) -> dict:
             "fetched_count": google_fetched_count,
         },
     ])
+    if api_source:
+        sources.append(api_source)
+    sources.extend(extra_sources)
     env["sources"] = sources
     return env
 
@@ -3444,6 +3629,24 @@ def _load_latest_coin_snapshot(symbol: str) -> dict | None:
     from .agent_features.position_news.repository import get_latest_snapshot
 
     return get_latest_snapshot(symbol)
+
+
+def _coin_snapshot_is_stale(stored: dict) -> bool:
+    collection = stored.get("collection") or {}
+    observed = collection.get("last_success_ms")
+    if observed:
+        observed_seconds = float(observed) / 1000
+    else:
+        value = collection.get("last_success_at") or (stored.get("news_payload") or {}).get("updated_at")
+        if not value:
+            return False
+        try:
+            observed_seconds = datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+        except (ValueError, TypeError, OverflowError):
+            return True
+    # Publication timestamps describe the articles; collection freshness comes
+    # from the worker's last successful observation, even if content is unchanged.
+    return time.time() - observed_seconds > max(900, _COIN_CACHE_SECONDS * 3)
 
 
 def get_coin_news(symbol: str) -> dict:
@@ -3457,8 +3660,12 @@ def get_coin_news(symbol: str) -> dict:
         # The public briefing remains available during a transient DB
         # outage. Authenticated agent reads intentionally stay DB-only.
         stored = None
-    if stored is not None and isinstance(stored.get("news_payload"), dict):
-        env = dict(stored["news_payload"])
+    has_snapshot = stored is not None and isinstance(stored.get("news_payload"), dict)
+    if has_snapshot and not _coin_snapshot_is_stale(stored):
+        # A snapshot can precede translation or outlive a failed provider call.
+        # Join the shared title cache at read time so it can recover independently
+        # of collection, without paying again for already translated headlines.
+        env = _localize_news_payload(stored["news_payload"])
         env["data_source"] = "prefect_db"
         env["snapshot_id"] = str(stored.get("snapshot_id") or "")
         env["collection"] = dict(stored.get("collection") or {})
@@ -3467,9 +3674,18 @@ def get_coin_news(symbol: str) -> dict:
     def load():
         hit = _coin_cache.get(ckey)
         if hit and hit[1] > time.time():
-            return deepcopy(hit[0])
+            env = _localize_news_payload(hit[0])
+            _coin_cache[ckey] = (env, hit[1])
+            return deepcopy(env)
         env = _coin_news_envelope(base, strict=False, relevant_only=True)
-        env["items"] = _localize_coin_news_items(list(env.get("items") or []))
+        if not env.get("items") and has_snapshot:
+            env = _localize_news_payload(stored["news_payload"])
+            env.update(data_source="prefect_db_stale", stale=True,
+                       snapshot_id=str(stored.get("snapshot_id") or ""),
+                       collection=dict(stored.get("collection") or {}))
+            _coin_cache[ckey] = (env, time.time() + 60)
+            return deepcopy(env)
+        env = _localize_news_payload(env)
         env["data_source"] = "rss_cache"
         _coin_cache[ckey] = (env, time.time() + (_COIN_CACHE_SECONDS if env.get("items") else 60))
         while len(_coin_cache) > 512:

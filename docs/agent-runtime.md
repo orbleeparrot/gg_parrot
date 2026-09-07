@@ -55,7 +55,7 @@
 - `POSITION_NEWS_COLLECTION_SECONDS=300`: 티커별 RSS 재수집 간격. 첫 티커에는 대기하지 않는다. 오류/빈 결과는 60초부터 제한적으로 재시도한다.
 - `POSITION_NEWS_MAX_AI_ANALYSES_PER_RUN=2`, `POSITION_NEWS_MAX_AI_ANALYSES_PER_DAY=10`: 공용 분석 상한. 기본 모델은 Haiku. 기사 fingerprint가 같으면 분석 재사용.
 - `POSITION_NEWS_TRANSLATION_MAX_CALLS_PER_DAY=10`: 에이전트 수집 번역 상한. `NEWS_TRANSLATION_MAX_CALLS_PER_DAY=20`은 공개 뉴스와 에이전트가 공유하는 전체 제목 번역 상한이다. 번역 실패·예산 소진 시 원문을 제공한다.
-- 공개 코인 뉴스는 완료 스냅샷 우선. fallback RSS도 동시 요청을 합치며 빈 결과를 60초 캐시한다. 캐시 hit에서 번역을 다시 실행하지 않는다.
+- 공개 코인 뉴스는 최근 수집이 확인된 스냅샷을 우선 사용한다. 오래된 스냅샷은 RSS로 갱신하고, 수집 실패 시 마지막 뉴스를 오래된 결과로 표시한다. DB/RSS 캐시 hit에서도 공유 한국어 번역을 적용하며 이미 번역된 제목은 재과금하지 않는다.
 - 뉴스·번역 저장소와 일일 예산은 DB에 있으므로 재시작이나 프로세스 추가로 초기화되지 않는다. 웹과 Prefect는 반드시 같은 Postgres를 사용한다.
 - `RunSession(status,last_heartbeat_at)` 복합 인덱스로 현재 실행만 조회하며 매크로 JSON 전체를 읽지 않는다. API 인증과 소유권·스냅샷 조회는 요청별 DB 세션을 공유한다.
 - 웹 수집기는 보존 기간 정리를 매 스캔 대신 시간당 1회 실행한다.
@@ -82,4 +82,12 @@
 - Windows GitHub Actions에서 실행기 전체 테스트와 exe 빌드가 통과했다. `runner-v6` 공개 자산 20,123,920바이트를 다운로드해 SHA-256 `432abbf693d0d778ba0ed3b702cc383cdf0b91533d4a39cb6ad5049d6357f324` 일치를 확인했다.
 - 배포 전 최종 회귀: 백엔드 685개, 프론트엔드 34개 통과. 로컬 실행기는 50개 통과·Windows 전용 1개 제외이며 Windows 빌드에서는 해당 플랫폼 테스트까지 실행했다. 실제 거래소 주문 검증은 수행하지 않았다.
 
-운영 Playwright 전체 실패는 Prefect enrichment 태스크와 flow를 Failed로 표시합니다. RSS를 보존하고 최종 분석을 한 번만 수행한 뒤 실패를 기록하며 자동 유료 재시도는 하지 않습니다. 일부 소스 장애는 성공 수·단계·짧은 오류 메시지를 기록합니다.
+운영 Playwright 전체 실패라도 RSS/API의 사용 가능한 기사 또는 정상 빈 응답이 있으면 Prefect는 소스별 오류를 남기고 `degraded`로 완료합니다. 모든 수집 경로가 실패한 경우에만 flow를 실패로 기록하고, 마지막 스냅샷을 빈 결과로 덮거나 AI를 호출하지 않습니다.
+
+### CoinDesk 공식 API와 빠른 대체 소스
+
+- `https://decrypt.co/feed`, `https://cryptoslate.com/feed/` 공식 RSS를 초기 수집에 추가합니다. 피드 메타데이터는 프로세스 메모리와 기존 공유 페이지 캐시 테이블에 5분 저장하여 티커/Prefect 실행 간 재사용합니다. 브라우저는 추가 기사 탐색을 계속 수행합니다.
+- `COINDESK_API_KEY`가 설정된 경우에만 `https://data-api.coindesk.com/news/v1/search`를 서버에서 호출합니다. `source_key=coindesk`와 프로젝트 검색어를 보내며 키는 Authorization 헤더에만 사용합니다. 키·본문 전문은 로그나 DB에 저장하지 않습니다.
+- API가 정상 응답하면 CoinDesk HTML 검색/태그/섹션은 `replaced_by=coindesk_news_api`로 기록하고 반복 요청하지 않습니다. API 실패 시 기존 RSS/Playwright 경로를 유지합니다.
+- 기본 API 검색 캐시는 30분, 앱 호출 상한은 일 20회 및 누적 100회입니다. `COINDESK_NEWS_MAX_CALLS_PER_DAY`, `COINDESK_NEWS_MAX_TOTAL_CALLS`, `COINDESK_NEWS_CACHE_SECONDS`로 조정합니다. 일/누적 예산은 같은 트랜잭션에서 예약하고 AI 예산과 분리합니다. DB 예산 예약이 실패하면 API를 호출하지 않습니다. 401/403/429는 다른 티커와 공유하는 대기를 적용합니다.
+- 이 앱의 누적 상한은 공급자 계정의 실제 잔여 lifetime 호출 수를 대신하지 않습니다. 키 등록 전 해당 계정의 뉴스 접근·외부 사용자 표시 권한과 남은 호출 수를 확인해야 합니다. Personal 가격 이력 범위는 뉴스 보존 범위가 아닙니다. 키가 없으면 RSS/브라우저는 작동하며 API가 구성되지 않은 상태가 Prefect 설정에 표시됩니다.

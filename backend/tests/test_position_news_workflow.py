@@ -329,15 +329,35 @@ def test_rolling_deployment_does_not_pause_new_worker_schedule(monkeypatch):
         assert load_flow_from_entrypoint(deployment.entrypoint) is expected_flow
 
 
-def test_enrichment_task_fails_visibly_with_retained_rss_payload(monkeypatch):
+def test_enrichment_task_warns_without_failing_usable_rss_payload(monkeypatch, caplog):
     payload = {**_payload("BTC"), "browser_enrichment": {
         "status": "error", "source_count": 8, "successful_sources": 0},
         "sources": [{"name": "public-browser-source", "status": "error", "error": "TimeoutError"}]}
     monkeypatch.setattr(workflow.collector, "enrich_payload", lambda *_: payload)
-    with pytest.raises(workflow.BrowserEnrichmentUnavailable, match="Playwright 전체 소스") as failure:
-        workflow.enrich_ticker_news_task.fn("BTC", _payload("BTC"))
+    assert workflow.enrich_ticker_news_task.fn("BTC", _payload("BTC")) == payload
+    assert "성공 0/8" in caplog.text
+
+
+@pytest.mark.parametrize("source_name,status", [
+    ("google_news_rss", "ready"), ("coindesk_news_api", "ready"), ("coindesk_news_api", "empty"),
+])
+def test_empty_successful_primary_source_is_not_a_collection_outage(monkeypatch, source_name, status):
+    payload = {"symbol": "BTC", "items": [], "browser_enrichment": {
+        "status": "error", "source_count": 8, "successful_sources": 0},
+        "sources": [{"name": source_name, "status": status, "item_count": 0}]}
+    monkeypatch.setattr(workflow.collector, "enrich_payload", lambda *_: payload)
+    assert workflow.enrich_ticker_news_task.fn("BTC", payload) == payload
+
+
+@pytest.mark.parametrize("sources", [[], [{"name": "coindesk_news_api", "status": "unconfigured"}],
+    [{"name": "google_news_rss", "status": "error"}, {"name": "coindesk_news_api", "status": "error"}]])
+def test_enrichment_task_fails_when_no_source_returned_a_usable_result(monkeypatch, sources):
+    payload = {"symbol": "BTC", "items": [], "sources": sources, "browser_enrichment": {
+        "status": "error", "source_count": 8, "successful_sources": 0}}
+    monkeypatch.setattr(workflow.collector, "enrich_payload", lambda *_: payload)
+    with pytest.raises(workflow.BrowserEnrichmentUnavailable, match="사용 가능한 RSS/API 결과도 없습니다") as failure:
+        workflow.enrich_ticker_news_task.fn("BTC", payload)
     assert failure.value.payload == payload
-    assert failure.value.payload["items"] == _payload("BTC")["items"]
 
 
 @pytest.mark.parametrize("status,successful", [("partial", 3), ("disabled", 0)])
@@ -352,7 +372,7 @@ def test_partial_or_disabled_browser_does_not_fail_task(monkeypatch, caplog, sta
         assert not caplog.records
 
 
-def test_flow_processes_rss_once_before_failing_browser_outage(monkeypatch):
+def test_flow_processes_rss_once_and_retains_browser_outage_diagnostics(monkeypatch):
     monkeypatch.setenv("POSITION_NEWS_BROWSER_ENRICHMENT_ENABLED", "true")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key")
     monkeypatch.setattr(workflow, "_schedule_lag_seconds", lambda: 0.0)
@@ -375,15 +395,53 @@ def test_flow_processes_rss_once_before_failing_browser_outage(monkeypatch):
     monkeypatch.setattr(workflow, "process_ticker_news_task", Submitter(process))
     monkeypatch.setattr(workflow.repository, "finish_collection", lambda *_: events.append("lease_released"))
     monkeypatch.setattr(workflow, "prune_snapshots_task", Submitter(lambda _: events.append("pruned") or 0))
-    with pytest.raises(workflow.BrowserEnrichmentUnavailable, match="RSS 결과를 유지") as failure:
-        workflow.collect_position_news_flow.fn()
+    summary = workflow.collect_position_news_flow.fn()
     assert events == ["rss_published", "browser_failed", "final_processed", "lease_released", "pruned"]
-    summary = failure.value.payload["summary"]
     assert summary["stored"] == 1
     assert summary["ai_budget_used"] == 1
     assert summary["browser_failed_tickers"] == ["BTC"]
     assert summary["browser_failed_count"] == 1
-    assert summary["run_status"] == "browser_unavailable"
+    assert summary["source_failed_count"] == 0
+    assert summary["run_status"] == "degraded"
+
+
+@pytest.mark.parametrize("primary_available", [True, False])
+def test_flow_distinguishes_empty_primary_result_from_total_outage(monkeypatch, primary_available):
+    monkeypatch.setenv("POSITION_NEWS_BROWSER_ENRICHMENT_ENABLED", "true")
+    monkeypatch.setattr(workflow, "_schedule_lag_seconds", lambda: 0.0)
+    monkeypatch.setattr(workflow, "discover_tickers_task", lambda: ["BTC"])
+    payload = {"symbol": "BTC", "items": [], "sources": [
+        {"name": "coindesk_news_api", "status": "empty" if primary_available else "error"}],
+        "browser_enrichment": {"status": "error", "source_count": 2, "successful_sources": 0}}
+    errors, processed, releases = [], [], []
+    monkeypatch.setattr(workflow, "fetch_ticker_news_task", Submitter(lambda _: payload))
+    monkeypatch.setattr(workflow, "publish_initial_news_task", Submitter(
+        lambda *_: {"asset_symbol": "BTC", "status": "empty", "used_ai_budget": False}))
+    monkeypatch.setattr(workflow.collector, "enrich_payload", lambda *_: payload)
+    monkeypatch.setattr(workflow, "enrich_ticker_news_task", Submitter(workflow.enrich_ticker_news_task.fn))
+    monkeypatch.setattr(workflow, "record_fetch_error_task", Submitter(lambda *args: errors.append(args)))
+    def process(symbol, received, allow_ai):
+        assert primary_available, "A retrieval outage must not overwrite the DB outcome with empty"
+        processed.append(received)
+        return {"asset_symbol": symbol, "status": "empty", "used_ai_budget": False, "browser_status": "error"}
+    monkeypatch.setattr(workflow, "process_ticker_news_task", Submitter(process))
+    monkeypatch.setattr(workflow.repository, "finish_collection", lambda *args: releases.append(args))
+    monkeypatch.setattr(workflow, "prune_snapshots_task", Submitter(lambda _: 0))
+    if primary_available:
+        summary = workflow.collect_position_news_flow.fn()
+        assert summary["empty"] == 1 and summary["run_status"] == "degraded"
+        assert processed == [payload] and errors == []
+    else:
+        with pytest.raises(workflow.BrowserEnrichmentUnavailable, match="전체 소스 수집 실패") as failure:
+            workflow.collect_position_news_flow.fn()
+        summary = failure.value.payload["summary"]
+        assert summary["error"] == 1 and summary["empty"] == 0
+        assert summary["source_failed_tickers"] == ["BTC"]
+        assert summary["run_status"] == "source_unavailable"
+        assert processed == [] and len(errors) == 1
+    assert summary["browser_failed_tickers"] == ["BTC"]
+    assert summary["ai_budget_used"] == 0
+    assert releases == [("BTC", "token")]
 
 
 def test_effective_browser_concurrency_matches_render_default_and_bounds(monkeypatch):
@@ -394,6 +452,16 @@ def test_effective_browser_concurrency_matches_render_default_and_bounds(monkeyp
     assert workflow.effective_config()["browser_concurrency"] == 1
     monkeypatch.setenv("POSITION_NEWS_BROWSER_CONCURRENCY", "9")
     assert workflow.effective_config()["browser_concurrency"] == 4
+
+
+def test_effective_config_exposes_official_api_limits_without_credentials(monkeypatch):
+    configuration = {"enabled": True, "max_calls_per_day": 20, "max_total_calls": 100, "cache_seconds": 1800}
+    monkeypatch.setenv("COINDESK_API_KEY", "private-test-credential")
+    monkeypatch.setattr(workflow.coindesk_api, "configuration", lambda: configuration)
+    result = workflow.effective_config()
+    assert result["collector_mode"] == "rss_api_then_playwright"
+    assert result["coindesk_api"] == configuration
+    assert "private-test-credential" not in json.dumps(result)
 
 
 def test_browser_source_logs_distinguish_navigation_cooldown_and_unattempted_queue(monkeypatch, capsys):
@@ -448,8 +516,7 @@ def test_legacy_browser_source_logs_do_not_invent_attempt_or_http_status(monkeyp
         "sources": [{"name": "coindesk_asset_topic", "source_type": "coindesk_topic_playwright",
                      "status": "error", "error": "TimeoutError", "phase": "queue"}]}
     monkeypatch.setattr(workflow.collector, "enrich_payload", lambda *_: payload)
-    with pytest.raises(workflow.BrowserEnrichmentUnavailable):
-        workflow.enrich_ticker_news_task.fn("BTC", _payload("BTC"))
+    assert workflow.enrich_ticker_news_task.fn("BTC", _payload("BTC")) == payload
     logs = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     event = next(entry for entry in logs if entry.get("event") == "browser_source")
     assert event["phase"] == "queue"

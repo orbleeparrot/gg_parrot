@@ -16,6 +16,15 @@ services:
         value: "300"
       - key: POSITION_NEWS_SCHEDULE_SECONDS
         value: "60"
+      - key: POSITION_NEWS_EXTRA_RSS_ENABLED
+        value: "true"
+      # COINDESK_API_KEY is optional and must be added privately after access approval.
+      - key: COINDESK_NEWS_MAX_CALLS_PER_DAY
+        value: "20"
+      - key: COINDESK_NEWS_MAX_TOTAL_CALLS
+        value: "100"
+      - key: COINDESK_NEWS_CACHE_SECONDS
+        value: "1800"
       - key: POSITION_NEWS_BROWSER_ENRICHMENT_ENABLED
         value: "true"
       - key: POSITION_NEWS_BROWSER_BUDGET_SECONDS

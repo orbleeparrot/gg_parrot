@@ -20,7 +20,7 @@ from prefect.exceptions import MissingContextError
 from prefect.runtime import flow_run
 from prefect.types.entrypoint import EntrypointType
 
-from .. import news as news_mod
+from .. import coindesk_api, news as news_mod
 from ..agent_features.position_news import collector, repository
 from ..db import init_db
 
@@ -35,7 +35,7 @@ class NewsSourceCircuitOpen(RuntimeError):
 
 
 class BrowserEnrichmentUnavailable(RuntimeError):
-    """Fail the orchestration step while retaining its usable RSS payload."""
+    """Report an unavailable required source or an explicit browser probe."""
 
     def __init__(self, message: str, payload: dict | None = None):
         super().__init__(message)
@@ -56,8 +56,12 @@ def _schedule_lag_seconds() -> float:
     log_prints=True,
 )
 def fetch_ticker_news_task(asset_symbol: str) -> dict:
-    """Retry only the idempotent RSS read, never the model call."""
-    return news_mod.fetch_coin_news_for_collector(asset_symbol)
+    """Read shared RSS/API caches; paid model calls are a separate task."""
+    payload = news_mod.fetch_coin_news_for_collector(asset_symbol)
+    for source in payload.get("sources") or []:
+        print(json.dumps({"event": "news_source", "asset_symbol": asset_symbol, **source},
+                         ensure_ascii=False))
+    return payload
 
 
 @task(retries=0, log_prints=True)
@@ -76,7 +80,7 @@ def _log_browser_sources(sources: list[dict], *, asset_symbol: str | None = None
         "status", "fetched_count", "item_count", "excluded_age_or_date_count",
         "cached", "attempted", "http_status", "response_url", "response_headers",
         "error", "phase", "message", "retry_at", "queue_ms", "elapsed_ms", "startup_ms", "batch_elapsed_ms",
-        "timings_ms", "pagination",
+        "timings_ms", "pagination", "publisher", "replaced_by",
     )
     for source in sources:
         if not str(source.get("source_type") or "").endswith("_playwright"):
@@ -84,6 +88,25 @@ def _log_browser_sources(sources: list[dict], *, asset_symbol: str | None = None
         print(json.dumps({"event": "browser_source", "asset_symbol": asset_symbol,
                           **{key: source[key] for key in source_fields if key in source}},
                          ensure_ascii=False))
+
+
+def _browser_unavailable(payload: dict) -> bool:
+    browser = payload.get("browser_enrichment") or {}
+    return browser.get("status") != "disabled" and (
+        browser.get("status") == "error"
+        or (int(browser.get("source_count") or 0) > 0
+            and int(browser.get("successful_sources") or 0) == 0)
+    )
+
+
+def _has_usable_primary_result(payload: dict) -> bool:
+    # A successful RSS/API response with no relevant headlines is a legitimate
+    # empty result. It is different from every retrieval attempt failing.
+    return bool(payload.get("items")) or any(
+        source.get("status") in {"ready", "empty"}
+        and not str(source.get("source_type") or "").endswith("_playwright")
+        for source in payload.get("sources") or []
+    )
 
 
 @task(retries=0, log_prints=True)
@@ -104,18 +127,19 @@ def enrich_ticker_news_task(asset_symbol: str, news_payload: dict,
     status = browser.get("status")
     source_count = int(browser.get("source_count") or 0)
     successful = int(browser.get("successful_sources") or 0)
-    if status != "disabled" and (status == "error" or (source_count > 0 and successful == 0)):
+    unavailable = _browser_unavailable(result)
+    if unavailable and not _has_usable_primary_result(result):
         raise BrowserEnrichmentUnavailable(
             f"{asset_symbol} Playwright 전체 소스 수집 실패 ({successful}/{source_count}). "
-            "이미 수집한 RSS 결과는 유지합니다.",
+            "사용 가능한 RSS/API 결과도 없습니다.",
             result,
         )
-    if status == "partial":
+    if unavailable or status == "partial":
         try:
             logger = get_run_logger()
         except MissingContextError:
             logger = logging.getLogger(__name__)
-        logger.warning("%s Playwright 일부 소스 수집 실패: 성공 %s/%s, RSS 결과 유지",
+        logger.warning("%s Playwright 보강 소스 수집 실패: 성공 %s/%s, RSS/API 결과 유지",
                        asset_symbol, successful, source_count)
     return result
 
@@ -161,7 +185,8 @@ def effective_config(browser_budget_seconds: float | None = None) -> dict:
     """Safe operational values visible in Prefect logs; never credentials."""
     return {
         "version": os.environ.get("RENDER_GIT_COMMIT", "local"),
-        "collector_mode": "rss_then_playwright",
+        "collector_mode": "rss_api_then_playwright",
+        "coindesk_api": coindesk_api.configuration(),
         "collection_seconds": int(os.environ.get("POSITION_NEWS_COLLECTION_SECONDS", "300")),
         "schedule_seconds": max(60, int(os.environ.get("POSITION_NEWS_SCHEDULE_SECONDS", "60"))),
         "max_ai_per_run": int(os.environ.get("POSITION_NEWS_MAX_AI_ANALYSES_PER_RUN", "2")),
@@ -267,6 +292,7 @@ def collect_position_news_flow(browser_budget_seconds: float | None = None) -> d
     consecutive_fetch_failures = 0
     source_circuit_open = False
     browser_failures = []
+    source_failures = []
     expand = collector.browser_enrichment_enabled()
     pending = []
     leases = {}
@@ -354,11 +380,20 @@ def collect_position_news_flow(browser_budget_seconds: float | None = None) -> d
                             news_payload = enrich_ticker_news_task.submit(
                                 asset_symbol, news_payload, config["browser_budget_seconds"]).result()
                     except BrowserEnrichmentUnavailable as exc:
-                        # Prefect keeps this task Failed. Preserve its source
-                        # diagnostics and RSS, then run the final paid stage once.
+                        # Retain source diagnostics. A total retrieval outage
+                        # must not be persisted as a successful empty snapshot.
                         news_payload = exc.payload
+                    if _browser_unavailable(news_payload):
                         browser_failures.append(asset_symbol)
-                result = process_ticker_news_task.submit(asset_symbol, news_payload, allow_ai).result()
+                if _browser_unavailable(news_payload) and not _has_usable_primary_result(news_payload):
+                    source_failures.append(asset_symbol)
+                    record_fetch_error_task.submit(
+                        asset_symbol, "RSS/API 및 Playwright 소스 수집 실패",
+                    ).result()
+                    result = {"asset_symbol": asset_symbol, "status": "error", "used_ai_budget": False,
+                              "browser_status": "error", "reason": "all_sources_unavailable"}
+                else:
+                    result = process_ticker_news_task.submit(asset_symbol, news_payload, allow_ai).result()
             except Exception as exc:
                 # Paid tasks have no retries. Count an uncertain model attempt
                 # conservatively if final persistence failed.
@@ -377,17 +412,21 @@ def collect_position_news_flow(browser_budget_seconds: float | None = None) -> d
     summary["configuration"] = config
     summary["browser_failed_tickers"] = browser_failures
     summary["browser_failed_count"] = len(browser_failures)
-    if browser_failures:
-        summary["run_status"] = "browser_unavailable"
+    summary["source_failed_tickers"] = source_failures
+    summary["source_failed_count"] = len(source_failures)
+    if source_failures:
+        summary["run_status"] = "source_unavailable"
+    elif browser_failures:
+        summary["run_status"] = "degraded"
     print(json.dumps(summary, ensure_ascii=False))
     if source_circuit_open:
         raise NewsSourceCircuitOpen(
             "Google News RSS 및 CoinDesk RSS 연속 수집 실패"
         )
-    if browser_failures:
+    if source_failures:
         raise BrowserEnrichmentUnavailable(
-            f"Playwright 전체 소스 수집 실패: {', '.join(browser_failures)}. "
-            "이미 수집한 RSS 결과를 유지하고 최종 분석을 처리했습니다. 브라우저 소스 상태를 확인하세요.",
+            f"RSS/API 및 Playwright 전체 소스 수집 실패: {', '.join(source_failures)}. "
+            "기존 스냅샷을 유지합니다. 소스별 수집 상태를 확인하세요.",
             {"summary": summary},
         )
     return summary

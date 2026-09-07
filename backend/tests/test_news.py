@@ -13,6 +13,11 @@ from app import news
 from app.ai_runtime import AiBusyError
 from app.agent_features.position_news import repository
 
+
+@pytest.fixture(autouse=True)
+def isolated_title_retry_backoff(monkeypatch):
+    monkeypatch.setattr(news, "_title_translation_retry_at", {})
+
 _RSS = """<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0"><channel>
   <item>
@@ -289,6 +294,7 @@ def test_market_summary_does_not_call_anthropic_when_budget_is_exhausted(monkeyp
 
 
 def test_coin_news_prefers_central_snapshot_for_collected_asset(monkeypatch):
+    monkeypatch.setattr(news.time, "time", lambda: 1_777_173_000)
     item = {
         "title": "중앙 수집기가 저장한 비트코인 소식",
         "source": "테스트 매체",
@@ -558,7 +564,7 @@ def test_title_translation_parser_allows_one_embedded_proper_name():
     [
         (
             "Robinhood partners with Arbitrum",
-            "Robinhood와 Arbitrum 협력",
+            "Robinhood와 아비트럼 협력",
         ),
         (
             "DeepOceanCrypto(@Square-Creator-33c80ad80571)'s insights",
@@ -838,7 +844,7 @@ def test_more_than_twenty_deduplicated_titles_are_all_translated(monkeypatch):
         [{"title": title} for title in titles]
     )
 
-    assert calls == [titles]
+    assert calls == [titles[:10], titles[10:20], titles[20:]]
     assert [item["title"] for item in localized] == list(translations.values())
 
 
@@ -3362,3 +3368,127 @@ def test_partial_pagination_is_reported_without_losing_recent_ticker_news(monkey
     assert result['browser_enrichment']['incomplete_sources'] == len(result['sources'])
     assert all(source['http_status'] == 200 and source['attempted'] for source in result['sources'])
     assert all(source['pagination']['error'] == 'TimeoutError' for source in result['sources'])
+
+
+def test_snapshot_titles_join_durable_translations_without_another_paid_call(monkeypatch):
+    source = "Ethena's Guy Young: Stablecoin Growth Needs Real-World Reach"
+    korean = "에테나의 가이 영: 스테이블코인 성장에는 실물 경제로의 확장이 필요"
+    stored = {"snapshot_id": "ena", "news_payload": {"items": [{"title": source}]},
+              "collection": {"last_success_ms": int(news.time.time() * 1000)}}
+    monkeypatch.setattr(news, "_load_latest_coin_snapshot", lambda _base: stored)
+    monkeypatch.setattr(news, "_title_translation_cache", {})
+    monkeypatch.setattr(news, "_load_durable_title_translations", lambda _titles: {source: korean})
+    monkeypatch.setattr(news, "_request_korean_title_translations", lambda _titles: pytest.fail("cached translation"))
+    result = news.get_coin_news("ENAUSDT")
+    assert result["items"] == [{"title": korean, "original_title": source}]
+    assert result["translation"] == {"status": "ready", "pending_count": 0}
+    assert stored["news_payload"]["items"] == [{"title": source}]
+
+
+def test_rss_cached_original_recovers_when_worker_translation_arrives(monkeypatch):
+    source, korean = "Arbitrum token soars", "아비트럼 토큰 급등"
+    expiry = news.time.time() + 120
+    monkeypatch.setattr(news, "_coin_cache", {"coin:ARB": ({"items": [{"title": source}]}, expiry)})
+    monkeypatch.setattr(news, "_load_latest_coin_snapshot", lambda _base: None)
+    monkeypatch.setattr(news, "_title_translation_cache", {})
+    monkeypatch.setattr(news, "_load_durable_title_translations", lambda _titles: {source: korean})
+    monkeypatch.setattr(news, "_request_korean_title_translations", lambda _titles: pytest.fail("cached translation"))
+    monkeypatch.setattr(news, "_coin_news_envelope", lambda *_args, **_kwargs: pytest.fail("RSS cached"))
+    assert news.get_coin_news("ARBUSDT")["items"][0]["title"] == korean
+    assert news._coin_cache["coin:ARB"][1] == expiry
+
+
+def test_mixed_and_english_titles_share_one_paid_batch(monkeypatch):
+    english, mixed = "Arbitrum token soars", "Bitcoin 가격 상승"
+    calls = _stub_translation(monkeypatch, {english: "아비트럼 토큰 급등", mixed: "비트코인 가격 상승"})
+    result = news._localize_coin_news_items([{"title": english}, {"title": mixed}])
+    assert calls == [[english, mixed]]
+    assert [item["title"] for item in result] == ["아비트럼 토큰 급등", "비트코인 가격 상승"]
+
+
+def test_failed_title_does_not_repeat_paid_call_on_refresh_and_accepts_durable_repair(monkeypatch):
+    source, korean = "Arbitrum token soars", "아비트럼 토큰 급등"
+    calls = _stub_translation(monkeypatch, {})
+    durable = {}
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(news, "_load_durable_title_translations", lambda _titles: durable)
+    assert news._localize_coin_news_items([{"title": source}])[0]["title"] == source
+    assert news._localize_coin_news_items([{"title": source}])[0]["title"] == source
+    assert calls == [[source]]
+    durable[source] = korean
+    assert news._localize_coin_news_items([{"title": source}])[0]["title"] == korean
+    assert calls == [[source]]
+
+
+@pytest.mark.parametrize("source, translated, expected", [
+    ("Jupiter (JUP) Price Surges 3.04% Amid August Upgrades",
+     "Jupiter (JUP) 가격 8월 업그레이드 중 3.04% 급등", "주피터 (JUP) 가격 8월 업그레이드 중 3.04% 급등"),
+    ("Worldcoin Price Prediction September 2026: $WLD New Bull Run?",
+     "Worldcoin 가격 예측 2026년 9월: WLD 신규 강세장?", "월드코인 가격 예측 2026년 9월: WLD 신규 강세장?"),
+    ("Jupiter Launches JupUSD Stablecoin Backed By BlackRock's Tokenized Treasury Fund",
+     "Jupiter, BlackRock의 토큰화 국채 펀드로 뒷받침된 JupUSD 스테이블코인 출시",
+     "주피터, BlackRock의 토큰화 국채 펀드로 뒷받침된 JupUSD 스테이블코인 출시"),
+])
+def test_real_rejected_project_name_translations_are_normalized_and_preserve_facts(source, translated, expected):
+    payload = json.dumps({"items": [{"id": news._title_translation_id(source), "title_ko": translated}]})
+    assert news._parse_korean_title_translations(payload, [source]) == {source: expected}
+
+
+def test_cashtag_is_not_currency_but_real_dollar_amount_still_is():
+    assert news._valid_title_translation("$WLD Momentum Builds", "WLD 상승 모멘텀 강화")
+    assert not news._valid_title_translation("$WLD targets $0.50", "WLD 0.50원 목표")
+    assert not news._valid_title_translation("$WLD Momentum Builds", "BTC 상승 모멘텀 강화")
+
+
+def test_stale_snapshot_refreshes_from_rss_using_collection_observation(monkeypatch):
+    monkeypatch.setattr(news, "_coin_cache", {})
+    stored = {"news_payload": {"updated_at": "2026-09-02T04:28:14Z", "items": [{"title": "오래된 소식"}]},
+              "collection": {"last_success_ms": int((news.time.time() - 86400) * 1000)}}
+    monkeypatch.setattr(news, "_load_latest_coin_snapshot", lambda _base: stored)
+    monkeypatch.setattr(news, "_coin_news_envelope", lambda *_a, **_kw: {"items": [{"title": "새로 수집한 소식"}]})
+    result = news.get_coin_news("BTCUSDT")
+    assert result["data_source"] == "rss_cache"
+    assert result["items"][0]["title"] == "새로 수집한 소식"
+    stored["collection"]["last_success_ms"] = int(news.time.time() * 1000)
+    assert news.get_coin_news("BTCUSDT")["data_source"] == "prefect_db"
+
+
+def test_stale_snapshot_is_labeled_when_fresh_sources_are_empty(monkeypatch):
+    monkeypatch.setattr(news, "_coin_cache", {})
+    stored = {"snapshot_id": "old", "news_payload": {"items": [{"title": "마지막 소식"}]},
+              "collection": {"last_success_ms": int((news.time.time() - 86400) * 1000)}}
+    monkeypatch.setattr(news, "_load_latest_coin_snapshot", lambda _base: stored)
+    monkeypatch.setattr(news, "_coin_news_envelope", lambda *_a, **_kw: {"items": []})
+    result = news.get_coin_news("BTCUSDT")
+    assert result["stale"] is True
+    assert result["data_source"] == "prefect_db_stale"
+    assert result["collection"] == stored["collection"]
+    assert result["items"][0]["title"] == "마지막 소식"
+
+
+def test_existing_snapshot_filters_concert_listing_before_translation(monkeypatch):
+    concert = "10,000 Maniacs at Celestia Theater | Sep 19th, 2026"
+    stored = {"news_payload": {"items": [{"title": concert}, {"title": "셀레스티아 토큰 업데이트"}]}}
+    monkeypatch.setattr(news, "_load_latest_coin_snapshot", lambda _base: stored)
+    monkeypatch.setattr(news, "_request_korean_title_translations", lambda _titles: pytest.fail("concert is not news"))
+    assert news.get_coin_news("TIAUSDT")["items"] == [{"title": "셀레스티아 토큰 업데이트"}]
+
+
+@pytest.mark.parametrize("title", [
+    "[D-BIZ 암호화폐 뉴스] 美 대법원, 예측시장 규제권 놓고 '주 vs 연방' 심리할까",
+    "비트코인 vs 지캐시…양자컴퓨터·프라이버시 경쟁 시작됐다",
+    "비트코인, 8만 달러 뚫고 랠리 재시동 [e가상자산]",
+])
+def test_korean_publisher_labels_do_not_consume_translation_budget(monkeypatch, title):
+    monkeypatch.setattr(news, "_request_korean_title_translations", lambda _titles: pytest.fail("already Korean"))
+    assert news._localize_coin_news_items([{"title": title}]) == [{"title": title}]
+
+
+@pytest.mark.parametrize("source, translated", [
+    ("Aster launches USD1-settled RWA perpetuals with $28M liquidity fund",
+     "아스터, $28M 유동성 펀드와 함께 USD1 결제 RWA 무기한 선물 출시"),
+    ("Bittensor is Predicted to Drop to $ 173.82 By Sep 08, 2026",
+     "비텐서, 2026년 9월 08일까지 $ 173.82로 하락 전망"),
+])
+def test_real_numeric_identifier_and_abbreviated_month_translations(source, translated):
+    assert news._valid_title_translation(source, translated)

@@ -18,6 +18,15 @@ services:
         value: "true"
       - key: POSITION_NEWS_COLLECTION_SECONDS
         value: "300"
+      - key: POSITION_NEWS_EXTRA_RSS_ENABLED
+        value: "true"
+      # Optional COINDESK_API_KEY: add in the dashboard after confirming news/display access.
+      - key: COINDESK_NEWS_MAX_CALLS_PER_DAY
+        value: "20"
+      - key: COINDESK_NEWS_MAX_TOTAL_CALLS
+        value: "100"
+      - key: COINDESK_NEWS_CACHE_SECONDS
+        value: "1800"
       - key: POSITION_NEWS_BROWSER_ENRICHMENT_ENABLED
         value: "false"
       - key: POSITION_NEWS_MAX_AI_ANALYSES_PER_RUN
@@ -84,6 +93,15 @@ services:
         value: "300"
       - key: POSITION_NEWS_SCHEDULE_SECONDS
         value: "60"
+      - key: POSITION_NEWS_EXTRA_RSS_ENABLED
+        value: "true"
+      # Optional COINDESK_API_KEY: never commit the key or put it in browser variables.
+      - key: COINDESK_NEWS_MAX_CALLS_PER_DAY
+        value: "20"
+      - key: COINDESK_NEWS_MAX_TOTAL_CALLS
+        value: "100"
+      - key: COINDESK_NEWS_CACHE_SECONDS
+        value: "1800"
       - key: POSITION_NEWS_BROWSER_ENRICHMENT_ENABLED
         value: "true"
       - key: POSITION_NEWS_BROWSER_BUDGET_SECONDS

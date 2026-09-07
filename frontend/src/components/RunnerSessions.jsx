@@ -6,6 +6,8 @@ import CandleChart from "./CandleChart.jsx";
 import { computeSessionOverlay } from "../lib/indicators.js";
 import { RULE_TYPES } from "../lib/macro.js";
 import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
+import ConfirmDialog from "./ConfirmDialog.jsx";
+import { describeDeleteConfirm, describeStopConfirm } from "../features/agents/runOutcome.js";
 
 // 내 매크로 실행 현황 — 실행기(exe)가 올리는 세션을 실시간으로 보여주고,
 // 원격 종료(매크로만 / 청산 후)를 요청한다.
@@ -221,33 +223,40 @@ export default function RunnerSessions({
 
   useAdaptivePolling(load, { intervalMs: 4_000, maxIntervalMs: 60_000 });
 
-  async function onDelete(session) {
-    const label = session.status === "error" ? "오류로 끝난" : "응답이 끊긴";
-    if (!window.confirm(`${label} ${session.symbol} 세션을 목록에서 지울까요? 기록만 사라지고 거래는 건드리지 않아요.`)) return;
+  // 확인 모달이 기다리는 동작: { type: "stop", mode, session } | { type: "delete", session }
+  const [pending, setPending] = useState(null);
+
+  function findSession(sessionId) {
+    return [...(data?.active || []), ...(data?.recent || [])]
+      .find((session) => session.session_id === sessionId) || { session_id: sessionId };
+  }
+
+  function onDelete(session) {
+    setPending({ type: "delete", session });
+  }
+
+  function onStop(sessionId, mode) {
+    setPending({ type: "stop", mode, session: findSession(sessionId) });
+  }
+
+  async function confirmPending() {
+    if (!pending) return;
     setBusy(true);
     try {
-      await api.runnerDeleteSession(session.session_id);
+      if (pending.type === "stop") await api.runnerRequestStop(pending.session.session_id, pending.mode);
+      else await api.runnerDeleteSession(pending.session.session_id);
       await load();
     } catch (e) {
       setErr(String(e.message || e));
     } finally {
       setBusy(false);
+      setPending(null);
     }
   }
 
-  async function onStop(sessionId, mode) {
-    const label = mode === "close_and_stop" ? "청산 후 종료" : "매크로만 종료";
-    if (!window.confirm(`${label} 할까요? 실행기가 다음 확인에서 반영해요(최대 몇 초 지연).`)) return;
-    setBusy(true);
-    try {
-      await api.runnerRequestStop(sessionId, mode);
-      await load();
-    } catch (e) {
-      setErr(String(e.message || e));
-    } finally {
-      setBusy(false);
-    }
-  }
+  const confirmCopy = pending
+    ? (pending.type === "stop" ? describeStopConfirm(pending.mode, pending.session) : describeDeleteConfirm(pending.session))
+    : null;
 
   const active = data?.active || [];
   const recent = data?.recent || [];
@@ -289,6 +298,14 @@ export default function RunnerSessions({
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        open={!!confirmCopy}
+        {...(confirmCopy || {})}
+        busy={busy}
+        onConfirm={confirmPending}
+        onCancel={() => { if (!busy) setPending(null); }}
+      />
     </section>
   );
 }

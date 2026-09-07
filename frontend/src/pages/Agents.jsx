@@ -10,6 +10,8 @@ import AgentActivityStream from "../components/AgentActivityStream.jsx";
 import CandleChart from "../components/CandleChart.jsx";
 import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 import { ErrorNote, Loading } from "../components/Page.jsx";
+import ConfirmDialog from "../components/ConfirmDialog.jsx";
+import { describeDeleteConfirm, describeStopConfirm } from "../features/agents/runOutcome.js";
 
 const SESSION_STREAM_PROTOCOL = "ggparrot.sessions.v1";
 const SESSION_RECONNECT_MAX_MS = 30000;
@@ -127,6 +129,8 @@ export default function Agents() {
   const [chartSnapshot, setChartSnapshot] = useState(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  // 확인 모달이 기다리는 동작: { type: "stop", mode } | { type: "delete" }
+  const [pending, setPending] = useState(null);
   const [mobilePane, setMobilePane] = useState("chart");
   const sessionSnapshotRevision = useRef(0);
   const lastStreamMessageAt = useRef(0);
@@ -300,38 +304,41 @@ export default function Agents() {
     setMobilePane("chart");
   }
 
-  async function stopSession(mode) {
+  function stopSession(mode) {
     if (!selected) return;
-    const label = mode === "close_and_stop" ? "청산 후 종료" : "매크로만 종료";
-    if (!window.confirm(`${label} 할까요? 실행기가 다음 확인에서 반영해요.`)) return;
+    setPending({ type: "stop", mode });
+  }
+
+  function deleteSession() {
+    if (!selected) return;
+    setPending({ type: "delete" });
+  }
+
+  async function confirmPending() {
+    if (!pending || !selected) return;
     setBusy(true);
     try {
-      await api.runnerRequestStop(selected.session_id, mode);
+      if (pending.type === "stop") {
+        await api.runnerRequestStop(selected.session_id, pending.mode);
+      } else {
+        await api.runnerDeleteSession(selected.session_id);
+        const next = new URLSearchParams(searchParams);
+        next.delete("session");
+        setSearchParams(next, { replace: true });
+      }
       await loadSessions();
+      setPending(null);
     } catch (reason) {
       setError(String(reason.message || reason));
+      setPending(null);
     } finally {
       setBusy(false);
     }
   }
 
-  async function deleteSession() {
-    if (!selected) return;
-    const label = selected.status === "error" ? "오류로 끝난" : "응답이 끊긴";
-    if (!window.confirm(`${label} ${selected.symbol} 세션을 목록에서 지울까요? 기록만 사라지고 거래는 건드리지 않아요.`)) return;
-    setBusy(true);
-    try {
-      await api.runnerDeleteSession(selected.session_id);
-      const next = new URLSearchParams(searchParams);
-      next.delete("session");
-      setSearchParams(next, { replace: true });
-      await loadSessions();
-    } catch (reason) {
-      setError(String(reason.message || reason));
-    } finally {
-      setBusy(false);
-    }
-  }
+  const confirmCopy = pending && selected
+    ? (pending.type === "stop" ? describeStopConfirm(pending.mode, selected) : describeDeleteConfirm(selected))
+    : null;
 
   if (!token) return null;
   if (!sessions && !error) return <Loading label="실행 중인 매크로를 불러오는 중…" />;
@@ -384,6 +391,14 @@ export default function Agents() {
           {activePositionNews.error ? <div className="agent-inline-error" role="status">포지션 맞춤 뉴스를 불러오지 못했어요. 다른 작업은 계속 갱신됩니다.</div> : null}
         </div>
       ) : null}
+
+      <ConfirmDialog
+        open={!!confirmCopy}
+        {...(confirmCopy || {})}
+        busy={busy}
+        onConfirm={confirmPending}
+        onCancel={() => { if (!busy) setPending(null); }}
+      />
     </div>
   );
 }

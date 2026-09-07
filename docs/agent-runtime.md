@@ -38,6 +38,7 @@
 - `POSITION_NEWS_EMBEDDED_BOOTSTRAP_ONLY=true`: Render 웹은 신규·오래된 티커의 RSS만 복구하고 워커에 lease를 넘긴다. 웹에서 Chromium 설치나 유료 호출을 기다리지 않는다. 독립 로컬 운영에서는 false로 전체 수집을 수행한다.
 - `POSITION_NEWS_SCHEDULE_SECONDS=60`: Prefect 스케줄 확인 간격. 실제 같은 티커 재수집은 300초 DB 커서로 제한한다.
 - `POSITION_NEWS_BROWSER_ENRICHMENT_ENABLED=true`, `POSITION_NEWS_BROWSER_BUDGET_SECONDS=35`: 워커에서 RSS 유무와 무관하게 브라우저 보강. Render 기본 1개 탭(로컬 기본 3개), 섹션·태그 JavaScript 비활성·검색만 활성, 이미지·영상·폰트 제외, 공유 페이지 15분·실패/빈 결과 5분 캐시. 공개 페이지 캐시는 Postgres에도 최대 512개 저장해 Prefect의 새 프로세스에서도 재사용한다.
+- HTTP 429는 출처 호스트별 대기 상태로 DB에 공유한다. `Retry-After`(기본 5분, 최대 24시간)가 지나기 전에는 신규 티커에서도 해당 출처에 재요청하지 않으며, 다른 출처와 기존 뉴스 표시는 유지한다.
 - `POSITION_NEWS_SCAN_SECONDS=5`: 실행 티커 확인 주기. 시작 요청은 이 주기를 기다리지 않고 깨운다.
 - `POSITION_NEWS_COLLECTION_SECONDS=300`: 티커별 RSS 재수집 간격. 첫 티커에는 대기하지 않는다. 오류/빈 결과는 60초부터 제한적으로 재시도한다.
 - `POSITION_NEWS_MAX_AI_ANALYSES_PER_RUN=2`, `POSITION_NEWS_MAX_AI_ANALYSES_PER_DAY=10`: 공용 분석 상한. 기본 모델은 Haiku. 기사 fingerprint가 같으면 분석 재사용.

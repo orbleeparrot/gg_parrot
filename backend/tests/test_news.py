@@ -3077,3 +3077,243 @@ def test_browser_batch_reports_the_actual_startup_failure_phase(monkeypatch, fai
     result = news._fetch_browser_page_batch(pages, budget_seconds=1)
     assert result[news._browser_page_key(pages[0])]['phase'] == failed_phase
     assert result[news._browser_page_key(pages[0])]['status'] == 'error'
+
+
+@pytest.mark.parametrize('retry_after,delay', [
+    ('900', 900),
+    ('20', 300),
+    ('not-a-date', 300),
+    ('999999', 86_400),
+])
+def test_browser_publisher_cooldown_honors_retry_after_seconds_and_bounds(monkeypatch, retry_after, delay):
+    monkeypatch.setattr(news.time, 'time', lambda: 1_000.0)
+    result = news._browser_rate_limit(retry_after)
+    assert result['retry_at'] == 1_000 + delay
+    assert result['status'] == 'error' and result['error'] == 'rate_limited'
+    assert result['items'] == []
+
+
+def test_browser_publisher_cooldown_honors_retry_after_http_date(monkeypatch):
+    now = datetime(2026, 9, 7, 12, tzinfo=timezone.utc)
+    monkeypatch.setattr(news.time, 'time', lambda: now.timestamp())
+    retry_after = format_datetime(now + timedelta(minutes=45), usegmt=True)
+    assert news._browser_rate_limit(retry_after)['retry_at'] == now.timestamp() + 2_700
+
+
+def test_browser_429_stops_queued_publisher_pages_but_collects_other_hosts(monkeypatch):
+    from playwright import async_api
+    from types import SimpleNamespace
+
+    monkeypatch.setenv('POSITION_NEWS_BROWSER_CONCURRENCY', '1')
+    monkeypatch.setattr(news.time, 'time', lambda: 1_000.0)
+    pages = [
+        {'name': 'blocked_index', 'publisher': 'CoinDesk', 'kind': 'section', 'scope': 'markets',
+         'url': 'https://www.coindesk.com/markets'},
+        {'name': 'blocked_topic', 'publisher': 'CoinDesk', 'kind': 'topic', 'scope': 'ethena',
+         'url': 'https://www.coindesk.com/tag/ethena'},
+        {'name': 'healthy_index', 'publisher': 'Decrypt', 'kind': 'section', 'scope': 'news',
+         'url': 'https://decrypt.co/news'},
+    ]
+    navigated, closed = [], []
+
+    class Page:
+        async def goto(self, url, **_kwargs):
+            navigated.append(url)
+            return SimpleNamespace(status=429, headers={'retry-after': '900'}) if 'coindesk.com' in url else (
+                SimpleNamespace(status=200, headers={}))
+        def locator(self, _selector):
+            return self
+        async def evaluate_all(self, _script):
+            return [{'title': 'Bitcoin network welcomes a new upgrade',
+                     'href': 'https://decrypt.co/123456/bitcoin-network-upgrade',
+                     'published': '2026-09-07T00:00:00Z'}]
+        async def close(self):
+            closed.append('page')
+
+    class Context:
+        def set_default_timeout(self, _timeout):
+            pass
+        async def route(self, *_args):
+            pass
+        async def new_page(self):
+            return Page()
+
+    class Browser:
+        async def new_context(self, **_kwargs):
+            return Context()
+        async def close(self):
+            closed.append('browser')
+
+    class Driver:
+        @property
+        def chromium(self):
+            return self
+        async def launch(self, **_kwargs):
+            return Browser()
+        async def stop(self):
+            closed.append('driver')
+
+    class Manager:
+        async def start(self):
+            return Driver()
+
+    monkeypatch.setattr(async_api, 'async_playwright', lambda: Manager())
+    result = news._fetch_browser_page_batch(pages, budget_seconds=1)
+    origin_key = news._browser_rate_limit_key(pages[0])
+    assert origin_key == news._browser_rate_limit_key(pages[1]) == 'publisher-cooldown:www.coindesk.com'
+    assert navigated == [pages[0]['url'], pages[2]['url']]
+    assert result[origin_key]['retry_at'] == 1_900
+    assert result[news._browser_page_key(pages[0])]['error'] == 'rate_limited'
+    queued = result[news._browser_page_key(pages[1])]
+    assert queued['error'] == 'rate_limited' and queued['cached'] is True
+    healthy = result[news._browser_page_key(pages[2])]
+    assert healthy['status'] == 'ready' and len(healthy['items']) == 1
+    assert closed.count('page') == 2
+    assert closed[-2:] == ['browser', 'driver']
+
+
+def test_publisher_cooldown_survives_new_ticker_and_worker_without_extending_expiry(monkeypatch):
+    from copy import deepcopy
+
+    clock = {'now': 1_000.0}
+    monkeypatch.setattr(news.time, 'time', lambda: clock['now'])
+    monkeypatch.setattr(news, '_browser_page_cache', {})
+    first_page = {'name': 'ethena_search', 'publisher': 'CoinDesk', 'kind': 'asset_search',
+                  'scope': 'ethena', 'url': 'https://www.coindesk.com/search/', 'search_term': 'ethena'}
+    new_page = {**first_page, 'name': 'bittensor_search', 'scope': 'bittensor', 'search_term': 'bittensor'}
+    origin_key = news._browser_rate_limit_key(first_page)
+    stored, reads, writes, fetched = {}, [], [], []
+
+    def load(keys):
+        reads.append(keys)
+        return {key: deepcopy(stored[key][0]) for key in keys
+                if key in stored and stored[key][1] > clock['now'] * 1000}
+
+    def store(entries):
+        writes.append(deepcopy(entries))
+        stored.update(deepcopy(entries))
+
+    def fetch(pages, **_kwargs):
+        fetched.append(pages)
+        if len(fetched) == 1:
+            cooldown = news._browser_rate_limit('900')
+            return {news._browser_page_key(pages[0]): cooldown, origin_key: cooldown}
+        return _browser_batch(pages)
+
+    monkeypatch.setattr(news, '_load_durable_browser_pages', load)
+    monkeypatch.setattr(news, '_store_durable_browser_pages', store)
+    monkeypatch.setattr(news, '_fetch_browser_page_batch', fetch)
+    news._cached_browser_pages([first_page])
+    assert set(writes[0]) == {news._browser_page_key(first_page), origin_key}
+    assert stored[origin_key][1] == 1_900_000
+
+    # A fresh Prefect subprocess requests a previously unseen ticker on the
+    # same publisher. Reading its cooldown must neither crawl nor renew TTL.
+    news._browser_page_cache.clear()
+    for current in (1_100.0, 1_800.0):
+        clock['now'] = current
+        result = news._cached_browser_pages([new_page])
+        assert result[news._browser_page_key(new_page)]['retry_at'] == 1_900
+        assert result[news._browser_page_key(new_page)]['cached'] is True
+        assert set(reads[-1]) == {news._browser_page_key(new_page), origin_key}
+        assert len(fetched) == len(writes) == 1
+        assert stored[origin_key][1] == 1_900_000
+        assert news._browser_page_key(new_page) not in stored
+
+    # At the original expiry the new ticker can be fetched normally again.
+    clock['now'] = 1_900.0
+    result = news._cached_browser_pages([new_page])
+    assert len(fetched) == len(writes) == 2
+    assert fetched[-1] == [new_page]
+    assert result[news._browser_page_key(new_page)]['status'] == 'empty'
+    assert origin_key not in writes[-1]
+
+
+def test_concurrent_429_responses_keep_the_longest_publisher_cooldown(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+    from playwright import async_api
+
+    monkeypatch.setenv('POSITION_NEWS_BROWSER_CONCURRENCY', '2')
+    monkeypatch.setattr(news.time, 'time', lambda: 1_000.0)
+    descriptors = [
+        {'name': 'long_backoff', 'publisher': 'CoinDesk', 'kind': 'section', 'scope': 'markets',
+         'url': 'https://www.coindesk.com/markets'},
+        {'name': 'short_backoff', 'publisher': 'CoinDesk', 'kind': 'section', 'scope': 'policy',
+         'url': 'https://www.coindesk.com/policy'},
+    ]
+    second_navigating = asyncio.Event()
+    long_response_processed = asyncio.Event()
+
+    async def first_response(*_args, **_kwargs):
+        await second_navigating.wait()
+        return SimpleNamespace(status=429, headers={'retry-after': '3600'})
+
+    async def second_response(*_args, **_kwargs):
+        second_navigating.set()
+        await long_response_processed.wait()
+        return SimpleNamespace(status=429, headers={'retry-after': '300'})
+
+    first_page = SimpleNamespace(goto=AsyncMock(side_effect=first_response),
+        close=AsyncMock(side_effect=long_response_processed.set))
+    second_page = SimpleNamespace(goto=AsyncMock(side_effect=second_response), close=AsyncMock())
+    context = MagicMock()
+    context.route = AsyncMock()
+    context.new_page = AsyncMock(side_effect=[first_page, second_page])
+    browser = SimpleNamespace(new_context=AsyncMock(return_value=context), close=AsyncMock())
+    driver = SimpleNamespace(chromium=SimpleNamespace(launch=AsyncMock(return_value=browser)), stop=AsyncMock())
+    monkeypatch.setattr(async_api, 'async_playwright', lambda: SimpleNamespace(start=AsyncMock(return_value=driver)))
+
+    results = news._fetch_browser_page_batch(descriptors, budget_seconds=2)
+    first_page.goto.assert_awaited_once()
+    second_page.goto.assert_awaited_once()
+    assert results[news._browser_page_key(descriptors[0])]['retry_at'] == 4_600
+    assert results[news._browser_page_key(descriptors[1])]['retry_at'] == 1_300
+    assert results[news._browser_rate_limit_key(descriptors[0])]['retry_at'] == 4_600
+
+
+@pytest.mark.parametrize('memory_retry,durable_retry', [(1_600, 4_600), (4_600, 1_600)])
+def test_publisher_cooldown_uses_later_memory_or_durable_deadline_without_rewriting(monkeypatch, memory_retry, durable_retry):
+    monkeypatch.setattr(news.time, 'time', lambda: 1_000.0)
+    page = {'name': 'new_token', 'publisher': 'CoinDesk', 'kind': 'topic', 'scope': 'new-token',
+            'url': 'https://www.coindesk.com/tag/new-token'}
+    origin_key = news._browser_rate_limit_key(page)
+    memory = {'items': [], 'status': 'error', 'error': 'rate_limited', 'retry_at': memory_retry}
+    durable = {**memory, 'retry_at': durable_retry}
+    monkeypatch.setattr(news, '_browser_page_cache', {origin_key: (memory, memory_retry)})
+    monkeypatch.setattr(news, '_load_durable_browser_pages', lambda _keys: {origin_key: durable})
+    monkeypatch.setattr(news, '_fetch_browser_page_batch', lambda *_args, **_kwargs: pytest.fail('publisher still cooling down'))
+    writes = []
+    monkeypatch.setattr(news, '_store_durable_browser_pages', lambda entries: writes.append(entries))
+    result = news._cached_browser_pages([page])
+    assert result[news._browser_page_key(page)]['retry_at'] == max(memory_retry, durable_retry)
+    assert result[news._browser_page_key(page)]['cached'] is True
+    assert writes == []
+
+
+@pytest.mark.parametrize('symbol,project', [('ENA', 'ethena'), ('TAO', 'bittensor')])
+def test_cryptoslate_asset_hub_uses_project_alias_and_contributes_recent_news(monkeypatch, symbol, project):
+    monkeypatch.setenv('POSITION_NEWS_BROWSER_ENRICHMENT_ENABLED', 'true')
+    pages = news._browser_news_pages(symbol, symbol)
+    topic = next(page for page in pages if page['name'] == 'cryptoslate_asset_topic')
+    assert topic['url'] == f'https://cryptoslate.com/news/{project}/'
+    assert topic['scope'] == project and topic['publisher'] == 'CryptoSlate'
+    recent = datetime.now(timezone.utc).isoformat()
+    title = f'{project.title()} expands its token liquidity network'
+    article_url = f'https://cryptoslate.com/{project}-expands-token-liquidity/'
+    articles = news._parse_public_browser_links([
+        {'title': title, 'href': article_url, 'published': recent},
+        {'title': f'{project.title()} historic token launch',
+         'href': f'https://cryptoslate.com/{project}-historic-launch/', 'published': '2020-01-01T00:00:00Z'},
+    ], topic)
+    monkeypatch.setattr(news, '_cached_browser_pages', lambda descriptors:
+                        _browser_batch(descriptors, {'cryptoslate_asset_topic': articles}))
+    result = news.enrich_coin_news_for_collector(symbol, {'items': []})
+    assert [item['title'] for item in result['items']] == [title]
+    assert result['items'][0]['url'] == article_url.rstrip('/')
+    assert result['items'][0]['source_page'] == topic['url']
+    assert result['browser_enrichment']['added_count'] == 1
+    report = next(source for source in result['sources'] if source['name'] == 'cryptoslate_asset_topic')
+    assert report['fetched_count'] == 2 and report['item_count'] == 1
+    assert report['excluded_age_or_date_count'] == 1

@@ -9,8 +9,8 @@
   4) 비용: 중복 제거 뒤 제목을 번역하고, 결과를 메모리와 Postgres에 캐시해
      같은 제목을 다시 과금 호출하지 않는다. 번역 호출에도 DB 일일 예산을 적용한다.
 
-Google News RSS, CoinDesk 공식 RSS, Playwright로 렌더링한 CoinDesk 공개
-섹션·태그 페이지를 함께 사용한다.
+Google News RSS, CoinDesk 공식 RSS, Playwright로 읽는 CoinDesk·Decrypt·CryptoSlate
+공개 뉴스 목록과 프로젝트 페이지를 함께 사용한다.
 """
 from __future__ import annotations
 
@@ -2753,6 +2753,11 @@ def _browser_news_pages(asset_symbol: str, coin_name: str) -> list[dict]:
                 "kind": "topic", "scope": terms[0],
                 "url": f"https://www.coindesk.com/tag/{tag}",
             })
+            pages.append({
+                "name": "cryptoslate_asset_topic", "publisher": "CryptoSlate",
+                "kind": "topic", "scope": terms[0],
+                "url": f"https://cryptoslate.com/news/{tag}/",
+            })
     return pages
 
 
@@ -2837,6 +2842,26 @@ def _browser_error(exc: Exception, phase: str, *, budget_seconds: float = 0) -> 
             "phase": phase, "message": message[:160]}
 
 
+def _browser_rate_limit_key(descriptor: dict) -> str:
+    return "publisher-cooldown:" + (urlsplit(descriptor["url"]).hostname or "")
+
+
+def _browser_rate_limit(retry_after: str) -> dict:
+    now = time.time()
+    try:
+        delay = float(retry_after)
+    except (TypeError, ValueError):
+        try:
+            delay = parsedate_to_datetime(retry_after).timestamp() - now
+        except (TypeError, ValueError, OverflowError):
+            delay = 300
+    # Honor publisher backoff across pages, tickers and worker restarts.
+    delay = min(86_400, max(300, delay))
+    return {"items": [], "status": "error", "error": "rate_limited",
+            "phase": "navigation", "message": "HTTP 429; publisher cooldown",
+            "retry_at": now + delay}
+
+
 def _fetch_browser_page_batch(descriptors: list[dict], *, budget_seconds: float) -> dict:
     """One browser, bounded concurrent tabs and a deadline for the entire batch."""
     async def run():
@@ -2891,6 +2916,10 @@ def _fetch_browser_page_batch(descriptors: list[dict], *, budget_seconds: float)
                     key = _browser_page_key(descriptor)
                     page_phases[key] = "queue"
                     async with semaphore:
+                        origin_key = _browser_rate_limit_key(descriptor)
+                        if origin_key in results:
+                            results[key] = {**results[origin_key], "cached": True}
+                            return
                         page = None
                         try:
                             page_phases[key] = "page_create"
@@ -2899,6 +2928,13 @@ def _fetch_browser_page_batch(descriptors: list[dict], *, budget_seconds: float)
                             page_phases[key] = "navigation"
                             response = await page.goto(descriptor["url"],
                                 wait_until="domcontentloaded", timeout=page_timeout_ms)
+                            if response is not None and response.status == 429:
+                                result = _browser_rate_limit(response.headers.get("retry-after", ""))
+                                results[key] = result
+                                previous = results.get(origin_key) or {}
+                                if result["retry_at"] > previous.get("retry_at", 0):
+                                    results[origin_key] = result
+                                return
                             if response is None or response.status >= 400:
                                 results[key] = {"items": [], "status": "error", "error": "http_error",
                                                 "phase": "navigation", "message": f"HTTP {response.status if response else 'no response'}"}
@@ -3003,7 +3039,13 @@ def _cached_browser_pages(descriptors: list[dict]) -> dict:
             else:
                 missing.append(descriptor)
         if missing:
-            shared = _load_durable_browser_pages([_browser_page_key(page) for page in missing])
+            origin_keys = {_browser_rate_limit_key(page) for page in missing}
+            shared = _load_durable_browser_pages(
+                [_browser_page_key(page) for page in missing] + sorted(origin_keys))
+            for key in origin_keys:
+                hit = _browser_page_cache.get(key)
+                if hit and hit[1] > now and hit[0].get("retry_at", 0) > (shared.get(key) or {}).get("retry_at", 0):
+                    shared[key] = hit[0]
             remaining = []
             for descriptor in missing:
                 key = _browser_page_key(descriptor)
@@ -3011,7 +3053,11 @@ def _cached_browser_pages(descriptors: list[dict]) -> dict:
                 if isinstance(result, dict) and result.get("status") in {"ready", "empty", "error"}:
                     results[key] = {**deepcopy(result), "cached": True}
                 else:
-                    remaining.append(descriptor)
+                    cooldown = shared.get(_browser_rate_limit_key(descriptor)) or {}
+                    if cooldown.get("retry_at", 0) > now:
+                        results[key] = {**deepcopy(cooldown), "cached": True}
+                    else:
+                        remaining.append(descriptor)
             missing = remaining
         if missing:
             budget = min(90.0, max(5.0, float(os.environ.get(
@@ -3027,10 +3073,16 @@ def _cached_browser_pages(descriptors: list[dict]) -> dict:
                 result = fetched.get(key) or {"items": [], "status": "error", "error": "timeout"}
                 ttl = (max(60, int(os.environ.get("POSITION_NEWS_BROWSER_CACHE_SECONDS", "900")))
                        if result.get("status") == "ready" else 300)
-                expires_at = time.time() + ttl
+                expires_at = result.get("retry_at") or time.time() + ttl
                 _browser_page_cache[key] = (deepcopy(result), expires_at)
                 durable_entries[key] = (result, int(expires_at * 1000))
                 results[key] = result
+            for key in {_browser_rate_limit_key(page) for page in missing}:
+                cooldown = fetched.get(key) or {}
+                if cooldown.get("retry_at", 0) > time.time():
+                    expires_at = cooldown["retry_at"]
+                    _browser_page_cache[key] = (deepcopy(cooldown), expires_at)
+                    durable_entries[key] = (cooldown, int(expires_at * 1000))
             _store_durable_browser_pages(durable_entries)
             while len(_browser_page_cache) > 512:
                 _browser_page_cache.pop(next(iter(_browser_page_cache)))

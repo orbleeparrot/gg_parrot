@@ -430,6 +430,43 @@ def reserve_ai_budget(
     return reserved
 
 
+def reserve_news_api_budget(
+    *, daily_limit: int, total_limit: int, now_ms: int | None = None,
+    db: Session | None = None,
+) -> bool:
+    """Reserve one CoinDesk HTTP call against daily and lifetime app limits.
+
+    Both counters commit together. A rejected lifetime reservation cannot spend
+    the daily allowance, and concurrent workers cannot exceed either ceiling.
+    These counters are separate from paid model budgets and never auto-reset
+    when an API key rotates. Provider/account-wide limits still apply.
+    """
+    if daily_limit <= 0 or total_limit <= 0:
+        return False
+    if db is None:
+        with get_session() as owned:
+            return reserve_news_api_budget(daily_limit=daily_limit,
+                total_limit=total_limit, now_ms=now_ms, db=owned)
+    millis, now_iso = _clock(now_ms)
+    day = datetime.fromtimestamp(millis / 1000, timezone.utc).astimezone(
+        timezone(timedelta(hours=9))).strftime("%Y-%m-%d")
+    insert = postgres_insert if db.get_bind().dialect.name == "postgresql" else sqlite_insert
+    for key, limit in (("coindesk_news:lifetime", total_limit),
+                       (f"coindesk_news:{day}", daily_limit)):
+        statement = insert(TickerNewsAiBudget).values(
+            budget_date_kst=key, used=1, updated_at=now_iso,
+        ).on_conflict_do_update(
+            index_elements=[TickerNewsAiBudget.budget_date_kst],
+            set_={"used": TickerNewsAiBudget.used + 1, "updated_at": now_iso},
+            where=TickerNewsAiBudget.used < limit,
+        )
+        if db.exec(statement).rowcount != 1:
+            db.rollback()
+            return False
+    db.commit()
+    return True
+
+
 def _title_hash(title: str) -> str:
     return hashlib.sha256(title.encode("utf-8")).hexdigest()
 
@@ -472,6 +509,7 @@ def claim_title_translations(
     *,
     rejected_titles: list[str] | None = None,
     lease_ms: int = _TITLE_TRANSLATION_CLAIM_LEASE_MS,
+    retry_ms: int = 300_000,
     now_ms: int | None = None,
     db: Session | None = None,
 ) -> dict:
@@ -482,6 +520,7 @@ def claim_title_translations(
                 titles,
                 rejected_titles=rejected_titles,
                 lease_ms=lease_ms,
+                retry_ms=retry_ms,
                 now_ms=now_ms,
                 db=owned,
             )
@@ -503,6 +542,7 @@ def claim_title_translations(
     claim_token = uuid.uuid4().hex
     claimed: list[str] = []
     waiting: list[str] = []
+    deferred: list[str] = []
     cached: dict[str, str] = {}
 
     for title in unique_titles:
@@ -537,6 +577,13 @@ def claim_title_translations(
             and title not in rejected
         ):
             cached[title] = row.translated_title
+            continue
+
+        # A rejected/failed title must not consume a fresh paid batch on every
+        # page refresh. Unlike an active claim, this is not work to wait for.
+        if (row.processing_status == "error" and title not in rejected
+                and int(row.updated_ms or 0) + max(0, int(retry_ms)) > millis):
+            deferred.append(title)
             continue
 
         can_reclaim = (
@@ -576,6 +623,7 @@ def claim_title_translations(
         "claim_token": claim_token if claimed else "",
         "claimed": claimed,
         "waiting": waiting,
+        "deferred": deferred,
         "cached": cached,
     }
 
@@ -709,7 +757,7 @@ def release_title_translation_claims(
     now_ms: int | None = None,
     db: Session | None = None,
 ) -> None:
-    """Release failed claims so a retry can take them immediately."""
+    """Release failed claims; the claim path applies the shared retry backoff."""
     if not claim_token or not titles:
         return
     if db is None:

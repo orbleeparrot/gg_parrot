@@ -1189,3 +1189,19 @@ def test_browser_page_cache_older_batch_cannot_replace_newer_data(db):
     repository.store_browser_pages({"page": (newer, 20_000)}, now_ms=2_000, db=db)
     repository.store_browser_pages({"page": ({"items": [], "status": "error"}, 10_000)}, now_ms=1_000, db=db)
     assert repository.load_browser_pages(["page"], now_ms=3_000, db=db) == {"page": newer}
+
+
+def test_failed_translation_has_shared_backoff_without_waiting_on_a_nonexistent_worker(db_engine):
+    title = "Worldcoin Price Prediction"
+    with Session(db_engine) as db:
+        claim = repository.claim_title_translations([title], now_ms=1000, db=db)
+        repository.release_title_translation_claims([title], claim_token=claim["claim_token"], now_ms=1001, db=db)
+    with Session(db_engine) as db:
+        retry = repository.claim_title_translations([title], now_ms=1002, db=db)
+        assert retry["claimed"] == []
+        assert retry["waiting"] == []
+        assert retry["deferred"] == [title]
+    with Session(db_engine) as db:
+        retry = repository.claim_title_translations([title], now_ms=301001, db=db)
+        assert retry["claimed"] == [title]
+        assert retry["deferred"] == []

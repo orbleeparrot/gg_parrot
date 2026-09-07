@@ -293,6 +293,8 @@ def test_prefect_browser_can_recover_when_rss_is_down(monkeypatch):
 
 
 def test_rolling_deployment_does_not_pause_new_worker_schedule(monkeypatch):
+    from prefect.flows import load_flow_from_entrypoint
+    from prefect.types.entrypoint import EntrypointType
     monkeypatch.setenv("PREFECT_API_URL", "https://prefect.example.test/api")
     monkeypatch.setenv("RENDER_GIT_COMMIT", "revision-under-test")
     monkeypatch.setenv("POSITION_NEWS_SCHEDULE_SECONDS", "60")
@@ -300,27 +302,31 @@ def test_rolling_deployment_does_not_pause_new_worker_schedule(monkeypatch):
     monkeypatch.setattr("sys.argv", ["position_news", "serve"])
     monkeypatch.setattr(workflow.repository, "assert_worker_database", lambda: None)
     monkeypatch.setattr(workflow, "init_db", lambda: None)
-    options, deployments = {}, {}
-    monkeypatch.setattr(workflow.collect_position_news_flow, "to_deployment",
-                        lambda **kwargs: deployments.setdefault("collection", kwargs))
-    monkeypatch.setattr(workflow.coindesk_source_probe_flow, "to_deployment",
-                        lambda **kwargs: deployments.setdefault("probe", kwargs))
+    options, deployments = {}, []
     def serve(*registered, **kwargs):
         options.update(kwargs)
-        assert registered == (deployments["collection"], deployments["probe"])
+        deployments.extend(registered)
     monkeypatch.setattr(workflow, "serve", serve)
+    # Docker starts this module with `python -m`, so startup flow names belong
+    # to __main__. Reproduce that case while constructing real deployments.
+    monkeypatch.setattr(workflow.collect_position_news_flow, "__module__", "__main__")
+    monkeypatch.setattr(workflow.coindesk_source_probe_flow, "__module__", "__main__")
     workflow.main()
     assert options["pause_on_shutdown"] is False
     assert options["limit"] == 1  # Both deployments share the browser worker slot.
-    assert deployments["collection"]["paused"] is False
-    assert deployments["collection"]["interval"].total_seconds() == 60
-    assert deployments["collection"]["name"] == "shared-ticker-news"
-    assert deployments["probe"]["name"] == "coindesk-source-probe"
-    assert not {"interval", "cron", "rrule", "schedule", "schedules"} & deployments["probe"].keys()
-    for deployment in deployments.values():
-        assert deployment["version"] == "revision-under-test"
-        assert deployment["concurrency_limit"] == 1
-        assert deployment["parameters"] == {"browser_budget_seconds": 90}
+    collection, probe = deployments
+    assert collection.paused is False
+    assert collection.schedules[0].schedule.interval.total_seconds() == 60
+    assert collection.name == "shared-ticker-news"
+    assert probe.name == "coindesk-source-probe"
+    assert probe.schedules == []
+    for deployment, expected_flow in zip(deployments, (workflow.collect_position_news_flow, workflow.coindesk_source_probe_flow)):
+        assert deployment.version == "revision-under-test"
+        assert deployment.concurrency_limit == 1
+        assert deployment.parameters == {"browser_budget_seconds": 90}
+        assert deployment.entrypoint_type == EntrypointType.MODULE_PATH
+        assert deployment.entrypoint == "app.workflows.position_news." + expected_flow.fn.__name__
+        assert load_flow_from_entrypoint(deployment.entrypoint) is expected_flow
 
 
 def test_enrichment_task_fails_visibly_with_retained_rss_payload(monkeypatch):

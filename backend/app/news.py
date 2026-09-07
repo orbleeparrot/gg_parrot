@@ -829,7 +829,7 @@ def _is_news_article_candidate(item: dict) -> bool:
         return False
     title = str(item.get("title") or "")
     source = str(item.get("source") or "").strip().casefold()
-    if (source == "cme group" or host == "cmegroup.com") and re.fullmatch(
+    if (source in {"cme group", "cmegroup.com", "www.cmegroup.com"} or host == "cmegroup.com") and re.fullmatch(
         r"(?:CME Group\s+)?Bitcoin Futures(?:\s+and\s+Options)?", title.strip(), re.IGNORECASE
     ):
         return False
@@ -841,7 +841,7 @@ def _is_news_article_candidate(item: dict) -> bool:
     ):
         return False
     if source == "binance" or host == "binance.com":
-        if re.search(r"^[\d.,]+\s+[A-Z0-9]+/[A-Z0-9]+\s+(?:현물 거래|spot trad(?:e|ing))\b",
+        if re.search(r"^[\d.,]+\s+(?:Trade\s+)?[A-Z0-9]+/[A-Z0-9]+\s+(?:현물 거래|spot)\b",
                      title, re.IGNORECASE):
             return False
         if re.search(r"^[A-Z0-9]+/(?:USDT|USDC|BTC|ETH)\s+is going to pump\b", title, re.IGNORECASE):
@@ -868,6 +868,7 @@ def _is_news_article_candidate(item: dict) -> bool:
         r"\bprice\s*,?\s*charts?\s*,?\s*(?:and\s*)?market\s*cap\b|"
         r"\bprice\s+today\b.{0,50}\b(?:live|chart|market\s*cap)\b|"
         r"\blive\s+price\s+and\s+chart\b|"
+        r"\bprice\s+and\s+live\s+chart\b|"
         r"\blive\s+charts?\s*,?\s*(?:and\s+)?market\s*cap\b|"
         r"\bperpetual\s+chart\s*\|\s*binance futures\b|"
         r"가격.{0,12}차트.{0,16}시가총액|"
@@ -2633,9 +2634,29 @@ def _localize_coin_news_items(items: list[dict]) -> list[dict]:
     return localized
 
 
+def _within_live_news_window(item: dict) -> bool:
+    """Reject known old/future publication dates, including indexed quote pages.
+
+    Undated legacy metadata remains usable, without inventing a publication date.
+    Google search's when: filter describes its index and cannot enforce this.
+    """
+    raw = item.get("published")
+    if not raw:
+        return True
+    try:
+        stamp = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        stamp = stamp.replace(tzinfo=stamp.tzinfo or timezone.utc)
+    except (TypeError, ValueError):
+        return False
+    now = datetime.now(timezone.utc)
+    days = min(365, max(1, int(os.environ.get("POSITION_NEWS_BROWSER_MAX_AGE_DAYS", "30"))))
+    return now - timedelta(days=days) <= stamp <= now + timedelta(days=1)
+
+
 def _localize_news_payload(payload: dict) -> dict:
     candidates = [item for item in payload.get("items") or []
-                  if _is_news_article_candidate({**item, "title": item.get("original_title") or item.get("title")})]
+                  if _within_live_news_window(item)
+                  and _is_news_article_candidate({**item, "title": item.get("original_title") or item.get("title")})]
     result = {**payload, "items": _localize_coin_news_items(candidates)}
     pending = sum(1 for item in result["items"]
                   if not re.search(r"[가-힣]", str(item.get("title") or "")))
@@ -2753,6 +2774,7 @@ def _coin_news_envelope(
     *,
     strict: bool,
     relevant_only: bool = False,
+    include_archive: bool = False,
 ) -> dict:
     # This helper receives a base ticker from the public or worker ingress.
     base = canonical_asset_symbol(symbol)
@@ -2808,11 +2830,11 @@ def _coin_news_envelope(
         except NewsFetchError:
             return [], True
 
-    # Recent results first. Historical fallback only when both locales are empty.
+    # Live views never widen silently to five years. Historical tools opt in.
     recent_queries = [(q, locale) for q, locale in queries if "when:5y" not in q]
     archive_queries = [(q, locale) for q, locale in queries if "when:5y" in q]
     attempted_queries = []
-    for group in (recent_queries, archive_queries):
+    for group in ((recent_queries, archive_queries) if include_archive else (recent_queries,)):
         if batches and any(batches):
             break
         fetched = run_parallel({
@@ -2825,12 +2847,15 @@ def _coin_news_envelope(
                 failures += 1
                 continue
             candidate_count += len(candidates)
-            batches.append(_relevant_items(candidates, asset_symbol=base,
+            batch = (_relevant_items(candidates, asset_symbol=base,
                 coin_name=name, feed_source="google_news_rss") if relevant_only else candidates)
+            batches.append(batch if include_archive else [item for item in batch if _within_live_news_window(item)])
     queries = attempted_queries
     if strict and failures == len(queries):
         raise NewsFetchError("Google News RSS 수집에 실패했습니다.")
     items = _sort_news_items_newest_first(_merge_news_items(*batches))
+    if not include_archive:
+        items = [item for item in items if _within_live_news_window(item)]
     query_label = " | ".join(query for query, _locale in queries)
     env = _envelope(
         items,
@@ -3598,7 +3623,8 @@ def fetch_coin_news_for_collector(symbol: str) -> dict:
         if source_name not in fetched_sources:
             continue
         raw, available = fetched_sources[source_name]
-        relevant = _relevant_items(raw, asset_symbol=base, coin_name=name, feed_source=source_name)
+        relevant = [item for item in _relevant_items(raw, asset_symbol=base, coin_name=name, feed_source=source_name)
+                    if _within_live_news_window(item)]
         extra_items.extend(relevant)
         extra_sources.append({"name": source_name, "status": "ready" if available else "error",
                               "fetched_count": len(raw), "item_count": len(relevant)})
@@ -3615,6 +3641,8 @@ def fetch_coin_news_for_collector(symbol: str) -> dict:
         coin_name=name,
         feed_source="coindesk_rss",
     )
+    google_items = [item for item in google_items if _within_live_news_window(item)]
+    coindesk_items = [item for item in coindesk_items if _within_live_news_window(item)]
     if (not google_available and not coindesk_available and not openeden_available and not api_available
             and not any(source["status"] == "ready" for source in extra_sources)):
         raise NewsFetchError("모든 뉴스 RSS/API 소스 수집에 실패했습니다.")
@@ -3715,7 +3743,7 @@ def get_coin_news(symbol: str) -> dict:
         env = _coin_news_envelope(base, strict=False, relevant_only=True)
         if not env.get("items") and has_snapshot:
             env = _localize_news_payload(stored["news_payload"])
-            env.update(data_source="prefect_db_stale", stale=True,
+            env.update(data_source="prefect_db_stale", stale=bool(env.get("items")),
                        snapshot_id=str(stored.get("snapshot_id") or ""),
                        collection=dict(stored.get("collection") or {}))
             _coin_cache[ckey] = (env, time.time() + 60)

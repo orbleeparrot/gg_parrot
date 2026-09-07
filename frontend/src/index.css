@@ -5628,6 +5628,11 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   text-align: center;
 }
 
+.news-racer-reader-state.is-notice {
+  min-height: 0;
+  padding: 12px;
+}
+
 .news-racer-reader-state strong {
   color: rgb(var(--c-slate-800));
   font-size: 14px;

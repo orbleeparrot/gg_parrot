@@ -122,8 +122,10 @@ def test_cryptoslate_xrp_uses_verified_publisher_slug():
 
 @pytest.mark.parametrize("title,source", [
     ("Bitcoin Futures", "CME Group"),
+    ("Bitcoin Futures", "cmegroup.com"),
     ("$CHIP 🟢 LONG SCENARIO 🎯 Entry: $0.0515–0.0520 🛡️ Stop | LuckyStar", "Binance"),
     ("1.217 ORCA/USDC 현물 거래 | 암호화폐, 주식 및 원자재", "Binance"),
+    ("1.217 Trade ORCA/USDC Spot | Crypto, bStocks & tCommodities", "Binance"),
     ("Orca/usdt is going to pump today", "Binance"),
     ("$Celestia (TIA.CC)$", "Moomoo"),
     ("$PROM PROM is showing bearish movement: -5.16% | HALIFI on Binance Square", "Binance"),
@@ -140,3 +142,26 @@ def test_live_google_results_exclude_products_and_community_trade_setups(title, 
 def test_publisher_news_is_preserved_while_evergreen_and_signals_are_excluded():
     assert news._is_news_article_candidate({"title": "CME Group Bitcoin Futures volume reaches new record", "source": "CME Group"})
     assert news._is_news_article_candidate({"title": "Binance lists CHIP token for spot trading", "source": "Binance"})
+
+
+def test_live_unknown_ticker_does_not_search_five_year_archive(monkeypatch):
+    calls = []
+    monkeypatch.setattr(news, "_fetch_news", lambda query, **_kwargs: calls.append(query) or [])
+    assert news._coin_news_envelope("CHIP", strict=True, relevant_only=True)["items"] == []
+    assert len(calls) == 2 and all("when:5y" not in query for query in calls)
+
+
+def test_known_old_google_results_cannot_displace_current_headlines(monkeypatch):
+    old = [{**_article("Ethena token archive", published="2020-01-01T00:00:00Z"),
+            "title": f"Ethena token archive {index}"} for index in range(12)]
+    current = _article("Ethena announces new integration")
+    monkeypatch.setattr(news, "_fetch_news", lambda *_args, **_kwargs: old + [current])
+    result = news._coin_news_envelope("ENA", strict=True, relevant_only=True)
+    assert [item["title"] for item in result["items"]] == [current["title"]]
+
+
+def test_cached_old_news_is_removed_before_translation(monkeypatch):
+    monkeypatch.setattr(news, "_ensure_title_translations", lambda *_args: (_ for _ in ()).throw(AssertionError()))
+    payload = news._localize_news_payload({"items": [_article(published="2025-12-01T00:00:00Z")]})
+    assert payload["items"] == []
+    assert payload["translation"]["pending_count"] == 0

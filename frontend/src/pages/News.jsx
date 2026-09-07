@@ -319,14 +319,14 @@ const RacerNewsBriefing = memo(function RacerNewsBriefing({ coin, rank, newsStat
       ) : null}
 
       {status === "success" && data?.translation?.status === "partial" ? (
-        <div className="news-racer-reader-state" role="status">
+        <div className="news-racer-reader-state is-notice" role="status">
           <span>한국어 번역을 준비 중인 제목 {data.translation.pending_count}건은 원문으로 표시하고 있어요.</span>
           <button type="button" onClick={() => onRetry(coin.symbol)}>번역 다시 확인</button>
         </div>
       ) : null}
 
       {status === "success" && data?.stale ? (
-        <div className="news-racer-reader-state" role="status">
+        <div className="news-racer-reader-state is-notice" role="status">
           <span>최신 소식을 가져오지 못해 마지막으로 수집한 뉴스를 표시하고 있어요.</span>
         </div>
       ) : null}

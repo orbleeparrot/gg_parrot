@@ -1299,7 +1299,7 @@ def test_worker_fetch_surfaces_network_failure(monkeypatch):
         news._fetch_news("BTC", strict=True)
 
 
-def test_single_letter_asset_searches_current_and_five_year_archive(monkeypatch):
+def test_single_letter_asset_can_explicitly_search_historical_archive(monkeypatch):
     calls = []
 
     def fake_fetch(query, *, limit, strict, locale):
@@ -1316,7 +1316,7 @@ def test_single_letter_asset_searches_current_and_five_year_archive(monkeypatch)
 
     monkeypatch.setattr(news, "_fetch_news", fake_fetch)
 
-    payload = news._coin_news_envelope("T", strict=True, relevant_only=True)
+    payload = news._coin_news_envelope("T", strict=True, relevant_only=True, include_archive=True)
 
     assert payload["coin_name"] == "쓰레스홀드"
     assert [item["title"] for item in payload["items"]] == [
@@ -1326,7 +1326,7 @@ def test_single_letter_asset_searches_current_and_five_year_archive(monkeypatch)
     assert any("when:5y" in query for query, _locale in calls)
 
 
-def test_unknown_active_asset_falls_back_to_five_year_search(monkeypatch):
+def test_unknown_asset_can_explicitly_search_historical_archive(monkeypatch):
     calls = []
 
     def fake_fetch(query, *, limit, strict, locale):
@@ -1343,7 +1343,7 @@ def test_unknown_active_asset_falls_back_to_five_year_search(monkeypatch):
 
     monkeypatch.setattr(news, "_fetch_news", fake_fetch)
 
-    payload = news._coin_news_envelope("XYZ", strict=True, relevant_only=True)
+    payload = news._coin_news_envelope("XYZ", strict=True, relevant_only=True, include_archive=True)
 
     assert [item["title"] for item in payload["items"]] == [
         "XYZ token launched its storage network in 2025",

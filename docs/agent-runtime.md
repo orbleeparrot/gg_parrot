@@ -56,6 +56,7 @@
 - `POSITION_NEWS_MAX_AI_ANALYSES_PER_RUN=2`, `POSITION_NEWS_MAX_AI_ANALYSES_PER_DAY=10`: 공용 분석 상한. 기본 모델은 Haiku. 기사 fingerprint가 같으면 분석 재사용.
 - `POSITION_NEWS_TRANSLATION_MAX_CALLS_PER_DAY=10`: 에이전트 수집 번역 상한. `NEWS_TRANSLATION_MAX_CALLS_PER_DAY=20`은 공개 뉴스와 에이전트가 공유하는 전체 제목 번역 상한이다. 번역 실패·예산 소진 시 원문을 제공한다.
 - 공개 코인 뉴스는 최근 수집이 확인된 스냅샷을 우선 사용한다. 오래된 스냅샷은 RSS로 갱신하고, 수집 실패 시 마지막 뉴스를 오래된 결과로 표시한다. DB/RSS 캐시 hit에서도 공유 한국어 번역을 적용하며 이미 번역된 제목은 재과금하지 않는다.
+- 실시간 뉴스와 코인동향은 Google 검색의 `when:` 조건 외에 알려진 게시일을 직접 검사해 기본 30일 범위 밖의 기사를 제외한다. 최근 결과가 없다는 이유로 5년 검색을 자동 실행하지 않는다. 내부 아카이브 도구는 명시적인 `include_archive=True` 호출에 한해 과거 검색을 사용할 수 있다.
 - 뉴스·번역 저장소와 일일 예산은 DB에 있으므로 재시작이나 프로세스 추가로 초기화되지 않는다. 웹과 Prefect는 반드시 같은 Postgres를 사용한다.
 - `RunSession(status,last_heartbeat_at)` 복합 인덱스로 현재 실행만 조회하며 매크로 JSON 전체를 읽지 않는다. API 인증과 소유권·스냅샷 조회는 요청별 DB 세션을 공유한다.
 - 웹 수집기는 보존 기간 정리를 매 스캔 대신 시간당 1회 실행한다.

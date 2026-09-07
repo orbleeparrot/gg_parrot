@@ -16,14 +16,23 @@
   - **청산 후 종료**: 보유 포지션을 시장가로 정리한 뒤 종료
 - 거래소 API 키/시크릿은 **서버로 전송되지 않습니다**. 서버로 가는 건 회원 키 + 구동 상태뿐입니다.
 
+## v6 실행 상태 보고
+
+- 시세 조회에 실패해도 heartbeat를 보내 원격 종료 명령을 계속 받습니다.
+- 시장가 주문은 `FILLED` 확인 뒤에 체결로 처리합니다. 접수 응답이나 타임아웃은 체결 완료가 아닙니다.
+- 주문 응답을 잃으면 같은 client order ID로 상태를 조회하며, 시장가 주문을 다시 전송하지 않습니다.
+- 종료 시 최종 포지션·수량·실현손익을 서버에 보고합니다. 청산 실패는 오류로 남기고 보유 상태를 보존합니다.
+- 소스는 v6이며 Windows exe는 `runner-v6` 새 릴리스로 빌드해야 합니다. 이미 배포된 v5 바이너리는 덮어쓰지 않습니다.
+- v6 게시 후 `RUNNER_DOWNLOAD_URL`, `RUNNER_EXE_VERSION=6`을 함께 갱신합니다. v5 연결 호환은 유지할 수 있으며, 전체 체결 확인 기능을 요구할 때 `RUNNER_MIN_VERSION=6`으로 올립니다.
+
 ## 웹 빠른 연결 (Windows)
 
 Windows용 단일 exe를 파일에서 평소처럼 한 번 실행하면, 실행기는 현재 사용자 전용
-릴리스 경로인 `%LOCALAPPDATA%\GGParrot\runner-v5\ggparrot-runner.exe`에 자신을 복사하고
+릴리스 경로인 `%LOCALAPPDATA%\GGParrot\runner-v6\ggparrot-runner.exe`에 자신을 복사하고
 `ggparrot://` 링크 처리기를 등록합니다. HKCU(현재 사용자)에만 등록하므로 관리자
 권한은 필요하지 않습니다. 이 준비가 실패해도 파일 선택을 포함한 기존 기능은 그대로
 사용할 수 있습니다. 이전 릴리스는 덮어쓰거나 지우지 않으므로 실행 중인 구버전이
-있어도 v5 복사와 등록을 막지 않습니다. 창의 상태와 로그에서 v5 등록 완료를 확인할
+있어도 v6 복사와 등록을 막지 않습니다. 창의 상태와 로그에서 v6 등록 완료를 확인할
 수 있습니다.
 
 v5부터는 실행기를 하나만 유지합니다. 이미 열려 있는 상태에서 사이트의
@@ -35,7 +44,7 @@ v5부터는 실행기를 하나만 유지합니다. 이미 열려 있는 상태�
 
 ```text
 ggparrot://launch?v=1&ticket=<일회용 43자 티켓>                       # 기존 운영 호환
-ggparrot://launch/?v=2&env=production|local&ticket=<일회용 43자 티켓> # runner-v5
+ggparrot://launch/?v=2&env=production|local&ticket=<일회용 43자 티켓> # runner-v6
 ```
 
 Windows가 authority 뒤에 빈 루트 경로를 보충한 `ggparrot://launch/?...`도 같은
@@ -73,7 +82,7 @@ python -m unittest discover -s runner -p 'test_*.py'
 
 ### 배포 (GitHub Releases 권장)
 1. 위에서 만든 `dist/ggparrot-runner.exe` 를 레포의 **Releases** 에 첨부해 publish
-2. 첨부 파일의 다운로드 링크를 복사 (예: `.../releases/download/runner-v5/ggparrot-runner.exe`)
+2. 첨부 파일의 다운로드 링크를 복사 (예: `.../releases/download/runner-v6/ggparrot-runner.exe`)
 3. 백엔드 환경변수 `RUNNER_DOWNLOAD_URL` 에 그 링크를 설정
    → 다운로드 페이지 버튼이 자동으로 그 링크로 연결됨(서버에 파일을 둘 필요 없음)
 4. 새 바이너리에서 `ggparrot://` 연결을 Windows에서 검증한 뒤에만

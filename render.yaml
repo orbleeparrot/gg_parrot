@@ -87,7 +87,11 @@ services:
       - key: POSITION_NEWS_BROWSER_ENRICHMENT_ENABLED
         value: "true"
       - key: POSITION_NEWS_BROWSER_BUDGET_SECONDS
-        value: "35"
+        value: "90"
+      - key: POSITION_NEWS_BROWSER_PAGE_BUDGET_SECONDS
+        value: "15"
+      - key: POSITION_NEWS_BROWSER_MAX_LOAD_MORE_CLICKS
+        value: "2"
       - key: POSITION_NEWS_BROWSER_CONCURRENCY
         value: "1"
       - key: POSITION_NEWS_TRANSLATION_MAX_CALLS_PER_DAY

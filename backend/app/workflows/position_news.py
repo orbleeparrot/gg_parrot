@@ -15,7 +15,7 @@ try:
 except ImportError:
     pass
 
-from prefect import flow, get_run_logger, task
+from prefect import flow, get_run_logger, serve, task
 from prefect.exceptions import MissingContextError
 from prefect.runtime import flow_run
 
@@ -67,13 +67,38 @@ def publish_initial_news_task(asset_symbol: str, news_payload: dict) -> dict:
     return result
 
 
+def _log_browser_sources(sources: list[dict], *, asset_symbol: str | None = None) -> None:
+    # Keep each public page independently searchable in Prefect. A queued page
+    # that never navigated must remain distinguishable from a publisher error.
+    source_fields = (
+        "name", "source_type", "source_page", "scope", "search_term",
+        "status", "fetched_count", "item_count", "excluded_age_or_date_count",
+        "cached", "attempted", "http_status", "response_url", "response_headers",
+        "error", "phase", "message", "retry_at", "queue_ms", "elapsed_ms", "startup_ms", "batch_elapsed_ms",
+        "timings_ms", "pagination",
+    )
+    for source in sources:
+        if not str(source.get("source_type") or "").endswith("_playwright"):
+            continue
+        print(json.dumps({"event": "browser_source", "asset_symbol": asset_symbol,
+                          **{key: source[key] for key in source_fields if key in source}},
+                         ensure_ascii=False))
+
+
 @task(retries=0, log_prints=True)
-def enrich_ticker_news_task(asset_symbol: str, news_payload: dict) -> dict:
+def enrich_ticker_news_task(asset_symbol: str, news_payload: dict,
+                           browser_budget_seconds: float | None = None) -> dict:
     """One bounded browser stage; source failures retain the RSS snapshot."""
-    result = collector.enrich_payload(asset_symbol, news_payload)
+    if browser_budget_seconds is None:
+        result = collector.enrich_payload(asset_symbol, news_payload)
+    else:
+        budget = news_mod._browser_batch_budget_seconds(browser_budget_seconds)
+        result = collector.enrich_payload(asset_symbol, news_payload, enricher=lambda symbol, payload:
+            news_mod.enrich_coin_news_for_collector(symbol, payload, browser_budget_seconds=budget))
     print(json.dumps({"asset_symbol": asset_symbol,
                       "browser_enrichment": result.get("browser_enrichment", {}),
                       "sources": result.get("sources", [])}, ensure_ascii=False))
+    _log_browser_sources(result.get("sources", []), asset_symbol=asset_symbol)
     browser = result.get("browser_enrichment") or {}
     status = browser.get("status")
     source_count = int(browser.get("source_count") or 0)
@@ -131,7 +156,7 @@ def prune_snapshots_task(retention_days: int) -> int:
     return repository.prune_snapshots(retention_days=retention_days)
 
 
-def effective_config() -> dict:
+def effective_config(browser_budget_seconds: float | None = None) -> dict:
     """Safe operational values visible in Prefect logs; never credentials."""
     return {
         "version": os.environ.get("RENDER_GIT_COMMIT", "local"),
@@ -141,10 +166,49 @@ def effective_config() -> dict:
         "max_ai_per_run": int(os.environ.get("POSITION_NEWS_MAX_AI_ANALYSES_PER_RUN", "2")),
         "max_ai_per_day": int(os.environ.get("POSITION_NEWS_MAX_AI_ANALYSES_PER_DAY", "10")),
         "browser_enabled": collector.browser_enrichment_enabled(),
-        "browser_budget_seconds": min(90, max(5, int(os.environ.get("POSITION_NEWS_BROWSER_BUDGET_SECONDS", "35")))),
+        "browser_budget_seconds": (news_mod._browser_batch_budget_seconds() if browser_budget_seconds is None
+                                   else news_mod._browser_batch_budget_seconds(browser_budget_seconds)),
+        "browser_page_budget_seconds": news_mod._browser_page_budget_seconds(),
+        "browser_max_load_more_clicks": news_mod._browser_max_load_more_clicks(),
         "browser_concurrency": min(4, max(1, int(os.environ.get(
             "POSITION_NEWS_BROWSER_CONCURRENCY", "1" if os.environ.get("RENDER") else "3")))),
     }
+
+
+@flow(name="gg-parrot-coindesk-source-probe", retries=0,
+      timeout_seconds=210, log_prints=True)
+def coindesk_source_probe_flow(browser_budget_seconds: float | None = None) -> dict:
+    """Manually inspect eight fixed public pages using normal cache and backoff.
+
+    No parameters accept arbitrary URLs, positions, or paid model requests.
+    This flow has no schedule and shares the worker's one execution slot.
+    """
+    configuration = {**effective_config(browser_budget_seconds), "collector_mode": "browser_source_probe"}
+    print(json.dumps({"configuration": configuration}, ensure_ascii=False))
+    descriptors = [
+        {"name": name, "publisher": "CoinDesk", "kind": kind, "scope": scope, "url": url}
+        for name, kind, scope, _query, url in news_mod._COINDESK_DISCOVERY_SOURCES
+    ]
+    started = time.monotonic()
+    results = (news_mod._cached_browser_pages(descriptors) if browser_budget_seconds is None else
+               news_mod._cached_browser_pages(descriptors, budget_seconds=configuration["browser_budget_seconds"]))
+    sources = [news_mod._browser_source_report(descriptor, results[news_mod._browser_page_key(descriptor)])
+               for descriptor in descriptors]
+    _log_browser_sources(sources)
+    successful = sum(source["status"] in {"ready", "empty"} for source in sources)
+    summary = {
+        "event": "browser_source_probe", "configuration": configuration,
+        "status": "ready" if successful == len(sources) else "partial" if successful else "error",
+        "source_count": len(sources), "successful_sources": successful,
+        "elapsed_ms": round((time.monotonic() - started) * 1000),
+        "sources": sources,
+    }
+    print(json.dumps(summary, ensure_ascii=False))
+    if successful != len(sources):
+        raise BrowserEnrichmentUnavailable(
+            f"CoinDesk 공개 페이지 진단: {len(sources) - successful}/{len(sources)}개 소스를 가져오지 못했습니다. "
+            "소스별 HTTP 응답·대기 시간·출판사 cooldown 로그를 확인하세요.", summary)
+    return summary
 
 
 @flow(
@@ -153,9 +217,9 @@ def effective_config() -> dict:
     timeout_seconds=_FLOW_TIMEOUT_SECONDS,
     log_prints=True,
 )
-def collect_position_news_flow() -> dict:
+def collect_position_news_flow(browser_budget_seconds: float | None = None) -> dict:
     """Collect each shared ticker once within a bounded central cycle."""
-    config = effective_config()
+    config = effective_config(browser_budget_seconds)
     print(json.dumps({"configuration": config}, ensure_ascii=False))
     collection_seconds = max(
         60,
@@ -276,7 +340,11 @@ def collect_position_news_flow() -> dict:
             try:
                 if expand:
                     try:
-                        news_payload = enrich_ticker_news_task.submit(asset_symbol, news_payload).result()
+                        if browser_budget_seconds is None:
+                            news_payload = enrich_ticker_news_task.submit(asset_symbol, news_payload).result()
+                        else:
+                            news_payload = enrich_ticker_news_task.submit(
+                                asset_symbol, news_payload, config["browser_budget_seconds"]).result()
                     except BrowserEnrichmentUnavailable as exc:
                         # Prefect keeps this task Failed. Preserve its source
                         # diagnostics and RSS, then run the final paid stage once.
@@ -346,21 +414,29 @@ def main() -> None:
         int(os.environ.get("POSITION_NEWS_SCHEDULE_SECONDS", "60")),
     )
     print(json.dumps({"configuration": effective_config()}, ensure_ascii=False))
-    collect_position_news_flow.serve(
+    collection_deployment = collect_position_news_flow.to_deployment(
         name="shared-ticker-news",
+        parameters={"browser_budget_seconds": 90},
         interval=timedelta(seconds=interval_seconds),
         paused=False,
-        # During rolling deploys the old runner shuts down after the new one
-        # registers. Pausing on shutdown would disable the new schedule.
-        pause_on_shutdown=False,
         version=os.environ.get("RENDER_GIT_COMMIT") or None,
-        limit=1,
-        global_limit=1,
+        concurrency_limit=1,
         tags=["agents", "position-news", "central-collector"],
         description=(
             "RSS를 먼저 공개하고 Playwright 공개 웹 탐색을 추가한 뒤 공용 DB에 분석을 저장합니다."
         ),
     )
+    probe_deployment = coindesk_source_probe_flow.to_deployment(
+        name="coindesk-source-probe",
+        parameters={"browser_budget_seconds": 90},
+        version=os.environ.get("RENDER_GIT_COMMIT") or None,
+        concurrency_limit=1,
+        tags=["agents", "position-news", "source-diagnostics"],
+        description="수동 실행 전용: CoinDesk 4개 섹션과 4개 코인 태그의 HTTP·수집·더보기 진단",
+    )
+    # During rolling deploys the old runner must not pause the new schedule.
+    # One shared process slot also prevents probes competing with collection.
+    serve(collection_deployment, probe_deployment, limit=1, pause_on_shutdown=False)
 
 
 if __name__ == "__main__":

@@ -45,7 +45,11 @@
 - `POSITION_NEWS_EMBEDDED_ENABLED=true`: 웹 내 수집기. 외부 워커 전용 운영에서는 false로 끌 수 있다.
 - `POSITION_NEWS_EMBEDDED_BOOTSTRAP_ONLY=true`: Render 웹은 신규·오래된 티커의 RSS만 복구하고 워커에 lease를 넘긴다. 웹에서 Chromium 설치나 유료 호출을 기다리지 않는다. 독립 로컬 운영에서는 false로 전체 수집을 수행한다.
 - `POSITION_NEWS_SCHEDULE_SECONDS=60`: Prefect 스케줄 확인 간격. 실제 같은 티커 재수집은 300초 DB 커서로 제한한다.
-- `POSITION_NEWS_BROWSER_ENRICHMENT_ENABLED=true`, `POSITION_NEWS_BROWSER_BUDGET_SECONDS=35`: 워커에서 RSS 유무와 무관하게 브라우저 보강. Render 기본 1개 탭(로컬 기본 3개), 섹션·태그 JavaScript 비활성·검색만 활성, 이미지·영상·폰트 제외, 공유 페이지 15분·실패/빈 결과 5분 캐시. 공개 페이지 캐시는 Postgres에도 최대 512개 저장해 Prefect의 새 프로세스에서도 재사용한다.
+- `POSITION_NEWS_BROWSER_ENRICHMENT_ENABLED=true`, `POSITION_NEWS_BROWSER_BUDGET_SECONDS=90`: 워커에서 RSS를 게시한 뒤 브라우저로 보강한다. Prefect 두 배포는 `browser_budget_seconds=90` 실행 매개변수를 명시하며, 이 값이 Render 환경의 기존 `35`보다 우선한다. Prefect에서 실행 매개변수를 조정할 수 있고(5~180초), `configuration.browser_budget_seconds`에서 실제 적용값을 확인한다. Prefect 외 직접 호출은 환경 설정을 사용한다.
+- Render 기본 1개 탭(로컬 3개), 티커 태그 → 티커 검색 → 공통 섹션 순서로 탐색하며 같은 순위에서는 출처를 번갈아 처리한다. `POSITION_NEWS_BROWSER_PAGE_BUDGET_SECONDS=15`는 탭 생성부터 추가 로딩까지의 개별 한도다. 페이지 닫기는 0.5초로 제한해 뒤 작업을 막지 않는다. 전체 한도 내 시작하지 못한 페이지는 `attempted=false`, `phase=queue`, `error=budget_exhausted`로 기록하고 실패 캐시에 저장하지 않는다. 이전 버전의 queue 실패 캐시도 무시한다.
+- CoinDesk는 JavaScript·CSS를 활성화하고 이미지·영상·폰트를 제외한다. 사이트의 개인정보 거부·광고 닫기 버튼을 정상 조작한 뒤, 섹션은 `More stories`, 태그는 페이지 번호 메뉴의 다음 페이지 링크로 추가 로딩한다. `POSITION_NEWS_BROWSER_MAX_LOAD_MORE_CLICKS=2`로 횟수를 제한하고 새 기사 URL이 늘지 않으면 멈춘다. 페이지를 넘길 때마다 기사를 누적하며 추가 로딩 실패 시 앞서 확보한 기사와 `partial` 진단을 보존한다.
+- 공통 페이지 결과는 티커별 필터링 전 최대 200개 후보를 보관한다. 정상 페이지는 15분, 실패·빈 결과·부분 수집은 5분 캐시하고, 공개 페이지 캐시는 Postgres에도 최대 512개 저장해 Prefect의 새 프로세스에서 재사용한다. 각 티커 화면에는 최신 관련 기사 최대 10개만 제공한다.
+- Prefect는 `event=browser_source` 로그로 URL·검색어·실제 요청 여부·HTTP 상태·안전한 응답 헤더·대기/단계별 소요 시간·추가 로딩 결과를 남긴다. 무스케줄 `coindesk-source-probe` 배포를 수동 실행하면 4개 섹션과 BTC·ETH·XRP·SOL 태그를 같은 캐시·대기 규칙으로 검사한다. 기사 수집이 실패하거나 부분 완료되면 진단 flow가 실패하며, 정규 수집과 실행 슬롯 1개를 공유한다. 이 진단은 RSS·포지션·유료 AI를 호출하지 않는다.
 - HTTP 429는 출처 호스트별 대기 상태로 DB에 공유한다. `Retry-After`(기본 5분, 최대 24시간)가 지나기 전에는 신규 티커에서도 해당 출처에 재요청하지 않으며, 다른 출처와 기존 뉴스 표시는 유지한다.
 - `POSITION_NEWS_SCAN_SECONDS=5`: 실행 티커 확인 주기. 시작 요청은 이 주기를 기다리지 않고 깨운다.
 - `POSITION_NEWS_COLLECTION_SECONDS=300`: 티커별 RSS 재수집 간격. 첫 티커에는 대기하지 않는다. 오류/빈 결과는 60초부터 제한적으로 재시도한다.

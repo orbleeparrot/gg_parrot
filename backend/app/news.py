@@ -2758,7 +2758,23 @@ def _browser_news_pages(asset_symbol: str, coin_name: str) -> list[dict]:
                 "kind": "topic", "scope": terms[0],
                 "url": f"https://cryptoslate.com/news/{tag}/",
             })
-    return pages
+    return _prioritize_browser_pages(pages)
+
+
+def _prioritize_browser_pages(descriptors: list[dict]) -> list[dict]:
+    """Read project pages before shared indexes, alternating publishers per tier."""
+    ordered = []
+    tiers = {"topic": 0, "asset_search": 1, "section": 2}
+    for priority in sorted({tiers.get(page.get("kind"), 3) for page in descriptors}):
+        publishers = {}
+        for page in descriptors:
+            if tiers.get(page.get("kind"), 3) == priority:
+                publishers.setdefault(page.get("publisher", ""), []).append(page)
+        while any(publishers.values()):
+            for pages in publishers.values():
+                if pages:
+                    ordered.append(pages.pop(0))
+    return ordered
 
 
 def _parse_public_browser_links(raw_links: list[dict], descriptor: dict) -> list[dict]:
@@ -2766,7 +2782,7 @@ def _parse_public_browser_links(raw_links: list[dict], descriptor: dict) -> list
     if publisher == "CoinDesk":
         return _parse_coindesk_browser_links(
             raw_links, source_kind=descriptor["kind"], source_scope=descriptor["scope"],
-            source_page=descriptor["url"], limit=50,
+            source_page=descriptor["url"], limit=200,
         )
     host = "decrypt.co" if publisher == "Decrypt" else "cryptoslate.com"
     path_pattern = (r"/\d{4,}/[^/]+/?" if publisher == "Decrypt"
@@ -2806,6 +2822,20 @@ def _parse_public_browser_links(raw_links: list[dict], descriptor: dict) -> list
     return items
 
 
+def _merge_browser_items(*sources: list[dict]) -> list[dict]:
+    # Candidate pages must not use the ten-item UI limit before ticker filtering.
+    merged, seen = [], set()
+    for items in sources:
+        for item in items:
+            key = str(item.get("url") or item.get("title") or "").split("?")[0].rstrip("/")
+            if key and key not in seen:
+                merged.append(item)
+                seen.add(key)
+                if len(merged) >= 200:
+                    return merged
+    return merged
+
+
 _BROWSER_LINKS_SCRIPT = """anchors => anchors.map(anchor => {
   const heading = anchor.querySelector('h1,h2,h3,h4,h5,h6')
     || anchor.closest('h1,h2,h3,h4,h5,h6');
@@ -2826,6 +2856,61 @@ _BROWSER_LINKS_SCRIPT = """anchors => anchors.map(anchor => {
 def _browser_concurrency() -> int:
     default = "1" if os.environ.get("RENDER", "").lower() in {"true", "1"} else "3"
     return min(4, max(1, int(os.environ.get("POSITION_NEWS_BROWSER_CONCURRENCY", default))))
+
+
+_BROWSER_PAGE_CLOSE_SECONDS = 0.5
+
+
+def _browser_page_budget_seconds() -> float:
+    return min(30.0, max(5.0, float(os.environ.get(
+        "POSITION_NEWS_BROWSER_PAGE_BUDGET_SECONDS", "15"))))
+
+
+def _browser_batch_budget_seconds(override: float | None = None) -> float:
+    value = override if override is not None else os.environ.get("POSITION_NEWS_BROWSER_BUDGET_SECONDS", "90")
+    return min(180.0, max(5.0, float(value)))
+
+
+def _browser_max_load_more_clicks() -> int:
+    return min(5, max(0, int(os.environ.get("POSITION_NEWS_BROWSER_MAX_LOAD_MORE_CLICKS", "2"))))
+
+
+def _browser_deferred(result: dict) -> bool:
+    # Old workers cached never-attempted queue timeouts as source failures.
+    return result.get("phase") == "queue" or result.get("error") in {
+        "browser_busy", "budget_exhausted"}
+
+
+def _browser_response_metadata(response) -> dict:
+    if response is None:
+        return {}
+    headers = response.headers
+    parsed = urlsplit(str(getattr(response, "url", "")))
+    return {"http_status": response.status,
+            "response_url": urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", "")),
+            "response_headers": {key: str(headers[key])[:160] for key in (
+                "server", "retry-after", "cf-mitigated", "x-vercel-mitigated") if key in headers}}
+
+
+def _browser_source_report(descriptor: dict, result: dict, *, items: list | None = None,
+                           excluded_count: int = 0) -> dict:
+    """Persist the same safe source diagnostics in snapshots and Prefect probes."""
+    report = {
+        "name": descriptor["name"],
+        "source_type": f"{descriptor['publisher'].lower()}_{descriptor['kind']}_playwright",
+        "source_page": descriptor["url"], "scope": descriptor["scope"],
+        "status": result["status"], "fetched_count": len(result.get("items") or []),
+        "item_count": len(items if items is not None else result.get("items") or []),
+        "excluded_age_or_date_count": excluded_count, "cached": bool(result.get("cached")),
+    }
+    if descriptor.get("search_term"):
+        report["search_term"] = descriptor["search_term"]
+    for key in ("error", "phase", "message", "attempted", "http_status", "response_url",
+                "response_headers", "retry_at", "queue_ms", "elapsed_ms", "startup_ms", "batch_elapsed_ms",
+                "timings_ms", "pagination"):
+        if key in result:
+            report[key] = deepcopy(result[key])
+    return report
 
 
 def _browser_error(exc: Exception, phase: str, *, budget_seconds: float = 0) -> dict:
@@ -2863,38 +2948,84 @@ def _browser_rate_limit(retry_after: str) -> dict:
 
 
 def _fetch_browser_page_batch(descriptors: list[dict], *, budget_seconds: float) -> dict:
-    """One browser, bounded concurrent tabs and a deadline for the entire batch."""
+    """Prioritized pages with independent work/cleanup limits and a batch ceiling."""
+    descriptors = _prioritize_browser_pages(descriptors)
+
     async def run():
         from playwright.async_api import async_playwright
 
-        results = {}
+        results, page_phases, diagnostics = {}, {}, {}
         browser = driver = None
         phase = "driver_start"
-        page_phases = {}
+        started = time.monotonic()
         page_timeout_ms = min(15_000, max(3_000, int(os.environ.get(
             "POSITION_NEWS_BROWSER_PAGE_TIMEOUT_MS", "10000"))))
         semaphore = asyncio.Semaphore(_browser_concurrency())
+
+        def switch_phase(key, next_phase):
+            now = time.monotonic()
+            state = diagnostics[key]
+            previous = page_phases.get(key, "queue")
+            timings = state["timings_ms"]
+            timings[previous] = timings.get(previous, 0) + round((now - state.pop("_phase_started", now)) * 1000)
+            state["_phase_started"] = now
+            page_phases[key] = next_phase
+
+        def finish(key):
+            switch_phase(key, page_phases.get(key, "queue"))
+            state = diagnostics[key]
+            result = results[key]
+            result.update({name: value for name, value in state.items() if not name.startswith("_")})
+            result["elapsed_ms"] = round((time.monotonic() - state["_started"]) * 1000)
+
+        def record_backoff(descriptor, details):
+            if details.get("http_status") != 429:
+                return {}
+            cooldown = {**_browser_rate_limit(details.get("retry_after", "")),
+                        "http_status": 429, "response_url": details.get("response_url", "")}
+            origin_key = _browser_rate_limit_key(descriptor)
+            previous = results.get(origin_key) or {}
+            if cooldown["retry_at"] > previous.get("retry_at", 0):
+                results[origin_key] = cooldown
+            return {"retry_at": results[origin_key]["retry_at"]}
+
+        def preserve_or_fail(key, exc, *, cancelled=False):
+            failure = _browser_error(exc, page_phases[key], budget_seconds=budget_seconds)
+            current = results.get(key) or {}
+            if current.get("items"):
+                # A load-more timeout must not erase successfully extracted cards.
+                current["pagination"] = {**current.get("pagination", {}),
+                                         "stop_reason": ("batch_timeout" if cancelled else "page_timeout"
+                                                         if isinstance(exc, TimeoutError) else "pagination_error"),
+                                         "error": failure["error"], "message": failure["message"]}
+                current["phase"] = page_phases[key]
+                current["status"] = "partial"
+                results[key] = current
+            else:
+                results[key] = failure
+
         try:
             async with asyncio.timeout(budget_seconds):
                 driver = await async_playwright().start()
                 phase = "browser_launch"
                 launch_options = {"headless": True, "args": [
                     "--disable-dev-shm-usage", "--disable-gpu", "--renderer-process-limit=1"],
-                                  "timeout": min(15_000, budget_seconds * 1000)}
+                    "timeout": min(20_000, budget_seconds * 1000)}
                 executable = os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH", "").strip()
                 if executable:
                     launch_options["executable_path"] = executable
                 browser = await driver.chromium.launch(**launch_options)
                 phase = "context"
-                async def make_context(*, interactive: bool):
+
+                async def make_context(*, interactive):
                     context = await browser.new_context(locale="en-US", timezone_id="UTC",
                                                         java_script_enabled=interactive)
                     context.set_default_timeout(page_timeout_ms)
 
                     async def route_request(route):
                         resource = route.request.resource_type
-                        if resource in {"image", "media", "font", "stylesheet"} or (
-                            resource == "script" and not interactive
+                        if resource in {"image", "media", "font"} or (
+                            not interactive and resource in {"script", "stylesheet"}
                         ):
                             await route.abort()
                         else:
@@ -2903,80 +3034,122 @@ def _fetch_browser_page_batch(descriptors: list[dict], *, budget_seconds: float)
                     await context.route("**/*", route_request)
                     return context
 
-                # Publisher indexes and tags contain server-rendered cards.
-                # Only the archive search needs JavaScript hydration; avoid
-                # booting ad/analytics applications on every static source.
-                static_context = await make_context(interactive=False)
-                search_context = await make_context(interactive=True) if any(
-                    descriptor.get("search_term") for descriptor in descriptors
-                ) else None
+                # CoinDesk pagination is client-rendered. CSS must also remain
+                # enabled so button visibility and popup dismissal are accurate.
+                interactive_context = await make_context(interactive=True) if any(
+                    page["publisher"] == "CoinDesk" for page in descriptors) else None
+                static_context = await make_context(interactive=False) if any(
+                    page["publisher"] != "CoinDesk" for page in descriptors) else None
                 phase = "queue"
+                startup_ms = round((time.monotonic() - started) * 1000)
 
                 async def fetch(descriptor):
                     key = _browser_page_key(descriptor)
                     page_phases[key] = "queue"
+                    diagnostics[key] = {"attempted": False, "timings_ms": {}, "startup_ms": startup_ms,
+                                        "_started": time.monotonic(), "_phase_started": time.monotonic()}
                     async with semaphore:
+                        state = diagnostics[key]
+                        state["queue_ms"] = round((time.monotonic() - state["_started"]) * 1000)
                         origin_key = _browser_rate_limit_key(descriptor)
                         if origin_key in results:
-                            results[key] = {**results[origin_key], "cached": True}
+                            switch_phase(key, "publisher_cooldown")
+                            results[key] = {**results[origin_key], "cached": True, "phase": "publisher_cooldown"}
+                            finish(key)
                             return
                         page = None
                         try:
-                            page_phases[key] = "page_create"
-                            context = search_context if descriptor.get("search_term") else static_context
-                            page = await context.new_page()
-                            page_phases[key] = "navigation"
-                            response = await page.goto(descriptor["url"],
-                                wait_until="domcontentloaded", timeout=page_timeout_ms)
-                            if response is not None and response.status == 429:
-                                result = _browser_rate_limit(response.headers.get("retry-after", ""))
-                                results[key] = result
-                                previous = results.get(origin_key) or {}
-                                if result["retry_at"] > previous.get("retry_at", 0):
-                                    results[origin_key] = result
-                                return
-                            if response is None or response.status >= 400:
-                                results[key] = {"items": [], "status": "error", "error": "http_error",
-                                                "phase": "navigation", "message": f"HTTP {response.status if response else 'no response'}"}
-                                return
-                            term = descriptor.get("search_term")
-                            if term:
-                                page_phases[key] = "search"
-                                # CoinDesk renders an interactive input before
-                                # React attaches its search handlers. Filling
-                                # it immediately can silently do nothing.
-                                try:
-                                    await page.wait_for_load_state(
-                                        "networkidle", timeout=min(5_000, page_timeout_ms))
-                                except Exception:
-                                    pass
-                                search_box = page.locator('input[placeholder*="Search"]').first
-                                await search_box.fill(term)
-                                await search_box.press("Enter")
-                                try:
-                                    await page.wait_for_function(
-                                        r"""token => Array.from(document.querySelectorAll('a[href]'))
-                                        .some(a => (a.innerText || '').toLowerCase().includes(token)
-                                          && /\/(markets|business|policy|tech|web3|finance)\/\d{4}\//.test(a.href))""",
-                                        arg=term.split()[0], timeout=min(5_000, page_timeout_ms))
-                                except Exception:
-                                    pass
-                            page_phases[key] = "extraction"
-                            raw = await page.locator("a[href]").evaluate_all(_BROWSER_LINKS_SCRIPT)
-                            items = _parse_public_browser_links(raw, descriptor)
-                            results[key] = {"items": items, "status": "ready" if items else "empty"}
+                            async with asyncio.timeout(_browser_page_budget_seconds()):
+                                switch_phase(key, "page_create")
+                                context = interactive_context if descriptor["publisher"] == "CoinDesk" else static_context
+                                page = await context.new_page()
+                                switch_phase(key, "navigation")
+                                state["attempted"] = True
+                                response = await page.goto(descriptor["url"],
+                                    wait_until="domcontentloaded", timeout=page_timeout_ms)
+                                state.update(_browser_response_metadata(response))
+                                if response is not None and response.status == 429:
+                                    result = {**_browser_rate_limit(response.headers.get("retry-after", "")),
+                                              **_browser_response_metadata(response)}
+                                    results[key] = result
+                                    previous = results.get(origin_key) or {}
+                                    if result["retry_at"] > previous.get("retry_at", 0):
+                                        results[origin_key] = deepcopy(result)
+                                    return
+                                if response is None or response.status >= 400:
+                                    results[key] = {"items": [], "status": "error", "error": "http_error",
+                                                   "phase": "navigation", "message": f"HTTP {response.status if response else 'no response'}"}
+                                    return
+                                term = descriptor.get("search_term")
+                                if term:
+                                    switch_phase(key, "search")
+                                    from .coindesk_browser import search_coindesk_page
+                                    search_result = await search_coindesk_page(page, term=term,
+                                                                              timeout_ms=min(5_000, page_timeout_ms))
+                                    state.update({key: value for key, value in search_result.items()
+                                                  if key in {"http_status", "response_url"}})
+                                    if search_result.get("error"):
+                                        results[key] = {"items": [], "status": "error", "phase": "search", **search_result,
+                                                        **record_backoff(descriptor, search_result)}
+                                        return
+                                    if search_result.get("empty"):
+                                        results[key] = {"items": [], "status": "empty", "phase": "search"}
+                                        return
+                                switch_phase(key, "extraction")
+                                raw = await page.locator("a[href]").evaluate_all(_BROWSER_LINKS_SCRIPT)
+                                items = _parse_public_browser_links(raw, descriptor)
+                                results[key] = {"items": items, "status": "ready" if items else "empty"}
+                                if descriptor["publisher"] == "CoinDesk":
+                                    switch_phase(key, "pagination")
+                                    from .coindesk_browser import expand_coindesk_page
+                                    async def capture_page():
+                                        raw = await page.locator("a[href]").evaluate_all(_BROWSER_LINKS_SCRIPT)
+                                        expanded = _parse_public_browser_links(raw, descriptor)
+                                        results[key]["items"] = _merge_browser_items(results[key]["items"], expanded)
+                                        results[key]["status"] = "ready" if results[key]["items"] else "empty"
+
+                                    pagination = await expand_coindesk_page(page,
+                                        max_clicks=_browser_max_load_more_clicks(),
+                                        timeout_ms=min(5_000, page_timeout_ms), on_page=capture_page)
+                                    results[key]["pagination"] = pagination
+                                    results[key].update(record_backoff(descriptor, pagination))
+                                    switch_phase(key, "extraction")
+                                    raw = await page.locator("a[href]").evaluate_all(_BROWSER_LINKS_SCRIPT)
+                                    expanded = _parse_public_browser_links(raw, descriptor)
+                                    results[key]["items"] = _merge_browser_items(results[key]["items"], expanded)
+                                    results[key]["status"] = "ready" if results[key]["items"] else "empty"
+                                    if pagination.get("error"):
+                                        results[key]["status"] = "partial" if results[key]["items"] else "error"
+                        except asyncio.CancelledError:
+                            preserve_or_fail(key, TimeoutError(), cancelled=True)
+                            raise
                         except Exception as exc:
-                            results[key] = _browser_error(exc, page_phases[key], budget_seconds=budget_seconds)
+                            preserve_or_fail(key, exc)
                         finally:
+                            switch_phase(key, "cleanup")
                             if page is not None:
-                                await page.close()
+                                try:
+                                    await asyncio.wait_for(page.close(), timeout=_BROWSER_PAGE_CLOSE_SECONDS)
+                                except Exception:
+                                    pass
+                            if key in results:
+                                finish(key)
 
                 await asyncio.gather(*(fetch(descriptor) for descriptor in descriptors))
         except Exception as exc:
             for descriptor in descriptors:
                 key = _browser_page_key(descriptor)
-                results.setdefault(key, _browser_error(
-                    exc, page_phases.get(key, phase), budget_seconds=budget_seconds))
+                if key in results:
+                    continue
+                failed_phase = page_phases.get(key, phase)
+                if failed_phase == "queue":
+                    results[key] = {"items": [], "status": "error", "error": "budget_exhausted",
+                                    "phase": "queue", "attempted": False,
+                                    "message": "Batch deadline reached before this page could start",
+                                    "queue_ms": round((time.monotonic() - diagnostics[key]["_started"]) * 1000)}
+                else:
+                    results[key] = {**_browser_error(exc, failed_phase, budget_seconds=budget_seconds),
+                                    "attempted": False}
         finally:
             if browser is not None:
                 try:
@@ -2988,13 +3161,20 @@ def _fetch_browser_page_batch(descriptors: list[dict], *, budget_seconds: float)
                     await asyncio.wait_for(driver.stop(), timeout=2)
                 except Exception:
                     pass
+        for descriptor in descriptors:
+            key = _browser_page_key(descriptor)
+            results[key]["batch_elapsed_ms"] = round((time.monotonic() - started) * 1000)
+            if key in diagnostics:
+                results[key].setdefault("startup_ms", diagnostics[key]["startup_ms"])
         return results
 
     return asyncio.run(run())
 
 
 def _browser_page_key(descriptor: dict) -> str:
-    return descriptor["url"] + "|" + str(descriptor.get("search_term") or "")
+    # Static-only results cannot prove that interactive pagination succeeded.
+    # Publisher cooldown keys intentionally remain unchanged across revisions.
+    return descriptor["url"] + "|" + str(descriptor.get("search_term") or "") + "|rendered-v2"
 
 
 def _load_durable_browser_pages(keys: list[str]) -> dict:
@@ -3018,7 +3198,7 @@ def _store_durable_browser_pages(entries: dict) -> None:
         logger.warning("Shared browser page cache write unavailable")
 
 
-def _cached_browser_pages(descriptors: list[dict]) -> dict:
+def _cached_browser_pages(descriptors: list[dict], *, budget_seconds: float | None = None) -> dict:
     """Reuse pages across tickers and the fresh subprocess of each Prefect run."""
     now = time.time()
     results = {}
@@ -3026,16 +3206,16 @@ def _cached_browser_pages(descriptors: list[dict]) -> dict:
         for descriptor in descriptors:
             key = _browser_page_key(descriptor)
             hit = _browser_page_cache.get(key)
-            results[key] = deepcopy(hit[0]) if hit and hit[1] > now else {
-                "items": [], "status": "error", "error": "browser_busy"}
+            results[key] = {**deepcopy(hit[0]), "cached": True, "attempted": False} if hit and hit[1] > now and not _browser_deferred(hit[0]) else {
+                "items": [], "status": "error", "error": "browser_busy", "attempted": False, "phase": "queue"}
         return results
     try:
         missing = []
         for descriptor in descriptors:
             key = _browser_page_key(descriptor)
             hit = _browser_page_cache.get(key)
-            if hit and hit[1] > now:
-                results[key] = {**deepcopy(hit[0]), "cached": True}
+            if hit and hit[1] > now and not _browser_deferred(hit[0]):
+                results[key] = {**deepcopy(hit[0]), "cached": True, "attempted": False}
             else:
                 missing.append(descriptor)
         if missing:
@@ -3050,18 +3230,17 @@ def _cached_browser_pages(descriptors: list[dict]) -> dict:
             for descriptor in missing:
                 key = _browser_page_key(descriptor)
                 result = shared.get(key)
-                if isinstance(result, dict) and result.get("status") in {"ready", "empty", "error"}:
-                    results[key] = {**deepcopy(result), "cached": True}
+                if isinstance(result, dict) and result.get("status") in {"ready", "empty", "partial", "error"} and not _browser_deferred(result):
+                    results[key] = {**deepcopy(result), "cached": True, "attempted": False}
                 else:
                     cooldown = shared.get(_browser_rate_limit_key(descriptor)) or {}
                     if cooldown.get("retry_at", 0) > now:
-                        results[key] = {**deepcopy(cooldown), "cached": True}
+                        results[key] = {**deepcopy(cooldown), "cached": True, "attempted": False, "phase": "publisher_cooldown"}
                     else:
                         remaining.append(descriptor)
             missing = remaining
         if missing:
-            budget = min(90.0, max(5.0, float(os.environ.get(
-                "POSITION_NEWS_BROWSER_BUDGET_SECONDS", "35"))))
+            budget = _browser_batch_budget_seconds(budget_seconds)
             try:
                 fetched = _fetch_browser_page_batch(missing, budget_seconds=budget)
             except Exception as exc:
@@ -3071,12 +3250,15 @@ def _cached_browser_pages(descriptors: list[dict]) -> dict:
             for descriptor in missing:
                 key = _browser_page_key(descriptor)
                 result = fetched.get(key) or {"items": [], "status": "error", "error": "timeout"}
+                results[key] = result
+                if _browser_deferred(result):
+                    _browser_page_cache.pop(key, None)
+                    continue
                 ttl = (max(60, int(os.environ.get("POSITION_NEWS_BROWSER_CACHE_SECONDS", "900")))
                        if result.get("status") == "ready" else 300)
                 expires_at = result.get("retry_at") or time.time() + ttl
                 _browser_page_cache[key] = (deepcopy(result), expires_at)
                 durable_entries[key] = (result, int(expires_at * 1000))
-                results[key] = result
             for key in {_browser_rate_limit_key(page) for page in missing}:
                 cooldown = fetched.get(key) or {}
                 if cooldown.get("retry_at", 0) > time.time():
@@ -3091,7 +3273,7 @@ def _cached_browser_pages(descriptors: list[dict]) -> dict:
         _browser_collection_lock.release()
 
 
-def enrich_coin_news_for_collector(symbol: str, rss_payload: dict) -> dict:
+def enrich_coin_news_for_collector(symbol: str, rss_payload: dict, *, browser_budget_seconds: float | None = None) -> dict:
     """Expand an already-published RSS snapshot using public rendered pages.
 
     This worker-only phase never translates or invokes AI. Source failures are
@@ -3111,11 +3293,13 @@ def enrich_coin_news_for_collector(symbol: str, rss_payload: dict) -> dict:
     if os.environ.get("COINDESK_PLAYWRIGHT_ENABLED", "true").lower() in {"0", "false", "no", "off"}:
         descriptors = [page for page in descriptors if page["publisher"] != "CoinDesk"]
     started = time.monotonic()
-    results = _cached_browser_pages(descriptors)
+    results = (_cached_browser_pages(descriptors) if browser_budget_seconds is None else
+               _cached_browser_pages(descriptors, budget_seconds=browser_budget_seconds))
     candidates = list(payload.get("items") or [])
     original_keys = {(str(item.get("url") or ""), str(item.get("title") or "")) for item in candidates}
     sources = list(payload.get("sources") or [])
     successful = 0
+    incomplete = 0
     now = datetime.now(timezone.utc)
     max_age_days = min(365, max(1, int(os.environ.get(
         "POSITION_NEWS_BROWSER_MAX_AGE_DAYS", "30"))))
@@ -3137,17 +3321,9 @@ def enrich_coin_news_for_collector(symbol: str, rss_payload: dict) -> dict:
         excluded_count = len(items) - len(current_items)
         items = current_items
         candidates.extend(items)
-        successful += result.get("status") in {"ready", "empty"}
-        sources.append({
-            "name": descriptor["name"], "source_type": feed_source,
-            "source_page": descriptor["url"], "status": result["status"],
-            "fetched_count": len(result.get("items") or []), "item_count": len(items),
-            "excluded_age_or_date_count": excluded_count,
-            "cached": bool(result.get("cached")),
-            **({"error": result["error"]} if result.get("error") else {}),
-            **({"phase": result["phase"]} if result.get("phase") else {}),
-            **({"message": result["message"]} if result.get("message") else {}),
-        })
+        successful += result.get("status") in {"ready", "empty", "partial"}
+        incomplete += result.get("status") == "partial"
+        sources.append(_browser_source_report(descriptor, result, items=items, excluded_count=excluded_count))
     # Sort before capping so old archive matches cannot displace recent RSS.
     merged, seen_titles, seen_urls = [], set(), set()
     for item in _sort_news_items_newest_first(candidates):
@@ -3164,10 +3340,11 @@ def enrich_coin_news_for_collector(symbol: str, rss_payload: dict) -> dict:
     payload["items"] = merged
     payload["sources"] = sources
     payload["browser_enrichment"] = {
-        "status": "ready" if successful == len(descriptors) else "partial" if successful else "error",
+        "status": "ready" if successful == len(descriptors) and not incomplete else "partial" if successful else "error",
         "added_count": sum((str(item.get("url") or ""), str(item.get("title") or ""))
                            not in original_keys for item in merged),
         "source_count": len(descriptors), "successful_sources": successful,
+        "incomplete_sources": incomplete,
         "elapsed_ms": round((time.monotonic() - started) * 1000),
     }
     return payload

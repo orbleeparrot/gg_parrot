@@ -3161,10 +3161,10 @@ def test_browser_429_stops_queued_publisher_pages_but_collects_other_hosts(monke
     result = news._fetch_browser_page_batch(pages, budget_seconds=1)
     origin_key = news._browser_rate_limit_key(pages[0])
     assert origin_key == news._browser_rate_limit_key(pages[1]) == 'publisher-cooldown:www.coindesk.com'
-    assert navigated == [pages[0]['url'], pages[2]['url']]
+    assert navigated == [pages[1]['url'], pages[2]['url']]
     assert result[origin_key]['retry_at'] == 1_900
     assert result[news._browser_page_key(pages[0])]['error'] == 'rate_limited'
-    queued = result[news._browser_page_key(pages[1])]
+    queued = result[news._browser_page_key(pages[0])]
     assert queued['error'] == 'rate_limited' and queued['cached'] is True
     healthy = result[news._browser_page_key(pages[2])]
     assert healthy['status'] == 'ready' and len(healthy['items']) == 1
@@ -3317,3 +3317,48 @@ def test_cryptoslate_asset_hub_uses_project_alias_and_contributes_recent_news(mo
     report = next(source for source in result['sources'] if source['name'] == 'cryptoslate_asset_topic')
     assert report['fetched_count'] == 2 and report['item_count'] == 1
     assert report['excluded_age_or_date_count'] == 1
+
+
+def test_browser_candidates_preserve_all_pages_before_ticker_filtering():
+    first = [{'url': f'https://www.coindesk.com/markets/2026/09/07/story-{i}',
+              'title': f'Article about market development {i}'} for i in range(16)]
+    second = first[5:] + [{'url': 'https://www.coindesk.com/markets/2026/09/07/ethena-news',
+                          'title': 'Ethena announces a new token integration'}]
+    merged = news._merge_browser_items(first, second)
+    assert len(merged) == 17
+    assert merged[-1]['title'] == 'Ethena announces a new token integration'
+    assert len(first) == 16
+
+
+def test_browser_response_diagnostics_keep_only_safe_headers_and_url_path():
+    from types import SimpleNamespace
+    response = SimpleNamespace(status=429,
+        url='https://www.coindesk.com/tag/bitcoin?token=do-not-log#private',
+        headers={'server': 'test-cdn', 'retry-after': '300', 'cf-mitigated': 'challenge',
+                 'set-cookie': 'secret-cookie', 'authorization': 'Bearer secret'})
+    result = news._browser_response_metadata(response)
+    assert result == {'http_status': 429, 'response_url': 'https://www.coindesk.com/tag/bitcoin',
+                      'response_headers': {'server': 'test-cdn', 'retry-after': '300', 'cf-mitigated': 'challenge'}}
+
+
+def test_partial_pagination_is_reported_without_losing_recent_ticker_news(monkeypatch):
+    monkeypatch.setenv('POSITION_NEWS_BROWSER_ENRICHMENT_ENABLED', 'true')
+    article = {'url': 'https://www.coindesk.com/markets/2026/09/07/ethena-upgrade',
+               'title': 'Ethena announces a new token upgrade',
+               'published': datetime.now(timezone.utc).isoformat()}
+
+    def fetch(pages):
+        return {news._browser_page_key(page): {
+            'items': [article], 'status': 'partial', 'attempted': True, 'http_status': 200,
+            'pagination': {'initial_count': 12, 'final_count': 12, 'clicks': 1,
+                           'pages_loaded': 0, 'stop_reason': 'page_timeout', 'error': 'TimeoutError'},
+            'queue_ms': 123, 'timings_ms': {'navigation': 42},
+        } for page in pages}
+
+    monkeypatch.setattr(news, '_cached_browser_pages', fetch)
+    result = news.enrich_coin_news_for_collector('ENA', {'items': []})
+    assert len(result['items']) == 1 and result['items'][0]['url'] == article['url']
+    assert result['browser_enrichment']['status'] == 'partial'
+    assert result['browser_enrichment']['incomplete_sources'] == len(result['sources'])
+    assert all(source['http_status'] == 200 and source['attempted'] for source in result['sources'])
+    assert all(source['pagination']['error'] == 'TimeoutError' for source in result['sources'])

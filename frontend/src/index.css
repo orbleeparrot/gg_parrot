@@ -8230,7 +8230,13 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   padding: 24px 22px 28px;
 }
 .agent-result-head { display: grid; justify-items: start; gap: 6px; }
-.agent-result-head img { width: 72px; height: 72px; margin-bottom: 8px; pointer-events: none; user-select: none; }
+.agent-result-head img {
+  width: clamp(112px, 30cqi, 160px);
+  height: auto;
+  margin-bottom: 10px;
+  pointer-events: none;
+  user-select: none;
+}
 .agent-result-eyebrow { margin: 0; color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 750; letter-spacing: .06em; }
 .agent-result.is-critical .agent-result-eyebrow { color: rgb(var(--c-red-600)); }
 .agent-result.is-warning .agent-result-eyebrow { color: rgb(var(--c-amber-800)); }
@@ -8293,6 +8299,9 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 .agent-result-note { margin: 0; color: rgb(var(--c-slate-500)); font-size: 12px; line-height: 1.5; font-weight: 500; }
 .agent-result-actions { display: flex; gap: 8px; }
 .agent-chat-controls.has-result { grid-template-columns: minmax(0, 1fr) auto; }
+.agent-chat-result-toggle { flex: none; overflow: visible; }
+.agent-chat-result-toggle button { color: rgb(var(--c-slate-800)); }
+.agent-chat-result-toggle button:hover { background: rgb(var(--c-surface)); color: rgb(var(--c-slate-900)); }
 
 /* 확인 모달 — window.confirm 대체. 세로 CTA 두 개(48px), 주 동작이 위(DESIGN §6). */
 .confirm-dialog { width: 100%; max-width: 400px; padding: 24px; }

@@ -224,7 +224,10 @@ export default function AgentActivityStream({
         <div className={`agent-chat-controls${ended ? " has-result" : ""}`}>
           <ModuleTabs selected={filter} onSelect={selectFilter} entitlements={entitlements} />
           {ended ? (
-            <button type="button" className="btn btn-s btn-secondary" onClick={() => setShowLog(false)}>결과 보기</button>
+            // 왼쪽 분기 탭과 같은 트랙·글자로 — 다른 부품처럼 보이지 않게.
+            <div className="agent-chat-tabs agent-chat-result-toggle" role="group" aria-label="결과 화면">
+              <button type="button" onClick={() => setShowLog(false)}>결과 보기</button>
+            </div>
           ) : null}
         </div>
       </header>

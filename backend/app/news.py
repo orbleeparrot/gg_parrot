@@ -828,6 +828,18 @@ def _is_news_article_candidate(item: dict) -> bool:
     ):
         return False
     title = str(item.get("title") or "")
+    source = str(item.get("source") or "").strip().casefold()
+    if (source == "cme group" or host == "cmegroup.com") and re.fullmatch(
+        r"(?:CME Group\s+)?Bitcoin Futures(?:\s+and\s+Options)?", title.strip(), re.IGNORECASE
+    ):
+        return False
+    # Google News also indexes exchange community posts containing a trading
+    # entry/stop setup. They must not become news or spend translation budget.
+    if (source == "binance" or host == "binance.com") and re.search(
+        r"\b(?:long|short)\s+(?:scenario|setup|signal)\b.*\b(?:entry|stop|tp|sl)\b",
+        title, re.IGNORECASE | re.DOTALL,
+    ):
+        return False
     # Search engines can match a project name used by a concert venue. Such
     # listings are neither token news nor worth a paid translation request.
     if re.search(r"\bat\s+.{0,60}\b(?:theat(?:er|re)|concert hall|music hall)\b|"

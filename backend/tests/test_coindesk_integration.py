@@ -118,3 +118,17 @@ def test_cryptoslate_xrp_uses_verified_publisher_slug():
     page = next(page for page in news._browser_news_pages("XRP", "리플")
                 if page["name"] == "cryptoslate_asset_topic")
     assert page["url"] == "https://cryptoslate.com/news/xrp/"
+
+
+@pytest.mark.parametrize("title,source", [
+    ("Bitcoin Futures", "CME Group"),
+    ("$CHIP 🟢 LONG SCENARIO 🎯 Entry: $0.0515–0.0520 🛡️ Stop | LuckyStar", "Binance"),
+])
+def test_live_google_results_exclude_products_and_community_trade_setups(title, source):
+    assert not news._is_news_article_candidate({"title": title, "source": source,
+                                               "url": "https://news.google.com/rss/articles/example"})
+
+
+def test_publisher_news_is_preserved_while_evergreen_and_signals_are_excluded():
+    assert news._is_news_article_candidate({"title": "CME Group Bitcoin Futures volume reaches new record", "source": "CME Group"})
+    assert news._is_news_article_candidate({"title": "Binance lists CHIP token for spot trading", "source": "Binance"})

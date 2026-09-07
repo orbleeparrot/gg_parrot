@@ -3,12 +3,11 @@ import test from "node:test";
 
 import { positionNewsModule } from "../src/features/agents/positionNews/events.js";
 
-test("successful empty collection is distinct from waiting or a failed request", () => {
-  const [event] = positionNewsModule.buildEvents({ featureStates: { position_news: {
+test("successful empty collection does not create a chat notification", () => {
+  const events = positionNewsModule.buildEvents({ featureStates: { position_news: {
     data: { context: { asset_symbol: "NEW" }, items: [], analysis_status: "empty", collection: { status: "ready" } },
   } } });
-  assert.ok(event);
-  assert.match(event.title, /관련 뉴스 없음/);
+  assert.deepEqual(events, []);
 });
 
 test("failed news requests are visible inside the activity stream", () => {
@@ -19,8 +18,7 @@ test("failed news requests are visible inside the activity stream", () => {
   assert.match(event.title, /뉴스.*연결/);
 });
 
-test("pending position news is shown as a current collection status event", () => {
-  const before = Date.now();
+test("pending position news waits quietly until an article arrives", () => {
   const events = positionNewsModule.buildEvents({
     featureStates: {
       position_news: {
@@ -46,11 +44,7 @@ test("pending position news is shown as a current collection status event", () =
     },
   });
 
-  assert.equal(events.length, 1);
-  assert.equal(events[0].title, "EDEN 뉴스 수집 대기 중");
-  assert.match(events[0].summary, /수집을 준비/);
-  assert.ok(events[0].occurredAt >= before);
-  assert.equal(events[0].sourceLabel, "중앙 뉴스 수집 상태");
+  assert.deepEqual(events, []);
 });
 
 test("position news shows the article title and content summary without position labels", () => {

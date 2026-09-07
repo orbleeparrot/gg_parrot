@@ -1,5 +1,4 @@
 import { computeSessionOverlay } from "../../../lib/indicators.js";
-import { RULE_TYPES } from "../../../lib/macro.js";
 
 export const strategyModule = {
   key: "strategy",
@@ -24,19 +23,7 @@ export const strategyModule = {
       .slice(-3)
       .reverse();
 
-    if (!markers.length) {
-      const last = bars[lastClosedIndex];
-      return [{
-        id: `strategy-scan-${macro.rule_type}-${last.t}-${interval}`,
-        module: "strategy",
-        severity: "info",
-        expression: "focused",
-        title: "전략 조건 점검 완료",
-        summary: `${RULE_TYPES[macro.rule_type]?.label || macro.rule_type} · 최근 20개 봉 · 새 신호 없음`,
-        occurredAt: last.t,
-        sourceLabel: "전략 조건 재계산",
-      }];
-    }
+    if (!markers.length) return [];
 
     return markers.map((marker) => {
       const bar = bars[marker.index];
@@ -44,7 +31,11 @@ export const strategyModule = {
       // "새로 들어가는" 신호라 청산 경고와 같은 취급을 하면 안 된다.
       const isExit = marker.kind === "exit";
       return {
-        id: `strategy-${macro.rule_type}-${marker.index}-${bar?.t}`,
+        id: `strategy-${[
+          session?.session_id ?? macro.id ?? "session", macro.rule_type,
+          interval || macro.candle_interval || "interval", bar?.t ?? 0,
+          marker.kind || "entry", marker.side || session?.position_side || macro.position_side || "long",
+        ].map((part) => encodeURIComponent(String(part))).join(":")}`,
         module: "strategy",
         severity: isExit ? "watch" : "signal",
         expression: isExit ? "warning" : "signal",

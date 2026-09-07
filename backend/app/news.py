@@ -2818,6 +2818,25 @@ _BROWSER_LINKS_SCRIPT = """anchors => anchors.map(anchor => {
 })"""
 
 
+def _browser_concurrency() -> int:
+    default = "1" if os.environ.get("RENDER", "").lower() in {"true", "1"} else "3"
+    return min(4, max(1, int(os.environ.get("POSITION_NEWS_BROWSER_CONCURRENCY", default))))
+
+
+def _browser_error(exc: Exception, phase: str, *, budget_seconds: float = 0) -> dict:
+    # Playwright appends multiline call logs. Keep only the concise first line,
+    # never command/environment dumps or arbitrary page contents.
+    lines = str(exc).strip().splitlines()
+    message = lines[0].strip() if lines else (
+        f"Browser batch deadline ({budget_seconds:g}s) exceeded"
+        if isinstance(exc, TimeoutError) else type(exc).__name__
+    )
+    message = re.sub(r"(?i)(authorization|api[_-]?key|token|password)(\s*[:=]\s*)\S+",
+                     r"\1\2[redacted]", message)
+    return {"items": [], "status": "error", "error": type(exc).__name__,
+            "phase": phase, "message": message[:160]}
+
+
 def _fetch_browser_page_batch(descriptors: list[dict], *, budget_seconds: float) -> dict:
     """One browser, bounded concurrent tabs and a deadline for the entire batch."""
     async def run():
@@ -2825,43 +2844,68 @@ def _fetch_browser_page_batch(descriptors: list[dict], *, budget_seconds: float)
 
         results = {}
         browser = driver = None
+        phase = "driver_start"
+        page_phases = {}
         page_timeout_ms = min(15_000, max(3_000, int(os.environ.get(
             "POSITION_NEWS_BROWSER_PAGE_TIMEOUT_MS", "10000"))))
-        concurrency = min(4, max(1, int(os.environ.get(
-            "POSITION_NEWS_BROWSER_CONCURRENCY", "3"))))
-        semaphore = asyncio.Semaphore(concurrency)
+        semaphore = asyncio.Semaphore(_browser_concurrency())
         try:
             async with asyncio.timeout(budget_seconds):
                 driver = await async_playwright().start()
-                launch_options = {"headless": True, "args": ["--disable-dev-shm-usage"],
+                phase = "browser_launch"
+                launch_options = {"headless": True, "args": [
+                    "--disable-dev-shm-usage", "--disable-gpu", "--renderer-process-limit=1"],
                                   "timeout": min(15_000, budget_seconds * 1000)}
                 executable = os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH", "").strip()
                 if executable:
                     launch_options["executable_path"] = executable
                 browser = await driver.chromium.launch(**launch_options)
-                context = await browser.new_context(locale="en-US", timezone_id="UTC")
-                context.set_default_timeout(page_timeout_ms)
+                phase = "context"
+                async def make_context(*, interactive: bool):
+                    context = await browser.new_context(locale="en-US", timezone_id="UTC",
+                                                        java_script_enabled=interactive)
+                    context.set_default_timeout(page_timeout_ms)
 
-                async def route_request(route):
-                    if route.request.resource_type in {"image", "media", "font", "stylesheet"}:
-                        await route.abort()
-                    else:
-                        await route.continue_()
+                    async def route_request(route):
+                        resource = route.request.resource_type
+                        if resource in {"image", "media", "font", "stylesheet"} or (
+                            resource == "script" and not interactive
+                        ):
+                            await route.abort()
+                        else:
+                            await route.continue_()
 
-                await context.route("**/*", route_request)
+                    await context.route("**/*", route_request)
+                    return context
+
+                # Publisher indexes and tags contain server-rendered cards.
+                # Only the archive search needs JavaScript hydration; avoid
+                # booting ad/analytics applications on every static source.
+                static_context = await make_context(interactive=False)
+                search_context = await make_context(interactive=True) if any(
+                    descriptor.get("search_term") for descriptor in descriptors
+                ) else None
+                phase = "queue"
 
                 async def fetch(descriptor):
+                    key = _browser_page_key(descriptor)
+                    page_phases[key] = "queue"
                     async with semaphore:
-                        page = await context.new_page()
-                        key = _browser_page_key(descriptor)
+                        page = None
                         try:
+                            page_phases[key] = "page_create"
+                            context = search_context if descriptor.get("search_term") else static_context
+                            page = await context.new_page()
+                            page_phases[key] = "navigation"
                             response = await page.goto(descriptor["url"],
                                 wait_until="domcontentloaded", timeout=page_timeout_ms)
                             if response is None or response.status >= 400:
-                                results[key] = {"items": [], "status": "error", "error": "http_error"}
+                                results[key] = {"items": [], "status": "error", "error": "http_error",
+                                                "phase": "navigation", "message": f"HTTP {response.status if response else 'no response'}"}
                                 return
                             term = descriptor.get("search_term")
                             if term:
+                                page_phases[key] = "search"
                                 # CoinDesk renders an interactive input before
                                 # React attaches its search handlers. Filling
                                 # it immediately can silently do nothing.
@@ -2881,19 +2925,22 @@ def _fetch_browser_page_batch(descriptors: list[dict], *, budget_seconds: float)
                                         arg=term.split()[0], timeout=min(5_000, page_timeout_ms))
                                 except Exception:
                                     pass
+                            page_phases[key] = "extraction"
                             raw = await page.locator("a[href]").evaluate_all(_BROWSER_LINKS_SCRIPT)
                             items = _parse_public_browser_links(raw, descriptor)
                             results[key] = {"items": items, "status": "ready" if items else "empty"}
                         except Exception as exc:
-                            results[key] = {"items": [], "status": "error", "error": type(exc).__name__}
+                            results[key] = _browser_error(exc, page_phases[key], budget_seconds=budget_seconds)
                         finally:
-                            await page.close()
+                            if page is not None:
+                                await page.close()
 
                 await asyncio.gather(*(fetch(descriptor) for descriptor in descriptors))
         except Exception as exc:
             for descriptor in descriptors:
-                results.setdefault(_browser_page_key(descriptor), {
-                    "items": [], "status": "error", "error": type(exc).__name__})
+                key = _browser_page_key(descriptor)
+                results.setdefault(key, _browser_error(
+                    exc, page_phases.get(key, phase), budget_seconds=budget_seconds))
         finally:
             if browser is not None:
                 try:
@@ -3046,6 +3093,8 @@ def enrich_coin_news_for_collector(symbol: str, rss_payload: dict) -> dict:
             "excluded_age_or_date_count": excluded_count,
             "cached": bool(result.get("cached")),
             **({"error": result["error"]} if result.get("error") else {}),
+            **({"phase": result["phase"]} if result.get("phase") else {}),
+            **({"message": result["message"]} if result.get("message") else {}),
         })
     # Sort before capping so old archive matches cannot displace recent RSS.
     merged, seen_titles, seen_urls = [], set(), set()

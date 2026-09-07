@@ -37,7 +37,7 @@
 - `POSITION_NEWS_EMBEDDED_ENABLED=true`: 웹 내 수집기. 외부 워커 전용 운영에서는 false로 끌 수 있다.
 - `POSITION_NEWS_EMBEDDED_BOOTSTRAP_ONLY=true`: Render 웹은 신규·오래된 티커의 RSS만 복구하고 워커에 lease를 넘긴다. 웹에서 Chromium 설치나 유료 호출을 기다리지 않는다. 독립 로컬 운영에서는 false로 전체 수집을 수행한다.
 - `POSITION_NEWS_SCHEDULE_SECONDS=60`: Prefect 스케줄 확인 간격. 실제 같은 티커 재수집은 300초 DB 커서로 제한한다.
-- `POSITION_NEWS_BROWSER_ENRICHMENT_ENABLED=true`, `POSITION_NEWS_BROWSER_BUDGET_SECONDS=35`: 워커에서 RSS 유무와 무관하게 브라우저 보강. 최대 3개 탭, 이미지·영상·폰트 제외, 공유 페이지 15분·실패/빈 결과 5분 캐시. 공개 페이지 캐시는 Postgres에도 최대 512개 저장해 Prefect의 새 프로세스에서도 재사용한다.
+- `POSITION_NEWS_BROWSER_ENRICHMENT_ENABLED=true`, `POSITION_NEWS_BROWSER_BUDGET_SECONDS=35`: 워커에서 RSS 유무와 무관하게 브라우저 보강. Render 기본 1개 탭(로컬 기본 3개), 섹션·태그 JavaScript 비활성·검색만 활성, 이미지·영상·폰트 제외, 공유 페이지 15분·실패/빈 결과 5분 캐시. 공개 페이지 캐시는 Postgres에도 최대 512개 저장해 Prefect의 새 프로세스에서도 재사용한다.
 - `POSITION_NEWS_SCAN_SECONDS=5`: 실행 티커 확인 주기. 시작 요청은 이 주기를 기다리지 않고 깨운다.
 - `POSITION_NEWS_COLLECTION_SECONDS=300`: 티커별 RSS 재수집 간격. 첫 티커에는 대기하지 않는다. 오류/빈 결과는 60초부터 제한적으로 재시도한다.
 - `POSITION_NEWS_MAX_AI_ANALYSES_PER_RUN=2`, `POSITION_NEWS_MAX_AI_ANALYSES_PER_DAY=10`: 공용 분석 상한. 기본 모델은 Haiku. 기사 fingerprint가 같으면 분석 재사용.
@@ -67,4 +67,6 @@
 - 실행기 테스트는 거래소 모의 응답으로 접수/체결 구분, 타임아웃 후 중복 주문 방지, 시세 장애 중 종료 명령 수신을 확인한다. 실거래 주문이나 운영 계정 변경은 실행하지 않았다.
 - 공개 RSS를 실제 조회한 단일 측정에서 LINK 10건(1.16초), SC 1건(0.85초), BMT 7건(0.72초)을 확인했다. 결과 수와 지연은 소스 상태에 따라 달라진다.
 - Windows GitHub Actions에서 실행기 전체 테스트와 exe 빌드가 통과했다. `runner-v6` 공개 자산 20,123,920바이트를 다운로드해 SHA-256 `432abbf693d0d778ba0ed3b702cc383cdf0b91533d4a39cb6ad5049d6357f324` 일치를 확인했다.
-- 배포 전 최종 회귀: 백엔드 675개, 프론트엔드 34개 통과. 로컬 실행기는 50개 통과·Windows 전용 1개 제외이며 Windows 빌드에서는 해당 플랫폼 테스트까지 실행했다. 실제 거래소 주문 검증은 수행하지 않았다.
+- 배포 전 최종 회귀: 백엔드 685개, 프론트엔드 34개 통과. 로컬 실행기는 50개 통과·Windows 전용 1개 제외이며 Windows 빌드에서는 해당 플랫폼 테스트까지 실행했다. 실제 거래소 주문 검증은 수행하지 않았다.
+
+운영 Playwright 전체 실패는 Prefect enrichment 태스크와 flow를 Failed로 표시합니다. RSS를 보존하고 최종 분석을 한 번만 수행한 뒤 실패를 기록하며 자동 유료 재시도는 하지 않습니다. 일부 소스 장애는 성공 수·단계·짧은 오류 메시지를 기록합니다.

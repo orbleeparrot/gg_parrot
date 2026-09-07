@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import time
 from datetime import datetime, timedelta, timezone
@@ -14,7 +15,8 @@ try:
 except ImportError:
     pass
 
-from prefect import flow, task
+from prefect import flow, get_run_logger, task
+from prefect.exceptions import MissingContextError
 from prefect.runtime import flow_run
 
 from .. import news as news_mod
@@ -29,6 +31,14 @@ _FLOW_TIMEOUT_SECONDS = max(
 
 class NewsSourceCircuitOpen(RuntimeError):
     pass
+
+
+class BrowserEnrichmentUnavailable(RuntimeError):
+    """Fail the orchestration step while retaining its usable RSS payload."""
+
+    def __init__(self, message: str, payload: dict | None = None):
+        super().__init__(message)
+        self.payload = payload or {}
 
 
 def _schedule_lag_seconds() -> float:
@@ -64,6 +74,23 @@ def enrich_ticker_news_task(asset_symbol: str, news_payload: dict) -> dict:
     print(json.dumps({"asset_symbol": asset_symbol,
                       "browser_enrichment": result.get("browser_enrichment", {}),
                       "sources": result.get("sources", [])}, ensure_ascii=False))
+    browser = result.get("browser_enrichment") or {}
+    status = browser.get("status")
+    source_count = int(browser.get("source_count") or 0)
+    successful = int(browser.get("successful_sources") or 0)
+    if status != "disabled" and (status == "error" or (source_count > 0 and successful == 0)):
+        raise BrowserEnrichmentUnavailable(
+            f"{asset_symbol} Playwright 전체 소스 수집 실패 ({successful}/{source_count}). "
+            "이미 수집한 RSS 결과는 유지합니다.",
+            result,
+        )
+    if status == "partial":
+        try:
+            logger = get_run_logger()
+        except MissingContextError:
+            logger = logging.getLogger(__name__)
+        logger.warning("%s Playwright 일부 소스 수집 실패: 성공 %s/%s, RSS 결과 유지",
+                       asset_symbol, successful, source_count)
     return result
 
 
@@ -115,6 +142,8 @@ def effective_config() -> dict:
         "max_ai_per_day": int(os.environ.get("POSITION_NEWS_MAX_AI_ANALYSES_PER_DAY", "10")),
         "browser_enabled": collector.browser_enrichment_enabled(),
         "browser_budget_seconds": min(90, max(5, int(os.environ.get("POSITION_NEWS_BROWSER_BUDGET_SECONDS", "35")))),
+        "browser_concurrency": min(4, max(1, int(os.environ.get(
+            "POSITION_NEWS_BROWSER_CONCURRENCY", "1" if os.environ.get("RENDER") else "3")))),
     }
 
 
@@ -172,6 +201,7 @@ def collect_position_news_flow() -> dict:
     ai_used = 0
     consecutive_fetch_failures = 0
     source_circuit_open = False
+    browser_failures = []
     expand = collector.browser_enrichment_enabled()
     pending = []
     leases = {}
@@ -245,7 +275,13 @@ def collect_position_news_flow() -> dict:
             allow_ai = ai_used < max_ai
             try:
                 if expand:
-                    news_payload = enrich_ticker_news_task.submit(asset_symbol, news_payload).result()
+                    try:
+                        news_payload = enrich_ticker_news_task.submit(asset_symbol, news_payload).result()
+                    except BrowserEnrichmentUnavailable as exc:
+                        # Prefect keeps this task Failed. Preserve its source
+                        # diagnostics and RSS, then run the final paid stage once.
+                        news_payload = exc.payload
+                        browser_failures.append(asset_symbol)
                 result = process_ticker_news_task.submit(asset_symbol, news_payload, allow_ai).result()
             except Exception as exc:
                 # Paid tasks have no retries. Count an uncertain model attempt
@@ -263,10 +299,20 @@ def collect_position_news_flow() -> dict:
     removed = prune_snapshots_task.submit(retention_days).result()
     summary = collector.summarize_results(results, removed=removed)
     summary["configuration"] = config
+    summary["browser_failed_tickers"] = browser_failures
+    summary["browser_failed_count"] = len(browser_failures)
+    if browser_failures:
+        summary["run_status"] = "browser_unavailable"
     print(json.dumps(summary, ensure_ascii=False))
     if source_circuit_open:
         raise NewsSourceCircuitOpen(
             "Google News RSS 및 CoinDesk RSS 연속 수집 실패"
+        )
+    if browser_failures:
+        raise BrowserEnrichmentUnavailable(
+            f"Playwright 전체 소스 수집 실패: {', '.join(browser_failures)}. "
+            "이미 수집한 RSS 결과를 유지하고 최종 분석을 처리했습니다. 브라우저 소스 상태를 확인하세요.",
+            {"summary": summary},
         )
     return summary
 

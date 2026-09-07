@@ -1,0 +1,154 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { advanceActivityTimeline } from "../src/features/agents/activityTimeline.js";
+
+const session = { session_id: 8, status: "running", connected: true,
+  in_position: true, position_qty: 1, position_side: "long", unrealized_pct: 0.1 };
+const context = { session, interval: "1m", candles: [], featureStates: {}, receivedAt: 1000 };
+const advance = (state, changes = {}) => advanceActivityTimeline(state, { ...context, ...changes });
+const news = (items, updated_at = 1000) => ({ position_news: { data: { items, updated_at } } });
+
+test("repeated heartbeat and snapshot timestamps do not create notifications", () => {
+  let state = advance(null);
+  const events = state.events;
+  for (let i = 0; i < 100; i++) {
+    state = advance(state, { receivedAt: 2000 + i, observedAt: 2000 + i,
+      session: { ...session, unrealized_pct: i / 100, heartbeat_kst: String(i) } });
+    assert.equal(state.events, events);
+  }
+  assert.deepEqual(state.events, []);
+});
+
+test("position entry, exit, repeated entry and termination each appear exactly once", () => {
+  let state = advance(null, { session: { ...session, in_position: false } });
+  state = advance(state);
+  state = advance(state, { session: { ...session, unrealized_pct: 0.2 } });
+  assert.deepEqual(state.events.map((e) => e.title), ["포지션 진입"]);
+  state = advance(state, { session: { ...session, in_position: false } });
+  state = advance(state);
+  state = advance(state, { session: { ...session, stopping: true, stop_mode: "close_and_stop" } });
+  const stopped = { ...session, status: "stopped", connected: false, in_position: false, note: "청산 완료" };
+  state = advance(state, { session: stopped });
+  state = advance(state, { session: { ...stopped } });
+  assert.deepEqual(state.events.map((e) => e.title), ["포지션 진입", "포지션 청산", "포지션 진입", "청산 후 종료 요청", "실행 종료"]);
+  assert.equal(new Set(state.events.map((e) => e.id)).size, 5);
+});
+
+test("a connection incident does not repeat on polls but can recur after recovery", () => {
+  let state = advance(null);
+  for (let incident = 0; incident < 2; incident++) {
+    for (let poll = 0; poll < 10; poll++) state = advance(state, { session: { ...session, connected: false } });
+    state = advance(state);
+  }
+  assert.deepEqual(state.events.map((e) => e.title), ["실행기 응답 끊김", "실행기 연결 복구", "실행기 응답 끊김", "실행기 연결 복구"]);
+});
+
+test("a stop request and terminal report do not repeat as their heartbeat ages", () => {
+  let state = advance(null);
+  const stopping = { ...session, stopping: true, stop_mode: "close_and_stop" };
+  state = advance(state, { session: stopping });
+  state = advance(state, { session: { ...stopping, connected: false, position_qty: 0.5 } });
+  const stopped = { ...session, status: "stopped", in_position: false, note: "청산 완료" };
+  state = advance(state, { session: stopped });
+  state = advance(state, { session: { ...stopped, connected: false, stopping: false, stop_mode: null } });
+  assert.deepEqual(state.events.map((e) => e.title), ["청산 후 종료 요청", "실행 종료"]);
+});
+
+test("an uncertain-order warning does not repeat on connection or quantity updates", () => {
+  const uncertain = { ...session, position_uncertain: true };
+  let state = advance(null, { session: uncertain });
+  state = advance(state, { session: { ...uncertain, connected: false, position_qty: 0.5 } });
+  assert.equal(state.events.length, 1);
+  assert.equal(state.events[0].title, "포지션 확인 필요");
+});
+
+test("loss warnings require a risk threshold or worsening and resist boundary oscillation", () => {
+  let state = advance(null);
+  const loss = (pct) => { state = advance(state, { session: { ...session, unrealized_pct: pct } }); };
+  for (const pct of [-2.01, -1.99, -2.03, -2.1, -3.9, -1.8]) loss(pct);
+  assert.equal(state.events.length, 1);
+  assert.equal(state.events[0].summary, "현재 평가손익 -2.01%");
+  loss(-4.1);
+  loss(-3.99);
+  loss(-4.01);
+  assert.equal(state.events.length, 2);
+  loss(-1.4); // clear recovery, rather than jitter around -2%
+  loss(-2.1);
+  assert.equal(state.events.length, 3);
+});
+
+test("missing position metrics do not rearm an ongoing loss incident", () => {
+  let state = advance(null, { session: { ...session, unrealized_pct: -3 } });
+  state = advance(state, { session: { ...session, unrealized_pct: null } });
+  state = advance(state, { session: { ...session, unrealized_pct: -3.1 } });
+  assert.equal(state.events.length, 1);
+});
+
+test("a sustained volatility regime does not alert on every closed bar or chart refresh", () => {
+  let state = advance(null);
+  const bar = (t, h = 102.5) => [{ t, o: 100, h, l: 100, c: 100, closed: true }];
+  for (const t of [1000, 2000, 3000]) state = advance(state, { candles: bar(t) });
+  assert.equal(state.events.length, 1);
+  state = advance(state, { candles: [] });
+  state = advance(state, { candles: bar(3000) });
+  assert.equal(state.events.length, 1);
+  state = advance(state, { candles: bar(4000, 104.5) });
+  assert.equal(state.events.length, 2);
+  state = advance(state, { candles: bar(5000, 100.5) });
+  state = advance(state, { candles: bar(6000) });
+  assert.equal(state.events.length, 3);
+});
+
+test("an article keeps its first timestamp and place across refreshes and translation", () => {
+  const article = { id: "a", title: "Article", source: "Source", summary: "Original" };
+  let state = advance(null, { featureStates: news([article]) });
+  state = advance(state, { receivedAt: 2000, featureStates: news([], 2000) });
+  state = advance(state, { receivedAt: 3000, featureStates: news([{ ...article, title: "번역된 기사", summary: "번역" }], 3000) });
+  assert.equal(state.events.length, 1);
+  assert.equal(state.events[0].occurredAt, 1000);
+  assert.equal(state.events[0].title, "번역된 기사");
+  const events = state.events;
+  state = advance(state, { receivedAt: 4000, featureStates: news([{ ...article, title: "번역된 기사", summary: "번역" }], 4000) });
+  assert.equal(state.events, events);
+});
+
+test("seen news survives disappearing responses and more than one screen of messages", () => {
+  const articles = Array.from({ length: 35 }, (_, i) => ({ id: `a-${i}`, title: `Article ${i}`, published: 1000 + i }));
+  let state = advance(null, { featureStates: news(articles) });
+  state = advance(state, { featureStates: news([]) });
+  state = advance(state, { featureStates: news([...articles].reverse()) });
+  assert.equal(state.events.length, 35);
+  assert.deepEqual(state.events.map((e) => e.title), articles.map((a) => a.title));
+});
+
+test("a repeated source failure is one incident until the source recovers", () => {
+  const unavailable = (observed_at) => ({ whale_activity: { data: { status: "unavailable", observed_at } } });
+  let state = advance(null, { featureStates: unavailable(1000) });
+  for (let t = 2000; t < 5000; t += 1000) state = advance(state, { featureStates: unavailable(t) });
+  assert.equal(state.events.length, 1);
+  assert.equal(state.events[0].occurredAt, 1000);
+  state = advance(state, { featureStates: { whale_activity: { data: { status: "empty", items: [] } } } });
+  state = advance(state, { featureStates: unavailable(6000) });
+  assert.equal(state.events.length, 2);
+});
+
+test("news retries do not resolve and re-announce the same connection failure", () => {
+  const staleData = { items: [{ id: "cached", title: "Cached article" }], collection: { status: "ready", freshness: "fresh" } };
+  const response = (status) => ({ position_news: { status, data: staleData } });
+  let state = advance(null, { featureStates: response("error") });
+  for (let i = 0; i < 10; i++) {
+    state = advance(state, { featureStates: response("loading") });
+    state = advance(state, { featureStates: response("error") });
+  }
+  assert.equal(state.events.filter((e) => e.conditionKey === "news-connection").length, 1);
+  state = advance(state, { featureStates: response("ready") });
+  state = advance(state, { featureStates: response("error") });
+  assert.equal(state.events.filter((e) => e.conditionKey === "news-connection").length, 2);
+});
+
+test("a different session gets its own baseline without retaining another macro's events", () => {
+  let state = advance(null, { featureStates: news([{ id: "a", title: "Article" }]) });
+  state = advance(state, { session: { ...session, session_id: 9 } });
+  assert.equal(state.events.length, 0);
+  assert.deepEqual(state.seen, {});
+});

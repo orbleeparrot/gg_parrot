@@ -3,9 +3,10 @@ import {
   AGENT_MODULE_MAP,
   AGENT_MODULES,
   accessFor,
-  buildAgentEvents,
 } from "../features/agents/registry.js";
+import { advanceActivityTimeline, emptyActivityTimeline } from "../features/agents/activityTimeline.js";
 const PLAN_LABELS = { free: "FREE", plus: "PLUS", pro: "PRO" };
+const EMPTY_FEATURE_STATES = {};
 const SECOND_MS = 1000;
 const MINUTE_MS = 60 * SECOND_MS;
 const HOUR_MS = 60 * MINUTE_MS;
@@ -107,7 +108,7 @@ export default function AgentActivityStream({
   session,
   candles,
   interval,
-  featureStates = {},
+  featureStates = EMPTY_FEATURE_STATES,
   observedAt,
   entitlements = null,
   onUpgrade,
@@ -119,27 +120,29 @@ export default function AgentActivityStream({
   const logRef = useRef(null);
   const followLatestRef = useRef(true);
   const previousIdsRef = useRef(new Set());
+  const initialMessagesRef = useRef(true);
+  const scrollRequestedRef = useRef(true);
+  const [timeline, setTimeline] = useState(() => emptyActivityTimeline(session?.session_id));
+  const context = useMemo(() => ({ symbol, macro, session, candles, interval,
+    observedAt, featureStates, receivedAt: Date.now() }),
+  [candles, featureStates, interval, macro, observedAt, session, symbol]);
+
+  useEffect(() => {
+    setTimeline((previous) => advanceActivityTimeline(previous, context));
+  }, [context]);
+
   const events = useMemo(() => {
-    const combined = buildAgentEvents({
-      symbol,
-      macro,
-      session,
-      candles,
-      interval,
-      observedAt,
-      featureStates,
-    });
-    return combined
+    return timeline.events
       .filter((event) => accessFor(AGENT_MODULE_MAP.get(event.module), entitlements) === "enabled")
       .sort((left, right) => eventTime(right.occurredAt) - eventTime(left.occurredAt));
-  }, [candles, entitlements, featureStates, interval, macro, observedAt, session, symbol]);
+  }, [entitlements, timeline.events]);
 
   const selectedModule = filter === "all" ? null : AGENT_MODULE_MAP.get(filter);
   const selectedAccess = selectedModule ? accessFor(selectedModule, entitlements) : "enabled";
   const selectedFeatureState = selectedModule ? featureStates[selectedModule.key] : null;
   const isFeatureLoading = selectedModule
-    ? selectedFeatureState?.status === "loading"
-    : Object.values(featureStates).some((state) => state?.status === "loading");
+    ? selectedFeatureState?.status === "loading" && !selectedFeatureState.data
+    : Object.values(featureStates).some((state) => state?.status === "loading" && !state.data);
   const visible = useMemo(() => {
     const filtered = filter === "all" ? events : events.filter((event) => event.module === filter);
     return filtered.slice(0, 24).reverse();
@@ -149,7 +152,6 @@ export default function AgentActivityStream({
     const elapsedSeconds = Math.floor(Math.max(0, now - occurredAt) / SECOND_MS);
     return occurredAt && elapsedSeconds <= HOUR_MS / SECOND_MS;
   });
-  const messageKey = visible.map((event) => event.id).join("|");
 
   useEffect(() => {
     if (!hasRelativeTime) return undefined;
@@ -160,21 +162,26 @@ export default function AgentActivityStream({
   useEffect(() => {
     const node = logRef.current;
     if (!node) return;
-    const nextIds = new Set(visible.map((event) => event.id));
     const previousIds = previousIdsRef.current;
-    const added = previousIds.size
-      ? visible.filter((event) => !previousIds.has(event.id)).length
-      : 0;
-    previousIdsRef.current = nextIds;
+    const added = initialMessagesRef.current ? 0
+      : visible.filter((event) => !previousIds.has(event.id)).length;
+    for (const event of events) previousIds.add(event.id);
+    // Filter switches and responses that temporarily omit a message must not
+    // turn previously observed events into new arrivals.
+    while (previousIds.size > 2000) previousIds.delete(previousIds.values().next().value);
 
-    if (!previousIds.size || followLatestRef.current) {
+    if (scrollRequestedRef.current || (added > 0 && followLatestRef.current)) {
       node.scrollTop = node.scrollHeight;
       setNewMessageCount(0);
     } else if (added > 0) {
       setNewMessageCount((current) => current + added);
     }
+    if (events.length) {
+      initialMessagesRef.current = false;
+      scrollRequestedRef.current = false;
+    }
     if (added > 0) setAnnouncement(`새 관측 ${added}개가 도착했어요.`);
-  }, [messageKey, visible]);
+  }, [events, visible]);
 
   function trackScroll() {
     const node = logRef.current;
@@ -185,7 +192,7 @@ export default function AgentActivityStream({
 
   function selectFilter(nextFilter) {
     followLatestRef.current = true;
-    previousIdsRef.current = new Set();
+    scrollRequestedRef.current = true;
     setNewMessageCount(0);
     setFilter(nextFilter);
   }
@@ -212,6 +219,7 @@ export default function AgentActivityStream({
           ref={logRef}
           className="agent-chat-log"
           role="log"
+          aria-relevant="additions"
           tabIndex={0}
           aria-label="에이전트 관측 기록"
           aria-busy={isFeatureLoading}

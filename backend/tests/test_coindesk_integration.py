@@ -126,6 +126,11 @@ def test_cryptoslate_xrp_uses_verified_publisher_slug():
     ("1.217 ORCA/USDC 현물 거래 | 암호화폐, 주식 및 원자재", "Binance"),
     ("Orca/usdt is going to pump today", "Binance"),
     ("$Celestia (TIA.CC)$", "Moomoo"),
+    ("$PROM PROM is showing bearish movement: -5.16% | HALIFI on Binance Square", "Binance"),
+    ("Property Share Investment Trust-Propshare Celestia Dividend History, Yield & Record Date", "INDmoney"),
+    ("Kids showcase talent at ‘Sapiens Celestia’", "The Tribune"),
+    ("ICP Crypto Price Prediction: Can Internet Computer Return To $20? Rb Leipzig (wdBc4vFTzb)", "Mshale"),
+    ("INSIGHTS⚡️ Internet Computer canisters are designed to host", "KuCoin"),
 ])
 def test_live_google_results_exclude_products_and_community_trade_setups(title, source):
     assert not news._is_news_article_candidate({"title": title, "source": source,

@@ -846,11 +846,20 @@ def _is_news_article_candidate(item: dict) -> bool:
             return False
         if re.search(r"^[A-Z0-9]+/(?:USDT|USDC|BTC|ETH)\s+is going to pump\b", title, re.IGNORECASE):
             return False
+        if re.search(r"^\$[A-Z0-9]+\s+[A-Z0-9]+\s+is showing (?:bearish|bullish) movement", title, re.IGNORECASE):
+            return False
     if source == "moomoo" and re.fullmatch(r"\$?[\w .-]+\s*\([A-Z0-9]+\.(?:CC|US|HK)\)\$?", title.strip()):
+        return False
+    if source == "indmoney" and re.search(r"\bDividend History, Yield & Record Date$", title, re.IGNORECASE):
+        return False
+    if source == "mshale" and re.search(r"\bRb Leipzig\s+\([A-Za-z0-9]{8,16}\)$", title, re.IGNORECASE):
+        return False
+    if source == "kucoin" and title.startswith("INSIGHTS⚡️"):
         return False
     # Search engines can match a project name used by a concert venue. Such
     # listings are neither token news nor worth a paid translation request.
     if re.search(r"\bat\s+.{0,60}\b(?:theat(?:er|re)|concert hall|music hall)\b|"
+                 r"\bkids showcase talent at\b|"
                  r"\bobituary\s*\(\d{4}\)|\bbuilding\s+.{0,40}\s+to bring their family home\b", title, re.IGNORECASE) and not re.search(
         r"\b(?:crypto|token|blockchain|nft|bitcoin|ethereum)\b|암호화폐|토큰", title, re.IGNORECASE
     ):
@@ -1892,6 +1901,7 @@ _TITLE_TRANSLATION_UPPER_TERMS = frozenset(_COIN_ALIASES) | {
     "USD",
 }
 _TITLE_TRANSLATION_UPPER_PROSE = {
+    "THIS",
     # 분기 표기는 티커가 아니다 — "Q3 earnings"는 "3분기 실적"으로 옮겨야 맞다.
     "Q1", "Q2", "Q3", "Q4",
     "AFTER",

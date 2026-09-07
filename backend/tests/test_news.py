@@ -3518,3 +3518,12 @@ def test_translation_spaced_amounts_still_reject_changed_facts(source, translate
 def test_spaced_korean_amount_does_not_absorb_independent_percent_or_year():
     assert news._translation_fact_tokens("3억 5%") [0] == (("300000000", "number"), ("5", "%"))
     assert news._translation_fact_tokens("3억 2026년") [0] == (("2026", "number"), ("300000000", "number"))
+
+
+def test_uppercase_question_word_is_prose_but_explicit_cashtag_remains_protected():
+    assert news._valid_title_translation(
+        "ICP labeled ‘weakest among 60 cryptos’ – Can Internet Computer ride Fed sentiment past THIS?",
+        "‘암호화폐 60종 중 최약체’로 지목된 ICP…인터넷컴퓨터, 연준 관련 기대감 타고 이 수준 넘을까?",
+    )
+    assert not news._valid_title_translation("$THIS token gains 5%", "토큰 가격 5% 상승")
+    assert news._valid_title_translation("$THIS token gains 5%", "$THIS 토큰 가격 5% 상승")

@@ -78,3 +78,5 @@ POSITION_NEWS_REQUIRE_POSTGRES=true
 `POSITION_NEWS_BROWSER_FALLBACK_ENABLED`는 이전 설정입니다. 현재 확장은 `POSITION_NEWS_BROWSER_ENRICHMENT_ENABLED`로 제어합니다. 기사·번역과 일일 예산은 DB에 저장하고, 번역 실패 시 원문을 보존합니다. 기사와 분석 순서를 함께 보존하며, 오류·빈 결과가 마지막 정상 스냅샷을 삭제하지 않습니다.
 
 전체 구조는 [에이전트 실행 구조](../docs/agent-runtime.md), Render 설정은 루트 `render.yaml`과 `render.prefect-worker.example.yaml`을 참고하세요.
+
+브라우저 공개 페이지 캐시는 `BrowserNewsPageCache`에 최대 512개 저장합니다. Prefect의 다음 subprocess도 만료 전 결과를 재사용하며 성공은 15분, 빈 결과·실패는 5분 후 갱신합니다. 배치 조회·원자적 upsert를 사용하고 만료 시간을 조회 시 연장하지 않습니다.

@@ -72,6 +72,8 @@ def _empty_coindesk_discovery(**_kwargs):
 @pytest.fixture(autouse=True)
 def _disable_real_coindesk_browser(monkeypatch):
     """Keep unit tests offline; browser-specific tests install their own fake."""
+    monkeypatch.setattr(news, "_load_durable_browser_pages", lambda _keys: {})
+    monkeypatch.setattr(news, "_store_durable_browser_pages", lambda _entries: None)
     monkeypatch.setattr(
         news,
         "_fetch_coindesk_pages_playwright",
@@ -2919,3 +2921,104 @@ def test_article_excerpt_enrichment_caps_large_legacy_limits_at_three(monkeypatc
     assert len(enriched) == 10
     assert all(item.get("excerpt") == "Article excerpt" for item in enriched[:3])
     assert all("excerpt" not in item for item in enriched[3:])
+
+
+@pytest.mark.parametrize(('symbol', 'project'), [
+    ('ENA', 'Ethena'), ('TAO', 'Bittensor'), ('TON', 'Toncoin'),
+    ('TIA', 'Celestia'), ('ZRO', 'LayerZero'),
+])
+def test_new_project_aliases_are_searched_and_match_headlines_without_ticker(monkeypatch, symbol, project):
+    calls = []
+    headline = {'title': f'{project} announces a network upgrade', 'url': 'https://example.com/news'}
+    def fetch(query, **kwargs):
+        calls.append(query)
+        return [headline] if project.lower() in query.lower() else []
+    monkeypatch.setattr(news, '_fetch_news', fetch)
+    result = news._coin_news_envelope(symbol, strict=True, relevant_only=True)
+    assert result['items'] and result['items'][0]['title'] == headline['title']
+    assert all(project.lower() in query.lower() for query in calls)
+    assert symbol not in news.position_news_collection_universe()
+
+
+@pytest.mark.parametrize(('symbol', 'title'), [
+    ('TAO', "Rumors claim Anthropic's Claude solved Navier-Stokes; Terence Tao clarifies"),
+    ('TAO', 'Terence Tao discusses a new math proof on a crypto news site'),
+    ('ENA', 'ENA announces a new television drama series'),
+    ('TON', 'The mine produces one ton of ore each day'),
+    ('ABC', 'ABC reports the latest sports results'),
+    ('ABC', 'Professor Abc receives a mathematics award'),
+    ('TIA', 'Tia wins a prestigious acting award'),
+])
+def test_short_tickers_do_not_match_people_channels_or_ordinary_words(symbol, title):
+    assert not news._matches_asset({'title': title}, symbol, symbol)
+
+
+@pytest.mark.parametrize(('symbol', 'title'), [
+    ('TAO', 'TAO token rallies after a network upgrade'),
+    ('TAO', '$TAO liquidity rises'),
+    ('TAO', 'TAOUSDT futures volume reaches a record'),
+    ('TAO', 'TAO surges 7% on increasing demand'),
+    ('ENA', 'ENA 토큰 상장 발표'),
+    ('ABC', 'ABC 코인 거래량 증가'),
+    ('ABC', 'ABC token launched its storage network'),
+    ('ABC', '$ABC gains exchange support'),
+    ('ABC', 'ABC/USDT volume increases'),
+])
+def test_short_tickers_accept_explicit_token_or_market_context(symbol, title):
+    assert news._matches_asset({'title': title}, symbol, symbol)
+
+
+@pytest.mark.parametrize(('url', 'title'), [
+    ('https://coinmarketcap.com/currencies/ethena/', 'Ethena (ENA)'),
+    ('https://coinmarketcap.com/ko/currencies/ethena/', 'Ethena (ENA)'),
+    ('https://coingecko.com/en/coins/ethena', 'Ethena'),
+    ('https://coinbase.com/price/ethena', 'Ethena price'),
+    ('https://news.google.com/rss/articles/opaque', 'Ethena (ENA) 가격, 차트, 시가총액 | 코인마켓캡'),
+    ('https://news.google.com/rss/articles/opaque', 'Ethena price today, ENA live price and chart'),
+    ('https://news.google.com/rss/articles/opaque', 'ENA to USD converter'),
+])
+def test_quote_and_converter_pages_are_excluded_from_collected_news(url, title):
+    assert news._relevant_items([{'url': url, 'title': title}], asset_symbol='ENA',
+                               coin_name='ENA', feed_source='google_news_rss') == []
+
+
+def test_quote_filter_keeps_actual_publisher_analysis_articles():
+    item = {'url': 'https://coinmarketcap.com/community/articles/123',
+            'title': 'Ethena token price surges after a new listing'}
+    assert news._relevant_items([item], asset_symbol='ENA', coin_name='ENA', feed_source='google_news_rss')
+
+
+def test_browser_project_searches_do_not_spend_pages_on_korean_aliases():
+    assert news._coindesk_asset_search_terms('ENA', 'ENA') == ['ethena']
+    assert news._coindesk_asset_search_terms('TAO', 'TAO') == ['bittensor']
+
+
+def test_browser_cache_uses_durable_results_after_a_fresh_worker_process(monkeypatch):
+    monkeypatch.setattr(news, '_browser_page_cache', {})
+    pages = news._browser_news_pages('ENA', 'ENA')
+    shared = _browser_batch(pages)
+    reads, writes = [], []
+    monkeypatch.setattr(news, '_load_durable_browser_pages', lambda keys: reads.append(keys) or shared)
+    monkeypatch.setattr(news, '_store_durable_browser_pages', lambda entries: writes.append(entries))
+    monkeypatch.setattr(news, '_fetch_browser_page_batch', lambda *_args, **_kwargs: pytest.fail('durable cache hit'))
+    result = news._cached_browser_pages(pages)
+    assert len(reads) == 1 and not writes
+    assert all(value['cached'] for value in result.values())
+
+
+def test_browser_cache_batches_only_missing_pages_into_durable_storage(monkeypatch):
+    monkeypatch.setattr(news, '_browser_page_cache', {})
+    pages = news._browser_news_pages('ENA', 'ENA')
+    existing_key = news._browser_page_key(pages[0])
+    calls, writes = [], []
+    monkeypatch.setattr(news, '_load_durable_browser_pages', lambda keys:
+                        {existing_key: {'items': [], 'status': 'empty'}})
+    monkeypatch.setattr(news, '_fetch_browser_page_batch', lambda missing, **_kwargs:
+                        calls.append(missing) or _browser_batch(missing))
+    monkeypatch.setattr(news, '_store_durable_browser_pages', lambda entries: writes.append(entries))
+    news._cached_browser_pages(pages)
+    assert len(calls) == len(writes) == 1
+    assert existing_key not in writes[0]
+    assert len(writes[0]) == len(pages) - 1
+    now_ms = news.time.time() * 1000
+    assert all(now_ms < expires_ms <= now_ms + 301_000 for _result, expires_ms in writes[0].values())

@@ -1,9 +1,10 @@
-"""API smoke tests via FastAPI TestClient (uses cached/synthetic data offline)."""
+"""API smoke tests via FastAPI TestClient with explicit offline market fixtures."""
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
+import pandas as pd
 
-from app import news
+from app import marketdata, news
 from app.main import app
 
 client = TestClient(app)
@@ -20,7 +21,17 @@ def _macro_payload():
     }
 
 
-def test_create_get_backtest_gallery_card_flow():
+def test_create_get_backtest_gallery_card_flow(monkeypatch):
+    def fake_klines(symbol, start_ms, end_ms, *, interval, market, allow_synthetic):
+        assert (symbol, interval, market, allow_synthetic) == ("BTCUSDT", "1d", "futures", False)
+        assert start_ms < end_ms
+        prices = [110.0, 108.0, 106.0, 104.0, 102.0, 100.0]
+        return pd.DataFrame({
+            "timestamp": pd.date_range(pd.to_datetime(start_ms, unit="ms", utc=True), periods=6, freq="D"),
+            "open": prices, "high": prices, "low": prices, "close": prices, "volume": [1.0] * 6,
+        }), "fixture"
+
+    monkeypatch.setattr(marketdata, "get_klines", fake_klines)
     # create
     r = client.post("/api/macros", json=_macro_payload())
     assert r.status_code == 200, r.text
@@ -28,6 +39,7 @@ def test_create_get_backtest_gallery_card_flow():
     slug = data["share_slug"]
     assert slug and data["human_summary"]
     assert "result" in data and "final_return_pct" in data["result"]
+    assert data["data_source"] == "fixture"
 
     # fetch (clone path)
     r = client.get(f"/api/macros/{slug}")
@@ -39,6 +51,7 @@ def test_create_get_backtest_gallery_card_flow():
     r = client.post("/api/backtest", json={"macro": loaded, "period_override": {"preset": "6m"}})
     assert r.status_code == 200
     assert "disclaimer" in r.json()
+    assert r.json()["data_source"] == "fixture"
 
     # gallery
     r = client.get("/api/gallery")

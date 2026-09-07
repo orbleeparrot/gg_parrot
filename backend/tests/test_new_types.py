@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from app import kimchi as kimchi_mod
+from app import marketdata
 from app.engine.backtest import run_backtest
 from app.engine.schema import Macro
 from app.main import app
@@ -101,7 +102,17 @@ def test_short_symmetry_allowed_only_for_fgj():
     # (No exception at schema level for D long; short D simply isn't offered by UI.)
 
 
-def test_create_macro_new_type_endpoint():
+def test_create_macro_new_type_endpoint(monkeypatch):
+    def fake_klines(symbol, start_ms, end_ms, *, interval, market, allow_synthetic):
+        assert (symbol, interval, market, allow_synthetic) == ("BTCUSDT", "1h", "spot", False)
+        assert start_ms < end_ms
+        candles = _osc_df()
+        candles["timestamp"] = pd.date_range(
+            pd.to_datetime(start_ms, unit="ms", utc=True), periods=len(candles), freq="h",
+        )
+        return candles, "fixture"
+
+    monkeypatch.setattr(marketdata, "get_klines", fake_klines)
     macro = {
         "symbol": "BTCUSDT", "rule_type": "D", "candle_interval": "1h",
         "params": _VALID_PARAMS["D"],
@@ -113,6 +124,7 @@ def test_create_macro_new_type_endpoint():
     body = res.json()
     assert body["share_slug"].startswith("btc-grid")
     assert "그리드" in body["human_summary"]
+    assert body["data_source"] == "fixture"
 
 
 # --- kimchi premium -----------------------------------------------------

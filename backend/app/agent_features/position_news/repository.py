@@ -10,11 +10,14 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete, update, or_
+from sqlalchemy.dialects.postgresql import insert as postgres_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from ... import news as news_mod
 from ...db import (
+    BrowserNewsPageCache,
     MarketNewsSummary,
     NewsTitleTranslation,
     RunSession,
@@ -40,6 +43,8 @@ _TITLE_TRANSLATION_CLAIM_LEASE_MS = max(
     30,
     int(os.environ.get("NEWS_TITLE_TRANSLATION_CLAIM_LEASE_SECONDS", "180")),
 ) * 1000
+_BROWSER_PAGE_CACHE_MAX_ROWS = 512
+_BROWSER_PAGE_CACHE_MAX_PAYLOAD_BYTES = 256_000
 
 
 @dataclass(frozen=True)
@@ -1370,4 +1375,71 @@ def store_market_news_summary(
     row.prompt_version = prompt_version
     row.updated_at = now_iso
     row.updated_ms = millis
+    db.commit()
+
+
+def load_browser_pages(keys: list[str], *, now_ms=None, db=None) -> dict[str, dict]:
+    """One batch read of unexpired public page results, independent of memory."""
+    requested = sorted({key for key in keys if isinstance(key, str) and 0 < len(key) <= 512})[:_BROWSER_PAGE_CACHE_MAX_ROWS]
+    if not requested:
+        return {}
+    if db is None:
+        with get_session() as owned:
+            return load_browser_pages(requested, now_ms=now_ms, db=owned)
+    millis, _ = _clock(now_ms)
+    rows = db.exec(select(BrowserNewsPageCache).where(
+        BrowserNewsPageCache.cache_key.in_(requested),
+        BrowserNewsPageCache.expires_ms > millis,
+    )).all()
+    results = {}
+    for row in rows:
+        try:
+            payload = json.loads(row.payload_json)
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if isinstance(payload, dict):
+            results[row.cache_key] = payload
+    return results
+
+
+def store_browser_pages(entries: dict[str, tuple[dict, int]], *, now_ms=None, db=None) -> None:
+    """Atomically share public article metadata; bound rows and payload size."""
+    if not entries:
+        return
+    if db is None:
+        with get_session() as owned:
+            return store_browser_pages(entries, now_ms=now_ms, db=owned)
+    millis, _ = _clock(now_ms)
+    values = []
+    for key, (payload, expires_ms) in entries.items():
+        if not isinstance(key, str) or not 0 < len(key) <= 512 or not isinstance(payload, dict):
+            continue
+        if expires_ms <= millis:
+            continue
+        serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        if len(serialized.encode("utf-8")) > _BROWSER_PAGE_CACHE_MAX_PAYLOAD_BYTES:
+            continue
+        values.append({"cache_key": key, "payload_json": serialized,
+                       "expires_ms": int(expires_ms), "updated_ms": millis})
+        if len(values) >= _BROWSER_PAGE_CACHE_MAX_ROWS:
+            break
+    if not values:
+        return
+
+    # A single atomic batch upsert also handles two processes seeing the same
+    # previously uncached public page. Late older results cannot overwrite new.
+    insert = postgres_insert if db.get_bind().dialect.name == "postgresql" else sqlite_insert
+    statement = insert(BrowserNewsPageCache).values(values)
+    statement = statement.on_conflict_do_update(
+        index_elements=[BrowserNewsPageCache.cache_key],
+        set_={name: getattr(statement.excluded, name)
+              for name in ("payload_json", "expires_ms", "updated_ms")},
+        where=BrowserNewsPageCache.updated_ms <= statement.excluded.updated_ms,
+    )
+    db.exec(statement)
+    db.exec(delete(BrowserNewsPageCache).where(BrowserNewsPageCache.expires_ms <= millis))
+    oldest = select(BrowserNewsPageCache.cache_key).order_by(
+        BrowserNewsPageCache.updated_ms.desc(), BrowserNewsPageCache.cache_key,
+    ).offset(_BROWSER_PAGE_CACHE_MAX_ROWS)
+    db.exec(delete(BrowserNewsPageCache).where(BrowserNewsPageCache.cache_key.in_(oldest)))
     db.commit()

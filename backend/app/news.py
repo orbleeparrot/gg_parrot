@@ -147,6 +147,12 @@ _COIN_ALIASES = {
     # while a real runner session is active.
     "BMT": ("bubblemaps",),
     "MUBARAK": ("mubarak coin", "mubarak token", "mubarak meme coin"),
+    "ENA": ("ethena", "에테나"),
+    "TAO": ("bittensor", "비트텐서"),
+    # TON is the network; Toncoin remains relevant to legacy TON market symbols.
+    "TON": ("toncoin", "the open network", "ton blockchain", "톤코인"),
+    "TIA": ("celestia", "셀레스티아"),
+    "ZRO": ("layerzero", "layer zero", "레이어제로"),
 }
 
 # These symbols are ordinary English words or common abbreviations. Matching
@@ -180,6 +186,7 @@ _AMBIGUOUS_BARE_TICKERS = frozenset({
 # also used by banks, subcutaneous medicines, and sweepstakes-casino credits.
 # Require a project name, crypto context, market pair, or trusted category.
 _CONTEXT_REQUIRED_TICKERS = frozenset({"MUBARAK", "SC", "T"})
+_DYNAMIC_CONTEXT_TICKERS = frozenset({"ENA", "TAO", "TON", "TIA", "ZRO"})
 
 # These project names also occur as ordinary English words. Preserve the
 # publisher's capitalization and reject common non-project phrases instead of
@@ -658,6 +665,29 @@ def _parse_openeden_rss(xml_text: str) -> list[dict]:
     return items
 
 
+def _has_dynamic_ticker_context(title: str, asset_symbol: str) -> bool:
+    """Short unfamiliar tickers need evidence that the headline names an asset."""
+    ticker = re.escape(asset_symbol)
+    if re.search(rf"(?<![A-Za-z0-9])\${ticker}(?![A-Za-z0-9])", title, re.IGNORECASE):
+        return True
+    if re.search(rf"(?<![A-Za-z0-9]){ticker}[\s/_-]?(?:USDT|USDC|BUSD|BTC|ETH|USD|KRW)(?![A-Za-z0-9])",
+                 title, re.IGNORECASE):
+        return True
+    contextual = rf"(?<![A-Za-z0-9]){ticker}(?![A-Za-z0-9])\s*(?:coin|crypto|token|코인|토큰)"
+    if re.search(contextual, title, re.IGNORECASE):
+        return True
+    # Capitalization alone is insufficient (TV channels, names, and acronyms).
+    # In particular, 'Terence Tao' must not be confused with Bittensor's TAO.
+    if not re.search(rf"(?<![A-Za-z0-9]){ticker}(?![A-Za-z0-9])", title):
+        return False
+    return bool(re.search(
+        r"\b(?:crypto(?:currency)?|blockchain|tokens?|coins?|altcoins?|defi|staking|"
+        r"mainnet|airdrop|tokenomics|stablecoin|futures|listing)\b|"
+        r"코인|토큰|암호화폐|가상자산|상장|거래량|스테이킹|"
+        r"\b(?:price|trades?|trading|rallies|surges|gains|drops|jumps|falls|soars)\b"
+        r".{0,25}(?:\d+(?:\.\d+)?%|\$[\d.]+)", title, re.IGNORECASE))
+
+
 def _matches_asset(item: dict, asset_symbol: str, coin_name: str) -> bool:
     categories = item.get("categories") or []
     title = str(item.get("title") or "")
@@ -681,6 +711,9 @@ def _matches_asset(item: dict, asset_symbol: str, coin_name: str) -> bool:
         *_COIN_ALIASES.get(asset_symbol, ()),
     }
     ticker = asset_symbol.casefold()
+    strict_dynamic_ticker = asset_symbol in _DYNAMIC_CONTEXT_TICKERS or (
+        asset_symbol not in _COIN_ALIASES and len(asset_symbol) <= 5
+    )
     case_sensitive_aliases = _CASE_SENSITIVE_PROJECT_ALIASES.get(
         asset_symbol,
         (),
@@ -694,7 +727,7 @@ def _matches_asset(item: dict, asset_symbol: str, coin_name: str) -> bool:
             continue
         if normalized in case_sensitive_normalized:
             continue
-        if normalized == ticker and asset_symbol in _AMBIGUOUS_BARE_TICKERS:
+        if normalized == ticker and (asset_symbol in _AMBIGUOUS_BARE_TICKERS or strict_dynamic_ticker):
             continue
         if re.search(r"[a-z0-9]", normalized):
             if re.search(
@@ -707,6 +740,11 @@ def _matches_asset(item: dict, asset_symbol: str, coin_name: str) -> bool:
     category_values = {
         str(category).strip().casefold() for category in categories
     }
+    if strict_dynamic_ticker:
+        return _has_dynamic_ticker_context(title, asset_symbol) or any(
+            category in {ticker, f"{ticker} token", f"{ticker} coin", f"{ticker} news"}
+            for category in category_values
+        )
     context_patterns = _PROJECT_ALIAS_CONTEXT_PATTERNS.get(asset_symbol, ())
     for alias in case_sensitive_aliases:
         if alias.casefold() in category_values:
@@ -768,6 +806,30 @@ def _matches_asset(item: dict, asset_symbol: str, coin_name: str) -> bool:
     return False
 
 
+def _is_news_article_candidate(item: dict) -> bool:
+    """Exclude evergreen quote/converter pages without resolving Google links."""
+    parsed = urlsplit(str(item.get("url") or ""))
+    host = str(parsed.hostname or "").removeprefix("www.").casefold()
+    path = parsed.path.casefold()
+    if host == "coinmarketcap.com" and re.match(r"/(?:[a-z]{2}/)?(?:currencies|converter)/", path):
+        return False
+    if host == "coingecko.com" and re.match(r"/(?:[a-z]{2}/)?(?:coins|converter)/", path):
+        return False
+    if host in {"coinbase.com", "binance.com", "kucoin.com", "kraken.com"} and re.match(
+        r"/(?:[a-z]{2}(?:-[a-z]{2})?/)?(?:prices?|convert|converter)/", path
+    ):
+        return False
+    title = str(item.get("title") or "")
+    return not bool(re.search(
+        r"\bprice\s*,?\s*charts?\s*,?\s*(?:and\s*)?market\s*cap\b|"
+        r"\bprice\s+today\b.{0,50}\b(?:live|chart|market\s*cap)\b|"
+        r"\blive\s+price\s+and\s+chart\b|"
+        r"가격.{0,12}차트.{0,16}시가총액|"
+        r"\b[A-Z0-9]{2,10}\s+to\s+[A-Z0-9]{2,10}\s+(?:converter|conversion)\b",
+        title, re.IGNORECASE,
+    ))
+
+
 def _relevant_items(
     items: list[dict],
     *,
@@ -777,7 +839,7 @@ def _relevant_items(
 ) -> list[dict]:
     relevant = []
     for raw in items:
-        if not _matches_asset(raw, asset_symbol, coin_name):
+        if not _is_news_article_candidate(raw) or not _matches_asset(raw, asset_symbol, coin_name):
             continue
         item = dict(raw)
         item["feed_source"] = feed_source
@@ -1041,7 +1103,7 @@ def _coindesk_asset_search_terms(asset_symbol: str, coin_name: str) -> list[str]
     seen = set()
     for candidate in candidates:
         term = re.sub(r"\s+", " ", str(candidate or "")).strip().casefold()
-        if len(term) < 2 or term in seen:
+        if len(term) < 2 or term in seen or not re.fullmatch(r"[a-z0-9][a-z0-9 -]*", term):
             continue
         seen.add(term)
         terms.append(term)
@@ -2584,6 +2646,12 @@ def _coin_news_envelope(
                 (f"{name} 코인 when:7d", "ko"),
                 (f'("{project}" OR {base}) (crypto OR token OR blockchain) when:7d', "en"),
             )
+        elif base in _COIN_ALIASES:
+            project_terms = " OR ".join(f'"{alias}"' for alias in _COIN_ALIASES[base][:3])
+            queries = (
+                (f'({base} 코인 OR {base} 토큰 OR {project_terms}) when:30d', "ko"),
+                (f'({project_terms} OR "{base} token" OR ${base}) when:30d', "en"),
+            )
         else:
             # A connected macro can use an exchange ticker outside the fixed
             # Korean-name catalogue. Search both locales and explicit crypto
@@ -2846,8 +2914,29 @@ def _browser_page_key(descriptor: dict) -> str:
     return descriptor["url"] + "|" + str(descriptor.get("search_term") or "")
 
 
+def _load_durable_browser_pages(keys: list[str]) -> dict:
+    if not keys or not os.environ.get("DATABASE_URL"):
+        return {}
+    try:
+        from .agent_features.position_news.repository import load_browser_pages
+        return load_browser_pages(keys)
+    except Exception:
+        logger.warning("Shared browser page cache read unavailable")
+        return {}
+
+
+def _store_durable_browser_pages(entries: dict) -> None:
+    if not entries or not os.environ.get("DATABASE_URL"):
+        return
+    try:
+        from .agent_features.position_news.repository import store_browser_pages
+        store_browser_pages(entries)
+    except Exception:
+        logger.warning("Shared browser page cache write unavailable")
+
+
 def _cached_browser_pages(descriptors: list[dict]) -> dict:
-    """Cache successful and empty/error pages across ticker jobs in this worker."""
+    """Reuse pages across tickers and the fresh subprocess of each Prefect run."""
     now = time.time()
     results = {}
     if not _browser_collection_lock.acquire(timeout=0.5):
@@ -2867,6 +2956,17 @@ def _cached_browser_pages(descriptors: list[dict]) -> dict:
             else:
                 missing.append(descriptor)
         if missing:
+            shared = _load_durable_browser_pages([_browser_page_key(page) for page in missing])
+            remaining = []
+            for descriptor in missing:
+                key = _browser_page_key(descriptor)
+                result = shared.get(key)
+                if isinstance(result, dict) and result.get("status") in {"ready", "empty", "error"}:
+                    results[key] = {**deepcopy(result), "cached": True}
+                else:
+                    remaining.append(descriptor)
+            missing = remaining
+        if missing:
             budget = min(90.0, max(5.0, float(os.environ.get(
                 "POSITION_NEWS_BROWSER_BUDGET_SECONDS", "35"))))
             try:
@@ -2874,13 +2974,17 @@ def _cached_browser_pages(descriptors: list[dict]) -> dict:
             except Exception as exc:
                 fetched = {_browser_page_key(page): {"items": [], "status": "error",
                            "error": type(exc).__name__} for page in missing}
+            durable_entries = {}
             for descriptor in missing:
                 key = _browser_page_key(descriptor)
                 result = fetched.get(key) or {"items": [], "status": "error", "error": "timeout"}
                 ttl = (max(60, int(os.environ.get("POSITION_NEWS_BROWSER_CACHE_SECONDS", "900")))
                        if result.get("status") == "ready" else 300)
-                _browser_page_cache[key] = (deepcopy(result), time.time() + ttl)
+                expires_at = time.time() + ttl
+                _browser_page_cache[key] = (deepcopy(result), expires_at)
+                durable_entries[key] = (result, int(expires_at * 1000))
                 results[key] = result
+            _store_durable_browser_pages(durable_entries)
             while len(_browser_page_cache) > 512:
                 _browser_page_cache.pop(next(iter(_browser_page_cache)))
         return results

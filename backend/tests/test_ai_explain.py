@@ -7,10 +7,11 @@ from __future__ import annotations
 
 import json
 
+import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
-from app import ai_explain, ai_runtime
+from app import ai_explain, ai_runtime, marketdata
 from app.agent_features.position_news import repository
 from app.ai_explain import AiError
 from app.engine.backtest import BacktestResult
@@ -234,6 +235,18 @@ def test_ai_explain_rejects_uncached_call_when_daily_budget_is_exhausted(monkeyp
 
 def test_endpoint_reports_ai_unavailable_without_key(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    def fake_klines(symbol, start_ms, end_ms, *, interval, market, allow_synthetic):
+        assert (symbol, interval, market, allow_synthetic) == ("BTCUSDT", "1d", "spot", False)
+        assert start_ms < end_ms
+        prices = [100.0, 102.0, 104.0, 106.0, 108.0, 110.0]
+        return pd.DataFrame({
+            "timestamp": pd.date_range(pd.to_datetime(start_ms, unit="ms", utc=True), periods=6, freq="D"),
+            "open": prices, "high": prices, "low": prices, "close": prices, "volume": [1.0] * 6,
+        }), "fixture"
+
+    # Exercise the real endpoint/backtest with explicit data, independent of
+    # the developer's market cache and Binance availability in the CI region.
+    monkeypatch.setattr(marketdata, "get_klines", fake_klines)
     body = {
         "macro": {
             "symbol": "BTCUSDT", "rule_type": "A", "candle_interval": "1d",

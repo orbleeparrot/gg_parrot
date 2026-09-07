@@ -460,6 +460,15 @@ class MarketNewsSummary(SQLModel, table=True):
     updated_ms: int = Field(default=0, sa_type=BigInteger)
 
 
+class BrowserNewsPageCache(SQLModel, table=True):
+    """Shared public article metadata surviving Prefect subprocess restarts."""
+
+    cache_key: str = Field(primary_key=True, max_length=512)
+    payload_json: str
+    expires_ms: int = Field(sa_type=BigInteger, index=True)
+    updated_ms: int = Field(sa_type=BigInteger, index=True)
+
+
 class NewsTitleTranslation(SQLModel, table=True):
     """One shared translation per normalized news title.
 

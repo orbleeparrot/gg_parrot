@@ -14,6 +14,7 @@ from sqlmodel import Session, SQLModel, create_engine, select
 
 from app.agent_features.position_news import repository
 from app.db import (
+    BrowserNewsPageCache,
     NewsTitleTranslation,
     RunSession,
     TickerNewsSnapshot,
@@ -1146,3 +1147,45 @@ def test_market_news_summary_round_trip_and_prompt_version_guard():
         assert repository.load_market_news_summary(key, prompt_version="v4", db=db) is None
         repository.store_market_news_summary(key, "고친 요약", prompt_version="v4", now_ms=2_000, db=db)
         assert repository.load_market_news_summary(key, prompt_version="v4", db=db) == "고친 요약"
+
+
+def test_browser_page_cache_survives_fresh_sessions_and_expires(db_engine):
+    key = "https://news.example/search|Arbitrum"
+    payload = {"items": [{"title": "Arbitrum update", "url": "https://news.example/article"}], "status": "ready"}
+    with Session(db_engine) as writer:
+        repository.store_browser_pages({key: (payload, 1_800_000_010_000)}, now_ms=1_800_000_000_000, db=writer)
+    with Session(db_engine) as reader:
+        loaded = repository.load_browser_pages([key, "missing"], now_ms=1_800_000_001_000, db=reader)
+        assert loaded == {key: payload}
+        loaded[key]["items"].clear()
+    with Session(db_engine) as restarted_reader:
+        assert repository.load_browser_pages([key], now_ms=1_800_000_002_000, db=restarted_reader) == {key: payload}
+        assert repository.load_browser_pages([key], now_ms=1_800_000_010_000, db=restarted_reader) == {}
+
+
+def test_browser_page_cache_batches_reads_and_bounds_retention(db_engine):
+    payload = {"items": [], "status": "empty"}
+    with Session(db_engine) as db:
+        repository.store_browser_pages({f"page-{index:03}": (payload, 10_000) for index in range(512)}, now_ms=1_000, db=db)
+        repository.store_browser_pages({"newest": ({"items": [], "status": "error"}, 20_000)}, now_ms=2_000, db=db)
+        rows = db.exec(select(BrowserNewsPageCache)).all()
+        assert len(rows) == 512
+        assert any(row.cache_key == "newest" for row in rows)
+        queries = []
+        def record(_conn, _cursor, statement, *_):
+            queries.append(statement)
+        event.listen(db_engine, "before_cursor_execute", record)
+        try:
+            assert len(repository.load_browser_pages([row.cache_key for row in rows], now_ms=3_000, db=db)) == 512
+        finally:
+            event.remove(db_engine, "before_cursor_execute", record)
+        assert len(queries) == 1
+        repository.store_browser_pages({"fresh": (payload, 30_000)}, now_ms=10_000, db=db)
+        assert {row.cache_key for row in db.exec(select(BrowserNewsPageCache)).all()} == {"newest", "fresh"}
+
+
+def test_browser_page_cache_older_batch_cannot_replace_newer_data(db):
+    newer = {"items": [{"title": "New news"}], "status": "ready"}
+    repository.store_browser_pages({"page": (newer, 20_000)}, now_ms=2_000, db=db)
+    repository.store_browser_pages({"page": ({"items": [], "status": "error"}, 10_000)}, now_ms=1_000, db=db)
+    assert repository.load_browser_pages(["page"], now_ms=3_000, db=db) == {"page": newer}

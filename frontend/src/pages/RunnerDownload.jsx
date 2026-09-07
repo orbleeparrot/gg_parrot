@@ -879,7 +879,7 @@ export default function RunnerDownload({ embedded = false, onExit }) {
         {downloadStarted && !runnerReady ? (
           <div className="runner-wizard-runner-notice" role="status">
             <strong>다운로드 목록에서 파일을 허용한 뒤 한 번 열어 주세요.</strong>
-            <p>브라우저가 ‘확인되지 않은 다운로드’로 막으면 GitHub의 껄무새 runner-v5 파일인지 확인한 뒤 유지·다운로드 계속을 선택해요.</p>
+            <p>브라우저가 ‘확인되지 않은 다운로드’로 막으면 GitHub의 껄무새 runner-v6 파일인지 확인한 뒤 유지·다운로드 계속을 선택해요.</p>
           </div>
         ) : !runnerReady && ["unavailable", "error"].includes(runnerDownloadState) ? (
           <div className="runner-wizard-runner-notice" role={runnerDownloadState === "error" ? "alert" : "status"}>
@@ -1079,12 +1079,12 @@ export default function RunnerDownload({ embedded = false, onExit }) {
             <span className="runner-wizard-launch-mark" aria-hidden="true">!</span>
             <div>
               <h2>실행기는 열렸지만 자동 연결되지 않았어요.</h2>
-              <p>{launchError || "열려 있는 구버전 실행기를 닫고 runner-v5를 한 번 실행한 뒤 새 연결을 만들어 주세요."}</p>
+              <p>{launchError || "열려 있는 구버전 실행기를 닫고 runner-v6를 한 번 실행한 뒤 새 연결을 만들어 주세요."}</p>
             </div>
           </div>
           <div className="runner-wizard-launch-diagnostic" role="status">
             <strong>실행기 로그에 ‘올바르지 않은 웹 연결 요청’이 보이나요?</strong>
-            <p>runner-v4 이하는 웹 연결마다 새 창을 열어요. runner-v5를 받아 한 번 열면, 다음부터는 이미 열린 실행기가 앞으로 나와요.</p>
+            <p>runner-v4 이하는 웹 연결마다 새 창을 열어요. runner-v6를 받아 한 번 열면, 다음부터는 이미 열린 실행기가 앞으로 나와요.</p>
           </div>
           <div className="runner-wizard-launch-actions">
             <button type="button" onClick={retryLaunchTicket} className="btn btn-m btn-secondary">새 연결 준비하기</button>
@@ -1120,7 +1120,7 @@ export default function RunnerDownload({ embedded = false, onExit }) {
           {showLaunchRecovery ? (
             <div className="runner-wizard-launch-recovery">
               <strong>실행기는 열렸는데 매크로가 비어 있나요?</strong>
-              <p>웹에서 열 때 새 실행기가 계속 나오면 열려 있는 구버전을 닫고 runner-v5를 한 번 실행해 연결 등록을 갱신하세요.</p>
+              <p>웹에서 열 때 새 실행기가 계속 나오면 열려 있는 구버전을 닫고 runner-v6를 한 번 실행해 연결 등록을 갱신하세요.</p>
               <div className="runner-wizard-launch-actions">
                 <a href={launchTicket?.launch_url} onClick={beginLaunchWait} className="btn btn-m btn-secondary">다시 열기</a>
                 <a
@@ -1130,7 +1130,7 @@ export default function RunnerDownload({ embedded = false, onExit }) {
                   rel={downloadIsExternal ? "noopener noreferrer" : undefined}
                   className="btn btn-m btn-ghost"
                 >
-                  runner-v5 받기
+                  runner-v6 받기
                 </a>
                 <button type="button" onClick={() => void downloadManualMacroFile()} disabled={manualDownloadBusy} className="btn btn-m btn-ghost">
                   {manualDownloadBusy ? "파일 준비 중…" : "수동으로 연결하기"}

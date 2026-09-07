@@ -11,14 +11,15 @@ export const riskModule = {
   availability: "live",
   buildEvents({ candles, session, interval }) {
     const closed = (candles || []).filter((bar) => bar?.closed !== false && safeNumber(bar?.o) > 0);
-    if (!closed.length) return [];
+    const events = [];
+    if (closed.length) {
     const recent = closed.slice(-20);
     const latest = recent[recent.length - 1];
     const ranges = recent.map((bar) => ((safeNumber(bar.h) - safeNumber(bar.l)) / safeNumber(bar.o, 1)) * 100);
     const averageRange = ranges.reduce((sum, value) => sum + value, 0) / ranges.length;
     const latestChange = ((safeNumber(latest.c) - safeNumber(latest.o)) / safeNumber(latest.o, 1)) * 100;
     const elevated = averageRange >= 2 || Math.abs(latestChange) >= 3;
-    const events = [{
+    events.push({
       id: `risk-volatility-${latest.t}-${interval}`,
       module: "risk",
       severity: elevated ? "warning" : "info",
@@ -27,7 +28,8 @@ export const riskModule = {
       summary: `${interval} · 평균 변동폭 ${averageRange.toFixed(2)}% · 최근 봉 ${latestChange >= 0 ? "+" : ""}${latestChange.toFixed(2)}%`,
       occurredAt: latest.t,
       sourceLabel: "바이낸스 확정 봉",
-    }];
+    });
+    }
 
     if (session?.status === "running" && session.in_position) {
       const unrealized = safeNumber(session.unrealized_pct);

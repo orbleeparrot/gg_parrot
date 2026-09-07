@@ -95,6 +95,28 @@ test("hidden poller aborts work and resumes immediately when visible", async () 
   assert.deepEqual(timers.delays(), [0]);
 });
 
+test("pending collection can refresh promptly then use the ready snapshot cadence", async () => {
+  const timers = fakeTimers();
+  let calls = 0;
+  const poller = createAdaptivePoller({
+    task: async () => ({ nextPollMs: ++calls === 1 ? 3_000 : calls === 2 ? 30_000 : null }),
+    intervalMs: 30_000,
+    jitterRatio: 0,
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer,
+  });
+  poller.start();
+  timers.next().fn();
+  await flush();
+  assert.deepEqual(timers.delays(), [3_000]);
+  timers.next().fn();
+  await flush();
+  assert.deepEqual(timers.delays(), [30_000]);
+  timers.next().fn();
+  await flush();
+  assert.deepEqual(timers.delays(), []);
+});
+
 test("request coordinator deduplicates consumers and aborts only after all leave", async () => {
   const coordinator = createRequestCoordinator();
   let calls = 0;

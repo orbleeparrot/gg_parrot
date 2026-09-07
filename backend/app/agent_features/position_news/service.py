@@ -212,12 +212,21 @@ def get_position_news(session: dict, db: Session | None = None) -> dict:
     # session is supplied; authenticated routes pass their shared session.
     stored = _load_latest_snapshot(asset) if db is None else _load_latest_snapshot(asset, db)
     if stored is None:
-        return build_pending_position_news(session)
+        payload = build_pending_position_news(session)
+        from .repository import get_collection_state
+        collection = get_collection_state(asset, db)
+        if collection:
+            payload["collection"].update(collection)
+            status = collection["status"]
+            if status in {"empty", "error"}:
+                payload["analysis_status"] = status
+                payload["overview"]["text"] = (
+                    f"{asset} 관련 뉴스를 검색했지만 아직 기사를 찾지 못했어요. 자동으로 다시 확인합니다."
+                    if status == "empty" else "뉴스 소스 연결에 실패했어요. 자동으로 재시도합니다."
+                )
+        return payload
 
     localized_news = dict(stored["news_payload"])
-    localized_news["items"] = news_mod._localize_coin_news_items(
-        list(localized_news.get("items") or [])
-    )
     payload = build_position_news(
         session,
         localized_news,

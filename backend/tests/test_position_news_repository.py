@@ -14,6 +14,7 @@ from sqlmodel import Session, SQLModel, create_engine, select
 
 from app.agent_features.position_news import repository
 from app.db import (
+    BrowserNewsPageCache,
     NewsTitleTranslation,
     RunSession,
     TickerNewsSnapshot,
@@ -163,6 +164,196 @@ def test_discovery_prioritizes_oldest_active_asset(db, monkeypatch):
     symbols = repository.discover_tracked_symbols(db)
 
     assert symbols == ["ETH", "BTC"]
+
+
+def test_collection_lease_throttles_fetches_and_fences_expired_owner(db):
+    first = repository.claim_collection("BTC", now_ms=1_000, db=db)
+    assert first
+    assert repository.claim_collection("BTC", now_ms=2_000, db=db) is None
+    assert repository.finish_collection("BTC", "wrong", now_ms=3_000, db=db) is False
+    assert repository.finish_collection("BTC", first, now_ms=3_000, db=db)
+    assert repository.claim_collection("BTC", now_ms=4_000, db=db) is None
+    next_due = db.get(TickerNewsState, "BTC").next_collection_ms
+    second = repository.claim_collection("BTC", now_ms=next_due, db=db)
+    assert second and second != first
+    assert repository.finish_collection("BTC", first, now_ms=next_due, db=db) is False
+
+
+def test_collection_discovery_only_returns_due_live_assets(db, monkeypatch):
+    monkeypatch.setattr(repository.time, "time", lambda: 100.0)
+    for symbol in ["BTCUSDT", "ETHUSDT"]:
+        db.add(RunSession(user_id=1, symbol=symbol, status="running",
+                          started_at="1970-01-01T00:01:35Z", last_heartbeat_at="1970-01-01T00:01:35Z"))
+    db.commit()
+    token = repository.claim_collection("BTC", now_ms=99_000, db=db)
+    assert token
+    assert repository.discover_tracked_symbols(db, due_only=True) == ["ETH"]
+
+
+def test_snapshot_reuse_keeps_sentiment_aligned_with_article_and_translation(db):
+    payload = _news()
+    payload["items"] = [
+        {"title": "Bitcoin approval", "source": "A"},
+        {"title": "Bitcoin hacked", "source": "B"},
+    ]
+    claim = repository.claim_snapshot(asset_symbol="BTC", snapshot_key="same-headlines",
+        news_payload=payload, prompt_version="v1", model="test", retry_incomplete=True,
+        now_ms=1_000, db=db)
+    localized = {**payload, "items": [
+        {"title": "비트코인 승인", "original_title": "Bitcoin approval", "source": "A"},
+        {"title": "비트코인 해킹", "original_title": "Bitcoin hacked", "source": "B"},
+    ]}
+    repository.complete_snapshot(claim.snapshot_id, {
+        "analysis_status": "ready", "items": [
+            {"sentiment": "positive"}, {"sentiment": "negative"},
+        ]}, news_payload=localized, claim_token=claim.claim_token, now_ms=2_000, db=db)
+    repository.claim_snapshot(asset_symbol="BTC", snapshot_key="same-headlines",
+        news_payload={**payload, "items": list(reversed(payload["items"]))},
+        prompt_version="v1", model="test", retry_incomplete=True, now_ms=3_000, db=db)
+    stored = repository.get_latest_snapshot("BTC", db)
+    pairs = dict(zip(
+        [item["original_title"] for item in stored["news_payload"]["items"]],
+        [item["sentiment"] for item in stored["analysis"]["items"]],
+    ))
+    assert pairs == {"Bitcoin approval": "positive", "Bitcoin hacked": "negative"}
+
+
+def test_empty_collection_status_is_readable_without_a_snapshot(db):
+    repository.mark_collection_outcome("BTC", "empty", now_ms=1_000, db=db)
+    assert repository.get_latest_snapshot("BTC", db) is None
+    assert repository.get_collection_state("BTC", db)["status"] == "empty"
+
+
+def test_concurrent_workers_claim_collection_once(db_engine):
+    gate = Barrier(2)
+    def claim():
+        with Session(db_engine) as session:
+            gate.wait(timeout=2)
+            return repository.claim_collection("ARB", now_ms=1000, db=session)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        tokens = list(pool.map(lambda _: claim(), range(2)))
+    assert sum(token is not None for token in tokens) == 1
+
+
+def test_collection_renewal_cannot_revive_expired_or_replaced_lease(db):
+    token = repository.claim_collection("ARB", now_ms=1_000, db=db)
+    assert repository.renew_collection("ARB", token, now_ms=200_000, db=db)
+    assert repository.claim_collection("ARB", now_ms=350_000, db=db) is None
+    assert not repository.renew_collection("ARB", token, now_ms=600_000, db=db)
+    successor = repository.claim_collection("ARB", now_ms=600_000, db=db)
+    assert successor and successor != token
+    assert not repository.renew_collection("ARB", token, now_ms=600_001, db=db)
+    assert not repository.finish_collection("ARB", token, now_ms=600_002, db=db)
+
+
+def test_collector_publishes_before_ai_and_persists_one_translation(db_engine, monkeypatch):
+    from app.agent_features.position_news import collector, classifier
+    from app import news
+    monkeypatch.setattr(repository, "get_session", lambda: Session(db_engine))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key")
+    translations = []
+    monkeypatch.setattr(news, "enrich_article_excerpts", lambda items, **_: items)
+    def analyze(items, *_):
+        assert repository.get_latest_snapshot("ARB")["news_payload"]["items"]
+        return {"items": [{"sentiment": "positive", "summary": "아비트럼이 상승했습니다.", "confidence": "medium"}]}
+    monkeypatch.setattr(classifier, "_generate_ai_analysis", analyze)
+    monkeypatch.setattr(news, "_request_korean_title_translations", lambda titles:
+                        translations.append(titles) or {"Arbitrum token soars": "아비트럼 토큰 급등"})
+    payload = _news("ARB", "Arbitrum token soars")
+    first = collector.collect_payload("ARB", payload)
+    second = collector.collect_payload("ARB", payload)
+    stored = repository.get_latest_snapshot("ARB")
+    assert first["status"] == "stored" and second["status"] == "reused"
+    assert stored["news_payload"]["items"][0]["title"] == "아비트럼 토큰 급등"
+    assert translations == [["Arbitrum token soars"]]
+
+
+def test_staged_collection_exposes_rss_before_browser_and_spends_once(db_engine, monkeypatch):
+    from app.agent_features.position_news import collector
+    from app import news
+    monkeypatch.setattr(repository, "get_session", lambda: Session(db_engine))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key")
+    paid = []
+    translations = []
+    payload = _news("ARB", "Arbitrum token soars")
+
+    def browser(symbol, rss):
+        published = repository.get_latest_snapshot(symbol)
+        assert published["news_payload"]["items"] == rss["items"]
+        assert published["analysis"]["ai"] is False
+        assert paid == [] and translations == []
+        # An unchanged merged batch must still upgrade the initial rule result.
+        return {**rss, "browser_enrichment": {"status": "ready"}}
+
+    def analyze(items, _name, *, allow_ai):
+        paid.append(allow_ai)
+        return _analysis()
+
+    monkeypatch.setattr(news, "_request_korean_title_translations", lambda titles:
+                        translations.append(titles) or {"Arbitrum token soars": "아비트럼 토큰 급등"})
+    result = collector.collect_ticker("ARB", fetcher=lambda _: payload,
+                                      enricher=browser, analyzer=analyze)
+    assert result["status"] == "stored"
+    assert paid == [True]
+    assert translations == [["Arbitrum token soars"]]
+    assert repository.get_latest_snapshot("ARB")["news_payload"]["items"][0]["title"] == "아비트럼 토큰 급등"
+
+
+def test_cycle_publishes_all_first_ticker_results_before_any_browser(db_engine, monkeypatch):
+    from app.agent_features.position_news import collector
+    monkeypatch.setattr(repository, "get_session", lambda: Session(db_engine))
+    browsed = []
+
+    def browser(symbol, payload):
+        assert repository.get_latest_snapshot("ARB") is not None
+        assert repository.get_latest_snapshot("SOL") is not None
+        browsed.append(symbol)
+        return payload
+
+    result = collector.run_collection_cycle(symbols=["ARBUSDT", "SOLUSDT"],
+        fetcher=lambda symbol: _news(symbol), enricher=browser, retention_days=0)
+    assert result["ticker_count"] == 2
+    assert browsed == ["ARB", "SOL"]
+
+
+def test_browser_failure_retains_first_rss_snapshot(db_engine, monkeypatch):
+    from app.agent_features.position_news import collector
+    monkeypatch.setattr(repository, "get_session", lambda: Session(db_engine))
+
+    def broken_browser(*_):
+        raise RuntimeError("Chromium unavailable")
+
+    result = collector.collect_ticker("SOL", fetcher=lambda _: _news("SOL"), enricher=broken_browser)
+    assert result["status"] == "reused"
+    assert repository.get_latest_snapshot("SOL")["news_payload"]["items"] == _news("SOL")["items"]
+
+
+def test_web_bootstrap_yields_lease_to_worker_and_recovers_stale_news(db_engine, monkeypatch):
+    from app.agent_features.position_news import collector
+    monkeypatch.setattr(repository, "get_session", lambda: Session(db_engine))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key")
+    monkeypatch.setenv("POSITION_NEWS_COLLECTION_SECONDS", "300")
+    monkeypatch.setattr(collector, "_localize_collected_payload",
+                        lambda *_: pytest.fail("bootstrap must not call translation"))
+    with Session(db_engine) as db:
+        db.add(RunSession(user_id=1, symbol="ARBUSDT", position_side="long", status="running",
+                          started_at="1970-01-01T00:00:01Z", last_heartbeat_at="1970-01-01T00:00:01Z"))
+        db.commit()
+    result = collector.run_collection_cycle(fetcher=lambda symbol: _news(symbol),
+        enricher=lambda *_: pytest.fail("bootstrap must not launch browser"),
+        bootstrap_only=True, now_ms=1_000, retention_days=0)
+    assert result["items"][0]["collection_stage"] == "rss_bootstrap"
+    assert result["ai_budget_used"] == 0
+    assert repository.discover_tracked_symbols(bootstrap_only=True, due_only=True, now_ms=1_001) == []
+    token = repository.claim_collection("ARB", now_ms=1_001)
+    assert token  # Prefect need not wait another collection interval.
+    repository.finish_collection("ARB", token, now_ms=1_002)
+    with Session(db_engine) as db:
+        session = db.exec(select(RunSession)).one()
+        session.last_heartbeat_at = "1970-01-01T00:10:02Z"
+        db.add(session)
+        db.commit()
+    assert repository.discover_tracked_symbols(bootstrap_only=True, due_only=True, now_ms=602_000) == ["ARB"]
 
 
 def test_claim_analyze_once_and_read_latest_snapshot(db):
@@ -956,3 +1147,45 @@ def test_market_news_summary_round_trip_and_prompt_version_guard():
         assert repository.load_market_news_summary(key, prompt_version="v4", db=db) is None
         repository.store_market_news_summary(key, "고친 요약", prompt_version="v4", now_ms=2_000, db=db)
         assert repository.load_market_news_summary(key, prompt_version="v4", db=db) == "고친 요약"
+
+
+def test_browser_page_cache_survives_fresh_sessions_and_expires(db_engine):
+    key = "https://news.example/search|Arbitrum"
+    payload = {"items": [{"title": "Arbitrum update", "url": "https://news.example/article"}], "status": "ready"}
+    with Session(db_engine) as writer:
+        repository.store_browser_pages({key: (payload, 1_800_000_010_000)}, now_ms=1_800_000_000_000, db=writer)
+    with Session(db_engine) as reader:
+        loaded = repository.load_browser_pages([key, "missing"], now_ms=1_800_000_001_000, db=reader)
+        assert loaded == {key: payload}
+        loaded[key]["items"].clear()
+    with Session(db_engine) as restarted_reader:
+        assert repository.load_browser_pages([key], now_ms=1_800_000_002_000, db=restarted_reader) == {key: payload}
+        assert repository.load_browser_pages([key], now_ms=1_800_000_010_000, db=restarted_reader) == {}
+
+
+def test_browser_page_cache_batches_reads_and_bounds_retention(db_engine):
+    payload = {"items": [], "status": "empty"}
+    with Session(db_engine) as db:
+        repository.store_browser_pages({f"page-{index:03}": (payload, 10_000) for index in range(512)}, now_ms=1_000, db=db)
+        repository.store_browser_pages({"newest": ({"items": [], "status": "error"}, 20_000)}, now_ms=2_000, db=db)
+        rows = db.exec(select(BrowserNewsPageCache)).all()
+        assert len(rows) == 512
+        assert any(row.cache_key == "newest" for row in rows)
+        queries = []
+        def record(_conn, _cursor, statement, *_):
+            queries.append(statement)
+        event.listen(db_engine, "before_cursor_execute", record)
+        try:
+            assert len(repository.load_browser_pages([row.cache_key for row in rows], now_ms=3_000, db=db)) == 512
+        finally:
+            event.remove(db_engine, "before_cursor_execute", record)
+        assert len(queries) == 1
+        repository.store_browser_pages({"fresh": (payload, 30_000)}, now_ms=10_000, db=db)
+        assert {row.cache_key for row in db.exec(select(BrowserNewsPageCache)).all()} == {"newest", "fresh"}
+
+
+def test_browser_page_cache_older_batch_cannot_replace_newer_data(db):
+    newer = {"items": [{"title": "New news"}], "status": "ready"}
+    repository.store_browser_pages({"page": (newer, 20_000)}, now_ms=2_000, db=db)
+    repository.store_browser_pages({"page": ({"items": [], "status": "error"}, 10_000)}, now_ms=1_000, db=db)
+    assert repository.load_browser_pages(["page"], now_ms=3_000, db=db) == {"page": newer}

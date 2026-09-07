@@ -28,6 +28,8 @@ _EXPECTED_BIGINT_COLUMNS = {
         "latest_observed_ms",
         "last_attempt_ms",
         "last_success_ms",
+        "collection_claimed_ms",
+        "next_collection_ms",
     },
 }
 
@@ -50,6 +52,15 @@ def test_fresh_postgres_ddl_uses_bigint_for_epoch_and_sequence_columns():
                 rf"\b{re.escape(column_name)}\s+BIGINT\b",
                 ddl,
             ), ddl
+
+
+def test_public_browser_cache_schema_uses_bigint_without_user_columns():
+    table = db_mod.BrowserNewsPageCache.__table__
+    assert set(table.columns.keys()) == {"cache_key", "payload_json", "expires_ms", "updated_ms"}
+    assert table.c.cache_key.primary_key
+    ddl = str(CreateTable(table).compile(dialect=postgresql.dialect()))
+    assert re.search(r"\bexpires_ms\s+BIGINT\b", ddl)
+    assert re.search(r"\bupdated_ms\s+BIGINT\b", ddl)
 
 
 class _Result:

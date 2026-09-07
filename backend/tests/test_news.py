@@ -72,6 +72,8 @@ def _empty_coindesk_discovery(**_kwargs):
 @pytest.fixture(autouse=True)
 def _disable_real_coindesk_browser(monkeypatch):
     """Keep unit tests offline; browser-specific tests install their own fake."""
+    monkeypatch.setattr(news, "_load_durable_browser_pages", lambda _keys: {})
+    monkeypatch.setattr(news, "_store_durable_browser_pages", lambda _entries: None)
     monkeypatch.setattr(
         news,
         "_fetch_coindesk_pages_playwright",
@@ -137,12 +139,33 @@ def test_coin_news_reuses_short_ttl_cache_and_refreshes_after_expiry(monkeypatch
 
     assert first == second
     assert first["refresh_seconds"] == news._COIN_CACHE_SECONDS
-    assert len(calls) == 1
+    assert len(calls) == 2
 
     payload, _expires_at = news._coin_cache["coin:BTC"]
     news._coin_cache["coin:BTC"] = (payload, 0)
     news.get_coin_news("BTCUSDT")
-    assert len(calls) == 2
+    assert len(calls) == 4
+
+
+def test_empty_public_news_is_cached_without_repeated_source_calls(monkeypatch):
+    monkeypatch.setattr(news, "_coin_cache", {})
+    monkeypatch.setattr(news, "_load_latest_coin_snapshot", lambda _: None)
+    calls = []
+    monkeypatch.setattr(news, "_coin_news_envelope", lambda *_args, **_kwargs:
+                        calls.append(True) or {"items": []})
+    assert news.get_coin_news("XYZUSDT")["items"] == []
+    assert news.get_coin_news("XYZUSDT")["items"] == []
+    assert calls == [True]
+
+
+def test_translation_budget_exhaustion_never_calls_provider(monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-test-key")
+    monkeypatch.setattr(repository, "reserve_ai_budget", lambda **_: False)
+    monkeypatch.setattr(news, "get_ai_runtime", lambda: SimpleNamespace(call=lambda _, load, **kwargs: (load(), "loaded")))
+    monkeypatch.setattr(news, "get_anthropic_client", lambda: pytest.fail("budget exhausted"))
+    with pytest.raises(news.NewsTranslationError):
+        news._request_korean_title_translations(["New token launches its network"])
 
 
 def test_market_news_retries_transient_ai_summary_without_refetching_headlines(monkeypatch):
@@ -315,7 +338,7 @@ def test_coin_news_prefers_central_snapshot_for_collected_asset(monkeypatch):
     assert payload["collection"]["status"] == "ready"
 
 
-def test_coin_news_translates_english_snapshot_titles_and_keeps_original(monkeypatch):
+def test_coin_news_reuses_collector_translation_without_paid_work(monkeypatch):
     news._coin_cache.clear()
     english = "Robinhood's new crypto network sends Arbitrum's token soaring"
     korean = "로빈후드의 새 암호화폐 네트워크에 아비트럼 토큰 급등"
@@ -324,7 +347,7 @@ def test_coin_news_translates_english_snapshot_titles_and_keeps_original(monkeyp
     monkeypatch.setattr(
         news,
         "_request_korean_title_translations",
-        lambda titles: {english: korean} if titles == [english] else {},
+        lambda titles: pytest.fail("stored snapshots must not trigger translation"),
         raising=False,
     )
     monkeypatch.setattr(
@@ -335,7 +358,7 @@ def test_coin_news_translates_english_snapshot_titles_and_keeps_original(monkeyp
             "news_payload": {
                 "symbol": "ARB",
                 "items": [
-                    {"title": english, "source": "CoinDesk"},
+                    {"title": korean, "original_title": english, "source": "CoinDesk"},
                     {"title": "아비트럼 24시간 28% 급등", "source": "서울신문"},
                 ],
             },
@@ -385,7 +408,7 @@ def test_title_translation_batches_only_untranslated_titles_and_reuses_cache(mon
     assert items[0]["title"] == english
 
 
-def test_title_translation_retries_only_items_missing_from_a_partial_batch(monkeypatch):
+def test_title_translation_keeps_partial_batch_without_paid_fanout(monkeypatch):
     first = "Arbitrum token soars"
     second = "MUBARAK jumps as BNB Chain meme rally broadens"
     calls = []
@@ -407,10 +430,10 @@ def test_title_translation_retries_only_items_missing_from_a_partial_batch(monke
         {"title": second},
     ])
 
-    assert calls == [[first, second], [second]]
+    assert calls == [[first, second]]
     assert [item["title"] for item in localized] == [
         "아비트럼 토큰 급등",
-        "BNB 체인 밈 랠리에 MUBARAK 급등",
+        second,
     ]
 
 
@@ -648,6 +671,7 @@ def test_title_translation_parser_accepts_equivalent_usd_code_and_word():
 
 
 def test_title_translation_reuses_shared_anthropic_client_and_model(monkeypatch):
+    monkeypatch.setattr(repository, "reserve_ai_budget", lambda **_kwargs: True)
     captured = []
     requests = []
     runtime_options = []
@@ -699,6 +723,7 @@ def test_title_translation_reuses_shared_anthropic_client_and_model(monkeypatch)
 
 
 def test_title_translation_reuses_ai_runtime_cache(monkeypatch):
+    monkeypatch.setattr(repository, "reserve_ai_budget", lambda **_kwargs: True)
     title = "Arbitrum token soars"
     title_id = hashlib.sha256(title.encode("utf-8")).hexdigest()[:16]
     monkeypatch.delenv("DATABASE_URL", raising=False)
@@ -740,20 +765,14 @@ def test_title_translation_reuses_ai_runtime_cache(monkeypatch):
     assert len(api_calls) == 1
 
 
-def test_title_translation_does_not_consume_a_daily_budget(monkeypatch):
+def test_title_translation_reserves_one_durable_daily_budget_call(monkeypatch):
     title = "Arbitrum token soars"
     title_id = hashlib.sha256(title.encode("utf-8")).hexdigest()[:16]
     monkeypatch.setenv("ANTHROPIC_API_KEY", "shared-key")
 
-    def forbidden_budget_reservation():
-        raise AssertionError("title translation must not use a daily budget")
-
-    monkeypatch.setattr(
-        news,
-        "_reserve_title_translation_call",
-        forbidden_budget_reservation,
-        raising=False,
-    )
+    budget_calls = []
+    monkeypatch.setattr(repository, "reserve_ai_budget", lambda **kwargs:
+                        budget_calls.append(kwargs) or True)
 
     class Messages:
         def create(self, **_kwargs):
@@ -785,6 +804,8 @@ def test_title_translation_does_not_consume_a_daily_budget(monkeypatch):
     assert news._request_korean_title_translations([title]) == {
         title: "아비트럼 토큰 급등",
     }
+    assert len(budget_calls) == 1
+    assert budget_calls[0]["namespace"] == "news_title_translation"
 
 
 def test_more_than_twenty_deduplicated_titles_are_all_translated(monkeypatch):
@@ -1048,10 +1069,9 @@ def test_claimed_translation_renews_lease_before_every_paid_call(monkeypatch):
 
     news._translate_claimed_titles([first, second], claim_token="claim-1")
 
-    assert calls == [[first, second], [second]]
+    assert calls == [[first, second]]
     assert renewals == [
         ([first, second], "claim-1"),
-        ([second], "claim-1"),
     ]
 
 
@@ -1326,6 +1346,39 @@ def test_unknown_active_asset_falls_back_to_five_year_search(monkeypatch):
     assert any("when:5y" in query for query, _locale in calls)
 
 
+def test_known_ticker_searches_english_project_name_when_korean_feed_is_empty(monkeypatch):
+    calls = []
+    def fetch(query, **kwargs):
+        calls.append((query, kwargs["locale"]))
+        return ([{"title": "Chainlink announces a partnership", "source": "News"}]
+                if kwargs["locale"] == "en" else [])
+    monkeypatch.setattr(news, "_fetch_news", fetch)
+    payload = news._coin_news_envelope("LINK", strict=True, relevant_only=True)
+    assert payload["items"][0]["title"] == "Chainlink announces a partnership"
+    assert any("chainlink" in query.lower() and locale == "en" for query, locale in calls)
+
+
+def test_current_ticker_news_skips_five_year_search(monkeypatch):
+    calls = []
+    def fetch(query, **kwargs):
+        calls.append(query)
+        return [{"title": "XYZ token announces an upgrade", "source": "News"}]
+    monkeypatch.setattr(news, "_fetch_news", fetch)
+    news._coin_news_envelope("XYZ", strict=True, relevant_only=True)
+    assert not any("when:5y" in query for query in calls)
+
+
+def test_collector_fast_sources_do_not_wait_for_browser_discovery(monkeypatch):
+    monkeypatch.setattr(news, "_coin_news_envelope", lambda *_args, **_kwargs: {
+        "items": [{"title": "Bitcoin approval", "source": "News"}], "symbol": "BTC"})
+    monkeypatch.setattr(news, "_fetch_coindesk_news", lambda **_kwargs: [])
+    monkeypatch.setattr(news, "_fetch_coindesk_discovery_news", lambda **_kwargs:
+                        pytest.fail("use fast ticker RSS results before broad browser searches"))
+    monkeypatch.setattr(news, "_fetch_coindesk_asset_archive_news", lambda *_args, **_kwargs:
+                        pytest.fail("archives must not delay current ticker news"))
+    assert news.fetch_coin_news_for_collector("BTC")["items"]
+
+
 def test_worker_merges_coindesk_rss_and_filters_each_source_by_asset(monkeypatch):
     google_items = [
         {
@@ -1401,27 +1454,7 @@ def test_worker_merges_coindesk_rss_and_filters_each_source_by_asset(monkeypatch
         "coindesk_rss": ("ready", 1),
         "google_news_rss": ("ready", 1),
     }
-    assert {
-        name for name in source_states if name.startswith("coindesk_section_")
-    } == {
-        "coindesk_section_markets",
-        "coindesk_section_policy",
-        "coindesk_section_tech",
-        "coindesk_section_business",
-    }
-    assert {
-        name for name in source_states if name.startswith("coindesk_topic_")
-    } == {
-        "coindesk_topic_bitcoin",
-        "coindesk_topic_ethereum",
-        "coindesk_topic_ripple",
-        "coindesk_topic_solana",
-    }
-    assert all(
-        state == ("ready", 0)
-        for name, state in source_states.items()
-        if name.startswith(("coindesk_section_", "coindesk_topic_"))
-    )
+    assert not any(name.startswith(("coindesk_section_", "coindesk_topic_")) for name in source_states)
     assert calls == ["https://www.coindesk.com/arc/outboundfeeds/rss/"]
 
 
@@ -1577,7 +1610,7 @@ def test_connected_bmt_uses_project_alias_and_broad_english_queries(monkeypatch)
         korean["title"],
         english["title"],
     ]
-    assert calls == [
+    assert sorted(calls) == sorted([
         (
             '(BMT 코인 OR BMT 토큰 OR 버블맵스) when:30d',
             50,
@@ -1591,7 +1624,7 @@ def test_connected_bmt_uses_project_alias_and_broad_english_queries(monkeypatch)
             True,
             "en",
         ),
-    ]
+    ])
 
 
 def test_siacoin_uses_project_name_instead_of_bare_sc_queries(monkeypatch):
@@ -1610,7 +1643,7 @@ def test_siacoin_uses_project_name_instead_of_bare_sc_queries(monkeypatch):
     )
 
     assert payload["coin_name"] == "시아코인"
-    assert calls == [
+    assert sorted(calls) == sorted([
         (
             '(시아코인 OR "SC 코인" OR SCUSDT) when:30d',
             50,
@@ -1624,7 +1657,7 @@ def test_siacoin_uses_project_name_instead_of_bare_sc_queries(monkeypatch):
             True,
             "en",
         ),
-    ]
+    ])
 
 
 @pytest.mark.parametrize(
@@ -1953,53 +1986,17 @@ def test_empty_coindesk_archive_uses_short_retry_cache_window():
     )
 
 
-def test_collector_uses_asset_archive_when_current_coindesk_has_no_match(monkeypatch):
-    archive_calls = []
-    archive_item = {
-        "title": "Threshold's Bitcoin Backed tBTC Debuts on Sui",
-        "source": "CoinDesk",
-        "url": "https://www.coindesk.com/markets/2025/07/07/threshold-tbtc",
-        "published": "2025-07-07T00:00:00+00:00",
-        "feed_source": "coindesk_asset_search_playwright",
-    }
-    monkeypatch.setattr(
-        news,
-        "_fetch_coindesk_discovery_news",
-        _empty_coindesk_discovery,
-    )
+def test_collector_empty_rss_remains_fast_even_legacy_browser_flag_is_enabled(monkeypatch):
+    monkeypatch.setenv("POSITION_NEWS_BROWSER_FALLBACK_ENABLED", "true")
+    monkeypatch.setattr(news, "_coin_news_envelope", lambda *_args, **_kwargs:
+                        {"items": [], "candidate_count": 0, "query": ""})
     monkeypatch.setattr(news, "_fetch_coindesk_news", lambda **_kwargs: [])
-    monkeypatch.setattr(
-        news,
-        "_coin_news_envelope",
-        lambda *_args, **_kwargs: {
-            "symbol": "T",
-            "coin_name": "쓰레스홀드",
-            "items": [],
-            "candidate_count": 0,
-            "query": "",
-        },
-    )
-    monkeypatch.setattr(
-        news,
-        "_fetch_coindesk_asset_archive_news",
-        lambda asset, coin_name, **_kwargs: (
-            archive_calls.append((asset, coin_name)) or [archive_item]
-        ),
-    )
-
-    payload = news.fetch_coin_news_for_collector("T")
-
-    assert archive_calls == [("T", "쓰레스홀드")]
-    assert payload["items"] == [archive_item]
-    archive_source = next(
-        source for source in payload["sources"]
-        if source["name"] == "coindesk_asset_archive"
-    )
-    assert archive_source["status"] == "ready"
-    assert archive_source["item_count"] == 1
+    monkeypatch.setattr(news, "_fetch_coindesk_discovery_news", lambda **_kwargs:
+                        pytest.fail("browser must run after the first snapshot"))
+    assert news.fetch_coin_news_for_collector("T")["items"] == []
 
 
-def test_collector_merges_archive_even_when_current_coindesk_has_a_match(monkeypatch):
+def test_collector_skips_archives_when_current_news_is_available(monkeypatch):
     current = {
         "title": "Threshold Network announces a Bitcoin integration",
         "source": "CoinDesk",
@@ -2034,10 +2031,9 @@ def test_collector_merges_archive_even_when_current_coindesk_has_a_match(monkeyp
 
     payload = news.fetch_coin_news_for_collector("T")
 
-    assert archive_calls == [("T", "쓰레스홀드")]
+    assert archive_calls == []
     assert [item["title"] for item in payload["items"]] == [
         current["title"],
-        archived["title"],
     ]
     assert payload["items"][0]["feed_source"] == "coindesk_rss"
 
@@ -2310,71 +2306,6 @@ def test_coindesk_discovery_stale_bundle_has_maximum_age(monkeypatch):
 
     with pytest.raises(news.NewsFetchError):
         news._fetch_coindesk_discovery_news(strict=True)
-
-
-def test_collector_merges_relevant_coindesk_discovery_source(monkeypatch):
-    xrp = {
-        "title": "Ripple prepares XRP Ledger for quantum computers",
-        "source": "CoinDesk",
-        "url": "https://news.google.com/rss/articles/xrp",
-        "published": "2026-08-29T05:48:04+00:00",
-        "published_display": "3일 전",
-        "feed_source": "coindesk_topic_google_rss",
-        "source_scope": "ripple",
-        "source_page": "https://www.coindesk.com/tag/ripple",
-    }
-    ethereum = {
-        "title": "Ethereum developers prepare a new upgrade",
-        "source": "CoinDesk",
-        "url": "https://news.google.com/rss/articles/eth",
-        "published": "2026-08-29T04:00:00+00:00",
-        "published_display": "3일 전",
-        "feed_source": "coindesk_section_google_rss",
-        "source_scope": "tech",
-        "source_page": "https://www.coindesk.com/tech",
-    }
-    discovery = {
-        "items": [xrp, ethereum],
-        "items_by_source": {
-            "coindesk_topic_ripple": [xrp],
-            "coindesk_section_tech": [ethereum],
-        },
-        "sources": [
-            {
-                "name": "coindesk_topic_ripple",
-                "source_type": "coindesk_topic_google_rss",
-                "source_page": "https://www.coindesk.com/tag/ripple",
-                "status": "ready",
-                "fetched_count": 1,
-            },
-            {
-                "name": "coindesk_section_tech",
-                "source_type": "coindesk_section_google_rss",
-                "source_page": "https://www.coindesk.com/tech",
-                "status": "ready",
-                "fetched_count": 1,
-            },
-        ],
-    }
-
-    monkeypatch.setattr(
-        news,
-        "_fetch_coindesk_discovery_news",
-        lambda **_kwargs: discovery,
-    )
-    monkeypatch.setattr(
-        news,
-        "_coin_news_envelope",
-        lambda *_args, **_kwargs: {"items": [], "candidate_count": 0, "query": "XRP"},
-    )
-    monkeypatch.setattr(news, "_fetch_coindesk_news", lambda **_kwargs: [])
-
-    payload = news.fetch_coin_news_for_collector("XRP")
-
-    assert payload["items"] == [xrp]
-    sources = {source["name"]: source for source in payload["sources"]}
-    assert sources["coindesk_topic_ripple"]["item_count"] == 1
-    assert sources["coindesk_section_tech"]["item_count"] == 0
 
 
 def test_all_supported_assets_have_english_news_aliases():
@@ -2855,3 +2786,239 @@ def test_market_summary_is_stored_for_the_day_after_generation(monkeypatch):
 
     assert news.get_market_news()["overview"] == "새 요약"
     assert stored == [(day, "새 요약")]
+
+
+def _browser_batch(descriptors, items_by_name=None, status="empty"):
+    return {news._browser_page_key(page): {
+        "items": (items_by_name or {}).get(page["name"], []),
+        "status": "ready" if (items_by_name or {}).get(page["name"]) else status,
+    } for page in descriptors}
+
+
+def test_browser_enrichment_runs_after_successful_rss_and_filters_other_assets(monkeypatch):
+    monkeypatch.setenv("POSITION_NEWS_BROWSER_ENRICHMENT_ENABLED", "true")
+    rss_item = {"title": "Ripple announces an XRP ledger update", "url": "https://example.com/rss",
+                "published": "2026-09-06T00:00:00Z"}
+    browser_item = {"title": "XRP network welcomes new Ripple partners", "url": "https://decrypt.co/123456/xrp",
+                    "published": "2026-09-07T00:00:00Z"}
+    unrelated = {"title": "Ethereum developers prepare a new upgrade", "url": "https://example.com/eth"}
+    calls = []
+    monkeypatch.setattr(news, "_cached_browser_pages", lambda pages:
+        calls.append(pages) or _browser_batch(pages, {"decrypt_news": [browser_item, unrelated]}))
+    original = {"items": [rss_item], "sources": [{"name": "google_news_rss", "status": "ready"}]}
+    result = news.enrich_coin_news_for_collector("XRP", original)
+    assert calls and any(page.get("search_term") == "ripple" for page in calls[0])
+    assert [item["title"] for item in result["items"]] == [browser_item["title"], rss_item["title"]]
+    assert result["browser_enrichment"]["added_count"] == 1
+    assert original["items"] == [rss_item] and len(original["sources"]) == 1
+    report = next(source for source in result["sources"] if source["name"] == "decrypt_news")
+    assert report["item_count"] == 1 and report["fetched_count"] == 2
+
+
+def test_browser_enrichment_preserves_rss_on_all_source_failures(monkeypatch):
+    monkeypatch.setenv("POSITION_NEWS_BROWSER_ENRICHMENT_ENABLED", "true")
+    monkeypatch.setattr(news, "_cached_browser_pages", lambda pages: _browser_batch(pages, status="error"))
+    original = {"items": [{"title": "Bitcoin network upgrade", "url": "https://example.com/btc"}]}
+    result = news.enrich_coin_news_for_collector("BTC", original)
+    assert result["items"] == original["items"]
+    assert result["browser_enrichment"]["status"] == "error"
+
+
+def test_browser_enrichment_old_archive_does_not_displace_recent_rss(monkeypatch):
+    monkeypatch.setenv("POSITION_NEWS_BROWSER_ENRICHMENT_ENABLED", "true")
+    recent = [{"title": f"Bitcoin news item {index}", "url": f"https://example.com/{index}",
+               "published": "2026-09-07T00:00:00Z"} for index in range(10)]
+    old = {"title": "Bitcoin archive news", "url": "https://example.com/old", "published": "2020-01-01T00:00:00Z"}
+    monkeypatch.setattr(news, "_cached_browser_pages", lambda pages:
+                        _browser_batch(pages, {"coindesk_asset_search_0": [old]}))
+    result = news.enrich_coin_news_for_collector("BTC", {"items": recent})
+    assert result["items"] == recent
+    assert result["browser_enrichment"]["added_count"] == 0
+
+
+def test_browser_indexes_are_reused_between_tickers_and_empty_pages_are_cached(monkeypatch):
+    monkeypatch.setattr(news, "_browser_page_cache", {})
+    calls = []
+    def fetch(pages, **_kwargs):
+        calls.append(pages)
+        return _browser_batch(pages)
+    monkeypatch.setattr(news, "_fetch_browser_page_batch", fetch)
+    bitcoin = news._browser_news_pages("BTC", "비트코인")
+    ethereum = news._browser_news_pages("ETH", "이더리움")
+    first = news._cached_browser_pages(bitcoin)
+    news._cached_browser_pages(bitcoin)
+    news._cached_browser_pages(ethereum)
+    assert len(calls) == 2
+    assert all(page["kind"] in {"asset_search", "topic"} for page in calls[1])
+    assert all(result["status"] == "empty" for result in first.values())
+
+
+def test_browser_failure_is_negative_cached_and_disabled_does_no_work(monkeypatch):
+    monkeypatch.setattr(news, "_browser_page_cache", {})
+    calls = []
+    def fail(pages, **_kwargs):
+        calls.append(pages)
+        raise RuntimeError("browser unavailable")
+    monkeypatch.setattr(news, "_fetch_browser_page_batch", fail)
+    pages = news._browser_news_pages("BTC", "비트코인")
+    assert all(result["status"] == "error" for result in news._cached_browser_pages(pages).values())
+    news._cached_browser_pages(pages)
+    assert len(calls) == 1
+    monkeypatch.setenv("POSITION_NEWS_BROWSER_ENRICHMENT_ENABLED", "false")
+    monkeypatch.setattr(news, "_cached_browser_pages", lambda *_args: pytest.fail("disabled browser"))
+    assert news.enrich_coin_news_for_collector("BTC", {"items": []})["browser_enrichment"]["status"] == "disabled"
+
+
+def test_public_browser_parser_checks_publisher_and_preserves_unknown_dates():
+    page = {"publisher": "Decrypt", "kind": "section", "scope": "news", "url": "https://decrypt.co/news"}
+    items = news._parse_public_browser_links([
+        {"title": "Chainlink network has a new integration", "href": "https://decrypt.co/123456/chainlink?utm_source=feed"},
+        {"title": "Chainlink network has a new integration", "href": "https://decrypt.co/123456/chainlink"},
+        {"title": "Chainlink fraudulent publisher article", "href": "https://evil.example/123456/chainlink"},
+        {"title": "Chainlink category navigation", "href": "https://decrypt.co/news"},
+    ], page)
+    assert len(items) == 1
+    assert items[0]["url"] == "https://decrypt.co/123456/chainlink"
+    assert items[0]["published"] is None
+    assert items[0]["feed_source"] == "decrypt_section_playwright"
+
+
+def test_coindesk_browser_parser_includes_web3_news_and_project_tags():
+    page = {"publisher": "CoinDesk", "kind": "topic", "scope": "chainlink",
+            "url": "https://www.coindesk.com/tag/chainlink"}
+    items = news._parse_public_browser_links([{
+        "title": "Chainlink connects tokenized stocks across chains",
+        "href": "https://www.coindesk.com/web3/2025/12/12/chainlink-xbridge",
+    }], page)
+    assert len(items) == 1 and items[0]["published"].startswith("2025-12-12")
+    pages = news._browser_news_pages("LINK", "체인링크")
+    assert any(descriptor["url"] == "https://www.coindesk.com/tag/chainlink" for descriptor in pages)
+
+
+def test_browser_archives_do_not_emit_historical_or_undated_live_news(monkeypatch):
+    monkeypatch.setenv("POSITION_NEWS_BROWSER_ENRICHMENT_ENABLED", "true")
+    historical = {"title": "Siacoin network mining changes", "url": "https://example.com/2018",
+                  "published": "2018-08-01T00:00:00Z"}
+    undated = {"title": "Siacoin network mining information", "url": "https://example.com/unknown"}
+    current = {"title": "Siacoin network releases new version", "url": "https://example.com/new",
+               "published": datetime.now(timezone.utc).isoformat()}
+    monkeypatch.setattr(news, "_cached_browser_pages", lambda pages:
+        _browser_batch(pages, {"coindesk_asset_search_0": [historical, undated, current]}))
+    result = news.enrich_coin_news_for_collector("SC", {"items": []})
+    assert [item["title"] for item in result["items"]] == [current["title"]]
+    source = next(source for source in result["sources"] if source["name"] == "coindesk_asset_search_0")
+    assert source["excluded_age_or_date_count"] == 2
+    assert result["browser_enrichment"]["added_count"] == 1
+
+
+def test_article_excerpt_enrichment_caps_large_legacy_limits_at_three(monkeypatch):
+    requested = []
+    monkeypatch.setattr(news, "_fetch_article_excerpts_playwright", lambda targets:
+                        requested.extend(targets) or ["Article excerpt"] * len(targets))
+    items = [{"title": f"Article {index}", "url": f"https://example.com/{index}"} for index in range(10)]
+    enriched = news.enrich_article_excerpts(items, limit=10)
+    assert len(requested) == 3
+    assert len(enriched) == 10
+    assert all(item.get("excerpt") == "Article excerpt" for item in enriched[:3])
+    assert all("excerpt" not in item for item in enriched[3:])
+
+
+@pytest.mark.parametrize(('symbol', 'project'), [
+    ('ENA', 'Ethena'), ('TAO', 'Bittensor'), ('TON', 'Toncoin'),
+    ('TIA', 'Celestia'), ('ZRO', 'LayerZero'),
+])
+def test_new_project_aliases_are_searched_and_match_headlines_without_ticker(monkeypatch, symbol, project):
+    calls = []
+    headline = {'title': f'{project} announces a network upgrade', 'url': 'https://example.com/news'}
+    def fetch(query, **kwargs):
+        calls.append(query)
+        return [headline] if project.lower() in query.lower() else []
+    monkeypatch.setattr(news, '_fetch_news', fetch)
+    result = news._coin_news_envelope(symbol, strict=True, relevant_only=True)
+    assert result['items'] and result['items'][0]['title'] == headline['title']
+    assert all(project.lower() in query.lower() for query in calls)
+    assert symbol not in news.position_news_collection_universe()
+
+
+@pytest.mark.parametrize(('symbol', 'title'), [
+    ('TAO', "Rumors claim Anthropic's Claude solved Navier-Stokes; Terence Tao clarifies"),
+    ('TAO', 'Terence Tao discusses a new math proof on a crypto news site'),
+    ('ENA', 'ENA announces a new television drama series'),
+    ('TON', 'The mine produces one ton of ore each day'),
+    ('ABC', 'ABC reports the latest sports results'),
+    ('ABC', 'Professor Abc receives a mathematics award'),
+    ('TIA', 'Tia wins a prestigious acting award'),
+])
+def test_short_tickers_do_not_match_people_channels_or_ordinary_words(symbol, title):
+    assert not news._matches_asset({'title': title}, symbol, symbol)
+
+
+@pytest.mark.parametrize(('symbol', 'title'), [
+    ('TAO', 'TAO token rallies after a network upgrade'),
+    ('TAO', '$TAO liquidity rises'),
+    ('TAO', 'TAOUSDT futures volume reaches a record'),
+    ('TAO', 'TAO surges 7% on increasing demand'),
+    ('ENA', 'ENA 토큰 상장 발표'),
+    ('ABC', 'ABC 코인 거래량 증가'),
+    ('ABC', 'ABC token launched its storage network'),
+    ('ABC', '$ABC gains exchange support'),
+    ('ABC', 'ABC/USDT volume increases'),
+])
+def test_short_tickers_accept_explicit_token_or_market_context(symbol, title):
+    assert news._matches_asset({'title': title}, symbol, symbol)
+
+
+@pytest.mark.parametrize(('url', 'title'), [
+    ('https://coinmarketcap.com/currencies/ethena/', 'Ethena (ENA)'),
+    ('https://coinmarketcap.com/ko/currencies/ethena/', 'Ethena (ENA)'),
+    ('https://coingecko.com/en/coins/ethena', 'Ethena'),
+    ('https://coinbase.com/price/ethena', 'Ethena price'),
+    ('https://news.google.com/rss/articles/opaque', 'Ethena (ENA) 가격, 차트, 시가총액 | 코인마켓캡'),
+    ('https://news.google.com/rss/articles/opaque', 'Ethena price today, ENA live price and chart'),
+    ('https://news.google.com/rss/articles/opaque', 'ENA to USD converter'),
+])
+def test_quote_and_converter_pages_are_excluded_from_collected_news(url, title):
+    assert news._relevant_items([{'url': url, 'title': title}], asset_symbol='ENA',
+                               coin_name='ENA', feed_source='google_news_rss') == []
+
+
+def test_quote_filter_keeps_actual_publisher_analysis_articles():
+    item = {'url': 'https://coinmarketcap.com/community/articles/123',
+            'title': 'Ethena token price surges after a new listing'}
+    assert news._relevant_items([item], asset_symbol='ENA', coin_name='ENA', feed_source='google_news_rss')
+
+
+def test_browser_project_searches_do_not_spend_pages_on_korean_aliases():
+    assert news._coindesk_asset_search_terms('ENA', 'ENA') == ['ethena']
+    assert news._coindesk_asset_search_terms('TAO', 'TAO') == ['bittensor']
+
+
+def test_browser_cache_uses_durable_results_after_a_fresh_worker_process(monkeypatch):
+    monkeypatch.setattr(news, '_browser_page_cache', {})
+    pages = news._browser_news_pages('ENA', 'ENA')
+    shared = _browser_batch(pages)
+    reads, writes = [], []
+    monkeypatch.setattr(news, '_load_durable_browser_pages', lambda keys: reads.append(keys) or shared)
+    monkeypatch.setattr(news, '_store_durable_browser_pages', lambda entries: writes.append(entries))
+    monkeypatch.setattr(news, '_fetch_browser_page_batch', lambda *_args, **_kwargs: pytest.fail('durable cache hit'))
+    result = news._cached_browser_pages(pages)
+    assert len(reads) == 1 and not writes
+    assert all(value['cached'] for value in result.values())
+
+
+def test_browser_cache_batches_only_missing_pages_into_durable_storage(monkeypatch):
+    monkeypatch.setattr(news, '_browser_page_cache', {})
+    pages = news._browser_news_pages('ENA', 'ENA')
+    existing_key = news._browser_page_key(pages[0])
+    calls, writes = [], []
+    monkeypatch.setattr(news, '_load_durable_browser_pages', lambda keys:
+                        {existing_key: {'items': [], 'status': 'empty'}})
+    monkeypatch.setattr(news, '_fetch_browser_page_batch', lambda missing, **_kwargs:
+                        calls.append(missing) or _browser_batch(missing))
+    monkeypatch.setattr(news, '_store_durable_browser_pages', lambda entries: writes.append(entries))
+    news._cached_browser_pages(pages)
+    assert len(calls) == len(writes) == 1
+    assert existing_key not in writes[0]
+    assert len(writes[0]) == len(pages) - 1
+    now_ms = news.time.time() * 1000
+    assert all(now_ms < expires_ms <= now_ms + 301_000 for _result, expires_ms in writes[0].values())

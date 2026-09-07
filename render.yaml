@@ -12,6 +12,22 @@ services:
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /api/health
     envVars:
+      - key: POSITION_NEWS_EMBEDDED_ENABLED
+        value: "true"
+      - key: POSITION_NEWS_EMBEDDED_BOOTSTRAP_ONLY
+        value: "true"
+      - key: POSITION_NEWS_COLLECTION_SECONDS
+        value: "300"
+      - key: POSITION_NEWS_BROWSER_ENRICHMENT_ENABLED
+        value: "false"
+      - key: POSITION_NEWS_MAX_AI_ANALYSES_PER_RUN
+        value: "2"
+      - key: POSITION_NEWS_MAX_AI_ANALYSES_PER_DAY
+        value: "10"
+      - key: POSITION_NEWS_TRANSLATION_MAX_CALLS_PER_DAY
+        value: "10"
+      - key: NEWS_TRANSLATION_MAX_CALLS_PER_DAY
+        value: "20"
       - key: PYTHON_VERSION
         value: "3.12.7"
       # api.binance.com 은 미국 IP를 차단 → Render(미국 리전)에선 공개 데이터
@@ -19,13 +35,13 @@ services:
       - key: BINANCE_API_BASE
         value: "https://data-api.binance.vision"
       - key: RUNNER_DOWNLOAD_URL
-        value: "https://github.com/orbleeparrot/gg_parrot/releases/download/runner-v5/ggparrot-runner.exe"
+        value: "https://github.com/orbleeparrot/gg_parrot/releases/download/runner-v6/ggparrot-runner.exe"
       - key: RUNNER_EXE_VERSION
-        value: "5"
+        value: "6"
       - key: RUNNER_SUPPORTS_LAUNCH
         value: "true"
       - key: RUNNER_MIN_VERSION
-        value: "5"
+        value: "6"
       # 대시보드에서 실제 값을 입력합니다. 비밀값은 Blueprint에 커밋하지 않습니다.
       - key: DATABASE_URL
         sync: false
@@ -65,7 +81,17 @@ services:
       - key: POSITION_NEWS_REQUIRE_POSTGRES
         value: "true"
       - key: POSITION_NEWS_COLLECTION_SECONDS
+        value: "300"
+      - key: POSITION_NEWS_SCHEDULE_SECONDS
         value: "60"
+      - key: POSITION_NEWS_BROWSER_ENRICHMENT_ENABLED
+        value: "true"
+      - key: POSITION_NEWS_BROWSER_BUDGET_SECONDS
+        value: "35"
+      - key: POSITION_NEWS_TRANSLATION_MAX_CALLS_PER_DAY
+        value: "10"
+      - key: NEWS_TRANSLATION_MAX_CALLS_PER_DAY
+        value: "20"
       - key: POSITION_NEWS_MAX_AI_ANALYSES_PER_RUN
         value: "2"
       - key: POSITION_NEWS_MAX_AI_ANALYSES_PER_DAY
@@ -77,7 +103,7 @@ services:
       - key: COINDESK_PLAYWRIGHT_TIMEOUT_MS
         value: "15000"
       - key: POSITION_NEWS_ARTICLE_PLAYWRIGHT_ENABLED
-        value: "true"
+        value: "false"
       - key: POSITION_NEWS_ARTICLE_TIMEOUT_MS
         value: "12000"
       # 웹 서비스와 정확히 같은 Supabase Session Pooler URL을 입력합니다.
@@ -93,4 +119,4 @@ services:
       - key: ANTHROPIC_MODEL
         value: "claude-haiku-4-5"
       - key: ANTHROPIC_POSITION_NEWS_MAX_TOKENS
-        value: "256"
+        value: "512"

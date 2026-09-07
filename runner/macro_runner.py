@@ -29,12 +29,14 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import queue
 import shutil
 import sys
 import threading
 import time
+import uuid
 from decimal import Decimal, ROUND_DOWN
 from pathlib import Path
 
@@ -436,17 +438,26 @@ class ServerClient:
         except Exception:
             return "continue"
 
-    def stopped(self, status: str = "stopped", note: str = "") -> None:
+    def stopped(self, status: str = "stopped", note: str = "", snapshot: dict | None = None) -> bool:
         if self.session_id is None:
-            return
-        try:
-            requests.post(
-                f"{self.base}/api/runner/stopped",
-                json={"session_id": self.session_id, "status": status, "note": note},
-                headers=self._headers, timeout=10,
-            )
-        except Exception:
-            pass
+            return True
+        # Repeating the same terminal snapshot is idempotent. A deploy or a
+        # transient response failure must not silently lose the final state.
+        body = {"session_id": self.session_id, "status": status, "note": note, "snapshot": snapshot}
+        for attempt in range(MAX_RETRIES):
+            try:
+                response = requests.post(
+                    f"{self.base}/api/runner/stopped", json=body,
+                    headers=self._headers, timeout=10,
+                )
+                if 400 <= response.status_code < 500 and response.status_code not in {408, 429}:
+                    return False
+                response.raise_for_status()
+                return True
+            except Exception:
+                if attempt + 1 < MAX_RETRIES:
+                    time.sleep(attempt + 1)
+        return False
 
 
 # ==================================================================
@@ -488,6 +499,8 @@ class BotThread(threading.Thread):
         self.entry_price = 0.0
         self.held_qty = 0.0
         self.realized = 0.0
+        self.position_uncertain = False
+        self.position_dust_qty = 0.0
 
     # --- GUI → 스레드 명령 --------------------------------------
     def set_command(self, mode: str) -> None:
@@ -556,24 +569,95 @@ class BotThread(threading.Thread):
         return float(self.client.get_symbol_ticker(symbol=self.symbol)["price"])
 
     def _place(self, side_word: str, qty: float, reduce_only: bool = False) -> bool:
-        for attempt in range(1, MAX_RETRIES + 1):
+        closing = reduce_only or self.in_position
+        client_id = "ggp-" + uuid.uuid4().hex[:28]
+        kwargs = dict(symbol=self.symbol, side=side_word, type="MARKET",
+                      quantity=qty, newClientOrderId=client_id,
+                      newOrderRespType="RESULT" if self.market == "futures" else "FULL")
+        if reduce_only:
+            kwargs["reduceOnly"] = "true"
+        try:
+            create = self.client.futures_create_order if self.market == "futures" else self.client.create_order
+            order = create(**kwargs)
+        except Exception:
+            # A timeout does not prove rejection. Reconcile the same client ID
+            # before any further decision; never send a second market order.
+            order = {}
+        terminal = {"FILLED", "CANCELED", "REJECTED", "EXPIRED", "EXPIRED_IN_MATCH"}
+        for attempt in range(MAX_RETRIES):
+            if order.get("status") in terminal:
+                break
             try:
-                if self.market == "futures":
-                    kwargs = dict(symbol=self.symbol, side=side_word, type="MARKET", quantity=qty)
-                    if reduce_only:
-                        kwargs["reduceOnly"] = "true"
-                    order = self.client.futures_create_order(**kwargs)
-                else:
-                    order = self.client.create_order(symbol=self.symbol, side=side_word,
-                                                     type="MARKET", quantity=qty)
-                self.log(f"  ✓ {side_word}{' (청산)' if reduce_only else ''} 체결: "
-                         f"id={order.get('orderId')} 수량={qty} 상태={order.get('status')}")
-                return True
-            except Exception as exc:
-                self.log(f"  ✗ {side_word} 주문 실패({attempt}/{MAX_RETRIES}): {exc}")
-                if attempt < MAX_RETRIES:
-                    time.sleep(1.0)
-        return False
+                query = self.client.futures_get_order if self.market == "futures" else self.client.get_order
+                order = query(symbol=self.symbol, origClientOrderId=client_id)
+            except Exception:
+                # Keep any confirmed partial fill from the previous response.
+                pass
+            if order.get("status") not in terminal and attempt + 1 < MAX_RETRIES:
+                time.sleep(0.25 * (attempt + 1))
+
+        def positive_number(value):
+            try:
+                number = float(value or 0)
+                return number if math.isfinite(number) and number > 0 else 0.0
+            except (ValueError, TypeError):
+                return 0.0
+
+        executed = positive_number(order.get("executedQty"))
+        average = positive_number(order.get("avgPrice"))
+        if not average and executed:
+            average = positive_number(order.get("cummulativeQuoteQty") or order.get("cumQuote")) / executed
+        if not average and executed:
+            fills = order.get("fills") or []
+            quote = sum(positive_number(fill.get("price")) * positive_number(fill.get("qty")) for fill in fills)
+            average = quote / executed
+
+        self._last_fill_qty, self._last_fill_price = executed, average
+        acquired = executed
+        fees_known = True
+        if self.market == "spot" and not closing and executed:
+            base_asset = getattr(self, "base_asset", "") or (self.symbol[:-4] if self.symbol.endswith(("USDT", "USDC")) else "")
+            fills = order.get("fills") or []
+            if not fills and order.get("orderId") is not None:
+                try:
+                    trades = self.client.get_my_trades(symbol=self.symbol, orderId=order["orderId"], limit=1000)
+                    fills = [trade for trade in trades if str(trade.get("orderId")) == str(order["orderId"])]
+                except Exception:
+                    fills = []
+            fees_known = bool(base_asset and fills) and all("commissionAsset" in fill and "commission" in fill for fill in fills)
+            fees_known = fees_known and math.isclose(sum(positive_number(fill.get("qty")) for fill in fills), executed, rel_tol=1e-9, abs_tol=1e-12)
+            if fees_known:
+                base_fee = sum(positive_number(fill.get("commission")) for fill in fills if fill["commissionAsset"] == base_asset)
+                acquired = max(0.0, executed - base_fee)
+        self.position_uncertain = order.get("status") not in terminal or (
+            order.get("status") == "FILLED" and not (executed and average)
+        ) or bool(executed and not average) or not fees_known
+        dust_only = False
+        if executed:
+            if closing:
+                closed_qty = min(self.held_qty, executed)
+                if average and self.entry_price:
+                    self.realized += _pnl_usdt(closed_qty, self.entry_price, average, self.side)
+                self.held_qty = max(0.0, self.held_qty - executed)
+                if self.held_qty < 1e-12:
+                    self.held_qty = 0.0
+                if self.market == "spot" and order.get("status") == "FILLED" and 0 < self.held_qty < self.step and not self.position_uncertain:
+                    # LOT_SIZE cannot sell this residue. Keep its amount in the
+                    # status note; never use unrelated account holdings to pad it.
+                    self.position_dust_qty = getattr(self, "position_dust_qty", 0.0) + self.held_qty
+                    self.log(f"최소 주문 단위 미만 잔여 수량: {self.position_dust_qty:.12g} {self.symbol}")
+                    dust_only = True
+                if (not self.held_qty or dust_only) and not self.position_uncertain:
+                    self.entry_price = 0.0
+            else:
+                self.entry_price, self.held_qty = average, acquired
+        # Unknown submission may have opened a real position even if the order
+        # query failed. Never turn that uncertainty into a flat snapshot.
+        self.in_position = (self.held_qty > 0 and not dust_only) or self.position_uncertain
+        if order.get("status") != "FILLED" or self.position_uncertain or (closing and self.in_position):
+            raise RuntimeError(f"주문 상태 {order.get('status', 'unknown')} — 체결 완료를 확인하지 못했습니다. 거래소에서 주문과 포지션을 확인하세요.")
+        self.log(f"  ✓ {side_word}{' (청산)' if reduce_only else ''} 체결: id={order.get('orderId')} 수량={executed}")
+        return True
 
     def _prepare(self) -> bool:
         """시장별 심볼정보/레버리지 세팅. 성공 시 True."""
@@ -599,19 +683,36 @@ class BotThread(threading.Thread):
             if not info:
                 self.log(f"[오류] '{self.symbol}' 은 (테스트넷) 현물에 없어요. 심볼을 바꾸세요.")
                 return False
+            self.base_asset = info.get("baseAsset", "")
             self.step, _ = _parse_filters(info)
         return True
 
     def _close_position(self) -> bool:
         """보유 포지션을 시장가로 정리. 성공 시 True."""
+        if getattr(self, "position_uncertain", False):
+            raise RuntimeError("포지션을 확인하지 못해 추가 주문을 보내지 않습니다. 거래소에서 주문과 포지션을 확인하세요.")
         if not self.in_position or self.held_qty <= 0:
             return True
         close_word = "SELL" if self.side == "long" else "BUY"
         reduce = self.market == "futures"
-        ok = self._place(close_word, _round_step(self.held_qty, self.step), reduce_only=reduce)
-        if ok:
-            self.in_position = False
-        return ok
+        return self._place(close_word, _round_step(self.held_qty, self.step), reduce_only=reduce)
+
+    def _snapshot(self) -> dict:
+        price = getattr(self, "last_price", 0.0)
+        return {
+            "in_position": self.in_position,
+            "position_uncertain": getattr(self, "position_uncertain", False),
+            "last_price": price,
+            "entry_price": self.entry_price if self.in_position else 0.0,
+            "position_qty": self.held_qty if self.in_position else getattr(self, "position_dust_qty", 0.0),
+            "realized_pnl": self.realized,
+            "unrealized_pct": _pnl_pct(self.entry_price, price, self.side) if self.in_position and price else 0.0,
+            "note": "포지션 확인 필요 · 거래소에서 주문과 포지션을 확인하세요." if getattr(self, "position_uncertain", False) else self._dust_note(),
+        }
+
+    def _dust_note(self) -> str:
+        dust = getattr(self, "position_dust_qty", 0.0)
+        return f"최소 주문 단위 미만 잔여 수량 {dust:.12g} {self.symbol}" if dust else ""
 
     # --- 메인 루프 ----------------------------------------------
     def run(self) -> None:
@@ -631,14 +732,19 @@ class BotThread(threading.Thread):
                 cmd = self._get_command()
                 if cmd:
                     note = self._finish_position(cmd)
-                    status = "stopped"
+                    status = "error" if cmd == "close_and_stop" and self.in_position else "stopped"
                     return
 
                 # 2) 시세
                 try:
                     price = self._price()
+                    self.last_price = price
                 except Exception as exc:
                     self.log(f"  일시 오류(시세): {exc} — {POLL_SECONDS:.0f}초 후 재시도")
+                    snapshot = {**self._snapshot(), "note": "시세 연결 재시도 중 · 마지막 확인 가격"}
+                    action = self.server.heartbeat(snapshot)
+                    if action in ("stop_only", "close_and_stop"):
+                        self.set_command(action)
                     self._sleep(POLL_SECONDS)
                     continue
                 guard.roll_day()
@@ -655,7 +761,6 @@ class BotThread(threading.Thread):
                             open_word = "BUY" if self.side == "long" else "SELL"
                             self.log(f"[진입] {price} → {open_word} {qty} {self.symbol}")
                             if self._place(open_word, qty):
-                                self.in_position, self.entry_price, self.held_qty = True, price, qty
                                 guard.on_entry()
                 else:
                     unreal = _pnl_usdt(self.held_qty, self.entry_price, price, self.side)
@@ -663,25 +768,16 @@ class BotThread(threading.Thread):
                     if forced or _should_exit(t, price, self.entry_price, self.side):
                         tag = f"[강제청산: {why}]" if forced else "[청산 신호]"
                         self.log(f"{tag} {price} (진입 {self.entry_price})")
+                        entry_price, realized_before = self.entry_price, self.realized
                         if self._close_position():
-                            pnl = _pnl_usdt(self.held_qty, self.entry_price, price, self.side)
-                            self.realized += pnl
-                            self.log(f"  손익 {_pnl_pct(self.entry_price, price, self.side):+.2f}% "
+                            pnl = self.realized - realized_before
+                            self.log(f"  손익 {_pnl_pct(entry_price, self._last_fill_price, self.side):+.2f}% "
                                      f"({pnl:+.2f} USDT) · 누적 {self.realized:+.2f} USDT")
-                            was_stop = not forced and _was_stop_exit(t, price, self.entry_price, self.side)
-                            self.entry_price, self.held_qty = 0.0, 0.0
+                            was_stop = not forced and _was_stop_exit(t, price, entry_price, self.side)
                             guard.on_exit(pnl, was_stop)
 
                 # 4) 상태 스냅샷 + 하트비트
-                unreal_pct = _pnl_pct(self.entry_price, price, self.side) if self.in_position else 0.0
-                snap = {
-                    "in_position": self.in_position,
-                    "last_price": price,
-                    "entry_price": self.entry_price,
-                    "position_qty": self.held_qty,
-                    "realized_pnl": self.realized,
-                    "unrealized_pct": unreal_pct,
-                }
+                snap = self._snapshot()
                 self.on_status(snap)
                 action = self.server.heartbeat(snap)
                 if action in ("stop_only", "close_and_stop"):
@@ -694,7 +790,11 @@ class BotThread(threading.Thread):
             status, note = "error", f"예기치 못한 오류: {exc}"
             self.log(note)
         finally:
-            self.server.stopped(status, note)
+            if self._dust_note():
+                note = f"{note} · {self._dust_note()}"
+            if self.server.stopped(status, note, snapshot=self._snapshot()) is False:
+                note += " · 서버 종료 상태 전송 실패"
+                self.log("서버에 종료 결과를 전송하지 못했어요. 내 에이전트의 상태가 지연될 수 있어요.")
             self.on_finish(status, note)
 
     def _finish_position(self, mode: str) -> str:
@@ -702,6 +802,13 @@ class BotThread(threading.Thread):
         if mode == "close_and_stop":
             if self.in_position:
                 self.log("청산 후 종료 요청 — 보유 포지션을 정리합니다.")
+                # A failed quote must not prevent a requested close. Keep the
+                # last known price for the estimate; position confirmation comes
+                # from the order result, not from this price.
+                try:
+                    self.last_price = self._price()
+                except Exception:
+                    pass
                 if self._close_position():
                     return "청산 완료 후 종료"
                 self.log("⚠ 청산 주문이 실패했어요. 거래소에서 직접 확인하세요.")

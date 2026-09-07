@@ -50,6 +50,24 @@ def fetch_ticker_news_task(asset_symbol: str) -> dict:
 
 
 @task(retries=0, log_prints=True)
+def publish_initial_news_task(asset_symbol: str, news_payload: dict) -> dict:
+    """Expose RSS headlines before browsers and paid model calls start."""
+    result = collector.publish_initial_payload(asset_symbol, news_payload)
+    print(json.dumps(result, ensure_ascii=False))
+    return result
+
+
+@task(retries=0, log_prints=True)
+def enrich_ticker_news_task(asset_symbol: str, news_payload: dict) -> dict:
+    """One bounded browser stage; source failures retain the RSS snapshot."""
+    result = collector.enrich_payload(asset_symbol, news_payload)
+    print(json.dumps({"asset_symbol": asset_symbol,
+                      "browser_enrichment": result.get("browser_enrichment", {}),
+                      "sources": result.get("sources", [])}, ensure_ascii=False))
+    return result
+
+
+@task(retries=0, log_prints=True)
 def process_ticker_news_task(
     asset_symbol: str,
     news_payload: dict,
@@ -61,6 +79,8 @@ def process_ticker_news_task(
         news_payload,
         allow_ai=allow_ai,
     )
+    if news_payload.get("browser_enrichment"):
+        result["browser_status"] = news_payload["browser_enrichment"].get("status")
     print(json.dumps(result, ensure_ascii=False))
     return result
 
@@ -76,12 +96,26 @@ def record_fetch_error_task(asset_symbol: str, error: str) -> None:
 
 @task(retries=0, log_prints=True)
 def discover_tickers_task() -> list[str]:
-    return repository.discover_tracked_symbols()
+    return repository.discover_tracked_symbols(due_only=True)
 
 
 @task(retries=0, log_prints=True)
 def prune_snapshots_task(retention_days: int) -> int:
     return repository.prune_snapshots(retention_days=retention_days)
+
+
+def effective_config() -> dict:
+    """Safe operational values visible in Prefect logs; never credentials."""
+    return {
+        "version": os.environ.get("RENDER_GIT_COMMIT", "local"),
+        "collector_mode": "rss_then_playwright",
+        "collection_seconds": int(os.environ.get("POSITION_NEWS_COLLECTION_SECONDS", "300")),
+        "schedule_seconds": max(60, int(os.environ.get("POSITION_NEWS_SCHEDULE_SECONDS", "60"))),
+        "max_ai_per_run": int(os.environ.get("POSITION_NEWS_MAX_AI_ANALYSES_PER_RUN", "2")),
+        "max_ai_per_day": int(os.environ.get("POSITION_NEWS_MAX_AI_ANALYSES_PER_DAY", "10")),
+        "browser_enabled": collector.browser_enrichment_enabled(),
+        "browser_budget_seconds": min(90, max(5, int(os.environ.get("POSITION_NEWS_BROWSER_BUDGET_SECONDS", "35")))),
+    }
 
 
 @flow(
@@ -92,6 +126,8 @@ def prune_snapshots_task(retention_days: int) -> int:
 )
 def collect_position_news_flow() -> dict:
     """Collect each shared ticker once within a bounded central cycle."""
+    config = effective_config()
+    print(json.dumps({"configuration": config}, ensure_ascii=False))
     collection_seconds = max(
         60,
         int(os.environ.get("POSITION_NEWS_COLLECTION_SECONDS", "300")),
@@ -103,7 +139,7 @@ def collect_position_news_flow() -> dict:
     schedule_lag = _schedule_lag_seconds()
     if schedule_lag > max_schedule_lag:
         summary = collector.summarize_results([])
-        summary.update(run_status="skipped_late", schedule_lag_seconds=int(schedule_lag))
+        summary.update(run_status="skipped_late", schedule_lag_seconds=int(schedule_lag), configuration=config)
         print(json.dumps(summary, ensure_ascii=False))
         return summary
     max_tickers = max(
@@ -112,7 +148,7 @@ def collect_position_news_flow() -> dict:
     )
     max_ai = max(
         0,
-        int(os.environ.get("POSITION_NEWS_MAX_AI_ANALYSES_PER_RUN", "12")),
+        int(os.environ.get("POSITION_NEWS_MAX_AI_ANALYSES_PER_RUN", "2")),
     )
     retention_days = max(
         1,
@@ -136,67 +172,97 @@ def collect_position_news_flow() -> dict:
     ai_used = 0
     consecutive_fetch_failures = 0
     source_circuit_open = False
+    expand = collector.browser_enrichment_enabled()
+    pending = []
+    leases = {}
 
-    for index, asset_symbol in enumerate(symbols):
-        if time.monotonic() - started >= max_cycle_seconds:
-            results.extend({
-                "asset_symbol": skipped,
-                "status": "skipped",
-                "reason": "cycle_deadline",
-                "used_ai_budget": False,
-            } for skipped in symbols[index:])
-            break
-
-        try:
-            news_payload = fetch_ticker_news_task.submit(asset_symbol).result()
-        except Exception as exc:
-            record_fetch_error_task.submit(
-                asset_symbol,
-                str(exc),
-            ).result()
-            results.append({
-                "asset_symbol": asset_symbol,
-                "status": "error",
-                "error": f"{asset_symbol} 뉴스 수집 실패",
-                "used_ai_budget": False,
-            })
-            consecutive_fetch_failures += 1
-            if consecutive_fetch_failures >= max_fetch_failures:
-                source_circuit_open = True
+    try:
+        for index, asset_symbol in enumerate(symbols):
+            if time.monotonic() - started >= max_cycle_seconds:
                 results.extend({
                     "asset_symbol": skipped,
                     "status": "skipped",
-                    "reason": "source_circuit_open",
+                    "reason": "cycle_deadline",
                     "used_ai_budget": False,
-                } for skipped in symbols[index + 1:])
+                } for skipped in symbols[index:])
                 break
-            continue
 
-        consecutive_fetch_failures = 0
-        allow_ai = ai_used < max_ai
-        try:
-            result = process_ticker_news_task.submit(
-                asset_symbol,
-                news_payload,
-                allow_ai,
-            ).result()
-        except Exception as exc:
-            # The durable daily budget is authoritative. This conservative
-            # cycle count prevents another ticker from spending the same slot
-            # when a model call succeeded but persistence later failed.
-            attempted = bool(os.environ.get("ANTHROPIC_API_KEY")) and allow_ai
-            result = {
-                "asset_symbol": asset_symbol,
-                "status": "error",
-                "error": str(exc),
-                "used_ai_budget": attempted,
-            }
-        if result.get("used_ai_budget"):
-            ai_used += 1
-        results.append(result)
+            token = repository.claim_collection(asset_symbol)
+            if not token:
+                results.append({"asset_symbol": asset_symbol, "status": "skipped", "used_ai_budget": False})
+                continue
+            leases[asset_symbol] = token
+            try:
+                try:
+                    news_payload = fetch_ticker_news_task.submit(asset_symbol).result()
+                except Exception as exc:
+                    record_fetch_error_task.submit(
+                        asset_symbol,
+                        str(exc),
+                    ).result()
+                    if expand:
+                        # Browsers are an independent source, so an RSS outage
+                        # still gets one chance to recover through public pages.
+                        news_payload = {"symbol": asset_symbol, "coin_name": asset_symbol,
+                                        "items": [], "sources": [{"name": "rss", "status": "error"}]}
+                        pending.append((asset_symbol, news_payload, None))
+                        continue
+                    results.append({
+                        "asset_symbol": asset_symbol,
+                        "status": "error",
+                        "error": f"{asset_symbol} 뉴스 수집 실패",
+                        "used_ai_budget": False,
+                    })
+                    consecutive_fetch_failures += 1
+                    if consecutive_fetch_failures >= max_fetch_failures:
+                        source_circuit_open = True
+                        results.extend({
+                            "asset_symbol": skipped,
+                            "status": "skipped",
+                            "reason": "source_circuit_open",
+                            "used_ai_budget": False,
+                        } for skipped in symbols[index + 1:])
+                        break
+                    continue
+
+                consecutive_fetch_failures = 0
+                initial = publish_initial_news_task.submit(asset_symbol, news_payload).result() if expand else None
+                pending.append((asset_symbol, news_payload, initial))
+            finally:
+                if not any(item[0] == asset_symbol for item in pending):
+                    repository.finish_collection(asset_symbol, leases.pop(asset_symbol))
+
+        for asset_symbol, news_payload, initial in pending:
+            if time.monotonic() - started >= max_cycle_seconds:
+                results.append({**(initial or {"asset_symbol": asset_symbol, "status": "skipped",
+                                               "used_ai_budget": False}),
+                                "reason": "cycle_deadline", "browser_status": "deferred"})
+                repository.finish_collection(asset_symbol, leases.pop(asset_symbol), next_delay_seconds=60)
+                continue
+            if not repository.renew_collection(asset_symbol, leases[asset_symbol]):
+                results.append({"asset_symbol": asset_symbol, "status": "superseded", "used_ai_budget": False})
+                continue
+            allow_ai = ai_used < max_ai
+            try:
+                if expand:
+                    news_payload = enrich_ticker_news_task.submit(asset_symbol, news_payload).result()
+                result = process_ticker_news_task.submit(asset_symbol, news_payload, allow_ai).result()
+            except Exception as exc:
+                # Paid tasks have no retries. Count an uncertain model attempt
+                # conservatively if final persistence failed.
+                result = {"asset_symbol": asset_symbol, "status": "error", "error": str(exc),
+                          "used_ai_budget": bool(os.environ.get("ANTHROPIC_API_KEY")) and allow_ai}
+            if result.get("used_ai_budget"):
+                ai_used += 1
+            results.append(result)
+            repository.finish_collection(asset_symbol, leases.pop(asset_symbol))
+    finally:
+        for asset_symbol, token in leases.items():
+            repository.finish_collection(asset_symbol, token)
 
     removed = prune_snapshots_task.submit(retention_days).result()
     summary = collector.summarize_results(results, removed=removed)
+    summary["configuration"] = config
     print(json.dumps(summary, ensure_ascii=False))
     if source_circuit_open:
         raise NewsSourceCircuitOpen(
@@ -231,18 +297,22 @@ def main() -> None:
 
     interval_seconds = max(
         60,
-        int(os.environ.get("POSITION_NEWS_COLLECTION_SECONDS", "300")),
+        int(os.environ.get("POSITION_NEWS_SCHEDULE_SECONDS", "60")),
     )
+    print(json.dumps({"configuration": effective_config()}, ensure_ascii=False))
     collect_position_news_flow.serve(
         name="shared-ticker-news",
         interval=timedelta(seconds=interval_seconds),
         paused=False,
-        pause_on_shutdown=True,
+        # During rolling deploys the old runner shuts down after the new one
+        # registers. Pausing on shutdown would disable the new schedule.
+        pause_on_shutdown=False,
+        version=os.environ.get("RENDER_GIT_COMMIT") or None,
         limit=1,
         global_limit=1,
         tags=["agents", "position-news", "central-collector"],
         description=(
-            "활성 매크로 티커의 뉴스를 한 번 수집·분석해 공용 DB에 저장합니다."
+            "RSS를 먼저 공개하고 Playwright 공개 웹 탐색을 추가한 뒤 공용 DB에 분석을 저장합니다."
         ),
     )
 

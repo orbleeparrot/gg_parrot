@@ -6,7 +6,7 @@ import time
 from contextlib import contextmanager
 from typing import Iterator, Optional
 
-from sqlalchemy import BigInteger, event
+from sqlalchemy import BigInteger, Index, event
 
 # epoch 밀리초를 담는 컬럼은 반드시 BIGINT 여야 한다. SQLite 의 INTEGER 는
 # 가변 길이(최대 8바이트)라 그냥 들어가지만, Postgres 의 INTEGER 는 정확히
@@ -347,6 +347,7 @@ class RunSession(SQLModel, table=True):
     거래소 API 키/시크릿은 이 테이블에 저장되지 않는다(로컬에서만 사용).
     """
 
+    __table_args__ = (Index("ix_runsession_active_heartbeat", "status", "last_heartbeat_at"),)
     id: Optional[int] = Field(default=None, primary_key=True)
     user_id: int = Field(index=True)
     # Stable account-library identity. Nullable for sessions created by legacy
@@ -369,6 +370,7 @@ class RunSession(SQLModel, table=True):
     stop_mode: str = ""
     # 마지막 heartbeat 의 실시간 스냅샷
     in_position: bool = False
+    position_uncertain: bool = False
     last_price: float = 0.0
     entry_price: float = 0.0
     position_qty: float = 0.0
@@ -431,6 +433,9 @@ class TickerNewsState(SQLModel, table=True):
     last_success_at: str = ""
     last_success_ms: int = Field(default=0, sa_type=BigInteger, index=True)
     updated_at: str = ""
+    collection_claim_token: str = ""
+    collection_claimed_ms: int = Field(default=0, sa_type=BigInteger)
+    next_collection_ms: int = Field(default=0, sa_type=BigInteger)
 
 
 class TickerNewsAiBudget(SQLModel, table=True):
@@ -453,6 +458,15 @@ class MarketNewsSummary(SQLModel, table=True):
     prompt_version: str = ""
     updated_at: str = ""
     updated_ms: int = Field(default=0, sa_type=BigInteger)
+
+
+class BrowserNewsPageCache(SQLModel, table=True):
+    """Shared public article metadata surviving Prefect subprocess restarts."""
+
+    cache_key: str = Field(primary_key=True, max_length=512)
+    payload_json: str
+    expires_ms: int = Field(sa_type=BigInteger, index=True)
+    updated_ms: int = Field(sa_type=BigInteger, index=True)
 
 
 class NewsTitleTranslation(SQLModel, table=True):
@@ -602,6 +616,7 @@ def _migrate() -> None:
             "rep_leverage": "ALTER TABLE macrorow ADD COLUMN rep_leverage INTEGER DEFAULT 1",
         },
         "runsession": {
+            "position_uncertain": "ALTER TABLE runsession ADD COLUMN position_uncertain BOOLEAN DEFAULT FALSE",
             "macro_json": "ALTER TABLE runsession ADD COLUMN macro_json TEXT DEFAULT ''",
             "user_macro_id": "ALTER TABLE runsession ADD COLUMN user_macro_id INTEGER",
         },
@@ -614,6 +629,9 @@ def _migrate() -> None:
             "next_retry_ms": "ALTER TABLE tickernewssnapshot ADD COLUMN next_retry_ms INTEGER DEFAULT 0",
         },
         "tickernewsstate": {
+            "collection_claim_token": "ALTER TABLE tickernewsstate ADD COLUMN collection_claim_token TEXT DEFAULT ''",
+            "collection_claimed_ms": "ALTER TABLE tickernewsstate ADD COLUMN collection_claimed_ms INTEGER DEFAULT 0",
+            "next_collection_ms": "ALTER TABLE tickernewsstate ADD COLUMN next_collection_ms INTEGER DEFAULT 0",
             "observation_seq": "ALTER TABLE tickernewsstate ADD COLUMN observation_seq INTEGER DEFAULT 0",
             "latest_observation_seq": "ALTER TABLE tickernewsstate ADD COLUMN latest_observation_seq INTEGER DEFAULT 0",
             "latest_observed_ms": "ALTER TABLE tickernewsstate ADD COLUMN latest_observed_ms INTEGER DEFAULT 0",
@@ -644,6 +662,7 @@ def _migrate() -> None:
             "CREATE INDEX IF NOT EXISTS ix_runsession_user_macro_id "
             "ON runsession (user_macro_id)"
         )
+        conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_runsession_active_heartbeat ON runsession (status, last_heartbeat_at)")
         conn.exec_driver_sql(
             "CREATE INDEX IF NOT EXISTS ix_newstitletranslation_processing_status "
             "ON newstitletranslation (processing_status)"
@@ -660,7 +679,12 @@ def _migrate_pg() -> None:
     introduced after a table first shipped. `ADD COLUMN IF NOT EXISTS` makes this
     idempotent and safe on every startup."""
     stmts = [
+        "CREATE INDEX IF NOT EXISTS ix_runsession_active_heartbeat ON runsession (status, last_heartbeat_at)",
+        "ALTER TABLE tickernewsstate ADD COLUMN IF NOT EXISTS collection_claim_token TEXT DEFAULT ''",
+        "ALTER TABLE tickernewsstate ADD COLUMN IF NOT EXISTS collection_claimed_ms BIGINT DEFAULT 0",
+        "ALTER TABLE tickernewsstate ADD COLUMN IF NOT EXISTS next_collection_ms BIGINT DEFAULT 0",
         "ALTER TABLE runsession ADD COLUMN IF NOT EXISTS macro_json TEXT DEFAULT ''",
+        "ALTER TABLE runsession ADD COLUMN IF NOT EXISTS position_uncertain BOOLEAN DEFAULT FALSE",
         "ALTER TABLE runsession ADD COLUMN IF NOT EXISTS user_macro_id INTEGER",
         "CREATE INDEX IF NOT EXISTS ix_runsession_user_macro_id ON runsession (user_macro_id)",
         "ALTER TABLE tickernewssnapshot ADD COLUMN IF NOT EXISTS claim_token TEXT DEFAULT ''",
@@ -706,6 +730,8 @@ def _migrate_pg() -> None:
             "completed_ms",
         ),
         "tickernewsstate": (
+            "collection_claimed_ms",
+            "next_collection_ms",
             "observation_seq",
             "latest_observation_seq",
             "latest_observed_ms",

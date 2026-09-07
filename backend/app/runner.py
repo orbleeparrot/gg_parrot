@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import math
 import os
 import re
 import secrets
@@ -415,6 +416,8 @@ def start_session(user: User, payload: dict) -> dict:
         db.refresh(row)
         result = {"session_id": row.id, "poll_seconds": POLL_SECONDS}
     notify_sessions_changed(user.id)
+    from .agent_features.position_news.runtime import request_collection
+    request_collection()
     return result
 
 
@@ -434,11 +437,12 @@ def heartbeat(user: User, session_id: int, snapshot: dict) -> dict:
 
         row.last_price = float(snapshot.get("last_price", row.last_price) or 0.0)
         row.in_position = bool(snapshot.get("in_position", False))
+        row.position_uncertain = bool(snapshot.get("position_uncertain", row.position_uncertain))
         row.entry_price = float(snapshot.get("entry_price", 0.0) or 0.0)
         row.position_qty = float(snapshot.get("position_qty", 0.0) or 0.0)
         row.realized_pnl = float(snapshot.get("realized_pnl", 0.0) or 0.0)
         row.unrealized_pct = float(snapshot.get("unrealized_pct", 0.0) or 0.0)
-        if snapshot.get("note"):
+        if "note" in snapshot:
             row.note = str(snapshot["note"])[:200]
         row.last_heartbeat_at = _now_iso()
         action = row.stop_mode if row.stop_mode in _STOP_MODES else "continue"
@@ -448,7 +452,7 @@ def heartbeat(user: User, session_id: int, snapshot: dict) -> dict:
     return {"action": action}
 
 
-def mark_stopped(user: User, session_id: int, status: str = "stopped", note: str = "") -> dict:
+def mark_stopped(user: User, session_id: int, status: str = "stopped", note: str = "", *, snapshot: dict | None = None) -> dict:
     """실행기가 종료(또는 오류 종료)를 확정 보고한다."""
     with get_session() as db:
         row = db.get(RunSession, session_id)
@@ -458,7 +462,24 @@ def mark_stopped(user: User, session_id: int, status: str = "stopped", note: str
         if note:
             row.note = str(note)[:200]
         row.stopped_at = _now_iso()
-        row.in_position = bool(row.in_position and status != "stopped")  # 청산됐으면 False 로 남김
+        # A stopped process may still have an open exchange position. Legacy
+        # runners omit the final snapshot; preserve their last known position.
+        if snapshot is not None:
+            row.in_position = bool(snapshot.get("in_position", row.in_position))
+            row.position_uncertain = bool(snapshot.get("position_uncertain", row.position_uncertain))
+            for field in ("last_price", "entry_price", "position_qty", "realized_pnl", "unrealized_pct"):
+                if field in snapshot:
+                    value = float(snapshot[field] or 0)
+                    if not math.isfinite(value):
+                        raise HTTPException(status_code=422, detail="최종 포지션 값이 올바르지 않아요.")
+                    setattr(row, field, value)
+        elif status == "stopped" and note in {"청산 완료 후 종료", "포지션 없이 종료"}:
+            # v5 explicitly reports these outcomes without a final snapshot.
+            row.in_position = False
+            row.position_qty = row.entry_price = row.unrealized_pct = 0.0
+        if row.position_uncertain or (row.stop_mode == "close_and_stop" and row.in_position):
+            row.status = "error"
+            row.note = note or "청산 완료를 확인하지 못했어요. 거래소에서 포지션을 확인하세요."
         db.add(row)
         db.commit()
     notify_sessions_changed(user.id)
@@ -499,6 +520,7 @@ def _session_view(row: RunSession) -> dict:
         "stop_mode": row.stop_mode,
         "connected": connected,
         "in_position": row.in_position,
+        "position_uncertain": row.position_uncertain,
         "last_price": row.last_price,
         "entry_price": row.entry_price,
         "position_qty": row.position_qty,

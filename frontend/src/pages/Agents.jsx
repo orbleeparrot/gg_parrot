@@ -5,8 +5,10 @@ import { useAuth } from "../lib/auth.js";
 import { RULE_TYPES } from "../lib/macro.js";
 import { computeSessionOverlay } from "../lib/indicators.js";
 import { usePositionNewsFeature } from "../features/agents/positionNews/index.js";
+import { useWhaleActivity } from "../features/agents/useWhaleActivity.js";
 import AgentActivityStream from "../components/AgentActivityStream.jsx";
 import CandleChart from "../components/CandleChart.jsx";
+import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 import { ErrorNote, Loading } from "../components/Page.jsx";
 
 const SESSION_STREAM_PROTOCOL = "ggparrot.sessions.v1";
@@ -25,7 +27,7 @@ function ruleLabel(macro) {
 
 // 셀렉트 옵션 라벨: 실행 중 세션과 마지막 오류를 종목·전략·환경 기준으로 표기한다.
 function sessionOptionLabel(session) {
-  const prefix = session.status === "error"
+  const prefix = session.status === "stopped" ? "종료 · " : session.status === "error"
     ? "오류 · "
     : session.connected
       ? ""
@@ -35,6 +37,7 @@ function sessionOptionLabel(session) {
 }
 
 function statusText(session) {
+  if (session.position_uncertain) return "포지션 확인 필요";
   if (session.status === "error") return "실행 오류";
   if (session.status !== "running") return "실행 종료";
   if (session.stopping) return "종료 처리 중…";
@@ -126,6 +129,8 @@ export default function Agents() {
   const [busy, setBusy] = useState(false);
   const [mobilePane, setMobilePane] = useState("chart");
   const sessionSnapshotRevision = useRef(0);
+  const lastStreamMessageAt = useRef(0);
+  const [streamConnected, setStreamConnected] = useState(false);
 
   const loadSessions = useCallback(async () => {
     const revision = sessionSnapshotRevision.current;
@@ -140,6 +145,14 @@ export default function Agents() {
       setError(String(reason.message || reason));
     }
   }, []);
+
+  const pollSessions = useCallback(async () => {
+    if (Date.now() - lastStreamMessageAt.current < 15000) return;
+    setStreamConnected(false);
+    await loadSessions();
+  }, [loadSessions]);
+  useAdaptivePolling(pollSessions, { intervalMs: 5000, maxIntervalMs: 15000,
+    enabled: !!token, immediate: false, pollKey: token });
 
   useEffect(() => {
     if (!token) {
@@ -202,7 +215,10 @@ export default function Agents() {
           } catch (_) {
             return;
           }
-          if (message?.type !== "sessions.snapshot" || !message.data) return;
+          if (stopped || socket !== nextSocket || message?.type !== "sessions.snapshot" || !message.data) return;
+          lastStreamMessageAt.current = Date.now();
+          setStreamConnected(true);
+          setError("");
           sessionSnapshotRevision.current += 1;
           setSessions(message.data);
           reconnectAttempt = 0;
@@ -210,6 +226,10 @@ export default function Agents() {
         nextSocket.onerror = () => nextSocket.close();
         nextSocket.onclose = () => {
           if (socket === nextSocket) socket = null;
+          if (!stopped) {
+            lastStreamMessageAt.current = 0;
+            setStreamConnected(false);
+          }
           scheduleReconnect();
         };
       } catch (_) {
@@ -232,29 +252,10 @@ export default function Agents() {
   // 아니라 러너가 보고하는 active 세션을 그대로 쓴다. 단, 종료와 동시에 사라지는
   // 오류 상태는 같은 매크로가 다시 실행되기 전까지 최신 1건을 함께 보존한다.
   const activeSessions = useMemo(() => sessions?.active || [], [sessions]);
-  const recentErrorSessions = useMemo(() => {
-    const activeMacroIds = new Set(
-      activeSessions
-        .map((session) => session.user_macro_id)
-        .filter((id) => id !== null && id !== undefined),
-    );
-    const seen = new Set();
-    return (sessions?.recent || []).filter((session) => {
-      if (session.status !== "error") return false;
-      if (session.user_macro_id !== null && session.user_macro_id !== undefined) {
-        if (activeMacroIds.has(session.user_macro_id) || seen.has(session.user_macro_id)) return false;
-        seen.add(session.user_macro_id);
-        return true;
-      }
-      const legacyKey = `${session.symbol}:${session.position_side}:${session.market}`;
-      if (seen.has(legacyKey)) return false;
-      seen.add(legacyKey);
-      return true;
-    });
-  }, [activeSessions, sessions]);
+  // Keep terminal sessions visible so the user can verify the close result.
   const sessionOptions = useMemo(
-    () => [...activeSessions, ...recentErrorSessions],
-    [activeSessions, recentErrorSessions],
+    () => [...activeSessions, ...(sessions?.recent || [])],
+    [activeSessions, sessions],
   );
   const selectedId = searchParams.get("session");
   const selected = useMemo(() => {
@@ -269,7 +270,8 @@ export default function Agents() {
     setSearchParams(next, { replace: true });
   }, [searchParams, selected, selectedId, setSearchParams]);
 
-  const activePositionNews = usePositionNewsFeature(selected?.session_id);
+  const activePositionNews = usePositionNewsFeature(selected?.session_id, selected?.status === "running");
+  const whaleActivity = useWhaleActivity(selected);
 
   useEffect(() => {
     setChartSnapshot(null);
@@ -280,8 +282,8 @@ export default function Agents() {
   const market = executionMarket(macro, selected);
   const activeChart = chartSnapshot?.symbol === selected?.symbol ? chartSnapshot : null;
   const featureStates = useMemo(
-    () => ({ position_news: activePositionNews }),
-    [activePositionNews],
+    () => ({ position_news: activePositionNews, whale_activity: whaleActivity }),
+    [activePositionNews, whaleActivity],
   );
 
   const chartOverlay = useCallback((candles) => computeSessionOverlay(
@@ -336,6 +338,7 @@ export default function Agents() {
 
   return (
     <div className="agent-page">
+      {!streamConnected && sessions ? <p className="t-caption text-slate-500" role="status">실시간 연결 복구 중 · 5초마다 실행 상태 확인</p> : null}
       {error ? <ErrorNote>실행 상태 오류: {error}</ErrorNote> : null}
       {sessions && sessionOptions.length === 0 ? <EmptyLibrary /> : null}
 

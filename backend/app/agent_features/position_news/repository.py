@@ -9,12 +9,15 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import delete, update
+from sqlalchemy import delete, update, or_
+from sqlalchemy.dialects.postgresql import insert as postgres_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from ... import news as news_mod
 from ...db import (
+    BrowserNewsPageCache,
     MarketNewsSummary,
     NewsTitleTranslation,
     RunSession,
@@ -40,6 +43,8 @@ _TITLE_TRANSLATION_CLAIM_LEASE_MS = max(
     30,
     int(os.environ.get("NEWS_TITLE_TRANSLATION_CLAIM_LEASE_SECONDS", "180")),
 ) * 1000
+_BROWSER_PAGE_CACHE_MAX_ROWS = 512
+_BROWSER_PAGE_CACHE_MAX_PAYLOAD_BYTES = 256_000
 
 
 @dataclass(frozen=True)
@@ -208,20 +213,26 @@ def _retry_delay_ms(attempts: int) -> int:
 
 def discover_tracked_symbols(
     db: Session | None = None,
+    *, due_only: bool = False, bootstrap_only: bool = False,
+    now_ms: int | None = None,
 ) -> list[str]:
     """Return canonical assets backed by a live runner heartbeat."""
     if db is None:
         with get_session() as owned:
-            return discover_tracked_symbols(owned)
+            return discover_tracked_symbols(owned, due_only=due_only,
+                                            bootstrap_only=bootstrap_only, now_ms=now_ms)
 
     assets: set[str] = set()
-    now_ms = int(time.time() * 1000)
+    now_ms = int(time.time() * 1000) if now_ms is None else now_ms
     active_window_ms = max(
         30,
         int(os.environ.get("POSITION_NEWS_ACTIVE_SESSION_SECONDS", "60")),
     ) * 1000
     running_sessions = db.exec(
-        select(RunSession).where(RunSession.status == "running")
+        select(RunSession.symbol, RunSession.last_heartbeat_at).where(
+            RunSession.status == "running",
+            RunSession.last_heartbeat_at >= _clock(now_ms - active_window_ms)[1],
+        )
     ).all()
     assets.update(
         asset
@@ -232,6 +243,8 @@ def discover_tracked_symbols(
         if (asset := news_mod.asset_from_market_symbol(row.symbol))
     )
 
+    if not assets:
+        return []
     states = db.exec(
         select(TickerNewsState).where(
             TickerNewsState.asset_symbol.in_(sorted(assets))
@@ -241,10 +254,108 @@ def discover_tracked_symbols(
         row.asset_symbol: int(row.last_attempt_ms or 0)
         for row in states
     }
+    if bootstrap_only:
+        stale_before = now_ms - max(
+            120, int(os.environ.get("POSITION_NEWS_COLLECTION_SECONDS", "300")) * 2,
+        ) * 1000
+        assets.difference_update(
+            row.asset_symbol for row in states
+            if row.latest_snapshot_id is not None and row.last_success_ms > stale_before
+        )
+    if due_only:
+        assets.difference_update(
+            row.asset_symbol for row in states
+            if row.next_collection_ms > now_ms or (
+                row.collection_claim_token
+                and row.collection_claimed_ms > now_ms - _CLAIM_TIMEOUT_MS
+            )
+        )
     return sorted(
         assets,
         key=lambda symbol: (last_attempt_by_asset.get(symbol, 0), symbol),
     )
+
+
+def claim_collection(asset_symbol: str, *, now_ms=None, db=None) -> str | None:
+    """Claim before RSS I/O, with CAS fencing across web/Prefect workers."""
+    if db is None:
+        with get_session() as owned:
+            return claim_collection(asset_symbol, now_ms=now_ms, db=owned)
+    asset = news_mod.canonical_asset_symbol(asset_symbol)
+    if not asset:
+        return None
+    millis, stamp = _clock(now_ms)
+    _state(db, asset, stamp)
+    token = uuid.uuid4().hex
+    result = db.exec(update(TickerNewsState).where(
+        TickerNewsState.asset_symbol == asset,
+        TickerNewsState.next_collection_ms <= millis,
+        or_(TickerNewsState.collection_claim_token == "",
+            TickerNewsState.collection_claimed_ms <= millis - _CLAIM_TIMEOUT_MS),
+    ).values(collection_claim_token=token, collection_claimed_ms=millis,
+             last_attempt_at=stamp, last_attempt_ms=millis))
+    db.commit()
+    return token if result.rowcount == 1 else None
+
+
+def finish_collection(asset_symbol: str, token: str, *, now_ms=None, db=None,
+                      next_delay_seconds: int | None = None) -> bool:
+    if db is None:
+        with get_session() as owned:
+            return finish_collection(asset_symbol, token, now_ms=now_ms, db=owned,
+                                     next_delay_seconds=next_delay_seconds)
+    millis, _ = _clock(now_ms)
+    row = db.get(TickerNewsState, asset_symbol)
+    if row is None or not token or row.collection_claim_token != token:
+        return False
+    delay = max(60, int(os.environ.get("POSITION_NEWS_COLLECTION_SECONDS", "300")))
+    if row.collection_status in {"error", "empty", "pending"}:
+        delay = min(delay, 60 * 2 ** min(4, max(0, row.consecutive_failures - 1)))
+    elif next_delay_seconds is not None:
+        # A web bootstrap publishes fast RSS, then yields the same durable
+        # lease immediately so the scheduled worker can add browser sources.
+        delay = max(0, int(next_delay_seconds))
+    result = db.exec(update(TickerNewsState).where(
+        TickerNewsState.asset_symbol == asset_symbol,
+        TickerNewsState.collection_claim_token == token,
+    ).values(collection_claim_token="", next_collection_ms=millis + delay * 1000))
+    db.commit()
+    return result.rowcount == 1
+
+
+def renew_collection(asset_symbol: str, token: str, *, now_ms=None, db=None) -> bool:
+    """Fence the slow final stage after a queue of fast RSS publications."""
+    if not token:
+        return False
+    if db is None:
+        with get_session() as owned:
+            return renew_collection(asset_symbol, token, now_ms=now_ms, db=owned)
+    millis, _ = _clock(now_ms)
+    result = db.exec(update(TickerNewsState).where(
+        TickerNewsState.asset_symbol == asset_symbol,
+        TickerNewsState.collection_claim_token == token,
+        TickerNewsState.collection_claimed_ms > millis - _CLAIM_TIMEOUT_MS,
+    ).values(collection_claimed_ms=millis))
+    db.commit()
+    return result.rowcount == 1
+
+
+def get_collection_state(symbol: str, db=None) -> dict | None:
+    if db is None:
+        with get_session() as owned:
+            return get_collection_state(symbol, owned)
+    row = db.get(TickerNewsState, news_mod.canonical_asset_symbol(symbol))
+    if row is None:
+        return None
+    return {
+        "status": row.collection_status,
+        "last_attempt_at": row.last_attempt_at,
+        "last_success_at": row.last_success_at,
+        "last_success_ms": row.last_success_ms,
+        "consecutive_failures": row.consecutive_failures,
+        "next_collection_ms": row.next_collection_ms,
+        "last_error": "최근 뉴스 수집에 실패했어요. 자동으로 재시도합니다." if row.last_error else "",
+    }
 
 
 def reserve_ai_budget(
@@ -702,7 +813,10 @@ def claim_snapshot(
                 observation_seq=observation_seq,
                 observed_ms=millis,
                 observed_at=now_iso,
-                news_payload=news_payload,
+                # Refresh source metadata while preserving article/analysis order.
+                news_payload={**news_payload,
+                    "items": (_decoded_news(existing) or {}).get("items", []),
+                    "updated_at": (_decoded_news(existing) or {}).get("updated_at")},
             )
             if not observed:
                 db.rollback()
@@ -743,7 +857,7 @@ def claim_snapshot(
                 observation_seq=observation_seq,
                 observed_ms=millis,
                 observed_at=now_iso,
-                news_payload=news_payload,
+                news_payload=None,
             )
             if not observed:
                 db.rollback()
@@ -761,7 +875,10 @@ def claim_snapshot(
             return SnapshotClaim("pending", int(existing.id))
 
         token = uuid.uuid4().hex
-        stored_payload = news_payload if usable else None
+        stored_payload = _decoded_news(existing) if usable else None
+        if stored_payload:
+            stored_payload = {**news_payload, "items": stored_payload.get("items", []),
+                              "updated_at": stored_payload.get("updated_at")}
         values = {
             "claim_token": token,
             "claimed_at": now_iso,
@@ -771,7 +888,7 @@ def claim_snapshot(
             "last_observation_seq": observation_seq,
             "coin_name": str(news_payload.get("coin_name") or asset),
             "query": str(news_payload.get("query") or ""),
-            "news_json": json.dumps(news_payload, ensure_ascii=False),
+            "news_json": json.dumps(stored_payload or news_payload, ensure_ascii=False),
             "item_count": len(news_payload.get("items") or []),
         }
         if not usable:
@@ -904,6 +1021,8 @@ def complete_snapshot(
     analysis: dict,
     *,
     claim_token: str,
+    news_payload: dict | None = None,
+    keep_claim: bool = False,
     now_ms: int | None = None,
     db: Session | None = None,
 ) -> bool:
@@ -913,6 +1032,8 @@ def complete_snapshot(
                 snapshot_id,
                 analysis,
                 claim_token=claim_token,
+                news_payload=news_payload,
+                keep_claim=keep_claim,
                 now_ms=now_ms,
                 db=owned,
             )
@@ -960,7 +1081,8 @@ def complete_snapshot(
             next_retry_ms=next_retry_ms,
             completed_at=now_iso,
             completed_ms=millis,
-            claim_token="",
+            claim_token=claim_token if keep_claim else "",
+            **({"news_json": json.dumps(news_payload, ensure_ascii=False)} if news_payload is not None else {}),
         )
     )
     if result.rowcount != 1:
@@ -1253,4 +1375,71 @@ def store_market_news_summary(
     row.prompt_version = prompt_version
     row.updated_at = now_iso
     row.updated_ms = millis
+    db.commit()
+
+
+def load_browser_pages(keys: list[str], *, now_ms=None, db=None) -> dict[str, dict]:
+    """One batch read of unexpired public page results, independent of memory."""
+    requested = sorted({key for key in keys if isinstance(key, str) and 0 < len(key) <= 512})[:_BROWSER_PAGE_CACHE_MAX_ROWS]
+    if not requested:
+        return {}
+    if db is None:
+        with get_session() as owned:
+            return load_browser_pages(requested, now_ms=now_ms, db=owned)
+    millis, _ = _clock(now_ms)
+    rows = db.exec(select(BrowserNewsPageCache).where(
+        BrowserNewsPageCache.cache_key.in_(requested),
+        BrowserNewsPageCache.expires_ms > millis,
+    )).all()
+    results = {}
+    for row in rows:
+        try:
+            payload = json.loads(row.payload_json)
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if isinstance(payload, dict):
+            results[row.cache_key] = payload
+    return results
+
+
+def store_browser_pages(entries: dict[str, tuple[dict, int]], *, now_ms=None, db=None) -> None:
+    """Atomically share public article metadata; bound rows and payload size."""
+    if not entries:
+        return
+    if db is None:
+        with get_session() as owned:
+            return store_browser_pages(entries, now_ms=now_ms, db=owned)
+    millis, _ = _clock(now_ms)
+    values = []
+    for key, (payload, expires_ms) in entries.items():
+        if not isinstance(key, str) or not 0 < len(key) <= 512 or not isinstance(payload, dict):
+            continue
+        if expires_ms <= millis:
+            continue
+        serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        if len(serialized.encode("utf-8")) > _BROWSER_PAGE_CACHE_MAX_PAYLOAD_BYTES:
+            continue
+        values.append({"cache_key": key, "payload_json": serialized,
+                       "expires_ms": int(expires_ms), "updated_ms": millis})
+        if len(values) >= _BROWSER_PAGE_CACHE_MAX_ROWS:
+            break
+    if not values:
+        return
+
+    # A single atomic batch upsert also handles two processes seeing the same
+    # previously uncached public page. Late older results cannot overwrite new.
+    insert = postgres_insert if db.get_bind().dialect.name == "postgresql" else sqlite_insert
+    statement = insert(BrowserNewsPageCache).values(values)
+    statement = statement.on_conflict_do_update(
+        index_elements=[BrowserNewsPageCache.cache_key],
+        set_={name: getattr(statement.excluded, name)
+              for name in ("payload_json", "expires_ms", "updated_ms")},
+        where=BrowserNewsPageCache.updated_ms <= statement.excluded.updated_ms,
+    )
+    db.exec(statement)
+    db.exec(delete(BrowserNewsPageCache).where(BrowserNewsPageCache.expires_ms <= millis))
+    oldest = select(BrowserNewsPageCache.cache_key).order_by(
+        BrowserNewsPageCache.updated_ms.desc(), BrowserNewsPageCache.cache_key,
+    ).offset(_BROWSER_PAGE_CACHE_MAX_ROWS)
+    db.exec(delete(BrowserNewsPageCache).where(BrowserNewsPageCache.cache_key.in_(oldest)))
     db.commit()

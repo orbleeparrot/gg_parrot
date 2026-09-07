@@ -95,7 +95,7 @@ class RunnerActivationSafetyTests(unittest.TestCase):
             app._start()
         warning.assert_called_once()
 
-    def test_ticket_claim_identifies_v5_without_sending_exchange_keys(self) -> None:
+    def test_ticket_claim_identifies_v6_without_sending_exchange_keys(self) -> None:
         app = self.app()
         app.server_base = "https://example.invalid"
         response = Mock()
@@ -111,7 +111,7 @@ class RunnerActivationSafetyTests(unittest.TestCase):
             app._claim_protocol_ticket(self.launch)
 
         sent = fake_requests.post.call_args.kwargs["json"]
-        self.assertEqual(sent["runner_version"], "5")
+        self.assertEqual(sent["runner_version"], "6")
         self.assertEqual(sent["ticket"], self.launch.ticket)
         self.assertNotIn("api_key", sent)
         self.assertNotIn("api_secret", sent)

@@ -339,10 +339,9 @@ def test_news_collector_fetches_independent_sources_in_parallel(monkeypatch):
         lambda *_args, **_kwargs: [],
     )
     payload = news.fetch_coin_news_for_collector("EDEN")
-    assert len(payload["sources"]) == 4
+    assert len(payload["sources"]) == 3
     assert {item["name"] for item in payload["sources"]} == {
         "openeden_official_rss",
-        "coindesk_asset_archive",
         "coindesk_rss",
         "google_news_rss",
     }

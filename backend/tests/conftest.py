@@ -16,3 +16,5 @@ for _key in ("DATABASE_URL", "ANTHROPIC_API_KEY", "PREFECT_API_URL"):
 _TMP = tempfile.NamedTemporaryFile(prefix="ggp-test-", suffix=".db", delete=False)
 _TMP.close()
 os.environ["SQLITE_PATH"] = _TMP.name
+os.environ["POSITION_NEWS_EMBEDDED_ENABLED"] = "false"
+os.environ["POSITION_NEWS_BROWSER_ENRICHMENT_ENABLED"] = "false"

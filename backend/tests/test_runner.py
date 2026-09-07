@@ -134,7 +134,7 @@ def test_launch_ticket_create_claim_and_status_contract():
 
     claimed = client.post(
         "/api/runner/launch-tickets/claim",
-        json={"ticket": ticket, "runner_version": "5"},
+        json={"ticket": ticket, "runner_version": "6"},
     )
     assert claimed.status_code == 200, claimed.text
     assert claimed.headers["cache-control"] == "no-store"
@@ -155,7 +155,7 @@ def test_launch_ticket_create_claim_and_status_contract():
 
     replay = client.post(
         "/api/runner/launch-tickets/claim",
-        json={"ticket": ticket, "runner_version": "5"},
+        json={"ticket": ticket, "runner_version": "6"},
     )
     assert replay.status_code == 409
     assert replay.headers["cache-control"] == "no-store"
@@ -189,7 +189,7 @@ def test_launch_ticket_rejects_old_runner_without_consuming_ticket():
     ).json()
     ticket = parse_qs(urlsplit(created["launch_url"]).query)["ticket"][0]
 
-    for body in ({"ticket": ticket}, {"ticket": ticket, "runner_version": "4"}):
+    for body in ({"ticket": ticket}, {"ticket": ticket, "runner_version": "4"}, {"ticket": ticket, "runner_version": "5"}):
         response = client.post("/api/runner/launch-tickets/claim", json=body)
         assert response.status_code == 426
         assert response.headers["cache-control"] == "no-store"
@@ -202,7 +202,7 @@ def test_launch_ticket_rejects_old_runner_without_consuming_ticket():
 
     current = client.post(
         "/api/runner/launch-tickets/claim",
-        json={"ticket": ticket, "runner_version": "5"},
+        json={"ticket": ticket, "runner_version": "6"},
     )
     assert current.status_code == 200
 
@@ -263,7 +263,7 @@ def test_launch_ticket_expires_and_cannot_be_claimed():
     assert status.json()["status"] == "expired"
     claim = client.post(
         "/api/runner/launch-tickets/claim",
-        json={"ticket": ticket, "runner_version": "5"},
+        json={"ticket": ticket, "runner_version": "6"},
     )
     assert claim.status_code == 410
     assert claim.headers["cache-control"] == "no-store"
@@ -301,9 +301,9 @@ def test_runner_download_info_advertises_launch_capability_safely():
     if info["supports_launch"]:
         assert info["launch_scheme"] == "ggparrot"
         assert info["min_runner_version"]
-        if "/runner-v5/" in info["url"]:
-            assert int(info["min_runner_version"]) >= 5
-            assert int(info["version"]) >= 5
+        if "/runner-v6/" in info["url"]:
+            assert int(info["min_runner_version"]) >= 6
+            assert int(info["version"]) >= 6
     else:
         assert info["launch_scheme"] == ""
         assert info["min_runner_version"] == ""

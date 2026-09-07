@@ -24,7 +24,7 @@ def test_position_effect_truth_table(side, sentiment, expected):
     assert classifier.position_effect(sentiment, side) == expected
 
 
-def test_agent_position_news_localizes_snapshot_titles(monkeypatch):
+def test_agent_position_news_preserves_collector_localized_titles(monkeypatch):
     english = "Arbitrum token soars"
     korean = "아비트럼 토큰 급등"
     stored = {
@@ -33,7 +33,7 @@ def test_agent_position_news_localizes_snapshot_titles(monkeypatch):
             "symbol": "ARB",
             "coin_name": "아비트럼",
             "updated_at": "2026-09-04T00:00:00Z",
-            "items": [{"title": english, "source": "CoinDesk"}],
+            "items": [{"title": korean, "original_title": english, "source": "CoinDesk"}],
         },
         "analysis": {
             "items": [{
@@ -52,7 +52,7 @@ def test_agent_position_news_localizes_snapshot_titles(monkeypatch):
     monkeypatch.setattr(
         service.news_mod,
         "_localize_coin_news_items",
-        lambda items: [{**items[0], "title": korean, "original_title": english}],
+        lambda items: pytest.fail("reads must not translate"),
     )
 
     payload = service.get_position_news({
@@ -244,11 +244,12 @@ def test_ai_enriches_and_summarizes_only_three_articles_in_one_batch(monkeypatch
     assert result["items"][3]["summary"] == ""
 
 
-def test_rate_limited_analysis_keeps_article_content_without_spending_ai(monkeypatch):
+def test_rate_limited_analysis_keeps_feed_content_without_browser_or_ai(monkeypatch):
     items = [{
         "title": "시아코인 네트워크 업데이트",
         "source": "테스트뉴스",
         "url": "https://example.com/siacoin",
+        "excerpt": "시아 네트워크가 저장소 처리 방식을 개선한 업데이트를 발표했습니다.",
     }]
     enrichment_calls = []
 
@@ -269,7 +270,7 @@ def test_rate_limited_analysis_keeps_article_content_without_spending_ai(monkeyp
 
     result = classifier.analyze_headlines(items, "시아코인", allow_ai=False)
 
-    assert len(enrichment_calls) == 1
+    assert enrichment_calls == []
     assert result["analysis_status"] == "rate_limited"
     assert result["analysis_source"] == "rule"
     assert result["ai"] is False
@@ -446,6 +447,8 @@ def test_request_path_marks_old_shared_snapshot_stale(monkeypatch):
 
 
 def test_request_path_returns_pending_before_first_central_run(monkeypatch):
+    from app.agent_features.position_news import repository
+    monkeypatch.setattr(repository, "get_collection_state", lambda *_: None)
     monkeypatch.setattr(service, "_load_latest_snapshot", lambda _symbol: None)
 
     payload = service.get_position_news({
@@ -460,3 +463,10 @@ def test_request_path_returns_pending_before_first_central_run(monkeypatch):
     assert payload["context"]["asset_symbol"] == "ETH"
     assert payload["items"] == []
     assert payload["collection"]["freshness"] == "pending"
+
+
+def test_agent_read_never_calls_paid_translation(monkeypatch):
+    monkeypatch.setattr(service, "_load_latest_snapshot", lambda _: _stored_snapshot())
+    monkeypatch.setattr(service.news_mod, "_localize_coin_news_items", lambda *_:
+                        pytest.fail("agent reads must not invoke translation"))
+    assert service.get_position_news({"symbol": "BTCUSDT", "position_side": "long"})["items"]

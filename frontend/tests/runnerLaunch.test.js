@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { findLaunchedSession } from "../src/lib/runnerLaunch.js";
+import { findLaunchedSession, launchPhaseFromTicketStatus } from "../src/lib/runnerLaunch.js";
 
 const selected = { id: 42, symbol: "ZECUSDT" };
 
@@ -33,4 +33,13 @@ test("legacy runners without a macro id match by symbol only", () => {
   ];
   assert.equal(findLaunchedSession(active, [], selected)?.session_id, 5);
   assert.equal(findLaunchedSession(active, [], { id: 9, symbol: "ETHUSDT" }), null);
+});
+
+test("a rejected launch ticket becomes an 'outdated runner' phase with both versions", () => {
+  const outdated = launchPhaseFromTicketStatus({ status: "rejected", runner_version: "5", min_runner_version: "6" });
+  assert.deepEqual(outdated, { phase: "outdated", runnerVersion: "5", minVersion: "6" });
+  assert.deepEqual(launchPhaseFromTicketStatus({ status: "claimed" }), { phase: "claimed" });
+  assert.deepEqual(launchPhaseFromTicketStatus({ status: "expired" }), { phase: "expired" });
+  assert.deepEqual(launchPhaseFromTicketStatus({ status: "ready" }), { phase: null });
+  assert.deepEqual(launchPhaseFromTicketStatus(null), { phase: null });
 });

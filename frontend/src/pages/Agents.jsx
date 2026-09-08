@@ -83,6 +83,8 @@ function MacroDock({ sessions, selected, busy, onChange, onStop, onDelete }) {
       <div className="agent-macro-dock-status" aria-label={`실행 상태: ${statusText(selected)}`}>
         <i className={`agent-live-dot ${connected ? "is-running" : "is-checking"}`} aria-hidden="true" />
         <span>{statusText(selected)}</span>
+        {/* v7+ 실행기만 버전을 보고한다. 빈 값이면 표시하지 않는다. */}
+        {selected.runner_version ? <span className="agent-macro-dock-version num">실행기 v{selected.runner_version}</span> : null}
       </div>
 
       <div className="agent-macro-dock-actions">
@@ -137,6 +139,8 @@ export default function Agents() {
   const [busy, setBusy] = useState(false);
   // 확인 모달이 기다리는 동작: { type: "stop", mode } | { type: "delete" }
   const [pending, setPending] = useState(null);
+  // 종료 요청을 서버 왕복 전에 화면에 먼저 반영한다: { id, mode }
+  const [pendingStop, setPendingStop] = useState(null);
   const [mobilePane, setMobilePane] = useState("chart");
   const sessionSnapshotRevision = useRef(0);
   const lastStreamMessageAt = useRef(0);
@@ -263,10 +267,23 @@ export default function Agents() {
   // 오류 상태는 같은 매크로가 다시 실행되기 전까지 최신 1건을 함께 보존한다.
   const activeSessions = useMemo(() => sessions?.active || [], [sessions]);
   // Keep terminal sessions visible so the user can verify the close result.
-  const sessionOptions = useMemo(
-    () => [...activeSessions, ...(sessions?.recent || [])],
-    [activeSessions, sessions],
-  );
+  const sessionOptions = useMemo(() => {
+    const all = [...activeSessions, ...(sessions?.recent || [])];
+    if (!pendingStop) return all;
+    return all.map((session) => (
+      session.session_id === pendingStop.id && session.status === "running" && !session.stopping
+        ? { ...session, stopping: true, stop_mode: pendingStop.mode }
+        : session
+    ));
+  }, [activeSessions, pendingStop, sessions]);
+
+  // 서버가 같은 상태를 보고하면 낙관적 표시를 거둔다.
+  useEffect(() => {
+    if (!pendingStop) return;
+    const reported = [...activeSessions, ...(sessions?.recent || [])]
+      .find((session) => session.session_id === pendingStop.id);
+    if (!reported || reported.stopping || reported.status !== "running") setPendingStop(null);
+  }, [activeSessions, pendingStop, sessions]);
   const selectedId = searchParams.get("session");
   const selected = useMemo(() => {
     if (!sessionOptions.length) return null;
@@ -322,12 +339,19 @@ export default function Agents() {
 
   async function confirmPending() {
     if (!pending || !selected) return;
+    const action = pending;
+    const target = selected;
+    if (action.type === "stop") {
+      // 화면을 먼저 결과 화면으로 넘긴다. 실행기 확정은 그 안에서 기다린다.
+      setPendingStop({ id: target.session_id, mode: action.mode });
+      setPending(null);
+    }
     setBusy(true);
     try {
-      if (pending.type === "stop") {
-        await api.runnerRequestStop(selected.session_id, pending.mode);
+      if (action.type === "stop") {
+        await api.runnerRequestStop(target.session_id, action.mode);
       } else {
-        await api.runnerDeleteSession(selected.session_id);
+        await api.runnerDeleteSession(target.session_id);
         const next = new URLSearchParams(searchParams);
         next.delete("session");
         setSearchParams(next, { replace: true });
@@ -336,6 +360,7 @@ export default function Agents() {
       setPending(null);
     } catch (reason) {
       setError(String(reason.message || reason));
+      if (action.type === "stop") setPendingStop(null);
       setPending(null);
     } finally {
       setBusy(false);

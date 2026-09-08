@@ -263,6 +263,8 @@ class RunnerStartRequest(BaseModel):
     # 실행 중인 매크로 원문(선택) — 마이페이지 실시간 차트에 전략 보조지표를 그리는
     # 데 쓴다. 거래소 키/시크릿은 포함되지 않는다. 예전 실행기는 보내지 않는다.
     macro: Optional[dict] = None
+    # 실행기 버전. v7 부터 보낸다. 있고 최소 버전 미만이면 세션을 만들지 않는다.
+    runner_version: str = ""
 
 
 class RunnerHeartbeatRequest(BaseModel):
@@ -1143,9 +1145,22 @@ def runner_launch_ticket_claim(
 ) -> dict:
     response.headers["Cache-Control"] = "no-store"
     current = req.runner_version.strip()
+    if not _runner_version_supported(current):
+        # 거절 사실을 티켓에 남긴다 — 이 426 은 실행기 창에만 가고, 웹은 상태 조회로 알아챈다.
+        runner_mod.mark_launch_ticket_rejected(req.ticket, current)
+        raise HTTPException(
+            status_code=426,
+            detail=f"실행기 v{_RUNNER_MIN_VERSION or '6'} 이상으로 업데이트해 주세요.",
+            headers={"Cache-Control": "no-store"},
+        )
+    return runner_mod.claim_launch_ticket(req.ticket)
+
+
+def _runner_version_supported(current: str) -> bool:
+    """실행기가 최소 버전 이상인가. 숫자 아닌 값은 미지원으로 본다."""
     required = _RUNNER_MIN_VERSION or "6"
     try:
-        supported = (
+        return (
             current.isascii()
             and current.isdigit()
             and required.isascii()
@@ -1155,18 +1170,19 @@ def runner_launch_ticket_claim(
             and int(current) >= int(required)
         )
     except ValueError:
-        supported = False
-    if not supported:
-        raise HTTPException(
-            status_code=426,
-            detail=f"실행기 v{required} 이상으로 업데이트해 주세요.",
-            headers={"Cache-Control": "no-store"},
-        )
-    return runner_mod.claim_launch_ticket(req.ticket)
+        return False
 
 
 @app.post("/api/runner/start")
 def runner_start(req: RunnerStartRequest, user: User = Depends(_runner_user)) -> dict:
+    # 버전을 보낸 실행기(v7+)만 검사한다. 안 보내는 v6 이하는 아직 막지 않는다 —
+    # 배포된 v6 도 버전을 안 실어 보내므로, 빈 값 거절은 v7 exe 가 나간 뒤에 켠다.
+    version = req.runner_version.strip()
+    if version and not _runner_version_supported(version):
+        raise HTTPException(
+            status_code=426,
+            detail=f"실행기 v{_RUNNER_MIN_VERSION or '6'} 이상으로 업데이트해 주세요.",
+        )
     return runner_mod.start_session(user, req.model_dump())
 
 
@@ -1211,7 +1227,7 @@ def runner_launch_ticket_get(
     user: User = Depends(auth_mod.current_user),
 ) -> dict:
     response.headers["Cache-Control"] = "no-store"
-    return runner_mod.launch_ticket_status(user.id, launch_id)
+    return runner_mod.launch_ticket_status(user.id, launch_id, min_runner_version=_RUNNER_MIN_VERSION)
 
 
 @app.get("/api/me/runner/key")

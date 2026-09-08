@@ -336,6 +336,10 @@ class RunnerLaunchTicket(SQLModel, table=True):
     expires_at: str
     expires_ms: int = Field(index=True, sa_type=BigInteger)
     claimed_at: str = ""
+    # 실행기가 최소 버전 미만이라 claim 이 거절된 기록. 웹이 상태 조회로 바로 안내한다 —
+    # 426 응답은 실행기 창에만 가고 브라우저는 알 길이 없었다.
+    rejected_at: str = ""
+    rejected_version: str = ""
 
 
 class RunSession(SQLModel, table=True):
@@ -381,6 +385,8 @@ class RunSession(SQLModel, table=True):
     started_at: str
     last_heartbeat_at: str = ""
     stopped_at: Optional[str] = None
+    # 시작 요청에 실린 실행기 버전. v6 이하 exe 는 보내지 않아 빈 문자열로 남는다.
+    runner_version: str = ""
 
 
 class TickerNewsSnapshot(SQLModel, table=True):
@@ -688,6 +694,13 @@ def _migrate() -> None:
             "last_error": "ALTER TABLE dailychallenge ADD COLUMN last_error TEXT DEFAULT ''",
         },
     }
+    added.setdefault("runnerlaunchticket", {}).update({
+        "rejected_at": "ALTER TABLE runnerlaunchticket ADD COLUMN rejected_at TEXT DEFAULT ''",
+        "rejected_version": "ALTER TABLE runnerlaunchticket ADD COLUMN rejected_version TEXT DEFAULT ''",
+    })
+    added.setdefault("runsession", {})["runner_version"] = (
+        "ALTER TABLE runsession ADD COLUMN runner_version TEXT DEFAULT ''"
+    )
     with _engine.connect() as conn:
         for table, cols in added.items():
             existing = {row[1] for row in conn.exec_driver_sql(f"PRAGMA table_info({table})")}
@@ -727,6 +740,7 @@ _PG_ADDED_COLUMNS = {
     "runsession": {
         "macro_json": "TEXT DEFAULT ''", "position_uncertain": "BOOLEAN DEFAULT FALSE",
         "user_macro_id": "INTEGER",
+        "runner_version": "TEXT DEFAULT ''",
     },
     "tickernewssnapshot": {
         "claim_token": "TEXT DEFAULT ''", "last_observed_at": "TEXT DEFAULT ''",
@@ -737,6 +751,10 @@ _PG_ADDED_COLUMNS = {
         "collection_claim_token": "TEXT DEFAULT ''", "collection_claimed_ms": "BIGINT DEFAULT 0",
         "next_collection_ms": "BIGINT DEFAULT 0", "observation_seq": "BIGINT DEFAULT 0",
         "latest_observation_seq": "BIGINT DEFAULT 0", "latest_observed_ms": "BIGINT DEFAULT 0",
+    },
+    "runnerlaunchticket": {
+        "rejected_at": "TEXT DEFAULT ''",
+        "rejected_version": "TEXT DEFAULT ''",
     },
 }
 _PG_INDEXES = {

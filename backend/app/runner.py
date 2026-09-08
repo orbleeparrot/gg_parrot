@@ -244,24 +244,61 @@ def create_launch_ticket(
         }
 
 
-def launch_ticket_status(user_id: int, launch_id: int) -> dict:
-    """Return only the lifecycle state of one ticket owned by the account."""
+def launch_ticket_status(user_id: int, launch_id: int, *, min_runner_version: str = "") -> dict:
+    """Return only the lifecycle state of one ticket owned by the account.
+
+    ``rejected`` means an outdated runner answered the launch: the ticket is still
+    usable, but the web should tell the user to update instead of waiting.
+    """
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
     with get_session() as db:
         row = db.get(RunnerLaunchTicket, launch_id)
         if row is None or row.user_id != user_id:
             raise _ticket_error(404, "실행 연결 요청을 찾을 수 없어요.")
+        rejected_version = getattr(row, "rejected_version", "")
         if row.claimed_at:
             status = "claimed"
         elif row.expires_ms <= now_ms:
             status = "expired"
+        elif getattr(row, "rejected_at", ""):
+            status = "rejected"
         else:
             status = "ready"
-        return {
+        payload = {
             "launch_id": row.id,
             "expires_at": row.expires_at,
             "status": status,
         }
+        if status == "rejected":
+            payload["runner_version"] = rejected_version
+            payload["min_runner_version"] = min_runner_version
+        return payload
+
+
+def mark_launch_ticket_rejected(ticket: str, runner_version: str) -> None:
+    """Record that an outdated runner answered this ticket. Best effort, never raises.
+
+    The ticket stays claimable by an up-to-date runner; only the web-visible state
+    changes so the wizard can explain the situation immediately.
+    """
+    raw_ticket = (ticket or "").strip()
+    if not _LAUNCH_TICKET_RE.fullmatch(raw_ticket):
+        return
+    digest = _ticket_digest(raw_ticket)
+    now = datetime.now(timezone.utc)
+    try:
+        with get_session() as db:
+            row = db.exec(
+                select(RunnerLaunchTicket).where(RunnerLaunchTicket.token_hash == digest)
+            ).first()
+            if row is None or row.claimed_at or row.expires_ms <= int(now.timestamp() * 1000):
+                return
+            row.rejected_at = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+            row.rejected_version = str(runner_version or "")[:12]
+            db.add(row)
+            db.commit()
+    except Exception:
+        return
 
 
 def claim_launch_ticket(ticket: str) -> dict:
@@ -335,6 +372,8 @@ def start_session(user: User, payload: dict) -> dict:
     leverage = max(1, int(payload.get("leverage", 1) or 1))
     market = str(payload.get("market", "")).lower()
     summary = str(payload.get("human_summary", ""))[:300]
+    # 시작 요청에 실린 실행기 버전. 예전 실행기는 보내지 않는다(빈 문자열).
+    runner_version = str(payload.get("runner_version") or "").strip()[:12]
     if market not in ("spot", "futures"):
         market = "futures" if (side == "short" or leverage > 1) else "spot"
     # 실행 중인 매크로 원문 — 마이페이지 실시간 차트에 전략 보조지표를 그리는 데 쓴다.
@@ -410,6 +449,7 @@ def start_session(user: User, payload: dict) -> dict:
             stop_mode="",
             started_at=now,
             last_heartbeat_at=now,
+            runner_version=runner_version,
         )
         db.add(row)
         db.commit()
@@ -520,6 +560,7 @@ def _session_view(row: RunSession) -> dict:
         "status": row.status,
         "stopping": stopping,
         "stop_mode": row.stop_mode,
+        "runner_version": getattr(row, "runner_version", ""),
         "connected": connected,
         "in_position": row.in_position,
         "position_uncertain": row.position_uncertain,

@@ -537,14 +537,16 @@ export default function RunnerDownload({ embedded = false, onExit }) {
     return () => { alive = false; };
   }, [downloadChecked, launchAttempt, selected?.id, signedIn, step, supportsLaunch]);
 
-  // 마지막 단계에서 '여기서 고른 매크로'가 실행기에서 실제로 시작되면 바로 내 에이전트로 넘어간다.
-  // 단계에 들어올 때의 실행 중 목록을 기준선으로 잡아, 원래 돌던 세션은 새 시작으로 보지 않는다.
+  // 연결 단계(수동 연결 = STEP_ACCOUNT, 자동 연결 = STEP_LAUNCH)에서 '여기서 고른 매크로'가
+  // 실행기에서 실제로 시작되면 바로 내 에이전트로 넘어간다. 단계에 들어올 때의 실행 중 목록을
+  // 기준선으로 잡아, 원래 돌던 세션은 새 시작으로 보지 않는다. 수동 연결 파일에는 매크로 id 가
+  // 없어 실행기가 id 를 못 보내므로, 그 경우 같은 종목의 새 세션으로 판별한다.
   const launchBaselineRef = useRef(null);
   useEffect(() => {
     launchBaselineRef.current = null;
   }, [selected?.id, step]);
   const watchLaunchedSession = useCallback(async () => {
-    if (step !== STEP_LAUNCH || !selected?.id || !signedIn) return;
+    if (step < STEP_ACCOUNT || !selected?.id || !signedIn) return;
     let data;
     try {
       data = await api.runnerSessions();
@@ -557,12 +559,12 @@ export default function RunnerDownload({ embedded = false, onExit }) {
       return;
     }
     const launched = findLaunchedSession(active, launchBaselineRef.current, selected);
-    if (launched) navigate(`/agents?session=${launched.session_id}`, { state: { launchedFromQuickRun: true } });
+    if (launched) navigate(`/agents?session=${launched.session_id}`, { state: { launchedFromQuickRun: true, launchedAtStep: step } });
   }, [navigate, selected, signedIn, step]);
   useAdaptivePolling(watchLaunchedSession, {
     intervalMs: 3000,
     maxIntervalMs: 6000,
-    enabled: step === STEP_LAUNCH && !!selected?.id && signedIn,
+    enabled: step >= STEP_ACCOUNT && !!selected?.id && signedIn,
     immediate: true,
     pollKey: `${selected?.id ?? ""}:${step}`,
   });

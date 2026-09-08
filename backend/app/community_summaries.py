@@ -63,11 +63,19 @@ def _model():
     return os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5")
 
 
+def _request_timeout():
+    try:
+        return max(10.0, min(60.0, float(os.environ.get("COMMUNITY_SUMMARY_TIMEOUT_SECONDS", "45"))))
+    except ValueError:
+        return 45.0
+
+
 def configuration():
     return {"enabled": bool(os.environ.get("ANTHROPIC_API_KEY", "").strip()),
             "model": _model(), "prompt_version": PROMPT_VERSION,
             "max_body_chars": MAX_BODY_CHARS, "batch_size": _BATCH_SIZE,
-            "cache_retention_days": 30, "daily_limit": None}
+            "cache_retention_days": 30, "daily_limit": None,
+            "request_timeout_seconds": _request_timeout()}
 
 
 def _remember(key, summary):
@@ -88,6 +96,27 @@ def _remembered(key):
     return ""
 
 
+def _summary_unit_text(text: str) -> str:
+    """Normalize equivalent body notation, without changing headline rules."""
+    text = re.sub(r"(?<=\d)[万萬亿億千百]", lambda match: {
+        "万": "만", "萬": "만", "亿": "억", "億": "억", "千": "천", "百": "백",
+    }[match[0]], text)
+    text = re.sub(r"(?<=\d)\s*(?:小时|小時)", "시간", text)
+    text = re.sub(r"(?<=\d)\s*(?:分钟|分鐘)", "분", text)
+    text = re.sub(r"(?<=\d)[‐‑‒–—−](?=(?i:hours?|minutes?|mins?)\b)", "-", text)
+
+    def chart_minutes(match):
+        before = text[max(0, match.start() - 32):match.start()]
+        # A dollar amount or an explicitly labeled volume remains an amount,
+        # even when the author also mentions a chart in the sentence.
+        if re.search(r"(?:[$€£₩]|\b(?:USD|EUR|GBP|KRW|JPY|CNY|USDT|USDC|volume|funding|valuation)|거래량|거래대금)\s*$", before, re.I):
+            return match[0]
+        return match[1] + "분"
+
+    return re.sub(r"(?<![A-Za-z0-9$€£₩])(\d+(?:\.\d+)?)M(?=\s+(?i:chart|timeframe|candles?)\b)",
+                  chart_minutes, text)
+
+
 def _summary_amount_units(text: str) -> dict[tuple[str, str], set[str | None]]:
     """Keep units attached to each amount, without requiring omitted amounts.
 
@@ -97,7 +126,7 @@ def _summary_amount_units(text: str) -> dict[tuple[str, str], set[str | None]]:
     from . import news
 
     text = news._translation_number_text(news._translation_identifier_text(text))
-    units = {}
+    units, amounts = {}, []
     fiat = (
         ("USD", "$", r"USD|dollars?|US[- ]dollars?", "달러"),
         ("EUR", "€", r"EUR|euros?", "유로"),
@@ -126,7 +155,25 @@ def _summary_amount_units(text: str) -> dict[tuple[str, str], set[str | None]]:
             token = re.match(r"\s*([A-Z0-9]{2,32})(?![A-Za-z0-9])", after)
             if token and token[1] in news._COIN_ALIASES:
                 unit = token[1]
-        units.setdefault(facts[0], set()).add(unit)
+        # NUMBER_TOKEN accepts a trailing comma. Retain that comma as the
+        # separator between list members rather than hiding it in the amount.
+        end = match.end() - int(match.group().endswith(","))
+        amounts.append({"fact": facts[0], "unit": unit, "start": match.start(), "end": end})
+
+    for index, amount in enumerate(amounts):
+        if amount["unit"] is None:
+            continue
+        previous = index - 1
+        while previous >= 0 and amounts[previous]["unit"] is None:
+            gap = text[amounts[previous]["end"]:amounts[previous + 1]["start"]]
+            if not re.fullmatch(r"\s*(?:[-~～‐‑‒–—−,、]|및|와|과|and|to)\s*", gap):
+                break
+            # A trailing currency belongs to every adjacent member of a plain
+            # range/list (6.41~6.67달러), never across words or sentence breaks.
+            amounts[previous]["unit"] = amount["unit"]
+            previous -= 1
+    for amount in amounts:
+        units.setdefault(amount["fact"], set()).add(amount["unit"])
     return units
 
 
@@ -143,9 +190,7 @@ def _valid_summary(body: str, summary: str) -> bool:
     # supported by the body, not invented or changed during translation.
     from .news import (_implied_number_facts, _translation_fact_tokens,
                        _translation_has_untranslated_prose, _translation_protected_upper_tokens)
-    normalize_units = lambda text: re.sub(
-        r"(?<=\d)[万萬亿億千百]", lambda match: {"万": "만", "萬": "만", "亿": "억", "億": "억", "千": "천", "百": "백"}[match[0]], text)
-    body = normalize_units(body)
+    body, summary = _summary_unit_text(body), _summary_unit_text(summary)
     if _translation_has_untranslated_prose(body, summary):
         return False
     protected = set(_translation_protected_upper_tokens(body)) | set(_translation_protected_upper_tokens(summary))
@@ -185,6 +230,9 @@ def _request_summaries(jobs):
     def request():
         response = get_anthropic_client().messages.create(
             model=_model(), max_tokens=2200, system=system,
+            # Full-body batches need more time than the shared headline default.
+            # HTTP readers still return immediately; retries remain disabled.
+            timeout=_request_timeout(),
             messages=[{"role": "user", "content": json.dumps(articles, ensure_ascii=False)}],
         )
         content = "\n".join(block.text for block in response.content if getattr(block, "type", None) == "text").strip()

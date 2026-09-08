@@ -66,6 +66,8 @@ Binance Square는 커뮤니티 게시글로 구분합니다. 짧은 글은 공�
 
 요약은 기본 2~3문장으로 만들며 매우 짧은 게시글은 1문장이 될 수 있습니다. 게시글당 저장 본문은 최대 20,000자·JSON 20KB, 모델 입력은 최대 12,000자이며 입력이 잘리면 화면에 `본문 일부 요약`으로 표시합니다. `ANTHROPIC_MODEL`을 사용하고 일일 횟수 제한은 없습니다. 게시글 ID·본문 해시·모델/프롬프트 버전으로 30일 동안 재사용하며, 공유 DB 작업 선점에 실패하면 유료 호출을 하지 않습니다. 웹 종료 시 대기 작업을 취소하고 실행 중인 요약이 끝난 뒤 AI 연결을 닫습니다.
 
+본문 요약은 제목보다 긴 배치를 처리하므로 `COMMUNITY_SUMMARY_TIMEOUT_SECONDS` 기본 45초(10~60초 범위)를 따로 사용합니다. HTTP 읽기는 이 시간을 기다리지 않습니다. 시간 초과 시 즉시 유료 호출을 반복하지 않고 성공한 요약을 보존하며 공유 실패 항목만 기존 재시도 간격 후 처리합니다.
+
 `publish_initial_news_task`는 번역·요약 AI를 호출하지 않고 최초 본문 스냅샷을 먼저 발행합니다. `process_ticker_news_task`에서 미번역 원문도 보존한 채 제목 번역과 `community_summaries.enrich_items(..., wait=True)`를 수행합니다. 같은 게시글의 본문 해시가 달라지면 새 스냅샷·요약을 만들고, 바뀌지 않은 뉴스 기사의 유료 분석은 재사용합니다. HTTP 응답은 요약 완료를 기다리지 않으며 공유 캐시에서 완료된 결과를 표시합니다.
 
 Prefect에서 `community_content` 로그의 `stage=fetched/processed`를 비교하면 본문 `ready/missing/error` 건수와 요약 `ready_count/pending_count/unavailable_count`를 확인할 수 있습니다. 본문 원문과 API 키는 로그에 넣지 않습니다. 요약·유료 모델 태스크는 자동 재시도하지 않고 공유 캐시의 작업 소유권과 다음 수집 주기로 복구합니다. 요약 캐시는 웹·워커가 같은 Postgres를 사용해야 중복 호출을 막을 수 있습니다. 기존 수집 유지보수 태스크가 30일 지난 요약을 한 번에 최대 500건 정리하며 HTTP 읽기마다 정리 쿼리를 실행하지 않습니다. 정리 결과는 `news_cache_maintenance` 및 flow의 `community_summaries_pruned`로 확인합니다.

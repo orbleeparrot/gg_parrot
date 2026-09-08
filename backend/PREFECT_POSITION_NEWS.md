@@ -1,6 +1,6 @@
 # 포지션 뉴스 수집과 Prefect 운영
 
-매크로 시작 직후 웹 서버가 RSS 기사를 먼저 공개하고, Prefect 워커가 Playwright로 공개 웹 페이지를 탐색해 수집 범위를 넓힙니다. 분석과 번역은 최종 기사 묶음에만 적용하며, 에이전트 조회 API는 저장된 결과를 읽습니다.
+매크로 시작 직후 웹 서버가 RSS 기사와 Binance Square 공개 게시글을 먼저 공개하고, Prefect 워커가 Playwright로 공개 웹 페이지를 탐색해 수집 범위를 넓힙니다. 제목은 공유 캐시를 통해 한국어로 번역하며, 에이전트 조회 API는 저장된 결과를 읽습니다.
 
 CHIPUSDT는 USD.AI의 CHIP입니다. 프로젝트명 `USD.AI`·`USDai`·`유에스디에이아이`로 검색하고 일반 반도체 기사와 구분합니다. 등록되지 않은 티커는 Binance 공개 상품 목록의 `an`/`adn` 이름을 조회합니다. 이름 목록 전체를 하루 단위로 공유 캐시하며 장애 시 마지막 성공본을 사용합니다. 이 웹 endpoint는 무료 보조 메타데이터 경로이므로 조회 실패가 티커 검색을 막지 않습니다.
 
@@ -34,11 +34,23 @@ Render 웹에서는 `POSITION_NEWS_EMBEDDED_BOOTSTRAP_ONLY=true`가 기본입니
 
 ## Playwright 범위와 제한
 
+### Binance Square 커뮤니티
+
+`https://www.binance.com/en/square/hashtag/{ticker}`의 **Latest** 탭을 Playwright로 확인했습니다. 해당 탭의 공개 `GET /bapi/composite/v4/friendly/pgc/content/queryByHashtag` 요청을 서버에서도 재사용합니다. 파라미터는 `hashtag=#ticker`, `orderBy=LATEST`, `pageIndex=1..2`, `pageSize=20`입니다. 인증·거래 API 키가 필요하지 않습니다. RSS 링크는 확인되지 않았고 초기 HTML/SSR에는 오래된 Hot 게시글이 섞여 있어 수집에 사용하지 않습니다.
+
+RSS와 병렬로 최대 2페이지를 수집하며 브라우저 배치와 별도로 6초의 요청 예산을 적용합니다. 티커별 5분 공유 DB 캐시·동시 요청 합치기를 사용하고, 401/403/429는 출처 공통 대기시간을 저장합니다. 추가 페이지 실패 때 첫 페이지를 보존하고 갱신 장애 때는 최근 7일 범위의 마지막 성공 결과를 유지하며 `partial`/`stale`를 기록합니다. 공개 페이지만 읽으며 로그인이나 채팅방 가입을 하지 않습니다.
+
+최근 7일의 유효 게시글 중 최신 5건을 기사 10건과 별도로 표시합니다. 작성자당 최대 2건, 동일 ID·동일 제목은 중복 제거하며 태그만 붙인 무관한 글과 사설방 가입 광고를 제외합니다. 본문 전체는 저장하지 않고 짧은 첫 문단 제목, 작성자, 실제 게시일, 원문 링크를 저장합니다. `content_type=community`를 내 에이전트와 코인동향에 보존해 **커뮤니티**로 표시하고 포지션 유불리 분석에는 넣지 않습니다. 표시하는 제목은 다른 언어도 모두 한국어 번역 대상이며 일일 번역 제한은 없습니다.
+
+Prefect `fetch_ticker_news_task` 로그의 `news_source/name=binance_square`에서 `status`, `fetched_count`, `item_count`, `pages_fetched`, `cached`, `elapsed_ms`, `http_status`, `retry_at`를 확인할 수 있습니다. 실행 설정의 `binance_square`에 활성 여부와 수집 범위가 기록됩니다. 새 게시글은 초기 공개 단계에서 저장되며 같은 기사의 분석은 재사용합니다.
+
+### 기사 웹 페이지
+
 RSS 결과가 있어도 브라우저 확장을 수행합니다. 공개 뉴스 사이트의 기사 목록, 프로젝트 태그, 티커 검색 결과를 읽고 관련 기사를 RSS 결과와 합칩니다. 첫 RSS 결과는 브라우저 탐색 전에 공개합니다. 소스 차단·시간 초과는 소스별 상태에 남기며 정상 RSS 결과를 유지합니다. RSS 전체 장애에서도 브라우저 소스로 복구할 수 있습니다.
 
-CoinDesk 섹션·검색·태그 외에 Decrypt 뉴스 목록과 CryptoSlate 뉴스 목록·프로젝트 뉴스 허브를 사용합니다. 출처에 해당 프로젝트 허브가 없거나 최근 기사가 없으면 기존 RSS 결과를 유지합니다. 브라우저 기사는 확인된 발행일이 최근 30일 이내인 경우만 채택하며, 전체 기사 중 최신 10건을 중복 제거해 표시합니다.
+CoinDesk 섹션·검색·태그 외에 Decrypt 뉴스 목록과 CryptoSlate 뉴스 목록·프로젝트 뉴스 허브를 사용합니다. 출처에 해당 프로젝트 허브가 없거나 최근 기사가 없으면 기존 RSS 결과를 유지합니다. 확인된 발행일이 최대 5년 범위인 기사 중 최신 10건을 중복 제거해 표시하며, 최근 30일보다 오래된 기사는 과거 기사로 구분합니다.
 
-기본 탐색 예산은 35초, 동시 탭은 Render에서 1개·로컬에서 3개입니다. 기사와 출처 캐시를 재사용하며 최종 기사가 바뀌지 않았다면 저장된 분석·번역을 재사용합니다. 브라우저 탐색 자체에는 모델 API를 사용하지 않습니다.
+기본 탐색 예산은 90초, 페이지별 예산은 15초, 동시 탭은 Render에서 1개·로컬에서 3개입니다. 기사와 출처 캐시를 재사용하며 최종 기사가 바뀌지 않았다면 저장된 분석·번역을 재사용합니다. 브라우저 탐색 자체에는 모델 API를 사용하지 않습니다.
 
 ## 실행과 관리
 
@@ -72,12 +84,14 @@ POSITION_NEWS_COLLECTION_SECONDS=300
 POSITION_NEWS_SCHEDULE_SECONDS=60
 POSITION_NEWS_ACTIVE_SESSION_SECONDS=60
 POSITION_NEWS_BROWSER_ENRICHMENT_ENABLED=true
-POSITION_NEWS_BROWSER_BUDGET_SECONDS=35
+POSITION_NEWS_BROWSER_BUDGET_SECONDS=90
 POSITION_NEWS_BROWSER_CONCURRENCY=3
 POSITION_NEWS_MAX_AI_ANALYSES_PER_RUN=2
 POSITION_NEWS_MAX_AI_ANALYSES_PER_DAY=10
-POSITION_NEWS_TRANSLATION_MAX_CALLS_PER_DAY=10
-NEWS_TRANSLATION_MAX_CALLS_PER_DAY=20
+BINANCE_SQUARE_ENABLED=true
+BINANCE_SQUARE_CACHE_SECONDS=300
+BINANCE_SQUARE_MAX_ITEMS=5
+BINANCE_SQUARE_MAX_AGE_DAYS=7
 ANTHROPIC_MODEL=claude-haiku-4-5
 ANTHROPIC_POSITION_NEWS_MAX_TOKENS=512
 POSITION_NEWS_REQUIRE_POSTGRES=true

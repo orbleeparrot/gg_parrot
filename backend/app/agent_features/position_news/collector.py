@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import time
+from copy import deepcopy
 from collections import Counter
 from typing import Callable, Iterable
 
@@ -54,10 +55,15 @@ def analysis_fingerprint(asset_symbol: str, items: list[dict]) -> str:
                 "title": str(item.get("original_title") or item.get("title") or "").strip(),
                 "source": str(item.get("source") or "").strip(),
                 "excerpt": str(item.get("excerpt") or "").strip(),
+                **({"content_type": "community",
+                    "community_post_id": str(item.get("community_post_id") or ""),
+                    "url": str(item.get("url") or "").strip()}
+                   if classifier.is_community_item(item) else {}),
             }
             for item in items
         ),
-        key=lambda item: (item["title"].casefold(), item["source"].casefold()),
+        key=lambda item: (item["title"].casefold(), item["source"].casefold(),
+                          item.get("content_type", ""), item.get("community_post_id", ""), item.get("url", "")),
     )
     material = {
         "asset_symbol": news_mod.canonical_asset_symbol(asset_symbol),
@@ -72,6 +78,49 @@ def analysis_fingerprint(asset_symbol: str, items: list[dict]) -> str:
         sort_keys=True,
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _reuse_editorial_analysis(asset: str, items: list[dict], snapshot_key: str,
+                             coin_name: str, repo) -> dict | None:
+    """Community changes create a new snapshot without rebuying unchanged news analysis."""
+    reader = getattr(repo, "get_latest_snapshot", None)
+    if reader is None:
+        return None
+    previous = reader(asset)
+    if not previous or previous.get("snapshot_id") == snapshot_key:
+        return None  # Preserve retries of this snapshot's incomplete analysis.
+    old_items = list((previous.get("news_payload") or {}).get("items") or [])
+    if not any(classifier.is_community_item(item) for item in [*items, *old_items]):
+        return None
+    # Recompute the old full key to reject reuse after a model/prompt change.
+    if previous.get("snapshot_id") != analysis_fingerprint(asset, old_items):
+        return None
+    editorial = [item for item in items if not classifier.is_community_item(item)]
+    old_editorial = [item for item in old_items if not classifier.is_community_item(item)]
+    if not editorial or analysis_fingerprint(asset, editorial) != analysis_fingerprint(asset, old_editorial):
+        return None
+    previous_analysis = previous.get("analysis") or {}
+    assessed = previous_analysis.get("items") or []
+    if (previous_analysis.get("analysis_status") not in {"ready", "degraded", "rate_limited"}
+            or len(assessed) != len(old_items)):
+        return None
+    by_identity = {}
+    for item, assessment in zip(old_items, assessed):
+        if classifier.is_community_item(item):
+            continue
+        identity = _article_identity(item)
+        if identity in by_identity or not isinstance(assessment, dict):
+            return None
+        if assessment.get("sentiment") not in classifier.SENTIMENTS:
+            return None
+        by_identity[identity] = assessment
+    if any(_article_identity(item) not in by_identity for item in editorial):
+        return None
+    result = deepcopy(previous_analysis)
+    result["items"] = [classifier.community_analysis() if classifier.is_community_item(item)
+                       else deepcopy(by_identity[_article_identity(item)]) for item in items]
+    result["overview"] = classifier._fallback_overview(items, coin_name)
+    return result
 
 
 def select_ticker_window(
@@ -166,7 +215,9 @@ def collect_payload(
             "translation": dict(news_payload.get("translation") or {})}
     claimed_items = list(claimed_payload.get("items") or [])
     coin_name = str(claimed_payload.get("coin_name") or asset)
-    wants_ai = bool(os.environ.get("ANTHROPIC_API_KEY")) and allow_ai
+    reused_analysis = _reuse_editorial_analysis(asset, claimed_items, snapshot_key, coin_name, repo)
+    has_editorial = any(not classifier.is_community_item(item) for item in claimed_items)
+    wants_ai = bool(os.environ.get("ANTHROPIC_API_KEY")) and allow_ai and has_editorial and reused_analysis is None
     reserved_ai = False
     if wants_ai:
         daily_limit = max(
@@ -195,11 +246,11 @@ def collect_payload(
     try:
         # Publish headlines before any paid/slow enrichment. The same claim
         # stays fenced until final analysis, so reads can already show articles.
-        if os.environ.get("ANTHROPIC_API_KEY") and not claim.had_usable_analysis:
+        if wants_ai and not claim.had_usable_analysis:
             baseline = classifier.analyze_headlines(claimed_items, coin_name, allow_ai=False)
             repo.complete_snapshot(claim.snapshot_id, baseline,
                 claim_token=claim.claim_token, keep_claim=True, now_ms=now_ms)
-        analysis = analyzer(
+        analysis = reused_analysis if reused_analysis is not None else analyzer(
             claimed_items,
             coin_name,
             allow_ai=reserved_ai,
@@ -232,6 +283,7 @@ def collect_payload(
         "snapshot_key": snapshot_key,
         "status": "stored",
         "analysis_status": analysis.get("analysis_status"),
+        "editorial_analysis_reused": reused_analysis is not None,
         "used_ai_budget": reserved_ai,
     }
 
@@ -250,6 +302,23 @@ def publish_initial_payload(symbol: str, payload: dict, *, repo=None, now_ms=Non
               if news_mod._within_coin_news_window(item) and news_mod._is_news_article_candidate(
                   {**item, "title": item.get("original_title") or item.get("title")})]
     if stored and usable and not news_mod._coin_snapshot_is_stale(stored):
+        incoming_community = [item for item in payload.get("items") or []
+                              if classifier.is_community_item(item)]
+        incoming_ids = {str(item.get("community_post_id") or item.get("url") or "")
+                        for item in incoming_community} - {""}
+        stored_ids = {str(item.get("community_post_id") or item.get("url") or "")
+                      for item in stored.get("news_payload", {}).get("items", [])
+                      if classifier.is_community_item(item)} - {""}
+        if incoming_ids and incoming_ids != stored_ids:
+            # Fast community updates must not wait for the browser. Preserve the
+            # existing editorial set here so its paid analysis remains reusable;
+            # the final enrichment pass still publishes newly discovered news.
+            initial = {**stored.get("news_payload", {}), **payload,
+                       "items": news_mod._sort_news_items_newest_first(
+                           [item for item in usable if not classifier.is_community_item(item)]
+                           + incoming_community)}
+            return collect_payload(symbol, initial, repo=repo, allow_ai=False,
+                                   localize=False, now_ms=now_ms)
         # Do not replace an existing complete browser/AI snapshot with a
         # temporary RSS-only view on every refresh. A stale or filtered-out
         # snapshot must not hold the first fresh headlines behind browser I/O.

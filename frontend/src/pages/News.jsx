@@ -2,7 +2,7 @@ import { memo, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api.js";
 import useNewsBriefings from "../hooks/useNewsBriefings.js";
-import { hasPendingTranslation, historicalNewsLabel } from "../lib/newsBriefings.js";
+import { communityPostIdentity, hasPendingTranslation, historicalNewsLabel, newsPublishedLabel, newsSourceLabel } from "../lib/newsBriefings.js";
 import CoinIcon from "../components/CoinIcon.jsx";
 import NewsBriefingReader from "../components/NewsBriefingReader.jsx";
 import { AnnotatedText, TermChips } from "../components/NewsTerms.jsx";
@@ -90,10 +90,11 @@ function MarketBriefing({ market, loading, error }) {
   const translationPending = hasPendingTranslation(market);
   const readerItems = useMemo(
     () => (market?.items || []).map((item) => ({
-      id: item.url || item.title,
+      id: communityPostIdentity(item) || item.url || item.title,
       title: item.title,
-      source: item.source,
-      time: historicalNewsLabel(item) || item.published_display,
+      source: newsSourceLabel(item),
+      time: historicalNewsLabel(item) || newsPublishedLabel(item),
+      community: item.content_type === "community" ? { author: item.author, source: item.source } : null,
       url: item.url,
     })),
     [market],
@@ -122,6 +123,7 @@ function MarketBriefing({ market, loading, error }) {
             empty="지금은 불러올 시장 헤드라인이 없어요."
             queueLabel="헤드라인 읽는 순서"
             rotateMs={5_000}
+            rowHeight={readerItems.some((item) => item.community) ? 76 : 48}
           /> : null}
           {translationPending ? <TranslationPending data={market} /> : null}
 
@@ -154,12 +156,13 @@ const RacerNewsBriefing = memo(function RacerNewsBriefing({ coin, rank, newsStat
   const headingId = `racer-${coin.symbol.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
   const readerItems = useMemo(
     () => (data?.items || []).map((item) => ({
-      id: item.url || item.title,
+      id: communityPostIdentity(item) || item.url || item.title,
       title: item.title,
-      source: item.source,
+      source: newsSourceLabel(item),
       rowLabel: item.is_historical
-        ? `${historicalNewsLabel(item)} · ${item.source || "출처 미상"}` : undefined,
-      time: item.published_display,
+        ? `${historicalNewsLabel(item)} · ${newsSourceLabel(item)}` : undefined,
+      time: historicalNewsLabel(item) || newsPublishedLabel(item),
+      community: item.content_type === "community" ? { author: item.author, source: item.source } : null,
       url: item.url,
     })),
     [data],
@@ -224,7 +227,7 @@ const RacerNewsBriefing = memo(function RacerNewsBriefing({ coin, rank, newsStat
           queueLabel={`${base} 뉴스`}
           rotateMs={RACER_NEWS_ROTATE_MS}
           syncTick={rotationTick}
-          rowHeight={92}
+          rowHeight={readerItems.some((item) => item.community) ? 108 : 92}
           visibleRows={3}
           queueOnly
         />

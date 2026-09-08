@@ -5730,6 +5730,37 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   color: rgb(var(--c-slate-900));
 }
 
+.news-reader-row.is-community {
+  padding: 8px 10px 8px 12px;
+  grid-template-columns: minmax(0, 1fr) 14px;
+  grid-template-rows: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 4px 8px;
+}
+
+.news-reader-row.is-community .news-reader-row-title {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.news-reader-row.is-community .news-reader-row-source {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.news-reader-row-community-meta > span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.news-reader-row.is-community .news-reader-row-arrow {
+  grid-column: 2;
+  grid-row: 1 / 3;
+  align-self: center;
+}
+
 @container racer-panel (min-width: 480px) {
   .news-racer-briefing-stack {
     grid-template-columns: repeat(2, minmax(0, 1fr));

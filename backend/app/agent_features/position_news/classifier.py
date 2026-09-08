@@ -173,6 +173,13 @@ def _trim_title(title: str, limit: int = 54) -> str:
 
 
 def _fallback_overview(items: list[dict], coin_name: str) -> str:
+    community_count = sum(is_community_item(item) for item in items)
+    if community_count:
+        editorial = [item for item in items if not is_community_item(item)]
+        community_text = f"커뮤니티 게시글 {community_count}건은 작성자의 의견입니다."
+        if not editorial:
+            return f"{coin_name} 관련 " + community_text
+        return _fallback_overview(editorial, coin_name) + " " + community_text
     if not items:
         return f"{coin_name} 관련 최신 헤드라인을 찾지 못했어요."
     subjects = [f"‘{_trim_title(item.get('title', ''))}’" for item in items[:2] if item.get("title")]
@@ -290,10 +297,23 @@ def _generate_ai_analysis(items: list[dict], coin_name: str) -> dict:
     return get_ai_runtime().call(key, load, retries=0)[0]
 
 
+def is_community_item(item: dict) -> bool:
+    return str(item.get("content_type") or "").casefold() == "community"
+
+
+def community_analysis() -> dict:
+    return {"sentiment": "unclear", "summary": "커뮤니티 작성자의 의견입니다.",
+            "reason": "검증된 뉴스 기사와 구분되는 개인 의견으로 방향을 단정하지 않았어요.",
+            "confidence": "low"}
+
+
 def analyze_headlines(items: list[dict], coin_name: str, *, allow_ai: bool = True) -> dict:
     """Summarize a bounded article batch with one AI call and safe fallback."""
     baseline_items = []
     for item in items:
+        if is_community_item(item):
+            baseline_items.append(community_analysis())
+            continue
         assessed = classify_headline(str(item.get("title") or ""))
         assessed["summary"] = _clean_summary(item.get("excerpt") or "")
         baseline_items.append(assessed)
@@ -304,7 +324,8 @@ def analyze_headlines(items: list[dict], coin_name: str, *, allow_ai: bool = Tru
         "analysis_status": "ready" if items else "empty",
         "ai": False,
     }
-    if not items:
+    editorial_indexes = [index for index, item in enumerate(items) if not is_community_item(item)]
+    if not editorial_indexes:
         return baseline
     if not os.environ.get("ANTHROPIC_API_KEY"):
         return baseline
@@ -312,16 +333,17 @@ def analyze_headlines(items: list[dict], coin_name: str, *, allow_ai: bool = Tru
         baseline["analysis_status"] = "rate_limited"
         return baseline
     try:
+        editorial_items = [items[index] for index in editorial_indexes]
         enriched = news_mod.enrich_article_excerpts(
-            items,
+            editorial_items,
             limit=_MAX_AI_SUMMARY_ITEMS,
         )
     except Exception:
-        enriched = [dict(item) for item in items]
+        enriched = [dict(items[index]) for index in editorial_indexes]
     for index, item in enumerate(enriched[:_MAX_AI_SUMMARY_ITEMS]):
         excerpt = _clean_summary(item.get("excerpt") or "")
         if excerpt:
-            baseline["items"][index]["summary"] = excerpt
+            baseline["items"][editorial_indexes[index]]["summary"] = excerpt
     try:
         selected = enriched[:_MAX_AI_SUMMARY_ITEMS]
         generated = _generate_ai_analysis(selected, coin_name)
@@ -329,9 +351,8 @@ def analyze_headlines(items: list[dict], coin_name: str, *, allow_ai: bool = Tru
         baseline["analysis_status"] = "degraded"
         return baseline
     merged_items = list(baseline["items"])
-    for index, (rule_item, ai_item) in enumerate(
-        zip(baseline["items"], generated["items"])
-    ):
+    for index, ai_item in zip(editorial_indexes, generated["items"]):
+        rule_item = baseline["items"][index]
         if {rule_item["sentiment"], ai_item["sentiment"]} == {"positive", "negative"}:
             merged_items[index] = {
                 "sentiment": "unclear",

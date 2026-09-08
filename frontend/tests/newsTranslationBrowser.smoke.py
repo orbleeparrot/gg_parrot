@@ -21,6 +21,14 @@ def article(title, key):
             "url": f"https://fixture.invalid/{key}", "published_display": "방금 전"}
 
 
+def community(historical=True):
+    return {"content_type": "community", "community_post_id": "123456789", "author": "시장기록자",
+            "source": "Binance Square", "url": "https://www.binance.com/en/square/post/123456789",
+            "title": "이더리움에 대한 커뮤니티 작성자의 의견", "original_title": "A personal Ethereum outlook",
+            "excerpt": "Original English community body", "is_historical": historical,
+            "published": "2022-01-02T01:30:00Z" if historical else "2026-09-08T01:30:00Z"}
+
+
 def route_request(route):
     parsed = urlparse(route.request.url)
     path = parsed.path
@@ -36,7 +44,7 @@ def route_request(route):
         payload = {"coins": [{"symbol": symbol, "last_price": 10, "change_pct": 1,
                               "quote_volume": 100000} for symbol in ["BTCUSDT", "ETHUSDT"]]}
     elif path == "/api/news/market":
-        payload = {"items": [article("시장 ETF 자금 유입 증가", "market")] if ready else [],
+        payload = {"items": [article("시장 ETF 자금 유입 증가", "market"), community(historical=False)] if ready else [],
                    "translation": {"status": "ready" if ready else "partial",
                                    "pending_count": 0 if ready else 1, "retry_after_seconds": 30}}
     elif path == "/api/news/coin/BTCUSDT":
@@ -46,7 +54,7 @@ def route_request(route):
                                       "Bitcoin ETF inflows rise", "btc")]}
     elif path == "/api/news/coin/ETHUSDT":
         payload = {"items": [{**article("이더리움 네트워크 업데이트 발표", "eth"),
-                             "is_historical": True, "published": "2022-01-02T01:30:00Z"}],
+                             "is_historical": True, "published": "2022-01-02T01:30:00Z"}, community()],
                    "translation": {"status": "ready", "pending_count": 0}}
     route.fulfill(status=200, content_type="application/json", body=json.dumps(payload, ensure_ascii=False))
 
@@ -69,8 +77,12 @@ with sync_playwright() as playwright:
     expect(page.get_by_text("Bitcoin ETF inflows rise", exact=True)).to_have_count(0)
     expect(btc.get_by_text("BTC 관련 최근 뉴스가 없어요.")).to_have_count(0)
     expect(market.get_by_text("지금은 불러올 시장 헤드라인이 없어요.")).to_have_count(0)
-    expect(eth.get_by_text("이더리움 네트워크 업데이트 발표", exact=True)).to_be_visible()
-    expect(eth.get_by_text("과거 기사 · 2022.01.02 · 검증 뉴스", exact=True)).to_be_visible()
+    expect(eth.get_by_text("이더리움 네트워크 업데이트 발표", exact=True).first).to_be_visible()
+    expect(eth.get_by_text("과거 기사 · 2022.01.02 · 검증 뉴스", exact=True).first).to_be_visible()
+    expect(eth.get_by_text("커뮤니티 · 시장기록자", exact=True).first).to_be_visible()
+    expect(eth.get_by_text("Binance Square · 과거 게시글 · 2022.01.02", exact=True).first).to_be_visible()
+    expect(page.get_by_text("A personal Ethereum outlook", exact=True)).to_have_count(0)
+    expect(page.get_by_text("Original English community body", exact=True)).to_have_count(0)
     assert calls["/api/news/market"] == calls["/api/news/coin/BTCUSDT"] == calls["/api/news/coin/ETHUSDT"] == 1
 
     page.clock.run_for(25000)
@@ -78,6 +90,8 @@ with sync_playwright() as playwright:
     ready = True
     page.clock.run_for(6000)
     expect(market.get_by_text("시장 ETF 자금 유입 증가", exact=True).first).to_be_visible()
+    expect(market.get_by_text("커뮤니티 · 시장기록자", exact=True).first).to_be_visible()
+    expect(market.get_by_text("Binance Square · 2026.09.08 10:30 KST", exact=True).first).to_be_visible()
     expect(btc.get_by_text("비트코인 ETF 자금 유입 증가", exact=True)).to_be_visible()
     expect(page.get_by_text("한국어로 번역하고 있어요.", exact=False)).to_have_count(0)
     assert calls["/api/news/market"] == calls["/api/news/coin/BTCUSDT"] == 2
@@ -86,6 +100,7 @@ with sync_playwright() as playwright:
     assert calls["/api/news/market"] == calls["/api/news/coin/BTCUSDT"] == 2
     assert calls["/api/news/coin/ETHUSDT"] == 1
     assert not errors, errors
+    page.screenshot(path="/tmp/gg-parrot-community-news-public.png", full_page=True)
     print(json.dumps({"passed": True, "api_calls": dict(calls), "javascript_errors": errors,
                       "pending_after_retry": 0, "english_headlines": 0}, ensure_ascii=False))
     browser.close()

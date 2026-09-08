@@ -27,6 +27,12 @@ _DISCLAIMER = (
 
 
 def _article_id(item: dict) -> str:
+    if item.get("content_type") == "community":
+        identity = "|".join((
+            "community", str(item.get("source") or "Binance Square"),
+            str(item.get("community_post_id") or item.get("url") or ""),
+        ))
+        return hashlib.sha256(identity.encode("utf-8")).hexdigest()[:20]
     identity = "|".join(
         (
             str(item.get("original_title") or item.get("title") or ""),
@@ -43,7 +49,8 @@ def _snapshot_id(asset_symbol: str, items: list[dict]) -> str:
         [
             asset_symbol,
             *[
-                f"{item.get('title') or ''}|{item.get('source') or ''}"
+                _article_id(item) if item.get("content_type") == "community"
+                else f"{item.get('title') or ''}|{item.get('source') or ''}"
                 for item in items
             ],
         ]
@@ -86,8 +93,9 @@ def build_position_news(
     analyzed_items = list(analysis.get("items") or [])
     items = []
     for index, raw in enumerate(raw_items):
+        is_community = raw.get("content_type") == "community"
         is_historical = bool(raw.get("published")) and not news_mod._within_live_news_window(raw)
-        assessed = (
+        assessed = {} if is_community else (
             analyzed_items[index]
             if index < len(analyzed_items)
             else classifier.classify_headline(raw.get("title", ""))
@@ -98,9 +106,9 @@ def build_position_news(
             else "unclear"
         )
         effect = classifier.position_effect(sentiment, side)
-        if is_historical:
-            # Background history is useful context, but not a fresh directional
-            # observation about the user's current position.
+        if is_historical or is_community:
+            # History and unverified community opinions do not establish a
+            # directional observation about the user's current position.
             sentiment, effect = "unclear", "unclear"
         items.append(
             {
@@ -112,13 +120,19 @@ def build_position_news(
                     else {}
                 ),
                 "source": str(raw.get("source") or ""),
+                **({
+                    "content_type": "community",
+                    "community_post_id": str(raw.get("community_post_id") or ""),
+                    "author": str(raw.get("author") or ""),
+                } if is_community else {}),
                 "url": str(raw.get("url") or ""),
                 "published": raw.get("published"),
                 "is_historical": is_historical,
                 "asset_sentiment": sentiment,
                 "position_effect": effect,
                 "summary": str(
-                    assessed.get("summary") or raw.get("excerpt") or ""
+                    "커뮤니티 작성자의 의견이며 포지션 영향은 확인되지 않았어요."
+                    if is_community else assessed.get("summary") or raw.get("excerpt") or ""
                 )[:180],
                 "confidence": (
                     assessed.get("confidence")
@@ -138,6 +152,18 @@ def build_position_news(
     coin_name = str(
         news_payload.get("coin_name") or asset_symbol or "선택 종목"
     )
+    community_count = sum(item.get("content_type") == "community" for item in items)
+    article_count = len(items) - community_count
+    only_community = bool(community_count) and not article_count
+    overview = {"text": str(analysis.get("overview") or ""), "scope": "articles"}
+    if community_count:
+        overview = {
+            "text": (
+                f"뉴스 {article_count}건과 커뮤니티 게시글 {community_count}건을 확인했어요. "
+                if article_count else f"커뮤니티 게시글 {community_count}건을 확인했어요. "
+            ) + "커뮤니티 글은 작성자의 의견입니다.",
+            "scope": "mixed_sources" if article_count else "community_posts",
+        }
     return {
         "feature_key": FEATURE_KEY,
         "feature_version": classifier.FEATURE_VERSION,
@@ -147,10 +173,7 @@ def build_position_news(
             coin_name=coin_name,
             side=side,
         ),
-        "overview": {
-            "text": str(analysis.get("overview") or ""),
-            "scope": "articles",
-        },
+        "overview": overview,
         "snapshot_id": (
             snapshot_id[:20]
             if snapshot_id
@@ -158,8 +181,8 @@ def build_position_news(
         ),
         "items": items,
         "analysis_status": analysis.get("analysis_status") or "degraded",
-        "analysis_source": analysis.get("analysis_source") or "rule",
-        "ai": bool(analysis.get("ai", False)),
+        "analysis_source": "community" if only_community else analysis.get("analysis_source") or "rule",
+        "ai": bool(analysis.get("ai", False)) and not only_community,
         "updated_at": news_payload.get("updated_at"),
         "refresh_seconds": int(
             news_payload.get("refresh_seconds") or _REFRESH_SECONDS

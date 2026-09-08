@@ -7,7 +7,7 @@
      AI 입력으로 사용하고, 저장되는 결과는 짧은 요약뿐이다.
   3) 환각 방지: AI는 수집한 기사 내용에서만 요약하고 새 사실을 추가하지 않는다.
   4) 비용: 중복 제거 뒤 제목을 번역하고, 결과를 메모리와 Postgres에 캐시해
-     같은 제목을 다시 과금 호출하지 않는다. 번역 호출에도 DB 일일 예산을 적용한다.
+     같은 제목을 다시 과금 호출하지 않는다. 번역에는 일일 횟수 제한을 두지 않는다.
 
 Google News RSS, CoinDesk 공식 RSS, Playwright로 읽는 CoinDesk·Decrypt·CryptoSlate
 공개 뉴스 목록과 프로젝트 페이지를 함께 사용한다.
@@ -36,6 +36,7 @@ import httpx
 
 from .http_runtime import SingleFlightGroup, get_http_client, run_parallel
 from .ai_runtime import AiBusyError, ai_cache_key, get_ai_runtime, get_anthropic_client
+from . import binance_square
 
 _GOOGLE_NEWS = "https://news.google.com/rss/search"
 _COINDESK_RSS = "https://www.coindesk.com/arc/outboundfeeds/rss/"
@@ -871,6 +872,8 @@ def _matches_asset(item: dict, asset_symbol: str, coin_name: str) -> bool:
 
 def _is_news_article_candidate(item: dict) -> bool:
     """Exclude evergreen quote/converter pages without resolving Google links."""
+    if item.get("content_type") == "community":
+        return binance_square.is_community_item(item)
     parsed = urlsplit(str(item.get("url") or ""))
     host = str(parsed.hostname or "").removeprefix("www.").casefold()
     path = parsed.path.casefold()
@@ -2043,6 +2046,7 @@ _TITLE_TRANSLATION_UPPER_TERMS = frozenset(_COIN_ALIASES) | {
     "USD",
 }
 _TITLE_TRANSLATION_UPPER_PROSE = {
+    "LONG", "SHORT", "ENTRY", "STOP", "LOSS", "TARGET", "SUPPORT", "BULL", "BEAR", "ALERT", "SPOT",
     "THIS",
     # 분기 표기는 티커가 아니다 — "Q3 earnings"는 "3분기 실적"으로 옮겨야 맞다.
     "Q1", "Q2", "Q3", "Q4",
@@ -2949,6 +2953,8 @@ def _within_news_window(item: dict, days: int) -> bool:
     Undated legacy metadata remains usable, without inventing a publication date.
     Google search's when: filter describes its index and cannot enforce this.
     """
+    if item.get("content_type") == "community":
+        return binance_square.within_window(item)
     raw = item.get("published")
     if not raw:
         return True
@@ -3817,19 +3823,9 @@ def enrich_coin_news_for_collector(symbol: str, rss_payload: dict, *, browser_bu
         successful += result.get("status") in {"ready", "empty", "partial"}
         incomplete += result.get("status") == "partial"
         sources.append(_browser_source_report(descriptor, result, items=items, excluded_count=excluded_count))
-    # Sort before capping so old archive matches cannot displace recent RSS.
-    merged, seen_titles, seen_urls = [], set(), set()
-    for item in _sort_news_items_newest_first(candidates):
-        title = re.sub(r"\s+", " ", str(item.get("title") or "")).strip().casefold()
-        url = str(item.get("url") or "").split("?")[0].rstrip("/")
-        if not title or title in seen_titles or (url and url in seen_urls):
-            continue
-        seen_titles.add(title)
-        if url:
-            seen_urls.add(url)
-        merged.append(item)
-        if len(merged) == _MAX_COIN_ITEMS:
-            break
+    # Community has separate slots: a new discussion cannot evict an article
+    # or force the unchanged editorial batch through paid analysis again.
+    merged = _public_news_candidates(candidates, limit=_MAX_COIN_ITEMS, include_archive=True)
     payload["items"] = merged
     payload["sources"] = sources
     payload["browser_enrichment"] = {
@@ -3890,17 +3886,21 @@ def _public_news_candidates(items: list[dict], *, limit: int, include_archive: b
     within_window = _within_coin_news_window if include_archive else _within_live_news_window
     current = [item for item in items if within_window(item) and _is_news_article_candidate(item)]
     unique, titles, urls = [], set(), set()
+    counts = Counter()
     for item in _sort_news_items_newest_first(current):
+        kind = "community" if item.get("content_type") == "community" else "article"
+        cap = binance_square.configuration()["max_items"] if kind == "community" else limit
+        if counts[kind] >= cap:
+            continue
         title = re.sub(r"\s+", " ", str(item.get("title") or "")).strip().casefold()
         url = str(item.get("url") or "").split("?")[0].split("#")[0].rstrip("/")
-        if not title or title in titles or (url and url in urls):
+        if not title or (kind, title) in titles or (url and url in urls):
             continue
-        titles.add(title)
+        titles.add((kind, title))
         if url:
             urls.add(url)
         unique.append(dict(item))
-        if len(unique) >= limit:
-            break
+        counts[kind] += 1
     return unique
 
 
@@ -3956,6 +3956,11 @@ def _fetch_public_news_payload(asset_symbol: str | None = None) -> dict:
         fallback = _fetch_public_news_fallback(asset_symbol)
         payload["items"] = list(fallback.get("items") or [])
         sources.extend(fallback.get("sources") or [])
+    if asset_symbol and binance_square.configuration()["enabled"]:
+        community = binance_square.fetch_posts(asset_symbol)
+        payload["items"] = _public_news_candidates([*payload["items"], *community["items"]],
+                                                   limit=_MAX_COIN_ITEMS, include_archive=True)
+        sources.append(community["source"])
     payload["sources"] = sources
     if not payload["items"] and not any(source.get("status") in {"ready", "empty", "partial"} for source in sources):
         raise NewsFetchError("모든 뉴스 RSS 소스 수집에 실패했습니다. 잠시 후 다시 시도해 주세요.", sources=sources)
@@ -3992,6 +3997,10 @@ def fetch_coin_news_for_collector(symbol: str) -> dict:
         "google": fetch_google,
         "coindesk": lambda: fetch_source(_fetch_coindesk_news),
     }
+    if binance_square.configuration()["enabled"]:
+        # The public JSON request observed in Playwright is bounded separately
+        # from browser enrichment and shares its result across users/processes.
+        loaders["binance_square"] = lambda: binance_square.fetch_posts(base)
     if coindesk_api.configuration()["enabled"]:
         search_terms = _coindesk_asset_search_terms(base, name)
         loaders["coindesk_api"] = lambda: coindesk_api.fetch_news(search_terms[0] if search_terms else base)
@@ -4002,6 +4011,8 @@ def fetch_coin_news_for_collector(symbol: str) -> dict:
     if base == "EDEN":
         loaders["openeden"] = lambda: fetch_source(_fetch_openeden_news)
     fetched_sources = run_parallel(loaders)
+    community = fetched_sources.get("binance_square", {"items": [], "source": {}})
+    community_available = community["source"].get("status") in {"ready", "empty", "partial"}
 
     google_payload, google_available = fetched_sources["google"]
     google_payload = google_payload or {}
@@ -4054,11 +4065,11 @@ def fetch_coin_news_for_collector(symbol: str) -> dict:
     )
     google_items = [item for item in google_items if _within_coin_news_window(item)]
     coindesk_items = [item for item in coindesk_items if _within_coin_news_window(item)]
-    if (not google_available and not coindesk_available and not openeden_available and not api_available
+    if (not google_available and not coindesk_available and not openeden_available and not api_available and not community_available
             and not any(source["status"] == "ready" for source in extra_sources)):
         raise NewsFetchError("모든 뉴스 RSS/API 소스 수집에 실패했습니다.")
     items = _public_news_candidates(
-        [*openeden_items, *current_api_items, *coindesk_items, *google_items, *extra_items],
+        [*openeden_items, *current_api_items, *coindesk_items, *google_items, *extra_items, *community["items"]],
         limit=_MAX_COIN_ITEMS, include_archive=True)
     env = _envelope(
         items,
@@ -4096,6 +4107,8 @@ def fetch_coin_news_for_collector(symbol: str) -> dict:
     if api_source:
         sources.append(api_source)
     sources.extend(extra_sources)
+    if community["source"]:
+        sources.append(community["source"])
     env["sources"] = sources
     return _with_news_history(env)
 

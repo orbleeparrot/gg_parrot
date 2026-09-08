@@ -1,4 +1,4 @@
-import { communityPostIdentity, hasKoreanText, newsSourceLabel } from "../../../lib/newsBriefings.js";
+import { communityPostIdentity, communitySummaryPresentation, hasKoreanText, newsSourceLabel } from "../../../lib/newsBriefings.js";
 import { publicationTime } from "./presentation.js";
 
 function impactPresentation(effect) {
@@ -82,6 +82,7 @@ export const positionNewsModule = {
           : hasKoreanText(item.summary) ? item.summary : "",
         isNewsArticle: true,
         isCommunityPost,
+        communitySummary: communitySummaryPresentation(item),
         isHistorical,
         notify: !isHistorical,
         publishedAt,

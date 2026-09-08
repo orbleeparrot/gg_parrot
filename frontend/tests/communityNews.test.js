@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { communityPostIdentity, historicalNewsLabel, newsPublishedLabel, newsSourceLabel, prepareNewsResponse } from "../src/lib/newsBriefings.js";
+import { communityPostIdentity, communitySummaryPresentation, hasPendingCommunitySummaries, hasPendingTranslation, historicalNewsLabel, newsPublishedLabel, newsSourceLabel, prepareNewsResponse } from "../src/lib/newsBriefings.js";
 import { positionNewsModule } from "../src/features/agents/positionNews/events.js";
 import { advanceActivityTimeline, emptyActivityTimeline } from "../src/features/agents/activityTimeline.js";
 import { countNewObservations } from "../src/features/agents/positionNews/presentation.js";
@@ -73,4 +73,53 @@ test("English community titles stay pending while original title and body never 
   assert.equal(payload.items.length, 0);
   assert.equal(payload.translation.pending_count, 1);
   assert.equal(positionNewsModule.buildEvents({ featureStates: state([untranslated]) }).length, 0);
+});
+
+test("only ready Korean body summaries are displayed, with partial-body provenance", () => {
+  const readyPost = { ...post, community_summary_status: "ready",
+    community_summary: "작성자는 CHIP의 거래량 변화를 관찰했어요. 단기 방향은 아직 불확실하다는 의견이에요." };
+  assert.deepEqual(communitySummaryPresentation(readyPost), { status: "ready", label: "본문 요약", text: readyPost.community_summary });
+  assert.equal(communitySummaryPresentation({ ...readyPost, community_summary_partial: true }).label, "본문 일부 요약");
+  assert.deepEqual(communitySummaryPresentation({ ...readyPost, community_summary_status: "pending" }),
+    { status: "pending", label: "본문 요약 중", text: "" });
+  for (const item of [post, { ...readyPost, community_summary: "Original English body" },
+    { ...readyPost, community_summary_status: "unavailable" }]) {
+    assert.equal(communitySummaryPresentation(item).status, "unavailable");
+    assert.equal(communitySummaryPresentation(item).text, "");
+  }
+  assert.equal(communitySummaryPresentation({ title: "일반 기사", summary: "기사 요약" }), null);
+});
+
+test("body summaries remain independent from completed headline translations", () => {
+  const payload = prepareNewsResponse({ items: [{ ...post, community_summary_status: "pending" }],
+    translation: { status: "ready", pending_count: 0 },
+    community_summaries: { status: "partial", pending_count: 1, retry_after_seconds: 30 } });
+  assert.equal(payload.items.length, 1);
+  assert.equal(hasPendingTranslation(payload), false);
+  assert.equal(hasPendingCommunitySummaries(payload), true);
+  assert.equal(hasPendingCommunitySummaries({ items: [{ ...post, community_summary_status: "pending" }] }), true);
+  assert.equal(hasPendingCommunitySummaries({ items: [{ ...post, community_summary_status: "unavailable" }],
+    community_summaries: { status: "ready", pending_count: 0 } }), false);
+});
+
+test("summary arrival and edits update the same live post without extra observations", () => {
+  const pendingPost = { ...post, community_summary_status: "pending" };
+  const context = { session: { session_id: 41 }, featureStates: state([pendingPost]), receivedAt: Date.parse(post.published) };
+  let timeline = advanceActivityTimeline(emptyActivityTimeline(41), context);
+  const initial = timeline.events.filter((event) => event.module === "position_news");
+  assert.equal(initial[0].communitySummary.status, "pending");
+  const seen = new Set(initial.map((event) => event.id));
+  for (const [text, partial] of [["작성자가 거래량 증가를 분석했어요. 투자 판단은 확인되지 않은 개인 의견이에요.", true],
+    ["작성자가 거래량 증가를 관찰했어요. 추가 방향은 확인이 필요하다는 의견이에요.", false]]) {
+    timeline = advanceActivityTimeline(timeline, { ...context, receivedAt: context.receivedAt + 60000,
+      featureStates: state([{ ...post, community_summary_status: "ready", community_summary: text,
+        community_summary_partial: partial }]) });
+    const events = timeline.events.filter((event) => event.module === "position_news");
+    assert.equal(events.length, 1);
+    assert.equal(events[0].communitySummary.text, text);
+    assert.equal(events[0].communitySummary.label, partial ? "본문 일부 요약" : "본문 요약");
+    assert.equal(events[0].occurredAt, initial[0].occurredAt);
+    assert.equal(events[0].severity, "info");
+    assert.equal(countNewObservations(events, seen), 0);
+  }
 });

@@ -70,6 +70,46 @@ def test_effective_config_reports_public_community_limits(monkeypatch):
     assert workflow.effective_config()["binance_square"] == configuration
 
 
+def test_fetch_and_process_logs_track_body_and_summary_states_without_raw_body(monkeypatch, capsys):
+    raw = {"content_type": "community", "source": "Binance Square", "community_post_id": "123",
+           "title": "CHIP 소식", "url": "https://www.binance.com/en/square/post/123",
+           "community_body": "DO NOT LOG THIS RAW BODY", "community_body_status": "ready"}
+    payload = {"symbol": "CHIP", "items": [raw]}
+    monkeypatch.setattr(workflow.news_mod, "fetch_coin_news_for_collector", lambda _: payload)
+    assert workflow.fetch_ticker_news_task.fn("CHIP") == payload
+    fetched = json.loads(capsys.readouterr().out)
+    assert fetched["event"] == "community_content" and fetched["stage"] == "fetched"
+    assert fetched["community_bodies"]["ready"] == 1
+    assert fetched["community_summaries"]["pending_count"] == 1
+    result = {"status": "stored", "community_bodies": {"ready": 1, "missing": 0, "error": 0},
+              "community_summaries": {"ready_count": 1, "pending_count": 0, "unavailable_count": 0}}
+    monkeypatch.setattr(workflow.collector, "collect_payload", lambda *args, **kwargs: result)
+    workflow.process_ticker_news_task.fn("CHIP", payload, False)
+    logs = capsys.readouterr().out
+    processed = json.loads(logs.splitlines()[0])
+    assert processed["stage"] == "processed" and processed["community_summaries"]["ready_count"] == 1
+    assert "DO NOT LOG" not in str(fetched) + logs
+
+
+def test_worker_maintenance_prunes_summaries_with_snapshot_cleanup(monkeypatch, capsys):
+    calls = []
+    monkeypatch.setattr(workflow.repository, "prune_snapshots", lambda **kwargs: calls.append(kwargs) or 3)
+    monkeypatch.setattr(workflow.collector, "prune_community_summaries", lambda: 7)
+    assert workflow.prune_snapshots_task.fn(30) == {"snapshots": 3, "community_summaries": 7}
+    assert calls == [{"retention_days": 30}]
+    log = json.loads(capsys.readouterr().out)
+    assert log == {"event": "news_cache_maintenance", "snapshots": 3, "community_summaries": 7}
+
+
+def test_effective_config_exposes_actual_summary_limits_without_credentials():
+    from app import community_summaries
+    actual = community_summaries.configuration()
+    config = workflow.effective_config()["community_summaries"]
+    assert all(config[key] == value for key, value in actual.items())
+    assert config["worker_waits"] is True and config["http_waits"] is False
+    assert config["prune_batch_limit"] == 500
+
+
 def test_flow_uses_base_tickers_and_separates_model_stage(
     monkeypatch,
 ):

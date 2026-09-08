@@ -3125,7 +3125,14 @@ def _with_news_history(payload: dict) -> dict:
                          "archive_max_age_days": _news_archive_days()}}
 
 
+_COMMUNITY_BODY_FIELDS = (
+    "community_body", "community_body_hash", "community_body_status", "community_body_truncated",
+)
+
+
 def _localize_news_payload(payload: dict) -> dict:
+    from . import community_summaries
+
     ticker_payload = bool(payload.get("symbol") or payload.get("feature_key") == "position_news")
     within_window = _within_coin_news_window if ticker_payload else _within_live_news_window
     candidates = [item for item in payload.get("items") or []
@@ -3138,6 +3145,14 @@ def _localize_news_payload(payload: dict) -> dict:
     result["translation"] = {"status": "partial" if pending else "ready", "pending_count": pending}
     if pending:
         result["translation"]["retry_after_seconds"] = 30
+    # A ready headline remains visible while a separately cached body summary
+    # is prepared. Never return the internal source text to public readers.
+    enriched, summary_status = community_summaries.enrich_items(result["items"], wait=False)
+    result["items"] = [
+        {key: value for key, value in item.items() if key not in _COMMUNITY_BODY_FIELDS}
+        for item in enriched
+    ]
+    result["community_summaries"] = summary_status
     return result
 
 

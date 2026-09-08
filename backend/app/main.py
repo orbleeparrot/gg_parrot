@@ -55,6 +55,7 @@ from . import optimize_runtime as optimize_runtime_mod
 from . import paper as paper_mod
 from . import ai_explain as ai_explain_mod
 from . import ai_runtime as ai_runtime_mod
+from . import community_summaries as community_summaries_mod
 from . import auth as auth_mod
 from . import points as points_mod
 from . import account as account_mod
@@ -83,6 +84,7 @@ from .realtrade import build_bundle
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    community_summaries_mod.start()
     position_news_runtime.start()
     try:
         yield
@@ -95,9 +97,12 @@ async def lifespan(app: FastAPI):
                 optimize_runtime_mod.shutdown()
             finally:
                 try:
-                    ai_runtime_mod.close_ai_runtime()
+                    await asyncio.to_thread(community_summaries_mod.shutdown)
                 finally:
-                    http_runtime_mod.close_http_runtime()
+                    try:
+                        ai_runtime_mod.close_ai_runtime()
+                    finally:
+                        http_runtime_mod.close_http_runtime()
 
 
 app = FastAPI(title="Coin Macro Backtest & Share (Simulation only)", lifespan=lifespan)

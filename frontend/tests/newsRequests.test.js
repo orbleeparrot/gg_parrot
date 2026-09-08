@@ -69,6 +69,29 @@ test("market and coin translations automatically refresh only pending keys and s
   h.queue.stop();
 });
 
+test("ready headlines keep polling pending body summaries, then stop on ready or unavailable", async () => {
+  for (const finalStatus of ["ready", "unavailable"]) {
+    let calls = 0;
+    const h = harness(async () => {
+      calls += 1;
+      const waiting = calls === 1;
+      return { ...ready, items: [{ title: "CHIP 커뮤니티 의견", content_type: "community",
+        community_summary_status: waiting ? "pending" : finalStatus,
+        community_summary: waiting ? "" : "작성자는 거래량 증가를 관찰했어요." }],
+      community_summaries: { status: waiting ? "partial" : "ready", pending_count: waiting ? 1 : 0,
+        retry_after_seconds: 45 } };
+    });
+    h.queue.start();
+    await h.next();
+    assert.equal(h.states.get("BTC").data.translation.status, "ready");
+    assert.deepEqual(h.delays(), [45000]);
+    await h.next();
+    assert.equal(calls, 2);
+    assert.deepEqual(h.delays(), []);
+    h.queue.stop();
+  }
+});
+
 test("slow source requests are limited to two concurrent keys with no overlapping retry", async () => {
   const releases = new Map();
   const calls = [];

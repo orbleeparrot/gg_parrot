@@ -6,6 +6,17 @@ export function hasKoreanText(value) {
   return /[가-힣]/.test(String(value || ""));
 }
 
+export function communitySummaryPresentation(item) {
+  if (item?.content_type !== "community") return null;
+  const text = String(item.community_summary || "").trim();
+  if (item.community_summary_status === "ready" && hasKoreanText(text)) {
+    return { status: "ready", label: item.community_summary_partial ? "본문 일부 요약" : "본문 요약", text };
+  }
+  return item.community_summary_status === "pending"
+    ? { status: "pending", label: "본문 요약 중", text: "" }
+    : { status: "unavailable", label: "본문 요약을 제공할 수 없어요.", text: "" };
+}
+
 export function communityPostIdentity(item) {
   if (item?.content_type !== "community") return null;
   const post = String(item.community_post_id || "").trim() || String(item.url || "").trim();
@@ -62,6 +73,24 @@ export function hasPendingTranslation(payload) {
   return payload?.translation?.status === "partial";
 }
 
+export function hasPendingCommunitySummaries(payload) {
+  return payload?.community_summaries?.status === "partial"
+    || (payload?.items || []).some((item) => item?.content_type === "community"
+      && item.community_summary_status === "pending");
+}
+
+export function hasPendingNewsWork(payload) {
+  return hasPendingTranslation(payload) || hasPendingCommunitySummaries(payload);
+}
+
+export function newsRetryAfterSeconds(payload) {
+  const delays = [
+    hasPendingTranslation(payload) ? payload?.translation?.retry_after_seconds : null,
+    hasPendingCommunitySummaries(payload) ? payload?.community_summaries?.retry_after_seconds : null,
+  ].map(Number).filter((value) => Number.isFinite(value) && value > 0);
+  return delays.length ? Math.min(...delays) : 30;
+}
+
 export function createNewsBriefingQueue({
   keys,
   load,
@@ -85,7 +114,7 @@ export function createNewsBriefingQueue({
     if (active) onChange(key, { status: record.status, data: record.data, error: record.error });
   };
   const retryDelay = (attempt, payload) => {
-    const serverSeconds = Number(payload?.translation?.retry_after_seconds);
+    const serverSeconds = newsRetryAfterSeconds(payload);
     const serverDelay = Number.isFinite(serverSeconds) && serverSeconds > 0
       ? Math.min(3_600_000, serverSeconds * 1000) : RETRY_MS;
     return Math.max(serverDelay, Math.min(MAX_RETRY_MS, RETRY_MS * (2 ** Math.min(attempt - 1, 4))));
@@ -130,7 +159,7 @@ export function createNewsBriefingQueue({
       record.data = prepareNewsResponse(payload);
       record.status = "success";
       record.failures = 0;
-      record.pendingAttempts = hasPendingTranslation(record.data) || record.data.stale
+      record.pendingAttempts = hasPendingNewsWork(record.data) || record.data.stale
         ? record.pendingAttempts + 1 : 0;
       record.dueAt = record.pendingAttempts
         ? now() + retryDelay(record.pendingAttempts, record.data) : null;

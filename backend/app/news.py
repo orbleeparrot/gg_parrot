@@ -56,7 +56,7 @@ _COIN_CACHE_SECONDS = max(60, int(os.environ.get("COIN_NEWS_CACHE_SECONDS", "300
 _COINDESK_DISCOVERY_MAX_STALE_SECONDS = 6 * 60 * 60
 _OPENEDEN_CACHE_SECONDS = 60 * 60
 _OPENEDEN_MAX_AGE_DAYS = 30
-_TITLE_TRANSLATION_PROMPT_VERSION = "coin-news-title-ko-v8"
+_TITLE_TRANSLATION_PROMPT_VERSION = "coin-news-title-ko-v9"
 _TITLE_TRANSLATION_BATCH_SIZE = 10
 _TITLE_TRANSLATION_RETRY_SECONDS = 300
 _TITLE_TRANSLATION_MAX_TOKENS = max(
@@ -2110,15 +2110,40 @@ def _translation_identifier_text(value: str) -> str:
     return value
 
 
+def _translation_uppercase_prose_positions(value: str, matches: list) -> set[int]:
+    """Only infer prose from a substantial uppercase run with English grammar.
+
+    A later lowercase clause must not turn SAME/DAILY into assets. Keep the
+    leading subject conservative; known and explicit identifiers are protected
+    separately even when they occur inside a prose run.
+    """
+    grammar_words = {"AND", "THE", "IN", "OF", "TO", "WITH", "FOR", "FROM", "IS", "ARE"}
+    groups, current = [], []
+    for match in matches:
+        if current and not re.fullmatch(r"[\s\d.,%+$€£₩:;!?|—–\-()/'’]*", value[current[-1].end():match.start()]):
+            groups.append(current)
+            current = []
+        current.append(match)
+    groups.append(current)
+    return {
+        match.start()
+        for group in groups
+        if len(group) >= 4 and len(grammar_words.intersection(match.group(1) for match in group)) >= 2
+        for match in group[1:]
+    }
+
+
 def _translation_protected_upper_tokens(value: str) -> tuple[str, ...]:
     value = _translation_identifier_text(value)
     protected = set()
     source_has_lowercase = bool(re.search(r"[a-z]", value))
     source_has_asian_text = bool(re.search(r"[가-힣\u3040-\u30ff\u3400-\u9fff]", value))
-    for match in re.finditer(
+    matches = list(re.finditer(
         r"(?<![A-Za-z0-9])([A-Z][A-Z0-9]{0,31})(?![A-Za-z0-9])",
         value,
-    ):
+    ))
+    prose_positions = _translation_uppercase_prose_positions(value, matches)
+    for match in matches:
         token = match.group(1)
         before = value[max(0, match.start() - 24):match.start()]
         after = value[match.end():match.end() + 24]
@@ -2133,6 +2158,8 @@ def _translation_protected_upper_tokens(value: str) -> tuple[str, ...]:
             before.endswith("$")
             or re.search(r"(?:promo\s+code|code|프로모션\s+코드|코드)\s*:?\s*$", before, re.IGNORECASE)
             or (before.endswith("(") and after.startswith(")"))
+            or (token == "B" and re.search(r"\bCapital\s+$", before))
+            or (re.fullmatch(r"[A-Z]+\d+[A-Z0-9]*", token) and token not in _TITLE_TRANSLATION_UPPER_PROSE)
         )
         has_asset_context = bool(re.match(
             r"(?:'s)?\s*(?:token|coin|network|protocol|stock|shares|토큰|코인)",
@@ -2143,6 +2170,7 @@ def _translation_protected_upper_tokens(value: str) -> tuple[str, ...]:
             (source_has_lowercase or source_has_asian_text)
             and 2 <= len(token) <= 5
             and token not in _TITLE_TRANSLATION_UPPER_PROSE
+            and match.start() not in prose_positions
         )
         if (
             token in _TITLE_TRANSLATION_UPPER_TERMS

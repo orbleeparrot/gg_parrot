@@ -1,5 +1,7 @@
-import { Link } from "react-router-dom";
+import { useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api.js";
+import { isLoggedIn } from "../lib/auth.js";
 import InfoTooltip from "./InfoTooltip.jsx";
 import { baseOf, fmtMoney, fmtMoneyCompact, fmtKrw, fmtPrice, fmtQty, quoteOf } from "../lib/format.js";
 import { useUsdKrw } from "../lib/usdkrw.js";
@@ -39,6 +41,26 @@ export function PaperPanelView({ macro, valErr, onRegister, controller }) {
     restart,
   } = controller;
   const { rate: krwRate } = useUsdKrw();
+  const navigate = useNavigate();
+  const [launching, setLaunching] = useState(false);
+
+  // 빠른 실행 — 지금 만든 매크로를 내 라이브러리에 저장하고 실행기 연결 플로우로 바로 간다.
+  // 리더보드의 '빠른 실행에 사용'과 같은 길이라 실행 화면은 하나만 유지한다.
+  async function quickRun() {
+    if (!isLoggedIn()) {
+      navigate("/login?next=%2Fbuilder&notice=%EB%A1%9C%EA%B7%B8%EC%9D%B8%20%ED%9B%84%20%EC%9D%B4%EC%9A%A9%ED%95%A0%20%EC%88%98%20%EC%9E%88%EC%96%B4%EC%9A%94.");
+      return;
+    }
+    setError("");
+    setLaunching(true);
+    try {
+      const saved = await api.saveMyMacro(macro, `직접 만들기 · ${macro.symbol || "매크로"}`);
+      navigate("/?run=1&step=1", { state: { selectedMacroId: saved.item.id } });
+    } catch (e) {
+      setError(String(e.message || e));
+      setLaunching(false);
+    }
+  }
 
   async function downloadMacro() {
     setError("");
@@ -286,11 +308,14 @@ export function PaperPanelView({ macro, valErr, onRegister, controller }) {
           </ul>
         </div>
         <div className="flex items-center gap-3 flex-wrap">
-          <button onClick={downloadMacro} disabled={!!valErr} className="btn btn-m btn-secondary">
+          <button onClick={quickRun} disabled={!!valErr || launching} className="btn btn-l btn-primary">
+            {launching ? "실행 준비 중…" : "빠른 실행"}
+          </button>
+          <button onClick={downloadMacro} disabled={!!valErr} className="btn btn-l btn-secondary">
             매크로 파일 내려받기 (.ggm.json)
           </button>
           <Link to="/?run=1&step=1" className="t-small font-semibold text-slate-900 underline underline-offset-4 decoration-slate-300 hover:decoration-slate-900">
-            빠른 실행 열기·사용법 →
+            사용법 →
           </Link>
         </div>
       </div>

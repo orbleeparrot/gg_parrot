@@ -55,7 +55,7 @@ function HomeEntryHero({ onLeaderboard, onGuide }) {
           <span className="home-entry-choice-art" aria-hidden="true">
             <img src="/brand/navigation/ggparrot-nav-leaderboard.svg" alt="" width="88" height="88" draggable="false" />
           </span>
-          <span className="home-entry-choice-copy"><strong>리더보드</strong><small>커뮤니티 인기 전략을 골라 바로 실행해요. 마음에 드는 매크로를 그대로 실행기로 돌릴 수 있어요.</small></span>
+          <span className="home-entry-choice-copy"><strong>빠른 실행</strong><small>커뮤니티 인기 전략을 골라 바로 실행해요. 마음에 드는 매크로를 그대로 실행기로 돌릴 수 있어요.</small></span>
           <span className="home-entry-choice-arrow" aria-hidden="true">→</span>
         </button>
         <button
@@ -341,7 +341,7 @@ export default function Home() {
     });
   }, [setSearchParams]);
 
-  // 홈 '리더보드' 갈림길 — 실행 플로우를 리더보드 선택 화면에서 바로 연다.
+  // 홈 '빠른 실행' 갈림길 — 실행 플로우를 리더보드 선택 화면에서 바로 연다.
   const openLeaderboardRun = useCallback(() => openRunner("leaderboard"), [openRunner]);
 
   // 로그아웃 상태에서 홈 진입 버튼을 누르면 바로 로그인 화면으로 보낸다.
@@ -374,7 +374,7 @@ export default function Home() {
     });
   }, [setSearchParams]);
 
-  // 리더보드·직접 만들기 진입은 로그인 필수 — 로그아웃이면 로그인 화면으로 보낸다.
+  // 빠른 실행·직접 만들기 진입은 로그인 필수 — 로그아웃이면 로그인 화면으로 보낸다.
   const startLeaderboard = useCallback(() => {
     if (!isLoggedIn()) { requireLogin("/?run=1&step=1&view=leaderboard"); return; }
     openLeaderboardRun();

@@ -62,15 +62,19 @@ function MacroDock({ sessions, selected, busy, onChange, onStop, onDelete }) {
     <section className="agent-macro-dock" aria-label="매크로 세션 선택과 제어">
       <label className="agent-macro-dock-picker">
         <span className="sr-only">매크로 세션 선택</span>
-        <span className="agent-macro-select-wrap">
-          <select value={String(selected.session_id)} onChange={(event) => onChange(event.target.value)}>
-            {sessions.map((session) => (
-              <option key={session.session_id} value={String(session.session_id)}>
-                {sessionOptionLabel(session)}
-              </option>
-            ))}
-          </select>
-          <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m4 6 4 4 4-4" /></svg>
+        <span className="agent-macro-picker-row">
+          <span className="agent-macro-select-wrap">
+            <select value={String(selected.session_id)} onChange={(event) => onChange(event.target.value)}>
+              {sessions.map((session) => (
+                <option key={session.session_id} value={String(session.session_id)}>
+                  {sessionOptionLabel(session)}
+                </option>
+              ))}
+            </select>
+            <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m4 6 4 4 4-4" /></svg>
+          </span>
+          {/* 새 실행 추가 — 빠른 실행 플로우(라이브러리·리더보드에서 골라 실행기 연결)로 간다. */}
+          <Link to="/?run=1&step=1" className="btn btn-m btn-secondary agent-macro-new" title="빠른 실행에서 매크로를 골라 새로 시작해요">+ 새 매크로</Link>
         </span>
       </label>
 

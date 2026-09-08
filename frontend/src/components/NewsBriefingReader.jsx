@@ -195,7 +195,18 @@ export default function NewsBriefingReader({
           >
             {rows.map(({ item, slot }) => {
               const content = (
-                queueOnly ? (
+                item.community ? (
+                  <>
+                    <span className="news-reader-row-title">{item.title}</span>
+                    <span className="news-reader-row-source news-reader-row-community-meta">
+                      <span title={item.community.author || "작성자 미상"}>커뮤니티 · {item.community.author || "작성자 미상"}</span>
+                      <span title={`${item.community.source || "Binance Square"} · ${item.time || "게시일 확인 불가"}`}>
+                        {item.community.source || "Binance Square"} · {item.time || "게시일 확인 불가"}
+                      </span>
+                    </span>
+                    <span className="news-reader-row-arrow" aria-hidden="true">{item.url ? "↗" : "→"}</span>
+                  </>
+                ) : queueOnly ? (
                   <>
                     <span className="news-reader-row-title">{item.title}</span>
                     <span className="news-reader-row-source">{item.rowLabel || item.source || "출처 미상"}</span>
@@ -211,7 +222,7 @@ export default function NewsBriefingReader({
                   </>
                 )
               );
-              const className = `news-reader-row ${slot === 0 ? "is-active" : ""}`;
+              const className = `news-reader-row ${slot === 0 ? "is-active" : ""} ${item.community ? "is-community" : ""}`;
               return item.url ? (
                 <a key={`${item.id}:${slot}`} href={item.url} target="_blank" rel="noopener noreferrer" className={className} aria-current={slot === 0 ? "true" : undefined}>{content}</a>
               ) : (

@@ -7,13 +7,34 @@ export function hasKoreanText(value) {
   return /[가-힣]/.test(String(value || ""));
 }
 
+export function communityPostIdentity(item) {
+  if (item?.content_type !== "community") return null;
+  const post = String(item.community_post_id || "").trim() || String(item.url || "").trim();
+  if (!post) return null;
+  const source = String(item.source || "Binance Square").normalize("NFKC").trim().toLowerCase();
+  return `community:${JSON.stringify([source, post])}`;
+}
+
+export function newsSourceLabel(item) {
+  if (item?.content_type !== "community") return item?.source || "출처 미상";
+  return ["커뮤니티", item.source || "Binance Square", String(item.author || "").trim() || "작성자 미상"].join(" · ");
+}
+
+export function newsPublishedLabel(item) {
+  if (item?.published_display) return item.published_display;
+  const published = typeof item?.published === "number" ? item.published : Date.parse(item?.published || "");
+  const date = new Date(published + 9 * 60 * 60 * 1000);
+  if (!Number.isFinite(published) || published <= 0 || !Number.isFinite(date.getTime())) return "게시일 확인 불가";
+  return `${date.toISOString().slice(0, 16).replaceAll("-", ".").replace("T", " ")} KST`;
+}
+
 export function historicalNewsLabel(item) {
   if (!item?.is_historical) return "";
   const published = typeof item.published === "number" ? item.published : Date.parse(item.published || "");
   const date = new Date(published + 9 * 60 * 60 * 1000);
   const label = Number.isFinite(published) && published > 0 && Number.isFinite(date.getTime())
     ? date.toISOString().slice(0, 10).replaceAll("-", ".") : "게시일 확인 불가";
-  return `과거 기사 · ${label}`;
+  return `${item.content_type === "community" ? "과거 게시글" : "과거 기사"} · ${label}`;
 }
 
 export function prepareNewsResponse(payload = {}) {

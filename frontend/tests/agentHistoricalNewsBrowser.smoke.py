@@ -83,6 +83,28 @@ with sync_playwright() as playwright:
     assert len(fixture_module.messages(page)) == 3
     expect(page.locator(".agent-new-message")).to_have_text("새 관측 1개 ↓")
     fixture_module.assert_quiet_refresh(page, fixture, 35)
+    before_community_badge = fixture_module.new_observations(page)
+    fixture.news_items.append({
+        "content_type": "community", "community_post_id": "123456789", "author": "시장기록자",
+        "source": "Binance Square", "url": "https://www.binance.com/en/square/post/123456789",
+        "title": "CHIP에 대한 커뮤니티 작성자의 의견", "original_title": "A personal CHIP outlook",
+        "summary": "Original English community body", "position_effect": "favorable",
+        "is_historical": True, "published": "2022-01-02T01:30:00Z",
+    })
+    fixture_module.advance(page, fixture, 35)
+    assert len(fixture_module.messages(page)) == 4
+    assert fixture_module.new_observations(page) == before_community_badge
+    expect(page.get_by_text("커뮤니티 · 과거 게시글", exact=True)).to_have_count(1)
+    expect(page.get_by_text("커뮤니티 · Binance Square · 시장기록자", exact=False)).to_have_count(1)
+    expect(page.get_by_text("Original English community body", exact=True)).to_have_count(0)
+    expect(page.get_by_text("A personal CHIP outlook", exact=True)).to_have_count(0)
+    post = page.locator(".agent-message").filter(has=page.get_by_text("CHIP에 대한 커뮤니티 작성자의 의견", exact=True))
+    assert "is-info" in post.get_attribute("class")
+    fixture.news_items[-1]["title"] = "한국어 표현을 수정한 커뮤니티 의견"
+    fixture.news_items[-1]["id"] = "changed-title-hash"
+    fixture_module.advance(page, fixture, 35)
+    assert len(fixture_module.messages(page)) == 4
+    assert fixture_module.new_observations(page) == before_community_badge
     assert not errors, errors
     page.get_by_role("log", name="에이전트 관측 기록").evaluate("""node => {
         node.style.height = ''; node.style.maxHeight = ''; node.style.minHeight = '';

@@ -283,7 +283,10 @@ export default function AgentActivityStream({
                       {hasTierBadge ? `${planLabel} 구독 기능. ` : ""}
                       {module?.label || event.module}{severityLabel ? `. ${severityLabel}` : ""}.
                     </span>
-                    {event.isHistorical ? <p className="agent-message-detail">과거 기사</p> : null}
+                    {event.isCommunityPost || event.isHistorical ? <p className="agent-message-detail">
+                      {[event.isCommunityPost ? "커뮤니티" : "", event.isHistorical
+                        ? event.isCommunityPost ? "과거 게시글" : "과거 기사" : ""].filter(Boolean).join(" · ")}
+                    </p> : null}
                     <p className="agent-message-primary">{event.title}</p>
                     {event.summary ? <p className="agent-message-summary">{event.summary}</p> : null}
                     {event.detail ? <p className="agent-message-detail">{event.detailLabel || "판단 근거"} · {event.detail}</p> : null}

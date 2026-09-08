@@ -1,4 +1,4 @@
-import { hasKoreanText } from "../../../lib/newsBriefings.js";
+import { communityPostIdentity, hasKoreanText, newsSourceLabel } from "../../../lib/newsBriefings.js";
 import { publicationTime } from "./presentation.js";
 
 function impactPresentation(effect) {
@@ -12,6 +12,8 @@ function normalizeIdentity(value) {
 }
 
 function articleIdentity(item) {
+  const communityIdentity = communityPostIdentity(item);
+  if (communityIdentity) return communityIdentity;
   if (item.id != null && String(item.id).trim()) return String(item.id);
   const sourceUrl = String(item.url || "").trim();
   if (sourceUrl) {
@@ -66,7 +68,8 @@ export const positionNewsModule = {
       if (!item || !hasKoreanText(item.title)) return;
       const identity = articleIdentity(item);
       if (!identity) return;
-      const presentation = impactPresentation(item.position_effect);
+      const isCommunityPost = item.content_type === "community";
+      const presentation = impactPresentation(isCommunityPost ? "unclear" : item.position_effect);
       const isHistorical = item.is_historical === true || data.content_scope === "archive";
       const publishedAt = publicationTime(item.published);
       events.push({
@@ -75,14 +78,16 @@ export const positionNewsModule = {
         severity: presentation.severity,
         expression: presentation.expression,
         title: item.title || "관련 뉴스",
-        summary: hasKoreanText(item.summary) ? item.summary : "",
+        summary: isCommunityPost ? "커뮤니티 작성자의 의견이며 포지션 영향은 확인되지 않았어요."
+          : hasKoreanText(item.summary) ? item.summary : "",
         isNewsArticle: true,
+        isCommunityPost,
         isHistorical,
         notify: !isHistorical,
         publishedAt,
         occurredAt: publishedAt === null ? 0 : item.published,
         fallbackTime: "게시일 확인 불가",
-        sourceLabel: item.source || "원문",
+        sourceLabel: newsSourceLabel(item),
         sourceUrl: item.url || "",
       });
     });

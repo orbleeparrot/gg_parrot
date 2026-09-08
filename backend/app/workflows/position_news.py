@@ -188,10 +188,13 @@ def prune_snapshots_task(retention_days: int) -> int:
 
 def effective_config(browser_budget_seconds: float | None = None) -> dict:
     """Safe operational values visible in Prefect logs; never credentials."""
+    from .. import binance_square
+
     return {
         "version": os.environ.get("RENDER_GIT_COMMIT", "local"),
         "collector_mode": "rss_api_then_playwright",
         "coindesk_api": coindesk_api.configuration(),
+        "binance_square": binance_square.configuration(),
         "title_translation": {"daily_call_limit": None, "scope": "all_articles", "shared_cache": True},
         "news_history": {"archive_max_age_days": news_mod._news_archive_days(),
                          "recent_first": True, "historical_articles_notify": False},

@@ -60,6 +60,16 @@ def _payload(symbol):
     }
 
 
+def test_effective_config_reports_public_community_limits(monkeypatch):
+    from app import binance_square
+
+    configuration = {"enabled": True, "cache_seconds": 300, "max_items": 5,
+                     "max_age_days": 30, "page_limit": 2, "request_budget_seconds": 6}
+    monkeypatch.setattr(binance_square, "configuration", lambda: configuration)
+
+    assert workflow.effective_config()["binance_square"] == configuration
+
+
 def test_flow_uses_base_tickers_and_separates_model_stage(
     monkeypatch,
 ):

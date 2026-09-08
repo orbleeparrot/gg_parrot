@@ -9127,7 +9127,7 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   --lb-bronze: 184 115 51;
   /* 행마다 그리드를 따로 계산하므로 유동 열(name·summary) 외에는 폭을 고정한다 —
      그래야 머리글과 모든 행의 열이 같은 자리에서 시작한다. 반응 열은 아이콘 3개 폭. */
-  --lb-actions-w: 172px;                   /* 투표 알약 2개(아이콘+수) + 복사 아이콘이 한 줄 */
+  --lb-actions-w: 196px;                   /* 투표 알약 2개(아이콘+수) + 자물쇠·가격 알약(또는 복사 아이콘)이 한 줄 */
   --lb-columns: 32px 36px minmax(220px, 1fr) minmax(0, 1.35fr) 104px var(--lb-actions-w);
   --lb-areas: "rank coin name summary return actions";
   padding-bottom: 88px; /* 마지막 행이 떠 있는 채팅 버튼 위로 올라올 여지 */
@@ -9210,6 +9210,10 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 .lb-vote.is-on { background: rgb(var(--c-slate-100)); border-color: rgb(var(--c-slate-400)); color: rgb(var(--c-slate-900)); }
 .lb-vote.is-on svg { fill: rgb(var(--c-slate-900) / 0.14); }
 .lb-vote:focus-visible, .lb-icon-btn:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
+/* 언락 — 같은 알약에 자물쇠 + 가격. 포인트가 나가는 동작이라 가격만 브랜드 금색. */
+.lb-unlock .num { color: rgb(var(--c-brand-line)); }
+.lb-unlock:hover { border-color: rgb(var(--c-brand-line)); }
+.lb-unlock:disabled { opacity: 0.6; cursor: wait; }
 .lb-icon-btn {
   width: 34px;
   height: 34px;

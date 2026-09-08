@@ -98,6 +98,10 @@ def _remembered(key):
 
 def _summary_unit_text(text: str) -> str:
     """Normalize equivalent body notation, without changing headline rules."""
+    # Explicit alphabetic-leading asset tags may be absent from the static
+    # catalog (#crv). Normalize only the comparison text, never $15m amounts.
+    text = re.sub(r"(?<![A-Za-z0-9])([#$])([A-Za-z][A-Za-z0-9]{0,31})(?![A-Za-z0-9_])",
+                  lambda match: match[1] + match[2].upper(), text)
     text = re.sub(r"(?<=\d)[万萬亿億千百]", lambda match: {
         "万": "만", "萬": "만", "亿": "억", "億": "억", "千": "천", "百": "백",
     }[match[0]], text)

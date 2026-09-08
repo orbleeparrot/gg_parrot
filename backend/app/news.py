@@ -2114,6 +2114,9 @@ def _translation_fact_tokens(
         try:
             amount = _number_body_amount(match.group("body"))
         except InvalidOperation:
+            # An unparseable amount is still a numeric claim. Dropping it would
+            # let malformed additions ("1억2억") pass as if no number existed.
+            numbers.append((match.group("body"), "invalid"))
             continue
         if match.group("sign") == "-":
             amount = -amount
@@ -2181,6 +2184,8 @@ def _translation_preserves_facts(original: str, translated: str) -> bool:
     translated_numbers, translated_tickers, translated_currencies = _translation_fact_tokens(
         translated, protected_upper=protected_upper
     )
+    if any(unit == "invalid" for _, unit in (*original_numbers, *translated_numbers)):
+        return False
     # Korean sentence structure can repeat or consolidate an abbreviation
     # ("FIL Price Filecoin TA FIL Technical Analysis"). Preserve every distinct
     # identifier, without treating its occurrence count as a numeric fact.

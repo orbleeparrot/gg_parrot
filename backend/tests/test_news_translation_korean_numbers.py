@@ -64,3 +64,11 @@ def test_whitespace_does_not_merge_independent_amount_percentage_or_count():
     assert not news._valid_title_translation(
         "Fund reaches $300M, grows 5%", "펀드 3억5천만달러 도달",
     )
+
+
+@pytest.mark.parametrize("original,translated", [
+    ("Bitcoin network update", "비트코인 네트워크 업데이트, 1억2억 토큰"),
+    ("Bitcoin network update 1억2억 tokens", "비트코인 네트워크 업데이트, 1억2억 토큰"),
+])
+def test_invalid_numeric_claim_cannot_disappear_from_fact_validation(original, translated):
+    assert not news._valid_title_translation(original, translated)

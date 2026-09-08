@@ -87,6 +87,19 @@ test("slow source requests are limited to two concurrent keys with no overlappin
   h.queue.stop();
 });
 
+test("an old translated snapshot keeps refreshing until fresh news arrives", async () => {
+  let calls = 0;
+  const h = harness(async () => ({ ...ready, stale: ++calls === 1 }));
+  h.queue.start();
+  await h.next();
+  assert.equal(h.states.get("BTC").data.items.length, 1);
+  assert.deepEqual(h.delays(), [30000]);
+  await h.next();
+  assert.equal(h.states.get("BTC").data.stale, false);
+  assert.deepEqual(h.delays(), []);
+  h.queue.stop();
+});
+
 test("translation retries respect server cooldown and back off instead of looping quickly", async () => {
   const h = harness(async () => ({ ...pending, translation: { ...pending.translation, retry_after_seconds: 45 } }));
   h.queue.start();

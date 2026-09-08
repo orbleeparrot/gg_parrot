@@ -17,6 +17,9 @@ from app.agent_features.position_news import repository
 @pytest.fixture(autouse=True)
 def isolated_title_retry_backoff(monkeypatch):
     monkeypatch.setattr(news, "_title_translation_retry_at", {})
+    monkeypatch.setattr(news, "_fetch_public_news_fallback", lambda *_args, **_kwargs: {
+        "items": [], "sources": [],
+    }, raising=False)
 
 _RSS = """<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0"><channel>
@@ -1123,7 +1126,7 @@ def test_market_news_localizes_titles_before_summary_and_preserves_source_cache(
     monkeypatch.setattr(
         news,
         "_fetch_news",
-        lambda _query: [{"title": english, "source": "CoinDesk"}],
+        lambda _query, **_kwargs: [{"title": english, "source": "CoinDesk"}],
     )
     monkeypatch.setattr(
         news,

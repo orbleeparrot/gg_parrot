@@ -97,3 +97,14 @@ def test_news_translation_preflight_busy_returns_safe_retry_status(monkeypatch):
 
     assert client.get("/api/news/market").status_code == 429
     assert client.get("/api/news/coin/ARBUSDT").status_code == 429
+
+
+def test_source_outage_is_retryable_not_an_empty_success(monkeypatch):
+    def fail(*_args, **_kwargs):
+        raise news.NewsFetchError("뉴스 출처에 연결하지 못했습니다. 잠시 후 다시 시도합니다.")
+    monkeypatch.setattr(news, "get_market_news", fail)
+    monkeypatch.setattr(news, "get_coin_news", fail)
+    for path in ("/api/news/market", "/api/news/coin/ICPUSDT"):
+        response = client.get(path)
+        assert response.status_code == 503
+        assert "뉴스 출처" in response.json()["detail"]

@@ -689,6 +689,8 @@ def news_market() -> dict:
         raise HTTPException(status_code=429, detail=str(exc)) from exc
     except news_mod.NewsTranslationError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except news_mod.NewsFetchError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.get("/api/news/coin/{symbol}")
@@ -699,6 +701,8 @@ def news_coin(symbol: str) -> dict:
     except news_mod.NewsTranslationBusyError as exc:
         raise HTTPException(status_code=429, detail=str(exc)) from exc
     except news_mod.NewsTranslationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except news_mod.NewsFetchError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 

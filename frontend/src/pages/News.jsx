@@ -54,14 +54,6 @@ function TranslationPending({ data }) {
   );
 }
 
-function Disclaimer({ text }) {
-  return (
-    <div className="news-briefing-disclaimer t-caption text-slate-700">
-      <b className="text-slate-900">주의 · </b>{text}
-    </div>
-  );
-}
-
 function BriefingSectionHeader({ id, title, description, count, countLabel, pendingLabel }) {
   const tooltipId = `${id}-description`;
 
@@ -124,7 +116,6 @@ function MarketBriefing({ market, loading, error }) {
 
           {/* AI 요약은 페이지 머리(제목·기준일 아래)로 올라갔다. 여기엔 용어 칩만 남긴다. */}
           <TermChips texts={[market.overview, ...(market.items || []).map((item) => item.title)]} />
-          {market.disclaimer ? <Disclaimer text={market.disclaimer} /> : null}
         </>
       ) : null}
     </section>
@@ -152,27 +143,30 @@ function useElementSize(ref) {
 const clampNum = (value, min, max) => Math.min(max, Math.max(min, value));
 function tileFit(width, height) {
   const area = width * height;
-  const scale = clampNum(Math.sqrt(area / 48_000), 0.8, 2); // 220×220 ≈ 1
-  const ticker = Math.round(clampNum(22 * scale, 16, 40));
-  const change = Math.round(clampNum(13 * scale, 11, 20));
+  const scale = clampNum(Math.sqrt(area / 48_000), 0.6, 2); // 220×220 ≈ 1
+  const ticker = Math.round(clampNum(22 * scale, 15, 40));
+  const change = Math.round(clampNum(13 * scale, 10, 20));
   const icon = Math.round(clampNum(ticker * 1.15, 18, 44));
-  const title = Math.round(clampNum(14 * scale, 13, 24));
+  const title = Math.round(clampNum(14 * scale, 11, 24)); // 작은 타일은 기사 글자도 11px 까지 줄인다
   const padX = width >= 160 ? 14 : 8;
   const padY = width >= 160 ? 12 : 8;
   const innerW = width - padX * 2;
   const tiny = width < 64 || height < 40; // 티커만
   const stackedHead = !tiny && innerW < 130; // 순위·로고 한 줄, 그 아래 티커·상승률 — 접지 않고 쌓는다
   const headH = tiny ? 16 : stackedHead ? icon + 4 + ticker + change * 1.2 + 2 : Math.max(icon, ticker + change * 1.2 + 2);
-  // 지표는 한 줄(줄바꿈 없음). 폭이 모자라면 거래대금을 뺀다.
-  const showMetrics = !tiny && innerW >= 120 && height >= headH + padY * 2 + 40;
-  const metricsFull = innerW >= 260; // "현재가 n USDT · 거래대금 n만" 이 한 줄에 들어가는 폭
-  const metricsH = showMetrics ? 30 : 0; // 위 선 10 + 글자 20
   const lineH = title * 1.4;
   const base = 6 + 14; // 제목 아래 간격 + 메타 한 줄
-  const blocks = 1 + (showMetrics ? 1 : 0) + 1;
-  const available = height - padY * 2 - headH - metricsH - 10 * (blocks - 1) - 11 - 4;
+  // 기사가 먼저다 — 두 줄이 들어갈 자리를 확보한 뒤, 남으면 지표(한 줄, 줄바꿈 없음)를 넣는다.
+  const metricsH = 30; // 위 선 10 + 글자 20
+  const roomWithoutMetrics = height - padY * 2 - headH - 10 - 11 - 4;
+  const newsPossible = !tiny && innerW >= 80 && Math.floor((roomWithoutMetrics - base) / lineH) >= 2;
+  const showMetrics = !tiny && innerW >= 120 && (newsPossible
+    ? roomWithoutMetrics - (2 * lineH + base) >= metricsH + 10
+    : height >= headH + padY * 2 + 40);
+  const metricsFull = innerW >= 260; // "현재가 n USDT · 거래대금 n만" 이 한 줄에 들어가는 폭
+  const available = roomWithoutMetrics - (showMetrics ? metricsH + 10 : 0);
   const linesFit = Math.floor((available - base) / lineH);
-  const showNews = !tiny && innerW >= 96 && linesFit >= 2;
+  const showNews = newsPossible && linesFit >= 2;
   const lines = showNews ? clampNum(linesFit, 2, 6) : 0;
   return { ticker, change, icon, title, lines, showNews, showMetrics, metricsFull, padX, padY, tiny, stackedHead };
 }
@@ -403,9 +397,6 @@ export default function News() {
         title="오늘의 코인동향"
         meta={market?.as_of ? <>기준 <span className="num">{market.as_of}</span> · KST</> : null}
         description={summary ? undefined : "시장·규제와 활발히 움직이는 코인을 두 개의 브리핑으로 나눠 읽어요."}
-        note={summary
-          ? "AI가 오늘 헤드라인만 근거로 쓴 요약이에요. 경주마 선정과 뉴스는 참고용이며 투자 권유가 아니에요."
-          : "경주마 선정과 뉴스는 참고용이며 투자 권유가 아니에요."}
       >
         {summary ? (
           <div className="page-head-lead">
@@ -416,6 +407,12 @@ export default function News() {
           </div>
         ) : null}
       </PageHeader>
+      {/* 고지는 요약 바로 뒤가 아니라 왼쪽 열의 맨 아래 — 오른쪽 열 바닥과 줄을 맞춘다. */}
+      <p className="news-top-note">
+        {summary
+          ? "AI가 오늘 헤드라인만 근거로 쓴 요약이에요. 경주마 선정과 뉴스는 참고용이며 투자 권유가 아니에요."
+          : "경주마 선정과 뉴스는 참고용이며 투자 권유가 아니에요."}
+      </p>
       </div>
       <MarketBriefing market={market} loading={marketLoading} error={marketError} />
       </div>

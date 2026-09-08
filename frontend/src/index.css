@@ -5055,8 +5055,19 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 
 /* 위 줄 — 왼쪽 제목·기준일·AI 요약(PageHeader), 오른쪽 시장·규제 헤드라인. 넓은 화면에서 2단. */
 .news-top { display: grid; grid-template-columns: minmax(0, 1fr); }
-.news-top-copy { min-width: 0; }
+.news-top-copy { min-width: 0; display: flex; flex-direction: column; }
+.news-top .page-head { margin-bottom: 0; }
+/* 고지 — 왼쪽 열의 맨 아래. 넓은 화면에서는 오른쪽 열 바닥과 줄이 맞는다. */
+.news-top-note {
+  margin: auto 0 0;
+  padding-top: 28px;
+  color: rgb(var(--c-slate-500));
+  font-size: 13px;
+  line-height: 1.5;
+  font-weight: 600;
+}
 .news-top .news-briefing-section.is-market {
+  margin-top: 28px;
   padding-top: 24px;
   border-top: 1px solid rgb(var(--c-slate-300));
 }
@@ -5064,16 +5075,19 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   .news-top {
     grid-template-columns: minmax(0, 11fr) minmax(0, 10fr);
     column-gap: 36px;
-    align-items: start;
+    align-items: stretch;
   }
-  .news-top .page-head { margin-bottom: 28px; }
   .news-top .news-briefing-section.is-market {
-    padding-top: 0;
+    /* 섹션 제목의 세로 중심을 페이지 제목(아이브로 26px 아래, 44px×1.08 한 줄)의 중심에 맞춘다. 섹션 머리 76px 의 중심은 38px. */
+    margin-top: 0;
+    padding-top: calc(26px + clamp(30px, 22px + 1.6vw, 44px) * 0.54 - 38px);
     padding-left: 36px;
     border-top: 0;
     border-left: 1px solid rgb(var(--c-slate-300));
   }
 }
+/* 섹션 머리와 본문 사이 — 캐러셀·트리맵 모두 같은 간격. */
+.news-carousel { margin-top: 16px; }
 
 .news-briefing-grid {
   border-top: 1px solid rgb(var(--c-slate-300));
@@ -5241,7 +5255,7 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 .news-racer-map {
   position: relative;
   /* 타일 사이 8px 간격은 JSX 에서 calc 로 뺀다. 바깥 모서리가 맞도록 -4px 로 당긴다. */
-  margin: -4px;
+  margin: 16px -4px -4px;
   width: calc(100% + 8px);
   height: clamp(460px, 44vw, 680px);
   container: racer-map / size;

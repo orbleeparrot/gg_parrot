@@ -56,7 +56,7 @@ _COIN_CACHE_SECONDS = max(60, int(os.environ.get("COIN_NEWS_CACHE_SECONDS", "300
 _COINDESK_DISCOVERY_MAX_STALE_SECONDS = 6 * 60 * 60
 _OPENEDEN_CACHE_SECONDS = 60 * 60
 _OPENEDEN_MAX_AGE_DAYS = 30
-_TITLE_TRANSLATION_PROMPT_VERSION = "coin-news-title-ko-v6"
+_TITLE_TRANSLATION_PROMPT_VERSION = "coin-news-title-ko-v7"
 _TITLE_TRANSLATION_BATCH_SIZE = 10
 _TITLE_TRANSLATION_RETRY_SECONDS = 300
 _TITLE_TRANSLATION_MAX_TOKENS = max(
@@ -2105,6 +2105,7 @@ def _translation_protected_upper_tokens(value: str) -> tuple[str, ...]:
         )
         if (
             token in _TITLE_TRANSLATION_UPPER_TERMS
+            or (token.endswith("USDT") and token[:-4] in _COIN_ALIASES)
             or is_identifier
             or has_asset_context
             or is_short_entity
@@ -2234,6 +2235,43 @@ def _translation_number_text(value: str) -> str:
     )
 
 
+def _translation_time_unit_facts(value: str) -> list[tuple[int, int, str, str]]:
+    """Preserve chart/duration units without turning monetary m into minutes."""
+    facts = []
+    pattern = (
+        r"(?<![A-Za-z0-9$€£₩])(?P<amount>[+-]?\d+(?:\.\d+)?)(?:\s*-\s*|\s*)"
+        r"(?P<unit>(?i:minutes?|mins?|hours?)|[hH]|m|시간|분(?!기|의\s*\d))"
+        r"(?![A-Za-z0-9])"
+    )
+    for match in re.finditer(pattern, value):
+        raw_unit = match.group("unit")
+        unit = "hour" if raw_unit.casefold() in {"h", "hour", "hours", "시간"} else "minute"
+        if raw_unit == "m":
+            before, after = value[max(0, match.start() - 48):match.start()], value[match.end():match.end() + 48]
+            monetary = bool(
+                re.search(r"(?:[$€£₩]|\b(?:USD|EUR|GBP|KRW|JPY|CNY))\s*$", before, re.IGNORECASE)
+                or re.match(r"\s*(?:USD|EUR|GBP|KRW|JPY|CNY|dollars?|euros?|달러|원)(?![A-Za-z0-9])", after, re.IGNORECASE)
+                or re.search(r"\b(?:volume|funding|raised?|raises|revenue|valuation|supply|holders|tokens|market\s*cap)\s*[:=]?\s*$", before, re.IGNORECASE)
+                or re.match(r"\s*(?:funding|volume|revenue|valuation|tokens|holders|in\s+funding)\b", after, re.IGNORECASE)
+                or re.search(r"(?:거래량|조달|시가총액)\s*[:=]?\s*$", before)
+            )
+            if monetary:
+                continue  # The ordinary number parser retains the million multiplier.
+            ticker = re.search(r"(?:\$)?([A-Z][A-Z0-9]*(?:/USDT)?)\s+$", before)
+            base = (ticker.group(1).removesuffix("/USDT").removesuffix("USDT") if ticker else "")
+            clear_timeframe = bool(
+                (base in _COIN_ALIASES and base not in {"USD", "EUR", "GBP", "KRW", "JPY", "CNY"})
+                or re.search(r"\b(?:chart|charts|timeframe|timeframes|candles?|candlesticks?|volatility)\b|波动|波動|图表|圖表|K线|K線|차트|분봉|변동", before + after, re.IGNORECASE)
+                or re.search(r"\b(?:in|over|within|during|past|last)\s*$", before, re.IGNORECASE)
+            )
+            # A bare lowercase m can also mean million or metres. Do not guess:
+            # ambiguous cases must keep the same notation in the translation.
+            unit = "minute" if clear_timeframe else "literal:m"
+        amount = format(Decimal(match.group("amount")).normalize(), "f")
+        facts.append((match.start(), match.end(), amount, unit))
+    return facts
+
+
 def _translation_fact_tokens(
     value: str,
     *,
@@ -2249,8 +2287,12 @@ def _translation_fact_tokens(
         "BILLION": Decimal(1_000_000_000),
         "TRILLION": Decimal(10**12),
     }
-    numbers = []
-    for match in _NUMBER_TOKEN.finditer(_translation_number_text(value)):
+    number_text = _translation_number_text(value)
+    time_units = _translation_time_unit_facts(number_text)
+    numbers = [(amount, unit) for _start, _end, amount, unit in time_units]
+    for match in _NUMBER_TOKEN.finditer(number_text):
+        if any(start < match.end() and match.start() < end for start, end, _amount, _unit in time_units):
+            continue
         suffix = str(match.group("suffix") or "")
         try:
             amount = _number_body_amount(match.group("body"))
@@ -2528,6 +2570,10 @@ def _request_korean_title_translations(titles: list[str], *, claim_token: str = 
         "숫자·부호·%·"
         "통화·K/M/B 표기를 원문 문자열 그대로 복사해. "
         "protected_numbers는 천·백만 단위와 언어별 숫자 표기를 해석한 실제 수량이야. "
+        "unit이 minute이면 분·분봉, hour이면 시간·시간봉이며 숫자와 시간 단위를 모두 유지해. "
+        "차트의 15m는 15분(봉)이지 1,500만이 아니고, 1h/4h는 1시간/4시간이야. "
+        "unit이 literal:m이면 뜻이 불확실하므로 숫자와 소문자 m을 그대로 유지해. "
+        "$15m·15M funding·volume 15m처럼 금액·수량 문맥의 m/M은 백만 단위야. "
         "번역한 수량이 각 값과 일치해야 해. required_currencies의 모든 통화도 "
         "빠짐없이 유지해(USD는 달러, EUR는 유로). 특히 $79K를 79K로 쓰면 "
         "달러가 누락되므로 반드시 $79K 또는 7만9000달러로 써. "

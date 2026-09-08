@@ -2,7 +2,7 @@ import { memo, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api.js";
 import useNewsBriefings from "../hooks/useNewsBriefings.js";
-import { communityPostIdentity, hasPendingTranslation, historicalNewsLabel, newsPublishedLabel, newsSourceLabel } from "../lib/newsBriefings.js";
+import { communityPostIdentity, communitySummaryPresentation, hasPendingTranslation, historicalNewsLabel, newsPublishedLabel, newsSourceLabel } from "../lib/newsBriefings.js";
 import CoinIcon from "../components/CoinIcon.jsx";
 import NewsBriefingReader from "../components/NewsBriefingReader.jsx";
 import { AnnotatedText, TermChips } from "../components/NewsTerms.jsx";
@@ -94,7 +94,7 @@ function MarketBriefing({ market, loading, error }) {
       title: item.title,
       source: newsSourceLabel(item),
       time: historicalNewsLabel(item) || newsPublishedLabel(item),
-      community: item.content_type === "community" ? { author: item.author, source: item.source } : null,
+      community: item.content_type === "community" ? { author: item.author, source: item.source, summary: communitySummaryPresentation(item) } : null,
       url: item.url,
     })),
     [market],
@@ -162,7 +162,7 @@ const RacerNewsBriefing = memo(function RacerNewsBriefing({ coin, rank, newsStat
       rowLabel: item.is_historical
         ? `${historicalNewsLabel(item)} · ${newsSourceLabel(item)}` : undefined,
       time: historicalNewsLabel(item) || newsPublishedLabel(item),
-      community: item.content_type === "community" ? { author: item.author, source: item.source } : null,
+      community: item.content_type === "community" ? { author: item.author, source: item.source, summary: communitySummaryPresentation(item) } : null,
       url: item.url,
     })),
     [data],

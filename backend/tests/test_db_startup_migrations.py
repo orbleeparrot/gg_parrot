@@ -17,7 +17,7 @@ def current_schema():
     for table, names in db._PG_BIGINT_COLUMNS.items():
         columns.update({(table, name): "bigint" for name in names})
     return {
-        "tables": {table.name: table.name == "newstitletranslation"
+        "tables": {table.name: table.name in db._PG_PRIVATE_CACHE_TABLES
                    for table in db.SQLModel.metadata.tables.values()},
         "columns": columns,
         "indexes": set(db._PG_INDEXES),
@@ -69,7 +69,7 @@ class Connection:
         if "FROM pg_indexes" in statement:
             return [(name,) for name in self.state["indexes"]]
         if "aclexplode" in statement:
-            return [(role,) for role in self.state["grants"]]
+            return list(self.state["grants"])
         return []
 
     @property
@@ -123,13 +123,13 @@ def test_catalog_reader_accepts_real_sqlalchemy_cursor_results():
                     if "pg_indexes" in statement:
                         return connection.exec_driver_sql("SELECT 'ix_newstitletranslation_claimed_ms'")
                     assert "aclexplode" in statement
-                    return connection.exec_driver_sql("SELECT 'PUBLIC'")
+                    return connection.exec_driver_sql("SELECT 'newstitletranslation', 'PUBLIC'")
 
             assert db._pg_schema_state(CatalogConnection()) == {
                 "tables": {"newstitletranslation": 1},
                 "columns": {("newstitletranslation", "claimed_ms"): "bigint"},
                 "indexes": {"ix_newstitletranslation_claimed_ms"},
-                "grants": {"PUBLIC"},
+                "grants": {("newstitletranslation", "PUBLIC")},
             }
     finally:
         engine.dispose()
@@ -203,7 +203,7 @@ def test_schema_creation_uses_same_locked_transaction_before_security(monkeypatc
         created.append(bind)
         bind.state = current_schema()
         bind.state["tables"]["newstitletranslation"] = False
-        bind.state["grants"] = {"PUBLIC", "anon", "authenticated"}
+        bind.state["grants"] = {("newstitletranslation", role) for role in ("PUBLIC", "anon", "authenticated")}
 
     monkeypatch.setattr(db.SQLModel.metadata, "create_all", create_all)
     db.init_db()
@@ -220,7 +220,7 @@ def test_schema_creation_uses_same_locked_transaction_before_security(monkeypatc
 def test_only_missing_index_and_remaining_grant_are_changed(monkeypatch):
     state = current_schema()
     state["indexes"].remove("ix_runsession_active_heartbeat")
-    state["grants"] = {"authenticated"}
+    state["grants"] = {("newstitletranslation", "authenticated")}
     connection = Connection(state)
     wire(monkeypatch, connection)
     db.init_db()
@@ -238,4 +238,39 @@ def test_existing_integer_timestamps_upgrade_without_readding_columns(monkeypatc
     db.init_db()
     assert connection.ddl == [
         "ALTER TABLE tickernewsstate ALTER COLUMN latest_observed_ms TYPE BIGINT USING latest_observed_ms::bigint"
+    ]
+
+
+def test_community_summary_security_changes_only_its_own_permissions(monkeypatch):
+    state = current_schema()
+    state["tables"]["communitypostsummary"] = False
+    state["grants"] = {("communitypostsummary", role) for role in ("PUBLIC", "anon", "authenticated")}
+    connection = Connection(state)
+    wire(monkeypatch, connection)
+    db.init_db()
+    assert connection.ddl == [
+        "ALTER TABLE communitypostsummary ENABLE ROW LEVEL SECURITY",
+        "REVOKE ALL PRIVILEGES ON TABLE communitypostsummary FROM PUBLIC",
+        "REVOKE ALL PRIVILEGES ON TABLE communitypostsummary FROM anon",
+        "REVOKE ALL PRIVILEGES ON TABLE communitypostsummary FROM authenticated",
+    ]
+
+
+def test_new_community_cache_creation_and_security_are_one_locked_transaction(monkeypatch):
+    state = current_schema()
+    state["tables"].pop("communitypostsummary")
+    connection = Connection(state)
+    wire(monkeypatch, connection)
+
+    def create_all(bind):
+        assert any("pg_advisory_xact_lock" in statement for statement in bind.statements)
+        bind.state["tables"]["communitypostsummary"] = False
+        bind.state["grants"] = {("communitypostsummary", "anon")}
+
+    monkeypatch.setattr(db.SQLModel.metadata, "create_all", create_all)
+    db.init_db()
+    assert connection.committed
+    assert connection.ddl == [
+        "ALTER TABLE communitypostsummary ENABLE ROW LEVEL SECURITY",
+        "REVOKE ALL PRIVILEGES ON TABLE communitypostsummary FROM anon",
     ]

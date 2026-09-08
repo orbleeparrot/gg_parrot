@@ -1,7 +1,8 @@
-"""Public community metadata from the request made by Square's Latest tab.
+"""Public community posts from Square's Latest tab and public article detail.
 
 This is a website endpoint, not Binance's authenticated trading API. No account,
-cookies, full post bodies, or private chat data are needed or persisted.
+cookies, or private chat data are used. Bounded plain bodies stay internal for
+summarization; public response serialization must remove them.
 """
 from __future__ import annotations
 
@@ -9,6 +10,7 @@ from collections import Counter
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
+import hashlib
 import html
 import json
 import math
@@ -23,9 +25,13 @@ import httpx
 from .http_runtime import SingleFlightGroup, get_http_client
 
 _ENDPOINT = "https://www.binance.com/bapi/composite/v4/friendly/pgc/content/queryByHashtag"
-_PREFIX = "binance-square-latest-v1:"
-_COOLDOWN = _PREFIX + "cooldown"
+_DETAIL_ENDPOINT = "https://www.binance.com/bapi/composite/v3/friendly/pgc/special/content/detail/"
+_PREFIX = "binance-square-latest-v2:"
+# An upgrade must not discard an upstream's existing access/rate-limit cooldown.
+_COOLDOWN = "binance-square-latest-v1:cooldown"
 _MAX_RESPONSE_BYTES = 2_000_000
+_MAX_BODY_CHARACTERS = 20_000
+_MAX_BODY_JSON_BYTES = 20_000
 _cache: dict[str, dict] = {}
 _lock = threading.Lock()
 _flights = SingleFlightGroup()
@@ -76,6 +82,30 @@ def _plain(value):
     text = html.unescape(re.sub(r"<[^>]*>", " ", text))
     text = re.sub(r"\{(?:future|spot)\}\([^)]*\)", " ", text)
     return text.strip()
+
+
+def _body_fields(value, *, status=None):
+    text = _plain(value)
+    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)
+    text = "\n".join(re.sub(r"[^\S\n]+", " ", line).strip() for line in text.splitlines())
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    original_length = len(text)
+    text = text[:_MAX_BODY_CHARACTERS]
+    # Ten posts plus metadata must fit BrowserNewsPageCache's 256 KB row limit,
+    # including non-ASCII characters and JSON-escaped line breaks/quotes.
+    if len(json.dumps(text, ensure_ascii=False).encode("utf-8")) > _MAX_BODY_JSON_BYTES:
+        lower, upper = 0, len(text)
+        while lower < upper:
+            middle = (lower + upper + 1) // 2
+            if len(json.dumps(text[:middle], ensure_ascii=False).encode("utf-8")) <= _MAX_BODY_JSON_BYTES:
+                lower = middle
+            else:
+                upper = middle - 1
+        text = text[:lower].rstrip()
+    return {"community_body": text,
+            "community_body_hash": hashlib.sha256(text.encode("utf-8")).hexdigest() if text else "",
+            "community_body_truncated": len(text) < original_length or not text,
+            "community_body_status": status or ("ready" if text else "missing")}
 
 
 def _substantive_lines(text):
@@ -152,7 +182,7 @@ def parse_posts(rows: list, symbol: str) -> list[dict]:
         if (parsed.scheme != "https" or parsed.netloc != "www.binance.com"
                 or not re.fullmatch(rf"/[a-z]{{2}}(?:-[A-Za-z]{{2,4}})?/square/post/{identifier}", parsed.path)):
             continue
-        content = _plain(raw.get("content"))[:20_000]
+        content = _plain(raw.get("content"))[:_MAX_BODY_CHARACTERS]
         title = _headline(raw, content)
         meaningful = "\n".join(_substantive_lines(_plain(raw.get("title")) + "\n" + content))
         if not title or not re.search(rf"(?<![A-Za-z0-9]){re.escape(asset)}(?:USDT|USDC)?(?![A-Za-z0-9])", meaningful, re.I):
@@ -165,7 +195,10 @@ def parse_posts(rows: list, symbol: str) -> list[dict]:
                 "url": f"https://www.binance.com/en/square/post/{identifier}", "published": published,
                 "published_display": datetime.fromtimestamp(stamp, timezone(timedelta(hours=9))).strftime("%Y.%m.%d %H:%M"),
                 "feed_source": "binance_square_public_json", "source_page": _page(asset),
-                "categories": [asset], "language": str(raw.get("detectedLanguage") or "")[:20]}
+                "categories": [asset], "language": str(raw.get("detectedLanguage") or "")[:20],
+                # Short-post content equals detail.bodyTextOnly. Article content
+                # may be absent or a preview; only its detail is a trusted body.
+                **_body_fields(raw.get("content") if raw.get("contentType") == 1 else "")}
         if within_window(item):
             candidates.append(item)
     selected, ids, titles, authors = [], set(), set(), Counter()
@@ -220,12 +253,11 @@ def _retry_seconds(response):
     return max(300, min(86400, math.ceil(delay))) if math.isfinite(delay) else 300
 
 
-def _read_page(symbol, index, deadline):
+def _read_json(url, deadline, *, params=None):
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         raise TimeoutError("request_budget_exhausted")
-    with get_http_client().stream("GET", _ENDPOINT,
-            params={"hashtag": f"#{symbol.lower()}", "pageIndex": index, "pageSize": 20, "orderBy": "LATEST"},
+    with get_http_client().stream("GET", url, params=params,
             headers={"Accept": "application/json"}, timeout=min(3.0, remaining), follow_redirects=False) as response:
         if response.status_code != 200:
             return response, None
@@ -239,9 +271,108 @@ def _read_page(symbol, index, deadline):
             chunks.append(chunk)
         payload = json.loads(b"".join(chunks))
     if (not isinstance(payload, dict) or payload.get("success") is not True or payload.get("code") != "000000"
-            or not isinstance(payload.get("data"), dict) or not isinstance(payload["data"].get("feedData"), list)):
+            or not isinstance(payload.get("data"), dict)):
         raise ValueError("invalid_response")
-    return response, payload["data"]["feedData"]
+    return response, payload["data"]
+
+
+def _read_page(symbol, index, deadline):
+    response, data = _read_json(_ENDPOINT, deadline, params={
+        "hashtag": f"#{symbol.lower()}", "pageIndex": index, "pageSize": 20, "orderBy": "LATEST"})
+    if data is None:
+        return response, None
+    if not isinstance(data.get("feedData"), list):
+        raise ValueError("invalid_response")
+    return response, data["feedData"]
+
+
+def _fetch_body(identifier, symbol, deadline):
+    key = _PREFIX + "body:" + identifier
+
+    def load():
+        saved = _load([key, _COOLDOWN])
+        hit = saved.get(key) or {}
+        previous = hit.get("result") or {}
+        if hit.get("expires_at", 0) > time.time() and isinstance(previous.get("body"), dict):
+            result = deepcopy(previous)
+            result["source"].update(cached=True, attempted=False)
+            return result
+        cooldown = saved.get(_COOLDOWN) or {}
+        if cooldown.get("expires_at", 0) > time.time():
+            if previous.get("body", {}).get("community_body_status") == "ready":
+                return {**deepcopy(previous), "source": {
+                    "attempted": False, "error": "detail_cooldown", "stale": True}}
+            return {"body": _body_fields("", status="error"), "source": {
+                "attempted": False, "error": "detail_cooldown"}}
+        result = {"body": _body_fields("", status="error"), "source": {"attempted": False},
+                  "last_attempt_ms": previous.get("last_attempt_ms", 0)}
+        ttl = 60
+        try:
+            if time.monotonic() >= deadline:
+                raise TimeoutError("request_budget_exhausted")
+            result["source"]["attempted"] = True
+            result["last_attempt_ms"] = int(time.time() * 1000)
+            response, data = _read_json(_DETAIL_ENDPOINT + identifier, deadline)
+            result["source"]["http_status"] = response.status_code
+            if response.status_code != 200:
+                result["source"]["error"] = "detail_http_error"
+                if response.status_code in {401, 403, 429}:
+                    ttl = _retry_seconds(response)
+                    reason = {401: "authentication_required", 403: "access_denied", 429: "rate_limited"}[response.status_code]
+                    _store(_COOLDOWN, _result(symbol, "error", error=reason,
+                        http_status=response.status_code, retry_at=time.time() + ttl), ttl)
+            elif (str(data.get("id")) != identifier or data.get("contentStatus") != 2
+                    or data.get("contentType") not in {1, 2}):
+                raise ValueError("invalid_detail")
+            else:
+                result["body"] = _body_fields(data.get("bodyTextOnly"))
+                if result["body"]["community_body_status"] == "ready":
+                    ttl = configuration()["cache_seconds"]
+        except (httpx.HTTPError, TimeoutError, ValueError) as exc:
+            result["source"]["error"] = ("detail_timeout" if isinstance(exc, (httpx.TimeoutException, TimeoutError))
+                                          else "invalid_detail" if isinstance(exc, ValueError) else "detail_failed")
+        if result["body"]["community_body_status"] != "ready" and previous.get("body", {}).get("community_body_status") == "ready":
+            result["body"] = deepcopy(previous["body"])
+            result["source"]["stale"] = True
+        _store(key, result, ttl)
+        return result
+
+    # A different ticker may already be loading this body. Do not wait on its
+    # independent deadline and overrun this collection's six-second budget.
+    pending = {"body": _body_fields("", status="error"),
+               "source": {"attempted": False, "error": "detail_in_flight"}}
+    result, state = _flights.run(key, load, stale_value=pending)
+    result = deepcopy(result)
+    if state != "loaded":
+        result["source"].update(cached=True, attempted=False)
+    return result
+
+
+def _fill_bodies(result, symbol, deadline):
+    items = result["items"]
+    # Refresh the least recently attempted detail first, including expired
+    # successes. Otherwise a six-second budget keeps refreshing the first two
+    # articles forever while edited bodies later in the list stay stale.
+    missing = [item for item in items if item.get("community_body_status") != "ready"]
+    keys = [_PREFIX + "body:" + item["community_post_id"] for item in missing]
+    saved = _load(keys) if keys else {}
+    missing.sort(key=lambda item: saved.get(_PREFIX + "body:" + item["community_post_id"], {})
+                 .get("result", {}).get("last_attempt_ms", 0))
+    for item in missing:
+        body = _fetch_body(item["community_post_id"], symbol, deadline)
+        item.update(body["body"])
+        if body["source"].get("attempted"):
+            result["source"]["details_fetched"] = result["source"].get("details_fetched", 0) + 1
+        if body["source"].get("error"):
+            result["source"].setdefault("detail_error", body["source"]["error"])
+        if body["source"].get("stale"):
+            result["source"]["stale"] = True
+        if body["source"].get("http_status"):
+            result["source"]["detail_http_status"] = body["source"]["http_status"]
+    result["source"]["body_pending_count"] = sum(item.get("community_body_status") != "ready" for item in items)
+    result["source"]["body_truncated_count"] = sum(bool(item.get("community_body_truncated")) for item in items)
+    if result["source"]["body_pending_count"] and result["source"]["status"] == "ready":
+        result["source"]["status"] = "partial"
 
 
 def fetch_posts(symbol: str) -> dict:
@@ -300,6 +431,9 @@ def fetch_posts(symbol: str) -> dict:
                 result["source"]["status"] = "partial"
         else:
             result["source"]["status"] = "ready" if result["items"] else "empty"
+        _fill_bodies(result, asset, deadline)
+        if result["source"].get("body_pending_count"):
+            ttl = min(ttl, 60)
         result["source"].update(fetched_count=len(rows), item_count=len(result["items"]),
                                 elapsed_ms=round((time.monotonic() - started) * 1000))
         _store(key, result, ttl)

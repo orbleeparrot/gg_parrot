@@ -32,10 +32,38 @@ def _localize_collected_payload(payload: dict, repo, now_ms=None) -> dict:
         logging.getLogger(__name__).warning("Ticker title translation pending (%s); retaining raw articles for retry",
                                            type(exc).__name__)
     ready = {_article_identity(item): item for item in localized}
-    return {**payload, "items": [ready.get(_article_identity(item), item) for item in items],
+    merged = [{**item, **ready.get(_article_identity(item), {})} for item in items]
+    metadata = {}
+    if any(classifier.is_community_item(item) for item in merged):
+        try:
+            from ... import community_summaries
+            enriched, metadata = community_summaries.enrich_items(merged, wait=True)
+            by_identity = {_article_identity(item): item for item in enriched}
+            merged = [{**item, **by_identity.get(_article_identity(item), {})} for item in merged]
+        except Exception as exc:
+            logging.getLogger(__name__).warning(
+                "Community body summaries pending (%s); retaining raw posts for retry", type(exc).__name__)
+    result = {**payload, "items": merged,
             "translation": {"status": "partial" if len(localized) < len(items) else "ready",
                             "pending_count": max(0, len(items) - len(localized)),
                             "retry_after_seconds": 30}}
+    result["community_summaries"] = community_progress({"items": merged, "community_summaries": metadata})["community_summaries"]
+    return result
+
+
+def community_progress(payload: dict) -> dict:
+    """Safe counters for collector/Prefect logs; never include raw post bodies."""
+    posts = [item for item in payload.get("items") or [] if classifier.is_community_item(item)]
+    bodies = Counter(str(item.get("community_body_status") or
+                         ("ready" if item.get("community_body") else "missing")) for item in posts)
+    summaries = Counter(str(item.get("community_summary_status") or
+                            ("pending" if item.get("community_body") else "unavailable")) for item in posts)
+    return {"community_bodies": {status: bodies[status] for status in ("ready", "missing", "error")},
+            "community_summaries": {
+                "status": "partial" if summaries["pending"] else "ready",
+                "ready_count": summaries["ready"], "pending_count": summaries["pending"],
+                "unavailable_count": summaries["unavailable"], "retry_after_seconds": 30,
+                **dict(payload.get("community_summaries") or {})}}
 
 
 def _article_identity(item: dict) -> tuple[str, str, str]:
@@ -57,13 +85,16 @@ def analysis_fingerprint(asset_symbol: str, items: list[dict]) -> str:
                 "excerpt": str(item.get("excerpt") or "").strip(),
                 **({"content_type": "community",
                     "community_post_id": str(item.get("community_post_id") or ""),
-                    "url": str(item.get("url") or "").strip()}
+                    "url": str(item.get("url") or "").strip(),
+                    **({"community_body_hash": str(item["community_body_hash"]).strip()}
+                       if str(item.get("community_body_hash") or "").strip() else {})}
                    if classifier.is_community_item(item) else {}),
             }
             for item in items
         ),
         key=lambda item: (item["title"].casefold(), item["source"].casefold(),
-                          item.get("content_type", ""), item.get("community_post_id", ""), item.get("url", "")),
+                          item.get("content_type", ""), item.get("community_post_id", ""), item.get("url", ""),
+                          item.get("community_body_hash", "")),
     )
     material = {
         "asset_symbol": news_mod.canonical_asset_symbol(asset_symbol),
@@ -190,6 +221,7 @@ def collect_payload(
     # must not prevent an earlier unfinished translation from being retried.
     if localize:
         news_payload = _localize_collected_payload(news_payload, repo, now_ms)
+    progress = community_progress(news_payload)
     claim = repo.claim_snapshot(
         asset_symbol=asset,
         snapshot_key=snapshot_key,
@@ -205,6 +237,7 @@ def collect_payload(
             "snapshot_key": snapshot_key,
             "status": claim.status,
             "used_ai_budget": False,
+            **progress,
         }
 
     claimed_payload = getattr(claim, "news_payload", None) or news_payload
@@ -212,7 +245,8 @@ def collect_payload(
         translated = {_article_identity(item): item for item in news_payload.get("items") or []}
         claimed_payload = {**claimed_payload,
             "items": [translated.get(_article_identity(item), item) for item in claimed_payload.get("items") or []],
-            "translation": dict(news_payload.get("translation") or {})}
+            "translation": dict(news_payload.get("translation") or {}),
+            "community_summaries": dict(news_payload.get("community_summaries") or {})}
     claimed_items = list(claimed_payload.get("items") or [])
     coin_name = str(claimed_payload.get("coin_name") or asset)
     reused_analysis = _reuse_editorial_analysis(asset, claimed_items, snapshot_key, coin_name, repo)
@@ -241,6 +275,7 @@ def collect_payload(
             "status": "reused",
             "budget_status": "daily_limit",
             "used_ai_budget": False,
+            **progress,
         }
 
     try:
@@ -277,6 +312,7 @@ def collect_payload(
             "snapshot_key": snapshot_key,
             "status": "superseded",
             "used_ai_budget": reserved_ai,
+            **progress,
         }
     return {
         "asset_symbol": asset,
@@ -285,6 +321,7 @@ def collect_payload(
         "analysis_status": analysis.get("analysis_status"),
         "editorial_analysis_reused": reused_analysis is not None,
         "used_ai_budget": reserved_ai,
+        **progress,
     }
 
 
@@ -304,11 +341,13 @@ def publish_initial_payload(symbol: str, payload: dict, *, repo=None, now_ms=Non
     if stored and usable and not news_mod._coin_snapshot_is_stale(stored):
         incoming_community = [item for item in payload.get("items") or []
                               if classifier.is_community_item(item)]
-        incoming_ids = {str(item.get("community_post_id") or item.get("url") or "")
-                        for item in incoming_community} - {""}
-        stored_ids = {str(item.get("community_post_id") or item.get("url") or "")
+        incoming_ids = {(str(item.get("community_post_id") or item.get("url") or ""),
+                         str(item.get("community_body_hash") or ""))
+                        for item in incoming_community}
+        stored_ids = {(str(item.get("community_post_id") or item.get("url") or ""),
+                       str(item.get("community_body_hash") or ""))
                       for item in stored.get("news_payload", {}).get("items", [])
-                      if classifier.is_community_item(item)} - {""}
+                      if classifier.is_community_item(item)}
         if incoming_ids and incoming_ids != stored_ids:
             # Fast community updates must not wait for the browser. Preserve the
             # existing editorial set here so its paid analysis remains reusable;
@@ -317,12 +356,14 @@ def publish_initial_payload(symbol: str, payload: dict, *, repo=None, now_ms=Non
                        "items": news_mod._sort_news_items_newest_first(
                            [item for item in usable if not classifier.is_community_item(item)]
                            + incoming_community)}
+            initial["community_summaries"] = community_progress({"items": initial["items"]})["community_summaries"]
             return collect_payload(symbol, initial, repo=repo, allow_ai=False,
                                    localize=False, now_ms=now_ms)
         # Do not replace an existing complete browser/AI snapshot with a
         # temporary RSS-only view on every refresh. A stale or filtered-out
         # snapshot must not hold the first fresh headlines behind browser I/O.
-        return {"asset_symbol": symbol, "status": "reused", "used_ai_budget": False}
+        return {"asset_symbol": symbol, "status": "reused", "used_ai_budget": False,
+                **community_progress(stored.get("news_payload") or {})}
     return collect_payload(symbol, payload, repo=repo, allow_ai=False,
                            localize=False, now_ms=now_ms)
 
@@ -395,8 +436,19 @@ def summarize_results(results: list[dict], *, removed: int = 0) -> dict:
             1 for item in results if item.get("used_ai_budget")
         ),
         "pruned": removed,
+        "community_bodies": {status: sum(int((item.get("community_bodies") or {}).get(status) or 0)
+                                           for item in results) for status in ("ready", "missing", "error")},
+        "community_summaries": {key: sum(int((item.get("community_summaries") or {}).get(key) or 0)
+                                          for item in results)
+                                for key in ("ready_count", "pending_count", "unavailable_count")},
         "items": results,
     }
+
+
+def prune_community_summaries(*, now_ms=None) -> int:
+    """Bounded worker maintenance, never part of an HTTP read or summary claim."""
+    from ... import community_summary_repository
+    return community_summary_repository.prune_summaries(retention_days=30, limit=500, now_ms=now_ms)
 
 
 def run_collection_cycle(
@@ -524,4 +576,6 @@ def run_collection_cycle(
         retention_days=keep_days,
         now_ms=now_ms,
     )
-    return summarize_results(results, removed=removed)
+    summary = summarize_results(results, removed=removed)
+    summary["community_summaries_pruned"] = prune_community_summaries(now_ms=now_ms)
+    return summary

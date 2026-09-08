@@ -89,6 +89,7 @@ with sync_playwright() as playwright:
         "source": "Binance Square", "url": "https://www.binance.com/en/square/post/123456789",
         "title": "CHIP에 대한 커뮤니티 작성자의 의견", "original_title": "A personal CHIP outlook",
         "summary": "Original English community body", "position_effect": "favorable",
+        "community_summary_status": "pending", "community_summary": "Original English summary must stay hidden",
         "is_historical": True, "published": "2022-01-02T01:30:00Z",
     })
     fixture_module.advance(page, fixture, 35)
@@ -100,11 +101,24 @@ with sync_playwright() as playwright:
     expect(page.get_by_text("A personal CHIP outlook", exact=True)).to_have_count(0)
     post = page.locator(".agent-message").filter(has=page.get_by_text("CHIP에 대한 커뮤니티 작성자의 의견", exact=True))
     assert "is-info" in post.get_attribute("class")
-    fixture.news_items[-1]["title"] = "한국어 표현을 수정한 커뮤니티 의견"
-    fixture.news_items[-1]["id"] = "changed-title-hash"
+    expect(post.get_by_text("본문 요약 중", exact=True)).to_have_count(1)
+    expect(page.get_by_text("Original English summary must stay hidden", exact=True)).to_have_count(0)
+    summary = "작성자는 CHIP의 거래량 증가를 관찰했어요. 추가 상승 여부는 확인이 필요하다는 개인 의견이에요."
+    fixture.news_items[-1].update(community_summary_status="ready", community_summary=summary,
+                                 community_summary_partial=True)
     fixture_module.advance(page, fixture, 35)
     assert len(fixture_module.messages(page)) == 4
     assert fixture_module.new_observations(page) == before_community_badge
+    expect(post.get_by_text("본문 일부 요약", exact=True)).to_have_count(1)
+    expect(post.get_by_text(summary, exact=True)).to_have_count(1)
+    expect(page.get_by_text("본문 요약 중", exact=True)).to_have_count(0)
+    fixture.news_items[-1]["title"] = "한국어 표현을 수정한 커뮤니티 의견"
+    fixture.news_items[-1]["id"] = "changed-title-hash"
+    fixture.news_items[-1]["community_summary_partial"] = False
+    fixture_module.advance(page, fixture, 35)
+    assert len(fixture_module.messages(page)) == 4
+    assert fixture_module.new_observations(page) == before_community_badge
+    expect(page.get_by_text("본문 요약", exact=True)).to_have_count(1)
     assert not errors, errors
     page.get_by_role("log", name="에이전트 관측 기록").evaluate("""node => {
         node.style.height = ''; node.style.maxHeight = ''; node.style.minHeight = '';

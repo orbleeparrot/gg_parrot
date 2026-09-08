@@ -7,6 +7,7 @@ import {
 import { advanceActivityTimeline, emptyActivityTimeline } from "../features/agents/activityTimeline.js";
 import { countNewObservations, positionNewsNotice, publicationLabel, publicationTime } from "../features/agents/positionNews/presentation.js";
 import RunResultScreen from "./RunResultScreen.jsx";
+import CommunityBodySummary from "./CommunityBodySummary.jsx";
 const PLAN_LABELS = { free: "FREE", plus: "PLUS", pro: "PRO" };
 const EMPTY_FEATURE_STATES = {};
 const SECOND_MS = 1000;
@@ -288,6 +289,7 @@ export default function AgentActivityStream({
                         ? event.isCommunityPost ? "과거 게시글" : "과거 기사" : ""].filter(Boolean).join(" · ")}
                     </p> : null}
                     <p className="agent-message-primary">{event.title}</p>
+                    <CommunityBodySummary summary={event.communitySummary} />
                     {event.summary ? <p className="agent-message-summary">{event.summary}</p> : null}
                     {event.detail ? <p className="agent-message-detail">{event.detailLabel || "판단 근거"} · {event.detail}</p> : null}
                     <footer>

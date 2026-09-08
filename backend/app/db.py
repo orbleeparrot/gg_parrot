@@ -488,6 +488,23 @@ class NewsTitleTranslation(SQLModel, table=True):
     updated_ms: int = Field(default=0, sa_type=BigInteger, index=True)
 
 
+class CommunityPostSummary(SQLModel, table=True):
+    """One fenced Korean summary per public post body and model/prompt version.
+
+    Body text belongs to the source cache; this table keeps only its hash.
+    """
+
+    summary_key: str = Field(primary_key=True, max_length=64)
+    post_id: str = Field(max_length=30)
+    body_hash: str = Field(max_length=64)
+    prompt_version: str = Field(max_length=160)
+    summary_ko: str = ""
+    processing_status: str = Field(default="pending", index=True)
+    claim_token: str = ""
+    claimed_ms: int = Field(default=0, sa_type=BigInteger, index=True)
+    updated_ms: int = Field(default=0, sa_type=BigInteger, index=True)
+
+
 class DailyChallenge(SQLModel, table=True):
     """One day's AI challenge: the chosen symbol for a KST date (idempotency key)."""
 
@@ -707,6 +724,7 @@ _PG_INDEXES = {
     "ix_newstitletranslation_claimed_ms": ("newstitletranslation", "claimed_ms"),
 }
 _PG_BIGINT_COLUMNS = {
+    "communitypostsummary": ("claimed_ms", "updated_ms"),
     "tickernewssnapshot": (
         "collected_ms", "claimed_ms", "last_observed_ms", "last_observation_seq",
         "next_retry_ms", "completed_ms",
@@ -716,6 +734,7 @@ _PG_BIGINT_COLUMNS = {
         "latest_observation_seq", "latest_observed_ms", "last_attempt_ms", "last_success_ms",
     ),
 }
+_PG_PRIVATE_CACHE_TABLES = ("newstitletranslation", "communitypostsummary")
 _PG_MIGRATION_LOCK = 0x6767706172726F74  # Stable across web/worker processes and deployments.
 _PG_MIGRATION_ATTEMPTS = 3
 
@@ -734,12 +753,12 @@ def _pg_schema_state(conn) -> dict:
     indexes = {row[0] for row in conn.exec_driver_sql(
         "SELECT indexname FROM pg_indexes WHERE schemaname = current_schema()"
     )}
-    grants = {row[0] for row in conn.exec_driver_sql(
-        "SELECT DISTINCT CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE r.rolname END "
+    grants = {(table, role) for table, role in conn.exec_driver_sql(
+        "SELECT DISTINCT c.relname, CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE r.rolname END "
         "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
         "CROSS JOIN LATERAL aclexplode(COALESCE(c.relacl, acldefault('r', c.relowner))) a "
         "LEFT JOIN pg_roles r ON r.oid = a.grantee "
-        "WHERE n.nspname = current_schema() AND c.relname = 'newstitletranslation' "
+        "WHERE n.nspname = current_schema() AND c.relname IN ('newstitletranslation', 'communitypostsummary') "
         "AND (a.grantee = 0 OR r.rolname IN ('anon', 'authenticated'))"
     )}
     return {"tables": tables, "columns": columns, "indexes": indexes, "grants": grants}
@@ -763,12 +782,14 @@ def _pg_migration_statements(state: dict) -> list[str]:
     for name, (table, columns) in _PG_INDEXES.items():
         if table in state["tables"] and name not in state["indexes"]:
             statements.append(f"CREATE INDEX IF NOT EXISTS {name} ON {table} ({columns})")
-    if "newstitletranslation" in state["tables"]:
-        if not state["tables"]["newstitletranslation"]:
-            statements.append("ALTER TABLE newstitletranslation ENABLE ROW LEVEL SECURITY")
+    for table in _PG_PRIVATE_CACHE_TABLES:
+        if table not in state["tables"]:
+            continue
+        if not state["tables"][table]:
+            statements.append(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY")
         for role in ("PUBLIC", "anon", "authenticated"):
-            if role in state["grants"]:
-                statements.append(f"REVOKE ALL PRIVILEGES ON TABLE newstitletranslation FROM {role}")
+            if (table, role) in state["grants"]:
+                statements.append(f"REVOKE ALL PRIVILEGES ON TABLE {table} FROM {role}")
     return statements
 
 

@@ -218,6 +218,44 @@ def test_snapshot_reuse_keeps_sentiment_aligned_with_article_and_translation(db)
     assert pairs == {"Bitcoin approval": "positive", "Bitcoin hacked": "negative"}
 
 
+@pytest.mark.parametrize("analysis_status,expected_claim", [("ready", "reused"), ("rate_limited", "claimed")])
+def test_reused_snapshot_refreshes_body_summaries_by_identity_without_reordering(db, analysis_status, expected_claim):
+    article = {"title": "비트코인 소식", "original_title": "Bitcoin news", "source": "A"}
+    def post(identifier, body_hash):
+        return {"title": f"게시글 {identifier}", "content_type": "community", "source": "Binance Square",
+                "url": f"https://www.binance.com/en/square/post/{identifier}", "community_post_id": identifier,
+                "community_body_hash": body_hash, "community_summary_status": "pending", "community_summary": ""}
+    first, second = post("123", "first-body"), post("456", "second-body")
+    payload = {**_news(), "items": [first, article, second]}
+    claim = repository.claim_snapshot(asset_symbol="BTC", snapshot_key="summary-reuse",
+        news_payload=payload, prompt_version="v1", model="test", retry_incomplete=True, now_ms=1000, db=db)
+    analysis = {"analysis_status": analysis_status, "items": [
+        {"sentiment": "unclear"}, {"sentiment": "positive"}, {"sentiment": "unclear"}]}
+    repository.complete_snapshot(claim.snapshot_id, analysis, claim_token=claim.claim_token, now_ms=2000, db=db)
+    incoming = {**payload, "items": [
+        {**second, "community_summary_status": "ready", "community_summary": "두 번째 본문 요약", "community_summary_partial": True},
+        {**article, "title": "Bitcoin news"},
+        {**first, "community_summary_status": "ready", "community_summary": "첫 번째 본문 요약", "community_summary_partial": False},
+    ]}
+    refreshed = repository.claim_snapshot(asset_symbol="BTC", snapshot_key="summary-reuse",
+        news_payload=incoming, prompt_version="v1", model="test", retry_incomplete=True, now_ms=3000, db=db)
+    assert refreshed.status == expected_claim
+    saved = repository.get_latest_snapshot("BTC", db)
+    assert saved["analysis"] == analysis
+    assert [item["title"] for item in saved["news_payload"]["items"]] == [first["title"], article["title"], second["title"]]
+    assert [item.get("community_summary") for item in saved["news_payload"]["items"]] == ["첫 번째 본문 요약", None, "두 번째 본문 요약"]
+    assert saved["news_payload"]["items"][2]["community_summary_partial"] is True
+    assert len(db.exec(select(TickerNewsSnapshot)).all()) == 1
+
+
+def test_reused_payload_never_attaches_another_body_versions_summary():
+    stored = {"items": [{"content_type": "community", "community_post_id": "123", "community_body_hash": "old",
+                         "community_summary_status": "ready", "community_summary": "기존 본문 요약"}]}
+    incoming = {"items": [{"content_type": "community", "community_post_id": "123", "community_body_hash": "new",
+                           "community_summary_status": "ready", "community_summary": "다른 본문 요약"}]}
+    assert repository._refresh_reused_payload(stored, incoming)["items"] == stored["items"]
+
+
 def test_empty_collection_status_is_readable_without_a_snapshot(db):
     repository.mark_collection_outcome("BTC", "empty", now_ms=1_000, db=db)
     assert repository.get_latest_snapshot("BTC", db) is None

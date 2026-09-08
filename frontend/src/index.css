@@ -5053,9 +5053,148 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   text-wrap: pretty;
 }
 
+/* 위 줄 — 왼쪽 제목·기준일·AI 요약(PageHeader), 오른쪽 시장·규제 헤드라인. 넓은 화면에서 2단. */
+.news-top { display: grid; grid-template-columns: minmax(0, 1fr); }
+.news-top-copy { min-width: 0; }
+.news-top .news-briefing-section.is-market {
+  padding-top: 24px;
+  border-top: 1px solid rgb(var(--c-slate-300));
+}
+@media (min-width: 1100px) {
+  .news-top {
+    grid-template-columns: minmax(0, 11fr) minmax(0, 10fr);
+    column-gap: 36px;
+    align-items: start;
+  }
+  .news-top .page-head { margin-bottom: 28px; }
+  .news-top .news-briefing-section.is-market {
+    padding-top: 0;
+    padding-left: 36px;
+    border-top: 0;
+    border-left: 1px solid rgb(var(--c-slate-300));
+  }
+}
+
 .news-briefing-grid {
   border-top: 1px solid rgb(var(--c-slate-300));
 }
+
+/* 경주마 트리맵 — 한 직사각형을 상승률 비율로 나눈 벤토(Finviz 맵 방식).
+   타일 = 버튼. 농도 tier-1~5 는 상승률의 로그 비율. 밀도 is-xs~is-xl 은 타일 넓이에 따른 정보량. */
+.news-racer-map {
+  position: relative;
+  width: 100%;
+  height: clamp(340px, 38vw, 560px);
+  border-radius: 14px;
+  overflow: hidden;
+  background: rgb(var(--c-slate-200));
+  container: racer-map / size;
+}
+.news-map-tile {
+  position: absolute;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 10px 12px;
+  border: 2px solid rgb(var(--c-surface));
+  border-radius: 0;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  grid-template-rows: max-content max-content max-content;
+  align-content: start;
+  align-items: center;
+  column-gap: 8px;
+  row-gap: 2px;
+  overflow: hidden;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  color: rgb(var(--c-slate-900));
+  background: rgb(var(--c-green-600) / var(--tile-alpha, .3));
+  transition: filter 120ms ease, box-shadow 120ms ease;
+}
+.news-map-tile.tier-0 { --tile-alpha: 0; background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-500)); }
+.news-map-tile.tier-1 { --tile-alpha: .22; }
+.news-map-tile.tier-2 { --tile-alpha: .38; }
+.news-map-tile.tier-3 { --tile-alpha: .56; }
+.news-map-tile.tier-4 { --tile-alpha: .78; color: #fff; }
+.news-map-tile.tier-5 { --tile-alpha: 1; color: #fff; }
+/* 다크의 상승색(#0ecb81)은 밝아서 흰 글자가 묻힌다 — 진한 타일엔 브랜드 잉크(어두운 글자). */
+.dark .news-map-tile.tier-4,
+.dark .news-map-tile.tier-5 { color: rgb(var(--c-brand-ink)); }
+.news-map-tile:hover { filter: brightness(1.08); }
+.news-map-tile:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: -4px; }
+.news-map-tile.is-selected { box-shadow: inset 0 0 0 3px rgb(var(--c-brand)); }
+.news-map-tile.is-selected:focus-visible { outline-offset: -6px; }
+
+.news-map-rank {
+  grid-column: 1;
+  grid-row: 1;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  opacity: .78;
+}
+.news-map-logo { grid-column: 1; grid-row: 2 / span 2; align-self: center; }
+.news-map-ticker {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: end;
+  overflow: hidden;
+  font-size: 24px;
+  line-height: 1;
+  font-weight: 820;
+  letter-spacing: -0.04em;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.news-map-change {
+  grid-column: 2;
+  grid-row: 3;
+  font-size: 14px;
+  line-height: 1.2;
+  font-weight: 750;
+  white-space: nowrap;
+}
+.news-map-price {
+  grid-column: 1 / -1;
+  grid-row: 4;
+  margin-top: 8px;
+  font-size: 13px;
+  font-weight: 650;
+  opacity: .82;
+  white-space: nowrap;
+}
+.news-map-price small { font-size: 10px; font-weight: 700; margin-left: 2px; }
+
+/* 밀도 — 좁아질수록 순위·로고·가격을 순서대로 접는다. */
+.news-map-tile.is-xl .news-map-ticker { font-size: 34px; }
+.news-map-tile.is-xl .news-map-change { font-size: 18px; }
+.news-map-tile.is-lg .news-map-ticker { font-size: 24px; }
+.news-map-tile.is-lg .news-map-price { display: none; }
+.news-map-tile.is-md { padding: 8px 10px; }
+.news-map-tile.is-md .news-map-ticker { font-size: 18px; }
+.news-map-tile.is-md .news-map-change { font-size: 12px; }
+.news-map-tile.is-md .news-map-price,
+.news-map-tile.is-md .news-map-logo { display: none; }
+.news-map-tile.is-md .news-map-ticker { grid-column: 1 / -1; grid-row: 2; }
+.news-map-tile.is-md .news-map-change { grid-column: 1 / -1; grid-row: 3; }
+.news-map-tile.is-sm,
+.news-map-tile.is-xs { padding: 6px 8px; row-gap: 0; }
+.news-map-tile.is-sm .news-map-ticker,
+.news-map-tile.is-xs .news-map-ticker { grid-column: 1 / -1; grid-row: 1; font-size: 14px; }
+.news-map-tile.is-sm .news-map-change,
+.news-map-tile.is-xs .news-map-change { grid-column: 1 / -1; grid-row: 2; font-size: 11px; }
+.news-map-tile.is-sm .news-map-rank,
+.news-map-tile.is-sm .news-map-logo,
+.news-map-tile.is-sm .news-map-price,
+.news-map-tile.is-xs .news-map-rank,
+.news-map-tile.is-xs .news-map-logo,
+.news-map-tile.is-xs .news-map-price,
+.news-map-tile.is-xs .news-map-change { display: none; }
+
+/* 선택한 종목의 브리핑 — 지도 아래 한 장. */
+.news-racer-focus { margin-top: 16px; }
+.news-racer-focus .news-racer-briefing { contain-intrinsic-size: auto 420px; }
 
 .news-briefing-section {
   min-width: 0;
@@ -5802,27 +5941,9 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   }
 }
 
-@media (min-width: 1280px) {
-  .news-briefing-grid {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  }
-
-  .news-briefing-section {
-    padding-right: 18px;
-  }
-
-  .news-briefing-section + .news-briefing-section {
-    margin-top: 0;
-    padding-top: 24px;
-    padding-right: 0;
-    padding-left: 18px;
-    border-top: 0;
-    border-left: 1px solid rgb(var(--c-slate-300));
-  }
-}
-
 @media (max-width: 639px) {
+  .news-racer-map { height: 440px; border-radius: 10px; }
+
   .news-briefing-section-head {
     min-height: 0;
     padding-bottom: 20px;

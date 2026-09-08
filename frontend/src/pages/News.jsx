@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api.js";
 import useNewsBriefings from "../hooks/useNewsBriefings.js";
@@ -8,6 +8,7 @@ import NewsBriefingReader from "../components/NewsBriefingReader.jsx";
 import { AnnotatedText, TermChips } from "../components/NewsTerms.jsx";
 import { PageHeader, Loading, ErrorNote } from "../components/Page.jsx";
 import { splitSummary } from "../lib/summaryText.js";
+import { layoutTreemap, racerWeight } from "../lib/treemap.js";
 
 const COIN_NEWS_CONCURRENCY = 2;
 const RACER_NEWS_ROTATE_MS = 5_000;
@@ -242,26 +243,100 @@ const RacerNewsBriefing = memo(function RacerNewsBriefing({ coin, rank, newsStat
   );
 });
 
+// 컨테이너 크기 — 트리맵은 실제 종횡비로 나눠야 타일이 정사각형에 가깝다.
+function useElementSize(ref) {
+  const [size, setSize] = useState({ width: 0, height: 0 });
+  useEffect(() => {
+    const node = ref.current;
+    if (!node || typeof ResizeObserver === "undefined") return undefined;
+    const observer = new ResizeObserver((entries) => {
+      const box = entries[0]?.contentRect;
+      if (box) setSize({ width: Math.round(box.width), height: Math.round(box.height) });
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [ref]);
+  return size;
+}
+
+// 타일 밀도 — 넓이에 따라 보여줄 정보량을 줄인다(xl: 로고·가격까지, xs: 티커만).
+function tileDensity(width, height) {
+  if (width >= 220 && height >= 150) return "is-xl";
+  if (width >= 150 && height >= 96) return "is-lg";
+  if (width >= 96 && height >= 64) return "is-md";
+  if (width >= 64 && height >= 40) return "is-sm";
+  return "is-xs";
+}
+
+// 색 농도 — 상승률의 로그 비율(최대 대비)을 5단계로. 순위 편차가 커도(4%·112%) 고르게 퍼진다.
+function tileTier(change, maxChange) {
+  if (!(change > 0)) return 0;
+  const t = Math.log1p(change) / Math.log1p(Math.max(maxChange, change, 1));
+  return Math.min(5, Math.max(1, Math.ceil(t * 5)));
+}
+
+// 경주마 트리맵 — 한 직사각형을 상승률 비율로 나눈 벤토. 타일을 누르면 아래 브리핑이 그 코인으로 바뀐다.
+function RacerTreemap({ coins, selected, onSelect }) {
+  const ref = useRef(null);
+  const size = useElementSize(ref);
+  const maxChange = coins.reduce((acc, coin) => Math.max(acc, Number(coin.change_pct) || 0), 0);
+  const rects = useMemo(() => layoutTreemap(
+    coins.map((coin, index) => ({ weight: racerWeight(coin.change_pct), coin, rank: index + 1 })),
+    size.width || 16,
+    size.height || 9,
+  ), [coins, size.width, size.height]);
+
+  return (
+    <div ref={ref} className="news-racer-map" role="list" aria-label="경주마 상승률 지도 — 넓을수록 오늘 많이 오른 종목">
+      {size.width > 0 ? rects.map(({ x, y, width, height, item }) => {
+        const { coin, rank } = item;
+        const base = coinOf(coin.symbol);
+        const change = Number(coin.change_pct) || 0;
+        const tier = tileTier(change, maxChange);
+        const density = tileDensity(width * size.width, height * size.height);
+        const isSelected = selected === coin.symbol;
+        return (
+          <button
+            key={coin.symbol}
+            type="button"
+            role="listitem"
+            className={`news-map-tile ${density} tier-${tier} ${isSelected ? "is-selected" : ""}`}
+            style={{ left: `${x * 100}%`, top: `${y * 100}%`, width: `${width * 100}%`, height: `${height * 100}%` }}
+            aria-pressed={isSelected}
+            aria-label={`${rank}위 ${base} ${change > 0 ? "+" : ""}${change.toFixed(2)}%`}
+            title={`${rank}위 ${base} · ${change > 0 ? "+" : ""}${change.toFixed(2)}%`}
+            onClick={() => onSelect(coin.symbol)}
+          >
+            <span className="news-map-rank num" aria-hidden="true">{String(rank).padStart(2, "0")}</span>
+            <CoinIcon symbol={coin.symbol} size={density === "is-xl" ? 36 : 24} className="news-map-logo" alt="" />
+            <span className="news-map-ticker num">{base}</span>
+            <span className="news-map-change num">{change > 0 ? "+" : ""}{change.toFixed(2)}%</span>
+            <span className="news-map-price num">{formatPrice(coin.last_price)} <small>USDT</small></span>
+          </button>
+        );
+      }) : null}
+    </div>
+  );
+}
+
 function RacerBriefing({ coins, loading, error }) {
   const { newsBySymbol, retry } = useCoinNewsBriefings(coins);
-  const [rotationTick, setRotationTick] = useState(0);
+  const [selected, setSelected] = useState("");
   const termTexts = coins.flatMap((coin) => (
     newsBySymbol[coin.symbol]?.data?.items || []
   ).map((item) => item.title));
 
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      setRotationTick((value) => value + 1);
-    }, RACER_NEWS_ROTATE_MS);
-    return () => window.clearInterval(timer);
-  }, []);
+  // 선택이 없거나 목록에서 사라지면 1위로 되돌린다.
+  const selectedIndex = coins.findIndex((coin) => coin.symbol === selected);
+  const focusIndex = selectedIndex >= 0 ? selectedIndex : 0;
+  const focusCoin = coins[focusIndex] || null;
 
   return (
     <section className="news-briefing-section is-racers" aria-labelledby="racer-briefing-title">
       <BriefingSectionHeader
         id="racer-briefing-title"
         title="경주마 동향"
-        description="거래가 활발한 종목을 두 개씩 비교하고, 모든 카드의 뉴스가 같은 리듬으로 올라와요."
+        description="오늘 많이 오른 종목일수록 넓은 자리를 차지해요. 타일을 누르면 그 종목의 뉴스가 아래에 펼쳐져요."
         count={coins.length}
         countLabel="종목"
         pendingLabel="시장 확인 중"
@@ -276,18 +351,18 @@ function RacerBriefing({ coins, loading, error }) {
 
       {coins.length > 0 ? (
         <>
-          <div className="news-racer-briefing-stack">
-            {coins.map((coin, index) => (
+          <RacerTreemap coins={coins} selected={focusCoin?.symbol} onSelect={setSelected} />
+          {focusCoin ? (
+            <div className="news-racer-focus">
               <RacerNewsBriefing
-                key={coin.symbol}
-                coin={coin}
-                rank={index + 1}
-                newsState={newsBySymbol[coin.symbol]}
+                key={focusCoin.symbol}
+                coin={focusCoin}
+                rank={focusIndex + 1}
+                newsState={newsBySymbol[focusCoin.symbol]}
                 onRetry={retry}
-                rotationTick={rotationTick}
               />
-            ))}
-          </div>
+            </div>
+          ) : null}
           <TermChips texts={termTexts} />
         </>
       ) : null}
@@ -333,6 +408,9 @@ export default function News() {
 
   return (
     <div className="news-briefing-page">
+      {/* 위 줄: 왼쪽은 제목·기준일·AI 요약, 오른쪽은 시장·규제 헤드라인. 아래 줄: 경주마 트리맵. */}
+      <div className="news-top">
+      <div className="news-top-copy">
       {/* AI 요약이 있으면 그날의 내용이 머리 본문이 된다 — 첫 줄은 굵은 리드, 나머지는 본문.
           없으면 예전 설명문으로 돌아간다. */}
       <PageHeader
@@ -353,9 +431,11 @@ export default function News() {
           </div>
         ) : null}
       </PageHeader>
+      </div>
+      <MarketBriefing market={market} loading={marketLoading} error={marketError} />
+      </div>
 
       <div className="news-briefing-grid">
-        <MarketBriefing market={market} loading={marketLoading} error={marketError} />
         <RacerBriefing coins={coins} loading={coinsLoading} error={coinsError} />
       </div>
     </div>

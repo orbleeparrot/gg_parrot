@@ -78,7 +78,8 @@ export function createNewsBriefingQueue({
             record.data = prepareNewsResponse(response);
             record.status = "success";
             record.failures = 0;
-            record.pendingAttempts = hasPendingTranslation(record.data) ? record.pendingAttempts + 1 : 0;
+            record.pendingAttempts = hasPendingTranslation(record.data) || record.data.stale
+              ? record.pendingAttempts + 1 : 0;
             record.dueAt = record.pendingAttempts
               ? now() + retryDelay(record.pendingAttempts, record.data) : null;
           } catch (reason) {

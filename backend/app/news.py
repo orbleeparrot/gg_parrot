@@ -458,6 +458,10 @@ _publisher_rss_cache: dict[str, tuple[list[dict], float]] = {}
 class NewsFetchError(RuntimeError):
     """Raised when every configured RSS source is unavailable."""
 
+    def __init__(self, message: str, *, sources: list[dict] | None = None):
+        super().__init__(message)
+        self.sources = sources or []
+
 
 class NewsTranslationError(RuntimeError):
     """Raised instead of leaking an untranslated English headline to the UI."""
@@ -977,9 +981,27 @@ def _fetch_news(
         items, _state = _rss_refreshes.run(("google", query, locale, limit), load)
         return [dict(item) for item in items]
     except Exception as exc:
+        details = _safe_news_source_error(exc)
+        logger.warning("RSS fetch failed: source=google_news_rss error=%s http_status=%s",
+                       details["error"], details.get("http_status"))
         if strict:
             raise NewsFetchError("Google News RSS 수집에 실패했습니다.") from exc
         return []
+
+
+def _safe_news_source_error(exc: Exception) -> dict:
+    """Record failure type/status without response bodies, URLs or credentials."""
+    cause = exc
+    seen = set()
+    while cause.__cause__ is not None and id(cause) not in seen:
+        seen.add(id(cause))
+        cause = cause.__cause__
+    details = {"error": type(cause).__name__}
+    response = getattr(cause, "response", None)
+    status = getattr(response, "status_code", None)
+    if isinstance(status, int):
+        details["http_status"] = status
+    return details
 
 
 def _combine_coindesk_discovery_items(items_by_source: dict) -> list[dict]:
@@ -2755,10 +2777,7 @@ def get_market_news() -> dict:
     now = time.time()
     hit = _cache.get("market")
     cached = bool(hit and hit[1] == day)
-    raw = deepcopy(hit[0]) if cached else _envelope(
-        _fetch_news(_MARKET_QUERY), overview=None,
-        label="코인 시장·규제 동향", query=_MARKET_QUERY,
-    )
+    raw = deepcopy(hit[0]) if cached else _fetch_public_news_payload()
     result = _localize_news_payload(raw)
     if result.get("overview"):
         result["overview"] = _plain_summary_text(result["overview"]) or result["overview"]
@@ -2830,10 +2849,11 @@ def _coin_news_envelope(
             )
     batches: list[list[dict]] = []
     failures = 0
+    source_errors = []
     candidate_count = 0
     candidate_limit = 50 if len(queries) > 1 else 20
 
-    def fetch_query(query: str, locale: str) -> tuple[list[dict], bool]:
+    def fetch_query(query: str, locale: str) -> tuple[list[dict], dict | None]:
         try:
             candidates = _fetch_news(
                 query,
@@ -2841,9 +2861,9 @@ def _coin_news_envelope(
                 strict=True,
                 locale=locale,
             )
-            return candidates, False
-        except NewsFetchError:
-            return [], True
+            return candidates, None
+        except NewsFetchError as exc:
+            return [], {"locale": locale, **_safe_news_source_error(exc)}
 
     # Live views never widen silently to five years. Historical tools opt in.
     recent_queries = [(q, locale) for q, locale in queries if "when:5y" not in q]
@@ -2860,14 +2880,20 @@ def _coin_news_envelope(
         for candidates, failed in fetched.values():
             if failed:
                 failures += 1
+                source_errors.append(failed)
                 continue
             candidate_count += len(candidates)
             batch = (_relevant_items(candidates, asset_symbol=base,
                 coin_name=name, feed_source="google_news_rss") if relevant_only else candidates)
             batches.append(batch if include_archive else [item for item in batch if _within_live_news_window(item)])
     queries = attempted_queries
+    source = {"name": "google_news_rss", "status": "error" if failures == len(queries) else
+              "partial" if failures else "ready", "fetched_count": candidate_count,
+              "query_count": len(queries), "failed_query_count": failures}
+    if source_errors:
+        source["errors"] = source_errors
     if strict and failures == len(queries):
-        raise NewsFetchError("Google News RSS 수집에 실패했습니다.")
+        raise NewsFetchError("Google News RSS 수집에 실패했습니다.", sources=[source])
     items = _sort_news_items_newest_first(_merge_news_items(*batches))
     if not include_archive:
         items = [item for item in items if _within_live_news_window(item)]
@@ -2882,6 +2908,7 @@ def _coin_news_envelope(
     env["coin_name"] = name
     env["refresh_seconds"] = _COIN_CACHE_SECONDS
     env["candidate_count"] = candidate_count
+    env["sources"] = [{**source, "item_count": len(items)}]
     return env
 
 
@@ -3569,6 +3596,83 @@ def _fetch_shared_publisher_rss(source_name: str, *, strict: bool = True) -> lis
         return []
 
 
+def _public_news_candidates(items: list[dict], *, limit: int) -> list[dict]:
+    current = [item for item in items if _within_live_news_window(item) and _is_news_article_candidate(item)]
+    unique, titles, urls = [], set(), set()
+    for item in _sort_news_items_newest_first(current):
+        title = re.sub(r"\s+", " ", str(item.get("title") or "")).strip().casefold()
+        url = str(item.get("url") or "").split("?")[0].split("#")[0].rstrip("/")
+        if not title or title in titles or (url and url in urls):
+            continue
+        titles.add(title)
+        if url:
+            urls.add(url)
+        unique.append(dict(item))
+        if len(unique) >= limit:
+            break
+    return unique
+
+
+def _fetch_public_news_fallback(asset_symbol: str | None = None) -> dict:
+    """Reuse free shared publisher feeds when public Google discovery is empty."""
+    def fetch(source_name, loader):
+        try:
+            raw = loader()
+            relevant = (_relevant_items(raw, asset_symbol=asset_symbol,
+                         coin_name=_COIN_KO.get(asset_symbol, asset_symbol), feed_source=source_name)
+                        if asset_symbol else raw)
+            items = _public_news_candidates(relevant, limit=_MAX_COIN_ITEMS if asset_symbol else _MAX_ITEMS)
+            return {"items": items, "source": {"name": source_name, "status": "ready",
+                    "fetched_count": len(raw), "item_count": len(items)}}
+        except Exception as exc:
+            details = _safe_news_source_error(exc)
+            logger.warning("RSS fetch failed: source=%s error=%s http_status=%s",
+                           source_name, details["error"], details.get("http_status"))
+            return {"items": [], "source": {"name": source_name, "status": "error",
+                    "fetched_count": 0, "item_count": 0, **details}}
+
+    loaders = {"coindesk_rss": lambda: _fetch_coindesk_news(strict=True),
+               **{name: (lambda name=name: _fetch_shared_publisher_rss(name, strict=True))
+                  for name in _EXTRA_RSS_SOURCES}}
+    results = run_parallel({name: (lambda name=name, loader=loader: fetch(name, loader))
+                            for name, loader in loaders.items()})
+    return {"items": _public_news_candidates(
+                [item for result in results.values() for item in result["items"]],
+                limit=_MAX_COIN_ITEMS if asset_symbol else _MAX_ITEMS),
+            "sources": [result["source"] for result in results.values()]}
+
+
+def _fetch_public_news_payload(asset_symbol: str | None = None) -> dict:
+    """Use Google first; add publisher feeds only when no current item survives."""
+    label = f"{_COIN_KO.get(asset_symbol, asset_symbol)} 뉴스" if asset_symbol else "코인 시장·규제 동향"
+    query = f"{_COIN_KO.get(asset_symbol, asset_symbol)} 코인 when:7d" if asset_symbol else _MARKET_QUERY
+    try:
+        if asset_symbol:
+            payload = _coin_news_envelope(asset_symbol, strict=True, relevant_only=True)
+        else:
+            raw = _fetch_news(_MARKET_QUERY, strict=True)
+            payload = _envelope(raw, overview=None, label=label, query=query)
+        payload["items"] = _public_news_candidates(payload.get("items") or [],
+                              limit=_MAX_COIN_ITEMS if asset_symbol else _MAX_ITEMS)
+        sources = list(payload.get("sources") or [{"name": "google_news_rss", "status": "ready",
+                       "fetched_count": len(payload["items"]), "item_count": len(payload["items"])}])
+    except NewsFetchError as exc:
+        payload = _envelope([], overview=None, label=label, query=query)
+        sources = list(exc.sources or [{"name": "google_news_rss", "status": "error",
+                       "fetched_count": 0, "item_count": 0, **_safe_news_source_error(exc)}])
+    if not payload["items"]:
+        fallback = _fetch_public_news_fallback(asset_symbol)
+        payload["items"] = list(fallback.get("items") or [])
+        sources.extend(fallback.get("sources") or [])
+    payload["sources"] = sources
+    if not payload["items"] and not any(source.get("status") in {"ready", "empty", "partial"} for source in sources):
+        raise NewsFetchError("모든 뉴스 RSS 소스 수집에 실패했습니다. 잠시 후 다시 시도해 주세요.", sources=sources)
+    if asset_symbol:
+        payload.update(symbol=asset_symbol, coin_name=_COIN_KO.get(asset_symbol, asset_symbol),
+                       refresh_seconds=_COIN_CACHE_SECONDS)
+    return payload
+
+
 def fetch_coin_news_for_collector(symbol: str) -> dict:
     """Merge RSS and configured official API results before browser enrichment."""
     from . import coindesk_api
@@ -3756,9 +3860,17 @@ def get_coin_news(symbol: str) -> dict:
             if env.get("data_source") == "prefect_db_stale":
                 env["stale"] = bool(env.get("items"))
             return env
-        raw = _coin_news_envelope(base, strict=False, relevant_only=True)
+        try:
+            raw = _fetch_public_news_payload(base)
+        except NewsFetchError as exc:
+            if not has_snapshot:
+                raise
+            raw = {"items": [], "sources": exc.sources}
         if not raw.get("items") and has_snapshot:
+            current_sources = list(raw.get("sources") or [])
             raw = deepcopy(stored["news_payload"])
+            if current_sources:
+                raw["sources"] = current_sources
             raw.update(data_source="prefect_db_stale",
                        snapshot_id=str(stored.get("snapshot_id") or ""),
                        collection=dict(stored.get("collection") or {}))

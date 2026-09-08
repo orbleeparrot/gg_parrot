@@ -212,7 +212,7 @@ export default function ChatBox({ defaultOpen = false, defaultStickerTray = fals
                         <div className="chat-bubble-line">
                           {stickerFromText(m.text) ? (
                             <p className="chat-bubble is-sticker">
-                              <img src={stickerFromText(m.text).src} alt={`${stickerFromText(m.text).label} 스티커`} width="120" height="120" draggable="false" decoding="async" />
+                              <img src={stickerFromText(m.text).src} alt={`${stickerFromText(m.text).label} 스티커`} width="92" height="92" draggable="false" decoding="async" />
                             </p>
                           ) : (
                             <p className="chat-bubble">{m.text}</p>

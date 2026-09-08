@@ -8513,7 +8513,7 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 /* 스티커 — 말풍선 없이 그림만(카카오톡 방식). */
 .chat-row .chat-bubble.is-sticker,
 .chat-row.is-mine .chat-bubble.is-sticker { padding: 0; background: transparent; border-radius: 0; }
-.chat-bubble.is-sticker img { display: block; width: 120px; height: 120px; object-fit: contain; }
+.chat-bubble.is-sticker img { display: block; width: 92px; height: 92px; object-fit: contain; } /* 패널 폭의 약 1/4 */
 .chat-bubble-line time { flex: none; color: rgb(var(--c-slate-500)); font-size: 10.5px; font-weight: 600; padding-bottom: 2px; }
 .chat-divider {
   display: flex;

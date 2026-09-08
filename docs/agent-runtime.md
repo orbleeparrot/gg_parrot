@@ -99,3 +99,5 @@
 - API가 정상 응답하면 CoinDesk HTML 검색/태그/섹션은 `replaced_by=coindesk_news_api`로 기록하고 반복 요청하지 않습니다. API 실패 시 기존 RSS/Playwright 경로를 유지합니다.
 - 기본 API 검색 캐시는 30분, 앱 호출 상한은 일 20회 및 누적 100회입니다. `COINDESK_NEWS_MAX_CALLS_PER_DAY`, `COINDESK_NEWS_MAX_TOTAL_CALLS`, `COINDESK_NEWS_CACHE_SECONDS`로 조정합니다. 일/누적 예산은 같은 트랜잭션에서 예약하고 AI 예산과 분리합니다. DB 예산 예약이 실패하면 API를 호출하지 않습니다. 401/403/429는 다른 티커와 공유하는 대기를 적용합니다.
 - 이 앱의 누적 상한은 공급자 계정의 실제 잔여 lifetime 호출 수를 대신하지 않습니다. 키 등록 전 해당 계정의 뉴스 접근·외부 사용자 표시 권한과 남은 호출 수를 확인해야 합니다. Personal 가격 이력 범위는 뉴스 보존 범위가 아닙니다. 키가 없으면 RSS/브라우저는 작동하며 API가 구성되지 않은 상태가 Prefect 설정에 표시됩니다.
+
+Blockscout·XRPScan 잔고 관측은 `shared-onchain-holders`가 별도로 관리한다. PEPE/WETH는 10분, XRP는 6시간 만기를 사용하고 원본 주소·정수 잔고는 비공개 `OnchainHolderState`에 저장한다. 매크로 티커와 일치하는 관측만 전달하며 첫 기준과 변화 없음은 알림에서 제외한다. 같은 주소의 잔고 증감은 체결과 구분해 `고래 동향` 탭에 표시한다. [소스·주기·운영 로그](../DEPLOY.md#온체인-상위-주소-중앙-수집).

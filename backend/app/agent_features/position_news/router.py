@@ -32,7 +32,8 @@ def whale_activity(session_id: int, response: Response,
     db.rollback()
     if session["status"] != "running" or not session["connected"]:
         return {"feature_key": "whale_activity", "status": "stopped", "items": []}
-    return get_large_trade_activity(session["symbol"], session["market"])
+    return get_large_trade_activity(session["symbol"], session["market"],
+                                    session_started_at=session.get("started_at"))
 
 
 @router.get("/sessions/{session_id}/position-news")

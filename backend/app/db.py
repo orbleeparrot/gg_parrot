@@ -609,6 +609,29 @@ class WhaleTradeState(SQLModel, table=True):
     collection_status: str = "pending"
 
 
+class OnchainHolderState(SQLModel, table=True):
+    """Shared top-holder balance snapshots and fenced collection leases.
+
+    Provider rows hold cooldowns only. Wallet balances are internal collection
+    baselines; public summaries describe balance changes, never inferred trades.
+    """
+
+    state_key: str = Field(primary_key=True, max_length=64)
+    coin: str = Field(default="", max_length=8)
+    source: str = Field(max_length=16)
+    holders_json: str = ""
+    payload_json: str = ""
+    last_success_ms: int = Field(default=0, sa_type=BigInteger)
+    last_attempt_ms: int = Field(default=0, sa_type=BigInteger, index=True)
+    next_collection_ms: int = Field(default=0, sa_type=BigInteger, index=True)
+    claim_token: str = ""
+    claimed_ms: int = Field(default=0, sa_type=BigInteger)
+    observation_seq: int = Field(default=0, sa_type=BigInteger)
+    consecutive_failures: int = 0
+    error_code: str = ""
+    collection_status: str = "pending"
+
+
 class BoardPost(SQLModel, table=True):
     """껄무새 게시판 글. 로그인 계정만 작성. 이미지(jpg/png) 1장을 DB에 함께 저장.
 
@@ -764,6 +787,7 @@ _PG_INDEXES = {
     "ix_newstitletranslation_claimed_ms": ("newstitletranslation", "claimed_ms"),
 }
 _PG_BIGINT_COLUMNS = {
+    "onchainholderstate": ("last_success_ms", "last_attempt_ms", "next_collection_ms", "claimed_ms", "observation_seq"),
     "whaletradestate": ("last_success_ms", "last_attempt_ms", "next_collection_ms", "claimed_ms"),
     "communitypostsummary": ("claimed_ms", "updated_ms"),
     "tickernewssnapshot": (
@@ -775,7 +799,7 @@ _PG_BIGINT_COLUMNS = {
         "latest_observation_seq", "latest_observed_ms", "last_attempt_ms", "last_success_ms",
     ),
 }
-_PG_PRIVATE_CACHE_TABLES = ("newstitletranslation", "communitypostsummary", "whaletradestate")
+_PG_PRIVATE_CACHE_TABLES = ("newstitletranslation", "communitypostsummary", "whaletradestate", "onchainholderstate")
 _PG_MIGRATION_LOCK = 0x6767706172726F74  # Stable across web/worker processes and deployments.
 _PG_MIGRATION_ATTEMPTS = 3
 

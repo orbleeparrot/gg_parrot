@@ -1,6 +1,6 @@
 """Two independent Prefect slots in one process, with one shutdown owner.
 
-News/probes share one runner slot and public trades have another. Runners share a
+News/probes share one runner slot; public trades and bounded holder checks share another. Runners share a
 background asyncio loop so Prefect cannot replace the main thread's SIGTERM
 handler. Only actual flow runs create subprocesses; idle runners share imports.
 """

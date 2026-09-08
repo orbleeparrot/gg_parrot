@@ -10,6 +10,7 @@ import {
   readSeenId,
   writeSeenId,
 } from "../lib/chatBadge.js";
+import { STICKERS, stickerFromText, stickerText } from "../lib/chatStickers.js";
 
 // 리더보드 채팅 — 우하단 원형 껄무새 버튼으로 여는 대화록. 목록이 길어도 항상 손에 닿고,
 // 닫혀 있는 동안 도착한 메시지는 'N new' 배지와 놀란 표정으로 알린다. 매일 KST 00:00 초기화.
@@ -25,7 +26,7 @@ function kstClock(now = Date.now()) {
   return `${two(date.getUTCHours())}:${two(date.getUTCMinutes())}`;
 }
 
-export default function ChatBox({ defaultOpen = false }) {
+export default function ChatBox({ defaultOpen = false, defaultStickerTray = false }) {
   const panelId = useId();
   const [open, setOpen] = useState(defaultOpen);
   const [items, setItems] = useState([]);
@@ -37,6 +38,7 @@ export default function ChatBox({ defaultOpen = false }) {
   const [busy, setBusy] = useState(false);
   const [seenId, setSeenId] = useState(() => readSeenId());
   const [dividerId, setDividerId] = useState(null);
+  const [stickerOpen, setStickerOpen] = useState(defaultStickerTray);
 
   const dividerReadyRef = useRef(false); // 열린 채로 첫 목록이 오면 그때 한 번 기준을 잡는다
   const listRef = useRef(null);
@@ -81,7 +83,12 @@ export default function ChatBox({ defaultOpen = false }) {
     const target = name.trim() ? inputRef : nameRef;
     const frame = window.requestAnimationFrame(() => target.current?.focus({ preventScroll: true }));
     const onKeyDown = (event) => {
-      if (event.key === "Escape") setOpen(false);
+      if (event.key !== "Escape") return;
+      // 스티커 트레이가 열려 있으면 그것부터 닫는다
+      setStickerOpen((tray) => {
+        if (!tray) setOpen(false);
+        return false;
+      });
     };
     document.addEventListener("keydown", onKeyDown);
     return () => {
@@ -109,28 +116,40 @@ export default function ChatBox({ defaultOpen = false }) {
     inputRef.current?.focus();
   }
 
-  async function send(e) {
-    e.preventDefault();
+  // 글과 스티커가 같은 길로 나간다 — 아이디 확인·전송·429 처리 한 곳.
+  async function post(body) {
     setError("");
-    if (!text.trim()) return;
+    if (!body.trim()) return false;
     if (!name.trim()) {
       setError("먼저 아이디를 정해 주세요.");
       nameRef.current?.focus();
-      return;
+      return false;
     }
     setBusy(true);
     try {
       setNickname(name.trim());
-      await api.chatPost(name.trim(), text.trim());
-      setText("");
+      await api.chatPost(name.trim(), body.trim());
       stickToBottomRef.current = true;
       refresh();
+      return true;
     } catch (err) {
       setError(String(err.message || err)); // 429 rate limit surfaces here
+      return false;
     } finally {
       setBusy(false);
       inputRef.current?.focus();
     }
+  }
+
+  async function send(e) {
+    e.preventDefault();
+    if (await post(text)) setText("");
+  }
+
+  // 카카오톡처럼 스티커는 누르는 즉시 보낸다.
+  async function sendSticker(id) {
+    setStickerOpen(false);
+    await post(stickerText(id));
   }
 
   const nameNeeded = !name.trim() || editingName;
@@ -191,7 +210,13 @@ export default function ChatBox({ defaultOpen = false }) {
                       <div className="chat-row-body">
                         {!mine && !continued ? <span className="chat-row-name">{m.username}</span> : null}
                         <div className="chat-bubble-line">
-                          <p className="chat-bubble">{m.text}</p>
+                          {stickerFromText(m.text) ? (
+                            <p className="chat-bubble is-sticker">
+                              <img src={stickerFromText(m.text).src} alt={`${stickerFromText(m.text).label} 스티커`} width="120" height="120" draggable="false" decoding="async" />
+                            </p>
+                          ) : (
+                            <p className="chat-bubble">{m.text}</p>
+                          )}
                           <time className="num">{m.created_kst}</time>
                         </div>
                       </div>
@@ -201,6 +226,24 @@ export default function ChatBox({ defaultOpen = false }) {
               })
             )}
           </div>
+
+          {stickerOpen ? (
+            <div className="chat-sticker-tray" role="group" aria-label="스티커 고르기">
+              {STICKERS.map((sticker) => (
+                <button
+                  key={sticker.id}
+                  type="button"
+                  className="chat-sticker-tile"
+                  onClick={() => sendSticker(sticker.id)}
+                  disabled={busy}
+                  aria-label={`${sticker.label} 스티커 보내기`}
+                >
+                  <img src={sticker.src} alt="" width="56" height="56" draggable="false" decoding="async" />
+                  <span>{sticker.label}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
 
           <form onSubmit={send} className="chat-composer">
             {nameNeeded ? (
@@ -226,6 +269,16 @@ export default function ChatBox({ defaultOpen = false }) {
                 {name}
               </button>
             )}
+            <button
+              type="button"
+              className={`chat-sticker-btn${stickerOpen ? " is-on" : ""}`}
+              onClick={() => setStickerOpen((tray) => !tray)}
+              aria-expanded={stickerOpen}
+              aria-label={stickerOpen ? "스티커 닫기" : "스티커 열기"}
+              title="스티커"
+            >
+              <img src={STICKERS[0].src} alt="" width="22" height="22" draggable="false" decoding="async" />
+            </button>
             <input
               ref={inputRef}
               value={text}

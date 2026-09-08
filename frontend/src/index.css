@@ -8402,7 +8402,7 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   /* 상단바·하단 바·버튼을 뺀 범위 안에서만 — 헤더를 침범하지 않는다 */
   height: min(600px, calc(100dvh - var(--site-topbar-h, 64px) - var(--chat-bar-h) - 48px - 40px));
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  grid-template-rows: auto minmax(0, 1fr) auto auto auto; /* 머리·기록·(스티커 트레이)·작성줄·오류 */
   border-radius: 20px;
   background: rgb(var(--c-surface));
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.32);
@@ -8508,6 +8508,10 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   color: rgb(var(--c-brand-ink));
 }
 .chat-row.is-mine.is-continued .chat-bubble { border-radius: 18px; }
+/* 스티커 — 말풍선 없이 그림만(카카오톡 방식). */
+.chat-row .chat-bubble.is-sticker,
+.chat-row.is-mine .chat-bubble.is-sticker { padding: 0; background: transparent; border-radius: 0; }
+.chat-bubble.is-sticker img { display: block; width: 120px; height: 120px; object-fit: contain; }
 .chat-bubble-line time { flex: none; color: rgb(var(--c-slate-500)); font-size: 10.5px; font-weight: 600; padding-bottom: 2px; }
 .chat-divider {
   display: flex;
@@ -8540,7 +8544,7 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 /* 작성줄 — 입력과 버튼은 같은 44px */
 .chat-composer {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) 44px;
+  grid-template-columns: auto 36px minmax(0, 1fr) 44px;
   align-items: center;
   gap: 8px;
   padding: 10px 12px 0;
@@ -8583,6 +8587,45 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 }
 .chat-name-chip:hover { background: rgb(var(--c-slate-200)); }
 .chat-name-chip:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
+.chat-sticker-btn {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+  transition: background-color var(--chat-dur) var(--chat-ease);
+}
+.chat-sticker-btn img { width: 24px; height: 24px; }
+.chat-sticker-btn:hover, .chat-sticker-btn.is-on { background: rgb(var(--c-slate-100)); }
+.chat-sticker-btn:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
+.chat-sticker-tray {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 4px;
+  padding: 10px 12px;
+  border-top: 1px solid rgb(var(--c-slate-200));
+}
+.chat-sticker-tile {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  padding: 6px 2px 4px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: rgb(var(--c-slate-600));
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background-color var(--chat-dur) var(--chat-ease);
+}
+.chat-sticker-tile img { width: 44px; height: 44px; object-fit: contain; }
+.chat-sticker-tile:hover:not(:disabled) { background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-900)); }
+.chat-sticker-tile:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: -2px; }
+.chat-sticker-tile:disabled { opacity: 0.5; cursor: not-allowed; }
 .chat-send {
   width: 44px;
   height: 44px;

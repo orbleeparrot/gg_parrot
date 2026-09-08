@@ -429,7 +429,7 @@ skeleton shimmer 금지. `prefers-reduced-motion` 존중.
 | `.chip-sm` | 조밀한 자리용 축소 칩 (수정자라 `.chip` 뒤에 정의) |
 | `.table-row` `.row-label` `.row-value` `.stat-label` `.stat-value` | 상자 없는 표·스탯 |
 | `ConfirmDialog` (`components/`) | `window.confirm` 대체. `.dialog` 안에 제목·설명·(경고 `.alert-warn`)·**세로 CTA 2개**(48px, 주 동작 위). ESC·스크림 클릭으로 닫힘 |
-| `ChatBox` (`components/`) | 리더보드 채팅. 하단 '오늘의 경주마' 바 **위 14px에 떠 있는 48px 알약**(파랑 `blue-600` 바탕 + 노란 깃털 28px + 흰 'Chat' 15px, surface·slate 링 + 그림자, 새 소식이면 빨간 링 + `N new` 배지) → 위로 열리는 380×600 시트(상단바·하단 바·버튼을 뺀 높이 안). 메신저 말풍선. 보드는 아래 88px 여지를 둬 마지막 행이 버튼 위로 올라온다 | 스티커: 작성줄의 껄무새 버튼 → 6칸 트레이, 누르면 즉시 전송(`[sticker:id]` 토큰), 말풍선 없이 92px 그림
+| `ChatBox` (`components/`) | 리더보드 채팅. 하단 '오늘의 경주마' 바 **위 14px에 떠 있는 48px 알약**(딥 골드 `#9c6e06` 바탕 + 노란 깃털 28px + 흰 'Chat' 15px, surface·slate 링 + 그림자, 새 소식이면 빨간 링 + `N new` 배지) → 위로 열리는 380×600 시트(상단바·하단 바·버튼을 뺀 높이 안). 메신저 말풍선. 보드는 아래 88px 여지를 둬 마지막 행이 버튼 위로 올라온다 | 스티커: 작성줄의 껄무새 버튼 → 6칸 트레이, 누르면 즉시 전송(`[sticker:id]` 토큰), 말풍선 없이 92px 그림
 | `RunResultScreen` (`components/`) | 실행이 끝나면 에이전트 채팅 자리를 **통째로** 차지. 아이브로 → 헤드라인 → 총 실현손익(큰 숫자, 상승 초록·하락 빨강) → 실행 시간·종목·남은 포지션 행. 상자 없음 |
 
 화면 골격(`components/Page.jsx`)도 같은 이유로 공용이다 — `PageHeader` `SectionTitle`

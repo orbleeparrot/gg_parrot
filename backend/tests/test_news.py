@@ -16,6 +16,8 @@ from app.agent_features.position_news import repository
 
 @pytest.fixture(autouse=True)
 def isolated_title_retry_backoff(monkeypatch):
+    # Asset-catalog I/O has its own test suite; these RSS unit tests stay offline.
+    monkeypatch.setattr(news, "_prepare_asset_identity", lambda _: None)
     monkeypatch.setattr(news, "_title_translation_retry_at", {})
     monkeypatch.setattr(news, "_fetch_public_news_fallback", lambda *_args, **_kwargs: {
         "items": [], "sources": [],
@@ -147,12 +149,12 @@ def test_coin_news_reuses_short_ttl_cache_and_refreshes_after_expiry(monkeypatch
 
     assert first == second
     assert first["refresh_seconds"] == news._COIN_CACHE_SECONDS
-    assert len(calls) == 2
+    assert len(calls) == 4  # two recent queries and two sparse-page archive queries
 
     payload, _expires_at = news._coin_cache["coin:BTC"]
     news._coin_cache["coin:BTC"] = (payload, 0)
     news.get_coin_news("BTCUSDT")
-    assert len(calls) == 4
+    assert len(calls) == 8
 
 
 def test_empty_public_news_is_cached_without_repeated_source_calls(monkeypatch):
@@ -1544,13 +1546,13 @@ def test_eden_uses_korean_and_english_google_queries(monkeypatch):
         market["title"],
         ticker_market["title"],
     ]
-    assert payload["query"] == (
+    assert payload["query"].startswith(
         '(OpenEden OR 오픈에덴 OR "EDEN 코인") when:30d | '
         '(OpenEden OR "Open Eden") when:30d | '
         '(EDEN coin OR EDEN crypto OR EDEN token OR $EDEN OR EDEN USDT OR '
         'EDEN listing OR EDEN price) when:30d'
     )
-    assert calls == [
+    assert sorted(call for call in calls if "when:5y" not in call[0]) == sorted([
         ('(OpenEden OR 오픈에덴 OR "EDEN 코인") when:30d', 50, True, "ko"),
         (
             '(OpenEden OR "Open Eden") when:30d',
@@ -1565,14 +1567,15 @@ def test_eden_uses_korean_and_english_google_queries(monkeypatch):
             True,
             "en",
         ),
-    ]
+    ])
+    assert sum("when:5y" in call[0] for call in calls) == 2
     google_source = next(
         source
         for source in payload["sources"]
         if source["name"] == "google_news_rss"
     )
     assert google_source["item_count"] == 4
-    assert google_source["fetched_count"] == 13
+    assert google_source["fetched_count"] == 24
 
 
 def test_connected_bmt_uses_project_alias_and_broad_english_queries(monkeypatch):

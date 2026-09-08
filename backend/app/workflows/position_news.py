@@ -172,8 +172,13 @@ def record_fetch_error_task(asset_symbol: str, error: str) -> None:
 
 
 @task(retries=0, log_prints=True)
-def discover_tickers_task() -> list[str]:
-    return repository.discover_tracked_symbols(due_only=True)
+def discover_tickers_task() -> dict:
+    selection = repository.discover_ticker_selection()
+    result = {"active_symbols": selection["active"], "due_symbols": selection["due"]}
+    print(json.dumps({"event": "ticker_discovery", **result,
+                      "active_ticker_count": len(result["active_symbols"]),
+                      "due_ticker_count": len(result["due_symbols"])}, ensure_ascii=False))
+    return result
 
 
 @task(retries=0, log_prints=True)
@@ -188,6 +193,8 @@ def effective_config(browser_budget_seconds: float | None = None) -> dict:
         "collector_mode": "rss_api_then_playwright",
         "coindesk_api": coindesk_api.configuration(),
         "title_translation": {"daily_call_limit": None, "scope": "all_articles", "shared_cache": True},
+        "news_history": {"archive_max_age_days": news_mod._news_archive_days(),
+                         "recent_first": True, "historical_articles_notify": False},
         "collection_seconds": int(os.environ.get("POSITION_NEWS_COLLECTION_SECONDS", "300")),
         "schedule_seconds": max(60, int(os.environ.get("POSITION_NEWS_SCHEDULE_SECONDS", "60"))),
         "max_ai_per_run": int(os.environ.get("POSITION_NEWS_MAX_AI_ANALYSES_PER_RUN", "2")),
@@ -286,7 +293,8 @@ def collect_position_news_flow(browser_budget_seconds: float | None = None) -> d
         )),
     )
 
-    symbols = list(discover_tickers_task())[:max_tickers]
+    selection = discover_tickers_task()
+    symbols = list(selection["due_symbols"])[:max_tickers]
     started = time.monotonic()
     results: list[dict] = []
     ai_used = 0
@@ -410,6 +418,8 @@ def collect_position_news_flow(browser_budget_seconds: float | None = None) -> d
 
     removed = prune_snapshots_task.submit(retention_days).result()
     summary = collector.summarize_results(results, removed=removed)
+    summary["active_ticker_count"] = len(selection["active_symbols"])
+    summary["due_ticker_count"] = len(selection["due_symbols"])
     summary["configuration"] = config
     summary["browser_failed_tickers"] = browser_failures
     summary["browser_failed_count"] = len(browser_failures)

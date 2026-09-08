@@ -1,4 +1,5 @@
 import { hasKoreanText } from "../../../lib/newsBriefings.js";
+import { publicationTime } from "./presentation.js";
 
 function impactPresentation(effect) {
   if (effect === "favorable") return { severity: "signal", expression: "signal" };
@@ -66,6 +67,8 @@ export const positionNewsModule = {
       const identity = articleIdentity(item);
       if (!identity) return;
       const presentation = impactPresentation(item.position_effect);
+      const isHistorical = item.is_historical === true || data.content_scope === "archive";
+      const publishedAt = publicationTime(item.published);
       events.push({
         id: `position-news-${identity}`,
         module: "position_news",
@@ -73,8 +76,12 @@ export const positionNewsModule = {
         expression: presentation.expression,
         title: item.title || "관련 뉴스",
         summary: hasKoreanText(item.summary) ? item.summary : "",
-        occurredAt: item.published || 0,
-        fallbackTime: "최근 수집",
+        isNewsArticle: true,
+        isHistorical,
+        notify: !isHistorical,
+        publishedAt,
+        occurredAt: publishedAt === null ? 0 : item.published,
+        fallbackTime: "게시일 확인 불가",
         sourceLabel: item.source || "원문",
         sourceUrl: item.url || "",
       });

@@ -358,6 +358,88 @@ def test_web_bootstrap_yields_lease_to_worker_and_recovers_stale_news(db_engine,
     assert repository.discover_tracked_symbols(bootstrap_only=True, due_only=True, now_ms=602_000) == ["ARB"]
 
 
+@pytest.mark.parametrize("outcome", ["empty", "error"])
+@pytest.mark.parametrize("has_stale_snapshot", [False, True])
+@pytest.mark.parametrize("collection_seconds", [30, 300])
+def test_unsuccessful_bootstrap_yields_to_worker_without_starving_recovery(
+    db_engine, monkeypatch, outcome, has_stale_snapshot, collection_seconds,
+):
+    from app.agent_features.position_news import collector
+
+    monkeypatch.setattr(repository, "get_session", lambda: Session(db_engine))
+    monkeypatch.setenv("POSITION_NEWS_COLLECTION_SECONDS", str(collection_seconds))
+    if has_stale_snapshot:
+        collector.collect_payload("CHIP", _news("CHIP"), repo=repository,
+                                  localize=False, allow_ai=False, now_ms=1_000)
+    now_ms = 1_000_000
+
+    def heartbeat(millis):
+        with Session(db_engine) as db:
+            row = db.exec(select(RunSession)).first()
+            if row is None:
+                row = RunSession(user_id=1, symbol="CHIPUSDT", status="running",
+                                 started_at=repository._clock(millis)[1])
+            row.last_heartbeat_at = repository._clock(millis)[1]
+            db.add(row)
+            db.commit()
+
+    def fetch(_symbol):
+        if outcome == "error":
+            raise RuntimeError("RSS temporarily unavailable")
+        return {"symbol": "CHIP", "items": [], "sources": [{"name": "rss", "status": "ready"}]}
+
+    heartbeat(now_ms)
+    result = collector.run_collection_cycle(fetcher=fetch, bootstrap_only=True,
+                                            now_ms=now_ms, retention_days=0)
+    assert result["items"][0]["status"] == outcome
+    assert result["ai_budget_used"] == 0
+    with Session(db_engine) as db:
+        state = db.get(TickerNewsState, "CHIP")
+        assert state.next_collection_ms == now_ms
+        assert not state.collection_claim_token
+    assert repository.discover_tracked_symbols(due_only=True, now_ms=now_ms + 1) == ["CHIP"]
+    assert repository.discover_tracked_symbols(
+        due_only=True, bootstrap_only=True, now_ms=now_ms + 1,
+    ) == []
+
+    # Even when the web scans immediately before the next minute's worker,
+    # empty/error bootstrap cannot renew the shared delay and hide CHIP again.
+    heartbeat(now_ms + 60_000)
+    result = collector.run_collection_cycle(
+        fetcher=lambda *_: pytest.fail("web must leave time for independent worker sources"),
+        bootstrap_only=True, now_ms=now_ms + 60_000, retention_days=0,
+    )
+    assert result["ticker_count"] == 0
+    token = repository.claim_collection("CHIP", now_ms=now_ms + 60_001)
+    assert token
+    assert repository.claim_collection("CHIP", now_ms=now_ms + 60_002) is None
+    assert not repository.finish_collection("CHIP", "superseded-token", now_ms=now_ms + 60_002,
+                                            next_delay_seconds=0)
+    assert repository.finish_collection("CHIP", token, now_ms=now_ms + 60_003)
+
+    # If the worker stops making attempts, the web still resumes RSS recovery.
+    recovery_ms = now_ms + 60_002 + max(120, collection_seconds * 2) * 1000
+    heartbeat(recovery_ms)
+    assert repository.discover_tracked_symbols(
+        due_only=True, bootstrap_only=True, now_ms=recovery_ms,
+    ) == ["CHIP"]
+
+
+def test_ticker_selection_keeps_deferred_live_assets_observable(db):
+    db.add(RunSession(user_id=1, symbol="CHIPUSDT", status="running",
+                      started_at="1970-01-01T00:00:01Z", last_heartbeat_at="1970-01-01T00:00:01Z"))
+    db.add(TickerNewsState(asset_symbol="CHIP", next_collection_ms=60_000,
+                          last_attempt_ms=1_000))
+    db.commit()
+
+    assert repository.discover_ticker_selection(db, now_ms=1_001) == {
+        "active": ["CHIP"], "eligible": ["CHIP"], "due": [],
+    }
+    assert repository.discover_ticker_selection(db, bootstrap_only=True, now_ms=1_001) == {
+        "active": ["CHIP"], "eligible": [], "due": [],
+    }
+
+
 def test_claim_analyze_once_and_read_latest_snapshot(db):
     payload = _news()
     first = repository.claim_snapshot(

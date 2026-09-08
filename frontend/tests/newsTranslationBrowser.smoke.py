@@ -45,7 +45,8 @@ def route_request(route):
         payload = {"items": [article("비트코인 ETF 자금 유입 증가" if ready else
                                       "Bitcoin ETF inflows rise", "btc")]}
     elif path == "/api/news/coin/ETHUSDT":
-        payload = {"items": [article("이더리움 네트워크 업데이트 발표", "eth")],
+        payload = {"items": [{**article("이더리움 네트워크 업데이트 발표", "eth"),
+                             "is_historical": True, "published": "2022-01-02T01:30:00Z"}],
                    "translation": {"status": "ready", "pending_count": 0}}
     route.fulfill(status=200, content_type="application/json", body=json.dumps(payload, ensure_ascii=False))
 
@@ -69,6 +70,7 @@ with sync_playwright() as playwright:
     expect(btc.get_by_text("BTC 관련 최근 뉴스가 없어요.")).to_have_count(0)
     expect(market.get_by_text("지금은 불러올 시장 헤드라인이 없어요.")).to_have_count(0)
     expect(eth.get_by_text("이더리움 네트워크 업데이트 발표", exact=True)).to_be_visible()
+    expect(eth.get_by_text("과거 기사 · 2022.01.02 · 검증 뉴스", exact=True)).to_be_visible()
     assert calls["/api/news/market"] == calls["/api/news/coin/BTCUSDT"] == calls["/api/news/coin/ETHUSDT"] == 1
 
     page.clock.run_for(25000)

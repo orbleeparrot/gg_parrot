@@ -217,10 +217,18 @@ def discover_tracked_symbols(
     now_ms: int | None = None,
 ) -> list[str]:
     """Return canonical assets backed by a live runner heartbeat."""
+    selection = discover_ticker_selection(db, bootstrap_only=bootstrap_only, now_ms=now_ms)
+    return selection["due" if due_only else "eligible"]
+
+
+def discover_ticker_selection(
+    db: Session | None = None, *, bootstrap_only: bool = False,
+    now_ms: int | None = None,
+) -> dict[str, list[str]]:
+    """Read live and due assets together so deferred work stays observable."""
     if db is None:
         with get_session() as owned:
-            return discover_tracked_symbols(owned, due_only=due_only,
-                                            bootstrap_only=bootstrap_only, now_ms=now_ms)
+            return discover_ticker_selection(owned, bootstrap_only=bootstrap_only, now_ms=now_ms)
 
     assets: set[str] = set()
     now_ms = int(time.time() * 1000) if now_ms is None else now_ms
@@ -244,7 +252,7 @@ def discover_tracked_symbols(
     )
 
     if not assets:
-        return []
+        return {"active": [], "eligible": [], "due": []}
     states = db.exec(
         select(TickerNewsState).where(
             TickerNewsState.asset_symbol.in_(sorted(assets))
@@ -254,26 +262,31 @@ def discover_tracked_symbols(
         row.asset_symbol: int(row.last_attempt_ms or 0)
         for row in states
     }
+    def order(symbol):
+        return (last_attempt_by_asset.get(symbol, 0), symbol)
+
+    active = sorted(assets, key=order)
     if bootstrap_only:
         stale_before = now_ms - max(
             120, int(os.environ.get("POSITION_NEWS_COLLECTION_SECONDS", "300")) * 2,
         ) * 1000
+        # Empty/error RSS bootstrap still counts as an attempt. Without this
+        # grace period the web's five-second scanner repeatedly wins the lease
+        # before Prefect's one-minute schedule can try independent sources.
         assets.difference_update(
             row.asset_symbol for row in states
-            if row.latest_snapshot_id is not None and row.last_success_ms > stale_before
+            if (row.latest_snapshot_id is not None and row.last_success_ms > stale_before)
+            or (row.last_attempt_ms > 0 and row.last_attempt_ms > stale_before)
         )
-    if due_only:
-        assets.difference_update(
-            row.asset_symbol for row in states
-            if row.next_collection_ms > now_ms or (
-                row.collection_claim_token
-                and row.collection_claimed_ms > now_ms - _CLAIM_TIMEOUT_MS
-            )
+    eligible = sorted(assets, key=order)
+    assets.difference_update(
+        row.asset_symbol for row in states
+        if row.next_collection_ms > now_ms or (
+            row.collection_claim_token
+            and row.collection_claimed_ms > now_ms - _CLAIM_TIMEOUT_MS
         )
-    return sorted(
-        assets,
-        key=lambda symbol: (last_attempt_by_asset.get(symbol, 0), symbol),
     )
+    return {"active": active, "eligible": eligible, "due": sorted(assets, key=order)}
 
 
 def claim_collection(asset_symbol: str, *, now_ms=None, db=None) -> str | None:
@@ -309,12 +322,12 @@ def finish_collection(asset_symbol: str, token: str, *, now_ms=None, db=None,
     if row is None or not token or row.collection_claim_token != token:
         return False
     delay = max(60, int(os.environ.get("POSITION_NEWS_COLLECTION_SECONDS", "300")))
-    if row.collection_status in {"error", "empty", "pending"}:
-        delay = min(delay, 60 * 2 ** min(4, max(0, row.consecutive_failures - 1)))
-    elif next_delay_seconds is not None:
+    if next_delay_seconds is not None:
         # A web bootstrap publishes fast RSS, then yields the same durable
-        # lease immediately so the scheduled worker can add browser sources.
+        # lease even when empty so the scheduled worker can try more sources.
         delay = max(0, int(next_delay_seconds))
+    elif row.collection_status in {"error", "empty", "pending"}:
+        delay = min(delay, 60 * 2 ** min(4, max(0, row.consecutive_failures - 1)))
     result = db.exec(update(TickerNewsState).where(
         TickerNewsState.asset_symbol == asset_symbol,
         TickerNewsState.collection_claim_token == token,

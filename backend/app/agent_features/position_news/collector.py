@@ -245,9 +245,14 @@ def browser_enrichment_enabled() -> bool:
 def publish_initial_payload(symbol: str, payload: dict, *, repo=None, now_ms=None) -> dict:
     """Make the first headlines visible without a browser or a paid API call."""
     repo = repo or _default_repository()
-    if repo.get_latest_snapshot(symbol):
+    stored = repo.get_latest_snapshot(symbol)
+    usable = [item for item in (stored or {}).get("news_payload", {}).get("items", [])
+              if news_mod._within_coin_news_window(item) and news_mod._is_news_article_candidate(
+                  {**item, "title": item.get("original_title") or item.get("title")})]
+    if stored and usable and not news_mod._coin_snapshot_is_stale(stored):
         # Do not replace an existing complete browser/AI snapshot with a
-        # temporary RSS-only view on every refresh.
+        # temporary RSS-only view on every refresh. A stale or filtered-out
+        # snapshot must not hold the first fresh headlines behind browser I/O.
         return {"asset_symbol": symbol, "status": "reused", "used_ai_budget": False}
     return collect_payload(symbol, payload, repo=repo, allow_ai=False,
                            localize=False, now_ms=now_ms)
@@ -408,7 +413,8 @@ def run_collection_cycle(
                 repo.mark_collection_outcome(asset, "error", error=str(exc), now_ms=now_ms)
                 results.append({"asset_symbol": asset, "status": "error",
                                 "error": f"{asset} 뉴스 수집 실패", "used_ai_budget": False})
-                repo.finish_collection(asset, token, now_ms=now_ms)
+                repo.finish_collection(asset, token, now_ms=now_ms,
+                                       next_delay_seconds=0 if bootstrap_only else None)
                 leases.pop(asset)
 
         for asset, payload, initial in pending:

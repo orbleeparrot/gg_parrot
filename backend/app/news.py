@@ -159,7 +159,27 @@ _COIN_ALIASES = {
     "TON": ("toncoin", "the open network", "ton blockchain", "톤코인"),
     "TIA": ("celestia", "셀레스티아"),
     "ZRO": ("layerzero", "layer zero", "레이어제로"),
+    # Binance CHIPUSDT is USD.AI; semiconductor headlines rarely name the token.
+    "CHIP": ("usd.ai", "usdai", "유에스디에이아이"),
 }
+
+
+def _project_aliases(asset_symbol: str) -> tuple[str, ...]:
+    """Filtering reads prepared metadata; it never starts network discovery."""
+    from .news_asset_catalog import peek_asset_name
+    aliases = _COIN_ALIASES.get(asset_symbol, ())
+    if aliases:
+        # Curated aliases include disambiguation rules for names like Threshold
+        # and Optimism. A generic exchange label must not weaken those rules.
+        return aliases
+    discovered = peek_asset_name(asset_symbol)
+    return tuple(dict.fromkeys((*aliases, *((discovered,) if discovered else ()))))
+
+
+def _prepare_asset_identity(asset_symbol: str) -> None:
+    if asset_symbol not in _COIN_ALIASES and asset_symbol not in _COIN_KO:
+        from .news_asset_catalog import get_asset_name
+        get_asset_name(asset_symbol)
 
 # These symbols are ordinary English words or common abbreviations. Matching
 # their lowercase spelling in a broad CoinDesk section feed creates false
@@ -720,10 +740,10 @@ def _matches_asset(item: dict, asset_symbol: str, coin_name: str) -> bool:
     aliases = {
         asset_symbol,
         coin_name,
-        *_COIN_ALIASES.get(asset_symbol, ()),
+        *_project_aliases(asset_symbol),
     }
     ticker = asset_symbol.casefold()
-    strict_dynamic_ticker = asset_symbol in _DYNAMIC_CONTEXT_TICKERS or (
+    strict_dynamic_ticker = asset_symbol == "CHIP" or asset_symbol in _DYNAMIC_CONTEXT_TICKERS or (
         asset_symbol not in _COIN_ALIASES and len(asset_symbol) <= 5
     )
     case_sensitive_aliases = _CASE_SENSITIVE_PROJECT_ALIASES.get(
@@ -752,6 +772,13 @@ def _matches_asset(item: dict, asset_symbol: str, coin_name: str) -> bool:
     category_values = {
         str(category).strip().casefold() for category in categories
     }
+    if asset_symbol == "CHIP":
+        # Older CHIP/CHIPS projects and generic AI hardware must not fill USD.AI
+        # history. Historical CHIP results require its project alias above.
+        return _within_live_news_window(item) and bool(re.search(
+            r"(?<![A-Za-z0-9])(?:\$CHIP|CHIPUSDT|CHIP\s+(?:token|코인|토큰))(?![A-Za-z0-9])",
+            title, re.IGNORECASE,
+        ))
     if strict_dynamic_ticker:
         return _has_dynamic_ticker_context(title, asset_symbol) or any(
             category in {ticker, f"{ticker} token", f"{ticker} coin", f"{ticker} news"}
@@ -1178,13 +1205,13 @@ def _fetch_coindesk_pages_playwright(descriptors) -> dict[str, list[dict]]:
 
 def _coindesk_asset_search_terms(asset_symbol: str, coin_name: str) -> list[str]:
     """Build precise project-name searches; never search a one-letter ticker."""
-    aliases = _COIN_ALIASES.get(asset_symbol, ())
+    aliases = _project_aliases(asset_symbol)
     candidates = list(aliases) if aliases else [coin_name]
     terms = []
     seen = set()
     for candidate in candidates:
         term = re.sub(r"\s+", " ", str(candidate or "")).strip().casefold()
-        if len(term) < 2 or term in seen or not re.fullmatch(r"[a-z0-9][a-z0-9 -]*", term):
+        if len(term) < 2 or term in seen or not re.fullmatch(r"[a-z0-9][a-z0-9 .-]*", term):
             continue
         seen.add(term)
         terms.append(term)
@@ -1888,12 +1915,17 @@ _TITLE_KOREAN_PROJECT_NAMES = {
     "bittensor": "비텐서", "celestia": "셀레스티아", "raydium": "레이디움",
     "orca": "오르카", "fetch.ai": "페치에이아이", "layerzero": "레이어제로",
     "aster": "아스터", "zama": "자마", "boundless": "바운들리스",
+    "tradoor": "트래도어",
     "artificial superintelligence alliance": "인공초지능 얼라이언스",
 }
 
 
 def _normalize_title_translation(original: str, translated: object) -> str:
     value = _normalize_news_title(translated)
+    # These headlines name the exchange as the actor. Do not turn the ordinary
+    # adjective "bullish" in market outlooks into an invented company name.
+    if re.match(r"^Bullish\s+(?:Expands|Backs)\b", original):
+        value = re.sub(r"(?<![A-Za-z0-9])Bullish(?![A-Za-z0-9])", "불리시", value)
     for name, korean in sorted(_TITLE_KOREAN_PROJECT_NAMES.items(), key=lambda pair: -len(pair[0])):
         # Only replace a project name that was present in the source. Uppercase
         # tickers, including ORCA and T, must retain their exact spelling.
@@ -2720,7 +2752,7 @@ def _localize_coin_news_items(items: list[dict]) -> list[dict]:
     return ready
 
 
-def _within_live_news_window(item: dict) -> bool:
+def _within_news_window(item: dict, days: int) -> bool:
     """Reject known old/future publication dates, including indexed quote pages.
 
     Undated legacy metadata remains usable, without inventing a publication date.
@@ -2735,15 +2767,46 @@ def _within_live_news_window(item: dict) -> bool:
     except (TypeError, ValueError):
         return False
     now = datetime.now(timezone.utc)
-    days = min(365, max(1, int(os.environ.get("POSITION_NEWS_BROWSER_MAX_AGE_DAYS", "30"))))
     return now - timedelta(days=days) <= stamp <= now + timedelta(days=1)
 
 
+def _within_live_news_window(item: dict) -> bool:
+    return _within_news_window(item, min(365, max(1, int(os.environ.get(
+        "POSITION_NEWS_BROWSER_MAX_AGE_DAYS", "30")))))
+
+
+def _news_archive_days() -> int:
+    return min(1826, max(30, int(os.environ.get("POSITION_NEWS_ARCHIVE_MAX_AGE_DAYS", "1826"))))
+
+
+def _within_coin_news_window(item: dict) -> bool:
+    return _within_news_window(item, _news_archive_days())
+
+
+def _with_news_history(payload: dict) -> dict:
+    items = []
+    for original in payload.get("items") or []:
+        item = dict(original)
+        item.pop("is_historical", None)
+        if item.get("published") and not _within_live_news_window(item):
+            item["is_historical"] = True
+        items.append(item)
+    historical = sum(bool(item.get("is_historical")) for item in items)
+    return {**payload, "items": items,
+            "content_scope": "archive" if items and historical == len(items) else "mixed" if historical else "recent",
+            "coverage": {"recent_count": len(items) - historical, "historical_count": historical,
+                         "archive_max_age_days": _news_archive_days()}}
+
+
 def _localize_news_payload(payload: dict) -> dict:
+    ticker_payload = bool(payload.get("symbol") or payload.get("feature_key") == "position_news")
+    within_window = _within_coin_news_window if ticker_payload else _within_live_news_window
     candidates = [item for item in payload.get("items") or []
-                  if _within_live_news_window(item)
+                  if within_window(item)
                   and _is_news_article_candidate({**item, "title": item.get("original_title") or item.get("title")})]
     result = {**payload, "items": _localize_coin_news_items(candidates)}
+    if ticker_payload:
+        result = _with_news_history(result)
     pending = len(candidates) - len(result["items"])
     result["translation"] = {"status": "partial" if pending else "ready", "pending_count": pending}
     if pending:
@@ -2841,6 +2904,7 @@ def _coin_news_envelope(
     base = canonical_asset_symbol(symbol)
     if not base:
         return _envelope([], overview=None, label="코인 뉴스", query="")
+    _prepare_asset_identity(base)
     name = _COIN_KO.get(base, base)
     queries = _COIN_GOOGLE_QUERIES.get(base)
     if queries is None:
@@ -2850,8 +2914,8 @@ def _coin_news_envelope(
                 (f"{name} 코인 when:7d", "ko"),
                 (f'("{project}" OR {base}) (crypto OR token OR blockchain) when:7d', "en"),
             )
-        elif base in _COIN_ALIASES:
-            project_terms = " OR ".join(f'"{alias}"' for alias in _COIN_ALIASES[base][:3])
+        elif _project_aliases(base):
+            project_terms = " OR ".join(f'"{alias}"' for alias in _project_aliases(base)[:3])
             queries = (
                 (f'({base} 코인 OR {base} 토큰 OR {project_terms}) when:30d', "ko"),
                 (f'({project_terms} OR "{base} token" OR ${base}) when:30d', "en"),
@@ -2892,12 +2956,17 @@ def _coin_news_envelope(
         except NewsFetchError as exc:
             return [], {"locale": locale, **_safe_news_source_error(exc)}
 
-    # Live views never widen silently to five years. Historical tools opt in.
+    # Sparse ticker briefings can add clearly dated background articles. Keep
+    # recent retrieval first and skip the extra requests when it fills a page.
     recent_queries = [(q, locale) for q, locale in queries if "when:5y" not in q]
     archive_queries = [(q, locale) for q, locale in queries if "when:5y" in q]
+    if include_archive and not archive_queries:
+        archive_queries = [(re.sub(r"when:\d+[dy]", "when:5y", q), locale)
+                           for q, locale in recent_queries[:2]]
     attempted_queries = []
-    for group in ((recent_queries, archive_queries) if include_archive else (recent_queries,)):
-        if batches and any(batches):
+    for group_index, group in enumerate((recent_queries, archive_queries) if include_archive else (recent_queries,)):
+        if len(_public_news_candidates([item for batch in batches for item in batch],
+                                       limit=_MAX_COIN_ITEMS, include_archive=include_archive)) >= _MAX_COIN_ITEMS:
             break
         fetched = run_parallel({
             index: (lambda query=query, locale=locale: fetch_query(query, locale))
@@ -2912,7 +2981,11 @@ def _coin_news_envelope(
             candidate_count += len(candidates)
             batch = (_relevant_items(candidates, asset_symbol=base,
                 coin_name=name, feed_source="google_news_rss") if relevant_only else candidates)
-            batches.append(batch if include_archive else [item for item in batch if _within_live_news_window(item)])
+            within_window = _within_coin_news_window if include_archive else _within_live_news_window
+            # An archive index hit without a publication date cannot be
+            # established as within five years or labeled as current news.
+            batches.append([item for item in batch if within_window(item)
+                            and (group_index == 0 or bool(item.get("published")))])
     queries = attempted_queries
     source = {"name": "google_news_rss", "status": "error" if failures == len(queries) else
               "partial" if failures else "ready", "fetched_count": candidate_count,
@@ -2921,9 +2994,8 @@ def _coin_news_envelope(
         source["errors"] = source_errors
     if strict and failures == len(queries):
         raise NewsFetchError("Google News RSS 수집에 실패했습니다.", sources=[source])
-    items = _sort_news_items_newest_first(_merge_news_items(*batches))
-    if not include_archive:
-        items = [item for item in items if _within_live_news_window(item)]
+    items = _public_news_candidates([item for batch in batches for item in batch],
+                                   limit=_MAX_COIN_ITEMS, include_archive=include_archive)
     query_label = " | ".join(query for query, _locale in queries)
     env = _envelope(
         items,
@@ -2936,7 +3008,7 @@ def _coin_news_envelope(
     env["refresh_seconds"] = _COIN_CACHE_SECONDS
     env["candidate_count"] = candidate_count
     env["sources"] = [{**source, "item_count": len(items)}]
-    return env
+    return _with_news_history(env)
 
 
 def _browser_news_pages(asset_symbol: str, coin_name: str) -> list[dict]:
@@ -3506,6 +3578,7 @@ def enrich_coin_news_for_collector(symbol: str, rss_payload: dict, *, browser_bu
     base = canonical_asset_symbol(symbol)
     if not base:
         return payload
+    _prepare_asset_identity(base)
     name = _COIN_KO.get(base, base)
     descriptors = _browser_news_pages(base, name)
     sources = list(payload.get("sources") or [])
@@ -3531,8 +3604,7 @@ def enrich_coin_news_for_collector(symbol: str, rss_payload: dict, *, browser_bu
     successful = 0
     incomplete = 0
     now = datetime.now(timezone.utc)
-    max_age_days = min(365, max(1, int(os.environ.get(
-        "POSITION_NEWS_BROWSER_MAX_AGE_DAYS", "30"))))
+    max_age_days = _news_archive_days()
     cutoff = now - timedelta(days=max_age_days)
     for descriptor in descriptors:
         result = results[_browser_page_key(descriptor)]
@@ -3577,7 +3649,7 @@ def enrich_coin_news_for_collector(symbol: str, rss_payload: dict, *, browser_bu
         "incomplete_sources": incomplete,
         "elapsed_ms": round((time.monotonic() - started) * 1000),
     }
-    return payload
+    return _with_news_history(payload)
 
 
 def _fetch_shared_publisher_rss(source_name: str, *, strict: bool = True) -> list[dict]:
@@ -3623,8 +3695,9 @@ def _fetch_shared_publisher_rss(source_name: str, *, strict: bool = True) -> lis
         return []
 
 
-def _public_news_candidates(items: list[dict], *, limit: int) -> list[dict]:
-    current = [item for item in items if _within_live_news_window(item) and _is_news_article_candidate(item)]
+def _public_news_candidates(items: list[dict], *, limit: int, include_archive: bool = False) -> list[dict]:
+    within_window = _within_coin_news_window if include_archive else _within_live_news_window
+    current = [item for item in items if within_window(item) and _is_news_article_candidate(item)]
     unique, titles, urls = [], set(), set()
     for item in _sort_news_items_newest_first(current):
         title = re.sub(r"\s+", " ", str(item.get("title") or "")).strip().casefold()
@@ -3648,7 +3721,8 @@ def _fetch_public_news_fallback(asset_symbol: str | None = None) -> dict:
             relevant = (_relevant_items(raw, asset_symbol=asset_symbol,
                          coin_name=_COIN_KO.get(asset_symbol, asset_symbol), feed_source=source_name)
                         if asset_symbol else raw)
-            items = _public_news_candidates(relevant, limit=_MAX_COIN_ITEMS if asset_symbol else _MAX_ITEMS)
+            items = _public_news_candidates(relevant, limit=_MAX_COIN_ITEMS if asset_symbol else _MAX_ITEMS,
+                                            include_archive=bool(asset_symbol))
             return {"items": items, "source": {"name": source_name, "status": "ready",
                     "fetched_count": len(raw), "item_count": len(items)}}
         except Exception as exc:
@@ -3665,7 +3739,7 @@ def _fetch_public_news_fallback(asset_symbol: str | None = None) -> dict:
                             for name, loader in loaders.items()})
     return {"items": _public_news_candidates(
                 [item for result in results.values() for item in result["items"]],
-                limit=_MAX_COIN_ITEMS if asset_symbol else _MAX_ITEMS),
+                limit=_MAX_COIN_ITEMS if asset_symbol else _MAX_ITEMS, include_archive=bool(asset_symbol)),
             "sources": [result["source"] for result in results.values()]}
 
 
@@ -3675,12 +3749,12 @@ def _fetch_public_news_payload(asset_symbol: str | None = None) -> dict:
     query = f"{_COIN_KO.get(asset_symbol, asset_symbol)} 코인 when:7d" if asset_symbol else _MARKET_QUERY
     try:
         if asset_symbol:
-            payload = _coin_news_envelope(asset_symbol, strict=True, relevant_only=True)
+            payload = _coin_news_envelope(asset_symbol, strict=True, relevant_only=True, include_archive=True)
         else:
             raw = _fetch_news(_MARKET_QUERY, strict=True)
             payload = _envelope(raw, overview=None, label=label, query=query)
         payload["items"] = _public_news_candidates(payload.get("items") or [],
-                              limit=_MAX_COIN_ITEMS if asset_symbol else _MAX_ITEMS)
+                              limit=_MAX_COIN_ITEMS if asset_symbol else _MAX_ITEMS, include_archive=bool(asset_symbol))
         sources = list(payload.get("sources") or [{"name": "google_news_rss", "status": "ready",
                        "fetched_count": len(payload["items"]), "item_count": len(payload["items"])}])
     except NewsFetchError as exc:
@@ -3706,14 +3780,15 @@ def fetch_coin_news_for_collector(symbol: str) -> dict:
     base = canonical_asset_symbol(symbol)
     if not base:
         return _envelope([], overview=None, label="코인 뉴스", query="")
+    _prepare_asset_identity(base)
     name = _COIN_KO.get(base, base)
     query = f"{name} 코인 when:7d"
 
     def fetch_google():
         try:
-            return _coin_news_envelope(base, strict=True, relevant_only=True), True
-        except NewsFetchError:
-            return None, False
+            return _coin_news_envelope(base, strict=True, relevant_only=True, include_archive=True), True
+        except NewsFetchError as exc:
+            return {"items": [], "sources": exc.sources}, False
 
     def fetch_source(loader):
         try:
@@ -3750,8 +3825,7 @@ def fetch_coin_news_for_collector(symbol: str) -> dict:
     api_items = _relevant_items(api_payload.get("items") or [], asset_symbol=base,
                                coin_name=name, feed_source="coindesk_news_api")
     now = datetime.now(timezone.utc)
-    cutoff = now - timedelta(days=min(365, max(1, int(os.environ.get(
-        "POSITION_NEWS_BROWSER_MAX_AGE_DAYS", "30")))))
+    cutoff = now - timedelta(days=_news_archive_days())
     current_api_items = []
     for item in api_items:
         try:
@@ -3770,7 +3844,7 @@ def fetch_coin_news_for_collector(symbol: str) -> dict:
             continue
         raw, available = fetched_sources[source_name]
         relevant = [item for item in _relevant_items(raw, asset_symbol=base, coin_name=name, feed_source=source_name)
-                    if _within_live_news_window(item)]
+                    if _within_coin_news_window(item)]
         extra_items.extend(relevant)
         extra_sources.append({"name": source_name, "status": "ready" if available else "error",
                               "fetched_count": len(raw), "item_count": len(relevant)})
@@ -3787,14 +3861,14 @@ def fetch_coin_news_for_collector(symbol: str) -> dict:
         coin_name=name,
         feed_source="coindesk_rss",
     )
-    google_items = [item for item in google_items if _within_live_news_window(item)]
-    coindesk_items = [item for item in coindesk_items if _within_live_news_window(item)]
+    google_items = [item for item in google_items if _within_coin_news_window(item)]
+    coindesk_items = [item for item in coindesk_items if _within_coin_news_window(item)]
     if (not google_available and not coindesk_available and not openeden_available and not api_available
             and not any(source["status"] == "ready" for source in extra_sources)):
         raise NewsFetchError("모든 뉴스 RSS/API 소스 수집에 실패했습니다.")
-    items = _sort_news_items_newest_first(
-        _merge_news_items(openeden_items, current_api_items, coindesk_items, google_items, extra_items)
-    )
+    items = _public_news_candidates(
+        [*openeden_items, *current_api_items, *coindesk_items, *google_items, *extra_items],
+        limit=_MAX_COIN_ITEMS, include_archive=True)
     env = _envelope(
         items,
         overview=None,
@@ -3820,8 +3894,10 @@ def fetch_coin_news_for_collector(symbol: str) -> dict:
             "fetched_count": len(coindesk_raw),
         },
         {
+            **next(iter(google_payload.get("sources") or []), {}),
             "name": "google_news_rss",
-            "status": "ready" if google_available else "error",
+            "status": (next(iter(google_payload.get("sources") or []), {}).get("status")
+                       or ("ready" if google_available else "error")),
             "item_count": len(google_items),
             "fetched_count": google_fetched_count,
         },
@@ -3830,7 +3906,7 @@ def fetch_coin_news_for_collector(symbol: str) -> dict:
         sources.append(api_source)
     sources.extend(extra_sources)
     env["sources"] = sources
-    return env
+    return _with_news_history(env)
 
 
 def _load_latest_coin_snapshot(symbol: str) -> dict | None:

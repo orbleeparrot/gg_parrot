@@ -5,6 +5,7 @@ import {
   accessFor,
 } from "../features/agents/registry.js";
 import { advanceActivityTimeline, emptyActivityTimeline } from "../features/agents/activityTimeline.js";
+import { countNewObservations, positionNewsNotice, publicationLabel, publicationTime } from "../features/agents/positionNews/presentation.js";
 import RunResultScreen from "./RunResultScreen.jsx";
 const PLAN_LABELS = { free: "FREE", plus: "PLUS", pro: "PRO" };
 const EMPTY_FEATURE_STATES = {};
@@ -150,7 +151,13 @@ export default function AgentActivityStream({
     const filtered = filter === "all" ? events : events.filter((event) => event.module === filter);
     return filtered.slice(0, 24).reverse();
   }, [events, filter]);
+  const newsNotice = (filter === "all" || filter === "position_news")
+    && accessFor(AGENT_MODULE_MAP.get("position_news"), entitlements) === "enabled"
+    ? positionNewsNotice(featureStates.position_news, {
+      hasArticles: events.some((event) => event.isNewsArticle),
+    }) : "";
   const hasRelativeTime = visible.some((event) => {
+    if (event.isNewsArticle) return false;
     const occurredAt = eventTime(event.occurredAt);
     const elapsedSeconds = Math.floor(Math.max(0, now - occurredAt) / SECOND_MS);
     return occurredAt && elapsedSeconds <= HOUR_MS / SECOND_MS;
@@ -166,8 +173,7 @@ export default function AgentActivityStream({
     const node = logRef.current;
     if (!node) return;
     const previousIds = previousIdsRef.current;
-    const added = initialMessagesRef.current ? 0
-      : visible.filter((event) => !previousIds.has(event.id)).length;
+    const added = initialMessagesRef.current ? 0 : countNewObservations(visible, previousIds);
     for (const event of events) previousIds.add(event.id);
     // Filter switches and responses that temporarily omit a message must not
     // turn previously observed events into new arrivals.
@@ -232,10 +238,11 @@ export default function AgentActivityStream({
         </div>
       </header>
 
-      <div className="agent-chat-stream">
+      <div className="agent-chat-stream flex flex-col">
+        {newsNotice ? <div className="agent-checking" role="status" data-news-status>{newsNotice}</div> : null}
         <div
           ref={logRef}
-          className="agent-chat-log"
+          className="agent-chat-log flex-1"
           role="log"
           aria-relevant="additions"
           tabIndex={0}
@@ -263,6 +270,7 @@ export default function AgentActivityStream({
                   key={event.id}
                   className={`agent-message is-${event.severity}`}
                   data-plan={plan}
+                  aria-live={event.notify === false ? "off" : undefined}
                 >
                   <span className="agent-message-avatar" aria-hidden="true">
                     <img src={avatarForEvent(event)} alt="" width="80" height="80" draggable="false" decoding="async" />
@@ -275,6 +283,7 @@ export default function AgentActivityStream({
                       {hasTierBadge ? `${planLabel} 구독 기능. ` : ""}
                       {module?.label || event.module}{severityLabel ? `. ${severityLabel}` : ""}.
                     </span>
+                    {event.isHistorical ? <p className="agent-message-detail">과거 기사</p> : null}
                     <p className="agent-message-primary">{event.title}</p>
                     {event.summary ? <p className="agent-message-summary">{event.summary}</p> : null}
                     {event.detail ? <p className="agent-message-detail">{event.detailLabel || "판단 근거"} · {event.detail}</p> : null}
@@ -288,24 +297,28 @@ export default function AgentActivityStream({
                       )}
                       <time
                         className="num"
-                        dateTime={eventTime(event.occurredAt) ? new Date(eventTime(event.occurredAt)).toISOString() : undefined}
+                        dateTime={event.isNewsArticle
+                          ? publicationTime(event.publishedAt) === null ? undefined : new Date(event.publishedAt).toISOString()
+                          : eventTime(event.occurredAt) ? new Date(eventTime(event.occurredAt)).toISOString() : undefined}
                         aria-live="off"
                       >
-                        <span aria-hidden="true">{activityTime(event.occurredAt, now, event.fallbackTime)}</span>
-                        <span className="sr-only">발생 시각 {absoluteActivityTime(event.occurredAt, event.fallbackTime)}</span>
+                        {event.isNewsArticle ? publicationLabel(event.publishedAt) : <>
+                          <span aria-hidden="true">{activityTime(event.occurredAt, now, event.fallbackTime)}</span>
+                          <span className="sr-only">발생 시각 {absoluteActivityTime(event.occurredAt, event.fallbackTime)}</span>
+                        </>}
                       </time>
                     </footer>
                   </div>
                 </article>
               );
             })
-          ) : (
+          ) : newsNotice ? null : (
             <div className="agent-stream-empty">
               <strong>새 소식이 없어요.</strong>
             </div>
           )}
 
-          {isFeatureLoading && selectedAccess === "enabled" ? (
+          {isFeatureLoading && selectedAccess === "enabled" && !newsNotice ? (
             <div className="agent-checking" role="status">
               <i className="agent-live-dot is-checking" aria-hidden="true" />
               새 데이터를 확인하는 중…

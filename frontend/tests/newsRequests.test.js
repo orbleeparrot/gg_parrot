@@ -1,10 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createNewsBriefingQueue, prepareNewsResponse } from "../src/lib/newsBriefings.js";
+import { createNewsBriefingQueue, historicalNewsLabel, prepareNewsResponse } from "../src/lib/newsBriefings.js";
 
 const flush = () => new Promise(setImmediate);
 const ready = { items: [{ id: "a", title: "비트코인 ETF 자금 유입 증가" }], translation: { status: "ready", pending_count: 0 } };
 const pending = { items: [], translation: { status: "partial", pending_count: 2, retry_after_seconds: 30 } };
+
+test("archived coin news shows its actual KST publication date without relabeling recent articles", () => {
+  assert.equal(historicalNewsLabel({ is_historical: true, published: "2022-01-02T23:30:00Z" }), "과거 기사 · 2022.01.03");
+  assert.equal(historicalNewsLabel({ is_historical: true, published: "invalid" }), "과거 기사 · 게시일 확인 불가");
+  assert.equal(historicalNewsLabel({ is_historical: false, published: "2022-01-02T23:30:00Z" }), "");
+});
 
 function harness(load, keys = ["BTC"]) {
   let clock = 1000;

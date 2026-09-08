@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api.js";
 import useNewsBriefings from "../hooks/useNewsBriefings.js";
@@ -12,10 +12,6 @@ import { layoutTreemap, racerWeight } from "../lib/treemap.js";
 
 const COIN_NEWS_CONCURRENCY = 2;
 const RACER_NEWS_ROTATE_MS = 5_000;
-const compactVolumeFormatter = new Intl.NumberFormat("ko-KR", {
-  notation: "compact",
-  maximumFractionDigits: 1,
-});
 
 function coinOf(symbol) {
   return (symbol || "").replace(/USDT$|BUSD$|USDC$/, "");
@@ -27,12 +23,6 @@ function formatPrice(value) {
   return number.toLocaleString("en-US", {
     maximumFractionDigits: number >= 1 ? 2 : 6,
   });
-}
-
-function formatVolume(value) {
-  const number = Number(value);
-  if (!Number.isFinite(number)) return "—";
-  return compactVolumeFormatter.format(number);
 }
 
 function errorMessage(reason) {
@@ -138,111 +128,6 @@ function MarketBriefing({ market, loading, error }) {
   );
 }
 
-const RacerNewsBriefing = memo(function RacerNewsBriefing({ coin, rank, newsState, onRetry, rotationTick }) {
-  const base = coinOf(coin.symbol);
-  const data = newsState?.data || null;
-  const status = newsState?.status || "queued";
-  const translationPending = hasPendingTranslation(data);
-  const change = Number(coin.change_pct) || 0;
-  const changeTone = change > 0 ? "is-up" : change < 0 ? "is-down" : "is-flat";
-  const changePrefix = change > 0 ? "+" : "";
-  const headingId = `racer-${coin.symbol.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
-  const readerItems = useMemo(
-    () => (data?.items || []).map((item) => ({
-      id: communityPostIdentity(item) || item.url || item.title,
-      title: item.title,
-      source: newsSourceLabel(item),
-      rowLabel: item.is_historical
-        ? `${historicalNewsLabel(item)} · ${newsSourceLabel(item)}` : undefined,
-      time: historicalNewsLabel(item) || newsPublishedLabel(item),
-      community: item.content_type === "community" ? { author: item.author, source: item.source, summary: communitySummaryPresentation(item) } : null,
-      url: item.url,
-    })),
-    [data],
-  );
-
-  return (
-    <article className="news-racer-briefing" aria-labelledby={headingId}>
-      <header className="news-racer-briefing-head">
-        <div className="news-racer-identity">
-          <span className="news-racer-rank" aria-label={`${rank}위`}>
-            <strong className="num">{String(rank).padStart(2, "0")}</strong><small>위</small>
-          </span>
-          <CoinIcon symbol={coin.symbol} size={32} className="news-racer-logo" alt="" />
-          <div className="news-racer-ticker">
-            <h3 id={headingId} className="num">{base}</h3>
-          </div>
-          <div className="news-racer-identity-actions">
-            <strong className={`news-racer-change num ${changeTone}`}>
-              {changePrefix}{change.toFixed(2)}%
-            </strong>
-          </div>
-        </div>
-        <div className="news-racer-metrics">
-          <span>
-            <small>현재가</small>
-            <strong><b className="num">{formatPrice(coin.last_price)}</b><em>USDT</em></strong>
-          </span>
-          <span>
-            <small>24시간 거래대금</small>
-            <strong><b className="num">{formatVolume(coin.quote_volume)}</b><em>USDT</em></strong>
-          </span>
-        </div>
-      </header>
-
-      {status === "queued" || status === "loading" ? (
-        <div className="news-racer-reader-state" role="status">
-          <strong>{base} 뉴스 브리핑 준비 중</strong>
-          <span>{status === "queued" ? "순위대로 뉴스를 불러오고 있어요." : "최신 원문을 확인하고 있어요."}</span>
-        </div>
-      ) : null}
-
-      {status === "error" ? (
-        <div className="news-racer-reader-state is-error" role="alert">
-          <strong>{base} 뉴스를 불러오지 못했어요.</strong>
-          <span>{newsState.error}</span>
-          <button type="button" onClick={() => onRetry(coin.symbol)}>다시 시도</button>
-        </div>
-      ) : null}
-
-      {status === "success" && readerItems.length === 0 && !translationPending ? (
-        <div className="news-racer-reader-state">
-          <strong>{base} 관련 최근 뉴스가 없어요.</strong>
-          <span>새 원문이 수집되면 이 자리에 브리핑이 나타나요.</span>
-        </div>
-      ) : null}
-
-      {readerItems.length > 0 ? (
-        <NewsBriefingReader
-          key={data.updated_at || data.as_of || coin.symbol}
-          items={readerItems}
-          ariaLabel={`${data.coin_name || base} 뉴스`}
-          queueLabel={`${base} 뉴스`}
-          rotateMs={RACER_NEWS_ROTATE_MS}
-          syncTick={rotationTick}
-          rowHeight={readerItems.some((item) => item.community) ? 108 : 92}
-          visibleRows={3}
-          queueOnly
-        />
-      ) : null}
-
-      {translationPending ? <TranslationPending data={data} /> : null}
-
-      {status === "success" && data?.stale ? (
-        <div className="news-racer-reader-state is-notice" role="status">
-          <span>최신 소식을 가져오지 못해 마지막으로 수집한 뉴스를 표시하고 있어요.</span>
-        </div>
-      ) : null}
-
-      <footer className="news-racer-footer">
-        <Link to={`/builder?symbol=${encodeURIComponent(coin.symbol)}`} className="news-racer-builder-link">
-          <span>매크로 만들기</span><span aria-hidden="true">→</span>
-        </Link>
-      </footer>
-    </article>
-  );
-});
-
 // 컨테이너 크기 — 트리맵은 실제 종횡비로 나눠야 타일이 정사각형에 가깝다.
 function useElementSize(ref) {
   const [size, setSize] = useState({ width: 0, height: 0 });
@@ -259,27 +144,61 @@ function useElementSize(ref) {
   return size;
 }
 
-// 타일 밀도 — 넓이에 따라 보여줄 정보량을 줄인다(xl: 로고·가격까지, xs: 티커만).
+// 타일 밀도 — 넓이에 따라 보여줄 정보량을 줄인다(xl: 로고·가격·헤드라인, md 이하: 헤드라인 없음).
 function tileDensity(width, height) {
-  if (width >= 220 && height >= 150) return "is-xl";
-  if (width >= 150 && height >= 96) return "is-lg";
+  if (width >= 240 && height >= 230) return "is-xl";
+  if (width >= 128 && height >= 150) return "is-lg";
   if (width >= 96 && height >= 64) return "is-md";
   if (width >= 64 && height >= 40) return "is-sm";
   return "is-xs";
 }
 
-// 색 농도 — 상승률의 로그 비율(최대 대비)을 5단계로. 순위 편차가 커도(4%·112%) 고르게 퍼진다.
-function tileTier(change, maxChange) {
-  if (!(change > 0)) return 0;
-  const t = Math.log1p(change) / Math.log1p(Math.max(maxChange, change, 1));
-  return Math.min(5, Math.max(1, Math.ceil(t * 5)));
+// 타일 하나의 헤드라인 — 모든 타일이 같은 tick 으로 다음 기사로 넘어가므로 화면 전체가 한 번에 바뀐다.
+// key 가 바뀌면 새로 마운트되어 진입 애니메이션이 돌고, 그 시점이 모든 타일에서 같다.
+function TileHeadline({ base, newsState, tick, onRetry, symbol }) {
+  const status = newsState?.status || "queued";
+  const items = newsState?.data?.items || [];
+  if (status === "queued" || status === "loading") {
+    return <span className="news-map-news is-state">{base} 뉴스 준비 중</span>;
+  }
+  if (status === "error") {
+    return (
+      <span className="news-map-news is-state">
+        뉴스를 불러오지 못했어요.
+        <button type="button" onClick={() => onRetry(symbol)}>다시 시도</button>
+      </span>
+    );
+  }
+  if (!items.length) {
+    return <span className="news-map-news is-state">최근 {base} 뉴스가 없어요.</span>;
+  }
+  const index = tick % items.length;
+  const item = items[index];
+  const source = newsSourceLabel(item);
+  const time = historicalNewsLabel(item) || newsPublishedLabel(item);
+  return (
+    <a
+      key={`${index}-${item.url || item.title}`}
+      className="news-map-news"
+      href={item.url || undefined}
+      target="_blank"
+      rel="noreferrer noopener"
+      aria-label={`${base} 뉴스 ${index + 1}/${items.length}: ${item.title}`}
+    >
+      <span className="news-map-news-title">{item.title}</span>
+      <span className="news-map-news-meta">
+        <span className="news-map-news-source">{source}</span>
+        {time ? <span className="news-map-news-time">{time}</span> : null}
+        <span className="news-map-news-count num" aria-hidden="true">{index + 1}/{items.length}</span>
+      </span>
+    </a>
+  );
 }
 
-// 경주마 트리맵 — 한 직사각형을 상승률 비율로 나눈 벤토. 타일을 누르면 아래 브리핑이 그 코인으로 바뀐다.
-function RacerTreemap({ coins, selected, onSelect }) {
+// 경주마 트리맵 — 한 직사각형을 상승률 비율로 나눈 벤토. 타일은 유리(§7 상단바와 같은 값), 색면 없음.
+function RacerTreemap({ coins, newsBySymbol, onRetry, tick }) {
   const ref = useRef(null);
   const size = useElementSize(ref);
-  const maxChange = coins.reduce((acc, coin) => Math.max(acc, Number(coin.change_pct) || 0), 0);
   const rects = useMemo(() => layoutTreemap(
     coins.map((coin, index) => ({ weight: racerWeight(coin.change_pct), coin, rank: index + 1 })),
     size.width || 16,
@@ -292,27 +211,33 @@ function RacerTreemap({ coins, selected, onSelect }) {
         const { coin, rank } = item;
         const base = coinOf(coin.symbol);
         const change = Number(coin.change_pct) || 0;
-        const tier = tileTier(change, maxChange);
-        const density = tileDensity(width * size.width, height * size.height);
-        const isSelected = selected === coin.symbol;
+        const changeTone = change > 0 ? "is-up" : change < 0 ? "is-down" : "is-flat";
+        const density = tileDensity(width * size.width - 8, height * size.height - 8);
+        const withNews = density === "is-xl" || density === "is-lg";
         return (
-          <button
+          <article
             key={coin.symbol}
-            type="button"
             role="listitem"
-            className={`news-map-tile ${density} tier-${tier} ${isSelected ? "is-selected" : ""}`}
-            style={{ left: `${x * 100}%`, top: `${y * 100}%`, width: `${width * 100}%`, height: `${height * 100}%` }}
-            aria-pressed={isSelected}
+            className={`news-map-tile ${density}`}
+            style={{
+              left: `calc(${x * 100}% + 4px)`,
+              top: `calc(${y * 100}% + 4px)`,
+              width: `calc(${width * 100}% - 8px)`,
+              height: `calc(${height * 100}% - 8px)`,
+            }}
             aria-label={`${rank}위 ${base} ${change > 0 ? "+" : ""}${change.toFixed(2)}%`}
-            title={`${rank}위 ${base} · ${change > 0 ? "+" : ""}${change.toFixed(2)}%`}
-            onClick={() => onSelect(coin.symbol)}
           >
-            <span className="news-map-rank num" aria-hidden="true">{String(rank).padStart(2, "0")}</span>
-            <CoinIcon symbol={coin.symbol} size={density === "is-xl" ? 36 : 24} className="news-map-logo" alt="" />
-            <span className="news-map-ticker num">{base}</span>
-            <span className="news-map-change num">{change > 0 ? "+" : ""}{change.toFixed(2)}%</span>
-            <span className="news-map-price num">{formatPrice(coin.last_price)} <small>USDT</small></span>
-          </button>
+            <header className="news-map-head">
+              <span className="news-map-rank num" aria-hidden="true">{String(rank).padStart(2, "0")}</span>
+              <CoinIcon symbol={coin.symbol} size={density === "is-xl" ? 32 : 22} className="news-map-logo" alt="" />
+              <Link to={`/builder?symbol=${encodeURIComponent(coin.symbol)}`} className="news-map-ticker num" title={`${base} 매크로 만들기`}>{base}</Link>
+              <span className={`news-map-change num ${changeTone}`}>{change > 0 ? "+" : ""}{change.toFixed(2)}%</span>
+              <span className="news-map-price num">{formatPrice(coin.last_price)} <small>USDT</small></span>
+            </header>
+            {withNews ? (
+              <TileHeadline base={base} symbol={coin.symbol} newsState={newsBySymbol[coin.symbol]} tick={tick} onRetry={onRetry} />
+            ) : null}
+          </article>
         );
       }) : null}
     </div>
@@ -321,22 +246,37 @@ function RacerTreemap({ coins, selected, onSelect }) {
 
 function RacerBriefing({ coins, loading, error }) {
   const { newsBySymbol, retry } = useCoinNewsBriefings(coins);
-  const [selected, setSelected] = useState("");
+  const [tick, setTick] = useState(0);
   const termTexts = coins.flatMap((coin) => (
     newsBySymbol[coin.symbol]?.data?.items || []
   ).map((item) => item.title));
 
-  // 선택이 없거나 목록에서 사라지면 1위로 되돌린다.
-  const selectedIndex = coins.findIndex((coin) => coin.symbol === selected);
-  const focusIndex = selectedIndex >= 0 ? selectedIndex : 0;
-  const focusCoin = coins[focusIndex] || null;
+  // 한 박자 — 모든 타일의 헤드라인이 같은 순간에 다음 기사로 넘어간다. 탭이 숨겨지면 멈춘다.
+  useEffect(() => {
+    if (!coins.length) return undefined;
+    let timer = 0;
+    const start = () => {
+      window.clearInterval(timer);
+      timer = window.setInterval(() => setTick((value) => value + 1), RACER_NEWS_ROTATE_MS);
+    };
+    const onVisibility = () => {
+      if (document.hidden) window.clearInterval(timer);
+      else start();
+    };
+    if (!document.hidden) start();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [coins.length]);
 
   return (
     <section className="news-briefing-section is-racers" aria-labelledby="racer-briefing-title">
       <BriefingSectionHeader
         id="racer-briefing-title"
         title="경주마 동향"
-        description="오늘 많이 오른 종목일수록 넓은 자리를 차지해요. 타일을 누르면 그 종목의 뉴스가 아래에 펼쳐져요."
+        description="오늘 많이 오른 종목일수록 넓은 자리를 차지하고, 종목마다 최신 기사 한 줄이 같은 박자로 바뀌어요."
         count={coins.length}
         countLabel="종목"
         pendingLabel="시장 확인 중"
@@ -351,18 +291,7 @@ function RacerBriefing({ coins, loading, error }) {
 
       {coins.length > 0 ? (
         <>
-          <RacerTreemap coins={coins} selected={focusCoin?.symbol} onSelect={setSelected} />
-          {focusCoin ? (
-            <div className="news-racer-focus">
-              <RacerNewsBriefing
-                key={focusCoin.symbol}
-                coin={focusCoin}
-                rank={focusIndex + 1}
-                newsState={newsBySymbol[focusCoin.symbol]}
-                onRetry={retry}
-              />
-            </div>
-          ) : null}
+          <RacerTreemap coins={coins} newsBySymbol={newsBySymbol} onRetry={retry} tick={tick} />
           <TermChips texts={termTexts} />
         </>
       ) : null}

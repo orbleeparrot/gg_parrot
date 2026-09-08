@@ -429,7 +429,7 @@ skeleton shimmer 금지. `prefers-reduced-motion` 존중.
 | `.chip-sm` | 조밀한 자리용 축소 칩 (수정자라 `.chip` 뒤에 정의) |
 | `.table-row` `.row-label` `.row-value` `.stat-label` `.stat-value` | 상자 없는 표·스탯 |
 | `ConfirmDialog` (`components/`) | `window.confirm` 대체. `.dialog` 안에 제목·설명·(경고 `.alert-warn`)·**세로 CTA 2개**(48px, 주 동작 위). ESC·스크림 클릭으로 닫힘 |
-| `ChatBox` (`components/`) | 리더보드 채팅. 우하단 **64px 원형 껄무새 버튼**(잉크 원판 + surface 링 + 그림자, 새 소식이면 signal 표정 + 빨간 `N new` 배지) → 372×560 대화록 시트(모바일은 바닥 시트). 말풍선 없이 이름·시각·본문, 같은 사람 연속은 헤더 생략, 열 때 '새 메시지' 구분선. 작성줄은 아이디 칩·입력·전송 44px, 도움말 1줄 고정(오류가 자리를 대체) |
+| `ChatBox` (`components/`) | 리더보드 채팅. 우하단 **72px 원형 버튼**(잉크 원판 위 56px 깃털 `ggparrot-feather-terminal.svg`, surface 링 + 그림자, 새 소식이면 빨간 halo + `N new` 배지) → 440×700 대화록 시트(모바일은 바닥 시트). 말풍선 없이 이름·시각·본문, 같은 사람 연속은 헤더 생략, 열 때 '새 메시지' 구분선. 작성줄은 아이디 칩·입력·전송 44px, 도움말 1줄 고정(오류가 자리를 대체) |
 | `RunResultScreen` (`components/`) | 실행이 끝나면 에이전트 채팅 자리를 **통째로** 차지. 아이브로 → 헤드라인 → 총 실현손익(큰 숫자, 상승 초록·하락 빨강) → 실행 시간·종목·남은 포지션 행. 상자 없음 |
 
 화면 골격(`components/Page.jsx`)도 같은 이유로 공용이다 — `PageHeader` `SectionTitle`

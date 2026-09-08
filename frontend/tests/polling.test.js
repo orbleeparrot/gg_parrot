@@ -146,3 +146,30 @@ test("request coordinator deduplicates consumers and aborts only after all leave
   await assert.rejects(third, { name: "AbortError" });
   assert.equal(sharedSignal.aborted, true);
 });
+
+test("a remounted consumer does not reuse the prior consumer's aborted request", async () => {
+  const coordinator = createRequestCoordinator();
+  const firstController = new AbortController();
+  let calls = 0;
+  let releaseOld;
+  let releaseFresh;
+  const factory = () => {
+    calls += 1;
+    return calls === 1 ? new Promise((resolve) => { releaseOld = resolve; })
+      : new Promise((resolve) => { releaseFresh = resolve; });
+  };
+  const first = coordinator.run("news", factory, { signal: firstController.signal });
+  firstController.abort();
+  const remounted = coordinator.run("news", factory);
+  await assert.rejects(first, { name: "AbortError" });
+  assert.equal(calls, 2);
+  releaseOld({ items: ["old"] });
+  await flush();
+  assert.equal(coordinator.size(), 1);
+  const secondConsumer = coordinator.run("news", factory);
+  assert.equal(calls, 2);
+  releaseFresh({ items: ["fresh"] });
+  assert.deepEqual(await remounted, { items: ["fresh"] });
+  assert.deepEqual(await secondConsumer, { items: ["fresh"] });
+  assert.equal(coordinator.size(), 0);
+});

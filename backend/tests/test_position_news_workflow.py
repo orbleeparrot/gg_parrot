@@ -464,6 +464,15 @@ def test_effective_config_exposes_official_api_limits_without_credentials(monkey
     assert "private-test-credential" not in json.dumps(result)
 
 
+def test_translation_policy_has_no_daily_quota_and_keeps_analysis_limits(monkeypatch):
+    monkeypatch.setenv("POSITION_NEWS_TRANSLATION_MAX_CALLS_PER_DAY", "0")
+    monkeypatch.setenv("NEWS_TRANSLATION_MAX_CALLS_PER_DAY", "0")
+    monkeypatch.setenv("POSITION_NEWS_MAX_AI_ANALYSES_PER_DAY", "10")
+    result = workflow.effective_config()
+    assert result["title_translation"] == {"daily_call_limit": None, "scope": "all_articles", "shared_cache": True}
+    assert result["max_ai_per_day"] == 10
+
+
 def test_browser_source_logs_distinguish_navigation_cooldown_and_unattempted_queue(monkeypatch, capsys):
     sources = [
         {"name": "coindesk_rss", "status": "ready", "fetched_count": 25, "item_count": 1},

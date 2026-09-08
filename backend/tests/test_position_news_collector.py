@@ -70,6 +70,8 @@ class FakeRepository:
         if row["claim_token"] != claim_token:
             return False
         row["analysis"] = analysis
+        if _kwargs.get("news_payload") is not None:
+            row["news"] = _kwargs["news_payload"]
         row["completed"] = True
         row["claim_token"] = claim_token if _kwargs.get("keep_claim") else ""
         return True
@@ -162,6 +164,55 @@ def test_base_fingerprint_ignores_reordering_but_not_asset_or_headline_changes()
     assert collector.analysis_fingerprint("CRVUSD", first) != (
         collector.analysis_fingerprint("CRV", first)
     )
+
+
+def test_collector_translates_every_title_without_legacy_quotas_and_retains_pending(monkeypatch):
+    monkeypatch.setenv("POSITION_NEWS_TRANSLATION_MAX_CALLS_PER_DAY", "0")
+    monkeypatch.setenv("NEWS_TRANSLATION_MAX_CALLS_PER_DAY", "0")
+    rows = [{"title": f"Bitcoin headline {index}", "source": "CoinDesk", "url": f"https://news.test/{index}"}
+            for index in range(23)]
+    seen = []
+    def localize(items):
+        seen.extend(items)
+        return [{**item, "title": f"비트코인 소식 {index}", "original_title": item["title"]}
+                for index, item in enumerate(items) if index != 11]
+    monkeypatch.setattr(collector.news_mod, "_localize_coin_news_items", localize)
+    class NoBudget:
+        def reserve_ai_budget(self, **_):
+            raise AssertionError("Title translation must not reserve an analysis budget")
+    result = collector._localize_collected_payload({"items": rows}, NoBudget())
+    assert seen == rows and len(seen) == 23
+    assert len(result["items"]) == 23
+    assert result["items"][11] == rows[11]
+    assert result["items"][22]["title"] == "비트코인 소식 22"
+    assert result["translation"]["pending_count"] == 1
+    assert result["translation"]["status"] == "partial"
+
+
+def test_reused_analysis_does_not_skip_translation_recovery(monkeypatch):
+    repo, calls, analyses = FakeRepository(), [], []
+    payload = _payload("BTC", "Bitcoin ETF approved")
+    def localize(items):
+        calls.append(items)
+        return [] if len(calls) == 1 else [{**items[0], "original_title": items[0]["title"],
+                                          "title": "BTC 비트코인 ETF 승인"}]
+    monkeypatch.setattr(collector.news_mod, "_localize_coin_news_items", localize)
+    def analyze(items, coin_name, **kwargs):
+        analyses.append(items)
+        return _analysis(items, coin_name, **kwargs)
+    first = collector.collect_payload("BTC", payload, repo=repo, analyzer=analyze, allow_ai=False)
+    second = collector.collect_payload("BTC", payload, repo=repo, analyzer=analyze, allow_ai=False)
+    assert first["status"] == "stored" and second["status"] == "reused"
+    assert first["snapshot_key"] == second["snapshot_key"]
+    assert len(calls) == 2 and len(analyses) == 1
+    assert repo.by_id[1]["news"]["items"][0]["title"] == payload["items"][0]["title"]
+    assert repo.budget_used == 0
+
+
+def test_translation_does_not_change_analysis_identity():
+    raw = {"title": "Bitcoin ETF approved", "source": "CoinDesk", "excerpt": "Source description"}
+    localized = {**raw, "original_title": raw["title"], "title": "비트코인 ETF 승인"}
+    assert collector.analysis_fingerprint("BTC", [raw]) == collector.analysis_fingerprint("BTC", [localized])
 
 
 def test_same_base_ticker_fetches_and_analyzes_once_per_cycle():

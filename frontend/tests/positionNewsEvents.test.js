@@ -63,7 +63,7 @@ test("position news shows the article title and content summary without position
           },
           items: [{
             id: "news-1",
-            title: "OpenEden expands its tokenized Treasury platform",
+            title: "OpenEden, 토큰화 미국 국채 플랫폼 확대",
             source: "CoinDesk",
             url: "https://news.example.com/openeden",
             published: "2026-08-25T01:11:44Z",
@@ -83,7 +83,7 @@ test("position news shows the article title and content summary without position
   });
 
   assert.equal(events.length, 1);
-  assert.equal(events[0].title, "OpenEden expands its tokenized Treasury platform");
+  assert.equal(events[0].title, "OpenEden, 토큰화 미국 국채 플랫폼 확대");
   assert.equal(
     events[0].summary,
     "OpenEden이 토큰화 미국 국채 플랫폼의 지원 범위를 확대했다는 내용입니다.",
@@ -93,4 +93,16 @@ test("position news shows the article title and content summary without position
   assert.equal(events[0].sourceLabel, "CoinDesk");
   const serialized = JSON.stringify(events);
   assert.doesNotMatch(serialized, /롱 포지션|유리한 뉴스|불리한 뉴스|판단 근거|최근 헤드라인 요약/);
+});
+
+test("English headlines and summaries cannot enter the agent notification stream", () => {
+  const events = positionNewsModule.buildEvents({ featureStates: { position_news: { data: {
+    items: [
+      { id: "pending", title: "Bitcoin rises", summary: "비트코인 상승" },
+      { id: "ready", title: "비트코인 상승", summary: "Bitcoin rises" },
+    ],
+  } } } });
+  assert.equal(events.length, 1);
+  assert.equal(events[0].id, "position-news-ready");
+  assert.equal(events[0].summary, "");
 });

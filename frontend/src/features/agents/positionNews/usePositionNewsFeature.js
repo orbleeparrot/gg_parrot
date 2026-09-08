@@ -63,7 +63,11 @@ export function usePositionNewsFeature(sessionId, running = true) {
       if (requestRef.current === requestId) {
         setState({ status: "ready", sessionId: targetSessionId, data, error: "" });
       }
-      return { nextPollMs: !running ? null : data?.analysis_status === "pending" ? 3000 : 30000 };
+      const waitingForTranslation = data?.translation?.status === "partial";
+      const translationDelay = Math.max(30000, Math.min(300000,
+        (Number(data?.translation?.retry_after_seconds) || 30) * 1000));
+      return { nextPollMs: !running ? null : waitingForTranslation ? translationDelay
+        : data?.analysis_status === "pending" ? 3000 : 30000 };
     } catch (reason) {
       if (reason?.name === "AbortError") return;
       if (requestRef.current === requestId) {

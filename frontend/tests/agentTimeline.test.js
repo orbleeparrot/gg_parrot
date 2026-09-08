@@ -100,7 +100,7 @@ test("a sustained volatility regime does not alert on every closed bar or chart 
 });
 
 test("an article keeps its first timestamp and place across refreshes and translation", () => {
-  const article = { id: "a", title: "Article", source: "Source", summary: "Original" };
+  const article = { id: "a", title: "처음 번역한 기사", source: "Source", summary: "기사 요약" };
   let state = advance(null, { featureStates: news([article]) });
   state = advance(state, { receivedAt: 2000, featureStates: news([], 2000) });
   state = advance(state, { receivedAt: 3000, featureStates: news([{ ...article, title: "번역된 기사", summary: "번역" }], 3000) });
@@ -113,7 +113,7 @@ test("an article keeps its first timestamp and place across refreshes and transl
 });
 
 test("seen news survives disappearing responses and more than one screen of messages", () => {
-  const articles = Array.from({ length: 35 }, (_, i) => ({ id: `a-${i}`, title: `Article ${i}`, published: 1000 + i }));
+  const articles = Array.from({ length: 35 }, (_, i) => ({ id: `a-${i}`, title: `새 기사 ${i}`, published: 1000 + i }));
   let state = advance(null, { featureStates: news(articles) });
   state = advance(state, { featureStates: news([]) });
   state = advance(state, { featureStates: news([...articles].reverse()) });
@@ -133,7 +133,7 @@ test("a repeated source failure is one incident until the source recovers", () =
 });
 
 test("news retries do not resolve and re-announce the same connection failure", () => {
-  const staleData = { items: [{ id: "cached", title: "Cached article" }], collection: { status: "ready", freshness: "fresh" } };
+  const staleData = { items: [{ id: "cached", title: "저장된 기사" }], collection: { status: "ready", freshness: "fresh" } };
   const response = (status) => ({ position_news: { status, data: staleData } });
   let state = advance(null, { featureStates: response("error") });
   for (let i = 0; i < 10; i++) {
@@ -147,8 +147,21 @@ test("news retries do not resolve and re-announce the same connection failure", 
 });
 
 test("a different session gets its own baseline without retaining another macro's events", () => {
-  let state = advance(null, { featureStates: news([{ id: "a", title: "Article" }]) });
+  let state = advance(null, { featureStates: news([{ id: "a", title: "새 기사" }]) });
   state = advance(state, { session: { ...session, session_id: 9 } });
   assert.equal(state.events.length, 0);
   assert.deepEqual(state.seen, {});
+});
+
+test("an untranslated article is first announced only when its Korean translation arrives", () => {
+  const original = { id: "late-translation", title: "Bitcoin ETF inflows rise", published: 1000 };
+  let state = advance(null, { featureStates: news([original]) });
+  assert.equal(state.events.length, 0);
+  const translated = { ...original, original_title: original.title, title: "비트코인 ETF 자금 유입 증가" };
+  for (let receivedAt = 2000; receivedAt <= 4000; receivedAt += 1000) {
+    state = advance(state, { receivedAt, featureStates: news([translated], receivedAt) });
+  }
+  assert.equal(state.events.length, 1);
+  assert.equal(state.events[0].title, translated.title);
+  assert.equal(state.events[0].occurredAt, 1000);
 });

@@ -51,8 +51,8 @@ def test_agent_position_news_preserves_collector_localized_titles(monkeypatch):
     monkeypatch.setattr(service, "_load_latest_snapshot", lambda *_args: stored)
     monkeypatch.setattr(
         service.news_mod,
-        "_localize_coin_news_items",
-        lambda items: pytest.fail("reads must not translate"),
+        "_request_korean_title_translations",
+        lambda items: pytest.fail("completed Korean titles must not call the model"),
     )
 
     payload = service.get_position_news({
@@ -465,8 +465,46 @@ def test_request_path_returns_pending_before_first_central_run(monkeypatch):
     assert payload["collection"]["freshness"] == "pending"
 
 
-def test_agent_read_never_calls_paid_translation(monkeypatch):
+def test_korean_agent_read_never_calls_paid_translation(monkeypatch):
     monkeypatch.setattr(service, "_load_latest_snapshot", lambda _: _stored_snapshot())
-    monkeypatch.setattr(service.news_mod, "_localize_coin_news_items", lambda *_:
-                        pytest.fail("agent reads must not invoke translation"))
+    monkeypatch.setattr(service.news_mod, "_request_korean_title_translations", lambda *_:
+                        pytest.fail("Korean agent reads must not call the model"))
     assert service.get_position_news({"symbol": "BTCUSDT", "position_side": "long"})["items"]
+
+
+def test_translation_pending_article_recovers_without_losing_identity_or_sentiment(monkeypatch):
+    raw = [
+        {"title": "Bitcoin ETF approved", "source": "CoinDesk", "url": "https://news.test/one"},
+        {"title": "Bitcoin exchange hacked", "source": "CoinDesk", "url": "https://news.test/two"},
+    ]
+    stored = {"snapshot_id": "unchanged-snapshot", "news_payload": {"symbol": "BTC", "items": raw},
+              "analysis": {"overview": "최근 소식: Bitcoin ETF approved", "items": [
+                  {"sentiment": "positive", "summary": "Bitcoin ETF approved"},
+                  {"sentiment": "negative", "summary": "Bitcoin exchange hacked"}]},
+              "collection": {"last_success_ms": int(__import__("time").time() * 1000)}}
+    monkeypatch.setattr(service, "_load_latest_snapshot", lambda *_: stored)
+    events, complete = [], [False]
+    class DB:
+        def rollback(self):
+            events.append("released")
+    translated = {raw[0]["title"]: "비트코인 ETF 승인", raw[1]["title"]: "비트코인 거래소 해킹"}
+    def localize(items):
+        assert events[-1] == "released"
+        events.append("translation")
+        return [{**item, "original_title": item["title"], "title": translated[item["title"]]}
+                for index, item in enumerate(items) if complete[0] or index == 1]
+    monkeypatch.setattr(service.news_mod, "_localize_coin_news_items", localize)
+    session = {"symbol": "BTCUSDT", "position_side": "long"}
+    pending = service.get_position_news(session, db=DB())
+    assert len(pending["items"]) == 1 and pending["translation"]["pending_count"] == 1
+    assert pending["items"][0]["asset_sentiment"] == "negative"
+    assert pending["items"][0]["summary"] == "비트코인 거래소 해킹"
+    assert "Bitcoin" not in pending["overview"]["text"]
+    complete[0] = True
+    ready = service.get_position_news(session, db=DB())
+    assert ready["translation"]["status"] == "ready"
+    assert ready["snapshot_id"] == pending["snapshot_id"]
+    assert ready["items"][0]["id"] == service._article_id(raw[0])
+    assert ready["items"][1]["id"] == pending["items"][0]["id"]
+    assert [item["asset_sentiment"] for item in ready["items"]] == ["positive", "negative"]
+    assert raw[0]["title"] == "Bitcoin ETF approved"  # Retry source is untouched.

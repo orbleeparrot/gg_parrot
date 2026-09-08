@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import time
 
 from sqlmodel import Session
@@ -226,13 +227,32 @@ def get_position_news(session: dict, db: Session | None = None) -> dict:
                 )
         return payload
 
-    localized_news = dict(stored["news_payload"])
+    # Release the request read transaction before joining shared translation
+    # work; a provider wait must not pin a Postgres connection.
+    if db is not None:
+        db.rollback()
     payload = build_position_news(
         session,
-        localized_news,
+        stored["news_payload"],
         stored["analysis"],
         snapshot_id=str(stored.get("snapshot_id") or ""),
     )
+    # Project sentiment before filtering. An unfinished first article must not
+    # shift the analysis attached to the second article when it becomes visible.
+    # This also gives old/reused raw snapshots a translation retry path.
+    payload = news_mod._localize_news_payload(payload)
+    for item in payload["items"]:
+        summary = str(item.get("summary") or "").strip()
+        if not re.search(r"[가-힣]", summary) or news_mod._title_needs_korean_translation(summary):
+            item["summary"] = item["title"]
+    overview = str((payload.get("overview") or {}).get("text") or "")
+    if not re.search(r"[가-힣]", overview) or news_mod._title_needs_korean_translation(overview):
+        titles = [f"‘{item['title']}’" for item in payload["items"][:2]]
+        text = (", ".join(titles) + " 소식이 확인됐어요." if titles else
+                "뉴스를 한국어로 번역하고 있어요. 완료되는 대로 표시합니다."
+                if payload.get("translation", {}).get("pending_count") else
+                "관련 최신 뉴스를 확인하고 있어요.")
+        payload["overview"] = {"text": text, "scope": "headlines_only"}
     collection = dict(stored.get("collection") or {})
     last_success_ms = int(collection.get("last_success_ms") or 0)
     age_ms = max(0, int(time.time() * 1000) - last_success_ms)

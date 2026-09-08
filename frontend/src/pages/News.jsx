@@ -1,13 +1,14 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api.js";
+import useNewsBriefings from "../hooks/useNewsBriefings.js";
+import { hasPendingTranslation } from "../lib/newsBriefings.js";
 import CoinIcon from "../components/CoinIcon.jsx";
 import NewsBriefingReader from "../components/NewsBriefingReader.jsx";
 import { AnnotatedText, TermChips } from "../components/NewsTerms.jsx";
 import { Loading, ErrorNote } from "../components/Page.jsx";
 
 const COIN_NEWS_CONCURRENCY = 2;
-const NEWS_BUSY_RETRY_DELAYS_MS = [400, 1_200, 2_400];
 const RACER_NEWS_ROTATE_MS = 5_000;
 const compactVolumeFormatter = new Intl.NumberFormat("ko-KR", {
   notation: "compact",
@@ -36,116 +37,22 @@ function errorMessage(reason) {
   return reason instanceof Error ? reason.message : String(reason);
 }
 
-function wait(milliseconds) {
-  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
-}
-
-async function requestNewsWithBusyRetry(load) {
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      return await load();
-    } catch (reason) {
-      if (reason?.status !== 429 || attempt >= NEWS_BUSY_RETRY_DELAYS_MS.length) {
-        throw reason;
-      }
-      await wait(NEWS_BUSY_RETRY_DELAYS_MS[attempt]);
-    }
-  }
-}
-
-function requestCoinNews(symbol) {
-  return requestNewsWithBusyRetry(() => api.newsCoin(symbol));
-}
-
-function requestMarketNews() {
-  return requestNewsWithBusyRetry(() => api.newsMarket());
-}
-
 function useCoinNewsBriefings(coins) {
-  const [newsBySymbol, setNewsBySymbol] = useState({});
-  const generationRef = useRef(0);
-  const symbolsKey = coins.map((coin) => coin.symbol).join("|");
-
-  useEffect(() => {
-    const symbols = symbolsKey ? symbolsKey.split("|") : [];
-    const generation = generationRef.current + 1;
-    generationRef.current = generation;
-
-    if (symbols.length === 0) {
-      setNewsBySymbol({});
-      return undefined;
-    }
-
-    setNewsBySymbol((current) => {
-      const next = {};
-      for (const symbol of symbols) {
-        const previous = current[symbol];
-        next[symbol] = previous?.status === "success"
-          ? previous
-          : { status: "queued", data: null, error: "" };
-      }
-      return next;
-    });
-
-    let cursor = 0;
-    async function runWorker() {
-      while (cursor < symbols.length && generationRef.current === generation) {
-        const symbol = symbols[cursor];
-        cursor += 1;
-        setNewsBySymbol((current) => ({
-          ...current,
-          [symbol]: { status: "loading", data: current[symbol]?.data || null, error: "" },
-        }));
-
-        try {
-          const data = await requestCoinNews(symbol);
-          if (generationRef.current !== generation) return;
-          setNewsBySymbol((current) => ({
-            ...current,
-            [symbol]: { status: "success", data, error: "" },
-          }));
-        } catch (reason) {
-          if (generationRef.current !== generation) return;
-          setNewsBySymbol((current) => ({
-            ...current,
-            [symbol]: { status: "error", data: null, error: errorMessage(reason) },
-          }));
-        }
-      }
-    }
-
-    const workerCount = Math.min(COIN_NEWS_CONCURRENCY, symbols.length);
-    for (let index = 0; index < workerCount; index += 1) runWorker();
-
-    return () => {
-      if (generationRef.current === generation) generationRef.current += 1;
-    };
-  }, [symbolsKey]);
-
-  const retry = useCallback(async (symbol) => {
-    const generation = generationRef.current;
-    setNewsBySymbol((current) => ({
-      ...current,
-      [symbol]: { status: "loading", data: null, error: "" },
-    }));
-
-    try {
-      const data = await requestCoinNews(symbol);
-      if (generationRef.current !== generation) return;
-      setNewsBySymbol((current) => ({
-        ...current,
-        [symbol]: { status: "success", data, error: "" },
-      }));
-    } catch (reason) {
-      if (generationRef.current !== generation) return;
-      setNewsBySymbol((current) => ({
-        ...current,
-        [symbol]: { status: "error", data: null, error: errorMessage(reason) },
-      }));
-    }
-  }, []);
-
+  const { states: newsBySymbol, retry } = useNewsBriefings(
+    coins.map((coin) => coin.symbol),
+    (symbol, signal) => api.newsCoin(symbol, { signal }),
+    COIN_NEWS_CONCURRENCY,
+  );
   return { newsBySymbol, retry };
+}
+
+function TranslationPending({ data }) {
+  const count = Number(data?.translation?.pending_count) || 0;
+  return (
+    <div className="news-racer-reader-state is-notice" role="status">
+      <span>{count > 0 ? `${count}개 기사 제목을` : "기사 제목을"} 한국어로 번역하고 있어요. 완료되면 자동으로 표시해요.</span>
+    </div>
+  );
 }
 
 function Disclaimer({ text }) {
@@ -180,6 +87,7 @@ function BriefingSectionHeader({ id, title, description, count, countLabel, pend
 }
 
 function MarketBriefing({ market, loading, error }) {
+  const translationPending = hasPendingTranslation(market);
   const readerItems = useMemo(
     () => (market?.items || []).map((item) => ({
       id: item.url || item.title,
@@ -207,14 +115,15 @@ function MarketBriefing({ market, loading, error }) {
 
       {market ? (
         <>
-          <NewsBriefingReader
+          {readerItems.length > 0 || !translationPending ? <NewsBriefingReader
             key={market.updated_at || market.as_of || "market"}
             items={readerItems}
             ariaLabel="현재 읽는 시장·규제 헤드라인"
             empty="지금은 불러올 시장 헤드라인이 없어요."
             queueLabel="헤드라인 읽는 순서"
             rotateMs={5_000}
-          />
+          /> : null}
+          {translationPending ? <TranslationPending data={market} /> : null}
 
           {market.overview ? (
             <div className="news-market-summary">
@@ -238,6 +147,7 @@ const RacerNewsBriefing = memo(function RacerNewsBriefing({ coin, rank, newsStat
   const base = coinOf(coin.symbol);
   const data = newsState?.data || null;
   const status = newsState?.status || "queued";
+  const translationPending = hasPendingTranslation(data);
   const change = Number(coin.change_pct) || 0;
   const changeTone = change > 0 ? "is-up" : change < 0 ? "is-down" : "is-flat";
   const changePrefix = change > 0 ? "+" : "";
@@ -297,14 +207,14 @@ const RacerNewsBriefing = memo(function RacerNewsBriefing({ coin, rank, newsStat
         </div>
       ) : null}
 
-      {status === "success" && readerItems.length === 0 ? (
+      {status === "success" && readerItems.length === 0 && !translationPending ? (
         <div className="news-racer-reader-state">
           <strong>{base} 관련 최근 뉴스가 없어요.</strong>
           <span>새 원문이 수집되면 이 자리에 브리핑이 나타나요.</span>
         </div>
       ) : null}
 
-      {status === "success" && readerItems.length > 0 ? (
+      {readerItems.length > 0 ? (
         <NewsBriefingReader
           key={data.updated_at || data.as_of || coin.symbol}
           items={readerItems}
@@ -318,12 +228,7 @@ const RacerNewsBriefing = memo(function RacerNewsBriefing({ coin, rank, newsStat
         />
       ) : null}
 
-      {status === "success" && data?.translation?.status === "partial" ? (
-        <div className="news-racer-reader-state is-notice" role="status">
-          <span>한국어 번역을 준비 중인 제목 {data.translation.pending_count}건은 원문으로 표시하고 있어요.</span>
-          <button type="button" onClick={() => onRetry(coin.symbol)}>번역 다시 확인</button>
-        </div>
-      ) : null}
+      {translationPending ? <TranslationPending data={data} /> : null}
 
       {status === "success" && data?.stale ? (
         <div className="news-racer-reader-state is-notice" role="status">
@@ -394,9 +299,13 @@ function RacerBriefing({ coins, loading, error }) {
 }
 
 export default function News() {
-  const [market, setMarket] = useState(null);
-  const [marketLoading, setMarketLoading] = useState(true);
-  const [marketError, setMarketError] = useState("");
+  const { states: marketStates } = useNewsBriefings(
+    ["market"], (_key, signal) => api.newsMarket({ signal }), 1,
+  );
+  const marketState = marketStates.market;
+  const market = marketState?.data || null;
+  const marketLoading = !marketState || ["queued", "loading"].includes(marketState.status);
+  const marketError = marketState?.error || "";
   const [coins, setCoins] = useState([]);
   const [coinsLoading, setCoinsLoading] = useState(true);
   const [coinsError, setCoinsError] = useState("");
@@ -404,23 +313,14 @@ export default function News() {
   useEffect(() => {
     let alive = true;
 
-    requestMarketNews()
-      .then((response) => {
-        if (alive) setMarket(response);
-      })
-      .catch((reason) => {
-        if (alive) setMarketError(errorMessage(reason));
-      })
-      .finally(() => {
-        if (alive) setMarketLoading(false);
-      });
+    const controller = new AbortController();
 
-    api.hotCoins(10)
+    api.hotCoins(10, { signal: controller.signal })
       .then((response) => {
         if (alive) setCoins(response.coins || []);
       })
       .catch((reason) => {
-        if (alive) setCoinsError(errorMessage(reason));
+        if (alive && reason?.name !== "AbortError") setCoinsError(errorMessage(reason));
       })
       .finally(() => {
         if (alive) setCoinsLoading(false);
@@ -428,6 +328,7 @@ export default function News() {
 
     return () => {
       alive = false;
+      controller.abort();
     };
   }, []);
 

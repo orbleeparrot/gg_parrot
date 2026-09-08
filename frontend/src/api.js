@@ -155,9 +155,9 @@ export const api = {
   hotCoins: (limit, options = {}) => req(`/api/hot-coins?limit=${limit || 10}`, options),
 
   // '오늘의 코인동향' — 시장·규제 뉴스 헤드라인 + AI 중립 개요 (KST 하루 1회 캐시)
-  newsMarket: () => req("/api/news/market"),
+  newsMarket: (options = {}) => req("/api/news/market", options),
   // '경주마 동향' — 서버가 Prefect DB 우선, 미수집 티커만 RSS fallback
-  newsCoin: (symbol) => req(`/api/news/coin/${encodeURIComponent(symbol)}`),
+  newsCoin: (symbol, options = {}) => req(`/api/news/coin/${encodeURIComponent(symbol)}`, options),
   // 내 에이전트 기능 01 — 서버가 세션 소유권과 등록 매크로 방향을 확인한다.
   agentWhaleActivity: (sessionId, options = {}) =>
     req(`/api/me/agents/sessions/${sessionId}/whale-activity`, options),

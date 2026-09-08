@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import SimBadge from "../components/SimBadge.jsx";
 import RegisterMacroModal from "../components/RegisterMacroModal.jsx";
 import ChatBox from "../components/ChatBox.jsx";
-import { PageHeader, EmptyState, Loading, ErrorNote } from "../components/Page.jsx";
+import { EmptyState, Loading, ErrorNote } from "../components/Page.jsx";
 import { api } from "../api.js";
 import CoinIcon from "../components/CoinIcon.jsx";
 import { getUserId } from "../lib/user.js";
@@ -169,7 +169,19 @@ export default function Leaderboard() {
 
   return (
     <div>
-      <PageHeader title="오늘의 리더보드" actions={<SimBadge className="lg:hidden" />} />
+      {/* 머리 — 큰 타이포 제목, 그 아래 초기화 카운트다운. 오른쪽 끝에 만들기 버튼. */}
+      <header className="lb-head">
+        <div className="lb-head-copy">
+          <h1 className="lb-head-title">오늘의 리더보드</h1>
+          <p className="lb-head-sub">리더보드 초기화 <span className="num">{fmtCountdown(remain)}</span></p>
+        </div>
+        <div className="lb-head-actions">
+          <SimBadge className="lg:hidden" />
+          <button onClick={() => navigate("/builder?guide=1")} className="btn btn-m btn-primary">
+            매크로 만들기
+          </button>
+        </div>
+      </header>
 
       {quickRunMode ? (
         <div className="leaderboard-quick-run-callout" role="status">
@@ -187,16 +199,6 @@ export default function Leaderboard() {
           등록을 완료했어요. 같은 설정으로 모의 수익률 집계를 시작했어요.
         </div>
       ) : null}
-
-      {/* 도구막대 — 안내문은 두지 않는다. 초기화 시각은 카운트다운이, 방어전은 1~3위 배지가 말한다. */}
-      <div className="lb-toolbar">
-        <button onClick={() => navigate("/builder?guide=1")} className="btn btn-m btn-primary">
-          매크로 만들기
-        </button>
-        <span className="lb-countdown t-small text-slate-500">
-          리더보드 초기화 <span className="num text-slate-900">{fmtCountdown(remain)}</span>
-        </span>
-      </div>
 
       {busy && <Loading />}
       {error && <ErrorNote>오류: {error}</ErrorNote>}

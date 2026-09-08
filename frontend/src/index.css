@@ -4974,13 +4974,18 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   width: 100%;
 }
 
-/* 페이지 머리 — 제목·기준일·설명·고지를 한 줄에 욱여넣지 않고 세로로 쌓아
-   큰 타이포로 읽힌다. 상자·배경 없이 글자 크기와 여백만으로 위계를 만든다(§1-3). */
-.news-page-head {
-  margin-bottom: 32px;
+/* 페이지 머리(공용 PageHeader) — 모든 화면이 같은 규격. 상자 없이 크기·여백으로만 위계(§1-3).
+   아이브로 → 제목 → meta(수치 한 줄) → 설명 → note. 우측 액션은 제목 밑선에 맞춘다. */
+.page-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px 24px;
+  flex-wrap: wrap;
+  margin-bottom: 28px;
 }
-
-.news-page-eyebrow {
+.page-head-copy { min-width: 0; }
+.page-head-eyebrow {
   display: block;
   margin-bottom: 12px;
   color: rgb(var(--c-slate-500));
@@ -4989,35 +4994,40 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   font-weight: 750;
   letter-spacing: 0.08em;
 }
-
-.news-page-title {
+.page-head-title {
   margin: 0;
   color: rgb(var(--c-slate-900));
-  font-size: clamp(34px, 26px + 2vw, 52px);
+  font-size: clamp(30px, 22px + 1.6vw, 44px);
   line-height: 1.08;
   font-weight: 800;
   letter-spacing: -0.03em;
   text-wrap: balance;
 }
-
-.news-page-asof {
-  display: block;
-  margin-top: 14px;
+.page-head-meta {
+  margin: 12px 0 0;
   color: rgb(var(--c-slate-500));
   font-size: 15px;
   line-height: 1.4;
   font-weight: 600;
 }
-
-.news-page-description {
-  margin: 20px 0 0;
-  max-width: 36ch;
+.page-head-meta .num { color: rgb(var(--c-slate-900)); }
+.page-head-description {
+  margin: 16px 0 0;
+  max-width: 40ch;
   color: rgb(var(--c-slate-700));
-  font-size: clamp(17px, 15px + 0.5vw, 21px);
+  font-size: clamp(16px, 15px + 0.3vw, 19px);
   line-height: 1.5;
   font-weight: 500;
   text-wrap: pretty;
 }
+.page-head-note {
+  margin: 10px 0 0;
+  color: rgb(var(--c-slate-500));
+  font-size: 13px;
+  line-height: 1.5;
+  font-weight: 600;
+}
+.page-head-actions { display: flex; align-items: center; gap: 10px; margin-left: auto; }
 
 .news-briefing-grid {
   border-top: 1px solid rgb(var(--c-slate-300));
@@ -5431,14 +5441,6 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   margin-top: 20px;
   padding-top: 16px;
   border-top: 1px solid rgb(var(--c-slate-200));
-}
-
-.news-page-disclaimer {
-  margin-top: 12px;
-  color: rgb(var(--c-slate-500));
-  font-size: 13px;
-  line-height: 1.5;
-  font-weight: 600;
 }
 
 .news-racer-briefing-stack {
@@ -8632,34 +8634,6 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 
 /* 리더보드 — 전체 폭을 쓰는 괘선 표(§1-3 카드 없음, §5 폭 제한 없음).
    순위 | 로고 | 매크로 | 전략 | 수익률 | 반응. 1·2·3위는 금·은·동(테마 무관 상수). */
-/* 머리 — 코인동향 머리와 같은 계열의 큰 타이포. 상자 없이 크기·여백으로 위계(§1-3). */
-.lb-head {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 16px 24px;
-  flex-wrap: wrap;
-  margin-bottom: 22px;
-}
-.lb-head-copy { min-width: 0; }
-.lb-head-title {
-  margin: 0;
-  color: rgb(var(--c-slate-900));
-  font-size: clamp(30px, 22px + 1.6vw, 44px);
-  line-height: 1.08;
-  font-weight: 800;
-  letter-spacing: -0.03em;
-  text-wrap: balance;
-}
-.lb-head-sub {
-  margin: 10px 0 0;
-  color: rgb(var(--c-slate-500));
-  font-size: 15px;
-  line-height: 1.4;
-  font-weight: 600;
-}
-.lb-head-sub .num { color: rgb(var(--c-slate-900)); }
-.lb-head-actions { display: flex; align-items: center; gap: 10px; margin-left: auto; }
 .lb-board {
   --lb-gold: 212 160 23;
   --lb-silver: 154 165 177;

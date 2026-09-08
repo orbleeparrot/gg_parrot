@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import SimBadge from "../components/SimBadge.jsx";
 import RegisterMacroModal from "../components/RegisterMacroModal.jsx";
 import ChatBox from "../components/ChatBox.jsx";
-import { EmptyState, Loading, ErrorNote } from "../components/Page.jsx";
+import { PageHeader, EmptyState, Loading, ErrorNote } from "../components/Page.jsx";
 import { api } from "../api.js";
 import CoinIcon from "../components/CoinIcon.jsx";
 import { getUserId } from "../lib/user.js";
@@ -169,19 +169,18 @@ export default function Leaderboard() {
 
   return (
     <div>
-      {/* 머리 — 큰 타이포 제목, 그 아래 초기화 카운트다운. 오른쪽 끝에 만들기 버튼. */}
-      <header className="lb-head">
-        <div className="lb-head-copy">
-          <h1 className="lb-head-title">오늘의 리더보드</h1>
-          <p className="lb-head-sub">리더보드 초기화 <span className="num">{fmtCountdown(remain)}</span></p>
-        </div>
-        <div className="lb-head-actions">
-          <SimBadge className="lg:hidden" />
-          <button onClick={() => navigate("/builder?guide=1")} className="btn btn-m btn-primary">
-            매크로 만들기
-          </button>
-        </div>
-      </header>
+      <PageHeader
+        title="오늘의 리더보드"
+        meta={<>리더보드 초기화 <span className="num">{fmtCountdown(remain)}</span></>}
+        actions={(
+          <>
+            <SimBadge className="lg:hidden" />
+            <button onClick={() => navigate("/builder?guide=1")} className="btn btn-m btn-primary">
+              매크로 만들기
+            </button>
+          </>
+        )}
+      />
 
       {quickRunMode ? (
         <div className="leaderboard-quick-run-callout" role="status">

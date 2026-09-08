@@ -5,16 +5,21 @@
 // "불러오는 중…"이 여섯 가지 크기·색으로 흩어져 있었다. 같은 것은 같게 보여야
 // 화면을 옮겨 다닐 때 눈이 다시 적응하지 않는다.
 
-// 제목(t-h2) · 부제(t-small) · 우측 액션. 부제는 measure 로 한 줄 길이를 묶는다.
-export function PageHeader({ title, description, actions, eyebrow, headingAs: Heading = "h1" }) {
+// 페이지 머리 — 모든 화면이 같은 타이포 규격을 쓴다(코인동향·리더보드에서 시작한 형태).
+// 아이브로(11/750/자간) → 제목(clamp 30~44px/800) → meta(기준일·카운트다운 같은 수치 한 줄)
+// → 설명(16~19/500, 40ch) → note(13, 고지). 상자 없이 크기·여백으로만 위계(§1-3).
+// 우측 액션은 제목 밑선에 맞춘다. 제목이 없는 화면(내 에이전트)은 이 컴포넌트를 쓰지 않는다.
+export function PageHeader({ title, description, meta, note, actions, eyebrow, headingAs: Heading = "h1" }) {
   return (
-    <header className="flex items-start justify-between gap-5 flex-wrap mb-7">
-      <div className="min-w-0">
-        {eyebrow && <div className="t-caption text-slate-500 mb-2">{eyebrow}</div>}
-        <Heading className="t-h2 text-slate-900">{title}</Heading>
-        {description && <p className="mt-3 t-small text-slate-700 measure">{description}</p>}
+    <header className="page-head">
+      <div className="page-head-copy">
+        {eyebrow && <span className="page-head-eyebrow">{eyebrow}</span>}
+        <Heading className="page-head-title">{title}</Heading>
+        {meta && <p className="page-head-meta">{meta}</p>}
+        {description && <p className="page-head-description">{description}</p>}
+        {note && <p className="page-head-note">{note}</p>}
       </div>
-      {actions && <div className="flex items-center gap-2 shrink-0">{actions}</div>}
+      {actions && <div className="page-head-actions">{actions}</div>}
     </header>
   );
 }

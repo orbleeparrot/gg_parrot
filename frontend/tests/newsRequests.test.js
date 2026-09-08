@@ -19,17 +19,17 @@ function harness(load, keys = ["BTC"]) {
   const states = new Map();
   const queue = createNewsBriefingQueue({
     keys, load, onChange: (key, state) => states.set(key, state), now: () => clock,
-    setTimer: (fn, delay) => { timers.set(++nextId, { fn, delay }); return nextId; },
+    setTimer: (fn, delay) => { timers.set(++nextId, { fn, dueAt: clock + delay }); return nextId; },
     clearTimer: (id) => timers.delete(id),
   });
   return {
     queue, states,
-    delays: () => [...timers.values()].map((timer) => timer.delay),
+    delays: () => [...timers.values()].map((timer) => timer.dueAt - clock).sort((a, b) => a - b),
     async next() {
-      const [id, timer] = timers.entries().next().value || [];
+      const [id, timer] = [...timers].sort((a, b) => a[1].dueAt - b[1].dueAt)[0] || [];
       assert.ok(timer, "expected a scheduled request");
       timers.delete(id);
-      clock += timer.delay;
+      clock = timer.dueAt;
       timer.fn();
       await flush();
     },
@@ -82,7 +82,7 @@ test("slow source requests are limited to two concurrent keys with no overlappin
   await h.next();
   assert.deepEqual(calls, ["BTC", "ETH"]);
   h.queue.retry("BTC");
-  assert.deepEqual(h.delays(), []);
+  assert.deepEqual(h.delays(), [45000, 45000]); // Only the two request deadlines.
   releases.get("BTC")();
   await flush();
   assert.deepEqual(calls, ["BTC", "ETH", "SOL"]);
@@ -90,6 +90,115 @@ test("slow source requests are limited to two concurrent keys with no overlappin
   await flush();
   assert.equal(peak, 2);
   assert.deepEqual(h.delays(), []);
+  h.queue.stop();
+});
+
+test("a pending translation retries at its deadline while another card remains loading", async () => {
+  const calls = [];
+  const signals = new Map();
+  let active = 0;
+  let peak = 0;
+  const h = harness(async (key, signal) => {
+    calls.push(key);
+    active += 1;
+    peak = Math.max(peak, active);
+    if (key === "SLOW") {
+      signals.set(key, signal);
+      signal.addEventListener("abort", () => { active -= 1; }, { once: true });
+      return new Promise(() => {});
+    }
+    active -= 1;
+    return key === "BTC" && calls.filter((value) => value === key).length === 1 ? pending : ready;
+  }, ["BTC", "SLOW", "CFG"]);
+  h.queue.start();
+  await h.next();
+  assert.deepEqual(calls, ["BTC", "SLOW", "CFG"]);
+  assert.deepEqual(h.delays(), [30000, 45000]);
+  await h.next();
+  assert.deepEqual(calls, ["BTC", "SLOW", "CFG", "BTC"]);
+  assert.equal(h.states.get("BTC").data.translation.status, "ready");
+  assert.equal(h.states.get("SLOW").status, "loading");
+  assert.equal(signals.get("SLOW").aborted, false);
+  assert.equal(peak, 2);
+  h.queue.stop();
+  assert.equal(signals.get("SLOW").aborted, true);
+  assert.deepEqual(h.delays(), []);
+});
+
+test("two stalled requests time out and release slots for the remaining cards", async () => {
+  const calls = [];
+  const signals = new Map();
+  const h = harness((key, signal) => {
+    calls.push(key);
+    signals.set(key, signal);
+    return key.startsWith("SLOW") ? new Promise(() => {}) : Promise.resolve(ready);
+  }, ["SLOW1", "SLOW2", "BTC", "CFG"]);
+  h.queue.start();
+  await h.next();
+  assert.deepEqual(calls, ["SLOW1", "SLOW2"]);
+  await h.next();
+  assert.equal(signals.get("SLOW1").aborted, true);
+  assert.equal(h.states.get("SLOW1").status, "error");
+  assert.equal(h.states.get("BTC").data.translation.status, "ready");
+  assert.equal(h.states.get("CFG").data.translation.status, "ready");
+  await h.next();
+  assert.equal(signals.get("SLOW2").aborted, true);
+  assert.deepEqual(calls, ["SLOW1", "SLOW2", "BTC", "CFG"]);
+  assert.deepEqual(h.delays(), [30000]);
+  h.queue.stop();
+});
+
+test("never-loaded cards precede retries when earlier slow cards repeatedly become due", async () => {
+  const calls = [];
+  const h = harness(async (key) => {
+    calls.push(key);
+    return key.startsWith("EARLY") ? new Promise(() => {}) : ready;
+  }, ["EARLY1", "EARLY2", "EARLY3", "EARLY4", "BTC", "CFG"]);
+  h.queue.start();
+  await h.next(); // EARLY1 and EARLY2 start.
+  await h.next(); // EARLY1 times out; EARLY3 starts.
+  await h.next(); // EARLY2 times out; EARLY4 starts.
+  await h.next(); // At 90s, earlier retries are overdue but BTC/CFG still have dueAt=0.
+  assert.deepEqual(calls.slice(0, 6), ["EARLY1", "EARLY2", "EARLY3", "EARLY4", "BTC", "CFG"]);
+  assert.equal(h.states.get("BTC").data.translation.status, "ready");
+  assert.equal(h.states.get("CFG").data.translation.status, "ready");
+  h.queue.stop();
+});
+
+test("a timed-out retry keeps ready headlines and discards its late response", async () => {
+  let calls = 0;
+  let release;
+  const h = harness(async () => {
+    calls += 1;
+    if (calls === 1) return { ...pending, items: ready.items };
+    return new Promise((resolve) => { release = resolve; });
+  });
+  h.queue.start();
+  await h.next();
+  await h.next();
+  await h.next();
+  const afterTimeout = h.states.get("BTC");
+  assert.equal(afterTimeout.status, "error");
+  assert.deepEqual(afterTimeout.data.items, ready.items);
+  assert.deepEqual(h.delays(), [30000]);
+  release({ ...ready, items: [{ title: "늦게 도착한 응답" }] });
+  await flush();
+  assert.equal(h.states.get("BTC"), afterTimeout);
+  h.queue.stop();
+});
+
+test("manual retry uses a free slot while another card is still loading", async () => {
+  const calls = [];
+  const h = harness(async (key) => {
+    calls.push(key);
+    return key === "SLOW" ? new Promise(() => {}) : ready;
+  }, ["BTC", "SLOW"]);
+  h.queue.start();
+  await h.next();
+  h.queue.retry("BTC");
+  await h.next();
+  assert.deepEqual(calls, ["BTC", "SLOW", "BTC"]);
+  assert.equal(h.states.get("SLOW").status, "loading");
   h.queue.stop();
 });
 
@@ -178,6 +287,32 @@ test("hiding the page aborts pending requests and resuming waits for the existin
   await h.next();
   assert.equal(attempts, 2);
   assert.deepEqual(h.delays(), [30000]);
+  h.queue.stop();
+});
+
+test("a late response from a hidden-page request cannot replace the resumed request", async () => {
+  const releases = [];
+  const signals = [];
+  const h = harness((_key, signal) => {
+    signals.push(signal);
+    return new Promise((resolve) => releases.push(resolve));
+  });
+  h.queue.start();
+  await h.next();
+  h.queue.setVisible(false);
+  assert.equal(signals[0].aborted, true);
+  assert.deepEqual(h.delays(), []);
+  h.queue.setVisible(true);
+  await h.next();
+  assert.equal(signals.length, 2);
+  releases[0]({ ...ready, items: [{ title: "취소된 요청의 오래된 제목" }] });
+  await flush();
+  assert.equal(h.states.get("BTC").status, "loading");
+  assert.equal(h.states.get("BTC").data, null);
+  releases[1](ready);
+  await flush();
+  assert.deepEqual(h.states.get("BTC").data.items, ready.items);
+  assert.deepEqual(h.delays(), []);
   h.queue.stop();
 });
 

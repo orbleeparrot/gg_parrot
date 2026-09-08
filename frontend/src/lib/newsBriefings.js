@@ -1,7 +1,6 @@
-import { createAdaptivePoller } from "./polling.js";
-
 const RETRY_MS = 30_000;
 const MAX_RETRY_MS = 300_000;
+const REQUEST_TIMEOUT_MS = 45_000;
 
 export function hasKoreanText(value) {
   return /[가-힣]/.test(String(value || ""));
@@ -69,14 +68,19 @@ export function createNewsBriefingQueue({
   onChange,
   concurrency = 2,
   now = Date.now,
-  setTimer,
-  clearTimer,
+  setTimer = (fn, delay) => setTimeout(fn, delay),
+  clearTimer = (id) => clearTimeout(id),
+  requestTimeoutMs = REQUEST_TIMEOUT_MS,
 }) {
   const records = new Map([...new Set(keys)].map((key) => [key, {
     status: "queued", data: null, error: "", dueAt: 0,
     pendingAttempts: 0, failures: 0,
   }]));
+  const requests = new Map();
+  const slots = Math.max(1, Math.trunc(concurrency) || 2);
   let active = false;
+  let visible = true;
+  let timer = null;
   const notify = (key, record) => {
     if (active) onChange(key, { status: record.status, data: record.data, error: record.error });
   };
@@ -87,64 +91,115 @@ export function createNewsBriefingQueue({
     return Math.max(serverDelay, Math.min(MAX_RETRY_MS, RETRY_MS * (2 ** Math.min(attempt - 1, 4))));
   };
 
-  const poller = createAdaptivePoller({
-    intervalMs: RETRY_MS,
-    maxIntervalMs: MAX_RETRY_MS,
-    ...(setTimer ? { setTimer } : {}),
-    ...(clearTimer ? { clearTimer } : {}),
-    task: async ({ signal }) => {
-      const due = [...records].filter(([, record]) => record.dueAt !== null && record.dueAt <= now());
-      let cursor = 0;
-      async function worker() {
-        while (cursor < due.length && active && !signal.aborted) {
-          const [key, record] = due[cursor++];
-          record.status = record.data ? "success" : "loading";
-          record.loading = true;
-          record.error = "";
-          notify(key, record);
-          try {
-            const response = await load(key, signal);
-            if (!active || signal.aborted) continue;
-            record.data = prepareNewsResponse(response);
-            record.status = "success";
-            record.failures = 0;
-            record.pendingAttempts = hasPendingTranslation(record.data) || record.data.stale
-              ? record.pendingAttempts + 1 : 0;
-            record.dueAt = record.pendingAttempts
-              ? now() + retryDelay(record.pendingAttempts, record.data) : null;
-          } catch (reason) {
-            if (signal.aborted || reason?.name === "AbortError") {
-              record.status = record.data ? "success" : "queued";
-              continue;
-            }
-            record.status = "error";
-            record.error = reason instanceof Error ? reason.message : String(reason);
-            record.failures += 1;
-            const transient = !reason?.status || reason.status === 429 || reason.status >= 500;
-            record.dueAt = transient
-              ? now() + retryDelay(record.failures) : null;
-          } finally {
-            record.loading = false;
-            notify(key, record);
-          }
-        }
+  const clearScheduled = () => {
+    if (timer !== null) clearTimer(timer);
+    timer = null;
+  };
+  const schedule = (delay) => {
+    clearScheduled();
+    if (active && visible) timer = setTimer(pump, Math.max(0, delay));
+  };
+
+  function startRequest(key, record) {
+    const controller = new AbortController();
+    const request = { controller, timer: null, cancel: null };
+    const interrupted = new Promise((_resolve, reject) => {
+      request.cancel = (reason) => {
+        // Settle the timeout first so fetch's AbortError cannot turn it into
+        // an immediate retry. Visibility cancellation uses AbortError itself.
+        reject(reason);
+        controller.abort();
+      };
+    });
+    requests.set(key, request);
+    record.status = record.data ? "success" : "loading";
+    record.loading = true;
+    record.error = "";
+    notify(key, record);
+    request.timer = setTimer(() => request.cancel(Object.assign(
+      new Error("뉴스 응답이 지연되어 잠시 후 다시 확인해요."), { name: "TimeoutError" },
+    )), requestTimeoutMs);
+    const current = () => active && visible && requests.get(key) === request;
+    const response = Promise.resolve().then(() => {
+      if (controller.signal.aborted) throw Object.assign(new Error("aborted"), { name: "AbortError" });
+      return load(key, controller.signal);
+    });
+    // One stalled source must not hold the other slot or the whole retry batch.
+    Promise.race([response, interrupted]).then((payload) => {
+      if (!current()) return;
+      record.data = prepareNewsResponse(payload);
+      record.status = "success";
+      record.failures = 0;
+      record.pendingAttempts = hasPendingTranslation(record.data) || record.data.stale
+        ? record.pendingAttempts + 1 : 0;
+      record.dueAt = record.pendingAttempts
+        ? now() + retryDelay(record.pendingAttempts, record.data) : null;
+    }).catch((reason) => {
+      if (!current()) return;
+      if (reason?.name === "AbortError") {
+        record.status = record.data ? "success" : "queued";
+        return;
       }
-      await Promise.all(Array.from({ length: Math.min(concurrency, due.length) }, () => worker()));
-      const deadlines = [...records.values()].map((record) => record.dueAt).filter((value) => value !== null);
-      return { nextPollMs: deadlines.length ? Math.max(0, Math.min(...deadlines) - now()) : null };
-    },
-  });
+      record.status = "error";
+      record.error = reason instanceof Error ? reason.message : String(reason);
+      record.failures += 1;
+      const transient = !reason?.status || reason.status === 429 || reason.status >= 500;
+      record.dueAt = transient ? now() + retryDelay(record.failures) : null;
+    }).finally(() => {
+      clearTimer(request.timer);
+      if (requests.get(key) !== request) return;
+      requests.delete(key);
+      record.loading = false;
+      notify(key, record);
+      pump();
+    });
+  }
+
+  function pump() {
+    clearScheduled();
+    if (!active || !visible) return;
+    const due = [...records]
+      .filter(([, record]) => !record.loading && record.dueAt !== null && record.dueAt <= now())
+      .sort((a, b) => a[1].dueAt - b[1].dueAt);
+    for (const [key, record] of due) {
+      if (requests.size >= slots) break;
+      startRequest(key, record);
+    }
+    if (requests.size >= slots) return;
+    const deadlines = [...records.values()]
+      .filter((record) => !record.loading && record.dueAt !== null)
+      .map((record) => record.dueAt);
+    if (deadlines.length) schedule(Math.min(...deadlines) - now());
+  }
+
+  function cancelRequests() {
+    for (const [key, request] of requests) {
+      requests.delete(key);
+      clearTimer(request.timer);
+      request.cancel(Object.assign(new Error("aborted"), { name: "AbortError" }));
+      const record = records.get(key);
+      record.loading = false;
+      record.status = record.data ? "success" : "queued";
+      notify(key, record);
+    }
+  }
 
   return {
-    start() { active = true; poller.start(); },
-    stop() { active = false; poller.stop(); },
-    setVisible(visible) { poller.setVisible(visible); },
+    start() { if (!active) { active = true; schedule(0); } },
+    stop() { active = false; clearScheduled(); cancelRequests(); },
+    setVisible(nextVisible) {
+      if (visible === !!nextVisible) return;
+      visible = !!nextVisible;
+      clearScheduled();
+      if (visible) schedule(0);
+      else cancelRequests();
+    },
     retry(key) {
       const record = records.get(key);
       if (!record || record.loading || !active) return;
       record.dueAt = 0;
       record.failures = 0;
-      poller.trigger();
+      schedule(0);
     },
   };
 }

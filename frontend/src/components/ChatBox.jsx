@@ -11,6 +11,7 @@ import {
   writeSeenId,
 } from "../lib/chatBadge.js";
 import { STICKERS, stickerFromText, stickerText } from "../lib/chatStickers.js";
+import { appendMessage } from "../lib/chatFeed.js";
 
 // 리더보드 채팅 — 우하단 원형 껄무새 버튼으로 여는 대화록. 목록이 길어도 항상 손에 닿고,
 // 닫혀 있는 동안 도착한 메시지는 'N new' 배지와 놀란 표정으로 알린다. 매일 KST 00:00 초기화.
@@ -138,8 +139,10 @@ export default function ChatBox({ defaultOpen = false, defaultStickerTray = fals
     setBusy(true);
     try {
       setNickname(name.trim());
-      await api.chatPost(name.trim(), body.trim());
+      const result = await api.chatPost(name.trim(), body.trim());
+      // 응답의 메시지를 바로 붙인다 — 다음 폴링(0.6초)을 기다리지 않는다.
       stickToBottomRef.current = true;
+      if (result?.message) setItems((current) => appendMessage(current, result.message));
       refresh();
       return true;
     } catch (err) {

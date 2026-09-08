@@ -9,6 +9,7 @@ import CoinIcon from "../components/CoinIcon.jsx";
 import { getUserId } from "../lib/user.js";
 import { useAuth, isLoggedIn, getAuthUser, updateAuthUser } from "../lib/auth.js";
 import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
+import { applyVote, settleVote } from "../lib/leaderboardVotes.js";
 
 const pad = (n) => String(n).padStart(2, "0");
 
@@ -95,11 +96,21 @@ export default function Leaderboard() {
     row?.focus({ preventScroll: true });
   }, [items, registeredId]);
 
+  // 누르는 즉시 화면에 반영하고(낙관적 갱신), 서버 응답의 수치로 확정한다. 목록 전체를
+  // 다시 받지 않는다 — 그 재조회(0.8초)가 체감 지연의 대부분이었다. 실패하면 되돌린다.
   async function vote(id, value) {
+    let snapshot = null;
+    setItems((current) => {
+      snapshot = current;
+      return current.map((entry) => (entry.id === id ? applyVote(entry, value) : entry));
+    });
     try {
-      await api.leaderboardVote(id, uid, value);
-      load();
-    } catch (_) {}
+      const result = await api.leaderboardVote(id, uid, value);
+      setItems((current) => settleVote(current, result));
+    } catch (e) {
+      if (snapshot) setItems(snapshot);
+      setError(String(e.message || e));
+    }
   }
 
   function copyToBuilder(entry) {

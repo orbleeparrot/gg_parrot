@@ -58,6 +58,9 @@ function marketLabel(session) {
 
 export function describeRunOutcome(session) {
   const s = session || {};
+  // 종료를 요청했지만 실행기가 아직 확정 보고를 하지 않은 구간. 예전에는 이 동안 화면이
+  // 그대로여서 채팅에 알림만 먼저 쌓였다 — 결과 화면을 먼저 띄우고 여기서 기다린다.
+  const stopping = !!s.stopping && s.status === "running";
   const uncertain = !!s.position_uncertain;
   const failed = s.status === "error";
   const closedOut = s.note === "청산 완료 후 종료";
@@ -69,7 +72,15 @@ export function describeRunOutcome(session) {
   let detail = "";
   let tone = "neutral";
   let avatar = "calm";
-  if (uncertain) {
+  if (stopping) {
+    eyebrow = "종료 처리 중";
+    title = s.stop_mode === "close_and_stop" ? "청산하고 종료하는 중이에요" : "매크로를 멈추는 중이에요";
+    detail = s.stop_mode === "close_and_stop"
+      ? "실행기가 다음 확인에서 포지션을 정리해요. 완료 보고가 오면 결과가 채워집니다."
+      : "실행기가 다음 확인에서 매크로를 멈춰요. 포지션은 그대로 남습니다.";
+    tone = "pending";
+    avatar = "focused";
+  } else if (uncertain) {
     eyebrow = "포지션 확인 필요";
     title = "청산 완료를 확인하지 못했어요";
     detail = s.note || "거래소에서 주문과 남은 포지션을 직접 확인하세요.";
@@ -99,8 +110,10 @@ export function describeRunOutcome(session) {
     detail = s.note || "";
   }
 
-  const elapsed = elapsedLabel(s.started_kst, s.stopped_kst);
-  const span = [s.started_kst, s.stopped_kst].filter(Boolean).join(" → ");
+  // 아직 끝나지 않았으면 마지막 heartbeat 를 끝점으로 삼는다.
+  const endedAt = s.stopped_kst || (stopping ? s.heartbeat_kst : "");
+  const elapsed = elapsedLabel(s.started_kst, endedAt);
+  const span = [s.started_kst, endedAt].filter(Boolean).join(" → ");
   const rows = [
     { label: "실행 시간", value: elapsed ? `${elapsed} · ${span}` : span || "—", numeric: true },
     { label: "종목·환경", value: `${s.symbol || "—"} · ${marketLabel(s)} · ${s.testnet ? "테스트넷" : "메인넷(실거래)"}` },
@@ -116,8 +129,11 @@ export function describeRunOutcome(session) {
   ];
 
   return {
-    eyebrow, title, detail, tone, avatar,
-    pnl: { value: Number(s.realized_pnl) || 0, text: formatSignedUsdt(s.realized_pnl), tone: toneOf(s.realized_pnl) },
+    eyebrow, title, detail, tone, avatar, pending: stopping,
+    // 처리 중에는 확정 수치를 주장하지 않는다.
+    pnl: stopping
+      ? { value: null, text: "집계 중", tone: "flat" }
+      : { value: Number(s.realized_pnl) || 0, text: formatSignedUsdt(s.realized_pnl), tone: toneOf(s.realized_pnl) },
     rows,
   };
 }

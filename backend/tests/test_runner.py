@@ -194,17 +194,51 @@ def test_launch_ticket_rejects_old_runner_without_consuming_ticket():
         assert response.status_code == 426
         assert response.headers["cache-control"] == "no-store"
 
+    # 웹은 거절을 바로 알아야 한다 — 티켓은 살아 있지만 상태는 rejected.
     status = client.get(
         f"/api/me/runner/launch-tickets/{created['launch_id']}",
         headers=_auth(token),
     )
-    assert status.json()["status"] == "ready"
+    assert status.json()["status"] == "rejected"
+    assert status.json()["runner_version"] == "5"
+    assert status.json()["min_runner_version"] == "6"
 
     current = client.post(
         "/api/runner/launch-tickets/claim",
         json={"ticket": ticket, "runner_version": "6"},
     )
     assert current.status_code == 200
+    settled = client.get(
+        f"/api/me/runner/launch-tickets/{created['launch_id']}",
+        headers=_auth(token),
+    ).json()
+    assert settled["status"] == "claimed"
+    assert "runner_version" not in settled
+
+
+def test_start_records_runner_version_and_rejects_outdated():
+    token = _signup()
+    key = client.get("/api/me/runner/key", headers=_auth(token)).json()["key"]
+    headers = {"X-Runner-Key": key}
+
+    # v7+ 실행기: 버전이 세션에 남는다.
+    started = client.post("/api/runner/start", json={"symbol": "BTCUSDT", "runner_version": "7"}, headers=headers)
+    assert started.status_code == 200, started.text
+    sessions = client.get("/api/me/runner/sessions", headers=_auth(token)).json()
+    session = next(s for s in sessions["active"] if s["session_id"] == started.json()["session_id"])
+    assert session["runner_version"] == "7"
+
+    # 버전을 보냈는데 최소 미만이면 세션을 만들지 않는다.
+    old = client.post("/api/runner/start", json={"symbol": "BTCUSDT", "runner_version": "5"}, headers=headers)
+    assert old.status_code == 426
+    assert "업데이트" in old.json()["detail"]
+
+    # 버전을 안 보내는 예전 실행기는 아직 허용(빈 값으로 기록).
+    legacy = client.post("/api/runner/start", json={"symbol": "ETHUSDT"}, headers=headers)
+    assert legacy.status_code == 200
+    sessions = client.get("/api/me/runner/sessions", headers=_auth(token)).json()
+    legacy_view = next(s for s in sessions["active"] if s["session_id"] == legacy.json()["session_id"])
+    assert legacy_view["runner_version"] == ""
 
 
 def test_launch_ticket_enforces_macro_ownership_and_testnet():

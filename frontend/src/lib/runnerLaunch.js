@@ -18,3 +18,21 @@ export function findLaunchedSession(activeSessions, baselineIds, selected) {
     session.user_macro_id == null && !!selected.symbol && session.symbol === selected.symbol
   )) || null;
 }
+
+
+// 런치 티켓 상태 응답 → 마법사 단계. 거절(rejected)은 기다릴 일이 아니라 안내할 일이다.
+export function launchPhaseFromTicketStatus(data) {
+  const status = String(data?.status || "").toLowerCase();
+  if (status === "claimed" || data?.claimed === true || !!data?.claimed_at) {
+    return { phase: "claimed" };
+  }
+  if (status === "rejected") {
+    return {
+      phase: "outdated",
+      runnerVersion: String(data?.runner_version || ""),
+      minVersion: String(data?.min_runner_version || ""),
+    };
+  }
+  if (["expired", "cancelled", "revoked"].includes(status)) return { phase: "expired" };
+  return { phase: null };
+}

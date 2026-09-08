@@ -6,7 +6,7 @@ import { getAuthUser, updateAuthUser, useAuth } from "../lib/auth.js";
 import { RULE_TYPES } from "../lib/macro.js";
 import { getUserId } from "../lib/user.js";
 import { fmtSize, isRunnerOpened, markRunnerOpened, useRunnerDownload } from "../lib/runnerDownload.js";
-import { findLaunchedSession } from "../lib/runnerLaunch.js";
+import { findLaunchedSession, launchPhaseFromTicketStatus } from "../lib/runnerLaunch.js";
 import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 
 const BINANCE_KEY_GUIDE_STORAGE_PREFIX = "ggparrot:binance-testnet-key-ready:v1";
@@ -315,6 +315,50 @@ function InlineLeaderboard({ items, ownedItems, busy, error, importingId, onImpo
   );
 }
 
+// 구버전 실행기가 웹 연결에 응답했을 때. '실행기 열기'는 Windows 에 등록된 exe 를 여는데,
+// 등록은 마지막으로 직접 실행한 파일이 남긴다 — 새 파일을 받아만 두면 계속 구버전이 열린다.
+export function OutdatedRunnerPanel({ version, minVersion, downloadUrl, downloadIsExternal, onRetry, onManual, manualBusy }) {
+  const shown = version ? `v${version}` : "구버전";
+  return (
+    <>
+      <div className="runner-wizard-launch-panel is-warning" role="alert">
+        <span className="runner-wizard-launch-mark" aria-hidden="true">!</span>
+        <div>
+          <h2>이 PC에서 열린 실행기는 {shown}이에요. 웹 연결은 v{minVersion}부터 돼요.</h2>
+          <p>‘실행기 열기’는 Windows에 등록된 실행기를 여는데, 마지막으로 직접 실행한 파일이 {shown}이라 그게 열렸어요. 새 파일을 받아 한 번 직접 실행하면 등록이 바뀝니다.</p>
+        </div>
+      </div>
+      <div className="runner-wizard-launch-callout">
+        <span className="num">01</span>
+        <div><strong>최신 실행기(v{minVersion})를 받아요.</strong><p>아래 ‘최신 실행기 받기’로 내려받아요.</p></div>
+      </div>
+      <div className="runner-wizard-launch-callout">
+        <span className="num">02</span>
+        <div><strong>받은 파일을 한 번 직접 더블클릭해요.</strong><p>이때 ‘실행기 열기’가 새 버전을 가리키도록 등록돼요. 창 제목이 v{minVersion}인지 확인해요.</p></div>
+      </div>
+      <div className="runner-wizard-launch-callout">
+        <span className="num">03</span>
+        <div><strong>열려 있던 {shown} 창을 닫고 새 연결을 준비해요.</strong><p>구버전은 종료할 때 손익을 보고하지 않아 결과가 0으로 남아요.</p></div>
+      </div>
+      <div className="runner-wizard-launch-actions">
+        <a
+          href={downloadUrl}
+          download={downloadIsExternal ? undefined : true}
+          target={downloadIsExternal ? "_blank" : undefined}
+          rel={downloadIsExternal ? "noopener noreferrer" : undefined}
+          className="btn btn-m btn-secondary"
+        >
+          최신 실행기 받기
+        </a>
+        <button type="button" onClick={onRetry} className="btn btn-m btn-secondary">새 연결 준비하기</button>
+        <button type="button" onClick={onManual} disabled={manualBusy} className="btn btn-m btn-ghost">
+          {manualBusy ? "파일 준비 중…" : "수동으로 연결하기"}
+        </button>
+      </div>
+    </>
+  );
+}
+
 function Workspace({ title, status, bodyClassName = "", children }) {
   return (
     <div className="runner-wizard-workspace">
@@ -357,6 +401,8 @@ export default function RunnerDownload({ embedded = false, onExit }) {
   const [launchOpenAttempt, setLaunchOpenAttempt] = useState(0);
   const [showLaunchRecovery, setShowLaunchRecovery] = useState(false);
   const [launchError, setLaunchError] = useState("");
+  // 서버가 구버전 실행기의 연결을 거절했을 때: { runnerVersion, minVersion }
+  const [outdatedRunner, setOutdatedRunner] = useState(null);
   const [manualDownloadBusy, setManualDownloadBusy] = useState(false);
   const [manualDownloadError, setManualDownloadError] = useState("");
   // 껄무새 회원 키(계정 연결용) — 실행 마법사에서 복사해 실행기 ④번 칸에 붙여넣는다.
@@ -580,12 +626,18 @@ export default function RunnerDownload({ embedded = false, onExit }) {
         const data = await api.runnerLaunchTicketStatus(launchTicket.launch_id);
         if (!alive) return;
         pollFailures = 0;
-        const status = String(data?.status || "").toLowerCase();
-        if (status === "claimed" || data?.claimed === true || !!data?.claimed_at) {
+        const next = launchPhaseFromTicketStatus(data);
+        if (next.phase === "claimed") {
           setLaunchPhase("claimed");
           return;
         }
-        if (["expired", "cancelled", "revoked"].includes(status)) {
+        if (next.phase === "outdated") {
+          // 구버전 실행기가 열렸다. 기다리지 말고 바로 알린다.
+          setOutdatedRunner({ runnerVersion: next.runnerVersion, minVersion: next.minVersion || requiredRunnerVersion });
+          setLaunchPhase("outdated");
+          return;
+        }
+        if (next.phase === "expired") {
           setLaunchError("연결 시간이 만료됐어요. 새 연결을 준비해 주세요.");
           setLaunchPhase("error");
           return;
@@ -642,6 +694,7 @@ export default function RunnerDownload({ embedded = false, onExit }) {
 
   function retryLaunchTicket() {
     setLaunchError("");
+    setOutdatedRunner(null);
     setLaunchAttempt((current) => current + 1);
   }
 
@@ -865,7 +918,7 @@ export default function RunnerDownload({ embedded = false, onExit }) {
               : "배포 정보 없음";
     const mark = runnerReady ? "✓" : runnerDownloadState === "loading" ? "…" : runnerAvailable ? "↓" : "—";
     const heading = runnerReady
-      ? "이 PC의 실행기가 연결 준비됐어요."
+      ? "실행기 받기를 눌렀어요. 받은 파일을 한 번 직접 실행했다면 준비된 거예요."
       : downloadStarted
         ? "다운로드한 실행기를 한 번 열어 주세요."
         : runnerDownloadState === "loading"
@@ -896,7 +949,7 @@ export default function RunnerDownload({ embedded = false, onExit }) {
             <dt>배포 상태</dt>
             <dd>
               {runnerReady
-                ? "이 PC에서 한 번 실행함"
+                ? "받기를 눌렀음 · 실제 버전은 실행기 창 제목에서 확인"
                 : runnerDownloadState === "loading"
                   ? "확인 중"
                   : runnerDownloadState === "available"
@@ -1105,6 +1158,24 @@ export default function RunnerDownload({ embedded = false, onExit }) {
       );
     }
 
+    if (launchPhase === "outdated") {
+      return (
+        <Workspace title="설치된 실행기가 오래됐어요" status={`v${outdatedRunner?.runnerVersion || "?"} 열림`}>
+          <MacroSummary item={selected} compact />
+          <OutdatedRunnerPanel
+            version={outdatedRunner?.runnerVersion || ""}
+            minVersion={outdatedRunner?.minVersion || requiredRunnerVersion}
+            downloadUrl={downloadUrl}
+            downloadIsExternal={downloadIsExternal}
+            onRetry={retryLaunchTicket}
+            onManual={() => void downloadManualMacroFile()}
+            manualBusy={manualDownloadBusy}
+          />
+          {manualDownloadError ? <p className="runner-wizard-error" role="alert">파일을 준비하지 못했어요: {manualDownloadError}</p> : null}
+        </Workspace>
+      );
+    }
+
     if (launchPhase === "error") {
       return (
         <Workspace title="실행기 연결을 준비하지 못했어요" status="다시 시도 가능">
@@ -1302,7 +1373,7 @@ export default function RunnerDownload({ embedded = false, onExit }) {
         </a>
       );
     }
-    if (["unsupported", "error"].includes(launchPhase)) {
+    if (["unsupported", "error", "outdated"].includes(launchPhase)) {
       return (
         <a
           href={downloadUrl}

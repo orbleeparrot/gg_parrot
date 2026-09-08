@@ -910,6 +910,11 @@ def _is_news_article_candidate(item: dict) -> bool:
     return not bool(re.search(
         r"\bprice\s*,?\s*charts?\s*,?\s*(?:and\s*)?market\s*cap\b|"
         r"\bprice\s+today\b.{0,50}\b(?:live|chart|market\s*cap)\b|"
+        # Google wrappers hide the quote/holders page URL. Match only the
+        # static page labels, preserving forecasts and changes in holdings.
+        r"\bprice\s*\([A-Z0-9]{2,20}\s*/\s*[A-Z0-9]{2,20}\)\s+today\s*\|\s*"
+        r"live\s+price\s*,\s*market\s+cap\s*(?:&|and)\s*charts?\s*$|"
+        r"^[\w.$-]+\s+holders\s+(?:and|&)\s+distribution\s+charts?\s*$|"
         r"\blive\s+price\s+and\s+chart\b|"
         r"\bprice\s+and\s+live\s+chart\b|"
         r"\blive\s+charts?\s*,?\s*(?:and\s+)?market\s*cap\b|"

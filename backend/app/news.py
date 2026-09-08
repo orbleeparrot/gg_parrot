@@ -924,6 +924,13 @@ def _is_news_article_candidate(item: dict) -> bool:
         r"(?:CME Group\s+)?Bitcoin Futures(?:\s+and\s+Options)?", title.strip(), re.IGNORECASE
     ):
         return False
+    # Google indexes dated prediction-contract listings as fresh news. Filter
+    # the product label before translation, while retaining editorial coverage.
+    if (source in {"robinhood", "robinhood.com", "www.robinhood.com"} or host == "robinhood.com") and re.fullmatch(
+        r"[A-Z0-9]{1,20}\s+price(?:\s+range)?\s+on\s+.+\s+Crypto\s+Prediction\s+Market",
+        title.strip(), re.IGNORECASE,
+    ):
+        return False
     # Google News also indexes exchange community posts containing a trading
     # entry/stop setup. They must not become news or spend translation budget.
     if (source == "binance" or host == "binance.com") and re.search(

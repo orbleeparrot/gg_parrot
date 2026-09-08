@@ -74,7 +74,9 @@ function MacroDock({ sessions, selected, busy, onChange, onStop, onDelete }) {
             <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m4 6 4 4 4-4" /></svg>
           </span>
           {/* 새 실행 추가 — 빠른 실행 플로우(라이브러리·리더보드에서 골라 실행기 연결)로 간다. */}
-          <Link to="/?run=1&step=1" className="btn btn-m btn-secondary agent-macro-new" title="빠른 실행에서 매크로를 골라 새로 시작해요">+ 새 매크로</Link>
+          <Link to="/?run=1&step=1" className="btn btn-m btn-secondary agent-macro-new" aria-label="새 매크로 실행" title="빠른 실행에서 매크로를 골라 새로 시작해요">
+            <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 3v10M3 8h10" /></svg>
+          </Link>
         </span>
       </label>
 

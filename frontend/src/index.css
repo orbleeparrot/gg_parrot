@@ -491,9 +491,11 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 .agent-macro-dock > * { min-height: 82px; padding: 10px 14px; }
 .agent-macro-dock > * + * { border-left: 1px solid rgb(var(--c-slate-200)); }
 .agent-macro-dock-picker { display: grid; min-width: 0; align-content: center; gap: 5px; color: rgb(var(--c-slate-500)); font-size: 13px; font-weight: 700; }
+/* 셀렉트는 내용에 맞는 폭(최대 320px)으로, 옆에 44px '+' 아이콘 버튼. 줄 전체를 늘리지 않는다. */
 .agent-macro-picker-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.agent-macro-picker-row .agent-macro-select-wrap { flex: 1 1 auto; }
-.agent-macro-new { flex: none; min-height: 44px; white-space: nowrap; }
+.agent-macro-picker-row .agent-macro-select-wrap { flex: 0 1 320px; min-width: 0; }
+.agent-macro-new { flex: none; width: 44px; min-height: 44px; padding: 0; display: inline-grid; place-items: center; }
+.agent-macro-new svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
 .agent-macro-select-wrap { position: relative; display: block; min-width: 0; }
 .agent-macro-dock-picker select {
   width: 100%;

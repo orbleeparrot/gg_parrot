@@ -10,16 +10,22 @@
 // → 설명(16~19/500, 40ch) → note(13, 고지). 상자 없이 크기·여백으로만 위계(§1-3).
 // 우측 액션은 제목 밑선에 맞춘다. 제목이 없는 화면(내 에이전트)은 이 컴포넌트를 쓰지 않는다.
 export function PageHeader({ title, description, meta, note, actions, eyebrow, headingAs: Heading = "h1" }) {
+  const hasSub = Boolean(meta || description || note || actions);
   return (
     <header className="page-head">
-      <div className="page-head-copy">
-        {eyebrow && <span className="page-head-eyebrow">{eyebrow}</span>}
-        <Heading className="page-head-title">{title}</Heading>
-        {meta && <p className="page-head-meta">{meta}</p>}
-        {description && <p className="page-head-description">{description}</p>}
-        {note && <p className="page-head-note">{note}</p>}
-      </div>
-      {actions && <div className="page-head-actions">{actions}</div>}
+      {eyebrow && <span className="page-head-eyebrow">{eyebrow}</span>}
+      <Heading className="page-head-title">{title}</Heading>
+      {hasSub && (
+        // 보조 줄 — 왼쪽 meta·설명·note, 오른쪽 액션. 세로 중앙을 맞춰 한 줄로 읽힌다.
+        <div className="page-head-sub">
+          <div className="page-head-copy">
+            {meta && <p className="page-head-meta">{meta}</p>}
+            {description && <p className="page-head-description">{description}</p>}
+            {note && <p className="page-head-note">{note}</p>}
+          </div>
+          {actions && <div className="page-head-actions">{actions}</div>}
+        </div>
+      )}
     </header>
   );
 }

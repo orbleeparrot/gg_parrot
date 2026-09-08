@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useLocation, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api.js";
 import RunnerSessions from "../components/RunnerSessions.jsx";
 import { getAuthUser, updateAuthUser, useAuth } from "../lib/auth.js";
 import { RULE_TYPES } from "../lib/macro.js";
 import { getUserId } from "../lib/user.js";
 import { fmtSize, isRunnerOpened, markRunnerOpened, useRunnerDownload } from "../lib/runnerDownload.js";
+import { findLaunchedSession } from "../lib/runnerLaunch.js";
 import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 
 const BINANCE_KEY_GUIDE_STORAGE_PREFIX = "ggparrot:binance-testnet-key-ready:v1";
@@ -329,6 +330,7 @@ function Workspace({ title, status, bodyClassName = "", children }) {
 export default function RunnerDownload({ embedded = false, onExit }) {
   const { token, user } = useAuth();
   const location = useLocation();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const headingRef = useRef(null);
   const performanceHintsRef = useRef(new Map());
@@ -534,6 +536,36 @@ export default function RunnerDownload({ embedded = false, onExit }) {
       });
     return () => { alive = false; };
   }, [downloadChecked, launchAttempt, selected?.id, signedIn, step, supportsLaunch]);
+
+  // 마지막 단계에서 '여기서 고른 매크로'가 실행기에서 실제로 시작되면 바로 내 에이전트로 넘어간다.
+  // 단계에 들어올 때의 실행 중 목록을 기준선으로 잡아, 원래 돌던 세션은 새 시작으로 보지 않는다.
+  const launchBaselineRef = useRef(null);
+  useEffect(() => {
+    launchBaselineRef.current = null;
+  }, [selected?.id, step]);
+  const watchLaunchedSession = useCallback(async () => {
+    if (step !== STEP_LAUNCH || !selected?.id || !signedIn) return;
+    let data;
+    try {
+      data = await api.runnerSessions();
+    } catch (_) {
+      return; // 일시 오류는 다음 폴링에서 다시 본다
+    }
+    const active = Array.isArray(data?.active) ? data.active : [];
+    if (launchBaselineRef.current === null) {
+      launchBaselineRef.current = new Set(active.map((session) => session.session_id));
+      return;
+    }
+    const launched = findLaunchedSession(active, launchBaselineRef.current, selected);
+    if (launched) navigate(`/agents?session=${launched.session_id}`, { state: { launchedFromQuickRun: true } });
+  }, [navigate, selected, signedIn, step]);
+  useAdaptivePolling(watchLaunchedSession, {
+    intervalMs: 3000,
+    maxIntervalMs: 6000,
+    enabled: step === STEP_LAUNCH && !!selected?.id && signedIn,
+    immediate: true,
+    pollKey: `${selected?.id ?? ""}:${step}`,
+  });
 
   useEffect(() => {
     if (step !== STEP_LAUNCH || launchPhase !== "opening" || !launchTicket?.launch_id) return undefined;

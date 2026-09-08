@@ -166,19 +166,26 @@ export default function ChatBox({ defaultOpen = false }) {
               items.map((m, index) => {
                 const previous = index > 0 ? items[index - 1] : null;
                 const showDivider = dividerId != null && m.id === dividerId;
-                const continued = !showDivider && previous && previous.username === m.username;
+                const continued = !showDivider && !!previous && previous.username === m.username;
                 const mine = !!name.trim() && m.username === name.trim();
+                const initial = String(m.username || "?").trim().charAt(0).toUpperCase() || "?";
                 return (
                   <Fragment key={m.id}>
                     {showDivider ? (
                       <div className="chat-divider" role="separator" aria-label="여기부터 새 메시지"><span>새 메시지</span></div>
                     ) : null}
-                    <article className={`chat-msg${continued ? " is-continued" : ""}${mine ? " is-mine" : ""}`}>
-                      <header>
-                        <span className="chat-msg-name">{m.username}</span>
-                        <time className="num">{m.created_kst}</time>
-                      </header>
-                      <p>{m.text}</p>
+                    {/* 메신저 말풍선 — 남은 왼쪽(아바타·이름·회색), 나는 오른쪽(노랑, 이름 없음). */}
+                    <article className={`chat-row${mine ? " is-mine" : ""}${continued ? " is-continued" : ""}`} aria-label={`${m.username}, ${m.created_kst}`}>
+                      {!mine ? (
+                        <span className="chat-avatar" aria-hidden="true">{continued ? "" : initial}</span>
+                      ) : null}
+                      <div className="chat-row-body">
+                        {!mine && !continued ? <span className="chat-row-name">{m.username}</span> : null}
+                        <div className="chat-bubble-line">
+                          <p className="chat-bubble">{m.text}</p>
+                          <time className="num">{m.created_kst}</time>
+                        </div>
+                      </div>
                     </article>
                   </Fragment>
                 );
@@ -243,7 +250,8 @@ export default function ChatBox({ defaultOpen = false }) {
         aria-controls={open ? panelId : undefined}
         aria-label={open ? "채팅 닫기" : badge ? `채팅 열기, 새 메시지 ${unseen}개` : "채팅 열기"}
       >
-        <img src={FAB_ICON} alt="" width="56" height="56" draggable="false" decoding="async" />
+        <img src={FAB_ICON} alt="" width="34" height="34" draggable="false" decoding="async" />
+        <span className="chat-fab-label" aria-hidden="true">Chat</span>
         {badge ? <span className="chat-fab-badge num" aria-hidden="true">{badge}</span> : null}
       </button>
     </div>

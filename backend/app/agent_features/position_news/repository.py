@@ -24,6 +24,7 @@ from ...db import (
     TickerNewsAiBudget,
     TickerNewsSnapshot,
     TickerNewsState,
+    assert_shared_worker_database,
     database_dialect,
     get_session,
 )
@@ -1390,16 +1391,8 @@ def prune_snapshots(
 
 
 def assert_worker_database() -> None:
-    """Fail closed on Render if the worker is not sharing durable Postgres."""
-    default_required = "true" if os.environ.get("RENDER") else "false"
-    required = os.environ.get(
-        "POSITION_NEWS_REQUIRE_POSTGRES",
-        default_required,
-    ).strip().lower() in {"1", "true", "yes"}
-    if required and database_dialect() != "postgresql":
-        raise RuntimeError(
-            "중앙 뉴스 워커는 웹 서버와 같은 Postgres DATABASE_URL이 필요합니다."
-        )
+    """Compatibility wrapper for existing callers and dialect test overrides."""
+    assert_shared_worker_database(dialect=database_dialect())
 
 
 def load_market_news_summary(

@@ -64,6 +64,7 @@ from . import runner as runner_mod
 from . import user_macros as user_macros_mod
 from .agent_features.position_news.router import router as position_news_router
 from .agent_features.position_news import runtime as position_news_runtime
+from .agent_features.whale_activity import runtime as whale_activity_runtime
 from .observability import observe_application, router as observability_router
 from fastapi import Depends
 from .db import User
@@ -86,10 +87,14 @@ async def lifespan(app: FastAPI):
     init_db()
     community_summaries_mod.start()
     position_news_runtime.start()
+    whale_activity_runtime.start()
     try:
         yield
     finally:
-        await position_news_runtime.stop()
+        try:
+            await whale_activity_runtime.stop()
+        finally:
+            await position_news_runtime.stop()
         try:
             await paper_mod.shutdown_running_sessions()
         finally:

@@ -383,6 +383,7 @@ def test_rolling_deployment_does_not_pause_new_worker_schedule(monkeypatch):
     monkeypatch.setenv("PREFECT_API_URL", "https://prefect.example.test/api")
     monkeypatch.setenv("RENDER_GIT_COMMIT", "revision-under-test")
     monkeypatch.setenv("POSITION_NEWS_SCHEDULE_SECONDS", "60")
+    monkeypatch.setenv("WHALE_TRADE_PREFECT_ENABLED", "false")
     monkeypatch.setenv("POSITION_NEWS_COLLECTION_SECONDS", "300")
     monkeypatch.setattr("sys.argv", ["position_news", "serve"])
     monkeypatch.setattr(workflow.repository, "assert_worker_database", lambda: None)

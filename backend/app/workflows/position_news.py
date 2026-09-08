@@ -463,13 +463,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="껄무새 중앙 뉴스 수집 워커")
     parser.add_argument(
         "mode",
-        choices=("serve", "once"),
+        choices=("serve", "serve-news", "once"),
         nargs="?",
         default="serve",
     )
     args = parser.parse_args()
 
-    if args.mode == "serve" and not os.environ.get("PREFECT_API_URL"):
+    if args.mode != "once" and not os.environ.get("PREFECT_API_URL"):
         raise RuntimeError(
             "PREFECT_API_URL이 필요합니다. Prefect Cloud workspace API URL을 설정하세요."
         )
@@ -516,6 +516,11 @@ def main() -> None:
     probe_deployment.entrypoint = "app.workflows.position_news.coindesk_source_probe_flow"
     # During rolling deploys the old runner must not pause the new schedule.
     # One shared process slot also prevents probes competing with collection.
+    if args.mode == "serve" and os.environ.get("WHALE_TRADE_PREFECT_ENABLED", "true").lower() not in {"0", "false", "no"}:
+        from .agent_collectors import serve_collectors
+        from .whale_activity import create_deployment
+        serve_collectors([collection_deployment, probe_deployment], [create_deployment()])
+        return
     serve(collection_deployment, probe_deployment, limit=1, pause_on_shutdown=False)
 
 

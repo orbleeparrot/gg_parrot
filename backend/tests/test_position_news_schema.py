@@ -63,49 +63,17 @@ def test_public_browser_cache_schema_uses_bigint_without_user_columns():
     assert re.search(r"\bupdated_ms\s+BIGINT\b", ddl)
 
 
-class _Result:
-    def first(self):
-        return ("integer",)
-
-
-class _Connection:
-    def __init__(self):
-        self.statements = []
-        self.committed = False
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_args):
-        return None
-
-    def exec_driver_sql(self, statement):
-        self.statements.append(statement)
-        return _Result()
-
-    def commit(self):
-        self.committed = True
-
-
-class _Engine:
-    def __init__(self, connection):
-        self.connection = connection
-
-    def connect(self):
-        return self.connection
-
-
-def test_postgres_migration_upgrades_existing_integer_columns(monkeypatch):
-    connection = _Connection()
-    monkeypatch.setattr(db_mod, "_engine", _Engine(connection))
-
-    db_mod._migrate_pg()
-
-    statements = set(connection.statements)
+def test_postgres_migration_upgrades_existing_integer_columns():
+    state = {
+        "tables": {table.name: False for table in _EXPECTED_BIGINT_COLUMNS},
+        "columns": {(table.name, column): "integer"
+                    for table, columns in _EXPECTED_BIGINT_COLUMNS.items() for column in columns},
+        "indexes": set(), "grants": set(),
+    }
+    statements = set(db_mod._pg_migration_statements(state))
     for table, expected_columns in _EXPECTED_BIGINT_COLUMNS.items():
         for column_name in expected_columns:
             assert (
                 f"ALTER TABLE {table.name} ALTER COLUMN {column_name} "
                 f"TYPE BIGINT USING {column_name}::bigint"
             ) in statements
-    assert connection.committed is True

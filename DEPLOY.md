@@ -61,3 +61,9 @@ Prefect Cloud 연결, 상세 검증 절차는
 [backend/PREFECT_POSITION_NEWS.md](backend/PREFECT_POSITION_NEWS.md)를 참고하세요.
 
 에이전트 API는 중앙 DB만 읽습니다. 웹과 worker가 같은 Postgres를 사용하는지, Prefect의 `shared-ticker-news`가 일시정지되지 않았는지, 배포 버전과 RSS → 초기 저장 → 브라우저 → 최종 저장 태스크를 확인합니다. `pause_on_shutdown=False`로 롤링 배포 시 기존 worker가 새 스케줄을 정지하는 문제를 방지합니다.
+
+## DB 초기화와 롤링 배포
+
+웹 DB 초기화는 모듈 import 때 실행하지 않고 FastAPI lifespan에서 수행합니다. Postgres는 컬럼·인덱스·BIGINT 타입·번역 테이블 권한 상태를 먼저 조회해 이미 반영된 DDL을 생략합니다. `ADD COLUMN IF NOT EXISTS`도 테이블 잠금을 얻으므로 정상 시작에 반복하면 실행 중인 매크로의 갱신과 교착상태가 생길 수 있습니다.
+
+실제 변경이 필요할 때만 트랜잭션 advisory lock으로 웹/워커의 마이그레이션을 직렬화하고, 2초 lock timeout을 적용합니다. `40P01`(교착상태)·`55P03`(잠금 대기 실패)은 트랜잭션 전체를 rollback한 뒤 최대 3회 시도하며, 다른 오류는 숨기지 않습니다. 번역 캐시의 RLS와 공개 역할 권한 회수는 유지합니다.

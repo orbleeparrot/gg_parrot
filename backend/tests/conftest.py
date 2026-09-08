@@ -9,6 +9,7 @@
 """
 import os
 import tempfile
+import pytest
 
 for _key in ("DATABASE_URL", "ANTHROPIC_API_KEY", "COINDESK_API_KEY", "PREFECT_API_URL"):
     os.environ[_key] = ""
@@ -20,3 +21,11 @@ os.environ["POSITION_NEWS_EMBEDDED_ENABLED"] = "false"
 os.environ["POSITION_NEWS_BROWSER_ENRICHMENT_ENABLED"] = "false"
 os.environ["POSITION_NEWS_EXTRA_RSS_ENABLED"] = "false"
 os.environ["BINANCE_SQUARE_ENABLED"] = "false"
+
+
+@pytest.fixture(scope="session", autouse=True)
+def initialize_isolated_database():
+    # Tests that intentionally omit TestClient's lifespan still need tables;
+    # production imports must never initialize the database for this reason.
+    from app.db import init_db
+    init_db()

@@ -104,9 +104,8 @@ app = FastAPI(title="Coin Macro Backtest & Share (Simulation only)", lifespan=li
 app.include_router(position_news_router)
 app.include_router(observability_router)
 
-# Ensure tables exist even when the app is imported without the lifespan running
-# (e.g. TestClient constructed without a context manager).
-init_db()
+# Schema initialization belongs to lifespan, before serving requests. Importing
+# route definitions must not run DDL against a database used by live macros.
 
 # 응답 압축. 캔들 JSON은 같은 모양의 숫자 문자열이 300줄 반복이라 압축이 아주
 # 잘 든다 — /api/candles 실측 29,387 B -> 7,083 B (4.1배). 이게 빠져 있어서

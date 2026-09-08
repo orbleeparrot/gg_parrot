@@ -74,15 +74,15 @@ Prefect에서 `community_content` 로그의 `stage=fetched/processed`를 비교�
 
 ## 대규모 체결 중앙 수집
 
-기존 `python -m app.workflows.position_news serve` 명령이 뉴스·소스 진단과 고래 체결을 함께 관리합니다. Prefect 관리 프로세스는 공유하고 실행 슬롯은 분리합니다. 뉴스·Playwright 진단은 기존 슬롯 1개를 공유하며, `gg-parrot-whale-activity/shared-whale-trades`는 별도 슬롯 1개로 30초마다 실행됩니다. 느린 뉴스 수집이 체결 수집을 대기시키지 않으며 추가 Render 서비스나 유료 모델은 사용하지 않습니다. 네 배포 모두 같은 커밋 버전과 `pause_on_shutdown=False`를 사용합니다.
+기존 `python -m app.workflows.position_news serve` 명령이 뉴스·소스 진단과 고래 체결을 함께 관리합니다. Prefect 관리 프로세스는 공유하고 실행 슬롯은 분리합니다. 뉴스·Playwright 진단은 공식 Runner의 자식 프로세스 슬롯 1개를 공유하며, 체결·온체인 관측은 관리 프로세스 안의 스레드 슬롯 1개에서 실행합니다. `gg-parrot-whale-activity/shared-whale-trades`는 30초마다 실행됩니다. 느린 뉴스 수집이 체결 수집을 대기시키지 않으며 추가 Render 서비스나 유료 모델은 사용하지 않습니다. 네 배포 모두 같은 커밋 버전과 `pause_on_shutdown=False`를 사용합니다.
 
 `whales.py`의 공개 Binance aggregate trades 로직을 사용합니다. 최근 heartbeat가 있는 실행 세션의 `(market, symbol)`을 합쳐 한 번 수집하고, 매크로가 없으면 외부 호출을 하지 않습니다. 매크로 시작 직후 웹의 별도 백그라운드 수집기가 첫 결과를 만들며, 운영에서는 이후 120초 동안 Prefect에 양보합니다. Prefect 장애 시 같은 DB lease·재시도 간격을 따르는 웹 복구 경로가 작동합니다. HTTP 세션 API는 공용 DB 결과만 읽으며 조회 결과를 프로세스 내 2초 동안 공유합니다.
 
-수집마다 최대 500개 공개 체결을 확인하고, 기본 `AGENT_LARGE_TRADE_MIN_QUOTE=100000` USDT/USDC 이상 체결을 최근 10분 동안 합쳐 최신 30개까지 보관합니다. 체결 ID로 중복을 제거하며 시장을 구분합니다. 활발한 종목의 모든 체결을 보장하는 데이터가 아니며 특정 지갑·고래의 보유량 변화로 해석하지 않습니다. 기존 비활성 온체인 보유량 분석과 배너는 그대로 비활성입니다.
+수집마다 최대 500개 공개 체결을 확인하고, 기본 `AGENT_LARGE_TRADE_MIN_QUOTE=100000` USDT/USDC 이상 체결을 최근 10분 동안 합쳐 최신 30개까지 보관합니다. 체결 ID로 중복을 제거하며 시장을 구분합니다. 활발한 종목의 모든 체결을 보장하는 데이터가 아니며 특정 지갑·고래의 보유량 변화로 해석하지 않습니다. 온체인 잔고 관측은 아래의 별도 수집 경로로 제공하며 체결로 해석하지 않습니다.
 
 `WhaleTradeState`는 30초 갱신 커서, 60초 작업 소유권, 마지막 정상 스냅샷을 공용 Postgres에 보관합니다. 작업 소유권을 얻지 못하면 외부 호출을 하지 않으며, 만료된 작업은 새 결과를 덮을 수 없습니다. 429·418의 재시도 시각은 같은 시장의 다른 종목에도 공유하고 실패해도 마지막 정상 관측 시각을 갱신하지 않습니다. 7일간 비활성인 데이터는 수집 유지보수에서 최대 500행씩 정리합니다. 가장 오래 수집하지 못한 종목부터 순환하며 웹 보조 수집 대상도 한 번의 일괄 상태 조회로 선택합니다.
 
-Prefect의 `whale_discovery`, `whale_source`, `whale_collection` 로그에서 활성 거래쌍, HTTP 상태, 표본·대규모 체결 수, 소요 시간과 재시도 간격을 확인합니다. 정상 빈 결과는 `empty`, 소스 실패는 실패한 flow로 남습니다. 늦은 스케줄을 재생하지 않고, 개별 flow는 60초 제한과 20초 수집 예산을 사용합니다. `configuration`에는 실제 커밋과 AI 호출 0이 표시됩니다. 배포 뒤 새 Prefect 배포가 READY이고 새 버전의 정기 실행이 완료되는지 확인합니다.
+Prefect의 `whale_discovery`, `whale_source`, `whale_collection` 로그에서 활성 거래쌍, HTTP 상태, 표본·대규모 체결 수, 소요 시간과 재시도 간격을 확인합니다. 정상 빈 결과는 `empty`, 소스 실패는 실패한 flow로 남습니다. 늦은 스케줄을 재생하지 않고, 개별 flow는 60초 제한을 사용하며, 순회가 12초를 넘으면 다음 거래쌍의 요청을 시작하지 않습니다. `configuration`에는 실제 커밋과 AI 호출 0이 표시됩니다. 배포 뒤 새 Prefect 배포가 READY이고 새 버전의 정기 실행이 완료되는지 확인합니다.
 
 선택적 운영 스위치는 `WHALE_TRADE_PREFECT_ENABLED=false`(기존 뉴스만 실행), `WHALE_TRADE_EMBEDDED_ENABLED=false`(웹 보조 수집 끄기), `WHALE_TRADE_EMBEDDED_BOOTSTRAP_ONLY=true`(웹 첫 수집·장애 복구만)입니다. 현물 기본 주소는 Binance 공식 공개 시세 전용 `data-api.binance.vision`, 선물은 `fapi.binance.com`이며 `BINANCE_API_BASE`·`BINANCE_FAPI_BASE` 설정을 존중합니다. [Binance 공개 시세 API 문서](https://github.com/binance/binance-spot-api-docs/blob/master/faqs/market_data_only.md)
 
@@ -94,7 +94,7 @@ Prefect의 `whale_discovery`, `whale_source`, `whale_collection` 로그에서 �
 
 ## 온체인 상위 주소 중앙 수집
 
-`gg-parrot-onchain-holders/shared-onchain-holders`가 기존 워커에 함께 등록됩니다. 별도 Render 서비스나 관리 프로세스 없이 체결 수집 실행 슬롯을 공유하며, 매분 만기가 지난 소스 중 가장 오래 기다린 한 개만 확인합니다. HTTP 요청당 최대 12초와 응답 크기 제한을 적용하고, 실제 호출 간격은 공용 `OnchainHolderState`의 만기로 관리합니다. 첫 기준 수집은 세 번의 정기 실행에 걸쳐 완료됩니다.
+`gg-parrot-onchain-holders/shared-onchain-holders`가 기존 워커에 함께 등록됩니다. 별도 Render 서비스나 추가 Python 자식 프로세스 없이 체결 수집의 스레드 슬롯을 공유하며, 매분 만기가 지난 소스 중 가장 오래 기다린 한 개만 확인합니다. HTTP 요청당 최대 12초와 응답 크기 제한을 적용하고, 실제 호출 간격은 공용 `OnchainHolderState`의 만기로 관리합니다. 첫 기준 수집은 세 번의 정기 실행에 걸쳐 완료됩니다.
 
 | 소스 | 대상 | 실제 호출 간격 | 수집 범위 |
 | --- | --- | --- | --- |
@@ -109,3 +109,13 @@ Prefect의 `whale_discovery`, `whale_source`, `whale_collection` 로그에서 �
 `GET /api/whale-activity`에서 세 소스의 마지막 성공·다음 수집·추적 주소 수·상태를 확인할 수 있습니다. 이 공개 경로와 인증된 에이전트 경로 모두 짧은 읽기 캐시만 사용합니다. 원본 주소 목록·잔고·수집 권한 토큰은 공개하지 않습니다. DB 테이블은 RLS 및 공개 역할 권한 회수 대상이며, 429의 재시도 간격은 같은 공급자 전체에 적용합니다. 실패 시 기존 정상 관측은 보존합니다.
 
 Prefect에서 `onchain_discovery`, `onchain_source`, `onchain_collection` 로그의 `coin`, `http_status`, `fetched_count`, `excluded_count`, `tracked_count`, `observed_at`, `error_code`를 확인합니다. 수집 실패는 실패 상태로 남기고 다음 만기에 재시도합니다. `not_due_or_claimed` 또는 수집 대상 0개는 DB 만기/중복 방지에 따른 정상 결과입니다. 기존 `WHALE_TRADE_PREFECT_ENABLED=false`는 체결과 온체인 수집을 함께 끄므로 뉴스만 운영할 때만 사용합니다.
+
+### 예약 지연과 워커 메모리 복구
+
+`LightweightCollectorRunner`는 Prefect에 이미 생성된 예약 실행을 가져와 `Pending(force=False)`로 선점한 뒤, 같은 실행 ID를 Prefect flow engine에 전달합니다. 새 임의 실행을 만들지 않으며 태스크·완료/실패·소스 로그와 배포 동시 실행 제한을 유지합니다. 정식 SDK 3.7.8에 고정하고, 브라우저를 쓰는 뉴스 수집은 기존 프로세스 격리를 유지합니다. 체결·온체인 수집은 관리 프로세스 안의 단일 스레드에서 순차 실행해 Python/Prefect의 반복 로딩으로 인한 메모리 중복을 줄입니다.
+
+신규 예약은 배포별로 번갈아 선택합니다. 과거 예약이 조회 페이지를 채우면 최근 실행 구간을 별도로 조회합니다. 시작 시 및 30초마다 오래된 자동 예약만 제한된 개수로 정리하며, 정리 한 회차는 최대 15초입니다. 체결·온체인은 120초, 뉴스는 기존 flow의 유효 관측 지연 설정(기본 600초)을 적용합니다. 수동 진단, 이미 시작된 작업, 실행기가 연결된 사용자 매크로는 정리 대상이 아닙니다.
+
+Prefect는 원자적인 ‘예약 상태일 때만 취소’를 제공하지 않으므로, 상태를 다시 확인하고 `Cancelling(force=False)`를 요청합니다. 인프라가 없는 예약은 서버에서 `Cancelled`로 전환하고, 완료된 실행에는 요청을 거절합니다. 확인 직후 오래된 수집이 시작되는 경합은 해당 유효 관측 시간을 이미 넘긴 수집에만 영향을 줍니다. 작업 기록을 삭제하거나 과거 실행을 `Pending`으로 되돌리지 않습니다. `collector_queue_cleanup`의 `retired`는 이러한 정상 정리를 뜻합니다.
+
+배포 뒤 네 Prefect 배포의 커밋·READY 상태, 같은 실행 ID에 연결된 태스크·소스 로그·최종 상태를 확인합니다. 체결·온체인 예약 지연과 `collector_queue_cleanup`을 확인하고, 공용 DB 및 공개 API의 세 소스 관측 시각을 대조합니다. 스레드에서 실행 중인 HTTP 요청은 취소 즉시 강제 종료하지 않으며, 제한된 실행이 끝난 뒤 자신이 실행한 `Cancelling` 상태를 마무리합니다. 기존 `Pending`/`Running` 기록을 일괄 변경하지 않습니다. Render 재시작이나 메모리 부족 여부는 워커 로그·메모리 지표로 별도 확인합니다.

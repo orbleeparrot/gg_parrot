@@ -433,7 +433,7 @@ skeleton shimmer 금지. `prefers-reduced-motion` 존중.
 | `RunResultScreen` (`components/`) | 실행이 끝나면 에이전트 채팅 자리를 **통째로** 차지. 아이브로 → 헤드라인 → 총 실현손익(큰 숫자, 상승 초록·하락 빨강) → 실행 시간·종목·남은 포지션 행. 상자 없음 |
 
 화면 골격(`components/Page.jsx`)도 같은 이유로 공용이다 — `PageHeader` `SectionTitle`
-`EmptyState` `EmptyRow` `Loading` `ErrorNote`. 페이지마다 제목 줄과 "불러오는 중…"을 따로
+`EmptyState` `EmptyRow` `Loading` `ErrorNote`. **페이지 머리는 `PageHeader` 하나로 통일한다**: 아이브로(11/750/자간 .08em) → 제목(clamp 30~44px/800/−.03em) → meta(15/600, 수치는 `.num` 본문색) → 설명(16~19/500, 40ch) → note(13/600 고지). 우측 액션은 제목 밑선. 제목이 없는 화면(내 에이전트)과 로그인 셸·글 제목(게시글)은 예외. 페이지마다 제목 줄과 "불러오는 중…"을 따로
 짜면 화면을 옮길 때마다 눈이 다시 적응해야 한다.
 
 `.dialog`는 §6이 말하는 "면 배경"이 아니라 **surface**를 쓴다 — 면(`slate-100`)으로 깔면 그 안에

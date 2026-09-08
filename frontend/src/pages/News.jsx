@@ -6,7 +6,7 @@ import { hasPendingTranslation, historicalNewsLabel } from "../lib/newsBriefings
 import CoinIcon from "../components/CoinIcon.jsx";
 import NewsBriefingReader from "../components/NewsBriefingReader.jsx";
 import { AnnotatedText, TermChips } from "../components/NewsTerms.jsx";
-import { Loading, ErrorNote } from "../components/Page.jsx";
+import { PageHeader, Loading, ErrorNote } from "../components/Page.jsx";
 
 const COIN_NEWS_CONCURRENCY = 2;
 const RACER_NEWS_ROTATE_MS = 5_000;
@@ -336,13 +336,13 @@ export default function News() {
 
   return (
     <div className="news-briefing-page">
-      <header className="news-page-head">
-        <span className="news-page-eyebrow">MARKET NEWSROOM</span>
-        <h1 className="news-page-title">오늘의 코인동향</h1>
-        {market?.as_of ? <time className="news-page-asof num">기준 {market.as_of} · KST</time> : null}
-        <p className="news-page-description">시장·규제와 활발히 움직이는 코인을 두 개의 브리핑으로 나눠 읽어요.</p>
-        <p className="news-page-disclaimer">경주마 선정과 뉴스는 참고용이며 투자 권유가 아니에요.</p>
-      </header>
+      <PageHeader
+        eyebrow="MARKET NEWSROOM"
+        title="오늘의 코인동향"
+        meta={market?.as_of ? <>기준 <span className="num">{market.as_of}</span> · KST</> : null}
+        description="시장·규제와 활발히 움직이는 코인을 두 개의 브리핑으로 나눠 읽어요."
+        note="경주마 선정과 뉴스는 참고용이며 투자 권유가 아니에요."
+      />
 
       <div className="news-briefing-grid">
         <MarketBriefing market={market} loading={marketLoading} error={marketError} />

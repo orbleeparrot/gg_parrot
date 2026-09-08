@@ -891,7 +891,7 @@ def test_invalid_durable_translation_is_retranslated_not_exposed(monkeypatch):
     monkeypatch.setattr(
         news,
         "_request_korean_title_translations",
-        lambda titles: {english: korean} if titles == [english] else {},
+        lambda titles, **_kwargs: {english: korean} if titles == [english] else {},
     )
     monkeypatch.setattr(
         news,
@@ -1051,7 +1051,7 @@ def test_claimed_translation_renews_lease_before_every_paid_call(monkeypatch):
         raising=False,
     )
 
-    def translate(titles):
+    def translate(titles, **_kwargs):
         calls.append(list(titles))
         if titles == [first, second]:
             return {first: "아비트럼 토큰 급등"}
@@ -1106,7 +1106,7 @@ def test_title_translation_reuses_durable_cache_after_memory_reset(monkeypatch):
         lambda _titles, **_kwargs: None,
     )
 
-    def translate(titles):
+    def translate(titles, **_kwargs):
         api_calls.append(titles)
         return {english: korean}
 

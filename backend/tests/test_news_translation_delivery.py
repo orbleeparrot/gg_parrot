@@ -129,7 +129,7 @@ def test_preflight_busy_releases_claim_for_prompt_retry(monkeypatch):
     releases = []
     monkeypatch.setattr(news, "_renew_durable_title_translation_claims", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(news, "_release_durable_title_translation_claims", lambda titles, **kwargs: releases.append(kwargs))
-    monkeypatch.setattr(news, "_request_korean_title_translations", lambda _: (_ for _ in ()).throw(AiBusyError("busy")))
+    monkeypatch.setattr(news, "_request_korean_title_translations", lambda _, **_kwargs: (_ for _ in ()).throw(AiBusyError("busy")))
     with pytest.raises(news.NewsTranslationBusyError):
         news._translate_title_batch(["Arbitrum token rises"], claim_token="claim")
     assert releases == [{"claim_token": "claim", "retry_immediately": True}]

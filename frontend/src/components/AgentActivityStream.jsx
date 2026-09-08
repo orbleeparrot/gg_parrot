@@ -215,7 +215,12 @@ export default function AgentActivityStream({
     node.focus({ preventScroll: true });
   }
 
-  const ended = !!session && session.status !== "running";
+  // 종료 '요청' 시점부터 결과 화면으로 넘어간다 — 실행기 확정을 기다리는 동안 채팅에
+  // 알림만 쌓이고 화면이 그대로이던 문제.
+  const ended = !!session && (session.status !== "running" || !!session.stopping);
+  useEffect(() => {
+    if (ended) setShowLog(false);
+  }, [ended]);
   if (ended && !showLog) {
     return (
       <aside className="agent-chat" aria-label={`${symbol} 실행 결과`}>

@@ -68,3 +68,24 @@ test("the close-and-stop confirmation warns about mainnet and adapts to a flat s
   assert.match(keep.description, /포지션은 그대로/);
   assert.match(describeDeleteConfirm({ ...base, status: "error" }).title, /오류로 끝난 ZECUSDT/);
 });
+
+
+test("requesting a stop shows the result screen in a pending state, not a final figure", () => {
+  const pending = describeRunOutcome({ ...base, status: "running", stopping: true,
+    stop_mode: "close_and_stop", stopped_kst: "", heartbeat_kst: "09/04 18:22:10",
+    in_position: true, position_qty: 0.42, entry_price: 951.2, unrealized_pct: -4.86, realized_pnl: 0 });
+  assert.equal(pending.eyebrow, "종료 처리 중");
+  assert.match(pending.title, /청산하고 종료하는 중/);
+  assert.equal(pending.tone, "pending");
+  assert.equal(pending.pending, true);
+  assert.equal(pending.pnl.text, "집계 중", "확정 전에는 수치를 주장하지 않는다");
+  assert.equal(pending.rows.find((row) => row.label === "실행 시간").value,
+    "2시간 10분 · 09/04 16:12:03 → 09/04 18:22:10", "끝점은 마지막 heartbeat");
+  assert.match(pending.rows.find((row) => row.label === "남은 포지션").value, /^0.42 @ 951.2/);
+});
+
+test("stopping only counts while the session is still running", () => {
+  const done = describeRunOutcome({ ...base, stopping: true });
+  assert.equal(done.pending, false);
+  assert.equal(done.pnl.text, "+128.40 USDT");
+});

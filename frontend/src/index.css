@@ -8284,6 +8284,8 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 }
 .agent-result-eyebrow { margin: 0; color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 750; letter-spacing: .06em; }
 .agent-result.is-critical .agent-result-eyebrow { color: rgb(var(--c-red-600)); }
+.agent-result.is-pending .agent-result-eyebrow { display: flex; align-items: center; gap: 6px; color: rgb(var(--c-slate-600)); }
+.agent-result-pnl.is-pending { color: rgb(var(--c-slate-500)); font-size: clamp(24px, 6cqi, 34px); }
 .agent-result.is-warning .agent-result-eyebrow { color: rgb(var(--c-amber-800)); }
 .agent-result-title {
   margin: 0;

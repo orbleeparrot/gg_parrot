@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../../api.js";
 import useAdaptivePolling from "../../../hooks/useAdaptivePolling.js";
+import { hasPendingNewsWork, newsRetryAfterSeconds } from "../../../lib/newsBriefings.js";
 
 const POLL_MS = 3000;
 const POSITION_NEWS_BUSY_RETRY_DELAYS_MS = [400, 1_200, 2_400];
@@ -63,9 +64,9 @@ export function usePositionNewsFeature(sessionId, running = true) {
       if (requestRef.current === requestId) {
         setState({ status: "ready", sessionId: targetSessionId, data, error: "" });
       }
-      const waitingForTranslation = data?.translation?.status === "partial";
+      const waitingForTranslation = hasPendingNewsWork(data);
       const translationDelay = Math.max(30000, Math.min(300000,
-        (Number(data?.translation?.retry_after_seconds) || 30) * 1000));
+        newsRetryAfterSeconds(data) * 1000));
       return { nextPollMs: !running ? null : waitingForTranslation ? translationDelay
         : data?.analysis_status === "pending" ? 3000 : 30000 };
     } catch (reason) {

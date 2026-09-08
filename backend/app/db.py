@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from typing import Iterator, Optional
 
 from sqlalchemy import BigInteger, Index, event
+from sqlalchemy.exc import DBAPIError
 
 # epoch 밀리초를 담는 컬럼은 반드시 BIGINT 여야 한다. SQLite 의 INTEGER 는
 # 가변 길이(최대 8바이트)라 그냥 들어가지만, Postgres 의 INTEGER 는 정확히
@@ -493,6 +494,23 @@ class NewsTitleTranslation(SQLModel, table=True):
     updated_ms: int = Field(default=0, sa_type=BigInteger, index=True)
 
 
+class CommunityPostSummary(SQLModel, table=True):
+    """One fenced Korean summary per public post body and model/prompt version.
+
+    Body text belongs to the source cache; this table keeps only its hash.
+    """
+
+    summary_key: str = Field(primary_key=True, max_length=64)
+    post_id: str = Field(max_length=30)
+    body_hash: str = Field(max_length=64)
+    prompt_version: str = Field(max_length=160)
+    summary_ko: str = ""
+    processing_status: str = Field(default="pending", index=True)
+    claim_token: str = ""
+    claimed_ms: int = Field(default=0, sa_type=BigInteger, index=True)
+    updated_ms: int = Field(default=0, sa_type=BigInteger, index=True)
+
+
 class DailyChallenge(SQLModel, table=True):
     """One day's AI challenge: the chosen symbol for a KST date (idempotency key)."""
 
@@ -567,6 +585,28 @@ class WhaleObservation(SQLModel, table=True):
     buys: int = 0
     sells: int = 0
     tracked: int = 0
+
+
+class WhaleTradeState(SQLModel, table=True):
+    """Shared public trade observations and fenced collector work per pair.
+
+    Provider keys use an empty symbol and hold only a market-wide cooldown.
+    Neither kind of row belongs to a user or authorizes trading.
+    """
+
+    state_key: str = Field(primary_key=True, max_length=64)
+    symbol: str = Field(default="", max_length=21)
+    market: str = Field(max_length=12)
+    payload_json: str = ""
+    last_success_ms: int = Field(default=0, sa_type=BigInteger)
+    last_attempt_ms: int = Field(default=0, sa_type=BigInteger, index=True)
+    next_collection_ms: int = Field(default=0, sa_type=BigInteger, index=True)
+    claim_token: str = ""
+    claimed_ms: int = Field(default=0, sa_type=BigInteger)
+    consecutive_failures: int = 0
+    last_error: str = ""
+    error_code: str = ""
+    collection_status: str = "pending"
 
 
 class BoardPost(SQLModel, table=True):
@@ -687,97 +727,153 @@ def _migrate() -> None:
         conn.commit()
 
 
+_PG_ADDED_COLUMNS = {
+    "dailychallenge": {
+        "status": "TEXT DEFAULT 'ready'", "claim_token": "TEXT DEFAULT ''",
+        "claimed_ms": "BIGINT DEFAULT 0", "last_error": "TEXT DEFAULT ''",
+    },
+    "leaderboardentry": {"streak_days": "INTEGER DEFAULT 1", "first_created_ms": "BIGINT"},
+    "newstitletranslation": {
+        "processing_status": "TEXT DEFAULT 'ready'", "claim_token": "TEXT DEFAULT ''",
+        "claimed_ms": "BIGINT DEFAULT 0",
+    },
+    "runsession": {
+        "macro_json": "TEXT DEFAULT ''", "position_uncertain": "BOOLEAN DEFAULT FALSE",
+        "user_macro_id": "INTEGER",
+        "runner_version": "TEXT DEFAULT ''",
+    },
+    "tickernewssnapshot": {
+        "claim_token": "TEXT DEFAULT ''", "last_observed_at": "TEXT DEFAULT ''",
+        "last_observed_ms": "BIGINT DEFAULT 0", "last_observation_seq": "BIGINT DEFAULT 0",
+        "analysis_attempts": "INTEGER DEFAULT 0", "next_retry_ms": "BIGINT DEFAULT 0",
+    },
+    "tickernewsstate": {
+        "collection_claim_token": "TEXT DEFAULT ''", "collection_claimed_ms": "BIGINT DEFAULT 0",
+        "next_collection_ms": "BIGINT DEFAULT 0", "observation_seq": "BIGINT DEFAULT 0",
+        "latest_observation_seq": "BIGINT DEFAULT 0", "latest_observed_ms": "BIGINT DEFAULT 0",
+    },
+    "runnerlaunchticket": {
+        "rejected_at": "TEXT DEFAULT ''",
+        "rejected_version": "TEXT DEFAULT ''",
+    },
+}
+_PG_INDEXES = {
+    "ix_runsession_active_heartbeat": ("runsession", "status, last_heartbeat_at"),
+    "ix_runsession_user_macro_id": ("runsession", "user_macro_id"),
+    "ix_newstitletranslation_processing_status": ("newstitletranslation", "processing_status"),
+    "ix_newstitletranslation_claimed_ms": ("newstitletranslation", "claimed_ms"),
+}
+_PG_BIGINT_COLUMNS = {
+    "whaletradestate": ("last_success_ms", "last_attempt_ms", "next_collection_ms", "claimed_ms"),
+    "communitypostsummary": ("claimed_ms", "updated_ms"),
+    "tickernewssnapshot": (
+        "collected_ms", "claimed_ms", "last_observed_ms", "last_observation_seq",
+        "next_retry_ms", "completed_ms",
+    ),
+    "tickernewsstate": (
+        "collection_claimed_ms", "next_collection_ms", "observation_seq",
+        "latest_observation_seq", "latest_observed_ms", "last_attempt_ms", "last_success_ms",
+    ),
+}
+_PG_PRIVATE_CACHE_TABLES = ("newstitletranslation", "communitypostsummary", "whaletradestate")
+_PG_MIGRATION_LOCK = 0x6767706172726F74  # Stable across web/worker processes and deployments.
+_PG_MIGRATION_ATTEMPTS = 3
+
+
+def _pg_schema_state(conn) -> dict:
+    """Read catalogs without locking application tables for a no-op ALTER."""
+    tables = {name: rls for name, rls in conn.exec_driver_sql(
+        "SELECT c.relname, c.relrowsecurity FROM pg_class c "
+        "JOIN pg_namespace n ON n.oid = c.relnamespace "
+        "WHERE n.nspname = current_schema() AND c.relkind IN ('r', 'p')"
+    )}
+    columns = {(table, column): kind for table, column, kind in conn.exec_driver_sql(
+        "SELECT table_name, column_name, data_type FROM information_schema.columns "
+        "WHERE table_schema = current_schema()"
+    )}
+    indexes = {row[0] for row in conn.exec_driver_sql(
+        "SELECT indexname FROM pg_indexes WHERE schemaname = current_schema()"
+    )}
+    grants = {(table, role) for table, role in conn.exec_driver_sql(
+        "SELECT DISTINCT c.relname, CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE r.rolname END "
+        "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+        "CROSS JOIN LATERAL aclexplode(COALESCE(c.relacl, acldefault('r', c.relowner))) a "
+        "LEFT JOIN pg_roles r ON r.oid = a.grantee "
+        "WHERE n.nspname = current_schema() AND c.relname IN ("
+        + ", ".join("'" + table + "'" for table in _PG_PRIVATE_CACHE_TABLES) + ") "
+        "AND (a.grantee = 0 OR r.rolname IN ('anon', 'authenticated'))"
+    )}
+    return {"tables": tables, "columns": columns, "indexes": indexes, "grants": grants}
+
+
+def _pg_migration_statements(state: dict) -> list[str]:
+    statements = []
+    for table, columns in _PG_ADDED_COLUMNS.items():
+        if table not in state["tables"]:
+            continue  # create_all handles a table that has never existed.
+        for column, definition in columns.items():
+            if (table, column) not in state["columns"]:
+                statements.append(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {definition}")
+    for table, columns in _PG_BIGINT_COLUMNS.items():
+        for column in columns:
+            kind = state["columns"].get((table, column))
+            if kind is not None and kind != "bigint":
+                statements.append(
+                    f"ALTER TABLE {table} ALTER COLUMN {column} TYPE BIGINT USING {column}::bigint"
+                )
+    for name, (table, columns) in _PG_INDEXES.items():
+        if table in state["tables"] and name not in state["indexes"]:
+            statements.append(f"CREATE INDEX IF NOT EXISTS {name} ON {table} ({columns})")
+    for table in _PG_PRIVATE_CACHE_TABLES:
+        if table not in state["tables"]:
+            continue
+        if not state["tables"][table]:
+            statements.append(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY")
+        for role in ("PUBLIC", "anon", "authenticated"):
+            if (table, role) in state["grants"]:
+                statements.append(f"REVOKE ALL PRIVILEGES ON TABLE {table} FROM {role}")
+    return statements
+
+
+def _pg_missing_tables(state: dict) -> bool:
+    return any(table.name not in state["tables"] for table in SQLModel.metadata.tables.values())
+
+
 def _migrate_pg() -> None:
-    """Postgres: create_all does not ALTER existing tables either, so add columns
-    introduced after a table first shipped. `ADD COLUMN IF NOT EXISTS` makes this
-    idempotent and safe on every startup."""
-    stmts = [
-        "CREATE INDEX IF NOT EXISTS ix_runsession_active_heartbeat ON runsession (status, last_heartbeat_at)",
-        "ALTER TABLE tickernewsstate ADD COLUMN IF NOT EXISTS collection_claim_token TEXT DEFAULT ''",
-        "ALTER TABLE tickernewsstate ADD COLUMN IF NOT EXISTS collection_claimed_ms BIGINT DEFAULT 0",
-        "ALTER TABLE tickernewsstate ADD COLUMN IF NOT EXISTS next_collection_ms BIGINT DEFAULT 0",
-        "ALTER TABLE runsession ADD COLUMN IF NOT EXISTS macro_json TEXT DEFAULT ''",
-        "ALTER TABLE runsession ADD COLUMN IF NOT EXISTS position_uncertain BOOLEAN DEFAULT FALSE",
-        "ALTER TABLE runsession ADD COLUMN IF NOT EXISTS user_macro_id INTEGER",
-        "ALTER TABLE runsession ADD COLUMN IF NOT EXISTS runner_version TEXT DEFAULT ''",
-        "ALTER TABLE runnerlaunchticket ADD COLUMN IF NOT EXISTS rejected_at TEXT DEFAULT ''",
-        "ALTER TABLE runnerlaunchticket ADD COLUMN IF NOT EXISTS rejected_version TEXT DEFAULT ''",
-        "CREATE INDEX IF NOT EXISTS ix_runsession_user_macro_id ON runsession (user_macro_id)",
-        "ALTER TABLE tickernewssnapshot ADD COLUMN IF NOT EXISTS claim_token TEXT DEFAULT ''",
-        "ALTER TABLE tickernewssnapshot ADD COLUMN IF NOT EXISTS last_observed_at TEXT DEFAULT ''",
-        "ALTER TABLE tickernewssnapshot ADD COLUMN IF NOT EXISTS last_observed_ms BIGINT DEFAULT 0",
-        "ALTER TABLE tickernewssnapshot ADD COLUMN IF NOT EXISTS last_observation_seq BIGINT DEFAULT 0",
-        "ALTER TABLE tickernewssnapshot ADD COLUMN IF NOT EXISTS analysis_attempts INTEGER DEFAULT 0",
-        "ALTER TABLE tickernewssnapshot ADD COLUMN IF NOT EXISTS next_retry_ms BIGINT DEFAULT 0",
-        "ALTER TABLE tickernewsstate ADD COLUMN IF NOT EXISTS observation_seq BIGINT DEFAULT 0",
-        "ALTER TABLE tickernewsstate ADD COLUMN IF NOT EXISTS latest_observation_seq BIGINT DEFAULT 0",
-        "ALTER TABLE tickernewsstate ADD COLUMN IF NOT EXISTS latest_observed_ms BIGINT DEFAULT 0",
-        "ALTER TABLE leaderboardentry ADD COLUMN IF NOT EXISTS streak_days INTEGER DEFAULT 1",
-        "ALTER TABLE leaderboardentry ADD COLUMN IF NOT EXISTS first_created_ms BIGINT",
-        "ALTER TABLE newstitletranslation ADD COLUMN IF NOT EXISTS processing_status TEXT DEFAULT 'ready'",
-        "ALTER TABLE newstitletranslation ADD COLUMN IF NOT EXISTS claim_token TEXT DEFAULT ''",
-        "ALTER TABLE newstitletranslation ADD COLUMN IF NOT EXISTS claimed_ms BIGINT DEFAULT 0",
-        "CREATE INDEX IF NOT EXISTS ix_newstitletranslation_processing_status ON newstitletranslation (processing_status)",
-        "CREATE INDEX IF NOT EXISTS ix_newstitletranslation_claimed_ms ON newstitletranslation (claimed_ms)",
-        "ALTER TABLE dailychallenge ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'ready'",
-        "ALTER TABLE dailychallenge ADD COLUMN IF NOT EXISTS claim_token TEXT DEFAULT ''",
-        "ALTER TABLE dailychallenge ADD COLUMN IF NOT EXISTS claimed_ms BIGINT DEFAULT 0",
-        "ALTER TABLE dailychallenge ADD COLUMN IF NOT EXISTS last_error TEXT DEFAULT ''",
-        "ALTER TABLE newstitletranslation ENABLE ROW LEVEL SECURITY",
-        "REVOKE ALL PRIVILEGES ON TABLE newstitletranslation FROM PUBLIC",
-        (
-            "DO $$ BEGIN "
-            "IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN "
-            "REVOKE ALL PRIVILEGES ON TABLE newstitletranslation FROM anon; "
-            "END IF; "
-            "IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN "
-            "REVOKE ALL PRIVILEGES ON TABLE newstitletranslation FROM authenticated; "
-            "END IF; "
-            "END $$"
-        ),
-    ]
-    bigint_columns = {
-        "tickernewssnapshot": (
-            "collected_ms",
-            "claimed_ms",
-            "last_observed_ms",
-            "last_observation_seq",
-            "next_retry_ms",
-            "completed_ms",
-        ),
-        "tickernewsstate": (
-            "collection_claimed_ms",
-            "next_collection_ms",
-            "observation_seq",
-            "latest_observation_seq",
-            "latest_observed_ms",
-            "last_attempt_ms",
-            "last_success_ms",
-        ),
-    }
-    with _engine.connect() as conn:
-        for ddl in stmts:
-            conn.exec_driver_sql(ddl)
-        for table, columns in bigint_columns.items():
-            for column in columns:
-                row = conn.exec_driver_sql(
-                    "SELECT data_type FROM information_schema.columns "
-                    f"WHERE table_schema = current_schema() AND table_name = '{table}' "
-                    f"AND column_name = '{column}'"
-                ).first()
-                if row is not None and row[0] != "bigint":
-                    conn.exec_driver_sql(
-                        f"ALTER TABLE {table} ALTER COLUMN {column} "
-                        f"TYPE BIGINT USING {column}::bigint"
-                    )
-        conn.commit()
+    """Inspect first; serialize only necessary DDL and retry rolled-back locks.
+
+    Even ADD COLUMN IF NOT EXISTS takes an AccessExclusiveLock. A normal boot
+    therefore executes catalog SELECTs only, leaving live trading unblocked.
+    """
+    for attempt in range(_PG_MIGRATION_ATTEMPTS):
+        try:
+            with _engine.begin() as conn:
+                state = _pg_schema_state(conn)
+                if not _pg_missing_tables(state) and not _pg_migration_statements(state):
+                    return
+                conn.exec_driver_sql("SET LOCAL lock_timeout = '2000ms'")
+                conn.exec_driver_sql(f"SELECT pg_advisory_xact_lock({_PG_MIGRATION_LOCK})")
+                # Another boot can finish migration while this transaction waits.
+                state = _pg_schema_state(conn)
+                if _pg_missing_tables(state):
+                    SQLModel.metadata.create_all(conn)
+                    state = _pg_schema_state(conn)
+                for ddl in _pg_migration_statements(state):
+                    conn.exec_driver_sql(ddl)
+            return
+        except DBAPIError as exc:
+            code = getattr(exc.orig, "sqlstate", None) or getattr(exc.orig, "pgcode", None)
+            if code not in {"40P01", "55P03"} or attempt + 1 == _PG_MIGRATION_ATTEMPTS:
+                raise
+            # begin() rolled back the entire transaction and released its locks.
+            time.sleep(0.1 * (attempt + 1))
 
 
 def init_db() -> None:
-    SQLModel.metadata.create_all(_engine)
     # create_all never ALTERs a pre-existing table, so patch late-added columns on
     # both backends: SQLite via PRAGMA checks, Postgres via ADD COLUMN IF NOT EXISTS.
     if _is_sqlite():
+        SQLModel.metadata.create_all(_engine)
         _migrate()
     else:
         _migrate_pg()
@@ -796,3 +892,15 @@ def request_session() -> Iterator[Session]:
 def database_dialect() -> str:
     """Expose the configured store type without leaking the engine itself."""
     return str(_engine.dialect.name)
+
+
+def assert_shared_worker_database(*, dialect: str | None = None) -> None:
+    """Fail closed when a deployed collector does not share durable Postgres.
+
+    Keep the existing worker setting so news and trade collectors use the same
+    Render database requirement without importing any source or feature code.
+    """
+    default_required = "true" if os.environ.get("RENDER") else "false"
+    required = os.environ.get("POSITION_NEWS_REQUIRE_POSTGRES", default_required).strip().lower() in {"1", "true", "yes"}
+    if required and (database_dialect() if dialect is None else dialect) != "postgresql":
+        raise RuntimeError("중앙 수집 워커는 웹 서버와 같은 Postgres DATABASE_URL이 필요합니다.")

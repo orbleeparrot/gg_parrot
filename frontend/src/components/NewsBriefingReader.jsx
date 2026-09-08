@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import CommunityBodySummary from "./CommunityBodySummary.jsx";
 
 const TICK_MS = 520;
 const DEFAULT_VISIBLE_ROWS = 4;
@@ -45,6 +46,8 @@ export default function NewsBriefingReader({
   const [viewportPaused, setViewportPaused] = useState(false);
   const guardRef = useRef(null);
   const readerRef = useRef(null);
+  const trackRef = useRef(null);
+  const [measuredRows, setMeasuredRows] = useState(null);
   const previousSyncTickRef = useRef(syncTick);
 
   const total = items.length;
@@ -52,12 +55,31 @@ export default function NewsBriefingReader({
   const active = total ? items[activeIndex] : null;
   const rotates = total > 1;
   const visibleCount = Math.min(total, visibleRows);
+  const hasCommunity = items.some((item) => item.community);
   const rows = total
     ? Array.from({ length: visibleCount + (rotates ? 1 : 0) }, (_, slot) => ({
         item: items[mod(offset + slot, total)],
         slot,
       }))
     : [];
+
+  // Community summaries have natural height. Measure the visible rows and the
+  // outgoing row so rotation never clips a longer summary or skips an article.
+  useLayoutEffect(() => {
+    if (!hasCommunity || !trackRef.current) return undefined;
+    const nodes = [...trackRef.current.children];
+    const measure = () => {
+      const heights = nodes.map((node) => node.getBoundingClientRect().height);
+      const next = { window: heights.slice(0, visibleCount).reduce((sum, height) => sum + height, 0),
+        step: heights[0] || rowHeight };
+      setMeasuredRows((previous) => previous?.window === next.window && previous?.step === next.step ? previous : next);
+    };
+    measure();
+    if (!("ResizeObserver" in window)) return undefined;
+    const observer = new ResizeObserver(measure);
+    nodes.forEach((node) => observer.observe(node));
+    return () => observer.disconnect();
+  }, [hasCommunity, items, offset, rowHeight, visibleCount]);
 
   useEffect(() => {
     const sync = () => setPageHidden(document.hidden);
@@ -168,6 +190,7 @@ export default function NewsBriefingReader({
               {active.value ? <strong className={`news-reader-value num ${active.tone || ""}`}>{active.value}</strong> : null}
             </div>
             {active.description ? <p className="news-reader-description">{active.description}</p> : null}
+            <CommunityBodySummary summary={active.community?.summary} />
           </div>
         </article>
       )}
@@ -182,11 +205,12 @@ export default function NewsBriefingReader({
           </header>
         )}
         <span className="sr-only">전체 {total}개 중 {activeIndex + 1}번째 뉴스</span>
-        <div className="news-reader-queue-window" style={{ height: `${visibleCount * rowHeight}px` }}>
+        <div className="news-reader-queue-window" style={{ height: `${hasCommunity && measuredRows ? measuredRows.window : visibleCount * rowHeight}px` }}>
           <div
+            ref={trackRef}
             className="news-reader-queue-track"
             style={{
-              transform: `translateY(${moving ? -rowHeight : 0}px)`,
+              transform: `translateY(${moving ? -(hasCommunity && measuredRows ? measuredRows.step : rowHeight) : 0}px)`,
               transition: moving ? `transform ${TICK_MS}ms cubic-bezier(0.22, 0.61, 0.36, 1)` : "none",
             }}
             onTransitionEnd={(event) => {
@@ -204,6 +228,7 @@ export default function NewsBriefingReader({
                         {item.community.source || "Binance Square"} · {item.time || "게시일 확인 불가"}
                       </span>
                     </span>
+                    <CommunityBodySummary summary={item.community.summary} />
                     <span className="news-reader-row-arrow" aria-hidden="true">{item.url ? "↗" : "→"}</span>
                   </>
                 ) : queueOnly ? (

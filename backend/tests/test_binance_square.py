@@ -1,6 +1,8 @@
 """Public Square feed contracts captured from the hashtag Latest tab."""
 from copy import deepcopy
 from datetime import datetime, timezone
+import hashlib
+import json
 import time
 
 import httpx
@@ -49,8 +51,8 @@ def transport(monkeypatch, handler):
     monkeypatch.setattr(square, "get_http_client", lambda: httpx.Client(transport=httpx.MockTransport(handler)))
 
 
-def test_post_metadata_and_short_headline_do_not_store_full_body():
-    raw = post(content="$CHIP holds support ahead of another move.\n\nFULL BODY MUST NOT BE STORED")
+def test_post_metadata_keeps_internal_body_separate_from_short_headline():
+    raw = post(content="$CHIP holds support ahead of another move.\n\nEntry: 0.05\nStop: 0.04")
     items = square.parse_posts([raw], "CHIP")
     assert len(items) == 1
     item = items[0]
@@ -59,8 +61,277 @@ def test_post_metadata_and_short_headline_do_not_store_full_body():
     assert item["source"] == "Binance Square"
     assert item["author"] == "Example author"
     assert item["title"] == "$CHIP holds support ahead of another move."
-    assert "FULL BODY" not in str(item)
+    assert item["community_body"] == raw["content"]
+    assert item["community_body_hash"] == hashlib.sha256(raw["content"].encode()).hexdigest()
+    assert item["community_body_status"] == "ready"
+    assert item["community_body_truncated"] is False
     assert datetime.fromisoformat(item["published"]).tzinfo is not None
+
+
+def test_body_cleans_markup_without_dropping_levels_or_later_paragraphs():
+    raw = post(content='<p>$CHIP holds support.</p><p>Entry: 0.05<br>Stop: 0.04 &amp; risk: 2%</p>'
+                       '<script>untrusted()</script>\n{future}(CHIPUSDT)')
+    item = square.parse_posts([raw], "CHIP")[0]
+    assert item["community_body"] == "$CHIP holds support.\nEntry: 0.05\nStop: 0.04 & risk: 2%"
+    reformatted = post(content="$CHIP holds support.\nEntry: 0.05\nStop: 0.04 & risk: 2%")
+    assert item["community_body_hash"] == square.parse_posts([reformatted], "CHIP")[0]["community_body_hash"]
+    changed = post(content=reformatted["content"].replace("0.04", "0.03"))
+    assert item["community_body_hash"] != square.parse_posts([changed], "CHIP")[0]["community_body_hash"]
+
+
+def test_large_non_ascii_bodies_fit_real_repository_serialization(provider, monkeypatch):
+    monkeypatch.setenv("BINANCE_SQUARE_MAX_ITEMS", "10")
+    rows = [post(str(i), authorName=f"Author {i}", content=f"$CHIP observation {i}\n" + '가격🙂"' * 10_000)
+            for i in range(10)]
+    transport(monkeypatch, lambda request: httpx.Response(200, json=feed(rows)))
+    result = square.fetch_posts("CHIP")
+    assert len(result["items"]) == 10
+    assert all(item["community_body_truncated"] for item in result["items"])
+    payload = provider.entries[square._PREFIX + "CHIP"][0]
+    assert len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()) < 256_000
+    for item in result["items"]:
+        assert len(item["community_body"]) <= 20_000
+        assert item["community_body_hash"] == hashlib.sha256(item["community_body"].encode()).hexdigest()
+    square._cache.clear()
+    monkeypatch.setattr(square, "get_http_client", lambda: pytest.fail("persisted bodies must survive restart"))
+    assert square.fetch_posts("CHIP")["items"] == result["items"]
+
+
+def detail(identifier="123", body="$CHIP has support at 0.05.\nThe stop level is 0.04.", **changes):
+    return {"success": True, "code": "000000", "data": {
+        "id": int(identifier), "contentType": 2, "contentStatus": 2,
+        "bodyTextOnly": body, "body": '{"layout":{"root":[]}}', **changes}}
+
+
+def test_long_article_uses_public_detail_body_instead_of_missing_content(provider, monkeypatch):
+    calls = []
+    article = post(contentType=2, title="$CHIP market outlook", content=None)
+    def handler(request):
+        calls.append(request)
+        assert "authorization" not in request.headers and "cookie" not in request.headers
+        if request.url.path.endswith("queryByHashtag"):
+            return httpx.Response(200, json=feed([article]))
+        assert str(request.url) == square._DETAIL_ENDPOINT + "123"
+        return httpx.Response(200, json=detail())
+    transport(monkeypatch, handler)
+    result = square.fetch_posts("CHIP")
+    item = result["items"][0]
+    assert len(calls) == 2
+    assert item["community_body"] == detail()["data"]["bodyTextOnly"]
+    assert item["community_body_status"] == "ready"
+    assert item["community_body_truncated"] is False
+    assert result["source"]["details_fetched"] == 1
+    assert result["source"]["body_pending_count"] == 0
+
+
+def test_article_preview_and_title_are_never_treated_as_a_complete_body():
+    item = square.parse_posts([post(contentType=2, title="$CHIP full article", content="Preview only")], "CHIP")[0]
+    assert item["community_body"] == item["community_body_hash"] == ""
+    assert item["community_body_status"] == "missing"
+    assert item["community_body_truncated"] is True
+
+
+def test_all_selected_articles_get_detail_and_share_it_across_tickers(provider, monkeypatch):
+    calls = []
+    rows = [post(str(i), authorName=f"Author {i}", contentType=2, title=f"CHIP and BTC outlook {i}", content=None)
+            for i in range(5)]
+    def handler(request):
+        calls.append(request.url.path)
+        if request.url.path.endswith("queryByHashtag"):
+            return httpx.Response(200, json=feed(rows))
+        return httpx.Response(200, json=detail(request.url.path.rsplit("/", 1)[-1]))
+    transport(monkeypatch, handler)
+    first = square.fetch_posts("CHIP")
+    assert first["source"]["details_fetched"] == 5
+    assert all(item["community_body_status"] == "ready" for item in first["items"])
+    square._cache.clear()
+    second = square.fetch_posts("BTC")
+    assert len(calls) == 7  # two ticker lists, each post body fetched once
+    assert [item["community_body_hash"] for item in second["items"]] == [item["community_body_hash"] for item in first["items"]]
+
+
+def test_expired_detail_refreshes_an_edited_body_and_changes_summary_identity(provider, monkeypatch):
+    body = ["$CHIP stop level is 0.04."]
+    def handler(request):
+        return httpx.Response(200, json=feed([post(contentType=2, title="$CHIP article", content=None)])
+                              if request.url.path.endswith("queryByHashtag") else detail(body=body[0]))
+    transport(monkeypatch, handler)
+    before = square.fetch_posts("CHIP")["items"][0]
+    for entry in provider.entries.values():
+        entry[0]["expires_at"] = 0
+    square._cache.clear()
+    body[0] = "$CHIP stop level is 0.03."
+    after = square.fetch_posts("CHIP")["items"][0]
+    assert after["community_body"] == body[0]
+    assert before["community_body_hash"] != after["community_body_hash"]
+
+
+@pytest.mark.parametrize("payload", [detail("456"), detail(contentStatus=0), detail(body=None)])
+def test_invalid_or_absent_detail_keeps_title_without_inventing_body(provider, monkeypatch, payload):
+    def handler(request):
+        return httpx.Response(200, json=feed([post(contentType=2, title="$CHIP article", content=None)])
+                              if request.url.path.endswith("queryByHashtag") else payload)
+    transport(monkeypatch, handler)
+    result = square.fetch_posts("CHIP")
+    item = result["items"][0]
+    assert item["title"] == "$CHIP article"
+    assert item["community_body"] == item["community_body_hash"] == ""
+    assert item["community_body_status"] in {"missing", "error"}
+    assert result["source"]["status"] == "partial"
+    assert result["source"]["body_pending_count"] == 1
+
+
+def test_detail_429_stops_following_details_and_shares_existing_cooldown(provider, monkeypatch):
+    calls = []
+    rows = [post(str(i), authorName=f"Author {i}", contentType=2, title=f"CHIP article {i}", content=None) for i in range(3)]
+    def handler(request):
+        calls.append(request.url.path)
+        return (httpx.Response(200, json=feed(rows)) if request.url.path.endswith("queryByHashtag")
+                else httpx.Response(429, headers={"Retry-After": "600"}))
+    transport(monkeypatch, handler)
+    result = square.fetch_posts("CHIP")
+    assert len(calls) == 2
+    assert len(result["items"]) == 3
+    assert all(item["community_body_status"] == "error" for item in result["items"])
+    square._cache.clear()
+    assert square.fetch_posts("BTC")["source"]["error"] == "rate_limited"
+    assert len(calls) == 2
+
+
+def test_v1_metadata_cache_refreshes_but_existing_rate_limit_does_not(provider, monkeypatch):
+    old_key = "binance-square-latest-v1:CHIP"
+    provider.entries[old_key] = ({"expires_at": time.time() + 300,
+        "result": {"items": [{"title": "old title only"}], "source": {}}}, int((time.time() + 600) * 1000))
+    calls = []
+    transport(monkeypatch, lambda request: (calls.append(request) or httpx.Response(200, json=feed([post()]))))
+    assert square.fetch_posts("CHIP")["items"][0]["community_body_status"] == "ready"
+    assert len(calls) == 1
+    assert square._COOLDOWN == "binance-square-latest-v1:cooldown"
+
+
+def test_detail_network_failure_has_no_retry_or_fake_body(provider, monkeypatch):
+    calls = []
+    def handler(request):
+        calls.append(request.url.path)
+        if request.url.path.endswith("queryByHashtag"):
+            return httpx.Response(200, json=feed([post(contentType=2, title="$CHIP article", content=None)]))
+        raise httpx.ConnectError("fixture unavailable")
+    transport(monkeypatch, handler)
+    result = square.fetch_posts("CHIP")
+    assert len(calls) == 2
+    assert result["items"][0]["community_body_status"] == "error"
+    assert result["items"][0]["community_body"] == ""
+    assert result["source"]["detail_error"] == "detail_failed"
+
+
+def test_detail_budget_is_shared_and_unfinished_articles_go_first_next_refresh(provider, monkeypatch):
+    clock, calls = [100.0], []
+    monkeypatch.setattr(square.time, "monotonic", lambda: clock[0])
+    rows = [post(str(i), authorName=f"Author {i}", contentType=2, title=f"CHIP outlook {i}", content=None)
+            for i in range(5)]
+    def read(url, deadline, *, params=None):
+        if url == square._ENDPOINT:
+            return httpx.Response(200), {"feedData": rows}
+        identifier = url.rsplit("/", 1)[-1]
+        assert clock[0] < deadline
+        calls.append(identifier)
+        # A complete detail can use the remaining budget, after which another
+        # upstream request must not be started.
+        clock[0] += min(3, deadline - clock[0])
+        return httpx.Response(200), detail(identifier)["data"]
+    monkeypatch.setattr(square, "_read_json", read)
+    first = square.fetch_posts("CHIP")
+    assert len(calls) == 2
+    assert first["source"]["body_pending_count"] == 3
+    unfinished = {item["community_post_id"] for item in first["items"] if item["community_body_status"] != "ready"}
+    # Simulate expiry without altering wall-clock or the fixture's article dates.
+    for key, entry in provider.entries.items():
+        if key == square._PREFIX + "CHIP" or entry[0].get("result", {}).get("body", {}).get("community_body_status") != "ready":
+            entry[0]["expires_at"] = 0
+    square._cache.clear()
+    second = square.fetch_posts("CHIP")
+    assert set(calls[2:]).issubset(unfinished)
+    assert second["source"]["body_pending_count"] == 1
+
+
+def test_expired_successful_details_rotate_so_every_edited_body_refreshes(provider, monkeypatch):
+    clock, calls, slow = [time.time()], [], [False]
+    monkeypatch.setattr(square.time, "time", lambda: clock[0])
+    monkeypatch.setattr(square.time, "monotonic", lambda: clock[0])
+    rows = [post(str(i), authorName=f"Author {i}", date=clock[0]-60,
+                 contentType=2, title=f"CHIP outlook {i}", content=None) for i in range(5)]
+
+    def read(url, deadline, *, params=None):
+        if url == square._ENDPOINT:
+            return httpx.Response(200), {"feedData": rows}
+        identifier = url.rsplit("/", 1)[-1]
+        calls.append(identifier)
+        assert clock[0] < deadline
+        clock[0] += min(3 if slow[0] else 0.1, deadline-clock[0])
+        return httpx.Response(200), detail(identifier, body=f"$CHIP body {identifier} {'edited' if slow[0] else 'original'}")["data"]
+
+    monkeypatch.setattr(square, "_read_json", read)
+    assert square.fetch_posts("CHIP")["source"]["body_pending_count"] == 0
+    calls.clear()
+    slow[0] = True
+    for _ in range(3):
+        clock[0] += 301
+        square._cache.clear()
+        before = len(calls)
+        result = square.fetch_posts("CHIP")
+        assert len(calls)-before == 2
+        assert result["source"]["body_pending_count"] == 0
+    assert set(calls) == {str(i) for i in range(5)}
+    assert all("edited" in item["community_body"] for item in result["items"])
+
+
+def test_mid_batch_detail_429_preserves_other_expired_last_good_bodies(provider, monkeypatch):
+    clock, blocked, calls = [time.time()], [False], []
+    monkeypatch.setattr(square.time, "time", lambda: clock[0])
+    monkeypatch.setattr(square.time, "monotonic", lambda: clock[0])
+    rows = [post(str(i), authorName=f"Author {i}", date=clock[0]-60,
+                 contentType=2, title=f"CHIP outlook {i}", content=None) for i in range(3)]
+
+    def read(url, deadline, *, params=None):
+        if url == square._ENDPOINT:
+            return httpx.Response(200), {"feedData": rows}
+        calls.append(url)
+        return ((httpx.Response(429, headers={"Retry-After": "600"}), None) if blocked[0]
+                else (httpx.Response(200), detail(url.rsplit("/", 1)[-1])["data"]))
+
+    monkeypatch.setattr(square, "_read_json", read)
+    first = square.fetch_posts("CHIP")
+    blocked[0] = True
+    clock[0] += 301
+    square._cache.clear()
+    before = len(calls)
+    refreshed = square.fetch_posts("CHIP")
+    assert len(calls)-before == 1
+    assert refreshed["source"]["stale"] is True
+    assert refreshed["source"]["detail_error"] == "detail_http_error"
+    assert [item["community_body_hash"] for item in refreshed["items"]] == [item["community_body_hash"] for item in first["items"]]
+    assert refreshed["source"]["body_pending_count"] == 0
+
+
+def test_inflight_detail_does_not_wait_past_other_tickers_budget(provider, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+    started, release = threading.Event(), threading.Event()
+    def read(url, deadline, *, params=None):
+        started.set()
+        assert release.wait(2)
+        return httpx.Response(200), detail()["data"]
+    monkeypatch.setattr(square, "_read_json", read)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        leader = pool.submit(square._fetch_body, "123", "CHIP", time.monotonic() + 6)
+        assert started.wait(1)
+        try:
+            follower = square._fetch_body("123", "BTC", time.monotonic() + 0.01)
+            assert follower["source"]["attempted"] is False
+            assert follower["source"]["error"] == "detail_in_flight"
+        finally:
+            release.set()
+        assert leader.result(timeout=2)["body"]["community_body_status"] == "ready"
 
 
 def test_parser_rejects_wrong_ticker_unknown_dates_removed_posts_and_bad_urls():

@@ -458,6 +458,8 @@ def start_session(user: User, payload: dict) -> dict:
     notify_sessions_changed(user.id)
     from .agent_features.position_news.runtime import request_collection
     request_collection()
+    from .agent_features.whale_activity.runtime import request_collection as request_whale_collection
+    request_whale_collection()
     return result
 
 

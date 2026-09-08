@@ -12,6 +12,8 @@ from app.agent_features.position_news import repository
 def test_web_lifespan_collects_new_ticker_and_preserves_close_result(monkeypatch):
     monkeypatch.setenv("POSITION_NEWS_EMBEDDED_ENABLED", "true")
     monkeypatch.setenv("POSITION_NEWS_SCAN_SECONDS", "1")
+    monkeypatch.setenv("WHALE_TRADE_EMBEDDED_ENABLED", "true")
+    monkeypatch.setenv("WHALE_TRADE_EMBEDDED_BOOTSTRAP_ONLY", "false")
     fetched = []
     def fetch(asset):
         fetched.append(asset)
@@ -43,7 +45,19 @@ def test_web_lifespan_collects_new_ticker_and_preserves_close_result(monkeypatch
         assert payload["items"][0]["title"] == f"{ticker} 네트워크 업데이트"
         assert fetched.count(ticker) == 1
         assert client.get(path).status_code == 401
-        assert client.get(f"/api/me/agents/sessions/{session_id}/whale-activity", headers=auth).json()["status"] == "empty"
+        whale_path = f"/api/me/agents/sessions/{session_id}/whale-activity"
+        assert client.get(whale_path).status_code == 401
+        outsider = client.post("/api/auth/signup", json={
+            "email": f"other-{ticker}@example.com", "username": f"o{ticker}", "password": "password123",
+        }).json()
+        assert client.get(whale_path, headers={"Authorization": f"Bearer {outsider['token']}"}).status_code == 404
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            whale_payload = client.get(whale_path, headers=auth).json()
+            if whale_payload["status"] == "empty":
+                break
+            time.sleep(.05)
+        assert whale_payload["status"] == "empty"
         client.post("/api/runner/heartbeat", headers=runner_auth, json={
             "session_id": session_id, "in_position": True, "position_qty": 2,
             "entry_price": 100, "last_price": 105, "unrealized_pct": 5,
@@ -63,3 +77,4 @@ def test_web_lifespan_collects_new_ticker_and_preserves_close_result(monkeypatch
         assert ended["status"] == "stopped" and ended["in_position"] is False
         assert ended["realized_pnl"] == 10
         assert ticker not in repository.discover_tracked_symbols()
+        assert client.get(whale_path, headers=auth).json()["status"] == "stopped"

@@ -55,6 +55,7 @@ from . import optimize_runtime as optimize_runtime_mod
 from . import paper as paper_mod
 from . import ai_explain as ai_explain_mod
 from . import ai_runtime as ai_runtime_mod
+from . import community_summaries as community_summaries_mod
 from . import auth as auth_mod
 from . import points as points_mod
 from . import account as account_mod
@@ -63,6 +64,7 @@ from . import runner as runner_mod
 from . import user_macros as user_macros_mod
 from .agent_features.position_news.router import router as position_news_router
 from .agent_features.position_news import runtime as position_news_runtime
+from .agent_features.whale_activity import runtime as whale_activity_runtime
 from .observability import observe_application, router as observability_router
 from fastapi import Depends
 from .db import User
@@ -83,11 +85,16 @@ from .realtrade import build_bundle
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    community_summaries_mod.start()
     position_news_runtime.start()
+    whale_activity_runtime.start()
     try:
         yield
     finally:
-        await position_news_runtime.stop()
+        try:
+            await whale_activity_runtime.stop()
+        finally:
+            await position_news_runtime.stop()
         try:
             await paper_mod.shutdown_running_sessions()
         finally:
@@ -95,18 +102,20 @@ async def lifespan(app: FastAPI):
                 optimize_runtime_mod.shutdown()
             finally:
                 try:
-                    ai_runtime_mod.close_ai_runtime()
+                    await asyncio.to_thread(community_summaries_mod.shutdown)
                 finally:
-                    http_runtime_mod.close_http_runtime()
+                    try:
+                        ai_runtime_mod.close_ai_runtime()
+                    finally:
+                        http_runtime_mod.close_http_runtime()
 
 
 app = FastAPI(title="Coin Macro Backtest & Share (Simulation only)", lifespan=lifespan)
 app.include_router(position_news_router)
 app.include_router(observability_router)
 
-# Ensure tables exist even when the app is imported without the lifespan running
-# (e.g. TestClient constructed without a context manager).
-init_db()
+# Schema initialization belongs to lifespan, before serving requests. Importing
+# route definitions must not run DDL against a database used by live macros.
 
 # 응답 압축. 캔들 JSON은 같은 모양의 숫자 문자열이 300줄 반복이라 압축이 아주
 # 잘 든다 — /api/candles 실측 29,387 B -> 7,083 B (4.1배). 이게 빠져 있어서

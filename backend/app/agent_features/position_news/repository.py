@@ -24,6 +24,7 @@ from ...db import (
     TickerNewsAiBudget,
     TickerNewsSnapshot,
     TickerNewsState,
+    assert_shared_worker_database,
     database_dialect,
     get_session,
 )
@@ -804,6 +805,25 @@ def release_title_translation_claims(
     db.commit()
 
 
+def _refresh_reused_payload(stored: dict, incoming: dict) -> dict:
+    """Keep article/assessment ordering, but observe new summaries by body ID."""
+    def identity(item):
+        if item.get("content_type") != "community" or not item.get("community_post_id"):
+            return None
+        return (str(item["community_post_id"]), str(item.get("community_body_hash") or ""),
+                str(item.get("source") or ""), str(item.get("url") or ""))
+
+    updates = {identity(item): item for item in incoming.get("items") or [] if identity(item) is not None}
+    items = []
+    for old in stored.get("items") or []:
+        current = updates.get(identity(old))
+        summary_fields = ({key: current[key] for key in (
+            "community_summary", "community_summary_status", "community_summary_partial",
+        ) if key in current} if current else {})
+        items.append({**old, **summary_fields})
+    return {**incoming, "items": items, "updated_at": stored.get("updated_at")}
+
+
 def claim_snapshot(
     *,
     asset_symbol: str,
@@ -876,10 +896,8 @@ def claim_snapshot(
                 observation_seq=observation_seq,
                 observed_ms=millis,
                 observed_at=now_iso,
-                # Refresh source metadata while preserving article/analysis order.
-                news_payload={**news_payload,
-                    "items": (_decoded_news(existing) or {}).get("items", []),
-                    "updated_at": (_decoded_news(existing) or {}).get("updated_at")},
+                # Preserve article/analysis order while new body summaries arrive.
+                news_payload=_refresh_reused_payload(_decoded_news(existing) or {}, news_payload),
             )
             if not observed:
                 db.rollback()
@@ -940,8 +958,7 @@ def claim_snapshot(
         token = uuid.uuid4().hex
         stored_payload = _decoded_news(existing) if usable else None
         if stored_payload:
-            stored_payload = {**news_payload, "items": stored_payload.get("items", []),
-                              "updated_at": stored_payload.get("updated_at")}
+            stored_payload = _refresh_reused_payload(stored_payload, news_payload)
         values = {
             "claim_token": token,
             "claimed_at": now_iso,
@@ -1374,16 +1391,8 @@ def prune_snapshots(
 
 
 def assert_worker_database() -> None:
-    """Fail closed on Render if the worker is not sharing durable Postgres."""
-    default_required = "true" if os.environ.get("RENDER") else "false"
-    required = os.environ.get(
-        "POSITION_NEWS_REQUIRE_POSTGRES",
-        default_required,
-    ).strip().lower() in {"1", "true", "yes"}
-    if required and database_dialect() != "postgresql":
-        raise RuntimeError(
-            "중앙 뉴스 워커는 웹 서버와 같은 Postgres DATABASE_URL이 필요합니다."
-        )
+    """Compatibility wrapper for existing callers and dialect test overrides."""
+    assert_shared_worker_database(dialect=database_dialect())
 
 
 def load_market_news_summary(

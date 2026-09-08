@@ -61,6 +61,8 @@ def fetch_ticker_news_task(asset_symbol: str) -> dict:
     for source in payload.get("sources") or []:
         print(json.dumps({"event": "news_source", "asset_symbol": asset_symbol, **source},
                          ensure_ascii=False))
+    print(json.dumps({"event": "community_content", "asset_symbol": asset_symbol,
+                      "stage": "fetched", **collector.community_progress(payload)}, ensure_ascii=False))
     return payload
 
 
@@ -158,6 +160,9 @@ def process_ticker_news_task(
     )
     if news_payload.get("browser_enrichment"):
         result["browser_status"] = news_payload["browser_enrichment"].get("status")
+    print(json.dumps({"event": "community_content", "asset_symbol": asset_symbol,
+                      "stage": "processed", "community_bodies": result.get("community_bodies", {}),
+                      "community_summaries": result.get("community_summaries", {})}, ensure_ascii=False))
     print(json.dumps(result, ensure_ascii=False))
     return result
 
@@ -182,13 +187,16 @@ def discover_tickers_task() -> dict:
 
 
 @task(retries=0, log_prints=True)
-def prune_snapshots_task(retention_days: int) -> int:
-    return repository.prune_snapshots(retention_days=retention_days)
+def prune_snapshots_task(retention_days: int) -> dict:
+    result = {"snapshots": repository.prune_snapshots(retention_days=retention_days),
+              "community_summaries": collector.prune_community_summaries()}
+    print(json.dumps({"event": "news_cache_maintenance", **result}, ensure_ascii=False))
+    return result
 
 
 def effective_config(browser_budget_seconds: float | None = None) -> dict:
     """Safe operational values visible in Prefect logs; never credentials."""
-    from .. import binance_square
+    from .. import binance_square, community_summaries
 
     return {
         "version": os.environ.get("RENDER_GIT_COMMIT", "local"),
@@ -196,6 +204,9 @@ def effective_config(browser_budget_seconds: float | None = None) -> dict:
         "coindesk_api": coindesk_api.configuration(),
         "binance_square": binance_square.configuration(),
         "title_translation": {"daily_call_limit": None, "scope": "all_articles", "shared_cache": True},
+        "community_summaries": {**community_summaries.configuration(), "input": "public_post_body", "language": "ko",
+                                "worker_waits": True, "http_waits": False,
+                                "shared_cache": True, "retention_days": 30, "prune_batch_limit": 500},
         "news_history": {"archive_max_age_days": news_mod._news_archive_days(),
                          "recent_first": True, "historical_articles_notify": False},
         "collection_seconds": int(os.environ.get("POSITION_NEWS_COLLECTION_SECONDS", "300")),
@@ -419,8 +430,10 @@ def collect_position_news_flow(browser_budget_seconds: float | None = None) -> d
         for asset_symbol, token in leases.items():
             repository.finish_collection(asset_symbol, token)
 
-    removed = prune_snapshots_task.submit(retention_days).result()
+    maintenance = prune_snapshots_task.submit(retention_days).result()
+    removed = maintenance.get("snapshots", 0) if isinstance(maintenance, dict) else maintenance
     summary = collector.summarize_results(results, removed=removed)
+    summary["community_summaries_pruned"] = maintenance.get("community_summaries", 0) if isinstance(maintenance, dict) else 0
     summary["active_ticker_count"] = len(selection["active_symbols"])
     summary["due_ticker_count"] = len(selection["due_symbols"])
     summary["configuration"] = config
@@ -450,13 +463,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="껄무새 중앙 뉴스 수집 워커")
     parser.add_argument(
         "mode",
-        choices=("serve", "once"),
+        choices=("serve", "serve-news", "once"),
         nargs="?",
         default="serve",
     )
     args = parser.parse_args()
 
-    if args.mode == "serve" and not os.environ.get("PREFECT_API_URL"):
+    if args.mode != "once" and not os.environ.get("PREFECT_API_URL"):
         raise RuntimeError(
             "PREFECT_API_URL이 필요합니다. Prefect Cloud workspace API URL을 설정하세요."
         )
@@ -503,6 +516,11 @@ def main() -> None:
     probe_deployment.entrypoint = "app.workflows.position_news.coindesk_source_probe_flow"
     # During rolling deploys the old runner must not pause the new schedule.
     # One shared process slot also prevents probes competing with collection.
+    if args.mode == "serve" and os.environ.get("WHALE_TRADE_PREFECT_ENABLED", "true").lower() not in {"0", "false", "no"}:
+        from .agent_collectors import serve_collectors
+        from .whale_activity import create_deployment
+        serve_collectors([collection_deployment, probe_deployment], [create_deployment()])
+        return
     serve(collection_deployment, probe_deployment, limit=1, pause_on_shutdown=False)
 
 

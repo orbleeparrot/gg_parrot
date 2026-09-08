@@ -22,10 +22,12 @@ const strategyContext = {
   interval: "1m", candles,
 };
 
-test("ordinary strategy scans and empty whale polls do not create chat entries", () => {
+test("ordinary strategy scans and waiting or empty whale snapshots do not create chat entries", () => {
   assert.deepEqual(strategyModule.buildEvents({ ...strategyContext, candles: candles.slice(0, 2) }), []);
-  assert.deepEqual(whaleEvents({ status: "empty", items: [], observed_at: 1000 }), []);
-  assert.deepEqual(whaleEvents({ status: "empty", items: [], observed_at: 2000 }), []);
+  for (const status of ["empty", "pending", "collecting", "stopped"]) {
+    assert.deepEqual(whaleEvents({ status, items: [], observed_at: 1000 }), []);
+    assert.deepEqual(whaleEvents({ status, items: [], observed_at: 2000 }), []);
+  }
 });
 
 test("a strategy signal keeps its identity when older bars shift its array index", () => {
@@ -65,11 +67,11 @@ test("whale events contain actual large trades and no empty-state narration", ()
 test("persistent whale failures carry a connection condition instead of new observation time", () => {
   const [error] = whaleEvents(null, { error: "offline" });
   assert.equal(error.conditionKey, "whale-connection");
-  assert.equal(error.conditionValue, "error");
+  assert.equal(error.conditionValue, "unavailable");
   assert.equal(error.occurredAt, 0);
   const [stale] = whaleEvents({ stale: true, items: [] });
   assert.equal(stale.conditionKey, "whale-connection");
-  assert.equal(stale.conditionValue, "stale");
+  assert.equal(stale.conditionValue, "unavailable");
 });
 
 test("pending and empty news responses stay quiet while real articles remain visible", () => {

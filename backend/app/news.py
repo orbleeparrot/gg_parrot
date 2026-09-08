@@ -56,7 +56,7 @@ _COIN_CACHE_SECONDS = max(60, int(os.environ.get("COIN_NEWS_CACHE_SECONDS", "300
 _COINDESK_DISCOVERY_MAX_STALE_SECONDS = 6 * 60 * 60
 _OPENEDEN_CACHE_SECONDS = 60 * 60
 _OPENEDEN_MAX_AGE_DAYS = 30
-_TITLE_TRANSLATION_PROMPT_VERSION = "coin-news-title-ko-v6"
+_TITLE_TRANSLATION_PROMPT_VERSION = "coin-news-title-ko-v9"
 _TITLE_TRANSLATION_BATCH_SIZE = 10
 _TITLE_TRANSLATION_RETRY_SECONDS = 300
 _TITLE_TRANSLATION_MAX_TOKENS = max(
@@ -922,6 +922,13 @@ def _is_news_article_candidate(item: dict) -> bool:
         return False
     if (source in {"cme group", "cmegroup.com", "www.cmegroup.com"} or host == "cmegroup.com") and re.fullmatch(
         r"(?:CME Group\s+)?Bitcoin Futures(?:\s+and\s+Options)?", title.strip(), re.IGNORECASE
+    ):
+        return False
+    # Google indexes dated prediction-contract listings as fresh news. Filter
+    # the product label before translation, while retaining editorial coverage.
+    if (source in {"robinhood", "robinhood.com", "www.robinhood.com"} or host == "robinhood.com") and re.fullmatch(
+        r"[A-Z0-9]{1,20}\s+price(?:\s+range)?\s+on\s+.+\s+Crypto\s+Prediction\s+Market",
+        title.strip(), re.IGNORECASE,
     ):
         return False
     # Google News also indexes exchange community posts containing a trading
@@ -1987,6 +1994,10 @@ _TITLE_KOREAN_PROJECT_NAMES = {
 
 def _normalize_title_translation(original: str, translated: object) -> str:
     value = _normalize_news_title(translated)
+    if _has_french_gdp_context(original):
+        value = re.sub(r"(?<![A-Za-z0-9])PIB(?![A-Za-z0-9])", "GDP", value)
+    if re.search(r"(?<![A-Za-z0-9])OI(?![A-Za-z0-9])", original) and not re.search(r"(?<![A-Za-z0-9])OI(?![A-Za-z0-9])", value):
+        value = re.sub(r"미결제\s*약정", "미결제약정(OI)", value, count=1)
     # These headlines name the exchange as the actor. Do not turn the ordinary
     # adjective "bullish" in market outlooks into an invented company name.
     if re.match(r"^Bullish\s+(?:Expands|Backs)\b", original):
@@ -2035,6 +2046,7 @@ _TITLE_TRANSLATION_UPPER_TERMS = frozenset(_COIN_ALIASES) | {
     "L1",
     "L2",
     "NFT",
+    "OI",
     "RWA",
     "SEC",
     "TVL",
@@ -2075,36 +2087,94 @@ _TITLE_TRANSLATION_UPPER_PROSE = {
 }
 
 
+def _has_french_gdp_context(value: str) -> bool:
+    if re.search(r"[$#]PIB\b|\bPIB\s+(?:token|coin|stock|shares|protocol)\b", value, re.IGNORECASE):
+        return False
+    return bool(re.search(r"\bPIB\b", value) and re.search(
+        r"\b(?:le|du|japonais|français|trimestre|révisé|annualisé)\b", value, re.IGNORECASE))
+
+
+def _translation_identifier_text(value: str) -> str:
+    """Normalize explicit asset tags and contextual finance notation, not prose."""
+    def asset_tag(match):
+        marker, token = match.groups()
+        return marker + token.upper() if marker == "$" or token.upper() in _COIN_ALIASES else match.group()
+    value = re.sub(r"(?<![A-Za-z0-9])([$#])([a-z][a-z0-9]{0,31})(?![A-Za-z0-9])", asset_tag, value)
+    # A lowercase known symbol introducing a Chinese market sentence is an
+    # identifier. Do not capitalize arbitrary English words inside prose.
+    value = re.sub(r"^([a-z][a-z0-9]{1,9})(?=\s*[\u3400-\u9fff])",
+                   lambda match: match.group().upper() if match.group().upper() in _COIN_ALIASES else match.group(), value)
+    if _has_french_gdp_context(value):
+        value = re.sub(r"\bPIB\b", "GDP", value)
+        value = re.sub(r"(?<![$#A-Za-z0-9])T([1-4])\b(?!\s+(?:token|coin)\b)", r"\1분기", value)
+    return value
+
+
+def _translation_uppercase_prose_positions(value: str, matches: list) -> set[int]:
+    """Only infer prose from a substantial uppercase run with English grammar.
+
+    A later lowercase clause must not turn SAME/DAILY into assets. Keep the
+    leading subject conservative; known and explicit identifiers are protected
+    separately even when they occur inside a prose run.
+    """
+    grammar_words = {"AND", "THE", "IN", "OF", "TO", "WITH", "FOR", "FROM", "IS", "ARE"}
+    groups, current = [], []
+    for match in matches:
+        if current and not re.fullmatch(r"[\s\d.,%+$€£₩:;!?|—–\-()/'’]*", value[current[-1].end():match.start()]):
+            groups.append(current)
+            current = []
+        current.append(match)
+    groups.append(current)
+    return {
+        match.start()
+        for group in groups
+        if len(group) >= 4 and len(grammar_words.intersection(match.group(1) for match in group)) >= 2
+        for match in group[1:]
+    }
+
+
 def _translation_protected_upper_tokens(value: str) -> tuple[str, ...]:
+    value = _translation_identifier_text(value)
     protected = set()
     source_has_lowercase = bool(re.search(r"[a-z]", value))
-    source_has_hangul = bool(re.search(r"[가-힣]", value))
-    for match in re.finditer(
+    source_has_asian_text = bool(re.search(r"[가-힣\u3040-\u30ff\u3400-\u9fff]", value))
+    matches = list(re.finditer(
         r"(?<![A-Za-z0-9])([A-Z][A-Z0-9]{0,31})(?![A-Za-z0-9])",
         value,
-    ):
+    ))
+    prose_positions = _translation_uppercase_prose_positions(value, matches)
+    for match in matches:
         token = match.group(1)
         before = value[max(0, match.start() - 24):match.start()]
         after = value[match.end():match.end() + 24]
+        if token == "T" and re.search(
+            r"\b(?:DON|DOESN|DIDN|ISN|AREN|WASN|WEREN|WON|WOULDN|CAN|COULDN|SHOULDN|MUSTN|HASN|HAVEN|HADN)['’]$",
+            before, re.IGNORECASE,
+        ):
+            continue  # DON'T has no T asset; French l'ETH / d'BTC retain theirs.
         if token == "US" and re.match(r"[- ]Dollars?\b", after, re.IGNORECASE):
             continue
         is_identifier = bool(
             before.endswith("$")
             or re.search(r"(?:promo\s+code|code|프로모션\s+코드|코드)\s*:?\s*$", before, re.IGNORECASE)
             or (before.endswith("(") and after.startswith(")"))
+            or (token == "B" and re.search(r"\bCapital\s+$", before))
+            or (re.fullmatch(r"[A-Z]+\d+[A-Z0-9]*", token) and token not in _TITLE_TRANSLATION_UPPER_PROSE)
         )
         has_asset_context = bool(re.match(
             r"(?:'s)?\s*(?:token|coin|network|protocol|stock|shares|토큰|코인)",
             after,
             re.IGNORECASE,
-        ))
+        )) and not (token == "SOFTWARE" and re.match(r"\s+(?:stock|shares)\b", after, re.IGNORECASE))
         is_short_entity = bool(
-            (source_has_lowercase or source_has_hangul)
+            (source_has_lowercase or source_has_asian_text)
             and 2 <= len(token) <= 5
             and token not in _TITLE_TRANSLATION_UPPER_PROSE
+            and match.start() not in prose_positions
         )
         if (
             token in _TITLE_TRANSLATION_UPPER_TERMS
+            or (token.endswith("USDT") and token[:-4] in _COIN_ALIASES)
             or is_identifier
             or has_asset_context
             or is_short_entity
@@ -2124,7 +2194,7 @@ _KO_NUMBER_UNITS = {
     "십": Decimal(10),
 }
 # 숫자 뒤에 붙는 단위 약어(200ms, 5km)는 숫자의 일부로 본다 — 영문 산문이 아니다.
-_NUMBER_UNIT_ABBREVIATIONS = r"(?:ms|km|kg|mg|hz|khz|mhz|ghz|kb|mb|gb|tb|bps|bp|tps|mph|h|x)"
+_NUMBER_UNIT_ABBREVIATIONS = r"(?:ms|km|kg|mg|hz|khz|mhz|ghz|kb|mb|gb|tb|bps|bp|tps|mph|h|x|u)"
 _NUMBER_TOKEN = re.compile(
     r"(?<![A-Za-z0-9])(?P<sign>[+-]?)(?P<currency>[$€£₩]?)"
     # Whitespace joins amount components only when both sides have Korean
@@ -2133,7 +2203,7 @@ _NUMBER_TOKEN = re.compile(
     r"(?:(?<=[조억만천백십])\s+(?=\d[\d,]*(?:\.\d+)?[조억만천백십])"
     r"(?:\d[\d,]*(?:\.\d+)?[조억만천백십]*)+)*)"
     r"(?P<suffix>%|[KMBkmb](?![A-Za-z0-9])|\s?(?:thousand|million|billion|trillion)(?![A-Za-z0-9]))?"
-    rf"(?=$|[^A-Za-z0-9]|{_NUMBER_UNIT_ABBREVIATIONS}(?![A-Za-z0-9]))",
+    rf"(?![.,]\d)(?=$|[^A-Za-z0-9]|{_NUMBER_UNIT_ABBREVIATIONS}(?![A-Za-z0-9]))",
     re.IGNORECASE,
 )
 # 원문에 글자로 적힌 수 — 번역문이 이를 숫자로 옮기는 것은 사실 변조가 아니다.
@@ -2160,6 +2230,11 @@ _SCALE_WORDS = {100, 1_000, 10**6, 10**9, 10**12}
 def _implied_number_facts(value: str) -> set[tuple[str, str]]:
     words = re.findall(r"[a-z]+\d?", str(value or "").casefold())
     implied: set[int] = set()
+    # Explicit Chinese ordinals are quantities, e.g. 第一 → 1위. A bare
+    # character 一 inside an unrelated word is not evidence for an added 1.
+    chinese_ordinals = {char: index for index, char in enumerate("一二三四五六七八九十", 1)}
+    for match in re.finditer(r"第([一二三四五六七八九十])(?![零〇一二三四五六七八九十百千万])", value):
+        implied.add(chinese_ordinals[match.group(1)])
     for index, word in enumerate(words):
         amount = _IMPLIED_NUMBER_WORDS.get(word)
         if amount is None:
@@ -2207,6 +2282,9 @@ def _has_korean_currency(value: str, currency: str) -> bool:
 
 
 def _translation_number_text(value: str) -> str:
+    # One/two digits after a comma cannot be a thousands group. Percentage
+    # notation makes its decimal role unambiguous across RSS locales.
+    value = re.sub(r"(?<![\d.,])(\d+),(\d{1,2})(?=\s*%)", r"\1.\2", value)
     # German RSS titles use Millionen/Milliarden and dot-separated thousands.
     # Require an explicit German quantity word: an English "1.000 ETH" must
     # retain its decimal meaning instead of silently becoming 1,000 ETH.
@@ -2234,11 +2312,51 @@ def _translation_number_text(value: str) -> str:
     )
 
 
+def _translation_quantity_unit_facts(value: str) -> list[tuple[int, int, str, str]]:
+    """Preserve chart/duration units and opaque quote units such as 0.1305u."""
+    facts = []
+    pattern = (
+        r"(?<![A-Za-z0-9$€£₩])(?P<amount>[+-]?\d+(?:\.\d+)?)(?:\s*-\s*|\s*)"
+        r"(?P<unit>(?i:minutes?|mins?|hours?)|[hH]|m|[uU]|시간|분(?!기|의\s*\d))"
+        r"(?![A-Za-z0-9])"
+    )
+    for match in re.finditer(pattern, value):
+        raw_unit = match.group("unit")
+        unit = "hour" if raw_unit.casefold() in {"h", "hour", "hours", "시간"} else "minute"
+        if raw_unit.casefold() == "u":
+            unit = "literal:u"  # Keep the source's quote unit instead of inventing USD/USDT.
+        if raw_unit == "m":
+            before, after = value[max(0, match.start() - 48):match.start()], value[match.end():match.end() + 48]
+            monetary = bool(
+                re.search(r"(?:[$€£₩]|\b(?:USD|EUR|GBP|KRW|JPY|CNY))\s*$", before, re.IGNORECASE)
+                or re.match(r"\s*(?:USD|EUR|GBP|KRW|JPY|CNY|dollars?|euros?|달러|원)(?![A-Za-z0-9])", after, re.IGNORECASE)
+                or re.search(r"\b(?:volume|funding|raised?|raises|revenue|valuation|supply|holders|tokens|market\s*cap)\s*[:=]?\s*$", before, re.IGNORECASE)
+                or re.match(r"\s*(?:funding|volume|revenue|valuation|tokens|holders|in\s+funding)\b", after, re.IGNORECASE)
+                or re.search(r"(?:거래량|조달|시가총액)\s*[:=]?\s*$", before)
+            )
+            if monetary:
+                continue  # The ordinary number parser retains the million multiplier.
+            ticker = re.search(r"(?:\$)?([A-Z][A-Z0-9]*(?:/USDT)?)\s+$", before)
+            base = (ticker.group(1).removesuffix("/USDT").removesuffix("USDT") if ticker else "")
+            clear_timeframe = bool(
+                (base in _COIN_ALIASES and base not in {"USD", "EUR", "GBP", "KRW", "JPY", "CNY"})
+                or re.search(r"\b(?:chart|charts|timeframe|timeframes|candles?|candlesticks?|volatility)\b|波动|波動|图表|圖表|K线|K線|차트|분봉|변동", before + after, re.IGNORECASE)
+                or re.search(r"\b(?:in|over|within|during|past|last)\s*$", before, re.IGNORECASE)
+            )
+            # A bare lowercase m can also mean million or metres. Do not guess:
+            # ambiguous cases must keep the same notation in the translation.
+            unit = "minute" if clear_timeframe else "literal:m"
+        amount = format(Decimal(match.group("amount")).normalize(), "f")
+        facts.append((match.start(), match.end(), amount, unit))
+    return facts
+
+
 def _translation_fact_tokens(
     value: str,
     *,
     protected_upper: set[str] | None = None,
 ) -> tuple[tuple[tuple[str, str], ...], tuple[str, ...], tuple[str, ...]]:
+    value = _translation_identifier_text(value)
     multipliers = {
         "": Decimal(1),
         "K": Decimal(1_000),
@@ -2249,8 +2367,12 @@ def _translation_fact_tokens(
         "BILLION": Decimal(1_000_000_000),
         "TRILLION": Decimal(10**12),
     }
-    numbers = []
-    for match in _NUMBER_TOKEN.finditer(_translation_number_text(value)):
+    number_text = _translation_number_text(value)
+    time_units = _translation_quantity_unit_facts(number_text)
+    numbers = [(amount, unit) for _start, _end, amount, unit in time_units]
+    for match in _NUMBER_TOKEN.finditer(number_text):
+        if any(start < match.end() and match.start() < end for start, end, _amount, _unit in time_units):
+            continue
         suffix = str(match.group("suffix") or "")
         try:
             amount = _number_body_amount(match.group("body"))
@@ -2341,6 +2463,8 @@ def _translation_preserves_facts(original: str, translated: str) -> bool:
 
 
 def _translation_has_untranslated_prose(original: str, value: str) -> bool:
+    original = _translation_identifier_text(original)
+    value = _translation_identifier_text(value)
     # 숫자에 붙은 단위 약어(200ms, 5km)는 영문 산문이 아니다. 아래에서 원문의 숫자
     # 식별자를 먼저 지우면 "ms"만 남아 산문으로 잡히므로 그 전에 걷어낸다.
     remaining = re.sub(
@@ -2528,6 +2652,12 @@ def _request_korean_title_translations(titles: list[str], *, claim_token: str = 
         "숫자·부호·%·"
         "통화·K/M/B 표기를 원문 문자열 그대로 복사해. "
         "protected_numbers는 천·백만 단위와 언어별 숫자 표기를 해석한 실제 수량이야. "
+        "unit이 minute이면 분·분봉, hour이면 시간·시간봉이며 숫자와 시간 단위를 모두 유지해. "
+        "차트의 15m는 15분(봉)이지 1,500만이 아니고, 1h/4h는 1시간/4시간이야. "
+        "unit이 literal:m 또는 literal:u이면 뜻이 불확실하므로 숫자와 소문자 m/u를 그대로 유지해. "
+        "$15m·15M funding·volume 15m처럼 금액·수량 문맥의 m/M은 백만 단위야. "
+        "프랑스어 경제 문맥의 PIB는 GDP, T1~T4는 1~4분기와 같은 뜻이야. "
+        "1,4%처럼 소수 쉼표로 쓴 비율도 protected_numbers의 1.4% 값을 유지해. "
         "번역한 수량이 각 값과 일치해야 해. required_currencies의 모든 통화도 "
         "빠짐없이 유지해(USD는 달러, EUR는 유로). 특히 $79K를 79K로 쓰면 "
         "달러가 누락되므로 반드시 $79K 또는 7만9000달러로 써. "
@@ -2995,7 +3125,14 @@ def _with_news_history(payload: dict) -> dict:
                          "archive_max_age_days": _news_archive_days()}}
 
 
+_COMMUNITY_BODY_FIELDS = (
+    "community_body", "community_body_hash", "community_body_status", "community_body_truncated",
+)
+
+
 def _localize_news_payload(payload: dict) -> dict:
+    from . import community_summaries
+
     ticker_payload = bool(payload.get("symbol") or payload.get("feature_key") == "position_news")
     within_window = _within_coin_news_window if ticker_payload else _within_live_news_window
     candidates = [item for item in payload.get("items") or []
@@ -3008,6 +3145,14 @@ def _localize_news_payload(payload: dict) -> dict:
     result["translation"] = {"status": "partial" if pending else "ready", "pending_count": pending}
     if pending:
         result["translation"]["retry_after_seconds"] = 30
+    # A ready headline remains visible while a separately cached body summary
+    # is prepared. Never return the internal source text to public readers.
+    enriched, summary_status = community_summaries.enrich_items(result["items"], wait=False)
+    result["items"] = [
+        {key: value for key, value in item.items() if key not in _COMMUNITY_BODY_FIELDS}
+        for item in enriched
+    ]
+    result["community_summaries"] = summary_status
     return result
 
 

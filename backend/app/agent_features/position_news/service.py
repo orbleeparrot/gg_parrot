@@ -83,6 +83,7 @@ def build_position_news(
     analysis: dict,
     *,
     snapshot_id: str = "",
+    _include_community_body: bool = False,
 ) -> dict:
     """Project one shared analysis into an authoritative session direction."""
     side = str(session.get("position_side") or "").strip().lower()
@@ -124,6 +125,11 @@ def build_position_news(
                     "content_type": "community",
                     "community_post_id": str(raw.get("community_post_id") or ""),
                     "author": str(raw.get("author") or ""),
+                    **{key: raw[key] for key in (
+                        "community_summary", "community_summary_status", "community_summary_partial",
+                    ) if key in raw},
+                    **({key: raw[key] for key in news_mod._COMMUNITY_BODY_FIELDS if key in raw}
+                       if _include_community_body else {}),
                 } if is_community else {}),
                 "url": str(raw.get("url") or ""),
                 "published": raw.get("published"),
@@ -265,6 +271,7 @@ def get_position_news(session: dict, db: Session | None = None) -> dict:
         stored["news_payload"],
         stored["analysis"],
         snapshot_id=str(stored.get("snapshot_id") or ""),
+        _include_community_body=True,
     )
     # Project sentiment before filtering. An unfinished first article must not
     # shift the analysis attached to the second article when it becomes visible.

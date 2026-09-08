@@ -13,7 +13,7 @@ RESPONSE = 'FET 24시간 내 10% 하락: 약세 AI 부문의 기술적 조정'
 def test_captured_provider_hour_translation_preserves_original_number():
     payload = json.dumps({'items': [{'id': news._title_translation_id(ORIGINAL), 'title_ko': RESPONSE}]})
     assert news._parse_korean_title_translations(payload, [ORIGINAL]) == {ORIGINAL: RESPONSE}
-    assert ('24', 'number') in news._translation_fact_tokens(ORIGINAL)[0]
+    assert ('24', 'hour') in news._translation_fact_tokens(ORIGINAL)[0]
 
 
 @pytest.mark.parametrize('response', [
@@ -22,6 +22,8 @@ def test_captured_provider_hour_translation_preserves_original_number():
     RESPONSE.replace('10%', '11%'),
     RESPONSE.replace('FET', 'BTC'),
     RESPONSE.replace('AI ', ''),
+    RESPONSE.replace('24시간', '24'),
+    RESPONSE.replace('24시간', '24분'),
 ])
 def test_hour_support_still_rejects_changed_or_missing_facts(response):
     assert not news._valid_title_translation(ORIGINAL, response)

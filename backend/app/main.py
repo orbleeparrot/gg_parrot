@@ -19,6 +19,7 @@ from fastapi import (
     Form,
     Header,
     HTTPException,
+    Query,
     Request,
     Response,
     UploadFile,
@@ -320,8 +321,11 @@ class VoteRequest(BaseModel):
 
 
 class ChatPostRequest(BaseModel):
-    username: str
     text: str
+
+
+class ChatReadRequest(BaseModel):
+    last_seen_id: int
 
 
 # --- endpoints ----------------------------------------------------------
@@ -944,20 +948,28 @@ async def leaderboard_delete(entry_id: int, account: User = Depends(auth_mod.cur
 
 # --- leaderboard chat (daily KST board) ---------------------------------
 @app.get("/api/chat")
-def chat_list() -> dict:
-    return chat_mod.list_messages()
+def chat_list(
+    before_id: Optional[int] = Query(default=None, ge=1, le=2**63 - 1),
+    seen_id: Optional[int] = Query(default=None, ge=0),
+    account: Optional[User] = Depends(auth_mod.optional_user),
+) -> dict:
+    return chat_mod.list_messages(account, before_id=before_id, seen_id=seen_id)
 
 
 @app.post("/api/chat")
-def chat_post(req: ChatPostRequest, request: Request) -> dict:
-    ip = request.client.host if request.client else "unknown"
+def chat_post(req: ChatPostRequest, account: User = Depends(auth_mod.current_user)) -> dict:
     try:
-        msg = chat_mod.add_message(req.username, req.text, ip)
+        msg = chat_mod.add_message(account, req.text)
     except chat_mod.RateLimited as exc:
         raise HTTPException(status_code=429, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"message": msg}
+
+
+@app.put("/api/chat/read")
+def chat_read(req: ChatReadRequest, account: User = Depends(auth_mod.current_user)) -> dict:
+    return chat_mod.mark_read(account, req.last_seen_id)
 
 
 # --- 껄무새 게시판 -------------------------------------------------------

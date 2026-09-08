@@ -18,6 +18,7 @@ export function createAdaptivePoller({
   let failures = 0;
   let timer = null;
   let controller = null;
+  let refreshPending = false;
 
   const clearScheduled = () => {
     if (timer == null) return;
@@ -44,6 +45,7 @@ export function createAdaptivePoller({
   const run = async () => {
     if (!active || !visible || running) return;
     running = true;
+    refreshPending = false;
     controller = new AbortController();
     let aborted = false;
     let nextPollMs;
@@ -60,8 +62,8 @@ export function createAdaptivePoller({
     } finally {
       running = false;
       controller = null;
-      if (active && visible && nextPollMs !== null) {
-        schedule(aborted ? 0 : Number.isFinite(nextPollMs) ? nextPollMs : retryDelay());
+      if (active && visible && (refreshPending || nextPollMs !== null)) {
+        schedule(refreshPending || aborted ? 0 : Number.isFinite(nextPollMs) ? nextPollMs : retryDelay());
       }
     }
   };
@@ -74,11 +76,16 @@ export function createAdaptivePoller({
     },
     stop() {
       active = false;
+      refreshPending = false;
       clearScheduled();
       controller?.abort();
     },
     trigger() {
-      if (!active || !visible || running) return;
+      if (!active || !visible) return;
+      if (running) {
+        refreshPending = true;
+        return;
+      }
       schedule(0);
     },
     setVisible(nextVisible) {

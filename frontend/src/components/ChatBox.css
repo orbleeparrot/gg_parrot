@@ -1,0 +1,17 @@
+/* Optional status/history controls must not change which row receives space. */
+.chat-float .chat-sheet { display: flex; flex-direction: column; }
+.chat-sheet > .chat-log { flex: 1; min-height: 0; }
+.chat-sheet > :not(.chat-log) { flex-shrink: 0; }
+.chat-status, .chat-login-prompt { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; font-size: 12px; }
+.chat-status.is-error { color: rgb(var(--c-red-700)); background: rgb(var(--c-red-50)); }
+.chat-login-prompt { color: rgb(var(--c-slate-700)); border-top: 1px solid rgb(var(--c-slate-200)); }
+.chat-status button, .chat-history, .chat-jump, .chat-login-prompt a { color: inherit; font: inherit; cursor: pointer; }
+.chat-status button { flex-shrink: 0; text-decoration: underline; background: transparent; border: 0; }
+.chat-history, .chat-jump { display: block; border: 1px solid rgb(var(--c-slate-300)); border-radius: 16px; padding: 7px 14px; margin: 6px auto; background: rgb(var(--c-surface)); color: rgb(var(--c-slate-800)); font-size: 12px; }
+.chat-history:disabled { cursor: wait; opacity: .65; }
+.chat-legacy { margin-left: 5px; font-size: 10px; font-weight: 400; opacity: .7; }
+.chat-composer .chat-member-name { display: inline-flex; align-items: center; cursor: default; max-width: 92px; overflow: hidden; white-space: nowrap; }
+.chat-member-name > span { overflow: hidden; text-overflow: ellipsis; }
+.chat-member-name:hover { background: rgb(var(--c-slate-100)); }
+.chat-login-prompt a { white-space: nowrap; text-decoration: underline; }
+.chat-status button:focus-visible, .chat-history:focus-visible, .chat-jump:focus-visible, .chat-login-prompt a:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }

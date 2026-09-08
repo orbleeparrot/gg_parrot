@@ -536,11 +536,22 @@ class LeaderboardCarryover(SQLModel, table=True):
 class ChatMessage(SQLModel, table=True):
     """One leaderboard chat message (daily KST board; reference only)."""
 
+    __table_args__ = (Index("ix_chatmessage_user_created_ms", "user_id", "created_ms"),)
+
     id: Optional[int] = Field(default=None, primary_key=True)
+    # Legacy messages have no verified author; never infer ownership from names.
+    user_id: Optional[int] = Field(default=None)
     username: str
     text: str
     created_at: str  # UTC ISO
     created_ms: int = Field(index=True, sa_type=BigInteger)  # epoch ms
+
+
+class ChatReadState(SQLModel, table=True):
+    """A member's durable, monotonically increasing chat read position."""
+
+    user_id: int = Field(primary_key=True)
+    last_seen_id: int = Field(default=0)
 
 
 class LeaderboardVote(SQLModel, table=True):
@@ -646,6 +657,9 @@ def _migrate() -> None:
     """Add columns introduced after a table was first created (SQLite create_all
     does not ALTER existing tables). Idempotent and safe to run every startup."""
     added = {
+        "chatmessage": {
+            "user_id": "ALTER TABLE chatmessage ADD COLUMN user_id INTEGER",
+        },
         "leaderboardentry": {
             "username": "ALTER TABLE leaderboardentry ADD COLUMN username TEXT DEFAULT ''",
             "password_hash": "ALTER TABLE leaderboardentry ADD COLUMN password_hash TEXT DEFAULT ''",
@@ -712,6 +726,10 @@ def _migrate() -> None:
         # ALTER TABLE cannot add an indexed SQLModel field in SQLite. Keep the
         # lookup index explicit for upgraded databases as well as fresh ones.
         conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_chatmessage_user_created_ms "
+            "ON chatmessage (user_id, created_ms)"
+        )
+        conn.exec_driver_sql(
             "CREATE INDEX IF NOT EXISTS ix_runsession_user_macro_id "
             "ON runsession (user_macro_id)"
         )
@@ -728,6 +746,7 @@ def _migrate() -> None:
 
 
 _PG_ADDED_COLUMNS = {
+    "chatmessage": {"user_id": "INTEGER"},
     "dailychallenge": {
         "status": "TEXT DEFAULT 'ready'", "claim_token": "TEXT DEFAULT ''",
         "claimed_ms": "BIGINT DEFAULT 0", "last_error": "TEXT DEFAULT ''",
@@ -758,6 +777,7 @@ _PG_ADDED_COLUMNS = {
     },
 }
 _PG_INDEXES = {
+    "ix_chatmessage_user_created_ms": ("chatmessage", "user_id, created_ms"),
     "ix_runsession_active_heartbeat": ("runsession", "status, last_heartbeat_at"),
     "ix_runsession_user_macro_id": ("runsession", "user_macro_id"),
     "ix_newstitletranslation_processing_status": ("newstitletranslation", "processing_status"),
@@ -775,7 +795,10 @@ _PG_BIGINT_COLUMNS = {
         "latest_observation_seq", "latest_observed_ms", "last_attempt_ms", "last_success_ms",
     ),
 }
-_PG_PRIVATE_CACHE_TABLES = ("newstitletranslation", "communitypostsummary", "whaletradestate")
+_PG_PRIVATE_CACHE_TABLES = (
+    "newstitletranslation", "communitypostsummary", "whaletradestate",
+    "chatmessage", "chatreadstate",
+)
 _PG_MIGRATION_LOCK = 0x6767706172726F74  # Stable across web/worker processes and deployments.
 _PG_MIGRATION_ATTEMPTS = 3
 

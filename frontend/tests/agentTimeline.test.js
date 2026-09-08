@@ -132,6 +132,50 @@ test("a repeated source failure is one incident until the source recovers", () =
   assert.equal(state.events.length, 2);
 });
 
+test("whale collection retries and stale reads remain one incident until a successful snapshot", () => {
+  const response = (data, error = "") => ({ whale_activity: { data, error } });
+  let state = advance(null, { featureStates: response(null, "offline") });
+  const duringOutage = [
+    { status: "pending", items: [], collection: { status: "pending" } },
+    { status: "ready", items: [], stale: true },
+    { status: "ready", items: [], collection: { freshness: "stale" } },
+    { status: "unavailable", items: [] },
+    { status: "ready", items: [], collection: { status: "error" } },
+    { status: "ready", items: [], collection: { status: "collecting" } },
+    null,
+  ];
+  for (let i = 0; i < 3; i++) {
+    for (const data of duringOutage) {
+      state = advance(state, { receivedAt: 2000 + i, featureStates: response(data) });
+    }
+  }
+  assert.equal(state.events.length, 1);
+  assert.equal(state.events[0].occurredAt, 1000);
+  state = advance(state, { featureStates: response({ status: "empty", items: [] }) });
+  state = advance(state, { featureStates: response({ status: "unavailable", items: [] }) });
+  assert.equal(state.events.length, 2);
+});
+
+test("durable whale snapshots do not repeat reordered or temporarily missing trades", () => {
+  const trade = (id, market = "spot") => ({ id: `${market}:LINKUSDT:${id}`, side: "buy",
+    price: 120, quantity: 1000, notional: 120000, occurred_at: 1000 + id });
+  const response = (items, observedAt, market = "spot") => ({ whale_activity: { data: {
+    status: items.length ? "ready" : "empty", symbol: "LINKUSDT", market,
+    quote_asset: "USDT", threshold_quote: 100000, items, observed_at: observedAt,
+    collection: { status: "ready", freshness: "fresh", snapshot_id: observedAt },
+  } } });
+  let state = advance(null, { featureStates: response([trade(1), trade(2)], 1000) });
+  const firstIds = state.events.map((event) => event.id);
+  state = advance(state, { featureStates: response([], 2000) });
+  state = advance(state, { featureStates: response([trade(2), trade(1)], 3000) });
+  assert.deepEqual(state.events.map((event) => event.id), firstIds);
+  assert.deepEqual(state.events.map((event) => event.occurredAt), [1001, 1002]);
+  state = advance(state, { featureStates: response([trade(3), trade(2)], 4000) });
+  assert.equal(state.events.length, 3);
+  state = advance(state, { featureStates: response([trade(1, "futures")], 5000, "futures") });
+  assert.equal(state.events.length, 4);
+});
+
 test("news retries do not resolve and re-announce the same connection failure", () => {
   const staleData = { items: [{ id: "cached", title: "저장된 기사" }], collection: { status: "ready", freshness: "fresh" } };
   const response = (status) => ({ position_news: { status, data: staleData } });

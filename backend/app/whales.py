@@ -1,6 +1,9 @@
-"""'고래 동향' — on-chain top-holder flow (reference indicator only, NOT a signal).
+"""Public large-trade samples and a separate, dormant on-chain holder experiment.
 
-[차후 도입 / 현재 비활성화]
+The active aggregate-trade source is collected by the shared Prefect worker.
+HTTP readers use durable snapshots; this adapter has no request-local cache.
+
+[온체인 상위 보유자 동향: 차후 도입 / 현재 비활성화]
     상위 보유자 목록에 거래소·컨트랙트·브리지 지갑이 많이 섞여 있어 신호 신뢰도가
     낮다고 판단, 노출을 보류했습니다. ``_DENYLIST_BASE`` 주소 라벨링을 충분히
     보강한 뒤 ``main.py`` 의 /api/whale-activity 라우트와 프론트의 <WhaleBanner />
@@ -30,91 +33,169 @@ from __future__ import annotations
 
 import os
 import math
-import threading
-from copy import deepcopy
+import re
 import time
 from datetime import datetime, timezone
-from typing import Iterable, Optional
+from email.utils import parsedate_to_datetime
+from typing import Optional
 
 import httpx
 from sqlmodel import select
 
 from .db import WhaleHolderBalance, WhaleObservation, get_session
-from .http_runtime import SingleFlightGroup, get_http_client
+from .http_runtime import get_http_client
 
 
-# Public large fills are observable for any supported trading pair. They do
-# not identify wallet owners or imply a change in a named investor's holdings.
-_large_trade_cache = {}
-_large_trade_lock = threading.Lock()
-_large_trade_flights = SingleFlightGroup()
+# Public fills identify taker direction, not wallet owners or their holdings.
+LARGE_TRADE_SAMPLE_LIMIT = 500
+LARGE_TRADE_WINDOW_SECONDS = 600
+LARGE_TRADE_MAX_ITEMS = 30
+LARGE_TRADE_REFRESH_SECONDS = 30
+LARGE_TRADE_TIMEOUT_SECONDS = 8
 
 
-def _fetch_aggregate_trades(symbol, market):
+class LargeTradeSourceError(RuntimeError):
+    """Safe source failure metadata; never include upstream text or URLs."""
+
+    def __init__(self, code: str, *, http_status: int | None = None,
+                 retry_after_seconds: int | None = None) -> None:
+        self.code = code
+        self.http_status = http_status
+        self.retry_after_seconds = retry_after_seconds
+        self.retry_after_sec = retry_after_seconds
+        super().__init__(f"Binance aggregate trades: {code}" +
+                         (f" (HTTP {http_status})" if http_status is not None else ""))
+
+
+def _threshold_quote() -> float:
+    try:
+        threshold = float(os.environ.get("AGENT_LARGE_TRADE_MIN_QUOTE", "100000"))
+    except (TypeError, ValueError, OverflowError):
+        threshold = 100000.0
+    return max(1000.0, threshold) if math.isfinite(threshold) else 100000.0
+
+
+def configuration() -> dict:
+    """Safe source settings for Prefect logs; no credentials or configured URLs."""
+    return {
+        "provider": "binance_public_aggregate_trades", "threshold_quote": _threshold_quote(),
+        "sample_limit": LARGE_TRADE_SAMPLE_LIMIT, "window_seconds": LARGE_TRADE_WINDOW_SECONDS,
+        "max_items": LARGE_TRADE_MAX_ITEMS, "refresh_seconds": LARGE_TRADE_REFRESH_SECONDS,
+        "timeout_seconds": LARGE_TRADE_TIMEOUT_SECONDS, "api_calls_per_fetch": 1, "ai_calls": 0,
+    }
+
+
+def base_payload(symbol: str, market: str = "spot", *, status: str = "pending") -> dict:
+    """Build the shared HTTP contract, rejecting unsupported pairs and markets."""
+    symbol = str(symbol or "").strip().upper()
+    symbol = symbol if re.fullmatch(r"[A-Z0-9]{1,21}", symbol) else ""
+    if market not in ("spot", "futures"):
+        raise ValueError("unsupported aggregate-trade market")
+    quote = next((value for value in ("USDT", "USDC") if symbol.endswith(value) and len(symbol) > len(value)), "")
+    if not symbol or not quote:
+        raise ValueError("unsupported aggregate-trade symbol")
+    return {
+        "feature_key": "whale_activity", "symbol": symbol, "market": market,
+        "status": status, "items": [], "stale": False,
+        "threshold_quote": _threshold_quote(), "quote_asset": quote, "sampled_trades": 0,
+        "refresh_seconds": LARGE_TRADE_REFRESH_SECONDS,
+        "disclaimer": "수집 시 최대 500건씩 확인한 최근 10분의 대규모 체결 표본입니다. 전체 거래나 특정 고래의 보유량을 뜻하지 않습니다.",
+    }
+
+
+def _retry_after_seconds(value: str | None, *, default: int) -> int:
+    try:
+        delay = float(value)
+    except (TypeError, ValueError, OverflowError):
+        try:
+            target = parsedate_to_datetime(value or "")
+            if target.tzinfo is None:
+                target = target.replace(tzinfo=timezone.utc)
+            delay = target.timestamp() - time.time()
+        except (TypeError, ValueError, OverflowError):
+            delay = default
+    if not math.isfinite(delay):
+        delay = default
+    return max(1, min(3600, math.ceil(delay)))
+
+
+def _fetch_aggregate_trades(symbol: str, market: str) -> list:
     futures = market == "futures"
-    base = os.environ.get("BINANCE_FAPI_BASE", "https://fapi.binance.com") if futures else os.environ.get("BINANCE_API_BASE", "https://api.binance.com")
+    base = (os.environ.get("BINANCE_FAPI_BASE", "https://fapi.binance.com") if futures
+            else os.environ.get("BINANCE_API_BASE", "https://data-api.binance.vision"))
     path = "/fapi/v1/aggTrades" if futures else "/api/v3/aggTrades"
-    response = get_http_client().get(base.rstrip("/") + path, params={"symbol": symbol, "limit": 500}, timeout=8)
-    response.raise_for_status()
-    rows = response.json()
+    try:
+        response = get_http_client().get(base.rstrip("/") + path,
+            params={"symbol": symbol, "limit": LARGE_TRADE_SAMPLE_LIMIT}, timeout=LARGE_TRADE_TIMEOUT_SECONDS)
+    except httpx.TimeoutException:
+        raise LargeTradeSourceError("timeout") from None
+    except httpx.RequestError:
+        raise LargeTradeSourceError("network_error") from None
+    status = response.status_code
+    if status in (429, 418):
+        raise LargeTradeSourceError("rate_limited", http_status=status,
+            retry_after_seconds=_retry_after_seconds(response.headers.get("Retry-After"),
+                default=300 if status == 418 else 60))
+    if not 200 <= status < 300:
+        raise LargeTradeSourceError("http_error", http_status=status)
+    try:
+        rows = response.json()
+    except (TypeError, ValueError):
+        raise LargeTradeSourceError("invalid_response", http_status=status) from None
     if not isinstance(rows, list):
-        raise ValueError("invalid aggregate trades response")
+        raise LargeTradeSourceError("invalid_response", http_status=status)
     return rows
 
 
-def get_large_trade_activity(symbol: str, market: str = "spot") -> dict:
-    from .news import canonical_market_symbol
-    symbol = canonical_market_symbol(symbol)
-    market = "futures" if market == "futures" else "spot"
-    quote = next((value for value in ("USDT", "USDC") if symbol.endswith(value) and len(symbol) > len(value)), "")
-    threshold = max(1000, float(os.environ.get("AGENT_LARGE_TRADE_MIN_QUOTE", "100000")))
-    base = {
-        "feature_key": "whale_activity", "symbol": symbol, "market": market,
-        "status": "unavailable", "items": [], "stale": False,
-        "threshold_quote": threshold, "quote_asset": quote, "sampled_trades": 0,
-        "refresh_seconds": 30,
-        "disclaimer": "최근 최대 500건 중 10분 이내 대규모 체결 표본입니다. 전체 거래나 특정 고래의 보유량을 뜻하지 않습니다.",
-    }
-    if not symbol or not quote:
-        return base
-    key = (symbol, market)
-    def load():
-        now = time.time()
-        with _large_trade_lock:
-            hit = _large_trade_cache.get(key)
-        if hit and hit[1] > now:
-            return deepcopy(hit[0])
-        payload = {**base, "observed_at": datetime.fromtimestamp(now, timezone.utc).isoformat(),
-                   "window_start": datetime.fromtimestamp(now - 600, timezone.utc).isoformat()}
+def _trade_integer(value) -> int:
+    """Read exact nonnegative IDs/timestamps without float rounding or bools."""
+    if type(value) is int and value >= 0:
+        return value
+    if isinstance(value, str) and re.fullmatch(r"[0-9]+", value):
+        return int(value)
+    raise ValueError("invalid trade integer")
+
+
+def fetch_large_trade_activity(symbol: str, market: str = "spot") -> dict:
+    """Collect one public sample; persistence, shared claims and retries live elsewhere."""
+    payload = base_payload(symbol, market)
+    symbol = payload["symbol"]
+    rows = _fetch_aggregate_trades(symbol, market)
+    if not isinstance(rows, list):
+        raise LargeTradeSourceError("invalid_response")
+    now = time.time()  # The response can include fills occurring while the request was in flight.
+    payload.update(observed_at=datetime.fromtimestamp(now, timezone.utc).isoformat(),
+        window_start=datetime.fromtimestamp(now - LARGE_TRADE_WINDOW_SECONDS, timezone.utc).isoformat())
+    items = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
         try:
-            rows = _fetch_aggregate_trades(symbol, market)
-            items = {}
-            for row in rows:
-                try:
-                    price, quantity = float(row["p"]), float(row["q"])
-                    notional = price * quantity
-                    timestamp = int(row["T"])
-                    if (not math.isfinite(notional) or price <= 0 or quantity <= 0
-                        or notional < threshold or not (now - 600) * 1000 <= timestamp <= (now + 5) * 1000
-                        or not isinstance(row.get("m"), bool)):
-                        continue
-                    identity = f"{market}:{symbol}:{int(row['a'])}"
-                    items[identity] = {"id": identity, "price": price, "quantity": quantity,
-                        "notional": notional, "side": "sell" if row["m"] else "buy",
-                        "occurred_at": datetime.fromtimestamp(timestamp / 1000, timezone.utc).isoformat()}
-                except (ValueError, TypeError, KeyError, OverflowError):
-                    continue
-            payload.update(status="ready" if items else "empty", sampled_trades=len(rows),
-                           items=sorted(items.values(), key=lambda item: item["occurred_at"], reverse=True)[:30])
-        except Exception:
-            if hit and now - hit[2] < 120:
-                payload = {**hit[0], "stale": True, "status": "unavailable"}
-        with _large_trade_lock:
-            _large_trade_cache[key] = (payload, now + 30, hit[2] if payload["stale"] else now)
-            while len(_large_trade_cache) > 512:
-                _large_trade_cache.pop(next(iter(_large_trade_cache)))
-        return deepcopy(payload)
-    return _large_trade_flights.run(key, load)[0]
+            if isinstance(row["p"], bool) or isinstance(row["q"], bool) or not isinstance(row.get("m"), bool):
+                continue
+            price, quantity = float(row["p"]), float(row["q"])
+            notional = price * quantity
+            timestamp, aggregate_id = _trade_integer(row["T"]), _trade_integer(row["a"])
+            if (not all(math.isfinite(value) and value > 0 for value in (price, quantity, notional))
+                or notional < payload["threshold_quote"]
+                or not (now - LARGE_TRADE_WINDOW_SECONDS) * 1000 <= timestamp <= (now + 5) * 1000):
+                continue
+            identity = f"{market}:{symbol}:{aggregate_id}"
+            items[identity] = {"id": identity, "price": price, "quantity": quantity,
+                "notional": notional, "side": "sell" if row["m"] else "buy",
+                "occurred_at": datetime.fromtimestamp(timestamp / 1000, timezone.utc).isoformat()}
+        except (ValueError, TypeError, KeyError, OverflowError):
+            continue
+    payload.update(status="ready" if items else "empty", sampled_trades=len(rows),
+        items=sorted(items.values(), key=lambda item: item["occurred_at"], reverse=True)[:LARGE_TRADE_MAX_ITEMS])
+    return payload
+
+
+def get_large_trade_activity(symbol: str, market: str = "spot") -> dict:
+    """Read the shared collected snapshot; this HTTP path never fetches Binance."""
+    from .agent_features.whale_activity.service import get_activity
+
+    return get_activity(symbol, market)
 
 # --- supported coins ----------------------------------------------------
 # `symbol` is the Binance pair the builder uses, so clicking a coin can prefill it.

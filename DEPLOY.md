@@ -72,6 +72,20 @@ Binance Square는 커뮤니티 게시글로 구분합니다. 짧은 글은 공�
 
 Prefect에서 `community_content` 로그의 `stage=fetched/processed`를 비교하면 본문 `ready/missing/error` 건수와 요약 `ready_count/pending_count/unavailable_count`를 확인할 수 있습니다. 본문 원문과 API 키는 로그에 넣지 않습니다. 요약·유료 모델 태스크는 자동 재시도하지 않고 공유 캐시의 작업 소유권과 다음 수집 주기로 복구합니다. 요약 캐시는 웹·워커가 같은 Postgres를 사용해야 중복 호출을 막을 수 있습니다. 기존 수집 유지보수 태스크가 30일 지난 요약을 한 번에 최대 500건 정리하며 HTTP 읽기마다 정리 쿼리를 실행하지 않습니다. 정리 결과는 `news_cache_maintenance` 및 flow의 `community_summaries_pruned`로 확인합니다.
 
+## 대규모 체결 중앙 수집
+
+기존 `python -m app.workflows.position_news serve` 명령이 뉴스·소스 진단과 고래 체결을 함께 관리합니다. Prefect 관리 프로세스는 공유하고 실행 슬롯은 분리합니다. 뉴스·Playwright 진단은 기존 슬롯 1개를 공유하며, `gg-parrot-whale-activity/shared-whale-trades`는 별도 슬롯 1개로 30초마다 실행됩니다. 느린 뉴스 수집이 체결 수집을 대기시키지 않으며 추가 Render 서비스나 유료 모델은 사용하지 않습니다. 세 배포 모두 같은 커밋 버전과 `pause_on_shutdown=False`를 사용합니다.
+
+`whales.py`의 공개 Binance aggregate trades 로직을 사용합니다. 최근 heartbeat가 있는 실행 세션의 `(market, symbol)`을 합쳐 한 번 수집하고, 매크로가 없으면 외부 호출을 하지 않습니다. 매크로 시작 직후 웹의 별도 백그라운드 수집기가 첫 결과를 만들며, 운영에서는 이후 120초 동안 Prefect에 양보합니다. Prefect 장애 시 같은 DB lease·재시도 간격을 따르는 웹 복구 경로가 작동합니다. HTTP 세션 API는 공용 DB 결과만 읽으며 조회 결과를 프로세스 내 2초 동안 공유합니다.
+
+수집마다 최대 500개 공개 체결을 확인하고, 기본 `AGENT_LARGE_TRADE_MIN_QUOTE=100000` USDT/USDC 이상 체결을 최근 10분 동안 합쳐 최신 30개까지 보관합니다. 체결 ID로 중복을 제거하며 시장을 구분합니다. 활발한 종목의 모든 체결을 보장하는 데이터가 아니며 특정 지갑·고래의 보유량 변화로 해석하지 않습니다. 기존 비활성 온체인 보유량 분석과 배너는 그대로 비활성입니다.
+
+`WhaleTradeState`는 30초 갱신 커서, 60초 작업 소유권, 마지막 정상 스냅샷을 공용 Postgres에 보관합니다. 작업 소유권을 얻지 못하면 외부 호출을 하지 않으며, 만료된 작업은 새 결과를 덮을 수 없습니다. 429·418의 재시도 시각은 같은 시장의 다른 종목에도 공유하고 실패해도 마지막 정상 관측 시각을 갱신하지 않습니다. 7일간 비활성인 데이터는 수집 유지보수에서 최대 500행씩 정리합니다. 가장 오래 수집하지 못한 종목부터 순환하며 웹 보조 수집 대상도 한 번의 일괄 상태 조회로 선택합니다.
+
+Prefect의 `whale_discovery`, `whale_source`, `whale_collection` 로그에서 활성 거래쌍, HTTP 상태, 표본·대규모 체결 수, 소요 시간과 재시도 간격을 확인합니다. 정상 빈 결과는 `empty`, 소스 실패는 실패한 flow로 남습니다. 늦은 스케줄을 재생하지 않고, 개별 flow는 60초 제한과 20초 수집 예산을 사용합니다. `configuration`에는 실제 커밋과 AI 호출 0이 표시됩니다. 배포 뒤 새 Prefect 배포가 READY이고 새 버전의 정기 실행이 완료되는지 확인합니다.
+
+선택적 운영 스위치는 `WHALE_TRADE_PREFECT_ENABLED=false`(기존 뉴스만 실행), `WHALE_TRADE_EMBEDDED_ENABLED=false`(웹 보조 수집 끄기), `WHALE_TRADE_EMBEDDED_BOOTSTRAP_ONLY=true`(웹 첫 수집·장애 복구만)입니다. 현물 기본 주소는 Binance 공식 공개 시세 전용 `data-api.binance.vision`, 선물은 `fapi.binance.com`이며 `BINANCE_API_BASE`·`BINANCE_FAPI_BASE` 설정을 존중합니다. [Binance 공개 시세 API 문서](https://github.com/binance/binance-spot-api-docs/blob/master/faqs/market_data_only.md)
+
 ## DB 초기화와 롤링 배포
 
 웹 DB 초기화는 모듈 import 때 실행하지 않고 FastAPI lifespan에서 수행합니다. Postgres는 컬럼·인덱스·BIGINT 타입·번역 테이블 권한 상태를 먼저 조회해 이미 반영된 DDL을 생략합니다. `ADD COLUMN IF NOT EXISTS`도 테이블 잠금을 얻으므로 정상 시작에 반복하면 실행 중인 매크로의 갱신과 교착상태가 생길 수 있습니다.

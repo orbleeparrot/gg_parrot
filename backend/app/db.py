@@ -581,6 +581,28 @@ class WhaleObservation(SQLModel, table=True):
     tracked: int = 0
 
 
+class WhaleTradeState(SQLModel, table=True):
+    """Shared public trade observations and fenced collector work per pair.
+
+    Provider keys use an empty symbol and hold only a market-wide cooldown.
+    Neither kind of row belongs to a user or authorizes trading.
+    """
+
+    state_key: str = Field(primary_key=True, max_length=64)
+    symbol: str = Field(default="", max_length=21)
+    market: str = Field(max_length=12)
+    payload_json: str = ""
+    last_success_ms: int = Field(default=0, sa_type=BigInteger)
+    last_attempt_ms: int = Field(default=0, sa_type=BigInteger, index=True)
+    next_collection_ms: int = Field(default=0, sa_type=BigInteger, index=True)
+    claim_token: str = ""
+    claimed_ms: int = Field(default=0, sa_type=BigInteger)
+    consecutive_failures: int = 0
+    last_error: str = ""
+    error_code: str = ""
+    collection_status: str = "pending"
+
+
 class BoardPost(SQLModel, table=True):
     """껄무새 게시판 글. 로그인 계정만 작성. 이미지(jpg/png) 1장을 DB에 함께 저장.
 
@@ -724,6 +746,7 @@ _PG_INDEXES = {
     "ix_newstitletranslation_claimed_ms": ("newstitletranslation", "claimed_ms"),
 }
 _PG_BIGINT_COLUMNS = {
+    "whaletradestate": ("last_success_ms", "last_attempt_ms", "next_collection_ms", "claimed_ms"),
     "communitypostsummary": ("claimed_ms", "updated_ms"),
     "tickernewssnapshot": (
         "collected_ms", "claimed_ms", "last_observed_ms", "last_observation_seq",
@@ -734,7 +757,7 @@ _PG_BIGINT_COLUMNS = {
         "latest_observation_seq", "latest_observed_ms", "last_attempt_ms", "last_success_ms",
     ),
 }
-_PG_PRIVATE_CACHE_TABLES = ("newstitletranslation", "communitypostsummary")
+_PG_PRIVATE_CACHE_TABLES = ("newstitletranslation", "communitypostsummary", "whaletradestate")
 _PG_MIGRATION_LOCK = 0x6767706172726F74  # Stable across web/worker processes and deployments.
 _PG_MIGRATION_ATTEMPTS = 3
 
@@ -758,7 +781,8 @@ def _pg_schema_state(conn) -> dict:
         "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
         "CROSS JOIN LATERAL aclexplode(COALESCE(c.relacl, acldefault('r', c.relowner))) a "
         "LEFT JOIN pg_roles r ON r.oid = a.grantee "
-        "WHERE n.nspname = current_schema() AND c.relname IN ('newstitletranslation', 'communitypostsummary') "
+        "WHERE n.nspname = current_schema() AND c.relname IN ("
+        + ", ".join("'" + table + "'" for table in _PG_PRIVATE_CACHE_TABLES) + ") "
         "AND (a.grantee = 0 OR r.rolname IN ('anon', 'authenticated'))"
     )}
     return {"tables": tables, "columns": columns, "indexes": indexes, "grants": grants}
@@ -850,3 +874,15 @@ def request_session() -> Iterator[Session]:
 def database_dialect() -> str:
     """Expose the configured store type without leaking the engine itself."""
     return str(_engine.dialect.name)
+
+
+def assert_shared_worker_database(*, dialect: str | None = None) -> None:
+    """Fail closed when a deployed collector does not share durable Postgres.
+
+    Keep the existing worker setting so news and trade collectors use the same
+    Render database requirement without importing any source or feature code.
+    """
+    default_required = "true" if os.environ.get("RENDER") else "false"
+    required = os.environ.get("POSITION_NEWS_REQUIRE_POSTGRES", default_required).strip().lower() in {"1", "true", "yes"}
+    if required and (database_dialect() if dialect is None else dialect) != "postgresql":
+        raise RuntimeError("중앙 수집 워커는 웹 서버와 같은 Postgres DATABASE_URL이 필요합니다.")

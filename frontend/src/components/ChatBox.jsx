@@ -257,7 +257,7 @@ export default function ChatBox({ defaultOpen = false }) {
         aria-controls={open ? panelId : undefined}
         aria-label={open ? "채팅 닫기" : badge ? `채팅 열기, 새 메시지 ${unseen}개` : "채팅 열기"}
       >
-        <img src={FAB_ICON} alt="" width="26" height="26" draggable="false" decoding="async" />
+        <img src={FAB_ICON} alt="" width="44" height="44" draggable="false" decoding="async" />
         <span className="chat-fab-label" aria-hidden="true">Chat</span>
         {badge ? <span className="chat-fab-badge num" aria-hidden="true">{badge}</span> : null}
       </button>

@@ -8635,3 +8635,88 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   .chat-skeleton i { animation: none; }
   .chat-spinner { animation: none; border-color: rgb(var(--c-brand-ink)); border-top-color: transparent; }
 }
+
+/* 리더보드 보드 — 폭 1120px 로 묶어 시선 이동을 줄이고, 넓은 화면에선 행 액션이
+   우하단 채팅 버튼(right 20px)과 겹치지 않는다. 1·2·3위는 금·은·동(테마 무관 상수). */
+.lb-board {
+  --lb-gold: 212 160 23;
+  --lb-silver: 154 165 177;
+  --lb-bronze: 184 115 51;
+  max-width: 1120px;
+}
+.lb-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  max-width: 1120px;
+  margin-bottom: 20px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid rgb(var(--c-slate-200));
+}
+.lb-toolbar-left { min-width: 0; }
+.lb-toolbar-right { display: flex; align-items: center; gap: 14px; margin-left: auto; flex-wrap: wrap; }
+.lb-countdown { white-space: nowrap; }
+.lb-rank { color: rgb(var(--c-slate-600)); }
+.lb-rank.is-1 { color: rgb(var(--lb-gold)); }
+.lb-rank.is-2 { color: rgb(var(--lb-silver)); }
+.lb-rank.is-3 { color: rgb(var(--lb-bronze)); }
+.lb-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
+  width: 100%;
+}
+@media (min-width: 640px) { .lb-actions { width: auto; } }
+.lb-vote {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 34px;
+  padding: 0 10px 0 9px;
+  border: 1px solid rgb(var(--c-slate-300));
+  border-radius: 999px;
+  background: rgb(var(--c-surface));
+  color: rgb(var(--c-slate-700));
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background-color 120ms ease-out, color 120ms ease-out;
+}
+.lb-vote svg, .lb-icon-btn svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.lb-vote:hover { background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-900)); }
+.lb-vote.is-on { background: rgb(var(--c-slate-100)); border-color: rgb(var(--c-slate-400)); color: rgb(var(--c-slate-900)); }
+.lb-vote.is-on svg { fill: rgb(var(--c-slate-900) / 0.14); }
+.lb-vote:focus-visible, .lb-icon-btn:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
+.lb-icon-btn {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 10px;
+  background: rgb(var(--c-slate-100));
+  color: rgb(var(--c-slate-700));
+  cursor: pointer;
+  transition: background-color 120ms ease-out, color 120ms ease-out;
+}
+.lb-icon-btn:hover:not(:disabled) { background: rgb(var(--c-slate-200)); color: rgb(var(--c-slate-900)); }
+.lb-icon-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+/* 목록 끝 — 실제 종결 요소. 높이만큼 마지막 행이 채팅 버튼 위로 올라온다. */
+.lb-end {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  min-height: 96px;
+  margin-top: 4px;
+  padding: 18px 0 24px;
+  border-top: 1px solid rgb(var(--c-slate-200));
+  color: rgb(var(--c-slate-500));
+  font-size: 12px;
+  font-weight: 600;
+}

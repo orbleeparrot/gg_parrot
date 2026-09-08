@@ -18,6 +18,18 @@ export function countUnseen(items, seenId) {
   return (items || []).filter((item) => Number(item?.id) > seen).length;
 }
 
+// 패널을 열 때 '새 메시지' 구분선을 놓을 첫 안 읽은 메시지 id. 없으면 null.
+export function firstUnseenId(items, seenId) {
+  if (seenId === null || seenId === undefined) return null;
+  const seen = Number(seenId);
+  if (!Number.isFinite(seen)) return null;
+  const unseen = (items || [])
+    .map((item) => Number(item?.id))
+    .filter((id) => Number.isFinite(id) && id > seen)
+    .sort((a, b) => a - b);
+  return unseen.length ? unseen[0] : null;
+}
+
 export function badgeLabel(count) {
   if (count <= 0) return "";
   return `${count > 99 ? "99+" : count} new`;

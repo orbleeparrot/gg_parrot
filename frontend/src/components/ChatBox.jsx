@@ -17,7 +17,13 @@ import {
 const POLL_MS = 3000;
 const FAB_ICON = "/brand/ggparrot-feather-terminal.svg"; // 정사각 깃털 — 원판 안에 잘림 없이 들어간다
 const EMPTY_FACE = "/brand/agent/ggparrot-agent-curious-v1.svg";
-const HELPER_DEFAULT = "투자 조언이 아니에요. 매매 판단과 책임은 본인에게 있어요.";
+
+// 헤더의 KST 시계(시:분).
+function kstClock(now = Date.now()) {
+  const date = new Date(now + 9 * 60 * 60 * 1000);
+  const two = (n) => String(n).padStart(2, "0");
+  return `${two(date.getUTCHours())}:${two(date.getUTCMinutes())}`;
+}
 
 export default function ChatBox({ defaultOpen = false }) {
   const panelId = useId();
@@ -31,6 +37,7 @@ export default function ChatBox({ defaultOpen = false }) {
   const [busy, setBusy] = useState(false);
   const [seenId, setSeenId] = useState(() => readSeenId());
   const [dividerId, setDividerId] = useState(null);
+
   const dividerReadyRef = useRef(false); // 열린 채로 첫 목록이 오면 그때 한 번 기준을 잡는다
   const listRef = useRef(null);
   const inputRef = useRef(null);
@@ -127,6 +134,8 @@ export default function ChatBox({ defaultOpen = false }) {
   }
 
   const nameNeeded = !name.trim() || editingName;
+  // 별도 타이머 없이 렌더마다 계산 — 폴링이 3초마다 새 목록으로 재렌더하므로 충분하다.
+  const clock = kstClock();
 
   return (
     <div className="chat-float">
@@ -135,7 +144,7 @@ export default function ChatBox({ defaultOpen = false }) {
           <header className="chat-head">
             <div className="chat-head-title">
               <h3>리더보드 채팅</h3>
-              <p><span className="num">{items.length}</span>개 · KST 00:00 초기화</p>
+              <p>KST <span className="num">{clock}</span></p>
             </div>
             <button type="button" className="chat-close" onClick={() => setOpen(false)} aria-label="채팅 닫기">
               <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m4 4 8 8M12 4l-8 8" /></svg>
@@ -236,9 +245,7 @@ export default function ChatBox({ defaultOpen = false }) {
               )}
             </button>
           </form>
-          <p className={`chat-helper${error ? " is-error" : ""}`} role={error ? "alert" : undefined}>
-            {error || HELPER_DEFAULT}
-          </p>
+          {error ? <p className="chat-helper is-error" role="alert">{error}</p> : <span className="chat-composer-gap" aria-hidden="true" />}
         </section>
       ) : null}
 
@@ -250,7 +257,7 @@ export default function ChatBox({ defaultOpen = false }) {
         aria-controls={open ? panelId : undefined}
         aria-label={open ? "채팅 닫기" : badge ? `채팅 열기, 새 메시지 ${unseen}개` : "채팅 열기"}
       >
-        <img src={FAB_ICON} alt="" width="34" height="34" draggable="false" decoding="async" />
+        <img src={FAB_ICON} alt="" width="26" height="26" draggable="false" decoding="async" />
         <span className="chat-fab-label" aria-hidden="true">Chat</span>
         {badge ? <span className="chat-fab-badge num" aria-hidden="true">{badge}</span> : null}
       </button>

@@ -744,6 +744,13 @@ def _matches_asset(item: dict, asset_symbol: str, coin_name: str) -> bool:
         r"\bcitizens\s+financial\s+group\b", title, re.IGNORECASE,
     ) and not re.search(r"\bcentrifuge\b|센트리퓨[즈지]", title, re.IGNORECASE):
         return False
+    if asset_symbol == "FET" and re.search(
+        r"\bforum\s+energy\s+technologies\b", title, re.IGNORECASE,
+    ) and not re.search(
+        r"\bartificial\s+superintelligence\s+alliance\b|\bfetch\.ai\b|페치",
+        title, re.IGNORECASE,
+    ):
+        return False
     if asset_symbol == "EDEN":
         if any(term in searchable for term in _EDEN_NOISE_TERMS):
             return False
@@ -890,6 +897,15 @@ def _is_news_article_candidate(item: dict) -> bool:
     if re.search(r"\bcitizens\s+financial\s+group\b", title, re.IGNORECASE) and not re.search(
         r"\b(?:centrifuge|crypto(?:currency|currencies)?|blockchain|tokens?|tokeniz\w*|"
         r"bitcoin|ethereum|defi|stablecoins?)\b|암호화폐|가상자산|블록체인|토큰|센트리퓨[즈지]",
+        title, re.IGNORECASE,
+    ):
+        return False
+    # FET is also an energy-services stock. Keep explicit crypto reporting as
+    # market news; the asset matcher above requires the actual FET project.
+    if re.search(r"\bforum\s+energy\s+technologies\b", title, re.IGNORECASE) and not re.search(
+        r"\b(?:artificial\s+superintelligence\s+alliance|fetch\.ai|"
+        r"crypto(?:currency|currencies)?|blockchain|tokens?|tokeniz\w*|"
+        r"bitcoin|ethereum|defi|stablecoins?)\b|페치|암호화폐|가상자산|블록체인|토큰",
         title, re.IGNORECASE,
     ):
         return False

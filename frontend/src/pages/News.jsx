@@ -7,6 +7,7 @@ import CoinIcon from "../components/CoinIcon.jsx";
 import NewsBriefingReader from "../components/NewsBriefingReader.jsx";
 import { AnnotatedText, TermChips } from "../components/NewsTerms.jsx";
 import { PageHeader, Loading, ErrorNote } from "../components/Page.jsx";
+import { splitSummary } from "../lib/summaryText.js";
 
 const COIN_NEWS_CONCURRENCY = 2;
 const RACER_NEWS_ROTATE_MS = 5_000;
@@ -127,16 +128,7 @@ function MarketBriefing({ market, loading, error }) {
           /> : null}
           {translationPending ? <TranslationPending data={market} /> : null}
 
-          {market.overview ? (
-            <div className="news-market-summary">
-              <div className="news-market-summary-head">
-                <span>AI 요약</span>
-                {market.as_of ? <time className="num">{market.as_of} KST</time> : null}
-              </div>
-              <p><AnnotatedText text={market.overview} /></p>
-            </div>
-          ) : null}
-
+          {/* AI 요약은 페이지 머리(제목·기준일 아래)로 올라갔다. 여기엔 용어 칩만 남긴다. */}
           <TermChips texts={[market.overview, ...(market.items || []).map((item) => item.title)]} />
           {market.disclaimer ? <Disclaimer text={market.disclaimer} /> : null}
         </>
@@ -337,15 +329,30 @@ export default function News() {
     };
   }, []);
 
+  const summary = market?.overview ? splitSummary(market.overview) : null;
+
   return (
     <div className="news-briefing-page">
+      {/* AI 요약이 있으면 그날의 내용이 머리 본문이 된다 — 첫 줄은 굵은 리드, 나머지는 본문.
+          없으면 예전 설명문으로 돌아간다. */}
       <PageHeader
         eyebrow="MARKET NEWSROOM"
         title="오늘의 코인동향"
         meta={market?.as_of ? <>기준 <span className="num">{market.as_of}</span> · KST</> : null}
-        description="시장·규제와 활발히 움직이는 코인을 두 개의 브리핑으로 나눠 읽어요."
-        note="경주마 선정과 뉴스는 참고용이며 투자 권유가 아니에요."
-      />
+        description={summary ? undefined : "시장·규제와 활발히 움직이는 코인을 두 개의 브리핑으로 나눠 읽어요."}
+        note={summary
+          ? "AI가 오늘 헤드라인만 근거로 쓴 요약이에요. 경주마 선정과 뉴스는 참고용이며 투자 권유가 아니에요."
+          : "경주마 선정과 뉴스는 참고용이며 투자 권유가 아니에요."}
+      >
+        {summary ? (
+          <div className="page-head-lead">
+            <p className="page-head-lead-first"><AnnotatedText text={summary.lead} /></p>
+            {summary.body.map((line, index) => (
+              <p key={index}><AnnotatedText text={line} /></p>
+            ))}
+          </div>
+        ) : null}
+      </PageHeader>
 
       <div className="news-briefing-grid">
         <MarketBriefing market={market} loading={marketLoading} error={marketError} />

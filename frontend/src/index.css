@@ -5031,6 +5031,27 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   font-weight: 600;
 }
 .page-head-actions { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+/* 머리 본문 — 그날의 AI 요약. 첫 줄은 굵은 리드(20~22px), 나머지는 16px·행간 1.7 본문. 상자 없음. */
+.page-head-lead { display: grid; gap: 12px; margin-top: 4px; }
+.page-head-lead-first {
+  margin: 0;
+  max-width: 40ch;
+  color: rgb(var(--c-slate-900));
+  font-size: clamp(19px, 17px + 0.5vw, 22px);
+  line-height: 1.5;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  text-wrap: pretty;
+}
+.page-head-lead p:not(.page-head-lead-first) {
+  margin: 0;
+  max-width: 60ch;
+  color: rgb(var(--c-slate-700));
+  font-size: 16px;
+  line-height: 1.7;
+  font-weight: 500;
+  text-wrap: pretty;
+}
 
 .news-briefing-grid {
   border-top: 1px solid rgb(var(--c-slate-300));
@@ -5411,33 +5432,6 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   display: grid;
   place-items: center;
   text-align: center;
-}
-
-.news-market-summary {
-  margin-top: 24px;
-  padding-left: 16px;
-  border-left: 2px solid rgb(var(--c-brand));
-}
-
-.news-market-summary-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  color: rgb(var(--c-slate-500));
-  font-size: 12px;
-  line-height: 1.4;
-  font-weight: 700;
-}
-
-.news-market-summary > p {
-  margin-top: 8px;
-  color: rgb(var(--c-slate-700));
-  font-size: 14px;
-  line-height: 1.65;
-  font-weight: 500;
-  /* 요약은 '3~4줄'을 줄바꿈으로 나눠 온다. pre-line 이 없으면 전부 한 덩어리로 붙는다. */
-  white-space: pre-line;
 }
 
 .news-briefing-disclaimer {

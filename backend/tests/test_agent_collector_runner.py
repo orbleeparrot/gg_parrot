@@ -135,7 +135,7 @@ def test_registration_failure_does_not_attempt_stop_before_start(monkeypatch):
 
 
 def test_existing_cli_registers_all_deployments_in_shared_runner_supervisor(monkeypatch):
-    from app.workflows import position_news, whale_activity
+    from app.workflows import position_news, whale_activity, onchain_holders
 
     monkeypatch.setenv("PREFECT_API_URL", "https://prefect.invalid")
     monkeypatch.setenv("WHALE_TRADE_PREFECT_ENABLED", "true")
@@ -151,11 +151,12 @@ def test_existing_cli_registers_all_deployments_in_shared_runner_supervisor(monk
     monkeypatch.setattr(position_news.collect_position_news_flow, "to_deployment", deployment)
     monkeypatch.setattr(position_news.coindesk_source_probe_flow, "to_deployment", deployment)
     monkeypatch.setattr(whale_activity, "create_deployment", lambda: "whale")
+    monkeypatch.setattr(onchain_holders, "create_deployment", lambda: "onchain")
     monkeypatch.setattr(position_news, "serve", lambda *_args, **_kwargs: pytest.fail("news-only serve"))
     served = []
     monkeypatch.setattr(agent_collectors, "serve_collectors", lambda news, whales: served.append((news, whales)))
     position_news.main()
-    assert served == [(deployments, ["whale"])]
+    assert served == [(deployments, ["whale", "onchain"])]
     assert [item.entrypoint for item in deployments] == [
         "app.workflows.position_news.collect_position_news_flow",
         "app.workflows.position_news.coindesk_source_probe_flow",

@@ -8339,18 +8339,17 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   gap: 12px;
 }
 
-/* 원형 마스코트 버튼 */
+/* 알약형 버튼 — 깃털과 'Chat' 이 한 줄에 맞는 폭. 잉크 바탕 위 노란 깃털·라벨. */
 .chat-fab {
   position: relative;
-  width: 72px;
-  height: 72px;
-  padding: 0;
+  height: 64px;
+  padding: 0 22px 0 12px;
   border: 0;
-  border-radius: 50%;
-  display: flex;
+  border-radius: 999px;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
+  gap: 6px;
   background: rgb(var(--chat-disc));
   /* surface 링 + 1px 슬레이트 테두리 — 다크에서 원판이 배경에 붙지 않게 */
   box-shadow: 0 0 0 3px rgb(var(--c-surface)), 0 0 0 4px rgb(var(--c-slate-300)), 0 10px 28px rgba(0, 0, 0, 0.28);
@@ -8360,15 +8359,15 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 }
 .chat-fab-label {
   color: rgb(var(--c-brand));
-  font-size: 12px;
+  font-size: 17px;
   line-height: 1;
   font-weight: 800;
   letter-spacing: 0.04em;
 }
 .chat-fab img {
   display: block;
-  width: 26px;
-  height: 26px;
+  width: 44px;
+  height: 44px;
   object-fit: contain;
   pointer-events: none;
   user-select: none;
@@ -8624,9 +8623,9 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 
 @media (max-width: 640px) {
   .chat-float { right: 14px; left: 14px; align-items: stretch; }
-  .chat-fab { width: 64px; height: 64px; align-self: flex-end; }
-  .chat-fab img { width: 22px; height: 22px; }
-  .chat-fab-label { font-size: 11px; }
+  .chat-fab { height: 56px; padding: 0 18px 0 10px; align-self: flex-end; }
+  .chat-fab img { width: 38px; height: 38px; }
+  .chat-fab-label { font-size: 15px; }
   .chat-sheet { width: auto; height: min(82vh, calc(100vh - 56px - 96px)); }
 }
 @media (prefers-reduced-motion: reduce) {

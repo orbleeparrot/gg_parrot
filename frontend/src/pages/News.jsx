@@ -4,7 +4,7 @@ import { api } from "../api.js";
 import useNewsBriefings from "../hooks/useNewsBriefings.js";
 import { communityPostIdentity, communitySummaryPresentation, hasPendingTranslation, historicalNewsLabel, newsPublishedLabel, newsSourceLabel } from "../lib/newsBriefings.js";
 import CoinIcon from "../components/CoinIcon.jsx";
-import NewsBriefingReader from "../components/NewsBriefingReader.jsx";
+import MarketCarousel from "../components/MarketCarousel.jsx";
 import { AnnotatedText, TermChips } from "../components/NewsTerms.jsx";
 import { PageHeader, Loading, ErrorNote } from "../components/Page.jsx";
 import { splitSummary } from "../lib/summaryText.js";
@@ -23,6 +23,13 @@ function formatPrice(value) {
   return number.toLocaleString("en-US", {
     maximumFractionDigits: number >= 1 ? 2 : 6,
   });
+}
+
+const compactVolumeFormatter = new Intl.NumberFormat("ko-KR", { notation: "compact", maximumFractionDigits: 1 });
+function formatVolume(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "—";
+  return compactVolumeFormatter.format(number);
 }
 
 function errorMessage(reason) {
@@ -86,8 +93,8 @@ function MarketBriefing({ market, loading, error }) {
       title: item.title,
       source: newsSourceLabel(item),
       time: historicalNewsLabel(item) || newsPublishedLabel(item),
-      community: item.content_type === "community" ? { author: item.author, source: item.source, summary: communitySummaryPresentation(item) } : null,
-      url: item.url,
+      image: item.image || "",
+      url: item.article_url || item.url,
     })),
     [market],
   );
@@ -97,7 +104,7 @@ function MarketBriefing({ market, loading, error }) {
       <BriefingSectionHeader
         id="market-briefing-title"
         title="시장·규제 한눈에"
-        description="오늘 시장을 움직이는 정책과 주요 이슈를 헤드라인 근거로 읽어요."
+        description="오늘 시장을 움직이는 정책과 주요 이슈. 화살표로 넘기면 가운데 기사가 선명해져요."
         count={market?.items?.length || 0}
         countLabel="헤드라인"
         pendingLabel="새 소식 확인 중"
@@ -108,15 +115,11 @@ function MarketBriefing({ market, loading, error }) {
 
       {market ? (
         <>
-          {readerItems.length > 0 || !translationPending ? <NewsBriefingReader
-            key={market.updated_at || market.as_of || "market"}
-            items={readerItems}
-            ariaLabel="현재 읽는 시장·규제 헤드라인"
-            empty="지금은 불러올 시장 헤드라인이 없어요."
-            queueLabel="헤드라인 읽는 순서"
-            rotateMs={5_000}
-            rowHeight={readerItems.some((item) => item.community) ? 76 : 48}
-          /> : null}
+          {readerItems.length > 0 ? (
+            <MarketCarousel items={readerItems} />
+          ) : !translationPending ? (
+            <div className="news-reader-empty t-small text-slate-500">지금은 불러올 시장 헤드라인이 없어요.</div>
+          ) : null}
           {translationPending ? <TranslationPending data={market} /> : null}
 
           {/* AI 요약은 페이지 머리(제목·기준일 아래)로 올라갔다. 여기엔 용어 칩만 남긴다. */}
@@ -144,54 +147,80 @@ function useElementSize(ref) {
   return size;
 }
 
-// 타일 밀도 — 넓이에 따라 보여줄 정보량을 줄인다(xl: 로고·가격·헤드라인, md 이하: 헤드라인 없음).
-function tileDensity(width, height) {
-  if (width >= 240 && height >= 230) return "is-xl";
-  if (width >= 128 && height >= 150) return "is-lg";
-  if (width >= 96 && height >= 64) return "is-md";
-  if (width >= 64 && height >= 40) return "is-sm";
-  return "is-xs";
+// 타일 맞춤 — 픽셀 크기로 글자 크기·순위 숫자·기사 제목 줄 수를 정한다.
+// 기사는 타일당 한 건. 큰 타일은 글자를 키우고 줄 수를 늘려 채우고, 좁고 긴 타일은 줄 수를 늘려 제목이 잘리지 않게 한다.
+const clampNum = (value, min, max) => Math.min(max, Math.max(min, value));
+function tileFit(width, height) {
+  const area = width * height;
+  const scale = clampNum(Math.sqrt(area / 48_000), 0.8, 2); // 220×220 ≈ 1
+  const ticker = Math.round(clampNum(22 * scale, 16, 40));
+  const change = Math.round(clampNum(13 * scale, 11, 20));
+  const icon = Math.round(clampNum(ticker * 1.15, 18, 44));
+  const title = Math.round(clampNum(14 * scale, 13, 24));
+  const padX = width >= 160 ? 14 : 8;
+  const padY = width >= 160 ? 12 : 8;
+  const innerW = width - padX * 2;
+  const tiny = width < 64 || height < 40; // 티커만
+  const stackedHead = !tiny && innerW < 130; // 순위·로고 한 줄, 그 아래 티커·상승률 — 접지 않고 쌓는다
+  const headH = tiny ? 16 : stackedHead ? icon + 4 + ticker + change * 1.2 + 2 : Math.max(icon, ticker + change * 1.2 + 2);
+  // 지표는 한 줄(줄바꿈 없음). 폭이 모자라면 거래대금을 뺀다.
+  const showMetrics = !tiny && innerW >= 120 && height >= headH + padY * 2 + 40;
+  const metricsFull = innerW >= 260; // "현재가 n USDT · 거래대금 n만" 이 한 줄에 들어가는 폭
+  const metricsH = showMetrics ? 30 : 0; // 위 선 10 + 글자 20
+  const lineH = title * 1.4;
+  const base = 6 + 14; // 제목 아래 간격 + 메타 한 줄
+  const blocks = 1 + (showMetrics ? 1 : 0) + 1;
+  const available = height - padY * 2 - headH - metricsH - 10 * (blocks - 1) - 11 - 4;
+  const linesFit = Math.floor((available - base) / lineH);
+  const showNews = !tiny && innerW >= 96 && linesFit >= 2;
+  const lines = showNews ? clampNum(linesFit, 2, 6) : 0;
+  return { ticker, change, icon, title, lines, showNews, showMetrics, metricsFull, padX, padY, tiny, stackedHead };
 }
 
-// 타일 하나의 헤드라인 — 모든 타일이 같은 tick 으로 다음 기사로 넘어가므로 화면 전체가 한 번에 바뀐다.
+// 타일의 기사 한 건 — 모든 타일이 같은 tick 으로 다음 기사로 넘어가므로 화면 전체가 한 번에 바뀐다.
 // key 가 바뀌면 새로 마운트되어 진입 애니메이션이 돌고, 그 시점이 모든 타일에서 같다.
-function TileHeadline({ base, newsState, tick, onRetry, symbol }) {
+function TileNews({ base, newsState, tick, onRetry, symbol, lines }) {
   const status = newsState?.status || "queued";
   const items = newsState?.data?.items || [];
   if (status === "queued" || status === "loading") {
-    return <span className="news-map-news is-state">{base} 뉴스 준비 중</span>;
+    return <div className="news-map-news is-state">{base} 뉴스 준비 중</div>;
   }
   if (status === "error") {
     return (
-      <span className="news-map-news is-state">
+      <div className="news-map-news is-state">
         뉴스를 불러오지 못했어요.
         <button type="button" onClick={() => onRetry(symbol)}>다시 시도</button>
-      </span>
+      </div>
     );
   }
   if (!items.length) {
-    return <span className="news-map-news is-state">최근 {base} 뉴스가 없어요.</span>;
+    return <div className="news-map-news is-state">최근 {base} 뉴스가 없어요.</div>;
   }
   const index = tick % items.length;
   const item = items[index];
-  const source = newsSourceLabel(item);
   const time = historicalNewsLabel(item) || newsPublishedLabel(item);
+  // 제목이 짧아 줄이 남으면 커뮤니티 글의 본문 요약으로 채운다(뉴스 기사는 요약이 없어 제목만).
+  const summary = communitySummaryPresentation(item);
+  const excerptLines = summary?.status === "ready" && lines >= 4 ? lines - 2 : 0;
   return (
-    <a
-      key={`${index}-${item.url || item.title}`}
-      className="news-map-news"
-      href={item.url || undefined}
-      target="_blank"
-      rel="noreferrer noopener"
-      aria-label={`${base} 뉴스 ${index + 1}/${items.length}: ${item.title}`}
-    >
-      <span className="news-map-news-title">{item.title}</span>
-      <span className="news-map-news-meta">
-        <span className="news-map-news-source">{source}</span>
-        {time ? <span className="news-map-news-time">{time}</span> : null}
-        <span className="news-map-news-count num" aria-hidden="true">{index + 1}/{items.length}</span>
-      </span>
-    </a>
+    <div className="news-map-news" style={{ "--tile-excerpt-lines": excerptLines, "--tile-title-lines": excerptLines > 0 ? 2 : lines }}>
+      <a
+        key={`${index}-${item.url || item.title}`}
+        className="news-map-news-item"
+        href={item.url || undefined}
+        target="_blank"
+        rel="noreferrer noopener"
+        aria-label={`${base} 뉴스 ${index + 1}/${items.length}: ${item.title}`}
+      >
+        <span className="news-map-news-title">{item.title}</span>
+        {excerptLines > 0 ? <span className="news-map-news-excerpt">{summary.text}</span> : null}
+        <span className="news-map-news-meta">
+          <span className="news-map-news-source">{newsSourceLabel(item)}</span>
+          {time ? <span className="news-map-news-time">{time}</span> : null}
+          <span className="news-map-news-count num" aria-hidden="true">{index + 1}/{items.length}</span>
+        </span>
+      </a>
+    </div>
   );
 }
 
@@ -212,30 +241,42 @@ function RacerTreemap({ coins, newsBySymbol, onRetry, tick }) {
         const base = coinOf(coin.symbol);
         const change = Number(coin.change_pct) || 0;
         const changeTone = change > 0 ? "is-up" : change < 0 ? "is-down" : "is-flat";
-        const density = tileDensity(width * size.width - 8, height * size.height - 8);
-        const withNews = density === "is-xl" || density === "is-lg";
+        const fit = tileFit(width * size.width - 8, height * size.height - 8);
         return (
           <article
             key={coin.symbol}
             role="listitem"
-            className={`news-map-tile ${density}`}
+            className={`news-map-tile ${fit.tiny ? "is-tiny" : ""} ${fit.stackedHead ? "is-stacked" : ""}`}
             style={{
               left: `calc(${x * 100}% + 4px)`,
               top: `calc(${y * 100}% + 4px)`,
               width: `calc(${width * 100}% - 8px)`,
               height: `calc(${height * 100}% - 8px)`,
+              padding: `${fit.padY}px ${fit.padX}px`,
+              "--tile-ticker": `${fit.ticker}px`,
+              "--tile-change": `${fit.change}px`,
+              "--tile-icon": `${fit.icon}px`,
+              "--tile-title": `${fit.title}px`,
+              "--tile-lines": fit.lines,
             }}
             aria-label={`${rank}위 ${base} ${change > 0 ? "+" : ""}${change.toFixed(2)}%`}
           >
             <header className="news-map-head">
               <span className="news-map-rank num" aria-hidden="true">{String(rank).padStart(2, "0")}</span>
-              <CoinIcon symbol={coin.symbol} size={density === "is-xl" ? 32 : 22} className="news-map-logo" alt="" />
+              <CoinIcon symbol={coin.symbol} size={fit.icon} className="news-map-logo" alt="" />
               <Link to={`/builder?symbol=${encodeURIComponent(coin.symbol)}`} className="news-map-ticker num" title={`${base} 매크로 만들기`}>{base}</Link>
               <span className={`news-map-change num ${changeTone}`}>{change > 0 ? "+" : ""}{change.toFixed(2)}%</span>
-              <span className="news-map-price num">{formatPrice(coin.last_price)} <small>USDT</small></span>
             </header>
-            {withNews ? (
-              <TileHeadline base={base} symbol={coin.symbol} newsState={newsBySymbol[coin.symbol]} tick={tick} onRetry={onRetry} />
+            {fit.showMetrics ? (
+              <p className="news-map-metrics">
+                <span><small>현재가</small><b className="num">{formatPrice(coin.last_price)}</b><em>USDT</em></span>
+                {fit.metricsFull ? (
+                  <span><small>거래대금</small><b className="num">{formatVolume(coin.quote_volume)}</b></span>
+                ) : null}
+              </p>
+            ) : null}
+            {fit.showNews ? (
+              <TileNews base={base} symbol={coin.symbol} newsState={newsBySymbol[coin.symbol]} tick={tick} onRetry={onRetry} lines={fit.lines} />
             ) : null}
           </article>
         );
@@ -304,7 +345,22 @@ export default function News() {
     ["market"], (_key, signal) => api.newsMarket({ signal }), 1,
   );
   const marketState = marketStates.market;
-  const market = marketState?.data || null;
+  // 기사 사진(og:image)은 서버가 배경에서 채운다 — 아직이면 몇 번 더 조용히 받아 온다.
+  const [marketRefresh, setMarketRefresh] = useState({ data: null, attempts: 0 });
+  const market = marketRefresh.data || marketState?.data || null;
+  const imagesPending = market?.image_status === "pending" && marketRefresh.attempts < 3;
+  useEffect(() => {
+    if (!imagesPending) return undefined;
+    let alive = true;
+    const timer = window.setTimeout(() => {
+      api.newsMarket().then((next) => {
+        if (alive) setMarketRefresh((current) => ({ data: next, attempts: current.attempts + 1 }));
+      }).catch(() => {
+        if (alive) setMarketRefresh((current) => ({ ...current, attempts: current.attempts + 1 }));
+      });
+    }, 7_000);
+    return () => { alive = false; window.clearTimeout(timer); };
+  }, [imagesPending, marketRefresh.attempts]);
   const marketLoading = !marketState || ["queued", "loading"].includes(marketState.status);
   const marketError = marketState?.error || "";
   const [coins, setCoins] = useState([]);

@@ -3232,6 +3232,11 @@ def get_market_news() -> dict:
         # lost for the rest of the day and could not recover on the next read.
         raw.update(overview=result.get("overview"), ai=result.get("ai", False))
         _cache["market"] = (raw, day)
+    # 기사 이미지(og:image)는 배경에서 채운다 — 응답을 막지 않고, 준비되면 다음 읽기에 붙는다.
+    from . import news_images
+    result["image_status"] = news_images.attach(result["items"])
+    if result["image_status"] == "pending":
+        news_images.ensure_resolving(result["items"])
     return result
 
 

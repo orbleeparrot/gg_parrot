@@ -22,6 +22,8 @@ os.environ["WHALE_TRADE_EMBEDDED_ENABLED"] = "false"
 os.environ["POSITION_NEWS_BROWSER_ENRICHMENT_ENABLED"] = "false"
 os.environ["POSITION_NEWS_EXTRA_RSS_ENABLED"] = "false"
 os.environ["BINANCE_SQUARE_ENABLED"] = "false"
+# 기사 이미지 워커는 실제 네트워크를 쓴다 — 테스트 프로세스에서 백그라운드로 돌지 않게 끈다.
+os.environ["NEWS_IMAGES_DISABLED"] = "1"
 
 
 @pytest.fixture(scope="session", autouse=True)

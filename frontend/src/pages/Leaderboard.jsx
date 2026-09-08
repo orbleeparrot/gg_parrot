@@ -52,7 +52,6 @@ export default function Leaderboard() {
   const justRegistered = !!location.state?.justRegistered;
   useAuth(); // re-render on login/logout so gating reflects the current account
   const [items, setItems] = useState([]);
-  const [challenge, setChallenge] = useState(null); // 오늘의 AI 챌린지
   const [unlocking, setUnlocking] = useState(0); // entry id being unlocked
   const [deleting, setDeleting] = useState(0); // entry id being deleted
   const [remain, setRemain] = useState(0);
@@ -77,9 +76,10 @@ export default function Leaderboard() {
 
   // Poll live returns every 5s; tick the countdown every 1s locally.
   useAdaptivePolling(load, { intervalMs: 5_000, maxIntervalMs: 60_000 });
-  // Ensure + fetch today's AI challenge once (first call of the day generates it).
+  // 오늘의 AI 챌린지(매일 한 종목으로 AI 매크로 3개 자동 등록)는 첫 조회가 생성을 겸한다.
+  // 화면엔 라벨을 두지 않고 AI 배지로만 드러낸다.
   useEffect(() => {
-    api.challengeToday().then(setChallenge).catch(() => {});
+    api.challengeToday().catch(() => {});
   }, []);
   useEffect(() => {
     const t = setInterval(() => setRemain((r) => (r > 0 ? r - 1 : 0)), 1000);
@@ -169,11 +169,7 @@ export default function Leaderboard() {
 
   return (
     <div>
-      <PageHeader
-        eyebrow="매일 KST 00:00 초기화 · 상위 3등은 방어전"
-        title="오늘의 리더보드"
-        actions={<SimBadge className="lg:hidden" />}
-      />
+      <PageHeader title="오늘의 리더보드" actions={<SimBadge className="lg:hidden" />} />
 
       {quickRunMode ? (
         <div className="leaderboard-quick-run-callout" role="status">
@@ -192,21 +188,14 @@ export default function Leaderboard() {
         </div>
       ) : null}
 
-      {/* 한 줄 도구막대: 오늘의 AI 챌린지 · (오른쪽) 매크로 만들기 · 초기화 카운트다운 */}
+      {/* 도구막대 — 안내문은 두지 않는다. 초기화 시각은 카운트다운이, 방어전은 1~3위 배지가 말한다. */}
       <div className="lb-toolbar">
-        <div className="lb-toolbar-left t-small text-slate-700">
-          {challenge?.active && challenge.symbol ? (
-            <><b className="text-slate-900">오늘의 AI 챌린지</b> · <b className="text-slate-900 num">{challenge.symbol.replace(/USDT$/, "")}</b></>
-          ) : null}
-        </div>
-        <div className="lb-toolbar-right">
-          <button onClick={() => navigate("/builder?guide=1")} className="btn btn-m btn-primary">
-            매크로 만들기
-          </button>
-          <span className="lb-countdown t-small text-slate-500">
-            리더보드 초기화 <span className="num text-slate-900">{fmtCountdown(remain)}</span>
-          </span>
-        </div>
+        <button onClick={() => navigate("/builder?guide=1")} className="btn btn-m btn-primary">
+          매크로 만들기
+        </button>
+        <span className="lb-countdown t-small text-slate-500">
+          리더보드 초기화 <span className="num text-slate-900">{fmtCountdown(remain)}</span>
+        </span>
       </div>
 
       {busy && <Loading />}
@@ -217,144 +206,133 @@ export default function Leaderboard() {
         </EmptyState>
       )}
 
-      {/* board-row: 카드 대신 캔버스 위 괘선 리스트. 순위+종목 로고+이름/설명 스택.
-          보드 폭은 1120px 로 묶어 이름→수익률→액션의 시선 이동을 짧게 하고, 넓은 화면에선
-          액션 무리가 우하단 채팅 버튼과 겹치지 않게 한다. 1·2·3위 숫자는 금·은·동. */}
-      <div className="lb-board">
-        {items.map((e, idx) => {
-          const r = ret(e);
-          const first = idx === 0;
-          // 아바타 자리를 종목 로고로 바꾼다 — 목록을 훑을 때 '누가 올렸나'보다
-          // '무슨 코인인가'가 먼저 눈에 들어와야 고르기 쉽다.
-          return (
-            <div
-              key={e.id}
-              id={`leaderboard-entry-${e.id}`}
-              tabIndex={registeredId === e.id ? -1 : undefined}
-              className={
-                "py-4 border-b border-slate-200 last:border-0 flex items-center gap-3 sm:gap-4 flex-wrap " +
-                (registeredId === e.id ? "border-l-2 border-l-brand pl-3" : "")
-              }
-            >
-              <div className={`lb-rank w-7 shrink-0 text-center t-h4 num is-${idx + 1}`}>{idx + 1}</div>
-              <CoinIcon symbol={e.symbol} size={36} className={"shrink-0" + (first ? " is-first" : "")} alt="" />
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-x-2 gap-y-1 flex-wrap">
-                  {e.crown && <span className="badge badge-flat" title="판매·좋아요 상위">인기 셀러</span>}
-                  {/* AI bots carry their own numbered name (껄무새1호기봇 …) — use
-                      the stored username rather than a hardcoded label. */}
-                  <span className="t-title text-slate-900 truncate">{e.username || e.nickname}</span>
-                  {e.is_ai && <span className="badge badge-ai">AI</span>}
-                  {(e.is_owner || e.is_mine) && <span className="badge badge-mine">내 것</span>}
-                  {e.macro?.leverage > 1 && (
-                    <span className="badge badge-risk" title="고위험 레버리지 전략">
-                      고위험 · {e.macro.leverage}배
-                    </span>
-                  )}
-                  {/* 초기화를 넘기고 살아남은 매크로 — 며칠째 버티는지가 곧 실력이다. */}
-                  {e.defending && (
-                    <span className="badge badge-streak" title={`${e.first_created_kst} 등록 이후 초기화 없이 상위권을 지키는 중 · 수익률도 그때부터 이어져요`}>
-                      {e.streak_days}일째 순위권 방어중
-                    </span>
-                  )}
-                  <span className="t-caption text-slate-500">
-                    {e.defending ? `· ${e.first_created_kst} 등록` : `· 오늘 ${e.created_kst} 등록`}
-                  </span>
-                </div>
-                {e.locked ? (
-                  <div className="mt-1 t-small text-slate-500 truncate">잠김 · 언락하면 전략과 설정이 공개돼요</div>
-                ) : (
-                  <div className="mt-1 t-small text-slate-700 truncate">{e.human_summary}</div>
-                )}
-              </div>
-
-              <div className={"w-24 shrink-0 text-right t-h4 num " + r.cls}>{r.text}</div>
-
-              {/* Five action buttons never fit beside the summary on a phone —
-                  give them their own full-width row below it.
-                  투표는 다중 선택이 아닌 토글이라 chip 규격을 쓰되, 상승/하락색으로
-                  채우지 않는다(§2-1: 등락색은 글자 색으로만). */}
-              <div className="lb-actions">
-                <button
-                  onClick={() => vote(e.id, 1)}
-                  className={"lb-vote" + (e.my_vote === 1 ? " is-on" : "")}
-                  title="좋아요"
-                  aria-label={`좋아요 ${e.likes}`}
-                  aria-pressed={e.my_vote === 1}
-                >
-                  <ThumbUpIcon /><span className="num">{e.likes}</span>
-                </button>
-                <button
-                  onClick={() => vote(e.id, -1)}
-                  className={"lb-vote" + (e.my_vote === -1 ? " is-on" : "")}
-                  title="싫어요"
-                  aria-label={`싫어요 ${e.dislikes}`}
-                  aria-pressed={e.my_vote === -1}
-                >
-                  <ThumbDownIcon /><span className="num">{e.dislikes}</span>
-                </button>
-                {e.locked ? (
-                  // 행마다 노란 버튼을 두면 화면에 노랑이 열 개가 된다 —
-                  // 페이지의 primary 는 상단 '등록' 하나뿐이라 여기는 secondary.
-                  <button
-                    onClick={() => unlock(e)}
-                    disabled={unlocking === e.id}
-                    className="btn btn-s btn-secondary font-bold"
-                    title="포인트를 써서 매크로 공개+복사 (창작자에게 70% 적립)"
-                  >
-                    {unlocking === e.id ? "여는 중…" : quickRunMode ? <>언락 후 사용 · <span className="num">{e.unlock_price}P</span></> : <>언락 <span className="num">{e.unlock_price}P</span></>}
-                  </button>
-                ) : quickRunMode ? (
-                  <button
-                    onClick={() => useForQuickRun(e)}
-                    disabled={unlocking === e.id}
-                    className="btn btn-s btn-secondary"
-                    title="이 매크로를 빠른 실행에 연결"
-                  >
-                    {unlocking === e.id ? "저장 중…" : "이 매크로 사용"}
-                  </button>
-                ) : (
-                  <button
-                    onClick={() => copyToBuilder(e)}
-                    disabled={unlocking === e.id}
-                    className="lb-icon-btn"
-                    title="빌더로 복사"
-                    aria-label="빌더로 복사"
-                  >
-                    <CopyIcon />
-                  </button>
-                )}
-                {(e.is_owner || (e.is_mine && !e.for_sale)) && (
-                  <button
-                    onClick={() => setModal({ edit: e })}
-                    className="btn btn-s btn-secondary"
-                    title={e.is_owner ? "내 매크로 수정" : "비밀번호 확인 후 수정"}
-                  >
-                    수정
-                  </button>
-                )}
-                {e.is_owner && (
-                  <button
-                    onClick={() => remove(e)}
-                    disabled={deleting === e.id}
-                    className="btn btn-s btn-secondary text-red-600 hover:text-red-700"
-                    title="내 매크로 삭제"
-                  >
-                    {deleting === e.id ? "삭제 중…" : "삭제"}
-                  </button>
-                )}
-              </div>
-            </div>
-          );
-        })}
-        {/* 목록의 실제 종결 요소 — 마지막 행이 화면 바닥·채팅 버튼에 붙지 않게 한다. */}
-        {!busy && items.length > 0 ? (
-          <div className="lb-end" aria-label="리더보드 끝">
-            <span>오늘 <span className="num">{items.length}</span>개 · 자정에 초기화</span>
-            <span>상위 3등은 수익률 그대로 방어전</span>
+      {/* board — 전체 폭을 쓰는 괘선 표(§1-3 카드 없음, §5 폭 제한 없음).
+          순위 | 로고 | 매크로(이름·배지·등록) | 전략 | 수익률 | 반응. 넓은 화면에선 전략이
+          자기 열을 갖고, 좁아지면 이름 아래로 내려온다. 1·2·3위는 금·은·동 + '방어전' 배지. */}
+      {!busy && items.length > 0 ? (
+        <div className="lb-board" role="table" aria-label="오늘의 리더보드">
+          <div className="lb-row lb-row-head" role="row">
+            <span role="columnheader" className="lb-col-rank">순위</span>
+            <span aria-hidden="true" className="lb-col-coin" />
+            <span role="columnheader" className="lb-col-name">매크로</span>
+            <span role="columnheader" className="lb-col-summary">전략</span>
+            <span role="columnheader" className="lb-col-return">수익률</span>
+            <span role="columnheader" className="lb-col-actions">반응</span>
           </div>
-        ) : null}
-      </div>
+          {items.map((e, idx) => {
+            const r = ret(e);
+            const top3 = idx < 3;
+            return (
+              <div
+                key={e.id}
+                id={`leaderboard-entry-${e.id}`}
+                tabIndex={registeredId === e.id ? -1 : undefined}
+                className={`lb-row${registeredId === e.id ? " is-registered" : ""}`}
+                role="row"
+              >
+                <div className={`lb-rank num is-${idx + 1}`} role="cell">{idx + 1}</div>
+                <CoinIcon symbol={e.symbol} size={36} className="lb-coin" alt="" />
+                <div className="lb-name" role="cell">
+                  <div className="lb-name-line">
+                    <span className="lb-title">{e.username || e.nickname}</span>
+                    {e.is_ai && <span className="badge badge-ai">AI</span>}
+                    {(e.is_owner || e.is_mine) && <span className="badge badge-mine">내 것</span>}
+                    {top3 && (
+                      <span
+                        className="badge badge-streak"
+                        title={e.defending
+                          ? `${e.first_created_kst} 등록 이후 초기화 없이 상위권을 지키는 중 · 수익률도 그때부터 이어져요`
+                          : "자정 초기화 뒤에도 수익률을 그대로 들고 다음 날 방어전을 치러요"}
+                      >
+                        {e.defending ? `방어전 · ${e.streak_days}일째` : "방어전"}
+                      </span>
+                    )}
+                    {e.macro?.leverage > 1 && (
+                      <span className="badge badge-risk" title="고위험 레버리지 전략">고위험 · {e.macro.leverage}배</span>
+                    )}
+                    {e.crown && <span className="badge badge-flat" title="판매·좋아요 상위">인기 셀러</span>}
+                  </div>
+                  <div className="lb-meta t-caption text-slate-500">
+                    {e.defending ? `${e.first_created_kst} 등록` : `오늘 ${e.created_kst} 등록`}
+                  </div>
+                </div>
+                <div className={`lb-summary${e.locked ? " is-locked" : ""}`} role="cell">
+                  {e.locked ? "잠김 · 언락하면 전략과 설정이 공개돼요" : e.human_summary}
+                </div>
+                <div className={"lb-return num " + r.cls} role="cell">{r.text}</div>
+                <div className="lb-actions" role="cell">
+                  <button
+                    onClick={() => vote(e.id, 1)}
+                    className={"lb-vote" + (e.my_vote === 1 ? " is-on" : "")}
+                    title="좋아요"
+                    aria-label={`좋아요 ${e.likes}`}
+                    aria-pressed={e.my_vote === 1}
+                  >
+                    <ThumbUpIcon /><span className="num">{e.likes}</span>
+                  </button>
+                  <button
+                    onClick={() => vote(e.id, -1)}
+                    className={"lb-vote" + (e.my_vote === -1 ? " is-on" : "")}
+                    title="싫어요"
+                    aria-label={`싫어요 ${e.dislikes}`}
+                    aria-pressed={e.my_vote === -1}
+                  >
+                    <ThumbDownIcon /><span className="num">{e.dislikes}</span>
+                  </button>
+                  {e.locked ? (
+                    <button
+                      onClick={() => unlock(e)}
+                      disabled={unlocking === e.id}
+                      className="btn btn-s btn-secondary font-bold"
+                      title="포인트를 써서 매크로 공개+복사 (창작자에게 70% 적립)"
+                    >
+                      {unlocking === e.id ? "여는 중…" : quickRunMode ? <>언락 후 사용 · <span className="num">{e.unlock_price}P</span></> : <>언락 <span className="num">{e.unlock_price}P</span></>}
+                    </button>
+                  ) : quickRunMode ? (
+                    <button
+                      onClick={() => useForQuickRun(e)}
+                      disabled={unlocking === e.id}
+                      className="btn btn-s btn-secondary"
+                      title="이 매크로를 빠른 실행에 연결"
+                    >
+                      {unlocking === e.id ? "저장 중…" : "이 매크로 사용"}
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => copyToBuilder(e)}
+                      disabled={unlocking === e.id}
+                      className="lb-icon-btn"
+                      title="빌더로 복사"
+                      aria-label="빌더로 복사"
+                    >
+                      <CopyIcon />
+                    </button>
+                  )}
+                  {(e.is_owner || (e.is_mine && !e.for_sale)) && (
+                    <button
+                      onClick={() => setModal({ edit: e })}
+                      className="btn btn-s btn-secondary"
+                      title={e.is_owner ? "내 매크로 수정" : "비밀번호 확인 후 수정"}
+                    >
+                      수정
+                    </button>
+                  )}
+                  {e.is_owner && (
+                    <button
+                      onClick={() => remove(e)}
+                      disabled={deleting === e.id}
+                      className="btn btn-s btn-secondary text-red-600 hover:text-red-700"
+                      title="내 매크로 삭제"
+                    >
+                      {deleting === e.id ? "삭제 중…" : "삭제"}
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
 
       {modal && (
         <RegisterMacroModal

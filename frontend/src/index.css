@@ -8325,73 +8325,72 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
  * 리더보드 채팅 — 우하단 원형 껄무새 버튼과 대화록 시트. 떠 있는 것이라 그림자를 쓴다(§6).
  * 말풍선·카드 없이 이름·시각·본문의 타이포로만 대화를 나눈다(§1-3). 하단 마퀴(56px) 위에 앉는다. */
 .chat-float {
-  --chat-disc: 30 35 41;                      /* 마스코트 원판 — 테마와 무관한 잉크색 */
+  --chat-disc: 30 35 41;                      /* 버튼 바탕 — 테마와 무관한 잉크색 */
   --chat-badge-ink: #fff;                     /* 빨간 배지 위 글자 — 테마와 무관 */
   --chat-ease: cubic-bezier(0.22, 0.61, 0.36, 1);
   --chat-dur: 180ms;
+  --chat-bar-h: 45px;                         /* 하단 '오늘의 경주마' 바: 44px + 위 괘선 */
   position: fixed;
-  right: 20px;
-  bottom: calc(56px + 16px + env(safe-area-inset-bottom));
-  z-index: 70;
+  right: var(--site-gutter, 22px);
+  bottom: env(safe-area-inset-bottom);
+  z-index: 30;                                /* 하단 바(z-20) 위, 모달(80+) 아래 */
+  height: var(--chat-bar-h);
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 12px;
+  align-items: center;
+  padding-left: 12px;
+  border-left: 1px solid rgb(var(--c-slate-200));
+  background-color: rgb(var(--glass-bg) / var(--glass-alpha));
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  backdrop-filter: saturate(180%) blur(20px);
 }
 
-/* 알약형 버튼 — 깃털과 'Chat' 이 한 줄에 맞는 폭. 잉크 바탕 위 노란 깃털·라벨. */
+/* 하단 바 안의 작은 알약 버튼 — 깃털 20px + 'Chat' 13px. 사이트 S 버튼(34px) 규격. */
 .chat-fab {
   position: relative;
-  height: 64px;
-  padding: 0 22px 0 12px;
+  height: 34px;
+  padding: 0 12px 0 8px;
   border: 0;
   border-radius: 999px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: 5px;
   background: rgb(var(--chat-disc));
-  /* surface 링 + 1px 슬레이트 테두리 — 다크에서 원판이 배경에 붙지 않게 */
-  box-shadow: 0 0 0 3px rgb(var(--c-surface)), 0 0 0 4px rgb(var(--c-slate-300)), 0 10px 28px rgba(0, 0, 0, 0.28);
   cursor: pointer;
-  overflow: visible;
-  transition: transform var(--chat-dur) var(--chat-ease), box-shadow var(--chat-dur) var(--chat-ease);
+  transition: transform 100ms var(--chat-ease), box-shadow var(--chat-dur) var(--chat-ease);
 }
 .chat-fab-label {
   color: rgb(var(--c-brand));
-  font-size: 17px;
+  font-size: 13px;
   line-height: 1;
   font-weight: 800;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.02em;
 }
 .chat-fab img {
   display: block;
-  width: 44px;
-  height: 44px;
+  width: 20px;
+  height: 20px;
   object-fit: contain;
   pointer-events: none;
   user-select: none;
 }
-.chat-fab:hover, .chat-fab.is-hover { transform: translateY(-2px); }
-.chat-fab:active:not(:disabled), .chat-fab.is-active { transform: translateY(0) scale(0.97); }
-.chat-fab:focus-visible, .chat-fab.is-focus {
-  outline: 3px solid rgb(var(--c-brand-line));
-  outline-offset: 4px;
-}
-.chat-fab.is-open { box-shadow: 0 0 0 3px rgb(var(--c-surface)), 0 0 0 5px rgb(var(--c-brand)), 0 10px 28px rgba(0, 0, 0, 0.28); }
-.chat-fab.has-news { box-shadow: 0 0 0 3px rgb(var(--c-surface)), 0 0 0 5px rgb(var(--c-red-600) / 0.55), 0 10px 28px rgba(0, 0, 0, 0.28); }
+.chat-fab:hover, .chat-fab.is-hover { filter: brightness(1.15); }
+.chat-fab:active:not(:disabled), .chat-fab.is-active { transform: scale(0.97); }
+.chat-fab:focus-visible, .chat-fab.is-focus { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
+.chat-fab.is-open { box-shadow: 0 0 0 2px rgb(var(--c-brand)); }
+.chat-fab.has-news { box-shadow: 0 0 0 2px rgb(var(--c-red-600) / 0.55); }
 .chat-fab-badge {
   position: absolute;
-  top: -8px;
-  right: -10px;
-  height: 22px;
-  padding: 0 8px;
+  top: -9px;
+  right: -8px;
+  height: 18px;
+  padding: 0 6px;
   display: inline-flex;
   align-items: center;
   border-radius: 999px;
   background: rgb(var(--c-red-600));
   color: var(--chat-badge-ink);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 800;
   white-space: nowrap;
   box-shadow: 0 0 0 2px rgb(var(--c-surface));
@@ -8399,8 +8398,12 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 
 /* 대화록 시트 */
 .chat-sheet {
-  width: min(440px, calc(100vw - 40px));
-  height: min(700px, calc(100vh - 56px - 120px));
+  position: absolute;
+  right: 0;
+  bottom: calc(var(--chat-bar-h) + 10px);
+  width: min(360px, calc(100vw - 2 * var(--site-gutter, 22px)));
+  /* 상단바·하단 바를 뺀 범위 안에서만 — 헤더를 침범하지 않는다 */
+  height: min(560px, calc(100dvh - var(--site-topbar-h, 64px) - var(--chat-bar-h) - 28px));
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto auto;
   border-radius: 20px;
@@ -8424,7 +8427,7 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 .chat-head-title h3 {
   margin: 0;
   color: rgb(var(--c-slate-900));
-  font-size: 17px;
+  font-size: 16px;
   line-height: 1.25;
   font-weight: 800;
   letter-spacing: -0.015em;
@@ -8622,11 +8625,7 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 .chat-helper.is-error { color: rgb(var(--c-red-600)); font-weight: 650; }
 
 @media (max-width: 640px) {
-  .chat-float { right: 14px; left: 14px; align-items: stretch; }
-  .chat-fab { height: 56px; padding: 0 18px 0 10px; align-self: flex-end; }
-  .chat-fab img { width: 38px; height: 38px; }
-  .chat-fab-label { font-size: 15px; }
-  .chat-sheet { width: auto; height: min(82vh, calc(100vh - 56px - 96px)); }
+  .chat-sheet { width: calc(100vw - 2 * var(--site-gutter, 16px)); height: min(70dvh, calc(100dvh - var(--site-topbar-h, 64px) - var(--chat-bar-h) - 24px)); }
 }
 @media (prefers-reduced-motion: reduce) {
   .chat-fab, .chat-fab img, .chat-close, .chat-field, .chat-name-chip, .chat-send { transition: none; }
@@ -8636,41 +8635,82 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   .chat-spinner { animation: none; border-color: rgb(var(--c-brand-ink)); border-top-color: transparent; }
 }
 
-/* 리더보드 보드 — 폭 1120px 로 묶어 시선 이동을 줄이고, 넓은 화면에선 행 액션이
-   우하단 채팅 버튼(right 20px)과 겹치지 않는다. 1·2·3위는 금·은·동(테마 무관 상수). */
+/* 리더보드 — 전체 폭을 쓰는 괘선 표(§1-3 카드 없음, §5 폭 제한 없음).
+   순위 | 로고 | 매크로 | 전략 | 수익률 | 반응. 1·2·3위는 금·은·동(테마 무관 상수). */
+.lb-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.lb-countdown { white-space: nowrap; }
 .lb-board {
   --lb-gold: 212 160 23;
   --lb-silver: 154 165 177;
   --lb-bronze: 184 115 51;
-  max-width: 1120px;
+  --lb-columns: 32px 36px minmax(220px, 1fr) minmax(0, 1.35fr) 104px auto;
+  --lb-areas: "rank coin name summary return actions";
 }
-.lb-toolbar {
-  display: flex;
+.lb-row {
+  display: grid;
+  grid-template-columns: var(--lb-columns);
+  grid-template-areas: var(--lb-areas);
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-  max-width: 1120px;
-  margin-bottom: 20px;
-  padding-bottom: 14px;
+  column-gap: 16px;
+  row-gap: 8px;
+  padding: 14px 0;
   border-bottom: 1px solid rgb(var(--c-slate-200));
 }
-.lb-toolbar-left { min-width: 0; }
-.lb-toolbar-right { display: flex; align-items: center; gap: 14px; margin-left: auto; flex-wrap: wrap; }
-.lb-countdown { white-space: nowrap; }
-.lb-rank { color: rgb(var(--c-slate-600)); }
+.lb-row:last-child { border-bottom: 0; }
+.lb-row.is-registered { box-shadow: inset 2px 0 0 rgb(var(--c-brand)); padding-left: 12px; }
+.lb-row-head {
+  padding: 8px 0 10px;
+  color: rgb(var(--c-slate-500));
+  font-size: 13px;
+  font-weight: 600;
+}
+.lb-col-rank, .lb-rank { grid-area: rank; }
+.lb-col-coin, .lb-coin { grid-area: coin; }
+.lb-col-name, .lb-name { grid-area: name; }
+.lb-col-summary, .lb-summary { grid-area: summary; }
+.lb-col-return, .lb-return { grid-area: return; }
+.lb-col-actions, .lb-actions { grid-area: actions; }
+.lb-col-rank { text-align: center; }
+.lb-col-return, .lb-col-actions { text-align: right; }
+.lb-rank { text-align: center; font-size: 20px; font-weight: 800; color: rgb(var(--c-slate-600)); }
 .lb-rank.is-1 { color: rgb(var(--lb-gold)); }
 .lb-rank.is-2 { color: rgb(var(--lb-silver)); }
 .lb-rank.is-3 { color: rgb(var(--lb-bronze)); }
-.lb-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 6px;
-  flex-wrap: wrap;
-  width: 100%;
+.lb-coin { justify-self: center; }
+.lb-name { min-width: 0; }
+.lb-name-line { display: flex; align-items: center; gap: 6px 8px; flex-wrap: wrap; min-width: 0; }
+.lb-title {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgb(var(--c-slate-900));
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
 }
-@media (min-width: 640px) { .lb-actions { width: auto; } }
+.lb-meta { margin-top: 2px; }
+.lb-summary {
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  color: rgb(var(--c-slate-700));
+  font-size: 14px;
+  line-height: 1.45;
+  font-weight: 500;
+}
+.lb-summary.is-locked { color: rgb(var(--c-slate-500)); }
+.lb-return { text-align: right; font-size: 16px; font-weight: 700; white-space: nowrap; }
+.lb-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
 .lb-vote {
   display: inline-flex;
   align-items: center;
@@ -8705,18 +8745,20 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 }
 .lb-icon-btn:hover:not(:disabled) { background: rgb(var(--c-slate-200)); color: rgb(var(--c-slate-900)); }
 .lb-icon-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-/* 목록 끝 — 실제 종결 요소. 높이만큼 마지막 행이 채팅 버튼 위로 올라온다. */
-.lb-end {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-  min-height: 96px;
-  margin-top: 4px;
-  padding: 18px 0 24px;
-  border-top: 1px solid rgb(var(--c-slate-200));
-  color: rgb(var(--c-slate-500));
-  font-size: 12px;
-  font-weight: 600;
+@media (max-width: 1099px) {
+  /* 전략이 이름 아래로 내려온다 — 배치는 영역으로 못 박는다 */
+  .lb-board {
+    --lb-columns: 28px 36px minmax(0, 1fr) 96px auto;
+    --lb-areas: "rank coin name return actions" "rank coin summary summary summary";
+  }
+  .lb-row-head { grid-template-areas: "rank coin name return actions"; }
+  .lb-row-head .lb-col-summary { display: none; }
+}
+@media (max-width: 639px) {
+  .lb-board {
+    --lb-columns: 24px 36px minmax(0, 1fr) 84px;
+    --lb-areas: "rank coin name return" "rank coin summary summary" "actions actions actions actions";
+  }
+  .lb-actions { justify-content: flex-start; }
+  .lb-row-head { display: none; }
 }

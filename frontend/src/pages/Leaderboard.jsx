@@ -11,6 +11,30 @@ import { useAuth, isLoggedIn, getAuthUser, updateAuthUser } from "../lib/auth.js
 import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 
 const pad = (n) => String(n).padStart(2, "0");
+
+// 행 액션 아이콘 — 글자 버튼 셋이 오른쪽 끝에 몰리지 않게 아이콘으로 줄인다.
+function ThumbUpIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.3a2 2 0 0 0 2-1.7l1.4-9a2 2 0 0 0-2-2.3H14zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3" />
+    </svg>
+  );
+}
+function ThumbDownIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.7a2 2 0 0 0-2 1.7l-1.4 9a2 2 0 0 0 2 2.3H10zM17 2h2.7a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H17" />
+    </svg>
+  );
+}
+function CopyIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <rect x="9" y="9" width="13" height="13" rx="2" />
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+    </svg>
+  );
+}
 const fmtCountdown = (s) => `${pad(Math.floor(s / 3600))}:${pad(Math.floor((s % 3600) / 60))}:${pad(s % 60)}`;
 
 function ret(e) {
@@ -148,7 +172,6 @@ export default function Leaderboard() {
       <PageHeader
         eyebrow="매일 KST 00:00 초기화 · 상위 3등은 방어전"
         title="오늘의 리더보드"
-        description="실시간 모의(페이퍼) 수익률과 좋아요로 겨루는 오늘의 보드예요. 자정에 초기화되지만 상위 3등은 등록한 때부터의 수익률을 그대로 들고 다음 날로 이어져 방어전을 치러요. 좋아요·수익률은 참고용이고 매수 추천이 아니에요."
         actions={<SimBadge className="lg:hidden" />}
       />
 
@@ -169,25 +192,22 @@ export default function Leaderboard() {
         </div>
       ) : null}
 
-      {/* countdown + register */}
-      <div className="flex items-center justify-between flex-wrap gap-3 mb-6 pb-4 border-b border-slate-200">
-        <div className="t-small text-slate-700">
-          리더보드 초기화까지{" "}
-          <span className="t-title num text-slate-900">{fmtCountdown(remain)}</span>{" "}
-          <span className="text-slate-500">남음 (상위 3등은 수익률까지 그대로 다음 날로 이어져요)</span>
+      {/* 한 줄 도구막대: 오늘의 AI 챌린지 · (오른쪽) 매크로 만들기 · 초기화 카운트다운 */}
+      <div className="lb-toolbar">
+        <div className="lb-toolbar-left t-small text-slate-700">
+          {challenge?.active && challenge.symbol ? (
+            <><b className="text-slate-900">오늘의 AI 챌린지</b> · <b className="text-slate-900 num">{challenge.symbol.replace(/USDT$/, "")}</b></>
+          ) : null}
         </div>
-        <button onClick={() => navigate("/builder?guide=1")} className="btn btn-m btn-primary">
-          매크로 만들기
-        </button>
+        <div className="lb-toolbar-right">
+          <button onClick={() => navigate("/builder?guide=1")} className="btn btn-m btn-primary">
+            매크로 만들기
+          </button>
+          <span className="lb-countdown t-small text-slate-500">
+            리더보드 초기화 <span className="num text-slate-900">{fmtCountdown(remain)}</span>
+          </span>
+        </div>
       </div>
-
-      {challenge?.active && challenge.symbol && (
-        <div className="notice mb-4">
-          <div className="t-small text-slate-700">
-            <b className="text-slate-900">오늘의 AI 챌린지</b> — AI가 <b className="text-slate-900">{challenge.symbol.replace(/USDT$/, "")}</b>로 짠 매크로 3개가 리더보드에 있어요. 나만의 매크로를 등록해 수익률을 겨뤄봐요.
-          </div>
-        </div>
-      )}
 
       {busy && <Loading />}
       {error && <ErrorNote>오류: {error}</ErrorNote>}
@@ -197,9 +217,10 @@ export default function Leaderboard() {
         </EmptyState>
       )}
 
-      {/* board-row: 카드 대신 캔버스 위 괘선 리스트. 순위+아바타+이름/설명 스택,
-          1위만 아바타를 브랜드색으로 채우고 순위 숫자를 강조색으로 뒤집는다. */}
-      <div>
+      {/* board-row: 카드 대신 캔버스 위 괘선 리스트. 순위+종목 로고+이름/설명 스택.
+          보드 폭은 1120px 로 묶어 이름→수익률→액션의 시선 이동을 짧게 하고, 넓은 화면에선
+          액션 무리가 우하단 채팅 버튼과 겹치지 않게 한다. 1·2·3위 숫자는 금·은·동. */}
+      <div className="lb-board">
         {items.map((e, idx) => {
           const r = ret(e);
           const first = idx === 0;
@@ -215,7 +236,7 @@ export default function Leaderboard() {
                 (registeredId === e.id ? "border-l-2 border-l-brand pl-3" : "")
               }
             >
-              <div className={"w-6 shrink-0 text-center t-h4 num " + (first ? "text-slate-900" : "text-slate-600")}>{idx + 1}</div>
+              <div className={`lb-rank w-7 shrink-0 text-center t-h4 num is-${idx + 1}`}>{idx + 1}</div>
               <CoinIcon symbol={e.symbol} size={36} className={"shrink-0" + (first ? " is-first" : "")} alt="" />
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-x-2 gap-y-1 flex-wrap">
@@ -253,22 +274,24 @@ export default function Leaderboard() {
                   give them their own full-width row below it.
                   투표는 다중 선택이 아닌 토글이라 chip 규격을 쓰되, 상승/하락색으로
                   채우지 않는다(§2-1: 등락색은 글자 색으로만). */}
-              <div className="flex items-center gap-2 flex-wrap w-full sm:w-auto justify-end">
+              <div className="lb-actions">
                 <button
                   onClick={() => vote(e.id, 1)}
-                  className={"chip num " + (e.my_vote === 1 ? "border-slate-300 bg-slate-100 text-slate-900" : "")}
+                  className={"lb-vote" + (e.my_vote === 1 ? " is-on" : "")}
                   title="좋아요"
+                  aria-label={`좋아요 ${e.likes}`}
                   aria-pressed={e.my_vote === 1}
                 >
-                  좋아요 {e.likes}
+                  <ThumbUpIcon /><span className="num">{e.likes}</span>
                 </button>
                 <button
                   onClick={() => vote(e.id, -1)}
-                  className={"chip num " + (e.my_vote === -1 ? "border-slate-300 bg-slate-100 text-slate-900" : "")}
+                  className={"lb-vote" + (e.my_vote === -1 ? " is-on" : "")}
                   title="싫어요"
+                  aria-label={`싫어요 ${e.dislikes}`}
                   aria-pressed={e.my_vote === -1}
                 >
-                  싫어요 {e.dislikes}
+                  <ThumbDownIcon /><span className="num">{e.dislikes}</span>
                 </button>
                 {e.locked ? (
                   // 행마다 노란 버튼을 두면 화면에 노랑이 열 개가 된다 —
@@ -281,14 +304,24 @@ export default function Leaderboard() {
                   >
                     {unlocking === e.id ? "여는 중…" : quickRunMode ? <>언락 후 사용 · <span className="num">{e.unlock_price}P</span></> : <>언락 <span className="num">{e.unlock_price}P</span></>}
                   </button>
-                ) : (
+                ) : quickRunMode ? (
                   <button
-                    onClick={() => quickRunMode ? useForQuickRun(e) : copyToBuilder(e)}
+                    onClick={() => useForQuickRun(e)}
                     disabled={unlocking === e.id}
                     className="btn btn-s btn-secondary"
-                    title={quickRunMode ? "이 매크로를 빠른 실행에 연결" : "이 매크로를 빌더로 복사"}
+                    title="이 매크로를 빠른 실행에 연결"
                   >
-                    {quickRunMode ? (unlocking === e.id ? "저장 중…" : "이 매크로 사용") : "빌더로 복사"}
+                    {unlocking === e.id ? "저장 중…" : "이 매크로 사용"}
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => copyToBuilder(e)}
+                    disabled={unlocking === e.id}
+                    className="lb-icon-btn"
+                    title="빌더로 복사"
+                    aria-label="빌더로 복사"
+                  >
+                    <CopyIcon />
                   </button>
                 )}
                 {(e.is_owner || (e.is_mine && !e.for_sale)) && (
@@ -314,6 +347,13 @@ export default function Leaderboard() {
             </div>
           );
         })}
+        {/* 목록의 실제 종결 요소 — 마지막 행이 화면 바닥·채팅 버튼에 붙지 않게 한다. */}
+        {!busy && items.length > 0 ? (
+          <div className="lb-end" aria-label="리더보드 끝">
+            <span>오늘 <span className="num">{items.length}</span>개 · 자정에 초기화</span>
+            <span>상위 3등은 수익률 그대로 방어전</span>
+          </div>
+        ) : null}
       </div>
 
       {modal && (

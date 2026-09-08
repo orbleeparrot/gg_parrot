@@ -161,3 +161,48 @@ def test_existing_cli_registers_all_deployments_in_shared_runner_supervisor(monk
         "app.workflows.position_news.collect_position_news_flow",
         "app.workflows.position_news.coindesk_source_probe_flow",
     ]
+
+
+def test_default_supervisor_uses_lightweight_whale_slot(monkeypatch):
+    from prefect import runner as prefect_runner
+    from app.workflows import lightweight_collectors
+    handlers, _ = _signals(monkeypatch)
+    async def on_start(runner, instances):
+        if runner.settings['name'] == 'gg-parrot-whales':
+            handlers[signal.SIGTERM](signal.SIGTERM, None)
+    factory, instances = _runner_factory(on_start=on_start)
+    selected = []
+    def news_factory(**kwargs):
+        selected.append('news_process')
+        return factory(**kwargs)
+    def whale_factory(**kwargs):
+        selected.append('whale_thread')
+        return factory(**kwargs)
+    monkeypatch.setattr(prefect_runner, 'Runner', news_factory)
+    monkeypatch.setattr(lightweight_collectors, 'LightweightCollectorRunner', whale_factory)
+    agent_collectors.serve_collectors(['news'], ['whale', 'onchain'], poll_seconds=.001, shutdown_seconds=1)
+    assert selected == ['news_process', 'whale_thread']
+    assert len(instances) == 2
+
+
+def test_queue_cleanup_precedes_start_and_background_cleanup_is_drained(monkeypatch):
+    from uuid import uuid4
+    identity, events = uuid4(), []
+    async def queue_pass(ids, **kwargs):
+        events.append(('cleanup', ids, kwargs['max_lag_seconds']))
+    async def maintain(ids, **kwargs):
+        try:
+            events.append(('maintenance', ids))
+            await asyncio.Event().wait()
+        finally:
+            events.append(('drained', ids))
+    class Runner:
+        async def aadd_deployment(self, deployment):
+            return identity
+        async def start(self):
+            events.append(('start',))
+            await asyncio.sleep(.01)
+    monkeypatch.setattr(agent_collectors, '_queue_pass', queue_pass)
+    monkeypatch.setattr(agent_collectors, '_maintain_queue', maintain)
+    asyncio.run(agent_collectors._register_and_start(Runner(), ['news'], max_lag_seconds=600))
+    assert events == [('cleanup', [identity], 600), ('start',), ('maintenance', [identity]), ('drained', [identity])]

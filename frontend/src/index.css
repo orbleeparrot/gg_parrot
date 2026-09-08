@@ -5036,7 +5036,7 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 .page-head-lead-first {
   margin: 0;
   max-width: 40ch;
-  color: rgb(var(--c-slate-900));
+  color: rgb(var(--c-brand-line)); /* 브랜드 노랑 — 라이트는 읽히는 금색(#a68000), 다크는 #fcd535 */
   font-size: clamp(19px, 17px + 0.5vw, 22px);
   line-height: 1.5;
   font-weight: 700;

@@ -161,6 +161,8 @@ _COIN_ALIASES = {
     "ZRO": ("layerzero", "layer zero", "레이어제로"),
     # Binance CHIPUSDT is USD.AI; semiconductor headlines rarely name the token.
     "CHIP": ("usd.ai", "usdai", "유에스디에이아이"),
+    # The project name is also a laboratory device; apply context rules below.
+    "CFG": ("centrifuge", "센트리퓨즈", "센트리퓨지"),
 }
 
 
@@ -191,6 +193,7 @@ _AMBIGUOUS_BARE_TICKERS = frozenset({
     "APT",
     "ARB",
     "ATOM",
+    "CFG",
     "DOT",
     "ETC",
     "FIL",
@@ -211,7 +214,7 @@ _AMBIGUOUS_BARE_TICKERS = frozenset({
 # Even uppercase spelling is ambiguous for these tickers. For example, SC is
 # also used by banks, subcutaneous medicines, and sweepstakes-casino credits.
 # Require a project name, crypto context, market pair, or trusted category.
-_CONTEXT_REQUIRED_TICKERS = frozenset({"MUBARAK", "SC", "T"})
+_CONTEXT_REQUIRED_TICKERS = frozenset({"CFG", "MUBARAK", "SC", "T"})
 _DYNAMIC_CONTEXT_TICKERS = frozenset({"ENA", "TAO", "TON", "TIA", "ZRO"})
 
 # These project names also occur as ordinary English words. Preserve the
@@ -220,6 +223,7 @@ _DYNAMIC_CONTEXT_TICKERS = frozenset({"ENA", "TAO", "TON", "TIA", "ZRO"})
 _CASE_SENSITIVE_PROJECT_ALIASES = {
     "T": ("Threshold Network", "tBTC"),
     "AVAX": ("Avalanche",),
+    "CFG": ("Centrifuge", "센트리퓨즈", "센트리퓨지"),
     "GRT": ("The Graph",),
     "IMX": ("Immutable",),
     "MKR": ("Maker",),
@@ -234,11 +238,18 @@ _CASE_SENSITIVE_PROJECT_ALIASES = {
 _STRONG_CASE_SENSITIVE_PROJECT_ALIASES = {
     "T": frozenset({"tBTC"}),
 }
+_CENTRIFUGE_CRYPTO_CONTEXT = (
+    r"\b(?:crypto(?:currency|currencies)?|blockchain|defi|rwa|tokens?|tokeniz\w*|"
+    r"on[ -]?chain|real[ -]world\s+assets?|clo|ethereum|polkadot|tinlake|anemoy|"
+    r"aave|morpho|stablecoins?|governance)\b|\bli\.fi\b|"
+    r"암호화폐|가상자산|블록체인|토큰|온체인|디파이|거버넌스|실물\s*자산"
+)
 _PROJECT_ALIAS_CONTEXT_PATTERNS = {
     "T": (
         r"\b(?:bitcoin|blockchain|crypto|dao|defi|token|wormhole)\b",
     ),
     "AVAX": (r"\b(?:blockchain|c-chain|subnets?|validators?)\b",),
+    "CFG": (_CENTRIFUGE_CRYPTO_CONTEXT,),
     "GRT": (
         r"\b(?:data service|graph protocol|indexing|query network|subgraphs?|web3 data)\b",
     ),
@@ -866,6 +877,14 @@ def _is_news_article_candidate(item: dict) -> bool:
         return False
     title = str(item.get("title") or "")
     source = str(item.get("source") or "").strip().casefold()
+    # Centrifuge's token shares its name with industrial/laboratory equipment.
+    # Apply this before localization too, so saved Google results are repaired.
+    if re.search(r"\bcentrifuges?\b", title, re.IGNORECASE) and re.search(
+        r"\b(?:decanter|sedimentation|plasma)\s+centrifuges?\b|"
+        r"\b(?:sludge\s+dewatering|isotope\s+enrichment|reproducibility\s+variable)\b",
+        title, re.IGNORECASE,
+    ) and not re.search(_CENTRIFUGE_CRYPTO_CONTEXT, title, re.IGNORECASE):
+        return False
     # CFG is also Citizens Financial Group's stock symbol. Its institutional
     # shareholding reports are unrelated to Centrifuge, even with a $CFG tag.
     if re.search(r"\bcitizens\s+financial\s+group\b", title, re.IGNORECASE) and not re.search(
@@ -2085,7 +2104,7 @@ _KO_NUMBER_UNITS = {
     "십": Decimal(10),
 }
 # 숫자 뒤에 붙는 단위 약어(200ms, 5km)는 숫자의 일부로 본다 — 영문 산문이 아니다.
-_NUMBER_UNIT_ABBREVIATIONS = r"(?:ms|km|kg|mg|hz|khz|mhz|ghz|kb|mb|gb|tb|bps|bp|tps|mph|x)"
+_NUMBER_UNIT_ABBREVIATIONS = r"(?:ms|km|kg|mg|hz|khz|mhz|ghz|kb|mb|gb|tb|bps|bp|tps|mph|h|x)"
 _NUMBER_TOKEN = re.compile(
     r"(?<![A-Za-z0-9])(?P<sign>[+-]?)(?P<currency>[$€£₩]?)"
     # Whitespace joins amount components only when both sides have Korean

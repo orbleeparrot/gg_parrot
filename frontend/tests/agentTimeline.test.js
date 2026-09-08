@@ -165,3 +165,25 @@ test("an untranslated article is first announced only when its Korean translatio
   assert.equal(state.events[0].title, translated.title);
   assert.equal(state.events[0].occurredAt, 1000);
 });
+
+test("historical articles keep identity and publication dates through polls and translation corrections", () => {
+  const article = { id: "archive", title: "과거 프로젝트 출시", is_historical: true, published: "2022-01-02T01:30:00Z" };
+  let state = advance(null, { featureStates: news([article]) });
+  for (let i = 0; i < 10; i++) {
+    state = advance(state, { featureStates: news([], 2000 + i) });
+    state = advance(state, { featureStates: news([{ ...article, title: "과거 프로젝트 출시 소식" }], 3000 + i) });
+  }
+  assert.equal(state.events.length, 1);
+  assert.equal(state.events[0].isHistorical, true);
+  assert.equal(state.events[0].notify, false);
+  assert.equal(state.events[0].publishedAt, Date.parse(article.published));
+  assert.equal(state.events[0].occurredAt, Date.parse(article.published));
+});
+
+test("a later verified publication date updates the label without creating another article", () => {
+  let state = advance(null, { featureStates: news([{ id: "undated", title: "과거 소식", is_historical: true }]) });
+  assert.equal(state.events[0].publishedAt, null);
+  state = advance(state, { featureStates: news([{ id: "undated", title: "과거 소식", is_historical: true, published: "2022-01-02T01:30:00Z" }]) });
+  assert.equal(state.events.length, 1);
+  assert.equal(state.events[0].publishedAt, Date.parse("2022-01-02T01:30:00Z"));
+});

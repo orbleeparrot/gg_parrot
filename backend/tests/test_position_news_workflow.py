@@ -48,6 +48,10 @@ class RecordingPruner:
         return Immediate(0)
 
 
+def _selection(*symbols, due=None):
+    return {"active_symbols": list(symbols), "due_symbols": list(symbols) if due is None else due}
+
+
 def _payload(symbol):
     return {
         "symbol": symbol,
@@ -66,7 +70,7 @@ def test_flow_uses_base_tickers_and_separates_model_stage(
     monkeypatch.setattr(
         workflow,
         "discover_tickers_task",
-        lambda: ["BTC", "ETH"],
+        lambda: _selection("BTC", "ETH"),
     )
     monkeypatch.setattr(
         workflow,
@@ -109,7 +113,7 @@ def test_flow_uses_base_tickers_and_separates_model_stage(
 def test_flow_with_no_active_tickers_skips_source_and_ai_but_prunes(monkeypatch):
     prune = RecordingPruner()
     monkeypatch.setattr(workflow, "_schedule_lag_seconds", lambda: 0.0)
-    monkeypatch.setattr(workflow, "discover_tickers_task", lambda: [])
+    monkeypatch.setattr(workflow, "discover_tickers_task", lambda: _selection())
     monkeypatch.setattr(workflow, "fetch_ticker_news_task", ForbiddenSubmitter())
     monkeypatch.setattr(workflow, "process_ticker_news_task", ForbiddenSubmitter())
     monkeypatch.setattr(workflow, "record_fetch_error_task", ForbiddenSubmitter())
@@ -118,9 +122,40 @@ def test_flow_with_no_active_tickers_skips_source_and_ai_but_prunes(monkeypatch)
     summary = workflow.collect_position_news_flow.fn()
 
     assert summary["ticker_count"] == 0
+    assert summary["active_ticker_count"] == 0
+    assert summary["due_ticker_count"] == 0
     assert summary["ai_budget_used"] == 0
     assert summary["items"] == []
     assert prune.calls == [30]
+
+
+def test_flow_reports_active_but_deferred_ticker_without_fetching(monkeypatch):
+    monkeypatch.setattr(workflow, "_schedule_lag_seconds", lambda: 0.0)
+    monkeypatch.setattr(workflow, "discover_tickers_task", lambda: _selection("CHIP", due=[]))
+    monkeypatch.setattr(workflow, "fetch_ticker_news_task", ForbiddenSubmitter())
+    monkeypatch.setattr(workflow, "process_ticker_news_task", ForbiddenSubmitter())
+    monkeypatch.setattr(workflow, "prune_snapshots_task", RecordingPruner())
+
+    summary = workflow.collect_position_news_flow.fn()
+
+    assert summary["active_ticker_count"] == 1
+    assert summary["due_ticker_count"] == 0
+    assert summary["ticker_count"] == 0
+    assert summary["ai_budget_used"] == 0
+
+
+def test_discovery_task_logs_active_and_due_assets(monkeypatch, capsys):
+    monkeypatch.setattr(workflow.repository, "discover_ticker_selection", lambda: {
+        "active": ["CHIP"], "eligible": ["CHIP"], "due": [],
+    })
+
+    assert workflow.discover_tickers_task.fn() == _selection("CHIP", due=[])
+
+    log = json.loads(capsys.readouterr().out)
+    assert log["event"] == "ticker_discovery"
+    assert log["active_ticker_count"] == 1
+    assert log["due_ticker_count"] == 0
+    assert log["active_symbols"] == ["CHIP"]
 
 
 def test_prefect_retry_and_timeout_metadata():
@@ -174,7 +209,7 @@ def test_flow_opens_source_circuit_and_skips_remaining_tickers(monkeypatch):
     monkeypatch.setattr(
         workflow,
         "discover_tickers_task",
-        lambda: ["BTC", "ETH", "SOL"],
+        lambda: _selection("BTC", "ETH", "SOL"),
     )
 
     fetches = []
@@ -239,7 +274,7 @@ def test_flow_opens_source_circuit_and_skips_remaining_tickers(monkeypatch):
 def test_flow_publishes_all_rss_before_browser_tasks_and_holds_leases(monkeypatch):
     monkeypatch.setenv("POSITION_NEWS_BROWSER_ENRICHMENT_ENABLED", "true")
     monkeypatch.setattr(workflow, "_schedule_lag_seconds", lambda: 0.0)
-    monkeypatch.setattr(workflow, "discover_tickers_task", lambda: ["BTC", "ETH"])
+    monkeypatch.setattr(workflow, "discover_tickers_task", lambda: _selection("BTC", "ETH"))
     events = []
     active = set()
     def claim(symbol):
@@ -276,7 +311,7 @@ def test_flow_publishes_all_rss_before_browser_tasks_and_holds_leases(monkeypatc
 def test_prefect_browser_can_recover_when_rss_is_down(monkeypatch):
     monkeypatch.setenv("POSITION_NEWS_BROWSER_ENRICHMENT_ENABLED", "true")
     monkeypatch.setattr(workflow, "_schedule_lag_seconds", lambda: 0.0)
-    monkeypatch.setattr(workflow, "discover_tickers_task", lambda: ["BTC"])
+    monkeypatch.setattr(workflow, "discover_tickers_task", lambda: _selection("BTC"))
     def fail(*_):
         raise RuntimeError("RSS unavailable")
     monkeypatch.setattr(workflow, "fetch_ticker_news_task", Submitter(fail))
@@ -376,7 +411,7 @@ def test_flow_processes_rss_once_and_retains_browser_outage_diagnostics(monkeypa
     monkeypatch.setenv("POSITION_NEWS_BROWSER_ENRICHMENT_ENABLED", "true")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key")
     monkeypatch.setattr(workflow, "_schedule_lag_seconds", lambda: 0.0)
-    monkeypatch.setattr(workflow, "discover_tickers_task", lambda: ["BTC"])
+    monkeypatch.setattr(workflow, "discover_tickers_task", lambda: _selection("BTC"))
     payload = _payload("BTC")
     events = []
     monkeypatch.setattr(workflow, "fetch_ticker_news_task", Submitter(lambda _: payload))
@@ -409,7 +444,7 @@ def test_flow_processes_rss_once_and_retains_browser_outage_diagnostics(monkeypa
 def test_flow_distinguishes_empty_primary_result_from_total_outage(monkeypatch, primary_available):
     monkeypatch.setenv("POSITION_NEWS_BROWSER_ENRICHMENT_ENABLED", "true")
     monkeypatch.setattr(workflow, "_schedule_lag_seconds", lambda: 0.0)
-    monkeypatch.setattr(workflow, "discover_tickers_task", lambda: ["BTC"])
+    monkeypatch.setattr(workflow, "discover_tickers_task", lambda: _selection("BTC"))
     payload = {"symbol": "BTC", "items": [], "sources": [
         {"name": "coindesk_news_api", "status": "empty" if primary_available else "error"}],
         "browser_enrichment": {"status": "error", "source_count": 2, "successful_sources": 0}}
@@ -616,7 +651,7 @@ def test_main_flow_passes_budget_through_task_and_collector_after_initial_rss(mo
     monkeypatch.setenv("POSITION_NEWS_BROWSER_ENRICHMENT_ENABLED", "true")
     monkeypatch.setenv("POSITION_NEWS_MAX_AI_ANALYSES_PER_RUN", "0")
     monkeypatch.setattr(workflow, "_schedule_lag_seconds", lambda: 0)
-    monkeypatch.setattr(workflow, "discover_tickers_task", lambda: ["CHIP"])
+    monkeypatch.setattr(workflow, "discover_tickers_task", lambda: _selection("CHIP"))
     events = []
     monkeypatch.setattr(workflow, "fetch_ticker_news_task", Submitter(
         lambda symbol: events.append("rss") or _payload(symbol)))
@@ -644,7 +679,7 @@ def test_flow_reserves_full_browser_budget_and_processing_time_after_initial_rss
     monkeypatch.setenv("POSITION_NEWS_MAX_CYCLE_SECONDS", "240")
     monkeypatch.setenv("POSITION_NEWS_BROWSER_ENRICHMENT_ENABLED", "true")
     monkeypatch.setattr(workflow, "_schedule_lag_seconds", lambda: 0)
-    monkeypatch.setattr(workflow, "discover_tickers_task", lambda: ["BTC"])
+    monkeypatch.setattr(workflow, "discover_tickers_task", lambda: _selection("BTC"))
     clock, events, releases = [0], [], []
     monkeypatch.setattr(workflow.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(workflow, "fetch_ticker_news_task", Submitter(lambda symbol: _payload(symbol)))

@@ -2,7 +2,7 @@ import { memo, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api.js";
 import useNewsBriefings from "../hooks/useNewsBriefings.js";
-import { hasPendingTranslation } from "../lib/newsBriefings.js";
+import { hasPendingTranslation, historicalNewsLabel } from "../lib/newsBriefings.js";
 import CoinIcon from "../components/CoinIcon.jsx";
 import NewsBriefingReader from "../components/NewsBriefingReader.jsx";
 import { AnnotatedText, TermChips } from "../components/NewsTerms.jsx";
@@ -93,7 +93,7 @@ function MarketBriefing({ market, loading, error }) {
       id: item.url || item.title,
       title: item.title,
       source: item.source,
-      time: item.published_display,
+      time: historicalNewsLabel(item) || item.published_display,
       url: item.url,
     })),
     [market],
@@ -157,6 +157,8 @@ const RacerNewsBriefing = memo(function RacerNewsBriefing({ coin, rank, newsStat
       id: item.url || item.title,
       title: item.title,
       source: item.source,
+      rowLabel: item.is_historical
+        ? `${historicalNewsLabel(item)} · ${item.source || "출처 미상"}` : undefined,
       time: item.published_display,
       url: item.url,
     })),

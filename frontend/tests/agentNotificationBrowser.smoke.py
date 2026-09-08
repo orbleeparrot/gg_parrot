@@ -209,7 +209,8 @@ def main():
         baseline = messages(page)
         assert len(baseline) == 1, baseline
         assert baseline[0]["title"] == fixture.news_items[0]["title"]
-        assert baseline[0]["occurredAt"], baseline
+        assert baseline[0]["occurredAt"] is None, baseline
+        expect(page.get_by_text("게시일 확인 불가", exact=True)).to_be_visible()
         # Put the reader above the bottom so actual new events have a visible
         # badge; routine polls must not increment that badge or move messages.
         page.get_by_role("log", name="에이전트 관측 기록").evaluate("""node => {

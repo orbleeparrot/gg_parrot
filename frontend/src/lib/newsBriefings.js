@@ -7,6 +7,15 @@ export function hasKoreanText(value) {
   return /[가-힣]/.test(String(value || ""));
 }
 
+export function historicalNewsLabel(item) {
+  if (!item?.is_historical) return "";
+  const published = typeof item.published === "number" ? item.published : Date.parse(item.published || "");
+  const date = new Date(published + 9 * 60 * 60 * 1000);
+  const label = Number.isFinite(published) && published > 0 && Number.isFinite(date.getTime())
+    ? date.toISOString().slice(0, 10).replaceAll("-", ".") : "게시일 확인 불가";
+  return `과거 기사 · ${label}`;
+}
+
 export function prepareNewsResponse(payload = {}) {
   const sourceItems = Array.isArray(payload.items) ? payload.items : [];
   // The API validates full translations. This also protects mixed-version

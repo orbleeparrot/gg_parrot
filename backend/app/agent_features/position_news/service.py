@@ -86,6 +86,7 @@ def build_position_news(
     analyzed_items = list(analysis.get("items") or [])
     items = []
     for index, raw in enumerate(raw_items):
+        is_historical = bool(raw.get("published")) and not news_mod._within_live_news_window(raw)
         assessed = (
             analyzed_items[index]
             if index < len(analyzed_items)
@@ -97,6 +98,10 @@ def build_position_news(
             else "unclear"
         )
         effect = classifier.position_effect(sentiment, side)
+        if is_historical:
+            # Background history is useful context, but not a fresh directional
+            # observation about the user's current position.
+            sentiment, effect = "unclear", "unclear"
         items.append(
             {
                 "id": _article_id(raw),
@@ -109,6 +114,7 @@ def build_position_news(
                 "source": str(raw.get("source") or ""),
                 "url": str(raw.get("url") or ""),
                 "published": raw.get("published"),
+                "is_historical": is_historical,
                 "asset_sentiment": sentiment,
                 "position_effect": effect,
                 "summary": str(
@@ -255,13 +261,19 @@ def get_position_news(session: dict, db: Session | None = None) -> dict:
         payload["overview"] = {"text": text, "scope": "headlines_only"}
     collection = dict(stored.get("collection") or {})
     last_success_ms = int(collection.get("last_success_ms") or 0)
-    age_ms = max(0, int(time.time() * 1000) - last_success_ms)
+    last_observed_ms = max(last_success_ms, int(collection.get("last_attempt_ms") or 0)
+                           if collection.get("status") == "empty" else 0)
+    age_ms = max(0, int(time.time() * 1000) - last_observed_ms)
     collection["freshness"] = (
         "stale"
-        if not last_success_ms or age_ms > _STALE_SECONDS * 1000
+        if not last_observed_ms or age_ms > _STALE_SECONDS * 1000
         else "fresh"
     )
-    collection["age_seconds"] = age_ms // 1000 if last_success_ms else None
+    collection["age_seconds"] = age_ms // 1000 if last_observed_ms else None
     collection["stale_after_seconds"] = _STALE_SECONDS
     payload["collection"] = collection
+    if not payload["items"] and not payload.get("translation", {}).get("pending_count") and collection.get("status") == "empty":
+        payload["analysis_status"] = "empty"
+        payload["overview"] = {"text": "관련 기사를 최대 5년 범위까지 확인했지만 아직 찾지 못했어요. 자동으로 다시 확인합니다.",
+                               "scope": "headlines_only"}
     return payload

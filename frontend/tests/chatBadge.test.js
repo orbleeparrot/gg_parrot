@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { badgeLabel, countUnseen, latestMessageId } from "../src/lib/chatBadge.js";
+import { badgeLabel, countUnseen, firstUnseenId, latestMessageId } from "../src/lib/chatBadge.js";
 
 const items = [{ id: 11 }, { id: 12 }, { id: 15 }];
 
@@ -18,4 +18,10 @@ test("the badge reads as a count plus 'new' and caps at 99+", () => {
   assert.equal(badgeLabel(0), "");
   assert.equal(badgeLabel(3), "3 new");
   assert.equal(badgeLabel(140), "99+ new");
+});
+
+test("the new-message divider sits before the first unseen message", () => {
+  assert.equal(firstUnseenId(items, 11), 12);
+  assert.equal(firstUnseenId(items, 15), null);
+  assert.equal(firstUnseenId(items, null), null);
 });

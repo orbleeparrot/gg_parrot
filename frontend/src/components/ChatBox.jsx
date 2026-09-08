@@ -1,37 +1,53 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useId, useRef, useState } from "react";
 import { api } from "../api.js";
 import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 import { getNickname, setNickname } from "../lib/user.js";
-import { badgeLabel, countUnseen, latestMessageId, readSeenId, writeSeenId } from "../lib/chatBadge.js";
+import {
+  badgeLabel,
+  countUnseen,
+  firstUnseenId,
+  latestMessageId,
+  readSeenId,
+  writeSeenId,
+} from "../lib/chatBadge.js";
 
-// 리더보드 채팅 — 우하단에 떠 있는 버튼으로 연다. 목록이 길어져도 항상 손에 닿고,
-// 닫혀 있는 동안 도착한 메시지는 'N new' 배지로 알린다. 매일 KST 00:00 초기화.
+// 리더보드 채팅 — 우하단 원형 껄무새 버튼으로 여는 대화록. 목록이 길어도 항상 손에 닿고,
+// 닫혀 있는 동안 도착한 메시지는 'N new' 배지와 놀란 표정으로 알린다. 매일 KST 00:00 초기화.
 // React 가 메시지 텍스트를 이스케이프하므로 저장된 원문이 HTML 로 실행되지 않는다.
 const POLL_MS = 3000;
+const FACE = {
+  idle: "/brand/agent/ggparrot-agent-curious-v1.svg",
+  news: "/brand/agent/ggparrot-agent-signal-v1.svg",
+};
+const HELPER_DEFAULT = "투자 조언이 아니에요. 매매 판단과 책임은 본인에게 있어요.";
 
 export default function ChatBox({ defaultOpen = false }) {
+  const panelId = useId();
   const [open, setOpen] = useState(defaultOpen);
   const [items, setItems] = useState([]);
+  const [loaded, setLoaded] = useState(false);
   const [name, setName] = useState(getNickname());
+  const [editingName, setEditingName] = useState(false);
   const [text, setText] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [seenId, setSeenId] = useState(() => readSeenId());
+  const [dividerId, setDividerId] = useState(null);
+  const dividerReadyRef = useRef(false); // 열린 채로 첫 목록이 오면 그때 한 번 기준을 잡는다
   const listRef = useRef(null);
   const inputRef = useRef(null);
+  const nameRef = useRef(null);
   const stickToBottomRef = useRef(true);
 
   const load = useCallback(async (signal) => {
     const d = await api.chatList({ signal });
     setItems(d.items || []);
+    setLoaded(true);
   }, []);
-  const refresh = useAdaptivePolling(load, {
-    intervalMs: POLL_MS,
-    maxIntervalMs: 60_000,
-  });
+  const refresh = useAdaptivePolling(load, { intervalMs: POLL_MS, maxIntervalMs: 60_000 });
 
   const latest = latestMessageId(items);
-  // 처음 방문(저장된 값 없음)은 지금까지의 대화를 '읽음'으로 시작한다 — 전부 new 로 뜨지 않게.
+  // 처음 방문(저장된 값 없음)은 지금까지의 대화를 읽음으로 시작한다 — 전부 new 로 뜨지 않게.
   // 열려 있는 동안 도착한 메시지도 바로 읽음 처리한다.
   useEffect(() => {
     if (!items.length) return;
@@ -42,6 +58,11 @@ export default function ChatBox({ defaultOpen = false }) {
   }, [items.length, latest, open, seenId]);
   const unseen = open ? 0 : countUnseen(items, seenId);
   const badge = badgeLabel(unseen);
+  useEffect(() => {
+    if (!open || dividerReadyRef.current || !loaded) return;
+    dividerReadyRef.current = true;
+    setDividerId(firstUnseenId(items, seenId));
+  }, [items, loaded, open, seenId]);
 
   useEffect(() => {
     if (open && listRef.current && stickToBottomRef.current) {
@@ -52,7 +73,8 @@ export default function ChatBox({ defaultOpen = false }) {
   useEffect(() => {
     if (!open) return undefined;
     stickToBottomRef.current = true;
-    const frame = window.requestAnimationFrame(() => inputRef.current?.focus({ preventScroll: true }));
+    const target = name.trim() ? inputRef : nameRef;
+    const frame = window.requestAnimationFrame(() => target.current?.focus({ preventScroll: true }));
     const onKeyDown = (event) => {
       if (event.key === "Escape") setOpen(false);
     };
@@ -61,16 +83,39 @@ export default function ChatBox({ defaultOpen = false }) {
       window.cancelAnimationFrame(frame);
       document.removeEventListener("keydown", onKeyDown);
     };
+    // 열릴 때 한 번만 포커스한다 — 이름 편집 중 매 입력마다 옮기지 않게.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+
+  function toggle() {
+    if (!open) {
+      setDividerId(firstUnseenId(items, seenId)); // 열기 직전의 읽음 기준으로 구분선
+      dividerReadyRef.current = true;
+    } else {
+      dividerReadyRef.current = false;
+    }
+    setOpen(!open);
+  }
+
+  function commitName() {
+    if (!name.trim()) return;
+    setNickname(name.trim());
+    setEditingName(false);
+    inputRef.current?.focus();
+  }
 
   async function send(e) {
     e.preventDefault();
     setError("");
     if (!text.trim()) return;
-    if (!name.trim()) return setError("아이디를 입력하세요.");
+    if (!name.trim()) {
+      setError("먼저 아이디를 정해 주세요.");
+      nameRef.current?.focus();
+      return;
+    }
     setBusy(true);
     try {
-      setNickname(name);
+      setNickname(name.trim());
       await api.chatPost(name.trim(), text.trim());
       setText("");
       stickToBottomRef.current = true;
@@ -79,83 +124,128 @@ export default function ChatBox({ defaultOpen = false }) {
       setError(String(err.message || err)); // 429 rate limit surfaces here
     } finally {
       setBusy(false);
+      inputRef.current?.focus();
     }
   }
+
+  const nameNeeded = !name.trim() || editingName;
 
   return (
     <div className="chat-float">
       {open ? (
-        <section className="chat-panel" role="dialog" aria-label="리더보드 채팅">
-          <header className="chat-panel-head">
-            <div>
-              <h3 className="t-h4 text-slate-900">리더보드 채팅</h3>
-              <span className="t-caption text-slate-500">매일 KST 00:00 초기화</span>
+        <section id={panelId} className="chat-sheet" role="dialog" aria-label="리더보드 채팅">
+          <header className="chat-head">
+            <div className="chat-head-title">
+              <h3>리더보드 채팅</h3>
+              <p><span className="num">{items.length}</span>개 · KST 00:00 초기화</p>
             </div>
-            <button type="button" onClick={() => setOpen(false)} className="btn btn-s btn-ghost text-xl leading-none" aria-label="채팅 닫기">×</button>
+            <button type="button" className="chat-close" onClick={() => setOpen(false)} aria-label="채팅 닫기">
+              <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m4 4 8 8M12 4l-8 8" /></svg>
+            </button>
           </header>
 
-          {/* 메시지 목록은 카드가 아니라 스크롤 영역 — 위아래 괘선으로만 가둔다(§1-3). */}
           <div
             ref={listRef}
             role="log"
             aria-label="리더보드 채팅 메시지"
+            aria-busy={!loaded}
             onScroll={(event) => {
               const element = event.currentTarget;
               stickToBottomRef.current =
                 element.scrollHeight - element.scrollTop - element.clientHeight < 40;
             }}
-            className="chat-panel-log"
+            className="chat-log"
           >
-            {items.length === 0 && (
-              <div className="t-small text-slate-500 text-center py-8">아직 메시지가 없어요. 첫 채팅을 남겨봐요.</div>
-            )}
-            {items.map((m) => (
-              <div key={m.id} className="t-small">
-                <span className="t-caption text-slate-500 mr-2 num">{m.created_kst}</span>
-                <span className="font-bold text-slate-900 mr-2">{m.username}</span>
-                <span className="font-medium text-slate-700 break-words">{m.text}</span>
+            {!loaded ? (
+              <div className="chat-skeleton" aria-hidden="true"><i /><i /><i /></div>
+            ) : items.length === 0 ? (
+              <div className="chat-empty">
+                <img src={FACE.idle} alt="" width="56" height="56" draggable="false" />
+                <strong>아직 조용해요.</strong>
+                <span>오늘 첫 채팅을 남겨봐요.</span>
               </div>
-            ))}
+            ) : (
+              items.map((m, index) => {
+                const previous = index > 0 ? items[index - 1] : null;
+                const showDivider = dividerId != null && m.id === dividerId;
+                const continued = !showDivider && previous && previous.username === m.username;
+                const mine = !!name.trim() && m.username === name.trim();
+                return (
+                  <Fragment key={m.id}>
+                    {showDivider ? (
+                      <div className="chat-divider" role="separator" aria-label="여기부터 새 메시지"><span>새 메시지</span></div>
+                    ) : null}
+                    <article className={`chat-msg${continued ? " is-continued" : ""}${mine ? " is-mine" : ""}`}>
+                      <header>
+                        <span className="chat-msg-name">{m.username}</span>
+                        <time className="num">{m.created_kst}</time>
+                      </header>
+                      <p>{m.text}</p>
+                    </article>
+                  </Fragment>
+                );
+              })
+            )}
           </div>
 
-          <form onSubmit={send} className="chat-panel-form">
-            <input
-              value={name}
-              aria-label="채팅 아이디"
-              onChange={(e) => setName(e.target.value)}
-              maxLength={24}
-              placeholder="아이디"
-              className="field field-sm chat-panel-name"
-            />
+          <form onSubmit={send} className="chat-composer">
+            {nameNeeded ? (
+              <input
+                ref={nameRef}
+                value={name}
+                aria-label="채팅 아이디"
+                onChange={(e) => setName(e.target.value)}
+                onBlur={() => { if (name.trim()) commitName(); }}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commitName(); } }}
+                maxLength={24}
+                placeholder="아이디"
+                className="chat-field chat-field-name"
+              />
+            ) : (
+              <button
+                type="button"
+                className="chat-name-chip"
+                onClick={() => setEditingName(true)}
+                aria-label={`아이디 ${name}, 바꾸기`}
+                title="아이디 바꾸기"
+              >
+                {name}
+              </button>
+            )}
             <input
               ref={inputRef}
               value={text}
               aria-label="채팅 메시지"
+              aria-invalid={error ? true : undefined}
               onChange={(e) => setText(e.target.value)}
               maxLength={300}
-              placeholder="메시지 입력"
-              className="field field-sm flex-1 min-w-0"
+              placeholder="메시지"
+              className="chat-field"
+              disabled={busy}
             />
-            <button type="submit" disabled={busy} className="btn btn-m btn-secondary">전송</button>
+            <button type="submit" className="chat-send" disabled={busy || !text.trim()} aria-label={busy ? "보내는 중" : "전송"}>
+              {busy ? (
+                <span className="chat-spinner" aria-hidden="true" />
+              ) : (
+                <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 13V3M3.5 7.5 8 3l4.5 4.5" /></svg>
+              )}
+            </button>
           </form>
-          {error && <div className="chat-panel-error t-caption text-amber-700" role="alert">{error}</div>}
-          <p className="chat-panel-note t-caption text-slate-500">
-            채팅 내용은 투자 조언이 아니고, 매매 판단과 책임은 본인에게 있어요.
+          <p className={`chat-helper${error ? " is-error" : ""}`} role={error ? "alert" : undefined}>
+            {error || HELPER_DEFAULT}
           </p>
         </section>
       ) : null}
 
       <button
         type="button"
-        className={`chat-fab${open ? " is-open" : ""}`}
-        onClick={() => setOpen((current) => !current)}
+        className={`chat-fab${open ? " is-open" : ""}${unseen ? " has-news" : ""}`}
+        onClick={toggle}
         aria-expanded={open}
+        aria-controls={open ? panelId : undefined}
         aria-label={open ? "채팅 닫기" : badge ? `채팅 열기, 새 메시지 ${unseen}개` : "채팅 열기"}
       >
-        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-          <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H10l-4.4 3.5A.7.7 0 0 1 4.5 19v-3.1A2.5 2.5 0 0 1 4 13.5v-8Z" />
-        </svg>
-        <span className="chat-fab-label">{open ? "닫기" : "채팅"}</span>
+        <img src={unseen ? FACE.news : FACE.idle} alt="" width="64" height="64" draggable="false" decoding="async" />
         {badge ? <span className="chat-fab-badge num" aria-hidden="true">{badge}</span> : null}
       </button>
     </div>

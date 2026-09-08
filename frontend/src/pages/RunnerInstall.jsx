@@ -8,6 +8,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { PageHeader, SectionTitle } from "../components/Page.jsx";
 import { RunnerKeyPanel } from "../components/RunnerSessions.jsx";
+import RunnerLaunchGuide from "../components/RunnerLaunchGuide.jsx";
 import { useAuth } from "../lib/auth.js";
 import {
   fmtSize,
@@ -35,7 +36,7 @@ const WHY = [
 const INSTALL_STEPS = [
   {
     title: "실행기 내려받기",
-    body: "아래 버튼을 누르면 GitHub 릴리스에서 ggparrot-runner.exe 를 받아요. 설치 과정 없이 파일 하나로 바로 실행돼요.",
+    body: "위의 실행기 내려받기 버튼을 누르면 GitHub 릴리스에서 ggparrot-runner.exe 를 받아요. 설치 과정 없이 파일 하나로 바로 실행돼요.",
   },
   {
     title: "브라우저 경고 허용하기",
@@ -148,6 +149,8 @@ export default function RunnerInstall() {
       {/* 3. 설치 순서 */}
       <section className="mt-9" aria-labelledby="runner-steps">
         <SectionTitle className="mb-3"><span id="runner-steps">설치하고 처음 여는 순서</span></SectionTitle>
+        <p className="t-small text-slate-700">다운로드한 파일을 여는 과정을 화면으로 확인해 보세요. 아래 순서대로 따라 하면 돼요.</p>
+        <RunnerLaunchGuide />
         <ol className="card divide-y divide-slate-200">
           {INSTALL_STEPS.map((step, index) => (
             <li key={step.title} className="p-4 flex gap-4">

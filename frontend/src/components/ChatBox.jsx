@@ -15,10 +15,8 @@ import {
 // 닫혀 있는 동안 도착한 메시지는 'N new' 배지와 놀란 표정으로 알린다. 매일 KST 00:00 초기화.
 // React 가 메시지 텍스트를 이스케이프하므로 저장된 원문이 HTML 로 실행되지 않는다.
 const POLL_MS = 3000;
-const FACE = {
-  idle: "/brand/agent/ggparrot-agent-curious-v1.svg",
-  news: "/brand/agent/ggparrot-agent-signal-v1.svg",
-};
+const FAB_ICON = "/brand/ggparrot-feather-terminal.svg"; // 정사각 깃털 — 원판 안에 잘림 없이 들어간다
+const EMPTY_FACE = "/brand/agent/ggparrot-agent-curious-v1.svg";
 const HELPER_DEFAULT = "투자 조언이 아니에요. 매매 판단과 책임은 본인에게 있어요.";
 
 export default function ChatBox({ defaultOpen = false }) {
@@ -160,7 +158,7 @@ export default function ChatBox({ defaultOpen = false }) {
               <div className="chat-skeleton" aria-hidden="true"><i /><i /><i /></div>
             ) : items.length === 0 ? (
               <div className="chat-empty">
-                <img src={FACE.idle} alt="" width="56" height="56" draggable="false" />
+                <img src={EMPTY_FACE} alt="" width="56" height="56" draggable="false" />
                 <strong>아직 조용해요.</strong>
                 <span>오늘 첫 채팅을 남겨봐요.</span>
               </div>
@@ -245,7 +243,7 @@ export default function ChatBox({ defaultOpen = false }) {
         aria-controls={open ? panelId : undefined}
         aria-label={open ? "채팅 닫기" : badge ? `채팅 열기, 새 메시지 ${unseen}개` : "채팅 열기"}
       >
-        <img src={unseen ? FACE.news : FACE.idle} alt="" width="64" height="64" draggable="false" decoding="async" />
+        <img src={FAB_ICON} alt="" width="56" height="56" draggable="false" decoding="async" />
         {badge ? <span className="chat-fab-badge num" aria-hidden="true">{badge}</span> : null}
       </button>
     </div>

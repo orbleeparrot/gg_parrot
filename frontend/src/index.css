@@ -8360,13 +8360,12 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
  * 리더보드 채팅 — 우하단 원형 껄무새 버튼과 대화록 시트. 떠 있는 것이라 그림자를 쓴다(§6).
  * 말풍선·카드 없이 이름·시각·본문의 타이포로만 대화를 나눈다(§1-3). 하단 마퀴(56px) 위에 앉는다. */
 .chat-float {
-  /* 버튼 바탕은 딥 골드 — 잉크색(#1e2329)은 다크에서 면(slate-100)과 같은 값이라 묻혔다.
-     브랜드 노랑을 그대로 쓰면 화면의 CTA 와 겨루므로(§1-4) 한 단계 어둡게 내린 금색을 쓴다.
-     테마와 무관한 상수: 라이트·다크 어느 바닥에서도 형체가 남는다. 깃털(#fcd535) 3.2:1,
-     흰 글자 4.6:1 — 둘 다 기준을 넘는다. */
-  --chat-disc: 156 110 6;
-  --chat-disc-hover: 181 130 8;
-  --chat-ink: 255 255 255;
+  /* 버튼 바탕은 브랜드 노랑 — 잉크색(#1e2329)은 다크에서 면(slate-100)과 같은 값이라 묻혔다.
+     글자는 잉크(12.2:1, §2 "브랜드 위 흰색 금지"). 깃털은 바탕과 같은 노랑이라 채움 대비가
+     없고 제 외곽선(#1e2329)으로 형태가 선다 — 미리보기에서 그 상태를 보고 고른 색이다. */
+  --chat-disc: var(--c-brand);
+  --chat-disc-hover: var(--c-brand-hover);
+  --chat-ink: var(--c-brand-ink);
   --chat-badge-ink: #fff;                     /* 빨간 배지 위 글자 — 테마와 무관 */
   --chat-ease: cubic-bezier(0.22, 0.61, 0.36, 1);
   --chat-dur: 180ms;
@@ -8413,7 +8412,9 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 .chat-fab:hover, .chat-fab.is-hover { transform: translateY(-1px); background: rgb(var(--chat-disc-hover)); }
 .chat-fab:active:not(:disabled), .chat-fab.is-active { transform: scale(0.97); }
 .chat-fab:focus-visible, .chat-fab.is-focus { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 3px; }
-.chat-fab.is-open { box-shadow: 0 0 0 2px rgb(var(--c-surface)), 0 0 0 4px rgb(var(--c-brand)), 0 8px 24px rgba(0, 0, 0, 0.24); }
+/* 열림 링은 슬레이트 — 노란 버튼 위에서 노란 링은 보이지 않는다. slate-900 은 테마마다
+   뒤집혀(라이트 진한 남색 / 다크 밝은 회색) 어느 바닥에서도 링이 남는다. */
+.chat-fab.is-open { box-shadow: 0 0 0 2px rgb(var(--c-surface)), 0 0 0 4px rgb(var(--c-slate-900)), 0 8px 24px rgba(0, 0, 0, 0.24); }
 .chat-fab.has-news { box-shadow: 0 0 0 2px rgb(var(--c-surface)), 0 0 0 4px rgb(var(--c-red-600) / 0.55), 0 8px 24px rgba(0, 0, 0, 0.24); }
 .chat-fab-badge {
   position: absolute;

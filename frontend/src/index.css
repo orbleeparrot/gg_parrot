@@ -528,6 +528,7 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   pointer-events: none;
 }
 .agent-macro-dock-status { display: flex; align-items: center; gap: 8px; color: rgb(var(--c-slate-700)); font-size: 13px; font-weight: 700; white-space: nowrap; }
+.agent-macro-dock-version { color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 600; }
 .agent-macro-dock-actions { display: flex; align-items: center; justify-content: flex-end; gap: 7px; white-space: nowrap; }
 .agent-macro-dock-actions .btn { min-height: 44px; padding-inline: 12px; }
 

@@ -170,6 +170,7 @@ class RunnerActivationSafetyTests(unittest.TestCase):
         self.assertEqual(app.user_macro_id, 73)
         self.assertEqual(payload["user_macro_id"], 73)
         self.assertEqual(payload["symbol"], "BTCUSDT")
+        self.assertEqual(payload["runner_version"], "6")
         self.assertNotIn("api_key", payload)
         self.assertNotIn("api_secret", payload)
 

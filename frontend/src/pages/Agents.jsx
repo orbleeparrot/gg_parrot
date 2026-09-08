@@ -83,6 +83,8 @@ function MacroDock({ sessions, selected, busy, onChange, onStop, onDelete }) {
       <div className="agent-macro-dock-status" aria-label={`실행 상태: ${statusText(selected)}`}>
         <i className={`agent-live-dot ${connected ? "is-running" : "is-checking"}`} aria-hidden="true" />
         <span>{statusText(selected)}</span>
+        {/* v7+ 실행기만 버전을 보고한다. 빈 값이면 표시하지 않는다. */}
+        {selected.runner_version ? <span className="agent-macro-dock-version num">실행기 v{selected.runner_version}</span> : null}
       </div>
 
       <div className="agent-macro-dock-actions">

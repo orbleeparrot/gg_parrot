@@ -1258,6 +1258,8 @@ class RunnerApp:
             "market": _decide_market(side, lev),
             "testnet": testnet,
             "human_summary": self.macro.get("human_summary", ""),
+            # 서버가 세션에 기록하고 오래된 버전을 거절할 수 있게 실어 보낸다.
+            "runner_version": RUNNER_VERSION,
             # 매크로 원문 — 마이페이지 실시간 차트에 빌더와 동일한 전략 보조지표를
             # 그리는 데 쓰인다. 거래소 키/시크릿은 여기에 포함되지 않는다.
             "macro": self.macro,

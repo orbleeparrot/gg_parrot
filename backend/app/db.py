@@ -335,6 +335,10 @@ class RunnerLaunchTicket(SQLModel, table=True):
     expires_at: str
     expires_ms: int = Field(index=True, sa_type=BigInteger)
     claimed_at: str = ""
+    # 실행기가 최소 버전 미만이라 claim 이 거절된 기록. 웹이 상태 조회로 바로 안내한다 —
+    # 426 응답은 실행기 창에만 가고 브라우저는 알 길이 없었다.
+    rejected_at: str = ""
+    rejected_version: str = ""
 
 
 class RunSession(SQLModel, table=True):
@@ -380,6 +384,8 @@ class RunSession(SQLModel, table=True):
     started_at: str
     last_heartbeat_at: str = ""
     stopped_at: Optional[str] = None
+    # 시작 요청에 실린 실행기 버전. v6 이하 exe 는 보내지 않아 빈 문자열로 남는다.
+    runner_version: str = ""
 
 
 class TickerNewsSnapshot(SQLModel, table=True):
@@ -648,6 +654,13 @@ def _migrate() -> None:
             "last_error": "ALTER TABLE dailychallenge ADD COLUMN last_error TEXT DEFAULT ''",
         },
     }
+    added.setdefault("runnerlaunchticket", {}).update({
+        "rejected_at": "ALTER TABLE runnerlaunchticket ADD COLUMN rejected_at TEXT DEFAULT ''",
+        "rejected_version": "ALTER TABLE runnerlaunchticket ADD COLUMN rejected_version TEXT DEFAULT ''",
+    })
+    added.setdefault("runsession", {})["runner_version"] = (
+        "ALTER TABLE runsession ADD COLUMN runner_version TEXT DEFAULT ''"
+    )
     with _engine.connect() as conn:
         for table, cols in added.items():
             existing = {row[1] for row in conn.exec_driver_sql(f"PRAGMA table_info({table})")}
@@ -686,6 +699,9 @@ def _migrate_pg() -> None:
         "ALTER TABLE runsession ADD COLUMN IF NOT EXISTS macro_json TEXT DEFAULT ''",
         "ALTER TABLE runsession ADD COLUMN IF NOT EXISTS position_uncertain BOOLEAN DEFAULT FALSE",
         "ALTER TABLE runsession ADD COLUMN IF NOT EXISTS user_macro_id INTEGER",
+        "ALTER TABLE runsession ADD COLUMN IF NOT EXISTS runner_version TEXT DEFAULT ''",
+        "ALTER TABLE runnerlaunchticket ADD COLUMN IF NOT EXISTS rejected_at TEXT DEFAULT ''",
+        "ALTER TABLE runnerlaunchticket ADD COLUMN IF NOT EXISTS rejected_version TEXT DEFAULT ''",
         "CREATE INDEX IF NOT EXISTS ix_runsession_user_macro_id ON runsession (user_macro_id)",
         "ALTER TABLE tickernewssnapshot ADD COLUMN IF NOT EXISTS claim_token TEXT DEFAULT ''",
         "ALTER TABLE tickernewssnapshot ADD COLUMN IF NOT EXISTS last_observed_at TEXT DEFAULT ''",

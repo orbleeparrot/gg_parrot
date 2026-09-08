@@ -8785,6 +8785,7 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 /* 바 위에 떠 있는 알약 버튼 — 깃털 28px + 'Chat' 15px, 높이 48px(L 버튼 규격). */
 .chat-fab {
   position: relative;
+  touch-action: none;                         /* 끌어서 옮길 수 있다 — 브라우저 스크롤 제스처와 겹치지 않게 */
   height: 48px;
   padding: 0 18px 0 12px;
   border: 0;
@@ -8818,6 +8819,14 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 .chat-fab:focus-visible, .chat-fab.is-focus { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 3px; }
 /* 열림 링은 슬레이트 — 노란 버튼 위에서 노란 링은 보이지 않는다. slate-900 은 테마마다
    뒤집혀(라이트 진한 남색 / 다크 밝은 회색) 어느 바닥에서도 링이 남는다. */
+.chat-fab.is-dragging { cursor: grabbing; transition: none; transform: none; }
+.chat-float.is-dragging .chat-sheet { animation: none; pointer-events: none; }
+/* 머리 오른쪽 — 투명도 슬라이더 + 닫기. 슬라이더는 시트 전체의 불투명도(25~100%)를 조절한다. */
+.chat-head-tools { flex: none; display: flex; align-items: center; gap: 2px; margin-top: 2px; }
+.chat-opacity { display: inline-flex; align-items: center; gap: 6px; padding: 0 6px; color: rgb(var(--c-slate-500)); }
+.chat-opacity svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.chat-opacity input[type="range"] { width: 76px; height: 20px; margin: 0; accent-color: rgb(var(--c-brand)); cursor: pointer; }
+.chat-opacity input[type="range"]:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; border-radius: 4px; }
 .chat-fab.is-open { box-shadow: 0 0 0 2px rgb(var(--c-surface)), 0 0 0 4px rgb(var(--c-slate-900)), 0 8px 24px rgba(0, 0, 0, 0.24); }
 .chat-fab.has-news { box-shadow: 0 0 0 2px rgb(var(--c-surface)), 0 0 0 4px rgb(var(--c-red-600) / 0.55), 0 8px 24px rgba(0, 0, 0, 0.24); }
 .chat-fab-badge {
@@ -8851,11 +8860,13 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   background: rgb(var(--c-surface));
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.32);
   overflow: hidden;
+  opacity: var(--chat-sheet-opacity, 1);
   animation: chat-sheet-in var(--chat-dur) var(--chat-ease) both;
 }
+/* 등장 애니메이션은 fill-mode both 라 끝 프레임의 opacity 가 인라인 값을 덮는다 — 슬라이더 값(--chat-sheet-opacity)을 끝 프레임에 쓴다. */
 @keyframes chat-sheet-in {
   from { opacity: 0; transform: translateY(10px) scale(0.98); }
-  to { opacity: 1; transform: none; }
+  to { opacity: var(--chat-sheet-opacity, 1); transform: none; }
 }
 .chat-head {
   display: flex;
@@ -9128,7 +9139,8 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   /* 행마다 그리드를 따로 계산하므로 유동 열(name·summary) 외에는 폭을 고정한다 —
      그래야 머리글과 모든 행의 열이 같은 자리에서 시작한다. 반응 열은 아이콘 3개 폭. */
   --lb-actions-w: 196px;                   /* 투표 알약 2개(아이콘+수) + 자물쇠·가격 알약(또는 복사 아이콘)이 한 줄 */
-  --lb-columns: 32px 36px minmax(220px, 1fr) minmax(0, 1.35fr) 104px var(--lb-actions-w);
+  --lb-return-gap: 32px;                   /* 수익률 숫자와 반응 버튼 사이 숨 — 열 간격 16px 만으로는 붙어 보인다 */
+  --lb-columns: 32px 36px minmax(220px, 1fr) minmax(0, 1.35fr) calc(104px + var(--lb-return-gap)) var(--lb-actions-w);
   --lb-areas: "rank coin name summary return actions";
   padding-bottom: 88px; /* 마지막 행이 떠 있는 채팅 버튼 위로 올라올 여지 */
 }
@@ -9158,6 +9170,7 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 .lb-col-actions, .lb-actions { grid-area: actions; }
 .lb-col-rank { text-align: center; }
 .lb-col-return, .lb-col-actions { text-align: right; }
+.lb-col-return, .lb-return { padding-right: var(--lb-return-gap); }
 .lb-rank { text-align: center; font-size: 20px; font-weight: 800; color: rgb(var(--c-slate-600)); }
 .lb-rank.is-1 { color: rgb(var(--lb-gold)); }
 .lb-rank.is-2 { color: rgb(var(--lb-silver)); }
@@ -9231,7 +9244,8 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 @media (max-width: 1099px) {
   /* 전략이 이름 아래로 내려온다 — 배치는 영역으로 못 박는다 */
   .lb-board {
-    --lb-columns: 28px 36px minmax(0, 1fr) 96px var(--lb-actions-w);
+    --lb-return-gap: 20px;
+    --lb-columns: 28px 36px minmax(0, 1fr) calc(96px + var(--lb-return-gap)) var(--lb-actions-w);
     --lb-areas: "rank coin name return actions" "rank coin summary summary summary";
   }
   .lb-row-head { grid-template-areas: "rank coin name return actions"; }
@@ -9239,6 +9253,7 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 }
 @media (max-width: 639px) {
   .lb-board {
+    --lb-return-gap: 0px;
     --lb-columns: 24px 36px minmax(0, 1fr) 84px;
     --lb-areas: "rank coin name return" "rank coin summary summary" "actions actions actions actions";
   }

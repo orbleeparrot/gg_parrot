@@ -10,6 +10,48 @@ import "./ChatBox.css";
 const POLL_MS = 3000;
 const FAB_ICON = "/brand/ggparrot-feather-terminal.svg";
 const EMPTY_FACE = "/brand/agent/ggparrot-agent-curious-v1.svg";
+const PLACEMENT_KEY = "chat:placement";      // 버튼을 끌어다 둔 자리(오른쪽·아래 여백 px) — 이 브라우저에만
+const OPACITY_KEY = "chat:opacity";          // 시트 불투명도 0.25~1
+const DRAG_THRESHOLD = 6;                    // 이보다 덜 움직이면 클릭
+const EDGE = 8;                              // 화면 가장자리 최소 여백
+const TOPBAR_FALLBACK = 64;
+
+function readStorage(key) {
+  try { return window.localStorage.getItem(key); } catch { return null; }
+}
+function writeStorage(key, value) {
+  try { window.localStorage.setItem(key, value); } catch { /* 저장 못 해도 동작엔 지장 없다 */ }
+}
+function loadPlacement() {
+  try {
+    const parsed = JSON.parse(readStorage(PLACEMENT_KEY) || "null");
+    if (parsed && Number.isFinite(parsed.right) && Number.isFinite(parsed.bottom)) return { right: parsed.right, bottom: parsed.bottom };
+  } catch { /* 깨진 값은 기본 자리 */ }
+  return null;
+}
+function loadOpacity() {
+  const value = Number(readStorage(OPACITY_KEY));
+  return Number.isFinite(value) && value >= 0.25 && value <= 1 ? value : 1;
+}
+function topbarHeight() {
+  const raw = getComputedStyle(document.documentElement).getPropertyValue("--site-topbar-h");
+  const value = parseFloat(raw);
+  return Number.isFinite(value) ? value : TOPBAR_FALLBACK;
+}
+// 버튼(과 열린 시트)이 화면 안에 남도록 여백을 자른다.
+function clampPlacement(placement, root) {
+  if (!placement || !root) return placement;
+  const fab = root.querySelector(".chat-fab")?.getBoundingClientRect();
+  const sheet = root.querySelector(".chat-sheet")?.getBoundingClientRect();
+  const width = Math.max(fab?.width || 0, sheet?.width || 0);
+  const above = sheet ? sheet.height + 12 : 0;
+  const maxRight = Math.max(EDGE, window.innerWidth - width - EDGE);
+  const maxBottom = Math.max(EDGE, window.innerHeight - (fab?.height || 48) - above - topbarHeight() - EDGE);
+  return {
+    right: Math.round(Math.min(maxRight, Math.max(EDGE, placement.right))),
+    bottom: Math.round(Math.min(maxBottom, Math.max(EDGE, placement.bottom))),
+  };
+}
 
 function kstClock(now = Date.now()) {
   const date = new Date(now + 9 * 60 * 60 * 1000);
@@ -41,6 +83,11 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
   const [dividerId, setDividerId] = useState(null);
   const [stickerOpen, setStickerOpen] = useState(defaultStickerTray && !!member);
   const [atBottom, setAtBottom] = useState(true);
+  const [placement, setPlacement] = useState(loadPlacement);   // null = CSS 기본 자리(오른쪽 아래)
+  const [opacity, setOpacity] = useState(loadOpacity);
+  const [dragging, setDragging] = useState(false);
+  const dragRef = useRef(null);                                  // { id, x, y, right, bottom, moved }
+  const suppressClickRef = useRef(false);
   const dividerReadyRef = useRef(false);
   const rootRef = useRef(null);
   const listRef = useRef(null);
@@ -179,6 +226,57 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
     };
   }, [close, open, stickerOpen]);
 
+  // 끌어서 옮기기 — 버튼을 잡고 6px 넘게 움직이면 드래그, 아니면 클릭. 자리는 이 브라우저에 남는다.
+  function onFabPointerDown(event) {
+    if (event.button != null && event.button !== 0) return;
+    const rect = rootRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    dragRef.current = {
+      id: event.pointerId, x: event.clientX, y: event.clientY, moved: false,
+      right: window.innerWidth - rect.right, bottom: window.innerHeight - rect.bottom,
+    };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  }
+  function onFabPointerMove(event) {
+    const drag = dragRef.current;
+    if (!drag || drag.id !== event.pointerId) return;
+    const dx = event.clientX - drag.x;
+    const dy = event.clientY - drag.y;
+    if (!drag.moved && Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
+    if (!drag.moved) { drag.moved = true; setDragging(true); }
+    setPlacement(clampPlacement({ right: drag.right - dx, bottom: drag.bottom - dy }, rootRef.current));
+  }
+  function onFabPointerEnd(event) {
+    const drag = dragRef.current;
+    if (!drag || drag.id !== event.pointerId) return;
+    dragRef.current = null;
+    if (drag.moved) {
+      suppressClickRef.current = true;             // 놓는 순간의 click 은 열고 닫기가 아니다
+      setDragging(false);
+      setPlacement((current) => { if (current) writeStorage(PLACEMENT_KEY, JSON.stringify(current)); return current; });
+    }
+  }
+  function onFabClick() {
+    if (suppressClickRef.current) { suppressClickRef.current = false; return; }
+    toggle();
+  }
+  function changeOpacity(event) {
+    const next = Math.min(1, Math.max(0.25, Number(event.target.value) / 100));
+    setOpacity(next);
+    writeStorage(OPACITY_KEY, String(next));
+  }
+  // 창 크기가 바뀌거나 시트가 열리면 옮겨 둔 자리가 화면 밖으로 나가지 않게 다시 자른다.
+  useLayoutEffect(() => {
+    if (!placement) return undefined;
+    const fit = () => setPlacement((current) => {
+      const next = clampPlacement(current, rootRef.current);
+      return next && current && next.right === current.right && next.bottom === current.bottom ? current : next;
+    });
+    fit();
+    window.addEventListener("resize", fit);
+    return () => window.removeEventListener("resize", fit);
+  }, [open, placement != null]); // eslint-disable-line react-hooks/exhaustive-deps
+
   function toggle() {
     if (open) close();
     else {
@@ -253,12 +351,18 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
   }
 
   return (
-    <div className="chat-float" ref={rootRef}>
+    <div className={`chat-float${dragging ? " is-dragging" : ""}`} ref={rootRef} style={placement ? { right: placement.right, bottom: placement.bottom } : undefined}>
       {open ? (
-        <section id={panelId} className="chat-sheet" role="dialog" aria-label="리더보드 채팅">
+        <section id={panelId} className="chat-sheet" role="dialog" aria-label="리더보드 채팅" style={opacity < 1 ? { "--chat-sheet-opacity": opacity } : undefined}>
           <header className="chat-head">
             <div className="chat-head-title"><h3>리더보드 채팅</h3><p>KST <span className="num">{kstClock()}</span> · 오늘의 대화</p></div>
-            <button type="button" className="chat-close" onClick={close} aria-label="채팅 닫기"><svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m4 4 8 8M12 4l-8 8" /></svg></button>
+            <div className="chat-head-tools">
+              <label className="chat-opacity" title={`투명도 ${Math.round((1 - opacity) * 100)}%`}>
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M2.5 12s3.5-6.5 9.5-6.5 9.5 6.5 9.5 6.5-3.5 6.5-9.5 6.5S2.5 12 2.5 12Z" /><circle cx="12" cy="12" r="3" /></svg>
+                <input type="range" min="25" max="100" step="5" value={Math.round(opacity * 100)} onChange={changeOpacity} aria-label="채팅창 불투명도" aria-valuetext={`${Math.round(opacity * 100)}%`} />
+              </label>
+              <button type="button" className="chat-close" onClick={close} aria-label="채팅 닫기"><svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m4 4 8 8M12 4l-8 8" /></svg></button>
+            </div>
           </header>
           {loadError || readError ? (
             <div className="chat-status is-error" role="alert">
@@ -320,7 +424,7 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
           {error ? <p className="chat-helper is-error" role="alert">{error}</p> : <span className="chat-composer-gap" aria-hidden="true" />}
         </section>
       ) : null}
-      <button type="button" className={`chat-fab${open ? " is-open" : ""}${unseen ? " has-news" : ""}`} onClick={toggle} aria-expanded={open} aria-controls={open ? panelId : undefined} aria-label={open ? "채팅 닫기" : badge ? `채팅 열기, 새 메시지 ${unseen}개` : "채팅 열기"}>
+      <button type="button" className={`chat-fab${open ? " is-open" : ""}${unseen ? " has-news" : ""}${dragging ? " is-dragging" : ""}`} onClick={onFabClick} onPointerDown={onFabPointerDown} onPointerMove={onFabPointerMove} onPointerUp={onFabPointerEnd} onPointerCancel={onFabPointerEnd} title="끌어서 옮길 수 있어요" aria-expanded={open} aria-controls={open ? panelId : undefined} aria-label={open ? "채팅 닫기" : badge ? `채팅 열기, 새 메시지 ${unseen}개` : "채팅 열기"}>
         <img src={FAB_ICON} alt="" width="44" height="44" draggable="false" decoding="async" /><span className="chat-fab-label" aria-hidden="true">Chat</span>{badge ? <span className="chat-fab-badge num" aria-hidden="true">{badge}</span> : null}
       </button>
     </div>

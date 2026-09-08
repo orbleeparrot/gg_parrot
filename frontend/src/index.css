@@ -8316,3 +8316,95 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 /* 확인 모달 — window.confirm 대체. 세로 CTA 두 개(48px), 주 동작이 위(DESIGN §6). */
 .confirm-dialog { width: 100%; max-width: 400px; padding: 24px; }
 .confirm-dialog-actions { display: grid; gap: 8px; margin-top: 24px; }
+
+/* 리더보드 채팅 — 우하단에 떠 있는 버튼과 패널. 떠 있는 것이라 그림자를 쓴다(§6).
+   하단 '오늘의 경주마' 마퀴(56px) 위에 앉는다. */
+.chat-float {
+  position: fixed;
+  right: 20px;
+  bottom: calc(56px + 16px + env(safe-area-inset-bottom));
+  z-index: 70;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 12px;
+}
+.chat-fab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 52px;
+  padding: 0 18px 0 14px;
+  border: 1px solid rgb(var(--c-slate-300));
+  border-radius: 999px;
+  background: rgb(var(--c-surface));
+  color: rgb(var(--c-slate-900));
+  font-size: 15px;
+  font-weight: 750;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  cursor: pointer;
+}
+.chat-fab:hover { background: rgb(var(--c-slate-100)); }
+.chat-fab:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
+.chat-fab svg { width: 22px; height: 22px; fill: currentColor; }
+.chat-fab-badge {
+  position: absolute;
+  top: -9px;
+  right: -6px;
+  padding: 0 8px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  background: rgb(var(--c-red-600));
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  box-shadow: 0 0 0 2px rgb(var(--c-surface));
+}
+.chat-panel {
+  width: min(380px, calc(100vw - 40px));
+  height: min(520px, calc(100vh - 56px - 120px));
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto auto auto;
+  border-radius: 20px;
+  background: rgb(var(--c-surface));
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.32);
+  overflow: hidden;
+}
+.chat-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 12px 12px 18px;
+  border-bottom: 1px solid rgb(var(--c-slate-200));
+}
+.chat-panel-head h3 + span { display: block; margin-top: 2px; }
+.chat-panel-log {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 12px 18px;
+  display: grid;
+  align-content: start;
+  gap: 8px;
+}
+.chat-panel-form {
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px 0;
+  border-top: 1px solid rgb(var(--c-slate-200));
+}
+.chat-panel-name { width: 6.5rem; flex: none; }
+.chat-panel-error { padding: 6px 18px 0; }
+.chat-panel-note { padding: 8px 18px 12px; }
+
+@media (max-width: 640px) {
+  .chat-float { right: 12px; left: 12px; align-items: stretch; }
+  .chat-fab { align-self: flex-end; }
+  .chat-panel { width: auto; height: min(70vh, calc(100vh - 56px - 96px)); }
+}

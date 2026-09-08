@@ -51,7 +51,7 @@ export function createRequestCoordinator() {
   return {
     run(key, factory, { signal } = {}) {
       let entry = inflight.get(key);
-      if (!entry) {
+      if (!entry || entry.controller.signal.aborted) {
         const controller = new AbortController();
         entry = { controller, consumers: new Set(), settled: false, promise: null };
         try {

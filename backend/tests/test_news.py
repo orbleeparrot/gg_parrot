@@ -163,16 +163,6 @@ def test_empty_public_news_is_cached_without_repeated_source_calls(monkeypatch):
     assert calls == [True]
 
 
-def test_translation_budget_exhaustion_never_calls_provider(monkeypatch):
-    from types import SimpleNamespace
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-test-key")
-    monkeypatch.setattr(repository, "reserve_ai_budget", lambda **_: False)
-    monkeypatch.setattr(news, "get_ai_runtime", lambda: SimpleNamespace(call=lambda _, load, **kwargs: (load(), "loaded")))
-    monkeypatch.setattr(news, "get_anthropic_client", lambda: pytest.fail("budget exhausted"))
-    with pytest.raises(news.NewsTranslationError):
-        news._request_korean_title_translations(["New token launches its network"])
-
-
 def test_market_news_retries_transient_ai_summary_without_refetching_headlines(monkeypatch):
     item = {
         "title": "비트코인 시장 새 소식",
@@ -437,10 +427,7 @@ def test_title_translation_keeps_partial_batch_without_paid_fanout(monkeypatch):
     ])
 
     assert calls == [[first, second]]
-    assert [item["title"] for item in localized] == [
-        "아비트럼 토큰 급등",
-        second,
-    ]
+    assert [item["title"] for item in localized] == ["아비트럼 토큰 급등"]
 
 
 def test_title_translation_applies_after_normalizing_source_whitespace(monkeypatch):
@@ -455,7 +442,7 @@ def test_title_translation_applies_after_normalizing_source_whitespace(monkeypat
     assert localized == [{"title": korean, "original_title": normalized}]
 
 
-def test_title_translation_without_shared_api_key_keeps_english_title(monkeypatch, caplog):
+def test_title_translation_without_shared_api_key_withholds_english_title(monkeypatch, caplog):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setenv("ANTHROPIC_NEWS_TRANSLATION_API_KEY", "ignored-old-key")
     monkeypatch.setattr(news, "_title_translation_cache", {})
@@ -464,11 +451,11 @@ def test_title_translation_without_shared_api_key_keeps_english_title(monkeypatc
     )
     item = {"title": "Arbitrum token rises", "source": "CoinDesk"}
 
-    # 키가 없으면 번역은 못 하지만 뉴스 응답까지 막지는 않는다 — 원문을 두고 경고만 남긴다.
+    # 키가 없으면 미번역 기사를 보류하되 한국어 기사 응답까지 막지 않는다.
     with caplog.at_level(logging.WARNING, logger="app.news"):
         items = news._localize_coin_news_items([item])
-    assert items[0]["title"] == "Arbitrum token rises"
-    assert "원문을 그대로" in caplog.text
+    assert items == []
+    assert "표시를 보류" in caplog.text
 
 
 def test_title_translation_parser_accepts_fenced_json_and_stable_ids():
@@ -771,7 +758,7 @@ def test_title_translation_reuses_ai_runtime_cache(monkeypatch):
     assert len(api_calls) == 1
 
 
-def test_title_translation_reserves_one_durable_daily_budget_call(monkeypatch):
+def test_title_translation_does_not_reserve_a_daily_budget_call(monkeypatch):
     title = "Arbitrum token soars"
     title_id = hashlib.sha256(title.encode("utf-8")).hexdigest()[:16]
     monkeypatch.setenv("ANTHROPIC_API_KEY", "shared-key")
@@ -810,8 +797,7 @@ def test_title_translation_reserves_one_durable_daily_budget_call(monkeypatch):
     assert news._request_korean_title_translations([title]) == {
         title: "아비트럼 토큰 급등",
     }
-    assert len(budget_calls) == 1
-    assert budget_calls[0]["namespace"] == "news_title_translation"
+    assert budget_calls == []
 
 
 def test_more_than_twenty_deduplicated_titles_are_all_translated(monkeypatch):
@@ -848,7 +834,7 @@ def test_more_than_twenty_deduplicated_titles_are_all_translated(monkeypatch):
     assert [item["title"] for item in localized] == list(translations.values())
 
 
-def test_title_translation_keeps_english_when_model_returns_nothing(monkeypatch, caplog):
+def test_title_translation_withholds_english_when_model_returns_nothing(monkeypatch, caplog):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "shared-key")
     monkeypatch.setattr(news, "_title_translation_cache", {})
     monkeypatch.setattr(
@@ -863,13 +849,13 @@ def test_title_translation_keeps_english_when_model_returns_nothing(monkeypatch,
         lambda _titles: {},
     )
 
-    # 모델이 아무것도 못 돌려줘도 종목 뉴스는 나간다 — 실패한 제목만 원문으로 남긴다.
+    # 모델 실패를 영어 원문 노출로 처리하지 않는다.
     with caplog.at_level(logging.WARNING, logger="app.news"):
         items = news._localize_coin_news_items([
             {"title": "Arbitrum token soars", "source": "CoinDesk"},
         ])
-    assert items[0]["title"] == "Arbitrum token soars"
-    assert "원문을 그대로" in caplog.text
+    assert items == []
+    assert "표시를 보류" in caplog.text
 
 
 def test_title_translation_marks_only_preflight_capacity_failure_safe_to_retry(
@@ -1035,7 +1021,7 @@ def test_mixed_korean_title_with_hyphenated_english_prose_is_translated(
     assert localized == [{"title": korean, "original_title": mixed}]
 
 
-def test_title_localization_logs_when_english_title_remains(monkeypatch, caplog):
+def test_title_localization_logs_when_english_title_is_pending(monkeypatch, caplog):
     english = "Arbitrum token soars"
     monkeypatch.setattr(news, "_title_translation_cache", {})
     monkeypatch.setattr(news, "_ensure_title_translations", lambda _titles: None)
@@ -1043,8 +1029,8 @@ def test_title_localization_logs_when_english_title_remains(monkeypatch, caplog)
     # 마지막 관문은 예외 대신 경고다 — 검증기 구멍 하나가 종목 전체 503 으로 번지지 않게.
     with caplog.at_level(logging.WARNING, logger="app.news"):
         items = news._localize_coin_news_items([{"title": english}])
-    assert items[0]["title"] == english
-    assert "원문을 그대로" in caplog.text
+    assert items == []
+    assert "표시를 보류" in caplog.text
 
 
 def test_claimed_translation_renews_lease_before_every_paid_call(monkeypatch):
@@ -1129,7 +1115,7 @@ def test_title_translation_reuses_durable_cache_after_memory_reset(monkeypatch):
     assert api_calls == [[english]]
 
 
-def test_market_news_localizes_titles_before_summary_and_cache(monkeypatch):
+def test_market_news_localizes_titles_before_summary_and_preserves_source_cache(monkeypatch):
     news._cache.clear()
     english = "Arbitrum token soars"
     korean = "아비트럼 토큰 급등"
@@ -1155,7 +1141,7 @@ def test_market_news_localizes_titles_before_summary_and_cache(monkeypatch):
 
     assert summarized == [korean]
     assert payload["items"][0]["title"] == korean
-    assert news._cache["market"][0]["items"][0]["title"] == korean
+    assert news._cache["market"][0]["items"][0]["title"] == english
 
 
 def test_coin_news_reuses_active_snapshot_outside_fixed_universe(monkeypatch):
@@ -2708,12 +2694,12 @@ def test_unresolved_korean_title_does_not_block_english_titles_in_same_batch(mon
     assert items[1]["title"] == korean
 
 
-def test_pure_english_title_that_cannot_be_translated_keeps_original_title(monkeypatch):
+def test_pure_english_title_that_cannot_be_translated_is_withheld(monkeypatch):
     # 번역 실패가 코인 뉴스 전체를 503 으로 막으면 안 된다 — 운영에서 두 번 장애가 났다.
     english = "Circle Internet Group Tokenized bStocks Price (CRCLB/USD) Today | Live Price, Market Cap & Chart"
     _stub_translation(monkeypatch, {})  # 모델이 영문을 그대로 돌려줌
     items = news._localize_coin_news_items([{"title": english}])
-    assert items[0]["title"] == english
+    assert items == []
 
 
 def test_fact_check_accepts_numbers_spelled_out_in_source():
@@ -3412,8 +3398,8 @@ def test_failed_title_does_not_repeat_paid_call_on_refresh_and_accepts_durable_r
     durable = {}
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.setattr(news, "_load_durable_title_translations", lambda _titles: durable)
-    assert news._localize_coin_news_items([{"title": source}])[0]["title"] == source
-    assert news._localize_coin_news_items([{"title": source}])[0]["title"] == source
+    assert news._localize_coin_news_items([{"title": source}]) == []
+    assert news._localize_coin_news_items([{"title": source}]) == []
     assert calls == [[source]]
     durable[source] = korean
     assert news._localize_coin_news_items([{"title": source}])[0]["title"] == korean

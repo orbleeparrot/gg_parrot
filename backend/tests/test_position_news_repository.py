@@ -271,6 +271,8 @@ def test_collector_publishes_before_ai_and_persists_one_translation(db_engine, m
 def test_staged_collection_exposes_rss_before_browser_and_spends_once(db_engine, monkeypatch):
     from app.agent_features.position_news import collector
     from app import news
+    monkeypatch.setattr(news, "_title_translation_cache", {})
+    monkeypatch.setattr(news, "_title_translation_retry_at", {})
     monkeypatch.setattr(repository, "get_session", lambda: Session(db_engine))
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key")
     paid = []
@@ -1205,3 +1207,19 @@ def test_failed_translation_has_shared_backoff_without_waiting_on_a_nonexistent_
         retry = repository.claim_title_translations([title], now_ms=301001, db=db)
         assert retry["claimed"] == [title]
         assert retry["deferred"] == []
+
+
+def test_local_translation_capacity_release_can_retry_without_provider_backoff(db_engine):
+    title = "Bitcoin ETF approved"
+    with Session(db_engine) as db:
+        first = repository.claim_title_translations([title], now_ms=1000, db=db)
+        repository.release_title_translation_claims([title], claim_token="wrong-token",
+                                                   retry_immediately=True, now_ms=1001, db=db)
+        assert repository.claim_title_translations([title], now_ms=1002, db=db)["waiting"] == [title]
+        repository.release_title_translation_claims([title], claim_token=first["claim_token"],
+                                                   retry_immediately=True, now_ms=1003, db=db)
+    with Session(db_engine) as db:
+        retry = repository.claim_title_translations([title], now_ms=1004, db=db)
+        assert retry["claimed"] == [title]
+        assert retry["deferred"] == [] and retry["waiting"] == []
+        assert retry["claim_token"] != first["claim_token"]

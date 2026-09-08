@@ -76,8 +76,8 @@ test("pending and empty news responses stay quiet while real articles remain vis
   for (const status of ["pending", "empty"]) {
     assert.deepEqual(newsEvents({ analysis_status: status, collection: { status }, items: [] }), []);
   }
-  const [article] = newsEvents({ analysis_status: "pending", items: [{ id: "stored", title: "Ethena launches payments" }] });
-  assert.equal(article.title, "Ethena launches payments");
+  const [article] = newsEvents({ analysis_status: "pending", items: [{ id: "stored", title: "에테나 결제 서비스 출시" }] });
+  assert.equal(article.title, "에테나 결제 서비스 출시");
 });
 
 test("news connection failures remain visible even during an initial pending snapshot", () => {
@@ -91,26 +91,26 @@ test("news connection failures remain visible even during an initial pending sna
 });
 
 test("news identity survives translations, reorderings, and snapshot refreshes", () => {
-  const first = { title: "Ethena launches payments", source: "Publisher", published: "2026-09-07T00:00:00Z" };
-  const second = { title: "Bittensor releases an upgrade", source: "Publisher", published: "2026-09-06T00:00:00Z" };
+  const first = { title: "에테나 결제 서비스 선보여", original_title: "Ethena launches payments", source: "Publisher", published: "2026-09-07T00:00:00Z" };
+  const second = { title: "비텐서 업그레이드 출시", original_title: "Bittensor releases an upgrade", source: "Publisher", published: "2026-09-06T00:00:00Z" };
   const original = newsEvents({ items: [first, second], updated_at: 1000 });
-  const translated = newsEvents({ items: [second, { ...first, title: "에테나 결제 서비스 출시", original_title: first.title }], updated_at: 2000 });
+  const translated = newsEvents({ items: [second, { ...first, title: "에테나 결제 서비스 출시" }], updated_at: 2000 });
   assert.equal(original[0].id, translated[1].id);
   assert.equal(original[1].id, translated[0].id);
   assert.notEqual(original[0].id, original[1].id);
 });
 
 test("article URLs take precedence over translated titles and stable server IDs remain unchanged", () => {
-  const first = newsEvents({ items: [{ url: "https://publisher.example/article", title: "First title" }] })[0];
+  const first = newsEvents({ items: [{ url: "https://publisher.example/article", title: "처음 번역한 제목" }] })[0];
   const translated = newsEvents({ items: [{ url: "https://publisher.example/article", title: "번역 제목" }] })[0];
   assert.equal(first.id, translated.id);
-  const stable = newsEvents({ items: [{ id: "news-1", url: "https://publisher.example/article", title: "Article" }] })[0];
+  const stable = newsEvents({ items: [{ id: "news-1", url: "https://publisher.example/article", title: "새 기사" }] })[0];
   assert.equal(stable.id, "position-news-news-1");
 });
 
 test("undated news keeps its first observation time in the ledger, not each refresh time", () => {
-  const first = newsEvents({ items: [{ id: "undated", title: "Article" }], updated_at: 1000 })[0];
-  const refreshed = newsEvents({ items: [{ id: "undated", title: "Updated display title" }], updated_at: 2000 })[0];
+  const first = newsEvents({ items: [{ id: "undated", title: "새 기사" }], updated_at: 1000 })[0];
+  const refreshed = newsEvents({ items: [{ id: "undated", title: "수정한 제목" }], updated_at: 2000 })[0];
   assert.equal(first.occurredAt, 0);
   assert.equal(refreshed.occurredAt, 0);
   assert.equal(first.id, refreshed.id);

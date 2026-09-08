@@ -23,7 +23,9 @@ def _bootstrap_only():
 def _cycle():
     global _last_pruned
     # The DB is authoritative across web instances and the optional worker.
-    # Native Render web instances serve the first RSS result without Chromium.
+    # Native Render web instances store the first RSS result without Chromium.
+    # The read service joins shared translation work and exposes only Korean
+    # headlines, so raw bootstrap snapshots never become English alerts.
     # Prefect owns regular browser/AI work; stale snapshots still receive RSS
     # recovery here if the external worker is temporarily unavailable.
     result = collector.run_collection_cycle(retention_days=0, bootstrap_only=_bootstrap_only())

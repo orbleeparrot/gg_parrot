@@ -18,52 +18,28 @@ class NewsCollectionError(RuntimeError):
 
 
 def _localize_collected_payload(payload: dict, repo, now_ms=None) -> dict:
-    """One bounded shared translation batch; failures preserve source titles."""
+    """Translate every title through the public shared cache, retaining raw work.
+
+    Display responses omit unfinished translations. Collector storage keeps the
+    original items so a temporary provider failure cannot lose an article.
+    """
     items = [dict(item) for item in payload.get("items") or []]
-    titles = list(dict.fromkeys(
-        str(item.get("title") or "") for item in items
-        if not item.get("original_title")
-        and news_mod._title_needs_korean_translation(str(item.get("title") or ""))
-    ))[:10]
-    if not titles:
-        return payload
-    token = ""
-    claimed = []
-    translations = {}
     try:
-        cached = repo.get_title_translations(titles)
-        rejected = [title for title, value in cached.items()
-                    if not news_mod._valid_title_translation(title, value)]
-        translations = {title: news_mod._normalize_title_translation(title, value)
-                        for title, value in cached.items() if title not in rejected}
-        missing = [title for title in titles if title not in translations]
-        if missing and os.environ.get("ANTHROPIC_API_KEY"):
-            claim = repo.claim_title_translations(missing, rejected_titles=rejected, now_ms=now_ms)
-            translations.update(claim.get("cached") or {})
-            claimed = claim.get("claimed") or []
-            token = claim.get("claim_token") or ""
-            if claimed and repo.reserve_ai_budget(
-                daily_limit=max(0, int(os.environ.get("POSITION_NEWS_TRANSLATION_MAX_CALLS_PER_DAY", "10"))),
-                namespace="position_news_translation", now_ms=now_ms,
-            ):
-                translated = news_mod._request_korean_title_translations(claimed)
-                translated = {title: news_mod._normalize_title_translation(title, value)
-                              for title, value in translated.items()
-                              if title in claimed and news_mod._valid_title_translation(title, value)}
-                repo.store_title_translations(translated, claim_token=token, now_ms=now_ms)
-                translations.update(translated)
+        localized = news_mod._localize_coin_news_items(items)
     except Exception as exc:
-        logging.getLogger(__name__).warning("Ticker title translation unavailable (%s); retaining original titles",
+        localized = []
+        logging.getLogger(__name__).warning("Ticker title translation pending (%s); retaining raw articles for retry",
                                            type(exc).__name__)
-    finally:
-        if token:
-            repo.release_title_translation_claims(claimed, claim_token=token)
-    for item in items:
-        original = item.get("title") or ""
-        translated = translations.get(original)
-        if translated and news_mod._valid_title_translation(original, translated):
-            item.update(title=translated, original_title=original)
-    return {**payload, "items": items}
+    ready = {_article_identity(item): item for item in localized}
+    return {**payload, "items": [ready.get(_article_identity(item), item) for item in items],
+            "translation": {"status": "partial" if len(localized) < len(items) else "ready",
+                            "pending_count": max(0, len(items) - len(localized)),
+                            "retry_after_seconds": 30}}
+
+
+def _article_identity(item: dict) -> tuple[str, str, str]:
+    return (str(item.get("original_title") or item.get("title") or ""),
+            str(item.get("source") or ""), str(item.get("url") or ""))
 
 
 def _analysis_model() -> str:
@@ -75,7 +51,7 @@ def analysis_fingerprint(asset_symbol: str, items: list[dict]) -> str:
     normalized_items = sorted(
         (
             {
-                "title": str(item.get("title") or "").strip(),
+                "title": str(item.get("original_title") or item.get("title") or "").strip(),
                 "source": str(item.get("source") or "").strip(),
                 "excerpt": str(item.get("excerpt") or "").strip(),
             }
@@ -161,6 +137,10 @@ def collect_payload(
         }
 
     snapshot_key = analysis_fingerprint(asset, items)
+    # Translation has its own shared cache and retry lifecycle. Reused analysis
+    # must not prevent an earlier unfinished translation from being retried.
+    if localize:
+        news_payload = _localize_collected_payload(news_payload, repo, now_ms)
     claim = repo.claim_snapshot(
         asset_symbol=asset,
         snapshot_key=snapshot_key,
@@ -179,6 +159,11 @@ def collect_payload(
         }
 
     claimed_payload = getattr(claim, "news_payload", None) or news_payload
+    if localize:
+        translated = {_article_identity(item): item for item in news_payload.get("items") or []}
+        claimed_payload = {**claimed_payload,
+            "items": [translated.get(_article_identity(item), item) for item in claimed_payload.get("items") or []],
+            "translation": dict(news_payload.get("translation") or {})}
     claimed_items = list(claimed_payload.get("items") or [])
     coin_name = str(claimed_payload.get("coin_name") or asset)
     wants_ai = bool(os.environ.get("ANTHROPIC_API_KEY")) and allow_ai
@@ -219,15 +204,11 @@ def collect_payload(
             coin_name,
             allow_ai=reserved_ai,
         )
-        localized_payload = (
-            _localize_collected_payload(claimed_payload, repo, now_ms)
-            if localize else claimed_payload
-        )
         completed = repo.complete_snapshot(
             claim.snapshot_id,
             analysis,
             claim_token=claim.claim_token,
-            news_payload=localized_payload,
+            news_payload=claimed_payload,
             now_ms=now_ms,
         )
     except Exception as exc:

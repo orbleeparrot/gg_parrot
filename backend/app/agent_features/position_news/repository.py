@@ -754,10 +754,11 @@ def release_title_translation_claims(
     titles: list[str],
     *,
     claim_token: str,
+    retry_immediately: bool = False,
     now_ms: int | None = None,
     db: Session | None = None,
 ) -> None:
-    """Release failed claims; the claim path applies the shared retry backoff."""
+    """Release claims, distinguishing local capacity from a provider failure."""
     if not claim_token or not titles:
         return
     if db is None:
@@ -765,6 +766,7 @@ def release_title_translation_claims(
             release_title_translation_claims(
                 titles,
                 claim_token=claim_token,
+                retry_immediately=retry_immediately,
                 now_ms=now_ms,
                 db=owned,
             )
@@ -779,7 +781,7 @@ def release_title_translation_claims(
             NewsTitleTranslation.claim_token == claim_token,
         )
         .values(
-            processing_status="error",
+            processing_status="retryable" if retry_immediately else "error",
             claim_token="",
             claimed_ms=0,
             updated_at=now_iso,

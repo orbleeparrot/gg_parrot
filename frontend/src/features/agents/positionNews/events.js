@@ -1,3 +1,5 @@
+import { hasKoreanText } from "../../../lib/newsBriefings.js";
+
 function impactPresentation(effect) {
   if (effect === "favorable") return { severity: "signal", expression: "signal" };
   if (effect === "unfavorable") return { severity: "warning", expression: "warning" };
@@ -60,7 +62,7 @@ export const positionNewsModule = {
     const events = [...statusEvents];
 
     newsItems.forEach((item) => {
-      if (!item) return;
+      if (!item || !hasKoreanText(item.title)) return;
       const identity = articleIdentity(item);
       if (!identity) return;
       const presentation = impactPresentation(item.position_effect);
@@ -70,7 +72,7 @@ export const positionNewsModule = {
         severity: presentation.severity,
         expression: presentation.expression,
         title: item.title || "관련 뉴스",
-        summary: item.summary || "",
+        summary: hasKoreanText(item.summary) ? item.summary : "",
         occurredAt: item.published || 0,
         fallbackTime: "최근 수집",
         sourceLabel: item.source || "원문",

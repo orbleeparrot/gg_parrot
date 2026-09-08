@@ -187,6 +187,7 @@ def effective_config(browser_budget_seconds: float | None = None) -> dict:
         "version": os.environ.get("RENDER_GIT_COMMIT", "local"),
         "collector_mode": "rss_api_then_playwright",
         "coindesk_api": coindesk_api.configuration(),
+        "title_translation": {"daily_call_limit": None, "scope": "all_articles", "shared_cache": True},
         "collection_seconds": int(os.environ.get("POSITION_NEWS_COLLECTION_SECONDS", "300")),
         "schedule_seconds": max(60, int(os.environ.get("POSITION_NEWS_SCHEDULE_SECONDS", "60"))),
         "max_ai_per_run": int(os.environ.get("POSITION_NEWS_MAX_AI_ANALYSES_PER_RUN", "2")),

@@ -41,6 +41,7 @@ export default function ChatBox({ defaultOpen = false, defaultStickerTray = fals
   const [stickerOpen, setStickerOpen] = useState(defaultStickerTray);
 
   const dividerReadyRef = useRef(false); // 열린 채로 첫 목록이 오면 그때 한 번 기준을 잡는다
+  const rootRef = useRef(null);
   const listRef = useRef(null);
   const inputRef = useRef(null);
   const nameRef = useRef(null);
@@ -90,10 +91,19 @@ export default function ChatBox({ defaultOpen = false, defaultStickerTray = fals
         return false;
       });
     };
+    // 패널·버튼 바깥을 누르면 닫는다 — 스크림 없는 팝오버의 기본 동작.
+    const onPointerDown = (event) => {
+      if (rootRef.current && !rootRef.current.contains(event.target)) {
+        setStickerOpen(false);
+        setOpen(false);
+      }
+    };
     document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("pointerdown", onPointerDown);
     return () => {
       window.cancelAnimationFrame(frame);
       document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("pointerdown", onPointerDown);
     };
     // 열릴 때 한 번만 포커스한다 — 이름 편집 중 매 입력마다 옮기지 않게.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -157,7 +167,7 @@ export default function ChatBox({ defaultOpen = false, defaultStickerTray = fals
   const clock = kstClock();
 
   return (
-    <div className="chat-float">
+    <div className="chat-float" ref={rootRef}>
       {open ? (
         <section id={panelId} className="chat-sheet" role="dialog" aria-label="리더보드 채팅">
           <header className="chat-head">

@@ -2,9 +2,13 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api.js";
 import { useAuth } from "../lib/auth.js";
-import { PageHeader, EmptyState, Loading, ErrorNote } from "../components/Page.jsx";
+import { initialOf, kstDateTime, pageWindow } from "../lib/boardText.js";
+import { PageHeader, EmptyState, ErrorNote } from "../components/Page.jsx";
+import { ChevronLeftIcon, ChevronRightIcon, CommentIcon, ImageIcon } from "../components/boardIcons.jsx";
+import "./Board.css";
 
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
+const PAGE_SIZE = 10;
 
 // 로그인 계정만 여는 글쓰기 폼(제목/본문 + 이미지 jpg·png 1장).
 function Composer({ onCreated, onCancel }) {
@@ -73,7 +77,8 @@ function Composer({ onCreated, onCancel }) {
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           maxLength={120}
-          className="field"
+          className={"field" + (err && !title.trim() ? " field-err" : "")}
+          aria-invalid={err && !title.trim() ? true : undefined}
         />
       </label>
       <label className="block">
@@ -109,7 +114,7 @@ function Composer({ onCreated, onCancel }) {
           </button>
         </div>
       )}
-      {err && <div className="t-small text-red-600" role="alert">{err}</div>}
+      <p className="board-form-error" role={err ? "alert" : undefined}>{err}</p>
       <div className="flex items-center gap-2">
         <button onClick={submit} disabled={busy} className="btn btn-l btn-primary">
           {busy ? "등록 중…" : "등록"}
@@ -122,28 +127,86 @@ function Composer({ onCreated, onCancel }) {
   );
 }
 
+// 쪽 이동 — 단일 선택이라 segmented 문법(§6). 현재 쪽만 면 배경, 앞뒤는 화살표.
 function Pager({ page, pages, onGo }) {
   if (pages <= 1) return null;
-  const nums = [];
-  const from = Math.max(1, page - 2);
-  const to = Math.min(pages, from + 4);
-  for (let i = from; i <= to; i++) nums.push(i);
-  // 페이지 번호는 단일 선택이지만 개수가 유동적이라 chip 규격을 쓴다(§6 chip).
-  const btn = "chip justify-center min-w-[34px] num disabled:opacity-30 ";
   return (
-    <div className="flex items-center justify-center gap-2 mt-6 flex-wrap">
-      <button disabled={page <= 1} onClick={() => onGo(page - 1)} className={btn}>
-        ‹
+    <nav className="board-pager" aria-label="쪽 이동">
+      <button type="button" className="board-page-btn" disabled={page <= 1} onClick={() => onGo(page - 1)} aria-label="이전 쪽">
+        <ChevronLeftIcon />
       </button>
-      {nums.map((n) => (
-        <button key={n} onClick={() => onGo(n)} className={btn + (n === page ? "chip-on" : "")}>
+      {pageWindow(page, pages).map((n) => (
+        <button
+          key={n}
+          type="button"
+          className={`board-page-btn num${n === page ? " is-on" : ""}`}
+          aria-current={n === page ? "page" : undefined}
+          onClick={() => onGo(n)}
+        >
           {n}
         </button>
       ))}
-      <button disabled={page >= pages} onClick={() => onGo(page + 1)} className={btn}>
-        ›
+      <button type="button" className="board-page-btn" disabled={page >= pages} onClick={() => onGo(page + 1)} aria-label="다음 쪽">
+        <ChevronRightIcon />
       </button>
-    </div>
+    </nav>
+  );
+}
+
+// 불러오는 동안의 뼈대 — 행 모양 그대로, 회전 대신.
+function SkeletonRows({ count = 6 }) {
+  return (
+    <ul className="board-list" aria-hidden="true">
+      {Array.from({ length: count }, (_, index) => (
+        <li key={index} className="board-row is-skeleton">
+          <span className="board-row-link">
+            <span className="board-avatar" />
+            <span className="board-row-body">
+              <span className="board-skeleton is-title" />
+              <span className="board-skeleton is-snippet" />
+            </span>
+            <span className="board-row-meta">
+              <span className="board-skeleton is-meta" />
+            </span>
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+// 글 한 줄 — 아바타 | 제목(+사진·댓글 표식)·요약 | 작성자·시각. 행 전체가 링크.
+function PostRow({ post }) {
+  const marks = post.has_image || post.comment_count > 0;
+  const when = kstDateTime(post.created_kst);
+  return (
+    <li className="board-row">
+      <Link to={`/board/${post.id}`} className="board-row-link">
+        <span className="board-avatar" aria-hidden="true">{initialOf(post.author_name)}</span>
+        <span className="board-row-body">
+          <span className="board-row-title">
+            <span>{post.title}</span>
+            {marks ? (
+              <span className="board-row-marks">
+                {post.has_image ? (
+                  <span title="사진 첨부"><ImageIcon /><span className="sr-only">사진 첨부</span></span>
+                ) : null}
+                {post.comment_count > 0 ? (
+                  <span title={`댓글 ${post.comment_count}개`}>
+                    <CommentIcon /><b className="num">{post.comment_count}</b><span className="sr-only">개 댓글</span>
+                  </span>
+                ) : null}
+              </span>
+            ) : null}
+          </span>
+          {post.snippet ? <span className="board-row-snippet">{post.snippet}</span> : null}
+        </span>
+        <span className="board-row-meta">
+          <span className="board-row-author">{post.author_name}</span>
+          <time className="board-row-time num" dateTime={when || undefined}>{post.created_kst}</time>
+        </span>
+      </Link>
+    </li>
   );
 }
 
@@ -159,8 +222,9 @@ export default function Board() {
 
   function load(p) {
     setBusy(true);
+    setErr("");
     api
-      .boardList(p, 10)
+      .boardList(p, PAGE_SIZE)
       .then((d) => setData(d))
       .catch((e) => setErr(String(e.message || e)))
       .finally(() => setBusy(false));
@@ -177,16 +241,22 @@ export default function Board() {
   }
 
   return (
-    <div className="max-w-3xl">
+    <div className="board-page">
+      {/* 제목 줄은 다른 화면과 같은 공용 규격(§9 PageHeader). 아이브로·설명 없이 제목 + 글 수, 오른쪽에 글쓰기. */}
       <PageHeader
-        eyebrow="전략·질문·정보"
         title="껄무새 게시판"
-        description="코린이끼리 전략·질문·정보를 나눠요. (투자 조언 아님)"
+        meta={data ? (
+          <>
+            글 <span className="num">{data.total.toLocaleString()}</span>개
+            {data.pages > 1 ? <> · <span className="num">{data.page}</span>/<span className="num">{data.pages}</span> 쪽</> : null}
+          </>
+        ) : null}
         actions={
           token ? (
             <button
               onClick={() => setComposing((v) => !v)}
               className={"btn btn-m " + (composing ? "btn-secondary" : "btn-primary")}
+              aria-expanded={composing}
             >
               {composing ? "닫기" : "새 글 쓰기"}
             </button>
@@ -203,7 +273,7 @@ export default function Board() {
       />
 
       {composing && token && (
-        <div className="mb-5">
+        <div className="board-composer">
           <Composer
             onCreated={(post) => {
               setComposing(false);
@@ -214,41 +284,20 @@ export default function Board() {
         </div>
       )}
 
-      {busy && <Loading />}
-      {err && <ErrorNote>오류: {err}</ErrorNote>}
+      {err && <ErrorNote>글 목록을 불러오지 못했어요: {err}</ErrorNote>}
+      {busy && !data && !err ? <SkeletonRows /> : null}
 
       {data && (
         <>
           {data.items.length === 0 ? (
             <EmptyState title="아직 글이 없어요">첫 글을 남겨봐요.</EmptyState>
           ) : (
-            <ul className="divide-y divide-slate-200 border-t border-slate-200">
-              {data.items.map((p) => (
-                <li key={p.id}>
-                  <Link to={`/board/${p.id}`} className="block py-4 px-2 -mx-2 rounded-lg hover:bg-slate-100">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="t-title text-slate-900 truncate">
-                          {p.has_image && <span className="badge badge-flat mr-2">사진</span>}
-                          {p.title}
-                          {p.comment_count > 0 && (
-                            <span className="ml-2 t-caption font-bold num text-indigo-800">[{p.comment_count}]</span>
-                          )}
-                        </div>
-                        {p.snippet && <div className="t-small text-slate-500 truncate mt-1">{p.snippet}</div>}
-                      </div>
-                      <div className="text-right shrink-0">
-                        <div className="t-caption text-slate-700">{p.author_name}</div>
-                        <div className="t-caption text-slate-500 num">{p.created_kst}</div>
-                      </div>
-                    </div>
-                  </Link>
-                </li>
-              ))}
+            <ul className={`board-list${busy ? " is-busy" : ""}`} aria-busy={busy || undefined}>
+              {data.items.map((post) => <PostRow key={post.id} post={post} />)}
             </ul>
           )}
           <Pager page={data.page} pages={data.pages} onGo={go} />
-          <p className="mt-4 t-caption text-slate-500 text-center">{data.disclaimer}</p>
+          {data.disclaimer ? <p className="board-foot">{data.disclaimer}</p> : null}
         </>
       )}
     </div>

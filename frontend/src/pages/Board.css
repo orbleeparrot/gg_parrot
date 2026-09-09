@@ -1,0 +1,173 @@
+/* 게시판 — 캔버스 위 괘선 목록(§1-3 카드 없음, §5 폭 제한 없음). 행 = 아바타 | 제목·요약 | 작성자·시각.
+   글 상세는 68ch 안에서 읽고, 댓글은 같은 행 문법. 색은 전부 --c-* 토큰(라이트·다크 자동). */
+.board-page { width: 100%; }
+.board-composer { max-width: 768px; margin-bottom: 24px; }
+
+/* ── 목록 ── */
+.board-list { margin: 0; padding: 0; list-style: none; border-top: 1px solid rgb(var(--c-slate-200)); }
+.board-list.is-busy { opacity: 0.6; }
+.board-row { border-bottom: 1px solid rgb(var(--c-slate-200)); }
+.board-row-link {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) max-content;
+  grid-template-areas: "avatar body meta";
+  align-items: center;
+  column-gap: 14px;
+  margin-inline: -10px;
+  padding: 16px 10px;
+  border-radius: 12px;
+  color: inherit;
+  text-decoration: none;
+}
+@media (hover: hover) {
+  .board-row-link:hover { background: rgb(var(--c-slate-100)); }
+}
+.board-row-link:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: -2px; }
+.board-row-link:active { background: rgb(var(--c-slate-200)); }
+.board-avatar {
+  grid-area: avatar;
+  width: 36px;
+  height: 36px;
+  border: 1px solid rgb(var(--c-slate-200));
+  border-radius: 999px;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  background: rgb(var(--c-slate-100));
+  color: rgb(var(--c-slate-900));
+  font-size: 14px;
+  line-height: 1;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+.board-row-body { grid-area: body; min-width: 0; display: grid; gap: 4px; }
+.board-row-title {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: rgb(var(--c-slate-900));
+  font-size: 17px;
+  line-height: 1.3;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+}
+.board-row-title > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 제목 뒤 표식 — 사진 첨부, 댓글 수. 글자와 같은 흐림색, 숫자는 .num */
+.board-row-marks { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 8px; color: rgb(var(--c-slate-500)); font-size: 13px; font-weight: 700; }
+.board-row-marks > span { display: inline-flex; align-items: center; gap: 3px; }
+.board-row-marks svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.board-row-snippet { overflow: hidden; color: rgb(var(--c-slate-500)); font-size: 14px; line-height: 1.5; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.board-row-meta { grid-area: meta; display: grid; justify-items: end; gap: 3px; text-align: right; }
+.board-row-author { color: rgb(var(--c-slate-700)); font-size: 13px; font-weight: 600; white-space: nowrap; }
+.board-row-time { color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 600; white-space: nowrap; }
+@media (max-width: 639px) {
+  .board-row-link { grid-template-columns: 36px minmax(0, 1fr); grid-template-areas: "avatar body" "avatar meta"; row-gap: 4px; }
+  .board-row-meta { display: flex; justify-content: flex-start; gap: 8px; text-align: left; }
+}
+/* 불러오는 동안 — 행 모양 그대로의 뼈대(회전 대신). */
+.board-row.is-skeleton .board-row-link { pointer-events: none; }
+.board-skeleton { display: block; height: 12px; border-radius: 6px; background: rgb(var(--c-slate-200)); }
+.board-skeleton.is-title { width: 46%; height: 14px; }
+.board-skeleton.is-snippet { width: 70%; }
+.board-skeleton.is-meta { width: 72px; }
+@media (prefers-reduced-motion: no-preference) {
+  .board-skeleton { animation: board-skeleton 1.2s ease-in-out infinite; }
+  .board-list { transition: opacity 150ms ease-out; }
+}
+@keyframes board-skeleton { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+
+/* ── 쪽 이동 — 단일 선택이라 segmented(§6): 현재 쪽만 면 배경. ── */
+.board-pager { margin-top: 24px; display: flex; align-items: center; justify-content: center; gap: 4px; }
+.board-page-btn {
+  min-width: 36px;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: rgb(var(--c-slate-700));
+  background: transparent;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.board-page-btn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+@media (hover: hover) {
+  .board-page-btn:hover:not(:disabled) { background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-900)); }
+}
+.board-page-btn:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
+.board-page-btn:active:not(:disabled) { transform: translateY(1px); }
+.board-page-btn.is-on { border-color: rgb(var(--c-slate-300)); background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-900)); }
+.board-page-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.board-foot { margin-top: 20px; color: rgb(var(--c-slate-500)); font-size: 13px; line-height: 1.5; font-weight: 600; }
+
+/* ── 글 상세 ── */
+.board-post { max-width: 768px; }
+.board-back { margin-left: -10px; gap: 4px; }
+.board-back svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.board-post-head { margin-top: 12px; padding-bottom: 20px; border-bottom: 1px solid rgb(var(--c-slate-200)); display: grid; gap: 12px; }
+.board-post-title {
+  margin: 0;
+  min-width: 0;
+  color: rgb(var(--c-slate-900));
+  font-size: clamp(24px, 20px + 0.8vw, 30px);
+  line-height: 1.2;
+  font-weight: 800;
+  letter-spacing: -0.025em;
+  text-wrap: balance;
+  overflow-wrap: anywhere;
+}
+.board-post-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.board-post-meta .board-avatar { width: 28px; height: 28px; font-size: 12px; }
+.board-post-meta b { color: rgb(var(--c-slate-900)); font-size: 14px; font-weight: 700; }
+.board-post-meta time { color: rgb(var(--c-slate-500)); font-size: 13px; font-weight: 600; }
+.board-post-meta .board-text-btn { margin-left: auto; }
+.board-post-figure { margin: 20px 0 0; }
+.board-post-figure img { display: block; max-width: 100%; max-height: 560px; border: 1px solid rgb(var(--c-slate-200)); border-radius: 12px; }
+.board-post-body {
+  margin: 20px 0 0;
+  max-width: 68ch;
+  color: rgb(var(--c-slate-700));
+  font-size: 16px;
+  line-height: 1.75;
+  font-weight: 450;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  text-wrap: pretty;
+}
+.board-post-skeleton { display: grid; gap: 14px; margin-top: 12px; }
+
+/* ── 댓글 ── */
+.board-comments { margin-top: 36px; }
+.board-comments-head { margin: 0 0 6px; display: flex; align-items: baseline; gap: 8px; color: rgb(var(--c-slate-900)); font-size: 17px; font-weight: 700; letter-spacing: -0.015em; }
+.board-comments-head .num { color: rgb(var(--c-slate-500)); font-size: 14px; font-weight: 700; }
+.board-comment-list { margin: 0; padding: 0; list-style: none; border-top: 1px solid rgb(var(--c-slate-200)); }
+.board-comment { padding: 14px 0; border-bottom: 1px solid rgb(var(--c-slate-200)); display: grid; grid-template-columns: 28px minmax(0, 1fr); column-gap: 12px; }
+.board-comment .board-avatar { width: 28px; height: 28px; font-size: 12px; }
+.board-comment-top { min-width: 0; display: flex; align-items: center; gap: 8px; }
+.board-comment-top b { color: rgb(var(--c-slate-900)); font-size: 14px; font-weight: 700; }
+.board-comment-top time { color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 600; }
+.board-comment-top .board-text-btn { margin-left: auto; }
+.board-comment-text { margin: 4px 0 0; color: rgb(var(--c-slate-700)); font-size: 15px; line-height: 1.6; font-weight: 500; white-space: pre-line; overflow-wrap: anywhere; }
+.board-comment-confirm { margin-top: 10px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.board-empty { padding: 24px 0; color: rgb(var(--c-slate-500)); font-size: 14px; font-weight: 500; }
+/* 글자 버튼(삭제) — 흐린 글자, 올리면 빨강. 44px 표적은 ::before 로 넓힌다. */
+.board-text-btn { position: relative; padding: 4px 6px; border: 0; border-radius: 6px; background: transparent; color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 700; cursor: pointer; }
+.board-text-btn::before { content: ""; position: absolute; inset: -8px; }
+@media (hover: hover) {
+  .board-text-btn:hover:not(:disabled) { color: rgb(var(--c-red-600)); background: rgb(var(--c-slate-100)); }
+}
+.board-text-btn:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
+.board-text-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ── 댓글 쓰기 — 라벨은 입력 위에(자리표시자로 대신하지 않는다). 입력 40 = 버튼 M 40. ── */
+.board-comment-form { margin-top: 16px; padding-top: 16px; border-top: 1px solid rgb(var(--c-slate-200)); display: grid; gap: 10px; }
+.board-comment-form-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
+@media (max-width: 480px) { .board-comment-form-row { grid-template-columns: minmax(0, 1fr); } }
+.board-field-label { display: grid; gap: 6px; color: rgb(var(--c-slate-700)); font-size: 13px; font-weight: 600; }
+.board-comment-form-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.board-comment-form-foot span { color: rgb(var(--c-slate-500)); font-size: 13px; font-weight: 600; }
+.board-form-error { min-height: 1lh; margin: 0; color: rgb(var(--c-red-600)); font-size: 13px; font-weight: 600; }

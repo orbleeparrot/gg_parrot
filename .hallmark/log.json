@@ -2,6 +2,16 @@
   {
     "date": "2026-09-09",
     "scope": "page",
+    "macrostructure": "Stat-Led identity strip + Index-First tabs",
+    "theme": "DESIGN.md locked",
+    "enrichment": "none",
+    "nav": "app shell (side rail + utility top bar)",
+    "footer": "none",
+    "brief": "내 활동(프로필) 재설계 — 공개 프로필 10곳 벤치마크(GitHub·SO·TradingView·Chess.com·LeetCode·벨로그·브런치·크몽·Binance Square·HN): 이름이 제목·옆에 등급·한 줄 메타·라벨 위 수치·개수 붙은 탭·전체 폭 괘선 표·등급 사다리"
+  },
+  {
+    "date": "2026-09-09",
+    "scope": "page",
     "macrostructure": "Index-First",
     "theme": "DESIGN.md locked",
     "enrichment": "none",

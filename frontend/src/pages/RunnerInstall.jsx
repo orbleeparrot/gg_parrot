@@ -33,9 +33,11 @@ export default function RunnerInstall() {
             <section className="runner-install-step" aria-labelledby="runner-get">
               <h2 id="runner-get" className="runner-install-step-title t-title text-slate-900">
                 <span className="num t-caption text-slate-400" aria-hidden="true">01</span>
-                내려받기
+                실행기 다운로드
               </h2>
-              <p className="t-small text-slate-700">내 Windows PC에서 실행 · 브라우저를 닫아도 주문 지속</p>
+              <p className="t-small text-slate-700">
+                웹에서 만든 매크로를 실제로 돌리는 프로그램이에요. 내 Windows PC에서 실행되고, 매크로 실행 중에는 브라우저를 닫아도 조건 확인과 주문이 이어져요.
+              </p>
               <p className="t-caption text-slate-700">{downloadMeta}</p>
               {download.available ? (
                 <a
@@ -48,7 +50,7 @@ export default function RunnerInstall() {
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                     <path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5" />
                   </svg>
-                  내려받기
+                  실행기 내려받기
                 </a>
               ) : (
                 <button
@@ -68,17 +70,17 @@ export default function RunnerInstall() {
             <section className="runner-install-step" aria-labelledby="runner-key">
               <h2 id="runner-key" className="runner-install-step-title t-title text-slate-900">
                 <span className="num t-caption text-slate-400" aria-hidden="true">02</span>
-                회원 키
+                회원 키 연결
               </h2>
-              <p className="t-small text-slate-700">실행기 ④번 칸에 붙여넣기</p>
+              <p className="t-small text-slate-700">실행기 창의 ④ 회원 키 칸에 붙여넣으세요.</p>
               {token ? (
                 <RunnerKeyPanel key={token} compact />
               ) : (
                 <Link to="/login?next=%2Frunner%2Finstall" className="btn btn-l btn-secondary runner-install-button">
-                  로그인 후 복사
+                  로그인하고 회원 키 복사
                 </Link>
               )}
-              <p className="t-caption text-slate-700">계정 연결·상태·원격 종료용 키</p>
+              <p className="t-caption text-slate-700">회원 키는 계정 연결과 상태 확인·원격 종료에 쓰며, 거래소 키와 달라요.</p>
             </section>
 
             <section className="runner-install-step" aria-labelledby="runner-next">
@@ -92,11 +94,11 @@ export default function RunnerInstall() {
                 onClick={() => { if (!opened) markRunnerOpened(); }}
                 className="btn btn-l btn-secondary runner-install-button"
               >
-                {opened ? "매크로 선택" : "실행했어요 · 선택"}
+                {opened ? "매크로 선택하기" : "실행했어요 · 매크로 선택"}
                 <span aria-hidden="true">→</span>
               </Link>
               <p className="t-small text-slate-700">
-                <Link to="/agents" className="runner-install-inline-link">내 에이전트</Link>에서 차트·손익 확인과 원격 종료
+                실행 후에는 <Link to="/agents" className="runner-install-inline-link">내 에이전트</Link>에서 실시간 차트와 손익을 확인하고 원격으로 종료할 수 있어요.
               </p>
             </section>
           </div>

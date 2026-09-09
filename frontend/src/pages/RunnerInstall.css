@@ -1,12 +1,12 @@
 .runner-install {
-  max-width: 1120px;
+  width: 100%;
 }
 
 .runner-install-layout {
   display: grid;
-  grid-template-columns: minmax(520px, 1fr) minmax(440px, .82fr);
+  grid-template-columns: clamp(520px, 41vw, 640px) minmax(440px, 1fr);
   align-items: start;
-  gap: 28px;
+  gap: 32px;
 }
 
 .runner-install-media {
@@ -30,9 +30,9 @@
 .runner-install-step {
   display: grid;
   align-content: start;
-  gap: 8px;
+  gap: 10px;
   min-width: 0;
-  padding: 0 14px;
+  padding: 0 18px;
   border-left: 1px solid rgb(var(--c-slate-200));
 }
 
@@ -49,10 +49,15 @@
 
 .runner-install-button {
   width: 100%;
-  min-height: 44px;
-  padding-inline: 10px;
-  font-size: 14px;
+  height: auto;
+  min-height: 48px;
+  padding: 10px 12px;
+  white-space: normal;
+  font-size: 15px;
+  line-height: 1.25;
 }
+
+.runner-install-button svg { flex: 0 0 auto; }
 
 .runner-install-inline-link {
   color: rgb(var(--c-slate-900));

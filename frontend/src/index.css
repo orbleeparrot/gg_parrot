@@ -5078,9 +5078,10 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
     align-items: stretch;
   }
   .news-top .news-briefing-section.is-market {
-    /* 섹션 제목의 세로 중심을 페이지 제목(아이브로 26px 아래, 44px×1.08 한 줄)의 중심에 맞춘다. 섹션 머리 76px 의 중심은 38px. */
-    margin-top: 0;
-    padding-top: calc(26px + clamp(30px, 22px + 1.6vw, 44px) * 0.54 - 38px);
+    /* 섹션 제목의 세로 중심을 페이지 제목(한 줄, 글자 크기×1.08)의 중심에 맞춘다.
+       섹션 머리는 min-height 76px 라 중심이 38px — 제목이 더 낮으므로 음수 여백으로 끌어올린다. */
+    margin-top: calc(clamp(30px, 22px + 1.6vw, 44px) * 0.54 - 38px);
+    padding-top: 0;
     padding-left: 36px;
     border-top: 0;
     border-left: 1px solid rgb(var(--c-slate-300));

@@ -393,7 +393,6 @@ export default function News() {
       {/* AI 요약이 있으면 그날의 내용이 머리 본문이 된다 — 첫 줄은 굵은 리드, 나머지는 본문.
           없으면 예전 설명문으로 돌아간다. */}
       <PageHeader
-        eyebrow="MARKET NEWSROOM"
         title="오늘의 코인동향"
         meta={market?.as_of ? <>기준 <span className="num">{market.as_of}</span> · KST</> : null}
         description={summary ? undefined : "시장·규제와 활발히 움직이는 코인을 두 개의 브리핑으로 나눠 읽어요."}

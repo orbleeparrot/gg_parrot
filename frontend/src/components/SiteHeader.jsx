@@ -10,7 +10,6 @@ import { ChevronDownIcon, DownloadIcon, HelpIcon, MenuIcon, UserIcon } from "./u
 import "./SiteHeader.css";
 
 export default function SiteHeader({ hasSidebar, onOpenNavigation, menuButtonRef }) {
-  const { pathname, search } = useLocation();
   const { token } = useAuth();
 
   return (

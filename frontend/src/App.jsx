@@ -21,6 +21,7 @@ const BoardPost = lazy(() => import("./pages/BoardPost.jsx"));
 const ForgotPassword = lazy(() => import("./pages/ForgotPassword.jsx"));
 const ResetPassword = lazy(() => import("./pages/ResetPassword.jsx"));
 const RunnerInstall = lazy(() => import("./pages/RunnerInstall.jsx"));
+const Guide = lazy(() => import("./pages/Guide.jsx"));
 
 function RouteChangeEffects() {
   const { pathname } = useLocation();
@@ -38,7 +39,7 @@ function RouteChangeEffects() {
       : pathname.startsWith("/board")
       ? "게시판"
       : pathname.startsWith("/guide")
-      ? "사용 가이드"
+      ? "사용법"
       : pathname.startsWith("/mypage")
       ? "내 활동"
       : pathname.startsWith("/agents")
@@ -68,18 +69,28 @@ function RouteLoading() {
   );
 }
 
-function LegacyStartRedirect({ view }) {
+function HomeRoute() {
   const location = useLocation();
   const params = new URLSearchParams(location.search);
-  if (view === "help") {
-    params.set("help", "start");
-    params.delete("step");
-    params.delete("run");
-  } else {
-    params.delete("help");
-    params.set("run", "1");
-    if (!params.has("step")) params.set("step", "1");
-  }
+  const onboardingOpen = params.get("guide") === "1"
+    || params.has("tour")
+    || params.get("resume") === "hero-register";
+  if (!params.has("help") || onboardingOpen) return <Home />;
+
+  const next = new URLSearchParams();
+  const section = params.get("help");
+  if (section && section !== "start") next.set("section", section);
+  if (params.has("q")) next.set("q", params.get("q"));
+  const query = next.toString();
+  return <Navigate to={{ pathname: "/guide", search: query ? `?${query}` : "" }} replace />;
+}
+
+function LegacyRunnerRedirect() {
+  const location = useLocation();
+  const params = new URLSearchParams(location.search);
+  params.delete("help");
+  params.set("run", "1");
+  if (!params.has("step")) params.set("step", "1");
   params.delete("guide");
   params.delete("tour");
   params.delete("resume");
@@ -96,7 +107,7 @@ function LegacyStartRedirect({ view }) {
 export default function App() {
   const { pathname } = useLocation();
   const isHome = pathname === "/";
-  const isLegacyStart = pathname === "/runner" || pathname === "/guide";
+  const isLegacyStart = pathname === "/runner";
   const isStart = isHome || isLegacyStart;
   const isNews = pathname === "/news";
   const isAgents = pathname === "/agents";
@@ -147,14 +158,14 @@ export default function App() {
           <RouteChangeEffects />
           <Suspense fallback={<RouteLoading />}>
             <Routes>
-              <Route path="/" element={<Home />} />
+              <Route path="/" element={<HomeRoute />} />
               <Route path="/builder" element={<Studio />} />
               <Route path="/s/:slug" element={<Studio />} />
               <Route path="/mypage" element={<MyPage />} />
               <Route path="/agents" element={<Agents />} />
               <Route path="/runner/install" element={<RunnerInstall />} />
-              <Route path="/runner" element={<LegacyStartRedirect view="runner" />} />
-              <Route path="/guide" element={<LegacyStartRedirect view="help" />} />
+              <Route path="/runner" element={<LegacyRunnerRedirect />} />
+              <Route path="/guide" element={<Guide />} />
               <Route path="/news" element={<News />} />
               <Route path="/board" element={<Board />} />
               <Route path="/board/:id" element={<BoardPost />} />

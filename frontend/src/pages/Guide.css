@@ -11,7 +11,7 @@
   align-self: flex-end;
   width: 112px;
   height: 112px;
-  margin-right: 12px;
+  margin-right: 36px;
   margin-bottom: -18px;
   object-fit: contain;
   pointer-events: none;
@@ -51,7 +51,7 @@
 
 @media (max-width: 767px) {
   .guide-search-area { margin: 0 auto 28px; }
-  .guide-search-mascot { width: 96px; height: 96px; margin-right: 8px; margin-bottom: -16px; }
+  .guide-search-mascot { width: 96px; height: 96px; margin-right: 32px; margin-bottom: -16px; }
   .guide-layout { grid-template-columns: minmax(0, 1fr); gap: 20px; }
   .guide-sidebar { position: static; }
   .guide-toc { max-height: none; overflow: visible; }

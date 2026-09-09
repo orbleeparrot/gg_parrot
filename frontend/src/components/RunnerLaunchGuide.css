@@ -16,56 +16,6 @@
   pointer-events: none;
 }
 
-.runner-launch-guide-caption {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 0 20px;
-  padding: 10px 0;
-  border-bottom: 1px solid rgb(var(--c-slate-200));
-}
-
-.runner-launch-guide-controls {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
-.runner-launch-guide-controls :is(button, a) {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  min-height: 44px;
-  padding: 0 10px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: rgb(var(--c-slate-700));
-  font: inherit;
-  text-decoration: none;
-  cursor: pointer;
-}
-
-.runner-launch-guide-controls :is(button, a):hover {
-  background: rgb(var(--c-slate-100));
-  color: rgb(var(--c-slate-900));
-}
-
-.runner-launch-guide-controls :is(button, a):focus-visible {
-  outline: 2px solid rgb(var(--c-brand-line));
-  outline-offset: 2px;
-}
-
-.runner-launch-guide-controls button:disabled {
-  opacity: .5;
-  cursor: wait;
-}
-
 @media (max-width: 480px) {
   .runner-launch-guide-frame { border-radius: 12px; }
-  .runner-launch-guide-caption { row-gap: 4px; }
-  .runner-launch-guide-controls { margin-left: -10px; }
 }

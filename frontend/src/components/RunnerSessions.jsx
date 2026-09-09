@@ -12,11 +12,12 @@ import { describeDeleteConfirm, describeStopConfirm } from "../features/agents/r
 // 내 매크로 실행 현황 — 실행기(exe)가 올리는 세션을 실시간으로 보여주고,
 // 원격 종료(매크로만 / 청산 후)를 요청한다.
 
-export function RunnerKeyPanel({ enabled = true }) {
+export function RunnerKeyPanel({ enabled = true, compact = false, menu = false }) {
   const [data, setData] = useState(null);
   const [revealed, setRevealed] = useState(false);
   const [err, setErr] = useState("");
   const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
 
   useEffect(() => {
     if (!enabled) return undefined;
@@ -35,6 +36,9 @@ export function RunnerKeyPanel({ enabled = true }) {
     try {
       setData(await api.runnerKeyRegenerate());
       setRevealed(true);
+      setCopied(false);
+      setCopyFailed(false);
+      setErr("");
     } catch (e) {
       setErr(String(e.message || e));
     }
@@ -42,11 +46,50 @@ export function RunnerKeyPanel({ enabled = true }) {
 
   async function copy() {
     if (!data?.key) return;
+    setCopyFailed(false);
     try {
       await navigator.clipboard.writeText(data.key);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
-    } catch (_) {}
+    } catch (_) { setCopyFailed(true); }
+  }
+
+  if (menu) {
+    if (err && !data) return <p className="t-small text-red-600" role="alert">회원 키 조회 실패. 메뉴를 다시 열어 주세요.</p>;
+    if (!data) return <p className="t-small text-slate-700" role="status">회원 키 불러오는 중…</p>;
+    return (
+      <div className="runner-key-menu">
+        <div className="runner-key-menu-field">
+          <input className="num" aria-label="회원 키" type={revealed || copyFailed ? "text" : "password"} readOnly value={data.key} onFocus={(event) => event.target.select()} />
+          <button type="button" className="t-small" onClick={() => { setRevealed(!(revealed || copyFailed)); setCopyFailed(false); }}>{revealed || copyFailed ? "숨기기" : "보기"}</button>
+        </div>
+        <div className="runner-key-menu-actions">
+          <button type="button" className="t-small" onClick={copy}>{copied ? "복사됨" : "복사"}</button>
+          <button type="button" className="t-small" onClick={regen}>재발급</button>
+        </div>
+        <span className="sr-only" role="status">{copied ? "회원 키를 복사했어요." : ""}</span>
+        {err ? <p className="t-small" role="alert">재발급하지 못했어요. 다시 시도해 주세요.</p> : null}
+        {copyFailed ? <p className="t-small" role="alert">복사하지 못했어요. 키를 직접 복사해 주세요.</p> : null}
+      </div>
+    );
+  }
+
+  if (compact) {
+    return (
+      <div className="space-y-2">
+        <button type="button" onClick={copy} disabled={!data?.key || !!err} className="btn btn-l btn-secondary w-full">
+          {err ? "회원 키를 불러오지 못했어요" : !data ? "회원 키 불러오는 중…" : copied ? "복사했어요" : "회원 키 복사"}
+        </button>
+        <span className="sr-only" role="status">{copied ? "회원 키를 복사했어요." : ""}</span>
+        {err ? <p className="t-small text-red-600" role="alert">키 조회 오류: {err}</p> : null}
+        {copyFailed ? (
+          <div className="space-y-2">
+            <p className="t-small text-red-600" role="alert">자동 복사를 하지 못했어요. 아래 키를 직접 복사해 주세요.</p>
+            <input aria-label="직접 복사할 회원 키" readOnly value={data.key} onFocus={(event) => event.target.select()} className="field w-full min-w-0 num" />
+          </div>
+        ) : null}
+      </div>
+    );
   }
 
   if (err) return <div className="t-small text-red-600">키 조회 오류: {err}</div>;

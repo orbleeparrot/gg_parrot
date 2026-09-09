@@ -47,6 +47,8 @@ def _tier(total_sales: int) -> dict:
         "next_name": nxt[1] if nxt else None,
         "next_at": nxt[0] if nxt else None,
         "to_next": (nxt[0] - total_sales) if nxt else 0,
+        # 사다리 전체 — 화면이 현재 칸과 남은 칸을 그릴 수 있게 임계값을 그대로 준다.
+        "ladder": [{"name": tname, "at": threshold} for threshold, tname, _ in _TIERS],
     }
 
 
@@ -79,6 +81,7 @@ def dashboard(user: User, db: Optional[Session] = None) -> dict:
                 "symbol": e.symbol,
                 "human_summary": e.human_summary,
                 "created_kst": _kst(e.created_ms),
+                "created_ms": e.created_ms,
                 "sales": sales_by_entry.get(e.id, 0),
                 "earned": earned_by_entry.get(e.id, 0),
                 "macro": _macro_of(e),
@@ -141,7 +144,7 @@ def dashboard(user: User, db: Optional[Session] = None) -> dict:
     return {
         "user": {
             "id": fresh.id, "username": fresh.username, "email": fresh.email,
-            "points_balance": fresh.points_balance,
+            "points_balance": fresh.points_balance, "created_at": fresh.created_at,
         },
         "tier": _tier(total_sales),
         "totals": {

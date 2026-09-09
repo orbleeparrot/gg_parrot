@@ -1,83 +1,158 @@
-"""Leaderboard chat — a daily (KST) message board (reference only, not advice).
-
-Same daily-reset model as the leaderboard: messages are filtered to the current
-KST day, so the chat clears at KST 00:00 without a scheduler. Safety: message
-length is capped, output is escaped by React on render (we store raw and never
-emit HTML), and a small in-memory rate limit curbs flooding.
-"""
+"""Daily KST chat with verified authors and member-scoped durable read state."""
 from __future__ import annotations
 
-import time
 from datetime import datetime, timezone
-from typing import Deque
-from collections import defaultdict, deque
 
+from sqlalchemy import func, or_, text as sql_text
 from sqlmodel import select
 
-from .db import ChatMessage, get_session
+from .db import ChatMessage, ChatReadState, User, get_session
 from .leaderboard import _kst_hhmm, today_start_ms
 
 MAX_LEN = 300
 MAX_LIST = 200
-# rate limit: at most _RATE_MAX messages per _RATE_WINDOW seconds per client key.
 _RATE_MAX = 5
 _RATE_WINDOW = 10.0
-_recent: dict[str, Deque[float]] = defaultdict(deque)
 
 
 class RateLimited(Exception):
-    """Raised when a client sends messages too quickly."""
+    """Raised when a member sends messages too quickly."""
 
 
 def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _check_rate(client_key: str) -> None:
-    now = time.time()
-    q = _recent[client_key]
-    while q and now - q[0] > _RATE_WINDOW:
-        q.popleft()
-    if len(q) >= _RATE_MAX:
-        raise RateLimited("메시지를 너무 빠르게 보냈어요. 잠시 후 다시 시도하세요.")
-    q.append(now)
+def _lock_member(db, user_id: int) -> User:
+    """Serialize writes per member across workers, including SQLite tests/dev.
+
+    PostgreSQL locks the account row; SQLite needs a write reservation before
+    the first read because it does not implement SELECT FOR UPDATE. Call this
+    before any queries in the transaction to avoid read-to-write upgrade races.
+    """
+    if db.get_bind().dialect.name == "sqlite":
+        db.exec(sql_text("BEGIN IMMEDIATE"))
+    account = db.exec(select(User).where(User.id == user_id).with_for_update()).first()
+    if account is None:
+        raise ValueError("계정을 찾을 수 없어요. 다시 로그인해 주세요.")
+    return account
 
 
-def add_message(username: str, text: str, client_key: str) -> dict:
+def _latest_id(db, *, start_ms: int | None = None) -> int:
+    query = select(func.max(ChatMessage.id))
+    if start_ms is not None:
+        query = query.where(ChatMessage.created_ms >= start_ms)
+    return int(db.exec(query).one() or 0)
+
+
+def add_message(account: User, text: str) -> dict:
     text = (text or "").strip()
     if not text:
         raise ValueError("빈 메시지는 보낼 수 없습니다.")
-    _check_rate(client_key)
-    text = text[:MAX_LEN]  # length cap (stored raw; React escapes on render)
-    name = (username or "익명").strip()[:24] or "익명"
-
-    now = _now_utc()
-    row = ChatMessage(
-        username=name,
-        text=text,
-        created_at=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        created_ms=int(now.timestamp() * 1000),
-    )
+    text = text[:MAX_LEN]
     with get_session() as db:
+        author = _lock_member(db, int(account.id))
+        # Timestamp after obtaining the lock: waiting senders must not insert an
+        # old timestamp that falls outside the persisted rate-limit window.
+        now = _now_utc()
+        now_ms = int(now.timestamp() * 1000)
+        recent_count = db.exec(
+            select(func.count(ChatMessage.id)).where(
+                ChatMessage.user_id == author.id,
+                ChatMessage.created_ms > now_ms - int(_RATE_WINDOW * 1000),
+            )
+        ).one()
+        if recent_count >= _RATE_MAX:
+            raise RateLimited("메시지를 너무 빠르게 보냈어요. 잠시 후 다시 시도하세요.")
+        row = ChatMessage(
+            user_id=author.id,
+            username=author.username,
+            text=text,
+            created_at=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            created_ms=now_ms,
+        )
         db.add(row)
         db.commit()
         db.refresh(row)
-    return _view(row)
+        return _view(row)
 
 
-def list_messages() -> dict:
-    start_ms = today_start_ms()
+def _member_seen_id(user_id: int) -> int:
     with get_session() as db:
-        rows = db.exec(
-            select(ChatMessage)
-            .where(ChatMessage.created_ms >= start_ms)
-            .order_by(ChatMessage.id.desc())
-            .limit(MAX_LIST)
-        ).all()
-    # oldest-first for natural chat rendering
-    items = [_view(r) for r in reversed(rows)]
+        state = db.get(ChatReadState, user_id)
+        if state is not None:
+            return state.last_seen_id
+    with get_session() as db:
+        _lock_member(db, user_id)
+        # Another request may have initialized this member while we waited.
+        state = db.get(ChatReadState, user_id)
+        if state is None:
+            state = ChatReadState(user_id=user_id, last_seen_id=_latest_id(db))
+            db.add(state)
+            db.commit()
+            db.refresh(state)
+        return state.last_seen_id
+
+
+def mark_read(account: User, last_seen_id: int) -> dict:
+    with get_session() as db:
+        _lock_member(db, int(account.id))
+        target = min(max(0, last_seen_id), _latest_id(db))
+        state = db.get(ChatReadState, account.id)
+        if state is None:
+            state = ChatReadState(user_id=int(account.id), last_seen_id=target)
+        else:
+            state.last_seen_id = max(state.last_seen_id, target)
+        db.add(state)
+        db.commit()
+        db.refresh(state)
+        return {"seen_id": state.last_seen_id}
+
+
+def list_messages(
+    account: User | None = None,
+    *,
+    before_id: int | None = None,
+    seen_id: int | None = None,
+) -> dict:
+    start_ms = today_start_ms()
+    server_seen = _member_seen_id(int(account.id)) if account is not None else None
+    with get_session() as db:
+        # Keep metadata independent of the requested historical page.
+        latest_id = _latest_id(db, start_ms=start_ms)
+        effective_seen = server_seen
+        if seen_id is not None:
+            supplied_seen = min(max(0, seen_id), _latest_id(db))
+            effective_seen = max(server_seen or 0, supplied_seen)
+        query = select(ChatMessage).where(
+            ChatMessage.created_ms >= start_ms, ChatMessage.id <= latest_id,
+        )
+        if before_id is not None:
+            query = query.where(ChatMessage.id < before_id)
+        rows = db.exec(query.order_by(ChatMessage.id.desc()).limit(MAX_LIST + 1)).all()
+        has_more = len(rows) > MAX_LIST
+        items = [_view(row) for row in reversed(rows[:MAX_LIST])]
+        unseen_count = 0
+        if effective_seen is not None:
+            unseen_query = select(func.count(ChatMessage.id)).where(
+                ChatMessage.created_ms >= start_ms,
+                ChatMessage.id > effective_seen,
+                ChatMessage.id <= latest_id,
+            )
+            if account is not None:
+                unseen_query = unseen_query.where(or_(
+                    ChatMessage.user_id.is_(None), ChatMessage.user_id != account.id,
+                ))
+            unseen_count = int(db.exec(unseen_query).one())
     return {
         "items": items,
+        "has_more": has_more,
+        "oldest_id": items[0]["id"] if items else None,
+        "latest_id": latest_id,
+        "day_start_ms": start_ms,
+        "seen_id": effective_seen,
+        "server_seen_id": server_seen,
+        "unseen_count": unseen_count,
         "disclaimer": "채팅 내용은 투자 조언이 아니며, 매매 판단과 책임은 본인에게 있습니다.",
     }
 
@@ -85,6 +160,7 @@ def list_messages() -> dict:
 def _view(row: ChatMessage) -> dict:
     return {
         "id": row.id,
+        "user_id": row.user_id,
         "username": row.username,
         "text": row.text,
         "created_kst": _kst_hhmm(row.created_ms),

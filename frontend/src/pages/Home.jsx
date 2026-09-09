@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
-import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
   beginJourney,
   dismissJourney,
@@ -9,7 +9,6 @@ import { isLoggedIn } from "../lib/auth.js";
 
 const StartGuide = lazy(() => import("./Start.jsx"));
 const RunnerFlow = lazy(() => import("./RunnerDownload.jsx"));
-const GuidePage = lazy(() => import("./Guide.jsx"));
 const FOCUSABLE =
   'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
@@ -304,7 +303,6 @@ function HomeHeroRotator({ onLeaderboard, onGuide, paused = false }) {
 
 export default function Home() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const location = useLocation();
   const navigate = useNavigate();
   const [nestedDialogOpen, setNestedDialogOpen] = useState(false);
   const backgroundRef = useRef(null);
@@ -318,13 +316,8 @@ export default function Home() {
   const legacyTour = searchParams.has("tour");
   const resumeRegistration = searchParams.get("resume") === "hero-register";
   const guideOpen = explicitGuide || legacyTour || resumeRegistration;
-  const helpSection = searchParams.get("help") || "";
-  const docsOpen = !guideOpen && !!helpSection;
-  const overlayOpen = guideOpen || docsOpen;
+  const overlayOpen = guideOpen;
   const runnerOpen = searchParams.get("run") === "1" || searchParams.has("step");
-  const helpReturnTo = typeof location.state?.helpReturnTo === "string"
-    ? location.state.helpReturnTo
-    : "";
 
   const openRunner = useCallback((view) => {
     setSearchParams((current) => {
@@ -389,14 +382,6 @@ export default function Home() {
     if (guideOpen) {
       dismissJourney();
     }
-    if (
-      docsOpen
-      && helpReturnTo.startsWith("/")
-      && !helpReturnTo.startsWith("//")
-    ) {
-      navigate(helpReturnTo, { replace: true });
-      return;
-    }
     setSearchParams((current) => {
       const next = new URLSearchParams(current);
       next.delete("guide");
@@ -405,7 +390,7 @@ export default function Home() {
       next.delete("help");
       return next;
     }, { replace: true });
-  }, [docsOpen, guideOpen, helpReturnTo, navigate, setSearchParams]);
+  }, [guideOpen, setSearchParams]);
 
   const restartGuide = useCallback(() => {
     setSearchParams((current) => {
@@ -421,12 +406,10 @@ export default function Home() {
   useEffect(() => {
     document.title = guideOpen
       ? "껄무새 가이드라인"
-      : docsOpen
-        ? "사용 방법 · 껄무새"
-        : runnerOpen
-          ? "매크로 만들기 가이드 · 껄무새"
-          : "비트코인 매크로 · 껄무새";
-  }, [docsOpen, guideOpen, runnerOpen]);
+      : runnerOpen
+        ? "매크로 만들기 가이드 · 껄무새"
+        : "비트코인 매크로 · 껄무새";
+  }, [guideOpen, runnerOpen]);
 
   useEffect(() => {
     if (guideOpen) beginJourney();
@@ -553,34 +536,26 @@ export default function Home() {
             aria-modal={nestedDialogOpen ? undefined : "true"}
             aria-labelledby="onboarding-dialog-title"
             tabIndex={-1}
-            className={`onboarding-dialog ${docsOpen ? "is-docs" : ""}`.trim()}
+            className="onboarding-dialog"
           >
             <header className="onboarding-dialog-bar">
-              {guideOpen ? (
-                <button
-                  type="button"
-                  className="onboarding-dialog-title-button min-w-0"
-                  onClick={restartGuide}
-                  aria-label="껄무새 가이드라인 첫 화면으로 이동"
-                  title="가이드 처음으로"
-                >
-                  <span id="onboarding-dialog-title" className="t-title text-slate-900">껄무새 가이드라인</span>
-                </button>
-              ) : (
-                <span id="onboarding-dialog-title" className="t-title text-slate-900">사용 방법</span>
-              )}
-              <button type="button" onClick={closeOverlay} className="onboarding-close" aria-label={guideOpen ? "껄무새 가이드라인 닫기" : "사용 방법 닫기"}>
-                <span className="hidden sm:inline">{guideOpen ? "나중에 이어보기" : "닫기"}</span>
+              <button
+                type="button"
+                className="onboarding-dialog-title-button min-w-0"
+                onClick={restartGuide}
+                aria-label="껄무새 가이드라인 첫 화면으로 이동"
+                title="가이드 처음으로"
+              >
+                <span id="onboarding-dialog-title" className="t-title text-slate-900">껄무새 가이드라인</span>
+              </button>
+              <button type="button" onClick={closeOverlay} className="onboarding-close" aria-label="껄무새 가이드라인 닫기">
+                <span className="hidden sm:inline">나중에 이어보기</span>
                 <span aria-hidden="true">×</span>
               </button>
             </header>
-            <div className={`onboarding-tour-viewport ${docsOpen ? "is-docs" : ""}`.trim()}>
+            <div className="onboarding-tour-viewport">
               <Suspense fallback={<div className="onboarding-loading t-small text-slate-600" role="status">화면 불러오는 중…</div>}>
-                {guideOpen ? (
-                  <StartGuide onNestedDialogChange={setNestedDialogOpen} />
-                ) : (
-                  <GuidePage embedded initialSection={helpSection || "start"} />
-                )}
+                <StartGuide onNestedDialogChange={setNestedDialogOpen} />
               </Suspense>
             </div>
           </section>

@@ -24,6 +24,13 @@ function emit() {
   listeners.forEach((l) => l());
 }
 
+// Account changes in another tab must also switch request and chat identity here.
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", (event) => {
+    if (event.key === null || event.key === TOKEN_KEY || event.key === USER_KEY) emit();
+  });
+}
+
 export function getToken() {
   return state.token;
 }

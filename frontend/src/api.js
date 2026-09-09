@@ -2,6 +2,7 @@
 // (FastAPI serves the built SPA and the /api routes from one origin).
 import { getToken } from "./lib/auth.js";
 import { createRequestCoordinator } from "./lib/requestCoordinator.js";
+import { withRequestTimeout } from "./lib/requestTimeout.js";
 
 const BASE = "";
 const RUNNER_SESSIONS_STREAM_PATH = "/api/me/runner/sessions/stream";
@@ -43,9 +44,9 @@ async function req(path, opts = {}) {
   const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
   if (token) headers["Authorization"] = `Bearer ${token}`;
   const method = String(opts.method || "GET").toUpperCase();
-  const { signal: callerSignal, ...fetchOptions } = opts;
-  const execute = async (signal) => {
-    const res = await fetch(BASE + path, { ...fetchOptions, method, headers, signal });
+  const { signal: callerSignal, timeoutMs, ...fetchOptions } = opts;
+  const execute = (signal) => withRequestTimeout(async (requestSignal) => {
+    const res = await fetch(BASE + path, { ...fetchOptions, method, headers, signal: requestSignal });
     const body = await jsonBody(res);
     if (!res.ok) {
       const detail = typeof body.detail === "string"
@@ -58,7 +59,7 @@ async function req(path, opts = {}) {
       throw error;
     }
     return body;
-  };
+  }, { signal, timeoutMs });
   if (method !== "GET") return execute(callerSignal);
   const authScope = token || "anonymous";
   return getRequests.run(`${authScope}:${path}`, execute, { signal: callerSignal });
@@ -245,9 +246,16 @@ export const api = {
     req(`/api/leaderboard/${entryId}/unlock`, { method: "POST" }),
 
   // leaderboard chat (daily KST)
-  chatList: (options = {}) => req("/api/chat", options),
-  chatPost: (username, text) =>
-    req("/api/chat", { method: "POST", body: JSON.stringify({ username, text }) }),
+  chatList: ({ beforeId, seenId, ...options } = {}) => {
+    const query = new URLSearchParams();
+    if (beforeId != null) query.set("before_id", String(beforeId));
+    if (seenId != null) query.set("seen_id", String(seenId));
+    return req(`/api/chat${query.size ? `?${query}` : ""}`, { timeoutMs: 15_000, ...options });
+  },
+  chatPost: (text, options = {}) =>
+    req("/api/chat", { timeoutMs: 15_000, ...options, method: "POST", body: JSON.stringify({ text }) }),
+  chatRead: (lastSeenId, options = {}) =>
+    req("/api/chat/read", { timeoutMs: 15_000, ...options, method: "PUT", body: JSON.stringify({ last_seen_id: lastSeenId }) }),
 
   // paper (simulated) trading
   paperStart: (macro, symbol, mode) =>

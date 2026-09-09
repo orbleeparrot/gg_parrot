@@ -60,6 +60,11 @@ def test_dashboard_reflects_created_purchased_and_sales():
     assert sd["created"][0]["sales"] == 1
     assert sd["tier"]["name"] == "브론즈"
     assert any(l["reason"] == "unlock_earn" for l in sd["ledger"])
+    # 등급 사다리·가입일·등록 시각(ms)은 화면이 그대로 그린다.
+    assert sd["tier"]["ladder"][:2] == [{"name": "새싹", "at": 0}, {"name": "브론즈", "at": 1}]
+    assert sd["tier"]["ladder"][-1] == {"name": "다이아", "at": 40}
+    assert sd["user"]["created_at"].endswith("Z")
+    assert isinstance(sd["created"][0]["created_ms"], int)
 
     # Buyer side: 1 purchase with the macro visible, balance debited.
     bd = client.get("/api/me/dashboard", headers=_auth(buyer)).json()

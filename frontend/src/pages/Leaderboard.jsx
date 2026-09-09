@@ -28,6 +28,17 @@ function ThumbDownIcon() {
     </svg>
   );
 }
+// 잠긴 매크로 — 자물쇠. 언락 버튼은 좋아요·싫어요와 같은 알약이고 글자는 가격(100P)만.
+function LockIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <rect x="4" y="10.5" width="16" height="11" rx="2.4" />
+      <path d="M8 10.5V7.5a4 4 0 0 1 8 0v3" />
+      <circle cx="12" cy="15.5" r="1.3" />
+      <path d="M12 16.8v1.7" />
+    </svg>
+  );
+}
 function CopyIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -295,10 +306,12 @@ export default function Leaderboard() {
                     <button
                       onClick={() => unlock(e)}
                       disabled={unlocking === e.id}
-                      className="btn btn-s btn-secondary font-bold"
-                      title="포인트를 써서 매크로 공개+복사 (창작자에게 70% 적립)"
+                      className="lb-vote lb-unlock"
+                      title={quickRunMode ? "포인트를 써서 언락하고 빠른 실행에 연결 (창작자에게 70% 적립)" : "포인트를 써서 매크로 공개+복사 (창작자에게 70% 적립)"}
+                      aria-label={`언락 ${e.unlock_price}P${quickRunMode ? " 후 사용" : ""}`}
                     >
-                      {unlocking === e.id ? "여는 중…" : quickRunMode ? <>언락 후 사용 · <span className="num">{e.unlock_price}P</span></> : <>언락 <span className="num">{e.unlock_price}P</span></>}
+                      <LockIcon />
+                      <span className="num">{unlocking === e.id ? "여는 중…" : `${e.unlock_price}P`}</span>
                     </button>
                   ) : quickRunMode ? (
                     <button

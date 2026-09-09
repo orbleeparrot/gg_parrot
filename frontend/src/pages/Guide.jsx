@@ -1,5 +1,9 @@
-import { useMemo, useState } from "react";
-import { PageHeader } from "../components/Page.jsx";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
+import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
+import { XIcon } from "@phosphor-icons/react/dist/csr/X";
+import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
+import "./Guide.css";
 
 // 코린이(코인 입문자)용 가이드 — 문서(docs) 형식: 좌측 목차 + 검색 + 본문.
 // 각 섹션은 검색용 plain `text`와 렌더용 `body`(JSX 또는 (go)=>JSX)를 함께 갖는다.
@@ -849,11 +853,48 @@ const BASE_SECTIONS = [
 const SECTIONS = BASE_SECTIONS;
 
 export default function Guide({ embedded = false, initialSection = "start" }) {
-  const [q, setQ] = useState("");
-  const [activeId, setActiveId] = useState(() =>
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [localQ, setLocalQ] = useState("");
+  const [localId, setLocalId] = useState(() =>
     SECTIONS.some((section) => section.id === initialSection) ? initialSection : SECTIONS[0].id
   );
+  const q = embedded ? localQ : searchParams.get("q") || "";
+  const activeId = embedded ? localId : searchParams.get("section") || "start";
+  const searchRef = useRef(null);
+  const articleRef = useRef(null);
+  const previousSectionRef = useRef(activeId);
   const [tocOpen, setTocOpen] = useState(false); // mobile only; ≥md the list is always shown
+
+  useEffect(() => {
+    const changed = previousSectionRef.current !== activeId;
+    previousSectionRef.current = activeId;
+    if (embedded || !changed || !articleRef.current) return;
+    const article = articleRef.current;
+    const top = article.getBoundingClientRect().top;
+    const margin = parseFloat(getComputedStyle(article).scrollMarginTop) || 0;
+    if (top < margin || top > window.innerHeight / 2) {
+      article.scrollIntoView({ block: "start", behavior: "auto" });
+    }
+  }, [activeId, embedded]);
+
+  function setQuery(value) {
+    if (embedded) setLocalQ(value);
+    else setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      if (value) next.set("q", value);
+      else next.delete("q");
+      return next;
+    }, { replace: true });
+  }
+
+  function selectSection(id) {
+    // Article links must still work when their destination is outside the search results.
+    if (embedded) {
+      setLocalId(id);
+      setLocalQ("");
+    } else setSearchParams({ section: id });
+    setTocOpen(false);
+  }
 
   const filtered = useMemo(() => {
     const query = q.trim().toLowerCase();
@@ -867,29 +908,32 @@ export default function Guide({ embedded = false, initialSection = "start" }) {
   const active = filtered.find((s) => s.id === activeId) || filtered[0] || null;
 
   return (
-    <div className={embedded ? "guide-embedded" : ""}>
-      {embedded ? (
-        <p className="guide-embedded-intro t-small text-slate-600">
-          궁금한 단어를 검색하거나 매매 방식 A–K의 작동 원리를 확인해요.
-        </p>
-      ) : (
-        <PageHeader
-          eyebrow="용어부터 전략까지"
-          title="사용 가이드"
-          description="궁금한 단어를 검색하거나, 매매 방식 A~K의 작동 원리를 그림과 함께 확인해요."
-          headingAs="h1"
-        />
-      )}
-      <div className="grid md:grid-cols-[230px_1fr] gap-4 md:gap-6">
-      {/* sidebar */}
-      <aside className={(embedded ? "md:sticky md:top-0 " : "md:sticky md:top-20 ") + "self-start"}>
-        <input
-          value={q}
-          aria-label="가이드 검색"
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="가이드 검색…"
-          className="field field-sm mb-3"
-        />
+    <div className={embedded ? "guide-page guide-embedded" : "guide-page"}>
+      {!embedded && <h1 className="sr-only">사용법</h1>}
+      <div className="guide-search-area">
+        {!embedded && (
+          <img className="guide-search-mascot" src="/brand/navigation/ggparrot-nav-builder.svg" alt="" width="112" height="112" draggable="false" />
+        )}
+        <form role="search" aria-label="사용법 검색" className="guide-search" onSubmit={(event) => event.preventDefault()}>
+          <MagnifyingGlassIcon size={28} weight="regular" aria-hidden="true" />
+          <input
+            ref={searchRef}
+            type="search"
+            value={q}
+            aria-label="사용법 검색"
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="사용법 검색"
+            autoComplete="off"
+          />
+          {q && (
+            <button type="button" className="guide-search-clear" aria-label="검색어 지우기" onClick={() => { setQuery(""); searchRef.current?.focus(); }}>
+              <XIcon size={20} weight="regular" aria-hidden="true" />
+            </button>
+          )}
+        </form>
+      </div>
+      <div className="guide-layout">
+      <aside className="guide-sidebar">
         {/* On a phone the full contents list would push every article a screen
             and a half down, so it collapses behind the current section name. */}
         <button
@@ -899,18 +943,15 @@ export default function Guide({ embedded = false, initialSection = "start" }) {
           className="btn btn-m btn-secondary md:hidden w-full mb-2 justify-between"
         >
           <span className="truncate">목차 · {active ? active.title : "문서 선택"}</span>
-          <span className="shrink-0 text-slate-400">{tocOpen ? "▲" : "▼"}</span>
+          <CaretDownIcon size={20} weight="regular" aria-hidden="true" className={tocOpen ? "rotate-180" : ""} />
         </button>
         {/* 목차는 단일 선택 — 선택된 문서 하나만 노란 채움(화면당 하나, §1-4). */}
-        <nav aria-label="가이드 목차" className={(tocOpen ? "block " : "hidden ") + "md:block space-y-1"}>
+        <nav aria-label="가이드 목차" className={(tocOpen ? "block " : "hidden ") + "guide-toc md:block space-y-1"}>
           {filtered.map((s) => (
             <button
               key={s.id}
               aria-current={active && active.id === s.id ? "page" : undefined}
-              onClick={() => {
-                setActiveId(s.id);
-                setTocOpen(false);
-              }}
+              onClick={() => selectSection(s.id)}
               className={
                 "w-full min-h-[44px] text-left rounded-[10px] t-small " +
                 (s.sub ? "pl-6 pr-3 py-2 " : "px-3 py-3 ") +
@@ -922,29 +963,26 @@ export default function Guide({ embedded = false, initialSection = "start" }) {
               {s.title}
             </button>
           ))}
-          {filtered.length === 0 && (
-            <div className="t-small text-slate-500 px-3 py-2">검색 결과가 없어요.</div>
-          )}
         </nav>
       </aside>
 
       {/* content */}
-      <article className="min-w-0">
+      <article ref={articleRef} className="guide-article">
         {active ? (
           <>
             {active.sub && (
               <button
-                onClick={() => setActiveId("rules")}
+                onClick={() => selectSection("rules")}
                 className="mb-3 t-small font-semibold text-slate-700 hover:text-slate-900"
               >
                 ← 전략 목록으로
               </button>
             )}
             <h2 className="t-h2 text-slate-900 mb-4">{active.title}</h2>
-            {typeof active.body === "function" ? active.body(setActiveId) : active.body}
+            {typeof active.body === "function" ? active.body(selectSection) : active.body}
           </>
         ) : (
-          <div className="t-small text-slate-500">문서를 골라주세요.</div>
+          <p className="t-body text-slate-700" role="status">검색 결과가 없어요.</p>
         )}
         <p className="mt-8 pt-4 border-t border-slate-200 t-caption text-slate-500">
           본 가이드는 교육용 정보이고 투자 조언이 아니에요. 실제 거래·자산 이동의 책임은 본인에게 있어요.

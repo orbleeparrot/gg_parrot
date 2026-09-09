@@ -1,0 +1,58 @@
+.guide-page { width: 100%; }
+
+.guide-search-area {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: min(100%, 520px);
+  margin: 8px auto 36px;
+}
+.guide-search-mascot {
+  align-self: flex-end;
+  width: 112px;
+  height: 112px;
+  margin-right: 36px;
+  margin-bottom: -18px;
+  object-fit: contain;
+  pointer-events: none;
+  user-select: none;
+}
+.guide-search {
+  width: 100%;
+  min-height: 48px;
+  margin: 0;
+  padding: 0 8px 0 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid rgb(var(--c-slate-300));
+  border-radius: 8px;
+  background: rgb(var(--c-surface));
+  color: rgb(var(--c-slate-700));
+}
+.guide-search:focus-within { border-color: rgb(var(--c-brand-line)); outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
+.guide-search > svg { width: 22px; height: 22px; flex: 0 0 auto; }
+.guide-search input { width: 100%; min-width: 0; height: 46px; padding: 0; border: 0; background: transparent; color: rgb(var(--c-slate-900)); font-size: 16px; line-height: 1.4; outline: none; }
+.guide-search input::placeholder { color: rgb(var(--c-slate-500)); }
+.guide-search input::-webkit-search-cancel-button { appearance: none; }
+.guide-search-clear { width: 44px; height: 44px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 8px; }
+.guide-search-clear:hover { background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-900)); }
+.guide-search-clear:focus-visible, .guide-page nav button:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
+
+.guide-layout { display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 40px; align-items: start; }
+.guide-sidebar { min-width: 0; position: sticky; top: calc(var(--site-topbar-h, 64px) + 24px); }
+.guide-toc { max-height: calc(100dvh - var(--site-topbar-h, 64px) - 100px); overflow-y: auto; scrollbar-width: thin; padding: 4px; }
+.guide-article { min-width: 0; max-width: 960px; padding-top: 4px; scroll-margin-top: calc(var(--site-topbar-h, 64px) + 24px); }
+
+/* The onboarding preview shares the articles but keeps its own local search state. */
+.guide-embedded .guide-search-area { margin-top: 0; }
+.guide-embedded .guide-sidebar { top: 0; }
+.guide-embedded .guide-toc { max-height: none; overflow: visible; }
+
+@media (max-width: 767px) {
+  .guide-search-area { margin: 0 auto 28px; }
+  .guide-search-mascot { width: 96px; height: 96px; margin-right: 32px; margin-bottom: -16px; }
+  .guide-layout { grid-template-columns: minmax(0, 1fr); gap: 20px; }
+  .guide-sidebar { position: static; }
+  .guide-toc { max-height: none; overflow: visible; }
+}

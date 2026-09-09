@@ -58,7 +58,7 @@ test("adaptive poller never overlaps and backs off after failures", async () => 
   assert.equal(calls, 1);
   release();
   await flush();
-  assert.deepEqual(timers.delays(), [1_000]);
+  assert.deepEqual(timers.delays(), [0], "a refresh during a request runs as soon as it settles");
 
   timers.next().fn();
   await flush();
@@ -93,6 +93,35 @@ test("hidden poller aborts work and resumes immediately when visible", async () 
   assert.deepEqual(timers.delays(), []);
   poller.setVisible(true);
   assert.deepEqual(timers.delays(), [0]);
+});
+
+test("refreshes during a request coalesce, even when normal polling has finished", async () => {
+  const timers = fakeTimers();
+  let release;
+  let calls = 0;
+  const poller = createAdaptivePoller({
+    task: () => {
+      calls += 1;
+      return new Promise((resolve) => { release = resolve; });
+    },
+    intervalMs: 1_000,
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer,
+  });
+  poller.start();
+  timers.next().fn();
+  poller.trigger();
+  poller.trigger();
+  release({ nextPollMs: null });
+  await flush();
+  assert.deepEqual(timers.delays(), [0]);
+  timers.next().fn();
+  assert.equal(calls, 2);
+  poller.trigger();
+  poller.stop();
+  release({});
+  await flush();
+  assert.deepEqual(timers.delays(), [], "unmount cancels the queued refresh");
 });
 
 test("pending collection can refresh promptly then use the ready snapshot cadence", async () => {

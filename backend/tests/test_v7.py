@@ -2,13 +2,16 @@
 from __future__ import annotations
 
 import pytest
+import secrets
 from fastapi.testclient import TestClient
 
 from app import chat as chat_mod
+from app import auth as auth_mod
 from app import leaderboard as lb
 from app import paper as paper_mod
 from app.main import app
 from app.security import hash_password, verify_password
+from app.db import User, get_session
 
 client = TestClient(app)
 
@@ -113,9 +116,20 @@ def test_edit_requires_correct_password(mock_paper):
 
 
 # --- chat ---------------------------------------------------------------
-def test_chat_post_and_list():
-    chat_mod._recent.clear()
-    r = client.post("/api/chat", json={"username": "지피", "text": "안녕하세요"})
+@pytest.fixture
+def chat_headers():
+    name = "chat_" + secrets.token_hex(4)
+    with get_session() as db:
+        account = User(email=f"{name}@example.com", username=name,
+                       password_hash="unused", created_at="2026-01-01T00:00:00Z")
+        db.add(account)
+        db.commit()
+        db.refresh(account)
+        return {"Authorization": f"Bearer {auth_mod.make_token(account.id)}"}
+
+
+def test_chat_post_and_list(chat_headers):
+    r = client.post("/api/chat", headers=chat_headers, json={"text": "안녕하세요"})
     assert r.status_code == 200
     assert r.json()["message"]["text"] == "안녕하세요"
     assert r.json()["message"]["created_kst"]
@@ -124,16 +138,14 @@ def test_chat_post_and_list():
     assert "투자 조언이 아니" in lst["disclaimer"]
 
 
-def test_chat_length_cap_and_empty():
-    chat_mod._recent.clear()
+def test_chat_length_cap_and_empty(chat_headers):
     long_text = "가" * 500
-    m = client.post("/api/chat", json={"username": "u", "text": long_text}).json()["message"]
+    m = client.post("/api/chat", headers=chat_headers, json={"text": long_text}).json()["message"]
     assert len(m["text"]) == chat_mod.MAX_LEN
-    empty = client.post("/api/chat", json={"username": "u", "text": "   "})
+    empty = client.post("/api/chat", headers=chat_headers, json={"text": "   "})
     assert empty.status_code == 400
 
 
-def test_chat_rate_limit():
-    chat_mod._recent.clear()
-    codes = [client.post("/api/chat", json={"username": "spam", "text": f"m{i}"}).status_code for i in range(8)]
+def test_chat_rate_limit(chat_headers):
+    codes = [client.post("/api/chat", headers=chat_headers, json={"text": f"m{i}"}).status_code for i in range(8)]
     assert 429 in codes  # flood is throttled

@@ -9,8 +9,9 @@
 // 아이브로(11/750/자간) → 제목(clamp 30~44px/800) → meta(기준일·카운트다운 같은 수치 한 줄)
 // → 설명(16~19/500, 40ch) → note(13, 고지). 상자 없이 크기·여백으로만 위계(§1-3).
 // 우측 액션은 제목 밑선에 맞춘다. 제목이 없는 화면(내 에이전트)은 이 컴포넌트를 쓰지 않는다.
-export function PageHeader({ title, description, meta, note, actions, eyebrow, headingAs: Heading = "h1" }) {
-  const hasSub = Boolean(meta || description || note || actions);
+// children 은 meta 바로 아래의 자유 영역 — 코인동향의 AI 요약(리드·본문)처럼 그날의 내용이 들어간다.
+export function PageHeader({ title, description, meta, note, actions, eyebrow, children, headingAs: Heading = "h1" }) {
+  const hasSub = Boolean(meta || description || note || actions || children);
   return (
     <header className="page-head">
       {eyebrow && <span className="page-head-eyebrow">{eyebrow}</span>}
@@ -20,6 +21,7 @@ export function PageHeader({ title, description, meta, note, actions, eyebrow, h
         <div className="page-head-sub">
           <div className="page-head-copy">
             {meta && <p className="page-head-meta">{meta}</p>}
+            {children}
             {description && <p className="page-head-description">{description}</p>}
             {note && <p className="page-head-note">{note}</p>}
           </div>

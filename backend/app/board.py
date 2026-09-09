@@ -15,6 +15,7 @@ from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
 from typing import Deque, Optional
 
+from sqlalchemy import func
 from sqlmodel import select
 
 from .db import BoardComment, BoardPost, User, get_session
@@ -132,24 +133,57 @@ def create_post(user: User, title: str, body: str, image_bytes: Optional[bytes],
 
 
 def list_posts(page: int = 1, size: int = PAGE_SIZE_DEFAULT) -> dict:
+    """한 쪽의 목록을 **쿼리 한 번**으로 만든다.
+
+    예전엔 전체 id 목록 → 글 행(사진 원본 바이트까지) → 댓글 행, 세 번을 오갔다. Render→Supabase 왕복이
+    한 번에 100ms 넘게 걸리니 목록 하나에 0.4초가 더 붙었고, 사진이 있는 글은 2MB 를 목록마다 실어 날랐다.
+    이제 필요한 열만 고르고, 댓글 수는 GROUP BY 하위 쿼리로, 전체 글 수는 창 함수로 같은 행에 실어 온다.
+    """
     page = max(1, int(page or 1))
     size = max(1, min(int(size or PAGE_SIZE_DEFAULT), PAGE_SIZE_MAX))
+    comment_counts = (
+        select(BoardComment.post_id.label("post_id"), func.count(BoardComment.id).label("n"))
+        .group_by(BoardComment.post_id)
+        .subquery()
+    )
+    statement = (
+        select(
+            BoardPost.id,
+            BoardPost.title,
+            BoardPost.body,
+            BoardPost.author_name,
+            BoardPost.author_user_id,
+            BoardPost.created_ms,
+            (func.coalesce(func.length(BoardPost.image_data), 0) > 0).label("has_image"),
+            func.coalesce(comment_counts.c.n, 0).label("comment_count"),
+            func.count().over().label("total"),
+        )
+        .outerjoin(comment_counts, comment_counts.c.post_id == BoardPost.id)
+        .order_by(BoardPost.created_ms.desc())
+        .offset((page - 1) * size)
+        .limit(size)
+    )
     with get_session() as db:
-        total = len(db.exec(select(BoardPost.id)).all())
-        rows = db.exec(
-            select(BoardPost)
-            .order_by(BoardPost.created_ms.desc())
-            .offset((page - 1) * size)
-            .limit(size)
-        ).all()
-        # 각 글의 댓글 수
-        counts: dict[int, int] = {}
-        ids = [r.id for r in rows]
-        if ids:
-            for c in db.exec(select(BoardComment.post_id).where(BoardComment.post_id.in_(ids))).all():
-                pid = c if isinstance(c, int) else c[0]
-                counts[pid] = counts.get(pid, 0) + 1
-        items = [_post_list_view(r, counts.get(r.id, 0)) for r in rows]
+        rows = db.exec(statement).all()
+        if rows:
+            total = int(rows[0].total)
+        else:
+            # 범위 밖의 쪽(예: 삭제 뒤 남은 주소)은 행이 없어 창 함수도 없다 — 그때만 한 번 더 센다.
+            total = int(db.exec(select(func.count(BoardPost.id))).one())
+        items = [
+            {
+                "id": r.id,
+                "title": r.title,
+                "snippet": (r.body or "")[:SNIPPET_LEN] + ("…" if len(r.body or "") > SNIPPET_LEN else ""),
+                "author_name": r.author_name,
+                "author_user_id": r.author_user_id,
+                "has_image": bool(r.has_image),
+                "comment_count": int(r.comment_count or 0),
+                "created_kst": _kst_display(r.created_ms),
+                "created_ms": r.created_ms,
+            }
+            for r in rows
+        ]
     pages = max(1, (total + size - 1) // size)
     return {
         "items": items,

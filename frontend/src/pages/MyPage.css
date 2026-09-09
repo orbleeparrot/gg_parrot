@@ -1,0 +1,117 @@
+/* Hallmark · genre: modern-minimal · macrostructure: Stat-Led identity strip + Index-First tabs · design-system: DESIGN.md · designed-as-app
+ * Hallmark · pre-emit critique: P4 H5 E4 S4 R5 V4
+ * 내 활동(프로필). 벤치마크 — GitHub·Stack Overflow·TradingView·Chess.com·LeetCode·벨로그·브런치·크몽·Binance Square
+ * (wiki concepts/프로필-페이지-디자인-관례): 이름이 제목, 옆에 등급, 한 줄 메타, 수치는 라벨 위·숫자 아래,
+ * 그 아래 개수 붙은 탭, 탭마다 전체 폭 괘선 표. 상자·카드 없음(§1-3). 노랑은 등급 사다리의 현재 칸 하나(§1-4). */
+
+.me-page { display: grid; gap: 24px; }
+
+/* ── 머리: 아바타 | 이름·메타 | 수치 ── */
+.me-head { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; column-gap: 22px; }
+.me-avatar {
+  width: 80px; height: 80px; border-radius: 999px; display: grid; place-items: center;
+  border: 1px solid rgb(var(--c-slate-200)); background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-900));
+  font-size: 32px; font-weight: 800; letter-spacing: -0.02em; line-height: 1;
+}
+.me-id { min-width: 0; display: grid; gap: 8px; }
+.me-name {
+  margin: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; min-width: 0;
+  color: rgb(var(--c-slate-900)); font-size: clamp(30px, 22px + 1.6vw, 44px); line-height: 1.1; font-weight: 800; letter-spacing: -0.03em;
+  overflow-wrap: anywhere;
+}
+.me-tier-badge { position: relative; top: 1px; letter-spacing: 0; }
+.me-meta { margin: 0; display: flex; flex-wrap: wrap; gap: 4px 14px; color: rgb(var(--c-slate-500)); font-size: 15px; line-height: 1.4; font-weight: 500; overflow-wrap: anywhere; }
+.me-stats { margin: 0; display: flex; align-items: end; gap: 32px; }
+.me-stat { display: grid; gap: 6px; text-align: right; }
+.me-stat dt { color: rgb(var(--c-slate-700)); font-size: 13px; line-height: 1.2; font-weight: 600; white-space: nowrap; }
+.me-stat dd { margin: 0; color: rgb(var(--c-slate-900)); font-size: 22px; line-height: 1; font-weight: 700; white-space: nowrap; }
+.me-stat.is-points dd { font-size: 34px; color: rgb(var(--c-indigo-800)); } /* 포인트는 인디고(§2-3) */
+
+/* ── 등급 사다리(progress-stepper §6): 26px 노드 + 2px 연결선. 완료·현재만 노랑 ── */
+.me-ladder { display: grid; gap: 14px; padding: 20px 0 18px; border-top: 1px solid rgb(var(--c-slate-200)); border-bottom: 1px solid rgb(var(--c-slate-200)); }
+.me-steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.me-step { position: relative; display: grid; justify-items: start; gap: 8px; min-width: 0; }
+.me-step::before { content: ""; position: absolute; top: 12px; left: 34px; right: 8px; height: 2px; background: rgb(var(--c-slate-200)); }
+.me-step:last-child::before { display: none; }
+.me-step.is-done::before { background: rgb(var(--c-brand)); }
+.me-step-node {
+  width: 26px; height: 26px; border-radius: 999px; display: grid; place-items: center;
+  background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-500)); font-size: 13px; font-weight: 800; line-height: 1;
+}
+.me-step.is-done .me-step-node, .me-step.is-current .me-step-node { background: rgb(var(--c-brand)); color: rgb(var(--c-brand-ink)); }
+.me-step.is-current .me-step-node { box-shadow: 0 0 0 4px rgb(var(--c-brand) / .22); }
+.me-step-name { color: rgb(var(--c-slate-500)); font-size: 14px; line-height: 1.2; font-weight: 600; }
+.me-step.is-current .me-step-name { color: rgb(var(--c-slate-900)); }
+.me-step-at { margin-top: -4px; color: rgb(var(--c-slate-500)); font-size: 12px; line-height: 1.2; font-weight: 600; }
+.me-ladder-note { margin: 0; color: rgb(var(--c-slate-700)); font-size: 14px; line-height: 1.5; font-weight: 500; }
+.me-ladder-note b { color: rgb(var(--c-slate-900)); font-weight: 700; }
+
+/* ── 탭(단일 선택 = segmented §6). 좁으면 가로 스크롤 ── */
+.me-tabs { overflow-x: auto; scrollbar-width: none; margin-inline: calc(-1 * var(--site-gutter, 22px)); padding-inline: var(--site-gutter, 22px); }
+.me-tabs::-webkit-scrollbar { display: none; }
+.me-tabs .seg { flex-wrap: nowrap; }
+.me-tabs .seg-item { white-space: nowrap; }
+.me-tab-count { margin-left: 6px; color: rgb(var(--c-slate-500)); font-size: 13px; font-weight: 700; }
+.seg-item-on .me-tab-count { color: rgb(var(--c-slate-700)); }
+.me-panel { min-height: 240px; }
+
+/* ── 표: 캔버스 위 괘선 행. 열 배치는 표마다 --me-cols 로 ── */
+.me-table { list-style: none; margin: 0; padding: 0; }
+.me-row {
+  display: grid; grid-template-columns: var(--me-cols); align-items: center; column-gap: 16px;
+  min-height: 60px; padding: 10px 0; border-bottom: 1px solid rgb(var(--c-slate-200));
+}
+.me-table-head { min-height: 0; padding: 0 0 8px; border-bottom: 1px solid rgb(var(--c-slate-300)); color: rgb(var(--c-slate-500)); font-size: 12px; line-height: 1.3; font-weight: 600; }
+.me-table.is-created { --me-cols: 36px minmax(0, 1fr) 72px 96px 112px auto; }
+.me-table.is-purchased { --me-cols: 36px minmax(0, 1fr) 96px 112px auto; }
+.me-table.is-sales { --me-cols: 112px minmax(0, 1fr) 96px; }
+.me-table.is-ledger { --me-cols: 112px minmax(0, 1fr) 96px 112px; }
+.me-main { min-width: 0; display: grid; gap: 3px; }
+.me-title { color: rgb(var(--c-slate-900)); font-size: 15px; line-height: 1.3; font-weight: 700; letter-spacing: -0.01em; }
+.me-seller { color: rgb(var(--c-slate-500)); font-size: 13px; font-weight: 600; letter-spacing: 0; }
+.me-sub { color: rgb(var(--c-slate-500)); font-size: 14px; line-height: 1.4; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.me-cell { color: rgb(var(--c-slate-700)); font-size: 14px; line-height: 1.4; font-weight: 500; white-space: nowrap; }
+.me-cell.me-text { white-space: normal; min-width: 0; }
+.me-cell.me-text b { color: rgb(var(--c-slate-900)); font-weight: 700; }
+.is-right { text-align: right; }
+.me-credit { color: rgb(var(--c-green-600)); font-weight: 700; }
+.me-debit { color: rgb(var(--c-red-600)); font-weight: 700; }
+.me-balance { color: rgb(var(--c-slate-500)); }
+.me-time { color: rgb(var(--c-slate-500)); font-size: 13px; line-height: 1.4; font-weight: 500; white-space: nowrap; }
+.me-row > .btn { justify-self: end; }
+
+/* 게시글 탭 — 글쓴이 열 없이 번호 | 제목 | 시각 */
+.me-posts { --board-cols: 56px minmax(0, 1fr) 96px; }
+
+/* ── 뼈대 ── */
+.me-skeleton { display: block; height: 12px; border-radius: 6px; background: rgb(var(--c-slate-100)); }
+.me-skeleton.is-avatar { width: 80px; height: 80px; border-radius: 999px; }
+.me-skeleton.is-round { width: 36px; height: 36px; border-radius: 999px; }
+
+@media (max-width: 1099px) {
+  .me-head { grid-template-columns: auto minmax(0, 1fr); row-gap: 18px; }
+  .me-stats { grid-column: 1 / -1; justify-content: start; gap: 28px; }
+  .me-stat { text-align: left; }
+}
+@media (max-width: 639px) {
+  .me-page { gap: 20px; }
+  .me-head { column-gap: 14px; }
+  .me-avatar { width: 56px; height: 56px; font-size: 24px; }
+  .me-stats { gap: 20px; flex-wrap: wrap; }
+  .me-stat.is-points dd { font-size: 28px; }
+  .me-steps { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .me-step-at { display: none; }
+  .me-step-name { font-size: 12px; }
+  /* 행을 두 줄로: 첫 줄 로고 + 제목·전략, 둘째 줄 수치·시각·버튼 */
+  .me-row.me-table-head { display: none; }
+  .me-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; min-height: 0; padding: 12px 0; }
+  .me-row > .coin-icon { order: -2; }
+  .me-row > .me-main { order: -1; flex: 1 1 calc(100% - 48px); }
+  .me-row > .me-cell, .me-row > .me-time { flex: 0 0 auto; }
+  .me-row > .btn { margin-left: auto; }
+  .me-table.is-sales .me-cell.me-text, .me-table.is-ledger .me-cell.me-text { flex: 1 1 100%; order: -1; }
+  .me-posts { --board-cols: 1fr 64px; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .me-step-node { transition: background-color 160ms ease, box-shadow 160ms ease; }
+}

@@ -44,10 +44,10 @@ export default function ThemeToggle({ className = "" }) {
       aria-label={isDark ? "다크 모드 켜짐, 라이트 모드로 전환" : "다크 모드 꺼짐, 다크 모드로 전환"}
       aria-checked={isDark}
       role="switch"
-      className={`site-ub site-ub-icon site-theme ${isDark ? "is-dark" : "is-light"} ${className}`}
+      className={`header-control header-theme ${className}`}
     >
       {isDark ? <SunIcon /> : <MoonIcon />}
-      <span className="site-ub-tip" aria-hidden="true">{nextLabel}</span>
+      <span className="header-tooltip" aria-hidden="true">{nextLabel}로 전환</span>
     </button>
   );
 }

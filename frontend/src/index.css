@@ -2233,9 +2233,6 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   .onboarding-dialog {
     max-height: calc(100dvh - 112px);
   }
-  .site-account-panel {
-    top: 72px;
-  }
 }
 
 @media (max-width: 767px) {
@@ -2370,7 +2367,8 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 /* 심볼 단독은 모바일 상단바에서만. 그 밖에서는 락업이 나온다. */
 .site-brand-symbol { display: none; }
 .site-mobile-brand .site-brand-symbol { display: block; width: auto; height: 32px; }
-.site-mobile-brand .site-brand-logo { display: none; }
+.site-mobile-brand .site-brand-logo.is-light,
+.site-mobile-brand .site-brand-logo.is-dark { display: none; }
 
 .site-brand-mark {
   width: 26px;
@@ -2474,8 +2472,7 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   font-size: 11px;
 }
 
-.site-menu-panel,
-.site-account-panel {
+.site-menu-panel {
   position: absolute;
   top: calc(100% + 8px);
   z-index: 70;
@@ -2518,8 +2515,7 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 }
 
 .site-menu-links a,
-.site-menu-mobile-primary a,
-.site-account-panel > button {
+.site-menu-mobile-primary a {
   width: 100%;
   padding: 12px 10px;
   border: 0;
@@ -2532,21 +2528,18 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 }
 
 .site-menu-links a:hover,
-.site-menu-mobile-primary a:hover,
-.site-account-panel > button:hover {
+.site-menu-mobile-primary a:hover {
   background: rgb(var(--c-slate-100));
 }
 
 .site-menu-links strong,
-.site-menu-mobile-primary strong,
-.site-account-panel strong {
+.site-menu-mobile-primary strong {
   font-size: 14px;
   line-height: 1.4;
 }
 
 .site-menu-links span,
-.site-menu-mobile-primary span,
-.site-account-panel span {
+.site-menu-mobile-primary span {
   color: rgb(var(--c-slate-500));
   font-size: 13px;
   line-height: 1.45;
@@ -2559,284 +2552,10 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 }
 
 .site-header-utility {
-  --ub-size: 36px;
-  --ub-ease: cubic-bezier(0.22, 0.61, 0.36, 1);
-  --ub-dur: 120ms;
   min-width: 0;
   margin-left: auto;
   display: flex;
   align-items: center;
-  gap: 4px;
-}
-
-/* 상단바 오른쪽 묶음 — 유틸리티 버튼 한 종류(.site-ub): 아이콘만이면 36px 정사각, 글자가 붙으면 알약.
-   왼쪽의 시세 칩(34px 알약)과 성격이 다르다 — 칩은 읽는 것, 이 버튼은 누르는 것.
-   Hallmark · component: header-utility · genre: modern-minimal · theme: DESIGN.md locked · pre-emit critique: P4 H4 E4 S4 R4 V4
-   states: default · hover · focus · active · disabled · loading · error · success
-   contrast: pass (40–41: 글자·아이콘은 slate-700/900 위 surface·slate-100, 툴팁은 slate-900 위 slate-50, 링은 brand-line)
-   tokens: pass (48) · responsive: pass (34·49, 320/375/414/768 확인) · icons: pass (30, 선 1.8 한 벌) */
-.site-ub {
-  position: relative;
-  height: var(--ub-size);
-  min-width: var(--ub-size);
-  margin: 0;
-  padding: 0;
-  border: 1px solid transparent;
-  border-radius: 10px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  flex: 0 0 auto;
-  color: rgb(var(--c-slate-700));
-  background: transparent;
-  font: inherit;
-  font-size: 13px;
-  line-height: 1;
-  font-weight: 700;
-  white-space: nowrap;
-  text-decoration: none;
-  cursor: pointer;
-}
-.site-ub::before { content: ""; position: absolute; inset: -4px; } /* 44px 터치 표적 — 모양은 36px 그대로 */
-.site-ub > svg {
-  width: 20px;
-  height: 20px;
-  flex: 0 0 auto;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-.site-ub:hover,
-.site-ub.is-hover,
-.site-ub[aria-expanded="true"],
-.site-ub[aria-current="page"] {
-  border-color: rgb(var(--c-slate-300));
-  background: rgb(var(--c-slate-100));
-  color: rgb(var(--c-slate-900));
-}
-.site-ub:focus-visible,
-.site-ub.is-focus {
-  outline: 2px solid rgb(var(--c-brand-line));
-  outline-offset: 2px;
-}
-.site-ub:active:not(:disabled):not([aria-disabled="true"]),
-.site-ub.is-active {
-  transform: translateY(1px);
-  filter: brightness(0.92);
-}
-.site-ub:disabled,
-.site-ub[aria-disabled="true"],
-.site-ub.is-disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-  pointer-events: none;
-}
-/* 글자가 있는 알약(실행기 설치) — 상단바는 크롬이라 secondary. 화면의 노랑은 본문 몫(§1-4). */
-.site-ub-cta {
-  padding: 0 12px 0 10px;
-  border-color: rgb(var(--c-slate-300));
-  background: rgb(var(--c-surface));
-  color: rgb(var(--c-slate-900));
-}
-.site-ub-cta:hover,
-.site-ub-cta.is-hover,
-.site-ub-cta[aria-current="page"] {
-  border-color: rgb(var(--c-brand-line));
-  background: rgb(var(--c-surface));
-}
-/* 상태 — 로딩은 아이콘 자리의 회전, 오류는 빨간 선 + 빨간 아이콘·글자, 성공은 초록. 글자(aria-label·title)가 함께 바뀌므로 색만으로 말하지 않는다. */
-.site-ub[data-state="loading"] > svg,
-.site-ub[data-state="loading"] > .site-avatar { visibility: hidden; }
-.site-ub[data-state="loading"]::after {
-  content: "";
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  translate: -50% -50%;
-  width: 16px;
-  height: 16px;
-  border: 2px solid rgb(var(--c-slate-300));
-  border-top-color: rgb(var(--c-slate-900));
-  border-radius: 999px;
-  animation: site-ub-spin 700ms linear infinite;
-}
-.site-ub[data-state="error"] { border-color: rgb(var(--c-red-600)); color: rgb(var(--c-red-600)); }
-.site-ub[data-state="success"] { border-color: rgb(var(--c-green-600)); color: rgb(var(--c-green-600)); }
-.site-ub-cta[data-state="loading"]::after { left: 20px; } /* 글자 알약은 아이콘 자리에서 돈다 */
-@keyframes site-ub-spin { to { transform: rotate(360deg); } }
-/* 글자 툴팁 — 아이콘만 있는 버튼의 이름. 마우스는 800ms 뒤(스치는 움직임에 깜빡이지 않게), 키보드 포커스는 바로. 열린 메뉴 위에는 띄우지 않는다. */
-.site-ub-tip {
-  position: absolute;
-  top: calc(100% + 8px);
-  left: 50%;
-  z-index: 1;
-  translate: -50% 0;
-  padding: 5px 8px;
-  border-radius: 6px;
-  background: rgb(var(--c-slate-900));
-  color: rgb(var(--c-slate-50));
-  font-size: 11px;
-  line-height: 1.2;
-  font-weight: 700;
-  white-space: nowrap;
-  opacity: 0;
-  pointer-events: none;
-}
-.site-ub:hover > .site-ub-tip,
-.site-ub.is-hover > .site-ub-tip { opacity: 1; transition: opacity 150ms var(--ub-ease) 800ms; }
-.site-ub:focus-visible > .site-ub-tip,
-.site-ub.is-focus > .site-ub-tip { opacity: 1; }
-.site-ub[aria-expanded="true"] > .site-ub-tip { display: none; }
-
-/* 아바타 — 이름 첫 글자. 로그인 전엔 사람 윤곽. */
-.site-avatar {
-  position: relative;
-  width: 28px;
-  height: 28px;
-  border: 1px solid rgb(var(--c-slate-300));
-  border-radius: 999px;
-  display: inline-grid;
-  place-items: center;
-  flex: 0 0 auto;
-  background: rgb(var(--c-slate-100));
-  color: rgb(var(--c-slate-900));
-  font-size: 12px;
-  line-height: 1;
-  font-weight: 800;
-  letter-spacing: -0.02em;
-}
-.site-avatar > svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.site-avatar.is-lg { width: 36px; height: 36px; font-size: 14px; }
-.site-avatar.is-lg > svg { width: 20px; height: 20px; }
-
-.site-account-root {
-  display: flex;
-  align-items: center;
-}
-.site-account-trigger { padding: 0 10px 0 3px; border-radius: 999px; gap: 8px; }
-.site-account-trigger.is-anon { padding: 0; border-radius: 10px; }
-.site-account-points { color: rgb(var(--c-slate-900)); font-size: 12px; font-weight: 700; }
-/* 아바타 버튼의 상태 — 로딩은 아바타를 두고 숫자만 뼈대, 오류는 아바타에 빨간 점 + 숫자 빨강(마지막 값). */
-.site-account-trigger[data-state="loading"]::after { display: none; }
-.site-account-trigger[data-state="loading"] > .site-avatar { visibility: visible; }
-.site-account-trigger[data-state="loading"] .site-account-points {
-  min-width: 44px;
-  height: 12px;
-  border-radius: 4px;
-  color: transparent;
-  background: rgb(var(--c-slate-200));
-}
-.site-account-trigger[data-state="error"] .site-avatar::after {
-  content: "";
-  position: absolute;
-  top: -2px;
-  right: -2px;
-  width: 9px;
-  height: 9px;
-  border: 2px solid rgb(var(--c-surface));
-  border-radius: 999px;
-  background: rgb(var(--c-red-600));
-}
-.site-account-trigger[data-state="error"] .site-account-points { color: rgb(var(--c-red-600)); }
-
-/* 계정 메뉴 — 머리(아바타·이름·포인트) → 항목 → 구분선 → 로그아웃. 회원키는 항목 아래에 펼쳐진다. */
-.site-account-head {
-  margin-bottom: 4px;
-  padding: 8px 10px 12px;
-  border-bottom: 1px solid rgb(var(--c-slate-200));
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.site-account-head > div { min-width: 0; display: grid; gap: 2px; }
-.site-account-head strong {
-  overflow: hidden;
-  color: rgb(var(--c-slate-900));
-  font-size: 14px;
-  line-height: 1.3;
-  font-weight: 700;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.site-account-head span { color: rgb(var(--c-slate-500)); font-size: 12px; line-height: 1.4; font-weight: 600; }
-.site-account-head span b { color: rgb(var(--c-slate-900)); font-weight: 700; }
-.site-account-panel > .site-account-cta {
-  width: calc(100% - 4px);
-  height: 40px;
-  margin: 4px 2px 6px;
-  padding: 0 16px;
-  border-radius: 12px;
-  display: inline-flex;
-  justify-content: center;
-  text-align: center;
-}
-.site-account-item strong { display: flex; align-items: center; gap: 8px; }
-.site-account-item strong > svg {
-  width: 15px;
-  height: 15px;
-  flex: 0 0 auto;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  color: rgb(var(--c-slate-500));
-}
-.site-account-item.is-hover { background: rgb(var(--c-slate-100)); }
-.site-account-item:focus-visible,
-.site-account-item.is-focus { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: -2px; }
-.site-account-item:active,
-.site-account-item.is-active { background: rgb(var(--c-slate-200)); }
-.site-account-item.is-open { background: rgb(var(--c-slate-100)); }
-.site-account-item:disabled,
-.site-account-item[aria-disabled="true"] { opacity: 0.5; cursor: not-allowed; }
-.site-account-item[data-state] strong::after { margin-left: auto; font-size: 11px; font-weight: 700; }
-.site-account-item[data-state="loading"] strong::after {
-  content: "";
-  width: 14px;
-  height: 14px;
-  border: 2px solid rgb(var(--c-slate-300));
-  border-top-color: rgb(var(--c-slate-900));
-  border-radius: 999px;
-  animation: site-ub-spin 700ms linear infinite;
-}
-.site-account-item[data-state="error"] { color: rgb(var(--c-red-600)); }
-.site-account-item[data-state="error"] span { color: rgb(var(--c-red-600)); }
-.site-account-item[data-state="success"] strong::after { content: "✓"; color: rgb(var(--c-green-600)); }
-.site-account-key { margin: 2px 2px 6px; }
-.site-account-sep { height: 1px; margin: 6px 4px; background: rgb(var(--c-slate-200)); }
-
-@media (prefers-reduced-motion: no-preference) {
-  .site-ub {
-    transition: background-color var(--ub-dur) var(--ub-ease), border-color var(--ub-dur) var(--ub-ease),
-      color var(--ub-dur) var(--ub-ease), transform 100ms var(--ub-ease);
-  }
-  .site-account-panel { animation: site-menu-in 180ms var(--ub-ease) both; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .site-account-panel { animation: site-menu-fade 150ms linear both; }
-}
-@keyframes site-menu-in {
-  from { opacity: 0; transform: translateY(-4px); }
-  to { opacity: 1; transform: none; }
-}
-@keyframes site-menu-fade {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-@media (max-width: 639px) {
-  /* 좁은 화면 — 실행기 설치는 아이콘만. */
-  .site-ub-cta { padding: 0; }
-  .site-ub-cta .site-ub-label { display: none; }
-}
-
-.site-account-panel {
-  right: 0;
-  width: 336px; /* 회원키 한 줄이 들어가는 폭 */
-  padding: 8px;
 }
 
 /* --------------------------------------------------------------------------
@@ -4340,13 +4059,6 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   .site-menu-mobile-primary {
     display: grid;
   }
-  .site-account-panel {
-    position: fixed;
-    top: 72px;
-    right: 12px;
-    left: 12px;
-    width: auto;
-  }
   .home-hero {
     padding: 72px 20px 80px;
   }
@@ -4430,12 +4142,6 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   .site-mobile-brand .brand-word {
     display: none;
   }
-}
-
-@media (max-width: 520px) {
-  /* 좁은 화면 — 포인트 숫자를 접고 아바타만. */
-  .site-account-trigger .site-account-points { display: none; }
-  .site-account-trigger { padding-inline: 3px; }
 }
 
 /* --------------------------------------------------------------------------

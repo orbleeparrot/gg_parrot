@@ -18,5 +18,23 @@ export function UserIcon() {
   return <svg {...base}><circle cx="12" cy="8" r="3.25" /><path d="M5.75 19c.8-3.2 2.88-4.8 6.25-4.8s5.45 1.6 6.25 4.8" /></svg>;
 }
 export function KeyIcon() {
-  return <svg {...base}><path d="M14.5 4a5.5 5.5 0 1 0 3.9 9.4L21 16v3h-3v-2h-2v-2h-2l-1.6-1.6A5.5 5.5 0 0 0 14.5 4Z" /><circle cx="15.5" cy="9" r="1" /></svg>;
+  return <svg {...base}><circle cx="8" cy="8" r="5" /><path d="m11.5 11.5 9 9M16 16l3-3M19 19l3-3" /></svg>;
+}
+export function ChevronDownIcon() {
+  return <svg {...base}><path d="m6 9 6 6 6-6" /></svg>;
+}
+export function ChevronRightIcon() {
+  return <svg {...base}><path d="m9 6 6 6-6 6" /></svg>;
+}
+export function CloseIcon() {
+  return <svg {...base}><path d="m6 6 12 12M6 18 18 6" /></svg>;
+}
+export function ActivityIcon() {
+  return <svg {...base}><rect x="4" y="3" width="16" height="18" rx="2" /><path d="M8 8h8M8 12h8M8 16h4" /></svg>;
+}
+export function MonitorIcon() {
+  return <svg {...base}><rect x="3" y="4" width="18" height="13" rx="2" /><path d="M8 21h8M12 17v4m-6-10 3-2 3 4 3-3 3 1" /></svg>;
+}
+export function LogoutIcon() {
+  return <svg {...base}><path d="M10 4H5a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h5m5-12 4 4-4 4M9 12h11" /></svg>;
 }

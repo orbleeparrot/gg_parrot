@@ -38,15 +38,25 @@ function topbarHeight() {
   const value = parseFloat(raw);
   return Number.isFinite(value) ? value : TOPBAR_FALLBACK;
 }
-// 버튼(과 열린 시트)이 화면 안에 남도록 여백을 자른다.
+// 왼쪽 한계 — 사이드바가 고정으로 깔린 화면(≥1100px)에서는 그 오른쪽 끝에서 막는다.
+// 좁은 화면의 서랍은 닫혀 있으면 폭이 0 이라 자연히 화면 가장자리가 한계가 된다.
+function leftBoundary() {
+  const sidebar = document.querySelector(".site-sidebar");
+  if (!sidebar) return EDGE;
+  const rect = sidebar.getBoundingClientRect();
+  const pinned = getComputedStyle(sidebar).position === "fixed" && rect.width > 0 && rect.left <= 1;
+  return pinned ? rect.right + EDGE : EDGE;
+}
+// 버튼(과 열린 시트)이 화면 안에, 사이드바 오른쪽에 남도록 여백을 자른다.
 function clampPlacement(placement, root) {
   if (!placement || !root) return placement;
-  const fab = root.querySelector(".chat-fab")?.getBoundingClientRect();
-  const sheet = root.querySelector(".chat-sheet")?.getBoundingClientRect();
-  const width = Math.max(fab?.width || 0, sheet?.width || 0);
-  const above = sheet ? sheet.height + 12 : 0;
-  const maxRight = Math.max(EDGE, window.innerWidth - width - EDGE);
-  const maxBottom = Math.max(EDGE, window.innerHeight - (fab?.height || 48) - above - topbarHeight() - EDGE);
+  // offsetWidth/Height 를 쓴다 — 누르는 순간의 :active scale(0.97) 이 섞이면 한계가 몇 px 헐거워진다.
+  const fab = root.querySelector(".chat-fab");
+  const sheet = root.querySelector(".chat-sheet");
+  const width = Math.max(fab?.offsetWidth || 0, sheet?.offsetWidth || 0);
+  const above = sheet ? sheet.offsetHeight + 12 : 0;
+  const maxRight = Math.max(EDGE, window.innerWidth - width - leftBoundary());
+  const maxBottom = Math.max(EDGE, window.innerHeight - (fab?.offsetHeight || 48) - above - topbarHeight() - EDGE);
   return {
     right: Math.round(Math.min(maxRight, Math.max(EDGE, placement.right))),
     bottom: Math.round(Math.min(maxBottom, Math.max(EDGE, placement.bottom))),

@@ -3,7 +3,6 @@ import { useSearchParams } from "react-router-dom";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { PageHeader } from "../components/Page.jsx";
 import "./Guide.css";
 
 // 코린이(코인 입문자)용 가이드 — 문서(docs) 형식: 좌측 목차 + 검색 + 본문.
@@ -910,10 +909,10 @@ export default function Guide({ embedded = false, initialSection = "start" }) {
 
   return (
     <div className={embedded ? "guide-page guide-embedded" : "guide-page"}>
-      {!embedded && <PageHeader title="사용법" />}
+      {!embedded && <h1 className="sr-only">사용법</h1>}
       <div className="guide-search-area">
         {!embedded && (
-          <img className="guide-search-mascot" src="/brand/navigation/ggparrot-nav-builder.svg" alt="" width="96" height="96" draggable="false" />
+          <img className="guide-search-mascot" src="/brand/navigation/ggparrot-nav-builder.svg" alt="" width="112" height="112" draggable="false" />
         )}
         <form role="search" aria-label="사용법 검색" className="guide-search" onSubmit={(event) => event.preventDefault()}>
           <MagnifyingGlassIcon size={28} weight="regular" aria-hidden="true" />

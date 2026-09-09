@@ -1,16 +1,16 @@
 .guide-page { width: 100%; }
 
 .guide-search-area {
-  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   width: min(100%, 520px);
-  margin: 20px auto 28px;
+  margin: 8px auto 36px;
 }
 .guide-search-mascot {
-  position: absolute;
-  right: 12px;
-  bottom: calc(100% - 16px);
-  width: 96px;
-  height: 96px;
+  width: 112px;
+  height: 112px;
+  margin-bottom: -18px;
   object-fit: contain;
   pointer-events: none;
   user-select: none;
@@ -48,8 +48,8 @@
 .guide-embedded .guide-toc { max-height: none; overflow: visible; }
 
 @media (max-width: 767px) {
-  .guide-search-area { margin: 16px auto 24px; }
-  .guide-search-mascot { right: 8px; bottom: calc(100% - 13px); width: 80px; height: 80px; }
+  .guide-search-area { margin: 0 auto 28px; }
+  .guide-search-mascot { width: 96px; height: 96px; margin-bottom: -16px; }
   .guide-layout { grid-template-columns: minmax(0, 1fr); gap: 20px; }
   .guide-sidebar { position: static; }
   .guide-toc { max-height: none; overflow: visible; }

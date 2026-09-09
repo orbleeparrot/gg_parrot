@@ -131,9 +131,7 @@ function ListBelow({ currentId, token, onWrite }) {
   if (!data || !data.items?.length) return null;
   return (
     <section className="board-post-list" aria-labelledby="board-post-list-title">
-      <h2 id="board-post-list-title" className="board-post-list-head">
-        껄무새 게시판 <span>글 <b className="num">{data.total.toLocaleString()}</b>개</span>
-      </h2>
+      <h2 id="board-post-list-title" className="board-post-list-head">껄무새 게시판</h2>
       <ul className="board-table">
         <li className="board-head" role="row" aria-hidden="true">
           <span className="board-col-no">번호</span>
@@ -230,10 +228,9 @@ export default function BoardPost() {
         <>
           <article>
             <h1 className="board-post-title">{post.title}</h1>
-            {/* 괘선 띠 — 글쓴이 | 시각 | 댓글. 한국 게시판의 글머리 관례. */}
+            {/* 괘선 띠 — 글쓴이 | 시각. 댓글 수는 아래 댓글 구획 제목에만 둔다(같은 정보를 두 번 쓰지 않는다). */}
             <div className="board-post-strip">
               <span><b>{post.author_name}</b></span>
-              <span>댓글 <span className="num">{post.comments.length}</span></span>
               <time className="num board-post-strip-time" dateTime={when || undefined}>{full}</time>
               {isMine ? (
                 <button type="button" onClick={() => setConfirmDelete(true)} disabled={deleting} className="board-text-btn">

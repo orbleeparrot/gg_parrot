@@ -239,15 +239,9 @@ export default function Board() {
 
   return (
     <div className="board-page">
-      {/* 제목 줄은 다른 화면과 같은 공용 규격(§9 PageHeader). 아이브로·설명 없이 제목 + 글 수, 오른쪽에 글쓰기. */}
+      {/* 제목 줄은 다른 화면과 같은 공용 규격(§9 PageHeader). 아이브로·설명·글 수 없이 제목, 오른쪽에 글쓰기. */}
       <PageHeader
         title="껄무새 게시판"
-        meta={data ? (
-          <>
-            글 <span className="num">{data.total.toLocaleString()}</span>개
-            {data.pages > 1 ? <> · <span className="num">{data.page}</span>/<span className="num">{data.pages}</span> 쪽</> : null}
-          </>
-        ) : null}
         actions={
           token ? (
             <button

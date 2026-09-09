@@ -24,6 +24,27 @@
 /* The 44px hit area stays generous; only the quiet state surface is inset. */
 .header-control::before { content: ""; position: absolute; inset: 2px; z-index: -1; border-radius: inherit; pointer-events: none; }
 .header-control > svg { width: 28px; height: 28px; flex: 0 0 auto; }
+/* 테마 — 채운 해·달 22px, 둥근 상태면. 프로필 — 32px 원형 아바타(로그인 전 사람 글리프 · 로그인 후 이름 첫 글자). */
+.header-theme, .account-trigger { border-radius: 999px; }
+.header-theme > svg { width: 22px; height: 22px; color: rgb(var(--c-slate-700)); }
+.header-theme:hover > svg { color: rgb(var(--c-slate-900)); }
+.header-avatar {
+  width: 32px;
+  height: 32px;
+  border: 1px solid rgb(var(--c-slate-300));
+  border-radius: 999px;
+  display: inline-grid;
+  place-items: center;
+  background: rgb(var(--c-slate-100));
+  color: rgb(var(--c-slate-900));
+  font-size: 13px;
+  line-height: 1;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+.header-avatar > svg { width: 18px; height: 18px; color: rgb(var(--c-slate-700)); }
+.account-trigger:hover .header-avatar, .account-trigger[aria-expanded="true"] .header-avatar { border-color: rgb(var(--c-slate-400)); background: rgb(var(--c-slate-200)); }
+.account-trigger::before { display: none; } /* 상태는 아바타 원반이 말한다 — 뒤에 네모 면을 또 깔지 않는다 */
 .header-resource { width: 104px; gap: 6px; font-weight: 600; }
 .header-resource::before { inset: 4px 0; }
 .header-resource > svg { width: 20px; height: 20px; }

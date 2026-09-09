@@ -12,10 +12,6 @@ import "./SiteHeader.css";
 export default function SiteHeader({ hasSidebar, onOpenNavigation, menuButtonRef }) {
   const { pathname, search } = useLocation();
   const { token } = useAuth();
-  const helpOpen = pathname === "/" && new URLSearchParams(search).has("help");
-  const docsParams = new URLSearchParams(pathname === "/" ? search : "");
-  docsParams.set("help", "start");
-  ["guide", "tour", "resume"].forEach((key) => docsParams.delete(key));
 
   return (
     <header className="site-header glass">
@@ -37,11 +33,11 @@ export default function SiteHeader({ hasSidebar, onOpenNavigation, menuButtonRef
                 <span className="header-resource-label">실행기 설치</span>
                 <span className="header-tooltip" aria-hidden="true">실행기 설치</span>
               </NavLink>
-              <Link to={`/?${docsParams.toString()}`} state={pathname === "/" ? undefined : { helpReturnTo: pathname + search }} className="header-control header-resource t-small" aria-haspopup="dialog" aria-expanded={helpOpen} aria-current={helpOpen ? "page" : undefined} aria-label="사용법">
+              <NavLink to="/guide" className="header-control header-resource t-small" aria-label="사용법">
                 <HelpIcon />
                 <span className="header-resource-label">사용법</span>
                 <span className="header-tooltip" aria-hidden="true">사용법</span>
-              </Link>
+              </NavLink>
             </nav>
           ) : null}
           <div className="header-personal">
@@ -110,15 +106,22 @@ function AccountMenu() {
   const next = encodeURIComponent(pathname + search);
   if (!member) {
     if (["/login", "/forgot", "/reset"].includes(pathname)) return null;
-    return <Link to={`/login?next=${next}`} className="header-control account-trigger" aria-label="로그인"><UserIcon /></Link>;
+    return (
+      <Link to={`/login?next=${next}`} className="header-control account-trigger" aria-label="로그인">
+        <span className="header-avatar" aria-hidden="true"><UserIcon /></span>
+        <span className="header-tooltip" aria-hidden="true">로그인</span>
+      </Link>
+    );
   }
 
   const points = user?.points_balance == null ? "—" : user.points_balance.toLocaleString();
+  const initial = String(user.username || "").trim().charAt(0).toUpperCase() || "?";
 
   return (
     <div className="account-menu-root" ref={rootRef}>
       <button ref={triggerRef} type="button" className="header-control account-trigger" onClick={() => setOpen((value) => !value)} aria-haspopup="dialog" aria-expanded={open} aria-controls="header-account-menu" aria-label={`${user.username} · 계정 메뉴`}>
-        <UserIcon />
+        <span className="header-avatar" aria-hidden="true">{initial}</span>
+        <span className="header-tooltip" aria-hidden="true">{user.username}</span>
       </button>
       {open ? (
         <section ref={panelRef} id="header-account-menu" className="account-popover" role="dialog" aria-label="계정 메뉴" tabIndex={-1}>

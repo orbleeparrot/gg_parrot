@@ -34,6 +34,9 @@ export default function RunnerInstall() {
               <span className="num t-caption text-slate-400" aria-hidden="true">01</span>
               실행기 다운로드
             </h2>
+            <p className="t-small text-slate-700">
+              웹에서 만든 매크로를 내 Windows PC에서 실행해요. 매크로 실행 중에는 브라우저를 닫아도 조건 확인과 주문이 이어져요.
+            </p>
             <p className="t-small text-slate-700">{downloadMeta}</p>
             {download.available ? (
               <a
@@ -76,7 +79,7 @@ export default function RunnerInstall() {
                 로그인하고 회원 키 복사
               </Link>
             )}
-            <p className="t-caption text-slate-700">거래소 API 키는 실행기 창에만 입력하세요.</p>
+            <p className="t-caption text-slate-700">회원 키는 계정 연결·상태 확인·원격 종료용이에요. 거래소 API 키와는 달라요.</p>
           </section>
 
           <section className="runner-install-step" aria-labelledby="runner-next">
@@ -93,9 +96,22 @@ export default function RunnerInstall() {
               {opened ? "매크로 선택하기" : "실행했어요 · 매크로 선택"}
               <span aria-hidden="true">→</span>
             </Link>
+            <p className="t-small text-slate-700">
+              실행 후에는 <Link to="/agents" className="runner-install-inline-link">내 에이전트</Link>에서 실시간 차트와 손익을 확인하고 원격으로 종료할 수 있어요.
+            </p>
           </section>
         </div>
       </div>
+
+      <aside className="runner-install-security" aria-labelledby="runner-security">
+        <h2 id="runner-security" className="t-title text-slate-900">거래소 키는 실행기에서만</h2>
+        <div className="runner-install-security-copy t-small text-slate-700">
+          <p>
+            바이낸스 API 키와 시크릿은 웹 화면에 입력하지 말고 실행기 창에만 입력하세요. 껄무새 웹·서버로 전송하거나 파일에 저장하지 않으며, 실행기를 다시 켜면 새로 입력해요.
+          </p>
+          <p>처음에는 실제 자금이 들지 않는 <strong className="text-slate-900">테스트넷 키</strong>로 시작하는 걸 권해요.</p>
+        </div>
+      </aside>
     </div>
   );
 }

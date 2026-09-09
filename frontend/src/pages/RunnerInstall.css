@@ -52,6 +52,27 @@
   min-height: 48px;
 }
 
+.runner-install-inline-link {
+  color: rgb(var(--c-slate-900));
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.runner-install-security {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 16px 36px;
+  margin-top: 32px;
+  padding-top: 24px;
+  border-top: 1px solid rgb(var(--c-slate-200));
+}
+
+.runner-install-security-copy {
+  display: grid;
+  gap: 8px;
+}
+
 @media (max-width: 1199px) {
   .runner-install-layout {
     grid-template-columns: minmax(0, 1fr);
@@ -75,6 +96,11 @@
   .runner-install-step:first-child {
     padding: 20px 0 0;
     border-top: 1px solid rgb(var(--c-slate-200));
+  }
+
+  .runner-install-security {
+    grid-template-columns: minmax(0, 1fr);
+    max-width: 720px;
   }
 }
 

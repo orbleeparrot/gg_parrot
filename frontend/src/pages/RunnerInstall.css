@@ -4,7 +4,7 @@
 
 .runner-install-layout {
   display: grid;
-  grid-template-columns: clamp(520px, 41vw, 640px) minmax(440px, 1fr);
+  grid-template-columns: clamp(500px, 36vw, 580px) minmax(440px, 1fr);
   align-items: start;
   gap: 32px;
 }
@@ -24,15 +24,15 @@
 .runner-install-actions {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  align-items: start;
+  align-items: stretch;
 }
 
 .runner-install-step {
   display: grid;
   align-content: start;
-  gap: 10px;
+  gap: 12px;
   min-width: 0;
-  padding: 0 18px;
+  padding: 2px 20px;
   border-left: 1px solid rgb(var(--c-slate-200));
 }
 
@@ -44,7 +44,25 @@
 .runner-install-step-title {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
+  font-size: 20px;
+  line-height: 1.35;
+  letter-spacing: -0.015em;
+}
+
+.runner-install-step-title .t-caption {
+  color: rgb(var(--c-slate-700));
+  font-size: 14px;
+}
+
+.runner-install-step > .t-small {
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+.runner-install-step > .t-caption {
+  font-size: 14px;
+  line-height: 1.5;
 }
 
 .runner-install-button {
@@ -69,15 +87,43 @@
 .runner-install-security {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 8px;
-  margin-top: 20px;
-  padding-top: 18px;
+  gap: 12px;
+  margin-top: 24px;
+  padding-top: 22px;
   border-top: 1px solid rgb(var(--c-slate-200));
+}
+
+.runner-install-security > .t-title {
+  font-size: 20px;
+  line-height: 1.35;
 }
 
 .runner-install-security-copy {
   display: grid;
-  gap: 8px;
+  gap: 10px;
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+@media (min-width: 1280px) and (max-width: 1399px) {
+  .runner-install-step {
+    padding-inline: 14px;
+  }
+
+  .runner-install-step:first-child {
+    padding-left: 0;
+  }
+
+  .runner-install-step-title,
+  .runner-install-security > .t-title {
+    font-size: 18px;
+  }
+
+  .runner-install-step > .t-small,
+  .runner-install-security-copy {
+    font-size: 15px;
+    line-height: 1.55;
+  }
 }
 
 @media (max-width: 1279px) {

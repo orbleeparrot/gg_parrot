@@ -47,7 +47,7 @@ def _millis(stamp):
         return 0
 
 
-def get_activity(symbol: str, market: str = "spot") -> dict:
+def _get_trade_activity(symbol: str, market: str = "spot") -> dict:
     try:
         payload = whales.base_payload(symbol, market)
     except ValueError:
@@ -81,4 +81,11 @@ def get_activity(symbol: str, market: str = "spot") -> dict:
                    collection={"status": status, "last_success_ms": last_success,
                                "last_attempt_ms": int(snapshot.get("last_attempt_ms") or 0),
                                "next_collection_ms": int(snapshot.get("next_collection_ms") or 0)})
+    return payload
+
+
+def get_activity(symbol: str, market: str = "spot", *, session_started_at=None) -> dict:
+    from . import onchain_service
+    payload = _get_trade_activity(symbol, market)
+    payload["onchain"] = onchain_service.get_activity(symbol, session_started_at=session_started_at)
     return payload

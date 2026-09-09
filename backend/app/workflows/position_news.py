@@ -519,7 +519,9 @@ def main() -> None:
     if args.mode == "serve" and os.environ.get("WHALE_TRADE_PREFECT_ENABLED", "true").lower() not in {"0", "false", "no"}:
         from .agent_collectors import serve_collectors
         from .whale_activity import create_deployment
-        serve_collectors([collection_deployment, probe_deployment], [create_deployment()])
+        from .onchain_holders import create_deployment as create_onchain_deployment
+        serve_collectors([collection_deployment, probe_deployment],
+                         [create_deployment(), create_onchain_deployment()])
         return
     serve(collection_deployment, probe_deployment, limit=1, pause_on_shutdown=False)
 

@@ -1,38 +1,20 @@
-"""Public large-trade samples and a separate, dormant on-chain holder experiment.
+"""Public aggregate trades and on-chain holder observations for Prefect workers.
 
-The active aggregate-trade source is collected by the shared Prefect worker.
-HTTP readers use durable snapshots; this adapter has no request-local cache.
+Source adapters make one bounded public HTTP request. Shared persistence, claims,
+and scheduled observation comparisons belong to their collection services.
+Balances are observations of token holdings, not proof of buys or sells: exchange,
+contract, bridge and AMM wallets can remain after the partial known-address filter.
+WETH observations cover the Ethereum WETH contract, not all native ETH holdings.
+XRPSCAN publishes its rich list nightly, so its observation interval is six hours.
 
-[온체인 상위 보유자 동향: 차후 도입 / 현재 비활성화]
-    상위 보유자 목록에 거래소·컨트랙트·브리지 지갑이 많이 섞여 있어 신호 신뢰도가
-    낮다고 판단, 노출을 보류했습니다. ``_DENYLIST_BASE`` 주소 라벨링을 충분히
-    보강한 뒤 ``main.py`` 의 /api/whale-activity 라우트와 프론트의 <WhaleBanner />
-    를 함께 되살리면 그대로 동작합니다. 순수 로직은 tests/test_whales.py 로 계속
-    검증되고 있어 방치되어 썩지 않습니다.
-
-
-Ported from the standalone `coin_active` collector, but self-contained: GGparrot
-fetches the top holders itself and diffs them against the previous observation
-stored in SQLite, so there is no dependency on an external daemon or Supabase.
-
-    balance up   vs. previous observation -> "buy"
-    balance down vs. previous observation -> "sell"
-
-IMPORTANT CAVEATS (surfaced in the UI, do not remove):
-  * Top-holder lists are full of exchange hot wallets, bridges, AMM pools and
-    contracts. Their balance moves are ordinary user deposits/withdrawals, NOT a
-    whale trading. ``_DENYLIST`` filters the best-known ones but is PARTIAL —
-    treat the output as a rough curiosity, never a trading signal.
-  * The delta window is "since the last observation", which is request-driven
-    (the server only refreshes once per cache window), so it is irregular. The
-    payload carries ``since`` / ``window_minutes`` so the UI can say so.
-  * XRP's rich list only refreshes about once a day upstream, so it gets a much
-    longer cache window and will usually report no change.
+Legacy pure diff helpers remain for compatibility; the collection service uses
+increase/decrease language and only compares wallets present in both snapshots.
 """
 from __future__ import annotations
 
 import os
 import math
+import json
 import re
 import time
 from datetime import datetime, timezone
@@ -40,9 +22,7 @@ from email.utils import parsedate_to_datetime
 from typing import Optional
 
 import httpx
-from sqlmodel import select
 
-from .db import WhaleHolderBalance, WhaleObservation, get_session
 from .http_runtime import get_http_client
 
 
@@ -103,7 +83,7 @@ def base_payload(symbol: str, market: str = "spot", *, status: str = "pending") 
     }
 
 
-def _retry_after_seconds(value: str | None, *, default: int) -> int:
+def _retry_after_seconds(value: str | None, *, default: int, max_seconds: int = 3600) -> int:
     try:
         delay = float(value)
     except (TypeError, ValueError, OverflowError):
@@ -116,7 +96,7 @@ def _retry_after_seconds(value: str | None, *, default: int) -> int:
             delay = default
     if not math.isfinite(delay):
         delay = default
-    return max(1, min(3600, math.ceil(delay)))
+    return max(1, min(max_seconds, math.ceil(delay)))
 
 
 def _fetch_aggregate_trades(symbol: str, market: str) -> list:
@@ -191,11 +171,11 @@ def fetch_large_trade_activity(symbol: str, market: str = "spot") -> dict:
     return payload
 
 
-def get_large_trade_activity(symbol: str, market: str = "spot") -> dict:
+def get_large_trade_activity(symbol: str, market: str = "spot", *, session_started_at=None) -> dict:
     """Read the shared collected snapshot; this HTTP path never fetches Binance."""
     from .agent_features.whale_activity.service import get_activity
 
-    return get_activity(symbol, market)
+    return get_activity(symbol, market, session_started_at=session_started_at)
 
 # --- supported coins ----------------------------------------------------
 # `symbol` is the Binance pair the builder uses, so clicking a coin can prefill it.
@@ -225,8 +205,47 @@ COINS: dict[str, dict] = {
     },
 }
 
-TOP_N = int(os.environ.get("WHALE_TOP_N", "50"))
-HTTP_TIMEOUT = float(os.environ.get("WHALE_HTTP_TIMEOUT", "12"))
+ONCHAIN_MAX_RESPONSE_BYTES = 2 * 1024 * 1024
+ONCHAIN_BLOCKSCOUT_MAX_RESPONSE_BYTES = 512 * 1024
+
+
+def _onchain_top_n() -> int:
+    try:
+        return max(1, min(100, int(os.environ.get("WHALE_TOP_N", "50"))))
+    except (TypeError, ValueError, OverflowError):
+        return 50
+
+
+def _onchain_timeout_seconds() -> float:
+    try:
+        value = float(os.environ.get("WHALE_HTTP_TIMEOUT", "12"))
+    except (TypeError, ValueError, OverflowError):
+        return 12.0
+    return max(1.0, min(12.0, value)) if math.isfinite(value) else 12.0
+
+
+TOP_N = _onchain_top_n()  # Legacy helper compatibility; new observations read settings dynamically.
+HTTP_TIMEOUT = _onchain_timeout_seconds()
+
+
+def onchain_configuration() -> dict:
+    """Safe Prefect configuration metadata, excluding API keys and wallet lists."""
+    return {
+        "provider": "public_onchain_holders", "coins": list(COINS),
+        "top_n": _onchain_top_n(),
+        "refresh_seconds": {coin: int(cfg["ttl"]) for coin, cfg in COINS.items()},
+        "timeout_seconds": _onchain_timeout_seconds(),
+        "max_response_bytes": ONCHAIN_MAX_RESPONSE_BYTES,
+        "api_calls_per_fetch": 1, "ai_calls": 0,
+        "xrp_upstream_refresh": "nightly", "eth_scope": "Ethereum WETH contract only; not native ETH",
+    }
+
+
+def supported_coin_for_symbol(symbol: str) -> str | None:
+    symbol = str(symbol or "").strip().upper()
+    quote = next((quote for quote in ("USDT", "USDC") if symbol.endswith(quote)), None)
+    base = symbol[:-len(quote)] if quote else ""
+    return {"PEPE": "PEPE", "1000PEPE": "PEPE", "WETH": "WETH", "ETH": "WETH", "XRP": "XRP"}.get(base)
 
 # Best-known non-trader addresses (null/burn, big CEX wallets, the main PEPE AMM
 # pool). PARTIAL by nature — extend via WHALE_EXCLUDE_ADDRESSES (comma-separated).
@@ -239,6 +258,11 @@ _DENYLIST_BASE = {
     "0xdfd5293d8e347dfe59e90efd55b2956a1343963d",  # Binance 16
     "0x9696f59e4d72e237be84ffd425dcad154bf96976",  # Binance 18
     "0xa43fe16908251ee70ef74718545e4fe6c5ccec9f",  # PEPE/WETH Uniswap V2 pool
+    # Labels published in https://docs.xrpscan.com/api-documentation/balance/balances
+    "rMQ98K56yXJbDGv49ZSmW51sLn94Xe1mu1",  # Ripple 29
+    "rKveEyR1SrkWbJX214xcfH43ZsoGMb3PEv",  # Ripple 39
+    "rEy8TFcrAPvhpKrwyrscNYyqBGUkE9hKaJ",  # Binance 4
+    "rBEc94rUFfLfTDwwGN7rQGBHc883c2QHhx",  # Uphold 4
 }
 
 
@@ -246,7 +270,8 @@ def _denylist() -> set[str]:
     extra = os.environ.get("WHALE_EXCLUDE_ADDRESSES", "")
     out = set(_DENYLIST_BASE)
     for a in extra.split(","):
-        a = a.strip().lower()
+        a = a.strip()
+        a = a.lower() if a.lower().startswith("0x") else a
         if a:
             out.add(a)
     return out
@@ -262,7 +287,8 @@ def filter_holders(holders: list[dict], contract: Optional[str] = None) -> tuple
     deny = _denylist()
     if contract:
         deny.add(contract.lower())
-    kept = [h for h in holders if h["wallet"].lower() not in deny]
+    kept = [h for h in holders if
+            (h["wallet"].lower() if h["wallet"].lower().startswith("0x") else h["wallet"]) not in deny]
     return kept, len(holders) - len(kept)
 
 
@@ -310,47 +336,155 @@ def mood(net: int, buys: int, sells: int) -> str:
 
 
 # --- fetchers -----------------------------------------------------------
-def _fetch_blockscout(cfg: dict, limit: int) -> list[dict]:
-    params = {
+class OnchainSourceError(RuntimeError):
+    """Safe, typed metadata; upstream bodies, request URLs and keys never escape."""
+
+    def __init__(self, code: str, *, http_status: int | None = None,
+                 retry_after_seconds: int | None = None, elapsed_ms: int | None = None) -> None:
+        self.code = code
+        self.http_status = http_status
+        self.retry_after_seconds = retry_after_seconds
+        self.retry_after_sec = retry_after_seconds
+        self.elapsed_ms = elapsed_ms
+        super().__init__(f"On-chain holders: {code}" +
+                         (f" (HTTP {http_status})" if http_status is not None else ""))
+
+
+def _request_onchain_json(url: str, *, params: dict | None = None, max_bytes: int) -> tuple[object, int]:
+    timeout = _onchain_timeout_seconds()
+    started = time.monotonic()
+    status = None
+    try:
+        # Disable redirects so a credential-bearing request cannot follow a new host.
+        with get_http_client().stream("GET", url, params=params, timeout=timeout, follow_redirects=False) as response:
+            status = response.status_code
+            if status in (429, 418):
+                raise OnchainSourceError("rate_limited", http_status=status,
+                    retry_after_seconds=_retry_after_seconds(response.headers.get("Retry-After"),
+                        default=300, max_seconds=86_400))
+            if not 200 <= status < 300:
+                raise OnchainSourceError("http_error", http_status=status)
+            length = response.headers.get("Content-Length", "")
+            if length.isdigit() and int(length) > max_bytes:
+                raise OnchainSourceError("response_too_large", http_status=status)
+            body = bytearray()
+            for chunk in response.iter_bytes():
+                if len(body) + len(chunk) > max_bytes:
+                    raise OnchainSourceError("response_too_large", http_status=status)
+                if time.monotonic() - started > timeout:
+                    raise OnchainSourceError("timeout", http_status=status)
+                body.extend(chunk)
+            try:
+                return json.loads(body), status
+            except (TypeError, ValueError, UnicodeDecodeError, RecursionError):
+                raise OnchainSourceError("invalid_response", http_status=status) from None
+    except httpx.TimeoutException:
+        raise OnchainSourceError("timeout", http_status=status) from None
+    except httpx.RequestError:
+        raise OnchainSourceError("network_error", http_status=status) from None
+
+
+def _holder_balance(value) -> str:
+    # Integers remain exact beyond 2**53; never use float or substitute a zero.
+    if type(value) is int and value >= 0:
+        return str(value)
+    if isinstance(value, str) and re.fullmatch(r"[0-9]{1,256}", value):
+        return str(int(value))
+    raise ValueError("invalid holder balance")
+
+
+def _parse_holder_rows(rows, *, source: str, status: int) -> list[dict]:
+    if not isinstance(rows, list):
+        raise OnchainSourceError("invalid_response", http_status=status)
+    if not rows:
+        raise OnchainSourceError("empty_response", http_status=status)
+    holders, seen = [], set()
+    ethereum = source == "blockscout"
+    try:
+        for row in rows:
+            if not isinstance(row, dict):
+                raise ValueError("invalid holder row")
+            wallet = row.get("address" if ethereum else "account")
+            if not isinstance(wallet, str):
+                raise ValueError("invalid holder address")
+            pattern = r"0x[a-fA-F0-9]{40}" if ethereum else r"r[1-9A-HJ-NP-Za-km-z]{24,34}"
+            if not re.fullmatch(pattern, wallet):
+                raise ValueError("invalid holder address")
+            wallet = wallet.lower() if ethereum else wallet
+            if wallet in seen:
+                raise ValueError("duplicate holder address")
+            seen.add(wallet)
+            holders.append({"wallet": wallet, "balance": _holder_balance(row.get("value" if ethereum else "balance"))})
+    except (ValueError, TypeError, OverflowError):
+        raise OnchainSourceError("invalid_response", http_status=status) from None
+    return sorted(holders, key=lambda item: (-int(item["balance"]), item["wallet"]))
+
+
+def _blockscout_params(cfg: dict, limit: int) -> dict:
+    return {
         "module": "token",
         "action": "getTokenHolders",
         "contractaddress": cfg["contract"],
         "page": 1,
         "offset": limit,
     }
+
+
+def _fetch_blockscout_rows(cfg: dict, limit: int) -> tuple[list[dict], int]:
+    params = _blockscout_params(cfg, limit)
     key = os.environ.get("BLOCKSCOUT_API_KEY", "")
     if key:
         params["apikey"] = key
-    with httpx.Client(timeout=HTTP_TIMEOUT) as client:
-        r = client.get(cfg["base_url"].rstrip("/") + "/", params=params)
-        r.raise_for_status()
-        rows = r.json().get("result")
-    if not isinstance(rows, list):
-        return []
-    out = []
-    for row in rows:
-        addr, val = row.get("address"), row.get("value")
-        if addr:
-            out.append({"wallet": str(addr), "balance": str(val if val is not None else "0")})
-    out.sort(key=lambda h: _to_int(h["balance"]) or 0, reverse=True)
-    return out[:limit]
+    payload, status = _request_onchain_json(cfg["base_url"].rstrip("/") + "/", params=params,
+        max_bytes=min(ONCHAIN_MAX_RESPONSE_BYTES, ONCHAIN_BLOCKSCOUT_MAX_RESPONSE_BYTES))
+    if not isinstance(payload, dict) or payload.get("status") != "1" or payload.get("message") != "OK":
+        raise OnchainSourceError("upstream_error", http_status=status)
+    return _parse_holder_rows(payload.get("result"), source="blockscout", status=status), status
+
+
+def _fetch_blockscout(cfg: dict, limit: int) -> list[dict]:
+    return _fetch_blockscout_rows(cfg, limit)[0][:limit]
+
+
+def _fetch_xrpscan_rows() -> tuple[list[dict], int]:
+    payload, status = _request_onchain_json("https://api.xrpscan.com/api/v1/balances", max_bytes=ONCHAIN_MAX_RESPONSE_BYTES)
+    return _parse_holder_rows(payload, source="xrpscan", status=status), status
 
 
 def _fetch_xrpscan(limit: int) -> list[dict]:
-    with httpx.Client(timeout=HTTP_TIMEOUT) as client:
-        r = client.get("https://api.xrpscan.com/api/v1/balances")
-        r.raise_for_status()
-        rows = r.json()
-    if not isinstance(rows, list):
-        return []
-    out = []
-    for item in rows[:limit]:
-        if not isinstance(item, dict):
-            continue
-        acct, bal = item.get("account"), item.get("balance")
-        if acct:
-            out.append({"wallet": str(acct), "balance": str(_to_int(bal) or 0)})
-    return out
+    return _fetch_xrpscan_rows()[0][:limit]
+
+
+def fetch_holder_observation(coin: str) -> dict:
+    """Collect one validated observation without DB access, local cache, or AI calls."""
+    coin = str(coin or "").strip().upper()
+    if coin not in COINS:
+        raise ValueError("unsupported on-chain coin")
+    cfg, limit, started = COINS[coin], _onchain_top_n(), time.monotonic()
+    try:
+        if cfg["source"] == "blockscout":
+            rows, status = _fetch_blockscout_rows(cfg, limit)
+            # Construct the public link independently of the credential-bearing request.
+            source_url = str(httpx.URL("https://eth.blockscout.com/api/", params=_blockscout_params(cfg, limit)))
+            source_label = "Blockscout · Ethereum 토큰 상위 보유 주소"
+        else:
+            rows, status = _fetch_xrpscan_rows()
+            source_url = "https://api.xrpscan.com/api/v1/balances"
+            source_label = "XRPScan · XRP 상위 보유 주소"
+        holders, excluded = filter_holders(rows[:limit], cfg.get("contract"))
+        return {
+            "coin": coin, "source": cfg["source"], "source_label": source_label,
+            "source_url": source_url, "observed_at": _now_iso(), "holders": holders,
+            "tracked_count": len(holders), "excluded_count": excluded, "fetched_count": len(rows),
+            "daily_source": cfg["source"] == "xrpscan", "http_status": status,
+            "elapsed_ms": round((time.monotonic() - started) * 1000),
+            "scope": ("Ethereum WETH 계약 보유량입니다. 네이티브 ETH 전체 보유량이 아닙니다." if coin == "WETH"
+                      else "XRP 상위 계좌 잔고 표본이며, 원본은 매일 밤 갱신됩니다." if coin == "XRP"
+                      else "Ethereum PEPE 계약 상위 보유 주소 표본입니다."),
+        }
+    except OnchainSourceError as exc:
+        exc.elapsed_ms = round((time.monotonic() - started) * 1000)
+        raise
 
 
 def _fetch(coin: str, cfg: dict) -> list[dict]:
@@ -361,103 +495,7 @@ def _fetch(coin: str, cfg: dict) -> list[dict]:
     return []
 
 
-# --- persistence + refresh ---------------------------------------------
-def _load_prev(db, coin: str) -> dict[str, str]:
-    rows = db.exec(select(WhaleHolderBalance).where(WhaleHolderBalance.coin == coin)).all()
-    return {r.wallet: r.balance_raw for r in rows}
-
-
-def _store(db, coin: str, holders: list[dict], prev: dict[str, str]) -> None:
-    """Upsert current balances (only touching rows that actually changed)."""
-    existing = {
-        r.wallet: r
-        for r in db.exec(select(WhaleHolderBalance).where(WhaleHolderBalance.coin == coin)).all()
-    }
-    now = _now_iso()
-    for h in holders:
-        row = existing.get(h["wallet"])
-        if row is None:
-            db.add(WhaleHolderBalance(coin=coin, wallet=h["wallet"], balance_raw=h["balance"], updated_at=now))
-        elif row.balance_raw != h["balance"]:
-            row.balance_raw = h["balance"]
-            row.updated_at = now
-            db.add(row)
-
-
-def _refresh_coin(coin: str, cfg: dict) -> dict:
-    """Fetch, diff against the stored snapshot, persist, and return the summary."""
-    holders = _fetch(coin, cfg)
-    if not holders:
-        raise RuntimeError(f"no holders for {coin}")
-    holders, excluded = filter_holders(holders, cfg.get("contract"))
-
-    with get_session() as db:
-        prev = _load_prev(db, coin)
-        baseline = not prev
-        d = diff_holders(prev, holders)
-        _store(db, coin, holders, prev)
-
-        obs = db.get(WhaleObservation, coin)
-        since = obs.observed_at if obs else None
-        now = _now_iso()
-        if obs is None:
-            obs = WhaleObservation(coin=coin, observed_at=now, buys=d["buys"], sells=d["sells"], tracked=len(holders))
-        else:
-            obs.observed_at, obs.buys, obs.sells, obs.tracked = now, d["buys"], d["sells"], len(holders)
-        db.add(obs)
-        db.commit()
-
-    window_min = None
-    if since:
-        try:
-            t0 = datetime.strptime(since, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
-            window_min = round((datetime.now(timezone.utc) - t0).total_seconds() / 60.0, 1)
-        except ValueError:
-            pass
-
-    return {
-        "coin": coin,
-        "name": cfg["name"],
-        "symbol": cfg["symbol"],
-        "tracked": len(holders),
-        "excluded": excluded,
-        "buys": d["buys"],
-        "sells": d["sells"],
-        "net": d["net"],
-        "baseline": baseline,  # first ever observation: nothing to compare yet
-        "since": since,
-        "window_minutes": window_min,
-        "observed_at": _now_iso(),
-        "mood": mood(d["net"], d["buys"], d["sells"]),
-        "daily_source": cfg["source"] == "xrpscan",  # upstream only refreshes ~daily
-    }
-
-
-# per-coin cache: coin -> (payload, expires_at)
-_cache: dict[str, tuple[dict, float]] = {}
-
-
 def get_whale_activity() -> dict:
-    """Cached on-chain whale flow for every supported coin (never raises)."""
-    out: list[dict] = []
-    for coin, cfg in COINS.items():
-        hit = _cache.get(coin)
-        if hit and hit[1] > time.time():
-            out.append(hit[0])
-            continue
-        try:
-            payload = _refresh_coin(coin, cfg)
-            _cache[coin] = (payload, time.time() + cfg["ttl"])
-            out.append(payload)
-        except Exception:
-            if hit:  # serve stale rather than dropping the coin
-                stale = dict(hit[0])
-                stale["stale"] = True
-                out.append(stale)
-
-    return {
-        "ok": bool(out),
-        "coins": out,
-        "updated_at": _now_iso(),
-        "disclaimer": "on-chain reference only; exchange/contract wallets may remain; not a trading signal",
-    }
+    """Read the shared on-chain snapshots without provider calls or DB writes."""
+    from .agent_features.whale_activity.onchain_service import get_all_activity
+    return get_all_activity()

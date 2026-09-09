@@ -1,6 +1,54 @@
+const holderTimeFormat = new Intl.DateTimeFormat("ko-KR", {
+  timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit",
+  hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+});
+
+function observationTime(value) {
+  const time = typeof value === "number" ? value : typeof value === "string" ? Date.parse(value) : NaN;
+  return Number.isFinite(time) && time > 0 && time <= 8.64e15 ? time : null;
+}
+
+function holderSourceUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:"
+      && ["eth.blockscout.com", "xrpscan.com", "api.xrpscan.com"].includes(url.hostname)
+      && !url.username && !url.password ? url.href : "";
+  } catch {
+    return "";
+  }
+}
+
+function holderEvents(onchain) {
+  if (onchain?.status !== "ready" || !["PEPE", "WETH", "XRP"].includes(onchain.coin)) return [];
+  const coin = onchain.coin;
+  return (Array.isArray(onchain.items) ? onchain.items : []).flatMap((item) => {
+    if (!item || typeof item.id !== "string" || !new RegExp(`^onchain:${coin}:\\d+$`).test(item.id)) return [];
+    const counts = [item.increased_count, item.decreased_count, item.compared_count, item.tracked_count];
+    if (!counts.every((value) => Number.isSafeInteger(value) && value >= 0)) return [];
+    const [increased, decreased, compared, tracked] = counts;
+    if (increased + decreased === 0 || increased + decreased > compared || compared > tracked) return [];
+    const observedAt = observationTime(item.occurred_at);
+    const previousAt = observationTime(item.previous_observed_at);
+    if (!observedAt || !previousAt || previousAt >= observedAt) return [];
+    const scope = item.scope || onchain.scope || `${coin}${coin === "WETH" ? " 토큰" : ""} 상위 보유 지갑`;
+    const daily = coin === "XRP" || item.daily_source || onchain.daily_source;
+    return [{
+      id: item.id, module: "whale_activity", severity: "info",
+      title: `${coin} 지갑 잔고 변화`,
+      summary: `동일 지갑 ${compared}개 비교 · 잔고 증가 ${increased}개 · 감소 ${decreased}개. ${scope}.${daily ? " 일 단위로 갱신되는 잔고 자료입니다." : ""}`,
+      detailLabel: "비교 기간",
+      detail: `${holderTimeFormat.format(previousAt)} ~ ${holderTimeFormat.format(observedAt)} (한국 시간)`,
+      occurredAt: observedAt,
+      sourceLabel: item.source_label || onchain.source_label || `${coin} 보유 지갑`,
+      sourceUrl: holderSourceUrl(item.source_url || onchain.source_url),
+    }];
+  });
+}
+
 export const leaderModule = {
   key: "whale_activity",
-  label: "고래 체결",
+  label: "고래 동향",
   entitlement: "agent.leader_signal",
   minimumPlan: "pro",
   availability: "live",
@@ -23,6 +71,7 @@ export const leaderModule = {
       summary: `${Number(item.notional).toLocaleString(undefined, { maximumFractionDigits: 0 })} ${data.quote_asset} · ${Number(item.quantity).toLocaleString()}개 · 체결가 ${item.price}. 특정 투자자의 보유량 변화는 알 수 없어요.`,
       occurredAt: item.occurred_at || 0, sourceLabel: `바이낸스 ${data.market === "futures" ? "선물" : "현물"} 공개 체결 표본`,
     }));
+    events.push(...holderEvents(data?.onchain));
     const failed = state?.error || data?.status === "unavailable" || data?.collection?.status === "error";
     const stale = data?.stale || data?.collection?.freshness === "stale";
     const pending = !data || ["pending", "collecting"].includes(data.status)

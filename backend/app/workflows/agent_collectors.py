@@ -1,23 +1,57 @@
-"""Two independent Prefect slots in one process, with one shutdown owner.
+"""Independent collection slots without a third heavyweight Python process.
 
-News/probes share one runner slot and public trades have another. Runners share a
-background asyncio loop so Prefect cannot replace the main thread's SIGTERM
-handler. Only actual flow runs create subprocesses; idle runners share imports.
+News/browser flows retain an isolated child; lightweight exchange/on-chain flows
+run on a bounded thread in the supervisor. One owner handles shutdown signals.
 """
 from __future__ import annotations
 
 import asyncio
 from concurrent.futures import Future
 import math
+import json
+import os
 import signal
 import threading
 import time
 
 
-async def _register_and_start(runner, deployments):
+async def _queue_pass(deployment_ids, *, max_lag_seconds):
+    from prefect.client.orchestration import get_client
+    from .collector_queue import prune_stale_scheduled
+    try:
+        async with asyncio.timeout(15):
+            async with get_client() as client:
+                summary = await prune_stale_scheduled(client, deployment_ids,
+                    max_lag_seconds=max_lag_seconds, limit=20)
+        if any(summary.get(key, 0) for key in ("retired", "errors", "deferred")):
+            print(json.dumps({"event": "collector_queue_cleanup", **summary}), flush=True)
+    except Exception:
+        # A control-plane interruption must not kill otherwise healthy collectors.
+        print(json.dumps({"event": "collector_queue_cleanup", "error_code": "orchestration_unavailable"}), flush=True)
+
+
+async def _maintain_queue(deployment_ids, *, max_lag_seconds):
+    while True:
+        await asyncio.sleep(30)
+        await _queue_pass(deployment_ids, max_lag_seconds=max_lag_seconds)
+
+
+async def _register_and_start(runner, deployments, *, max_lag_seconds=120):
+    deployment_ids = []
     for deployment in deployments:
-        await runner.aadd_deployment(deployment)
-    await runner.start()
+        identity = await runner.aadd_deployment(deployment)
+        if identity is not None:
+            deployment_ids.append(identity)
+    maintenance = None
+    if deployment_ids:
+        await _queue_pass(deployment_ids, max_lag_seconds=max_lag_seconds)
+        maintenance = asyncio.create_task(_maintain_queue(deployment_ids, max_lag_seconds=max_lag_seconds))
+    try:
+        await runner.start()
+    finally:
+        if maintenance is not None:
+            maintenance.cancel()
+            await asyncio.gather(maintenance, return_exceptions=True)
 
 
 async def _wait_for_stop(stopping, poll_seconds):
@@ -53,14 +87,16 @@ async def _stop_runners(runners, run_tasks, shutdown_seconds):
             raise RuntimeError("Prefect collector shutdown failed") from task.exception()
 
 
-async def _serve_async(news_deployments, whale_deployments, *, runner_factory,
+async def _serve_async(news_deployments, whale_deployments, *, runner_factory, whale_runner_factory,
                        stopping, poll_seconds, shutdown_seconds):
     runners = [
         runner_factory(name="gg-parrot-news", limit=1, pause_on_shutdown=False),
-        runner_factory(name="gg-parrot-whales", limit=1, query_seconds=5, pause_on_shutdown=False),
+        whale_runner_factory(name="gg-parrot-whales", limit=1, query_seconds=5, pause_on_shutdown=False),
     ]
-    run_tasks = [asyncio.create_task(_register_and_start(runner, deployments))
-                 for runner, deployments in zip(runners, (news_deployments, whale_deployments))]
+    news_max_lag = max(int(os.environ.get("POSITION_NEWS_COLLECTION_SECONDS", "300")),
+                       int(os.environ.get("POSITION_NEWS_MAX_SCHEDULE_LAG_SECONDS", "600")))
+    run_tasks = [asyncio.create_task(_register_and_start(runner, deployments, max_lag_seconds=lag))
+                 for runner, deployments, lag in zip(runners, (news_deployments, whale_deployments), (news_max_lag, 120))]
     stop_watcher = asyncio.create_task(_wait_for_stop(stopping, poll_seconds))
     try:
         done, _ = await asyncio.wait([*run_tasks, stop_watcher], return_when=asyncio.FIRST_COMPLETED)
@@ -80,11 +116,17 @@ async def _serve_async(news_deployments, whale_deployments, *, runner_factory,
         await _stop_runners(runners, run_tasks, shutdown_seconds)
 
 
-def serve_collectors(news_deployments, whale_deployments, *, runner_factory=None,
+def serve_collectors(news_deployments, whale_deployments, *, runner_factory=None, whale_runner_factory=None,
                      poll_seconds=.1, shutdown_seconds=270):
     """Block the main thread while both independently limited runners serve."""
     if threading.current_thread() is not threading.main_thread():
         raise RuntimeError("Collector supervisor must own the main thread's shutdown signals")
+    if whale_runner_factory is None:
+        if runner_factory is not None:
+            whale_runner_factory = runner_factory
+        else:
+            from .lightweight_collectors import LightweightCollectorRunner
+            whale_runner_factory = LightweightCollectorRunner
     if runner_factory is None:
         from prefect.runner import Runner
         runner_factory = Runner
@@ -103,7 +145,7 @@ def serve_collectors(news_deployments, whale_deployments, *, runner_factory=None
     def run():
         try:
             asyncio.run(_serve_async(news_deployments, whale_deployments,
-                runner_factory=runner_factory, stopping=stopping,
+                runner_factory=runner_factory, whale_runner_factory=whale_runner_factory, stopping=stopping,
                 poll_seconds=poll_seconds, shutdown_seconds=shutdown_seconds))
         except BaseException as exc:
             result.set_exception(exc)

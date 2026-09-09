@@ -570,6 +570,7 @@ def _session_view(row: RunSession) -> dict:
         "realized_pnl": row.realized_pnl,
         "unrealized_pct": row.unrealized_pct,
         "note": row.note,
+        "started_at": row.started_at,
         "started_kst": _kst_label(row.started_at),
         "heartbeat_kst": _kst_label(row.last_heartbeat_at),
         "stopped_kst": _kst_label(row.stopped_at or ""),

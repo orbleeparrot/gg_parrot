@@ -21,7 +21,10 @@ export default function RunnerInstall() {
   return (
     <div className="runner-install">
       {/* 제목 조판은 다른 화면과 같은 규격 — 공용 PageHeader(§9) */}
-      <PageHeader title="껄무새 매크로 실행기" />
+      <div className="runner-install-heading">
+        <PageHeader title="껄무새 매크로 실행기" />
+        <img className="runner-install-mascot" src="/brand/navigation/ggparrot-nav-agent.svg" alt="" width="96" height="96" draggable="false" />
+      </div>
 
       <div className="runner-install-layout">
         <div className="runner-install-media">

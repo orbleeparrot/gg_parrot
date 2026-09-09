@@ -911,23 +911,28 @@ export default function Guide({ embedded = false, initialSection = "start" }) {
   return (
     <div className={embedded ? "guide-page guide-embedded" : "guide-page"}>
       {!embedded && <PageHeader title="사용법" />}
-      <form role="search" aria-label="사용법 검색" className="guide-search" onSubmit={(event) => event.preventDefault()}>
-        <MagnifyingGlassIcon size={28} weight="regular" aria-hidden="true" />
-        <input
-          ref={searchRef}
-          type="search"
-          value={q}
-          aria-label="사용법 검색"
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="사용법 검색"
-          autoComplete="off"
-        />
-        {q && (
-          <button type="button" className="guide-search-clear" aria-label="검색어 지우기" onClick={() => { setQuery(""); searchRef.current?.focus(); }}>
-            <XIcon size={20} weight="regular" aria-hidden="true" />
-          </button>
+      <div className="guide-search-area">
+        {!embedded && (
+          <img className="guide-search-mascot" src="/brand/navigation/ggparrot-nav-builder.svg" alt="" width="96" height="96" draggable="false" />
         )}
-      </form>
+        <form role="search" aria-label="사용법 검색" className="guide-search" onSubmit={(event) => event.preventDefault()}>
+          <MagnifyingGlassIcon size={28} weight="regular" aria-hidden="true" />
+          <input
+            ref={searchRef}
+            type="search"
+            value={q}
+            aria-label="사용법 검색"
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="사용법 검색"
+            autoComplete="off"
+          />
+          {q && (
+            <button type="button" className="guide-search-clear" aria-label="검색어 지우기" onClick={() => { setQuery(""); searchRef.current?.focus(); }}>
+              <XIcon size={20} weight="regular" aria-hidden="true" />
+            </button>
+          )}
+        </form>
+      </div>
       <div className="guide-layout">
       <aside className="guide-sidebar">
         {/* On a phone the full contents list would push every article a screen

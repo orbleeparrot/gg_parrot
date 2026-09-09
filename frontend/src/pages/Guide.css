@@ -1,9 +1,24 @@
 .guide-page { width: 100%; }
 
-.guide-search {
+.guide-search-area {
+  position: relative;
   width: min(100%, 520px);
-  min-height: 48px;
   margin: 20px auto 28px;
+}
+.guide-search-mascot {
+  position: absolute;
+  right: 12px;
+  bottom: calc(100% - 16px);
+  width: 96px;
+  height: 96px;
+  object-fit: contain;
+  pointer-events: none;
+  user-select: none;
+}
+.guide-search {
+  width: 100%;
+  min-height: 48px;
+  margin: 0;
   padding: 0 8px 0 14px;
   display: flex;
   align-items: center;
@@ -28,12 +43,13 @@
 .guide-article { min-width: 0; max-width: 960px; padding-top: 4px; scroll-margin-top: calc(var(--site-topbar-h, 64px) + 24px); }
 
 /* The onboarding preview shares the articles but keeps its own local search state. */
-.guide-embedded .guide-search { margin-top: 0; }
+.guide-embedded .guide-search-area { margin-top: 0; }
 .guide-embedded .guide-sidebar { top: 0; }
 .guide-embedded .guide-toc { max-height: none; overflow: visible; }
 
 @media (max-width: 767px) {
-  .guide-search { margin: 16px auto 24px; }
+  .guide-search-area { margin: 16px auto 24px; }
+  .guide-search-mascot { right: 8px; bottom: calc(100% - 13px); width: 80px; height: 80px; }
   .guide-layout { grid-template-columns: minmax(0, 1fr); gap: 20px; }
   .guide-sidebar { position: static; }
   .guide-toc { max-height: none; overflow: visible; }

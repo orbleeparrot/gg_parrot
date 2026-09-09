@@ -2,6 +2,10 @@
   width: 100%;
 }
 
+.runner-install-heading { display: flex; align-items: center; gap: 12px; margin-bottom: 28px; }
+.runner-install-heading .page-head { min-width: 0; margin-bottom: 0; }
+.runner-install-mascot { width: 96px; height: 96px; flex: 0 0 auto; margin-block: -24px; object-fit: contain; pointer-events: none; user-select: none; }
+
 .runner-install-layout {
   display: grid;
   grid-template-columns: clamp(500px, 36vw, 580px) minmax(440px, 1fr);
@@ -162,6 +166,9 @@
 }
 
 @media (max-width: 767px) {
+  .runner-install-heading { gap: 8px; }
+  .runner-install-mascot { width: 72px; height: 72px; margin-block: -12px; }
+
   .runner-install-layout {
     gap: 24px;
   }

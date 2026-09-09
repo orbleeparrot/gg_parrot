@@ -211,7 +211,7 @@ export default function Board() {
   const [data, setData] = useState(null);
   const [busy, setBusy] = useState(true);
   const [err, setErr] = useState("");
-  const [composing, setComposing] = useState(false);
+  const [composing, setComposing] = useState(() => searchParams.get("write") === "1");
   const [now, setNow] = useState(() => Date.now());
 
   function load(p) {
@@ -260,10 +260,10 @@ export default function Board() {
           ) : (
             <button
               onClick={() => navigate("/login?next=%2Fboard")}
-              className="btn btn-m btn-secondary"
-              title="글쓰기는 로그인 후 이용할 수 있어요"
+              className="btn btn-m btn-primary"
+              title="로그인하면 바로 글을 쓸 수 있어요"
             >
-              로그인하고 글쓰기
+              글쓰기
             </button>
           )
         }

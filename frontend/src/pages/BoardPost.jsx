@@ -2,10 +2,10 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api.js";
 import { useAuth } from "../lib/auth.js";
-import { boardFullTime, kstDateTime } from "../lib/boardText.js";
+import { boardFullTime, boardTime, kstDateTime } from "../lib/boardText.js";
 import { ErrorNote } from "../components/Page.jsx";
 import ConfirmDialog from "../components/ConfirmDialog.jsx";
-import { ChevronLeftIcon } from "../components/boardIcons.jsx";
+import { ChevronLeftIcon, ImageIcon } from "../components/boardIcons.jsx";
 import "./Board.css";
 
 // §6 text-field 규격. `bg-white` 를 쓰면 안 된다: Tailwind 의 리터럴 흰색이라
@@ -119,6 +119,55 @@ function Comment({ c, onDeleted }) {
   );
 }
 
+// 글 아래 목록 — 읽고 나면 다음 글로 가는 게 게시판 관례(퀘이사존·디시·클리앙 모두 글 아래에 목록을 다시 둔다).
+function ListBelow({ currentId, token, onWrite }) {
+  const [data, setData] = useState(null);
+  const [now] = useState(() => Date.now());
+  useEffect(() => {
+    let alive = true;
+    api.boardList(1, 10).then((d) => { if (alive) setData(d); }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
+  if (!data || !data.items?.length) return null;
+  return (
+    <section className="board-post-list" aria-labelledby="board-post-list-title">
+      <h2 id="board-post-list-title" className="board-post-list-head">
+        껄무새 게시판 <span>글 <b className="num">{data.total.toLocaleString()}</b>개</span>
+      </h2>
+      <ul className="board-table">
+        <li className="board-head" role="row" aria-hidden="true">
+          <span className="board-col-no">번호</span>
+          <span className="board-col-title">제목</span>
+          <span className="board-col-author">글쓴이</span>
+          <span className="board-col-time">시각</span>
+        </li>
+        {data.items.map((post) => {
+          const current = post.id === currentId;
+          const time = boardTime(post.created_ms, now);
+          return (
+            <li key={post.id} className="board-item">
+              <Link to={`/board/${post.id}`} className={`board-row${current ? " is-current" : ""}`} aria-current={current ? "page" : undefined}>
+                <span className="board-no num" aria-hidden="true">{post.id}</span>
+                <span className="board-title">
+                  <span className="board-title-text">{post.title}</span>
+                  {post.comment_count > 0 ? <span className="board-count num" aria-hidden="true">{post.comment_count}</span> : null}
+                  {post.has_image ? <span className="board-mark" aria-hidden="true"><ImageIcon /></span> : null}
+                </span>
+                <span className="board-author" aria-hidden="true">{post.author_name}</span>
+                <time className={`board-time num${/:/.test(time) ? " is-today" : ""}`} dateTime={kstDateTime(post.created_kst) || undefined} title={boardFullTime(post.created_ms) || post.created_kst}>{time}</time>
+              </Link>
+            </li>
+          );
+        })}
+      </ul>
+      <div className="board-post-list-foot">
+        <Link to="/board" className="btn btn-m btn-secondary">목록 전체</Link>
+        <button type="button" onClick={onWrite} className="btn btn-m btn-primary">글쓰기</button>
+      </div>
+    </section>
+  );
+}
+
 function PostSkeleton() {
   return (
     <div className="board-post-skeleton" aria-hidden="true">
@@ -134,7 +183,7 @@ function PostSkeleton() {
 export default function BoardPost() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, token } = useAuth();
   const [post, setPost] = useState(null);
   const [err, setErr] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -165,7 +214,10 @@ export default function BoardPost() {
   const when = post ? kstDateTime(post.created_kst) : "";
   const full = post ? (boardFullTime(post.created_ms) || post.created_kst) : "";
 
+  const write = () => navigate(token ? "/board?write=1" : `/login?next=${encodeURIComponent("/board?write=1")}`);
+
   return (
+    <div className="board-post-page">
     <div className="board-post">
       <Link to="/board" className="btn btn-s btn-ghost board-back">
         <ChevronLeftIcon />목록
@@ -180,9 +232,9 @@ export default function BoardPost() {
             <h1 className="board-post-title">{post.title}</h1>
             {/* 괘선 띠 — 글쓴이 | 시각 | 댓글. 한국 게시판의 글머리 관례. */}
             <div className="board-post-strip">
-              <span>글쓴이 <b>{post.author_name}</b></span>
-              <span>시각 <time className="num" dateTime={when || undefined}>{full}</time></span>
+              <span><b>{post.author_name}</b></span>
               <span>댓글 <span className="num">{post.comments.length}</span></span>
+              <time className="num board-post-strip-time" dateTime={when || undefined}>{full}</time>
               {isMine ? (
                 <button type="button" onClick={() => setConfirmDelete(true)} disabled={deleting} className="board-text-btn">
                   {deleting ? "지우는 중…" : "글 삭제"}
@@ -222,9 +274,6 @@ export default function BoardPost() {
             />
           </section>
 
-          <div className="board-post-foot">
-            <Link to="/board" className="btn btn-m btn-secondary">목록</Link>
-          </div>
 
           <ConfirmDialog
             open={confirmDelete}
@@ -238,6 +287,8 @@ export default function BoardPost() {
           />
         </>
       ) : null}
+    </div>
+    <ListBelow currentId={Number(id)} token={token} onWrite={write} />
     </div>
   );
 }

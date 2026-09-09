@@ -1,30 +1,28 @@
 /* Shared header controls. SVG drawing stays with the icon library. */
 .site-header .site-mobile-brand { min-width: 44px; justify-content: center; }
-.site-header-utility.header-tools { gap: 12px; }
-.header-resources, .header-personal { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
-.header-personal { gap: 4px; }
+.site-header-utility.header-tools { gap: 8px; }
+.header-resources, .header-personal { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
 
 .header-control {
-  width: 44px;
-  height: 44px;
+  width: 32px;
+  height: 32px;
   padding: 0;
   position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
-  gap: 8px;
-  border: 1px solid transparent;
-  border-radius: 8px;
+  border: 0;
+  border-radius: 6px;
   color: rgb(var(--c-slate-700));
   background: transparent;
   white-space: nowrap;
   cursor: pointer;
 }
-.header-control > svg { width: 22px; height: 22px; flex: 0 0 auto; }
-.header-resource { width: 112px; border-color: rgb(var(--c-slate-300)); }
+.header-control > svg { width: 18px; height: 18px; flex: 0 0 auto; }
+.header-resource { width: 80px; font-weight: 600; }
 .header-control:hover, .header-control[aria-expanded="true"] { color: rgb(var(--c-slate-900)); background: rgb(var(--c-slate-100)); }
-.header-resource[aria-current="page"] { color: rgb(var(--c-slate-900)); background: rgb(var(--c-slate-100)); border-color: rgb(var(--c-slate-500)); }
+.header-resource[aria-current="page"] { color: rgb(var(--c-slate-900)); background: rgb(var(--c-slate-100)); }
 .header-control:active, .account-row:active { background: rgb(var(--c-slate-200)); }
 .header-control:focus-visible, .account-popover :is(a, button, input):focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
 
@@ -44,12 +42,11 @@
   pointer-events: none;
 }
 .header-control:hover > .header-tooltip, .header-control:focus-visible > .header-tooltip { opacity: 1; }
-.header-resources .header-tooltip { display: none; }
 
 .account-menu-root { position: relative; }
 .account-popover {
   position: absolute;
-  top: calc(100% + 8px);
+  top: calc(100% + 14px);
   right: 0;
   z-index: 80;
   width: 256px;
@@ -94,14 +91,7 @@
 }
 
 @media (max-width: 639px) {
-  .site-header-utility.header-tools { gap: 8px; }
-  .header-resources, .header-personal { gap: 4px; }
-  .header-resource { width: 44px; }
-  .header-resource-label { display: none; }
-  .header-resources .header-tooltip { display: block; }
+  .header-resource { width: 52px; }
+  .header-install-suffix { display: none; }
   .account-popover { position: fixed; top: 62px; right: 12px; width: min(256px, calc(100vw - 24px)); max-height: calc(100dvh - 74px); }
-}
-@media (max-width: 359px) {
-  .site-header-utility.header-tools { gap: 4px; }
-  .header-resources, .header-personal { gap: 2px; }
 }

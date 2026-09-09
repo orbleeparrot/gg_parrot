@@ -63,7 +63,7 @@ export default function RunnerLaunchGuide() {
           onLoad={onLoad}
           onError={() => setFailed(true)}
         >
-          <p>아래 순서대로 실행기를 열어 주세요. 안내 화면은 원본 보기로도 확인할 수 있어요.</p>
+          <p>안내 화면은 원본 보기로 확인할 수 있어요.</p>
         </object>
       </div>
       <figcaption id={captionId} className="runner-launch-guide-caption">

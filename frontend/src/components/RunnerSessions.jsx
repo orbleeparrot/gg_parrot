@@ -12,11 +12,12 @@ import { describeDeleteConfirm, describeStopConfirm } from "../features/agents/r
 // 내 매크로 실행 현황 — 실행기(exe)가 올리는 세션을 실시간으로 보여주고,
 // 원격 종료(매크로만 / 청산 후)를 요청한다.
 
-export function RunnerKeyPanel({ enabled = true }) {
+export function RunnerKeyPanel({ enabled = true, compact = false }) {
   const [data, setData] = useState(null);
   const [revealed, setRevealed] = useState(false);
   const [err, setErr] = useState("");
   const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
 
   useEffect(() => {
     if (!enabled) return undefined;
@@ -42,11 +43,30 @@ export function RunnerKeyPanel({ enabled = true }) {
 
   async function copy() {
     if (!data?.key) return;
+    setCopyFailed(false);
     try {
       await navigator.clipboard.writeText(data.key);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
-    } catch (_) {}
+    } catch (_) { setCopyFailed(true); }
+  }
+
+  if (compact) {
+    return (
+      <div className="space-y-2">
+        <button type="button" onClick={copy} disabled={!data?.key || !!err} className="btn btn-l btn-secondary w-full">
+          {err ? "회원 키를 불러오지 못했어요" : !data ? "회원 키 불러오는 중…" : copied ? "복사했어요" : "회원 키 복사"}
+        </button>
+        <span className="sr-only" role="status">{copied ? "회원 키를 복사했어요." : ""}</span>
+        {err ? <p className="t-small text-red-600" role="alert">키 조회 오류: {err}</p> : null}
+        {copyFailed ? (
+          <div className="space-y-2">
+            <p className="t-small text-red-600" role="alert">자동 복사를 하지 못했어요. 아래 키를 직접 복사해 주세요.</p>
+            <input aria-label="직접 복사할 회원 키" readOnly value={data.key} onFocus={(event) => event.target.select()} className="field w-full min-w-0 num" />
+          </div>
+        ) : null}
+      </div>
+    );
   }
 
   if (err) return <div className="t-small text-red-600">키 조회 오류: {err}</div>;

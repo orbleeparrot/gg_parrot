@@ -1,0 +1,108 @@
+.runner-install {
+  max-width: 1120px;
+}
+
+.runner-install-header {
+  margin-bottom: 24px;
+}
+
+.runner-install-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  align-items: start;
+  gap: 36px;
+}
+
+.runner-install-media {
+  min-width: 0;
+}
+
+.runner-install-media .runner-launch-guide {
+  margin: 0;
+}
+
+.runner-install-actions {
+  min-width: 0;
+}
+
+.runner-install-step {
+  display: grid;
+  gap: 12px;
+  padding: 24px 0;
+  border-top: 1px solid rgb(var(--c-slate-200));
+}
+
+.runner-install-step:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.runner-install-step:last-child {
+  padding-bottom: 0;
+}
+
+.runner-install-step-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.runner-install-button {
+  width: 100%;
+  min-height: 48px;
+}
+
+@media (max-width: 1199px) {
+  .runner-install-layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 28px;
+  }
+
+  .runner-install-media {
+    width: 100%;
+    max-width: 720px;
+  }
+
+  .runner-install-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    max-width: 720px;
+    align-items: start;
+    gap: 24px;
+  }
+
+  .runner-install-step,
+  .runner-install-step:first-child {
+    padding: 20px 0 0;
+    border-top: 1px solid rgb(var(--c-slate-200));
+  }
+}
+
+@media (max-width: 767px) {
+  .runner-install-header {
+    margin-bottom: 20px;
+  }
+
+  .runner-install-layout {
+    gap: 24px;
+  }
+
+  .runner-install-actions {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+
+  .runner-install-step,
+  .runner-install-step:first-child {
+    padding: 24px 0;
+  }
+
+  .runner-install-step:first-child {
+    border-top: 0;
+    padding-top: 0;
+  }
+
+  .runner-install-step:last-child {
+    padding-bottom: 0;
+  }
+}

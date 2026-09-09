@@ -2,9 +2,9 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api.js";
 import { useAuth } from "../lib/auth.js";
-import { initialOf, kstDateTime, pageWindow } from "../lib/boardText.js";
+import { boardFullTime, boardTime, kstDateTime, pageWindow } from "../lib/boardText.js";
 import { PageHeader, EmptyState, ErrorNote } from "../components/Page.jsx";
-import { ChevronLeftIcon, ChevronRightIcon, CommentIcon, ImageIcon } from "../components/boardIcons.jsx";
+import { ChevronLeftIcon, ChevronRightIcon, ImageIcon } from "../components/boardIcons.jsx";
 import "./Board.css";
 
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
@@ -153,58 +153,51 @@ function Pager({ page, pages, onGo }) {
   );
 }
 
-// 불러오는 동안의 뼈대 — 행 모양 그대로, 회전 대신.
-function SkeletonRows({ count = 6 }) {
+function TableHead() {
   return (
-    <ul className="board-list" aria-hidden="true">
+    <li className="board-head" role="row" aria-hidden="true">
+      <span className="board-col-no">번호</span>
+      <span className="board-col-title">제목</span>
+      <span className="board-col-author">글쓴이</span>
+      <span className="board-col-time">시각</span>
+    </li>
+  );
+}
+
+// 불러오는 동안의 뼈대 — 행 모양 그대로, 회전 대신.
+function SkeletonRows({ count = PAGE_SIZE }) {
+  return (
+    <ul className="board-table" aria-hidden="true">
+      <TableHead />
       {Array.from({ length: count }, (_, index) => (
         <li key={index} className="board-row is-skeleton">
-          <span className="board-row-link">
-            <span className="board-avatar" />
-            <span className="board-row-body">
-              <span className="board-skeleton is-title" />
-              <span className="board-skeleton is-snippet" />
-            </span>
-            <span className="board-row-meta">
-              <span className="board-skeleton is-meta" />
-            </span>
-          </span>
+          <span className="board-no"><span className="board-skeleton is-no" /></span>
+          <span className="board-title"><span className="board-skeleton is-title" /></span>
+          <span className="board-author"><span className="board-skeleton is-author" /></span>
+          <span className="board-time"><span className="board-skeleton is-time" /></span>
         </li>
       ))}
     </ul>
   );
 }
 
-// 글 한 줄 — 아바타 | 제목(+사진·댓글 표식)·요약 | 작성자·시각. 행 전체가 링크.
-function PostRow({ post }) {
-  const marks = post.has_image || post.comment_count > 0;
+// 글 한 줄 — 번호 | 제목 [댓글수] (사진) | 글쓴이 | 시각. 행 전체가 링크.
+function PostRow({ post, now }) {
+  const time = boardTime(post.created_ms, now);
+  const isToday = /:/.test(time);
+  const full = boardFullTime(post.created_ms) || post.created_kst;
   const when = kstDateTime(post.created_kst);
   return (
-    <li className="board-row">
-      <Link to={`/board/${post.id}`} className="board-row-link">
-        <span className="board-avatar" aria-hidden="true">{initialOf(post.author_name)}</span>
-        <span className="board-row-body">
-          <span className="board-row-title">
-            <span>{post.title}</span>
-            {marks ? (
-              <span className="board-row-marks">
-                {post.has_image ? (
-                  <span title="사진 첨부"><ImageIcon /><span className="sr-only">사진 첨부</span></span>
-                ) : null}
-                {post.comment_count > 0 ? (
-                  <span title={`댓글 ${post.comment_count}개`}>
-                    <CommentIcon /><b className="num">{post.comment_count}</b><span className="sr-only">개 댓글</span>
-                  </span>
-                ) : null}
-              </span>
-            ) : null}
-          </span>
-          {post.snippet ? <span className="board-row-snippet">{post.snippet}</span> : null}
+    <li className="board-item">
+      <Link to={`/board/${post.id}`} className="board-row" aria-label={`${post.title}${post.comment_count > 0 ? `, 댓글 ${post.comment_count}개` : ""}${post.has_image ? ", 사진 첨부" : ""}, ${post.author_name}, ${full}`}>
+        <span className="board-no num" aria-hidden="true">{post.id}</span>
+        <span className="board-title">
+          <span className="board-title-text">{post.title}</span>
+          {post.comment_count > 0 ? <span className="board-count num" aria-hidden="true">{post.comment_count}</span> : null}
+          {post.has_image ? <span className="board-mark" aria-hidden="true"><ImageIcon /></span> : null}
         </span>
-        <span className="board-row-meta">
-          <span className="board-row-author">{post.author_name}</span>
-          <time className="board-row-time num" dateTime={when || undefined}>{post.created_kst}</time>
-        </span>
+        <span className="board-author" aria-hidden="true">{post.author_name}</span>
+        <time className={`board-time num${isToday ? " is-today" : ""}`} dateTime={when || undefined} title={full} aria-hidden="true">{time}</time>
       </Link>
     </li>
   );
@@ -219,13 +212,17 @@ export default function Board() {
   const [busy, setBusy] = useState(true);
   const [err, setErr] = useState("");
   const [composing, setComposing] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
 
   function load(p) {
     setBusy(true);
     setErr("");
     api
       .boardList(p, PAGE_SIZE)
-      .then((d) => setData(d))
+      .then((d) => {
+        setData(d);
+        setNow(Date.now()); // 시각 표기(오늘 HH:MM)의 기준을 목록을 받은 순간으로
+      })
       .catch((e) => setErr(String(e.message || e)))
       .finally(() => setBusy(false));
   }
@@ -258,7 +255,7 @@ export default function Board() {
               className={"btn btn-m " + (composing ? "btn-secondary" : "btn-primary")}
               aria-expanded={composing}
             >
-              {composing ? "닫기" : "새 글 쓰기"}
+              {composing ? "닫기" : "글쓰기"}
             </button>
           ) : (
             <button
@@ -292,8 +289,9 @@ export default function Board() {
           {data.items.length === 0 ? (
             <EmptyState title="아직 글이 없어요">첫 글을 남겨봐요.</EmptyState>
           ) : (
-            <ul className={`board-list${busy ? " is-busy" : ""}`} aria-busy={busy || undefined}>
-              {data.items.map((post) => <PostRow key={post.id} post={post} />)}
+            <ul className={`board-table${busy ? " is-busy" : ""}`} aria-busy={busy || undefined} aria-label="글 목록">
+              <TableHead />
+              {data.items.map((post) => <PostRow key={post.id} post={post} now={now} />)}
             </ul>
           )}
           <Pager page={data.page} pages={data.pages} onGo={go} />

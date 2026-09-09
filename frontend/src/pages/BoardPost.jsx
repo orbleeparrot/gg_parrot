@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api.js";
 import { useAuth } from "../lib/auth.js";
-import { initialOf, kstDateTime } from "../lib/boardText.js";
+import { boardFullTime, kstDateTime } from "../lib/boardText.js";
 import { ErrorNote } from "../components/Page.jsx";
 import ConfirmDialog from "../components/ConfirmDialog.jsx";
 import { ChevronLeftIcon } from "../components/boardIcons.jsx";
@@ -90,34 +90,31 @@ function Comment({ c, onDeleted }) {
 
   return (
     <li className="board-comment">
-      <span className="board-avatar" aria-hidden="true">{initialOf(c.username)}</span>
-      <div className="min-w-0">
-        <div className="board-comment-top">
-          <b>{c.username}</b>
-          <time className="num" dateTime={when || undefined}>{c.created_kst}</time>
-          <button type="button" onClick={() => setConfirming((v) => !v)} className="board-text-btn" aria-expanded={confirming}>
-            삭제
-          </button>
-        </div>
-        <p className="board-comment-text">{c.text}</p>
-        {confirming && (
-          <div className="board-comment-confirm">
-            <input
-              type="password"
-              value={password}
-              aria-label="댓글을 쓸 때 정한 비밀번호"
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="작성 시 비밀번호"
-              className="field field-sm min-w-0 flex-1 sm:flex-none sm:w-56"
-            />
-            {/* red-600 은 다크에서 밝은 분홍이라 흰 글자가 안 읽힌다 — danger 는 채움용 별도 토큰. */}
-            <button type="button" onClick={remove} disabled={busy || !password} className="btn btn-m btn-danger">
-              {busy ? "지우는 중…" : "삭제 확인"}
-            </button>
-            {err && <span className="t-caption text-red-600" role="alert">{err}</span>}
-          </div>
-        )}
+      <div className="board-comment-top">
+        <b>{c.username}</b>
+        <time className="num" dateTime={when || undefined}>{c.created_kst}</time>
+        <button type="button" onClick={() => setConfirming((v) => !v)} className="board-text-btn" aria-expanded={confirming}>
+          삭제
+        </button>
       </div>
+      <p className="board-comment-text">{c.text}</p>
+      {confirming && (
+        <div className="board-comment-confirm">
+          <input
+            type="password"
+            value={password}
+            aria-label="댓글을 쓸 때 정한 비밀번호"
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="작성 시 비밀번호"
+            className="field field-sm min-w-0 flex-1 sm:flex-none sm:w-56"
+          />
+          {/* red-600 은 다크에서 밝은 분홍이라 흰 글자가 안 읽힌다 — danger 는 채움용 별도 토큰. */}
+          <button type="button" onClick={remove} disabled={busy || !password} className="btn btn-m btn-danger">
+            {busy ? "지우는 중…" : "삭제 확인"}
+          </button>
+          {err && <span className="t-caption text-red-600" role="alert">{err}</span>}
+        </div>
+      )}
     </li>
   );
 }
@@ -125,8 +122,8 @@ function Comment({ c, onDeleted }) {
 function PostSkeleton() {
   return (
     <div className="board-post-skeleton" aria-hidden="true">
-      <span className="board-skeleton is-title" style={{ width: "60%", height: 26 }} />
-      <span className="board-skeleton is-meta" style={{ width: 160 }} />
+      <span className="board-skeleton" style={{ width: "58%", height: 22 }} />
+      <span className="board-skeleton" style={{ width: 220 }} />
       <span className="board-skeleton" style={{ width: "92%", marginTop: 12 }} />
       <span className="board-skeleton" style={{ width: "84%" }} />
       <span className="board-skeleton" style={{ width: "48%" }} />
@@ -166,11 +163,12 @@ export default function BoardPost() {
 
   const isMine = post && user && user.id === post.author_user_id;
   const when = post ? kstDateTime(post.created_kst) : "";
+  const full = post ? (boardFullTime(post.created_ms) || post.created_kst) : "";
 
   return (
     <div className="board-post">
       <Link to="/board" className="btn btn-s btn-ghost board-back">
-        <ChevronLeftIcon />목록으로
+        <ChevronLeftIcon />목록
       </Link>
 
       {err ? <div className="mt-4"><ErrorNote>글을 불러오지 못했어요: {err}</ErrorNote></div> : null}
@@ -179,19 +177,18 @@ export default function BoardPost() {
       {post ? (
         <>
           <article>
-            <header className="board-post-head">
-              <h1 className="board-post-title">{post.title}</h1>
-              <div className="board-post-meta">
-                <span className="board-avatar" aria-hidden="true">{initialOf(post.author_name)}</span>
-                <b>{post.author_name}</b>
-                <time className="num" dateTime={when || undefined}>{post.created_kst}</time>
-                {isMine ? (
-                  <button type="button" onClick={() => setConfirmDelete(true)} disabled={deleting} className="board-text-btn">
-                    {deleting ? "지우는 중…" : "글 삭제"}
-                  </button>
-                ) : null}
-              </div>
-            </header>
+            <h1 className="board-post-title">{post.title}</h1>
+            {/* 괘선 띠 — 글쓴이 | 시각 | 댓글. 한국 게시판의 글머리 관례. */}
+            <div className="board-post-strip">
+              <span>글쓴이 <b>{post.author_name}</b></span>
+              <span>시각 <time className="num" dateTime={when || undefined}>{full}</time></span>
+              <span>댓글 <span className="num">{post.comments.length}</span></span>
+              {isMine ? (
+                <button type="button" onClick={() => setConfirmDelete(true)} disabled={deleting} className="board-text-btn">
+                  {deleting ? "지우는 중…" : "글 삭제"}
+                </button>
+              ) : null}
+            </div>
 
             {post.image_url ? (
               <figure className="board-post-figure">
@@ -207,7 +204,7 @@ export default function BoardPost() {
               댓글 <span className="num">{post.comments.length}</span>
             </h2>
             {post.comments.length === 0 ? (
-              <p className="board-empty" style={{ borderTop: "1px solid rgb(var(--c-slate-200))" }}>아직 댓글이 없어요. 첫 댓글을 남겨봐요.</p>
+              <p className="board-empty">아직 댓글이 없어요. 첫 댓글을 남겨봐요.</p>
             ) : (
               <ul className="board-comment-list">
                 {post.comments.map((c) => (
@@ -224,6 +221,10 @@ export default function BoardPost() {
               onAdded={(comment) => setPost((p) => ({ ...p, comments: [...p.comments, comment] }))}
             />
           </section>
+
+          <div className="board-post-foot">
+            <Link to="/board" className="btn btn-m btn-secondary">목록</Link>
+          </div>
 
           <ConfirmDialog
             open={confirmDelete}

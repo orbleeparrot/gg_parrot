@@ -1,5 +1,7 @@
 // 게시판 글줄의 작은 글자 도우미.
 
+const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
+
 // 아바타에 쓰는 이름 첫 글자 — 한글은 첫 음절, 영문은 대문자. 이름이 없으면 물음표.
 export function initialOf(name) {
   const first = String(name ?? "").trim().charAt(0);
@@ -10,6 +12,39 @@ export function initialOf(name) {
 export function kstDateTime(text) {
   const match = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})/.exec(String(text ?? "").trim());
   return match ? `${match[1]}T${match[2]}:00+09:00` : "";
+}
+
+function kstParts(ms) {
+  const d = new Date(ms + KST_OFFSET_MS);
+  const pad = (n) => String(n).padStart(2, "0");
+  return {
+    year: d.getUTCFullYear(),
+    month: pad(d.getUTCMonth() + 1),
+    day: pad(d.getUTCDate()),
+    hh: pad(d.getUTCHours()),
+    mm: pad(d.getUTCMinutes()),
+    dayKey: `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`,
+  };
+}
+
+// 목록의 시각 — 한국 게시판 관례. 오늘(KST)이면 `HH:MM`, 올해면 `MM.DD`, 그 전이면 `YY.MM.DD`.
+// 잘라 쓰는 대신 규칙으로 바꾸므로 같은 칸 폭 안에서 오늘 글이 한눈에 갈린다.
+export function boardTime(createdMs, nowMs = Date.now()) {
+  const value = Number(createdMs);
+  if (!Number.isFinite(value)) return "";
+  const t = kstParts(value);
+  const n = kstParts(nowMs);
+  if (t.dayKey === n.dayKey) return `${t.hh}:${t.mm}`;
+  if (t.year === n.year) return `${t.month}.${t.day}`;
+  return `${String(t.year).slice(-2)}.${t.month}.${t.day}`;
+}
+
+// 글 상세·툴팁용 전체 시각 — `2026.09.04 15:59`.
+export function boardFullTime(createdMs) {
+  const value = Number(createdMs);
+  if (!Number.isFinite(value)) return "";
+  const t = kstParts(value);
+  return `${t.year}.${t.month}.${t.day} ${t.hh}:${t.mm}`;
 }
 
 // 쪽 번호 띠 — 현재 쪽을 가운데 두고 최대 5개, 끝에서는 왼쪽으로 당겨 5개를 채운다.

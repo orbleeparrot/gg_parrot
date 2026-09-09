@@ -1,97 +1,129 @@
-/* 게시판 — 캔버스 위 괘선 목록(§1-3 카드 없음, §5 폭 제한 없음). 행 = 아바타 | 제목·요약 | 작성자·시각.
-   글 상세는 68ch 안에서 읽고, 댓글은 같은 행 문법. 색은 전부 --c-* 토큰(라이트·다크 자동). */
+/* Hallmark · genre: modern-minimal · macrostructure: Index-First · design-system: DESIGN.md · designed-as-app
+   pre-emit critique: P4 H4 E4 S4 R5 V4 · contrast: pass (40–41) · tokens: pass (48) · responsive: pass (34·49)
+
+   게시판 — 한국 커뮤니티 게시판의 문법(디시·에펨·클리앙·루리웹·뽐뿌·코인판·더쿠·인벤 벤치마크, 2026-09-09):
+   · 한 줄 42px 의 촘촘한 표. 카드·아바타·요약 없음. 괘선 하나로 행을 가른다.
+   · 열: 번호 | 제목 [댓글수] (사진 표식) | 글쓴이 | 시각. 숫자는 전부 .num(탭 숫자)로 세로줄이 맞는다.
+   · 제목은 보통 굵기(500) — 굵기는 위계가 아니라 글의 무게. 읽은 글은 흐려진다(:visited).
+   · 시각은 오늘 HH:MM · 올해 MM.DD · 그 전 YY.MM.DD 로 바뀌어 같은 칸 폭에서 오늘 글이 갈린다.
+   · 댓글 수는 제목 바로 뒤 [n] — 오른쪽 열로 빼지 않는다(읽는 흐름이 왼쪽에서 끊기지 않게).
+   색은 전부 --c-* 토큰(라이트·다크 자동). */
 .board-page { width: 100%; }
 .board-composer { max-width: 768px; margin-bottom: 24px; }
 
-/* ── 목록 ── */
-.board-list { margin: 0; padding: 0; list-style: none; border-top: 1px solid rgb(var(--c-slate-200)); }
-.board-list.is-busy { opacity: 0.6; }
-.board-row { border-bottom: 1px solid rgb(var(--c-slate-200)); }
-.board-row-link {
+/* ── 목록 표 ── */
+.board-table {
+  --board-cols: 72px minmax(0, 1fr) 128px 64px;
+  --board-gap: 16px;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.board-table.is-busy { opacity: 0.6; }
+.board-head,
+.board-row {
   display: grid;
-  grid-template-columns: 36px minmax(0, 1fr) max-content;
-  grid-template-areas: "avatar body meta";
+  grid-template-columns: var(--board-cols);
+  grid-template-areas: "no title author time";
   align-items: center;
-  column-gap: 14px;
-  margin-inline: -10px;
-  padding: 16px 10px;
-  border-radius: 12px;
+  column-gap: var(--board-gap);
+}
+.board-head {
+  padding: 6px 0 8px;
+  border-bottom: 1px solid rgb(var(--c-slate-300));
+  color: rgb(var(--c-slate-500));
+  font-size: 12px;
+  line-height: 1.3;
+  font-weight: 600;
+}
+.board-item { margin: 0; padding: 0; }
+/* 행 자체가 링크 — 표의 칸을 그대로 채운다(행 전체가 누르는 자리). */
+.board-row {
+  min-height: 42px;
+  padding: 0;
+  border-bottom: 1px solid rgb(var(--c-slate-200));
   color: inherit;
   text-decoration: none;
 }
+.board-row:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: -2px; }
 @media (hover: hover) {
-  .board-row-link:hover { background: rgb(var(--c-slate-100)); }
+  .board-row:hover { background: rgb(var(--c-slate-100)); }
 }
-.board-row-link:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: -2px; }
-.board-row-link:active { background: rgb(var(--c-slate-200)); }
-.board-avatar {
-  grid-area: avatar;
-  width: 36px;
-  height: 36px;
-  border: 1px solid rgb(var(--c-slate-200));
-  border-radius: 999px;
-  display: inline-grid;
-  place-items: center;
-  flex: 0 0 auto;
-  background: rgb(var(--c-slate-100));
-  color: rgb(var(--c-slate-900));
-  font-size: 14px;
-  line-height: 1;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-}
-.board-row-body { grid-area: body; min-width: 0; display: grid; gap: 4px; }
-.board-row-title {
-  min-width: 0;
+.board-row:active { background: rgb(var(--c-slate-200)); }
+.board-no, .board-col-no { grid-area: no; text-align: right; }
+.board-title, .board-col-title { grid-area: title; min-width: 0; }
+.board-author, .board-col-author { grid-area: author; min-width: 0; }
+.board-time, .board-col-time { grid-area: time; text-align: right; }
+
+.board-no { color: rgb(var(--c-slate-500)); font-size: 13px; font-weight: 500; }
+.board-title {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  padding: 10px 0;
   color: rgb(var(--c-slate-900));
-  font-size: 17px;
-  line-height: 1.3;
-  font-weight: 700;
-  letter-spacing: -0.015em;
+  font-size: 15px;
+  line-height: 1.4;
+  font-weight: 500;
+  letter-spacing: -0.005em;
 }
-.board-row-title > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* 제목 뒤 표식 — 사진 첨부, 댓글 수. 글자와 같은 흐림색, 숫자는 .num */
-.board-row-marks { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 8px; color: rgb(var(--c-slate-500)); font-size: 13px; font-weight: 700; }
-.board-row-marks > span { display: inline-flex; align-items: center; gap: 3px; }
-.board-row-marks svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.board-row-snippet { overflow: hidden; color: rgb(var(--c-slate-500)); font-size: 14px; line-height: 1.5; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
-.board-row-meta { grid-area: meta; display: grid; justify-items: end; gap: 3px; text-align: right; }
-.board-row-author { color: rgb(var(--c-slate-700)); font-size: 13px; font-weight: 600; white-space: nowrap; }
-.board-row-time { color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 600; white-space: nowrap; }
+.board-title-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 읽은 글은 흐려진다 — 무엇을 봤는지 목록에서 갈린다(디시·클리앙 관례). */
+.board-row:visited .board-title-text { color: rgb(var(--c-slate-600)); }
+@media (hover: hover) {
+  .board-row:hover .board-title-text { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+}
+/* 댓글 수 — 제목 바로 뒤 [n]. 참여 신호만 금색으로 도드라진다.
+   라이트는 amber-700(#7c5205, 흰 바탕 6.5:1 — brand-line #a68000 은 13px 글자엔 3.5:1 로 모자란다), 다크는 브랜드 노랑. */
+.board-count { flex: 0 0 auto; color: rgb(var(--c-amber-700)); font-size: 13px; font-weight: 700; }
+.dark .board-count { color: rgb(var(--c-brand-line)); }
+.board-count::before { content: "["; }
+.board-count::after { content: "]"; }
+.board-mark { flex: 0 0 auto; display: inline-grid; place-items: center; color: rgb(var(--c-slate-400)); }
+.board-mark svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.board-author { overflow: hidden; color: rgb(var(--c-slate-700)); font-size: 13px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.board-time { color: rgb(var(--c-slate-500)); font-size: 13px; font-weight: 500; white-space: nowrap; }
+.board-time.is-today { color: rgb(var(--c-slate-700)); }
+
 @media (max-width: 639px) {
-  .board-row-link { grid-template-columns: 36px minmax(0, 1fr); grid-template-areas: "avatar body" "avatar meta"; row-gap: 4px; }
-  .board-row-meta { display: flex; justify-content: flex-start; gap: 8px; text-align: left; }
+  /* 두 줄 — 제목 [n] / 글쓴이 · 시각. 번호는 접는다(모바일 디시·에펨 관례). */
+  .board-head { display: none; }
+  .board-row { grid-template-columns: minmax(0, 1fr) max-content; grid-template-areas: "title title" "author time"; column-gap: 8px; padding: 10px 0; }
+  .board-title { padding: 0 0 2px; }
+  .board-no { display: none; }
+  .board-author { font-size: 12px; }
+  .board-time { font-size: 12px; }
 }
+
 /* 불러오는 동안 — 행 모양 그대로의 뼈대(회전 대신). */
-.board-row.is-skeleton .board-row-link { pointer-events: none; }
-.board-skeleton { display: block; height: 12px; border-radius: 6px; background: rgb(var(--c-slate-200)); }
-.board-skeleton.is-title { width: 46%; height: 14px; }
-.board-skeleton.is-snippet { width: 70%; }
-.board-skeleton.is-meta { width: 72px; }
+.board-row.is-skeleton { pointer-events: none; }
+.board-skeleton { display: block; height: 11px; border-radius: 4px; background: rgb(var(--c-slate-200)); }
+.board-skeleton.is-no { width: 44px; margin-left: auto; }
+.board-skeleton.is-title { width: 52%; height: 13px; }
+.board-skeleton.is-author { width: 64px; }
+.board-skeleton.is-time { width: 40px; margin-left: auto; }
 @media (prefers-reduced-motion: no-preference) {
   .board-skeleton { animation: board-skeleton 1.2s ease-in-out infinite; }
-  .board-list { transition: opacity 150ms ease-out; }
+  .board-table { transition: opacity 150ms ease-out; }
 }
 @keyframes board-skeleton { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
 
-/* ── 쪽 이동 — 단일 선택이라 segmented(§6): 현재 쪽만 면 배경. ── */
-.board-pager { margin-top: 24px; display: flex; align-items: center; justify-content: center; gap: 4px; }
+/* ── 쪽 이동 — 단일 선택이라 segmented(§6): 현재 쪽만 면 배경. 표 아래 가운데(관례). ── */
+.board-pager { margin-top: 20px; display: flex; align-items: center; justify-content: center; gap: 2px; }
 .board-page-btn {
-  min-width: 36px;
-  height: 36px;
-  padding: 0 10px;
+  min-width: 34px;
+  height: 34px;
+  padding: 0 8px;
   border: 1px solid transparent;
-  border-radius: 10px;
+  border-radius: 8px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   color: rgb(var(--c-slate-700));
   background: transparent;
-  font-size: 14px;
-  font-weight: 700;
+  font-size: 13px;
+  font-weight: 600;
   cursor: pointer;
 }
 .board-page-btn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
@@ -100,74 +132,98 @@
 }
 .board-page-btn:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
 .board-page-btn:active:not(:disabled) { transform: translateY(1px); }
-.board-page-btn.is-on { border-color: rgb(var(--c-slate-300)); background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-900)); }
+.board-page-btn.is-on { border-color: rgb(var(--c-slate-300)); background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-900)); font-weight: 700; }
 .board-page-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-.board-foot { margin-top: 20px; color: rgb(var(--c-slate-500)); font-size: 13px; line-height: 1.5; font-weight: 600; }
+.board-foot { margin-top: 20px; color: rgb(var(--c-slate-500)); font-size: 12px; line-height: 1.5; font-weight: 500; }
 
-/* ── 글 상세 ── */
+/* ── 글 상세 — 제목 · 괘선 띠(글쓴이 | 시각 | 댓글) · 본문 · 댓글 표 · 쓰기 · 목록. ── */
 .board-post { max-width: 768px; }
 .board-back { margin-left: -10px; gap: 4px; }
 .board-back svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.board-post-head { margin-top: 12px; padding-bottom: 20px; border-bottom: 1px solid rgb(var(--c-slate-200)); display: grid; gap: 12px; }
 .board-post-title {
-  margin: 0;
+  margin: 14px 0 0;
   min-width: 0;
   color: rgb(var(--c-slate-900));
-  font-size: clamp(24px, 20px + 0.8vw, 30px);
-  line-height: 1.2;
-  font-weight: 800;
-  letter-spacing: -0.025em;
+  font-size: clamp(20px, 18px + 0.5vw, 24px);
+  line-height: 1.3;
+  font-weight: 700;
+  letter-spacing: -0.02em;
   text-wrap: balance;
   overflow-wrap: anywhere;
 }
-.board-post-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.board-post-meta .board-avatar { width: 28px; height: 28px; font-size: 12px; }
-.board-post-meta b { color: rgb(var(--c-slate-900)); font-size: 14px; font-weight: 700; }
-.board-post-meta time { color: rgb(var(--c-slate-500)); font-size: 13px; font-weight: 600; }
-.board-post-meta .board-text-btn { margin-left: auto; }
+.board-post-strip {
+  margin-top: 12px;
+  padding: 8px 0;
+  border-top: 1px solid rgb(var(--c-slate-300));
+  border-bottom: 1px solid rgb(var(--c-slate-200));
+  display: flex;
+  align-items: center;
+  gap: 0 14px;
+  flex-wrap: wrap;
+  color: rgb(var(--c-slate-500));
+  font-size: 13px;
+  line-height: 1.5;
+  font-weight: 500;
+}
+.board-post-strip b { color: rgb(var(--c-slate-900)); font-weight: 600; }
+.board-post-strip .num { color: rgb(var(--c-slate-700)); }
+.board-post-strip > span { display: inline-flex; align-items: baseline; gap: 5px; }
+.board-post-strip .board-text-btn { margin-left: auto; }
 .board-post-figure { margin: 20px 0 0; }
-.board-post-figure img { display: block; max-width: 100%; max-height: 560px; border: 1px solid rgb(var(--c-slate-200)); border-radius: 12px; }
+.board-post-figure img { display: block; max-width: 100%; max-height: 560px; border: 1px solid rgb(var(--c-slate-200)); border-radius: 8px; }
 .board-post-body {
   margin: 20px 0 0;
   max-width: 68ch;
-  color: rgb(var(--c-slate-700));
-  font-size: 16px;
-  line-height: 1.75;
+  color: rgb(var(--c-slate-800));
+  font-size: 15px;
+  line-height: 1.8;
   font-weight: 450;
   white-space: pre-line;
   overflow-wrap: anywhere;
   text-wrap: pretty;
 }
-.board-post-skeleton { display: grid; gap: 14px; margin-top: 12px; }
+.board-post-foot { margin-top: 28px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.board-post-skeleton { display: grid; gap: 14px; margin-top: 14px; }
 
-/* ── 댓글 ── */
-.board-comments { margin-top: 36px; }
-.board-comments-head { margin: 0 0 6px; display: flex; align-items: baseline; gap: 8px; color: rgb(var(--c-slate-900)); font-size: 17px; font-weight: 700; letter-spacing: -0.015em; }
-.board-comments-head .num { color: rgb(var(--c-slate-500)); font-size: 14px; font-weight: 700; }
-.board-comment-list { margin: 0; padding: 0; list-style: none; border-top: 1px solid rgb(var(--c-slate-200)); }
-.board-comment { padding: 14px 0; border-bottom: 1px solid rgb(var(--c-slate-200)); display: grid; grid-template-columns: 28px minmax(0, 1fr); column-gap: 12px; }
-.board-comment .board-avatar { width: 28px; height: 28px; font-size: 12px; }
-.board-comment-top { min-width: 0; display: flex; align-items: center; gap: 8px; }
-.board-comment-top b { color: rgb(var(--c-slate-900)); font-size: 14px; font-weight: 700; }
-.board-comment-top time { color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 600; }
+/* ── 댓글 — 글쓴이 · 시각 한 줄, 본문, 괘선. 아바타 없음. ── */
+.board-comments { margin-top: 32px; }
+.board-comments-head {
+  margin: 0;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgb(var(--c-slate-300));
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  color: rgb(var(--c-slate-900));
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.board-comments-head .num { color: rgb(var(--c-amber-700)); font-size: 14px; font-weight: 700; }
+.dark .board-comments-head .num { color: rgb(var(--c-brand-line)); }
+.board-comment-list { margin: 0; padding: 0; list-style: none; }
+.board-comment { padding: 12px 0; border-bottom: 1px solid rgb(var(--c-slate-200)); }
+.board-comment-top { min-width: 0; display: flex; align-items: baseline; gap: 8px; }
+.board-comment-top b { color: rgb(var(--c-slate-900)); font-size: 13px; font-weight: 700; }
+.board-comment-top time { color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 500; }
 .board-comment-top .board-text-btn { margin-left: auto; }
-.board-comment-text { margin: 4px 0 0; color: rgb(var(--c-slate-700)); font-size: 15px; line-height: 1.6; font-weight: 500; white-space: pre-line; overflow-wrap: anywhere; }
+.board-comment-text { margin: 4px 0 0; color: rgb(var(--c-slate-800)); font-size: 14px; line-height: 1.65; font-weight: 450; white-space: pre-line; overflow-wrap: anywhere; }
 .board-comment-confirm { margin-top: 10px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.board-empty { padding: 24px 0; color: rgb(var(--c-slate-500)); font-size: 14px; font-weight: 500; }
+.board-empty { padding: 20px 0; border-bottom: 1px solid rgb(var(--c-slate-200)); color: rgb(var(--c-slate-500)); font-size: 13px; font-weight: 500; }
 /* 글자 버튼(삭제) — 흐린 글자, 올리면 빨강. 44px 표적은 ::before 로 넓힌다. */
-.board-text-btn { position: relative; padding: 4px 6px; border: 0; border-radius: 6px; background: transparent; color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 700; cursor: pointer; }
-.board-text-btn::before { content: ""; position: absolute; inset: -8px; }
+.board-text-btn { position: relative; padding: 2px 4px; border: 0; border-radius: 6px; background: transparent; color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 600; cursor: pointer; }
+.board-text-btn::before { content: ""; position: absolute; inset: -10px; }
 @media (hover: hover) {
-  .board-text-btn:hover:not(:disabled) { color: rgb(var(--c-red-600)); background: rgb(var(--c-slate-100)); }
+  .board-text-btn:hover:not(:disabled) { color: rgb(var(--c-red-600)); text-decoration: underline; text-underline-offset: 3px; }
 }
 .board-text-btn:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
 .board-text-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* ── 댓글 쓰기 — 라벨은 입력 위에(자리표시자로 대신하지 않는다). 입력 40 = 버튼 M 40. ── */
-.board-comment-form { margin-top: 16px; padding-top: 16px; border-top: 1px solid rgb(var(--c-slate-200)); display: grid; gap: 10px; }
+.board-comment-form { margin-top: 14px; display: grid; gap: 10px; }
 .board-comment-form-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
 @media (max-width: 480px) { .board-comment-form-row { grid-template-columns: minmax(0, 1fr); } }
-.board-field-label { display: grid; gap: 6px; color: rgb(var(--c-slate-700)); font-size: 13px; font-weight: 600; }
+.board-field-label { display: grid; gap: 6px; color: rgb(var(--c-slate-700)); font-size: 12px; font-weight: 600; }
 .board-comment-form-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.board-comment-form-foot span { color: rgb(var(--c-slate-500)); font-size: 13px; font-weight: 600; }
+.board-comment-form-foot span { color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 500; }
 .board-form-error { min-height: 1lh; margin: 0; color: rgb(var(--c-red-600)); font-size: 13px; font-weight: 600; }

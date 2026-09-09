@@ -6,7 +6,7 @@ import MarketContext from "./MarketContext.jsx";
 import { BrandLink } from "./SiteNavigation.jsx";
 import ThemeToggle from "./ThemeToggle.jsx";
 import { RunnerKeyPanel } from "./RunnerSessions.jsx";
-import { ChevronDownIcon, MenuIcon, UserIcon } from "./utilityIcons.jsx";
+import { ChevronDownIcon, DownloadIcon, HelpIcon, MenuIcon, UserIcon } from "./utilityIcons.jsx";
 import "./SiteHeader.css";
 
 export default function SiteHeader({ hasSidebar, onOpenNavigation, menuButtonRef }) {
@@ -33,10 +33,14 @@ export default function SiteHeader({ hasSidebar, onOpenNavigation, menuButtonRef
           {hasSidebar ? (
             <nav className="header-resources" aria-label="설치 및 사용 안내">
               <NavLink to="/runner/install" className="header-control header-resource t-small" aria-label="실행기 설치">
-                <span>실행기<span className="header-install-suffix"> 설치</span></span>
+                <DownloadIcon />
+                <span className="header-resource-label">실행기 설치</span>
+                <span className="header-tooltip" aria-hidden="true">실행기 설치</span>
               </NavLink>
               <Link to={`/?${docsParams.toString()}`} state={pathname === "/" ? undefined : { helpReturnTo: pathname + search }} className="header-control header-resource t-small" aria-haspopup="dialog" aria-expanded={helpOpen} aria-current={helpOpen ? "page" : undefined} aria-label="사용법">
-                사용법
+                <HelpIcon />
+                <span className="header-resource-label">사용법</span>
+                <span className="header-tooltip" aria-hidden="true">사용법</span>
               </Link>
             </nav>
           ) : null}

@@ -47,7 +47,7 @@ export default function ThemeToggle({ className = "" }) {
       className={`header-control header-theme ${className}`}
     >
       {isDark ? <SunIcon /> : <MoonIcon />}
-      <span className="header-tooltip" aria-hidden="true">{nextLabel}로 전환</span>
+      <span className="header-tooltip" aria-hidden="true">{nextLabel}</span>
     </button>
   );
 }

@@ -558,17 +558,15 @@ export default function Studio() {
 
   return (
     <div>
-      <PageHeader
-        eyebrow="조건 정하기 → 결과 확인 → 리더보드 등록"
-        title="매크로 만들기"
-        description="종목과 거래 조건을 정하고, 과거 데이터로 확인한 뒤 같은 설정을 리더보드에 등록할 수 있어요."
-        actions={<SimBadge />}
-      />
+      {/* 머리말은 제목 한 줄뿐이다 — 단계 안내와 설명 문단은 바로 아래 '조건 정하기'
+          설명과 같은 말을 반복하면서 정작 좁은 조건 편집기를 화면 밖으로 밀어냈다. */}
+      <PageHeader title="매크로 만들기" actions={<SimBadge />} />
 
       {/* 유틸리티 한 줄 — 파일 등록과 사용법 안내는 본문이 아니라 부속 동작이라
           제목·설명 문단으로 두 블록을 차지할 이유가 없다. 괘선도 두지 않는다:
-          구획을 나눌 만한 내용이 아니라 버튼 두 개뿐이다. */}
-      <section className="mb-6" aria-label="빌더 도구">
+          구획을 나눌 만한 내용이 아니라 버튼 두 개뿐이다. 머리말을 덜어내며
+          이 줄이 페이지 첫 동작이 됐으므로 둘 다 눈에 걸리는 노랑으로 둔다. */}
+      <section className="mb-5" aria-label="빌더 도구">
         <input
           ref={macroFileInputRef}
           type="file"
@@ -584,7 +582,7 @@ export default function Studio() {
                 type="button"
                 onClick={() => macroFileInputRef.current?.click()}
                 disabled={fileImportBusy || busy}
-                className="btn btn-s btn-ghost"
+                className="btn btn-s btn-primary"
                 title="가지고 있는 .ggm.json 매크로 파일을 내 매크로에 등록하고 아래에서 이어서 수정해요"
               >
                 {fileImportBusy ? "파일 등록 중…" : "매크로 파일 등록"}
@@ -592,7 +590,7 @@ export default function Studio() {
             ) : (
               <Link
                 to="/login?next=%2Fbuilder"
-                className="btn btn-s btn-ghost"
+                className="btn btn-s btn-primary"
                 title="가지고 있는 매크로 파일을 등록하려면 로그인이 필요해요"
               >
                 로그인 후 파일 등록
@@ -605,7 +603,7 @@ export default function Studio() {
               setBuilderTab("basic"); // 투어가 짚는 요소는 모두 기본 빌더 안에 있다.
               setTourOpen(true);
             }}
-            className="btn btn-s btn-ghost"
+            className="btn btn-s btn-primary"
             title="화면을 순서대로 짚어가며 사용법을 안내해 드려요"
           >
             사용법 안내

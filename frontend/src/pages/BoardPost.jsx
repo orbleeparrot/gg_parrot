@@ -46,8 +46,10 @@ function CommentForm({ postId, user, token, onAdded }) {
   // 사진 32 | 닉네임 → 입력칸 → 오른쪽 아래 등록. 라벨 대신 자리표시자(댓글은 한 칸뿐이라 무엇인지 분명하다).
   return (
     <form onSubmit={submit} className="board-comment-form" aria-label="댓글 쓰기">
-      <AuthorAvatar userId={user.id} src={user.avatar_url} name={user.username} size={32} className="board-comment-form-avatar" />
-      <b className="board-comment-form-name">{user.username}</b>
+      <div className="board-comment-form-head">
+        <AuthorAvatar userId={user.id} src={user.avatar_url} name={user.username} size={32} />
+        <b className="board-comment-form-name">{user.username}</b>
+      </div>
       <textarea value={text} onChange={(e) => setText(e.target.value)} rows={2} maxLength={500} className="field board-comment-form-input" placeholder="댓글을 남겨보세요" aria-label="댓글" />
       <div className="board-comment-form-foot">
         <span className="board-form-error" role={err ? "alert" : undefined}>{err}</span>

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { api } from "../src/api.js";
-import { clearAuth, setAuth } from "../src/lib/auth.js";
+import { clearAuth, getAuthUser, mergeFetchedAuthUser, setAuth, updateAuthUser } from "../src/lib/auth.js";
 
 function member(t) {
   const values = new Map();
@@ -56,3 +56,34 @@ for (const action of ["uploadAvatar", "deleteAvatar"]) {
     assert.deepEqual(await api[action](file), { user: { id: 7, avatar_url: null } });
   });
 }
+
+test("profile edits send text and photo together; password and withdrawal secrets stay in request bodies", async (t) => {
+  member(t);
+  const calls = [];
+  t.mock.method(globalThis, "fetch", async (url, options) => { calls.push({ url, ...options }); return Response.json({ user: { id: 7 } }); });
+  const file = new File(["photo"], "profile.png", { type: "image/png" });
+  await api.updateProfile({ username: "new_name", bio: "소개", image: file });
+  assert.equal(calls[0].method, "PATCH");
+  assert.equal(calls[0].body.get("username"), "new_name");
+  assert.equal(calls[0].body.get("bio"), "소개");
+  assert.equal(calls[0].body.get("image").name, "profile.png");
+  await api.changePassword({ currentPassword: "old-secret", newPassword: "new-secret" });
+  assert.deepEqual(JSON.parse(calls[1].body), { current_password: "old-secret", new_password: "new-secret" });
+  await api.deleteAccount({ confirmation: "탈퇴", password: "old-secret", credential: "" });
+  assert.equal(calls[2].method, "DELETE");
+  assert.equal(JSON.parse(calls[2].body).confirmation, "탈퇴");
+  assert.ok(calls.every((call) => !call.url.includes("secret") && call.headers.Authorization === "Bearer avatar-member-token"));
+  assert.equal(JSON.stringify(getAuthUser()).includes("secret"), false);
+});
+
+test("late account reads preserve edited profile fields while accepting fresh points", (t) => {
+  member(t);
+  const before = { id: 7, username: "before", bio: "old", avatar_url: null, points_balance: 10 };
+  updateAuthUser({ ...before, username: "after", bio: "new", avatar_url: "/new-photo" });
+  assert.deepEqual(mergeFetchedAuthUser({ ...before, points_balance: 20 }, before), {
+    ...before, username: "after", bio: "new", avatar_url: "/new-photo", points_balance: 20,
+  });
+  updateAuthUser({ ...before, points_balance: 30 });
+  assert.equal(mergeFetchedAuthUser({ ...before, avatar_url: "/server-photo" }, before).avatar_url, "/server-photo");
+  assert.deepEqual(mergeFetchedAuthUser({ id: 8, username: "another" }, before), { id: 8, username: "another" });
+});

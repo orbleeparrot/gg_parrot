@@ -138,7 +138,19 @@ def _new_key() -> str:
     return "ggp_" + secrets.token_urlsafe(24)
 
 
+def _active_account(db, user_id: int) -> User:
+    # Serialize new runner starts/key creation with account withdrawal.
+    if db.get_bind().dialect.name == "sqlite" and not db.in_transaction():
+        from sqlalchemy import text as sql_text
+        db.exec(sql_text("BEGIN IMMEDIATE"))
+    account = db.exec(select(User).where(User.id == user_id).with_for_update().execution_options(populate_existing=True)).first()
+    if account is None or account.is_deleted:
+        raise HTTPException(status_code=401, detail="계정을 찾을 수 없어요.")
+    return account
+
+
 def _get_or_create_key_row(db, user_id: int) -> RunnerKey:
+    _active_account(db, user_id)
     row = db.exec(select(RunnerKey).where(RunnerKey.user_id == user_id)).first()
     if row is None:
         row = RunnerKey(user_id=user_id, key=_new_key(), created_at=_now_iso())
@@ -159,6 +171,7 @@ def get_or_create_key(user_id: int) -> dict:
 def regenerate_key(user_id: int) -> dict:
     """새 키를 발급하고 기존 키를 무효화한다(실행기에 재입력 필요)."""
     with get_session() as db:
+        _active_account(db, user_id)
         row = db.exec(select(RunnerKey).where(RunnerKey.user_id == user_id)).first()
         if row is None:
             row = RunnerKey(user_id=user_id, key=_new_key(), created_at=_now_iso())
@@ -182,7 +195,7 @@ def user_for_key(key: str) -> User:
         if row is None:
             raise HTTPException(status_code=401, detail="유효하지 않은 회원 키예요. 마이페이지에서 다시 확인하세요.")
         user = db.get(User, row.user_id)
-        if user is None:
+        if user is None or user.is_deleted:
             raise HTTPException(status_code=401, detail="계정을 찾을 수 없어요.")
         return user
 
@@ -216,6 +229,7 @@ def create_launch_ticket(
     expires = now + timedelta(seconds=LAUNCH_TICKET_TTL_SECONDS)
     raw_ticket = secrets.token_urlsafe(32)
     with get_session() as db:
+        _active_account(db, user_id)
         macro_row = db.get(UserMacro, user_macro_id)
         if macro_row is None or macro_row.user_id != user_id:
             raise _ticket_error(404, "내 매크로를 찾을 수 없어요.")
@@ -313,11 +327,16 @@ def claim_launch_ticket(ticket: str) -> dict:
     claimed_at = now.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     with get_session() as db:
+        if db.get_bind().dialect.name == "sqlite":
+            from sqlalchemy import text as sql_text
+            db.exec(sql_text("BEGIN IMMEDIATE"))
         candidate = db.exec(
             select(RunnerLaunchTicket).where(RunnerLaunchTicket.token_hash == digest)
         ).first()
         if candidate is None:
             raise _ticket_error(404, "유효한 실행 연결 요청을 찾을 수 없어요.")
+        # Account first, then ticket: use the same lock order as withdrawal.
+        _active_account(db, candidate.user_id)
         if candidate.claimed_at:
             raise _ticket_error(409, "이미 사용한 실행 연결 요청이에요.")
         if candidate.expires_ms <= now_ms:
@@ -408,6 +427,7 @@ def start_session(user: User, payload: dict) -> dict:
 
     now = _now_iso()
     with get_session() as db:
+        _active_account(db, user.id)
         if user_macro_id is not None:
             stored_row = db.get(UserMacro, user_macro_id)
             if stored_row is None or stored_row.user_id != user.id:

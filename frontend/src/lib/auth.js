@@ -49,6 +49,17 @@ export function updateAuthUser(user) {
   localStorage.setItem(USER_KEY, JSON.stringify(user));
   emit();
 }
+
+// A response started before an edit may refresh points, but cannot undo the
+// profile fields that changed locally while that request was in flight.
+export function mergeFetchedAuthUser(fetched, requested) {
+  if (state.user?.id !== fetched?.id) return fetched;
+  const merged = { ...fetched };
+  for (const field of ["username", "bio", "avatar_url", "can_change_password"]) {
+    if (state.user[field] !== undefined && state.user[field] !== requested?.[field]) merged[field] = state.user[field];
+  }
+  return merged;
+}
 export function clearAuth() {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);

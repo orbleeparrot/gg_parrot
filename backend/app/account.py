@@ -119,7 +119,7 @@ def dashboard(user: User, db: Optional[Session] = None) -> dict:
         if my_sales_rows:
             buyer_ids = list({u.user_id for u in my_sales_rows})
             for bu in db.exec(select(User).where(User.id.in_(buyer_ids))).all():
-                buyer_name[bu.id] = bu.username
+                buyer_name[bu.id] = "탈퇴한 회원" if bu.is_deleted else bu.username
         entry_symbol = {e.id: e.symbol for e in my_entries}
         sales = [
             {

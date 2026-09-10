@@ -16,17 +16,27 @@
 .me-photo-status { color: rgb(var(--c-slate-500)); font-size: 12px; }
 .me-photo-error { margin: 0; color: rgb(var(--c-red-600)); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
 .me-id { min-width: 0; display: grid; gap: 8px; }
+.me-name-row { display: flex; align-items: center; flex-wrap: wrap; gap: 12px 16px; }
+.me-edit-button { flex: none; gap: 6px; }
+.me-bio { margin: 2px 0; max-width: 56ch; color: rgb(var(--c-slate-700)); font-size: 15px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 .me-name {
   margin: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; min-width: 0;
   color: rgb(var(--c-slate-900)); font-size: clamp(30px, 22px + 1.6vw, 44px); line-height: 1.1; font-weight: 800; letter-spacing: -0.03em;
   overflow-wrap: anywhere;
 }
 .me-meta { margin: 0; display: flex; flex-wrap: wrap; gap: 4px 14px; color: rgb(var(--c-slate-500)); font-size: 15px; line-height: 1.4; font-weight: 500; overflow-wrap: anywhere; }
-.me-stats { margin: 8px 0 0; display: flex; align-items: end; gap: 32px; }
-.me-stat { display: grid; gap: 6px; text-align: right; }
+.me-stats { margin: 8px 0 0; display: flex; align-items: start; gap: 32px; }
+.me-stat { display: grid; grid-template-rows: 18px auto; gap: 8px; text-align: right; }
 .me-stat dt { color: rgb(var(--c-slate-700)); font-size: 13px; line-height: 1.2; font-weight: 600; white-space: nowrap; }
-.me-stat dd { margin: 0; color: rgb(var(--c-slate-900)); font-size: 22px; line-height: 1; font-weight: 700; white-space: nowrap; }
-.me-stat.is-points dd { font-size: 34px; color: rgb(var(--c-brand-line)); }
+.me-stat dd { margin: 0; color: rgb(var(--c-slate-900)); font-size: 28px; line-height: 1.2; font-weight: 700; white-space: nowrap; }
+.me-stat.is-points dd { color: rgb(var(--c-brand-line)); }
+.me-account { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 14px 24px; padding-bottom: 20px; border-bottom: 1px solid rgb(var(--c-slate-200)); }
+.me-account-id { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 12px; min-width: 0; color: rgb(var(--c-slate-700)); font-size: 14px; overflow-wrap: anywhere; }
+.me-account-id h2 { margin: 0; color: rgb(var(--c-slate-900)); font-size: 14px; font-weight: 700; }
+.me-signin-method { color: rgb(var(--c-slate-500)); font-size: 12px; }
+.me-account-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; }
+.me-account-actions .me-delete-account { color: rgb(var(--c-red-600)); }
+.me-notice { margin: 0; color: rgb(var(--c-slate-700)); font-size: 14px; }
 
 /* ── 현재 등급 + 접힌 조건 안내. SVG는 Phosphor duotone 원형을 사용한다. ── */
 .me-tier { min-width: 0; max-width: 540px; }
@@ -101,7 +111,7 @@
   .me-avatar { width: 64px; height: 64px; font-size: 26px; }
   .me-avatar-camera { width: 26px; height: 26px; }
   .me-stats { gap: 20px; flex-wrap: wrap; }
-  .me-stat.is-points dd { font-size: 28px; }
+  .me-stat dd { font-size: 24px; }
   .me-tier-list { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   /* 행을 두 줄로: 첫 줄 로고 + 제목·전략, 둘째 줄 수치·시각·버튼 */
   .me-row.me-table-head { display: none; }

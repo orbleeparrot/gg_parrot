@@ -59,6 +59,7 @@ from . import ai_runtime as ai_runtime_mod
 from . import community_summaries as community_summaries_mod
 from . import auth as auth_mod
 from . import avatars as avatars_mod
+from . import profile as profile_mod
 from . import points as points_mod
 from . import account as account_mod
 from . import challenge as challenge_mod
@@ -233,6 +234,17 @@ class ForgotRequest(BaseModel):
 class ResetRequest(BaseModel):
     token: str
     password: str
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class DeleteAccountRequest(BaseModel):
+    confirmation: str
+    password: str = ""
+    credential: str = ""
 
 
 class ExplainAiRequest(BaseModel):
@@ -423,6 +435,40 @@ def avatar_image(user_id: int, request: Request, v: str | None = None) -> Respon
     if request.headers.get("if-none-match") == etag:
         return Response(status_code=304, headers=headers)
     return Response(content=avatar.image_data, media_type="image/webp", headers=headers)
+
+
+@app.patch("/api/me/profile")
+def update_profile(
+    username: str = Form(...), bio: str = Form(""),
+    remove_avatar: bool = Form(False), image: UploadFile | None = File(None),
+    user: User = Depends(auth_mod.current_user),
+) -> dict:
+    normalized = None
+    if image is not None:
+        try:
+            raw = image.file.read(avatars_mod.MAX_IMAGE_BYTES + 1)
+            if len(raw) > avatars_mod.MAX_IMAGE_BYTES:
+                raise HTTPException(413, "프로필 사진은 2MB 이하만 올릴 수 있어요.")
+            normalized = avatars_mod.normalize_image(raw)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        finally:
+            image.file.close()
+    return profile_mod.update_profile(user.id, username, bio, image_data=normalized, remove_avatar=remove_avatar)
+
+
+@app.post("/api/me/password")
+def change_password(req: ChangePasswordRequest, user: User = Depends(auth_mod.current_user)) -> dict:
+    result = profile_mod.change_password(user.id, req.current_password, req.new_password)
+    runner_mod.notify_sessions_changed(user.id)
+    return result
+
+
+@app.delete("/api/me/account")
+def delete_account(req: DeleteAccountRequest, user: User = Depends(auth_mod.current_user)) -> dict:
+    result = profile_mod.delete_account(user.id, req.confirmation, req.password, req.credential)
+    runner_mod.notify_sessions_changed(user.id)
+    return result
 
 
 @app.get("/api/me/dashboard")
@@ -1359,6 +1405,11 @@ async def runner_sessions_stream(websocket: WebSocket) -> None:
                 changed.clear()
             except asyncio.TimeoutError:
                 reason = "resync"
+            try:
+                await asyncio.to_thread(auth_mod.decode_runner_session_stream_token, auth_values[0], check_expiry=False)
+            except HTTPException:
+                await websocket.close(code=4401, reason="계정 인증이 변경됐어요. 다시 로그인해 주세요.")
+                break
             await websocket.send_json(
                 {
                     "type": "sessions.snapshot",

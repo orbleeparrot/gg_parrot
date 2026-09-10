@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api.js";
-import { getAuthUser, getToken, useAuth, updateAuthUser } from "../lib/auth.js";
+import { clearAuth, getAuthUser, getToken, setAuth, useAuth, updateAuthUser, mergeFetchedAuthUser } from "../lib/auth.js";
 import { CameraIcon } from "@phosphor-icons/react/dist/csr/Camera";
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { PlantIcon } from "@phosphor-icons/react/dist/csr/Plant";
@@ -13,6 +13,8 @@ import {
 import { EmptyState, ErrorNote } from "../components/Page.jsx";
 import CoinIcon from "../components/CoinIcon.jsx";
 import UserAvatar from "../components/UserAvatar.jsx";
+import ProfileEditor, { PasswordChangeDialog, DeleteAccountDialog } from "../components/ProfileEditor.jsx";
+import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
 import { ImageIcon } from "../components/boardIcons.jsx";
 import "./Board.css"; // 게시글 탭은 게시판 목록 문법(.board-table)을 그대로 쓴다
 import "./MyPage.css";
@@ -60,52 +62,6 @@ function TierGuide({ tier }) {
         ))}
       </ol>
     </details>
-  );
-}
-
-function AvatarEditor({ user, onUpdate, onError }) {
-  const input = useRef(null);
-  const mounted = useRef(false);
-  const [busy, setBusy] = useState(false);
-  useEffect(() => {
-    mounted.current = true;
-    return () => { mounted.current = false; };
-  }, []);
-
-  async function save(file) {
-    if (busy) return;
-    onError("");
-    if (file && file.size > 2 * 1024 * 1024) {
-      onError("2MB 이하의 사진을 선택해주세요.");
-      return;
-    }
-    const requestToken = getToken();
-    const isCurrent = () => mounted.current && getToken() === requestToken && getAuthUser()?.id === user.id;
-    setBusy(true);
-    try {
-      const response = await (file ? api.uploadAvatar(file) : api.deleteAvatar());
-      if (isCurrent()) onUpdate(response.user);
-    } catch (e) {
-      if (isCurrent()) onError(String(e.message || "사진을 저장하지 못했어요."));
-    } finally {
-      if (isCurrent()) setBusy(false);
-    }
-  }
-
-  return (
-    <div className="me-photo" aria-busy={busy}>
-      <button type="button" className="me-avatar-edit" aria-label="프로필 사진 변경" aria-describedby="me-photo-hint" disabled={busy} onClick={() => input.current?.click()}>
-        <UserAvatar src={user.avatar_url} name={user.username} size={80} className="me-avatar" />
-        <span className="me-avatar-camera"><CameraIcon size={16} weight="bold" aria-hidden="true" /></span>
-      </button>
-      <input ref={input} type="file" accept="image/png,image/jpeg,image/webp" className="sr-only" tabIndex={-1} aria-label="프로필 사진 파일" disabled={busy} onChange={(event) => {
-        const file = event.target.files?.[0];
-        event.target.value = "";
-        if (file) save(file);
-      }} />
-      <span id="me-photo-hint" className="sr-only">PNG, JPG, WebP · 최대 2MB</span>
-      {busy ? <span className="me-photo-status" role="status">저장 중…</span> : user.avatar_url ? <button type="button" className="me-photo-reset" onClick={() => save(null)}>사진 삭제</button> : null}
-    </div>
   );
 }
 
@@ -266,11 +222,13 @@ function Skeleton() {
 
 export default function MyPage() {
   const { token, user: authUser } = useAuth();
+  const leavingAccount = useRef(false);
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
-  const [photoError, setPhotoError] = useState("");
+  const [editor, setEditor] = useState(null);
+  const [notice, setNotice] = useState("");
   const [now, setNow] = useState(() => Date.now());
 
   const paramTab = searchParams.get("tab");
@@ -279,9 +237,9 @@ export default function MyPage() {
   useEffect(() => {
     setData(null);
     setError("");
-    setPhotoError("");
+    setEditor(null);
     if (!token) {
-      navigate("/login?next=%2Fmypage");
+      if (!leavingAccount.current) navigate("/login?next=%2Fmypage");
       return;
     }
     let alive = true;
@@ -290,10 +248,7 @@ export default function MyPage() {
     api.myDashboard({ signal: controller.signal })
       .then((d) => {
         if (!alive || getToken() !== token) return;
-        const currentUser = getAuthUser();
-        const user = currentUser?.id === d.user.id && currentUser.avatar_url !== userAtStart?.avatar_url && currentUser.avatar_url !== undefined
-          ? { ...d.user, avatar_url: currentUser.avatar_url }
-          : d.user;
+        const user = mergeFetchedAuthUser(d.user, userAtStart);
         setData({ ...d, user });
         setNow(Date.now());
         updateAuthUser(user);
@@ -320,13 +275,18 @@ export default function MyPage() {
   if (!data) return <Skeleton />;
 
   const { tier, totals, created, purchased, sales, ledger, my_posts = [] } = data;
-  const user = authUser?.id === data.user.id && authUser.avatar_url !== undefined
-    ? { ...data.user, avatar_url: authUser.avatar_url }
-    : data.user;
-  const updateAvatar = (updatedUser) => {
-    setData((previous) => ({ ...previous, user: { ...previous.user, avatar_url: updatedUser.avatar_url } }));
-    updateAuthUser({ ...getAuthUser(), avatar_url: updatedUser.avatar_url });
+  const user = authUser?.id === data.user.id ? { ...data.user, ...authUser } : data.user;
+  const saveProfile = (updatedUser) => {
+    setData((previous) => ({ ...previous, user: updatedUser }));
+    updateAuthUser(updatedUser);
+    setNotice("프로필을 저장했어요.");
   };
+  const savePassword = (response) => {
+    setAuth(response.token, response.user);
+    setNotice("비밀번호를 변경했어요.");
+  };
+  const logout = () => { leavingAccount.current = true; clearAuth(); navigate("/login", { replace: true }); };
+  const deleted = () => { leavingAccount.current = true; clearAuth(); navigate("/login?notice=" + encodeURIComponent("회원 탈퇴가 완료됐어요."), { replace: true }); };
   const counts = { created: created.length, purchased: purchased.length, sales: sales.length, ledger: ledger.length, posts: my_posts.length };
   const openInBuilder = (macro) => navigate("/builder", { state: { macro } });
   const pickTab = (key) => setSearchParams(key === "created" ? {} : { tab: key }, { replace: true });
@@ -335,15 +295,19 @@ export default function MyPage() {
     <div className="me-page">
       {/* 머리 — 이름이 곧 제목(다른 화면의 PageHeader 제목과 같은 크기). 오른쪽은 포인트·수익·판매. */}
       <header className="me-head">
-        <AvatarEditor key={token} user={user} onUpdate={updateAvatar} onError={setPhotoError} />
+        <button type="button" className="me-avatar-edit" aria-label="프로필 사진 변경" aria-haspopup="dialog" onClick={() => setEditor("profile")}>
+          <UserAvatar src={user.avatar_url} name={user.username} size={80} className="me-avatar" />
+          <span className="me-avatar-camera"><CameraIcon size={16} weight="bold" aria-hidden="true" /></span>
+        </button>
         <div className="me-id">
-          <h1 className="me-name">
-            {user.username}
-          </h1>
+          <div className="me-name-row">
+            <h1 className="me-name">{user.username}</h1>
+            <button type="button" className="btn btn-s btn-secondary me-edit-button" aria-haspopup="dialog" onClick={() => setEditor("profile")}><PencilSimpleIcon size={16} aria-hidden="true" />프로필 편집</button>
+          </div>
           <p className="me-meta">
-            <span>{user.email}</span>
             {joinedLabel(user.created_at) ? <span className="num">{joinedLabel(user.created_at)}</span> : null}
           </p>
+          {user.bio ? <p className="me-bio">{user.bio}</p> : null}
           <TierGuide tier={tier} />
         </div>
         <dl className="me-stats">
@@ -352,7 +316,22 @@ export default function MyPage() {
           <div className="me-stat"><dt>누적 판매</dt><dd className="num">{totals.sales}건</dd></div>
         </dl>
       </header>
-      {photoError ? <p className="me-photo-error" role="alert">{photoError}</p> : null}
+      <section className="me-account" aria-labelledby="me-account-title">
+        <div className="me-account-id">
+          <h2 id="me-account-title">계정 설정</h2>
+          <span>{user.email}</span>
+          <span className="me-signin-method">{user.can_change_password ? "이메일 · 비밀번호" : "Google 로그인"}</span>
+        </div>
+        <div className="me-account-actions">
+          {user.can_change_password ? <button type="button" className="btn btn-s btn-secondary" aria-haspopup="dialog" onClick={() => setEditor("password")}>비밀번호 변경</button> : null}
+          <button type="button" className="btn btn-s btn-ghost" onClick={logout}>로그아웃</button>
+          <button type="button" className="btn btn-s btn-ghost me-delete-account" aria-haspopup="dialog" onClick={() => setEditor("delete")}>회원 탈퇴</button>
+        </div>
+      </section>
+      {notice ? <p className="me-notice" role="status">{notice}</p> : null}
+      {editor === "profile" ? <ProfileEditor key={token} user={user} onClose={() => setEditor(null)} onSaved={saveProfile} /> : null}
+      {editor === "password" && user.can_change_password ? <PasswordChangeDialog key={token} user={user} onClose={() => setEditor(null)} onSaved={savePassword} /> : null}
+      {editor === "delete" ? <DeleteAccountDialog key={token} user={user} onClose={() => setEditor(null)} onDeleted={deleted} /> : null}
 
       <div className="me-tabs">
         <div className="seg" role="tablist" aria-label="내 활동 종류">

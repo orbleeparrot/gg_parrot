@@ -69,21 +69,26 @@ def set_avatar(user_id: int, image_data: bytes | None) -> None:
         if db.get_bind().dialect.name == "sqlite":
             db.exec(sql_text("BEGIN IMMEDIATE"))
         user = db.exec(select(User).where(User.id == user_id).with_for_update()).first()
-        if user is None:
+        if user is None or user.is_deleted:
             raise LookupError("계정을 찾을 수 없어요.")
-        current = db.get(UserAvatar, user_id)
-        if image_data is None:
-            if current is not None:
-                db.delete(current)
-        else:
-            version = secrets.token_hex(16)
-            if current is None:
-                current = UserAvatar(user_id=user_id, version=version, image_data=image_data)
-            else:
-                current.version = version
-                current.image_data = image_data
-            db.add(current)
+        set_avatar_in_session(db, user_id, image_data)
         db.commit()
+
+
+def set_avatar_in_session(db: Session, user_id: int, image_data: bytes | None) -> None:
+    """Stage a photo change in the caller's locked account transaction."""
+    current = db.get(UserAvatar, user_id)
+    if image_data is None:
+        if current is not None:
+            db.delete(current)
+    else:
+        version = secrets.token_hex(16)
+        if current is None:
+            current = UserAvatar(user_id=user_id, version=version, image_data=image_data)
+        else:
+            current.version = version
+            current.image_data = image_data
+        db.add(current)
 
 
 def get_avatar(user_id: int, version: str | None = None) -> UserAvatar | None:

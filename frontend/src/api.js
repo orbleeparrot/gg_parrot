@@ -68,11 +68,12 @@ async function req(path, opts = {}) {
 // multipart/form-data 요청 (파일 업로드). Content-Type은 브라우저가 boundary와
 // 함께 자동 설정하도록 두고, Authorization 헤더만 붙인다.
 async function reqForm(path, formData, options = {}) {
+  const { method = "POST", ...requestOptions } = options;
   const token = getToken();
   const headers = {};
   if (token) headers["Authorization"] = `Bearer ${token}`;
   return withRequestTimeout(async (signal) => {
-    const res = await fetch(BASE + path, { method: "POST", headers, body: formData, signal });
+    const res = await fetch(BASE + path, { method, headers, body: formData, signal });
     const body = await jsonBody(res);
     if (!res.ok) {
       const detail = typeof body.detail === "string"
@@ -85,7 +86,7 @@ async function reqForm(path, formData, options = {}) {
       throw error;
     }
     return body;
-  }, options);
+  }, requestOptions);
 }
 
 export const api = {
@@ -106,6 +107,22 @@ export const api = {
     return reqForm("/api/me/avatar", form, { timeoutMs: 30_000 });
   },
   deleteAvatar: () => req("/api/me/avatar", { method: "DELETE", timeoutMs: 30_000 }),
+  deleteAccount: ({ confirmation, password, credential }, options = {}) => req("/api/me/account", {
+    ...options, method: "DELETE", body: JSON.stringify({ confirmation, password, credential }), timeoutMs: 30_000,
+  }),
+  updateProfile: ({ username, bio, image, removeAvatar = false }, options = {}) => {
+    const form = new FormData();
+    form.append("username", username);
+    form.append("bio", bio || "");
+    form.append("remove_avatar", String(removeAvatar));
+    if (image) form.append("image", image);
+    return reqForm("/api/me/profile", form, { ...options, method: "PATCH", timeoutMs: 30_000 });
+  },
+  changePassword: ({ currentPassword, newPassword }, options = {}) =>
+    req("/api/me/password", {
+      ...options, method: "POST", timeoutMs: 30_000,
+      body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+    }),
   myMacros: (options = {}) => req("/api/me/macros", options),
   myMacro: (id) => req(`/api/me/macros/${id}`),
   saveMyMacro: (macro, name = "") =>

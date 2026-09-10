@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { api } from "../api.js";
-import { clearAuth, getAuthUser, getToken, updateAuthUser, useAuth } from "../lib/auth.js";
+import { clearAuth, getAuthUser, getToken, mergeFetchedAuthUser, updateAuthUser, useAuth } from "../lib/auth.js";
 import MarketContext from "./MarketContext.jsx";
 import { BrandLink } from "./SiteNavigation.jsx";
 import ThemeToggle from "./ThemeToggle.jsx";
@@ -94,9 +94,7 @@ function AccountMenu() {
     const requestedUser = getAuthUser();
     api.me().then((data) => {
       if (!active || getToken() !== token) return;
-      const currentUser = getAuthUser();
-      const photoChanged = currentUser?.id === data.user?.id && currentUser?.avatar_url !== requestedUser?.avatar_url;
-      updateAuthUser(photoChanged ? { ...data.user, avatar_url: currentUser.avatar_url } : data.user);
+      updateAuthUser(mergeFetchedAuthUser(data.user, requestedUser));
       setPointsState("idle");
     }).catch((reason) => {
       if (!active || getToken() !== token) return;

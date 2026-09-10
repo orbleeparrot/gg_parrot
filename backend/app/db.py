@@ -256,6 +256,9 @@ class User(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     email: str = Field(index=True, unique=True)
     username: str = Field(index=True, unique=True)  # public display id
+    bio: str = ""
+    auth_version: int = 0
+    is_deleted: bool = False
     password_hash: str  # PBKDF2 (see security.py); never returned
     points_balance: int = Field(default=0)  # virtual points (no cash yet)
     created_at: str
@@ -692,6 +695,11 @@ def _migrate() -> None:
     """Add columns introduced after a table was first created (SQLite create_all
     does not ALTER existing tables). Idempotent and safe to run every startup."""
     added = {
+        "user": {
+            "bio": 'ALTER TABLE "user" ADD COLUMN bio TEXT NOT NULL DEFAULT \'\'',
+            "auth_version": 'ALTER TABLE "user" ADD COLUMN auth_version INTEGER NOT NULL DEFAULT 0',
+            "is_deleted": 'ALTER TABLE "user" ADD COLUMN is_deleted BOOLEAN NOT NULL DEFAULT FALSE',
+        },
         "chatmessage": {
             "user_id": "ALTER TABLE chatmessage ADD COLUMN user_id INTEGER",
         },
@@ -781,6 +789,7 @@ def _migrate() -> None:
 
 
 _PG_ADDED_COLUMNS = {
+    "user": {"bio": "TEXT NOT NULL DEFAULT ''", "auth_version": "INTEGER NOT NULL DEFAULT 0", "is_deleted": "BOOLEAN NOT NULL DEFAULT FALSE"},
     "chatmessage": {"user_id": "INTEGER"},
     "dailychallenge": {
         "status": "TEXT DEFAULT 'ready'", "claim_token": "TEXT DEFAULT ''",
@@ -872,7 +881,8 @@ def _pg_migration_statements(state: dict) -> list[str]:
             continue  # create_all handles a table that has never existed.
         for column, definition in columns.items():
             if (table, column) not in state["columns"]:
-                statements.append(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {definition}")
+                identifier = '"user"' if table == "user" else table
+                statements.append(f"ALTER TABLE {identifier} ADD COLUMN IF NOT EXISTS {column} {definition}")
     for table, columns in _PG_BIGINT_COLUMNS.items():
         for column in columns:
             kind = state["columns"].get((table, column))

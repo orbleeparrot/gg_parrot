@@ -47,12 +47,12 @@ def test_auth_dashboard_and_posts_reuse_one_injected_session(monkeypatch):
         )
         db.commit()
 
-        monkeypatch.setattr(auth, "_decode", lambda token: user.id)
+        token = auth.make_token(user.id, user.auth_version)
         monkeypatch.setattr(auth, "get_session", unexpected_session)
         monkeypatch.setattr(account, "get_session", unexpected_session)
         monkeypatch.setattr(board, "get_session", unexpected_session)
 
-        resolved = auth.current_user_in_session("Bearer token", db=db)
+        resolved = auth.current_user_in_session(f"Bearer {token}", db=db)
         dashboard = account.dashboard(resolved, db=db)
         posts = board.my_posts(resolved.id, db=db)
 

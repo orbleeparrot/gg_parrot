@@ -6,7 +6,7 @@ import DOMPurify from "dompurify";
 import { boardFullTime, boardTime, kstDateTime } from "../lib/boardText.js";
 import { ErrorNote } from "../components/Page.jsx";
 import ConfirmDialog from "../components/ConfirmDialog.jsx";
-import { ChevronLeftIcon, ThumbDownIcon, ThumbUpIcon } from "../components/boardIcons.jsx";
+import { ThumbDownIcon, ThumbUpIcon } from "../components/boardIcons.jsx";
 import { PostRow, TableHead } from "./Board.jsx";
 import { editPath, writePath } from "./BoardWrite.jsx";
 import { AuthorAvatar } from "../components/UserAvatar.jsx";
@@ -43,20 +43,18 @@ function CommentForm({ postId, user, token, onAdded }) {
     }
   }
 
+  // 사진 32 | 닉네임 → 입력칸 → 오른쪽 아래 등록. 라벨 대신 자리표시자(댓글은 한 칸뿐이라 무엇인지 분명하다).
   return (
     <form onSubmit={submit} className="board-comment-form" aria-label="댓글 쓰기">
-      <div className="board-comment-me">
-        <AuthorAvatar userId={user.id} src={user.avatar_url} name={user.username} size={32} />
-        <b>{user.username}</b>
+      <AuthorAvatar userId={user.id} src={user.avatar_url} name={user.username} size={32} className="board-comment-form-avatar" />
+      <b className="board-comment-form-name">{user.username}</b>
+      <textarea value={text} onChange={(e) => setText(e.target.value)} rows={2} maxLength={500} className="field board-comment-form-input" placeholder="댓글을 남겨보세요" aria-label="댓글" />
+      <div className="board-comment-form-foot">
+        <span className="board-form-error" role={err ? "alert" : undefined}>{err}</span>
+        <button type="submit" disabled={busy} className="btn btn-m btn-primary">
+          {busy ? "등록 중…" : "댓글 등록"}
+        </button>
       </div>
-      <label className="board-field-label">
-        댓글
-        <textarea value={text} onChange={(e) => setText(e.target.value)} rows={3} maxLength={500} className="field w-full" />
-      </label>
-      <button type="submit" disabled={busy} className="btn btn-m btn-primary">
-        {busy ? "등록 중…" : "댓글 등록"}
-      </button>
-      <p className="board-form-error" role={err ? "alert" : undefined}>{err}</p>
     </form>
   );
 }
@@ -217,10 +215,6 @@ export default function BoardPost() {
   return (
     <div className="board-post-page">
     <div className="board-post">
-      <Link to="/board" className="btn btn-s btn-secondary board-back">
-        <ChevronLeftIcon /><span>목록</span>
-      </Link>
-
       {err ? <div className="mt-4"><ErrorNote>글을 불러오지 못했어요: {err}</ErrorNote></div> : null}
       {!post && !err ? <PostSkeleton /> : null}
 

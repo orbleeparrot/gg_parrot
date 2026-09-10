@@ -207,7 +207,7 @@ def _macro_cards(db, texts: list[str], viewer_user_id: int | None) -> dict[int, 
 
 
 def _reply_cards(db, texts: list[str]) -> dict[int, dict]:
-    """본문 맨 앞 [reply:id] 가 가리키는 메시지들 — 인용 줄에 쓸 글쓴이와 발췌."""
+    """본문 맨 앞 [reply:id]가 가리키는 글쓴이·프로필 사진·발췌를 한 번에 조회."""
     ids: list[int] = []
     for text in texts:
         match = REPLY_TOKEN.match(text or "")
@@ -217,13 +217,17 @@ def _reply_cards(db, texts: list[str]) -> dict[int, dict]:
                 ids.append(target)
     if not ids:
         return {}
-    rows = db.exec(select(ChatMessage).where(ChatMessage.id.in_(ids))).all()
+    rows = db.exec(select(ChatMessage, UserAvatar.version).outerjoin(
+        UserAvatar, UserAvatar.user_id == ChatMessage.user_id,
+    ).where(ChatMessage.id.in_(ids))).all()
     cards = {}
-    for row in rows:
+    for row, version in rows:
         body = MACRO_TOKEN.sub("[매크로]", REPLY_TOKEN.sub("", row.text or "")).strip()
         cards[row.id] = {
             "id": row.id,
+            "user_id": row.user_id,
             "username": row.username,
+            "avatar_url": avatars.public_url(row.user_id, version),
             "excerpt": body[:_REPLY_EXCERPT] + ("…" if len(body) > _REPLY_EXCERPT else ""),
         }
     return cards

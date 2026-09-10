@@ -16,6 +16,22 @@
 .chat-login-prompt a { white-space: nowrap; text-decoration: underline; }
 .chat-status button:focus-visible, .chat-history:focus-visible, .chat-jump:focus-visible, .chat-login-prompt a:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
 
+/* The quoted message and reply share one bubble, with time kept outside. */
+.chat-row-body.has-reply { max-width: 100%; }
+.chat-row-body.has-reply > .chat-bubble-line { width: 100%; }
+.chat-bubble.is-reply { width: 240px; max-width: 100%; padding: 0; overflow: hidden; white-space: normal; }
+.chat-reply-quote { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid rgb(var(--c-slate-900) / .14); }
+.chat-row.is-mine .chat-reply-quote { border-bottom-color: rgb(var(--c-brand-ink) / .16); }
+.chat-reply-quote > .user-avatar { flex-shrink: 0; }
+.chat-reply-source { display: grid; gap: 2px; min-width: 0; font-size: 13px; line-height: 1.4; }
+.chat-reply-source > b, .chat-reply-source > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-reply-source > b { font-weight: 700; }
+.chat-reply-source > span { opacity: .75; }
+.chat-reply-body { padding: 9px 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.chat-reply-body.is-sticker img { display: block; width: 92px; height: 92px; object-fit: contain; }
+.chat-reply-body.is-macro { display: grid; gap: 8px; }
+.chat-reply-body > .chat-bubble-text { padding: 0; border-radius: 0; background: transparent; color: inherit; }
+
 /* Mobile has one fixed home for chat; desktop's remembered position is ignored. */
 .chat-float.is-mobile-fixed {
   --chat-bar-h: 0px;

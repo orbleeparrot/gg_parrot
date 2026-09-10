@@ -132,11 +132,20 @@ def test_changes_and_deletion_update_historical_chat_and_posts_by_account_id(api
         db.refresh(anonymous)
         anonymous_id = anonymous.id
     other_url = upload(api, other, picture(color="green")).json()["user"]["avatar_url"]
+    reply = api.post("/api/chat", headers=headers(other),
+                     json={"text": f"[reply:{posted['id']}] 답장"}).json()["message"]
+    anonymous_reply = api.post("/api/chat", headers=headers(other),
+                               json={"text": f"[reply:{anonymous_id}] 이전 메시지에 답장"}).json()["message"]
+    assert reply["reply_to"]["user_id"] == user.id
+    assert reply["reply_to"]["avatar_url"] is None
 
     def assert_surfaces(expected):
         messages = {m["id"]: m for m in api.get("/api/chat").json()["items"]}
         assert messages[posted["id"]]["avatar_url"] == expected
         assert messages[anonymous_id]["avatar_url"] is None
+        assert messages[reply["id"]]["reply_to"]["avatar_url"] == expected
+        assert messages[anonymous_reply["id"]]["reply_to"]["user_id"] is None
+        assert messages[anonymous_reply["id"]]["reply_to"]["avatar_url"] is None
         detail = api.get(f'/api/board/posts/{post["id"]}').json()
         assert detail["author_avatar_url"] == expected
         assert detail["comments"][0]["author_avatar_url"] is None
@@ -166,6 +175,9 @@ def test_list_queries_join_versions_without_loading_image_bytes_or_n_plus_one(ap
     for i in range(3):
         board.create_post(user, f"query {i}", "", None, "")
         chat.add_message(user, f"query {i}")
+    originals = chat.list_messages()["items"][-3:]
+    for original in originals:
+        chat.add_message(members[1], f"[reply:{original['id']}] 답장")
     statements = []
 
     def record(_conn, _cursor, statement, _params, _context, _executemany):
@@ -180,8 +192,9 @@ def test_list_queries_join_versions_without_loading_image_bytes_or_n_plus_one(ap
         assert "useravatar.image_data" not in statements[0]
         statements.clear()
         chat.list_messages()
-        assert len(statements) == 2
+        assert len(statements) == 3  # All quoted authors share one metadata query.
         assert "useravatar.version" in statements[1]
-        assert "useravatar.image_data" not in statements[1]
+        assert "useravatar.version" in statements[2]
+        assert all("useravatar.image_data" not in statement for statement in statements)
     finally:
         event.remove(db_mod._engine, "before_cursor_execute", record)

@@ -9,7 +9,7 @@ from sqlalchemy import delete, inspect
 from sqlmodel import create_engine, select
 
 from app import auth, chat, db as db_mod
-from app.db import ChatMessage, ChatReadState, User, get_session
+from app.db import ChatMessage, ChatReadState, User, UserAvatar, get_session
 from app.main import app
 
 
@@ -325,15 +325,21 @@ def test_macro_mention_becomes_a_card_and_hides_locked_strategy(members):
 
 def test_reply_quotes_the_original_and_report_covers_chat(members):
     author, other = members
+    with get_session() as db:
+        db.add(UserAvatar(user_id=author.id, version="reply-photo", image_data=b"fixture"))
+        db.commit()
     first = client().post("/api/chat", json={"text": "오늘 BTC 어때요?"}, headers=headers(author)).json()["message"]
     replied = client().post("/api/chat", json={"text": f"[reply:{first['id']}] 저는 관망이요"}, headers=headers(other))
     assert replied.status_code == 200, replied.text
     view = replied.json()["message"]
     assert view["reply_to"]["id"] == first["id"] and view["reply_to"]["username"] == author.username
     assert view["reply_to"]["excerpt"] == "오늘 BTC 어때요?"
+    assert view["reply_to"]["user_id"] == author.id
+    assert view["reply_to"]["avatar_url"] == f"/api/avatars/{author.id}?v=reply-photo"
     assert view["text"].startswith(f"[reply:{first['id']}]")  # 본문은 토큰 그대로, 화면이 인용 줄로 그린다
     listed = client().get("/api/chat", headers=headers(author)).json()["items"]
     assert listed[-1]["reply_to"]["id"] == first["id"] and listed[0]["reply_to"] is None
+    assert listed[-1]["reply_to"] == view["reply_to"]
     # 없는 메시지에 답장하면 인용만 사라진다(본문은 남는다).
     orphan = client().post("/api/chat", json={"text": "[reply:999999] 어디 갔지"}, headers=headers(author)).json()["message"]
     assert orphan["reply_to"] is None
@@ -349,4 +355,3 @@ def test_reply_quotes_the_original_and_report_covers_chat(members):
                          headers=headers(other)).status_code == 409
     assert client().post("/api/board/reports", json={"target_type": "chat", "target_id": 999999, "reason": "spam"},
                          headers=headers(other)).status_code == 404
-

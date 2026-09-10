@@ -81,6 +81,41 @@ function clampPlacement(placement, root) {
   };
 }
 
+function MessageBubble({ message, onClose }) {
+  const body = stripReplyToken(message.text);
+  const sticker = stickerFromText(body);
+  const hasMacros = !sticker && message.macros?.length > 0;
+  const content = sticker
+    ? <img src={sticker.src} alt={`${sticker.label} 스티커`} width="92" height="92" draggable="false" decoding="async" />
+    : hasMacros
+      ? splitMacroText(body, message.macros).map((part, index) => (
+          part.type === "text"
+            ? <p key={`t-${index}`} className="chat-bubble-text">{part.text}</p>
+            : <MacroCard key={`m-${part.card.entry_id}-${index}`} card={part.card} onClose={onClose} />
+        ))
+      : body;
+  const reply = message.reply_to;
+  if (reply) {
+    const quotedSticker = stickerFromText(reply.excerpt);
+    const excerpt = quotedSticker ? `${quotedSticker.label} 스티커` : reply.excerpt || "내용 없음";
+    return (
+      <div className="chat-bubble is-reply">
+        <div className="chat-reply-quote" aria-label={`${reply.username}의 메시지에 답장`}>
+          <AuthorAvatar userId={reply.user_id} src={reply.avatar_url} name={reply.username} size={32} />
+          <div className="chat-reply-source">
+            <b>{reply.username}</b>
+            <span title={excerpt}>{excerpt}</span>
+          </div>
+        </div>
+        <div className={`chat-reply-body${sticker ? " is-sticker" : hasMacros ? " is-macro" : ""}`}>{content}</div>
+      </div>
+    );
+  }
+  return hasMacros
+    ? <div className="chat-bubble is-macro">{content}</div>
+    : <p className={`chat-bubble${sticker ? " is-sticker" : ""}`}>{content}</p>;
+}
+
 function kstClock(now = Date.now()) {
   const date = new Date(now + 9 * 60 * 60 * 1000);
   return `${String(date.getUTCHours()).padStart(2, "0")}:${String(date.getUTCMinutes()).padStart(2, "0")}`;
@@ -577,28 +612,15 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
               const continued = !showDivider && sameAuthor(previous, message);
               const mine = isOwnMessage(message, member?.id);
               const legacy = message.user_id == null;
-              const body = stripReplyToken(message.text);
-              const sticker = stickerFromText(body);
               return (
                 <Fragment key={message.id}>
                   {showDivider ? <div className="chat-divider" role="separator" aria-label="여기부터 새 메시지"><span>새 메시지</span></div> : null}
                   <article className={`chat-row${mine ? " is-mine" : ""}${continued ? " is-continued" : ""}`} aria-label={`${message.username}${legacy ? ", 이전 익명 메시지" : ""}, ${message.created_kst}`} onContextMenu={(event) => openMenu(event, message)}>
                     {!mine ? (continued ? <span className="chat-avatar" aria-hidden="true" /> : <AuthorAvatar userId={message.user_id} src={message.avatar_url} name={message.username} size={32} className="chat-avatar" />) : null}
-                    <div className="chat-row-body">
+                    <div className={`chat-row-body${message.reply_to ? " has-reply" : ""}`}>
                       {!mine && !continued ? <span className="chat-row-name">{message.username}{legacy ? <small className="chat-legacy">이전 익명</small> : null}</span> : null}
-                      {message.reply_to ? (
-                        <p className="chat-quote"><b>{message.reply_to.username}</b><span>{message.reply_to.excerpt || "내용 없음"}</span></p>
-                      ) : null}
                       <div className="chat-bubble-line">
-                        {sticker
-                          ? <p className="chat-bubble is-sticker"><img src={sticker.src} alt={`${sticker.label} 스티커`} width="92" height="92" draggable="false" decoding="async" /></p>
-                          : message.macros?.length
-                            ? <div className="chat-bubble is-macro">{splitMacroText(body, message.macros).map((part, partIndex) => (
-                                part.type === "text"
-                                  ? <p key={`t-${partIndex}`} className="chat-bubble-text">{part.text}</p>
-                                  : <MacroCard key={`m-${part.card.entry_id}-${partIndex}`} card={part.card} onClose={close} />
-                              ))}</div>
-                            : <p className="chat-bubble">{body}</p>}
+                        <MessageBubble message={message} onClose={close} />
                         <time className="num">{message.created_kst}</time>
                       </div>
                     </div>

@@ -241,12 +241,12 @@ def main():
                         expect(rows.nth(1).locator(".lb-mobile-author-name")).to_have_text(fixture.rows[1]["username"])
                         geometry = mobile_geometry(rows)
                         assert_compact_geometry(geometry)
-                        expect(rows.first.locator(".lb-summary .sr-only")).to_have_text("전략:")
+                        expect(rows.first.locator(".lb-fact-strategy dt")).to_have_text("전략")
                         assert rows.first.locator(".lb-summary").get_attribute("aria-label") is None
                         assert rows.first.locator(".lb-mobile-meta").get_attribute("aria-label") is None
                         expect(rows.first.locator(".lb-return")).to_have_attribute("aria-label", "수익률 +1234.56%")
                         expect(rows.first.locator(".lb-mobile-field-label")).to_have_count(0)
-                        expect(rows.nth(1).locator(".lb-mobile-locked")).to_have_text("잠긴 전략")
+                        expect(rows.nth(1).locator(".lb-fact-locked dd")).to_have_text("잠긴 전략")
                         hits = [assert_expanded_hit_targets(rows.nth(index)) for index in range(rows.count())]
                         page.evaluate("window.scrollTo(0, document.documentElement.scrollHeight)")
                         last_action = rows.last.get_by_role("button", name="빌더로 복사", exact=True)
@@ -261,6 +261,11 @@ def main():
                     else:
                         expect(page.locator(".lb-row-head")).to_be_visible()
                         expect(rows.first.locator(".lb-title")).to_be_visible()
+                        expect(rows.first.locator(".lb-title")).to_have_text(fixture.rows[0]["username"])
+                        assert rows.first.locator(".lb-title").evaluate("el => getComputedStyle(el).fontSize") == "17px"
+                        expect(page.locator(".lb-col-name")).to_have_text("매크로")
+                        expect(page.locator(".lb-col-summary")).to_have_text("전략")
+                        expect(rows.first.locator(".lb-strategy-ticker strong")).to_have_text("BTC")
                         expect(rows.first.locator(".lb-mobile-meta")).to_be_hidden()
                         expect(rows.first.locator(".lb-mobile-symbol")).to_be_hidden()
                         assert len(rows.first.evaluate("el => getComputedStyle(el).gridTemplateColumns").split()) == 6
@@ -279,11 +284,33 @@ def main():
                     heights = [entry["row"]["h"] for entry in geometry]
                     assert all(height <= 190 for height in heights), heights
                     assert sum(heights) <= 570, heights
-                    expect(rows.first.locator(".lb-mobile-locked")).to_have_text("잠긴 전략")
+                    expect(rows.first.locator(".lb-fact-locked dd")).to_have_text("잠긴 전략")
                     expect(rows.nth(1).locator(".lb-summary-text")).to_have_text(fixture.rows[1]["human_summary"])
                     page.screenshot(path=str(OUTPUT / f"leaderboard-short-{width}-{theme}.png"), full_page=True)
                     checks[f"short-rows-{width}-{theme}"] = {"heights": heights, "total": sum(heights)}
                     context.close()
+
+            for width in (390, 1440):
+                fixture = Fixture()
+                short = fixture.rows[1]
+                short.update(locked=False, human_summary="1000PEPE · 숏 · 0.009 이상 숏 진입 / 0.007 이하 청산 · -3% 손절 · 자금 37.5% 투입",
+                             macro={**macro(short["symbol"]), "rule_type": "B", "position_side": "short", "risk": {"invest_ratio": .375}})
+                dca = fixture.rows[2]
+                dca.update(human_summary="ETH · 롱 · 7일마다 250.5 분할매수(DCA)",
+                           macro={**macro(dca["symbol"]), "rule_type": "C", "params": {"amount_per_buy": 250.5, "interval_days": 7}})
+                context, page = open_page(browser, origin, fixture, errors, width=width)
+                row = page.locator("#leaderboard-entry-2")
+                expect(row.locator(".lb-position")).to_have_text("숏")
+                expect(row.locator(".lb-fact-capital .num")).to_have_text("37.5%")
+                expect(row.locator(".lb-summary-text")).to_have_text("0.009 이상 숏 진입 / 0.007 이하 청산 · -3% 손절")
+                expect(page.locator("#leaderboard-entry-3 .lb-fact-capital dt")).to_have_text("회당 자금")
+                expect(page.locator("#leaderboard-entry-3 .lb-fact-capital .num")).to_have_text("250.5")
+                expect(page.locator("#leaderboard-entry-3 .lb-fact-capital small")).to_have_text("USDT")
+                assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+                assert row.locator(".lb-summary-text").evaluate("el => el.scrollHeight <= el.clientHeight + 1")
+                page.screenshot(path=str(OUTPUT / f"leaderboard-structured-{width}.png"), full_page=True)
+                checks[f"structured-summary-{width}"] = "passed"
+                context.close()
 
             fixture = Fixture()
             context, page = open_page(browser, origin, fixture, errors)

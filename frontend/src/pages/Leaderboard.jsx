@@ -10,6 +10,8 @@ import { getUserId } from "../lib/user.js";
 import { useAuth, isLoggedIn, getAuthUser, updateAuthUser } from "../lib/auth.js";
 import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 import { applyVote, settleVote } from "../lib/leaderboardVotes.js";
+import { baseOf, quoteOf } from "../lib/format.js";
+import { leaderboardStrategy } from "../lib/leaderboardStrategy.js";
 import "./LeaderboardMobile.css";
 
 const pad = (n) => String(n).padStart(2, "0");
@@ -80,6 +82,34 @@ function EntryBadges({ entry, top3 }) {
       )}
       {entry.crown && <span className="badge badge-flat" title="판매·좋아요 상위">인기 셀러</span>}
     </>
+  );
+}
+
+function StrategyDetails({ entry }) {
+  const details = leaderboardStrategy(entry);
+  return (
+    <dl className="lb-strategy-facts">
+      <div className="lb-fact lb-fact-ticker">
+        <dt className="sr-only">티커</dt>
+        <dd className="lb-strategy-ticker num"><strong>{baseOf(entry.symbol)}</strong><small>{quoteOf(entry.symbol)}</small></dd>
+      </div>
+      {details ? <>
+        <div className="lb-fact lb-fact-position">
+          <dt className="sr-only">포지션</dt>
+          <dd className={`lb-position is-${details.side || "unknown"}`}>
+            {{ long: "롱", short: "숏", switch: "롱 → 숏" }[details.side] || "—"}
+          </dd>
+        </div>
+        <div className="lb-fact lb-fact-capital">
+          <dt>{details.capital?.label || "자금"}</dt>
+          <dd><span className="num">{details.capital?.value || "—"}</span>{details.capital ? <small>{details.capital.unit}</small> : null}</dd>
+        </div>
+        <div className="lb-fact lb-fact-strategy">
+          <dt className="sr-only">전략</dt>
+          <dd className="lb-summary-text">{details.description}</dd>
+        </div>
+      </> : <div className="lb-fact lb-fact-locked"><dt className="sr-only">전략</dt><dd>잠긴 전략</dd></div>}
+    </dl>
   );
 }
 
@@ -298,9 +328,7 @@ export default function Leaderboard() {
                 </div>
                 <div className="lb-entry-details" role="presentation">
                   <div className={`lb-summary${e.locked ? " is-locked" : ""}`} role="cell">
-                    <span className="sr-only">전략: </span>
-                    {e.locked ? <span className="lb-mobile-locked">잠긴 전략</span> : null}
-                    <span className="lb-summary-text">{e.locked ? "잠김 · 언락하면 전략과 설정이 공개돼요" : e.human_summary}</span>
+                    <StrategyDetails entry={e} />
                   </div>
                   <div className="lb-mobile-meta" role="cell">
                     <span className="sr-only">작성자: </span>

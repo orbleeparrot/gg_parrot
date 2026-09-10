@@ -322,3 +322,31 @@ def test_macro_mention_becomes_a_card_and_hides_locked_strategy(members):
     empty = client().post("/api/chat", json={"text": "[macro:999999] 없음"}, headers=headers(author))
     assert empty.json()["message"]["macros"] == []
 
+
+def test_reply_quotes_the_original_and_report_covers_chat(members):
+    author, other = members
+    first = client().post("/api/chat", json={"text": "오늘 BTC 어때요?"}, headers=headers(author)).json()["message"]
+    replied = client().post("/api/chat", json={"text": f"[reply:{first['id']}] 저는 관망이요"}, headers=headers(other))
+    assert replied.status_code == 200, replied.text
+    view = replied.json()["message"]
+    assert view["reply_to"]["id"] == first["id"] and view["reply_to"]["username"] == author.username
+    assert view["reply_to"]["excerpt"] == "오늘 BTC 어때요?"
+    assert view["text"].startswith(f"[reply:{first['id']}]")  # 본문은 토큰 그대로, 화면이 인용 줄로 그린다
+    listed = client().get("/api/chat", headers=headers(author)).json()["items"]
+    assert listed[-1]["reply_to"]["id"] == first["id"] and listed[0]["reply_to"] is None
+    # 없는 메시지에 답장하면 인용만 사라진다(본문은 남는다).
+    orphan = client().post("/api/chat", json={"text": "[reply:999999] 어디 갔지"}, headers=headers(author)).json()["message"]
+    assert orphan["reply_to"] is None
+
+    # 채팅 신고 — 남의 메시지만, 계정당 한 번.
+    assert client().post("/api/board/reports", json={"target_type": "chat", "target_id": first["id"], "reason": "spam"}).status_code == 401
+    assert client().post("/api/board/reports", json={"target_type": "chat", "target_id": first["id"], "reason": "spam"},
+                         headers=headers(author)).status_code == 400  # 내 메시지
+    ok = client().post("/api/board/reports", json={"target_type": "chat", "target_id": first["id"], "reason": "abuse", "detail": "욕설"},
+                       headers=headers(other))
+    assert ok.status_code == 200 and ok.json()["ok"] is True
+    assert client().post("/api/board/reports", json={"target_type": "chat", "target_id": first["id"], "reason": "spam"},
+                         headers=headers(other)).status_code == 409
+    assert client().post("/api/board/reports", json={"target_type": "chat", "target_id": 999999, "reason": "spam"},
+                         headers=headers(other)).status_code == 404
+

@@ -1,10 +1,13 @@
 import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
+import { createPortal } from "react-dom";
 import { api } from "../api.js";
 import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 import { getAuthUser, getToken, useAuth } from "../lib/auth.js";
 import { badgeLabel, chatScope, firstUnseenId, isOwnMessage, sameAuthor } from "../lib/chatBadge.js";
 import { STICKERS, stickerFromText, stickerText } from "../lib/chatStickers.js";
 import { macroIdsInText, splitMacroText } from "../lib/chatMacro.js";
+import { replyText, stripReplyToken } from "../lib/chatReply.js";
+import ReportDialog from "./ReportDialog.jsx";
 import CoinIcon from "./CoinIcon.jsx";
 import { chatUnseenCount, getChatFeed, markChatSeen, observeChat, receiveChat, receiveChatPost, setChatLoadError, visibleChatReadId } from "../lib/chatStore.js";
 import UserAvatar, { AuthorAvatar } from "./UserAvatar.jsx";
@@ -124,6 +127,10 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
   const [open, setOpen] = useState(defaultOpen);
   const [text, setText] = useState("");
   const [error, setError] = useState("");
+  const [menu, setMenu] = useState(null);      // 오른쪽 클릭 메뉴 {x, y, message}
+  const [replyTo, setReplyTo] = useState(null); // 답장 대상 메시지
+  const [reporting, setReporting] = useState(null); // 신고할 메시지
+  const [copiedId, setCopiedId] = useState(0);
   const [readError, setReadError] = useState("");
   const [busy, setBusy] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
@@ -140,6 +147,13 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
   const rootRef = useRef(null);
   const listRef = useRef(null);
   const inputRef = useRef(null);
+  // 입력칸은 한 줄에서 시작해 글이 길어지면 위로 자란다(최대 5줄, 그 뒤로는 스스로 스크롤).
+  useLayoutEffect(() => {
+    const field = inputRef.current;
+    if (!field || field.tagName !== "TEXTAREA") return;
+    field.style.height = "auto";
+    field.style.height = `${Math.min(field.scrollHeight, 132)}px`;
+  }, [text, open]);
   const stickToBottomRef = useRef(true);
   const mountedRef = useRef(false);
   const pendingRequestsRef = useRef(new Set());
@@ -428,8 +442,49 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
 
   async function send(event) {
     event.preventDefault();
-    if (await post(text)) setText("");
+    const body = replyTo ? replyText(replyTo.id, text) : text;
+    if (await post(body)) {
+      setText("");
+      setReplyTo(null);
+    }
   }
+
+  // 오른쪽 클릭 메뉴 — 답장·복사·신고. 메뉴는 화면 안으로 접어 넣는다.
+  function openMenu(event, message) {
+    event.preventDefault();
+    const width = 168;
+    const height = 132;
+    setMenu({
+      message,
+      x: Math.min(event.clientX, window.innerWidth - width - 8),
+      y: Math.min(event.clientY, window.innerHeight - height - 8),
+    });
+  }
+
+  async function copyMessage(message) {
+    const body = stripReplyToken(message.text);
+    try {
+      await navigator.clipboard.writeText(body);
+      setCopiedId(message.id);
+      window.setTimeout(() => setCopiedId((current) => (current === message.id ? 0 : current)), 1400);
+    } catch {
+      window.prompt("메시지 내용이에요. 복사해 주세요.", body);
+    }
+  }
+
+  useEffect(() => {
+    if (!menu) return undefined;
+    const close_ = () => setMenu(null);
+    const onKey = (event) => { if (event.key === "Escape") { event.preventDefault(); close_(); } };
+    document.addEventListener("pointerdown", close_);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("resize", close_);
+    return () => {
+      document.removeEventListener("pointerdown", close_);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", close_);
+    };
+  }, [menu]);
 
   async function sendSticker(id) {
     setStickerOpen(false);
@@ -474,24 +529,28 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
               const continued = !showDivider && sameAuthor(previous, message);
               const mine = isOwnMessage(message, member?.id);
               const legacy = message.user_id == null;
-              const sticker = stickerFromText(message.text);
+              const body = stripReplyToken(message.text);
+              const sticker = stickerFromText(body);
               return (
                 <Fragment key={message.id}>
                   {showDivider ? <div className="chat-divider" role="separator" aria-label="여기부터 새 메시지"><span>새 메시지</span></div> : null}
-                  <article className={`chat-row${mine ? " is-mine" : ""}${continued ? " is-continued" : ""}`} aria-label={`${message.username}${legacy ? ", 이전 익명 메시지" : ""}, ${message.created_kst}`}>
+                  <article className={`chat-row${mine ? " is-mine" : ""}${continued ? " is-continued" : ""}`} aria-label={`${message.username}${legacy ? ", 이전 익명 메시지" : ""}, ${message.created_kst}`} onContextMenu={(event) => openMenu(event, message)}>
                     {!mine ? (continued ? <span className="chat-avatar" aria-hidden="true" /> : <AuthorAvatar userId={message.user_id} src={message.avatar_url} name={message.username} size={32} className="chat-avatar" />) : null}
                     <div className="chat-row-body">
                       {!mine && !continued ? <span className="chat-row-name">{message.username}{legacy ? <small className="chat-legacy">이전 익명</small> : null}</span> : null}
+                      {message.reply_to ? (
+                        <p className="chat-quote"><b>{message.reply_to.username}</b><span>{message.reply_to.excerpt || "내용 없음"}</span></p>
+                      ) : null}
                       <div className="chat-bubble-line">
                         {sticker
                           ? <p className="chat-bubble is-sticker"><img src={sticker.src} alt={`${sticker.label} 스티커`} width="92" height="92" draggable="false" decoding="async" /></p>
                           : message.macros?.length
-                            ? <div className="chat-bubble is-macro">{splitMacroText(message.text, message.macros).map((part, partIndex) => (
+                            ? <div className="chat-bubble is-macro">{splitMacroText(body, message.macros).map((part, partIndex) => (
                                 part.type === "text"
                                   ? <p key={`t-${partIndex}`} className="chat-bubble-text">{part.text}</p>
                                   : <MacroCard key={`m-${part.card.entry_id}-${partIndex}`} card={part.card} onClose={close} />
                               ))}</div>
-                            : <p className="chat-bubble">{message.text}</p>}
+                            : <p className="chat-bubble">{body}</p>}
                         <time className="num">{message.created_kst}</time>
                       </div>
                     </div>
@@ -506,6 +565,13 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
               {STICKERS.map((sticker) => <button key={sticker.id} type="button" className="chat-sticker-tile" onClick={() => sendSticker(sticker.id)} disabled={busy} aria-label={`${sticker.label} 스티커 보내기`}><img src={sticker.src} alt="" width="56" height="56" draggable="false" decoding="async" /><span>{sticker.label}</span></button>)}
             </div>
           ) : null}
+          {member && replyTo ? (
+            <p className="chat-reply-bar">
+              <span className="chat-reply-to"><b>{replyTo.username}</b>에게 답장</span>
+              <span className="chat-reply-excerpt">{stripReplyToken(replyTo.text)}</span>
+              <button type="button" onClick={() => setReplyTo(null)} aria-label="답장 취소">✕</button>
+            </p>
+          ) : null}
           {/* 붙여넣은 매크로 링크 — 보내면 카드로 바뀐다는 걸 미리 알려 준다. */}
           {member && macroIdsInText(text).length ? (
             <p className="chat-macro-hint">매크로 <b className="num">{macroIdsInText(text).length}</b>개를 언급했어요. 보내면 카드로 보여요.</p>
@@ -514,11 +580,44 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
             <form onSubmit={send} className="chat-composer">
               <span className="chat-name-chip chat-member-name" aria-label={`로그인 회원 ${member.username}`}><UserAvatar src={member.avatar_url} name={member.username} size={24} /><span className="chat-member-label">{member.username}</span></span>
               <button type="button" className={`chat-sticker-btn${stickerOpen ? " is-on" : ""}`} onClick={() => setStickerOpen((tray) => !tray)} aria-expanded={stickerOpen} aria-label={stickerOpen ? "스티커 닫기" : "스티커 열기"} title="스티커" disabled={busy}><img src={STICKERS[0].src} alt="" width="22" height="22" draggable="false" decoding="async" /></button>
-              <input ref={inputRef} value={text} aria-label="채팅 메시지" aria-invalid={error ? true : undefined} onChange={(event) => setText(event.target.value)} maxLength={300} placeholder="메시지" className="chat-field" disabled={busy} />
+              <textarea
+                ref={inputRef}
+                value={text}
+                rows={1}
+                aria-label="채팅 메시지"
+                aria-invalid={error ? true : undefined}
+                onChange={(event) => setText(event.target.value)}
+                onKeyDown={(event) => {
+                  // 줄바꿈은 Shift+Enter. Enter 는 보내기(한글 조합 중에는 넘긴다).
+                  if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+                  event.preventDefault();
+                  send(event);
+                }}
+                maxLength={300}
+                placeholder="메시지"
+                className="chat-field"
+                disabled={busy}
+              />
               <button type="submit" className="chat-send" disabled={busy || !text.trim()} aria-label={busy ? "보내는 중" : "전송"}>{busy ? <span className="chat-spinner" aria-hidden="true" /> : <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 13V3M3.5 7.5 8 3l4.5 4.5" /></svg>}</button>
             </form>
           ) : <div className="chat-login-prompt"><span>회원으로 로그인하고 대화에 참여해 보세요.</span><a href="/login?next=%2Fleaderboard">로그인</a></div>}
           {error ? <p className="chat-helper is-error" role="alert">{error}</p> : <span className="chat-composer-gap" aria-hidden="true" />}
+          {/* 메뉴는 body 에 띄운다 — 채팅 시트 안에 두면 시트의 스크롤·변형에 잘린다. */}
+          {menu ? createPortal(
+            <div className="chat-menu" style={{ left: menu.x, top: menu.y }} role="menu" aria-label="메시지 메뉴" onPointerDown={(event) => event.stopPropagation()}>
+              {member ? (
+                <button type="button" role="menuitem" onClick={() => { setReplyTo(menu.message); setMenu(null); inputRef.current?.focus(); }}>답장</button>
+              ) : null}
+              <button type="button" role="menuitem" onClick={() => { copyMessage(menu.message); setMenu(null); }}>
+                {copiedId === menu.message.id ? "복사했어요" : "복사"}
+              </button>
+              {member && menu.message.user_id !== member.id ? (
+                <button type="button" role="menuitem" className="is-danger" onClick={() => { setReporting(menu.message); setMenu(null); }}>신고</button>
+              ) : null}
+            </div>,
+            document.body,
+          ) : null}
+          <ReportDialog open={Boolean(reporting)} targetType="chat" targetId={reporting?.id} label="메시지" onClose={() => setReporting(null)} />
         </section>
       ) : null}
       <button type="button" className={`chat-fab${open ? " is-open" : ""}${unseen ? " has-news" : ""}${dragging ? " is-dragging" : ""}`} onClick={onFabClick} onPointerDown={mobilePlacement ? undefined : onFabPointerDown} onPointerMove={mobilePlacement ? undefined : onFabPointerMove} onPointerUp={mobilePlacement ? undefined : onFabPointerEnd} onPointerCancel={mobilePlacement ? undefined : onFabPointerEnd} title={mobilePlacement ? undefined : "끌어서 옮길 수 있어요"} aria-expanded={open} aria-controls={open ? panelId : undefined} aria-label={open ? "채팅 닫기" : badge ? `채팅 열기, 새 메시지 ${unseen}개` : "채팅 열기"}>

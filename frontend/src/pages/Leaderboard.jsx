@@ -306,6 +306,14 @@ export default function Leaderboard() {
                 <div className={`lb-rank num is-${idx + 1}`} role="cell" aria-label={`${idx + 1}위`}>{idx + 1}</div>
                 <CoinIcon symbol={e.symbol} size={36} className="lb-coin" alt="" />
                 <div className="lb-name" role="cell">
+                  <button
+                    onClick={() => mentionInChat(e)}
+                    className={"lb-mention" + (mentioned === e.id ? " is-on" : "")}
+                    title="채팅에 붙여넣을 매크로 링크 복사"
+                    aria-label="채팅에 붙여넣을 매크로 링크 복사"
+                  >
+                    {mentioned === e.id ? <span className="lb-mention-done">복사</span> : <ChatMentionIcon />}
+                  </button>
                   <div className="lb-name-line">
                     <span className="lb-mobile-symbol num">
                       <strong>{e.symbol.replace(/USDT$/, "")}</strong>
@@ -356,14 +364,6 @@ export default function Leaderboard() {
                   </button>
                   </div>
                   <div className="lb-command-actions" role="group" aria-label="매크로 이용">
-                  <button
-                    onClick={() => mentionInChat(e)}
-                    className={"lb-icon-btn" + (mentioned === e.id ? " is-on" : "")}
-                    title="채팅에 붙여넣을 매크로 링크 복사"
-                    aria-label="채팅에 붙여넣을 매크로 링크 복사"
-                  >
-                    {mentioned === e.id ? <span className="lb-mention-done">복사</span> : <ChatMentionIcon />}
-                  </button>
                   {e.locked ? (
                     <button
                       onClick={() => unlock(e)}

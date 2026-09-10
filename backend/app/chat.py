@@ -22,6 +22,9 @@ _RATE_WINDOW = 10.0
 # 화면에는 매크로 카드로 그린다(스티커의 [sticker:id] 와 같은 방식).
 MACRO_TOKEN = re.compile(r"\[macro:(\d{1,9})\]")
 _MAX_MACRO_CARDS = 3
+# 답장 — 본문 맨 앞의 [reply:id]. 화면은 인용 줄로 그리고 본문에서는 뺀다.
+REPLY_TOKEN = re.compile(r"^\[reply:(\d{1,12})\]\s*")
+_REPLY_EXCERPT = 60
 
 
 class RateLimited(Exception):
@@ -85,7 +88,7 @@ def add_message(account: User, text: str) -> dict:
         db.commit()
         db.refresh(row)
         return _view(row, avatars.avatar_url(row.user_id, db=db),
-                     _macro_cards(db, [row.text], int(account.id)))
+                     _macro_cards(db, [row.text], int(account.id)), _reply_cards(db, [row.text]))
 
 
 def _member_seen_id(user_id: int) -> int:
@@ -145,9 +148,10 @@ def list_messages(
         rows = db.exec(query.order_by(ChatMessage.id.desc()).limit(MAX_LIST + 1)).all()
         has_more = len(rows) > MAX_LIST
         page = list(reversed(rows[:MAX_LIST]))
-        cards = _macro_cards(db, [row.text for row, _version in page],
-                             int(account.id) if account is not None else None)
-        items = [_view(row, avatars.public_url(row.user_id, version), cards)
+        texts = [row.text for row, _version in page]
+        cards = _macro_cards(db, texts, int(account.id) if account is not None else None)
+        replies = _reply_cards(db, texts)
+        items = [_view(row, avatars.public_url(row.user_id, version), cards, replies)
                  for row, version in page]
         unseen_count = 0
         if effective_seen is not None:
@@ -202,7 +206,32 @@ def _macro_cards(db, texts: list[str], viewer_user_id: int | None) -> dict[int, 
     return cards
 
 
-def _view(row: ChatMessage, avatar_url: str | None = None, cards: dict[int, dict] | None = None) -> dict:
+def _reply_cards(db, texts: list[str]) -> dict[int, dict]:
+    """본문 맨 앞 [reply:id] 가 가리키는 메시지들 — 인용 줄에 쓸 글쓴이와 발췌."""
+    ids: list[int] = []
+    for text in texts:
+        match = REPLY_TOKEN.match(text or "")
+        if match:
+            target = int(match.group(1))
+            if target not in ids:
+                ids.append(target)
+    if not ids:
+        return {}
+    rows = db.exec(select(ChatMessage).where(ChatMessage.id.in_(ids))).all()
+    cards = {}
+    for row in rows:
+        body = MACRO_TOKEN.sub("[매크로]", REPLY_TOKEN.sub("", row.text or "")).strip()
+        cards[row.id] = {
+            "id": row.id,
+            "username": row.username,
+            "excerpt": body[:_REPLY_EXCERPT] + ("…" if len(body) > _REPLY_EXCERPT else ""),
+        }
+    return cards
+
+
+def _view(row: ChatMessage, avatar_url: str | None = None, cards: dict[int, dict] | None = None,
+          replies: dict[int, dict] | None = None) -> dict:
+    reply_match = REPLY_TOKEN.match(row.text or "")
     mentioned = []
     if cards:
         for found in MACRO_TOKEN.findall(row.text or ""):
@@ -215,6 +244,8 @@ def _view(row: ChatMessage, avatar_url: str | None = None, cards: dict[int, dict
         "username": row.username,
         "avatar_url": avatar_url,
         "text": row.text,
+        # 답장이면 인용할 원 메시지. 지워졌거나 못 찾으면 None(본문만 보인다).
+        "reply_to": (replies or {}).get(int(reply_match.group(1))) if reply_match else None,
         # 언급된 매크로 — 화면이 [macro:id] 자리에 이 카드를 그린다. 없으면 빈 목록.
         "macros": mentioned[:_MAX_MACRO_CARDS],
         "created_kst": _kst_hhmm(row.created_ms),

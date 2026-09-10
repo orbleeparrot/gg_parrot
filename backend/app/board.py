@@ -28,7 +28,7 @@ from sqlmodel import select
 
 from . import avatars
 from .moderation import require_clean_text
-from .db import BoardComment, BoardImage, BoardPost, BoardPostVote, BoardReport, User, UserAvatar, get_session
+from .db import BoardComment, BoardImage, BoardPost, BoardPostVote, BoardReport, ChatMessage, User, UserAvatar, get_session
 
 MAX_TITLE = 120
 MAX_BODY = 5000
@@ -780,18 +780,27 @@ class AlreadyReported(Exception):
     pass
 
 
+# 신고 대상 → (모델, 글쓴이 열). 채팅 메시지의 글쓴이는 ChatMessage.user_id 다.
+_REPORT_TARGETS = {
+    "post": (BoardPost, "author_user_id"),
+    "comment": (BoardComment, "author_user_id"),
+    "chat": (ChatMessage, "user_id"),
+}
+
+
 def report(target_type: str, target_id: int, user: User, reason: str, detail: str = "", db=None) -> dict:
-    """글·댓글 신고 — 계정당 대상 하나에 한 번, 내 것은 신고 못 한다."""
-    if target_type not in {"post", "comment"}:
+    """글·댓글·채팅 신고 — 계정당 대상 하나에 한 번, 내 것은 신고 못 한다."""
+    target_spec = _REPORT_TARGETS.get(target_type)
+    if target_spec is None:
         raise ValueError("신고 대상이 올바르지 않아요.")
     if reason not in REPORT_REASONS:
         raise ValueError("신고 사유를 골라 주세요.")
+    model, owner_field = target_spec
     with (nullcontext(db) if db is not None else get_session()) as db:
-        model = BoardPost if target_type == "post" else BoardComment
-        target = db.exec(select(model.id, model.author_user_id).where(model.id == target_id)).first()
+        target = db.exec(select(model.id, getattr(model, owner_field)).where(model.id == target_id)).first()
         if target is None:
             raise LookupError("신고할 글을 찾을 수 없어요.")
-        if target.author_user_id == user.id:
+        if target[1] == user.id:
             raise ValueError("내가 쓴 글은 신고할 수 없어요.")
         dup = db.exec(select(BoardReport).where(
             BoardReport.target_type == target_type, BoardReport.target_id == target_id, BoardReport.reporter_user_id == user.id,

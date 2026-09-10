@@ -1241,7 +1241,7 @@ class ReportIn(BaseModel):
 
 @app.post("/api/board/reports")
 def board_report(req: ReportIn, user: User = Depends(auth_mod.current_user_in_session), db: Session = Depends(request_session)) -> dict:
-    """글·댓글 신고 — 로그인 계정당 대상 하나에 한 번."""
+    """글·댓글·채팅 신고 — 로그인 계정당 대상 하나에 한 번."""
     try:
         return board_mod.report(req.target_type, req.target_id, user, req.reason, req.detail, db=db)
     except board_mod.AlreadyReported as exc:

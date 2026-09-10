@@ -1,6 +1,14 @@
 [
   {
     "date": "2026-09-10",
+    "scope": "profile-and-settings",
+    "macrostructure": "portrait rail + grouped activity workspace; dedicated settings",
+    "theme": "GGparrot tokens with user-authorized profile surfaces",
+    "enrichment": "none",
+    "brief": "사용자 제공 프로필 화면을 기준으로 신원/작업 공간·카드·활동 분류·편집과 보안 진입을 전면 재설계"
+  },
+  {
+    "date": "2026-09-10",
     "scope": "page",
     "macrostructure": "portrait + identity group + activity index",
     "theme": "DESIGN.md locked",

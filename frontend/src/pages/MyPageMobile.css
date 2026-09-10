@@ -1,77 +1,89 @@
-/* Compact profile: identity, useful totals, then the selected activity. */
+@media (min-width: 1100px) and (max-width: 1279px) {
+  .me-page { grid-template-columns: 208px minmax(0, 1fr); gap: 24px; }
+  .me-identity { padding-inline: 16px; }
+  .me-stat { padding-inline: 16px; }
+  .me-stat dd { font-size: 23px; }
+  .me-macro-card { padding: 16px; }
+}
 @media (max-width: 1099px) {
-  .me-head { gap: 16px; padding-block: 4px 16px; }
-  .me-profile { grid-template-columns: 72px minmax(0, 1fr); gap: 8px 16px; }
-  .me-profile > .me-avatar-edit, .me-profile > .me-skeleton.is-avatar { grid-row: 1 / span 2; }
-  .me-avatar { width: 72px; height: 72px; font-size: 30px; }
-  .me-avatar-camera { width: 24px; height: 24px; }
-  .me-id { display: contents; }
-  .me-name-row { grid-column: 2; grid-row: 1; gap: 0 8px; align-self: end; }
-  .me-name { font-size: 26px; line-height: 1.25; }
-  .me-meta { grid-column: 2; grid-row: 2; font-size: 12px; }
-  .me-bio { grid-column: 1 / -1; margin: 4px 0; font-size: 14px; line-height: 1.6; }
-  .me-head-actions { grid-column: 1 / -1; gap: 8px; padding: 4px 0 0; }
-  .me-head-actions .btn { min-height: 44px; padding-inline: 12px; font-size: 13px; border-block: 4px solid transparent; background-clip: padding-box; }
-  .me-tier-toggle { min-height: 44px; font-size: 12px; }
-  .me-tier-toggle .me-tier-icon { width: 20px; height: 20px; }
-  .me-tier { margin-left: 0; }
-  .me-tier-list { gap: 8px; }
-  .me-tier-list li { font-size: 12px; }
-  .me-profile > .me-stats { grid-column: 1 / -1; }
-  .me-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; padding-top: 8px; }
-  .me-stat { gap: 4px; }
-  .me-stat dt { font-size: 12px; }
-  .me-stat dd { font-size: 20px; line-height: 1.25; }
-  .me-stats.has-long-values { grid-template-columns: minmax(0, 1fr); gap: 4px; }
-  .me-stats.has-long-values .me-stat { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; min-height: 32px; }
-  .me-account-settings .me-account { display: grid; gap: 12px; padding-block: 8px 20px; }
-  .me-account-id { display: grid; gap: 4px; font-size: 14px; }
-  .me-account-id h2 { font-size: 15px; margin-bottom: 4px; }
-  .me-account-actions { gap: 8px; }
-  .me-account-actions > button { min-height: 44px; font-size: 13px; }
-  .me-account-actions > .me-delete-account { margin-left: auto; }
-  .me-tabs { padding: 0; }
-  .me-tab-list { gap: 24px; }
-  .me-tab { flex: none; min-height: 44px; gap: 6px; font-size: 14px; }
-  .me-panel { min-height: 180px; padding-top: 0; }
-  .me-panel-actions { margin: 4px 0 0; }
-  .me-create-link { min-height: 44px; }
-  .me-mobile-label { display: block; color: rgb(var(--c-slate-500)); font-family: var(--me-font-body); font-size: 12px; line-height: 1.4; font-weight: 500; }
-  .me-activity-value, .me-row-date { display: grid; gap: 4px; min-width: 0; }
-  .me-table .me-row.me-table-head { display: none; }
-  .me-row { display: grid; align-items: center; gap: 12px; padding: 16px 0; min-height: 0; }
-  .me-table.is-created .me-row, .me-table.is-purchased .me-row { grid-template-columns: 36px minmax(0, 1fr) auto; grid-template-areas: "icon main main" "details details action"; }
-  .me-row > .coin-icon { grid-area: icon; order: initial; align-self: start; }
-  .me-row > .me-main { grid-area: main; order: initial; }
-  .me-row-details { grid-area: details; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; min-width: 0; }
-  .me-row-details .me-activity-value { display: flex; align-items: baseline; gap: 4px; font-size: 13px; }
-  .me-row-details .me-row-date { flex-basis: 100%; display: flex; align-items: baseline; gap: 4px; font-size: 12px; }
-  .me-row > .btn { grid-area: action; align-self: end; margin: 0; min-height: 44px; padding: 0 10px; font-size: 12px; white-space: nowrap; border-block: 4px solid transparent; background-clip: padding-box; }
-  .me-title { font-size: 15px; }
-  .me-sub { font-size: 14px; line-height: 1.5; white-space: normal; overflow-wrap: anywhere; }
-  .me-cell { font-size: 15px; }
-  .me-row .is-right { text-align: left; }
-  .me-row-date { grid-area: date; font-size: 12px; white-space: normal; }
-  .me-row-earned, .me-row-change, .me-row-balance { text-align: right; }
-  .me-table.is-sales .me-row { grid-template-columns: minmax(0, 1fr) max-content; grid-template-areas: "main earned" "date earned"; gap: 8px 16px; }
-  .me-table.is-ledger .me-row { grid-template-columns: minmax(0, 1fr) max-content; grid-template-areas: "main change" "date balance"; gap: 8px 16px; }
-  .me-table .me-row > .me-text { grid-area: main; order: initial; overflow-wrap: anywhere; }
-  .me-table.is-sales .me-row-earned { grid-area: earned; }
-  .me-row-change { grid-area: change; }
-  .me-row-balance { grid-area: balance; display: flex; align-items: baseline; justify-content: flex-end; gap: 5px; font-size: 12px; }
-  .me-table.is-sales .me-row-earned .me-mobile-label, .me-row-change .me-mobile-label { display: none; }
-  .me-posts .board-head { display: none; }
-  .me-posts .board-row { grid-template-columns: minmax(0, 1fr); grid-template-areas: "title" "time"; gap: 8px; padding-block: 14px; }
-  .me-posts .board-no { display: none; }
-  .me-posts .board-title { padding: 0; }
-  .me-posts .board-title-text { white-space: normal; line-height: 1.5; }
-  .me-posts .board-time { text-align: left; font-size: 12px; }
-  .me-skeleton { max-width: 100%; }
-  .me-skeleton.is-avatar { width: 72px; height: 72px; }
+  .me-page { grid-template-columns: minmax(0, 1fr); gap: 24px; max-width: 780px; }
+  .me-profile-rail { position: static; }
+  .me-identity { padding: 24px 24px 16px; }
+  .me-avatar, .me-skeleton.is-avatar { width: 104px; height: 104px; }
+  .me-avatar { font-size: 40px; }
+  .me-name { margin-top: 12px; font-size: 28px; }
+  .me-tier-toggle { min-height: 36px; }
+  .me-bio { margin-top: 12px; max-width: 54ch; }
+  .me-edit-link { margin-top: 4px; min-height: 44px; }
+  .me-joined { margin-top: 4px; padding-top: 12px; }
+  .me-content { gap: 20px; }
+  .me-stat { padding-inline: 20px; }
+  .me-stat dd { font-size: 24px; }
+  .me-workspace-heading { margin-bottom: 16px; }
+  .me-create-link { min-height: 44px; border-block: 4px solid transparent; background-clip: padding-box; }
+  .me-card-action { min-height: 44px; }
+  .me-filters button { min-height: 40px; }
+}
+@media (max-width: 599px) {
+  .me-page { gap: 16px; }
+  .me-identity { padding: 20px 20px 12px; border-radius: 16px; }
+  .me-avatar, .me-skeleton.is-avatar { width: 88px; height: 88px; }
+  .me-avatar { font-size: 34px; border-width: 3px; }
+  .me-name-line { flex-direction: row; flex-wrap: wrap; justify-content: center; gap: 6px 10px; margin-top: 12px; }
+  .me-name { font-size: 26px; margin: 0; }
+  .me-tier-toggle { min-height: 32px; font-size: 12px; }
+  .me-bio { margin-top: 10px; font-size: 13px; line-height: 1.55; }
+  .me-identity-footer { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 0 16px; margin-top: 6px; }
+  .me-edit-link { margin-top: 0; font-size: 12px; }
+  .me-joined { width: auto; border: 0; font-size: 10px; margin: 0; padding: 0; }
+  .me-content { gap: 18px; }
+  .me-stats { padding-block: 18px; border-radius: 14px; }
+  .me-stat { gap: 6px; padding-inline: 12px; grid-template-rows: 18px auto; }
+  .me-stat dt { justify-content: center; gap: 0; font-size: 11px; }
+  .me-stat dt svg { display: none; }
+  .me-stat dd { text-align: center; font-size: 20px; }
+  .me-stat-link { inset: -10px 2px; }
+  .me-stats.has-long-values { gap: 14px; padding-block: 16px; }
+  .me-stats.has-long-values .me-stat { padding-inline: 20px; }
+  .me-stats.has-long-values .me-stat dd { font-size: 22px; }
+  .me-section-nav { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  .me-section-nav button { min-height: 44px; padding-bottom: 10px; gap: 6px; font-size: 14px; }
+  .me-section-nav button svg { width: 20px; height: 20px; }
+  .me-workspace-heading { gap: 8px; margin-bottom: 12px; }
+  .me-workspace-heading h2 { font-size: 21px; }
+  .me-create-link { font-size: 12px; padding-inline: 10px; }
+  .me-filters { display: flex; margin-bottom: 16px; }
+  .me-filters button { flex: 1; min-width: 0; gap: 6px; padding-inline: 8px; font-size: 13px; }
+  .me-workspace.is-macros { display: grid; grid-template-columns: minmax(0, 1fr) 44px; align-items: start; column-gap: 8px; }
+  .me-workspace.is-macros .me-workspace-heading { display: contents; }
+  .me-workspace:is(.is-macros, .is-points) .me-workspace-heading h2 { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .me-workspace.is-points .me-workspace-heading { margin: 0; }
+  .me-workspace.is-macros .me-create-link { grid-column: 2; grid-row: 1; min-height: 48px; padding: 0; border-block-width: 6px; }
+  .me-workspace.is-macros .me-create-link span { display: none; }
+  .me-workspace.is-macros .me-create-link svg { width: 22px; height: 22px; }
+  .me-workspace.is-macros .me-filters { grid-column: 1; grid-row: 1; }
+  .me-workspace.is-macros .me-panel { grid-column: 1 / -1; }
+  .me-macro-grid { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  .me-macro-card { padding: 18px; }
+  .me-macro-heading h3 { font-size: 17px; }
+  .me-macro-description { margin: 16px 0 20px; font-size: 14px; }
+  .me-macro-metrics { padding-block: 12px; }
+  .me-card-action { position: relative; min-height: 44px; padding-inline: 10px; border: 0; font-size: 12px; }
+  .me-card-action::before { position: absolute; inset: 4px 0; border: 1px solid rgb(var(--c-slate-300)); border-radius: 8px; content: ""; pointer-events: none; }
+  .me-transaction { grid-template-columns: minmax(0, 1fr) auto; gap: 12px; padding-block: 18px; }
+  .me-transaction-icon { display: none; }
+  .me-transaction-main p { font-size: 14px; }
+  .me-transaction-main > div { font-size: 11px; }
+  .me-transaction-amount strong { font-size: 14px; }
+  .me-transaction-amount > span { font-size: 10px; }
+  .me-post-title h3 { font-size: 15px; }
+  .me-post > a { padding-block: 16px; }
+  .me-empty { min-height: 200px; }
 }
 @media (max-width: 359px) {
-  .me-name { font-size: 24px; }
-  .me-stat dd { font-size: 19px; }
-  .me-stats.has-long-values .me-stat dd { font-size: 22px; }
-  .me-tier-list { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .me-stat { padding-inline: 8px; }
+  .me-stat dd { font-size: 18px; }
+  .me-section-nav { gap: 8px; }
+  .me-section-nav button { gap: 5px; font-size: 13px; }
+  .me-section-nav button svg { width: 18px; height: 18px; }
 }

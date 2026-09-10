@@ -28,6 +28,7 @@ SUMMARY = "RSI가 낮아지면 분할 매수하고, 목표 수익에 도달하�
 AT = "2026-09-10T01:30:00Z"
 AT_MS = 1789003800000
 TABS = {"created": "만든 매크로", "purchased": "구매한 매크로", "sales": "판매 내역", "ledger": "포인트 내역", "posts": "게시글"}
+SECTIONS = {"매크로": ("created", "purchased"), "포인트·판매": ("sales", "ledger"), "게시글": ("posts",)}
 MACRO = {"symbol": "BTCUSDT", "position_side": "long", "rule_type": "E", "candle_interval": "1d", "params": {"activation_profit": 5, "trail_percent": 3, "initial_capital": 1000}, "risk": {"invest_ratio": 1}}
 
 
@@ -74,42 +75,65 @@ class FilledFixtures(profile.Fixtures):
         return data
 
 
-def assert_selected_tab_visible(page):
-    page.wait_for_function("""() => {
-      const list = document.querySelector('[role="tablist"][aria-label="내 활동 종류"]');
-      const selected = list?.querySelector('[role="tab"][aria-selected="true"]');
-      if (!selected) return false;
-      const row = list.getBoundingClientRect(), tab = selected.getBoundingClientRect();
-      return tab.width > 0 && tab.left >= Math.max(0, row.left) - 1
-        && tab.right <= Math.min(innerWidth, row.right) + 1;
-    }""")
+def section_button(page, name):
+    return page.get_by_role("navigation", name="프로필 메뉴").get_by_role("button", name=name, exact=True)
 
 
-def assert_tab_overflow_control(page):
+def assert_activity(page, key):
+    section = next(label for label, keys in SECTIONS.items() if key in keys)
+    for label in SECTIONS:
+        expect(section_button(page, label)).to_have_attribute("aria-pressed", "true" if label == section else "false")
+    panel = page.locator(".me-panel")
+    expect(panel).to_be_visible()
     tabs = page.get_by_role("tablist", name="내 활동 종류")
-    metrics = tabs.evaluate("""el => ({
-      overflows: el.scrollWidth > el.clientWidth + 1,
-      atEnd: el.scrollLeft + el.clientWidth >= el.scrollWidth - 1
-    })""")
-    control = page.get_by_role("button", name="다음 활동 보기", exact=True)
-    if not metrics["overflows"]:
-        expect(control).not_to_be_visible()
+    if key == "posts":
+        expect(tabs).to_have_count(0)
+        expect(panel).to_have_attribute("role", "region")
+        expect(panel).to_have_attribute("aria-labelledby", "me-workspace-title")
     else:
-        expect(control).to_be_visible()
-        if metrics["atEnd"]: expect(control).to_be_disabled()
-        else: expect(control).to_be_enabled()
+        expect(tabs).to_be_visible()
+        expect(tabs.get_by_role("tab")).to_have_count(2)
+        selected = tabs.get_by_role("tab", name=re.compile(TABS[key]))
+        expect(selected).to_have_attribute("aria-selected", "true")
+        expect(selected).to_have_attribute("tabindex", "0")
+        expect(tabs.locator('[role="tab"][tabindex="0"]')).to_have_count(1)
+        expect(tabs.locator('[role="tab"][aria-selected="false"][tabindex="-1"]')).to_have_count(1)
+        expect(panel).to_have_attribute("role", "tabpanel")
+        expect(panel).to_have_attribute("aria-labelledby", f"me-tab-{key}")
+        for tab_key in SECTIONS[section]:
+            expect(tabs.get_by_role("tab", name=re.compile(TABS[tab_key]))).to_contain_text("2")
+    create = page.locator(".me-create-link")
+    if section == "매크로":
+        expect(create).to_have_count(1)
+        expect(create).to_be_visible()
+        expect(create).to_have_attribute("href", "/builder")
+        expect(create).to_have_attribute("aria-label", "매크로 만들기")
+        expect(create).to_have_text("매크로 만들기")
+        if page.viewport_size["width"] < 600:
+            button = create.bounding_box()
+            assert button["width"] >= 44 and button["height"] >= 44, button
+    elif section == "게시글":
+        expect(create).to_have_count(1)
+        expect(create).to_have_text("글쓰기")
+        expect(create).to_have_attribute("href", "/board/write")
+    else:
+        expect(create).to_have_count(0)
+    if key == "created": expect(page).to_have_url(re.compile(r"/mypage(?:\?tab=created)?$"))
+    else: expect(page).to_have_url(re.compile(rf"/mypage\?tab={key}$"))
 
 
-def assert_no_overflow(page):
-    assert_selected_tab_visible(page)
-    result = page.locator(".me-page").evaluate("""root => {
+def select_activity(page, key):
+    section = next(label for label, keys in SECTIONS.items() if key in keys)
+    section_button(page, section).click()
+    if key != "posts":
+        page.get_by_role("tablist", name="내 활동 종류").get_by_role("tab", name=re.compile(TABS[key])).click()
+    assert_activity(page, key)
+
+
+def assert_no_overflow(page, root=".me-page"):
+    result = page.locator(root).evaluate("""root => {
       const outside = [...root.querySelectorAll('*')].filter(el => {
         if (!el.checkVisibility() || el.classList.contains('sr-only')) return false;
-        // Inactive tabs may be intentionally clipped inside the horizontal strip.
-        // The strip and document themselves must fit; the selected tab is checked above.
-        const tab = el.closest('[role="tab"][aria-selected="false"]');
-        const list = tab?.closest('[role="tablist"][aria-label="내 활동 종류"]');
-        if (list && ['auto', 'scroll'].includes(getComputedStyle(list).overflowX)) return false;
         const rect = el.getBoundingClientRect();
         return rect.width > 0 && (rect.left < -1 || rect.right > innerWidth + 1);
       }).map(el => ({tag:el.tagName, cls:el.className, text:el.textContent.slice(0,80)}));
@@ -125,6 +149,7 @@ def assert_stats(page, stacked=False):
         left:label.getBoundingClientRect().left, right:value.getBoundingClientRect().right,
         font:getComputedStyle(value).fontSize, family:getComputedStyle(value).fontFamily};
     })""")
+    assert len(metrics) == 3, metrics
     assert len({(x["font"], x["family"]) for x in metrics}) == 1, metrics
     for field in (["left", "right"] if stacked else ["label", "value"]):
         assert max(x[field] for x in metrics) - min(x[field] for x in metrics) < 1, metrics
@@ -134,23 +159,62 @@ def assert_stats(page, stacked=False):
     }""")
 
 
-def assert_account_state(page, opened):
-    toggle = page.get_by_role("button", name="계정 설정", exact=True)
-    settings = page.locator("#me-account-settings")
-    expect(toggle).to_have_attribute("aria-controls", "me-account-settings")
-    expect(toggle).to_have_attribute("aria-expanded", "true" if opened else "false")
-    if opened:
-        expect(settings).to_be_visible()
-        expect(page.get_by_role("button", name="로그아웃", exact=True)).to_be_visible()
+def assert_profile_layout(page, width):
+    rail = page.locator(".me-profile-rail").bounding_box()
+    content = page.locator(".me-content").bounding_box()
+    photo = page.locator(".me-avatar").bounding_box()
+    name = page.locator(".me-name").bounding_box()
+    if width >= 1100:
+        assert rail["x"] + rail["width"] <= content["x"], (rail, content)
     else:
-        expect(settings).not_to_be_visible()
-        expect(page.get_by_role("button", name="로그아웃", exact=True)).not_to_be_visible()
+        assert abs(photo["x"] + photo["width"] / 2 - width / 2) < 1, photo
+        assert photo["y"] + photo["height"] <= name["y"] + 1, (photo, name)
+        assert content["y"] >= rail["y"] + rail["height"] - 1, (rail, content)
+    expect(page.get_by_role("button", name="프로필 편집", exact=True)).to_have_count(0)
+    expect(page.get_by_role("button", name="계정 설정", exact=True)).to_have_count(0)
+    expect(page.get_by_role("link", name="프로필 편집", exact=True)).to_have_attribute("href", "/mypage/settings")
+    expect(page.get_by_role("link", name="프로필 설정", exact=True)).to_have_attribute("href", "/mypage/settings?tab=security")
+    expect(page.get_by_role("link", name="프로필 사진 변경", exact=True)).to_have_attribute("href", "/mypage/settings")
+
+
+def assert_filled_rows(page, key, width):
+    if key in ("created", "purchased"):
+        cards = page.locator(".me-macro-card")
+        expect(cards).to_have_count(2)
+        expect(cards.first.locator(".me-macro-description")).to_have_text(SUMMARY)
+        expect(cards.first.get_by_role("button")).to_be_enabled()
+        expect(cards.last.get_by_role("button")).to_be_disabled()
+        first, last = cards.first.bounding_box(), cards.last.bounding_box()
+        assert abs(first["width"] - last["width"]) < 1, (first, last)
+        if width < 600:
+            assert abs(first["x"] - last["x"]) < 1 and last["y"] >= first["y"] + first["height"], (first, last)
+        elif width >= 1440:
+            assert abs(first["y"] - last["y"]) < 1 and last["x"] >= first["x"] + first["width"], (first, last)
+        if key == "created":
+            expect(cards.first).to_contain_text("8건")
+            expect(cards.first).to_contain_text("5,600P")
+        else:
+            expect(cards.first).to_contain_text("추세를기록하는매크로연구자")
+            expect(cards.first).to_contain_text("1,000P")
+    elif key == "posts":
+        rows = page.locator(".me-posts > .me-post")
+        expect(rows).to_have_count(2)
+        expect(rows.first.get_by_role("link")).to_have_attribute("href", "/board/13")
+        expect(rows.first.get_by_role("link")).to_have_attribute("aria-label", re.compile("댓글 12개.*사진 첨부"))
+    else:
+        rows = page.locator(".me-transactions > .me-transaction")
+        expect(rows).to_have_count(2)
+        if key == "ledger":
+            expect(rows.first).to_contain_text("12,500P")
+            expect(rows.last).to_contain_text("−1,000P")
+        else:
+            expect(rows.first).to_contain_text("매일꾸준하게기록하는초보투자자")
+            expect(rows.first).to_contain_text("700P")
 
 
 def main():
     if not (profile.BUILD / "index.html").is_file(): raise SystemExit(f"Build missing: {profile.BUILD}")
     OUTPUT.mkdir(parents=True, exist_ok=True)
-    # Reuse the existing suite's screenshot/report helpers in this test's output directory.
     profile.OUTPUT = OUTPUT
     server = ThreadingHTTPServer(("127.0.0.1", 0), partial(profile.Handler, directory=str(profile.BUILD)))
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -165,71 +229,34 @@ def main():
                     fixture = FilledFixtures(); context, page = suite.open(fixture, width, theme)
                     page.set_viewport_size({"width": width, "height": height})
                     page.evaluate("document.fonts.ready")
-                    compact = width < 1100
-                    expect(page.get_by_role("combobox", name="내 활동 종류")).to_have_count(0)
-                    tabs = page.get_by_role("tablist", name="내 활동 종류")
-                    expect(tabs).to_be_visible()
-                    expect(tabs.get_by_role("tab")).to_have_count(5)
-                    assert_account_state(page, False)
+                    assert_profile_layout(page, width)
                     assert_stats(page)
-                    for key, label in TABS.items():
-                        current = tabs.get_by_role("tab", name=re.compile(label))
-                        expect(current).to_contain_text("2")
-                        current.click()
-                        expect(current).to_have_attribute("aria-selected", "true")
-                        expect(current).to_have_attribute("tabindex", "0")
-                        expect(page.locator(".me-panel")).to_have_attribute("role", "tabpanel")
-                        expect(page.locator(".me-panel")).to_have_attribute("aria-labelledby", f"me-tab-{key}")
-                        create_link = page.locator(".me-create-link")
-                        if key == "created":
-                            expect(create_link).to_have_count(1)
-                            expect(create_link).to_be_visible()
-                            expect(create_link).to_have_text("매크로 만들기")
-                            expect(create_link).to_have_attribute("href", "/builder")
-                        else:
-                            expect(create_link).to_have_count(0)
-                        if key != "created": expect(page).to_have_url(re.compile(rf"\?tab={key}$"))
-                        rows = page.locator(".me-posts .board-item" if key == "posts" else ".me-table .me-row:not(.me-table-head)")
-                        expect(rows).to_have_count(2)
-                        if key in ("created", "purchased"):
-                            buttons = rows.get_by_role("button")
-                            expect(buttons.first).to_be_enabled(); expect(buttons.last).to_be_disabled()
-                            if compact:
-                                assert buttons.first.bounding_box()["height"] >= 44
-                                expect(rows.first.get_by_text("판매" if key == "created" else "구매 금액", exact=True)).to_be_visible()
-                            else:
-                                # Separate list-row grids must share their header's columns.
-                                columns = [".coin-icon", ".me-main"] + ([".me-row-sales", ".me-row-earned"] if key == "created" else [".me-row-price"]) + [".me-row-date", "button"]
-                                alignment = page.locator(".me-table").evaluate("""(el, selectors) => {
-                                  const head=[...el.querySelector('.me-table-head').children];
-                                  const data=el.querySelector('.me-row:not(.me-table-head)');
-                                  const row=selectors.map(selector=>data.querySelector(selector));
-                                  return head.map((cell,i)=>Math.abs(cell.getBoundingClientRect().right-row[i].getBoundingClientRect().right));
-                                }""", columns)
-                                assert max(alignment[:-1]) < 1, alignment
-                        if key == "ledger" and compact:
-                            expect(rows.first.get_by_text("잔액", exact=True)).to_be_visible()
-                            expect(rows.last).to_contain_text("−1,000P")
-                        if key == "posts":
-                            expect(rows.first.get_by_role("link")).to_have_attribute("href", "/board/13")
-                            expect(rows.first.get_by_role("link")).to_have_attribute("aria-label", re.compile("댓글 12개.*사진 첨부"))
+                    if width == 390:
+                        bronze = page.locator(".me-tier-toggle .me-tier-icon.is-bronze").evaluate("el => getComputedStyle(el).color")
+                        page.locator(".me-tier-toggle").click()
+                        tier = page.get_by_role("dialog", name="판매 등급", exact=True)
+                        expect(tier).to_be_visible()
+                        assert tier.locator(".me-tier-icon.is-bronze").evaluate("el => getComputedStyle(el).color") == bronze
+                        page.keyboard.press("Escape")
+                        expect(tier).not_to_be_visible()
+                    for key in TABS:
+                        select_activity(page, key)
+                        assert_filled_rows(page, key, width)
                         assert_no_overflow(page)
-                        assert_tab_overflow_control(page)
                         suite.screenshot(page, f"{key}-{width}-{theme}")
                     page.reload(wait_until="domcontentloaded")
-                    expect(page.locator(".me-posts .board-item")).to_have_count(2)
-                    expect(tabs.get_by_role("tab", name=re.compile(TABS["posts"]))).to_have_attribute("aria-selected", "true")
-                    assert_selected_tab_visible(page)
+                    expect(page.locator(".me-posts > .me-post")).to_have_count(2)
+                    assert_activity(page, "posts")
                     profile.open_account(page)
-                    assert_account_state(page, True)
+                    expect(page.get_by_text("parrot@example.com", exact=True)).to_be_visible()
                     expect(page.get_by_role("button", name="비밀번호 변경", exact=True)).to_be_visible()
                     page.get_by_role("button", name="비밀번호 변경", exact=True).click()
                     expect(page.get_by_role("dialog", name="비밀번호 변경")).to_be_visible(); page.keyboard.press("Escape")
                     page.get_by_role("button", name="회원 탈퇴", exact=True).click()
                     expect(page.get_by_role("dialog", name="회원 탈퇴")).to_be_visible(); page.keyboard.press("Escape")
-                    assert_no_overflow(page)
+                    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
                     suite.screenshot(page, f"account-{width}-{theme}")
-                    suite.record(f"filled-all-activities-account-{width}-{theme}", fixture); context.close()
+                    suite.record(f"workspace-activities-and-settings-{width}-{theme}", fixture); context.close()
 
             for points in (999999, 1000000, 2147483647):
                 fixture = FilledFixtures(); fixture.users["fixture-a"].update({"username": "매크로를연구하는이십글자이름입니다확인중", "points_balance": points, "bio": ""})
@@ -240,111 +267,40 @@ def main():
                 expect(page.locator(".me-bio")).to_have_count(0)
                 expect(page.locator(".me-stats")).to_contain_text(f"{points:,}P")
                 expect(page.locator(".me-stats")).to_contain_text("12345건")
-                expect(page.get_by_role("button", name="프로필 편집", exact=True)).to_be_visible()
+                assert_profile_layout(page, 320)
                 suite.screenshot(page, f"large-values-{points}-320")
                 suite.record(f"long-name-large-values-{points}", fixture); context.close()
 
-            fixture = FilledFixtures(); context, page = suite.open(fixture, 1099)
-            toggle = page.get_by_role("button", name="계정 설정", exact=True)
-            for open_state in (False, True):
-                if open_state:
-                    toggle.focus(); page.keyboard.press("Enter")
-                    expect(toggle).to_be_focused()
-                assert_account_state(page, open_state)
-                page.set_viewport_size({"width":1440,"height":900})
-                assert_account_state(page, open_state)
-                page.set_viewport_size({"width":390,"height":844})
-                assert_account_state(page, open_state)
-            toggle.press("Space"); assert_account_state(page, False)
+            for width in (390, 768, 1440):
+                fixture = FilledFixtures(); context, page = suite.open(fixture, width)
+                for key in TABS:
+                    page.goto(suite.origin + f"/mypage?tab={key}", wait_until="domcontentloaded")
+                    assert_activity(page, key)
+                    assert_filled_rows(page, key, width)
+                    assert_no_overflow(page)
+                for section, keys in list(SECTIONS.items())[:2]:
+                    select_activity(page, keys[0])
+                    page.get_by_role("tab", name=re.compile(TABS[keys[0]])).focus()
+                    for key, selected in [("ArrowRight", keys[1]), ("End", keys[1]), ("ArrowRight", keys[0]), ("ArrowLeft", keys[1]), ("Home", keys[0])]:
+                        before = page.evaluate("scrollY")
+                        page.keyboard.press(key)
+                        expect(page.get_by_role("tab", name=re.compile(TABS[selected]))).to_be_focused()
+                        assert_activity(page, selected)
+                        assert abs(page.evaluate("scrollY") - before) <= 1, (width, key, before, page.evaluate("scrollY"))
+                suite.record(f"section-deeplinks-filter-keyboard-{width}", fixture); context.close()
+
+            fixture = FilledFixtures(); context, page = suite.open(fixture, 390)
             profile.open_account(page)
+            for width in (1440, 390):
+                page.set_viewport_size({"width": width, "height": 900})
+                expect(page.get_by_role("navigation", name="설정 메뉴").get_by_role("link", name="계정 및 보안", exact=True)).to_have_attribute("aria-current", "page")
+                expect(page.get_by_role("button", name="로그아웃", exact=True)).to_be_visible()
+            page.reload(wait_until="domcontentloaded")
+            expect(page.get_by_role("button", name="로그아웃", exact=True)).to_be_visible()
             page.get_by_role("button", name="로그아웃", exact=True).click()
             expect(page).to_have_url(re.compile(r"/login$"))
             assert page.evaluate("localStorage.getItem('ggp_token')") is None
-            suite.record("account-collapse-resize-restoration-and-logout", fixture); context.close()
-
-            fixture = FilledFixtures(); context, page = suite.open(fixture, 390)
-            page.set_viewport_size({"width": 390, "height": 844})
-            tabs = page.get_by_role("tablist", name="내 활동 종류")
-            expect(tabs.get_by_role("tab", name=re.compile(TABS["created"]))).to_contain_text("2")
-            page.evaluate("document.fonts.ready")
-            assert_selected_tab_visible(page)
-            control = page.get_by_role("button", name="다음 활동 보기", exact=True)
-            expect(control).to_be_visible()
-            expect(control).to_be_enabled()
-            # Place the entire tab strip inside the viewport before testing scroll stability.
-            tabs.evaluate("el => window.scrollTo(0, Math.max(0, el.getBoundingClientRect().top + scrollY - 180))")
-            for step in range(len(TABS)):
-                assert_tab_overflow_control(page)
-                if control.is_disabled(): break
-                next_id = tabs.evaluate("""el => {
-                  const edge = el.getBoundingClientRect().right;
-                  return [...el.querySelectorAll('[role="tab"]')]
-                    .find(tab => tab.getBoundingClientRect().right > edge + 1)?.id;
-                }""")
-                assert next_id, "Enabled next-activity control has no hidden tab to reveal"
-                before = page.evaluate("scrollY")
-                control.click()
-                selected = page.locator(f"#{next_id}")
-                expect(selected).to_have_attribute("aria-selected", "true")
-                expect(selected).to_be_focused()
-                assert_selected_tab_visible(page)
-                assert abs(page.evaluate("scrollY") - before) <= 1, (step, before, page.evaluate("scrollY"))
-                assert_no_overflow(page)
-            expect(control).to_be_visible()
-            expect(control).to_be_disabled()
-            expect(tabs.get_by_role("tab", name=re.compile(TABS["posts"]))).to_have_attribute("aria-selected", "true")
-            suite.screenshot(page, "next-activity-at-end-390")
-            page.set_viewport_size({"width": 1440, "height": 900})
-            expect(control).not_to_be_visible()
-            assert_selected_tab_visible(page)
-            assert_no_overflow(page)
-            suite.record("activity-overflow-control-reveals-focuses-and-stops-at-end", fixture); context.close()
-
-            for width in (390, 768, 1440):
-                fixture = FilledFixtures(); context, page = suite.open(fixture, width)
-                if width < 1100:
-                    # Enter directly on the last tab, which begins offscreen on phones.
-                    page.goto(suite.origin + "/mypage?tab=posts", wait_until="domcontentloaded")
-                    expect(page.locator(".me-posts .board-item")).to_have_count(2)
-                    assert_selected_tab_visible(page)
-                    assert page.evaluate("scrollY") == 0
-                    page.reload(wait_until="domcontentloaded")
-                    expect(page.locator(".me-posts .board-item")).to_have_count(2)
-                    assert_selected_tab_visible(page)
-                    assert page.evaluate("scrollY") == 0
-                    # Keep the strip inside the viewport while changing content by pointer.
-                    page.get_by_role("tablist", name="내 활동 종류").evaluate("el => window.scrollTo(0, Math.max(0, el.getBoundingClientRect().top + scrollY - 180))")
-                    for selected in ("created", "ledger", "posts", "created"):
-                        before = page.evaluate("scrollY")
-                        current = page.get_by_role("tab", name=re.compile(TABS[selected]))
-                        current.click()
-                        expect(current).to_have_attribute("aria-selected", "true")
-                        assert_selected_tab_visible(page)
-                        assert abs(page.evaluate("scrollY") - before) <= 1, (width, selected, before, page.evaluate("scrollY"))
-                        assert_no_overflow(page)
-                    suite.screenshot(page, f"pointer-tabs-{width}")
-                page.get_by_role("tab", name=re.compile("만든 매크로")).focus()
-                for key, selected in [("ArrowRight", "purchased"), ("End", "posts"), ("ArrowRight", "created"), ("ArrowLeft", "posts"), ("Home", "created")]:
-                    before = page.evaluate("scrollY")
-                    page.keyboard.press(key)
-                    current = page.get_by_role("tab", name=re.compile(TABS[selected]))
-                    expect(current).to_be_focused()
-                    expect(current).to_have_attribute("aria-selected", "true")
-                    expect(current).to_have_attribute("tabindex", "0")
-                    expect(page.locator('.me-tabs [role="tab"][tabindex="0"]')).to_have_count(1)
-                    expect(page.locator('.me-tabs [role="tab"][aria-selected="false"][tabindex="-1"]')).to_have_count(4)
-                    expect(page.locator(".me-panel")).to_have_attribute("aria-labelledby", f"me-tab-{selected}")
-                    if selected != "created": expect(page).to_have_url(re.compile(rf"\?tab={selected}$"))
-                    else: expect(page).to_have_url(re.compile(r"/mypage$"))
-                    assert_selected_tab_visible(page)
-                    assert abs(page.evaluate("scrollY") - before) <= 1, (width, key, before, page.evaluate("scrollY"))
-                page.keyboard.press("Tab")
-                next_control = page.get_by_role("button", name="다음 활동 보기", exact=True)
-                if next_control.is_visible() and next_control.is_enabled():
-                    expect(next_control).to_be_focused()
-                    page.keyboard.press("Tab")
-                expect(page.locator(".me-panel")).to_be_focused()
-                suite.record(f"activity-pointer-keyboard-deeplink-{width}", fixture); context.close()
+            suite.record("security-page-resize-reload-and-logout", fixture); context.close()
 
             fixture = FilledFixtures(); fixture.users["fixture-a"]["can_change_password"] = False
             context, page = suite.open(fixture, 390); profile.open_account(page)
@@ -352,6 +308,15 @@ def main():
             expect(page.get_by_text("Google 로그인", exact=True)).to_be_visible()
             expect(page.get_by_role("button", name="회원 탈퇴", exact=True)).to_be_visible()
             suite.record("google-account-keeps-supported-actions", fixture); context.close()
+
+            fixture = profile.Fixtures(); context, page = suite.open(fixture, 390)
+            expect(page.locator(".me-macro-card")).to_have_count(0)
+            expect(page.locator(".me-create-link")).to_have_count(1)
+            expect(page.locator(".me-content").get_by_role("link", name="매크로 만들기", exact=True)).to_have_count(1)
+            expect(page.locator(".me-create-link")).to_have_attribute("href", "/builder")
+            assert_no_overflow(page)
+            suite.screenshot(page, "empty-created-390")
+            suite.record("empty-macros-have-one-create-action", fixture); context.close()
             browser.close()
             report = {"passed": True, "build": str(profile.BUILD), "checks": suite.checks, "page_errors": suite.errors, "screenshots": suite.screenshots}
             (OUTPUT / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2))

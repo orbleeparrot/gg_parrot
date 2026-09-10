@@ -82,7 +82,9 @@ function useAccountSave(user, onSuccess) {
   return { busy, error, setError, save };
 }
 
-export default function ProfileEditor({ user, onClose, onSaved }) {
+const profileValues = (user) => ({ username: user.username || "", bio: user.bio || "", avatar_url: user.avatar_url || null });
+
+export default function ProfileEditor({ user, onClose, onSaved, inline = false }) {
   const id = useId();
   const nameInput = useRef(null);
   const fileInput = useRef(null);
@@ -92,10 +94,30 @@ export default function ProfileEditor({ user, onClose, onSaved }) {
   const [preview, setPreview] = useState("");
   const [removeAvatar, setRemoveAvatar] = useState(false);
   const [invalidName, setInvalidName] = useState(false);
+  const [baseline, setBaseline] = useState(() => profileValues(user));
   const { busy, error, setError, save } = useAccountSave(user, (response) => {
+    const saved = profileValues(response.user);
+    setBaseline(saved);
+    setUsername(saved.username);
+    setBio(saved.bio);
+    setImage(null);
+    setPreview("");
+    setRemoveAvatar(false);
     onSaved?.(response.user);
-    onClose();
+    if (!inline) onClose();
   });
+  const dirty = username.trim() !== baseline.username || bio !== baseline.bio || !!image || (removeAvatar && !!baseline.avatar_url);
+
+  // Header hydration can fill an old cached profile, but must not replace a draft.
+  useEffect(() => {
+    if (dirty || busy) return;
+    const next = profileValues(user);
+    if (next.username === baseline.username && next.bio === baseline.bio && next.avatar_url === baseline.avatar_url) return;
+    setBaseline(next);
+    setUsername(next.username);
+    setBio(next.bio);
+    setRemoveAvatar(false);
+  }, [user.username, user.bio, user.avatar_url, baseline, busy, dirty]);
 
   useEffect(() => {
     if (!image) {
@@ -137,14 +159,12 @@ export default function ProfileEditor({ user, onClose, onSaved }) {
     save((signal) => api.updateProfile({ username: name, bio, image, removeAvatar }, { signal }));
   }
 
-  const source = removeAvatar ? null : preview || user.avatar_url;
-  const dirty = username.trim() !== user.username || bio !== (user.bio || "") || !!image || (removeAvatar && !!user.avatar_url);
-  return (
-    <EditorDialog title="프로필 편집" busy={busy} onClose={onClose} initialFocus={nameInput}>
-      <form className="profile-editor-form" onSubmit={submit}>
+  const source = removeAvatar ? null : preview || baseline.avatar_url;
+  const form = (
+      <form className={`profile-editor-form${inline ? " is-inline" : ""}`} aria-label="프로필 편집" onSubmit={submit}>
         <fieldset className="profile-editor-fields" disabled={busy}>
           <div className="profile-editor-photo">
-            <UserAvatar src={source} name={username} size={72} />
+            <UserAvatar src={source} name={username} size={inline ? 96 : 72} />
             <div className="profile-editor-photo-options">
               <div className="profile-editor-photo-actions">
                 <button type="button" className="btn btn-s btn-secondary" onClick={() => fileInput.current?.click()}>사진 변경</button>
@@ -160,7 +180,7 @@ export default function ProfileEditor({ user, onClose, onSaved }) {
           </label>
           <label className="profile-editor-label" htmlFor={`${id}-bio`}>
             <span className="profile-editor-label-row"><span>소개</span><span className="profile-editor-counter num" aria-hidden="true">{bio.length}/160</span></span>
-            <textarea id={`${id}-bio`} className="field" value={bio} onChange={(event) => setBio(event.target.value)} rows={3} maxLength={160} aria-describedby={`${id}-bio-hint`} />
+            <textarea id={`${id}-bio`} aria-label="소개" className="field" value={bio} onChange={(event) => setBio(event.target.value)} rows={3} maxLength={160} aria-describedby={`${id}-bio-hint`} />
             <span id={`${id}-bio-hint`} className="sr-only">최대 160자</span>
           </label>
           {error ? <p id={`${id}-error`} className="profile-editor-error" role="alert">{error}</p> : null}
@@ -170,8 +190,8 @@ export default function ProfileEditor({ user, onClose, onSaved }) {
           <button type="submit" className="btn btn-m btn-primary" disabled={busy || !dirty}>{busy ? "저장 중…" : "저장"}</button>
         </div>
       </form>
-    </EditorDialog>
   );
+  return inline ? form : <EditorDialog title="프로필 편집" busy={busy} onClose={onClose} initialFocus={nameInput}>{form}</EditorDialog>;
 }
 
 export function PasswordChangeDialog({ user, onClose, onSaved }) {

@@ -1,0 +1,45 @@
+.profile-settings-page { width: 100%; max-width: 1040px; min-width: 0; margin-inline: auto; padding-bottom: 40px; color: rgb(var(--c-slate-900)); }
+.profile-settings-header { display: grid; justify-items: start; gap: 20px; margin-bottom: 36px; }
+.profile-settings-back { display: inline-flex; align-items: center; gap: 8px; min-height: 36px; color: rgb(var(--c-slate-700)); font-size: 14px; font-weight: 550; text-decoration: none; }
+.profile-settings-back:hover { color: rgb(var(--c-slate-900)); }
+.profile-settings-header h1 { margin: 0; font-size: 32px; line-height: 1.2; font-weight: 750; letter-spacing: -.03em; }
+.profile-settings-layout { display: grid; grid-template-columns: 200px minmax(0, 640px); align-items: start; gap: 48px; }
+.profile-settings-nav { display: grid; gap: 4px; min-width: 0; }
+.profile-settings-nav a { display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 0 14px; border-radius: 8px; color: rgb(var(--c-slate-500)); font-size: 15px; font-weight: 600; text-decoration: none; }
+.profile-settings-nav svg { flex: none; }
+.profile-settings-nav a[aria-current="page"] { background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-900)); }
+.profile-settings-content { min-width: 0; }
+.profile-settings-panel[hidden] { display: none; }
+.profile-settings-panel > h2 { margin: 0 0 28px; font-size: 22px; line-height: 1.35; font-weight: 700; letter-spacing: -.025em; }
+.profile-settings-status { margin: 0 0 20px; padding: 12px 16px; border-radius: 8px; background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-900)); font-size: 14px; line-height: 1.5; }
+.profile-settings-load-error { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; color: rgb(var(--c-red-600)); font-size: 14px; }
+.profile-settings-load-error p { margin: 0; }
+.profile-settings-loading { margin: 0; color: rgb(var(--c-slate-500)); font-size: 14px; }
+.profile-settings-account { display: grid; gap: 24px; margin: 0; padding: 0 0 28px; }
+.profile-settings-account > div { display: grid; grid-template-columns: 120px minmax(0, 1fr); align-items: baseline; gap: 20px; }
+.profile-settings-account dt { color: rgb(var(--c-slate-500)); font-size: 14px; font-weight: 550; }
+.profile-settings-account dd { margin: 0; color: rgb(var(--c-slate-900)); font-size: 15px; font-weight: 550; overflow-wrap: anywhere; }
+.profile-settings-security-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; min-height: 92px; padding-block: 20px; border-top: 1px solid rgb(var(--c-slate-200)); }
+.profile-settings-security-row h3 { margin: 0; font-size: 15px; line-height: 1.4; font-weight: 600; }
+.profile-settings-security-row .btn { flex: none; min-height: 44px; font-size: 14px; }
+.profile-settings-session-actions { display: flex; align-items: center; gap: 12px; margin-top: 16px; padding-top: 24px; border-top: 1px solid rgb(var(--c-slate-200)); }
+.profile-settings-session-actions .btn { min-height: 44px; font-size: 14px; }
+.profile-settings-session-actions .profile-settings-withdrawal { margin-left: auto; color: rgb(var(--c-red-600)); }
+.profile-settings-page a:focus-visible, .profile-settings-page button:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 3px; }
+@media (hover: hover) {
+  .profile-settings-nav a:hover { background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-900)); }
+}
+@media (max-width: 1099px) {
+  .profile-settings-header { gap: 16px; margin-bottom: 24px; }
+  .profile-settings-back { min-height: 44px; font-size: 13px; }
+  .profile-settings-layout { grid-template-columns: minmax(0, 1fr); gap: 28px; }
+  .profile-settings-nav { display: flex; gap: 24px; border-bottom: 1px solid rgb(var(--c-slate-200)); }
+  .profile-settings-nav a { gap: 8px; min-height: 48px; padding: 0 0 12px; border-radius: 0; border-bottom: 2px solid transparent; font-size: 14px; }
+  .profile-settings-nav a[aria-current="page"] { border-bottom-color: rgb(var(--c-brand-line)); background: transparent; }
+  .profile-settings-nav svg { width: 20px; height: 20px; }
+  .profile-settings-content { width: 100%; max-width: 640px; }
+  .profile-settings-panel > h2 { margin-bottom: 24px; font-size: 20px; }
+  .profile-settings-account > div { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .profile-settings-security-row { min-height: 88px; gap: 12px; }
+  .profile-settings-security-row .btn { font-size: 13px; }
+}

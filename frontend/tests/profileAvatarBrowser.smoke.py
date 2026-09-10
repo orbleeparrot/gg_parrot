@@ -10,6 +10,7 @@ No production backend is started or contacted. Every API response is a fixture.
 import copy
 import json
 import os
+import re
 import struct
 import threading
 import zlib
@@ -175,16 +176,18 @@ class Suite:
         self.checks = []
         self.screenshots = []
 
-    def open(self, fixture, width=1440, theme="dark"):
+    def open(self, fixture, width=1440, theme="dark", path="/mypage", cached_user=None):
         context = self.browser.new_context(viewport={"width": width, "height": 900}, color_scheme=theme, reduced_motion="reduce")
         context.route("**/*", fixture.route)
         context.add_init_script("""window.google = {accounts:{id:{initialize(config){window.fixtureGoogleCallback=config.callback},renderButton(node){const button=document.createElement('button');button.type='button';button.textContent='Google 본인 확인';button.onclick=()=>window.fixtureGoogleCallback({credential:'fixture-google'});node.append(button)}}}};""")
         # A reload must use the last saved account/photo instead of resetting it.
-        context.add_init_script("if (!localStorage.getItem('ggp_token')) { localStorage.setItem('ggp_token','fixture-a'); localStorage.setItem('ggp_user'," + json.dumps(json.dumps(fixture.users["fixture-a"])) + "); }")
+        cached = fixture.users["fixture-a"] if cached_user is None else cached_user
+        context.add_init_script("if (!localStorage.getItem('ggp_token')) { localStorage.setItem('ggp_token','fixture-a'); localStorage.setItem('ggp_user'," + json.dumps(json.dumps(cached)) + "); }")
         page = context.new_page()
         page.on("pageerror", lambda error: self.errors.append(str(error)))
-        page.goto(self.origin + "/mypage", wait_until="domcontentloaded")
-        expect(page.get_by_role("button", name="프로필 사진 변경", exact=True)).to_be_visible()
+        page.goto(self.origin + path, wait_until="domcontentloaded")
+        if path == "/mypage":
+            expect(page.get_by_role("link", name="프로필 사진 변경", exact=True)).to_be_visible()
         return context, page
 
     def record(self, name, fixture):
@@ -200,7 +203,8 @@ class Suite:
 
 
 def expect_photo(page, url):
-    for selector in (".me-avatar", ".account-trigger .user-avatar"):
+    profile_avatar = ".me-avatar" if page.locator(".me-avatar").count() else ".profile-editor-photo .user-avatar"
+    for selector in (profile_avatar, ".account-trigger .user-avatar"):
         image = page.locator(selector).locator("img")
         if url:
             expect(image).to_have_attribute("src", url)
@@ -211,25 +215,36 @@ def expect_photo(page, url):
 
 
 def edit(page):
-    page.get_by_role("button", name="프로필 편집", exact=True).click()
-    dialog = page.get_by_role("dialog", name="프로필 편집", exact=True)
-    expect(dialog).to_be_visible()
-    return dialog
+    page.get_by_role("link", name="프로필 편집", exact=True).click()
+    expect(page).to_have_url(re.compile(r"/mypage/settings$"))
+    form = page.get_by_role("form", name="프로필 편집", exact=True)
+    expect(form).to_be_visible()
+    expect(page.get_by_role("dialog", name="프로필 편집", exact=True)).to_have_count(0)
+    expect(page.get_by_role("navigation", name="설정 메뉴").get_by_role("link", name="프로필", exact=True)).to_have_attribute("aria-current", "page")
+    return form
 
 
-def save(dialog):
-    dialog.get_by_role("button", name="저장", exact=True).click()
-    expect(dialog).not_to_be_visible()
+def save(form):
+    form.get_by_role("button", name="저장", exact=True).click()
+    expect(form.page.get_by_role("status")).to_contain_text("프로필을 저장")
+    expect(form).to_be_visible()
+    expect(form.get_by_role("button", name="저장", exact=True)).to_be_disabled()
+
+
+def return_to_profile(page):
+    page.get_by_role("link", name="프로필로 돌아가기", exact=True).click()
+    expect(page).to_have_url(re.compile(r"/mypage$"))
+    expect(page.locator(".me-name")).to_be_visible()
 
 
 def open_account(page):
-    settings = page.locator(".me-account-settings")
-    toggle = page.get_by_role("button", name="계정 설정", exact=True)
-    expect(toggle).to_have_attribute("aria-controls", settings.get_attribute("id"))
-    if toggle.get_attribute("aria-expanded") != "true":
-        toggle.click()
-    expect(toggle).to_have_attribute("aria-expanded", "true")
-    expect(settings).to_be_visible()
+    if not urlsplit(page.url).path.endswith("/mypage/settings"):
+        page.get_by_role("link", name="프로필 설정", exact=True).click()
+    security = page.get_by_role("navigation", name="설정 메뉴").get_by_role("link", name="계정 및 보안", exact=True)
+    security.click()
+    expect(page).to_have_url(re.compile(r"/mypage/settings\?tab=security$"))
+    expect(security).to_have_attribute("aria-current", "page")
+    expect(page.get_by_role("button", name="로그아웃", exact=True)).to_be_visible()
 
 
 def main():
@@ -251,19 +266,25 @@ def main():
                     assert len({x['value'] for x in metrics}) == 1, metrics
                     assert len({x['font'] for x in metrics}) == 1, metrics
                     tier_toggle = page.locator(".me-tier-toggle")
-                    expect(tier_toggle).to_have_attribute("aria-expanded", "false")
-                    expect(tier_toggle).to_have_attribute("aria-controls", "me-tier-guide")
+                    expect(tier_toggle).to_have_attribute("aria-haspopup", "dialog")
                     expect(page.get_by_role("list", name="판매 등급별 조건")).to_be_hidden()
                     tier_toggle.focus(); page.keyboard.press("Enter")
-                    expect(tier_toggle).to_have_attribute("aria-expanded", "true")
+                    expect(page.get_by_role("dialog", name="판매 등급", exact=True)).to_be_visible()
                     expect(page.get_by_role("list", name="판매 등급별 조건")).to_be_visible()
                     expect(page.locator(".me-tier-list li")).to_have_count(5)
-                    tier_toggle.press("Space")
-                    expect(tier_toggle).to_have_attribute("aria-expanded", "false")
+                    page.keyboard.press("Escape")
                     expect(page.get_by_role("list", name="판매 등급별 조건")).to_be_hidden()
                     expect(tier_toggle).to_be_focused()
+                    tier_toggle.press("Space")
+                    page.get_by_role("dialog", name="판매 등급", exact=True).get_by_role("button", name="닫기", exact=True).click()
+                    expect(tier_toggle).to_be_focused()
                     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
-                    suite.screenshot(page, f"settings-{width}-{theme}")
+                    expect(page.get_by_role("button", name="프로필 편집", exact=True)).to_have_count(0)
+                    expect(page.get_by_role("button", name="계정 설정", exact=True)).to_have_count(0)
+                    expect(page.get_by_role("link", name="프로필 설정", exact=True)).to_have_attribute("href", "/mypage/settings?tab=security")
+                    expect(page.get_by_role("link", name="프로필 편집", exact=True)).to_have_attribute("href", "/mypage/settings")
+                    expect(page.get_by_role("link", name="프로필 사진 변경", exact=True)).to_have_attribute("href", "/mypage/settings")
+                    suite.screenshot(page, f"profile-{width}-{theme}")
                     dialog = edit(page)
                     dialog.get_by_label("프로필명", exact=True).fill("변경전취소")
                     dialog.get_by_label("프로필 사진 파일").set_input_files(UPLOAD)
@@ -271,11 +292,15 @@ def main():
                     expect(dialog.locator(".user-avatar img")).to_be_visible()
                     assert dialog.evaluate("e=>e.scrollWidth <= e.clientWidth")
                     suite.screenshot(page, f"editor-{width}-{theme}")
-                    page.keyboard.press("Escape")
+                    dialog.get_by_role("button", name="취소", exact=True).click()
                     expect(dialog).not_to_be_visible()
-                    expect(page.get_by_role("button", name="프로필 편집", exact=True)).to_be_focused()
+                    expect(page).to_have_url(re.compile(r"/mypage$"))
                     expect(page.locator(".me-name")).to_have_text("껄무새")
                     expect_photo(page, None)
+                    page.get_by_role("link", name="프로필 사진 변경", exact=True).click()
+                    expect(page.get_by_role("form", name="프로필 편집", exact=True)).to_be_visible()
+                    expect(page.get_by_label("프로필명", exact=True)).to_have_value("껄무새")
+                    assert len(fixture.avatar_requests) == 0
                     suite.record(f"aligned-stats-editor-cancel-{width}-{theme}", fixture); context.close()
 
             fixture = Fixtures(); context, page = suite.open(fixture)
@@ -290,11 +315,15 @@ def main():
             dialog.get_by_role("button", name="저장", exact=True).click()
             expect(dialog.get_by_role("alert")).to_contain_text("이미 사용 중")
             expect(name).to_have_value("새프로필")
-            expect(page.locator(".me-name")).to_have_text("껄무새")
+            assert page.evaluate("JSON.parse(localStorage.getItem('ggp_user')).username") == "껄무새"
             fixture.reject_upload = False; save(dialog)
+            expect(name).to_have_value("새프로필")
+            expect(dialog.locator("textarea")).to_have_value("나의 소개글")
+            photo = fixture.users['fixture-a']['avatar_url']; expect_photo(page, photo)
+            return_to_profile(page)
             expect(page.locator(".me-name")).to_have_text("새프로필")
             expect(page.locator(".me-bio")).to_have_text("나의 소개글")
-            photo = fixture.users['fixture-a']['avatar_url']; expect_photo(page, photo)
+            expect_photo(page, photo)
             page.reload(wait_until="domcontentloaded")
             expect(page.locator(".me-bio")).to_have_text("나의 소개글"); expect_photo(page, photo)
             dialog = edit(page); dialog.get_by_role("button", name="삭제", exact=True).click(); save(dialog); expect_photo(page, None)
@@ -308,17 +337,33 @@ def main():
             fixture.release_me(); page.locator('.account-trigger').click()
             expect(page.locator('.account-points')).to_have_text('54,321P')
             expect(page.locator('.account-name')).to_have_text('새로운이름')
-            expect(page.locator('.me-bio')).to_have_text('저장한 소개'); expect_photo(page, photo)
+            expect(dialog.locator('textarea')).to_have_value('저장한 소개'); expect_photo(page, photo)
             suite.record('late-header-response-preserves-edited-profile', fixture); context.close()
 
             fixture = Fixtures(); fixture.hold_upload = True; second_photo=fixture.set_photo('fixture-b'); context,page=suite.open(fixture)
             dialog=edit(page); dialog.locator('input[autocomplete="nickname"]').fill('늦은변경'); dialog.get_by_role('button',name='저장',exact=True).click()
             expect(dialog.get_by_role('button',name='저장 중…')).to_be_disabled()
             page.evaluate("""user=>{localStorage.setItem('ggp_token','fixture-b');localStorage.setItem('ggp_user',JSON.stringify(user));window.dispatchEvent(new StorageEvent('storage',{key:'ggp_token'}));}""",fixture.users['fixture-b'])
-            expect(page.locator('.me-name')).to_have_text('다른회원')
+            expect(page.get_by_role('form',name='프로필 편집').get_by_label('프로필명',exact=True)).to_have_value('다른회원')
             fixture.release_uploads(); page.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))')
-            expect(page.locator('.me-name')).to_have_text('다른회원'); expect_photo(page,second_photo)
+            expect(page.get_by_role('form',name='프로필 편집').get_by_label('프로필명',exact=True)).to_have_value('다른회원'); expect_photo(page,second_photo)
+            assert page.evaluate("JSON.parse(localStorage.getItem('ggp_user')).id") == USER_B['id']
             suite.record('old-account-edit-cannot-overwrite-current-account',fixture);context.close()
+
+            fixture = Fixtures(); fixture.hold_me = True
+            fixture.users['fixture-a']['bio'] = '서버에 저장된 기존 소개'
+            cached = copy.deepcopy(fixture.users['fixture-a']); cached.pop('bio')
+            context, page = suite.open(fixture, width=375, path='/mypage/settings', cached_user=cached)
+            expect(page.get_by_role('navigation', name='설정 메뉴')).to_be_visible()
+            expect(page.get_by_role('form', name='프로필 편집', exact=True)).to_have_count(0)
+            assert fixture.held_me and not fixture.avatar_requests
+            fixture.release_me()
+            form = page.get_by_role('form', name='프로필 편집', exact=True)
+            expect(form).to_be_visible()
+            expect(form.locator('textarea')).to_have_value('서버에 저장된 기존 소개')
+            form.get_by_label('프로필명', exact=True).fill('소개보존회원'); save(form)
+            assert fixture.users['fixture-a']['bio'] == '서버에 저장된 기존 소개'
+            suite.record('incomplete-cache-waits-for-bio-before-editing',fixture);context.close()
 
             fixture=Fixtures();context,page=suite.open(fixture)
             open_account(page)

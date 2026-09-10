@@ -14,6 +14,7 @@ const Studio = lazy(() => import("./pages/Studio.jsx"));
 const Leaderboard = lazy(() => import("./pages/Leaderboard.jsx"));
 const Auth = lazy(() => import("./pages/Auth.jsx"));
 const MyPage = lazy(() => import("./pages/MyPage.jsx"));
+const ProfileSettings = lazy(() => import("./pages/ProfileSettings.jsx"));
 const Agents = lazy(() => import("./pages/Agents.jsx"));
 const News = lazy(() => import("./pages/News.jsx"));
 const Board = lazy(() => import("./pages/Board.jsx"));
@@ -41,6 +42,8 @@ function RouteChangeEffects() {
       ? "게시판"
       : pathname.startsWith("/guide")
       ? "사용법"
+      : pathname.startsWith("/mypage/settings")
+      ? "프로필 설정"
       : pathname.startsWith("/mypage")
       ? "내 활동"
       : pathname.startsWith("/agents")
@@ -171,6 +174,7 @@ export default function App() {
               <Route path="/builder" element={<Studio />} />
               <Route path="/s/:slug" element={<Studio />} />
               <Route path="/mypage" element={<MyPage />} />
+              <Route path="/mypage/settings" element={<ProfileSettings />} />
               <Route path="/agents" element={<Agents />} />
               <Route path="/runner/install" element={<RunnerInstall />} />
               <Route path="/runner" element={<LegacyRunnerRedirect />} />

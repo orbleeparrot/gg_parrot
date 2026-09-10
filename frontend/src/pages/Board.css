@@ -164,6 +164,8 @@
 /* ── 제목 옆 글 수, 제목 아래 왼쪽 검색(그누보드식), 오른쪽 정렬 + 글쓰기 ── */
 .board-title-count { margin-left: 12px; color: rgb(var(--c-slate-500)); font-size: 15px; font-weight: 500; letter-spacing: 0; vertical-align: 6px; }
 .board-title-count .num { color: rgb(var(--c-slate-700)); font-weight: 600; }
+.board-page .page-head-title { white-space: nowrap; text-wrap: nowrap; } /* 제목 + n건은 한 줄 — 좁아져도 꺾지 않는다 */
+.board-title-count { white-space: nowrap; }
 .board-page .page-head-sub { margin-top: 24px; } /* 제목과 검색·정렬 줄 사이 숨 */
 .board-searchbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 /* 범위 드롭다운(SelectMenu) — 입력칸 모양 버튼 + 아래로 펼쳐지는 우리 표면의 목록. 포커스는 노랑 테두리가 아니라 바깥 링. */

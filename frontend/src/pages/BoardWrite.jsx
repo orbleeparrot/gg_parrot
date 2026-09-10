@@ -3,21 +3,11 @@ import { useNavigate, useParams } from "react-router-dom";
 import { api } from "../api.js";
 import { useAuth } from "../lib/auth.js";
 import BoardBodyEditor from "../components/BoardBodyEditor.jsx";
+import { editPath, writePath } from "../lib/boardPaths.js";
 import { ErrorNote } from "../components/Page.jsx";
 import "./Board.css";
 
 const MAX_IMAGES = 10;
-export const WRITE_PATH = "/board/write";
-
-/** 글쓰기 주소 — 로그인 전이면 로그인 뒤 여기로 돌아온다. */
-export function writePath(token) {
-  return token ? WRITE_PATH : `/login?next=${encodeURIComponent(WRITE_PATH)}`;
-}
-
-export function editPath(postId) {
-  return `/board/${postId}/edit`;
-}
-
 // 글쓰기·수정 폼(제목 + 본문 편집기). 사진은 본문 커서 자리에 그대로 들어간다(BoardBodyEditor);
 // 저장은 글자 + `[사진n]` 자리 표시로 하고, 글 보기가 그 자리에 사진을 끼운다.
 function Composer({ initial, onSaved, onCancel }) {

@@ -1,11 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { api } from "../api.js";
+import useBoardList from "../hooks/useBoardList.js";
 import { useAuth } from "../lib/auth.js";
 import { boardFullTime, boardTime, kstDateTime, pageWindow } from "../lib/boardText.js";
 import { PageHeader, EmptyState, ErrorNote } from "../components/Page.jsx";
 import SelectMenu from "../components/SelectMenu.jsx";
-import { writePath } from "./BoardWrite.jsx";
+import { writePath } from "../lib/boardPaths.js";
 import { ChevronLeftIcon, ChevronRightIcon, ImageIcon, SearchIcon } from "../components/boardIcons.jsx";
 import { AuthorAvatar } from "../components/UserAvatar.jsx";
 import "./Board.css";
@@ -147,30 +147,8 @@ export default function Board() {
   const sort = searchParams.get("sort") || "new";
   const field = searchParams.get("field") || "all";
   const q = searchParams.get("q") || "";
-  const [data, setData] = useState(null);
-  const [busy, setBusy] = useState(true);
-  const [err, setErr] = useState("");
-  const [now, setNow] = useState(() => Date.now());
   const [sentinel, pageSize] = useFittedPageSize();
-
-  function load(p) {
-    setBusy(true);
-    setErr("");
-    api
-      .boardList(p, pageSize, { sort, q, field })
-      .then((d) => {
-        setData(d);
-        setNow(Date.now()); // 시각 표기(오늘 HH:MM)의 기준을 목록을 받은 순간으로
-      })
-      .catch((e) => setErr(String(e.message || e)))
-      .finally(() => setBusy(false));
-  }
-
-  useEffect(() => {
-    if (!pageSize) return; // 첫 렌더에서 자리를 재기 전
-    load(page);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, sort, field, q, pageSize]);
+  const { data, busy, err, now } = useBoardList(page, pageSize, { sort, q, field });
 
   // 주소가 곧 상태 — 기본값(1쪽·최신순·검색 없음)은 주소에서 뺀다.
   function update(next) {

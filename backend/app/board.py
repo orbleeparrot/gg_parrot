@@ -16,11 +16,14 @@ import re
 import nh3
 
 import time
+import threading
 from collections import defaultdict, deque
+from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from typing import Deque, Optional
 
-from sqlalchemy import func, or_
+from sqlalchemy import delete, func, literal, or_, update
+from sqlalchemy.orm import defer
 from sqlmodel import select
 
 from . import avatars
@@ -225,10 +228,10 @@ def validate_image(data: bytes, content_type: Optional[str]) -> tuple[bytes, str
 # ---------------------------------------------------------------------------
 # 글
 # ---------------------------------------------------------------------------
-def _image_views(row: BoardPost, images: list[BoardImage]) -> list[dict]:
+def _image_views(row: BoardPost, images: list[BoardImage], legacy_image: bool | None = None) -> list[dict]:
     """사진 목록 — 새 표(BoardImage) 순서대로, 옛 글의 한 장(BoardPost.image_data)은 맨 앞에."""
     views = []
-    if row.image_data:
+    if legacy_image if legacy_image is not None else bool(row.image_data):
         views.append({"id": 0, "url": f"/api/board/posts/{row.id}/image"})
     for img in sorted(images, key=lambda i: (i.position, i.id or 0)):
         views.append({"id": img.id, "url": f"/api/board/posts/{row.id}/images/{img.id}"})
@@ -265,8 +268,9 @@ def _post_list_view(row: BoardPost, comment_count: int, avatar_url: str | None =
 
 
 def _post_detail_view(row: BoardPost, comments: list[dict], avatar_url: str | None = None,
-                      images: list[BoardImage] | None = None, my_vote: int = 0) -> dict:
-    views = _image_views(row, images or [])
+                      images: list[BoardImage] | None = None, my_vote: int = 0,
+                      legacy_image: bool | None = None) -> dict:
+    views = _image_views(row, images or [], legacy_image)
     return {
         "id": row.id,
         "title": row.title,
@@ -290,7 +294,7 @@ def _post_detail_view(row: BoardPost, comments: list[dict], avatar_url: str | No
 
 
 def create_post(user: User, title: str, body: str, images: list[tuple[bytes, str]] | None = None,
-                body_format: str = "text") -> dict:
+                body_format: str = "text", db=None) -> dict:
     """글 작성. ``images`` 는 validate_image 를 거친 (bytes, mime) 목록 — 순서대로 붙는다.
 
     ``body_format="html"`` 이면 본문은 편집기 HTML — 새 사진 자리(`data-key="new:N"`)에 주소를 붙인 뒤 정제해 저장한다.
@@ -317,10 +321,9 @@ def create_post(user: User, title: str, body: str, images: list[tuple[bytes, str
         created_at=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
         created_ms=now_ms,
     )
-    with get_session() as db:
+    with (nullcontext(db) if db is not None else get_session()) as db:
         db.add(row)
-        db.commit()
-        db.refresh(row)
+        db.flush()
         stored = [
             BoardImage(post_id=row.id, position=index, image_mime=mime, image_data=data, created_ms=now_ms)
             for index, (data, mime) in enumerate(images)
@@ -328,9 +331,7 @@ def create_post(user: User, title: str, body: str, images: list[tuple[bytes, str
         for img in stored:
             db.add(img)
         if stored:
-            db.commit()
-            for img in stored:
-                db.refresh(img)
+            db.flush()
         if is_html:
             row.body = sanitize_body_html(_resolve_new_images(body, row.id, stored))
             # 본문이 가리키지 않는 새 사진은 남기지 않는다.
@@ -343,9 +344,9 @@ def create_post(user: User, title: str, body: str, images: list[tuple[bytes, str
                     db.delete(img)
             stored = kept
             db.add(row)
-            db.commit()
-            db.refresh(row)
-        return _post_detail_view(row, [], avatars.avatar_url(row.author_user_id, db=db), stored)
+        result = _post_detail_view(row, [], avatars.avatar_url(row.author_user_id, db=db), stored)
+        db.commit()
+        return result
 
 
 SORTS = {"new", "likes", "views", "comments"}
@@ -414,6 +415,10 @@ def list_posts(page: int = 1, size: int = PAGE_SIZE_DEFAULT, sort: str = "new", 
     }[sort]
     statement = statement.order_by(*order).offset((page - 1) * size).limit(size)
     with get_session() as db:
+        # This public, read-only query does not need BEGIN/ROLLBACK round trips.
+        # SQLAlchemy restores the connection's normal isolation on pool return;
+        # authenticated writes continue to use ordinary transactions.
+        db.connection(execution_options={"isolation_level": "AUTOCOMMIT"})
         rows = db.exec(statement).all()
         if rows:
             total = int(rows[0].total)
@@ -457,53 +462,71 @@ def list_posts(page: int = 1, size: int = PAGE_SIZE_DEFAULT, sort: str = "new", 
 # 조회수 — 같은 방문자(키)는 30분에 한 번만 센다. 프로세스 메모리라 재시작하면 잊지만 그 정도는 감수한다.
 _VIEW_WINDOW_SECONDS = 30 * 60
 _seen_views: dict[tuple[str, int], float] = {}
+_view_lock = threading.Lock()
 
 
-def _count_view(db, row: BoardPost, view_key: str | None) -> None:
-    if not view_key:
-        return
-    now = time.time()
-    key = (view_key, int(row.id))
-    last = _seen_views.get(key)
-    if last is not None and now - last < _VIEW_WINDOW_SECONDS:
-        return
-    _seen_views[key] = now
-    if len(_seen_views) > 20000:
-        for stale in [k for k, ts in _seen_views.items() if now - ts >= _VIEW_WINDOW_SECONDS][:5000]:
-            _seen_views.pop(stale, None)
-    row.views = int(row.views or 0) + 1
-    db.add(row)
-    db.commit()
-    db.refresh(row)
+def _comments(db, post_id: int) -> list[dict]:
+    rows = db.exec(select(BoardComment, UserAvatar.version)
+                   .outerjoin(UserAvatar, UserAvatar.user_id == BoardComment.author_user_id)
+                   .where(BoardComment.post_id == post_id).order_by(BoardComment.id.asc())).all()
+    return _comment_tree([_comment_view(row, avatars.public_url(row.author_user_id, version)) for row, version in rows])
 
 
-def get_post(post_id: int, viewer_id: int | None = None, view_key: str | None = None) -> Optional[dict]:
-    with get_session() as db:
-        row = db.get(BoardPost, post_id)
+def get_post(post_id: int, viewer_id: int | None = None, view_key: str | None = None, db=None) -> Optional[dict]:
+    # Project metadata only: neither legacy nor multi-image bytes belong in JSON reads.
+    vote = (select(BoardPostVote.value).where(BoardPostVote.post_id == BoardPost.id,
+            BoardPostVote.user_id == viewer_id).limit(1).scalar_subquery()) if viewer_id is not None else literal(0)
+    statement = select(*[c for c in BoardPost.__table__.c if c.name != "image_data"],
+                       (func.coalesce(func.length(BoardPost.image_data), 0) > 0).label("legacy_image"),
+                       UserAvatar.version.label("avatar_version"), func.coalesce(vote, 0).label("my_vote"))\
+        .outerjoin(UserAvatar, UserAvatar.user_id == BoardPost.author_user_id).where(BoardPost.id == post_id)
+    with (nullcontext(db) if db is not None else get_session()) as db:
+        row = db.exec(statement).first()
         if row is None:
             return None
-        _count_view(db, row, view_key)
-        my_vote = 0
-        if viewer_id is not None:
-            found = db.exec(select(BoardPostVote).where(BoardPostVote.post_id == post_id, BoardPostVote.user_id == viewer_id)).first()
-            my_vote = int(found.value) if found else 0
-        crows = db.exec(
-            select(BoardComment).where(BoardComment.post_id == post_id).order_by(BoardComment.id.asc())
-        ).all()
-        avatar_by_user = {uid: avatars.avatar_url(uid, db=db) for uid in {c.author_user_id for c in crows if c.author_user_id is not None}}
-        comments = _comment_tree([_comment_view(c, avatar_by_user.get(c.author_user_id)) for c in crows])
-        images = db.exec(select(BoardImage).where(BoardImage.post_id == post_id)).all()
-        return _post_detail_view(row, comments, avatars.avatar_url(row.author_user_id, db=db), images, my_vote=my_vote)
+        comments = _comments(db, post_id)
+        images = db.exec(select(BoardImage.id, BoardImage.position).where(BoardImage.post_id == post_id)).all()
+        result = _post_detail_view(row, comments, avatars.public_url(row.author_user_id, row.avatar_version),
+                                   images, my_vote=int(row.my_vote), legacy_image=row.legacy_image)
+        if view_key:
+            key, now = (view_key, post_id), time.time()
+            with _view_lock:
+                last = _seen_views.get(key)
+                reserved = last is None or now - last >= _VIEW_WINDOW_SECONDS
+                if reserved:
+                    _seen_views[key] = now
+                    if len(_seen_views) > 20000:
+                        for stale in list(_seen_views)[:5000]:
+                            if stale != key and now - _seen_views[stale] >= _VIEW_WINDOW_SECONDS:
+                                _seen_views.pop(stale, None)
+            if reserved:
+                try:
+                    # Atomic increment; no full-row refresh or intermediate commit.
+                    result["views"] = db.exec(update(BoardPost).where(BoardPost.id == post_id)
+                        .values(views=func.coalesce(BoardPost.views, 0) + 1).returning(BoardPost.views)
+                        .execution_options(synchronize_session=False)).scalar_one()
+                    db.commit()
+                except Exception:
+                    db.rollback()
+                    with _view_lock:
+                        if _seen_views.get(key) == now:
+                            _seen_views.pop(key, None)
+                    raise
+        return result
 
 
-def vote_post(post_id: int, user_id: int, value: int) -> Optional[dict]:
+def vote_post(post_id: int, user_id: int, value: int, db=None) -> Optional[dict]:
     """추천(+1)/비추천(-1). 같은 표를 다시 누르면 취소. 글이 없으면 None."""
     value = 1 if value > 0 else -1
-    with get_session() as db:
-        row = db.get(BoardPost, post_id)
+    with (nullcontext(db) if db is not None else get_session()) as db:
+        # Serialize per-post vote totals without loading attachments or all votes.
+        row = db.exec(select(BoardPost).options(defer(BoardPost.image_data, raiseload=True))
+                      .where(BoardPost.id == post_id).with_for_update()).first()
         if row is None:
             return None
         existing = db.exec(select(BoardPostVote).where(BoardPostVote.post_id == post_id, BoardPostVote.user_id == user_id)).first()
+        previous = int(existing.value) if existing else 0
+        current = 0 if previous == value else value
         if existing is None:
             db.add(BoardPostVote(post_id=post_id, user_id=user_id, value=value, created_ms=int(_now_utc().timestamp() * 1000)))
         elif existing.value == value:
@@ -511,15 +534,12 @@ def vote_post(post_id: int, user_id: int, value: int) -> Optional[dict]:
         else:
             existing.value = value
             db.add(existing)
-        db.commit()
-        votes = db.exec(select(BoardPostVote.value).where(BoardPostVote.post_id == post_id)).all()
-        values = [int(v if isinstance(v, int) else v[0]) for v in votes]
-        row.likes = sum(1 for v in values if v > 0)
-        row.dislikes = sum(1 for v in values if v < 0)
+        row.likes = int(row.likes or 0) + int(current == 1) - int(previous == 1)
+        row.dislikes = int(row.dislikes or 0) + int(current == -1) - int(previous == -1)
         db.add(row)
+        result = {"post_id": post_id, "likes": row.likes, "dislikes": row.dislikes, "my_vote": current}
         db.commit()
-        mine = db.exec(select(BoardPostVote).where(BoardPostVote.post_id == post_id, BoardPostVote.user_id == user_id)).first()
-        return {"post_id": post_id, "likes": row.likes, "dislikes": row.dislikes, "my_vote": int(mine.value) if mine else 0}
+        return result
 
 
 def get_image(post_id: int) -> Optional[tuple[bytes, str]]:
@@ -549,7 +569,7 @@ def get_post_image(post_id: int, image_id: int) -> Optional[tuple[bytes, str]]:
 
 def update_post(post_id: int, user: User, title: str, body: str,
                 keep_image_ids: list[int], new_images: list[tuple[bytes, str]] | None = None,
-                body_format: str = "text") -> Optional[dict]:
+                body_format: str = "text", db=None) -> Optional[dict]:
     """작성자 본인만 수정. 새 사진은 뒤에 순서대로 붙인다.
 
     옛 형식은 남길 사진 id 목록(``keep_image_ids``)에 없는 사진을 지운다. HTML 형식은 **본문이 가리키는 사진이 곧 남길 사진**이라
@@ -562,15 +582,17 @@ def update_post(post_id: int, user: User, title: str, body: str,
     is_html = body_format == "html"
     body = (body or "").strip()[:MAX_BODY * (4 if is_html else 1)]
     new_images = list(new_images or [])
-    with get_session() as db:
-        row = db.get(BoardPost, post_id)
-        if row is None:
+    with (nullcontext(db) if db is not None else get_session()) as db:
+        found = db.exec(select(BoardPost, (func.coalesce(func.length(BoardPost.image_data), 0) > 0))
+                       .options(defer(BoardPost.image_data, raiseload=True)).where(BoardPost.id == post_id)).first()
+        if found is None:
             return None
+        row, legacy_image = found
         if row.author_user_id != user.id:
             raise PermissionError("본인이 쓴 글만 고칠 수 있어요.")
-        existing = sorted(db.exec(select(BoardImage).where(BoardImage.post_id == post_id)).all(),
+        existing = sorted(db.exec(select(BoardImage).options(defer(BoardImage.image_data, raiseload=True)).where(BoardImage.post_id == post_id)).all(),
                           key=lambda i: (i.position, i.id or 0))
-        if len(existing) + (1 if row.image_data else 0) + len(new_images) > MAX_IMAGES:
+        if len(existing) + int(legacy_image) + len(new_images) > MAX_IMAGES:
             raise ValueError(f"사진은 {MAX_IMAGES}장까지 붙일 수 있어요.")
         now_ms = int(_now_utc().timestamp() * 1000)
         added = [
@@ -580,17 +602,16 @@ def update_post(post_id: int, user: User, title: str, body: str,
         for img in added:
             db.add(img)
         if added:
-            db.commit()
-            for img in added:
-                db.refresh(img)
+            db.flush()
         if is_html:
             body = sanitize_body_html(_resolve_new_images(body, post_id, added))
             keep = _referenced_image_ids(body, post_id)
         else:
             keep = {int(i) for i in keep_image_ids} | {img.id for img in added}
-        if row.image_data and 0 not in keep:
+        if legacy_image and 0 not in keep:
             row.image_data = None
             row.image_mime = ""
+            legacy_image = False
         kept = []
         for img in [*existing, *added]:
             if img.id in keep:
@@ -604,28 +625,21 @@ def update_post(post_id: int, user: User, title: str, body: str,
         row.body = body
         row.body_format = "html" if is_html else ""
         db.add(row)
+        result = _post_detail_view(row, _comments(db, post_id), avatars.avatar_url(row.author_user_id, db=db), kept,
+                                   legacy_image=legacy_image)
         db.commit()
-        db.refresh(row)
-        for img in kept:
-            db.refresh(img)
-        return _post_detail_view(row, [_comment_view(c) for c in db.exec(
-            select(BoardComment).where(BoardComment.post_id == post_id).order_by(BoardComment.id.asc())).all()],
-            avatars.avatar_url(row.author_user_id, db=db), kept)
+        return result
 
 
-def delete_post(post_id: int, user_id: int) -> bool:
+def delete_post(post_id: int, user_id: int, db=None) -> bool:
     """작성자 본인만 삭제. 댓글도 함께 지운다."""
-    with get_session() as db:
-        row = db.get(BoardPost, post_id)
+    with (nullcontext(db) if db is not None else get_session()) as db:
+        row = db.exec(select(BoardPost.id, BoardPost.author_user_id).where(BoardPost.id == post_id)).first()
         if row is None or row.author_user_id != user_id:
             return False
-        for c in db.exec(select(BoardComment).where(BoardComment.post_id == post_id)).all():
-            db.delete(c)
-        for img in db.exec(select(BoardImage).where(BoardImage.post_id == post_id)).all():
-            db.delete(img)
-        for v in db.exec(select(BoardPostVote).where(BoardPostVote.post_id == post_id)).all():
-            db.delete(v)
-        db.delete(row)
+        for model in (BoardComment, BoardImage, BoardPostVote):
+            db.exec(delete(model).where(model.post_id == post_id).execution_options(synchronize_session=False))
+        db.exec(delete(BoardPost).where(BoardPost.id == post_id).execution_options(synchronize_session=False))
         db.commit()
         return True
 
@@ -685,7 +699,7 @@ def _comment_tree(views: list[dict]) -> list[dict]:
     return roots
 
 
-def add_comment(post_id: int, user: User, text: str, parent_id: int | None = None) -> dict:
+def add_comment(post_id: int, user: User, text: str, parent_id: int | None = None, db=None) -> dict:
     """로그인 계정의 댓글 — 닉네임은 계정 이름. 연속 작성은 계정 단위로 제한한다.
 
     ``parent_id`` 가 있으면 답글. 답글의 답글은 같은 원댓글 아래로 붙인다(한 단계만).
@@ -694,14 +708,19 @@ def add_comment(post_id: int, user: User, text: str, parent_id: int | None = Non
     if not text:
         raise ValueError("댓글 내용을 입력해 주세요.")
     _check_rate(f"user:{user.id}")
-    with get_session() as db:
-        if db.get(BoardPost, post_id) is None:
+    with (nullcontext(db) if db is not None else get_session()) as db:
+        # Validate the post/reply and fetch the avatar version in one metadata query.
+        statement = select(BoardPost.id, UserAvatar.version, BoardComment.id.label("reply_id"),
+                           BoardComment.post_id.label("reply_post_id"), BoardComment.parent_id).select_from(BoardPost)
+        found = db.exec(statement.outerjoin(UserAvatar, UserAvatar.user_id == user.id)
+                        .outerjoin(BoardComment, BoardComment.id == parent_id)
+                        .where(BoardPost.id == post_id)).first()
+        if found is None:
             raise LookupError("글을 찾을 수 없어요.")
         if parent_id is not None:
-            parent = db.get(BoardComment, int(parent_id))
-            if parent is None or parent.post_id != post_id:
+            if found.reply_id is None or found.reply_post_id != post_id:
                 raise LookupError("답글을 달 댓글을 찾을 수 없어요.")
-            parent_id = parent.parent_id or parent.id
+            parent_id = found.parent_id or found.reply_id
         now = _now_utc()
         row = BoardComment(
             post_id=post_id,
@@ -714,28 +733,32 @@ def add_comment(post_id: int, user: User, text: str, parent_id: int | None = Non
             created_ms=int(now.timestamp() * 1000),
         )
         db.add(row)
+        db.flush()
+        result = _comment_view(row, avatars.public_url(user.id, found.version))
         db.commit()
-        db.refresh(row)
-        return _comment_view(row, avatars.avatar_url(user.id, db=db))
+        return result
 
 
-def edit_comment(comment_id: int, user: User, text: str) -> Optional[dict]:
+def edit_comment(comment_id: int, user: User, text: str, db=None) -> Optional[dict]:
     """댓글 작성자 본인만 고친다. 없으면 None, 남의 것이면 PermissionError."""
     text = (text or "").strip()
     if not text:
         raise ValueError("댓글 내용을 입력해 주세요.")
-    with get_session() as db:
-        row = db.get(BoardComment, comment_id)
-        if row is None:
+    with (nullcontext(db) if db is not None else get_session()) as db:
+        found = db.exec(select(BoardComment, UserAvatar.version)
+            .outerjoin(UserAvatar, UserAvatar.user_id == BoardComment.author_user_id)
+            .where(BoardComment.id == comment_id)).first()
+        if found is None:
             return None
+        row, version = found
         if row.author_user_id is None or row.author_user_id != user.id:
             raise PermissionError("본인이 쓴 댓글만 고칠 수 있어요.")
         row.text = text[:MAX_COMMENT]
         row.updated_ms = int(_now_utc().timestamp() * 1000)
         db.add(row)
+        result = _comment_view(row, avatars.public_url(user.id, version))
         db.commit()
-        db.refresh(row)
-        return _comment_view(row, avatars.avatar_url(user.id, db=db))
+        return result
 
 
 REPORT_REASONS = {"spam", "abuse", "privacy", "scam", "other"}
@@ -745,14 +768,15 @@ class AlreadyReported(Exception):
     pass
 
 
-def report(target_type: str, target_id: int, user: User, reason: str, detail: str = "") -> dict:
+def report(target_type: str, target_id: int, user: User, reason: str, detail: str = "", db=None) -> dict:
     """글·댓글 신고 — 계정당 대상 하나에 한 번, 내 것은 신고 못 한다."""
     if target_type not in {"post", "comment"}:
         raise ValueError("신고 대상이 올바르지 않아요.")
     if reason not in REPORT_REASONS:
         raise ValueError("신고 사유를 골라 주세요.")
-    with get_session() as db:
-        target = db.get(BoardPost if target_type == "post" else BoardComment, target_id)
+    with (nullcontext(db) if db is not None else get_session()) as db:
+        model = BoardPost if target_type == "post" else BoardComment
+        target = db.exec(select(model.id, model.author_user_id).where(model.id == target_id)).first()
         if target is None:
             raise LookupError("신고할 글을 찾을 수 없어요.")
         if target.author_user_id == user.id:
@@ -765,26 +789,26 @@ def report(target_type: str, target_id: int, user: User, reason: str, detail: st
         row = BoardReport(target_type=target_type, target_id=target_id, reporter_user_id=user.id,
                           reason=reason, detail=(detail or "").strip()[:500], created_ms=int(_now_utc().timestamp() * 1000))
         db.add(row)
+        db.flush()
+        result = {"ok": True, "report_id": row.id}
         db.commit()
-        db.refresh(row)
-        return {"ok": True, "report_id": row.id}
+        return result
 
 
-def delete_comment(comment_id: int, user: User) -> bool:
+def delete_comment(comment_id: int, user: User, db=None) -> bool:
     """댓글 작성자 본인, 또는 (옛 익명 댓글은) 글쓴이만 지운다. 원댓글을 지우면 답글도 함께."""
-    with get_session() as db:
+    with (nullcontext(db) if db is not None else get_session()) as db:
         row = db.get(BoardComment, comment_id)
         if row is None:
             return False
         if row.author_user_id is not None:
             allowed = row.author_user_id == user.id
         else:
-            post = db.get(BoardPost, row.post_id)
-            allowed = post is not None and post.author_user_id == user.id
+            post = db.exec(select(BoardPost.author_user_id).where(BoardPost.id == row.post_id)).first()
+            allowed = post is not None and post == user.id
         if not allowed:
             return False
-        for reply in db.exec(select(BoardComment).where(BoardComment.parent_id == comment_id)).all():
-            db.delete(reply)
-        db.delete(row)
+        db.exec(delete(BoardComment).where(or_(BoardComment.id == comment_id, BoardComment.parent_id == comment_id))
+                .execution_options(synchronize_session=False))
         db.commit()
         return True

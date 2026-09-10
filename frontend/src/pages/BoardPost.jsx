@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
+import useBoardList from "../hooks/useBoardList.js";
 import { api } from "../api.js";
 import { useAuth } from "../lib/auth.js";
 import DOMPurify from "dompurify";
@@ -9,7 +10,7 @@ import ConfirmDialog from "../components/ConfirmDialog.jsx";
 import ReportDialog from "../components/ReportDialog.jsx";
 import { ThumbDownIcon, ThumbUpIcon } from "../components/boardIcons.jsx";
 import { PostRow, TableHead } from "./Board.jsx";
-import { editPath, writePath } from "./BoardWrite.jsx";
+import { editPath, writePath } from "../lib/boardPaths.js";
 import { AuthorAvatar } from "../components/UserAvatar.jsx";
 import "./Board.css";
 
@@ -168,13 +169,7 @@ function countComments(list) {
 
 // 글 아래 목록 — 읽고 나면 다음 글로 가는 게 게시판 관례(퀘이사존·디시·클리앙 모두 글 아래에 목록을 다시 둔다).
 function ListBelow({ currentId, token, onWrite }) {
-  const [data, setData] = useState(null);
-  const [now] = useState(() => Date.now());
-  useEffect(() => {
-    let alive = true;
-    api.boardList(1, 10).then((d) => { if (alive) setData(d); }).catch(() => {});
-    return () => { alive = false; };
-  }, []);
+  const { data, now } = useBoardList(1, 10);
   if (!data || !data.items?.length) return null;
   return (
     <section className="board-post-list" aria-labelledby="board-post-list-title">
@@ -223,13 +218,15 @@ export default function BoardPost() {
   const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
+    const controller = new AbortController();
+    let active = true;
     setPost(null);
     setErr("");
-    api
-      .boardGet(id)
-      .then((d) => setPost(d))
-      .catch((e) => setErr(String(e.message || e)));
-  }, [id]);
+    api.boardGet(id, { signal: controller.signal })
+      .then(data => { if (active) setPost(data); })
+      .catch(error => { if (active && error.name !== "AbortError") setErr(String(error.message || error)); });
+    return () => { active = false; controller.abort(); };
+  }, [id, token]);
 
   async function removePost() {
     setDeleting(true);

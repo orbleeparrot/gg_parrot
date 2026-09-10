@@ -3,10 +3,26 @@
 import { getToken } from "./lib/auth.js";
 import { createRequestCoordinator } from "./lib/requestCoordinator.js";
 import { withRequestTimeout } from "./lib/requestTimeout.js";
+import { createBoardListCache } from "./lib/boardListCache.js";
 
 const BASE = "";
 const RUNNER_SESSIONS_STREAM_PATH = "/api/me/runner/sessions/stream";
 const getRequests = createRequestCoordinator();
+const boardLists = createBoardListCache();
+
+function boardListPath(page, size, { sort = "new", q = "", field = "all" } = {}) {
+  const params = new URLSearchParams({ page: String(page), size: String(size) });
+  if (sort && sort !== "new") params.set("sort", sort);
+  if (q) params.set("q", q);
+  if (q && field && field !== "all") params.set("field", field);
+  return `/api/board/posts?${params}`;
+}
+
+async function boardMutation(promise) {
+  const result = await promise;
+  boardLists.invalidate();
+  return result;
+}
 
 function websocketUrl(path) {
   const configuredBase = String(import.meta.env?.VITE_API_WS_BASE || "").trim();
@@ -44,7 +60,7 @@ async function req(path, opts = {}) {
   const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
   if (token) headers["Authorization"] = `Bearer ${token}`;
   const method = String(opts.method || "GET").toUpperCase();
-  const { signal: callerSignal, timeoutMs, ...fetchOptions } = opts;
+  const { signal: callerSignal, timeoutMs, requestKey = "", ...fetchOptions } = opts;
   const execute = (signal) => withRequestTimeout(async (requestSignal) => {
     const res = await fetch(BASE + path, { ...fetchOptions, method, headers, signal: requestSignal });
     const body = await jsonBody(res);
@@ -62,7 +78,7 @@ async function req(path, opts = {}) {
   }, { signal, timeoutMs });
   if (method !== "GET") return execute(callerSignal);
   const authScope = token || "anonymous";
-  return getRequests.run(`${authScope}:${path}`, execute, { signal: callerSignal });
+  return getRequests.run(`${authScope}:${requestKey}:${path}`, execute, { signal: callerSignal });
 }
 
 // multipart/form-data 요청 (파일 업로드). Content-Type은 브라우저가 boundary와
@@ -199,15 +215,15 @@ export const api = {
   },
 
   // 껄무새 게시판
-  boardList: (page = 1, size = 10, { sort = "new", q = "", field = "all" } = {}) => {
-    const params = new URLSearchParams({ page: String(page), size: String(size) });
-    if (sort && sort !== "new") params.set("sort", sort);
-    if (q) params.set("q", q);
-    if (q && field && field !== "all") params.set("field", field);
-    return req(`/api/board/posts?${params}`);
+  subscribeBoardList: boardLists.subscribe,
+  boardListVersion: boardLists.version,
+  boardListCached: (page = 1, size = 10, options = {}) => boardLists.peek(`${getToken()}:${boardListPath(page, size, options)}`),
+  boardList: (page = 1, size = 10, options = {}) => {
+    const path = boardListPath(page, size, options);
+    return boardLists.load(`${getToken()}:${path}`, version => req(path, { signal: options.signal, requestKey: `board-${version}` }));
   },
-  boardVote: (id, value) => req(`/api/board/posts/${id}/vote`, { method: "POST", body: JSON.stringify({ value }) }),
-  boardGet: (id) => req(`/api/board/posts/${id}`),
+  boardVote: (id, value) => boardMutation(req(`/api/board/posts/${id}/vote`, { method: "POST", body: JSON.stringify({ value }) })),
+  boardGet: (id, options = {}) => req(`/api/board/posts/${id}`, options).then(post => { boardLists.updatePost(post); return post; }),
   // 글 작성(로그인 필요) — title/body + 선택 이미지(File). multipart 전송.
   boardCreate: ({ title, body, bodyFormat = "text", images = [] }) => {
     const fd = new FormData();
@@ -215,7 +231,7 @@ export const api = {
     fd.append("body", body || "");
     fd.append("body_format", bodyFormat);
     for (const file of images) fd.append("images", file);
-    return reqForm("/api/board/posts", fd);
+    return boardMutation(reqForm("/api/board/posts", fd));
   },
   boardUpdate: (id, { title, body, bodyFormat = "text", keepImageIds = [], images = [] }) => {
     const fd = new FormData();
@@ -224,16 +240,16 @@ export const api = {
     fd.append("body_format", bodyFormat);
     fd.append("keep_image_ids", keepImageIds.join(","));
     for (const file of images) fd.append("images", file);
-    return reqForm(`/api/board/posts/${id}`, fd, { method: "PUT" });
+    return boardMutation(reqForm(`/api/board/posts/${id}`, fd, { method: "PUT" }));
   },
-  boardDelete: (id) => req(`/api/board/posts/${id}`, { method: "DELETE" }),
+  boardDelete: (id) => boardMutation(req(`/api/board/posts/${id}`, { method: "DELETE" })),
   boardImageUrl: (id) => `/api/board/posts/${id}/image`,
-  // 댓글 — 계정 없이 일회성 이름+비밀번호
+  // 댓글·답글 — 로그인 계정으로 작성. 성공하면 관련 목록을 다시 조회한다.
   boardAddComment: (postId, text, parentId = null) =>
-    req(`/api/board/posts/${postId}/comments`, { method: "POST", body: JSON.stringify({ text, parent_id: parentId }) }),
+    boardMutation(req(`/api/board/posts/${postId}/comments`, { method: "POST", body: JSON.stringify({ text, parent_id: parentId }) })),
   boardEditComment: (commentId, text) =>
-    req(`/api/board/comments/${commentId}`, { method: "PUT", body: JSON.stringify({ text }) }),
-  boardDeleteComment: (commentId) => req(`/api/board/comments/${commentId}`, { method: "DELETE" }),
+    boardMutation(req(`/api/board/comments/${commentId}`, { method: "PUT", body: JSON.stringify({ text }) })),
+  boardDeleteComment: (commentId) => boardMutation(req(`/api/board/comments/${commentId}`, { method: "DELETE" })),
   boardReport: ({ targetType, targetId, reason, detail = "" }) =>
     req("/api/board/reports", { method: "POST", body: JSON.stringify({ target_type: targetType, target_id: targetId, reason, detail }) }),
 

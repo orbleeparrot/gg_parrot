@@ -30,6 +30,7 @@ from fastapi import (
 )
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from sqlmodel import Session, select
 
@@ -1073,7 +1074,8 @@ async def board_create(
     body_format: str = Form("text"),
     images: list[UploadFile] = File(default=[]),
     image: Optional[UploadFile] = File(default=None),
-    user: User = Depends(auth_mod.current_user),
+    user: User = Depends(auth_mod.current_user_in_session),
+    db: Session = Depends(request_session),
 ) -> dict:
     """글 작성 — 로그인 계정만. 사진(jpg/png, 각 2MB 이하)은 `images` 로 여러 장, 옛 클라이언트의 `image` 한 장도 받는다.
     `body_format=html` 이면 편집기 HTML(새 사진은 `data-key="new:N"` 자리)로 받아 정제해 저장한다."""
@@ -1089,7 +1091,7 @@ async def board_create(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
     try:
-        return board_mod.create_post(user, title, body, validated, body_format=body_format)
+        return await run_in_threadpool(board_mod.create_post, user, title, body, validated, body_format=body_format, db=db)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -1102,7 +1104,8 @@ async def board_update(
     body_format: str = Form("text"),
     keep_image_ids: str = Form(""),
     images: list[UploadFile] = File(default=[]),
-    user: User = Depends(auth_mod.current_user),
+    user: User = Depends(auth_mod.current_user_in_session),
+    db: Session = Depends(request_session),
 ) -> dict:
     """글 수정 — 작성자만. `keep_image_ids` 는 남길 사진 id 를 쉼표로(옛 한 장은 0), `images` 는 새로 붙일 사진."""
     try:
@@ -1118,7 +1121,7 @@ async def board_update(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
     try:
-        view = board_mod.update_post(post_id, user, title, body, keep, validated, body_format=body_format)
+        view = await run_in_threadpool(board_mod.update_post, post_id, user, title, body, keep, validated, body_format=body_format, db=db)
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc))
     except ValueError as exc:
@@ -1135,10 +1138,9 @@ def board_list(
     sort: str = "new",
     q: str = "",
     field: str = "all",
-    account: Optional[User] = Depends(auth_mod.optional_user),
 ) -> dict:
     """목록 — sort: new|likes|views|comments, q: 검색어, field: all(제목+내용)|title|author."""
-    return board_mod.list_posts(page, size, sort=sort, q=q, field=field, viewer_id=account.id if account else None)
+    return board_mod.list_posts(page, size, sort=sort, q=q, field=field)
 
 
 def _board_view_key(request: Request) -> str:
@@ -1150,8 +1152,8 @@ def _board_view_key(request: Request) -> str:
 
 
 @app.get("/api/board/posts/{post_id}")
-def board_detail(post_id: int, request: Request, account: Optional[User] = Depends(auth_mod.optional_user)) -> dict:
-    view = board_mod.get_post(post_id, viewer_id=account.id if account else None, view_key=_board_view_key(request))
+def board_detail(post_id: int, request: Request, account: Optional[User] = Depends(auth_mod.optional_user_in_session), db: Session = Depends(request_session)) -> dict:
+    view = board_mod.get_post(post_id, viewer_id=account.id if account else None, view_key=_board_view_key(request), db=db)
     if view is None:
         raise HTTPException(status_code=404, detail="글을 찾을 수 없어요.")
     return view
@@ -1162,17 +1164,17 @@ class PostVoteRequest(BaseModel):
 
 
 @app.post("/api/board/posts/{post_id}/vote")
-def board_vote(post_id: int, req: PostVoteRequest, user: User = Depends(auth_mod.current_user)) -> dict:
+def board_vote(post_id: int, req: PostVoteRequest, user: User = Depends(auth_mod.current_user_in_session), db: Session = Depends(request_session)) -> dict:
     """추천(+1)/비추천(-1) — 로그인 계정당 한 표, 같은 표를 다시 누르면 취소."""
-    result = board_mod.vote_post(post_id, user.id, req.value)
+    result = board_mod.vote_post(post_id, user.id, req.value, db=db)
     if result is None:
         raise HTTPException(status_code=404, detail="글을 찾을 수 없어요.")
     return result
 
 
 @app.delete("/api/board/posts/{post_id}")
-def board_delete(post_id: int, user: User = Depends(auth_mod.current_user)) -> dict:
-    if not board_mod.delete_post(post_id, user.id):
+def board_delete(post_id: int, user: User = Depends(auth_mod.current_user_in_session), db: Session = Depends(request_session)) -> dict:
+    if not board_mod.delete_post(post_id, user.id, db=db):
         raise HTTPException(status_code=403, detail="본인이 쓴 글만 삭제할 수 있어요.")
     return {"ok": True}
 
@@ -1201,10 +1203,10 @@ class CommentIn(BaseModel):
 
 
 @app.post("/api/board/posts/{post_id}/comments")
-def board_comment_add(post_id: int, req: CommentIn, user: User = Depends(auth_mod.current_user)) -> dict:
+def board_comment_add(post_id: int, req: CommentIn, user: User = Depends(auth_mod.current_user_in_session), db: Session = Depends(request_session)) -> dict:
     """댓글·답글 — 로그인 계정만, 닉네임은 계정 이름. parent_id 가 있으면 그 댓글의 답글."""
     try:
-        return {"comment": board_mod.add_comment(post_id, user, req.text, parent_id=req.parent_id)}
+        return {"comment": board_mod.add_comment(post_id, user, req.text, parent_id=req.parent_id, db=db)}
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except ValueError as exc:
@@ -1218,9 +1220,9 @@ class CommentEditIn(BaseModel):
 
 
 @app.put("/api/board/comments/{comment_id}")
-def board_comment_edit(comment_id: int, req: CommentEditIn, user: User = Depends(auth_mod.current_user)) -> dict:
+def board_comment_edit(comment_id: int, req: CommentEditIn, user: User = Depends(auth_mod.current_user_in_session), db: Session = Depends(request_session)) -> dict:
     try:
-        view = board_mod.edit_comment(comment_id, user, req.text)
+        view = board_mod.edit_comment(comment_id, user, req.text, db=db)
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc))
     except ValueError as exc:
@@ -1238,10 +1240,10 @@ class ReportIn(BaseModel):
 
 
 @app.post("/api/board/reports")
-def board_report(req: ReportIn, user: User = Depends(auth_mod.current_user)) -> dict:
+def board_report(req: ReportIn, user: User = Depends(auth_mod.current_user_in_session), db: Session = Depends(request_session)) -> dict:
     """글·댓글 신고 — 로그인 계정당 대상 하나에 한 번."""
     try:
-        return board_mod.report(req.target_type, req.target_id, user, req.reason, req.detail)
+        return board_mod.report(req.target_type, req.target_id, user, req.reason, req.detail, db=db)
     except board_mod.AlreadyReported as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     except LookupError as exc:
@@ -1251,8 +1253,8 @@ def board_report(req: ReportIn, user: User = Depends(auth_mod.current_user)) -> 
 
 
 @app.delete("/api/board/comments/{comment_id}")
-def board_comment_delete(comment_id: int, user: User = Depends(auth_mod.current_user)) -> dict:
-    if not board_mod.delete_comment(comment_id, user):
+def board_comment_delete(comment_id: int, user: User = Depends(auth_mod.current_user_in_session), db: Session = Depends(request_session)) -> dict:
+    if not board_mod.delete_comment(comment_id, user, db=db):
         raise HTTPException(status_code=403, detail="본인이 쓴 댓글만 지울 수 있어요.")
     return {"ok": True}
 

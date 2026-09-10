@@ -54,6 +54,27 @@ def entries():
     return rows
 
 
+def short_entries():
+    """Ordinary rows must stay compact, not just fit unusually long fixtures."""
+    rows = entries()[:3]
+    for row, symbol, author, result, locked, summary in zip(
+        rows,
+        ("DOTUSDT", "CHIPUSDT", "XRPUSDT"),
+        ("포기하지않는새", "분할매수", "느린고래"),
+        (2.91, -.42, .08),
+        (True, False, True),
+        ("", "0.0011달러에 매수하고 0.0013달러에 매도해요.", ""),
+    ):
+        row.update(
+            symbol=symbol, username=author, nickname=author, return_pct=result,
+            likes=0, dislikes=0, is_owner=False, is_mine=False, is_ai=False, crown=False,
+            defending=False, streak_days=1, for_sale=True, locked=locked,
+            unlock_price=100 if locked else 0, macro=None if locked else macro(symbol),
+            human_summary=summary,
+        )
+    return rows
+
+
 class Handler(SimpleHTTPRequestHandler):
     def do_GET(self):
         if not (BUILD / urlsplit(self.path).path.lstrip("/")).is_file():
@@ -131,9 +152,66 @@ def open_page(browser, origin, fixture, errors, *, width=390, height=844, theme=
     page = context.new_page()
     page.on("pageerror", lambda error: errors.append(str(error)))
     page.goto(origin + "/leaderboard" + ("?from=quick-run" if quick else ""), wait_until="networkidle")
-    expect(page.locator(".lb-row:not(.lb-row-head)")).to_have_count(4)
+    expect(page.locator(".lb-row:not(.lb-row-head)")).to_have_count(len(fixture.rows))
     page.evaluate("document.fonts.ready")
     return context, page
+
+
+def mobile_geometry(rows):
+    return rows.evaluate_all("""rows => rows.map(row => {
+      const rect = el => { const r = el.getBoundingClientRect(); return {x:r.x,y:r.y,right:r.right,bottom:r.bottom,w:r.width,h:r.height}; };
+      const get = s => rect(row.querySelector(s));
+      const buttons = [...row.querySelectorAll('button')].map(button => {
+        const r = rect(button), style = getComputedStyle(button), after = getComputedStyle(button, '::after');
+        const left = parseFloat(after.left), right = parseFloat(after.right), top = parseFloat(after.top), bottom = parseFloat(after.bottom);
+        return {...r,background:style.backgroundColor,border:parseFloat(style.borderTopWidth),shadow:style.boxShadow,font:parseFloat(style.fontSize),
+          icons:[...button.querySelectorAll('svg')].map(rect),
+          hit:{x:r.x+left,y:r.y+top,right:r.right-right,bottom:r.bottom-bottom,w:r.w-left-right,h:r.h-top-bottom}};
+      });
+      return {row:rect(row),rank:get('.lb-rank'),coin:get('.lb-coin'),name:get('.lb-name'),returns:get('.lb-return'),summary:get('.lb-summary'),meta:get('.lb-mobile-meta'),actions:get('.lb-actions'),buttons,
+        symbolFits:row.querySelector('.lb-mobile-symbol strong').scrollWidth <= row.querySelector('.lb-mobile-symbol strong').clientWidth + 1,
+        returnFits:row.querySelector('.lb-return').scrollWidth <= row.querySelector('.lb-return').clientWidth + 1};
+    })""")
+
+
+def assert_compact_geometry(geometry):
+    for data in geometry:
+        assert data["rank"]["right"] <= data["coin"]["x"], data
+        assert data["coin"]["right"] <= data["name"]["x"], data
+        assert data["name"]["right"] <= data["returns"]["x"], data
+        assert data["coin"]["w"] <= 28 and data["coin"]["h"] <= 28, data
+        assert data["summary"]["y"] >= max(data[key]["bottom"] for key in ("rank", "coin", "name", "returns")), data
+        assert 3.9 <= data["meta"]["y"] - data["summary"]["bottom"] <= 4.1, data
+        assert data["actions"]["y"] >= data["meta"]["bottom"] + 6, data
+        assert data["symbolFits"] and data["returnFits"], data
+        assert data["row"]["h"] < 350, data
+        for index, button in enumerate(data["buttons"]):
+            assert button["w"] >= 36 and 31.9 <= button["h"] <= 32.1, data
+            assert button["background"] == "rgba(0, 0, 0, 0)" and button["border"] == 0 and button["shadow"] == "none", data
+            assert button["font"] == 12, data
+            assert all(icon["w"] == 18 and icon["h"] == 18 for icon in button["icons"]), data
+            assert button["x"] >= data["row"]["x"] and button["right"] <= data["row"]["right"] + 1, data
+            hit = button["hit"]
+            assert hit["w"] >= 44 and hit["h"] >= 44, data
+            for other in data["buttons"][index + 1:]:
+                other_hit = other["hit"]
+                # Expanded touch rectangles may meet, but must never overlap.
+                assert max(other_hit["x"] - hit["right"], hit["x"] - other_hit["right"], other_hit["y"] - hit["bottom"], hit["y"] - other_hit["bottom"]) >= -.1, data
+
+
+def assert_expanded_hit_targets(row):
+    row.locator(".lb-actions").evaluate("el => el.scrollIntoView({block:'center', inline:'nearest'})")
+    result = row.locator(".lb-actions button").evaluate_all("""buttons => buttons.map(button => {
+      const r = button.getBoundingClientRect(), p = getComputedStyle(button, '::after');
+      const x = r.x + r.width / 2, y = r.y + r.height / 2;
+      const probes = [[x,y],[r.x+parseFloat(p.left)+1,y],[r.right-parseFloat(p.right)-1,y],[x,r.y+parseFloat(p.top)+1],[x,r.bottom-parseFloat(p.bottom)-1]];
+      return {name:button.getAttribute('aria-label') || button.textContent.trim(),probes:probes.map(([x,y]) => {
+        const hit = document.elementFromPoint(x,y);
+        return {x,y,ok:hit === button || button.contains(hit),actual:hit?.closest('button')?.getAttribute('aria-label') || hit?.tagName};
+      })};
+    })""")
+    assert all(probe["ok"] for button in result for probe in button["probes"]), result
+    return result
 
 
 def main():
@@ -161,29 +239,15 @@ def main():
                         expect(page.locator(".lb-row-head")).to_be_hidden()
                         expect(rows.nth(1).locator(".lb-mobile-symbol strong")).to_have_text("1000PEPE")
                         expect(rows.nth(1).locator(".lb-mobile-author-name")).to_have_text(fixture.rows[1]["username"])
-                        geometry = rows.evaluate_all("""rows => rows.map(row => {
-                          const r = el => { const b = el.getBoundingClientRect(); return {x:b.x,y:b.y,right:b.right,bottom:b.bottom,w:b.width,h:b.height}; };
-                          const get = s => r(row.querySelector(s));
-                          const buttons = [...row.querySelectorAll('button')].map(r);
-                          return {row:r(row),rank:get('.lb-rank'),coin:get('.lb-coin'),name:get('.lb-name'),returns:get('.lb-return'),summary:get('.lb-summary'),meta:get('.lb-mobile-meta'),actions:get('.lb-actions'),buttons,
-                            symbolFits:row.querySelector('.lb-mobile-symbol strong').scrollWidth <= row.querySelector('.lb-mobile-symbol strong').clientWidth + 1,
-                            returnFits:row.querySelector('.lb-return').scrollWidth <= row.querySelector('.lb-return').clientWidth + 1};
-                        })""")
-                        for data in geometry:
-                            assert data["rank"]["right"] <= data["coin"]["x"], data
-                            assert data["coin"]["right"] <= data["name"]["x"], data
-                            assert data["name"]["right"] <= data["returns"]["x"], data
-                            assert data["summary"]["y"] >= max(data[key]["bottom"] for key in ("rank", "coin", "name", "returns")), data
-                            assert data["meta"]["y"] >= data["summary"]["bottom"] + 8, data
-                            assert data["actions"]["y"] >= data["meta"]["bottom"] + 8, data
-                            assert data["symbolFits"] and data["returnFits"], data
-                            for index, button in enumerate(data["buttons"]):
-                                assert button["w"] >= 48 and button["h"] >= 48, data
-                                assert button["x"] >= data["row"]["x"] and button["right"] <= data["row"]["right"] + 1, data
-                                for other in data["buttons"][index + 1:]:
-                                    assert max(other["x"] - button["right"], button["x"] - other["right"], other["y"] - button["bottom"], button["y"] - other["bottom"]) >= 7.9, data
-                        for field in ("전략", "수익률", "작성자"):
-                            expect(rows.first.locator(".lb-mobile-field-label").filter(has_text=field)).to_be_visible()
+                        geometry = mobile_geometry(rows)
+                        assert_compact_geometry(geometry)
+                        expect(rows.first.locator(".lb-summary .sr-only")).to_have_text("전략:")
+                        assert rows.first.locator(".lb-summary").get_attribute("aria-label") is None
+                        assert rows.first.locator(".lb-mobile-meta").get_attribute("aria-label") is None
+                        expect(rows.first.locator(".lb-return")).to_have_attribute("aria-label", "수익률 +1234.56%")
+                        expect(rows.first.locator(".lb-mobile-field-label")).to_have_count(0)
+                        expect(rows.nth(1).locator(".lb-mobile-locked")).to_have_text("잠긴 전략")
+                        hits = [assert_expanded_hit_targets(rows.nth(index)) for index in range(rows.count())]
                         page.evaluate("window.scrollTo(0, document.documentElement.scrollHeight)")
                         last_action = rows.last.get_by_role("button", name="빌더로 복사", exact=True)
                         expect(last_action).to_be_in_viewport()
@@ -193,7 +257,7 @@ def main():
                           return hit === el || el.contains(hit);
                         }"""), "The floating chat control must not cover the last entry's action"
                         page.evaluate("window.scrollTo(0, 0)")
-                        checks[f"filled-layout-{width}-{theme}"] = geometry
+                        checks[f"filled-layout-{width}-{theme}"] = {"geometry": geometry, "expanded_hit_targets": hits}
                     else:
                         expect(page.locator(".lb-row-head")).to_be_visible()
                         expect(rows.first.locator(".lb-title")).to_be_visible()
@@ -202,6 +266,23 @@ def main():
                         assert len(rows.first.evaluate("el => getComputedStyle(el).gridTemplateColumns").split()) == 6
                         checks[f"desktop-table-{theme}"] = "passed"
                     page.screenshot(path=str(OUTPUT / f"leaderboard-{width}-{theme}.png"), full_page=True)
+                    context.close()
+
+            for width in (320, 390):
+                for theme in ("dark", "light"):
+                    fixture = Fixture()
+                    fixture.rows = short_entries()
+                    context, page = open_page(browser, origin, fixture, errors, width=width, theme=theme)
+                    rows = page.locator(".lb-row:not(.lb-row-head)")
+                    geometry = mobile_geometry(rows)
+                    assert_compact_geometry(geometry)
+                    heights = [entry["row"]["h"] for entry in geometry]
+                    assert all(height <= 190 for height in heights), heights
+                    assert sum(heights) <= 570, heights
+                    expect(rows.first.locator(".lb-mobile-locked")).to_have_text("잠긴 전략")
+                    expect(rows.nth(1).locator(".lb-summary-text")).to_have_text(fixture.rows[1]["human_summary"])
+                    page.screenshot(path=str(OUTPUT / f"leaderboard-short-{width}-{theme}.png"), full_page=True)
+                    checks[f"short-rows-{width}-{theme}"] = {"heights": heights, "total": sum(heights)}
                     context.close()
 
             fixture = Fixture()
@@ -223,6 +304,25 @@ def main():
             context.close()
 
             fixture = Fixture()
+            context, page = open_page(browser, origin, fixture, errors, width=320)
+            owner = page.locator("#leaderboard-entry-1")
+            owner.get_by_role("button", name="수정", exact=True).click()
+            expect(page.get_by_role("dialog")).to_be_visible()
+            page.keyboard.press("Escape")
+            expect(page.get_by_role("dialog")).to_have_count(0)
+            assert not fixture.deleted
+            page.once("dialog", lambda dialog: dialog.dismiss())
+            owner.get_by_role("button", name="삭제", exact=True).click()
+            expect(owner).to_be_visible()
+            assert not fixture.deleted
+            page.once("dialog", lambda dialog: dialog.accept())
+            owner.get_by_role("button", name="삭제", exact=True).click()
+            expect(owner).to_have_count(0)
+            assert fixture.deleted == [1]
+            checks["owner-edit-and-confirmed-delete"] = "passed"
+            context.close()
+
+            fixture = Fixture()
             context, page = open_page(browser, origin, fixture, errors, member=False)
             page.locator("#leaderboard-entry-2").get_by_role("button", name="언락 100P", exact=True).click()
             page.wait_for_url("**/login?**")
@@ -233,8 +333,10 @@ def main():
 
             for entry_id, state_key, expected in [(1, "selectedSourceRef", 1), (4, "selectedMacroId", 901), (2, "selectedMacroId", 202)]:
                 fixture = Fixture()
-                context, page = open_page(browser, origin, fixture, errors, quick=True)
+                context, page = open_page(browser, origin, fixture, errors, quick=True, width=320)
                 row = page.locator(f"#leaderboard-entry-{entry_id}")
+                assert_compact_geometry(mobile_geometry(page.locator(".lb-row:not(.lb-row-head)")))
+                assert_expanded_hit_targets(row)
                 row.get_by_role("button", name="언락 100P 후 사용" if entry_id == 2 else "이 매크로 사용", exact=True).click()
                 page.wait_for_url("**/?run=1&step=1")
                 assert page.evaluate(f"history.state.usr.{state_key}") == expected

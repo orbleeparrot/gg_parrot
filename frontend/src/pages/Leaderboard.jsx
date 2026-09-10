@@ -221,7 +221,7 @@ export default function Leaderboard() {
     <div className="leaderboard-page">
       <PageHeader
         title="오늘의 리더보드"
-        meta={<>리더보드 초기화 <span className="num">{fmtCountdown(remain)}</span></>}
+        meta={<><span className="lb-reset-prefix">리더보드 </span>초기화 <span className="num">{fmtCountdown(remain)}</span></>}
         actions={(
           <>
             <SimBadge className="lg:hidden" />
@@ -296,21 +296,21 @@ export default function Leaderboard() {
                     {registrationLabel(e)}
                   </div>
                 </div>
-                <div className={`lb-summary${e.locked ? " is-locked" : ""}`} role="cell">
-                  <span className="lb-mobile-field-label">전략</span>
-                  <span className="lb-summary-text">{e.locked ? "잠김 · 언락하면 전략과 설정이 공개돼요" : e.human_summary}</span>
-                </div>
-                <div className={"lb-return num " + r.cls} role="cell">
-                  <span className="lb-mobile-field-label">수익률</span>
-                  <span className="lb-return-value">{r.text}</span>
-                </div>
-                <div className="lb-mobile-meta" role="cell">
-                  <div className="lb-mobile-author">
-                    <span className="lb-mobile-field-label">작성자</span>
-                    <span className="lb-mobile-author-name">{e.username || e.nickname}</span>
-                    <span className="lb-mobile-time">{registrationLabel(e)}</span>
+                <div className="lb-entry-details" role="presentation">
+                  <div className={`lb-summary${e.locked ? " is-locked" : ""}`} role="cell">
+                    <span className="sr-only">전략: </span>
+                    {e.locked ? <span className="lb-mobile-locked">잠긴 전략</span> : null}
+                    <span className="lb-summary-text">{e.locked ? "잠김 · 언락하면 전략과 설정이 공개돼요" : e.human_summary}</span>
                   </div>
-                  <div className="lb-mobile-badges"><EntryBadges entry={e} top3={top3} /></div>
+                  <div className="lb-mobile-meta" role="cell">
+                    <span className="sr-only">작성자: </span>
+                    <span className="lb-mobile-author-name">{e.username || e.nickname}</span>
+                    <span className="lb-mobile-time"><span className="sr-only">등록: </span>{e.defending ? e.first_created_kst : e.created_kst}</span>
+                    <span className="lb-mobile-badges"><EntryBadges entry={e} top3={top3} /></span>
+                  </div>
+                </div>
+                <div className={"lb-return num " + r.cls} role="cell" aria-label={`수익률 ${r.text}`}>
+                  <span className="lb-return-value">{r.text}</span>
                 </div>
                 <div className="lb-actions" role="cell">
                   <div className="lb-reactions" role="group" aria-label="매크로 반응">
@@ -343,7 +343,6 @@ export default function Leaderboard() {
                       aria-label={`언락 ${e.unlock_price}P${quickRunMode ? " 후 사용" : ""}`}
                     >
                       <LockIcon />
-                      <span className="lb-mobile-action-label">열기</span>
                       <span className="num">{unlocking === e.id ? "여는 중…" : `${e.unlock_price}P`}</span>
                     </button>
                   ) : quickRunMode ? (
@@ -364,7 +363,6 @@ export default function Leaderboard() {
                       aria-label="빌더로 복사"
                     >
                       <CopyIcon />
-                      <span className="lb-mobile-action-label">복사</span>
                     </button>
                   )}
                   {(e.is_owner || (e.is_mine && !e.for_sale)) && (

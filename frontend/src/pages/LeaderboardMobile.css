@@ -6,6 +6,9 @@
 .lb-reactions,
 .lb-command-actions { display: contents; }
 
+.lb-name-line { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; min-width: 0; }
+.lb-name-line > .badge { flex-shrink: 0; }
+
 /* Only the strategy cell changes; the macro title, badges and table columns retain their hierarchy. */
 .leaderboard-page .lb-summary { display: block; overflow: visible; -webkit-line-clamp: unset; }
 .lb-strategy-facts { display: block; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

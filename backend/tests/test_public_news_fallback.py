@@ -16,6 +16,8 @@ def article(title="Internet Computer blockchain update", *, url="https://news.te
 
 @pytest.fixture(autouse=True)
 def isolated(monkeypatch):
+    monkeypatch.setattr(news, "_coin_envelope_cache", {}, raising=False)
+    monkeypatch.setattr(news, "_coin_refresh_threads", {}, raising=False)
     monkeypatch.setattr(news, "_cache", {})
     monkeypatch.setattr(news, "_coin_cache", {})
     monkeypatch.setattr(news, "_publisher_rss_cache", {})
@@ -119,8 +121,14 @@ def test_total_outage_retains_stale_snapshot_and_current_failures(monkeypatch):
     monkeypatch.setattr(news, "_fetch_shared_publisher_rss", fail)
     result = news.get_coin_news("ICP")
     assert result["data_source"] == "prefect_db_stale" and result["stale"] is True
-    assert result["snapshot_id"] == "previous-snapshot"
-    assert len(result["items"]) == 1 and all(source["status"] == "error" for source in result["sources"])
+    assert result["snapshot_id"] == "previous-snapshot" and result["refreshing"] is True
+    assert len(result["items"]) == 1
+    thread = news._coin_refresh_threads.get("coin:ICP")
+    if thread is not None:
+        thread.join(timeout=5)
+    result = news.get_coin_news("ICP")  # 배경 갱신이 끝난 뒤: 여전히 스냅샷이지만 현재 실패 소스가 붙는다
+    assert result["data_source"] == "prefect_db_stale" and result["stale"] is True
+    assert result["sources"] and all(source["status"] == "error" for source in result["sources"])
 
 
 def test_shared_free_feed_cache_survives_different_public_tickers(monkeypatch):

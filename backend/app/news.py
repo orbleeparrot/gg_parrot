@@ -4288,11 +4288,62 @@ def _coin_snapshot_is_stale(stored: dict) -> bool:
     return time.time() - observed_seconds > max(900, _COIN_CACHE_SECONDS * 3)
 
 
+# 준비된 응답의 짧은 재사용 — 같은 종목을 연달아 읽을 때 번역 합치기·요약 붙이기(DB 왕복)를 반복하지 않는다.
+_COIN_ENVELOPE_CACHE_SECONDS = max(15, int(os.environ.get("COIN_NEWS_ENVELOPE_CACHE_SECONDS", "45")))
+_coin_envelope_cache: dict[str, tuple[dict, float]] = {}
+_coin_refresh_lock = threading.Lock()
+_coin_refresh_threads: dict[str, threading.Thread] = {}
+
+
+def _remember_coin_envelope(base: str, env: dict) -> None:
+    """번역·요약이 끝난 응답만 잠시 기억한다 — 대기 중인 응답은 다음 읽기에서 회복해야 한다."""
+    if env.get("stale") or env.get("refreshing"):
+        return
+    if (env.get("translation") or {}).get("status") != "ready":
+        return
+    if (env.get("community_summaries") or {}).get("status") == "partial":
+        return
+    _coin_envelope_cache[base] = (deepcopy(env), time.time() + _COIN_ENVELOPE_CACHE_SECONDS)
+    while len(_coin_envelope_cache) > 512:
+        _coin_envelope_cache.pop(next(iter(_coin_envelope_cache)))
+
+
+def _refresh_in_background(key: str, loader) -> threading.Thread | None:
+    """이전 값을 돌려준 뒤 새 수집을 배경에서 한 번만 돌린다(종목당 스레드 하나)."""
+    with _coin_refresh_lock:
+        running = _coin_refresh_threads.get(key)
+        if running is not None and running.is_alive():
+            return running
+
+        def run() -> None:
+            try:
+                _coin_refreshes.run(key, loader)
+            except Exception as exc:  # noqa: BLE001 — 배경 갱신 실패는 다음 읽기가 다시 시도한다
+                logger.warning("coin news background refresh failed: %s: %s", key, exc)
+            finally:
+                with _coin_refresh_lock:
+                    if _coin_refresh_threads.get(key) is thread:
+                        _coin_refresh_threads.pop(key, None)
+
+        thread = threading.Thread(target=run, name=f"coin-news-refresh-{key}", daemon=True)
+        _coin_refresh_threads[key] = thread
+        thread.start()
+        return thread
+
+
 def get_coin_news(symbol: str) -> dict:
-    """Return a central snapshot first, with request-time RSS as fallback."""
+    """Return a central snapshot first, with request-time RSS as fallback.
+
+    읽기는 기다리지 않는다: 준비된 응답은 짧게 재사용하고, RSS 캐시가 만료됐거나 스냅샷이 오래됐으면
+    이전 값을 `stale` 로 바로 돌려준 뒤 배경에서 새로 받는다(stale-while-revalidate).
+    아무 값도 없는 종목만 수집을 기다린다.
+    """
     base = asset_from_market_symbol(symbol)
     if not base:
         return _envelope([], overview=None, label="코인 뉴스", query="")
+    ready = _coin_envelope_cache.get(base)
+    if ready and ready[1] > time.time():
+        return deepcopy(ready[0])
     try:
         stored = _load_latest_coin_snapshot(base)
     except Exception:
@@ -4308,15 +4359,26 @@ def get_coin_news(symbol: str) -> dict:
         env["data_source"] = "prefect_db"
         env["snapshot_id"] = str(stored.get("snapshot_id") or "")
         env["collection"] = dict(stored.get("collection") or {})
+        _remember_coin_envelope(base, env)
         return env
     ckey = f"coin:{base}"
+
+    def serve_cached(raw: dict) -> dict:
+        env = _localize_news_payload(raw)
+        if env.get("data_source") == "prefect_db_stale":
+            env["stale"] = bool(env.get("items"))
+        return env
+
+    hit = _coin_cache.get(ckey)
+    if hit and hit[1] > time.time():
+        env = serve_cached(hit[0])
+        _remember_coin_envelope(base, env)
+        return env
+
     def load():
-        hit = _coin_cache.get(ckey)
-        if hit and hit[1] > time.time():
-            env = _localize_news_payload(hit[0])
-            if env.get("data_source") == "prefect_db_stale":
-                env["stale"] = bool(env.get("items"))
-            return env
+        fresh_hit = _coin_cache.get(ckey)
+        if fresh_hit and fresh_hit[1] > time.time():
+            return serve_cached(fresh_hit[0])
         try:
             raw = _fetch_public_news_payload(base)
         except NewsFetchError as exc:
@@ -4340,8 +4402,24 @@ def get_coin_news(symbol: str) -> dict:
         _coin_cache[ckey] = (deepcopy(raw), time.time() + ttl)
         while len(_coin_cache) > 512:
             _coin_cache.pop(next(iter(_coin_cache)))
-        env = _localize_news_payload(raw)
-        if raw.get("data_source") == "prefect_db_stale":
-            env["stale"] = bool(env.get("items"))
+        return serve_cached(raw)
+
+    # 이전 값(만료된 RSS 캐시 또는 오래된 스냅샷)이 있으면 그것을 바로 주고 배경에서 새로 받는다.
+    previous = None
+    if hit and (hit[0] or {}).get("items"):
+        previous = deepcopy(hit[0])
+    elif has_snapshot and (stored["news_payload"].get("items")):
+        previous = deepcopy(stored["news_payload"])
+        previous.setdefault("data_source", "prefect_db_stale")
+        previous.setdefault("snapshot_id", str(stored.get("snapshot_id") or ""))
+        previous.setdefault("collection", dict(stored.get("collection") or {}))
+    if previous is not None:
+        previous.setdefault("sources", [])
+        _refresh_in_background(ckey, load)
+        env = _localize_news_payload(previous)
+        env["stale"] = bool(env.get("items"))
+        env["refreshing"] = True
         return env
-    return _coin_refreshes.run(ckey, load)[0]
+    env = _coin_refreshes.run(ckey, load)[0]
+    _remember_coin_envelope(base, env)
+    return env

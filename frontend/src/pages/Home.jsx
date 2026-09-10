@@ -105,13 +105,13 @@ const COMMUNITY_POSTS = [
   { title: "이동평균 전략 기간을 바꿀 때 체크할 것", snippet: "20·60과 50·200 조합을 각각 돌려 본 표를 공유합니다.", author: "캔들읽는새", time: "어제 20:52", comments: 9 },
 ];
 
-function CommunityPostList({ duplicate = false }) {
+function CommunityPostList({ duplicate = false, limit = COMMUNITY_POSTS.length }) {
   return (
     <ul
       className="home-community-post-list"
       aria-hidden={duplicate ? "true" : undefined}
     >
-      {COMMUNITY_POSTS.map((post) => (
+      {COMMUNITY_POSTS.slice(0, limit).map((post) => (
         <li key={`${duplicate ? "loop-" : ""}${post.title}`}>
           <span className="home-community-post-copy">
             <strong>
@@ -144,11 +144,11 @@ function CommunityEntryHero({ staticLayout = false }) {
         <Heading id="home-community-title" className="home-entry-title">
           매크로 이야기가 쌓이는 <span>껄무새 게시판.</span>
         </Heading>
-        <p className="home-entry-description">
+        {!staticLayout ? <p className="home-entry-description">
           조건 설정이 막힐 때 다른 사용자의 질문과 답변을 찾아보고,
           백테스트 결과와 운영 후기를 글로 남겨 내 경험도 공유해요.
-        </p>
-        <dl className="home-community-points">
+        </p> : null}
+        {!staticLayout ? <dl className="home-community-points">
           <div>
             <dt>정보 찾아보기</dt>
             <dd>조건·백테스트·운영 기록을 주제별로 읽어봐요.</dd>
@@ -157,7 +157,7 @@ function CommunityEntryHero({ staticLayout = false }) {
             <dt>경험 공유하기</dt>
             <dd>궁금한 점을 묻고 내 매크로의 시행착오를 남겨요.</dd>
           </div>
-        </dl>
+        </dl> : null}
         <div className="home-community-actions" aria-label="커뮤니티 둘러보기">
           <Link to="/board" data-home-carousel-primary className="home-community-action is-primary">
             게시판 둘러보기 <span aria-hidden="true">→</span>
@@ -166,7 +166,7 @@ function CommunityEntryHero({ staticLayout = false }) {
       </div>
 
       <aside className="home-community-preview" aria-label="껄무새 게시판 화면 예시">
-        <header className="home-board-preview-head">
+        {!staticLayout ? <header className="home-board-preview-head">
           <span className="home-board-preview-mascot" aria-hidden="true">
             <img
               src="/brand/navigation/ggparrot-nav-board.svg"
@@ -182,16 +182,16 @@ function CommunityEntryHero({ staticLayout = false }) {
             <p>코린이끼리 전략·질문·정보를 나눠요. (투자 조언 아님)</p>
           </div>
           <span className="home-board-preview-write" aria-hidden="true">새 글 쓰기</span>
-        </header>
+        </header> : null}
         <div className="home-community-post-viewport">
           <div className="home-community-post-track">
-            <CommunityPostList />
+            <CommunityPostList limit={staticLayout ? 3 : COMMUNITY_POSTS.length} />
             {staticLayout ? null : <CommunityPostList duplicate />}
           </div>
         </div>
-        <footer className="home-board-preview-footer" aria-hidden="true">
+        {!staticLayout ? <footer className="home-board-preview-footer" aria-hidden="true">
           <span>‹</span><strong>1</strong><span>2</span><span>3</span><span>›</span>
-        </footer>
+        </footer> : null}
       </aside>
     </section>
   );

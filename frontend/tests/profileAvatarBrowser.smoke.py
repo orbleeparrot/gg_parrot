@@ -222,6 +222,12 @@ def save(dialog):
     expect(dialog).not_to_be_visible()
 
 
+def open_account(page):
+    settings = page.locator(".me-account-settings")
+    if not settings.evaluate("element => element.open"):
+        settings.locator("summary").click()
+
+
 def main():
     if not (BUILD / "index.html").is_file(): raise SystemExit(f"Build missing: {BUILD}")
     OUTPUT.mkdir(parents=True, exist_ok=True)
@@ -303,6 +309,7 @@ def main():
             suite.record('old-account-edit-cannot-overwrite-current-account',fixture);context.close()
 
             fixture=Fixtures();context,page=suite.open(fixture)
+            open_account(page)
             page.get_by_role('button',name='비밀번호 변경',exact=True).click(); dialog=page.get_by_role('dialog',name='비밀번호 변경')
             dialog.get_by_label('현재 비밀번호',exact=True).fill('wrong')
             dialog.get_by_label('새 비밀번호',exact=True).fill('new-password-123')
@@ -317,6 +324,7 @@ def main():
 
             for google in (False,True):
                 fixture=Fixtures();fixture.users['fixture-a']['can_change_password']=not google;context,page=suite.open(fixture,width=375)
+                open_account(page)
                 if google: expect(page.get_by_role('button',name='비밀번호 변경',exact=True)).to_have_count(0)
                 page.get_by_role('button',name='회원 탈퇴',exact=True).click(); dialog=page.get_by_role('dialog',name='회원 탈퇴')
                 submit=dialog.get_by_role('button',name='회원 탈퇴',exact=True);expect(submit).to_be_disabled()

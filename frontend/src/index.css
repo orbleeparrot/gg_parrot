@@ -5241,64 +5241,6 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   letter-spacing: -0.02em;
 }
 
-.news-briefing-info {
-  position: relative;
-  display: inline-flex;
-  flex: 0 0 auto;
-}
-
-.news-briefing-info > button {
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  border: 1px solid rgb(var(--c-slate-300));
-  border-radius: 999px;
-  display: grid;
-  place-items: center;
-  color: rgb(var(--c-slate-500));
-  background: rgb(var(--c-surface));
-  font-family: Georgia, serif;
-  font-size: 13px;
-  line-height: 1;
-  font-style: italic;
-  font-weight: 700;
-}
-
-.news-briefing-info > button:hover,
-.news-briefing-info:focus-within > button {
-  color: rgb(var(--c-slate-900));
-  border-color: rgb(var(--c-brand-line));
-}
-
-.news-briefing-info > [role="tooltip"] {
-  width: min(300px, calc(100vw - 40px));
-  padding: 10px 12px;
-  border: 1px solid rgb(var(--c-slate-300));
-  border-radius: 10px;
-  position: absolute;
-  z-index: 30;
-  top: -6px;
-  right: auto;
-  left: calc(100% + 8px);
-  visibility: hidden;
-  opacity: 0;
-  color: rgb(var(--c-slate-700));
-  background: rgb(var(--c-surface));
-  box-shadow: 0 12px 30px rgb(0 0 0 / 0.16);
-  font-size: 12px;
-  line-height: 1.55;
-  font-weight: 600;
-  transform: translateY(-3px);
-  transition: opacity 160ms ease, transform 160ms ease, visibility 160ms;
-}
-
-.news-briefing-info:hover > [role="tooltip"],
-.news-briefing-info:focus-within > [role="tooltip"] {
-  visibility: visible;
-  opacity: 1;
-  transform: translateY(0);
-}
-
 .news-briefing-section-status {
   min-width: max-content;
   display: inline-flex;
@@ -5310,6 +5252,9 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   line-height: 1.4;
   font-weight: 700;
 }
+
+/* Section help keeps a 16px glyph; its transparent hit area is independent. */
+.news-briefing-section-title .info-trigger.info-trigger::after { inset: -12px; }
 
 .news-briefing-section-status strong {
   color: rgb(var(--c-brand-line));
@@ -5964,17 +5909,6 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
     margin-top: 10px;
   }
 
-  .news-briefing-info {
-    position: static;
-  }
-
-  .news-briefing-info > [role="tooltip"] {
-    width: min(300px, calc(100vw - 20px));
-    top: calc(100% + 8px);
-    right: auto;
-    left: 0;
-  }
-
   .news-reader-lead {
     min-height: 220px;
   }
@@ -6031,11 +5965,6 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 }
 
 @media (pointer: coarse) {
-  .news-briefing-info > button {
-    width: 44px;
-    height: 44px;
-  }
-
   .news-reader-utility-row > a,
   .news-reader-utility-row > button {
     min-height: 44px;

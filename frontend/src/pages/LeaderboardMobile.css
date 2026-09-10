@@ -1,0 +1,141 @@
+/* Desktop keeps its existing table columns and action flow. */
+.lb-mobile-symbol,
+.lb-mobile-meta,
+.lb-mobile-field-label,
+.lb-mobile-action-label { display: none; }
+.lb-reactions,
+.lb-command-actions { display: contents; }
+
+/* Phones, including landscape touch screens: one ranked entry per ruled row. */
+@media (max-width: 767px), (max-width: 1099px) and (pointer: coarse) {
+  .leaderboard-page { padding-bottom: 72px; }
+  .leaderboard-page .lb-board {
+    --lb-return-gap: 0px;
+    --lb-columns: 22px 36px minmax(0, 1fr) max-content;
+    --lb-areas: "rank coin name return" "summary summary summary summary" "meta meta meta meta" "actions actions actions actions";
+    padding-bottom: 0;
+  }
+
+  .leaderboard-page .lb-row {
+    column-gap: 10px;
+    row-gap: 12px;
+    padding-block: 20px;
+  }
+
+  .leaderboard-page .lb-row-head { display: none; }
+  .leaderboard-page .lb-rank { font-size: 18px; }
+  .leaderboard-page .lb-name .lb-title,
+  .leaderboard-page .lb-name .badge,
+  .leaderboard-page .lb-name .lb-meta { display: none; }
+  .leaderboard-page .lb-name-line { display: block; }
+
+  .leaderboard-page .lb-mobile-symbol {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+    color: rgb(var(--c-slate-900));
+    line-height: 1.25;
+  }
+  .leaderboard-page .lb-mobile-symbol strong {
+    font-size: 16px;
+    font-weight: 700;
+    overflow-wrap: anywhere;
+  }
+  .leaderboard-page .lb-mobile-symbol small {
+    color: rgb(var(--c-slate-500));
+    font-size: 11px;
+    font-weight: 500;
+  }
+
+  .leaderboard-page .lb-return {
+    display: grid;
+    gap: 3px;
+    padding-right: 0;
+    font-size: 17px;
+    line-height: 1.25;
+    font-variant-numeric: tabular-nums;
+  }
+  .leaderboard-page .lb-mobile-field-label {
+    display: inline-block;
+    flex: none;
+    color: rgb(var(--c-slate-500));
+    font-family: "Pretendard", sans-serif;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.5;
+  }
+  .leaderboard-page .lb-return .lb-mobile-field-label { font-size: 11px; }
+  .leaderboard-page .lb-summary {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    overflow: visible;
+    font-size: 14px;
+    line-height: 1.55;
+  }
+  .leaderboard-page .lb-summary-text {
+    min-width: 0;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+  }
+
+  .leaderboard-page .lb-mobile-meta {
+    grid-area: meta;
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+  }
+  .leaderboard-page .lb-mobile-author {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 4px 8px;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .leaderboard-page .lb-mobile-author-name {
+    min-width: 0;
+    color: rgb(var(--c-slate-800));
+    overflow-wrap: anywhere;
+  }
+  .leaderboard-page .lb-mobile-time {
+    color: rgb(var(--c-slate-500));
+    font-size: 12px;
+    white-space: nowrap;
+  }
+  .leaderboard-page .lb-mobile-badges { display: flex; flex-wrap: wrap; gap: 6px; }
+  .leaderboard-page .lb-mobile-badges:empty { display: none; }
+
+  .leaderboard-page .lb-actions {
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+  }
+  .leaderboard-page .lb-reactions,
+  .leaderboard-page .lb-command-actions {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    min-width: 0;
+    max-width: 100%;
+  }
+  .leaderboard-page .lb-command-actions { justify-content: flex-end; margin-left: auto; }
+  .leaderboard-page .lb-actions button {
+    min-width: 48px;
+    min-height: 48px;
+    height: auto;
+    padding: 10px;
+    border-radius: 10px;
+    font-size: 13px;
+    line-height: 1.4;
+    touch-action: manipulation;
+  }
+  .leaderboard-page .lb-actions button svg { width: 20px; height: 20px; flex: none; }
+  .leaderboard-page .lb-icon-btn { display: inline-flex; justify-content: center; gap: 4px; width: auto; }
+  .leaderboard-page .lb-unlock { border-color: rgb(var(--c-brand-line)); }
+  .leaderboard-page .lb-mobile-action-label { display: inline; }
+}

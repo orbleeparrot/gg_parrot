@@ -63,7 +63,14 @@ def main():
                     expect(header.locator('.account-trigger')).to_be_visible()
                     if mobile:
                         expect(header.locator('.header-resources')).to_be_hidden()
-                        expect(header.locator('.header-theme')).to_be_hidden()
+                        toggle = header.locator('.header-theme')
+                        expect(toggle).to_be_visible()
+                        theme_box, profile_box = toggle.bounding_box(), header.locator('.account-trigger').bounding_box()
+                        assert theme_box['x'] + theme_box['width'] <= profile_box['x']
+                        assert theme_box['y'] == profile_box['y']
+                        toggle.tap()
+                        expect(toggle).to_have_attribute('aria-checked', 'false' if theme == 'dark' else 'true')
+                        assert page.evaluate('document.documentElement.classList.contains("dark")') == (theme == 'light')
                         # A touch click opens help once, then the next closes it.
                         header.get_by_role('button', name='시장 참고 지표 상세 열기').tap()
                         info = page.locator('#market-context-panel .info-trigger')
@@ -90,10 +97,7 @@ def main():
                             link = drawer.get_by_role('link', name=label, exact=False)
                             expect(link).to_be_visible()
                             assert link.bounding_box()['height'] >= 44
-                        toggle = drawer.get_by_role('switch')
-                        toggle.tap()
-                        expect(toggle).to_have_attribute('aria-checked', 'false' if theme == 'dark' else 'true')
-                        assert page.evaluate('document.documentElement.classList.contains("dark")') == (theme == 'light')
+                        expect(drawer.get_by_role('switch')).to_have_count(0)
                         assert page.locator('.header-tooltip:visible').count() == 0
                         page.screenshot(path=str(OUTPUT / f'menu-{width}-{theme}.png'), animations='disabled')
                         drawer.get_by_role('link', name='실행기 설치', exact=False).tap()
@@ -137,7 +141,7 @@ def main():
                 expect(panel).to_be_hidden()
                 page.get_by_role('button', name='페이지 메뉴 열기').tap()
                 drawer = page.get_by_role('dialog', name='모바일 페이지 메뉴')
-                drawer.get_by_role('switch').tap()  # must remain reachable on a short screen
+                drawer.get_by_role('link', name='실행기 설치', exact=False).scroll_into_view_if_needed()
                 drawer.get_by_role('link', name='사용법', exact=True).tap()
                 expect(drawer).to_be_hidden()  # even when navigating to the same URL
                 for path in ('/', '/news', '/guide', '/runner/install', '/board', '/leaderboard', '/builder'):
@@ -148,6 +152,19 @@ def main():
                     if path == '/news':
                         expect(page.locator('.news-racer-map')).to_be_hidden()
                         expect(page.get_by_role('list', name='경주마 상승률 순위')).to_be_visible()
+                        help_buttons = page.locator('.news-briefing-section-title .info-trigger')
+                        expect(help_buttons).to_have_count(2)
+                        for button in help_buttons.all():
+                            assert button.locator('svg').bounding_box()['width'] == 16
+                            assert button.evaluate('n => getComputedStyle(n).backgroundColor') == 'rgba(0, 0, 0, 0)'
+                            button.tap()
+                            expect(button).to_have_attribute('aria-expanded', 'true')
+                            tip = page.get_by_role('tooltip')
+                            expect(tip).to_be_visible()
+                            box = tip.bounding_box()
+                            assert box['x'] >= 0 and box['x'] + box['width'] <= width
+                            button.tap()
+                            expect(button).to_have_attribute('aria-expanded', 'false')
                 checks.append(f'member-landscape-route-smoke-{width}')
                 context.close()
             browser.close()

@@ -1,6 +1,5 @@
 import { useEffect, useRef } from "react";
 import { NavLink, useLocation } from "react-router-dom";
-import ThemeToggle from "./ThemeToggle.jsx";
 import { DownloadIcon, HelpIcon } from "./utilityIcons.jsx";
 import { lockBodyScroll } from "../lib/bodyScrollLock.js";
 
@@ -122,7 +121,6 @@ function NavigationContents({ onNavigate, tabIndex, mobile = false }) {
             <NavLink to="/guide" onClick={onNavigate} tabIndex={tabIndex} className="site-drawer-tool">
               <HelpIcon /><span>사용법</span>
             </NavLink>
-            <ThemeToggle className="site-drawer-tool" showLabel />
           </div>
         ) : null}
       </nav>

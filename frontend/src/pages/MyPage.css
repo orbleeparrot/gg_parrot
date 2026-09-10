@@ -4,7 +4,13 @@
 .dark .me-page { --me-tier-bronze: 207 150 104; }
 
 /* ── 머리: 아바타 | 이름·메타 | 수치 ── */
-.me-head { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; column-gap: 22px; padding-bottom: 24px; border-bottom: 1px solid rgb(var(--c-slate-200)); }
+.me-head { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "avatar identity stats" ". bio stats" ". tier stats"; align-items: start; gap: 8px 22px; padding-bottom: 24px; border-bottom: 1px solid rgb(var(--c-slate-200)); }
+.me-head > .me-avatar-edit { grid-area: avatar; }
+.me-head > .me-id { grid-area: identity; }
+.me-head > .me-bio { grid-area: bio; }
+.me-head > .me-tier { grid-area: tier; }
+.me-head > .me-stats { grid-area: stats; }
+.me-mobile-label, .me-mobile-activity, .me-account-settings > summary { display: none; }
 .me-photo { display: grid; justify-items: center; gap: 8px; width: 80px; }
 .me-avatar-edit { position: relative; display: block; padding: 0; border: 0; border-radius: 50%; background: transparent; cursor: pointer; }
 .me-avatar-edit:disabled { opacity: .65; cursor: wait; }
@@ -73,8 +79,8 @@
   min-height: 60px; padding: 10px 0; border-bottom: 1px solid rgb(var(--c-slate-200));
 }
 .me-table-head { min-height: 0; padding: 0 0 8px; border-bottom: 1px solid rgb(var(--c-slate-300)); color: rgb(var(--c-slate-500)); font-size: 12px; line-height: 1.3; font-weight: 600; }
-.me-table.is-created { --me-cols: 36px minmax(0, 1fr) 72px 96px 112px auto; }
-.me-table.is-purchased { --me-cols: 36px minmax(0, 1fr) 96px 112px auto; }
+.me-table.is-created { --me-cols: 36px minmax(0, 1fr) 72px 96px 112px 112px; }
+.me-table.is-purchased { --me-cols: 36px minmax(0, 1fr) 96px 112px 112px; }
 .me-table.is-sales { --me-cols: 112px minmax(0, 1fr) 96px; }
 .me-table.is-ledger { --me-cols: 112px minmax(0, 1fr) 96px 112px; }
 .me-main { min-width: 0; display: grid; gap: 3px; }
@@ -98,28 +104,3 @@
 .me-skeleton { display: block; height: 12px; border-radius: 6px; background: rgb(var(--c-slate-100)); }
 .me-skeleton.is-avatar { width: 80px; height: 80px; border-radius: 999px; }
 .me-skeleton.is-round { width: 36px; height: 36px; border-radius: 999px; }
-
-@media (max-width: 1099px) {
-  .me-head { grid-template-columns: auto minmax(0, 1fr); row-gap: 18px; }
-  .me-stats { grid-column: 1 / -1; justify-content: start; gap: 28px; }
-  .me-stat { text-align: left; }
-}
-@media (max-width: 639px) {
-  .me-page { gap: 20px; }
-  .me-head { column-gap: 14px; }
-  .me-photo { width: 64px; }
-  .me-avatar { width: 64px; height: 64px; font-size: 26px; }
-  .me-avatar-camera { width: 26px; height: 26px; }
-  .me-stats { gap: 20px; flex-wrap: wrap; }
-  .me-stat dd { font-size: 24px; }
-  .me-tier-list { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  /* 행을 두 줄로: 첫 줄 로고 + 제목·전략, 둘째 줄 수치·시각·버튼 */
-  .me-row.me-table-head { display: none; }
-  .me-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; min-height: 0; padding: 12px 0; }
-  .me-row > .coin-icon { order: -2; }
-  .me-row > .me-main { order: -1; flex: 1 1 calc(100% - 48px); }
-  .me-row > .me-cell, .me-row > .me-time { flex: 0 0 auto; }
-  .me-row > .btn { margin-left: auto; }
-  .me-table.is-sales .me-cell.me-text, .me-table.is-ledger .me-cell.me-text { flex: 1 1 100%; order: -1; }
-  .me-posts { --board-cols: 1fr 64px; }
-}

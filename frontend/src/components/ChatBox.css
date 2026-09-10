@@ -15,3 +15,15 @@
 .chat-member-name:hover { background: rgb(var(--c-slate-100)); }
 .chat-login-prompt a { white-space: nowrap; text-decoration: underline; }
 .chat-status button:focus-visible, .chat-history:focus-visible, .chat-jump:focus-visible, .chat-login-prompt a:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
+
+/* Mobile has one fixed home for chat; desktop's remembered position is ignored. */
+.chat-float.is-mobile-fixed {
+  --chat-bar-h: 0px;
+  right: max(16px, env(safe-area-inset-right));
+  bottom: calc(16px + env(safe-area-inset-bottom) + var(--chat-keyboard-offset, 0px));
+}
+.chat-float.is-mobile-fixed .chat-fab { touch-action: manipulation; }
+.chat-float.is-mobile-fixed .chat-sheet {
+  width: min(380px, calc(100vw - 32px - env(safe-area-inset-left) - env(safe-area-inset-right)));
+  max-height: calc(var(--chat-visible-height, 100dvh) - var(--site-topbar-h, 64px) - 48px - 40px - env(safe-area-inset-bottom));
+}

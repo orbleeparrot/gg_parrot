@@ -78,7 +78,9 @@ def assert_static_home(page):
     expect(page.locator(".home-mobile-stack")).to_be_visible()
     expect(page.locator(".home-hero-shell, .home-hero-pagination, .home-entry-mascot")).to_have_count(0)
     expect(page.locator(".home-community-post-list")).to_have_count(1)
-    expect(page.locator(".home-community-post-list li")).to_have_count(5)
+    expect(page.locator(".home-community-post-list li")).to_have_count(3)
+    expect(page.locator(".home-board-preview-head")).to_have_count(0)
+    expect(page.locator(".home-board-preview-footer")).to_have_count(0)
     expect(page.locator(".home-mobile-stack h1")).to_have_count(1)
     expect(page.locator(".home-mobile-stack #home-community-title")).to_have_count(1)
     assert page.locator(".home-community-post-track").evaluate(

@@ -11,6 +11,7 @@ import { PageHeader, Loading, ErrorNote } from "../components/Page.jsx";
 import { splitSummary } from "../lib/summaryText.js";
 import { layoutTreemap, racerWeight } from "../lib/treemap.js";
 import "./NewsMobile.css";
+import InfoTooltip from "../components/InfoTooltip.jsx";
 
 const COIN_NEWS_CONCURRENCY = 2;
 const HOT_COINS_CACHE_KEY = "hot-coins";
@@ -58,16 +59,11 @@ function TranslationPending({ data }) {
 }
 
 function BriefingSectionHeader({ id, title, description, count, countLabel, pendingLabel }) {
-  const tooltipId = `${id}-description`;
-
   return (
     <header className="news-briefing-section-head">
       <div className="news-briefing-section-title">
         <h2 id={id}>{title}</h2>
-        <span className="news-briefing-info">
-          <button type="button" aria-label={`${title} 설명`} aria-describedby={tooltipId}>i</button>
-          <span id={tooltipId} role="tooltip">{description}</span>
-        </span>
+        <InfoTooltip text={description} label={`${title} 설명`} placement="bottom" />
       </div>
       <span className="news-briefing-section-status" aria-live="polite">
         {Number.isFinite(count) && count > 0 ? (

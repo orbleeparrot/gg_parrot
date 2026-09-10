@@ -16,6 +16,16 @@ const OPACITY_KEY = "chat:opacity";          // 시트 불투명도 0.25~1
 const DRAG_THRESHOLD = 6;                    // 이보다 덜 움직이면 클릭
 const EDGE = 8;                              // 화면 가장자리 최소 여백
 const TOPBAR_FALLBACK = 64;
+const MOBILE_PLACEMENT_QUERY = "(max-width: 767px), (max-width: 1099px) and (pointer: coarse)";
+
+function isMobilePlacement() {
+  return typeof window !== "undefined" && window.matchMedia(MOBILE_PLACEMENT_QUERY).matches;
+}
+function subscribeMobilePlacement(listener) {
+  const query = window.matchMedia(MOBILE_PLACEMENT_QUERY);
+  query.addEventListener("change", listener);
+  return () => query.removeEventListener("change", listener);
+}
 
 function readStorage(key) {
   try { return window.localStorage.getItem(key); } catch { return null; }
@@ -79,6 +89,7 @@ export default function ChatBox(props) {
 }
 
 function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray = false }) {
+  const mobilePlacement = useSyncExternalStore(subscribeMobilePlacement, isMobilePlacement, () => false);
   const panelId = useId();
   const subscribe = useCallback((listener) => observeChat(scope, listener), [scope]);
   const snapshot = useCallback(() => getChatFeed(scope), [scope]);
@@ -110,6 +121,37 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
   const syncedSeenRef = useRef(-1);
   const serverSeenRef = useRef(-1);
   const syncingSeenRef = useRef(false);
+
+  useLayoutEffect(() => {
+    if (!mobilePlacement) return undefined;
+    // A desktop drag may be in progress when a window enters the mobile layout.
+    const drag = dragRef.current;
+    const fab = rootRef.current?.querySelector(".chat-fab");
+    if (drag && fab?.hasPointerCapture?.(drag.id)) fab.releasePointerCapture(drag.id);
+    dragRef.current = null;
+    suppressClickRef.current = false;
+    setDragging(false);
+    const root = rootRef.current;
+    const viewport = window.visualViewport;
+    const fitVisibleViewport = () => {
+      if (!root) return;
+      const height = viewport?.height || window.innerHeight;
+      const obscuredBottom = Math.max(0, window.innerHeight - height - (viewport?.offsetTop || 0));
+      root.style.setProperty("--chat-visible-height", `${height}px`);
+      root.style.setProperty("--chat-keyboard-offset", `${obscuredBottom}px`);
+    };
+    fitVisibleViewport();
+    viewport?.addEventListener("resize", fitVisibleViewport);
+    viewport?.addEventListener("scroll", fitVisibleViewport);
+    window.addEventListener("resize", fitVisibleViewport);
+    return () => {
+      viewport?.removeEventListener("resize", fitVisibleViewport);
+      viewport?.removeEventListener("scroll", fitVisibleViewport);
+      window.removeEventListener("resize", fitVisibleViewport);
+      root?.style.removeProperty("--chat-visible-height");
+      root?.style.removeProperty("--chat-keyboard-offset");
+    };
+  }, [mobilePlacement]);
 
   const isCurrent = useCallback(() => mountedRef.current && chatScope(getToken() ? getAuthUser()?.id : null) === scope, [scope]);
   useEffect(() => {
@@ -239,6 +281,7 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
 
   // 끌어서 옮기기 — 버튼을 잡고 6px 넘게 움직이면 드래그, 아니면 클릭. 자리는 이 브라우저에 남는다.
   function onFabPointerDown(event) {
+    if (isMobilePlacement()) return;
     if (event.button != null && event.button !== 0) return;
     const rect = rootRef.current?.getBoundingClientRect();
     if (!rect) return;
@@ -249,6 +292,7 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
     event.currentTarget.setPointerCapture?.(event.pointerId);
   }
   function onFabPointerMove(event) {
+    if (isMobilePlacement()) return;
     const drag = dragRef.current;
     if (!drag || drag.id !== event.pointerId) return;
     const dx = event.clientX - drag.x;
@@ -258,6 +302,7 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
     setPlacement(clampPlacement({ right: drag.right - dx, bottom: drag.bottom - dy }, rootRef.current));
   }
   function onFabPointerEnd(event) {
+    if (isMobilePlacement()) return;
     const drag = dragRef.current;
     if (!drag || drag.id !== event.pointerId) return;
     dragRef.current = null;
@@ -278,15 +323,19 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
   }
   // 창 크기가 바뀌거나 시트가 열리면 옮겨 둔 자리가 화면 밖으로 나가지 않게 다시 자른다.
   useLayoutEffect(() => {
-    if (!placement) return undefined;
-    const fit = () => setPlacement((current) => {
-      const next = clampPlacement(current, rootRef.current);
-      return next && current && next.right === current.right && next.bottom === current.bottom ? current : next;
-    });
+    if (mobilePlacement || !placement) return undefined;
+    const fit = () => {
+      // The resize event can arrive before the matchMedia subscription renders.
+      if (isMobilePlacement()) return;
+      setPlacement((current) => {
+        const next = clampPlacement(current, rootRef.current);
+        return next && current && next.right === current.right && next.bottom === current.bottom ? current : next;
+      });
+    };
     fit();
     window.addEventListener("resize", fit);
     return () => window.removeEventListener("resize", fit);
-  }, [open, placement != null]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [open, placement != null, mobilePlacement]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function toggle() {
     if (open) close();
@@ -362,7 +411,7 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
   }
 
   return (
-    <div className={`chat-float${dragging ? " is-dragging" : ""}`} ref={rootRef} style={placement ? { right: placement.right, bottom: placement.bottom } : undefined}>
+    <div className={`chat-float${dragging ? " is-dragging" : ""}${mobilePlacement ? " is-mobile-fixed" : ""}`} ref={rootRef} style={!mobilePlacement && placement ? { right: placement.right, bottom: placement.bottom } : undefined}>
       {open ? (
         <section id={panelId} className="chat-sheet" role="dialog" aria-label="리더보드 채팅" style={opacity < 1 ? { "--chat-sheet-opacity": opacity } : undefined}>
           <header className="chat-head">
@@ -434,7 +483,7 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
           {error ? <p className="chat-helper is-error" role="alert">{error}</p> : <span className="chat-composer-gap" aria-hidden="true" />}
         </section>
       ) : null}
-      <button type="button" className={`chat-fab${open ? " is-open" : ""}${unseen ? " has-news" : ""}${dragging ? " is-dragging" : ""}`} onClick={onFabClick} onPointerDown={onFabPointerDown} onPointerMove={onFabPointerMove} onPointerUp={onFabPointerEnd} onPointerCancel={onFabPointerEnd} title="끌어서 옮길 수 있어요" aria-expanded={open} aria-controls={open ? panelId : undefined} aria-label={open ? "채팅 닫기" : badge ? `채팅 열기, 새 메시지 ${unseen}개` : "채팅 열기"}>
+      <button type="button" className={`chat-fab${open ? " is-open" : ""}${unseen ? " has-news" : ""}${dragging ? " is-dragging" : ""}`} onClick={onFabClick} onPointerDown={mobilePlacement ? undefined : onFabPointerDown} onPointerMove={mobilePlacement ? undefined : onFabPointerMove} onPointerUp={mobilePlacement ? undefined : onFabPointerEnd} onPointerCancel={mobilePlacement ? undefined : onFabPointerEnd} title={mobilePlacement ? undefined : "끌어서 옮길 수 있어요"} aria-expanded={open} aria-controls={open ? panelId : undefined} aria-label={open ? "채팅 닫기" : badge ? `채팅 열기, 새 메시지 ${unseen}개` : "채팅 열기"}>
         <img src={FAB_ICON} alt="" width="44" height="44" draggable="false" decoding="async" /><span className="chat-fab-label" aria-hidden="true">Chat</span>{badge ? <span className="chat-fab-badge num" aria-hidden="true">{badge}</span> : null}
       </button>
     </div>

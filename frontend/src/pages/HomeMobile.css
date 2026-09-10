@@ -30,9 +30,9 @@
 
   .home-mobile-stack .home-entry-hero.is-community {
     grid-template-columns: minmax(0, 1fr);
-    gap: 32px;
+    gap: 20px;
     border-top: 1px solid rgb(var(--c-slate-200));
-    padding: 44px 20px;
+    padding: 32px 20px;
   }
 
   .home-mobile-stack .home-entry-choices {
@@ -58,6 +58,10 @@
 
   .home-mobile-stack .home-community-preview {
     width: 100%;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
   }
 
   .home-mobile-stack .home-community-post-viewport {

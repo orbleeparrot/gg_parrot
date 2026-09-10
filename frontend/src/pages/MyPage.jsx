@@ -18,6 +18,7 @@ import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
 import { ImageIcon } from "../components/boardIcons.jsx";
 import "./Board.css"; // 게시글 탭은 게시판 목록 문법(.board-table)을 그대로 쓴다
 import "./MyPage.css";
+import "./MyPageMobile.css";
 
 // 탭 = 내 것들의 목록. 개수는 탭 이름 뒤에 붙는다(깃허브·브런치 관례).
 const TABS = [
@@ -29,13 +30,28 @@ const TABS = [
 ];
 const TAB_KEYS = new Set(TABS.map((t) => t.key));
 
-function Stamp({ value, now, className = "" }) {
+function Stamp({ value, now, className = "", label }) {
   const full = fullKst(value);
   return (
     <time className={`me-time num ${className}`} dateTime={full ? new Date(value).toISOString() : undefined} title={full || undefined}>
-      {stampKst(value, now)}
+      {label ? <span className="me-mobile-label">{label}</span> : null}<span>{stampKst(value, now)}</span>
     </time>
   );
+}
+
+function ActivityValue({ label, children, className = "" }) {
+  return <span className={`me-cell me-activity-value ${className}`}><span className="me-mobile-label">{label}</span><span className="num">{children}</span></span>;
+}
+
+function useCompactProfile() {
+  const [compact, setCompact] = useState(() => window.matchMedia("(max-width: 1099px)").matches);
+  useEffect(() => {
+    const query = window.matchMedia("(max-width: 1099px)");
+    const sync = () => setCompact(query.matches);
+    query.addEventListener("change", sync);
+    return () => query.removeEventListener("change", sync);
+  }, []);
+  return compact;
 }
 
 function TierIcon({ name }) {
@@ -91,9 +107,9 @@ function CreatedTab({ rows, now, onOpen }) {
             <span className="me-title num">{m.symbol}</span>
             <span className="me-sub">{m.human_summary}</span>
           </div>
-          <span className="me-cell num is-right">{m.sales}건</span>
-          <span className={`me-cell num is-right${m.earned > 0 ? " me-credit" : ""}`}>{m.earned > 0 ? signedPoints(m.earned) : formatPoints(0)}</span>
-          <Stamp value={m.created_ms ?? m.created_kst} now={now} className="is-right" />
+          <ActivityValue label="판매" className="is-right me-row-sales">{m.sales}건</ActivityValue>
+          <ActivityValue label="수익" className={`is-right me-row-earned${m.earned > 0 ? " me-credit" : ""}`}>{m.earned > 0 ? signedPoints(m.earned) : formatPoints(0)}</ActivityValue>
+          <Stamp value={m.created_ms ?? m.created_kst} now={now} className="is-right me-row-date" label="등록" />
           <button type="button" onClick={() => onOpen(m.macro)} disabled={!m.macro} className="btn btn-s btn-secondary">빌더에서 열기</button>
         </li>
       ))}
@@ -119,8 +135,8 @@ function PurchasedTab({ rows, now, onOpen }) {
             <span className="me-title"><span className="num">{m.symbol}</span> <span className="me-seller">@{m.seller}</span></span>
             <span className="me-sub">{m.human_summary}</span>
           </div>
-          <span className="me-cell num is-right">{signedPoints(-m.price)}</span>
-          <Stamp value={m.unlocked_at} now={now} className="is-right" />
+          <ActivityValue label="구매 금액" className="is-right me-row-price">{signedPoints(-m.price)}</ActivityValue>
+          <Stamp value={m.unlocked_at} now={now} className="is-right me-row-date" label="구매" />
           <button type="button" onClick={() => onOpen(m.macro)} disabled={!m.macro} className="btn btn-s btn-secondary">빌더로 복사</button>
         </li>
       ))}
@@ -137,11 +153,11 @@ function SalesTab({ rows, now }) {
       <HeadRow cols={[{ label: "시각" }, { label: "내용" }, { label: "수익", right: true }]} />
       {rows.map((s, i) => (
         <li key={`${s.entry_id}-${i}`} className="me-row">
-          <Stamp value={s.at} now={now} />
+          <Stamp value={s.at} now={now} className="me-row-date" />
           <span className="me-cell me-text">
             <b>@{s.buyer}</b> 님이 <b className="num">{s.symbol}</b> 매크로를 언락
           </span>
-          <span className="me-cell num is-right me-credit">{signedPoints(s.earned)}</span>
+          <ActivityValue label="수익" className="is-right me-credit me-row-earned">{signedPoints(s.earned)}</ActivityValue>
         </li>
       ))}
     </ul>
@@ -157,10 +173,10 @@ function LedgerTab({ rows, now, symbolByEntry }) {
       <HeadRow cols={[{ label: "시각" }, { label: "내용" }, { label: "변동", right: true }, { label: "잔액", right: true }]} />
       {rows.map((l, i) => (
         <li key={i} className="me-row">
-          <Stamp value={l.created_at} now={now} />
+          <Stamp value={l.created_at} now={now} className="me-row-date" />
           <span className="me-cell me-text">{ledgerLabel(l, symbolByEntry)}</span>
-          <span className={`me-cell num is-right ${l.delta >= 0 ? "me-credit" : "me-debit"}`}>{signedPoints(l.delta)}</span>
-          <span className="me-cell num is-right me-balance">{formatPoints(l.balance_after)}</span>
+          <ActivityValue label="변동" className={`is-right me-row-change ${l.delta >= 0 ? "me-credit" : "me-debit"}`}>{signedPoints(l.delta)}</ActivityValue>
+          <ActivityValue label="잔액" className="is-right me-balance me-row-balance">{formatPoints(l.balance_after)}</ActivityValue>
         </li>
       ))}
     </ul>
@@ -229,6 +245,8 @@ export default function MyPage() {
   const [error, setError] = useState("");
   const [editor, setEditor] = useState(null);
   const [notice, setNotice] = useState("");
+  const compact = useCompactProfile();
+  const [accountOpen, setAccountOpen] = useState(false);
   const [now, setNow] = useState(() => Date.now());
 
   const paramTab = searchParams.get("tab");
@@ -238,6 +256,7 @@ export default function MyPage() {
     setData(null);
     setError("");
     setEditor(null);
+    setAccountOpen(false);
     if (!token) {
       if (!leavingAccount.current) navigate("/login?next=%2Fmypage");
       return;
@@ -290,6 +309,8 @@ export default function MyPage() {
   const counts = { created: created.length, purchased: purchased.length, sales: sales.length, ledger: ledger.length, posts: my_posts.length };
   const openInBuilder = (macro) => navigate("/builder", { state: { macro } });
   const pickTab = (key) => setSearchParams(key === "created" ? {} : { tab: key }, { replace: true });
+  // Eight monospaced characters exceed one of the three columns at 320px.
+  const longStats = [formatPoints(user.points_balance), formatPoints(totals.earned), `${totals.sales}건`].some((value) => value.length > 7);
 
   return (
     <div className="me-page">
@@ -302,21 +323,23 @@ export default function MyPage() {
         <div className="me-id">
           <div className="me-name-row">
             <h1 className="me-name">{user.username}</h1>
-            <button type="button" className="btn btn-s btn-secondary me-edit-button" aria-haspopup="dialog" onClick={() => setEditor("profile")}><PencilSimpleIcon size={16} aria-hidden="true" />프로필 편집</button>
+            <button type="button" className="btn btn-s btn-secondary me-edit-button" aria-label="프로필 편집" aria-haspopup="dialog" onClick={() => setEditor("profile")}><PencilSimpleIcon size={16} aria-hidden="true" /><span><span className="me-edit-prefix">프로필 </span>편집</span></button>
           </div>
           <p className="me-meta">
             {joinedLabel(user.created_at) ? <span className="num">{joinedLabel(user.created_at)}</span> : null}
           </p>
-          {user.bio ? <p className="me-bio">{user.bio}</p> : null}
-          <TierGuide tier={tier} />
         </div>
-        <dl className="me-stats">
+        {user.bio ? <p className="me-bio">{user.bio}</p> : null}
+        <TierGuide tier={tier} />
+        <dl className={`me-stats${longStats ? " has-long-values" : ""}`}>
           <div className="me-stat is-points"><dt>보유 포인트</dt><dd className="num">{formatPoints(user.points_balance)}</dd></div>
           <div className="me-stat"><dt>판매 수익</dt><dd className="num">{formatPoints(totals.earned)}</dd></div>
           <div className="me-stat"><dt>누적 판매</dt><dd className="num">{totals.sales}건</dd></div>
         </dl>
       </header>
-      <section className="me-account" aria-labelledby="me-account-title">
+      <details className="me-account-settings" open={!compact || accountOpen} onToggle={(event) => { if (compact) setAccountOpen(event.currentTarget.open); }}>
+        <summary>계정 설정<CaretDownIcon size={18} weight="regular" aria-hidden="true" /></summary>
+        <section className="me-account" aria-labelledby="me-account-title">
         <div className="me-account-id">
           <h2 id="me-account-title">계정 설정</h2>
           <span>{user.email}</span>
@@ -327,13 +350,15 @@ export default function MyPage() {
           <button type="button" className="btn btn-s btn-ghost" onClick={logout}>로그아웃</button>
           <button type="button" className="btn btn-s btn-ghost me-delete-account" aria-haspopup="dialog" onClick={() => setEditor("delete")}>회원 탈퇴</button>
         </div>
-      </section>
+        </section>
+      </details>
       {notice ? <p className="me-notice" role="status">{notice}</p> : null}
       {editor === "profile" ? <ProfileEditor key={token} user={user} onClose={() => setEditor(null)} onSaved={saveProfile} /> : null}
       {editor === "password" && user.can_change_password ? <PasswordChangeDialog key={token} user={user} onClose={() => setEditor(null)} onSaved={savePassword} /> : null}
       {editor === "delete" ? <DeleteAccountDialog key={token} user={user} onClose={() => setEditor(null)} onDeleted={deleted} /> : null}
 
       <div className="me-tabs">
+        <label className="me-mobile-activity" htmlFor="me-activity-select"><span id="me-activity-label" className="sr-only">내 활동 종류</span><select id="me-activity-select" value={tab} onChange={(event) => pickTab(event.target.value)}>{TABS.map((item) => <option key={item.key} value={item.key}>{item.label} · {counts[item.key]}</option>)}</select><CaretDownIcon size={18} aria-hidden="true" /></label>
         <div className="seg" role="tablist" aria-label="내 활동 종류">
           {TABS.map((t) => (
             <button
@@ -352,7 +377,7 @@ export default function MyPage() {
         </div>
       </div>
 
-      <section id="me-panel" role="tabpanel" aria-labelledby={`me-tab-${tab}`} className="me-panel">
+      <section id="me-panel" role={compact ? "region" : "tabpanel"} aria-label={compact ? TABS.find((item) => item.key === tab).label : undefined} aria-labelledby={compact ? undefined : `me-tab-${tab}`} className="me-panel">
         {tab === "created" && <CreatedTab rows={created} now={now} onOpen={openInBuilder} />}
         {tab === "purchased" && <PurchasedTab rows={purchased} now={now} onOpen={openInBuilder} />}
         {tab === "sales" && <SalesTab rows={sales} now={now} />}

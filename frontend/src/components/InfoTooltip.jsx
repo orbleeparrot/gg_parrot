@@ -5,7 +5,7 @@ import { GLOSSARY } from "../lib/glossary.js";
 // Desktop: hover. Mobile/touch: tap toggles (and tap-outside closes).
 // placement: "top" (default) or "bottom" — use "bottom" near the page top where
 // an upward tooltip would be clipped (e.g. the kimchi banner).
-export default function InfoTooltip({ term, text, placement = "top" }) {
+export default function InfoTooltip({ term, text, placement = "top", label = "설명 보기" }) {
   const [open, setOpen] = useState(false);
   const [shift, setShift] = useState(0); // px nudge to keep the bubble on screen
   const ref = useRef(null);
@@ -72,7 +72,7 @@ export default function InfoTooltip({ term, text, placement = "top" }) {
           44px 까지 키우면 문장 안 이웃 글자의 클릭을 가로챈다. */}
       <button
         type="button"
-        aria-label="설명 보기"
+        aria-label={label}
         aria-expanded={open}
         aria-controls={open ? tipId : undefined}
         aria-describedby={open ? tipId : undefined}

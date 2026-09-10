@@ -1,0 +1,80 @@
+/* Profile and activity keep their own reading order on compact screens. */
+@media (max-width: 1099px) {
+  .me-page { gap: 18px; }
+  .me-head { grid-template-columns: auto minmax(0, 1fr); grid-template-areas: "avatar identity" "bio bio" "tier tier" "stats stats"; gap: 14px; padding-bottom: 20px; }
+  .me-avatar { width: 64px; height: 64px; font-size: 26px; }
+  .me-avatar-camera { width: 24px; height: 24px; }
+  .me-id { gap: 7px; align-self: center; }
+  .me-name-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+  .me-name { font-size: 26px; line-height: 1.25; }
+  .me-edit-button { min-height: 44px; padding-inline: 10px; font-size: 13px; gap: 5px; }
+  .me-edit-prefix { display: none; }
+  .me-meta { font-size: 12px; }
+  .me-bio { max-width: none; margin: 0; font-size: 14px; line-height: 1.65; }
+  .me-tier { max-width: none; }
+  .me-tier summary { width: 100%; min-height: 44px; grid-template-columns: auto minmax(0, 1fr) auto; }
+  .me-tier-current { font-size: 13px; }
+  .me-tier-next { font-size: 12px; }
+  .me-tier-list { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+  .me-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; width: 100%; margin: 0; }
+  .me-stat { min-width: 0; grid-template-rows: 18px auto; gap: 6px; text-align: left; }
+  .me-stat dt { font-size: 12px; }
+  .me-stat dd { font-size: 22px; line-height: 1.25; }
+  .me-stats.has-long-values { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .me-stats.has-long-values .me-stat { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; min-height: 36px; }
+  .me-account-settings { border-bottom: 1px solid rgb(var(--c-slate-200)); }
+  .me-account-settings > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 48px; padding-bottom: 8px; list-style: none; color: rgb(var(--c-slate-700)); font-size: 14px; font-weight: 600; cursor: pointer; }
+  .me-account-settings > summary::-webkit-details-marker { display: none; }
+  .me-account-settings[open] > summary svg { transform: rotate(180deg); }
+  .me-account-settings .me-account { display: grid; gap: 12px; padding-block: 8px 16px; border: 0; }
+  .me-account-id { display: grid; gap: 5px; font-size: 14px; }
+  .me-account-id h2 { display: none; }
+  .me-account-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .me-account-actions > button { min-height: 44px; }
+  .me-account-actions > .me-delete-account { grid-column: 1 / -1; justify-self: start; padding-inline: 0; }
+  .me-tabs { margin: 0; padding: 0; overflow: visible; }
+  .me-tabs > .seg { display: none; }
+  .me-mobile-activity { position: relative; display: block; min-width: 0; }
+  .me-mobile-activity select { display: block; width: 100%; height: 48px; padding: 0 40px 0 12px; appearance: none; border: 1px solid rgb(var(--c-slate-300)); border-radius: 6px; background: rgb(var(--c-surface)); color: rgb(var(--c-slate-900)); font-size: 16px; font-weight: 600; cursor: pointer; }
+  .me-mobile-activity > svg { position: absolute; right: 12px; top: 15px; pointer-events: none; color: rgb(var(--c-slate-700)); }
+  .me-panel { min-width: 0; min-height: 180px; }
+  .me-mobile-label { display: block; color: rgb(var(--c-slate-500)); font-family: Pretendard, -apple-system, BlinkMacSystemFont, system-ui, sans-serif; font-size: 12px; line-height: 1.4; font-weight: 500; }
+  .me-activity-value, .me-row-date { display: grid; gap: 4px; min-width: 0; }
+  .me-table .me-row.me-table-head { display: none; }
+  .me-row { display: grid; align-items: center; gap: 12px; padding: 16px 0; min-height: 0; }
+  .me-table.is-created .me-row { grid-template-columns: 36px minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "icon main main" ". sales earned" ". date action"; }
+  .me-table.is-purchased .me-row { grid-template-columns: 36px minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "icon main main" ". price price" ". date action"; }
+  .me-row > .coin-icon { grid-area: icon; order: initial; }
+  .me-row > .me-main { grid-area: main; order: initial; }
+  .me-row-sales { grid-area: sales; }
+  .me-row-earned { grid-area: earned; }
+  .me-row-price { grid-area: price; }
+  .me-row-date { grid-area: date; }
+  .me-row > .btn { grid-area: action; margin-left: 0; min-height: 44px; padding-inline: 10px; font-size: 12px; white-space: normal; }
+  .me-title { font-size: 15px; }
+  .me-sub { font-size: 14px; line-height: 1.5; white-space: normal; overflow-wrap: anywhere; }
+  .me-cell { font-size: 15px; }
+  .me-row .is-right { text-align: left; }
+  .me-row-date { font-size: 12px; white-space: normal; }
+  .me-row-earned, .me-row-change, .me-row-balance { text-align: right !important; }
+  .me-table.is-sales .me-row { grid-template-columns: minmax(0, 1fr) max-content; grid-template-areas: "main earned" "date earned"; gap: 8px 16px; }
+  .me-table.is-ledger .me-row { grid-template-columns: minmax(0, 1fr) max-content; grid-template-areas: "main change" "date balance"; gap: 8px 16px; }
+  .me-table .me-row > .me-text { grid-area: main; order: initial; overflow-wrap: anywhere; }
+  .me-row-change { grid-area: change; }
+  .me-row-balance { grid-area: balance; display: flex; align-items: baseline; justify-content: flex-end; gap: 5px; font-size: 12px; }
+  .me-table.is-sales .me-row-earned .me-mobile-label, .me-row-change .me-mobile-label { display: none; }
+  .me-posts .board-head { display: none; }
+  .me-posts .board-row { grid-template-columns: minmax(0, 1fr); grid-template-areas: "title" "time"; gap: 8px; padding-block: 14px; }
+  .me-posts .board-no { display: none; }
+  .me-posts .board-title { padding: 0; }
+  .me-posts .board-title-text { white-space: normal; line-height: 1.5; }
+  .me-posts .board-time { text-align: left; font-size: 12px; }
+  .me-skeleton { max-width: 100%; }
+  .me-account-settings > summary:focus-visible,
+  .me-mobile-activity select:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
+}
+@media (max-width: 359px) {
+  .me-stat dd { font-size: 19px; }
+  .me-stats.has-long-values .me-stat dd { font-size: 22px; }
+  .me-tier-list { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}

@@ -128,8 +128,7 @@
 }
 
 @media (max-width: 1099px) {
-  .site-product-layout .header-resources,
-  .site-product-layout .header-personal > .header-theme { display: none; }
+  .site-product-layout .header-resources { display: none; }
   .site-product-layout .site-header .site-mobile-brand .site-brand-symbol { display: none; }
   .site-product-layout .site-header .site-mobile-brand .site-brand-logo.is-light { display: block; height: 30px; }
   .dark .site-product-layout .site-header .site-mobile-brand .site-brand-logo.is-light { display: none; }

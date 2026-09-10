@@ -10,6 +10,7 @@ import { getUserId } from "../lib/user.js";
 import { useAuth, isLoggedIn, getAuthUser, updateAuthUser } from "../lib/auth.js";
 import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 import { applyVote, settleVote } from "../lib/leaderboardVotes.js";
+import "./LeaderboardMobile.css";
 
 const pad = (n) => String(n).padStart(2, "0");
 
@@ -53,6 +54,33 @@ function ret(e) {
   if (e.return_pct == null) return { text: "집계중…", cls: "text-slate-500" };
   const up = e.return_pct >= 0;
   return { text: `${up ? "+" : ""}${e.return_pct.toFixed(2)}%`, cls: up ? "text-green-600" : "text-red-600" };
+}
+
+function registrationLabel(entry) {
+  return entry.defending ? `${entry.first_created_kst} 등록` : `오늘 ${entry.created_kst} 등록`;
+}
+
+function EntryBadges({ entry, top3 }) {
+  return (
+    <>
+      {entry.is_ai && <span className="badge badge-ai">AI</span>}
+      {(entry.is_owner || entry.is_mine) && <span className="badge badge-mine">내 것</span>}
+      {top3 && (
+        <span
+          className="badge badge-streak"
+          title={entry.defending
+            ? `${entry.first_created_kst} 등록 이후 초기화 없이 상위권을 지키는 중 · 수익률도 그때부터 이어져요`
+            : "자정 초기화 뒤에도 수익률을 그대로 들고 다음 날 방어전을 치러요"}
+        >
+          {entry.defending ? `방어전 · ${entry.streak_days}일째` : "방어전"}
+        </span>
+      )}
+      {entry.macro?.leverage > 1 && (
+        <span className="badge badge-risk" title="고위험 레버리지 전략">고위험 · {entry.macro.leverage}배</span>
+      )}
+      {entry.crown && <span className="badge badge-flat" title="판매·좋아요 상위">인기 셀러</span>}
+    </>
+  );
 }
 
 export default function Leaderboard() {
@@ -190,7 +218,7 @@ export default function Leaderboard() {
   }
 
   return (
-    <div>
+    <div className="leaderboard-page">
       <PageHeader
         title="오늘의 리더보드"
         meta={<>리더보드 초기화 <span className="num">{fmtCountdown(remain)}</span></>}
@@ -253,37 +281,39 @@ export default function Leaderboard() {
                 className={`lb-row${registeredId === e.id ? " is-registered" : ""}`}
                 role="row"
               >
-                <div className={`lb-rank num is-${idx + 1}`} role="cell">{idx + 1}</div>
+                <div className={`lb-rank num is-${idx + 1}`} role="cell" aria-label={`${idx + 1}위`}>{idx + 1}</div>
                 <CoinIcon symbol={e.symbol} size={36} className="lb-coin" alt="" />
                 <div className="lb-name" role="cell">
                   <div className="lb-name-line">
+                    <span className="lb-mobile-symbol num">
+                      <strong>{e.symbol.replace(/USDT$/, "")}</strong>
+                      {e.symbol.endsWith("USDT") ? <small>USDT</small> : null}
+                    </span>
                     <span className="lb-title">{e.username || e.nickname}</span>
-                    {e.is_ai && <span className="badge badge-ai">AI</span>}
-                    {(e.is_owner || e.is_mine) && <span className="badge badge-mine">내 것</span>}
-                    {top3 && (
-                      <span
-                        className="badge badge-streak"
-                        title={e.defending
-                          ? `${e.first_created_kst} 등록 이후 초기화 없이 상위권을 지키는 중 · 수익률도 그때부터 이어져요`
-                          : "자정 초기화 뒤에도 수익률을 그대로 들고 다음 날 방어전을 치러요"}
-                      >
-                        {e.defending ? `방어전 · ${e.streak_days}일째` : "방어전"}
-                      </span>
-                    )}
-                    {e.macro?.leverage > 1 && (
-                      <span className="badge badge-risk" title="고위험 레버리지 전략">고위험 · {e.macro.leverage}배</span>
-                    )}
-                    {e.crown && <span className="badge badge-flat" title="판매·좋아요 상위">인기 셀러</span>}
+                    <EntryBadges entry={e} top3={top3} />
                   </div>
                   <div className="lb-meta t-caption text-slate-500">
-                    {e.defending ? `${e.first_created_kst} 등록` : `오늘 ${e.created_kst} 등록`}
+                    {registrationLabel(e)}
                   </div>
                 </div>
                 <div className={`lb-summary${e.locked ? " is-locked" : ""}`} role="cell">
-                  {e.locked ? "잠김 · 언락하면 전략과 설정이 공개돼요" : e.human_summary}
+                  <span className="lb-mobile-field-label">전략</span>
+                  <span className="lb-summary-text">{e.locked ? "잠김 · 언락하면 전략과 설정이 공개돼요" : e.human_summary}</span>
                 </div>
-                <div className={"lb-return num " + r.cls} role="cell">{r.text}</div>
+                <div className={"lb-return num " + r.cls} role="cell">
+                  <span className="lb-mobile-field-label">수익률</span>
+                  <span className="lb-return-value">{r.text}</span>
+                </div>
+                <div className="lb-mobile-meta" role="cell">
+                  <div className="lb-mobile-author">
+                    <span className="lb-mobile-field-label">작성자</span>
+                    <span className="lb-mobile-author-name">{e.username || e.nickname}</span>
+                    <span className="lb-mobile-time">{registrationLabel(e)}</span>
+                  </div>
+                  <div className="lb-mobile-badges"><EntryBadges entry={e} top3={top3} /></div>
+                </div>
                 <div className="lb-actions" role="cell">
+                  <div className="lb-reactions" role="group" aria-label="매크로 반응">
                   <button
                     onClick={() => vote(e.id, 1)}
                     className={"lb-vote" + (e.my_vote === 1 ? " is-on" : "")}
@@ -302,6 +332,8 @@ export default function Leaderboard() {
                   >
                     <ThumbDownIcon /><span className="num">{e.dislikes}</span>
                   </button>
+                  </div>
+                  <div className="lb-command-actions" role="group" aria-label="매크로 이용">
                   {e.locked ? (
                     <button
                       onClick={() => unlock(e)}
@@ -311,6 +343,7 @@ export default function Leaderboard() {
                       aria-label={`언락 ${e.unlock_price}P${quickRunMode ? " 후 사용" : ""}`}
                     >
                       <LockIcon />
+                      <span className="lb-mobile-action-label">열기</span>
                       <span className="num">{unlocking === e.id ? "여는 중…" : `${e.unlock_price}P`}</span>
                     </button>
                   ) : quickRunMode ? (
@@ -331,6 +364,7 @@ export default function Leaderboard() {
                       aria-label="빌더로 복사"
                     >
                       <CopyIcon />
+                      <span className="lb-mobile-action-label">복사</span>
                     </button>
                   )}
                   {(e.is_owner || (e.is_mine && !e.for_sale)) && (
@@ -352,6 +386,7 @@ export default function Leaderboard() {
                       {deleting === e.id ? "삭제 중…" : "삭제"}
                     </button>
                   )}
+                  </div>
                 </div>
               </div>
             );

@@ -3106,7 +3106,8 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 
 .home-entry-hero.is-community {
   padding-block: clamp(36px, 5vh, 52px);
-  grid-template-columns: minmax(310px, 0.78fr) minmax(0, 1.22fr);
+  /* 글 칸이 미리보기보다 조금 넓다 — 좁으면 제목이 "쌓이는 / 껄무새 게시판." 으로 쪼개진다. */
+  grid-template-columns: minmax(360px, 1.05fr) minmax(0, 0.95fr);
   gap: clamp(38px, 4vw, 64px);
 }
 
@@ -3538,7 +3539,8 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   }
 
   .home-entry-hero.is-community {
-    grid-template-columns: minmax(250px, 0.6fr) minmax(470px, 1.4fr);
+    /* 좁은 폭에서도 글 칸을 미리보기만큼 준다 — 제목 "쌓이는 껄무새 게시판." 을 한 줄에 두려고. */
+    grid-template-columns: minmax(320px, 1.02fr) minmax(0, 0.98fr);
     gap: 30px;
   }
 

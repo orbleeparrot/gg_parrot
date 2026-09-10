@@ -15,11 +15,12 @@ const FOCUSABLE =
   'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 // 히어로 캐러셀 타이밍.
-//   DWELL  = 한 장이 머무는 시간. 5초는 카피를 다 읽기 전에 넘어가 조급했다.
+//   DWELL  = 한 장이 머무는 시간. 5초는 카피를 다 읽기 전에 넘어가 조급했고,
+//            10초도 히어로를 보다 말고 넘어가 15초로 늘렸다.
 //   EXIT   = 나가는 장을 DOM 에서 걷어내는 시점. index.css 의 home-hero-*
 //            애니메이션(520ms)보다 40ms 길어야 마지막 프레임이 잘리지 않는다.
 //            애니메이션 길이를 바꾸면 이 값도 같이 올려야 한다.
-const HERO_SLIDE_DWELL_MS = 10_000;
+const HERO_SLIDE_DWELL_MS = 15_000;
 const HERO_SLIDE_EXIT_MS = 560;
 
 function HomeEntryHero({ onLeaderboard, onGuide, staticLayout = false }) {
@@ -143,7 +144,8 @@ function CommunityEntryHero({ staticLayout = false }) {
     >
       <div className="home-entry-copy home-community-copy">
         <Heading id="home-community-title" className="home-entry-title">
-          매크로 이야기가 쌓이는 <span>껄무새 게시판.</span>
+          {/* 줄바꿈 금지 공백(U+00A0) — 좁은 칸에서 text-wrap: balance 가 "껄무새 / 게시판." 으로 쪼개 밑줄이 두 도막 났다. */}
+          매크로 이야기가 쌓이는 <span>껄무새{"\u00a0"}게시판.</span>
         </Heading>
         {!staticLayout ? <p className="home-entry-description">
           조건 설정이 막힐 때 다른 사용자의 질문과 답변을 찾아보고,

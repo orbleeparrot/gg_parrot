@@ -24,6 +24,7 @@ const ForgotPassword = lazy(() => import("./pages/ForgotPassword.jsx"));
 const ResetPassword = lazy(() => import("./pages/ResetPassword.jsx"));
 const RunnerInstall = lazy(() => import("./pages/RunnerInstall.jsx"));
 const Guide = lazy(() => import("./pages/Guide.jsx"));
+const Support = lazy(() => import("./pages/Support.jsx"));
 
 function RouteChangeEffects() {
   const { pathname } = useLocation();
@@ -42,6 +43,8 @@ function RouteChangeEffects() {
       ? "게시판"
       : pathname.startsWith("/guide")
       ? "사용법"
+      : pathname.startsWith("/support")
+      ? "고객센터"
       : pathname.startsWith("/mypage/settings")
       ? "프로필 설정"
       : pathname.startsWith("/mypage")
@@ -179,6 +182,7 @@ export default function App() {
               <Route path="/runner/install" element={<RunnerInstall />} />
               <Route path="/runner" element={<LegacyRunnerRedirect />} />
               <Route path="/guide" element={<Guide />} />
+              <Route path="/support" element={<Support />} />
               <Route path="/news" element={<News />} />
               <Route path="/board" element={<Board />} />
               <Route path="/board/write" element={<BoardWrite />} />

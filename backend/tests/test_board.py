@@ -303,3 +303,12 @@ def test_pagination_math():
     r = board.list_posts(page=1, size=5)
     assert r["page"] == 1 and r["size"] == 5
     assert r["pages"] == max(1, (r["total"] + 4) // 5)
+
+
+def test_support_info_uses_support_email_then_reset_sender(monkeypatch):
+    monkeypatch.setenv("SUPPORT_EMAIL", " help@example.com ")
+    assert client.get("/api/support/info").json() == {"email": "help@example.com"}
+    monkeypatch.delenv("SUPPORT_EMAIL")
+    monkeypatch.setenv("RESET_FROM_EMAIL", "noreply@example.com")
+    assert client.get("/api/support/info").json() == {"email": "noreply@example.com"}
+

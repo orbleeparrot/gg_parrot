@@ -1751,6 +1751,9 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   border-top: 1px solid rgb(var(--c-slate-200));
 }
 
+/* 문의하기 — 사이드바 맨 아래 작은 2차 버튼. 고지문 위. */
+.site-sidebar-support { width: 100%; margin-bottom: 12px; justify-content: center; }
+.site-sidebar-support[aria-current="page"] { background: rgb(var(--c-slate-200)); }
 .site-sidebar-bottom > p {
   padding: 0 4px;
   color: rgb(var(--c-slate-500));

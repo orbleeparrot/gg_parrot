@@ -1,0 +1,13 @@
+/* 고객센터 — 상자 없이 괘선 구획 세 개(§1-3). 글줄은 읽기 폭 안에. */
+.support-page { width: 100%; max-width: 760px; }
+.support-section { padding: 22px 0; border-top: 1px solid rgb(var(--c-slate-200)); }
+.support-section:first-of-type { border-top-color: rgb(var(--c-slate-300)); }
+.support-head { margin: 0 0 8px; color: rgb(var(--c-slate-900)); font-size: 17px; line-height: 1.3; font-weight: 700; letter-spacing: -0.015em; }
+.support-copy { margin: 0; color: rgb(var(--c-slate-700)); font-size: 15px; line-height: 1.6; font-weight: 500; }
+.support-address-row { margin-top: 16px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.support-address { color: rgb(var(--c-slate-900)); font-size: 20px; font-weight: 600; text-decoration: none; letter-spacing: 0; margin-right: 6px; overflow-wrap: anywhere; }
+.support-address:hover { text-decoration: underline; text-underline-offset: 4px; text-decoration-color: rgb(var(--c-brand-line)); }
+.support-address.is-loading { color: rgb(var(--c-slate-500)); font-size: 15px; margin-top: 16px; }
+.support-list { margin: 6px 0 0; padding-left: 18px; color: rgb(var(--c-slate-700)); font-size: 15px; line-height: 1.7; font-weight: 500; }
+.support-list li + li { margin-top: 4px; }
+.support-list b { color: rgb(var(--c-slate-900)); font-weight: 700; }

@@ -125,6 +125,7 @@ function NavigationContents({ onNavigate, tabIndex, mobile = false }) {
         ) : null}
       </nav>
       <div className="site-sidebar-bottom">
+        <NavLink to="/support" onClick={onNavigate} tabIndex={tabIndex} className="site-sidebar-support btn btn-s btn-secondary">문의하기</NavLink>
         <p>웹 결과는 모의 계산이며<br />투자 조언이 아니에요.</p>
       </div>
     </>

@@ -1,53 +1,43 @@
 @media (min-width: 1100px) and (max-width: 1279px) {
-  .me-page { grid-template-columns: 208px minmax(0, 1fr); gap: 24px; }
-  .me-identity { padding-inline: 16px; }
-  .me-stat { padding-inline: 16px; }
+  .me-page { --me-inset: 16px; grid-template-columns: 208px minmax(0, 1fr); gap: var(--me-section-gap); }
   .me-stat dd { font-size: 23px; }
-  .me-macro-card { padding: 16px; }
 }
 @media (max-width: 1099px) {
-  .me-page { grid-template-columns: minmax(0, 1fr); gap: 24px; max-width: 780px; }
+  .me-page { grid-template-columns: minmax(0, 1fr); gap: var(--me-section-gap); max-width: 780px; }
   .me-profile-rail { position: static; }
-  .me-identity { padding: 24px 24px 16px; }
+  .me-identity { padding: var(--me-inset); }
   .me-avatar, .me-skeleton.is-avatar { width: 104px; height: 104px; }
   .me-avatar { font-size: 40px; }
-  .me-name { margin-top: 12px; font-size: 28px; }
+  .me-name { font-size: 28px; }
   .me-tier-toggle { min-height: 36px; }
-  .me-bio { margin-top: 12px; max-width: 54ch; }
-  .me-joined { margin-top: 4px; padding-top: 12px; }
-  .me-content { gap: 20px; }
-  .me-stat { padding-inline: 20px; }
+  .me-bio { max-width: 54ch; }
   .me-stat dd { font-size: 24px; }
-  .me-workspace-heading { margin-bottom: 16px; }
   .me-create-link { min-height: 44px; border-block: 4px solid transparent; background-clip: padding-box; }
   .me-card-action { min-height: 44px; }
   .me-filters button { min-height: 40px; }
 }
 @media (max-width: 599px) {
-  .me-page { gap: 16px; }
-  .me-identity { padding: 20px 20px 12px; border-radius: 16px; }
+  .me-page { --me-inset: 16px; --me-section-gap: 16px; }
+  .me-identity { border-radius: 16px; }
   .me-avatar, .me-skeleton.is-avatar { width: 88px; height: 88px; }
   .me-avatar { font-size: 34px; border-width: 3px; }
-  .me-name-line { flex-direction: row; flex-wrap: wrap; justify-content: center; gap: 6px 10px; margin-top: 12px; }
+  .me-name-line { flex-direction: row; flex-wrap: wrap; justify-content: center; }
   .me-name { font-size: 26px; margin: 0; }
   .me-tier-toggle { min-height: 32px; font-size: 12px; }
-  .me-bio { margin-top: 10px; font-size: 13px; line-height: 1.55; }
-  .me-identity-footer { margin-top: 12px; }
+  .me-bio { font-size: 13px; line-height: 20px; }
   .me-joined { width: auto; border: 0; font-size: 10px; margin: 0; padding: 0; }
-  .me-content { gap: 18px; }
-  .me-stats { padding-block: 18px; border-radius: 14px; }
-  .me-stat { gap: 6px; padding-inline: 12px; grid-template-rows: 18px auto; }
+  .me-stats { border-radius: 14px; }
+  .me-stat { padding-inline: 12px; grid-template-rows: 16px auto; }
   .me-stat dt { justify-content: center; gap: 0; font-size: 11px; }
   .me-stat dt svg { display: none; }
-  .me-stat dd { text-align: center; font-size: 20px; }
+  .me-stat dd { text-align: center; font-size: 20px; line-height: 24px; }
   .me-stat-link { inset: -10px 2px; }
-  .me-stats.has-long-values { gap: 14px; padding-block: 16px; }
-  .me-stats.has-long-values .me-stat { padding-inline: 20px; }
+  .me-stats.has-long-values .me-stat { padding-inline: var(--me-inset); }
   .me-stats.has-long-values .me-stat dd { font-size: 22px; }
   .me-section-nav { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
-  .me-section-nav button { min-height: 44px; padding-bottom: 10px; gap: 6px; font-size: 14px; }
+  .me-section-nav button { min-height: 44px; gap: 8px; font-size: 14px; }
   .me-section-nav button svg { width: 20px; height: 20px; }
-  .me-workspace-heading { gap: 8px; margin-bottom: 12px; }
+  .me-workspace-heading { gap: 8px; }
   .me-workspace-heading h2 { font-size: 21px; }
   .me-create-link { font-size: 12px; padding-inline: 10px; }
   .me-filters { display: flex; margin-bottom: 16px; }
@@ -61,21 +51,18 @@
   .me-workspace.is-macros .me-create-link svg { width: 22px; height: 22px; }
   .me-workspace.is-macros .me-filters { grid-column: 1; grid-row: 1; }
   .me-workspace.is-macros .me-panel { grid-column: 1 / -1; }
-  .me-macro-grid { grid-template-columns: minmax(0, 1fr); gap: 14px; }
-  .me-macro-card { padding: 18px; }
+  .me-macro-grid { grid-template-columns: minmax(0, 1fr); }
   .me-macro-heading h3 { font-size: 17px; }
-  .me-macro-description { margin: 16px 0 20px; font-size: 14px; }
-  .me-macro-metrics { padding-block: 12px; }
+  .me-macro-description { font-size: 14px; }
   .me-card-action { position: relative; min-height: 44px; padding-inline: 10px; border: 0; font-size: 12px; }
   .me-card-action::before { position: absolute; inset: 4px 0; border: 1px solid rgb(var(--c-slate-300)); border-radius: 8px; content: ""; pointer-events: none; }
-  .me-transaction { grid-template-columns: minmax(0, 1fr) auto; gap: 12px; padding-block: 18px; }
+  .me-transaction { grid-template-columns: minmax(0, 1fr) auto; }
   .me-transaction-icon { display: none; }
   .me-transaction-main p { font-size: 14px; }
   .me-transaction-main > div { font-size: 11px; }
   .me-transaction-amount strong { font-size: 14px; }
   .me-transaction-amount > span { font-size: 10px; }
   .me-post-title h3 { font-size: 15px; }
-  .me-post > a { padding-block: 16px; }
   .me-empty { min-height: 200px; }
 }
 @media (max-width: 359px) {

@@ -54,6 +54,19 @@ test("a feed cache preserves unread state between route subscriptions", () => {
   cleanup();
 });
 
+test("polling replaces an author's photo without new messages or unread changes", () => {
+  const scope = "test-avatar-refresh";
+  receiveChat(scope, response([{ ...msg(1), avatar_url: "/api/auth/avatars/2?v=old" }], { seen_id: 1, unseen_count: 0 }));
+  const cached = getChatFeed(scope);
+  receiveChat(scope, response([{ ...msg(1), avatar_url: "/api/auth/avatars/2?v=new" }], { seen_id: 1, unseen_count: 0 }));
+  assert.notEqual(getChatFeed(scope), cached);
+  assert.equal(getChatFeed(scope).items[0].avatar_url, "/api/auth/avatars/2?v=new");
+  assert.equal(getChatFeed(scope).latestId, 1);
+  assert.equal(chatUnseenCount(getChatFeed(scope)), 0);
+  receiveChat(scope, response([{ ...msg(1), avatar_url: null }], { seen_id: 1, unseen_count: 0 }));
+  assert.equal(getChatFeed(scope).items[0].avatar_url, null);
+});
+
 test("other tabs advance the live badge immediately without moving a cursor backwards", () => {
   const scope = "test-tabs";
   const cleanup = observeChat(scope, () => {});

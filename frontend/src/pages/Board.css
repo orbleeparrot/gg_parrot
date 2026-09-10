@@ -2,7 +2,7 @@
    pre-emit critique: P4 H4 E4 S4 R5 V4 · contrast: pass (40–41) · tokens: pass (48) · responsive: pass (34·49)
 
    게시판 — 한국 커뮤니티 게시판의 문법(디시·에펨·클리앙·루리웹·뽐뿌·코인판·더쿠·인벤 벤치마크, 2026-09-09):
-   · 한 줄 42px 의 촘촘한 표. 카드·아바타·요약 없음. 괘선 하나로 행을 가른다.
+   · 한 줄 42px 의 촘촘한 표. 작성자 사진은 20px, 괘선 하나로 행을 가른다.
    · 열: 번호 | 제목 [댓글수] (사진 표식) | 글쓴이 | 시각. 숫자는 전부 .num(탭 숫자)로 세로줄이 맞는다.
    · 제목은 보통 굵기(500) — 굵기는 위계가 아니라 글의 무게. 읽은 글은 흐려진다(:visited).
    · 시각은 오늘 HH:MM · 올해 MM.DD · 그 전 YY.MM.DD 로 바뀌어 같은 칸 폭에서 오늘 글이 갈린다.
@@ -82,7 +82,8 @@
 .board-count::after { content: "]"; }
 .board-mark { flex: 0 0 auto; display: inline-grid; place-items: center; color: rgb(var(--c-slate-400)); }
 .board-mark svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.board-author { overflow: hidden; color: rgb(var(--c-slate-700)); font-size: 13px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.board-author { display: flex; align-items: center; gap: 6px; overflow: hidden; color: rgb(var(--c-slate-700)); font-size: 13px; font-weight: 500; white-space: nowrap; }
+.board-author-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .board-time { color: rgb(var(--c-slate-500)); font-size: 13px; font-weight: 500; white-space: nowrap; }
 .board-time.is-today { color: rgb(var(--c-slate-700)); }
 
@@ -174,7 +175,8 @@
 }
 .board-post-strip b { color: rgb(var(--c-slate-900)); font-weight: 600; }
 .board-post-strip .num { color: rgb(var(--c-slate-700)); }
-.board-post-strip > span { display: inline-flex; align-items: baseline; gap: 5px; }
+.board-post-strip > .board-post-author { min-width: 0; display: inline-flex; align-items: center; gap: 8px; }
+.board-post-author b { overflow-wrap: anywhere; }
 .board-post-strip-time { margin-left: auto; }
 .board-post-strip .board-text-btn { margin-left: 4px; }
 .board-post-figure { margin: 20px 0 0; }
@@ -192,7 +194,7 @@
 }
 .board-post-skeleton { display: grid; gap: 14px; margin-top: 14px; }
 
-/* ── 댓글 — 글쓴이 · 시각 한 줄, 본문, 괘선. 아바타 없음. ── */
+/* ── 댓글 — 글쓴이 · 시각 한 줄, 본문, 괘선. ── */
 .board-comments { margin-top: 32px; }
 .board-comments-head {
   margin: 0;

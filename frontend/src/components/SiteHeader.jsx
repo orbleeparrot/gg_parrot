@@ -5,6 +5,7 @@ import { clearAuth, getAuthUser, getToken, updateAuthUser, useAuth } from "../li
 import MarketContext from "./MarketContext.jsx";
 import { BrandLink } from "./SiteNavigation.jsx";
 import ThemeToggle from "./ThemeToggle.jsx";
+import UserAvatar from "./UserAvatar.jsx";
 import { RunnerKeyPanel } from "./RunnerSessions.jsx";
 import { ChevronDownIcon, DownloadIcon, HelpIcon, MenuIcon, UserIcon } from "./utilityIcons.jsx";
 import "./SiteHeader.css";
@@ -90,9 +91,12 @@ function AccountMenu() {
   useEffect(() => {
     if (!token) return undefined;
     let active = true;
+    const requestedUser = getAuthUser();
     api.me().then((data) => {
       if (!active || getToken() !== token) return;
-      updateAuthUser(data.user);
+      const currentUser = getAuthUser();
+      const photoChanged = currentUser?.id === data.user?.id && currentUser?.avatar_url !== requestedUser?.avatar_url;
+      updateAuthUser(photoChanged ? { ...data.user, avatar_url: currentUser.avatar_url } : data.user);
       setPointsState("idle");
     }).catch((reason) => {
       if (!active || getToken() !== token) return;
@@ -114,12 +118,11 @@ function AccountMenu() {
   }
 
   const points = user?.points_balance == null ? "—" : user.points_balance.toLocaleString();
-  const initial = String(user.username || "").trim().charAt(0).toUpperCase() || "?";
 
   return (
     <div className="account-menu-root" ref={rootRef}>
       <button ref={triggerRef} type="button" className="header-control account-trigger" onClick={() => setOpen((value) => !value)} aria-haspopup="dialog" aria-expanded={open} aria-controls="header-account-menu" aria-label={`${user.username} · 계정 메뉴`}>
-        <span className="header-avatar" aria-hidden="true">{initial}</span>
+        <UserAvatar src={user.avatar_url} name={user.username} size={32} className="header-avatar" />
         <span className="header-tooltip" aria-hidden="true">{user.username}</span>
       </button>
       {open ? (

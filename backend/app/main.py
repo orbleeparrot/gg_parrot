@@ -58,6 +58,7 @@ from . import ai_explain as ai_explain_mod
 from . import ai_runtime as ai_runtime_mod
 from . import community_summaries as community_summaries_mod
 from . import auth as auth_mod
+from . import avatars as avatars_mod
 from . import points as points_mod
 from . import account as account_mod
 from . import challenge as challenge_mod
@@ -370,9 +371,58 @@ def auth_reset(req: ResetRequest) -> dict:
 
 
 @app.get("/api/auth/me")
-def auth_me(user: User = Depends(auth_mod.current_user)) -> dict:
+def auth_me(
+    user: User = Depends(auth_mod.current_user_in_session),
+    db: Session = Depends(request_session),
+) -> dict:
     """Current account (from the Bearer token), including the points balance."""
+    return {"user": auth_mod.user_view(user, db=db)}
+
+
+@app.post("/api/me/avatar")
+def upload_avatar(
+    image: UploadFile = File(...),
+    user: User = Depends(auth_mod.current_user),
+) -> dict:
+    # Bounded read and raster decoding run in FastAPI's worker thread.
+    try:
+        data = image.file.read(avatars_mod.MAX_IMAGE_BYTES + 1)
+        if len(data) > avatars_mod.MAX_IMAGE_BYTES:
+            raise HTTPException(413, "프로필 사진은 2MB 이하만 올릴 수 있어요.")
+        normalized = avatars_mod.normalize_image(data)
+        avatars_mod.set_avatar(int(user.id), normalized)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(401, str(exc)) from exc
+    finally:
+        image.file.close()
     return {"user": auth_mod.user_view(user)}
+
+
+@app.delete("/api/me/avatar")
+def delete_avatar(user: User = Depends(auth_mod.current_user)) -> dict:
+    try:
+        avatars_mod.set_avatar(int(user.id), None)
+    except LookupError as exc:
+        raise HTTPException(401, str(exc)) from exc
+    return {"user": auth_mod.user_view(user)}
+
+
+@app.get("/api/avatars/{user_id}")
+def avatar_image(user_id: int, request: Request, v: str | None = None) -> Response:
+    avatar = avatars_mod.get_avatar(user_id, version=v)
+    if avatar is None:
+        raise HTTPException(404, "프로필 사진이 없어요.", headers={"Cache-Control": "no-store"})
+    etag = f'"{avatar.version}"'
+    headers = {
+        "Cache-Control": "public, max-age=300, must-revalidate",
+        "ETag": etag,
+        "X-Content-Type-Options": "nosniff",
+    }
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=headers)
+    return Response(content=avatar.image_data, media_type="image/webp", headers=headers)
 
 
 @app.get("/api/me/dashboard")

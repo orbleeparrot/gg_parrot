@@ -6,6 +6,7 @@ import { boardFullTime, boardTime, kstDateTime } from "../lib/boardText.js";
 import { ErrorNote } from "../components/Page.jsx";
 import ConfirmDialog from "../components/ConfirmDialog.jsx";
 import { ChevronLeftIcon, ImageIcon } from "../components/boardIcons.jsx";
+import { AuthorAvatar } from "../components/UserAvatar.jsx";
 import "./Board.css";
 
 // §6 text-field 규격. `bg-white` 를 쓰면 안 된다: Tailwind 의 리터럴 흰색이라
@@ -151,7 +152,7 @@ function ListBelow({ currentId, token, onWrite }) {
                   {post.comment_count > 0 ? <span className="board-count num" aria-hidden="true">{post.comment_count}</span> : null}
                   {post.has_image ? <span className="board-mark" aria-hidden="true"><ImageIcon /></span> : null}
                 </span>
-                <span className="board-author" aria-hidden="true">{post.author_name}</span>
+                <span className="board-author" aria-hidden="true"><AuthorAvatar userId={post.author_user_id} src={post.author_avatar_url} name={post.author_name} size={20} /><span className="board-author-name">{post.author_name}</span></span>
                 <time className={`board-time num${/:/.test(time) ? " is-today" : ""}`} dateTime={kstDateTime(post.created_kst) || undefined} title={boardFullTime(post.created_ms) || post.created_kst}>{time}</time>
               </Link>
             </li>
@@ -230,7 +231,7 @@ export default function BoardPost() {
             <h1 className="board-post-title">{post.title}</h1>
             {/* 괘선 띠 — 글쓴이 | 시각. 댓글 수는 아래 댓글 구획 제목에만 둔다(같은 정보를 두 번 쓰지 않는다). */}
             <div className="board-post-strip">
-              <span><b>{post.author_name}</b></span>
+              <span className="board-post-author"><AuthorAvatar userId={post.author_user_id} src={post.author_avatar_url} name={post.author_name} size={32} /><b>{post.author_name}</b></span>
               <time className="num board-post-strip-time" dateTime={when || undefined}>{full}</time>
               {isMine ? (
                 <button type="button" onClick={() => setConfirmDelete(true)} disabled={deleting} className="board-text-btn">

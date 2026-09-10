@@ -6,7 +6,8 @@ from datetime import datetime, timezone
 from sqlalchemy import func, or_, text as sql_text
 from sqlmodel import select
 
-from .db import ChatMessage, ChatReadState, User, get_session
+from . import avatars
+from .db import ChatMessage, ChatReadState, User, UserAvatar, get_session
 from .leaderboard import _kst_hhmm, today_start_ms
 
 MAX_LEN = 300
@@ -74,7 +75,7 @@ def add_message(account: User, text: str) -> dict:
         db.add(row)
         db.commit()
         db.refresh(row)
-        return _view(row)
+        return _view(row, avatars.avatar_url(row.user_id, db=db))
 
 
 def _member_seen_id(user_id: int) -> int:
@@ -124,14 +125,17 @@ def list_messages(
         if seen_id is not None:
             supplied_seen = min(max(0, seen_id), _latest_id(db))
             effective_seen = max(server_seen or 0, supplied_seen)
-        query = select(ChatMessage).where(
+        query = select(ChatMessage, UserAvatar.version).outerjoin(
+            UserAvatar, UserAvatar.user_id == ChatMessage.user_id,
+        ).where(
             ChatMessage.created_ms >= start_ms, ChatMessage.id <= latest_id,
         )
         if before_id is not None:
             query = query.where(ChatMessage.id < before_id)
         rows = db.exec(query.order_by(ChatMessage.id.desc()).limit(MAX_LIST + 1)).all()
         has_more = len(rows) > MAX_LIST
-        items = [_view(row) for row in reversed(rows[:MAX_LIST])]
+        items = [_view(row, avatars.public_url(row.user_id, version))
+                 for row, version in reversed(rows[:MAX_LIST])]
         unseen_count = 0
         if effective_seen is not None:
             unseen_query = select(func.count(ChatMessage.id)).where(
@@ -157,11 +161,12 @@ def list_messages(
     }
 
 
-def _view(row: ChatMessage) -> dict:
+def _view(row: ChatMessage, avatar_url: str | None = None) -> dict:
     return {
         "id": row.id,
         "user_id": row.user_id,
         "username": row.username,
+        "avatar_url": avatar_url,
         "text": row.text,
         "created_kst": _kst_hhmm(row.created_ms),
         "created_at": row.created_at,

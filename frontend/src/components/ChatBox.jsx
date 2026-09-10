@@ -5,6 +5,7 @@ import { getAuthUser, getToken, useAuth } from "../lib/auth.js";
 import { badgeLabel, chatScope, firstUnseenId, isOwnMessage, sameAuthor } from "../lib/chatBadge.js";
 import { STICKERS, stickerFromText, stickerText } from "../lib/chatStickers.js";
 import { chatUnseenCount, getChatFeed, markChatSeen, observeChat, receiveChat, receiveChatPost, setChatLoadError, visibleChatReadId } from "../lib/chatStore.js";
+import UserAvatar, { AuthorAvatar } from "./UserAvatar.jsx";
 import "./ChatBox.css";
 
 const POLL_MS = 3000;
@@ -398,13 +399,12 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
               const continued = !showDivider && sameAuthor(previous, message);
               const mine = isOwnMessage(message, member?.id);
               const legacy = message.user_id == null;
-              const initial = String(message.username || "?").trim().charAt(0).toUpperCase() || "?";
               const sticker = stickerFromText(message.text);
               return (
                 <Fragment key={message.id}>
                   {showDivider ? <div className="chat-divider" role="separator" aria-label="여기부터 새 메시지"><span>새 메시지</span></div> : null}
                   <article className={`chat-row${mine ? " is-mine" : ""}${continued ? " is-continued" : ""}`} aria-label={`${message.username}${legacy ? ", 이전 익명 메시지" : ""}, ${message.created_kst}`}>
-                    {!mine ? <span className="chat-avatar" aria-hidden="true">{continued ? "" : initial}</span> : null}
+                    {!mine ? (continued ? <span className="chat-avatar" aria-hidden="true" /> : <AuthorAvatar userId={message.user_id} src={message.avatar_url} name={message.username} size={32} className="chat-avatar" />) : null}
                     <div className="chat-row-body">
                       {!mine && !continued ? <span className="chat-row-name">{message.username}{legacy ? <small className="chat-legacy">이전 익명</small> : null}</span> : null}
                       <div className="chat-bubble-line">
@@ -425,7 +425,7 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
           ) : null}
           {member ? (
             <form onSubmit={send} className="chat-composer">
-              <span className="chat-name-chip chat-member-name" aria-label={`로그인 회원 ${member.username}`}><span>{member.username}</span></span>
+              <span className="chat-name-chip chat-member-name" aria-label={`로그인 회원 ${member.username}`}><UserAvatar src={member.avatar_url} name={member.username} size={24} /><span className="chat-member-label">{member.username}</span></span>
               <button type="button" className={`chat-sticker-btn${stickerOpen ? " is-on" : ""}`} onClick={() => setStickerOpen((tray) => !tray)} aria-expanded={stickerOpen} aria-label={stickerOpen ? "스티커 닫기" : "스티커 열기"} title="스티커" disabled={busy}><img src={STICKERS[0].src} alt="" width="22" height="22" draggable="false" decoding="async" /></button>
               <input ref={inputRef} value={text} aria-label="채팅 메시지" aria-invalid={error ? true : undefined} onChange={(event) => setText(event.target.value)} maxLength={300} placeholder="메시지" className="chat-field" disabled={busy} />
               <button type="submit" className="chat-send" disabled={busy || !text.trim()} aria-label={busy ? "보내는 중" : "전송"}>{busy ? <span className="chat-spinner" aria-hidden="true" /> : <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 13V3M3.5 7.5 8 3l4.5 4.5" /></svg>}</button>

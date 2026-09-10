@@ -1,13 +1,18 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api.js";
-import { useAuth, updateAuthUser } from "../lib/auth.js";
-import { initialOf } from "../lib/boardText.js";
+import { getAuthUser, getToken, useAuth, updateAuthUser } from "../lib/auth.js";
+import { CameraIcon } from "@phosphor-icons/react/dist/csr/Camera";
+import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
+import { PlantIcon } from "@phosphor-icons/react/dist/csr/Plant";
+import { MedalIcon } from "@phosphor-icons/react/dist/csr/Medal";
+import { DiamondIcon } from "@phosphor-icons/react/dist/csr/Diamond";
 import {
   formatPoints, fullKst, joinedLabel, ledgerLabel, signedPoints, stampKst, tierNextLabel, tierStepAt, tierSteps,
 } from "../lib/profileText.js";
 import { EmptyState, ErrorNote } from "../components/Page.jsx";
 import CoinIcon from "../components/CoinIcon.jsx";
+import UserAvatar from "../components/UserAvatar.jsx";
 import { ImageIcon } from "../components/boardIcons.jsx";
 import "./Board.css"; // 게시글 탭은 게시판 목록 문법(.board-table)을 그대로 쓴다
 import "./MyPage.css";
@@ -31,24 +36,76 @@ function Stamp({ value, now, className = "" }) {
   );
 }
 
-// 등급 사다리 — 누적 판매 건수로 오르는 다섯 칸. 현재 칸만 노랑(§1-4: 이 화면의 노랑은 여기 하나).
-function TierLadder({ tier }) {
-  const steps = tierSteps(tier);
+function TierIcon({ name }) {
+  const Icon = name === "새싹" ? PlantIcon : name === "다이아" ? DiamondIcon : MedalIcon;
+  const tone = { "새싹": "seed", "브론즈": "bronze", "실버": "silver", "골드": "gold", "다이아": "diamond" }[name] || "silver";
+  return <Icon className={`me-tier-icon is-${tone}`} size={24} weight="duotone" aria-hidden="true" />;
+}
+
+function TierGuide({ tier }) {
   return (
-    <section className="me-ladder" aria-label="등급">
-      <ol className="me-steps">
-        {steps.map((s) => (
-          <li key={s.name} className={`me-step is-${s.state}`} aria-current={s.state === "current" ? "step" : undefined}>
-            <span className="me-step-node" aria-hidden="true">{s.state === "done" ? "✓" : ""}</span>
-            <span className="me-step-name">{s.name}</span>
-            <span className="me-step-at num">{tierStepAt(s.at)}</span>
+    <details className="me-tier">
+      <summary aria-label={`등급 안내 · ${tier.name} · ${tierNextLabel(tier)}`}>
+        <span className="me-tier-current"><TierIcon name={tier.name} /><b>{tier.name}</b></span>
+        <span className="me-tier-next">{tierNextLabel(tier)}</span>
+        <CaretDownIcon className="me-tier-caret" size={16} weight="bold" aria-hidden="true" />
+      </summary>
+      <ol className="me-tier-list" aria-label="판매 등급별 조건">
+        {tierSteps(tier).map((step) => (
+          <li key={step.name} className={step.state === "current" ? "is-current" : undefined} aria-current={step.state === "current" ? "step" : undefined}>
+            <TierIcon name={step.name} />
+            <b>{step.name}</b>
+            <span className="num">{tierStepAt(step.at)}</span>
           </li>
         ))}
       </ol>
-      <p className="me-ladder-note">
-        누적 판매 <b className="num">{tier.sales}</b>건 · {tierNextLabel(tier)}
-      </p>
-    </section>
+    </details>
+  );
+}
+
+function AvatarEditor({ user, onUpdate, onError }) {
+  const input = useRef(null);
+  const mounted = useRef(false);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+
+  async function save(file) {
+    if (busy) return;
+    onError("");
+    if (file && file.size > 2 * 1024 * 1024) {
+      onError("2MB 이하의 사진을 선택해주세요.");
+      return;
+    }
+    const requestToken = getToken();
+    const isCurrent = () => mounted.current && getToken() === requestToken && getAuthUser()?.id === user.id;
+    setBusy(true);
+    try {
+      const response = await (file ? api.uploadAvatar(file) : api.deleteAvatar());
+      if (isCurrent()) onUpdate(response.user);
+    } catch (e) {
+      if (isCurrent()) onError(String(e.message || "사진을 저장하지 못했어요."));
+    } finally {
+      if (isCurrent()) setBusy(false);
+    }
+  }
+
+  return (
+    <div className="me-photo" aria-busy={busy}>
+      <button type="button" className="me-avatar-edit" aria-label="프로필 사진 변경" aria-describedby="me-photo-hint" disabled={busy} onClick={() => input.current?.click()}>
+        <UserAvatar src={user.avatar_url} name={user.username} size={80} className="me-avatar" />
+        <span className="me-avatar-camera"><CameraIcon size={16} weight="bold" aria-hidden="true" /></span>
+      </button>
+      <input ref={input} type="file" accept="image/png,image/jpeg,image/webp" className="sr-only" tabIndex={-1} aria-label="프로필 사진 파일" disabled={busy} onChange={(event) => {
+        const file = event.target.files?.[0];
+        event.target.value = "";
+        if (file) save(file);
+      }} />
+      <span id="me-photo-hint" className="sr-only">PNG, JPG, WebP · 최대 2MB</span>
+      {busy ? <span className="me-photo-status" role="status">저장 중…</span> : user.avatar_url ? <button type="button" className="me-photo-reset" onClick={() => save(null)}>사진 삭제</button> : null}
+    </div>
   );
 }
 
@@ -208,34 +265,45 @@ function Skeleton() {
 }
 
 export default function MyPage() {
-  const { token } = useAuth();
+  const { token, user: authUser } = useAuth();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
+  const [photoError, setPhotoError] = useState("");
   const [now, setNow] = useState(() => Date.now());
 
   const paramTab = searchParams.get("tab");
   const tab = TAB_KEYS.has(paramTab) ? paramTab : "created";
 
   useEffect(() => {
+    setData(null);
+    setError("");
+    setPhotoError("");
     if (!token) {
       navigate("/login?next=%2Fmypage");
       return;
     }
     let alive = true;
-    api.myDashboard()
+    const controller = new AbortController();
+    const userAtStart = getAuthUser();
+    api.myDashboard({ signal: controller.signal })
       .then((d) => {
-        if (!alive) return;
-        setData(d);
+        if (!alive || getToken() !== token) return;
+        const currentUser = getAuthUser();
+        const user = currentUser?.id === d.user.id && currentUser.avatar_url !== userAtStart?.avatar_url && currentUser.avatar_url !== undefined
+          ? { ...d.user, avatar_url: currentUser.avatar_url }
+          : d.user;
+        setData({ ...d, user });
         setNow(Date.now());
-        updateAuthUser(d.user); // 상단바 포인트와 맞춘다
+        updateAuthUser(user);
       })
       .catch((e) => {
         if (alive) setError(String(e.message || e));
       });
     return () => {
       alive = false;
+      controller.abort();
     };
   }, [navigate, token]);
 
@@ -251,7 +319,14 @@ export default function MyPage() {
   if (error) return <ErrorNote>내 활동을 불러오지 못했어요: {error}</ErrorNote>;
   if (!data) return <Skeleton />;
 
-  const { user, tier, totals, created, purchased, sales, ledger, my_posts = [] } = data;
+  const { tier, totals, created, purchased, sales, ledger, my_posts = [] } = data;
+  const user = authUser?.id === data.user.id && authUser.avatar_url !== undefined
+    ? { ...data.user, avatar_url: authUser.avatar_url }
+    : data.user;
+  const updateAvatar = (updatedUser) => {
+    setData((previous) => ({ ...previous, user: { ...previous.user, avatar_url: updatedUser.avatar_url } }));
+    updateAuthUser({ ...getAuthUser(), avatar_url: updatedUser.avatar_url });
+  };
   const counts = { created: created.length, purchased: purchased.length, sales: sales.length, ledger: ledger.length, posts: my_posts.length };
   const openInBuilder = (macro) => navigate("/builder", { state: { macro } });
   const pickTab = (key) => setSearchParams(key === "created" ? {} : { tab: key }, { replace: true });
@@ -260,16 +335,16 @@ export default function MyPage() {
     <div className="me-page">
       {/* 머리 — 이름이 곧 제목(다른 화면의 PageHeader 제목과 같은 크기). 오른쪽은 포인트·수익·판매. */}
       <header className="me-head">
-        <span className="me-avatar" aria-hidden="true">{initialOf(user.username)}</span>
+        <AvatarEditor key={token} user={user} onUpdate={updateAvatar} onError={setPhotoError} />
         <div className="me-id">
           <h1 className="me-name">
             {user.username}
-            <span className="badge badge-flat me-tier-badge">{tier.name}</span>
           </h1>
           <p className="me-meta">
             <span>{user.email}</span>
             {joinedLabel(user.created_at) ? <span className="num">{joinedLabel(user.created_at)}</span> : null}
           </p>
+          <TierGuide tier={tier} />
         </div>
         <dl className="me-stats">
           <div className="me-stat is-points"><dt>보유 포인트</dt><dd className="num">{formatPoints(user.points_balance)}</dd></div>
@@ -277,8 +352,7 @@ export default function MyPage() {
           <div className="me-stat"><dt>누적 판매</dt><dd className="num">{totals.sales}건</dd></div>
         </dl>
       </header>
-
-      <TierLadder tier={tier} />
+      {photoError ? <p className="me-photo-error" role="alert">{photoError}</p> : null}
 
       <div className="me-tabs">
         <div className="seg" role="tablist" aria-label="내 활동 종류">

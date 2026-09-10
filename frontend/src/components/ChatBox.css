@@ -10,8 +10,8 @@
 .chat-history, .chat-jump { display: block; border: 1px solid rgb(var(--c-slate-300)); border-radius: 16px; padding: 7px 14px; margin: 6px auto; background: rgb(var(--c-surface)); color: rgb(var(--c-slate-800)); font-size: 12px; }
 .chat-history:disabled { cursor: wait; opacity: .65; }
 .chat-legacy { margin-left: 5px; font-size: 10px; font-weight: 400; opacity: .7; }
-.chat-composer .chat-member-name { display: inline-flex; align-items: center; cursor: default; max-width: 92px; overflow: hidden; white-space: nowrap; }
-.chat-member-name > span { overflow: hidden; text-overflow: ellipsis; }
+.chat-composer .chat-member-name { display: inline-flex; align-items: center; gap: 5px; cursor: default; max-width: 104px; overflow: hidden; white-space: nowrap; }
+.chat-member-name > .chat-member-label { overflow: hidden; text-overflow: ellipsis; }
 .chat-member-name:hover { background: rgb(var(--c-slate-100)); }
 .chat-login-prompt a { white-space: nowrap; text-decoration: underline; }
 .chat-status button:focus-visible, .chat-history:focus-visible, .chat-jump:focus-visible, .chat-login-prompt a:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }

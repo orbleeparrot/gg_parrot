@@ -5,6 +5,7 @@ import { useAuth } from "../lib/auth.js";
 import { boardFullTime, boardTime, kstDateTime, pageWindow } from "../lib/boardText.js";
 import { PageHeader, EmptyState, ErrorNote } from "../components/Page.jsx";
 import { ChevronLeftIcon, ChevronRightIcon, ImageIcon } from "../components/boardIcons.jsx";
+import { AuthorAvatar } from "../components/UserAvatar.jsx";
 import "./Board.css";
 
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
@@ -196,7 +197,7 @@ function PostRow({ post, now }) {
           {post.comment_count > 0 ? <span className="board-count num" aria-hidden="true">{post.comment_count}</span> : null}
           {post.has_image ? <span className="board-mark" aria-hidden="true"><ImageIcon /></span> : null}
         </span>
-        <span className="board-author" aria-hidden="true">{post.author_name}</span>
+        <span className="board-author" aria-hidden="true"><AuthorAvatar userId={post.author_user_id} src={post.author_avatar_url} name={post.author_name} size={20} /><span className="board-author-name">{post.author_name}</span></span>
         <time className={`board-time num${isToday ? " is-today" : ""}`} dateTime={when || undefined} title={full} aria-hidden="true">{time}</time>
       </Link>
     </li>

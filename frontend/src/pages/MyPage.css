@@ -1,50 +1,51 @@
-/* Hallmark · genre: modern-minimal · macrostructure: Stat-Led identity strip + Index-First tabs · design-system: DESIGN.md · designed-as-app
- * Hallmark · pre-emit critique: P4 H5 E4 S4 R5 V4
- * 내 활동(프로필). 벤치마크 — GitHub·Stack Overflow·TradingView·Chess.com·LeetCode·벨로그·브런치·크몽·Binance Square
- * (wiki concepts/프로필-페이지-디자인-관례): 이름이 제목, 옆에 등급, 한 줄 메타, 수치는 라벨 위·숫자 아래,
- * 그 아래 개수 붙은 탭, 탭마다 전체 폭 괘선 표. 상자·카드 없음(§1-3). 노랑은 등급 사다리의 현재 칸 하나(§1-4). */
+/* 내 활동: 사진·이름·포인트 중심. 등급별 조건은 현재 등급을 눌렀을 때만 펼친다. */
 
-.me-page { display: grid; gap: 24px; }
+.me-page { --me-tier-bronze: 153 97 53; display: grid; gap: 24px; }
+.dark .me-page { --me-tier-bronze: 207 150 104; }
 
 /* ── 머리: 아바타 | 이름·메타 | 수치 ── */
-.me-head { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; column-gap: 22px; }
-.me-avatar {
-  width: 80px; height: 80px; border-radius: 999px; display: grid; place-items: center;
-  border: 1px solid rgb(var(--c-slate-200)); background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-900));
-  font-size: 32px; font-weight: 800; letter-spacing: -0.02em; line-height: 1;
-}
+.me-head { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; column-gap: 22px; padding-bottom: 24px; border-bottom: 1px solid rgb(var(--c-slate-200)); }
+.me-photo { display: grid; justify-items: center; gap: 8px; width: 80px; }
+.me-avatar-edit { position: relative; display: block; padding: 0; border: 0; border-radius: 50%; background: transparent; cursor: pointer; }
+.me-avatar-edit:disabled { opacity: .65; cursor: wait; }
+.me-avatar { width: 80px; height: 80px; font-size: 32px; }
+.me-avatar-camera { position: absolute; right: -2px; bottom: -2px; display: grid; place-items: center; width: 28px; height: 28px; border: 2px solid rgb(var(--c-slate-50)); border-radius: 50%; background: rgb(var(--c-slate-200)); color: rgb(var(--c-slate-900)); }
+.me-avatar-edit:hover .me-avatar-camera { background: rgb(var(--c-slate-300)); }
+.me-photo-reset { padding: 3px 4px; border: 0; background: transparent; color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 600; cursor: pointer; }
+.me-photo-reset:hover { color: rgb(var(--c-slate-900)); text-decoration: underline; }
+.me-photo-status { color: rgb(var(--c-slate-500)); font-size: 12px; }
+.me-photo-error { margin: 0; color: rgb(var(--c-red-600)); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
 .me-id { min-width: 0; display: grid; gap: 8px; }
 .me-name {
   margin: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; min-width: 0;
   color: rgb(var(--c-slate-900)); font-size: clamp(30px, 22px + 1.6vw, 44px); line-height: 1.1; font-weight: 800; letter-spacing: -0.03em;
   overflow-wrap: anywhere;
 }
-.me-tier-badge { position: relative; top: 1px; letter-spacing: 0; }
 .me-meta { margin: 0; display: flex; flex-wrap: wrap; gap: 4px 14px; color: rgb(var(--c-slate-500)); font-size: 15px; line-height: 1.4; font-weight: 500; overflow-wrap: anywhere; }
-.me-stats { margin: 0; display: flex; align-items: end; gap: 32px; }
+.me-stats { margin: 8px 0 0; display: flex; align-items: end; gap: 32px; }
 .me-stat { display: grid; gap: 6px; text-align: right; }
 .me-stat dt { color: rgb(var(--c-slate-700)); font-size: 13px; line-height: 1.2; font-weight: 600; white-space: nowrap; }
 .me-stat dd { margin: 0; color: rgb(var(--c-slate-900)); font-size: 22px; line-height: 1; font-weight: 700; white-space: nowrap; }
-.me-stat.is-points dd { font-size: 34px; color: rgb(var(--c-indigo-800)); } /* 포인트는 인디고(§2-3) */
+.me-stat.is-points dd { font-size: 34px; color: rgb(var(--c-brand-line)); }
 
-/* ── 등급 사다리(progress-stepper §6): 26px 노드 + 2px 연결선. 완료·현재만 노랑 ── */
-.me-ladder { display: grid; gap: 14px; padding: 20px 0 18px; border-top: 1px solid rgb(var(--c-slate-200)); border-bottom: 1px solid rgb(var(--c-slate-200)); }
-.me-steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); }
-.me-step { position: relative; display: grid; justify-items: start; gap: 8px; min-width: 0; }
-.me-step::before { content: ""; position: absolute; top: 12px; left: 34px; right: 8px; height: 2px; background: rgb(var(--c-slate-200)); }
-.me-step:last-child::before { display: none; }
-.me-step.is-done::before { background: rgb(var(--c-brand)); }
-.me-step-node {
-  width: 26px; height: 26px; border-radius: 999px; display: grid; place-items: center;
-  background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-500)); font-size: 13px; font-weight: 800; line-height: 1;
-}
-.me-step.is-done .me-step-node, .me-step.is-current .me-step-node { background: rgb(var(--c-brand)); color: rgb(var(--c-brand-ink)); }
-.me-step.is-current .me-step-node { box-shadow: 0 0 0 4px rgb(var(--c-brand) / .22); }
-.me-step-name { color: rgb(var(--c-slate-500)); font-size: 14px; line-height: 1.2; font-weight: 600; }
-.me-step.is-current .me-step-name { color: rgb(var(--c-slate-900)); }
-.me-step-at { margin-top: -4px; color: rgb(var(--c-slate-500)); font-size: 12px; line-height: 1.2; font-weight: 600; }
-.me-ladder-note { margin: 0; color: rgb(var(--c-slate-700)); font-size: 14px; line-height: 1.5; font-weight: 500; }
-.me-ladder-note b { color: rgb(var(--c-slate-900)); font-weight: 700; }
+/* ── 현재 등급 + 접힌 조건 안내. SVG는 Phosphor duotone 원형을 사용한다. ── */
+.me-tier { min-width: 0; max-width: 540px; }
+.me-tier summary { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; width: fit-content; max-width: 100%; min-height: 32px; cursor: pointer; list-style: none; border-radius: 4px; }
+.me-tier summary::-webkit-details-marker { display: none; }
+.me-tier-current { display: inline-flex; align-items: center; gap: 6px; color: rgb(var(--c-slate-900)); font-size: 14px; white-space: nowrap; }
+.me-tier-next { color: rgb(var(--c-slate-500)); font-size: 13px; line-height: 1.5; }
+.me-tier-caret { flex: none; color: rgb(var(--c-slate-500)); }
+.me-tier[open] .me-tier-caret { transform: rotate(180deg); }
+.me-tier-icon { flex: none; }
+.me-tier-icon.is-seed { color: rgb(var(--c-green-600)); }
+.me-tier-icon.is-bronze { color: rgb(var(--me-tier-bronze)); }
+.me-tier-icon.is-silver { color: rgb(var(--c-slate-500)); }
+.me-tier-icon.is-gold { color: rgb(var(--c-brand-line)); }
+.me-tier-icon.is-diamond { color: rgb(var(--c-sky-700)); }
+.me-tier-list { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin: 12px 0 0; padding: 12px 0 0; border-top: 1px solid rgb(var(--c-slate-200)); list-style: none; }
+.me-tier-list li { display: grid; justify-items: start; gap: 4px; min-width: 0; color: rgb(var(--c-slate-700)); font-size: 13px; line-height: 1.4; }
+.me-tier-list li.is-current b { text-decoration: underline; text-underline-offset: 4px; }
+.me-tier-list li > span { color: rgb(var(--c-slate-500)); font-size: 11px; }
 
 /* ── 탭(단일 선택 = segmented §6). 좁으면 가로 스크롤 ── */
 .me-tabs { overflow-x: auto; scrollbar-width: none; margin-inline: calc(-1 * var(--site-gutter, 22px)); padding-inline: var(--site-gutter, 22px); }
@@ -96,12 +97,12 @@
 @media (max-width: 639px) {
   .me-page { gap: 20px; }
   .me-head { column-gap: 14px; }
-  .me-avatar { width: 56px; height: 56px; font-size: 24px; }
+  .me-photo { width: 64px; }
+  .me-avatar { width: 64px; height: 64px; font-size: 26px; }
+  .me-avatar-camera { width: 26px; height: 26px; }
   .me-stats { gap: 20px; flex-wrap: wrap; }
   .me-stat.is-points dd { font-size: 28px; }
-  .me-steps { grid-template-columns: repeat(5, minmax(0, 1fr)); }
-  .me-step-at { display: none; }
-  .me-step-name { font-size: 12px; }
+  .me-tier-list { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   /* 행을 두 줄로: 첫 줄 로고 + 제목·전략, 둘째 줄 수치·시각·버튼 */
   .me-row.me-table-head { display: none; }
   .me-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; min-height: 0; padding: 12px 0; }
@@ -111,7 +112,4 @@
   .me-row > .btn { margin-left: auto; }
   .me-table.is-sales .me-cell.me-text, .me-table.is-ledger .me-cell.me-text { flex: 1 1 100%; order: -1; }
   .me-posts { --board-cols: 1fr 64px; }
-}
-@media (prefers-reduced-motion: no-preference) {
-  .me-step-node { transition: background-color 160ms ease, box-shadow 160ms ease; }
 }

@@ -18,7 +18,8 @@ from typing import Deque, Optional
 from sqlalchemy import func
 from sqlmodel import select
 
-from .db import BoardComment, BoardPost, User, get_session
+from . import avatars
+from .db import BoardComment, BoardPost, User, UserAvatar, get_session
 from .security import hash_password, verify_password
 
 MAX_TITLE = 120
@@ -78,7 +79,7 @@ def validate_image(data: bytes, content_type: Optional[str]) -> tuple[bytes, str
 # ---------------------------------------------------------------------------
 # 글
 # ---------------------------------------------------------------------------
-def _post_list_view(row: BoardPost, comment_count: int) -> dict:
+def _post_list_view(row: BoardPost, comment_count: int, avatar_url: str | None = None) -> dict:
     body = row.body or ""
     return {
         "id": row.id,
@@ -86,6 +87,7 @@ def _post_list_view(row: BoardPost, comment_count: int) -> dict:
         "snippet": body[:SNIPPET_LEN] + ("…" if len(body) > SNIPPET_LEN else ""),
         "author_name": row.author_name,
         "author_user_id": row.author_user_id,
+        "author_avatar_url": avatar_url,
         "has_image": bool(row.image_data),
         "comment_count": comment_count,
         "created_kst": _kst_display(row.created_ms),
@@ -93,13 +95,14 @@ def _post_list_view(row: BoardPost, comment_count: int) -> dict:
     }
 
 
-def _post_detail_view(row: BoardPost, comments: list[dict]) -> dict:
+def _post_detail_view(row: BoardPost, comments: list[dict], avatar_url: str | None = None) -> dict:
     return {
         "id": row.id,
         "title": row.title,
         "body": row.body or "",
         "author_name": row.author_name,
         "author_user_id": row.author_user_id,
+        "author_avatar_url": avatar_url,
         "has_image": bool(row.image_data),
         "image_url": f"/api/board/posts/{row.id}/image" if row.image_data else None,
         "created_kst": _kst_display(row.created_ms),
@@ -129,7 +132,7 @@ def create_post(user: User, title: str, body: str, image_bytes: Optional[bytes],
         db.add(row)
         db.commit()
         db.refresh(row)
-        return _post_detail_view(row, [])
+        return _post_detail_view(row, [], avatars.avatar_url(row.author_user_id, db=db))
 
 
 def list_posts(page: int = 1, size: int = PAGE_SIZE_DEFAULT) -> dict:
@@ -153,12 +156,14 @@ def list_posts(page: int = 1, size: int = PAGE_SIZE_DEFAULT) -> dict:
             BoardPost.body,
             BoardPost.author_name,
             BoardPost.author_user_id,
+            UserAvatar.version.label("avatar_version"),
             BoardPost.created_ms,
             (func.coalesce(func.length(BoardPost.image_data), 0) > 0).label("has_image"),
             func.coalesce(comment_counts.c.n, 0).label("comment_count"),
             func.count().over().label("total"),
         )
         .outerjoin(comment_counts, comment_counts.c.post_id == BoardPost.id)
+        .outerjoin(UserAvatar, UserAvatar.user_id == BoardPost.author_user_id)
         .order_by(BoardPost.created_ms.desc())
         .offset((page - 1) * size)
         .limit(size)
@@ -177,6 +182,7 @@ def list_posts(page: int = 1, size: int = PAGE_SIZE_DEFAULT) -> dict:
                 "snippet": (r.body or "")[:SNIPPET_LEN] + ("…" if len(r.body or "") > SNIPPET_LEN else ""),
                 "author_name": r.author_name,
                 "author_user_id": r.author_user_id,
+                "author_avatar_url": avatars.public_url(r.author_user_id, r.avatar_version),
                 "has_image": bool(r.has_image),
                 "comment_count": int(r.comment_count or 0),
                 "created_kst": _kst_display(r.created_ms),
@@ -204,7 +210,7 @@ def get_post(post_id: int) -> Optional[dict]:
             select(BoardComment).where(BoardComment.post_id == post_id).order_by(BoardComment.id.asc())
         ).all()
         comments = [_comment_view(c) for c in crows]
-        return _post_detail_view(row, comments)
+        return _post_detail_view(row, comments, avatars.avatar_url(row.author_user_id, db=db))
 
 
 def get_image(post_id: int) -> Optional[tuple[bytes, str]]:
@@ -245,7 +251,8 @@ def my_posts(user_id: int, limit: int = 50, db=None) -> list[dict]:
             for c in db.exec(select(BoardComment.post_id).where(BoardComment.post_id.in_(ids))).all():
                 pid = c if isinstance(c, int) else c[0]
                 counts[pid] = counts.get(pid, 0) + 1
-        return [_post_list_view(r, counts.get(r.id, 0)) for r in rows]
+        avatar_url = avatars.avatar_url(user_id, db=db) if rows else None
+        return [_post_list_view(r, counts.get(r.id, 0), avatar_url) for r in rows]
 
 
 # ---------------------------------------------------------------------------
@@ -256,6 +263,8 @@ def _comment_view(row: BoardComment) -> dict:
         "id": row.id,
         "post_id": row.post_id,
         "username": row.username,
+        # Anonymous comments have no verified account link, even when names match.
+        "author_avatar_url": None,
         "text": row.text,
         "created_kst": _kst_display(row.created_ms),
     }

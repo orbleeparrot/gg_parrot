@@ -22,6 +22,7 @@ from sqlmodel import Session, select
 
 from . import email_service
 from . import points as points_mod
+from . import avatars
 from .db import User, get_session, request_session
 from .security import hash_password, verify_password
 
@@ -114,7 +115,7 @@ def decode_runner_session_stream_token(token: str) -> int:
         raise AuthError(401, "실시간 세션 연결 인증이 만료됐거나 유효하지 않아요.")
 
 
-def user_view(user: User) -> dict:
+def user_view(user: User, db: Session | None = None) -> dict:
     """Public view of an account — never includes the password hash."""
     return {
         "id": user.id,
@@ -122,6 +123,7 @@ def user_view(user: User) -> dict:
         "username": user.username,
         "points_balance": user.points_balance,
         "created_at": user.created_at,
+        "avatar_url": avatars.avatar_url(user.id, db=db),
     }
 
 
@@ -158,7 +160,7 @@ def signup(email: str, username: str, password: str) -> dict:
         points_mod.apply(db, user, points_mod.SIGNUP_GRANT, "signup_grant")
         db.commit()
         db.refresh(user)
-        return {"token": make_token(user.id), "user": user_view(user)}
+        return {"token": make_token(user.id), "user": user_view(user, db=db)}
 
 
 def login(email: str, password: str) -> dict:
@@ -169,7 +171,7 @@ def login(email: str, password: str) -> dict:
             raise AuthError(401, _GOOGLE_ONLY_ACCOUNT_DETAIL)
         if user is None or not verify_password(password or "", user.password_hash):
             raise AuthError(401, "이메일 또는 비밀번호가 올바르지 않아요.")
-        return {"token": make_token(user.id), "user": user_view(user)}
+        return {"token": make_token(user.id), "user": user_view(user, db=db)}
 
 
 def get_user_by_id(user_id: int) -> Optional[User]:
@@ -238,7 +240,7 @@ def google_auth(credential: str) -> dict:
     with get_session() as db:
         user = db.exec(select(User).where(User.email == email)).first()
         if user is not None:
-            return {"token": make_token(user.id), "user": user_view(user)}
+            return {"token": make_token(user.id), "user": user_view(user, db=db)}
         username = _unique_username(db, info.get("name") or email.split("@")[0])
         user = User(
             email=email,
@@ -254,7 +256,7 @@ def google_auth(credential: str) -> dict:
         points_mod.apply(db, user, points_mod.SIGNUP_GRANT, "signup_grant")
         db.commit()
         db.refresh(user)
-        return {"token": make_token(user.id), "user": user_view(user)}
+        return {"token": make_token(user.id), "user": user_view(user, db=db)}
 
 
 # --- password reset -----------------------------------------------------

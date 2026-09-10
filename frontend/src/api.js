@@ -67,23 +67,25 @@ async function req(path, opts = {}) {
 
 // multipart/form-data 요청 (파일 업로드). Content-Type은 브라우저가 boundary와
 // 함께 자동 설정하도록 두고, Authorization 헤더만 붙인다.
-async function reqForm(path, formData) {
+async function reqForm(path, formData, options = {}) {
   const token = getToken();
   const headers = {};
   if (token) headers["Authorization"] = `Bearer ${token}`;
-  const res = await fetch(BASE + path, { method: "POST", headers, body: formData });
-  const body = await jsonBody(res);
-  if (!res.ok) {
-    const detail = typeof body.detail === "string"
-      ? body.detail
-      : body.detail != null
-        ? JSON.stringify(body.detail)
-        : res.statusText;
-    const error = new Error(detail);
-    error.status = res.status;
-    throw error;
-  }
-  return body;
+  return withRequestTimeout(async (signal) => {
+    const res = await fetch(BASE + path, { method: "POST", headers, body: formData, signal });
+    const body = await jsonBody(res);
+    if (!res.ok) {
+      const detail = typeof body.detail === "string"
+        ? body.detail
+        : body.detail != null
+          ? JSON.stringify(body.detail)
+          : res.statusText;
+      const error = new Error(detail);
+      error.status = res.status;
+      throw error;
+    }
+    return body;
+  }, options);
 }
 
 export const api = {
@@ -98,6 +100,12 @@ export const api = {
     req("/api/auth/google", { method: "POST", body: JSON.stringify({ credential }) }),
   me: () => req("/api/auth/me"),
   myDashboard: (options = {}) => req("/api/me/dashboard", options),
+  uploadAvatar: (image) => {
+    const form = new FormData();
+    form.append("image", image);
+    return reqForm("/api/me/avatar", form, { timeoutMs: 30_000 });
+  },
+  deleteAvatar: () => req("/api/me/avatar", { method: "DELETE", timeoutMs: 30_000 }),
   myMacros: (options = {}) => req("/api/me/macros", options),
   myMacro: (id) => req(`/api/me/macros/${id}`),
   saveMyMacro: (macro, name = "") =>

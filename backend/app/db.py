@@ -261,6 +261,18 @@ class User(SQLModel, table=True):
     created_at: str
 
 
+class UserAvatar(SQLModel, table=True):
+    """One normalized public photo per account, retained on the durable DB.
+
+    Keep image bytes out of User so auth and community queries never load them.
+    A separate table is also safe to add to existing databases with create_all.
+    """
+
+    user_id: int = Field(primary_key=True, foreign_key="user.id")
+    version: str
+    image_data: bytes
+
+
 class PointLedger(SQLModel, table=True):
     """Append-only record of every points change (audit trail for the wallet)."""
 
@@ -821,7 +833,7 @@ _PG_BIGINT_COLUMNS = {
 }
 _PG_PRIVATE_CACHE_TABLES = (
     "newstitletranslation", "communitypostsummary", "whaletradestate", "onchainholderstate",
-    "chatmessage", "chatreadstate",
+    "chatmessage", "chatreadstate", "useravatar",
 )
 _PG_MIGRATION_LOCK = 0x6767706172726F74  # Stable across web/worker processes and deployments.
 _PG_MIGRATION_ATTEMPTS = 3

@@ -1,9 +1,10 @@
 /* 소개 문구의 브랜드 밑줄은 글자 크기에 맞춰 선명하게 유지한다. */
 .home-start-page.is-entry .home-entry-copy .home-entry-title span {
   text-decoration-line: underline;
+  text-decoration-style: double;
   text-decoration-color: rgb(var(--c-brand));
-  text-decoration-thickness: .12em;
-  text-underline-offset: .06em;
+  text-decoration-thickness: .14em;
+  text-underline-offset: .08em;
   text-decoration-skip-ink: none;
 }
 

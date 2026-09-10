@@ -2703,11 +2703,14 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   text-wrap: balance;
 }
 
+/* 소개 제목의 강조 — 브랜드색 두 줄 밑줄(2026-09-10, 한 줄 → 두 줄). 두께는 두 줄 전체 높이라 글자 크기에 비례. */
 .home-entry-copy h1 span {
   text-decoration-line: underline;
+  text-decoration-style: double;
   text-decoration-color: rgb(var(--c-brand));
-  text-decoration-thickness: 2px;
-  text-underline-offset: 2px;
+  text-decoration-thickness: 0.14em;
+  text-underline-offset: 0.08em;
+  text-decoration-skip-ink: none;
 }
 
 .home-entry-description {
@@ -3605,9 +3608,11 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   color: inherit;
   background: transparent;
   text-decoration-line: underline;
+  text-decoration-style: double;
   text-decoration-color: rgb(var(--c-brand));
-  text-decoration-thickness: 0.11em;
-  text-underline-offset: 0.12em;
+  text-decoration-thickness: 0.14em;
+  text-underline-offset: 0.1em;
+  text-decoration-skip-ink: none;
 }
 
 .home-hero-description {

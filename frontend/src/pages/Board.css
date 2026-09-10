@@ -14,15 +14,14 @@
 .board-write .board-composer { margin: 16px 0 0; padding-top: 0; border-top: 0; }
 .board-composer-head { margin: 0 0 2px; color: rgb(var(--c-slate-900)); font-size: 15px; font-weight: 700; letter-spacing: -0.01em; }
 .board-composer textarea.field { min-height: 200px; resize: vertical; }
-/* 첨부 미리보기 — 붙인 순서대로 112px 정사각 썸네일, 번호와 지우기. */
-.board-composer-previews { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 12px; }
-.board-composer-preview { position: relative; width: 112px; height: 112px; }
-.board-composer-preview-pick { display: block; width: 100%; height: 100%; padding: 0; border: 0; background: transparent; cursor: pointer; border-radius: 10px; }
-.board-composer-preview img { width: 100%; height: 100%; object-fit: cover; border-radius: 10px; border: 1px solid rgb(var(--c-slate-200)); }
-.board-composer-preview-pick:hover img { border-color: rgb(var(--c-slate-400)); }
-.board-composer-preview-no { position: absolute; left: 6px; bottom: 6px; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 6px; display: grid; place-items: center; background: rgb(var(--c-slate-900) / .82); color: rgb(var(--c-slate-50)); font-size: 12px; font-weight: 700; pointer-events: none; }
-.board-composer-preview-remove { position: absolute; top: -8px; right: -8px; width: 24px; height: 24px; border-radius: 999px; background: rgb(var(--c-slate-900)); color: rgb(var(--c-slate-50)); font-size: 12px; font-weight: 700; }
-.board-composer-preview-pick:focus-visible, .board-composer-preview-remove:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
+/* 본문 편집기 — textarea 와 같은 면(.field)에 글자와 사진이 섞여 보인다. 사진은 한 줄을 차지하고, 누르면 고르고 ✕·Backspace 로 뺀다. */
+.board-editor-wrap { position: relative; }
+.board-editor { height: auto; min-height: 220px; padding: 12px 16px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; outline: none; }
+.board-editor:empty::before, .board-editor[data-empty="1"]::before { content: attr(data-placeholder); color: rgb(var(--c-slate-500)); pointer-events: none; }
+.board-editor img { display: block; max-width: min(100%, 720px); max-height: 420px; margin: 8px 0; border-radius: 8px; border: 1px solid rgb(var(--c-slate-200)); cursor: pointer; }
+.board-editor img:hover { border-color: rgb(var(--c-slate-400)); }
+.board-editor-remove { position: absolute; width: 28px; height: 28px; border-radius: 999px; background: rgb(var(--c-slate-900)); color: rgb(var(--c-slate-50)); font-size: 13px; font-weight: 700; box-shadow: 0 1px 3px rgb(0 0 0 / .3); }
+.board-editor-remove:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
 .board-composer-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .board-attach { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; }
 .board-attach input { display: none; }

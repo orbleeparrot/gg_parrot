@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import SimBadge from "../components/SimBadge.jsx";
 import RegisterMacroModal from "../components/RegisterMacroModal.jsx";
 import ChatBox from "../components/ChatBox.jsx";
+import { macroText } from "../lib/chatMacro.js";
 import { PageHeader, EmptyState, Loading, ErrorNote } from "../components/Page.jsx";
 import { api } from "../api.js";
 import CoinIcon from "../components/CoinIcon.jsx";
@@ -40,6 +41,15 @@ function LockIcon() {
     </svg>
   );
 }
+function ChatMentionIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 9.9 9.9 0 0 1-2.8-.4L3 21l1.6-4.6A8.1 8.1 0 0 1 3.6 11.5 8.4 8.4 0 0 1 12 3.1a8.4 8.4 0 0 1 9 8.4z" />
+      <path d="M8.5 11.5h7M8.5 8.5h4" />
+    </svg>
+  );
+}
+
 function CopyIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -93,6 +103,18 @@ export default function Leaderboard() {
   useAuth(); // re-render on login/logout so gating reflects the current account
   const [items, setItems] = useState([]);
   const [unlocking, setUnlocking] = useState(0); // entry id being unlocked
+  const [mentioned, setMentioned] = useState(0); // 채팅 링크를 방금 복사한 entry id
+
+  // 채팅에 붙여넣을 매크로 링크 — 채팅창은 `[macro:id]` 를 매크로 카드로 그린다.
+  async function mentionInChat(entry) {
+    try {
+      await navigator.clipboard.writeText(macroText(entry.id));
+      setMentioned(entry.id);
+      window.setTimeout(() => setMentioned((current) => (current === entry.id ? 0 : current)), 1600);
+    } catch {
+      window.prompt("채팅에 붙여넣을 매크로 링크예요. 복사해 주세요.", macroText(entry.id));
+    }
+  }
   const [deleting, setDeleting] = useState(0); // entry id being deleted
   const [remain, setRemain] = useState(0);
   const [busy, setBusy] = useState(true);
@@ -334,6 +356,14 @@ export default function Leaderboard() {
                   </button>
                   </div>
                   <div className="lb-command-actions" role="group" aria-label="매크로 이용">
+                  <button
+                    onClick={() => mentionInChat(e)}
+                    className={"lb-icon-btn" + (mentioned === e.id ? " is-on" : "")}
+                    title="채팅에 붙여넣을 매크로 링크 복사"
+                    aria-label="채팅에 붙여넣을 매크로 링크 복사"
+                  >
+                    {mentioned === e.id ? <span className="lb-mention-done">복사</span> : <ChatMentionIcon />}
+                  </button>
                   {e.locked ? (
                     <button
                       onClick={() => unlock(e)}

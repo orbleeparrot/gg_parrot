@@ -4,6 +4,8 @@ import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 import { getAuthUser, getToken, useAuth } from "../lib/auth.js";
 import { badgeLabel, chatScope, firstUnseenId, isOwnMessage, sameAuthor } from "../lib/chatBadge.js";
 import { STICKERS, stickerFromText, stickerText } from "../lib/chatStickers.js";
+import { macroIdsInText, splitMacroText } from "../lib/chatMacro.js";
+import CoinIcon from "./CoinIcon.jsx";
 import { chatUnseenCount, getChatFeed, markChatSeen, observeChat, receiveChat, receiveChatPost, setChatLoadError, visibleChatReadId } from "../lib/chatStore.js";
 import UserAvatar, { AuthorAvatar } from "./UserAvatar.jsx";
 import "./ChatBox.css";
@@ -81,6 +83,30 @@ function kstClock(now = Date.now()) {
 
 // A member switch remounts transient UI and aborts the previous member's requests.
 // Feed/read state lives outside the route, in a separate cache for each account.
+// 매크로 언급 카드 — 종목 로고·종목·글쓴이·전략 한 줄. 누르면 리더보드의 그 행으로 간다.
+function MacroCard({ card, onClose }) {
+  const goToEntry = () => {
+    const row = document.getElementById(`leaderboard-entry-${card.entry_id}`);
+    if (!row) return;
+    onClose?.();
+    row.scrollIntoView({ behavior: "smooth", block: "center" });
+    row.classList.add("is-flash");
+    window.setTimeout(() => row.classList.remove("is-flash"), 1600);
+  };
+  return (
+    <button type="button" className="chat-macro" onClick={goToEntry} title="리더보드에서 이 매크로 보기">
+      <CoinIcon symbol={card.symbol} size={28} alt="" />
+      <span className="chat-macro-body">
+        <span className="chat-macro-head">
+          <b className="num">{card.symbol}</b>
+          <span className="chat-macro-author">{card.is_ai ? "🤖 " : ""}{card.username}</span>
+        </span>
+        <span className="chat-macro-summary">{card.locked ? "잠긴 매크로 · 리더보드에서 언락하면 전략이 보여요" : card.human_summary || "전략 설명 없음"}</span>
+      </span>
+    </button>
+  );
+}
+
 export default function ChatBox(props) {
   const { token, user } = useAuth();
   const member = token && user?.id != null ? user : null;
@@ -457,7 +483,15 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
                     <div className="chat-row-body">
                       {!mine && !continued ? <span className="chat-row-name">{message.username}{legacy ? <small className="chat-legacy">이전 익명</small> : null}</span> : null}
                       <div className="chat-bubble-line">
-                        {sticker ? <p className="chat-bubble is-sticker"><img src={sticker.src} alt={`${sticker.label} 스티커`} width="92" height="92" draggable="false" decoding="async" /></p> : <p className="chat-bubble">{message.text}</p>}
+                        {sticker
+                          ? <p className="chat-bubble is-sticker"><img src={sticker.src} alt={`${sticker.label} 스티커`} width="92" height="92" draggable="false" decoding="async" /></p>
+                          : message.macros?.length
+                            ? <div className="chat-bubble is-macro">{splitMacroText(message.text, message.macros).map((part, partIndex) => (
+                                part.type === "text"
+                                  ? <p key={`t-${partIndex}`} className="chat-bubble-text">{part.text}</p>
+                                  : <MacroCard key={`m-${part.card.entry_id}-${partIndex}`} card={part.card} onClose={close} />
+                              ))}</div>
+                            : <p className="chat-bubble">{message.text}</p>}
                         <time className="num">{message.created_kst}</time>
                       </div>
                     </div>
@@ -471,6 +505,10 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
             <div className="chat-sticker-tray" role="group" aria-label="스티커 고르기">
               {STICKERS.map((sticker) => <button key={sticker.id} type="button" className="chat-sticker-tile" onClick={() => sendSticker(sticker.id)} disabled={busy} aria-label={`${sticker.label} 스티커 보내기`}><img src={sticker.src} alt="" width="56" height="56" draggable="false" decoding="async" /><span>{sticker.label}</span></button>)}
             </div>
+          ) : null}
+          {/* 붙여넣은 매크로 링크 — 보내면 카드로 바뀐다는 걸 미리 알려 준다. */}
+          {member && macroIdsInText(text).length ? (
+            <p className="chat-macro-hint">매크로 <b className="num">{macroIdsInText(text).length}</b>개를 언급했어요. 보내면 카드로 보여요.</p>
           ) : null}
           {member ? (
             <form onSubmit={send} className="chat-composer">

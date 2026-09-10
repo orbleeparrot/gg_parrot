@@ -282,3 +282,43 @@ def test_postgres_chat_migration_preserves_legacy_authors_and_secures_read_state
         "REVOKE ALL PRIVILEGES ON TABLE chatreadstate FROM PUBLIC",
         "REVOKE ALL PRIVILEGES ON TABLE chatreadstate FROM anon",
     ]
+
+
+def _entry(owner_user_id=None, symbol="BTCUSDT", summary="1일봉 · 20일선 돌파"):
+    from app.db import LeaderboardEntry
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    with get_session() as db:
+        row = LeaderboardEntry(user_id="anon", nickname="tester", username="tester",
+                               owner_user_id=owner_user_id, symbol=symbol, macro_json="{}",
+                               human_summary=summary, created_at="2026-01-01T00:00:00Z", created_ms=now_ms)
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return row.id
+
+
+def test_macro_mention_becomes_a_card_and_hides_locked_strategy(members):
+    author, other = members
+    free_id = _entry()                       # 주인 없는 옛 항목 — 누구나 본다
+    owned_id = _entry(owner_user_id=other.id)  # 주인 있는 항목 — 언락 전엔 잠김
+    posted = client().post("/api/chat", json={"text": f"이거 봐 [macro:{free_id}] 랑 [macro:{owned_id}]"},
+                           headers=headers(author))
+    assert posted.status_code == 200, posted.text
+    cards = posted.json()["message"]["macros"]
+    assert [c["entry_id"] for c in cards] == [free_id, owned_id]
+    assert cards[0]["locked"] is False and cards[0]["human_summary"] == "1일봉 · 20일선 돌파"
+    assert cards[0]["symbol"] == "BTCUSDT" and cards[0]["username"] == "tester"
+    assert cards[1]["locked"] is True and cards[1]["human_summary"] == ""  # 잠긴 전략은 새지 않는다
+
+    listed = client().get("/api/chat", headers=headers(author)).json()["items"][-1]
+    assert [c["entry_id"] for c in listed["macros"]] == [free_id, owned_id]
+    assert listed["text"].count("[macro:") == 2  # 본문은 토큰 그대로 — 화면이 자리에 카드를 그린다
+
+    # 주인이 보면 자기 매크로는 열려 있다.
+    owner_view = client().get("/api/chat", headers=headers(other)).json()["items"][-1]
+    assert owner_view["macros"][1]["locked"] is False
+
+    # 없는 매크로 번호는 카드가 붙지 않는다(본문 글자만 남는다).
+    empty = client().post("/api/chat", json={"text": "[macro:999999] 없음"}, headers=headers(author))
+    assert empty.json()["message"]["macros"] == []
+

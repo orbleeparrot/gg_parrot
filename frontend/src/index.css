@@ -8926,6 +8926,28 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 .lb-vote.is-on { background: rgb(var(--c-slate-100)); border-color: rgb(var(--c-slate-400)); color: rgb(var(--c-slate-900)); }
 .lb-vote.is-on svg { fill: rgb(var(--c-slate-900) / 0.14); }
 .lb-vote:focus-visible, .lb-icon-btn:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
+/* 채팅에 붙여넣기 — 복사하면 잠깐 '복사'로 바뀐다. */
+.lb-mention-done { font-size: 11px; font-weight: 700; letter-spacing: -0.02em; }
+.lb-icon-btn.is-on { border-color: rgb(var(--c-brand-line)); color: rgb(var(--c-slate-900)); }
+/* 채팅에서 온 매크로를 리더보드에서 찾았을 때 잠깐 밝힌다. */
+.lb-row.is-flash { animation: lb-flash 1.6s ease-out 1; }
+@keyframes lb-flash { from { background: rgb(var(--c-brand) / .22); } to { background: transparent; } }
+
+/* ── 채팅 속 매크로 카드 — 종목 로고 + 종목·글쓴이 + 전략 한 줄. 말풍선 안에서 누르는 것이라 상자를 유지한다. */
+.chat-bubble.is-macro { display: grid; gap: 6px; background: transparent; padding: 0; }
+.chat-bubble-text { margin: 0; padding: 8px 12px; border-radius: 14px; background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-900)); font-size: 14px; line-height: 1.5; }
+.chat-row.is-mine .chat-bubble-text { background: rgb(var(--c-brand)); color: rgb(var(--c-brand-ink)); }
+.chat-macro { width: 100%; display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid rgb(var(--c-slate-300)); border-radius: 14px; background: rgb(var(--c-surface)); text-align: left; cursor: pointer; }
+.chat-macro:hover { border-color: rgb(var(--c-brand-line)); }
+.chat-macro:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
+.chat-macro-body { min-width: 0; display: grid; gap: 2px; }
+.chat-macro-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.chat-macro-head b { color: rgb(var(--c-slate-900)); font-size: 14px; font-weight: 700; }
+.chat-macro-author { color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-macro-hint { margin: 0 12px 4px; color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 500; }
+.chat-macro-hint b { color: rgb(var(--c-slate-700)); }
+.chat-macro-summary { color: rgb(var(--c-slate-700)); font-size: 12px; line-height: 1.45; font-weight: 500; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
 /* 언락 — 같은 알약에 자물쇠 + 가격. 포인트가 나가는 동작이라 가격만 브랜드 금색. */
 .lb-unlock .num { color: rgb(var(--c-brand-line)); }
 .lb-unlock:hover { border-color: rgb(var(--c-brand-line)); }

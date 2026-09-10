@@ -18,6 +18,7 @@ const Agents = lazy(() => import("./pages/Agents.jsx"));
 const News = lazy(() => import("./pages/News.jsx"));
 const Board = lazy(() => import("./pages/Board.jsx"));
 const BoardPost = lazy(() => import("./pages/BoardPost.jsx"));
+const BoardWrite = lazy(() => import("./pages/BoardWrite.jsx"));
 const ForgotPassword = lazy(() => import("./pages/ForgotPassword.jsx"));
 const ResetPassword = lazy(() => import("./pages/ResetPassword.jsx"));
 const RunnerInstall = lazy(() => import("./pages/RunnerInstall.jsx"));
@@ -168,6 +169,7 @@ export default function App() {
               <Route path="/guide" element={<Guide />} />
               <Route path="/news" element={<News />} />
               <Route path="/board" element={<Board />} />
+              <Route path="/board/write" element={<BoardWrite />} />
               <Route path="/board/:id" element={<BoardPost />} />
               <Route path="/login" element={<Auth />} />
               <Route path="/forgot" element={<ForgotPassword />} />

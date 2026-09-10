@@ -1,122 +1,15 @@
 import { useEffect, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../api.js";
 import { useAuth } from "../lib/auth.js";
 import { boardFullTime, boardTime, kstDateTime, pageWindow } from "../lib/boardText.js";
 import { PageHeader, EmptyState, ErrorNote } from "../components/Page.jsx";
+import { writePath } from "./BoardWrite.jsx";
 import { ChevronLeftIcon, ChevronRightIcon, ImageIcon } from "../components/boardIcons.jsx";
 import { AuthorAvatar } from "../components/UserAvatar.jsx";
 import "./Board.css";
 
-const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
 const PAGE_SIZE = 10;
-
-// 로그인 계정만 여는 글쓰기 폼(제목/본문 + 이미지 jpg·png 1장).
-function Composer({ onCreated, onCancel }) {
-  const [title, setTitle] = useState("");
-  const [body, setBody] = useState("");
-  const [image, setImage] = useState(null);
-  const [preview, setPreview] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
-
-  useEffect(
-    () => () => {
-      if (preview) URL.revokeObjectURL(preview);
-    },
-    [preview]
-  );
-
-  function pickImage(e) {
-    setErr("");
-    const f = e.target.files?.[0];
-    if (!f) {
-      setImage(null);
-      setPreview("");
-      return;
-    }
-    if (!["image/jpeg", "image/png"].includes(f.type)) {
-      setImage(null);
-      setPreview("");
-      setErr("JPG 또는 PNG 이미지만 올릴 수 있어요.");
-      e.target.value = "";
-      return;
-    }
-    if (f.size > MAX_IMAGE_BYTES) {
-      setImage(null);
-      setPreview("");
-      setErr("이미지는 2MB 이하만 올릴 수 있어요.");
-      e.target.value = "";
-      return;
-    }
-    setImage(f);
-    setPreview(URL.createObjectURL(f));
-  }
-
-  async function submit() {
-    setErr("");
-    if (!title.trim()) return setErr("제목을 입력해 주세요.");
-    setBusy(true);
-    try {
-      const post = await api.boardCreate({ title: title.trim(), body, image });
-      onCreated(post);
-    } catch (e) {
-      setErr(String(e.message || e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  // 카드로 띄우지 않는다 — 목록 위에 같은 폭으로 끼어드는 괘선 구획(라벨·입력·버튼은 댓글창과 같은 규격).
-  return (
-    <section className="board-composer" aria-labelledby="board-composer-title">
-      <h2 id="board-composer-title" className="board-composer-head">새 글 쓰기</h2>
-      <label className="board-field-label">
-        제목
-        <input
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          maxLength={120}
-          className={"field field-sm" + (err && !title.trim() ? " field-err" : "")}
-          aria-invalid={err && !title.trim() ? true : undefined}
-        />
-      </label>
-      <label className="board-field-label">
-        내용
-        <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={8} maxLength={5000} className="field" />
-      </label>
-      {preview && (
-        <div className="board-composer-preview">
-          <img src={preview} alt="미리보기" />
-          <button
-            type="button"
-            onClick={() => {
-              setImage(null);
-              setPreview("");
-            }}
-            aria-label="첨부 이미지 지우기"
-          >
-            ✕
-          </button>
-        </div>
-      )}
-      <p className="board-form-error" role={err ? "alert" : undefined}>{err}</p>
-      <div className="board-composer-foot">
-        <label className="board-attach">
-          <span className="btn btn-s btn-secondary">사진 첨부</span>
-          <input type="file" accept="image/png,image/jpeg" onChange={pickImage} />
-          <span className="board-hint">{image ? image.name : "JPG·PNG · 2MB 이하"}</span>
-        </label>
-        <div className="board-composer-actions">
-          <button type="button" onClick={onCancel} className="btn btn-m btn-secondary">취소</button>
-          <button type="button" onClick={submit} disabled={busy} className="btn btn-m btn-primary">
-            {busy ? "등록 중…" : "등록"}
-          </button>
-        </div>
-      </div>
-    </section>
-  );
-}
 
 // 쪽 이동 — 단일 선택이라 segmented 문법(§6). 현재 쪽만 면 배경, 앞뒤는 화살표.
 function Pager({ page, pages, onGo }) {
@@ -196,13 +89,11 @@ function PostRow({ post, now }) {
 
 export default function Board() {
   const { token } = useAuth();
-  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10) || 1);
   const [data, setData] = useState(null);
   const [busy, setBusy] = useState(true);
   const [err, setErr] = useState("");
-  const [composing, setComposing] = useState(() => searchParams.get("write") === "1");
   const [now, setNow] = useState(() => Date.now());
 
   function load(p) {
@@ -230,39 +121,16 @@ export default function Board() {
 
   return (
     <div className="board-page">
-      {/* 제목 줄은 다른 화면과 같은 공용 규격(§9 PageHeader). 아이브로·설명·글 수 없이 제목, 오른쪽에 글쓰기. */}
+      {/* 제목 줄은 다른 화면과 같은 공용 규격(§9 PageHeader). 아이브로·설명·글 수 없이 제목, 오른쪽에 글쓰기.
+          글쓰기는 글 보기처럼 전용 페이지(/board/write)로 이동한다 — 목록 위에 끼워 넣지 않는다. */}
       <PageHeader
         title="껄무새 게시판"
         actions={
-          token ? (
-            <button
-              onClick={() => setComposing((v) => !v)}
-              className={"btn btn-m " + (composing ? "btn-secondary" : "btn-primary")}
-              aria-expanded={composing}
-            >
-              {composing ? "닫기" : "글쓰기"}
-            </button>
-          ) : (
-            <button
-              onClick={() => navigate("/login?next=%2Fboard")}
-              className="btn btn-m btn-primary"
-              title="로그인하면 바로 글을 쓸 수 있어요"
-            >
-              글쓰기
-            </button>
-          )
+          <Link to={writePath(token)} className="btn btn-m btn-primary" title={token ? undefined : "로그인하면 바로 글을 쓸 수 있어요"}>
+            글쓰기
+          </Link>
         }
       />
-
-      {composing && token && (
-        <Composer
-          onCreated={(post) => {
-            setComposing(false);
-            navigate(`/board/${post.id}`);
-          }}
-          onCancel={() => setComposing(false)}
-        />
-      )}
 
       {err && <ErrorNote>글 목록을 불러오지 못했어요: {err}</ErrorNote>}
       {busy && !data && !err ? <SkeletonRows /> : null}

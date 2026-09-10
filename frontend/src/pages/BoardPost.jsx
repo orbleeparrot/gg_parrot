@@ -6,6 +6,7 @@ import { boardFullTime, boardTime, kstDateTime } from "../lib/boardText.js";
 import { ErrorNote } from "../components/Page.jsx";
 import ConfirmDialog from "../components/ConfirmDialog.jsx";
 import { ChevronLeftIcon, ImageIcon } from "../components/boardIcons.jsx";
+import { writePath } from "./BoardWrite.jsx";
 import { AuthorAvatar } from "../components/UserAvatar.jsx";
 import "./Board.css";
 
@@ -211,7 +212,7 @@ export default function BoardPost() {
   const when = post ? kstDateTime(post.created_kst) : "";
   const full = post ? (boardFullTime(post.created_ms) || post.created_kst) : "";
 
-  const write = () => navigate(token ? "/board?write=1" : `/login?next=${encodeURIComponent("/board?write=1")}`);
+  const write = () => navigate(writePath(token));
 
   return (
     <div className="board-post-page">

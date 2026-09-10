@@ -11,6 +11,7 @@
 .board-page { width: 100%; }
 /* ── 글쓰기 — 표와 같은 폭의 괘선 구획. 카드·상자 없이 목록과 같은 언어로(제목 15/700, 라벨 12/600, 입력 40). ── */
 .board-composer { margin-bottom: 24px; padding: 18px 0 20px; display: grid; gap: 12px; border-top: 1px solid rgb(var(--c-slate-300)); border-bottom: 1px solid rgb(var(--c-slate-200)); }
+.board-write .board-composer { margin: 16px 0 0; padding-top: 0; border-top: 0; }
 .board-composer-head { margin: 0 0 2px; color: rgb(var(--c-slate-900)); font-size: 15px; font-weight: 700; letter-spacing: -0.01em; }
 .board-composer textarea.field { min-height: 200px; resize: vertical; }
 .board-composer-preview { position: relative; justify-self: start; }

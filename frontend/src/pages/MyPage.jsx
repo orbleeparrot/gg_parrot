@@ -214,7 +214,7 @@ function LedgerTab({ rows, now, symbolByEntry }) {
 function PostsTab({ rows, now }) {
   if (rows.length === 0) {
     return (
-      <EmptyState title="아직 쓴 글이 없어요" action={<Link to="/board?write=1" className="btn btn-m btn-secondary">글쓰기</Link>}>
+      <EmptyState title="아직 쓴 글이 없어요" action={<Link to="/board/write" className="btn btn-m btn-secondary">글쓰기</Link>}>
         게시판에 남긴 글이 여기 모여요.
       </EmptyState>
     );

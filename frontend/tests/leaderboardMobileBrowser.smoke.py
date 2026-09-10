@@ -308,6 +308,12 @@ def main():
                 expect(page.locator("#leaderboard-entry-3 .lb-fact-capital small")).to_have_text("USDT")
                 assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
                 assert row.locator(".lb-summary-text").evaluate("el => el.scrollHeight <= el.clientHeight + 1")
+                expect(row.locator(".lb-strategy-facts")).to_have_attribute("title", "1000PEPEUSDT | 숏 | 0.009 이상 숏 진입 / 0.007 이하 청산 · -3% 손절 | 자금 37.5% 투입")
+                assert row.locator(".lb-strategy-facts").evaluate("""el => {
+                  const fields = [...el.children].filter(child => getComputedStyle(child).display !== 'none');
+                  return fields.every((field, index) => index === 0 ||
+                    field.getBoundingClientRect().x >= fields[index - 1].getBoundingClientRect().right - 1);
+                }"""), "Strategy fields must stay on one line in ticker / side / strategy / capital order"
                 page.screenshot(path=str(OUTPUT / f"leaderboard-structured-{width}.png"), full_page=True)
                 checks[f"structured-summary-{width}"] = "passed"
                 context.close()

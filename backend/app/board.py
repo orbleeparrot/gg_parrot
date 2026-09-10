@@ -24,7 +24,7 @@ from sqlalchemy import func, or_
 from sqlmodel import select
 
 from . import avatars
-from .db import BoardComment, BoardImage, BoardPost, BoardPostVote, User, UserAvatar, get_session
+from .db import BoardComment, BoardImage, BoardPost, BoardPostVote, BoardReport, User, UserAvatar, get_session
 
 MAX_TITLE = 120
 MAX_BODY = 5000
@@ -491,7 +491,7 @@ def get_post(post_id: int, viewer_id: int | None = None, view_key: str | None = 
             select(BoardComment).where(BoardComment.post_id == post_id).order_by(BoardComment.id.asc())
         ).all()
         avatar_by_user = {uid: avatars.avatar_url(uid, db=db) for uid in {c.author_user_id for c in crows if c.author_user_id is not None}}
-        comments = [_comment_view(c, avatar_by_user.get(c.author_user_id)) for c in crows]
+        comments = _comment_tree([_comment_view(c, avatar_by_user.get(c.author_user_id)) for c in crows])
         images = db.exec(select(BoardImage).where(BoardImage.post_id == post_id)).all()
         return _post_detail_view(row, comments, avatars.avatar_url(row.author_user_id, db=db), images, my_vote=my_vote)
 
@@ -662,14 +662,34 @@ def _comment_view(row: BoardComment, avatar_url: str | None = None) -> dict:
         "username": row.username,
         "author_user_id": row.author_user_id,
         "author_avatar_url": avatar_url if row.author_user_id is not None else None,
+        "parent_id": row.parent_id,
+        "edited": row.updated_ms is not None,
+        "updated_ms": row.updated_ms,
         "text": row.text,
         "created_kst": _kst_display(row.created_ms),
         "created_ms": int(row.created_ms),
     }
 
 
-def add_comment(post_id: int, user: User, text: str) -> dict:
-    """로그인 계정의 댓글 — 닉네임은 계정 이름. 연속 작성은 계정 단위로 제한한다."""
+def _comment_tree(views: list[dict]) -> list[dict]:
+    """id 순 평면 목록 → 원댓글 목록(각각 replies 에 답글, 둘 다 id 순)."""
+    by_id = {v["id"]: {**v, "replies": []} for v in views}
+    roots: list[dict] = []
+    for v in views:
+        node = by_id[v["id"]]
+        parent = by_id.get(v["parent_id"]) if v["parent_id"] else None
+        if parent is not None:
+            parent["replies"].append(node)
+        else:
+            roots.append(node)
+    return roots
+
+
+def add_comment(post_id: int, user: User, text: str, parent_id: int | None = None) -> dict:
+    """로그인 계정의 댓글 — 닉네임은 계정 이름. 연속 작성은 계정 단위로 제한한다.
+
+    ``parent_id`` 가 있으면 답글. 답글의 답글은 같은 원댓글 아래로 붙인다(한 단계만).
+    """
     text = (text or "").strip()
     if not text:
         raise ValueError("댓글 내용을 입력해 주세요.")
@@ -677,11 +697,17 @@ def add_comment(post_id: int, user: User, text: str) -> dict:
     with get_session() as db:
         if db.get(BoardPost, post_id) is None:
             raise LookupError("글을 찾을 수 없어요.")
+        if parent_id is not None:
+            parent = db.get(BoardComment, int(parent_id))
+            if parent is None or parent.post_id != post_id:
+                raise LookupError("답글을 달 댓글을 찾을 수 없어요.")
+            parent_id = parent.parent_id or parent.id
         now = _now_utc()
         row = BoardComment(
             post_id=post_id,
             username=user.username,
             author_user_id=user.id,
+            parent_id=parent_id,
             password_hash="",
             text=text[:MAX_COMMENT],
             created_at=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -693,8 +719,59 @@ def add_comment(post_id: int, user: User, text: str) -> dict:
         return _comment_view(row, avatars.avatar_url(user.id, db=db))
 
 
+def edit_comment(comment_id: int, user: User, text: str) -> Optional[dict]:
+    """댓글 작성자 본인만 고친다. 없으면 None, 남의 것이면 PermissionError."""
+    text = (text or "").strip()
+    if not text:
+        raise ValueError("댓글 내용을 입력해 주세요.")
+    with get_session() as db:
+        row = db.get(BoardComment, comment_id)
+        if row is None:
+            return None
+        if row.author_user_id is None or row.author_user_id != user.id:
+            raise PermissionError("본인이 쓴 댓글만 고칠 수 있어요.")
+        row.text = text[:MAX_COMMENT]
+        row.updated_ms = int(_now_utc().timestamp() * 1000)
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return _comment_view(row, avatars.avatar_url(user.id, db=db))
+
+
+REPORT_REASONS = {"spam", "abuse", "privacy", "scam", "other"}
+
+
+class AlreadyReported(Exception):
+    pass
+
+
+def report(target_type: str, target_id: int, user: User, reason: str, detail: str = "") -> dict:
+    """글·댓글 신고 — 계정당 대상 하나에 한 번, 내 것은 신고 못 한다."""
+    if target_type not in {"post", "comment"}:
+        raise ValueError("신고 대상이 올바르지 않아요.")
+    if reason not in REPORT_REASONS:
+        raise ValueError("신고 사유를 골라 주세요.")
+    with get_session() as db:
+        target = db.get(BoardPost if target_type == "post" else BoardComment, target_id)
+        if target is None:
+            raise LookupError("신고할 글을 찾을 수 없어요.")
+        if target.author_user_id == user.id:
+            raise ValueError("내가 쓴 글은 신고할 수 없어요.")
+        dup = db.exec(select(BoardReport).where(
+            BoardReport.target_type == target_type, BoardReport.target_id == target_id, BoardReport.reporter_user_id == user.id,
+        )).first()
+        if dup is not None:
+            raise AlreadyReported("이미 신고한 글이에요.")
+        row = BoardReport(target_type=target_type, target_id=target_id, reporter_user_id=user.id,
+                          reason=reason, detail=(detail or "").strip()[:500], created_ms=int(_now_utc().timestamp() * 1000))
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return {"ok": True, "report_id": row.id}
+
+
 def delete_comment(comment_id: int, user: User) -> bool:
-    """댓글 작성자 본인, 또는 (옛 익명 댓글은) 글쓴이만 지운다."""
+    """댓글 작성자 본인, 또는 (옛 익명 댓글은) 글쓴이만 지운다. 원댓글을 지우면 답글도 함께."""
     with get_session() as db:
         row = db.get(BoardComment, comment_id)
         if row is None:
@@ -706,6 +783,8 @@ def delete_comment(comment_id: int, user: User) -> bool:
             allowed = post is not None and post.author_user_id == user.id
         if not allowed:
             return False
+        for reply in db.exec(select(BoardComment).where(BoardComment.parent_id == comment_id)).all():
+            db.delete(reply)
         db.delete(row)
         db.commit()
         return True

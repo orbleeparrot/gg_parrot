@@ -6,6 +6,7 @@ import DOMPurify from "dompurify";
 import { boardFullTime, boardTime, kstDateTime } from "../lib/boardText.js";
 import { ErrorNote } from "../components/Page.jsx";
 import ConfirmDialog from "../components/ConfirmDialog.jsx";
+import ReportDialog from "../components/ReportDialog.jsx";
 import { ThumbDownIcon, ThumbUpIcon } from "../components/boardIcons.jsx";
 import { PostRow, TableHead } from "./Board.jsx";
 import { editPath, writePath } from "./BoardWrite.jsx";
@@ -13,12 +14,13 @@ import { AuthorAvatar } from "../components/UserAvatar.jsx";
 import "./Board.css";
 
 // 댓글 쓰기 — 로그인 계정만, 닉네임은 계정 이름(왼쪽에 사진과 함께). 로그인 전에는 안내 한 줄.
-function CommentForm({ postId, user, token, onAdded }) {
+function CommentForm({ postId, user, token, onAdded, parentId = null, onCancel = null, autoFocus = false }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const location = useLocation();
   if (!token || !user) {
+    if (parentId) return null;
     return (
       <p className="board-comment-login">
         댓글은 로그인한 회원만 남길 수 있어요.
@@ -33,9 +35,10 @@ function CommentForm({ postId, user, token, onAdded }) {
     if (!text.trim()) return setErr("댓글 내용을 입력해 주세요.");
     setBusy(true);
     try {
-      const { comment } = await api.boardAddComment(postId, text);
+      const { comment } = await api.boardAddComment(postId, text, parentId);
       onAdded(comment);
       setText("");
+      onCancel?.();
     } catch (e2) {
       setErr(String(e2.message || e2));
     } finally {
@@ -45,53 +48,98 @@ function CommentForm({ postId, user, token, onAdded }) {
 
   // 입력칸 → 오른쪽 아래 등록. 라벨 대신 자리표시자(댓글은 한 칸뿐이라 무엇인지 분명하다). 작성자 표시는 등록된 댓글 행이 한다.
   return (
-    <form onSubmit={submit} className="board-comment-form" aria-label="댓글 쓰기">
-      <textarea value={text} onChange={(e) => setText(e.target.value)} rows={2} maxLength={500} className="field board-comment-form-input" placeholder="댓글을 남겨보세요" aria-label="댓글" />
+    <form onSubmit={submit} className={`board-comment-form${parentId ? " is-reply" : ""}`} aria-label={parentId ? "답글 쓰기" : "댓글 쓰기"}>
+      <textarea value={text} onChange={(e) => setText(e.target.value)} rows={2} maxLength={500} className="field board-comment-form-input" placeholder={parentId ? "답글을 남겨보세요" : "댓글을 남겨보세요"} aria-label={parentId ? "답글" : "댓글"} autoFocus={autoFocus} />
       <div className="board-comment-form-foot">
         <span className="board-form-error" role={err ? "alert" : undefined}>{err}</span>
-        <button type="submit" disabled={busy} className="btn btn-m btn-primary">
-          {busy ? "등록 중…" : "댓글 등록"}
+        {onCancel ? <button type="button" className="btn btn-s btn-ghost" onClick={onCancel}>취소</button> : null}
+        <button type="submit" disabled={busy} className={`btn ${parentId ? "btn-s btn-secondary" : "btn-m btn-primary"}`}>
+          {busy ? "등록 중…" : parentId ? "답글 등록" : "댓글 등록"}
         </button>
       </div>
     </form>
   );
 }
 
-function Comment({ c, canDelete, onDeleted }) {
+// 댓글 한 개 — 사진 · 닉네임 · 시각(고쳤으면 '수정됨') | 답글 · 편집 · 삭제 · 신고. 답글은 아래에 들여 쓴다.
+function Comment({ c, post, user, token, onChange, onDeleted, isReply = false }) {
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [replying, setReplying] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(c.text);
+  const [reporting, setReporting] = useState(false);
   const when = kstDateTime(c.created_kst);
   const rel = Number.isFinite(c.created_ms) ? boardTime(c.created_ms) : c.created_kst;
+  const mine = Boolean(user) && c.author_user_id === user.id;
+  const canDelete = mine || (Boolean(user) && c.author_user_id == null && post.author_user_id === user.id);
 
   async function remove() {
-    setErr("");
-    setBusy(true);
+    setErr(""); setBusy(true);
     try {
       await api.boardDeleteComment(c.id);
       onDeleted(c.id);
     } catch (e) {
-      setErr(String(e.message || e));
+      setErr(String(e.message || e)); setBusy(false); setConfirming(false);
+    }
+  }
+
+  async function saveEdit(e) {
+    e.preventDefault();
+    if (!draft.trim()) return setErr("댓글 내용을 입력해 주세요.");
+    setErr(""); setBusy(true);
+    try {
+      const { comment } = await api.boardEditComment(c.id, draft);
+      onChange(comment);
+      setEditing(false);
+    } catch (e2) {
+      setErr(String(e2.message || e2));
+    } finally {
       setBusy(false);
-      setConfirming(false);
     }
   }
 
   return (
-    <li className="board-comment">
+    <li className={`board-comment${isReply ? " is-reply" : ""}`}>
       <div className="board-comment-top">
         <AuthorAvatar userId={c.author_user_id} src={c.author_avatar_url} name={c.username} size={24} />
         <b>{c.username}</b>
         <time className={/전$/.test(rel) ? undefined : "num"} dateTime={when || undefined} title={c.created_kst}>{rel}</time>
-        {canDelete ? (
-          <button type="button" onClick={() => setConfirming(true)} disabled={busy} className="board-text-btn">삭제</button>
-        ) : null}
+        {c.edited ? <span className="board-comment-edited">수정됨</span> : null}
+        <span className="board-comment-actions">
+          {token && !isReply ? <button type="button" onClick={() => setReplying((v) => !v)} className="board-text-btn" aria-expanded={replying}>답글</button> : null}
+          {mine ? <button type="button" onClick={() => { setEditing((v) => !v); setDraft(c.text); }} className="board-text-btn" aria-expanded={editing}>편집</button> : null}
+          {canDelete ? <button type="button" onClick={() => setConfirming(true)} disabled={busy} className="board-text-btn">삭제</button> : null}
+          {token && !mine ? <button type="button" onClick={() => setReporting(true)} className="board-text-btn">신고</button> : null}
+        </span>
       </div>
-      <p className="board-comment-text">{c.text}</p>
-      {err ? <p className="board-form-error" role="alert">{err}</p> : null}
+      {editing ? (
+        <form className="board-comment-edit" onSubmit={saveEdit}>
+          <textarea value={draft} onChange={(e) => setDraft(e.target.value)} rows={2} maxLength={500} className="field board-comment-form-input" aria-label="댓글 고치기" autoFocus />
+          <div className="board-comment-form-foot">
+            <span className="board-form-error" role={err ? "alert" : undefined}>{err}</span>
+            <button type="button" className="btn btn-s btn-ghost" onClick={() => { setEditing(false); setErr(""); }}>취소</button>
+            <button type="submit" className="btn btn-s btn-secondary" disabled={busy}>{busy ? "저장 중…" : "저장"}</button>
+          </div>
+        </form>
+      ) : (
+        <p className="board-comment-text">{c.text}</p>
+      )}
+      {!editing && err ? <p className="board-form-error" role="alert">{err}</p> : null}
+      {replying ? (
+        <CommentForm postId={post.id} user={user} token={token} parentId={c.id} autoFocus onCancel={() => setReplying(false)} onAdded={(reply) => onChange(null, reply)} />
+      ) : null}
+      {c.replies?.length ? (
+        <ul className="board-replies">
+          {c.replies.map((r) => (
+            <Comment key={r.id} c={r} post={post} user={user} token={token} isReply onChange={onChange} onDeleted={onDeleted} />
+          ))}
+        </ul>
+      ) : null}
       <ConfirmDialog
         open={confirming}
-        title="이 댓글을 지울까요?"
+        title={isReply ? "이 답글을 지울까요?" : c.replies?.length ? "이 댓글과 답글을 지울까요?" : "이 댓글을 지울까요?"}
         description="지운 댓글은 되돌릴 수 없어요."
         confirmLabel="삭제"
         tone="danger"
@@ -99,8 +147,23 @@ function Comment({ c, canDelete, onDeleted }) {
         onConfirm={remove}
         onCancel={() => { if (!busy) setConfirming(false); }}
       />
+      <ReportDialog open={reporting} targetType="comment" targetId={c.id} label="댓글" onClose={() => setReporting(false)} />
     </li>
   );
+}
+
+// 댓글 트리(원댓글 + replies) 갱신 — 화면 상태만 만진다.
+function replaceComment(list, edited) {
+  return list.map((c) => (c.id === edited.id ? { ...c, ...edited, replies: c.replies } : { ...c, replies: (c.replies || []).map((r) => (r.id === edited.id ? { ...r, ...edited } : r)) }));
+}
+function addReply(list, reply) {
+  return list.map((c) => (c.id === reply.parent_id ? { ...c, replies: [...(c.replies || []), reply] } : c));
+}
+function removeComment(list, id) {
+  return list.filter((c) => c.id !== id).map((c) => ({ ...c, replies: (c.replies || []).filter((r) => r.id !== id) }));
+}
+function countComments(list) {
+  return list.reduce((n, c) => n + 1 + (c.replies?.length || 0), 0);
 }
 
 // 글 아래 목록 — 읽고 나면 다음 글로 가는 게 게시판 관례(퀘이사존·디시·클리앙 모두 글 아래에 목록을 다시 둔다).
@@ -187,6 +250,7 @@ export default function BoardPost() {
   const [voting, setVoting] = useState(false);
   const [voteErr, setVoteErr] = useState("");
   const [avatarOpen, setAvatarOpen] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
   const avatarSrc = post ? (isMine && user?.avatar_url !== undefined ? user.avatar_url : post.author_avatar_url) : null;
 
   async function vote(value) {
@@ -242,6 +306,10 @@ export default function BoardPost() {
                     {deleting ? "지우는 중…" : "삭제"}
                   </button>
                 </span>
+              ) : token ? (
+                <span className="board-post-actions">
+                  <button type="button" onClick={() => setReportOpen(true)} className="btn btn-s btn-ghost">신고</button>
+                </span>
               ) : null}
             </div>
 
@@ -268,7 +336,7 @@ export default function BoardPost() {
 
           <section className="board-comments" aria-labelledby="board-comments-title">
             <h2 id="board-comments-title" className="board-comments-head">
-              댓글 <span className="num">{post.comments.length}</span>
+              댓글 <span className="num">{countComments(post.comments)}</span>
             </h2>
             {post.comments.length === 0 ? (
               <p className="board-empty">아직 댓글이 없어요. 첫 댓글을 남겨봐요.</p>
@@ -278,8 +346,11 @@ export default function BoardPost() {
                   <Comment
                     key={c.id}
                     c={c}
-                    canDelete={Boolean(user) && (c.author_user_id === user.id || (c.author_user_id == null && isMine))}
-                    onDeleted={(cid) => setPost((p) => ({ ...p, comments: p.comments.filter((x) => x.id !== cid) }))}
+                    post={post}
+                    user={user}
+                    token={token}
+                    onChange={(edited, reply) => setPost((p) => ({ ...p, comments: reply ? addReply(p.comments, reply) : replaceComment(p.comments, edited) }))}
+                    onDeleted={(cid) => setPost((p) => ({ ...p, comments: removeComment(p.comments, cid) }))}
                   />
                 ))}
               </ul>
@@ -293,6 +364,7 @@ export default function BoardPost() {
           </section>
 
 
+          <ReportDialog open={reportOpen} targetType="post" targetId={post.id} label="글" onClose={() => setReportOpen(false)} />
           <ConfirmDialog
             open={confirmDelete}
             title="이 글을 삭제할까요?"

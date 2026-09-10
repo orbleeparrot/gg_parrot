@@ -166,11 +166,20 @@
 .board-title-count .num { color: rgb(var(--c-slate-700)); font-weight: 600; }
 .board-page .page-head-sub { margin-top: 24px; } /* 제목과 검색·정렬 줄 사이 숨 */
 .board-searchbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-/* 범위 드롭다운 — 브라우저 기본 대신 우리 입력칸 모양 + 오른쪽 화살표(currentColor 라 테마를 따라간다). */
-.board-select { position: relative; display: inline-flex; }
-.board-select select { width: 124px; padding-right: 30px; appearance: none; -webkit-appearance: none; cursor: pointer; color: rgb(var(--c-slate-900)); font-weight: 600; }
-.board-select::after { content: ""; position: absolute; right: 13px; top: 50%; width: 7px; height: 7px; margin-top: -5px; border-right: 2px solid rgb(var(--c-slate-500)); border-bottom: 2px solid rgb(var(--c-slate-500)); transform: rotate(45deg); pointer-events: none; }
-.board-select:hover::after { border-color: rgb(var(--c-slate-900)); }
+/* 범위 드롭다운(SelectMenu) — 입력칸 모양 버튼 + 아래로 펼쳐지는 우리 표면의 목록. 포커스는 노랑 테두리가 아니라 바깥 링. */
+.board-select { width: 124px; }
+.select-menu { position: relative; display: inline-flex; }
+.select-menu-trigger { width: 100%; display: inline-flex; align-items: center; justify-content: space-between; gap: 8px; padding-right: 12px; color: rgb(var(--c-slate-900)); font-weight: 600; cursor: pointer; text-align: left; }
+.select-menu-trigger:focus { border-color: transparent; }
+.select-menu-trigger:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
+.select-menu-trigger:hover, .select-menu.is-open .select-menu-trigger { background: rgb(var(--c-slate-200)); }
+.select-menu-caret { width: 7px; height: 7px; margin: -4px 2px 0 0; border-right: 2px solid rgb(var(--c-slate-500)); border-bottom: 2px solid rgb(var(--c-slate-500)); transform: rotate(45deg); transition: transform 120ms ease; }
+.select-menu.is-open .select-menu-caret { transform: rotate(225deg); margin-top: 3px; }
+.select-menu-list { position: absolute; top: calc(100% + 6px); left: 0; z-index: 30; min-width: 100%; margin: 0; padding: 6px; list-style: none; border: 1px solid rgb(var(--c-slate-300)); border-radius: 12px; background: rgb(var(--c-surface)); box-shadow: 0 8px 24px rgb(5 12 22 / .18); }
+.select-menu-item { padding: 0 10px; height: 36px; display: flex; align-items: center; border-radius: 8px; color: rgb(var(--c-slate-700)); font-size: 14px; font-weight: 600; white-space: nowrap; cursor: pointer; }
+.select-menu-item.is-active { background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-900)); }
+.select-menu-item.is-selected { color: rgb(var(--c-slate-900)); }
+.select-menu-item.is-selected::after { content: ""; width: 5px; height: 9px; margin-left: auto; padding-left: 12px; border-right: 2px solid rgb(var(--c-slate-900)); border-bottom: 2px solid rgb(var(--c-slate-900)); transform: rotate(45deg); box-sizing: content-box; }
 /* 검색어 칸 — 돋보기(와 검색 중이면 지우기)는 칸 안 오른쪽에. */
 .board-search { position: relative; display: inline-flex; }
 .board-search .field { width: 260px; padding-right: 40px; }
@@ -180,11 +189,11 @@
 .board-search-clear { right: 34px; font-size: 12px; font-weight: 700; }
 .board-search-go:hover, .board-search-clear:hover { color: rgb(var(--c-slate-900)); background: rgb(var(--c-slate-200)); }
 .board-search-go svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-.board-search-go:focus-visible, .board-search-clear:focus-visible, .board-select select:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
+.board-search-go:focus-visible, .board-search-clear:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
 .board-sort .seg-item { height: 32px; padding: 0 10px; font-size: 13px; }
 @media (max-width: 639px) {
   .board-searchbar { display: grid; grid-template-columns: 112px minmax(0, 1fr); }
-  .board-select select { width: 100%; }
+  .board-select { width: 100%; }
   .board-search .field { width: 100%; }
   .board-sort { order: 2; }
 }
@@ -327,7 +336,22 @@
 .board-comment-top { min-width: 0; display: flex; align-items: center; gap: 8px; } /* 사진은 baseline 에 앉히면 떠 보인다 — 가운데 맞춤 */
 .board-comment-top b { color: rgb(var(--c-slate-900)); font-size: 13px; font-weight: 700; }
 .board-comment-top time { color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 500; }
-.board-comment-top .board-text-btn { margin-left: auto; }
+.board-comment-actions { margin-left: auto; display: inline-flex; gap: 2px; }
+.board-comment-edited { color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 500; }
+.board-comment-edit { margin-top: 6px; display: grid; gap: 8px; }
+.board-comment-form.is-reply { margin: 10px 0 4px; }
+.board-comment-form.is-reply .board-comment-form-input { min-height: 56px; }
+/* 답글 — 원댓글 아래 들여쓰기 + 왼쪽 2px 괘선 */
+.board-replies { list-style: none; margin: 8px 0 0; padding: 0 0 0 14px; border-left: 2px solid rgb(var(--c-slate-200)); }
+.board-replies .board-comment { padding: 10px 0; border-bottom: 0; }
+.board-replies .board-comment + .board-comment { border-top: 1px solid rgb(var(--c-slate-200)); }
+/* 신고 다이얼로그 — 사유는 칩처럼 고른다 */
+.board-report-reasons { margin-top: 14px; display: flex; flex-wrap: wrap; gap: 6px; }
+.board-report-reason { display: inline-flex; align-items: center; height: 34px; padding: 0 12px; border: 1px solid rgb(var(--c-slate-300)); border-radius: 999px; color: rgb(var(--c-slate-700)); font-size: 14px; font-weight: 600; cursor: pointer; }
+.board-report-reason input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.board-report-reason.is-on { background: rgb(var(--c-slate-900)); border-color: rgb(var(--c-slate-900)); color: rgb(var(--c-slate-50)); }
+.board-report-reason:has(input:focus-visible) { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
+.board-report-detail { margin-top: 12px; height: auto; min-height: 64px; padding-block: 10px; font-size: 14px; }
 .board-comment-text { margin: 4px 0 0; color: rgb(var(--c-slate-800)); font-size: 14px; line-height: 1.65; font-weight: 450; white-space: pre-line; overflow-wrap: anywhere; }
 .board-comment-confirm { margin-top: 10px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .board-empty { padding: 20px 0; border-bottom: 1px solid rgb(var(--c-slate-200)); color: rgb(var(--c-slate-500)); font-size: 13px; font-weight: 500; }

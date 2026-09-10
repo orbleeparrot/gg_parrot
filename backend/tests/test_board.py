@@ -259,6 +259,37 @@ def test_comments_need_login_and_use_the_account_name():
     assert client.get(f"/api/board/posts/{pid}").json()["comments"] == []
 
 
+def test_replies_edits_and_reports():
+    author, _ = _signup()
+    pid = client.post("/api/board/posts", data={"title": "답글글", "body": "x"}, headers=_auth(author)).json()["id"]
+    other, _ = _signup()
+    root = client.post(f"/api/board/posts/{pid}/comments", json={"text": "원댓글"}, headers=_auth(other)).json()["comment"]
+    reply = client.post(f"/api/board/posts/{pid}/comments", json={"text": "답글", "parent_id": root["id"]}, headers=_auth(author)).json()["comment"]
+    assert reply["parent_id"] == root["id"]
+    # 답글의 답글은 같은 원댓글 아래로
+    nested = client.post(f"/api/board/posts/{pid}/comments", json={"text": "답글의 답글", "parent_id": reply["id"]}, headers=_auth(other)).json()["comment"]
+    assert nested["parent_id"] == root["id"]
+    tree = client.get(f"/api/board/posts/{pid}").json()["comments"]
+    assert [c["id"] for c in tree] == [root["id"]] and [r["id"] for r in tree[0]["replies"]] == [reply["id"], nested["id"]]
+    assert client.post(f"/api/board/posts/{pid}/comments", json={"text": "x", "parent_id": 999999}, headers=_auth(other)).status_code == 404
+    # 편집: 본인만, edited 표시
+    assert client.put(f"/api/board/comments/{root['id']}", json={"text": "남이 고침"}, headers=_auth(author)).status_code == 403
+    edited = client.put(f"/api/board/comments/{root['id']}", json={"text": "고친 원댓글"}, headers=_auth(other)).json()["comment"]
+    assert edited["text"] == "고친 원댓글" and edited["edited"] is True and isinstance(edited["updated_ms"], int)
+    assert client.put(f"/api/board/comments/{root['id']}", json={"text": " "}, headers=_auth(other)).status_code == 400
+    # 신고: 로그인 필수, 내 것은 안 됨, 한 번만
+    assert client.post("/api/board/reports", json={"target_type": "post", "target_id": pid, "reason": "spam"}).status_code == 401
+    assert client.post("/api/board/reports", json={"target_type": "post", "target_id": pid, "reason": "spam"}, headers=_auth(author)).status_code == 400
+    assert client.post("/api/board/reports", json={"target_type": "post", "target_id": pid, "reason": "spam", "detail": "광고"}, headers=_auth(other)).status_code == 200
+    assert client.post("/api/board/reports", json={"target_type": "post", "target_id": pid, "reason": "abuse"}, headers=_auth(other)).status_code == 409
+    assert client.post("/api/board/reports", json={"target_type": "comment", "target_id": root["id"], "reason": "abuse"}, headers=_auth(author)).status_code == 200
+    assert client.post("/api/board/reports", json={"target_type": "comment", "target_id": 999999, "reason": "abuse"}, headers=_auth(author)).status_code == 404
+    assert client.post("/api/board/reports", json={"target_type": "post", "target_id": pid, "reason": "nope"}, headers=_auth(other)).status_code == 400
+    # 원댓글을 지우면 답글도 사라진다
+    assert client.delete(f"/api/board/comments/{root['id']}", headers=_auth(other)).status_code == 200
+    assert client.get(f"/api/board/posts/{pid}").json()["comments"] == []
+
+
 def test_empty_fields_rejected():
     token, _ = _signup()
     # 제목 없음

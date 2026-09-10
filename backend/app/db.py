@@ -704,6 +704,18 @@ class BoardPostVote(SQLModel, table=True):
     created_ms: int = Field(sa_type=BigInteger)
 
 
+class BoardReport(SQLModel, table=True):
+    """글·댓글 신고 — 로그인 계정당 대상 하나에 한 번. 운영자가 DB 에서 본다(화면 없음)."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    target_type: str = Field(index=True)  # post | comment
+    target_id: int = Field(index=True)
+    reporter_user_id: int = Field(index=True)
+    reason: str = ""  # spam | abuse | privacy | scam | other
+    detail: str = ""
+    created_ms: int = Field(sa_type=BigInteger)
+
+
 class BoardComment(SQLModel, table=True):
     """게시글 댓글. 2026-09-10 부터 로그인 계정만 단다(닉네임 = 계정 이름, author_user_id 로 본인 확인).
 
@@ -714,6 +726,8 @@ class BoardComment(SQLModel, table=True):
     post_id: int = Field(index=True)
     username: str = ""
     author_user_id: Optional[int] = Field(default=None, index=True)
+    parent_id: Optional[int] = Field(default=None, index=True)  # 답글이면 부모 댓글(한 단계만)
+    updated_ms: Optional[int] = Field(default=None, sa_type=BigInteger)  # 고친 시각(없으면 원문)
     password_hash: str = ""  # 옛 익명 댓글의 흔적; 응답에 미포함
     text: str = ""
     created_at: str
@@ -825,7 +839,7 @@ _PG_ADDED_COLUMNS = {
         "claimed_ms": "BIGINT DEFAULT 0", "last_error": "TEXT DEFAULT ''",
     },
     "leaderboardentry": {"streak_days": "INTEGER DEFAULT 1", "first_created_ms": "BIGINT"},
-    "boardcomment": {"author_user_id": "INTEGER"},
+    "boardcomment": {"author_user_id": "INTEGER", "parent_id": "INTEGER", "updated_ms": "BIGINT"},
     "boardpost": {
         "body_format": "TEXT NOT NULL DEFAULT ''", "views": "INTEGER NOT NULL DEFAULT 0",
         "likes": "INTEGER NOT NULL DEFAULT 0", "dislikes": "INTEGER NOT NULL DEFAULT 0",

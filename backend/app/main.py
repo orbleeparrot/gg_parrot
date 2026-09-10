@@ -1197,19 +1197,57 @@ def board_post_image(post_id: int, image_id: int) -> Response:
 
 class CommentIn(BaseModel):
     text: str
+    parent_id: Optional[int] = None
 
 
 @app.post("/api/board/posts/{post_id}/comments")
 def board_comment_add(post_id: int, req: CommentIn, user: User = Depends(auth_mod.current_user)) -> dict:
-    """댓글 — 로그인 계정만, 닉네임은 계정 이름."""
+    """댓글·답글 — 로그인 계정만, 닉네임은 계정 이름. parent_id 가 있으면 그 댓글의 답글."""
     try:
-        return {"comment": board_mod.add_comment(post_id, user, req.text)}
+        return {"comment": board_mod.add_comment(post_id, user, req.text, parent_id=req.parent_id)}
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except board_mod.RateLimited as exc:
         raise HTTPException(status_code=429, detail=str(exc))
+
+
+class CommentEditIn(BaseModel):
+    text: str
+
+
+@app.put("/api/board/comments/{comment_id}")
+def board_comment_edit(comment_id: int, req: CommentEditIn, user: User = Depends(auth_mod.current_user)) -> dict:
+    try:
+        view = board_mod.edit_comment(comment_id, user, req.text)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if view is None:
+        raise HTTPException(status_code=404, detail="댓글을 찾을 수 없어요.")
+    return {"comment": view}
+
+
+class ReportIn(BaseModel):
+    target_type: str
+    target_id: int
+    reason: str
+    detail: str = ""
+
+
+@app.post("/api/board/reports")
+def board_report(req: ReportIn, user: User = Depends(auth_mod.current_user)) -> dict:
+    """글·댓글 신고 — 로그인 계정당 대상 하나에 한 번."""
+    try:
+        return board_mod.report(req.target_type, req.target_id, user, req.reason, req.detail)
+    except board_mod.AlreadyReported as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @app.delete("/api/board/comments/{comment_id}")

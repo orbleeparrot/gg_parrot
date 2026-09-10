@@ -4,6 +4,7 @@ import { api } from "../api.js";
 import { useAuth } from "../lib/auth.js";
 import { boardFullTime, boardTime, kstDateTime, pageWindow } from "../lib/boardText.js";
 import { PageHeader, EmptyState, ErrorNote } from "../components/Page.jsx";
+import SelectMenu from "../components/SelectMenu.jsx";
 import { writePath } from "./BoardWrite.jsx";
 import { ChevronLeftIcon, ChevronRightIcon, ImageIcon, SearchIcon } from "../components/boardIcons.jsx";
 import { AuthorAvatar } from "../components/UserAvatar.jsx";
@@ -88,11 +89,7 @@ function SearchBar({ q, field, onSearch }) {
   useEffect(() => { setDraft(q); setWhere(field); }, [q, field]);
   return (
     <form className="board-searchbar" role="search" onSubmit={(e) => { e.preventDefault(); onSearch({ q: draft.trim(), field: where }); }}>
-      <span className="board-select">
-        <select value={where} onChange={(e) => setWhere(e.target.value)} className="field field-sm" aria-label="검색 범위">
-          {FIELDS.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
-        </select>
-      </span>
+      <SelectMenu value={where} options={FIELDS} onChange={setWhere} label="검색 범위" className="board-select" />
       <span className="board-search">
         <input value={draft} onChange={(e) => setDraft(e.target.value)} className="field field-sm" placeholder="검색어" aria-label="검색어" maxLength={80} />
         {q ? <button type="button" className="board-search-clear" aria-label="검색 지우기" onClick={() => onSearch({ q: "", field: "all" })}>✕</button> : null}

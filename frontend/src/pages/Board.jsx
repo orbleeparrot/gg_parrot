@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../api.js";
 import { useAuth } from "../lib/auth.js";
@@ -9,7 +9,36 @@ import { ChevronLeftIcon, ChevronRightIcon, ImageIcon, SearchIcon } from "../com
 import { AuthorAvatar } from "../components/UserAvatar.jsx";
 import "./Board.css";
 
-const PAGE_SIZE = 13; // 첫 화면에 표가 조금 더 차게(1000px 높이 기준)
+// 한 쪽의 글 수는 화면 높이에 맞춘다 — 표가 스크롤 없이 페이지 이동 바로 위까지 차게.
+const ROW_PX = 43; // .board-row 42 + 괘선 1
+const ROW_PX_MOBILE = 63; // ≤639px 두 줄 행(패딩 10×2 + 두 줄 + 괘선 1)
+const HEAD_PX = 32; // 열 머리글(모바일은 접힘)
+const BELOW_PX = 20 + 34 + 20 + 18 + 56; // 쪽 이동(여백 20 + 34) + 고지문(여백 20 + 한 줄 18) + 본문 아래 여백(하단 띠 56)
+const MIN_ROWS = 5;
+const MAX_ROWS = 30; // 백엔드 상한과 같다
+
+function fittedRows(tableTop, viewportHeight, mobile = false) {
+  const room = viewportHeight - tableTop - (mobile ? 0 : HEAD_PX) - BELOW_PX;
+  return Math.max(MIN_ROWS, Math.min(MAX_ROWS, Math.floor(room / (mobile ? ROW_PX_MOBILE : ROW_PX))));
+}
+
+// 표가 시작하는 자리(sentinel)와 창 높이로 한 쪽의 글 수를 정한다. 창 크기가 바뀌면 다시 잰다.
+function useFittedPageSize() {
+  const sentinel = useRef(null);
+  const [size, setSize] = useState(null);
+  useLayoutEffect(() => {
+    let timer = null;
+    const measure = () => {
+      const top = sentinel.current ? sentinel.current.getBoundingClientRect().top + window.scrollY : 0;
+      setSize(fittedRows(top, window.innerHeight, window.matchMedia("(max-width: 639px)").matches));
+    };
+    const onResize = () => { window.clearTimeout(timer); timer = window.setTimeout(measure, 120); };
+    measure();
+    window.addEventListener("resize", onResize);
+    return () => { window.clearTimeout(timer); window.removeEventListener("resize", onResize); };
+  }, []);
+  return [sentinel, size];
+}
 
 // 쪽 이동 — 단일 선택이라 segmented 문법(§6). 현재 쪽만 면 배경, 앞뒤는 화살표.
 function Pager({ page, pages, onGo }) {
@@ -74,7 +103,7 @@ function SearchBar({ q, field, onSearch }) {
 }
 
 // 불러오는 동안의 뼈대 — 행 모양 그대로, 회전 대신.
-function SkeletonRows({ count = PAGE_SIZE }) {
+function SkeletonRows({ count = MIN_ROWS }) {
   return (
     <ul className="board-table" aria-hidden="true">
       <TableHead />
@@ -125,12 +154,13 @@ export default function Board() {
   const [busy, setBusy] = useState(true);
   const [err, setErr] = useState("");
   const [now, setNow] = useState(() => Date.now());
+  const [sentinel, pageSize] = useFittedPageSize();
 
   function load(p) {
     setBusy(true);
     setErr("");
     api
-      .boardList(p, PAGE_SIZE, { sort, q, field })
+      .boardList(p, pageSize, { sort, q, field })
       .then((d) => {
         setData(d);
         setNow(Date.now()); // 시각 표기(오늘 HH:MM)의 기준을 목록을 받은 순간으로
@@ -140,9 +170,10 @@ export default function Board() {
   }
 
   useEffect(() => {
+    if (!pageSize) return; // 첫 렌더에서 자리를 재기 전
     load(page);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, sort, field, q]);
+  }, [page, sort, field, q, pageSize]);
 
   // 주소가 곧 상태 — 기본값(1쪽·최신순·검색 없음)은 주소에서 뺀다.
   function update(next) {
@@ -182,7 +213,8 @@ export default function Board() {
       </PageHeader>
 
       {err && <ErrorNote>글 목록을 불러오지 못했어요: {err}</ErrorNote>}
-      {busy && !data && !err ? <SkeletonRows /> : null}
+      <div ref={sentinel} aria-hidden="true" />
+      {(busy || !pageSize) && !data && !err ? <SkeletonRows count={pageSize || MIN_ROWS} /> : null}
 
       {data && (
         <>

@@ -8535,16 +8535,16 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 .chat-tool:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
 .chat-tool svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 
-/* 빠른 입력 안내 — 키 이름은 kbd 로, 설명은 한 줄. */
-.chat-shortcuts { width: min(440px, 92vw); }
-.chat-shortcut-list { margin: 18px 0 0; display: grid; gap: 14px; }
-.chat-shortcut-list > div { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 12px; align-items: start; }
-.chat-shortcut-list dt { display: flex; flex-wrap: wrap; gap: 4px; }
-.chat-shortcut-list dd { margin: 0; display: grid; gap: 2px; }
-.chat-shortcut-list dd b { color: rgb(var(--c-slate-900)); font-size: 14px; font-weight: 700; }
-.chat-shortcut-list dd span { color: rgb(var(--c-slate-700)); font-size: 13px; line-height: 1.6; font-weight: 500; }
-.chat-shortcut-list kbd { display: inline-flex; align-items: center; height: 22px; padding: 0 7px; border: 1px solid rgb(var(--c-slate-300)); border-bottom-width: 2px; border-radius: 6px; background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-900)); font-family: inherit; font-size: 12px; font-weight: 700; }
-.chat-shortcut-mouse { color: rgb(var(--c-slate-700)); font-size: 12px; font-weight: 600; }
+/* 빠른 입력 안내 — 키 칩은 제목 줄 앞에, 설명은 그 아래 한 줄. 줄 사이는 괘선. */
+.chat-shortcuts { width: min(400px, 92vw); }
+.chat-shortcut-list { margin: 16px 0 0; padding: 0; list-style: none; }
+.chat-shortcut-list li { padding: 12px 0; border-top: 1px solid rgb(var(--c-slate-200)); }
+.chat-shortcut-list li:first-child { border-top: 0; padding-top: 4px; }
+.chat-shortcut-title { margin: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+.chat-shortcut-title b { margin-left: 6px; color: rgb(var(--c-slate-900)); font-size: 14px; font-weight: 700; }
+.chat-shortcut-desc { margin: 5px 0 0; color: rgb(var(--c-slate-700)); font-size: 13px; line-height: 1.6; font-weight: 500; }
+.chat-shortcut-list kbd { display: inline-flex; align-items: center; height: 22px; padding: 0 7px; border: 1px solid rgb(var(--c-slate-300)); border-bottom-width: 2px; border-radius: 6px; background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-900)); font-family: inherit; font-size: 12px; font-weight: 700; vertical-align: -3px; }
+.chat-shortcut-list kbd.is-mouse { border-style: dashed; border-bottom-width: 1px; color: rgb(var(--c-slate-700)); font-weight: 600; }
 
 .chat-opacity input[type="range"]:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; border-radius: 4px; }
 .chat-fab.is-open { box-shadow: 0 0 0 2px rgb(var(--c-surface)), 0 0 0 4px rgb(var(--c-slate-900)), 0 8px 24px rgba(0, 0, 0, 0.24); }
@@ -8966,8 +8966,6 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 .chat-macro-author { color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* ── `/` 매크로 고르기 — 입력칸 위 목록. 골라 넣으면 채팅에 매크로 카드로 보인다. ── */
 .chat-picker { margin: 0 12px 6px; padding: 6px; display: grid; gap: 2px; max-height: 232px; overflow-y: auto; border: 1px solid rgb(var(--c-slate-300)); border-radius: 12px; background: rgb(var(--c-surface)); }
-.chat-picker-head { margin: 2px 6px 4px; color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 600; }
-.chat-picker-head b { color: rgb(var(--c-slate-900)); font-weight: 700; }
 .chat-picker-empty { margin: 6px; color: rgb(var(--c-slate-500)); font-size: 13px; font-weight: 500; }
 .chat-picker-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 9px; background: transparent; text-align: left; cursor: pointer; }
 .chat-picker-row.is-active { background: rgb(var(--c-slate-100)); }

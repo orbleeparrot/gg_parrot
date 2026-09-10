@@ -312,10 +312,15 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
     const frame = window.requestAnimationFrame(() => inputRef.current?.focus({ preventScroll: true }));
     const onKeyDown = (event) => {
       if (event.key !== "Escape") return;
-      if (stickerOpen) setStickerOpen(false);
+      // 위에 뜬 것부터 닫는다 — 도움말·신고 창이 열려 있으면 채팅은 그대로 둔다.
+      if (shortcutsOpen) setShortcutsOpen(false);
+      else if (reporting) setReporting(null);
+      else if (stickerOpen) setStickerOpen(false);
       else close();
     };
     const onPointerDown = (event) => {
+      // body 로 띄운 창(도움말·신고·메시지 메뉴)에서의 클릭은 '바깥'이 아니다.
+      if (event.target.closest?.(".scrim, .chat-menu")) return;
       if (rootRef.current && !rootRef.current.contains(event.target)) close();
     };
     document.addEventListener("keydown", onKeyDown);
@@ -325,7 +330,7 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
       document.removeEventListener("keydown", onKeyDown);
       document.removeEventListener("pointerdown", onPointerDown);
     };
-  }, [close, open, stickerOpen]);
+  }, [close, open, reporting, shortcutsOpen, stickerOpen]);
 
   // 끌어서 옮기기 — 버튼을 잡고 6px 넘게 움직이면 드래그, 아니면 클릭. 자리는 이 브라우저에 남는다.
   function onFabPointerDown(event) {
@@ -601,7 +606,6 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
           {/* `/` 매크로 고르기 — 입력칸 위에 뜬다. 고르면 [macro:id] 가 본문에 들어간다. */}
           {picking ? (
             <div className="chat-picker" role="listbox" aria-label="매크로 고르기">
-              <p className="chat-picker-head">매크로 고르기 {query ? <b>‘{query}’</b> : "— 이름·종목·전략으로 좁혀요"}</p>
               {macroList === null ? (
                 <p className="chat-picker-empty">불러오는 중…</p>
               ) : picks.length === 0 ? (
@@ -693,28 +697,28 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
               <div role="dialog" aria-modal="true" aria-labelledby="chat-shortcuts-title" className="dialog chat-shortcuts">
                 <h2 id="chat-shortcuts-title" className="t-h4 text-slate-900">빠른 입력</h2>
                 <p className="mt-3 t-small text-slate-700">채팅을 더 빠르게 쓰는 방법이에요.</p>
-                <dl className="chat-shortcut-list">
-                  <div>
-                    <dt><kbd>/</kbd></dt>
-                    <dd><b>매크로 언급</b><span>입력칸에 <kbd>/</kbd> 를 치면 오늘의 매크로 목록이 떠요. <kbd>/BTC</kbd> 처럼 이어 치면 종목·글쓴이·전략으로 좁혀지고, 고르면 채팅에 매크로 카드로 보여요.</span></dd>
-                  </div>
-                  <div>
-                    <dt><kbd>↑</kbd><kbd>↓</kbd><kbd>Enter</kbd></dt>
-                    <dd><b>목록에서 고르기</b><span>매크로 목록이 떠 있을 때 위아래로 옮기고 <kbd>Enter</kbd> 로 넣어요. <kbd>Esc</kbd> 로 닫아요.</span></dd>
-                  </div>
-                  <div>
-                    <dt><kbd>Enter</kbd></dt>
-                    <dd><b>보내기</b><span>줄을 바꾸려면 <kbd>Shift</kbd> + <kbd>Enter</kbd>. 입력칸은 줄이 늘면 위로 커져요.</span></dd>
-                  </div>
-                  <div>
-                    <dt><span className="chat-shortcut-mouse">오른쪽 클릭</span></dt>
-                    <dd><b>답장 · 복사 · 신고</b><span>메시지를 오른쪽 클릭하면 나와요. 답장하면 상대 말이 인용돼요.</span></dd>
-                  </div>
-                  <div>
-                    <dt><span className="chat-shortcut-mouse">깃털 버튼</span></dt>
-                    <dd><b>스티커</b><span>작성줄 왼쪽 깃털을 누르면 껄무새 표정 6종을 바로 보낼 수 있어요.</span></dd>
-                  </div>
-                </dl>
+                <ul className="chat-shortcut-list">
+                  <li>
+                    <p className="chat-shortcut-title"><kbd>/</kbd><b>매크로 언급</b></p>
+                    <p className="chat-shortcut-desc">오늘의 매크로를 골라 채팅에 카드로 보내요. <kbd>/BTC</kbd> 처럼 이어 치면 좁혀져요.</p>
+                  </li>
+                  <li>
+                    <p className="chat-shortcut-title"><kbd>↑</kbd><kbd>↓</kbd><kbd>Enter</kbd><b>목록에서 고르기</b></p>
+                    <p className="chat-shortcut-desc">매크로 목록이 떠 있을 때 써요. <kbd>Esc</kbd> 로 닫아요.</p>
+                  </li>
+                  <li>
+                    <p className="chat-shortcut-title"><kbd>Enter</kbd><b>보내기</b></p>
+                    <p className="chat-shortcut-desc"><kbd>Shift</kbd><kbd>Enter</kbd> 는 줄바꿈이에요. 입력칸은 줄이 늘면 위로 커져요.</p>
+                  </li>
+                  <li>
+                    <p className="chat-shortcut-title"><kbd className="is-mouse">오른쪽 클릭</kbd><b>답장 · 복사 · 신고</b></p>
+                    <p className="chat-shortcut-desc">메시지를 오른쪽 클릭하면 나와요. 답장하면 상대 말이 인용돼요.</p>
+                  </li>
+                  <li>
+                    <p className="chat-shortcut-title"><kbd className="is-mouse">깃털 버튼</kbd><b>스티커</b></p>
+                    <p className="chat-shortcut-desc">작성줄 왼쪽 깃털을 누르면 껄무새 표정 6종을 바로 보내요.</p>
+                  </li>
+                </ul>
                 <div className="confirm-dialog-actions">
                   <button type="button" className="btn btn-l w-full btn-primary" onClick={() => setShortcutsOpen(false)}>닫기</button>
                 </div>

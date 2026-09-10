@@ -130,7 +130,7 @@ def test_author_edits_title_body_and_images_in_place():
 def test_html_body_is_sanitized_and_new_images_get_their_urls():
     token, _ = _signup()
     raw = ('<h2 style="text-align: center; position: fixed">제목</h2>'
-           '<p><strong>굵게</strong> <span style="color: rgb(200, 30, 51); font-size: 20px; behavior: x">색</span></p>'
+           '<p><strong>굵게</strong> <span style="color: rgb(200, 30, 51); font-size: 20px; behavior: x">강조</span></p>'
            '<img data-key="new:0" alt="" width="320" data-align="center">'
            '<p>외부 <img src="https://evil.example/pixel.png"> 사진은 빠진다</p>'
            '<script>alert(1)</script><p onclick="x()">끝 <a href="javascript:alert(1)">링크</a> <a href="https://example.com">좋은 링크</a></p>')
@@ -146,7 +146,7 @@ def test_html_body_is_sanitized_and_new_images_get_their_urls():
     assert "evil.example" not in html and "<script" not in html and "onclick" not in html and "javascript:" not in html
     assert 'href="https://example.com"' in html and 'rel="noopener noreferrer nofollow"' in html
     listed = next(p for p in client.get("/api/board/posts").json()["items"] if p["id"] == post["id"])
-    assert listed["snippet"].startswith("제목 굵게") and "<" not in listed["snippet"]
+    assert listed["snippet"].startswith("제목 굵게 강조") and "<" not in listed["snippet"]
 
 
 def test_html_edit_keeps_only_images_still_in_the_body():
@@ -303,12 +303,3 @@ def test_pagination_math():
     r = board.list_posts(page=1, size=5)
     assert r["page"] == 1 and r["size"] == 5
     assert r["pages"] == max(1, (r["total"] + 4) // 5)
-
-
-def test_support_info_uses_support_email_then_reset_sender(monkeypatch):
-    monkeypatch.setenv("SUPPORT_EMAIL", " help@example.com ")
-    assert client.get("/api/support/info").json() == {"email": "help@example.com"}
-    monkeypatch.delenv("SUPPORT_EMAIL")
-    monkeypatch.setenv("RESET_FROM_EMAIL", "noreply@example.com")
-    assert client.get("/api/support/info").json() == {"email": "noreply@example.com"}
-

@@ -218,7 +218,6 @@ export const api = {
   subscribeBoardList: boardLists.subscribe,
   boardListVersion: boardLists.version,
   boardListCached: (page = 1, size = 10, options = {}) => boardLists.peek(`${getToken()}:${boardListPath(page, size, options)}`),
-  supportInfo: () => req("/api/support/info"),
   boardList: (page = 1, size = 10, options = {}) => {
     const path = boardListPath(page, size, options);
     return boardLists.load(`${getToken()}:${path}`, version => req(path, { signal: options.signal, requestKey: `board-${version}` }));

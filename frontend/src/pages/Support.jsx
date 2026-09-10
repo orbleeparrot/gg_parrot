@@ -1,67 +1,91 @@
-import { useEffect, useState } from "react";
-import { api } from "../api.js";
+import { useState } from "react";
 import { useAuth } from "../lib/auth.js";
 import { PageHeader } from "../components/Page.jsx";
+import SelectMenu from "../components/SelectMenu.jsx";
 import "./Support.css";
 
-// 고객센터 — 지금은 이메일로만 받는다. 주소는 서버 설정(SUPPORT_EMAIL)에서 온다.
+// 고객센터 — 접수 시스템이 아직 없어서, 양식을 채우면 메일 본문으로 만들어 메일 앱을 연다.
+const CONTACTS = ["heejaerho@hecto.co.kr", "clcleh123@hecto.co.kr"];
+const TOPICS = [
+  ["account", "계정·로그인"],
+  ["runner", "매크로·실행기"],
+  ["board", "게시판·댓글"],
+  ["points", "포인트·언락"],
+  ["etc", "기타"],
+];
+
+function topicLabel(key) {
+  return (TOPICS.find(([value]) => value === key) || TOPICS[TOPICS.length - 1])[1];
+}
+
 export default function Support() {
   const { user } = useAuth();
-  const [email, setEmail] = useState(null);
+  const [topic, setTopic] = useState("account");
+  const [title, setTitle] = useState("");
+  const [body, setBody] = useState("");
   const [copied, setCopied] = useState(false);
 
-  useEffect(() => {
-    let alive = true;
-    api.supportInfo().then((d) => { if (alive) setEmail(d.email || ""); }).catch(() => { if (alive) setEmail(""); });
-    return () => { alive = false; };
-  }, []);
+  const subject = `[껄무새 문의] ${topicLabel(topic)}${title.trim() ? ` - ${title.trim()}` : ""}`;
+  const mailBody = [
+    `계정: ${user ? user.username : "(로그인 전)"}`,
+    `문의 유형: ${topicLabel(topic)}`,
+    "",
+    body.trim() || "(내용을 적어 주세요)",
+  ].join("\n");
+  const mailto = `mailto:${CONTACTS.join(",")}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(mailBody)}`;
 
-  const subject = encodeURIComponent(`[껄무새 문의]${user ? ` ${user.username}` : ""}`);
-  const body = encodeURIComponent(`어떤 화면에서 무엇을 하다가 어떤 일이 있었는지 적어 주세요.\n\n계정: ${user ? user.username : "(로그인 전)"}\n화면: \n시각: \n내용: `);
-
-  async function copy() {
+  async function copyMail() {
     try {
-      await navigator.clipboard.writeText(email);
+      await navigator.clipboard.writeText(`받는 사람: ${CONTACTS.join(", ")}\n제목: ${subject}\n\n${mailBody}`);
       setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
-    } catch { /* 클립보드 막힘 — 주소는 화면에 있다 */ }
+      window.setTimeout(() => setCopied(false), 1600);
+    } catch { /* 클립보드가 막힌 브라우저 — 주소와 내용은 화면에 있다 */ }
   }
 
   return (
     <div className="support-page">
       <PageHeader title="고객센터" />
-      <section className="support-section">
-        <h2 className="support-head">이메일로 문의해 주세요</h2>
-        <p className="support-copy">지금은 이메일로만 문의를 받고 있어요. 확인하는 대로 답장드릴게요.</p>
-        {email === null ? (
-          <p className="support-address is-loading" aria-busy="true">주소를 불러오는 중…</p>
-        ) : email ? (
-          <div className="support-address-row">
-            <a className="support-address" href={`mailto:${email}?subject=${subject}&body=${body}`}>{email}</a>
-            <a className="btn btn-m btn-primary" href={`mailto:${email}?subject=${subject}&body=${body}`}>메일 쓰기</a>
-            <button type="button" className="btn btn-m btn-secondary" onClick={copy}>{copied ? "복사했어요" : "주소 복사"}</button>
-          </div>
-        ) : (
-          <p className="support-copy">문의 이메일 주소를 준비하고 있어요. 조금 뒤에 다시 확인해 주세요.</p>
-        )}
-      </section>
-      <section className="support-section">
-        <h2 className="support-head">이렇게 적어 주시면 빨라요</h2>
-        <ul className="support-list">
-          <li><b>계정 이름</b> — 로그인한 닉네임</li>
-          <li><b>어느 화면</b>에서 <b>무엇을 하다가</b> 생긴 일인지</li>
-          <li><b>시각</b>과, 있다면 <b>화면 캡처</b></li>
-          <li>실행기 문제라면 실행기 창에 보이는 <b>오류 문구</b></li>
-        </ul>
-      </section>
-      <section className="support-section">
-        <h2 className="support-head">먼저 확인해 보세요</h2>
-        <ul className="support-list">
-          <li>사용법은 상단의 <b>사용법</b>, 실행기는 <b>실행기 설치</b> 페이지에 정리돼 있어요.</li>
-          <li>비밀번호를 잊었다면 로그인 화면의 <b>비밀번호 찾기</b>로 바로 다시 정할 수 있어요.</li>
-          <li>웹의 결과는 모의 계산이며 투자 조언이 아니에요.</li>
-        </ul>
-      </section>
+      <p className="support-copy">
+        죄송합니다. 고객센터는 현재 개발 중입니다.
+        <br />
+        아래의 이메일로 문의를 보내주시길 바랍니다.
+      </p>
+      <p className="support-contact">
+        담당자
+        {CONTACTS.map((email, index) => (
+          <span key={email}>
+            {index === 0 ? " : " : ", "}
+            <a href={`mailto:${email}`}>{email}</a>
+          </span>
+        ))}
+      </p>
+
+      {/* 문의 양식 — 채우면 메일 제목·본문이 만들어진다. 보내는 건 사용자의 메일 앱. */}
+      <form className="support-form" onSubmit={(e) => e.preventDefault()} aria-label="문의 양식">
+        <label className="support-field">
+          <span>문의 유형</span>
+          <SelectMenu value={topic} options={TOPICS} onChange={setTopic} label="문의 유형" className="support-topic" />
+        </label>
+        <label className="support-field">
+          <span>제목</span>
+          <input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={80} className="field field-sm" placeholder="한 줄로 요약해 주세요" />
+        </label>
+        <label className="support-field">
+          <span>내용</span>
+          <textarea
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            maxLength={2000}
+            rows={6}
+            className="field support-body"
+            placeholder={"어느 화면에서 무엇을 하다가 어떤 일이 있었는지 적어 주세요.\n오류 문구나 화면 캡처가 있으면 메일에 함께 첨부해 주세요."}
+          />
+        </label>
+        <div className="support-actions">
+          <a className="btn btn-m btn-primary" href={mailto}>메일 앱으로 보내기</a>
+          <button type="button" className="btn btn-m btn-secondary" onClick={copyMail}>{copied ? "복사했어요" : "내용 복사"}</button>
+        </div>
+      </form>
     </div>
   );
 }

@@ -1131,13 +1131,6 @@ async def board_update(
     return view
 
 
-@app.get("/api/support/info")
-def support_info() -> dict:
-    """고객센터 — 문의 이메일. SUPPORT_EMAIL 이 없으면 비밀번호 재설정 발신 주소(RESET_FROM_EMAIL)를 쓴다."""
-    email = (os.environ.get("SUPPORT_EMAIL") or os.environ.get("RESET_FROM_EMAIL") or "").strip()
-    return {"email": email}
-
-
 @app.get("/api/board/posts")
 def board_list(
     page: int = 1,

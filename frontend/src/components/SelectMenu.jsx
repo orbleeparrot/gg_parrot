@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
+import "./SelectMenu.css";
 
 // 우리 모양의 드롭다운 — 브라우저 <select> 대신. 버튼(입력칸 모양) + 아래로 펼쳐지는 목록(dialog 표면).
 // 키보드: Enter·Space·↓ 로 열고, ↑↓ 로 옮기고, Enter 로 고르고, Esc 로 닫는다. 바깥을 누르면 닫힌다.

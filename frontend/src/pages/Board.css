@@ -335,13 +335,6 @@
 .board-replies { list-style: none; margin: 8px 0 0; padding: 0 0 0 14px; border-left: 2px solid rgb(var(--c-slate-200)); }
 .board-replies .board-comment { padding: 10px 0; border-bottom: 0; }
 .board-replies .board-comment + .board-comment { border-top: 1px solid rgb(var(--c-slate-200)); }
-/* 신고 다이얼로그 — 사유는 칩처럼 고른다 */
-.board-report-reasons { margin-top: 14px; display: flex; flex-wrap: wrap; gap: 6px; }
-.board-report-reason { display: inline-flex; align-items: center; height: 34px; padding: 0 12px; border: 1px solid rgb(var(--c-slate-300)); border-radius: 999px; color: rgb(var(--c-slate-700)); font-size: 14px; font-weight: 600; cursor: pointer; }
-.board-report-reason input { position: absolute; opacity: 0; width: 1px; height: 1px; }
-.board-report-reason.is-on { background: rgb(var(--c-slate-900)); border-color: rgb(var(--c-slate-900)); color: rgb(var(--c-slate-50)); }
-.board-report-reason:has(input:focus-visible) { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
-.board-report-detail { margin-top: 12px; height: auto; min-height: 64px; padding-block: 10px; font-size: 14px; }
 .board-comment-text { margin: 4px 0 0; color: rgb(var(--c-slate-800)); font-size: 14px; line-height: 1.65; font-weight: 450; white-space: pre-line; overflow-wrap: anywhere; }
 .board-comment-confirm { margin-top: 10px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .board-empty { padding: 20px 0; border-bottom: 1px solid rgb(var(--c-slate-200)); color: rgb(var(--c-slate-500)); font-size: 13px; font-weight: 500; }

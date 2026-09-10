@@ -1,0 +1,8 @@
+/* 신고 다이얼로그 — 게시판·채팅 어디서 열려도 같은 모양이라 부품 CSS 로 둔다. 사유는 칩처럼 고른다. */
+.report-reasons { margin-top: 14px; display: flex; flex-wrap: wrap; gap: 6px; }
+.report-reason { display: inline-flex; align-items: center; height: 34px; padding: 0 12px; border: 1px solid rgb(var(--c-slate-300)); border-radius: 999px; color: rgb(var(--c-slate-700)); font-size: 14px; font-weight: 600; cursor: pointer; }
+.report-reason input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.report-reason.is-on { background: rgb(var(--c-slate-900)); border-color: rgb(var(--c-slate-900)); color: rgb(var(--c-slate-50)); }
+.report-reason:has(input:focus-visible) { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
+.report-detail { margin-top: 12px; height: auto; min-height: 64px; padding-block: 10px; font-size: 14px; }
+.report-error { min-height: 1lh; margin: 12px 0 0; color: rgb(var(--c-red-600)); font-size: 13px; font-weight: 600; }

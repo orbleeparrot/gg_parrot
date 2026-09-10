@@ -1,25 +1,27 @@
 /* Compact profile: identity, useful totals, then the selected activity. */
 @media (max-width: 1099px) {
   .me-head { gap: 16px; padding-block: 4px 16px; }
-  .me-profile { grid-template-columns: 64px minmax(0, 1fr); gap: 12px 16px; }
-  .me-avatar { width: 64px; height: 64px; font-size: 26px; }
+  .me-profile { grid-template-columns: 72px minmax(0, 1fr); gap: 8px 16px; }
+  .me-profile > .me-avatar-edit, .me-profile > .me-skeleton.is-avatar { grid-row: 1 / span 2; }
+  .me-avatar { width: 72px; height: 72px; font-size: 30px; }
   .me-avatar-camera { width: 24px; height: 24px; }
-  .me-id { gap: 4px; align-self: center; }
-  .me-name-row { gap: 0 8px; }
+  .me-id { display: contents; }
+  .me-name-row { grid-column: 2; grid-row: 1; gap: 0 8px; align-self: end; }
   .me-name { font-size: 26px; line-height: 1.25; }
-  .me-meta { font-size: 12px; }
-  .me-bio { margin-top: 8px; font-size: 14px; line-height: 1.6; }
-  .me-head-actions { grid-column: 1 / -1; gap: 12px; padding: 0; }
-  .me-head-actions .btn { min-height: 44px; padding-inline: 12px; font-size: 13px; }
-  .me-head-actions .me-settings-toggle { margin-left: auto; }
+  .me-meta { grid-column: 2; grid-row: 2; font-size: 12px; }
+  .me-bio { grid-column: 1 / -1; margin: 4px 0; font-size: 14px; line-height: 1.6; }
+  .me-head-actions { grid-column: 1 / -1; gap: 8px; padding: 4px 0 0; }
+  .me-head-actions .btn { min-height: 44px; padding-inline: 12px; font-size: 13px; border-block: 4px solid transparent; background-clip: padding-box; }
   .me-tier-toggle { min-height: 44px; font-size: 12px; }
   .me-tier-toggle .me-tier-icon { width: 20px; height: 20px; }
+  .me-tier { margin-left: 0; }
   .me-tier-list { gap: 8px; }
   .me-tier-list li { font-size: 12px; }
-  .me-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; padding-top: 16px; }
+  .me-profile > .me-stats { grid-column: 1 / -1; }
+  .me-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; padding-top: 8px; }
   .me-stat { gap: 4px; }
   .me-stat dt { font-size: 12px; }
-  .me-stat dd { font-size: 22px; line-height: 1.25; }
+  .me-stat dd { font-size: 20px; line-height: 1.25; }
   .me-stats.has-long-values { grid-template-columns: minmax(0, 1fr); gap: 4px; }
   .me-stats.has-long-values .me-stat { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; min-height: 32px; }
   .me-account-settings .me-account { display: grid; gap: 12px; padding-block: 8px 20px; }
@@ -29,12 +31,11 @@
   .me-account-actions > button { min-height: 44px; font-size: 13px; }
   .me-account-actions > .me-delete-account { margin-left: auto; }
   .me-tabs { padding: 0; }
-  .me-tab-list { display: none; }
-  .me-mobile-activity { position: relative; display: inline-block; max-width: 100%; }
-  .me-mobile-activity select { display: block; max-width: 100%; height: 44px; padding: 0 32px 0 0; appearance: none; border: 0; border-radius: 0; background: transparent; color: rgb(var(--c-slate-900)); font-size: 17px; font-weight: 700; cursor: pointer; }
-  .me-mobile-activity select option { background: rgb(var(--c-surface)); color: rgb(var(--c-slate-900)); }
-  .me-mobile-activity > svg { position: absolute; right: 4px; top: 13px; pointer-events: none; color: rgb(var(--c-slate-700)); }
+  .me-tab-list { gap: 24px; }
+  .me-tab { flex: none; min-height: 44px; gap: 6px; font-size: 14px; }
   .me-panel { min-height: 180px; padding-top: 0; }
+  .me-panel-actions { margin: 4px 0 0; }
+  .me-create-link { min-height: 44px; }
   .me-mobile-label { display: block; color: rgb(var(--c-slate-500)); font-family: var(--me-font-body); font-size: 12px; line-height: 1.4; font-weight: 500; }
   .me-activity-value, .me-row-date { display: grid; gap: 4px; min-width: 0; }
   .me-table .me-row.me-table-head { display: none; }
@@ -45,7 +46,7 @@
   .me-row-details { grid-area: details; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; min-width: 0; }
   .me-row-details .me-activity-value { display: flex; align-items: baseline; gap: 4px; font-size: 13px; }
   .me-row-details .me-row-date { flex-basis: 100%; display: flex; align-items: baseline; gap: 4px; font-size: 12px; }
-  .me-row > .btn { grid-area: action; align-self: end; margin: 0; min-height: 44px; padding: 0 10px; font-size: 12px; white-space: nowrap; }
+  .me-row > .btn { grid-area: action; align-self: end; margin: 0; min-height: 44px; padding: 0 10px; font-size: 12px; white-space: nowrap; border-block: 4px solid transparent; background-clip: padding-box; }
   .me-title { font-size: 15px; }
   .me-sub { font-size: 14px; line-height: 1.5; white-space: normal; overflow-wrap: anywhere; }
   .me-cell { font-size: 15px; }
@@ -66,7 +67,7 @@
   .me-posts .board-title-text { white-space: normal; line-height: 1.5; }
   .me-posts .board-time { text-align: left; font-size: 12px; }
   .me-skeleton { max-width: 100%; }
-  .me-skeleton.is-avatar { width: 64px; height: 64px; }
+  .me-skeleton.is-avatar { width: 72px; height: 72px; }
 }
 @media (max-width: 359px) {
   .me-name { font-size: 24px; }

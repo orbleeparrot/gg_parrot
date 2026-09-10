@@ -2,6 +2,14 @@
   {
     "date": "2026-09-10",
     "scope": "page",
+    "macrostructure": "portrait + identity group + activity index",
+    "theme": "DESIGN.md locked",
+    "enrichment": "none",
+    "brief": "Pinterest·TradingView·GitHub 공개 프로필을 직접 캡처해 요소의 근접성·크기·행동 배치·탭을 검토하고 껄무새의 매크로·포인트·계정 관리 흐름에 적용"
+  },
+  {
+    "date": "2026-09-10",
+    "scope": "page",
     "macrostructure": "profile + activity index",
     "theme": "DESIGN.md locked",
     "enrichment": "none",

@@ -74,10 +74,42 @@ class FilledFixtures(profile.Fixtures):
         return data
 
 
+def assert_selected_tab_visible(page):
+    page.wait_for_function("""() => {
+      const list = document.querySelector('[role="tablist"][aria-label="내 활동 종류"]');
+      const selected = list?.querySelector('[role="tab"][aria-selected="true"]');
+      if (!selected) return false;
+      const row = list.getBoundingClientRect(), tab = selected.getBoundingClientRect();
+      return tab.width > 0 && tab.left >= Math.max(0, row.left) - 1
+        && tab.right <= Math.min(innerWidth, row.right) + 1;
+    }""")
+
+
+def assert_tab_overflow_control(page):
+    tabs = page.get_by_role("tablist", name="내 활동 종류")
+    metrics = tabs.evaluate("""el => ({
+      overflows: el.scrollWidth > el.clientWidth + 1,
+      atEnd: el.scrollLeft + el.clientWidth >= el.scrollWidth - 1
+    })""")
+    control = page.get_by_role("button", name="다음 활동 보기", exact=True)
+    if not metrics["overflows"]:
+        expect(control).not_to_be_visible()
+    else:
+        expect(control).to_be_visible()
+        if metrics["atEnd"]: expect(control).to_be_disabled()
+        else: expect(control).to_be_enabled()
+
+
 def assert_no_overflow(page):
+    assert_selected_tab_visible(page)
     result = page.locator(".me-page").evaluate("""root => {
       const outside = [...root.querySelectorAll('*')].filter(el => {
         if (!el.checkVisibility() || el.classList.contains('sr-only')) return false;
+        // Inactive tabs may be intentionally clipped inside the horizontal strip.
+        // The strip and document themselves must fit; the selected tab is checked above.
+        const tab = el.closest('[role="tab"][aria-selected="false"]');
+        const list = tab?.closest('[role="tablist"][aria-label="내 활동 종류"]');
+        if (list && ['auto', 'scroll'].includes(getComputedStyle(list).overflowX)) return false;
         const rect = el.getBoundingClientRect();
         return rect.width > 0 && (rect.left < -1 || rect.right > innerWidth + 1);
       }).map(el => ({tag:el.tagName, cls:el.className, text:el.textContent.slice(0,80)}));
@@ -134,21 +166,28 @@ def main():
                     page.set_viewport_size({"width": width, "height": height})
                     page.evaluate("document.fonts.ready")
                     compact = width < 1100
-                    selector = page.get_by_role("combobox", name="내 활동 종류")
-                    if compact:
-                        expect(selector).to_be_visible()
-                        assert selector.evaluate("e=>parseFloat(getComputedStyle(e).fontSize)") >= 16
-                        assert selector.bounding_box()["height"] >= 44
-                        expect(page.get_by_role("tablist", name="내 활동 종류")).not_to_be_visible()
-                    else:
-                        expect(selector).not_to_be_visible()
-                        expect(page.get_by_role("tablist", name="내 활동 종류")).to_be_visible()
+                    expect(page.get_by_role("combobox", name="내 활동 종류")).to_have_count(0)
+                    tabs = page.get_by_role("tablist", name="내 활동 종류")
+                    expect(tabs).to_be_visible()
+                    expect(tabs.get_by_role("tab")).to_have_count(5)
                     assert_account_state(page, False)
                     assert_stats(page)
                     for key, label in TABS.items():
-                        if compact: selector.select_option(key)
-                        else: page.get_by_role("tab", name=re.compile(label)).click()
-                        expect(page.locator(".me-panel")).to_have_attribute("aria-label" if compact else "aria-labelledby", label if compact else f"me-tab-{key}")
+                        current = tabs.get_by_role("tab", name=re.compile(label))
+                        expect(current).to_contain_text("2")
+                        current.click()
+                        expect(current).to_have_attribute("aria-selected", "true")
+                        expect(current).to_have_attribute("tabindex", "0")
+                        expect(page.locator(".me-panel")).to_have_attribute("role", "tabpanel")
+                        expect(page.locator(".me-panel")).to_have_attribute("aria-labelledby", f"me-tab-{key}")
+                        create_link = page.locator(".me-create-link")
+                        if key == "created":
+                            expect(create_link).to_have_count(1)
+                            expect(create_link).to_be_visible()
+                            expect(create_link).to_have_text("매크로 만들기")
+                            expect(create_link).to_have_attribute("href", "/builder")
+                        else:
+                            expect(create_link).to_have_count(0)
                         if key != "created": expect(page).to_have_url(re.compile(rf"\?tab={key}$"))
                         rows = page.locator(".me-posts .board-item" if key == "posts" else ".me-table .me-row:not(.me-table-head)")
                         expect(rows).to_have_count(2)
@@ -175,10 +214,12 @@ def main():
                             expect(rows.first.get_by_role("link")).to_have_attribute("href", "/board/13")
                             expect(rows.first.get_by_role("link")).to_have_attribute("aria-label", re.compile("댓글 12개.*사진 첨부"))
                         assert_no_overflow(page)
+                        assert_tab_overflow_control(page)
                         suite.screenshot(page, f"{key}-{width}-{theme}")
                     page.reload(wait_until="domcontentloaded")
                     expect(page.locator(".me-posts .board-item")).to_have_count(2)
-                    if compact: expect(selector).to_have_value("posts")
+                    expect(tabs.get_by_role("tab", name=re.compile(TABS["posts"]))).to_have_attribute("aria-selected", "true")
+                    assert_selected_tab_visible(page)
                     profile.open_account(page)
                     assert_account_state(page, True)
                     expect(page.get_by_role("button", name="비밀번호 변경", exact=True)).to_be_visible()
@@ -221,22 +262,89 @@ def main():
             assert page.evaluate("localStorage.getItem('ggp_token')") is None
             suite.record("account-collapse-resize-restoration-and-logout", fixture); context.close()
 
-            fixture = FilledFixtures(); context, page = suite.open(fixture, 1440)
-            page.get_by_role("tab", name=re.compile("만든 매크로")).focus()
-            for key, selected in [("ArrowRight", "purchased"), ("End", "posts"), ("ArrowRight", "created"), ("ArrowLeft", "posts"), ("Home", "created")]:
-                page.keyboard.press(key)
-                current = page.get_by_role("tab", name=re.compile(TABS[selected]))
-                expect(current).to_be_focused()
-                expect(current).to_have_attribute("aria-selected", "true")
-                expect(current).to_have_attribute("tabindex", "0")
-                expect(page.locator('.me-tabs [role="tab"][tabindex="0"]')).to_have_count(1)
-                expect(page.locator('.me-tabs [role="tab"][aria-selected="false"][tabindex="-1"]')).to_have_count(4)
-                expect(page.locator(".me-panel")).to_have_attribute("aria-labelledby", f"me-tab-{selected}")
-                if selected != "created": expect(page).to_have_url(re.compile(rf"\?tab={selected}$"))
-                else: expect(page).to_have_url(re.compile(r"/mypage$"))
-            page.keyboard.press("Tab")
-            expect(page.locator(".me-panel")).to_be_focused()
-            suite.record("desktop-activity-keyboard-navigation", fixture); context.close()
+            fixture = FilledFixtures(); context, page = suite.open(fixture, 390)
+            page.set_viewport_size({"width": 390, "height": 844})
+            tabs = page.get_by_role("tablist", name="내 활동 종류")
+            expect(tabs.get_by_role("tab", name=re.compile(TABS["created"]))).to_contain_text("2")
+            page.evaluate("document.fonts.ready")
+            assert_selected_tab_visible(page)
+            control = page.get_by_role("button", name="다음 활동 보기", exact=True)
+            expect(control).to_be_visible()
+            expect(control).to_be_enabled()
+            # Place the entire tab strip inside the viewport before testing scroll stability.
+            tabs.evaluate("el => window.scrollTo(0, Math.max(0, el.getBoundingClientRect().top + scrollY - 180))")
+            for step in range(len(TABS)):
+                assert_tab_overflow_control(page)
+                if control.is_disabled(): break
+                next_id = tabs.evaluate("""el => {
+                  const edge = el.getBoundingClientRect().right;
+                  return [...el.querySelectorAll('[role="tab"]')]
+                    .find(tab => tab.getBoundingClientRect().right > edge + 1)?.id;
+                }""")
+                assert next_id, "Enabled next-activity control has no hidden tab to reveal"
+                before = page.evaluate("scrollY")
+                control.click()
+                selected = page.locator(f"#{next_id}")
+                expect(selected).to_have_attribute("aria-selected", "true")
+                expect(selected).to_be_focused()
+                assert_selected_tab_visible(page)
+                assert abs(page.evaluate("scrollY") - before) <= 1, (step, before, page.evaluate("scrollY"))
+                assert_no_overflow(page)
+            expect(control).to_be_visible()
+            expect(control).to_be_disabled()
+            expect(tabs.get_by_role("tab", name=re.compile(TABS["posts"]))).to_have_attribute("aria-selected", "true")
+            suite.screenshot(page, "next-activity-at-end-390")
+            page.set_viewport_size({"width": 1440, "height": 900})
+            expect(control).not_to_be_visible()
+            assert_selected_tab_visible(page)
+            assert_no_overflow(page)
+            suite.record("activity-overflow-control-reveals-focuses-and-stops-at-end", fixture); context.close()
+
+            for width in (390, 768, 1440):
+                fixture = FilledFixtures(); context, page = suite.open(fixture, width)
+                if width < 1100:
+                    # Enter directly on the last tab, which begins offscreen on phones.
+                    page.goto(suite.origin + "/mypage?tab=posts", wait_until="domcontentloaded")
+                    expect(page.locator(".me-posts .board-item")).to_have_count(2)
+                    assert_selected_tab_visible(page)
+                    assert page.evaluate("scrollY") == 0
+                    page.reload(wait_until="domcontentloaded")
+                    expect(page.locator(".me-posts .board-item")).to_have_count(2)
+                    assert_selected_tab_visible(page)
+                    assert page.evaluate("scrollY") == 0
+                    # Keep the strip inside the viewport while changing content by pointer.
+                    page.get_by_role("tablist", name="내 활동 종류").evaluate("el => window.scrollTo(0, Math.max(0, el.getBoundingClientRect().top + scrollY - 180))")
+                    for selected in ("created", "ledger", "posts", "created"):
+                        before = page.evaluate("scrollY")
+                        current = page.get_by_role("tab", name=re.compile(TABS[selected]))
+                        current.click()
+                        expect(current).to_have_attribute("aria-selected", "true")
+                        assert_selected_tab_visible(page)
+                        assert abs(page.evaluate("scrollY") - before) <= 1, (width, selected, before, page.evaluate("scrollY"))
+                        assert_no_overflow(page)
+                    suite.screenshot(page, f"pointer-tabs-{width}")
+                page.get_by_role("tab", name=re.compile("만든 매크로")).focus()
+                for key, selected in [("ArrowRight", "purchased"), ("End", "posts"), ("ArrowRight", "created"), ("ArrowLeft", "posts"), ("Home", "created")]:
+                    before = page.evaluate("scrollY")
+                    page.keyboard.press(key)
+                    current = page.get_by_role("tab", name=re.compile(TABS[selected]))
+                    expect(current).to_be_focused()
+                    expect(current).to_have_attribute("aria-selected", "true")
+                    expect(current).to_have_attribute("tabindex", "0")
+                    expect(page.locator('.me-tabs [role="tab"][tabindex="0"]')).to_have_count(1)
+                    expect(page.locator('.me-tabs [role="tab"][aria-selected="false"][tabindex="-1"]')).to_have_count(4)
+                    expect(page.locator(".me-panel")).to_have_attribute("aria-labelledby", f"me-tab-{selected}")
+                    if selected != "created": expect(page).to_have_url(re.compile(rf"\?tab={selected}$"))
+                    else: expect(page).to_have_url(re.compile(r"/mypage$"))
+                    assert_selected_tab_visible(page)
+                    assert abs(page.evaluate("scrollY") - before) <= 1, (width, key, before, page.evaluate("scrollY"))
+                page.keyboard.press("Tab")
+                next_control = page.get_by_role("button", name="다음 활동 보기", exact=True)
+                if next_control.is_visible() and next_control.is_enabled():
+                    expect(next_control).to_be_focused()
+                    page.keyboard.press("Tab")
+                expect(page.locator(".me-panel")).to_be_focused()
+                suite.record(f"activity-pointer-keyboard-deeplink-{width}", fixture); context.close()
 
             fixture = FilledFixtures(); fixture.users["fixture-a"]["can_change_password"] = False
             context, page = suite.open(fixture, 390); profile.open_account(page)

@@ -4,6 +4,8 @@ import { api } from "../api.js";
 import { clearAuth, getAuthUser, getToken, setAuth, useAuth, updateAuthUser, mergeFetchedAuthUser } from "../lib/auth.js";
 import { CameraIcon } from "@phosphor-icons/react/dist/csr/Camera";
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
+import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
+import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { PlantIcon } from "@phosphor-icons/react/dist/csr/Plant";
 import { MedalIcon } from "@phosphor-icons/react/dist/csr/Medal";
 import { DiamondIcon } from "@phosphor-icons/react/dist/csr/Diamond";
@@ -21,7 +23,7 @@ import "./Board.css"; // 게시글 탭은 게시판 목록 문법(.board-table)�
 import "./MyPage.css";
 import "./MyPageMobile.css";
 
-// 탭 = 내 것들의 목록. 개수는 탭 이름 뒤에 붙는다(깃허브·브런치 관례).
+// 내 활동의 종류와 개수를 한 탐색 안에서 보여 준다.
 const TABS = [
   { key: "created", label: "만든 매크로" },
   { key: "purchased", label: "구매한 매크로" },
@@ -42,17 +44,6 @@ function Stamp({ value, now, className = "", label }) {
 
 function ActivityValue({ label, children, className = "" }) {
   return <span className={`me-cell me-activity-value ${className}`}><span className="me-mobile-label">{label}</span><span className="num">{children}</span></span>;
-}
-
-function useCompactProfile() {
-  const [compact, setCompact] = useState(() => window.matchMedia("(max-width: 1099px)").matches);
-  useEffect(() => {
-    const query = window.matchMedia("(max-width: 1099px)");
-    const sync = () => setCompact(query.matches);
-    query.addEventListener("change", sync);
-    return () => query.removeEventListener("change", sync);
-  }, []);
-  return compact;
 }
 
 function TierIcon({ name }) {
@@ -221,9 +212,9 @@ function Skeleton() {
         <div className="me-profile">
           <span className="me-skeleton is-avatar" />
           <div className="me-id"><span className="me-skeleton" style={{ width: 200, height: 36 }} /><span className="me-skeleton" style={{ width: 160, height: 16 }} /></div>
+          <div className="me-stats">{Array.from({ length: 3 }, (_, i) => <div className="me-stat" key={i}><span className="me-skeleton" style={{ width: 64 }} /><span className="me-skeleton" style={{ width: 96, height: 28 }} /></div>)}</div>
           <div className="me-head-actions"><span className="me-skeleton" style={{ width: 112, height: 36 }} /></div>
         </div>
-        <div className="me-stats">{Array.from({ length: 3 }, (_, i) => <div className="me-stat" key={i}><span className="me-skeleton" style={{ width: 64 }} /><span className="me-skeleton" style={{ width: 96, height: 28 }} /></div>)}</div>
       </div>
       <ul className="me-table" style={{ "--me-cols": "36px minmax(0,1fr) 120px" }}>
         {Array.from({ length: 5 }, (_, i) => (
@@ -243,13 +234,44 @@ export default function MyPage() {
   const [error, setError] = useState("");
   const [editor, setEditor] = useState(null);
   const [notice, setNotice] = useState("");
-  const compact = useCompactProfile();
+  const tabListRef = useRef(null);
+  const [tabOverflow, setTabOverflow] = useState({ visible: false, next: false });
   const [accountOpen, setAccountOpen] = useState(false);
   const [tierOpen, setTierOpen] = useState(false);
   const [now, setNow] = useState(() => Date.now());
 
   const paramTab = searchParams.get("tab");
   const tab = TAB_KEYS.has(paramTab) ? paramTab : "created";
+
+  useEffect(() => {
+    const list = tabListRef.current;
+    if (!list) return;
+    const updateOverflow = () => {
+      const first = list.firstElementChild.getBoundingClientRect();
+      const last = list.lastElementChild.getBoundingClientRect();
+      const visible = last.right - first.left > list.parentElement.clientWidth + 1;
+      const next = last.right > list.getBoundingClientRect().right + 1;
+      setTabOverflow((previous) => previous.visible === visible && previous.next === next ? previous : { visible, next });
+    };
+    const revealSelected = () => {
+      const selected = list.querySelector('[aria-selected="true"]');
+      if (!selected) return;
+      const frame = list.getBoundingClientRect();
+      const item = selected.getBoundingClientRect();
+      if (item.left < frame.left) list.scrollLeft += item.left - frame.left;
+      else if (item.right > frame.right) list.scrollLeft += item.right - frame.right;
+      updateOverflow();
+    };
+    revealSelected();
+    const observer = new ResizeObserver(revealSelected);
+    observer.observe(list);
+    observer.observe(list.parentElement);
+    list.addEventListener("scroll", updateOverflow, { passive: true });
+    return () => {
+      observer.disconnect();
+      list.removeEventListener("scroll", updateOverflow);
+    };
+  }, [tab, data]);
 
   useEffect(() => {
     setData(null);
@@ -309,6 +331,14 @@ export default function MyPage() {
   const counts = { created: created.length, purchased: purchased.length, sales: sales.length, ledger: ledger.length, posts: my_posts.length };
   const openInBuilder = (macro) => navigate("/builder", { state: { macro } });
   const pickTab = (key) => setSearchParams(key === "created" ? {} : { tab: key }, { replace: true });
+  const revealNextTab = () => {
+    const list = tabListRef.current;
+    const edge = list.getBoundingClientRect().right;
+    const next = Array.from(list.children).find((item) => item.getBoundingClientRect().right > edge + 1);
+    if (!next) return;
+    pickTab(next.id.replace("me-tab-", ""));
+    next.focus({ preventScroll: true });
+  };
   const moveTab = (event, index) => {
     const next = { ArrowRight: (index + 1) % TABS.length, ArrowLeft: (index + TABS.length - 1) % TABS.length, Home: 0, End: TABS.length - 1 }[event.key];
     if (next === undefined) return;
@@ -325,7 +355,7 @@ export default function MyPage() {
       <header className="me-head">
         <div className="me-profile">
         <button type="button" className="me-avatar-edit" aria-label="프로필 사진 변경" aria-haspopup="dialog" onClick={() => setEditor("profile")}>
-          <UserAvatar src={user.avatar_url} name={user.username} size={80} className="me-avatar" />
+          <UserAvatar src={user.avatar_url} name={user.username} size={128} className="me-avatar" />
           <span className="me-avatar-camera"><CameraIcon size={16} weight="bold" aria-hidden="true" /></span>
         </button>
         <div className="me-id">
@@ -338,17 +368,17 @@ export default function MyPage() {
           </p>
           {user.bio ? <p className="me-bio">{user.bio}</p> : null}
         </div>
+        <dl className={`me-stats${longStats ? " has-long-values" : ""}`}>
+          <div className="me-stat is-points"><dt>보유 포인트</dt><dd className="num">{formatPoints(user.points_balance)}</dd></div>
+          <div className="me-stat"><dt>판매 수익</dt><dd className="num">{formatPoints(totals.earned)}</dd></div>
+          <div className="me-stat"><dt>누적 판매</dt><dd className="num">{totals.sales}건</dd></div>
+        </dl>
         <div className="me-head-actions">
           <button type="button" className="btn btn-s btn-secondary me-edit-button" aria-label="프로필 편집" aria-haspopup="dialog" onClick={() => setEditor("profile")}><PencilSimpleIcon size={18} aria-hidden="true" /><span>프로필 편집</span></button>
           <button type="button" className="btn btn-s btn-ghost me-settings-toggle" aria-label="계정 설정" aria-expanded={accountOpen} aria-controls="me-account-settings" onClick={() => setAccountOpen(!accountOpen)}><GearSixIcon size={20} aria-hidden="true" /><span>계정 설정</span></button>
         </div>
         </div>
         <TierGuide tier={tier} open={tierOpen} />
-        <dl className={`me-stats${longStats ? " has-long-values" : ""}`}>
-          <div className="me-stat is-points"><dt>보유 포인트</dt><dd className="num">{formatPoints(user.points_balance)}</dd></div>
-          <div className="me-stat"><dt>판매 수익</dt><dd className="num">{formatPoints(totals.earned)}</dd></div>
-          <div className="me-stat"><dt>누적 판매</dt><dd className="num">{totals.sales}건</dd></div>
-        </dl>
       </header>
       <div className="me-account-settings" id="me-account-settings" hidden={!accountOpen}>
         <section className="me-account" aria-labelledby="me-account-title">
@@ -370,8 +400,7 @@ export default function MyPage() {
       {editor === "delete" ? <DeleteAccountDialog key={token} user={user} onClose={() => setEditor(null)} onDeleted={deleted} /> : null}
 
       <div className="me-tabs">
-        <label className="me-mobile-activity" htmlFor="me-activity-select"><span id="me-activity-label" className="sr-only">내 활동 종류</span><select id="me-activity-select" value={tab} onChange={(event) => pickTab(event.target.value)}>{TABS.map((item) => <option key={item.key} value={item.key}>{item.label} · {counts[item.key]}</option>)}</select><CaretDownIcon size={18} aria-hidden="true" /></label>
-        <div className="me-tab-list" role="tablist" aria-label="내 활동 종류">
+        <div className="me-tab-list" role="tablist" aria-label="내 활동 종류" ref={tabListRef}>
           {TABS.map((t, index) => (
             <button
               key={t.key}
@@ -389,9 +418,11 @@ export default function MyPage() {
             </button>
           ))}
         </div>
+        {tabOverflow.visible ? <button type="button" className="me-tab-next" aria-label="다음 활동 보기" disabled={!tabOverflow.next} onClick={revealNextTab}><CaretRightIcon size={22} aria-hidden="true" /></button> : null}
       </div>
 
-      <section id="me-panel" role={compact ? "region" : "tabpanel"} tabIndex={0} aria-label={compact ? TABS.find((item) => item.key === tab).label : undefined} aria-labelledby={compact ? undefined : `me-tab-${tab}`} className="me-panel">
+      <section id="me-panel" role="tabpanel" tabIndex={0} aria-labelledby={`me-tab-${tab}`} className="me-panel">
+        {tab === "created" && created.length > 0 ? <div className="me-panel-actions"><Link to="/builder" className="me-create-link"><PlusIcon size={18} aria-hidden="true" />매크로 만들기</Link></div> : null}
         {tab === "created" && <CreatedTab rows={created} now={now} onOpen={openInBuilder} />}
         {tab === "purchased" && <PurchasedTab rows={purchased} now={now} onOpen={openInBuilder} />}
         {tab === "sales" && <SalesTab rows={sales} now={now} />}

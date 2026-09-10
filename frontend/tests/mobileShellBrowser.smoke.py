@@ -28,6 +28,8 @@ class Fixture(news.Fixture):
         path = urlsplit(route.request.url).path
         if path == '/api/auth/me':
             route.fulfill(json={'user': USER})
+        elif path == '/api/me/dashboard':
+            route.fulfill(json={'user': USER, 'tier': {'name': '새싹', 'sales': 0}, 'totals': {'earned': 0, 'sales': 0}, 'created': [], 'purchased': [], 'sales': [], 'ledger': [], 'my_posts': []})
         elif path == '/api/auth/google/config':
             route.fulfill(json={'enabled': False})
         else:
@@ -123,7 +125,7 @@ def main():
                     checks.append(f'navigation-help-theme-guest-{width}-{theme}')
                     context.close()
 
-            # Signed-in account popup stays in bounds; portrait + short landscape.
+            # Signed-in header goes directly to the profile at both mobile shapes.
             for width, height in ((320, 740), (844, 390)):
                 context = browser.new_context(viewport={'width': width, 'height': height}, has_touch=True, is_mobile=True, user_agent=IPHONE, color_scheme='dark')
                 context.add_init_script("localStorage.setItem('ggp_token', 'fixture'); localStorage.setItem('ggp_user', " + json.dumps(json.dumps(USER)) + ");")
@@ -132,13 +134,12 @@ def main():
                 page.on('pageerror', lambda error: errors.append(str(error)))
                 page.goto(origin + '/guide', wait_until='networkidle')
                 page.locator('.account-trigger').tap()
-                panel = page.get_by_role('dialog', name='계정 메뉴', exact=True)
-                expect(panel).to_be_visible()
-                box = panel.bounding_box()
-                assert box['x'] >= 0 and box['x'] + box['width'] <= width and box['y'] + box['height'] <= height
+                expect(page).to_have_url(origin + '/mypage')
+                expect(page.get_by_role('dialog', name='계정 메뉴', exact=True)).to_have_count(0)
+                expect(page.get_by_role('button', name='회원 키', exact=True)).to_be_visible()
+                expect(page.get_by_role('button', name='로그아웃', exact=True)).to_be_visible()
+                bounds(page)
                 page.screenshot(path=str(OUTPUT / f'account-{width}.png'), animations='disabled')
-                page.keyboard.press('Escape')
-                expect(panel).to_be_hidden()
                 page.get_by_role('button', name='페이지 메뉴 열기').tap()
                 drawer = page.get_by_role('dialog', name='모바일 페이지 메뉴')
                 drawer.get_by_role('link', name='실행기 설치', exact=False).scroll_into_view_if_needed()

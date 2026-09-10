@@ -335,10 +335,12 @@ def main():
             for _, payload in fixture.held_me: payload['user']['points_balance'] = 54321
             dialog = edit(page); dialog.locator('input[autocomplete="nickname"]').fill("새로운이름"); dialog.locator('textarea').fill('저장한 소개'); dialog.get_by_label('프로필 사진 파일').set_input_files(UPLOAD); save(dialog)
             photo = fixture.users['fixture-a']['avatar_url']
-            fixture.release_me(); page.locator('.account-trigger').click()
-            expect(page.locator('.account-points')).to_have_text('54,321P')
-            expect(page.locator('.account-name')).to_have_text('새로운이름')
+            fixture.release_me()
+            page.wait_for_function("JSON.parse(localStorage.getItem('ggp_user')).points_balance === 54321")
             expect(dialog.locator('textarea')).to_have_value('저장한 소개'); expect_photo(page, photo)
+            page.locator('.account-trigger').click()
+            expect(page.locator('.me-name')).to_have_text('새로운이름')
+            expect(page.locator('.me-bio')).to_have_text('저장한 소개'); expect_photo(page, photo)
             suite.record('late-header-response-preserves-edited-profile', fixture); context.close()
 
             fixture = Fixtures(); fixture.hold_upload = True; second_photo=fixture.set_photo('fixture-b'); context,page=suite.open(fixture)

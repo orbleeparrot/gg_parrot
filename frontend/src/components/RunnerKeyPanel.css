@@ -1,0 +1,11 @@
+.runner-key-menu { display: grid; gap: 8px; }
+.runner-key-menu-field { display: flex; align-items: center; min-width: 0; border: 1px solid rgb(var(--c-slate-300)); border-radius: 6px; }
+.runner-key-menu-field input { width: 100%; min-width: 0; height: 44px; padding: 0 10px; background: transparent; color: rgb(var(--c-slate-900)); font-size: 14px; }
+.runner-key-menu button { min-height: 44px; padding: 0 10px; border-radius: 6px; white-space: nowrap; }
+.runner-key-menu-field button { flex: 0 0 auto; }
+.runner-key-menu-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.runner-key-menu-actions button { border: 1px solid rgb(var(--c-slate-300)); }
+.runner-key-menu button:hover { background: rgb(var(--c-slate-100)); }
+.runner-key-menu button:disabled { opacity: .5; cursor: default; }
+.runner-key-menu [role="alert"] { color: rgb(var(--c-red-600)); }
+.runner-key-menu :is(button, input):focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }

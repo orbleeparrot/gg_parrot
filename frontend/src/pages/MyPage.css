@@ -20,6 +20,10 @@
 .me-tier-icon.is-diamond { color: rgb(var(--c-sky-700)); }
 .me-bio { max-width: 38ch; margin: 18px 0 2px; color: rgb(var(--c-slate-700)); font-size: 14px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
 .me-identity-footer { width: 100%; }
+.me-profile-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; width: 100%; margin-top: 12px; }
+.me-profile-actions > button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: rgb(var(--c-slate-700)); font-size: 12px; font-weight: 600; cursor: pointer; }
+.me-profile-actions > button:hover, .me-profile-actions > button[aria-expanded="true"] { background: rgb(var(--c-slate-200)); }
+.me-member-key { width: 100%; min-width: 0; margin-top: 12px; padding-top: 16px; border-top: 1px solid rgb(var(--c-slate-200)); text-align: left; }
 .me-joined { margin: 16px 0 0; padding-top: 16px; width: 100%; border-top: 1px solid rgb(var(--c-slate-200)); color: rgb(var(--c-slate-500)); font-size: 11px; font-weight: 500; line-height: 1.5; }
 .me-content { display: grid; gap: 24px; min-width: 0; }
 .me-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0; padding: 24px 0; border: 1px solid rgb(var(--c-slate-200)); border-radius: 16px; background: rgb(var(--c-surface)); }

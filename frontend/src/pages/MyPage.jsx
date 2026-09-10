@@ -2,7 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api.js";
-import { getAuthUser, getToken, mergeFetchedAuthUser, updateAuthUser, useAuth } from "../lib/auth.js";
+import { clearAuth, getAuthUser, getToken, mergeFetchedAuthUser, updateAuthUser, useAuth } from "../lib/auth.js";
+import { KeyIcon } from "@phosphor-icons/react/dist/csr/Key";
+import { SignOutIcon } from "@phosphor-icons/react/dist/csr/SignOut";
+import { RunnerKeyPanel } from "../components/RunnerSessions.jsx";
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
 import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
 import { SquaresFourIcon } from "@phosphor-icons/react/dist/csr/SquaresFour";
@@ -150,11 +153,13 @@ function Skeleton() {
 
 export default function MyPage() {
   const { token, user: authUser } = useAuth();
+  const leavingAccount = useRef(false);
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
   const [tierOpen, setTierOpen] = useState(false);
+  const [keyOpen, setKeyOpen] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const param = searchParams.get("tab");
   const tab = TAB_KEYS.has(param) ? param : "created";
@@ -165,7 +170,8 @@ export default function MyPage() {
     setData(null);
     setError("");
     setTierOpen(false);
-    if (!token) { navigate("/login?next=%2Fmypage", { replace: true }); return; }
+    setKeyOpen(false);
+    if (!token) { if (!leavingAccount.current) navigate("/login?next=%2Fmypage", { replace: true }); return; }
     let alive = true;
     const controller = new AbortController();
     const userAtStart = getAuthUser();
@@ -187,6 +193,7 @@ export default function MyPage() {
   const { tier, totals, created, purchased, sales, ledger, my_posts = [] } = data;
   const user = authUser?.id === data.user.id ? { ...data.user, ...authUser } : data.user;
   const counts = { created: created.length, purchased: purchased.length, sales: sales.length, ledger: ledger.length, posts: my_posts.length };
+  const logout = () => { leavingAccount.current = true; clearAuth(); navigate("/login", { replace: true }); };
   const pickTab = (key) => setSearchParams(key === "created" ? {} : { tab: key }, { replace: true });
   const moveTab = (event, index) => {
     const next = { ArrowRight: (index + 1) % filters.length, ArrowLeft: (index + filters.length - 1) % filters.length, Home: 0, End: filters.length - 1 }[event.key];
@@ -211,6 +218,11 @@ export default function MyPage() {
         <button className="me-tier-toggle" type="button" aria-label={"등급 안내 · " + tier.name} aria-haspopup="dialog" onClick={() => setTierOpen(true)}><TierIcon name={tier.name} size={22} /><span>{tier.name}</span><CaretRightIcon size={14} aria-hidden="true" /></button></div>
         {user.bio ? <p className="me-bio">{user.bio}</p> : null}
         <div className="me-identity-footer"><p className="me-joined num">{joinedLabel(user.created_at)}</p></div>
+        <div className="me-profile-actions">
+          <button type="button" aria-expanded={keyOpen} aria-controls="me-member-key" onClick={() => setKeyOpen(!keyOpen)}><KeyIcon size={18} aria-hidden="true" />회원 키</button>
+          <button type="button" onClick={logout}><SignOutIcon size={18} aria-hidden="true" />로그아웃</button>
+        </div>
+        {keyOpen ? <section id="me-member-key" className="me-member-key" aria-label="회원 키 관리"><RunnerKeyPanel key={token} menu /></section> : null}
       </div>
     </aside>
     <div className="me-content">

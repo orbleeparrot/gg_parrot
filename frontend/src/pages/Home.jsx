@@ -79,11 +79,12 @@ function HomeEntryHero({ onLeaderboard, onGuide, staticLayout = false }) {
       </nav>
 
       {!staticLayout ? <div className="home-entry-mascot" aria-hidden="true">
-        {/* 벡터라 해상도별 사본이 필요 없다. 이전엔 480/800/1180 webp 3종 + png
-            폴백(609KB)을 두었는데, SVG 한 장(24KB)이 그보다 작고 어떤 배율에서도
-            선명하다. LCP 이미지라 eager + fetchPriority 는 유지한다. */}
+        {/* 관절별 그룹에 CSS 애니메이션(8초 반복)이 들어 있는 SVG — <img> 로 넣어도
+            움직이고, 스크립트가 없어 안전하다. 벡터라 해상도별 사본이 필요 없고
+            LCP 이미지라 eager + fetchPriority 는 유지한다. 이전 정지 버전은
+            ggparrot-sunglasses-hero-v2.svg. */}
         <img
-          src="/brand/ggparrot-sunglasses-hero-v2.svg"
+          src="/brand/ggparrot-hero-articulated.svg"
           alt=""
           width="1180"
           height="1120"

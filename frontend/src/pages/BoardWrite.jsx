@@ -26,15 +26,7 @@ function Composer({ initial, onSaved, onCancel }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [count, setCount] = useState(0);
-  const input = useRef(null);
   const editor = useRef(null);
-
-  function pickImages(e) {
-    setErr("");
-    const picked = Array.from(e.target.files || []);
-    e.target.value = ""; // 같은 파일을 다시 골라도 change 가 나게
-    if (picked.length) editor.current?.insertFiles(picked);
-  }
 
   async function submit() {
     setErr("");
@@ -77,16 +69,10 @@ function Composer({ initial, onSaved, onCancel }) {
       </div>
       <p className="board-form-error" role={err ? "alert" : undefined}>{err}</p>
       <div className="board-composer-foot">
-        <div className="board-attach">
-          <button type="button" className="btn btn-s btn-secondary" onClick={() => input.current?.click()} disabled={count >= MAX_IMAGES}>
-            사진 첨부
-          </button>
-          <input ref={input} type="file" accept="image/png,image/jpeg" multiple onChange={pickImages} />
-          <span className="board-hint">
-            {count > 0 ? <><b className="num">{count}</b>/{MAX_IMAGES}장 · </> : null}
-            사진은 커서 자리에 들어가고 끌어서 옮기거나 모서리로 크기를 바꿔요 · JPG·PNG · 한 장에 2MB · {MAX_IMAGES}장까지
-          </span>
-        </div>
+        <span className="board-hint">
+          {count > 0 ? <><b className="num">{count}</b>/{MAX_IMAGES}장 · </> : null}
+          사진은 도구 줄의 사진 버튼이나 붙여넣기·끌어다 놓기로 · JPG·PNG · 한 장에 2MB · {MAX_IMAGES}장까지
+        </span>
         <div className="board-composer-actions">
           <button type="button" onClick={onCancel} className="btn btn-m btn-secondary">취소</button>
           <button type="button" onClick={submit} disabled={busy} className="btn btn-m btn-primary">

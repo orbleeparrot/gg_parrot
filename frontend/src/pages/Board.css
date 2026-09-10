@@ -55,8 +55,6 @@
 .board-rich img[data-align="center"], .board-editor .board-img[data-align="center"] { margin-left: auto; margin-right: auto; }
 .board-rich img[data-align="right"], .board-editor .board-img[data-align="right"] { margin-left: auto; }
 .board-composer-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.board-attach { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; }
-.board-attach input { display: none; }
 .board-hint { color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 500; }
 .board-composer-actions { display: flex; gap: 8px; }
 

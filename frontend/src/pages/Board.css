@@ -328,7 +328,7 @@
 /* ── 댓글 쓰기 — [사진 32 · 닉네임] 한 줄(세로 가운데 맞춤) → 입력칸(닉네임 열에 맞춰 42px 들여쓰기) → 오른쪽 아래 등록 ── */
 .board-comment-form { margin-top: 16px; display: grid; gap: 8px; }
 .board-comment-form-head { display: flex; align-items: center; gap: 10px; height: 32px; }
-.board-comment-form-head .user-avatar { flex: none; display: block; }
+.board-comment-form-head .user-avatar { flex: none; }
 .board-comment-form-name { color: rgb(var(--c-slate-900)); font-size: 14px; line-height: 1; font-weight: 700; }
 .board-comment-form-input { width: calc(100% - 42px); margin-left: 42px; height: auto; min-height: 72px; padding-block: 10px; resize: vertical; }
 .board-comment-form-foot { display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding-left: 42px; }

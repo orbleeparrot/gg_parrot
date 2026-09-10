@@ -27,6 +27,7 @@ from sqlalchemy.orm import defer
 from sqlmodel import select
 
 from . import avatars
+from .moderation import require_clean_text
 from .db import BoardComment, BoardImage, BoardPost, BoardPostVote, BoardReport, User, UserAvatar, get_session
 
 MAX_TITLE = 120
@@ -303,8 +304,11 @@ def create_post(user: User, title: str, body: str, images: list[tuple[bytes, str
     if not title:
         raise ValueError("제목을 입력해 주세요.")
     title = title[:MAX_TITLE]
+    require_clean_text(title, "제목")
     is_html = body_format == "html"
     body = (body or "").strip()[:MAX_BODY * (4 if is_html else 1)]
+    if not is_html:
+        require_clean_text(body, "본문")
     images = list(images or [])
     if len(images) > MAX_IMAGES:
         raise ValueError(f"사진은 {MAX_IMAGES}장까지 붙일 수 있어요.")
@@ -334,6 +338,7 @@ def create_post(user: User, title: str, body: str, images: list[tuple[bytes, str
             db.flush()
         if is_html:
             row.body = sanitize_body_html(_resolve_new_images(body, row.id, stored))
+            require_clean_text(row.body, "본문", html=True)
             # 본문이 가리키지 않는 새 사진은 남기지 않는다.
             referenced = _referenced_image_ids(row.body, row.id)
             kept = []
@@ -590,6 +595,9 @@ def update_post(post_id: int, user: User, title: str, body: str,
         row, legacy_image = found
         if row.author_user_id != user.id:
             raise PermissionError("본인이 쓴 글만 고칠 수 있어요.")
+        require_clean_text(title, "제목")
+        if not is_html:
+            require_clean_text(body, "본문")
         existing = sorted(db.exec(select(BoardImage).options(defer(BoardImage.image_data, raiseload=True)).where(BoardImage.post_id == post_id)).all(),
                           key=lambda i: (i.position, i.id or 0))
         if len(existing) + int(legacy_image) + len(new_images) > MAX_IMAGES:
@@ -605,6 +613,7 @@ def update_post(post_id: int, user: User, title: str, body: str,
             db.flush()
         if is_html:
             body = sanitize_body_html(_resolve_new_images(body, post_id, added))
+            require_clean_text(body, "본문", html=True)
             keep = _referenced_image_ids(body, post_id)
         else:
             keep = {int(i) for i in keep_image_ids} | {img.id for img in added}
@@ -707,6 +716,8 @@ def add_comment(post_id: int, user: User, text: str, parent_id: int | None = Non
     text = (text or "").strip()
     if not text:
         raise ValueError("댓글 내용을 입력해 주세요.")
+    text = text[:MAX_COMMENT]
+    require_clean_text(text, "댓글")
     _check_rate(f"user:{user.id}")
     with (nullcontext(db) if db is not None else get_session()) as db:
         # Validate the post/reply and fetch the avatar version in one metadata query.
@@ -753,6 +764,7 @@ def edit_comment(comment_id: int, user: User, text: str, db=None) -> Optional[di
         row, version = found
         if row.author_user_id is None or row.author_user_id != user.id:
             raise PermissionError("본인이 쓴 댓글만 고칠 수 있어요.")
+        require_clean_text(text[:MAX_COMMENT], "댓글")
         row.text = text[:MAX_COMMENT]
         row.updated_ms = int(_now_utc().timestamp() * 1000)
         db.add(row)

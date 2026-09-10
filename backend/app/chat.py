@@ -9,6 +9,7 @@ from sqlmodel import select
 from . import avatars
 from .db import ChatMessage, ChatReadState, User, UserAvatar, get_session
 from .leaderboard import _kst_hhmm, today_start_ms
+from .moderation import require_clean_text
 
 MAX_LEN = 300
 MAX_LIST = 200
@@ -51,6 +52,7 @@ def add_message(account: User, text: str) -> dict:
     if not text:
         raise ValueError("빈 메시지는 보낼 수 없습니다.")
     text = text[:MAX_LEN]
+    require_clean_text(text, "메시지")
     with get_session() as db:
         author = _lock_member(db, int(account.id))
         # Timestamp after obtaining the lock: waiting senders must not insert an

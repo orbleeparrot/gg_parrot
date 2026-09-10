@@ -133,6 +133,7 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
   const [replyTo, setReplyTo] = useState(null); // 답장 대상 메시지
   const [reporting, setReporting] = useState(null); // 신고할 메시지
   const [copiedId, setCopiedId] = useState(0);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [macroList, setMacroList] = useState(null); // 매크로 고르기 목록(한 번 받아 둔다)
   const [pickIndex, setPickIndex] = useState(0);
   const [readError, setReadError] = useState("");
@@ -528,6 +529,12 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
                 <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M2.5 12s3.5-6.5 9.5-6.5 9.5 6.5 9.5 6.5-3.5 6.5-9.5 6.5S2.5 12 2.5 12Z" /><circle cx="12" cy="12" r="3" /></svg>
                 <input type="range" min="25" max="100" step="5" value={Math.round(opacity * 100)} onChange={changeOpacity} aria-label="채팅창 불투명도" aria-valuetext={`${Math.round(opacity * 100)}%`} />
               </label>
+              <button type="button" className="chat-tool" onClick={() => setShortcutsOpen(true)} aria-label="빠른 입력 도움말" title="빠른 입력">
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <rect x="2.5" y="6" width="19" height="12" rx="2.5" />
+                  <path d="M6 9.5h.01M9.5 9.5h.01M13 9.5h.01M16.5 9.5h.01M6 13h.01M18 13h.01M9 16h6" />
+                </svg>
+              </button>
               <button type="button" className="chat-close" onClick={close} aria-label="채팅 닫기"><svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m4 4 8 8M12 4l-8 8" /></svg></button>
             </div>
           </header>
@@ -678,6 +685,40 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
               {member && menu.message.user_id !== member.id ? (
                 <button type="button" role="menuitem" className="is-danger" onClick={() => { setReporting(menu.message); setMenu(null); }}>신고</button>
               ) : null}
+            </div>,
+            document.body,
+          ) : null}
+          {shortcutsOpen ? createPortal(
+            <div className="scrim fixed inset-0 z-[95] grid place-items-center p-4" onMouseDown={(event) => { if (event.target === event.currentTarget) setShortcutsOpen(false); }}>
+              <div role="dialog" aria-modal="true" aria-labelledby="chat-shortcuts-title" className="dialog chat-shortcuts">
+                <h2 id="chat-shortcuts-title" className="t-h4 text-slate-900">빠른 입력</h2>
+                <p className="mt-3 t-small text-slate-700">채팅을 더 빠르게 쓰는 방법이에요.</p>
+                <dl className="chat-shortcut-list">
+                  <div>
+                    <dt><kbd>/</kbd></dt>
+                    <dd><b>매크로 언급</b><span>입력칸에 <kbd>/</kbd> 를 치면 오늘의 매크로 목록이 떠요. <kbd>/BTC</kbd> 처럼 이어 치면 종목·글쓴이·전략으로 좁혀지고, 고르면 채팅에 매크로 카드로 보여요.</span></dd>
+                  </div>
+                  <div>
+                    <dt><kbd>↑</kbd><kbd>↓</kbd><kbd>Enter</kbd></dt>
+                    <dd><b>목록에서 고르기</b><span>매크로 목록이 떠 있을 때 위아래로 옮기고 <kbd>Enter</kbd> 로 넣어요. <kbd>Esc</kbd> 로 닫아요.</span></dd>
+                  </div>
+                  <div>
+                    <dt><kbd>Enter</kbd></dt>
+                    <dd><b>보내기</b><span>줄을 바꾸려면 <kbd>Shift</kbd> + <kbd>Enter</kbd>. 입력칸은 줄이 늘면 위로 커져요.</span></dd>
+                  </div>
+                  <div>
+                    <dt><span className="chat-shortcut-mouse">오른쪽 클릭</span></dt>
+                    <dd><b>답장 · 복사 · 신고</b><span>메시지를 오른쪽 클릭하면 나와요. 답장하면 상대 말이 인용돼요.</span></dd>
+                  </div>
+                  <div>
+                    <dt><span className="chat-shortcut-mouse">깃털 버튼</span></dt>
+                    <dd><b>스티커</b><span>작성줄 왼쪽 깃털을 누르면 껄무새 표정 6종을 바로 보낼 수 있어요.</span></dd>
+                  </div>
+                </dl>
+                <div className="confirm-dialog-actions">
+                  <button type="button" className="btn btn-l w-full btn-primary" onClick={() => setShortcutsOpen(false)}>닫기</button>
+                </div>
+              </div>
             </div>,
             document.body,
           ) : null}

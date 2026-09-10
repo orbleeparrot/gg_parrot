@@ -136,7 +136,7 @@ def main():
                 page.locator('.account-trigger').tap()
                 expect(page).to_have_url(origin + '/mypage')
                 expect(page.get_by_role('dialog', name='계정 메뉴', exact=True)).to_have_count(0)
-                expect(page.get_by_role('button', name='회원 키', exact=True)).to_be_visible()
+                expect(page.get_by_role('button', name='회원 키 관리', exact=True)).to_have_count(0)
                 expect(page.get_by_role('button', name='로그아웃', exact=True)).to_be_visible()
                 bounds(page)
                 page.screenshot(path=str(OUTPUT / f'account-{width}.png'), animations='disabled')

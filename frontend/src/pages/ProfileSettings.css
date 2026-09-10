@@ -22,6 +22,7 @@
 .profile-settings-security-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; min-height: 92px; padding-block: 20px; border-top: 1px solid rgb(var(--c-slate-200)); }
 .profile-settings-security-row h3 { margin: 0; font-size: 15px; line-height: 1.4; font-weight: 600; }
 .profile-settings-security-row .btn { flex: none; min-height: 44px; font-size: 14px; }
+.profile-settings-key-panel { min-width: 0; padding-bottom: 16px; }
 .profile-settings-session-actions { display: flex; align-items: center; gap: 12px; margin-top: 16px; padding-top: 24px; border-top: 1px solid rgb(var(--c-slate-200)); }
 .profile-settings-session-actions .btn { min-height: 44px; font-size: 14px; }
 .profile-settings-session-actions .profile-settings-withdrawal { margin-left: auto; color: rgb(var(--c-red-600)); }

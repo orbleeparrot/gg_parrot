@@ -6,12 +6,24 @@ import { ShieldCheckIcon } from "@phosphor-icons/react/dist/csr/ShieldCheck";
 import { api } from "../api.js";
 import { clearAuth, getAuthUser, getToken, mergeFetchedAuthUser, setAuth, updateAuthUser, useAuth } from "../lib/auth.js";
 import ProfileEditor, { DeleteAccountDialog, PasswordChangeDialog } from "../components/ProfileEditor.jsx";
+import { RunnerKeyPanel } from "../components/RunnerSessions.jsx";
 import "./ProfileSettings.css";
 
 function hasProfile(user) {
   return user?.id != null && typeof user.username === "string" && typeof user.email === "string"
     && typeof user.bio === "string" && typeof user.can_change_password === "boolean"
     && Object.prototype.hasOwnProperty.call(user, "avatar_url");
+}
+
+function MemberKeySettings() {
+  const [open, setOpen] = useState(false);
+  return <div className="profile-settings-member-key">
+    <div className="profile-settings-security-row">
+      <h3>회원 키</h3>
+      <button type="button" className="btn btn-m btn-secondary" aria-label="회원 키 관리" aria-expanded={open} aria-controls="profile-settings-member-key" onClick={() => setOpen((value) => !value)}>{open ? "닫기" : "관리"}</button>
+    </div>
+    {open ? <div id="profile-settings-member-key" className="profile-settings-key-panel"><RunnerKeyPanel menu /></div> : null}
+  </div>;
 }
 
 export default function ProfileSettings() {
@@ -106,6 +118,7 @@ export default function ProfileSettings() {
                 <div><dt>로그인 방식</dt><dd>{typeof user.can_change_password === "boolean" ? (user.can_change_password ? "이메일 · 비밀번호" : "Google 로그인") : "불러오는 중…"}</dd></div>
               </dl>
               {user.can_change_password ? <div className="profile-settings-security-row"><h3>비밀번호</h3><button type="button" className="btn btn-m btn-secondary" aria-haspopup="dialog" onClick={() => setDialog("password")}>비밀번호 변경</button></div> : null}
+              {security ? <MemberKeySettings key={accountKey} /> : null}
               <div className="profile-settings-session-actions">
                 <button type="button" className="btn btn-m btn-secondary" onClick={logout}>로그아웃</button>
                 <button type="button" className="btn btn-m btn-ghost profile-settings-withdrawal" aria-haspopup="dialog" disabled={typeof user.can_change_password !== "boolean"} onClick={() => setDialog("delete")}>회원 탈퇴</button>

@@ -1,4 +1,4 @@
-"""Header-to-profile navigation, member key controls and profile logout.
+"""Header-to-profile navigation, security-page member key controls and logout.
 
 FRONTEND_BUILD and BROWSER_EXECUTABLE_PATH select a local build and Chromium.
 PROFILE_ACCOUNT_OUTPUT selects screenshots/reports. All APIs use local fixtures.
@@ -64,10 +64,14 @@ def main():
                     header.click()
                     expect(page).to_have_url(re.compile(r'/mypage$'))
                     expect(page.get_by_role('dialog', name='계정 메뉴')).to_have_count(0)
-                    toggle = page.get_by_role('button', name='회원 키', exact=True)
-                    expect(toggle).to_be_visible()
+                    toggle = page.get_by_role('button', name='회원 키 관리', exact=True)
+                    expect(toggle).to_have_count(0)
                     assert not fixture.key_calls
                     suite.screenshot(page, f'profile-{width}-{theme}')
+                    page.get_by_role('link', name='프로필 설정', exact=True).click()
+                    expect(page).to_have_url(re.compile(r'/mypage/settings\?tab=security$'))
+                    expect(toggle).to_be_visible()
+                    assert not fixture.key_calls
                     toggle.click()
                     key = page.get_by_label('회원 키', exact=True)
                     expect(key).to_have_attribute('type', 'password')
@@ -87,37 +91,42 @@ def main():
                     expect(key).to_have_value('fixture-only-fixture-a-key-1')
                     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
                     suite.screenshot(page, f'member-key-{width}-{theme}')
+                    navigation = page.get_by_role('navigation', name='설정 메뉴')
+                    navigation.get_by_role('link', name='프로필', exact=True).click()
+                    expect(page.locator('#profile-settings-member-key')).to_have_count(0)
+                    navigation.get_by_role('link', name='계정 및 보안', exact=True).click()
+                    expect(toggle).to_have_attribute('aria-expanded', 'false')
                     page.get_by_role('button', name='로그아웃', exact=True).click()
                     expect(page).to_have_url(re.compile(r'/login$'))
                     assert page.evaluate("localStorage.getItem('ggp_token')") is None
-                    expect(page.locator('#me-member-key')).to_have_count(0)
+                    expect(page.locator('#profile-settings-member-key')).to_have_count(0)
                     suite.record(f'header-key-logout-{width}-{theme}', fixture)
                     context.close()
 
             fixture = Fixture(); fixture.fail_key = True
-            context, page = suite.open(fixture, 390)
-            toggle = page.get_by_role('button', name='회원 키', exact=True)
+            context, page = suite.open(fixture, 390, path='/mypage/settings?tab=security')
+            toggle = page.get_by_role('button', name='회원 키 관리', exact=True)
             toggle.click()
-            expect(page.locator('#me-member-key [role="alert"]')).to_be_visible()
+            expect(page.locator('#profile-settings-member-key [role="alert"]')).to_be_visible()
             toggle.click(); fixture.fail_key = False; toggle.click()
             key = page.get_by_label('회원 키', exact=True)
             expect(key).to_have_attribute('type', 'password')
             page.evaluate("Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async()=>{throw new Error('denied')}}})")
             page.get_by_role('button', name='복사', exact=True).click()
             expect(key).to_have_attribute('type', 'text')
-            expect(page.locator('#me-member-key [role="alert"]')).to_contain_text('직접 복사')
+            expect(page.locator('#profile-settings-member-key [role="alert"]')).to_contain_text('직접 복사')
             suite.record('key-fetch-retry-and-clipboard-fallback', fixture); context.close()
 
             fixture = Fixture(); fixture.hold_key = True
-            context, page = suite.open(fixture, 390)
-            page.get_by_role('button', name='회원 키', exact=True).click()
-            expect(page.locator('#me-member-key [role="status"]')).to_be_visible()
+            context, page = suite.open(fixture, 390, path='/mypage/settings?tab=security')
+            page.get_by_role('button', name='회원 키 관리', exact=True).click()
+            expect(page.locator('#profile-settings-member-key [role="status"]')).to_be_visible()
             page.evaluate("user=>{localStorage.setItem('ggp_token','fixture-b');localStorage.setItem('ggp_user',JSON.stringify(user));window.dispatchEvent(new StorageEvent('storage',{key:'ggp_token'}))}", fixture.users['fixture-b'])
-            expect(page.locator('.me-name')).to_have_text('다른회원')
-            expect(page.locator('#me-member-key')).to_have_count(0)
+            expect(page.locator('.profile-settings-account')).to_contain_text(fixture.users['fixture-b']['email'])
+            expect(page.locator('#profile-settings-member-key')).to_have_count(0)
             fixture.hold_key = False
             for route, payload in fixture.held_keys: route.fulfill(json=payload)
-            page.get_by_role('button', name='회원 키', exact=True).click()
+            page.get_by_role('button', name='회원 키 관리', exact=True).click()
             expect(page.get_by_label('회원 키', exact=True)).to_have_value('fixture-only-fixture-b-key-0')
             suite.record('late-key-response-cannot-cross-accounts', fixture); context.close()
             browser.close()

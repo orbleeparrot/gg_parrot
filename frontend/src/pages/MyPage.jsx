@@ -3,9 +3,7 @@ import { createPortal } from "react-dom";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api.js";
 import { clearAuth, getAuthUser, getToken, mergeFetchedAuthUser, updateAuthUser, useAuth } from "../lib/auth.js";
-import { KeyIcon } from "@phosphor-icons/react/dist/csr/Key";
 import { SignOutIcon } from "@phosphor-icons/react/dist/csr/SignOut";
-import { RunnerKeyPanel } from "../components/RunnerSessions.jsx";
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
 import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
 import { SquaresFourIcon } from "@phosphor-icons/react/dist/csr/SquaresFour";
@@ -159,7 +157,6 @@ export default function MyPage() {
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
   const [tierOpen, setTierOpen] = useState(false);
-  const [keyOpen, setKeyOpen] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const param = searchParams.get("tab");
   const tab = TAB_KEYS.has(param) ? param : "created";
@@ -170,7 +167,6 @@ export default function MyPage() {
     setData(null);
     setError("");
     setTierOpen(false);
-    setKeyOpen(false);
     if (!token) { if (!leavingAccount.current) navigate("/login?next=%2Fmypage", { replace: true }); return; }
     let alive = true;
     const controller = new AbortController();
@@ -219,10 +215,8 @@ export default function MyPage() {
         {user.bio ? <p className="me-bio">{user.bio}</p> : null}
         <div className="me-identity-footer"><p className="me-joined num">{joinedLabel(user.created_at)}</p></div>
         <div className="me-profile-actions">
-          <button type="button" aria-expanded={keyOpen} aria-controls="me-member-key" onClick={() => setKeyOpen(!keyOpen)}><KeyIcon size={18} aria-hidden="true" />회원 키</button>
           <button type="button" onClick={logout}><SignOutIcon size={18} aria-hidden="true" />로그아웃</button>
         </div>
-        {keyOpen ? <section id="me-member-key" className="me-member-key" aria-label="회원 키 관리"><RunnerKeyPanel key={token} menu /></section> : null}
       </div>
     </aside>
     <div className="me-content">

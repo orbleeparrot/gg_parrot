@@ -164,14 +164,28 @@
 /* ── 제목 옆 글 수, 제목 아래 왼쪽 검색(그누보드식), 오른쪽 정렬 + 글쓰기 ── */
 .board-title-count { margin-left: 12px; color: rgb(var(--c-slate-500)); font-size: 15px; font-weight: 500; letter-spacing: 0; vertical-align: 6px; }
 .board-title-count .num { color: rgb(var(--c-slate-700)); font-weight: 600; }
-.board-searchbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.board-searchbar-field { width: 116px; padding-right: 28px; appearance: auto; }
-.board-searchbar-input { width: 240px; }
+.board-page .page-head-sub { margin-top: 24px; } /* 제목과 검색·정렬 줄 사이 숨 */
+.board-searchbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* 범위 드롭다운 — 브라우저 기본 대신 우리 입력칸 모양 + 오른쪽 화살표(currentColor 라 테마를 따라간다). */
+.board-select { position: relative; display: inline-flex; }
+.board-select select { width: 124px; padding-right: 30px; appearance: none; -webkit-appearance: none; cursor: pointer; color: rgb(var(--c-slate-900)); font-weight: 600; }
+.board-select::after { content: ""; position: absolute; right: 13px; top: 50%; width: 7px; height: 7px; margin-top: -5px; border-right: 2px solid rgb(var(--c-slate-500)); border-bottom: 2px solid rgb(var(--c-slate-500)); transform: rotate(45deg); pointer-events: none; }
+.board-select:hover::after { border-color: rgb(var(--c-slate-900)); }
+/* 검색어 칸 — 돋보기(와 검색 중이면 지우기)는 칸 안 오른쪽에. */
+.board-search { position: relative; display: inline-flex; }
+.board-search .field { width: 260px; padding-right: 40px; }
+.board-search:has(.board-search-clear) .field { padding-right: 68px; }
+.board-search-go, .board-search-clear { position: absolute; top: 4px; width: 32px; height: 32px; display: grid; place-items: center; border-radius: 9px; color: rgb(var(--c-slate-500)); }
+.board-search-go { right: 4px; }
+.board-search-clear { right: 34px; font-size: 12px; font-weight: 700; }
+.board-search-go:hover, .board-search-clear:hover { color: rgb(var(--c-slate-900)); background: rgb(var(--c-slate-200)); }
+.board-search-go svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.board-search-go:focus-visible, .board-search-clear:focus-visible, .board-select select:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
 .board-sort .seg-item { height: 32px; padding: 0 10px; font-size: 13px; }
 @media (max-width: 639px) {
-  .board-searchbar { display: grid; grid-template-columns: 104px minmax(0, 1fr) auto; }
-  .board-searchbar-field { width: auto; }
-  .board-searchbar-input { width: auto; }
+  .board-searchbar { display: grid; grid-template-columns: 112px minmax(0, 1fr); }
+  .board-select select { width: 100%; }
+  .board-search .field { width: 100%; }
   .board-sort { order: 2; }
 }
 

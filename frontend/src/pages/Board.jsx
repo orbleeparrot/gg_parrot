@@ -5,11 +5,11 @@ import { useAuth } from "../lib/auth.js";
 import { boardFullTime, boardTime, kstDateTime, pageWindow } from "../lib/boardText.js";
 import { PageHeader, EmptyState, ErrorNote } from "../components/Page.jsx";
 import { writePath } from "./BoardWrite.jsx";
-import { ChevronLeftIcon, ChevronRightIcon, ImageIcon } from "../components/boardIcons.jsx";
+import { ChevronLeftIcon, ChevronRightIcon, ImageIcon, SearchIcon } from "../components/boardIcons.jsx";
 import { AuthorAvatar } from "../components/UserAvatar.jsx";
 import "./Board.css";
 
-const PAGE_SIZE = 10;
+const PAGE_SIZE = 13; // 첫 화면에 표가 조금 더 차게(1000px 높이 기준)
 
 // 쪽 이동 — 단일 선택이라 segmented 문법(§6). 현재 쪽만 면 배경, 앞뒤는 화살표.
 function Pager({ page, pages, onGo }) {
@@ -52,19 +52,23 @@ export function TableHead() {
 const SORTS = [["new", "최신순"], ["likes", "추천순"], ["views", "조회순"], ["comments", "댓글순"]];
 const FIELDS = [["all", "제목+내용"], ["title", "제목"], ["author", "글쓴이"]];
 
-// 검색 — 그누보드식 `[제목+내용 ▾][검색어][검색]`. 제목 줄 아래 왼쪽.
+// 검색 — 제목 줄 아래 왼쪽. 범위 드롭다운(우리 입력칸 모양 + 화살표)과 검색어 칸 안의 돋보기·지우기.
 function SearchBar({ q, field, onSearch }) {
   const [draft, setDraft] = useState(q);
   const [where, setWhere] = useState(field);
   useEffect(() => { setDraft(q); setWhere(field); }, [q, field]);
   return (
     <form className="board-searchbar" role="search" onSubmit={(e) => { e.preventDefault(); onSearch({ q: draft.trim(), field: where }); }}>
-      <select value={where} onChange={(e) => setWhere(e.target.value)} className="field field-sm board-searchbar-field" aria-label="검색 범위">
-        {FIELDS.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
-      </select>
-      <input value={draft} onChange={(e) => setDraft(e.target.value)} className="field field-sm board-searchbar-input" placeholder="검색어" aria-label="검색어" maxLength={80} />
-      <button type="submit" className="btn btn-s btn-secondary">검색</button>
-      {q ? <Link to="/board" className="btn btn-s btn-ghost">지우기</Link> : null}
+      <span className="board-select">
+        <select value={where} onChange={(e) => setWhere(e.target.value)} className="field field-sm" aria-label="검색 범위">
+          {FIELDS.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+        </select>
+      </span>
+      <span className="board-search">
+        <input value={draft} onChange={(e) => setDraft(e.target.value)} className="field field-sm" placeholder="검색어" aria-label="검색어" maxLength={80} />
+        {q ? <button type="button" className="board-search-clear" aria-label="검색 지우기" onClick={() => onSearch({ q: "", field: "all" })}>✕</button> : null}
+        <button type="submit" className="board-search-go" aria-label="검색"><SearchIcon /></button>
+      </span>
     </form>
   );
 }

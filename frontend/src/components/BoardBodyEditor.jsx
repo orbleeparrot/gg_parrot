@@ -141,13 +141,13 @@ const BoardBodyEditor = forwardRef(function BoardBodyEditor({ initialHtml = "", 
       if (f.size > MAX_IMAGE_BYTES) return onError?.(`${f.name} — 사진은 한 장에 2MB 이하만 올릴 수 있어요.`);
     }
     if (picked.length > room) onError?.(`사진은 ${maxImages}장까지 붙일 수 있어요. 앞의 ${room}장만 붙였어요.`);
-    const chain = editor.chain().focus();
-    for (const f of picked.slice(0, room)) {
+    // 한 번에 넣는다 — setImage 를 잇달아 부르면 방금 넣어 골라진 사진 자리에 다음 사진이 덮어써서 한 장만 남는다.
+    const nodes = picked.slice(0, room).map((f) => {
       const url = URL.createObjectURL(f);
       files.current.set(url, f);
-      chain.setImage({ src: url, alt: "" });
-    }
-    chain.run();
+      return { type: "image", attrs: { src: url, alt: "" } };
+    });
+    editor.chain().focus().insertContent([...nodes, { type: "paragraph" }]).run();
   }
 
   function setLink() {

@@ -2703,10 +2703,10 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   text-wrap: balance;
 }
 
-/* 소개 제목의 강조 — 손으로 그은 듯한 브랜드색 두 줄(SVG 배경, 2026-09-10). 줄이 바뀌면 조각마다 다시 긋는다(box-decoration-break). */
+/* 소개 제목의 강조 — 마커로 힘 있게 두 번 그은 듯한 브랜드색 두 획(SVG 배경, 2026-09-10). 곧고 굵고 살짝 기울었다. 줄이 바뀌면 조각마다 다시 긋는다(box-decoration-break). */
 .home-entry-copy h1 span {
   text-decoration: none;
-  background-image: url("data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20viewBox=%220%200%20200%2022%22%20preserveAspectRatio=%22none%22%3E%3Cpath%20d=%22M4%207.5%20C%2038%203.5,%2082%2011,%20124%207%20S%20178%204.5,%20196%206.5%22%20fill=%22none%22%20stroke=%22%23fcd535%22%20stroke-width=%222.2%22%20stroke-linecap=%22round%22%20vector-effect=%22non-scaling-stroke%22/%3E%3Cpath%20d=%22M8%2015.5%20C%2050%2019.5,%2096%2012.5,%20140%2015.5%20S%20184%2018,%20193%2014.5%22%20fill=%22none%22%20stroke=%22%23fcd535%22%20stroke-width=%221.8%22%20stroke-linecap=%22round%22%20opacity=%22.92%22%20vector-effect=%22non-scaling-stroke%22/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20viewBox=%220%200%20200%2020%22%20preserveAspectRatio=%22none%22%3E%3Cpolygon%20points=%221,3.6%20199,1.2%20199.5,6.4%200.5,8.6%22%20fill=%22%23fcd535%22/%3E%3Cpolygon%20points=%225,12.2%20196,13.6%20195,18.4%204,16.8%22%20fill=%22%23fcd535%22/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: 0 100%;
   background-size: 100% 0.34em;
@@ -3610,7 +3610,7 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   color: inherit;
   background-color: transparent;
   text-decoration: none;
-  background-image: url("data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20viewBox=%220%200%20200%2022%22%20preserveAspectRatio=%22none%22%3E%3Cpath%20d=%22M4%207.5%20C%2038%203.5,%2082%2011,%20124%207%20S%20178%204.5,%20196%206.5%22%20fill=%22none%22%20stroke=%22%23fcd535%22%20stroke-width=%222.2%22%20stroke-linecap=%22round%22%20vector-effect=%22non-scaling-stroke%22/%3E%3Cpath%20d=%22M8%2015.5%20C%2050%2019.5,%2096%2012.5,%20140%2015.5%20S%20184%2018,%20193%2014.5%22%20fill=%22none%22%20stroke=%22%23fcd535%22%20stroke-width=%221.8%22%20stroke-linecap=%22round%22%20opacity=%22.92%22%20vector-effect=%22non-scaling-stroke%22/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20viewBox=%220%200%20200%2020%22%20preserveAspectRatio=%22none%22%3E%3Cpolygon%20points=%221,3.6%20199,1.2%20199.5,6.4%200.5,8.6%22%20fill=%22%23fcd535%22/%3E%3Cpolygon%20points=%225,12.2%20196,13.6%20195,18.4%204,16.8%22%20fill=%22%23fcd535%22/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: 0 100%;
   background-size: 100% 0.34em;

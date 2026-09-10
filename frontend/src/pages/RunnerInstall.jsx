@@ -3,12 +3,34 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { RunnerKeyPanel } from "../components/RunnerSessions.jsx";
 import RunnerLaunchGuide from "../components/RunnerLaunchGuide.jsx";
+import RunnerDeviceHandoff from "../components/RunnerDeviceHandoff.jsx";
 import { PageHeader } from "../components/Page.jsx";
 import { useAuth } from "../lib/auth.js";
 import { fmtSize, isRunnerOpened, markRunnerOpened, useRunnerDownload } from "../lib/runnerDownload.js";
+import { getRunnerDevice } from "../lib/runnerDevice.js";
 import "./RunnerInstall.css";
 
 export default function RunnerInstall() {
+  const device = getRunnerDevice();
+  if (device.canRunWindowsRunner) return <WindowsRunnerInstall />;
+  return (
+    <div className="runner-install">
+      <div className="runner-install-heading">
+        <PageHeader title="껄무새 매크로 실행기" />
+        <img className="runner-install-mascot" src="/brand/navigation/ggparrot-nav-agent.svg" alt="" width="96" height="96" draggable="false" />
+      </div>
+      <div className="runner-install-layout is-device-limited">
+        <div className="runner-install-side">
+          <RunnerDeviceHandoff installation isMobile={device.isMobile} />
+          <p className="runner-install-device-key t-small text-slate-700">거래소 API 키와 시크릿은 Windows 실행기에만 입력하세요.</p>
+        </div>
+        <div className="runner-install-media"><RunnerLaunchGuide /></div>
+      </div>
+    </div>
+  );
+}
+
+function WindowsRunnerInstall() {
   const { token } = useAuth();
   const download = useRunnerDownload();
   const [opened] = useState(isRunnerOpened);

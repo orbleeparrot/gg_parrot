@@ -124,6 +124,13 @@ export default function App() {
     setMobileNavigationOpen(false);
   }, [pathname]);
 
+  useEffect(() => {
+    const desktop = window.matchMedia("(min-width: 1100px)");
+    const closeOnDesktop = () => { if (desktop.matches) setMobileNavigationOpen(false); };
+    desktop.addEventListener("change", closeOnDesktop);
+    return () => desktop.removeEventListener("change", closeOnDesktop);
+  }, []);
+
   return (
     <div className={`${isStart ? "home-shell" : "min-h-screen"} ${authShell ? "site-auth-layout" : "site-product-layout"}${hasMarquee ? " has-site-marquee" : ""}`}>
       <a href="#main-content" className="skip-link">본문으로 건너뛰기</a>
@@ -139,6 +146,7 @@ export default function App() {
           hasSidebar={!authShell}
           onOpenNavigation={() => setMobileNavigationOpen(true)}
           menuButtonRef={menuButtonRef}
+          navigationOpen={mobileNavigationOpen}
         />
         {/* [차후 도입] <WhaleBanner /> */}
         <main

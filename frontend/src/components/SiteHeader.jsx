@@ -10,7 +10,7 @@ import { RunnerKeyPanel } from "./RunnerSessions.jsx";
 import { ChevronDownIcon, DownloadIcon, HelpIcon, MenuIcon, UserIcon } from "./utilityIcons.jsx";
 import "./SiteHeader.css";
 
-export default function SiteHeader({ hasSidebar, onOpenNavigation, menuButtonRef }) {
+export default function SiteHeader({ hasSidebar, onOpenNavigation, menuButtonRef, navigationOpen }) {
   const { token } = useAuth();
 
   return (
@@ -18,7 +18,7 @@ export default function SiteHeader({ hasSidebar, onOpenNavigation, menuButtonRef
       <div className="site-header-inner">
         <div className="site-header-leading">
           {hasSidebar ? (
-            <button ref={menuButtonRef} type="button" onClick={onOpenNavigation} className="site-mobile-menu-button" aria-label="페이지 메뉴 열기" aria-controls="site-mobile-navigation">
+            <button ref={menuButtonRef} type="button" onClick={onOpenNavigation} className="site-mobile-menu-button" aria-label="페이지 메뉴 열기" aria-controls="site-mobile-navigation" aria-expanded={navigationOpen}>
               <MenuIcon />
             </button>
           ) : null}

@@ -1,5 +1,8 @@
 import { useEffect, useRef } from "react";
 import { NavLink, useLocation } from "react-router-dom";
+import ThemeToggle from "./ThemeToggle.jsx";
+import { DownloadIcon, HelpIcon } from "./utilityIcons.jsx";
+import { lockBodyScroll } from "../lib/bodyScrollLock.js";
 
 const NAV_LINKS = [
   { to: "/agents", label: "내 에이전트", icon: "agent", matches: ["/agents"] },
@@ -103,7 +106,7 @@ function NavigationList({ pathname, onNavigate, tabIndex }) {
   );
 }
 
-function NavigationContents({ onNavigate, tabIndex }) {
+function NavigationContents({ onNavigate, tabIndex, mobile = false }) {
   const { pathname } = useLocation();
 
   return (
@@ -111,6 +114,17 @@ function NavigationContents({ onNavigate, tabIndex }) {
       <BrandLink onClick={onNavigate} className="site-sidebar-brand" />
       <nav className="site-side-nav" aria-label="전체 페이지">
         <NavigationList pathname={pathname} onNavigate={onNavigate} tabIndex={tabIndex} />
+        {mobile ? (
+          <div className="site-drawer-tools">
+            <NavLink to="/runner/install" onClick={onNavigate} tabIndex={tabIndex} className="site-drawer-tool">
+              <DownloadIcon /><span>실행기 설치</span><small>Windows PC</small>
+            </NavLink>
+            <NavLink to="/guide" onClick={onNavigate} tabIndex={tabIndex} className="site-drawer-tool">
+              <HelpIcon /><span>사용법</span>
+            </NavLink>
+            <ThemeToggle className="site-drawer-tool" showLabel />
+          </div>
+        ) : null}
       </nav>
       <div className="site-sidebar-bottom">
         <p>웹 결과는 모의 계산이며<br />투자 조언이 아니에요.</p>
@@ -124,8 +138,7 @@ export default function SiteNavigation({ mobileOpen, onClose, triggerRef }) {
 
   useEffect(() => {
     if (!mobileOpen) return undefined;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
+    const unlockBodyScroll = lockBodyScroll();
     const frame = window.requestAnimationFrame(() => drawerRef.current?.querySelector("a")?.focus());
     const onKeyDown = (event) => {
       if (event.key === "Escape") {
@@ -150,7 +163,7 @@ export default function SiteNavigation({ mobileOpen, onClose, triggerRef }) {
     document.addEventListener("keydown", onKeyDown);
     return () => {
       window.cancelAnimationFrame(frame);
-      document.body.style.overflow = previousOverflow;
+      unlockBodyScroll();
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [mobileOpen, onClose, triggerRef]);
@@ -172,11 +185,13 @@ export default function SiteNavigation({ mobileOpen, onClose, triggerRef }) {
         id="site-mobile-navigation"
         className={`site-mobile-drawer ${mobileOpen ? "is-open" : ""}`}
         aria-label="모바일 페이지 메뉴"
+        role={mobileOpen ? "dialog" : undefined}
+        aria-modal={mobileOpen ? true : undefined}
         aria-hidden={!mobileOpen}
         inert={mobileOpen ? undefined : ""}
       >
         <button type="button" onClick={onClose} className="site-drawer-close" aria-label="메뉴 닫기">×</button>
-        <NavigationContents onNavigate={onClose} tabIndex={mobileOpen ? undefined : -1} />
+        <NavigationContents mobile onNavigate={onClose} tabIndex={mobileOpen ? undefined : -1} />
       </aside>
     </>
   );

@@ -122,11 +122,37 @@
   .account-popover { position: fixed; top: 62px; right: 12px; width: min(256px, calc(100vw - 24px)); max-height: calc(100dvh - 74px); }
 }
 
-@media (max-width: 479px) {
-  .site-header-utility.header-tools { gap: 4px; }
-  .header-resource { width: 44px; gap: 0; }
-  .header-resource::before { inset: 2px; }
-  .header-resource > svg { width: 24px; height: 24px; }
-  .header-resource-label { display: none; }
-  .header-resource > .header-tooltip { display: block; }
+/* Touch has no hover state. Accessible labels remain on every control. */
+@media (hover: none), (pointer: coarse) {
+  .header-tooltip { display: none; }
+}
+
+@media (max-width: 1099px) {
+  .site-product-layout .header-resources,
+  .site-product-layout .header-personal > .header-theme { display: none; }
+  .site-product-layout .site-header .site-mobile-brand .site-brand-symbol { display: none; }
+  .site-product-layout .site-header .site-mobile-brand .site-brand-logo.is-light { display: block; height: 30px; }
+  .dark .site-product-layout .site-header .site-mobile-brand .site-brand-logo.is-light { display: none; }
+  .dark .site-product-layout .site-header .site-mobile-brand .site-brand-logo.is-dark { display: block; height: 30px; }
+  .site-product-layout .site-mobile-menu-button { border: 0; background: transparent; border-radius: 6px; }
+  .site-product-layout .site-mobile-menu-button svg { width: 24px; height: 24px; }
+  .site-mobile-drawer .site-side-nav { flex: 0 0 auto; }
+  .site-drawer-tools { margin-top: 16px; padding-top: 12px; border-top: 1px solid rgb(var(--c-slate-200)); }
+  .site-drawer-tools .site-drawer-tool {
+    width: 100%; min-height: 48px; height: auto; padding: 10px 14px;
+    display: flex; align-items: center; justify-content: flex-start; gap: 12px;
+    border-radius: 6px; color: rgb(var(--c-slate-700)); font-size: 15px; font-weight: 600;
+  }
+  .site-drawer-tool > svg { flex: 0 0 24px; width: 24px; height: 24px; }
+  .site-drawer-tool > small { margin-left: auto; font-size: 12px; font-weight: 500; }
+  .site-drawer-tool:hover, .site-drawer-tool[aria-current="page"] { background: rgb(var(--c-slate-100)); }
+  .site-drawer-tool:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
+  .site-product-layout .site-mobile-drawer {
+    overflow-y: auto; overscroll-behavior: contain;
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .site-mobile-drawer .site-sidebar-brand { flex-shrink: 0; }
+  .site-mobile-drawer .site-drawer-close { top: calc(15px + env(safe-area-inset-top)); }
+  .account-popover { position: fixed; right: max(12px, env(safe-area-inset-right)); width: min(256px, calc(100vw - 24px)); top: calc(64px + env(safe-area-inset-top)); max-height: calc(100dvh - 80px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); }
 }

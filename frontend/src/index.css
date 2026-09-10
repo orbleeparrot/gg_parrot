@@ -397,8 +397,8 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   }
 }
 
-/* Preserve the compact visual sizes on desktop while meeting a 44px touch
-   target on phones and tablets. */
+/* Standalone controls get 44px targets. Inline help keeps a round glyph and
+   expands only its transparent hit area, so adjacent labels do not stretch. */
 @media (pointer: coarse) {
   .btn-m,
   .btn-s,
@@ -407,12 +407,11 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
     min-height: 44px;
   }
   .info-trigger {
-    width: 28px;
-    height: 44px;
-    margin-block: -12px;
+    width: 20px;
+    height: 20px;
   }
-  .info-trigger::after {
-    inset: 0;
+  .info-trigger.info-trigger::after {
+    inset: -6px;
   }
 }
 
@@ -9022,4 +9021,28 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   }
   .lb-actions { justify-content: flex-start; }
   .lb-row-head { display: none; }
+}
+
+/* Mobile shell: leave room for the PWA status bar and home indicator. */
+@media (max-width: 1099px) {
+  .site-product-layout { --site-topbar-h: calc(112px + env(safe-area-inset-top)); }
+  .site-auth-layout { --site-topbar-h: calc(64px + env(safe-area-inset-top)); }
+  .site-product-layout .site-header,
+  .site-auth-layout .site-header { height: var(--site-topbar-h); padding-top: env(safe-area-inset-top); }
+  .site-product-layout .site-header-inner { height: 112px; padding-inline: max(12px, env(safe-area-inset-left)) max(12px, env(safe-area-inset-right)); }
+  .site-auth-layout .site-header-inner { height: 64px; }
+  .market-context-panel { top: calc(var(--site-topbar-h) + 8px); max-height: calc(100dvh - var(--site-topbar-h) - 24px - env(safe-area-inset-bottom)); }
+  .site-product-layout .onboarding-layer { inset: var(--site-topbar-h) 0 0; }
+  .site-product-layout .onboarding-dialog { max-height: calc(100dvh - var(--site-topbar-h) - 24px); }
+  .site-mobile-drawer .site-side-nav { flex: 0 0 auto; overflow: visible; }
+}
+@media (max-width: 767px) {
+  .site-product-layout .onboarding-dialog,
+  .site-product-layout .onboarding-dialog.is-docs { height: calc(100dvh - var(--site-topbar-h)); max-height: calc(100dvh - var(--site-topbar-h)); }
+}
+@media (max-width: 767px), (max-width: 1099px) and (pointer: coarse) {
+  /* The same quotes already have their own news page. A fixed ticker should
+     not cover controls or consume a line on every phone screen. */
+  .site-product-layout .site-marquee { display: none; }
+  .has-site-marquee .site-main { padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
 }

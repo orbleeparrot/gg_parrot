@@ -2,11 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api.js";
 import RunnerSessions from "../components/RunnerSessions.jsx";
+import RunnerDeviceHandoff from "../components/RunnerDeviceHandoff.jsx";
 import { getAuthUser, updateAuthUser, useAuth } from "../lib/auth.js";
 import { RULE_TYPES } from "../lib/macro.js";
 import { getUserId } from "../lib/user.js";
 import { fmtSize, isRunnerOpened, markRunnerOpened, useRunnerDownload } from "../lib/runnerDownload.js";
 import { findLaunchedSession, launchPhaseFromTicketStatus } from "../lib/runnerLaunch.js";
+import { getRunnerDevice } from "../lib/runnerDevice.js";
 import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 
 const BINANCE_KEY_GUIDE_STORAGE_PREFIX = "ggparrot:binance-testnet-key-ready:v1";
@@ -372,6 +374,14 @@ function Workspace({ title, status, bodyClassName = "", children }) {
 }
 
 export default function RunnerDownload({ embedded = false, onExit }) {
+  const device = getRunnerDevice();
+  if (!device.canRunWindowsRunner) {
+    return <div className="runner-wizard-device"><RunnerDeviceHandoff isMobile={device.isMobile} onExit={embedded ? onExit : undefined} /></div>;
+  }
+  return <WindowsRunnerDownload embedded={embedded} onExit={onExit} />;
+}
+
+function WindowsRunnerDownload({ embedded = false, onExit }) {
   const { token, user } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();

@@ -67,48 +67,33 @@ function Composer({ onCreated, onCancel }) {
     }
   }
 
-  // 폼은 §1-3 이 상자를 허용하는 예외 — 목록 위로 끼어들어 오는 것이라
-  // 끼어든 것처럼 보여야 한다.
+  // 카드로 띄우지 않는다 — 목록 위에 같은 폭으로 끼어드는 괘선 구획(라벨·입력·버튼은 댓글창과 같은 규격).
   return (
-    <div className="form-surface border border-slate-200 p-5 space-y-4">
-      <h2 className="t-title text-slate-900">새 글 쓰기</h2>
-      <label className="block">
-        <span className="block t-small font-semibold text-slate-700 mb-2">제목</span>
+    <section className="board-composer" aria-labelledby="board-composer-title">
+      <h2 id="board-composer-title" className="board-composer-head">새 글 쓰기</h2>
+      <label className="board-field-label">
+        제목
         <input
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           maxLength={120}
-          className={"field" + (err && !title.trim() ? " field-err" : "")}
+          className={"field field-sm" + (err && !title.trim() ? " field-err" : "")}
           aria-invalid={err && !title.trim() ? true : undefined}
         />
       </label>
-      <label className="block">
-        <span className="block t-small font-semibold text-slate-700 mb-2">내용</span>
-        <textarea
-          value={body}
-          onChange={(e) => setBody(e.target.value)}
-          rows={6}
-          maxLength={5000}
-          className="field"
-        />
+      <label className="board-field-label">
+        내용
+        <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={8} maxLength={5000} className="field" />
       </label>
-      <div className="flex items-center gap-3 flex-wrap">
-        <label className="inline-flex items-center gap-2 cursor-pointer">
-          <span className="btn btn-s btn-secondary">사진 첨부</span>
-          <input type="file" accept="image/png,image/jpeg" onChange={pickImage} className="hidden" />
-          <span className="t-caption text-slate-500">JPG·PNG · 2MB 이하</span>
-        </label>
-      </div>
       {preview && (
-        <div className="relative inline-block">
-          <img src={preview} alt="미리보기" className="max-h-48 rounded-xl border border-slate-200" />
-          {/* slate-900/50 은 두 테마에서 서로 뒤집히는 짝 — 다크에서도 대비가 유지된다. */}
+        <div className="board-composer-preview">
+          <img src={preview} alt="미리보기" />
           <button
+            type="button"
             onClick={() => {
               setImage(null);
               setPreview("");
             }}
-            className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-slate-900 text-slate-50 t-caption font-bold"
             aria-label="첨부 이미지 지우기"
           >
             ✕
@@ -116,15 +101,20 @@ function Composer({ onCreated, onCancel }) {
         </div>
       )}
       <p className="board-form-error" role={err ? "alert" : undefined}>{err}</p>
-      <div className="flex items-center gap-2">
-        <button onClick={submit} disabled={busy} className="btn btn-l btn-primary">
-          {busy ? "등록 중…" : "등록"}
-        </button>
-        <button onClick={onCancel} className="btn btn-l btn-secondary">
-          취소
-        </button>
+      <div className="board-composer-foot">
+        <label className="board-attach">
+          <span className="btn btn-s btn-secondary">사진 첨부</span>
+          <input type="file" accept="image/png,image/jpeg" onChange={pickImage} />
+          <span className="board-hint">{image ? image.name : "JPG·PNG · 2MB 이하"}</span>
+        </label>
+        <div className="board-composer-actions">
+          <button type="button" onClick={onCancel} className="btn btn-m btn-secondary">취소</button>
+          <button type="button" onClick={submit} disabled={busy} className="btn btn-m btn-primary">
+            {busy ? "등록 중…" : "등록"}
+          </button>
+        </div>
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -265,15 +255,13 @@ export default function Board() {
       />
 
       {composing && token && (
-        <div className="board-composer">
-          <Composer
-            onCreated={(post) => {
-              setComposing(false);
-              navigate(`/board/${post.id}`);
-            }}
-            onCancel={() => setComposing(false)}
-          />
-        </div>
+        <Composer
+          onCreated={(post) => {
+            setComposing(false);
+            navigate(`/board/${post.id}`);
+          }}
+          onCancel={() => setComposing(false)}
+        />
       )}
 
       {err && <ErrorNote>글 목록을 불러오지 못했어요: {err}</ErrorNote>}

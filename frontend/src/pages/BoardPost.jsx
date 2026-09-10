@@ -44,27 +44,25 @@ function CommentForm({ postId, onAdded }) {
 
   return (
     <form onSubmit={submit} className="board-comment-form" aria-label="댓글 쓰기">
-      <div className="board-comment-form-row">
+      <div className="board-comment-form-id">
         <label className="board-field-label">
           이름
           <input value={username} onChange={(e) => setUsername(e.target.value)} maxLength={24} autoComplete="nickname" className={commentInputCls} />
         </label>
         <label className="board-field-label">
-          비밀번호 · 지울 때만 써요
+          비밀번호
           <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" className={commentInputCls} />
         </label>
       </div>
       <label className="board-field-label">
         댓글
-        <textarea value={text} onChange={(e) => setText(e.target.value)} rows={2} maxLength={500} className={commentInputCls + " w-full"} />
+        <textarea value={text} onChange={(e) => setText(e.target.value)} rows={3} maxLength={500} className="field w-full" />
       </label>
+      <button type="submit" disabled={busy} className="btn btn-m btn-primary">
+        {busy ? "등록 중…" : "댓글 등록"}
+      </button>
       <p className="board-form-error" role={err ? "alert" : undefined}>{err}</p>
-      <div className="board-comment-form-foot">
-        <span>계정 없이 남길 수 있어요.</span>
-        <button type="submit" disabled={busy} className="btn btn-m btn-primary">
-          {busy ? "등록 중…" : "댓글 등록"}
-        </button>
-      </div>
+      <p className="board-comment-form-note">계정 없이 남길 수 있어요. 비밀번호는 댓글을 지울 때만 써요.</p>
     </form>
   );
 }

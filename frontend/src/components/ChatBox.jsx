@@ -134,6 +134,16 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
   const [reporting, setReporting] = useState(null); // 신고할 메시지
   const [copiedId, setCopiedId] = useState(0);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const shortcutsRef = useRef(null);
+  useEffect(() => {
+    if (!shortcutsOpen) return undefined;
+    const onPointerDown = (event) => {
+      if (shortcutsRef.current?.contains(event.target) || event.target.closest?.(".chat-tool")) return;
+      setShortcutsOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [shortcutsOpen]);
   const [macroList, setMacroList] = useState(null); // 매크로 고르기 목록(한 번 받아 둔다)
   const [pickIndex, setPickIndex] = useState(0);
   const [readError, setReadError] = useState("");
@@ -534,7 +544,7 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
                 <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M2.5 12s3.5-6.5 9.5-6.5 9.5 6.5 9.5 6.5-3.5 6.5-9.5 6.5S2.5 12 2.5 12Z" /><circle cx="12" cy="12" r="3" /></svg>
                 <input type="range" min="25" max="100" step="5" value={Math.round(opacity * 100)} onChange={changeOpacity} aria-label="채팅창 불투명도" aria-valuetext={`${Math.round(opacity * 100)}%`} />
               </label>
-              <button type="button" className="chat-tool" onClick={() => setShortcutsOpen(true)} aria-label="빠른 입력 도움말" title="빠른 입력">
+              <button type="button" className={`chat-tool${shortcutsOpen ? " is-on" : ""}`} onClick={() => setShortcutsOpen((on) => !on)} aria-expanded={shortcutsOpen} aria-label="빠른 입력" title="빠른 입력">
                 <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                   <rect x="2.5" y="6" width="19" height="12" rx="2.5" />
                   <path d="M6 9.5h.01M9.5 9.5h.01M13 9.5h.01M16.5 9.5h.01M6 13h.01M18 13h.01M9 16h6" />
@@ -692,39 +702,26 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
             </div>,
             document.body,
           ) : null}
-          {shortcutsOpen ? createPortal(
-            <div className="scrim fixed inset-0 z-[95] grid place-items-center p-4" onMouseDown={(event) => { if (event.target === event.currentTarget) setShortcutsOpen(false); }}>
-              <div role="dialog" aria-modal="true" aria-labelledby="chat-shortcuts-title" className="dialog chat-shortcuts">
-                <h2 id="chat-shortcuts-title" className="t-h4 text-slate-900">빠른 입력</h2>
-                <p className="mt-3 t-small text-slate-700">채팅을 더 빠르게 쓰는 방법이에요.</p>
-                <ul className="chat-shortcut-list">
-                  <li>
-                    <p className="chat-shortcut-title"><kbd>/</kbd><b>매크로 언급</b></p>
-                    <p className="chat-shortcut-desc">오늘의 매크로를 골라 채팅에 카드로 보내요. <kbd>/BTC</kbd> 처럼 이어 치면 좁혀져요.</p>
-                  </li>
-                  <li>
-                    <p className="chat-shortcut-title"><kbd>↑</kbd><kbd>↓</kbd><kbd>Enter</kbd><b>목록에서 고르기</b></p>
-                    <p className="chat-shortcut-desc">매크로 목록이 떠 있을 때 써요. <kbd>Esc</kbd> 로 닫아요.</p>
-                  </li>
-                  <li>
-                    <p className="chat-shortcut-title"><kbd>Enter</kbd><b>보내기</b></p>
-                    <p className="chat-shortcut-desc"><kbd>Shift</kbd><kbd>Enter</kbd> 는 줄바꿈이에요. 입력칸은 줄이 늘면 위로 커져요.</p>
-                  </li>
-                  <li>
-                    <p className="chat-shortcut-title"><kbd className="is-mouse">오른쪽 클릭</kbd><b>답장 · 복사 · 신고</b></p>
-                    <p className="chat-shortcut-desc">메시지를 오른쪽 클릭하면 나와요. 답장하면 상대 말이 인용돼요.</p>
-                  </li>
-                  <li>
-                    <p className="chat-shortcut-title"><kbd className="is-mouse">깃털 버튼</kbd><b>스티커</b></p>
-                    <p className="chat-shortcut-desc">작성줄 왼쪽 깃털을 누르면 껄무새 표정 6종을 바로 보내요.</p>
-                  </li>
-                </ul>
-                <div className="confirm-dialog-actions">
-                  <button type="button" className="btn btn-l w-full btn-primary" onClick={() => setShortcutsOpen(false)}>닫기</button>
-                </div>
+          {/* 빠른 입력 — 머리 아래에 뜨는 작은 판. 동작은 왼쪽, 키는 오른쪽. 바깥 클릭·Esc·× 로 닫는다. */}
+          {shortcutsOpen ? (
+            <div ref={shortcutsRef} className="chat-shortcuts" role="dialog" aria-label="빠른 입력">
+              <div className="chat-shortcuts-head">
+                <b>빠른 입력</b>
+                <button type="button" className="chat-shortcuts-close" onClick={() => setShortcutsOpen(false)} aria-label="닫기"><svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m4 4 8 8M12 4l-8 8" /></svg></button>
               </div>
-            </div>,
-            document.body,
+              <ul>
+                <li>
+                  <span className="chat-shortcut-what">매크로 언급<small>오늘의 매크로를 카드로 보내요 · <b className="num">/BTC</b> 처럼 이어 치면 좁혀져요</small></span>
+                  <span className="chat-shortcut-keys"><kbd>/</kbd></span>
+                </li>
+                <li><span className="chat-shortcut-what">목록에서 고르기</span><span className="chat-shortcut-keys"><kbd>↑</kbd><kbd>↓</kbd><kbd>Enter</kbd></span></li>
+                <li><span className="chat-shortcut-what">목록 닫기</span><span className="chat-shortcut-keys"><kbd>Esc</kbd></span></li>
+                <li><span className="chat-shortcut-what">보내기</span><span className="chat-shortcut-keys"><kbd>Enter</kbd></span></li>
+                <li><span className="chat-shortcut-what">줄바꿈</span><span className="chat-shortcut-keys"><kbd>Shift</kbd><kbd>Enter</kbd></span></li>
+                <li><span className="chat-shortcut-what">답장 · 복사 · 신고</span><span className="chat-shortcut-keys">메시지 오른쪽 클릭</span></li>
+                <li><span className="chat-shortcut-what">스티커</span><span className="chat-shortcut-keys">깃털 버튼</span></li>
+              </ul>
+            </div>
           ) : null}
           <ReportDialog open={Boolean(reporting)} targetType="chat" targetId={reporting?.id} label="메시지" onClose={() => setReporting(null)} />
         </section>

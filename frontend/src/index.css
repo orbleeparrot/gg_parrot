@@ -8535,16 +8535,21 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 .chat-tool:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
 .chat-tool svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 
-/* 빠른 입력 안내 — 키 칩은 제목 줄 앞에, 설명은 그 아래 한 줄. 줄 사이는 괘선. */
-.chat-shortcuts { width: min(400px, 92vw); }
-.chat-shortcut-list { margin: 16px 0 0; padding: 0; list-style: none; }
-.chat-shortcut-list li { padding: 12px 0; border-top: 1px solid rgb(var(--c-slate-200)); }
-.chat-shortcut-list li:first-child { border-top: 0; padding-top: 4px; }
-.chat-shortcut-title { margin: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
-.chat-shortcut-title b { margin-left: 6px; color: rgb(var(--c-slate-900)); font-size: 14px; font-weight: 700; }
-.chat-shortcut-desc { margin: 5px 0 0; color: rgb(var(--c-slate-700)); font-size: 13px; line-height: 1.6; font-weight: 500; }
-.chat-shortcut-list kbd { display: inline-flex; align-items: center; height: 22px; padding: 0 7px; border: 1px solid rgb(var(--c-slate-300)); border-bottom-width: 2px; border-radius: 6px; background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-900)); font-family: inherit; font-size: 12px; font-weight: 700; vertical-align: -3px; }
-.chat-shortcut-list kbd.is-mouse { border-style: dashed; border-bottom-width: 1px; color: rgb(var(--c-slate-700)); font-weight: 600; }
+/* 빠른 입력 — 채팅 머리 아래에 뜨는 작은 판. 동작은 왼쪽, 키는 오른쪽 키캡. 닫기는 × · 바깥 클릭 · Esc. */
+.chat-tool.is-on { background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-900)); }
+.chat-shortcuts { position: absolute; top: 72px; right: 10px; z-index: 3; width: min(316px, calc(100% - 20px)); padding: 2px 12px 4px; border: 1px solid rgb(var(--c-slate-300)); border-radius: 12px; background: rgb(var(--c-surface)); box-shadow: 0 12px 32px rgb(5 12 22 / .28); }
+.chat-shortcuts-head { height: 38px; display: flex; align-items: center; justify-content: space-between; }
+.chat-shortcuts-head b { color: rgb(var(--c-slate-900)); font-size: 13px; font-weight: 700; }
+.chat-shortcuts-close { width: 28px; height: 28px; margin-right: -6px; display: grid; place-items: center; border-radius: 8px; color: rgb(var(--c-slate-500)); cursor: pointer; }
+.chat-shortcuts-close:hover { background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-900)); }
+.chat-shortcuts-close svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+.chat-shortcuts ul { margin: 0; padding: 0; list-style: none; }
+.chat-shortcuts li { min-height: 38px; padding: 6px 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid rgb(var(--c-slate-200)); }
+.chat-shortcut-what { min-width: 0; display: grid; gap: 2px; color: rgb(var(--c-slate-800)); font-size: 13px; font-weight: 600; }
+.chat-shortcut-what small { color: rgb(var(--c-slate-500)); font-size: 11.5px; line-height: 1.45; font-weight: 500; }
+.chat-shortcut-what small b { color: rgb(var(--c-slate-700)); font-weight: 700; }
+.chat-shortcut-keys { flex: none; display: inline-flex; align-items: center; gap: 3px; color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 500; }
+.chat-shortcuts kbd { display: inline-flex; align-items: center; height: 20px; padding: 0 6px; border: 1px solid rgb(var(--c-slate-300)); border-bottom-width: 2px; border-radius: 5px; background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-900)); font-family: inherit; font-size: 11px; font-weight: 700; vertical-align: -4px; }
 
 .chat-opacity input[type="range"]:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; border-radius: 4px; }
 .chat-fab.is-open { box-shadow: 0 0 0 2px rgb(var(--c-surface)), 0 0 0 4px rgb(var(--c-slate-900)), 0 8px 24px rgba(0, 0, 0, 0.24); }

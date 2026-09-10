@@ -8886,16 +8886,7 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 .lb-rank.is-2 { color: rgb(var(--lb-silver)); }
 .lb-rank.is-3 { color: rgb(var(--lb-bronze)); }
 .lb-coin { justify-self: center; }
-/* 매크로 열 — 이름·등록 시각은 그대로 두 줄, '채팅에 붙여넣기'는 열 오른쪽 끝에 세로 가운데. */
-.lb-name { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "line mention" "meta mention"; align-items: center; column-gap: 10px; }
-.lb-name-line { grid-area: line; }
-.lb-name > .lb-meta { grid-area: meta; min-width: 0; }
-.lb-mention { grid-area: mention; width: 30px; height: 30px; display: inline-grid; place-items: center; border: 1px solid rgb(var(--c-slate-300)); border-radius: 999px; background: transparent; color: rgb(var(--c-slate-500)); cursor: pointer; }
-.lb-mention:hover { border-color: rgb(var(--c-slate-400)); color: rgb(var(--c-slate-900)); background: rgb(var(--c-slate-100)); }
-.lb-mention.is-on { border-color: rgb(var(--c-brand-line)); color: rgb(var(--c-slate-900)); }
-.lb-mention:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
-.lb-mention svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
-.lb-name-line { display: flex; align-items: center; gap: 6px 8px; flex-wrap: wrap; min-width: 0; }
+.lb-name { min-width: 0; }
 .lb-title {
   max-width: 100%;
   overflow: hidden;
@@ -8941,9 +8932,6 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 .lb-vote.is-on { background: rgb(var(--c-slate-100)); border-color: rgb(var(--c-slate-400)); color: rgb(var(--c-slate-900)); }
 .lb-vote.is-on svg { fill: rgb(var(--c-slate-900) / 0.14); }
 .lb-vote:focus-visible, .lb-icon-btn:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
-/* 채팅에 붙여넣기 — 복사하면 잠깐 '복사'로 바뀐다. */
-.lb-mention-done { font-size: 10px; font-weight: 700; letter-spacing: -0.03em; }
-.lb-icon-btn.is-on { border-color: rgb(var(--c-brand-line)); color: rgb(var(--c-slate-900)); }
 /* 채팅에서 온 매크로를 리더보드에서 찾았을 때 잠깐 밝힌다. */
 .lb-row.is-flash { animation: lb-flash 1.6s ease-out 1; }
 @keyframes lb-flash { from { background: rgb(var(--c-brand) / .22); } to { background: transparent; } }
@@ -8959,6 +8947,19 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 .chat-macro-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .chat-macro-head b { color: rgb(var(--c-slate-900)); font-size: 14px; font-weight: 700; }
 .chat-macro-author { color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* ── `/` 매크로 고르기 — 입력칸 위 목록. 골라 넣으면 채팅에 매크로 카드로 보인다. ── */
+.chat-picker { margin: 0 12px 6px; padding: 6px; display: grid; gap: 2px; max-height: 232px; overflow-y: auto; border: 1px solid rgb(var(--c-slate-300)); border-radius: 12px; background: rgb(var(--c-surface)); }
+.chat-picker-head { margin: 2px 6px 4px; color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 600; }
+.chat-picker-head b { color: rgb(var(--c-slate-900)); font-weight: 700; }
+.chat-picker-empty { margin: 6px; color: rgb(var(--c-slate-500)); font-size: 13px; font-weight: 500; }
+.chat-picker-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 9px; background: transparent; text-align: left; cursor: pointer; }
+.chat-picker-row.is-active { background: rgb(var(--c-slate-100)); }
+.chat-picker-body { min-width: 0; display: grid; gap: 1px; }
+.chat-picker-title { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.chat-picker-title b { color: rgb(var(--c-slate-900)); font-size: 13px; font-weight: 700; }
+.chat-picker-title span { color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-picker-summary { color: rgb(var(--c-slate-700)); font-size: 12px; line-height: 1.4; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* ── 메시지 오른쪽 클릭 메뉴 — 답장·복사·신고. 시트 위에 뜨는 작은 판. ── */
 .chat-menu { position: fixed; z-index: 95; min-width: 132px; padding: 6px; display: grid; gap: 2px; border: 1px solid rgb(var(--c-slate-300)); border-radius: 12px; background: rgb(var(--c-surface)); box-shadow: 0 10px 28px rgb(5 12 22 / .24); }
 .chat-menu button { height: 36px; padding: 0 10px; display: flex; align-items: center; border-radius: 8px; color: rgb(var(--c-slate-800)); font-size: 14px; font-weight: 600; text-align: left; cursor: pointer; }

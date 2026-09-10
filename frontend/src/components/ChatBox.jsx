@@ -7,6 +7,8 @@ import { badgeLabel, chatScope, firstUnseenId, isOwnMessage, sameAuthor } from "
 import { STICKERS, stickerFromText, stickerText } from "../lib/chatStickers.js";
 import { macroIdsInText, splitMacroText } from "../lib/chatMacro.js";
 import { replyText, stripReplyToken } from "../lib/chatReply.js";
+import { applyMacroPick, filterMacros, slashQuery } from "../lib/chatSlash.js";
+import { getUserId } from "../lib/user.js";
 import ReportDialog from "./ReportDialog.jsx";
 import CoinIcon from "./CoinIcon.jsx";
 import { chatUnseenCount, getChatFeed, markChatSeen, observeChat, receiveChat, receiveChatPost, setChatLoadError, visibleChatReadId } from "../lib/chatStore.js";
@@ -131,6 +133,8 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
   const [replyTo, setReplyTo] = useState(null); // 답장 대상 메시지
   const [reporting, setReporting] = useState(null); // 신고할 메시지
   const [copiedId, setCopiedId] = useState(0);
+  const [macroList, setMacroList] = useState(null); // 매크로 고르기 목록(한 번 받아 둔다)
+  const [pickIndex, setPickIndex] = useState(0);
   const [readError, setReadError] = useState("");
   const [busy, setBusy] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
@@ -152,7 +156,10 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
     const field = inputRef.current;
     if (!field || field.tagName !== "TEXTAREA") return;
     field.style.height = "auto";
-    field.style.height = `${Math.min(field.scrollHeight, 132)}px`;
+    const grown = Math.min(field.scrollHeight, 132);
+    field.style.height = `${grown}px`;
+    // 한 줄일 때는 스크롤 막대를 아예 만들지 않는다(브라우저가 화살표를 그린다).
+    field.style.overflowY = field.scrollHeight > 132 ? "auto" : "hidden";
   }, [text, open]);
   const stickToBottomRef = useRef(true);
   const mountedRef = useRef(false);
@@ -449,6 +456,25 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
     }
   }
 
+  // `/` 로 매크로 고르기 — 오늘 리더보드 목록을 한 번 받아 두고 입력에 따라 걸러 보인다.
+  const query = member ? slashQuery(text) : null;
+  const picking = query !== null;
+  const picks = picking ? filterMacros(macroList || [], query) : [];
+  useEffect(() => {
+    if (!picking || macroList !== null) return undefined;
+    let alive = true;
+    api.leaderboard(getUserId())
+      .then((data) => { if (alive) setMacroList(data?.entries || data?.items || []); })
+      .catch(() => { if (alive) setMacroList([]); });
+    return () => { alive = false; };
+  }, [picking, macroList]);
+  useEffect(() => { setPickIndex(0); }, [query]);
+
+  function pickMacro(entry) {
+    setText((current) => applyMacroPick(current, entry.id));
+    inputRef.current?.focus();
+  }
+
   // 오른쪽 클릭 메뉴 — 답장·복사·신고. 메뉴는 화면 안으로 접어 넣는다.
   function openMenu(event, message) {
     event.preventDefault();
@@ -565,6 +591,34 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
               {STICKERS.map((sticker) => <button key={sticker.id} type="button" className="chat-sticker-tile" onClick={() => sendSticker(sticker.id)} disabled={busy} aria-label={`${sticker.label} 스티커 보내기`}><img src={sticker.src} alt="" width="56" height="56" draggable="false" decoding="async" /><span>{sticker.label}</span></button>)}
             </div>
           ) : null}
+          {/* `/` 매크로 고르기 — 입력칸 위에 뜬다. 고르면 [macro:id] 가 본문에 들어간다. */}
+          {picking ? (
+            <div className="chat-picker" role="listbox" aria-label="매크로 고르기">
+              <p className="chat-picker-head">매크로 고르기 {query ? <b>‘{query}’</b> : "— 이름·종목·전략으로 좁혀요"}</p>
+              {macroList === null ? (
+                <p className="chat-picker-empty">불러오는 중…</p>
+              ) : picks.length === 0 ? (
+                <p className="chat-picker-empty">{macroList.length ? "맞는 매크로가 없어요." : "오늘 등록된 매크로가 없어요."}</p>
+              ) : picks.map((entry, index) => (
+                <button
+                  key={entry.id}
+                  type="button"
+                  role="option"
+                  aria-selected={index === pickIndex}
+                  className={`chat-picker-row${index === pickIndex ? " is-active" : ""}`}
+                  onMouseEnter={() => setPickIndex(index)}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => pickMacro(entry)}
+                >
+                  <CoinIcon symbol={entry.symbol} size={24} alt="" />
+                  <span className="chat-picker-body">
+                    <span className="chat-picker-title"><b className="num">{entry.symbol}</b><span>{entry.username || entry.nickname}</span></span>
+                    <span className="chat-picker-summary">{entry.locked ? "잠긴 매크로" : entry.human_summary || "전략 설명 없음"}</span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : null}
           {member && replyTo ? (
             <p className="chat-reply-bar">
               <span className="chat-reply-to"><b>{replyTo.username}</b>에게 답장</span>
@@ -588,6 +642,16 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
                 aria-invalid={error ? true : undefined}
                 onChange={(event) => setText(event.target.value)}
                 onKeyDown={(event) => {
+                  if (picking && picks.length) {
+                    if (event.key === "ArrowDown") { event.preventDefault(); setPickIndex((i) => (i + 1) % picks.length); return; }
+                    if (event.key === "ArrowUp") { event.preventDefault(); setPickIndex((i) => (i - 1 + picks.length) % picks.length); return; }
+                    if ((event.key === "Enter" || event.key === "Tab") && !event.nativeEvent.isComposing) {
+                      event.preventDefault();
+                      pickMacro(picks[pickIndex] || picks[0]);
+                      return;
+                    }
+                  }
+                  if (event.key === "Escape" && picking) { event.preventDefault(); setText(""); return; }
                   // 줄바꿈은 Shift+Enter. Enter 는 보내기(한글 조합 중에는 넘긴다).
                   if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
                   event.preventDefault();

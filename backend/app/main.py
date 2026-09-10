@@ -1068,11 +1068,13 @@ def chat_read(req: ChatReadRequest, account: User = Depends(auth_mod.current_use
 async def board_create(
     title: str = Form(...),
     body: str = Form(""),
+    body_format: str = Form("text"),
     images: list[UploadFile] = File(default=[]),
     image: Optional[UploadFile] = File(default=None),
     user: User = Depends(auth_mod.current_user),
 ) -> dict:
-    """글 작성 — 로그인 계정만. 사진(jpg/png, 각 2MB 이하)은 `images` 로 여러 장, 옛 클라이언트의 `image` 한 장도 받는다."""
+    """글 작성 — 로그인 계정만. 사진(jpg/png, 각 2MB 이하)은 `images` 로 여러 장, 옛 클라이언트의 `image` 한 장도 받는다.
+    `body_format=html` 이면 편집기 HTML(새 사진은 `data-key="new:N"` 자리)로 받아 정제해 저장한다."""
     uploads = [*(images or []), *([image] if image is not None else [])]
     uploads = [up for up in uploads if up is not None and (up.filename or "")]
     if len(uploads) > board_mod.MAX_IMAGES:
@@ -1085,7 +1087,7 @@ async def board_create(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
     try:
-        return board_mod.create_post(user, title, body, validated)
+        return board_mod.create_post(user, title, body, validated, body_format=body_format)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -1095,6 +1097,7 @@ async def board_update(
     post_id: int,
     title: str = Form(...),
     body: str = Form(""),
+    body_format: str = Form("text"),
     keep_image_ids: str = Form(""),
     images: list[UploadFile] = File(default=[]),
     user: User = Depends(auth_mod.current_user),
@@ -1113,7 +1116,7 @@ async def board_update(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
     try:
-        view = board_mod.update_post(post_id, user, title, body, keep, validated)
+        view = board_mod.update_post(post_id, user, title, body, keep, validated, body_format=body_format)
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc))
     except ValueError as exc:

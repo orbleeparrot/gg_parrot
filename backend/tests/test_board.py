@@ -127,6 +127,52 @@ def test_author_edits_title_body_and_images_in_place():
     assert client.put("/api/board/posts/999999", data={"title": "x", "body": ""}, headers=_auth(token)).status_code == 404
 
 
+def test_html_body_is_sanitized_and_new_images_get_their_urls():
+    token, _ = _signup()
+    raw = ('<h2 style="text-align: center; position: fixed">제목</h2>'
+           '<p><strong>굵게</strong> <span style="color: rgb(200, 30, 51); font-size: 20px; behavior: x">색</span></p>'
+           '<img data-key="new:0" alt="" width="320" data-align="center">'
+           '<p>외부 <img src="https://evil.example/pixel.png"> 사진은 빠진다</p>'
+           '<script>alert(1)</script><p onclick="x()">끝 <a href="javascript:alert(1)">링크</a> <a href="https://example.com">좋은 링크</a></p>')
+    r = client.post("/api/board/posts", data={"title": "서식", "body": raw, "body_format": "html"},
+                    files=[("images", ("a.png", io.BytesIO(_PNG), "image/png"))], headers=_auth(token))
+    assert r.status_code == 200, r.text
+    post = r.json()
+    assert post["body_format"] == "html"
+    html = post["body_html"]
+    assert 'style="text-align: center"' in html and "position" not in html
+    assert "<strong>굵게</strong>" in html and "color: rgb(200, 30, 51); font-size: 20px" in html and "behavior" not in html
+    assert f'src="/api/board/posts/{post["id"]}/images/{post["images"][0]["id"]}"' in html and 'width="320"' in html and 'data-align="center"' in html
+    assert "evil.example" not in html and "<script" not in html and "onclick" not in html and "javascript:" not in html
+    assert 'href="https://example.com"' in html and 'rel="noopener noreferrer nofollow"' in html
+    listed = next(p for p in client.get("/api/board/posts").json()["items"] if p["id"] == post["id"])
+    assert listed["snippet"].startswith("제목 굵게") and "<" not in listed["snippet"]
+
+
+def test_html_edit_keeps_only_images_still_in_the_body():
+    token, _ = _signup()
+    created = client.post("/api/board/posts", data={"title": "둘", "body": '<p>a</p><img data-key="new:0"><img data-key="new:1">', "body_format": "html"},
+                          files=[("images", ("a.png", io.BytesIO(_PNG), "image/png")), ("images", ("b.png", io.BytesIO(_PNG), "image/png"))],
+                          headers=_auth(token)).json()
+    first, second = created["images"]
+    body = f'<p>고침</p><img src="{second["url"]}"><img data-key="new:0">'
+    r = client.put(f"/api/board/posts/{created['id']}", data={"title": "둘 고침", "body": body, "body_format": "html"},
+                   files=[("images", ("c.png", io.BytesIO(_PNG), "image/png"))], headers=_auth(token))
+    assert r.status_code == 200, r.text
+    edited = r.json()
+    assert [img["id"] for img in edited["images"]][0] == second["id"] and len(edited["images"]) == 2
+    assert client.get(first["url"]).status_code == 404  # 본문에서 빠진 사진은 지워진다
+    assert edited["body_html"].count("<img") == 2 and edited["images"][1]["url"] in edited["body_html"]
+
+
+def test_legacy_text_post_is_served_as_html_with_images_in_place():
+    token, _ = _signup()
+    created = client.post("/api/board/posts", data={"title": "옛 글", "body": "첫 줄\n둘째\n\n[사진1]\n\n끝 <b>"},
+                          files=[("images", ("a.png", io.BytesIO(_PNG), "image/png"))], headers=_auth(token)).json()
+    assert created["body_format"] == "text"
+    assert created["body_html"] == f'<p>첫 줄<br>둘째</p><img src="{created["images"][0]["url"]}" alt=""><p>끝 &lt;b&gt;</p>'
+
+
 def test_too_many_images_rejected():
     token, _ = _signup()
     files = [("images", (f"{i}.png", io.BytesIO(_PNG), "image/png")) for i in range(11)]

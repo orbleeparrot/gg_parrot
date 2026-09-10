@@ -202,17 +202,19 @@ export const api = {
   boardList: (page = 1, size = 10) => req(`/api/board/posts?page=${page}&size=${size}`),
   boardGet: (id) => req(`/api/board/posts/${id}`),
   // 글 작성(로그인 필요) — title/body + 선택 이미지(File). multipart 전송.
-  boardCreate: ({ title, body, images = [] }) => {
+  boardCreate: ({ title, body, bodyFormat = "text", images = [] }) => {
     const fd = new FormData();
     fd.append("title", title);
     fd.append("body", body || "");
+    fd.append("body_format", bodyFormat);
     for (const file of images) fd.append("images", file);
     return reqForm("/api/board/posts", fd);
   },
-  boardUpdate: (id, { title, body, keepImageIds = [], images = [] }) => {
+  boardUpdate: (id, { title, body, bodyFormat = "text", keepImageIds = [], images = [] }) => {
     const fd = new FormData();
     fd.append("title", title);
     fd.append("body", body || "");
+    fd.append("body_format", bodyFormat);
     fd.append("keep_image_ids", keepImageIds.join(","));
     for (const file of images) fd.append("images", file);
     return reqForm(`/api/board/posts/${id}`, fd, { method: "PUT" });

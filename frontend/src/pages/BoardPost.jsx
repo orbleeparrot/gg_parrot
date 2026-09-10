@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api.js";
 import { useAuth } from "../lib/auth.js";
-import { boardFullTime, boardTime, kstDateTime, splitBodyWithImages } from "../lib/boardText.js";
+import DOMPurify from "dompurify";
+import { boardFullTime, boardTime, kstDateTime } from "../lib/boardText.js";
 import { ErrorNote } from "../components/Page.jsx";
 import ConfirmDialog from "../components/ConfirmDialog.jsx";
 import { ChevronLeftIcon, ImageIcon } from "../components/boardIcons.jsx";
@@ -166,22 +167,14 @@ function ListBelow({ currentId, token, onWrite }) {
   );
 }
 
-// 본문 — `[사진n]` 자리에 그 사진을 끼우고, 자리가 없는 사진은 글 뒤에 이어 붙인다.
-function PostBody({ body, images }) {
-  const { segments, trailing } = splitBodyWithImages(body, images);
-  const total = images.length;
-  const figure = ({ image, index }) => (
-    <figure key={`img-${image.id ?? image.url}-${index}`} className="board-post-figure">
-      <img src={image.url} alt={total > 1 ? `첨부 이미지 ${index}/${total}` : "첨부 이미지"} loading="lazy" />
-    </figure>
-  );
-  if (!segments.length && !trailing.length) return null;
-  return (
-    <div className="board-post-body">
-      {segments.map((seg, i) => (seg.type === "text" ? <p key={`t-${i}`}>{seg.text}</p> : figure(seg)))}
-      {trailing.map(figure)}
-    </div>
-  );
+// 본문 — 서버가 정제해 준 HTML(편집기 서식·본문 안 사진). 화면에서 한 번 더 걸러 그린다.
+const PURIFY = { ALLOWED_TAGS: ["p", "br", "strong", "b", "em", "i", "u", "s", "strike", "h2", "h3", "h4", "ul", "ol", "li", "blockquote", "a", "img", "span", "mark", "code", "pre", "hr"],
+  ALLOWED_ATTR: ["href", "target", "rel", "src", "alt", "width", "height", "style", "data-align"],
+  // DOMPurify 는 이 정규식으로 href·src 뿐 아니라 width 같은 일반 속성값도 거른다 — 스킴 없는 값(상대 주소·숫자)은 통과, `javascript:` 류는 차단.
+  ALLOWED_URI_REGEXP: /^(?:https?:|mailto:|[^a-z]|[a-z+.-]+(?:[^a-z+.:-]|$))/i };
+function PostBody({ html }) {
+  if (!html) return null;
+  return <div className="board-post-body board-rich" dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(html, PURIFY) }} />;
 }
 
 function PostSkeleton() {
@@ -260,7 +253,7 @@ export default function BoardPost() {
               ) : null}
             </div>
 
-            <PostBody body={post.body} images={post.images?.length ? post.images : post.image_url ? [{ id: 0, url: post.image_url }] : []} />
+            <PostBody html={post.body_html} />
           </article>
 
           <section className="board-comments" aria-labelledby="board-comments-title">

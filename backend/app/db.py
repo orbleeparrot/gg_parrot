@@ -672,6 +672,7 @@ class BoardPost(SQLModel, table=True):
     body: str = ""
     image_mime: str = ""  # "" | image/jpeg | image/png
     image_data: Optional[bytes] = Field(default=None)  # 원본 바이트(없으면 None)
+    body_format: str = ""  # "" = 글자 + [사진n] 자리 표시(옛 글) | "html" = 정제된 HTML(편집기, 2026-09-10~)
     created_at: str  # UTC ISO
     created_ms: int = Field(index=True, sa_type=BigInteger)
 
@@ -810,6 +811,7 @@ _PG_ADDED_COLUMNS = {
         "claimed_ms": "BIGINT DEFAULT 0", "last_error": "TEXT DEFAULT ''",
     },
     "leaderboardentry": {"streak_days": "INTEGER DEFAULT 1", "first_created_ms": "BIGINT"},
+    "boardpost": {"body_format": "TEXT NOT NULL DEFAULT ''"},
     "newstitletranslation": {
         "processing_status": "TEXT DEFAULT 'ready'", "claim_token": "TEXT DEFAULT ''",
         "claimed_ms": "BIGINT DEFAULT 0",

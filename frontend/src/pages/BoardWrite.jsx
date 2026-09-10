@@ -39,12 +39,12 @@ function Composer({ initial, onSaved, onCancel }) {
   async function submit() {
     setErr("");
     if (!title.trim()) return setErr("제목을 입력해 주세요.");
-    const { body, keepImageIds, files } = editor.current?.collect() || { body: "", keepImageIds: [], files: [] };
+    const { html, files } = editor.current?.collect() || { html: "", files: [] };
     setBusy(true);
     try {
       const post = initial?.id
-        ? await api.boardUpdate(initial.id, { title: title.trim(), body, images: files, keepImageIds })
-        : await api.boardCreate({ title: title.trim(), body, images: files });
+        ? await api.boardUpdate(initial.id, { title: title.trim(), body: html, bodyFormat: "html", images: files })
+        : await api.boardCreate({ title: title.trim(), body: html, bodyFormat: "html", images: files });
       onSaved(post);
     } catch (e) {
       setErr(String(e.message || e));
@@ -69,8 +69,7 @@ function Composer({ initial, onSaved, onCancel }) {
         내용
         <BoardBodyEditor
           ref={editor}
-          initialBody={initial?.body || ""}
-          initialImages={initial?.images || []}
+          initialHtml={initial?.bodyHtml || ""}
           maxImages={MAX_IMAGES}
           onError={setErr}
           onCountChange={setCount}
@@ -85,7 +84,7 @@ function Composer({ initial, onSaved, onCancel }) {
           <input ref={input} type="file" accept="image/png,image/jpeg" multiple onChange={pickImages} />
           <span className="board-hint">
             {count > 0 ? <><b className="num">{count}</b>/{MAX_IMAGES}장 · </> : null}
-            커서 자리에 들어가요 · 붙여넣기·끌어다 놓기도 돼요 · JPG·PNG · 한 장에 2MB · {MAX_IMAGES}장까지
+            사진은 커서 자리에 들어가고 끌어서 옮기거나 모서리로 크기를 바꿔요 · JPG·PNG · 한 장에 2MB · {MAX_IMAGES}장까지
           </span>
         </div>
         <div className="board-composer-actions">
@@ -124,7 +123,7 @@ export default function BoardWrite() {
         navigate(`/board/${id}`, { replace: true }); // 남의 글은 보기로
         return;
       }
-      setInitial({ id: post.id, title: post.title, body: post.body || "", images: post.images?.length ? post.images : post.image_url ? [{ id: 0, url: post.image_url }] : [] });
+      setInitial({ id: post.id, title: post.title, bodyHtml: post.body_html || "" });
     }).catch((e) => { if (alive) setLoadError(String(e.message || e)); });
     return () => { alive = false; };
   }, [editing, id, navigate, token, user]);

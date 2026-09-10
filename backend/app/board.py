@@ -10,7 +10,10 @@
 """
 from __future__ import annotations
 
+import html as html_mod
 import re
+
+import nh3
 
 import time
 from collections import defaultdict, deque
@@ -70,9 +73,141 @@ MAX_IMAGES = 10  # 글 하나에 붙일 수 있는 사진 수
 IMAGE_MARK = re.compile(r"\[사진\s*(\d+)\]")
 
 
-def _snippet(body: str) -> str:
-    text = IMAGE_MARK.sub("", body or "").strip()
+def _snippet(body: str, body_format: str = "") -> str:
+    if body_format == "html":
+        text = html_mod.unescape(re.sub(r"<[^>]+>", " ", body or ""))
+        text = re.sub(r"\s+", " ", text).strip()
+    else:
+        text = IMAGE_MARK.sub("", body or "").strip()
     return text[:SNIPPET_LEN] + ("…" if len(text) > SNIPPET_LEN else "")
+
+
+# ---------------------------------------------------------------------------
+# 본문 HTML — 편집기(TipTap)가 만든 HTML 을 저장 전에 정제한다. 허용 목록 밖은 전부 버린다.
+# 사진은 우리 서버 주소만(외부 이미지·추적 픽셀 금지). 새 사진은 `data-key="new:N"` 자리로 오고
+# 저장할 때 실제 주소로 바꾼다.
+# ---------------------------------------------------------------------------
+_HTML_TAGS = {"p", "br", "strong", "b", "em", "i", "u", "s", "strike", "h2", "h3", "h4", "ul", "ol", "li",
+              "blockquote", "a", "img", "span", "mark", "code", "pre", "hr"}
+_STYLED = {"p", "h2", "h3", "h4", "li", "blockquote", "span", "img"}
+_HTML_ATTRS = {
+    "a": {"href", "target"},  # rel 은 nh3 가 link_rel 로 붙인다
+    "img": {"src", "alt", "width", "height", "style", "data-align"},
+    **{tag: {"style"} for tag in _STYLED if tag != "img"},
+}
+_STYLE_RULES = {
+    "text-align": re.compile(r"^(left|center|right|justify)$"),
+    "color": re.compile(r"^(#[0-9a-fA-F]{3,8}|rgba?\([\d.,\s%]+\)|[a-zA-Z]{3,20})$"),
+    "background-color": re.compile(r"^(#[0-9a-fA-F]{3,8}|rgba?\([\d.,\s%]+\)|[a-zA-Z]{3,20})$"),
+    "font-size": re.compile(r"^\d{1,3}(\.\d+)?(px|em|rem|%)$"),
+    "width": re.compile(r"^\d{1,4}(px|%)$"),
+    "height": re.compile(r"^(auto|\d{1,4}(px|%))$"),
+}
+_OWN_IMAGE_SRC = re.compile(r"^/api/board/posts/(\d+)/(image|images/(\d+))$")
+
+
+def _clean_style(value: str) -> str:
+    kept = []
+    for part in (value or "").split(";"):
+        if ":" not in part:
+            continue
+        prop, _, val = part.partition(":")
+        prop, val = prop.strip().lower(), val.strip()
+        rule = _STYLE_RULES.get(prop)
+        if rule and rule.match(val):
+            kept.append(f"{prop}: {val}")
+    return "; ".join(kept)
+
+
+def _html_attribute_filter(tag: str, attr: str, value: str):
+    if attr == "style":
+        cleaned = _clean_style(value)
+        return cleaned or None
+    if tag == "img" and attr == "src":
+        return value if _OWN_IMAGE_SRC.match(value or "") else None
+    if tag == "img" and attr == "data-align":
+        return value if value in {"left", "center", "right"} else None
+    if tag == "img" and attr in {"width", "height"}:
+        return value if re.match(r"^\d{1,4}$", value or "") else None
+    if tag == "a" and attr == "target":
+        return "_blank"
+    return value
+
+
+def sanitize_body_html(raw: str) -> str:
+    cleaned = nh3.clean(
+        raw or "",
+        tags=_HTML_TAGS,
+        attributes=_HTML_ATTRS,
+        attribute_filter=_html_attribute_filter,
+        url_schemes={"http", "https", "mailto"},
+        link_rel="noopener noreferrer nofollow",
+        strip_comments=True,
+    )
+    # 주소가 지워진 사진(외부 주소·자리 못 찾음)은 통째로 뺀다.
+    cleaned = re.sub(r"<img(?![^>]*\ssrc=)[^>]*>", "", cleaned)
+    return cleaned.strip()
+
+
+_IMG_TAG = re.compile(r"<img\b[^>]*>", re.I)
+_ATTR = re.compile(r"""([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*("([^"]*)"|'([^']*)'|([^\s"'=<>`]+))""")
+
+
+def _img_attrs(tag: str) -> dict[str, str]:
+    return {m.group(1).lower(): (m.group(3) if m.group(3) is not None else m.group(4) if m.group(4) is not None else m.group(5) or "")
+            for m in _ATTR.finditer(tag[4:])}
+
+
+def _resolve_new_images(raw: str, post_id: int, stored: list) -> str:
+    """`data-key="new:N"` 사진에 저장된 N번째 새 사진의 주소를 붙인다(N 은 올린 순서, 0부터)."""
+    def swap(match: re.Match) -> str:
+        attrs = _img_attrs(match.group(0))
+        key = attrs.get("data-key", "")
+        if key.startswith("new:"):
+            try:
+                img = stored[int(key[4:])]
+            except (ValueError, IndexError):
+                return ""
+            attrs["src"] = f"/api/board/posts/{post_id}/images/{img.id}"
+        attrs.pop("data-key", None)
+        return "<img " + " ".join(f'{k}="{html_mod.escape(v, quote=True)}"' for k, v in attrs.items()) + ">"
+    return _IMG_TAG.sub(swap, raw or "")
+
+
+def _referenced_image_ids(body_html: str, post_id: int) -> set[int]:
+    """본문이 가리키는 이 글의 사진 id 들(옛 한 장은 0)."""
+    ids: set[int] = set()
+    for match in _IMG_TAG.finditer(body_html or ""):
+        src = _img_attrs(match.group(0)).get("src", "")
+        m = _OWN_IMAGE_SRC.match(src)
+        if m and int(m.group(1)) == post_id:
+            ids.add(int(m.group(3)) if m.group(3) else 0)
+    return ids
+
+
+def _legacy_html(body: str, views: list[dict]) -> str:
+    """옛 글(글자 + [사진n]) 을 화면이 같은 방식으로 그리게 HTML 로 바꾼다."""
+    parts: list[str] = []
+    text = body or ""
+    last = 0
+    def paragraphs(chunk: str) -> None:
+        for para in re.split(r"\n{2,}", chunk.strip("\n")):
+            if para.strip():
+                parts.append("<p>" + html_mod.escape(para).replace("\n", "<br>") + "</p>")
+    used: set[int] = set()
+    for match in IMAGE_MARK.finditer(text):
+        index = int(match.group(1))
+        if not (1 <= index <= len(views)):
+            continue
+        paragraphs(text[last:match.start()])
+        parts.append(f'<img src="{html_mod.escape(views[index - 1]["url"], quote=True)}" alt="">')
+        used.add(index)
+        last = match.end()
+    paragraphs(text[last:])
+    for index, view in enumerate(views, start=1):
+        if index not in used:
+            parts.append(f'<img src="{html_mod.escape(view["url"], quote=True)}" alt="">')
+    return "".join(parts)
 
 
 def validate_image(data: bytes, content_type: Optional[str]) -> tuple[bytes, str]:
@@ -116,7 +251,7 @@ def _post_list_view(row: BoardPost, comment_count: int, avatar_url: str | None =
     return {
         "id": row.id,
         "title": row.title,
-        "snippet": _snippet(body),
+        "snippet": _snippet(body, row.body_format),
         "author_name": row.author_name,
         "author_user_id": row.author_user_id,
         "author_avatar_url": avatar_url,
@@ -140,19 +275,26 @@ def _post_detail_view(row: BoardPost, comments: list[dict], avatar_url: str | No
         "has_image": bool(views),
         "image_url": views[0]["url"] if views else None,  # 옛 화면 호환 — 첫 장
         "images": views,
+        "body_format": row.body_format or "text",
+        "body_html": (row.body or "") if row.body_format == "html" else _legacy_html(row.body or "", views),
         "created_kst": _kst_display(row.created_ms),
         "created_ms": row.created_ms,
         "comments": comments,
     }
 
 
-def create_post(user: User, title: str, body: str, images: list[tuple[bytes, str]] | None = None) -> dict:
-    """글 작성. ``images`` 는 validate_image 를 거친 (bytes, mime) 목록 — 순서대로 붙는다."""
+def create_post(user: User, title: str, body: str, images: list[tuple[bytes, str]] | None = None,
+                body_format: str = "text") -> dict:
+    """글 작성. ``images`` 는 validate_image 를 거친 (bytes, mime) 목록 — 순서대로 붙는다.
+
+    ``body_format="html"`` 이면 본문은 편집기 HTML — 새 사진 자리(`data-key="new:N"`)에 주소를 붙인 뒤 정제해 저장한다.
+    """
     title = (title or "").strip()
     if not title:
         raise ValueError("제목을 입력해 주세요.")
     title = title[:MAX_TITLE]
-    body = (body or "").strip()[:MAX_BODY]
+    is_html = body_format == "html"
+    body = (body or "").strip()[:MAX_BODY * (4 if is_html else 1)]
     images = list(images or [])
     if len(images) > MAX_IMAGES:
         raise ValueError(f"사진은 {MAX_IMAGES}장까지 붙일 수 있어요.")
@@ -162,7 +304,8 @@ def create_post(user: User, title: str, body: str, images: list[tuple[bytes, str
         author_user_id=user.id,
         author_name=user.username,
         title=title,
-        body=body,
+        body="" if is_html else body,
+        body_format="html" if is_html else "",
         image_mime="",
         image_data=None,
         created_at=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -182,6 +325,20 @@ def create_post(user: User, title: str, body: str, images: list[tuple[bytes, str
             db.commit()
             for img in stored:
                 db.refresh(img)
+        if is_html:
+            row.body = sanitize_body_html(_resolve_new_images(body, row.id, stored))
+            # 본문이 가리키지 않는 새 사진은 남기지 않는다.
+            referenced = _referenced_image_ids(row.body, row.id)
+            kept = []
+            for img in stored:
+                if img.id in referenced:
+                    kept.append(img)
+                else:
+                    db.delete(img)
+            stored = kept
+            db.add(row)
+            db.commit()
+            db.refresh(row)
         return _post_detail_view(row, [], avatars.avatar_url(row.author_user_id, db=db), stored)
 
 
@@ -209,6 +366,7 @@ def list_posts(page: int = 1, size: int = PAGE_SIZE_DEFAULT) -> dict:
             BoardPost.id,
             BoardPost.title,
             BoardPost.body,
+            BoardPost.body_format,
             BoardPost.author_name,
             BoardPost.author_user_id,
             UserAvatar.version.label("avatar_version"),
@@ -235,7 +393,7 @@ def list_posts(page: int = 1, size: int = PAGE_SIZE_DEFAULT) -> dict:
             {
                 "id": r.id,
                 "title": r.title,
-                "snippet": _snippet(r.body or ""),
+                "snippet": _snippet(r.body or "", r.body_format or ""),
                 "author_name": r.author_name,
                 "author_user_id": r.author_user_id,
                 "author_avatar_url": avatars.public_url(r.author_user_id, r.avatar_version),
@@ -296,57 +454,69 @@ def get_post_image(post_id: int, image_id: int) -> Optional[tuple[bytes, str]]:
 
 
 def update_post(post_id: int, user: User, title: str, body: str,
-                keep_image_ids: list[int], new_images: list[tuple[bytes, str]] | None = None) -> Optional[dict]:
-    """작성자 본인만 수정. 남길 사진 id 목록에 없는 사진은 지우고, 새 사진은 뒤에 순서대로 붙인다.
+                keep_image_ids: list[int], new_images: list[tuple[bytes, str]] | None = None,
+                body_format: str = "text") -> Optional[dict]:
+    """작성자 본인만 수정. 새 사진은 뒤에 순서대로 붙인다.
 
-    반환: 수정된 상세 뷰. 글이 없으면 None, 남의 글이면 PermissionError.
+    옛 형식은 남길 사진 id 목록(``keep_image_ids``)에 없는 사진을 지운다. HTML 형식은 **본문이 가리키는 사진이 곧 남길 사진**이라
+    목록을 보지 않는다. 반환: 수정된 상세 뷰. 글이 없으면 None, 남의 글이면 PermissionError.
     """
     title = (title or "").strip()
     if not title:
         raise ValueError("제목을 입력해 주세요.")
     title = title[:MAX_TITLE]
-    body = (body or "").strip()[:MAX_BODY]
+    is_html = body_format == "html"
+    body = (body or "").strip()[:MAX_BODY * (4 if is_html else 1)]
     new_images = list(new_images or [])
-    keep = {int(i) for i in keep_image_ids}
     with get_session() as db:
         row = db.get(BoardPost, post_id)
         if row is None:
             return None
         if row.author_user_id != user.id:
             raise PermissionError("본인이 쓴 글만 고칠 수 있어요.")
-        if row.image_data and 0 not in keep:
-            row.image_data = None
-            row.image_mime = ""
         existing = sorted(db.exec(select(BoardImage).where(BoardImage.post_id == post_id)).all(),
                           key=lambda i: (i.position, i.id or 0))
-        kept = []
-        for img in existing:
-            if img.id in keep:
-                kept.append(img)
-            else:
-                db.delete(img)
-        if len(kept) + (1 if row.image_data else 0) + len(new_images) > MAX_IMAGES:
+        if len(existing) + (1 if row.image_data else 0) + len(new_images) > MAX_IMAGES:
             raise ValueError(f"사진은 {MAX_IMAGES}장까지 붙일 수 있어요.")
-        for index, img in enumerate(kept):
-            img.position = index
-            db.add(img)
         now_ms = int(_now_utc().timestamp() * 1000)
         added = [
-            BoardImage(post_id=post_id, position=len(kept) + index, image_mime=mime, image_data=data, created_ms=now_ms)
+            BoardImage(post_id=post_id, position=len(existing) + index, image_mime=mime, image_data=data, created_ms=now_ms)
             for index, (data, mime) in enumerate(new_images)
         ]
         for img in added:
             db.add(img)
+        if added:
+            db.commit()
+            for img in added:
+                db.refresh(img)
+        if is_html:
+            body = sanitize_body_html(_resolve_new_images(body, post_id, added))
+            keep = _referenced_image_ids(body, post_id)
+        else:
+            keep = {int(i) for i in keep_image_ids} | {img.id for img in added}
+        if row.image_data and 0 not in keep:
+            row.image_data = None
+            row.image_mime = ""
+        kept = []
+        for img in [*existing, *added]:
+            if img.id in keep:
+                kept.append(img)
+            else:
+                db.delete(img)
+        for index, img in enumerate(kept):
+            img.position = index
+            db.add(img)
         row.title = title
         row.body = body
+        row.body_format = "html" if is_html else ""
         db.add(row)
         db.commit()
         db.refresh(row)
-        for img in [*kept, *added]:
+        for img in kept:
             db.refresh(img)
         return _post_detail_view(row, [_comment_view(c) for c in db.exec(
             select(BoardComment).where(BoardComment.post_id == post_id).order_by(BoardComment.id.asc())).all()],
-            avatars.avatar_url(row.author_user_id, db=db), [*kept, *added])
+            avatars.avatar_url(row.author_user_id, db=db), kept)
 
 
 def delete_post(post_id: int, user_id: int) -> bool:

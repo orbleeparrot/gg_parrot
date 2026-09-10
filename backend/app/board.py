@@ -20,11 +20,11 @@ from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
 from typing import Deque, Optional
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlmodel import select
 
 from . import avatars
-from .db import BoardComment, BoardImage, BoardPost, User, UserAvatar, get_session
+from .db import BoardComment, BoardImage, BoardPost, BoardPostVote, User, UserAvatar, get_session
 from .security import hash_password, verify_password
 
 MAX_TITLE = 120
@@ -257,13 +257,16 @@ def _post_list_view(row: BoardPost, comment_count: int, avatar_url: str | None =
         "author_avatar_url": avatar_url,
         "has_image": bool(row.image_data) or image_count > 0,
         "comment_count": comment_count,
+        "views": int(row.views or 0),
+        "likes": int(row.likes or 0),
+        "dislikes": int(row.dislikes or 0),
         "created_kst": _kst_display(row.created_ms),
         "created_ms": row.created_ms,
     }
 
 
 def _post_detail_view(row: BoardPost, comments: list[dict], avatar_url: str | None = None,
-                      images: list[BoardImage] | None = None) -> dict:
+                      images: list[BoardImage] | None = None, my_vote: int = 0) -> dict:
     views = _image_views(row, images or [])
     return {
         "id": row.id,
@@ -275,6 +278,10 @@ def _post_detail_view(row: BoardPost, comments: list[dict], avatar_url: str | No
         "has_image": bool(views),
         "image_url": views[0]["url"] if views else None,  # 옛 화면 호환 — 첫 장
         "images": views,
+        "views": int(row.views or 0),
+        "likes": int(row.likes or 0),
+        "dislikes": int(row.dislikes or 0),
+        "my_vote": my_vote,
         "body_format": row.body_format or "text",
         "body_html": (row.body or "") if row.body_format == "html" else _legacy_html(row.body or "", views),
         "created_kst": _kst_display(row.created_ms),
@@ -342,7 +349,12 @@ def create_post(user: User, title: str, body: str, images: list[tuple[bytes, str
         return _post_detail_view(row, [], avatars.avatar_url(row.author_user_id, db=db), stored)
 
 
-def list_posts(page: int = 1, size: int = PAGE_SIZE_DEFAULT) -> dict:
+SORTS = {"new", "likes", "views", "comments"}
+FILTERS = {"all", "image", "mine"}
+
+
+def list_posts(page: int = 1, size: int = PAGE_SIZE_DEFAULT, sort: str = "new", q: str = "",
+               filter: str = "all", viewer_id: int | None = None) -> dict:
     """한 쪽의 목록을 **쿼리 한 번**으로 만든다.
 
     예전엔 전체 id 목록 → 글 행(사진 원본 바이트까지) → 댓글 행, 세 번을 오갔다. Render→Supabase 왕복이
@@ -351,6 +363,9 @@ def list_posts(page: int = 1, size: int = PAGE_SIZE_DEFAULT) -> dict:
     """
     page = max(1, int(page or 1))
     size = max(1, min(int(size or PAGE_SIZE_DEFAULT), PAGE_SIZE_MAX))
+    sort = sort if sort in SORTS else "new"
+    filter = filter if filter in FILTERS else "all"
+    q = (q or "").strip()[:80]
     comment_counts = (
         select(BoardComment.post_id.label("post_id"), func.count(BoardComment.id).label("n"))
         .group_by(BoardComment.post_id)
@@ -371,6 +386,9 @@ def list_posts(page: int = 1, size: int = PAGE_SIZE_DEFAULT) -> dict:
             BoardPost.author_user_id,
             UserAvatar.version.label("avatar_version"),
             BoardPost.created_ms,
+            BoardPost.views,
+            BoardPost.likes,
+            BoardPost.dislikes,
             ((func.coalesce(func.length(BoardPost.image_data), 0) > 0) | (func.coalesce(image_counts.c.n, 0) > 0)).label("has_image"),
             func.coalesce(comment_counts.c.n, 0).label("comment_count"),
             func.count().over().label("total"),
@@ -378,17 +396,35 @@ def list_posts(page: int = 1, size: int = PAGE_SIZE_DEFAULT) -> dict:
         .outerjoin(comment_counts, comment_counts.c.post_id == BoardPost.id)
         .outerjoin(image_counts, image_counts.c.post_id == BoardPost.id)
         .outerjoin(UserAvatar, UserAvatar.user_id == BoardPost.author_user_id)
-        .order_by(BoardPost.created_ms.desc())
-        .offset((page - 1) * size)
-        .limit(size)
     )
+    if q:
+        needle = f"%{q}%"
+        statement = statement.where(or_(BoardPost.title.ilike(needle), BoardPost.body.ilike(needle)))
+    if filter == "image":
+        statement = statement.where((func.coalesce(func.length(BoardPost.image_data), 0) > 0) | (func.coalesce(image_counts.c.n, 0) > 0))
+    elif filter == "mine":
+        statement = statement.where(BoardPost.author_user_id == (viewer_id if viewer_id is not None else -1))
+    order = {
+        "new": (BoardPost.created_ms.desc(),),
+        "likes": (BoardPost.likes.desc(), BoardPost.created_ms.desc()),
+        "views": (BoardPost.views.desc(), BoardPost.created_ms.desc()),
+        "comments": (func.coalesce(comment_counts.c.n, 0).desc(), BoardPost.created_ms.desc()),
+    }[sort]
+    statement = statement.order_by(*order).offset((page - 1) * size).limit(size)
     with get_session() as db:
         rows = db.exec(statement).all()
         if rows:
             total = int(rows[0].total)
         else:
-            # 범위 밖의 쪽(예: 삭제 뒤 남은 주소)은 행이 없어 창 함수도 없다 — 그때만 한 번 더 센다.
-            total = int(db.exec(select(func.count(BoardPost.id))).one())
+            count_stmt = select(func.count(BoardPost.id)).outerjoin(image_counts, image_counts.c.post_id == BoardPost.id)
+            if q:
+                needle = f"%{q}%"
+                count_stmt = count_stmt.where(or_(BoardPost.title.ilike(needle), BoardPost.body.ilike(needle)))
+            if filter == "image":
+                count_stmt = count_stmt.where((func.coalesce(func.length(BoardPost.image_data), 0) > 0) | (func.coalesce(image_counts.c.n, 0) > 0))
+            elif filter == "mine":
+                count_stmt = count_stmt.where(BoardPost.author_user_id == (viewer_id if viewer_id is not None else -1))
+            total = int(db.exec(count_stmt).one() or 0)
         items = [
             {
                 "id": r.id,
@@ -398,6 +434,9 @@ def list_posts(page: int = 1, size: int = PAGE_SIZE_DEFAULT) -> dict:
                 "author_user_id": r.author_user_id,
                 "author_avatar_url": avatars.public_url(r.author_user_id, r.avatar_version),
                 "has_image": bool(r.has_image),
+                "views": int(r.views or 0),
+                "likes": int(r.likes or 0),
+                "dislikes": int(r.dislikes or 0),
                 "comment_count": int(r.comment_count or 0),
                 "created_kst": _kst_display(r.created_ms),
                 "created_ms": r.created_ms,
@@ -407,6 +446,9 @@ def list_posts(page: int = 1, size: int = PAGE_SIZE_DEFAULT) -> dict:
     pages = max(1, (total + size - 1) // size)
     return {
         "items": items,
+        "sort": sort,
+        "q": q,
+        "filter": filter,
         "page": page,
         "size": size,
         "total": total,
@@ -415,17 +457,71 @@ def list_posts(page: int = 1, size: int = PAGE_SIZE_DEFAULT) -> dict:
     }
 
 
-def get_post(post_id: int) -> Optional[dict]:
+# 조회수 — 같은 방문자(키)는 30분에 한 번만 센다. 프로세스 메모리라 재시작하면 잊지만 그 정도는 감수한다.
+_VIEW_WINDOW_SECONDS = 30 * 60
+_seen_views: dict[tuple[str, int], float] = {}
+
+
+def _count_view(db, row: BoardPost, view_key: str | None) -> None:
+    if not view_key:
+        return
+    now = time.time()
+    key = (view_key, int(row.id))
+    last = _seen_views.get(key)
+    if last is not None and now - last < _VIEW_WINDOW_SECONDS:
+        return
+    _seen_views[key] = now
+    if len(_seen_views) > 20000:
+        for stale in [k for k, ts in _seen_views.items() if now - ts >= _VIEW_WINDOW_SECONDS][:5000]:
+            _seen_views.pop(stale, None)
+    row.views = int(row.views or 0) + 1
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+
+
+def get_post(post_id: int, viewer_id: int | None = None, view_key: str | None = None) -> Optional[dict]:
     with get_session() as db:
         row = db.get(BoardPost, post_id)
         if row is None:
             return None
+        _count_view(db, row, view_key)
+        my_vote = 0
+        if viewer_id is not None:
+            found = db.exec(select(BoardPostVote).where(BoardPostVote.post_id == post_id, BoardPostVote.user_id == viewer_id)).first()
+            my_vote = int(found.value) if found else 0
         crows = db.exec(
             select(BoardComment).where(BoardComment.post_id == post_id).order_by(BoardComment.id.asc())
         ).all()
         comments = [_comment_view(c) for c in crows]
         images = db.exec(select(BoardImage).where(BoardImage.post_id == post_id)).all()
-        return _post_detail_view(row, comments, avatars.avatar_url(row.author_user_id, db=db), images)
+        return _post_detail_view(row, comments, avatars.avatar_url(row.author_user_id, db=db), images, my_vote=my_vote)
+
+
+def vote_post(post_id: int, user_id: int, value: int) -> Optional[dict]:
+    """추천(+1)/비추천(-1). 같은 표를 다시 누르면 취소. 글이 없으면 None."""
+    value = 1 if value > 0 else -1
+    with get_session() as db:
+        row = db.get(BoardPost, post_id)
+        if row is None:
+            return None
+        existing = db.exec(select(BoardPostVote).where(BoardPostVote.post_id == post_id, BoardPostVote.user_id == user_id)).first()
+        if existing is None:
+            db.add(BoardPostVote(post_id=post_id, user_id=user_id, value=value, created_ms=int(_now_utc().timestamp() * 1000)))
+        elif existing.value == value:
+            db.delete(existing)
+        else:
+            existing.value = value
+            db.add(existing)
+        db.commit()
+        votes = db.exec(select(BoardPostVote.value).where(BoardPostVote.post_id == post_id)).all()
+        values = [int(v if isinstance(v, int) else v[0]) for v in votes]
+        row.likes = sum(1 for v in values if v > 0)
+        row.dislikes = sum(1 for v in values if v < 0)
+        db.add(row)
+        db.commit()
+        mine = db.exec(select(BoardPostVote).where(BoardPostVote.post_id == post_id, BoardPostVote.user_id == user_id)).first()
+        return {"post_id": post_id, "likes": row.likes, "dislikes": row.dislikes, "my_vote": int(mine.value) if mine else 0}
 
 
 def get_image(post_id: int) -> Optional[tuple[bytes, str]]:
@@ -529,6 +625,8 @@ def delete_post(post_id: int, user_id: int) -> bool:
             db.delete(c)
         for img in db.exec(select(BoardImage).where(BoardImage.post_id == post_id)).all():
             db.delete(img)
+        for v in db.exec(select(BoardPostVote).where(BoardPostVote.post_id == post_id)).all():
+            db.delete(v)
         db.delete(row)
         db.commit()
         return True
@@ -568,6 +666,7 @@ def _comment_view(row: BoardComment) -> dict:
         "author_avatar_url": None,
         "text": row.text,
         "created_kst": _kst_display(row.created_ms),
+        "created_ms": int(row.created_ms),
     }
 
 

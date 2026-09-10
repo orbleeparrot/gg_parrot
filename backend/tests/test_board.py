@@ -173,6 +173,46 @@ def test_legacy_text_post_is_served_as_html_with_images_in_place():
     assert created["body_html"] == f'<p>첫 줄<br>둘째</p><img src="{created["images"][0]["url"]}" alt=""><p>끝 &lt;b&gt;</p>'
 
 
+def test_votes_views_sort_search_and_filter():
+    author, _ = _signup()
+    other, _ = _signup()
+    a = client.post("/api/board/posts", data={"title": "비트코인 전략 공유", "body": "본문에 이더리움 이야기"}, headers=_auth(author)).json()
+    b = client.post("/api/board/posts", data={"title": "잡담", "body": "사진 있음"},
+                    files=[("images", ("p.png", io.BytesIO(_PNG), "image/png"))], headers=_auth(author)).json()
+    # 추천: 한 표, 같은 표는 취소, 바꾸면 이동. 로그인 없이는 401.
+    assert client.post(f"/api/board/posts/{a['id']}/vote", json={"value": 1}).status_code == 401
+    r = client.post(f"/api/board/posts/{a['id']}/vote", json={"value": 1}, headers=_auth(other)).json()
+    assert (r["likes"], r["dislikes"], r["my_vote"]) == (1, 0, 1)
+    r = client.post(f"/api/board/posts/{a['id']}/vote", json={"value": -1}, headers=_auth(other)).json()
+    assert (r["likes"], r["dislikes"], r["my_vote"]) == (0, 1, -1)
+    r = client.post(f"/api/board/posts/{a['id']}/vote", json={"value": -1}, headers=_auth(other)).json()
+    assert (r["likes"], r["dislikes"], r["my_vote"]) == (0, 0, 0)
+    client.post(f"/api/board/posts/{a['id']}/vote", json={"value": 1}, headers=_auth(other))
+    client.post(f"/api/board/posts/{a['id']}/vote", json={"value": 1}, headers=_auth(author))
+    detail = client.get(f"/api/board/posts/{a['id']}", headers=_auth(other)).json()
+    assert detail["likes"] == 2 and detail["my_vote"] == 1
+    # 조회수: 같은 방문자는 30분에 한 번. 다른 UA 는 따로 센다.
+    v1 = client.get(f"/api/board/posts/{b['id']}", headers={"user-agent": "ua-1"}).json()["views"]
+    v2 = client.get(f"/api/board/posts/{b['id']}", headers={"user-agent": "ua-1"}).json()["views"]
+    v3 = client.get(f"/api/board/posts/{b['id']}", headers={"user-agent": "ua-2"}).json()["views"]
+    assert (v1, v2, v3) == (1, 1, 2)
+    # 정렬·검색·필터
+    ids = lambda **kw: [p["id"] for p in client.get("/api/board/posts", params=kw, headers=_auth(author)).json()["items"]]
+    assert ids(sort="likes")[0] == a["id"]
+    assert ids(sort="views")[0] == b["id"]
+    assert ids(q="이더리움") == [a["id"]]  # 본문 검색
+    assert ids(q="잡담") == [b["id"]]
+    assert ids(filter="image")[:1] == [b["id"]] and a["id"] not in ids(filter="image")
+    mine = ids(filter="mine")
+    assert a["id"] in mine and b["id"] in mine
+    assert [p["id"] for p in client.get("/api/board/posts", params={"filter": "mine"}).json()["items"]] == []  # 로그인 없으면 빈 목록
+    listed = client.get("/api/board/posts", params={"q": "잡담"}).json()
+    assert listed["total"] == 1 and listed["items"][0]["views"] == 2 and listed["items"][0]["likes"] == 0
+    # 댓글에 created_ms 가 실린다
+    client.post(f"/api/board/posts/{a['id']}/comments", json={"username": "익명", "password": "pw", "text": "댓글"})
+    assert isinstance(client.get(f"/api/board/posts/{a['id']}").json()["comments"][0]["created_ms"], int)
+
+
 def test_too_many_images_rejected():
     token, _ = _signup()
     files = [("images", (f"{i}.png", io.BytesIO(_PNG), "image/png")) for i in range(11)]

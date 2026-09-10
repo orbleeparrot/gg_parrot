@@ -673,6 +673,9 @@ class BoardPost(SQLModel, table=True):
     image_mime: str = ""  # "" | image/jpeg | image/png
     image_data: Optional[bytes] = Field(default=None)  # 원본 바이트(없으면 None)
     body_format: str = ""  # "" = 글자 + [사진n] 자리 표시(옛 글) | "html" = 정제된 HTML(편집기, 2026-09-10~)
+    views: int = 0  # 조회수 — 같은 방문자는 30분에 한 번만 센다
+    likes: int = 0  # 추천 수(BoardPostVote 합계를 복제해 둔 것 — 목록 정렬용)
+    dislikes: int = 0
     created_at: str  # UTC ISO
     created_ms: int = Field(index=True, sa_type=BigInteger)
 
@@ -688,6 +691,16 @@ class BoardImage(SQLModel, table=True):
     position: int = 0  # 첨부 순서(0부터)
     image_mime: str = ""  # image/jpeg | image/png
     image_data: bytes
+    created_ms: int = Field(sa_type=BigInteger)
+
+
+class BoardPostVote(SQLModel, table=True):
+    """게시글 추천(+1)/비추천(-1) — 로그인 계정당 글 하나에 한 표. 같은 표를 다시 누르면 취소."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    post_id: int = Field(index=True)
+    user_id: int = Field(index=True)
+    value: int  # +1 | -1
     created_ms: int = Field(sa_type=BigInteger)
 
 
@@ -811,7 +824,10 @@ _PG_ADDED_COLUMNS = {
         "claimed_ms": "BIGINT DEFAULT 0", "last_error": "TEXT DEFAULT ''",
     },
     "leaderboardentry": {"streak_days": "INTEGER DEFAULT 1", "first_created_ms": "BIGINT"},
-    "boardpost": {"body_format": "TEXT NOT NULL DEFAULT ''"},
+    "boardpost": {
+        "body_format": "TEXT NOT NULL DEFAULT ''", "views": "INTEGER NOT NULL DEFAULT 0",
+        "likes": "INTEGER NOT NULL DEFAULT 0", "dislikes": "INTEGER NOT NULL DEFAULT 0",
+    },
     "newstitletranslation": {
         "processing_status": "TEXT DEFAULT 'ready'", "claim_token": "TEXT DEFAULT ''",
         "claimed_ms": "BIGINT DEFAULT 0",

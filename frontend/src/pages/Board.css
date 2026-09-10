@@ -61,7 +61,7 @@
 
 /* ── 목록 표 ── */
 .board-table {
-  --board-cols: 56px minmax(0, 1fr) 128px 64px;
+  --board-cols: 56px minmax(0, 1fr) 128px 72px 56px 56px;
   --board-gap: 16px;
   width: 100%;
   margin: 0;
@@ -73,7 +73,7 @@
 .board-row {
   display: grid;
   grid-template-columns: var(--board-cols);
-  grid-template-areas: "no title author time";
+  grid-template-areas: "no title author time views likes";
   align-items: center;
   column-gap: var(--board-gap);
 }
@@ -139,15 +139,38 @@
 .board-time { color: rgb(var(--c-slate-500)); font-size: 13px; font-weight: 500; white-space: nowrap; }
 .board-time.is-today { color: rgb(var(--c-slate-700)); }
 
+.board-views, .board-col-views { grid-area: views; text-align: right; }
+.board-likes, .board-col-likes { grid-area: likes; text-align: right; }
+.board-views, .board-likes { color: rgb(var(--c-slate-500)); font-size: 13px; font-weight: 500; }
+.board-likes.is-hot { color: rgb(var(--c-slate-900)); font-weight: 700; }
 @media (max-width: 639px) {
-  /* 두 줄 — 제목 [n] / 글쓴이 · 시각. 번호는 접는다(모바일 디시·에펨 관례). */
+  /* 두 줄 — 제목 [n] / 글쓴이 · 시각 · 조회 · 추천. 번호는 접는다(모바일 디시·에펨 관례). */
   .board-head { display: none; }
-  .board-row { grid-template-columns: minmax(0, 1fr) max-content; grid-template-areas: "title title" "author time"; column-gap: 8px; padding: 10px 0; }
+  .board-row { grid-template-columns: minmax(0, 1fr) max-content max-content max-content; grid-template-areas: "title title title title" "author time views likes"; column-gap: 10px; padding: 10px 0; }
   .board-title { padding: 0 0 2px; }
   .board-no { display: none; }
   .board-author { font-size: 12px; }
   .board-time { font-size: 12px; }
+  .board-views::before { content: "조회 "; }
+  .board-likes::before { content: "추천 "; }
+  .board-views, .board-likes { font-size: 12px; text-align: left; }
 }
+
+/* ── 목록 위 조작 줄: 전체 글 수 | 정렬(segmented) · 필터(칩) · 검색 ── */
+.board-controls { display: flex; align-items: center; justify-content: space-between; gap: 12px 16px; flex-wrap: wrap; margin-bottom: 12px; }
+.board-total { margin: 0; color: rgb(var(--c-slate-500)); font-size: 13px; font-weight: 500; white-space: nowrap; }
+.board-total b { color: rgb(var(--c-slate-900)); font-weight: 700; }
+.board-controls-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.board-controls .seg-item { height: 32px; padding: 0 10px; font-size: 13px; }
+.board-filters { display: flex; gap: 6px; }
+/* 필터의 켜짐은 노랑이 아니라 면 — 이 화면의 노랑은 글쓰기 하나(§1-4). */
+.board-filters .chip-on { background: rgb(var(--c-slate-200)); color: rgb(var(--c-slate-900)); border-color: transparent; }
+.board-search { position: relative; display: flex; }
+.board-search .field { width: 220px; height: 36px; padding-right: 36px; }
+.board-search-btn { position: absolute; right: 2px; top: 2px; width: 32px; height: 32px; display: grid; place-items: center; border-radius: 10px; color: rgb(var(--c-slate-500)); }
+.board-search-btn:hover { color: rgb(var(--c-slate-900)); background: rgb(var(--c-slate-200)); }
+.board-search-btn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+@media (max-width: 639px) { .board-search { width: 100%; } .board-search .field { width: 100%; } }
 
 /* 불러오는 동안 — 행 모양 그대로의 뼈대(회전 대신). */
 .board-row.is-skeleton { pointer-events: none; }
@@ -229,7 +252,27 @@
 .board-post-strip .num { color: rgb(var(--c-slate-700)); }
 .board-post-strip > .board-post-author { min-width: 0; display: inline-flex; align-items: center; gap: 8px; }
 .board-post-author b { overflow-wrap: anywhere; }
-.board-post-strip-time { margin-left: auto; }
+.board-post-strip-time { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; }
+.board-post-strip-dot { color: rgb(var(--c-slate-400)); }
+.board-avatar-btn { display: inline-flex; padding: 0; border: 0; border-radius: 999px; background: transparent; cursor: zoom-in; }
+.board-avatar-btn:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
+/* 본문이 짧아도 댓글·아래 목록이 바로 올라붙지 않게 — 글이 화면의 주인공. */
+.board-post-main { min-height: 56vh; display: flex; flex-direction: column; }
+.board-post-main .board-post-body { flex: 1 0 auto; }
+/* 반응 — 본문 아래 가운데 알약 두 개(리더보드 좋아요와 같은 문법). */
+.board-react { display: flex; justify-content: center; gap: 10px; margin: 28px 0 8px; }
+.board-react-btn { display: inline-flex; align-items: center; gap: 6px; height: 40px; padding: 0 16px 0 14px; border: 1px solid rgb(var(--c-slate-300)); border-radius: 999px; background: transparent; color: rgb(var(--c-slate-700)); font-size: 14px; font-weight: 600; cursor: pointer; }
+.board-react-btn svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.board-react-btn .num { color: rgb(var(--c-slate-900)); font-weight: 700; }
+.board-react-btn:hover:not(:disabled) { background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-900)); }
+.board-react-btn.is-on { border-color: rgb(var(--c-brand-line)); color: rgb(var(--c-slate-900)); }
+.board-react-btn.is-on svg { fill: rgb(var(--c-brand) / .25); }
+.board-react-btn.is-down { border-color: rgb(var(--c-red-600)); }
+.board-react-btn.is-down svg { fill: rgb(var(--c-red-600) / .2); }
+.board-react-btn:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
+.board-react-btn:disabled { opacity: .6; cursor: wait; }
+.board-lightbox { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; background: rgb(0 0 0 / .72); cursor: zoom-out; }
+.board-lightbox img { width: min(360px, 80vw); height: min(360px, 80vw); object-fit: cover; border-radius: 999px; box-shadow: 0 12px 40px rgb(0 0 0 / .45); cursor: default; }
 .board-post-strip .board-text-btn { margin-left: 4px; }
 .board-post-actions { display: inline-flex; gap: 2px; margin-left: 6px; }
 .board-post-actions .is-danger:hover:not(:disabled) { color: rgb(var(--c-red-600)); }

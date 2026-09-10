@@ -199,7 +199,14 @@ export const api = {
   },
 
   // 껄무새 게시판
-  boardList: (page = 1, size = 10) => req(`/api/board/posts?page=${page}&size=${size}`),
+  boardList: (page = 1, size = 10, { sort = "new", q = "", filter = "all" } = {}) => {
+    const params = new URLSearchParams({ page: String(page), size: String(size) });
+    if (sort && sort !== "new") params.set("sort", sort);
+    if (q) params.set("q", q);
+    if (filter && filter !== "all") params.set("filter", filter);
+    return req(`/api/board/posts?${params}`);
+  },
+  boardVote: (id, value) => req(`/api/board/posts/${id}/vote`, { method: "POST", body: JSON.stringify({ value }) }),
   boardGet: (id) => req(`/api/board/posts/${id}`),
   // 글 작성(로그인 필요) — title/body + 선택 이미지(File). multipart 전송.
   boardCreate: ({ title, body, bodyFormat = "text", images = [] }) => {

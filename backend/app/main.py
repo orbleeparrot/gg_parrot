@@ -5,6 +5,8 @@ historical data. Every returned result represents a PAST SIMULATION.
 """
 from __future__ import annotations
 
+import hashlib
+
 import asyncio
 import json
 import os
@@ -1127,16 +1129,45 @@ async def board_update(
 
 
 @app.get("/api/board/posts")
-def board_list(page: int = 1, size: int = board_mod.PAGE_SIZE_DEFAULT) -> dict:
-    return board_mod.list_posts(page, size)
+def board_list(
+    page: int = 1,
+    size: int = board_mod.PAGE_SIZE_DEFAULT,
+    sort: str = "new",
+    q: str = "",
+    filter: str = "all",
+    account: Optional[User] = Depends(auth_mod.optional_user),
+) -> dict:
+    """목록 — sort: new|likes|views|comments, q: 제목+내용 검색, filter: all|image|mine(로그인)."""
+    return board_mod.list_posts(page, size, sort=sort, q=q, filter=filter, viewer_id=account.id if account else None)
+
+
+def _board_view_key(request: Request) -> str:
+    """조회수용 방문자 키 — IP(프록시 뒤면 첫 X-Forwarded-For) + UA 해시. 저장하지 않고 메모리에서 30분만 기억한다."""
+    forwarded = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+    ip = forwarded or (request.client.host if request.client else "")
+    ua = request.headers.get("user-agent", "")
+    return hashlib.sha1(f"{ip}|{ua}".encode()).hexdigest()[:16]
 
 
 @app.get("/api/board/posts/{post_id}")
-def board_detail(post_id: int) -> dict:
-    view = board_mod.get_post(post_id)
+def board_detail(post_id: int, request: Request, account: Optional[User] = Depends(auth_mod.optional_user)) -> dict:
+    view = board_mod.get_post(post_id, viewer_id=account.id if account else None, view_key=_board_view_key(request))
     if view is None:
         raise HTTPException(status_code=404, detail="글을 찾을 수 없어요.")
     return view
+
+
+class PostVoteRequest(BaseModel):
+    value: int
+
+
+@app.post("/api/board/posts/{post_id}/vote")
+def board_vote(post_id: int, req: PostVoteRequest, user: User = Depends(auth_mod.current_user)) -> dict:
+    """추천(+1)/비추천(-1) — 로그인 계정당 한 표, 같은 표를 다시 누르면 취소."""
+    result = board_mod.vote_post(post_id, user.id, req.value)
+    if result is None:
+        raise HTTPException(status_code=404, detail="글을 찾을 수 없어요.")
+    return result
 
 
 @app.delete("/api/board/posts/{post_id}")

@@ -6,7 +6,8 @@ import DOMPurify from "dompurify";
 import { boardFullTime, boardTime, kstDateTime } from "../lib/boardText.js";
 import { ErrorNote } from "../components/Page.jsx";
 import ConfirmDialog from "../components/ConfirmDialog.jsx";
-import { ChevronLeftIcon, ImageIcon } from "../components/boardIcons.jsx";
+import { ChevronLeftIcon, ThumbDownIcon, ThumbUpIcon } from "../components/boardIcons.jsx";
+import { PostRow, TableHead } from "./Board.jsx";
 import { editPath, writePath } from "./BoardWrite.jsx";
 import { AuthorAvatar } from "../components/UserAvatar.jsx";
 import "./Board.css";
@@ -75,6 +76,7 @@ function Comment({ c, onDeleted }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const when = kstDateTime(c.created_kst);
+  const rel = Number.isFinite(c.created_ms) ? boardTime(c.created_ms) : c.created_kst;
 
   async function remove() {
     setErr("");
@@ -93,7 +95,7 @@ function Comment({ c, onDeleted }) {
     <li className="board-comment">
       <div className="board-comment-top">
         <b>{c.username}</b>
-        <time className="num" dateTime={when || undefined}>{c.created_kst}</time>
+        <time className={/전$/.test(rel) ? undefined : "num"} dateTime={when || undefined} title={c.created_kst}>{rel}</time>
         <button type="button" onClick={() => setConfirming((v) => !v)} className="board-text-btn" aria-expanded={confirming}>
           삭제
         </button>
@@ -134,30 +136,8 @@ function ListBelow({ currentId, token, onWrite }) {
     <section className="board-post-list" aria-labelledby="board-post-list-title">
       <h2 id="board-post-list-title" className="board-post-list-head">껄무새 게시판</h2>
       <ul className="board-table">
-        <li className="board-head" role="row" aria-hidden="true">
-          <span className="board-col-no">번호</span>
-          <span className="board-col-title">제목</span>
-          <span className="board-col-author">글쓴이</span>
-          <span className="board-col-time">시각</span>
-        </li>
-        {data.items.map((post) => {
-          const current = post.id === currentId;
-          const time = boardTime(post.created_ms, now);
-          return (
-            <li key={post.id} className="board-item">
-              <Link to={`/board/${post.id}`} className={`board-row${current ? " is-current" : ""}`} aria-current={current ? "page" : undefined}>
-                <span className="board-no num" aria-hidden="true">{post.id}</span>
-                <span className="board-title">
-                  <span className="board-title-text">{post.title}</span>
-                  {post.comment_count > 0 ? <span className="board-count num" aria-hidden="true">{post.comment_count}</span> : null}
-                  {post.has_image ? <span className="board-mark" aria-hidden="true"><ImageIcon /></span> : null}
-                </span>
-                <span className="board-author" aria-hidden="true"><AuthorAvatar userId={post.author_user_id} src={post.author_avatar_url} name={post.author_name} size={20} /><span className="board-author-name">{post.author_name}</span></span>
-                <time className={`board-time num${/:/.test(time) ? " is-today" : ""}`} dateTime={kstDateTime(post.created_kst) || undefined} title={boardFullTime(post.created_ms) || post.created_kst}>{time}</time>
-              </Link>
-            </li>
-          );
-        })}
+        <TableHead />
+        {data.items.map((post) => <PostRow key={post.id} post={post} now={now} current={post.id === currentId} />)}
       </ul>
       <div className="board-post-list-foot">
         <Link to="/board" className="btn btn-m btn-secondary">목록 전체</Link>
@@ -222,6 +202,31 @@ export default function BoardPost() {
   const isMine = post && user && user.id === post.author_user_id;
   const when = post ? kstDateTime(post.created_kst) : "";
   const full = post ? (boardFullTime(post.created_ms) || post.created_kst) : "";
+  const rel = post ? boardTime(post.created_ms) : "";
+  const [voting, setVoting] = useState(false);
+  const [voteErr, setVoteErr] = useState("");
+  const [avatarOpen, setAvatarOpen] = useState(false);
+  const avatarSrc = post ? (isMine && user?.avatar_url !== undefined ? user.avatar_url : post.author_avatar_url) : null;
+
+  async function vote(value) {
+    if (!token) { navigate(`/login?next=${encodeURIComponent(`/board/${id}`)}`); return; }
+    if (voting) return;
+    setVoting(true); setVoteErr("");
+    try {
+      const r = await api.boardVote(post.id, value);
+      setPost((p) => ({ ...p, likes: r.likes, dislikes: r.dislikes, my_vote: r.my_vote }));
+    } catch (e) {
+      setVoteErr(String(e.message || e));
+    } finally {
+      setVoting(false);
+    }
+  }
+  useEffect(() => {
+    if (!avatarOpen) return undefined;
+    const onKey = (e) => { if (e.key === "Escape") setAvatarOpen(false); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [avatarOpen]);
 
   const write = () => navigate(writePath(token));
 
@@ -237,12 +242,23 @@ export default function BoardPost() {
 
       {post ? (
         <>
-          <article>
+          <article className="board-post-main">
             <h1 className="board-post-title">{post.title}</h1>
-            {/* 괘선 띠 — 글쓴이 | 시각. 댓글 수는 아래 댓글 구획 제목에만 둔다(같은 정보를 두 번 쓰지 않는다). */}
+            {/* 괘선 띠 — 글쓴이(사진은 눌러 크게) | N분 전 · 조회 N | 편집·삭제. 댓글 수는 아래 댓글 구획 제목에만. */}
             <div className="board-post-strip">
-              <span className="board-post-author"><AuthorAvatar userId={post.author_user_id} src={post.author_avatar_url} name={post.author_name} size={32} /><b>{post.author_name}</b></span>
-              <time className="num board-post-strip-time" dateTime={when || undefined}>{full}</time>
+              <span className="board-post-author">
+                {avatarSrc ? (
+                  <button type="button" className="board-avatar-btn" onClick={() => setAvatarOpen(true)} aria-label={`${post.author_name} 프로필 사진 크게 보기`}>
+                    <AuthorAvatar userId={post.author_user_id} src={post.author_avatar_url} name={post.author_name} size={32} />
+                  </button>
+                ) : <AuthorAvatar userId={post.author_user_id} src={post.author_avatar_url} name={post.author_name} size={32} />}
+                <b>{post.author_name}</b>
+              </span>
+              <span className="board-post-strip-time">
+                <time className={/전$/.test(rel) ? undefined : "num"} dateTime={when || undefined} title={full}>{rel}</time>
+                <span className="board-post-strip-dot" aria-hidden="true">·</span>
+                <span>조회 <span className="num">{(post.views || 0).toLocaleString()}</span></span>
+              </span>
               {isMine ? (
                 <span className="board-post-actions">
                   <Link to={editPath(post.id)} className="btn btn-s btn-ghost">편집</Link>
@@ -254,7 +270,24 @@ export default function BoardPost() {
             </div>
 
             <PostBody html={post.body_html} />
+
+            {/* 반응 — 본문 아래 가운데. 추천은 로그인 계정당 한 표, 같은 표를 다시 누르면 취소. */}
+            <div className="board-react" role="group" aria-label="이 글에 반응">
+              <button type="button" onClick={() => vote(1)} disabled={voting} className={`board-react-btn${post.my_vote === 1 ? " is-on" : ""}`} aria-pressed={post.my_vote === 1} title={token ? "추천" : "로그인하면 추천할 수 있어요"}>
+                <ThumbUpIcon /><span>추천</span><span className="num">{post.likes || 0}</span>
+              </button>
+              <button type="button" onClick={() => vote(-1)} disabled={voting} className={`board-react-btn${post.my_vote === -1 ? " is-on is-down" : ""}`} aria-pressed={post.my_vote === -1} title={token ? "비추천" : "로그인하면 비추천할 수 있어요"}>
+                <ThumbDownIcon /><span>비추천</span><span className="num">{post.dislikes || 0}</span>
+              </button>
+            </div>
+            {voteErr ? <p className="board-form-error" role="alert">{voteErr}</p> : null}
           </article>
+
+          {avatarOpen && avatarSrc ? (
+            <div className="board-lightbox" onClick={() => setAvatarOpen(false)} role="dialog" aria-label={`${post.author_name} 프로필 사진`}>
+              <img src={avatarSrc} alt={`${post.author_name} 프로필 사진`} onClick={(e) => e.stopPropagation()} />
+            </div>
+          ) : null}
 
           <section className="board-comments" aria-labelledby="board-comments-title">
             <h2 id="board-comments-title" className="board-comments-head">

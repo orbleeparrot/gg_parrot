@@ -27,16 +27,21 @@ function kstParts(ms) {
   };
 }
 
-// 목록의 시각 — 한국 게시판 관례. 오늘(KST)이면 `HH:MM`, 올해면 `MM.DD`, 그 전이면 `YY.MM.DD`.
+// 목록·글의 시각 — 한국 게시판 관례. 7일 안이면 `방금 전·N분 전·N시간 전·N일 전`, 올해면 `MM.DD`, 그 전이면 `YY.MM.DD`(KST).
 // 잘라 쓰는 대신 규칙으로 바꾸므로 같은 칸 폭 안에서 오늘 글이 한눈에 갈린다.
 export function boardTime(createdMs, nowMs = Date.now()) {
-  const value = Number(createdMs);
-  if (!Number.isFinite(value)) return "";
-  const t = kstParts(value);
-  const n = kstParts(nowMs);
-  if (t.dayKey === n.dayKey) return `${t.hh}:${t.mm}`;
-  if (t.year === n.year) return `${t.month}.${t.day}`;
-  return `${String(t.year).slice(-2)}.${t.month}.${t.day}`;
+  if (!Number.isFinite(createdMs)) return "";
+  // 최근 글은 "N분 전·N시간 전·N일 전"(한국 게시판 관례), 그보다 오래되면 날짜.
+  const diff = Math.max(0, nowMs - createdMs);
+  const minute = 60_000; const hour = 60 * minute; const day = 24 * hour;
+  if (diff < minute) return "방금 전";
+  if (diff < hour) return `${Math.floor(diff / minute)}분 전`;
+  if (diff < day) return `${Math.floor(diff / hour)}시간 전`;
+  if (diff < 7 * day) return `${Math.floor(diff / day)}일 전`;
+  const t = kstParts(createdMs);
+  const now = kstParts(nowMs);
+  if (t.year === now.year) return `${t.month}.${t.day}`;
+  return `${String(t.year).slice(2)}.${t.month}.${t.day}`;
 }
 
 // 글 상세·툴팁용 전체 시각 — `2026.09.04 15:59`.

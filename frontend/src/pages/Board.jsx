@@ -5,7 +5,7 @@ import { useAuth } from "../lib/auth.js";
 import { boardFullTime, boardTime, kstDateTime, pageWindow } from "../lib/boardText.js";
 import { PageHeader, EmptyState, ErrorNote } from "../components/Page.jsx";
 import { writePath } from "./BoardWrite.jsx";
-import { ChevronLeftIcon, ChevronRightIcon, ImageIcon } from "../components/boardIcons.jsx";
+import { ChevronLeftIcon, ChevronRightIcon, ImageIcon, SearchIcon } from "../components/boardIcons.jsx";
 import { AuthorAvatar } from "../components/UserAvatar.jsx";
 import "./Board.css";
 
@@ -37,14 +37,48 @@ function Pager({ page, pages, onGo }) {
   );
 }
 
-function TableHead() {
+export function TableHead() {
   return (
     <li className="board-head" role="row" aria-hidden="true">
       <span className="board-col-no">번호</span>
       <span className="board-col-title">제목</span>
       <span className="board-col-author">글쓴이</span>
       <span className="board-col-time">시각</span>
+      <span className="board-col-views">조회</span>
+      <span className="board-col-likes">추천</span>
     </li>
+  );
+}
+
+const SORTS = [["new", "최신순"], ["likes", "추천순"], ["views", "조회순"], ["comments", "댓글순"]];
+const FILTERS = [["all", "전체"], ["image", "사진"], ["mine", "내 글"]];
+
+// 목록 위 조작 줄 — 왼쪽 전체 글 수, 오른쪽 정렬(단일 선택 = segmented)·필터(칩)·검색(제목+내용).
+function Controls({ total, sort, filter, q, canMine, onChange }) {
+  const [draft, setDraft] = useState(q);
+  useEffect(() => { setDraft(q); }, [q]);
+  return (
+    <div className="board-controls">
+      <p className="board-total">
+        {q ? <>‘{q}’ 검색 결과 <b className="num">{total.toLocaleString()}</b>개</> : <>전체 <b className="num">{total.toLocaleString()}</b>개</>}
+      </p>
+      <div className="board-controls-right">
+        <div className="seg" role="group" aria-label="정렬">
+          {SORTS.map(([key, label]) => (
+            <button key={key} type="button" className={`seg-item${sort === key ? " seg-item-on" : ""}`} aria-pressed={sort === key} onClick={() => onChange({ sort: key })}>{label}</button>
+          ))}
+        </div>
+        <div className="board-filters" role="group" aria-label="필터">
+          {FILTERS.filter(([key]) => key !== "mine" || canMine).map(([key, label]) => (
+            <button key={key} type="button" className={`chip chip-sm${filter === key ? " chip-on" : ""}`} aria-pressed={filter === key} onClick={() => onChange({ filter: key })}>{label}</button>
+          ))}
+        </div>
+        <form className="board-search" role="search" onSubmit={(e) => { e.preventDefault(); onChange({ q: draft.trim() }); }}>
+          <input value={draft} onChange={(e) => setDraft(e.target.value)} className="field field-sm" placeholder="제목·내용 검색" aria-label="제목과 내용 검색" maxLength={80} />
+          <button type="submit" className="board-search-btn" aria-label="검색"><SearchIcon /></button>
+        </form>
+      </div>
+    </div>
   );
 }
 
@@ -59,21 +93,23 @@ function SkeletonRows({ count = PAGE_SIZE }) {
           <span className="board-title"><span className="board-skeleton is-title" /></span>
           <span className="board-author"><span className="board-skeleton is-author" /></span>
           <span className="board-time"><span className="board-skeleton is-time" /></span>
+          <span className="board-views"><span className="board-skeleton is-time" /></span>
+          <span className="board-likes"><span className="board-skeleton is-time" /></span>
         </li>
       ))}
     </ul>
   );
 }
 
-// 글 한 줄 — 번호 | 제목 [댓글수] (사진) | 글쓴이 | 시각. 행 전체가 링크.
-function PostRow({ post, now }) {
+// 글 한 줄 — 번호 | 제목 [댓글수] (사진) | 글쓴이 | 시각 | 조회 | 추천. 행 전체가 링크.
+export function PostRow({ post, now, current = false }) {
   const time = boardTime(post.created_ms, now);
-  const isToday = /:/.test(time);
+  const isToday = /전$/.test(time);
   const full = boardFullTime(post.created_ms) || post.created_kst;
   const when = kstDateTime(post.created_kst);
   return (
     <li className="board-item">
-      <Link to={`/board/${post.id}`} className="board-row" aria-label={`${post.title}${post.comment_count > 0 ? `, 댓글 ${post.comment_count}개` : ""}${post.has_image ? ", 사진 첨부" : ""}, ${post.author_name}, ${full}`}>
+      <Link to={`/board/${post.id}`} className={`board-row${current ? " is-current" : ""}`} aria-current={current ? "page" : undefined} aria-label={`${post.title}${post.comment_count > 0 ? `, 댓글 ${post.comment_count}개` : ""}${post.has_image ? ", 사진 첨부" : ""}, ${post.author_name}, ${full}, 조회 ${post.views || 0}, 추천 ${post.likes || 0}`}>
         <span className="board-no num" aria-hidden="true">{post.id}</span>
         <span className="board-title">
           <span className="board-title-text">{post.title}</span>
@@ -81,7 +117,9 @@ function PostRow({ post, now }) {
           {post.has_image ? <span className="board-mark" aria-hidden="true"><ImageIcon /></span> : null}
         </span>
         <span className="board-author" aria-hidden="true"><AuthorAvatar userId={post.author_user_id} src={post.author_avatar_url} name={post.author_name} size={20} /><span className="board-author-name">{post.author_name}</span></span>
-        <time className={`board-time num${isToday ? " is-today" : ""}`} dateTime={when || undefined} title={full} aria-hidden="true">{time}</time>
+        <time className={`board-time${isToday ? " is-today" : " num"}`} dateTime={when || undefined} title={full} aria-hidden="true">{time}</time>
+        <span className="board-views num" aria-hidden="true">{post.views || 0}</span>
+        <span className={`board-likes num${post.likes > 0 ? " is-hot" : ""}`} aria-hidden="true">{post.likes || 0}</span>
       </Link>
     </li>
   );
@@ -91,6 +129,9 @@ export default function Board() {
   const { token } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10) || 1);
+  const sort = searchParams.get("sort") || "new";
+  const filter = searchParams.get("filter") || "all";
+  const q = searchParams.get("q") || "";
   const [data, setData] = useState(null);
   const [busy, setBusy] = useState(true);
   const [err, setErr] = useState("");
@@ -100,7 +141,7 @@ export default function Board() {
     setBusy(true);
     setErr("");
     api
-      .boardList(p, PAGE_SIZE)
+      .boardList(p, PAGE_SIZE, { sort, q, filter: filter === "mine" && !token ? "all" : filter })
       .then((d) => {
         setData(d);
         setNow(Date.now()); // 시각 표기(오늘 HH:MM)의 기준을 목록을 받은 순간으로
@@ -112,10 +153,21 @@ export default function Board() {
   useEffect(() => {
     load(page);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page]);
+  }, [page, sort, filter, q, token]);
 
+  // 주소가 곧 상태 — 기본값(1쪽·최신순·전체·검색 없음)은 주소에서 뺀다.
+  function update(next) {
+    const merged = { page, sort, filter, q, ...next };
+    if (!("page" in next)) merged.page = 1;
+    const params = {};
+    if (merged.page > 1) params.page = String(merged.page);
+    if (merged.sort !== "new") params.sort = merged.sort;
+    if (merged.filter !== "all") params.filter = merged.filter;
+    if (merged.q) params.q = merged.q;
+    setSearchParams(params);
+  }
   function go(p) {
-    setSearchParams({ page: String(p) });
+    update({ page: p });
     window.scrollTo({ top: 0 });
   }
 
@@ -132,13 +184,17 @@ export default function Board() {
         }
       />
 
+      <Controls total={data?.total || 0} sort={sort} filter={filter} q={q} canMine={Boolean(token)} onChange={update} />
+
       {err && <ErrorNote>글 목록을 불러오지 못했어요: {err}</ErrorNote>}
       {busy && !data && !err ? <SkeletonRows /> : null}
 
       {data && (
         <>
           {data.items.length === 0 ? (
-            <EmptyState title="아직 글이 없어요">첫 글을 남겨봐요.</EmptyState>
+            q || filter !== "all"
+              ? <EmptyState title="맞는 글이 없어요">{q ? "다른 말로 검색해 보세요." : "조건을 바꿔 보세요."}</EmptyState>
+              : <EmptyState title="아직 글이 없어요">첫 글을 남겨봐요.</EmptyState>
           ) : (
             <ul className={`board-table${busy ? " is-busy" : ""}`} aria-busy={busy || undefined} aria-label="글 목록">
               <TableHead />

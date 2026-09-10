@@ -8,7 +8,8 @@
    · 시각은 오늘 HH:MM · 올해 MM.DD · 그 전 YY.MM.DD 로 바뀌어 같은 칸 폭에서 오늘 글이 갈린다.
    · 댓글 수는 제목 바로 뒤 [n] — 오른쪽 열로 빼지 않는다(읽는 흐름이 왼쪽에서 끊기지 않게).
    색은 전부 --c-* 토큰(라이트·다크 자동). */
-.board-page { width: 100%; }
+/* 게시판 화면(목록·글·글쓰기)은 가운데 1160px 안에 — 전체 폭으로 퍼지면 표와 글이 너무 넓다(퀘이사존 1200 컨테이너, §5 예외). */
+.board-page, .board-post-page { width: 100%; max-width: 1160px; margin-inline: auto; }
 /* ── 글쓰기 — 표와 같은 폭의 괘선 구획. 카드·상자 없이 목록과 같은 언어로(제목 15/700, 라벨 12/600, 입력 40). ── */
 .board-composer { margin-bottom: 24px; padding: 18px 0 20px; display: grid; gap: 12px; border-top: 1px solid rgb(var(--c-slate-300)); border-bottom: 1px solid rgb(var(--c-slate-200)); }
 .board-write .board-composer { margin: 16px 0 0; padding-top: 0; border-top: 0; }
@@ -216,7 +217,7 @@
 
 /* ── 글 상세 — 제목 · 괘선 띠(글쓴이 · 댓글 | 시각) · 본문 · 댓글 · 쓰기, 그 아래 같은 목록(전체 폭).
    퀘이사존의 글 보기와 같은 세로 흐름. 글·댓글은 퀘이사존 넓은 카드 폭(1170px)까지, 본문 글줄은 900px 까지. ── */
-.board-post-page { width: 100%; }
+
 .board-post { min-width: 0; } /* 괘선·띠·댓글은 목록과 같은 전체 폭. 본문 글줄만 아래에서 폭을 제한한다. */
 .board-post-list { margin-top: 44px; }
 .board-post-list-head { margin: 0 0 10px; color: rgb(var(--c-slate-900)); font-size: 15px; font-weight: 700; letter-spacing: -0.01em; }
@@ -309,7 +310,7 @@
 .dark .board-comments-head .num { color: rgb(var(--c-brand-line)); }
 .board-comment-list { margin: 0; padding: 0; list-style: none; }
 .board-comment { padding: 12px 0; border-bottom: 1px solid rgb(var(--c-slate-200)); }
-.board-comment-top { min-width: 0; display: flex; align-items: baseline; gap: 8px; }
+.board-comment-top { min-width: 0; display: flex; align-items: center; gap: 8px; } /* 사진은 baseline 에 앉히면 떠 보인다 — 가운데 맞춤 */
 .board-comment-top b { color: rgb(var(--c-slate-900)); font-size: 13px; font-weight: 700; }
 .board-comment-top time { color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 500; }
 .board-comment-top .board-text-btn { margin-left: auto; }
@@ -325,13 +326,10 @@
 .board-text-btn:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
 .board-text-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
-/* ── 댓글 쓰기 — [사진 32 · 닉네임] 한 줄(세로 가운데 맞춤) → 입력칸(닉네임 열에 맞춰 42px 들여쓰기) → 오른쪽 아래 등록 ── */
+/* ── 댓글 쓰기 — 입력칸(2줄) → 오른쪽 아래 등록. 작성자는 등록된 행에서 보이므로 여기엔 두지 않는다. ── */
 .board-comment-form { margin-top: 16px; display: grid; gap: 8px; }
-.board-comment-form-head { display: flex; align-items: center; gap: 10px; height: 32px; }
-.board-comment-form-head .user-avatar { flex: none; }
-.board-comment-form-name { color: rgb(var(--c-slate-900)); font-size: 14px; line-height: 1; font-weight: 700; }
-.board-comment-form-input { width: calc(100% - 42px); margin-left: 42px; height: auto; min-height: 72px; padding-block: 10px; resize: vertical; }
-.board-comment-form-foot { display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding-left: 42px; }
+.board-comment-form-input { height: auto; min-height: 72px; padding-block: 10px; resize: vertical; }
+.board-comment-form-foot { display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
 .board-comment-form-foot .board-form-error { flex: 1 1 auto; min-height: 0; text-align: left; }
 .board-field-label { display: grid; gap: 4px; color: rgb(var(--c-slate-700)); font-size: 12px; line-height: 1.3; font-weight: 600; }
 .board-comment-top .user-avatar { flex: none; }

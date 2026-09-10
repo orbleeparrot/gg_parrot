@@ -10,6 +10,8 @@
 """
 from __future__ import annotations
 
+import re
+
 import time
 from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
@@ -64,6 +66,13 @@ def _check_rate(client_key: str) -> None:
 # 이미지 검증 — jpg/png만, 매직 바이트로 실제 형식을 확인(확장자/헤더 위조 방지).
 # ---------------------------------------------------------------------------
 MAX_IMAGES = 10  # 글 하나에 붙일 수 있는 사진 수
+# 본문 안 사진 자리 — `[사진1]` 처럼 첨부 순서(1부터)를 가리킨다. 화면이 이 자리에 사진을 끼워 넣는다.
+IMAGE_MARK = re.compile(r"\[사진\s*(\d+)\]")
+
+
+def _snippet(body: str) -> str:
+    text = IMAGE_MARK.sub("", body or "").strip()
+    return text[:SNIPPET_LEN] + ("…" if len(text) > SNIPPET_LEN else "")
 
 
 def validate_image(data: bytes, content_type: Optional[str]) -> tuple[bytes, str]:
@@ -107,7 +116,7 @@ def _post_list_view(row: BoardPost, comment_count: int, avatar_url: str | None =
     return {
         "id": row.id,
         "title": row.title,
-        "snippet": body[:SNIPPET_LEN] + ("…" if len(body) > SNIPPET_LEN else ""),
+        "snippet": _snippet(body),
         "author_name": row.author_name,
         "author_user_id": row.author_user_id,
         "author_avatar_url": avatar_url,
@@ -226,7 +235,7 @@ def list_posts(page: int = 1, size: int = PAGE_SIZE_DEFAULT) -> dict:
             {
                 "id": r.id,
                 "title": r.title,
-                "snippet": (r.body or "")[:SNIPPET_LEN] + ("…" if len(r.body or "") > SNIPPET_LEN else ""),
+                "snippet": _snippet(r.body or ""),
                 "author_name": r.author_name,
                 "author_user_id": r.author_user_id,
                 "author_avatar_url": avatars.public_url(r.author_user_id, r.avatar_version),
@@ -284,6 +293,60 @@ def get_post_image(post_id: int, image_id: int) -> Optional[tuple[bytes, str]]:
         if img is None or img.post_id != post_id or not img.image_data:
             return None
         return img.image_data, (img.image_mime or "image/jpeg")
+
+
+def update_post(post_id: int, user: User, title: str, body: str,
+                keep_image_ids: list[int], new_images: list[tuple[bytes, str]] | None = None) -> Optional[dict]:
+    """작성자 본인만 수정. 남길 사진 id 목록에 없는 사진은 지우고, 새 사진은 뒤에 순서대로 붙인다.
+
+    반환: 수정된 상세 뷰. 글이 없으면 None, 남의 글이면 PermissionError.
+    """
+    title = (title or "").strip()
+    if not title:
+        raise ValueError("제목을 입력해 주세요.")
+    title = title[:MAX_TITLE]
+    body = (body or "").strip()[:MAX_BODY]
+    new_images = list(new_images or [])
+    keep = {int(i) for i in keep_image_ids}
+    with get_session() as db:
+        row = db.get(BoardPost, post_id)
+        if row is None:
+            return None
+        if row.author_user_id != user.id:
+            raise PermissionError("본인이 쓴 글만 고칠 수 있어요.")
+        if row.image_data and 0 not in keep:
+            row.image_data = None
+            row.image_mime = ""
+        existing = sorted(db.exec(select(BoardImage).where(BoardImage.post_id == post_id)).all(),
+                          key=lambda i: (i.position, i.id or 0))
+        kept = []
+        for img in existing:
+            if img.id in keep:
+                kept.append(img)
+            else:
+                db.delete(img)
+        if len(kept) + (1 if row.image_data else 0) + len(new_images) > MAX_IMAGES:
+            raise ValueError(f"사진은 {MAX_IMAGES}장까지 붙일 수 있어요.")
+        for index, img in enumerate(kept):
+            img.position = index
+            db.add(img)
+        now_ms = int(_now_utc().timestamp() * 1000)
+        added = [
+            BoardImage(post_id=post_id, position=len(kept) + index, image_mime=mime, image_data=data, created_ms=now_ms)
+            for index, (data, mime) in enumerate(new_images)
+        ]
+        for img in added:
+            db.add(img)
+        row.title = title
+        row.body = body
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        for img in [*kept, *added]:
+            db.refresh(img)
+        return _post_detail_view(row, [_comment_view(c) for c in db.exec(
+            select(BoardComment).where(BoardComment.post_id == post_id).order_by(BoardComment.id.asc())).all()],
+            avatars.avatar_url(row.author_user_id, db=db), [*kept, *added])
 
 
 def delete_post(post_id: int, user_id: int) -> bool:

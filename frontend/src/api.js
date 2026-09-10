@@ -209,6 +209,14 @@ export const api = {
     for (const file of images) fd.append("images", file);
     return reqForm("/api/board/posts", fd);
   },
+  boardUpdate: (id, { title, body, keepImageIds = [], images = [] }) => {
+    const fd = new FormData();
+    fd.append("title", title);
+    fd.append("body", body || "");
+    fd.append("keep_image_ids", keepImageIds.join(","));
+    for (const file of images) fd.append("images", file);
+    return reqForm(`/api/board/posts/${id}`, fd, { method: "PUT" });
+  },
   boardDelete: (id) => req(`/api/board/posts/${id}`, { method: "DELETE" }),
   boardImageUrl: (id) => `/api/board/posts/${id}/image`,
   // 댓글 — 계정 없이 일회성 이름+비밀번호

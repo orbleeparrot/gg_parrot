@@ -170,6 +170,7 @@ export default function App() {
               <Route path="/news" element={<News />} />
               <Route path="/board" element={<Board />} />
               <Route path="/board/write" element={<BoardWrite />} />
+              <Route path="/board/:id/edit" element={<BoardWrite />} />
               <Route path="/board/:id" element={<BoardPost />} />
               <Route path="/login" element={<Auth />} />
               <Route path="/forgot" element={<ForgotPassword />} />

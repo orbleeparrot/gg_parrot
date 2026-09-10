@@ -17,10 +17,12 @@
 /* 첨부 미리보기 — 붙인 순서대로 112px 정사각 썸네일, 번호와 지우기. */
 .board-composer-previews { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 12px; }
 .board-composer-preview { position: relative; width: 112px; height: 112px; }
+.board-composer-preview-pick { display: block; width: 100%; height: 100%; padding: 0; border: 0; background: transparent; cursor: pointer; border-radius: 10px; }
 .board-composer-preview img { width: 100%; height: 100%; object-fit: cover; border-radius: 10px; border: 1px solid rgb(var(--c-slate-200)); }
-.board-composer-preview-no { position: absolute; left: 6px; bottom: 6px; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 6px; display: grid; place-items: center; background: rgb(var(--c-slate-900) / .82); color: rgb(var(--c-slate-50)); font-size: 12px; font-weight: 700; }
-.board-composer-preview button { position: absolute; top: -8px; right: -8px; width: 24px; height: 24px; border-radius: 999px; background: rgb(var(--c-slate-900)); color: rgb(var(--c-slate-50)); font-size: 12px; font-weight: 700; }
-.board-composer-preview button:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
+.board-composer-preview-pick:hover img { border-color: rgb(var(--c-slate-400)); }
+.board-composer-preview-no { position: absolute; left: 6px; bottom: 6px; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 6px; display: grid; place-items: center; background: rgb(var(--c-slate-900) / .82); color: rgb(var(--c-slate-50)); font-size: 12px; font-weight: 700; pointer-events: none; }
+.board-composer-preview-remove { position: absolute; top: -8px; right: -8px; width: 24px; height: 24px; border-radius: 999px; background: rgb(var(--c-slate-900)); color: rgb(var(--c-slate-50)); font-size: 12px; font-weight: 700; }
+.board-composer-preview-pick:focus-visible, .board-composer-preview-remove:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
 .board-composer-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .board-attach { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; }
 .board-attach input { display: none; }
@@ -199,11 +201,16 @@
 .board-post-author b { overflow-wrap: anywhere; }
 .board-post-strip-time { margin-left: auto; }
 .board-post-strip .board-text-btn { margin-left: 4px; }
+.board-post-actions { display: inline-flex; gap: 2px; margin-left: 6px; }
+.board-post-actions .is-danger:hover:not(:disabled) { color: rgb(var(--c-red-600)); }
+.board-post-body p { margin: 0; white-space: pre-line; }
+.board-post-body .board-post-figure { margin: 0; } /* 본문 안 사진은 문단과 같은 간격(14px)으로 잇는다 */
 .board-post-figure { margin: 20px 0 0; }
-.board-post-figure + .board-post-figure { margin-top: 12px; } /* 여러 장은 세로로 이어 붙인다(한국 게시판 관례) */
 .board-post-figure img { display: block; max-width: 100%; max-height: 560px; border: 1px solid rgb(var(--c-slate-200)); border-radius: 8px; }
 .board-post-body {
   margin: 20px 0 0;
+  display: grid;
+  gap: 14px;
   max-width: 900px; /* 한 줄 ≈ 60자 — 한국 게시판 본문 폭(퀘이사존 800·디시 850) */
   color: rgb(var(--c-slate-800));
   font-size: 15px;

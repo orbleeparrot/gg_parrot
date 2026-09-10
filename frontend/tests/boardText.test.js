@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { boardFullTime, boardTime, initialOf, kstDateTime, pageWindow } from "../src/lib/boardText.js";
+import { boardFullTime, boardTime, imageMark, initialOf, kstDateTime, pageWindow, renumberImageMarks, splitBodyWithImages } from "../src/lib/boardText.js";
 
 test("initialOf takes the first syllable or an uppercase letter, ? when empty", () => {
   assert.equal(initialOf("노희재"), "노");
@@ -38,4 +38,18 @@ test("pageWindow keeps the current page centred and fills five at the edges", ()
   assert.deepEqual(pageWindow(10, 10), [6, 7, 8, 9, 10]);
   assert.deepEqual(pageWindow(2, 3), [1, 2, 3]);
   assert.deepEqual(pageWindow(1, 0), []);
+});
+
+test("splitBodyWithImages puts figures where the marks are and the rest after the text", () => {
+  const images = [{ id: 1, url: "/a" }, { id: 2, url: "/b" }, { id: 3, url: "/c" }];
+  const { segments, trailing } = splitBodyWithImages("첫 줄\n[사진2]\n둘째 줄 [사진 9]", images);
+  assert.deepEqual(segments.map((s) => (s.type === "text" ? s.text : `img${s.index}`)), ["첫 줄", "img2", "둘째 줄 [사진 9]"]);
+  assert.deepEqual(trailing.map((t) => t.index), [1, 3]);
+  assert.deepEqual(splitBodyWithImages("", images).segments, []);
+  assert.equal(splitBodyWithImages("", images).trailing.length, 3);
+});
+
+test("renumberImageMarks drops the removed mark and shifts later ones", () => {
+  assert.equal(renumberImageMarks("a [사진1] b [사진2] c [사진3]", 2), "a [사진1] b  c [사진2]");
+  assert.equal(imageMark(4), "[사진4]");
 });

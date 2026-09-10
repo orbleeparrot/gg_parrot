@@ -2,11 +2,11 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api.js";
 import { useAuth } from "../lib/auth.js";
-import { boardFullTime, boardTime, kstDateTime } from "../lib/boardText.js";
+import { boardFullTime, boardTime, kstDateTime, splitBodyWithImages } from "../lib/boardText.js";
 import { ErrorNote } from "../components/Page.jsx";
 import ConfirmDialog from "../components/ConfirmDialog.jsx";
 import { ChevronLeftIcon, ImageIcon } from "../components/boardIcons.jsx";
-import { writePath } from "./BoardWrite.jsx";
+import { editPath, writePath } from "./BoardWrite.jsx";
 import { AuthorAvatar } from "../components/UserAvatar.jsx";
 import "./Board.css";
 
@@ -166,6 +166,24 @@ function ListBelow({ currentId, token, onWrite }) {
   );
 }
 
+// 본문 — `[사진n]` 자리에 그 사진을 끼우고, 자리가 없는 사진은 글 뒤에 이어 붙인다.
+function PostBody({ body, images }) {
+  const { segments, trailing } = splitBodyWithImages(body, images);
+  const total = images.length;
+  const figure = ({ image, index }) => (
+    <figure key={`img-${image.id ?? image.url}-${index}`} className="board-post-figure">
+      <img src={image.url} alt={total > 1 ? `첨부 이미지 ${index}/${total}` : "첨부 이미지"} loading="lazy" />
+    </figure>
+  );
+  if (!segments.length && !trailing.length) return null;
+  return (
+    <div className="board-post-body">
+      {segments.map((seg, i) => (seg.type === "text" ? <p key={`t-${i}`}>{seg.text}</p> : figure(seg)))}
+      {trailing.map(figure)}
+    </div>
+  );
+}
+
 function PostSkeleton() {
   return (
     <div className="board-post-skeleton" aria-hidden="true">
@@ -233,19 +251,16 @@ export default function BoardPost() {
               <span className="board-post-author"><AuthorAvatar userId={post.author_user_id} src={post.author_avatar_url} name={post.author_name} size={32} /><b>{post.author_name}</b></span>
               <time className="num board-post-strip-time" dateTime={when || undefined}>{full}</time>
               {isMine ? (
-                <button type="button" onClick={() => setConfirmDelete(true)} disabled={deleting} className="board-text-btn">
-                  {deleting ? "지우는 중…" : "글 삭제"}
-                </button>
+                <span className="board-post-actions">
+                  <Link to={editPath(post.id)} className="btn btn-s btn-ghost">편집</Link>
+                  <button type="button" onClick={() => setConfirmDelete(true)} disabled={deleting} className="btn btn-s btn-ghost is-danger">
+                    {deleting ? "지우는 중…" : "삭제"}
+                  </button>
+                </span>
               ) : null}
             </div>
 
-            {(post.images?.length ? post.images : post.image_url ? [{ id: 0, url: post.image_url }] : []).map((img, index, all) => (
-              <figure key={img.id ?? img.url} className="board-post-figure">
-                <img src={img.url} alt={all.length > 1 ? `첨부 이미지 ${index + 1}/${all.length}` : "첨부 이미지"} loading="lazy" />
-              </figure>
-            ))}
-
-            {post.body ? <p className="board-post-body">{post.body}</p> : null}
+            <PostBody body={post.body} images={post.images?.length ? post.images : post.image_url ? [{ id: 0, url: post.image_url }] : []} />
           </article>
 
           <section className="board-comments" aria-labelledby="board-comments-title">

@@ -97,6 +97,36 @@ def test_multiple_images_upload_in_order_and_serve():
     assert client.get(post["images"][0]["url"]).status_code == 404
 
 
+def test_author_edits_title_body_and_images_in_place():
+    token, _ = _signup()
+    created = client.post(
+        "/api/board/posts",
+        data={"title": "처음", "body": "첫 줄\n[사진1]\n둘째 줄\n[사진2]"},
+        files=[("images", ("a.png", io.BytesIO(_PNG), "image/png")), ("images", ("b.png", io.BytesIO(_PNG), "image/png"))],
+        headers=_auth(token),
+    ).json()
+    first, second = created["images"]
+    # 첫 장은 지우고, 둘째 장은 남기고, 새 장을 하나 붙인다. 본문의 자리 번호는 화면이 다시 매겨 보낸다.
+    r = client.put(
+        f"/api/board/posts/{created['id']}",
+        data={"title": "고침", "body": "첫 줄\n둘째 줄\n[사진1]\n[사진2]", "keep_image_ids": str(second["id"])},
+        files=[("images", ("c.png", io.BytesIO(_PNG), "image/png"))],
+        headers=_auth(token),
+    )
+    assert r.status_code == 200, r.text
+    edited = r.json()
+    assert edited["title"] == "고침" and edited["body"].startswith("첫 줄\n둘째 줄")
+    assert [img["id"] for img in edited["images"]][0] == second["id"] and len(edited["images"]) == 2
+    assert client.get(first["url"]).status_code == 404
+    assert client.get(edited["images"][1]["url"]).status_code == 200
+    listed = next(p for p in client.get("/api/board/posts").json()["items"] if p["id"] == created["id"])
+    assert "[사진" not in listed["snippet"]  # 목록 발췌에는 사진 자리가 안 보인다
+    # 남의 글은 못 고친다.
+    other, _ = _signup()
+    assert client.put(f"/api/board/posts/{created['id']}", data={"title": "x", "body": ""}, headers=_auth(other)).status_code == 403
+    assert client.put("/api/board/posts/999999", data={"title": "x", "body": ""}, headers=_auth(token)).status_code == 404
+
+
 def test_too_many_images_rejected():
     token, _ = _signup()
     files = [("images", (f"{i}.png", io.BytesIO(_PNG), "image/png")) for i in range(11)]

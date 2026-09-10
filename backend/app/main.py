@@ -1090,6 +1090,39 @@ async def board_create(
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+@app.put("/api/board/posts/{post_id}")
+async def board_update(
+    post_id: int,
+    title: str = Form(...),
+    body: str = Form(""),
+    keep_image_ids: str = Form(""),
+    images: list[UploadFile] = File(default=[]),
+    user: User = Depends(auth_mod.current_user),
+) -> dict:
+    """글 수정 — 작성자만. `keep_image_ids` 는 남길 사진 id 를 쉼표로(옛 한 장은 0), `images` 는 새로 붙일 사진."""
+    try:
+        keep = [int(part) for part in keep_image_ids.split(",") if part.strip()]
+    except ValueError:
+        raise HTTPException(status_code=400, detail="남길 사진 목록이 올바르지 않아요.")
+    uploads = [up for up in (images or []) if up is not None and (up.filename or "")]
+    validated: list[tuple[bytes, str]] = []
+    for up in uploads:
+        data = await up.read()
+        try:
+            validated.append(board_mod.validate_image(data, up.content_type))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+    try:
+        view = board_mod.update_post(post_id, user, title, body, keep, validated)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if view is None:
+        raise HTTPException(status_code=404, detail="글을 찾을 수 없어요.")
+    return view
+
+
 @app.get("/api/board/posts")
 def board_list(page: int = 1, size: int = board_mod.PAGE_SIZE_DEFAULT) -> dict:
     return board_mod.list_posts(page, size)

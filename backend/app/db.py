@@ -705,15 +705,16 @@ class BoardPostVote(SQLModel, table=True):
 
 
 class BoardComment(SQLModel, table=True):
-    """게시글 댓글. 리더보드 채팅처럼 계정 없이 '일회성 아이디+비밀번호'로 단다.
+    """게시글 댓글. 2026-09-10 부터 로그인 계정만 단다(닉네임 = 계정 이름, author_user_id 로 본인 확인).
 
-    비밀번호 해시는 본인 삭제 확인에만 쓰고, 절대 응답(view)에 담지 않는다.
+    그 전의 익명 댓글(author_user_id 없음)은 그대로 보이고, 글쓴이만 지울 수 있다. password_hash 는 옛 행에만 남아 있다.
     """
 
     id: Optional[int] = Field(default=None, primary_key=True)
     post_id: int = Field(index=True)
     username: str = ""
-    password_hash: str = ""  # PBKDF2; 본인 삭제 확인용, 응답에 미포함
+    author_user_id: Optional[int] = Field(default=None, index=True)
+    password_hash: str = ""  # 옛 익명 댓글의 흔적; 응답에 미포함
     text: str = ""
     created_at: str
     created_ms: int = Field(index=True, sa_type=BigInteger)
@@ -824,6 +825,7 @@ _PG_ADDED_COLUMNS = {
         "claimed_ms": "BIGINT DEFAULT 0", "last_error": "TEXT DEFAULT ''",
     },
     "leaderboardentry": {"streak_days": "INTEGER DEFAULT 1", "first_created_ms": "BIGINT"},
+    "boardcomment": {"author_user_id": "INTEGER"},
     "boardpost": {
         "body_format": "TEXT NOT NULL DEFAULT ''", "views": "INTEGER NOT NULL DEFAULT 0",
         "likes": "INTEGER NOT NULL DEFAULT 0", "dislikes": "INTEGER NOT NULL DEFAULT 0",

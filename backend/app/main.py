@@ -1196,32 +1196,26 @@ def board_post_image(post_id: int, image_id: int) -> Response:
 
 
 class CommentIn(BaseModel):
-    username: str
-    password: str
     text: str
 
 
 @app.post("/api/board/posts/{post_id}/comments")
-def board_comment_add(post_id: int, req: CommentIn, request: Request) -> dict:
-    ip = request.client.host if request.client else "unknown"
+def board_comment_add(post_id: int, req: CommentIn, user: User = Depends(auth_mod.current_user)) -> dict:
+    """댓글 — 로그인 계정만, 닉네임은 계정 이름."""
     try:
-        return {"comment": board_mod.add_comment(post_id, req.username, req.password, req.text, ip)}
-    except board_mod.RateLimited as exc:
-        raise HTTPException(status_code=429, detail=str(exc))
+        return {"comment": board_mod.add_comment(post_id, user, req.text)}
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-
-
-class CommentDeleteIn(BaseModel):
-    password: str
+    except board_mod.RateLimited as exc:
+        raise HTTPException(status_code=429, detail=str(exc))
 
 
 @app.delete("/api/board/comments/{comment_id}")
-def board_comment_delete(comment_id: int, req: CommentDeleteIn) -> dict:
-    if not board_mod.delete_comment(comment_id, req.password):
-        raise HTTPException(status_code=403, detail="비밀번호가 맞지 않아요.")
+def board_comment_delete(comment_id: int, user: User = Depends(auth_mod.current_user)) -> dict:
+    if not board_mod.delete_comment(comment_id, user):
+        raise HTTPException(status_code=403, detail="본인이 쓴 댓글만 지울 수 있어요.")
     return {"ok": True}
 
 

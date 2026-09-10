@@ -229,16 +229,9 @@ export const api = {
   boardDelete: (id) => req(`/api/board/posts/${id}`, { method: "DELETE" }),
   boardImageUrl: (id) => `/api/board/posts/${id}/image`,
   // 댓글 — 계정 없이 일회성 이름+비밀번호
-  boardAddComment: (postId, { username, password, text }) =>
-    req(`/api/board/posts/${postId}/comments`, {
-      method: "POST",
-      body: JSON.stringify({ username, password, text }),
-    }),
-  boardDeleteComment: (commentId, password) =>
-    req(`/api/board/comments/${commentId}`, {
-      method: "DELETE",
-      body: JSON.stringify({ password }),
-    }),
+  boardAddComment: (postId, text) =>
+    req(`/api/board/posts/${postId}/comments`, { method: "POST", body: JSON.stringify({ text }) }),
+  boardDeleteComment: (commentId) => req(`/api/board/comments/${commentId}`, { method: "DELETE" }),
 
   // 한강 수온 (server-cached proxy of the public Hangang temperature API)
   hangangTemp: (options = {}) => req("/api/hangang-temp", options),

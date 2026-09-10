@@ -25,7 +25,6 @@ from sqlmodel import select
 
 from . import avatars
 from .db import BoardComment, BoardImage, BoardPost, BoardPostVote, User, UserAvatar, get_session
-from .security import hash_password, verify_password
 
 MAX_TITLE = 120
 MAX_BODY = 5000
@@ -491,7 +490,8 @@ def get_post(post_id: int, viewer_id: int | None = None, view_key: str | None = 
         crows = db.exec(
             select(BoardComment).where(BoardComment.post_id == post_id).order_by(BoardComment.id.asc())
         ).all()
-        comments = [_comment_view(c) for c in crows]
+        avatar_by_user = {uid: avatars.avatar_url(uid, db=db) for uid in {c.author_user_id for c in crows if c.author_user_id is not None}}
+        comments = [_comment_view(c, avatar_by_user.get(c.author_user_id)) for c in crows]
         images = db.exec(select(BoardImage).where(BoardImage.post_id == post_id)).all()
         return _post_detail_view(row, comments, avatars.avatar_url(row.author_user_id, db=db), images, my_vote=my_vote)
 
@@ -655,37 +655,34 @@ def my_posts(user_id: int, limit: int = 50, db=None) -> list[dict]:
 # ---------------------------------------------------------------------------
 # 댓글 (계정 없이 이름+비밀번호)
 # ---------------------------------------------------------------------------
-def _comment_view(row: BoardComment) -> dict:
+def _comment_view(row: BoardComment, avatar_url: str | None = None) -> dict:
     return {
         "id": row.id,
         "post_id": row.post_id,
         "username": row.username,
-        # Anonymous comments have no verified account link, even when names match.
-        "author_avatar_url": None,
+        "author_user_id": row.author_user_id,
+        "author_avatar_url": avatar_url if row.author_user_id is not None else None,
         "text": row.text,
         "created_kst": _kst_display(row.created_ms),
         "created_ms": int(row.created_ms),
     }
 
 
-def add_comment(post_id: int, username: str, password: str, text: str, client_key: str) -> dict:
+def add_comment(post_id: int, user: User, text: str) -> dict:
+    """로그인 계정의 댓글 — 닉네임은 계정 이름. 연속 작성은 계정 단위로 제한한다."""
     text = (text or "").strip()
     if not text:
         raise ValueError("댓글 내용을 입력해 주세요.")
-    name = (username or "").strip()[:MAX_NAME]
-    if not name:
-        raise ValueError("이름(아이디)을 입력해 주세요.")
-    if not (password or "").strip():
-        raise ValueError("비밀번호를 입력해 주세요.")
-    _check_rate(client_key)
+    _check_rate(f"user:{user.id}")
     with get_session() as db:
         if db.get(BoardPost, post_id) is None:
             raise LookupError("글을 찾을 수 없어요.")
         now = _now_utc()
         row = BoardComment(
             post_id=post_id,
-            username=name,
-            password_hash=hash_password(password),
+            username=user.username,
+            author_user_id=user.id,
+            password_hash="",
             text=text[:MAX_COMMENT],
             created_at=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
             created_ms=int(now.timestamp() * 1000),
@@ -693,16 +690,21 @@ def add_comment(post_id: int, username: str, password: str, text: str, client_ke
         db.add(row)
         db.commit()
         db.refresh(row)
-        return _comment_view(row)
+        return _comment_view(row, avatars.avatar_url(user.id, db=db))
 
 
-def delete_comment(comment_id: int, password: str) -> bool:
-    """작성 때 넣은 비밀번호가 맞아야 삭제."""
+def delete_comment(comment_id: int, user: User) -> bool:
+    """댓글 작성자 본인, 또는 (옛 익명 댓글은) 글쓴이만 지운다."""
     with get_session() as db:
         row = db.get(BoardComment, comment_id)
-        if row is None or not row.password_hash:
+        if row is None:
             return False
-        if not verify_password(password or "", row.password_hash):
+        if row.author_user_id is not None:
+            allowed = row.author_user_id == user.id
+        else:
+            post = db.get(BoardPost, row.post_id)
+            allowed = post is not None and post.author_user_id == user.id
+        if not allowed:
             return False
         db.delete(row)
         db.commit()

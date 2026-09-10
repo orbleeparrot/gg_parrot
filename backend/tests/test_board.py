@@ -208,7 +208,7 @@ def test_votes_views_sort_search_and_filter():
     listed = client.get("/api/board/posts", params={"q": "잡담"}).json()
     assert listed["total"] == 1 and listed["items"][0]["views"] == 2 and listed["items"][0]["likes"] == 0
     # 댓글에 created_ms 가 실린다
-    client.post(f"/api/board/posts/{a['id']}/comments", json={"username": "익명", "password": "pw", "text": "댓글"})
+    client.post(f"/api/board/posts/{a['id']}/comments", json={"text": "댓글"}, headers=_auth(other))
     assert isinstance(client.get(f"/api/board/posts/{a['id']}").json()["comments"][0]["created_ms"], int)
 
 
@@ -241,23 +241,22 @@ def test_only_author_can_delete():
     assert client.get(f"/api/board/posts/{pid}").status_code == 404
 
 
-def test_comment_oneoff_id_password_and_delete():
-    token, _ = _signup()
-    pid = client.post("/api/board/posts", data={"title": "댓글글", "body": "x"}, headers=_auth(token)).json()["id"]
-
-    # 댓글: 계정 없이 이름+비번(로그인 헤더 없음)
-    c = client.post(f"/api/board/posts/{pid}/comments", json={
-        "username": "행인", "password": "pw123", "text": "좋아요",
-    })
-    assert c.status_code == 200
-    cid = c.json()["comment"]["id"]
-    # 응답에 비밀번호/해시가 새어나오지 않음
-    assert "password" not in c.json()["comment"]
-    assert "password_hash" not in c.json()["comment"]
-
-    # 틀린 비번은 삭제 실패, 맞으면 성공
-    assert client.request("DELETE", f"/api/board/comments/{cid}", json={"password": "nope"}).status_code == 403
-    assert client.request("DELETE", f"/api/board/comments/{cid}", json={"password": "pw123"}).status_code == 200
+def test_comments_need_login_and_use_the_account_name():
+    author, _ = _signup()
+    pid = client.post("/api/board/posts", data={"title": "댓글글", "body": "x"}, headers=_auth(author)).json()["id"]
+    assert client.post(f"/api/board/posts/{pid}/comments", json={"text": "익명"}).status_code == 401
+    commenter, account = _signup()
+    c = client.post(f"/api/board/posts/{pid}/comments", json={"text": "좋아요"}, headers=_auth(commenter))
+    assert c.status_code == 200, c.text
+    comment = c.json()["comment"]
+    assert comment["username"] == account["username"] and comment["author_user_id"] == account["id"]
+    assert "password" not in comment and "password_hash" not in comment
+    assert client.post(f"/api/board/posts/{pid}/comments", json={"text": "  "}, headers=_auth(commenter)).status_code == 400
+    # 남(글쓴이 포함)은 못 지우고, 쓴 사람만 지운다.
+    assert client.delete(f"/api/board/comments/{comment['id']}").status_code == 401
+    assert client.delete(f"/api/board/comments/{comment['id']}", headers=_auth(author)).status_code == 403
+    assert client.delete(f"/api/board/comments/{comment['id']}", headers=_auth(commenter)).status_code == 200
+    assert client.get(f"/api/board/posts/{pid}").json()["comments"] == []
 
 
 def test_empty_fields_rejected():
@@ -265,9 +264,8 @@ def test_empty_fields_rejected():
     # 제목 없음
     assert client.post("/api/board/posts", data={"title": "  ", "body": "x"}, headers=_auth(token)).status_code == 400
     pid = client.post("/api/board/posts", data={"title": "t", "body": "x"}, headers=_auth(token)).json()["id"]
-    # 댓글 이름/내용 누락
-    assert client.post(f"/api/board/posts/{pid}/comments", json={"username": "", "password": "p", "text": "hi"}).status_code == 400
-    assert client.post(f"/api/board/posts/{pid}/comments", json={"username": "n", "password": "p", "text": " "}).status_code == 400
+    # 댓글 내용 누락(로그인 상태)
+    assert client.post(f"/api/board/posts/{pid}/comments", json={"text": " "}, headers=_auth(token)).status_code == 400
 
 
 def test_pagination_math():

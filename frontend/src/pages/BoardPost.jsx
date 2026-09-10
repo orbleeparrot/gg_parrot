@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api.js";
 import { useAuth } from "../lib/auth.js";
 import DOMPurify from "dompurify";
@@ -12,32 +12,30 @@ import { editPath, writePath } from "./BoardWrite.jsx";
 import { AuthorAvatar } from "../components/UserAvatar.jsx";
 import "./Board.css";
 
-// §6 text-field 규격. `bg-white` 를 쓰면 안 된다: Tailwind 의 리터럴 흰색이라
-// `.dark` 에서 near-white 로 뒤집히는 text-slate-900 과 겹쳐 글자가 사라진다.
-const commentInputCls = "field field-sm";
-
-// 댓글 작성 — 리더보드 채팅처럼 계정 없이 '일회성 이름+비밀번호'를 매번 입력.
-// 라벨은 입력 위에 보이게 둔다(자리표시자는 라벨이 아니다).
-function CommentForm({ postId, onAdded }) {
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
+// 댓글 쓰기 — 로그인 계정만, 닉네임은 계정 이름(왼쪽에 사진과 함께). 로그인 전에는 안내 한 줄.
+function CommentForm({ postId, user, token, onAdded }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const location = useLocation();
+  if (!token || !user) {
+    return (
+      <p className="board-comment-login">
+        댓글은 로그인한 회원만 남길 수 있어요.
+        <Link to={`/login?next=${encodeURIComponent(location.pathname)}`} className="btn btn-s btn-secondary">로그인</Link>
+      </p>
+    );
+  }
 
   async function submit(e) {
     e.preventDefault();
     setErr("");
-    if (!username.trim() || !password.trim() || !text.trim()) {
-      setErr("이름·비밀번호·내용을 모두 입력해 주세요.");
-      return;
-    }
+    if (!text.trim()) return setErr("댓글 내용을 입력해 주세요.");
     setBusy(true);
     try {
-      const { comment } = await api.boardAddComment(postId, { username, password, text });
+      const { comment } = await api.boardAddComment(postId, text);
       onAdded(comment);
       setText("");
-      // 이름/비밀번호는 남겨둬 연속 작성 편하게 (계정 아님, 일회성 입력값)
     } catch (e2) {
       setErr(String(e2.message || e2));
     } finally {
@@ -47,15 +45,9 @@ function CommentForm({ postId, onAdded }) {
 
   return (
     <form onSubmit={submit} className="board-comment-form" aria-label="댓글 쓰기">
-      <div className="board-comment-form-id">
-        <label className="board-field-label">
-          이름
-          <input value={username} onChange={(e) => setUsername(e.target.value)} maxLength={24} autoComplete="nickname" className={commentInputCls} />
-        </label>
-        <label className="board-field-label">
-          비밀번호
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" className={commentInputCls} />
-        </label>
+      <div className="board-comment-me">
+        <AuthorAvatar userId={user.id} src={user.avatar_url} name={user.username} size={32} />
+        <b>{user.username}</b>
       </div>
       <label className="board-field-label">
         댓글
@@ -65,14 +57,12 @@ function CommentForm({ postId, onAdded }) {
         {busy ? "등록 중…" : "댓글 등록"}
       </button>
       <p className="board-form-error" role={err ? "alert" : undefined}>{err}</p>
-      <p className="board-comment-form-note">계정 없이 남길 수 있어요. 비밀번호는 댓글을 지울 때만 써요.</p>
     </form>
   );
 }
 
-function Comment({ c, onDeleted }) {
+function Comment({ c, canDelete, onDeleted }) {
   const [confirming, setConfirming] = useState(false);
-  const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const when = kstDateTime(c.created_kst);
@@ -82,42 +72,37 @@ function Comment({ c, onDeleted }) {
     setErr("");
     setBusy(true);
     try {
-      await api.boardDeleteComment(c.id, password);
+      await api.boardDeleteComment(c.id);
       onDeleted(c.id);
     } catch (e) {
       setErr(String(e.message || e));
-    } finally {
       setBusy(false);
+      setConfirming(false);
     }
   }
 
   return (
     <li className="board-comment">
       <div className="board-comment-top">
+        <AuthorAvatar userId={c.author_user_id} src={c.author_avatar_url} name={c.username} size={24} />
         <b>{c.username}</b>
         <time className={/전$/.test(rel) ? undefined : "num"} dateTime={when || undefined} title={c.created_kst}>{rel}</time>
-        <button type="button" onClick={() => setConfirming((v) => !v)} className="board-text-btn" aria-expanded={confirming}>
-          삭제
-        </button>
+        {canDelete ? (
+          <button type="button" onClick={() => setConfirming(true)} disabled={busy} className="board-text-btn">삭제</button>
+        ) : null}
       </div>
       <p className="board-comment-text">{c.text}</p>
-      {confirming && (
-        <div className="board-comment-confirm">
-          <input
-            type="password"
-            value={password}
-            aria-label="댓글을 쓸 때 정한 비밀번호"
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="작성 시 비밀번호"
-            className="field field-sm min-w-0 flex-1 sm:flex-none sm:w-56"
-          />
-          {/* red-600 은 다크에서 밝은 분홍이라 흰 글자가 안 읽힌다 — danger 는 채움용 별도 토큰. */}
-          <button type="button" onClick={remove} disabled={busy || !password} className="btn btn-m btn-danger">
-            {busy ? "지우는 중…" : "삭제 확인"}
-          </button>
-          {err && <span className="t-caption text-red-600" role="alert">{err}</span>}
-        </div>
-      )}
+      {err ? <p className="board-form-error" role="alert">{err}</p> : null}
+      <ConfirmDialog
+        open={confirming}
+        title="이 댓글을 지울까요?"
+        description="지운 댓글은 되돌릴 수 없어요."
+        confirmLabel="삭제"
+        tone="danger"
+        busy={busy}
+        onConfirm={remove}
+        onCancel={() => { if (!busy) setConfirming(false); }}
+      />
     </li>
   );
 }
@@ -209,8 +194,7 @@ export default function BoardPost() {
   const avatarSrc = post ? (isMine && user?.avatar_url !== undefined ? user.avatar_url : post.author_avatar_url) : null;
 
   async function vote(value) {
-    if (!token) { navigate(`/login?next=${encodeURIComponent(`/board/${id}`)}`); return; }
-    if (voting) return;
+    if (!token || voting) return;
     setVoting(true); setVoteErr("");
     try {
       const r = await api.boardVote(post.id, value);
@@ -233,8 +217,8 @@ export default function BoardPost() {
   return (
     <div className="board-post-page">
     <div className="board-post">
-      <Link to="/board" className="btn btn-s btn-ghost board-back">
-        <ChevronLeftIcon />목록
+      <Link to="/board" className="btn btn-s btn-secondary board-back">
+        <ChevronLeftIcon /><span>목록</span>
       </Link>
 
       {err ? <div className="mt-4"><ErrorNote>글을 불러오지 못했어요: {err}</ErrorNote></div> : null}
@@ -273,13 +257,14 @@ export default function BoardPost() {
 
             {/* 반응 — 본문 아래 가운데. 추천은 로그인 계정당 한 표, 같은 표를 다시 누르면 취소. */}
             <div className="board-react" role="group" aria-label="이 글에 반응">
-              <button type="button" onClick={() => vote(1)} disabled={voting} className={`board-react-btn${post.my_vote === 1 ? " is-on" : ""}`} aria-pressed={post.my_vote === 1} title={token ? "추천" : "로그인하면 추천할 수 있어요"}>
+              <button type="button" onClick={() => vote(1)} disabled={voting || !token} className={`board-react-btn${post.my_vote === 1 ? " is-on" : ""}`} aria-pressed={post.my_vote === 1} title={token ? "추천" : "로그인한 회원만 추천할 수 있어요"}>
                 <ThumbUpIcon /><span>추천</span><span className="num">{post.likes || 0}</span>
               </button>
-              <button type="button" onClick={() => vote(-1)} disabled={voting} className={`board-react-btn${post.my_vote === -1 ? " is-on is-down" : ""}`} aria-pressed={post.my_vote === -1} title={token ? "비추천" : "로그인하면 비추천할 수 있어요"}>
+              <button type="button" onClick={() => vote(-1)} disabled={voting || !token} className={`board-react-btn${post.my_vote === -1 ? " is-on is-down" : ""}`} aria-pressed={post.my_vote === -1} title={token ? "비추천" : "로그인한 회원만 비추천할 수 있어요"}>
                 <ThumbDownIcon /><span>비추천</span><span className="num">{post.dislikes || 0}</span>
               </button>
             </div>
+            {!token ? <p className="board-react-hint">추천과 댓글은 로그인한 회원만 할 수 있어요.</p> : null}
             {voteErr ? <p className="board-form-error" role="alert">{voteErr}</p> : null}
           </article>
 
@@ -301,6 +286,7 @@ export default function BoardPost() {
                   <Comment
                     key={c.id}
                     c={c}
+                    canDelete={Boolean(user) && (c.author_user_id === user.id || (c.author_user_id == null && isMine))}
                     onDeleted={(cid) => setPost((p) => ({ ...p, comments: p.comments.filter((x) => x.id !== cid) }))}
                   />
                 ))}
@@ -308,6 +294,8 @@ export default function BoardPost() {
             )}
             <CommentForm
               postId={post.id}
+              user={user}
+              token={token}
               onAdded={(comment) => setPost((p) => ({ ...p, comments: [...p.comments, comment] }))}
             />
           </section>

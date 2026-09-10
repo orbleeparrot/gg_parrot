@@ -113,8 +113,8 @@ export default function BoardWrite() {
   return (
     <div className="board-post-page board-write">
       <div className="board-post">
-        <Link to={backTo} className="btn btn-s btn-ghost board-back">
-          <ChevronLeftIcon />{editing ? "글로" : "목록"}
+        <Link to={backTo} className="btn btn-s btn-secondary board-back">
+          <ChevronLeftIcon /><span>{editing ? "글로" : "목록"}</span>
         </Link>
         <h1 className="board-post-title">{editing ? "글 수정" : "새 글 쓰기"}</h1>
         {loadError ? <ErrorNote>글을 불러오지 못했어요: {loadError}</ErrorNote> : null}

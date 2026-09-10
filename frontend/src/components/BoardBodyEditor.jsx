@@ -217,6 +217,9 @@ const BoardBodyEditor = forwardRef(function BoardBodyEditor({ initialHtml = "", 
         <span className="board-tool-sep" />
         <ToolButton label="사진 넣기" disabled={state.images >= maxImages} onClick={() => fileInput.current?.click()}><PhotoIcon size={18} /></ToolButton>
         <ToolButton label="서식 지우기" onClick={run((c) => c.unsetAllMarks().clearNodes())}><EraserIcon size={18} /></ToolButton>
+        <span className="board-tool-hint">
+          {state.images > 0 ? <><b className="num">{state.images}</b>/{maxImages}장 · </> : null}JPG·PNG · 한 장에 2MB · {maxImages}장까지
+        </span>
         <input ref={fileInput} type="file" accept="image/png,image/jpeg" multiple hidden onChange={(e) => { const picked = Array.from(e.target.files || []); e.target.value = ""; if (picked.length) insertImages(picked); }} />
       </div>
       <EditorContent editor={editor} />

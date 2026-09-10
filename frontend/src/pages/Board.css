@@ -23,6 +23,8 @@
 .board-tool:disabled { opacity: .35; cursor: default; }
 .board-tool:focus-visible, .board-tool-select select:focus-visible, .board-color-dot:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 1px; }
 .board-tool-sep { width: 1px; height: 20px; margin: 0 4px; background: rgb(var(--c-slate-200)); }
+.board-tool-hint { margin-left: auto; padding: 0 8px; color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 500; white-space: nowrap; }
+.board-tool-hint b { color: rgb(var(--c-slate-700)); font-weight: 700; }
 .board-tool-select select { height: 32px; padding: 0 8px; border-radius: 8px; border: 0; background: transparent; color: rgb(var(--c-slate-700)); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
 .board-tool-select select:hover { background: rgb(var(--c-slate-100)); }
 .board-tool-color { position: relative; }
@@ -54,8 +56,7 @@
 .board-rich img { margin: 8px 0 12px; }
 .board-rich img[data-align="center"], .board-editor .board-img[data-align="center"] { margin-left: auto; margin-right: auto; }
 .board-rich img[data-align="right"], .board-editor .board-img[data-align="right"] { margin-left: auto; }
-.board-composer-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.board-hint { color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 500; }
+.board-composer-foot { display: flex; align-items: center; justify-content: flex-end; gap: 12px; flex-wrap: wrap; }
 .board-composer-actions { display: flex; gap: 8px; }
 
 /* ── 목록 표 ── */

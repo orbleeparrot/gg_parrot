@@ -25,7 +25,6 @@ function Composer({ initial, onSaved, onCancel }) {
   const [title, setTitle] = useState(initial?.title || "");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
-  const [count, setCount] = useState(0);
   const editor = useRef(null);
 
   async function submit() {
@@ -64,15 +63,10 @@ function Composer({ initial, onSaved, onCancel }) {
           initialHtml={initial?.bodyHtml || ""}
           maxImages={MAX_IMAGES}
           onError={setErr}
-          onCountChange={setCount}
         />
       </div>
       <p className="board-form-error" role={err ? "alert" : undefined}>{err}</p>
       <div className="board-composer-foot">
-        <span className="board-hint">
-          {count > 0 ? <><b className="num">{count}</b>/{MAX_IMAGES}장 · </> : null}
-          사진은 도구 줄의 사진 버튼이나 붙여넣기·끌어다 놓기로 · JPG·PNG · 한 장에 2MB · {MAX_IMAGES}장까지
-        </span>
         <div className="board-composer-actions">
           <button type="button" onClick={onCancel} className="btn btn-m btn-secondary">취소</button>
           <button type="button" onClick={submit} disabled={busy} className="btn btn-m btn-primary">

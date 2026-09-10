@@ -15,6 +15,7 @@ import CoinIcon from "../components/CoinIcon.jsx";
 import UserAvatar from "../components/UserAvatar.jsx";
 import ProfileEditor, { PasswordChangeDialog, DeleteAccountDialog } from "../components/ProfileEditor.jsx";
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
+import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
 import { ImageIcon } from "../components/boardIcons.jsx";
 import "./Board.css"; // 게시글 탭은 게시판 목록 문법(.board-table)을 그대로 쓴다
 import "./MyPage.css";
@@ -60,14 +61,10 @@ function TierIcon({ name }) {
   return <Icon className={`me-tier-icon is-${tone}`} size={24} weight="duotone" aria-hidden="true" />;
 }
 
-function TierGuide({ tier }) {
+function TierGuide({ tier, open }) {
   return (
-    <details className="me-tier">
-      <summary aria-label={`등급 안내 · ${tier.name} · ${tierNextLabel(tier)}`}>
-        <span className="me-tier-current"><TierIcon name={tier.name} /><b>{tier.name}</b></span>
-        <span className="me-tier-next">{tierNextLabel(tier)}</span>
-        <CaretDownIcon className="me-tier-caret" size={16} weight="bold" aria-hidden="true" />
-      </summary>
+    <div className="me-tier" id="me-tier-guide" hidden={!open}>
+      <p className="me-tier-next">{tierNextLabel(tier)}</p>
       <ol className="me-tier-list" aria-label="판매 등급별 조건">
         {tierSteps(tier).map((step) => (
           <li key={step.name} className={step.state === "current" ? "is-current" : undefined} aria-current={step.state === "current" ? "step" : undefined}>
@@ -77,7 +74,7 @@ function TierGuide({ tier }) {
           </li>
         ))}
       </ol>
-    </details>
+    </div>
   );
 }
 
@@ -92,9 +89,7 @@ function HeadRow({ cols }) {
 function CreatedTab({ rows, now, onOpen }) {
   if (rows.length === 0) {
     return (
-      <EmptyState title="아직 등록한 매크로가 없어요" action={<Link to="/builder" className="btn btn-m btn-secondary">매크로 만들기</Link>}>
-        빌더에서 만들어 리더보드에 올리면 여기 쌓여요.
-      </EmptyState>
+      <EmptyState title="아직 등록한 매크로가 없어요" action={<Link to="/builder" className="btn btn-s btn-secondary">매크로 만들기</Link>} />
     );
   }
   return (
@@ -107,9 +102,11 @@ function CreatedTab({ rows, now, onOpen }) {
             <span className="me-title num">{m.symbol}</span>
             <span className="me-sub">{m.human_summary}</span>
           </div>
+          <div className="me-row-details">
           <ActivityValue label="판매" className="is-right me-row-sales">{m.sales}건</ActivityValue>
           <ActivityValue label="수익" className={`is-right me-row-earned${m.earned > 0 ? " me-credit" : ""}`}>{m.earned > 0 ? signedPoints(m.earned) : formatPoints(0)}</ActivityValue>
           <Stamp value={m.created_ms ?? m.created_kst} now={now} className="is-right me-row-date" label="등록" />
+          </div>
           <button type="button" onClick={() => onOpen(m.macro)} disabled={!m.macro} className="btn btn-s btn-secondary">빌더에서 열기</button>
         </li>
       ))}
@@ -120,9 +117,7 @@ function CreatedTab({ rows, now, onOpen }) {
 function PurchasedTab({ rows, now, onOpen }) {
   if (rows.length === 0) {
     return (
-      <EmptyState title="언락한 매크로가 없어요" action={<Link to="/leaderboard" className="btn btn-m btn-secondary">리더보드 보기</Link>}>
-        리더보드에서 전략을 열면 여기서 다시 볼 수 있어요.
-      </EmptyState>
+      <EmptyState title="구매한 매크로가 없어요" action={<Link to="/leaderboard" className="btn btn-s btn-secondary">리더보드 보기</Link>} />
     );
   }
   return (
@@ -135,8 +130,10 @@ function PurchasedTab({ rows, now, onOpen }) {
             <span className="me-title"><span className="num">{m.symbol}</span> <span className="me-seller">@{m.seller}</span></span>
             <span className="me-sub">{m.human_summary}</span>
           </div>
+          <div className="me-row-details">
           <ActivityValue label="구매 금액" className="is-right me-row-price">{signedPoints(-m.price)}</ActivityValue>
           <Stamp value={m.unlocked_at} now={now} className="is-right me-row-date" label="구매" />
+          </div>
           <button type="button" onClick={() => onOpen(m.macro)} disabled={!m.macro} className="btn btn-s btn-secondary">빌더로 복사</button>
         </li>
       ))}
@@ -186,9 +183,7 @@ function LedgerTab({ rows, now, symbolByEntry }) {
 function PostsTab({ rows, now }) {
   if (rows.length === 0) {
     return (
-      <EmptyState title="아직 쓴 글이 없어요" action={<Link to="/board/write" className="btn btn-m btn-secondary">글쓰기</Link>}>
-        게시판에 남긴 글이 여기 모여요.
-      </EmptyState>
+      <EmptyState title="아직 쓴 글이 없어요" action={<Link to="/board/write" className="btn btn-s btn-secondary">글쓰기</Link>} />
     );
   }
   return (
@@ -223,9 +218,12 @@ function Skeleton() {
   return (
     <div className="me-page" aria-hidden="true">
       <div className="me-head">
-        <span className="me-skeleton is-avatar" />
-        <div className="me-id"><span className="me-skeleton" style={{ width: 200, height: 36 }} /><span className="me-skeleton" style={{ width: 280, height: 16 }} /></div>
-        <span className="me-skeleton" style={{ width: 160, height: 44 }} />
+        <div className="me-profile">
+          <span className="me-skeleton is-avatar" />
+          <div className="me-id"><span className="me-skeleton" style={{ width: 200, height: 36 }} /><span className="me-skeleton" style={{ width: 160, height: 16 }} /></div>
+          <div className="me-head-actions"><span className="me-skeleton" style={{ width: 112, height: 36 }} /></div>
+        </div>
+        <div className="me-stats">{Array.from({ length: 3 }, (_, i) => <div className="me-stat" key={i}><span className="me-skeleton" style={{ width: 64 }} /><span className="me-skeleton" style={{ width: 96, height: 28 }} /></div>)}</div>
       </div>
       <ul className="me-table" style={{ "--me-cols": "36px minmax(0,1fr) 120px" }}>
         {Array.from({ length: 5 }, (_, i) => (
@@ -247,6 +245,7 @@ export default function MyPage() {
   const [notice, setNotice] = useState("");
   const compact = useCompactProfile();
   const [accountOpen, setAccountOpen] = useState(false);
+  const [tierOpen, setTierOpen] = useState(false);
   const [now, setNow] = useState(() => Date.now());
 
   const paramTab = searchParams.get("tab");
@@ -257,6 +256,7 @@ export default function MyPage() {
     setError("");
     setEditor(null);
     setAccountOpen(false);
+    setTierOpen(false);
     if (!token) {
       if (!leavingAccount.current) navigate("/login?next=%2Fmypage");
       return;
@@ -309,13 +309,21 @@ export default function MyPage() {
   const counts = { created: created.length, purchased: purchased.length, sales: sales.length, ledger: ledger.length, posts: my_posts.length };
   const openInBuilder = (macro) => navigate("/builder", { state: { macro } });
   const pickTab = (key) => setSearchParams(key === "created" ? {} : { tab: key }, { replace: true });
+  const moveTab = (event, index) => {
+    const next = { ArrowRight: (index + 1) % TABS.length, ArrowLeft: (index + TABS.length - 1) % TABS.length, Home: 0, End: TABS.length - 1 }[event.key];
+    if (next === undefined) return;
+    event.preventDefault();
+    pickTab(TABS[next].key);
+    document.getElementById(`me-tab-${TABS[next].key}`)?.focus({ preventScroll: true });
+  };
   // Eight monospaced characters exceed one of the three columns at 320px.
   const longStats = [formatPoints(user.points_balance), formatPoints(totals.earned), `${totals.sales}건`].some((value) => value.length > 7);
 
   return (
     <div className="me-page">
-      {/* 머리 — 이름이 곧 제목(다른 화면의 PageHeader 제목과 같은 크기). 오른쪽은 포인트·수익·판매. */}
+      {/* 신원 → 같은 기준선의 수치 → 활동. 설정과 등급 조건은 필요할 때 펼친다. */}
       <header className="me-head">
+        <div className="me-profile">
         <button type="button" className="me-avatar-edit" aria-label="프로필 사진 변경" aria-haspopup="dialog" onClick={() => setEditor("profile")}>
           <UserAvatar src={user.avatar_url} name={user.username} size={80} className="me-avatar" />
           <span className="me-avatar-camera"><CameraIcon size={16} weight="bold" aria-hidden="true" /></span>
@@ -323,22 +331,26 @@ export default function MyPage() {
         <div className="me-id">
           <div className="me-name-row">
             <h1 className="me-name">{user.username}</h1>
-            <button type="button" className="btn btn-s btn-secondary me-edit-button" aria-label="프로필 편집" aria-haspopup="dialog" onClick={() => setEditor("profile")}><PencilSimpleIcon size={16} aria-hidden="true" /><span><span className="me-edit-prefix">프로필 </span>편집</span></button>
+            <button type="button" className="me-tier-toggle" aria-label={`등급 안내 · ${tier.name}`} aria-expanded={tierOpen} aria-controls="me-tier-guide" onClick={() => setTierOpen(!tierOpen)}><TierIcon name={tier.name} /><span>{tier.name}</span><CaretDownIcon size={12} aria-hidden="true" /></button>
           </div>
           <p className="me-meta">
             {joinedLabel(user.created_at) ? <span className="num">{joinedLabel(user.created_at)}</span> : null}
           </p>
+          {user.bio ? <p className="me-bio">{user.bio}</p> : null}
         </div>
-        {user.bio ? <p className="me-bio">{user.bio}</p> : null}
-        <TierGuide tier={tier} />
+        <div className="me-head-actions">
+          <button type="button" className="btn btn-s btn-secondary me-edit-button" aria-label="프로필 편집" aria-haspopup="dialog" onClick={() => setEditor("profile")}><PencilSimpleIcon size={18} aria-hidden="true" /><span>프로필 편집</span></button>
+          <button type="button" className="btn btn-s btn-ghost me-settings-toggle" aria-label="계정 설정" aria-expanded={accountOpen} aria-controls="me-account-settings" onClick={() => setAccountOpen(!accountOpen)}><GearSixIcon size={20} aria-hidden="true" /><span>계정 설정</span></button>
+        </div>
+        </div>
+        <TierGuide tier={tier} open={tierOpen} />
         <dl className={`me-stats${longStats ? " has-long-values" : ""}`}>
           <div className="me-stat is-points"><dt>보유 포인트</dt><dd className="num">{formatPoints(user.points_balance)}</dd></div>
           <div className="me-stat"><dt>판매 수익</dt><dd className="num">{formatPoints(totals.earned)}</dd></div>
           <div className="me-stat"><dt>누적 판매</dt><dd className="num">{totals.sales}건</dd></div>
         </dl>
       </header>
-      <details className="me-account-settings" open={!compact || accountOpen} onToggle={(event) => { if (compact) setAccountOpen(event.currentTarget.open); }}>
-        <summary>계정 설정<CaretDownIcon size={18} weight="regular" aria-hidden="true" /></summary>
+      <div className="me-account-settings" id="me-account-settings" hidden={!accountOpen}>
         <section className="me-account" aria-labelledby="me-account-title">
         <div className="me-account-id">
           <h2 id="me-account-title">계정 설정</h2>
@@ -351,7 +363,7 @@ export default function MyPage() {
           <button type="button" className="btn btn-s btn-ghost me-delete-account" aria-haspopup="dialog" onClick={() => setEditor("delete")}>회원 탈퇴</button>
         </div>
         </section>
-      </details>
+      </div>
       {notice ? <p className="me-notice" role="status">{notice}</p> : null}
       {editor === "profile" ? <ProfileEditor key={token} user={user} onClose={() => setEditor(null)} onSaved={saveProfile} /> : null}
       {editor === "password" && user.can_change_password ? <PasswordChangeDialog key={token} user={user} onClose={() => setEditor(null)} onSaved={savePassword} /> : null}
@@ -359,8 +371,8 @@ export default function MyPage() {
 
       <div className="me-tabs">
         <label className="me-mobile-activity" htmlFor="me-activity-select"><span id="me-activity-label" className="sr-only">내 활동 종류</span><select id="me-activity-select" value={tab} onChange={(event) => pickTab(event.target.value)}>{TABS.map((item) => <option key={item.key} value={item.key}>{item.label} · {counts[item.key]}</option>)}</select><CaretDownIcon size={18} aria-hidden="true" /></label>
-        <div className="seg" role="tablist" aria-label="내 활동 종류">
-          {TABS.map((t) => (
+        <div className="me-tab-list" role="tablist" aria-label="내 활동 종류">
+          {TABS.map((t, index) => (
             <button
               key={t.key}
               type="button"
@@ -368,8 +380,10 @@ export default function MyPage() {
               id={`me-tab-${t.key}`}
               aria-selected={tab === t.key}
               aria-controls="me-panel"
-              className={`seg-item${tab === t.key ? " seg-item-on" : ""}`}
+              tabIndex={tab === t.key ? 0 : -1}
+              className="me-tab"
               onClick={() => pickTab(t.key)}
+              onKeyDown={(event) => moveTab(event, index)}
             >
               {t.label}<span className="me-tab-count num">{counts[t.key]}</span>
             </button>
@@ -377,7 +391,7 @@ export default function MyPage() {
         </div>
       </div>
 
-      <section id="me-panel" role={compact ? "region" : "tabpanel"} aria-label={compact ? TABS.find((item) => item.key === tab).label : undefined} aria-labelledby={compact ? undefined : `me-tab-${tab}`} className="me-panel">
+      <section id="me-panel" role={compact ? "region" : "tabpanel"} tabIndex={0} aria-label={compact ? TABS.find((item) => item.key === tab).label : undefined} aria-labelledby={compact ? undefined : `me-tab-${tab}`} className="me-panel">
         {tab === "created" && <CreatedTab rows={created} now={now} onOpen={openInBuilder} />}
         {tab === "purchased" && <PurchasedTab rows={purchased} now={now} onOpen={openInBuilder} />}
         {tab === "sales" && <SalesTab rows={sales} now={now} />}

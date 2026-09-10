@@ -1,5 +1,13 @@
 [
   {
+    "date": "2026-09-10",
+    "scope": "page",
+    "macrostructure": "profile + activity index",
+    "theme": "DESIGN.md locked",
+    "enrichment": "none",
+    "brief": "프로필 신원·통계·활동 순서 재설계: 이름 옆 등급, 필요할 때 여는 계정 설정, 밑줄 탭과 짧은 모바일 목록"
+  },
+  {
     "date": "2026-09-09",
     "scope": "page",
     "macrostructure": "Stat-Led identity strip + Index-First tabs",

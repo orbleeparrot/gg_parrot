@@ -224,8 +224,12 @@ def save(dialog):
 
 def open_account(page):
     settings = page.locator(".me-account-settings")
-    if not settings.evaluate("element => element.open"):
-        settings.locator("summary").click()
+    toggle = page.get_by_role("button", name="계정 설정", exact=True)
+    expect(toggle).to_have_attribute("aria-controls", settings.get_attribute("id"))
+    if toggle.get_attribute("aria-expanded") != "true":
+        toggle.click()
+    expect(toggle).to_have_attribute("aria-expanded", "true")
+    expect(settings).to_be_visible()
 
 
 def main():
@@ -246,10 +250,18 @@ def main():
                     assert len({x['label'] for x in metrics}) == 1, metrics
                     assert len({x['value'] for x in metrics}) == 1, metrics
                     assert len({x['font'] for x in metrics}) == 1, metrics
+                    tier_toggle = page.locator(".me-tier-toggle")
+                    expect(tier_toggle).to_have_attribute("aria-expanded", "false")
+                    expect(tier_toggle).to_have_attribute("aria-controls", "me-tier-guide")
                     expect(page.get_by_role("list", name="판매 등급별 조건")).to_be_hidden()
-                    page.locator(".me-tier summary").click()
+                    tier_toggle.focus(); page.keyboard.press("Enter")
+                    expect(tier_toggle).to_have_attribute("aria-expanded", "true")
+                    expect(page.get_by_role("list", name="판매 등급별 조건")).to_be_visible()
                     expect(page.locator(".me-tier-list li")).to_have_count(5)
-                    page.locator(".me-tier summary").click()
+                    tier_toggle.press("Space")
+                    expect(tier_toggle).to_have_attribute("aria-expanded", "false")
+                    expect(page.get_by_role("list", name="판매 등급별 조건")).to_be_hidden()
+                    expect(tier_toggle).to_be_focused()
                     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
                     suite.screenshot(page, f"settings-{width}-{theme}")
                     dialog = edit(page)

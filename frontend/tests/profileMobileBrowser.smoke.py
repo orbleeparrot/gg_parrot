@@ -102,6 +102,19 @@ def assert_stats(page, stacked=False):
     }""")
 
 
+def assert_account_state(page, opened):
+    toggle = page.get_by_role("button", name="계정 설정", exact=True)
+    settings = page.locator("#me-account-settings")
+    expect(toggle).to_have_attribute("aria-controls", "me-account-settings")
+    expect(toggle).to_have_attribute("aria-expanded", "true" if opened else "false")
+    if opened:
+        expect(settings).to_be_visible()
+        expect(page.get_by_role("button", name="로그아웃", exact=True)).to_be_visible()
+    else:
+        expect(settings).not_to_be_visible()
+        expect(page.get_by_role("button", name="로그아웃", exact=True)).not_to_be_visible()
+
+
 def main():
     if not (profile.BUILD / "index.html").is_file(): raise SystemExit(f"Build missing: {profile.BUILD}")
     OUTPUT.mkdir(parents=True, exist_ok=True)
@@ -115,7 +128,7 @@ def main():
             if os.environ.get("BROWSER_EXECUTABLE_PATH"): launch["executable_path"] = os.environ["BROWSER_EXECUTABLE_PATH"]
             browser = playwright.chromium.launch(**launch)
             suite = profile.Suite(browser, f"http://127.0.0.1:{server.server_port}")
-            for width, height in [(320, 740), (390, 844), (844, 390), (1440, 900)]:
+            for width, height in [(320, 740), (375, 812), (390, 844), (414, 896), (768, 1024), (844, 390), (1440, 900)]:
                 for theme in ("light", "dark"):
                     fixture = FilledFixtures(); context, page = suite.open(fixture, width, theme)
                     page.set_viewport_size({"width": width, "height": height})
@@ -125,15 +138,12 @@ def main():
                     if compact:
                         expect(selector).to_be_visible()
                         assert selector.evaluate("e=>parseFloat(getComputedStyle(e).fontSize)") >= 16
+                        assert selector.bounding_box()["height"] >= 44
                         expect(page.get_by_role("tablist", name="내 활동 종류")).not_to_be_visible()
-                        summary = page.locator(".me-account-settings > summary")
-                        expect(summary).to_have_text("계정 설정")
-                        assert summary.bounding_box()["height"] >= 48
-                        expect(page.get_by_role("button", name="로그아웃", exact=True)).not_to_be_visible()
-                        assert not page.locator(".me-account-settings").evaluate("e=>e.open")
                     else:
                         expect(selector).not_to_be_visible()
                         expect(page.get_by_role("tablist", name="내 활동 종류")).to_be_visible()
+                    assert_account_state(page, False)
                     assert_stats(page)
                     for key, label in TABS.items():
                         if compact: selector.select_option(key)
@@ -150,11 +160,13 @@ def main():
                                 expect(rows.first.get_by_text("판매" if key == "created" else "구매 금액", exact=True)).to_be_visible()
                             else:
                                 # Separate list-row grids must share their header's columns.
-                                alignment = page.locator(".me-table").evaluate("""el => {
+                                columns = [".coin-icon", ".me-main"] + ([".me-row-sales", ".me-row-earned"] if key == "created" else [".me-row-price"]) + [".me-row-date", "button"]
+                                alignment = page.locator(".me-table").evaluate("""(el, selectors) => {
                                   const head=[...el.querySelector('.me-table-head').children];
-                                  const row=[...el.querySelector('.me-row:not(.me-table-head)').children];
+                                  const data=el.querySelector('.me-row:not(.me-table-head)');
+                                  const row=selectors.map(selector=>data.querySelector(selector));
                                   return head.map((cell,i)=>Math.abs(cell.getBoundingClientRect().right-row[i].getBoundingClientRect().right));
-                                }""")
+                                }""", columns)
                                 assert max(alignment[:-1]) < 1, alignment
                         if key == "ledger" and compact:
                             expect(rows.first.get_by_text("잔액", exact=True)).to_be_visible()
@@ -168,6 +180,7 @@ def main():
                     expect(page.locator(".me-posts .board-item")).to_have_count(2)
                     if compact: expect(selector).to_have_value("posts")
                     profile.open_account(page)
+                    assert_account_state(page, True)
                     expect(page.get_by_role("button", name="비밀번호 변경", exact=True)).to_be_visible()
                     page.get_by_role("button", name="비밀번호 변경", exact=True).click()
                     expect(page.get_by_role("dialog", name="비밀번호 변경")).to_be_visible(); page.keyboard.press("Escape")
@@ -191,21 +204,39 @@ def main():
                 suite.record(f"long-name-large-values-{points}", fixture); context.close()
 
             fixture = FilledFixtures(); context, page = suite.open(fixture, 1099)
-            settings = page.locator(".me-account-settings"); summary = settings.locator("summary")
+            toggle = page.get_by_role("button", name="계정 설정", exact=True)
             for open_state in (False, True):
-                if open_state: summary.click()
-                assert settings.evaluate("e=>e.open") == open_state
+                if open_state:
+                    toggle.focus(); page.keyboard.press("Enter")
+                    expect(toggle).to_be_focused()
+                assert_account_state(page, open_state)
                 page.set_viewport_size({"width":1440,"height":900})
-                expect(summary).not_to_be_visible(); expect(page.get_by_role("button", name="로그아웃", exact=True)).to_be_visible()
+                assert_account_state(page, open_state)
                 page.set_viewport_size({"width":390,"height":844})
-                expect(summary).to_be_visible()
-                expect(settings).to_have_js_property("open", open_state)
-            summary.click(); expect(settings).to_have_js_property("open", False)
+                assert_account_state(page, open_state)
+            toggle.press("Space"); assert_account_state(page, False)
             profile.open_account(page)
             page.get_by_role("button", name="로그아웃", exact=True).click()
             expect(page).to_have_url(re.compile(r"/login$"))
             assert page.evaluate("localStorage.getItem('ggp_token')") is None
             suite.record("account-collapse-resize-restoration-and-logout", fixture); context.close()
+
+            fixture = FilledFixtures(); context, page = suite.open(fixture, 1440)
+            page.get_by_role("tab", name=re.compile("만든 매크로")).focus()
+            for key, selected in [("ArrowRight", "purchased"), ("End", "posts"), ("ArrowRight", "created"), ("ArrowLeft", "posts"), ("Home", "created")]:
+                page.keyboard.press(key)
+                current = page.get_by_role("tab", name=re.compile(TABS[selected]))
+                expect(current).to_be_focused()
+                expect(current).to_have_attribute("aria-selected", "true")
+                expect(current).to_have_attribute("tabindex", "0")
+                expect(page.locator('.me-tabs [role="tab"][tabindex="0"]')).to_have_count(1)
+                expect(page.locator('.me-tabs [role="tab"][aria-selected="false"][tabindex="-1"]')).to_have_count(4)
+                expect(page.locator(".me-panel")).to_have_attribute("aria-labelledby", f"me-tab-{selected}")
+                if selected != "created": expect(page).to_have_url(re.compile(rf"\?tab={selected}$"))
+                else: expect(page).to_have_url(re.compile(r"/mypage$"))
+            page.keyboard.press("Tab")
+            expect(page.locator(".me-panel")).to_be_focused()
+            suite.record("desktop-activity-keyboard-navigation", fixture); context.close()
 
             fixture = FilledFixtures(); fixture.users["fixture-a"]["can_change_password"] = False
             context, page = suite.open(fixture, 390); profile.open_account(page)

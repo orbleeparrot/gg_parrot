@@ -2703,14 +2703,16 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   text-wrap: balance;
 }
 
-/* 소개 제목의 강조 — 브랜드색 두 줄 밑줄(2026-09-10, 한 줄 → 두 줄). 두께는 두 줄 전체 높이라 글자 크기에 비례. */
+/* 소개 제목의 강조 — 손으로 그은 듯한 브랜드색 두 줄(SVG 배경, 2026-09-10). 줄이 바뀌면 조각마다 다시 긋는다(box-decoration-break). */
 .home-entry-copy h1 span {
-  text-decoration-line: underline;
-  text-decoration-style: double;
-  text-decoration-color: rgb(var(--c-brand));
-  text-decoration-thickness: 0.14em;
-  text-underline-offset: 0.08em;
-  text-decoration-skip-ink: none;
+  text-decoration: none;
+  background-image: url("data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20viewBox=%220%200%20200%2022%22%20preserveAspectRatio=%22none%22%3E%3Cpath%20d=%22M4%207.5%20C%2038%203.5,%2082%2011,%20124%207%20S%20178%204.5,%20196%206.5%22%20fill=%22none%22%20stroke=%22%23fcd535%22%20stroke-width=%222.2%22%20stroke-linecap=%22round%22%20vector-effect=%22non-scaling-stroke%22/%3E%3Cpath%20d=%22M8%2015.5%20C%2050%2019.5,%2096%2012.5,%20140%2015.5%20S%20184%2018,%20193%2014.5%22%20fill=%22none%22%20stroke=%22%23fcd535%22%20stroke-width=%221.8%22%20stroke-linecap=%22round%22%20opacity=%22.92%22%20vector-effect=%22non-scaling-stroke%22/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: 0 100%;
+  background-size: 100% 0.34em;
+  padding-bottom: 0.04em;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
 }
 
 .home-entry-description {
@@ -3606,13 +3608,15 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 
 .home-hero-title mark {
   color: inherit;
-  background: transparent;
-  text-decoration-line: underline;
-  text-decoration-style: double;
-  text-decoration-color: rgb(var(--c-brand));
-  text-decoration-thickness: 0.14em;
-  text-underline-offset: 0.1em;
-  text-decoration-skip-ink: none;
+  background-color: transparent;
+  text-decoration: none;
+  background-image: url("data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20viewBox=%220%200%20200%2022%22%20preserveAspectRatio=%22none%22%3E%3Cpath%20d=%22M4%207.5%20C%2038%203.5,%2082%2011,%20124%207%20S%20178%204.5,%20196%206.5%22%20fill=%22none%22%20stroke=%22%23fcd535%22%20stroke-width=%222.2%22%20stroke-linecap=%22round%22%20vector-effect=%22non-scaling-stroke%22/%3E%3Cpath%20d=%22M8%2015.5%20C%2050%2019.5,%2096%2012.5,%20140%2015.5%20S%20184%2018,%20193%2014.5%22%20fill=%22none%22%20stroke=%22%23fcd535%22%20stroke-width=%221.8%22%20stroke-linecap=%22round%22%20opacity=%22.92%22%20vector-effect=%22non-scaling-stroke%22/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: 0 100%;
+  background-size: 100% 0.34em;
+  padding-bottom: 0.04em;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
 }
 
 .home-hero-description {

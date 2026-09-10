@@ -49,15 +49,6 @@ function useCoinNewsBriefings(coins) {
   return { newsBySymbol, retry };
 }
 
-function TranslationPending({ data }) {
-  const count = Number(data?.translation?.pending_count) || 0;
-  return (
-    <div className="news-racer-reader-state is-notice" role="status">
-      <span>{count > 0 ? `${count}개 기사 제목을` : "기사 제목을"} 한국어로 번역하고 있어요. 완료되면 자동으로 표시해요.</span>
-    </div>
-  );
-}
-
 function BriefingSectionHeader({ id, title, description, count, countLabel, pendingLabel }) {
   return (
     <header className="news-briefing-section-head">
@@ -111,8 +102,6 @@ function MarketBriefing({ market, loading, error }) {
           ) : !translationPending ? (
             <div className="news-reader-empty t-small text-slate-500">지금은 불러올 시장 헤드라인이 없어요.</div>
           ) : null}
-          {translationPending ? <TranslationPending data={market} /> : null}
-
           {/* AI 요약은 페이지 머리(제목·기준일 아래)로 올라갔다. 여기엔 용어 칩만 남긴다. */}
           <TermChips texts={[market.overview, ...(market.items || []).map((item) => item.title)]} />
         </>
@@ -330,7 +319,6 @@ function RacerMobileList({ coins, newsBySymbol, onRetry }) {
         {status === "error" ? <div className="news-racer-mobile-state is-error" role="alert"><p>뉴스를 불러오지 못했어요.</p><button type="button" className="btn btn-s btn-secondary" onClick={() => onRetry(selected.symbol)}>다시 시도</button></div> : null}
         {status === "success" && !items.length && !pending ? <p className="news-racer-mobile-state">최근 {base} 뉴스가 없어요.</p> : null}
         {items.length > 0 ? <MobileArticleList key={selected.symbol} base={base} items={items} /> : null}
-        {pending ? <TranslationPending data={newsState.data} /> : null}
       </section>
     </div>
   );
@@ -346,7 +334,8 @@ function MobileArticleList({ base, items }) {
 
     const measure = () => {
       const visibleRows = [...list.children].slice(0, 3);
-      const height = visibleRows.reduce((sum, row) => sum + row.getBoundingClientRect().height, 0);
+      const heights = visibleRows.map((row) => row.getBoundingClientRect().height);
+      const height = (heights[0] || 0) + (heights[1] || 0) + (heights[2] || 0) * 0.5;
       list.style.setProperty("--news-racer-mobile-articles-height", `${Math.ceil(height)}px`);
     };
 
@@ -362,7 +351,7 @@ function MobileArticleList({ base, items }) {
       ref={listRef}
       className="news-racer-mobile-articles"
       aria-label={`${base} 뉴스 목록`}
-      tabIndex={items.length > 3 ? 0 : undefined}
+      tabIndex={items.length > 2 ? 0 : undefined}
     >
           {items.map((item, index) => {
             const summary = communitySummaryPresentation(item);

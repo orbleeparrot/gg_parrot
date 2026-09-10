@@ -40,8 +40,9 @@
     margin: 0;
     padding: 0;
     overflow-y: auto;
-    overscroll-behavior-y: contain;
+    overscroll-behavior-y: auto;
     scrollbar-width: thin;
+    -webkit-overflow-scrolling: touch;
     list-style: none;
   }
   .news-racer-mobile-articles:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
@@ -52,5 +53,17 @@
   .news-racer-mobile-summary { display: grid; gap: 5px; margin-top: 10px; }
   .news-racer-mobile-summary > span { color: rgb(var(--c-slate-500)); font-size: 11px; }
   .news-racer-mobile-summary > p { margin: 0; color: rgb(var(--c-slate-700)); font-size: 14px; line-height: 1.7; overflow-wrap: anywhere; }
+  .news-briefing-page .news-term-chips { gap: 5px; margin-top: 8px; }
+  .news-briefing-page .news-term-chips-label { font-size: 11px; }
+  .news-briefing-page .news-term-chip.chip {
+    min-height: 26px;
+    height: 26px;
+    gap: 3px;
+    padding-inline: 7px;
+    font-size: 11px;
+  }
+  .news-briefing-page .news-term-chip .info-trigger { width: 16px; height: 16px; }
+  .news-briefing-page .news-term-chip .info-trigger svg { width: 12px; height: 12px; }
+  .news-briefing-page .news-term-chip .info-trigger.info-trigger::after { inset: -5px -2px; }
   .news-racer-mobile :is(button, a):focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
 }

@@ -33,7 +33,7 @@ class Handler(SimpleHTTPRequestHandler):
 
 def article(symbol, index=0):
     suffix = f" {index + 1}" if index else ""
-    return {"title": f"{symbol.removesuffix('USDT')} 거래량 증가와 시장 참여 확대에 대한 최신 소식{suffix}", "source": "검증 뉴스", "url": f"https://fixture.invalid/{symbol}/{index}", "published_display": "10분 전"}
+    return {"title": f"{symbol.removesuffix('USDT')} 현물 ETF 거래량 증가와 시장 참여 확대 소식{suffix}", "source": "검증 뉴스", "url": f"https://fixture.invalid/{symbol}/{index}", "published_display": "10분 전"}
 
 
 class Fixture:
@@ -115,23 +115,46 @@ def main():
                         assert long_ticker.evaluate("el => el.scrollWidth <= el.clientWidth + 1")
                         metrics = page.locator(".news-racer-mobile-row").evaluate_all("""rows => rows.map(row => ({height:row.getBoundingClientRect().height, overflow:row.scrollWidth>row.clientWidth, font:parseFloat(getComputedStyle(row.querySelector('.news-racer-mobile-price')).fontSize)}))""")
                         assert all(row["height"] >= 48 and not row["overflow"] and row["font"] >= 13 for row in metrics), metrics
-                        expect(page.locator("#news-racer-mobile-reader a").filter(has_text="BTC 거래량").first).to_be_visible()
+                        expect(page.locator("#news-racer-mobile-reader a").filter(has_text="BTC 현물 ETF").first).to_be_visible()
                         article_list = page.get_by_role("list", name="BTC 뉴스 목록")
                         expect(article_list.locator(":scope > li")).to_have_count(5)
                         list_metrics = article_list.evaluate("""list => {
                           const rows = [...list.children].map(row => row.getBoundingClientRect());
                           const box = list.getBoundingClientRect();
                           return {clientHeight:list.clientHeight,scrollHeight:list.scrollHeight,scrollTop:list.scrollTop,
-                            thirdBottom:rows[2].bottom,fourthTop:rows[3].top,bottom:box.bottom,overflow:getComputedStyle(list).overflowY};
+                            secondBottom:rows[1].bottom,thirdTop:rows[2].top,thirdHeight:rows[2].height,
+                            fourthTop:rows[3].top,bottom:box.bottom,overflow:getComputedStyle(list).overflowY,
+                            overscroll:getComputedStyle(list).overscrollBehaviorY};
                         }""")
                         assert list_metrics["scrollHeight"] > list_metrics["clientHeight"], list_metrics
-                        assert list_metrics["thirdBottom"] <= list_metrics["bottom"] + 1, list_metrics
-                        assert list_metrics["fourthTop"] >= list_metrics["bottom"] - 1, list_metrics
+                        assert list_metrics["secondBottom"] <= list_metrics["bottom"] + 1, list_metrics
+                        third_visible = list_metrics["bottom"] - list_metrics["thirdTop"]
+                        assert list_metrics["thirdHeight"] * .45 <= third_visible <= list_metrics["thirdHeight"] * .55 + 1, list_metrics
+                        assert list_metrics["fourthTop"] > list_metrics["bottom"], list_metrics
                         assert list_metrics["overflow"] == "auto", list_metrics
+                        assert list_metrics["overscroll"] == "auto", list_metrics
+                        term_chip = page.locator(".news-briefing-section.is-racers .news-term-chip").first
+                        expect(term_chip).to_be_visible()
+                        term_metrics = term_chip.evaluate("""chip => {
+                          const button=chip.querySelector('.info-trigger'),icon=button.querySelector('svg');
+                          return {height:chip.getBoundingClientRect().height,font:parseFloat(getComputedStyle(chip).fontSize),
+                            button:button.getBoundingClientRect().width,icon:icon.getBoundingClientRect().width};
+                        }""")
+                        assert term_metrics == {"height": 26, "font": 11, "button": 16, "icon": 12}, term_metrics
                         if width in (320, 375):
-                            article_list.screenshot(path=str(OUTPUT / f"three-news-{width}-{theme}.png"), animations="disabled")
+                            article_list.screenshot(path=str(OUTPUT / f"two-half-news-{width}-{theme}.png"), animations="disabled")
+                            page.locator(".news-briefing-section.is-racers .news-term-chips").screenshot(path=str(OUTPUT / f"terms-{width}-{theme}.png"), animations="disabled")
                         article_list.evaluate("list => { list.scrollTop = list.scrollHeight; }")
                         assert article_list.evaluate("list => list.scrollTop > 0")
+                        if width == 375 and theme == "dark":
+                            article_list.evaluate("list => { list.scrollIntoView({block:'start'}); list.scrollTop=0; }")
+                            before_page_scroll = page.evaluate("scrollY")
+                            assert before_page_scroll > 0
+                            box = article_list.bounding_box()
+                            page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+                            page.mouse.wheel(0, -180)
+                            page.wait_for_timeout(100)
+                            assert page.evaluate("scrollY") < before_page_scroll
                         page.locator(".news-racer-mobile-row").nth(4).click()
                         expect(page.get_by_role("heading", name="SOL 뉴스", exact=True)).to_be_visible()
                         assert page.get_by_role("list", name="SOL 뉴스 목록").get_attribute("tabindex") is None
@@ -172,7 +195,7 @@ def main():
             page.locator(".news-racer-mobile-row").nth(3).click()
             expect(reader.get_by_text("최근 ADA 뉴스가 없어요.", exact=True)).to_be_visible()
             page.locator(".news-racer-mobile-row").nth(5).click()
-            expect(reader.get_by_role("status")).to_contain_text("한국어로 번역하고 있어요")
+            expect(reader.locator(".news-racer-reader-state.is-notice")).to_have_count(0)
             expect(reader.get_by_text("최근 DOGE 뉴스가 없어요.", exact=True)).to_have_count(0)
             checks.append("selected-news-loading-error-retry-empty-translation")
             context.close()

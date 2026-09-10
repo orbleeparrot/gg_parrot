@@ -37,10 +37,10 @@ export function TermChips({ texts }) {
   const terms = findNewsTerms(joined);
   if (terms.length === 0) return null;
   return (
-    <div className="mt-3 flex flex-wrap items-center gap-2">
-      <span className="t-caption text-slate-700">용어</span>
+    <div className="news-term-chips mt-3 flex flex-wrap items-center gap-2">
+      <span className="news-term-chips-label t-caption text-slate-700">용어</span>
       {terms.map((t) => (
-        <span key={t} className="chip chip-sm">
+        <span key={t} className="news-term-chip chip chip-sm">
           {t}
           <InfoTooltip text={NEWS_GLOSSARY[t]} />
         </span>

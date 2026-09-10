@@ -2,17 +2,17 @@ import { useState } from "react";
 import { useAuth } from "../lib/auth.js";
 import "./UserAvatar.css";
 
-function AvatarImage({ src, initial }) {
+function AvatarImage({ src, initial, size, priority }) {
   const [failed, setFailed] = useState(false);
   if (!src || failed) return <span>{initial}</span>;
-  return <img src={src} alt="" draggable="false" decoding="async" onError={() => setFailed(true)} />;
+  return <img src={src} alt="" width={size} height={size} draggable="false" decoding="async" loading="eager" fetchPriority={priority ? "high" : "auto"} onError={() => setFailed(true)} />;
 }
 
-export default function UserAvatar({ src, name, size = 32, className = "", decorative = true }) {
+export default function UserAvatar({ src, name, size = 32, className = "", decorative = true, priority = false }) {
   const initial = Array.from(String(name || "").trim())[0]?.toUpperCase() || "?";
   return (
     <span className={`user-avatar${className ? ` ${className}` : ""}`} style={{ "--avatar-size": `${size}px` }} aria-hidden={decorative ? true : undefined} role={decorative ? undefined : "img"} aria-label={decorative ? undefined : `${name || "회원"} 프로필 사진`}>
-      <AvatarImage key={src || "empty"} src={src} initial={initial} />
+      <AvatarImage key={src || "empty"} src={src} initial={initial} size={size} priority={priority} />
     </span>
   );
 }

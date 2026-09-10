@@ -93,6 +93,9 @@ def set_avatar_in_session(db: Session, user_id: int, image_data: bytes | None) -
 
 def get_avatar(user_id: int, version: str | None = None) -> UserAvatar | None:
     with get_session() as db:
+        # Public image reads are one statement: skip transaction round trips.
+        # Isolation is restored when the connection returns to the pool.
+        db.connection(execution_options={"isolation_level": "AUTOCOMMIT"})
         query = select(UserAvatar).where(UserAvatar.user_id == user_id)
         if version is not None:
             query = query.where(UserAvatar.version == version)

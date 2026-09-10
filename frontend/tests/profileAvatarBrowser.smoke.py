@@ -188,6 +188,7 @@ class Suite:
         page.goto(self.origin + path, wait_until="domcontentloaded")
         if path == "/mypage":
             expect(page.get_by_role("link", name="프로필 사진 변경", exact=True)).to_be_visible()
+            expect(page.locator(".me-stat dd").first).to_be_visible()
         return context, page
 
     def record(self, name, fixture):

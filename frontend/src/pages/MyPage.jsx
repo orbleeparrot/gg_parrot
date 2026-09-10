@@ -142,11 +142,8 @@ function Posts({ rows, now }) {
   ))}</ul>;
 }
 
-function Skeleton() {
-  return <div className="me-page" aria-hidden="true">
-    <div className="me-profile-rail"><div className="me-identity"><span className="me-skeleton is-avatar" /><span className="me-skeleton is-name" /><span className="me-skeleton is-bio" /></div></div>
-    <div className="me-content"><div className="me-stats">{[0, 1, 2].map((i) => <div key={i} className="me-stat"><span className="me-skeleton" /><span className="me-skeleton is-value" /></div>)}</div><div className="me-macro-grid">{[0, 1].map((i) => <div key={i} className="me-macro-card me-loading-card"><span className="me-skeleton is-name" /><span className="me-skeleton" /><span className="me-skeleton" /></div>)}</div></div>
-  </div>;
+function ActivitySkeleton() {
+  return <div className="me-content" aria-busy="true" aria-label="내 활동 불러오는 중"><div className="me-stats" aria-hidden="true">{[0, 1, 2].map((i) => <div key={i} className="me-stat"><span className="me-skeleton" /><span className="me-skeleton is-value" /></div>)}</div><div className="me-macro-grid" aria-hidden="true">{[0, 1].map((i) => <div key={i} className="me-macro-card me-loading-card"><span className="me-skeleton is-name" /><span className="me-skeleton" /><span className="me-skeleton" /></div>)}</div></div>;
 }
 
 export default function MyPage() {
@@ -154,7 +151,10 @@ export default function MyPage() {
   const leavingAccount = useRef(false);
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [data, setData] = useState(null);
+  const [result, setResult] = useState(null);
+  // A token switch must hide the previous account's activity in this render,
+  // before the effect for the new account starts.
+  const data = result?.token === token ? result.value : null;
   const [error, setError] = useState("");
   const [tierOpen, setTierOpen] = useState(false);
   const [now, setNow] = useState(() => Date.now());
@@ -164,7 +164,7 @@ export default function MyPage() {
   const filters = FILTERS[section] || [];
 
   useEffect(() => {
-    setData(null);
+    setResult(null);
     setError("");
     setTierOpen(false);
     if (!token) { if (!leavingAccount.current) navigate("/login?next=%2Fmypage", { replace: true }); return; }
@@ -174,7 +174,7 @@ export default function MyPage() {
     api.myDashboard({ signal: controller.signal }).then((value) => {
       if (!alive || getToken() !== token) return;
       const user = mergeFetchedAuthUser(value.user, userAtStart);
-      setData({ ...value, user });
+      setResult({ token, value: { ...value, user } });
       updateAuthUser(user);
       setNow(Date.now());
     }).catch((reason) => { if (alive && reason.name !== "AbortError") setError(String(reason.message || reason)); });
@@ -183,11 +183,11 @@ export default function MyPage() {
 
   const symbolByEntry = useMemo(() => Object.fromEntries([...(data?.created || []), ...(data?.purchased || [])].map((item) => [item.entry_id, item.symbol])), [data]);
   if (!token) return null;
-  if (error) return <ErrorNote>내 활동을 불러오지 못했어요: {error}</ErrorNote>;
-  if (!data) return <Skeleton />;
 
-  const { tier, totals, created, purchased, sales, ledger, my_posts = [] } = data;
-  const user = authUser?.id === data.user.id ? { ...data.user, ...authUser } : data.user;
+  const { tier, totals, created = [], purchased = [], sales = [], ledger = [], my_posts = [] } = data || {};
+  // Identity is already available from login/header hydration. It must not wait
+  // for the independent sales, macro and ledger queries in the dashboard.
+  const user = data ? (authUser?.id === data.user.id ? { ...data.user, ...authUser } : data.user) : authUser;
   const counts = { created: created.length, purchased: purchased.length, sales: sales.length, ledger: ledger.length, posts: my_posts.length };
   const logout = () => { leavingAccount.current = true; clearAuth(); navigate("/login", { replace: true }); };
   const pickTab = (key) => setSearchParams(key === "created" ? {} : { tab: key }, { replace: true });
@@ -198,28 +198,28 @@ export default function MyPage() {
     pickTab(filters[next].key);
     document.getElementById("me-tab-" + filters[next].key)?.focus({ preventScroll: true });
   };
-  const longStats = [formatPoints(user.points_balance), formatPoints(totals.earned), totals.sales + "건"].some((value) => value.length > 7);
   const title = section === "macros" ? "내 매크로" : section === "points" ? "포인트·판매" : "내 게시글";
-  const metrics = [
+  const metrics = data ? [
     { label: "보유 포인트", value: formatPoints(user.points_balance), Icon: CoinsIcon, target: "ledger", points: true },
     { label: "판매 수익", value: formatPoints(totals.earned), Icon: TrendUpIcon, target: "sales" },
     { label: "누적 판매", value: totals.sales + "건", Icon: ReceiptIcon, target: "sales" },
-  ];
+  ] : [];
+  const longStats = metrics.some(({ value }) => value.length > 7);
   return <div className="me-page">
     <aside className="me-profile-rail">
       <div className="me-identity">
         <Link className="me-settings-link me-icon-button" to="/mypage/settings?tab=security" aria-label="프로필 설정"><GearSixIcon size={24} aria-hidden="true" /></Link>
-        <Link className="me-portrait-link" to="/mypage/settings" aria-label="프로필 사진 변경"><UserAvatar src={user.avatar_url} name={user.username} size={144} className="me-avatar" /></Link>
-        <div className="me-name-line"><h1 className="me-name">{user.username}</h1>
-        <button className="me-tier-toggle" type="button" aria-label={"등급 안내 · " + tier.name} aria-haspopup="dialog" onClick={() => setTierOpen(true)}><TierIcon name={tier.name} size={22} /><span>{tier.name}</span><CaretRightIcon size={14} aria-hidden="true" /></button></div>
-        {user.bio ? <p className="me-bio">{user.bio}</p> : null}
-        <div className="me-identity-footer"><p className="me-joined num">{joinedLabel(user.created_at)}</p></div>
+        <Link className="me-portrait-link" to="/mypage/settings" aria-label="프로필 사진 변경">{user ? <UserAvatar src={user.avatar_url} name={user.username} size={144} className="me-avatar" priority /> : <span className="me-skeleton is-avatar" aria-hidden="true" />}</Link>
+        <div className="me-name-line">{user ? <h1 className="me-name">{user.username}</h1> : <span className="me-skeleton is-name" aria-hidden="true" />}
+        {tier ? <button className="me-tier-toggle" type="button" aria-label={"등급 안내 · " + tier.name} aria-haspopup="dialog" onClick={() => setTierOpen(true)}><TierIcon name={tier.name} size={22} /><span>{tier.name}</span><CaretRightIcon size={14} aria-hidden="true" /></button> : <span className="me-tier-placeholder" aria-hidden="true" />}</div>
+        {user?.bio ? <p className="me-bio">{user.bio}</p> : null}
+        <div className="me-identity-footer"><p className="me-joined num">{user ? joinedLabel(user.created_at) : <span className="me-skeleton" aria-hidden="true" />}</p></div>
         <div className="me-profile-actions">
           <button type="button" onClick={logout}><SignOutIcon size={18} aria-hidden="true" />로그아웃</button>
         </div>
       </div>
     </aside>
-    <div className="me-content">
+    {error ? <ErrorNote>내 활동을 불러오지 못했어요: {error}</ErrorNote> : !data ? <ActivitySkeleton /> : <div className="me-content">
       <dl className={"me-stats" + (longStats ? " has-long-values" : "")}>{metrics.map(({ label, value, Icon, target, points }) => <div className={"me-stat" + (points ? " is-points" : "")} key={label}><dt><Icon size={20} aria-hidden="true" />{label}</dt><dd className="num">{value}</dd><button type="button" className="me-stat-link" aria-label={label + " 내역 보기"} onClick={() => pickTab(target)} /></div>)}</dl>
       <nav className="me-section-nav" aria-label="프로필 메뉴">{SECTIONS.map(({ key, label, first, Icon }) => <button key={key} type="button" aria-pressed={section === key} onClick={() => pickTab(first)}><Icon size={22} aria-hidden="true" /><span>{label}</span></button>)}</nav>
       <section className={"me-workspace is-" + section} aria-labelledby="me-workspace-title">
@@ -229,7 +229,7 @@ export default function MyPage() {
           {section === "macros" ? <MacroCards rows={tab === "purchased" ? purchased : created} purchased={tab === "purchased"} now={now} onOpen={(macro) => navigate("/builder", { state: { macro } })} /> : section === "points" ? <Transactions rows={tab === "ledger" ? ledger : sales} ledger={tab === "ledger"} now={now} symbolByEntry={symbolByEntry} /> : <Posts rows={my_posts} now={now} />}
         </section>
       </section>
-    </div>
-    {tierOpen ? <TierDialog tier={tier} onClose={() => setTierOpen(false)} /> : null}
+    </div>}
+    {tierOpen && tier ? <TierDialog tier={tier} onClose={() => setTierOpen(false)} /> : null}
   </div>;
 }

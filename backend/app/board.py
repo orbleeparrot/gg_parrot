@@ -19,7 +19,7 @@ from sqlalchemy import func
 from sqlmodel import select
 
 from . import avatars
-from .db import BoardComment, BoardPost, User, UserAvatar, get_session
+from .db import BoardComment, BoardImage, BoardPost, User, UserAvatar, get_session
 from .security import hash_password, verify_password
 
 MAX_TITLE = 120
@@ -63,6 +63,9 @@ def _check_rate(client_key: str) -> None:
 # ---------------------------------------------------------------------------
 # 이미지 검증 — jpg/png만, 매직 바이트로 실제 형식을 확인(확장자/헤더 위조 방지).
 # ---------------------------------------------------------------------------
+MAX_IMAGES = 10  # 글 하나에 붙일 수 있는 사진 수
+
+
 def validate_image(data: bytes, content_type: Optional[str]) -> tuple[bytes, str]:
     """(bytes, mime) 반환. 형식/크기 위반 시 ValueError."""
     if not data:
@@ -79,7 +82,27 @@ def validate_image(data: bytes, content_type: Optional[str]) -> tuple[bytes, str
 # ---------------------------------------------------------------------------
 # 글
 # ---------------------------------------------------------------------------
-def _post_list_view(row: BoardPost, comment_count: int, avatar_url: str | None = None) -> dict:
+def _image_views(row: BoardPost, images: list[BoardImage]) -> list[dict]:
+    """사진 목록 — 새 표(BoardImage) 순서대로, 옛 글의 한 장(BoardPost.image_data)은 맨 앞에."""
+    views = []
+    if row.image_data:
+        views.append({"id": 0, "url": f"/api/board/posts/{row.id}/image"})
+    for img in sorted(images, key=lambda i: (i.position, i.id or 0)):
+        views.append({"id": img.id, "url": f"/api/board/posts/{row.id}/images/{img.id}"})
+    return views
+
+
+def _image_counts(db, post_ids: list[int]) -> dict[int, int]:
+    if not post_ids:
+        return {}
+    rows = db.exec(
+        select(BoardImage.post_id, func.count(BoardImage.id))
+        .where(BoardImage.post_id.in_(post_ids)).group_by(BoardImage.post_id)
+    ).all()
+    return {int(pid): int(n) for pid, n in rows}
+
+
+def _post_list_view(row: BoardPost, comment_count: int, avatar_url: str | None = None, image_count: int = 0) -> dict:
     body = row.body or ""
     return {
         "id": row.id,
@@ -88,14 +111,16 @@ def _post_list_view(row: BoardPost, comment_count: int, avatar_url: str | None =
         "author_name": row.author_name,
         "author_user_id": row.author_user_id,
         "author_avatar_url": avatar_url,
-        "has_image": bool(row.image_data),
+        "has_image": bool(row.image_data) or image_count > 0,
         "comment_count": comment_count,
         "created_kst": _kst_display(row.created_ms),
         "created_ms": row.created_ms,
     }
 
 
-def _post_detail_view(row: BoardPost, comments: list[dict], avatar_url: str | None = None) -> dict:
+def _post_detail_view(row: BoardPost, comments: list[dict], avatar_url: str | None = None,
+                      images: list[BoardImage] | None = None) -> dict:
+    views = _image_views(row, images or [])
     return {
         "id": row.id,
         "title": row.title,
@@ -103,36 +128,52 @@ def _post_detail_view(row: BoardPost, comments: list[dict], avatar_url: str | No
         "author_name": row.author_name,
         "author_user_id": row.author_user_id,
         "author_avatar_url": avatar_url,
-        "has_image": bool(row.image_data),
-        "image_url": f"/api/board/posts/{row.id}/image" if row.image_data else None,
+        "has_image": bool(views),
+        "image_url": views[0]["url"] if views else None,  # 옛 화면 호환 — 첫 장
+        "images": views,
         "created_kst": _kst_display(row.created_ms),
         "created_ms": row.created_ms,
         "comments": comments,
     }
 
 
-def create_post(user: User, title: str, body: str, image_bytes: Optional[bytes], image_mime: str) -> dict:
+def create_post(user: User, title: str, body: str, images: list[tuple[bytes, str]] | None = None) -> dict:
+    """글 작성. ``images`` 는 validate_image 를 거친 (bytes, mime) 목록 — 순서대로 붙는다."""
     title = (title or "").strip()
     if not title:
         raise ValueError("제목을 입력해 주세요.")
     title = title[:MAX_TITLE]
     body = (body or "").strip()[:MAX_BODY]
+    images = list(images or [])
+    if len(images) > MAX_IMAGES:
+        raise ValueError(f"사진은 {MAX_IMAGES}장까지 붙일 수 있어요.")
     now = _now_utc()
+    now_ms = int(now.timestamp() * 1000)
     row = BoardPost(
         author_user_id=user.id,
         author_name=user.username,
         title=title,
         body=body,
-        image_mime=image_mime or "",
-        image_data=image_bytes,
+        image_mime="",
+        image_data=None,
         created_at=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        created_ms=int(now.timestamp() * 1000),
+        created_ms=now_ms,
     )
     with get_session() as db:
         db.add(row)
         db.commit()
         db.refresh(row)
-        return _post_detail_view(row, [], avatars.avatar_url(row.author_user_id, db=db))
+        stored = [
+            BoardImage(post_id=row.id, position=index, image_mime=mime, image_data=data, created_ms=now_ms)
+            for index, (data, mime) in enumerate(images)
+        ]
+        for img in stored:
+            db.add(img)
+        if stored:
+            db.commit()
+            for img in stored:
+                db.refresh(img)
+        return _post_detail_view(row, [], avatars.avatar_url(row.author_user_id, db=db), stored)
 
 
 def list_posts(page: int = 1, size: int = PAGE_SIZE_DEFAULT) -> dict:
@@ -149,6 +190,11 @@ def list_posts(page: int = 1, size: int = PAGE_SIZE_DEFAULT) -> dict:
         .group_by(BoardComment.post_id)
         .subquery()
     )
+    image_counts = (
+        select(BoardImage.post_id.label("post_id"), func.count(BoardImage.id).label("n"))
+        .group_by(BoardImage.post_id)
+        .subquery()
+    )
     statement = (
         select(
             BoardPost.id,
@@ -158,11 +204,12 @@ def list_posts(page: int = 1, size: int = PAGE_SIZE_DEFAULT) -> dict:
             BoardPost.author_user_id,
             UserAvatar.version.label("avatar_version"),
             BoardPost.created_ms,
-            (func.coalesce(func.length(BoardPost.image_data), 0) > 0).label("has_image"),
+            ((func.coalesce(func.length(BoardPost.image_data), 0) > 0) | (func.coalesce(image_counts.c.n, 0) > 0)).label("has_image"),
             func.coalesce(comment_counts.c.n, 0).label("comment_count"),
             func.count().over().label("total"),
         )
         .outerjoin(comment_counts, comment_counts.c.post_id == BoardPost.id)
+        .outerjoin(image_counts, image_counts.c.post_id == BoardPost.id)
         .outerjoin(UserAvatar, UserAvatar.user_id == BoardPost.author_user_id)
         .order_by(BoardPost.created_ms.desc())
         .offset((page - 1) * size)
@@ -210,15 +257,33 @@ def get_post(post_id: int) -> Optional[dict]:
             select(BoardComment).where(BoardComment.post_id == post_id).order_by(BoardComment.id.asc())
         ).all()
         comments = [_comment_view(c) for c in crows]
-        return _post_detail_view(row, comments, avatars.avatar_url(row.author_user_id, db=db))
+        images = db.exec(select(BoardImage).where(BoardImage.post_id == post_id)).all()
+        return _post_detail_view(row, comments, avatars.avatar_url(row.author_user_id, db=db), images)
 
 
 def get_image(post_id: int) -> Optional[tuple[bytes, str]]:
+    """옛 주소(`/image`) — 옛 글의 한 장, 없으면 새 표의 첫 장(옛 화면·캐시된 번들 호환)."""
     with get_session() as db:
         row = db.get(BoardPost, post_id)
-        if row is None or not row.image_data:
+        if row is None:
             return None
-        return row.image_data, (row.image_mime or "image/jpeg")
+        if row.image_data:
+            return row.image_data, (row.image_mime or "image/jpeg")
+        first = db.exec(
+            select(BoardImage).where(BoardImage.post_id == post_id).order_by(BoardImage.position.asc(), BoardImage.id.asc())
+        ).first()
+        if first is None or not first.image_data:
+            return None
+        return first.image_data, (first.image_mime or "image/jpeg")
+
+
+def get_post_image(post_id: int, image_id: int) -> Optional[tuple[bytes, str]]:
+    """새 표의 사진 한 장 — 글 id 와 짝이 맞을 때만."""
+    with get_session() as db:
+        img = db.get(BoardImage, image_id)
+        if img is None or img.post_id != post_id or not img.image_data:
+            return None
+        return img.image_data, (img.image_mime or "image/jpeg")
 
 
 def delete_post(post_id: int, user_id: int) -> bool:
@@ -229,6 +294,8 @@ def delete_post(post_id: int, user_id: int) -> bool:
             return False
         for c in db.exec(select(BoardComment).where(BoardComment.post_id == post_id)).all():
             db.delete(c)
+        for img in db.exec(select(BoardImage).where(BoardImage.post_id == post_id)).all():
+            db.delete(img)
         db.delete(row)
         db.commit()
         return True
@@ -252,7 +319,8 @@ def my_posts(user_id: int, limit: int = 50, db=None) -> list[dict]:
                 pid = c if isinstance(c, int) else c[0]
                 counts[pid] = counts.get(pid, 0) + 1
         avatar_url = avatars.avatar_url(user_id, db=db) if rows else None
-        return [_post_list_view(r, counts.get(r.id, 0), avatar_url) for r in rows]
+        image_counts = _image_counts(db, ids)
+        return [_post_list_view(r, counts.get(r.id, 0), avatar_url, image_count=image_counts.get(r.id, 0)) for r in rows]
 
 
 # ---------------------------------------------------------------------------

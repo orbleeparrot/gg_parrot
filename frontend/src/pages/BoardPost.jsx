@@ -239,11 +239,11 @@ export default function BoardPost() {
               ) : null}
             </div>
 
-            {post.image_url ? (
-              <figure className="board-post-figure">
-                <img src={api.boardImageUrl(post.id)} alt="첨부 이미지" loading="lazy" />
+            {(post.images?.length ? post.images : post.image_url ? [{ id: 0, url: post.image_url }] : []).map((img, index, all) => (
+              <figure key={img.id ?? img.url} className="board-post-figure">
+                <img src={img.url} alt={all.length > 1 ? `첨부 이미지 ${index + 1}/${all.length}` : "첨부 이미지"} loading="lazy" />
               </figure>
-            ) : null}
+            ))}
 
             {post.body ? <p className="board-post-body">{post.body}</p> : null}
           </article>

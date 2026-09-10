@@ -1068,20 +1068,24 @@ def chat_read(req: ChatReadRequest, account: User = Depends(auth_mod.current_use
 async def board_create(
     title: str = Form(...),
     body: str = Form(""),
+    images: list[UploadFile] = File(default=[]),
     image: Optional[UploadFile] = File(default=None),
     user: User = Depends(auth_mod.current_user),
 ) -> dict:
-    """글 작성 — 로그인 계정만. 이미지(jpg/png, 2MB 이하) 1장 선택."""
-    image_bytes: Optional[bytes] = None
-    image_mime = ""
-    if image is not None and (image.filename or ""):
-        data = await image.read()
+    """글 작성 — 로그인 계정만. 사진(jpg/png, 각 2MB 이하)은 `images` 로 여러 장, 옛 클라이언트의 `image` 한 장도 받는다."""
+    uploads = [*(images or []), *([image] if image is not None else [])]
+    uploads = [up for up in uploads if up is not None and (up.filename or "")]
+    if len(uploads) > board_mod.MAX_IMAGES:
+        raise HTTPException(status_code=400, detail=f"사진은 {board_mod.MAX_IMAGES}장까지 붙일 수 있어요.")
+    validated: list[tuple[bytes, str]] = []
+    for up in uploads:
+        data = await up.read()
         try:
-            image_bytes, image_mime = board_mod.validate_image(data, image.content_type)
+            validated.append(board_mod.validate_image(data, up.content_type))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
     try:
-        return board_mod.create_post(user, title, body, image_bytes, image_mime)
+        return board_mod.create_post(user, title, body, validated)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -1109,6 +1113,15 @@ def board_delete(post_id: int, user: User = Depends(auth_mod.current_user)) -> d
 @app.get("/api/board/posts/{post_id}/image")
 def board_image(post_id: int) -> Response:
     got = board_mod.get_image(post_id)
+    if got is None:
+        raise HTTPException(status_code=404, detail="이미지가 없어요.")
+    data, mime = got
+    return Response(content=data, media_type=mime, headers={"Cache-Control": "public, max-age=86400"})
+
+
+@app.get("/api/board/posts/{post_id}/images/{image_id}")
+def board_post_image(post_id: int, image_id: int) -> Response:
+    got = board_mod.get_post_image(post_id, image_id)
     if got is None:
         raise HTTPException(status_code=404, detail="이미지가 없어요.")
     data, mime = got

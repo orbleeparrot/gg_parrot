@@ -676,6 +676,20 @@ class BoardPost(SQLModel, table=True):
     created_ms: int = Field(index=True, sa_type=BigInteger)
 
 
+class BoardImage(SQLModel, table=True):
+    """게시글에 붙은 사진 — 글 하나에 여러 장(순서 유지). 바이트를 DB에 두는 이유는 BoardPost 와 같다.
+
+    2026-09-10 부터 새 글의 사진은 전부 여기에 들어간다. BoardPost.image_data 는 그 전 글의 한 장을 그대로 서빙한다.
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    post_id: int = Field(index=True)
+    position: int = 0  # 첨부 순서(0부터)
+    image_mime: str = ""  # image/jpeg | image/png
+    image_data: bytes
+    created_ms: int = Field(sa_type=BigInteger)
+
+
 class BoardComment(SQLModel, table=True):
     """게시글 댓글. 리더보드 채팅처럼 계정 없이 '일회성 아이디+비밀번호'로 단다.
 

@@ -71,6 +71,39 @@ def test_image_upload_and_serve():
     assert img.content == _PNG
 
 
+def test_multiple_images_upload_in_order_and_serve():
+    token, _ = _signup()
+    r = client.post(
+        "/api/board/posts",
+        data={"title": "사진 여러 장", "body": ""},
+        files=[("images", ("a.png", io.BytesIO(_PNG), "image/png")), ("images", ("b.png", io.BytesIO(_PNG), "image/png"))],
+        headers=_auth(token),
+    )
+    assert r.status_code == 200, r.text
+    post = r.json()
+    assert post["has_image"] is True and len(post["images"]) == 2
+    assert post["image_url"] == post["images"][0]["url"]  # 옛 화면 호환 — 첫 장
+    for img in post["images"]:
+        got = client.get(img["url"])
+        assert got.status_code == 200 and got.headers["content-type"] == "image/png" and got.content == _PNG
+    # 목록·상세 모두 사진 표식이 붙고, 상세는 순서대로 준다.
+    assert client.get(f"/api/board/posts/{post['id']}").json()["images"] == post["images"]
+    listed = next(p for p in client.get("/api/board/posts").json()["items"] if p["id"] == post["id"])
+    assert listed["has_image"] is True
+    # 다른 글 id 로는 사진을 못 본다.
+    assert client.get(f"/api/board/posts/{post['id'] + 1000}/images/{post['images'][0]['id']}").status_code == 404
+    # 삭제하면 사진도 같이 지워진다.
+    assert client.delete(f"/api/board/posts/{post['id']}", headers=_auth(token)).status_code == 200
+    assert client.get(post["images"][0]["url"]).status_code == 404
+
+
+def test_too_many_images_rejected():
+    token, _ = _signup()
+    files = [("images", (f"{i}.png", io.BytesIO(_PNG), "image/png")) for i in range(11)]
+    r = client.post("/api/board/posts", data={"title": "많다", "body": ""}, files=files, headers=_auth(token))
+    assert r.status_code == 400 and "10장" in r.json()["detail"]
+
+
 def test_gif_rejected():
     token, _ = _signup()
     r = client.post(

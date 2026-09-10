@@ -14,9 +14,13 @@
 .board-write .board-composer { margin: 16px 0 0; padding-top: 0; border-top: 0; }
 .board-composer-head { margin: 0 0 2px; color: rgb(var(--c-slate-900)); font-size: 15px; font-weight: 700; letter-spacing: -0.01em; }
 .board-composer textarea.field { min-height: 200px; resize: vertical; }
-.board-composer-preview { position: relative; justify-self: start; }
-.board-composer-preview img { display: block; max-height: 160px; border-radius: 10px; border: 1px solid rgb(var(--c-slate-200)); }
+/* 첨부 미리보기 — 붙인 순서대로 112px 정사각 썸네일, 번호와 지우기. */
+.board-composer-previews { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 12px; }
+.board-composer-preview { position: relative; width: 112px; height: 112px; }
+.board-composer-preview img { width: 100%; height: 100%; object-fit: cover; border-radius: 10px; border: 1px solid rgb(var(--c-slate-200)); }
+.board-composer-preview-no { position: absolute; left: 6px; bottom: 6px; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 6px; display: grid; place-items: center; background: rgb(var(--c-slate-900) / .82); color: rgb(var(--c-slate-50)); font-size: 12px; font-weight: 700; }
 .board-composer-preview button { position: absolute; top: -8px; right: -8px; width: 24px; height: 24px; border-radius: 999px; background: rgb(var(--c-slate-900)); color: rgb(var(--c-slate-50)); font-size: 12px; font-weight: 700; }
+.board-composer-preview button:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
 .board-composer-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .board-attach { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; }
 .board-attach input { display: none; }
@@ -52,17 +56,21 @@
 .board-item { margin: 0; padding: 0; }
 /* 행 자체가 링크 — 표의 칸을 그대로 채운다(행 전체가 누르는 자리). */
 .board-row {
+  position: relative;
+  isolation: isolate;
   min-height: 42px;
   padding: 0;
   border-bottom: 1px solid rgb(var(--c-slate-200));
   color: inherit;
   text-decoration: none;
 }
+/* 상태면은 글자 밖으로 8px 더 넓게 깐다 — 번호가 면 가장자리에 붙어 잘린 듯 보이지 않게. 괘선·글자 자리는 그대로. */
+.board-row::before { content: ""; position: absolute; inset: 0 -8px; z-index: -1; border-radius: 6px; pointer-events: none; }
 .board-row:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: -2px; }
 @media (hover: hover) {
-  .board-row:hover { background: rgb(var(--c-slate-100)); }
+  .board-row:hover::before { background: rgb(var(--c-slate-100)); }
 }
-.board-row:active { background: rgb(var(--c-slate-200)); }
+.board-row:active::before { background: rgb(var(--c-slate-200)); }
 .board-no, .board-col-no { grid-area: no; text-align: left; } /* 왼쪽 정렬 — 페이지 제목·글 수와 같은 세로선에서 시작 */
 .board-title, .board-col-title { grid-area: title; min-width: 0; }
 .board-author, .board-col-author { grid-area: author; min-width: 0; }
@@ -158,7 +166,7 @@
 .board-post-list { margin-top: 44px; }
 .board-post-list-head { margin: 0 0 10px; color: rgb(var(--c-slate-900)); font-size: 15px; font-weight: 700; letter-spacing: -0.01em; }
 .board-post-list-foot { margin-top: 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.board-row.is-current { background: rgb(var(--c-slate-100)); }
+.board-row.is-current::before { background: rgb(var(--c-slate-100)); }
 .board-row.is-current .board-title-text { color: rgb(var(--c-slate-900)); font-weight: 700; }
 .board-post-title {
   margin: 14px 0 0;
@@ -192,6 +200,7 @@
 .board-post-strip-time { margin-left: auto; }
 .board-post-strip .board-text-btn { margin-left: 4px; }
 .board-post-figure { margin: 20px 0 0; }
+.board-post-figure + .board-post-figure { margin-top: 12px; } /* 여러 장은 세로로 이어 붙인다(한국 게시판 관례) */
 .board-post-figure img { display: block; max-width: 100%; max-height: 560px; border: 1px solid rgb(var(--c-slate-200)); border-radius: 8px; }
 .board-post-body {
   margin: 20px 0 0;

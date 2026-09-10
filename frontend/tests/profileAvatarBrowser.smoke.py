@@ -215,7 +215,8 @@ def expect_photo(page, url):
 
 
 def edit(page):
-    page.get_by_role("link", name="프로필 편집", exact=True).click()
+    page.get_by_role("link", name="프로필 설정", exact=True).click()
+    page.get_by_role("navigation", name="설정 메뉴").get_by_role("link", name="프로필", exact=True).click()
     expect(page).to_have_url(re.compile(r"/mypage/settings$"))
     form = page.get_by_role("form", name="프로필 편집", exact=True)
     expect(form).to_be_visible()
@@ -282,7 +283,7 @@ def main():
                     expect(page.get_by_role("button", name="프로필 편집", exact=True)).to_have_count(0)
                     expect(page.get_by_role("button", name="계정 설정", exact=True)).to_have_count(0)
                     expect(page.get_by_role("link", name="프로필 설정", exact=True)).to_have_attribute("href", "/mypage/settings?tab=security")
-                    expect(page.get_by_role("link", name="프로필 편집", exact=True)).to_have_attribute("href", "/mypage/settings")
+                    expect(page.get_by_role("link", name="프로필 편집", exact=True)).to_have_count(0)
                     expect(page.get_by_role("link", name="프로필 사진 변경", exact=True)).to_have_attribute("href", "/mypage/settings")
                     suite.screenshot(page, f"profile-{width}-{theme}")
                     dialog = edit(page)

@@ -14,7 +14,6 @@
   .me-name { margin-top: 12px; font-size: 28px; }
   .me-tier-toggle { min-height: 36px; }
   .me-bio { margin-top: 12px; max-width: 54ch; }
-  .me-edit-link { margin-top: 4px; min-height: 44px; }
   .me-joined { margin-top: 4px; padding-top: 12px; }
   .me-content { gap: 20px; }
   .me-stat { padding-inline: 20px; }
@@ -33,8 +32,7 @@
   .me-name { font-size: 26px; margin: 0; }
   .me-tier-toggle { min-height: 32px; font-size: 12px; }
   .me-bio { margin-top: 10px; font-size: 13px; line-height: 1.55; }
-  .me-identity-footer { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 0 16px; margin-top: 6px; }
-  .me-edit-link { margin-top: 0; font-size: 12px; }
+  .me-identity-footer { margin-top: 12px; }
   .me-joined { width: auto; border: 0; font-size: 10px; margin: 0; padding: 0; }
   .me-content { gap: 18px; }
   .me-stats { padding-block: 18px; border-radius: 14px; }

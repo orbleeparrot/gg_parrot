@@ -172,7 +172,7 @@ def assert_profile_layout(page, width):
         assert content["y"] >= rail["y"] + rail["height"] - 1, (rail, content)
     expect(page.get_by_role("button", name="프로필 편집", exact=True)).to_have_count(0)
     expect(page.get_by_role("button", name="계정 설정", exact=True)).to_have_count(0)
-    expect(page.get_by_role("link", name="프로필 편집", exact=True)).to_have_attribute("href", "/mypage/settings")
+    expect(page.get_by_role("link", name="프로필 편집", exact=True)).to_have_count(0)
     expect(page.get_by_role("link", name="프로필 설정", exact=True)).to_have_attribute("href", "/mypage/settings?tab=security")
     expect(page.get_by_role("link", name="프로필 사진 변경", exact=True)).to_have_attribute("href", "/mypage/settings")
 

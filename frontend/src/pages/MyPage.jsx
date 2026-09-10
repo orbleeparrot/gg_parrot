@@ -210,8 +210,7 @@ export default function MyPage() {
         <div className="me-name-line"><h1 className="me-name">{user.username}</h1>
         <button className="me-tier-toggle" type="button" aria-label={"등급 안내 · " + tier.name} aria-haspopup="dialog" onClick={() => setTierOpen(true)}><TierIcon name={tier.name} size={22} /><span>{tier.name}</span><CaretRightIcon size={14} aria-hidden="true" /></button></div>
         {user.bio ? <p className="me-bio">{user.bio}</p> : null}
-        <div className="me-identity-footer"><Link className="me-edit-link" to="/mypage/settings"><PencilSimpleIcon size={16} aria-hidden="true" />프로필 편집</Link>
-        <p className="me-joined num">{joinedLabel(user.created_at)}</p></div>
+        <div className="me-identity-footer"><p className="me-joined num">{joinedLabel(user.created_at)}</p></div>
       </div>
     </aside>
     <div className="me-content">

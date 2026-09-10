@@ -176,10 +176,11 @@
 .select-menu-caret { width: 7px; height: 7px; margin: -4px 2px 0 0; border-right: 2px solid rgb(var(--c-slate-500)); border-bottom: 2px solid rgb(var(--c-slate-500)); transform: rotate(45deg); transition: transform 120ms ease; }
 .select-menu.is-open .select-menu-caret { transform: rotate(225deg); margin-top: 3px; }
 .select-menu-list { position: absolute; top: calc(100% + 6px); left: 0; z-index: 30; min-width: 100%; margin: 0; padding: 6px; list-style: none; border: 1px solid rgb(var(--c-slate-300)); border-radius: 12px; background: rgb(var(--c-surface)); box-shadow: 0 8px 24px rgb(5 12 22 / .18); }
-.select-menu-item { padding: 0 10px; height: 36px; display: flex; align-items: center; border-radius: 8px; color: rgb(var(--c-slate-700)); font-size: 14px; font-weight: 600; white-space: nowrap; cursor: pointer; }
+.select-menu-item { padding: 0 10px; height: 36px; display: flex; align-items: center; gap: 14px; border-radius: 8px; color: rgb(var(--c-slate-700)); font-size: 14px; font-weight: 600; white-space: nowrap; cursor: pointer; }
 .select-menu-item.is-active { background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-900)); }
 .select-menu-item.is-selected { color: rgb(var(--c-slate-900)); }
-.select-menu-item.is-selected::after { content: ""; width: 5px; height: 9px; margin-left: auto; padding-left: 12px; border-right: 2px solid rgb(var(--c-slate-900)); border-bottom: 2px solid rgb(var(--c-slate-900)); transform: rotate(45deg); box-sizing: content-box; }
+/* 고른 항목의 체크 — 6×10 상자의 오른쪽·아래 선을 45° 돌린 작은 표. */
+.select-menu-item.is-selected::after { content: ""; flex: none; width: 6px; height: 10px; margin: -3px 4px 0 auto; border-right: 2px solid rgb(var(--c-slate-900)); border-bottom: 2px solid rgb(var(--c-slate-900)); transform: rotate(45deg); box-sizing: border-box; }
 /* 검색어 칸 — 돋보기(와 검색 중이면 지우기)는 칸 안 오른쪽에. */
 .board-search { position: relative; display: inline-flex; }
 .board-search .field { width: 260px; padding-right: 40px; }

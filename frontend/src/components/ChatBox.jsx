@@ -1,10 +1,18 @@
 import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
+import { createPortal } from "react-dom";
 import { api } from "../api.js";
 import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 import { getAuthUser, getToken, useAuth } from "../lib/auth.js";
 import { badgeLabel, chatScope, firstUnseenId, isOwnMessage, sameAuthor } from "../lib/chatBadge.js";
 import { STICKERS, stickerFromText, stickerText } from "../lib/chatStickers.js";
+import { macroIdsInText, splitMacroText } from "../lib/chatMacro.js";
+import { replyText, stripReplyToken } from "../lib/chatReply.js";
+import { applyMacroPick, filterMacros, slashQuery } from "../lib/chatSlash.js";
+import { getUserId } from "../lib/user.js";
+import ReportDialog from "./ReportDialog.jsx";
+import CoinIcon from "./CoinIcon.jsx";
 import { chatUnseenCount, getChatFeed, markChatSeen, observeChat, receiveChat, receiveChatPost, setChatLoadError, visibleChatReadId } from "../lib/chatStore.js";
+import UserAvatar, { AuthorAvatar } from "./UserAvatar.jsx";
 import "./ChatBox.css";
 
 const POLL_MS = 3000;
@@ -15,6 +23,16 @@ const OPACITY_KEY = "chat:opacity";          // 시트 불투명도 0.25~1
 const DRAG_THRESHOLD = 6;                    // 이보다 덜 움직이면 클릭
 const EDGE = 8;                              // 화면 가장자리 최소 여백
 const TOPBAR_FALLBACK = 64;
+const MOBILE_PLACEMENT_QUERY = "(max-width: 767px), (max-width: 1099px) and (pointer: coarse)";
+
+function isMobilePlacement() {
+  return typeof window !== "undefined" && window.matchMedia(MOBILE_PLACEMENT_QUERY).matches;
+}
+function subscribeMobilePlacement(listener) {
+  const query = window.matchMedia(MOBILE_PLACEMENT_QUERY);
+  query.addEventListener("change", listener);
+  return () => query.removeEventListener("change", listener);
+}
 
 function readStorage(key) {
   try { return window.localStorage.getItem(key); } catch { return null; }
@@ -63,6 +81,41 @@ function clampPlacement(placement, root) {
   };
 }
 
+function MessageBubble({ message, onClose }) {
+  const body = stripReplyToken(message.text);
+  const sticker = stickerFromText(body);
+  const hasMacros = !sticker && message.macros?.length > 0;
+  const content = sticker
+    ? <img src={sticker.src} alt={`${sticker.label} 스티커`} width="92" height="92" draggable="false" decoding="async" />
+    : hasMacros
+      ? splitMacroText(body, message.macros).map((part, index) => (
+          part.type === "text"
+            ? <p key={`t-${index}`} className="chat-bubble-text">{part.text}</p>
+            : <MacroCard key={`m-${part.card.entry_id}-${index}`} card={part.card} onClose={onClose} />
+        ))
+      : body;
+  const reply = message.reply_to;
+  if (reply) {
+    const quotedSticker = stickerFromText(reply.excerpt);
+    const excerpt = quotedSticker ? `${quotedSticker.label} 스티커` : reply.excerpt || "내용 없음";
+    return (
+      <div className="chat-bubble is-reply">
+        <div className="chat-reply-quote" aria-label={`${reply.username}의 메시지에 답장`}>
+          <AuthorAvatar userId={reply.user_id} src={reply.avatar_url} name={reply.username} size={32} />
+          <div className="chat-reply-source">
+            <b>{reply.username}</b>
+            <span title={excerpt}>{excerpt}</span>
+          </div>
+        </div>
+        <div className={`chat-reply-body${sticker ? " is-sticker" : hasMacros ? " is-macro" : ""}`}>{content}</div>
+      </div>
+    );
+  }
+  return hasMacros
+    ? <div className="chat-bubble is-macro">{content}</div>
+    : <p className={`chat-bubble${sticker ? " is-sticker" : ""}`}>{content}</p>;
+}
+
 function kstClock(now = Date.now()) {
   const date = new Date(now + 9 * 60 * 60 * 1000);
   return `${String(date.getUTCHours()).padStart(2, "0")}:${String(date.getUTCMinutes()).padStart(2, "0")}`;
@@ -70,6 +123,30 @@ function kstClock(now = Date.now()) {
 
 // A member switch remounts transient UI and aborts the previous member's requests.
 // Feed/read state lives outside the route, in a separate cache for each account.
+// 매크로 언급 카드 — 종목 로고·종목·글쓴이·전략 한 줄. 누르면 리더보드의 그 행으로 간다.
+function MacroCard({ card, onClose }) {
+  const goToEntry = () => {
+    const row = document.getElementById(`leaderboard-entry-${card.entry_id}`);
+    if (!row) return;
+    onClose?.();
+    row.scrollIntoView({ behavior: "smooth", block: "center" });
+    row.classList.add("is-flash");
+    window.setTimeout(() => row.classList.remove("is-flash"), 1600);
+  };
+  return (
+    <button type="button" className="chat-macro" onClick={goToEntry} title="리더보드에서 이 매크로 보기">
+      <CoinIcon symbol={card.symbol} size={28} alt="" />
+      <span className="chat-macro-body">
+        <span className="chat-macro-head">
+          <b className="num">{card.symbol}</b>
+          <span className="chat-macro-author">{card.is_ai ? "🤖 " : ""}{card.username}</span>
+        </span>
+        <span className="chat-macro-summary">{card.locked ? "잠긴 매크로 · 리더보드에서 언락하면 전략이 보여요" : card.human_summary || "전략 설명 없음"}</span>
+      </span>
+    </button>
+  );
+}
+
 export default function ChatBox(props) {
   const { token, user } = useAuth();
   const member = token && user?.id != null ? user : null;
@@ -78,6 +155,7 @@ export default function ChatBox(props) {
 }
 
 function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray = false }) {
+  const mobilePlacement = useSyncExternalStore(subscribeMobilePlacement, isMobilePlacement, () => false);
   const panelId = useId();
   const subscribe = useCallback((listener) => observeChat(scope, listener), [scope]);
   const snapshot = useCallback(() => getChatFeed(scope), [scope]);
@@ -86,6 +164,23 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
   const [open, setOpen] = useState(defaultOpen);
   const [text, setText] = useState("");
   const [error, setError] = useState("");
+  const [menu, setMenu] = useState(null);      // 오른쪽 클릭 메뉴 {x, y, message}
+  const [replyTo, setReplyTo] = useState(null); // 답장 대상 메시지
+  const [reporting, setReporting] = useState(null); // 신고할 메시지
+  const [copiedId, setCopiedId] = useState(0);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const shortcutsRef = useRef(null);
+  useEffect(() => {
+    if (!shortcutsOpen) return undefined;
+    const onPointerDown = (event) => {
+      if (shortcutsRef.current?.contains(event.target) || event.target.closest?.(".chat-tool")) return;
+      setShortcutsOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [shortcutsOpen]);
+  const [macroList, setMacroList] = useState(null); // 매크로 고르기 목록(한 번 받아 둔다)
+  const [pickIndex, setPickIndex] = useState(0);
   const [readError, setReadError] = useState("");
   const [busy, setBusy] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
@@ -102,6 +197,16 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
   const rootRef = useRef(null);
   const listRef = useRef(null);
   const inputRef = useRef(null);
+  // 입력칸은 한 줄에서 시작해 글이 길어지면 위로 자란다(최대 5줄, 그 뒤로는 스스로 스크롤).
+  useLayoutEffect(() => {
+    const field = inputRef.current;
+    if (!field || field.tagName !== "TEXTAREA") return;
+    field.style.height = "auto";
+    const grown = Math.min(field.scrollHeight, 132);
+    field.style.height = `${grown}px`;
+    // 한 줄일 때는 스크롤 막대를 아예 만들지 않는다(브라우저가 화살표를 그린다).
+    field.style.overflowY = field.scrollHeight > 132 ? "auto" : "hidden";
+  }, [text, open]);
   const stickToBottomRef = useRef(true);
   const mountedRef = useRef(false);
   const pendingRequestsRef = useRef(new Set());
@@ -109,6 +214,37 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
   const syncedSeenRef = useRef(-1);
   const serverSeenRef = useRef(-1);
   const syncingSeenRef = useRef(false);
+
+  useLayoutEffect(() => {
+    if (!mobilePlacement) return undefined;
+    // A desktop drag may be in progress when a window enters the mobile layout.
+    const drag = dragRef.current;
+    const fab = rootRef.current?.querySelector(".chat-fab");
+    if (drag && fab?.hasPointerCapture?.(drag.id)) fab.releasePointerCapture(drag.id);
+    dragRef.current = null;
+    suppressClickRef.current = false;
+    setDragging(false);
+    const root = rootRef.current;
+    const viewport = window.visualViewport;
+    const fitVisibleViewport = () => {
+      if (!root) return;
+      const height = viewport?.height || window.innerHeight;
+      const obscuredBottom = Math.max(0, window.innerHeight - height - (viewport?.offsetTop || 0));
+      root.style.setProperty("--chat-visible-height", `${height}px`);
+      root.style.setProperty("--chat-keyboard-offset", `${obscuredBottom}px`);
+    };
+    fitVisibleViewport();
+    viewport?.addEventListener("resize", fitVisibleViewport);
+    viewport?.addEventListener("scroll", fitVisibleViewport);
+    window.addEventListener("resize", fitVisibleViewport);
+    return () => {
+      viewport?.removeEventListener("resize", fitVisibleViewport);
+      viewport?.removeEventListener("scroll", fitVisibleViewport);
+      window.removeEventListener("resize", fitVisibleViewport);
+      root?.style.removeProperty("--chat-visible-height");
+      root?.style.removeProperty("--chat-keyboard-offset");
+    };
+  }, [mobilePlacement]);
 
   const isCurrent = useCallback(() => mountedRef.current && chatScope(getToken() ? getAuthUser()?.id : null) === scope, [scope]);
   useEffect(() => {
@@ -221,10 +357,15 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
     const frame = window.requestAnimationFrame(() => inputRef.current?.focus({ preventScroll: true }));
     const onKeyDown = (event) => {
       if (event.key !== "Escape") return;
-      if (stickerOpen) setStickerOpen(false);
+      // 위에 뜬 것부터 닫는다 — 도움말·신고 창이 열려 있으면 채팅은 그대로 둔다.
+      if (shortcutsOpen) setShortcutsOpen(false);
+      else if (reporting) setReporting(null);
+      else if (stickerOpen) setStickerOpen(false);
       else close();
     };
     const onPointerDown = (event) => {
+      // body 로 띄운 창(도움말·신고·메시지 메뉴)에서의 클릭은 '바깥'이 아니다.
+      if (event.target.closest?.(".scrim, .chat-menu")) return;
       if (rootRef.current && !rootRef.current.contains(event.target)) close();
     };
     document.addEventListener("keydown", onKeyDown);
@@ -234,10 +375,11 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
       document.removeEventListener("keydown", onKeyDown);
       document.removeEventListener("pointerdown", onPointerDown);
     };
-  }, [close, open, stickerOpen]);
+  }, [close, open, reporting, shortcutsOpen, stickerOpen]);
 
   // 끌어서 옮기기 — 버튼을 잡고 6px 넘게 움직이면 드래그, 아니면 클릭. 자리는 이 브라우저에 남는다.
   function onFabPointerDown(event) {
+    if (isMobilePlacement()) return;
     if (event.button != null && event.button !== 0) return;
     const rect = rootRef.current?.getBoundingClientRect();
     if (!rect) return;
@@ -248,6 +390,7 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
     event.currentTarget.setPointerCapture?.(event.pointerId);
   }
   function onFabPointerMove(event) {
+    if (isMobilePlacement()) return;
     const drag = dragRef.current;
     if (!drag || drag.id !== event.pointerId) return;
     const dx = event.clientX - drag.x;
@@ -257,6 +400,7 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
     setPlacement(clampPlacement({ right: drag.right - dx, bottom: drag.bottom - dy }, rootRef.current));
   }
   function onFabPointerEnd(event) {
+    if (isMobilePlacement()) return;
     const drag = dragRef.current;
     if (!drag || drag.id !== event.pointerId) return;
     dragRef.current = null;
@@ -277,15 +421,19 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
   }
   // 창 크기가 바뀌거나 시트가 열리면 옮겨 둔 자리가 화면 밖으로 나가지 않게 다시 자른다.
   useLayoutEffect(() => {
-    if (!placement) return undefined;
-    const fit = () => setPlacement((current) => {
-      const next = clampPlacement(current, rootRef.current);
-      return next && current && next.right === current.right && next.bottom === current.bottom ? current : next;
-    });
+    if (mobilePlacement || !placement) return undefined;
+    const fit = () => {
+      // The resize event can arrive before the matchMedia subscription renders.
+      if (isMobilePlacement()) return;
+      setPlacement((current) => {
+        const next = clampPlacement(current, rootRef.current);
+        return next && current && next.right === current.right && next.bottom === current.bottom ? current : next;
+      });
+    };
     fit();
     window.addEventListener("resize", fit);
     return () => window.removeEventListener("resize", fit);
-  }, [open, placement != null]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [open, placement != null, mobilePlacement]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function toggle() {
     if (open) close();
@@ -352,8 +500,68 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
 
   async function send(event) {
     event.preventDefault();
-    if (await post(text)) setText("");
+    const body = replyTo ? replyText(replyTo.id, text) : text;
+    if (await post(body)) {
+      setText("");
+      setReplyTo(null);
+    }
   }
+
+  // `/` 로 매크로 고르기 — 오늘 리더보드 목록을 한 번 받아 두고 입력에 따라 걸러 보인다.
+  const query = member ? slashQuery(text) : null;
+  const picking = query !== null;
+  const picks = picking ? filterMacros(macroList || [], query) : [];
+  useEffect(() => {
+    if (!picking || macroList !== null) return undefined;
+    let alive = true;
+    api.leaderboard(getUserId())
+      .then((data) => { if (alive) setMacroList(data?.entries || data?.items || []); })
+      .catch(() => { if (alive) setMacroList([]); });
+    return () => { alive = false; };
+  }, [picking, macroList]);
+  useEffect(() => { setPickIndex(0); }, [query]);
+
+  function pickMacro(entry) {
+    setText((current) => applyMacroPick(current, entry.id));
+    inputRef.current?.focus();
+  }
+
+  // 오른쪽 클릭 메뉴 — 답장·복사·신고. 메뉴는 화면 안으로 접어 넣는다.
+  function openMenu(event, message) {
+    event.preventDefault();
+    const width = 168;
+    const height = 132;
+    setMenu({
+      message,
+      x: Math.min(event.clientX, window.innerWidth - width - 8),
+      y: Math.min(event.clientY, window.innerHeight - height - 8),
+    });
+  }
+
+  async function copyMessage(message) {
+    const body = stripReplyToken(message.text);
+    try {
+      await navigator.clipboard.writeText(body);
+      setCopiedId(message.id);
+      window.setTimeout(() => setCopiedId((current) => (current === message.id ? 0 : current)), 1400);
+    } catch {
+      window.prompt("메시지 내용이에요. 복사해 주세요.", body);
+    }
+  }
+
+  useEffect(() => {
+    if (!menu) return undefined;
+    const close_ = () => setMenu(null);
+    const onKey = (event) => { if (event.key === "Escape") { event.preventDefault(); close_(); } };
+    document.addEventListener("pointerdown", close_);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("resize", close_);
+    return () => {
+      document.removeEventListener("pointerdown", close_);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", close_);
+    };
+  }, [menu]);
 
   async function sendSticker(id) {
     setStickerOpen(false);
@@ -361,7 +569,7 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
   }
 
   return (
-    <div className={`chat-float${dragging ? " is-dragging" : ""}`} ref={rootRef} style={placement ? { right: placement.right, bottom: placement.bottom } : undefined}>
+    <div className={`chat-float${dragging ? " is-dragging" : ""}${mobilePlacement ? " is-mobile-fixed" : ""}`} ref={rootRef} style={!mobilePlacement && placement ? { right: placement.right, bottom: placement.bottom } : undefined}>
       {open ? (
         <section id={panelId} className="chat-sheet" role="dialog" aria-label="리더보드 채팅" style={opacity < 1 ? { "--chat-sheet-opacity": opacity } : undefined}>
           <header className="chat-head">
@@ -371,6 +579,12 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
                 <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M2.5 12s3.5-6.5 9.5-6.5 9.5 6.5 9.5 6.5-3.5 6.5-9.5 6.5S2.5 12 2.5 12Z" /><circle cx="12" cy="12" r="3" /></svg>
                 <input type="range" min="25" max="100" step="5" value={Math.round(opacity * 100)} onChange={changeOpacity} aria-label="채팅창 불투명도" aria-valuetext={`${Math.round(opacity * 100)}%`} />
               </label>
+              <button type="button" className={`chat-tool${shortcutsOpen ? " is-on" : ""}`} onClick={() => setShortcutsOpen((on) => !on)} aria-expanded={shortcutsOpen} aria-label="빠른 입력" title="빠른 입력">
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <rect x="2.5" y="6" width="19" height="12" rx="2.5" />
+                  <path d="M6 9.5h.01M9.5 9.5h.01M13 9.5h.01M16.5 9.5h.01M6 13h.01M18 13h.01M9 16h6" />
+                </svg>
+              </button>
               <button type="button" className="chat-close" onClick={close} aria-label="채팅 닫기"><svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m4 4 8 8M12 4l-8 8" /></svg></button>
             </div>
           </header>
@@ -398,17 +612,15 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
               const continued = !showDivider && sameAuthor(previous, message);
               const mine = isOwnMessage(message, member?.id);
               const legacy = message.user_id == null;
-              const initial = String(message.username || "?").trim().charAt(0).toUpperCase() || "?";
-              const sticker = stickerFromText(message.text);
               return (
                 <Fragment key={message.id}>
                   {showDivider ? <div className="chat-divider" role="separator" aria-label="여기부터 새 메시지"><span>새 메시지</span></div> : null}
-                  <article className={`chat-row${mine ? " is-mine" : ""}${continued ? " is-continued" : ""}`} aria-label={`${message.username}${legacy ? ", 이전 익명 메시지" : ""}, ${message.created_kst}`}>
-                    {!mine ? <span className="chat-avatar" aria-hidden="true">{continued ? "" : initial}</span> : null}
-                    <div className="chat-row-body">
+                  <article className={`chat-row${mine ? " is-mine" : ""}${continued ? " is-continued" : ""}`} aria-label={`${message.username}${legacy ? ", 이전 익명 메시지" : ""}, ${message.created_kst}`} onContextMenu={(event) => openMenu(event, message)}>
+                    {!mine ? (continued ? <span className="chat-avatar" aria-hidden="true" /> : <AuthorAvatar userId={message.user_id} src={message.avatar_url} name={message.username} size={32} className="chat-avatar" />) : null}
+                    <div className={`chat-row-body${message.reply_to ? " has-reply" : ""}`}>
                       {!mine && !continued ? <span className="chat-row-name">{message.username}{legacy ? <small className="chat-legacy">이전 익명</small> : null}</span> : null}
                       <div className="chat-bubble-line">
-                        {sticker ? <p className="chat-bubble is-sticker"><img src={sticker.src} alt={`${sticker.label} 스티커`} width="92" height="92" draggable="false" decoding="async" /></p> : <p className="chat-bubble">{message.text}</p>}
+                        <MessageBubble message={message} onClose={close} />
                         <time className="num">{message.created_kst}</time>
                       </div>
                     </div>
@@ -423,18 +635,120 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
               {STICKERS.map((sticker) => <button key={sticker.id} type="button" className="chat-sticker-tile" onClick={() => sendSticker(sticker.id)} disabled={busy} aria-label={`${sticker.label} 스티커 보내기`}><img src={sticker.src} alt="" width="56" height="56" draggable="false" decoding="async" /><span>{sticker.label}</span></button>)}
             </div>
           ) : null}
+          {/* `/` 매크로 고르기 — 입력칸 위에 뜬다. 고르면 [macro:id] 가 본문에 들어간다. */}
+          {picking ? (
+            <div className="chat-picker" role="listbox" aria-label="매크로 고르기">
+              {macroList === null ? (
+                <p className="chat-picker-empty">불러오는 중…</p>
+              ) : picks.length === 0 ? (
+                <p className="chat-picker-empty">{macroList.length ? "맞는 매크로가 없어요." : "오늘 등록된 매크로가 없어요."}</p>
+              ) : picks.map((entry, index) => (
+                <button
+                  key={entry.id}
+                  type="button"
+                  role="option"
+                  aria-selected={index === pickIndex}
+                  className={`chat-picker-row${index === pickIndex ? " is-active" : ""}`}
+                  onMouseEnter={() => setPickIndex(index)}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => pickMacro(entry)}
+                >
+                  <CoinIcon symbol={entry.symbol} size={24} alt="" />
+                  <span className="chat-picker-body">
+                    <span className="chat-picker-title"><b className="num">{entry.symbol}</b><span>{entry.username || entry.nickname}</span></span>
+                    <span className="chat-picker-summary">{entry.locked ? "잠긴 매크로" : entry.human_summary || "전략 설명 없음"}</span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+          {member && replyTo ? (
+            <p className="chat-reply-bar">
+              <span className="chat-reply-to"><b>{replyTo.username}</b>에게 답장</span>
+              <span className="chat-reply-excerpt">{stripReplyToken(replyTo.text)}</span>
+              <button type="button" onClick={() => setReplyTo(null)} aria-label="답장 취소">✕</button>
+            </p>
+          ) : null}
+          {/* 붙여넣은 매크로 링크 — 보내면 카드로 바뀐다는 걸 미리 알려 준다. */}
+          {member && macroIdsInText(text).length ? (
+            <p className="chat-macro-hint">매크로 <b className="num">{macroIdsInText(text).length}</b>개를 언급했어요. 보내면 카드로 보여요.</p>
+          ) : null}
           {member ? (
             <form onSubmit={send} className="chat-composer">
-              <span className="chat-name-chip chat-member-name" aria-label={`로그인 회원 ${member.username}`}><span>{member.username}</span></span>
+              <span className="chat-name-chip chat-member-name" aria-label={`로그인 회원 ${member.username}`}><UserAvatar src={member.avatar_url} name={member.username} size={24} /><span className="chat-member-label">{member.username}</span></span>
               <button type="button" className={`chat-sticker-btn${stickerOpen ? " is-on" : ""}`} onClick={() => setStickerOpen((tray) => !tray)} aria-expanded={stickerOpen} aria-label={stickerOpen ? "스티커 닫기" : "스티커 열기"} title="스티커" disabled={busy}><img src={STICKERS[0].src} alt="" width="22" height="22" draggable="false" decoding="async" /></button>
-              <input ref={inputRef} value={text} aria-label="채팅 메시지" aria-invalid={error ? true : undefined} onChange={(event) => setText(event.target.value)} maxLength={300} placeholder="메시지" className="chat-field" disabled={busy} />
+              <textarea
+                ref={inputRef}
+                value={text}
+                rows={1}
+                aria-label="채팅 메시지"
+                aria-invalid={error ? true : undefined}
+                onChange={(event) => setText(event.target.value)}
+                onKeyDown={(event) => {
+                  if (picking && picks.length) {
+                    if (event.key === "ArrowDown") { event.preventDefault(); setPickIndex((i) => (i + 1) % picks.length); return; }
+                    if (event.key === "ArrowUp") { event.preventDefault(); setPickIndex((i) => (i - 1 + picks.length) % picks.length); return; }
+                    if ((event.key === "Enter" || event.key === "Tab") && !event.nativeEvent.isComposing) {
+                      event.preventDefault();
+                      pickMacro(picks[pickIndex] || picks[0]);
+                      return;
+                    }
+                  }
+                  if (event.key === "Escape" && picking) { event.preventDefault(); setText(""); return; }
+                  // 줄바꿈은 Shift+Enter. Enter 는 보내기(한글 조합 중에는 넘긴다).
+                  if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+                  event.preventDefault();
+                  send(event);
+                }}
+                maxLength={300}
+                placeholder="메시지"
+                className="chat-field"
+                disabled={busy}
+              />
               <button type="submit" className="chat-send" disabled={busy || !text.trim()} aria-label={busy ? "보내는 중" : "전송"}>{busy ? <span className="chat-spinner" aria-hidden="true" /> : <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 13V3M3.5 7.5 8 3l4.5 4.5" /></svg>}</button>
             </form>
           ) : <div className="chat-login-prompt"><span>회원으로 로그인하고 대화에 참여해 보세요.</span><a href="/login?next=%2Fleaderboard">로그인</a></div>}
           {error ? <p className="chat-helper is-error" role="alert">{error}</p> : <span className="chat-composer-gap" aria-hidden="true" />}
+          {/* 메뉴는 body 에 띄운다 — 채팅 시트 안에 두면 시트의 스크롤·변형에 잘린다. */}
+          {menu ? createPortal(
+            <div className="chat-menu" style={{ left: menu.x, top: menu.y }} role="menu" aria-label="메시지 메뉴" onPointerDown={(event) => event.stopPropagation()}>
+              {member ? (
+                <button type="button" role="menuitem" onClick={() => { setReplyTo(menu.message); setMenu(null); inputRef.current?.focus(); }}>답장</button>
+              ) : null}
+              <button type="button" role="menuitem" onClick={() => { copyMessage(menu.message); setMenu(null); }}>
+                {copiedId === menu.message.id ? "복사했어요" : "복사"}
+              </button>
+              {member && menu.message.user_id !== member.id ? (
+                <button type="button" role="menuitem" className="is-danger" onClick={() => { setReporting(menu.message); setMenu(null); }}>신고</button>
+              ) : null}
+            </div>,
+            document.body,
+          ) : null}
+          {/* 빠른 입력 — 머리 아래에 뜨는 작은 판. 동작은 왼쪽, 키는 오른쪽. 바깥 클릭·Esc·× 로 닫는다. */}
+          {shortcutsOpen ? (
+            <div ref={shortcutsRef} className="chat-shortcuts" role="dialog" aria-label="빠른 입력">
+              <div className="chat-shortcuts-head">
+                <b>빠른 입력</b>
+                <button type="button" className="chat-shortcuts-close" onClick={() => setShortcutsOpen(false)} aria-label="닫기"><svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m4 4 8 8M12 4l-8 8" /></svg></button>
+              </div>
+              <ul>
+                <li>
+                  <span className="chat-shortcut-what">매크로 언급<small>오늘의 매크로를 카드로 보내요 · <b className="num">/BTC</b> 처럼 이어 치면 좁혀져요</small></span>
+                  <span className="chat-shortcut-keys"><kbd>/</kbd></span>
+                </li>
+                <li><span className="chat-shortcut-what">목록에서 고르기</span><span className="chat-shortcut-keys"><kbd>↑</kbd><kbd>↓</kbd><kbd>Enter</kbd></span></li>
+                <li><span className="chat-shortcut-what">목록 닫기</span><span className="chat-shortcut-keys"><kbd>Esc</kbd></span></li>
+                <li><span className="chat-shortcut-what">보내기</span><span className="chat-shortcut-keys"><kbd>Enter</kbd></span></li>
+                <li><span className="chat-shortcut-what">줄바꿈</span><span className="chat-shortcut-keys"><kbd>Shift</kbd><kbd>Enter</kbd></span></li>
+                <li><span className="chat-shortcut-what">답장 · 복사 · 신고</span><span className="chat-shortcut-keys">메시지 오른쪽 클릭</span></li>
+                <li><span className="chat-shortcut-what">스티커</span><span className="chat-shortcut-keys">깃털 버튼</span></li>
+              </ul>
+            </div>
+          ) : null}
+          <ReportDialog open={Boolean(reporting)} targetType="chat" targetId={reporting?.id} label="메시지" onClose={() => setReporting(null)} />
         </section>
       ) : null}
-      <button type="button" className={`chat-fab${open ? " is-open" : ""}${unseen ? " has-news" : ""}${dragging ? " is-dragging" : ""}`} onClick={onFabClick} onPointerDown={onFabPointerDown} onPointerMove={onFabPointerMove} onPointerUp={onFabPointerEnd} onPointerCancel={onFabPointerEnd} title="끌어서 옮길 수 있어요" aria-expanded={open} aria-controls={open ? panelId : undefined} aria-label={open ? "채팅 닫기" : badge ? `채팅 열기, 새 메시지 ${unseen}개` : "채팅 열기"}>
+      <button type="button" className={`chat-fab${open ? " is-open" : ""}${unseen ? " has-news" : ""}${dragging ? " is-dragging" : ""}`} onClick={onFabClick} onPointerDown={mobilePlacement ? undefined : onFabPointerDown} onPointerMove={mobilePlacement ? undefined : onFabPointerMove} onPointerUp={mobilePlacement ? undefined : onFabPointerEnd} onPointerCancel={mobilePlacement ? undefined : onFabPointerEnd} title={mobilePlacement ? undefined : "끌어서 옮길 수 있어요"} aria-expanded={open} aria-controls={open ? panelId : undefined} aria-label={open ? "채팅 닫기" : badge ? `채팅 열기, 새 메시지 ${unseen}개` : "채팅 열기"}>
         <img src={FAB_ICON} alt="" width="44" height="44" draggable="false" decoding="async" /><span className="chat-fab-label" aria-hidden="true">Chat</span>{badge ? <span className="chat-fab-badge num" aria-hidden="true">{badge}</span> : null}
       </button>
     </div>

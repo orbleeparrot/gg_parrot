@@ -1,5 +1,29 @@
 [
   {
+    "date": "2026-09-10",
+    "scope": "profile-and-settings",
+    "macrostructure": "portrait rail + grouped activity workspace; dedicated settings",
+    "theme": "GGparrot tokens with user-authorized profile surfaces",
+    "enrichment": "none",
+    "brief": "사용자 제공 프로필 화면을 기준으로 신원/작업 공간·카드·활동 분류·편집과 보안 진입을 전면 재설계"
+  },
+  {
+    "date": "2026-09-10",
+    "scope": "page",
+    "macrostructure": "portrait + identity group + activity index",
+    "theme": "DESIGN.md locked",
+    "enrichment": "none",
+    "brief": "Pinterest·TradingView·GitHub 공개 프로필을 직접 캡처해 요소의 근접성·크기·행동 배치·탭을 검토하고 껄무새의 매크로·포인트·계정 관리 흐름에 적용"
+  },
+  {
+    "date": "2026-09-10",
+    "scope": "page",
+    "macrostructure": "profile + activity index",
+    "theme": "DESIGN.md locked",
+    "enrichment": "none",
+    "brief": "프로필 신원·통계·활동 순서 재설계: 이름 옆 등급, 필요할 때 여는 계정 설정, 밑줄 탭과 짧은 모바일 목록"
+  },
+  {
     "date": "2026-09-09",
     "scope": "page",
     "macrostructure": "Stat-Led identity strip + Index-First tabs",

@@ -14,6 +14,7 @@ from typing import Optional
 from sqlmodel import Session, select
 
 from . import points as points_mod
+from .auth import user_view
 from .db import LeaderboardEntry, MacroUnlock, PointLedger, User, get_session
 
 _KST = timezone(timedelta(hours=9))
@@ -118,7 +119,7 @@ def dashboard(user: User, db: Optional[Session] = None) -> dict:
         if my_sales_rows:
             buyer_ids = list({u.user_id for u in my_sales_rows})
             for bu in db.exec(select(User).where(User.id.in_(buyer_ids))).all():
-                buyer_name[bu.id] = bu.username
+                buyer_name[bu.id] = "탈퇴한 회원" if bu.is_deleted else bu.username
         entry_symbol = {e.id: e.symbol for e in my_entries}
         sales = [
             {
@@ -140,12 +141,10 @@ def dashboard(user: User, db: Optional[Session] = None) -> dict:
              "ref": l.ref, "created_at": l.created_at}
             for l in ledger
         ]
+        profile = user_view(fresh, db=db)
 
     return {
-        "user": {
-            "id": fresh.id, "username": fresh.username, "email": fresh.email,
-            "points_balance": fresh.points_balance, "created_at": fresh.created_at,
-        },
+        "user": profile,
         "tier": _tier(total_sales),
         "totals": {
             "created": len(my_entries), "sales": total_sales,

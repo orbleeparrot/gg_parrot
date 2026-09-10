@@ -14,14 +14,17 @@ const Studio = lazy(() => import("./pages/Studio.jsx"));
 const Leaderboard = lazy(() => import("./pages/Leaderboard.jsx"));
 const Auth = lazy(() => import("./pages/Auth.jsx"));
 const MyPage = lazy(() => import("./pages/MyPage.jsx"));
+const ProfileSettings = lazy(() => import("./pages/ProfileSettings.jsx"));
 const Agents = lazy(() => import("./pages/Agents.jsx"));
 const News = lazy(() => import("./pages/News.jsx"));
 const Board = lazy(() => import("./pages/Board.jsx"));
 const BoardPost = lazy(() => import("./pages/BoardPost.jsx"));
+const BoardWrite = lazy(() => import("./pages/BoardWrite.jsx"));
 const ForgotPassword = lazy(() => import("./pages/ForgotPassword.jsx"));
 const ResetPassword = lazy(() => import("./pages/ResetPassword.jsx"));
 const RunnerInstall = lazy(() => import("./pages/RunnerInstall.jsx"));
 const Guide = lazy(() => import("./pages/Guide.jsx"));
+const Support = lazy(() => import("./pages/Support.jsx"));
 
 function RouteChangeEffects() {
   const { pathname } = useLocation();
@@ -40,6 +43,10 @@ function RouteChangeEffects() {
       ? "게시판"
       : pathname.startsWith("/guide")
       ? "사용법"
+      : pathname.startsWith("/support")
+      ? "고객센터"
+      : pathname.startsWith("/mypage/settings")
+      ? "프로필 설정"
       : pathname.startsWith("/mypage")
       ? "내 활동"
       : pathname.startsWith("/agents")
@@ -123,6 +130,13 @@ export default function App() {
     setMobileNavigationOpen(false);
   }, [pathname]);
 
+  useEffect(() => {
+    const desktop = window.matchMedia("(min-width: 1100px)");
+    const closeOnDesktop = () => { if (desktop.matches) setMobileNavigationOpen(false); };
+    desktop.addEventListener("change", closeOnDesktop);
+    return () => desktop.removeEventListener("change", closeOnDesktop);
+  }, []);
+
   return (
     <div className={`${isStart ? "home-shell" : "min-h-screen"} ${authShell ? "site-auth-layout" : "site-product-layout"}${hasMarquee ? " has-site-marquee" : ""}`}>
       <a href="#main-content" className="skip-link">본문으로 건너뛰기</a>
@@ -138,6 +152,7 @@ export default function App() {
           hasSidebar={!authShell}
           onOpenNavigation={() => setMobileNavigationOpen(true)}
           menuButtonRef={menuButtonRef}
+          navigationOpen={mobileNavigationOpen}
         />
         {/* [차후 도입] <WhaleBanner /> */}
         <main
@@ -162,12 +177,16 @@ export default function App() {
               <Route path="/builder" element={<Studio />} />
               <Route path="/s/:slug" element={<Studio />} />
               <Route path="/mypage" element={<MyPage />} />
+              <Route path="/mypage/settings" element={<ProfileSettings />} />
               <Route path="/agents" element={<Agents />} />
               <Route path="/runner/install" element={<RunnerInstall />} />
               <Route path="/runner" element={<LegacyRunnerRedirect />} />
               <Route path="/guide" element={<Guide />} />
+              <Route path="/support" element={<Support />} />
               <Route path="/news" element={<News />} />
               <Route path="/board" element={<Board />} />
+              <Route path="/board/write" element={<BoardWrite />} />
+              <Route path="/board/:id/edit" element={<BoardWrite />} />
               <Route path="/board/:id" element={<BoardPost />} />
               <Route path="/login" element={<Auth />} />
               <Route path="/forgot" element={<ForgotPassword />} />

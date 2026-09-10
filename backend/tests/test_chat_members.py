@@ -9,7 +9,7 @@ from sqlalchemy import delete, inspect
 from sqlmodel import create_engine, select
 
 from app import auth, chat, db as db_mod
-from app.db import ChatMessage, ChatReadState, User, get_session
+from app.db import ChatMessage, ChatReadState, User, UserAvatar, get_session
 from app.main import app
 
 
@@ -282,3 +282,76 @@ def test_postgres_chat_migration_preserves_legacy_authors_and_secures_read_state
         "REVOKE ALL PRIVILEGES ON TABLE chatreadstate FROM PUBLIC",
         "REVOKE ALL PRIVILEGES ON TABLE chatreadstate FROM anon",
     ]
+
+
+def _entry(owner_user_id=None, symbol="BTCUSDT", summary="1일봉 · 20일선 돌파"):
+    from app.db import LeaderboardEntry
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    with get_session() as db:
+        row = LeaderboardEntry(user_id="anon", nickname="tester", username="tester",
+                               owner_user_id=owner_user_id, symbol=symbol, macro_json="{}",
+                               human_summary=summary, created_at="2026-01-01T00:00:00Z", created_ms=now_ms)
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return row.id
+
+
+def test_macro_mention_becomes_a_card_and_hides_locked_strategy(members):
+    author, other = members
+    free_id = _entry()                       # 주인 없는 옛 항목 — 누구나 본다
+    owned_id = _entry(owner_user_id=other.id)  # 주인 있는 항목 — 언락 전엔 잠김
+    posted = client().post("/api/chat", json={"text": f"이거 봐 [macro:{free_id}] 랑 [macro:{owned_id}]"},
+                           headers=headers(author))
+    assert posted.status_code == 200, posted.text
+    cards = posted.json()["message"]["macros"]
+    assert [c["entry_id"] for c in cards] == [free_id, owned_id]
+    assert cards[0]["locked"] is False and cards[0]["human_summary"] == "1일봉 · 20일선 돌파"
+    assert cards[0]["symbol"] == "BTCUSDT" and cards[0]["username"] == "tester"
+    assert cards[1]["locked"] is True and cards[1]["human_summary"] == ""  # 잠긴 전략은 새지 않는다
+
+    listed = client().get("/api/chat", headers=headers(author)).json()["items"][-1]
+    assert [c["entry_id"] for c in listed["macros"]] == [free_id, owned_id]
+    assert listed["text"].count("[macro:") == 2  # 본문은 토큰 그대로 — 화면이 자리에 카드를 그린다
+
+    # 주인이 보면 자기 매크로는 열려 있다.
+    owner_view = client().get("/api/chat", headers=headers(other)).json()["items"][-1]
+    assert owner_view["macros"][1]["locked"] is False
+
+    # 없는 매크로 번호는 카드가 붙지 않는다(본문 글자만 남는다).
+    empty = client().post("/api/chat", json={"text": "[macro:999999] 없음"}, headers=headers(author))
+    assert empty.json()["message"]["macros"] == []
+
+
+def test_reply_quotes_the_original_and_report_covers_chat(members):
+    author, other = members
+    with get_session() as db:
+        db.add(UserAvatar(user_id=author.id, version="reply-photo", image_data=b"fixture"))
+        db.commit()
+    first = client().post("/api/chat", json={"text": "오늘 BTC 어때요?"}, headers=headers(author)).json()["message"]
+    replied = client().post("/api/chat", json={"text": f"[reply:{first['id']}] 저는 관망이요"}, headers=headers(other))
+    assert replied.status_code == 200, replied.text
+    view = replied.json()["message"]
+    assert view["reply_to"]["id"] == first["id"] and view["reply_to"]["username"] == author.username
+    assert view["reply_to"]["excerpt"] == "오늘 BTC 어때요?"
+    assert view["reply_to"]["user_id"] == author.id
+    assert view["reply_to"]["avatar_url"] == f"/api/avatars/{author.id}?v=reply-photo"
+    assert view["text"].startswith(f"[reply:{first['id']}]")  # 본문은 토큰 그대로, 화면이 인용 줄로 그린다
+    listed = client().get("/api/chat", headers=headers(author)).json()["items"]
+    assert listed[-1]["reply_to"]["id"] == first["id"] and listed[0]["reply_to"] is None
+    assert listed[-1]["reply_to"] == view["reply_to"]
+    # 없는 메시지에 답장하면 인용만 사라진다(본문은 남는다).
+    orphan = client().post("/api/chat", json={"text": "[reply:999999] 어디 갔지"}, headers=headers(author)).json()["message"]
+    assert orphan["reply_to"] is None
+
+    # 채팅 신고 — 남의 메시지만, 계정당 한 번.
+    assert client().post("/api/board/reports", json={"target_type": "chat", "target_id": first["id"], "reason": "spam"}).status_code == 401
+    assert client().post("/api/board/reports", json={"target_type": "chat", "target_id": first["id"], "reason": "spam"},
+                         headers=headers(author)).status_code == 400  # 내 메시지
+    ok = client().post("/api/board/reports", json={"target_type": "chat", "target_id": first["id"], "reason": "abuse", "detail": "욕설"},
+                       headers=headers(other))
+    assert ok.status_code == 200 and ok.json()["ok"] is True
+    assert client().post("/api/board/reports", json={"target_type": "chat", "target_id": first["id"], "reason": "spam"},
+                         headers=headers(other)).status_code == 409
+    assert client().post("/api/board/reports", json={"target_type": "chat", "target_id": 999999, "reason": "spam"},
+                         headers=headers(other)).status_code == 404

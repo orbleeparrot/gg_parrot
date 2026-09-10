@@ -8,7 +8,7 @@ import {
   watchSystemTheme,
 } from "../lib/theme.js";
 
-export default function ThemeToggle({ className = "" }) {
+export default function ThemeToggle({ className = "", showLabel = false }) {
   const [pref, setPref] = useState(getStoredTheme);
   const [systemTheme, setSystemTheme] = useState(() => resolveTheme("system"));
 
@@ -16,6 +16,16 @@ export default function ThemeToggle({ className = "" }) {
   useEffect(() => {
     applyTheme(pref);
   }, [pref]);
+
+  useEffect(() => {
+    const onChange = (event) => setPref(event.type === "storage" ? getStoredTheme() : event.detail);
+    window.addEventListener("ggp:theme-change", onChange);
+    window.addEventListener("storage", onChange);
+    return () => {
+      window.removeEventListener("ggp:theme-change", onChange);
+      window.removeEventListener("storage", onChange);
+    };
+  }, []);
 
   // Follow the OS while on "system".
   useEffect(() => {
@@ -47,7 +57,7 @@ export default function ThemeToggle({ className = "" }) {
       className={`header-control header-theme ${className}`}
     >
       {isDark ? <SunIcon /> : <MoonIcon />}
-      <span className="header-tooltip" aria-hidden="true">{nextLabel}</span>
+      {showLabel ? <span>{nextLabel}</span> : <span className="header-tooltip" aria-hidden="true">{nextLabel}</span>}
     </button>
   );
 }

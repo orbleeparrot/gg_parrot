@@ -12,7 +12,8 @@
 - `ggparrot-sunglasses-mark.png`: 서비스 타이틀에서 사용하는 선글라스 껄무새 투명 심볼이다.
 - `ggparrot-feather-mark.png`: 서비스 상단 워드마크와 조합하는 깃털 투명 심볼이다.
 - `ggparrot-feather-terminal.png`: 한글 워드마크 끝에 붙이는 세로형 깃털 투명 심볼이다.
-- `ggparrot-sunglasses-hero-v2.png` / `.webp`: 홈 첫 화면용 전신 선글라스 껄무새 투명 일러스트다.
+- `ggparrot-hero-articulated.svg`: 홈 첫 화면용 전신 선글라스 껄무새. 관절별 `<g>` 에 CSS 애니메이션(8초 반복)이 들어 있어 `<img>` 로 넣어도 움직이며, 움직임 줄이기 설정에서는 멈춘다.
+- `ggparrot-sunglasses-hero-v2.svg`: 같은 캐릭터의 이전 정지 버전(캔들·반짝임 장식 포함).
 - `ggparrot-sal-logo-source.png`: `살` 심볼과 워드마크가 함께 있는 제공 원본이다.
 - `navigation/ggparrot-nav-*.png`: 사이드바 페이지별 껄무새 캐릭터 아이콘. 모두 256×256 투명 RGBA 자산이다.
 - `navigation/outline/ggparrot-outline-*.png`: 사이드바 전용 껄무새 선 아이콘. 모두 512×512 투명 RGBA 마스크 자산이다.

@@ -1,0 +1,2 @@
+# Exact detected expressions only. Do not allow an entire message by keyword.
+# No application-specific exclusions yet.

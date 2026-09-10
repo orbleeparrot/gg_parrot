@@ -91,6 +91,46 @@ export function newsRetryAfterSeconds(payload) {
   return delays.length ? Math.min(...delays) : 30;
 }
 
+/**
+ * 뉴스 응답 캐시 — 화면을 떠났다 돌아와도 마지막 응답을 바로 그린다.
+ * 모듈 메모리 + sessionStorage 거울(새로고침에도 남는다). 저장소가 없거나 깨져 있어도 조용히 빈 캐시로 동작한다.
+ */
+export function createNewsCache({ storage = null, storageKey = "ggp_news_cache_v1", maxAgeMs = 12 * 60 * 60 * 1000, now = Date.now } = {}) {
+  const entries = new Map();
+  try {
+    const raw = storage?.getItem(storageKey);
+    if (raw) {
+      for (const [key, entry] of Object.entries(JSON.parse(raw))) {
+        if (entry && typeof entry === "object" && entry.data && Number.isFinite(entry.storedAt)) entries.set(key, entry);
+      }
+    }
+  } catch { /* 저장소 접근 불가·손상 — 메모리 캐시만 쓴다 */ }
+  const persist = () => {
+    try { storage?.setItem(storageKey, JSON.stringify(Object.fromEntries(entries))); } catch { /* 용량 초과 등 — 메모리 캐시는 유지 */ }
+  };
+  return {
+    get(key) {
+      const entry = entries.get(key);
+      if (!entry) return null;
+      if (now() - entry.storedAt > maxAgeMs) { entries.delete(key); return null; }
+      return entry;
+    },
+    set(key, data, storedAt = now()) { entries.set(key, { data, storedAt }); persist(); },
+    isFresh(key, freshMs) { const entry = this.get(key); return Boolean(entry) && now() - entry.storedAt < freshMs; },
+    clear() { entries.clear(); persist(); },
+  };
+}
+
+const sessionStore = (() => { try { return typeof sessionStorage === "undefined" ? null : sessionStorage; } catch { return null; } })();
+/** 앱 전체가 공유하는 뉴스 캐시 — 코인동향 화면이 라우트를 오가도 응답을 다시 받지 않는다. */
+export const newsCache = createNewsCache({ storage: sessionStore });
+
+/** 캐시로 만든 첫 상태 — 있으면 `success`(자료 포함), 없으면 `queued`. */
+export function cachedNewsState(cache, key) {
+  const hit = cache?.get(key);
+  return hit ? { status: "success", data: hit.data, error: "" } : { status: "queued", data: null, error: "" };
+}
+
 export function createNewsBriefingQueue({
   keys,
   load,
@@ -100,11 +140,20 @@ export function createNewsBriefingQueue({
   setTimer = (fn, delay) => setTimeout(fn, delay),
   clearTimer = (id) => clearTimeout(id),
   requestTimeoutMs = REQUEST_TIMEOUT_MS,
+  cache = null,
+  freshMs = 0,
 }) {
-  const records = new Map([...new Set(keys)].map((key) => [key, {
-    status: "queued", data: null, error: "", dueAt: 0,
-    pendingAttempts: 0, failures: 0,
-  }]));
+  // 캐시가 있으면 그 자료로 시작한다. 신선하고 남은 일(번역·요약 대기)이 없으면 요청 자체를 내지 않고,
+  // 오래됐으면 보이는 채로 조용히 새로 받는다(status 는 자료가 있는 한 success).
+  const records = new Map([...new Set(keys)].map((key) => {
+    const hit = cache?.get(key) || null;
+    const seeded = hit ? hit.data : null;
+    const settled = Boolean(seeded) && now() - hit.storedAt < freshMs && !hasPendingNewsWork(seeded) && !seeded.stale;
+    return [key, {
+      status: seeded ? "success" : "queued", data: seeded, error: "", dueAt: settled ? null : 0,
+      pendingAttempts: 0, failures: 0,
+    }];
+  }));
   const requests = new Map();
   const slots = Math.max(1, Math.trunc(concurrency) || 2);
   let active = false;
@@ -159,6 +208,7 @@ export function createNewsBriefingQueue({
       record.data = prepareNewsResponse(payload);
       record.status = "success";
       record.failures = 0;
+      cache?.set(key, record.data, now());
       record.pendingAttempts = hasPendingNewsWork(record.data) || record.data.stale
         ? record.pendingAttempts + 1 : 0;
       record.dueAt = record.pendingAttempts

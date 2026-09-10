@@ -1,130 +1,44 @@
-import { useEffect, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { api } from "../api.js";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
+import useBoardList from "../hooks/useBoardList.js";
 import { useAuth } from "../lib/auth.js";
 import { boardFullTime, boardTime, kstDateTime, pageWindow } from "../lib/boardText.js";
 import { PageHeader, EmptyState, ErrorNote } from "../components/Page.jsx";
-import { ChevronLeftIcon, ChevronRightIcon, ImageIcon } from "../components/boardIcons.jsx";
+import SelectMenu from "../components/SelectMenu.jsx";
+import { writePath } from "../lib/boardPaths.js";
+import { ChevronLeftIcon, ChevronRightIcon, ImageIcon, SearchIcon } from "../components/boardIcons.jsx";
+import { AuthorAvatar } from "../components/UserAvatar.jsx";
 import "./Board.css";
 
-const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
-const PAGE_SIZE = 10;
+// 한 쪽의 글 수는 화면 높이에 맞춘다 — 표가 스크롤 없이 페이지 이동 바로 위까지 차게.
+const ROW_PX = 43; // .board-row 42 + 괘선 1
+const ROW_PX_MOBILE = 63; // ≤639px 두 줄 행(패딩 10×2 + 두 줄 + 괘선 1)
+const HEAD_PX = 32; // 열 머리글(모바일은 접힘)
+const BELOW_PX = 20 + 34 + 20 + 18 + 56; // 쪽 이동(여백 20 + 34) + 고지문(여백 20 + 한 줄 18) + 본문 아래 여백(하단 띠 56)
+const MIN_ROWS = 5;
+const MAX_ROWS = 30; // 백엔드 상한과 같다
 
-// 로그인 계정만 여는 글쓰기 폼(제목/본문 + 이미지 jpg·png 1장).
-function Composer({ onCreated, onCancel }) {
-  const [title, setTitle] = useState("");
-  const [body, setBody] = useState("");
-  const [image, setImage] = useState(null);
-  const [preview, setPreview] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
+function fittedRows(tableTop, viewportHeight, mobile = false) {
+  const room = viewportHeight - tableTop - (mobile ? 0 : HEAD_PX) - BELOW_PX;
+  return Math.max(MIN_ROWS, Math.min(MAX_ROWS, Math.floor(room / (mobile ? ROW_PX_MOBILE : ROW_PX))));
+}
 
-  useEffect(
-    () => () => {
-      if (preview) URL.revokeObjectURL(preview);
-    },
-    [preview]
-  );
-
-  function pickImage(e) {
-    setErr("");
-    const f = e.target.files?.[0];
-    if (!f) {
-      setImage(null);
-      setPreview("");
-      return;
-    }
-    if (!["image/jpeg", "image/png"].includes(f.type)) {
-      setImage(null);
-      setPreview("");
-      setErr("JPG 또는 PNG 이미지만 올릴 수 있어요.");
-      e.target.value = "";
-      return;
-    }
-    if (f.size > MAX_IMAGE_BYTES) {
-      setImage(null);
-      setPreview("");
-      setErr("이미지는 2MB 이하만 올릴 수 있어요.");
-      e.target.value = "";
-      return;
-    }
-    setImage(f);
-    setPreview(URL.createObjectURL(f));
-  }
-
-  async function submit() {
-    setErr("");
-    if (!title.trim()) return setErr("제목을 입력해 주세요.");
-    setBusy(true);
-    try {
-      const post = await api.boardCreate({ title: title.trim(), body, image });
-      onCreated(post);
-    } catch (e) {
-      setErr(String(e.message || e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  // 폼은 §1-3 이 상자를 허용하는 예외 — 목록 위로 끼어들어 오는 것이라
-  // 끼어든 것처럼 보여야 한다.
-  return (
-    <div className="form-surface border border-slate-200 p-5 space-y-4">
-      <h2 className="t-title text-slate-900">새 글 쓰기</h2>
-      <label className="block">
-        <span className="block t-small font-semibold text-slate-700 mb-2">제목</span>
-        <input
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          maxLength={120}
-          className={"field" + (err && !title.trim() ? " field-err" : "")}
-          aria-invalid={err && !title.trim() ? true : undefined}
-        />
-      </label>
-      <label className="block">
-        <span className="block t-small font-semibold text-slate-700 mb-2">내용</span>
-        <textarea
-          value={body}
-          onChange={(e) => setBody(e.target.value)}
-          rows={6}
-          maxLength={5000}
-          className="field"
-        />
-      </label>
-      <div className="flex items-center gap-3 flex-wrap">
-        <label className="inline-flex items-center gap-2 cursor-pointer">
-          <span className="btn btn-s btn-secondary">사진 첨부</span>
-          <input type="file" accept="image/png,image/jpeg" onChange={pickImage} className="hidden" />
-          <span className="t-caption text-slate-500">JPG·PNG · 2MB 이하</span>
-        </label>
-      </div>
-      {preview && (
-        <div className="relative inline-block">
-          <img src={preview} alt="미리보기" className="max-h-48 rounded-xl border border-slate-200" />
-          {/* slate-900/50 은 두 테마에서 서로 뒤집히는 짝 — 다크에서도 대비가 유지된다. */}
-          <button
-            onClick={() => {
-              setImage(null);
-              setPreview("");
-            }}
-            className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-slate-900 text-slate-50 t-caption font-bold"
-            aria-label="첨부 이미지 지우기"
-          >
-            ✕
-          </button>
-        </div>
-      )}
-      <p className="board-form-error" role={err ? "alert" : undefined}>{err}</p>
-      <div className="flex items-center gap-2">
-        <button onClick={submit} disabled={busy} className="btn btn-l btn-primary">
-          {busy ? "등록 중…" : "등록"}
-        </button>
-        <button onClick={onCancel} className="btn btn-l btn-secondary">
-          취소
-        </button>
-      </div>
-    </div>
-  );
+// 표가 시작하는 자리(sentinel)와 창 높이로 한 쪽의 글 수를 정한다. 창 크기가 바뀌면 다시 잰다.
+function useFittedPageSize() {
+  const sentinel = useRef(null);
+  const [size, setSize] = useState(null);
+  useLayoutEffect(() => {
+    let timer = null;
+    const measure = () => {
+      const top = sentinel.current ? sentinel.current.getBoundingClientRect().top + window.scrollY : 0;
+      setSize(fittedRows(top, window.innerHeight, window.matchMedia("(max-width: 639px)").matches));
+    };
+    const onResize = () => { window.clearTimeout(timer); timer = window.setTimeout(measure, 120); };
+    measure();
+    window.addEventListener("resize", onResize);
+    return () => { window.clearTimeout(timer); window.removeEventListener("resize", onResize); };
+  }, []);
+  return [sentinel, size];
 }
 
 // 쪽 이동 — 단일 선택이라 segmented 문법(§6). 현재 쪽만 면 배경, 앞뒤는 화살표.
@@ -153,51 +67,74 @@ function Pager({ page, pages, onGo }) {
   );
 }
 
-function TableHead() {
+export function TableHead() {
   return (
     <li className="board-head" role="row" aria-hidden="true">
-      <span className="board-col-no">번호</span>
+      <span className="board-col-likes">추천</span>
       <span className="board-col-title">제목</span>
       <span className="board-col-author">글쓴이</span>
       <span className="board-col-time">시각</span>
+      <span className="board-col-views">조회</span>
     </li>
   );
 }
 
+const SORTS = [["new", "최신순"], ["likes", "추천순"], ["views", "조회순"], ["comments", "댓글순"]];
+const FIELDS = [["all", "제목+내용"], ["title", "제목"], ["author", "글쓴이"]];
+
+// 검색 — 제목 줄 아래 왼쪽. 범위 드롭다운(우리 입력칸 모양 + 화살표)과 검색어 칸 안의 돋보기·지우기.
+function SearchBar({ q, field, onSearch }) {
+  const [draft, setDraft] = useState(q);
+  const [where, setWhere] = useState(field);
+  useEffect(() => { setDraft(q); setWhere(field); }, [q, field]);
+  return (
+    <form className="board-searchbar" role="search" onSubmit={(e) => { e.preventDefault(); onSearch({ q: draft.trim(), field: where }); }}>
+      <SelectMenu value={where} options={FIELDS} onChange={setWhere} label="검색 범위" className="board-select" />
+      <span className="board-search">
+        <input value={draft} onChange={(e) => setDraft(e.target.value)} className="field field-sm" placeholder="검색어" aria-label="검색어" maxLength={80} />
+        {q ? <button type="button" className="board-search-clear" aria-label="검색 지우기" onClick={() => onSearch({ q: "", field: "all" })}>✕</button> : null}
+        <button type="submit" className="board-search-go" aria-label="검색"><SearchIcon /></button>
+      </span>
+    </form>
+  );
+}
+
 // 불러오는 동안의 뼈대 — 행 모양 그대로, 회전 대신.
-function SkeletonRows({ count = PAGE_SIZE }) {
+function SkeletonRows({ count = MIN_ROWS }) {
   return (
     <ul className="board-table" aria-hidden="true">
       <TableHead />
       {Array.from({ length: count }, (_, index) => (
         <li key={index} className="board-row is-skeleton">
-          <span className="board-no"><span className="board-skeleton is-no" /></span>
+          <span className="board-likes"><span className="board-skeleton is-no" /></span>
           <span className="board-title"><span className="board-skeleton is-title" /></span>
           <span className="board-author"><span className="board-skeleton is-author" /></span>
           <span className="board-time"><span className="board-skeleton is-time" /></span>
+          <span className="board-views"><span className="board-skeleton is-time" /></span>
         </li>
       ))}
     </ul>
   );
 }
 
-// 글 한 줄 — 번호 | 제목 [댓글수] (사진) | 글쓴이 | 시각. 행 전체가 링크.
-function PostRow({ post, now }) {
+// 글 한 줄 — 추천수(퀘이사존식 왼쪽 숫자) | 제목 [댓글수] (사진) | 글쓴이 | 시각 | 조회. 행 전체가 링크.
+export function PostRow({ post, now, current = false }) {
   const time = boardTime(post.created_ms, now);
-  const isToday = /:/.test(time);
+  const isToday = /전$/.test(time);
   const full = boardFullTime(post.created_ms) || post.created_kst;
   const when = kstDateTime(post.created_kst);
   return (
     <li className="board-item">
-      <Link to={`/board/${post.id}`} className="board-row" aria-label={`${post.title}${post.comment_count > 0 ? `, 댓글 ${post.comment_count}개` : ""}${post.has_image ? ", 사진 첨부" : ""}, ${post.author_name}, ${full}`}>
-        <span className="board-no num" aria-hidden="true">{post.id}</span>
+      <Link to={`/board/${post.id}`} className={`board-row${current ? " is-current" : ""}`} aria-current={current ? "page" : undefined} aria-label={`${post.title}${post.comment_count > 0 ? `, 댓글 ${post.comment_count}개` : ""}${post.has_image ? ", 사진 첨부" : ""}, ${post.author_name}, ${full}, 조회 ${post.views || 0}, 추천 ${post.likes || 0}`}>
+        <span className={`board-likes num${post.likes > 0 ? " is-hot" : ""}`} aria-hidden="true">{post.likes || 0}</span>
         <span className="board-title">
           <span className="board-title-text">{post.title}</span>
           {post.comment_count > 0 ? <span className="board-count num" aria-hidden="true">{post.comment_count}</span> : null}
           {post.has_image ? <span className="board-mark" aria-hidden="true"><ImageIcon /></span> : null}
         </span>
-        <span className="board-author" aria-hidden="true">{post.author_name}</span>
-        <time className={`board-time num${isToday ? " is-today" : ""}`} dateTime={when || undefined} title={full} aria-hidden="true">{time}</time>
+        <span className="board-author" aria-hidden="true"><AuthorAvatar userId={post.author_user_id} src={post.author_avatar_url} name={post.author_name} size={20} /><span className="board-author-name">{post.author_name}</span></span>
+        <time className={`board-time${isToday ? " is-today" : " num"}`} dateTime={when || undefined} title={full} aria-hidden="true">{time}</time>
+        <span className="board-views num" aria-hidden="true">{post.views || 0}</span>
       </Link>
     </li>
   );
@@ -205,83 +142,61 @@ function PostRow({ post, now }) {
 
 export default function Board() {
   const { token } = useAuth();
-  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10) || 1);
-  const [data, setData] = useState(null);
-  const [busy, setBusy] = useState(true);
-  const [err, setErr] = useState("");
-  const [composing, setComposing] = useState(() => searchParams.get("write") === "1");
-  const [now, setNow] = useState(() => Date.now());
+  const sort = searchParams.get("sort") || "new";
+  const field = searchParams.get("field") || "all";
+  const q = searchParams.get("q") || "";
+  const [sentinel, pageSize] = useFittedPageSize();
+  const { data, busy, err, now } = useBoardList(page, pageSize, { sort, q, field });
 
-  function load(p) {
-    setBusy(true);
-    setErr("");
-    api
-      .boardList(p, PAGE_SIZE)
-      .then((d) => {
-        setData(d);
-        setNow(Date.now()); // 시각 표기(오늘 HH:MM)의 기준을 목록을 받은 순간으로
-      })
-      .catch((e) => setErr(String(e.message || e)))
-      .finally(() => setBusy(false));
+  // 주소가 곧 상태 — 기본값(1쪽·최신순·검색 없음)은 주소에서 뺀다.
+  function update(next) {
+    const merged = { page, sort, field, q, ...next };
+    if (!("page" in next)) merged.page = 1;
+    const params = {};
+    if (merged.page > 1) params.page = String(merged.page);
+    if (merged.sort !== "new") params.sort = merged.sort;
+    if (merged.q) { params.q = merged.q; if (merged.field !== "all") params.field = merged.field; }
+    setSearchParams(params);
   }
-
-  useEffect(() => {
-    load(page);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page]);
-
   function go(p) {
-    setSearchParams({ page: String(p) });
+    update({ page: p });
     window.scrollTo({ top: 0 });
   }
 
   return (
     <div className="board-page">
-      {/* 제목 줄은 다른 화면과 같은 공용 규격(§9 PageHeader). 아이브로·설명·글 수 없이 제목, 오른쪽에 글쓰기. */}
+      {/* 제목 줄은 다른 화면과 같은 공용 규격(§9 PageHeader). 아이브로·설명·글 수 없이 제목, 오른쪽에 글쓰기.
+          글쓰기는 글 보기처럼 전용 페이지(/board/write)로 이동한다 — 목록 위에 끼워 넣지 않는다. */}
       <PageHeader
-        title="껄무새 게시판"
+        title={<>껄무새 게시판{data ? <span className="board-title-count"><span className="num">{data.total.toLocaleString()}</span>건</span> : null}</>}
         actions={
-          token ? (
-            <button
-              onClick={() => setComposing((v) => !v)}
-              className={"btn btn-m " + (composing ? "btn-secondary" : "btn-primary")}
-              aria-expanded={composing}
-            >
-              {composing ? "닫기" : "글쓰기"}
-            </button>
-          ) : (
-            <button
-              onClick={() => navigate("/login?next=%2Fboard")}
-              className="btn btn-m btn-primary"
-              title="로그인하면 바로 글을 쓸 수 있어요"
-            >
+          <>
+            <div className="seg board-sort" role="group" aria-label="정렬">
+              {SORTS.map(([key, label]) => (
+                <button key={key} type="button" className={`seg-item${sort === key ? " seg-item-on" : ""}`} aria-pressed={sort === key} onClick={() => update({ sort: key })}>{label}</button>
+              ))}
+            </div>
+            <Link to={writePath(token)} className="btn btn-m btn-primary" title={token ? undefined : "로그인하면 바로 글을 쓸 수 있어요"}>
               글쓰기
-            </button>
-          )
+            </Link>
+          </>
         }
-      />
-
-      {composing && token && (
-        <div className="board-composer">
-          <Composer
-            onCreated={(post) => {
-              setComposing(false);
-              navigate(`/board/${post.id}`);
-            }}
-            onCancel={() => setComposing(false)}
-          />
-        </div>
-      )}
+      >
+        <SearchBar q={q} field={field} onSearch={update} />
+      </PageHeader>
 
       {err && <ErrorNote>글 목록을 불러오지 못했어요: {err}</ErrorNote>}
-      {busy && !data && !err ? <SkeletonRows /> : null}
+      <div ref={sentinel} aria-hidden="true" />
+      {(busy || !pageSize) && !data && !err ? <SkeletonRows count={pageSize || MIN_ROWS} /> : null}
 
       {data && (
         <>
           {data.items.length === 0 ? (
-            <EmptyState title="아직 글이 없어요">첫 글을 남겨봐요.</EmptyState>
+            q
+              ? <EmptyState title={`‘${q}’ 검색 결과가 없어요`}>다른 말로 검색해 보세요.</EmptyState>
+              : <EmptyState title="아직 글이 없어요">첫 글을 남겨봐요.</EmptyState>
           ) : (
             <ul className={`board-table${busy ? " is-busy" : ""}`} aria-busy={busy || undefined} aria-label="글 목록">
               <TableHead />

@@ -5,6 +5,8 @@ historical data. Every returned result represents a PAST SIMULATION.
 """
 from __future__ import annotations
 
+import hashlib
+
 import asyncio
 import json
 import os
@@ -28,6 +30,7 @@ from fastapi import (
 )
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from sqlmodel import Session, select
 
@@ -58,6 +61,8 @@ from . import ai_explain as ai_explain_mod
 from . import ai_runtime as ai_runtime_mod
 from . import community_summaries as community_summaries_mod
 from . import auth as auth_mod
+from . import avatars as avatars_mod
+from . import profile as profile_mod
 from . import points as points_mod
 from . import account as account_mod
 from . import challenge as challenge_mod
@@ -234,6 +239,17 @@ class ResetRequest(BaseModel):
     password: str
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class DeleteAccountRequest(BaseModel):
+    confirmation: str
+    password: str = ""
+    credential: str = ""
+
+
 class ExplainAiRequest(BaseModel):
     macro: Macro
     period_override: Optional[Period] = None
@@ -370,9 +386,92 @@ def auth_reset(req: ResetRequest) -> dict:
 
 
 @app.get("/api/auth/me")
-def auth_me(user: User = Depends(auth_mod.current_user)) -> dict:
+def auth_me(
+    user: User = Depends(auth_mod.current_user_in_session),
+    db: Session = Depends(request_session),
+) -> dict:
     """Current account (from the Bearer token), including the points balance."""
+    return {"user": auth_mod.user_view(user, db=db)}
+
+
+@app.post("/api/me/avatar")
+def upload_avatar(
+    image: UploadFile = File(...),
+    user: User = Depends(auth_mod.current_user),
+) -> dict:
+    # Bounded read and raster decoding run in FastAPI's worker thread.
+    try:
+        data = image.file.read(avatars_mod.MAX_IMAGE_BYTES + 1)
+        if len(data) > avatars_mod.MAX_IMAGE_BYTES:
+            raise HTTPException(413, "프로필 사진은 2MB 이하만 올릴 수 있어요.")
+        normalized = avatars_mod.normalize_image(data)
+        avatars_mod.set_avatar(int(user.id), normalized)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(401, str(exc)) from exc
+    finally:
+        image.file.close()
     return {"user": auth_mod.user_view(user)}
+
+
+@app.delete("/api/me/avatar")
+def delete_avatar(user: User = Depends(auth_mod.current_user)) -> dict:
+    try:
+        avatars_mod.set_avatar(int(user.id), None)
+    except LookupError as exc:
+        raise HTTPException(401, str(exc)) from exc
+    return {"user": auth_mod.user_view(user)}
+
+
+@app.get("/api/avatars/{user_id}")
+def avatar_image(user_id: int, request: Request, v: str | None = None) -> Response:
+    avatar = avatars_mod.get_avatar(user_id, version=v)
+    if avatar is None:
+        raise HTTPException(404, "프로필 사진이 없어요.", headers={"Cache-Control": "no-store"})
+    etag = f'"{avatar.version}"'
+    headers = {
+        "Cache-Control": "public, max-age=300, must-revalidate",
+        "ETag": etag,
+        "X-Content-Type-Options": "nosniff",
+    }
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=headers)
+    return Response(content=avatar.image_data, media_type="image/webp", headers=headers)
+
+
+@app.patch("/api/me/profile")
+def update_profile(
+    username: str = Form(...), bio: str = Form(""),
+    remove_avatar: bool = Form(False), image: UploadFile | None = File(None),
+    user: User = Depends(auth_mod.current_user),
+) -> dict:
+    normalized = None
+    if image is not None:
+        try:
+            raw = image.file.read(avatars_mod.MAX_IMAGE_BYTES + 1)
+            if len(raw) > avatars_mod.MAX_IMAGE_BYTES:
+                raise HTTPException(413, "프로필 사진은 2MB 이하만 올릴 수 있어요.")
+            normalized = avatars_mod.normalize_image(raw)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        finally:
+            image.file.close()
+    return profile_mod.update_profile(user.id, username, bio, image_data=normalized, remove_avatar=remove_avatar)
+
+
+@app.post("/api/me/password")
+def change_password(req: ChangePasswordRequest, user: User = Depends(auth_mod.current_user)) -> dict:
+    result = profile_mod.change_password(user.id, req.current_password, req.new_password)
+    runner_mod.notify_sessions_changed(user.id)
+    return result
+
+
+@app.delete("/api/me/account")
+def delete_account(req: DeleteAccountRequest, user: User = Depends(auth_mod.current_user)) -> dict:
+    result = profile_mod.delete_account(user.id, req.confirmation, req.password, req.credential)
+    runner_mod.notify_sessions_changed(user.id)
+    return result
 
 
 @app.get("/api/me/dashboard")
@@ -972,40 +1071,110 @@ def chat_read(req: ChatReadRequest, account: User = Depends(auth_mod.current_use
 async def board_create(
     title: str = Form(...),
     body: str = Form(""),
+    body_format: str = Form("text"),
+    images: list[UploadFile] = File(default=[]),
     image: Optional[UploadFile] = File(default=None),
-    user: User = Depends(auth_mod.current_user),
+    user: User = Depends(auth_mod.current_user_in_session),
+    db: Session = Depends(request_session),
 ) -> dict:
-    """글 작성 — 로그인 계정만. 이미지(jpg/png, 2MB 이하) 1장 선택."""
-    image_bytes: Optional[bytes] = None
-    image_mime = ""
-    if image is not None and (image.filename or ""):
-        data = await image.read()
+    """글 작성 — 로그인 계정만. 사진(jpg/png, 각 2MB 이하)은 `images` 로 여러 장, 옛 클라이언트의 `image` 한 장도 받는다.
+    `body_format=html` 이면 편집기 HTML(새 사진은 `data-key="new:N"` 자리)로 받아 정제해 저장한다."""
+    uploads = [*(images or []), *([image] if image is not None else [])]
+    uploads = [up for up in uploads if up is not None and (up.filename or "")]
+    if len(uploads) > board_mod.MAX_IMAGES:
+        raise HTTPException(status_code=400, detail=f"사진은 {board_mod.MAX_IMAGES}장까지 붙일 수 있어요.")
+    validated: list[tuple[bytes, str]] = []
+    for up in uploads:
+        data = await up.read()
         try:
-            image_bytes, image_mime = board_mod.validate_image(data, image.content_type)
+            validated.append(board_mod.validate_image(data, up.content_type))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
     try:
-        return board_mod.create_post(user, title, body, image_bytes, image_mime)
+        return await run_in_threadpool(board_mod.create_post, user, title, body, validated, body_format=body_format, db=db)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
 
-@app.get("/api/board/posts")
-def board_list(page: int = 1, size: int = board_mod.PAGE_SIZE_DEFAULT) -> dict:
-    return board_mod.list_posts(page, size)
-
-
-@app.get("/api/board/posts/{post_id}")
-def board_detail(post_id: int) -> dict:
-    view = board_mod.get_post(post_id)
+@app.put("/api/board/posts/{post_id}")
+async def board_update(
+    post_id: int,
+    title: str = Form(...),
+    body: str = Form(""),
+    body_format: str = Form("text"),
+    keep_image_ids: str = Form(""),
+    images: list[UploadFile] = File(default=[]),
+    user: User = Depends(auth_mod.current_user_in_session),
+    db: Session = Depends(request_session),
+) -> dict:
+    """글 수정 — 작성자만. `keep_image_ids` 는 남길 사진 id 를 쉼표로(옛 한 장은 0), `images` 는 새로 붙일 사진."""
+    try:
+        keep = [int(part) for part in keep_image_ids.split(",") if part.strip()]
+    except ValueError:
+        raise HTTPException(status_code=400, detail="남길 사진 목록이 올바르지 않아요.")
+    uploads = [up for up in (images or []) if up is not None and (up.filename or "")]
+    validated: list[tuple[bytes, str]] = []
+    for up in uploads:
+        data = await up.read()
+        try:
+            validated.append(board_mod.validate_image(data, up.content_type))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+    try:
+        view = await run_in_threadpool(board_mod.update_post, post_id, user, title, body, keep, validated, body_format=body_format, db=db)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     if view is None:
         raise HTTPException(status_code=404, detail="글을 찾을 수 없어요.")
     return view
 
 
+@app.get("/api/board/posts")
+def board_list(
+    page: int = 1,
+    size: int = board_mod.PAGE_SIZE_DEFAULT,
+    sort: str = "new",
+    q: str = "",
+    field: str = "all",
+) -> dict:
+    """목록 — sort: new|likes|views|comments, q: 검색어, field: all(제목+내용)|title|author."""
+    return board_mod.list_posts(page, size, sort=sort, q=q, field=field)
+
+
+def _board_view_key(request: Request) -> str:
+    """조회수용 방문자 키 — IP(프록시 뒤면 첫 X-Forwarded-For) + UA 해시. 저장하지 않고 메모리에서 30분만 기억한다."""
+    forwarded = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+    ip = forwarded or (request.client.host if request.client else "")
+    ua = request.headers.get("user-agent", "")
+    return hashlib.sha1(f"{ip}|{ua}".encode()).hexdigest()[:16]
+
+
+@app.get("/api/board/posts/{post_id}")
+def board_detail(post_id: int, request: Request, account: Optional[User] = Depends(auth_mod.optional_user_in_session), db: Session = Depends(request_session)) -> dict:
+    view = board_mod.get_post(post_id, viewer_id=account.id if account else None, view_key=_board_view_key(request), db=db)
+    if view is None:
+        raise HTTPException(status_code=404, detail="글을 찾을 수 없어요.")
+    return view
+
+
+class PostVoteRequest(BaseModel):
+    value: int
+
+
+@app.post("/api/board/posts/{post_id}/vote")
+def board_vote(post_id: int, req: PostVoteRequest, user: User = Depends(auth_mod.current_user_in_session), db: Session = Depends(request_session)) -> dict:
+    """추천(+1)/비추천(-1) — 로그인 계정당 한 표, 같은 표를 다시 누르면 취소."""
+    result = board_mod.vote_post(post_id, user.id, req.value, db=db)
+    if result is None:
+        raise HTTPException(status_code=404, detail="글을 찾을 수 없어요.")
+    return result
+
+
 @app.delete("/api/board/posts/{post_id}")
-def board_delete(post_id: int, user: User = Depends(auth_mod.current_user)) -> dict:
-    if not board_mod.delete_post(post_id, user.id):
+def board_delete(post_id: int, user: User = Depends(auth_mod.current_user_in_session), db: Session = Depends(request_session)) -> dict:
+    if not board_mod.delete_post(post_id, user.id, db=db):
         raise HTTPException(status_code=403, detail="본인이 쓴 글만 삭제할 수 있어요.")
     return {"ok": True}
 
@@ -1019,33 +1188,74 @@ def board_image(post_id: int) -> Response:
     return Response(content=data, media_type=mime, headers={"Cache-Control": "public, max-age=86400"})
 
 
+@app.get("/api/board/posts/{post_id}/images/{image_id}")
+def board_post_image(post_id: int, image_id: int) -> Response:
+    got = board_mod.get_post_image(post_id, image_id)
+    if got is None:
+        raise HTTPException(status_code=404, detail="이미지가 없어요.")
+    data, mime = got
+    return Response(content=data, media_type=mime, headers={"Cache-Control": "public, max-age=86400"})
+
+
 class CommentIn(BaseModel):
-    username: str
-    password: str
     text: str
+    parent_id: Optional[int] = None
 
 
 @app.post("/api/board/posts/{post_id}/comments")
-def board_comment_add(post_id: int, req: CommentIn, request: Request) -> dict:
-    ip = request.client.host if request.client else "unknown"
+def board_comment_add(post_id: int, req: CommentIn, user: User = Depends(auth_mod.current_user_in_session), db: Session = Depends(request_session)) -> dict:
+    """댓글·답글 — 로그인 계정만, 닉네임은 계정 이름. parent_id 가 있으면 그 댓글의 답글."""
     try:
-        return {"comment": board_mod.add_comment(post_id, req.username, req.password, req.text, ip)}
+        return {"comment": board_mod.add_comment(post_id, user, req.text, parent_id=req.parent_id, db=db)}
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     except board_mod.RateLimited as exc:
         raise HTTPException(status_code=429, detail=str(exc))
+
+
+class CommentEditIn(BaseModel):
+    text: str
+
+
+@app.put("/api/board/comments/{comment_id}")
+def board_comment_edit(comment_id: int, req: CommentEditIn, user: User = Depends(auth_mod.current_user_in_session), db: Session = Depends(request_session)) -> dict:
+    try:
+        view = board_mod.edit_comment(comment_id, user, req.text, db=db)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if view is None:
+        raise HTTPException(status_code=404, detail="댓글을 찾을 수 없어요.")
+    return {"comment": view}
+
+
+class ReportIn(BaseModel):
+    target_type: str
+    target_id: int
+    reason: str
+    detail: str = ""
+
+
+@app.post("/api/board/reports")
+def board_report(req: ReportIn, user: User = Depends(auth_mod.current_user_in_session), db: Session = Depends(request_session)) -> dict:
+    """글·댓글·채팅 신고 — 로그인 계정당 대상 하나에 한 번."""
+    try:
+        return board_mod.report(req.target_type, req.target_id, user, req.reason, req.detail, db=db)
+    except board_mod.AlreadyReported as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
 
-class CommentDeleteIn(BaseModel):
-    password: str
-
-
 @app.delete("/api/board/comments/{comment_id}")
-def board_comment_delete(comment_id: int, req: CommentDeleteIn) -> dict:
-    if not board_mod.delete_comment(comment_id, req.password):
-        raise HTTPException(status_code=403, detail="비밀번호가 맞지 않아요.")
+def board_comment_delete(comment_id: int, user: User = Depends(auth_mod.current_user_in_session), db: Session = Depends(request_session)) -> dict:
+    if not board_mod.delete_comment(comment_id, user, db=db):
+        raise HTTPException(status_code=403, detail="본인이 쓴 댓글만 지울 수 있어요.")
     return {"ok": True}
 
 
@@ -1309,6 +1519,11 @@ async def runner_sessions_stream(websocket: WebSocket) -> None:
                 changed.clear()
             except asyncio.TimeoutError:
                 reason = "resync"
+            try:
+                await asyncio.to_thread(auth_mod.decode_runner_session_stream_token, auth_values[0], check_expiry=False)
+            except HTTPException:
+                await websocket.close(code=4401, reason="계정 인증이 변경됐어요. 다시 로그인해 주세요.")
+                break
             await websocket.send_json(
                 {
                     "type": "sessions.snapshot",

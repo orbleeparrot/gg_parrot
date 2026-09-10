@@ -1,311 +1,235 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api.js";
-import { useAuth, updateAuthUser } from "../lib/auth.js";
-import { initialOf } from "../lib/boardText.js";
-import {
-  formatPoints, fullKst, joinedLabel, ledgerLabel, signedPoints, stampKst, tierNextLabel, tierStepAt, tierSteps,
-} from "../lib/profileText.js";
-import { EmptyState, ErrorNote } from "../components/Page.jsx";
+import { clearAuth, getAuthUser, getToken, mergeFetchedAuthUser, updateAuthUser, useAuth } from "../lib/auth.js";
+import { SignOutIcon } from "@phosphor-icons/react/dist/csr/SignOut";
+import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
+import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
+import { SquaresFourIcon } from "@phosphor-icons/react/dist/csr/SquaresFour";
+import { ArrowsLeftRightIcon } from "@phosphor-icons/react/dist/csr/ArrowsLeftRight";
+import { ArticleIcon } from "@phosphor-icons/react/dist/csr/Article";
+import { CoinsIcon } from "@phosphor-icons/react/dist/csr/Coins";
+import { TrendUpIcon } from "@phosphor-icons/react/dist/csr/TrendUp";
+import { ReceiptIcon } from "@phosphor-icons/react/dist/csr/Receipt";
+import { ArrowUpRightIcon } from "@phosphor-icons/react/dist/csr/ArrowUpRight";
+import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
+import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
+import { XIcon } from "@phosphor-icons/react/dist/csr/X";
+import { PlantIcon } from "@phosphor-icons/react/dist/csr/Plant";
+import { MedalIcon } from "@phosphor-icons/react/dist/csr/Medal";
+import { DiamondIcon } from "@phosphor-icons/react/dist/csr/Diamond";
+import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
+import { ImageIcon } from "@phosphor-icons/react/dist/csr/Image";
+import { formatPoints, fullKst, joinedLabel, ledgerLabel, signedPoints, stampKst, tierNextLabel, tierStepAt, tierSteps, toMs } from "../lib/profileText.js";
+import { ErrorNote } from "../components/Page.jsx";
 import CoinIcon from "../components/CoinIcon.jsx";
-import { ImageIcon } from "../components/boardIcons.jsx";
-import "./Board.css"; // 게시글 탭은 게시판 목록 문법(.board-table)을 그대로 쓴다
+import UserAvatar from "../components/UserAvatar.jsx";
 import "./MyPage.css";
+import "./MyPageMobile.css";
 
-// 탭 = 내 것들의 목록. 개수는 탭 이름 뒤에 붙는다(깃허브·브런치 관례).
-const TABS = [
-  { key: "created", label: "만든 매크로" },
-  { key: "purchased", label: "구매한 매크로" },
-  { key: "sales", label: "판매 내역" },
-  { key: "ledger", label: "포인트 내역" },
-  { key: "posts", label: "게시글" },
+const FILTERS = {
+  macros: [{ key: "created", label: "만든 매크로" }, { key: "purchased", label: "구매한 매크로" }],
+  points: [{ key: "sales", label: "판매 내역" }, { key: "ledger", label: "포인트 내역" }],
+};
+const SECTIONS = [
+  { key: "macros", label: "매크로", first: "created", Icon: SquaresFourIcon },
+  { key: "points", label: "포인트·판매", first: "sales", Icon: ArrowsLeftRightIcon },
+  { key: "posts", label: "게시글", first: "posts", Icon: ArticleIcon },
 ];
-const TAB_KEYS = new Set(TABS.map((t) => t.key));
+const TAB_KEYS = new Set(["created", "purchased", "sales", "ledger", "posts"]);
 
 function Stamp({ value, now, className = "" }) {
-  const full = fullKst(value);
-  return (
-    <time className={`me-time num ${className}`} dateTime={full ? new Date(value).toISOString() : undefined} title={full || undefined}>
-      {stampKst(value, now)}
-    </time>
-  );
+  const ms = toMs(value);
+  return <time className={"me-time num " + className} dateTime={ms == null ? undefined : new Date(ms).toISOString()} title={fullKst(value) || undefined}>{stampKst(value, now)}</time>;
 }
 
-// 등급 사다리 — 누적 판매 건수로 오르는 다섯 칸. 현재 칸만 노랑(§1-4: 이 화면의 노랑은 여기 하나).
-function TierLadder({ tier }) {
-  const steps = tierSteps(tier);
-  return (
-    <section className="me-ladder" aria-label="등급">
-      <ol className="me-steps">
-        {steps.map((s) => (
-          <li key={s.name} className={`me-step is-${s.state}`} aria-current={s.state === "current" ? "step" : undefined}>
-            <span className="me-step-node" aria-hidden="true">{s.state === "done" ? "✓" : ""}</span>
-            <span className="me-step-name">{s.name}</span>
-            <span className="me-step-at num">{tierStepAt(s.at)}</span>
+function TierIcon({ name, size = 24 }) {
+  const Icon = name === "새싹" ? PlantIcon : name === "다이아" ? DiamondIcon : MedalIcon;
+  const tone = { 새싹: "seed", 브론즈: "bronze", 실버: "silver", 골드: "gold", 다이아: "diamond" }[name] || "silver";
+  return <Icon className={"me-tier-icon is-" + tone} size={size} weight="duotone" aria-hidden="true" />;
+}
+
+function TierDialog({ tier, onClose }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    const dialog = ref.current;
+    const previous = document.activeElement;
+    const overflow = document.documentElement.style.overflow;
+    document.documentElement.style.overflow = "hidden";
+    dialog.showModal();
+    return () => {
+      dialog.close();
+      document.documentElement.style.overflow = overflow;
+      if (previous?.isConnected) previous.focus({ preventScroll: true });
+    };
+  }, []);
+  return createPortal(
+    <dialog className="me-tier-dialog" ref={ref} aria-labelledby="me-tier-title" onCancel={(event) => { event.preventDefault(); onClose(); }}>
+      <header><h2 id="me-tier-title">판매 등급</h2><button type="button" className="me-icon-button" aria-label="닫기" onClick={onClose}><XIcon size={22} aria-hidden="true" /></button></header>
+      <p className="me-tier-next">{tierNextLabel(tier)}</p>
+      <ol className="me-tier-list" aria-label="판매 등급별 조건">
+        {tierSteps(tier).map((step) => (
+          <li key={step.name} className={step.state === "current" ? "is-current" : ""} aria-current={step.state === "current" ? "step" : undefined}>
+            <TierIcon name={step.name} size={32} /><b>{step.name}</b><span>{tierStepAt(step.at)}</span>
           </li>
         ))}
       </ol>
-      <p className="me-ladder-note">
-        누적 판매 <b className="num">{tier.sales}</b>건 · {tierNextLabel(tier)}
-      </p>
-    </section>
+    </dialog>, document.body,
   );
 }
 
-function HeadRow({ cols }) {
+function EmptyActivity({ kind }) {
+  const data = {
+    created: [SquaresFourIcon, "아직 만든 매크로가 없어요"],
+    purchased: [SquaresFourIcon, "구매한 매크로가 없어요"],
+    sales: [ReceiptIcon, "아직 판매 내역이 없어요"],
+    ledger: [CoinsIcon, "포인트 변동이 없어요"],
+    posts: [ArticleIcon, "아직 쓴 글이 없어요"],
+  };
+  const [Icon, title] = data[kind];
+  return <div className="me-empty"><Icon size={36} weight="light" aria-hidden="true" /><p>{title}</p>{kind === "purchased" ? <Link to="/leaderboard">리더보드 보기<ArrowUpRightIcon size={16} aria-hidden="true" /></Link> : null}</div>;
+}
+
+function MacroCards({ rows, purchased, now, onOpen }) {
+  if (!rows.length) return <EmptyActivity kind={purchased ? "purchased" : "created"} />;
   return (
-    <li className="me-row me-table-head" role="row" aria-hidden="true">
-      {cols.map((c, i) => <span key={i} className={c.right ? "is-right" : ""}>{c.label}</span>)}
+    <ul className="me-macro-grid" aria-label={purchased ? "구매한 매크로" : "만든 매크로"}>
+      {rows.map((macro, index) => (
+        <li className="me-macro-card" key={String(macro.entry_id) + "-" + index}>
+          <div className="me-macro-heading">
+            <CoinIcon symbol={macro.symbol} size={36} alt="" />
+            <div><h3 className="num">{macro.symbol}</h3>{purchased ? <span className="me-seller">@{macro.seller}</span> : <Stamp value={macro.created_ms ?? macro.created_kst} now={now} />}</div>
+          </div>
+          <p className="me-macro-description">{macro.human_summary}</p>
+          <dl className="me-macro-metrics">
+            {purchased ? <><div><dt>구매 금액</dt><dd className="num">{formatPoints(macro.price)}</dd></div><div><dt>구매일</dt><dd><Stamp value={macro.unlocked_at} now={now} /></dd></div></> : <><div><dt>판매</dt><dd className="num">{macro.sales}건</dd></div><div><dt>판매 수익</dt><dd className={"num " + (macro.earned > 0 ? "me-credit" : "")}>{macro.earned > 0 ? signedPoints(macro.earned) : formatPoints(0)}</dd></div></>}
+          </dl>
+          <footer><button type="button" className="me-card-action" onClick={() => onOpen(macro.macro)} disabled={!macro.macro}>{macro.macro ? (purchased ? "빌더로 복사" : "빌더에서 열기") : "불러오기 불가"}<ArrowUpRightIcon size={18} aria-hidden="true" /></button></footer>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function Transactions({ rows, ledger, now, symbolByEntry }) {
+  if (!rows.length) return <EmptyActivity kind={ledger ? "ledger" : "sales"} />;
+  return (
+    <ul className={"me-transactions " + (ledger ? "is-ledger" : "is-sales")} aria-label={ledger ? "포인트 내역" : "판매 내역"}>
+      {rows.map((row, index) => (
+        <li className="me-transaction" key={index}>
+          <span className="me-transaction-icon" aria-hidden="true">{ledger ? <CoinsIcon size={22} /> : <ReceiptIcon size={22} />}</span>
+          <div className="me-transaction-main">
+            <p>{ledger ? ledgerLabel(row, symbolByEntry) : <><b>{row.symbol}</b> 매크로 판매</>}</p>
+            <div>{!ledger ? <span>@{row.buyer}</span> : null}<Stamp value={ledger ? row.created_at : row.at} now={now} /></div>
+          </div>
+          <div className="me-transaction-amount"><strong className={"num " + ((ledger ? row.delta : row.earned) >= 0 ? "me-credit" : "me-debit")}>{signedPoints(ledger ? row.delta : row.earned)}</strong>{ledger ? <span>잔액 <span className="num">{formatPoints(row.balance_after)}</span></span> : null}</div>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function Posts({ rows, now }) {
+  if (!rows.length) return <EmptyActivity kind="posts" />;
+  return <ul className="me-posts" aria-label="게시글">{rows.map((post) => (
+    <li className="me-post" key={post.id}>
+      <Link to={"/board/" + post.id} aria-label={post.title + (post.comment_count > 0 ? ", 댓글 " + post.comment_count + "개" : "") + (post.has_image ? ", 사진 첨부" : "") + ", " + fullKst(post.created_ms)}>
+        <div className="me-post-title"><h3>{post.title}</h3>{post.has_image ? <ImageIcon size={18} aria-hidden="true" /> : null}<ArrowUpRightIcon size={20} aria-hidden="true" /></div>
+        <div className="me-post-meta"><Stamp value={post.created_ms} now={now} /><span><ChatCircleIcon size={16} aria-hidden="true" /><span className="num">{post.comment_count || 0}</span></span></div>
+      </Link>
     </li>
-  );
+  ))}</ul>;
 }
 
-function CreatedTab({ rows, now, onOpen }) {
-  if (rows.length === 0) {
-    return (
-      <EmptyState title="아직 등록한 매크로가 없어요" action={<Link to="/builder" className="btn btn-m btn-secondary">매크로 만들기</Link>}>
-        빌더에서 만들어 리더보드에 올리면 여기 쌓여요.
-      </EmptyState>
-    );
-  }
-  return (
-    <ul className="me-table is-created" aria-label="만든 매크로">
-      <HeadRow cols={[{ label: "" }, { label: "매크로" }, { label: "판매", right: true }, { label: "수익", right: true }, { label: "등록", right: true }, { label: "" }]} />
-      {rows.map((m) => (
-        <li key={m.entry_id} className="me-row">
-          <CoinIcon symbol={m.symbol} size={36} alt="" />
-          <div className="me-main">
-            <span className="me-title num">{m.symbol}</span>
-            <span className="me-sub">{m.human_summary}</span>
-          </div>
-          <span className="me-cell num is-right">{m.sales}건</span>
-          <span className={`me-cell num is-right${m.earned > 0 ? " me-credit" : ""}`}>{m.earned > 0 ? signedPoints(m.earned) : formatPoints(0)}</span>
-          <Stamp value={m.created_ms ?? m.created_kst} now={now} className="is-right" />
-          <button type="button" onClick={() => onOpen(m.macro)} disabled={!m.macro} className="btn btn-s btn-secondary">빌더에서 열기</button>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function PurchasedTab({ rows, now, onOpen }) {
-  if (rows.length === 0) {
-    return (
-      <EmptyState title="언락한 매크로가 없어요" action={<Link to="/leaderboard" className="btn btn-m btn-secondary">리더보드 보기</Link>}>
-        리더보드에서 전략을 열면 여기서 다시 볼 수 있어요.
-      </EmptyState>
-    );
-  }
-  return (
-    <ul className="me-table is-purchased" aria-label="구매한 매크로">
-      <HeadRow cols={[{ label: "" }, { label: "매크로" }, { label: "지불", right: true }, { label: "언락", right: true }, { label: "" }]} />
-      {rows.map((m, i) => (
-        <li key={`${m.entry_id}-${i}`} className="me-row">
-          <CoinIcon symbol={m.symbol} size={36} alt="" />
-          <div className="me-main">
-            <span className="me-title"><span className="num">{m.symbol}</span> <span className="me-seller">@{m.seller}</span></span>
-            <span className="me-sub">{m.human_summary}</span>
-          </div>
-          <span className="me-cell num is-right">{signedPoints(-m.price)}</span>
-          <Stamp value={m.unlocked_at} now={now} className="is-right" />
-          <button type="button" onClick={() => onOpen(m.macro)} disabled={!m.macro} className="btn btn-s btn-secondary">빌더로 복사</button>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function SalesTab({ rows, now }) {
-  if (rows.length === 0) {
-    return <EmptyState title="아직 판매가 없어요">누군가 내 매크로를 언락하면 언락 금액의 70%가 들어와요.</EmptyState>;
-  }
-  return (
-    <ul className="me-table is-sales" aria-label="판매 내역">
-      <HeadRow cols={[{ label: "시각" }, { label: "내용" }, { label: "수익", right: true }]} />
-      {rows.map((s, i) => (
-        <li key={`${s.entry_id}-${i}`} className="me-row">
-          <Stamp value={s.at} now={now} />
-          <span className="me-cell me-text">
-            <b>@{s.buyer}</b> 님이 <b className="num">{s.symbol}</b> 매크로를 언락
-          </span>
-          <span className="me-cell num is-right me-credit">{signedPoints(s.earned)}</span>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function LedgerTab({ rows, now, symbolByEntry }) {
-  if (rows.length === 0) {
-    return <EmptyState title="포인트 변동이 없어요" />;
-  }
-  return (
-    <ul className="me-table is-ledger" aria-label="포인트 내역">
-      <HeadRow cols={[{ label: "시각" }, { label: "내용" }, { label: "변동", right: true }, { label: "잔액", right: true }]} />
-      {rows.map((l, i) => (
-        <li key={i} className="me-row">
-          <Stamp value={l.created_at} now={now} />
-          <span className="me-cell me-text">{ledgerLabel(l, symbolByEntry)}</span>
-          <span className={`me-cell num is-right ${l.delta >= 0 ? "me-credit" : "me-debit"}`}>{signedPoints(l.delta)}</span>
-          <span className="me-cell num is-right me-balance">{formatPoints(l.balance_after)}</span>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function PostsTab({ rows, now }) {
-  if (rows.length === 0) {
-    return (
-      <EmptyState title="아직 쓴 글이 없어요" action={<Link to="/board?write=1" className="btn btn-m btn-secondary">글쓰기</Link>}>
-        게시판에 남긴 글이 여기 모여요.
-      </EmptyState>
-    );
-  }
-  return (
-    <ul className="board-table me-posts" aria-label="게시글">
-      <li className="board-head" role="row" aria-hidden="true">
-        <span className="board-col-no">번호</span>
-        <span className="board-col-title">제목</span>
-        <span className="board-col-time">시각</span>
-      </li>
-      {rows.map((p) => {
-        const full = fullKst(p.created_ms);
-        return (
-          <li key={p.id} className="board-item">
-            <Link to={`/board/${p.id}`} className="board-row" aria-label={`${p.title}${p.comment_count > 0 ? `, 댓글 ${p.comment_count}개` : ""}${p.has_image ? ", 사진 첨부" : ""}, ${full}`}>
-              <span className="board-no num" aria-hidden="true">{p.id}</span>
-              <span className="board-title">
-                <span className="board-title-text">{p.title}</span>
-                {p.comment_count > 0 ? <span className="board-count num" aria-hidden="true">{p.comment_count}</span> : null}
-                {p.has_image ? <span className="board-mark" aria-hidden="true"><ImageIcon /></span> : null}
-              </span>
-              <time className="board-time num" dateTime={full ? new Date(p.created_ms).toISOString() : undefined} title={full || undefined} aria-hidden="true">{stampKst(p.created_ms, now)}</time>
-            </Link>
-          </li>
-        );
-      })}
-    </ul>
-  );
-}
-
-// 불러오는 동안의 뼈대 — 머리(아바타·이름·수치)와 행 다섯 줄. 회전 대신 자리를 잡아 둔다.
-function Skeleton() {
-  return (
-    <div className="me-page" aria-hidden="true">
-      <div className="me-head">
-        <span className="me-skeleton is-avatar" />
-        <div className="me-id"><span className="me-skeleton" style={{ width: 200, height: 36 }} /><span className="me-skeleton" style={{ width: 280, height: 16 }} /></div>
-        <span className="me-skeleton" style={{ width: 160, height: 44 }} />
-      </div>
-      <ul className="me-table" style={{ "--me-cols": "36px minmax(0,1fr) 120px" }}>
-        {Array.from({ length: 5 }, (_, i) => (
-          <li key={i} className="me-row"><span className="me-skeleton is-round" /><span className="me-skeleton" style={{ width: "48%", height: 14 }} /><span className="me-skeleton" style={{ width: 80, height: 14, justifySelf: "end" }} /></li>
-        ))}
-      </ul>
-    </div>
-  );
+function ActivitySkeleton() {
+  return <div className="me-content" aria-busy="true" aria-label="내 활동 불러오는 중"><div className="me-stats" aria-hidden="true">{[0, 1, 2].map((i) => <div key={i} className="me-stat"><span className="me-skeleton" /><span className="me-skeleton is-value" /></div>)}</div><div className="me-macro-grid" aria-hidden="true">{[0, 1].map((i) => <div key={i} className="me-macro-card me-loading-card"><span className="me-skeleton is-name" /><span className="me-skeleton" /><span className="me-skeleton" /></div>)}</div></div>;
 }
 
 export default function MyPage() {
-  const { token } = useAuth();
+  const { token, user: authUser } = useAuth();
+  const leavingAccount = useRef(false);
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [data, setData] = useState(null);
+  const [result, setResult] = useState(null);
+  // A token switch must hide the previous account's activity in this render,
+  // before the effect for the new account starts.
+  const data = result?.token === token ? result.value : null;
   const [error, setError] = useState("");
+  const [tierOpen, setTierOpen] = useState(false);
   const [now, setNow] = useState(() => Date.now());
-
-  const paramTab = searchParams.get("tab");
-  const tab = TAB_KEYS.has(paramTab) ? paramTab : "created";
+  const param = searchParams.get("tab");
+  const tab = TAB_KEYS.has(param) ? param : "created";
+  const section = tab === "posts" ? "posts" : ["sales", "ledger"].includes(tab) ? "points" : "macros";
+  const filters = FILTERS[section] || [];
 
   useEffect(() => {
-    if (!token) {
-      navigate("/login?next=%2Fmypage");
-      return;
-    }
+    setResult(null);
+    setError("");
+    setTierOpen(false);
+    if (!token) { if (!leavingAccount.current) navigate("/login?next=%2Fmypage", { replace: true }); return; }
     let alive = true;
-    api.myDashboard()
-      .then((d) => {
-        if (!alive) return;
-        setData(d);
-        setNow(Date.now());
-        updateAuthUser(d.user); // 상단바 포인트와 맞춘다
-      })
-      .catch((e) => {
-        if (alive) setError(String(e.message || e));
-      });
-    return () => {
-      alive = false;
-    };
+    const controller = new AbortController();
+    const userAtStart = getAuthUser();
+    api.myDashboard({ signal: controller.signal }).then((value) => {
+      if (!alive || getToken() !== token) return;
+      const user = mergeFetchedAuthUser(value.user, userAtStart);
+      setResult({ token, value: { ...value, user } });
+      updateAuthUser(user);
+      setNow(Date.now());
+    }).catch((reason) => { if (alive && reason.name !== "AbortError") setError(String(reason.message || reason)); });
+    return () => { alive = false; controller.abort(); };
   }, [navigate, token]);
 
-  // 포인트 내역의 `entry:123` 을 종목명으로 — 내가 만든 것과 산 것 양쪽에서 찾는다.
-  const symbolByEntry = useMemo(() => {
-    const map = {};
-    for (const m of data?.created || []) map[m.entry_id] = m.symbol;
-    for (const m of data?.purchased || []) map[m.entry_id] = m.symbol;
-    return map;
-  }, [data]);
-
+  const symbolByEntry = useMemo(() => Object.fromEntries([...(data?.created || []), ...(data?.purchased || [])].map((item) => [item.entry_id, item.symbol])), [data]);
   if (!token) return null;
-  if (error) return <ErrorNote>내 활동을 불러오지 못했어요: {error}</ErrorNote>;
-  if (!data) return <Skeleton />;
 
-  const { user, tier, totals, created, purchased, sales, ledger, my_posts = [] } = data;
+  const { tier, totals, created = [], purchased = [], sales = [], ledger = [], my_posts = [] } = data || {};
+  // Identity is already available from login/header hydration. It must not wait
+  // for the independent sales, macro and ledger queries in the dashboard.
+  const user = data ? (authUser?.id === data.user.id ? { ...data.user, ...authUser } : data.user) : authUser;
   const counts = { created: created.length, purchased: purchased.length, sales: sales.length, ledger: ledger.length, posts: my_posts.length };
-  const openInBuilder = (macro) => navigate("/builder", { state: { macro } });
+  const logout = () => { leavingAccount.current = true; clearAuth(); navigate("/login", { replace: true }); };
   const pickTab = (key) => setSearchParams(key === "created" ? {} : { tab: key }, { replace: true });
-
-  return (
-    <div className="me-page">
-      {/* 머리 — 이름이 곧 제목(다른 화면의 PageHeader 제목과 같은 크기). 오른쪽은 포인트·수익·판매. */}
-      <header className="me-head">
-        <span className="me-avatar" aria-hidden="true">{initialOf(user.username)}</span>
-        <div className="me-id">
-          <h1 className="me-name">
-            {user.username}
-            <span className="badge badge-flat me-tier-badge">{tier.name}</span>
-          </h1>
-          <p className="me-meta">
-            <span>{user.email}</span>
-            {joinedLabel(user.created_at) ? <span className="num">{joinedLabel(user.created_at)}</span> : null}
-          </p>
-        </div>
-        <dl className="me-stats">
-          <div className="me-stat is-points"><dt>보유 포인트</dt><dd className="num">{formatPoints(user.points_balance)}</dd></div>
-          <div className="me-stat"><dt>판매 수익</dt><dd className="num">{formatPoints(totals.earned)}</dd></div>
-          <div className="me-stat"><dt>누적 판매</dt><dd className="num">{totals.sales}건</dd></div>
-        </dl>
-      </header>
-
-      <TierLadder tier={tier} />
-
-      <div className="me-tabs">
-        <div className="seg" role="tablist" aria-label="내 활동 종류">
-          {TABS.map((t) => (
-            <button
-              key={t.key}
-              type="button"
-              role="tab"
-              id={`me-tab-${t.key}`}
-              aria-selected={tab === t.key}
-              aria-controls="me-panel"
-              className={`seg-item${tab === t.key ? " seg-item-on" : ""}`}
-              onClick={() => pickTab(t.key)}
-            >
-              {t.label}<span className="me-tab-count num">{counts[t.key]}</span>
-            </button>
-          ))}
+  const moveTab = (event, index) => {
+    const next = { ArrowRight: (index + 1) % filters.length, ArrowLeft: (index + filters.length - 1) % filters.length, Home: 0, End: filters.length - 1 }[event.key];
+    if (next === undefined) return;
+    event.preventDefault();
+    pickTab(filters[next].key);
+    document.getElementById("me-tab-" + filters[next].key)?.focus({ preventScroll: true });
+  };
+  const title = section === "macros" ? "내 매크로" : section === "points" ? "포인트·판매" : "내 게시글";
+  const metrics = data ? [
+    { label: "보유 포인트", value: formatPoints(user.points_balance), Icon: CoinsIcon, target: "ledger", points: true },
+    { label: "판매 수익", value: formatPoints(totals.earned), Icon: TrendUpIcon, target: "sales" },
+    { label: "누적 판매", value: totals.sales + "건", Icon: ReceiptIcon, target: "sales" },
+  ] : [];
+  const longStats = metrics.some(({ value }) => value.length > 7);
+  return <div className="me-page">
+    <aside className="me-profile-rail">
+      <div className="me-identity">
+        <Link className="me-settings-link me-icon-button" to="/mypage/settings?tab=security" aria-label="프로필 설정"><GearSixIcon size={24} aria-hidden="true" /></Link>
+        <Link className="me-portrait-link" to="/mypage/settings" aria-label="프로필 사진 변경">{user ? <UserAvatar src={user.avatar_url} name={user.username} size={144} className="me-avatar" priority /> : <span className="me-skeleton is-avatar" aria-hidden="true" />}</Link>
+        <div className="me-name-line">{user ? <h1 className="me-name">{user.username}</h1> : <span className="me-skeleton is-name" aria-hidden="true" />}
+        {tier ? <button className="me-tier-toggle" type="button" aria-label={"등급 안내 · " + tier.name} aria-haspopup="dialog" onClick={() => setTierOpen(true)}><TierIcon name={tier.name} size={22} /><span>{tier.name}</span><CaretRightIcon size={14} aria-hidden="true" /></button> : <span className="me-tier-placeholder" aria-hidden="true" />}</div>
+        {user?.bio ? <p className="me-bio">{user.bio}</p> : null}
+        <div className="me-identity-footer"><p className="me-joined num">{user ? joinedLabel(user.created_at) : <span className="me-skeleton" aria-hidden="true" />}</p></div>
+        <div className="me-profile-actions">
+          <button type="button" onClick={logout}><SignOutIcon size={18} aria-hidden="true" />로그아웃</button>
         </div>
       </div>
-
-      <section id="me-panel" role="tabpanel" aria-labelledby={`me-tab-${tab}`} className="me-panel">
-        {tab === "created" && <CreatedTab rows={created} now={now} onOpen={openInBuilder} />}
-        {tab === "purchased" && <PurchasedTab rows={purchased} now={now} onOpen={openInBuilder} />}
-        {tab === "sales" && <SalesTab rows={sales} now={now} />}
-        {tab === "ledger" && <LedgerTab rows={ledger} now={now} symbolByEntry={symbolByEntry} />}
-        {tab === "posts" && <PostsTab rows={my_posts} now={now} />}
+    </aside>
+    {error ? <ErrorNote>내 활동을 불러오지 못했어요: {error}</ErrorNote> : !data ? <ActivitySkeleton /> : <div className="me-content">
+      <dl className={"me-stats" + (longStats ? " has-long-values" : "")}>{metrics.map(({ label, value, Icon, target, points }) => <div className={"me-stat" + (points ? " is-points" : "")} key={label}><dt><Icon size={20} aria-hidden="true" />{label}</dt><dd className="num">{value}</dd><button type="button" className="me-stat-link" aria-label={label + " 내역 보기"} onClick={() => pickTab(target)} /></div>)}</dl>
+      <nav className="me-section-nav" aria-label="프로필 메뉴">{SECTIONS.map(({ key, label, first, Icon }) => <button key={key} type="button" aria-pressed={section === key} onClick={() => pickTab(first)}><Icon size={22} aria-hidden="true" /><span>{label}</span></button>)}</nav>
+      <section className={"me-workspace is-" + section} aria-labelledby="me-workspace-title">
+        <header className="me-workspace-heading"><h2 id="me-workspace-title">{title}{section === "posts" ? <span className="num">{my_posts.length}</span> : null}</h2>{section === "macros" ? <Link to="/builder" className="me-create-link" aria-label="매크로 만들기"><PlusIcon size={18} aria-hidden="true" /><span>매크로 만들기</span></Link> : section === "posts" ? <Link to="/board/write" className="me-create-link"><PencilSimpleIcon size={18} aria-hidden="true" /><span>글쓰기</span></Link> : null}</header>
+        {filters.length ? <div className="me-filters" role="tablist" aria-label="내 활동 종류">{filters.map((filter, index) => <button key={filter.key} type="button" role="tab" id={"me-tab-" + filter.key} aria-selected={tab === filter.key} aria-controls="me-panel" tabIndex={tab === filter.key ? 0 : -1} onClick={() => pickTab(filter.key)} onKeyDown={(event) => moveTab(event, index)}>{filter.label}<span className="num">{counts[filter.key]}</span></button>)}</div> : null}
+        <section className="me-panel" id="me-panel" role={filters.length ? "tabpanel" : "region"} tabIndex={0} aria-labelledby={filters.length ? "me-tab-" + tab : "me-workspace-title"}>
+          {section === "macros" ? <MacroCards rows={tab === "purchased" ? purchased : created} purchased={tab === "purchased"} now={now} onOpen={(macro) => navigate("/builder", { state: { macro } })} /> : section === "points" ? <Transactions rows={tab === "ledger" ? ledger : sales} ledger={tab === "ledger"} now={now} symbolByEntry={symbolByEntry} /> : <Posts rows={my_posts} now={now} />}
+        </section>
       </section>
-    </div>
-  );
+    </div>}
+    {tierOpen && tier ? <TierDialog tier={tier} onClose={() => setTierOpen(false)} /> : null}
+  </div>;
 }

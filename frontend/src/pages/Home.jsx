@@ -6,6 +6,8 @@ import {
 } from "../lib/journey.js";
 import { lockBodyScroll } from "../lib/bodyScrollLock.js";
 import { isLoggedIn } from "../lib/auth.js";
+import { getRunnerDevice } from "../lib/runnerDevice.js";
+import "./HomeMobile.css";
 
 const StartGuide = lazy(() => import("./Start.jsx"));
 const RunnerFlow = lazy(() => import("./RunnerDownload.jsx"));
@@ -13,23 +15,25 @@ const FOCUSABLE =
   'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 // 히어로 캐러셀 타이밍.
-//   DWELL  = 한 장이 머무는 시간. 5초는 카피를 다 읽기 전에 넘어가 조급했다.
+//   DWELL  = 한 장이 머무는 시간. 5초는 카피를 다 읽기 전에 넘어가 조급했고,
+//            10초도 히어로를 보다 말고 넘어가 15초로 늘렸다.
 //   EXIT   = 나가는 장을 DOM 에서 걷어내는 시점. index.css 의 home-hero-*
 //            애니메이션(520ms)보다 40ms 길어야 마지막 프레임이 잘리지 않는다.
 //            애니메이션 길이를 바꾸면 이 값도 같이 올려야 한다.
-const HERO_SLIDE_DWELL_MS = 10_000;
+const HERO_SLIDE_DWELL_MS = 15_000;
 const HERO_SLIDE_EXIT_MS = 560;
 
-function HomeEntryHero({ onLeaderboard, onGuide }) {
+function HomeEntryHero({ onLeaderboard, onGuide, staticLayout = false }) {
+  const mobileDevice = getRunnerDevice().isMobile;
   return (
     <section
       className="home-entry-hero is-intro"
       aria-labelledby="home-entry-title"
-      aria-roledescription="슬라이드"
-      aria-label="1 / 2"
+      aria-roledescription={staticLayout ? undefined : "슬라이드"}
+      aria-label={staticLayout ? undefined : "1 / 2"}
     >
       <div className="home-entry-copy">
-        <h1 id="home-entry-title">
+        <h1 id="home-entry-title" className="home-entry-title">
           코린이도<br />
           쉽게 시작하는<br />
           코인 매크로 <span>껄무새</span>
@@ -54,7 +58,10 @@ function HomeEntryHero({ onLeaderboard, onGuide }) {
           <span className="home-entry-choice-art" aria-hidden="true">
             <img src="/brand/navigation/ggparrot-nav-leaderboard.svg" alt="" width="88" height="88" draggable="false" />
           </span>
-          <span className="home-entry-choice-copy"><strong>빠른 실행</strong><small>커뮤니티 인기 전략을 골라 바로 실행해요. 마음에 드는 매크로를 그대로 실행기로 돌릴 수 있어요.</small></span>
+          <span className="home-entry-choice-copy">
+            <strong>{mobileDevice ? "매크로 둘러보기" : "빠른 실행"}</strong>
+            <small>{mobileDevice ? "인기 전략과 성과를 살펴보고, 실행은 Windows PC에서 이어가요." : "커뮤니티 인기 전략을 골라 바로 실행해요. 마음에 드는 매크로를 그대로 실행기로 돌릴 수 있어요."}</small>
+          </span>
           <span className="home-entry-choice-arrow" aria-hidden="true">→</span>
         </button>
         <button
@@ -72,12 +79,13 @@ function HomeEntryHero({ onLeaderboard, onGuide }) {
         </button>
       </nav>
 
-      <div className="home-entry-mascot" aria-hidden="true">
-        {/* 벡터라 해상도별 사본이 필요 없다. 이전엔 480/800/1180 webp 3종 + png
-            폴백(609KB)을 두었는데, SVG 한 장(24KB)이 그보다 작고 어떤 배율에서도
-            선명하다. LCP 이미지라 eager + fetchPriority 는 유지한다. */}
+      {!staticLayout ? <div className="home-entry-mascot" aria-hidden="true">
+        {/* 관절별 그룹에 CSS 애니메이션(8초 반복)이 들어 있는 SVG — <img> 로 넣어도
+            움직이고, 스크립트가 없어 안전하다. 벡터라 해상도별 사본이 필요 없고
+            LCP 이미지라 eager + fetchPriority 는 유지한다. 이전 정지 버전은
+            ggparrot-sunglasses-hero-v2.svg. */}
         <img
-          src="/brand/ggparrot-sunglasses-hero-v2.svg"
+          src="/brand/ggparrot-hero-articulated.svg"
           alt=""
           width="1180"
           height="1120"
@@ -86,7 +94,7 @@ function HomeEntryHero({ onLeaderboard, onGuide }) {
           fetchPriority="high"
           draggable="false"
         />
-      </div>
+      </div> : null}
     </section>
   );
 }
@@ -99,13 +107,13 @@ const COMMUNITY_POSTS = [
   { title: "이동평균 전략 기간을 바꿀 때 체크할 것", snippet: "20·60과 50·200 조합을 각각 돌려 본 표를 공유합니다.", author: "캔들읽는새", time: "어제 20:52", comments: 9 },
 ];
 
-function CommunityPostList({ duplicate = false }) {
+function CommunityPostList({ duplicate = false, limit = COMMUNITY_POSTS.length }) {
   return (
     <ul
       className="home-community-post-list"
       aria-hidden={duplicate ? "true" : undefined}
     >
-      {COMMUNITY_POSTS.map((post) => (
+      {COMMUNITY_POSTS.slice(0, limit).map((post) => (
         <li key={`${duplicate ? "loop-" : ""}${post.title}`}>
           <span className="home-community-post-copy">
             <strong>
@@ -125,23 +133,25 @@ function CommunityPostList({ duplicate = false }) {
   );
 }
 
-function CommunityEntryHero() {
+function CommunityEntryHero({ staticLayout = false }) {
+  const Heading = staticLayout ? "h2" : "h1";
   return (
     <section
       className="home-entry-hero is-community"
       aria-labelledby="home-community-title"
-      aria-roledescription="슬라이드"
-      aria-label="2 / 2"
+      aria-roledescription={staticLayout ? undefined : "슬라이드"}
+      aria-label={staticLayout ? undefined : "2 / 2"}
     >
       <div className="home-entry-copy home-community-copy">
-        <h1 id="home-community-title">
-          매크로 이야기가 쌓이는 <span>껄무새 게시판.</span>
-        </h1>
-        <p className="home-entry-description">
+        <Heading id="home-community-title" className="home-entry-title">
+          {/* 줄바꿈 금지 공백(U+00A0) — 좁은 칸에서 text-wrap: balance 가 "껄무새 / 게시판." 으로 쪼개 밑줄이 두 도막 났다. */}
+          매크로 이야기가 쌓이는 <span>껄무새{"\u00a0"}게시판.</span>
+        </Heading>
+        {!staticLayout ? <p className="home-entry-description">
           조건 설정이 막힐 때 다른 사용자의 질문과 답변을 찾아보고,
           백테스트 결과와 운영 후기를 글로 남겨 내 경험도 공유해요.
-        </p>
-        <dl className="home-community-points">
+        </p> : null}
+        {!staticLayout ? <dl className="home-community-points">
           <div>
             <dt>정보 찾아보기</dt>
             <dd>조건·백테스트·운영 기록을 주제별로 읽어봐요.</dd>
@@ -150,7 +160,7 @@ function CommunityEntryHero() {
             <dt>경험 공유하기</dt>
             <dd>궁금한 점을 묻고 내 매크로의 시행착오를 남겨요.</dd>
           </div>
-        </dl>
+        </dl> : null}
         <div className="home-community-actions" aria-label="커뮤니티 둘러보기">
           <Link to="/board" data-home-carousel-primary className="home-community-action is-primary">
             게시판 둘러보기 <span aria-hidden="true">→</span>
@@ -159,7 +169,7 @@ function CommunityEntryHero() {
       </div>
 
       <aside className="home-community-preview" aria-label="껄무새 게시판 화면 예시">
-        <header className="home-board-preview-head">
+        {!staticLayout ? <header className="home-board-preview-head">
           <span className="home-board-preview-mascot" aria-hidden="true">
             <img
               src="/brand/navigation/ggparrot-nav-board.svg"
@@ -175,22 +185,23 @@ function CommunityEntryHero() {
             <p>코린이끼리 전략·질문·정보를 나눠요. (투자 조언 아님)</p>
           </div>
           <span className="home-board-preview-write" aria-hidden="true">새 글 쓰기</span>
-        </header>
+        </header> : null}
         <div className="home-community-post-viewport">
           <div className="home-community-post-track">
-            <CommunityPostList />
-            <CommunityPostList duplicate />
+            <CommunityPostList limit={staticLayout ? 3 : COMMUNITY_POSTS.length} />
+            {staticLayout ? null : <CommunityPostList duplicate />}
           </div>
         </div>
-        <footer className="home-board-preview-footer" aria-hidden="true">
+        {!staticLayout ? <footer className="home-board-preview-footer" aria-hidden="true">
           <span>‹</span><strong>1</strong><span>2</span><span>3</span><span>›</span>
-        </footer>
+        </footer> : null}
       </aside>
     </section>
   );
 }
 
 function HomeHeroRotator({ onLeaderboard, onGuide, paused = false }) {
+  const [mobile, setMobile] = useState(() => typeof window !== "undefined" && window.matchMedia("(max-width: 1099px)").matches);
   const [activeSlide, setActiveSlide] = useState(0);
   const [outgoingSlide, setOutgoingSlide] = useState(null);
   const [direction, setDirection] = useState(1);
@@ -198,6 +209,14 @@ function HomeHeroRotator({ onLeaderboard, onGuide, paused = false }) {
   const [interactionPaused, setInteractionPaused] = useState(false);
   const [documentHidden, setDocumentHidden] = useState(false);
   const [reducedMotion, setReducedMotion] = useState(false);
+
+  useEffect(() => {
+    const query = window.matchMedia("(max-width: 1099px)");
+    const syncLayout = () => setMobile(query.matches);
+    syncLayout();
+    query.addEventListener("change", syncLayout);
+    return () => query.removeEventListener("change", syncLayout);
+  }, []);
 
   useEffect(() => {
     const motionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -214,7 +233,8 @@ function HomeHeroRotator({ onLeaderboard, onGuide, paused = false }) {
     return () => document.removeEventListener("visibilitychange", syncVisibility);
   }, []);
 
-  const autoRotationBlocked = paused
+  const autoRotationBlocked = mobile
+    || paused
     || interactionPaused
     || documentHidden
     || reducedMotion;
@@ -240,6 +260,15 @@ function HomeHeroRotator({ onLeaderboard, onGuide, paused = false }) {
     }, HERO_SLIDE_DWELL_MS);
     return () => window.clearTimeout(timer);
   }, [activeSlide, autoRotationBlocked, selectSlide, timerCycle]);
+
+  if (mobile) {
+    return (
+      <div className="home-mobile-stack">
+        <HomeEntryHero onLeaderboard={onLeaderboard} onGuide={onGuide} staticLayout />
+        <CommunityEntryHero staticLayout />
+      </div>
+    );
+  }
 
   return (
     <div
@@ -367,11 +396,12 @@ export default function Home() {
     });
   }, [setSearchParams]);
 
-  // 빠른 실행·직접 만들기 진입은 로그인 필수 — 로그아웃이면 로그인 화면으로 보낸다.
+  // 모바일은 공개 전략을 먼저 둘러본다. PC의 실행 플로우와 직접 만들기는 로그인이 필요하다.
   const startLeaderboard = useCallback(() => {
+    if (getRunnerDevice().isMobile) { navigate("/leaderboard"); return; }
     if (!isLoggedIn()) { requireLogin("/?run=1&step=1&view=leaderboard"); return; }
     openLeaderboardRun();
-  }, [openLeaderboardRun, requireLogin]);
+  }, [navigate, openLeaderboardRun, requireLogin]);
 
   const startGuide = useCallback(() => {
     if (!isLoggedIn()) { requireLogin("/?guide=1&tour=build"); return; }

@@ -22,6 +22,7 @@ from sqlmodel import Session, select
 
 from . import email_service
 from . import points as points_mod
+from . import avatars
 from .db import User, get_session, request_session
 from .security import hash_password, verify_password
 
@@ -48,6 +49,7 @@ _GOOGLE_ONLY_ACCOUNT_DETAIL = (
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _USERNAME_RE = re.compile(r"^[A-Za-z0-9_가-힣]{2,20}$")
+MAX_PASSWORD_LENGTH = 256
 
 
 class AuthError(HTTPException):
@@ -59,25 +61,34 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def make_token(user_id: int) -> str:
+def make_token(user_id: int, version: int | None = None) -> str:
+    if version is None:
+        account = get_user_by_id(user_id)
+        version = account.auth_version if account else 0
     payload = {
         "sub": str(user_id),
+        "ver": version,
         "iat": int(_now().timestamp()),
         "exp": int((_now() + timedelta(hours=_TOKEN_TTL_HOURS)).timestamp()),
     }
     return jwt.encode(payload, SECRET_KEY, algorithm=_JWT_ALGO)
 
 
-def _decode(token: str) -> int:
+def _session_payload(token: str) -> dict:
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[_JWT_ALGO])
         # Purpose-scoped tokens (password reset, websocket handoff, etc.) must
         # never be accepted as ordinary browser sessions.
         if payload.get("purpose") is not None:
             raise ValueError("purpose-scoped token")
-        return int(payload["sub"])
+        int(payload["sub"])
+        return payload
     except (jwt.PyJWTError, KeyError, ValueError):
         raise AuthError(401, "세션이 만료됐거나 유효하지 않아요. 다시 로그인해 주세요.")
+
+
+def _decode(token: str) -> int:
+    return int(_session_payload(token)["sub"])
 
 
 def make_runner_session_stream_token(user_id: int) -> dict:
@@ -89,9 +100,13 @@ def make_runner_session_stream_token(user_id: int) -> dict:
     on regular HTTP endpoints.
     """
     now = _now()
+    user = get_user_by_id(user_id)
+    if user is None:
+        raise AuthError(401, "계정을 찾을 수 없어요.")
     expires = now + timedelta(seconds=_RUNNER_SESSION_STREAM_TTL_SECONDS)
     payload = {
         "sub": str(user_id),
+        "ver": user.auth_version,
         "purpose": _RUNNER_SESSION_STREAM_PURPOSE,
         "jti": secrets.token_urlsafe(12),
         "iat": int(now.timestamp()),
@@ -103,37 +118,50 @@ def make_runner_session_stream_token(user_id: int) -> dict:
     }
 
 
-def decode_runner_session_stream_token(token: str) -> int:
+def decode_runner_session_stream_token(token: str, *, check_expiry: bool = True) -> int:
     """Validate a sessions-stream token and return its account id."""
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[_JWT_ALGO])
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[_JWT_ALGO], options={"verify_exp": check_expiry})
         if payload.get("purpose") != _RUNNER_SESSION_STREAM_PURPOSE:
             raise ValueError("wrong purpose")
+        _check_token_account(payload, get_user_by_id(int(payload["sub"])))
         return int(payload["sub"])
     except (jwt.PyJWTError, KeyError, ValueError):
         raise AuthError(401, "실시간 세션 연결 인증이 만료됐거나 유효하지 않아요.")
 
 
-def user_view(user: User) -> dict:
+def user_view(user: User, db: Session | None = None) -> dict:
     """Public view of an account — never includes the password hash."""
     return {
         "id": user.id,
         "email": user.email,
         "username": user.username,
+        "bio": user.bio,
+        "can_change_password": bool(user.password_hash),
         "points_balance": user.points_balance,
         "created_at": user.created_at,
+        "avatar_url": avatars.avatar_url(user.id, db=db),
     }
+
+
+def validate_username(username: str) -> str:
+    username = (username or "").strip()
+    if not _USERNAME_RE.fullmatch(username):
+        raise AuthError(400, "아이디는 2~20자의 한글/영문/숫자/밑줄만 가능해요.")
+    return username
+
+
+def validate_new_password(password: str) -> None:
+    if not 8 <= len(password or "") <= MAX_PASSWORD_LENGTH:
+        raise AuthError(400, "비밀번호는 8~256자로 입력해 주세요.")
 
 
 def signup(email: str, username: str, password: str) -> dict:
     email = (email or "").strip().lower()
-    username = (username or "").strip()
+    username = validate_username(username)
     if not _EMAIL_RE.match(email):
         raise AuthError(400, "이메일 형식이 올바르지 않아요.")
-    if not _USERNAME_RE.match(username):
-        raise AuthError(400, "아이디는 2~20자의 한글/영문/숫자/밑줄만 가능해요.")
-    if len(password or "") < 8:
-        raise AuthError(400, "비밀번호는 8자 이상이어야 해요.")
+    validate_new_password(password)
 
     with get_session() as db:
         existing_email = db.exec(select(User).where(User.email == email)).first()
@@ -158,7 +186,7 @@ def signup(email: str, username: str, password: str) -> dict:
         points_mod.apply(db, user, points_mod.SIGNUP_GRANT, "signup_grant")
         db.commit()
         db.refresh(user)
-        return {"token": make_token(user.id), "user": user_view(user)}
+        return {"token": make_token(user.id, user.auth_version), "user": user_view(user, db=db)}
 
 
 def login(email: str, password: str) -> dict:
@@ -169,12 +197,13 @@ def login(email: str, password: str) -> dict:
             raise AuthError(401, _GOOGLE_ONLY_ACCOUNT_DETAIL)
         if user is None or not verify_password(password or "", user.password_hash):
             raise AuthError(401, "이메일 또는 비밀번호가 올바르지 않아요.")
-        return {"token": make_token(user.id), "user": user_view(user)}
+        return {"token": make_token(user.id, user.auth_version), "user": user_view(user, db=db)}
 
 
 def get_user_by_id(user_id: int) -> Optional[User]:
     with get_session() as db:
-        return db.get(User, user_id)
+        user = db.get(User, user_id)
+        return user if user is not None and not user.is_deleted else None
 
 
 # --- Google 간편 로그인 -------------------------------------------------
@@ -238,7 +267,7 @@ def google_auth(credential: str) -> dict:
     with get_session() as db:
         user = db.exec(select(User).where(User.email == email)).first()
         if user is not None:
-            return {"token": make_token(user.id), "user": user_view(user)}
+            return {"token": make_token(user.id, user.auth_version), "user": user_view(user, db=db)}
         username = _unique_username(db, info.get("name") or email.split("@")[0])
         user = User(
             email=email,
@@ -254,13 +283,15 @@ def google_auth(credential: str) -> dict:
         points_mod.apply(db, user, points_mod.SIGNUP_GRANT, "signup_grant")
         db.commit()
         db.refresh(user)
-        return {"token": make_token(user.id), "user": user_view(user)}
+        return {"token": make_token(user.id, user.auth_version), "user": user_view(user, db=db)}
 
 
 # --- password reset -----------------------------------------------------
 def _make_reset_token(user_id: int) -> str:
+    user = get_user_by_id(user_id)
     payload = {
         "sub": str(user_id),
+        "ver": user.auth_version if user else 0,
         "purpose": "reset",
         "iat": int(_now().timestamp()),
         "exp": int((_now() + timedelta(minutes=_RESET_TTL_MIN)).timestamp()),
@@ -273,8 +304,9 @@ def _decode_reset_token(token: str) -> int:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[_JWT_ALGO])
         if payload.get("purpose") != "reset":
             raise ValueError("wrong purpose")
+        _check_token_account(payload, get_user_by_id(int(payload["sub"])))
         return int(payload["sub"])
-    except (jwt.PyJWTError, KeyError, ValueError):
+    except (jwt.PyJWTError, KeyError, ValueError, AuthError):
         raise AuthError(400, "재설정 링크가 만료됐거나 유효하지 않아요. 다시 요청해 주세요.")
 
 
@@ -305,27 +337,42 @@ def request_password_reset(email: str) -> dict:
 
 
 def reset_password(token: str, new_password: str) -> dict:
-    if len(new_password or "") < 8:
-        raise AuthError(400, "비밀번호는 8자 이상이어야 해요.")
+    validate_new_password(new_password)
     user_id = _decode_reset_token(token)
     with get_session() as db:
-        user = db.get(User, user_id)
-        if user is None:
+        from sqlalchemy import text as sql_text
+        if db.get_bind().dialect.name == "sqlite":
+            db.exec(sql_text("BEGIN IMMEDIATE"))
+        user = db.exec(select(User).where(User.id == user_id).with_for_update()).first()
+        if user is None or user.is_deleted:
             raise AuthError(400, "계정을 찾을 수 없어요.")
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[_JWT_ALGO])
+        _check_token_account(payload, user)
         user.password_hash = hash_password(new_password)
+        user.auth_version += 1
         db.add(user)
         db.commit()
     return {"ok": True, "message": "비밀번호가 변경됐어요. 새 비밀번호로 로그인해 주세요."}
+
+
+def _check_token_account(payload: dict, user: User | None) -> User:
+    if user is None or user.is_deleted or payload.get("ver", 0) != user.auth_version:
+        raise AuthError(401, "세션이 만료됐어요. 다시 로그인해 주세요.")
+    return user
+
+
+def session_user(token: str, db: Session | None = None) -> User:
+    payload = _session_payload(token)
+    user_id = int(payload["sub"])
+    user = db.get(User, user_id) if db is not None else get_user_by_id(user_id)
+    return _check_token_account(payload, user)
 
 
 def current_user(authorization: Optional[str] = Header(default=None)) -> User:
     """FastAPI dependency: resolve the Bearer token to a User (401 otherwise)."""
     if not authorization or not authorization.lower().startswith("bearer "):
         raise AuthError(401, "로그인이 필요해요.")
-    user = get_user_by_id(_decode(authorization[7:].strip()))
-    if user is None:
-        raise AuthError(401, "계정을 찾을 수 없어요.")
-    return user
+    return session_user(authorization[7:].strip())
 
 
 def current_user_in_session(
@@ -335,10 +382,7 @@ def current_user_in_session(
     """Resolve auth with the request's already-open session for DB-only routes."""
     if not authorization or not authorization.lower().startswith("bearer "):
         raise AuthError(401, "로그인이 필요해요.")
-    user = db.get(User, _decode(authorization[7:].strip()))
-    if user is None:
-        raise AuthError(401, "계정을 찾을 수 없어요.")
-    return user
+    return session_user(authorization[7:].strip(), db=db)
 
 
 def optional_user(authorization: Optional[str] = Header(default=None)) -> Optional[User]:
@@ -346,7 +390,7 @@ def optional_user(authorization: Optional[str] = Header(default=None)) -> Option
     if not authorization or not authorization.lower().startswith("bearer "):
         return None
     try:
-        return get_user_by_id(_decode(authorization[7:].strip()))
+        return session_user(authorization[7:].strip())
     except HTTPException:
         return None
 
@@ -359,6 +403,6 @@ def optional_user_in_session(
     if not authorization or not authorization.lower().startswith("bearer "):
         return None
     try:
-        return db.get(User, _decode(authorization[7:].strip()))
+        return session_user(authorization[7:].strip(), db=db)
     except HTTPException:
         return None

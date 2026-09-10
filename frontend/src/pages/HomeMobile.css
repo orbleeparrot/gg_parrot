@@ -1,0 +1,84 @@
+/* 소개 문구의 브랜드 밑줄은 글자 크기에 맞춰 선명하게 유지한다. */
+.home-start-page.is-entry .home-entry-copy .home-entry-title span {
+  text-decoration: none;
+  background-size: 100% .34em;
+  padding-bottom: .04em;
+}
+
+/* 모바일은 두 소개를 문서 흐름에 놓는다. 스크롤 안에 별도 캐러셀을 두지 않는다. */
+@media (max-width: 1099px) {
+  .home-mobile-stack {
+    width: min(100%, 680px);
+    margin-inline: auto;
+  }
+
+  .home-mobile-stack .home-entry-hero {
+    width: 100%;
+    min-height: 0;
+    padding: 36px 20px 44px;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+    gap: 32px;
+  }
+
+  .home-mobile-stack .home-entry-hero.is-intro {
+    grid-template-areas: "copy" "choices";
+    grid-template-rows: auto auto;
+  }
+
+  .home-mobile-stack .home-entry-hero.is-community {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 20px;
+    border-top: 1px solid rgb(var(--c-slate-200));
+    padding: 32px 20px;
+  }
+
+  .home-mobile-stack .home-entry-choices {
+    width: 100%;
+  }
+
+  .home-mobile-stack .home-entry-copy .home-entry-title {
+    margin: 0;
+    color: rgb(var(--c-slate-900));
+    font-size: clamp(36px, 10vw, 52px);
+    line-height: 1.12;
+    font-weight: 790;
+    letter-spacing: -.045em;
+    word-break: keep-all;
+    overflow-wrap: anywhere;
+    text-wrap: balance;
+  }
+
+  .home-mobile-stack .home-community-copy .home-entry-title {
+    font-size: clamp(32px, 8.5vw, 44px);
+    line-height: 1.2;
+  }
+
+  .home-mobile-stack .home-community-preview {
+    width: 100%;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+
+  .home-mobile-stack .home-community-post-viewport {
+    height: auto;
+    overflow: visible;
+  }
+
+  .home-mobile-stack .home-community-post-track {
+    animation: none;
+    transform: none;
+    will-change: auto;
+  }
+
+  .home-mobile-stack .home-community-post-list li {
+    height: auto;
+  }
+
+  .home-mobile-stack .home-community-post-copy strong {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+}

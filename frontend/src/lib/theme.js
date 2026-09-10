@@ -32,6 +32,7 @@ export function setStoredTheme(pref) {
     /* preference just won't persist */
   }
   applyTheme(pref);
+  window.dispatchEvent(new CustomEvent("ggp:theme-change", { detail: pref }));
 }
 
 /** Watch the OS setting; only repaints while the user is on "system". */

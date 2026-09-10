@@ -17,14 +17,17 @@ test("kstDateTime turns the board's KST label into a datetime attribute", () => 
 // 2026-09-09 13:00 KST = 2026-09-09T04:00Z
 const NOW = Date.UTC(2026, 8, 9, 4, 0, 0);
 
-test("boardTime shows HH:MM today, MM.DD this year, YY.MM.DD before that (all KST)", () => {
-  assert.equal(boardTime(Date.UTC(2026, 8, 9, 0, 5, 0), NOW), "09:05");          // 오늘 09:05 KST
-  assert.equal(boardTime(Date.UTC(2026, 8, 8, 14, 59, 0), NOW), "09.08");        // 어제 23:59 KST
-  assert.equal(boardTime(Date.UTC(2026, 8, 8, 15, 0, 0), NOW), "00:00");         // 오늘 00:00 KST — KST 기준으로 가른다
+test("boardTime shows relative time within a week, then MM.DD this year, YY.MM.DD before that (KST)", () => {
+  assert.equal(boardTime(NOW - 20_000, NOW), "방금 전");
+  assert.equal(boardTime(NOW - 5 * 60_000, NOW), "5분 전");
+  assert.equal(boardTime(NOW - 3 * 3_600_000, NOW), "3시간 전");
+  assert.equal(boardTime(NOW - 26 * 3_600_000, NOW), "1일 전");
+  assert.equal(boardTime(NOW - 6 * 86_400_000, NOW), "6일 전");
+  assert.equal(boardTime(NOW - 8 * 86_400_000, NOW), "09.01");                  // 일주일 넘으면 날짜
   assert.equal(boardTime(Date.UTC(2026, 0, 3, 3, 0, 0), NOW), "01.03");          // 올해
   assert.equal(boardTime(Date.UTC(2025, 11, 31, 20, 0, 0), NOW), "01.01");       // UTC 로는 작년, KST 로는 올해 1월 1일 → 올해 형식
   assert.equal(boardTime(Date.UTC(2025, 11, 30, 3, 0, 0), NOW), "25.12.30");      // 작년
-  assert.equal(boardTime(Date.UTC(2024, 4, 1, 3, 0, 0), NOW), "24.05.01");       // 그 전
+  assert.equal(boardTime(NOW + 60_000, NOW), "방금 전");                          // 시계가 앞선 글도 음수로 안 보인다
   assert.equal(boardTime("x", NOW), "");
 });
 

@@ -1,0 +1,58 @@
+.profile-editor-dialog {
+  width: min(520px, calc(100vw - 32px));
+  max-width: none;
+  max-height: calc(100dvh - 32px);
+  margin: auto;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid rgb(var(--c-slate-300));
+  border-radius: 16px;
+  background: rgb(var(--c-surface));
+  color: rgb(var(--c-slate-900));
+  box-shadow: 0 20px 60px rgb(0 0 0 / .2);
+}
+.profile-editor-dialog[open] { display: flex; flex-direction: column; }
+.profile-editor-dialog::backdrop { background: rgb(0 0 0 / .5); }
+.profile-editor-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 20px 28px 12px; flex: 0 0 auto; }
+.profile-editor-heading h2 { margin: 0; font-size: 22px; line-height: 1.4; font-weight: 700; letter-spacing: -.025em; }
+.profile-editor-close { display: grid; place-items: center; width: 44px; height: 44px; flex: none; padding: 0; border: 0; border-radius: 8px; background: transparent; color: rgb(var(--c-slate-700)); cursor: pointer; }
+.profile-editor-close:hover:not(:disabled) { background: rgb(var(--c-slate-100)); }
+.profile-editor-form { display: flex; flex-direction: column; min-height: 0; }
+.profile-editor-fields { display: grid; gap: 22px; min-width: 0; min-height: 0; margin: 0; padding: 8px 28px 28px; border: 0; overflow-y: auto; overscroll-behavior: contain; }
+.profile-editor-photo { display: flex; align-items: center; gap: 16px; }
+.profile-editor-photo-options { display: grid; gap: 8px; min-width: 0; }
+.profile-editor-photo-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.profile-editor-label { display: grid; gap: 8px; color: rgb(var(--c-slate-900)); font-size: 14px; line-height: 1.4; font-weight: 600; }
+.profile-editor-label-row { display: flex; justify-content: space-between; gap: 12px; }
+.profile-editor-label textarea { resize: vertical; min-height: 96px; }
+.profile-editor-label .field { width: 100%; min-width: 0; min-height: 48px; padding: 12px 14px; font-size: 16px; line-height: 1.5; font-weight: 500; }
+.profile-editor-hint, .profile-editor-counter { color: rgb(var(--c-slate-500)); font-size: 12px; line-height: 1.5; font-weight: 500; }
+.profile-editor-error { margin: 0; color: rgb(var(--c-red-600)); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.profile-editor-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 18px 28px; border-top: 1px solid rgb(var(--c-slate-200)); flex: 0 0 auto; }
+.profile-editor-footer > button { min-width: 80px; min-height: 44px; }
+.profile-editor-dialog button:focus-visible, .profile-editor-form.is-inline button:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
+.profile-editor-dialog button:disabled { cursor: default; opacity: .5; }
+.profile-delete-notice { display: grid; gap: 10px; color: rgb(var(--c-slate-700)); font-size: 14px; line-height: 1.6; }
+.profile-delete-notice p { margin: 0; }
+.profile-delete-notice a { text-decoration: underline; text-underline-offset: 3px; }
+.profile-delete-google { display: grid; gap: 12px; }
+.profile-editor-form.is-inline { width: 100%; }
+.profile-editor-form.is-inline .profile-editor-fields { overflow: visible; padding: 0 0 28px; gap: 28px; }
+.profile-editor-form.is-inline .profile-editor-photo { gap: 24px; padding-bottom: 4px; }
+.profile-editor-form.is-inline .profile-editor-photo > .user-avatar { flex: none; }
+.profile-editor-form.is-inline .profile-editor-photo-actions .btn { min-height: 44px; padding-inline: 14px; font-size: 13px; }
+.profile-editor-form.is-inline .profile-editor-photo-options { gap: 10px; }
+.profile-editor-form.is-inline .profile-editor-label { gap: 10px; font-size: 15px; }
+.profile-editor-form.is-inline .profile-editor-label textarea { min-height: 128px; }
+.profile-editor-form.is-inline .profile-editor-footer { padding: 20px 0 0; }
+@media (max-width: 479px) {
+  .profile-editor-dialog { width: calc(100vw - 24px); max-height: calc(100dvh - 24px); }
+  .profile-editor-heading { padding: 16px 20px 8px; }
+  .profile-editor-fields { padding: 8px 20px 20px; gap: 18px; }
+  .profile-editor-footer { padding: 14px 20px; }
+  .profile-editor-photo { gap: 12px; }
+  .profile-editor-form.is-inline .profile-editor-photo { gap: 16px; }
+  .profile-editor-form.is-inline .profile-editor-photo-actions { gap: 2px; }
+  .profile-editor-form.is-inline .profile-editor-photo-actions .btn { padding-inline: 10px; }
+  .profile-editor-form.is-inline .profile-editor-fields { gap: 24px; }
+}

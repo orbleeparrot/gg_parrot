@@ -8,6 +8,7 @@ import { RULE_TYPES } from "../lib/macro.js";
 import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 import ConfirmDialog from "./ConfirmDialog.jsx";
 import { describeDeleteConfirm, describeStopConfirm } from "../features/agents/runOutcome.js";
+import "./RunnerKeyPanel.css";
 
 // 내 매크로 실행 현황 — 실행기(exe)가 올리는 세션을 실시간으로 보여주고,
 // 원격 종료(매크로만 / 청산 후)를 요청한다.
@@ -55,7 +56,7 @@ export function RunnerKeyPanel({ enabled = true, compact = false, menu = false }
   }
 
   if (menu) {
-    if (err && !data) return <p className="t-small text-red-600" role="alert">회원 키 조회 실패. 메뉴를 다시 열어 주세요.</p>;
+    if (err && !data) return <p className="t-small text-red-600" role="alert">회원 키를 불러오지 못했어요. 닫았다가 다시 열어 주세요.</p>;
     if (!data) return <p className="t-small text-slate-700" role="status">회원 키 불러오는 중…</p>;
     return (
       <div className="runner-key-menu">

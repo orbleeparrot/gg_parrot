@@ -3,10 +3,26 @@
 import { getToken } from "./lib/auth.js";
 import { createRequestCoordinator } from "./lib/requestCoordinator.js";
 import { withRequestTimeout } from "./lib/requestTimeout.js";
+import { createBoardListCache } from "./lib/boardListCache.js";
 
 const BASE = "";
 const RUNNER_SESSIONS_STREAM_PATH = "/api/me/runner/sessions/stream";
 const getRequests = createRequestCoordinator();
+const boardLists = createBoardListCache();
+
+function boardListPath(page, size, { sort = "new", q = "", field = "all" } = {}) {
+  const params = new URLSearchParams({ page: String(page), size: String(size) });
+  if (sort && sort !== "new") params.set("sort", sort);
+  if (q) params.set("q", q);
+  if (q && field && field !== "all") params.set("field", field);
+  return `/api/board/posts?${params}`;
+}
+
+async function boardMutation(promise) {
+  const result = await promise;
+  boardLists.invalidate();
+  return result;
+}
 
 function websocketUrl(path) {
   const configuredBase = String(import.meta.env?.VITE_API_WS_BASE || "").trim();
@@ -44,7 +60,7 @@ async function req(path, opts = {}) {
   const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
   if (token) headers["Authorization"] = `Bearer ${token}`;
   const method = String(opts.method || "GET").toUpperCase();
-  const { signal: callerSignal, timeoutMs, ...fetchOptions } = opts;
+  const { signal: callerSignal, timeoutMs, requestKey = "", ...fetchOptions } = opts;
   const execute = (signal) => withRequestTimeout(async (requestSignal) => {
     const res = await fetch(BASE + path, { ...fetchOptions, method, headers, signal: requestSignal });
     const body = await jsonBody(res);
@@ -62,28 +78,31 @@ async function req(path, opts = {}) {
   }, { signal, timeoutMs });
   if (method !== "GET") return execute(callerSignal);
   const authScope = token || "anonymous";
-  return getRequests.run(`${authScope}:${path}`, execute, { signal: callerSignal });
+  return getRequests.run(`${authScope}:${requestKey}:${path}`, execute, { signal: callerSignal });
 }
 
 // multipart/form-data 요청 (파일 업로드). Content-Type은 브라우저가 boundary와
 // 함께 자동 설정하도록 두고, Authorization 헤더만 붙인다.
-async function reqForm(path, formData) {
+async function reqForm(path, formData, options = {}) {
+  const { method = "POST", ...requestOptions } = options;
   const token = getToken();
   const headers = {};
   if (token) headers["Authorization"] = `Bearer ${token}`;
-  const res = await fetch(BASE + path, { method: "POST", headers, body: formData });
-  const body = await jsonBody(res);
-  if (!res.ok) {
-    const detail = typeof body.detail === "string"
-      ? body.detail
-      : body.detail != null
-        ? JSON.stringify(body.detail)
-        : res.statusText;
-    const error = new Error(detail);
-    error.status = res.status;
-    throw error;
-  }
-  return body;
+  return withRequestTimeout(async (signal) => {
+    const res = await fetch(BASE + path, { method, headers, body: formData, signal });
+    const body = await jsonBody(res);
+    if (!res.ok) {
+      const detail = typeof body.detail === "string"
+        ? body.detail
+        : body.detail != null
+          ? JSON.stringify(body.detail)
+          : res.statusText;
+      const error = new Error(detail);
+      error.status = res.status;
+      throw error;
+    }
+    return body;
+  }, requestOptions);
 }
 
 export const api = {
@@ -98,6 +117,28 @@ export const api = {
     req("/api/auth/google", { method: "POST", body: JSON.stringify({ credential }) }),
   me: () => req("/api/auth/me"),
   myDashboard: (options = {}) => req("/api/me/dashboard", options),
+  uploadAvatar: (image) => {
+    const form = new FormData();
+    form.append("image", image);
+    return reqForm("/api/me/avatar", form, { timeoutMs: 30_000 });
+  },
+  deleteAvatar: () => req("/api/me/avatar", { method: "DELETE", timeoutMs: 30_000 }),
+  deleteAccount: ({ confirmation, password, credential }, options = {}) => req("/api/me/account", {
+    ...options, method: "DELETE", body: JSON.stringify({ confirmation, password, credential }), timeoutMs: 30_000,
+  }),
+  updateProfile: ({ username, bio, image, removeAvatar = false }, options = {}) => {
+    const form = new FormData();
+    form.append("username", username);
+    form.append("bio", bio || "");
+    form.append("remove_avatar", String(removeAvatar));
+    if (image) form.append("image", image);
+    return reqForm("/api/me/profile", form, { ...options, method: "PATCH", timeoutMs: 30_000 });
+  },
+  changePassword: ({ currentPassword, newPassword }, options = {}) =>
+    req("/api/me/password", {
+      ...options, method: "POST", timeoutMs: 30_000,
+      body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+    }),
   myMacros: (options = {}) => req("/api/me/macros", options),
   myMacro: (id) => req(`/api/me/macros/${id}`),
   saveMyMacro: (macro, name = "") =>
@@ -174,29 +215,43 @@ export const api = {
   },
 
   // 껄무새 게시판
-  boardList: (page = 1, size = 10) => req(`/api/board/posts?page=${page}&size=${size}`),
-  boardGet: (id) => req(`/api/board/posts/${id}`),
+  subscribeBoardList: boardLists.subscribe,
+  boardListVersion: boardLists.version,
+  boardListCached: (page = 1, size = 10, options = {}) => boardLists.peek(`${getToken()}:${boardListPath(page, size, options)}`),
+  boardList: (page = 1, size = 10, options = {}) => {
+    const path = boardListPath(page, size, options);
+    return boardLists.load(`${getToken()}:${path}`, version => req(path, { signal: options.signal, requestKey: `board-${version}` }));
+  },
+  boardVote: (id, value) => boardMutation(req(`/api/board/posts/${id}/vote`, { method: "POST", body: JSON.stringify({ value }) })),
+  boardGet: (id, options = {}) => req(`/api/board/posts/${id}`, options).then(post => { boardLists.updatePost(post); return post; }),
   // 글 작성(로그인 필요) — title/body + 선택 이미지(File). multipart 전송.
-  boardCreate: ({ title, body, image }) => {
+  boardCreate: ({ title, body, bodyFormat = "text", images = [] }) => {
     const fd = new FormData();
     fd.append("title", title);
     fd.append("body", body || "");
-    if (image) fd.append("image", image);
-    return reqForm("/api/board/posts", fd);
+    fd.append("body_format", bodyFormat);
+    for (const file of images) fd.append("images", file);
+    return boardMutation(reqForm("/api/board/posts", fd));
   },
-  boardDelete: (id) => req(`/api/board/posts/${id}`, { method: "DELETE" }),
+  boardUpdate: (id, { title, body, bodyFormat = "text", keepImageIds = [], images = [] }) => {
+    const fd = new FormData();
+    fd.append("title", title);
+    fd.append("body", body || "");
+    fd.append("body_format", bodyFormat);
+    fd.append("keep_image_ids", keepImageIds.join(","));
+    for (const file of images) fd.append("images", file);
+    return boardMutation(reqForm(`/api/board/posts/${id}`, fd, { method: "PUT" }));
+  },
+  boardDelete: (id) => boardMutation(req(`/api/board/posts/${id}`, { method: "DELETE" })),
   boardImageUrl: (id) => `/api/board/posts/${id}/image`,
-  // 댓글 — 계정 없이 일회성 이름+비밀번호
-  boardAddComment: (postId, { username, password, text }) =>
-    req(`/api/board/posts/${postId}/comments`, {
-      method: "POST",
-      body: JSON.stringify({ username, password, text }),
-    }),
-  boardDeleteComment: (commentId, password) =>
-    req(`/api/board/comments/${commentId}`, {
-      method: "DELETE",
-      body: JSON.stringify({ password }),
-    }),
+  // 댓글·답글 — 로그인 계정으로 작성. 성공하면 관련 목록을 다시 조회한다.
+  boardAddComment: (postId, text, parentId = null) =>
+    boardMutation(req(`/api/board/posts/${postId}/comments`, { method: "POST", body: JSON.stringify({ text, parent_id: parentId }) })),
+  boardEditComment: (commentId, text) =>
+    boardMutation(req(`/api/board/comments/${commentId}`, { method: "PUT", body: JSON.stringify({ text }) })),
+  boardDeleteComment: (commentId) => boardMutation(req(`/api/board/comments/${commentId}`, { method: "DELETE" })),
+  boardReport: ({ targetType, targetId, reason, detail = "" }) =>
+    req("/api/board/reports", { method: "POST", body: JSON.stringify({ target_type: targetType, target_id: targetId, reason, detail }) }),
 
   // 한강 수온 (server-cached proxy of the public Hangang temperature API)
   hangangTemp: (options = {}) => req("/api/hangang-temp", options),

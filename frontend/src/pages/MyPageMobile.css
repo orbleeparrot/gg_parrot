@@ -1,0 +1,74 @@
+@media (min-width: 1100px) and (max-width: 1279px) {
+  .me-page { --me-inset: 16px; grid-template-columns: 208px minmax(0, 1fr); gap: var(--me-section-gap); }
+  .me-stat dd { font-size: 23px; }
+}
+@media (max-width: 1099px) {
+  .me-page { grid-template-columns: minmax(0, 1fr); gap: var(--me-section-gap); max-width: 780px; }
+  .me-profile-rail { position: static; }
+  .me-identity { padding: var(--me-inset); }
+  .me-avatar, .me-skeleton.is-avatar { width: 104px; height: 104px; }
+  .me-avatar { font-size: 40px; }
+  .me-name { font-size: 28px; }
+  .me-tier-toggle { min-height: 36px; }
+  .me-bio { max-width: 54ch; }
+  .me-stat dd { font-size: 24px; }
+  .me-create-link { min-height: 44px; border-block: 4px solid transparent; background-clip: padding-box; }
+  .me-card-action { min-height: 44px; }
+  .me-filters button { min-height: 40px; }
+}
+@media (max-width: 599px) {
+  .me-page { --me-inset: 16px; --me-section-gap: 16px; }
+  .me-identity { border-radius: 16px; }
+  .me-avatar, .me-skeleton.is-avatar { width: 88px; height: 88px; }
+  .me-avatar { font-size: 34px; border-width: 3px; }
+  .me-name-line { flex-direction: row; flex-wrap: wrap; justify-content: center; }
+  .me-name { font-size: 26px; margin: 0; }
+  .me-tier-toggle { min-height: 32px; font-size: 12px; }
+  .me-bio { font-size: 13px; line-height: 20px; }
+  .me-joined { width: auto; border: 0; font-size: 10px; margin: 0; padding: 0; }
+  .me-stats { border-radius: 14px; }
+  .me-stat { padding-inline: 12px; grid-template-rows: 16px auto; }
+  .me-stat dt { justify-content: center; gap: 0; font-size: 11px; }
+  .me-stat dt svg { display: none; }
+  .me-stat dd { text-align: center; font-size: 20px; line-height: 24px; }
+  .me-stat-link { inset: -10px 2px; }
+  .me-stats.has-long-values .me-stat { padding-inline: var(--me-inset); }
+  .me-stats.has-long-values .me-stat dd { font-size: 22px; }
+  .me-section-nav { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  .me-section-nav button { min-height: 44px; gap: 8px; font-size: 14px; }
+  .me-section-nav button svg { width: 20px; height: 20px; }
+  .me-workspace-heading { gap: 8px; }
+  .me-workspace-heading h2 { font-size: 21px; }
+  .me-create-link { font-size: 12px; padding-inline: 10px; }
+  .me-filters { display: flex; margin-bottom: 16px; }
+  .me-filters button { flex: 1; min-width: 0; gap: 6px; padding-inline: 8px; font-size: 13px; }
+  .me-workspace.is-macros { display: grid; grid-template-columns: minmax(0, 1fr) 44px; align-items: start; column-gap: 8px; }
+  .me-workspace.is-macros .me-workspace-heading { display: contents; }
+  .me-workspace:is(.is-macros, .is-points) .me-workspace-heading h2 { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .me-workspace.is-points .me-workspace-heading { margin: 0; }
+  .me-workspace.is-macros .me-create-link { grid-column: 2; grid-row: 1; min-height: 48px; padding: 0; border-block-width: 6px; }
+  .me-workspace.is-macros .me-create-link span { display: none; }
+  .me-workspace.is-macros .me-create-link svg { width: 22px; height: 22px; }
+  .me-workspace.is-macros .me-filters { grid-column: 1; grid-row: 1; }
+  .me-workspace.is-macros .me-panel { grid-column: 1 / -1; }
+  .me-macro-grid { grid-template-columns: minmax(0, 1fr); }
+  .me-macro-heading h3 { font-size: 17px; }
+  .me-macro-description { font-size: 14px; }
+  .me-card-action { position: relative; min-height: 44px; padding-inline: 10px; border: 0; font-size: 12px; }
+  .me-card-action::before { position: absolute; inset: 4px 0; border: 1px solid rgb(var(--c-slate-300)); border-radius: 8px; content: ""; pointer-events: none; }
+  .me-transaction { grid-template-columns: minmax(0, 1fr) auto; }
+  .me-transaction-icon { display: none; }
+  .me-transaction-main p { font-size: 14px; }
+  .me-transaction-main > div { font-size: 11px; }
+  .me-transaction-amount strong { font-size: 14px; }
+  .me-transaction-amount > span { font-size: 10px; }
+  .me-post-title h3 { font-size: 15px; }
+  .me-empty { min-height: 200px; }
+}
+@media (max-width: 359px) {
+  .me-stat { padding-inline: 8px; }
+  .me-stat dd { font-size: 18px; }
+  .me-section-nav { gap: 8px; }
+  .me-section-nav button { gap: 5px; font-size: 13px; }
+  .me-section-nav button svg { width: 18px; height: 18px; }
+}

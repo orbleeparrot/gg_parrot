@@ -1,18 +1,30 @@
 """Daily KST chat with verified authors and member-scoped durable read state."""
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 
 from sqlalchemy import func, or_, text as sql_text
 from sqlmodel import select
 
-from .db import ChatMessage, ChatReadState, User, get_session
-from .leaderboard import _kst_hhmm, today_start_ms
+from . import avatars
+from .db import ChatMessage, ChatReadState, LeaderboardEntry, User, UserAvatar, get_session
+from .leaderboard import _kst_hhmm, _unlocked_ids_for, today_start_ms
+from .moderation import require_clean_text
 
 MAX_LEN = 300
 MAX_LIST = 200
 _RATE_MAX = 5
 _RATE_WINDOW = 10.0
+
+
+# 매크로 언급 — 리더보드 행의 '채팅에 붙여넣기'가 넣어 주는 토큰. 채팅 본문에 글자로 실려 오고,
+# 화면에는 매크로 카드로 그린다(스티커의 [sticker:id] 와 같은 방식).
+MACRO_TOKEN = re.compile(r"\[macro:(\d{1,9})\]")
+_MAX_MACRO_CARDS = 3
+# 답장 — 본문 맨 앞의 [reply:id]. 화면은 인용 줄로 그리고 본문에서는 뺀다.
+REPLY_TOKEN = re.compile(r"^\[reply:(\d{1,12})\]\s*")
+_REPLY_EXCERPT = 60
 
 
 class RateLimited(Exception):
@@ -50,6 +62,7 @@ def add_message(account: User, text: str) -> dict:
     if not text:
         raise ValueError("빈 메시지는 보낼 수 없습니다.")
     text = text[:MAX_LEN]
+    require_clean_text(text, "메시지")
     with get_session() as db:
         author = _lock_member(db, int(account.id))
         # Timestamp after obtaining the lock: waiting senders must not insert an
@@ -74,7 +87,8 @@ def add_message(account: User, text: str) -> dict:
         db.add(row)
         db.commit()
         db.refresh(row)
-        return _view(row)
+        return _view(row, avatars.avatar_url(row.user_id, db=db),
+                     _macro_cards(db, [row.text], int(account.id)), _reply_cards(db, [row.text]))
 
 
 def _member_seen_id(user_id: int) -> int:
@@ -124,14 +138,21 @@ def list_messages(
         if seen_id is not None:
             supplied_seen = min(max(0, seen_id), _latest_id(db))
             effective_seen = max(server_seen or 0, supplied_seen)
-        query = select(ChatMessage).where(
+        query = select(ChatMessage, UserAvatar.version).outerjoin(
+            UserAvatar, UserAvatar.user_id == ChatMessage.user_id,
+        ).where(
             ChatMessage.created_ms >= start_ms, ChatMessage.id <= latest_id,
         )
         if before_id is not None:
             query = query.where(ChatMessage.id < before_id)
         rows = db.exec(query.order_by(ChatMessage.id.desc()).limit(MAX_LIST + 1)).all()
         has_more = len(rows) > MAX_LIST
-        items = [_view(row) for row in reversed(rows[:MAX_LIST])]
+        page = list(reversed(rows[:MAX_LIST]))
+        texts = [row.text for row, _version in page]
+        cards = _macro_cards(db, texts, int(account.id) if account is not None else None)
+        replies = _reply_cards(db, texts)
+        items = [_view(row, avatars.public_url(row.user_id, version), cards, replies)
+                 for row, version in page]
         unseen_count = 0
         if effective_seen is not None:
             unseen_query = select(func.count(ChatMessage.id)).where(
@@ -157,12 +178,80 @@ def list_messages(
     }
 
 
-def _view(row: ChatMessage) -> dict:
+def _macro_cards(db, texts: list[str], viewer_user_id: int | None) -> dict[int, dict]:
+    """본문에 실린 [macro:id] 들을 카드 자료로. 잠긴 매크로는 전략을 빼고 잠김만 알린다."""
+    ids: list[int] = []
+    for text in texts:
+        for found in MACRO_TOKEN.findall(text or ""):
+            entry_id = int(found)
+            if entry_id not in ids:
+                ids.append(entry_id)
+    if not ids:
+        return {}
+    rows = db.exec(select(LeaderboardEntry).where(LeaderboardEntry.id.in_(ids))).all()
+    unlocked = _unlocked_ids_for(db, viewer_user_id, [row.id for row in rows])
+    cards = {}
+    for row in rows:
+        has_owner = row.owner_user_id is not None
+        is_owner = has_owner and viewer_user_id is not None and row.owner_user_id == viewer_user_id
+        visible = (not has_owner) or is_owner or (row.id in unlocked)
+        cards[row.id] = {
+            "entry_id": row.id,
+            "symbol": row.symbol,
+            "username": row.username or row.nickname,
+            "is_ai": bool(row.is_ai),
+            "locked": not visible,
+            "human_summary": row.human_summary if visible else "",
+        }
+    return cards
+
+
+def _reply_cards(db, texts: list[str]) -> dict[int, dict]:
+    """본문 맨 앞 [reply:id]가 가리키는 글쓴이·프로필 사진·발췌를 한 번에 조회."""
+    ids: list[int] = []
+    for text in texts:
+        match = REPLY_TOKEN.match(text or "")
+        if match:
+            target = int(match.group(1))
+            if target not in ids:
+                ids.append(target)
+    if not ids:
+        return {}
+    rows = db.exec(select(ChatMessage, UserAvatar.version).outerjoin(
+        UserAvatar, UserAvatar.user_id == ChatMessage.user_id,
+    ).where(ChatMessage.id.in_(ids))).all()
+    cards = {}
+    for row, version in rows:
+        body = MACRO_TOKEN.sub("[매크로]", REPLY_TOKEN.sub("", row.text or "")).strip()
+        cards[row.id] = {
+            "id": row.id,
+            "user_id": row.user_id,
+            "username": row.username,
+            "avatar_url": avatars.public_url(row.user_id, version),
+            "excerpt": body[:_REPLY_EXCERPT] + ("…" if len(body) > _REPLY_EXCERPT else ""),
+        }
+    return cards
+
+
+def _view(row: ChatMessage, avatar_url: str | None = None, cards: dict[int, dict] | None = None,
+          replies: dict[int, dict] | None = None) -> dict:
+    reply_match = REPLY_TOKEN.match(row.text or "")
+    mentioned = []
+    if cards:
+        for found in MACRO_TOKEN.findall(row.text or ""):
+            card = cards.get(int(found))
+            if card is not None and card not in mentioned:
+                mentioned.append(card)
     return {
         "id": row.id,
         "user_id": row.user_id,
         "username": row.username,
+        "avatar_url": avatar_url,
         "text": row.text,
+        # 답장이면 인용할 원 메시지. 지워졌거나 못 찾으면 None(본문만 보인다).
+        "reply_to": (replies or {}).get(int(reply_match.group(1))) if reply_match else None,
+        # 언급된 매크로 — 화면이 [macro:id] 자리에 이 카드를 그린다. 없으면 빈 목록.
+        "macros": mentioned[:_MAX_MACRO_CARDS],
         "created_kst": _kst_hhmm(row.created_ms),
         "created_at": row.created_at,
     }

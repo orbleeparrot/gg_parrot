@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createNewsBriefingQueue, historicalNewsLabel, prepareNewsResponse } from "../src/lib/newsBriefings.js";
+import * as libs from "../src/lib/newsBriefings.js";
+const { createNewsBriefingQueue, historicalNewsLabel, prepareNewsResponse } = libs;
 
 const flush = () => new Promise(setImmediate);
 const ready = { items: [{ id: "a", title: "비트코인 ETF 자금 유입 증가" }], translation: { status: "ready", pending_count: 0 } };
@@ -12,12 +13,13 @@ test("archived coin news shows its actual KST publication date without relabelin
   assert.equal(historicalNewsLabel({ is_historical: false, published: "2022-01-02T23:30:00Z" }), "");
 });
 
-function harness(load, keys = ["BTC"]) {
+function harness(load, keys = ["BTC"], extra = {}) {
   let clock = 1000;
   let nextId = 0;
   const timers = new Map();
   const states = new Map();
   const queue = createNewsBriefingQueue({
+    ...extra,
     keys, load, onChange: (key, state) => states.set(key, state), now: () => clock,
     setTimer: (fn, delay) => { timers.set(++nextId, { fn, dueAt: clock + delay }); return nextId; },
     clearTimer: (id) => timers.delete(id),
@@ -357,4 +359,51 @@ test("leaving a page discards late results and a fresh visit fetches the news ag
   assert.equal(calls, 1);
   assert.equal(revisit.states.get("BTC").data.translation.status, "ready");
   revisit.queue.stop();
+});
+
+test("createNewsCache restores from storage, drops entries past max age, and survives a broken store", () => {
+  const { createNewsCache } = libs;
+  let clock = 100_000;
+  const store = new Map();
+  const storage = { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => store.set(k, v) };
+  const first = createNewsCache({ storage, now: () => clock, maxAgeMs: 1_000 });
+  first.set("BTC", ready);
+  const restored = createNewsCache({ storage, now: () => clock, maxAgeMs: 1_000 });
+  assert.deepEqual(restored.get("BTC").data, ready);
+  assert.equal(restored.isFresh("BTC", 500), true);
+  clock += 2_000;
+  assert.equal(restored.get("BTC"), null); // 너무 오래된 자료는 버린다
+  const broken = createNewsCache({ storage: { getItem() { throw new Error("blocked"); }, setItem() { throw new Error("blocked"); } } });
+  broken.set("BTC", ready);
+  assert.deepEqual(broken.get("BTC").data, ready);
+});
+
+test("a fresh cached briefing is shown at once and no request is sent", async () => {
+  const { createNewsCache } = libs;
+  let calls = 0;
+  const cache = createNewsCache({ now: () => 1000 });
+  cache.set("BTC", prepareNewsResponse(ready), 1000);
+  const h = harness(async () => { calls += 1; return ready; }, ["BTC"], { cache, freshMs: 60_000 });
+  h.queue.start();
+  await h.next(); // start() 의 첫 pump — 신선한 캐시는 요청을 내지 않고 다음 예약도 없다
+  assert.equal(calls, 0);
+  assert.deepEqual(h.delays(), []);
+});
+
+test("a stale cached briefing stays visible while it refreshes, then the cache is replaced", async () => {
+  const { createNewsCache } = libs;
+  const cache = createNewsCache({ now: () => 1000 });
+  const old = prepareNewsResponse({ ...ready, items: [{ id: "old", title: "어제 헤드라인" }] });
+  cache.set("BTC", old, 1000 - 10 * 60_000);
+  let release;
+  const h = harness(() => new Promise((resolve) => { release = resolve; }), ["BTC"], { cache, freshMs: 5 * 60_000 });
+  h.queue.start();
+  await h.next();
+  assert.equal(h.states.get("BTC").status, "success"); // 옛 자료를 보이는 채로 받는다
+  assert.equal(h.states.get("BTC").data.items[0].id, "old");
+  release(ready);
+  await flush();
+  assert.equal(h.states.get("BTC").data.items[0].id, "a");
+  assert.equal(cache.get("BTC").data.items[0].id, "a");
+  h.queue.stop();
 });

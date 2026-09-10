@@ -25,6 +25,19 @@
   min-width: 0;
 }
 
+.runner-install-layout.is-device-limited {
+  grid-template-columns: minmax(0, 480px) minmax(0, 420px);
+  gap: 48px;
+}
+.runner-install-device-key {
+  max-width: 480px;
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid rgb(var(--c-slate-200));
+  line-height: 1.6;
+  word-break: keep-all;
+}
+
 .runner-install-actions {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -171,6 +184,15 @@
 
   .runner-install-layout {
     gap: 24px;
+  }
+
+  .runner-install-layout.is-device-limited {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 24px;
+  }
+
+  .runner-install-layout.is-device-limited .runner-install-media {
+    max-width: 360px;
   }
 
   .runner-install-step,

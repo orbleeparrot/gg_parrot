@@ -1,0 +1,2 @@
+# korcen 1.0.3 misses this common spelling; keep additions covered by tests.
+씨발

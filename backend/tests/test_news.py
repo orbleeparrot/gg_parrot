@@ -19,6 +19,8 @@ def isolated_title_retry_backoff(monkeypatch):
     # Asset-catalog I/O has its own test suite; these RSS unit tests stay offline.
     monkeypatch.setattr(news, "_prepare_asset_identity", lambda _: None)
     monkeypatch.setattr(news, "_title_translation_retry_at", {})
+    monkeypatch.setattr(news, "_coin_envelope_cache", {}, raising=False)
+    monkeypatch.setattr(news, "_coin_refresh_threads", {}, raising=False)
     monkeypatch.setattr(news, "_fetch_public_news_fallback", lambda *_args, **_kwargs: {
         "items": [], "sources": [],
     }, raising=False)
@@ -151,10 +153,62 @@ def test_coin_news_reuses_short_ttl_cache_and_refreshes_after_expiry(monkeypatch
     assert first["refresh_seconds"] == news._COIN_CACHE_SECONDS
     assert len(calls) == 4  # two recent queries and two sparse-page archive queries
 
+    # 만료된 캐시는 기다리지 않는다 — 이전 값을 stale 로 바로 주고 배경에서 새로 받는다.
     payload, _expires_at = news._coin_cache["coin:BTC"]
     news._coin_cache["coin:BTC"] = (payload, 0)
-    news.get_coin_news("BTCUSDT")
+    news._coin_envelope_cache.clear()
+    third = news.get_coin_news("BTCUSDT")
+    assert third["stale"] is True and third["refreshing"] is True
+    assert third["items"] == first["items"]
+    thread = news._coin_refresh_threads.get("coin:BTC")
+    if thread is not None:
+        thread.join(timeout=5)
     assert len(calls) == 8
+    assert news._coin_cache["coin:BTC"][1] > 0
+    news._coin_envelope_cache.clear()
+    fourth = news.get_coin_news("BTCUSDT")
+    assert "stale" not in fourth and len(calls) == 8
+
+
+def test_stale_snapshot_is_served_at_once_while_a_background_refresh_runs(monkeypatch):
+    news._coin_cache.clear()
+    item = {
+        "title": "이더리움 업그레이드 소식", "source": "테스트 매체", "url": "https://news.example.com/eth",
+        "published": "2026-08-12T05:00:00+00:00", "published_display": "10분 전",
+    }
+    stored = {"snapshot_id": "snap-1", "collection": {"last_success_ms": 1},
+              "news_payload": {"items": [item], "sources": [], "symbol": "ETH"}}
+    monkeypatch.setattr(news, "_load_latest_coin_snapshot", lambda _symbol: stored)
+    started = []
+    monkeypatch.setattr(news, "_refresh_in_background", lambda key, loader: started.append(key))
+    env = news.get_coin_news("ETHUSDT")
+    assert env["stale"] is True and env["refreshing"] is True
+    assert env["data_source"] == "prefect_db_stale" and env["snapshot_id"] == "snap-1"
+    assert [i["title"] for i in env["items"]] == [item["title"]]
+    assert started == ["coin:ETH"]
+
+
+def test_ready_coin_envelope_is_reused_briefly_without_recomputing(monkeypatch):
+    news._coin_cache.clear()
+    item = {"title": "비트코인 새 소식", "source": "테스트 매체", "url": "https://news.example.com/btc",
+            "published": "2026-08-12T05:00:00+00:00", "published_display": "10분 전"}
+    monkeypatch.setattr(news, "_fetch_news", lambda *_a, **_k: [item])
+    monkeypatch.setattr(news, "_load_latest_coin_snapshot", lambda _symbol: None)
+    localized = []
+
+    def fake_localize(payload):
+        localized.append(payload)
+        return {**payload, "translation": {"status": "ready", "pending_count": 0},
+                "community_summaries": {"status": "ready", "pending_count": 0}}
+
+    monkeypatch.setattr(news, "_localize_news_payload", fake_localize)
+    first = news.get_coin_news("BTCUSDT")
+    seen = len(localized)
+    assert news.get_coin_news("BTCUSDT") == first
+    assert len(localized) == seen  # 45초 안의 두 번째 읽기는 번역 합치기를 다시 돌리지 않는다
+    news._coin_envelope_cache["BTC"] = (first, 0)  # 만료되면 다시 계산한다
+    news.get_coin_news("BTCUSDT")
+    assert len(localized) > seen
 
 
 def test_empty_public_news_is_cached_without_repeated_source_calls(monkeypatch):
@@ -3438,10 +3492,19 @@ def test_stale_snapshot_refreshes_from_rss_using_collection_observation(monkeypa
               "collection": {"last_success_ms": int((news.time.time() - 86400) * 1000)}}
     monkeypatch.setattr(news, "_load_latest_coin_snapshot", lambda _base: stored)
     monkeypatch.setattr(news, "_coin_news_envelope", lambda *_a, **_kw: {"items": [{"title": "새로 수집한 소식"}]})
+    # 오래된 스냅샷은 기다리지 않는다 — 먼저 그대로 주고, 배경 수집이 끝나면 RSS 결과로 바뀐다.
+    result = news.get_coin_news("BTCUSDT")
+    assert result["data_source"] == "prefect_db_stale" and result["refreshing"] is True
+    assert result["items"][0]["title"] == "오래된 소식"
+    thread = news._coin_refresh_threads.get("coin:BTC")
+    if thread is not None:
+        thread.join(timeout=5)
+    news._coin_envelope_cache.clear()
     result = news.get_coin_news("BTCUSDT")
     assert result["data_source"] == "rss_cache"
     assert result["items"][0]["title"] == "새로 수집한 소식"
     stored["collection"]["last_success_ms"] = int(news.time.time() * 1000)
+    news._coin_envelope_cache.clear()
     assert news.get_coin_news("BTCUSDT")["data_source"] == "prefect_db"
 
 

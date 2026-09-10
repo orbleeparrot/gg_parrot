@@ -5,7 +5,7 @@ import { GLOSSARY } from "../lib/glossary.js";
 // Desktop: hover. Mobile/touch: tap toggles (and tap-outside closes).
 // placement: "top" (default) or "bottom" — use "bottom" near the page top where
 // an upward tooltip would be clipped (e.g. the kimchi banner).
-export default function InfoTooltip({ term, text, placement = "top" }) {
+export default function InfoTooltip({ term, text, placement = "top", label = "설명 보기" }) {
   const [open, setOpen] = useState(false);
   const [shift, setShift] = useState(0); // px nudge to keep the bubble on screen
   const ref = useRef(null);
@@ -65,14 +65,14 @@ export default function InfoTooltip({ term, text, placement = "top" }) {
     <span
       ref={ref}
       className="relative inline-flex items-center align-[-0.15em] ml-1"
-      onMouseEnter={() => setOpen(true)}
-      onMouseLeave={() => setOpen(false)}
+      onPointerEnter={(event) => { if (event.pointerType === "mouse") setOpen(true); }}
+      onPointerLeave={(event) => { if (event.pointerType === "mouse") setOpen(false); }}
     >
       {/* 아이콘은 16px 로 두되 실제 히트박스는 ::after 로 32px 까지 넓힌다.
           44px 까지 키우면 문장 안 이웃 글자의 클릭을 가로챈다. */}
       <button
         type="button"
-        aria-label="설명 보기"
+        aria-label={label}
         aria-expanded={open}
         aria-controls={open ? tipId : undefined}
         aria-describedby={open ? tipId : undefined}
@@ -89,9 +89,11 @@ export default function InfoTooltip({ term, text, placement = "top" }) {
           // immediately closing again.
           setOpen(e.detail === 0 ? (value) => !value : !openBeforePointerRef.current);
         }}
-        className="info-trigger relative w-4 h-4 rounded-full bg-slate-200 text-[10px] leading-none text-slate-700 flex items-center justify-center hover:bg-slate-300 after:absolute after:-inset-2 after:content-['']"
+        className="info-trigger relative w-4 h-4 rounded-full text-slate-700 flex items-center justify-center after:absolute after:-inset-2 after:content-['']"
       >
-        ⓘ
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true" focusable="false">
+          <circle cx="12" cy="12" r="9" /><path d="M12 11v6" /><circle cx="12" cy="7.5" r=".9" fill="currentColor" stroke="none" />
+        </svg>
       </button>
       {open && (
         // 툴팁은 실제로 무언가를 덮으므로 그림자를 허용한다(§7 떠 있는 것).

@@ -256,9 +256,24 @@ class User(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     email: str = Field(index=True, unique=True)
     username: str = Field(index=True, unique=True)  # public display id
+    bio: str = ""
+    auth_version: int = 0
+    is_deleted: bool = False
     password_hash: str  # PBKDF2 (see security.py); never returned
     points_balance: int = Field(default=0)  # virtual points (no cash yet)
     created_at: str
+
+
+class UserAvatar(SQLModel, table=True):
+    """One normalized public photo per account, retained on the durable DB.
+
+    Keep image bytes out of User so auth and community queries never load them.
+    A separate table is also safe to add to existing databases with create_all.
+    """
+
+    user_id: int = Field(primary_key=True, foreign_key="user.id")
+    version: str
+    image_data: bytes
 
 
 class PointLedger(SQLModel, table=True):
@@ -657,20 +672,63 @@ class BoardPost(SQLModel, table=True):
     body: str = ""
     image_mime: str = ""  # "" | image/jpeg | image/png
     image_data: Optional[bytes] = Field(default=None)  # 원본 바이트(없으면 None)
+    body_format: str = ""  # "" = 글자 + [사진n] 자리 표시(옛 글) | "html" = 정제된 HTML(편집기, 2026-09-10~)
+    views: int = 0  # 조회수 — 같은 방문자는 30분에 한 번만 센다
+    likes: int = 0  # 추천 수(BoardPostVote 합계를 복제해 둔 것 — 목록 정렬용)
+    dislikes: int = 0
     created_at: str  # UTC ISO
     created_ms: int = Field(index=True, sa_type=BigInteger)
 
 
-class BoardComment(SQLModel, table=True):
-    """게시글 댓글. 리더보드 채팅처럼 계정 없이 '일회성 아이디+비밀번호'로 단다.
+class BoardImage(SQLModel, table=True):
+    """게시글에 붙은 사진 — 글 하나에 여러 장(순서 유지). 바이트를 DB에 두는 이유는 BoardPost 와 같다.
 
-    비밀번호 해시는 본인 삭제 확인에만 쓰고, 절대 응답(view)에 담지 않는다.
+    2026-09-10 부터 새 글의 사진은 전부 여기에 들어간다. BoardPost.image_data 는 그 전 글의 한 장을 그대로 서빙한다.
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    post_id: int = Field(index=True)
+    position: int = 0  # 첨부 순서(0부터)
+    image_mime: str = ""  # image/jpeg | image/png
+    image_data: bytes
+    created_ms: int = Field(sa_type=BigInteger)
+
+
+class BoardPostVote(SQLModel, table=True):
+    """게시글 추천(+1)/비추천(-1) — 로그인 계정당 글 하나에 한 표. 같은 표를 다시 누르면 취소."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    post_id: int = Field(index=True)
+    user_id: int = Field(index=True)
+    value: int  # +1 | -1
+    created_ms: int = Field(sa_type=BigInteger)
+
+
+class BoardReport(SQLModel, table=True):
+    """글·댓글 신고 — 로그인 계정당 대상 하나에 한 번. 운영자가 DB 에서 본다(화면 없음)."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    target_type: str = Field(index=True)  # post | comment
+    target_id: int = Field(index=True)
+    reporter_user_id: int = Field(index=True)
+    reason: str = ""  # spam | abuse | privacy | scam | other
+    detail: str = ""
+    created_ms: int = Field(sa_type=BigInteger)
+
+
+class BoardComment(SQLModel, table=True):
+    """게시글 댓글. 2026-09-10 부터 로그인 계정만 단다(닉네임 = 계정 이름, author_user_id 로 본인 확인).
+
+    그 전의 익명 댓글(author_user_id 없음)은 그대로 보이고, 글쓴이만 지울 수 있다. password_hash 는 옛 행에만 남아 있다.
     """
 
     id: Optional[int] = Field(default=None, primary_key=True)
     post_id: int = Field(index=True)
     username: str = ""
-    password_hash: str = ""  # PBKDF2; 본인 삭제 확인용, 응답에 미포함
+    author_user_id: Optional[int] = Field(default=None, index=True)
+    parent_id: Optional[int] = Field(default=None, index=True)  # 답글이면 부모 댓글(한 단계만)
+    updated_ms: Optional[int] = Field(default=None, sa_type=BigInteger)  # 고친 시각(없으면 원문)
+    password_hash: str = ""  # 옛 익명 댓글의 흔적; 응답에 미포함
     text: str = ""
     created_at: str
     created_ms: int = Field(index=True, sa_type=BigInteger)
@@ -680,6 +738,11 @@ def _migrate() -> None:
     """Add columns introduced after a table was first created (SQLite create_all
     does not ALTER existing tables). Idempotent and safe to run every startup."""
     added = {
+        "user": {
+            "bio": 'ALTER TABLE "user" ADD COLUMN bio TEXT NOT NULL DEFAULT \'\'',
+            "auth_version": 'ALTER TABLE "user" ADD COLUMN auth_version INTEGER NOT NULL DEFAULT 0',
+            "is_deleted": 'ALTER TABLE "user" ADD COLUMN is_deleted BOOLEAN NOT NULL DEFAULT FALSE',
+        },
         "chatmessage": {
             "user_id": "ALTER TABLE chatmessage ADD COLUMN user_id INTEGER",
         },
@@ -769,12 +832,18 @@ def _migrate() -> None:
 
 
 _PG_ADDED_COLUMNS = {
+    "user": {"bio": "TEXT NOT NULL DEFAULT ''", "auth_version": "INTEGER NOT NULL DEFAULT 0", "is_deleted": "BOOLEAN NOT NULL DEFAULT FALSE"},
     "chatmessage": {"user_id": "INTEGER"},
     "dailychallenge": {
         "status": "TEXT DEFAULT 'ready'", "claim_token": "TEXT DEFAULT ''",
         "claimed_ms": "BIGINT DEFAULT 0", "last_error": "TEXT DEFAULT ''",
     },
     "leaderboardentry": {"streak_days": "INTEGER DEFAULT 1", "first_created_ms": "BIGINT"},
+    "boardcomment": {"author_user_id": "INTEGER", "parent_id": "INTEGER", "updated_ms": "BIGINT"},
+    "boardpost": {
+        "body_format": "TEXT NOT NULL DEFAULT ''", "views": "INTEGER NOT NULL DEFAULT 0",
+        "likes": "INTEGER NOT NULL DEFAULT 0", "dislikes": "INTEGER NOT NULL DEFAULT 0",
+    },
     "newstitletranslation": {
         "processing_status": "TEXT DEFAULT 'ready'", "claim_token": "TEXT DEFAULT ''",
         "claimed_ms": "BIGINT DEFAULT 0",
@@ -821,7 +890,7 @@ _PG_BIGINT_COLUMNS = {
 }
 _PG_PRIVATE_CACHE_TABLES = (
     "newstitletranslation", "communitypostsummary", "whaletradestate", "onchainholderstate",
-    "chatmessage", "chatreadstate",
+    "chatmessage", "chatreadstate", "useravatar",
 )
 _PG_MIGRATION_LOCK = 0x6767706172726F74  # Stable across web/worker processes and deployments.
 _PG_MIGRATION_ATTEMPTS = 3
@@ -860,7 +929,8 @@ def _pg_migration_statements(state: dict) -> list[str]:
             continue  # create_all handles a table that has never existed.
         for column, definition in columns.items():
             if (table, column) not in state["columns"]:
-                statements.append(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {definition}")
+                identifier = '"user"' if table == "user" else table
+                statements.append(f"ALTER TABLE {identifier} ADD COLUMN IF NOT EXISTS {column} {definition}")
     for table, columns in _PG_BIGINT_COLUMNS.items():
         for column in columns:
             kind = state["columns"].get((table, column))

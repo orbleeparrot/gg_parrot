@@ -61,7 +61,7 @@
 
 /* ── 목록 표 ── */
 .board-table {
-  --board-cols: 56px minmax(0, 1fr) 128px 72px 56px 56px;
+  --board-cols: 48px minmax(0, 1fr) 128px 72px 56px;
   --board-gap: 16px;
   width: 100%;
   margin: 0;
@@ -73,7 +73,7 @@
 .board-row {
   display: grid;
   grid-template-columns: var(--board-cols);
-  grid-template-areas: "no title author time views likes";
+  grid-template-areas: "likes title author time views";
   align-items: center;
   column-gap: var(--board-gap);
 }
@@ -140,13 +140,17 @@
 .board-time.is-today { color: rgb(var(--c-slate-700)); }
 
 .board-views, .board-col-views { grid-area: views; text-align: right; }
-.board-likes, .board-col-likes { grid-area: likes; text-align: right; }
+/* 추천수는 왼쪽 첫 열(퀘이사존식) — 0 은 흐리게, 1 이상은 브랜드 금색 굵게. */
+.board-likes, .board-col-likes { grid-area: likes; text-align: left; }
 .board-views, .board-likes { color: rgb(var(--c-slate-500)); font-size: 13px; font-weight: 500; }
-.board-likes.is-hot { color: rgb(var(--c-slate-900)); font-weight: 700; }
+.board-likes.is-hot { color: rgb(var(--c-brand-line)); font-weight: 700; }
+/* 내 활동의 글 탭은 번호 | 제목 | 시각 세 열을 그대로 쓴다. */
+.me-posts .board-head, .me-posts .board-row { grid-template-areas: "no title time"; }
 @media (max-width: 639px) {
   /* 두 줄 — 제목 [n] / 글쓴이 · 시각 · 조회 · 추천. 번호는 접는다(모바일 디시·에펨 관례). */
   .board-head { display: none; }
   .board-row { grid-template-columns: minmax(0, 1fr) max-content max-content max-content; grid-template-areas: "title title title title" "author time views likes"; column-gap: 10px; padding: 10px 0; }
+  .board-likes.is-hot { color: rgb(var(--c-brand-line)); }
   .board-title { padding: 0 0 2px; }
   .board-no { display: none; }
   .board-author { font-size: 12px; }
@@ -156,21 +160,19 @@
   .board-views, .board-likes { font-size: 12px; text-align: left; }
 }
 
-/* ── 목록 위 조작 줄: 전체 글 수 | 정렬(segmented) · 필터(칩) · 검색 ── */
-.board-controls { display: flex; align-items: center; justify-content: space-between; gap: 12px 16px; flex-wrap: wrap; margin-bottom: 12px; }
-.board-total { margin: 0; color: rgb(var(--c-slate-500)); font-size: 13px; font-weight: 500; white-space: nowrap; }
-.board-total b { color: rgb(var(--c-slate-900)); font-weight: 700; }
-.board-controls-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.board-controls .seg-item { height: 32px; padding: 0 10px; font-size: 13px; }
-.board-filters { display: flex; gap: 6px; }
-/* 필터의 켜짐은 노랑이 아니라 면 — 이 화면의 노랑은 글쓰기 하나(§1-4). */
-.board-filters .chip-on { background: rgb(var(--c-slate-200)); color: rgb(var(--c-slate-900)); border-color: transparent; }
-.board-search { position: relative; display: flex; }
-.board-search .field { width: 220px; height: 36px; padding-right: 36px; }
-.board-search-btn { position: absolute; right: 2px; top: 2px; width: 32px; height: 32px; display: grid; place-items: center; border-radius: 10px; color: rgb(var(--c-slate-500)); }
-.board-search-btn:hover { color: rgb(var(--c-slate-900)); background: rgb(var(--c-slate-200)); }
-.board-search-btn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-@media (max-width: 639px) { .board-search { width: 100%; } .board-search .field { width: 100%; } }
+/* ── 제목 옆 글 수, 제목 아래 왼쪽 검색(그누보드식), 오른쪽 정렬 + 글쓰기 ── */
+.board-title-count { margin-left: 12px; color: rgb(var(--c-slate-500)); font-size: 15px; font-weight: 500; letter-spacing: 0; vertical-align: 6px; }
+.board-title-count .num { color: rgb(var(--c-slate-700)); font-weight: 600; }
+.board-searchbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.board-searchbar-field { width: 116px; padding-right: 28px; appearance: auto; }
+.board-searchbar-input { width: 240px; }
+.board-sort .seg-item { height: 32px; padding: 0 10px; font-size: 13px; }
+@media (max-width: 639px) {
+  .board-searchbar { display: grid; grid-template-columns: 104px minmax(0, 1fr) auto; }
+  .board-searchbar-field { width: auto; }
+  .board-searchbar-input { width: auto; }
+  .board-sort { order: 2; }
+}
 
 /* 불러오는 동안 — 행 모양 그대로의 뼈대(회전 대신). */
 .board-row.is-skeleton { pointer-events: none; }

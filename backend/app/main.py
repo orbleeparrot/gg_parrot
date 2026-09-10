@@ -1134,11 +1134,11 @@ def board_list(
     size: int = board_mod.PAGE_SIZE_DEFAULT,
     sort: str = "new",
     q: str = "",
-    filter: str = "all",
+    field: str = "all",
     account: Optional[User] = Depends(auth_mod.optional_user),
 ) -> dict:
-    """목록 — sort: new|likes|views|comments, q: 제목+내용 검색, filter: all|image|mine(로그인)."""
-    return board_mod.list_posts(page, size, sort=sort, q=q, filter=filter, viewer_id=account.id if account else None)
+    """목록 — sort: new|likes|views|comments, q: 검색어, field: all(제목+내용)|title|author."""
+    return board_mod.list_posts(page, size, sort=sort, q=q, field=field, viewer_id=account.id if account else None)
 
 
 def _board_view_key(request: Request) -> str:

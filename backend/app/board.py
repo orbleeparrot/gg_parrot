@@ -350,11 +350,11 @@ def create_post(user: User, title: str, body: str, images: list[tuple[bytes, str
 
 
 SORTS = {"new", "likes", "views", "comments"}
-FILTERS = {"all", "image", "mine"}
+SEARCH_FIELDS = {"all", "title", "author"}  # 제목+내용 | 제목 | 글쓴이
 
 
 def list_posts(page: int = 1, size: int = PAGE_SIZE_DEFAULT, sort: str = "new", q: str = "",
-               filter: str = "all", viewer_id: int | None = None) -> dict:
+               field: str = "all", viewer_id: int | None = None) -> dict:
     """한 쪽의 목록을 **쿼리 한 번**으로 만든다.
 
     예전엔 전체 id 목록 → 글 행(사진 원본 바이트까지) → 댓글 행, 세 번을 오갔다. Render→Supabase 왕복이
@@ -364,8 +364,16 @@ def list_posts(page: int = 1, size: int = PAGE_SIZE_DEFAULT, sort: str = "new", 
     page = max(1, int(page or 1))
     size = max(1, min(int(size or PAGE_SIZE_DEFAULT), PAGE_SIZE_MAX))
     sort = sort if sort in SORTS else "new"
-    filter = filter if filter in FILTERS else "all"
+    field = field if field in SEARCH_FIELDS else "all"
     q = (q or "").strip()[:80]
+
+    def search_clause():
+        needle = f"%{q}%"
+        if field == "title":
+            return BoardPost.title.ilike(needle)
+        if field == "author":
+            return BoardPost.author_name.ilike(needle)
+        return or_(BoardPost.title.ilike(needle), BoardPost.body.ilike(needle))
     comment_counts = (
         select(BoardComment.post_id.label("post_id"), func.count(BoardComment.id).label("n"))
         .group_by(BoardComment.post_id)
@@ -398,12 +406,7 @@ def list_posts(page: int = 1, size: int = PAGE_SIZE_DEFAULT, sort: str = "new", 
         .outerjoin(UserAvatar, UserAvatar.user_id == BoardPost.author_user_id)
     )
     if q:
-        needle = f"%{q}%"
-        statement = statement.where(or_(BoardPost.title.ilike(needle), BoardPost.body.ilike(needle)))
-    if filter == "image":
-        statement = statement.where((func.coalesce(func.length(BoardPost.image_data), 0) > 0) | (func.coalesce(image_counts.c.n, 0) > 0))
-    elif filter == "mine":
-        statement = statement.where(BoardPost.author_user_id == (viewer_id if viewer_id is not None else -1))
+        statement = statement.where(search_clause())
     order = {
         "new": (BoardPost.created_ms.desc(),),
         "likes": (BoardPost.likes.desc(), BoardPost.created_ms.desc()),
@@ -416,14 +419,9 @@ def list_posts(page: int = 1, size: int = PAGE_SIZE_DEFAULT, sort: str = "new", 
         if rows:
             total = int(rows[0].total)
         else:
-            count_stmt = select(func.count(BoardPost.id)).outerjoin(image_counts, image_counts.c.post_id == BoardPost.id)
+            count_stmt = select(func.count(BoardPost.id))
             if q:
-                needle = f"%{q}%"
-                count_stmt = count_stmt.where(or_(BoardPost.title.ilike(needle), BoardPost.body.ilike(needle)))
-            if filter == "image":
-                count_stmt = count_stmt.where((func.coalesce(func.length(BoardPost.image_data), 0) > 0) | (func.coalesce(image_counts.c.n, 0) > 0))
-            elif filter == "mine":
-                count_stmt = count_stmt.where(BoardPost.author_user_id == (viewer_id if viewer_id is not None else -1))
+                count_stmt = count_stmt.where(search_clause())
             total = int(db.exec(count_stmt).one() or 0)
         items = [
             {
@@ -448,7 +446,7 @@ def list_posts(page: int = 1, size: int = PAGE_SIZE_DEFAULT, sort: str = "new", 
         "items": items,
         "sort": sort,
         "q": q,
-        "filter": filter,
+        "field": field,
         "page": page,
         "size": size,
         "total": total,

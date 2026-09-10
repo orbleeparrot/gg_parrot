@@ -199,11 +199,11 @@ export const api = {
   },
 
   // 껄무새 게시판
-  boardList: (page = 1, size = 10, { sort = "new", q = "", filter = "all" } = {}) => {
+  boardList: (page = 1, size = 10, { sort = "new", q = "", field = "all" } = {}) => {
     const params = new URLSearchParams({ page: String(page), size: String(size) });
     if (sort && sort !== "new") params.set("sort", sort);
     if (q) params.set("q", q);
-    if (filter && filter !== "all") params.set("filter", filter);
+    if (q && field && field !== "all") params.set("field", field);
     return req(`/api/board/posts?${params}`);
   },
   boardVote: (id, value) => req(`/api/board/posts/${id}/vote`, { method: "POST", body: JSON.stringify({ value }) }),

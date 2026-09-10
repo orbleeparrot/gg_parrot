@@ -200,12 +200,11 @@ def test_votes_views_sort_search_and_filter():
     ids = lambda **kw: [p["id"] for p in client.get("/api/board/posts", params=kw, headers=_auth(author)).json()["items"]]
     assert ids(sort="likes")[0] == a["id"]
     assert ids(sort="views")[0] == b["id"]
-    assert ids(q="이더리움") == [a["id"]]  # 본문 검색
+    assert ids(q="이더리움") == [a["id"]]  # 제목+내용
+    assert ids(q="이더리움", field="title") == []  # 제목만
     assert ids(q="잡담") == [b["id"]]
-    assert ids(filter="image")[:1] == [b["id"]] and a["id"] not in ids(filter="image")
-    mine = ids(filter="mine")
-    assert a["id"] in mine and b["id"] in mine
-    assert [p["id"] for p in client.get("/api/board/posts", params={"filter": "mine"}).json()["items"]] == []  # 로그인 없으면 빈 목록
+    author_name = client.get(f"/api/board/posts/{a['id']}").json()["author_name"]
+    assert set(ids(q=author_name, field="author")) == {a["id"], b["id"]}  # 글쓴이
     listed = client.get("/api/board/posts", params={"q": "잡담"}).json()
     assert listed["total"] == 1 and listed["items"][0]["views"] == 2 and listed["items"][0]["likes"] == 0
     # 댓글에 created_ms 가 실린다

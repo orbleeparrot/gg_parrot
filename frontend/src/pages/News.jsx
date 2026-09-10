@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api.js";
 import useNewsBriefings from "../hooks/useNewsBriefings.js";
@@ -329,7 +329,41 @@ function RacerMobileList({ coins, newsBySymbol, onRetry }) {
         {status === "queued" || status === "loading" ? <p className="news-racer-mobile-state" role="status">{base} 뉴스를 불러오는 중…</p> : null}
         {status === "error" ? <div className="news-racer-mobile-state is-error" role="alert"><p>뉴스를 불러오지 못했어요.</p><button type="button" className="btn btn-s btn-secondary" onClick={() => onRetry(selected.symbol)}>다시 시도</button></div> : null}
         {status === "success" && !items.length && !pending ? <p className="news-racer-mobile-state">최근 {base} 뉴스가 없어요.</p> : null}
-        {items.length > 0 ? <ul className="news-racer-mobile-articles">
+        {items.length > 0 ? <MobileArticleList key={selected.symbol} base={base} items={items} /> : null}
+        {pending ? <TranslationPending data={newsState.data} /> : null}
+      </section>
+    </div>
+  );
+}
+
+function MobileArticleList({ base, items }) {
+  const listRef = useRef(null);
+
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!list) return undefined;
+    list.scrollTop = 0;
+
+    const measure = () => {
+      const visibleRows = [...list.children].slice(0, 3);
+      const height = visibleRows.reduce((sum, row) => sum + row.getBoundingClientRect().height, 0);
+      list.style.setProperty("--news-racer-mobile-articles-height", `${Math.ceil(height)}px`);
+    };
+
+    measure();
+    if (typeof ResizeObserver === "undefined") return undefined;
+    const observer = new ResizeObserver(measure);
+    [...list.children].slice(0, 3).forEach((row) => observer.observe(row));
+    return () => observer.disconnect();
+  }, [items]);
+
+  return (
+    <ul
+      ref={listRef}
+      className="news-racer-mobile-articles"
+      aria-label={`${base} 뉴스 목록`}
+      tabIndex={items.length > 3 ? 0 : undefined}
+    >
           {items.map((item, index) => {
             const summary = communitySummaryPresentation(item);
             return (
@@ -342,10 +376,7 @@ function RacerMobileList({ coins, newsBySymbol, onRetry }) {
               </li>
             );
           })}
-        </ul> : null}
-        {pending ? <TranslationPending data={newsState.data} /> : null}
-      </section>
-    </div>
+    </ul>
   );
 }
 

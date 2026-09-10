@@ -31,8 +31,9 @@ class Handler(SimpleHTTPRequestHandler):
         pass
 
 
-def article(symbol):
-    return {"title": f"{symbol.removesuffix('USDT')} 거래량 증가와 시장 참여 확대에 대한 최신 소식", "source": "검증 뉴스", "url": f"https://fixture.invalid/{symbol}", "published_display": "10분 전"}
+def article(symbol, index=0):
+    suffix = f" {index + 1}" if index else ""
+    return {"title": f"{symbol.removesuffix('USDT')} 거래량 증가와 시장 참여 확대에 대한 최신 소식{suffix}", "source": "검증 뉴스", "url": f"https://fixture.invalid/{symbol}/{index}", "published_display": "10분 전"}
 
 
 class Fixture:
@@ -60,6 +61,7 @@ class Fixture:
         elif path.startswith("/api/news/coin/"):
             symbol = path.rsplit("/", 1)[-1]
             data = {"items": [article(symbol)], "translation": {"status": "ready"}}
+            if symbol == "BTCUSDT": data["items"] = [article(symbol, index) for index in range(5)]
             if symbol == "ETHUSDT" and self.hold_eth:
                 self.held.append((route, data))
                 return
@@ -113,9 +115,26 @@ def main():
                         assert long_ticker.evaluate("el => el.scrollWidth <= el.clientWidth + 1")
                         metrics = page.locator(".news-racer-mobile-row").evaluate_all("""rows => rows.map(row => ({height:row.getBoundingClientRect().height, overflow:row.scrollWidth>row.clientWidth, font:parseFloat(getComputedStyle(row.querySelector('.news-racer-mobile-price')).fontSize)}))""")
                         assert all(row["height"] >= 48 and not row["overflow"] and row["font"] >= 13 for row in metrics), metrics
-                        expect(page.locator("#news-racer-mobile-reader a").filter(has_text="BTC 거래량")).to_be_visible()
+                        expect(page.locator("#news-racer-mobile-reader a").filter(has_text="BTC 거래량").first).to_be_visible()
+                        article_list = page.get_by_role("list", name="BTC 뉴스 목록")
+                        expect(article_list.locator(":scope > li")).to_have_count(5)
+                        list_metrics = article_list.evaluate("""list => {
+                          const rows = [...list.children].map(row => row.getBoundingClientRect());
+                          const box = list.getBoundingClientRect();
+                          return {clientHeight:list.clientHeight,scrollHeight:list.scrollHeight,scrollTop:list.scrollTop,
+                            thirdBottom:rows[2].bottom,fourthTop:rows[3].top,bottom:box.bottom,overflow:getComputedStyle(list).overflowY};
+                        }""")
+                        assert list_metrics["scrollHeight"] > list_metrics["clientHeight"], list_metrics
+                        assert list_metrics["thirdBottom"] <= list_metrics["bottom"] + 1, list_metrics
+                        assert list_metrics["fourthTop"] >= list_metrics["bottom"] - 1, list_metrics
+                        assert list_metrics["overflow"] == "auto", list_metrics
+                        if width in (320, 375):
+                            article_list.screenshot(path=str(OUTPUT / f"three-news-{width}-{theme}.png"), animations="disabled")
+                        article_list.evaluate("list => { list.scrollTop = list.scrollHeight; }")
+                        assert article_list.evaluate("list => list.scrollTop > 0")
                         page.locator(".news-racer-mobile-row").nth(4).click()
                         expect(page.get_by_role("heading", name="SOL 뉴스", exact=True)).to_be_visible()
+                        assert page.get_by_role("list", name="SOL 뉴스 목록").get_attribute("tabindex") is None
                         expect(page.locator(".news-racer-mobile-summary p")).to_have_text(SUMMARY)
                         expect(page.locator(".news-racer-mobile-article-meta")).to_contain_text("과거 게시글 · 2022.01.02")
                         expect(page.locator(".news-racer-mobile-reader-head a")).to_have_attribute("href", "/builder?symbol=SOLUSDT")

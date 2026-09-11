@@ -233,6 +233,20 @@ export default function Studio() {
   useEffect(() => { loadTestLimits().catch(() => {}); }, [loadTestLimits]);
   const testBudget = useMemo(() => backtestBudget(form, testLimits), [form, testLimits]);
   const budgetBlocked = !!testBudget && !testBudget.allowed;
+  // 봉 간격 선택지 — 지금 테스트 기간에서 봉 수 한도를 넘는 간격은 고를 수 없게. 한도 숫자는 보여 주지 않는다.
+  const intervalOptions = useMemo(() => CANDLE_INTERVALS.map((option) => {
+    if (!testLimits) return option;
+    const budget = backtestBudget({ ...form, candle_interval: option.value }, testLimits);
+    const blocked = !!budget && !budget.allowed && !budget.error;
+    return blocked ? { ...option, disabled: true, title: "이 테스트 기간에서는 봉이 너무 많아 고를 수 없어요" } : option;
+  }), [form, testLimits]);
+  const disabledIntervals = useMemo(() => intervalOptions.filter((option) => option.disabled).map((option) => ({ value: option.value, title: option.title })), [intervalOptions]);
+  // 기간을 늘려 지금 간격이 불가능해지면 가능한 다음 간격으로 옮긴다 — 불가능한 조합을 들고 있지 않게.
+  useEffect(() => {
+    if (!testBudget || testBudget.allowed || testBudget.error) return;
+    const larger = testBudget.suggestions.find((choice) => choice.kind === "interval");
+    if (larger) setForm((previous) => ({ ...previous, ...larger.patch }));
+  }, [testBudget]);
 
   const valErr = validate(form);
   const currentMacro = useMemo(() => buildMacro(form), [form]);
@@ -794,7 +808,7 @@ export default function Studio() {
             </div>
           </div>
           <div className="studio-scroll studio-cond-body">
-            <Builder form={form} setForm={setForm} variant="dense" />
+            <Builder form={form} setForm={setForm} variant="dense" intervalOptions={intervalOptions} />
           </div>
           <div className="studio-cond-foot">
             {/* 안내·오류는 한 번에 하나, 경고 상자 하나로 — 오류 > 범위 확인 실패 > 입력 오류 > 범위 초과 > 조건 바뀜. */}
@@ -813,7 +827,7 @@ export default function Studio() {
               {testLabel}
             </button>
             <div className="studio-foot-note t-caption text-slate-500">
-              <span>{testBudget?.bars != null ? <>{intervalLabel}봉 <b className="num">{testBudget.bars.toLocaleString()}</b>개 / 최대 <span className="num">{testBudget.maxBars.toLocaleString()}</span></> : "첫 결과 뒤부터 자동 테스트가 동작해요"}</span>
+              <span>첫 결과 뒤부터 자동 테스트가 동작해요</span>
               <span>
                 <kbd className="num rounded border border-slate-300 bg-slate-100 px-1">Ctrl</kbd>+<kbd className="num rounded border border-slate-300 bg-slate-100 px-1">Enter</kbd>
               </span>
@@ -836,6 +850,7 @@ export default function Studio() {
                   onIntervalChange={(value) => setForm((f) => ({ ...f, candle_interval: value }))}
                   overlay={overlay}
                   variant="studio"
+                  disabledIntervals={disabledIntervals}
                 />
               ))
             ) : (

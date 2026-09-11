@@ -164,7 +164,8 @@ function SymbolChips({ value, onChange, placeholder }) {
 // `chartSlot(basicSettings)` 은 기본 설정을 감싸 참고 차트와 한 블록으로 묶는
 // 래퍼다. Studio 가 넘겨준다 — 폼 컴포넌트가 차트·시세 폴링까지 끌어안지 않도록
 // 자리만 비워 둔다. 넘어오지 않으면 기본 설정만 그대로 그린다.
-export default function Builder({ form, setForm, chartSlot = null, variant = "default" }) {
+// intervalOptions — 봉 간격 선택지를 밖에서 준다(예: 테스트 기간에서 봉 수 한도를 넘는 간격은 disabled + title).
+export default function Builder({ form, setForm, chartSlot = null, variant = "default", intervalOptions = null }) {
   const dense = variant === "dense";
   // 격자 — 기본은 sm 에서 2·3열, 촘촘한 판은 늘 2열.
   const g2 = dense ? "bd-grid" : "grid grid-cols-1 sm:grid-cols-2 gap-4";
@@ -227,7 +228,7 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
     <Field key={k} label={label} term={opts.term} hint={opts.hint} anchor={opts.anchor}>
       <select className={inputCls} value={form[k]} onChange={set(k)}>
         {options.map((o) => (
-          <option key={o.value} value={o.value}>{o.label}</option>
+          <option key={o.value} value={o.value} disabled={!!o.disabled} title={o.title}>{o.label}{o.disabled ? " · 불가" : ""}</option>
         ))}
       </select>
     </Field>
@@ -308,7 +309,7 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
       </select>
     </Field>
   );
-  const intervalField = sel("candle_interval", "봉 간격", CANDLE_INTERVALS, {
+  const intervalField = sel("candle_interval", "봉 간격", intervalOptions || CANDLE_INTERVALS, {
     term: "candle_interval",
     anchor: "interval",
     hint: meta.indicator ? "지표 계산 기준(필수)" : "체결 판정 기준",

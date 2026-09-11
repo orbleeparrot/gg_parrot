@@ -126,8 +126,11 @@ export default function CandleChart({
   // "studio" — 직접 만들기 워크벤치용. 도구줄 한 줄(종목·시세 · 봉 간격 segmented · 확대 · 범례),
   // 시세 읽기(OHLC)는 그림 위에 겹치고, 그림은 판 크기를 재서 꽉 채운다(스크롤 없음).
   variant = "default",
+  // 고를 수 없는 봉 간격(예: 테스트 기간에서 봉 수 한도를 넘는 것) — [{ value, title }]. 도구줄 segmented 에서 비활성.
+  disabledIntervals = [],
 }) {
   const studio = variant === "studio";
+  const disabledIntervalMap = Object.fromEntries((disabledIntervals || []).map((item) => [item.value, item.title || "이 테스트 기간에서는 고를 수 없어요"]));
   const [localInterval, setLocalInterval] = useState(defaultInterval);
   const [candles, setCandles] = useState(null);
   const [error, setError] = useState("");
@@ -332,6 +335,8 @@ export default function CandleChart({
                   type="button"
                   onClick={() => changeInterval(o.value)}
                   aria-pressed={interval === o.value}
+                  disabled={!!disabledIntervalMap[o.value]}
+                  title={disabledIntervalMap[o.value]}
                   className={"seg-item " + (interval === o.value ? "seg-item-on" : "")}
                 >
                   {o.label}

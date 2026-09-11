@@ -1,6 +1,10 @@
 // Beginner-friendly term explanations (no jargon). One place to edit/translate.
 // Used by <InfoTooltip term="..."> everywhere the terms appear.
 export const GLOSSARY = {
+  symbols:
+    "확인할 코인의 티커예요(예: BTCUSDT). 여러 종목을 넣으면 자금을 종목 수만큼 균등하게 나눠 각각 따로 돌려요.",
+  position:
+    "롱은 오를 거라고 보고 사두는 것(싸게 사서 비싸게 팔면 이익), 숏은 내릴 거라고 보고 미리 파는 것(비쌀 때 팔고 싸질 때 되사면 이익 · 하락에 베팅)이에요. 전략에 따라 숏이 막혀 있을 수 있어요.",
   long: "가격이 오를 거라고 예상하고 사두는 것. 싸게 사서 비싸게 팔면 이익이에요.",
   short:
     "가격이 내릴 거라고 예상하고 미리 파는 것. 비쌀 때 팔고 싸질 때 되사면 이익이에요. (하락에 베팅)",

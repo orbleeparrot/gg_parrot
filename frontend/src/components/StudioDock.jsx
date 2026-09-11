@@ -1,0 +1,487 @@
+// 직접 만들기 결과 독 — 다섯 탭의 화면. 데이터는 공용 부품(ResultView·OptimizePanel·PaperPanel)의
+// 것과 같고, 화면만 워크벤치 시안대로 그린다: 수치 띠 · 자산곡선 · 열 지도 · 상태 상자 · 세 갈래 결과.
+// 스타일은 pages/Studio.css 의 .sd-* .
+import { useState } from "react";
+import { Link } from "react-router-dom";
+import { api } from "../api.js";
+import EquityChart from "./EquityChart.jsx";
+import InfoTooltip from "./InfoTooltip.jsx";
+import { heatStyle, HeatLegend, verdict } from "./OptimizePanel.jsx";
+import { useMacroActions } from "./PaperPanel.jsx";
+import { fmtMoney, fmtMoneyCompact, fmtKrw, fmtPrice, fmtQty, quoteOf, baseOf } from "../lib/format.js";
+import { buildMacro, RULE_TYPES, CANDLE_INTERVALS } from "../lib/macro.js";
+import { useUsdKrw } from "../lib/usdkrw.js";
+
+const AI_MASCOT = "/brand/navigation/ggparrot-nav-agent.svg";
+const SIDE_KO = { buy: "매수", sell: "매도", short: "숏 진입", cover: "숏 청산" };
+const SIDE_CLS = { buy: "is-buy", short: "is-buy", sell: "is-sell", cover: "is-sell" };
+const pct = (v, digits = 2) => `${v >= 0 ? "+" : ""}${Number(v).toFixed(digits)}%`;
+const tone = (v) => (v >= 0 ? "text-green-600" : "text-red-600");
+
+// ── 탭 줄 — 밑줄 탭 + 상태 점(빈 · 초록=완료 · 호박=조건 바뀜 · 노랑 깜박임=진행 중) ──
+export function StudioTabs({ tabs, active, onChange }) {
+  return (
+    <div className="sd-tabs" role="tablist" aria-label="결과 보기">
+      {tabs.map((tab) => (
+        <button
+          key={tab.id}
+          type="button"
+          role="tab"
+          id={`studio-tab-${tab.id}`}
+          aria-selected={active === tab.id}
+          aria-controls="studio-dock-panel"
+          disabled={!tab.enabled}
+          title={!tab.enabled ? "백테스트 결과가 있어야 볼 수 있어요" : undefined}
+          onClick={() => onChange(tab.id)}
+          className={"sd-tab" + (active === tab.id ? " is-on" : "")}
+        >
+          <i className={"studio-dot" + (tab.dot ? ` is-${tab.dot}` : "")} aria-hidden="true" />
+          {tab.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ── 백테스트 — 수치 여섯 칸 + 자산곡선 + 종목별 표 ──
+export function StudioBacktest({ result: r, perSymbol, summary, dataSource, periodLabel, symbol, leverage = 1 }) {
+  const { rate: krwRate } = useUsdKrw();
+  const quote = quoteOf(symbol);
+  const bh = r.buy_hold_return_pct != null ? r.buy_hold_return_pct : null;
+  const vsHold = bh !== null ? r.final_return_pct - bh : null;
+  const liq = r.liquidation_count || 0;
+  const kpis = [
+    { k: "수익률", term: "backtest", v: pct(r.final_return_pct), cls: tone(r.final_return_pct),
+      d: `${fmtMoneyCompact(r.initial_capital, symbol)} → ${fmtMoneyCompact(r.final_equity, symbol)}` },
+    { k: "최대낙폭 (MDD)", term: "mdd", v: `-${r.mdd_pct.toFixed(1)}%`, cls: "text-red-600",
+      d: `최대 연속손절 ${r.max_consecutive_losses || 0}회` },
+    { k: "홀딩 대비", term: "buy_hold", v: vsHold === null ? "—" : `${vsHold >= 0 ? "+" : ""}${vsHold.toFixed(1)}%p`, cls: vsHold === null ? "" : tone(vsHold),
+      d: bh === null ? "비교 기준 없음" : `그냥 들고 있으면 ${pct(bh)}` },
+    { k: "거래", v: `${r.total_trades}회`, cls: "", d: `승률 ${r.win_rate_pct.toFixed(1)}%`, term: "win_rate" },
+    { k: "샤프 · 손익비", term: "sharpe", v: `${r.sharpe != null ? r.sharpe.toFixed(2) : "—"} · ${r.profit_factor != null ? r.profit_factor.toFixed(2) : "—"}`,
+      cls: r.sharpe != null && r.sharpe >= 1 ? "text-green-600" : "", d: "둘 다 1 이상이면 양호" },
+    { k: "청산 위험", term: "liquidation", v: liq > 0 ? `${liq}회 청산` : "없음", cls: liq > 0 ? "text-red-600" : "",
+      d: leverage > 1 ? `${leverage}배 · 가격 ${(100 / leverage).toFixed(leverage >= 100 ? 2 : 1)}% 반대면 청산` : "1배 · 현물과 같음" },
+  ];
+  return (
+    <div className="sd-bt">
+      <div className="sd-kpis">
+        {kpis.map((kpi) => (
+          <div key={kpi.k} className="sd-kpi">
+            <div className="sd-kpi-k">{kpi.k}{kpi.term && <InfoTooltip term={kpi.term} />}</div>
+            <div className={"sd-kpi-v num " + kpi.cls}>{kpi.v}</div>
+            <div className="sd-kpi-d num">{kpi.d}</div>
+          </div>
+        ))}
+      </div>
+
+      {liq > 0 && (
+        <div className="alert alert-risk sd-liq">
+          <div className="t-title">기간 중 <span className="num">{liq}</span>번 청산됐어요 (전액 손실)</div>
+          <div className="mt-1 t-small">
+            레버리지 <span className="num">{leverage}</span>배라 청산으로 잃은 금액 <b className="num">{fmtMoney(r.liquidated_loss || 0, symbol)}</b>
+            {fmtKrw(r.liquidated_loss || 0, krwRate) && <span className="num"> ({fmtKrw(r.liquidated_loss || 0, krwRate)})</span>}.
+            <InfoTooltip term="liquidation" />
+          </div>
+        </div>
+      )}
+
+      <div className="sd-two">
+        <div className="sd-eq">
+          <div className="sd-cap">자산곡선{periodLabel ? ` · ${periodLabel}` : ""} · 파선이 본전</div>
+          <EquityChart curve={r.equity_curve} />
+        </div>
+        <div className="sd-side">
+          <table className="sd-table">
+            <thead>
+              <tr><th>종목</th><th className="r">수익률</th><th className="r">MDD</th><th className="r">거래</th></tr>
+            </thead>
+            <tbody>
+              {perSymbol && perSymbol.length > 0 ? (
+                perSymbol.map((row) => (
+                  <tr key={row.symbol}>
+                    <td className="num">{row.symbol}</td>
+                    <td className={"r num " + tone(row.final_return_pct)}>{pct(row.final_return_pct)}</td>
+                    <td className="r num">-{Number(row.mdd_pct).toFixed(1)}%</td>
+                    <td className="r num">{row.total_trades}</td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td className="num">{symbol}</td>
+                  <td className={"r num " + tone(r.final_return_pct)}>{pct(r.final_return_pct)}</td>
+                  <td className="r num">-{r.mdd_pct.toFixed(1)}%</td>
+                  <td className="r num">{r.total_trades}</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+          <p className="sd-note">
+            {perSymbol && perSymbol.length > 1 ? "위 큰 수치는 종목별을 합산한 포트폴리오 전체 결과예요." : "종목을 더 넣으면 여기서 종목별로 갈라 보고, 위 큰 수치는 합산이에요."}
+          </p>
+          {summary && <p className="sd-note sd-summary">{summary}</p>}
+          {r.same_bar_sl_bars > 0 && (
+            <p className="sd-note text-amber-700">
+              한 봉에서 익절·손절이 같이 닿은 봉 <span className="num">{r.same_bar_sl_bars}</span>개 — 보수적으로 손절 우선으로 처리했어요.
+            </p>
+          )}
+          {dataSource && (
+            <p className="sd-note">
+              데이터: {dataSource === "binance-futures" ? "바이낸스 선물(USDT-M) 실제 캔들" : dataSource}
+              {dataSource === "synthetic" && " (오프라인 폴백 · 합성 데이터)"}
+              {fmtKrw(r.final_equity, krwRate) ? ` · 최종 ${fmtKrw(r.final_equity, krwRate)}` : ""}
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── 껄무새 AI 해설 — 얼굴 + 머리말 + 요점 + 이 매크로를 쓴다면. 규칙 기반 문장은 보이지 않는다(분석하기를 누르면 AI). ──
+export function StudioAiExplain({ explanation, onAiExplain, aiBusy, aiError }) {
+  const isAi = explanation && explanation.source === "ai";
+  return (
+    <div className="sd-ai">
+      <img src={AI_MASCOT} alt="" width="256" height="256" className="sd-ai-face" aria-hidden="true" draggable="false" />
+      <div className="sd-ai-body">
+        <div className="sd-ai-who">
+          껄무새 AI 해설
+          <small>{isAi ? "이 결과가 왜 이렇게 나왔는지 · 5줄 안으로" : "이 결과가 왜 이렇게 나왔는지 쉽게 정리해 드려요"}</small>
+        </div>
+        {isAi ? (
+          <>
+            <p className="sd-ai-head">{explanation.headline}</p>
+            {explanation.points?.length > 0 && (
+              <ul className="sd-ai-points">
+                {explanation.points.map((point, index) => <li key={index}>{point}</li>)}
+              </ul>
+            )}
+            {explanation.lesson && (
+              <p className="sd-ai-lesson"><b>이 매크로를 쓴다면 · </b>{explanation.lesson}</p>
+            )}
+            {explanation.disclaimer && <p className="sd-note">{explanation.disclaimer}</p>}
+          </>
+        ) : (
+          <p className="sd-ai-empty">
+            버튼을 누르면 서버의 AI 가 백테스트 결과의 원인을 짚어요 — 어디서 벌고 어디서 잃었는지, 무엇을 조심할지, 어떤 값을 바꿔 볼지.
+          </p>
+        )}
+        {aiError && <p className="sd-note text-amber-700" role="alert">{aiError}</p>}
+        <div className="sd-ai-actions">
+          <button type="button" onClick={onAiExplain} disabled={aiBusy} className="btn btn-m btn-secondary">
+            {aiBusy ? "분석 중…" : isAi ? "다시 분석" : "AI 로 분석하기"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── 익·손절 최적화 — 열 지도(왼쪽) + 최적·검증·주의·적용(오른쪽) ──
+export function StudioOptimize({ form, setForm, valErr, onResult }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [data, setData] = useState(null);
+
+  async function run() {
+    setError("");
+    if (valErr) return setError(valErr);
+    setBusy(true);
+    try {
+      const res = await api.optimize(buildMacro(form));
+      setData(res);
+      onResult?.(res);
+    } catch (e) {
+      setError(String(e.message || e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  const apply = (tp, sl) => setForm((f) => ({ ...f, take_profit_pct: tp, stop_loss_pct: sl, use_stop_loss: true }));
+
+  const returns = data ? data.cells.map((c) => c.final_return_pct) : [];
+  const extent = returns.length ? Math.max(...returns.map((v) => Math.abs(v))) : 0;
+  const cellAt = (tp, sl) => data?.cells.find((c) => c.tp === tp && c.sl === sl) || null;
+  const best = data?.best || null;
+  const current = data?.current || null;
+  const currentCell = current ? cellAt(current.tp, current.sl) : null;
+  const isCurrent = (tp, sl) => current && current.tp === tp && current.sl === sl;
+  const isBest = (tp, sl) => best && best.tp === tp && best.sl === sl;
+  const bestApplied = best && Number(form.take_profit_pct) === best.tp && Number(form.stop_loss_pct) === best.sl && form.use_stop_loss;
+  const info = best ? verdict(best, data.validation) : null;
+
+  if (!data) {
+    return (
+      <div className="sd-empty">
+        <b>익절 × 손절 조합을 모두 돌려 봐요</b>
+        <span>기간을 학습과 검증으로 나눠, 학습에서 고른 값이 고를 때 쓰지 않은 검증 구간에서도 통했는지까지 확인해요. 칸을 누르면 조건에 바로 적용돼요.</span>
+        {error && <span className="text-red-600">오류: {error}</span>}
+        <button type="button" onClick={run} disabled={busy || !!valErr} className="btn btn-m btn-secondary">
+          {busy ? "최적화 중…" : "최적화 돌려보기"}
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="sd-opt">
+      <div className="sd-opt-grid">
+        <div className="sd-opt-head">
+          <b>손절 ＼ 익절 · 학습 구간 수익률 <InfoTooltip term="optimize" /></b>
+          <span>칸을 누르면 조건에 적용돼요</span>
+        </div>
+        <div className="sd-heat" style={{ gridTemplateColumns: `52px repeat(${data.tp_values.length}, minmax(0, 1fr))` }}>
+          <div className="sd-heat-h" />
+          {data.tp_values.map((tp) => <div key={`h-${tp}`} className="sd-heat-h num">{tp}%</div>)}
+          {data.sl_values.map((sl) => (
+            <>
+              <div key={`r-${sl}`} className="sd-heat-h num">{sl}%</div>
+              {data.tp_values.map((tp) => {
+                const c = cellAt(tp, sl);
+                if (!c) return <div key={`${tp}-${sl}`} />;
+                return (
+                  <button
+                    key={`${tp}-${sl}`}
+                    type="button"
+                    onClick={() => apply(tp, sl)}
+                    style={heatStyle(c.final_return_pct, extent)}
+                    className={"sd-heat-c num" + (isBest(tp, sl) ? " is-best" : "") + (isCurrent(tp, sl) ? " is-current" : "")}
+                    title={
+                      `익절 ${tp}% · 손절 ${sl}%\n학습 ${pct(c.final_return_pct)} · MDD -${c.mdd_pct.toFixed(1)}% · 샤프 ${c.sharpe ?? "—"} · 매매 ${c.total_trades}회\n` +
+                      (c.oos_return_pct != null ? `검증 ${pct(c.oos_return_pct)} (매매 ${c.oos_trades}회)\n` : "검증 구간 없음 (기간이 짧아요)\n") +
+                      "누르면 조건에 적용"
+                    }
+                  >
+                    <span>{pct(c.final_return_pct, 1)}</span>
+                    {c.oos_return_pct != null && <small>검증 {pct(c.oos_return_pct, 1)}</small>}
+                  </button>
+                );
+              })}
+            </>
+          ))}
+        </div>
+        <div className="sd-opt-legend">
+          <HeatLegend extent={extent} />
+          <span className="sd-opt-marks"><i className="is-best" /> 최적 <i className="is-current" /> 지금 설정</span>
+        </div>
+      </div>
+
+      <div className="sd-opt-side">
+        {best && (
+          <div className="sd-box">
+            <div className="sd-box-k">★ 최적 · 학습 구간</div>
+            <div className="sd-box-v">익절 <span className="num">{best.tp}%</span> · 손절 <span className="num">{best.sl}%</span></div>
+            <div className="sd-box-d num">학습 {pct(best.final_return_pct)} · MDD -{best.mdd_pct.toFixed(1)}% · 매매 {best.total_trades}회</div>
+          </div>
+        )}
+        {best && data.validation?.split && best.oos_return_pct != null && (
+          <div className="sd-box">
+            <div className="sd-box-k">검증 구간 · 고를 때 쓰지 않은 {data.validation.test_label}</div>
+            <div className={"sd-box-v num " + tone(best.oos_return_pct)}>
+              {pct(best.oos_return_pct)}
+              {currentCell?.oos_return_pct != null && <small className="text-slate-500"> · 지금 설정 {pct(currentCell.oos_return_pct)}</small>}
+            </div>
+            <div className="sd-box-d num">매매 {best.oos_trades}회{data.validation.overfit_gap != null && ` · 학습 대비 ${data.validation.overfit_gap >= 0 ? "-" : "+"}${Math.abs(data.validation.overfit_gap).toFixed(1)}%p`}</div>
+          </div>
+        )}
+        {info && (
+          <div className={"sd-box sd-box-note " + info.cls}>
+            <b>{info.label}</b> — {info.text}
+          </div>
+        )}
+        <div className="sd-box sd-box-note notice-warn">
+          <b>과최적화 주의</b> — 과거에 맞춰 고른 값이라 미래 수익을 보장하지 않아요. 한 칸만 튀는 조합보다 주변까지 고르게 좋은 구간이 더 믿을 만해요.
+        </div>
+        {best && (
+          <button type="button" onClick={() => apply(best.tp, best.sl)} disabled={bestApplied || !!valErr} className="btn btn-m btn-secondary w-full">
+            {bestApplied ? "최적값 적용됨 · 다시 계산 중" : `익절 ${best.tp}% · 손절 ${best.sl}% 적용`}
+          </button>
+        )}
+        <button type="button" onClick={run} disabled={busy || !!valErr} className="btn btn-s btn-ghost w-full">
+          {busy ? "최적화 중…" : "다시 최적화"}
+        </button>
+        {error && <p className="sd-note text-red-600">오류: {error}</p>}
+      </div>
+    </div>
+  );
+}
+
+// 시작 시점 설정 한 줄 — 페이퍼는 시작할 때의 설정으로 고정된다.
+function macroLine(macro) {
+  if (!macro) return "";
+  const interval = CANDLE_INTERVALS.find((i) => i.value === macro.candle_interval)?.label || macro.candle_interval;
+  const parts = [macro.symbol, RULE_TYPES[macro.rule_type]?.label, macro.position_side === "short" ? "숏" : "롱", interval ? `${interval}봉` : "", `${macro.leverage || 1}배`];
+  return parts.filter(Boolean).join(" · ");
+}
+
+// ── 페이퍼 트레이딩 — 왼쪽 상태 상자, 오른쪽 매매 로그 ──
+export function StudioPaper({ macro, valErr, controller }) {
+  const { status, mode, setMode, busy, error, startedMacro, startedMode, running, start, stop, restart } = controller;
+  const { rate: krwRate } = useUsdKrw();
+  const quote = quoteOf(macro.symbol);
+  const base = baseOf(macro.symbol);
+  const ret = status?.current_return ?? 0;
+  const macroChanged = running && startedMacro && JSON.stringify(startedMacro) !== JSON.stringify(macro);
+  const modeLabel = (value) => (value === "replay" ? "데모 리플레이" : "실시간");
+
+  return (
+    <div className="sd-paper">
+      <div className="sd-paper-left">
+        {!status ? (
+          <>
+            <div className="sd-field">
+              <label>모의매매 방식 <InfoTooltip term="paper_trading" /></label>
+              <div className="seg sd-seg" role="group" aria-label="페이퍼 트레이딩 방식">
+                <button type="button" onClick={() => setMode("live")} aria-pressed={mode === "live"} className={"seg-item " + (mode === "live" ? "seg-item-on" : "")} disabled={busy}>실시간 (live)</button>
+                <button type="button" onClick={() => setMode("replay")} aria-pressed={mode === "replay"} className={"seg-item " + (mode === "replay" ? "seg-item-on" : "")} disabled={busy}>데모 리플레이 · 최근 시세 빠르게 재생</button>
+              </div>
+            </div>
+            <div className="sd-lock">
+              <b>시작 시점의 설정이 잠겨요.</b> 익절·손절·일일 최대손실·최대 보유시간·재진입 금지가 함께 적용되고, 도중에 조건을 바꾸면 재시작해야 반영돼요.
+              실제 주문 없이 실시간 시세로 "샀다·팔았다 치고" 기록만 하니 거래소 계정·API 키가 필요 없어요.
+            </div>
+            {macro.leverage > 1 && (
+              <div className="notice-risk sd-note">
+                레버리지 <span className="num">{macro.leverage}</span>배: 가격이 약 <b className="num text-red-600">{(100 / macro.leverage).toFixed(macro.leverage >= 100 ? 2 : 1)}%</b> 반대로 움직이면 청산(전액 손실)돼요. 모의(가짜 돈)로 위험을 체험하는 용도예요.
+              </div>
+            )}
+            <div className="sd-paper-actions">
+              <button type="button" onClick={start} disabled={busy || !!valErr} className="btn btn-m btn-secondary">{busy ? "시작 중…" : "페이퍼 트레이딩 시작"}</button>
+              <span className="sd-note"><span className="num">{macro.symbol}</span> · {modeLabel(mode)}</span>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="sd-stat">
+              <div className="sd-box">
+                <div className="sd-box-k">상태</div>
+                <div className="sd-box-v">
+                  <span className={running ? "text-green-600" : "text-slate-500"}>●</span> {running ? "진행 중" : "중지됨"}
+                  <small className="text-slate-500"> · {modeLabel(startedMode || mode)}</small>
+                </div>
+              </div>
+              <div className="sd-box">
+                <div className="sd-box-k">현재 수익률</div>
+                <div className={"sd-box-v num " + tone(ret)}>{pct(ret)}</div>
+              </div>
+              <div className="sd-box">
+                <div className="sd-box-k">현재 평가금액 ({quote})</div>
+                <div className="sd-box-v num" title={fmtMoney(status.current_equity, macro.symbol)}>{fmtMoneyCompact(status.current_equity, macro.symbol)}</div>
+                {fmtKrw(status.current_equity, krwRate) && <div className="sd-box-d num">{fmtKrw(status.current_equity, krwRate)}</div>}
+              </div>
+              <div className="sd-box">
+                <div className="sd-box-k">청산</div>
+                <div className={"sd-box-v num " + ((status.liquidations || 0) > 0 ? "text-red-600" : "")}>{status.liquidations || 0}회</div>
+                {(status.liquidations || 0) > 0 && <div className="sd-box-d num">잃은 금액 {fmtMoney(status.liquidated_loss || 0, macro.symbol)}</div>}
+              </div>
+            </div>
+            <div className={"sd-lock" + (macroChanged ? " is-warn" : "")}>
+              시작 시점 설정 · <b>{macroLine(startedMacro || macro)}</b>
+              {macroChanged && <> · 조건을 바꿨지만 이 세션은 시작 시점 설정으로 계속 돌아요. 반영하려면 재시작하세요.</>}
+            </div>
+            <div className="sd-paper-actions">
+              {running ? (
+                <>
+                  <button type="button" onClick={stop} disabled={busy} className="btn btn-s btn-danger">중지</button>
+                  {macroChanged && <button type="button" onClick={restart} disabled={busy || !!valErr} className="btn btn-s btn-secondary">바뀐 설정으로 재시작</button>}
+                </>
+              ) : (
+                <button type="button" onClick={start} disabled={busy || !!valErr} className="btn btn-s btn-secondary">{busy ? "시작 중…" : "다시 시작"}</button>
+              )}
+              <Link to="/mypage" className="btn btn-s btn-ghost">마이페이지에서 보기</Link>
+            </div>
+          </>
+        )}
+        {valErr && <p className="sd-note text-amber-700" role="alert">{valErr}</p>}
+        {error && <p className="sd-note text-red-600" role="alert">오류: {error}</p>}
+      </div>
+
+      <div className="sd-log">
+        <div className="sd-log-cap">
+          <span>실시간 매매 로그 (최신이 위)</span>
+          {status && status.last_price > 0 && <span>현재가 <b className="num">{fmtPrice(status.last_price)}</b> {quote}</span>}
+        </div>
+        {!status ? (
+          <div className="sd-log-empty"><b>백테스트가 괜찮으면 여기서 실제 시세로 돌려 봐요</b>결과가 쌓이는 동안 페이지를 닫아도 마이페이지에서 이어 볼 수 있어요.</div>
+        ) : (status.trades || []).length === 0 ? (
+          <div className="sd-log-empty">아직 체결이 없어요. 조건을 낮추거나(익절·손절 0.3~1%) 변동성 큰 종목·리플레이를 써 봐요.</div>
+        ) : (
+          <div className="sd-log-rows">
+            {status.trades.map((t) => (
+              <div key={t.id} className="sd-log-row">
+                <span className="sd-log-t num">{String(t.ts).slice(11, 19)}</span>
+                <span className={"sd-log-side " + (SIDE_CLS[t.side] || "")}>{SIDE_KO[t.side] || t.side}</span>
+                <span className="sd-log-px num">{fmtPrice(t.price)} <small>{quote}</small> · {fmtQty(t.qty)} <small>{base}</small></span>
+                <span className={"sd-log-pnl num " + tone(t.return_at_trade)}>{pct(t.return_at_trade)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── 등록 · 실행 — 근거 한 줄 + 세 갈래(리더보드 등록이 노랑) + 실행기 안내는 접이식 ──
+export function StudioOutcomes({ macro, valErr, result, paperStatus, paperRunning, explanation, optimized, canRegister, onRegister }) {
+  const { quickRun, downloadMacro, launching, error } = useMacroActions(macro);
+  const paperRet = paperStatus?.current_return;
+  const futures = macro.position_side === "short" || macro.leverage > 1;
+  return (
+    <div className="sd-outcomes">
+      <div className="sd-verdict">
+        {paperRet != null ? (
+          <span className={"sd-verdict-lead " + tone(paperRet)}>{paperRunning ? "페이퍼 진행 중" : "페이퍼 기록"} · {pct(paperRet)}</span>
+        ) : (
+          <span className="sd-verdict-lead text-slate-500">페이퍼 트레이딩은 아직</span>
+        )}
+        {result && (
+          <span>백테스트 <b className={"num " + tone(result.final_return_pct)}>{pct(result.final_return_pct)}</b> · MDD <b className="num">-{result.mdd_pct.toFixed(1)}%</b></span>
+        )}
+        <span>{explanation?.source === "ai" ? "AI 해설 확인" : "AI 해설 안 봄"}</span>
+        <span>{optimized ? "최적화 확인" : "최적화 안 돌림"}</span>
+        <span className="sd-verdict-tail">{canRegister ? "이 설정 그대로 이어져요" : "조건이 바뀌었어요 — 다시 테스트한 뒤 등록할 수 있어요"}</span>
+      </div>
+
+      <div className="sd-outs">
+        <div className="sd-out is-main">
+          <h5>리더보드 등록</h5>
+          <p>오늘의 리더보드에 올려 다른 사람과 겨뤄요. 테스트한 설정을 바꾸지 않고 모의매매에 써요.</p>
+          <button type="button" onClick={() => onRegister?.()} disabled={!onRegister || !canRegister || !!valErr} className="btn btn-l btn-primary w-full">
+            이 설정으로 등록
+          </button>
+        </div>
+        <div className="sd-out">
+          <h5>빠른 실행</h5>
+          <p>내 윈도우 PC 의 실행기로 바로 넘겨요. 매크로 선택 → API 키 → 실행기 준비 → 계정 연결 순서예요.</p>
+          <button type="button" onClick={quickRun} disabled={!!valErr || launching} className="btn btn-l btn-secondary w-full">
+            {launching ? "실행 준비 중…" : "실행기로 보내기"}
+          </button>
+        </div>
+        <div className="sd-out">
+          <h5>매크로 파일 내려받기</h5>
+          <p><span className="num">.ggm.json</span> 파일로 저장해요. 다른 PC 의 실행기에 넣거나 나중에 다시 불러올 수 있어요.</p>
+          <button type="button" onClick={downloadMacro} disabled={!!valErr} className="btn btn-l btn-secondary w-full">내려받기</button>
+        </div>
+      </div>
+      {error && <p className="sd-note text-red-600" role="alert">오류: {error}</p>}
+
+      <details className="sd-howto">
+        <summary>실행기로 실거래하는 방법 · 주의</summary>
+        <ol>
+          <li>위 버튼으로 <b>매크로 파일(.ggm.json)</b>을 내려받아요.</li>
+          <li>마이페이지에서 <b>껄무새 회원 키</b>를 복사해요(계정당 1개).</li>
+          <li>매크로 실행기를 열어 ①파일 ②실거래 여부 ③API 키 ④회원 키를 넣고 시작해요.</li>
+        </ol>
+        <ul>
+          <li>실행기는 <u>실제로 주문을 실행해요</u> (기본값: 바이낸스 테스트넷 = 가짜 자금).</li>
+          <li>{futures ? "숏·레버리지 매크로라 USDT-M 선물로 실행돼요." : "롱·1배 매크로라 현물(spot)로 실행돼요."} 익절·손절·일일 최대손실·최대 보유시간·재진입 금지가 함께 적용돼요.</li>
+          <li>실제 자금은 실행기에서 <b>실거래(메인넷) 체크</b>를 켜야 움직여요(경고 확인 단계 있음). 실행 현황과 원격 종료는 마이페이지에서 확인해요.</li>
+        </ul>
+        <Link to="/?run=1&step=1" className="sd-howto-link">사용법 →</Link>
+      </details>
+      <p className="sd-note">실거래(메인넷)는 실행기에서 켜요 · API 키는 실행기 로컬에서만 쓰고 서버로 보내지 않아요 · 출금 기능은 없어요. 공유 링크와 인증 카드는 오른쪽 위 ⋯ 에 있어요.</p>
+    </div>
+  );
+}

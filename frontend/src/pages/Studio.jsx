@@ -2,12 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import Builder from "../components/Builder.jsx";
-import ResultView, { ParrotExplain } from "../components/ResultView.jsx";
 import SimBadge from "../components/SimBadge.jsx";
-import { PaperPanelView, PaperNextSteps } from "../components/PaperPanel.jsx";
+import { StudioTabs, StudioBacktest, StudioAiExplain, StudioOptimize, StudioPaper, StudioOutcomes } from "../components/StudioDock.jsx";
 import usePaperSession from "../hooks/usePaperSession.js";
 import CandleChart from "../components/CandleChart.jsx";
-import OptimizePanel from "../components/OptimizePanel.jsx";
 import RegisterMacroModal from "../components/RegisterMacroModal.jsx";
 import ProductTour from "../components/ProductTour.jsx";
 import { EmptyState, Loading } from "../components/Page.jsx";
@@ -779,25 +777,7 @@ export default function Studio() {
         {/* ── 결과 독 ── */}
         <section className="studio-dock" aria-label="결과">
           <div className="studio-dock-head">
-            <div className="seg" role="tablist" aria-label="결과 보기">
-              {tabs.map((tab) => (
-                <button
-                  key={tab.id}
-                  type="button"
-                  role="tab"
-                  id={`studio-tab-${tab.id}`}
-                  aria-selected={dockTab === tab.id}
-                  aria-controls="studio-dock-panel"
-                  disabled={!tab.enabled}
-                  title={!tab.enabled ? "백테스트 결과가 있어야 볼 수 있어요" : undefined}
-                  onClick={() => setDockTab(tab.id)}
-                  className={"seg-item " + (dockTab === tab.id ? "seg-item-on" : "")}
-                >
-                  <i className={"studio-dot" + (tab.dot ? ` is-${tab.dot}` : "")} aria-hidden="true" />
-                  {tab.label}
-                </button>
-              ))}
-            </div>
+            <StudioTabs tabs={tabs} active={dockTab} onChange={setDockTab} />
             <div className="studio-dock-cta">{dockCta}</div>
           </div>
           <div className="studio-scroll studio-dock-body" role="tabpanel" id="studio-dock-panel" aria-labelledby={`studio-tab-${dockTab}`}>
@@ -821,31 +801,26 @@ export default function Studio() {
                       결과를 낸 뒤 조건이 바뀌었어요. 아래 숫자는 이전 조건의 결과이며 등록에는 사용할 수 없어요.
                     </div>
                   )}
-                  <ResultView
+                  <StudioBacktest
                     result={result}
                     perSymbol={perSymbol}
-                    explanation={explanation}
-                    onAiExplain={enrichExplanation}
-                    aiBusy={aiBusy}
-                    aiError={aiError}
                     summary={summary}
                     dataSource={dataSource}
                     periodLabel={periodLabel}
                     symbol={testedMacro?.symbol || form.symbol}
                     leverage={runLeverage}
-                    hideBlocks={["ai"]}
                   />
                 </>
               )
             )}
 
             {dockTab === "ai" && result && (
-              <ParrotExplain explanation={explanation} onAiExplain={enrichExplanation} aiBusy={aiBusy} aiError={aiError} />
+              <StudioAiExplain explanation={explanation} onAiExplain={enrichExplanation} aiBusy={aiBusy} aiError={aiError} />
             )}
 
             {dockTab === "opt" && result && (
               form.rule_type === "A" ? (
-                <OptimizePanel form={form} setForm={setForm} valErr={valErr} onResult={() => setOptimized(true)} />
+                <StudioOptimize form={form} setForm={setForm} valErr={valErr} onResult={() => setOptimized(true)} />
               ) : (
                 <EmptyState title="이 매매 방식은 자동 최적화를 지원하지 않아요">
                   익절/손절 자동 최적화는 <b className="text-slate-900">A · 익절/손절 후 재진입</b>에서만 돌릴 수 있어요.
@@ -854,24 +829,20 @@ export default function Studio() {
             )}
 
             {dockTab === "paper" && result && (
-              <PaperPanelView
-                macro={currentMacro}
-                valErr={valErr}
-                onRegister={resultIsFresh ? openRegistration : null}
-                controller={paper}
-                nextSteps={false}
-              />
+              <StudioPaper macro={currentMacro} valErr={valErr} controller={paper} />
             )}
 
             {dockTab === "done" && result && (
-              <PaperNextSteps
+              <StudioOutcomes
                 macro={testedMacro || currentMacro}
                 valErr={valErr}
-                primary="register"
-                onRegister={() => openRegistration(paper.mode)}
-                canRegister={resultIsFresh}
                 result={result}
                 paperStatus={paper.status}
+                paperRunning={paper.running}
+                explanation={explanation}
+                optimized={optimized}
+                canRegister={resultIsFresh}
+                onRegister={() => openRegistration(paper.mode)}
               />
             )}
           </div>

@@ -18,7 +18,7 @@ import InfoTooltip from "./InfoTooltip.jsx";
 //
 // 채도·명도는 CSS 변수라 테마가 바뀌면 스케일이 통째로 뒤집힌다. 셀 글자는
 // `text-slate-800` — 이 변수도 테마에 따라 뒤집혀 늘 반대편 명도에 놓인다.
-function heatStyle(value, extent) {
+export function heatStyle(value, extent) {
   if (!(extent > 0)) return { background: "rgb(var(--c-slate-100))" };
   const t = Math.max(-1, Math.min(1, value / extent)); // -1 = 최대손실, +1 = 최대이익
   const mag = Math.abs(t);
@@ -31,7 +31,7 @@ function heatStyle(value, extent) {
 }
 
 // 연속 색 스케일은 범례 없이는 읽을 수 없다.
-function HeatLegend({ extent }) {
+export function HeatLegend({ extent }) {
   const stops = [-1, -0.5, 0, 0.5, 1];
   return (
     <div className="flex items-center gap-2 t-caption text-slate-500">
@@ -52,7 +52,7 @@ const tone = (v) => (v >= 0 ? "text-green-600" : "text-red-600");
 
 // Verdict on the winning cell: did the value picked on the training window
 // still work on the window it was never allowed to see?
-function verdict(best, v) {
+export function verdict(best, v) {
   if (!v?.split) {
     return {
       cls: "notice-warn",

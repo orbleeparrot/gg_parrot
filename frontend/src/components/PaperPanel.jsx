@@ -26,7 +26,8 @@ function PaperBadge() {
 
 // 페이퍼 다음 단계 — 실행기 실거래 안내 + 빠른 실행 · 매크로 파일 내려받기.
 // primary="register" 면 리더보드 등록이 노란 버튼이고 빠른 실행은 2차가 된다(노랑은 한 번에 하나).
-export function PaperNextSteps({ macro, valErr, primary = "quickRun", onRegister = null, canRegister = true, result = null, paperStatus = null }) {
+// 빠른 실행 · 매크로 파일 내려받기 — 페이퍼 다음 단계와 직접 만들기의 '등록·실행' 탭이 같이 쓴다.
+export function useMacroActions(macro) {
   const navigate = useNavigate();
   const [launching, setLaunching] = useState(false);
   const [error, setError] = useState("");
@@ -58,6 +59,11 @@ export function PaperNextSteps({ macro, valErr, primary = "quickRun", onRegister
     }
   }
 
+  return { quickRun, downloadMacro, launching, error };
+}
+
+export function PaperNextSteps({ macro, valErr, primary = "quickRun", onRegister = null, canRegister = true, result = null, paperStatus = null }) {
+  const { quickRun, downloadMacro, launching, error } = useMacroActions(macro);
   const registerFirst = primary === "register";
   const paperRet = paperStatus?.current_return;
 

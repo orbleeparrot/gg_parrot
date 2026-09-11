@@ -259,7 +259,8 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
   // 차트를 정하는 값들 — 종목·매매 방식·포지션·봉 간격·기간. 차트 섹션 안으로
   // 들어가 "무엇을 볼지 정하고 바로 아래에서 본다"가 한 덩어리로 읽힌다.
   const symbolField = (
-    <Field label="종목" anchor="symbol" hint={dense ? "여러 종목이면 자금을 종목 수만큼 균등하게 나눠요." : "여러 종목은 쉼표로 나눠 써요. 자금은 종목 수만큼 균등하게 나눠요."}>
+    // 촘촘한 판은 도움말 문장 대신 라벨 옆 ⓘ 하나(용어 'symbols').
+    <Field label="종목" anchor="symbol" term={dense ? "symbols" : undefined} hint={dense ? undefined : "여러 종목은 쉼표로 나눠 써요. 자금은 종목 수만큼 균등하게 나눠요."}>
       {dense ? (
         <SymbolChips value={form.symbol} onChange={(value) => setForm({ ...form, symbol: value })} placeholder="BTCUSDT" />
       ) : (
@@ -283,8 +284,8 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
     </span>
   );
   const positionField = dense ? (
-    // 촘촘한 판은 두 값뿐이라 segmented — select 보다 한 번에 읽힌다.
-    <Field label="포지션" anchor="position" hint={positionHint}>
+    // 촘촘한 판은 두 값뿐이라 segmented — select 보다 한 번에 읽힌다. 롱·숏 설명은 라벨 옆 ⓘ 하나('position').
+    <Field label="포지션" anchor="position" term="position">
       <div className="seg bd-seg" role="group" aria-label="포지션">
         <button type="button" onClick={() => setForm({ ...form, position_side: "long" })} aria-pressed={!isShort} className={"seg-item " + (!isShort ? "seg-item-on" : "")}>롱</button>
         <button

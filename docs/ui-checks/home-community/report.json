@@ -1,11 +1,11 @@
 {
   "passed": true,
-  "build": "/tmp/ggp-home-community-build",
+  "build": "/tmp/ggp-home-preview-build",
   "checks": {
     "mobile-320-dark": {
       "width": 320,
       "scrollWidth": 320,
-      "scrollHeight": 1300,
+      "scrollHeight": 1335,
       "viewport": 844,
       "animation": "none",
       "transform": "none",
@@ -15,7 +15,7 @@
     "mobile-390-dark": {
       "width": 390,
       "scrollWidth": 390,
-      "scrollHeight": 1225,
+      "scrollHeight": 1270,
       "viewport": 844,
       "animation": "none",
       "transform": "none",
@@ -25,7 +25,7 @@
     "mobile-390-light": {
       "width": 390,
       "scrollWidth": 390,
-      "scrollHeight": 1225,
+      "scrollHeight": 1270,
       "viewport": 844,
       "animation": "none",
       "transform": "none",
@@ -35,7 +35,7 @@
     "mobile-768-dark": {
       "width": 768,
       "scrollWidth": 768,
-      "scrollHeight": 1260,
+      "scrollHeight": 1287,
       "viewport": 844,
       "animation": "none",
       "transform": "none",
@@ -45,7 +45,7 @@
     "mobile-1099-light": {
       "width": 1099,
       "scrollWidth": 1099,
-      "scrollHeight": 1262,
+      "scrollHeight": 1289,
       "viewport": 844,
       "animation": "none",
       "transform": "none",

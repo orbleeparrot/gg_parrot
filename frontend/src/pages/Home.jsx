@@ -100,6 +100,40 @@ function HomeEntryHero({ onLeaderboard, onGuide, staticLayout = false }) {
   );
 }
 
+const COMMUNITY_POSTS = [
+  { title: "DCA 매수 간격 7일·14일 비교해 봤어요", snippet: "같은 SOLUSDT 조건에서 기간만 바꿔 본 결과와 느낀 점을 정리했습니다.", author: "차분한고래", time: "오늘 09:44", comments: 12 },
+  { title: "백테스트 수익률보다 MDD를 먼저 봐야 하나요?", snippet: "첫 전략을 만들었는데 수익률은 높고 최대낙폭도 커서 기준이 궁금해요.", author: "코린이7일차", time: "오늘 09:08", comments: 8 },
+  { title: "횡보장에서 그리드 간격 정하는 방법", snippet: "너무 촘촘하게 잡았을 때 수수료가 결과에 미친 영향을 비교했습니다.", author: "느린거북", time: "오늘 08:36", comments: 5 },
+  { title: "페이퍼 트레이딩 첫날 기록", snippet: "실제 돈 없이 체결 흐름을 보니 조건이 언제 작동하는지 이해하기 쉬웠어요.", author: "보라여우", time: "어제 22:17", comments: 17, hasImage: true },
+  { title: "이동평균 전략 기간을 바꿀 때 체크할 것", snippet: "20·60과 50·200 조합을 각각 돌려 본 표를 공유합니다.", author: "캔들읽는새", time: "어제 20:52", comments: 9 },
+];
+
+function CommunityPostList({ duplicate = false, limit = COMMUNITY_POSTS.length }) {
+  return (
+    <ul
+      className="home-community-post-list"
+      aria-hidden={duplicate ? "true" : undefined}
+    >
+      {COMMUNITY_POSTS.slice(0, limit).map((post) => (
+        <li key={`${duplicate ? "loop-" : ""}${post.title}`}>
+          <span className="home-community-post-copy">
+            <strong>
+              {post.hasImage ? <span className="home-board-photo-badge">사진</span> : null}
+              {post.title}
+              <span className="home-community-post-comments">[{post.comments}]</span>
+            </strong>
+            <small>{post.snippet}</small>
+          </span>
+          <span className="home-board-post-meta">
+            <strong>{post.author}</strong>
+            <time>{post.time}</time>
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function CommunityEntryHero({ staticLayout = false }) {
   const Heading = staticLayout ? "h2" : "h1";
   return (
@@ -114,7 +148,20 @@ function CommunityEntryHero({ staticLayout = false }) {
           {/* 줄바꿈 금지 공백(U+00A0) — 좁은 칸에서 text-wrap: balance 가 "껄무새 / 게시판." 으로 쪼개 밑줄이 두 도막 났다. */}
           매크로 이야기가 쌓이는 <span>껄무새{"\u00a0"}게시판.</span>
         </Heading>
-        <p className="home-entry-description">혼자 풀기 어려운 조건부터 직접 돌려본 결과까지.</p>
+        {!staticLayout ? <p className="home-entry-description">
+          조건 설정이 막힐 때 다른 사용자의 질문과 답변을 찾아보고,
+          백테스트 결과와 운영 후기를 글로 남겨 내 경험도 공유해요.
+        </p> : null}
+        {!staticLayout ? <dl className="home-community-points">
+          <div>
+            <dt>정보 찾아보기</dt>
+            <dd>조건·백테스트·운영 기록을 주제별로 읽어봐요.</dd>
+          </div>
+          <div>
+            <dt>경험 공유하기</dt>
+            <dd>궁금한 점을 묻고 내 매크로의 시행착오를 남겨요.</dd>
+          </div>
+        </dl> : null}
         <div className="home-community-actions" aria-label="커뮤니티 둘러보기">
           <Link to="/board" data-home-carousel-primary className="home-community-action is-primary">
             게시판 둘러보기 <span aria-hidden="true">→</span>
@@ -122,22 +169,34 @@ function CommunityEntryHero({ staticLayout = false }) {
         </div>
       </div>
 
-      <aside className="home-community-guide" aria-label="게시판에서 나눌 수 있는 이야기">
-        <img className="home-community-mascot" src="/brand/navigation/ggparrot-nav-board.svg" alt="" width="240" height="240" draggable="false" />
-        <dl className="home-community-topics">
+      <aside className="home-community-preview" aria-label="껄무새 게시판 화면 예시" aria-describedby="home-community-preview-caption">
+        {!staticLayout ? <header className="home-board-preview-head">
+          <span className="home-board-preview-mascot" aria-hidden="true">
+            <img
+              src="/brand/navigation/ggparrot-nav-board.svg"
+              alt=""
+              width="256"
+              height="256"
+              draggable="false"
+            />
+          </span>
           <div>
-            <dt className="t-h4 text-slate-900">질문</dt>
-            <dd className="t-small text-slate-600">매매 방식과 조건 설정</dd>
+            <span>전략·질문·정보</span>
+            <h2>껄무새 게시판</h2>
+            <p>코린이끼리 전략·질문·정보를 나눠요. (투자 조언 아님)</p>
           </div>
-          <div>
-            <dt className="t-h4 text-slate-900">비교</dt>
-            <dd className="t-small text-slate-600">백테스트 결과와 전략별 차이</dd>
+          <span className="home-board-preview-write" aria-hidden="true">새 글 쓰기</span>
+        </header> : null}
+        <p id="home-community-preview-caption" className="home-community-preview-caption t-caption text-slate-500">게시글 미리보기</p>
+        <div className="home-community-post-viewport">
+          <div className="home-community-post-track">
+            <CommunityPostList limit={staticLayout ? 3 : COMMUNITY_POSTS.length} />
+            {staticLayout ? null : <CommunityPostList duplicate />}
           </div>
-          <div>
-            <dt className="t-h4 text-slate-900">기록</dt>
-            <dd className="t-small text-slate-600">실행 후기와 시행착오</dd>
-          </div>
-        </dl>
+        </div>
+        {!staticLayout ? <footer className="home-board-preview-footer" aria-hidden="true">
+          <span>‹</span><strong>1</strong><span>2</span><span>3</span><span>›</span>
+        </footer> : null}
       </aside>
     </section>
   );

@@ -1,35 +1,8 @@
-/* 게시판 소개는 그림과 주제 설명으로 구성한다. 게시글 목록이나 버튼 모양을 흉내 내지 않는다. */
-.home-community-guide {
-  min-width: 0;
-  display: grid;
-  grid-template-columns: minmax(120px, 1fr) minmax(0, 1fr);
-  align-items: center;
-  gap: 32px;
+/* 히어로의 게시판 모형은 유지하고, 예시 글만 읽기 전용 미리보기로 구분한다. */
+.home-community-preview-caption { margin: 0 0 8px; text-align: right; }
+.home-community-preview .home-community-post-viewport {
+  opacity: .72;
+  filter: grayscale(1);
+  cursor: default;
 }
-
-.home-community-mascot {
-  display: block;
-  width: min(100%, 240px);
-  height: auto;
-  justify-self: center;
-  user-select: none;
-}
-
-.home-community-topics {
-  display: grid;
-  gap: 32px;
-  margin: 0;
-}
-
-.home-community-topics > div { display: grid; gap: 6px; }
-.home-community-topics dd { margin: 0; word-break: keep-all; overflow-wrap: break-word; }
-
-@media (max-width: 1099px) {
-  .home-mobile-stack .home-community-guide {
-    grid-template-columns: 88px minmax(0, 1fr);
-    gap: 28px;
-  }
-  .home-community-topics { gap: 20px; }
-  .home-community-topics > div { gap: 4px; }
-  .home-mobile-stack .home-community-copy .home-entry-description { margin-top: 16px; }
-}
+.home-community-preview .home-community-post-list li { cursor: default; }

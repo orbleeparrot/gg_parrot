@@ -12,6 +12,7 @@ import CoinIcon from "./CoinIcon.jsx";
 import { fmtMoney, fmtMoneyCompact, fmtKrw, fmtPrice, fmtQty, quoteOf, baseOf } from "../lib/format.js";
 import { buildMacro, RULE_TYPES, CANDLE_INTERVALS } from "../lib/macro.js";
 import { leaderboardStrategy } from "../lib/leaderboardStrategy.js";
+import { strategyPhrases } from "../lib/strategyText.js";
 import { useUsdKrw } from "../lib/usdkrw.js";
 
 const AI_MASCOT = "/brand/navigation/ggparrot-nav-agent.svg";
@@ -498,6 +499,19 @@ function macroFacts({ macro, symbol, symbols, result, futures }) {
   return facts;
 }
 
+// 조건 문장 조판 — 구는 세로 괘선으로 나누고, 숫자는 고정폭 굵게, 부호 있는 값은 등락색.
+function StrategyText({ text }) {
+  const phrases = strategyPhrases(text);
+  if (!phrases.length) return <span className="sd-card-phrase">상세 정보 없음</span>;
+  return phrases.map((tokens, i) => (
+    <span key={i} className="sd-card-phrase">
+      {tokens.map((token, j) => token.t === "num"
+        ? <b key={j} className={"num" + (token.tone ? ` is-${token.tone}` : "")}>{token.v}</b>
+        : <Fragment key={j}>{token.v}</Fragment>)}
+    </span>
+  ));
+}
+
 export function StudioOutcomes({ macro, result, valErr, strategyEntry, periodLabel, dataSource = "", symbols = [], canRegister, onRegister, onShare, shareBusy = false }) {
   const { quickRun, downloadMacro, launching, error } = useMacroActions(macro);
   const futures = macro.position_side === "short" || macro.leverage > 1;
@@ -529,7 +543,7 @@ export function StudioOutcomes({ macro, result, valErr, strategyEntry, periodLab
                 <span className="sd-card-tag">{marketLabel}</span>
               </div>
             </div>
-            <p className="sd-card-strategy">{details?.description || "상세 정보 없음"}</p>
+            <p className="sd-card-strategy" title={details?.description || ""}><StrategyText text={details?.description || ""} /></p>
             <dl className="sd-card-facts">
               {facts.map((f) => (
                 <div key={f.k}><dt>{f.k}</dt><dd className={f.num ? "num" : undefined}>{f.v}</dd></div>

@@ -4,11 +4,9 @@ import { Link, useLocation, useNavigate, useParams, useSearchParams } from "reac
 import Builder from "../components/Builder.jsx";
 import SimBadge from "../components/SimBadge.jsx";
 import { StudioTabs, StudioBacktest, StudioAiExplain, StudioOptimize, StudioPaper, StudioOutcomes } from "../components/StudioDock.jsx";
-import StrategyDetails from "../components/StrategyDetails.jsx";
 import usePaperSession from "../hooks/usePaperSession.js";
 import CandleChart from "../components/CandleChart.jsx";
 import RegisterMacroModal from "../components/RegisterMacroModal.jsx";
-import ProductTour from "../components/ProductTour.jsx";
 import { EmptyState, Loading } from "../components/Page.jsx";
 import { api } from "../api.js";
 import { useAuth } from "../lib/auth.js";
@@ -36,70 +34,6 @@ import "./StudioBudget.css";
 
 const MAX_MACRO_FILE_BYTES = 2 * 1024 * 1024;
 
-// '사용법 안내' 프로덕트 투어 단계. 각 anchor 는 화면의 data-tour 요소를 가리킨다.
-const TOUR_STEPS = [
-  {
-    anchor: "market-briefing",
-    title: "시장 브리핑",
-    body: "먼저 시장 분위기를 확인해요. ‘시장 브리핑 보기’를 누르면 김치 프리미엄(국내외 가격 차이 · +김프/−역프)과 공포·탐욕 지수(0~100, 시장 심리)를 볼 수 있어요. 매매 전 참고용 지표예요.",
-  },
-  {
-    anchor: "symbol",
-    title: "종목 입력",
-    body: "확인할 코인을 정해요. 예: BTCUSDT. 여러 종목은 쉼표로 나눠 쓰면 자금을 종목 수만큼 균등하게 나눠 확인해요.",
-  },
-  {
-    anchor: "strategy",
-    title: "매매 방식 선택",
-    body: "이동평균 크로스·볼린저·RSI 등 원하는 전략을 골라요. 라벨 옆 ⓘ에 마우스를 올리면 각 매매 방식이 어떤 규칙인지 설명을 확인할 수 있어요.",
-  },
-  {
-    anchor: "position",
-    title: "포지션",
-    body: "오를 때 버는 롱(long), 내릴 때 버는 숏(short)을 정해요. 전략에 따라 숏이 막혀 있을 수 있어요.",
-  },
-  {
-    anchor: "interval",
-    title: "봉 간격",
-    body: "지표 계산과 체결을 판정하는 캔들 단위예요. 1분·1시간·1일처럼 전략에 맞는 시간 단위를 골라요.",
-  },
-  {
-    anchor: "period",
-    title: "테스트 기간",
-    body: "과거 어느 구간의 데이터로 확인할지 정해요. 최근 1년·6개월·3개월 또는 직접 기간을 지정할 수 있어요.",
-  },
-  {
-    anchor: "chart",
-    title: "실시간 차트 · 보조지표",
-    body: "지금 고른 종목의 실시간 시세를 보여줘요. 선택한 매매 방식의 보조지표(예: 이동평균·볼린저 밴드)가 함께 그려지고, 아래 설정값을 바꾸면 보조지표도 즉시 따라 바뀌는 걸 확인할 수 있어요.",
-  },
-  {
-    anchor: "strategy-params",
-    title: "전략 조건",
-    body: "고른 매매 방식에만 필요한 세부 값을 정해요. 익절 기준·이동평균 기간·밴드 폭처럼 전략마다 항목이 달라져요.",
-  },
-  {
-    anchor: "risk",
-    title: "손실 제한",
-    body: "한 번에 쓸 자금 비율과 손절 기준(%)을 정해요. 손절을 켜면 정해진 손실에서 자동으로 정리해 위험을 제한해요.",
-  },
-  {
-    anchor: "advanced-risk",
-    title: "고급 위험 관리",
-    body: "하루 최대 손실·최대 보유 시간·손절 뒤 쉬는 시간 같은 추가 안전장치예요. 필요할 때만 설정하면 돼요.",
-  },
-  {
-    anchor: "fees",
-    title: "거래 비용과 펀딩비",
-    body: "실제에 가깝게 수수료·체결 가격 차이(슬리피지)·펀딩비를 반영해요. ‘실제 펀딩비 가져오기’로 해당 기간 평균값을 자동으로 채울 수 있어요.",
-  },
-  {
-    anchor: "leverage",
-    title: "레버리지",
-    body: "배수를 올리면 수익도 손실도 그만큼 커지고 청산 위험이 생겨요. 1배는 현물과 같아 청산이 없어요. 백테스트·모의에서만 적용돼요.",
-  },
-];
-
 function macroKey(macro) {
   return JSON.stringify(macro);
 }
@@ -111,7 +45,16 @@ function periodLabelOf(macro) {
   return PERIOD_PRESETS.find((item) => item.value === macro.period?.preset)?.label || macro.period?.preset || "";
 }
 
-// 저장·공유 — ⋯ 메뉴에서 여는 다이얼로그. 링크·인증 카드는 본문이 아니라 부속 결과라 화면에 늘 두지 않는다.
+// 매크로 파일 등록 아이콘 — 트레이 위로 올라가는 화살표.
+function UploadIcon() {
+  return (
+    <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M10 12.5V3.5M6.5 7l3.5-3.5L13.5 7M3.5 12.5v2.5a1.5 1.5 0 0 0 1.5 1.5h10a1.5 1.5 0 0 0 1.5-1.5v-2.5" />
+    </svg>
+  );
+}
+
+// 저장·공유 — 매크로 등록 탭에서 여는 다이얼로그. 링크·인증 카드는 본문이 아니라 부속 결과라 화면에 늘 두지 않는다.
 function ShareDialog({ share, stale, busy, onClose, onRenew }) {
   const [copied, setCopied] = useState(false);
   useEffect(() => {
@@ -199,9 +142,7 @@ export default function Studio() {
       return !!draft && draft.context?.origin !== "hero";
     }
   );
-  const [tourOpen, setTourOpen] = useState(false);
   const [dockTab, setDockTab] = useState(() => saved?.dockTab || "bt"); // 결과 독의 탭 — 백테스트 → AI 해설 → 최적화 → 페이퍼 → 매크로 등록
-  const [menuOpen, setMenuOpen] = useState(false); // ⋯ 메뉴(파일 등록 · 공유 · 사용법)
   const [shareOpen, setShareOpen] = useState(false); // 저장·공유 다이얼로그
   const [optimized, setOptimized] = useState(() => !!saved?.optimized); // 최적화를 한 번이라도 돌렸는지(탭 앞 점)
   const [fileImportBusy, setFileImportBusy] = useState(false);
@@ -284,19 +225,6 @@ export default function Studio() {
   // 페이퍼가 돌기 시작하면 그 탭으로, 결과가 사라지면(파일 등록 등) 백테스트 탭으로.
   useEffect(() => { if (paper.running) setDockTab("paper"); }, [paper.running]);
   useEffect(() => { if (!result) { setDockTab("bt"); setOptimized(false); } }, [result]);
-
-  // ⋯ 메뉴 — 바깥 클릭·Esc 로 닫는다.
-  useEffect(() => {
-    if (!menuOpen) return undefined;
-    const onPointerDown = (event) => { if (!event.target.closest?.(".studio-more")) setMenuOpen(false); };
-    const onKey = (event) => { if (event.key === "Escape") setMenuOpen(false); };
-    document.addEventListener("pointerdown", onPointerDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("pointerdown", onPointerDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [menuOpen]);
 
   // Clone flow: load a shared macro into the builder.
   useEffect(() => {
@@ -631,8 +559,18 @@ export default function Studio() {
   // 페이지는 스크롤하지 않는다. 조건(왼쪽) · 차트(오른쪽 위) · 결과 독(오른쪽 아래)이 각자 스크롤한다.
   // 결과 독의 탭 순서가 곧 검증 순서다: 백테스트 → AI 해설 → 익·손절 최적화 → 페이퍼 트레이딩 → 등록·실행.
   const intervalLabel = CANDLE_INTERVALS.find((item) => item.value === form.candle_interval)?.label || "";
-  const stage = dockTab === "done" || (paper.status && !paper.running) ? 3 : paper.running ? 2 : result ? 1 : 0;
   const shareStale = !!share && !!share.macroKey && share.macroKey !== currentMacroKey;
+  // 공유 링크 — 있으면 다이얼로그를 열고, 없거나 조건이 바뀌었으면 저장해서 만든 뒤 연다.
+  async function openShare() {
+    if (share && !shareStale) { setShareOpen(true); return; }
+    const ok = await saveAndShare();
+    if (ok) setShareOpen(true);
+  }
+  const strategyExtra = [
+    ...(chartSymbols.length > 1 ? [{ label: "종목", value: `${chartSymbols.length}개` }] : []),
+    ...(intervalLabel ? [{ label: "봉", value: intervalLabel }] : []),
+    ...(periodLabelOf(currentMacro) ? [{ label: "기간", value: periodLabelOf(currentMacro) }] : []),
+  ];
   const testPrimary = !busy && (!testedMacro || !resultIsFresh);
   const testLabel = busy
     ? "결과 계산 중…"
@@ -708,80 +646,9 @@ export default function Studio() {
         aria-label="껄무새 매크로 파일 등록"
       />
 
-      {/* 제목 띠 — 제목 · 지금 조건 한 줄 · 모의 뱃지 · 단계 · ⋯. 설명 문단은 두지 않는다. */}
-      <header className="studio-strip">
-        <h1 className="sr-only">매크로 만들기</h1>
-        {/* 제목 자리엔 지금 매크로를 리더보드 전략 칸과 같은 표기로: 티커 | 포지션 | 전략 | 자금 | 봉 | 기간.
-            결과가 최신이면 서버 요약(전략 조건·손절)을, 아니면 매매 방식 이름을 쓴다. */}
-        <div className="studio-strip-strategy">
-          <StrategyDetails
-            entry={{ symbol: chartSymbols[0] || form.symbol || "—", human_summary: resultIsFresh ? summary : "", macro: currentMacro, locked: false }}
-            extra={[
-              ...(chartSymbols.length > 1 ? [{ label: "종목", value: `${chartSymbols.length}개` }] : []),
-              ...(intervalLabel ? [{ label: "봉", value: intervalLabel }] : []),
-              ...(periodLabelOf(currentMacro) ? [{ label: "기간", value: periodLabelOf(currentMacro) }] : []),
-            ]}
-          />
-        </div>
-        {loadedFrom && <span className="studio-strip-loaded t-caption">불러온 매크로 · <b>{loadedFrom}</b></span>}
-        <SimBadge />
-        <ol className="studio-flow" aria-label="진행 단계">
-          {["조건", "검증 3종", "페이퍼 트레이딩", "매크로 등록"].map((label, index) => (
-            <li key={label} className={index < stage ? "is-done" : index === stage ? "is-now" : ""} aria-current={index === stage ? "step" : undefined}>
-              <i aria-hidden="true" />{label}
-            </li>
-          ))}
-        </ol>
-        <div className="studio-more">
-          <button
-            type="button"
-            className="studio-more-btn"
-            aria-haspopup="menu"
-            aria-expanded={menuOpen}
-            aria-label="더 보기 — 파일 등록 · 공유 · 사용법"
-            onClick={() => setMenuOpen((open) => !open)}
-          >
-            ⋯
-          </button>
-          {menuOpen && (
-            <div className="studio-menu" role="menu">
-              {!slug && (token ? (
-                <button
-                  type="button"
-                  role="menuitem"
-                  disabled={fileImportBusy || busy}
-                  onClick={() => { setMenuOpen(false); macroFileInputRef.current?.click(); }}
-                >
-                  {fileImportBusy ? "파일 등록 중…" : "매크로 파일 등록"}<small>.ggm.json</small>
-                </button>
-              ) : (
-                <Link to="/login?next=%2Fbuilder" role="menuitem" onClick={() => setMenuOpen(false)}>
-                  로그인 후 파일 등록<small>.ggm.json</small>
-                </Link>
-              ))}
-              <button
-                type="button"
-                role="menuitem"
-                disabled={busy || !!valErr}
-                onClick={async () => {
-                  setMenuOpen(false);
-                  if (share && !shareStale) { setShareOpen(true); return; }
-                  const ok = await saveAndShare();
-                  if (ok) setShareOpen(true);
-                }}
-              >
-                {share && !shareStale ? "공유 링크 보기" : "저장하고 공유 링크 만들기"}<small>인증 카드</small>
-              </button>
-              <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); setTourOpen(true); }}>
-                사용법 안내<small>화면 순서대로</small>
-              </button>
-            </div>
-          )}
-        </div>
-      </header>
-
-      {(hasRegistrationDraft || fileImportError || fileImportSuccess) && (
+      {(hasRegistrationDraft || fileImportError || fileImportSuccess || loadedFrom) && (
         <div className="studio-banner">
+          {loadedFrom && <p className="t-small text-slate-700">불러온 매크로 · <b className="text-slate-900">{loadedFrom}</b></p>}
           {hasRegistrationDraft && (
             <div className="notice t-small text-slate-700 flex items-center justify-between gap-4 flex-wrap">
               <span>로그인 화면으로 가기 전에 테스트한 등록 설정이 남아 있어요.</span>
@@ -800,6 +667,21 @@ export default function Studio() {
         <aside className="studio-cond" aria-label="조건">
           <div className="studio-panel-head">
             <h2 className="t-title text-slate-900">조건</h2>
+            {/* 매크로 파일 등록 — 가지고 있는 .ggm.json 을 내 매크로에 등록하고 조건에 불러온다. 로그인 전엔 로그인으로. */}
+            {!slug && (token ? (
+              <button
+                type="button"
+                className="studio-cond-upload"
+                onClick={() => macroFileInputRef.current?.click()}
+                disabled={fileImportBusy || busy}
+                aria-label={fileImportBusy ? "파일 등록 중" : "매크로 파일 등록 (.ggm.json)"}
+                title={fileImportBusy ? "파일 등록 중…" : "매크로 파일 등록 (.ggm.json) — 내 매크로에 등록하고 조건에 불러와요"}
+              >
+                <UploadIcon />
+              </button>
+            ) : (
+              <Link to="/login?next=%2Fbuilder" className="studio-cond-upload" aria-label="로그인 후 매크로 파일 등록" title="매크로 파일을 등록하려면 로그인이 필요해요"><UploadIcon /></Link>
+            ))}
             <div className="studio-head-right">
               <label className="flex items-center gap-2 t-caption text-slate-700 cursor-pointer select-none">
                 <input type="checkbox" checked={autoRun} onChange={(event) => setAutoRun(event.target.checked)} />
@@ -915,11 +797,12 @@ export default function Studio() {
               <StudioOutcomes
                 macro={testedMacro || currentMacro}
                 valErr={valErr}
-                result={result}
-                paperStatus={paper.status}
-                paperRunning={paper.running}
+                strategyEntry={{ symbol: chartSymbols[0] || form.symbol || "—", human_summary: summary, macro: testedMacro || currentMacro, locked: false }}
+                strategyExtra={strategyExtra}
                 canRegister={resultIsFresh}
                 onRegister={() => openRegistration(paper.mode)}
+                onShare={openShare}
+                shareBusy={busy}
               />
             )}
           </div>
@@ -951,7 +834,6 @@ export default function Studio() {
         />
       ) : null}
 
-      <ProductTour steps={TOUR_STEPS} open={tourOpen} onClose={() => setTourOpen(false)} />
     </div>
   );
 }

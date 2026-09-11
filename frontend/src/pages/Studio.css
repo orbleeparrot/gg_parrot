@@ -9,40 +9,9 @@
   padding: 0;
   overflow: hidden;
 }
-.studio-page { height: 100%; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr); }
+.studio-page { height: 100%; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
 
-/* ── 제목 띠: 제목 · 지금 조건 요약 · 모의 뱃지 · 단계 · ⋯ ── */
-.studio-strip {
-  min-height: 52px;
-  display: flex; align-items: center; gap: 12px;
-  padding: 6px var(--site-gutter);
-  border-bottom: 1px solid rgb(var(--c-slate-200));
-}
-.studio-strip-strategy { min-width: 0; flex: 1 1 auto; }
-.studio-strip-strategy .lb-strategy-facts { line-height: 1.3; }
-.studio-strip-loaded { white-space: nowrap; color: rgb(var(--c-slate-700)); }
-.studio-strip-loaded b { color: rgb(var(--c-slate-900)); }
-/* 단계 — 조건 → 검증 → 페이퍼 → 등록. 점만 상태를 말한다(빈 · 찬 · 노랑=지금). */
-.studio-flow { margin: 0 0 0 auto; padding: 0; list-style: none; display: flex; align-items: center; color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 600; }
-.studio-flow li { display: flex; align-items: center; gap: 6px; padding: 0 10px; height: 28px; position: relative; white-space: nowrap; }
-.studio-flow li + li::before { content: ""; position: absolute; left: -7px; width: 14px; height: 1px; background: rgb(var(--c-slate-300)); }
-.studio-flow li i { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid rgb(var(--c-slate-400)); }
-.studio-flow li.is-done { color: rgb(var(--c-slate-700)); }
-.studio-flow li.is-done i { background: rgb(var(--c-slate-700)); border-color: rgb(var(--c-slate-700)); }
-.studio-flow li.is-now { color: rgb(var(--c-slate-900)); }
-.studio-flow li.is-now i { background: rgb(var(--c-brand)); border-color: rgb(var(--c-brand)); }
-/* ⋯ 메뉴 — 파일 등록·공유·사용법. 본문이 아니라 부속 동작이라 한 버튼에 모은다. */
-.studio-more { position: relative; }
-.studio-more-btn { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 10px; color: rgb(var(--c-slate-700)); font-size: 18px; font-weight: 800; letter-spacing: 1px; line-height: 1; }
-.studio-more-btn:hover, .studio-more-btn[aria-expanded="true"] { background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-900)); }
-.studio-more-btn:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
-.studio-menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 30; min-width: 232px; padding: 6px; border: 1px solid rgb(var(--c-slate-300)); border-radius: 12px; background: rgb(var(--c-surface)); box-shadow: 0 10px 28px rgb(5 12 22 / .24); }
-.studio-menu button, .studio-menu a { width: 100%; height: 38px; padding: 0 10px; display: flex; align-items: center; justify-content: space-between; gap: 10px; border-radius: 8px; color: rgb(var(--c-slate-800)); font-size: 14px; font-weight: 600; text-align: left; text-decoration: none; cursor: pointer; }
-.studio-menu button:hover, .studio-menu a:hover { background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-900)); }
-.studio-menu button:disabled { opacity: .5; cursor: not-allowed; }
-.studio-menu small { color: rgb(var(--c-slate-500)); font-weight: 500; white-space: nowrap; }
-
-/* 띠 아래 알림 줄 — 등록 이어가기·파일 등록 결과처럼 가끔 생기는 것만. */
+/* 위 알림 줄 — 불러온 매크로·등록 이어가기·파일 등록 결과처럼 가끔 생기는 것만. */
 .studio-banner { padding: 8px var(--site-gutter) 0; display: grid; gap: 6px; }
 
 /* ── 세 판 ── */
@@ -57,6 +26,11 @@
 .studio-panel-head { min-height: 44px; display: flex; align-items: center; gap: 10px; padding: 0 16px; border-bottom: 1px solid rgb(var(--c-slate-200)); }
 .studio-panel-head h2 { margin: 0; }
 .studio-panel-head .studio-head-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+/* 매크로 파일 등록 아이콘 — 조건 제목 옆 28px. */
+.studio-cond-upload { width: 28px; height: 28px; display: inline-grid; place-items: center; border: 1px solid rgb(var(--c-slate-300)); border-radius: 8px; color: rgb(var(--c-slate-700)); background: transparent; cursor: pointer; }
+.studio-cond-upload:hover { background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-900)); border-color: rgb(var(--c-slate-400)); }
+.studio-cond-upload:disabled { opacity: .5; cursor: not-allowed; }
+.studio-cond-upload:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
 .studio-scroll { overflow: auto; min-height: 0; overscroll-behavior: contain; }
 
 /* 조건 — Builder 를 그대로 쓰되 좁은 열에 맞춰 2열로 접는다. 스크롤은 이 판 안에서만. */
@@ -236,15 +210,16 @@
 .sd-log-px small { color: rgb(var(--c-slate-500)); font-weight: 500; }
 .sd-log-pnl { font-weight: 700; }
 /* 등록 · 실행 */
-.sd-verdict { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-bottom: 12px; padding: 9px 12px; border: 1px solid rgb(var(--c-slate-200)); border-radius: 10px; color: rgb(var(--c-slate-700)); font-size: 13px; font-weight: 500; }
-.sd-verdict b { color: rgb(var(--c-slate-900)); }
-.sd-verdict-lead { font-weight: 800; }
-.sd-verdict-tail { margin-left: auto; color: rgb(var(--c-slate-500)); }
-.sd-outs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
-.sd-out { display: grid; gap: 8px; align-content: start; padding: 14px; border: 1px solid rgb(var(--c-slate-200)); border-radius: 12px; }
-.sd-out.is-main { border-color: rgb(var(--c-brand-line)); background: rgb(var(--c-brand) / .08); }
-.sd-out h5 { margin: 0; color: rgb(var(--c-slate-900)); font-size: 15px; font-weight: 800; }
-.sd-out p { margin: 0; min-height: 40px; color: rgb(var(--c-slate-700)); font-size: 13px; line-height: 1.55; }
+/* 매크로 등록 — 내가 만든 매크로 한 줄(리더보드 전략 칸 표기, 한 단계 크게)이 주인공. 그 아래 동작 넷, 그 아래 안내 상자. */
+.sd-macro { padding: 6px 0 14px; }
+.sd-macro .lb-strategy-facts { white-space: normal; overflow: visible; line-height: 1.6; }
+.sd-macro .lb-fact { display: inline-block; margin-bottom: 4px; }
+.sd-macro .lb-strategy-ticker strong { font-size: 24px; }
+.sd-macro .lb-strategy-ticker small { font-size: 12px; }
+.sd-macro .lb-fact dd { font-size: 15px; }
+.sd-macro .lb-fact .lb-position { font-size: 14px; }
+.sd-macro .lb-fact dt { font-size: 13px; }
+.sd-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .sd-runner { margin-top: 12px; }
 
 /* 공유 다이얼로그 — 인증 카드가 넓어 확인 다이얼로그보다 조금 넓게. */
@@ -270,6 +245,4 @@
   .studio-cond { border-right: 0; border-top: 1px solid rgb(var(--c-slate-200)); }
   .studio-cond .studio-scroll, .studio-dock .studio-scroll, .studio-chart .studio-scroll { overflow: visible; }
   .studio-dock-body { min-height: 320px; }
-  .sd-outs { grid-template-columns: minmax(0, 1fr); }
-  .studio-flow { display: none; }
 }

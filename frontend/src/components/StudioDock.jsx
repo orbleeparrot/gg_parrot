@@ -8,6 +8,7 @@ import EquityChart from "./EquityChart.jsx";
 import InfoTooltip from "./InfoTooltip.jsx";
 import { verdict } from "./OptimizePanel.jsx";
 import { useMacroActions } from "./PaperPanel.jsx";
+import StrategyDetails from "./StrategyDetails.jsx";
 import { fmtMoney, fmtMoneyCompact, fmtKrw, fmtPrice, fmtQty, quoteOf, baseOf } from "../lib/format.js";
 import { buildMacro, RULE_TYPES, CANDLE_INTERVALS } from "../lib/macro.js";
 import { useUsdKrw } from "../lib/usdkrw.js";
@@ -422,49 +423,37 @@ export function StudioPaper({ macro, valErr, controller }) {
   );
 }
 
-// ── 등록 · 실행 — 근거 한 줄 + 세 갈래(리더보드 등록이 노랑) + 실행기 안내는 접이식 ──
-export function StudioOutcomes({ macro, valErr, result, paperStatus, paperRunning, canRegister, onRegister }) {
+// ── 매크로 등록 — 내가 만든 매크로 한 줄이 주인공, 그 아래 네 가지 동작(리더보드 등록이 노랑), 그 아래 실행기 안내 상자 ──
+export function StudioOutcomes({ macro, valErr, strategyEntry, strategyExtra = [], canRegister, onRegister, onShare, shareBusy = false }) {
   const { quickRun, downloadMacro, launching, error } = useMacroActions(macro);
-  const paperRet = paperStatus?.current_return;
   const futures = macro.position_side === "short" || macro.leverage > 1;
   return (
     <div className="sd-outcomes">
-      <div className="sd-verdict">
-        {paperRet != null ? (
-          <span className={"sd-verdict-lead " + tone(paperRet)}>{paperRunning ? "페이퍼 진행 중" : "페이퍼 기록"} · {pct(paperRet)}</span>
-        ) : (
-          <span className="sd-verdict-lead text-slate-500">페이퍼 트레이딩은 아직</span>
-        )}
-        {result && (
-          <span>백테스트 <b className={"num " + tone(result.final_return_pct)}>{pct(result.final_return_pct)}</b> · MDD <b className="num">-{result.mdd_pct.toFixed(1)}%</b></span>
-        )}
-        <span className="sd-verdict-tail">{canRegister ? "이 설정 그대로 이어져요" : "조건이 바뀌었어요 — 다시 테스트한 뒤 등록할 수 있어요"}</span>
+      <div className="sd-macro">
+        <StrategyDetails entry={strategyEntry} extra={strategyExtra} />
       </div>
-
-      <div className="sd-outs">
-        <div className="sd-out is-main">
-          <h5>리더보드 등록</h5>
-          <p>오늘의 리더보드에 올려 다른 사람과 겨뤄요. 테스트한 설정을 바꾸지 않고 모의매매에 써요.</p>
-          <button type="button" onClick={() => onRegister?.()} disabled={!onRegister || !canRegister || !!valErr} className="btn btn-l btn-primary w-full">
-            이 설정으로 등록
-          </button>
-        </div>
-        <div className="sd-out">
-          <h5>빠른 실행</h5>
-          <p>내 윈도우 PC 의 실행기로 바로 넘겨요. 매크로 선택 → API 키 → 실행기 준비 → 계정 연결 순서예요.</p>
-          <button type="button" onClick={quickRun} disabled={!!valErr || launching} className="btn btn-l btn-secondary w-full">
-            {launching ? "실행 준비 중…" : "실행기로 보내기"}
-          </button>
-        </div>
-        <div className="sd-out">
-          <h5>매크로 파일 내려받기</h5>
-          <p><span className="num">.ggm.json</span> 파일로 저장해요. 다른 PC 의 실행기에 넣거나 나중에 다시 불러올 수 있어요.</p>
-          <button type="button" onClick={downloadMacro} disabled={!!valErr} className="btn btn-l btn-secondary w-full">내려받기</button>
-        </div>
+      <div className="sd-actions">
+        <button
+          type="button"
+          onClick={() => onRegister?.()}
+          disabled={!onRegister || !canRegister || !!valErr}
+          title={!canRegister ? "조건이 바뀌었어요 — 다시 테스트한 뒤 등록할 수 있어요" : undefined}
+          className="btn btn-l btn-primary"
+        >
+          리더보드 등록
+        </button>
+        <button type="button" onClick={quickRun} disabled={!!valErr || launching} className="btn btn-l btn-secondary">
+          {launching ? "실행 준비 중…" : "빠른 실행"}
+        </button>
+        <button type="button" onClick={downloadMacro} disabled={!!valErr} className="btn btn-l btn-secondary">매크로 파일 내려받기</button>
+        <button type="button" onClick={onShare} disabled={!!valErr || shareBusy} className="btn btn-l btn-secondary">
+          {shareBusy ? "저장 중…" : "공유 링크 보기"}
+        </button>
       </div>
+      {!canRegister && <p className="sd-note text-amber-700">조건이 바뀌었어요 — 다시 테스트한 뒤 등록할 수 있어요.</p>}
       {error && <p className="sd-note is-error" role="alert">오류: {error}</p>}
 
-      {/* 실행기 실거래 안내 — 원래 페이퍼 다음 단계에 있던 호박색 상자 그대로. 버튼은 위 세 상자에 있으니 여기는 글만. */}
+      {/* 실행기 실거래 안내 — 원래 페이퍼 다음 단계에 있던 호박색 상자 그대로. */}
       <div className="alert alert-warn sd-runner space-y-3">
         <div className="t-title">동작 검증 완료 → 매크로 실행기로 실거래</div>
         <p className="t-small">
@@ -489,7 +478,6 @@ export function StudioOutcomes({ macro, valErr, result, paperStatus, paperRunnin
           </ul>
         </div>
       </div>
-      <p className="sd-note">공유 링크와 인증 카드는 오른쪽 위 ⋯ 에 있어요.</p>
     </div>
   );
 }

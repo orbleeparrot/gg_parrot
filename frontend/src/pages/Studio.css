@@ -136,14 +136,21 @@
 .sd-empty span { max-width: 520px; }
 .sd-empty .btn { margin-top: 6px; }
 /* 백테스트 */
-.sd-kpis { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); border: 1px solid rgb(var(--c-slate-200)); border-radius: 12px; } /* overflow 를 막지 않는다 — ⓘ 말풍선이 띠 밖으로 나가야 한다 */
-.sd-kpi { min-width: 0; padding: 10px 14px; border-right: 1px solid rgb(var(--c-slate-200)); }
+/* 칸 폭은 내용에 맞춰 — 수익률(홀딩 비교 한 줄)·평가금액(전체 금액 + 단위)이 넓고, 샤프·손익비는 좁다. overflow 를 막지 않는다(ⓘ 말풍선). */
+.sd-kpis { display: grid; grid-template-columns: 1.55fr 1.35fr 1.1fr .95fr .95fr .95fr; border: 1px solid rgb(var(--c-slate-200)); border-radius: 12px; }
+.sd-kpi { min-width: 0; padding: 10px 12px; border-right: 1px solid rgb(var(--c-slate-200)); container-type: inline-size; }
 .sd-kpi:last-child { border-right: 0; }
-.sd-kpi-k { display: flex; align-items: center; gap: 2px; color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 600; }
-.sd-kpi-cap { white-space: nowrap; } /* 캡션만 한 줄 — 컨테이너나 자식 span 전체에 걸면 ⓘ 말풍선 글까지 안 접혀 상자 밖으로 흘렀다 */
-.sd-kpi-v { margin-top: 3px; color: rgb(var(--c-slate-900)); font-size: 18px; font-weight: 700; letter-spacing: -.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.sd-kpi-d { margin-top: 2px; color: rgb(var(--c-slate-500)); font-size: 12px; line-height: 1.4; }
-.sd-kpi-d > span { display: block; } /* 관련 정보 한 줄씩 — 홀딩 비교처럼 두 줄이면 두 줄로 */
+.sd-kpi-k { display: flex; align-items: center; gap: 2px; color: rgb(var(--c-slate-500)); font-size: 13px; font-weight: 600; }
+.sd-kpi-cap { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } /* 캡션만 한 줄 — 컨테이너나 자식 span 전체에 걸면 ⓘ 말풍선 글까지 안 접혀 상자 밖으로 흘렀다 */
+.sd-kpi-v { margin-top: 3px; color: rgb(var(--c-slate-900)); font-size: 22px; font-weight: 700; letter-spacing: -.02em; white-space: nowrap; }
+.sd-kpi-unit { margin-left: 4px; color: rgb(var(--c-slate-500)); font-size: .6em; font-weight: 600; letter-spacing: 0; }
+.sd-kpi-d { margin-top: 3px; color: rgb(var(--c-slate-500)); font-size: 13px; line-height: 1.4; font-weight: 500; }
+.sd-kpi-d .num { color: rgb(var(--c-slate-700)); font-weight: 600; }
+.sd-kpi-d .num.is-up { color: rgb(var(--c-green-600)); }
+.sd-kpi-d .num.is-down { color: rgb(var(--c-red-600)); }
+/* 좁은 칸에서는 값 글자를 한 단계씩 줄여 잘리지 않게 한다(칸 폭 기준 컨테이너 쿼리). */
+@container (max-width: 215px) { .sd-kpi-v { font-size: 20px; } }
+@container (max-width: 180px) { .sd-kpi-v { font-size: 18px; } .sd-kpi-k, .sd-kpi-d { font-size: 12px; } }
 .sd-liq { margin-top: 12px; }
 .sd-two { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 16px; margin-top: 8px; }
 .sd-eq { position: relative; padding: 8px 10px 8px; border: 1px solid rgb(var(--c-slate-200)); border-radius: 12px; }

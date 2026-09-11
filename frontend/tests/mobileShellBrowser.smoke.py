@@ -95,7 +95,7 @@ def main():
                         drawer = page.get_by_role('dialog', name='모바일 페이지 메뉴')
                         expect(drawer).to_be_visible()
                         expect(page.locator('.site-frame')).to_have_attribute('inert', '')
-                        for label in ('사용법', '실행기 설치'):
+                        for label in ('FAQ', '실행기 설치'):
                             link = drawer.get_by_role('link', name=label, exact=False)
                             expect(link).to_be_visible()
                             assert link.bounding_box()['height'] >= 44
@@ -143,7 +143,7 @@ def main():
                 page.get_by_role('button', name='페이지 메뉴 열기').tap()
                 drawer = page.get_by_role('dialog', name='모바일 페이지 메뉴')
                 drawer.get_by_role('link', name='실행기 설치', exact=False).scroll_into_view_if_needed()
-                drawer.get_by_role('link', name='사용법', exact=True).tap()
+                drawer.get_by_role('link', name='FAQ', exact=True).tap()
                 expect(drawer).to_be_hidden()  # even when navigating to the same URL
                 for path in ('/', '/news', '/guide', '/runner/install', '/board', '/leaderboard', '/builder'):
                     page.goto(origin + path, wait_until='networkidle')

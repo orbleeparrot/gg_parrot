@@ -44,6 +44,7 @@ _INTERVAL_MS = {
     "4h": 4 * 60 * 60_000,
     "1d": _MS_DAY,
 }
+PERIOD_PRESET_DAYS = {"1y": 365, "6m": 182, "3m": 91, "1m": 30, "1w": 7, "1d": 1}
 
 # Refuse requests whose raw simulation would monopolize the web process. The
 # response curve is compacted separately, but the engine still evaluates every
@@ -84,6 +85,15 @@ def _expected_bar_count(interval: str, start_ms: int, end_ms: int) -> int:
 def estimate_bar_count(interval: str, start_ms: int, end_ms: int) -> int:
     """Public interval-aware bar estimate used for preflight CPU budgets."""
     return _expected_bar_count(interval, start_ms, end_ms)
+
+
+def backtest_limits() -> dict:
+    """Expose the same limits and period arithmetic used by the simulation."""
+    return {
+        "max_bars": MAX_BACKTEST_BARS,
+        "interval_ms": dict(_INTERVAL_MS),
+        "preset_days": dict(PERIOD_PRESET_DAYS),
+    }
 
 
 def _cache_covers_window(
@@ -134,7 +144,7 @@ def resolve_period(preset: Optional[str], start: Optional[str], end: Optional[st
     """Resolve a period into (start_ms, end_ms) UTC epoch milliseconds."""
     now = datetime.now(timezone.utc)
     if preset and preset != "custom":
-        days = {"1y": 365, "6m": 182, "3m": 91}.get(preset)
+        days = PERIOD_PRESET_DAYS.get(preset)
         if days is None:
             raise ValueError(f"unknown period preset: {preset}")
         start_dt = now - timedelta(days=days)

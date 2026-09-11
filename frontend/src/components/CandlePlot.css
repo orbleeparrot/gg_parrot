@@ -1,0 +1,54 @@
+.financial-candle-plot {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  height: 260px;
+  outline: none;
+}
+.financial-candle-plot.is-expanded { height: 350px; }
+.financial-candle-plot.has-rsi { height: 370px; }
+.financial-candle-plot.is-expanded.has-rsi { height: 460px; }
+.financial-candle-plot:focus-visible {
+  outline: 2px solid rgb(var(--c-brand-line));
+  outline-offset: 2px;
+}
+.financial-candle-canvas { position: absolute; inset: 0; }
+.candle-chart.is-studio { width: 100%; min-width: 0; }
+.candle-chart-market { min-width: 0; }
+.candle-chart-symbol { margin: 0 0 4px; }
+.candle-chart-price-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; }
+.candle-chart-price { display: inline-flex; align-items: baseline; gap: 6px; white-space: nowrap; }
+.candle-chart-current {
+  font-size: clamp(28px, 2.4vw, 32px);
+  font-weight: 750;
+  line-height: 1.15;
+  letter-spacing: -.035em;
+}
+.candle-chart-readout { padding-block: 8px; }
+.candle-readout-row { display: flex; align-items: flex-end; gap: 12px; }
+.candle-readout-row .candle-ohlc { flex: 1; min-width: 0; }
+/* Match the price-axis label inset, rather than the outer canvas edge. */
+.candle-chart-readout .candle-chart-live { flex: none; margin-left: auto; margin-right: 10px; white-space: nowrap; }
+.candle-chart.is-studio .candle-chart-readout { flex: none; }
+.candle-chart.is-studio .candle-chart-plot > .financial-candle-plot {
+  position: absolute;
+  inset: 0;
+  height: 100%;
+}
+@media (max-width: 640px) {
+  .financial-candle-plot { height: 240px; }
+  .financial-candle-plot.is-expanded { height: 280px; }
+  .financial-candle-plot.has-rsi { height: 350px; }
+  .financial-candle-plot.is-expanded.has-rsi { height: 390px; }
+}
+@media (max-width: 1099px) {
+  .candle-chart.is-studio .candle-chart-toolbar .candle-chart-controls {
+    display: grid;
+    grid-template-columns: 32px max-content 32px max-content;
+    justify-content: start;
+    max-width: 100%;
+  }
+  .candle-chart.is-studio .candle-chart-controls > .seg { grid-column: 1 / -1; }
+  .candle-chart.is-studio .candle-chart-stage .candle-chart-plot { min-height: 240px; }
+  .candle-chart.is-studio .candle-chart-stage .candle-chart-plot:has(.has-rsi) { min-height: 350px; }
+}

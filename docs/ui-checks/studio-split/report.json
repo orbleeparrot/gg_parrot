@@ -1,0 +1,493 @@
+{
+  "passed": true,
+  "checks": [
+    {
+      "target": 280,
+      "panel": 280,
+      "chart": 927,
+      "work": 1208,
+      "columns": 1,
+      "moneyLines": 1,
+      "overflow": false,
+      "chartCanvas": 830
+    },
+    {
+      "target": 400,
+      "panel": 400,
+      "chart": 807,
+      "work": 1208,
+      "columns": 1,
+      "moneyLines": 1,
+      "overflow": false,
+      "chartCanvas": 710
+    },
+    {
+      "target": 460,
+      "panel": 460,
+      "chart": 747,
+      "work": 1208,
+      "columns": 2,
+      "moneyLines": 1,
+      "overflow": false,
+      "chartCanvas": 650
+    },
+    {
+      "target": 560,
+      "panel": 560,
+      "chart": 647,
+      "work": 1208,
+      "columns": 2,
+      "moneyLines": 1,
+      "overflow": false,
+      "chartCanvas": 550
+    },
+    {
+      "target": 680,
+      "panel": 680,
+      "chart": 527,
+      "work": 1208,
+      "columns": 2,
+      "moneyLines": 1,
+      "overflow": false,
+      "chartCanvas": 430
+    },
+    {
+      "target": 336,
+      "panel": 336,
+      "chart": 871,
+      "work": 1208,
+      "columns": 1,
+      "moneyLines": 1,
+      "overflow": false,
+      "chartCanvas": 774
+    },
+    {
+      "clickStable": true,
+      "repeatedClickStable": true,
+      "continuousPointerTracking": true
+    },
+    {
+      "minimumWidthStableOnOvershoot": true,
+      "collapseDeadZonePx": 96
+    },
+    {
+      "collapseThreshold": true,
+      "reverseBeforeRelease": true
+    },
+    {
+      "cancelCollapseRestoresWidth": true
+    },
+    {
+      "restorePreviousWidth": true,
+      "preserveInputsOnCollapse": true,
+      "focusRestored": true
+    },
+    {
+      "collapsedReload": true,
+      "mobileAlwaysShowsConditions": true,
+      "keyboardRestore": true
+    },
+    {
+      "keyboardCollapse": true
+    },
+    {
+      "rule": "A",
+      "target": 280,
+      "panel": 280,
+      "chart": 927,
+      "work": 1208,
+      "columns": 1,
+      "moneyLines": 1,
+      "overflow": false,
+      "chartCanvas": 830
+    },
+    {
+      "rule": "B",
+      "target": 280,
+      "panel": 280,
+      "chart": 927,
+      "work": 1208,
+      "columns": 1,
+      "moneyLines": 1,
+      "overflow": false,
+      "chartCanvas": 828
+    },
+    {
+      "rule": "C",
+      "target": 280,
+      "panel": 280,
+      "chart": 927,
+      "work": 1208,
+      "columns": 1,
+      "moneyLines": 0,
+      "overflow": false,
+      "chartCanvas": 828
+    },
+    {
+      "rule": "D",
+      "target": 280,
+      "panel": 280,
+      "chart": 927,
+      "work": 1208,
+      "columns": 1,
+      "moneyLines": 1,
+      "overflow": false,
+      "chartCanvas": 828
+    },
+    {
+      "rule": "E",
+      "target": 280,
+      "panel": 280,
+      "chart": 927,
+      "work": 1208,
+      "columns": 1,
+      "moneyLines": 1,
+      "overflow": false,
+      "chartCanvas": 830
+    },
+    {
+      "rule": "F",
+      "target": 280,
+      "panel": 280,
+      "chart": 927,
+      "work": 1208,
+      "columns": 1,
+      "moneyLines": 1,
+      "overflow": false,
+      "chartCanvas": 830
+    },
+    {
+      "rule": "G",
+      "target": 280,
+      "panel": 280,
+      "chart": 927,
+      "work": 1208,
+      "columns": 1,
+      "moneyLines": 1,
+      "overflow": false,
+      "chartCanvas": 828
+    },
+    {
+      "rule": "H",
+      "target": 280,
+      "panel": 280,
+      "chart": 927,
+      "work": 1208,
+      "columns": 1,
+      "moneyLines": 1,
+      "overflow": false,
+      "chartCanvas": 828
+    },
+    {
+      "rule": "I",
+      "target": 280,
+      "panel": 280,
+      "chart": 927,
+      "work": 1208,
+      "columns": 1,
+      "moneyLines": 1,
+      "overflow": false,
+      "chartCanvas": 830
+    },
+    {
+      "rule": "J",
+      "target": 280,
+      "panel": 280,
+      "chart": 927,
+      "work": 1208,
+      "columns": 1,
+      "moneyLines": 1,
+      "overflow": false,
+      "chartCanvas": 830
+    },
+    {
+      "rule": "K",
+      "target": 280,
+      "panel": 280,
+      "chart": 927,
+      "work": 1208,
+      "columns": 1,
+      "moneyLines": 1,
+      "overflow": false,
+      "chartCanvas": 828
+    },
+    {
+      "rule": "A",
+      "target": 460,
+      "panel": 460,
+      "chart": 747,
+      "work": 1208,
+      "columns": 2,
+      "moneyLines": 1,
+      "overflow": false,
+      "chartCanvas": 648
+    },
+    {
+      "rule": "B",
+      "target": 460,
+      "panel": 460,
+      "chart": 747,
+      "work": 1208,
+      "columns": 2,
+      "moneyLines": 1,
+      "overflow": false,
+      "chartCanvas": 648
+    },
+    {
+      "rule": "C",
+      "target": 460,
+      "panel": 460,
+      "chart": 747,
+      "work": 1208,
+      "columns": 2,
+      "moneyLines": 0,
+      "overflow": false,
+      "chartCanvas": 650
+    },
+    {
+      "rule": "D",
+      "target": 460,
+      "panel": 460,
+      "chart": 747,
+      "work": 1208,
+      "columns": 2,
+      "moneyLines": 1,
+      "overflow": false,
+      "chartCanvas": 648
+    },
+    {
+      "rule": "E",
+      "target": 460,
+      "panel": 460,
+      "chart": 747,
+      "work": 1208,
+      "columns": 2,
+      "moneyLines": 1,
+      "overflow": false,
+      "chartCanvas": 648
+    },
+    {
+      "rule": "F",
+      "target": 460,
+      "panel": 460,
+      "chart": 747,
+      "work": 1208,
+      "columns": 2,
+      "moneyLines": 1,
+      "overflow": false,
+      "chartCanvas": 650
+    },
+    {
+      "rule": "G",
+      "target": 460,
+      "panel": 460,
+      "chart": 747,
+      "work": 1208,
+      "columns": 2,
+      "moneyLines": 1,
+      "overflow": false,
+      "chartCanvas": 648
+    },
+    {
+      "rule": "H",
+      "target": 460,
+      "panel": 460,
+      "chart": 747,
+      "work": 1208,
+      "columns": 2,
+      "moneyLines": 1,
+      "overflow": false,
+      "chartCanvas": 648
+    },
+    {
+      "rule": "I",
+      "target": 460,
+      "panel": 460,
+      "chart": 747,
+      "work": 1208,
+      "columns": 2,
+      "moneyLines": 1,
+      "overflow": false,
+      "chartCanvas": 648
+    },
+    {
+      "rule": "J",
+      "target": 460,
+      "panel": 460,
+      "chart": 747,
+      "work": 1208,
+      "columns": 2,
+      "moneyLines": 1,
+      "overflow": false,
+      "chartCanvas": 650
+    },
+    {
+      "rule": "K",
+      "target": 460,
+      "panel": 460,
+      "chart": 747,
+      "work": 1208,
+      "columns": 2,
+      "moneyLines": 1,
+      "overflow": false,
+      "chartCanvas": 648
+    },
+    {
+      "rule": "A",
+      "target": 680,
+      "panel": 680,
+      "chart": 527,
+      "work": 1208,
+      "columns": 2,
+      "moneyLines": 1,
+      "overflow": false,
+      "chartCanvas": 428
+    },
+    {
+      "rule": "B",
+      "target": 680,
+      "panel": 680,
+      "chart": 527,
+      "work": 1208,
+      "columns": 2,
+      "moneyLines": 1,
+      "overflow": false,
+      "chartCanvas": 428
+    },
+    {
+      "rule": "C",
+      "target": 680,
+      "panel": 680,
+      "chart": 527,
+      "work": 1208,
+      "columns": 2,
+      "moneyLines": 0,
+      "overflow": false,
+      "chartCanvas": 430
+    },
+    {
+      "rule": "D",
+      "target": 680,
+      "panel": 680,
+      "chart": 527,
+      "work": 1208,
+      "columns": 2,
+      "moneyLines": 1,
+      "overflow": false,
+      "chartCanvas": 428
+    },
+    {
+      "rule": "E",
+      "target": 680,
+      "panel": 680,
+      "chart": 527,
+      "work": 1208,
+      "columns": 2,
+      "moneyLines": 1,
+      "overflow": false,
+      "chartCanvas": 428
+    },
+    {
+      "rule": "F",
+      "target": 680,
+      "panel": 680,
+      "chart": 527,
+      "work": 1208,
+      "columns": 2,
+      "moneyLines": 1,
+      "overflow": false,
+      "chartCanvas": 430
+    },
+    {
+      "rule": "G",
+      "target": 680,
+      "panel": 680,
+      "chart": 527,
+      "work": 1208,
+      "columns": 2,
+      "moneyLines": 1,
+      "overflow": false,
+      "chartCanvas": 428
+    },
+    {
+      "rule": "H",
+      "target": 680,
+      "panel": 680,
+      "chart": 527,
+      "work": 1208,
+      "columns": 2,
+      "moneyLines": 1,
+      "overflow": false,
+      "chartCanvas": 428
+    },
+    {
+      "rule": "I",
+      "target": 680,
+      "panel": 680,
+      "chart": 527,
+      "work": 1208,
+      "columns": 2,
+      "moneyLines": 1,
+      "overflow": false,
+      "chartCanvas": 430
+    },
+    {
+      "rule": "J",
+      "target": 680,
+      "panel": 680,
+      "chart": 527,
+      "work": 1208,
+      "columns": 2,
+      "moneyLines": 1,
+      "overflow": false,
+      "chartCanvas": 430
+    },
+    {
+      "rule": "K",
+      "target": 680,
+      "panel": 680,
+      "chart": 527,
+      "work": 1208,
+      "columns": 2,
+      "moneyLines": 1,
+      "overflow": false,
+      "chartCanvas": 428
+    },
+    {
+      "resultReflow": true,
+      "noRepeatBacktest": true,
+      "pointerCancel": true
+    },
+    {
+      "mobile": 320,
+      "panel": 320,
+      "chart": 320,
+      "work": 320,
+      "columns": 1,
+      "moneyLines": 1,
+      "overflow": false,
+      "chartCanvas": 224
+    },
+    {
+      "mobile": 390,
+      "panel": 390,
+      "chart": 390,
+      "work": 390,
+      "columns": 1,
+      "moneyLines": 1,
+      "overflow": false,
+      "chartCanvas": 294
+    },
+    {
+      "mobile": 768,
+      "panel": 768,
+      "chart": 768,
+      "work": 768,
+      "columns": 2,
+      "moneyLines": 1,
+      "overflow": false,
+      "chartCanvas": 672
+    }
+  ],
+  "errors": []
+}

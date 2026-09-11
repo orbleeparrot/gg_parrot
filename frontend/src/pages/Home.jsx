@@ -7,6 +7,7 @@ import {
 import { lockBodyScroll } from "../lib/bodyScrollLock.js";
 import { isLoggedIn } from "../lib/auth.js";
 import { getRunnerDevice } from "../lib/runnerDevice.js";
+import "./HomeCommunity.css";
 import "./HomeMobile.css";
 
 const StartGuide = lazy(() => import("./Start.jsx"));
@@ -168,7 +169,7 @@ function CommunityEntryHero({ staticLayout = false }) {
         </div>
       </div>
 
-      <aside className="home-community-preview" aria-label="껄무새 게시판 화면 예시">
+      <aside className="home-community-preview" aria-label="껄무새 게시판 화면 예시" aria-describedby="home-community-preview-caption">
         {!staticLayout ? <header className="home-board-preview-head">
           <span className="home-board-preview-mascot" aria-hidden="true">
             <img
@@ -186,15 +187,13 @@ function CommunityEntryHero({ staticLayout = false }) {
           </div>
           <span className="home-board-preview-write" aria-hidden="true">새 글 쓰기</span>
         </header> : null}
+        <p id="home-community-preview-caption" className="home-community-preview-caption t-caption text-slate-500">게시글 미리보기</p>
         <div className="home-community-post-viewport">
           <div className="home-community-post-track">
             <CommunityPostList limit={staticLayout ? 3 : COMMUNITY_POSTS.length} />
             {staticLayout ? null : <CommunityPostList duplicate />}
           </div>
         </div>
-        {!staticLayout ? <footer className="home-board-preview-footer" aria-hidden="true">
-          <span>‹</span><strong>1</strong><span>2</span><span>3</span><span>›</span>
-        </footer> : null}
       </aside>
     </section>
   );

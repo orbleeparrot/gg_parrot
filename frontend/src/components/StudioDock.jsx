@@ -1,0 +1,673 @@
+// 직접 만들기 결과 독 — 다섯 탭의 화면. 데이터는 공용 부품(ResultView·OptimizePanel·PaperPanel)의
+// 것과 같고, 화면만 워크벤치 시안대로 그린다: 수치 띠 · 자산곡선 · 열 지도 · 상태 상자 · 세 갈래 결과.
+// 스타일은 pages/Studio.css 의 .sd-* .
+import { Fragment, useLayoutEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
+import { api } from "../api.js";
+import EquityChart from "./EquityChart.jsx";
+import InfoTooltip from "./InfoTooltip.jsx";
+import { verdict } from "./OptimizePanel.jsx";
+import { useMacroActions } from "./PaperPanel.jsx";
+import CoinIcon from "./CoinIcon.jsx";
+import { fmtMoney, fmtMoneyCompact, fmtKrw, fmtPrice, fmtQty, quoteOf, baseOf } from "../lib/format.js";
+import { buildMacro, RULE_TYPES, CANDLE_INTERVALS } from "../lib/macro.js";
+import { leaderboardStrategy } from "../lib/leaderboardStrategy.js";
+import { strategyPhrases } from "../lib/strategyText.js";
+import { paperMainButton } from "../lib/paperMain.js";
+import { useUsdKrw } from "../lib/usdkrw.js";
+
+const AI_MASCOT = "/brand/navigation/ggparrot-nav-agent.svg";
+const SIDE_KO = { buy: "매수", sell: "매도", short: "숏 진입", cover: "숏 청산" };
+const SIDE_CLS = { buy: "is-buy", short: "is-buy", sell: "is-sell", cover: "is-sell" };
+const pct = (v, digits = 2) => `${v >= 0 ? "+" : ""}${Number(v).toFixed(digits)}%`;
+// 금액 축약 — 1,000,000 → 1.00M · 764,842 → 764.8K (수치 띠의 보조 글은 한 줄이어야 한다).
+const compactNum = (v) => {
+  const a = Math.abs(Number(v) || 0);
+  if (a >= 1e9) return (v / 1e9).toFixed(2) + "B";
+  if (a >= 1e6) return (v / 1e6).toFixed(2) + "M";
+  if (a >= 1e3) return (v / 1e3).toFixed(1) + "K";
+  return Number(v).toFixed(0);
+};
+// 등락색 — 독 전용 클래스(.is-up/.is-down). Tailwind 의 text-*-600 은 .sd-box-v 같은 상자 규칙과 같은 우선순위라
+// 실리는 순서에 따라 지는 일이 있었다(페이퍼 현재 수익률이 마이너스인데 흰색).
+const tone = (v) => (v >= 0 ? "is-up" : "is-down");
+
+// ── 탭 줄 — 같은 폭의 탭 + 상태 점(빈 · 초록=완료 · 호박=조건 바뀜 · 노랑 깜박임=진행 중) + 미끄러지는 밑줄.
+//    폭은 문구와 무관하게 같다(96~168px 칸). 밑줄은 탭마다 긋지 않고 줄 하나가 켜진 탭 자리로 옮겨 간다(--sd-tab-index). ──
+export function StudioTabs({ tabs, active, onChange }) {
+  const activeIndex = Math.max(0, tabs.findIndex((tab) => tab.id === active));
+  return (
+    <div className="sd-tabs" style={{ "--sd-tab-count": tabs.length, "--sd-tab-index": activeIndex }}>
+      {/* 바깥은 가로 스크롤 상자, 안쪽 트랙이 칸을 나눈다 — 밑줄은 트랙 기준이라 독이 아주 좁아 밀려도 켜진 탭 아래에 온다. */}
+      <div className="sd-tabs-track" role="tablist" aria-label="결과 보기">
+      {tabs.map((tab) => (
+        <button
+          key={tab.id}
+          type="button"
+          role="tab"
+          id={`studio-tab-${tab.id}`}
+          aria-selected={active === tab.id}
+          aria-controls="studio-dock-panel"
+          disabled={!tab.enabled}
+          title={!tab.enabled ? "백테스트 결과가 있어야 볼 수 있어요" : undefined}
+          onClick={() => onChange(tab.id)}
+          className={"sd-tab" + (active === tab.id ? " is-on" : "")}
+        >
+          <i className={"studio-dot" + (tab.dot ? ` is-${tab.dot}` : "")} aria-hidden="true" />
+          <span className="sd-tab-label">{tab.label}</span>
+        </button>
+      ))}
+      </div>
+    </div>
+  );
+}
+
+// ── 백테스트 — 수치 여섯 칸 + 자산곡선 + 종목별 표 ──
+export function StudioBacktest({ result: r, perSymbol, periodLabel, symbol, leverage = 1 }) {
+  const { rate: krwRate } = useUsdKrw();
+  const quote = quoteOf(symbol);
+  const bh = r.buy_hold_return_pct != null ? r.buy_hold_return_pct : null;
+  const vsHold = bh !== null ? r.final_return_pct - bh : null;
+  const liq = r.liquidation_count || 0;
+  // 원래 ResultView 의 정보 세트 그대로(수익률·홀딩 비교 · 최종 평가금액+원화 · MDD · 승률 · 총 매매 횟수 · 샤프 · 손익비 · 최대 연속손절),
+  // 관련된 것끼리 한 칸에: 수익률↔홀딩 비교, 평가금액↔원화, MDD↔연속손절, 승률↔매매 횟수. 없던 지표는 만들지 않는다.
+  const streak = r.max_consecutive_losses || 0;
+  const krw = fmtKrw(r.final_equity, krwRate); // "≈ 10.3억원"
+  const krwMatch = /^(≈?\s*[\d.,]+)(.*)$/.exec(krw || "");
+  // 숫자에만 .num(고정폭) — 한글까지 고정폭 클래스에 넣으면 한글이 대체 글꼴로 빠져 글자가 깨져 보인다.
+  const kpis = [
+    { k: `백테스트 수익률 · ${periodLabel || "테스트 기간"}`, term: "backtest", v: pct(r.final_return_pct), cls: tone(r.final_return_pct),
+      d: bh === null ? "비교 기준 없음" : (
+        <>홀딩했다면 <span className="num">{pct(bh)}</span> (<span className={"num " + tone(vsHold)}>{vsHold >= 0 ? "+" : ""}{vsHold.toFixed(2)}%p</span>)</>
+      ) },
+    { k: "최종 평가금액", v: <>{fmtMoneyCompact(r.final_equity, symbol).replace(new RegExp(`\\s*${quote}$`), "")}<small className="sd-kpi-unit">{quote}</small></>, title: fmtMoney(r.final_equity, symbol), cls: "",
+      d: krw ? (krwMatch ? <><span className="num">{krwMatch[1]}</span>{krwMatch[2]}</> : krw) : null },
+    { k: "MDD (최대낙폭)", term: "mdd", v: `-${r.mdd_pct.toFixed(1)}%`, cls: "is-down",
+      d: <>최대 연속손절 <span className={"num" + (streak >= 5 ? " is-down" : "")}>{streak}</span>회</> },
+    { k: "승률", term: "win_rate", v: `${r.win_rate_pct.toFixed(1)}%`, cls: "", d: <>총 매매 횟수 <span className="num">{r.total_trades}</span></> },
+    { k: "샤프지수", term: "sharpe", v: r.sharpe != null ? r.sharpe.toFixed(2) : "—", cls: r.sharpe != null && r.sharpe >= 1 ? "is-up" : "", d: null },
+    { k: "손익비 (PF)", term: "profit_factor", v: r.profit_factor != null ? r.profit_factor.toFixed(2) : "—", cls: r.profit_factor != null && r.profit_factor >= 1 ? "is-up" : "", d: null },
+  ];
+  return (
+    <div className="sd-bt">
+      <div className="sd-kpis">
+        {kpis.map((kpi) => (
+          <div key={kpi.k} className="sd-kpi">
+            <div className="sd-kpi-k"><span className="sd-kpi-cap">{kpi.k}</span>{kpi.term && <InfoTooltip term={kpi.term} />}</div>
+            <div className={"sd-kpi-v num " + kpi.cls} title={kpi.title}>{kpi.v}</div>
+            {kpi.d && <div className="sd-kpi-d">{kpi.d}</div>}
+          </div>
+        ))}
+      </div>
+
+      {liq > 0 && (
+        <div className="alert alert-risk sd-liq">
+          <div className="t-title">기간 중 <span className="num">{liq}</span>번 청산됐어요 (전액 손실)</div>
+          <div className="mt-1 t-small">
+            레버리지 <span className="num">{leverage}</span>배라 청산으로 잃은 금액 <b className="num">{fmtMoney(r.liquidated_loss || 0, symbol)}</b>
+            {fmtKrw(r.liquidated_loss || 0, krwRate) && <span className="num"> ({fmtKrw(r.liquidated_loss || 0, krwRate)})</span>}.
+            <InfoTooltip term="liquidation" />
+          </div>
+        </div>
+      )}
+
+      <div className="sd-two">
+        <div className="sd-eq">
+          <div className="sd-cap">자산곡선{periodLabel ? ` · ${periodLabel}` : ""} · 파선이 본전</div>
+          <EquityChart curve={r.equity_curve} height={140} stretch />
+        </div>
+        <div className="sd-side">
+          <table className="sd-table">
+            <thead>
+              <tr><th>종목</th><th className="r">수익률</th><th className="r">MDD</th><th className="r">거래</th></tr>
+            </thead>
+            <tbody>
+              {perSymbol && perSymbol.length > 0 ? (
+                perSymbol.map((row) => (
+                  <tr key={row.symbol}>
+                    <td className="num">{row.symbol}</td>
+                    <td className={"r num " + tone(row.final_return_pct)}>{pct(row.final_return_pct)}</td>
+                    <td className="r num">-{Number(row.mdd_pct).toFixed(1)}%</td>
+                    <td className="r num">{row.total_trades}</td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td className="num">{symbol}</td>
+                  <td className={"r num " + tone(r.final_return_pct)}>{pct(r.final_return_pct)}</td>
+                  <td className="r num">-{r.mdd_pct.toFixed(1)}%</td>
+                  <td className="r num">{r.total_trades}</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+          {leverage > 1 && (
+            <p className="sd-note"><span className="badge badge-risk">고위험 레버리지 <span className="num">{leverage}</span>배 <InfoTooltip term="leverage" /></span></p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── 껄무새 AI 해설 — 얼굴 + 머리말 + 요점 + 이 매크로를 쓴다면. 규칙 기반 문장은 보이지 않는다(분석하기를 누르면 AI). ──
+export function StudioAiExplain({ explanation, onAiExplain, aiBusy, aiError }) {
+  const isAi = explanation && explanation.source === "ai";
+  return (
+    <div className="sd-ai">
+      <img src={AI_MASCOT} alt="" width="256" height="256" className="sd-ai-face" aria-hidden="true" draggable="false" />
+      <div className="sd-ai-body">
+        <div className="sd-ai-who">
+          껄무새 AI 해설
+          <small>{isAi ? "이 결과가 왜 이렇게 나왔는지 · 5줄 안으로" : "이 결과가 왜 이렇게 나왔는지 쉽게 정리해 드려요"}</small>
+        </div>
+        {isAi ? (
+          <>
+            <p className="sd-ai-head">{explanation.headline}</p>
+            {explanation.points?.length > 0 && (
+              <ul className="sd-ai-points">
+                {explanation.points.map((point, index) => <li key={index}>{point}</li>)}
+              </ul>
+            )}
+            {explanation.lesson && (
+              <p className="sd-ai-lesson"><b>이 매크로를 쓴다면 · </b>{explanation.lesson}</p>
+            )}
+            {explanation.disclaimer && <p className="sd-note">{explanation.disclaimer}</p>}
+          </>
+        ) : (
+          <p className="sd-ai-empty">
+            버튼을 누르면 서버의 AI 가 백테스트 결과의 원인을 짚어요 — 어디서 벌고 어디서 잃었는지, 무엇을 조심할지, 어떤 값을 바꿔 볼지.
+          </p>
+        )}
+        {aiError && <p className="sd-note text-amber-700" role="alert">{aiError}</p>}
+        <div className="sd-ai-actions">
+          <button type="button" onClick={onAiExplain} disabled={aiBusy} className="btn btn-m btn-secondary">
+            {aiBusy ? "분석 중…" : isAi ? "다시 분석" : "AI 로 분석하기"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── 익·손절 최적화 — 열 지도(왼쪽) + 최적·검증·주의·적용(오른쪽). 시안대로 셀은 한 줄, 색은 은은한 초록/빨강. ──
+// 셀 색 — 본전(0)이 회색, |수익률|/최대 에 비례해 초록·빨강을 섞는다(시안의 color-mix).
+function heatBg(value, extent) {
+  if (!(extent > 0)) return {};
+  const mag = Math.min(1, Math.abs(value) / extent);
+  const p = Math.round(8 + 56 * mag);
+  const color = value >= 0 ? "rgb(var(--c-green-600))" : "rgb(var(--c-red-600))";
+  return { background: `color-mix(in srgb, ${color} ${p}%, rgb(var(--c-slate-100)))` };
+}
+
+export function StudioOptimize({ form, setForm, valErr, onResult }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [data, setData] = useState(null);
+
+  async function run() {
+    setError("");
+    if (valErr) return setError(valErr);
+    setBusy(true);
+    try {
+      const res = await api.optimize(buildMacro(form));
+      setData(res);
+      onResult?.(res);
+    } catch (e) {
+      setError(String(e.message || e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  const apply = (tp, sl) => setForm((f) => ({ ...f, take_profit_pct: tp, stop_loss_pct: sl, use_stop_loss: true }));
+
+  const returns = data ? data.cells.map((c) => c.final_return_pct) : [];
+  const extent = returns.length ? Math.max(...returns.map((v) => Math.abs(v))) : 0;
+  const cellAt = (tp, sl) => data?.cells.find((c) => c.tp === tp && c.sl === sl) || null;
+  const best = data?.best || null;
+  const current = data?.current || null;
+  const currentCell = current ? cellAt(current.tp, current.sl) : null;
+  const isCurrent = (tp, sl) => current && current.tp === tp && current.sl === sl;
+  const isBest = (tp, sl) => best && best.tp === tp && best.sl === sl;
+  const bestApplied = best && Number(form.take_profit_pct) === best.tp && Number(form.stop_loss_pct) === best.sl && form.use_stop_loss;
+  const info = best ? verdict(best, data.validation) : null;
+
+  if (!data) {
+    return (
+      <div className="sd-empty">
+        <b>익절 × 손절 조합을 모두 돌려 봐요</b>
+        <span>기간을 학습과 검증으로 나눠, 학습에서 고른 값이 고를 때 쓰지 않은 검증 구간에서도 통했는지까지 확인해요. 칸을 누르면 조건에 바로 적용돼요.</span>
+        {error && <span className="is-error">오류: {error}</span>}
+        <button type="button" onClick={run} disabled={busy || !!valErr} className="btn btn-m btn-secondary">
+          {busy ? "최적화 중…" : "최적화 돌려보기"}
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="sd-opt">
+      <div className="sd-opt-grid">
+        <div className="sd-opt-head">
+          <b>손절 ＼ 익절 · 학습 구간 수익률 <InfoTooltip term="optimize" /></b>
+          <span className="sd-opt-hint">회색이 본전 · 칸을 누르면 적용</span>
+          <button type="button" onClick={run} disabled={busy || !!valErr} className="btn btn-s btn-secondary">{busy ? "최적화 중…" : "다시 최적화"}</button>
+        </div>
+        <div className="sd-heat" style={{ gridTemplateColumns: `52px repeat(${data.tp_values.length}, minmax(0, 1fr))` }}>
+          <div className="sd-heat-h" />
+          {data.tp_values.map((tp) => <div key={`h-${tp}`} className="sd-heat-h num">{tp}%</div>)}
+          {data.sl_values.map((sl) => (
+            <Fragment key={`r-${sl}`}>
+              <div className="sd-heat-h num">{sl}%</div>
+              {data.tp_values.map((tp) => {
+                const c = cellAt(tp, sl);
+                if (!c) return <div key={`${tp}-${sl}`} />;
+                return (
+                  <button
+                    key={`${tp}-${sl}`}
+                    type="button"
+                    onClick={() => apply(tp, sl)}
+                    style={heatBg(c.final_return_pct, extent)}
+                    className={"sd-heat-c num" + (isBest(tp, sl) ? " is-best" : "") + (isCurrent(tp, sl) ? " is-current" : "")}
+                    aria-label={`익절 ${tp}% 손절 ${sl}% · 학습 ${pct(c.final_return_pct, 1)}${c.oos_return_pct != null ? ` · 검증 ${pct(c.oos_return_pct, 1)}` : ""}`}
+                    title={
+                      `익절 ${tp}% · 손절 ${sl}%\n학습 ${pct(c.final_return_pct)} · MDD -${c.mdd_pct.toFixed(1)}% · 샤프 ${c.sharpe ?? "—"} · 매매 ${c.total_trades}회\n` +
+                      (c.oos_return_pct != null ? `검증 ${pct(c.oos_return_pct)} (매매 ${c.oos_trades}회)\n` : "검증 구간 없음 (기간이 짧아요)\n") +
+                      "누르면 조건에 적용"
+                    }
+                  >
+                    {pct(c.final_return_pct, 1).replace("%", "")}
+                  </button>
+                );
+              })}
+            </Fragment>
+          ))}
+        </div>
+      </div>
+
+      <div className="sd-opt-side">
+        {best && (
+          <div className="sd-box">
+            <div className="sd-box-k">★ 최적 · 주변까지 고르게 좋은 구간</div>
+            <div className="sd-box-v">익절 <span className="num">{best.tp}%</span> · 손절 <span className="num">{best.sl}%</span></div>
+          </div>
+        )}
+        {best && data.validation?.split && best.oos_return_pct != null && (
+          <div className="sd-box">
+            <div className="sd-box-k">검증 구간 · 고를 때 쓰지 않은 기간 <InfoTooltip text={`검증 기간 ${data.validation.test_label} 에서 다시 돌린 성적이에요. 학습 ${data.validation.train_label}.`} /></div>
+            <div className={"sd-box-v num " + tone(best.oos_return_pct)}>
+              {pct(best.oos_return_pct, 1)}
+              {currentCell?.oos_return_pct != null && <small className="text-slate-500"> · 지금 설정 {pct(currentCell.oos_return_pct, 1)}</small>}
+            </div>
+          </div>
+        )}
+        <div className="sd-box is-warn">
+          {info ? <><b>{info.label}</b> — {info.text}</> : <><b>과최적화 주의</b> — 과거에 맞춘 값이에요. 주변까지 고르게 좋은 구간이 더 믿을 만해요.</>}
+        </div>
+        {best && (
+          <button type="button" onClick={() => apply(best.tp, best.sl)} disabled={bestApplied || !!valErr} className="btn btn-m btn-secondary w-full">
+            {bestApplied ? "최적값 적용됨 · 다시 계산 중" : `익절 ${best.tp}% · 손절 ${best.sl}% 적용`}
+          </button>
+        )}
+        {error && <p className="sd-note is-error">오류: {error}</p>}
+      </div>
+    </div>
+  );
+}
+
+// 시작 시점 설정 한 줄 — 페이퍼는 시작할 때의 설정으로 고정된다.
+function macroLine(macro) {
+  if (!macro) return "";
+  const interval = CANDLE_INTERVALS.find((i) => i.value === macro.candle_interval)?.label || macro.candle_interval;
+  const parts = [macro.symbol, RULE_TYPES[macro.rule_type]?.label, macro.position_side === "short" ? "숏" : "롱", interval ? `${interval}봉` : "", `${macro.leverage || 1}배`];
+  return parts.filter(Boolean).join(" · ");
+}
+
+// ── 페이퍼 트레이딩 — 왼쪽 상태 상자, 오른쪽 매매 로그 ──
+export function StudioPaper({ macro, valErr, controller }) {
+  const { status, mode, setMode, busy, error, startedMacro, startedMode, running, start, stop, restart } = controller;
+  const { rate: krwRate } = useUsdKrw();
+  const quote = quoteOf(macro.symbol);
+  const base = baseOf(macro.symbol);
+  const ret = status?.current_return ?? 0;
+  const macroChanged = running && startedMacro && JSON.stringify(startedMacro) !== JSON.stringify(macro);
+  const modeLabel = (value) => (value === "replay" ? "데모 리플레이" : "실시간");
+  // 주 버튼 하나 — 시작 → 중지 → 다시 시작. 자리(왼쪽 아래 동작 줄)와 폭은 그대로, 문구와 색만 바뀐다.
+  const main = paperMainButton({ running, hasSession: !!status, busy });
+
+  return (
+    <div className="sd-paper">
+      <div className="sd-paper-left">
+        {!status ? (
+          <>
+            <div className="sd-field">
+              <label>모의매매 방식 <InfoTooltip term="paper_trading" /></label>
+              <div className="seg sd-seg" role="group" aria-label="페이퍼 트레이딩 방식">
+                <button type="button" onClick={() => setMode("live")} aria-pressed={mode === "live"} className={"seg-item " + (mode === "live" ? "seg-item-on" : "")} disabled={busy}>실시간 (live)</button>
+                <button type="button" onClick={() => setMode("replay")} aria-pressed={mode === "replay"} className={"seg-item " + (mode === "replay" ? "seg-item-on" : "")} disabled={busy}>데모 리플레이 · 최근 시세 빠르게 재생</button>
+              </div>
+            </div>
+            <div className="sd-lock">
+              <b>시작 시점의 설정이 잠겨요.</b> 익절·손절·일일 최대손실·최대 보유시간·재진입 금지가 함께 적용되고, 도중에 조건을 바꾸면 재시작해야 반영돼요.
+              실제 주문 없이 실시간 시세로 "샀다·팔았다 치고" 기록만 하니 거래소 계정·API 키가 필요 없어요.
+            </div>
+            {macro.leverage > 1 && (
+              <div className="sd-lock is-risk">
+                <b>레버리지 <span className="num">{macro.leverage}</span>배</b> — 가격이 약 <b className="num">{(100 / macro.leverage).toFixed(macro.leverage >= 100 ? 2 : 1)}%</b> 반대로 움직이면 청산(전액 손실)돼요. 모의(가짜 돈)로 위험을 체험하는 용도예요.
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            <div className="sd-stat">
+              <div className="sd-box">
+                <div className="sd-box-k">상태</div>
+                <div className="sd-box-v">
+                  <span className={running ? "is-up" : "text-slate-500"}>●</span> {running ? "진행 중" : "중지됨"}
+                  <small className="text-slate-500"> · {modeLabel(startedMode || mode)}</small>
+                </div>
+              </div>
+              <div className="sd-box">
+                <div className="sd-box-k">현재 수익률</div>
+                <div className={"sd-box-v num " + tone(ret)}>{pct(ret)}</div>
+              </div>
+              <div className="sd-box">
+                <div className="sd-box-k">현재 평가금액 ({quote})</div>
+                <div className="sd-box-v num" title={fmtMoney(status.current_equity, macro.symbol)}>{fmtMoneyCompact(status.current_equity, macro.symbol)}</div>
+                {fmtKrw(status.current_equity, krwRate) && <div className="sd-box-d num">{fmtKrw(status.current_equity, krwRate)}</div>}
+              </div>
+              <div className="sd-box">
+                <div className="sd-box-k">청산</div>
+                <div className={"sd-box-v num " + ((status.liquidations || 0) > 0 ? "is-down" : "")}>{status.liquidations || 0}회</div>
+                {(status.liquidations || 0) > 0 && <div className="sd-box-d num">잃은 금액 {fmtMoney(status.liquidated_loss || 0, macro.symbol)}</div>}
+              </div>
+            </div>
+            <div className={"sd-lock" + (macroChanged ? " is-warn" : "")}>
+              시작 시점 설정 · <b>{macroLine(startedMacro || macro)}</b>
+              {macroChanged && <> · 조건을 바꿨지만 이 세션은 시작 시점 설정으로 계속 돌아요. 반영하려면 재시작하세요.</>}
+            </div>
+          </>
+        )}
+        {/* 동작 줄 — 두 상태가 같은 자리를 쓴다. 주 버튼(시작 · 중지 · 다시 시작)은 크고 폭이 고정이라 문구가 바뀌어도 줄이 움직이지 않는다(§1-4: 노랑은 시작/다시 시작일 때만).
+            마이페이지 링크는 예전 흐름이라 두지 않는다. */}
+        <div className="sd-paper-actions">
+          <button
+            type="button"
+            onClick={main.action === "stop" ? stop : start}
+            disabled={busy || (main.action === "start" && !!valErr)}
+            className={"btn btn-l sd-paper-main " + (main.tone === "danger" ? "btn-danger" : "btn-primary")}
+          >
+            {main.label}
+          </button>
+          {running && macroChanged && <button type="button" onClick={restart} disabled={busy || !!valErr} className="btn btn-l btn-secondary">바뀐 설정으로 재시작</button>}
+          {!status && <span className="sd-note"><span className="num">{macro.symbol}</span> · {modeLabel(mode)}</span>}
+        </div>
+        {valErr && <p className="sd-note text-amber-700" role="alert">{valErr}</p>}
+        {error && <p className="sd-note is-error" role="alert">오류: {error}</p>}
+      </div>
+
+      <div className="sd-log">
+        <div className="sd-log-cap">
+          <span>실시간 매매 로그 (최신순)</span>
+          {status && status.last_price > 0 && <span>현재가 <b className="num">{fmtPrice(status.last_price)}</b> {quote}</span>}
+        </div>
+        {!status ? (
+          <div className="sd-log-empty"><b>백테스트가 괜찮으면 여기서 실제 시세로 돌려 봐요</b>결과가 쌓이는 동안 페이지를 닫아도 마이페이지에서 이어 볼 수 있어요.</div>
+        ) : (status.trades || []).length === 0 ? (
+          <div className="sd-log-empty">아직 체결이 없어요. 조건을 낮추거나(익절·손절 0.3~1%) 변동성 큰 종목·리플레이를 써 봐요.</div>
+        ) : (
+          <div className="sd-log-rows">
+            {status.trades.map((t) => (
+              <div key={t.id} className="sd-log-row">
+                <span className="sd-log-t num">{String(t.ts).slice(11, 19)}</span>
+                <span className={"sd-log-side " + (SIDE_CLS[t.side] || "")}>{SIDE_KO[t.side] || t.side}</span>
+                <span className="sd-log-px num">{fmtPrice(t.price)} <small>{quote}</small> · {fmtQty(t.qty)} <small>{base}</small></span>
+                <span className={"sd-log-pnl num " + tone(t.return_at_trade)}>{pct(t.return_at_trade)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── 매크로 등록 — 왼쪽은 내가 만든 매크로를 담은 트레이딩 카드(산출물), 오른쪽은 같은 높이의 동작 목록(리더보드 등록만 노랑), 그 아래 실행기 안내 상자 ──
+const ACT_ICON = {
+  board: <path d="M3.5 16.5h13M6 16.5V9.5M10 16.5v-11M14 16.5v-4" />,
+  run: <path d="M3.5 4.5h13v9h-13zM7.5 16.5h5M10 13.5v3" />,
+  download: <path d="M10 3v10M6 9l4 4 4-4M4 16.5h12" />,
+  link: <path d="M8 12a3 3 0 0 0 4.2 0l3-3a3 3 0 0 0-4.2-4.2l-1 1M12 8a3 3 0 0 0-4.2 0l-3 3a3 3 0 0 0 4.2 4.2l1-1" />,
+};
+function ActIcon({ name }) {
+  return (
+    <span className="sd-act-ic" aria-hidden="true">
+      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{ACT_ICON[name]}</svg>
+    </span>
+  );
+}
+
+// 카드 안의 자산곡선 미리보기 — 백테스트 탭의 큰 차트와 같은 곡선을 선 하나로. 파선이 본전. 색은 최종 수익률의 등락색.
+function CardSpark({ curve, up }) {
+  if (!Array.isArray(curve) || curve.length < 2) return null;
+  const W = 300, H = 64, PAD = 3;
+  const step = Math.max(1, Math.ceil(curve.length / 160));
+  const pts = curve.filter((_, i) => i % step === 0 || i === curve.length - 1).map((p) => Number(p.equity));
+  const start = Number(curve[0].equity);
+  let lo = Math.min(start, ...pts);
+  let hi = Math.max(start, ...pts);
+  if (!(hi > lo)) hi = lo + 1;
+  const x = (i) => ((i / (pts.length - 1)) * W).toFixed(1);
+  const y = (v) => (PAD + (1 - (v - lo) / (hi - lo)) * (H - PAD * 2)).toFixed(1);
+  const line = pts.map((v, i) => `${i ? "L" : "M"}${x(i)} ${y(v)}`).join(" ");
+  return (
+    <svg className={"sd-card-spark " + (up ? "is-up" : "is-down")} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" aria-hidden="true">
+      <path className="sd-card-spark-area" d={`${line} L${W} ${H} L0 ${H} Z`} />
+      <path className="sd-card-spark-base" d={`M0 ${y(start)} H${W}`} />
+      <path className="sd-card-spark-line" d={line} />
+    </svg>
+  );
+}
+
+const fmtN = (v, digits = 8) => Number(v).toLocaleString("en-US", { maximumFractionDigits: digits });
+// 데이터 출처 — 서버의 source 값(cache · binance · binance-futures · synthetic)을 사람 말로.
+const SOURCE_KO = { cache: "바이낸스 (캐시)", binance: "바이낸스 현물", "binance-futures": "바이낸스 선물(USDT-M)", synthetic: "합성 데이터 (오프라인)" };
+
+// 카드의 사양표 — 매크로 파일에 실제로 들어가는 조건만(종목 · 봉 간격 · 자금 · 위험 관리 · 비용). 없는 값은 만들지 않는다.
+function macroFacts({ macro, symbol, symbols, result, futures }) {
+  const p = macro.params || {};
+  const risk = macro.risk || {};
+  const fees = macro.fees || {};
+  const quote = quoteOf(symbol);
+  const interval = CANDLE_INTERVALS.find((i) => i.value === macro.candle_interval)?.label || "";
+  const facts = [];
+  if (symbols.length > 1) facts.push({ k: `종목 ${symbols.length}개`, v: symbols.map(baseOf).join(" · "), num: true });
+  facts.push({ k: "봉 간격", v: interval ? `${interval}봉` : "—" });
+  if (macro.rule_type === "C") {
+    facts.push({ k: "자금", v: p.amount_per_buy != null ? `회당 ${fmtN(p.amount_per_buy)} ${quote} · ${fmtN(p.interval_days || 0)}일마다` : "—" });
+  } else {
+    const capital = p.initial_capital ?? result?.initial_capital;
+    const ratio = risk.invest_ratio != null ? `${fmtN(Number(risk.invest_ratio) * 100)}% 투입` : "";
+    facts.push({ k: "자금", v: [capital != null ? `${fmtN(capital, 2)} ${quote}` : "", ratio].filter(Boolean).join(" · ") || "—" });
+  }
+  const riskParts = [
+    risk.stop_loss_pct != null ? `손절 -${fmtN(risk.stop_loss_pct)}%` : "",
+    risk.daily_max_loss_pct != null ? `일일 최대손실 -${fmtN(risk.daily_max_loss_pct)}%` : "",
+    risk.max_holding_hours != null ? `최대 보유 ${fmtN(risk.max_holding_hours)}시간` : "",
+    risk.cooldown_minutes ? `재진입 금지 ${fmtN(risk.cooldown_minutes)}분` : "",
+  ].filter(Boolean);
+  facts.push({ k: "위험 관리", v: riskParts.length ? riskParts.join(" · ") : "손절 없음" });
+  const feeParts = [
+    fees.commission_pct != null ? `수수료 ${fmtN(fees.commission_pct)}%` : "",
+    fees.slippage_pct != null ? `슬리피지 ${fmtN(fees.slippage_pct)}%` : "",
+    futures && fees.funding_pct ? `펀딩 ${fmtN(fees.funding_pct)}%/일` : "",
+  ].filter(Boolean);
+  if (feeParts.length) facts.push({ k: "비용", v: feeParts.join(" · ") });
+  return facts;
+}
+
+// 조건 문장 조판 — 구는 세로 괘선으로 나누고, 사용자가 정한 숫자(익절·손절·가격·기간·σ·k·배수)는 고정폭 굵게 노랑.
+// 한 줄로만 놓는다: 폭이 모자라면 들어갈 때까지 글자 크기를 줄인다(줄바꿈도 말줄임도 없다). title 에 전문이 있다.
+function useFitLine(ref, text) {
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return undefined;
+    let raf = 0;
+    const fit = () => {
+      const max = parseFloat(getComputedStyle(el).getPropertyValue("--sd-strategy-max")) || 19;
+      let size = max;
+      el.style.fontSize = `${size}px`;
+      while (size > 8 && el.scrollWidth > el.clientWidth) {
+        size -= 0.5;
+        el.style.fontSize = `${size}px`;
+      }
+    };
+    const schedule = () => {
+      if (typeof requestAnimationFrame === "undefined") { fit(); return; }
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(fit);
+    };
+    fit();
+    // 폭이 바뀔 때(분할 바 · 창 크기)와 웹폰트가 늦게 들어와 글이 넓어질 때 다시 맞춘다 — 폰트 로드는 상자 크기를 바꾸지 않아 ResizeObserver 만으로는 못 잡는다.
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(schedule);
+    observer?.observe(el);
+    const fonts = typeof document !== "undefined" ? document.fonts : null;
+    fonts?.ready?.then(schedule, () => {});
+    fonts?.addEventListener?.("loadingdone", schedule);
+    return () => {
+      if (typeof cancelAnimationFrame !== "undefined") cancelAnimationFrame(raf);
+      observer?.disconnect();
+      fonts?.removeEventListener?.("loadingdone", schedule);
+    };
+  }, [ref, text]);
+}
+
+function StrategyText({ text }) {
+  const ref = useRef(null);
+  const phrases = strategyPhrases(text, { dropLeverage: true }); // 레버리지는 머리의 시장 태그가 보여 준다
+  useFitLine(ref, text);
+  return (
+    <p ref={ref} className="sd-card-strategy" title={text || ""}>
+      {phrases.length ? phrases.map((tokens, i) => (
+        <span key={i} className="sd-card-phrase">
+          {tokens.map((token, j) => token.t === "num" ? <b key={j} className="num">{token.v}</b> : <Fragment key={j}>{token.v}</Fragment>)}
+        </span>
+      )) : <span className="sd-card-phrase">상세 정보 없음</span>}
+    </p>
+  );
+}
+
+export function StudioOutcomes({ macro, result, valErr, strategyEntry, periodLabel, dataSource = "", symbols = [], canRegister, onRegister, onShare, shareBusy = false }) {
+  const { quickRun, downloadMacro, launching, error } = useMacroActions(macro);
+  const futures = macro.position_side === "short" || macro.leverage > 1;
+  const leverage = macro.leverage || 1;
+  const symbol = strategyEntry?.symbol || macro.symbol || "";
+  const details = leaderboardStrategy(strategyEntry);
+  const side = details?.side || macro.position_side || null;
+  const sideLabel = { long: "롱", short: "숏", switch: "롱 → 숏" }[side] || "—";
+  const marginLabel = macro.margin_mode === "cross" ? "교차" : "격리";
+  const marketLabel = futures ? `선물 · ${marginLabel} ${leverage}배` : "현물 · 1배";
+  const ruleLabel = RULE_TYPES[macro.rule_type]?.label || macro.rule_type || "";
+  const facts = macroFacts({ macro, symbol, symbols, result, futures });
+  const ret = Number(result?.final_return_pct ?? 0);
+  return (
+    <div className="sd-outcomes">
+      <div className="sd-done">
+        <article className="sd-card" aria-label="내 매크로 카드">
+          <div className="sd-card-in">
+          {/* 왼쪽 — 이 매크로가 무엇인지: 종목 · 포지션/시장 · 매매 방식 · 조건 문장 · 사양표 */}
+          <div className="sd-card-spec">
+            <div className="sd-card-head">
+              <CoinIcon symbol={symbol} size={44} className="sd-card-coin" alt="" />
+              <div className="sd-card-id">
+                <div className="sd-card-ticker num"><strong>{baseOf(symbol)}</strong><small>{quoteOf(symbol)}</small></div>
+                <div className="sd-card-rule" title="매매 방식">{ruleLabel}</div>
+              </div>
+              <div className="sd-card-tags">
+                <span className={"sd-card-side is-" + (side || "unknown")}>{sideLabel}</span>
+                <span className="sd-card-tag">{marketLabel}</span>
+              </div>
+            </div>
+            <StrategyText text={details?.description || ""} />
+            <dl className="sd-card-facts">
+              {facts.map((f) => (
+                <div key={f.k}><dt>{f.k}</dt><dd className={f.num ? "num" : undefined}>{f.v}</dd></div>
+              ))}
+            </dl>
+          </div>
+          {/* 오른쪽 — 이 매크로가 테스트에서 낸 것: 수익률 · 자산곡선 · MDD/승률/매매 */}
+          <div className="sd-card-proof">
+            <span className="sd-card-eyebrow num" aria-hidden="true">GGPARROT MACRO</span>
+            <span className="sd-card-k">백테스트 수익률{periodLabel ? ` · ${periodLabel}` : ""}</span>
+            <strong className={"sd-card-ret num " + tone(ret)}>{pct(ret)}</strong>
+            <CardSpark curve={result?.equity_curve} up={ret >= 0} />
+            {result && (
+              <dl className="sd-card-stats">
+                <div><dt>MDD</dt><dd className="num is-down">-{Number(result.mdd_pct).toFixed(1)}%</dd></div>
+                <div><dt>승률</dt><dd className="num">{Number(result.win_rate_pct).toFixed(1)}%</dd></div>
+                <div><dt>매매</dt><dd><span className="num">{result.total_trades}</span>회</dd></div>
+              </dl>
+            )}
+            {dataSource && <span className="sd-card-src">데이터 · {SOURCE_KO[dataSource] || dataSource}</span>}
+          </div>
+          </div>
+        </article>
+
+        <div className="sd-act">
+          <button
+            type="button"
+            onClick={() => onRegister?.()}
+            disabled={!onRegister || !canRegister || !!valErr}
+            title={!canRegister ? "조건이 바뀌었어요 — 다시 테스트한 뒤 등록할 수 있어요" : undefined}
+            className="sd-act-row is-primary"
+          >
+            <ActIcon name="board" /><span className="sd-act-t"><b>리더보드 등록</b><small>오늘의 리더보드에 올려 다른 사람과 겨뤄요</small></span><i className="sd-act-chev" aria-hidden="true" />
+          </button>
+          <button type="button" onClick={quickRun} disabled={!!valErr || launching} className="sd-act-row">
+            <ActIcon name="run" /><span className="sd-act-t"><b>{launching ? "실행 준비 중…" : "빠른 실행"}</b><small>내 PC 실행기로 바로 넘겨요</small></span><i className="sd-act-chev" aria-hidden="true" />
+          </button>
+          <button type="button" onClick={downloadMacro} disabled={!!valErr} className="sd-act-row">
+            <ActIcon name="download" /><span className="sd-act-t"><b>매크로 파일 내려받기</b><small>.ggm.json 파일로 저장해요</small></span><i className="sd-act-chev" aria-hidden="true" />
+          </button>
+          <button type="button" onClick={onShare} disabled={!!valErr || shareBusy} className="sd-act-row">
+            <ActIcon name="link" /><span className="sd-act-t"><b>{shareBusy ? "저장 중…" : "공유 링크 보기"}</b><small>링크와 인증 카드 이미지를 받아요</small></span><i className="sd-act-chev" aria-hidden="true" />
+          </button>
+          {!canRegister && <p className="sd-note text-amber-700">조건이 바뀌었어요 — 다시 테스트한 뒤 등록할 수 있어요.</p>}
+          {error && <p className="sd-note is-error" role="alert">오류: {error}</p>}
+        </div>
+      </div>
+
+      {/* 실행기 실거래 안내 — 제목 줄(무엇인지) + 두 열(진행 방법 · 알아 둘 것). 상자와 색은 원래의 호박색 alert 그대로.
+          흐름은 지금 프로젝트 기준: 빠른 실행 마법사(테스트넷 · 웹이 실행기를 열어 줌) → 실거래는 파일을 실행기에서 직접 → 상태·종료는 내 에이전트. */}
+      <section className="alert alert-warn sd-runner" aria-labelledby="sd-runner-title">
+        <div className="sd-runner-head">
+          <h3 id="sd-runner-title" className="sd-runner-title">실거래 실행법</h3>
+        </div>
+        <div className="sd-runner-cols">
+          <div className="sd-runner-sec">
+            <h4 className="sd-runner-h">진행 방법</h4>
+            <ol className="sd-runner-steps">
+              <li><i>1</i><div><b>테스트넷으로 먼저</b><span>위 목록의 <b>빠른 실행</b>을 누르면 이 매크로가 내 매크로에 저장되고, 테스트넷 키 준비 → 실행기 받기 → 연결이 한 화면씩 이어져요. 웹이 실행기를 열어 주면 실행기에 테스트넷 API 키를 넣고 <b>매크로 시작</b>을 눌러요.</span></div></li>
+              <li><i>2</i><div><b>실거래로 바꾸기</b><span><b>매크로 파일 내려받기</b>로 받은 .ggm.json 을 실행기 ①에서 열고, ② 실거래(메인넷) 체크를 켜고, ③ 실거래 API 키·시크릿과 ④ 회원 키를 넣고 시작해요. 회원 키는 <Link to="/runner/install" className="sd-runner-link">실행기 설치 화면</Link>에서 복사해요.</span></div></li>
+              <li><i>3</i><div><b>지켜보기 · 멈추기</b><span><b>내 에이전트</b>에서 실시간 차트와 손익을 보고, <b>매크로만 종료</b> 또는 <b>청산 후 종료</b>로 원격 종료해요.</span></div></li>
+            </ol>
+          </div>
+          <div className="sd-runner-sec">
+            <h4 className="sd-runner-h sd-runner-warn">주의: 실행기는 실제로 주문을 실행해요 (기본값: 바이낸스 테스트넷 = 가짜 자금)</h4>
+            <ul className="sd-runner-notes">
+              <li>{futures ? "숏·레버리지 매크로라 USDT-M 선물로 실행돼요." : "롱·1배 매크로라 현물(spot)로 실행돼요."}</li>
+              <li>익절·손절·일일 최대손실·최대 보유시간·재진입 금지가 함께 적용돼요.</li>
+              <li>실제 자금은 실행기에서 <b>실거래(메인넷) 체크</b>를 켜야 움직여요(경고 확인 단계 있음). 빠른 실행은 테스트넷으로만 연결돼요.</li>
+              <li>API 키는 실행기 로컬에서만 쓰고 서버로 전송·저장하지 않아요. 출금 기능은 없어요.</li>
+              <li>실행 중에는 브라우저를 닫아도 되지만, PC 를 끄거나 실행기를 닫으면 매크로도 멈춰요.</li>
+            </ul>
+          </div>
+        </div>
+        <p className="sd-runner-foot">
+          실행기는 내 Windows PC 에서 주문을 처리하는 프로그램이에요(설치 없이 실행 · Windows 10 이상).
+          웹은 주문을 내지 않고, 실행 중 상태와 종료는 <b>내 에이전트</b>에서 봐요.
+        </p>
+      </section>
+    </div>
+  );
+}

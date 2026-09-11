@@ -10,8 +10,7 @@ import { getUserId } from "../lib/user.js";
 import { useAuth, isLoggedIn, getAuthUser, updateAuthUser } from "../lib/auth.js";
 import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 import { applyVote, settleVote } from "../lib/leaderboardVotes.js";
-import { baseOf, quoteOf } from "../lib/format.js";
-import { leaderboardStrategy } from "../lib/leaderboardStrategy.js";
+import StrategyDetails from "../components/StrategyDetails.jsx";
 import "./LeaderboardMobile.css";
 
 const pad = (n) => String(n).padStart(2, "0");
@@ -82,38 +81,6 @@ function EntryBadges({ entry, top3 }) {
       )}
       {entry.crown && <span className="badge badge-flat" title="판매·좋아요 상위">인기 셀러</span>}
     </>
-  );
-}
-
-function StrategyDetails({ entry }) {
-  const details = leaderboardStrategy(entry);
-  const sideLabel = { long: "롱", short: "숏", switch: "롱 → 숏" }[details?.side] || "—";
-  const fullText = details
-    ? `${entry.symbol} | ${sideLabel} | ${details.description} | ${details.capital ? `${details.capital.label} ${details.capital.value} ${details.capital.unit}` : "자금 —"}`
-    : `${entry.symbol} | 잠긴 전략`;
-  return (
-    <dl className="lb-strategy-facts" title={fullText}>
-      <div className="lb-fact lb-fact-ticker">
-        <dt className="sr-only">티커</dt>
-        <dd className="lb-strategy-ticker num"><strong>{baseOf(entry.symbol)}</strong><small>{quoteOf(entry.symbol)}</small></dd>
-      </div>
-      {details ? <>
-        <div className="lb-fact lb-fact-position">
-          <dt className="sr-only">포지션</dt>
-          <dd className={`lb-position is-${details.side || "unknown"}`}>
-            {sideLabel}
-          </dd>
-        </div>
-        <div className="lb-fact lb-fact-strategy">
-          <dt className="sr-only">전략</dt>
-          <dd className="lb-summary-text">{details.description}</dd>
-        </div>
-        <div className="lb-fact lb-fact-capital">
-          <dt>{details.capital?.label || "자금"}</dt>
-          <dd><span className="num">{details.capital?.value || "—"}</span>{details.capital ? <small>{details.capital.unit}</small> : null}</dd>
-        </div>
-      </> : <div className="lb-fact lb-fact-locked"><dt className="sr-only">전략</dt><dd>잠긴 전략</dd></div>}
-    </dl>
   );
 }
 

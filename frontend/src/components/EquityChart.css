@@ -1,0 +1,6 @@
+.equity-chart-plot { position: relative; width: 100%; min-width: 0; min-height: 56px; }
+.equity-chart-canvas { position: absolute; inset: 0; }
+.equity-chart-plot:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; border-radius: 4px; }
+.equity-chart-tooltip { position: absolute; top: -4px; z-index: 2; pointer-events: none; white-space: nowrap; }
+.equity-chart .equity-caption > span { flex: 1; min-width: 0; }
+.equity-chart .equity-caption > span:last-child { text-align: right; }

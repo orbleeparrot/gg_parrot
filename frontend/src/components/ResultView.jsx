@@ -31,7 +31,7 @@ const MOOD_ACCENT = {
 
 // 껄무새 AI 원인 분석 카드. 규칙기반 장문 멘트는 쓰지 않고, '분석하기'를 누르면
 // 서버(Gemini)가 결과 원인을 5줄 이내로 간결하게 분석한다.
-function ParrotExplain({ explanation, onAiExplain, aiBusy, aiError }) {
+export function ParrotExplain({ explanation, onAiExplain, aiBusy, aiError }) {
   const isAi = explanation && explanation.source === "ai";
 
   // AI 분석 결과가 있을 때: 간결한 원인 분석만 렌더.
@@ -298,6 +298,8 @@ export default function ResultView({
   // 바깥(Studio)에서 넣어주는 블록 — 실시간 차트처럼 결과 계산과 무관하게
   // 이 열에 같이 놓이는 것들. [{ id, label, node }]
   extraBlocks = [],
+  // 여기서는 그리지 않을 블록 id — 직접 만들기는 AI 해설을 결과 독의 다른 탭에 둔다.
+  hideBlocks = [],
 }) {
   const { rate: krwRate } = useUsdKrw();
   // 바깥 블록이 늘 맨 위에 오도록 기본 순서 앞에 붙인다(첫 방문 기준).
@@ -327,7 +329,9 @@ export default function ResultView({
   // --- 개인 맞춤 배치 -------------------------------------------------
   // 종목별 표는 단일 종목이면 아예 없다. 없는 블록에 손잡이를 달면 빈 상자만 남는다.
   const hasPerSymbol = !!(perSymbol && perSymbol.length);
-  const visibleIds = knownBlockIds.filter((id) => id !== "symbols" || hasPerSymbol);
+  const visibleIds = knownBlockIds.filter(
+    (id) => !hideBlocks.includes(id) && (id !== "symbols" || hasPerSymbol)
+  );
   const ordered = order.filter((id) => visibleIds.includes(id));
 
   // 갱신은 전부 함수형으로. 렌더 클로저의 order 를 읽으면 ↑ 를 빠르게 두 번 눌렀을 때

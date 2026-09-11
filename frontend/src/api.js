@@ -155,6 +155,7 @@ export const api = {
 
   createMacro: (macro) => req("/api/macros", { method: "POST", body: JSON.stringify(macro) }),
   getMacro: (slug) => req(`/api/macros/${slug}`),
+  backtestLimits: () => req("/api/backtest/limits", { timeoutMs: 8000, cache: "no-store" }),
   backtest: (macro, periodOverride) =>
     req("/api/backtest", {
       method: "POST",

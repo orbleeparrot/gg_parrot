@@ -79,13 +79,24 @@ def assert_static_home(page):
     expect(page.locator(".home-hero-shell, .home-hero-pagination, .home-entry-mascot")).to_have_count(0)
     expect(page.locator(".home-community-post-list")).to_have_count(1)
     expect(page.locator(".home-community-post-list li")).to_have_count(3)
+    expect(page.get_by_text("게시글 미리보기", exact=True)).to_be_visible()
+    expect(page.locator(".home-community-post-list a,.home-community-post-list button")).to_have_count(0)
     expect(page.locator(".home-board-preview-head")).to_have_count(0)
     expect(page.locator(".home-board-preview-footer")).to_have_count(0)
+    assert_preview_outline(page)
     expect(page.locator(".home-mobile-stack h1")).to_have_count(1)
     expect(page.locator(".home-mobile-stack #home-community-title")).to_have_count(1)
     assert page.locator(".home-community-post-track").evaluate(
         "el => getComputedStyle(el).animationName === 'none' && getComputedStyle(el).transform === 'none'"
     )
+
+
+def assert_preview_outline(page):
+    style = page.locator('.home-community-post-viewport').evaluate("""n=>{
+      const s=getComputedStyle(n);
+      return {borders:[s.borderTopWidth,s.borderRightWidth,s.borderBottomWidth,s.borderLeftWidth],opacity:s.opacity,filter:s.filter};
+    }""")
+    assert style == {'borders':['1px']*4,'opacity':'1','filter':'none'},style
 
 
 def measure(page):
@@ -101,7 +112,7 @@ def measure(page):
         scrollHeight: document.documentElement.scrollHeight, viewport: innerHeight,
         animation: getComputedStyle(belt).animationName,
         transform: getComputedStyle(belt).transform,
-        underline: underline.textDecorationThickness, nested,
+        underline: underline.backgroundSize.split(' ')[1], nested,
       };
     }""")
 
@@ -138,6 +149,8 @@ def main():
                 )
                 page.evaluate("window.scrollTo(0, 0)")
                 page.screenshot(path=str(OUTPUT / f"home-{width}-{theme}.png"), full_page=True)
+                page.get_by_role('link',name='게시판 둘러보기').click()
+                page.wait_for_url('**/board')
                 checks[f"mobile-{width}-{theme}"] = data
                 context.close()
 
@@ -175,9 +188,17 @@ def main():
             page.get_by_role("button", name="두 번째 화면, 커뮤니티", exact=True).click()
             expect(page.locator(".home-entry-hero.is-community")).to_be_visible()
             expect(page.locator(".home-community-post-list")).to_have_count(2)
+            expect(page.get_by_text("게시글 미리보기", exact=True)).to_be_visible()
+            expect(page.locator(".home-community-post-list a,.home-community-post-list button")).to_have_count(0)
+            preview = page.locator(".home-community-post-viewport")
+            assert preview.evaluate("n=>getComputedStyle(n).cursor") == 'default'
+            assert_preview_outline(page)
+            expect(page.locator(".home-board-preview-footer")).to_have_count(0)
             assert page.locator(".home-community-post-track").evaluate(
                 "el => getComputedStyle(el).animationName"
             ) == "home-community-post-belt"
+            preview.hover()
+            assert page.locator(".home-community-post-track").evaluate("n=>getComputedStyle(n).animationPlayState") == 'paused'
             expect(page.locator(".home-hero-slide-frame.is-exiting")).to_have_count(0)
             page.screenshot(path=str(OUTPUT / "home-desktop-community.png"), full_page=True)
             page.set_viewport_size({"width": 390, "height": 844})

@@ -1,0 +1,7 @@
+.studio-budget { display: grid; gap: 7px; color: rgb(var(--c-slate-500)); font-size: 12px; line-height: 1.5; }
+.studio-budget p { margin: 0; font-variant-numeric: tabular-nums; }
+.studio-budget.is-over { color: rgb(var(--c-amber-700)); }
+.studio-budget-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.studio-budget-actions button { padding: 5px 8px; border: 1px solid rgb(var(--c-slate-300)); border-radius: 6px; color: rgb(var(--c-slate-900)); font-size: 12px; line-height: 1.5; font-weight: 600; text-align: left; }
+.studio-budget-actions button:hover { background: rgb(var(--c-slate-100)); }
+.studio-budget-actions button:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }

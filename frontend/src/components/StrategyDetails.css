@@ -1,0 +1,20 @@
+/* 전략 한 줄 — 티커(굵게·단위 작게) | 포지션(롱 초록·숏 빨강) | 전략 설명 | 자금. 리더보드 전략 칸과 직접 만들기 제목 띠가 같이 쓴다. */
+.lb-strategy-facts { display: block; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lb-fact { display: inline; }
+.lb-fact dt { display: inline; color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 600; }
+.lb-fact dd { display: inline; margin: 0; color: rgb(var(--c-slate-900)); font-size: 14px; line-height: 1.5; font-weight: 600; }
+.lb-fact .lb-strategy-ticker { display: inline; }
+.lb-strategy-ticker strong { font-size: 18px; font-weight: 750; letter-spacing: -.025em; white-space: nowrap; }
+.lb-strategy-ticker small { margin-left: 4px; font-size: 10px; font-weight: 600; color: rgb(var(--c-slate-500)); }
+.lb-fact .lb-position { font-size: 13px; font-weight: 700; white-space: nowrap; }
+.lb-fact .lb-position.is-long { color: rgb(var(--c-green-600)); }
+.lb-fact .lb-position.is-short { color: rgb(var(--c-red-600)); }
+.lb-fact-position,
+.lb-fact-strategy,
+.lb-fact-capital,
+.lb-fact-extra,
+.lb-fact-locked { margin-left: 8px; padding-left: 8px; border-left: 1px solid rgb(var(--c-slate-300)); }
+.lb-fact-capital dd, .lb-fact-extra dd { margin-left: 6px; }
+.lb-fact-capital small { margin-left: 4px; font-size: 12px; font-weight: 500; color: rgb(var(--c-slate-700)); }
+.lb-fact .lb-summary-text { display: inline; font-weight: 500; color: rgb(var(--c-slate-700)); }
+.lb-fact-locked dd { color: rgb(var(--c-slate-500)); font-size: 13px; font-weight: 500; }

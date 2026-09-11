@@ -151,7 +151,7 @@ export function readHeroDraft() {
       ["long", "short"].includes(macro?.position_side) &&
       ["1m", "5m", "15m", "1h", "4h", "1d"].includes(macro?.candle_interval) &&
       ["auto", "spot", "futures"].includes(macro?.market || "auto") &&
-      ["1y", "6m", "3m", "custom"].includes(macro?.period?.preset || "1y");
+      ["1y", "6m", "3m", "1m", "1w", "1d", "custom"].includes(macro?.period?.preset || "1y");
     const validMacro =
       macro &&
       typeof macro === "object" &&

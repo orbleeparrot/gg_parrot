@@ -9,6 +9,8 @@ const NAV_LINKS = [
   { to: "/leaderboard", label: "리더보드", icon: "leaderboard", matches: ["/leaderboard", "/gallery"] },
   { to: "/news", label: "코인동향", icon: "news", matches: ["/news"] },
   { to: "/board", label: "게시판", icon: "board", matches: ["/board"] },
+  // 준비 중인 페이지 — 링크가 아니라 자리만 잡는다(배지 `업데이트 예정`, 비활성). 열리면 to 를 살리고 soon 을 뗀다.
+  { to: "/bots", label: "자동 매매 봇", icon: "agent", matches: ["/bots"], soon: true, soonLabel: "업데이트 예정" },
 ];
 
 const NAV_ICON_SOURCES = {
@@ -86,6 +88,17 @@ function NavigationList({ pathname, onNavigate, tabIndex }) {
     <div className="site-side-list">
       {NAV_LINKS.map((link) => {
         const active = pathIsActive(pathname, link);
+        if (link.soon) {
+          return (
+            <span key={link.to} className="site-side-link is-soon" aria-disabled="true" title={link.soonLabel}>
+              <span className="site-side-icon" aria-hidden="true"><NavIcon name={link.icon} /></span>
+              <span className="site-side-label-row">
+                <span className="site-side-label">{link.label}</span>
+                <span className="site-side-badge">{link.soonLabel}</span>
+              </span>
+            </span>
+          );
+        }
         return (
           <NavLink
             key={link.to}
@@ -119,7 +132,7 @@ function NavigationContents({ onNavigate, tabIndex, mobile = false }) {
               <DownloadIcon /><span>실행기 설치</span><small>Windows PC</small>
             </NavLink>
             <NavLink to="/guide" onClick={onNavigate} tabIndex={tabIndex} className="site-drawer-tool">
-              <HelpIcon /><span>사용법</span>
+              <HelpIcon /><span>FAQ</span>
             </NavLink>
           </div>
         ) : null}

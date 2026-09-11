@@ -32,10 +32,10 @@ export default function SiteHeader({ hasSidebar, onOpenNavigation, menuButtonRef
                 <span className="header-resource-label">실행기 설치</span>
                 <span className="header-tooltip" aria-hidden="true">실행기 설치</span>
               </NavLink>
-              <NavLink to="/guide" className="header-control header-resource t-small" aria-label="사용법">
+              <NavLink to="/guide" className="header-control header-resource t-small" aria-label="FAQ">
                 <HelpIcon />
-                <span className="header-resource-label">사용법</span>
-                <span className="header-tooltip" aria-hidden="true">사용법</span>
+                <span className="header-resource-label">FAQ</span>
+                <span className="header-tooltip" aria-hidden="true">FAQ</span>
               </NavLink>
             </nav>
           ) : null}

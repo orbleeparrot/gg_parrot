@@ -64,7 +64,7 @@
 
   .home-mobile-stack .home-community-post-viewport {
     height: auto;
-    overflow: visible;
+    overflow: hidden;
   }
 
   .home-mobile-stack .home-community-post-track {

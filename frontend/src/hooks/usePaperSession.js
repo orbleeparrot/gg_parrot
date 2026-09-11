@@ -4,14 +4,47 @@ import useAdaptivePolling from "./useAdaptivePolling.js";
 
 const PAPER_POLL_ERROR = "페이퍼 세션 상태를 갱신하지 못했어요. 잠시 뒤 다시 확인할게요.";
 
-export default function usePaperSession({ macro, valErr = "", onStarted, stopOnUnmount = false }) {
-  const [session, setSession] = useState(null);
-  const [status, setStatus] = useState(null);
-  const [mode, setMode] = useState("live");
-  const [phase, setPhase] = useState("idle");
+// resumeKey — 주면 시작한 세션(id·시작 설정·방식)을 sessionStorage 에 남기고, 화면을 떠났다 돌아와 다시
+// 마운트될 때 그 세션을 이어서 본다(서버 쪽 세션은 계속 돌고 있다). 미리보기(stopOnUnmount)와는 같이 쓰지 않는다.
+function readResume(key) {
+  if (!key) return null;
+  try {
+    const value = JSON.parse(sessionStorage.getItem(key) || "null");
+    return value?.session?.session_id ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeResume(key, value) {
+  if (!key) return;
+  try {
+    if (value) sessionStorage.setItem(key, JSON.stringify(value));
+    else sessionStorage.removeItem(key);
+  } catch {
+    // 저장소가 막혀 있으면 이어 보기만 포기한다.
+  }
+}
+
+export default function usePaperSession({ macro, valErr = "", onStarted, stopOnUnmount = false, resumeKey = "" }) {
+  const resumed = useRef(undefined);
+  if (resumed.current === undefined) resumed.current = stopOnUnmount ? null : readResume(resumeKey);
+  const [session, setSession] = useState(() => resumed.current?.session || null);
+  // 이어 보는 세션은 실제 상태를 폴링이 곧 채운다 — 그때까지는 '진행 중'으로 두어 폴링이 시작되게 한다.
+  const [status, setStatus] = useState(() => (resumed.current ? {
+    ...resumed.current.session,
+    status: "running",
+    current_equity: resumed.current.session.virtual_balance,
+    current_return: 0,
+    last_price: 0,
+    trades: [],
+    liquidations: 0,
+  } : null));
+  const [mode, setMode] = useState(() => resumed.current?.startedMode || "live");
+  const [phase, setPhase] = useState(() => (resumed.current ? "running" : "idle"));
   const [error, setError] = useState("");
-  const [startedMacro, setStartedMacro] = useState(null);
-  const [startedMode, setStartedMode] = useState("");
+  const [startedMacro, setStartedMacro] = useState(() => resumed.current?.startedMacro || null);
+  const [startedMode, setStartedMode] = useState(() => resumed.current?.startedMode || "");
   const generationRef = useRef(0);
   const actionRef = useRef(false);
   const sessionRef = useRef(session);
@@ -95,9 +128,10 @@ export default function usePaperSession({ macro, valErr = "", onStarted, stopOnU
     setStartedMode(modeSnapshot);
     setStatus(initialStatus);
     changePhase("running");
+    writeResume(resumeKey, { session: nextSession, startedMacro: macroSnapshot, startedMode: modeSnapshot });
     onStartedRef.current?.({ session: nextSession, macro: macroSnapshot, mode: modeSnapshot });
     return true;
-  }, [changePhase]);
+  }, [changePhase, resumeKey]);
 
   const start = useCallback(async () => {
     if (actionRef.current) return false;

@@ -1,23 +1,26 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import Builder from "../components/Builder.jsx";
-import ResultView from "../components/ResultView.jsx";
 import SimBadge from "../components/SimBadge.jsx";
-import PaperPanel from "../components/PaperPanel.jsx";
+import { StudioTabs, StudioBacktest, StudioAiExplain, StudioOptimize, StudioPaper, StudioOutcomes } from "../components/StudioDock.jsx";
+import usePaperSession from "../hooks/usePaperSession.js";
+import useStudioSplit from "../hooks/useStudioSplit.js";
 import CandleChart from "../components/CandleChart.jsx";
-import OptimizePanel from "../components/OptimizePanel.jsx";
 import RegisterMacroModal from "../components/RegisterMacroModal.jsx";
-import ProductTour from "../components/ProductTour.jsx";
-import { PageHeader } from "../components/Page.jsx";
+import { EmptyState, Loading } from "../components/Page.jsx";
 import { api } from "../api.js";
 import { useAuth } from "../lib/auth.js";
 import {
+  CANDLE_INTERVALS,
+  PERIOD_PRESETS,
   RULE_TYPES,
   buildMacro,
   defaultForm,
   macroToForm,
   validate,
   withTypeDefaults,
+  validateDetailed,
 } from "../lib/macro.js";
 import { computeStrategyOverlay } from "../lib/indicators.js";
 import {
@@ -26,72 +29,13 @@ import {
   readHeroDraft,
   takeRegistrationDraft,
 } from "../lib/journey.js";
+import { readStudioSession, writeStudioSession } from "../lib/studioSession.js";
+import { backtestBudget, validBacktestLimits } from "../lib/backtestBudget.js";
+import "./Studio.css";
+import "./StudioBudget.css";
+import "./StudioSplit.css";
 
 const MAX_MACRO_FILE_BYTES = 2 * 1024 * 1024;
-
-// '사용법 안내' 프로덕트 투어 단계. 각 anchor 는 화면의 data-tour 요소를 가리킨다.
-const TOUR_STEPS = [
-  {
-    anchor: "market-briefing",
-    title: "시장 브리핑",
-    body: "먼저 시장 분위기를 확인해요. ‘시장 브리핑 보기’를 누르면 김치 프리미엄(국내외 가격 차이 · +김프/−역프)과 공포·탐욕 지수(0~100, 시장 심리)를 볼 수 있어요. 매매 전 참고용 지표예요.",
-  },
-  {
-    anchor: "symbol",
-    title: "종목 입력",
-    body: "확인할 코인을 정해요. 예: BTCUSDT. 여러 종목은 쉼표로 나눠 쓰면 자금을 종목 수만큼 균등하게 나눠 확인해요.",
-  },
-  {
-    anchor: "strategy",
-    title: "매매 방식 선택",
-    body: "이동평균 크로스·볼린저·RSI 등 원하는 전략을 골라요. 라벨 옆 ⓘ에 마우스를 올리면 각 매매 방식이 어떤 규칙인지 설명을 확인할 수 있어요.",
-  },
-  {
-    anchor: "position",
-    title: "포지션",
-    body: "오를 때 버는 롱(long), 내릴 때 버는 숏(short)을 정해요. 전략에 따라 숏이 막혀 있을 수 있어요.",
-  },
-  {
-    anchor: "interval",
-    title: "봉 간격",
-    body: "지표 계산과 체결을 판정하는 캔들 단위예요. 1분·1시간·1일처럼 전략에 맞는 시간 단위를 골라요.",
-  },
-  {
-    anchor: "period",
-    title: "테스트 기간",
-    body: "과거 어느 구간의 데이터로 확인할지 정해요. 최근 1년·6개월·3개월 또는 직접 기간을 지정할 수 있어요.",
-  },
-  {
-    anchor: "chart",
-    title: "실시간 차트 · 보조지표",
-    body: "지금 고른 종목의 실시간 시세를 보여줘요. 선택한 매매 방식의 보조지표(예: 이동평균·볼린저 밴드)가 함께 그려지고, 아래 설정값을 바꾸면 보조지표도 즉시 따라 바뀌는 걸 확인할 수 있어요.",
-  },
-  {
-    anchor: "strategy-params",
-    title: "전략 조건",
-    body: "고른 매매 방식에만 필요한 세부 값을 정해요. 익절 기준·이동평균 기간·밴드 폭처럼 전략마다 항목이 달라져요.",
-  },
-  {
-    anchor: "risk",
-    title: "손실 제한",
-    body: "한 번에 쓸 자금 비율과 손절 기준(%)을 정해요. 손절을 켜면 정해진 손실에서 자동으로 정리해 위험을 제한해요.",
-  },
-  {
-    anchor: "advanced-risk",
-    title: "고급 위험 관리",
-    body: "하루 최대 손실·최대 보유 시간·손절 뒤 쉬는 시간 같은 추가 안전장치예요. 필요할 때만 설정하면 돼요.",
-  },
-  {
-    anchor: "fees",
-    title: "거래 비용과 펀딩비",
-    body: "실제에 가깝게 수수료·체결 가격 차이(슬리피지)·펀딩비를 반영해요. ‘실제 펀딩비 가져오기’로 해당 기간 평균값을 자동으로 채울 수 있어요.",
-  },
-  {
-    anchor: "leverage",
-    title: "레버리지",
-    body: "배수를 올리면 수익도 손실도 그만큼 커지고 청산 위험이 생겨요. 1배는 현물과 같아 청산이 없어요. 백테스트·모의에서만 적용돼요.",
-  },
-];
 
 function macroKey(macro) {
   return JSON.stringify(macro);
@@ -101,103 +45,99 @@ function periodLabelOf(macro) {
   if (macro.period?.preset === "custom") {
     return `${macro.period.start || "?"} ~ ${macro.period.end || "?"}`;
   }
-  return { "1y": "최근 1년", "6m": "최근 6개월", "3m": "최근 3개월" }[
-    macro.period?.preset
-  ] || macro.period?.preset || "";
+  return PERIOD_PRESETS.find((item) => item.value === macro.period?.preset)?.label || macro.period?.preset || "";
 }
 
-// 조건 정하기 맨 위 블록 — '실시간 차트 · 보조지표' 제목 바로 아래가 차트고,
-// 기본 설정(children)은 그 밑으로 내려온다. 차트가 폼 맨 위에 있으니 스크롤을
-// 내리면 종목·매매 방식부터 손실 제한까지 모든 값이 고정된 차트 아래에서
-// 움직인다 — 무엇을 바꾸든 보조지표가 따라 변하는 게 눈에 들어온다.
-function ChartDisclosure({ symbols, form, setForm, children }) {
-  const [open, setOpen] = useState(true);
-  const contentId = useId();
-
-  // 실시간 차트에 지금 매크로 설정 그대로 보조지표를 얹는다(예: 볼린저 상·하단
-  // 밴드와 매수·매도 구간). form 이 바뀌면 오버레이도 즉시 따라간다.
-  const overlay = useCallback((candles) => computeStrategyOverlay(form, candles), [form]);
-  const ruleLabel = RULE_TYPES[form.rule_type]?.label || "";
-  const symbolLabel = symbols.length === 1 ? symbols[0] : `${symbols.length}개 종목`;
-
+// 매크로 파일 등록 아이콘 — 트레이 위로 올라가는 화살표.
+function UploadIcon() {
   return (
-    <>
-      {/* 설명 문단은 두지 않는다 — 바로 위 '조건 정하기' 설명과 두 줄이 겹쳐 쌓인다. */}
-      <h3 className="t-title text-slate-900">실시간 차트 · 보조지표</h3>
+    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 16V3M7 8l5-5 5 5M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+    </svg>
+  );
+}
 
-      {symbols.length > 0 ? (
-        // 아래 폼이 비쳐 보이지 않도록 캔버스 색을 깔고, 고정됐을 때 스크롤되는
-        // 내용과의 경계가 보이도록 아래쪽에만 괘선을 둔다.
-        <section className="builder-chart-sticky pb-1 border-b border-slate-200" data-tour="chart">
-          <button
-            type="button"
-            onClick={() => setOpen((value) => !value)}
-            className="w-full py-2 flex items-center justify-between gap-3 text-left"
-            aria-expanded={open}
-            aria-controls={contentId}
-          >
-            {/* 고정된 뒤에도 무엇을 보고 있는지 남아야 해서 종목·전략을 여기 둔다. */}
-            <span className="min-w-0 t-caption text-slate-500">
-              <span className="num text-slate-900 font-bold">{symbolLabel}</span>
-              {ruleLabel ? <span className="ml-2">· {ruleLabel}</span> : null}
-            </span>
-            <span className="t-caption text-slate-400" aria-hidden="true">{open ? "접기 ↑" : "펼치기 ↓"}</span>
-          </button>
-          {open ? (
-            <div id={contentId} className="pb-3 space-y-5">
-              {/* 시장은 넘기지 않는다(= 현물). 보조지표는 rule_type·포지션·전략 조건만
-                  보고 그려져 레버리지와 무관한데, 레버리지로 선물 캔들을 끌어오면
-                  지표는 그대로인 채 배포 리전의 선물 차단에 걸려 차트만 사라졌다.
-
-                  interval 은 controlled — 위의 '봉 간격'과 차트 툴바가 같은 값을
-                  가리켜야 한다. defaultInterval 로 두면 툴바에서 바꾼 간격이
-                  매크로에 반영되지 않아 둘이 조용히 어긋난다.
-
-                  minimal — 조작 안내·면책 문단을 접어 스티키 높이를 줄인다. 확대·축소
-                  버튼은 그대로 남는다(compact 와 달리 minimal 은 컨트롤을 지우지 않는다). */}
-              {symbols.map((symbol) => (
-                <CandleChart
-                  key={symbol}
-                  symbol={symbol}
-                  interval={form.candle_interval || "1m"}
-                  onIntervalChange={(value) => setForm((f) => ({ ...f, candle_interval: value }))}
-                  overlay={overlay}
-                  minimal
-                />
-              ))}
-            </div>
-          ) : null}
-        </section>
-      ) : null}
-
-      {children}
-    </>
+// 저장·공유 — 매크로 등록 탭에서 여는 다이얼로그. 링크·인증 카드는 본문이 아니라 부속 결과라 화면에 늘 두지 않는다.
+function ShareDialog({ share, stale, busy, onClose, onRenew }) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    const onKey = (event) => { if (event.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(share.url);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1400);
+    } catch {
+      window.prompt("공유 링크예요. 복사해 주세요.", share.url);
+    }
+  }
+  return createPortal(
+    <div className="scrim fixed inset-0 z-[90] grid place-items-center p-4" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <div role="dialog" aria-modal="true" aria-labelledby="studio-share-title" className="dialog confirm-dialog studio-share">
+        <h2 id="studio-share-title" className="t-h4 text-slate-900">저장·공유</h2>
+        {stale ? (
+          <div className="notice-warn mt-3 t-small text-slate-700">이 링크는 저장 당시 설정을 가리켜요. 지금 바꾼 조건을 공유하려면 새 링크를 만들어 주세요.</div>
+        ) : (
+          <p className="mt-3 t-small text-slate-700">지금 조건과 백테스트 결과가 저장됐어요. 링크를 받은 사람은 같은 설정을 불러와 이어서 볼 수 있어요.</p>
+        )}
+        <div className="mt-4 flex gap-2">
+          <input readOnly value={share.url} aria-label="공유 링크" className="field field-sm flex-1" onFocus={(event) => event.target.select()} />
+          <button type="button" onClick={copy} className="btn btn-m btn-secondary shrink-0">{copied ? "복사했어요" : "링크 복사"}</button>
+        </div>
+        <img src={api.cardUrl(share.slug)} alt="공유용 백테스트 인증 카드" className="mt-4" />
+        <a
+          href={api.cardUrl(share.slug)}
+          download={`${share.slug}.png`}
+          className="mt-3 inline-block t-small font-semibold text-slate-900 underline underline-offset-4 decoration-slate-300 hover:decoration-slate-900"
+        >
+          카드 이미지 내려받기
+        </a>
+        <div className="confirm-dialog-actions">
+          {stale && (
+            <button type="button" onClick={onRenew} disabled={busy} className="btn btn-l w-full btn-primary">
+              {busy ? "저장 중…" : "지금 조건으로 새 링크 만들기"}
+            </button>
+          )}
+          <button type="button" onClick={onClose} className="btn btn-l w-full btn-ghost">닫기</button>
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }
 
 export default function Studio() {
+  const split = useStudioSplit();
   const { token } = useAuth();
   const { slug } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const entryQuery = searchParams.toString();
-  const [form, setForm] = useState(defaultForm);
-  const [result, setResult] = useState(null);
-  const [testedMacro, setTestedMacro] = useState(null);
-  const [perSymbol, setPerSymbol] = useState([]);
-  const [explanation, setExplanation] = useState(null);
+  // 다른 화면에 다녀와도 조건·결과·탭이 남아 있도록 — 이 탭(sessionStorage)에 둔 작업 상태로 시작한다.
+  // 공유 링크(/s/:slug)는 그 링크의 매크로가 우선이라 읽지 않는다.
+  const savedRef = useRef(undefined);
+  if (savedRef.current === undefined) savedRef.current = slug ? null : readStudioSession();
+  const saved = savedRef.current;
+  const [form, setForm] = useState(() => saved?.form || defaultForm());
+  const [result, setResult] = useState(() => saved?.result || null);
+  const [testedMacro, setTestedMacro] = useState(() => saved?.testedMacro || null);
+  const [perSymbol, setPerSymbol] = useState(() => saved?.perSymbol || []);
+  const [explanation, setExplanation] = useState(() => saved?.explanation || null);
   const [aiBusy, setAiBusy] = useState(false);
   const [aiError, setAiError] = useState("");
-  const [summary, setSummary] = useState("");
-  const [dataSource, setDataSource] = useState("");
-  const [periodLabel, setPeriodLabel] = useState("");
+  const [summary, setSummary] = useState(() => saved?.summary || "");
+  const [dataSource, setDataSource] = useState(() => saved?.dataSource || "");
+  const [periodLabel, setPeriodLabel] = useState(() => saved?.periodLabel || "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [share, setShare] = useState(null);
-  const [loadedFrom, setLoadedFrom] = useState("");
-  const [runLeverage, setRunLeverage] = useState(1);
-  const [autoRun, setAutoRun] = useState(true);
+  const [share, setShare] = useState(() => saved?.share || null);
+  const [loadedFrom, setLoadedFrom] = useState(() => saved?.loadedFrom || "");
+  const [runLeverage, setRunLeverage] = useState(() => saved?.runLeverage || 1);
+  const [autoRun, setAutoRun] = useState(() => saved?.autoRun ?? true);
   const [registerOpen, setRegisterOpen] = useState(false);
   const [registrationMode, setRegistrationMode] = useState("live");
   const [hasRegistrationDraft, setHasRegistrationDraft] = useState(
@@ -206,20 +146,69 @@ export default function Studio() {
       return !!draft && draft.context?.origin !== "hero";
     }
   );
-  const [tourOpen, setTourOpen] = useState(false);
-  const [builderTab, setBuilderTab] = useState("basic"); // "basic" | "pro" (프로는 개발 중)
+  const [dockTab, setDockTab] = useState(() => saved?.dockTab || "bt"); // 결과 독의 탭 — 백테스트 → AI 해설 → 최적화 → 페이퍼 → 매크로 등록
+  const [shareOpen, setShareOpen] = useState(false); // 저장·공유 다이얼로그
+  const [optimized, setOptimized] = useState(() => !!saved?.optimized); // 최적화를 한 번이라도 돌렸는지(탭 앞 점)
   const [fileImportBusy, setFileImportBusy] = useState(false);
   const [fileImportError, setFileImportError] = useState("");
   const [fileImportSuccess, setFileImportSuccess] = useState("");
   const macroFileInputRef = useRef(null);
   const requestIdRef = useRef(0);
-  const lastAttemptKeyRef = useRef("");
+  // 복원한 결과가 지금 조건과 같으면 자동 테스트가 바로 다시 돌지 않게 마지막 시도 키를 맞춰 둔다.
+  const lastAttemptKeyRef = useRef(saved?.testedMacro ? macroKey(saved.testedMacro) : "");
   const aiRequestIdRef = useRef(0);
   const latestTestedKeyRef = useRef("");
   const resumeRequestIdRef = useRef(0);
   const processedEntryQueryRef = useRef("");
+  const [testLimits, setTestLimits] = useState(null);
+  const [limitsError, setLimitsError] = useState("");
+  const loadTestLimits = useCallback(async () => {
+    try {
+      const value = await api.backtestLimits();
+      if (!validBacktestLimits(value)) throw new Error("invalid backtest limits");
+      setTestLimits(value);
+      setLimitsError("");
+      return value;
+    } catch (_) {
+      const message = "테스트 범위를 확인하지 못했어요. 다시 시도해 주세요.";
+      setLimitsError(message);
+      throw new Error(message);
+    }
+  }, []);
+  useEffect(() => { loadTestLimits().catch(() => {}); }, [loadTestLimits]);
+  const testBudget = useMemo(() => backtestBudget(form, testLimits), [form, testLimits]);
+  const budgetBlocked = !!testBudget && !testBudget.allowed;
+  // 봉 간격 선택지 — 지금 테스트 기간에서 봉 수 한도를 넘는 간격은 고를 수 없게. 한도 숫자는 보여 주지 않는다.
+  const intervalOptions = useMemo(() => CANDLE_INTERVALS.map((option) => {
+    if (!testLimits) return option;
+    const budget = backtestBudget({ ...form, candle_interval: option.value }, testLimits);
+    const blocked = !!budget && !budget.allowed && !budget.error;
+    return blocked ? { ...option, disabled: true, title: "이 테스트 기간에서는 봉이 너무 많아 고를 수 없어요" } : option;
+  }), [form, testLimits]);
+  const disabledIntervals = useMemo(() => intervalOptions.filter((option) => option.disabled).map((option) => ({ value: option.value, title: option.title })), [intervalOptions]);
+  // 기간을 늘려 지금 간격이 불가능해지면 가능한 다음 간격으로 옮긴다 — 불가능한 조합을 들고 있지 않게.
+  useEffect(() => {
+    if (!testBudget || testBudget.allowed || testBudget.error) return;
+    const larger = testBudget.suggestions.find((choice) => choice.kind === "interval");
+    if (larger) setForm((previous) => ({ ...previous, ...larger.patch }));
+  }, [testBudget]);
 
-  const valErr = validate(form);
+  // 입력 검증 — 걸린 칸(fieldError.field)은 조건 판에서 노랗게 띄우고 라벨 아래 문구를 적는다. 바닥 경고 상자에는 올리지 않는다.
+  const fieldError = validateDetailed(form);
+  const valErr = fieldError?.message ?? null;
+  const fieldErrorKey = fieldError?.field || "";
+  useEffect(() => {
+    if (!fieldErrorKey) return;
+    const host = document.querySelector(`.studio-cond-body [data-field="${fieldErrorKey}"]`);
+    if (!host) return;
+    const reduce = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+    host.scrollIntoView({ block: "center", behavior: reduce ? "auto" : "smooth" });
+    // 다른 칸에 입력 중이면 커서를 뺏지 않는다 — 스크롤과 노랑 표시만.
+    const active = document.activeElement;
+    const typing = active && ["INPUT", "SELECT", "TEXTAREA"].includes(active.tagName) && !host.contains(active);
+    if (typing) return;
+    host.querySelector('input:not([type="checkbox"]):not([disabled]), select:not([disabled]), button:not([disabled])')?.focus({ preventScroll: true });
+  }, [fieldErrorKey]);
   const currentMacro = useMemo(() => buildMacro(form), [form]);
   const currentMacroKey = useMemo(() => macroKey(currentMacro), [currentMacro]);
   const testedMacroKey = testedMacro ? macroKey(testedMacro) : "";
@@ -238,6 +227,23 @@ export default function Studio() {
     }
     return out;
   }, [form.symbol]);
+
+  const paper = usePaperSession({ macro: currentMacro, valErr, resumeKey: slug ? "" : "ggp_studio_paper:v1" });
+
+  // 작업 상태 저장 — 값이 바뀌고 300ms 뒤에 한 번. 결과(자산곡선 365점)까지 함께 둔다.
+  useEffect(() => {
+    if (slug) return undefined;
+    const timer = window.setTimeout(() => writeStudioSession({
+      form, result, testedMacro, perSymbol, explanation, summary, dataSource, periodLabel, share, loadedFrom, runLeverage, autoRun, dockTab, optimized,
+    }), 300);
+    return () => window.clearTimeout(timer);
+  }, [slug, form, result, testedMacro, perSymbol, explanation, summary, dataSource, periodLabel, share, loadedFrom, runLeverage, autoRun, dockTab, optimized]);
+  // 차트 오버레이 — 지금 매크로 설정 그대로 보조지표(볼린저 밴드·매수/매도 구간 등)를 얹는다. form 이 바뀌면 즉시 따라간다.
+  const overlay = useCallback((candles) => computeStrategyOverlay(form, candles), [form]);
+
+  // 페이퍼가 돌기 시작하면 그 탭으로, 결과가 사라지면(파일 등록 등) 백테스트 탭으로.
+  useEffect(() => { if (paper.running) setDockTab("paper"); }, [paper.running]);
+  useEffect(() => { if (!result) { setDockTab("bt"); setOptimized(false); } }, [result]);
 
   // Clone flow: load a shared macro into the builder.
   useEffect(() => {
@@ -296,6 +302,11 @@ export default function Studio() {
     setAiBusy(false);
     setBusy(true);
     try {
+      const budget = backtestBudget(snapshot, await loadTestLimits());
+      if (!budget?.allowed) {
+        if (budget?.error) setError(budget.error);
+        return false;
+      }
       const data = await api.backtest(macro);
       if (requestId !== requestIdRef.current) return false;
       setTestedMacro(macro);
@@ -314,7 +325,7 @@ export default function Studio() {
     } finally {
       if (requestId === requestIdRef.current) setBusy(false);
     }
-  }, []);
+  }, [loadTestLimits]);
 
   // Consume all entry parameters in one place so two effects cannot restore
   // each other's deleted query keys. A login-return draft wins over starter
@@ -401,12 +412,12 @@ export default function Studio() {
   // Once the first result exists, re-run after edits settle. Freshness keys and
   // request IDs prevent stale responses from becoming registerable results.
   useEffect(() => {
-    if (!autoRun || !testedMacro || valErr || busy || registerOpen) return;
+    if (!autoRun || !testedMacro || valErr || budgetBlocked || busy || registerOpen) return;
     if (currentMacroKey === lastAttemptKeyRef.current) return;
     const snapshot = form;
     const timer = window.setTimeout(() => runBacktest(snapshot), 700);
     return () => window.clearTimeout(timer);
-  }, [autoRun, busy, currentMacroKey, form, registerOpen, runBacktest, testedMacro, valErr]);
+  }, [autoRun, busy, budgetBlocked, currentMacroKey, form, registerOpen, runBacktest, testedMacro, valErr]);
 
   useEffect(() => {
     const onKeyDown = (event) => {
@@ -420,7 +431,7 @@ export default function Studio() {
 
   async function saveAndShare() {
     setError("");
-    if (valErr) return setError(valErr);
+    if (valErr) { setError(valErr); return false; }
     const requestId = ++requestIdRef.current;
     const key = currentMacroKey;
     lastAttemptKeyRef.current = key;
@@ -428,6 +439,11 @@ export default function Studio() {
     setAiBusy(false);
     setBusy(true);
     try {
+      const budget = backtestBudget(form, await loadTestLimits());
+      if (!budget?.allowed) {
+        if (budget?.error) setError(budget.error);
+        return false;
+      }
       const macro = currentMacro;
       const data = await api.createMacro(macro);
       if (requestId !== requestIdRef.current) return;
@@ -448,8 +464,10 @@ export default function Studio() {
         url: `${window.location.origin}/s/${data.share_slug}`,
         macroKey: key,
       });
+      return true;
     } catch (reason) {
       if (requestId === requestIdRef.current) setError(String(reason.message || reason));
+      return false;
     } finally {
       if (requestId === requestIdRef.current) setBusy(false);
     }
@@ -556,271 +574,253 @@ export default function Studio() {
     setRegisterOpen(true);
   }
 
+  // ── 워크벤치 ──────────────────────────────────────────────────────────
+  // 페이지는 스크롤하지 않는다. 조건(왼쪽) · 차트(오른쪽 위) · 결과 독(오른쪽 아래)이 각자 스크롤한다.
+  // 결과 독의 탭 순서가 곧 검증 순서다: 백테스트 → AI 해설 → 익·손절 최적화 → 페이퍼 트레이딩 → 등록·실행.
+  const shareStale = !!share && !!share.macroKey && share.macroKey !== currentMacroKey;
+  // 공유 링크 — 있으면 다이얼로그를 열고, 없거나 조건이 바뀌었으면 저장해서 만든 뒤 연다.
+  async function openShare() {
+    if (share && !shareStale) { setShareOpen(true); return; }
+    const ok = await saveAndShare();
+    if (ok) setShareOpen(true);
+  }
+  const testPrimary = !busy && (!testedMacro || !resultIsFresh);
+  const testLabel = busy
+    ? "결과 계산 중…"
+    : !testedMacro
+      ? "이 조건으로 백테스트"
+      : resultIsFresh
+        ? "자동 실행 완료"
+        : "바뀐 조건으로 다시 테스트";
+  const tabs = [
+    { id: "bt", label: "백테스트", enabled: true, dot: busy ? "run" : !result ? "" : resultIsFresh ? "ok" : "warn" },
+    { id: "ai", label: "껄무새 AI 해설", enabled: !!result, dot: aiBusy ? "run" : explanation?.source === "ai" ? "ok" : "" },
+    { id: "opt", label: "익·손절 최적화", enabled: !!result, dot: optimized ? "ok" : "" },
+    { id: "paper", label: "페이퍼 트레이딩", enabled: !!result, dot: paper.running ? "run" : paper.status ? "ok" : "" },
+    { id: "done", label: "매크로 등록", enabled: !!result, dot: "" },
+  ];
+
+
+  const limitsRetry = limitsError ? (
+    <button type="button" className="btn btn-s btn-secondary" onClick={() => loadTestLimits().catch(() => {})}>다시 확인</button>
+  ) : null;
+  const footAlert = (() => {
+    if (limitsError && (!error || error === limitsError)) return { tone: "risk", text: limitsError, actions: limitsRetry };
+    if (error) return { tone: "risk", text: `오류: ${error}`, actions: error === limitsError ? limitsRetry : null };
+    if (valErr && !fieldErrorKey) return { tone: "warn", text: valErr, actions: null }; // 칸이 정해진 오류는 그 칸에 표시된다
+    if (budgetBlocked) {
+      const text = testBudget.error || `테스트 범위를 넘어요 · ${testBudget.bars.toLocaleString()}봉 / 최대 ${testBudget.maxBars.toLocaleString()}봉`;
+      const actions = testBudget.suggestions.length > 0 ? (
+        <span className="studio-cond-alert-actions">
+          {testBudget.suggestions.map((choice) => (
+            <button type="button" key={choice.kind} className="btn btn-s btn-secondary" disabled={busy} onClick={() => { setForm((previous) => ({ ...previous, ...choice.patch })); setError(""); }}>
+              {choice.kind === "interval"
+                ? `${CANDLE_INTERVALS.find((item) => item.value === choice.value)?.label || choice.value}봉으로`
+                : `${PERIOD_PRESETS.find((item) => item.value === choice.value)?.label || choice.value}로`}
+            </button>
+          ))}
+        </span>
+      ) : null;
+      return { tone: "warn", text, actions };
+    }
+    return null;
+  })();
+
   return (
-    <div>
-      {/* 머리말은 제목 한 줄뿐이다 — 단계 안내와 설명 문단은 바로 아래 '조건 정하기'
-          설명과 같은 말을 반복하면서 정작 좁은 조건 편집기를 화면 밖으로 밀어냈다. */}
-      <PageHeader title="매크로 만들기" actions={<SimBadge />} />
+    <div className="studio-page">
+      <input
+        ref={macroFileInputRef}
+        type="file"
+        accept=".json,.ggm.json,application/json"
+        onChange={onMacroFileChange}
+        className="sr-only"
+        aria-label="껄무새 매크로 파일 등록"
+      />
 
-      {/* 유틸리티 한 줄 — 파일 등록과 사용법 안내는 본문이 아니라 부속 동작이라
-          제목·설명 문단으로 두 블록을 차지할 이유가 없다. 괘선도 두지 않는다:
-          구획을 나눌 만한 내용이 아니라 버튼 두 개뿐이다. 머리말을 덜어내며
-          이 줄이 페이지 첫 동작이 됐으므로 둘 다 눈에 걸리는 노랑으로 둔다. */}
-      <section className="mb-5" aria-label="빌더 도구">
-        <input
-          ref={macroFileInputRef}
-          type="file"
-          accept=".json,.ggm.json,application/json"
-          onChange={onMacroFileChange}
-          className="sr-only"
-          aria-label="껄무새 매크로 파일 등록"
-        />
-        <div className="py-1 flex items-center gap-2 flex-wrap">
-          {!slug ? (
-            token ? (
-              <button
-                type="button"
-                onClick={() => macroFileInputRef.current?.click()}
-                disabled={fileImportBusy || busy}
-                className="btn btn-s btn-primary"
-                title="가지고 있는 .ggm.json 매크로 파일을 내 매크로에 등록하고 아래에서 이어서 수정해요"
-              >
-                {fileImportBusy ? "파일 등록 중…" : "매크로 파일 등록"}
-              </button>
-            ) : (
-              <Link
-                to="/login?next=%2Fbuilder"
-                className="btn btn-s btn-primary"
-                title="가지고 있는 매크로 파일을 등록하려면 로그인이 필요해요"
-              >
-                로그인 후 파일 등록
-              </Link>
-            )
-          ) : null}
-          <button
-            type="button"
-            onClick={() => {
-              setBuilderTab("basic"); // 투어가 짚는 요소는 모두 기본 빌더 안에 있다.
-              setTourOpen(true);
-            }}
-            className="btn btn-s btn-primary"
-            title="화면을 순서대로 짚어가며 사용법을 안내해 드려요"
-          >
-            사용법 안내
-          </button>
-        </div>
-        {fileImportError ? <p className="mt-2 t-small text-red-600" role="alert">{fileImportError}</p> : null}
-        {fileImportSuccess ? <p className="mt-2 t-small text-green-700" role="status">{fileImportSuccess}</p> : null}
-      </section>
-
-      {hasRegistrationDraft ? (
-        <div className="notice mb-7 t-small text-slate-700 flex items-center justify-between gap-4 flex-wrap">
-          <span>로그인 화면으로 가기 전에 테스트한 등록 설정이 남아 있어요.</span>
-          <button
-            type="button"
-            onClick={() => navigate("/builder?guide=1&register=1")}
-            className="btn btn-m btn-secondary"
-          >
-            등록 계속하기
-          </button>
-        </div>
-      ) : null}
-
-      <div className="grid lg:grid-cols-2 gap-8 lg:gap-10">
-        <section id="macro-editor">
-          <div className="mb-5">
-            <div className="t-caption text-slate-500 num">01</div>
-            <h2 className="mt-1 t-h4 text-slate-900">조건 정하기</h2>
-            <p className="mt-2 t-small text-slate-700">처음에는 종목과 전략만 바꾸고 나머지는 기본값으로 확인해도 돼요.</p>
-          </div>
-
-          <div className="seg mb-5 max-w-full flex-wrap" role="tablist" aria-label="매크로 빌더 종류">
-            <button
-              type="button"
-              role="tab"
-              id="builder-tab-basic"
-              aria-selected={builderTab === "basic"}
-              aria-controls="builder-panel-basic"
-              onClick={() => setBuilderTab("basic")}
-              className={"seg-item " + (builderTab === "basic" ? "seg-item-on" : "")}
-            >
-              기본 매크로 빌더
-            </button>
-            <button
-              type="button"
-              role="tab"
-              id="builder-tab-pro"
-              aria-selected={builderTab === "pro"}
-              aria-controls="builder-panel-pro"
-              onClick={() => setBuilderTab("pro")}
-              className={"seg-item " + (builderTab === "pro" ? "seg-item-on" : "")}
-            >
-              프로 매크로 빌더
-              <span className="badge badge-flat ml-2">개발 예정</span>
-            </button>
-          </div>
-
-          {loadedFrom ? (
-            <div className="notice mb-5 t-small text-slate-700">
-              불러온 매크로 · <b className="text-slate-900">{loadedFrom}</b>
-            </div>
-          ) : null}
-
-          {/* 프로 빌더는 아직 준비 중이라 폼을 열지 않는다. 기본 빌더는 계속 마운트해
-              두어 탭을 오가도 입력한 조건이 사라지지 않게 한다. */}
-          <div
-            id="builder-panel-basic"
-            role="tabpanel"
-            aria-labelledby="builder-tab-basic"
-            hidden={builderTab !== "basic"}
-          >
-            <Builder
-              form={form}
-              setForm={setForm}
-              chartSlot={(basicSettings) => (
-                <ChartDisclosure symbols={chartSymbols} form={form} setForm={setForm}>
-                  {basicSettings}
-                </ChartDisclosure>
-              )}
-            />
-          </div>
-
-          {builderTab === "pro" ? (
-            <div
-              id="builder-panel-pro"
-              role="tabpanel"
-              aria-labelledby="builder-tab-pro"
-              className="py-14 text-center border-b border-slate-200"
-            >
-              <div className="t-title text-slate-900">프로 매크로 빌더는 준비 중이에요</div>
-              <p className="mt-2 t-small text-slate-700 measure mx-auto">
-                여러 조건을 조합하고 진입·청산 규칙을 직접 짜는 고급 빌더예요. 아직 개발 중이라
-                지금은 사용할 수 없어요. 그동안은 기본 매크로 빌더로 조건을 만들어 주세요.
-              </p>
-              <button
-                type="button"
-                onClick={() => setBuilderTab("basic")}
-                className="btn btn-m btn-secondary mt-5"
-              >
-                기본 매크로 빌더로 돌아가기
+      {(hasRegistrationDraft || fileImportError || fileImportSuccess || loadedFrom) && (
+        <div className="studio-banner">
+          {loadedFrom && <p className="t-small text-slate-700">불러온 매크로 · <b className="text-slate-900">{loadedFrom}</b></p>}
+          {hasRegistrationDraft && (
+            <div className="notice t-small text-slate-700 flex items-center justify-between gap-4 flex-wrap">
+              <span>로그인 화면으로 가기 전에 테스트한 등록 설정이 남아 있어요.</span>
+              <button type="button" onClick={() => navigate("/builder?guide=1&register=1")} className="btn btn-s btn-secondary">
+                등록 계속하기
               </button>
             </div>
-          ) : null}
+          )}
+          {fileImportError && <p className="t-small text-red-600" role="alert">{fileImportError}</p>}
+          {fileImportSuccess && <p className="t-small text-green-700" role="status">{fileImportSuccess}</p>}
+        </div>
+      )}
 
-          {builderTab === "basic" ? (
-            <>
-              {valErr ? <div className="mt-4 t-small text-amber-700" role="alert">{valErr}</div> : null}
-              {error ? <div className="mt-4 t-small text-red-600" role="alert">오류: {error}</div> : null}
-              <div className="mt-6 flex items-center gap-3 flex-wrap">
-                <button onClick={() => runBacktest(form)} disabled={busy || !!valErr}
-                  className={"btn btn-l " + (resultIsFresh ? "btn-secondary" : "btn-primary")}>
-                  {busy ? "결과 계산 중…" : testedMacro && !resultIsFresh ? "바뀐 조건으로 다시 테스트" : "이 조건으로 백테스트"}
+      <div ref={split.workRef} className="studio-work" data-conditions-collapsed={split.collapsed} style={{ "--studio-condition-width": `${split.width}px` }}>
+        {/* ── 조건 ── */}
+        <aside id="studio-conditions" className="studio-cond" aria-label="조건" {...split.panelProps}>
+          <div className="studio-panel-head">
+            <h2 className="t-h2 text-slate-900">조건</h2>
+            <div className="studio-head-right">
+              {/* 매크로 파일 등록 — 가지고 있는 .ggm.json 을 내 매크로에 등록하고 조건에 불러온다. 로그인 전엔 로그인으로. */}
+              {!slug && (token ? (
+                <button
+                  type="button"
+                  className="studio-cond-upload t-caption"
+                  onClick={() => macroFileInputRef.current?.click()}
+                  disabled={fileImportBusy || busy}
+                  aria-label={fileImportBusy ? "매크로 업로드 중" : "매크로 업로드 (.ggm.json)"}
+                  title={fileImportBusy ? "업로드 중…" : "매크로 업로드 (.ggm.json)"}
+                >
+                  <UploadIcon />
+                  <span>{fileImportBusy ? "업로드 중…" : "매크로 업로드"}</span>
                 </button>
-                <button onClick={saveAndShare} disabled={busy || !!valErr} className="btn btn-l btn-secondary">
-                  저장하고 공유 링크 만들기
-                </button>
-                <label className="flex items-center gap-2 t-small text-slate-700 cursor-pointer select-none">
-                  <input type="checkbox" checked={autoRun} onChange={(event) => setAutoRun(event.target.checked)} />
-                  변경 뒤 자동 테스트
-                </label>
+              ) : (
+                <Link to="/login?next=%2Fbuilder" className="studio-cond-upload t-caption" aria-label="로그인 후 매크로 업로드" title="매크로 파일을 등록하려면 로그인이 필요해요"><UploadIcon /><span>매크로 업로드</span></Link>
+              ))}
+            </div>
+          </div>
+          <div className="studio-scroll studio-cond-body">
+            <Builder form={form} setForm={setForm} variant="dense" intervalOptions={intervalOptions} fieldError={fieldError} />
+          </div>
+          <div className="studio-cond-foot">
+            {/* 안내·오류는 한 번에 하나, 경고 상자 하나로 — 오류 > 범위 확인 실패 > 입력 오류 > 범위 초과 > 조건 바뀜. */}
+            {footAlert && (
+              <div className={"alert studio-cond-alert " + (footAlert.tone === "risk" ? "alert-risk" : "alert-warn")} role={footAlert.tone === "risk" ? "alert" : "status"}>
+                <span className="studio-cond-alert-text">{footAlert.text}</span>
+                {footAlert.actions}
               </div>
-              <p className="mt-3 t-caption text-slate-500">
-                첫 결과 뒤부터 자동 테스트가 동작해요 · <kbd className="num rounded border border-slate-300 bg-slate-100 px-1">Ctrl</kbd>+<kbd className="num rounded border border-slate-300 bg-slate-100 px-1">Enter</kbd>
-              </p>
-            </>
-          ) : null}
+            )}
+            <button
+              type="button"
+              onClick={() => runBacktest(form)}
+              disabled={busy || !!valErr || budgetBlocked}
+              className={"btn btn-l w-full " + (testPrimary ? "btn-primary" : "btn-secondary")}
+            >
+              {testLabel}
+            </button>
+            <div className="studio-foot-note t-caption text-slate-500">
+              <label className="flex items-center gap-2 t-caption text-slate-700 cursor-pointer select-none whitespace-nowrap">
+                <input type="checkbox" checked={autoRun} onChange={(event) => setAutoRun(event.target.checked)} />
+                자동 실행
+              </label>
+              <span>
+                <kbd className="num rounded border border-slate-300 bg-slate-100 px-1">Ctrl</kbd>+<kbd className="num rounded border border-slate-300 bg-slate-100 px-1">Enter</kbd>
+              </span>
+            </div>
+          </div>
+        </aside>
+
+        <div className="studio-splitter-track">
+          <div className="studio-splitter" {...split.separatorProps} />
+          <button type="button" className="studio-conditions-reopen" {...split.reopenProps}>
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9 5 7 7-7 7" /></svg>
+          </button>
+        </div>
+
+        {/* ── 차트 — 주인공. 조건을 바꾸면 보조지표·익절/손절선이 바로 따라온다.
+            판 머리는 따로 두지 않는다 — CandleChart(studio) 의 도구줄(종목·시세·봉 간격·범례)이 곧 머리다. ── */}
+        <section className="studio-chart" aria-label="실시간 차트 · 보조지표" data-tour="chart">
+          <div className={"studio-chart-body" + (chartSymbols.length > 1 ? " is-multi" : "")}>
+            {chartSymbols.length > 0 ? (
+              // 시장은 넘기지 않는다(= 현물). 보조지표는 rule_type·포지션·전략 조건만 보고 그려져
+              // 레버리지와 무관하다. interval 은 controlled — 조건의 '봉 간격'과 차트 툴바가 같은 값을 가리킨다.
+              chartSymbols.map((symbol) => (
+                <CandleChart
+                  key={symbol}
+                  symbol={symbol}
+                  interval={form.candle_interval || "1m"}
+                  onIntervalChange={(value) => setForm((f) => ({ ...f, candle_interval: value }))}
+                  overlay={overlay}
+                  variant="studio"
+                  disabledIntervals={disabledIntervals}
+                />
+              ))
+            ) : (
+              <EmptyState title="종목을 입력하면 차트가 나와요">왼쪽 조건의 종목 칸에 BTCUSDT 처럼 적어 주세요.</EmptyState>
+            )}
+          </div>
         </section>
 
-        <section id="backtest-result">
-          <div className="mb-5">
-            <div className="t-caption text-slate-500 num">02</div>
-            <h2 className="mt-1 t-h4 text-slate-900">결과 확인</h2>
-            <p className="mt-2 t-small text-slate-700">수익률과 함께 최대낙폭, 홀딩 비교, 청산 위험을 확인해요.</p>
+        {/* ── 결과 독 ── */}
+        <section className="studio-dock" aria-label="결과">
+          <div className="studio-dock-head">
+            <StudioTabs tabs={tabs} active={dockTab} onChange={setDockTab} />
           </div>
-
-          <div className="sr-only" role="status" aria-live="polite">
-            {busy ? "백테스트 결과를 계산하고 있어요." : resultIsFresh ? "백테스트 결과가 준비됐어요." : ""}
-          </div>
-
-          {!result && !busy ? (
-            <div className="py-14 text-center border-b border-slate-200">
-              <div className="t-title text-slate-900">아직 계산한 결과가 없어요</div>
-              <div className="mt-2 t-small text-slate-700">왼쪽의 백테스트 버튼을 누르면 이곳에 결과가 나와요.</div>
+          <div className="studio-scroll studio-dock-body" role="tabpanel" id="studio-dock-panel" aria-labelledby={`studio-tab-${dockTab}`}>
+            <div className="sr-only" role="status" aria-live="polite">
+              {busy ? "백테스트 결과를 계산하고 있어요." : resultIsFresh ? "백테스트 결과가 준비됐어요." : ""}
             </div>
-          ) : null}
 
-          {result && !resultIsFresh ? (
-            <div className="notice-warn my-5 t-small text-slate-700">
-              결과를 낸 뒤 조건이 바뀌었어요. 아래 숫자는 이전 조건의 결과이며 등록에는 사용할 수 없어요.
-            </div>
-          ) : null}
+            {dockTab === "bt" && (
+              !result ? (
+                busy ? (
+                  <Loading label="백테스트 결과를 계산하고 있어요…" />
+                ) : (
+                  <EmptyState title="아직 계산한 결과가 없어요">
+                    왼쪽 조건을 고른 뒤 <b className="text-slate-900">이 조건으로 백테스트</b>를 누르면 여기와 차트에 바로 나와요.
+                  </EmptyState>
+                )
+              ) : (
+                <>
+                  {/* 조건이 바뀐 경우의 안내는 독 머리(다음 행동 자리)에 한 줄로 — 본문 위에 띠를 얹지 않는다. */}
+                  <StudioBacktest
+                    result={result}
+                    perSymbol={perSymbol}
+                    periodLabel={periodLabel}
+                    symbol={testedMacro?.symbol || form.symbol}
+                    leverage={runLeverage}
+                  />
+                </>
+              )
+            )}
 
-          {result ? (
-            <div className="mt-6">
-              <ResultView
+            {dockTab === "ai" && result && (
+              <StudioAiExplain explanation={explanation} onAiExplain={enrichExplanation} aiBusy={aiBusy} aiError={aiError} />
+            )}
+
+            {dockTab === "opt" && result && (
+              form.rule_type === "A" ? (
+                <StudioOptimize form={form} setForm={setForm} valErr={valErr} onResult={() => setOptimized(true)} />
+              ) : (
+                <EmptyState title="이 매매 방식은 자동 최적화를 지원하지 않아요">
+                  익절/손절 자동 최적화는 <b className="text-slate-900">A · 익절/손절 후 재진입</b>에서만 돌릴 수 있어요.
+                </EmptyState>
+              )
+            )}
+
+            {dockTab === "paper" && result && (
+              <StudioPaper macro={currentMacro} valErr={valErr} controller={paper} />
+            )}
+
+            {dockTab === "done" && result && (
+              <StudioOutcomes
+                macro={testedMacro || currentMacro}
+                valErr={valErr}
+                strategyEntry={{ symbol: chartSymbols[0] || form.symbol || "—", human_summary: summary, macro: testedMacro || currentMacro, locked: false }}
                 result={result}
-                perSymbol={perSymbol}
-                explanation={explanation}
-                onAiExplain={enrichExplanation}
-                aiBusy={aiBusy}
-                aiError={aiError}
-                summary={summary}
-                dataSource={dataSource}
                 periodLabel={periodLabel}
-                symbol={testedMacro?.symbol || form.symbol}
-                leverage={runLeverage}
+                dataSource={dataSource}
+                symbols={chartSymbols}
+                canRegister={resultIsFresh}
+                onRegister={() => openRegistration(paper.mode)}
+                onShare={openShare}
+                shareBusy={busy}
               />
-            </div>
-          ) : null}
-
-          {resultIsFresh ? (
-            <section className="mt-6 py-5 border-y border-slate-200 flex items-center justify-between gap-4 flex-wrap">
-              <div>
-                <div className="t-caption text-slate-500 num">03</div>
-                <h3 className="mt-1 t-title text-slate-900">리더보드 등록</h3>
-                <p className="mt-1 t-small text-slate-700">테스트한 설정을 바꾸지 않고 모의매매에 사용해요.</p>
-              </div>
-              <button onClick={() => openRegistration()} className="btn btn-l btn-primary">
-                이 설정으로 등록
-              </button>
-            </section>
-          ) : null}
-
-          {result && form.rule_type === "A" ? (
-            <div className="mt-6">
-              <OptimizePanel form={form} setForm={setForm} valErr={valErr} />
-            </div>
-          ) : null}
-
-          {result ? (
-            <div className="mt-6">
-              <PaperPanel macro={currentMacro} valErr={valErr} onRegister={resultIsFresh ? openRegistration : null} />
-            </div>
-          ) : null}
-
-          {share ? (
-            <section className="mt-6 pt-5 border-t border-slate-200 space-y-4">
-              <h3 className="t-title text-slate-900">저장·공유</h3>
-              {share.macroKey && share.macroKey !== currentMacroKey ? (
-                <div className="notice-warn t-small text-slate-700">
-                  이 링크는 저장 당시 설정을 가리켜요. 지금 바꾼 조건을 공유하려면 새 링크를 만들어 주세요.
-                </div>
-              ) : null}
-              <div className="flex gap-2">
-                <input readOnly value={share.url} aria-label="공유 링크" className="field field-sm flex-1" />
-                <button onClick={() => navigator.clipboard?.writeText(share.url)} className="btn btn-m btn-secondary">
-                  링크 복사
-                </button>
-              </div>
-              <img src={api.cardUrl(share.slug)} alt="공유용 백테스트 인증 카드" className="w-full rounded-xl border border-slate-200" />
-              <a href={api.cardUrl(share.slug)} download={`${share.slug}.png`}
-                className="inline-block t-small font-semibold text-slate-900 underline underline-offset-4 decoration-slate-300 hover:decoration-slate-900">
-                카드 이미지 내려받기
-              </a>
-            </section>
-          ) : null}
+            )}
+          </div>
         </section>
       </div>
+
+      {shareOpen && share && (
+        <ShareDialog
+          share={share}
+          stale={shareStale}
+          busy={busy}
+          onClose={() => setShareOpen(false)}
+          onRenew={async () => {
+            const ok = await saveAndShare();
+            if (!ok) setShareOpen(false);
+          }}
+        />
+      )}
 
       {registerOpen && testedMacro ? (
         <RegisterMacroModal
@@ -834,7 +834,6 @@ export default function Studio() {
         />
       ) : null}
 
-      <ProductTour steps={TOUR_STEPS} open={tourOpen} onClose={() => setTourOpen(false)} />
     </div>
   );
 }

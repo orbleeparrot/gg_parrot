@@ -1,0 +1,78 @@
+/* 조건 패널의 실제 너비에 반응한다. 컨트롤 36px · 라벨 13px. */
+.builder-dense { container: builder / inline-size; }
+.builder-dense .bd-sec { padding: 12px 0 14px; border-bottom: 1px solid rgb(var(--c-slate-200)); }
+.builder-dense .bd-sec:last-child { border-bottom: 0; }
+.builder-dense .bd-h { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 0 0 10px; color: rgb(var(--c-slate-900)); font-size: 14px; font-weight: 700; line-height: 1.45; }
+.builder-dense .bd-h h3 { margin: 0; font-size: inherit; font-weight: inherit; word-break: keep-all; }
+.builder-dense .bd-h .t-caption { flex-basis: 100%; margin-left: 0; font-size: 12px; font-weight: 500; }
+.builder-dense .bd-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-items: start; }
+.builder-dense .bd-grid + .bd-grid { margin-top: 12px; }
+.builder-dense .bd-grid-1 { grid-template-columns: minmax(0, 1fr); }
+.builder-dense .bd-field { min-width: 0; display: grid; grid-row: span 3; grid-template-rows: subgrid; row-gap: 4px; align-self: stretch; }
+.builder-dense .bd-field-wide { grid-column: 1 / -1; }
+/* 같은 행은 라벨·입력·설명의 기준선을 공유한다. 긴 라벨이 옆 입력칸을 밀어내지 않는다. */
+.builder-dense .bd-label { display: flex; align-items: center; align-self: end; gap: 2px; min-height: 18px; color: rgb(var(--c-slate-700)); font-size: 13px; font-weight: 600; line-height: 18px; word-break: keep-all; overflow-wrap: anywhere; }
+.builder-dense .bd-label > .relative { flex-shrink: 0; }
+.builder-dense .bd-hint { color: rgb(var(--c-slate-500)); font-size: 12px; line-height: 1.5; word-break: keep-all; overflow-wrap: anywhere; }
+.builder-dense .field { height: 36px; min-height: 36px; padding-top: 0; padding-bottom: 0; padding-left: 9px; border-radius: 8px; font-size: 14px; font-weight: 500; }
+.builder-dense input.field:not(select) { padding-right: 9px; }
+/* 숫자 칸의 단위 접미사 — 라벨 끝의 "(%)" 가 여기로 온다. */
+.builder-dense .bd-unit { position: relative; min-width: 0; align-self: start; }
+.builder-dense .bd-unit input.field { width: 100%; padding-right: var(--bd-unit-width, 36px); appearance: textfield; -moz-appearance: textfield; }
+.builder-dense .bd-unit input::-webkit-inner-spin-button, .builder-dense .bd-unit input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.builder-dense .bd-unit-tag { position: absolute; right: 9px; top: 18px; transform: translateY(-50%); color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 500; pointer-events: none; }
+/* 포지션 segmented */
+.builder-dense .bd-seg { height: 36px; padding: 3px; width: 100%; }
+.builder-dense .bd-seg .seg-item { flex: 1; justify-content: center; height: 28px; padding: 0 10px; font-size: 13px; }
+.builder-dense .bd-seg .seg-item:disabled { opacity: .45; cursor: not-allowed; }
+/* 종목 칩 */
+.builder-dense .bd-chips { min-height: 32px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.builder-dense .bd-chip { height: 32px; display: inline-flex; align-items: center; gap: 6px; padding: 0 4px 0 8px; border: 1px solid rgb(var(--c-slate-300)); border-radius: 999px; color: rgb(var(--c-slate-900)); font-size: 13px; font-weight: 600; }
+.builder-dense .bd-chip button { width: 18px; height: 18px; border-radius: 50%; color: rgb(var(--c-slate-500)); font-size: 14px; line-height: 1; }
+.builder-dense .bd-chip button:hover { background: rgb(var(--c-slate-200)); color: rgb(var(--c-slate-900)); }
+.builder-dense .bd-chip-input { flex: 1 1 100px; min-width: 100px; height: 32px; padding: 0 10px; border: 1px dashed rgb(var(--c-slate-300)); border-radius: 999px; background: transparent; color: rgb(var(--c-slate-900)); font-size: 13px; font-weight: 500; }
+.builder-dense .bd-chip-input::placeholder { color: rgb(var(--c-slate-500)); }
+.builder-dense .bd-chip-input:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 1px; border-color: transparent; }
+/* 접이식 절(고급 위험 관리 · 비용) — 제목 왼쪽 갈매기, 오른쪽에 상태 한마디. */
+.builder-dense .bd-details > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 8px; color: rgb(var(--c-slate-700)); font-size: 14px; font-weight: 600; line-height: 20px; }
+.builder-dense .bd-details > summary::-webkit-details-marker { display: none; }
+.builder-dense .bd-details > summary::before { content: ""; flex: none; width: 6px; height: 6px; border-right: 1.5px solid rgb(var(--c-slate-500)); border-bottom: 1.5px solid rgb(var(--c-slate-500)); transform: rotate(-45deg); transition: transform .15s; }
+.builder-dense .bd-details[open] > summary::before { transform: rotate(45deg); }
+.builder-dense .bd-details > summary small { margin-left: auto; color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 500; }
+.builder-dense .bd-details[data-tour="fees"] > summary { flex-wrap: wrap; row-gap: 2px; }
+.builder-dense .bd-details[data-tour="fees"] > summary small { flex-basis: 100%; margin-left: 14px; font-family: inherit; }
+.builder-dense .bd-details .bd-grid { margin-top: 10px; }
+.builder-dense .bd-details .notice { margin-top: 10px; }
+.builder-dense .bd-check { grid-column: 1 / -1; display: inline-flex; align-items: center; gap: 6px; min-height: 32px; color: rgb(var(--c-slate-700)); font-size: 13px; font-weight: 500; line-height: 1.5; word-break: keep-all; }
+.builder-dense input[type="checkbox"] { flex-shrink: 0; }
+/* 레버리지 — 슬라이더 · 숫자 · 배 */
+.builder-dense .bd-range { display: flex; align-items: center; gap: 10px; }
+.builder-dense .bd-range input[type="range"] { flex: 1; min-width: 0; }
+.builder-dense .bd-range .field { width: 64px; }
+.builder-dense .alert { margin-top: 8px; padding: 8px 10px; font-size: 12px; }
+.builder-dense .notice { font-size: 12px; }
+.builder-dense .t-caption, .builder-dense .t-small { font-size: 12px; line-height: 1.5; }
+.builder-dense .btn-s { height: 32px; padding-inline: 10px; font-size: 12px; }
+.builder-dense .mt-3 { margin-top: 8px; }
+.builder-dense .mt-4 { margin-top: 10px; }
+@container builder (min-width: 420px) {
+  .builder-dense .bd-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@container builder (min-width: 560px) {
+  .builder-dense .bd-field-wide { grid-column: auto; }
+}
+@media (pointer: coarse) {
+  .builder-dense .bd-seg { height: 50px; }
+  .builder-dense .bd-seg .seg-item { height: 44px; }
+}
+@media (max-width: 639px) {
+  /* iOS에서 입력할 때 화면이 자동 확대되지 않도록 입력 글자만 보정한다. */
+  .builder-dense input.field, .builder-dense select.field, .builder-dense .bd-chip-input { font-size: 16px; }
+}
+/* 입력 오류 — 걸린 칸만 노랗게 띄우고 라벨 아래 한 줄로 이유를 적는다(바닥 경고 상자 대신). 나타날 때 한 번 반짝인다. */
+.builder-dense .is-invalid .bd-label label, .builder-dense .is-invalid .bd-label > span { color: rgb(var(--c-amber-700)); }
+.builder-dense .is-invalid .field, .builder-dense .is-invalid .bd-seg { box-shadow: inset 0 0 0 1.5px rgb(var(--c-brand)); background: rgb(var(--c-brand) / .12); animation: bd-invalid-in .9s ease-out; }
+.builder-dense .is-invalid .field:focus-visible { outline-color: rgb(var(--c-brand-line)); }
+.builder-dense .bd-error { margin-top: 4px; color: rgb(var(--c-amber-700)); font-size: 11.5px; font-weight: 600; line-height: 1.4; }
+@keyframes bd-invalid-in { from { background: rgb(var(--c-brand) / .45); } to { background: rgb(var(--c-brand) / .12); } }
+@media (prefers-reduced-motion: reduce) { .builder-dense .is-invalid .field, .builder-dense .is-invalid .bd-seg { animation: none; } }

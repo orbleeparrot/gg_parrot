@@ -81,8 +81,8 @@
 .studio-dock { grid-area: dock; min-height: 0; min-width: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); border-top: 1px solid rgb(var(--c-slate-200)); }
 /* 머리: 밑줄 탭(왼쪽) + 지금 단계의 다음 행동(오른쪽). 한 줄에 안 들어가면 행동이 아래 줄 오른쪽으로 내려온다. */
 .studio-dock-head { min-height: 44px; display: flex; flex-wrap: wrap; align-items: stretch; gap: 0 12px; padding: 0 12px 0 8px; border-bottom: 1px solid rgb(var(--c-slate-200)); }
-.sd-tabs { display: flex; gap: 2px; align-items: stretch; }
-.sd-tab { display: flex; align-items: center; gap: 7px; height: 44px; padding: 0 12px; margin-bottom: -1px; border-bottom: 2px solid transparent; color: rgb(var(--c-slate-500)); font-size: 14px; font-weight: 700; white-space: nowrap; cursor: pointer; }
+.sd-tabs { display: flex; gap: 2px; align-items: stretch; margin-bottom: -1px; } /* 켜진 탭의 밑줄이 머리의 괘선을 덮도록 줄 전체가 1px 겹친다 */
+.sd-tab { display: flex; align-items: center; gap: 7px; height: 44px; padding: 0 12px; border-bottom: 2px solid transparent; color: rgb(var(--c-slate-500)); font-size: 14px; font-weight: 700; white-space: nowrap; cursor: pointer; }
 .sd-tab:hover { color: rgb(var(--c-slate-900)); }
 .sd-tab.is-on { color: rgb(var(--c-slate-900)); border-bottom-color: rgb(var(--c-slate-900)); }
 .sd-tab:disabled { opacity: .45; cursor: not-allowed; }
@@ -92,8 +92,6 @@
 .studio-dot.is-warn { background: rgb(var(--c-amber-600)); border-color: rgb(var(--c-amber-600)); }
 .studio-dot.is-run { background: rgb(var(--c-brand)); border-color: rgb(var(--c-brand)); animation: studio-pulse 1.4s ease-in-out infinite; }
 @keyframes studio-pulse { 50% { opacity: .35; } }
-.studio-dock-cta { margin-left: auto; flex: none; display: flex; align-items: center; gap: 10px; padding: 4px 0; }
-.studio-dock-cta .studio-cta-note { color: rgb(var(--c-slate-500)); white-space: nowrap; }
 .studio-dock-body { padding: 12px 16px 12px; display: flex; flex-direction: column; }
 .studio-dock-body > * { flex: none; }
 /* 백테스트 탭은 독 높이를 그대로 쓴다 — 수치 띠는 제 높이, 아래 두 칸이 남는 높이를 나눠 갖고 자산곡선이 그 안을 채운다. */
@@ -307,9 +305,6 @@
 .studio-share { max-width: 520px; }
 .studio-share img { width: 100%; border-radius: 12px; border: 1px solid rgb(var(--c-slate-200)); }
 
-@media (max-width: 1560px) {
-  .studio-dock-cta .studio-cta-note { display: none; } /* 탭 다섯 + 버튼이 한 줄에 들어가도록 안내 문구는 뺀다 */
-}
 @media (max-width: 1300px) {
   .sd-tab { padding-inline: 9px; font-size: 12px; }
   .sd-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }

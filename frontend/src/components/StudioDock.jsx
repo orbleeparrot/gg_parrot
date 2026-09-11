@@ -349,7 +349,8 @@ export function StudioPaper({ macro, valErr, controller }) {
               </div>
             )}
             <div className="sd-paper-actions">
-              <button type="button" onClick={start} disabled={busy || !!valErr} className="btn btn-m btn-secondary">{busy ? "시작 중…" : "페이퍼 트레이딩 시작"}</button>
+              {/* 독 머리에 있던 다음 행동이 여기로 — 결과가 최신이면 이 화면의 노란 버튼은 이것 하나(§1-4). */}
+              <button type="button" onClick={start} disabled={busy || !!valErr} className="btn btn-m btn-primary">{busy ? "시작 중…" : "페이퍼 트레이딩 시작"}</button>
               <span className="sd-note"><span className="num">{macro.symbol}</span> · {modeLabel(mode)}</span>
             </div>
           </>

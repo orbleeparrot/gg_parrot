@@ -600,24 +600,7 @@ export default function Studio() {
     { id: "done", label: "매크로 등록", enabled: !!result, dot: "" },
   ];
 
-  function startPaper() {
-    setDockTab("paper");
-    paper.start();
-  }
 
-  // 독 오른쪽의 다음 행동 — 노란 버튼은 화면에 하나뿐이다(§1-4). 결과가 최신이면 조건 판의
-  // 백테스트 버튼이 2차로 내려가고 여기의 '페이퍼 트레이딩 시작'이 노랑을 받는다. 페이퍼가 도는 동안은 아무것도 두지 않는다.
-  let dockCta = null;
-  if (!paper.running && result && resultIsFresh && dockTab !== "done") {
-    dockCta = (
-      <>
-        <span className="t-caption studio-cta-note">검증 3종 확인했어요?</span>
-        <button type="button" onClick={startPaper} disabled={paper.busy || !!valErr} className="btn btn-m btn-primary">
-          {paper.busy ? "시작 중…" : "페이퍼 트레이딩 시작"}
-        </button>
-      </>
-    );
-  }
   const limitsRetry = limitsError ? (
     <button type="button" className="btn btn-s btn-secondary" onClick={() => loadTestLimits().catch(() => {})}>다시 확인</button>
   ) : null;
@@ -760,7 +743,6 @@ export default function Studio() {
         <section className="studio-dock" aria-label="결과">
           <div className="studio-dock-head">
             <StudioTabs tabs={tabs} active={dockTab} onChange={setDockTab} />
-            <div className="studio-dock-cta">{dockCta}</div>
           </div>
           <div className="studio-scroll studio-dock-body" role="tabpanel" id="studio-dock-panel" aria-labelledby={`studio-tab-${dockTab}`}>
             <div className="sr-only" role="status" aria-live="polite">

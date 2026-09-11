@@ -8,7 +8,10 @@
 .studio-cond { min-width: 0; border-right: 0; }
 .studio-chart { container: studio-chart / inline-size; }
 .studio-dock { container: studio-dock / inline-size; }
-.sd-tabs { min-width: 0; max-width: 100%; overflow-x: auto; }
+/* 탭 줄은 독이 아주 좁을 때만 가로로 밀린다. 세로는 잘라 두고 스크롤바는 숨긴다 — overflow-x: auto 만 두면 세로도 auto 가 되어
+   탭의 밑줄 겹침(-1px)만으로 세로·가로 스크롤바가 함께 생겼다. 밑줄 겹침은 탭이 아니라 이 줄 전체가 진다(Studio.css .sd-tabs). */
+.sd-tabs { min-width: 0; max-width: 100%; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+.sd-tabs::-webkit-scrollbar { display: none; }
 .studio-work[data-conditions-collapsed="true"] { --studio-divider-width: 24px; }
 .studio-work[data-conditions-collapsed="true"] .studio-cond { overflow: hidden; visibility: hidden; }
 
@@ -31,7 +34,6 @@
 
 /* 창 크기를 유지한 채 조건을 넓혀도 오른쪽 콘텐츠는 남은 폭에 맞춘다. */
 @container studio-dock (max-width: 900px) {
-  .studio-dock-cta .studio-cta-note { display: none; }
   .sd-tab { padding-inline: 9px; font-size: 12px; }
   .sd-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .sd-kpi:nth-child(3) { border-right: 0; }

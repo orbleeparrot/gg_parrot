@@ -109,7 +109,17 @@
 @keyframes studio-pulse { 50% { opacity: .35; } }
 .studio-dock-cta { margin-left: auto; flex: none; display: flex; align-items: center; gap: 10px; padding: 4px 0; }
 .studio-dock-cta .studio-cta-note { color: rgb(var(--c-slate-500)); white-space: nowrap; }
-.studio-dock-body { padding: 12px 16px 12px; }
+.studio-dock-body { padding: 12px 16px 12px; display: flex; flex-direction: column; }
+.studio-dock-body > * { flex: none; }
+/* 백테스트 탭은 독 높이를 그대로 쓴다 — 수치 띠는 제 높이, 아래 두 칸이 남는 높이를 나눠 갖고 자산곡선이 그 안을 채운다. */
+.studio-dock-body > .sd-bt { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.sd-bt > .sd-kpis, .sd-bt > .sd-liq { flex: none; }
+.sd-bt > .sd-two { flex: 1 1 auto; min-height: 0; }
+.sd-eq { display: flex; flex-direction: column; min-height: 0; }
+.sd-eq > .sd-cap { position: static; flex: none; margin-bottom: 6px; }
+.sd-eq > .equity-fill { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.equity-fill > .equity-fill-svg { flex: 1 1 0; min-height: 56px; }
+.equity-fill > .equity-caption { flex: none; }
 /* 부품들이 스스로 그리는 위 괘선·여백은 독 안에서는 탭 줄이 대신한다. */
 .studio-dock-body > section { border-top: 0; padding-top: 0; }
 .studio-dock-body .studio-stale { margin-bottom: 14px; }
@@ -135,7 +145,7 @@
 .sd-kpi-d { margin-top: 2px; color: rgb(var(--c-slate-500)); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sd-liq { margin-top: 12px; }
 .sd-two { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 16px; margin-top: 8px; }
-.sd-eq { position: relative; padding: 26px 10px 8px; border: 1px solid rgb(var(--c-slate-200)); border-radius: 12px; }
+.sd-eq { position: relative; padding: 8px 10px 8px; border: 1px solid rgb(var(--c-slate-200)); border-radius: 12px; }
 .sd-cap { position: absolute; left: 12px; top: 8px; color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 600; }
 .sd-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .sd-table th { padding: 6px 8px; border-bottom: 1px solid rgb(var(--c-slate-200)); color: rgb(var(--c-slate-500)); font-weight: 600; text-align: left; }
@@ -156,7 +166,7 @@
 .sd-ai-actions { margin-top: 12px; display: flex; gap: 8px; }
 /* 최적화 */
 .sd-opt { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 18px; }
-.sd-opt-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; font-size: 13px; white-space: nowrap; }
+.sd-opt-head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; font-size: 13px; white-space: nowrap; }
 .sd-opt-head b { flex: none; display: inline-flex; align-items: center; gap: 2px; }
 /* 안내 글만 말줄임 — 자손 span 전체에 걸면 ⓘ 말풍선 래퍼까지 잘려 말풍선이 안 보인다. */
 .sd-opt-head > .sd-opt-hint { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
@@ -164,14 +174,14 @@
 .sd-opt-head b { color: rgb(var(--c-slate-700)); display: inline-flex; align-items: center; gap: 2px; }
 .sd-opt-head span { color: rgb(var(--c-slate-500)); }
 .sd-heat { display: grid; gap: 3px; font-size: 12px; }
-.sd-heat-h { height: 26px; display: grid; place-items: center; color: rgb(var(--c-slate-500)); font-weight: 600; }
-.sd-heat-c { height: 32px; display: flex; align-items: center; justify-content: center; gap: 3px; border-radius: 6px; color: rgb(var(--c-slate-900)); font-weight: 700; cursor: pointer; }
+.sd-heat-h { height: 24px; display: grid; place-items: center; color: rgb(var(--c-slate-500)); font-weight: 600; }
+.sd-heat-c { height: 30px; display: flex; align-items: center; justify-content: center; gap: 3px; border-radius: 6px; color: rgb(var(--c-slate-900)); font-weight: 700; cursor: pointer; }
 .sd-heat-c:hover { box-shadow: inset 0 0 0 2px rgb(var(--c-slate-400)); }
 .sd-heat-c.is-current { box-shadow: inset 0 0 0 1px rgb(var(--c-slate-400)); }
 .sd-heat-c.is-best { box-shadow: inset 0 0 0 2px rgb(var(--c-brand)); }
 .sd-heat-c.is-best::before { content: "★ "; color: rgb(var(--c-amber-600)); }
-.sd-opt-side { display: grid; gap: 8px; align-content: start; }
-.sd-box { padding: 9px 12px; border: 1px solid rgb(var(--c-slate-200)); border-radius: 10px; min-width: 0; }
+.sd-opt-side { display: grid; gap: 6px; align-content: start; }
+.sd-box { padding: 8px 12px; border: 1px solid rgb(var(--c-slate-200)); border-radius: 10px; min-width: 0; }
 .sd-box-k { color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 600; }
 .sd-box-v { margin-top: 3px; color: rgb(var(--c-slate-900)); font-size: 16px; font-weight: 700; }
 .sd-box-v small { font-size: 12px; font-weight: 600; }

@@ -94,7 +94,7 @@ export function StudioBacktest({ result: r, perSymbol, summary, dataSource, peri
       <div className="sd-two">
         <div className="sd-eq">
           <div className="sd-cap">자산곡선{periodLabel ? ` · ${periodLabel}` : ""} · 파선이 본전</div>
-          <EquityChart curve={r.equity_curve} height={140} />
+          <EquityChart curve={r.equity_curve} height={140} stretch />
         </div>
         <div className="sd-side">
           <table className="sd-table">

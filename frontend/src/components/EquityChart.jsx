@@ -17,8 +17,10 @@ const compact = (v) => {
   return v.toFixed(2);
 };
 
-// height — viewBox 높이. 폭에 비례해 그려지므로 낮출수록 납작해진다(직접 만들기 결과 독은 150).
-export default function EquityChart({ curve, height = DEFAULT_H }) {
+// height — viewBox 높이. 폭에 비례해 그려지므로 낮출수록 납작해진다.
+// stretch — 부모가 준 높이를 그대로 채운다(비율 무시). 선·면뿐이라 세로로 늘려도 글자가 찌그러지지 않는다 —
+//        직접 만들기 결과 독처럼 높이가 창에 따라 정해지는 칸에서 스크롤을 만들지 않으려고.
+export default function EquityChart({ curve, height = DEFAULT_H, stretch = false }) {
   const H = height;
   const svgRef = useRef(null);
   const [hover, setHover] = useState(null);
@@ -70,11 +72,12 @@ export default function EquityChart({ curve, height = DEFAULT_H }) {
   const lastDay = curve[n - 1].t.slice(0, 10);
 
   return (
-    <div className="w-full relative">
+    <div className={"w-full relative" + (stretch ? " equity-fill" : "")}>
       <svg
         ref={svgRef}
         viewBox={`0 0 ${W} ${H}`}
-        className="w-full h-auto touch-pan-y"
+        preserveAspectRatio={stretch ? "none" : undefined}
+        className={(stretch ? "w-full equity-fill-svg" : "w-full h-auto") + " touch-pan-y"}
         role="img"
         aria-label={`자산곡선. 시작 ${compact(start)}, 최종 ${compact(end)}`}
         tabIndex={0}
@@ -99,7 +102,7 @@ export default function EquityChart({ curve, height = DEFAULT_H }) {
 
         {/* 끝점을 강조 — 곡선이 어디서 끝났는지가 이 차트의 결론이다.
             겹치는 표면 위에서도 떨어져 보이도록 표면색 링을 두른다. */}
-        <circle cx={x(n - 1)} cy={y(end)} r="4" fill={stroke} stroke="rgb(var(--c-surface))" strokeWidth="2" />
+        <circle cx={x(n - 1)} cy={y(end)} r="4" fill={stroke} stroke="rgb(var(--c-surface))" strokeWidth="2" vectorEffect={stretch ? "non-scaling-stroke" : undefined} />
 
         {hover != null && (
           <g pointerEvents="none">
@@ -126,7 +129,7 @@ export default function EquityChart({ curve, height = DEFAULT_H }) {
       )}
 
       {/* 차트 캡션은 좌우 끝에 13/600 (§4 자리별 적용표) */}
-      <div className="flex justify-between gap-4 t-caption text-slate-700 num mt-1">
+      <div className="equity-caption flex justify-between gap-4 t-caption text-slate-700 num mt-1">
         <span>
           {firstDay} <span className="text-slate-500">시작 {compact(start)}</span>
         </span>

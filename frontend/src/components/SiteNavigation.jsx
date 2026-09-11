@@ -119,7 +119,7 @@ function NavigationContents({ onNavigate, tabIndex, mobile = false }) {
               <DownloadIcon /><span>실행기 설치</span><small>Windows PC</small>
             </NavLink>
             <NavLink to="/guide" onClick={onNavigate} tabIndex={tabIndex} className="site-drawer-tool">
-              <HelpIcon /><span>사용법</span>
+              <HelpIcon /><span>FAQ</span>
             </NavLink>
           </div>
         ) : null}

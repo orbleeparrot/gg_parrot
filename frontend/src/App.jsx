@@ -42,7 +42,7 @@ function RouteChangeEffects() {
       : pathname.startsWith("/board")
       ? "게시판"
       : pathname.startsWith("/guide")
-      ? "사용법"
+      ? "FAQ"
       : pathname.startsWith("/support")
       ? "고객센터"
       : pathname.startsWith("/mypage/settings")

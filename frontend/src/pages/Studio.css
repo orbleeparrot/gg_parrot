@@ -229,7 +229,7 @@
 .sd-card-ticker strong { color: rgb(var(--c-slate-900)); font-size: 24px; font-weight: 800; letter-spacing: -.02em; }
 .sd-card-ticker small { margin-left: 5px; color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 700; }
 .sd-card-rule { margin-top: 5px; color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.sd-card-tags { margin-left: auto; flex: none; display: flex; align-items: center; gap: 8px; }
+.sd-card-tags { margin-left: auto; flex: none; align-self: flex-start; display: flex; align-items: center; gap: 8px; } /* 칩은 티커 윗선에 맞춘다 */
 .sd-card-side { display: inline-flex; align-items: center; height: 30px; padding: 0 12px; border-radius: 8px; background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-700)); font-size: 14px; font-weight: 800; white-space: nowrap; }
 .sd-card-side.is-long { background: rgb(var(--c-green-600) / .14); color: rgb(var(--c-green-600)); }
 .sd-card-side.is-short { background: rgb(var(--c-red-600) / .14); color: rgb(var(--c-red-600)); }

@@ -606,11 +606,9 @@ export default function Studio() {
   }
 
   // 독 오른쪽의 다음 행동 — 노란 버튼은 화면에 하나뿐이다(§1-4). 결과가 최신이면 조건 판의
-  // 백테스트 버튼이 2차로 내려가고 여기의 '페이퍼 트레이딩 시작'이 노랑을 받는다.
+  // 백테스트 버튼이 2차로 내려가고 여기의 '페이퍼 트레이딩 시작'이 노랑을 받는다. 페이퍼가 도는 동안은 아무것도 두지 않는다.
   let dockCta = null;
-  if (paper.running) {
-    dockCta = <button type="button" onClick={() => setDockTab("done")} className="btn btn-m btn-secondary">매크로 등록으로 →</button>;
-  } else if (result && resultIsFresh && dockTab !== "done") {
+  if (!paper.running && result && resultIsFresh && dockTab !== "done") {
     dockCta = (
       <>
         <span className="t-caption studio-cta-note">검증 3종 확인했어요?</span>

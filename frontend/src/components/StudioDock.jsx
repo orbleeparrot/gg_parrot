@@ -401,7 +401,7 @@ export function StudioPaper({ macro, valErr, controller }) {
 
       <div className="sd-log">
         <div className="sd-log-cap">
-          <span>실시간 매매 로그 (최신이 위)</span>
+          <span>실시간 매매 로그 (최신순)</span>
           {status && status.last_price > 0 && <span>현재가 <b className="num">{fmtPrice(status.last_price)}</b> {quote}</span>}
         </div>
         {!status ? (

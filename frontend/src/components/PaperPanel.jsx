@@ -321,7 +321,7 @@ export function PaperPanelView({ macro, valErr, onRegister, controller, nextStep
       {/* live trade log */}
       {status && (
         <div>
-          <div className="t-title text-slate-900 mb-2">실시간 매매 로그 (최신이 위)</div>
+          <div className="t-title text-slate-900 mb-2">실시간 매매 로그 (최신순)</div>
           {/* Five fixed columns don't fit a phone, so the log scrolls sideways
               rather than stretching the page. 스크롤 컨테이너일 뿐 카드가 아니라
               테두리는 두지 않고, 행 구분은 괘선만 쓴다(§6 table-row). */}

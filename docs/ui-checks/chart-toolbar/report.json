@@ -1,0 +1,38 @@
+{
+  "passed": true,
+  "checks": [
+    {
+      "viewport": 1440,
+      "gap": 28,
+      "captionBottom": 122.1875,
+      "intervalBottom": 120.890625,
+      "overflow": false,
+      "align": "last baseline"
+    },
+    {
+      "viewport": 1100,
+      "gap": -266.125,
+      "captionBottom": 119.1875,
+      "intervalBottom": 150.078125,
+      "overflow": false,
+      "align": "last baseline"
+    },
+    {
+      "viewport": 390,
+      "gap": -266.125,
+      "captionBottom": 167.1875,
+      "intervalBottom": 208.078125,
+      "overflow": false,
+      "align": "last baseline"
+    },
+    {
+      "viewport": 320,
+      "gap": -266.125,
+      "captionBottom": 167.1875,
+      "intervalBottom": 208.078125,
+      "overflow": false,
+      "align": "last baseline"
+    }
+  ],
+  "errors": []
+}

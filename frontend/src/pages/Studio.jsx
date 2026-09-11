@@ -770,7 +770,7 @@ export default function Studio() {
             {valErr && <div className="t-small text-amber-700" role="alert">{valErr}</div>}
             {error && <div className="t-small text-red-600" role="alert">오류: {error}</div>}
             <div className={"studio-budget" + (budgetBlocked ? " is-over" : "")} role="status">
-              {testBudget?.bars != null && <p>{periodLabelOf(currentMacro)} · {intervalLabel}봉 · <b>{testBudget.bars.toLocaleString()}개</b> / 최대 {testBudget.maxBars.toLocaleString()}개</p>}
+              {testBudget?.bars != null && <p>백테스트 · {periodLabelOf(currentMacro)} · {intervalLabel}봉 · <b>{testBudget.bars.toLocaleString()}개</b> / 최대 {testBudget.maxBars.toLocaleString()}개</p>}
               {testBudget?.error && <p>{testBudget.error}</p>}
               {budgetBlocked && testBudget.suggestions.length > 0 && (
                 <div className="studio-budget-actions">

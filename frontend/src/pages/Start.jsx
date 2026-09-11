@@ -15,7 +15,7 @@ import {
 } from "../components/HeroGuideScreens.jsx";
 import useHeroBacktest, { macroFingerprint } from "../hooks/useHeroBacktest.js";
 import usePaperSession from "../hooks/usePaperSession.js";
-import { RULE_TYPES, buildMacro, defaultForm, macroToForm, validate } from "../lib/macro.js";
+import { RULE_TYPES, PERIOD_PRESETS, buildMacro, defaultForm, macroToForm, validate } from "../lib/macro.js";
 import { GUIDE_CHAPTERS as CHAPTERS } from "../lib/guideFlow.js";
 import { api } from "../api.js";
 import { getUserId } from "../lib/user.js";
@@ -150,7 +150,7 @@ function copyFor(screen) {
 
 function periodSummary(form) {
   if (form.preset === "custom") return `${form.start || "?"} ~ ${form.end || "?"}`;
-  return { "3m": "최근 3개월", "6m": "최근 6개월", "1y": "최근 1년" }[form.preset] || "직접 지정";
+  return PERIOD_PRESETS.find((item) => item.value === form.preset)?.label || "직접 지정";
 }
 
 function normalizeGuideSymbol(value) {

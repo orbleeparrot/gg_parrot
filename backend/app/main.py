@@ -78,6 +78,7 @@ from . import whales as whales_mod
 from .card import render_card
 from .security import hash_password
 from .data import NoSpotDataError, average_daily_funding_pct, get_klines, resolve_period
+from .data.binance import backtest_limits
 from .marketdata import fetch_klines_for_macro
 from .db import MacroRow, get_session, init_db, request_session
 from .engine import BacktestResult, Macro, Period, compact_backtest_result, human_summary
@@ -134,7 +135,7 @@ app.add_middleware(GZipMiddleware, minimum_size=500, compresslevel=6)
 
 # --- helpers ------------------------------------------------------------
 def _period_label(period: Period) -> str:
-    labels = {"1y": "최근 1년", "6m": "최근 6개월", "3m": "최근 3개월"}
+    labels = {"1y": "최근 1년", "6m": "최근 6개월", "3m": "최근 3개월", "1m": "최근 1개월", "1w": "최근 1주", "1d": "최근 1일"}
     if period.preset and period.preset != "custom":
         return labels.get(period.preset, period.preset)
     return f"{period.start} ~ {period.end}"
@@ -587,6 +588,11 @@ def get_macro(slug: str) -> dict:
         "share_slug": row.share_slug,
         "human_summary": row.human_summary,
     }
+
+
+@app.get("/api/backtest/limits")
+def get_backtest_limits() -> dict:
+    return backtest_limits()
 
 
 @app.post("/api/backtest")

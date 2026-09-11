@@ -1,13 +1,8 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { AreaSeries, CrosshairMode, LineStyle, createChart } from "lightweight-charts";
+import "./EquityChart.css";
 
-// Dependency-free SVG line chart of the equity curve (deterministic, offline-safe).
-//
-// 값을 읽는 통로가 툴팁 하나뿐이면 안 된다 — 그래서 시작·최종 금액과 날짜는 축
-// 바깥에 직접 적고, 호버는 그 위에 얹는 보조 수단으로만 둔다. 초기자본선(본전)은
-// 파선으로 긋는다: 격자가 아니라 임계선이라 파선이 의미를 갖는다.
-const W = 720;
 const DEFAULT_H = 240;
-const PAD = { l: 8, r: 8, t: 14, b: 22 };
 
 const compact = (v) => {
   const a = Math.abs(v);
@@ -17,126 +12,212 @@ const compact = (v) => {
   return v.toFixed(2);
 };
 
-// height — viewBox 높이. 폭에 비례해 그려지므로 낮출수록 납작해진다.
-// stretch — 부모가 준 높이를 그대로 채운다(비율 무시). 선·면뿐이라 세로로 늘려도 글자가 찌그러지지 않는다 —
-//        직접 만들기 결과 독처럼 높이가 창에 따라 정해지는 칸에서 스크롤을 만들지 않으려고.
-export default function EquityChart({ curve, height = DEFAULT_H, stretch = false }) {
-  const H = height;
-  const svgRef = useRef(null);
-  const [hover, setHover] = useState(null);
+// Backtest sampling and the previous chart both space samples by their order.
+// Ordinal chart keys keep every point, including repeated dates; visible dates
+// always come from the original curve, never from these internal keys.
+const seriesData = (curve) => curve.map((point, index) => ({ time: index + 1, value: point.equity }));
 
-  const n = curve?.length || 0;
-  const geom = useMemo(() => {
-    if (!curve || n < 2) return null;
-    const values = curve.map((p) => p.equity);
-    const min = Math.min(...values);
-    const max = Math.max(...values);
-    const span = max - min || Math.abs(max) * 0.001 || 1;
-    // 위아래로 숨통을 틔워 선이 테두리에 닿지 않게 한다.
-    const lo = min - span * 0.08;
-    const hi = max + span * 0.08;
-    const range = hi - lo || 1;
-    const x = (i) => PAD.l + (i / (n - 1)) * (W - PAD.l - PAD.r);
-    const y = (v) => PAD.t + (1 - (v - lo) / range) * (H - PAD.t - PAD.b);
-    const line = values.map((v, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
-    const area = `${line} L${x(n - 1).toFixed(1)},${H - PAD.b} L${x(0).toFixed(1)},${H - PAD.b} Z`;
-    return { values, x, y, line, area, start: values[0], end: values[n - 1] };
-  }, [curve, n, H]);
-
-  const indexAt = useCallback(
-    (clientX) => {
-      const rect = svgRef.current?.getBoundingClientRect();
-      if (!rect || !rect.width) return null;
-      const vx = ((clientX - rect.left) / rect.width) * W;
-      const ratio = (vx - PAD.l) / (W - PAD.l - PAD.r);
-      const i = Math.round(ratio * (n - 1));
-      return i >= 0 && i < n ? i : null;
-    },
-    [n]
-  );
-
-  if (!curve || n < 2) {
-    return <div className="t-small text-slate-500">자산곡선 데이터가 없어요.</div>;
+class Endpoint {
+  attached({ chart, series, requestUpdate }) {
+    Object.assign(this, { chart, series, requestUpdate });
   }
+  update(point, color, surface) {
+    Object.assign(this, { point, color, surface });
+    this.requestUpdate?.();
+  }
+  paneViews() {
+    return [{ zOrder: () => "top", renderer: () => ({ draw: (target) => {
+      if (!this.point) return;
+      const x = this.chart.timeScale().timeToCoordinate(this.point.time);
+      const y = this.series.priceToCoordinate(this.point.value);
+      if (x == null || y == null) return;
+      target.useMediaCoordinateSpace(({ context }) => {
+        context.beginPath();
+        context.arc(x, y, 4, 0, Math.PI * 2);
+        context.fillStyle = this.color;
+        context.fill();
+        context.strokeStyle = this.surface;
+        context.lineWidth = 2;
+        context.stroke();
+      });
+    } }) }];
+  }
+}
 
-  const { values, x, y, line, area, start, end } = geom;
+function EquityPlot({ curve, height, stretch }) {
+  const hostRef = useRef(null);
+  const chartRef = useRef(null);
+  const currentRef = useRef(null);
+  const hoverRef = useRef(null);
+  const keyboardRef = useRef(false);
+  const [hover, setHover] = useState(null);
+  const data = useMemo(() => seriesData(curve), [curve]);
+  const start = curve[0].equity;
+  const end = curve[curve.length - 1].equity;
   const up = end >= start;
-  // Theme-aware (see index.css): the vars hold bare "R G B" triplets, so the
-  // same value serves both the solid stroke and the translucent area fill.
-  const rgb = up ? "var(--chart-up)" : "var(--chart-down)";
-  const stroke = `rgb(${rgb})`;
-  const fill = `rgb(${rgb} / 0.12)`;
+  currentRef.current = { curve, data, up };
 
-  const at = hover != null ? curve[hover] : null;
-  const firstDay = curve[0].t.slice(0, 10);
-  const lastDay = curve[n - 1].t.slice(0, 10);
+  useEffect(() => {
+    const host = hostRef.current;
+    const chart = createChart(host, {
+      autoSize: true,
+      layout: { background: { type: "solid", color: "transparent" }, attributionLogo: true },
+      grid: { vertLines: { visible: false }, horzLines: { visible: false } },
+      leftPriceScale: { visible: false },
+      rightPriceScale: { visible: false, scaleMargins: { top: 0.08, bottom: 0.12 } },
+      timeScale: { visible: false, rightOffset: 0, minBarSpacing: 0.001, lockVisibleTimeRangeOnResize: true },
+      crosshair: {
+        mode: CrosshairMode.Magnet,
+        vertLine: { labelVisible: false, style: LineStyle.SparseDotted, width: 1 },
+        horzLine: { visible: false, labelVisible: false },
+      },
+      // Keep the complete backtest visible and let mobile swipes and mouse
+      // wheels continue scrolling the surrounding result page.
+      handleScroll: false,
+      handleScale: false,
+      kineticScroll: { mouse: false, touch: false },
+      localization: { priceFormatter: compact },
+    });
+    const series = chart.addSeries(AreaSeries, {
+      lineWidth: 2,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      crosshairMarkerRadius: 4,
+      crosshairMarkerBorderWidth: 2,
+    });
+    const baseline = series.createPriceLine({
+      price: currentRef.current.curve[0].equity,
+      lineWidth: 1,
+      lineStyle: LineStyle.Dashed,
+      axisLabelVisible: false,
+      title: "",
+    });
+    const endpoint = new Endpoint();
+    series.attachPrimitive(endpoint);
+    const applyTheme = () => {
+      const style = getComputedStyle(host);
+      const color = (token, fallback, alpha = 1) => {
+        const triplet = style.getPropertyValue(token).trim() || fallback;
+        return `rgba(${triplet.split(/\s+/).join(",")},${alpha})`;
+      };
+      const stroke = color(currentRef.current.up ? "--chart-up" : "--chart-down", currentRef.current.up ? "0 192 135" : "246 70 93");
+      const fill = color(currentRef.current.up ? "--chart-up" : "--chart-down", currentRef.current.up ? "0 192 135" : "246 70 93", 0.12);
+      const surface = color("--c-surface", "255 255 255");
+      chart.applyOptions({
+        layout: { textColor: color("--chart-axis", "106 116 128"), fontFamily: style.fontFamily },
+        crosshair: { vertLine: { color: color("--chart-crosshair", "100 116 139", 0.8) } },
+      });
+      series.applyOptions({ lineColor: stroke, topColor: fill, bottomColor: fill, crosshairMarkerBackgroundColor: stroke, crosshairMarkerBorderColor: surface });
+      baseline.applyOptions({ color: color("--chart-axis", "106 116 128", 0.5) });
+      endpoint.update(currentRef.current.data.at(-1), stroke, surface);
+    };
+    const onCrosshair = (event) => {
+      if (keyboardRef.current) return;
+      const index = typeof event.time === "number" ? event.time - 1 : null;
+      const valid = index != null && index >= 0 && index < currentRef.current.curve.length && event.point;
+      const next = valid ? { index, x: event.point.x } : null;
+      hoverRef.current = next;
+      setHover(next);
+    };
+    const fitCurve = () => {
+      const count = currentRef.current.data.length;
+      const width = host.clientWidth;
+      if (!width) return;
+      // A 1,000-point mobile curve must remain complete. Leave enough physical
+      // space for the endpoint ring even when each sample is less than 1px wide.
+      const spacing = Math.max(0.001, (width - 16) / Math.max(1, count - 1));
+      const margin = Math.max(0, 8 / spacing - 0.5);
+      chart.timeScale().setVisibleLogicalRange({ from: -margin, to: count - 1 + margin });
+    };
+    chart.subscribeCrosshairMove(onCrosshair);
+    // Hidden time axes report width 0; observe the actual plot instead.
+    const resizeObserver = new ResizeObserver(fitCurve);
+    resizeObserver.observe(host);
+    const themeObserver = new MutationObserver(applyTheme);
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["class", "style"] });
+    chartRef.current = { chart, series, baseline, applyTheme, fitCurve };
+    applyTheme();
+    return () => {
+      themeObserver.disconnect();
+      resizeObserver.disconnect();
+      chart.unsubscribeCrosshairMove(onCrosshair);
+      chartRef.current = null;
+      chart.remove();
+    };
+  }, []);
+
+  useEffect(() => {
+    const active = chartRef.current;
+    if (!active) return;
+    active.series.setData(data);
+    active.baseline.applyOptions({ price: start });
+    active.applyTheme();
+    active.fitCurve();
+    active.chart.clearCrosshairPosition();
+    keyboardRef.current = false;
+    hoverRef.current = null;
+    setHover(null);
+  }, [data, start]);
+
+  const clearHover = () => {
+    keyboardRef.current = false;
+    chartRef.current?.chart.clearCrosshairPosition();
+    hoverRef.current = null;
+    setHover(null);
+  };
+  const onKeyDown = (event) => {
+    if (event.key === "Escape") { clearHover(); return; }
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const current = hoverRef.current?.index ?? curve.length - 1;
+    const index = event.key === "Home" ? 0 : event.key === "End" ? curve.length - 1
+      : Math.max(0, Math.min(curve.length - 1, current + (event.key === "ArrowRight" ? 1 : -1)));
+    const active = chartRef.current;
+    if (!active) return;
+    keyboardRef.current = true;
+    active.chart.setCrosshairPosition(curve[index].equity, data[index].time, active.series);
+    const next = { index, x: active.chart.timeScale().timeToCoordinate(data[index].time) ?? 0 };
+    hoverRef.current = next;
+    setHover(next);
+  };
+  const at = hover ? curve[hover.index] : null;
 
   return (
-    <div className={"w-full relative" + (stretch ? " equity-fill" : "")}>
-      <svg
-        ref={svgRef}
-        viewBox={`0 0 ${W} ${H}`}
-        preserveAspectRatio={stretch ? "none" : undefined}
-        className={(stretch ? "w-full equity-fill-svg" : "w-full h-auto") + " touch-pan-y"}
+    <div className={"equity-chart w-full relative" + (stretch ? " equity-fill" : "")}>
+      <div
+        className={"equity-chart-plot touch-pan-y" + (stretch ? " equity-fill-svg" : "")}
+        style={stretch ? undefined : { aspectRatio: `720 / ${height}` }}
         role="img"
-        aria-label={`자산곡선. 시작 ${compact(start)}, 최종 ${compact(end)}`}
+        aria-label={`자산곡선. 시작 ${compact(start)}, 최종 ${compact(end)}. 좌우 화살표로 날짜별 금액 확인`}
         tabIndex={0}
-        onPointerMove={(e) => setHover(indexAt(e.clientX))}
-        onPointerLeave={() => setHover(null)}
-        onKeyDown={(e) => {
-          if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
-          e.preventDefault();
-          setHover((h) => {
-            const cur = h == null ? n - 1 : h;
-            return Math.max(0, Math.min(n - 1, cur + (e.key === "ArrowRight" ? 1 : -1)));
-          });
-        }}
+        onKeyDown={onKeyDown}
+        onPointerMoveCapture={() => { keyboardRef.current = false; }}
+        onPointerLeave={clearHover}
+        onBlur={clearHover}
       >
-        {/* 초기자본선 — 이 선 위가 이익, 아래가 손실이라는 기준 */}
-        <line
-          x1={PAD.l} x2={W - PAD.r} y1={y(start)} y2={y(start)}
-          stroke="rgb(var(--chart-axis))" strokeWidth="1" strokeDasharray="4 4" opacity="0.5"
-        />
-        <path d={area} fill={fill} />
-        <path d={line} fill="none" stroke={stroke} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
-
-        {/* 끝점을 강조 — 곡선이 어디서 끝났는지가 이 차트의 결론이다.
-            겹치는 표면 위에서도 떨어져 보이도록 표면색 링을 두른다. */}
-        <circle cx={x(n - 1)} cy={y(end)} r="4" fill={stroke} stroke="rgb(var(--c-surface))" strokeWidth="2" vectorEffect={stretch ? "non-scaling-stroke" : undefined} />
-
-        {hover != null && (
-          <g pointerEvents="none">
-            <line
-              x1={x(hover)} x2={x(hover)} y1={PAD.t} y2={H - PAD.b}
-              stroke="rgb(var(--chart-crosshair))" strokeWidth="1" strokeDasharray="2 3" opacity="0.8"
-            />
-            <circle cx={x(hover)} cy={y(values[hover])} r="4" fill={stroke} stroke="rgb(var(--c-surface))" strokeWidth="2" />
-          </g>
+        <div ref={hostRef} className="equity-chart-canvas" />
+        {at && (
+          <div
+            className="equity-chart-tooltip t-caption num text-slate-900 bg-surface border border-slate-200 rounded-lg px-2 py-1 shadow-lg"
+            style={{ left: hover.x, transform: `translateX(${hover.index >= curve.length / 2 ? "-100%" : "0"})` }}
+          >
+            {at.t.slice(0, 10)} · {compact(at.equity)}
+          </div>
         )}
-      </svg>
-
-      {/* 호버 값 — 툴팁이 유일한 통로가 되지 않도록 아래 캡션에도 값을 남긴다 */}
-      {at && (
-        <div
-          className="absolute -top-1 t-caption num text-slate-900 bg-surface border border-slate-200 rounded-lg px-2 py-1 shadow-lg pointer-events-none whitespace-nowrap"
-          style={{
-            left: `${(x(hover) / W) * 100}%`,
-            transform: `translateX(${hover > n / 2 ? "-100%" : "0"})`,
-          }}
-        >
-          {at.t.slice(0, 10)} · {compact(at.equity)}
-        </div>
-      )}
-
-      {/* 차트 캡션은 좌우 끝에 13/600 (§4 자리별 적용표) */}
+      </div>
       <div className="equity-caption flex justify-between gap-4 t-caption text-slate-700 num mt-1">
-        <span>
-          {firstDay} <span className="text-slate-500">시작 {compact(start)}</span>
-        </span>
+        <span>{curve[0].t.slice(0, 10)} <span className="text-slate-500">시작 {compact(start)}</span></span>
         <span className={up ? "text-green-600" : "text-red-600"}>
-          <span className="text-slate-500">{lastDay} 최종</span> {compact(end)}
+          <span className="text-slate-500">{curve[curve.length - 1].t.slice(0, 10)} 최종</span> {compact(end)}
         </span>
       </div>
     </div>
   );
+}
+
+export default function EquityChart({ curve, height = DEFAULT_H, stretch = false }) {
+  if (!curve || curve.length < 2) {
+    return <div className="t-small text-slate-500">자산곡선 데이터가 없어요.</div>;
+  }
+  return <EquityPlot curve={curve} height={height} stretch={stretch} />;
 }

@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { useLocation, useNavigate } from "react-router-dom";
 import Builder from "./Builder.jsx";
 import { api } from "../api.js";
-import { RULE_TYPES, buildMacro, defaultForm, macroToForm, validate } from "../lib/macro.js";
+import { RULE_TYPES, PERIOD_PRESETS, buildMacro, defaultForm, macroToForm, validate } from "../lib/macro.js";
 import { getUserId } from "../lib/user.js";
 import { clearAuth, useAuth } from "../lib/auth.js";
 import { lockBodyScroll } from "../lib/bodyScrollLock.js";
@@ -17,7 +17,7 @@ function MacroReview({ macro }) {
   const period = macro.period?.preset === "custom" ? (
     <span className="num">{macro.period.start || "?"} ~ {macro.period.end || "?"}</span>
   ) : (
-    { "1y": "최근 1년", "6m": "최근 6개월", "3m": "최근 3개월" }[macro.period?.preset] || macro.period?.preset
+    PERIOD_PRESETS.find((item) => item.value === macro.period?.preset)?.label || macro.period?.preset
   );
   const rows = [
     ["종목", <span className="num">{macro.symbols?.length ? macro.symbols.join(", ") : macro.symbol}</span>],

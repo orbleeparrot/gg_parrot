@@ -1,0 +1,13 @@
+{
+  "checks": [
+    "Start/end dates, amounts, endpoint keyboard access, Escape, dark rendering",
+    "Every repeated-date point retained in source order",
+    "Theme changes repaint existing canvas",
+    "All 1000 points remain in view at mobile width, no horizontal page overflow",
+    "Stretch layout remains within its result dock",
+    "Flat zero, negative, and loss curves render",
+    "Empty, remount and unmount dispose the chart safely"
+  ],
+  "passed": 7,
+  "browser_errors": []
+}

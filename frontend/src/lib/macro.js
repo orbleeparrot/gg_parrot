@@ -27,6 +27,9 @@ export const PERIOD_PRESETS = [
   { value: "1y", label: "최근 1년" },
   { value: "6m", label: "최근 6개월" },
   { value: "3m", label: "최근 3개월" },
+  { value: "1m", label: "최근 1개월" },
+  { value: "1w", label: "최근 1주" },
+  { value: "1d", label: "최근 1일" },
   { value: "custom", label: "직접 지정" },
 ];
 

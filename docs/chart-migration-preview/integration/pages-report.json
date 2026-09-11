@@ -1,0 +1,74 @@
+{
+  "passed": true,
+  "pages": [
+    {
+      "route": "/builder",
+      "width": 1440,
+      "chartDimensions": {
+        "x": 584,
+        "y": 194,
+        "width": 840,
+        "height": 308.953125
+      },
+      "screenshot": "page-builder-1440.png"
+    },
+    {
+      "route": "/builder",
+      "strategy": "F",
+      "width": 1440,
+      "chartDimensions": {
+        "x": 584,
+        "y": 213.1875,
+        "width": 840,
+        "height": 289.765625
+      },
+      "screenshot": "page-builder-rsi-1440.png"
+    },
+    {
+      "route": "/agents",
+      "width": 1440,
+      "chartDimensions": {
+        "x": 251,
+        "y": 328.5625,
+        "width": 566,
+        "height": 350
+      },
+      "screenshot": "page-agents-1440.png"
+    },
+    {
+      "route": "/builder",
+      "width": 390,
+      "chartDimensions": {
+        "x": 16,
+        "y": 332.625,
+        "width": 358,
+        "height": 240
+      },
+      "screenshot": "page-builder-390.png"
+    },
+    {
+      "route": "/builder",
+      "strategy": "F",
+      "width": 390,
+      "chartDimensions": {
+        "x": 16,
+        "y": 332.625,
+        "width": 358,
+        "height": 350
+      },
+      "screenshot": "page-builder-rsi-390.png"
+    },
+    {
+      "route": "/agents",
+      "width": 390,
+      "chartDimensions": {
+        "x": 11,
+        "y": 528.046875,
+        "width": 368,
+        "height": 280
+      },
+      "screenshot": "page-agents-390.png"
+    }
+  ],
+  "errors": []
+}

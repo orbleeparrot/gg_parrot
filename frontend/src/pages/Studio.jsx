@@ -808,7 +808,7 @@ export default function Studio() {
               {testLabel}
             </button>
             <div className="studio-foot-note t-caption text-slate-500">
-              <span>{testBudget?.bars != null ? <>{periodLabelOf(currentMacro)} · {intervalLabel}봉 <b className="num">{testBudget.bars.toLocaleString()}</b>개 / 최대 <span className="num">{testBudget.maxBars.toLocaleString()}</span></> : "첫 결과 뒤부터 자동 테스트가 동작해요"}</span>
+              <span>{testBudget?.bars != null ? <>{intervalLabel}봉 <b className="num">{testBudget.bars.toLocaleString()}</b>개 / 최대 <span className="num">{testBudget.maxBars.toLocaleString()}</span></> : "첫 결과 뒤부터 자동 테스트가 동작해요"}</span>
               <span>
                 <kbd className="num rounded border border-slate-300 bg-slate-100 px-1">Ctrl</kbd>+<kbd className="num rounded border border-slate-300 bg-slate-100 px-1">Enter</kbd>
               </span>

@@ -486,7 +486,7 @@ function macroFacts({ macro, symbol, symbols, result, futures }) {
     risk.stop_loss_pct != null ? `손절 -${fmtN(risk.stop_loss_pct)}%` : "",
     risk.daily_max_loss_pct != null ? `일일 최대손실 -${fmtN(risk.daily_max_loss_pct)}%` : "",
     risk.max_holding_hours != null ? `최대 보유 ${fmtN(risk.max_holding_hours)}시간` : "",
-    risk.cooldown_minutes ? `손절 뒤 ${fmtN(risk.cooldown_minutes)}분 쉼` : "",
+    risk.cooldown_minutes ? `재진입 금지 ${fmtN(risk.cooldown_minutes)}분` : "",
   ].filter(Boolean);
   facts.push({ k: "위험 관리", v: riskParts.length ? riskParts.join(" · ") : "손절 없음" });
   const feeParts = [
@@ -593,20 +593,17 @@ export function StudioOutcomes({ macro, result, valErr, strategyEntry, periodLab
             <h4 className="sd-runner-h">진행 방법</h4>
             <ol className="sd-runner-steps">
               <li><i>1</i><div><b>테스트넷으로 먼저</b><span>위 목록의 <b>빠른 실행</b>을 누르면 이 매크로가 내 매크로에 저장되고, 테스트넷 키 준비 → 실행기 받기 → 연결이 한 화면씩 이어져요. 웹이 실행기를 열어 주면 실행기에 테스트넷 API 키를 넣고 <b>매크로 시작</b>을 눌러요.</span></div></li>
-              <li><i>2</i><div><b>실거래로 바꾸기</b><span><b>매크로 파일 내려받기</b>로 받은 .ggm.json 을 실행기 ①에서 열고, ② 실거래를 켜고, ③ 실거래 API 키·시크릿과 ④ 회원 키를 넣고 시작해요. 회원 키는 <Link to="/runner/install" className="sd-runner-link">실행기 설치 화면</Link>에서 복사해요.</span></div></li>
+              <li><i>2</i><div><b>실거래로 바꾸기</b><span><b>매크로 파일 내려받기</b>로 받은 .ggm.json 을 실행기 ①에서 열고, ② 실거래(메인넷) 체크를 켜고, ③ 실거래 API 키·시크릿과 ④ 회원 키를 넣고 시작해요. 회원 키는 <Link to="/runner/install" className="sd-runner-link">실행기 설치 화면</Link>에서 복사해요.</span></div></li>
               <li><i>3</i><div><b>지켜보기 · 멈추기</b><span><b>내 에이전트</b>에서 실시간 차트와 손익을 보고, <b>매크로만 종료</b> 또는 <b>청산 후 종료</b>로 원격 종료해요.</span></div></li>
             </ol>
           </div>
           <div className="sd-runner-sec">
-            <h4 className="sd-runner-h">알아 둘 것</h4>
+            <h4 className="sd-runner-h sd-runner-warn">주의: 실행기는 실제로 주문을 실행해요 (기본값: 바이낸스 테스트넷 = 가짜 자금)</h4>
             <ul className="sd-runner-notes">
-              <li>
-                <b>실행기는 실제로 주문을 넣어요.</b> 빠른 실행은 테스트넷(가짜 자금)으로만 연결되고,
-                실제 자금은 실행기에서 <b>실거래</b>를 켜야 움직여요.
-              </li>
-              <li>{futures ? "숏 · 레버리지 매크로라 USDT-M 선물로 실행돼요." : "롱 · 1배 매크로라 현물로 실행돼요."}</li>
-              <li>익절 · 손절 · 일일 최대손실 · 최대 보유시간 · 손절 뒤 쉬는 시간이 카드의 조건 그대로 적용돼요.</li>
-              <li>API 키는 실행기 창에만 입력하고 웹·서버로 보내거나 저장하지 않아요. 출금 권한은 필요 없어요.</li>
+              <li>{futures ? "숏·레버리지 매크로라 USDT-M 선물로 실행돼요." : "롱·1배 매크로라 현물(spot)로 실행돼요."}</li>
+              <li>익절·손절·일일 최대손실·최대 보유시간·재진입 금지가 함께 적용돼요.</li>
+              <li>실제 자금은 실행기에서 <b>실거래(메인넷) 체크</b>를 켜야 움직여요(경고 확인 단계 있음). 빠른 실행은 테스트넷으로만 연결돼요.</li>
+              <li>API 키는 실행기 로컬에서만 쓰고 서버로 전송·저장하지 않아요. 출금 기능은 없어요.</li>
               <li>실행 중에는 브라우저를 닫아도 되지만, PC 를 끄거나 실행기를 닫으면 매크로도 멈춰요.</li>
             </ul>
           </div>

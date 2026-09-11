@@ -287,6 +287,7 @@
 .sd-runner-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px 32px; padding-top: 12px; }
 .sd-runner-sec { min-width: 0; }
 .sd-runner-h { margin: 0 0 8px; font-size: 12px; font-weight: 700; letter-spacing: .02em; opacity: .8; }
+.sd-runner-h.sd-runner-warn { font-size: 13px; letter-spacing: 0; opacity: 1; } /* 오른쪽 열 제목이 곧 경고문 — 원문의 "주의:" 줄 */
 .sd-runner-steps { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
 .sd-runner-steps li { display: flex; align-items: flex-start; gap: 10px; }
 .sd-runner-steps i { flex: none; width: 20px; height: 20px; margin-top: 1px; border-radius: 50%; display: grid; place-items: center; background: rgb(var(--c-amber-700)); color: rgb(var(--c-amber-50)); font-style: normal; font-size: 11px; font-weight: 800; }

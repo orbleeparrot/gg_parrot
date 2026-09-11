@@ -8,9 +8,10 @@ import EquityChart from "./EquityChart.jsx";
 import InfoTooltip from "./InfoTooltip.jsx";
 import { verdict } from "./OptimizePanel.jsx";
 import { useMacroActions } from "./PaperPanel.jsx";
-import StrategyDetails from "./StrategyDetails.jsx";
+import CoinIcon from "./CoinIcon.jsx";
 import { fmtMoney, fmtMoneyCompact, fmtKrw, fmtPrice, fmtQty, quoteOf, baseOf } from "../lib/format.js";
 import { buildMacro, RULE_TYPES, CANDLE_INTERVALS } from "../lib/macro.js";
+import { leaderboardStrategy } from "../lib/leaderboardStrategy.js";
 import { useUsdKrw } from "../lib/usdkrw.js";
 
 const AI_MASCOT = "/brand/navigation/ggparrot-nav-agent.svg";
@@ -423,35 +424,111 @@ export function StudioPaper({ macro, valErr, controller }) {
   );
 }
 
-// ── 매크로 등록 — 내가 만든 매크로 한 줄이 주인공, 그 아래 네 가지 동작(리더보드 등록이 노랑), 그 아래 실행기 안내 상자 ──
-export function StudioOutcomes({ macro, valErr, strategyEntry, strategyExtra = [], canRegister, onRegister, onShare, shareBusy = false }) {
+// ── 매크로 등록 — 왼쪽은 내가 만든 매크로를 담은 트레이딩 카드(산출물), 오른쪽은 동작 목록(리더보드 등록만 노랑), 그 아래 실행기 안내 상자 ──
+const ACT_ICON = {
+  run: <path d="M3.5 4.5h13v9h-13zM7.5 16.5h5M10 13.5v3" />,
+  download: <path d="M10 3v10M6 9l4 4 4-4M4 16.5h12" />,
+  link: <path d="M8 12a3 3 0 0 0 4.2 0l3-3a3 3 0 0 0-4.2-4.2l-1 1M12 8a3 3 0 0 0-4.2 0l-3 3a3 3 0 0 0 4.2 4.2l1-1" />,
+};
+function ActIcon({ name }) {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {ACT_ICON[name]}
+    </svg>
+  );
+}
+
+// 카드 안의 자산곡선 미리보기 — 백테스트 탭의 큰 차트와 같은 곡선을 선 하나로. 파선이 본전. 색은 최종 수익률의 등락색.
+function CardSpark({ curve, up }) {
+  if (!Array.isArray(curve) || curve.length < 2) return null;
+  const W = 300, H = 64, PAD = 3;
+  const step = Math.max(1, Math.ceil(curve.length / 160));
+  const pts = curve.filter((_, i) => i % step === 0 || i === curve.length - 1).map((p) => Number(p.equity));
+  const start = Number(curve[0].equity);
+  let lo = Math.min(start, ...pts);
+  let hi = Math.max(start, ...pts);
+  if (!(hi > lo)) hi = lo + 1;
+  const x = (i) => ((i / (pts.length - 1)) * W).toFixed(1);
+  const y = (v) => (PAD + (1 - (v - lo) / (hi - lo)) * (H - PAD * 2)).toFixed(1);
+  const line = pts.map((v, i) => `${i ? "L" : "M"}${x(i)} ${y(v)}`).join(" ");
+  return (
+    <svg className={"sd-card-spark " + (up ? "is-up" : "is-down")} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" aria-hidden="true">
+      <path className="sd-card-spark-area" d={`${line} L${W} ${H} L0 ${H} Z`} />
+      <path className="sd-card-spark-base" d={`M0 ${y(start)} H${W}`} />
+      <path className="sd-card-spark-line" d={line} />
+    </svg>
+  );
+}
+
+export function StudioOutcomes({ macro, result, valErr, strategyEntry, periodLabel, symbolCount = 1, canRegister, onRegister, onShare, shareBusy = false }) {
   const { quickRun, downloadMacro, launching, error } = useMacroActions(macro);
   const futures = macro.position_side === "short" || macro.leverage > 1;
+  const leverage = macro.leverage || 1;
+  const symbol = strategyEntry?.symbol || macro.symbol || "";
+  const details = leaderboardStrategy(strategyEntry);
+  const side = details?.side || macro.position_side || null;
+  const sideLabel = { long: "롱", short: "숏", switch: "롱 → 숏" }[side] || "—";
+  const intervalLabel = CANDLE_INTERVALS.find((i) => i.value === macro.candle_interval)?.label || "";
+  const sub = [
+    details?.capital ? `${details.capital.label} ${details.capital.value} ${details.capital.unit}` : "",
+    intervalLabel ? `${intervalLabel}봉` : "",
+    periodLabel || "",
+    symbolCount > 1 ? `외 ${symbolCount - 1}종목` : "",
+  ].filter(Boolean).join(" · ");
+  const ret = Number(result?.final_return_pct ?? 0);
   return (
     <div className="sd-outcomes">
-      <div className="sd-macro">
-        <StrategyDetails entry={strategyEntry} extra={strategyExtra} />
+      <div className="sd-done">
+        <article className="sd-card" aria-label="내 매크로 카드">
+          <span className="sd-card-eyebrow num" aria-hidden="true">GGPARROT MACRO</span>
+          <div className="sd-card-head">
+            <CoinIcon symbol={symbol} size={48} className="sd-card-coin" alt="" />
+            <div className="sd-card-ticker num">
+              <strong>{baseOf(symbol)}</strong>
+              <small>{quoteOf(symbol)} · {futures ? "선물" : "현물"} · {leverage}배</small>
+            </div>
+            <span className={"sd-card-side is-" + (side || "unknown")}>{sideLabel}</span>
+          </div>
+          <p className="sd-card-strategy">{details?.description || "상세 정보 없음"}</p>
+          {sub && <p className="sd-card-sub">{sub}</p>}
+          <CardSpark curve={result?.equity_curve} up={ret >= 0} />
+          {result && (
+            <div className="sd-card-foot">
+              <div>
+                <span className="sd-card-k">백테스트 수익률{periodLabel ? ` · ${periodLabel}` : ""}</span>
+                <span className={"sd-card-v num " + tone(ret)}>{pct(ret)}</span>
+              </div>
+              <div className="r">
+                <span className="sd-card-k">MDD · 승률</span>
+                <span className="sd-card-v num">-{Number(result.mdd_pct).toFixed(1)}% · {Number(result.win_rate_pct).toFixed(1)}%</span>
+              </div>
+            </div>
+          )}
+        </article>
+
+        <div className="sd-act">
+          <button
+            type="button"
+            onClick={() => onRegister?.()}
+            disabled={!onRegister || !canRegister || !!valErr}
+            title={!canRegister ? "조건이 바뀌었어요 — 다시 테스트한 뒤 등록할 수 있어요" : undefined}
+            className="btn btn-l btn-primary"
+          >
+            리더보드 등록
+          </button>
+          <button type="button" onClick={quickRun} disabled={!!valErr || launching} className="sd-act-row">
+            <ActIcon name="run" /><span>{launching ? "실행 준비 중…" : "빠른 실행"}</span><em>내 PC 실행기로</em><i className="sd-act-chev" aria-hidden="true" />
+          </button>
+          <button type="button" onClick={downloadMacro} disabled={!!valErr} className="sd-act-row">
+            <ActIcon name="download" /><span>매크로 파일 내려받기</span><em>.ggm.json</em><i className="sd-act-chev" aria-hidden="true" />
+          </button>
+          <button type="button" onClick={onShare} disabled={!!valErr || shareBusy} className="sd-act-row">
+            <ActIcon name="link" /><span>{shareBusy ? "저장 중…" : "공유 링크 보기"}</span><em>인증 카드</em><i className="sd-act-chev" aria-hidden="true" />
+          </button>
+          {!canRegister && <p className="sd-note text-amber-700">조건이 바뀌었어요 — 다시 테스트한 뒤 등록할 수 있어요.</p>}
+          {error && <p className="sd-note is-error" role="alert">오류: {error}</p>}
+        </div>
       </div>
-      <div className="sd-actions">
-        <button
-          type="button"
-          onClick={() => onRegister?.()}
-          disabled={!onRegister || !canRegister || !!valErr}
-          title={!canRegister ? "조건이 바뀌었어요 — 다시 테스트한 뒤 등록할 수 있어요" : undefined}
-          className="btn btn-l btn-primary"
-        >
-          리더보드 등록
-        </button>
-        <button type="button" onClick={quickRun} disabled={!!valErr || launching} className="btn btn-l btn-secondary">
-          {launching ? "실행 준비 중…" : "빠른 실행"}
-        </button>
-        <button type="button" onClick={downloadMacro} disabled={!!valErr} className="btn btn-l btn-secondary">매크로 파일 내려받기</button>
-        <button type="button" onClick={onShare} disabled={!!valErr || shareBusy} className="btn btn-l btn-secondary">
-          {shareBusy ? "저장 중…" : "공유 링크 보기"}
-        </button>
-      </div>
-      {!canRegister && <p className="sd-note text-amber-700">조건이 바뀌었어요 — 다시 테스트한 뒤 등록할 수 있어요.</p>}
-      {error && <p className="sd-note is-error" role="alert">오류: {error}</p>}
 
       {/* 실행기 실거래 안내 — 원래 페이퍼 다음 단계에 있던 호박색 상자 그대로. */}
       <div className="alert alert-warn sd-runner space-y-3">

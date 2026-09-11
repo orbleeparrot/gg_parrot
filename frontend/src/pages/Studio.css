@@ -216,17 +216,40 @@
 .sd-log-px small { color: rgb(var(--c-slate-500)); font-weight: 500; }
 .sd-log-pnl { font-weight: 700; }
 /* 등록 · 실행 */
-/* 매크로 등록 — 내가 만든 매크로 한 줄(리더보드 전략 칸 표기, 한 단계 크게)이 주인공. 그 아래 동작 넷, 그 아래 안내 상자. */
-.sd-macro { padding: 6px 0 14px; }
-.sd-macro .lb-strategy-facts { white-space: normal; overflow: visible; line-height: 1.6; }
-.sd-macro .lb-fact { display: inline-block; margin-bottom: 4px; }
-.sd-macro .lb-strategy-ticker strong { font-size: 24px; }
-.sd-macro .lb-strategy-ticker small { font-size: 12px; }
-.sd-macro .lb-fact dd { font-size: 15px; }
-.sd-macro .lb-fact .lb-position { font-size: 14px; }
-.sd-macro .lb-fact dt { font-size: 13px; }
-.sd-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.sd-runner { margin-top: 12px; }
+/* 매크로 등록 — 왼쪽은 내 매크로를 담은 트레이딩 카드(산출물: 로고·티커·포지션·전략·자산곡선·결과), 오른쪽은 동작 목록(등록만 노랑, 나머지는 한마디 설명이 붙은 행), 그 아래 안내 상자. */
+.sd-done { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; align-items: start; padding-top: 2px; } /* 카드가 폭 대부분, 동작 목록은 오른쪽 300px */
+.sd-card { position: relative; overflow: hidden; min-width: 0; padding: 18px 18px 14px; border: 1px solid rgb(var(--c-slate-300)); border-radius: 18px; background: linear-gradient(160deg, rgb(var(--c-brand) / .16), rgb(var(--c-surface)) 46%); box-shadow: 0 12px 30px rgb(var(--c-scrim) / .16); }
+.sd-card-eyebrow { position: absolute; right: 16px; top: 14px; color: rgb(var(--c-slate-500)); font-size: 10px; font-weight: 700; letter-spacing: .14em; }
+.sd-card-head { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
+.sd-card-coin { flex: none; border-radius: 50%; }
+.sd-card-ticker { min-width: 0; line-height: 1; }
+.sd-card-ticker strong { display: block; color: rgb(var(--c-slate-900)); font-size: 24px; font-weight: 800; letter-spacing: -.02em; }
+.sd-card-ticker small { display: block; margin-top: 5px; color: rgb(var(--c-slate-500)); font-size: 11px; font-weight: 600; letter-spacing: .02em; white-space: nowrap; }
+.sd-card-side { margin-left: auto; flex: none; display: inline-flex; align-items: center; height: 24px; padding: 0 9px; border-radius: 7px; background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-700)); font-size: 12px; font-weight: 800; white-space: nowrap; }
+.sd-card-side.is-long { background: rgb(var(--c-green-600) / .14); color: rgb(var(--c-green-600)); }
+.sd-card-side.is-short { background: rgb(var(--c-red-600) / .14); color: rgb(var(--c-red-600)); }
+.sd-card-strategy { margin: 16px 0 0; color: rgb(var(--c-slate-900)); font-size: 15px; font-weight: 700; line-height: 1.5; overflow-wrap: anywhere; }
+.sd-card-sub { margin: 4px 0 0; color: rgb(var(--c-slate-500)); font-size: 12.5px; font-weight: 500; line-height: 1.5; }
+.sd-card-spark { display: block; width: 100%; height: 72px; margin-top: 14px; }
+.sd-card-spark-area { fill: currentColor; opacity: .12; }
+.sd-card-spark-line { fill: none; stroke: currentColor; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.sd-card-spark-base { fill: none; stroke: rgb(var(--c-slate-400)); stroke-width: 1; stroke-dasharray: 3 3; opacity: .7; vector-effect: non-scaling-stroke; }
+.sd-card-foot { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; margin-top: 12px; padding-top: 12px; border-top: 1px dashed rgb(var(--c-slate-300)); }
+.sd-card-foot .r { text-align: right; }
+.sd-card-k { display: block; color: rgb(var(--c-slate-500)); font-size: 11px; font-weight: 600; white-space: nowrap; }
+.sd-card-v { display: block; margin-top: 2px; color: rgb(var(--c-slate-900)); font-size: 17px; font-weight: 800; letter-spacing: -.01em; white-space: nowrap; }
+/* 동작 목록 — 노란 등록 버튼 아래 행 셋(아이콘 · 이름 · 한마디 · 갈매기). */
+.sd-act { display: grid; gap: 8px; align-content: start; min-width: 0; }
+.sd-act-row { display: flex; align-items: center; gap: 10px; height: 44px; padding: 0 12px 0 14px; border: 1px solid rgb(var(--c-slate-300)); border-radius: 12px; background: transparent; color: rgb(var(--c-slate-900)); font-size: 14px; font-weight: 700; text-align: left; transition: background .12s; }
+.sd-act-row:hover:not(:disabled) { background: rgb(var(--c-slate-100)); }
+.sd-act-row:disabled { opacity: .5; cursor: not-allowed; }
+.sd-act-row:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
+.sd-act-row svg { flex: none; width: 16px; height: 16px; color: rgb(var(--c-slate-700)); }
+.sd-act-row > span { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sd-act-row em { flex: none; color: rgb(var(--c-slate-500)); font-style: normal; font-size: 12px; font-weight: 500; white-space: nowrap; }
+.sd-act-chev { flex: none; width: 6px; height: 6px; margin-left: 2px; border-top: 1.5px solid rgb(var(--c-slate-400)); border-right: 1.5px solid rgb(var(--c-slate-400)); transform: rotate(45deg); }
+.sd-act .sd-note { margin-top: 2px; }
+.sd-runner { margin-top: 14px; }
 
 /* 공유 다이얼로그 — 인증 카드가 넓어 확인 다이얼로그보다 조금 넓게. */
 .studio-share { max-width: 520px; }
@@ -240,7 +263,7 @@
   .sd-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .sd-kpi:nth-child(3) { border-right: 0; }
   .sd-kpi:nth-child(-n+3) { border-bottom: 1px solid rgb(var(--c-slate-200)); }
-  .sd-two, .sd-opt, .sd-paper { grid-template-columns: minmax(0, 1fr); }
+  .sd-two, .sd-opt, .sd-paper, .sd-done { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* 좁은 화면 — 한 열로 쌓고 페이지가 스크롤한다. */

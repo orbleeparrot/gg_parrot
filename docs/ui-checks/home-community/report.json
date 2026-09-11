@@ -1,0 +1,62 @@
+{
+  "passed": true,
+  "build": "/tmp/ggp-home-community-build",
+  "checks": {
+    "mobile-320-dark": {
+      "width": 320,
+      "scrollWidth": 320,
+      "scrollHeight": 1300,
+      "viewport": 844,
+      "animation": "none",
+      "transform": "none",
+      "underline": "12.24px",
+      "nested": []
+    },
+    "mobile-390-dark": {
+      "width": 390,
+      "scrollWidth": 390,
+      "scrollHeight": 1225,
+      "viewport": 844,
+      "animation": "none",
+      "transform": "none",
+      "underline": "13.26px",
+      "nested": []
+    },
+    "mobile-390-light": {
+      "width": 390,
+      "scrollWidth": 390,
+      "scrollHeight": 1225,
+      "viewport": 844,
+      "animation": "none",
+      "transform": "none",
+      "underline": "13.26px",
+      "nested": []
+    },
+    "mobile-768-dark": {
+      "width": 768,
+      "scrollWidth": 768,
+      "scrollHeight": 1260,
+      "viewport": 844,
+      "animation": "none",
+      "transform": "none",
+      "underline": "17.68px",
+      "nested": []
+    },
+    "mobile-1099-light": {
+      "width": 1099,
+      "scrollWidth": 1099,
+      "scrollHeight": 1262,
+      "viewport": 844,
+      "animation": "none",
+      "transform": "none",
+      "underline": "17.68px",
+      "nested": []
+    },
+    "mobile-static-after-25-seconds": "passed",
+    "cta-iphone": "passed",
+    "cta-android": "passed",
+    "cta-windows-narrow": "passed",
+    "desktop-carousel-and-breakpoint-resize": "passed"
+  },
+  "page_errors": []
+}

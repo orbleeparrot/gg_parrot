@@ -74,24 +74,28 @@ def open_page(browser, origin, errors, *, width, theme="dark", height=844, user_
     return context, page
 
 
+def assert_community_intro(page):
+    guide = page.get_by_role("complementary", name="게시판에서 나눌 수 있는 이야기")
+    expect(guide).to_be_visible()
+    expect(guide.locator('dt')).to_have_text(['질문', '비교', '기록'])
+    expect(guide.locator('a,button,time')).to_have_count(0)
+    expect(page.locator('.home-community-post-list,.home-board-preview-write,.home-board-preview-footer')).to_have_count(0)
+    expect(page.get_by_role('link',name='게시판 둘러보기')).to_have_attribute('href','/board')
+    assert guide.evaluate("el => getComputedStyle(el).animationName === 'none' && getComputedStyle(el).transform === 'none'")
+
+
 def assert_static_home(page):
     expect(page.locator(".home-mobile-stack")).to_be_visible()
     expect(page.locator(".home-hero-shell, .home-hero-pagination, .home-entry-mascot")).to_have_count(0)
-    expect(page.locator(".home-community-post-list")).to_have_count(1)
-    expect(page.locator(".home-community-post-list li")).to_have_count(3)
-    expect(page.locator(".home-board-preview-head")).to_have_count(0)
-    expect(page.locator(".home-board-preview-footer")).to_have_count(0)
+    assert_community_intro(page)
     expect(page.locator(".home-mobile-stack h1")).to_have_count(1)
     expect(page.locator(".home-mobile-stack #home-community-title")).to_have_count(1)
-    assert page.locator(".home-community-post-track").evaluate(
-        "el => getComputedStyle(el).animationName === 'none' && getComputedStyle(el).transform === 'none'"
-    )
 
 
 def measure(page):
     return page.evaluate("""() => {
       const frame = document.querySelector('.home-mobile-stack');
-      const belt = document.querySelector('.home-community-post-track');
+      const guide = document.querySelector('.home-community-guide');
       const underline = getComputedStyle(document.querySelector('.home-entry-title span'));
       const nested = [...frame.querySelectorAll('*')].filter(el =>
         ['auto','scroll'].includes(getComputedStyle(el).overflowY) && el.scrollHeight > el.clientHeight + 1
@@ -99,9 +103,9 @@ def measure(page):
       return {
         width: innerWidth, scrollWidth: document.documentElement.scrollWidth,
         scrollHeight: document.documentElement.scrollHeight, viewport: innerHeight,
-        animation: getComputedStyle(belt).animationName,
-        transform: getComputedStyle(belt).transform,
-        underline: underline.textDecorationThickness, nested,
+        animation: getComputedStyle(guide).animationName,
+        transform: getComputedStyle(guide).transform,
+        underline: underline.backgroundSize.split(' ')[1], nested,
       };
     }""")
 
@@ -132,12 +136,14 @@ def main():
                 assert float(data["underline"].removesuffix("px")) >= 4, data
                 page.evaluate("window.scrollTo(0, document.documentElement.scrollHeight)")
                 assert page.evaluate("window.scrollY") > 0
-                expect(page.locator(".home-community-post-list li").last).to_be_in_viewport()
-                assert page.locator(".home-community-preview").evaluate(
+                expect(page.locator(".home-community-topics > div").last).to_be_in_viewport()
+                assert page.locator(".home-community-guide").evaluate(
                     "el => { const r = el.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth; }"
                 )
                 page.evaluate("window.scrollTo(0, 0)")
                 page.screenshot(path=str(OUTPUT / f"home-{width}-{theme}.png"), full_page=True)
+                page.get_by_role('link',name='게시판 둘러보기').click()
+                page.wait_for_url('**/board')
                 checks[f"mobile-{width}-{theme}"] = data
                 context.close()
 
@@ -174,10 +180,7 @@ def main():
             expect(page.locator(".home-hero-pagination button")).to_have_count(2)
             page.get_by_role("button", name="두 번째 화면, 커뮤니티", exact=True).click()
             expect(page.locator(".home-entry-hero.is-community")).to_be_visible()
-            expect(page.locator(".home-community-post-list")).to_have_count(2)
-            assert page.locator(".home-community-post-track").evaluate(
-                "el => getComputedStyle(el).animationName"
-            ) == "home-community-post-belt"
+            assert_community_intro(page)
             expect(page.locator(".home-hero-slide-frame.is-exiting")).to_have_count(0)
             page.screenshot(path=str(OUTPUT / "home-desktop-community.png"), full_page=True)
             page.set_viewport_size({"width": 390, "height": 844})

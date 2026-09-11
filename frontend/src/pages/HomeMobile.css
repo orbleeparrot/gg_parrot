@@ -54,31 +54,4 @@
     line-height: 1.2;
   }
 
-  .home-mobile-stack .home-community-preview {
-    width: 100%;
-    padding: 0;
-    border: 0;
-    border-radius: 0;
-    background: transparent;
-  }
-
-  .home-mobile-stack .home-community-post-viewport {
-    height: auto;
-    overflow: visible;
-  }
-
-  .home-mobile-stack .home-community-post-track {
-    animation: none;
-    transform: none;
-    will-change: auto;
-  }
-
-  .home-mobile-stack .home-community-post-list li {
-    height: auto;
-  }
-
-  .home-mobile-stack .home-community-post-copy strong {
-    white-space: normal;
-    overflow-wrap: anywhere;
-  }
 }

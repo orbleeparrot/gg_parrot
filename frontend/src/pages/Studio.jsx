@@ -558,7 +558,6 @@ export default function Studio() {
   // ── 워크벤치 ──────────────────────────────────────────────────────────
   // 페이지는 스크롤하지 않는다. 조건(왼쪽) · 차트(오른쪽 위) · 결과 독(오른쪽 아래)이 각자 스크롤한다.
   // 결과 독의 탭 순서가 곧 검증 순서다: 백테스트 → AI 해설 → 익·손절 최적화 → 페이퍼 트레이딩 → 등록·실행.
-  const intervalLabel = CANDLE_INTERVALS.find((item) => item.value === form.candle_interval)?.label || "";
   const shareStale = !!share && !!share.macroKey && share.macroKey !== currentMacroKey;
   // 공유 링크 — 있으면 다이얼로그를 열고, 없거나 조건이 바뀌었으면 저장해서 만든 뒤 연다.
   async function openShare() {
@@ -566,11 +565,6 @@ export default function Studio() {
     const ok = await saveAndShare();
     if (ok) setShareOpen(true);
   }
-  const strategyExtra = [
-    ...(chartSymbols.length > 1 ? [{ label: "종목", value: `${chartSymbols.length}개` }] : []),
-    ...(intervalLabel ? [{ label: "봉", value: intervalLabel }] : []),
-    ...(periodLabelOf(currentMacro) ? [{ label: "기간", value: periodLabelOf(currentMacro) }] : []),
-  ];
   const testPrimary = !busy && (!testedMacro || !resultIsFresh);
   const testLabel = busy
     ? "결과 계산 중…"
@@ -666,8 +660,8 @@ export default function Studio() {
         {/* ── 조건 ── */}
         <aside className="studio-cond" aria-label="조건">
           <div className="studio-panel-head">
-            <div className="studio-cond-heading">
-              <h2 className="t-title text-slate-900">조건</h2>
+            <h2 className="t-h2 text-slate-900">조건</h2>
+            <div className="studio-head-right">
               {/* 매크로 파일 등록 — 가지고 있는 .ggm.json 을 내 매크로에 등록하고 조건에 불러온다. 로그인 전엔 로그인으로. */}
               {!slug && (token ? (
                 <button
@@ -684,12 +678,6 @@ export default function Studio() {
               ) : (
                 <Link to="/login?next=%2Fbuilder" className="studio-cond-upload t-caption" aria-label="로그인 후 매크로 업로드" title="매크로 파일을 등록하려면 로그인이 필요해요"><UploadIcon /><span>매크로 업로드</span></Link>
               ))}
-            </div>
-            <div className="studio-head-right">
-              <label className="flex items-center gap-2 t-caption text-slate-700 cursor-pointer select-none whitespace-nowrap">
-                <input type="checkbox" checked={autoRun} onChange={(event) => setAutoRun(event.target.checked)} />
-                자동 실행
-              </label>
             </div>
           </div>
           <div className="studio-scroll studio-cond-body">
@@ -712,7 +700,10 @@ export default function Studio() {
               {testLabel}
             </button>
             <div className="studio-foot-note t-caption text-slate-500">
-              <span>첫 결과 뒤부터 자동 테스트가 동작해요</span>
+              <label className="flex items-center gap-2 t-caption text-slate-700 cursor-pointer select-none whitespace-nowrap">
+                <input type="checkbox" checked={autoRun} onChange={(event) => setAutoRun(event.target.checked)} />
+                자동 실행
+              </label>
               <span>
                 <kbd className="num rounded border border-slate-300 bg-slate-100 px-1">Ctrl</kbd>+<kbd className="num rounded border border-slate-300 bg-slate-100 px-1">Enter</kbd>
               </span>
@@ -801,7 +792,9 @@ export default function Studio() {
                 macro={testedMacro || currentMacro}
                 valErr={valErr}
                 strategyEntry={{ symbol: chartSymbols[0] || form.symbol || "—", human_summary: summary, macro: testedMacro || currentMacro, locked: false }}
-                strategyExtra={strategyExtra}
+                result={result}
+                periodLabel={periodLabel}
+                symbolCount={chartSymbols.length}
                 canRegister={resultIsFresh}
                 onRegister={() => openRegistration(paper.mode)}
                 onShare={openShare}

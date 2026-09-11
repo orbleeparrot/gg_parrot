@@ -27,7 +27,6 @@
 .studio-panel-head h2 { margin: 0; }
 .studio-panel-head .studio-head-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 /* 파일 등록은 아이콘과 짧은 이름을 함께 표시한다. */
-.studio-cond-heading { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .studio-cond-upload { flex: none; height: 28px; padding: 0; display: inline-flex; align-items: center; justify-content: center; gap: 4px; border: 0; border-radius: 4px; color: rgb(var(--c-slate-500)); background: transparent; cursor: pointer; white-space: nowrap; text-decoration: none; }
 .studio-cond-upload > svg { display: block; width: 16px; height: 16px; }
 @media (hover: hover) {

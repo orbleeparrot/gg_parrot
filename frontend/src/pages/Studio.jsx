@@ -13,6 +13,7 @@ import { api } from "../api.js";
 import { useAuth } from "../lib/auth.js";
 import {
   CANDLE_INTERVALS,
+  PERIOD_PRESETS,
   RULE_TYPES,
   buildMacro,
   defaultForm,
@@ -28,7 +29,9 @@ import {
   takeRegistrationDraft,
 } from "../lib/journey.js";
 import { readStudioSession, writeStudioSession } from "../lib/studioSession.js";
+import { backtestBudget, validBacktestLimits } from "../lib/backtestBudget.js";
 import "./Studio.css";
+import "./StudioBudget.css";
 
 const MAX_MACRO_FILE_BYTES = 2 * 1024 * 1024;
 
@@ -104,9 +107,7 @@ function periodLabelOf(macro) {
   if (macro.period?.preset === "custom") {
     return `${macro.period.start || "?"} ~ ${macro.period.end || "?"}`;
   }
-  return { "1y": "최근 1년", "6m": "최근 6개월", "3m": "최근 3개월" }[
-    macro.period?.preset
-  ] || macro.period?.preset || "";
+  return PERIOD_PRESETS.find((item) => item.value === macro.period?.preset)?.label || macro.period?.preset || "";
 }
 
 // 저장·공유 — ⋯ 메뉴에서 여는 다이얼로그. 링크·인증 카드는 본문이 아니라 부속 결과라 화면에 늘 두지 않는다.
@@ -213,6 +214,24 @@ export default function Studio() {
   const latestTestedKeyRef = useRef("");
   const resumeRequestIdRef = useRef(0);
   const processedEntryQueryRef = useRef("");
+  const [testLimits, setTestLimits] = useState(null);
+  const [limitsError, setLimitsError] = useState("");
+  const loadTestLimits = useCallback(async () => {
+    try {
+      const value = await api.backtestLimits();
+      if (!validBacktestLimits(value)) throw new Error("invalid backtest limits");
+      setTestLimits(value);
+      setLimitsError("");
+      return value;
+    } catch (_) {
+      const message = "테스트 범위를 확인하지 못했어요. 다시 시도해 주세요.";
+      setLimitsError(message);
+      throw new Error(message);
+    }
+  }, []);
+  useEffect(() => { loadTestLimits().catch(() => {}); }, [loadTestLimits]);
+  const testBudget = useMemo(() => backtestBudget(form, testLimits), [form, testLimits]);
+  const budgetBlocked = !!testBudget && !testBudget.allowed;
 
   const valErr = validate(form);
   const currentMacro = useMemo(() => buildMacro(form), [form]);
@@ -321,6 +340,11 @@ export default function Studio() {
     setAiBusy(false);
     setBusy(true);
     try {
+      const budget = backtestBudget(snapshot, await loadTestLimits());
+      if (!budget?.allowed) {
+        if (budget?.error) setError(budget.error);
+        return false;
+      }
       const data = await api.backtest(macro);
       if (requestId !== requestIdRef.current) return false;
       setTestedMacro(macro);
@@ -339,7 +363,7 @@ export default function Studio() {
     } finally {
       if (requestId === requestIdRef.current) setBusy(false);
     }
-  }, []);
+  }, [loadTestLimits]);
 
   // Consume all entry parameters in one place so two effects cannot restore
   // each other's deleted query keys. A login-return draft wins over starter
@@ -426,12 +450,12 @@ export default function Studio() {
   // Once the first result exists, re-run after edits settle. Freshness keys and
   // request IDs prevent stale responses from becoming registerable results.
   useEffect(() => {
-    if (!autoRun || !testedMacro || valErr || busy || registerOpen) return;
+    if (!autoRun || !testedMacro || valErr || budgetBlocked || busy || registerOpen) return;
     if (currentMacroKey === lastAttemptKeyRef.current) return;
     const snapshot = form;
     const timer = window.setTimeout(() => runBacktest(snapshot), 700);
     return () => window.clearTimeout(timer);
-  }, [autoRun, busy, currentMacroKey, form, registerOpen, runBacktest, testedMacro, valErr]);
+  }, [autoRun, busy, budgetBlocked, currentMacroKey, form, registerOpen, runBacktest, testedMacro, valErr]);
 
   useEffect(() => {
     const onKeyDown = (event) => {
@@ -453,6 +477,11 @@ export default function Studio() {
     setAiBusy(false);
     setBusy(true);
     try {
+      const budget = backtestBudget(form, await loadTestLimits());
+      if (!budget?.allowed) {
+        if (budget?.error) setError(budget.error);
+        return false;
+      }
       const macro = currentMacro;
       const data = await api.createMacro(macro);
       if (requestId !== requestIdRef.current) return;
@@ -626,7 +655,8 @@ export default function Studio() {
       </>
     );
   } else if (result && !resultIsFresh) {
-    dockCta = <span className="t-caption studio-cta-note">조건이 바뀌었어요 · 다시 테스트하면 이어져요</span>;
+    // 좁은 화면에서도 숨기지 않는다(.studio-cta-note 와 달리) — 아래 숫자가 이전 조건의 것임을 알려야 한다.
+    dockCta = <span className="t-caption studio-cta-stale">조건이 바뀌었어요 · 아래는 이전 조건의 결과예요 · 다시 테스트하면 이어져요</span>;
   }
 
   return (
@@ -739,10 +769,26 @@ export default function Studio() {
           <div className="studio-cond-foot">
             {valErr && <div className="t-small text-amber-700" role="alert">{valErr}</div>}
             {error && <div className="t-small text-red-600" role="alert">오류: {error}</div>}
+            <div className={"studio-budget" + (budgetBlocked ? " is-over" : "")} role="status">
+              {testBudget?.bars != null && <p>{periodLabelOf(currentMacro)} · {intervalLabel}봉 · <b>{testBudget.bars.toLocaleString()}개</b> / 최대 {testBudget.maxBars.toLocaleString()}개</p>}
+              {testBudget?.error && <p>{testBudget.error}</p>}
+              {budgetBlocked && testBudget.suggestions.length > 0 && (
+                <div className="studio-budget-actions">
+                  {testBudget.suggestions.map((choice) => (
+                    <button type="button" key={choice.kind} disabled={busy} onClick={() => { setForm((previous) => ({ ...previous, ...choice.patch })); setError(""); }}>
+                      {choice.kind === "interval"
+                        ? `기간 유지 · ${CANDLE_INTERVALS.find((item) => item.value === choice.value)?.label || choice.value}봉으로 변경`
+                        : `${intervalLabel}봉 유지 · ${PERIOD_PRESETS.find((item) => item.value === choice.value)?.label || choice.value}로 변경`}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {limitsError && <div className="studio-budget-actions"><button type="button" onClick={() => loadTestLimits().catch(() => {})}>{limitsError}</button></div>}
+            </div>
             <button
               type="button"
               onClick={() => runBacktest(form)}
-              disabled={busy || !!valErr}
+              disabled={busy || !!valErr || budgetBlocked}
               className={"btn btn-l w-full " + (testPrimary ? "btn-primary" : "btn-secondary")}
             >
               {testLabel}
@@ -801,11 +847,7 @@ export default function Studio() {
                 )
               ) : (
                 <>
-                  {!resultIsFresh && (
-                    <div className="notice-warn studio-stale t-small text-slate-700">
-                      결과를 낸 뒤 조건이 바뀌었어요. 아래 숫자는 이전 조건의 결과이며 등록에는 사용할 수 없어요.
-                    </div>
-                  )}
+                  {/* 조건이 바뀐 경우의 안내는 독 머리(다음 행동 자리)에 한 줄로 — 본문 위에 띠를 얹지 않는다. */}
                   <StudioBacktest
                     result={result}
                     perSymbol={perSymbol}

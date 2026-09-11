@@ -14,8 +14,21 @@
 }
 .financial-candle-canvas { position: absolute; inset: 0; }
 .candle-chart.is-studio { width: 100%; min-width: 0; }
+.candle-chart-market { min-width: 0; }
+.candle-chart-symbol { margin: 0 0 4px; }
 .candle-chart-price-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; }
-.candle-chart.is-studio .candle-chart-readout { flex: none; padding: 6px 0; }
+.candle-chart-price { display: inline-flex; align-items: baseline; gap: 6px; white-space: nowrap; }
+.candle-chart-current {
+  font-size: clamp(28px, 2.4vw, 32px);
+  font-weight: 750;
+  line-height: 1.15;
+  letter-spacing: -.035em;
+}
+.candle-chart-readout { padding-block: 8px; }
+.candle-readout-row { display: flex; align-items: flex-end; gap: 12px; }
+.candle-readout-row .candle-ohlc { flex: 1; min-width: 0; }
+.candle-chart-readout .candle-chart-live { flex: none; margin-left: auto; white-space: nowrap; }
+.candle-chart.is-studio .candle-chart-readout { flex: none; }
 .candle-chart.is-studio .candle-chart-plot > .financial-candle-plot {
   position: absolute;
   inset: 0;
@@ -35,7 +48,6 @@
     max-width: 100%;
   }
   .candle-chart.is-studio .candle-chart-controls > .seg { grid-column: 1 / -1; }
-  .candle-chart.is-studio .candle-chart-market { flex-wrap: wrap; }
   .candle-chart.is-studio .candle-chart-stage .candle-chart-plot { min-height: 240px; }
   .candle-chart.is-studio .candle-chart-stage .candle-chart-plot:has(.has-rsi) { min-height: 350px; }
 }

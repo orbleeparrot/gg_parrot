@@ -46,7 +46,7 @@ function fullTime(ms) {
 }
 
 // --- inspector panel: OHLC of the hovered (or latest) bar ---------------
-function BarReadout({ bar }) {
+function BarReadout({ bar, live }) {
   if (!bar) return null;
   const rise = bar.c >= bar.o;
   const pct = bar.o ? ((bar.c - bar.o) / bar.o) * 100 : 0;
@@ -57,17 +57,24 @@ function BarReadout({ bar }) {
     </span>
   );
   return (
-    <div className="candle-ohlc flex flex-wrap items-center gap-x-3 gap-y-1 t-caption">
-      <span className="candle-ohlc-time text-slate-700 num">{fullTime(bar.t)}</span>
-      {cell("시", bar.o)}
-      {cell("고", bar.h)}
-      {cell("저", bar.l)}
-      {cell("종", bar.c)}
-      <span className={"candle-ohlc-change font-bold num " + (rise ? "text-green-600" : "text-red-600")}>
-        {rise ? "+" : ""}
-        {pct.toFixed(2)}%
-      </span>
-      {!bar.closed && <span className="badge badge-flat">진행 중</span>}
+    <div className="candle-readout-row">
+      <div className="candle-ohlc flex flex-wrap items-center gap-x-3 gap-y-1 t-caption">
+        <span className="candle-ohlc-time text-slate-700 num">{fullTime(bar.t)}</span>
+        {cell("시", bar.o)}
+        {cell("고", bar.h)}
+        {cell("저", bar.l)}
+        {cell("종", bar.c)}
+        <span className={"candle-ohlc-change font-bold num " + (rise ? "text-green-600" : "text-red-600")}>
+          {rise ? "+" : ""}
+          {pct.toFixed(2)}%
+        </span>
+      </div>
+      {live && (
+        <span className="candle-chart-live inline-flex items-center gap-1.5 t-caption font-bold text-red-600">
+          <span aria-hidden="true" className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse motion-reduce:animate-none" />
+          LIVE
+        </span>
+      )}
     </div>
   );
 }
@@ -102,11 +109,24 @@ function RangeChange({ percent }) {
       className="candle-chart-change inline-flex items-baseline gap-1.5 whitespace-nowrap"
       title="화면에 보이는 첫 봉의 시가 대비 마지막 봉의 종가"
     >
-      <span className="t-caption font-medium text-slate-500">구간 등락</span>
       <span className={"t-label font-bold num " + (up ? "text-green-600" : "text-red-600")}>
         {up ? "+" : ""}{percent.toFixed(2)}%
       </span>
+      <span className="t-caption font-medium text-slate-500">구간 등락</span>
     </span>
+  );
+}
+
+function MarketPrice({ bar, quote, changePct }) {
+  if (!bar) return null;
+  return (
+    <div className="candle-chart-price-row">
+      <span className="candle-chart-price">
+        <strong className="candle-chart-current num text-slate-900">{fmtPrice(bar.c)}</strong>
+        <span className="candle-chart-quote t-caption text-slate-500">{quote}</span>
+      </span>
+      <RangeChange percent={changePct} />
+    </div>
   );
 }
 
@@ -123,8 +143,8 @@ export default function CandleChart({
   minimal = false,
   overlay = null,
   title,
-  // "studio" — 직접 만들기 워크벤치용. 도구줄 한 줄(종목·시세 · 봉 간격 segmented · 확대 · 범례),
-  // 시세 읽기(OHLC)는 그림 위에 겹치고, 그림은 판 크기를 재서 꽉 채운다(스크롤 없음).
+  // "studio" — 직접 만들기 워크벤치용. 종목·시세와 차트 조작 아래 OHLC·LIVE를 표시하고,
+  // 그림은 판의 남은 공간을 채운다.
   variant = "default",
   // 고를 수 없는 봉 간격(예: 테스트 기간에서 봉 수 한도를 넘는 것) — [{ value, title }]. 도구줄 segmented 에서 비활성.
   disabledIntervals = [],
@@ -312,20 +332,8 @@ export default function CandleChart({
       <div className="candle-chart is-studio">
         <div className="candle-chart-toolbar">
           <div className="candle-chart-market">
-            <h3 className="candle-chart-symbol text-slate-900"><span className="num">{title || symbol}</span></h3>
-            {last && (
-              <>
-                <strong className="candle-chart-current num text-slate-900">{fmtPrice(last.c)}</strong>
-                <span className="candle-chart-quote t-caption text-slate-500">{quote}</span>
-                <RangeChange percent={changePct} />
-                {live && !last.closed && (
-                  <span className="candle-chart-live flex items-center gap-1 t-caption font-bold text-red-600">
-                    <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse motion-reduce:animate-none" />
-                    LIVE
-                  </span>
-                )}
-              </>
-            )}
+            <h3 className="candle-chart-symbol t-caption text-slate-500"><span className="num">{title || symbol}</span></h3>
+            <MarketPrice bar={last} quote={quote} changePct={changePct} />
           </div>
           <div className="candle-chart-controls">
             {/* 봉 간격은 표시만 — 값은 왼쪽 조건에서 정한다. 한도를 넘는 간격은 흐리게. */}
@@ -360,7 +368,7 @@ export default function CandleChart({
         )}
         {view.length > 0 && (
           <div className="candle-chart-stage">
-            <div className="candle-chart-readout"><BarReadout bar={inspected} /></div>
+            <div className="candle-chart-readout"><BarReadout bar={inspected} live={live && !last.closed} /></div>
             <div className="candle-chart-plot">
               {plot}
             </div>
@@ -373,22 +381,10 @@ export default function CandleChart({
   // 차트도 카드에 담지 않는다 — 캔버스 위에 그리고 구획은 괘선으로만(§1-3).
   return (
     <div className={`candle-chart pt-4 border-t border-slate-200 ${minimal ? "is-minimal" : ""}`}>
-      <div className="candle-chart-toolbar flex items-center justify-between flex-wrap gap-2 mb-2">
+      <div className="candle-chart-toolbar flex items-center justify-between flex-wrap gap-2">
         <div className="candle-chart-market">
-          <h3 className="candle-chart-symbol t-title text-slate-900"><span className="num">{title || symbol}</span></h3>
-          {last && (
-            <div className="candle-chart-price-row">
-              <strong className="candle-chart-current num text-slate-900">{fmtPrice(last.c)}</strong>
-              <span className="candle-chart-quote t-caption text-slate-500">{quote}</span>
-              <RangeChange percent={changePct} />
-              {live && !last.closed && (
-                <span className="candle-chart-live flex items-center gap-1 t-caption font-bold text-red-600">
-                  <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse motion-reduce:animate-none" />
-                  LIVE
-                </span>
-              )}
-            </div>
-          )}
+          <h3 className="candle-chart-symbol t-caption text-slate-500"><span className="num">{title || symbol}</span></h3>
+          <MarketPrice bar={last} quote={quote} changePct={changePct} />
         </div>
 
         <div className="candle-chart-controls flex items-center gap-2">
@@ -422,8 +418,8 @@ export default function CandleChart({
       </div>
 
       {/* OHLC read-out: hovered bar, or the latest one when not hovering */}
-      <div className="candle-chart-readout mb-2 min-h-[20px]">
-        <BarReadout bar={inspected} />
+      <div className="candle-chart-readout">
+        <BarReadout bar={inspected} live={live && last && !last.closed} />
       </div>
 
       {/* 보조지표 범례 */}

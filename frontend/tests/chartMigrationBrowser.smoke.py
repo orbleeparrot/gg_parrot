@@ -99,7 +99,7 @@ def verify_case(page, config, width):
         accessible = section.text_content()
         for label in (str(spec["rsi"]["entry"]), str(spec["rsi"]["exit"]), spec["rsi"].get("lowLabel", ""), spec["rsi"].get("highLabel", "")):
             assert label in accessible, (config, "missing RSI threshold/meaning", label)
-    assert "BTCUSDT" in text and "USDT" in text and "진행 중" in text, (config, text)
+    assert "BTCUSDT" in text and "USDT" in text and "LIVE" in text, (config, text)
     assert all(label in text for label in ("시", "고", "저", "종")), (config, "OHLC labels")
     assert state["data"][-1]["candles"] == bars(), (config, "data changed")
     assert state["data"][-1]["market"] == "spot" and state["data"][-1]["stale"] is False

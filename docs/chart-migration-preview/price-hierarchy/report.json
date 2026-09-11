@@ -1,0 +1,132 @@
+{
+  "passed": true,
+  "checks": [
+    {
+      "case": "1440px default",
+      "priceSize": 32,
+      "symbolSize": 13,
+      "changeSize": 15,
+      "labelAfterPercent": true,
+      "rightAligned": true,
+      "bottomAligned": true,
+      "readoutPadding": "8px"
+    },
+    {
+      "case": "1440px studio",
+      "priceSize": 32,
+      "symbolSize": 13,
+      "changeSize": 15,
+      "labelAfterPercent": true,
+      "rightAligned": true,
+      "bottomAligned": true,
+      "readoutPadding": "8px"
+    },
+    {
+      "case": "1440px compact",
+      "priceSize": 32,
+      "symbolSize": 13,
+      "changeSize": 15,
+      "labelAfterPercent": true,
+      "rightAligned": true,
+      "bottomAligned": true,
+      "readoutPadding": "8px"
+    },
+    {
+      "case": "1440px minimal",
+      "priceSize": 32,
+      "symbolSize": 13,
+      "changeSize": 15,
+      "labelAfterPercent": true,
+      "rightAligned": true,
+      "bottomAligned": true,
+      "readoutPadding": "8px"
+    },
+    {
+      "case": "1440px LIVE follows latest view"
+    },
+    {
+      "case": "1440px /builder",
+      "priceSize": 32,
+      "symbolSize": 13,
+      "changeSize": 15,
+      "labelAfterPercent": true,
+      "rightAligned": true,
+      "bottomAligned": true,
+      "readoutPadding": "8px"
+    },
+    {
+      "case": "1440px /agents",
+      "priceSize": 32,
+      "symbolSize": 13,
+      "changeSize": 15,
+      "labelAfterPercent": true,
+      "rightAligned": true,
+      "bottomAligned": true,
+      "readoutPadding": "8px"
+    },
+    {
+      "case": "390px default",
+      "priceSize": 28,
+      "symbolSize": 13,
+      "changeSize": 15,
+      "labelAfterPercent": true,
+      "rightAligned": true,
+      "bottomAligned": true,
+      "readoutPadding": "8px"
+    },
+    {
+      "case": "390px studio",
+      "priceSize": 28,
+      "symbolSize": 13,
+      "changeSize": 15,
+      "labelAfterPercent": true,
+      "rightAligned": true,
+      "bottomAligned": true,
+      "readoutPadding": "8px"
+    },
+    {
+      "case": "390px compact",
+      "priceSize": 28,
+      "symbolSize": 13,
+      "changeSize": 15,
+      "labelAfterPercent": true,
+      "rightAligned": true,
+      "bottomAligned": true,
+      "readoutPadding": "8px"
+    },
+    {
+      "case": "390px minimal",
+      "priceSize": 28,
+      "symbolSize": 13,
+      "changeSize": 15,
+      "labelAfterPercent": true,
+      "rightAligned": true,
+      "bottomAligned": true,
+      "readoutPadding": "8px"
+    },
+    {
+      "case": "390px LIVE follows latest view"
+    },
+    {
+      "case": "390px /builder",
+      "priceSize": 28,
+      "symbolSize": 13,
+      "changeSize": 15,
+      "labelAfterPercent": true,
+      "rightAligned": true,
+      "bottomAligned": true,
+      "readoutPadding": "8px"
+    },
+    {
+      "case": "390px /agents",
+      "priceSize": 28,
+      "symbolSize": 13,
+      "changeSize": 15,
+      "labelAfterPercent": true,
+      "rightAligned": true,
+      "bottomAligned": true,
+      "readoutPadding": "8px"
+    }
+  ],
+  "pageErrors": []
+}

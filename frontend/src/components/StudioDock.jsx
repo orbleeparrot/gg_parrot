@@ -24,7 +24,9 @@ const compactNum = (v) => {
   if (a >= 1e3) return (v / 1e3).toFixed(1) + "K";
   return Number(v).toFixed(0);
 };
-const tone = (v) => (v >= 0 ? "text-green-600" : "text-red-600");
+// 등락색 — 독 전용 클래스(.is-up/.is-down). Tailwind 의 text-*-600 은 .sd-box-v 같은 상자 규칙과 같은 우선순위라
+// 실리는 순서에 따라 지는 일이 있었다(페이퍼 현재 수익률이 마이너스인데 흰색).
+const tone = (v) => (v >= 0 ? "is-up" : "is-down");
 
 // ── 탭 줄 — 밑줄 탭 + 상태 점(빈 · 초록=완료 · 호박=조건 바뀜 · 노랑 깜박임=진행 중) ──
 export function StudioTabs({ tabs, active, onChange }) {
@@ -60,11 +62,11 @@ export function StudioBacktest({ result: r, perSymbol, summary, dataSource, peri
   const liq = r.liquidation_count || 0;
   const kpis = [
     { k: "수익률", term: "backtest", v: pct(r.final_return_pct), cls: tone(r.final_return_pct), d: `${compactNum(r.initial_capital)} → ${compactNum(r.final_equity)}` },
-    { k: "최대낙폭 (MDD)", term: "mdd", v: `-${r.mdd_pct.toFixed(1)}%`, cls: "text-red-600", d: `연속 손절 최대 ${r.max_consecutive_losses || 0}회` },
+    { k: "최대낙폭 (MDD)", term: "mdd", v: `-${r.mdd_pct.toFixed(1)}%`, cls: "is-down", d: `연속 손절 최대 ${r.max_consecutive_losses || 0}회` },
     { k: "홀딩 대비", term: "buy_hold", v: vsHold === null ? "—" : `${vsHold >= 0 ? "+" : ""}${vsHold.toFixed(1)}%p`, cls: vsHold === null ? "" : tone(vsHold), d: bh === null ? "비교 기준 없음" : `홀딩 ${pct(bh, 1)}` },
     { k: "거래", term: "win_rate", v: `${r.total_trades}회`, cls: "", d: `승률 ${r.win_rate_pct.toFixed(1)}%` },
-    { k: "샤프지수", term: "sharpe", v: r.sharpe != null ? r.sharpe.toFixed(2) : "—", cls: r.sharpe != null && r.sharpe >= 1 ? "text-green-600" : "", d: `손익비 ${r.profit_factor != null ? r.profit_factor.toFixed(2) : "—"}` },
-    { k: "청산 위험", term: "liquidation", v: liq > 0 ? `${liq}회 청산` : "없음", cls: liq > 0 ? "text-red-600" : "", d: leverage > 1 ? `${leverage}배 · ${(100 / leverage).toFixed(leverage >= 100 ? 2 : 1)}% 반대면 청산` : "1배 · 현물과 같음" },
+    { k: "샤프지수", term: "sharpe", v: r.sharpe != null ? r.sharpe.toFixed(2) : "—", cls: r.sharpe != null && r.sharpe >= 1 ? "is-up" : "", d: `손익비 ${r.profit_factor != null ? r.profit_factor.toFixed(2) : "—"}` },
+    { k: "청산 위험", term: "liquidation", v: liq > 0 ? `${liq}회 청산` : "없음", cls: liq > 0 ? "is-down" : "", d: leverage > 1 ? `${leverage}배 · ${(100 / leverage).toFixed(leverage >= 100 ? 2 : 1)}% 반대면 청산` : "1배 · 현물과 같음" },
   ];
   return (
     <div className="sd-bt">
@@ -219,7 +221,7 @@ export function StudioOptimize({ form, setForm, valErr, onResult }) {
       <div className="sd-empty">
         <b>익절 × 손절 조합을 모두 돌려 봐요</b>
         <span>기간을 학습과 검증으로 나눠, 학습에서 고른 값이 고를 때 쓰지 않은 검증 구간에서도 통했는지까지 확인해요. 칸을 누르면 조건에 바로 적용돼요.</span>
-        {error && <span className="text-red-600">오류: {error}</span>}
+        {error && <span className="is-error">오류: {error}</span>}
         <button type="button" onClick={run} disabled={busy || !!valErr} className="btn btn-m btn-secondary">
           {busy ? "최적화 중…" : "최적화 돌려보기"}
         </button>
@@ -232,8 +234,8 @@ export function StudioOptimize({ form, setForm, valErr, onResult }) {
       <div className="sd-opt-grid">
         <div className="sd-opt-head">
           <b>손절 ＼ 익절 · 학습 구간 수익률 <InfoTooltip term="optimize" /></b>
-          <span>회색이 본전 · 칸을 누르면 적용</span>
-          <button type="button" onClick={run} disabled={busy || !!valErr} className="btn btn-s btn-ghost">{busy ? "최적화 중…" : "다시 최적화"}</button>
+          <span className="sd-opt-hint">회색이 본전 · 칸을 누르면 적용</span>
+          <button type="button" onClick={run} disabled={busy || !!valErr} className="btn btn-s btn-secondary">{busy ? "최적화 중…" : "다시 최적화"}</button>
         </div>
         <div className="sd-heat" style={{ gridTemplateColumns: `52px repeat(${data.tp_values.length}, minmax(0, 1fr))` }}>
           <div className="sd-heat-h" />
@@ -291,7 +293,7 @@ export function StudioOptimize({ form, setForm, valErr, onResult }) {
             {bestApplied ? "최적값 적용됨 · 다시 계산 중" : `익절 ${best.tp}% · 손절 ${best.sl}% 적용`}
           </button>
         )}
-        {error && <p className="sd-note text-red-600">오류: {error}</p>}
+        {error && <p className="sd-note is-error">오류: {error}</p>}
       </div>
     </div>
   );
@@ -347,7 +349,7 @@ export function StudioPaper({ macro, valErr, controller }) {
               <div className="sd-box">
                 <div className="sd-box-k">상태</div>
                 <div className="sd-box-v">
-                  <span className={running ? "text-green-600" : "text-slate-500"}>●</span> {running ? "진행 중" : "중지됨"}
+                  <span className={running ? "is-up" : "text-slate-500"}>●</span> {running ? "진행 중" : "중지됨"}
                   <small className="text-slate-500"> · {modeLabel(startedMode || mode)}</small>
                 </div>
               </div>
@@ -362,7 +364,7 @@ export function StudioPaper({ macro, valErr, controller }) {
               </div>
               <div className="sd-box">
                 <div className="sd-box-k">청산</div>
-                <div className={"sd-box-v num " + ((status.liquidations || 0) > 0 ? "text-red-600" : "")}>{status.liquidations || 0}회</div>
+                <div className={"sd-box-v num " + ((status.liquidations || 0) > 0 ? "is-down" : "")}>{status.liquidations || 0}회</div>
                 {(status.liquidations || 0) > 0 && <div className="sd-box-d num">잃은 금액 {fmtMoney(status.liquidated_loss || 0, macro.symbol)}</div>}
               </div>
             </div>
@@ -379,12 +381,12 @@ export function StudioPaper({ macro, valErr, controller }) {
               ) : (
                 <button type="button" onClick={start} disabled={busy || !!valErr} className="btn btn-s btn-secondary">{busy ? "시작 중…" : "다시 시작"}</button>
               )}
-              <Link to="/mypage" className="btn btn-s btn-ghost">마이페이지에서 보기</Link>
+              <Link to="/mypage" className="btn btn-s btn-secondary">마이페이지에서 보기</Link>
             </div>
           </>
         )}
         {valErr && <p className="sd-note text-amber-700" role="alert">{valErr}</p>}
-        {error && <p className="sd-note text-red-600" role="alert">오류: {error}</p>}
+        {error && <p className="sd-note is-error" role="alert">오류: {error}</p>}
       </div>
 
       <div className="sd-log">
@@ -455,7 +457,7 @@ export function StudioOutcomes({ macro, valErr, result, paperStatus, paperRunnin
           <button type="button" onClick={downloadMacro} disabled={!!valErr} className="btn btn-l btn-secondary w-full">내려받기</button>
         </div>
       </div>
-      {error && <p className="sd-note text-red-600" role="alert">오류: {error}</p>}
+      {error && <p className="sd-note is-error" role="alert">오류: {error}</p>}
 
       <details className="sd-howto">
         <summary>실행기로 실거래하는 방법 · 주의</summary>

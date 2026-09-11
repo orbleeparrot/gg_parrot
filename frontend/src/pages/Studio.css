@@ -115,6 +115,10 @@
 .studio-dock-body .studio-stale { margin-bottom: 14px; }
 
 /* ── 결과 독 화면(.sd-*) — 워크벤치 시안. 수치 띠·상자·열 지도는 시안대로 테두리를 쓴다(§1-3 의 예외, 작업대 안이라 구획이 많다). ── */
+/* 등락색 — 상자·띠·표 어디서든 기본 글자색보다 먼저다(두 단계 선택자). */
+.studio-dock-body .is-up { color: rgb(var(--c-green-600)); }
+.studio-dock-body .is-down { color: rgb(var(--c-red-600)); }
+.studio-dock-body .is-error { color: rgb(var(--c-red-600)); }
 .sd-note { margin: 8px 0 0; color: rgb(var(--c-slate-500)); font-size: 13px; line-height: 1.55; font-weight: 500; }
 .sd-note .num { color: rgb(var(--c-slate-700)); }
 .sd-empty { min-height: 180px; display: grid; place-items: center; align-content: center; gap: 8px; text-align: center; color: rgb(var(--c-slate-500)); font-size: 13px; line-height: 1.55; }
@@ -152,8 +156,9 @@
 /* 최적화 */
 .sd-opt { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 18px; }
 .sd-opt-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; font-size: 13px; white-space: nowrap; }
-.sd-opt-head b { flex: none; }
-.sd-opt-head span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.sd-opt-head b { flex: none; display: inline-flex; align-items: center; gap: 2px; }
+/* 안내 글만 말줄임 — 자손 span 전체에 걸면 ⓘ 말풍선 래퍼까지 잘려 말풍선이 안 보인다. */
+.sd-opt-head > .sd-opt-hint { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .sd-opt-head .btn { margin-left: auto; flex: none; }
 .sd-opt-head b { color: rgb(var(--c-slate-700)); display: inline-flex; align-items: center; gap: 2px; }
 .sd-opt-head span { color: rgb(var(--c-slate-500)); }

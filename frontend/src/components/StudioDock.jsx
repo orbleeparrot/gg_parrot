@@ -480,7 +480,6 @@ export function StudioOutcomes({ macro, valErr, result, paperStatus, paperRunnin
             <li>실제 자금은 실행기에서 <b>실거래(메인넷) 체크</b>를 켜야 움직여요(경고 확인 단계 있음).</li>
             <li>API 키는 실행기 로컬에서만 쓰고 서버로 전송·저장하지 않아요. 출금 기능은 없어요.</li>
           </ul>
-          <Link to="/?run=1&step=1" className="inline-block t-small font-semibold text-slate-900 underline underline-offset-4 decoration-slate-300 hover:decoration-slate-900">사용법 →</Link>
         </div>
       </div>
       <p className="sd-note">공유 링크와 인증 카드는 오른쪽 위 ⋯ 에 있어요.</p>

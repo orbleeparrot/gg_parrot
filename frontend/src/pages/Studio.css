@@ -217,12 +217,7 @@
 .sd-out.is-main { border-color: rgb(var(--c-brand-line)); background: rgb(var(--c-brand) / .08); }
 .sd-out h5 { margin: 0; color: rgb(var(--c-slate-900)); font-size: 15px; font-weight: 800; }
 .sd-out p { margin: 0; min-height: 40px; color: rgb(var(--c-slate-700)); font-size: 13px; line-height: 1.55; }
-.sd-howto { margin-top: 12px; color: rgb(var(--c-slate-700)); font-size: 13px; line-height: 1.6; }
-.sd-howto > summary { cursor: pointer; color: rgb(var(--c-slate-700)); font-weight: 700; }
-.sd-howto ol, .sd-howto ul { margin: 6px 0 0; padding-left: 18px; }
-.sd-howto b { color: rgb(var(--c-slate-900)); }
-.sd-howto-link { display: inline-block; margin-top: 6px; color: rgb(var(--c-slate-900)); font-weight: 700; text-decoration: underline; text-underline-offset: 4px; text-decoration-color: rgb(var(--c-slate-300)); }
-.sd-howto-link:hover { text-decoration-color: rgb(var(--c-slate-900)); }
+.sd-runner { margin-top: 12px; }
 
 /* 공유 다이얼로그 — 인증 카드가 넓어 확인 다이얼로그보다 조금 넓게. */
 .studio-share { max-width: 520px; }

@@ -416,7 +416,7 @@ export function StudioPaper({ macro, valErr, controller }) {
 }
 
 // ── 등록 · 실행 — 근거 한 줄 + 세 갈래(리더보드 등록이 노랑) + 실행기 안내는 접이식 ──
-export function StudioOutcomes({ macro, valErr, result, paperStatus, paperRunning, explanation, optimized, canRegister, onRegister }) {
+export function StudioOutcomes({ macro, valErr, result, paperStatus, paperRunning, canRegister, onRegister }) {
   const { quickRun, downloadMacro, launching, error } = useMacroActions(macro);
   const paperRet = paperStatus?.current_return;
   const futures = macro.position_side === "short" || macro.leverage > 1;
@@ -431,8 +431,6 @@ export function StudioOutcomes({ macro, valErr, result, paperStatus, paperRunnin
         {result && (
           <span>백테스트 <b className={"num " + tone(result.final_return_pct)}>{pct(result.final_return_pct)}</b> · MDD <b className="num">-{result.mdd_pct.toFixed(1)}%</b></span>
         )}
-        <span>{explanation?.source === "ai" ? "AI 해설 확인" : "AI 해설 안 봄"}</span>
-        <span>{optimized ? "최적화 확인" : "최적화 안 돌림"}</span>
         <span className="sd-verdict-tail">{canRegister ? "이 설정 그대로 이어져요" : "조건이 바뀌었어요 — 다시 테스트한 뒤 등록할 수 있어요"}</span>
       </div>
 
@@ -459,21 +457,33 @@ export function StudioOutcomes({ macro, valErr, result, paperStatus, paperRunnin
       </div>
       {error && <p className="sd-note is-error" role="alert">오류: {error}</p>}
 
-      <details className="sd-howto">
-        <summary>실행기로 실거래하는 방법 · 주의</summary>
-        <ol>
-          <li>위 버튼으로 <b>매크로 파일(.ggm.json)</b>을 내려받아요.</li>
-          <li>마이페이지에서 <b>껄무새 회원 키</b>를 복사해요(계정당 1개).</li>
-          <li>매크로 실행기를 열어 ①파일 ②실거래 여부 ③API 키 ④회원 키를 넣고 시작해요.</li>
-        </ol>
-        <ul>
-          <li>실행기는 <u>실제로 주문을 실행해요</u> (기본값: 바이낸스 테스트넷 = 가짜 자금).</li>
-          <li>{futures ? "숏·레버리지 매크로라 USDT-M 선물로 실행돼요." : "롱·1배 매크로라 현물(spot)로 실행돼요."} 익절·손절·일일 최대손실·최대 보유시간·재진입 금지가 함께 적용돼요.</li>
-          <li>실제 자금은 실행기에서 <b>실거래(메인넷) 체크</b>를 켜야 움직여요(경고 확인 단계 있음). 실행 현황과 원격 종료는 마이페이지에서 확인해요.</li>
-        </ul>
-        <Link to="/?run=1&step=1" className="sd-howto-link">사용법 →</Link>
-      </details>
-      <p className="sd-note">실거래(메인넷)는 실행기에서 켜요 · API 키는 실행기 로컬에서만 쓰고 서버로 보내지 않아요 · 출금 기능은 없어요. 공유 링크와 인증 카드는 오른쪽 위 ⋯ 에 있어요.</p>
+      {/* 실행기 실거래 안내 — 원래 페이퍼 다음 단계에 있던 호박색 상자 그대로. 버튼은 위 세 상자에 있으니 여기는 글만. */}
+      <div className="alert alert-warn sd-runner space-y-3">
+        <div className="t-title">동작 검증 완료 → 매크로 실행기로 실거래</div>
+        <p className="t-small">
+          터미널·파이썬 설치 없이 <b>껄무새 매크로 실행기</b>(프로그램)에 이 매크로 파일을 넣고 돌려요.
+          실행 현황과 원격 종료는 <b>마이페이지</b>에서 확인해요.
+        </p>
+        <div className="pt-3 border-t border-amber-700/30 space-y-2">
+          <p className="t-small font-bold">진행 방법</p>
+          <ol className="t-small list-decimal pl-4 space-y-1">
+            <li>위 버튼으로 <b>매크로 파일(.ggm.json)</b>을 내려받아요.</li>
+            <li>마이페이지에서 <b>껄무새 회원 키</b>를 복사해요(계정당 1개).</li>
+            <li>매크로 실행기를 열어 ①파일 ②실거래 여부 ③API 키 ④회원 키를 넣고 시작해요.</li>
+          </ol>
+          <p className="t-small font-bold pt-1">
+            주의: 실행기는 <u>실제로 주문을 실행해요</u> (기본값: 바이낸스 테스트넷 = 가짜 자금)
+          </p>
+          <ul className="t-small list-disc pl-4 space-y-1">
+            <li>{futures ? "숏·레버리지 매크로라 USDT-M 선물로 실행돼요." : "롱·1배 매크로라 현물(spot)로 실행돼요."}</li>
+            <li>익절·손절·일일 최대손실·최대 보유시간·재진입 금지가 함께 적용돼요.</li>
+            <li>실제 자금은 실행기에서 <b>실거래(메인넷) 체크</b>를 켜야 움직여요(경고 확인 단계 있음).</li>
+            <li>API 키는 실행기 로컬에서만 쓰고 서버로 전송·저장하지 않아요. 출금 기능은 없어요.</li>
+          </ul>
+          <Link to="/?run=1&step=1" className="inline-block t-small font-semibold text-slate-900 underline underline-offset-4 decoration-slate-300 hover:decoration-slate-900">사용법 →</Link>
+        </div>
+      </div>
+      <p className="sd-note">공유 링크와 인증 카드는 오른쪽 위 ⋯ 에 있어요.</p>
     </div>
   );
 }

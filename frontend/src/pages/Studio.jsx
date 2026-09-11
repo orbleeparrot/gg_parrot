@@ -839,8 +839,6 @@ export default function Studio() {
                 result={result}
                 paperStatus={paper.status}
                 paperRunning={paper.running}
-                explanation={explanation}
-                optimized={optimized}
                 canRegister={resultIsFresh}
                 onRegister={() => openRegistration(paper.mode)}
               />

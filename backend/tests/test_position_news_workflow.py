@@ -113,7 +113,7 @@ def test_effective_config_exposes_actual_summary_limits_without_credentials():
 def test_flow_uses_base_tickers_and_separates_model_stage(
     monkeypatch,
 ):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.setenv("POSITION_NEWS_MAX_AI_ANALYSES_PER_RUN", "1")
     monkeypatch.setenv("POSITION_NEWS_MAX_CYCLE_SECONDS", "240")
     monkeypatch.setattr(workflow, "_schedule_lag_seconds", lambda: 0.0)
@@ -460,7 +460,7 @@ def test_partial_or_disabled_browser_does_not_fail_task(monkeypatch, caplog, sta
 
 def test_flow_processes_rss_once_and_retains_browser_outage_diagnostics(monkeypatch):
     monkeypatch.setenv("POSITION_NEWS_BROWSER_ENRICHMENT_ENABLED", "true")
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
     monkeypatch.setattr(workflow, "_schedule_lag_seconds", lambda: 0.0)
     monkeypatch.setattr(workflow, "discover_tickers_task", lambda: _selection("BTC"))
     payload = _payload("BTC")

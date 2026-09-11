@@ -141,13 +141,13 @@ def test_ai_json_requires_a_factual_summary_and_discards_other_freeform_text():
 
 def test_missing_or_failed_ai_uses_safe_rule_fallback(monkeypatch):
     items = [{"title": "비트코인 현물 ETF 승인", "source": "테스트뉴스"}]
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     without_key = classifier.analyze_headlines(items, "비트코인")
     assert without_key["analysis_source"] == "rule"
     assert without_key["analysis_status"] == "ready"
     assert without_key["items"][0]["sentiment"] == "positive"
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.setattr(
         classifier,
         "_generate_ai_analysis",
@@ -204,7 +204,7 @@ def test_ai_enriches_and_summarizes_only_three_articles_in_one_batch(monkeypatch
     ]
     calls = []
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.setattr(
         classifier.news_mod,
         "enrich_article_excerpts",
@@ -253,7 +253,7 @@ def test_rate_limited_analysis_keeps_feed_content_without_browser_or_ai(monkeypa
     }]
     enrichment_calls = []
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.setattr(
         classifier.news_mod,
         "enrich_article_excerpts",

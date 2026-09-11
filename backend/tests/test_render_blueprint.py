@@ -10,14 +10,14 @@ def test_render_blueprint_includes_position_news_background_worker():
     web = blueprint.split("  - type: web\n", 1)[1].split("  - type: worker\n", 1)[0]
     worker = blueprint.split("  - type: worker\n", 1)[1]
 
-    assert '- key: ANTHROPIC_API_KEY\n        sync: false' in web
+    assert '- key: GEMINI_API_KEY\n        sync: false' in web
     assert (
-        '- key: ANTHROPIC_MODEL\n'
-        '        value: "claude-haiku-4-5"'
+        '- key: GEMINI_MODEL\n'
+        '        value: "gemini-3.5-flash-lite"'
         in web
     )
-    assert 'ANTHROPIC_NEWS_TRANSLATION_API_KEY' not in blueprint
-    assert 'ANTHROPIC_NEWS_TRANSLATION_MODEL' not in blueprint
+    assert 'GEMINI_NEWS_TRANSLATION_API_KEY' not in blueprint
+    assert 'GEMINI_NEWS_TRANSLATION_MODEL' not in blueprint
     assert 'NEWS_TITLE_TRANSLATION_ENABLED' not in blueprint
     assert 'NEWS_TITLE_TRANSLATION_MAX_CALLS_PER_DAY' not in blueprint
     assert '- key: AI_EXPLAIN_MAX_CALLS_PER_DAY\n        value: "20"' in web
@@ -27,7 +27,7 @@ def test_render_blueprint_includes_position_news_background_worker():
         in web
     )
     assert (
-        '- key: ANTHROPIC_NEWS_TRANSLATION_MAX_TOKENS\n        value: "2048"'
+        '- key: GEMINI_NEWS_TRANSLATION_MAX_TOKENS\n        value: "2048"'
         in web
     )
 
@@ -38,7 +38,7 @@ def test_render_blueprint_includes_position_news_background_worker():
     assert "python -m app.workflows.position_news serve" in worker
     assert "maxShutdownDelaySeconds: 300" in worker
     assert "healthCheckPath:" not in worker
-    assert 'value: "claude-haiku-4-5"' in worker
+    assert 'value: "gemini-3.5-flash-lite"' in worker
     assert 'value: "2"' in worker
     assert 'value: "10"' in worker
     assert 'value: "512"' in worker
@@ -53,14 +53,14 @@ def test_render_blueprint_includes_position_news_background_worker():
     env_example = (
         Path(__file__).resolve().parents[1] / ".env.example"
     ).read_text(encoding="utf-8")
-    assert "ANTHROPIC_API_KEY=" in env_example
-    assert "ANTHROPIC_MODEL=" in env_example
+    assert "GEMINI_API_KEY=" in env_example
+    assert "GEMINI_MODEL=" in env_example
     assert "NEWS_MARKET_SUMMARY_MAX_CALLS_PER_DAY=3" in env_example
     assert "AI_ACQUIRE_TIMEOUT_SECONDS=1" in env_example
     assert "NEWS_TITLE_TRANSLATION_ENABLED" not in env_example
     assert "NEWS_TITLE_TRANSLATION_MAX_CALLS_PER_DAY" not in env_example
-    assert "ANTHROPIC_NEWS_TRANSLATION_API_KEY" not in env_example
-    assert "ANTHROPIC_NEWS_TRANSLATION_MODEL" not in env_example
+    assert "GEMINI_NEWS_TRANSLATION_API_KEY" not in env_example
+    assert "GEMINI_NEWS_TRANSLATION_MODEL" not in env_example
 
     dockerfile = (
         Path(__file__).resolve().parents[1] / "Dockerfile.prefect"

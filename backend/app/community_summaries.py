@@ -16,7 +16,7 @@ import time
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 
-from .ai_runtime import AiBusyError, ai_cache_key, get_ai_runtime, get_anthropic_client
+from .ai_runtime import AiBusyError, ai_cache_key, default_model, get_ai_client, get_ai_runtime
 
 logger = logging.getLogger(__name__)
 PROMPT_VERSION = "community-body-summary-ko-v1"
@@ -60,7 +60,7 @@ def clear_memory_cache():
 
 
 def _model():
-    return os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5")
+    return default_model()
 
 
 def _request_timeout():
@@ -71,7 +71,7 @@ def _request_timeout():
 
 
 def configuration():
-    return {"enabled": bool(os.environ.get("ANTHROPIC_API_KEY", "").strip()),
+    return {"enabled": bool(os.environ.get("GEMINI_API_KEY", "").strip()),
             "model": _model(), "prompt_version": PROMPT_VERSION,
             "max_body_chars": MAX_BODY_CHARS, "batch_size": _BATCH_SIZE,
             "cache_retention_days": 30, "daily_limit": None,
@@ -232,7 +232,7 @@ def _request_summaries(jobs):
     key = ai_cache_key("community-summary", PROMPT_VERSION, _model(), {"items": articles, "system": system})
 
     def request():
-        response = get_anthropic_client().messages.create(
+        response = get_ai_client().messages.create(
             model=_model(), max_tokens=2200, system=system,
             # Full-body batches need more time than the shared headline default.
             # HTTP readers still return immediately; retries remain disabled.
@@ -259,7 +259,7 @@ def _request_summaries(jobs):
 
 
 def _execute(jobs, *, background=False):
-    if not os.environ.get("ANTHROPIC_API_KEY", "").strip():
+    if not os.environ.get("GEMINI_API_KEY", "").strip():
         return
     repository = _repository()
     for offset in range(0, len(jobs), _BATCH_SIZE):
@@ -306,7 +306,7 @@ def _execute(jobs, *, background=False):
 
 def _schedule(jobs):
     global _executor
-    if not os.environ.get("ANTHROPIC_API_KEY", "").strip():
+    if not os.environ.get("GEMINI_API_KEY", "").strip():
         return
     with _lock:
         if _stopping:

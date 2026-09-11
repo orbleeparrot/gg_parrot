@@ -22,7 +22,7 @@ def response(*pairs):
 
 @pytest.fixture
 def provider(monkeypatch):
-    monkeypatch.setenv('ANTHROPIC_API_KEY', 'do-not-log-provider-key')
+    monkeypatch.setenv('GEMINI_API_KEY', 'do-not-log-provider-key')
     monkeypatch.delenv('DATABASE_URL', raising=False)
     requests, replies = [], []
     runtime = AiCallRuntime(max_concurrent=1, acquire_timeout_seconds=0.01, cache_ttl_seconds=900)
@@ -33,7 +33,7 @@ def provider(monkeypatch):
             if isinstance(result, Exception):
                 raise result
             return result
-    monkeypatch.setattr(news, 'get_anthropic_client', lambda: SimpleNamespace(messages=Messages()))
+    monkeypatch.setattr(news, 'get_ai_client', lambda: SimpleNamespace(messages=Messages()))
     monkeypatch.setattr(news, 'get_ai_runtime', lambda: runtime)
     return requests, replies
 

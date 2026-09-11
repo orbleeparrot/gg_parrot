@@ -178,7 +178,7 @@ def test_failed_call_is_not_cached_and_releases_capacity():
     assert runtime.call("key", lambda: "recovered") == ("recovered", "loaded")
 
 
-def test_shared_anthropic_client_has_timeout_and_sdk_retries_disabled(monkeypatch):
+def test_shared_ai_client_has_timeout_and_sdk_retries_disabled(monkeypatch):
     created = []
 
     class Client:
@@ -189,20 +189,114 @@ def test_shared_anthropic_client_has_timeout_and_sdk_retries_disabled(monkeypatc
             pass
 
     ai_runtime.close_ai_runtime()
-    monkeypatch.setattr(ai_runtime.anthropic, "Anthropic", Client)
-    assert ai_runtime.get_anthropic_client() is ai_runtime.get_anthropic_client()
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
+    monkeypatch.setattr(ai_runtime.genai, "Client", Client)
+    assert ai_runtime.get_ai_client() is ai_runtime.get_ai_client()
     assert len(created) == 1
-    assert created[0]["timeout"] > 0
-    assert created[0]["max_retries"] == 0
+    http = created[0]["http_options"]
+    assert http.timeout > 0  # milliseconds
+    # The runtime owns retries; the SDK must not retry underneath it.
+    assert http.retry_options.attempts <= 1
     ai_runtime.close_ai_runtime()
 
 
-def test_shared_anthropic_client_has_no_explicit_key_override():
-    assert "api_key" not in signature(ai_runtime.get_anthropic_client).parameters
+def test_shared_ai_client_refuses_to_start_without_a_key(monkeypatch):
+    ai_runtime.close_ai_runtime()
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    with pytest.raises(ai_runtime.AiAuthError):
+        ai_runtime.get_ai_client()
+
+
+def test_shared_ai_client_has_no_explicit_key_override():
+    assert "api_key" not in signature(ai_runtime.get_ai_client).parameters
 
 
 def test_all_ai_callers_use_the_guarded_runtime():
+    # 호출 지점은 SDK 를 모른다 — 공급자를 바꿀 때 ai_runtime 한 곳만 손대기 위해서다.
     for module in (ai_explain, ai_challenge, news, classifier):
         source = getsource(module)
         assert "get_ai_runtime" in source, module.__name__
-        assert "anthropic.Anthropic(" not in source, module.__name__
+        assert "genai." not in source and "anthropic" not in source, module.__name__
+
+
+# --- Gemini adapter: the only code that touches the SDK ---------------------
+class _FakeModels:
+    def __init__(self, outcome):
+        self.outcome = outcome
+        self.calls = []
+
+    def generate_content(self, **kwargs):
+        self.calls.append(kwargs)
+        if isinstance(self.outcome, Exception):
+            raise self.outcome
+        return type("Resp", (), {"text": self.outcome})()
+
+
+def _messages(outcome):
+    models = _FakeModels(outcome)
+    client = type("Client", (), {"models": models})()
+    return ai_runtime._Messages(client), models
+
+
+def test_adapter_maps_the_shared_contract_onto_generate_content():
+    messages, models = _messages("답변껄")
+    response = messages.create(
+        model="gemini-3.5-flash-lite", max_tokens=321, system="시스템 지시",
+        messages=[{"role": "user", "content": "질문"}], timeout=2.5,
+    )
+    assert [(b.type, b.text) for b in response.content] == [("text", "답변껄")]
+    call = models.calls[0]
+    assert call["model"] == "gemini-3.5-flash-lite"
+    assert call["config"].system_instruction == "시스템 지시"
+    assert call["config"].max_output_tokens == 321
+    assert call["config"].http_options.timeout == 2500  # seconds in, milliseconds out
+    turn = call["contents"][0]
+    assert turn.role == "user" and turn.parts[0].text == "질문"
+
+
+def test_adapter_turns_assistant_role_into_model_turn():
+    messages, models = _messages("ok")
+    messages.create(model="m", max_tokens=1, messages=[
+        {"role": "user", "content": "a"}, {"role": "assistant", "content": "b"},
+    ])
+    assert [c.role for c in models.calls[0]["contents"]] == ["user", "model"]
+
+
+def test_adapter_hands_back_an_empty_block_when_the_model_returns_nothing():
+    messages, _ = _messages(None)  # blocked / empty answer
+    response = messages.create(model="m", max_tokens=1, messages=[{"role": "user", "content": "x"}])
+    assert response.content[0].text == ""
+
+
+@pytest.mark.parametrize("code, expected, transient", [
+    (401, ai_runtime.AiAuthError, False),
+    (403, ai_runtime.AiAuthError, False),
+    (429, ai_runtime.AiRateLimitError, True),
+    (500, ai_runtime.AiStatusError, True),
+    (400, ai_runtime.AiStatusError, False),
+])
+def test_adapter_translates_provider_errors(code, expected, transient):
+    error = ai_runtime.genai_errors.APIError(code, {"error": {"message": "nope", "status": "X"}})
+    messages, _ = _messages(error)
+    with pytest.raises(expected) as raised:
+        messages.create(model="m", max_tokens=1, messages=[{"role": "user", "content": "x"}])
+    assert raised.value.status_code == code
+    assert ai_runtime._provider_transient(raised.value) is transient
+
+
+def test_adapter_reads_googles_400_invalid_key_as_an_auth_error():
+    error = ai_runtime.genai_errors.APIError(
+        400, {"error": {"message": "API key not valid. Please pass a valid API key.", "status": "INVALID_ARGUMENT"}},
+    )
+    messages, _ = _messages(error)
+    with pytest.raises(ai_runtime.AiAuthError):
+        messages.create(model="m", max_tokens=1, messages=[{"role": "user", "content": "x"}])
+
+
+def test_adapter_treats_network_failures_as_transient():
+    import httpx
+
+    messages, _ = _messages(httpx.ConnectTimeout("slow"))
+    with pytest.raises(ai_runtime.AiConnectionError) as raised:
+        messages.create(model="m", max_tokens=1, messages=[{"role": "user", "content": "x"}])
+    assert ai_runtime._provider_transient(raised.value) is True

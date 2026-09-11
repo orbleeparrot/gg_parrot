@@ -11,6 +11,7 @@ from collections import Counter
 from typing import Callable, Iterable
 
 from ... import news as news_mod
+from ...ai_runtime import ai_available, default_model
 from . import classifier
 
 
@@ -72,7 +73,7 @@ def _article_identity(item: dict) -> tuple[str, str, str]:
 
 
 def _analysis_model() -> str:
-    return os.environ.get("ANTHROPIC_MODEL", "").strip() or "claude-haiku-4-5"
+    return default_model()
 
 
 def analysis_fingerprint(asset_symbol: str, items: list[dict]) -> str:
@@ -100,7 +101,7 @@ def analysis_fingerprint(asset_symbol: str, items: list[dict]) -> str:
         "asset_symbol": news_mod.canonical_asset_symbol(asset_symbol),
         "prompt_version": classifier.PROMPT_VERSION,
         "model": _analysis_model(),
-        "ai_enabled": bool(os.environ.get("ANTHROPIC_API_KEY")),
+        "ai_enabled": ai_available(),
         "items": normalized_items,
     }
     encoded = json.dumps(
@@ -251,7 +252,7 @@ def collect_payload(
     coin_name = str(claimed_payload.get("coin_name") or asset)
     reused_analysis = _reuse_editorial_analysis(asset, claimed_items, snapshot_key, coin_name, repo)
     has_editorial = any(not classifier.is_community_item(item) for item in claimed_items)
-    wants_ai = bool(os.environ.get("ANTHROPIC_API_KEY")) and allow_ai and has_editorial and reused_analysis is None
+    wants_ai = ai_available() and allow_ai and has_editorial and reused_analysis is None
     reserved_ai = False
     if wants_ai:
         daily_limit = max(
@@ -557,7 +558,7 @@ def run_collection_cycle(
                     result["browser_status"] = payload["browser_enrichment"].get("status")
             except NewsCollectionError as exc:
                 result = {"asset_symbol": asset, "status": "error", "error": str(exc),
-                          "used_ai_budget": bool(os.environ.get("ANTHROPIC_API_KEY")) and ai_used < ai_limit}
+                          "used_ai_budget": ai_available() and ai_used < ai_limit}
             if result.get("used_ai_budget"):
                 ai_used += 1
             results.append(result)

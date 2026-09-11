@@ -304,7 +304,7 @@ def test_one_ticker_failure_does_not_stop_other_tickers():
 
 
 def test_cycle_applies_one_central_ai_budget_across_tickers(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     repo = FakeRepository()
     allowed = []
 

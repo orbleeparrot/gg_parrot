@@ -49,9 +49,9 @@ services:
         sync: false
       - key: PREFECT_API_KEY
         sync: false
-      - key: ANTHROPIC_API_KEY
+      - key: GEMINI_API_KEY
         sync: false
-      - key: ANTHROPIC_MODEL
-        value: "claude-haiku-4-5"
-      - key: ANTHROPIC_POSITION_NEWS_MAX_TOKENS
+      - key: GEMINI_MODEL
+        value: "gemini-3.5-flash-lite"
+      - key: GEMINI_POSITION_NEWS_MAX_TOKENS
         value: "512"

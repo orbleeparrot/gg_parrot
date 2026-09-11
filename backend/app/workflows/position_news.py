@@ -421,7 +421,7 @@ def collect_position_news_flow(browser_budget_seconds: float | None = None) -> d
                 # Paid tasks have no retries. Count an uncertain model attempt
                 # conservatively if final persistence failed.
                 result = {"asset_symbol": asset_symbol, "status": "error", "error": str(exc),
-                          "used_ai_budget": bool(os.environ.get("ANTHROPIC_API_KEY")) and allow_ai}
+                          "used_ai_budget": bool(os.environ.get("GEMINI_API_KEY")) and allow_ai}
             if result.get("used_ai_budget"):
                 ai_used += 1
             results.append(result)

@@ -11,12 +11,12 @@ import re
 from typing import Iterable
 
 from ... import news as news_mod
-from ...ai_runtime import ai_cache_key, get_ai_runtime, get_anthropic_client
+from ...ai_runtime import ai_available, ai_cache_key, default_model, get_ai_client, get_ai_runtime
 
 FEATURE_VERSION = 2
 PROMPT_VERSION = "position-news-article-summary-v3"
-_DEFAULT_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5")
-_MAX_TOKENS = max(128, int(os.environ.get("ANTHROPIC_POSITION_NEWS_MAX_TOKENS", "500")))
+_DEFAULT_MODEL = default_model()
+_MAX_TOKENS = max(128, int(os.environ.get("GEMINI_POSITION_NEWS_MAX_TOKENS", "500")))
 _MAX_AI_SUMMARY_ITEMS = max(
     1,
     min(5, int(os.environ.get("POSITION_NEWS_MAX_AI_SUMMARY_ITEMS", "3"))),
@@ -276,7 +276,7 @@ def _generate_ai_analysis(items: list[dict], coin_name: str) -> dict:
         '{"items":[{"index":0,"sentiment":"positive|negative|neutral|unclear",'
         '"summary":"기사 핵심 내용"}]}'
     )
-    selected_model = os.environ.get("ANTHROPIC_MODEL", _DEFAULT_MODEL)
+    selected_model = default_model()
     user = f"대상: {coin_name}\n기사 JSON:\n{json.dumps(payload, ensure_ascii=False)}"
     key = ai_cache_key(
         "position-news-classifier",
@@ -286,7 +286,7 @@ def _generate_ai_analysis(items: list[dict], coin_name: str) -> dict:
     )
 
     def load():
-        response = get_anthropic_client().messages.create(
+        response = get_ai_client().messages.create(
             model=selected_model,
             max_tokens=_MAX_TOKENS,
             system=system,
@@ -327,7 +327,7 @@ def analyze_headlines(items: list[dict], coin_name: str, *, allow_ai: bool = Tru
     editorial_indexes = [index for index, item in enumerate(items) if not is_community_item(item)]
     if not editorial_indexes:
         return baseline
-    if not os.environ.get("ANTHROPIC_API_KEY"):
+    if not ai_available():
         return baseline
     if not allow_ai:
         baseline["analysis_status"] = "rate_limited"

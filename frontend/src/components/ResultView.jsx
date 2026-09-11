@@ -30,7 +30,7 @@ const MOOD_ACCENT = {
 };
 
 // 껄무새 AI 원인 분석 카드. 규칙기반 장문 멘트는 쓰지 않고, '분석하기'를 누르면
-// 서버(Anthropic)가 결과 원인을 5줄 이내로 간결하게 분석한다.
+// 서버(Gemini)가 결과 원인을 5줄 이내로 간결하게 분석한다.
 export function ParrotExplain({ explanation, onAiExplain, aiBusy, aiError }) {
   const isAi = explanation && explanation.source === "ai";
 
@@ -83,7 +83,7 @@ export function ParrotExplain({ explanation, onAiExplain, aiBusy, aiError }) {
     );
   }
 
-  // 아직 AI 분석 전: 분석 버튼만. 서버 Anthropic 키로 동작(입력 불필요).
+  // 아직 AI 분석 전: 분석 버튼만. 서버 Gemini 키로 동작(입력 불필요).
   return (
     <div className="pt-4 border-t border-slate-200">
       <div className="flex items-center justify-between gap-3 flex-wrap">

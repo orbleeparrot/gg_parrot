@@ -20,7 +20,7 @@ def article(name):
 
 
 def test_community_only_uses_opinion_baseline_without_article_or_model_requests(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.setattr(classifier.news_mod, "enrich_article_excerpts",
                         lambda *_args, **_kwargs: pytest.fail("community must not fetch article bodies"))
     monkeypatch.setattr(classifier, "_generate_ai_analysis",
@@ -36,7 +36,7 @@ def test_community_only_uses_opinion_baseline_without_article_or_model_requests(
 
 
 def test_mixed_analysis_excludes_community_and_preserves_editorial_indexes(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     first, second = article("첫째"), article("둘째")
     seen = []
 
@@ -71,7 +71,7 @@ class LatestRepository(FakeRepository):
 
 
 def test_community_updates_store_new_snapshots_without_rebuying_unchanged_news(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.setenv("POSITION_NEWS_MAX_AI_ANALYSES_PER_DAY", "10")
     repo, calls = LatestRepository(), []
     first, second = article("첫째"), article("둘째")
@@ -104,7 +104,7 @@ def test_community_updates_store_new_snapshots_without_rebuying_unchanged_news(m
 
 
 def test_community_only_collector_reserves_no_analysis_budget(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     repo = LatestRepository()
     monkeypatch.setattr(repo, "reserve_ai_budget", lambda **_: pytest.fail("community has no analysis charge"))
     monkeypatch.setattr(classifier, "_generate_ai_analysis", lambda *_: pytest.fail("no model"))
@@ -118,7 +118,7 @@ def test_community_only_collector_reserves_no_analysis_budget(monkeypatch):
 
 
 def test_new_community_posts_publish_before_browser_and_keep_existing_editorial_analysis(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.setattr(collector.news_mod, "_coin_snapshot_is_stale", lambda _: False)
     repo = LatestRepository()
     first, browser_article = article("첫째"), article("브라우저 추가")
@@ -156,15 +156,15 @@ def test_community_identity_is_stable_across_order_but_distinguishes_new_posts()
 
 
 def test_editorial_reuse_does_not_cross_model_changes(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    monkeypatch.setenv("ANTHROPIC_MODEL", "model-one")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_MODEL", "model-one")
     repo = LatestRepository()
     item = article("첫째")
     analysis = lambda items, _coin, **_: {"items": [{"sentiment": "neutral", "summary": "소식"} for _ in items],
                                          "analysis_status": "ready", "analysis_source": "ai", "ai": True}
     collector.collect_payload("CHIP", {"symbol": "CHIP", "items": [item]}, repo=repo,
                               analyzer=analysis, localize=False)
-    monkeypatch.setenv("ANTHROPIC_MODEL", "model-two")
+    monkeypatch.setenv("GEMINI_MODEL", "model-two")
 
     result = collector.collect_payload("CHIP", {"symbol": "CHIP", "items": [post(), item]}, repo=repo,
                                        analyzer=analysis, localize=False)
@@ -181,7 +181,7 @@ def test_community_refresh_uses_real_repository_snapshot_order_and_fencing(monke
     engine = create_engine("sqlite://")
     SQLModel.metadata.create_all(engine)
     monkeypatch.setattr(repository, "get_session", lambda: Session(engine))
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     item = article("첫째")
     analysis = {"items": [{"sentiment": "positive", "summary": "기사 요약", "confidence": "medium"}],
                 "analysis_status": "ready", "analysis_source": "ai", "ai": True}

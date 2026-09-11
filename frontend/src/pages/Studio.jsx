@@ -672,9 +672,9 @@ export default function Studio() {
         </div>
       )}
 
-      <div ref={split.workRef} className="studio-work" style={{ "--studio-condition-width": `${split.width}px` }}>
+      <div ref={split.workRef} className="studio-work" data-conditions-collapsed={split.collapsed} style={{ "--studio-condition-width": `${split.width}px` }}>
         {/* ── 조건 ── */}
-        <aside id="studio-conditions" className="studio-cond" aria-label="조건">
+        <aside id="studio-conditions" className="studio-cond" aria-label="조건" {...split.panelProps}>
           <div className="studio-panel-head">
             <h2 className="t-h2 text-slate-900">조건</h2>
             <div className="studio-head-right">
@@ -727,7 +727,12 @@ export default function Studio() {
           </div>
         </aside>
 
-        <div className="studio-splitter" {...split.separatorProps} />
+        <div className="studio-splitter-track">
+          <div className="studio-splitter" {...split.separatorProps} />
+          <button type="button" className="studio-conditions-reopen" {...split.reopenProps}>
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9 5 7 7-7 7" /></svg>
+          </button>
+        </div>
 
         {/* ── 차트 — 주인공. 조건을 바꾸면 보조지표·익절/손절선이 바로 따라온다.
             판 머리는 따로 두지 않는다 — CandleChart(studio) 의 도구줄(종목·시세·봉 간격·범례)이 곧 머리다. ── */}

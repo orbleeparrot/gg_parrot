@@ -2,16 +2,19 @@
 .studio-page > .studio-banner { grid-row: 1; }
 .studio-page > .studio-work {
   grid-row: 2;
-  grid-template-columns: var(--studio-condition-width, 336px) 1px minmax(0, 1fr);
+  grid-template-columns: var(--studio-condition-width, 336px) var(--studio-divider-width, 1px) minmax(0, 1fr);
   grid-template-areas: "cond split chart" "cond split dock";
 }
 .studio-cond { min-width: 0; border-right: 0; }
 .studio-chart { container: studio-chart / inline-size; }
 .studio-dock { container: studio-dock / inline-size; }
 .sd-tabs { min-width: 0; max-width: 100%; overflow-x: auto; }
+.studio-work[data-conditions-collapsed="true"] { --studio-divider-width: 24px; }
+.studio-work[data-conditions-collapsed="true"] .studio-cond { overflow: hidden; visibility: hidden; }
 
 /* 선은 1px, 드래그 영역은 13px. 키보드 포커스는 손잡이에도 표시한다. */
-.studio-splitter { grid-area: split; position: relative; z-index: 30; background: rgb(var(--c-slate-200)); cursor: col-resize; touch-action: none; }
+.studio-splitter-track { grid-area: split; position: relative; z-index: 30; }
+.studio-splitter { position: absolute; inset: 0; background: rgb(var(--c-slate-200)); cursor: col-resize; touch-action: none; }
 .studio-splitter::before { content: ""; position: absolute; inset: 0 -6px; }
 .studio-splitter::after { content: ""; position: absolute; top: 50%; left: -1px; width: 3px; height: 28px; border-radius: 2px; transform: translateY(-50%); background: rgb(var(--c-slate-400)); }
 .studio-splitter:hover, .studio-splitter:focus-visible, .studio-work.is-resizing .studio-splitter { background: rgb(var(--c-brand-line)); }
@@ -19,6 +22,12 @@
 .studio-splitter:focus-visible { outline: none; }
 .studio-splitter:focus-visible::after { box-shadow: 0 0 0 3px rgb(var(--c-brand-line) / .25); }
 .studio-work.is-resizing, .studio-work.is-resizing * { cursor: col-resize !important; user-select: none; }
+.studio-conditions-reopen { display: none; position: absolute; top: 50%; left: 0; transform: translateY(-50%); width: 24px; height: 48px; padding: 0; border: 1px solid rgb(var(--c-slate-300)); border-left: 0; border-radius: 0 6px 6px 0; background: rgb(var(--c-surface)); color: rgb(var(--c-slate-700)); cursor: pointer; }
+.studio-conditions-reopen:hover { background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-900)); }
+.studio-conditions-reopen:focus-visible { outline-offset: -2px; }
+.studio-work[data-conditions-collapsed="true"] .studio-splitter-track { background: rgb(var(--c-slate-50)); border-right: 1px solid rgb(var(--c-slate-200)); }
+.studio-work[data-conditions-collapsed="true"] .studio-splitter { visibility: hidden; pointer-events: none; }
+.studio-work[data-conditions-collapsed="true"] .studio-conditions-reopen { display: grid; place-items: center; }
 
 /* 창 크기를 유지한 채 조건을 넓혀도 오른쪽 콘텐츠는 남은 폭에 맞춘다. */
 @container studio-dock (max-width: 900px) {
@@ -39,5 +48,5 @@
 }
 @media (max-width: 1099px) {
   .studio-page > .studio-work { grid-template-columns: minmax(0, 1fr); grid-template-areas: "chart" "cond" "dock"; }
-  .studio-splitter { display: none; }
+  .studio-splitter-track { display: none; }
 }

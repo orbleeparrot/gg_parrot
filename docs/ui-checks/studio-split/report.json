@@ -67,6 +67,26 @@
       "continuousPointerTracking": true
     },
     {
+      "collapseThreshold": true,
+      "reverseBeforeRelease": true
+    },
+    {
+      "cancelCollapseRestoresWidth": true
+    },
+    {
+      "restorePreviousWidth": true,
+      "preserveInputsOnCollapse": true,
+      "focusRestored": true
+    },
+    {
+      "collapsedReload": true,
+      "mobileAlwaysShowsConditions": true,
+      "keyboardRestore": true
+    },
+    {
+      "keyboardCollapse": true
+    },
+    {
       "rule": "A",
       "target": 280,
       "panel": 280,

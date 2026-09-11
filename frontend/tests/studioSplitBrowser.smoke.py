@@ -61,6 +61,89 @@ def drag_to(page, target):
     assert not page.locator('.studio-work.is-resizing').count()
 
 
+def check_collapse(page, checks):
+    panel = page.locator('.studio-cond')
+    divider = page.locator('.studio-splitter')
+    reopen = page.get_by_role('button', name='조건 펼치기')
+    values = page.locator('.builder-dense input,.builder-dense select').evaluate_all('nodes => nodes.map(n => [n.type,n.value,n.checked])')
+
+    def start_drag():
+        box = divider.bounding_box()
+        width = float(divider.get_attribute('aria-valuenow'))
+        x, y = box['x'] + box['width']/2, box['y'] + 180
+        page.mouse.move(x,y); page.mouse.down()
+        return lambda target: (page.mouse.move(x+target-width,y), settle(page))
+
+    def assert_closed():
+        expect(reopen).to_be_visible()
+        expect(panel).to_have_attribute('inert','')
+        expect(panel).to_have_attribute('aria-hidden','true')
+        geometry = page.evaluate("""() => {
+          const box = s => document.querySelector(s).getBoundingClientRect();
+          const work=box('.studio-work'), panel=box('.studio-cond'), chart=box('.studio-chart'), button=box('.studio-conditions-reopen');
+          return {panel:panel.width, chart:chart.width, work:work.width, center:button.y+button.height/2-work.y-work.height/2, overflow:document.documentElement.scrollWidth>innerWidth};
+        }""")
+        assert geometry['panel']==0 and abs(geometry['chart']+24-geometry['work'])<=1,geometry
+        assert abs(geometry['center'])<=1 and not geometry['overflow'],geometry
+
+    # The minimum has a small buffer; crossing it can be reversed in the same gesture.
+    move = start_drag()
+    move(265); expect(divider).to_have_attribute('aria-valuenow','280')
+    expect(reopen).to_be_hidden()
+    move(240); assert_closed()
+    assert page.evaluate("localStorage.getItem('ggp_studio_conditions_collapsed')") == 'false'
+    move(270); assert_closed()
+    move(320); expect(divider).to_have_attribute('aria-valuenow','320')
+    expect(panel).not_to_have_attribute('inert','')
+    page.mouse.up(); settle(page)
+    expect(divider).to_have_attribute('aria-valuenow','320')
+    checks.append({'collapseThreshold':True,'reverseBeforeRelease':True})
+
+    # A cancelled collapse preview restores the committed width and keyboard access.
+    drag_to(page,560)
+    move=start_drag(); move(240); assert_closed()
+    divider.dispatch_event('pointercancel',{'pointerId':1})
+    page.mouse.up(); settle(page)
+    expect(divider).to_have_attribute('aria-valuenow','560')
+    expect(panel).not_to_have_attribute('inert','')
+    assert not page.locator('.studio-work.is-resizing').count()
+    checks.append({'cancelCollapseRestoresWidth':True})
+
+    # Commit collapse, restore with the centered button, then persist across navigation.
+    move=start_drag(); move(240); page.mouse.up(); settle(page)
+    assert_closed(); expect(reopen).to_be_focused()
+    assert page.evaluate("localStorage.getItem('ggp_studio_condition_width')") == '560'
+    assert page.evaluate("localStorage.getItem('ggp_studio_conditions_collapsed')") == 'true'
+    reopen.click(); settle(page)
+    expect(divider).to_have_attribute('aria-valuenow','560')
+    expect(divider).to_be_focused()
+    assert values == page.locator('.builder-dense input,.builder-dense select').evaluate_all('nodes => nodes.map(n => [n.type,n.value,n.checked])')
+    checks.append({'restorePreviousWidth':True,'preserveInputsOnCollapse':True,'focusRestored':True})
+
+    move=start_drag(); move(240); page.mouse.up(); settle(page)
+    page.reload(); expect(page.locator('.studio-chart canvas').first).to_be_visible(); settle(page)
+    assert_closed()
+    reopen.evaluate('n=>n.blur()'); page.mouse.move(10,10)
+    page.screenshot(path=str(OUTPUT/'conditions-collapsed.png'))
+    page.set_viewport_size({'width':390,'height':844}); settle(page)
+    expect(panel).to_be_visible(); expect(panel).not_to_have_attribute('inert','')
+    expect(panel).not_to_have_attribute('aria-hidden','true')
+    expect(reopen).to_be_hidden()
+    assert not inspect(page)['overflow']
+    page.set_viewport_size({'width':1440,'height':1000}); settle(page)
+    assert_closed()
+    reopen.focus(); reopen.press('Enter'); settle(page)
+    expect(divider).to_have_attribute('aria-valuenow','560')
+    checks.append({'collapsedReload':True,'mobileAlwaysShowsConditions':True,'keyboardRestore':True})
+
+    divider.press('Home'); divider.press('ArrowLeft'); settle(page)
+    assert_closed(); expect(reopen).to_be_focused()
+    reopen.press('Enter'); settle(page)
+    expect(divider).to_have_attribute('aria-valuenow','280')
+    expect(panel).not_to_have_attribute('inert','')
+    checks.append({'keyboardCollapse':True})
+
+
 def main():
     OUTPUT.mkdir(parents=True, exist_ok=True)
     checks, errors, backtests = [], [], []
@@ -119,6 +202,7 @@ def main():
         assert state['chart'] >= 480 and not state['overflow'],state
         page.set_viewport_size({'width':1440,'height':1000}); settle(page)
         expect(divider).to_have_attribute('aria-valuenow','560')
+        check_collapse(page,checks)
         for width in (280,460,680):
             drag_to(page,width)
             for rule in 'ABCDEFGHIJK':
@@ -164,9 +248,11 @@ def main():
         mobile=browser.new_page(viewport={'width':390,'height':844},is_mobile=True,has_touch=True)
         mobile.route('**/*', fixtures.route_handler)
         mobile.on('pageerror',lambda error:errors.append(str(error)))
-        mobile.add_init_script("localStorage.setItem('ggp_theme','dark');localStorage.setItem('ggp_studio_condition_width','680');")
+        mobile.add_init_script("localStorage.setItem('ggp_theme','dark');localStorage.setItem('ggp_studio_condition_width','680');localStorage.setItem('ggp_studio_conditions_collapsed','true');")
         mobile.goto(BASE+'/builder')
         expect(mobile.locator('.studio-chart canvas').first).to_be_visible()
+        expect(mobile.locator('.studio-cond')).to_be_visible()
+        expect(mobile.locator('.studio-cond')).not_to_have_attribute('inert','')
         expect(mobile.get_by_role('separator',name='조건 패널 너비 조절')).to_have_count(0)
         for width in (320,390,768):
             mobile.set_viewport_size({'width':width,'height':844}); settle(mobile)

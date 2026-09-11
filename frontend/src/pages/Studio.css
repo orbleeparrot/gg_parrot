@@ -295,6 +295,7 @@
 .sd-runner-steps div > span { font-size: 12.5px; line-height: 1.5; opacity: .85; }
 .sd-runner-notes { margin: 0; padding: 0 0 0 16px; list-style: disc; display: grid; gap: 6px; font-size: 13px; line-height: 1.55; } /* preflight 가 ul 의 글머리를 지우므로 되살린다 */
 .sd-runner-notes li::marker { color: rgb(var(--c-amber-700)); }
+.sd-runner-link { font-weight: 700; text-decoration: underline; text-underline-offset: 2px; }
 
 /* 공유 다이얼로그 — 인증 카드가 넓어 확인 다이얼로그보다 조금 넓게. */
 .studio-share { max-width: 520px; }

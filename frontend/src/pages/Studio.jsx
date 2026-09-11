@@ -654,10 +654,34 @@ export default function Studio() {
         </button>
       </>
     );
-  } else if (result && !resultIsFresh) {
-    // 좁은 화면에서도 숨기지 않는다(.studio-cta-note 와 달리) — 아래 숫자가 이전 조건의 것임을 알려야 한다.
-    dockCta = <span className="t-caption studio-cta-stale">조건이 바뀌었어요 · 아래는 이전 조건의 결과예요 · 다시 테스트하면 이어져요</span>;
   }
+  // 조건이 바뀐 뒤의 안내는 조건 판의 테스트 버튼 위에 둔다 — 고칠 곳(조건)과 할 일(테스트) 바로 옆이 맞다.
+  const staleNote = result && !resultIsFresh ? "조건이 바뀌었어요 · 오른쪽 결과는 이전 조건의 것이에요" : "";
+  const limitsRetry = limitsError ? (
+    <button type="button" className="btn btn-s btn-secondary" onClick={() => loadTestLimits().catch(() => {})}>다시 확인</button>
+  ) : null;
+  const footAlert = (() => {
+    if (limitsError && (!error || error === limitsError)) return { tone: "risk", text: limitsError, actions: limitsRetry };
+    if (error) return { tone: "risk", text: `오류: ${error}`, actions: error === limitsError ? limitsRetry : null };
+    if (valErr) return { tone: "warn", text: valErr, actions: null };
+    if (budgetBlocked) {
+      const text = testBudget.error || `테스트 범위를 넘어요 · ${testBudget.bars.toLocaleString()}봉 / 최대 ${testBudget.maxBars.toLocaleString()}봉`;
+      const actions = testBudget.suggestions.length > 0 ? (
+        <span className="studio-cond-alert-actions">
+          {testBudget.suggestions.map((choice) => (
+            <button type="button" key={choice.kind} className="btn btn-s btn-secondary" disabled={busy} onClick={() => { setForm((previous) => ({ ...previous, ...choice.patch })); setError(""); }}>
+              {choice.kind === "interval"
+                ? `${CANDLE_INTERVALS.find((item) => item.value === choice.value)?.label || choice.value}봉으로`
+                : `${PERIOD_PRESETS.find((item) => item.value === choice.value)?.label || choice.value}로`}
+            </button>
+          ))}
+        </span>
+      ) : null;
+      return { tone: "warn", text, actions };
+    }
+    if (staleNote) return { tone: "warn", text: staleNote, actions: null };
+    return null;
+  })();
 
   return (
     <div className="studio-page">
@@ -675,7 +699,8 @@ export default function Studio() {
         <h1 className="t-h4 text-slate-900">매크로 만들기</h1>
         <span className="studio-strip-meta t-caption">
           <b className="num">{chartSymbols.length === 0 ? "종목 없음" : chartSymbols.join(", ")}</b>
-          {ruleLabel && <> · {ruleLabel}</>}
+          {/* 결과가 최신이면 서버가 만든 사람 말 요약(포지션·전략 조건·손절·자금)을, 아니면 매매 방식 이름만. 앞의 종목 조각은 뺀다. */}
+          {resultIsFresh && summary ? <> · {summary.replace(/^[^·]+·\s*/, "")}</> : ruleLabel ? <> · {ruleLabel}</> : null}
           {intervalLabel && <> · {intervalLabel}봉</>}
           {periodLabelOf(currentMacro) && <> · {periodLabelOf(currentMacro)}</>}
         </span>
@@ -767,24 +792,13 @@ export default function Studio() {
             <Builder form={form} setForm={setForm} variant="dense" />
           </div>
           <div className="studio-cond-foot">
-            {valErr && <div className="t-small text-amber-700" role="alert">{valErr}</div>}
-            {error && <div className="t-small text-red-600" role="alert">오류: {error}</div>}
-            <div className={"studio-budget" + (budgetBlocked ? " is-over" : "")} role="status">
-              {testBudget?.bars != null && <p>백테스트 · {periodLabelOf(currentMacro)} · {intervalLabel}봉 · <b>{testBudget.bars.toLocaleString()}개</b> / 최대 {testBudget.maxBars.toLocaleString()}개</p>}
-              {testBudget?.error && <p>{testBudget.error}</p>}
-              {budgetBlocked && testBudget.suggestions.length > 0 && (
-                <div className="studio-budget-actions">
-                  {testBudget.suggestions.map((choice) => (
-                    <button type="button" key={choice.kind} disabled={busy} onClick={() => { setForm((previous) => ({ ...previous, ...choice.patch })); setError(""); }}>
-                      {choice.kind === "interval"
-                        ? `기간 유지 · ${CANDLE_INTERVALS.find((item) => item.value === choice.value)?.label || choice.value}봉으로 변경`
-                        : `${intervalLabel}봉 유지 · ${PERIOD_PRESETS.find((item) => item.value === choice.value)?.label || choice.value}로 변경`}
-                    </button>
-                  ))}
-                </div>
-              )}
-              {limitsError && <div className="studio-budget-actions"><button type="button" onClick={() => loadTestLimits().catch(() => {})}>{limitsError}</button></div>}
-            </div>
+            {/* 안내·오류는 한 번에 하나, 경고 상자 하나로 — 오류 > 범위 확인 실패 > 입력 오류 > 범위 초과 > 조건 바뀜. */}
+            {footAlert && (
+              <div className={"alert studio-cond-alert " + (footAlert.tone === "risk" ? "alert-risk" : "alert-warn")} role={footAlert.tone === "risk" ? "alert" : "status"}>
+                <span className="studio-cond-alert-text">{footAlert.text}</span>
+                {footAlert.actions}
+              </div>
+            )}
             <button
               type="button"
               onClick={() => runBacktest(form)}
@@ -794,7 +808,7 @@ export default function Studio() {
               {testLabel}
             </button>
             <div className="studio-foot-note t-caption text-slate-500">
-              <span>첫 결과 뒤부터 자동 테스트가 동작해요</span>
+              <span>{testBudget?.bars != null ? <>{periodLabelOf(currentMacro)} · {intervalLabel}봉 <b className="num">{testBudget.bars.toLocaleString()}</b>개 / 최대 <span className="num">{testBudget.maxBars.toLocaleString()}</span></> : "첫 결과 뒤부터 자동 테스트가 동작해요"}</span>
               <span>
                 <kbd className="num rounded border border-slate-300 bg-slate-100 px-1">Ctrl</kbd>+<kbd className="num rounded border border-slate-300 bg-slate-100 px-1">Enter</kbd>
               </span>
@@ -851,8 +865,6 @@ export default function Studio() {
                   <StudioBacktest
                     result={result}
                     perSymbol={perSymbol}
-                    summary={summary}
-                    dataSource={dataSource}
                     periodLabel={periodLabel}
                     symbol={testedMacro?.symbol || form.symbol}
                     leverage={runLeverage}

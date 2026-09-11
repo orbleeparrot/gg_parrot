@@ -54,7 +54,7 @@ export function StudioTabs({ tabs, active, onChange }) {
 }
 
 // ── 백테스트 — 수치 여섯 칸 + 자산곡선 + 종목별 표 ──
-export function StudioBacktest({ result: r, perSymbol, summary, dataSource, periodLabel, symbol, leverage = 1 }) {
+export function StudioBacktest({ result: r, perSymbol, periodLabel, symbol, leverage = 1 }) {
   const { rate: krwRate } = useUsdKrw();
   const quote = quoteOf(symbol);
   const bh = r.buy_hold_return_pct != null ? r.buy_hold_return_pct : null;
@@ -132,18 +132,9 @@ export function StudioBacktest({ result: r, perSymbol, summary, dataSource, peri
               )}
             </tbody>
           </table>
-          {summary && (
-            <p className="sd-note sd-summary">
-              {summary}
-              {leverage > 1 && <span className="badge badge-risk ml-2">고위험 레버리지 <span className="num">{leverage}</span>배 <InfoTooltip term="leverage" /></span>}
-            </p>
+          {leverage > 1 && (
+            <p className="sd-note"><span className="badge badge-risk">고위험 레버리지 <span className="num">{leverage}</span>배 <InfoTooltip term="leverage" /></span></p>
           )}
-          <p className="sd-note">
-            {perSymbol && perSymbol.length > 1 ? "위 큰 수치는 종목별을 합산한 전체 결과예요" : "종목을 더 넣으면 종목별로 갈라 보여요"}
-            {dataSource ? ` · 데이터 ${dataSource === "binance-futures" ? "바이낸스 선물 실제 캔들" : dataSource}${dataSource === "synthetic" ? " (오프라인 폴백)" : ""}` : ""}
-            {fmtKrw(r.final_equity, krwRate) ? ` · 최종 ${fmtKrw(r.final_equity, krwRate)}` : ""}
-            {r.same_bar_sl_bars > 0 ? ` · 익절·손절이 같이 닿은 봉 ${r.same_bar_sl_bars}개는 손절 우선` : ""}
-          </p>
         </div>
       </div>
     </div>

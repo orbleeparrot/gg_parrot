@@ -65,6 +65,11 @@
 .studio-cond-body { padding: 0 16px 8px; overflow-x: hidden; } /* Builder(variant="dense") 가 절 사이 여백·괘선을 스스로 가진다. 말풍선이 넘쳐도 가로 스크롤은 없다. */
 .studio-cond-foot { padding: 12px 16px; border-top: 1px solid rgb(var(--c-slate-200)); display: grid; gap: 8px; }
 .studio-cond-foot .studio-foot-note { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+/* 바닥 경고 상자 — 공용 .alert 위에 촘촘하게. 글 왼쪽, 행동 버튼 오른쪽. */
+.studio-cond-alert { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 8px 10px; font-size: 13px; line-height: 1.5; }
+.studio-cond-alert-text { flex: 1 1 160px; min-width: 0; }
+.studio-cond-alert .btn-s { height: 26px; padding-inline: 8px; font-size: 12px; }
+.studio-cond-alert-actions { display: inline-flex; flex-wrap: wrap; gap: 6px; }
 
 /* 차트 — 주인공. CandleChart(variant="studio") 가 판을 채운다: 도구줄 한 줄 → 그림(판 크기를 재서 꽉) → 기간 줄. */
 .studio-chart { grid-area: chart; min-height: 0; min-width: 0; display: grid; grid-template-rows: minmax(0, 1fr); }
@@ -109,7 +114,6 @@
 @keyframes studio-pulse { 50% { opacity: .35; } }
 .studio-dock-cta { margin-left: auto; flex: none; display: flex; align-items: center; gap: 10px; padding: 4px 0; }
 .studio-dock-cta .studio-cta-note { color: rgb(var(--c-slate-500)); white-space: nowrap; }
-.studio-dock-cta .studio-cta-stale { color: rgb(var(--c-amber-600)); font-weight: 600; }
 .studio-dock-body { padding: 12px 16px 12px; display: flex; flex-direction: column; }
 .studio-dock-body > * { flex: none; }
 /* 백테스트 탭은 독 높이를 그대로 쓴다 — 수치 띠는 제 높이, 아래 두 칸이 남는 높이를 나눠 갖고 자산곡선이 그 안을 채운다. */

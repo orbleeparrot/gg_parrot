@@ -1,9 +1,14 @@
-import { cloneElement, isValidElement, useId, useState } from "react";
+import { cloneElement, createContext, isValidElement, useContext, useId, useState } from "react";
 import { RULE_TYPES, PERIOD_PRESETS, CANDLE_INTERVALS, MAX_LEVERAGE, withTypeDefaults } from "../lib/macro.js";
 import InfoTooltip from "./InfoTooltip.jsx";
 import { api } from "../api.js";
 import { quoteOf, fmtKrw } from "../lib/format.js";
 import { useUsdKrw } from "../lib/usdkrw.js";
+import CoinIcon from "./CoinIcon.jsx";
+import "./Builder.css";
+
+// 촘촘한 판(variant="dense") — 직접 만들기의 좁은 조건 판용. Field·Group 이 이 값을 보고 규격을 바꾼다.
+const DenseContext = createContext(false);
 
 // USDT amount plus an approximate KRW reference (when a rate is available).
 const money = (v, symbol, rate) => {
@@ -26,6 +31,7 @@ function leverageRisk(lev) {
 
 // §4 자리별 적용표: 입력 라벨 14/600, 도움말 14/500 — 둘 다 '작은 글씨' 단계.
 function Field({ label, term, children, hint, anchor }) {
+  const dense = useContext(DenseContext);
   const controlId = useId();
   const labelId = `${controlId}-label`;
   const hintId = `${controlId}-hint`;
@@ -41,6 +47,29 @@ function Field({ label, term, children, hint, anchor }) {
           : children.props["aria-describedby"],
       })
     : children;
+
+  if (dense) {
+    return (
+      <div
+        className="bd-field"
+        data-tour={anchor}
+        role={directControl ? undefined : "group"}
+        aria-labelledby={directControl ? undefined : labelId}
+        aria-describedby={!directControl && hint ? hintId : undefined}
+      >
+        <div className="bd-label">
+          {directControl ? (
+            <label id={labelId} htmlFor={children.props.id || controlId}>{label}</label>
+          ) : (
+            <span id={labelId}>{label}</span>
+          )}
+          {term && <InfoTooltip term={term} />}
+        </div>
+        {renderedControl}
+        {hint && <div id={hintId} className="bd-hint">{hint}</div>}
+      </div>
+    );
+  }
 
   return (
     <div
@@ -67,6 +96,19 @@ function Field({ label, term, children, hint, anchor }) {
 // 빌더의 입력 묶음. 상자로 감싸지 않고 괘선 + 제목으로만 나눈다(§1-3) —
 // 폼 상자 예외는 화면 전체를 감싸는 폼(로그인·모달)에만 적용한다.
 function Group({ title, term, children, note, anchor }) {
+  const dense = useContext(DenseContext);
+  if (dense) {
+    return (
+      <section className="bd-sec" data-tour={anchor}>
+        <div className="bd-h">
+          <h3>{title}</h3>
+          {term && <InfoTooltip term={term} />}
+          {note}
+        </div>
+        {children}
+      </section>
+    );
+  }
   return (
     <section className="pt-5 border-t border-slate-200" data-tour={anchor}>
       <div className="flex items-center text-slate-700 mb-3">
@@ -81,10 +123,55 @@ function Group({ title, term, children, note, anchor }) {
 
 const inputCls = "field";
 
+// 종목 칩 — 쉼표 목록(form.symbol)을 칩으로 보여 주고, 입력칸에서 Enter·쉼표로 더한다. 값은 그대로 "BTCUSDT, ETHUSDT".
+function SymbolChips({ value, onChange, placeholder }) {
+  const [draft, setDraft] = useState("");
+  const symbols = String(value || "").split(",").map((part) => part.trim().toUpperCase()).filter(Boolean);
+  const commit = () => {
+    const added = draft.split(",").map((part) => part.trim().toUpperCase()).filter(Boolean);
+    if (!added.length) return;
+    const next = [...symbols];
+    for (const symbol of added) if (!next.includes(symbol)) next.push(symbol);
+    onChange(next.join(", "));
+    setDraft("");
+  };
+  const remove = (symbol) => onChange(symbols.filter((item) => item !== symbol).join(", "));
+  return (
+    <div className="bd-chips">
+      {symbols.map((symbol) => (
+        <span key={symbol} className="bd-chip">
+          <CoinIcon symbol={symbol} size={14} alt="" />
+          <span className="num">{symbol}</span>
+          <button type="button" onClick={() => remove(symbol)} aria-label={`${symbol} 빼기`}>×</button>
+        </span>
+      ))}
+      <input
+        className="bd-chip-input num"
+        value={draft}
+        placeholder={symbols.length ? "+ 종목 추가" : placeholder}
+        aria-label="종목 추가"
+        onChange={(event) => setDraft(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === ",") { event.preventDefault(); commit(); }
+          else if (event.key === "Backspace" && !draft && symbols.length) remove(symbols[symbols.length - 1]);
+        }}
+        onBlur={commit}
+      />
+    </div>
+  );
+}
+
 // `chartSlot(basicSettings)` 은 기본 설정을 감싸 참고 차트와 한 블록으로 묶는
 // 래퍼다. Studio 가 넘겨준다 — 폼 컴포넌트가 차트·시세 폴링까지 끌어안지 않도록
 // 자리만 비워 둔다. 넘어오지 않으면 기본 설정만 그대로 그린다.
-export default function Builder({ form, setForm, chartSlot = null }) {
+export default function Builder({ form, setForm, chartSlot = null, variant = "default" }) {
+  const dense = variant === "dense";
+  // 격자 — 기본은 sm 에서 2·3열, 촘촘한 판은 늘 2열.
+  const g2 = dense ? "bd-grid" : "grid grid-cols-1 sm:grid-cols-2 gap-4";
+  const g3 = dense ? "bd-grid" : "grid grid-cols-1 sm:grid-cols-3 gap-4";
+  const g2y = dense ? "bd-grid" : "grid grid-cols-1 sm:grid-cols-2 gap-4 gap-y-5";
+  const g3m = dense ? "bd-grid" : "grid grid-cols-1 sm:grid-cols-3 gap-4 gap-y-5 mt-4";
+  const g2full = dense ? "col-span-full bd-grid" : "col-span-full grid grid-cols-1 sm:grid-cols-2 gap-4 items-end";
   const instanceId = useId().replace(/:/g, "");
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
   const setChk = (k) => (e) => setForm({ ...form, [k]: e.target.checked });
@@ -115,11 +202,27 @@ export default function Builder({ form, setForm, chartSlot = null }) {
 
   // Field builders — plain functions (invoked, not JSX components) so inputs
   // keep focus across keystrokes. They close over the current `form`.
-  const num = (k, label, opts = {}) => (
-    <Field key={k} label={label} term={opts.term} hint={opts.hint} anchor={opts.anchor}>
-      <input className="field num" type="number" step={opts.step || "any"} value={form[k]} onChange={set(k)} />
-    </Field>
-  );
+  const num = (k, label, opts = {}) => {
+    if (dense) {
+      // 라벨 끝의 "(단위)" 를 칸 안 접미사로. 단위를 따로 주면 라벨은 그대로 둔다.
+      const match = opts.unit ? null : /^(.*?)\s*\(([^(),]+)\)\s*$/.exec(label);
+      const text = match ? match[1] : label;
+      const unit = opts.unit || (match ? match[2] : "");
+      return (
+        <Field key={k} label={text} term={opts.term} hint={opts.hint} anchor={opts.anchor}>
+          <div className="bd-unit">
+            <input className="field num" type="number" step={opts.step || "any"} value={form[k]} onChange={set(k)} aria-label={label} />
+            {unit && <span className="bd-unit-tag">{unit}</span>}
+          </div>
+        </Field>
+      );
+    }
+    return (
+      <Field key={k} label={label} term={opts.term} hint={opts.hint} anchor={opts.anchor}>
+        <input className="field num" type="number" step={opts.step || "any"} value={form[k]} onChange={set(k)} />
+      </Field>
+    );
+  };
   const sel = (k, label, options, opts = {}) => (
     <Field key={k} label={label} term={opts.term} hint={opts.hint} anchor={opts.anchor}>
       <select className={inputCls} value={form[k]} onChange={set(k)}>
@@ -130,7 +233,7 @@ export default function Builder({ form, setForm, chartSlot = null }) {
     </Field>
   );
   const chk = (k, label, opts = {}) => (
-    <div key={k} className="flex items-center gap-1 h-12 t-small text-slate-700">
+    <div key={k} className={dense ? "bd-check" : "flex items-center gap-1 h-12 t-small text-slate-700"}>
       <label htmlFor={`${instanceId}-${k}`} className="flex items-center gap-2 cursor-pointer">
         <input id={`${instanceId}-${k}`} type="checkbox" checked={!!form[k]} onChange={setChk(k)} />
         {label}
@@ -138,72 +241,116 @@ export default function Builder({ form, setForm, chartSlot = null }) {
       {opts.term && <InfoTooltip term={opts.term} />}
     </div>
   );
+  // 체크박스가 딸린 숫자 칸 — 촘촘한 판에서는 라벨의 "(단위)" 를 칸 안 접미사로 옮긴다.
+  const unitLabel = (label) => (dense ? label.replace(/\s*\([^()]+\)\s*$/, "") : label);
+  const unitInput = (input, unit) =>
+    dense ? (
+      <div className="bd-unit flex-1">
+        {input}
+        <span className="bd-unit-tag">{unit}</span>
+      </div>
+    ) : (
+      input
+    );
   const cap = num("initial_capital", `시작 자금 (${quoteOf(form.symbol)})`, {
     hint: money(form.initial_capital, form.symbol, krwRate),
   });
 
   // 차트를 정하는 값들 — 종목·매매 방식·포지션·봉 간격·기간. 차트 섹션 안으로
   // 들어가 "무엇을 볼지 정하고 바로 아래에서 본다"가 한 덩어리로 읽힌다.
-  const basicSettings = (
-    <div className="space-y-5">
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 gap-y-5">
-        <Field label="종목" anchor="symbol" hint="여러 종목은 쉼표로 나눠 써요. 자금은 종목 수만큼 균등하게 나눠요.">
-          <input className={inputCls} value={form.symbol} onChange={set("symbol")} placeholder="BTCUSDT 또는 BTCUSDT, ETHUSDT" />
-        </Field>
-        <Field label="매매 방식" anchor="strategy" term={`strat_${rt}`}>
-          <select className={inputCls} value={rt} onChange={(e) => setForm(withTypeDefaults(form, e.target.value))}>
-            {Object.entries(RULE_TYPES).map(([k, v]) => (
-              <option key={k} value={k}>{v.label}</option>
-            ))}
-          </select>
-        </Field>
-      </div>
-
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <Field
-          label="포지션"
-          anchor="position"
-          hint={
-            <span className="inline-flex items-center flex-wrap">
-              롱 <InfoTooltip term="long" />
-              <span className="ml-2">숏</span> <InfoTooltip term="short" />
-            </span>
-          }
-        >
-          <select className={inputCls} value={form.position_side} onChange={set("position_side")} disabled={!meta.allowShort}>
-            <option value="long">롱 (long)</option>
-            <option value="short" disabled={!meta.allowShort}>숏 (short)</option>
-          </select>
-        </Field>
-        {sel("candle_interval", "봉 간격", CANDLE_INTERVALS, {
-          term: "candle_interval",
-          anchor: "interval",
-          hint: meta.indicator ? "지표 계산 기준(필수)" : "체결 판정 기준",
-        })}
-        <Field label="테스트 기간" anchor="period" term="backtest">
-          <select className={inputCls} value={form.preset} onChange={set("preset")}>
-            {PERIOD_PRESETS.map((p) => (
-              <option key={p.value} value={p.value}>{p.label}</option>
-            ))}
-          </select>
-        </Field>
-      </div>
-
-      {form.preset === "custom" && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <Field label="시작일" hint="YYYY-MM-DD">
-            <input className={inputCls} type="date" value={form.start} onChange={set("start")} />
-          </Field>
-          <Field label="종료일" hint="YYYY-MM-DD">
-            <input className={inputCls} type="date" value={form.end} onChange={set("end")} />
-          </Field>
-        </div>
+  const symbolField = (
+    <Field label="종목" anchor="symbol" hint={dense ? "여러 종목이면 자금을 종목 수만큼 균등하게 나눠요." : "여러 종목은 쉼표로 나눠 써요. 자금은 종목 수만큼 균등하게 나눠요."}>
+      {dense ? (
+        <SymbolChips value={form.symbol} onChange={(value) => setForm({ ...form, symbol: value })} placeholder="BTCUSDT" />
+      ) : (
+        <input className={inputCls} value={form.symbol} onChange={set("symbol")} placeholder="BTCUSDT 또는 BTCUSDT, ETHUSDT" />
       )}
+    </Field>
+  );
+  const strategyField = (
+    <Field label="매매 방식" anchor="strategy" term={`strat_${rt}`}>
+      <select className={inputCls} value={rt} onChange={(e) => setForm(withTypeDefaults(form, e.target.value))}>
+        {Object.entries(RULE_TYPES).map(([k, v]) => (
+          <option key={k} value={k}>{v.label}</option>
+        ))}
+      </select>
+    </Field>
+  );
+  const positionHint = (
+    <span className="inline-flex items-center flex-wrap">
+      롱 <InfoTooltip term="long" />
+      <span className="ml-2">숏</span> <InfoTooltip term="short" />
+    </span>
+  );
+  const positionField = dense ? (
+    // 촘촘한 판은 두 값뿐이라 segmented — select 보다 한 번에 읽힌다.
+    <Field label="포지션" anchor="position" hint={positionHint}>
+      <div className="seg bd-seg" role="group" aria-label="포지션">
+        <button type="button" onClick={() => setForm({ ...form, position_side: "long" })} aria-pressed={!isShort} className={"seg-item " + (!isShort ? "seg-item-on" : "")}>롱</button>
+        <button
+          type="button"
+          onClick={() => setForm({ ...form, position_side: "short" })}
+          disabled={!meta.allowShort}
+          title={!meta.allowShort ? "이 매매 방식은 숏을 지원하지 않아요" : undefined}
+          aria-pressed={isShort}
+          className={"seg-item " + (isShort ? "seg-item-on" : "")}
+        >
+          숏
+        </button>
+      </div>
+    </Field>
+  ) : (
+    <Field label="포지션" anchor="position" hint={positionHint}>
+      <select className={inputCls} value={form.position_side} onChange={set("position_side")} disabled={!meta.allowShort}>
+        <option value="long">롱 (long)</option>
+        <option value="short" disabled={!meta.allowShort}>숏 (short)</option>
+      </select>
+    </Field>
+  );
+  const intervalField = sel("candle_interval", "봉 간격", CANDLE_INTERVALS, {
+    term: "candle_interval",
+    anchor: "interval",
+    hint: meta.indicator ? "지표 계산 기준(필수)" : "체결 판정 기준",
+  });
+  const periodField = (
+    <Field label="테스트 기간" anchor="period" term="backtest">
+      <select className={inputCls} value={form.preset} onChange={set("preset")}>
+        {PERIOD_PRESETS.map((p) => (
+          <option key={p.value} value={p.value}>{p.label}</option>
+        ))}
+      </select>
+    </Field>
+  );
+  const customRange = form.preset === "custom" && (
+    <div className={g2}>
+      <Field label="시작일" hint="YYYY-MM-DD">
+        <input className={inputCls} type="date" value={form.start} onChange={set("start")} />
+      </Field>
+      <Field label="종료일" hint="YYYY-MM-DD">
+        <input className={inputCls} type="date" value={form.end} onChange={set("end")} />
+      </Field>
+    </div>
+  );
+
+  // 차트를 정하는 값들 — 종목·매매 방식·포지션·봉 간격·기간. 차트 섹션 안으로
+  // 들어가 "무엇을 볼지 정하고 바로 아래에서 본다"가 한 덩어리로 읽힌다.
+  const basicSettings = dense ? (
+    <section className="bd-sec">
+      <div className="bd-grid bd-grid-1">{symbolField}{strategyField}</div>
+      <div className="bd-grid">{positionField}{intervalField}{periodField}</div>
+      {customRange}
+    </section>
+  ) : (
+    <div className="space-y-5">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 gap-y-5">{symbolField}{strategyField}</div>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">{positionField}{intervalField}{periodField}</div>
+      {customRange}
     </div>
   );
 
   return (
-    <div className="space-y-5">
+    <DenseContext.Provider value={dense}>
+    <div className={dense ? "builder-dense" : "space-y-5"}>
       {/* 차트를 움직이는 설정과 차트를 한 블록으로 묶어 맨 위에 고정한다.
           Studio 가 스티키 섹션으로 감싸므로 여기서는 자리만 만든다. */}
       {chartSlot ? chartSlot(basicSettings) : basicSettings}
@@ -211,34 +358,34 @@ export default function Builder({ form, setForm, chartSlot = null }) {
       {/* rule-specific params */}
       <Group title={<>전략 조건 · <span className="text-slate-900">{meta.label}</span></>} anchor="strategy-params">
         {rt === "A" && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className={g2}>
             {num("take_profit_pct", "익절 기준 (%)", { term: "take_profit" })}
             {cap}
           </div>
         )}
         {rt === "B" && (
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className={g3}>
             {num("buy_price", `살 가격 (${quoteOf(form.symbol)})`, { term: "limit_order", hint: isShort ? "숏을 되사서 정리할 가격이에요" : undefined })}
             {num("sell_price", `팔 가격 (${quoteOf(form.symbol)})`, { term: "limit_order", hint: isShort ? "팔아서 숏에 들어갈 가격이에요" : undefined })}
             {cap}
           </div>
         )}
         {rt === "C" && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className={g2}>
             {num("amount_per_buy", `한 번에 살 금액 (${quoteOf(form.symbol)})`, { term: "dca", hint: money(form.amount_per_buy, form.symbol, krwRate) })}
             {num("interval_days", "매수 간격 (일)", { term: "dca" })}
           </div>
         )}
 
         {rt === "D" && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className={g2}>
             {num("lower_price", `가격 범위 하단 (${quoteOf(form.symbol)})`, { term: "grid" })}
             {num("upper_price", `가격 범위 상단 (${quoteOf(form.symbol)})`, { term: "grid" })}
             {num("grid_count", "나눌 칸 수", { term: "grid_count", step: "1" })}
             {sel("grid_mode", "칸 간격", [{ value: "arithmetic", label: "같은 금액 간격" }, { value: "geometric", label: "같은 비율 간격" }], { term: "grid_mode" })}
             {num("per_grid_invest", `격자당 투입액 (빈칸=균등, ${quoteOf(form.symbol)})`, { hint: "비우면 예산을 격자 수로 균등 분배" })}
             {sel("band_exit_action", "가격 범위를 벗어나면", [{ value: "stop", label: "전량 정리하고 중단" }, { value: "hold", label: "보유 유지" }])}
-            <div className="col-span-full grid grid-cols-1 sm:grid-cols-2 gap-4 items-end">
+            <div className={g2full}>
               {chk("rebalance_on_start", "시작 가격에 맞춰 칸 다시 배치")}
               {cap}
             </div>
@@ -246,7 +393,7 @@ export default function Builder({ form, setForm, chartSlot = null }) {
         )}
 
         {rt === "E" && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className={g2}>
             {sel("entry_mode", "처음 들어갈 때", [{ value: "immediate", label: "바로 진입" }, { value: "dip", label: "가격이 내리면 진입" }])}
             {num("entry_dip", "진입할 하락폭 (%)", { hint: "가격이 내리면 진입을 골랐을 때 써요" })}
             {num("activation_profit", "추적을 시작할 이익 (%)", { term: "activation_profit" })}
@@ -257,7 +404,7 @@ export default function Builder({ form, setForm, chartSlot = null }) {
         )}
 
         {rt === "F" && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className={g2}>
             {num("rsi_period", "RSI 계산 기간", { term: "rsi", step: "1" })}
             {num("confirm_candles", "신호를 확인할 봉 수", { step: "1", hint: "연속해서 조건을 만족해야 신호로 봐요" })}
             {num("entry_threshold", isShort ? "숏을 정리할 RSI" : "진입할 RSI", {
@@ -273,7 +420,7 @@ export default function Builder({ form, setForm, chartSlot = null }) {
         )}
 
         {rt === "G" && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className={g2}>
             {num("bb_period", "평균 계산 기간", { term: "bollinger", step: "1" })}
             {num("bb_std", "밴드 폭 (표준편차 σ)", { term: "bollinger" })}
             {sel("strategy", "밴드를 쓰는 방식", [{ value: "reversion", label: "밴드 안으로 되돌아오기" }, { value: "breakout", label: "밴드 밖으로 돌파하기" }], {
@@ -282,7 +429,7 @@ export default function Builder({ form, setForm, chartSlot = null }) {
                 : undefined,
             })}
             {sel("exit_target", "정리할 위치", [{ value: "mid", label: "가운데 선" }, { value: "opposite", label: "반대쪽 밴드" }])}
-            <div className="col-span-full grid grid-cols-1 sm:grid-cols-2 gap-4 items-end">
+            <div className={g2full}>
               {chk("squeeze_filter", "변동성이 줄어든 구간만 사용", { term: "squeeze" })}
               {num("squeeze_lookback", "변동성 비교 기간", { step: "1" })}
             </div>
@@ -291,7 +438,7 @@ export default function Builder({ form, setForm, chartSlot = null }) {
         )}
 
         {rt === "H" && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className={g2}>
             {num("base_order_size", `처음 살 금액 (${quoteOf(form.symbol)})`, { term: "martingale" })}
             {num("safety_order_size", `첫 추가매수 금액 (${quoteOf(form.symbol)})`, { term: "safety_order" })}
             {num("price_deviation", "추가매수할 하락 간격 (%)", { hint: "가격이 이만큼 더 내릴 때마다 추가로 사요" })}
@@ -305,7 +452,7 @@ export default function Builder({ form, setForm, chartSlot = null }) {
         )}
 
         {rt === "I" && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className={g2}>
             {num("k", "돌파 기준 계수 (k)", { term: "volatility_breakout" })}
             {sel("exit_mode", "정리 기준", [{ value: "next_open", label: "다음 봉 시작 가격" }, { value: "trailing", label: "고점 추적" }, { value: "take_profit", label: "익절 기준" }])}
             {num("trail_percent", "고점에서 허용할 하락폭 (%)", { term: "trail_percent", hint: "고점 추적을 골랐을 때 써요" })}
@@ -318,7 +465,7 @@ export default function Builder({ form, setForm, chartSlot = null }) {
         )}
 
         {rt === "J" && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className={g2}>
             {sel("ma_type", "이동평균 종류", [{ value: "SMA", label: "단순 이동평균 (SMA)" }, { value: "EMA", label: "최근 가격 비중이 큰 평균 (EMA)" }], { term: "ma_cross" })}
             {num("confirm_candles", "신호를 확인할 봉 수", { step: "1" })}
             {num("fast_period", "짧은 이동평균 기간", { step: "1" })}
@@ -332,7 +479,7 @@ export default function Builder({ form, setForm, chartSlot = null }) {
         )}
 
         {rt === "K" && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className={g2}>
             {num("drop_trigger_pct", "방어를 시작할 하락폭 (%)", { hint: "진입가보다 이만큼 내리면 방어를 시작해요" })}
             {num("partial_exit_pct", "방어할 때 팔 비율 (%)", { hint: "들고 있는 수량 중 몇 %를 팔지 정해요" })}
             {chk("flip_to_short", "일부를 판 뒤 숏으로 전환")}
@@ -348,12 +495,15 @@ export default function Builder({ form, setForm, chartSlot = null }) {
 
       {/* common risk */}
       <Group title="손실 제한" anchor="risk">
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 gap-y-5">
+        <div className={g2y}>
           {num("invest_ratio_pct", "한 번에 사용할 자금 (%)", { term: "invest_ratio", hint: "시작 자금 중 한 번에 얼마를 쓸지 정해요" })}
-          <Field label="손절 기준 (%)" term="stop_loss" hint={isShort && (rt === "A" || rt === "B") ? "숏은 손절이 필수예요" : "사용하지 않으려면 체크를 풀어요"}>
+          <Field label={unitLabel("손절 기준 (%)")} term="stop_loss" hint={isShort && (rt === "A" || rt === "B") ? "숏은 손절이 필수예요" : "사용하지 않으려면 체크를 풀어요"}>
             <div className="flex items-center gap-2">
               <input aria-label="손절 기준 사용" type="checkbox" checked={form.use_stop_loss} disabled={isShort && (rt === "A" || rt === "B")} onChange={setChk("use_stop_loss")} />
-              <input aria-label="손절률 (%)" className="field num" type="number" value={form.stop_loss_pct} disabled={!form.use_stop_loss} onChange={set("stop_loss_pct")} />
+              {unitInput(
+                <input aria-label="손절률 (%)" className="field num" type="number" value={form.stop_loss_pct} disabled={!form.use_stop_loss} onChange={set("stop_loss_pct")} />,
+                "%",
+              )}
             </div>
           </Field>
         </div>
@@ -365,19 +515,28 @@ export default function Builder({ form, setForm, chartSlot = null }) {
       {(() => {
         const isDca = rt === "C";
         return (
-          <details className="pt-5 border-t border-slate-200" data-tour="advanced-risk">
-            <summary className="t-label text-slate-700 cursor-pointer">고급 위험 관리</summary>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 gap-y-5 mt-4">
-              <Field label="하루 최대 손실 (%)" term="daily_max_loss" hint={isDca ? "도달하면 그날 추가 매수를 멈춰요" : "도달하면 그날 거래를 멈춰요"}>
+          <details className={dense ? "bd-sec bd-details" : "pt-5 border-t border-slate-200"} data-tour="advanced-risk">
+            <summary className={dense ? "bd-sum" : "t-label text-slate-700 cursor-pointer"}>
+              고급 위험 관리
+              {dense && <small>{form.use_daily_max_loss || (!isDca && form.use_max_holding) ? "사용 중" : "미사용"}</small>}
+            </summary>
+            <div className={g3m}>
+              <Field label={unitLabel("하루 최대 손실 (%)")} term="daily_max_loss" hint={isDca ? "도달하면 그날 추가 매수를 멈춰요" : "도달하면 그날 거래를 멈춰요"}>
                 <div className="flex items-center gap-2">
                   <input aria-label="하루 최대 손실 사용" type="checkbox" checked={form.use_daily_max_loss} onChange={setChk("use_daily_max_loss")} />
-                  <input aria-label="하루 최대 손실률 (%)" className="field num" type="number" value={form.daily_max_loss_pct} disabled={!form.use_daily_max_loss} onChange={set("daily_max_loss_pct")} />
+                  {unitInput(
+                    <input aria-label="하루 최대 손실률 (%)" className="field num" type="number" value={form.daily_max_loss_pct} disabled={!form.use_daily_max_loss} onChange={set("daily_max_loss_pct")} />,
+                    "%",
+                  )}
                 </div>
               </Field>
               <Field label="가장 오래 보유할 시간" term="max_holding" hint={isDca ? "분할매수에는 사용하지 않아요" : "이 시간을 넘기면 강제로 정리해요"}>
                 <div className="flex items-center gap-2">
                   <input aria-label="최대 보유시간 사용" type="checkbox" checked={!isDca && form.use_max_holding} disabled={isDca} onChange={setChk("use_max_holding")} />
-                  <input aria-label="최대 보유시간 (시간)" className="field num" type="number" value={form.max_holding_hours} disabled={isDca || !form.use_max_holding} onChange={set("max_holding_hours")} />
+                  {unitInput(
+                    <input aria-label="최대 보유시간 (시간)" className="field num" type="number" value={form.max_holding_hours} disabled={isDca || !form.use_max_holding} onChange={set("max_holding_hours")} />,
+                    "시간",
+                  )}
                 </div>
               </Field>
               {isDca ? (
@@ -398,14 +557,15 @@ export default function Builder({ form, setForm, chartSlot = null }) {
       })()}
 
       {/* fees */}
-      <details className="pt-5 border-t border-slate-200" data-tour="fees">
-        <summary className="t-label text-slate-700 cursor-pointer">
+      <details className={dense ? "bd-sec bd-details" : "pt-5 border-t border-slate-200"} data-tour="fees">
+        <summary className={dense ? "bd-sum" : "t-label text-slate-700 cursor-pointer"}>
           거래 비용과 펀딩비
+          {dense && <small className="num">수수료 {form.commission_pct}% · 슬리피지 {form.slippage_pct}%</small>}
         </summary>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 gap-y-5 mt-4">
+        <div className={g3m}>
           {num("commission_pct", "거래 수수료 (%)", { term: "commission", step: "0.01" })}
           {num("slippage_pct", "체결 가격 차이 (%)", { term: "slippage", step: "0.01" })}
-          {num("funding_pct", "하루 펀딩비 (숏, %)", { step: "0.01" })}
+          {num("funding_pct", dense ? "하루 펀딩비 · 숏" : "하루 펀딩비 (숏, %)", { step: "0.01", unit: dense ? "%" : undefined })}
         </div>
         <div className="mt-3 flex items-center gap-2 flex-wrap">
           <button
@@ -433,7 +593,7 @@ export default function Builder({ form, setForm, chartSlot = null }) {
             anchor="leverage"
             note={<span className="ml-2 t-caption text-slate-500">격리(isolated) · 백테스트·모의만</span>}
           >
-            <div className="flex items-center gap-4">
+            <div className={dense ? "bd-range" : "flex items-center gap-4"}>
               <input
                 aria-label="레버리지 배수"
                 type="range" min="1" max={MAX_LEVERAGE} step="1" value={lev}
@@ -467,5 +627,6 @@ export default function Builder({ form, setForm, chartSlot = null }) {
         );
       })()}
     </div>
+    </DenseContext.Provider>
   );
 }

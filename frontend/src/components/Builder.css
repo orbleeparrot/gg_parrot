@@ -1,0 +1,50 @@
+/* 빌더 촘촘한 판(variant="dense") — 직접 만들기의 336px 조건 판용.
+   컨트롤 32px · 라벨 11px · 2열 격자 · 절은 아래 괘선. 색·모양은 공용 .field/.seg/.alert 그대로다. */
+.builder-dense .bd-sec { padding: 10px 0 12px; border-bottom: 1px solid rgb(var(--c-slate-200)); }
+.builder-dense .bd-sec:last-child { border-bottom: 0; }
+.builder-dense .bd-h { display: flex; align-items: center; gap: 4px; margin: 0 0 8px; color: rgb(var(--c-slate-700)); font-size: 12px; font-weight: 700; }
+.builder-dense .bd-h h3 { margin: 0; font-size: 12px; font-weight: 700; }
+.builder-dense .bd-h .t-caption { font-size: 11px; }
+.builder-dense .bd-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 10px; }
+.builder-dense .bd-grid + .bd-grid { margin-top: 8px; }
+.builder-dense .bd-grid-1 { grid-template-columns: minmax(0, 1fr); }
+.builder-dense .bd-field { min-width: 0; }
+.builder-dense .bd-label { display: flex; align-items: center; gap: 2px; margin-bottom: 4px; color: rgb(var(--c-slate-500)); font-size: 11px; font-weight: 600; }
+.builder-dense .bd-hint { margin-top: 4px; color: rgb(var(--c-slate-500)); font-size: 11px; line-height: 1.4; }
+.builder-dense .field { height: 32px; min-height: 32px; padding-top: 0; padding-bottom: 0; padding-left: 9px; border-radius: 8px; font-size: 13px; font-weight: 600; }
+.builder-dense input.field:not(select) { padding-right: 9px; }
+/* 숫자 칸의 단위 접미사 — 라벨 끝의 "(%)" 가 여기로 온다. */
+.builder-dense .bd-unit { position: relative; }
+.builder-dense .bd-unit input.field { width: 100%; padding-right: 46px; }
+.builder-dense .bd-unit-tag { position: absolute; right: 9px; top: 50%; transform: translateY(-50%); color: rgb(var(--c-slate-500)); font-size: 11px; font-weight: 600; pointer-events: none; }
+/* 포지션 segmented */
+.builder-dense .bd-seg { height: 32px; padding: 3px; width: 100%; }
+.builder-dense .bd-seg .seg-item { flex: 1; justify-content: center; height: 24px; padding: 0 10px; font-size: 12px; }
+.builder-dense .bd-seg .seg-item:disabled { opacity: .45; cursor: not-allowed; }
+/* 종목 칩 */
+.builder-dense .bd-chips { min-height: 32px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.builder-dense .bd-chip { height: 28px; display: inline-flex; align-items: center; gap: 6px; padding: 0 4px 0 8px; border: 1px solid rgb(var(--c-slate-300)); border-radius: 999px; color: rgb(var(--c-slate-900)); font-size: 12px; font-weight: 700; }
+.builder-dense .bd-chip button { width: 18px; height: 18px; border-radius: 50%; color: rgb(var(--c-slate-500)); font-size: 14px; line-height: 1; }
+.builder-dense .bd-chip button:hover { background: rgb(var(--c-slate-200)); color: rgb(var(--c-slate-900)); }
+.builder-dense .bd-chip-input { flex: 1 1 100px; min-width: 100px; height: 28px; padding: 0 10px; border: 1px dashed rgb(var(--c-slate-300)); border-radius: 999px; background: transparent; color: rgb(var(--c-slate-900)); font-size: 12px; font-weight: 600; }
+.builder-dense .bd-chip-input::placeholder { color: rgb(var(--c-slate-500)); }
+.builder-dense .bd-chip-input:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 1px; border-color: transparent; }
+/* 접이식 절(고급 위험 관리 · 비용) — 제목 왼쪽 갈매기, 오른쪽에 상태 한마디. */
+.builder-dense .bd-details > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 8px; color: rgb(var(--c-slate-700)); font-size: 12px; font-weight: 700; }
+.builder-dense .bd-details > summary::-webkit-details-marker { display: none; }
+.builder-dense .bd-details > summary::before { content: ""; flex: none; width: 6px; height: 6px; border-right: 1.5px solid rgb(var(--c-slate-500)); border-bottom: 1.5px solid rgb(var(--c-slate-500)); transform: rotate(-45deg); transition: transform .15s; }
+.builder-dense .bd-details[open] > summary::before { transform: rotate(45deg); }
+.builder-dense .bd-details > summary small { margin-left: auto; color: rgb(var(--c-slate-500)); font-size: 11px; font-weight: 500; }
+.builder-dense .bd-details .bd-grid { margin-top: 10px; }
+.builder-dense .bd-details .notice { margin-top: 10px; }
+.builder-dense .bd-check { display: inline-flex; align-items: center; gap: 6px; height: 32px; color: rgb(var(--c-slate-700)); font-size: 12px; font-weight: 600; }
+/* 레버리지 — 슬라이더 · 숫자 · 배 */
+.builder-dense .bd-range { display: flex; align-items: center; gap: 10px; }
+.builder-dense .bd-range input[type="range"] { flex: 1; min-width: 0; }
+.builder-dense .bd-range .field { width: 64px; }
+.builder-dense .alert { margin-top: 8px; padding: 8px 10px; font-size: 12px; }
+.builder-dense .notice { font-size: 12px; }
+.builder-dense .t-caption, .builder-dense .t-small { font-size: 11px; }
+.builder-dense .btn-s { height: 28px; padding-inline: 10px; font-size: 12px; }
+.builder-dense .mt-3 { margin-top: 8px; }
+.builder-dense .mt-4 { margin-top: 10px; }

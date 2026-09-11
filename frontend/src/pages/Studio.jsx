@@ -731,7 +731,7 @@ export default function Studio() {
             </div>
           </div>
           <div className="studio-scroll studio-cond-body">
-            <Builder form={form} setForm={setForm} />
+            <Builder form={form} setForm={setForm} variant="dense" />
           </div>
           <div className="studio-cond-foot">
             {valErr && <div className="t-small text-amber-700" role="alert">{valErr}</div>}
@@ -753,16 +753,10 @@ export default function Studio() {
           </div>
         </aside>
 
-        {/* ── 차트 — 주인공. 조건을 바꾸면 보조지표·익절/손절선이 바로 따라온다. ── */}
+        {/* ── 차트 — 주인공. 조건을 바꾸면 보조지표·익절/손절선이 바로 따라온다.
+            판 머리는 따로 두지 않는다 — CandleChart(studio) 의 도구줄(종목·시세·봉 간격·범례)이 곧 머리다. ── */}
         <section className="studio-chart" aria-label="실시간 차트 · 보조지표" data-tour="chart">
-          <div className="studio-panel-head">
-            <h2 className="t-title text-slate-900">실시간 차트 · 보조지표</h2>
-            <div className="studio-head-right t-caption text-slate-500">
-              <span className="num text-slate-900 font-bold">{chartSymbols.length === 1 ? chartSymbols[0] : `${chartSymbols.length}개 종목`}</span>
-              {ruleLabel && <span>· {ruleLabel}</span>}
-            </div>
-          </div>
-          <div className={"studio-scroll studio-chart-body" + (chartSymbols.length === 1 ? " is-single" : "")}>
+          <div className={"studio-chart-body" + (chartSymbols.length > 1 ? " is-multi" : "")}>
             {chartSymbols.length > 0 ? (
               // 시장은 넘기지 않는다(= 현물). 보조지표는 rule_type·포지션·전략 조건만 보고 그려져
               // 레버리지와 무관하다. interval 은 controlled — 조건의 '봉 간격'과 차트 툴바가 같은 값을 가리킨다.
@@ -773,7 +767,7 @@ export default function Studio() {
                   interval={form.candle_interval || "1m"}
                   onIntervalChange={(value) => setForm((f) => ({ ...f, candle_interval: value }))}
                   overlay={overlay}
-                  minimal
+                  variant="studio"
                 />
               ))
             ) : (

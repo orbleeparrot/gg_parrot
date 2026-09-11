@@ -133,10 +133,13 @@ function bandPath(upper, lower, cx, y) {
   return d + " Z";
 }
 
-function Chart({ candles, symbol, hover, setHover, onPan, overlay, expanded = false }) {
-  const W = 720;
-  const H = expanded ? 350 : 260;
-  const pad = { l: 6, r: 6, t: 10, b: 10 };
+// size — 바깥이 잰 픽셀 크기. 주면 viewBox 가 곧 픽셀이라 글자가 1:1 로 그려지고 판을 꽉 채운다(직접 만들기 워크벤치).
+// axis — 오른쪽에 가격 눈금(안내선 값)을 단다.
+function Chart({ candles, symbol, hover, setHover, onPan, overlay, expanded = false, size = null, axis = false }) {
+  const W = size?.w || 720;
+  const H = size?.h || (expanded ? 350 : 260);
+  const pad = { l: 6, r: axis ? 64 : 6, t: 10, b: 10 };
+  const tagFont = size ? "11px" : "9px";
   const n = candles.length;
   const svgRef = useRef(null);
   const drag = useRef(null);
@@ -249,7 +252,8 @@ function Chart({ candles, symbol, hover, setHover, onPan, overlay, expanded = fa
     <svg
       ref={svgRef}
       viewBox={`0 0 ${W} ${H}`}
-      className="w-full h-auto touch-pan-y select-none cursor-crosshair"
+      className={(size ? "w-full h-full" : "w-full h-auto") + " touch-pan-y select-none cursor-crosshair"}
+      preserveAspectRatio={size ? "none" : undefined}
       role="img"
       aria-label={`${symbol} 봉차트. 좌우 화살표로 봉별 값을 확인할 수 있어요.`}
       tabIndex={0}
@@ -275,6 +279,12 @@ function Chart({ candles, symbol, hover, setHover, onPan, overlay, expanded = fa
     >
       {guides.map((v, i) => (
         <line key={i} x1={pad.l} x2={W - pad.r} y1={y(v)} y2={y(v)} stroke="rgb(var(--chart-grid))" strokeWidth="1" />
+      ))}
+      {/* 오른쪽 가격 눈금 — 안내선 값. 현재가는 위 도구줄이 크게 말하므로 여기엔 없다. */}
+      {axis && guides.map((v, i) => (
+        <text key={`ax-${i}`} x={W - pad.r + 8} y={y(v) + 4} className="num" style={{ fontSize: "11px", fill: "rgb(var(--c-slate-500))" }}>
+          {fmtPrice(v)}
+        </text>
       ))}
 
       {/* overlay: shaded bands sit under the candles */}
@@ -370,7 +380,7 @@ function Chart({ candles, symbol, hover, setHover, onPan, overlay, expanded = fa
             y={t.ty - 2}
             textAnchor="end"
             className="num"
-            style={{ fontSize: "9px", fontWeight: 700, fill: t.color, paintOrder: "stroke", stroke: "rgb(var(--c-surface))", strokeWidth: 3 }}
+            style={{ fontSize: tagFont, fontWeight: 700, fill: t.color, paintOrder: "stroke", stroke: "rgb(var(--c-surface))", strokeWidth: 3 }}
           >
             {t.label}
           </text>
@@ -431,7 +441,11 @@ export default function CandleChart({
   minimal = false,
   overlay = null,
   title,
+  // "studio" — 직접 만들기 워크벤치용. 도구줄 한 줄(종목·시세 · 봉 간격 segmented · 확대 · 범례),
+  // 시세 읽기(OHLC)는 그림 위에 겹치고, 그림은 판 크기를 재서 꽉 채운다(스크롤 없음).
+  variant = "default",
 }) {
+  const studio = variant === "studio";
   const [localInterval, setLocalInterval] = useState(defaultInterval);
   const [candles, setCandles] = useState(null);
   const [error, setError] = useState("");
@@ -644,6 +658,24 @@ export default function CandleChart({
     return () => el.removeEventListener("wheel", onWheel);
   }, [zoom, maxZoom, applyZoom]);
 
+  // studio — 그림 칸의 픽셀 크기를 재서 Chart 에 넘긴다. 칸이 바뀌면(창 크기·독 높이) 다시 잰다.
+  const plotBoxRef = useRef(null);
+  const [plotSize, setPlotSize] = useState(null);
+  const hasView = !!(candles && candles.length);
+  useEffect(() => {
+    if (!studio || !hasView) return undefined;
+    const el = plotBoxRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return undefined;
+    const observer = new ResizeObserver((entries) => {
+      const box = entries[0]?.contentRect;
+      if (!box || box.width < 40 || box.height < 40) return;
+      const next = { w: Math.round(box.width), h: Math.round(box.height) };
+      setPlotSize((prev) => (prev && prev.w === next.w && prev.h === next.h ? prev : next));
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [studio, hasView]);
+
   const quote = quoteOf(symbol);
   const last = view.length ? view[view.length - 1] : null;
   const firstBar = view.length ? view[0] : null;
@@ -652,6 +684,92 @@ export default function CandleChart({
   const inspected = hover != null && view[hover] ? view[hover] : last;
 
   const btn = "btn btn-s btn-secondary w-9 px-0";
+
+  if (studio) {
+    const zoomBtn = "btn btn-s btn-secondary w-8 px-0";
+    return (
+      <div className="candle-chart is-studio">
+        <div className="candle-chart-toolbar">
+          <div className="candle-chart-market">
+            <h3 className="candle-chart-symbol text-slate-900"><span className="num">{title || symbol}</span></h3>
+            {last && (
+              <>
+                <strong className="candle-chart-current num text-slate-900">{fmtPrice(last.c)}</strong>
+                <span className="candle-chart-quote t-caption text-slate-500">{quote}</span>
+                <span className={"candle-chart-change t-label font-bold num " + (up ? "text-green-600" : "text-red-600")}>
+                  {up ? "+" : ""}
+                  {changePct.toFixed(2)}%
+                </span>
+                {live && !last.closed && (
+                  <span className="candle-chart-live flex items-center gap-1 t-caption font-bold text-red-600">
+                    <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse motion-reduce:animate-none" />
+                    LIVE
+                  </span>
+                )}
+              </>
+            )}
+          </div>
+          <div className="candle-chart-controls">
+            <div className="seg" role="group" aria-label="차트 봉 간격">
+              {INTERVALS.map((o) => (
+                <button
+                  key={o.value}
+                  type="button"
+                  onClick={() => changeInterval(o.value)}
+                  aria-pressed={interval === o.value}
+                  className={"seg-item " + (interval === o.value ? "seg-item-on" : "")}
+                >
+                  {o.label}
+                </button>
+              ))}
+            </div>
+            <button onClick={() => applyZoom(zoom * 1.35)} disabled={zoom >= maxZoom} className={zoomBtn} title="축소 (더 많은 봉)" aria-label="차트 축소">−</button>
+            <span className="t-caption text-slate-700 num candle-chart-zoom">{Math.min(zoom, total)}봉</span>
+            <button onClick={() => applyZoom(zoom * 0.7)} disabled={zoom <= MIN_ZOOM} className={zoomBtn} title="확대 (봉 자세히)" aria-label="차트 확대">+</button>
+            {!live && (
+              <button onClick={() => setAnchor(null)} className="btn btn-s btn-secondary" title="최신 봉으로 이동">최신</button>
+            )}
+          </div>
+          {viewOverlay && overlayFull?.legend?.length > 0 && (
+            <div className="candle-chart-legend">
+              {overlayFull.legend.map((item, i) => <LegendItem key={i} item={item} />)}
+            </div>
+          )}
+        </div>
+
+        {error && <div className="notice-warn py-6 t-small text-slate-700">차트를 불러오지 못했어요: {error}</div>}
+        {!error && !candles && (
+          <div className="candle-chart-stage flex items-center justify-center t-small text-slate-500">{loading ? "차트 불러오는 중…" : "—"}</div>
+        )}
+        {!error && view.length > 0 && (
+          <div ref={plotRef} className="candle-chart-stage">
+            <div ref={plotBoxRef} className="candle-chart-plot">
+              <div className="candle-chart-readout-overlay"><BarReadout bar={inspected} /></div>
+              {plotSize && (
+                <Chart candles={view} symbol={symbol} hover={hover} setHover={setHover} onPan={pan} overlay={viewOverlay} size={plotSize} axis />
+              )}
+            </div>
+            {viewOverlay?.rsi && (
+              <RsiPane
+                values={viewOverlay.rsi.values}
+                entry={viewOverlay.rsi.entry}
+                exit={viewOverlay.rsi.exit}
+                lowLabel={viewOverlay.rsi.lowLabel}
+                highLabel={viewOverlay.rsi.highLabel}
+              />
+            )}
+          </div>
+        )}
+        {!error && view.length > 0 && (
+          <div className="candle-chart-range num">
+            <span>{fullTime(view[0].t)}</span>
+            <span>{live ? "진행 중 · 실시간 갱신" : "과거 구간 보는 중"}</span>
+            <span>{fullTime(view[view.length - 1].t)}</span>
+          </div>
+        )}
+      </div>
+    );
+  }
 
   // 차트도 카드에 담지 않는다 — 캔버스 위에 그리고 구획은 괘선으로만(§1-3).
   return (

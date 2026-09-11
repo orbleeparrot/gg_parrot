@@ -51,8 +51,8 @@
   min-height: 0; min-width: 0;
   display: grid;
   grid-template-columns: 336px minmax(0, 1fr);
-  /* 차트 행은 차트의 제 높이(비율 고정 SVG)만큼, 최대 62%. 나머지가 독이다(최소 260px). */
-  grid-template-rows: fit-content(62%) minmax(260px, 1fr);
+  /* 차트 58% · 결과 독 42%(최소 280px). 차트는 주어진 높이를 스스로 채운다(CandleChart studio). */
+  grid-template-rows: minmax(0, 1fr) minmax(280px, 42%);
   grid-template-areas: "cond chart" "cond dock";
 }
 .studio-panel-head { min-height: 44px; display: flex; align-items: center; gap: 10px; padding: 0 16px; border-bottom: 1px solid rgb(var(--c-slate-200)); }
@@ -62,26 +62,35 @@
 
 /* 조건 — Builder 를 그대로 쓰되 좁은 열에 맞춰 2열로 접는다. 스크롤은 이 판 안에서만. */
 .studio-cond { grid-area: cond; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; border-right: 1px solid rgb(var(--c-slate-200)); }
-.studio-cond-body { padding: 4px 16px 16px; }
-/* Builder 의 sm:grid-cols-3 은 336px 안에서 칸이 95px 로 줄어 select 글자가 잘린다 — 이 판에서는 모두 2열. */
-.studio-cond .sm\:grid-cols-2, .studio-cond .sm\:grid-cols-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.studio-cond .space-y-5 > :not([hidden]) ~ :not([hidden]) { margin-top: 16px; }
-.studio-cond .candle-chart { display: none; }
+.studio-cond-body { padding: 0 16px 8px; } /* Builder(variant="dense") 가 절 사이 여백·괘선을 스스로 가진다 */
 .studio-cond-foot { padding: 12px 16px; border-top: 1px solid rgb(var(--c-slate-200)); display: grid; gap: 8px; }
 .studio-cond-foot .studio-foot-note { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 
-/* 차트 — 주인공. CandleChart 의 도구줄·시세는 그대로, 위 괘선만 뺀다(판 머리가 그 역할). */
-.studio-chart { grid-area: chart; min-height: 0; min-width: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); }
-.studio-chart-body { padding: 0 16px 8px; }
-/* 종목이 하나면 차트를 판 높이에 맞춰 누른다 — CandleChart 의 SVG 는 폭에 비례해 높이가 정해지므로,
-   판이 그보다 낮을 때 SVG 만 줄여(그림은 가운데로 모임) 스크롤이 생기지 않게 한다. 여러 종목은 세로로 쌓여 스크롤한다. */
-.studio-chart-body.is-single { display: flex; flex-direction: column; overflow: hidden; }
-.studio-chart-body.is-single .candle-chart { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
-.studio-chart-body.is-single .candle-chart > * { flex: 0 0 auto; }
-.studio-chart-body.is-single .candle-chart > div:has(> svg.w-full) { flex: 0 1 auto; min-height: 0; }
-.studio-chart-body.is-single .candle-chart > div:has(> svg.w-full) > svg.w-full { max-height: 100%; }
-.studio-chart-body .candle-chart { border-top: 0; padding-top: 6px; }
-.studio-chart-body .candle-chart + .candle-chart { border-top: 1px solid rgb(var(--c-slate-200)); padding-top: 14px; margin-top: 8px; }
+/* 차트 — 주인공. CandleChart(variant="studio") 가 판을 채운다: 도구줄 한 줄 → 그림(판 크기를 재서 꽉) → 기간 줄. */
+.studio-chart { grid-area: chart; min-height: 0; min-width: 0; display: grid; grid-template-rows: minmax(0, 1fr); }
+.studio-chart-body { min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.studio-chart-body.is-multi { overflow: auto; }
+.studio-chart-body .candle-chart.is-studio { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; padding: 0 16px 6px; }
+.studio-chart-body.is-multi .candle-chart.is-studio { flex: none; height: 380px; }
+.studio-chart-body.is-multi .candle-chart.is-studio + .candle-chart.is-studio { border-top: 1px solid rgb(var(--c-slate-200)); }
+/* 도구줄 — 종목·시세·LIVE | 봉 간격 segmented · 확대 | 범례. 44px 한 줄, 좁으면 접힌다. */
+.candle-chart.is-studio .candle-chart-toolbar { min-height: 44px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 4px 0; border-bottom: 1px solid rgb(var(--c-slate-200)); }
+.candle-chart.is-studio .candle-chart-market { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.candle-chart.is-studio .candle-chart-symbol { margin: 0; font-size: 15px; font-weight: 800; letter-spacing: -.01em; }
+.candle-chart.is-studio .candle-chart-current { font-size: 15px; font-weight: 700; }
+.candle-chart.is-studio .candle-chart-controls { display: flex; align-items: center; gap: 6px; }
+.candle-chart.is-studio .candle-chart-controls .seg { padding: 3px; }
+.candle-chart.is-studio .candle-chart-controls .seg-item { height: 24px; padding: 0 9px; font-size: 12px; }
+.candle-chart.is-studio .candle-chart-controls .btn-s { height: 28px; }
+.candle-chart.is-studio .candle-chart-zoom { min-width: 34px; text-align: center; }
+.candle-chart.is-studio .candle-chart-legend { margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
+/* 그림 — 남는 높이를 전부 쓴다. SVG 는 이 칸의 픽셀 크기로 그려진다(CandleChart 가 잰다). */
+.candle-chart.is-studio .candle-chart-stage { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.candle-chart.is-studio .candle-chart-plot { position: relative; flex: 1 1 auto; min-height: 120px; }
+.candle-chart.is-studio .candle-chart-plot > svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.candle-chart.is-studio .candle-chart-readout-overlay { position: absolute; left: 4px; top: 6px; z-index: 1; pointer-events: none; }
+.candle-chart.is-studio .candle-chart-readout-overlay .candle-ohlc { font-size: 11px; column-gap: 10px; }
+.candle-chart.is-studio .candle-chart-range { display: flex; justify-content: space-between; gap: 12px; margin-top: 4px; color: rgb(var(--c-slate-500)); font-size: 11px; }
 
 /* 결과 독 — 탭이 곧 검증 순서. 탭 앞 점이 상태, 오른쪽에는 지금 단계의 다음 행동 하나. */
 .studio-dock { grid-area: dock; min-height: 0; min-width: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); border-top: 1px solid rgb(var(--c-slate-200)); }

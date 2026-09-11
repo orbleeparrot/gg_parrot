@@ -27,7 +27,8 @@
 .candle-chart-readout { padding-block: 8px; }
 .candle-readout-row { display: flex; align-items: flex-end; gap: 12px; }
 .candle-readout-row .candle-ohlc { flex: 1; min-width: 0; }
-.candle-chart-readout .candle-chart-live { flex: none; margin-left: auto; white-space: nowrap; }
+/* Match the price-axis label inset, rather than the outer canvas edge. */
+.candle-chart-readout .candle-chart-live { flex: none; margin-left: auto; margin-right: 10px; white-space: nowrap; }
 .candle-chart.is-studio .candle-chart-readout { flex: none; }
 .candle-chart.is-studio .candle-chart-plot > .financial-candle-plot {
   position: absolute;

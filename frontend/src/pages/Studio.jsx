@@ -672,16 +672,17 @@ export default function Studio() {
               {!slug && (token ? (
                 <button
                   type="button"
-                  className="studio-cond-upload"
+                  className="studio-cond-upload t-caption"
                   onClick={() => macroFileInputRef.current?.click()}
                   disabled={fileImportBusy || busy}
-                  aria-label={fileImportBusy ? "파일 등록 중" : "매크로 파일 등록 (.ggm.json)"}
-                  title={fileImportBusy ? "파일 등록 중…" : "매크로 파일 등록 (.ggm.json) — 내 매크로에 등록하고 조건에 불러와요"}
+                  aria-label={fileImportBusy ? "매크로 업로드 중" : "매크로 업로드 (.ggm.json)"}
+                  title={fileImportBusy ? "업로드 중…" : "매크로 업로드 (.ggm.json)"}
                 >
                   <UploadIcon />
+                  <span>{fileImportBusy ? "업로드 중…" : "매크로 업로드"}</span>
                 </button>
               ) : (
-                <Link to="/login?next=%2Fbuilder" className="studio-cond-upload" aria-label="로그인 후 매크로 파일 등록" title="매크로 파일을 등록하려면 로그인이 필요해요"><UploadIcon /></Link>
+                <Link to="/login?next=%2Fbuilder" className="studio-cond-upload t-caption" aria-label="로그인 후 매크로 업로드" title="매크로 파일을 등록하려면 로그인이 필요해요"><UploadIcon /><span>매크로 업로드</span></Link>
               ))}
             </div>
             <div className="studio-head-right">

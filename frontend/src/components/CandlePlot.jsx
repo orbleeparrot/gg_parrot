@@ -38,9 +38,12 @@ const CandlePlot = forwardRef(function CandlePlot({ candles, overlay, symbol, ex
 
   useLayoutEffect(() => {
     const colors = palette(host.current);
+    const fonts = host.current.ownerDocument.fonts;
+    const axisFont = `11px ${colors.fontFamily}`;
+    const fontReady = !fonts || fonts.check(axisFont, "0123456789.,");
     const chart = createChart(canvas.current, {
       autoSize: true,
-      layout: { background: { type: "solid", color: "transparent" }, textColor: colors.muted, fontSize: 11, fontFamily: getComputedStyle(host.current).fontFamily, attributionLogo: true, panes: { enableResize: false, separatorColor: colors.grid } },
+      layout: { background: { type: "solid", color: "transparent" }, textColor: colors.muted, fontSize: 11, fontFamily: fontReady ? colors.fontFamily : "sans-serif", attributionLogo: true, panes: { enableResize: false, separatorColor: colors.grid } },
       grid: { vertLines: { visible: false }, horzLines: { color: colors.grid } },
       crosshair: { mode: CrosshairMode.Magnet, vertLine: { color: colors.crosshair, labelBackgroundColor: colors.tag }, horzLine: { color: colors.crosshair, labelBackgroundColor: colors.tag } },
       rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.08, bottom: 0.08 }, minimumWidth: 64 },
@@ -61,6 +64,13 @@ const CandlePlot = forwardRef(function CandlePlot({ candles, overlay, symbol, ex
       handleScale: { mouseWheel: false, pinch: true, axisPressedMouseMove: { time: true, price: false }, axisDoubleClickReset: { time: true, price: false } },
     });
     const state = { chart, rows: [], overlay: null, colors, data: [], live: true, range: null, changing: false, hover: null, keyboard: false, disposed: false };
+    // Changing the font explicitly clears LWC's cached label widths. Otherwise
+    // a cold font load leaves extra space to the right of the price labels.
+    if (!fontReady) {
+      fonts.load(axisFont, "0123456789.,").then(() => {
+        if (!state.disposed) chart.applyOptions({ layout: { fontFamily: colors.fontFamily } });
+      }).catch(() => {});
+    }
     const series = chart.addSeries(CandlestickSeries, {
       upColor: colors.up, downColor: colors.down, wickUpColor: colors.up, wickDownColor: colors.down,
       borderVisible: false, priceLineSource: PriceLineSource.LastVisible, priceLineStyle: LineStyle.Dashed,

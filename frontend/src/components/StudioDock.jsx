@@ -32,10 +32,14 @@ const compactNum = (v) => {
 // 실리는 순서에 따라 지는 일이 있었다(페이퍼 현재 수익률이 마이너스인데 흰색).
 const tone = (v) => (v >= 0 ? "is-up" : "is-down");
 
-// ── 탭 줄 — 밑줄 탭 + 상태 점(빈 · 초록=완료 · 호박=조건 바뀜 · 노랑 깜박임=진행 중) ──
+// ── 탭 줄 — 같은 폭의 탭 + 상태 점(빈 · 초록=완료 · 호박=조건 바뀜 · 노랑 깜박임=진행 중) + 미끄러지는 밑줄.
+//    폭은 문구와 무관하게 같다(96~168px 칸). 밑줄은 탭마다 긋지 않고 줄 하나가 켜진 탭 자리로 옮겨 간다(--sd-tab-index). ──
 export function StudioTabs({ tabs, active, onChange }) {
+  const activeIndex = Math.max(0, tabs.findIndex((tab) => tab.id === active));
   return (
-    <div className="sd-tabs" role="tablist" aria-label="결과 보기">
+    <div className="sd-tabs" style={{ "--sd-tab-count": tabs.length, "--sd-tab-index": activeIndex }}>
+      {/* 바깥은 가로 스크롤 상자, 안쪽 트랙이 칸을 나눈다 — 밑줄은 트랙 기준이라 독이 아주 좁아 밀려도 켜진 탭 아래에 온다. */}
+      <div className="sd-tabs-track" role="tablist" aria-label="결과 보기">
       {tabs.map((tab) => (
         <button
           key={tab.id}
@@ -50,9 +54,10 @@ export function StudioTabs({ tabs, active, onChange }) {
           className={"sd-tab" + (active === tab.id ? " is-on" : "")}
         >
           <i className={"studio-dot" + (tab.dot ? ` is-${tab.dot}` : "")} aria-hidden="true" />
-          {tab.label}
+          <span className="sd-tab-label">{tab.label}</span>
         </button>
       ))}
+      </div>
     </div>
   );
 }

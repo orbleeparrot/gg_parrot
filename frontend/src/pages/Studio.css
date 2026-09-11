@@ -80,13 +80,19 @@
 /* 결과 독 — 탭이 곧 검증 순서. 탭 앞 점이 상태, 오른쪽에는 지금 단계의 다음 행동 하나. */
 .studio-dock { grid-area: dock; min-height: 0; min-width: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); border-top: 1px solid rgb(var(--c-slate-200)); }
 /* 머리: 밑줄 탭(왼쪽) + 지금 단계의 다음 행동(오른쪽). 한 줄에 안 들어가면 행동이 아래 줄 오른쪽으로 내려온다. */
-.studio-dock-head { min-height: 44px; display: flex; flex-wrap: wrap; align-items: stretch; gap: 0 12px; padding: 0 12px 0 8px; border-bottom: 1px solid rgb(var(--c-slate-200)); }
-.sd-tabs { display: flex; gap: 2px; align-items: stretch; margin-bottom: -1px; } /* 켜진 탭의 밑줄이 머리의 괘선을 덮도록 줄 전체가 1px 겹친다 */
-.sd-tab { display: flex; align-items: center; gap: 7px; height: 44px; padding: 0 12px; border-bottom: 2px solid transparent; color: rgb(var(--c-slate-500)); font-size: 14px; font-weight: 700; white-space: nowrap; cursor: pointer; }
-.sd-tab:hover { color: rgb(var(--c-slate-900)); }
-.sd-tab.is-on { color: rgb(var(--c-slate-900)); border-bottom-color: rgb(var(--c-slate-900)); }
+.studio-dock-head { min-width: 0; min-height: 44px; display: flex; flex-wrap: wrap; align-items: stretch; gap: 0 12px; padding: 0 12px 0 8px; border-bottom: 1px solid rgb(var(--c-slate-200)); } /* min-width: 0 — 그리드 항목이라 탭 줄의 최소 폭(96px×5)만큼 독 밖으로 자라지 않게 */
+/* 탭 줄 — 칸 폭이 같다(96~168px, 문구 길이와 무관). 켜진 탭은 색·굵기·밑줄 세 가지로 표시하고, 밑줄 하나가 탭 자리로 미끄러진다.
+   줄 전체가 머리 괘선 위로 1px 겹쳐 밑줄이 괘선을 덮는다. 96px 아래로는 줄이지 않고 문구를 말줄임하며, 그보다 좁으면 가로로 민다(StudioSplit.css). */
+.sd-tabs { position: relative; width: calc(168px * var(--sd-tab-count, 5)); max-width: 100%; margin-bottom: -1px; } /* 머리 폭까지만 넓어진다(가로 스크롤 상자는 StudioSplit.css) */
+.sd-tabs-track { position: relative; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); align-items: stretch; width: 100%; min-width: calc(96px * var(--sd-tab-count, 5)); max-width: calc(168px * var(--sd-tab-count, 5)); } /* 칸은 168→96px 로 같이 줄고, 그 아래서는 트랙이 상자보다 넓어져 가로로 민다 */
+.sd-tab { display: flex; align-items: center; justify-content: center; gap: 7px; min-width: 0; height: 44px; padding: 0 10px; color: rgb(var(--c-slate-500)); font-size: 13px; font-weight: 600; white-space: nowrap; cursor: pointer; transition: color .15s; }
+.sd-tab-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.sd-tab:hover { color: rgb(var(--c-slate-700)); }
+.sd-tab.is-on { color: rgb(var(--c-slate-900)); font-weight: 700; }
 .sd-tab:disabled { opacity: .45; cursor: not-allowed; }
 .sd-tab:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: -2px; border-radius: 6px; }
+.sd-tabs-track::after { content: ""; position: absolute; left: 0; bottom: 0; height: 2px; width: calc(100% / var(--sd-tab-count, 5)); background: rgb(var(--c-slate-900)); transform: translateX(calc(100% * var(--sd-tab-index, 0))); transition: transform .22s cubic-bezier(.2, .7, .2, 1); pointer-events: none; }
+@media (prefers-reduced-motion: reduce) { .sd-tabs-track::after { transition: none; } }
 .studio-dot { flex: none; width: 7px; height: 7px; margin-right: 7px; border-radius: 50%; border: 1.5px solid rgb(var(--c-slate-400)); }
 .studio-dot.is-ok { background: rgb(var(--c-green-600)); border-color: rgb(var(--c-green-600)); }
 .studio-dot.is-warn { background: rgb(var(--c-amber-600)); border-color: rgb(var(--c-amber-600)); }

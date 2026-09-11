@@ -571,7 +571,7 @@ export default function Studio() {
     : !testedMacro
       ? "이 조건으로 백테스트"
       : resultIsFresh
-        ? "결과 최신 · 바꾸면 다시 계산해요"
+        ? "자동 실행 완료"
         : "바뀐 조건으로 다시 테스트";
   const tabs = [
     { id: "bt", label: "백테스트", enabled: true, dot: busy ? "run" : !result ? "" : resultIsFresh ? "ok" : "warn" },
@@ -601,8 +601,6 @@ export default function Studio() {
       </>
     );
   }
-  // 조건이 바뀐 뒤의 안내는 조건 판의 테스트 버튼 위에 둔다 — 고칠 곳(조건)과 할 일(테스트) 바로 옆이 맞다.
-  const staleNote = result && !resultIsFresh ? "조건이 바뀌었어요 · 오른쪽 결과는 이전 조건의 것이에요" : "";
   const limitsRetry = limitsError ? (
     <button type="button" className="btn btn-s btn-secondary" onClick={() => loadTestLimits().catch(() => {})}>다시 확인</button>
   ) : null;
@@ -625,7 +623,6 @@ export default function Studio() {
       ) : null;
       return { tone: "warn", text, actions };
     }
-    if (staleNote) return { tone: "warn", text: staleNote, actions: null };
     return null;
   })();
 

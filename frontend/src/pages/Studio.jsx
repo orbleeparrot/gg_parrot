@@ -794,7 +794,8 @@ export default function Studio() {
                 strategyEntry={{ symbol: chartSymbols[0] || form.symbol || "—", human_summary: summary, macro: testedMacro || currentMacro, locked: false }}
                 result={result}
                 periodLabel={periodLabel}
-                symbolCount={chartSymbols.length}
+                dataSource={dataSource}
+                symbols={chartSymbols}
                 canRegister={resultIsFresh}
                 onRegister={() => openRegistration(paper.mode)}
                 onShare={openShare}

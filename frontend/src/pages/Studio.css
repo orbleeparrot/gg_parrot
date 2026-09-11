@@ -216,39 +216,68 @@
 .sd-log-px small { color: rgb(var(--c-slate-500)); font-weight: 500; }
 .sd-log-pnl { font-weight: 700; }
 /* 등록 · 실행 */
-/* 매크로 등록 — 왼쪽은 내 매크로를 담은 트레이딩 카드(산출물: 로고·티커·포지션·전략·자산곡선·결과), 오른쪽은 동작 목록(등록만 노랑, 나머지는 한마디 설명이 붙은 행), 그 아래 안내 상자. */
-.sd-done { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; align-items: start; padding-top: 2px; } /* 카드가 폭 대부분, 동작 목록은 오른쪽 300px */
-.sd-card { position: relative; overflow: hidden; min-width: 0; padding: 18px 18px 14px; border: 1px solid rgb(var(--c-slate-300)); border-radius: 18px; background: linear-gradient(160deg, rgb(var(--c-brand) / .16), rgb(var(--c-surface)) 46%); box-shadow: 0 12px 30px rgb(var(--c-scrim) / .16); }
-.sd-card-eyebrow { position: absolute; right: 16px; top: 14px; color: rgb(var(--c-slate-500)); font-size: 10px; font-weight: 700; letter-spacing: .14em; }
-.sd-card-head { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
+/* 매크로 등록 — 왼쪽은 내 매크로를 담은 트레이딩 카드(산출물), 오른쪽은 카드와 같은 높이의 동작 목록, 그 아래 안내 상자.
+   카드 안은 두 면: 왼쪽 "무엇인지"(종목 · 포지션/시장 · 매매 방식 · 조건 문장 · 사양표), 오른쪽 "테스트에서 낸 것"(수익률 · 자산곡선 · MDD/승률/매매). 절취선이 둘을 가른다. */
+.sd-done { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; align-items: stretch; padding-top: 2px; } /* 카드가 폭 대부분, 동작 목록은 오른쪽 300px · 둘의 높이는 같다 */
+.sd-card { position: relative; overflow: hidden; min-width: 0; container-type: inline-size; border: 1px solid rgb(var(--c-slate-300)); border-radius: 18px; background: linear-gradient(160deg, rgb(var(--c-brand) / .16), rgb(var(--c-surface)) 46%); box-shadow: 0 12px 30px rgb(var(--c-scrim) / .16); }
+.sd-card-in { height: 100%; display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 38%); } /* 컨테이너 쿼리는 자손에만 걸리므로 두 면은 안쪽 상자가 나눈다 */
+.sd-card-spec { min-width: 0; padding: 18px 20px 16px; display: flex; flex-direction: column; gap: 14px; }
+.sd-card-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .sd-card-coin { flex: none; border-radius: 50%; }
-.sd-card-ticker { min-width: 0; line-height: 1; }
-.sd-card-ticker strong { display: block; color: rgb(var(--c-slate-900)); font-size: 24px; font-weight: 800; letter-spacing: -.02em; }
-.sd-card-ticker small { display: block; margin-top: 5px; color: rgb(var(--c-slate-500)); font-size: 11px; font-weight: 600; letter-spacing: .02em; white-space: nowrap; }
-.sd-card-side { margin-left: auto; flex: none; display: inline-flex; align-items: center; height: 24px; padding: 0 9px; border-radius: 7px; background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-700)); font-size: 12px; font-weight: 800; white-space: nowrap; }
+.sd-card-id { min-width: 0; }
+.sd-card-ticker { line-height: 1; white-space: nowrap; }
+.sd-card-ticker strong { color: rgb(var(--c-slate-900)); font-size: 24px; font-weight: 800; letter-spacing: -.02em; }
+.sd-card-ticker small { margin-left: 5px; color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 700; }
+.sd-card-rule { margin-top: 5px; color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sd-card-tags { margin-left: auto; flex: none; display: flex; align-items: center; gap: 6px; }
+.sd-card-side { display: inline-flex; align-items: center; height: 24px; padding: 0 9px; border-radius: 7px; background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-700)); font-size: 12px; font-weight: 800; white-space: nowrap; }
 .sd-card-side.is-long { background: rgb(var(--c-green-600) / .14); color: rgb(var(--c-green-600)); }
 .sd-card-side.is-short { background: rgb(var(--c-red-600) / .14); color: rgb(var(--c-red-600)); }
-.sd-card-strategy { margin: 16px 0 0; color: rgb(var(--c-slate-900)); font-size: 15px; font-weight: 700; line-height: 1.5; overflow-wrap: anywhere; }
-.sd-card-sub { margin: 4px 0 0; color: rgb(var(--c-slate-500)); font-size: 12.5px; font-weight: 500; line-height: 1.5; }
-.sd-card-spark { display: block; width: 100%; height: 72px; margin-top: 14px; }
+.sd-card-tag { display: inline-flex; align-items: center; height: 24px; padding: 0 9px; border: 1px solid rgb(var(--c-slate-300)); border-radius: 7px; color: rgb(var(--c-slate-700)); font-size: 12px; font-weight: 700; white-space: nowrap; }
+.sd-card-strategy { margin: 0; color: rgb(var(--c-slate-900)); font-size: 16px; font-weight: 700; line-height: 1.45; overflow-wrap: anywhere; }
+.sd-card-facts { margin: auto 0 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 18px; padding-top: 12px; border-top: 1px solid rgb(var(--c-slate-200)); }
+.sd-card-facts > div { min-width: 0; }
+.sd-card-facts dt { color: rgb(var(--c-slate-500)); font-size: 11px; font-weight: 600; }
+.sd-card-facts dd { margin: 2px 0 0; color: rgb(var(--c-slate-900)); font-size: 13px; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
+.sd-card-proof { position: relative; min-width: 0; padding: 18px 18px 14px; border-left: 1px dashed rgb(var(--c-slate-300)); display: flex; flex-direction: column; }
+.sd-card-eyebrow { position: absolute; right: 16px; top: 16px; color: rgb(var(--c-slate-500)); font-size: 10px; font-weight: 700; letter-spacing: .14em; }
+.sd-card-k { display: block; padding-right: 120px; color: rgb(var(--c-slate-500)); font-size: 11px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sd-card-ret { display: block; margin-top: 2px; color: rgb(var(--c-slate-900)); font-size: 26px; font-weight: 800; letter-spacing: -.02em; line-height: 1.1; white-space: nowrap; }
+.sd-card-spark { display: block; width: 100%; height: 56px; flex: 1 1 56px; min-height: 44px; margin-top: 10px; }
 .sd-card-spark-area { fill: currentColor; opacity: .12; }
 .sd-card-spark-line { fill: none; stroke: currentColor; stroke-width: 2; vector-effect: non-scaling-stroke; }
 .sd-card-spark-base { fill: none; stroke: rgb(var(--c-slate-400)); stroke-width: 1; stroke-dasharray: 3 3; opacity: .7; vector-effect: non-scaling-stroke; }
-.sd-card-foot { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; margin-top: 12px; padding-top: 12px; border-top: 1px dashed rgb(var(--c-slate-300)); }
-.sd-card-foot .r { text-align: right; }
-.sd-card-k { display: block; color: rgb(var(--c-slate-500)); font-size: 11px; font-weight: 600; white-space: nowrap; }
-.sd-card-v { display: block; margin-top: 2px; color: rgb(var(--c-slate-900)); font-size: 17px; font-weight: 800; letter-spacing: -.01em; white-space: nowrap; }
-/* 동작 목록 — 노란 등록 버튼 아래 행 셋(아이콘 · 이름 · 한마디 · 갈매기). */
-.sd-act { display: grid; gap: 8px; align-content: start; min-width: 0; }
-.sd-act-row { display: flex; align-items: center; gap: 10px; height: 44px; padding: 0 12px 0 14px; border: 1px solid rgb(var(--c-slate-300)); border-radius: 12px; background: transparent; color: rgb(var(--c-slate-900)); font-size: 14px; font-weight: 700; text-align: left; transition: background .12s; }
+.sd-card-stats { margin: 10px 0 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding-top: 10px; border-top: 1px dashed rgb(var(--c-slate-300)); }
+.sd-card-stats dt { color: rgb(var(--c-slate-500)); font-size: 11px; font-weight: 600; }
+.sd-card-stats dd { margin: 1px 0 0; color: rgb(var(--c-slate-900)); font-size: 15px; font-weight: 800; white-space: nowrap; }
+.sd-card-src { margin-top: 8px; color: rgb(var(--c-slate-500)); font-size: 11px; font-weight: 500; }
+/* 카드가 좁으면(1300~1540px 창) 결과 면을 카드 아래 한 줄 띠로 — 수익률 · 자산곡선 · MDD/승률/매매. 카드가 길어지지 않아 동작 행도 그대로다. */
+@container (max-width: 620px) {
+  .sd-card-in { grid-template-columns: minmax(0, 1fr); }
+  .sd-card-proof { padding: 12px 18px; border-left: 0; border-top: 1px dashed rgb(var(--c-slate-300)); display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "k spark stats" "ret spark stats"; column-gap: 16px; align-items: center; }
+  .sd-card-eyebrow, .sd-card-src { display: none; }
+  .sd-card-k { grid-area: k; align-self: end; padding-right: 0; }
+  .sd-card-ret { grid-area: ret; align-self: start; }
+  .sd-card-spark { grid-area: spark; flex: none; height: 56px; min-height: 0; margin: 0; }
+  .sd-card-stats { grid-area: stats; margin: 0; padding: 0; border: 0; display: flex; gap: 16px; }
+}
+/* 동작 목록 — 행 넷이 카드 높이를 똑같이 나눠 갖는다(첫 행만 노랑). 아이콘 칩 · 이름 · 한 줄 설명 · 갈매기. */
+.sd-act { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.sd-act-row { flex: 1 1 0; min-height: 48px; display: flex; align-items: center; gap: 12px; padding: 8px 12px 8px 12px; border: 1px solid rgb(var(--c-slate-300)); border-radius: 12px; background: transparent; color: rgb(var(--c-slate-900)); text-align: left; transition: background .12s; }
 .sd-act-row:hover:not(:disabled) { background: rgb(var(--c-slate-100)); }
 .sd-act-row:disabled { opacity: .5; cursor: not-allowed; }
 .sd-act-row:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
-.sd-act-row svg { flex: none; width: 16px; height: 16px; color: rgb(var(--c-slate-700)); }
-.sd-act-row > span { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.sd-act-row em { flex: none; color: rgb(var(--c-slate-500)); font-style: normal; font-size: 12px; font-weight: 500; white-space: nowrap; }
-.sd-act-chev { flex: none; width: 6px; height: 6px; margin-left: 2px; border-top: 1.5px solid rgb(var(--c-slate-400)); border-right: 1.5px solid rgb(var(--c-slate-400)); transform: rotate(45deg); }
-.sd-act .sd-note { margin-top: 2px; }
+.sd-act-row.is-primary { background: rgb(var(--c-brand)); border-color: rgb(var(--c-brand)); color: rgb(var(--c-brand-ink)); }
+.sd-act-row.is-primary:hover:not(:disabled) { background: rgb(var(--c-brand-hover)); }
+.sd-act-ic { flex: none; width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-700)); }
+.sd-act-ic svg { width: 16px; height: 16px; }
+.sd-act-row.is-primary .sd-act-ic { background: rgb(var(--c-brand-ink) / .1); color: rgb(var(--c-brand-ink)); }
+.sd-act-t { flex: 1 1 auto; min-width: 0; display: grid; gap: 2px; }
+.sd-act-t b { font-size: 14px; font-weight: 700; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sd-act-t small { color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 500; line-height: 1.35; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sd-act-row.is-primary .sd-act-t small { color: rgb(var(--c-brand-ink) / .72); }
+.sd-act-chev { flex: none; width: 6px; height: 6px; margin-left: 2px; border-top: 1.5px solid currentColor; border-right: 1.5px solid currentColor; opacity: .55; transform: rotate(45deg); }
+.sd-act .sd-note { flex: none; margin-top: 2px; }
 .sd-runner { margin-top: 14px; }
 
 /* 공유 다이얼로그 — 인증 카드가 넓어 확인 다이얼로그보다 조금 넓게. */
@@ -264,6 +293,7 @@
   .sd-kpi:nth-child(3) { border-right: 0; }
   .sd-kpi:nth-child(-n+3) { border-bottom: 1px solid rgb(var(--c-slate-200)); }
   .sd-two, .sd-opt, .sd-paper, .sd-done { grid-template-columns: minmax(0, 1fr); }
+  .sd-act-row { flex: none; } /* 카드 아래로 내려가면 행은 제 높이 */
 }
 
 /* 좁은 화면 — 한 열로 쌓고 페이지가 스크롤한다. */

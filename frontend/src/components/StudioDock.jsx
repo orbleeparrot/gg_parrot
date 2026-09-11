@@ -424,17 +424,18 @@ export function StudioPaper({ macro, valErr, controller }) {
   );
 }
 
-// ── 매크로 등록 — 왼쪽은 내가 만든 매크로를 담은 트레이딩 카드(산출물), 오른쪽은 동작 목록(리더보드 등록만 노랑), 그 아래 실행기 안내 상자 ──
+// ── 매크로 등록 — 왼쪽은 내가 만든 매크로를 담은 트레이딩 카드(산출물), 오른쪽은 같은 높이의 동작 목록(리더보드 등록만 노랑), 그 아래 실행기 안내 상자 ──
 const ACT_ICON = {
+  board: <path d="M3.5 16.5h13M6 16.5V9.5M10 16.5v-11M14 16.5v-4" />,
   run: <path d="M3.5 4.5h13v9h-13zM7.5 16.5h5M10 13.5v3" />,
   download: <path d="M10 3v10M6 9l4 4 4-4M4 16.5h12" />,
   link: <path d="M8 12a3 3 0 0 0 4.2 0l3-3a3 3 0 0 0-4.2-4.2l-1 1M12 8a3 3 0 0 0-4.2 0l-3 3a3 3 0 0 0 4.2 4.2l1-1" />,
 };
 function ActIcon({ name }) {
   return (
-    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      {ACT_ICON[name]}
-    </svg>
+    <span className="sd-act-ic" aria-hidden="true">
+      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{ACT_ICON[name]}</svg>
+    </span>
   );
 }
 
@@ -460,7 +461,44 @@ function CardSpark({ curve, up }) {
   );
 }
 
-export function StudioOutcomes({ macro, result, valErr, strategyEntry, periodLabel, symbolCount = 1, canRegister, onRegister, onShare, shareBusy = false }) {
+const fmtN = (v, digits = 8) => Number(v).toLocaleString("en-US", { maximumFractionDigits: digits });
+// 데이터 출처 — 서버의 source 값(cache · binance · binance-futures · synthetic)을 사람 말로.
+const SOURCE_KO = { cache: "바이낸스 (캐시)", binance: "바이낸스 현물", "binance-futures": "바이낸스 선물(USDT-M)", synthetic: "합성 데이터 (오프라인)" };
+
+// 카드의 사양표 — 매크로 파일에 실제로 들어가는 조건만(종목 · 봉 간격 · 자금 · 위험 관리 · 비용). 없는 값은 만들지 않는다.
+function macroFacts({ macro, symbol, symbols, result, futures }) {
+  const p = macro.params || {};
+  const risk = macro.risk || {};
+  const fees = macro.fees || {};
+  const quote = quoteOf(symbol);
+  const interval = CANDLE_INTERVALS.find((i) => i.value === macro.candle_interval)?.label || "";
+  const facts = [];
+  if (symbols.length > 1) facts.push({ k: `종목 ${symbols.length}개`, v: symbols.map(baseOf).join(" · "), num: true });
+  facts.push({ k: "봉 간격", v: interval ? `${interval}봉` : "—" });
+  if (macro.rule_type === "C") {
+    facts.push({ k: "자금", v: p.amount_per_buy != null ? `회당 ${fmtN(p.amount_per_buy)} ${quote} · ${fmtN(p.interval_days || 0)}일마다` : "—" });
+  } else {
+    const capital = p.initial_capital ?? result?.initial_capital;
+    const ratio = risk.invest_ratio != null ? `${fmtN(Number(risk.invest_ratio) * 100)}% 투입` : "";
+    facts.push({ k: "자금", v: [capital != null ? `${fmtN(capital, 2)} ${quote}` : "", ratio].filter(Boolean).join(" · ") || "—" });
+  }
+  const riskParts = [
+    risk.stop_loss_pct != null ? `손절 -${fmtN(risk.stop_loss_pct)}%` : "",
+    risk.daily_max_loss_pct != null ? `일일 최대손실 -${fmtN(risk.daily_max_loss_pct)}%` : "",
+    risk.max_holding_hours != null ? `최대 보유 ${fmtN(risk.max_holding_hours)}시간` : "",
+    risk.cooldown_minutes ? `재진입 대기 ${fmtN(risk.cooldown_minutes)}분` : "",
+  ].filter(Boolean);
+  facts.push({ k: "위험 관리", v: riskParts.length ? riskParts.join(" · ") : "손절 없음" });
+  const feeParts = [
+    fees.commission_pct != null ? `수수료 ${fmtN(fees.commission_pct)}%` : "",
+    fees.slippage_pct != null ? `슬리피지 ${fmtN(fees.slippage_pct)}%` : "",
+    futures && fees.funding_pct ? `펀딩 ${fmtN(fees.funding_pct)}%/일` : "",
+  ].filter(Boolean);
+  if (feeParts.length) facts.push({ k: "비용", v: feeParts.join(" · ") });
+  return facts;
+}
+
+export function StudioOutcomes({ macro, result, valErr, strategyEntry, periodLabel, dataSource = "", symbols = [], canRegister, onRegister, onShare, shareBusy = false }) {
   const { quickRun, downloadMacro, launching, error } = useMacroActions(macro);
   const futures = macro.position_side === "short" || macro.leverage > 1;
   const leverage = macro.leverage || 1;
@@ -468,42 +506,52 @@ export function StudioOutcomes({ macro, result, valErr, strategyEntry, periodLab
   const details = leaderboardStrategy(strategyEntry);
   const side = details?.side || macro.position_side || null;
   const sideLabel = { long: "롱", short: "숏", switch: "롱 → 숏" }[side] || "—";
-  const intervalLabel = CANDLE_INTERVALS.find((i) => i.value === macro.candle_interval)?.label || "";
-  const sub = [
-    details?.capital ? `${details.capital.label} ${details.capital.value} ${details.capital.unit}` : "",
-    intervalLabel ? `${intervalLabel}봉` : "",
-    periodLabel || "",
-    symbolCount > 1 ? `외 ${symbolCount - 1}종목` : "",
-  ].filter(Boolean).join(" · ");
+  const marginLabel = macro.margin_mode === "cross" ? "교차" : "격리";
+  const marketLabel = futures ? `선물 · ${marginLabel} ${leverage}배` : "현물 · 1배";
+  const ruleLabel = RULE_TYPES[macro.rule_type]?.label || macro.rule_type || "";
+  const facts = macroFacts({ macro, symbol, symbols, result, futures });
   const ret = Number(result?.final_return_pct ?? 0);
   return (
     <div className="sd-outcomes">
       <div className="sd-done">
         <article className="sd-card" aria-label="내 매크로 카드">
-          <span className="sd-card-eyebrow num" aria-hidden="true">GGPARROT MACRO</span>
-          <div className="sd-card-head">
-            <CoinIcon symbol={symbol} size={48} className="sd-card-coin" alt="" />
-            <div className="sd-card-ticker num">
-              <strong>{baseOf(symbol)}</strong>
-              <small>{quoteOf(symbol)} · {futures ? "선물" : "현물"} · {leverage}배</small>
+          <div className="sd-card-in">
+          {/* 왼쪽 — 이 매크로가 무엇인지: 종목 · 포지션/시장 · 매매 방식 · 조건 문장 · 사양표 */}
+          <div className="sd-card-spec">
+            <div className="sd-card-head">
+              <CoinIcon symbol={symbol} size={44} className="sd-card-coin" alt="" />
+              <div className="sd-card-id">
+                <div className="sd-card-ticker num"><strong>{baseOf(symbol)}</strong><small>{quoteOf(symbol)}</small></div>
+                <div className="sd-card-rule" title="매매 방식">{ruleLabel}</div>
+              </div>
+              <div className="sd-card-tags">
+                <span className={"sd-card-side is-" + (side || "unknown")}>{sideLabel}</span>
+                <span className="sd-card-tag">{marketLabel}</span>
+              </div>
             </div>
-            <span className={"sd-card-side is-" + (side || "unknown")}>{sideLabel}</span>
+            <p className="sd-card-strategy">{details?.description || "상세 정보 없음"}</p>
+            <dl className="sd-card-facts">
+              {facts.map((f) => (
+                <div key={f.k}><dt>{f.k}</dt><dd className={f.num ? "num" : undefined}>{f.v}</dd></div>
+              ))}
+            </dl>
           </div>
-          <p className="sd-card-strategy">{details?.description || "상세 정보 없음"}</p>
-          {sub && <p className="sd-card-sub">{sub}</p>}
-          <CardSpark curve={result?.equity_curve} up={ret >= 0} />
-          {result && (
-            <div className="sd-card-foot">
-              <div>
-                <span className="sd-card-k">백테스트 수익률{periodLabel ? ` · ${periodLabel}` : ""}</span>
-                <span className={"sd-card-v num " + tone(ret)}>{pct(ret)}</span>
-              </div>
-              <div className="r">
-                <span className="sd-card-k">MDD · 승률</span>
-                <span className="sd-card-v num">-{Number(result.mdd_pct).toFixed(1)}% · {Number(result.win_rate_pct).toFixed(1)}%</span>
-              </div>
-            </div>
-          )}
+          {/* 오른쪽 — 이 매크로가 테스트에서 낸 것: 수익률 · 자산곡선 · MDD/승률/매매 */}
+          <div className="sd-card-proof">
+            <span className="sd-card-eyebrow num" aria-hidden="true">GGPARROT MACRO</span>
+            <span className="sd-card-k">백테스트 수익률{periodLabel ? ` · ${periodLabel}` : ""}</span>
+            <strong className={"sd-card-ret num " + tone(ret)}>{pct(ret)}</strong>
+            <CardSpark curve={result?.equity_curve} up={ret >= 0} />
+            {result && (
+              <dl className="sd-card-stats">
+                <div><dt>MDD</dt><dd className="num is-down">-{Number(result.mdd_pct).toFixed(1)}%</dd></div>
+                <div><dt>승률</dt><dd className="num">{Number(result.win_rate_pct).toFixed(1)}%</dd></div>
+                <div><dt>매매</dt><dd><span className="num">{result.total_trades}</span>회</dd></div>
+              </dl>
+            )}
+            {dataSource && <span className="sd-card-src">데이터 · {SOURCE_KO[dataSource] || dataSource}</span>}
+          </div>
+          </div>
         </article>
 
         <div className="sd-act">
@@ -512,18 +560,18 @@ export function StudioOutcomes({ macro, result, valErr, strategyEntry, periodLab
             onClick={() => onRegister?.()}
             disabled={!onRegister || !canRegister || !!valErr}
             title={!canRegister ? "조건이 바뀌었어요 — 다시 테스트한 뒤 등록할 수 있어요" : undefined}
-            className="btn btn-l btn-primary"
+            className="sd-act-row is-primary"
           >
-            리더보드 등록
+            <ActIcon name="board" /><span className="sd-act-t"><b>리더보드 등록</b><small>오늘의 리더보드에 올려 다른 사람과 겨뤄요</small></span><i className="sd-act-chev" aria-hidden="true" />
           </button>
           <button type="button" onClick={quickRun} disabled={!!valErr || launching} className="sd-act-row">
-            <ActIcon name="run" /><span>{launching ? "실행 준비 중…" : "빠른 실행"}</span><em>내 PC 실행기로</em><i className="sd-act-chev" aria-hidden="true" />
+            <ActIcon name="run" /><span className="sd-act-t"><b>{launching ? "실행 준비 중…" : "빠른 실행"}</b><small>내 PC 실행기로 바로 넘겨요</small></span><i className="sd-act-chev" aria-hidden="true" />
           </button>
           <button type="button" onClick={downloadMacro} disabled={!!valErr} className="sd-act-row">
-            <ActIcon name="download" /><span>매크로 파일 내려받기</span><em>.ggm.json</em><i className="sd-act-chev" aria-hidden="true" />
+            <ActIcon name="download" /><span className="sd-act-t"><b>매크로 파일 내려받기</b><small>.ggm.json 파일로 저장해요</small></span><i className="sd-act-chev" aria-hidden="true" />
           </button>
           <button type="button" onClick={onShare} disabled={!!valErr || shareBusy} className="sd-act-row">
-            <ActIcon name="link" /><span>{shareBusy ? "저장 중…" : "공유 링크 보기"}</span><em>인증 카드</em><i className="sd-act-chev" aria-hidden="true" />
+            <ActIcon name="link" /><span className="sd-act-t"><b>{shareBusy ? "저장 중…" : "공유 링크 보기"}</b><small>링크와 인증 카드 이미지를 받아요</small></span><i className="sd-act-chev" aria-hidden="true" />
           </button>
           {!canRegister && <p className="sd-note text-amber-700">조건이 바뀌었어요 — 다시 테스트한 뒤 등록할 수 있어요.</p>}
           {error && <p className="sd-note is-error" role="alert">오류: {error}</p>}

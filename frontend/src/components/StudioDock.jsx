@@ -486,7 +486,7 @@ function macroFacts({ macro, symbol, symbols, result, futures }) {
     risk.stop_loss_pct != null ? `손절 -${fmtN(risk.stop_loss_pct)}%` : "",
     risk.daily_max_loss_pct != null ? `일일 최대손실 -${fmtN(risk.daily_max_loss_pct)}%` : "",
     risk.max_holding_hours != null ? `최대 보유 ${fmtN(risk.max_holding_hours)}시간` : "",
-    risk.cooldown_minutes ? `재진입 대기 ${fmtN(risk.cooldown_minutes)}분` : "",
+    risk.cooldown_minutes ? `손절 뒤 ${fmtN(risk.cooldown_minutes)}분 쉼` : "",
   ].filter(Boolean);
   facts.push({ k: "위험 관리", v: riskParts.length ? riskParts.join(" · ") : "손절 없음" });
   const feeParts = [
@@ -578,31 +578,38 @@ export function StudioOutcomes({ macro, result, valErr, strategyEntry, periodLab
         </div>
       </div>
 
-      {/* 실행기 실거래 안내 — 원래 페이퍼 다음 단계에 있던 호박색 상자 그대로. */}
-      <div className="alert alert-warn sd-runner space-y-3">
-        <div className="t-title">동작 검증 완료 → 매크로 실행기로 실거래</div>
-        <p className="t-small">
-          터미널·파이썬 설치 없이 <b>껄무새 매크로 실행기</b>(프로그램)에 이 매크로 파일을 넣고 돌려요.
-          실행 현황과 원격 종료는 <b>마이페이지</b>에서 확인해요.
-        </p>
-        <div className="pt-3 border-t border-amber-700/30 space-y-2">
-          <p className="t-small font-bold">진행 방법</p>
-          <ol className="t-small list-decimal pl-4 space-y-1">
-            <li>위 버튼으로 <b>매크로 파일(.ggm.json)</b>을 내려받아요.</li>
-            <li>마이페이지에서 <b>껄무새 회원 키</b>를 복사해요(계정당 1개).</li>
-            <li>매크로 실행기를 열어 ①파일 ②실거래 여부 ③API 키 ④회원 키를 넣고 시작해요.</li>
-          </ol>
-          <p className="t-small font-bold pt-1">
-            주의: 실행기는 <u>실제로 주문을 실행해요</u> (기본값: 바이낸스 테스트넷 = 가짜 자금)
+      {/* 실행기 실거래 안내 — 제목 줄(무엇인지) + 두 열(진행 방법 · 알아 둘 것). 상자와 색은 원래의 호박색 alert 그대로. */}
+      <section className="alert alert-warn sd-runner" aria-labelledby="sd-runner-title">
+        <div className="sd-runner-head">
+          <h3 id="sd-runner-title" className="sd-runner-title">실거래는 껄무새 매크로 실행기로</h3>
+          <p className="sd-runner-lead">
+            터미널이나 파이썬 없이, 내려받은 매크로 파일을 실행기(윈도우 프로그램)에 넣으면 돌아가요.
+            실행 현황과 원격 종료는 <b>마이페이지</b>에서 봐요.
           </p>
-          <ul className="t-small list-disc pl-4 space-y-1">
-            <li>{futures ? "숏·레버리지 매크로라 USDT-M 선물로 실행돼요." : "롱·1배 매크로라 현물(spot)로 실행돼요."}</li>
-            <li>익절·손절·일일 최대손실·최대 보유시간·재진입 금지가 함께 적용돼요.</li>
-            <li>실제 자금은 실행기에서 <b>실거래(메인넷) 체크</b>를 켜야 움직여요(경고 확인 단계 있음).</li>
-            <li>API 키는 실행기 로컬에서만 쓰고 서버로 전송·저장하지 않아요. 출금 기능은 없어요.</li>
-          </ul>
         </div>
-      </div>
+        <div className="sd-runner-cols">
+          <div className="sd-runner-sec">
+            <h4 className="sd-runner-h">진행 방법</h4>
+            <ol className="sd-runner-steps">
+              <li><i>1</i><div><b>매크로 파일 내려받기</b><span>위 목록의 <b>매크로 파일 내려받기</b>로 .ggm.json 을 받아요.</span></div></li>
+              <li><i>2</i><div><b>회원 키 복사</b><span>마이페이지에서 껄무새 회원 키를 복사해요. 계정당 하나예요.</span></div></li>
+              <li><i>3</i><div><b>실행기에서 시작</b><span>실행기를 열어 파일 · 실거래 여부 · 바이낸스 API 키 · 회원 키를 넣고 시작해요.</span></div></li>
+            </ol>
+          </div>
+          <div className="sd-runner-sec">
+            <h4 className="sd-runner-h">알아 둘 것</h4>
+            <ul className="sd-runner-notes">
+              <li>
+                <b>실행기는 실제로 주문을 넣어요.</b> 기본은 바이낸스 테스트넷(가짜 자금)이고,
+                실제 자금은 실행기에서 <b>실거래(메인넷)</b>를 켜야 움직여요. 켤 때 경고를 한 번 더 확인해요.
+              </li>
+              <li>{futures ? "숏 · 레버리지 매크로라 USDT-M 선물로 실행돼요." : "롱 · 1배 매크로라 현물로 실행돼요."}</li>
+              <li>익절 · 손절 · 일일 최대손실 · 최대 보유시간 · 손절 뒤 쉬는 시간이 카드의 조건 그대로 적용돼요.</li>
+              <li>API 키는 내 PC 의 실행기에서만 쓰고 서버로 보내거나 저장하지 않아요. 출금 기능은 없어요.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
     </div>
   );
 }

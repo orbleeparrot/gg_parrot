@@ -279,7 +279,22 @@
 .sd-act-row.is-primary .sd-act-t small { color: rgb(var(--c-brand-ink) / .72); }
 .sd-act-chev { flex: none; width: 6px; height: 6px; margin-left: 2px; border-top: 1.5px solid currentColor; border-right: 1.5px solid currentColor; opacity: .55; transform: rotate(45deg); }
 .sd-act .sd-note { flex: none; margin-top: 2px; }
-.sd-runner { margin-top: 14px; }
+/* 실행기 안내 — 호박색 상자 안을 제목 줄 + 두 열(진행 방법 · 알아 둘 것)로. 글자색은 상자의 amber-800 을 따른다. */
+.sd-runner { margin-top: 14px; padding: 16px 18px 18px; }
+.sd-runner-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 18px; padding-bottom: 12px; border-bottom: 1px solid rgb(var(--c-amber-700) / .25); }
+.sd-runner-title { margin: 0; font-size: 15px; font-weight: 800; letter-spacing: -.01em; white-space: nowrap; }
+.sd-runner-lead { margin: 0; flex: 1 1 420px; font-size: 13px; line-height: 1.55; }
+.sd-runner-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px 32px; padding-top: 12px; }
+.sd-runner-sec { min-width: 0; }
+.sd-runner-h { margin: 0 0 8px; font-size: 12px; font-weight: 700; letter-spacing: .02em; opacity: .8; }
+.sd-runner-steps { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+.sd-runner-steps li { display: flex; align-items: flex-start; gap: 10px; }
+.sd-runner-steps i { flex: none; width: 20px; height: 20px; margin-top: 1px; border-radius: 50%; display: grid; place-items: center; background: rgb(var(--c-amber-700)); color: rgb(var(--c-amber-50)); font-style: normal; font-size: 11px; font-weight: 800; }
+.sd-runner-steps div { min-width: 0; display: grid; gap: 1px; }
+.sd-runner-steps div > b { font-size: 13.5px; font-weight: 700; }
+.sd-runner-steps div > span { font-size: 12.5px; line-height: 1.5; opacity: .85; }
+.sd-runner-notes { margin: 0; padding: 0 0 0 16px; list-style: disc; display: grid; gap: 6px; font-size: 13px; line-height: 1.55; } /* preflight 가 ul 의 글머리를 지우므로 되살린다 */
+.sd-runner-notes li::marker { color: rgb(var(--c-amber-700)); }
 
 /* 공유 다이얼로그 — 인증 카드가 넓어 확인 다이얼로그보다 조금 넓게. */
 .studio-share { max-width: 520px; }
@@ -295,6 +310,7 @@
   .sd-kpi:nth-child(-n+3) { border-bottom: 1px solid rgb(var(--c-slate-200)); }
   .sd-two, .sd-opt, .sd-paper, .sd-done { grid-template-columns: minmax(0, 1fr); }
   .sd-act-row { flex: none; } /* 카드 아래로 내려가면 행은 제 높이 */
+  .sd-runner-cols { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* 좁은 화면 — 한 열로 쌓고 페이지가 스크롤한다. */

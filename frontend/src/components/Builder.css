@@ -1,11 +1,11 @@
-/* 빌더 촘촘한 판(variant="dense") — 직접 만들기의 336px 조건 판용.
-   컨트롤 36px · 라벨 13px · 2열 격자. 긴 선택지와 체크 항목만 한 행을 쓴다. */
+/* 조건 패널의 실제 너비에 반응한다. 컨트롤 36px · 라벨 13px. */
+.builder-dense { container: builder / inline-size; }
 .builder-dense .bd-sec { padding: 12px 0 14px; border-bottom: 1px solid rgb(var(--c-slate-200)); }
 .builder-dense .bd-sec:last-child { border-bottom: 0; }
 .builder-dense .bd-h { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 0 0 10px; color: rgb(var(--c-slate-900)); font-size: 14px; font-weight: 700; line-height: 1.45; }
 .builder-dense .bd-h h3 { margin: 0; font-size: inherit; font-weight: inherit; word-break: keep-all; }
 .builder-dense .bd-h .t-caption { flex-basis: 100%; margin-left: 0; font-size: 12px; font-weight: 500; }
-.builder-dense .bd-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; }
+.builder-dense .bd-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-items: start; }
 .builder-dense .bd-grid + .bd-grid { margin-top: 12px; }
 .builder-dense .bd-grid-1 { grid-template-columns: minmax(0, 1fr); }
 .builder-dense .bd-field { min-width: 0; display: grid; grid-row: span 3; grid-template-rows: subgrid; row-gap: 4px; align-self: stretch; }
@@ -55,6 +55,12 @@
 .builder-dense .btn-s { height: 32px; padding-inline: 10px; font-size: 12px; }
 .builder-dense .mt-3 { margin-top: 8px; }
 .builder-dense .mt-4 { margin-top: 10px; }
+@container builder (min-width: 420px) {
+  .builder-dense .bd-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@container builder (min-width: 560px) {
+  .builder-dense .bd-field-wide { grid-column: auto; }
+}
 @media (pointer: coarse) {
   .builder-dense .bd-seg { height: 50px; }
   .builder-dense .bd-seg .seg-item { height: 44px; }

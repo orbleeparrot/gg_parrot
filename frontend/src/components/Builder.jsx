@@ -167,7 +167,7 @@ function SymbolChips({ value, onChange, placeholder }) {
 // intervalOptions — 봉 간격 선택지를 밖에서 준다(예: 테스트 기간에서 봉 수 한도를 넘는 간격은 disabled + title).
 export default function Builder({ form, setForm, chartSlot = null, variant = "default", intervalOptions = null }) {
   const dense = variant === "dense";
-  // 격자 — 기본은 sm 에서 2·3열, 촘촘한 판은 늘 2열.
+  // 격자 — 기본은 sm 에서 2·3열, 조건 판은 컨테이너 너비에 따라 1·2열.
   const g2 = dense ? "bd-grid" : "grid grid-cols-1 sm:grid-cols-2 gap-4";
   const g3 = dense ? "bd-grid" : "grid grid-cols-1 sm:grid-cols-3 gap-4";
   const g2y = dense ? "bd-grid" : "grid grid-cols-1 sm:grid-cols-2 gap-4 gap-y-5";
@@ -338,7 +338,7 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
   // 들어가 "무엇을 볼지 정하고 바로 아래에서 본다"가 한 덩어리로 읽힌다.
   const basicSettings = dense ? (
     <section className="bd-sec">
-      <div className="bd-grid bd-grid-1">{symbolField}{strategyField}</div>
+      <div className="bd-grid">{symbolField}{strategyField}</div>
       <div className="bd-grid">{positionField}{intervalField}{periodField}</div>
       {customRange}
     </section>

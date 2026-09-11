@@ -5,6 +5,7 @@ import Builder from "../components/Builder.jsx";
 import SimBadge from "../components/SimBadge.jsx";
 import { StudioTabs, StudioBacktest, StudioAiExplain, StudioOptimize, StudioPaper, StudioOutcomes } from "../components/StudioDock.jsx";
 import usePaperSession from "../hooks/usePaperSession.js";
+import useStudioSplit from "../hooks/useStudioSplit.js";
 import CandleChart from "../components/CandleChart.jsx";
 import RegisterMacroModal from "../components/RegisterMacroModal.jsx";
 import { EmptyState, Loading } from "../components/Page.jsx";
@@ -31,6 +32,7 @@ import { readStudioSession, writeStudioSession } from "../lib/studioSession.js";
 import { backtestBudget, validBacktestLimits } from "../lib/backtestBudget.js";
 import "./Studio.css";
 import "./StudioBudget.css";
+import "./StudioSplit.css";
 
 const MAX_MACRO_FILE_BYTES = 2 * 1024 * 1024;
 
@@ -107,6 +109,7 @@ function ShareDialog({ share, stale, busy, onClose, onRenew }) {
 }
 
 export default function Studio() {
+  const split = useStudioSplit();
   const { token } = useAuth();
   const { slug } = useParams();
   const location = useLocation();
@@ -653,9 +656,9 @@ export default function Studio() {
         </div>
       )}
 
-      <div className="studio-work">
+      <div ref={split.workRef} className={"studio-work" + (split.dragging ? "is-resizing" : "")} style={{ "--studio-condition-width": `${split.width}px` }}>
         {/* ── 조건 ── */}
-        <aside className="studio-cond" aria-label="조건">
+        <aside id="studio-conditions" className="studio-cond" aria-label="조건">
           <div className="studio-panel-head">
             <h2 className="t-h2 text-slate-900">조건</h2>
             <div className="studio-head-right">
@@ -707,6 +710,8 @@ export default function Studio() {
             </div>
           </div>
         </aside>
+
+        <div className="studio-splitter" {...split.separatorProps} />
 
         {/* ── 차트 — 주인공. 조건을 바꾸면 보조지표·익절/손절선이 바로 따라온다.
             판 머리는 따로 두지 않는다 — CandleChart(studio) 의 도구줄(종목·시세·봉 간격·범례)이 곧 머리다. ── */}

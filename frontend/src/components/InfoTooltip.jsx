@@ -8,13 +8,15 @@ import { GLOSSARY } from "../lib/glossary.js";
 export default function InfoTooltip({ term, text, placement = "top", label = "설명 보기" }) {
   const [open, setOpen] = useState(false);
   const [shift, setShift] = useState(0); // px nudge to keep the bubble on screen
+  const [flipped, setFlipped] = useState(false); // 위쪽이 스크롤 상자에 막히면 아래로 편다
   const ref = useRef(null);
   const tipRef = useRef(null);
   const openBeforePointerRef = useRef(false);
   const tipId = useId();
   const content = text || GLOSSARY[term] || "";
+  const effectivePlacement = flipped ? "bottom" : placement;
   const posCls =
-    placement === "bottom"
+    effectivePlacement === "bottom"
       ? "top-full mt-2"
       : "bottom-full mb-2";
 
@@ -41,21 +43,32 @@ export default function InfoTooltip({ term, text, placement = "top", label = "�
   // 기준은 뷰포트가 아니라 본문 영역(.site-frame)이다 — 데스크톱에서는 왼쪽
   // 232px 를 고정 사이드바가 차지하고 있어서, 뷰포트 기준으로 밀어 넣으면
   // 사이드바 밑으로 들어가 설명이 가려진다(포지션의 롱·숏 ⓘ 가 그랬다).
+  //
+  // 스크롤하는 상자(overflow: auto/hidden) 안에서는 그 상자가 경계다 — 직접 만들기의 조건 판처럼
+  // 좁은 스크롤 판에서 오른쪽 열의 ⓘ 가 판 밖으로 나가면 가로 스크롤이 생겼다. 위쪽이 상자에
+  // 막히면(맨 위 필드) 말풍선을 아래로 편다.
   useEffect(() => {
     if (!open) {
       setShift(0);
+      setFlipped(false);
       return;
     }
     const el = tipRef.current;
     if (!el) return;
     const frame = ref.current?.closest(".site-frame")?.getBoundingClientRect();
+    let box = null;
+    for (let node = ref.current?.parentElement; node && node !== document.body; node = node.parentElement) {
+      const style = getComputedStyle(node);
+      if (/(auto|scroll|hidden)/.test(style.overflowX + style.overflowY)) { box = node.getBoundingClientRect(); break; }
+    }
     const margin = 8;
-    const minLeft = Math.max(0, frame ? frame.left : 0) + margin;
-    const maxRight = Math.min(window.innerWidth, frame ? frame.right : window.innerWidth) - margin;
+    const minLeft = Math.max(0, frame ? frame.left : 0, box ? box.left : 0) + margin;
+    const maxRight = Math.min(window.innerWidth, frame ? frame.right : window.innerWidth, box ? box.right : window.innerWidth) - margin;
     const r = el.getBoundingClientRect();
     if (r.left < minLeft) setShift(minLeft - r.left);
     else if (r.right > maxRight) setShift(maxRight - r.right);
-  }, [open]);
+    if (!flipped && placement === "top" && box && r.top < box.top + 4) setFlipped(true);
+  }, [open, flipped, placement]);
 
   if (!content) return null;
 

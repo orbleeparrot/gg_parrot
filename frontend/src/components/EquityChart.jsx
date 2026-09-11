@@ -6,7 +6,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 // 바깥에 직접 적고, 호버는 그 위에 얹는 보조 수단으로만 둔다. 초기자본선(본전)은
 // 파선으로 긋는다: 격자가 아니라 임계선이라 파선이 의미를 갖는다.
 const W = 720;
-const H = 240;
+const DEFAULT_H = 240;
 const PAD = { l: 8, r: 8, t: 14, b: 22 };
 
 const compact = (v) => {
@@ -17,7 +17,9 @@ const compact = (v) => {
   return v.toFixed(2);
 };
 
-export default function EquityChart({ curve }) {
+// height — viewBox 높이. 폭에 비례해 그려지므로 낮출수록 납작해진다(직접 만들기 결과 독은 150).
+export default function EquityChart({ curve, height = DEFAULT_H }) {
+  const H = height;
   const svgRef = useRef(null);
   const [hover, setHover] = useState(null);
 
@@ -37,7 +39,7 @@ export default function EquityChart({ curve }) {
     const line = values.map((v, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
     const area = `${line} L${x(n - 1).toFixed(1)},${H - PAD.b} L${x(0).toFixed(1)},${H - PAD.b} Z`;
     return { values, x, y, line, area, start: values[0], end: values[n - 1] };
-  }, [curve, n]);
+  }, [curve, n, H]);
 
   const indexAt = useCallback(
     (clientX) => {

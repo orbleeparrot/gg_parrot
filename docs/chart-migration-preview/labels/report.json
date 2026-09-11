@@ -1,0 +1,18 @@
+{
+  "passed": true,
+  "checks": [
+    "1440px default",
+    "1440px studio",
+    "1440px compact",
+    "1440px minimal",
+    "1440px /builder",
+    "1440px /agents",
+    "390px default",
+    "390px studio",
+    "390px compact",
+    "390px minimal",
+    "390px /builder",
+    "390px /agents"
+  ],
+  "pageErrors": []
+}

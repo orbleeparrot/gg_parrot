@@ -13,6 +13,7 @@
   outline-offset: 2px;
 }
 .financial-candle-canvas { position: absolute; inset: 0; }
+.candle-chart.is-studio { width: 100%; min-width: 0; }
 .candle-chart-price-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; }
 .candle-chart.is-studio .candle-chart-readout { flex: none; padding: 6px 0; }
 .candle-chart.is-studio .candle-chart-plot > .financial-candle-plot {
@@ -27,7 +28,7 @@
   .financial-candle-plot.is-expanded.has-rsi { height: 390px; }
 }
 @media (max-width: 1099px) {
-  .candle-chart.is-studio .candle-chart-controls {
+  .candle-chart.is-studio .candle-chart-toolbar .candle-chart-controls {
     display: grid;
     grid-template-columns: 32px max-content 32px max-content;
     justify-content: start;

@@ -9,7 +9,7 @@
   padding: 0;
   overflow: hidden;
 }
-.studio-page { height: 100%; min-height: 0; display: grid; grid-template-rows: auto auto minmax(0, 1fr); }
+.studio-page { height: 100%; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr); }
 
 /* ── 제목 띠: 제목 · 지금 조건 요약 · 모의 뱃지 · 단계 · ⋯ ── */
 .studio-strip {
@@ -70,7 +70,7 @@
 .studio-cond-alert .btn-s { height: 26px; padding-inline: 8px; font-size: 12px; }
 .studio-cond-alert-actions { display: inline-flex; flex-wrap: wrap; gap: 6px; }
 
-/* 차트 — 주인공. CandleChart(variant="studio") 가 판을 채운다: 도구줄 한 줄 → 그림(판 크기를 재서 꽉) → 기간 줄. */
+/* 차트 — CandleChart(variant="studio") 가 도구줄 아래 남는 공간을 채운다. */
 .studio-chart { grid-area: chart; min-height: 0; min-width: 0; display: grid; grid-template-rows: minmax(0, 1fr); }
 .studio-chart-body { min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .studio-chart-body.is-multi { overflow: auto; }

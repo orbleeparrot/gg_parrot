@@ -95,6 +95,21 @@ function LegendItem({ item }) {
   );
 }
 
+function RangeChange({ percent }) {
+  const up = percent >= 0;
+  return (
+    <span
+      className="candle-chart-change inline-flex items-baseline gap-1.5 whitespace-nowrap"
+      title="화면에 보이는 첫 봉의 시가 대비 마지막 봉의 종가"
+    >
+      <span className="t-caption font-medium text-slate-500">구간 등락</span>
+      <span className={"t-label font-bold num " + (up ? "text-green-600" : "text-red-600")}>
+        {up ? "+" : ""}{percent.toFixed(2)}%
+      </span>
+    </span>
+  );
+}
+
 export default function CandleChart({
   symbol,
   market = "spot",
@@ -284,7 +299,6 @@ export default function CandleChart({
   const last = view.length ? view[view.length - 1] : null;
   const firstBar = view.length ? view[0] : null;
   const changePct = last && firstBar?.o ? ((last.c - firstBar.o) / firstBar.o) * 100 : 0;
-  const up = changePct >= 0;
   const inspected = hover != null && candles?.[hover] ? candles[hover] : last;
 
   const btn = "btn btn-s btn-secondary w-9 px-0";
@@ -300,10 +314,7 @@ export default function CandleChart({
               <>
                 <strong className="candle-chart-current num text-slate-900">{fmtPrice(last.c)}</strong>
                 <span className="candle-chart-quote t-caption text-slate-500">{quote}</span>
-                <span className={"candle-chart-change t-label font-bold num " + (up ? "text-green-600" : "text-red-600")}>
-                  {up ? "+" : ""}
-                  {changePct.toFixed(2)}%
-                </span>
+                <RangeChange percent={changePct} />
                 {live && !last.closed && (
                   <span className="candle-chart-live flex items-center gap-1 t-caption font-bold text-red-600">
                     <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse motion-reduce:animate-none" />
@@ -353,13 +364,6 @@ export default function CandleChart({
             </div>
           </div>
         )}
-        {view.length > 0 && (
-          <div className="candle-chart-range num">
-            <span>{fullTime(view[0].t)}</span>
-            <span>{live ? "진행 중 · 실시간 갱신" : "과거 구간 보는 중"}</span>
-            <span>{fullTime(view[view.length - 1].t)}</span>
-          </div>
-        )}
       </div>
     );
   }
@@ -374,10 +378,7 @@ export default function CandleChart({
             <div className="candle-chart-price-row">
               <strong className="candle-chart-current num text-slate-900">{fmtPrice(last.c)}</strong>
               <span className="candle-chart-quote t-caption text-slate-500">{quote}</span>
-              <span className={"candle-chart-change t-label font-bold num " + (up ? "text-green-600" : "text-red-600")}>
-                {up ? "+" : ""}
-                {changePct.toFixed(2)}%
-              </span>
+              <RangeChange percent={changePct} />
               {live && !last.closed && (
                 <span className="candle-chart-live flex items-center gap-1 t-caption font-bold text-red-600">
                   <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse motion-reduce:animate-none" />
@@ -453,24 +454,11 @@ export default function CandleChart({
         <div className="mt-2 notice t-small text-slate-700">{overlayFull.note}</div>
       )}
 
-      {minimal && !error && view.length > 0 ? (
-        <div className="candle-chart-range num">
-          <span>{fullTime(view[0].t)}</span>
-          <span>{fullTime(view[view.length - 1].t)}</span>
-        </div>
-      ) : null}
-
       {!minimal && !compact && !error && view.length > 0 && (
         <div className="mt-2 space-y-1 t-caption text-slate-500">
-          <div className="flex items-center justify-between gap-3 num text-slate-700">
-            <span>{fullTime(view[0].t)}</span>
-            <span>{fullTime(view[view.length - 1].t)}</span>
-          </div>
           <div className="flex items-center justify-between flex-wrap gap-1">
-          <span>휠·＋/− 확대 · 드래그로 이동 · 봉 위에서 시가·고가·저가·종가 확인</span>
-          <span>
-            {live ? "마지막 봉은 진행 중 (실시간 갱신)" : "과거 구간 보는 중"} · 바이낸스 공개 시세
-          </span>
+            <span>휠·＋/− 확대 · 드래그로 이동 · 봉 위에서 시가·고가·저가·종가 확인</span>
+            <span>바이낸스 공개 시세</span>
           </div>
           {overlayFull && (
             <div className="text-slate-400">보조지표는 학습을 돕는 참고 표시예요. 실제 체결·수익을 보장하지 않아요.</div>

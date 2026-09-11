@@ -615,17 +615,6 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   gap: 8px 14px;
 }
 .agent-chart-stage .candle-ohlc-cell { display: flex; justify-content: space-between; gap: 5px; }
-.agent-chart-stage .candle-chart-range {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding-top: 8px;
-  color: rgb(var(--c-slate-500));
-  font-size: 12px;
-  font-weight: 650;
-}
-
 .agent-chat {
   container: agent-chat / inline-size;
   contain: size;

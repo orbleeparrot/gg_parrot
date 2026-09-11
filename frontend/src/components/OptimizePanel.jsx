@@ -127,7 +127,7 @@ function BestSummary({ best, v }) {
   );
 }
 
-export default function OptimizePanel({ form, setForm, valErr }) {
+export default function OptimizePanel({ form, setForm, valErr, onResult }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [data, setData] = useState(null);
@@ -142,6 +142,7 @@ export default function OptimizePanel({ form, setForm, valErr }) {
     try {
       const res = await api.optimize(buildMacro(form));
       setData(res);
+      onResult?.(res);
     } catch (e) {
       setError(String(e.message || e));
     } finally {

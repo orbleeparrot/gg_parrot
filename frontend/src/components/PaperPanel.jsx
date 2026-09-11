@@ -24,25 +24,12 @@ function PaperBadge() {
   );
 }
 
-export function PaperPanelView({ macro, valErr, onRegister, controller }) {
-  const {
-    session,
-    status,
-    mode,
-    setMode,
-    busy,
-    error,
-    setError,
-    startedMacro,
-    startedMode,
-    running,
-    start,
-    stop,
-    restart,
-  } = controller;
-  const { rate: krwRate } = useUsdKrw();
+// 페이퍼 다음 단계 — 실행기 실거래 안내 + 빠른 실행 · 매크로 파일 내려받기.
+// primary="register" 면 리더보드 등록이 노란 버튼이고 빠른 실행은 2차가 된다(노랑은 한 번에 하나).
+export function PaperNextSteps({ macro, valErr, primary = "quickRun", onRegister = null, canRegister = true, result = null, paperStatus = null }) {
   const navigate = useNavigate();
   const [launching, setLaunching] = useState(false);
+  const [error, setError] = useState("");
 
   // 빠른 실행 — 지금 만든 매크로를 내 라이브러리에 저장하고 실행기 연결 플로우로 바로 간다.
   // 리더보드의 '빠른 실행에 사용'과 같은 길이라 실행 화면은 하나만 유지한다.
@@ -71,6 +58,105 @@ export function PaperPanelView({ macro, valErr, onRegister, controller }) {
     }
   }
 
+  const registerFirst = primary === "register";
+  const paperRet = paperStatus?.current_return;
+
+  return (
+    <div className="space-y-5">
+      {registerFirst && (
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <div className="t-small text-slate-700">
+            {/* 지금까지의 근거 한 줄 — 무엇을 보고 등록하는지 남긴다. */}
+            {result && (
+              <span>
+                백테스트 <b className={"num " + (result.final_return_pct >= 0 ? "text-green-600" : "text-red-600")}>
+                  {result.final_return_pct >= 0 ? "+" : ""}{result.final_return_pct.toFixed(2)}%
+                </b>
+                {" · "}MDD <b className="num">-{result.mdd_pct.toFixed(1)}%</b>
+              </span>
+            )}
+            {paperRet != null && (
+              <span>{result ? " · " : ""}페이퍼 <b className={"num " + (paperRet >= 0 ? "text-green-600" : "text-red-600")}>{paperRet >= 0 ? "+" : ""}{Number(paperRet).toFixed(2)}%</b></span>
+            )}
+            {!result && paperRet == null && <span>테스트한 설정을 바꾸지 않고 모의매매에 사용해요.</span>}
+            {!canRegister && (
+              <span className="block mt-1 text-amber-700">조건이 바뀌었어요 — 다시 테스트한 뒤에 등록할 수 있어요.</span>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => onRegister?.()}
+            disabled={!onRegister || !canRegister || !!valErr}
+            className="btn btn-l btn-primary shrink-0"
+          >
+            이 설정으로 리더보드 등록
+          </button>
+        </div>
+      )}
+
+      {/* real-trade: 매크로 파일(.ggm.json)만 내려받아 '껄무새 매크로 실행기'에 넣는다.
+          실행기가 실제 주문을 실행하므로(기본 테스트넷) 아래 문구는 그 위험을 축소하지 않는다. */}
+      <div className="alert alert-warn space-y-3">
+        <div className="t-title">동작 검증 완료 → 매크로 실행기로 실거래</div>
+        <p className="t-small">
+          터미널·파이썬 설치 없이 <b>껄무새 매크로 실행기</b>(프로그램)에 이 매크로 파일을 넣고 돌려요.
+          실행 현황과 원격 종료는 <b>마이페이지</b>에서 확인해요.
+        </p>
+        <div className="pt-3 border-t border-amber-700/30 space-y-2">
+          <p className="t-small font-bold">진행 방법</p>
+          <ol className="t-small list-decimal pl-4 space-y-1">
+            <li>아래 버튼으로 <b>매크로 파일(.ggm.json)</b>을 내려받아요.</li>
+            <li>마이페이지에서 <b>껄무새 회원 키</b>를 복사해요(계정당 1개).</li>
+            <li>매크로 실행기를 열어 ①파일 ②실거래 여부 ③API 키 ④회원 키를 넣고 시작해요.</li>
+          </ol>
+          <p className="t-small font-bold pt-1">
+            주의: 실행기는 <u>실제로 주문을 실행해요</u> (기본값: 바이낸스 테스트넷 = 가짜 자금)
+          </p>
+          <ul className="t-small list-disc pl-4 space-y-1">
+            <li>
+              {macro.position_side === "short" || macro.leverage > 1
+                ? "숏·레버리지 매크로라 USDT-M 선물로 실행돼요."
+                : "롱·1배 매크로라 현물(spot)로 실행돼요."}
+            </li>
+            <li>익절·손절·일일 최대손실·최대 보유시간·재진입 금지가 함께 적용돼요.</li>
+            <li>실제 자금은 실행기에서 <b>실거래(메인넷) 체크</b>를 켜야 움직여요(경고 확인 단계 있음).</li>
+            <li>API 키는 실행기 로컬에서만 쓰고 서버로 전송·저장하지 않아요. 출금 기능은 없어요.</li>
+          </ul>
+        </div>
+        {error && <div className="t-small text-red-600" role="alert">오류: {error}</div>}
+        <div className="flex items-center gap-3 flex-wrap">
+          <button onClick={quickRun} disabled={!!valErr || launching} className={"btn btn-l " + (registerFirst ? "btn-secondary" : "btn-primary")}>
+            {launching ? "실행 준비 중…" : "빠른 실행"}
+          </button>
+          <button onClick={downloadMacro} disabled={!!valErr} className="btn btn-l btn-secondary">
+            매크로 파일 내려받기 (.ggm.json)
+          </button>
+          <Link to="/?run=1&step=1" className="t-small font-semibold text-slate-900 underline underline-offset-4 decoration-slate-300 hover:decoration-slate-900">
+            사용법 →
+          </Link>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function PaperPanelView({ macro, valErr, onRegister, controller, nextSteps = true }) {
+  const {
+    session,
+    status,
+    mode,
+    setMode,
+    busy,
+    error,
+    setError,
+    startedMacro,
+    startedMode,
+    running,
+    start,
+    stop,
+    restart,
+  } = controller;
+  const { rate: krwRate } = useUsdKrw();
   const ret = status?.current_return ?? 0;
   const up = ret >= 0;
   // The running session is locked to the macro it was started with; the builder
@@ -278,47 +364,7 @@ export function PaperPanelView({ macro, valErr, onRegister, controller }) {
         </div>
       )}
 
-      {/* real-trade: 매크로 파일(.ggm.json)만 내려받아 '껄무새 매크로 실행기'에 넣는다.
-          실행기가 실제 주문을 실행하므로(기본 테스트넷) 아래 문구는 그 위험을 축소하지 않는다. */}
-      <div className="alert alert-warn space-y-3">
-        <div className="t-title">동작 검증 완료 → 매크로 실행기로 실거래</div>
-        <p className="t-small">
-          터미널·파이썬 설치 없이 <b>껄무새 매크로 실행기</b>(프로그램)에 이 매크로 파일을 넣고 돌려요.
-          실행 현황과 원격 종료는 <b>마이페이지</b>에서 확인해요.
-        </p>
-        <div className="pt-3 border-t border-amber-700/30 space-y-2">
-          <p className="t-small font-bold">진행 방법</p>
-          <ol className="t-small list-decimal pl-4 space-y-1">
-            <li>아래 버튼으로 <b>매크로 파일(.ggm.json)</b>을 내려받아요.</li>
-            <li>마이페이지에서 <b>껄무새 회원 키</b>를 복사해요(계정당 1개).</li>
-            <li>매크로 실행기를 열어 ①파일 ②실거래 여부 ③API 키 ④회원 키를 넣고 시작해요.</li>
-          </ol>
-          <p className="t-small font-bold pt-1">
-            주의: 실행기는 <u>실제로 주문을 실행해요</u> (기본값: 바이낸스 테스트넷 = 가짜 자금)
-          </p>
-          <ul className="t-small list-disc pl-4 space-y-1">
-            <li>
-              {macro.position_side === "short" || macro.leverage > 1
-                ? "숏·레버리지 매크로라 USDT-M 선물로 실행돼요."
-                : "롱·1배 매크로라 현물(spot)로 실행돼요."}
-            </li>
-            <li>익절·손절·일일 최대손실·최대 보유시간·재진입 금지가 함께 적용돼요.</li>
-            <li>실제 자금은 실행기에서 <b>실거래(메인넷) 체크</b>를 켜야 움직여요(경고 확인 단계 있음).</li>
-            <li>API 키는 실행기 로컬에서만 쓰고 서버로 전송·저장하지 않아요. 출금 기능은 없어요.</li>
-          </ul>
-        </div>
-        <div className="flex items-center gap-3 flex-wrap">
-          <button onClick={quickRun} disabled={!!valErr || launching} className="btn btn-l btn-primary">
-            {launching ? "실행 준비 중…" : "빠른 실행"}
-          </button>
-          <button onClick={downloadMacro} disabled={!!valErr} className="btn btn-l btn-secondary">
-            매크로 파일 내려받기 (.ggm.json)
-          </button>
-          <Link to="/?run=1&step=1" className="t-small font-semibold text-slate-900 underline underline-offset-4 decoration-slate-300 hover:decoration-slate-900">
-            사용법 →
-          </Link>
-        </div>
-      </div>
+      {nextSteps && <PaperNextSteps macro={macro} valErr={valErr} />}
     </section>
   );
 }

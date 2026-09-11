@@ -1,0 +1,126 @@
+/* 직접 만들기 워크벤치 — 페이지는 스크롤하지 않는다. 조건(왼쪽) · 차트(오른쪽 위) · 결과 독(오른쪽 아래)
+   세 판이 각자 스크롤한다. 규격은 DESIGN.md '직접 만들기 워크벤치'. 부품(.field/.seg/.btn/.notice)은 공용 그대로. */
+
+/* 본문 틀 — 내 에이전트(.agent-main)와 같이 상단바·하단 경주마 띠를 뺀 높이에 고정한다. */
+.site-main.studio-main {
+  --studio-marquee-h: 56px;
+  height: calc(100svh - var(--site-topbar-h, 64px) - var(--studio-marquee-h) - env(safe-area-inset-bottom));
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+}
+.studio-page { height: 100%; min-height: 0; display: grid; grid-template-rows: auto auto minmax(0, 1fr); }
+
+/* ── 제목 띠: 제목 · 지금 조건 요약 · 모의 뱃지 · 단계 · ⋯ ── */
+.studio-strip {
+  min-height: 52px;
+  display: flex; align-items: center; gap: 12px;
+  padding: 6px var(--site-gutter);
+  border-bottom: 1px solid rgb(var(--c-slate-200));
+}
+.studio-strip h1 { margin: 0; white-space: nowrap; }
+.studio-strip-meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: rgb(var(--c-slate-500)); }
+.studio-strip-meta b { color: rgb(var(--c-slate-900)); font-weight: 700; }
+.studio-strip-loaded { white-space: nowrap; color: rgb(var(--c-slate-700)); }
+.studio-strip-loaded b { color: rgb(var(--c-slate-900)); }
+/* 단계 — 조건 → 검증 → 페이퍼 → 등록. 점만 상태를 말한다(빈 · 찬 · 노랑=지금). */
+.studio-flow { margin: 0 0 0 auto; padding: 0; list-style: none; display: flex; align-items: center; color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 600; }
+.studio-flow li { display: flex; align-items: center; gap: 6px; padding: 0 10px; height: 28px; position: relative; white-space: nowrap; }
+.studio-flow li + li::before { content: ""; position: absolute; left: -7px; width: 14px; height: 1px; background: rgb(var(--c-slate-300)); }
+.studio-flow li i { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid rgb(var(--c-slate-400)); }
+.studio-flow li.is-done { color: rgb(var(--c-slate-700)); }
+.studio-flow li.is-done i { background: rgb(var(--c-slate-700)); border-color: rgb(var(--c-slate-700)); }
+.studio-flow li.is-now { color: rgb(var(--c-slate-900)); }
+.studio-flow li.is-now i { background: rgb(var(--c-brand)); border-color: rgb(var(--c-brand)); }
+/* ⋯ 메뉴 — 파일 등록·공유·사용법. 본문이 아니라 부속 동작이라 한 버튼에 모은다. */
+.studio-more { position: relative; }
+.studio-more-btn { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 10px; color: rgb(var(--c-slate-700)); font-size: 18px; font-weight: 800; letter-spacing: 1px; line-height: 1; }
+.studio-more-btn:hover, .studio-more-btn[aria-expanded="true"] { background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-900)); }
+.studio-more-btn:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
+.studio-menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 30; min-width: 232px; padding: 6px; border: 1px solid rgb(var(--c-slate-300)); border-radius: 12px; background: rgb(var(--c-surface)); box-shadow: 0 10px 28px rgb(5 12 22 / .24); }
+.studio-menu button, .studio-menu a { width: 100%; height: 38px; padding: 0 10px; display: flex; align-items: center; justify-content: space-between; gap: 10px; border-radius: 8px; color: rgb(var(--c-slate-800)); font-size: 14px; font-weight: 600; text-align: left; text-decoration: none; cursor: pointer; }
+.studio-menu button:hover, .studio-menu a:hover { background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-900)); }
+.studio-menu button:disabled { opacity: .5; cursor: not-allowed; }
+.studio-menu small { color: rgb(var(--c-slate-500)); font-weight: 500; white-space: nowrap; }
+
+/* 띠 아래 알림 줄 — 등록 이어가기·파일 등록 결과처럼 가끔 생기는 것만. */
+.studio-banner { padding: 8px var(--site-gutter) 0; display: grid; gap: 6px; }
+
+/* ── 세 판 ── */
+.studio-work {
+  min-height: 0; min-width: 0;
+  display: grid;
+  grid-template-columns: 336px minmax(0, 1fr);
+  /* 차트 행은 차트의 제 높이(비율 고정 SVG)만큼, 최대 62%. 나머지가 독이다(최소 260px). */
+  grid-template-rows: fit-content(62%) minmax(260px, 1fr);
+  grid-template-areas: "cond chart" "cond dock";
+}
+.studio-panel-head { min-height: 44px; display: flex; align-items: center; gap: 10px; padding: 0 16px; border-bottom: 1px solid rgb(var(--c-slate-200)); }
+.studio-panel-head h2 { margin: 0; }
+.studio-panel-head .studio-head-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.studio-scroll { overflow: auto; min-height: 0; overscroll-behavior: contain; }
+
+/* 조건 — Builder 를 그대로 쓰되 좁은 열에 맞춰 2열로 접는다. 스크롤은 이 판 안에서만. */
+.studio-cond { grid-area: cond; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; border-right: 1px solid rgb(var(--c-slate-200)); }
+.studio-cond-body { padding: 4px 16px 16px; }
+/* Builder 의 sm:grid-cols-3 은 336px 안에서 칸이 95px 로 줄어 select 글자가 잘린다 — 이 판에서는 모두 2열. */
+.studio-cond .sm\:grid-cols-2, .studio-cond .sm\:grid-cols-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.studio-cond .space-y-5 > :not([hidden]) ~ :not([hidden]) { margin-top: 16px; }
+.studio-cond .candle-chart { display: none; }
+.studio-cond-foot { padding: 12px 16px; border-top: 1px solid rgb(var(--c-slate-200)); display: grid; gap: 8px; }
+.studio-cond-foot .studio-foot-note { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+
+/* 차트 — 주인공. CandleChart 의 도구줄·시세는 그대로, 위 괘선만 뺀다(판 머리가 그 역할). */
+.studio-chart { grid-area: chart; min-height: 0; min-width: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); }
+.studio-chart-body { padding: 0 16px 8px; }
+/* 종목이 하나면 차트를 판 높이에 맞춰 누른다 — CandleChart 의 SVG 는 폭에 비례해 높이가 정해지므로,
+   판이 그보다 낮을 때 SVG 만 줄여(그림은 가운데로 모임) 스크롤이 생기지 않게 한다. 여러 종목은 세로로 쌓여 스크롤한다. */
+.studio-chart-body.is-single { display: flex; flex-direction: column; overflow: hidden; }
+.studio-chart-body.is-single .candle-chart { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.studio-chart-body.is-single .candle-chart > * { flex: 0 0 auto; }
+.studio-chart-body.is-single .candle-chart > div:has(> svg.w-full) { flex: 0 1 auto; min-height: 0; }
+.studio-chart-body.is-single .candle-chart > div:has(> svg.w-full) > svg.w-full { max-height: 100%; }
+.studio-chart-body .candle-chart { border-top: 0; padding-top: 6px; }
+.studio-chart-body .candle-chart + .candle-chart { border-top: 1px solid rgb(var(--c-slate-200)); padding-top: 14px; margin-top: 8px; }
+
+/* 결과 독 — 탭이 곧 검증 순서. 탭 앞 점이 상태, 오른쪽에는 지금 단계의 다음 행동 하나. */
+.studio-dock { grid-area: dock; min-height: 0; min-width: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); border-top: 1px solid rgb(var(--c-slate-200)); }
+/* 탭과 다음 행동이 한 줄에 안 들어가면 행동이 아래 줄 오른쪽으로 내려온다(가로 스크롤로 숨기지 않는다). */
+.studio-dock-head { min-height: 52px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 8px 16px; border-bottom: 1px solid rgb(var(--c-slate-200)); }
+.studio-dock-head .seg { flex: none; }
+.studio-dock .seg-item { height: 34px; font-size: 14px; white-space: nowrap; }
+.studio-dock .seg-item:disabled { opacity: .45; cursor: not-allowed; }
+.studio-dot { flex: none; width: 7px; height: 7px; margin-right: 7px; border-radius: 50%; border: 1.5px solid rgb(var(--c-slate-400)); }
+.studio-dot.is-ok { background: rgb(var(--c-green-600)); border-color: rgb(var(--c-green-600)); }
+.studio-dot.is-warn { background: rgb(var(--c-amber-600)); border-color: rgb(var(--c-amber-600)); }
+.studio-dot.is-run { background: rgb(var(--c-brand)); border-color: rgb(var(--c-brand)); animation: studio-pulse 1.4s ease-in-out infinite; }
+@keyframes studio-pulse { 50% { opacity: .35; } }
+.studio-dock-cta { margin-left: auto; flex: none; display: flex; align-items: center; gap: 10px; }
+.studio-dock-cta .studio-cta-note { color: rgb(var(--c-slate-500)); white-space: nowrap; }
+.studio-dock-body { padding: 14px 16px 24px; }
+/* 부품들이 스스로 그리는 위 괘선·여백은 독 안에서는 탭 줄이 대신한다. */
+.studio-dock-body > section { border-top: 0; padding-top: 0; }
+.studio-dock-body .studio-stale { margin-bottom: 14px; }
+
+/* 공유 다이얼로그 — 인증 카드가 넓어 확인 다이얼로그보다 조금 넓게. */
+.studio-share { max-width: 520px; }
+.studio-share img { width: 100%; border-radius: 12px; border: 1px solid rgb(var(--c-slate-200)); }
+
+@media (max-width: 1560px) {
+  .studio-dock-cta .studio-cta-note { display: none; } /* 탭 다섯 + 버튼이 한 줄에 들어가도록 안내 문구는 뺀다 */
+}
+@media (max-width: 1300px) {
+  .studio-dock .seg-item { padding-inline: 8px; font-size: 13px; }
+}
+
+/* 좁은 화면 — 한 열로 쌓고 페이지가 스크롤한다. */
+@media (max-width: 1099px) {
+  .site-main.studio-main { height: auto; overflow: visible; padding-bottom: calc(var(--studio-marquee-h) + env(safe-area-inset-bottom)); }
+  .studio-page { height: auto; }
+  .studio-work { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto auto; grid-template-areas: "chart" "cond" "dock"; }
+  .studio-cond { border-right: 0; border-top: 1px solid rgb(var(--c-slate-200)); }
+  .studio-cond .studio-scroll, .studio-dock .studio-scroll, .studio-chart .studio-scroll { overflow: visible; }
+  .studio-dock-body { min-height: 320px; }
+  .studio-flow { display: none; }
+  .studio-strip-meta { display: none; }
+}

@@ -118,6 +118,7 @@ export default function App() {
   const isStart = isHome || isLegacyStart;
   const isNews = pathname === "/news";
   const isAgents = pathname === "/agents";
+  const isBuilder = pathname === "/builder" || pathname.startsWith("/s/");
   const authShell = ["/login", "/forgot", "/reset"].includes(pathname);
   // '오늘의 경주마' 마퀴는 화면 아래에 고정으로 떠 있다. 띄우는 화면에서는 본문
   // 마지막 줄이 그 밑에 깔리므로, 마퀴 높이만큼 바닥 여백을 더 준다.
@@ -166,6 +167,8 @@ export default function App() {
               ? "site-main auth-main"
               : isAgents
                 ? "site-main agent-main"
+                : isBuilder
+                ? "site-main studio-main"
                 : isNews
                 ? "site-main news-main py-6 sm:py-8"
                 : "site-main py-6 sm:py-8"}

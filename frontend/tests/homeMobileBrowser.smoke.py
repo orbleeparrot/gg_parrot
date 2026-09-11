@@ -83,11 +83,20 @@ def assert_static_home(page):
     expect(page.locator(".home-community-post-list a,.home-community-post-list button")).to_have_count(0)
     expect(page.locator(".home-board-preview-head")).to_have_count(0)
     expect(page.locator(".home-board-preview-footer")).to_have_count(0)
+    assert_preview_outline(page)
     expect(page.locator(".home-mobile-stack h1")).to_have_count(1)
     expect(page.locator(".home-mobile-stack #home-community-title")).to_have_count(1)
     assert page.locator(".home-community-post-track").evaluate(
         "el => getComputedStyle(el).animationName === 'none' && getComputedStyle(el).transform === 'none'"
     )
+
+
+def assert_preview_outline(page):
+    style = page.locator('.home-community-post-viewport').evaluate("""n=>{
+      const s=getComputedStyle(n);
+      return {borders:[s.borderTopWidth,s.borderRightWidth,s.borderBottomWidth,s.borderLeftWidth],opacity:s.opacity,filter:s.filter};
+    }""")
+    assert style == {'borders':['1px']*4,'opacity':'1','filter':'none'},style
 
 
 def measure(page):
@@ -183,7 +192,8 @@ def main():
             expect(page.locator(".home-community-post-list a,.home-community-post-list button")).to_have_count(0)
             preview = page.locator(".home-community-post-viewport")
             assert preview.evaluate("n=>getComputedStyle(n).cursor") == 'default'
-            assert preview.evaluate("n=>Number(getComputedStyle(n).opacity)") == .72
+            assert_preview_outline(page)
+            expect(page.locator(".home-board-preview-footer")).to_have_count(0)
             assert page.locator(".home-community-post-track").evaluate(
                 "el => getComputedStyle(el).animationName"
             ) == "home-community-post-belt"

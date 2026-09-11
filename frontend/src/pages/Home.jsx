@@ -194,9 +194,6 @@ function CommunityEntryHero({ staticLayout = false }) {
             {staticLayout ? null : <CommunityPostList duplicate />}
           </div>
         </div>
-        {!staticLayout ? <footer className="home-board-preview-footer" aria-hidden="true">
-          <span>‹</span><strong>1</strong><span>2</span><span>3</span><span>›</span>
-        </footer> : null}
       </aside>
     </section>
   );

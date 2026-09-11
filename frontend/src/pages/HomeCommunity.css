@@ -1,8 +1,10 @@
-/* 히어로의 게시판 모형은 유지하고, 예시 글만 읽기 전용 미리보기로 구분한다. */
+/* 게시글 미리보기는 외곽선으로 묶고 원래 글자색을 사용한다. */
 .home-community-preview-caption { margin: 0 0 8px; text-align: right; }
 .home-community-preview .home-community-post-viewport {
-  opacity: .72;
-  filter: grayscale(1);
+  border: 1px solid rgb(var(--c-slate-300));
+  border-radius: 12px;
+  padding-inline: 8px;
   cursor: default;
 }
 .home-community-preview .home-community-post-list li { cursor: default; }
+.home-mobile-stack .home-community-post-list li:last-child { border-bottom: 0; }

@@ -79,12 +79,14 @@
 .studio-chart-body.is-multi .candle-chart.is-studio + .candle-chart.is-studio { border-top: 1px solid rgb(var(--c-slate-200)); }
 /* 도구줄 — 종목·시세·LIVE | 봉 간격 segmented · 확대 | 범례. 44px 한 줄, 좁으면 접힌다. */
 .candle-chart.is-studio .candle-chart-toolbar { min-height: 44px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 4px 0; border-bottom: 1px solid rgb(var(--c-slate-200)); }
-.candle-chart.is-studio .candle-chart-market { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
-.candle-chart.is-studio .candle-chart-symbol { margin: 0; font-size: 15px; font-weight: 800; letter-spacing: -.01em; }
-.candle-chart.is-studio .candle-chart-current { font-size: 15px; font-weight: 700; }
 .candle-chart.is-studio .candle-chart-controls { display: flex; align-items: center; gap: 6px; }
 .candle-chart.is-studio .candle-chart-controls .seg { padding: 3px; }
 .candle-chart.is-studio .candle-chart-controls .seg-item { height: 24px; padding: 0 9px; font-size: 12px; }
+/* 봉 간격 표시 — 누르는 것이 아니다. 조건 판의 값을 비출 뿐. */
+.candle-chart.is-studio .candle-chart-intervals { cursor: default; }
+.candle-chart.is-studio .candle-chart-intervals .seg-item { cursor: default; }
+.candle-chart.is-studio .candle-chart-intervals .seg-item:not(.seg-item-on):hover { color: rgb(var(--c-slate-500)); }
+.candle-chart.is-studio .candle-chart-intervals .seg-item.is-unavailable { opacity: .38; }
 .candle-chart.is-studio .candle-chart-controls .btn-s { height: 28px; }
 .candle-chart.is-studio .candle-chart-zoom { min-width: 34px; text-align: center; }
 .candle-chart.is-studio .candle-chart-legend { margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }

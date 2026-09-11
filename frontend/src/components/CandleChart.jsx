@@ -328,19 +328,16 @@ export default function CandleChart({
             )}
           </div>
           <div className="candle-chart-controls">
-            <div className="seg" role="group" aria-label="차트 봉 간격">
+            {/* 봉 간격은 표시만 — 값은 왼쪽 조건에서 정한다. 한도를 넘는 간격은 흐리게. */}
+            <div className="seg candle-chart-intervals" role="group" aria-label="봉 간격 (조건에서 정해요)" title="봉 간격은 왼쪽 조건에서 정해요">
               {INTERVALS.map((o) => (
-                <button
+                <span
                   key={o.value}
-                  type="button"
-                  onClick={() => changeInterval(o.value)}
-                  aria-pressed={interval === o.value}
-                  disabled={!!disabledIntervalMap[o.value]}
-                  title={disabledIntervalMap[o.value]}
-                  className={"seg-item " + (interval === o.value ? "seg-item-on" : "")}
+                  aria-current={interval === o.value ? "true" : undefined}
+                  className={"seg-item " + (interval === o.value ? "seg-item-on" : "") + (disabledIntervalMap[o.value] ? " is-unavailable" : "")}
                 >
                   {o.label}
-                </button>
+                </span>
               ))}
             </div>
             <button onClick={() => applyZoom(zoom * 1.35)} disabled={zoom >= maxZoom} className={zoomBtn} title="축소 (더 많은 봉)" aria-label="차트 축소">−</button>

@@ -30,7 +30,7 @@ function leverageRisk(lev) {
 }
 
 // §4 자리별 적용표: 입력 라벨 14/600, 도움말 14/500 — 둘 다 '작은 글씨' 단계.
-function Field({ label, term, children, hint, anchor }) {
+function Field({ label, term, children, hint, anchor, wide = false }) {
   const dense = useContext(DenseContext);
   const controlId = useId();
   const labelId = `${controlId}-label`;
@@ -51,7 +51,7 @@ function Field({ label, term, children, hint, anchor }) {
   if (dense) {
     return (
       <div
-        className="bd-field"
+        className={wide ? "bd-field bd-field-wide" : "bd-field"}
         data-tour={anchor}
         role={directControl ? undefined : "group"}
         aria-labelledby={directControl ? undefined : labelId}
@@ -210,8 +210,8 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
       const text = match ? match[1] : label;
       const unit = opts.unit || (match ? match[2] : "");
       return (
-        <Field key={k} label={text} term={opts.term} hint={opts.hint} anchor={opts.anchor}>
-          <div className="bd-unit">
+        <Field key={k} label={opts.denseLabel || text} term={opts.term} hint={opts.hint} anchor={opts.anchor} wide={opts.wide}>
+          <div className="bd-unit" style={{ "--bd-unit-width": unit ? `${Math.max(30, unit.length * 7 + 18)}px` : "9px" }}>
             <input className="field num" type="number" step={opts.step || "any"} value={form[k]} onChange={set(k)} aria-label={label} />
             {unit && <span className="bd-unit-tag">{unit}</span>}
           </div>
@@ -225,7 +225,7 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
     );
   };
   const sel = (k, label, options, opts = {}) => (
-    <Field key={k} label={label} term={opts.term} hint={opts.hint} anchor={opts.anchor}>
+    <Field key={k} label={label} term={opts.term} hint={opts.hint} anchor={opts.anchor} wide={opts.wide}>
       <select className={inputCls} value={form[k]} onChange={set(k)}>
         {options.map((o) => (
           <option key={o.value} value={o.value} disabled={!!o.disabled} title={o.title}>{o.label}{o.disabled ? " · 불가" : ""}</option>
@@ -246,7 +246,7 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
   const unitLabel = (label) => (dense ? label.replace(/\s*\([^()]+\)\s*$/, "") : label);
   const unitInput = (input, unit) =>
     dense ? (
-      <div className="bd-unit flex-1">
+      <div className="bd-unit flex-1" style={{ "--bd-unit-width": unit.length > 1 ? "38px" : "30px" }}>
         {input}
         <span className="bd-unit-tag">{unit}</span>
       </div>
@@ -385,8 +385,8 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
             {num("upper_price", `가격 범위 상단 (${quoteOf(form.symbol)})`, { term: "grid" })}
             {num("grid_count", "나눌 칸 수", { term: "grid_count", step: "1" })}
             {sel("grid_mode", "칸 간격", [{ value: "arithmetic", label: "같은 금액 간격" }, { value: "geometric", label: "같은 비율 간격" }], { term: "grid_mode" })}
-            {num("per_grid_invest", `격자당 투입액 (빈칸=균등, ${quoteOf(form.symbol)})`, { hint: "비우면 예산을 격자 수로 균등 분배" })}
-            {sel("band_exit_action", "가격 범위를 벗어나면", [{ value: "stop", label: "전량 정리하고 중단" }, { value: "hold", label: "보유 유지" }])}
+            {num("per_grid_invest", `격자당 투입액 (빈칸=균등, ${quoteOf(form.symbol)})`, { denseLabel: "격자당 투입액", unit: quoteOf(form.symbol), hint: "비우면 예산을 격자 수로 균등 분배", wide: true })}
+            {sel("band_exit_action", "가격 범위를 벗어나면", [{ value: "stop", label: "전량 정리하고 중단" }, { value: "hold", label: "보유 유지" }], { wide: true })}
             <div className={g2full}>
               {chk("rebalance_on_start", "시작 가격에 맞춰 칸 다시 배치")}
               {cap}
@@ -396,7 +396,7 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
 
         {rt === "E" && (
           <div className={g2}>
-            {sel("entry_mode", "처음 들어갈 때", [{ value: "immediate", label: "바로 진입" }, { value: "dip", label: "가격이 내리면 진입" }])}
+            {sel("entry_mode", "처음 들어갈 때", [{ value: "immediate", label: "바로 진입" }, { value: "dip", label: "가격이 내리면 진입" }], { wide: true })}
             {num("entry_dip", "진입할 하락폭 (%)", { hint: "가격이 내리면 진입을 골랐을 때 써요" })}
             {num("activation_profit", "추적을 시작할 이익 (%)", { term: "activation_profit" })}
             {num("trail_percent", "고점에서 허용할 하락폭 (%)", { term: "trail_percent" })}
@@ -424,18 +424,20 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
         {rt === "G" && (
           <div className={g2}>
             {num("bb_period", "평균 계산 기간", { term: "bollinger", step: "1" })}
-            {num("bb_std", "밴드 폭 (표준편차 σ)", { term: "bollinger" })}
+            {num("bb_std", "밴드 폭 (표준편차 σ)", { term: "bollinger", denseLabel: "밴드 폭 · 표준편차", unit: "σ" })}
             {sel("strategy", "밴드를 쓰는 방식", [{ value: "reversion", label: "밴드 안으로 되돌아오기" }, { value: "breakout", label: "밴드 밖으로 돌파하기" }], {
+              wide: true,
               hint: isShort
                 ? "숏은 방향이 반대예요 — 되돌아오기는 상단 밴드, 돌파하기는 하단 이탈에서 진입해요"
                 : undefined,
             })}
-            {sel("exit_target", "정리할 위치", [{ value: "mid", label: "가운데 선" }, { value: "opposite", label: "반대쪽 밴드" }])}
+            {sel("exit_target", "정리할 위치", [{ value: "mid", label: "가운데 선" }, { value: "opposite", label: "반대쪽 밴드" }], { wide: true })}
             <div className={g2full}>
               {chk("squeeze_filter", "변동성이 줄어든 구간만 사용", { term: "squeeze" })}
               {num("squeeze_lookback", "변동성 비교 기간", { step: "1" })}
+              {dense && cap}
             </div>
-            {cap}
+            {!dense && cap}
           </div>
         )}
 
@@ -456,7 +458,7 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
         {rt === "I" && (
           <div className={g2}>
             {num("k", "돌파 기준 계수 (k)", { term: "volatility_breakout" })}
-            {sel("exit_mode", "정리 기준", [{ value: "next_open", label: "다음 봉 시작 가격" }, { value: "trailing", label: "고점 추적" }, { value: "take_profit", label: "익절 기준" }])}
+            {sel("exit_mode", "정리 기준", [{ value: "next_open", label: "다음 봉 시작 가격" }, { value: "trailing", label: "고점 추적" }, { value: "take_profit", label: "익절 기준" }], { wide: true })}
             {num("trail_percent", "고점에서 허용할 하락폭 (%)", { term: "trail_percent", hint: "고점 추적을 골랐을 때 써요" })}
             {num("take_profit", "익절 기준 (%)", { hint: "익절 기준을 골랐을 때 써요" })}
             {num("ma_filter_period", "이동평균 필터 기간", { step: "1", hint: "비워두면 사용하지 않아요" })}
@@ -468,13 +470,15 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
 
         {rt === "J" && (
           <div className={g2}>
-            {sel("ma_type", "이동평균 종류", [{ value: "SMA", label: "단순 이동평균 (SMA)" }, { value: "EMA", label: "최근 가격 비중이 큰 평균 (EMA)" }], { term: "ma_cross" })}
-            {num("confirm_candles", "신호를 확인할 봉 수", { step: "1" })}
+            {sel("ma_type", "이동평균 종류", [{ value: "SMA", label: "단순 이동평균 (SMA)" }, { value: "EMA", label: "최근 가격 비중이 큰 평균 (EMA)" }], { term: "ma_cross", wide: true })}
+            {!dense && num("confirm_candles", "신호를 확인할 봉 수", { step: "1" })}
             {num("fast_period", "짧은 이동평균 기간", { step: "1" })}
             {num("slow_period", "긴 이동평균 기간", { step: "1" })}
             {sel("exit_signal", "정리 기준", [{ value: "dead_cross", label: isShort ? "평균선이 위로 교차" : "평균선이 아래로 교차" }, { value: "take_profit", label: "익절 기준" }, { value: "both", label: "둘 중 먼저" }], {
+              wide: true,
               hint: isShort ? "숏은 데드크로스에서 들어가고 골든크로스에서 정리해요" : undefined,
             })}
+            {dense && num("confirm_candles", "신호를 확인할 봉 수", { step: "1" })}
             {num("take_profit", "익절 기준 (%)", { hint: "익절 기준을 포함할 때 써요" })}
             {cap}
           </div>

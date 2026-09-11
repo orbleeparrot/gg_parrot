@@ -26,9 +26,16 @@
 .studio-panel-head { min-height: 44px; display: flex; align-items: center; gap: 10px; padding: 0 16px; border-bottom: 1px solid rgb(var(--c-slate-200)); }
 .studio-panel-head h2 { margin: 0; }
 .studio-panel-head .studio-head-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
-/* 매크로 파일 등록 아이콘 — 조건 제목 옆 28px. */
-.studio-cond-upload { width: 28px; height: 28px; display: inline-grid; place-items: center; border: 1px solid rgb(var(--c-slate-300)); border-radius: 8px; color: rgb(var(--c-slate-700)); background: transparent; cursor: pointer; }
-.studio-cond-upload:hover { background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-900)); border-color: rgb(var(--c-slate-400)); }
+/* 제목과 파일 등록을 한 묶음으로. 아이콘은 테두리 없이 제목 높이에 맞춘다. */
+.studio-cond-heading { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.studio-cond-upload { flex: none; width: 32px; height: 32px; padding: 0; display: inline-grid; place-items: center; border: 0; border-radius: 6px; color: rgb(var(--c-slate-700)); background: transparent; cursor: pointer; }
+.studio-cond-upload > svg { display: block; width: 20px; height: 20px; }
+@media (hover: hover) {
+  .studio-cond-upload:hover:not(:disabled) { background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-900)); }
+}
+@media (pointer: coarse) {
+  .studio-cond-upload { width: 44px; height: 44px; }
+}
 .studio-cond-upload:disabled { opacity: .5; cursor: not-allowed; }
 .studio-cond-upload:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
 .studio-scroll { overflow: auto; min-height: 0; overscroll-behavior: contain; }

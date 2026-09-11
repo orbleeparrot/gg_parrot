@@ -48,8 +48,8 @@ function periodLabelOf(macro) {
 // 매크로 파일 등록 아이콘 — 트레이 위로 올라가는 화살표.
 function UploadIcon() {
   return (
-    <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M10 12.5V3.5M6.5 7l3.5-3.5L13.5 7M3.5 12.5v2.5a1.5 1.5 0 0 0 1.5 1.5h10a1.5 1.5 0 0 0 1.5-1.5v-2.5" />
+    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 16V3M7 8l5-5 5 5M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
     </svg>
   );
 }
@@ -666,26 +666,28 @@ export default function Studio() {
         {/* ── 조건 ── */}
         <aside className="studio-cond" aria-label="조건">
           <div className="studio-panel-head">
-            <h2 className="t-title text-slate-900">조건</h2>
-            {/* 매크로 파일 등록 — 가지고 있는 .ggm.json 을 내 매크로에 등록하고 조건에 불러온다. 로그인 전엔 로그인으로. */}
-            {!slug && (token ? (
-              <button
-                type="button"
-                className="studio-cond-upload"
-                onClick={() => macroFileInputRef.current?.click()}
-                disabled={fileImportBusy || busy}
-                aria-label={fileImportBusy ? "파일 등록 중" : "매크로 파일 등록 (.ggm.json)"}
-                title={fileImportBusy ? "파일 등록 중…" : "매크로 파일 등록 (.ggm.json) — 내 매크로에 등록하고 조건에 불러와요"}
-              >
-                <UploadIcon />
-              </button>
-            ) : (
-              <Link to="/login?next=%2Fbuilder" className="studio-cond-upload" aria-label="로그인 후 매크로 파일 등록" title="매크로 파일을 등록하려면 로그인이 필요해요"><UploadIcon /></Link>
-            ))}
+            <div className="studio-cond-heading">
+              <h2 className="t-title text-slate-900">조건</h2>
+              {/* 매크로 파일 등록 — 가지고 있는 .ggm.json 을 내 매크로에 등록하고 조건에 불러온다. 로그인 전엔 로그인으로. */}
+              {!slug && (token ? (
+                <button
+                  type="button"
+                  className="studio-cond-upload"
+                  onClick={() => macroFileInputRef.current?.click()}
+                  disabled={fileImportBusy || busy}
+                  aria-label={fileImportBusy ? "파일 등록 중" : "매크로 파일 등록 (.ggm.json)"}
+                  title={fileImportBusy ? "파일 등록 중…" : "매크로 파일 등록 (.ggm.json) — 내 매크로에 등록하고 조건에 불러와요"}
+                >
+                  <UploadIcon />
+                </button>
+              ) : (
+                <Link to="/login?next=%2Fbuilder" className="studio-cond-upload" aria-label="로그인 후 매크로 파일 등록" title="매크로 파일을 등록하려면 로그인이 필요해요"><UploadIcon /></Link>
+              ))}
+            </div>
             <div className="studio-head-right">
-              <label className="flex items-center gap-2 t-caption text-slate-700 cursor-pointer select-none">
+              <label className="flex items-center gap-2 t-caption text-slate-700 cursor-pointer select-none whitespace-nowrap">
                 <input type="checkbox" checked={autoRun} onChange={(event) => setAutoRun(event.target.checked)} />
-                변경 뒤 자동 테스트
+                자동 실행
               </label>
             </div>
           </div>

@@ -4,11 +4,15 @@
 // 숫자는 자릿수 쉼표를 품되 쉼표로 끝나지 않는다 — "볼린저(20, 2σ)" 의 "20," 가 숫자에 딸려 오지 않게.
 const NUM = /([+\-−]?\d(?:[\d,]*\d)?(?:\.\d+)?(?:\s?~\s?[+\-−]?\d(?:[\d,]*\d)?(?:\.\d+)?)?(?:%|σ|x)?)/g;
 
-export function strategyPhrases(text) {
+// 서버 요약 끝에 붙는 "3배 레버리지(격리)" 구. 카드 머리의 시장 태그(선물 · 격리 3배)가 같은 값을 보여 주므로 뺄 수 있다.
+const LEVERAGE_PHRASE = /^\d+배 레버리지(\(.*\))?$/;
+
+export function strategyPhrases(text, { dropLeverage = false } = {}) {
   const phrases = String(text || "")
     .split(" · ")
     .map((phrase) => phrase.trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .filter((phrase) => !(dropLeverage && LEVERAGE_PHRASE.test(phrase)));
   return phrases.map((phrase) => {
     const tokens = [];
     let last = 0;

@@ -234,11 +234,11 @@
 .sd-card-side.is-long { background: rgb(var(--c-green-600) / .14); color: rgb(var(--c-green-600)); }
 .sd-card-side.is-short { background: rgb(var(--c-red-600) / .14); color: rgb(var(--c-red-600)); }
 .sd-card-tag { display: inline-flex; align-items: center; height: 30px; padding: 0 12px; border: 1px solid rgb(var(--c-slate-300)); border-radius: 8px; color: rgb(var(--c-slate-700)); font-size: 14px; font-weight: 700; white-space: nowrap; }
-/* 조건 문장 — 구(句)는 세로 괘선으로, 숫자는 고정폭 굵게 한 단계 크게, 부호 있는 값은 등락색. 단어는 600 으로 한 단계 가볍게 둬 숫자가 먼저 읽힌다. */
-.sd-card-strategy { margin: 0; display: flex; flex-wrap: wrap; align-items: baseline; row-gap: 4px; color: rgb(var(--c-slate-900)); font-size: 19px; font-weight: 600; letter-spacing: -.01em; line-height: 1.4; }
-.sd-card-phrase { min-width: 0; overflow-wrap: anywhere; }
+/* 조건 문장 — 한 줄 고정. 구(句)는 세로 괘선으로, 사용자가 정한 숫자는 고정폭 굵게 노랑(amber-700: 라이트 짙은 호박, 다크 밝은 노랑), 단어는 600.
+   폭이 모자라면 StrategyText 가 --sd-strategy-max 에서 들어갈 때까지 글자 크기를 줄인다. 줄바꿈도 말줄임도 없다(전문은 title). */
+.sd-card-strategy { --sd-strategy-max: 19px; margin: 0; color: rgb(var(--c-slate-900)); font-size: var(--sd-strategy-max); font-weight: 600; letter-spacing: -.01em; line-height: 1.4; white-space: nowrap; overflow: hidden; }
 .sd-card-phrase + .sd-card-phrase { margin-left: 12px; padding-left: 12px; border-left: 1px solid rgb(var(--c-slate-300)); }
-.sd-card-strategy .num { font-size: 21px; font-weight: 800; letter-spacing: -.02em; }
+.sd-card-strategy .num { color: rgb(var(--c-amber-700)); font-size: 1.1em; font-weight: 800; letter-spacing: -.02em; }
 .sd-card-facts { margin: auto 0 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 18px; padding-top: 14px; border-top: 1px solid rgb(var(--c-slate-200)); }
 .sd-card-facts > div { min-width: 0; }
 .sd-card-facts dt { color: rgb(var(--c-slate-500)); font-size: 11px; font-weight: 600; }
@@ -258,8 +258,7 @@
 /* 카드가 좁으면(1300~1540px 창) 결과 면을 카드 아래 한 줄 띠로 — 수익률 · 자산곡선 · MDD/승률/매매. 카드가 길어지지 않아 동작 행도 그대로다. */
 @container (max-width: 620px) {
   .sd-card-in { grid-template-columns: minmax(0, 1fr); }
-  .sd-card-strategy { font-size: 17px; }
-  .sd-card-strategy .num { font-size: 19px; }
+  .sd-card-strategy { --sd-strategy-max: 17px; }
   .sd-card-proof { padding: 12px 18px; border-left: 0; border-top: 1px dashed rgb(var(--c-slate-300)); display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "k spark stats" "ret spark stats"; column-gap: 16px; align-items: center; }
   .sd-card-eyebrow, .sd-card-src { display: none; }
   .sd-card-k { grid-area: k; align-self: end; padding-right: 0; }
@@ -286,9 +285,10 @@
 .sd-act .sd-note { flex: none; margin-top: 2px; }
 /* 실행기 안내 — 호박색 상자 안을 제목 줄 + 두 열(진행 방법 · 알아 둘 것)로. 글자색은 상자의 amber-800 을 따른다. */
 .sd-runner { margin-top: 14px; padding: 16px 18px 18px; }
-.sd-runner-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 18px; padding-bottom: 12px; border-bottom: 1px solid rgb(var(--c-amber-700) / .25); }
+.sd-runner-head { padding-bottom: 10px; border-bottom: 1px solid rgb(var(--c-amber-700) / .25); }
 .sd-runner-title { margin: 0; font-size: 15px; font-weight: 800; letter-spacing: -.01em; white-space: nowrap; }
-.sd-runner-lead { margin: 0; flex: 1 1 420px; font-size: 13px; line-height: 1.55; }
+/* 바닥 한 줄 — 실행기가 무엇인지. 링크는 두지 않는다(내 에이전트는 굵은 글자만). */
+.sd-runner-foot { margin: 12px 0 0; padding-top: 10px; border-top: 1px solid rgb(var(--c-amber-700) / .25); font-size: 12.5px; line-height: 1.55; }
 .sd-runner-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px 32px; padding-top: 12px; }
 .sd-runner-sec { min-width: 0; }
 .sd-runner-h { margin: 0 0 8px; font-size: 12px; font-weight: 700; letter-spacing: .02em; opacity: .8; }

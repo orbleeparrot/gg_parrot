@@ -1,7 +1,7 @@
 // 직접 만들기 결과 독 — 다섯 탭의 화면. 데이터는 공용 부품(ResultView·OptimizePanel·PaperPanel)의
 // 것과 같고, 화면만 워크벤치 시안대로 그린다: 수치 띠 · 자산곡선 · 열 지도 · 상태 상자 · 세 갈래 결과.
 // 스타일은 pages/Studio.css 의 .sd-* .
-import { Fragment, useState } from "react";
+import { Fragment, useLayoutEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api.js";
 import EquityChart from "./EquityChart.jsx";
@@ -499,17 +499,55 @@ function macroFacts({ macro, symbol, symbols, result, futures }) {
   return facts;
 }
 
-// 조건 문장 조판 — 구는 세로 괘선으로 나누고, 숫자는 고정폭 굵게, 부호 있는 값은 등락색.
+// 조건 문장 조판 — 구는 세로 괘선으로 나누고, 사용자가 정한 숫자(익절·손절·가격·기간·σ·k·배수)는 고정폭 굵게 노랑.
+// 한 줄로만 놓는다: 폭이 모자라면 들어갈 때까지 글자 크기를 줄인다(줄바꿈도 말줄임도 없다). title 에 전문이 있다.
+function useFitLine(ref, text) {
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return undefined;
+    let raf = 0;
+    const fit = () => {
+      const max = parseFloat(getComputedStyle(el).getPropertyValue("--sd-strategy-max")) || 19;
+      let size = max;
+      el.style.fontSize = `${size}px`;
+      while (size > 8 && el.scrollWidth > el.clientWidth) {
+        size -= 0.5;
+        el.style.fontSize = `${size}px`;
+      }
+    };
+    const schedule = () => {
+      if (typeof requestAnimationFrame === "undefined") { fit(); return; }
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(fit);
+    };
+    fit();
+    // 폭이 바뀔 때(분할 바 · 창 크기)와 웹폰트가 늦게 들어와 글이 넓어질 때 다시 맞춘다 — 폰트 로드는 상자 크기를 바꾸지 않아 ResizeObserver 만으로는 못 잡는다.
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(schedule);
+    observer?.observe(el);
+    const fonts = typeof document !== "undefined" ? document.fonts : null;
+    fonts?.ready?.then(schedule, () => {});
+    fonts?.addEventListener?.("loadingdone", schedule);
+    return () => {
+      if (typeof cancelAnimationFrame !== "undefined") cancelAnimationFrame(raf);
+      observer?.disconnect();
+      fonts?.removeEventListener?.("loadingdone", schedule);
+    };
+  }, [ref, text]);
+}
+
 function StrategyText({ text }) {
-  const phrases = strategyPhrases(text);
-  if (!phrases.length) return <span className="sd-card-phrase">상세 정보 없음</span>;
-  return phrases.map((tokens, i) => (
-    <span key={i} className="sd-card-phrase">
-      {tokens.map((token, j) => token.t === "num"
-        ? <b key={j} className={"num" + (token.tone ? ` is-${token.tone}` : "")}>{token.v}</b>
-        : <Fragment key={j}>{token.v}</Fragment>)}
-    </span>
-  ));
+  const ref = useRef(null);
+  const phrases = strategyPhrases(text, { dropLeverage: true }); // 레버리지는 머리의 시장 태그가 보여 준다
+  useFitLine(ref, text);
+  return (
+    <p ref={ref} className="sd-card-strategy" title={text || ""}>
+      {phrases.length ? phrases.map((tokens, i) => (
+        <span key={i} className="sd-card-phrase">
+          {tokens.map((token, j) => token.t === "num" ? <b key={j} className="num">{token.v}</b> : <Fragment key={j}>{token.v}</Fragment>)}
+        </span>
+      )) : <span className="sd-card-phrase">상세 정보 없음</span>}
+    </p>
+  );
 }
 
 export function StudioOutcomes({ macro, result, valErr, strategyEntry, periodLabel, dataSource = "", symbols = [], canRegister, onRegister, onShare, shareBusy = false }) {
@@ -543,7 +581,7 @@ export function StudioOutcomes({ macro, result, valErr, strategyEntry, periodLab
                 <span className="sd-card-tag">{marketLabel}</span>
               </div>
             </div>
-            <p className="sd-card-strategy" title={details?.description || ""}><StrategyText text={details?.description || ""} /></p>
+            <StrategyText text={details?.description || ""} />
             <dl className="sd-card-facts">
               {facts.map((f) => (
                 <div key={f.k}><dt>{f.k}</dt><dd className={f.num ? "num" : undefined}>{f.v}</dd></div>
@@ -596,11 +634,7 @@ export function StudioOutcomes({ macro, result, valErr, strategyEntry, periodLab
           흐름은 지금 프로젝트 기준: 빠른 실행 마법사(테스트넷 · 웹이 실행기를 열어 줌) → 실거래는 파일을 실행기에서 직접 → 상태·종료는 내 에이전트. */}
       <section className="alert alert-warn sd-runner" aria-labelledby="sd-runner-title">
         <div className="sd-runner-head">
-          <h3 id="sd-runner-title" className="sd-runner-title">실거래는 껄무새 매크로 실행기로</h3>
-          <p className="sd-runner-lead">
-            실행기는 내 Windows PC 에서 주문을 처리하는 프로그램이에요(설치 없이 실행 · Windows 10 이상).
-            웹은 주문을 내지 않고, 실행 중 상태와 종료는 <Link to="/agents" className="sd-runner-link">내 에이전트</Link>에서 봐요.
-          </p>
+          <h3 id="sd-runner-title" className="sd-runner-title">실거래 실행법</h3>
         </div>
         <div className="sd-runner-cols">
           <div className="sd-runner-sec">
@@ -622,6 +656,10 @@ export function StudioOutcomes({ macro, result, valErr, strategyEntry, periodLab
             </ul>
           </div>
         </div>
+        <p className="sd-runner-foot">
+          실행기는 내 Windows PC 에서 주문을 처리하는 프로그램이에요(설치 없이 실행 · Windows 10 이상).
+          웹은 주문을 내지 않고, 실행 중 상태와 종료는 <b>내 에이전트</b>에서 봐요.
+        </p>
       </section>
     </div>
   );

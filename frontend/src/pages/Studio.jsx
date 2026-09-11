@@ -4,6 +4,7 @@ import { Link, useLocation, useNavigate, useParams, useSearchParams } from "reac
 import Builder from "../components/Builder.jsx";
 import SimBadge from "../components/SimBadge.jsx";
 import { StudioTabs, StudioBacktest, StudioAiExplain, StudioOptimize, StudioPaper, StudioOutcomes } from "../components/StudioDock.jsx";
+import StrategyDetails from "../components/StrategyDetails.jsx";
 import usePaperSession from "../hooks/usePaperSession.js";
 import CandleChart from "../components/CandleChart.jsx";
 import RegisterMacroModal from "../components/RegisterMacroModal.jsx";
@@ -615,7 +616,6 @@ export default function Studio() {
   // ── 워크벤치 ──────────────────────────────────────────────────────────
   // 페이지는 스크롤하지 않는다. 조건(왼쪽) · 차트(오른쪽 위) · 결과 독(오른쪽 아래)이 각자 스크롤한다.
   // 결과 독의 탭 순서가 곧 검증 순서다: 백테스트 → AI 해설 → 익·손절 최적화 → 페이퍼 트레이딩 → 등록·실행.
-  const ruleLabel = RULE_TYPES[form.rule_type]?.label || "";
   const intervalLabel = CANDLE_INTERVALS.find((item) => item.value === form.candle_interval)?.label || "";
   const stage = dockTab === "done" || (paper.status && !paper.running) ? 3 : paper.running ? 2 : result ? 1 : 0;
   const shareStale = !!share && !!share.macroKey && share.macroKey !== currentMacroKey;
@@ -696,14 +696,19 @@ export default function Studio() {
 
       {/* 제목 띠 — 제목 · 지금 조건 한 줄 · 모의 뱃지 · 단계 · ⋯. 설명 문단은 두지 않는다. */}
       <header className="studio-strip">
-        <h1 className="t-h4 text-slate-900">매크로 만들기</h1>
-        <span className="studio-strip-meta t-caption">
-          <b className="num">{chartSymbols.length === 0 ? "종목 없음" : chartSymbols.join(", ")}</b>
-          {/* 결과가 최신이면 서버가 만든 사람 말 요약(포지션·전략 조건·손절·자금)을, 아니면 매매 방식 이름만. 앞의 종목 조각은 뺀다. */}
-          {resultIsFresh && summary ? <> · {summary.replace(/^[^·]+·\s*/, "")}</> : ruleLabel ? <> · {ruleLabel}</> : null}
-          {intervalLabel && <> · {intervalLabel}봉</>}
-          {periodLabelOf(currentMacro) && <> · {periodLabelOf(currentMacro)}</>}
-        </span>
+        <h1 className="sr-only">매크로 만들기</h1>
+        {/* 제목 자리엔 지금 매크로를 리더보드 전략 칸과 같은 표기로: 티커 | 포지션 | 전략 | 자금 | 봉 | 기간.
+            결과가 최신이면 서버 요약(전략 조건·손절)을, 아니면 매매 방식 이름을 쓴다. */}
+        <div className="studio-strip-strategy">
+          <StrategyDetails
+            entry={{ symbol: chartSymbols[0] || form.symbol || "—", human_summary: resultIsFresh ? summary : "", macro: currentMacro, locked: false }}
+            extra={[
+              ...(chartSymbols.length > 1 ? [{ label: "종목", value: `${chartSymbols.length}개` }] : []),
+              ...(intervalLabel ? [{ label: "봉", value: intervalLabel }] : []),
+              ...(periodLabelOf(currentMacro) ? [{ label: "기간", value: periodLabelOf(currentMacro) }] : []),
+            ]}
+          />
+        </div>
         {loadedFrom && <span className="studio-strip-loaded t-caption">불러온 매크로 · <b>{loadedFrom}</b></span>}
         <SimBadge />
         <ol className="studio-flow" aria-label="진행 단계">

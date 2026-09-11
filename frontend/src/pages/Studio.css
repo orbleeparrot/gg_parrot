@@ -141,8 +141,9 @@
 .sd-kpi:last-child { border-right: 0; }
 .sd-kpi-k { display: flex; align-items: center; gap: 2px; color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 600; }
 .sd-kpi-cap { white-space: nowrap; } /* 캡션만 한 줄 — 컨테이너나 자식 span 전체에 걸면 ⓘ 말풍선 글까지 안 접혀 상자 밖으로 흘렀다 */
-.sd-kpi-v { margin-top: 3px; color: rgb(var(--c-slate-900)); font-size: 20px; font-weight: 700; letter-spacing: -.02em; white-space: nowrap; overflow: hidden; }
-.sd-kpi-d { margin-top: 2px; color: rgb(var(--c-slate-500)); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sd-kpi-v { margin-top: 3px; color: rgb(var(--c-slate-900)); font-size: 18px; font-weight: 700; letter-spacing: -.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sd-kpi-d { margin-top: 2px; color: rgb(var(--c-slate-500)); font-size: 12px; line-height: 1.4; }
+.sd-kpi-d > span { display: block; } /* 관련 정보 한 줄씩 — 홀딩 비교처럼 두 줄이면 두 줄로 */
 .sd-liq { margin-top: 12px; }
 .sd-two { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 16px; margin-top: 8px; }
 .sd-eq { position: relative; padding: 8px 10px 8px; border: 1px solid rgb(var(--c-slate-200)); border-radius: 12px; }

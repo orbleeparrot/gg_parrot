@@ -60,13 +60,23 @@ export function StudioBacktest({ result: r, perSymbol, summary, dataSource, peri
   const bh = r.buy_hold_return_pct != null ? r.buy_hold_return_pct : null;
   const vsHold = bh !== null ? r.final_return_pct - bh : null;
   const liq = r.liquidation_count || 0;
+  // 원래 ResultView 의 정보 세트 그대로(수익률·홀딩 비교 · 최종 평가금액+원화 · MDD · 승률 · 총 매매 횟수 · 샤프 · 손익비 · 최대 연속손절),
+  // 관련된 것끼리 한 칸에: 수익률↔홀딩 비교, 평가금액↔원화, MDD↔연속손절, 승률↔매매 횟수. 없던 지표는 만들지 않는다.
+  const streak = r.max_consecutive_losses || 0;
+  const krw = fmtKrw(r.final_equity, krwRate);
+  const equityCompact = fmtMoneyCompact(r.final_equity, symbol).replace(new RegExp(`\\s*${quote}$`), "");
   const kpis = [
-    { k: "수익률", term: "backtest", v: pct(r.final_return_pct), cls: tone(r.final_return_pct), d: `${compactNum(r.initial_capital)} → ${compactNum(r.final_equity)}` },
-    { k: "최대낙폭 (MDD)", term: "mdd", v: `-${r.mdd_pct.toFixed(1)}%`, cls: "is-down", d: `연속 손절 최대 ${r.max_consecutive_losses || 0}회` },
-    { k: "홀딩 대비", term: "buy_hold", v: vsHold === null ? "—" : `${vsHold >= 0 ? "+" : ""}${vsHold.toFixed(1)}%p`, cls: vsHold === null ? "" : tone(vsHold), d: bh === null ? "비교 기준 없음" : `홀딩 ${pct(bh, 1)}` },
-    { k: "거래", term: "win_rate", v: `${r.total_trades}회`, cls: "", d: `승률 ${r.win_rate_pct.toFixed(1)}%` },
-    { k: "샤프지수", term: "sharpe", v: r.sharpe != null ? r.sharpe.toFixed(2) : "—", cls: r.sharpe != null && r.sharpe >= 1 ? "is-up" : "", d: `손익비 ${r.profit_factor != null ? r.profit_factor.toFixed(2) : "—"}` },
-    { k: "청산 위험", term: "liquidation", v: liq > 0 ? `${liq}회 청산` : "없음", cls: liq > 0 ? "is-down" : "", d: leverage > 1 ? `${leverage}배 · ${(100 / leverage).toFixed(leverage >= 100 ? 2 : 1)}% 반대면 청산` : "1배 · 현물과 같음" },
+    { k: `백테스트 수익률 · ${periodLabel || "테스트 기간"}`, term: "backtest", v: pct(r.final_return_pct), cls: tone(r.final_return_pct),
+      d: bh === null ? ["비교 기준 없음"] : [
+        `홀딩(HODL)했다면 ${pct(bh)}`,
+        <span key="vs" className={vsHold >= 0 ? "is-up" : "is-down"}>{vsHold >= 0 ? "▲" : "▼"} 홀딩보다 {vsHold >= 0 ? "+" : ""}{vsHold.toFixed(2)}%p {vsHold >= 0 ? "초과" : "미달"}</span>,
+      ] },
+    { k: "최종 평가금액", v: equityCompact, title: fmtMoney(r.final_equity, symbol), cls: "", d: [`${quote}${krw ? ` ${krw}` : ""}`] }, // fmtKrw 가 '≈' 를 붙여 준다
+    { k: "MDD (최대낙폭)", term: "mdd", v: `-${r.mdd_pct.toFixed(1)}%`, cls: "is-down",
+      d: [<span key="streak" className={streak >= 5 ? "is-down" : ""}>최대 연속손절 {streak}회</span>] },
+    { k: "승률", term: "win_rate", v: `${r.win_rate_pct.toFixed(1)}%`, cls: "", d: [`총 매매 횟수 ${r.total_trades}`] },
+    { k: "샤프지수", term: "sharpe", v: r.sharpe != null ? r.sharpe.toFixed(2) : "—", cls: r.sharpe != null && r.sharpe >= 1 ? "is-up" : "", d: [] },
+    { k: "손익비 (PF)", term: "profit_factor", v: r.profit_factor != null ? r.profit_factor.toFixed(2) : "—", cls: r.profit_factor != null && r.profit_factor >= 1 ? "is-up" : "", d: [] },
   ];
   return (
     <div className="sd-bt">
@@ -74,8 +84,8 @@ export function StudioBacktest({ result: r, perSymbol, summary, dataSource, peri
         {kpis.map((kpi) => (
           <div key={kpi.k} className="sd-kpi">
             <div className="sd-kpi-k"><span className="sd-kpi-cap">{kpi.k}</span>{kpi.term && <InfoTooltip term={kpi.term} />}</div>
-            <div className={"sd-kpi-v num " + kpi.cls}>{kpi.v}</div>
-            <div className="sd-kpi-d num">{kpi.d}</div>
+            <div className={"sd-kpi-v num " + kpi.cls} title={kpi.title}>{kpi.v}</div>
+            {kpi.d.length > 0 && <div className="sd-kpi-d num">{kpi.d.map((line, index) => <span key={index}>{line}</span>)}</div>}
           </div>
         ))}
       </div>
@@ -121,7 +131,12 @@ export function StudioBacktest({ result: r, perSymbol, summary, dataSource, peri
               )}
             </tbody>
           </table>
-          {summary && <p className="sd-note sd-summary">{summary}</p>}
+          {summary && (
+            <p className="sd-note sd-summary">
+              {summary}
+              {leverage > 1 && <span className="badge badge-risk ml-2">고위험 레버리지 <span className="num">{leverage}</span>배 <InfoTooltip term="leverage" /></span>}
+            </p>
+          )}
           <p className="sd-note">
             {perSymbol && perSymbol.length > 1 ? "위 큰 수치는 종목별을 합산한 전체 결과예요" : "종목을 더 넣으면 종목별로 갈라 보여요"}
             {dataSource ? ` · 데이터 ${dataSource === "binance-futures" ? "바이낸스 선물 실제 캔들" : dataSource}${dataSource === "synthetic" ? " (오프라인 폴백)" : ""}` : ""}

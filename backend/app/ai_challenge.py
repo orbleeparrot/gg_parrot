@@ -1,4 +1,4 @@
-"""Generate the daily challenge's macros (Anthropic, with a safe template fallback).
+"""Generate the daily challenge's macros (Gemini, with a safe template fallback).
 
 The model proposes a few beginner-friendly macros for the chosen symbol; every
 proposal is validated against the real :class:`Macro` schema and anything invalid
@@ -11,11 +11,11 @@ import json
 import os
 from typing import Optional
 
-from .ai_runtime import ai_cache_key, get_ai_runtime, get_anthropic_client
+from .ai_runtime import ai_available, ai_cache_key, default_model, get_ai_client, get_ai_runtime
 from .engine.schema import Macro
 
-_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-5")
-_MAX_TOKENS = int(os.environ.get("ANTHROPIC_CHALLENGE_MAX_TOKENS", "2048"))
+_MODEL = default_model()
+_MAX_TOKENS = int(os.environ.get("GEMINI_CHALLENGE_MAX_TOKENS", "2048"))
 _PROMPT_VERSION = "daily-challenge-v2"
 
 _SYSTEM = (
@@ -83,7 +83,7 @@ def _ai_propose(symbol: str) -> list[dict]:
     )
 
     def load():
-        response = get_anthropic_client().messages.create(
+        response = get_ai_client().messages.create(
             model=_MODEL,
             max_tokens=_MAX_TOKENS,
             system=_SYSTEM,
@@ -108,7 +108,7 @@ def _ai_propose(symbol: str) -> list[dict]:
 def generate_macros(symbol: str, n: int = 3) -> list[dict]:
     """Return exactly ``n`` valid macro dicts for ``symbol`` (AI + template fill)."""
     proposed: list[dict] = []
-    if os.environ.get("ANTHROPIC_API_KEY"):
+    if ai_available():
         try:
             proposed = _ai_propose(symbol)
         except Exception:

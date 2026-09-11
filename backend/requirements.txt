@@ -11,7 +11,7 @@ httpx>=0.28.1
 playwright==1.62.0
 Pillow>=12.0.0
 # 껄무새 AI 해설 / 데일리 챌린지 — 공식 Anthropic SDK (서버측 키만 사용).
-anthropic>=0.40.0
+google-genai>=1.0.0
 # Loads a local backend/.env for dev secrets (e.g. GEMINI_API_KEY). Optional at
 # runtime — main.py imports it defensively — but pinned so `pip install` provides it.
 python-dotenv>=1.0.1

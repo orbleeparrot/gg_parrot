@@ -43,7 +43,7 @@ class Cache:
 def cache(monkeypatch):
     repository = Cache()
     monkeypatch.setattr(summaries, "_repository", lambda: repository)
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-not-a-real-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-not-a-real-key")
     summaries.clear_memory_cache()
     return repository
 
@@ -161,7 +161,7 @@ def test_provider_receives_body_not_headline_and_runtime_does_not_retry(cache, m
                 {"id": payload[0]["id"], "summary_ko": "작성자는 CFG의 거래량 변화와 지지선을 설명합니다."}]}))])
     monkeypatch.setattr(summaries, "get_ai_runtime", lambda: Runtime())
     monkeypatch.delenv("COMMUNITY_SUMMARY_TIMEOUT_SECONDS", raising=False)
-    monkeypatch.setattr(summaries, "get_anthropic_client", lambda: SimpleNamespace(messages=Messages()))
+    monkeypatch.setattr(summaries, "get_ai_client", lambda: SimpleNamespace(messages=Messages()))
     assert summaries.enrich_items([post()], wait=True)[0][0]["community_summary_status"] == "ready"
     assert len(calls) == 1
 

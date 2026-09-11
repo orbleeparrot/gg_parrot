@@ -288,7 +288,7 @@ def test_collector_publishes_before_ai_and_persists_one_translation(db_engine, m
     from app.agent_features.position_news import collector, classifier
     from app import news
     monkeypatch.setattr(repository, "get_session", lambda: Session(db_engine))
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
     translations = []
     monkeypatch.setattr(news, "enrich_article_excerpts", lambda items, **_: items)
     def analyze(items, *_):
@@ -312,7 +312,7 @@ def test_staged_collection_exposes_rss_before_browser_and_spends_once(db_engine,
     monkeypatch.setattr(news, "_title_translation_cache", {})
     monkeypatch.setattr(news, "_title_translation_retry_at", {})
     monkeypatch.setattr(repository, "get_session", lambda: Session(db_engine))
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
     paid = []
     translations = []
     payload = _news("ARB", "Arbitrum token soars")
@@ -371,7 +371,7 @@ def test_browser_failure_retains_first_rss_snapshot(db_engine, monkeypatch):
 def test_web_bootstrap_yields_lease_to_worker_and_recovers_stale_news(db_engine, monkeypatch):
     from app.agent_features.position_news import collector
     monkeypatch.setattr(repository, "get_session", lambda: Session(db_engine))
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
     monkeypatch.setenv("POSITION_NEWS_COLLECTION_SECONDS", "300")
     monkeypatch.setattr(collector, "_localize_collected_payload",
                         lambda *_: pytest.fail("bootstrap must not call translation"))

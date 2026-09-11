@@ -20,7 +20,7 @@ def _stub(monkeypatch):
 
     monkeypatch.setattr("app.challenge.paper_mod.start_session", _fake_start)
     monkeypatch.setattr("app.challenge._pick_symbol", lambda: "BTCUSDT")
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)  # force template fallback
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)  # force template fallback
 
 
 def test_generate_macros_falls_back_to_valid_templates():

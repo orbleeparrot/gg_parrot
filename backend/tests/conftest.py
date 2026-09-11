@@ -11,7 +11,7 @@ import os
 import tempfile
 import pytest
 
-for _key in ("DATABASE_URL", "ANTHROPIC_API_KEY", "COINDESK_API_KEY", "PREFECT_API_URL"):
+for _key in ("DATABASE_URL", "GEMINI_API_KEY", "COINDESK_API_KEY", "PREFECT_API_URL"):
     os.environ[_key] = ""
 
 _TMP = tempfile.NamedTemporaryFile(prefix="ggp-test-", suffix=".db", delete=False)

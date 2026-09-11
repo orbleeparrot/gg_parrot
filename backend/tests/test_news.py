@@ -234,7 +234,7 @@ def test_market_news_retries_transient_ai_summary_without_refetching_headlines(m
     summary_calls = []
     summaries = iter([None, "시장 뉴스 요약"])
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.setattr(news, "_cache", {})
     monkeypatch.setattr(news, "_MARKET_SUMMARY_RETRY_SECONDS", 0, raising=False)
     monkeypatch.setattr(news, "_market_summary_retry_at", 0.0, raising=False)
@@ -264,7 +264,7 @@ def test_market_news_retries_transient_ai_summary_without_refetching_headlines(m
 def test_market_summary_daily_budget_caps_each_process(monkeypatch):
     reserve = getattr(news, "_reserve_market_summary_call", None)
     assert reserve is not None
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.setattr(news, "_MARKET_SUMMARY_MAX_CALLS_PER_DAY", 2)
     monkeypatch.setattr(news, "_market_summary_budget", ("", 0))
@@ -294,7 +294,7 @@ def test_durable_market_summary_budget_uses_its_own_namespace(monkeypatch):
 def test_market_summary_budget_fails_closed_when_database_is_unavailable(monkeypatch):
     reserve = getattr(news, "_reserve_market_summary_call", None)
     assert reserve is not None
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.setenv("DATABASE_URL", "postgresql://example.invalid/db")
     monkeypatch.setattr(
         news,
@@ -305,9 +305,9 @@ def test_market_summary_budget_fails_closed_when_database_is_unavailable(monkeyp
     assert reserve() is False
 
 
-def test_market_summary_does_not_call_anthropic_when_budget_is_exhausted(monkeypatch):
+def test_market_summary_does_not_call_the_model_when_budget_is_exhausted(monkeypatch):
     api_calls = []
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.setattr(
         news,
         "_reserve_market_summary_call",
@@ -330,7 +330,7 @@ def test_market_summary_does_not_call_anthropic_when_budget_is_exhausted(monkeyp
 
     monkeypatch.setattr(
         news,
-        "get_anthropic_client",
+        "get_ai_client",
         lambda: type("Client", (), {"messages": Messages()})(),
     )
     monkeypatch.setattr(news, "get_ai_runtime", lambda: Runtime())
@@ -397,7 +397,7 @@ def test_coin_news_reuses_collector_translation_without_paid_work(monkeypatch):
     news._coin_cache.clear()
     english = "Robinhood's new crypto network sends Arbitrum's token soaring"
     korean = "로빈후드의 새 암호화폐 네트워크에 아비트럼 토큰 급등"
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.setattr(news, "_title_translation_cache", {}, raising=False)
     monkeypatch.setattr(
         news,
@@ -433,7 +433,7 @@ def test_title_translation_batches_only_untranslated_titles_and_reuses_cache(mon
     calls = []
     english = "MUBARAK jumps as BNB Chain meme rally broadens"
     korean = "BNB 체인 밈코인 강세에 MUBARAK 급등"
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.setattr(news, "_title_translation_cache", {}, raising=False)
 
     def translate(titles):
@@ -467,7 +467,7 @@ def test_title_translation_keeps_partial_batch_without_paid_fanout(monkeypatch):
     first = "Arbitrum token soars"
     second = "MUBARAK jumps as BNB Chain meme rally broadens"
     calls = []
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.setattr(news, "_title_translation_cache", {})
 
     def translate(titles):
@@ -493,7 +493,7 @@ def test_title_translation_applies_after_normalizing_source_whitespace(monkeypat
     raw = "Arbitrum   token\nsoars"
     normalized = "Arbitrum token soars"
     korean = "아비트럼 토큰 급등"
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.setattr(news, "_title_translation_cache", {normalized: korean})
 
     localized = news._localize_coin_news_items([{"title": raw}])
@@ -502,8 +502,8 @@ def test_title_translation_applies_after_normalizing_source_whitespace(monkeypat
 
 
 def test_title_translation_without_shared_api_key_withholds_english_title(monkeypatch, caplog):
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.setenv("ANTHROPIC_NEWS_TRANSLATION_API_KEY", "ignored-old-key")
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setenv("GEMINI_NEWS_TRANSLATION_API_KEY", "ignored-old-key")
     monkeypatch.setattr(news, "_title_translation_cache", {})
     monkeypatch.setattr(
         news, "_load_durable_title_translations", lambda _titles: {}
@@ -722,16 +722,16 @@ def test_title_translation_parser_accepts_equivalent_usd_code_and_word():
     }
 
 
-def test_title_translation_reuses_shared_anthropic_client_and_model(monkeypatch):
+def test_title_translation_reuses_shared_ai_client_and_model(monkeypatch):
     monkeypatch.setattr(repository, "reserve_ai_budget", lambda **_kwargs: True)
     captured = []
     requests = []
     runtime_options = []
     monkeypatch.delenv("DATABASE_URL", raising=False)
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "shared-key")
-    monkeypatch.setenv("ANTHROPIC_MODEL", "shared-haiku")
-    monkeypatch.setenv("ANTHROPIC_NEWS_TRANSLATION_API_KEY", "ignored-old-key")
-    monkeypatch.setenv("ANTHROPIC_NEWS_TRANSLATION_MODEL", "ignored-old-model")
+    monkeypatch.setenv("GEMINI_API_KEY", "shared-key")
+    monkeypatch.setenv("GEMINI_MODEL", "shared-haiku")
+    monkeypatch.setenv("GEMINI_NEWS_TRANSLATION_API_KEY", "ignored-old-key")
+    monkeypatch.setenv("GEMINI_NEWS_TRANSLATION_MODEL", "ignored-old-model")
 
     class Block:
         type = "text"
@@ -760,7 +760,7 @@ def test_title_translation_reuses_shared_anthropic_client_and_model(monkeypatch)
             runtime_options.append(kwargs)
             return loader(), "loaded"
 
-    monkeypatch.setattr(news, "get_anthropic_client", fake_client)
+    monkeypatch.setattr(news, "get_ai_client", fake_client)
     monkeypatch.setattr(news, "get_ai_runtime", lambda: Runtime())
 
     translated = news._request_korean_title_translations(
@@ -779,7 +779,7 @@ def test_title_translation_reuses_ai_runtime_cache(monkeypatch):
     title = "Arbitrum token soars"
     title_id = hashlib.sha256(title.encode("utf-8")).hexdigest()[:16]
     monkeypatch.delenv("DATABASE_URL", raising=False)
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "shared-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "shared-key")
     api_calls = []
 
     class Block:
@@ -807,7 +807,7 @@ def test_title_translation_reuses_ai_runtime_cache(monkeypatch):
     runtime = Runtime()
     monkeypatch.setattr(
         news,
-        "get_anthropic_client",
+        "get_ai_client",
         lambda: type("Client", (), {"messages": Messages()})(),
     )
     monkeypatch.setattr(news, "get_ai_runtime", lambda: runtime)
@@ -820,7 +820,7 @@ def test_title_translation_reuses_ai_runtime_cache(monkeypatch):
 def test_title_translation_does_not_reserve_a_daily_budget_call(monkeypatch):
     title = "Arbitrum token soars"
     title_id = hashlib.sha256(title.encode("utf-8")).hexdigest()[:16]
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "shared-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "shared-key")
 
     budget_calls = []
     monkeypatch.setattr(repository, "reserve_ai_budget", lambda **kwargs:
@@ -848,7 +848,7 @@ def test_title_translation_does_not_reserve_a_daily_budget_call(monkeypatch):
 
     monkeypatch.setattr(
         news,
-        "get_anthropic_client",
+        "get_ai_client",
         lambda: type("Client", (), {"messages": Messages()})(),
     )
     monkeypatch.setattr(news, "get_ai_runtime", lambda: Runtime())
@@ -876,7 +876,7 @@ def test_more_than_twenty_deduplicated_titles_are_all_translated(monkeypatch):
     }
     calls = []
     monkeypatch.delenv("DATABASE_URL", raising=False)
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "shared-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "shared-key")
     monkeypatch.setattr(news, "_title_translation_cache", {})
     monkeypatch.setattr(
         news,
@@ -894,7 +894,7 @@ def test_more_than_twenty_deduplicated_titles_are_all_translated(monkeypatch):
 
 
 def test_title_translation_withholds_english_when_model_returns_nothing(monkeypatch, caplog):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "shared-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "shared-key")
     monkeypatch.setattr(news, "_title_translation_cache", {})
     monkeypatch.setattr(
         news,
@@ -934,7 +934,7 @@ def test_title_translation_marks_only_preflight_capacity_failure_safe_to_retry(
 def test_invalid_durable_translation_is_retranslated_not_exposed(monkeypatch):
     english = "BTC price holds near $70,000"
     korean = "BTC 가격 $70,000 부근 유지"
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "shared-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "shared-key")
     monkeypatch.setenv("DATABASE_URL", "postgresql://cache.example/db")
     monkeypatch.setattr(news, "_title_translation_cache", {})
     monkeypatch.setattr(
@@ -977,7 +977,7 @@ def test_mixed_korean_prefix_does_not_leave_english_headline(monkeypatch):
     mixed = "[속보] Bitcoin surges as ETF inflows rise"
     korean = "[속보] ETF 자금 유입 증가에 비트코인 급등"
     calls = []
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "shared-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "shared-key")
     monkeypatch.setattr(news, "_title_translation_cache", {})
     monkeypatch.setattr(
         news,
@@ -995,7 +995,7 @@ def test_short_mixed_title_does_not_leave_english_word(monkeypatch):
     mixed = "[속보] Bitcoin 급등"
     korean = "[속보] 비트코인 급등"
     calls = []
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "shared-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "shared-key")
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.setattr(news, "_title_translation_cache", {})
     monkeypatch.setattr(
@@ -1015,7 +1015,7 @@ def test_localizing_an_already_translated_proper_name_is_idempotent(monkeypatch)
     korean = "Robinhood가 새 암호화폐 네트워크를 출시"
     calls = []
     monkeypatch.delenv("DATABASE_URL", raising=False)
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "shared-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "shared-key")
     monkeypatch.setattr(news, "_title_translation_cache", {})
 
     def translate(titles):
@@ -1044,7 +1044,7 @@ def test_korean_title_with_only_proper_names_does_not_call_translation(
     korean_title,
 ):
     monkeypatch.delenv("DATABASE_URL", raising=False)
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "shared-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "shared-key")
     monkeypatch.setattr(news, "_title_translation_cache", {})
     monkeypatch.setattr(
         news,
@@ -1066,7 +1066,7 @@ def test_mixed_korean_title_with_hyphenated_english_prose_is_translated(
     korean = "온체인 기록적인 급등"
     calls = []
     monkeypatch.delenv("DATABASE_URL", raising=False)
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "shared-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "shared-key")
     monkeypatch.setattr(news, "_title_translation_cache", {})
     monkeypatch.setattr(
         news,
@@ -1131,7 +1131,7 @@ def test_title_translation_reuses_durable_cache_after_memory_reset(monkeypatch):
     korean = "아비트럼 토큰 급등"
     durable = {}
     api_calls = []
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "shared-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "shared-key")
     monkeypatch.setenv("DATABASE_URL", "postgresql://cache.example/db")
     monkeypatch.setattr(news, "_title_translation_cache", {})
     monkeypatch.setattr(
@@ -1267,7 +1267,7 @@ def test_coin_news_falls_back_to_rss_when_central_store_is_unavailable(monkeypat
 
 def test_public_coin_news_fallback_filters_unrelated_broad_search_results(monkeypatch):
     news._coin_cache.clear()
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.setattr(news, "_title_translation_cache", {})
     monkeypatch.setattr(news, "_load_latest_coin_snapshot", lambda _symbol: None)
     monkeypatch.setattr(
@@ -2693,7 +2693,7 @@ def test_plain_summary_text_strips_markdown_but_keeps_lines():
 
 
 def test_market_summary_returns_plain_text_even_when_model_uses_markdown(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.setattr(news, "_reserve_market_summary_call", lambda: True, raising=False)
 
     class Messages:
@@ -2706,7 +2706,7 @@ def test_market_summary_returns_plain_text_even_when_model_uses_markdown(monkeyp
             return loader(), "loaded"
 
     monkeypatch.setattr(
-        news, "get_anthropic_client", lambda: type("Client", (), {"messages": Messages()})()
+        news, "get_ai_client", lambda: type("Client", (), {"messages": Messages()})()
     )
     monkeypatch.setattr(news, "get_ai_runtime", lambda: Runtime())
 
@@ -2719,7 +2719,7 @@ def test_market_summary_returns_plain_text_even_when_model_uses_markdown(monkeyp
 def _stub_translation(monkeypatch, mapping):
     """모델 응답을 흉내 낸다. mapping 에 없는 제목은 '동일 문장'을 돌려준다."""
     monkeypatch.setattr(news, "_title_translation_cache", {})
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     calls = []
 
     def fake(titles):
@@ -2805,7 +2805,7 @@ def _seed_market_cache_without_overview(monkeypatch, items):
 
 
 def test_market_summary_reuses_stored_day_summary_without_calling_model(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     day = _seed_market_cache_without_overview(
         monkeypatch, [{"title": "비트코인 시장 뉴스", "source": "테스트"}]
     )
@@ -2825,7 +2825,7 @@ def test_market_summary_reuses_stored_day_summary_without_calling_model(monkeypa
 
 
 def test_market_summary_is_stored_for_the_day_after_generation(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     day = _seed_market_cache_without_overview(
         monkeypatch, [{"title": "비트코인 시장 뉴스", "source": "테스트"}]
     )

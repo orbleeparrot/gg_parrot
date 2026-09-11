@@ -68,7 +68,7 @@ def test_body_hash_invalidates_snapshot_but_empty_legacy_fields_preserve_old_key
 
 
 def test_same_post_body_edit_publishes_without_summary_wait_or_rebuying_editorial_analysis(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.setattr(collector.news_mod, "_coin_snapshot_is_stale", lambda _: False)
     repo = LatestRepository()
     original = post(community_summary="예전 본문 요약", community_summary_status="ready")

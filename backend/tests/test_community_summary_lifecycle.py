@@ -19,7 +19,7 @@ def test_background_work_is_deduplicated_bounded_and_shutdown_cancels_queue(monk
         entered.set()
         assert release.wait(5)
     summaries.shutdown()
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "not-a-real-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "not-a-real-key")
     monkeypatch.setattr(summaries, "ThreadPoolExecutor", ObservedExecutor)
     monkeypatch.setattr(summaries, "_execute", execute)
     monkeypatch.setattr(summaries, "_QUEUE_MAX", 2)

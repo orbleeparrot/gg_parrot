@@ -19,7 +19,7 @@ def isolated_translation(monkeypatch):
 
 @pytest.mark.parametrize("legacy_limit", ["0", "1", "20"])
 def test_translation_provider_has_no_daily_quota(monkeypatch, legacy_limit):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.setenv("NEWS_TRANSLATION_MAX_CALLS_PER_DAY", legacy_limit)
     monkeypatch.setattr(repository, "reserve_ai_budget", lambda **_: pytest.fail("translation has no daily budget"))
     calls = []
@@ -31,7 +31,7 @@ def test_translation_provider_has_no_daily_quota(monkeypatch, legacy_limit):
                   for article in articles]
         return SimpleNamespace(content=[SimpleNamespace(type="text", text=json.dumps({"items": result}))])
 
-    monkeypatch.setattr(news, "get_anthropic_client", lambda: SimpleNamespace(messages=SimpleNamespace(create=create)))
+    monkeypatch.setattr(news, "get_ai_client", lambda: SimpleNamespace(messages=SimpleNamespace(create=create)))
     monkeypatch.setattr(news, "get_ai_runtime", lambda: SimpleNamespace(call=lambda key, load, **_: (load(), "loaded")))
     for index in range(22):
         title = f"Arbitrum token update {index}"
@@ -112,14 +112,14 @@ def test_a_failed_batch_does_not_discard_later_batches(monkeypatch):
 def test_long_headline_reaches_translator_without_losing_final_facts(monkeypatch):
     title = "Arbitrum " + "network expansion " * 20 + "reaches $50M"
     korean = "아비트럼 네트워크 확장 규모 $50M 도달"
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     def create(**kwargs):
         article = json.loads(kwargs["messages"][0]["content"])[0]
         assert article["title"] == title
         return SimpleNamespace(content=[SimpleNamespace(type="text", text=json.dumps({
             "items": [{"id": article["id"], "title_ko": korean}],
         }))])
-    monkeypatch.setattr(news, "get_anthropic_client", lambda: SimpleNamespace(messages=SimpleNamespace(create=create)))
+    monkeypatch.setattr(news, "get_ai_client", lambda: SimpleNamespace(messages=SimpleNamespace(create=create)))
     monkeypatch.setattr(news, "get_ai_runtime", lambda: SimpleNamespace(call=lambda key, load, **_: (load(), "loaded")))
     assert news._request_korean_title_translations([title]) == {title: korean}
 

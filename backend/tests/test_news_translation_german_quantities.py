@@ -84,7 +84,7 @@ def test_captured_german_dollar_currency_is_not_a_us_ticker():
 
 def test_request_supplies_required_amounts_and_currency_without_relaxing_validation(monkeypatch):
     requests = []
-    monkeypatch.setenv('ANTHROPIC_API_KEY', 'test-key')
+    monkeypatch.setenv('GEMINI_API_KEY', 'test-key')
     class Messages:
         def create(self, **kwargs):
             requests.append(kwargs)
@@ -93,7 +93,7 @@ def test_request_supplies_required_amounts_and_currency_without_relaxing_validat
     class Runtime:
         def call(self, key, loader, **kwargs):
             return loader(), 'loaded'
-    monkeypatch.setattr(news, 'get_anthropic_client', lambda: SimpleNamespace(messages=Messages()))
+    monkeypatch.setattr(news, 'get_ai_client', lambda: SimpleNamespace(messages=Messages()))
     monkeypatch.setattr(news, 'get_ai_runtime', Runtime)
     assert news._request_korean_title_translations([DOT])
     article = json.loads(requests[0]['messages'][0]['content'])[0]

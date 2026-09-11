@@ -1,7 +1,7 @@
-"""AI 원인 분석(껄무새 해설의 AI 층) — Anthropic Claude (Messages API).
+"""AI 원인 분석(껄무새 해설의 AI 층) — Gemini.
 
-SERVER-SIDE ONLY. Uses the official ``anthropic`` SDK, which reads the key from
-``ANTHROPIC_API_KEY`` in the environment (local .env for dev, Render env for
+SERVER-SIDE ONLY. Every call goes through :mod:`ai_runtime`, which reads the key
+from ``GEMINI_API_KEY`` in the environment (local .env for dev, Render env for
 deploy) — never hardcoded, never logged, never returned to the client. There is
 NO user-supplied key: if the server key is set the feature is on for everyone; if
 not, callers fall back to the deterministic rule-based explanation.
@@ -20,24 +20,26 @@ import threading
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-import anthropic
-
 from .engine.backtest import BacktestResult
 from .engine.explain import MOODS, Explanation, explain_result
 from .engine.schema import Macro
 from .engine.summary import human_summary
 from .ai_runtime import (
+    AiAuthError,
     AiBusyError,
+    AiConnectionError,
+    AiRateLimitError,
+    AiStatusError,
+    ai_available,
     ai_cache_key,
+    default_model,
+    get_ai_client,
     get_ai_runtime,
-    get_anthropic_client,
 )
 
-# Default per the claude-api guidance; override with ANTHROPIC_MODEL. For this
-# cheap, high-volume task claude-haiku-4-5 is far more cost-effective — set the
-# env var to switch without a code change.
-_DEFAULT_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-5")
-_MAX_TOKENS = int(os.environ.get("ANTHROPIC_MAX_TOKENS", "2048"))
+# 모델은 GEMINI_MODEL 하나로 앱 전체가 함께 바뀐다(ai_runtime.default_model).
+_DEFAULT_MODEL = default_model()
+_MAX_TOKENS = int(os.environ.get("GEMINI_MAX_TOKENS", "2048"))
 _MAX_CALLS_PER_DAY = max(
     0,
     int(os.environ.get("AI_EXPLAIN_MAX_CALLS_PER_DAY", "20")),
@@ -131,11 +133,6 @@ def _reserve_ai_explain_call() -> bool:
         return True
 
 
-def ai_available() -> bool:
-    """True when the server Anthropic key is configured (feature is on)."""
-    return bool(os.environ.get("ANTHROPIC_API_KEY"))
-
-
 def _facts(macro: Macro, r: BacktestResult, per_symbol=None) -> str:
     data = {
             "요약": human_summary(macro),
@@ -169,7 +166,7 @@ def _facts(macro: Macro, r: BacktestResult, per_symbol=None) -> str:
 
 
 def _extract_text(resp) -> Optional[str]:
-    """First text block of a Claude response (thinking blocks may precede it)."""
+    """First text block of a model response (non-text blocks may precede it)."""
     try:
         for block in resp.content:
             if getattr(block, "type", None) == "text":
@@ -199,8 +196,8 @@ def generate_with_cache_status(
     model: Optional[str] = None,
 ) -> tuple[Explanation, str]:
     """Return an explanation and ``loaded|cached|shared`` runtime state."""
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        raise AiError("서버에 Anthropic 키가 설정되지 않았어요.")
+    if not ai_available():
+        raise AiError("서버에 Gemini 키가 설정되지 않았어요.")
     system = _SYSTEM
     if per_symbol:
         system += (
@@ -219,7 +216,7 @@ def generate_with_cache_status(
     def load_explanation():
         if not _reserve_ai_explain_call():
             raise AiError("오늘 사용할 수 있는 AI 심화 분석 횟수를 모두 사용했어요.")
-        response = get_anthropic_client().messages.create(
+        response = get_ai_client().messages.create(
             model=selected_model,
             max_tokens=_MAX_TOKENS,
             system=system,
@@ -251,23 +248,23 @@ def generate_with_cache_status(
         explanation, runtime_state = get_ai_runtime().call(cache_key, load_explanation)
     except AiBusyError:
         raise AiError("AI 요청이 몰려 있어요. 잠시 후 다시 시도해 주세요.")
-    except (anthropic.AuthenticationError, anthropic.PermissionDeniedError):
-        raise AiError("Anthropic 키가 유효하지 않거나 권한이 없어요.")
-    except anthropic.RateLimitError:
+    except AiAuthError:
+        raise AiError("Gemini 키가 유효하지 않거나 권한이 없어요.")
+    except AiRateLimitError:
         raise AiError("요청이 몰렸어요(레이트 리밋). 잠시 후 다시 시도해 주세요.")
-    except anthropic.APIStatusError as exc:
-        detail = str(getattr(exc, "message", "") or exc).lower()
-        if "credit" in detail or "billing" in detail:
-            raise AiError("Anthropic 크레딧이 부족해요. 콘솔에서 결제/충전을 확인해 주세요.")
+    except AiStatusError as exc:
+        detail = str(exc).lower()
+        if "quota" in detail or "billing" in detail:
+            raise AiError("Gemini 사용량 한도에 걸렸어요. Google AI Studio 에서 결제/한도를 확인해 주세요.")
         raise AiError("AI 호출에 실패했어요.")
-    except anthropic.APIConnectionError:
+    except AiConnectionError:
         raise AiError("네트워크 오류로 AI 호출에 실패했어요. 잠시 후 다시 시도해 주세요.")
 
     return explanation, runtime_state
 
 
 def generate(macro: Macro, result: BacktestResult, *, per_symbol=None, model: Optional[str] = None) -> Explanation:
-    """Call Claude and return an AI Explanation. Raises :class:`AiError` on failure."""
+    """Call the model and return an AI Explanation. Raises :class:`AiError` on failure."""
     return generate_with_cache_status(
         macro,
         result,

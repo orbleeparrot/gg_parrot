@@ -57,7 +57,7 @@ def test_ambiguous_lowercase_m_must_keep_the_original_notation():
 
 
 def test_provider_gets_minute_fact_and_repair_rejects_cached_million_result(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "fixture-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "fixture-key")
     requests = []
     replies = [WRONG, CORRECT]
     def create(**kwargs):
@@ -65,7 +65,7 @@ def test_provider_gets_minute_fact_and_repair_rejects_cached_million_result(monk
         return SimpleNamespace(content=[SimpleNamespace(type="text", text=json.dumps({
             "items": [{"id": news._title_translation_id(ORIGINAL), "title_ko": replies.pop(0)}],
         }))])
-    monkeypatch.setattr(news, "get_anthropic_client", lambda: SimpleNamespace(messages=SimpleNamespace(create=create)))
+    monkeypatch.setattr(news, "get_ai_client", lambda: SimpleNamespace(messages=SimpleNamespace(create=create)))
     runtime = AiCallRuntime(max_concurrent=1, acquire_timeout_seconds=0.01, cache_ttl_seconds=900)
     monkeypatch.setattr(news, "get_ai_runtime", lambda: runtime)
     assert news._request_korean_title_translations([ORIGINAL]) == {ORIGINAL: CORRECT}

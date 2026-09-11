@@ -656,7 +656,7 @@ export default function Studio() {
         </div>
       )}
 
-      <div ref={split.workRef} className={"studio-work" + (split.dragging ? "is-resizing" : "")} style={{ "--studio-condition-width": `${split.width}px` }}>
+      <div ref={split.workRef} className="studio-work" style={{ "--studio-condition-width": `${split.width}px` }}>
         {/* ── 조건 ── */}
         <aside id="studio-conditions" className="studio-cond" aria-label="조건">
           <div className="studio-panel-head">

@@ -1,5 +1,7 @@
 /* 조건 패널의 너비는 드래그 값, 차트와 결과는 남는 공간을 사용한다. */
-.studio-work {
+.studio-page > .studio-banner { grid-row: 1; }
+.studio-page > .studio-work {
+  grid-row: 2;
   grid-template-columns: var(--studio-condition-width, 336px) 1px minmax(0, 1fr);
   grid-template-areas: "cond split chart" "cond split dock";
 }
@@ -36,6 +38,6 @@
   .candle-chart.is-studio .candle-chart-controls .seg { max-width: 100%; overflow-x: auto; }
 }
 @media (max-width: 1099px) {
-  .studio-work { grid-template-columns: minmax(0, 1fr); grid-template-areas: "chart" "cond" "dock"; }
+  .studio-page > .studio-work { grid-template-columns: minmax(0, 1fr); grid-template-areas: "chart" "cond" "dock"; }
   .studio-splitter { display: none; }
 }

@@ -40,9 +40,22 @@ def drag_to(page, target):
     divider = page.get_by_role("separator", name="조건 패널 너비 조절")
     box = divider.bounding_box()
     current = float(divider.get_attribute("aria-valuenow"))
+    before = page.locator('.studio-work').bounding_box()
+    chart_before = page.locator('.studio-chart').bounding_box()
+    saved = page.evaluate("localStorage.getItem('ggp_studio_condition_width')")
     page.mouse.move(box["x"] + box["width"] / 2, box["y"] + 180)
     page.mouse.down()
-    page.mouse.move(box["x"] + box["width"] / 2 + target - current, box["y"] + 180, steps=12)
+    for step in range(1,13):
+        delta = (target-current)*step/12
+        page.mouse.move(box["x"] + box["width"] / 2 + delta, box["y"] + 180)
+        settle(page)
+        panel = page.locator('.studio-cond').bounding_box()
+        chart = page.locator('.studio-chart').bounding_box()
+        work = page.locator('.studio-work').bounding_box()
+        assert abs(panel['width']-current-delta) <= 1, (step,current,target,panel)
+        assert abs(chart['height']-chart_before['height']) <= 1, (step,chart,chart_before)
+        assert abs(work['y']-before['y']) <= 1 and abs(work['height']-before['height']) <= 1, (step,work,before)
+        assert page.evaluate("localStorage.getItem('ggp_studio_condition_width')") == saved, 'Drag persisted before release'
     page.mouse.up()
     settle(page)
     assert not page.locator('.studio-work.is-resizing').count()
@@ -84,13 +97,21 @@ def main():
         form_after = page.locator('.builder-dense input,.builder-dense select').evaluate_all('nodes => nodes.map(n => [n.type,n.value,n.checked])')
         assert form_before == form_after, 'Resizing changed form values'
 
-        # Keyboard, limits, reset, persisted preference and window resizing.
+        # A click or rapid repeated clicks must never reset the split.
+        drag_to(page,560)
+        before_click=inspect(page)
+        divider.click(); settle(page)
+        assert inspect(page)==before_click, 'Click changed the layout'
+        divider.dblclick(); settle(page)
+        assert inspect(page)==before_click, 'Repeated clicks reset the split'
+        checks.append({'clickStable':True,'repeatedClickStable':True,'continuousPointerTracking':True})
+        # Keyboard, limits, persisted preference and window resizing.
         divider.focus()
         divider.press('Home'); expect(divider).to_have_attribute('aria-valuenow','280')
         divider.press('ArrowRight'); expect(divider).to_have_attribute('aria-valuenow','296')
         divider.press('Shift+ArrowRight'); expect(divider).to_have_attribute('aria-valuenow','344')
         divider.press('End'); expect(divider).to_have_attribute('aria-valuenow','680')
-        divider.dblclick(); expect(divider).to_have_attribute('aria-valuenow','336')
+        divider.dblclick(); expect(divider).to_have_attribute('aria-valuenow','680')
         drag_to(page,560)
         page.reload(); expect(divider).to_have_attribute('aria-valuenow','560')
         page.set_viewport_size({'width':1100,'height':900}); settle(page)

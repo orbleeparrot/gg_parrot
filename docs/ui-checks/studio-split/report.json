@@ -62,6 +62,11 @@
       "chartCanvas": 774
     },
     {
+      "clickStable": true,
+      "repeatedClickStable": true,
+      "continuousPointerTracking": true
+    },
+    {
       "rule": "A",
       "target": 280,
       "panel": 280,

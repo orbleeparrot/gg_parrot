@@ -27,6 +27,7 @@ import {
   readHeroDraft,
   takeRegistrationDraft,
 } from "../lib/journey.js";
+import { readStudioSession, writeStudioSession } from "../lib/studioSession.js";
 import "./Studio.css";
 
 const MAX_MACRO_FILE_BYTES = 2 * 1024 * 1024;
@@ -167,22 +168,27 @@ export default function Studio() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const entryQuery = searchParams.toString();
-  const [form, setForm] = useState(defaultForm);
-  const [result, setResult] = useState(null);
-  const [testedMacro, setTestedMacro] = useState(null);
-  const [perSymbol, setPerSymbol] = useState([]);
-  const [explanation, setExplanation] = useState(null);
+  // 다른 화면에 다녀와도 조건·결과·탭이 남아 있도록 — 이 탭(sessionStorage)에 둔 작업 상태로 시작한다.
+  // 공유 링크(/s/:slug)는 그 링크의 매크로가 우선이라 읽지 않는다.
+  const savedRef = useRef(undefined);
+  if (savedRef.current === undefined) savedRef.current = slug ? null : readStudioSession();
+  const saved = savedRef.current;
+  const [form, setForm] = useState(() => saved?.form || defaultForm());
+  const [result, setResult] = useState(() => saved?.result || null);
+  const [testedMacro, setTestedMacro] = useState(() => saved?.testedMacro || null);
+  const [perSymbol, setPerSymbol] = useState(() => saved?.perSymbol || []);
+  const [explanation, setExplanation] = useState(() => saved?.explanation || null);
   const [aiBusy, setAiBusy] = useState(false);
   const [aiError, setAiError] = useState("");
-  const [summary, setSummary] = useState("");
-  const [dataSource, setDataSource] = useState("");
-  const [periodLabel, setPeriodLabel] = useState("");
+  const [summary, setSummary] = useState(() => saved?.summary || "");
+  const [dataSource, setDataSource] = useState(() => saved?.dataSource || "");
+  const [periodLabel, setPeriodLabel] = useState(() => saved?.periodLabel || "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [share, setShare] = useState(null);
-  const [loadedFrom, setLoadedFrom] = useState("");
-  const [runLeverage, setRunLeverage] = useState(1);
-  const [autoRun, setAutoRun] = useState(true);
+  const [share, setShare] = useState(() => saved?.share || null);
+  const [loadedFrom, setLoadedFrom] = useState(() => saved?.loadedFrom || "");
+  const [runLeverage, setRunLeverage] = useState(() => saved?.runLeverage || 1);
+  const [autoRun, setAutoRun] = useState(() => saved?.autoRun ?? true);
   const [registerOpen, setRegisterOpen] = useState(false);
   const [registrationMode, setRegistrationMode] = useState("live");
   const [hasRegistrationDraft, setHasRegistrationDraft] = useState(
@@ -192,16 +198,17 @@ export default function Studio() {
     }
   );
   const [tourOpen, setTourOpen] = useState(false);
-  const [dockTab, setDockTab] = useState("bt"); // 결과 독의 탭 — 백테스트 → AI 해설 → 최적화 → 페이퍼 → 등록·실행
+  const [dockTab, setDockTab] = useState(() => saved?.dockTab || "bt"); // 결과 독의 탭 — 백테스트 → AI 해설 → 최적화 → 페이퍼 → 매크로 등록
   const [menuOpen, setMenuOpen] = useState(false); // ⋯ 메뉴(파일 등록 · 공유 · 사용법)
   const [shareOpen, setShareOpen] = useState(false); // 저장·공유 다이얼로그
-  const [optimized, setOptimized] = useState(false); // 최적화를 한 번이라도 돌렸는지(탭 앞 점)
+  const [optimized, setOptimized] = useState(() => !!saved?.optimized); // 최적화를 한 번이라도 돌렸는지(탭 앞 점)
   const [fileImportBusy, setFileImportBusy] = useState(false);
   const [fileImportError, setFileImportError] = useState("");
   const [fileImportSuccess, setFileImportSuccess] = useState("");
   const macroFileInputRef = useRef(null);
   const requestIdRef = useRef(0);
-  const lastAttemptKeyRef = useRef("");
+  // 복원한 결과가 지금 조건과 같으면 자동 테스트가 바로 다시 돌지 않게 마지막 시도 키를 맞춰 둔다.
+  const lastAttemptKeyRef = useRef(saved?.testedMacro ? macroKey(saved.testedMacro) : "");
   const aiRequestIdRef = useRef(0);
   const latestTestedKeyRef = useRef("");
   const resumeRequestIdRef = useRef(0);
@@ -227,7 +234,16 @@ export default function Studio() {
     return out;
   }, [form.symbol]);
 
-  const paper = usePaperSession({ macro: currentMacro, valErr });
+  const paper = usePaperSession({ macro: currentMacro, valErr, resumeKey: slug ? "" : "ggp_studio_paper:v1" });
+
+  // 작업 상태 저장 — 값이 바뀌고 300ms 뒤에 한 번. 결과(자산곡선 365점)까지 함께 둔다.
+  useEffect(() => {
+    if (slug) return undefined;
+    const timer = window.setTimeout(() => writeStudioSession({
+      form, result, testedMacro, perSymbol, explanation, summary, dataSource, periodLabel, share, loadedFrom, runLeverage, autoRun, dockTab, optimized,
+    }), 300);
+    return () => window.clearTimeout(timer);
+  }, [slug, form, result, testedMacro, perSymbol, explanation, summary, dataSource, periodLabel, share, loadedFrom, runLeverage, autoRun, dockTab, optimized]);
   // 차트 오버레이 — 지금 매크로 설정 그대로 보조지표(볼린저 밴드·매수/매도 구간 등)를 얹는다. form 이 바뀌면 즉시 따라간다.
   const overlay = useCallback((candles) => computeStrategyOverlay(form, candles), [form]);
 
@@ -574,7 +590,6 @@ export default function Studio() {
   const intervalLabel = CANDLE_INTERVALS.find((item) => item.value === form.candle_interval)?.label || "";
   const stage = dockTab === "done" || (paper.status && !paper.running) ? 3 : paper.running ? 2 : result ? 1 : 0;
   const shareStale = !!share && !!share.macroKey && share.macroKey !== currentMacroKey;
-  const paperReturn = paper.status?.current_return;
   const testPrimary = !busy && (!testedMacro || !resultIsFresh);
   const testLabel = busy
     ? "결과 계산 중…"
@@ -588,7 +603,7 @@ export default function Studio() {
     { id: "ai", label: "껄무새 AI 해설", enabled: !!result, dot: aiBusy ? "run" : explanation?.source === "ai" ? "ok" : "" },
     { id: "opt", label: "익·손절 최적화", enabled: !!result, dot: optimized ? "ok" : "" },
     { id: "paper", label: "페이퍼 트레이딩", enabled: !!result, dot: paper.running ? "run" : paper.status ? "ok" : "" },
-    { id: "done", label: "등록 · 실행", enabled: !!result, dot: "" },
+    { id: "done", label: "매크로 등록", enabled: !!result, dot: "" },
   ];
 
   function startPaper() {
@@ -600,17 +615,7 @@ export default function Studio() {
   // 백테스트 버튼이 2차로 내려가고 여기의 '페이퍼 트레이딩 시작'이 노랑을 받는다.
   let dockCta = null;
   if (paper.running) {
-    dockCta = (
-      <>
-        <span className="t-caption studio-cta-note">
-          페이퍼 진행 중
-          {paperReturn != null && (
-            <> · <b className={"num " + (paperReturn >= 0 ? "text-green-600" : "text-red-600")}>{paperReturn >= 0 ? "+" : ""}{Number(paperReturn).toFixed(2)}%</b></>
-          )}
-        </span>
-        <button type="button" onClick={() => setDockTab("done")} className="btn btn-m btn-secondary">등록 · 실행으로 →</button>
-      </>
-    );
+    dockCta = <button type="button" onClick={() => setDockTab("done")} className="btn btn-m btn-secondary">매크로 등록으로 →</button>;
   } else if (result && resultIsFresh && dockTab !== "done") {
     dockCta = (
       <>
@@ -647,7 +652,7 @@ export default function Studio() {
         {loadedFrom && <span className="studio-strip-loaded t-caption">불러온 매크로 · <b>{loadedFrom}</b></span>}
         <SimBadge />
         <ol className="studio-flow" aria-label="진행 단계">
-          {["조건", "검증 3종", "페이퍼 트레이딩", "등록 · 실행"].map((label, index) => (
+          {["조건", "검증 3종", "페이퍼 트레이딩", "매크로 등록"].map((label, index) => (
             <li key={label} className={index < stage ? "is-done" : index === stage ? "is-now" : ""} aria-current={index === stage ? "step" : undefined}>
               <i aria-hidden="true" />{label}
             </li>

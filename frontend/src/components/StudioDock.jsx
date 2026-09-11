@@ -73,7 +73,7 @@ export function StudioBacktest({ result: r, perSymbol, summary, dataSource, peri
       <div className="sd-kpis">
         {kpis.map((kpi) => (
           <div key={kpi.k} className="sd-kpi">
-            <div className="sd-kpi-k">{kpi.k}{kpi.term && <InfoTooltip term={kpi.term} />}</div>
+            <div className="sd-kpi-k"><span className="sd-kpi-cap">{kpi.k}</span>{kpi.term && <InfoTooltip term={kpi.term} />}</div>
             <div className={"sd-kpi-v num " + kpi.cls}>{kpi.v}</div>
             <div className="sd-kpi-d num">{kpi.d}</div>
           </div>
@@ -94,7 +94,7 @@ export function StudioBacktest({ result: r, perSymbol, summary, dataSource, peri
       <div className="sd-two">
         <div className="sd-eq">
           <div className="sd-cap">자산곡선{periodLabel ? ` · ${periodLabel}` : ""} · 파선이 본전</div>
-          <EquityChart curve={r.equity_curve} height={150} />
+          <EquityChart curve={r.equity_curve} height={140} />
         </div>
         <div className="sd-side">
           <table className="sd-table">

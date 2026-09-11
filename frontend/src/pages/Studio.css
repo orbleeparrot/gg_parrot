@@ -187,7 +187,7 @@
 .sd-box.is-warn b { color: rgb(var(--c-amber-600)); }
 /* 페이퍼 트레이딩 */
 .sd-paper { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); gap: 18px; }
-.sd-paper-left { min-width: 0; }
+.sd-paper-left { min-width: 0; display: flex; flex-direction: column; }
 .sd-field label { display: flex; align-items: center; gap: 2px; margin-bottom: 4px; color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 600; }
 .sd-seg { height: 32px; padding: 3px; display: inline-flex; }
 .sd-seg .seg-item { height: 24px; padding: 0 10px; font-size: 13px; white-space: nowrap; }
@@ -195,7 +195,10 @@
 .sd-lock b { color: rgb(var(--c-slate-900)); }
 .sd-lock.is-warn { background: rgb(var(--c-amber-50)); color: rgb(var(--c-amber-800)); }
 .sd-lock.is-risk b { color: rgb(var(--c-red-600)); }
-.sd-paper-actions { margin-top: 10px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* 동작 줄은 왼쪽 판의 바닥. 주 버튼은 폭 고정 — '시작'·'중지'·'다시 시작' 어느 문구든 같은 크기. */
+.sd-paper-actions { margin-top: auto; padding-top: 12px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sd-paper-actions .sd-note { margin: 0; }
+.sd-paper-main { flex: none; width: 168px; padding-inline: 0; justify-content: center; font-size: 16px; }
 .sd-stat { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .sd-log { min-width: 0; border: 1px solid rgb(var(--c-slate-200)); border-radius: 10px; overflow: hidden; font-size: 13px; align-self: start; }
 .sd-log-cap { display: flex; justify-content: space-between; gap: 10px; padding: 7px 10px; border-bottom: 1px solid rgb(var(--c-slate-200)); color: rgb(var(--c-slate-500)); font-weight: 600; }

@@ -13,6 +13,7 @@ import { fmtMoney, fmtMoneyCompact, fmtKrw, fmtPrice, fmtQty, quoteOf, baseOf } 
 import { buildMacro, RULE_TYPES, CANDLE_INTERVALS } from "../lib/macro.js";
 import { leaderboardStrategy } from "../lib/leaderboardStrategy.js";
 import { strategyPhrases } from "../lib/strategyText.js";
+import { paperMainButton } from "../lib/paperMain.js";
 import { useUsdKrw } from "../lib/usdkrw.js";
 
 const AI_MASCOT = "/brand/navigation/ggparrot-nav-agent.svg";
@@ -326,6 +327,8 @@ export function StudioPaper({ macro, valErr, controller }) {
   const ret = status?.current_return ?? 0;
   const macroChanged = running && startedMacro && JSON.stringify(startedMacro) !== JSON.stringify(macro);
   const modeLabel = (value) => (value === "replay" ? "데모 리플레이" : "실시간");
+  // 주 버튼 하나 — 시작 → 중지 → 다시 시작. 자리(왼쪽 아래 동작 줄)와 폭은 그대로, 문구와 색만 바뀐다.
+  const main = paperMainButton({ running, hasSession: !!status, busy });
 
   return (
     <div className="sd-paper">
@@ -348,11 +351,6 @@ export function StudioPaper({ macro, valErr, controller }) {
                 <b>레버리지 <span className="num">{macro.leverage}</span>배</b> — 가격이 약 <b className="num">{(100 / macro.leverage).toFixed(macro.leverage >= 100 ? 2 : 1)}%</b> 반대로 움직이면 청산(전액 손실)돼요. 모의(가짜 돈)로 위험을 체험하는 용도예요.
               </div>
             )}
-            <div className="sd-paper-actions">
-              {/* 독 머리에 있던 다음 행동이 여기로 — 결과가 최신이면 이 화면의 노란 버튼은 이것 하나(§1-4). */}
-              <button type="button" onClick={start} disabled={busy || !!valErr} className="btn btn-m btn-primary">{busy ? "시작 중…" : "페이퍼 트레이딩 시작"}</button>
-              <span className="sd-note"><span className="num">{macro.symbol}</span> · {modeLabel(mode)}</span>
-            </div>
           </>
         ) : (
           <>
@@ -383,19 +381,22 @@ export function StudioPaper({ macro, valErr, controller }) {
               시작 시점 설정 · <b>{macroLine(startedMacro || macro)}</b>
               {macroChanged && <> · 조건을 바꿨지만 이 세션은 시작 시점 설정으로 계속 돌아요. 반영하려면 재시작하세요.</>}
             </div>
-            <div className="sd-paper-actions">
-              {running ? (
-                <>
-                  <button type="button" onClick={stop} disabled={busy} className="btn btn-s btn-danger">중지</button>
-                  {macroChanged && <button type="button" onClick={restart} disabled={busy || !!valErr} className="btn btn-s btn-secondary">바뀐 설정으로 재시작</button>}
-                </>
-              ) : (
-                <button type="button" onClick={start} disabled={busy || !!valErr} className="btn btn-s btn-secondary">{busy ? "시작 중…" : "다시 시작"}</button>
-              )}
-              <Link to="/mypage" className="btn btn-s btn-secondary">마이페이지에서 보기</Link>
-            </div>
           </>
         )}
+        {/* 동작 줄 — 두 상태가 같은 자리를 쓴다. 주 버튼(시작 · 중지 · 다시 시작)은 크고 폭이 고정이라 문구가 바뀌어도 줄이 움직이지 않는다(§1-4: 노랑은 시작/다시 시작일 때만).
+            마이페이지 링크는 예전 흐름이라 두지 않는다. */}
+        <div className="sd-paper-actions">
+          <button
+            type="button"
+            onClick={main.action === "stop" ? stop : start}
+            disabled={busy || (main.action === "start" && !!valErr)}
+            className={"btn btn-l sd-paper-main " + (main.tone === "danger" ? "btn-danger" : "btn-primary")}
+          >
+            {main.label}
+          </button>
+          {running && macroChanged && <button type="button" onClick={restart} disabled={busy || !!valErr} className="btn btn-l btn-secondary">바뀐 설정으로 재시작</button>}
+          {!status && <span className="sd-note"><span className="num">{macro.symbol}</span> · {modeLabel(mode)}</span>}
+        </div>
         {valErr && <p className="sd-note text-amber-700" role="alert">{valErr}</p>}
         {error && <p className="sd-note is-error" role="alert">오류: {error}</p>}
       </div>

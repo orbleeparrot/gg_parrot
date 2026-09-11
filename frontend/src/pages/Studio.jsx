@@ -20,6 +20,7 @@ import {
   macroToForm,
   validate,
   withTypeDefaults,
+  validateDetailed,
 } from "../lib/macro.js";
 import { computeStrategyOverlay } from "../lib/indicators.js";
 import {
@@ -192,7 +193,22 @@ export default function Studio() {
     if (larger) setForm((previous) => ({ ...previous, ...larger.patch }));
   }, [testBudget]);
 
-  const valErr = validate(form);
+  // 입력 검증 — 걸린 칸(fieldError.field)은 조건 판에서 노랗게 띄우고 라벨 아래 문구를 적는다. 바닥 경고 상자에는 올리지 않는다.
+  const fieldError = validateDetailed(form);
+  const valErr = fieldError?.message ?? null;
+  const fieldErrorKey = fieldError?.field || "";
+  useEffect(() => {
+    if (!fieldErrorKey) return;
+    const host = document.querySelector(`.studio-cond-body [data-field="${fieldErrorKey}"]`);
+    if (!host) return;
+    const reduce = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+    host.scrollIntoView({ block: "center", behavior: reduce ? "auto" : "smooth" });
+    // 다른 칸에 입력 중이면 커서를 뺏지 않는다 — 스크롤과 노랑 표시만.
+    const active = document.activeElement;
+    const typing = active && ["INPUT", "SELECT", "TEXTAREA"].includes(active.tagName) && !host.contains(active);
+    if (typing) return;
+    host.querySelector('input:not([type="checkbox"]):not([disabled]), select:not([disabled]), button:not([disabled])')?.focus({ preventScroll: true });
+  }, [fieldErrorKey]);
   const currentMacro = useMemo(() => buildMacro(form), [form]);
   const currentMacroKey = useMemo(() => macroKey(currentMacro), [currentMacro]);
   const testedMacroKey = testedMacro ? macroKey(testedMacro) : "";
@@ -610,7 +626,7 @@ export default function Studio() {
   const footAlert = (() => {
     if (limitsError && (!error || error === limitsError)) return { tone: "risk", text: limitsError, actions: limitsRetry };
     if (error) return { tone: "risk", text: `오류: ${error}`, actions: error === limitsError ? limitsRetry : null };
-    if (valErr) return { tone: "warn", text: valErr, actions: null };
+    if (valErr && !fieldErrorKey) return { tone: "warn", text: valErr, actions: null }; // 칸이 정해진 오류는 그 칸에 표시된다
     if (budgetBlocked) {
       const text = testBudget.error || `테스트 범위를 넘어요 · ${testBudget.bars.toLocaleString()}봉 / 최대 ${testBudget.maxBars.toLocaleString()}봉`;
       const actions = testBudget.suggestions.length > 0 ? (
@@ -681,7 +697,7 @@ export default function Studio() {
             </div>
           </div>
           <div className="studio-scroll studio-cond-body">
-            <Builder form={form} setForm={setForm} variant="dense" intervalOptions={intervalOptions} />
+            <Builder form={form} setForm={setForm} variant="dense" intervalOptions={intervalOptions} fieldError={fieldError} />
           </div>
           <div className="studio-cond-foot">
             {/* 안내·오류는 한 번에 하나, 경고 상자 하나로 — 오류 > 범위 확인 실패 > 입력 오류 > 범위 초과 > 조건 바뀜. */}

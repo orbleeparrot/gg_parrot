@@ -69,3 +69,10 @@
   /* iOS에서 입력할 때 화면이 자동 확대되지 않도록 입력 글자만 보정한다. */
   .builder-dense input.field, .builder-dense select.field, .builder-dense .bd-chip-input { font-size: 16px; }
 }
+/* 입력 오류 — 걸린 칸만 노랗게 띄우고 라벨 아래 한 줄로 이유를 적는다(바닥 경고 상자 대신). 나타날 때 한 번 반짝인다. */
+.builder-dense .is-invalid .bd-label label, .builder-dense .is-invalid .bd-label > span { color: rgb(var(--c-amber-700)); }
+.builder-dense .is-invalid .field, .builder-dense .is-invalid .bd-seg { box-shadow: inset 0 0 0 1.5px rgb(var(--c-brand)); background: rgb(var(--c-brand) / .12); animation: bd-invalid-in .9s ease-out; }
+.builder-dense .is-invalid .field:focus-visible { outline-color: rgb(var(--c-brand-line)); }
+.builder-dense .bd-error { margin-top: 4px; color: rgb(var(--c-amber-700)); font-size: 11.5px; font-weight: 600; line-height: 1.4; }
+@keyframes bd-invalid-in { from { background: rgb(var(--c-brand) / .45); } to { background: rgb(var(--c-brand) / .12); } }
+@media (prefers-reduced-motion: reduce) { .builder-dense .is-invalid .field, .builder-dense .is-invalid .bd-seg { animation: none; } }

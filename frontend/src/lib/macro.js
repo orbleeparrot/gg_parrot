@@ -150,54 +150,61 @@ function martingaleRequiredFunds(form) {
   return total;
 }
 
-export function validate(form) {
+// 입력 검증 — 걸린 항목(form 의 키)과 문구를 함께 돌려준다. 화면은 그 칸을 노랗게 띄우고 라벨 아래에 문구를 적는다.
+export function validateDetailed(form) {
   const rt = form.rule_type;
   const meta = RULE_TYPES[rt];
   const isShort = form.position_side === "short";
+  const fail = (field, message) => ({ field, message });
 
   // Short A/B must set a stop loss (short loss is theoretically unbounded).
   if (isShort && (rt === "A" || rt === "B") && (!form.use_stop_loss || !(form.stop_loss_pct > 0))) {
-    return "숏으로 A·B 전략을 쓸 때는 손절 기준을 반드시 입력해야 해요.";
+    return fail("stop_loss_pct", "숏으로 A·B 전략을 쓸 때는 손절 기준을 반드시 입력해야 해요.");
   }
   if (isShort && !meta.allowShort) {
-    return `${rt} 전략은 숏을 지원하지 않아요.`;
+    return fail("position_side", `${rt} 전략은 숏을 지원하지 않아요.`);
   }
   const lev = num(form.leverage);
-  if (rt === "C" && lev > 1) return "C 분할매수 전략은 레버리지 없이 1배로만 쓸 수 있어요.";
-  if (!(lev >= 1) || lev > MAX_LEVERAGE) return `레버리지는 1~${MAX_LEVERAGE}배 사이로 입력해요.`;
-  if (!Number.isInteger(lev)) return "레버리지는 정수로 입력해요.";
+  if (rt === "C" && lev > 1) return fail("leverage", "C 분할매수 전략은 레버리지 없이 1배로만 쓸 수 있어요.");
+  if (!(lev >= 1) || lev > MAX_LEVERAGE) return fail("leverage", `레버리지는 1~${MAX_LEVERAGE}배 사이로 입력해요.`);
+  if (!Number.isInteger(lev)) return fail("leverage", "레버리지는 정수로 입력해요.");
   if (rt === "D") {
-    if (!(num(form.upper_price) > num(form.lower_price))) return "D 전략의 가격 범위 상단은 하단보다 커야 해요.";
-    if (form.grid_mode === "geometric" && !(num(form.lower_price) > 0)) return "D 전략에서 같은 비율 간격을 쓰려면 하단 가격이 0보다 커야 해요.";
+    if (!(num(form.upper_price) > num(form.lower_price))) return fail("upper_price", "D 전략의 가격 범위 상단은 하단보다 커야 해요.");
+    if (form.grid_mode === "geometric" && !(num(form.lower_price) > 0)) return fail("lower_price", "D 전략에서 같은 비율 간격을 쓰려면 하단 가격이 0보다 커야 해요.");
     if (form.per_grid_invest !== "" && num(form.per_grid_invest) * num(form.grid_count) > num(form.initial_capital) * (num(form.invest_ratio_pct) / 100) + 1e-6) {
-      return "D 전략의 전체 칸에 필요한 금액이 사용할 수 있는 자금을 넘어요.";
+      return fail("per_grid_invest", "D 전략의 전체 칸에 필요한 금액이 사용할 수 있는 자금을 넘어요.");
     }
   }
   if (rt === "H") {
     const budget = num(form.initial_capital) * (num(form.invest_ratio_pct) / 100);
     if (martingaleRequiredFunds(form) > budget + 1e-6) {
-      return "H 전략의 최대 추가매수 금액이 사용할 수 있는 자금을 넘어요.";
+      return fail("max_safety_orders", "H 전략의 최대 추가매수 금액이 사용할 수 있는 자금을 넘어요.");
     }
   }
   if (rt === "F" && (form.exit_mode === "take_profit" || form.exit_mode === "both") && !(num(form.take_profit) > 0)) {
-    return "F 전략에서 익절 기준을 포함하려면 익절률을 입력해요.";
+    return fail("take_profit", "F 전략에서 익절 기준을 포함하려면 익절률을 입력해요.");
   }
   if (rt === "I" && form.exit_mode === "take_profit" && !(num(form.take_profit) > 0)) {
-    return "I 전략에서 익절 기준을 골랐다면 익절률을 입력해요.";
+    return fail("take_profit", "I 전략에서 익절 기준을 골랐다면 익절률을 입력해요.");
   }
   if (rt === "J") {
-    if (!(num(form.fast_period) < num(form.slow_period))) return "J 전략의 짧은 이동평균 기간은 긴 기간보다 작아야 해요.";
+    if (!(num(form.fast_period) < num(form.slow_period))) return fail("fast_period", "J 전략의 짧은 이동평균 기간은 긴 기간보다 작아야 해요.");
     if ((form.exit_signal === "take_profit" || form.exit_signal === "both") && !(num(form.take_profit) > 0)) {
-      return "J 전략에서 익절 기준을 포함하려면 익절률을 입력해요.";
+      return fail("take_profit", "J 전략에서 익절 기준을 포함하려면 익절률을 입력해요.");
     }
   }
   if (rt === "K") {
-    if (!(num(form.drop_trigger_pct) > 0)) return "K 전략의 방어 시작 하락폭을 입력해요.";
-    if (!(num(form.partial_exit_pct) > 0 && num(form.partial_exit_pct) <= 100)) return "K 전략에서 팔 비율은 0%보다 크고 100% 이하여야 해요.";
-    if (!(num(form.short_take_profit_pct) > 0)) return "K 전략의 숏 익절 기준을 입력해요.";
-    if (!(num(form.short_stop_loss_pct) > 0)) return "K 전략에서 숏으로 전환하려면 손절 기준이 필요해요.";
+    if (!(num(form.drop_trigger_pct) > 0)) return fail("drop_trigger_pct", "K 전략의 방어 시작 하락폭을 입력해요.");
+    if (!(num(form.partial_exit_pct) > 0 && num(form.partial_exit_pct) <= 100)) return fail("partial_exit_pct", "K 전략에서 팔 비율은 0%보다 크고 100% 이하여야 해요.");
+    if (!(num(form.short_take_profit_pct) > 0)) return fail("short_take_profit_pct", "K 전략의 숏 익절 기준을 입력해요.");
+    if (!(num(form.short_stop_loss_pct) > 0)) return fail("short_stop_loss_pct", "K 전략에서 숏으로 전환하려면 손절 기준이 필요해요.");
   }
   return null;
+}
+
+// 문구만 필요한 곳(등록 모달 · 시작 화면 · 히어로 백테스트)은 이걸 쓴다.
+export function validate(form) {
+  return validateDetailed(form)?.message ?? null;
 }
 
 function buildParams(rt, form) {

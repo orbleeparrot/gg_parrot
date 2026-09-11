@@ -30,11 +30,13 @@ function leverageRisk(lev) {
 }
 
 // §4 자리별 적용표: 입력 라벨 14/600, 도움말 14/500 — 둘 다 '작은 글씨' 단계.
-function Field({ label, term, children, hint, anchor, wide = false }) {
+// name 은 form 의 키 — 검증 오류가 이 칸을 가리키면(error) 노랗게 띄우고 라벨 아래 문구를 적는다. data-field 로 화면이 스크롤·포커스한다.
+function Field({ label, term, children, hint, anchor, wide = false, name, error = null }) {
   const dense = useContext(DenseContext);
   const controlId = useId();
   const labelId = `${controlId}-label`;
   const hintId = `${controlId}-hint`;
+  const errorId = `${controlId}-error`;
   const directControl =
     isValidElement(children) &&
     typeof children.type === "string" &&
@@ -42,17 +44,17 @@ function Field({ label, term, children, hint, anchor, wide = false }) {
   const renderedControl = directControl
     ? cloneElement(children, {
         id: children.props.id || controlId,
-        "aria-describedby": hint
-          ? [children.props["aria-describedby"], hintId].filter(Boolean).join(" ")
-          : children.props["aria-describedby"],
+        "aria-invalid": error ? true : children.props["aria-invalid"],
+        "aria-describedby": [children.props["aria-describedby"], hint ? hintId : "", error ? errorId : ""].filter(Boolean).join(" ") || undefined,
       })
     : children;
 
   if (dense) {
     return (
       <div
-        className={wide ? "bd-field bd-field-wide" : "bd-field"}
+        className={(wide ? "bd-field bd-field-wide" : "bd-field") + (error ? " is-invalid" : "")}
         data-tour={anchor}
+        data-field={name}
         role={directControl ? undefined : "group"}
         aria-labelledby={directControl ? undefined : labelId}
         aria-describedby={!directControl && hint ? hintId : undefined}
@@ -66,6 +68,7 @@ function Field({ label, term, children, hint, anchor, wide = false }) {
           {term && <InfoTooltip term={term} />}
         </div>
         {renderedControl}
+        {error && <div id={errorId} className="bd-error" role="alert">{error}</div>}
         {hint && <div id={hintId} className="bd-hint">{hint}</div>}
       </div>
     );
@@ -73,8 +76,9 @@ function Field({ label, term, children, hint, anchor, wide = false }) {
 
   return (
     <div
-      className="block"
+      className={"block" + (error ? " is-invalid" : "")}
       data-tour={anchor}
+      data-field={name}
       role={directControl ? undefined : "group"}
       aria-labelledby={directControl ? undefined : labelId}
       aria-describedby={!directControl && hint ? hintId : undefined}
@@ -88,6 +92,7 @@ function Field({ label, term, children, hint, anchor, wide = false }) {
         {term && <InfoTooltip term={term} />}
       </div>
       {renderedControl}
+      {error && <div id={errorId} className="t-small font-semibold text-amber-700 mt-2" role="alert">{error}</div>}
       {hint && <div id={hintId} className="t-small text-slate-500 mt-2">{hint}</div>}
     </div>
   );
@@ -165,7 +170,7 @@ function SymbolChips({ value, onChange, placeholder }) {
 // 래퍼다. Studio 가 넘겨준다 — 폼 컴포넌트가 차트·시세 폴링까지 끌어안지 않도록
 // 자리만 비워 둔다. 넘어오지 않으면 기본 설정만 그대로 그린다.
 // intervalOptions — 봉 간격 선택지를 밖에서 준다(예: 테스트 기간에서 봉 수 한도를 넘는 간격은 disabled + title).
-export default function Builder({ form, setForm, chartSlot = null, variant = "default", intervalOptions = null }) {
+export default function Builder({ form, setForm, chartSlot = null, variant = "default", intervalOptions = null, fieldError = null }) {
   const dense = variant === "dense";
   // 격자 — 기본은 sm 에서 2·3열, 조건 판은 컨테이너 너비에 따라 1·2열.
   const g2 = dense ? "bd-grid" : "grid grid-cols-1 sm:grid-cols-2 gap-4";
@@ -175,6 +180,9 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
   const g2full = dense ? "col-span-full bd-grid" : "col-span-full grid grid-cols-1 sm:grid-cols-2 gap-4 items-end";
   const instanceId = useId().replace(/:/g, "");
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
+  // 검증 오류가 가리키는 칸 — 그 칸만 문구와 노랑을 받는다.
+  const errOf = (k) => (fieldError && fieldError.field === k ? fieldError.message : null);
+  const fieldCls = (k, base) => base + (errOf(k) ? " is-invalid" : "");
   const setChk = (k) => (e) => setForm({ ...form, [k]: e.target.checked });
   const rt = form.rule_type;
   const meta = RULE_TYPES[rt];
@@ -210,23 +218,23 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
       const text = match ? match[1] : label;
       const unit = opts.unit || (match ? match[2] : "");
       return (
-        <Field key={k} label={opts.denseLabel || text} term={opts.term} hint={opts.hint} anchor={opts.anchor} wide={opts.wide}>
+        <Field key={k} name={k} error={errOf(k)} label={opts.denseLabel || text} term={opts.term} hint={opts.hint} anchor={opts.anchor} wide={opts.wide}>
           <div className="bd-unit" style={{ "--bd-unit-width": unit ? `${Math.max(30, unit.length * 7 + 18)}px` : "9px" }}>
-            <input className="field num" type="number" step={opts.step || "any"} value={form[k]} onChange={set(k)} aria-label={label} />
+            <input className={fieldCls(k, "field num")} type="number" step={opts.step || "any"} value={form[k]} onChange={set(k)} aria-label={label} aria-invalid={errOf(k) ? true : undefined} />
             {unit && <span className="bd-unit-tag">{unit}</span>}
           </div>
         </Field>
       );
     }
     return (
-      <Field key={k} label={label} term={opts.term} hint={opts.hint} anchor={opts.anchor}>
-        <input className="field num" type="number" step={opts.step || "any"} value={form[k]} onChange={set(k)} />
+      <Field key={k} name={k} error={errOf(k)} label={label} term={opts.term} hint={opts.hint} anchor={opts.anchor}>
+        <input className={fieldCls(k, "field num")} type="number" step={opts.step || "any"} value={form[k]} onChange={set(k)} />
       </Field>
     );
   };
   const sel = (k, label, options, opts = {}) => (
-    <Field key={k} label={label} term={opts.term} hint={opts.hint} anchor={opts.anchor} wide={opts.wide}>
-      <select className={inputCls} value={form[k]} onChange={set(k)}>
+    <Field key={k} name={k} error={errOf(k)} label={label} term={opts.term} hint={opts.hint} anchor={opts.anchor} wide={opts.wide}>
+      <select className={fieldCls(k, inputCls)} value={form[k]} onChange={set(k)}>
         {options.map((o) => (
           <option key={o.value} value={o.value} disabled={!!o.disabled} title={o.title}>{o.label}{o.disabled ? " · 불가" : ""}</option>
         ))}
@@ -286,7 +294,7 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
   );
   const positionField = dense ? (
     // 촘촘한 판은 두 값뿐이라 segmented — select 보다 한 번에 읽힌다. 롱·숏 설명은 라벨 옆 ⓘ 하나('position').
-    <Field label="포지션" anchor="position" term="position">
+    <Field name="position_side" error={errOf("position_side")} label="포지션" anchor="position" term="position">
       <div className="seg bd-seg" role="group" aria-label="포지션">
         <button type="button" onClick={() => setForm({ ...form, position_side: "long" })} aria-pressed={!isShort} className={"seg-item " + (!isShort ? "seg-item-on" : "")}>롱</button>
         <button
@@ -302,8 +310,8 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
       </div>
     </Field>
   ) : (
-    <Field label="포지션" anchor="position" hint={positionHint}>
-      <select className={inputCls} value={form.position_side} onChange={set("position_side")} disabled={!meta.allowShort}>
+    <Field name="position_side" error={errOf("position_side")} label="포지션" anchor="position" hint={positionHint}>
+      <select className={fieldCls("position_side", inputCls)} value={form.position_side} onChange={set("position_side")} disabled={!meta.allowShort}>
         <option value="long">롱 (long)</option>
         <option value="short" disabled={!meta.allowShort}>숏 (short)</option>
       </select>
@@ -503,11 +511,11 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
       <Group title="손실 제한" anchor="risk">
         <div className={g2y}>
           {num("invest_ratio_pct", "한 번에 사용할 자금 (%)", { term: "invest_ratio", hint: "시작 자금 중 한 번에 얼마를 쓸지 정해요" })}
-          <Field label={unitLabel("손절 기준 (%)")} term="stop_loss" hint={isShort && (rt === "A" || rt === "B") ? "숏은 손절이 필수예요" : "사용하지 않으려면 체크를 풀어요"}>
+          <Field name="stop_loss_pct" error={errOf("stop_loss_pct")} label={unitLabel("손절 기준 (%)")} term="stop_loss" hint={isShort && (rt === "A" || rt === "B") ? "숏은 손절이 필수예요" : "사용하지 않으려면 체크를 풀어요"}>
             <div className="flex items-center gap-2">
               <input aria-label="손절 기준 사용" type="checkbox" checked={form.use_stop_loss} disabled={isShort && (rt === "A" || rt === "B")} onChange={setChk("use_stop_loss")} />
               {unitInput(
-                <input aria-label="손절률 (%)" className="field num" type="number" value={form.stop_loss_pct} disabled={!form.use_stop_loss} onChange={set("stop_loss_pct")} />,
+                <input aria-label="손절률 (%)" className={fieldCls("stop_loss_pct", "field num")} type="number" value={form.stop_loss_pct} disabled={!form.use_stop_loss} onChange={set("stop_loss_pct")} aria-invalid={errOf("stop_loss_pct") ? true : undefined} />,
                 "%",
               )}
             </div>
@@ -599,22 +607,26 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
             anchor="leverage"
             note={<span className="ml-2 t-caption text-slate-500">격리(isolated) · 백테스트·모의만</span>}
           >
-            <div className={dense ? "bd-range" : "flex items-center gap-4"}>
-              <input
-                aria-label="레버리지 배수"
-                type="range" min="1" max={MAX_LEVERAGE} step="1" value={lev}
-                onChange={set("leverage")}
-                className="flex-1 accent-red-500"
-              />
-              <div className="flex items-center gap-2">
+            <div data-field="leverage" className={errOf("leverage") ? "is-invalid" : undefined}>
+              <div className={dense ? "bd-range" : "flex items-center gap-4"}>
                 <input
-                  aria-label="레버리지 배수 직접 입력"
-                  className="field w-20 text-center num"
-                  type="number" min="1" max={MAX_LEVERAGE} step="1" value={form.leverage}
+                  aria-label="레버리지 배수"
+                  type="range" min="1" max={MAX_LEVERAGE} step="1" value={lev}
                   onChange={set("leverage")}
+                  className="flex-1 accent-red-500"
                 />
-                <span className="t-label text-slate-700">배</span>
+                <div className="flex items-center gap-2">
+                  <input
+                    aria-label="레버리지 배수 직접 입력"
+                    className={fieldCls("leverage", "field w-20 text-center num")}
+                    type="number" min="1" max={MAX_LEVERAGE} step="1" value={form.leverage}
+                    onChange={set("leverage")}
+                    aria-invalid={errOf("leverage") ? true : undefined}
+                  />
+                  <span className="t-label text-slate-700">배</span>
+                </div>
               </div>
+              {errOf("leverage") && <div className={dense ? "bd-error" : "t-small font-semibold text-amber-700 mt-2"} role="alert">{errOf("leverage")}</div>}
             </div>
             {risk ? (
               <div className={"alert mt-3 t-small flex items-start gap-2 " + risk.cls}>

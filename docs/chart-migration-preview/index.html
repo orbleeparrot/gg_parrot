@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>껄무새 전략 차트 검증</title>
+  <style>
+    :root { color-scheme: dark; --chart-up: 0 192 135; --chart-down: 246 70 93; }
+    * { box-sizing: border-box; }
+    body { max-width: 1400px; margin: 0 auto; padding: 24px; background: #0b0e11; color: #bac0c8; font: 14px/1.5 sans-serif; }
+    h1 { margin: 20px 0 8px; color: #fcd535; font-size: 22px; }
+    .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+    label { display: inline-flex; align-items: center; gap: 6px; }
+    select, button { min-height: 36px; padding: 6px 10px; border: 1px solid #454d58; border-radius: 6px; background: #1e2329; color: #eaecef; font: inherit; }
+    select:focus-visible, button:focus-visible, input:focus-visible, a:focus-visible { outline: 2px solid #fcd535; outline-offset: 3px; }
+    #legend { min-height: 21px; margin-bottom: 12px; font-size: 13px; }
+    #chart { width: 100%; height: 460px; }
+    footer { margin-top: 18px; font-size: 12px; }
+    a { color: #fcd535; }
+    @media (max-width: 600px) { body { padding: 12px; } #chart { height: 440px; } }
+  </style>
+</head>
+<body>
+  <div class="controls">
+    <label>전략
+      <select id="strategy">
+        <option value="A">A · 익절·손절</option>
+        <option value="B">B · 지정가</option>
+        <option value="C">C · 정기 분할매수</option>
+        <option value="D">D · 그리드</option>
+        <option value="E">E · 트레일링</option>
+        <option value="F">F · RSI</option>
+        <option value="G" selected>G · 볼린저 밴드</option>
+        <option value="H">H · 추가매수</option>
+        <option value="I">I · 변동성 돌파</option>
+        <option value="J">J · 이동평균 교차</option>
+        <option value="K">K · 하락 방어</option>
+      </select>
+    </label>
+    <label>방향 <select id="side"><option value="long">롱</option><option value="short">숏</option></select></label>
+    <label><input type="checkbox" id="average">평단선</label>
+    <button type="button" id="zoom-in">확대</button>
+    <button type="button" id="reset">초기화</button>
+  </div>
+  <h1 id="heading">전략 표시 검증</h1>
+  <div id="legend"></div>
+  <div id="chart" aria-label="전략 표시 호환성 검증 차트"></div>
+  <footer>
+    테스트용 캔들 데이터 · Lightweight Charts™ 5.2.1 · <a href="README.md">검증 결과·이미지 목록</a><br>
+    Copyright © 2026 TradingView, Inc. · <a href="https://www.tradingview.com/">TradingView</a> · <a href="LICENSE">Apache License 2.0</a>
+  </footer>
+  <script src="app.js"></script>
+  <script>
+    const strategy = document.getElementById('strategy');
+    const side = document.getElementById('side');
+    const average = document.getElementById('average');
+    function redraw() { window.render(strategy.value, side.value, average.checked); }
+    [strategy, side, average].forEach(control => control.addEventListener('change', redraw));
+    document.getElementById('zoom-in').addEventListener('click', () => window.zoom());
+    document.getElementById('reset').addEventListener('click', redraw);
+    redraw();
+  </script>
+</body>
+</html>

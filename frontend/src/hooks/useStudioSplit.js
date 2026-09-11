@@ -7,7 +7,7 @@ const MIN_WIDTH = 280;
 const MAX_WIDTH = 680;
 const CHART_MIN_WIDTH = 480;
 // 최소 너비를 맞추다가 조금 지나쳐도 접히지 않도록 충분한 드래그 여유를 둔다.
-const COLLAPSE_WIDTH = MIN_WIDTH - 96;
+const COLLAPSE_WIDTH = MIN_WIDTH - 256;
 const clamp = (value, max) => Math.round(Math.min(max, Math.max(MIN_WIDTH, value)));
 
 function savedWidth() {

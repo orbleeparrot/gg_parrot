@@ -86,11 +86,24 @@ def check_collapse(page, checks):
         assert geometry['panel']==0 and abs(geometry['chart']+24-geometry['work'])<=1,geometry
         assert abs(geometry['center'])<=1 and not geometry['overflow'],geometry
 
-    # The minimum has a small buffer; crossing it can be reversed in the same gesture.
+    # Overshooting the minimum by up to 96px must still leave the panel open.
+    drag_to(page,280)
+    for target in (265,240,216,184):
+        move = start_drag(); move(target)
+        expect(divider).to_have_attribute('aria-valuenow','280')
+        expect(reopen).to_be_hidden()
+        page.mouse.up(); settle(page)
+        expect(divider).to_have_attribute('aria-valuenow','280')
+        expect(panel).not_to_have_attribute('inert','')
+        assert page.evaluate("localStorage.getItem('ggp_studio_conditions_collapsed')") == 'false'
+        assert page.evaluate("localStorage.getItem('ggp_studio_condition_width')") == '280'
+    checks.append({'minimumWidthStableOnOvershoot':True,'collapseDeadZonePx':96})
+
+    # Only a deliberate further drag collapses; reversing is possible before release.
     move = start_drag()
-    move(265); expect(divider).to_have_attribute('aria-valuenow','280')
+    move(184); expect(divider).to_have_attribute('aria-valuenow','280')
     expect(reopen).to_be_hidden()
-    move(240); assert_closed()
+    move(180); assert_closed()
     assert page.evaluate("localStorage.getItem('ggp_studio_conditions_collapsed')") == 'false'
     move(270); assert_closed()
     move(320); expect(divider).to_have_attribute('aria-valuenow','320')
@@ -101,7 +114,7 @@ def check_collapse(page, checks):
 
     # A cancelled collapse preview restores the committed width and keyboard access.
     drag_to(page,560)
-    move=start_drag(); move(240); assert_closed()
+    move=start_drag(); move(180); assert_closed()
     divider.dispatch_event('pointercancel',{'pointerId':1})
     page.mouse.up(); settle(page)
     expect(divider).to_have_attribute('aria-valuenow','560')
@@ -110,7 +123,7 @@ def check_collapse(page, checks):
     checks.append({'cancelCollapseRestoresWidth':True})
 
     # Commit collapse, restore with the centered button, then persist across navigation.
-    move=start_drag(); move(240); page.mouse.up(); settle(page)
+    move=start_drag(); move(180); page.mouse.up(); settle(page)
     assert_closed(); expect(reopen).to_be_focused()
     assert page.evaluate("localStorage.getItem('ggp_studio_condition_width')") == '560'
     assert page.evaluate("localStorage.getItem('ggp_studio_conditions_collapsed')") == 'true'
@@ -120,7 +133,7 @@ def check_collapse(page, checks):
     assert values == page.locator('.builder-dense input,.builder-dense select').evaluate_all('nodes => nodes.map(n => [n.type,n.value,n.checked])')
     checks.append({'restorePreviousWidth':True,'preserveInputsOnCollapse':True,'focusRestored':True})
 
-    move=start_drag(); move(240); page.mouse.up(); settle(page)
+    move=start_drag(); move(180); page.mouse.up(); settle(page)
     page.reload(); expect(page.locator('.studio-chart canvas').first).to_be_visible(); settle(page)
     assert_closed()
     reopen.evaluate('n=>n.blur()'); page.mouse.move(10,10)

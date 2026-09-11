@@ -67,6 +67,10 @@
       "continuousPointerTracking": true
     },
     {
+      "minimumWidthStableOnOvershoot": true,
+      "collapseDeadZonePx": 96
+    },
+    {
       "collapseThreshold": true,
       "reverseBeforeRelease": true
     },
@@ -139,7 +143,7 @@
       "columns": 1,
       "moneyLines": 1,
       "overflow": false,
-      "chartCanvas": 828
+      "chartCanvas": 830
     },
     {
       "rule": "F",

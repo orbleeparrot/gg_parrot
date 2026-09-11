@@ -234,7 +234,7 @@
 .sd-card-side.is-long { background: rgb(var(--c-green-600) / .14); color: rgb(var(--c-green-600)); }
 .sd-card-side.is-short { background: rgb(var(--c-red-600) / .14); color: rgb(var(--c-red-600)); }
 .sd-card-tag { display: inline-flex; align-items: center; height: 30px; padding: 0 12px; border: 1px solid rgb(var(--c-slate-300)); border-radius: 8px; color: rgb(var(--c-slate-700)); font-size: 14px; font-weight: 700; white-space: nowrap; }
-.sd-card-strategy { margin: 0; color: rgb(var(--c-slate-900)); font-size: 16px; font-weight: 700; line-height: 1.45; overflow-wrap: anywhere; }
+.sd-card-strategy { margin: 0; color: rgb(var(--c-slate-900)); font-size: 19px; font-weight: 700; letter-spacing: -.01em; line-height: 1.4; overflow-wrap: anywhere; }
 .sd-card-facts { margin: auto 0 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 18px; padding-top: 14px; border-top: 1px solid rgb(var(--c-slate-200)); }
 .sd-card-facts > div { min-width: 0; }
 .sd-card-facts dt { color: rgb(var(--c-slate-500)); font-size: 11px; font-weight: 600; }
@@ -254,6 +254,7 @@
 /* 카드가 좁으면(1300~1540px 창) 결과 면을 카드 아래 한 줄 띠로 — 수익률 · 자산곡선 · MDD/승률/매매. 카드가 길어지지 않아 동작 행도 그대로다. */
 @container (max-width: 620px) {
   .sd-card-in { grid-template-columns: minmax(0, 1fr); }
+  .sd-card-strategy { font-size: 17px; }
   .sd-card-proof { padding: 12px 18px; border-left: 0; border-top: 1px dashed rgb(var(--c-slate-300)); display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "k spark stats" "ret spark stats"; column-gap: 16px; align-items: center; }
   .sd-card-eyebrow, .sd-card-src { display: none; }
   .sd-card-k { grid-area: k; align-self: end; padding-right: 0; }

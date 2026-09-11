@@ -1706,6 +1706,13 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   font-weight: 800;
 }
 
+/* 준비 중인 메뉴 — 링크가 아니다. 흐린 글자·아이콘에 `업데이트 예정` 배지, 호버해도 면이 생기지 않는다. */
+.site-side-link.is-soon { color: rgb(var(--c-slate-400)); cursor: not-allowed; }
+.site-side-link.is-soon:hover { color: rgb(var(--c-slate-400)); background: transparent; }
+.site-side-link.is-soon .site-side-icon-glyph { opacity: 0.45; }
+.site-side-label-row { min-width: 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.site-side-badge { flex: none; display: inline-flex; align-items: center; height: 20px; padding: 0 7px; border-radius: 6px; background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-500)); font-size: 11px; font-weight: 700; letter-spacing: 0.01em; white-space: nowrap; }
+
 .site-sidebar-bottom {
   margin-top: auto;
   padding: 14px 16px 18px;

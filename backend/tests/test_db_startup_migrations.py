@@ -11,6 +11,46 @@ from sqlalchemy.exc import OperationalError
 from app import db
 
 
+def test_existing_news_article_schema_adds_pending_column_before_index():
+    state = current_schema()
+    state["columns"].pop(("newsarticle", "enrichment_pending"))
+    state["indexes"].discard("ix_newsarticle_enrichment")
+    statements = db._pg_migration_statements(state)
+    column = "ALTER TABLE newsarticle ADD COLUMN IF NOT EXISTS enrichment_pending BOOLEAN NOT NULL DEFAULT TRUE"
+    index = "CREATE INDEX IF NOT EXISTS ix_newsarticle_enrichment ON newsarticle (enrichment_pending, last_seen_ms)"
+    assert column in statements
+    assert index in statements
+    assert statements.index(column) < statements.index(index)
+
+
+def test_existing_sqlite_news_rows_survive_startup_upgrade(tmp_path, monkeypatch):
+    from sqlalchemy import inspect
+    from app.agent_features.position_news import articles
+    engine = create_engine(f"sqlite:///{tmp_path / 'older-news.db'}")
+    monkeypatch.setattr(db, "_engine", engine)
+    with engine.begin() as conn:
+        conn.exec_driver_sql("""CREATE TABLE newsarticle (
+            asset_symbol VARCHAR NOT NULL, article_id VARCHAR NOT NULL,
+            revision BIGINT NOT NULL, ready BOOLEAN NOT NULL,
+            item_json VARCHAR NOT NULL, assessment_json VARCHAR NOT NULL,
+            analysis_source VARCHAR NOT NULL, analysis_status VARCHAR NOT NULL,
+            first_seen_ms BIGINT NOT NULL, last_seen_ms BIGINT NOT NULL,
+            PRIMARY KEY (asset_symbol, article_id))""")
+        conn.exec_driver_sql("""INSERT INTO newsarticle VALUES (
+            'BTC', 'old', 1, TRUE, '{"title":"기존 비트코인 뉴스"}', '{}',
+            'rule', 'ready', 1, 1)""")
+    try:
+        db.init_db()
+        db.init_db()  # Repeated reloads must be a no-op and retain the article.
+        assert "ix_newsarticle_enrichment" in {item["name"] for item in inspect(engine).get_indexes("newsarticle")}
+        with db.get_session() as session:
+            row = session.get(articles.NewsArticle, ("BTC", "old"))
+            assert row is not None and "기존 비트코인 뉴스" in row.item_json
+            assert row.enrichment_pending is True
+    finally:
+        engine.dispose()
+
+
 def current_schema():
     columns = {(table.name, column.name): "text"
                for table in db.SQLModel.metadata.tables.values() for column in table.columns}

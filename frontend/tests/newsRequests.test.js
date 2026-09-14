@@ -408,6 +408,30 @@ test("a stale cached briefing stays visible while it refreshes, then the cache i
   h.queue.stop();
 });
 
+test("a failed periodic refresh retains ready articles and retries without discarding the cached response", async () => {
+  let calls = 0;
+  const h = harness(async () => {
+    calls += 1;
+    if (calls === 2) throw Object.assign(new Error("갱신 실패"), { status: 500 });
+    return { ...ready, refresh_seconds: 30 };
+  });
+  h.queue.start();
+  await h.next();
+  const prior = h.states.get("BTC").data;
+  await h.next();
+  assert.equal(h.states.get("BTC").status, "error");
+  assert.equal(h.states.get("BTC").error, "갱신 실패");
+  assert.equal(h.states.get("BTC").data, prior);
+  assert.deepEqual(h.delays(), [30_000]);
+  h.queue.retry("BTC");
+  await h.next();
+  assert.equal(calls, 3);
+  assert.equal(h.states.get("BTC").status, "success");
+  assert.equal(h.states.get("BTC").error, "");
+  assert.equal(h.states.get("BTC").data, prior);
+  h.queue.stop();
+});
+
 test("prepared feeds poll partial results at 3 seconds and completed results at 30 seconds", async () => {
   let calls = 0;
   const h = harness(async () => ++calls === 1

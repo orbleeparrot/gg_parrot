@@ -43,6 +43,7 @@ class Fixture:
         self.held = []
         self.calls = {}
         self.periodic = False
+        self.fail_refresh = False
 
     def route(self, route):
         url = urlsplit(route.request.url)
@@ -54,11 +55,15 @@ class Fixture:
             route.continue_()
             return
         self.calls[path] = self.calls.get(path, 0) + 1
+        if self.fail_refresh and path.startswith("/api/news/") and self.calls[path] > 1:
+            route.fulfill(status=500, json={"detail": "테스트 뉴스 갱신 오류"})
+            return
         data = {"items": []}
         if path == "/api/hot-coins":
             data = {"coins": [{"symbol": symbol, "last_price": 65234.45 if index == 0 else .000012 if index == 6 else 14.35, "change_pct": 12.2 - index * 1.6, "quote_volume": 345678} for index, symbol in enumerate(SYMBOLS)]}
         elif path == "/api/news/market":
             data = {"as_of": "2026-09-10", "overview": "시장 전반의 거래량이 늘었어요.\n주요 자산으로 자금이 유입됐어요.", "items": [article("시장")], "translation": {"status": "ready"}}
+            if self.periodic: data["refresh_seconds"] = 3
         elif path.startswith("/api/news/coin/"):
             symbol = path.rsplit("/", 1)[-1]
             data = {"items": [article(symbol)], "translation": {"status": "ready"}}
@@ -196,6 +201,33 @@ def main():
             assert [path for path in fixture.calls if path.startswith("/api/news/coin/")] == ["/api/news/coin/BTCUSDT"]
             checks.append("incremental-refresh-preserves-scroll-and-only-fetches-selected-coin")
             context.close()
+
+            for width in (375, 1440):
+                fixture = Fixture()
+                fixture.periodic = True
+                fixture.fail_refresh = True
+                context, page = open_page(browser, origin, fixture, width, "dark", errors)
+                market = page.locator(".news-briefing-section.is-market")
+                coin = page.locator("#news-racer-mobile-reader") if width == 375 else page.locator('.news-map-tile[aria-label^="1위 BTC "]')
+                expect(market.get_by_text(article("시장")["title"], exact=True).first).to_be_visible()
+                expect(coin.get_by_text(article("BTCUSDT")["title"], exact=True).first).to_be_visible()
+                page.clock.run_for(3500)
+                retry_name = "뉴스 새로고침에 실패했어요. 다시 시도"
+                expect(coin.get_by_role("button", name=retry_name)).to_be_visible()
+                expect(market.get_by_role("button", name=retry_name)).to_be_visible()
+                expect(coin.get_by_text(article("BTCUSDT")["title"], exact=True).first).to_be_visible()
+                expect(market.get_by_text(article("시장")["title"], exact=True).first).to_be_visible()
+                expect(coin.get_by_text("뉴스를 불러오지 못했어요.", exact=True)).to_have_count(0)
+                expect(market.get_by_text("시장 뉴스를 불러오지 못했어요:", exact=False)).to_have_count(0)
+                assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+                coin.screenshot(path=str(OUTPUT / f"refresh-failure-keeps-news-{width}.png"), animations="disabled")
+                fixture.fail_refresh = False
+                coin.get_by_role("button", name=retry_name).click()
+                expect(coin.get_by_role("button", name=retry_name)).to_have_count(0)
+                market.get_by_role("button", name=retry_name).click()
+                expect(market.get_by_role("button", name=retry_name)).to_have_count(0)
+                checks.append(f"refresh-failure-retains-articles-and-retry-{width}")
+                context.close()
 
             fixture = Fixture()
             fixture.hold_eth = True

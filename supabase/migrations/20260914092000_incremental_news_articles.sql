@@ -22,6 +22,10 @@ CREATE TABLE IF NOT EXISTS public.newsarticle (
     last_seen_ms BIGINT NOT NULL,
     PRIMARY KEY (asset_symbol, article_id)
 );
+-- The development worker may already have created the first article schema.
+-- CREATE TABLE IF NOT EXISTS alone does not add later model fields.
+ALTER TABLE public.newsarticle
+    ADD COLUMN IF NOT EXISTS enrichment_pending BOOLEAN NOT NULL DEFAULT TRUE;
 CREATE INDEX IF NOT EXISTS ix_newsarticle_feed_revision
     ON public.newsarticle (asset_symbol, ready, revision);
 CREATE INDEX IF NOT EXISTS ix_newsarticle_last_seen ON public.newsarticle (last_seen_ms);

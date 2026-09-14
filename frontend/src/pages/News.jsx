@@ -74,7 +74,12 @@ function BriefingSectionHeader({ id, title, description, count, countLabel, pend
   );
 }
 
-function MarketBriefing({ market, loading, error }) {
+function NewsRefreshRetry({ onRetry }) {
+  return <button type="button" className="news-refresh-retry" onClick={onRetry}
+    aria-label="뉴스 새로고침에 실패했어요. 다시 시도">새로고침 재시도</button>;
+}
+
+function MarketBriefing({ market, loading, error, onRetry }) {
   const translationPending = hasPendingTranslation(market);
   const readerItems = useMemo(
     () => (market?.items || []).map((item) => ({
@@ -100,7 +105,8 @@ function MarketBriefing({ market, loading, error }) {
       />
 
       {loading ? <Loading label="시장 브리핑을 준비하는 중…" /> : null}
-      {error ? <ErrorNote>시장 뉴스를 불러오지 못했어요: {error}</ErrorNote> : null}
+      {error && !readerItems.length ? <ErrorNote>시장 뉴스를 불러오지 못했어요: {error}</ErrorNote> : null}
+      {error && readerItems.length > 0 ? <NewsRefreshRetry onRetry={onRetry} /> : null}
 
       {market ? (
         <>
@@ -174,7 +180,7 @@ function TileNews({ base, newsState, tick, onRetry, symbol, lines }) {
   if (status === "queued" || status === "loading") {
     return <div className="news-map-news is-state">{base} 뉴스 준비 중</div>;
   }
-  if (status === "error") {
+  if (status === "error" && !items.length) {
     return (
       <div className="news-map-news is-state">
         뉴스를 불러오지 못했어요.
@@ -193,22 +199,26 @@ function TileNews({ base, newsState, tick, onRetry, symbol, lines }) {
   const excerptLines = summary?.status === "ready" && lines >= 4 ? lines - 2 : 0;
   return (
     <div className="news-map-news" style={{ "--tile-excerpt-lines": excerptLines, "--tile-title-lines": excerptLines > 0 ? 2 : lines }}>
-      <a
+      <div
         key={`${index}-${item.url || item.title}`}
         className="news-map-news-item"
-        href={item.url || undefined}
-        target="_blank"
-        rel="noreferrer noopener"
-        aria-label={`${base} 뉴스 ${index + 1}/${items.length}: ${item.title}`}
       >
-        <span className="news-map-news-title">{item.title}</span>
-        {excerptLines > 0 ? <span className="news-map-news-excerpt">{summary.text}</span> : null}
+        <a className="news-map-news-link"
+          href={item.url || undefined}
+          target="_blank"
+          rel="noreferrer noopener"
+          aria-label={`${base} 뉴스 ${index + 1}/${items.length}: ${item.title}`}
+        >
+          <span className="news-map-news-title">{item.title}</span>
+          {excerptLines > 0 ? <span className="news-map-news-excerpt">{summary.text}</span> : null}
+        </a>
         <span className="news-map-news-meta">
           <span className="news-map-news-source">{newsSourceLabel(item)}</span>
           {time ? <span className="news-map-news-time">{time}</span> : null}
-          <span className="news-map-news-count num" aria-hidden="true">{index + 1}/{items.length}</span>
+          {status === "error" ? <NewsRefreshRetry onRetry={() => onRetry(symbol)} />
+            : <span className="news-map-news-count num" aria-hidden="true">{index + 1}/{items.length}</span>}
         </span>
-      </a>
+      </div>
     </div>
   );
 }
@@ -322,7 +332,8 @@ function RacerMobileList({ coins, newsBySymbol, onRetry, selectedSymbol, onSelec
           <Link to={`/builder?symbol=${encodeURIComponent(selected.symbol)}`}>매크로 만들기</Link>
         </header>
         {status === "queued" || status === "loading" ? <p className="news-racer-mobile-state" role="status">{base} 뉴스를 불러오는 중…</p> : null}
-        {status === "error" ? <div className="news-racer-mobile-state is-error" role="alert"><p>뉴스를 불러오지 못했어요.</p><button type="button" className="btn btn-s btn-secondary" onClick={() => onRetry(selected.symbol)}>다시 시도</button></div> : null}
+        {status === "error" && !items.length ? <div className="news-racer-mobile-state is-error" role="alert"><p>뉴스를 불러오지 못했어요.</p><button type="button" className="btn btn-s btn-secondary" onClick={() => onRetry(selected.symbol)}>다시 시도</button></div> : null}
+        {status === "error" && items.length > 0 ? <NewsRefreshRetry onRetry={() => onRetry(selected.symbol)} /> : null}
         {status === "success" && !items.length && !pending ? <p className="news-racer-mobile-state">최근 {base} 뉴스가 없어요.</p> : null}
         {items.length > 0 ? <MobileArticleList key={selected.symbol} base={base} items={items} /> : null}
       </section>
@@ -436,7 +447,7 @@ function RacerBriefing({ coins, loading, error }) {
 
 export default function News() {
   // 시장 뉴스는 하루 단위 자료라 10분 안에 돌아오면 다시 받지 않는다.
-  const { states: marketStates } = useNewsBriefings(
+  const { states: marketStates, retry: retryMarket } = useNewsBriefings(
     ["market"], (_key, signal) => api.newsMarket({ signal }), 1, { freshMs: 10 * 60 * 1000 },
   );
   const marketState = marketStates.market;
@@ -504,7 +515,7 @@ export default function News() {
           : "경주마 선정과 뉴스는 참고용이며 투자 권유가 아니에요."}
       </p>
       </div>
-      <MarketBriefing market={market} loading={marketLoading} error={marketError} />
+      <MarketBriefing market={market} loading={marketLoading} error={marketError} onRetry={() => retryMarket("market")} />
       </div>
 
       <div className="news-briefing-grid">

@@ -1,0 +1,52 @@
+{
+  "passed": true,
+  "environment": "running local development server / real prepared PostgreSQL news",
+  "news_responses": [
+    {
+      "path": "/api/news/market",
+      "status": 200
+    },
+    {
+      "path": "/api/news/coin/CVCUSDT",
+      "status": 200
+    },
+    {
+      "path": "/api/news/coin/ARKUSDT",
+      "status": 200
+    },
+    {
+      "path": "/api/news/coin/REZUSDT",
+      "status": 200
+    },
+    {
+      "path": "/api/news/coin/FILUSDT",
+      "status": 200
+    },
+    {
+      "path": "/api/news/coin/NEARUSDT",
+      "status": 200
+    },
+    {
+      "path": "/api/news/coin/LSKUSDT",
+      "status": 200
+    },
+    {
+      "path": "/api/news/coin/XRPUSDT",
+      "status": 200
+    },
+    {
+      "path": "/api/news/coin/BTCUSDT",
+      "status": 200
+    },
+    {
+      "path": "/api/news/coin/ADAUSDT",
+      "status": 200
+    },
+    {
+      "path": "/api/news/coin/SUIUSDT",
+      "status": 200
+    }
+  ],
+  "visible_coin_titles": 6,
+  "coin_requests_completed": 10
+}

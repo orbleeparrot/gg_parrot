@@ -1,0 +1,21 @@
+{
+  "audit": "late-unlock-response-writes-current-account-cache",
+  "scope": "In-memory localStorage and mocked API; no server balance changes",
+  "source": "frontend/src/pages/Leaderboard.jsx",
+  "source_sha256": "ca0090298c6c8a7052b8a1498f207bce7e2470b7a6efa567d33a41681adcefc4",
+  "steps": [
+    "A starts unlock with 100 points",
+    "Switch to B with 900 points",
+    "A response returns 80 points"
+  ],
+  "expected_current_account": {
+    "id": 2,
+    "points_balance": 900
+  },
+  "observed_current_account": {
+    "id": 2,
+    "username": "B",
+    "points_balance": 80
+  },
+  "defect_reproduced": true
+}

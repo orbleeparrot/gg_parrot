@@ -72,39 +72,14 @@ def test_short_without_stop_loss_rejected():
     assert r.status_code == 422  # pydantic validation error
 
 
-def test_news_translation_failure_returns_retryable_service_error(monkeypatch):
-    def fail_translation(*_args, **_kwargs):
-        raise news.NewsTranslationError("영문 뉴스 제목 번역에 실패했습니다.")
+def test_public_news_reads_do_not_depend_on_translation_or_source_availability(monkeypatch):
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("HTTP read attempted collection or translation")
 
-    monkeypatch.setattr(news, "get_market_news", fail_translation)
-    monkeypatch.setattr(news, "get_coin_news", fail_translation)
-
-    market = client.get("/api/news/market")
-    coin = client.get("/api/news/coin/ARBUSDT")
-
-    assert market.status_code == 503
-    assert coin.status_code == 503
-    assert "번역" in market.json()["detail"]
-    assert "번역" in coin.json()["detail"]
-
-
-def test_news_translation_preflight_busy_returns_safe_retry_status(monkeypatch):
-    def busy(*_args, **_kwargs):
-        raise news.NewsTranslationBusyError("뉴스 번역 요청이 몰려 있습니다.")
-
-    monkeypatch.setattr(news, "get_market_news", busy)
-    monkeypatch.setattr(news, "get_coin_news", busy)
-
-    assert client.get("/api/news/market").status_code == 429
-    assert client.get("/api/news/coin/ARBUSDT").status_code == 429
-
-
-def test_source_outage_is_retryable_not_an_empty_success(monkeypatch):
-    def fail(*_args, **_kwargs):
-        raise news.NewsFetchError("뉴스 출처에 연결하지 못했습니다. 잠시 후 다시 시도합니다.")
-    monkeypatch.setattr(news, "get_market_news", fail)
-    monkeypatch.setattr(news, "get_coin_news", fail)
-    for path in ("/api/news/market", "/api/news/coin/ICPUSDT"):
+    for name in ("get_market_news", "get_coin_news", "_fetch_public_news_payload", "_ensure_title_translations"):
+        monkeypatch.setattr(news, name, forbidden)
+    for path in ("/api/news/market", "/api/news/coin/ARBUSDT", "/api/news/coin/ICPUSDT"):
         response = client.get(path)
-        assert response.status_code == 503
-        assert "뉴스 출처" in response.json()["detail"]
+        assert response.status_code == 200, response.text
+        assert response.json()["data_source"] == "prepared_db"
+        assert "items" in response.json()

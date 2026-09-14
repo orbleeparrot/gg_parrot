@@ -16,6 +16,8 @@ def collection_leases(monkeypatch):
     monkeypatch.setattr(workflow.repository, "claim_collection", lambda *_: "token")
     monkeypatch.setattr(workflow.repository, "finish_collection", lambda *_: True)
     monkeypatch.setattr(workflow.repository, "renew_collection", lambda *_: True)
+    monkeypatch.setattr(workflow.repository, "publish_articles", None)
+    monkeypatch.setattr(workflow.repository, "claim_maintenance", lambda **_: True)
 
 
 class Immediate:
@@ -94,9 +96,9 @@ def test_fetch_and_process_logs_track_body_and_summary_states_without_raw_body(m
 def test_worker_maintenance_prunes_summaries_with_snapshot_cleanup(monkeypatch, capsys):
     calls = []
     monkeypatch.setattr(workflow.repository, "prune_snapshots", lambda **kwargs: calls.append(kwargs) or 3)
-    monkeypatch.setattr(workflow.collector, "prune_community_summaries", lambda: 7)
+    monkeypatch.setattr(workflow.collector, "prune_community_summaries", lambda **_: 7)
     assert workflow.prune_snapshots_task.fn(30) == {"snapshots": 3, "community_summaries": 7}
-    assert calls == [{"retention_days": 30}]
+    assert calls == [{"retention_days": 30, "now_ms": None}]
     log = json.loads(capsys.readouterr().out)
     assert log == {"event": "news_cache_maintenance", "snapshots": 3, "community_summaries": 7}
 

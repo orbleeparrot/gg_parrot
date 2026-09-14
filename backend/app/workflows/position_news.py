@@ -57,7 +57,13 @@ def _schedule_lag_seconds() -> float:
 )
 def fetch_ticker_news_task(asset_symbol: str) -> dict:
     """Read shared RSS/API caches; paid model calls are a separate task."""
-    payload = news_mod.fetch_coin_news_for_collector(asset_symbol)
+    publisher = collector.ArticlePublisher(asset_symbol, repository)
+    try:
+        payload = collector._call_with_progress(news_mod.fetch_coin_news_for_collector, asset_symbol,
+                                                on_progress=publisher)
+        publisher(payload)
+    finally:
+        publisher.finish()
     for source in payload.get("sources") or []:
         print(json.dumps({"event": "news_source", "asset_symbol": asset_symbol, **source},
                          ensure_ascii=False))
@@ -115,12 +121,20 @@ def _has_usable_primary_result(payload: dict) -> bool:
 def enrich_ticker_news_task(asset_symbol: str, news_payload: dict,
                            browser_budget_seconds: float | None = None) -> dict:
     """One bounded browser stage; source failures retain the RSS snapshot."""
-    if browser_budget_seconds is None:
-        result = collector.enrich_payload(asset_symbol, news_payload)
-    else:
-        budget = news_mod._browser_batch_budget_seconds(browser_budget_seconds)
-        result = collector.enrich_payload(asset_symbol, news_payload, enricher=lambda symbol, payload:
-            news_mod.enrich_coin_news_for_collector(symbol, payload, browser_budget_seconds=budget))
+    publisher = collector.ArticlePublisher(asset_symbol, repository)
+    try:
+        if browser_budget_seconds is None:
+            result = collector._call_with_progress(collector.enrich_payload, asset_symbol, news_payload,
+                                                   on_progress=publisher)
+        else:
+            budget = news_mod._browser_batch_budget_seconds(browser_budget_seconds)
+            result = collector.enrich_payload(asset_symbol, news_payload, on_progress=publisher,
+                enricher=lambda symbol, payload, on_progress=None: collector._call_with_progress(
+                    news_mod.enrich_coin_news_for_collector, symbol, payload,
+                    browser_budget_seconds=budget, on_progress=on_progress))
+        publisher(result)
+    finally:
+        publisher.finish()
     print(json.dumps({"asset_symbol": asset_symbol,
                       "browser_enrichment": result.get("browser_enrichment", {}),
                       "sources": result.get("sources", [])}, ensure_ascii=False))
@@ -188,8 +202,7 @@ def discover_tickers_task() -> dict:
 
 @task(retries=0, log_prints=True)
 def prune_snapshots_task(retention_days: int) -> dict:
-    result = {"snapshots": repository.prune_snapshots(retention_days=retention_days),
-              "community_summaries": collector.prune_community_summaries()}
+    result = collector.run_maintenance(retention_days=retention_days)
     print(json.dumps({"event": "news_cache_maintenance", **result}, ensure_ascii=False))
     return result
 

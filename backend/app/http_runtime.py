@@ -10,7 +10,7 @@ import atexit
 import os
 import threading
 import time
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from contextvars import copy_context
 from typing import Callable, Mapping, TypeVar
 
@@ -106,15 +106,28 @@ def _run_parallel_loader(context, loader: Callable[[], T]) -> T:
         _parallel_state.active = previous
 
 
-def run_parallel(loaders: Mapping[str, Callable[[], T]]) -> dict[str, T]:
+def run_parallel(loaders: Mapping[str, Callable[[], T]], *, on_result=None) -> dict[str, T]:
     """Run independent blocking I/O functions concurrently on a bounded pool."""
     if getattr(_parallel_state, "active", False):
-        return {key: loader() for key, loader in loaders.items()}
+        results = {}
+        for key, loader in loaders.items():
+            results[key] = loader()
+            if on_result is not None:
+                on_result(key, results[key])
+        return results
     futures = {
         key: _get_io_executor().submit(_run_parallel_loader, copy_context(), loader)
         for key, loader in loaders.items()
     }
-    return {key: future.result() for key, future in futures.items()}
+    if on_result is None:
+        return {key: future.result() for key, future in futures.items()}
+    keys = {future: key for key, future in futures.items()}
+    results = {}
+    for future in as_completed(keys):
+        key = keys[future]
+        results[key] = future.result()
+        on_result(key, results[key])
+    return results
 
 
 def close_http_runtime() -> None:
@@ -133,6 +146,11 @@ class SingleFlightGroup:
     A cold follower waits for the leader and receives its result.  When a stale
     value exists, followers return it immediately while the leader refreshes;
     this bounds upstream traffic without making every request wait on a slow API.
+
+    Legacy collectors store their results after run() returns and require this
+    synchronous leader contract. HTTP cache readers use cache_runtime.ResponseCache
+    instead: it publishes inside the flight and refreshes the first stale read
+    in the background, with bounded size and failure cooldowns.
     """
 
     def __init__(self) -> None:

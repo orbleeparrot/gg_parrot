@@ -11,7 +11,15 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /api/health
+    # Market candles are reproducible public data; retain them across restarts.
+    # This disk belongs to this single web instance, not the news worker.
+    disk:
+      name: market-cache
+      mountPath: /var/data/market-cache
+      sizeGB: 1
     envVars:
+      - key: MARKET_CACHE_DIR
+        value: /var/data/market-cache
       - key: POSITION_NEWS_EMBEDDED_ENABLED
         value: "true"
       - key: POSITION_NEWS_EMBEDDED_BOOTSTRAP_ONLY

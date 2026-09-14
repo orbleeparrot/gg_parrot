@@ -1,6 +1,7 @@
 """Tests for v7: password hashing, edit-with-password, return sort, chat."""
 from __future__ import annotations
 
+from tests.leaderboard_helpers import publish_ready_board
 import pytest
 import secrets
 from fastapi.testclient import TestClient
@@ -68,8 +69,8 @@ def mock_paper(monkeypatch):
     monkeypatch.setattr(paper_mod, "start_session", fake_start)
     monkeypatch.setattr(paper_mod, "stop_session", fake_stop)
     monkeypatch.setattr(
-        lb.paper_mod, "get_statuses",
-        lambda ids, *, db=None: {
+        lb, "_durable_statuses",
+        lambda db, ids: {
             sid: {
                 "current_return": returns.get(sid, 0.0),
                 "current_equity": 1e6,
@@ -87,6 +88,7 @@ def test_leaderboard_sorted_by_return(mock_paper):
     r2 = client.post("/api/leaderboard/register", json={"macro": _macro_dict(), "username": "high", "password": "p", "user_id": "b"}).json()["entry"]
     mock_paper[r1["paper_session_id"]] = 1.0
     mock_paper[r2["paper_session_id"]] = 9.0
+    publish_ready_board()
     board = client.get("/api/leaderboard").json()["items"]
     # highest return must appear before lower return
     idx_high = next(i for i, e in enumerate(board) if e["id"] == r2["id"])

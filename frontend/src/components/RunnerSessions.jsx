@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api.js";
+import { captureAccountGuard, useAuth } from "../lib/auth.js";
+import { createRunnerKeyStore } from "../lib/runnerKeyStore.js";
 import { SectionTitle, EmptyRow } from "./Page.jsx";
 import CandleChart from "./CandleChart.jsx";
 import { computeSessionOverlay } from "../lib/indicators.js";
@@ -14,46 +16,50 @@ import "./RunnerKeyPanel.css";
 // 내 매크로 실행 현황 — 실행기(exe)가 올리는 세션을 실시간으로 보여주고,
 // 원격 종료(매크로만 / 청산 후)를 요청한다.
 
+const runnerKeys = createRunnerKeyStore({
+  read: (generation) => api.runnerKey({ requestKey: `runner-key-${generation}` }),
+  regenerate: () => api.runnerKeyRegenerate(),
+});
+
 export function RunnerKeyPanel({ enabled = true, compact = false, menu = false }) {
-  const [data, setData] = useState(null);
+  const { accountVersion } = useAuth();
+  const isCurrent = useMemo(() => captureAccountGuard({ accountOnly: true }), [accountVersion]);
+  const getSnapshot = useCallback(() => runnerKeys.getSnapshot(accountVersion), [accountVersion]);
+  const { data, error: err, regenerating } = useSyncExternalStore(runnerKeys.subscribe, getSnapshot, getSnapshot);
   const [revealed, setRevealed] = useState(false);
-  const [err, setErr] = useState("");
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
 
   useEffect(() => {
-    if (!enabled) return undefined;
-    let alive = true;
-    api.runnerKey()
-      .then((d) => alive && setData(d))
-      .catch((e) => alive && setErr(String(e.message || e)));
-    return () => { alive = false; };
-  }, [enabled]);
+    setRevealed(false);
+    setCopied(false);
+    setCopyFailed(false);
+    if (enabled) void runnerKeys.load(accountVersion, isCurrent);
+  }, [enabled, accountVersion, isCurrent]);
 
   if (!enabled) return null;
 
   async function regen() {
+    if (!isCurrent() || regenerating) return;
     if (!window.confirm("새 키를 발급하면 기존 키는 즉시 무효화돼요. 실행기에 새 키를 다시 입력해야 해요. 계속할까요?"))
       return;
-    try {
-      setData(await api.runnerKeyRegenerate());
+    const updated = await runnerKeys.rotate(accountVersion, isCurrent);
+    if (updated && isCurrent()) {
       setRevealed(true);
       setCopied(false);
       setCopyFailed(false);
-      setErr("");
-    } catch (e) {
-      setErr(String(e.message || e));
     }
   }
 
   async function copy() {
-    if (!data?.key) return;
+    if (!isCurrent() || !data?.key || regenerating) return;
     setCopyFailed(false);
     try {
       await navigator.clipboard.writeText(data.key);
+      if (!isCurrent()) return;
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
-    } catch (_) { setCopyFailed(true); }
+    } catch (_) { if (isCurrent()) setCopyFailed(true); }
   }
 
   if (menu) {
@@ -66,8 +72,8 @@ export function RunnerKeyPanel({ enabled = true, compact = false, menu = false }
           <button type="button" className="t-small" onClick={() => { setRevealed(!(revealed || copyFailed)); setCopyFailed(false); }}>{revealed || copyFailed ? "숨기기" : "보기"}</button>
         </div>
         <div className="runner-key-menu-actions">
-          <button type="button" className="t-small" onClick={copy}>{copied ? "복사됨" : "복사"}</button>
-          <button type="button" className="t-small" onClick={regen}>재발급</button>
+          <button type="button" className="t-small" onClick={copy} disabled={regenerating}>{copied ? "복사됨" : "복사"}</button>
+          <button type="button" className="t-small" onClick={regen} disabled={regenerating}>재발급</button>
         </div>
         <span className="sr-only" role="status">{copied ? "회원 키를 복사했어요." : ""}</span>
         {err ? <p className="t-small" role="alert">재발급하지 못했어요. 다시 시도해 주세요.</p> : null}
@@ -79,7 +85,7 @@ export function RunnerKeyPanel({ enabled = true, compact = false, menu = false }
   if (compact) {
     return (
       <div className="space-y-2">
-        <button type="button" onClick={copy} disabled={!data?.key || !!err} className="btn btn-l btn-secondary w-full">
+        <button type="button" onClick={copy} disabled={!data?.key || !!err || regenerating} className="btn btn-l btn-secondary w-full">
           {err ? "회원 키를 불러오지 못했어요" : !data ? "회원 키 불러오는 중…" : copied ? "복사했어요" : "회원 키 복사"}
         </button>
         <span className="sr-only" role="status">{copied ? "회원 키를 복사했어요." : ""}</span>
@@ -110,8 +116,8 @@ export function RunnerKeyPanel({ enabled = true, compact = false, menu = false }
         <button onClick={() => setRevealed((v) => !v)} className="btn btn-s btn-secondary">
           {revealed ? "숨기기" : "보기"}
         </button>
-        <button onClick={copy} className="btn btn-s btn-secondary">{copied ? "복사됨!" : "복사"}</button>
-        <button onClick={regen} className="btn btn-s btn-secondary">키 재발급</button>
+        <button onClick={copy} disabled={regenerating} className="btn btn-s btn-secondary">{copied ? "복사됨!" : "복사"}</button>
+        <button onClick={regen} disabled={regenerating} className="btn btn-s btn-secondary">키 재발급</button>
       </div>
       <div className="t-caption text-slate-500">
         이 키는 서버 상태 확인·원격 종료에만 쓰여요. 거래소 API 키는 실행기에서 로컬로만 쓰고 서버로 보내지 않아요.

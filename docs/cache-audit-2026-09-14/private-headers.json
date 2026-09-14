@@ -1,0 +1,48 @@
+{
+  "scope": "real ASGI headers; fake user and stubbed data methods; no lifespan or real DB",
+  "interpretation": "Baseline policy gap, not evidence of actual HTTP cache disclosure. Assertions should change after a fix.",
+  "records": [
+    {
+      "path": "/api/auth/me",
+      "method": "GET",
+      "status": 200,
+      "cache_control": null,
+      "etag": null
+    },
+    {
+      "path": "/api/me/dashboard",
+      "method": "GET",
+      "status": 200,
+      "cache_control": null,
+      "etag": null
+    },
+    {
+      "path": "/api/me/macros",
+      "method": "GET",
+      "status": 200,
+      "cache_control": null,
+      "etag": null
+    },
+    {
+      "path": "/api/me/runner/key",
+      "method": "GET",
+      "status": 200,
+      "cache_control": null,
+      "etag": null
+    },
+    {
+      "path": "/api/me/runner/sessions",
+      "method": "GET",
+      "status": 200,
+      "cache_control": null,
+      "etag": null
+    },
+    {
+      "path": "/api/me/runner/sessions/stream-token",
+      "method": "POST",
+      "status": 200,
+      "cache_control": "no-store",
+      "etag": null
+    }
+  ]
+}

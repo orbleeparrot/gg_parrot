@@ -18,6 +18,8 @@ _TMP = tempfile.NamedTemporaryFile(prefix="ggp-test-", suffix=".db", delete=Fals
 _TMP.close()
 os.environ["SQLITE_PATH"] = _TMP.name
 os.environ["POSITION_NEWS_EMBEDDED_ENABLED"] = "false"
+os.environ["PUBLIC_NEWS_EMBEDDED_ENABLED"] = "false"
+os.environ["LEADERBOARD_BACKGROUND_ENABLED"] = "false"
 os.environ["WHALE_TRADE_EMBEDDED_ENABLED"] = "false"
 os.environ["POSITION_NEWS_BROWSER_ENRICHMENT_ENABLED"] = "false"
 os.environ["POSITION_NEWS_EXTRA_RSS_ENABLED"] = "false"
@@ -32,3 +34,17 @@ def initialize_isolated_database():
     # production imports must never initialize the database for this reason.
     from app.db import init_db
     init_db()
+
+
+@pytest.fixture(autouse=True)
+def isolate_runtime_caches(tmp_path, monkeypatch):
+    # Historical candle tests must never reuse backend/cache/market.db. Shared
+    # response caches also must not outlive each test's DB/loader fixtures.
+    from app.data import binance
+    from app import cache_runtime
+    monkeypatch.setattr(binance, "_CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(binance, "_DB_PATH", str(tmp_path / "market.db"))
+    cache_runtime.clear_all_caches()
+    yield
+    cache_runtime.close_cache_runtime()
+    cache_runtime.clear_all_caches()

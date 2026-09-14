@@ -7,7 +7,7 @@ import { PageHeader, EmptyState, Loading, ErrorNote } from "../components/Page.j
 import { api } from "../api.js";
 import CoinIcon from "../components/CoinIcon.jsx";
 import { getUserId } from "../lib/user.js";
-import { useAuth, isLoggedIn, getAuthUser, updateAuthUser } from "../lib/auth.js";
+import { useAuth, useAccountGuard, isLoggedIn, getAuthUser, updateAuthUser } from "../lib/auth.js";
 import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 import { applyVote, settleVote } from "../lib/leaderboardVotes.js";
 import StrategyDetails from "../components/StrategyDetails.jsx";
@@ -84,61 +84,115 @@ function EntryBadges({ entry, top3 }) {
   );
 }
 
+function ResetCountdown({ resetAt }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  return <span className="num">{fmtCountdown(Math.max(0, Math.ceil((resetAt - now) / 1000)))}</span>;
+}
+
 export default function Leaderboard() {
+  const { accountVersion } = useAuth();
+  return <AccountLeaderboard key={accountVersion} />;
+}
+
+function AccountLeaderboard() {
+  const isCurrentAccount = useAccountGuard();
   const uid = getUserId();
   const navigate = useNavigate();
   const location = useLocation();
   const quickRunMode = new URLSearchParams(location.search).get("from") === "quick-run";
-  const registeredId = location.state?.registeredId || null;
+  const registeredId = Number(location.state?.registeredId) || null;
   const justRegistered = !!location.state?.justRegistered;
-  useAuth(); // re-render on login/logout so gating reflects the current account
+  const auth = useAuth();
   const [items, setItems] = useState([]);
   const [unlocking, setUnlocking] = useState(0); // entry id being unlocked
   const [deleting, setDeleting] = useState(0); // entry id being deleted
-  const [remain, setRemain] = useState(0);
+  const [resetAt, setResetAt] = useState(Date.now());
+  const [page, setPage] = useState(1);
+  const [board, setBoard] = useState({ total: 0, has_more: false, preparing: false, stale: false });
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState("");
   const [modal, setModal] = useState(false); // false | {edit?: entry}
-  const focusedRegistrationRef = useRef(false);
+  const focusRequestRef = useRef(null);
+  const [pendingFocus, setPendingFocus] = useState(null);
 
   const load = useCallback(async (signal) => {
+    if (!isCurrentAccount()) return;
+    const focusRequest = focusRequestRef.current;
     try {
-      const d = await api.leaderboard(uid, { signal });
+      const d = await api.leaderboard(uid, {
+        signal, page, pageSize: 50, entryId: focusRequest?.entryId,
+      });
+      if (!isCurrentAccount() || signal?.aborted || focusRequest !== focusRequestRef.current) return;
+      if (d.snapshot_expired) {
+        setPage(1);
+        return;
+      }
+      // The server returns the effective page after a daily reset or entry lookup.
+      setPage(d.page || 1);
+      setBoard(d);
       setItems(d.items || []);
-      setRemain(d.seconds_to_reset || 0);
+      setResetAt(Date.now() + (d.seconds_to_reset || 0) * 1000);
       setError("");
+      if (focusRequest && d.entry_location) {
+        focusRequestRef.current = null;
+        setPendingFocus(focusRequest.entryId);
+      } else if (focusRequest && Date.now() >= focusRequest.retryUntil) {
+        focusRequestRef.current = null;
+        setError("현재 리더보드에서 이 매크로를 찾을 수 없어요. 잠시 후 다시 확인해 주세요.");
+      }
     } catch (e) {
-      if (e?.name !== "AbortError") setError(String(e.message || e));
+      if (isCurrentAccount() && e?.name !== "AbortError") setError(String(e.message || e));
       if (signal) throw e;
     } finally {
-      setBusy(false);
+      if (isCurrentAccount() && !signal?.aborted) setBusy(false);
     }
-  }, [uid]);
+  }, [uid, page, auth.token, isCurrentAccount]);
 
-  // Poll live returns every 5s; tick the countdown every 1s locally.
-  useAdaptivePolling(load, { intervalMs: 5_000, maxIntervalMs: 60_000 });
-  // 오늘의 AI 챌린지(매일 한 종목으로 AI 매크로 3개 자동 등록)는 첫 조회가 생성을 겸한다.
-  // 화면엔 라벨을 두지 않고 AI 배지로만 드러낸다.
   useEffect(() => {
-    api.challengeToday().catch(() => {});
-  }, []);
+    setItems([]);
+    setBusy(true);
+    setPage(1);
+  }, [auth.token]);
+
+  // Only the visible bounded page is refreshed. The countdown owns its timer.
+  const refreshBoard = useAdaptivePolling(load, { intervalMs: 5_000, maxIntervalMs: 60_000, pollKey: `${auth.token}:${page}` });
   useEffect(() => {
-    const t = setInterval(() => setRemain((r) => (r > 0 ? r - 1 : 0)), 1000);
-    return () => clearInterval(t);
-  }, []);
+    if (!registeredId) return;
+    // A newly registered entry can need one background refresh before it has a rank.
+    focusRequestRef.current = { entryId: registeredId, retryUntil: Date.now() + 90_000 };
+    refreshBoard();
+  }, [registeredId, refreshBoard]);
   useEffect(() => {
-    if (!registeredId || focusedRegistrationRef.current) return;
-    if (!items.some((entry) => entry.id === registeredId)) return;
-    focusedRegistrationRef.current = true;
-    const row = document.getElementById(`leaderboard-entry-${registeredId}`);
+    const focusEntry = (event) => {
+      const entryId = Number(event.detail?.entryId);
+      if (!Number.isSafeInteger(entryId) || entryId < 1) return;
+      focusRequestRef.current = { entryId, retryUntil: 0 };
+      setBusy(true);
+      refreshBoard();
+    };
+    window.addEventListener("ggp:leaderboard-focus-entry", focusEntry);
+    return () => window.removeEventListener("ggp:leaderboard-focus-entry", focusEntry);
+  }, [refreshBoard]);
+  useEffect(() => {
+    if (!pendingFocus || !items.some((entry) => entry.id === pendingFocus)) return;
+    const row = document.getElementById(`leaderboard-entry-${pendingFocus}`);
+    if (!row) return;
     const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-    row?.scrollIntoView({ block: "center", behavior: reducedMotion ? "auto" : "smooth" });
-    row?.focus({ preventScroll: true });
-  }, [items, registeredId]);
+    row.scrollIntoView({ block: "center", behavior: reducedMotion ? "auto" : "smooth" });
+    row.focus({ preventScroll: true });
+    row.classList.add("is-flash");
+    window.setTimeout(() => row.classList.remove("is-flash"), 1600);
+    setPendingFocus(null);
+  }, [items, pendingFocus]);
 
   // 누르는 즉시 화면에 반영하고(낙관적 갱신), 서버 응답의 수치로 확정한다. 목록 전체를
   // 다시 받지 않는다 — 그 재조회(0.8초)가 체감 지연의 대부분이었다. 실패하면 되돌린다.
   async function vote(id, value) {
+    if (!isCurrentAccount()) return;
     let snapshot = null;
     setItems((current) => {
       snapshot = current;
@@ -146,8 +200,10 @@ export default function Leaderboard() {
     });
     try {
       const result = await api.leaderboardVote(id, uid, value);
+      if (!isCurrentAccount()) return;
       setItems((current) => settleVote(current, result));
     } catch (e) {
+      if (!isCurrentAccount()) return;
       if (snapshot) setItems(snapshot);
       setError(String(e.message || e));
     }
@@ -159,21 +215,24 @@ export default function Leaderboard() {
   }
 
   async function remove(entry) {
-    if (deleting) return;
+    if (deleting || !isCurrentAccount()) return;
     if (!window.confirm("이 매크로를 리더보드에서 삭제할까요? 되돌릴 수 없어요.")) return;
     setError("");
     setDeleting(entry.id);
     try {
       await api.leaderboardDelete(entry.id);
+      if (!isCurrentAccount()) return;
       await load();
     } catch (e) {
+      if (!isCurrentAccount()) return;
       setError(String(e.message || e));
     } finally {
-      setDeleting(0);
+      if (isCurrentAccount()) setDeleting(0);
     }
   }
 
   async function unlock(entry) {
+    if (!isCurrentAccount()) return;
     if (!isLoggedIn()) {
       const next = quickRunMode ? "%2Fleaderboard%3Ffrom%3Dquick-run" : "%2Fleaderboard";
       navigate(`/login?mode=signup&next=${next}`);
@@ -183,6 +242,7 @@ export default function Leaderboard() {
     setUnlocking(entry.id);
     try {
       const d = await api.leaderboardUnlock(entry.id);
+      if (!isCurrentAccount()) return;
       if (d.points_balance != null) {
         updateAuthUser({ ...getAuthUser(), points_balance: d.points_balance });
       }
@@ -192,13 +252,15 @@ export default function Leaderboard() {
       }
       await load(); // reveal the now-unlocked macro
     } catch (e) {
+      if (!isCurrentAccount()) return;
       setError(String(e.message || e));
     } finally {
-      setUnlocking(0);
+      if (isCurrentAccount()) setUnlocking(0);
     }
   }
 
   async function useForQuickRun(entry) {
+    if (!isCurrentAccount()) return;
     if (!isLoggedIn()) {
       navigate("/login?next=%2Fleaderboard%3Ffrom%3Dquick-run");
       return;
@@ -208,11 +270,13 @@ export default function Leaderboard() {
     try {
       if (!entry.for_sale) {
         const saved = await api.saveMyMacro(entry.macro, `리더보드 · ${entry.symbol}`);
+        if (!isCurrentAccount()) return;
         navigate("/?run=1&step=1", { state: { selectedMacroId: saved.item.id } });
         return;
       }
       navigate("/?run=1&step=1", { state: { selectedSourceRef: entry.id } });
     } catch (e) {
+      if (!isCurrentAccount()) return;
       setError(String(e.message || e));
       setUnlocking(0);
     }
@@ -222,7 +286,7 @@ export default function Leaderboard() {
     <div className="leaderboard-page">
       <PageHeader
         title="오늘의 리더보드"
-        meta={<><span className="lb-reset-prefix">리더보드 </span>초기화 <span className="num">{fmtCountdown(remain)}</span></>}
+        meta={<><span className="lb-reset-prefix">리더보드 </span>초기화 <ResetCountdown resetAt={resetAt} /></>}
         actions={(
           <>
             <SimBadge className="lg:hidden" />
@@ -252,7 +316,12 @@ export default function Leaderboard() {
 
       {busy && <Loading />}
       {error && <ErrorNote>오류: {error}</ErrorNote>}
-      {!busy && items.length === 0 && (
+      {!busy && board.preparing && (
+        <p className="notice-good mb-5" role="status">
+          {board.stale ? "오늘의 순위를 준비하고 있어요. 마지막으로 완료된 순위를 보여드려요." : "오늘의 순위를 준비하고 있어요. 잠시 후 자동으로 표시돼요."}
+        </p>
+      )}
+      {!busy && !board.preparing && items.length === 0 && (
         <EmptyState title="아직 등록된 매크로가 없어요">
           위 <b className="text-slate-900">매크로 만들기</b>에서 조건을 정하고 결과를 확인한 뒤 등록할 수 있어요.
         </EmptyState>
@@ -273,16 +342,17 @@ export default function Leaderboard() {
           </div>
           {items.map((e, idx) => {
             const r = ret(e);
-            const top3 = idx < 3;
+            const rank = e.rank || ((page - 1) * 50 + idx + 1);
+            const top3 = rank <= 3;
             return (
               <div
                 key={e.id}
                 id={`leaderboard-entry-${e.id}`}
-                tabIndex={registeredId === e.id ? -1 : undefined}
+                tabIndex={-1}
                 className={`lb-row${registeredId === e.id ? " is-registered" : ""}`}
                 role="row"
               >
-                <div className={`lb-rank num is-${idx + 1}`} role="cell" aria-label={`${idx + 1}위`}>{idx + 1}</div>
+                <div className={`lb-rank num is-${rank}`} role="cell" aria-label={`${rank}위`}>{rank}</div>
                 <CoinIcon symbol={e.symbol} size={36} className="lb-coin" alt="" />
                 <div className="lb-name" role="cell">
                   <div className="lb-name-line">
@@ -390,6 +460,14 @@ export default function Leaderboard() {
           })}
         </div>
       ) : null}
+
+      {!busy && board.total > 50 && (
+        <nav className="flex items-center justify-center gap-4 my-5" aria-label="리더보드 페이지">
+          <button className="btn btn-s btn-secondary" disabled={page === 1} onClick={() => { setBusy(true); setPage((value) => value - 1); }}>이전</button>
+          <span>{page} / {Math.ceil(board.total / 50)}</span>
+          <button className="btn btn-s btn-secondary" disabled={!board.has_more} onClick={() => { setBusy(true); setPage((value) => value + 1); }}>다음</button>
+        </nav>
+      )}
 
       {modal && (
         <RegisterMacroModal

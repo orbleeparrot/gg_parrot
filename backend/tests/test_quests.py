@@ -123,3 +123,76 @@ def test_dashboard_carries_the_quest_board():
     d = client.get("/api/me/dashboard", headers=_auth(token)).json()
     assert d["quests"]["total"] == 30
     assert len(d["quests"]["quests"]) == 3
+
+
+def test_quest_reward_preserves_balance_changed_during_a_long_request():
+    from app import points
+    from app.db import PointLedger, User, get_session
+    from sqlmodel import select
+
+    token = _signup()
+    uid = client.get("/api/auth/me", headers=_auth(token)).json()["user"]["id"]
+    with get_session() as request_db:
+        # Authentication loaded this account before the backtest began.
+        account = request_db.get(User, uid)
+        before = account.points_balance
+        with get_session() as other_db:
+            points.apply(other_db, other_db.get(User, uid), -100, "unlock_spend", "fixture")
+            other_db.commit()
+        assert account.points_balance == before
+        assert quests.complete(request_db, account, "backtest_run") is not None
+        assert account.points_balance == before - 100 + 10
+    with get_session() as db:
+        assert db.get(User, uid).points_balance == before - 100 + 10
+        ledger = db.exec(select(PointLedger).where(PointLedger.user_id == uid, PointLedger.reason == "quest")).one()
+        assert ledger.balance_after == before - 100 + 10
+
+
+def test_quest_cannot_reward_an_account_deleted_during_a_long_request():
+    from app.db import DailyQuestClaim, User, get_session
+    from sqlmodel import select
+
+    token = _signup()
+    uid = client.get("/api/auth/me", headers=_auth(token)).json()["user"]["id"]
+    with get_session() as request_db:
+        account = request_db.get(User, uid)
+        with get_session() as other_db:
+            deleted = other_db.get(User, uid)
+            deleted.is_deleted = True
+            deleted.points_balance = 0
+            other_db.add(deleted)
+            other_db.commit()
+        assert quests.complete(request_db, account, "backtest_run") is None
+    with get_session() as db:
+        assert db.get(User, uid).points_balance == 0
+        assert db.exec(select(DailyQuestClaim).where(DailyQuestClaim.user_id == uid)).first() is None
+
+
+@pytest.mark.parametrize("keys", [("backtest_run", "paper_start"), ("backtest_run", "backtest_run")])
+def test_simultaneous_quest_requests_keep_wallet_and_ledger_consistent(keys):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    from app.db import DailyQuestClaim, PointLedger, User, get_session
+    from sqlmodel import select
+
+    token = _signup()
+    uid = client.get("/api/auth/me", headers=_auth(token)).json()["user"]["id"]
+    before = _balance(token)
+    loaded = Barrier(2)
+
+    def claim(key):
+        with get_session() as db:
+            user = db.get(User, uid)
+            loaded.wait(timeout=5)
+            return quests.complete(db, user, key)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        replies = list(pool.map(claim, keys))
+    expected = len(set(keys))
+    assert sum(reply is not None for reply in replies) == expected
+    with get_session() as db:
+        assert db.get(User, uid).points_balance == before + 10 * expected
+        claims = db.exec(select(DailyQuestClaim).where(DailyQuestClaim.user_id == uid)).all()
+        ledger = db.exec(select(PointLedger).where(PointLedger.user_id == uid, PointLedger.reason == "quest")).all()
+        assert len(claims) == len(ledger) == expected
+        assert sorted(row.balance_after for row in ledger) == [before + 10 * (i + 1) for i in range(expected)]

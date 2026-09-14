@@ -4,13 +4,14 @@ import { Link, useLocation, useNavigate, useParams, useSearchParams } from "reac
 import Builder from "../components/Builder.jsx";
 import SimBadge from "../components/SimBadge.jsx";
 import { StudioTabs, StudioBacktest, StudioAiExplain, StudioOptimize, StudioPaper, StudioOutcomes } from "../components/StudioDock.jsx";
+import MacroCard from "../components/MacroCard.jsx";
 import usePaperSession from "../hooks/usePaperSession.js";
 import useStudioSplit from "../hooks/useStudioSplit.js";
 import CandleChart from "../components/CandleChart.jsx";
 import RegisterMacroModal from "../components/RegisterMacroModal.jsx";
 import { EmptyState, Loading } from "../components/Page.jsx";
 import { api } from "../api.js";
-import { useAuth } from "../lib/auth.js";
+import { useAuth, useAccountGuard, getAuthScope } from "../lib/auth.js";
 import {
   CANDLE_INTERVALS,
   PERIOD_PRESETS,
@@ -29,7 +30,7 @@ import {
   readHeroDraft,
   takeRegistrationDraft,
 } from "../lib/journey.js";
-import { readStudioSession, writeStudioSession } from "../lib/studioSession.js";
+import { readStudioSession, writeStudioSession, studioPaperKey } from "../lib/studioSession.js";
 import { backtestBudget, validBacktestLimits } from "../lib/backtestBudget.js";
 import "./Studio.css";
 import "./StudioBudget.css";
@@ -57,9 +58,64 @@ function UploadIcon() {
   );
 }
 
+// 빌더 종류 — 조건 판의 제목이 곧 드롭다운(`기본 빌더 ▾`). 지금은 기본 빌더뿐이고 프로 빌더는 업데이트 예정이라 메뉴에 비활성으로만 있다.
+// 프로가 열리면 항목의 disabled 를 떼고 고른 값으로 폼을 바꿔 끼운다.
+function BuilderModeMenu() {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef(null);
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDown = (event) => { if (!rootRef.current?.contains(event.target)) setOpen(false); };
+    const onKey = (event) => { if (event.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onDown); document.removeEventListener("keydown", onKey); };
+  }, [open]);
+  return (
+    <div className="studio-mode" ref={rootRef}>
+      <button type="button" className="studio-mode-btn" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+        기본 빌더<i className="studio-mode-chev" aria-hidden="true" />
+      </button>
+      {open && (
+        <div className="studio-mode-menu" role="menu" aria-label="빌더 종류">
+          <button type="button" role="menuitemradio" aria-checked="true" className="studio-mode-item is-on" onClick={() => setOpen(false)}>
+            <span className="studio-mode-check" aria-hidden="true">✓</span>기본 빌더
+          </button>
+          <button type="button" role="menuitemradio" aria-checked="false" disabled title="프로 빌더는 업데이트 예정이에요" className="studio-mode-item is-soon">
+            <span className="studio-mode-check" aria-hidden="true" />프로 빌더<span className="studio-soon-badge">업데이트 예정</span>
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // 저장·공유 — 매크로 등록 탭에서 여는 다이얼로그. 링크·인증 카드는 본문이 아니라 부속 결과라 화면에 늘 두지 않는다.
-function ShareDialog({ share, stale, busy, onClose, onRenew }) {
+function ShareDialog({ share, stale, busy, card, onClose, onRenew }) {
   const [copied, setCopied] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const cardRef = useRef(null);
+  // 카드 이미지 — 화면의 트레이딩 카드를 브라우저가 그린 그대로 뜬다(html-to-image: SVG foreignObject 로 같은 렌더링 엔진이 그린다, 2배).
+  // 폰트(Pretendard · JetBrains Mono)와 로고 사본(/api/coin-logo)이 모두 같은 출처라 그대로 실린다. 모서리 밖은 투명.
+  async function downloadCard() {
+    if (!cardRef.current) return;
+    setSaving(true); setSaveError("");
+    try {
+      const { toPng } = await import("html-to-image");
+      if (document.fonts?.ready) await document.fonts.ready;
+      // 캡처 상자의 바깥 여백(margin-top 16px)이 복제본에도 실려 카드가 아래로 밀리고 바닥이 잘렸다 — 복제본에서는 여백을 0 으로.
+      const dataUrl = await toPng(cardRef.current, { pixelRatio: 2, cacheBust: false, style: { margin: "0" } });
+      const a = document.createElement("a");
+      a.href = dataUrl;
+      a.download = `${share.slug}.png`;
+      a.click();
+    } catch (e) {
+      setSaveError("카드 이미지를 만들지 못했어요. 잠시 후 다시 시도해 주세요.");
+    } finally {
+      setSaving(false);
+    }
+  }
   useEffect(() => {
     const onKey = (event) => { if (event.key === "Escape") onClose(); };
     document.addEventListener("keydown", onKey);
@@ -87,14 +143,17 @@ function ShareDialog({ share, stale, busy, onClose, onRenew }) {
           <input readOnly value={share.url} aria-label="공유 링크" className="field field-sm flex-1" onFocus={(event) => event.target.select()} />
           <button type="button" onClick={copy} className="btn btn-m btn-secondary shrink-0">{copied ? "복사했어요" : "링크 복사"}</button>
         </div>
-        <img src={api.cardUrl(share.slug)} alt="공유용 백테스트 인증 카드" className="mt-4" />
-        <a
-          href={api.cardUrl(share.slug)}
-          download={`${share.slug}.png`}
-          className="mt-3 inline-block t-small font-semibold text-slate-900 underline underline-offset-4 decoration-slate-300 hover:decoration-slate-900"
-        >
-          카드 이미지 내려받기
-        </a>
+        {card && (
+          <div ref={cardRef} className="studio-share-card">
+            <MacroCard {...card} logoProxy />
+          </div>
+        )}
+        <div className="mt-3 flex items-center gap-3 flex-wrap">
+          <button type="button" onClick={downloadCard} disabled={saving || !card} className="btn btn-m btn-secondary">
+            {saving ? "이미지 만드는 중…" : "카드 이미지 내려받기"}
+          </button>
+          {saveError && <span className="t-small text-red-600" role="alert">{saveError}</span>}
+        </div>
         <div className="confirm-dialog-actions">
           {stale && (
             <button type="button" onClick={onRenew} disabled={busy} className="btn btn-l w-full btn-primary">
@@ -110,6 +169,16 @@ function ShareDialog({ share, stale, busy, onClose, onRenew }) {
 }
 
 export default function Studio() {
+  const { accountVersion } = useAuth();
+  const scope = getAuthScope();
+  const location = useLocation();
+  const entryOwner = useRef({ key: location.key, scope });
+  if (entryOwner.current.key !== location.key) entryOwner.current = { key: location.key, scope };
+  return <AccountStudio key={accountVersion} scope={scope} allowRouterMacro={entryOwner.current.scope === scope} />;
+}
+
+function AccountStudio({ scope, allowRouterMacro }) {
+  const isCurrentAccount = useAccountGuard();
   const split = useStudioSplit();
   const { token } = useAuth();
   const { slug } = useParams();
@@ -120,7 +189,7 @@ export default function Studio() {
   // 다른 화면에 다녀와도 조건·결과·탭이 남아 있도록 — 이 탭(sessionStorage)에 둔 작업 상태로 시작한다.
   // 공유 링크(/s/:slug)는 그 링크의 매크로가 우선이라 읽지 않는다.
   const savedRef = useRef(undefined);
-  if (savedRef.current === undefined) savedRef.current = slug ? null : readStudioSession();
+  if (savedRef.current === undefined) savedRef.current = slug ? null : readStudioSession(scope);
   const saved = savedRef.current;
   const [form, setForm] = useState(() => saved?.form || defaultForm());
   const [result, setResult] = useState(() => saved?.result || null);
@@ -165,16 +234,18 @@ export default function Studio() {
   const loadTestLimits = useCallback(async () => {
     try {
       const value = await api.backtestLimits();
+      if (!isCurrentAccount()) throw new DOMException("Account changed", "AbortError");
       if (!validBacktestLimits(value)) throw new Error("invalid backtest limits");
       setTestLimits(value);
       setLimitsError("");
       return value;
     } catch (_) {
+      if (!isCurrentAccount()) throw new DOMException("Account changed", "AbortError");
       const message = "테스트 범위를 확인하지 못했어요. 다시 시도해 주세요.";
       setLimitsError(message);
       throw new Error(message);
     }
-  }, []);
+  }, [isCurrentAccount]);
   useEffect(() => { loadTestLimits().catch(() => {}); }, [loadTestLimits]);
   const testBudget = useMemo(() => backtestBudget(form, testLimits), [form, testLimits]);
   const budgetBlocked = !!testBudget && !testBudget.allowed;
@@ -228,16 +299,16 @@ export default function Studio() {
     return out;
   }, [form.symbol]);
 
-  const paper = usePaperSession({ macro: currentMacro, valErr, resumeKey: slug ? "" : "ggp_studio_paper:v1" });
+  const paper = usePaperSession({ macro: currentMacro, valErr, resumeKey: slug ? "" : studioPaperKey(scope), accountGuard: isCurrentAccount });
 
   // 작업 상태 저장 — 값이 바뀌고 300ms 뒤에 한 번. 결과(자산곡선 365점)까지 함께 둔다.
   useEffect(() => {
     if (slug) return undefined;
-    const timer = window.setTimeout(() => writeStudioSession({
+    const timer = window.setTimeout(() => { if (isCurrentAccount()) writeStudioSession({
       form, result, testedMacro, perSymbol, explanation, summary, dataSource, periodLabel, share, loadedFrom, runLeverage, autoRun, dockTab, optimized,
-    }), 300);
+    }, scope); }, 300);
     return () => window.clearTimeout(timer);
-  }, [slug, form, result, testedMacro, perSymbol, explanation, summary, dataSource, periodLabel, share, loadedFrom, runLeverage, autoRun, dockTab, optimized]);
+  }, [scope, isCurrentAccount, slug, form, result, testedMacro, perSymbol, explanation, summary, dataSource, periodLabel, share, loadedFrom, runLeverage, autoRun, dockTab, optimized]);
   // 차트 오버레이 — 지금 매크로 설정 그대로 보조지표(볼린저 밴드·매수/매도 구간 등)를 얹는다. form 이 바뀌면 즉시 따라간다.
   const overlay = useCallback((candles) => computeStrategyOverlay(form, candles), [form]);
 
@@ -245,7 +316,9 @@ export default function Studio() {
   useEffect(() => { if (paper.running) setDockTab("paper"); }, [paper.running]);
   useEffect(() => { if (!result) { setDockTab("bt"); setOptimized(false); } }, [result]);
 
-  // Clone flow: load a shared macro into the builder.
+  // Clone flow: load a shared macro into the builder, then run its backtest once so the
+  // receiver sees results, tabs and the card right away (the link stores conditions only).
+  const runBacktestRef = useRef(null);
   useEffect(() => {
     if (!slug) return;
     let alive = true;
@@ -254,13 +327,16 @@ export default function Studio() {
       .getMacro(slug)
       .then((data) => {
         if (!alive) return;
-        setForm(macroToForm(data.macro));
+        const loadedForm = macroToForm(data.macro);
+        setForm(loadedForm);
         setLoadedFrom(data.human_summary);
         setShare({
           slug,
           url: `${window.location.origin}/s/${slug}`,
-          macroKey: macroKey(buildMacro(macroToForm(data.macro))),
+          macroKey: macroKey(buildMacro(loadedForm)),
         });
+        setBusy(false);
+        return runBacktestRef.current?.(loadedForm);
       })
       .catch((reason) => alive && setError(String(reason.message || reason)))
       .finally(() => alive && setBusy(false));
@@ -273,7 +349,7 @@ export default function Studio() {
   // preserve React Router's own key/index bookkeeping.
   useEffect(() => {
     const macro = location.state?.macro;
-    if (!macro) return;
+    if (!macro || !allowRouterMacro) return;
     setForm(macroToForm(macro));
     setLoadedFrom(
       location.state?.source === "hero-guide"
@@ -281,9 +357,10 @@ export default function Studio() {
         : "리더보드에서 복사한 매크로"
     );
     navigate(location.pathname + location.search, { replace: true, state: null });
-  }, [location.pathname, location.search, location.state, navigate]);
+  }, [allowRouterMacro, location.pathname, location.search, location.state, navigate]);
 
   const runBacktest = useCallback(async (snapshot) => {
+    if (!isCurrentAccount()) return false;
     const validationError = validate(snapshot);
     setError("");
     if (validationError) {
@@ -303,12 +380,13 @@ export default function Studio() {
     setBusy(true);
     try {
       const budget = backtestBudget(snapshot, await loadTestLimits());
+      if (!isCurrentAccount()) return false;
       if (!budget?.allowed) {
         if (budget?.error) setError(budget.error);
         return false;
       }
       const data = await api.backtest(macro);
-      if (requestId !== requestIdRef.current) return false;
+      if (!isCurrentAccount() || requestId !== requestIdRef.current) return false;
       setTestedMacro(macro);
       setResult(data.result);
       setPerSymbol(data.per_symbol || []);
@@ -320,12 +398,13 @@ export default function Studio() {
       setRunLeverage(macro.leverage || 1);
       return true;
     } catch (reason) {
-      if (requestId === requestIdRef.current) setError(String(reason.message || reason));
+      if (isCurrentAccount() && requestId === requestIdRef.current) setError(String(reason.message || reason));
       return false;
     } finally {
-      if (requestId === requestIdRef.current) setBusy(false);
+      if (isCurrentAccount() && requestId === requestIdRef.current) setBusy(false);
     }
-  }, [loadTestLimits]);
+  }, [isCurrentAccount, loadTestLimits]);
+  runBacktestRef.current = runBacktest;
 
   // Consume all entry parameters in one place so two effects cannot restore
   // each other's deleted query keys. A login-return draft wins over starter
@@ -430,6 +509,7 @@ export default function Studio() {
   }, [busy, form, registerOpen, runBacktest, valErr]);
 
   async function saveAndShare() {
+    if (!isCurrentAccount()) return false;
     setError("");
     if (valErr) { setError(valErr); return false; }
     const requestId = ++requestIdRef.current;
@@ -440,13 +520,14 @@ export default function Studio() {
     setBusy(true);
     try {
       const budget = backtestBudget(form, await loadTestLimits());
+      if (!isCurrentAccount()) return false;
       if (!budget?.allowed) {
         if (budget?.error) setError(budget.error);
         return false;
       }
       const macro = currentMacro;
       const data = await api.createMacro(macro);
-      if (requestId !== requestIdRef.current) return;
+      if (!isCurrentAccount() || requestId !== requestIdRef.current) return;
       setTestedMacro(macro);
       setResult(data.result);
       // The save endpoint returns an aggregate representative result but no
@@ -466,10 +547,10 @@ export default function Studio() {
       });
       return true;
     } catch (reason) {
-      if (requestId === requestIdRef.current) setError(String(reason.message || reason));
+      if (isCurrentAccount() && requestId === requestIdRef.current) setError(String(reason.message || reason));
       return false;
     } finally {
-      if (requestId === requestIdRef.current) setBusy(false);
+      if (isCurrentAccount() && requestId === requestIdRef.current) setBusy(false);
     }
   }
 
@@ -489,6 +570,7 @@ export default function Studio() {
     setFileImportBusy(true);
     try {
       const rawMacro = JSON.parse(await file.text());
+      if (!isCurrentAccount()) return;
       if (!rawMacro || typeof rawMacro !== "object" || !rawMacro.symbol || !rawMacro.rule_type || !rawMacro.params) {
         throw new Error("INVALID_MACRO_FILE");
       }
@@ -499,6 +581,7 @@ export default function Studio() {
       const macro = buildMacro(importedForm);
       const name = file.name.replace(/\.ggm\.json$|\.json$/i, "") || `${macro.symbol} 매크로`;
       const data = await api.saveMyMacro(macro, name);
+      if (!isCurrentAccount()) return;
       const savedMacro = data?.item?.macro || macro;
 
       requestIdRef.current += 1;
@@ -519,6 +602,7 @@ export default function Studio() {
       setError("");
       setFileImportSuccess("내 매크로에 등록하고 아래 조건 편집기에 불러왔어요. 백테스트로 설정을 다시 확인해 주세요.");
     } catch (reason) {
+      if (!isCurrentAccount()) return;
       const message = String(reason.message || reason);
       setFileImportError(
         message === "INVALID_MACRO_FILE" || reason instanceof SyntaxError
@@ -528,7 +612,7 @@ export default function Studio() {
             : `매크로 파일을 등록하지 못했어요: ${message}`,
       );
     } finally {
-      setFileImportBusy(false);
+      if (isCurrentAccount()) setFileImportBusy(false);
     }
   }
 
@@ -547,20 +631,21 @@ export default function Studio() {
     setAiError("");
     try {
       const data = await api.explainAi(macro);
-      if (requestId !== aiRequestIdRef.current || latestTestedKeyRef.current !== key) return;
+      if (!isCurrentAccount() || requestId !== aiRequestIdRef.current || latestTestedKeyRef.current !== key) return;
       if (data.explanation) setExplanation(data.explanation);
       if (data.ai_available === false) setAiError("AI 해설이 아직 준비되지 않았어요 (서버 설정 필요).");
       else if (data.ai_error) setAiError(data.ai_error);
     } catch (reason) {
-      if (requestId === aiRequestIdRef.current && latestTestedKeyRef.current === key) {
+      if (isCurrentAccount() && requestId === aiRequestIdRef.current && latestTestedKeyRef.current === key) {
         setAiError("AI 호출 실패: " + String(reason.message || reason));
       }
     } finally {
-      if (requestId === aiRequestIdRef.current) setAiBusy(false);
+      if (isCurrentAccount() && requestId === aiRequestIdRef.current) setAiBusy(false);
     }
   }
 
   function finishRegistration(entry) {
+    if (!isCurrentAccount()) return;
     completeJourney();
     setRegisterOpen(false);
     navigate("/leaderboard", {
@@ -604,6 +689,19 @@ export default function Studio() {
   const limitsRetry = limitsError ? (
     <button type="button" className="btn btn-s btn-secondary" onClick={() => loadTestLimits().catch(() => {})}>다시 확인</button>
   ) : null;
+  // 매크로 카드 재료 — 매크로 등록 탭과 공유 다이얼로그가 같은 카드를 그린다.
+  // 카드는 결과와 짝인 '테스트한 매크로'를 보여 준다. 종목도 그 매크로에서 읽는다 — 조건 판에서 종목을 빼도 다시 테스트하기 전엔 카드가 바뀌지 않는다.
+  const cardMacro = testedMacro || currentMacro;
+  const cardSymbols = Array.isArray(cardMacro.symbols) && cardMacro.symbols.length > 1 ? cardMacro.symbols : [cardMacro.symbol].filter(Boolean);
+  const cardProps = {
+    macro: cardMacro,
+    result,
+    perSymbol,
+    strategyEntry: { symbol: cardSymbols[0] || "—", human_summary: summary, macro: cardMacro, locked: false },
+    periodLabel,
+    dataSource,
+    symbols: cardSymbols,
+  };
   const footAlert = (() => {
     if (limitsError && (!error || error === limitsError)) return { tone: "risk", text: limitsError, actions: limitsRetry };
     if (error) return { tone: "risk", text: `오류: ${error}`, actions: error === limitsError ? limitsRetry : null };
@@ -657,7 +755,7 @@ export default function Studio() {
         {/* ── 조건 ── */}
         <aside id="studio-conditions" className="studio-cond" aria-label="조건" {...split.panelProps}>
           <div className="studio-panel-head">
-            <h2 className="t-h2 text-slate-900">조건</h2>
+            <BuilderModeMenu />
             <div className="studio-head-right">
               {/* 매크로 파일 등록 — 가지고 있는 .ggm.json 을 내 매크로에 등록하고 조건에 불러온다. 로그인 전엔 로그인으로. */}
               {!slug && (token ? (
@@ -792,13 +890,8 @@ export default function Studio() {
 
             {dockTab === "done" && result && (
               <StudioOutcomes
-                macro={testedMacro || currentMacro}
+                {...cardProps}
                 valErr={valErr}
-                strategyEntry={{ symbol: chartSymbols[0] || form.symbol || "—", human_summary: summary, macro: testedMacro || currentMacro, locked: false }}
-                result={result}
-                periodLabel={periodLabel}
-                dataSource={dataSource}
-                symbols={chartSymbols}
                 canRegister={resultIsFresh}
                 onRegister={() => openRegistration(paper.mode)}
                 onShare={openShare}
@@ -814,6 +907,7 @@ export default function Studio() {
           share={share}
           stale={shareStale}
           busy={busy}
+          card={result ? cardProps : null}
           onClose={() => setShareOpen(false)}
           onRenew={async () => {
             const ok = await saveAndShare();

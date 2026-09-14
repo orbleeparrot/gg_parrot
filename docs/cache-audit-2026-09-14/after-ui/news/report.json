@@ -1,0 +1,22 @@
+{
+  "passed": true,
+  "checks": [
+    "layout-selection-320-light",
+    "layout-selection-320-dark",
+    "layout-selection-375-light",
+    "layout-selection-375-dark",
+    "layout-selection-767-light",
+    "layout-selection-767-dark",
+    "layout-selection-768-light",
+    "layout-selection-768-dark",
+    "layout-selection-1440-light",
+    "layout-selection-1440-dark",
+    "incremental-refresh-preserves-scroll-and-only-fetches-selected-coin",
+    "refresh-failure-retains-articles-and-retry-375",
+    "refresh-failure-retains-articles-and-retry-1440",
+    "selected-news-loading-error-retry-empty-translation",
+    "page-and-footer-share-one-45s-quote-refresh"
+  ],
+  "page_errors": [],
+  "build": "/tmp/ggp-cache-implementation-build"
+}

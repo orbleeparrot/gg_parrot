@@ -1,0 +1,24 @@
+{
+  "passed": true,
+  "scenarios": {
+    "shrinking_snapshot": {
+      "passed": true,
+      "effective_page": 1,
+      "visible_rows": 3
+    },
+    "off_page_macro_focus": {
+      "passed": true,
+      "entry_id": 1,
+      "effective_page": 3,
+      "focused": true,
+      "max_response_rows": 50
+    },
+    "newly_registered_entry_waits_for_snapshot": {
+      "passed": true,
+      "entry_id": 1,
+      "effective_page": 3,
+      "focused": true,
+      "max_response_rows": 50
+    }
+  }
+}

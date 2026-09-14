@@ -9,7 +9,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import delete, update, or_
+from sqlalchemy import case, delete, update, or_
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
@@ -364,12 +364,63 @@ def get_collection_state(symbol: str, db=None) -> dict | None:
     return {
         "status": row.collection_status,
         "last_attempt_at": row.last_attempt_at,
+        "last_attempt_ms": row.last_attempt_ms,
         "last_success_at": row.last_success_at,
         "last_success_ms": row.last_success_ms,
         "consecutive_failures": row.consecutive_failures,
         "next_collection_ms": row.next_collection_ms,
         "last_error": "최근 뉴스 수집에 실패했어요. 자동으로 재시도합니다." if row.last_error else "",
     }
+
+
+def publish_articles(asset_symbol: str, payload: dict, *, analysis=None, now_ms=None, enrichment_only=False, db=None) -> int:
+    from .articles import upsert_articles
+    if db is None:
+        with get_session() as owned:
+            return publish_articles(asset_symbol, payload, analysis=analysis, now_ms=now_ms,
+                                    enrichment_only=enrichment_only, db=owned)
+    return upsert_articles(asset_symbol, list(payload.get("items") or []), analysis=analysis,
+                           payload=payload, now_ms=now_ms, enrichment_only=enrichment_only, db=db)
+
+
+def read_article_feed(asset_symbol: str, *, after_revision=None, limit=100, db=None):
+    from .articles import read_article_feed as read
+    if db is None:
+        with get_session() as owned:
+            return read_article_feed(asset_symbol, after_revision=after_revision, limit=limit, db=owned)
+    return read(asset_symbol, after_revision=after_revision, limit=limit, db=db)
+
+
+def claim_maintenance(*, now_ms=None, db=None):
+    from .articles import claim_maintenance as claim
+    if db is None:
+        with get_session() as owned:
+            return claim_maintenance(now_ms=now_ms, db=owned)
+    return claim(now_ms=now_ms, db=db)
+
+
+def pending_article_batches(*, limit=50, now_ms=None, db=None):
+    from .articles import pending_article_batches as pending
+    if db is None:
+        with get_session() as owned:
+            return pending_article_batches(limit=limit, now_ms=now_ms, db=owned)
+    return pending(limit=limit, now_ms=now_ms, db=db)
+
+
+def claim_article_enrichment(asset_symbol, *, now_ms=None, db=None):
+    from .articles import claim_maintenance as claim
+    if db is None:
+        with get_session() as owned:
+            return claim_article_enrichment(asset_symbol, now_ms=now_ms, db=owned)
+    return claim(f"article-enrichment:{asset_symbol}", interval_seconds=30, now_ms=now_ms, db=db)
+
+
+def prune_articles(*, retention_days=30, now_ms=None, db=None):
+    from .articles import prune_articles as prune
+    if db is None:
+        with get_session() as owned:
+            return prune_articles(retention_days=retention_days, now_ms=now_ms, db=owned)
+    return prune(retention_days=retention_days, now_ms=now_ms, db=db)
 
 
 def reserve_ai_budget(
@@ -539,107 +590,54 @@ def claim_title_translations(
                 db=owned,
             )
 
-    unique_titles = list(
-        dict.fromkeys(
-            str(title or "").strip()
-            for title in titles
-            if str(title or "").strip()
-        )
-    )
-    rejected = {
-        str(title or "").strip()
-        for title in (rejected_titles or [])
-        if str(title or "").strip()
-    }
+    unique_titles = list(dict.fromkeys(str(title or "").strip() for title in titles
+                                       if str(title or "").strip()))
+    rejected = {str(title or "").strip() for title in rejected_titles or []}
     millis, now_iso = _clock(now_ms)
-    stale_before = millis - max(1, int(lease_ms))
-    claim_token = uuid.uuid4().hex
-    claimed: list[str] = []
-    waiting: list[str] = []
-    deferred: list[str] = []
-    cached: dict[str, str] = {}
-
+    token = uuid.uuid4().hex
+    result = {"claim_token": "", "claimed": [], "waiting": [], "deferred": [], "cached": {}}
+    if not unique_titles:
+        return result
+    # Sort both insertion and row locks globally so overlapping batches cannot
+    # deadlock. SQLite's first write serializes the equivalent transaction.
+    by_hash = {_title_hash(title): title for title in unique_titles}
+    ordered = sorted(by_hash)
+    insert = postgres_insert if db.get_bind().dialect.name == "postgresql" else sqlite_insert
+    db.exec(insert(NewsTitleTranslation).values([
+        dict(title_hash=key, original_title=by_hash[key], processing_status="pending",
+             claim_token=token, claimed_ms=millis, updated_at=now_iso, updated_ms=millis)
+        for key in ordered
+    ]).on_conflict_do_nothing(index_elements=[NewsTitleTranslation.title_hash]))
+    rows = db.exec(select(NewsTitleTranslation).where(NewsTitleTranslation.title_hash.in_(ordered))
+                   .order_by(NewsTitleTranslation.title_hash).with_for_update()).all()
+    by_title = {row.original_title: row for row in rows}
+    reclaim = []
     for title in unique_titles:
-        title_hash = _title_hash(title)
-        row = db.get(NewsTitleTranslation, title_hash)
+        row = by_title.get(title)
         if row is None:
-            candidate = NewsTitleTranslation(
-                title_hash=title_hash,
-                original_title=title,
-                processing_status="pending",
-                claim_token=claim_token,
-                claimed_ms=millis,
-                updated_at=now_iso,
-                updated_ms=millis,
-            )
-            try:
-                with db.begin_nested():
-                    db.add(candidate)
-                    db.flush()
-                claimed.append(title)
-                continue
-            except IntegrityError:
-                db.expire_all()
-                row = db.get(NewsTitleTranslation, title_hash)
-
-        if row is None or row.original_title != title:
-            waiting.append(title)
-            continue
-        if (
-            row.processing_status == "ready"
-            and row.translated_title
-            and title not in rejected
-        ):
-            cached[title] = row.translated_title
-            continue
-
-        # A rejected/failed title must not consume a fresh paid batch on every
-        # page refresh. Unlike an active claim, this is not work to wait for.
-        if (row.processing_status == "error" and title not in rejected
-                and int(row.updated_ms or 0) + max(0, int(retry_ms)) > millis):
-            deferred.append(title)
-            continue
-
-        can_reclaim = (
-            title in rejected
-            or row.processing_status != "pending"
-            or int(row.claimed_ms or 0) <= stale_before
-        )
-        if not can_reclaim:
-            waiting.append(title)
-            continue
-        previous_token = row.claim_token
-        previous_claimed_ms = int(row.claimed_ms or 0)
-        result = db.exec(
-            update(NewsTitleTranslation)
-            .where(
-                NewsTitleTranslation.title_hash == title_hash,
-                NewsTitleTranslation.original_title == title,
-                NewsTitleTranslation.claim_token == previous_token,
-                NewsTitleTranslation.claimed_ms == previous_claimed_ms,
-            )
-            .values(
-                translated_title="",
-                processing_status="pending",
-                claim_token=claim_token,
-                claimed_ms=millis,
-                updated_at=now_iso,
-                updated_ms=millis,
-            )
-        )
-        if result.rowcount == 1:
-            claimed.append(title)
+            result["waiting"].append(title)
+        elif row.claim_token == token:
+            result["claimed"].append(title)
+        elif row.processing_status == "ready" and row.translated_title and title not in rejected:
+            result["cached"][title] = row.translated_title
+        elif (row.processing_status == "error" and title not in rejected
+              and int(row.updated_ms or 0) + max(0, int(retry_ms)) > millis):
+            result["deferred"].append(title)
+        elif (title in rejected or row.processing_status != "pending"
+              or int(row.claimed_ms or 0) <= millis - max(1, int(lease_ms))):
+            reclaim.append(row.title_hash)
+            result["claimed"].append(title)
         else:
-            waiting.append(title)
-
+            result["waiting"].append(title)
+    if reclaim:
+        # Rows remain locked through this update/commit; the returned token
+        # fences subsequent renewal, completion and release just as before.
+        db.exec(update(NewsTitleTranslation).where(NewsTitleTranslation.title_hash.in_(reclaim)).values(
+            translated_title="", processing_status="pending", claim_token=token,
+            claimed_ms=millis, updated_at=now_iso, updated_ms=millis))
     db.commit()
-    return {
-        "claim_token": claim_token if claimed else "",
-        "claimed": claimed,
-        "waiting": waiting,
-        "deferred": deferred,
-        "cached": cached,
-    }
+    result["claim_token"] = token if result["claimed"] else ""
+    return result
 
 
 def store_title_translations(
@@ -661,58 +659,35 @@ def store_title_translations(
             return
 
     millis, now_iso = _clock(now_ms)
-    for raw_original, raw_translated in translations.items():
-        original = str(raw_original or "").strip()
-        translated = str(raw_translated or "").strip()
-        if not original or not translated:
-            continue
-        title_hash = _title_hash(original)
-        if claim_token:
-            db.exec(
-                update(NewsTitleTranslation)
-                .where(
-                    NewsTitleTranslation.title_hash == title_hash,
-                    NewsTitleTranslation.original_title == original,
-                    NewsTitleTranslation.processing_status == "pending",
-                    NewsTitleTranslation.claim_token == claim_token,
-                )
-                .values(
-                    translated_title=translated,
-                    processing_status="ready",
-                    claim_token="",
-                    claimed_ms=0,
-                    updated_at=now_iso,
-                    updated_ms=millis,
-                )
-            )
-            continue
-        row = db.get(NewsTitleTranslation, title_hash)
-        if row is None:
-            candidate = NewsTitleTranslation(
-                title_hash=title_hash,
-                original_title=original,
-                translated_title=translated,
-                processing_status="ready",
-                updated_at=now_iso,
-                updated_ms=millis,
-            )
-            try:
-                with db.begin_nested():
-                    db.add(candidate)
-                    db.flush()
-                continue
-            except IntegrityError:
-                db.expire_all()
-                row = db.get(NewsTitleTranslation, title_hash)
-        if row is None or row.original_title != original:
-            continue
-        row.translated_title = translated
-        row.processing_status = "ready"
-        row.claim_token = ""
-        row.claimed_ms = 0
-        row.updated_at = now_iso
-        row.updated_ms = millis
-        db.add(row)
+    cleaned = {str(original or "").strip(): str(translated or "").strip()
+               for original, translated in translations.items()
+               if str(original or "").strip() and str(translated or "").strip()}
+    if not cleaned:
+        return
+    if claim_token:
+        values = {_title_hash(original): translated for original, translated in cleaned.items()}
+        originals = {_title_hash(original): original for original in cleaned}
+        db.exec(update(NewsTitleTranslation).where(
+            NewsTitleTranslation.title_hash.in_(list(values)),
+            NewsTitleTranslation.original_title == case(originals, value=NewsTitleTranslation.title_hash),
+            NewsTitleTranslation.processing_status == "pending",
+            NewsTitleTranslation.claim_token == claim_token,
+        ).values(translated_title=case(values, value=NewsTitleTranslation.title_hash),
+                 processing_status="ready", claim_token="", claimed_ms=0,
+                 updated_at=now_iso, updated_ms=millis))
+    else:
+        insert = postgres_insert if db.get_bind().dialect.name == "postgresql" else sqlite_insert
+        statement = insert(NewsTitleTranslation).values([
+            dict(title_hash=_title_hash(original), original_title=original,
+                 translated_title=translated, processing_status="ready", claim_token="",
+                 claimed_ms=0, updated_at=now_iso, updated_ms=millis)
+            for original, translated in cleaned.items()
+        ])
+        db.exec(statement.on_conflict_do_update(
+            index_elements=[NewsTitleTranslation.title_hash],
+            set_={key: getattr(statement.excluded, key) for key in (
+                "translated_title", "processing_status", "claim_token", "claimed_ms", "updated_at", "updated_ms")},
+            where=NewsTitleTranslation.original_title == statement.excluded.original_title))
     db.commit()
 
 

@@ -42,11 +42,12 @@ def position_news(
     response: Response,
     user: User = Depends(auth_mod.current_user_in_session),
     db: Session = Depends(request_session),
+    cursor: int | None = None,
 ) -> dict:
     response.headers["Cache-Control"] = "private, no-store"
     session = runner_mod.get_owned_session(user.id, session_id, db=db)
     try:
-        return service.get_position_news(session, db=db)
+        return service.get_position_news(session, db=db, **({"cursor": max(0, cursor)} if cursor is not None else {}))
     except NewsTranslationBusyError as exc:
         raise HTTPException(status_code=429, detail=str(exc)) from exc
     except NewsTranslationError as exc:

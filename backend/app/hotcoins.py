@@ -17,7 +17,8 @@ import os
 import time
 from typing import Optional
 
-from .http_runtime import SingleFlightGroup, get_http_client
+from .http_runtime import get_http_client
+from .cache_runtime import ResponseCache
 
 # Env-configurable base so a US-hosted deploy can use data-api.binance.vision
 # (api.binance.com is geo-blocked from US IPs). Same public data either way.
@@ -88,10 +89,8 @@ def select_hot_coins(
     return pool[: max(1, limit)]
 
 
-# Shared cache: (coins, expires_at). Keyed by limit.
-_cache: dict[int, tuple[list[dict], float]] = {}
-_refreshes = SingleFlightGroup()
-
+# One normalized source result; different list lengths reuse it.
+_cache = ResponseCache("hot-coins", max_entries=1, max_bytes=100_000, retry_seconds=15)
 
 def _fetch_tickers() -> Optional[list[dict]]:
     try:
@@ -106,28 +105,18 @@ def _fetch_tickers() -> Optional[list[dict]]:
 def get_hot_coins(limit: int = 10) -> dict:
     """Return the cached hot-coins list (fetches Binance at most once per window)."""
     limit = max(1, min(int(limit), 50))
-    hit = _cache.get(limit)
-    if hit and hit[1] > time.time():
-        coins = hit[0]
-        return _envelope(coins, cached=True)
-
-    if hit:
-        tickers, refresh_state = _refreshes.run(
-            "binance:24h",
-            _fetch_tickers,
-            stale_value=None,
-        )
-    else:
-        tickers, refresh_state = _refreshes.run("binance:24h", _fetch_tickers)
-    if tickers is None:
-        # Serve a stale cache if we have one; otherwise report empty (UI hides).
-        if hit:
-            return _envelope(hit[0], cached=True, stale=True)
+    def load():
+        tickers = _fetch_tickers()
+        if not tickers:
+            raise RuntimeError("hot coin source unavailable")
+        return {"coins": select_hot_coins(tickers, limit=50),
+                "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    try:
+        payload, state = _cache.get_or_load("binance:24h", load, ttl=CACHE_SECONDS, stale_ttl=300)
+    except Exception:
         return _envelope([], cached=False, error="binance")
-
-    coins = select_hot_coins(tickers, limit=limit)
-    _cache[limit] = (coins, time.time() + CACHE_SECONDS)
-    return _envelope(coins, cached=refresh_state == "shared")
+    return {**_envelope(payload["coins"][:limit], cached=state != "loaded", stale=state == "stale"),
+            "updated_at": payload["updated_at"]}
 
 
 def _envelope(coins: list[dict], *, cached: bool, stale: bool = False, error: str | None = None) -> dict:

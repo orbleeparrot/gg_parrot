@@ -1,0 +1,71 @@
+{
+  "audit_date": "2026-09-14",
+  "source_commit": "f30fbeefb1c2bde9440de28204d3c32aa382f0d9",
+  "scope": "Offline behavioral reproduction, not production telemetry",
+  "network": "Socket connections and DNS resolution prohibited",
+  "persistence": "Temporary SQLite only; app.main and app.db were not imported",
+  "checks": {
+    "hotcoins_limit_specific_cache": {
+      "requested_limits": [
+        3,
+        10,
+        20,
+        3,
+        10
+      ],
+      "fixture_upstream_calls": 3,
+      "note": "Current page callers use limit=10; this demonstrates parameter-specific duplication."
+    },
+    "expired_cache_failure_retries": {
+      "sequential_requests": 5,
+      "fixture_upstream_calls": 5,
+      "stale_responses": 5
+    },
+    "stale_singleflight": {
+      "first_expired_request_waits_for_loader": true,
+      "concurrent_follower": [
+        "old",
+        "stale"
+      ],
+      "first_result": [
+        "fresh",
+        "loaded"
+      ],
+      "note": "Event ordering verifies blocking; this is not a latency benchmark."
+    },
+    "chart_expired_key_retention": {
+      "synthetic_limit_range": [
+        10,
+        300
+      ],
+      "expired_entries_remaining": 291,
+      "total_entries_after_new_symbol": 292,
+      "note": "291 synthetic keys; neither actual production traffic nor measured memory consumption."
+    },
+    "expired_fx_on_failure": {
+      "previous_valid_rate": 1500,
+      "fixture_configured_fallback": 1380,
+      "returned_rate": 1380.0,
+      "is_fallback": true
+    },
+    "historical_open_bar_cache": {
+      "first_close": 11.0,
+      "second_close": 11.0,
+      "new_fixture_upstream_close": 14,
+      "fixture_upstream_calls": 1,
+      "second_source": "cache"
+    },
+    "extended_history_refetch": {
+      "fixture_upstream_windows": [
+        {
+          "start_ms": 0,
+          "end_ms": 600000
+        },
+        {
+          "start_ms": 0,
+          "end_ms": 720000
+        }
+      ]
+    }
+  }
+}

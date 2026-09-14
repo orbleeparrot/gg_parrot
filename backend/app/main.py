@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 
 import asyncio
+import logging
 import json
 import os
 import uuid
@@ -52,8 +53,10 @@ from . import hotcoins as hotcoins_mod
 from . import http_runtime as http_runtime_mod
 from . import kimchi as kimchi_mod
 from . import news as news_mod
+from . import public_news as public_news_mod
 from . import board as board_mod
 from . import leaderboard as leaderboard_mod
+from . import leaderboard_runtime
 from . import optimize as optimize_mod
 from . import optimize_runtime as optimize_runtime_mod
 from . import paper as paper_mod
@@ -79,7 +82,9 @@ from .db import User
 from . import whales as whales_mod
 from .card import render_card
 from .security import hash_password
+from .http_cache import public_news_response
 from .data import NoSpotDataError, average_daily_funding_pct, get_klines, resolve_period
+from .data import symbols as symbols_mod
 from .data.binance import backtest_limits
 from .marketdata import fetch_klines_for_macro
 from .db import MacroRow, get_session, init_db, request_session
@@ -94,15 +99,21 @@ from .realtrade import build_bundle
 async def lifespan(app: FastAPI):
     init_db()
     community_summaries_mod.start()
+    leaderboard_runtime.start()
+    public_news_mod.start()
     position_news_runtime.start()
     whale_activity_runtime.start()
     try:
         yield
     finally:
-        try:
-            await whale_activity_runtime.stop()
-        finally:
-            await position_news_runtime.stop()
+        stopped = await asyncio.gather(
+            leaderboard_runtime.stop(), public_news_mod.stop(),
+            whale_activity_runtime.stop(), position_news_runtime.stop(),
+            return_exceptions=True,
+        )
+        for result in stopped:
+            if isinstance(result, BaseException):
+                logging.getLogger(__name__).error("Background worker shutdown failed: %s", type(result).__name__)
         try:
             await paper_mod.shutdown_running_sessions()
         finally:
@@ -115,6 +126,8 @@ async def lifespan(app: FastAPI):
                     try:
                         ai_runtime_mod.close_ai_runtime()
                     finally:
+                        from .cache_runtime import close_cache_runtime
+                        await asyncio.to_thread(close_cache_runtime)
                         http_runtime_mod.close_http_runtime()
 
 
@@ -784,7 +797,7 @@ def candles(
 ) -> dict:
     """Recent OHLC candles for the live chart (public market data only).
 
-    Globally cached per (symbol, interval, limit, market) for a few seconds, so
+    Globally cached per (symbol, interval, market) and sliced to the requested limit, so
     many viewers collapse into at most one upstream call per window. The last
     candle is the in-progress bar (``closed: false``) and is never persisted to
     the shared kline cache, so it can't leak into a backtest.
@@ -823,13 +836,10 @@ def hot_coins(limit: int = 10) -> dict:
 
 
 @app.get("/api/news/market")
-def news_market() -> dict:
-    """'오늘의 코인동향' — 시장·규제 전반 뉴스 헤드라인 + AI 중립 개요.
-
-    Google News RSS(무료) 기반. KST 하루 1회만 요약해 캐시(정보 제공용, 자문 아님).
-    """
+def news_market(request: Request) -> Response:
+    """백그라운드에서 준비한 시장 기사와 일별 요약을 DB에서 조회한다."""
     try:
-        return news_mod.get_market_news()
+        return public_news_response(request, public_news_mod.get_market_news())
     except news_mod.NewsTranslationBusyError as exc:
         raise HTTPException(status_code=429, detail=str(exc)) from exc
     except news_mod.NewsTranslationError as exc:
@@ -839,10 +849,12 @@ def news_market() -> dict:
 
 
 @app.get("/api/news/coin/{symbol}")
-def news_coin(symbol: str) -> dict:
-    """'경주마 동향' — 중앙 DB 우선, 미수집·장애 시 RSS 캐시 fallback."""
+def news_coin(symbol: str, request: Request) -> Response:
+    """준비된 코인 기사를 조회한다. 미수집 상태도 외부 호출 없이 반환한다."""
     try:
-        return news_mod.get_coin_news(symbol)
+        return public_news_response(request, public_news_mod.get_coin_news(symbol))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except news_mod.NewsTranslationBusyError as exc:
         raise HTTPException(status_code=429, detail=str(exc)) from exc
     except news_mod.NewsTranslationError as exc:
@@ -965,27 +977,25 @@ async def leaderboard_register(
 
 
 @app.get("/api/challenge/today")
-async def challenge_today() -> dict:
-    """Today's AI challenge (lazily generated once per KST day): symbol + 🤖 name."""
-    return await challenge_mod.get_today()
+def challenge_today(db: Session = Depends(request_session)) -> dict:
+    """Read the completed daily challenge without starting background work."""
+    return challenge_mod.get_today(db=db)
 
 
 @app.get("/api/leaderboard")
-async def leaderboard_list(
+def leaderboard_list(
     user_id: str = "",
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=100),
+    snapshot_id: str = Query(default="", max_length=64),
+    entry_id: Optional[int] = Query(default=None, ge=1),
     account: Optional[User] = Depends(auth_mod.optional_user_in_session),
     db: Session = Depends(request_session),
 ) -> dict:
-    # 첫 요청이 그날의 이월(어제 상위 N등 → 오늘 보드)을 처리한다. 스케줄러 없이
-    # 초기화되는 보드와 같은 방식이라 배포에 별도 크론이 필요 없다.
-    await leaderboard_mod.ensure_today_carryover()
-    # 실행 가이드의 "리더보드에서 가져오기"도 이 API만 호출하므로, 사용자가
-    # 리더보드 페이지를 먼저 열지 않아도 오늘의 AI 엔트리가 준비되어야 한다.
-    await challenge_mod.ensure_today()
+    """Read a completed public ranking and current private access state."""
     return leaderboard_mod.list_entries(
-        viewer_id=user_id,
-        viewer_user_id=account.id if account else None,
-        db=db,
+        viewer_id=user_id, viewer_user_id=account.id if account else None,
+        db=db, page=page, page_size=page_size, snapshot_id=snapshot_id, entry_id=entry_id,
     )
 
 
@@ -1011,7 +1021,10 @@ def leaderboard_unlock(entry_id: int, account: User = Depends(auth_mod.current_u
 
 @app.post("/api/leaderboard/{entry_id}/vote")
 def leaderboard_vote(entry_id: int, req: VoteRequest) -> dict:
-    return leaderboard_mod.vote(entry_id, req.user_id, req.value)
+    try:
+        return leaderboard_mod.vote(entry_id, req.user_id, req.value)
+    except leaderboard_mod.UnlockError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message)
 
 
 @app.post("/api/leaderboard/{entry_id}/edit")
@@ -1077,15 +1090,29 @@ async def leaderboard_delete(entry_id: int, account: User = Depends(auth_mod.cur
 def chat_list(
     before_id: Optional[int] = Query(default=None, ge=1, le=2**63 - 1),
     seen_id: Optional[int] = Query(default=None, ge=0),
-    account: Optional[User] = Depends(auth_mod.optional_user),
+    after_id: Optional[int] = Query(default=None, ge=0, le=2**63 - 1),
+    metadata_only: bool = False,
+    message_ids: Optional[str] = Query(default=None, max_length=4200, pattern=r"^\d+(,\d+)*$"),
+    account: Optional[User] = Depends(auth_mod.optional_user_in_session),
+    db: Session = Depends(request_session),
 ) -> dict:
-    return chat_mod.list_messages(account, before_id=before_id, seen_id=seen_id)
+    ids = list(dict.fromkeys(int(value) for value in message_ids.split(","))) if message_ids else None
+    if ids is not None and (len(ids) > chat_mod.MAX_LIST or any(value < 1 or value > 2**63 - 1 for value in ids)):
+        raise HTTPException(422, "메시지는 한 번에 200개까지 조회할 수 있어요.")
+    if sum((before_id is not None, after_id is not None, metadata_only, ids is not None)) > 1:
+        raise HTTPException(422, "메시지 조회 방식을 하나만 선택해 주세요.")
+    try:
+        return chat_mod.list_messages(account, before_id=before_id, seen_id=seen_id,
+                                      after_id=after_id, metadata_only=metadata_only, message_ids=ids, db=db)
+    except ValueError as exc:
+        raise HTTPException(401, str(exc)) from exc
 
 
 @app.post("/api/chat")
-def chat_post(req: ChatPostRequest, account: User = Depends(auth_mod.current_user)) -> dict:
+def chat_post(req: ChatPostRequest, account: User = Depends(auth_mod.current_user_in_session),
+              db: Session = Depends(request_session)) -> dict:
     try:
-        msg = chat_mod.add_message(account, req.text)
+        msg = chat_mod.add_message(account, req.text, db=db)
     except chat_mod.RateLimited as exc:
         raise HTTPException(status_code=429, detail=str(exc))
     except ValueError as exc:
@@ -1094,8 +1121,12 @@ def chat_post(req: ChatPostRequest, account: User = Depends(auth_mod.current_use
 
 
 @app.put("/api/chat/read")
-def chat_read(req: ChatReadRequest, account: User = Depends(auth_mod.current_user)) -> dict:
-    return chat_mod.mark_read(account, req.last_seen_id)
+def chat_read(req: ChatReadRequest, account: User = Depends(auth_mod.current_user_in_session),
+              db: Session = Depends(request_session)) -> dict:
+    try:
+        return chat_mod.mark_read(account, req.last_seen_id, db=db)
+    except ValueError as exc:
+        raise HTTPException(401, str(exc)) from exc
 
 
 # --- 껄무새 게시판 -------------------------------------------------------
@@ -1294,6 +1325,29 @@ def board_comment_delete(comment_id: int, user: User = Depends(auth_mod.current_
     if not board_mod.delete_comment(comment_id, user, db=db):
         raise HTTPException(status_code=403, detail="본인이 쓴 댓글만 지울 수 있어요.")
     return {"ok": True}
+
+
+@app.get("/api/symbols")
+def symbols(response: Response) -> dict:
+    """Tradable Binance USDT symbols (spot + USDT-M perpetual) for the builder's search — only these can be added."""
+    try:
+        data = symbols_mod.list_symbols()
+        response.headers["Cache-Control"] = (
+            "public, max-age=5, s-maxage=5" if data.get("stale") or not data.get("items")
+            else "public, max-age=300, s-maxage=300"
+        )
+        return data
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"종목 목록을 불러오지 못했어요: {type(exc).__name__}")
+
+
+@app.get("/api/coin-logo/{base}.png")
+def coin_logo(base: str) -> Response:
+    """Same-origin copy of Binance's public coin logo so the share card can be captured as an image."""
+    png = symbols_mod.coin_logo_png(base)
+    if png is None:
+        raise HTTPException(status_code=404, detail="logo not found")
+    return Response(content=png, media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
 
 
 @app.get("/api/card/{slug}.png")

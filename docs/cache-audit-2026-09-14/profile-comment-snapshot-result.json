@@ -1,0 +1,15 @@
+{
+  "audit": "profile-rename-leaves-comment-author-snapshot",
+  "scope": "Temporary SQLite and socket connections forbidden",
+  "source": "backend/app/profile.py",
+  "source_sha256": "7ac4bbf77a9b9db77d466de39b27c1c67870de062acad4071c6308c59f7ef2d0",
+  "expected": {
+    "post_author": "audit_after",
+    "comment_author": "audit_after"
+  },
+  "observed": {
+    "post_author": "audit_after",
+    "comment_author": "audit_before"
+  },
+  "defect_reproduced": true
+}

@@ -1,6 +1,8 @@
 """Daily AI challenge: lazy idempotent generation, template fallback, 🤖 flag."""
 from __future__ import annotations
 
+from tests.leaderboard_helpers import publish_ready_board
+import asyncio
 import pytest
 from fastapi.testclient import TestClient
 
@@ -37,6 +39,8 @@ def test_challenge_creates_three_ai_entries_and_is_idempotent(monkeypatch):
     fake_date = "2099-01-" + secrets.token_hex(2)[:2].rjust(2, "0")
     monkeypatch.setattr("app.challenge._today_kst", lambda: fake_date)
 
+    assert client.get("/api/challenge/today").json()["active"] is False
+    asyncio.run(challenge.ensure_today())
     r1 = client.get("/api/challenge/today")
     assert r1.status_code == 200, r1.text
     body = r1.json()
@@ -45,6 +49,7 @@ def test_challenge_creates_three_ai_entries_and_is_idempotent(monkeypatch):
     assert body["ai_name"] == "껄무새봇"
 
     # AI entries show on the board flagged is_ai, free/visible (macro present).
+    publish_ready_board()
     items = client.get("/api/leaderboard").json()["items"]
     ai_entries = [e for e in items if e.get("is_ai")]
     assert len(ai_entries) >= 3
@@ -56,13 +61,15 @@ def test_challenge_creates_three_ai_entries_and_is_idempotent(monkeypatch):
     assert {"껄무새1호기봇", "껄무새2호기봇", "껄무새3호기봇"} <= names
     assert all(n.startswith("껄무새") and n.endswith("호기봇") for n in names)
 
-    # Second call same day must NOT create more (idempotent).
+    # A repeated background preparation and GET must not create more entries.
+    asyncio.run(challenge.ensure_today())
     client.get("/api/challenge/today")
+    publish_ready_board()
     items2 = client.get("/api/leaderboard").json()["items"]
     assert len([e for e in items2 if e.get("is_ai")]) == len(ai_entries)
 
 
-def test_leaderboard_initializes_daily_challenge_before_listing(monkeypatch):
+def test_leaderboard_reads_without_initializing_daily_challenge(monkeypatch):
     events = []
 
     async def carryover():
@@ -84,7 +91,7 @@ def test_leaderboard_initializes_daily_challenge_before_listing(monkeypatch):
     response = client.get("/api/leaderboard")
 
     assert response.status_code == 200
-    assert events == ["carryover", "challenge", "list"]
+    assert events == ["list"]
 
 
 def test_daily_challenge_is_claimed_before_expensive_generation():

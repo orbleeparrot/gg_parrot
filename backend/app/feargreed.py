@@ -18,7 +18,8 @@ from typing import Optional
 
 import httpx
 
-from .http_runtime import SingleFlightGroup, get_http_client
+from .http_runtime import get_http_client
+from .cache_runtime import ResponseCache
 
 _FNG_URL = "https://api.alternative.me/fng/"
 
@@ -36,8 +37,7 @@ _KO = {
 }
 
 # (payload, expires_at)
-_cache: Optional[tuple[dict, float]] = None
-_refreshes = SingleFlightGroup()
+_cache = ResponseCache("fear-greed", max_entries=1, retry_seconds=30, max_retry_seconds=300)
 
 
 def _classify_ko(value: int, upstream: str) -> str:
@@ -76,35 +76,17 @@ def _fetch() -> Optional[dict]:
 
 def get_fear_greed() -> dict:
     """Cached market-wide Fear & Greed index (never raises)."""
-    global _cache
-    now = time.time()
-    if _cache and _cache[1] > now:
-        return {**_cache[0], "cached": True}
-
-    if _cache:
-        data, refresh_state = _refreshes.run("fear-greed", _fetch, stale_value=None)
-    else:
-        data, refresh_state = _refreshes.run("fear-greed", _fetch)
-    if refresh_state == "stale":
-        return {**_cache[0], "cached": True, "stale": True}
-    if data is None:
-        # Serve the last good value rather than blanking the widget.
-        if _cache:
-            return {**_cache[0], "cached": True, "stale": True}
+    def load():
+        data = _fetch()
+        if data is None:
+            raise RuntimeError("fear-greed source unavailable")
+        return {"ok": True, "scope": "market", **data, "updated_at": _now_iso(),
+                "disclaimer": "market-wide crypto sentiment; reference only, not a trading signal"}
+    try:
+        payload, state = _cache.get_or_load("index", load, ttl=CACHE_SECONDS, stale_ttl=86_400)
+    except Exception:
         return {"ok": False, "error": "upstream", "updated_at": _now_iso()}
-
-    payload = {
-        "ok": True,
-        "scope": "market",  # market-wide, NOT per-coin
-        "value": data["value"],
-        "classification": data["classification"],
-        "classification_ko": data["classification_ko"],
-        "observed_ts": data["observed_ts"],
-        "updated_at": _now_iso(),
-        "disclaimer": "market-wide crypto sentiment; reference only, not a trading signal",
-    }
-    _cache = (payload, now + CACHE_SECONDS)
-    return {**payload, "cached": refresh_state == "shared"}
+    return {**payload, "cached": state != "loaded", **({"stale": True} if state == "stale" else {})}
 
 
 def _now_iso() -> str:

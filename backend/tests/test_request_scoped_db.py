@@ -111,7 +111,7 @@ def test_paper_statuses_batch_missing_sessions_in_one_query(monkeypatch):
     assert 999 not in statuses
 
 
-def test_leaderboard_uses_injected_session_and_batched_paper_statuses(monkeypatch):
+def test_leaderboard_snapshot_reader_uses_injected_session_without_paper_lookups(monkeypatch):
     engine = _database()
     with Session(engine) as db:
         paper_rows = []
@@ -149,6 +149,11 @@ def test_leaderboard_uses_injected_session_and_batched_paper_statuses(monkeypatc
             )
         db.commit()
 
+        from app import leaderboard_snapshot as snapshots
+        monkeypatch.setattr(snapshots, "get_session", lambda: Session(engine))
+        token = snapshots.claim_refresh()
+        snapshots.publish_snapshot(token, leaderboard._today_kst(), leaderboard.compute_entries(db=db)["items"])
+
         monkeypatch.setattr(leaderboard, "get_session", lambda: (_ for _ in ()).throw(
             AssertionError("leaderboard opened another session")
         ))
@@ -163,8 +168,7 @@ def test_leaderboard_uses_injected_session_and_batched_paper_statuses(monkeypatc
 
         result = leaderboard.list_entries(db=db)
 
-    assert len(calls) == 1
-    assert len(calls[0]) == 2
+    assert calls == []
     assert [item["return_pct"] for item in result["items"]] == [2.0, -1.0]
 
 

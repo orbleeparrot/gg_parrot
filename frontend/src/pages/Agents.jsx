@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api.js";
-import { useAuth } from "../lib/auth.js";
+import { useAuth, useAccountGuard } from "../lib/auth.js";
 import { RULE_TYPES } from "../lib/macro.js";
 import { computeSessionOverlay } from "../lib/indicators.js";
 import { usePositionNewsFeature } from "../features/agents/positionNews/index.js";
@@ -135,7 +135,13 @@ function EmptyLibrary() {
 }
 
 export default function Agents() {
+  const { accountVersion } = useAuth();
+  return <AccountAgents key={accountVersion} />;
+}
+
+function AccountAgents() {
   const { token } = useAuth();
+  const isCurrentAccount = useAccountGuard();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [sessions, setSessions] = useState(null);
@@ -151,25 +157,27 @@ export default function Agents() {
   const lastStreamMessageAt = useRef(0);
   const [streamConnected, setStreamConnected] = useState(false);
 
-  const loadSessions = useCallback(async () => {
+  const loadSessions = useCallback(async (signal) => {
+    if (!isCurrentAccount()) return;
     const revision = sessionSnapshotRevision.current;
     try {
-      const data = await api.runnerSessions();
-      if (sessionSnapshotRevision.current !== revision) return;
+      const data = await api.runnerSessions({ signal });
+      if (!isCurrentAccount() || signal?.aborted || sessionSnapshotRevision.current !== revision) return;
       sessionSnapshotRevision.current += 1;
       setSessions(data);
       setError("");
     } catch (reason) {
-      if (sessionSnapshotRevision.current !== revision) return;
+      if (!isCurrentAccount() || signal?.aborted || sessionSnapshotRevision.current !== revision) return;
       setError(String(reason.message || reason));
     }
-  }, []);
+  }, [isCurrentAccount]);
 
-  const pollSessions = useCallback(async () => {
+  const pollSessions = useCallback(async (signal) => {
+    if (!isCurrentAccount()) return;
     if (Date.now() - lastStreamMessageAt.current < 15000) return;
     setStreamConnected(false);
-    await loadSessions();
-  }, [loadSessions]);
+    await loadSessions(signal);
+  }, [isCurrentAccount, loadSessions]);
   useAdaptivePolling(pollSessions, { intervalMs: 5000, maxIntervalMs: 15000,
     enabled: !!token, immediate: false, pollKey: token });
 
@@ -179,10 +187,11 @@ export default function Agents() {
       return undefined;
     }
     let alive = true;
+    const controller = new AbortController();
     const sessionRevision = sessionSnapshotRevision.current;
-    api.runnerSessions()
+    api.runnerSessions({ signal: controller.signal })
       .then((data) => {
-        if (!alive) return;
+        if (!alive || !isCurrentAccount()) return;
         if (sessionSnapshotRevision.current === sessionRevision) {
           sessionSnapshotRevision.current += 1;
           setSessions(data);
@@ -190,10 +199,10 @@ export default function Agents() {
         setError("");
       })
       .catch((reason) => {
-        if (alive) setError(String(reason.message || reason));
+        if (alive && isCurrentAccount() && reason.name !== "AbortError") setError(String(reason.message || reason));
       });
-    return () => { alive = false; };
-  }, [navigate, token]);
+    return () => { alive = false; controller.abort(); };
+  }, [isCurrentAccount, navigate, token]);
 
   useEffect(() => {
     if (!token) return undefined;
@@ -203,7 +212,7 @@ export default function Agents() {
     let reconnectAttempt = 0;
 
     const scheduleReconnect = () => {
-      if (stopped || reconnectTimer !== null) return;
+      if (stopped || !isCurrentAccount() || reconnectTimer !== null) return;
       const delay = Math.min(
         SESSION_RECONNECT_MAX_MS,
         1000 * (2 ** Math.min(reconnectAttempt, 5)),
@@ -216,9 +225,10 @@ export default function Agents() {
     };
 
     const connect = async () => {
+      if (!isCurrentAccount()) return;
       try {
         const credential = await api.runnerSessionsStreamToken();
-        if (stopped) return;
+        if (stopped || !isCurrentAccount()) return;
         if (!credential?.token) throw new Error("실시간 연결 토큰이 없어요.");
 
         const nextSocket = new WebSocket(api.runnerSessionsStreamUrl(), [
@@ -234,7 +244,7 @@ export default function Agents() {
           } catch (_) {
             return;
           }
-          if (stopped || socket !== nextSocket || message?.type !== "sessions.snapshot" || !message.data) return;
+          if (stopped || !isCurrentAccount() || socket !== nextSocket || message?.type !== "sessions.snapshot" || !message.data) return;
           lastStreamMessageAt.current = Date.now();
           setStreamConnected(true);
           setError("");
@@ -245,7 +255,7 @@ export default function Agents() {
         nextSocket.onerror = () => nextSocket.close();
         nextSocket.onclose = () => {
           if (socket === nextSocket) socket = null;
-          if (!stopped) {
+          if (!stopped && isCurrentAccount()) {
             lastStreamMessageAt.current = 0;
             setStreamConnected(false);
           }
@@ -265,7 +275,7 @@ export default function Agents() {
         socket.close(1000, "page closed");
       }
     };
-  }, [token]);
+  }, [isCurrentAccount, token]);
 
   // 선택의 소스는 '실행기에서 실제 구동 중인 세션'이다. 저장된 매크로 라이브러리가
   // 아니라 러너가 보고하는 active 세션을 그대로 쓴다. 단, 종료와 동시에 사라지는
@@ -344,7 +354,7 @@ export default function Agents() {
   }
 
   async function confirmPending() {
-    if (!pending || !selected) return;
+    if (!pending || !selected || !isCurrentAccount()) return;
     const action = pending;
     const target = selected;
     if (action.type === "stop") {
@@ -358,18 +368,22 @@ export default function Agents() {
         await api.runnerRequestStop(target.session_id, action.mode);
       } else {
         await api.runnerDeleteSession(target.session_id);
+        if (!isCurrentAccount()) return;
         const next = new URLSearchParams(searchParams);
         next.delete("session");
         setSearchParams(next, { replace: true });
       }
+      if (!isCurrentAccount()) return;
       await loadSessions();
+      if (!isCurrentAccount()) return;
       setPending(null);
     } catch (reason) {
+      if (!isCurrentAccount()) return;
       setError(String(reason.message || reason));
       if (action.type === "stop") setPendingStop(null);
       setPending(null);
     } finally {
-      setBusy(false);
+      if (isCurrentAccount()) setBusy(false);
     }
   }
 

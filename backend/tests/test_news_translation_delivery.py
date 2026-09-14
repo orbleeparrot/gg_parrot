@@ -17,6 +17,34 @@ def isolated_translation(monkeypatch):
     monkeypatch.setattr(news, "_load_latest_coin_snapshot", lambda _: None)
 
 
+def test_first_pass_is_published_before_correction_and_only_missing_claims_are_renewed(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    first, second = "Arbitrum token update 731", "Arbitrum token update 732"
+    published, renewed = {}, []
+    calls = 0
+    def create(**kwargs):
+        nonlocal calls
+        calls += 1
+        batch = json.loads(kwargs["messages"][0]["content"])
+        if calls == 2:
+            assert published == {first: "아비트럼 토큰 업데이트 731"}
+            assert [item["title"] for item in batch] == [second]
+        chosen = batch[0]
+        return SimpleNamespace(content=[SimpleNamespace(type="text", text=json.dumps({"items": [{
+            "id": chosen["id"], "title_ko": f"아비트럼 토큰 업데이트 {chosen['title'].split()[-1]}"
+        }]}))])
+    def renew(titles, **kwargs):
+        assert not set(titles).intersection(published), "completed claims no longer belong to the worker"
+        renewed.append(titles)
+    monkeypatch.setattr(news, "get_ai_client", lambda: SimpleNamespace(messages=SimpleNamespace(create=create)))
+    monkeypatch.setattr(news, "get_ai_runtime", lambda: SimpleNamespace(call=lambda key, load, **_: (load(), "loaded")))
+    monkeypatch.setattr(news, "_renew_durable_title_translation_claims", renew)
+    result = news._request_korean_title_translations([first, second], claim_token="worker", on_progress=published.update)
+    assert calls == 2
+    assert renewed == [[second]]
+    assert result == {first: "아비트럼 토큰 업데이트 731", second: "아비트럼 토큰 업데이트 732"}
+
+
 @pytest.mark.parametrize("legacy_limit", ["0", "1", "20"])
 def test_translation_provider_has_no_daily_quota(monkeypatch, legacy_limit):
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")

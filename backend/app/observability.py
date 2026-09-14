@@ -40,6 +40,41 @@ _STATIC_RUM_ROUTES = frozenset({
 # Uvicorn configures this logger in both local and Render deployments, so these
 # structured records are emitted without adding a duplicate process-wide handler.
 _logger = logging.getLogger("uvicorn.error")
+_performance_lock = threading.Lock()
+_performance_routes = OrderedDict()
+_performance_last_log = 0.0
+
+
+def record_request_latency(route: str, duration_ms: float) -> None:
+    """Bounded recent samples by route template, never URL, account or query."""
+    with _performance_lock:
+        if route not in _performance_routes:
+            if len(_performance_routes) >= 128:
+                _performance_routes.popitem(last=False)
+            _performance_routes[route] = deque(maxlen=256)
+        _performance_routes[route].append(max(0.0, duration_ms))
+
+
+def performance_snapshot() -> dict:
+    from .cache_runtime import cache_statistics
+    with _performance_lock:
+        samples = {key: sorted(values) for key, values in _performance_routes.items()}
+    return {"caches": cache_statistics(), "routes": {
+        key: {"samples": len(values), "p50_ms": round(values[math.ceil(len(values) * .5) - 1], 2),
+              "p95_ms": round(values[math.ceil(len(values) * .95) - 1], 2)}
+        for key, values in samples.items() if values
+    }}
+
+
+def log_performance_snapshot() -> None:
+    global _performance_last_log
+    now = time.monotonic()
+    with _performance_lock:
+        if now - _performance_last_log < 60:
+            return
+        _performance_last_log = now
+    _logger.info(json.dumps({"event": "cache_performance", **performance_snapshot()},
+                            ensure_ascii=False, separators=(",", ":")))
 
 
 def _bounded_int_setting(name: str, default: int, minimum: int, maximum: int) -> int:
@@ -220,6 +255,8 @@ class ObservabilityMiddleware:
                     for name, values in state.spans.items()
                 }
             if str(scope.get("path") or "").startswith("/api/"):
+                route = getattr(scope.get("route"), "path", "/api/other")
+                record_request_latency(route, elapsed)
                 _logger.info(json.dumps({
                     "event": "http_request",
                     "request_id": request_id,
@@ -230,6 +267,7 @@ class ObservabilityMiddleware:
                     "spans": spans,
                     "error": error_name,
                 }, ensure_ascii=False, separators=(",", ":")))
+                log_performance_snapshot()
             end_trace(token)
 
 
@@ -252,7 +290,8 @@ def observe_application(
         allow_methods=allow_methods,
         allow_headers=allow_headers,
     )
-    return ObservabilityMiddleware(cors_app)
+    from .http_cache import CachePolicyMiddleware
+    return ObservabilityMiddleware(CachePolicyMiddleware(cors_app))
 
 
 def normalize_rum_route(value: str) -> str:

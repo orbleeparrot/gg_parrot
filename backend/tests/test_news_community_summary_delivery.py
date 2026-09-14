@@ -135,7 +135,8 @@ def test_agent_read_passes_private_body_to_summary_then_strips_it_and_preserves_
     monkeypatch.setattr(service, "_load_latest_snapshot", lambda *_: stored)
     phases = []
 
-    def enrich(items, *, wait):
+    def enrich(items, *, wait, schedule):
+        assert schedule is False, "HTTP reads must not schedule summary work"
         assert wait is False and items[0]["community_body"] == BODY
         phases.append(True)
         return summary_result(items, ready=len(phases) > 1)

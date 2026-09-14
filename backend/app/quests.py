@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm.attributes import set_committed_value
 from sqlmodel import select
 
 from . import points as points_mod
@@ -64,9 +65,8 @@ def complete(db, user: Optional[User], key: str) -> Optional[dict]:
 
     Returns the quest view (with ``reward``) when this call paid it, ``None``
     when there is no account, the quest is unknown, or it was already claimed
-    today. Commits its own transaction so a hook can never leave the calling
-    endpoint half-done; a concurrent duplicate claim loses on the unique index
-    and is treated as already-claimed.
+    today. Commits the claim and reward together; a concurrent duplicate claim
+    loses on the unique index and is treated as already-claimed.
     """
     if user is None or user.id is None:
         return None
@@ -83,29 +83,31 @@ def complete(db, user: Optional[User], key: str) -> Optional[dict]:
     ).first()
     if existing is not None:
         return None
-    account = db.get(User, user.id)
-    if account is None or getattr(account, "is_deleted", False):
-        return None
+    user_id = user.id
     created_at, created_ms = _now()
-    db.add(
-        DailyQuestClaim(
-            user_id=user.id,
-            date_kst=date_kst,
-            quest_key=key,
-            reward=quest["reward"],
-            created_at=created_at,
-            created_ms=created_ms,
-        )
-    )
-    points_mod.apply(db, account, quest["reward"], REASON, f"{date_kst}:{key}")
     try:
+        # Lock the wallet before its child records, matching withdrawal's lock
+        # order. A duplicate claim rolls back this increment and its ledger row.
+        balance = points_mod.credit_current(db, user_id, quest["reward"], REASON, f"{date_kst}:{key}")
+        if balance is None:
+            db.rollback()
+            return None
+        db.add(
+            DailyQuestClaim(
+                user_id=user_id,
+                date_kst=date_kst,
+                quest_key=key,
+                reward=quest["reward"],
+                created_at=created_at,
+                created_ms=created_ms,
+            )
+        )
         db.commit()
     except IntegrityError:
         db.rollback()
         return None
-    # 요청 스코프 세션이 든 user 객체도 새 잔액을 보게 맞춘다.
-    if user is not account:
-        user.points_balance = account.points_balance
+    # Synchronize the request's snapshot without scheduling another ORM write.
+    set_committed_value(user, "points_balance", balance)
     return {**quest, "done": True, "date_kst": date_kst}
 
 

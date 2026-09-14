@@ -5,7 +5,7 @@ import Builder from "./Builder.jsx";
 import { api } from "../api.js";
 import { RULE_TYPES, PERIOD_PRESETS, buildMacro, defaultForm, macroToForm, validate } from "../lib/macro.js";
 import { getUserId } from "../lib/user.js";
-import { clearAuth, useAuth } from "../lib/auth.js";
+import { captureAccountGuard, clearAuth, getToken, useAuth } from "../lib/auth.js";
 import { lockBodyScroll } from "../lib/bodyScrollLock.js";
 import { saveRegistrationDraft } from "../lib/journey.js";
 
@@ -146,6 +146,8 @@ export default function RegisterMacroModal({
   if (!open) return null;
 
   async function save() {
+    const isCurrentAccount = captureAccountGuard({ accountOnly: true });
+    if (getToken() !== token || !isCurrentAccount()) return;
     if (submittingRef.current) return;
     setError("");
     if (needsLogin) return setError(isEdit ? "로그인 후 수정할 수 있어요." : "로그인 후 등록할 수 있어요.");
@@ -156,20 +158,23 @@ export default function RegisterMacroModal({
     try {
       if (isEdit) {
         const data = await api.leaderboardEdit(editEntry.id, macro, accountEdit ? "" : password, mode);
+        if (!isCurrentAccount()) return;
         await onDone?.(data.entry);
       } else {
         const data = await api.leaderboardRegister(macro, user.username, "", getUserId(), mode);
+        if (!isCurrentAccount()) return;
         await onDone?.(data.entry);
       }
-      onClose();
+      if (isCurrentAccount()) onClose();
     } catch (reason) {
+      if (!isCurrentAccount()) return;
       if (reason.status === 401 && !isEdit && initialMacro) {
         saveRegistrationDraft(initialMacro, {
           origin: draftOrigin,
           mode,
           returnTo: loginReturnPath,
         });
-        clearAuth();
+        clearAuth({ preserveRegistrationDraft: true });
         const next = loginReturnPath || "/builder?guide=1&register=1";
         navigate(`/login?next=${encodeURIComponent(next)}`, { replace: true });
         return;
@@ -177,7 +182,7 @@ export default function RegisterMacroModal({
       setError(String(reason.message || reason));
     } finally {
       submittingRef.current = false;
-      setBusy(false);
+      if (isCurrentAccount()) setBusy(false);
     }
   }
 

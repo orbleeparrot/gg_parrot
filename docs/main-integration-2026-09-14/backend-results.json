@@ -1,0 +1,12 @@
+{
+  "exit_code": 0,
+  "arguments": [
+    "tests"
+  ],
+  "passed": 1890,
+  "failed": 0,
+  "errors": 0,
+  "skipped": 0,
+  "external_network": "blocked",
+  "database": "temporary SQLite"
+}

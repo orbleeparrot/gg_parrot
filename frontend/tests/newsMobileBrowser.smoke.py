@@ -42,6 +42,8 @@ class Fixture:
         self.hold_eth = False
         self.held = []
         self.calls = {}
+        self.periodic = False
+        self.fail_refresh = False
 
     def route(self, route):
         url = urlsplit(route.request.url)
@@ -53,15 +55,24 @@ class Fixture:
             route.continue_()
             return
         self.calls[path] = self.calls.get(path, 0) + 1
+        if self.fail_refresh and path.startswith("/api/news/") and self.calls[path] > 1:
+            route.fulfill(status=500, json={"detail": "테스트 뉴스 갱신 오류"})
+            return
         data = {"items": []}
         if path == "/api/hot-coins":
             data = {"coins": [{"symbol": symbol, "last_price": 65234.45 if index == 0 else .000012 if index == 6 else 14.35, "change_pct": 12.2 - index * 1.6, "quote_volume": 345678} for index, symbol in enumerate(SYMBOLS)]}
+            if self.periodic:
+                data["coins"][0]["last_price"] = 70000 + self.calls[path]
         elif path == "/api/news/market":
             data = {"as_of": "2026-09-10", "overview": "시장 전반의 거래량이 늘었어요.\n주요 자산으로 자금이 유입됐어요.", "items": [article("시장")], "translation": {"status": "ready"}}
+            if self.periodic: data["refresh_seconds"] = 3
         elif path.startswith("/api/news/coin/"):
             symbol = path.rsplit("/", 1)[-1]
             data = {"items": [article(symbol)], "translation": {"status": "ready"}}
             if symbol == "BTCUSDT": data["items"] = [article(symbol, index) for index in range(5)]
+            if self.periodic:
+                data["refresh_seconds"] = 3
+                data["items"][-1]["title"] += f" 갱신 {self.calls[path]}"
             if symbol == "ETHUSDT" and self.hold_eth:
                 self.held.append((route, data))
                 return
@@ -82,6 +93,8 @@ def open_page(browser, origin, fixture, width, theme, errors):
     context = browser.new_context(viewport={"width": width, "height": 1000}, color_scheme=theme, reduced_motion="reduce")
     context.route("**/*", fixture.route)
     page = context.new_page()
+    if fixture.periodic:
+        page.clock.install()
     page.on("pageerror", lambda error: errors.append(str(error)))
     page.goto(origin + "/news", wait_until="domcontentloaded")
     expect(page.locator(".news-racer-mobile-row")).to_have_count(10)
@@ -116,6 +129,7 @@ def main():
                         metrics = page.locator(".news-racer-mobile-row").evaluate_all("""rows => rows.map(row => ({height:row.getBoundingClientRect().height, overflow:row.scrollWidth>row.clientWidth, font:parseFloat(getComputedStyle(row.querySelector('.news-racer-mobile-price')).fontSize)}))""")
                         assert all(row["height"] >= 48 and not row["overflow"] and row["font"] >= 13 for row in metrics), metrics
                         expect(page.locator("#news-racer-mobile-reader a").filter(has_text="BTC 현물 ETF").first).to_be_visible()
+                        assert [path for path in fixture.calls if path.startswith("/api/news/coin/")] == ["/api/news/coin/BTCUSDT"]
                         article_list = page.get_by_role("list", name="BTC 뉴스 목록")
                         expect(article_list.locator(":scope > li")).to_have_count(5)
                         list_metrics = article_list.evaluate("""list => {
@@ -177,6 +191,47 @@ def main():
                     context.close()
 
             fixture = Fixture()
+            fixture.periodic = True
+            context, page = open_page(browser, origin, fixture, 375, "dark", errors)
+            article_list = page.get_by_role("list", name="BTC 뉴스 목록")
+            expect(article_list.locator(":scope > li")).to_have_count(5)
+            article_list.evaluate("el => { el.scrollTop = 80; }")
+            before = article_list.evaluate("el => el.scrollTop")
+            page.clock.run_for(3500)
+            expect(article_list).to_contain_text("갱신 2")
+            assert article_list.evaluate("el => el.scrollTop") == before
+            assert [path for path in fixture.calls if path.startswith("/api/news/coin/")] == ["/api/news/coin/BTCUSDT"]
+            checks.append("incremental-refresh-preserves-scroll-and-only-fetches-selected-coin")
+            context.close()
+
+            for width in (375, 1440):
+                fixture = Fixture()
+                fixture.periodic = True
+                fixture.fail_refresh = True
+                context, page = open_page(browser, origin, fixture, width, "dark", errors)
+                market = page.locator(".news-briefing-section.is-market")
+                coin = page.locator("#news-racer-mobile-reader") if width == 375 else page.locator('.news-map-tile[aria-label^="1위 BTC "]')
+                expect(market.get_by_text(article("시장")["title"], exact=True).first).to_be_visible()
+                expect(coin.get_by_text(article("BTCUSDT")["title"], exact=True).first).to_be_visible()
+                page.clock.run_for(3500)
+                retry_name = "뉴스 새로고침에 실패했어요. 다시 시도"
+                expect(coin.get_by_role("button", name=retry_name)).to_be_visible()
+                expect(market.get_by_role("button", name=retry_name)).to_be_visible()
+                expect(coin.get_by_text(article("BTCUSDT")["title"], exact=True).first).to_be_visible()
+                expect(market.get_by_text(article("시장")["title"], exact=True).first).to_be_visible()
+                expect(coin.get_by_text("뉴스를 불러오지 못했어요.", exact=True)).to_have_count(0)
+                expect(market.get_by_text("시장 뉴스를 불러오지 못했어요:", exact=False)).to_have_count(0)
+                assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+                coin.screenshot(path=str(OUTPUT / f"refresh-failure-keeps-news-{width}.png"), animations="disabled")
+                fixture.fail_refresh = False
+                coin.get_by_role("button", name=retry_name).click()
+                expect(coin.get_by_role("button", name=retry_name)).to_have_count(0)
+                market.get_by_role("button", name=retry_name).click()
+                expect(market.get_by_role("button", name=retry_name)).to_have_count(0)
+                checks.append(f"refresh-failure-retains-articles-and-retry-{width}")
+                context.close()
+
+            fixture = Fixture()
             fixture.hold_eth = True
             fixture.fail_xrp = True
             context, page = open_page(browser, origin, fixture, 375, "dark", errors)
@@ -198,6 +253,17 @@ def main():
             expect(reader.locator(".news-racer-reader-state.is-notice")).to_have_count(0)
             expect(reader.get_by_text("최근 DOGE 뉴스가 없어요.", exact=True)).to_have_count(0)
             checks.append("selected-news-loading-error-retry-empty-translation")
+            context.close()
+            fixture = Fixture()
+            fixture.periodic = True
+            context, page = open_page(browser, origin, fixture, 375, "dark", errors)
+            expect(page.locator(".news-racer-mobile-row").first).to_contain_text("70,001")
+            assert fixture.calls["/api/hot-coins"] == 1
+            page.clock.run_for(46_000)
+            expect(page.locator(".news-racer-mobile-row").first).to_contain_text("70,002")
+            expect(page.locator(".site-marquee")).to_contain_text("70,002")
+            assert fixture.calls["/api/hot-coins"] == 2, "page and footer must share one refreshed quote"
+            checks.append("page-and-footer-share-one-45s-quote-refresh")
             context.close()
             browser.close()
             assert not errors, errors

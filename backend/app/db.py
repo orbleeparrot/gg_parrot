@@ -845,6 +845,11 @@ def _migrate() -> None:
             "claim_token": "ALTER TABLE newstitletranslation ADD COLUMN claim_token TEXT DEFAULT ''",
             "claimed_ms": "ALTER TABLE newstitletranslation ADD COLUMN claimed_ms INTEGER DEFAULT 0",
         },
+        "newsarticle": {
+            # Legacy rows need one enrichment pass; subsequent writes explicitly
+            # set this flag from their current title/body completion state.
+            "enrichment_pending": "ALTER TABLE newsarticle ADD COLUMN enrichment_pending BOOLEAN NOT NULL DEFAULT TRUE",
+        },
         "dailychallenge": {
             "status": "ALTER TABLE dailychallenge ADD COLUMN status TEXT DEFAULT 'ready'",
             "claim_token": "ALTER TABLE dailychallenge ADD COLUMN claim_token TEXT DEFAULT ''",
@@ -886,10 +891,15 @@ def _migrate() -> None:
             "CREATE INDEX IF NOT EXISTS ix_newstitletranslation_claimed_ms "
             "ON newstitletranslation (claimed_ms)"
         )
+        conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_newsarticle_enrichment "
+            "ON newsarticle (enrichment_pending, last_seen_ms)"
+        )
         conn.commit()
 
 
 _PG_ADDED_COLUMNS = {
+    "newsarticle": {"enrichment_pending": "BOOLEAN NOT NULL DEFAULT TRUE"},
     "user": {"bio": "TEXT NOT NULL DEFAULT ''", "auth_version": "INTEGER NOT NULL DEFAULT 0", "is_deleted": "BOOLEAN NOT NULL DEFAULT FALSE"},
     "chatmessage": {"user_id": "INTEGER"},
     "dailychallenge": {
@@ -931,6 +941,7 @@ _PG_ADDED_COLUMNS = {
     },
 }
 _PG_INDEXES = {
+    "ix_newsarticle_enrichment": ("newsarticle", "enrichment_pending, last_seen_ms"),
     "ix_chatmessage_user_created_ms": ("chatmessage", "user_id, created_ms"),
     "ix_runsession_active_heartbeat": ("runsession", "status, last_heartbeat_at"),
     "ix_runsession_user_macro_id": ("runsession", "user_macro_id"),
@@ -953,6 +964,10 @@ _PG_BIGINT_COLUMNS = {
 _PG_PRIVATE_CACHE_TABLES = (
     "newstitletranslation", "communitypostsummary", "whaletradestate", "onchainholderstate",
     "chatmessage", "chatreadstate", "useravatar",
+    "newsarticlefeed", "newsarticle", "newsmaintenancelease", "publicnewslease",
+    "leaderboardsnapshotcontrol", "leaderboardsnapshotversion", "leaderboardsnapshotitem",
+    "leaderboardentrystats", "leaderboardchallengebot",
+    "dailyquestclaim", "runsessionevent",
 )
 _PG_MIGRATION_LOCK = 0x6767706172726F74  # Stable across web/worker processes and deployments.
 _PG_MIGRATION_ATTEMPTS = 3
@@ -1049,6 +1064,11 @@ def _migrate_pg() -> None:
 
 
 def init_db() -> None:
+    # Import additive read models before either SQLite or PostgreSQL inspects
+    # metadata. No data collection or schema work happens at module import.
+    from . import leaderboard_snapshot  # noqa: F401
+    from .agent_features.position_news import articles  # noqa: F401
+    from . import public_news  # noqa: F401
     # create_all never ALTERs a pre-existing table, so patch late-added columns on
     # both backends: SQLite via PRAGMA checks, Postgres via ADD COLUMN IF NOT EXISTS.
     if _is_sqlite():

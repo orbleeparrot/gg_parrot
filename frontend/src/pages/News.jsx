@@ -1,8 +1,8 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api.js";
 import useNewsBriefings from "../hooks/useNewsBriefings.js";
-import { newsCache } from "../lib/newsBriefings.js";
+import useHotCoins from "../hooks/useHotCoins.js";
 import { communityPostIdentity, communitySummaryPresentation, hasPendingTranslation, historicalNewsLabel, newsPublishedLabel, newsSourceLabel } from "../lib/newsBriefings.js";
 import CoinIcon from "../components/CoinIcon.jsx";
 import MarketCarousel from "../components/MarketCarousel.jsx";
@@ -14,8 +14,14 @@ import "./NewsMobile.css";
 import InfoTooltip from "../components/InfoTooltip.jsx";
 
 const COIN_NEWS_CONCURRENCY = 2;
-const HOT_COINS_CACHE_KEY = "hot-coins";
 const RACER_NEWS_ROTATE_MS = 5_000;
+const MOBILE_NEWS_QUERY = "(max-width: 767px), (max-width: 1099px) and (pointer: coarse)";
+const mobileNewsSnapshot = () => typeof window !== "undefined" && window.matchMedia(MOBILE_NEWS_QUERY).matches;
+const subscribeMobileNews = (notify) => {
+  const query = window.matchMedia(MOBILE_NEWS_QUERY);
+  query.addEventListener("change", notify);
+  return () => query.removeEventListener("change", notify);
+};
 
 function coinOf(symbol) {
   return (symbol || "").replace(/USDT$|BUSD$|USDC$/, "");
@@ -67,7 +73,12 @@ function BriefingSectionHeader({ id, title, description, count, countLabel, pend
   );
 }
 
-function MarketBriefing({ market, loading, error }) {
+function NewsRefreshRetry({ onRetry }) {
+  return <button type="button" className="news-refresh-retry" onClick={onRetry}
+    aria-label="뉴스 새로고침에 실패했어요. 다시 시도">새로고침 재시도</button>;
+}
+
+function MarketBriefing({ market, loading, error, onRetry }) {
   const translationPending = hasPendingTranslation(market);
   const readerItems = useMemo(
     () => (market?.items || []).map((item) => ({
@@ -93,7 +104,8 @@ function MarketBriefing({ market, loading, error }) {
       />
 
       {loading ? <Loading label="시장 브리핑을 준비하는 중…" /> : null}
-      {error ? <ErrorNote>시장 뉴스를 불러오지 못했어요: {error}</ErrorNote> : null}
+      {error && !readerItems.length ? <ErrorNote>시장 뉴스를 불러오지 못했어요: {error}</ErrorNote> : null}
+      {error && readerItems.length > 0 ? <NewsRefreshRetry onRetry={onRetry} /> : null}
 
       {market ? (
         <>
@@ -167,7 +179,7 @@ function TileNews({ base, newsState, tick, onRetry, symbol, lines }) {
   if (status === "queued" || status === "loading") {
     return <div className="news-map-news is-state">{base} 뉴스 준비 중</div>;
   }
-  if (status === "error") {
+  if (status === "error" && !items.length) {
     return (
       <div className="news-map-news is-state">
         뉴스를 불러오지 못했어요.
@@ -186,22 +198,26 @@ function TileNews({ base, newsState, tick, onRetry, symbol, lines }) {
   const excerptLines = summary?.status === "ready" && lines >= 4 ? lines - 2 : 0;
   return (
     <div className="news-map-news" style={{ "--tile-excerpt-lines": excerptLines, "--tile-title-lines": excerptLines > 0 ? 2 : lines }}>
-      <a
+      <div
         key={`${index}-${item.url || item.title}`}
         className="news-map-news-item"
-        href={item.url || undefined}
-        target="_blank"
-        rel="noreferrer noopener"
-        aria-label={`${base} 뉴스 ${index + 1}/${items.length}: ${item.title}`}
       >
-        <span className="news-map-news-title">{item.title}</span>
-        {excerptLines > 0 ? <span className="news-map-news-excerpt">{summary.text}</span> : null}
+        <a className="news-map-news-link"
+          href={item.url || undefined}
+          target="_blank"
+          rel="noreferrer noopener"
+          aria-label={`${base} 뉴스 ${index + 1}/${items.length}: ${item.title}`}
+        >
+          <span className="news-map-news-title">{item.title}</span>
+          {excerptLines > 0 ? <span className="news-map-news-excerpt">{summary.text}</span> : null}
+        </a>
         <span className="news-map-news-meta">
           <span className="news-map-news-source">{newsSourceLabel(item)}</span>
           {time ? <span className="news-map-news-time">{time}</span> : null}
-          <span className="news-map-news-count num" aria-hidden="true">{index + 1}/{items.length}</span>
+          {status === "error" ? <NewsRefreshRetry onRetry={() => onRetry(symbol)} />
+            : <span className="news-map-news-count num" aria-hidden="true">{index + 1}/{items.length}</span>}
         </span>
-      </a>
+      </div>
     </div>
   );
 }
@@ -269,8 +285,7 @@ function RacerTreemap({ coins, newsBySymbol, onRetry, tick }) {
 
 // Narrow screens use readable market rows; choosing a coin opens its full
 // headlines below the list without changing the desktop treemap's layout.
-function RacerMobileList({ coins, newsBySymbol, onRetry }) {
-  const [selectedSymbol, setSelectedSymbol] = useState(coins[0]?.symbol);
+function RacerMobileList({ coins, newsBySymbol, onRetry, selectedSymbol, onSelect }) {
   const reader = useRef(null);
   const selected = coins.find((coin) => coin.symbol === selectedSymbol) || coins[0];
   if (!selected) return null;
@@ -281,7 +296,7 @@ function RacerMobileList({ coins, newsBySymbol, onRetry }) {
   const pending = hasPendingTranslation(newsState?.data);
 
   function choose(symbol) {
-    setSelectedSymbol(symbol);
+    onSelect(symbol);
     window.requestAnimationFrame(() => reader.current?.scrollIntoView({
       block: "start",
       behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth",
@@ -316,7 +331,8 @@ function RacerMobileList({ coins, newsBySymbol, onRetry }) {
           <Link to={`/builder?symbol=${encodeURIComponent(selected.symbol)}`}>매크로 만들기</Link>
         </header>
         {status === "queued" || status === "loading" ? <p className="news-racer-mobile-state" role="status">{base} 뉴스를 불러오는 중…</p> : null}
-        {status === "error" ? <div className="news-racer-mobile-state is-error" role="alert"><p>뉴스를 불러오지 못했어요.</p><button type="button" className="btn btn-s btn-secondary" onClick={() => onRetry(selected.symbol)}>다시 시도</button></div> : null}
+        {status === "error" && !items.length ? <div className="news-racer-mobile-state is-error" role="alert"><p>뉴스를 불러오지 못했어요.</p><button type="button" className="btn btn-s btn-secondary" onClick={() => onRetry(selected.symbol)}>다시 시도</button></div> : null}
+        {status === "error" && items.length > 0 ? <NewsRefreshRetry onRetry={() => onRetry(selected.symbol)} /> : null}
         {status === "success" && !items.length && !pending ? <p className="news-racer-mobile-state">최근 {base} 뉴스가 없어요.</p> : null}
         {items.length > 0 ? <MobileArticleList key={selected.symbol} base={base} items={items} /> : null}
       </section>
@@ -330,7 +346,6 @@ function MobileArticleList({ base, items }) {
   useLayoutEffect(() => {
     const list = listRef.current;
     if (!list) return undefined;
-    list.scrollTop = 0;
 
     const measure = () => {
       const visibleRows = [...list.children].slice(0, 3);
@@ -370,7 +385,10 @@ function MobileArticleList({ base, items }) {
 }
 
 function RacerBriefing({ coins, loading, error }) {
-  const { newsBySymbol, retry } = useCoinNewsBriefings(coins);
+  const mobile = useSyncExternalStore(subscribeMobileNews, mobileNewsSnapshot, () => false);
+  const [selectedSymbol, setSelectedSymbol] = useState(null);
+  const selected = coins.find((coin) => coin.symbol === selectedSymbol) || coins[0];
+  const { newsBySymbol, retry } = useCoinNewsBriefings(mobile ? (selected ? [selected] : []) : coins);
   const [tick, setTick] = useState(0);
   const termTexts = coins.flatMap((coin) => (
     newsBySymbol[coin.symbol]?.data?.items || []
@@ -378,7 +396,7 @@ function RacerBriefing({ coins, loading, error }) {
 
   // 한 박자 — 모든 타일의 헤드라인이 같은 순간에 다음 기사로 넘어간다. 탭이 숨겨지면 멈춘다.
   useEffect(() => {
-    if (!coins.length) return undefined;
+    if (!coins.length || mobile) return undefined;
     let timer = 0;
     const start = () => {
       window.clearInterval(timer);
@@ -394,7 +412,7 @@ function RacerBriefing({ coins, loading, error }) {
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [coins.length]);
+  }, [coins.length, mobile]);
 
   return (
     <section className="news-briefing-section is-racers" aria-labelledby="racer-briefing-title">
@@ -417,7 +435,8 @@ function RacerBriefing({ coins, loading, error }) {
       {coins.length > 0 ? (
         <>
           <RacerTreemap coins={coins} newsBySymbol={newsBySymbol} onRetry={retry} tick={tick} />
-          <RacerMobileList coins={coins} newsBySymbol={newsBySymbol} onRetry={retry} />
+          <RacerMobileList coins={coins} newsBySymbol={newsBySymbol} onRetry={retry}
+            selectedSymbol={selected?.symbol} onSelect={setSelectedSymbol} />
           <TermChips texts={termTexts} />
         </>
       ) : null}
@@ -427,57 +446,15 @@ function RacerBriefing({ coins, loading, error }) {
 
 export default function News() {
   // 시장 뉴스는 하루 단위 자료라 10분 안에 돌아오면 다시 받지 않는다.
-  const { states: marketStates } = useNewsBriefings(
+  const { states: marketStates, retry: retryMarket } = useNewsBriefings(
     ["market"], (_key, signal) => api.newsMarket({ signal }), 1, { freshMs: 10 * 60 * 1000 },
   );
   const marketState = marketStates.market;
-  // 기사 사진(og:image)은 서버가 배경에서 채운다 — 아직이면 몇 번 더 조용히 받아 온다.
-  const [marketRefresh, setMarketRefresh] = useState({ data: null, attempts: 0 });
-  const market = marketRefresh.data || marketState?.data || null;
-  const imagesPending = market?.image_status === "pending" && marketRefresh.attempts < 3;
-  useEffect(() => {
-    if (!imagesPending) return undefined;
-    let alive = true;
-    const timer = window.setTimeout(() => {
-      api.newsMarket().then((next) => {
-        if (alive) setMarketRefresh((current) => ({ data: next, attempts: current.attempts + 1 }));
-      }).catch(() => {
-        if (alive) setMarketRefresh((current) => ({ ...current, attempts: current.attempts + 1 }));
-      });
-    }, 7_000);
-    return () => { alive = false; window.clearTimeout(timer); };
-  }, [imagesPending, marketRefresh.attempts]);
+  // Headlines, overview and image updates share one ordered response/cache.
+  const market = marketState?.data || null;
   const marketLoading = !marketState || ["queued", "loading"].includes(marketState.status);
   const marketError = marketState?.error || "";
-  // 경주마 목록도 캐시로 먼저 그린다 — 돌아온 순간 트리맵 자리가 잡히고, 최신 순위는 조용히 갱신된다.
-  const [coins, setCoins] = useState(() => newsCache.get(HOT_COINS_CACHE_KEY)?.data?.coins || []);
-  const [coinsLoading, setCoinsLoading] = useState(() => !newsCache.get(HOT_COINS_CACHE_KEY));
-  const [coinsError, setCoinsError] = useState("");
-
-  useEffect(() => {
-    let alive = true;
-
-    const controller = new AbortController();
-
-    api.hotCoins(10, { signal: controller.signal })
-      .then((response) => {
-        const next = response.coins || [];
-        newsCache.set(HOT_COINS_CACHE_KEY, { coins: next });
-        if (alive) setCoins(next);
-      })
-      .catch((reason) => {
-        // 캐시로 이미 그려져 있으면 갱신 실패를 굳이 알리지 않는다.
-        if (alive && reason?.name !== "AbortError" && !newsCache.get(HOT_COINS_CACHE_KEY)) setCoinsError(errorMessage(reason));
-      })
-      .finally(() => {
-        if (alive) setCoinsLoading(false);
-      });
-
-    return () => {
-      alive = false;
-      controller.abort();
-    };
-  }, []);
+  const { coins, loading: coinsLoading, error: coinsError } = useHotCoins();
 
   const summary = market?.overview ? splitSummary(market.overview) : null;
 
@@ -509,7 +486,7 @@ export default function News() {
           : "경주마 선정과 뉴스는 참고용이며 투자 권유가 아니에요."}
       </p>
       </div>
-      <MarketBriefing market={market} loading={marketLoading} error={marketError} />
+      <MarketBriefing market={market} loading={marketLoading} error={marketError} onRetry={() => retryMarket("market")} />
       </div>
 
       <div className="news-briefing-grid">

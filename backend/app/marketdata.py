@@ -24,10 +24,16 @@ def fetch_klines_for_macro(macro: Macro, start_ms: int, end_ms: int) -> tuple[pd
             macro.symbol, start_ms, end_ms,
             interval=macro.candle_interval, market=market, allow_synthetic=False,
         )
-    except NoSpotDataError:
-        if macro.market == "auto" and market == "futures":
+    except NoSpotDataError as first:
+        if macro.market != "auto":
+            raise
+        # "auto" may pick the wrong venue for a coin listed on only one of them
+        # (perp-only like 1000PEPEUSDT, or spot-only). Try the other one before giving up.
+        other = "spot" if market == "futures" else "futures"
+        try:
             return get_klines(
                 macro.symbol, start_ms, end_ms,
-                interval=macro.candle_interval, market="spot", allow_synthetic=False,
+                interval=macro.candle_interval, market=other, allow_synthetic=False,
             )
-        raise
+        except NoSpotDataError:
+            raise first

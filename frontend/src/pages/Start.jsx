@@ -19,7 +19,7 @@ import { RULE_TYPES, PERIOD_PRESETS, buildMacro, defaultForm, macroToForm, valid
 import { GUIDE_CHAPTERS as CHAPTERS } from "../lib/guideFlow.js";
 import { api } from "../api.js";
 import { getUserId } from "../lib/user.js";
-import { isLoggedIn } from "../lib/auth.js";
+import { isLoggedIn, useAuth, useAccountGuard } from "../lib/auth.js";
 import {
   completeJourney,
   peekRegistrationDraft,
@@ -292,6 +292,12 @@ function HeroTitle({ value }) {
 }
 
 export default function Start({ onNestedDialogChange }) {
+  const { accountVersion } = useAuth();
+  return <AccountStart key={accountVersion} onNestedDialogChange={onNestedDialogChange} />;
+}
+
+function AccountStart({ onNestedDialogChange }) {
+  const isCurrentAccount = useAccountGuard();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const searchKey = searchParams.toString();
@@ -327,8 +333,8 @@ export default function Start({ onNestedDialogChange }) {
       return { ...current, requestId, loading: showLoading ? true : current.loading };
     });
 
-    api.leaderboard(getUserId()).then((data) => {
-      if (!mountedRef.current) return;
+    api.leaderboardAll(getUserId()).then((data) => {
+      if (!mountedRef.current || !isCurrentAccount()) return;
       const fetchedItems = Array.isArray(data.items) ? data.items : [];
       const synced = fetchedItems.some((item) => item.id === entry.id);
       const items = synced ? fetchedItems : [entry, ...fetchedItems];
@@ -344,13 +350,13 @@ export default function Start({ onNestedDialogChange }) {
         };
       });
     }).catch(() => {
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || !isCurrentAccount()) return;
       setRegisteredBoardState((current) => {
         if (current?.key !== key || current?.mode !== mode || current.requestId !== requestId) return current;
         return { ...current, loading: false, error: true };
       });
     });
-  }, []);
+  }, [isCurrentAccount]);
 
   const screens = useMemo(
     () => createScreens(form),
@@ -380,6 +386,7 @@ export default function Start({ onNestedDialogChange }) {
   const backtest = useHeroBacktest(currentKey);
   const paperMacro = backtest.resultIsFresh ? backtest.testedMacro : macro;
   const paperController = usePaperSession({
+    accountGuard: isCurrentAccount,
     macro: paperMacro,
     valErr: backtest.resultIsFresh ? "" : "먼저 현재 설정으로 백테스트를 완료해 주세요.",
     stopOnUnmount: true,
@@ -407,8 +414,8 @@ export default function Start({ onNestedDialogChange }) {
   ));
 
   useEffect(() => {
-    saveHeroDraft(macro);
-  }, [macro]);
+    if (isCurrentAccount()) saveHeroDraft(macro);
+  }, [isCurrentAccount, macro]);
 
   useEffect(() => {
     setSymbolSearchError("");
@@ -495,7 +502,7 @@ export default function Start({ onNestedDialogChange }) {
     paperController.setMode(restoredMode);
 
     backtest.run(restored).then((ok) => {
-      if (!mountedRef.current || requestId !== resumeRequestIdRef.current) return;
+      if (!mountedRef.current || !isCurrentAccount() || requestId !== resumeRequestIdRef.current) return;
       const contextIsCurrent =
         currentKeyRef.current === restoredKey &&
         resumePendingKeyRef.current === restoredKey &&
@@ -570,6 +577,7 @@ export default function Start({ onNestedDialogChange }) {
   // 페이퍼까지 마친 매크로를 내 라이브러리에 저장하고, 리더보드 흐름과 동일하게
   // 실행 마법사의 'API 키 준비'(step=2)로 이어 붙인다. 저장은 로그인이 필요하다.
   async function handoffToRunner() {
+    if (!isCurrentAccount()) return;
     const runnable = backtest.testedMacro || macro;
     const symbol = String(runnable?.symbol || "").split(",")[0].trim().toUpperCase();
     if (!isLoggedIn()) {
@@ -579,21 +587,23 @@ export default function Start({ onNestedDialogChange }) {
     }
     try {
       const saved = await api.saveMyMacro(runnable, `${symbol || "BTCUSDT"} 매크로`);
+      if (!isCurrentAccount()) return;
       completeJourney();
       // flow=build → 실행 마법사가 '매크로 빌드~연결·실행' 8단계 진행바로 이어서 표시한다.
       navigate("/?run=1&step=2&flow=build", { state: { selectedMacroId: saved.item.id } });
     } catch (reason) {
+      if (!isCurrentAccount()) return;
       setResumeError(`매크로를 저장하지 못했어요: ${String(reason.message || reason)}`);
     }
   }
 
   async function advance() {
-    if (validationError) return;
+    if (validationError || !isCurrentAccount()) return;
 
     if (screen.kind === "paper") {
       if (!paperReady) return;
       const stopped = await paperController.stop();
-      if (!stopped) return;
+      if (!stopped || !isCurrentAccount()) return;
       await handoffToRunner();
       return;
     }
@@ -606,17 +616,19 @@ export default function Start({ onNestedDialogChange }) {
       setSymbolSearchError("");
       try {
         const data = await api.candles(symbol, form.candle_interval, 300);
+        if (!isCurrentAccount()) return;
         if (!Array.isArray(data.candles) || data.candles.length === 0) throw new Error("NO_CANDLES");
         setForm((current) => ({ ...current, symbol }));
         goTo(nextScreen);
       } catch (reason) {
+        if (!isCurrentAccount()) return;
         setSymbolSearchError(
           reason?.status === 422
             ? "바이낸스 현물에서 이 종목을 찾지 못했어요. BTC 또는 BTCUSDT처럼 다시 검색해 주세요."
             : "지금 시세 서버에 연결하지 못했어요. 잠시 후 다시 확인해 주세요.",
         );
       } finally {
-        setSymbolSearchBusy(false);
+        if (isCurrentAccount()) setSymbolSearchBusy(false);
       }
       return;
     }
@@ -624,7 +636,7 @@ export default function Start({ onNestedDialogChange }) {
     if (screen.kind === "backtest" && !backtest.resultIsFresh) {
       const runKey = currentKey;
       const ok = await backtest.run(form);
-      if (!ok || currentKeyRef.current !== runKey || screenKindRef.current !== "backtest") return;
+      if (!isCurrentAccount() || !ok || currentKeyRef.current !== runKey || screenKindRef.current !== "backtest") return;
       setResumeError("");
       if (resumePendingKeyRef.current === runKey) {
         takeRegistrationDraft();
@@ -644,7 +656,7 @@ export default function Start({ onNestedDialogChange }) {
     if (backtest.busy || resumePhase === "restoring") return;
     if (screen.kind === "paper" && paperController.running) {
       const stopped = await paperController.stop();
-      if (!stopped) return;
+      if (!stopped || !isCurrentAccount()) return;
     }
     goTo(previousScreen);
   }
@@ -656,6 +668,7 @@ export default function Start({ onNestedDialogChange }) {
   }
 
   function finishRegistration(entry) {
+    if (!isCurrentAccount()) return;
     if (!entry?.id) {
       setResumeError("등록은 처리됐지만 결과 항목을 확인하지 못했어요. 잠시 후 리더보드에서 확인해 주세요.");
       return;

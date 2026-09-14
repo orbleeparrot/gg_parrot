@@ -73,8 +73,12 @@ def sign(macro: Macro) -> dict:
 def verify(macro: Macro, sig: Optional[dict]) -> bool:
     if not isinstance(sig, dict):
         return False
-    given = str(sig.get("hmac") or "")
-    if not given or sig.get("v") != SIG_VERSION:
+    given = sig.get("hmac")
+    # compare_digest accepts ASCII strings only. A locally edited file can
+    # contain any JSON value; classify malformed signatures without a 500.
+    if (not isinstance(given, str) or len(given) != 64
+            or any(char not in "0123456789abcdef" for char in given)
+            or sig.get("v") != SIG_VERSION):
         return False
     return hmac.compare_digest(given, _mac(macro))
 

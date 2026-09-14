@@ -522,7 +522,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
 
   const loadLeaderboard = useCallback(async (signal) => {
     try {
-      const data = await api.leaderboard(getUserId(), { signal });
+      const data = await api.leaderboardAll(getUserId(), { signal });
       setLeaderboardItems(Array.isArray(data?.items) ? data.items : []);
       setLeaderboardError("");
     } catch (error) {

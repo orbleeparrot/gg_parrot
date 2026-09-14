@@ -1,0 +1,80 @@
+{
+  "scope": "local precomputed public APIs and current production static files only",
+  "records": [
+    {
+      "url": "http://127.0.0.1:8000/api/news/market",
+      "method": "GET",
+      "status": 200,
+      "headers": {
+        "vary": "Accept-Encoding",
+        "server-timing": "app;dur=969.94, db;dur=962.16;desc=\"3 calls\", sql;dur=575.89;desc=\"2 calls\""
+      }
+    },
+    {
+      "url": "http://127.0.0.1:8000/api/news/coin/BTCUSDT",
+      "method": "GET",
+      "status": 200,
+      "headers": {
+        "vary": "Accept-Encoding",
+        "server-timing": "app;dur=1122.36, db;dur=1111.06;desc=\"3 calls\", sql;dur=739.72;desc=\"2 calls\""
+      }
+    },
+    {
+      "url": "http://127.0.0.1:8000/api/leaderboard",
+      "method": "GET",
+      "status": 200,
+      "headers": {
+        "vary": "Accept-Encoding",
+        "server-timing": "app;dur=1828.77, db;dur=1819.63;desc=\"2 calls\", sql;dur=602.07;desc=\"2 calls\""
+      }
+    },
+    {
+      "url": "https://gg-parrot.vercel.app/",
+      "method": "GET",
+      "status": 200,
+      "headers": {
+        "cache-control": "public, max-age=0, must-revalidate",
+        "etag": "\"a8eac79d73d9ca216a0b5830de1667da\"",
+        "last-modified": "Mon, 14 Sep 2026 06:32:23 GMT",
+        "age": "864",
+        "x-vercel-cache": "HIT"
+      }
+    },
+    {
+      "url": "https://gg-parrot.vercel.app/brand/navigation/ggparrot-nav-agent.svg",
+      "method": "HEAD",
+      "status": 200,
+      "headers": {
+        "cache-control": "public, max-age=0, must-revalidate",
+        "etag": "\"eb75b61af4f4915d6d42b482a5511be3\"",
+        "last-modified": "Mon, 14 Sep 2026 06:44:15 GMT",
+        "age": "151",
+        "x-vercel-cache": "HIT"
+      }
+    },
+    {
+      "url": "https://gg-parrot.vercel.app/favicon/manifest.json",
+      "method": "HEAD",
+      "status": 200,
+      "headers": {
+        "cache-control": "public, max-age=0, must-revalidate",
+        "etag": "\"c013f64fa1d9784e09db31373d9130ee\"",
+        "last-modified": "Mon, 14 Sep 2026 06:35:22 GMT",
+        "age": "685",
+        "x-vercel-cache": "HIT"
+      }
+    },
+    {
+      "url": "https://gg-parrot.vercel.app/assets/index-B0LL36tW.js",
+      "method": "HEAD",
+      "status": 200,
+      "headers": {
+        "cache-control": "public, max-age=0, must-revalidate",
+        "etag": "\"2006b6483c6895bf96f4417974086121\"",
+        "last-modified": "Mon, 14 Sep 2026 06:15:03 GMT",
+        "age": "1905",
+        "x-vercel-cache": "HIT"
+      }
+    }
+  ]
+}

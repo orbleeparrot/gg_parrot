@@ -1,22 +1,9 @@
-"""Daily (KST) paper-return leaderboard.
+"""Daily KST leaderboard preparation and marketplace mutations.
 
-Users register a macro; it starts a paper session (reusing the paper engine) and
-appears on a board sorted by likes. The board is a *today-only* view: entries are
-filtered to the current KST calendar day, so at KST 00:00 the board naturally
-resets without any scheduler (spec §3.4, "조회 시 오늘 것만 필터").
-
-The reset is not total: the previous board day's top ``KEEP_TOP_N`` entries are
-carried into today so a winner has to defend its place. A carried entry keeps its
-ORIGINAL paper session — the competition is the macro's own return measured from
-the moment it was registered, so nothing about it is reset or restarted. If the
-macro's own rules ended it (target hit, stop-loss, max holding time), that final
-return is the number it defends with; ending on purpose is part of the strategy.
-Carrying is lazy and idempotent like the daily AI challenge — the first
-``/api/leaderboard`` request of a KST day runs it (see
-:func:`ensure_today_carryover`).
-
-KST is a fixed +09:00 offset (no DST), so we use ``timezone(timedelta(hours=9))``
-instead of ``zoneinfo`` to avoid a tz-database dependency on Windows.
+Background work materializes ranked, public snapshots from durable paper-session
+checkpoints. Public readers apply current viewer permissions to bounded pages of
+those snapshots. Daily carryover preserves each winner's original paper session,
+registration time and cumulative return in one retry-safe transaction.
 """
 from __future__ import annotations
 
@@ -28,6 +15,7 @@ from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+from sqlalchemy import func, update
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 
@@ -38,6 +26,7 @@ from .db import (
     LeaderboardEntry,
     LeaderboardVote,
     MacroUnlock,
+    PaperSession,
     User,
     get_session,
 )
@@ -152,6 +141,8 @@ def create_entry(
         db.add(row)
         db.commit()
         db.refresh(row)
+    from .leaderboard_snapshot import request_refresh
+    request_refresh()
     # The creator sees their own new entry unlocked.
     return _entry_view(row, {}, viewer_id=user_id, viewer_user_id=owner_user_id)
 
@@ -191,6 +182,8 @@ def update_entry(
         db.refresh(row)
         viewer = row.user_id
         owner = row.owner_user_id
+    from .leaderboard_snapshot import request_refresh
+    request_refresh()
     return _entry_view(row, {}, viewer_id=viewer, viewer_user_id=owner)
 
 
@@ -204,7 +197,9 @@ def delete_entry(entry_id: int) -> Optional[int]:
         sid = row.paper_session_id
         db.delete(row)
         db.commit()
-        return sid
+    from .leaderboard_snapshot import request_refresh
+    request_refresh()
+    return sid
 
 
 def _vote_tallies(db, entry_ids: list[int]) -> dict[int, dict]:
@@ -348,40 +343,41 @@ def _crown_owner_ids(db, owner_ids: list[int]) -> frozenset:
 
 
 def _compute_crown_owner_ids(db, owners: list[int]) -> frozenset:
-    """Owners whose ALL-TIME sales and cumulative likes both clear the crown bar."""
-    # Every entry each owner has ever posted (crown is a lifetime reputation).
-    entries = db.exec(
-        select(LeaderboardEntry.id, LeaderboardEntry.owner_user_id).where(
-            LeaderboardEntry.owner_user_id.in_(owners)
-        )
-    ).all()
-    entry_owner = {eid: oid for eid, oid in entries}
-    all_entry_ids = list(entry_owner.keys())
-    if not all_entry_ids:
-        return frozenset()
-    sales = {o: 0 for o in owners}
-    for eid in db.exec(select(MacroUnlock.entry_id).where(MacroUnlock.entry_id.in_(all_entry_ids))):
-        owner = entry_owner.get(eid)
-        if owner is not None:
-            sales[owner] += 1
-    likes = {o: 0 for o in owners}
-    for v in db.exec(select(LeaderboardVote).where(LeaderboardVote.entry_id.in_(all_entry_ids))):
-        if v.value > 0:
-            owner = entry_owner.get(v.entry_id)
-            if owner is not None:
-                likes[owner] += 1
-    return frozenset(
-        o for o in owners
-        if sales[o] >= CROWN_MIN_SALES and likes[o] >= CROWN_MIN_LIKES
-    )
+    """Aggregate lifetime reputation in SQL during background preparation."""
+    sales = dict(db.exec(select(LeaderboardEntry.owner_user_id, func.count())
+        .join(MacroUnlock, MacroUnlock.entry_id == LeaderboardEntry.id)
+        .where(LeaderboardEntry.owner_user_id.in_(owners))
+        .group_by(LeaderboardEntry.owner_user_id)).all())
+    likes = dict(db.exec(select(LeaderboardEntry.owner_user_id, func.count())
+        .join(LeaderboardVote, LeaderboardVote.entry_id == LeaderboardEntry.id)
+        .where(LeaderboardEntry.owner_user_id.in_(owners), LeaderboardVote.value > 0)
+        .group_by(LeaderboardEntry.owner_user_id)).all())
+    return frozenset(owner for owner in owners
+                     if sales.get(owner, 0) >= CROWN_MIN_SALES and likes.get(owner, 0) >= CROWN_MIN_LIKES)
 
 
-def list_entries(viewer_id: str = "", viewer_user_id: Optional[int] = None, db=None) -> dict:
-    """Today's (KST) entries, sorted by likes-score then live return.
+def list_entries(viewer_id: str = "", viewer_user_id: Optional[int] = None, db=None,
+                 *, page: int = 1, page_size: int = 50, snapshot_id: str = "",
+                 entry_id: Optional[int] = None) -> dict:
+    """Read a completed, bounded snapshot and apply current viewer permissions."""
+    from .leaderboard_snapshot import read_board
+    return read_board(viewer_id, viewer_user_id, db=db, page=page,
+                      page_size=page_size, snapshot_id=snapshot_id, entry_id=entry_id)
 
-    ``viewer_user_id`` (the logged-in account) drives per-viewer unlock state and
-    ownership; ``viewer_id`` (anonymous localStorage id) still drives votes.
-    """
+
+def _durable_statuses(db, ids: list[int]) -> dict[int, dict]:
+    """Background rankings use the same durable checkpoints across web workers."""
+    if not ids:
+        return {}
+    return {sid: {"current_return": ret, "current_equity": equity, "status": status, "mode": mode}
+            for sid, ret, equity, status, mode in db.exec(select(
+                PaperSession.id, PaperSession.current_return, PaperSession.current_equity,
+                PaperSession.status, PaperSession.mode,
+            ).where(PaperSession.id.in_(ids))).all()}
+
+
+def compute_entries(viewer_id: str = "", viewer_user_id: Optional[int] = None, db=None) -> dict:
+    """Background-only ranking from today's entries and durable paper returns."""
     start_ms = today_start_ms()
     session_scope = nullcontext(db) if db is not None else get_session()
     with session_scope as db:
@@ -391,10 +387,10 @@ def list_entries(viewer_id: str = "", viewer_user_id: Optional[int] = None, db=N
         entry_ids = [r.id for r in rows]
         tallies = _vote_tallies(db, entry_ids)
         unlocked_ids = _unlocked_ids_for(db, viewer_user_id, entry_ids)
-        crown_ids = _crown_owner_ids(db, [r.owner_user_id for r in rows])
-        paper_statuses = paper_mod.get_statuses(
-            [r.paper_session_id for r in rows if r.paper_session_id is not None],
-            db=db,
+        owners = list({r.owner_user_id for r in rows if r.owner_user_id is not None})
+        crown_ids = _compute_crown_owner_ids(db, owners) if owners else frozenset()
+        paper_statuses = _durable_statuses(
+            db, [r.paper_session_id for r in rows if r.paper_session_id is not None]
         )
 
     items = [
@@ -440,44 +436,7 @@ _carryover_lock = asyncio.Lock()
 _carryover_done_date: Optional[str] = None
 
 
-def _claim_carryover(date_kst: str) -> bool:
-    """Insert the day's marker row first, so only one caller does the work.
-
-    Claim-before-work (not after): if the work half-fails we must not run again
-    on the same day — the already-moved entries would no longer be in the
-    previous day's window, so a rerun would carry the *next* three as well.
-    """
-    with get_session() as db:
-        exists = db.exec(
-            select(LeaderboardCarryover).where(LeaderboardCarryover.date_kst == date_kst)
-        ).first()
-        if exists is not None:
-            return False
-        db.add(LeaderboardCarryover(
-            date_kst=date_kst, carried=0,
-            created_at=_now_utc().strftime("%Y-%m-%dT%H:%M:%SZ"),
-        ))
-        try:
-            db.commit()
-        except IntegrityError:
-            db.rollback()  # another worker claimed the same day
-            return False
-    return True
-
-
-def _record_carried(date_kst: str, carried: int) -> None:
-    with get_session() as db:
-        row = db.exec(
-            select(LeaderboardCarryover).where(LeaderboardCarryover.date_kst == date_kst)
-        ).first()
-        if row is None:
-            return
-        row.carried = carried
-        db.add(row)
-        db.commit()
-
-
-def _carry_previous_day_top() -> int:
+def _carry_previous_day_top(db=None) -> int:
     """Move the previous board day's top-N onto today's board. Returns how many.
 
     Only the *board day* moves. ``paper_session_id`` is untouched on purpose: the
@@ -488,14 +447,15 @@ def _carry_previous_day_top() -> int:
     """
     today_ms = today_start_ms()
     floor_ms = today_ms - CARRYOVER_LOOKBACK_DAYS * DAY_MS
-    with get_session() as db:
+    owned = db is None
+    with get_session() if owned else nullcontext(db) as db:
         last = db.exec(
             select(LeaderboardEntry)
             .where(
                 LeaderboardEntry.created_ms < today_ms,
                 LeaderboardEntry.created_ms >= floor_ms,
             )
-            .order_by(LeaderboardEntry.created_ms.desc())
+            .order_by(LeaderboardEntry.created_ms.desc()).limit(1)
         ).first()
         if last is None:
             return 0  # 되돌아볼 범위에 보드가 없다 — 이월할 것도 없다
@@ -506,9 +466,7 @@ def _carry_previous_day_top() -> int:
                 LeaderboardEntry.created_ms < day_start + DAY_MS,
             )
         ).all()
-        statuses = paper_mod.get_statuses(
-            [r.paper_session_id for r in rows if r.paper_session_id is not None], db=db
-        )
+        statuses = _durable_statuses(db, [r.paper_session_id for r in rows if r.paper_session_id is not None])
         ranked = [
             (r, _live_return(r.paper_session_id, statuses.get(r.paper_session_id))[0])
             for r in rows
@@ -523,17 +481,41 @@ def _carry_previous_day_top() -> int:
             row.created_ms = today_ms  # 보드 날짜만 오늘로
             db.add(row)
             carried += 1
-        db.commit()
+        if owned:
+            db.commit()
     return carried
 
 
-async def ensure_today_carryover() -> int:
-    """Carry the previous board day's top-N into today. Lazy, once per KST day.
+def _perform_carryover(date_kst: str) -> int:
+    """Claim, move entries and mark completion in one rollback-safe transaction."""
+    with get_session() as db:
+        if db.exec(select(LeaderboardCarryover).where(
+            LeaderboardCarryover.date_kst == date_kst)).first() is not None:
+            return 0
+        marker = LeaderboardCarryover(date_kst=date_kst, carried=0,
+            created_at=_now_utc().strftime("%Y-%m-%dT%H:%M:%SZ"))
+        db.add(marker)
+        try:
+            db.flush()  # unique date serializes competing workers until commit
+        except IntegrityError:
+            db.rollback()
+            if db.exec(select(LeaderboardCarryover).where(
+                LeaderboardCarryover.date_kst == date_kst)).first() is not None:
+                return 0
+            raise
+        if _today_kst() != date_kst:
+            raise RuntimeError("leaderboard day changed during carryover")
+        carried = _carry_previous_day_top(db=db)
+        if _today_kst() != date_kst:
+            raise RuntimeError("leaderboard day changed during carryover")
+        marker.carried = carried
+        db.add(marker)
+        db.commit()
+        return carried
 
-    Mirrors the daily AI challenge: the first request of the day does the work,
-    guarded by an in-process lock and a unique ``LeaderboardCarryover`` row, so
-    no scheduler is needed. Returns how many entries survived.
-    """
+
+async def ensure_today_carryover() -> int:
+    """Background-only daily rollover; failed work leaves no success marker."""
     global _carryover_done_date
     today = _today_kst()
     if _carryover_done_date == today:
@@ -541,39 +523,41 @@ async def ensure_today_carryover() -> int:
     async with _carryover_lock:
         if _carryover_done_date == today:
             return 0
-        if not _claim_carryover(today):
-            _carryover_done_date = today
-            return 0
-        carried = await asyncio.to_thread(_carry_previous_day_top)
-        await asyncio.to_thread(_record_carried, today, carried)
+        carried = await asyncio.to_thread(_perform_carryover, today)
         _carryover_done_date = today
         return carried
 
 
 def vote(entry_id: int, user_id: str, value: int) -> dict:
-    """Set/toggle a user's vote (+1/-1). Re-voting the same value cancels it."""
+    """Serialize one entry's vote toggle and update durable counters atomically."""
+    from .leaderboard_snapshot import LeaderboardEntryStats, ensure_stats
     value = 1 if value > 0 else -1
     with get_session() as db:
-        existing = db.exec(
-            select(LeaderboardVote).where(
-                LeaderboardVote.entry_id == entry_id, LeaderboardVote.user_id == user_id
-            )
-        ).first()
+        # A harmless write locks this entry on both PostgreSQL and SQLite.
+        locked = db.exec(update(LeaderboardEntry).where(LeaderboardEntry.id == entry_id)
+                         .values(id=LeaderboardEntry.id))
+        if locked.rowcount != 1:
+            raise UnlockError("엔트리를 찾을 수 없어요.", status=404)
+        ensure_stats(db, [entry_id])
+        stats = db.get(LeaderboardEntryStats, entry_id)
+        existing = db.exec(select(LeaderboardVote).where(
+            LeaderboardVote.entry_id == entry_id, LeaderboardVote.user_id == user_id)).first()
+        before = existing.value if existing else 0
+        after = 0 if before == value else value
         if existing is None:
-            db.add(LeaderboardVote(entry_id=entry_id, user_id=user_id, value=value))
-        elif existing.value == value:
-            db.delete(existing)  # toggle off
+            db.add(LeaderboardVote(entry_id=entry_id, user_id=user_id, value=after))
+        elif after == 0:
+            db.delete(existing)
         else:
-            existing.value = value
+            existing.value = after
             db.add(existing)
+        stats.likes += int(after > 0) - int(before > 0)
+        stats.dislikes += int(after < 0) - int(before < 0)
+        db.add(stats)
         db.commit()
-        tally = _vote_tallies(db, [entry_id])[entry_id]
-    return {
-        "entry_id": entry_id,
-        "likes": tally["likes"],
-        "dislikes": tally["dislikes"],
-        "my_vote": tally["by_user"].get(user_id, 0),
-    }
+        db.refresh(stats)
+        return {"entry_id": entry_id, "likes": stats.likes, "dislikes": stats.dislikes,
+                "my_vote": after}
 
 
 def unlock_entry(viewer: User, entry_id: int) -> dict:

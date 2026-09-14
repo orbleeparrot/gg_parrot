@@ -52,6 +52,7 @@ class Fixtures:
         self.fail = False
         self.fail_reads = False
         self.get_count = 0
+        self.get_queries = []
         self.post_bodies = []
         self.read_bodies = []
         self.unexpected_requests = []
@@ -98,7 +99,11 @@ class Fixtures:
                 route.fulfill(status=503, json={"detail": "채팅을 불러오지 못했어요."})
                 return
             query = parse_qs(parsed.query)
+            self.get_queries.append(query)
             before = int(query["before_id"][0]) if "before_id" in query else None
+            after = int(query["after_id"][0]) if "after_id" in query else None
+            metadata = query.get("metadata_only") == ["true"]
+            ids = [int(value) for value in query["message_ids"][0].split(",")] if "message_ids" in query else None
             if user_id is not None and self.seen.get(user_id) is None:
                 self.seen[user_id] = max([item["id"] for item in self.items] + [0])
             server_cursor = self.seen.get(user_id)
@@ -106,13 +111,21 @@ class Fixtures:
             if "seen_id" in query:
                 cursor = max(cursor or 0, int(query["seen_id"][0]))
             current = [dict(item) for item in self.items if item["created_ms"] >= self.day_start]
-            eligible = [item for item in current if before is None or item["id"] < before]
-            selected = eligible[-self.page_size:]
+            eligible = [item for item in current if (before is None or item["id"] < before)
+                        and (after is None or item["id"] > after) and (ids is None or item["id"] in ids)]
+            selected = [] if metadata else eligible if ids is not None else eligible[:self.page_size] if after is not None else eligible[-self.page_size:]
+            latest = max([item["id"] for item in current] + [0])
+            more_new = after is not None and len(eligible) > len(selected)
             payload = {
                 "items": selected,
-                "has_more": len(eligible) > len(selected),
+                "mode": "metadata" if metadata else "reconcile" if ids is not None else "delta" if after is not None else "snapshot",
+                "has_more": not metadata and after is None and ids is None and len(eligible) > len(selected),
+                "has_more_new": more_new,
+                "after_id": after,
+                "fetched_through_id": selected[-1]["id"] if more_new else latest,
+                "missing_ids": sorted(set(ids or []) - {item["id"] for item in selected}),
                 "oldest_id": selected[0]["id"] if selected else None,
-                "latest_id": max([item["id"] for item in current] + [0]),
+                "latest_id": latest,
                 "day_start_ms": self.day_start,
                 "seen_id": cursor,
                 "server_seen_id": server_cursor,
@@ -129,6 +142,8 @@ class Fixtures:
                 route.fulfill(status=204)
             else:
                 route.continue_()
+        elif request.url == "https://bin.bnbstatic.com/static/assets/logos/BTC.png":
+            route.fulfill(status=204)  # A known image is fulfilled locally.
         else:
             self.unexpected_requests.append(request.url)
             route.abort()
@@ -149,6 +164,10 @@ import React, {{ useState }} from {json.dumps(str(FRONTEND / 'node_modules/react
 import {{ createRoot }} from {json.dumps(str(FRONTEND / 'node_modules/react-dom/client.js'))};
 import ChatBox from {json.dumps(str(FRONTEND / 'src/components/ChatBox.jsx'))};
 import {{ setAuth, clearAuth }} from {json.dumps(str(FRONTEND / 'src/lib/auth.js'))};
+import {{ getChatFeed }} from {json.dumps(str(FRONTEND / 'src/lib/chatStore.js'))};
+import {{ invalidateLeaderboardCache }} from {json.dumps(str(FRONTEND / 'src/lib/cacheEvents.js'))};
+window.auditChatCache = () => getChatFeed('member:1');
+window.auditInvalidateMacros = invalidateLeaderboardCache;
 function Harness() {{
   const [mounted, setMounted] = useState(true);
   window.auditMount = setMounted;
@@ -186,7 +205,7 @@ def settle(page):
 
 
 def advance_poll(page):
-    page.clock.run_for(3500)
+    page.clock.run_for(3500 if page.locator(".chat-sheet").count() else 31_000)
     page.wait_for_timeout(80)
 
 
@@ -318,6 +337,78 @@ def empty_arrival(suite):
     fixture.items.append(message(1))
     advance_poll(page)
     assert_badge(page, 1)
+
+
+def closed_poll_and_delta(suite):
+    fixture = Fixtures([message(index) for index in range(1, 251)], seen=250)
+    page, _ = suite.page(fixture)
+    assert fixture.get_queries and fixture.get_queries[-1].get("metadata_only") == ["true"]
+    advance_poll(page)
+    assert all(query.get("metadata_only") == ["true"] for query in fixture.get_queries)
+    open_chat(page)
+    expect(page.locator(".chat-row")).to_have_count(200)
+    advance_poll(page)
+    assert fixture.get_queries[-1].get("after_id") == ["250"]
+    expect(page.locator(".chat-row")).to_have_count(200)
+
+
+def macro_picker_waits_for_preparing_board(suite):
+    class MacroFixtures(Fixtures):
+        preparing = True
+        macro_calls = 0
+        author = "macro-author"
+
+        def route(self, route):
+            if urlparse(route.request.url).path == "/api/leaderboard":
+                self.macro_calls += 1
+                route.fulfill(json={"preparing": self.preparing, "has_more": False, "snapshot_id": "fixture",
+                                    "items": [] if self.preparing else [{"id": 1, "symbol": "BTCUSDT", "username": self.author, "human_summary": "example strategy"}]})
+            elif route.request.url == "https://bin.bnbstatic.com/static/assets/logos/BTC.png":
+                route.fulfill(status=204)  # Local image fixture; never contact the CDN.
+            else:
+                super().route(route)
+
+    fixture = MacroFixtures([message(1)], seen=1)
+    page, _ = suite.page(fixture)
+    open_chat(page)
+    page.get_by_role("textbox", name="채팅 메시지", exact=True).fill("/")
+    settle(page)
+    assert fixture.macro_calls == 1
+    expect(page.locator(".chat-picker")).to_contain_text("불러오는 중")
+    expect(page.locator(".chat-picker")).not_to_contain_text("오늘 등록된 매크로가 없어요")
+    fixture.preparing = False
+    advance_poll(page)
+    expect(page.get_by_role("option")).to_contain_text("BTCUSDT")
+    assert fixture.macro_calls == 2
+    fixture.author = "refreshed-after-expiry"
+    page.clock.run_for(31_000)
+    settle(page)
+    expect(page.get_by_role("option")).to_contain_text(fixture.author)
+    assert fixture.macro_calls == 3
+    fixture.author = "refreshed-after-mutation"
+    page.evaluate("auditInvalidateMacros()")
+    settle(page)
+    expect(page.get_by_role("option")).to_contain_text(fixture.author)
+    assert fixture.macro_calls == 4
+
+
+def macro_card_requests_an_off_page_entry(suite):
+    item = message(1)
+    item.update(text="[macro:999]", macros=[{"entry_id": 999, "symbol": "BTCUSDT",
+                "username": "other-author", "human_summary": "historical strategy", "locked": False}])
+    fixture = Fixtures([item], seen=1)
+    page, _ = suite.page(fixture)
+    page.evaluate("""() => {
+      window.auditFocusRequests = [];
+      window.addEventListener('ggp:leaderboard-focus-entry', event => {
+        window.auditFocusRequests.push(event.detail.entryId);
+      });
+    }""")
+    open_chat(page)
+    page.locator(".chat-macro").click()
+    settle(page)
+    assert page.evaluate("window.auditFocusRequests") == [999]
+    expect(page.get_by_role("dialog", name="리더보드 채팅")).to_have_count(0)
 
 
 def scroll_unread(suite):
@@ -487,18 +578,57 @@ def history_gap_after_absence(suite):
     page.evaluate("auditMount(true)")
     settle(page)
     open_chat(page)
+    for _ in range(3):
+        if page.locator(".chat-bubble").filter(has_text=re.compile(r"^message-405$")).count():
+            break
+        advance_poll(page)
     expect(page.locator(".chat-bubble").filter(has_text=re.compile(r"^message-405$"))).to_have_count(1)
     # The stale cached first page must not anchor the next request at before_id=1.
     # All intervening rows 6..205 must remain reachable after a long absence.
-    for _ in range(3):
+    visited = set(page.locator(".chat-bubble").all_text_contents())
+    for _ in range(4):
         button = page.get_by_role("button", name="이전 메시지 더 보기", exact=True)
         if not button.count():
             break
         button.click()
         settle(page)
-    expect(page.locator(".chat-row")).to_have_count(405)
-    assert page.locator(".chat-bubble").all_text_contents() == [f"message-{index}" for index in range(1, 406)]
+        assert page.locator(".chat-row").count() <= 200
+        visited.update(page.locator(".chat-bubble").all_text_contents())
+    assert visited == {f"message-{index}" for index in range(1, 406)}
     expect(page.get_by_role("button", name="이전 메시지 더 보기", exact=True)).to_have_count(0)
+    page.get_by_role("button", name="다음 메시지 보기", exact=True).click()
+    settle(page)
+    assert page.locator(".chat-row").count() <= 200
+
+
+def bounded_history_round_trip(suite):
+    fixture = Fixtures([message(index) for index in range(1, 1206)])
+    page, _ = suite.page(fixture)
+    open_chat(page)
+    visited = set(page.locator(".chat-bubble").all_text_contents())
+    for _ in range(8):
+        button = page.get_by_role("button", name="이전 메시지 더 보기", exact=True)
+        if not button.count():
+            break
+        button.click()
+        settle(page)
+        assert page.locator(".chat-row").count() <= 200
+        assert page.evaluate("auditChatCache().items.length") <= 1000
+        visited.update(page.locator(".chat-bubble").all_text_contents())
+    assert visited == {f"message-{index}" for index in range(1, 1206)}
+    assert page.evaluate("auditChatCache().tailEvicted")
+    forward = set(page.locator(".chat-bubble").all_text_contents())
+    for _ in range(9):
+        button = page.get_by_role("button", name="다음 메시지 보기", exact=True)
+        if not button.count():
+            break
+        button.click()
+        settle(page)
+        assert page.evaluate("auditChatCache().items.length") <= 1000
+        forward.update(page.locator(".chat-bubble").all_text_contents())
+    assert forward == {f"message-{index}" for index in range(1, 1206)}
+    assert not page.evaluate("auditChatCache().tailEvicted")
+    assert any(query.get("after_id") == ["1000"] for query in fixture.get_queries)
 
 
 def day_rollover(suite):
@@ -537,11 +667,12 @@ def main():
                 if os.environ.get("BROWSER_EXECUTABLE_PATH"):
                     launch["executable_path"] = os.environ["BROWSER_EXECUTABLE_PATH"]
                 browser = playwright.chromium.launch(**launch)
-                for test in (identity, remount, cross_tab, cross_tab_auth, empty_arrival, scroll_unread,
+                for test in (identity, remount, cross_tab, cross_tab_auth, empty_arrival, closed_poll_and_delta,
+                             macro_picker_waits_for_preparing_board, macro_card_requests_an_off_page_entry, scroll_unread,
                              load_failure, post_get_race, own_post_does_not_read_unfetched_messages,
                              read_sync_after_reload, read_sync_retry_on_poll,
                              delayed_divider, pagination, history_gap_after_absence,
-                             day_rollover, anonymous):
+                             bounded_history_round_trip, day_rollover, anonymous):
                     suite = Suite(browser, f"http://127.0.0.1:{server.server_port}")
                     try:
                         test(suite)

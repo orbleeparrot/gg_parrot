@@ -1,0 +1,307 @@
+"""Prepared public news reads and bounded background collection.
+
+HTTP readers only read durable article projections. They can wake an already
+running worker through memory, but never fetch, translate or claim DB work.
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+import threading
+import time
+import uuid
+
+from sqlalchemy import BigInteger, or_, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlmodel import Field, SQLModel, select
+
+from . import news, news_images
+from .db import get_session
+from .agent_features.position_news import articles, collector
+from .public_news_cache import responses as _responses
+
+logger = logging.getLogger(__name__)
+_runtime = None
+_INTERNAL = frozenset((*news._COMMUNITY_BODY_FIELDS, "assessment", "analysis"))
+
+
+class PublicNewsLease(SQLModel, table=True):
+    scope: str = Field(primary_key=True)
+    token: str = ""
+    lease_until_ms: int = Field(default=0, sa_type=BigInteger)
+    next_run_ms: int = Field(default=0, sa_type=BigInteger)
+
+
+def claim_work(scope: str, *, now_ms=None) -> str | None:
+    millis = int(time.time() * 1000) if now_ms is None else now_ms
+    token = uuid.uuid4().hex
+    with get_session() as db:
+        insert = pg_insert if db.get_bind().dialect.name == "postgresql" else sqlite_insert
+        db.exec(insert(PublicNewsLease).values(scope=scope).on_conflict_do_nothing(
+            index_elements=[PublicNewsLease.scope]))
+        result = db.exec(update(PublicNewsLease).where(
+            PublicNewsLease.scope == scope, PublicNewsLease.next_run_ms <= millis,
+            or_(PublicNewsLease.token == "", PublicNewsLease.lease_until_ms <= millis),
+        ).values(token=token, lease_until_ms=millis + 120_000))
+        db.commit()
+        return token if result.rowcount == 1 else None
+
+
+def renew_work(scope: str, token: str) -> None:
+    with get_session() as db:
+        result = db.exec(update(PublicNewsLease).where(PublicNewsLease.scope == scope,
+                                                      PublicNewsLease.token == token)
+                .values(lease_until_ms=int(time.time() * 1000) + 120_000))
+        db.commit()
+        if result.rowcount != 1:
+            raise RuntimeError("public news preparation lease lost")
+
+
+def finish_work(scope: str, token: str, *, retry_seconds=300) -> None:
+    with get_session() as db:
+        db.exec(update(PublicNewsLease).where(PublicNewsLease.scope == scope,
+                                             PublicNewsLease.token == token)
+                .values(token="", lease_until_ms=0,
+                        next_run_ms=int((time.time() + retry_seconds) * 1000)))
+        db.commit()
+
+
+def request_refresh(scope: str) -> None:
+    if _runtime is not None:
+        _runtime.request(scope)
+
+
+def _public_payload(scope: str, feed: dict | None) -> dict:
+    market = scope == "MARKET"
+    name = news._COIN_KO.get(scope, scope)
+    result = news._envelope([], overview=None,
+                            label="코인 시장·규제" if market else f"{name} 뉴스", query="")
+    if not market:
+        result.update(symbol=scope, coin_name=name)
+    if feed is None:
+        result.update(translation={"status": "partial", "pending_count": 0, "retry_after_seconds": 3},
+                      collection={"status": "pending"}, refresh_seconds=3, data_source="prepared_db",
+                      cursor=0, image_status="ready")
+        return result
+    result.update({key: value for key, value in feed.items()
+                   if key not in {"analysis", "items", "has_more", "reset"}})
+    within_window = news._within_live_news_window if market else news._within_coin_news_window
+    items = [{key: value for key, value in item.items() if key not in _INTERNAL}
+             for item in feed.get("items", []) if within_window(item)]
+    # Sorting a bounded prepared article list does not fetch or analyze news.
+    result["items"] = news._sort_news_items_newest_first(items)
+    result["data_source"] = "prepared_db"
+    pending = (result.get("translation") or {}).get("status") == "partial"
+    summary_pending = sum(item.get("content_type") == "community"
+                          and item.get("community_summary_status") == "pending" for item in items)
+    result["community_summaries"] = {"status": "partial" if summary_pending else "ready",
+                                     "pending_count": summary_pending, "retry_after_seconds": 3}
+    result["collection"] = {"status": result.pop("collection_status", "ready")}
+    result["refresh_seconds"] = 3 if pending or summary_pending or result["collection"]["status"] == "pending" else 30
+    result.setdefault("image_status", "ready")
+    if market and news_images.enabled():
+        result["image_status"] = "pending" if any(
+            item.get("url") and not (item.get("image") or item.get("image_resolved")) for item in items
+        ) else "ready"
+    if not market:
+        result = news._with_news_history(result)
+    return result
+
+
+def get_market_news() -> dict:
+    request_refresh("MARKET")
+    return _cached_news("MARKET")
+
+
+def get_coin_news(symbol: str) -> dict:
+    scope = news.asset_from_market_symbol(symbol)
+    if not scope:
+        raise ValueError("코인 심볼이 올바르지 않아요.")
+    request_refresh(scope)
+    return _cached_news(scope)
+
+
+def _cached_news(scope: str) -> dict:
+    result, state = _responses.get_or_load(scope, lambda: _read_news(scope), ttl=1, stale_ttl=9)
+    if state == "stale":
+        result["stale"] = True
+    return result
+
+
+def _read_news(scope: str) -> dict:
+    with get_session() as db:
+        feed = articles.read_article_feed(scope, limit=100, include_analysis=False, db=db)
+        if feed is None and scope != "MARKET":
+            # Rolling upgrades may start with only the old durable snapshot.
+            # Expose its already translated items; never translate during GET.
+            from .agent_features.position_news.repository import get_latest_snapshot
+            stored = get_latest_snapshot(scope, db=db)
+            if stored:
+                raw = stored.get("news_payload") or {}
+                ready = [item for item in raw.get("items", []) if articles._ready(item)]
+                feed = {**raw, "items": ready,
+                        "translation": {"status": "partial" if len(ready) < len(raw.get("items", [])) else "ready",
+                                        "pending_count": len(raw.get("items", [])) - len(ready), "retry_after_seconds": 3}}
+    return _public_payload(scope, feed)
+
+
+def collect_market(*, claim_token=None) -> None:
+    """Publish raw/ready articles before summary and optional image work."""
+    as_of = news._kst_date()
+    overview = news._load_durable_market_summary(as_of)
+    def publish(payload):
+        with get_session() as db:
+            if claim_token:
+                lease = db.exec(select(PublicNewsLease).where(PublicNewsLease.scope == "MARKET")
+                                .with_for_update()).one_or_none()
+                if lease is None or lease.token != claim_token or lease.lease_until_ms <= int(time.time() * 1000):
+                    raise RuntimeError("stale market news publication")
+            articles.upsert_articles("MARKET", payload.get("items", []), payload=payload, db=db)
+
+    def source_ready(payload):
+        publish({**payload, "as_of": as_of, "overview": overview,
+                 "ai": bool(overview), "collection_status": "pending"})
+
+    raw = news._fetch_public_news_payload(on_progress=source_ready)
+    raw.update(as_of=as_of, overview=overview, ai=bool(overview), collection_status="pending")
+    publish(raw)
+    result = news._localize_news_payload(raw, on_progress=publish)
+    publish(result)
+    if overview is None:
+        overview = news._summarize(result.get("items", []), label="코인 시장·규제")
+        if overview:
+            news._store_durable_market_summary(raw["as_of"], overview)
+    result.update(overview=overview, ai=bool(overview), collection_status="ready")
+    result["image_status"] = news_images.attach(result.get("items", []))
+    publish(result)
+    if result["image_status"] == "pending":
+        # Image resolution stays outside HTTP and independently publishes each
+        # result; article text and the overview are already visible.
+        news_images.ensure_resolving(result["items"], on_ready=lambda item:
+            articles.update_article_image("MARKET", articles.article_id(item), item))
+
+
+class PublicNewsRuntime:
+    def __init__(self):
+        self.pending = {"MARKET": 0.0}
+        self.last_requested = {"MARKET": time.monotonic()}
+        self.lock = threading.Lock()
+        self.active = {}
+        self.loop = None
+        self.changed = None
+        self.task = None
+        self.discovery = None
+        self.stopping = False
+
+    def request(self, scope):
+        if not scope or len(scope) > 32 or not scope.isalnum():
+            return
+        with self.lock:
+            if scope in self.pending or len(self.pending) < 200:
+                self.last_requested[scope] = time.monotonic()
+                self.pending.setdefault(scope, 0.0)
+        if self.loop and not self.loop.is_closed():
+            self.loop.call_soon_threadsafe(self.changed.set)
+
+    def start(self):
+        self.loop = asyncio.get_running_loop()
+        self.changed = asyncio.Event()
+        self.task = self.loop.create_task(self.run(), name="public-news-preparation")
+        self.discovery = self.loop.create_task(self.discover(), name="public-news-hot-coins")
+
+    async def discover(self):
+        from . import hotcoins
+        while not self.stopping:
+            try:
+                payload = await asyncio.to_thread(hotcoins.get_hot_coins, 10)
+                for coin in payload.get("coins", []):
+                    self.request(news.asset_from_market_symbol(coin["symbol"]))
+            except Exception:
+                logger.warning("Public news prewarm discovery deferred")
+            await asyncio.sleep(300)
+
+    async def refresh(self, scope):
+        token = await asyncio.to_thread(claim_work, scope)
+        if token is None:
+            return 30
+        retry_seconds = 300
+        worker = None
+        try:
+            if scope == "MARKET":
+                worker = asyncio.create_task(asyncio.to_thread(collect_market, claim_token=token))
+            else:
+                # The collector's ticker lease is shared with the agent worker.
+                # Public prewarming performs no browser crawl or direction AI.
+                worker = asyncio.create_task(asyncio.to_thread(
+                    collector.collect_ticker, scope, allow_ai=False,
+                    enricher=lambda _symbol, payload: payload))
+            while not worker.done():
+                done, _ = await asyncio.wait({worker}, timeout=20)
+                if not done:
+                    await asyncio.to_thread(renew_work, scope, token)
+            await worker
+        except Exception as exc:
+            retry_seconds = 30
+            logger.warning("Public news preparation deferred: scope=%s reason=%s", scope, type(exc).__name__)
+        finally:
+            try:
+                if worker is not None and not worker.done():
+                    await asyncio.shield(worker)
+            finally:
+                await asyncio.to_thread(finish_work, scope, token, retry_seconds=retry_seconds)
+        return retry_seconds
+
+    async def run(self):
+        while not self.stopping:
+            self.changed.clear()
+            for scope, task in list(self.active.items()):
+                if task.done():
+                    self.active.pop(scope)
+                    delay = 30
+                    try:
+                        delay = task.result() or 300
+                    except Exception:
+                        logger.exception("Public news task failed")
+                    with self.lock:
+                        self.pending[scope] = time.monotonic() + delay
+            with self.lock:
+                expired = [scope for scope in self.last_requested if scope != "MARKET"
+                           and scope not in self.active
+                           and time.monotonic() - self.last_requested[scope] > 3600]
+                for scope in expired:
+                    self.pending.pop(scope, None)
+                    self.last_requested.pop(scope, None)
+                due = [scope for scope, at in self.pending.items()
+                       if at <= time.monotonic() and scope not in self.active]
+            for scope in due[:max(0, 3 - len(self.active))]:
+                self.active[scope] = asyncio.create_task(self.refresh(scope))
+            try:
+                await asyncio.wait_for(self.changed.wait(), timeout=2)
+            except asyncio.TimeoutError:
+                pass
+
+    async def stop(self):
+        self.stopping = True
+        self.changed.set()
+        self.discovery.cancel()
+        await asyncio.gather(self.discovery, return_exceptions=True)
+        await self.task
+        await asyncio.gather(*self.active.values(), return_exceptions=True)
+
+
+def start():
+    global _runtime
+    if os.environ.get("PUBLIC_NEWS_EMBEDDED_ENABLED", "true").lower() in {"0", "false", "no"}:
+        return
+    if _runtime is None:
+        _runtime = PublicNewsRuntime()
+        _runtime.start()
+
+
+async def stop():
+    global _runtime
+    current, _runtime = _runtime, None
+    if current is not None:
+        await current.stop()

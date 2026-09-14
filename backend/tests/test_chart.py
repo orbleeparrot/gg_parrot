@@ -71,7 +71,7 @@ def test_limit_is_clamped(monkeypatch):
     assert seen["limit"] == chart_mod.MAX_LIMIT
     chart_mod._cache.clear()
     chart_mod.get_candles("BTCUSDT", limit=1)
-    assert seen["limit"] == 10  # floor
+    assert seen["limit"] == chart_mod.MAX_LIMIT  # one buffer shared by display limits
 
 
 def test_blank_symbol_rejected():
@@ -109,10 +109,11 @@ def test_cache_expires(monkeypatch):
     _patch(monkeypatch, fake)
     chart_mod.get_candles("BTCUSDT", interval="1m")
     # Expire the entry rather than sleeping the suite.
-    key = ("BTCUSDT", "1m", 120, "spot")
-    payload, _ = chart_mod._cache[key]
-    chart_mod._cache[key] = (payload, time.time() - 1)
-    chart_mod.get_candles("BTCUSDT", interval="1m")
+    key = ("BTCUSDT", "1m", "spot")
+    chart_mod._cache._entries[key].expires = chart_mod._cache.clock() - 1
+    assert chart_mod.get_candles("BTCUSDT", interval="1m")["stale"] is True
+    from app.cache_runtime import close_cache_runtime
+    close_cache_runtime()
     assert calls["n"] == 2
 
 
@@ -133,9 +134,8 @@ def test_different_intervals_cache_separately(monkeypatch):
 def test_transient_failure_serves_stale_cache(monkeypatch):
     _patch(monkeypatch, lambda symbol, interval, limit, market: _fake_candles())
     chart_mod.get_candles("BTCUSDT", interval="1m")
-    key = ("BTCUSDT", "1m", 120, "spot")
-    payload, _ = chart_mod._cache[key]
-    chart_mod._cache[key] = (payload, time.time() - 1)  # force a refetch
+    key = ("BTCUSDT", "1m", "spot")
+    chart_mod._cache._entries[key].expires = chart_mod._cache.clock() - 1  # force a refetch
 
     def boom(symbol, interval, limit, market):
         raise RuntimeError("network down")

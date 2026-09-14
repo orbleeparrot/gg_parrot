@@ -2622,7 +2622,7 @@ def _title_translation_failure_reason(original: str, translated: object) -> str:
     return "invalid_title"
 
 
-def _request_korean_title_translations(titles: list[str], *, claim_token: str = "") -> dict[str, str]:
+def _request_korean_title_translations(titles: list[str], *, claim_token: str = "", on_progress=None) -> dict[str, str]:
     if not titles:
         return {}
     if not _title_translation_api_key():
@@ -2713,6 +2713,8 @@ def _request_korean_title_translations(titles: list[str], *, claim_token: str = 
     def load():
         # The first transport exception propagates without another paid call.
         parsed, previous, received_text = request_batch(articles)
+        if parsed and on_progress is not None:
+            on_progress(dict(parsed))
         missing = [article for article in articles if article["title"] not in parsed]
         if missing and received_text:
             correction_articles = []
@@ -2725,9 +2727,10 @@ def _request_korean_title_translations(titles: list[str], *, claim_token: str = 
                                             "failure_reason": reason})
             try:
                 if claim_token:
-                    # First-pass results are persisted when this call returns,
-                    # so renew ownership of the entire still-claimed batch.
-                    _renew_durable_title_translation_claims(titles, claim_token=claim_token)
+                    # Completed titles may already be published. Renew only
+                    # the rows still owned by this batch's claim token.
+                    _renew_durable_title_translation_claims(
+                        [article["title"] for article in missing], claim_token=claim_token)
                 # Stay inside this runtime singleflight/semaphore. Recursive
                 # runtime calls could deadlock and would lose the shared claim.
                 repaired, second_previous, _received = request_batch(correction_articles, correction=True)
@@ -2858,15 +2861,16 @@ def _missing_title_translations(titles: list[str]) -> list[str]:
         return [title for title in titles if title not in _title_translation_cache]
 
 
-def _translate_claimed_titles(titles: list[str], *, claim_token: str = "") -> None:
+def _translate_claimed_titles(titles: list[str], *, claim_token: str = "", on_progress=None) -> None:
     # Public endpoints normally serve ten items. Bound larger callers as well:
     # an oversized JSON response used to be cut off by the 2048-token limit,
     # discarding every translation in the paid batch.
     failure = None
     for offset in range(0, len(titles), _TITLE_TRANSLATION_BATCH_SIZE):
         try:
+            options = {"on_progress": on_progress} if on_progress is not None else {}
             _translate_title_batch(titles[offset:offset + _TITLE_TRANSLATION_BATCH_SIZE],
-                                   claim_token=claim_token)
+                                   claim_token=claim_token, **options)
         except NewsTranslationBusyError:
             _release_durable_title_translation_claims(titles[offset + _TITLE_TRANSLATION_BATCH_SIZE:],
                                                      claim_token=claim_token, retry_immediately=True)
@@ -2887,9 +2891,23 @@ def _defer_title_translations(titles: list[str]) -> None:
             _title_translation_retry_at.pop(next(iter(_title_translation_retry_at)))
 
 
-def _translate_title_batch(titles: list[str], *, claim_token: str = "") -> None:
+def _translate_title_batch(titles: list[str], *, claim_token: str = "", on_progress=None) -> None:
     if not titles:
         return
+    published = {}
+
+    def publish(values):
+        valid = {title: value for title, value in values.items()
+                 if title in titles and _valid_title_translation(title, value)
+                 and published.get(title) != value}
+        if not valid:
+            return
+        _store_durable_title_translations(valid, claim_token=claim_token)
+        _remember_title_translations(valid)
+        published.update(valid)
+        if on_progress is not None:
+            on_progress(dict(valid))
+
     try:
         _renew_durable_title_translation_claims(
             titles,
@@ -2897,6 +2915,8 @@ def _translate_title_batch(titles: list[str], *, claim_token: str = "") -> None:
         )
         try:
             options = {"claim_token": claim_token} if claim_token else {}
+            if on_progress is not None:
+                options["on_progress"] = publish
             fetched = _request_korean_title_translations(titles, **options)
         except ValueError:
             # Keep valid output; unresolved originals remain in the source
@@ -2907,8 +2927,7 @@ def _translate_title_batch(titles: list[str], *, claim_token: str = "") -> None:
             for title, value in fetched.items()
             if title in titles and _valid_title_translation(title, value)
         }
-        _remember_title_translations(fetched)
-        _store_durable_title_translations(fetched, claim_token=claim_token)
+        publish(fetched)
 
     except AiBusyError as exc:
         _release_durable_title_translation_claims(
@@ -2938,7 +2957,7 @@ def _translate_title_batch(titles: list[str], *, claim_token: str = "") -> None:
         )
 
 
-def _ensure_title_translations(titles: list[str]) -> None:
+def _ensure_title_translations(titles: list[str], *, on_progress=None) -> None:
     missing = _missing_title_translations(titles)
     durable = _load_durable_title_translations(missing)
     valid_durable = {
@@ -2963,7 +2982,8 @@ def _ensure_title_translations(titles: list[str]) -> None:
         # misses so overlapping request batches still translate each title once.
         with _title_translation_work_lock:
             pending = _missing_title_translations(missing)
-            _translate_claimed_titles(pending)
+            options = {"on_progress": on_progress} if on_progress is not None else {}
+            _translate_claimed_titles(pending, **options)
         return
 
     try:
@@ -2992,7 +3012,8 @@ def _ensure_title_translations(titles: list[str]) -> None:
 
     claimed = list(claim.get("claimed") or [])
     claim_token = str(claim.get("claim_token") or "")
-    _translate_claimed_titles(claimed, claim_token=claim_token)
+    options = {"on_progress": on_progress} if on_progress is not None else {}
+    _translate_claimed_titles(claimed, claim_token=claim_token, **options)
 
     waiting = [
         title
@@ -3013,7 +3034,7 @@ def _ensure_title_translations(titles: list[str]) -> None:
         )
 
 
-def _localize_coin_news_items(items: list[dict]) -> list[dict]:
+def _localize_coin_news_items(items: list[dict], *, wait_for_translation=True, on_progress=None) -> list[dict]:
     localized = [dict(item) for item in items]
     titles = []
     seen = set()
@@ -3044,7 +3065,13 @@ def _localize_coin_news_items(items: list[dict]) -> list[dict]:
         return localized
 
     try:
-        _ensure_title_translations(titles)
+        if wait_for_translation:
+            options = {"on_progress": on_progress} if on_progress is not None else {}
+            _ensure_title_translations(titles, **options)
+        else:
+            # A reader joins one prepared cache result; it never acquires work,
+            # calls a provider, sleeps, or retries another process's translation.
+            _remember_title_translations(_load_durable_title_translations(_missing_title_translations(titles)))
     except NewsTranslationError as exc:
         logger.warning("뉴스 제목 번역 대기 — 완료한 기사부터 표시합니다: %s", exc)
 
@@ -3130,7 +3157,7 @@ _COMMUNITY_BODY_FIELDS = (
 )
 
 
-def _localize_news_payload(payload: dict) -> dict:
+def _localize_news_payload(payload: dict, *, wait_for_translation=True, on_progress=None) -> dict:
     from . import community_summaries
 
     ticker_payload = bool(payload.get("symbol") or payload.get("feature_key") == "position_news")
@@ -3138,7 +3165,14 @@ def _localize_news_payload(payload: dict) -> dict:
     candidates = [item for item in payload.get("items") or []
                   if within_window(item)
                   and _is_news_article_candidate({**item, "title": item.get("original_title") or item.get("title")})]
-    result = {**payload, "items": _localize_coin_news_items(candidates)}
+    options = {}
+    if not wait_for_translation:
+        options["wait_for_translation"] = False
+    if on_progress is not None:
+        def translated(_values):
+            on_progress(_localize_news_payload(payload, wait_for_translation=False))
+        options["on_progress"] = translated
+    result = {**payload, "items": _localize_coin_news_items(candidates, **options)}
     if ticker_payload:
         result = _with_news_history(result)
     pending = len(candidates) - len(result["items"])
@@ -3147,7 +3181,8 @@ def _localize_news_payload(payload: dict) -> dict:
         result["translation"]["retry_after_seconds"] = 30
     # A ready headline remains visible while a separately cached body summary
     # is prepared. Never return the internal source text to public readers.
-    enriched, summary_status = community_summaries.enrich_items(result["items"], wait=False)
+    summary_options = {} if wait_for_translation else {"schedule": False}
+    enriched, summary_status = community_summaries.enrich_items(result["items"], wait=False, **summary_options)
     result["items"] = [
         {key: value for key, value in item.items() if key not in _COMMUNITY_BODY_FIELDS}
         for item in enriched
@@ -3581,7 +3616,7 @@ def _browser_rate_limit(retry_after: str) -> dict:
             "retry_at": now + delay}
 
 
-def _fetch_browser_page_batch(descriptors: list[dict], *, budget_seconds: float) -> dict:
+def _fetch_browser_page_batch(descriptors: list[dict], *, budget_seconds: float, on_progress=None) -> dict:
     """Prioritized pages with independent work/cleanup limits and a batch ceiling."""
     descriptors = _prioritize_browser_pages(descriptors)
 
@@ -3733,6 +3768,8 @@ def _fetch_browser_page_batch(descriptors: list[dict], *, budget_seconds: float)
                                 raw = await page.locator("a[href]").evaluate_all(_BROWSER_LINKS_SCRIPT)
                                 items = _parse_public_browser_links(raw, descriptor)
                                 results[key] = {"items": items, "status": "ready" if items else "empty"}
+                                if on_progress is not None:
+                                    await asyncio.to_thread(on_progress, descriptor, deepcopy(results[key]))
                                 if descriptor["publisher"] == "CoinDesk":
                                     switch_phase(key, "pagination")
                                     from .coindesk_browser import expand_coindesk_page
@@ -3741,6 +3778,8 @@ def _fetch_browser_page_batch(descriptors: list[dict], *, budget_seconds: float)
                                         expanded = _parse_public_browser_links(raw, descriptor)
                                         results[key]["items"] = _merge_browser_items(results[key]["items"], expanded)
                                         results[key]["status"] = "ready" if results[key]["items"] else "empty"
+                                        if on_progress is not None:
+                                            await asyncio.to_thread(on_progress, descriptor, deepcopy(results[key]))
 
                                     pagination = await expand_coindesk_page(page,
                                         max_clicks=_browser_max_load_more_clicks(),
@@ -3832,7 +3871,7 @@ def _store_durable_browser_pages(entries: dict) -> None:
         logger.warning("Shared browser page cache write unavailable")
 
 
-def _cached_browser_pages(descriptors: list[dict], *, budget_seconds: float | None = None) -> dict:
+def _cached_browser_pages(descriptors: list[dict], *, budget_seconds: float | None = None, on_progress=None) -> dict:
     """Reuse pages across tickers and the fresh subprocess of each Prefect run."""
     now = time.time()
     results = {}
@@ -3876,7 +3915,13 @@ def _cached_browser_pages(descriptors: list[dict], *, budget_seconds: float | No
         if missing:
             budget = _browser_batch_budget_seconds(budget_seconds)
             try:
-                fetched = _fetch_browser_page_batch(missing, budget_seconds=budget)
+                if on_progress is not None:
+                    for descriptor in descriptors:
+                        cached = results.get(_browser_page_key(descriptor))
+                        if cached is not None:
+                            on_progress(descriptor, deepcopy(cached))
+                options = {"on_progress": on_progress} if on_progress is not None else {}
+                fetched = _fetch_browser_page_batch(missing, budget_seconds=budget, **options)
             except Exception as exc:
                 fetched = {_browser_page_key(page): {"items": [], "status": "error",
                            "error": type(exc).__name__} for page in missing}
@@ -3910,7 +3955,7 @@ def _cached_browser_pages(descriptors: list[dict], *, budget_seconds: float | No
         _browser_collection_lock.release()
 
 
-def enrich_coin_news_for_collector(symbol: str, rss_payload: dict, *, browser_budget_seconds: float | None = None) -> dict:
+def enrich_coin_news_for_collector(symbol: str, rss_payload: dict, *, browser_budget_seconds: float | None = None, on_progress=None) -> dict:
     """Expand an already-published RSS snapshot using public rendered pages.
 
     This worker-only phase never translates or invokes AI. Source failures are
@@ -3944,8 +3989,32 @@ def enrich_coin_news_for_collector(symbol: str, rss_payload: dict, *, browser_bu
     if os.environ.get("COINDESK_PLAYWRIGHT_ENABLED", "true").lower() in {"0", "false", "no", "off"}:
         descriptors = [page for page in descriptors if page["publisher"] != "CoinDesk"]
     started = time.monotonic()
-    results = (_cached_browser_pages(descriptors) if browser_budget_seconds is None else
-               _cached_browser_pages(descriptors, budget_seconds=browser_budget_seconds))
+    options = {} if browser_budget_seconds is None else {"budget_seconds": browser_budget_seconds}
+    if on_progress is not None:
+        completed = {}
+        progress_lock = threading.Lock()
+
+        def page_ready(descriptor, result):
+            # Persist one page's discoveries before pagination or another page
+            # completes. The final envelope still carries complete diagnostics.
+            with progress_lock:
+                completed[_browser_page_key(descriptor)] = (descriptor, result)
+                progress_items = list(payload.get("items") or [])
+                progress_sources = list(sources)
+                for page, page_result in completed.values():
+                    relevant = _relevant_items(page_result.get("items") or [], asset_symbol=base,
+                                              coin_name=name, feed_source=f"{page['publisher'].lower()}_{page['kind']}_playwright")
+                    relevant = [item for item in relevant if _within_coin_news_window(item)]
+                    progress_items.extend(relevant)
+                    progress_sources.append(_browser_source_report(page, page_result, items=relevant, excluded_count=0))
+                progress = {**payload,
+                            "items": _public_news_candidates(progress_items, limit=_MAX_COIN_ITEMS, include_archive=True),
+                            "sources": progress_sources,
+                            "browser_enrichment": {"status": "partial", "source_count": len(descriptors)}}
+                on_progress(_with_news_history(progress))
+
+        options["on_progress"] = page_ready
+    results = _cached_browser_pages(descriptors, **options)
     candidates = list(payload.get("items") or [])
     original_keys = {(str(item.get("url") or ""), str(item.get("title") or "")) for item in candidates}
     successful = 0
@@ -4054,7 +4123,7 @@ def _public_news_candidates(items: list[dict], *, limit: int, include_archive: b
     return unique
 
 
-def _fetch_public_news_fallback(asset_symbol: str | None = None) -> dict:
+def _fetch_public_news_fallback(asset_symbol: str | None = None, *, on_progress=None) -> dict:
     """Reuse free shared publisher feeds when public Google discovery is empty."""
     def fetch(source_name, loader):
         try:
@@ -4076,15 +4145,22 @@ def _fetch_public_news_fallback(asset_symbol: str | None = None) -> dict:
     loaders = {"coindesk_rss": lambda: _fetch_coindesk_news(strict=True),
                **{name: (lambda name=name: _fetch_shared_publisher_rss(name, strict=True))
                   for name in _EXTRA_RSS_SOURCES}}
-    results = run_parallel({name: (lambda name=name, loader=loader: fetch(name, loader))
-                            for name, loader in loaders.items()})
-    return {"items": _public_news_candidates(
+    def envelope(results):
+        return {"items": _public_news_candidates(
                 [item for result in results.values() for item in result["items"]],
                 limit=_MAX_COIN_ITEMS if asset_symbol else _MAX_ITEMS, include_archive=bool(asset_symbol)),
             "sources": [result["source"] for result in results.values()]}
+    completed = {}
+    def source_ready(name, result):
+        completed[name] = result
+        on_progress(envelope(completed))
+    options = {"on_result": source_ready} if on_progress is not None else {}
+    results = run_parallel({name: (lambda name=name, loader=loader: fetch(name, loader))
+                            for name, loader in loaders.items()}, **options)
+    return envelope(results)
 
 
-def _fetch_public_news_payload(asset_symbol: str | None = None) -> dict:
+def _fetch_public_news_payload(asset_symbol: str | None = None, *, on_progress=None) -> dict:
     """Use Google first; add publisher feeds only when no current item survives."""
     label = f"{_COIN_KO.get(asset_symbol, asset_symbol)} 뉴스" if asset_symbol else "코인 시장·규제 동향"
     query = f"{_COIN_KO.get(asset_symbol, asset_symbol)} 코인 when:7d" if asset_symbol else _MARKET_QUERY
@@ -4103,7 +4179,10 @@ def _fetch_public_news_payload(asset_symbol: str | None = None) -> dict:
         sources = list(exc.sources or [{"name": "google_news_rss", "status": "error",
                        "fetched_count": 0, "item_count": 0, **_safe_news_source_error(exc)}])
     if not payload["items"]:
-        fallback = _fetch_public_news_fallback(asset_symbol)
+        def source_ready(partial):
+            on_progress({**payload, "items": partial["items"], "sources": [*sources, *partial["sources"]]})
+        options = {"on_progress": source_ready} if on_progress is not None else {}
+        fallback = _fetch_public_news_fallback(asset_symbol, **options)
         payload["items"] = list(fallback.get("items") or [])
         sources.extend(fallback.get("sources") or [])
     if asset_symbol and binance_square.configuration()["enabled"]:
@@ -4120,7 +4199,7 @@ def _fetch_public_news_payload(asset_symbol: str | None = None) -> dict:
     return payload
 
 
-def fetch_coin_news_for_collector(symbol: str) -> dict:
+def fetch_coin_news_for_collector(symbol: str, *, on_progress=None) -> dict:
     """Merge RSS and configured official API results before browser enrichment."""
     from . import coindesk_api
     base = canonical_asset_symbol(symbol)
@@ -4160,16 +4239,29 @@ def fetch_coin_news_for_collector(symbol: str) -> dict:
                 lambda **kwargs: _fetch_shared_publisher_rss(source_name, **kwargs))
     if base == "EDEN":
         loaders["openeden"] = lambda: fetch_source(_fetch_openeden_news)
-    fetched_sources = run_parallel(loaders)
+    if on_progress is None:
+        fetched_sources = run_parallel(loaders)
+    else:
+        completed = {}
+
+        def source_ready(key, value):
+            completed[key] = value
+            on_progress(_collected_news_envelope(base, name, query, completed, partial=True))
+
+        fetched_sources = run_parallel(loaders, on_result=source_ready)
+    return _collected_news_envelope(base, name, query, fetched_sources)
+
+
+def _collected_news_envelope(base: str, name: str, query: str, fetched_sources: dict, *, partial=False) -> dict:
     community = fetched_sources.get("binance_square", {"items": [], "source": {}})
     community_available = community["source"].get("status") in {"ready", "empty", "partial"}
 
-    google_payload, google_available = fetched_sources["google"]
+    google_payload, google_available = fetched_sources.get("google", ({}, False))
     google_payload = google_payload or {}
     google_raw = list(google_payload.get("items") or [])
     google_fetched_count = int(google_payload.get("candidate_count") or len(google_raw))
     google_query = str(google_payload.get("query") or query)
-    coindesk_raw, coindesk_available = fetched_sources["coindesk"]
+    coindesk_raw, coindesk_available = fetched_sources.get("coindesk", ([], False))
     openeden_items, openeden_available = fetched_sources.get("openeden", ([], False))
     api_payload = fetched_sources.get("coindesk_api", {})
     api_source = dict(api_payload.get("source") or {})
@@ -4217,7 +4309,8 @@ def fetch_coin_news_for_collector(symbol: str) -> dict:
     coindesk_items = [item for item in coindesk_items if _within_coin_news_window(item)]
     if (not google_available and not coindesk_available and not openeden_available and not api_available and not community_available
             and not any(source["status"] == "ready" for source in extra_sources)):
-        raise NewsFetchError("모든 뉴스 RSS/API 소스 수집에 실패했습니다.")
+        if not partial:
+            raise NewsFetchError("모든 뉴스 RSS/API 소스 수집에 실패했습니다.")
     items = _public_news_candidates(
         [*openeden_items, *current_api_items, *coindesk_items, *google_items, *extra_items, *community["items"]],
         limit=_MAX_COIN_ITEMS, include_archive=True)

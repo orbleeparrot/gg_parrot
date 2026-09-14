@@ -1,0 +1,67 @@
+{
+  "audited_baseline": "f30fbee",
+  "verification": "offline Node reproduction against application modules",
+  "all_five_baseline_behaviors_reproduced": true,
+  "external_requests": 0,
+  "real_accounts_used": 0,
+  "caveat": "Synthetic fixtures prove cache behavior, not production performance. Assertions intentionally describe the audited defects.",
+  "findings": [
+    {
+      "id": "symbol_cache_no_expiry",
+      "observed": {
+        "simulated_elapsed_days": 10,
+        "source_calls": 1,
+        "symbol": "OLDUSDT",
+        "stale": true
+      },
+      "conclusion": "Advancing the clock by ten days does not expire the symbol cache."
+    },
+    {
+      "id": "profile_edit_missing_board_invalidation",
+      "observed": {
+        "board_gets": 1,
+        "source_author": "NEW",
+        "returned_author": "OLD"
+      },
+      "conclusion": "The board list returns its cached old author name after a successful profile edit.",
+      "caveat": "This is about author_name. AuthorAvatar separately overrides the signed-in user's photo from auth state."
+    },
+    {
+      "id": "news_cache_no_global_eviction",
+      "synthetic_stress": true,
+      "observed": {
+        "expired_entries_inserted": 1000,
+        "fresh_entries_inserted": 1,
+        "persisted_entries": 1001
+      },
+      "conclusion": "Writing a new cache entry retains unrelated expired entries in the persisted cache.",
+      "caveat": "Artificial 1,000-key stress with a 1 ms TTL; not a production memory, traffic, or latency measurement."
+    },
+    {
+      "id": "chat_render_window_not_cache_limit",
+      "synthetic_stress": true,
+      "observed": {
+        "messages_supplied": 5000,
+        "messages_retained": 5000,
+        "messages_in_render_window": 200
+      },
+      "conclusion": "The 200-message rendering window retains all 5,000 supplied messages in its backing array.",
+      "caveat": "Synthetic message count, not observed production traffic. Server day boundaries prune prior-day messages."
+    },
+    {
+      "id": "studio_session_not_account_scoped",
+      "observed": {
+        "original_account_id": 1,
+        "new_account_id": 2,
+        "prior_draft_restored": true,
+        "retained_fields": [
+          "form",
+          "testedMacro",
+          "result"
+        ]
+      },
+      "conclusion": "Logging out and switching accounts leaves the previous Studio draft and result available for restoration.",
+      "caveat": "Same-browser local storage boundary only; this does not demonstrate bypassing server authorization."
+    }
+  ]
+}

@@ -11,8 +11,8 @@ from PIL import Image
 from sqlmodel import SQLModel, create_engine, select
 
 from app import auth, avatars, db as database, runner
-from app.db import (BoardPost, ChatMessage, LeaderboardEntry, MacroUnlock, PointLedger,
-                    RunnerKey, RunSession, User, UserMacro, get_session)
+from app.db import (BoardPost, ChatMessage, DailyQuestClaim, LeaderboardEntry, MacroUnlock, PointLedger,
+                    RunnerKey, RunSession, RunSessionEvent, User, UserMacro, get_session)
 from app.main import app
 
 client = TestClient(app)
@@ -118,6 +118,11 @@ def test_withdrawal_requires_confirmation_and_password_and_preserves_other_membe
         for user_id in (uid, other["user"]["id"]):
             db.add(MacroUnlock(user_id=user_id, entry_id=post["id"], price=100, created_at=member["user"]["created_at"]))
             db.add(UserMacro(user_id=user_id, macro_json="{}", source_type="upload", created_at=member["user"]["created_at"], updated_at=member["user"]["created_at"], symbol="BTCUSDT"))
+            run = RunSession(user_id=user_id, started_at=member["user"]["created_at"], status="stopped")
+            db.add(run)
+            db.flush()
+            db.add(RunSessionEvent(user_id=user_id, session_id=run.id, ts=run.started_at, message="private execution log"))
+            db.add(DailyQuestClaim(user_id=user_id, date_kst="2026-09-14", quest_key="paper_start", reward=10, created_at=run.started_at))
         db.commit()
     assert withdraw(member, confirmation="").status_code == 400
     assert withdraw(member, password="wrong").status_code == 400
@@ -136,6 +141,9 @@ def test_withdrawal_requires_confirmation_and_password_and_preserves_other_membe
         assert user.email != member["user"]["email"] and user.username != member["user"]["username"]
         assert db.exec(select(UserMacro).where(UserMacro.user_id == uid)).first() is None
         assert db.exec(select(UserMacro).where(UserMacro.user_id == other["user"]["id"])).first() is not None
+        for model in (RunSession, RunSessionEvent, DailyQuestClaim):
+            assert db.exec(select(model).where(model.user_id == uid)).first() is None
+            assert db.exec(select(model).where(model.user_id == other["user"]["id"])).first() is not None
         assert len(db.exec(select(MacroUnlock).where(MacroUnlock.entry_id == post["id"])).all()) == 2
         assert db.exec(select(PointLedger).where(PointLedger.user_id == uid, PointLedger.reason == "account_closed")).first() is not None
     assert client.get("/api/auth/me", headers=headers(other)).status_code == 200

@@ -97,7 +97,7 @@ def build_position_news(
         is_community = raw.get("content_type") == "community"
         is_historical = bool(raw.get("published")) and not news_mod._within_live_news_window(raw)
         assessed = {} if is_community else (
-            analyzed_items[index]
+            analyzed_items[index] or classifier.classify_headline(raw.get("title", ""))
             if index < len(analyzed_items)
             else classifier.classify_headline(raw.get("title", ""))
         )
@@ -241,9 +241,35 @@ def _load_latest_snapshot(symbol: str, db: Session | None = None) -> dict | None
     return get_latest_snapshot(symbol, db=db)
 
 
-def get_position_news(session: dict, db: Session | None = None) -> dict:
-    """Read the central snapshot and localize its deduplicated titles."""
+def get_position_news(session: dict, db: Session | None = None, *, cursor: int | None = None) -> dict:
+    """Read prepared article changes; legacy snapshots only join ready caches."""
     asset = news_mod.asset_from_market_symbol(str(session.get("symbol") or ""))
+    from .repository import read_article_feed, get_collection_state
+    feed = read_article_feed(asset, after_revision=cursor, db=db) if db is None or isinstance(db, Session) else None
+    if feed is not None:
+        payload = build_position_news(session, feed, feed["analysis"], snapshot_id=f"articles:{asset}")
+        payload.update({key: feed[key] for key in ("cursor", "reset", "has_more", "translation")})
+        collection = get_collection_state(asset, db)
+        payload["collection"] = collection or {"status": "ready", "freshness": "fresh"}
+        observed_ms = max(int((collection or {}).get("last_success_ms") or 0),
+                          int((collection or {}).get("last_attempt_ms") or 0))
+        if observed_ms:
+            age = max(0, int(time.time() * 1000) - observed_ms) // 1000
+            payload["collection"].update(age_seconds=age, stale_after_seconds=_STALE_SECONDS,
+                                         freshness="stale" if age > _STALE_SECONDS else "fresh")
+        if db is not None:
+            db.rollback()
+        # Filtering and side projection are local CPU work. No title cache,
+        # provider, source loader or enrichment scheduler is invoked here.
+        payload["items"] = [item for item in payload["items"] if news_mod._within_coin_news_window(item)]
+        payload["community_summaries"] = {
+            "status": "partial" if any(item.get("community_summary_status") == "pending" for item in payload["items"]) else "ready",
+        }
+        for item in payload["items"]:
+            if not re.search(r"[가-힣]", item["summary"]) or news_mod._title_needs_korean_translation(item["summary"]):
+                item["summary"] = item["title"]
+        payload["overview"] = {"text": "새 기사를 확인하면 바로 표시합니다.", "scope": "articles"}
+        return payload
     # Preserve the one-argument seam used by small unit fakes when no request
     # session is supplied; authenticated routes pass their shared session.
     stored = _load_latest_snapshot(asset) if db is None else _load_latest_snapshot(asset, db)
@@ -262,8 +288,8 @@ def get_position_news(session: dict, db: Session | None = None) -> dict:
                 )
         return payload
 
-    # Release the request read transaction before joining shared translation
-    # work; a provider wait must not pin a Postgres connection.
+    # Release the snapshot read transaction before joining prepared legacy
+    # caches. This compatibility path never claims or schedules translation.
     if db is not None:
         db.rollback()
     payload = build_position_news(
@@ -275,8 +301,9 @@ def get_position_news(session: dict, db: Session | None = None) -> dict:
     )
     # Project sentiment before filtering. An unfinished first article must not
     # shift the analysis attached to the second article when it becomes visible.
-    # This also gives old/reused raw snapshots a translation retry path.
-    payload = news_mod._localize_news_payload(payload)
+    # A background worker handles missing translations; this read only joins
+    # work that has already completed.
+    payload = news_mod._localize_news_payload(payload, wait_for_translation=False)
     for item in payload["items"]:
         summary = str(item.get("summary") or "").strip()
         if not re.search(r"[가-힣]", summary) or news_mod._title_needs_korean_translation(summary):

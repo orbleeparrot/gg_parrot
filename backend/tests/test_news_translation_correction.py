@@ -159,7 +159,7 @@ def test_existing_shared_claim_is_renewed_before_second_paid_call(provider, monk
         renewals.append((titles, claim_token))
     monkeypatch.setattr(news, '_renew_durable_title_translation_claims', renew)
     assert len(news._request_korean_title_translations([FIRST, SECOND], claim_token='existing-claim')) == 2
-    assert renewals == [([FIRST, SECOND], 'existing-claim')]
+    assert renewals == [([SECOND], 'existing-claim')]
     assert len(requests) == 2
 
 

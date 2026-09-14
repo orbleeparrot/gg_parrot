@@ -12,9 +12,9 @@ client = TestClient(app)
 
 @pytest.fixture(autouse=True)
 def _reset_cache():
-    hangang_mod._cache = None
+    hangang_mod._cache.clear()
     yield
-    hangang_mod._cache = None
+    hangang_mod._cache.clear()
 
 
 def test_label_formatting():
@@ -103,11 +103,12 @@ def test_success_false_is_treated_as_failure(monkeypatch):
 
 def test_serves_stale_cache_after_failure(monkeypatch):
     # 1) prime the cache with a good value
-    hangang_mod._cache = (
-        {"ok": True, "temperature": 22.0, "location": "중랑천",
-         "date": "20260709", "time": "11:00", "observed_label": "07/09 11:00"},
-        0.0,  # already expired -> next call refetches
-    )
+    hangang_mod._cache.get_or_load("temperature", lambda: {
+        "ok": True, "temperature": 22.0, "location": "중랑천",
+        "date": "20260709", "time": "11:00", "observed_label": "07/09 11:00"
+    }, ttl=1, stale_ttl=3600)
+    hangang_mod._cache._entries["temperature"].expires = hangang_mod._cache.clock() - 1
+
 
     class _Client:
         def __init__(self, *a, **k):

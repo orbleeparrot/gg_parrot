@@ -4,11 +4,28 @@ import { getToken } from "./lib/auth.js";
 import { createRequestCoordinator } from "./lib/requestCoordinator.js";
 import { withRequestTimeout } from "./lib/requestTimeout.js";
 import { createBoardListCache } from "./lib/boardListCache.js";
+import { invalidateLeaderboardCache } from "./lib/cacheEvents.js";
 
 const BASE = "";
 const RUNNER_SESSIONS_STREAM_PATH = "/api/me/runner/sessions/stream";
 const getRequests = createRequestCoordinator();
 const boardLists = createBoardListCache();
+const PUBLIC_READS = new Set([
+  "/api/news/market", "/api/hot-coins", "/api/symbols", "/api/candles", "/api/candles/live",
+  "/api/kimchi-premium", "/api/usdkrw", "/api/funding-rate", "/api/fear-greed", "/api/hangang-temp",
+  "/api/whale-activity", "/api/runner/download/info", "/api/auth/google/config", "/api/backtest/limits",
+  "/api/challenge/today",
+]);
+function publicRead(path, method) {
+  const pathname = path.split("?")[0];
+  return method === "GET" && (PUBLIC_READS.has(pathname) || /^\/api\/news\/coin\/[^/]+$/.test(pathname)
+    || /^\/api\/macros\/[^/]+$/.test(pathname));
+}
+async function leaderboardMutation(promise) {
+  const result = await promise;
+  invalidateLeaderboardCache();
+  return result;
+}
 
 function boardListPath(page, size, { sort = "new", q = "", field = "all" } = {}) {
   const params = new URLSearchParams({ page: String(page), size: String(size) });
@@ -56,13 +73,14 @@ async function jsonBody(res) {
 }
 
 async function req(path, opts = {}) {
-  const token = getToken();
+  const method = String(opts.method || "GET").toUpperCase();
+  const shared = publicRead(path, method);
+  const token = shared ? "" : getToken();
   const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
   if (token) headers["Authorization"] = `Bearer ${token}`;
-  const method = String(opts.method || "GET").toUpperCase();
   const { signal: callerSignal, timeoutMs, requestKey = "", ...fetchOptions } = opts;
   const execute = (signal) => withRequestTimeout(async (requestSignal) => {
-    const res = await fetch(BASE + path, { ...fetchOptions, method, headers, signal: requestSignal });
+    const res = await fetch(BASE + path, { ...fetchOptions, cache: shared ? (fetchOptions.cache || "default") : "no-store", credentials: shared ? "omit" : "same-origin", method, headers, signal: requestSignal });
     const body = await jsonBody(res);
     if (!res.ok) {
       const detail = typeof body.detail === "string"
@@ -89,7 +107,7 @@ async function reqForm(path, formData, options = {}) {
   const headers = {};
   if (token) headers["Authorization"] = `Bearer ${token}`;
   return withRequestTimeout(async (signal) => {
-    const res = await fetch(BASE + path, { method, headers, body: formData, signal });
+    const res = await fetch(BASE + path, { method, headers, body: formData, signal, cache: "no-store" });
     const body = await jsonBody(res);
     if (!res.ok) {
       const detail = typeof body.detail === "string"
@@ -122,9 +140,9 @@ export const api = {
   uploadAvatar: (image) => {
     const form = new FormData();
     form.append("image", image);
-    return reqForm("/api/me/avatar", form, { timeoutMs: 30_000 });
+    return boardMutation(reqForm("/api/me/avatar", form, { timeoutMs: 30_000 }));
   },
-  deleteAvatar: () => req("/api/me/avatar", { method: "DELETE", timeoutMs: 30_000 }),
+  deleteAvatar: () => boardMutation(req("/api/me/avatar", { method: "DELETE", timeoutMs: 30_000 })),
   deleteAccount: ({ confirmation, password, credential }, options = {}) => req("/api/me/account", {
     ...options, method: "DELETE", body: JSON.stringify({ confirmation, password, credential }), timeoutMs: 30_000,
   }),
@@ -134,7 +152,7 @@ export const api = {
     form.append("bio", bio || "");
     form.append("remove_avatar", String(removeAvatar));
     if (image) form.append("image", image);
-    return reqForm("/api/me/profile", form, { ...options, method: "PATCH", timeoutMs: 30_000 });
+    return boardMutation(reqForm("/api/me/profile", form, { ...options, method: "PATCH", timeoutMs: 30_000 }));
   },
   changePassword: ({ currentPassword, newPassword }, options = {}) =>
     req("/api/me/password", {
@@ -178,6 +196,9 @@ export const api = {
     }),
 
   cardUrl: (slug) => `/api/card/${slug}.png`,
+  // 거래 가능한 종목 목록(현물 + USDT-M 선물) — 조건 판의 종목 검색은 이 안에서만 고른다.
+  symbols: (options = {}) => req("/api/symbols", options),
+  coinLogoUrl: (base) => `/api/coin-logo/${encodeURIComponent(base)}.png`,
 
   // kimchi premium (reference indicator; upbit vs binance×USDKRW)
   kimchiPremium: (symbol, options = {}) => req(`/api/kimchi-premium?symbol=${encodeURIComponent(symbol || "BTC")}`, options),
@@ -194,20 +215,22 @@ export const api = {
   },
 
   // 오늘의 AI 챌린지 (KST 하루 1회 생성; symbol + 🤖 이름)
-  challengeToday: (options = {}) => req("/api/challenge/today", options),
+  challengeToday: (options = {}) => req("/api/challenge/today", { timeoutMs: 10_000, ...options }),
 
   // '오늘의 경주마' hot coins (server-cached, shared across clients)
   hotCoins: (limit, options = {}) => req(`/api/hot-coins?limit=${limit || 10}`, options),
 
   // '오늘의 코인동향' — 시장·규제 뉴스 헤드라인 + AI 중립 개요 (KST 하루 1회 캐시)
-  newsMarket: (options = {}) => req("/api/news/market", options),
+  newsMarket: (options = {}) => req("/api/news/market", { timeoutMs: 10_000, ...options }),
   // '경주마 동향' — 서버가 Prefect DB 우선, 미수집 티커만 RSS fallback
-  newsCoin: (symbol, options = {}) => req(`/api/news/coin/${encodeURIComponent(symbol)}`, options),
+  newsCoin: (symbol, options = {}) => req(`/api/news/coin/${encodeURIComponent(symbol)}`, { timeoutMs: 10_000, ...options }),
   // 내 에이전트 기능 01 — 서버가 세션 소유권과 등록 매크로 방향을 확인한다.
   agentWhaleActivity: (sessionId, options = {}) =>
     req(`/api/me/agents/sessions/${sessionId}/whale-activity`, options),
-  agentPositionNews: (sessionId, options = {}) =>
-    req(`/api/me/agents/sessions/${encodeURIComponent(sessionId)}/position-news`, options),
+  agentPositionNews: (sessionId, { cursor, ...options } = {}) => {
+    const query = Number.isSafeInteger(cursor) ? `?cursor=${cursor}` : "";
+    return req(`/api/me/agents/sessions/${encodeURIComponent(sessionId)}/position-news${query}`, options);
+  },
   // 저장 매크로도 실행 세션 없이 같은 공용 snapshot을 조회한다.
   agentMacroPositionNews: (macroId, symbol = "") => {
     const path = `/api/me/agents/macros/${encodeURIComponent(macroId)}/position-news`;
@@ -280,20 +303,39 @@ export const api = {
     ),
 
   // 오늘의 리더보드 (daily KST paper-return board)
-  leaderboard: (userId, options = {}) => req(`/api/leaderboard?user_id=${encodeURIComponent(userId || "")}`, options),
+  leaderboard: (userId, options = {}) => {
+    const { page = 1, pageSize = 50, snapshotId = "", entryId = null, ...requestOptions } = options;
+    const query = new URLSearchParams({ user_id: userId || "", page: String(page), page_size: String(pageSize) });
+    if (snapshotId) query.set("snapshot_id", snapshotId);
+    if (entryId != null) query.set("entry_id", String(entryId));
+    return req(`/api/leaderboard?${query}`, { timeoutMs: 10_000, ...requestOptions });
+  },
+  leaderboardAll: async (userId, options = {}) => {
+    let snapshotId = "";
+    const items = [];
+    let result;
+    for (let page = 1; page <= 100; page += 1) {
+      result = await api.leaderboard(userId, { ...options, page, pageSize: 100, snapshotId });
+      if (result.snapshot_expired) throw new Error("리더보드가 갱신됐어요. 목록을 다시 열어 주세요.");
+      snapshotId = result.snapshot_id;
+      items.push(...(result.items || []));
+      if (!result.has_more) return { ...result, items };
+    }
+    throw new Error("목록이 너무 커요. 리더보드 페이지에서 참가자를 찾아 주세요.");
+  },
   leaderboardRegister: (macro, username, password, userId, mode) =>
-    req("/api/leaderboard/register", {
+    leaderboardMutation(req("/api/leaderboard/register", {
       method: "POST",
       body: JSON.stringify({ macro, username, password, user_id: userId, mode: mode || "live" }),
-    }),
+    })),
   leaderboardEdit: (entryId, macro, password, mode) =>
-    req(`/api/leaderboard/${entryId}/edit`, {
+    leaderboardMutation(req(`/api/leaderboard/${entryId}/edit`, {
       method: "POST",
       body: JSON.stringify({ macro, password: password || "", mode: mode || "live" }),
-    }),
+    })),
   // 계정 소유 엔트리 삭제 (로그인 필요, 소유자만).
   leaderboardDelete: (entryId) =>
-    req(`/api/leaderboard/${entryId}`, { method: "DELETE" }),
+    leaderboardMutation(req(`/api/leaderboard/${entryId}`, { method: "DELETE" })),
   leaderboardVote: (entryId, userId, value) =>
     req(`/api/leaderboard/${entryId}/vote`, {
       method: "POST",
@@ -301,13 +343,16 @@ export const api = {
     }),
   // 포인트를 소진해 매크로 공개+복사 (창작자에게 70% 분배). 로그인 필요.
   leaderboardUnlock: (entryId) =>
-    req(`/api/leaderboard/${entryId}/unlock`, { method: "POST" }),
+    leaderboardMutation(req(`/api/leaderboard/${entryId}/unlock`, { method: "POST" })),
 
   // leaderboard chat (daily KST)
-  chatList: ({ beforeId, seenId, ...options } = {}) => {
+  chatList: ({ beforeId, seenId, afterId, metadataOnly, messageIds, ...options } = {}) => {
     const query = new URLSearchParams();
     if (beforeId != null) query.set("before_id", String(beforeId));
     if (seenId != null) query.set("seen_id", String(seenId));
+    if (afterId != null) query.set("after_id", String(afterId));
+    if (metadataOnly) query.set("metadata_only", "true");
+    if (messageIds?.length) query.set("message_ids", messageIds.join(","));
     return req(`/api/chat${query.size ? `?${query}` : ""}`, { timeoutMs: 15_000, ...options });
   },
   chatPost: (text, options = {}) =>
@@ -327,7 +372,7 @@ export const api = {
   runnerDownloadUrl: "/api/runner/download",
 
   // 매크로 실행기(exe) 연동 — 마이페이지용
-  runnerKey: () => req("/api/me/runner/key"),
+  runnerKey: (options = {}) => req("/api/me/runner/key", options),
   runnerKeyRegenerate: () => req("/api/me/runner/key/regenerate", { method: "POST" }),
   runnerSessions: (options = {}) => req("/api/me/runner/sessions", options),
   // 세션 실행 로그(최신순) — 실행기가 heartbeat 로 올린 신호·주문·체결·오류.

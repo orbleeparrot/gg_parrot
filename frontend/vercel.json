@@ -1,6 +1,13 @@
 {
+  "headers": [
+    { "source": "/assets/:path*", "headers": [{ "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }] },
+    { "source": "/sw.js", "headers": [{ "key": "Cache-Control", "value": "no-cache" }] },
+    { "source": "/index.html", "headers": [{ "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" }] },
+    { "source": "/favicon/:path*", "headers": [{ "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" }] },
+    { "source": "/brand/:path*", "headers": [{ "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" }] }
+  ],
   "rewrites": [
     { "source": "/api/:path*", "destination": "https://gg-parrot.onrender.com/api/:path*" },
-    { "source": "/(.*)", "destination": "/index.html" }
+    { "source": "/((?!api(?:/|$)|assets(?:/|$)|brand(?:/|$)|favicon(?:/|$)|sw\\.js$|offline\\.html$).*)", "destination": "/index.html" }
   ]
 }

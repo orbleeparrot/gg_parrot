@@ -80,13 +80,16 @@ export function hasPendingCommunitySummaries(payload) {
 }
 
 export function hasPendingNewsWork(payload) {
-  return hasPendingTranslation(payload) || hasPendingCommunitySummaries(payload);
+  return hasPendingTranslation(payload) || hasPendingCommunitySummaries(payload)
+    || payload?.image_status === "pending" || payload?.collection?.status === "pending";
 }
 
 export function newsRetryAfterSeconds(payload) {
   const delays = [
     hasPendingTranslation(payload) ? payload?.translation?.retry_after_seconds : null,
     hasPendingCommunitySummaries(payload) ? payload?.community_summaries?.retry_after_seconds : null,
+    payload?.collection?.status === "pending" ? 3 : null,
+    payload?.image_status === "pending" ? 30 : null,
   ].map(Number).filter((value) => Number.isFinite(value) && value > 0);
   return delays.length ? Math.min(...delays) : 30;
 }
@@ -95,29 +98,59 @@ export function newsRetryAfterSeconds(payload) {
  * 뉴스 응답 캐시 — 화면을 떠났다 돌아와도 마지막 응답을 바로 그린다.
  * 모듈 메모리 + sessionStorage 거울(새로고침에도 남는다). 저장소가 없거나 깨져 있어도 조용히 빈 캐시로 동작한다.
  */
-export function createNewsCache({ storage = null, storageKey = "ggp_news_cache_v1", maxAgeMs = 12 * 60 * 60 * 1000, now = Date.now } = {}) {
+export function createNewsCache({ storage = null, storageKey = "ggp_news_cache_v1", maxAgeMs = 12 * 60 * 60 * 1000,
+  maxEntries = 32, maxBytes = 1024 * 1024, now = Date.now } = {}) {
   const entries = new Map();
+  const sizes = new Map();
+  const byteLength = (value) => new TextEncoder().encode(JSON.stringify(value)).length;
+  let bytes = 2;
+  const remove = (key) => { bytes -= sizes.get(key) || 0; sizes.delete(key); entries.delete(key); };
+  const prune = () => {
+    let changed = false;
+    for (const [key, entry] of entries) {
+      if (now() - entry.storedAt > maxAgeMs || entry.storedAt > now() + 60_000) { remove(key); changed = true; }
+    }
+    while (entries.size && (entries.size > maxEntries || bytes > maxBytes)) { remove(entries.keys().next().value); changed = true; }
+    return changed;
+  };
+  const persist = () => {
+    try { storage?.setItem(storageKey, JSON.stringify(Object.fromEntries(entries))); } catch { /* 저장소 없이도 메모리 캐시로 동작 */ }
+  };
   try {
     const raw = storage?.getItem(storageKey);
-    if (raw) {
+    if (raw && new TextEncoder().encode(raw).length <= maxBytes * 2) {
       for (const [key, entry] of Object.entries(JSON.parse(raw))) {
-        if (entry && typeof entry === "object" && entry.data && Number.isFinite(entry.storedAt)) entries.set(key, entry);
+        if (!entry || typeof entry !== "object" || !entry.data || !Number.isFinite(entry.storedAt)) continue;
+        const size = byteLength({ [key]: entry });
+        entries.set(key, entry); sizes.set(key, size); bytes += size;
       }
-    }
+      if (prune()) persist();
+    } else if (raw) persist();
   } catch { /* 저장소 접근 불가·손상 — 메모리 캐시만 쓴다 */ }
-  const persist = () => {
-    try { storage?.setItem(storageKey, JSON.stringify(Object.fromEntries(entries))); } catch { /* 용량 초과 등 — 메모리 캐시는 유지 */ }
-  };
   return {
     get(key) {
+      if (prune()) persist();
       const entry = entries.get(key);
       if (!entry) return null;
-      if (now() - entry.storedAt > maxAgeMs) { entries.delete(key); return null; }
+      entries.delete(key); entries.set(key, entry);
       return entry;
     },
-    set(key, data, storedAt = now()) { entries.set(key, { data, storedAt }); persist(); },
+    set(key, data, storedAt = now()) {
+      const pruned = prune();
+      const same = entries.get(key)?.data === data;
+      const entry = { data, storedAt };
+      let size;
+      try { size = byteLength({ [key]: entry }); } catch { return; }
+      remove(key);
+      if (size <= maxBytes - 2) {
+        entries.set(key, entry); sizes.set(key, size); bytes += size;
+      }
+      const evicted = prune();
+      if (!same || pruned || evicted) persist();
+    },
     isFresh(key, freshMs) { const entry = this.get(key); return Boolean(entry) && now() - entry.storedAt < freshMs; },
-    clear() { entries.clear(); persist(); },
+    clear() { entries.clear(); sizes.clear(); bytes = 2; persist(); },
+    size: () => entries.size,
   };
 }
 
@@ -150,7 +183,9 @@ export function createNewsBriefingQueue({
     const seeded = hit ? hit.data : null;
     const settled = Boolean(seeded) && now() - hit.storedAt < freshMs && !hasPendingNewsWork(seeded) && !seeded.stale;
     return [key, {
-      status: seeded ? "success" : "queued", data: seeded, error: "", dueAt: settled ? null : 0,
+      status: seeded ? "success" : "queued", data: seeded, error: "",
+      dueAt: settled ? (Number(seeded.refresh_seconds) > 0
+        ? hit.storedAt + Math.max(3, Number(seeded.refresh_seconds)) * 1000 : null) : 0,
       pendingAttempts: 0, failures: 0,
     }];
   }));
@@ -159,13 +194,22 @@ export function createNewsBriefingQueue({
   let active = false;
   let visible = true;
   let timer = null;
+  const notified = new Map();
   const notify = (key, record) => {
-    if (active) onChange(key, { status: record.status, data: record.data, error: record.error });
+    if (!active) return;
+    const next = { status: record.status, data: record.data, error: record.error };
+    const last = notified.get(key);
+    if (last && last.status === next.status && last.data === next.data && last.error === next.error) return;
+    notified.set(key, next);
+    onChange(key, next);
   };
   const retryDelay = (attempt, payload) => {
     const serverSeconds = newsRetryAfterSeconds(payload);
     const serverDelay = Number.isFinite(serverSeconds) && serverSeconds > 0
       ? Math.min(3_600_000, serverSeconds * 1000) : RETRY_MS;
+    // Active preparation is an inexpensive DB read. Follow its short delivery
+    // interval; transport failures still back off from the normal 30 seconds.
+    if (payload && Number(payload.refresh_seconds) > 0) return serverDelay;
     return Math.max(serverDelay, Math.min(MAX_RETRY_MS, RETRY_MS * (2 ** Math.min(attempt - 1, 4))));
   };
 
@@ -205,14 +249,17 @@ export function createNewsBriefingQueue({
     // One stalled source must not hold the other slot or the whole retry batch.
     Promise.race([response, interrupted]).then((payload) => {
       if (!current()) return;
-      record.data = prepareNewsResponse(payload);
+      const prepared = prepareNewsResponse(payload);
+      if (!record.data || JSON.stringify(record.data) !== JSON.stringify(prepared)) record.data = prepared;
       record.status = "success";
       record.failures = 0;
       cache?.set(key, record.data, now());
       record.pendingAttempts = hasPendingNewsWork(record.data) || record.data.stale
         ? record.pendingAttempts + 1 : 0;
       record.dueAt = record.pendingAttempts
-        ? now() + retryDelay(record.pendingAttempts, record.data) : null;
+        ? now() + retryDelay(record.pendingAttempts, record.data)
+        : Number(record.data.refresh_seconds) > 0
+          ? now() + Math.max(3, Number(record.data.refresh_seconds)) * 1000 : null;
     }).catch((reason) => {
       if (!current()) return;
       if (reason?.name === "AbortError") {

@@ -13,6 +13,9 @@ test("chat requests send only message text and support pagination/read cursors",
   await api.chatPost("hello");
   await api.chatRead(42);
   await api.chatList({ beforeId: 81, seenId: 0 });
+  await api.chatList({ afterId: 42 });
+  await api.chatList({ metadataOnly: true, seenId: 42 });
+  await api.chatList({ messageIds: [2, 3] });
   assert.deepEqual(JSON.parse(calls[0].body), { text: "hello" });
   assert.equal(calls[0].method, "POST");
   assert.deepEqual(JSON.parse(calls[1].body), { last_seen_id: 42 });
@@ -21,6 +24,9 @@ test("chat requests send only message text and support pagination/read cursors",
   assert.equal(query.get("before_id"), "81");
   assert.equal(query.get("seen_id"), "0");
   assert.equal(calls[2].timeoutMs, undefined, "internal timeout options never reach fetch");
+  assert.equal(new URL(calls[3].url, "https://fixture.invalid").searchParams.get("after_id"), "42");
+  assert.equal(new URL(calls[4].url, "https://fixture.invalid").searchParams.get("metadata_only"), "true");
+  assert.equal(new URL(calls[5].url, "https://fixture.invalid").searchParams.get("message_ids"), "2,3");
 });
 
 function waitUntilAborted(signal) {

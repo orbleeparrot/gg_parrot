@@ -26,7 +26,10 @@ function writeResume(key, value) {
   }
 }
 
-export default function usePaperSession({ macro, valErr = "", onStarted, stopOnUnmount = false, resumeKey = "" }) {
+export default function usePaperSession({ macro, valErr = "", onStarted, stopOnUnmount = false, resumeKey = "", accountGuard = null }) {
+  const accountGuardRef = useRef(accountGuard);
+  accountGuardRef.current = accountGuard;
+  const isCurrentAccount = useCallback(() => accountGuardRef.current?.() ?? true, []);
   const resumed = useRef(undefined);
   if (resumed.current === undefined) resumed.current = stopOnUnmount ? null : readResume(resumeKey);
   const [session, setSession] = useState(() => resumed.current?.session || null);
@@ -66,21 +69,21 @@ export default function usePaperSession({ macro, valErr = "", onStarted, stopOnU
 
   const pollStatus = useCallback(async (signal) => {
     const activeSession = sessionRef.current;
-    if (!activeSession?.session_id) return;
+    if (!activeSession?.session_id || !isCurrentAccount()) return;
     const generation = generationRef.current;
     try {
       const nextStatus = await api.paperStatus(activeSession.session_id, { signal });
-      if (generation !== generationRef.current) return;
+      if (!isCurrentAccount() || generation !== generationRef.current) return;
       runningRef.current = nextStatus.status === "running";
       setStatus(nextStatus);
       setError((current) => current === PAPER_POLL_ERROR ? "" : current);
       changePhase(nextStatus.status === "running" ? "running" : "stopped");
     } catch (reason) {
       if (reason?.name === "AbortError") throw reason;
-      if (generation === generationRef.current) setError(PAPER_POLL_ERROR);
+      if (isCurrentAccount() && generation === generationRef.current) setError(PAPER_POLL_ERROR);
       throw reason;
     }
-  }, [changePhase]);
+  }, [changePhase, isCurrentAccount]);
 
   useAdaptivePolling(pollStatus, {
     intervalMs: 2_000,
@@ -104,8 +107,9 @@ export default function usePaperSession({ macro, valErr = "", onStarted, stopOnU
   }, []);
 
   const createSession = useCallback(async (generation, macroSnapshot, modeSnapshot) => {
+    if (!isCurrentAccount()) return false;
     const nextSession = await api.paperStart(macroSnapshot, macroSnapshot.symbol, modeSnapshot);
-    if (generation !== generationRef.current) {
+    if (!isCurrentAccount() || generation !== generationRef.current) {
       // Starting succeeded after the guide moved away or unmounted. The server
       // has already created a runner, so explicitly retire it instead of
       // leaving an invisible paper session behind.
@@ -131,10 +135,10 @@ export default function usePaperSession({ macro, valErr = "", onStarted, stopOnU
     writeResume(resumeKey, { session: nextSession, startedMacro: macroSnapshot, startedMode: modeSnapshot });
     onStartedRef.current?.({ session: nextSession, macro: macroSnapshot, mode: modeSnapshot });
     return true;
-  }, [changePhase, resumeKey]);
+  }, [changePhase, isCurrentAccount, resumeKey]);
 
   const start = useCallback(async () => {
-    if (actionRef.current) return false;
+    if (actionRef.current || !isCurrentAccount()) return false;
     if (valErr) {
       setError(valErr);
       return false;
@@ -151,7 +155,7 @@ export default function usePaperSession({ macro, valErr = "", onStarted, stopOnU
     try {
       return await createSession(generation, macroSnapshot, modeSnapshot);
     } catch (reason) {
-      if (generation === generationRef.current) {
+      if (isCurrentAccount() && generation === generationRef.current) {
         setError(String(reason.message || reason));
         changePhase("error");
       }
@@ -159,9 +163,10 @@ export default function usePaperSession({ macro, valErr = "", onStarted, stopOnU
     } finally {
       actionRef.current = false;
     }
-  }, [changePhase, createSession, macro, mode, valErr]);
+  }, [changePhase, createSession, isCurrentAccount, macro, mode, valErr]);
 
   const stop = useCallback(async () => {
+    if (!isCurrentAccount()) return false;
     if (phaseRef.current === "starting") {
       // Invalidate the in-flight start. createSession will stop the server
       // runner as soon as its response supplies the new session id.
@@ -184,19 +189,19 @@ export default function usePaperSession({ macro, valErr = "", onStarted, stopOnU
     changePhase("stopping");
     try {
       await api.paperStop(activeSession.session_id);
-      if (generation !== generationRef.current) return false;
+      if (!isCurrentAccount() || generation !== generationRef.current) return false;
       runningRef.current = false;
       setStatus((current) => current ? { ...current, status: "stopped" } : current);
       changePhase("stopped");
       try {
         const nextStatus = await api.paperStatus(activeSession.session_id);
-        if (generation === generationRef.current) setStatus(nextStatus);
+        if (isCurrentAccount() && generation === generationRef.current) setStatus(nextStatus);
       } catch (_) {
-        if (generation === generationRef.current) setError(PAPER_POLL_ERROR);
+        if (isCurrentAccount() && generation === generationRef.current) setError(PAPER_POLL_ERROR);
       }
       return true;
     } catch (reason) {
-      if (generation === generationRef.current) {
+      if (isCurrentAccount() && generation === generationRef.current) {
         setError(String(reason.message || reason));
         changePhase("error");
       }
@@ -204,10 +209,10 @@ export default function usePaperSession({ macro, valErr = "", onStarted, stopOnU
     } finally {
       actionRef.current = false;
     }
-  }, [changePhase]);
+  }, [changePhase, isCurrentAccount]);
 
   const restart = useCallback(async () => {
-    if (actionRef.current) return false;
+    if (actionRef.current || !isCurrentAccount()) return false;
     if (valErr) {
       setError(valErr);
       return false;
@@ -225,13 +230,14 @@ export default function usePaperSession({ macro, valErr = "", onStarted, stopOnU
     try {
       if (activeSession?.session_id && runningRef.current) {
         await api.paperStop(activeSession.session_id);
+        if (!isCurrentAccount()) return false;
         runningRef.current = false;
         setStatus((current) => current ? { ...current, status: "stopped" } : current);
       }
-      if (generation !== generationRef.current) return false;
+      if (!isCurrentAccount() || generation !== generationRef.current) return false;
       return await createSession(generation, macroSnapshot, modeSnapshot);
     } catch (reason) {
-      if (generation === generationRef.current) {
+      if (isCurrentAccount() && generation === generationRef.current) {
         setError(String(reason.message || reason));
         changePhase("error");
       }
@@ -239,7 +245,7 @@ export default function usePaperSession({ macro, valErr = "", onStarted, stopOnU
     } finally {
       actionRef.current = false;
     }
-  }, [changePhase, createSession, macro, mode, valErr]);
+  }, [changePhase, createSession, isCurrentAccount, macro, mode, valErr]);
 
   return {
     session,

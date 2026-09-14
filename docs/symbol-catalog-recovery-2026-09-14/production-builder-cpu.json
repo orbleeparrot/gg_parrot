@@ -1,0 +1,763 @@
+{
+  "checked_at": "2026-09-14T08:08:06.684685+00:00",
+  "scope": "One anonymous public GET-only browser visit, CPU sampling until 5s after DOMContentLoaded; profiler overhead applies",
+  "blocked_writes": [],
+  "raw_profile": "/tmp/ggp-builder-agvnq2i1.cpuprofile",
+  "timing": {
+    "longTasks": [],
+    "lcp": [
+      {
+        "ms": 1084,
+        "tag": "P",
+        "class": "mt-2 t-small text-slate-700 measure mx-auto"
+      },
+      {
+        "ms": 1452,
+        "tag": "STRONG",
+        "class": "candle-chart-current num text-slate-900"
+      }
+    ],
+    "paint": [
+      {
+        "name": "first-paint",
+        "entryType": "paint",
+        "startTime": 1084,
+        "duration": 0,
+        "navigationId": 4668,
+        "paintTime": 1053,
+        "presentationTime": 1084
+      },
+      {
+        "name": "first-contentful-paint",
+        "entryType": "paint",
+        "startTime": 1084,
+        "duration": 0,
+        "navigationId": 4668,
+        "paintTime": 1053,
+        "presentationTime": 1084
+      }
+    ],
+    "resources": [
+      {
+        "url": "https://gg-parrot.vercel.app/api/candles?symbol=BTCUSDT&interval=1d&limit=300&market=spot",
+        "start": 257.89999771118164,
+        "end": 1393.599998474121
+      },
+      {
+        "url": "https://gg-parrot.vercel.app/api/candles?symbol=BTCUSDT&interval=1d&limit=300&market=spot",
+        "start": 3259,
+        "end": 3459.599998474121
+      },
+      {
+        "url": "https://gg-parrot.vercel.app/api/candles/live?symbol=BTCUSDT&interval=1d&market=spot",
+        "start": 3260.099998474121,
+        "end": 3446.599998474121
+      }
+    ]
+  },
+  "navigation_clock_available": true,
+  "self": [
+    {
+      "function": "(idle)",
+      "url": "",
+      "line": 0,
+      "column": 0,
+      "sampled_ms": 4587.35
+    },
+    {
+      "function": "(program)",
+      "url": "",
+      "line": 0,
+      "column": 0,
+      "sampled_ms": 355.37
+    },
+    {
+      "function": "(anonymous)",
+      "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+      "line": 1,
+      "column": 1,
+      "sampled_ms": 12.75
+    },
+    {
+      "function": "Ct",
+      "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+      "line": 68,
+      "column": 25267,
+      "sampled_ms": 10.61
+    },
+    {
+      "function": "(garbage collector)",
+      "url": "",
+      "line": 0,
+      "column": 0,
+      "sampled_ms": 7.43
+    },
+    {
+      "function": "Yg",
+      "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+      "line": 41,
+      "column": 14755,
+      "sampled_ms": 4.25
+    },
+    {
+      "function": "(anonymous)",
+      "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+      "line": 73,
+      "column": 174636,
+      "sampled_ms": 4.22
+    },
+    {
+      "function": "fetch",
+      "url": "",
+      "line": 0,
+      "column": 0,
+      "sampled_ms": 3.19
+    },
+    {
+      "function": "createElement",
+      "url": "",
+      "line": 0,
+      "column": 0,
+      "sampled_ms": 2.13
+    },
+    {
+      "function": "ya",
+      "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+      "line": 39,
+      "column": 17129,
+      "sampled_ms": 2.12
+    },
+    {
+      "function": "lt",
+      "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+      "line": 41,
+      "column": 1452,
+      "sampled_ms": 2.12
+    },
+    {
+      "function": "$m",
+      "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+      "line": 73,
+      "column": 173748,
+      "sampled_ms": 1.68
+    },
+    {
+      "function": "Wt",
+      "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+      "line": 41,
+      "column": 27251,
+      "sampled_ms": 1.28
+    },
+    {
+      "function": "Yt",
+      "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+      "line": 41,
+      "column": 30819,
+      "sampled_ms": 1.25
+    },
+    {
+      "function": "addEventListener",
+      "url": "",
+      "line": 0,
+      "column": 0,
+      "sampled_ms": 1.07
+    },
+    {
+      "function": "hs",
+      "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+      "line": 38,
+      "column": 9049,
+      "sampled_ms": 1.07
+    },
+    {
+      "function": "(anonymous)",
+      "url": "extensions::SafeBuiltins",
+      "line": 8,
+      "column": 33,
+      "sampled_ms": 1.07
+    },
+    {
+      "function": "matchMedia",
+      "url": "",
+      "line": 0,
+      "column": 0,
+      "sampled_ms": 1.07
+    },
+    {
+      "function": "Fu",
+      "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+      "line": 50,
+      "column": 5219,
+      "sampled_ms": 1.07
+    },
+    {
+      "function": "onData",
+      "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+      "line": 68,
+      "column": 49613,
+      "sampled_ms": 1.07
+    },
+    {
+      "function": "_drawPrice",
+      "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+      "line": 73,
+      "column": 169963,
+      "sampled_ms": 1.07
+    },
+    {
+      "function": "ed",
+      "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+      "line": 39,
+      "column": 20650,
+      "sampled_ms": 1.07
+    },
+    {
+      "function": "Xs",
+      "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+      "line": 73,
+      "column": 98014,
+      "sampled_ms": 1.07
+    },
+    {
+      "function": "Ka",
+      "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+      "line": 41,
+      "column": 37189,
+      "sampled_ms": 1.07
+    },
+    {
+      "function": "Ep.signal",
+      "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+      "line": 68,
+      "column": 30293,
+      "sampled_ms": 1.07
+    }
+  ],
+  "inclusive": [
+    {
+      "function": "(root)",
+      "url": "",
+      "line": 0,
+      "column": 0,
+      "sampled_ms": 5078.86
+    },
+    {
+      "function": "(idle)",
+      "url": "",
+      "line": 0,
+      "column": 0,
+      "sampled_ms": 4587.35
+    },
+    {
+      "function": "(program)",
+      "url": "",
+      "line": 0,
+      "column": 0,
+      "sampled_ms": 355.37
+    },
+    {
+      "function": "F",
+      "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+      "line": 26,
+      "column": 1408,
+      "sampled_ms": 65.99
+    },
+    {
+      "function": "ie",
+      "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+      "line": 26,
+      "column": 1908,
+      "sampled_ms": 65.99
+    },
+    {
+      "function": "Kd",
+      "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+      "line": 41,
+      "column": 34703,
+      "sampled_ms": 61.74
+    },
+    {
+      "function": "Yd",
+      "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+      "line": 41,
+      "column": 40085,
+      "sampled_ms": 40.94
+    },
+    {
+      "function": "yM",
+      "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+      "line": 73,
+      "column": 128251,
+      "sampled_ms": 28.66
+    },
+    {
+      "function": "cl",
+      "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+      "line": 41,
+      "column": 39801,
+      "sampled_ms": 27.12
+    },
+    {
+      "function": "i1",
+      "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+      "line": 41,
+      "column": 40004,
+      "sampled_ms": 27.12
+    },
+    {
+      "function": "(anonymous)",
+      "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+      "line": 73,
+      "column": 128928,
+      "sampled_ms": 26.54
+    },
+    {
+      "function": "ef",
+      "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+      "line": 41,
+      "column": 44150,
+      "sampled_ms": 26.06
+    },
+    {
+      "function": "ii",
+      "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+      "line": 41,
+      "column": 40529,
+      "sampled_ms": 22.6
+    },
+    {
+      "function": "r1",
+      "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+      "line": 41,
+      "column": 40654,
+      "sampled_ms": 22.6
+    },
+    {
+      "function": "nl",
+      "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+      "line": 41,
+      "column": 24314,
+      "sampled_ms": 21.77
+    },
+    {
+      "function": "ya",
+      "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+      "line": 39,
+      "column": 17129,
+      "sampled_ms": 19.58
+    },
+    {
+      "function": "Ud",
+      "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+      "line": 41,
+      "column": 31701,
+      "sampled_ms": 18.59
+    },
+    {
+      "function": "Bd",
+      "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+      "line": 41,
+      "column": 31245,
+      "sampled_ms": 18.59
+    },
+    {
+      "function": "e1",
+      "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+      "line": 41,
+      "column": 31215,
+      "sampled_ms": 18.59
+    },
+    {
+      "function": "(anonymous)",
+      "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+      "line": 1,
+      "column": 1,
+      "sampled_ms": 18.08
+    },
+    {
+      "function": "Rm",
+      "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+      "line": 73,
+      "column": 110529,
+      "sampled_ms": 16.99
+    },
+    {
+      "function": "Rm",
+      "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+      "line": 73,
+      "column": 124662,
+      "sampled_ms": 16.99
+    },
+    {
+      "function": "s1",
+      "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+      "line": 41,
+      "column": 40041,
+      "sampled_ms": 13.82
+    },
+    {
+      "function": "Gd",
+      "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+      "line": 41,
+      "column": 40194,
+      "sampled_ms": 13.81
+    },
+    {
+      "function": "(anonymous)",
+      "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+      "line": 73,
+      "column": 174636,
+      "sampled_ms": 13.3
+    }
+  ],
+  "long_task_self": [],
+  "long_task_inclusive": [],
+  "top_stacks": [
+    {
+      "sampled_ms": 4587.35,
+      "frames": [
+        {
+          "function": "(root)",
+          "url": "",
+          "line": 0,
+          "column": 0
+        },
+        {
+          "function": "(idle)",
+          "url": "",
+          "line": 0,
+          "column": 0
+        }
+      ]
+    },
+    {
+      "sampled_ms": 355.37,
+      "frames": [
+        {
+          "function": "(root)",
+          "url": "",
+          "line": 0,
+          "column": 0
+        },
+        {
+          "function": "(program)",
+          "url": "",
+          "line": 0,
+          "column": 0
+        }
+      ]
+    },
+    {
+      "sampled_ms": 12.75,
+      "frames": [
+        {
+          "function": "(root)",
+          "url": "",
+          "line": 0,
+          "column": 0
+        },
+        {
+          "function": "(anonymous)",
+          "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+          "line": 1,
+          "column": 1
+        }
+      ]
+    },
+    {
+      "sampled_ms": 7.43,
+      "frames": [
+        {
+          "function": "(root)",
+          "url": "",
+          "line": 0,
+          "column": 0
+        },
+        {
+          "function": "(garbage collector)",
+          "url": "",
+          "line": 0,
+          "column": 0
+        }
+      ]
+    },
+    {
+      "sampled_ms": 4.22,
+      "frames": [
+        {
+          "function": "(root)",
+          "url": "",
+          "line": 0,
+          "column": 0
+        },
+        {
+          "function": "ie",
+          "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+          "line": 26,
+          "column": 1908
+        },
+        {
+          "function": "F",
+          "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+          "line": 26,
+          "column": 1408
+        },
+        {
+          "function": "Kd",
+          "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+          "line": 41,
+          "column": 34703
+        },
+        {
+          "function": "ii",
+          "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+          "line": 41,
+          "column": 40529
+        },
+        {
+          "function": "r1",
+          "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+          "line": 41,
+          "column": 40654
+        },
+        {
+          "function": "e1",
+          "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+          "line": 41,
+          "column": 31215
+        },
+        {
+          "function": "Bd",
+          "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+          "line": 41,
+          "column": 31245
+        },
+        {
+          "function": "Bd",
+          "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+          "line": 41,
+          "column": 31245
+        },
+        {
+          "function": "Ud",
+          "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+          "line": 41,
+          "column": 31701
+        },
+        {
+          "function": "nl",
+          "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+          "line": 41,
+          "column": 24314
+        },
+        {
+          "function": "(anonymous)",
+          "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+          "line": 73,
+          "column": 174636
+        }
+      ]
+    },
+    {
+      "sampled_ms": 3.19,
+      "frames": [
+        {
+          "function": "(root)",
+          "url": "",
+          "line": 0,
+          "column": 0
+        },
+        {
+          "function": "ie",
+          "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+          "line": 26,
+          "column": 1908
+        },
+        {
+          "function": "F",
+          "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+          "line": 26,
+          "column": 1408
+        },
+        {
+          "function": "Kd",
+          "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+          "line": 41,
+          "column": 34703
+        },
+        {
+          "function": "cl",
+          "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+          "line": 41,
+          "column": 39801
+        },
+        {
+          "function": "i1",
+          "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+          "line": 41,
+          "column": 40004
+        },
+        {
+          "function": "Yd",
+          "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+          "line": 41,
+          "column": 40085
+        },
+        {
+          "function": "Gd",
+          "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+          "line": 41,
+          "column": 40194
+        },
+        {
+          "function": "Yg",
+          "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+          "line": 41,
+          "column": 14755
+        }
+      ]
+    },
+    {
+      "sampled_ms": 2.12,
+      "frames": [
+        {
+          "function": "(root)",
+          "url": "",
+          "line": 0,
+          "column": 0
+        },
+        {
+          "function": "ie",
+          "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+          "line": 26,
+          "column": 1908
+        },
+        {
+          "function": "F",
+          "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+          "line": 26,
+          "column": 1408
+        },
+        {
+          "function": "Kd",
+          "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+          "line": 41,
+          "column": 34703
+        },
+        {
+          "function": "s1",
+          "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+          "line": 41,
+          "column": 40041
+        },
+        {
+          "function": "Yd",
+          "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+          "line": 41,
+          "column": 40085
+        },
+        {
+          "function": "ef",
+          "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+          "line": 41,
+          "column": 44150
+        },
+        {
+          "function": "ya",
+          "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+          "line": 39,
+          "column": 17129
+        }
+      ]
+    },
+    {
+      "sampled_ms": 2.12,
+      "frames": [
+        {
+          "function": "(root)",
+          "url": "",
+          "line": 0,
+          "column": 0
+        },
+        {
+          "function": "(anonymous)",
+          "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+          "line": 73,
+          "column": 128928
+        },
+        {
+          "function": "yM",
+          "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+          "line": 73,
+          "column": 128251
+        },
+        {
+          "function": "OM",
+          "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+          "line": 73,
+          "column": 129095
+        },
+        {
+          "function": "MM",
+          "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+          "line": 73,
+          "column": 129150
+        },
+        {
+          "function": "LM",
+          "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+          "line": 73,
+          "column": 126723
+        },
+        {
+          "function": "Cm",
+          "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+          "line": 73,
+          "column": 100422
+        },
+        {
+          "function": "zl",
+          "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+          "line": 73,
+          "column": 51727
+        },
+        {
+          "function": "Kl",
+          "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+          "line": 73,
+          "column": 46355
+        },
+        {
+          "function": "so",
+          "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+          "line": 73,
+          "column": 52907
+        },
+        {
+          "function": "M_",
+          "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+          "line": 73,
+          "column": 55621
+        },
+        {
+          "function": "y_",
+          "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+          "line": 73,
+          "column": 55488
+        },
+        {
+          "function": "(anonymous)",
+          "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+          "line": 73,
+          "column": 41296
+        },
+        {
+          "function": "Ct",
+          "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+          "line": 68,
+          "column": 25267
+        }
+      ]
+    }
+  ]
+}

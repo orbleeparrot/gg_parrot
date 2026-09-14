@@ -449,7 +449,7 @@ test("prepared feeds poll partial results at 3 seconds and completed results at 
 
 test("unchanged periodic results preserve object identity and skip storage writes", async () => {
   let writes = 0;
-  const cache = libs.createNewsCache({ storage: { getItem: () => null, setItem: () => { writes += 1; } } });
+  const cache = libs.createNewsCache({ now: () => 1000, storage: { getItem: () => null, setItem: () => { writes += 1; } } });
   const h = harness(async () => ({ ...ready, refresh_seconds: 30 }), ["BTC"], { cache });
   h.queue.start();
   await h.next();

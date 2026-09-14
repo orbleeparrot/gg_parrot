@@ -9,7 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from . import auth, avatars
-from .db import (BoardPost, ChatMessage, ChatReadState, LeaderboardEntry,
+from .db import (BoardComment, BoardPost, ChatMessage, ChatReadState, LeaderboardEntry,
                  RunnerKey, RunnerLaunchTicket, RunSession, User, UserMacro, get_session)
 from . import points
 from .security import hash_password, verify_password
@@ -54,6 +54,7 @@ def update_profile(
             if renamed:
                 db.exec(update(ChatMessage).where(ChatMessage.user_id == user_id).values(username=username))
                 db.exec(update(BoardPost).where(BoardPost.author_user_id == user_id).values(author_name=username))
+                db.exec(update(BoardComment).where(BoardComment.author_user_id == user_id).values(username=username))
                 db.exec(update(LeaderboardEntry).where(LeaderboardEntry.owner_user_id == user_id).values(
                     username=username, nickname=username,
                 ))
@@ -108,6 +109,7 @@ def delete_account(user_id: int, confirmation: str, password: str = "", credenti
             db.exec(delete(model).where(model.user_id == user_id))
         db.exec(update(ChatMessage).where(ChatMessage.user_id == user_id).values(username="탈퇴한 회원"))
         db.exec(update(BoardPost).where(BoardPost.author_user_id == user_id).values(author_name="탈퇴한 회원"))
+        db.exec(update(BoardComment).where(BoardComment.author_user_id == user_id).values(username="탈퇴한 회원"))
         db.exec(update(LeaderboardEntry).where(LeaderboardEntry.owner_user_id == user_id).values(username="탈퇴한 회원", nickname="탈퇴한 회원"))
         if user.points_balance:
             points.apply(db, user, -user.points_balance, "account_closed")

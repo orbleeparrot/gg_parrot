@@ -20,6 +20,7 @@ from sqlmodel import Field, SQLModel, select
 from . import news, news_images
 from .db import get_session
 from .agent_features.position_news import articles, collector
+from .public_news_cache import responses as _responses
 
 logger = logging.getLogger(__name__)
 _runtime = None
@@ -110,19 +111,29 @@ def _public_payload(scope: str, feed: dict | None) -> dict:
 
 
 def get_market_news() -> dict:
-    with get_session() as db:
-        feed = articles.read_article_feed("MARKET", limit=100, db=db)
     request_refresh("MARKET")
-    return _public_payload("MARKET", feed)
+    return _cached_news("MARKET")
 
 
 def get_coin_news(symbol: str) -> dict:
     scope = news.asset_from_market_symbol(symbol)
     if not scope:
         raise ValueError("코인 심볼이 올바르지 않아요.")
+    request_refresh(scope)
+    return _cached_news(scope)
+
+
+def _cached_news(scope: str) -> dict:
+    result, state = _responses.get_or_load(scope, lambda: _read_news(scope), ttl=1, stale_ttl=9)
+    if state == "stale":
+        result["stale"] = True
+    return result
+
+
+def _read_news(scope: str) -> dict:
     with get_session() as db:
-        feed = articles.read_article_feed(scope, limit=100, db=db)
-        if feed is None:
+        feed = articles.read_article_feed(scope, limit=100, include_analysis=False, db=db)
+        if feed is None and scope != "MARKET":
             # Rolling upgrades may start with only the old durable snapshot.
             # Expose its already translated items; never translate during GET.
             from .agent_features.position_news.repository import get_latest_snapshot
@@ -133,7 +144,6 @@ def get_coin_news(symbol: str) -> dict:
                 feed = {**raw, "items": ready,
                         "translation": {"status": "partial" if len(ready) < len(raw.get("items", [])) else "ready",
                                         "pending_count": len(raw.get("items", [])) - len(ready), "retry_after_seconds": 3}}
-    request_refresh(scope)
     return _public_payload(scope, feed)
 
 

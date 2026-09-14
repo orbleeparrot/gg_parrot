@@ -11,7 +11,7 @@ import CandleChart from "../components/CandleChart.jsx";
 import RegisterMacroModal from "../components/RegisterMacroModal.jsx";
 import { EmptyState, Loading } from "../components/Page.jsx";
 import { api } from "../api.js";
-import { useAuth } from "../lib/auth.js";
+import { useAuth, useAccountGuard, getAuthScope } from "../lib/auth.js";
 import {
   CANDLE_INTERVALS,
   PERIOD_PRESETS,
@@ -30,7 +30,7 @@ import {
   readHeroDraft,
   takeRegistrationDraft,
 } from "../lib/journey.js";
-import { readStudioSession, writeStudioSession } from "../lib/studioSession.js";
+import { readStudioSession, writeStudioSession, studioPaperKey } from "../lib/studioSession.js";
 import { backtestBudget, validBacktestLimits } from "../lib/backtestBudget.js";
 import "./Studio.css";
 import "./StudioBudget.css";
@@ -168,6 +168,16 @@ function ShareDialog({ share, stale, busy, card, onClose, onRenew }) {
 }
 
 export default function Studio() {
+  const { accountVersion } = useAuth();
+  const scope = getAuthScope();
+  const location = useLocation();
+  const entryOwner = useRef({ key: location.key, scope });
+  if (entryOwner.current.key !== location.key) entryOwner.current = { key: location.key, scope };
+  return <AccountStudio key={accountVersion} scope={scope} allowRouterMacro={entryOwner.current.scope === scope} />;
+}
+
+function AccountStudio({ scope, allowRouterMacro }) {
+  const isCurrentAccount = useAccountGuard();
   const split = useStudioSplit();
   const { token } = useAuth();
   const { slug } = useParams();
@@ -178,7 +188,7 @@ export default function Studio() {
   // 다른 화면에 다녀와도 조건·결과·탭이 남아 있도록 — 이 탭(sessionStorage)에 둔 작업 상태로 시작한다.
   // 공유 링크(/s/:slug)는 그 링크의 매크로가 우선이라 읽지 않는다.
   const savedRef = useRef(undefined);
-  if (savedRef.current === undefined) savedRef.current = slug ? null : readStudioSession();
+  if (savedRef.current === undefined) savedRef.current = slug ? null : readStudioSession(scope);
   const saved = savedRef.current;
   const [form, setForm] = useState(() => saved?.form || defaultForm());
   const [result, setResult] = useState(() => saved?.result || null);
@@ -223,16 +233,18 @@ export default function Studio() {
   const loadTestLimits = useCallback(async () => {
     try {
       const value = await api.backtestLimits();
+      if (!isCurrentAccount()) throw new DOMException("Account changed", "AbortError");
       if (!validBacktestLimits(value)) throw new Error("invalid backtest limits");
       setTestLimits(value);
       setLimitsError("");
       return value;
     } catch (_) {
+      if (!isCurrentAccount()) throw new DOMException("Account changed", "AbortError");
       const message = "테스트 범위를 확인하지 못했어요. 다시 시도해 주세요.";
       setLimitsError(message);
       throw new Error(message);
     }
-  }, []);
+  }, [isCurrentAccount]);
   useEffect(() => { loadTestLimits().catch(() => {}); }, [loadTestLimits]);
   const testBudget = useMemo(() => backtestBudget(form, testLimits), [form, testLimits]);
   const budgetBlocked = !!testBudget && !testBudget.allowed;
@@ -286,16 +298,16 @@ export default function Studio() {
     return out;
   }, [form.symbol]);
 
-  const paper = usePaperSession({ macro: currentMacro, valErr, resumeKey: slug ? "" : "ggp_studio_paper:v1" });
+  const paper = usePaperSession({ macro: currentMacro, valErr, resumeKey: slug ? "" : studioPaperKey(scope), accountGuard: isCurrentAccount });
 
   // 작업 상태 저장 — 값이 바뀌고 300ms 뒤에 한 번. 결과(자산곡선 365점)까지 함께 둔다.
   useEffect(() => {
     if (slug) return undefined;
-    const timer = window.setTimeout(() => writeStudioSession({
+    const timer = window.setTimeout(() => { if (isCurrentAccount()) writeStudioSession({
       form, result, testedMacro, perSymbol, explanation, summary, dataSource, periodLabel, share, loadedFrom, runLeverage, autoRun, dockTab, optimized,
-    }), 300);
+    }, scope); }, 300);
     return () => window.clearTimeout(timer);
-  }, [slug, form, result, testedMacro, perSymbol, explanation, summary, dataSource, periodLabel, share, loadedFrom, runLeverage, autoRun, dockTab, optimized]);
+  }, [scope, isCurrentAccount, slug, form, result, testedMacro, perSymbol, explanation, summary, dataSource, periodLabel, share, loadedFrom, runLeverage, autoRun, dockTab, optimized]);
   // 차트 오버레이 — 지금 매크로 설정 그대로 보조지표(볼린저 밴드·매수/매도 구간 등)를 얹는다. form 이 바뀌면 즉시 따라간다.
   const overlay = useCallback((candles) => computeStrategyOverlay(form, candles), [form]);
 
@@ -336,7 +348,7 @@ export default function Studio() {
   // preserve React Router's own key/index bookkeeping.
   useEffect(() => {
     const macro = location.state?.macro;
-    if (!macro) return;
+    if (!macro || !allowRouterMacro) return;
     setForm(macroToForm(macro));
     setLoadedFrom(
       location.state?.source === "hero-guide"
@@ -344,9 +356,10 @@ export default function Studio() {
         : "리더보드에서 복사한 매크로"
     );
     navigate(location.pathname + location.search, { replace: true, state: null });
-  }, [location.pathname, location.search, location.state, navigate]);
+  }, [allowRouterMacro, location.pathname, location.search, location.state, navigate]);
 
   const runBacktest = useCallback(async (snapshot) => {
+    if (!isCurrentAccount()) return false;
     const validationError = validate(snapshot);
     setError("");
     if (validationError) {
@@ -366,12 +379,13 @@ export default function Studio() {
     setBusy(true);
     try {
       const budget = backtestBudget(snapshot, await loadTestLimits());
+      if (!isCurrentAccount()) return false;
       if (!budget?.allowed) {
         if (budget?.error) setError(budget.error);
         return false;
       }
       const data = await api.backtest(macro);
-      if (requestId !== requestIdRef.current) return false;
+      if (!isCurrentAccount() || requestId !== requestIdRef.current) return false;
       setTestedMacro(macro);
       setResult(data.result);
       setPerSymbol(data.per_symbol || []);
@@ -383,12 +397,12 @@ export default function Studio() {
       setRunLeverage(macro.leverage || 1);
       return true;
     } catch (reason) {
-      if (requestId === requestIdRef.current) setError(String(reason.message || reason));
+      if (isCurrentAccount() && requestId === requestIdRef.current) setError(String(reason.message || reason));
       return false;
     } finally {
-      if (requestId === requestIdRef.current) setBusy(false);
+      if (isCurrentAccount() && requestId === requestIdRef.current) setBusy(false);
     }
-  }, [loadTestLimits]);
+  }, [isCurrentAccount, loadTestLimits]);
   runBacktestRef.current = runBacktest;
 
   // Consume all entry parameters in one place so two effects cannot restore
@@ -494,6 +508,7 @@ export default function Studio() {
   }, [busy, form, registerOpen, runBacktest, valErr]);
 
   async function saveAndShare() {
+    if (!isCurrentAccount()) return false;
     setError("");
     if (valErr) { setError(valErr); return false; }
     const requestId = ++requestIdRef.current;
@@ -504,13 +519,14 @@ export default function Studio() {
     setBusy(true);
     try {
       const budget = backtestBudget(form, await loadTestLimits());
+      if (!isCurrentAccount()) return false;
       if (!budget?.allowed) {
         if (budget?.error) setError(budget.error);
         return false;
       }
       const macro = currentMacro;
       const data = await api.createMacro(macro);
-      if (requestId !== requestIdRef.current) return;
+      if (!isCurrentAccount() || requestId !== requestIdRef.current) return;
       setTestedMacro(macro);
       setResult(data.result);
       // The save endpoint returns an aggregate representative result but no
@@ -530,10 +546,10 @@ export default function Studio() {
       });
       return true;
     } catch (reason) {
-      if (requestId === requestIdRef.current) setError(String(reason.message || reason));
+      if (isCurrentAccount() && requestId === requestIdRef.current) setError(String(reason.message || reason));
       return false;
     } finally {
-      if (requestId === requestIdRef.current) setBusy(false);
+      if (isCurrentAccount() && requestId === requestIdRef.current) setBusy(false);
     }
   }
 
@@ -553,6 +569,7 @@ export default function Studio() {
     setFileImportBusy(true);
     try {
       const rawMacro = JSON.parse(await file.text());
+      if (!isCurrentAccount()) return;
       if (!rawMacro || typeof rawMacro !== "object" || !rawMacro.symbol || !rawMacro.rule_type || !rawMacro.params) {
         throw new Error("INVALID_MACRO_FILE");
       }
@@ -563,6 +580,7 @@ export default function Studio() {
       const macro = buildMacro(importedForm);
       const name = file.name.replace(/\.ggm\.json$|\.json$/i, "") || `${macro.symbol} 매크로`;
       const data = await api.saveMyMacro(macro, name);
+      if (!isCurrentAccount()) return;
       const savedMacro = data?.item?.macro || macro;
 
       requestIdRef.current += 1;
@@ -583,6 +601,7 @@ export default function Studio() {
       setError("");
       setFileImportSuccess("내 매크로에 등록하고 아래 조건 편집기에 불러왔어요. 백테스트로 설정을 다시 확인해 주세요.");
     } catch (reason) {
+      if (!isCurrentAccount()) return;
       const message = String(reason.message || reason);
       setFileImportError(
         message === "INVALID_MACRO_FILE" || reason instanceof SyntaxError
@@ -592,7 +611,7 @@ export default function Studio() {
             : `매크로 파일을 등록하지 못했어요: ${message}`,
       );
     } finally {
-      setFileImportBusy(false);
+      if (isCurrentAccount()) setFileImportBusy(false);
     }
   }
 
@@ -611,20 +630,21 @@ export default function Studio() {
     setAiError("");
     try {
       const data = await api.explainAi(macro);
-      if (requestId !== aiRequestIdRef.current || latestTestedKeyRef.current !== key) return;
+      if (!isCurrentAccount() || requestId !== aiRequestIdRef.current || latestTestedKeyRef.current !== key) return;
       if (data.explanation) setExplanation(data.explanation);
       if (data.ai_available === false) setAiError("AI 해설이 아직 준비되지 않았어요 (서버 설정 필요).");
       else if (data.ai_error) setAiError(data.ai_error);
     } catch (reason) {
-      if (requestId === aiRequestIdRef.current && latestTestedKeyRef.current === key) {
+      if (isCurrentAccount() && requestId === aiRequestIdRef.current && latestTestedKeyRef.current === key) {
         setAiError("AI 호출 실패: " + String(reason.message || reason));
       }
     } finally {
-      if (requestId === aiRequestIdRef.current) setAiBusy(false);
+      if (isCurrentAccount() && requestId === aiRequestIdRef.current) setAiBusy(false);
     }
   }
 
   function finishRegistration(entry) {
+    if (!isCurrentAccount()) return;
     completeJourney();
     setRegisterOpen(false);
     navigate("/leaderboard", {

@@ -61,6 +61,8 @@ class Fixture:
         data = {"items": []}
         if path == "/api/hot-coins":
             data = {"coins": [{"symbol": symbol, "last_price": 65234.45 if index == 0 else .000012 if index == 6 else 14.35, "change_pct": 12.2 - index * 1.6, "quote_volume": 345678} for index, symbol in enumerate(SYMBOLS)]}
+            if self.periodic:
+                data["coins"][0]["last_price"] = 70000 + self.calls[path]
         elif path == "/api/news/market":
             data = {"as_of": "2026-09-10", "overview": "시장 전반의 거래량이 늘었어요.\n주요 자산으로 자금이 유입됐어요.", "items": [article("시장")], "translation": {"status": "ready"}}
             if self.periodic: data["refresh_seconds"] = 3
@@ -251,6 +253,17 @@ def main():
             expect(reader.locator(".news-racer-reader-state.is-notice")).to_have_count(0)
             expect(reader.get_by_text("최근 DOGE 뉴스가 없어요.", exact=True)).to_have_count(0)
             checks.append("selected-news-loading-error-retry-empty-translation")
+            context.close()
+            fixture = Fixture()
+            fixture.periodic = True
+            context, page = open_page(browser, origin, fixture, 375, "dark", errors)
+            expect(page.locator(".news-racer-mobile-row").first).to_contain_text("70,001")
+            assert fixture.calls["/api/hot-coins"] == 1
+            page.clock.run_for(46_000)
+            expect(page.locator(".news-racer-mobile-row").first).to_contain_text("70,002")
+            expect(page.locator(".site-marquee")).to_contain_text("70,002")
+            assert fixture.calls["/api/hot-coins"] == 2, "page and footer must share one refreshed quote"
+            checks.append("page-and-footer-share-one-45s-quote-refresh")
             context.close()
             browser.close()
             assert not errors, errors

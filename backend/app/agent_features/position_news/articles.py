@@ -182,22 +182,29 @@ def upsert_articles(asset_symbol: str, items: list[dict], *, analysis: dict | No
     revision = state.revision
     db.add(state)
     db.commit()
+    # A worker and an HTTP reader may share a process. External workers are
+    # observed through the short read TTL; local publications are visible now.
+    from ...public_news_cache import responses
+    responses.invalidate(scope)
     return revision
 
 
 def read_article_feed(asset_symbol: str, *, after_revision: int | None = None,
-                      limit: int = 100, db: Session | None = None) -> dict | None:
+                      limit: int = 100, include_analysis: bool = True,
+                      db: Session | None = None) -> dict | None:
     """Read prepared items and a resumable cursor in two indexed queries."""
     if db is None:
         with get_session() as owned:
-            return read_article_feed(asset_symbol, after_revision=after_revision, limit=limit, db=owned)
+            return read_article_feed(asset_symbol, after_revision=after_revision, limit=limit,
+                                     include_analysis=include_analysis, db=owned)
     state = db.get(NewsArticleFeed, str(asset_symbol).strip().upper())
     if state is None:
         return None
     bound = max(1, min(500, int(limit)))
     cursor = state.revision
     reset = after_revision is None or after_revision > cursor
-    statement = select(NewsArticle).where(NewsArticle.asset_symbol == state.asset_symbol,
+    projection = select(NewsArticle) if include_analysis else select(NewsArticle.item_json, NewsArticle.revision)
+    statement = projection.where(NewsArticle.asset_symbol == state.asset_symbol,
                                           NewsArticle.ready.is_(True), NewsArticle.revision <= cursor)
     if not reset:
         statement = statement.where(NewsArticle.revision > max(0, after_revision))
@@ -208,15 +215,17 @@ def read_article_feed(asset_symbol: str, *, after_revision: int | None = None,
     if has_more:
         cursor = rows[-1].revision
     items = [json.loads(row.item_json) for row in rows]
-    assessment = [json.loads(row.assessment_json) for row in rows]
     pending = max(0, state.item_count - state.ready_count)
-    return {**json.loads(state.metadata_json), "items": items, "cursor": cursor,
+    result = {**json.loads(state.metadata_json), "items": items, "cursor": cursor,
             "reset": reset, "has_more": has_more,
             "updated_at": datetime.fromtimestamp(state.updated_ms / 1000, timezone.utc).isoformat(),
             "translation": {"status": "partial" if pending else "ready", "pending_count": pending,
-                            "retry_after_seconds": 3},
-            "analysis": {"items": assessment, "analysis_source": "ai" if any(row.analysis_source == "ai" for row in rows) else "rule",
-                         "analysis_status": "ready", "ai": any(row.analysis_source == "ai" for row in rows)}}
+                            "retry_after_seconds": 3}}
+    if include_analysis:
+        result["analysis"] = {"items": [json.loads(row.assessment_json) for row in rows],
+                              "analysis_source": "ai" if any(row.analysis_source == "ai" for row in rows) else "rule",
+                              "analysis_status": "ready", "ai": any(row.analysis_source == "ai" for row in rows)}
+    return result
 
 
 def update_article_image(asset_symbol: str, article_id: str, image_fields: dict, *, now_ms=None, db=None):
@@ -303,4 +312,7 @@ def prune_articles(*, retention_days=30, limit=500, now_ms=None, db=None):
         db.exec(delete(NewsArticle).where(tuple_(NewsArticle.asset_symbol, NewsArticle.article_id).in_(
             [(row.asset_symbol, row.article_id) for row in rows])))
     db.commit()
+    from ...public_news_cache import responses
+    for scope in by_scope:
+        responses.invalidate(scope)
     return len(rows)

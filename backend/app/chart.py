@@ -5,8 +5,7 @@ short (a few seconds), so N browsers polling the same symbol collapse into at
 most one Binance call per window — the same pattern used by hot-coins/kimchi.
 
 Why a separate path from the backtest loader: ``data.get_klines`` is cache-first
-and persists whatever it fetched, including the still-forming bar. That is
-correct for settled history but would freeze a live chart, so the chart reads
+and persists only settled history. The moving edge instead reads
 :func:`get_recent_klines`, which always refetches and never stores the open bar.
 """
 from __future__ import annotations
@@ -16,7 +15,7 @@ import time
 from typing import Optional
 
 from .data import NoSpotDataError, get_recent_klines
-from .http_runtime import SingleFlightGroup
+from .cache_runtime import ResponseCache
 
 # Supported intervals -> how long a chart response stays fresh. This value is
 # both the server cache TTL and the poll interval the client is told to use.
@@ -39,13 +38,12 @@ _INTERVALS: dict[str, float] = {
 DEFAULT_INTERVAL = "1m"
 MAX_LIMIT = int(os.environ.get("CHART_MAX_LIMIT", "300"))
 
-# (symbol, interval, limit, market) -> (payload, expires_at)
-_cache: dict[tuple[str, str, int, str], tuple[dict, float]] = {}
+# One bounded history buffer per market/interval, sliced for each display limit.
+_cache = ResponseCache("chart-history", max_entries=256, max_bytes=16_000_000)
 _LIVE_REFRESH_SECONDS = 3.0
 # The latest two bars use a separate, short cache.  A 1d chart may refresh its
 # 300-bar history only once a minute, but its open candle still has to move.
-_live_cache: dict[tuple[str, str, str], tuple[dict, float]] = {}
-_refreshes = SingleFlightGroup()
+_live_cache = ResponseCache("chart-live", max_entries=512, max_bytes=2_000_000)
 
 
 def supported_intervals() -> list[str]:
@@ -72,10 +70,7 @@ def get_candles(
         market = "spot"
     limit = max(10, min(int(limit), MAX_LIMIT))
 
-    key = (symbol, interval, limit, market)
-    hit = _cache.get(key)
-    if hit and hit[1] > time.time():
-        return {**hit[0], "cached": True}
+    key = (symbol, interval, market)
 
     # 선물 호스트(fapi)는 배포 리전에서 차단될 수 있다 — 현물은 미러
     # (BINANCE_API_BASE)로 우회하지만 선물엔 대응 미러가 없다. 그래서 선물을
@@ -85,12 +80,12 @@ def get_candles(
     def load():
         used_market = market
         try:
-            candles = get_recent_klines(symbol, interval=interval, limit=limit, market=market)
+            candles = get_recent_klines(symbol, interval=interval, limit=MAX_LIMIT, market=market)
         except Exception as first_error:
             candles = None
             if market == "futures":
                 try:
-                    candles = get_recent_klines(symbol, interval=interval, limit=limit, market="spot")
+                    candles = get_recent_klines(symbol, interval=interval, limit=MAX_LIMIT, market="spot")
                     used_market = "spot"
                 except Exception:
                     candles = None
@@ -100,31 +95,19 @@ def get_candles(
                 raise NoSpotDataError("시세를 불러오지 못했습니다. 잠시 후 다시 시도하세요.")
         return candles, used_market
 
-    try:
-        if hit:
-            loaded, refresh_state = _refreshes.run(("history", key), load, stale_value=None)
-        else:
-            loaded, refresh_state = _refreshes.run(("history", key), load)
-    except Exception:
-        if hit:
-            return {**hit[0], "cached": True, "stale": True}
-        raise
-    if refresh_state == "stale":
-        return {**hit[0], "cached": True, "stale": True}
-    candles, used_market = loaded
+    def prepare():
+        candles, used_market = load()
+        return {
+            "symbol": symbol, "interval": interval, "market": used_market,
+            "requested_market": market, "candles": candles,
+            "server_time": int(time.time() * 1000),
+            "refresh_seconds": _INTERVALS[interval],
+            "disclaimer": "public market data; reference only",
+        }
 
-    payload = {
-        "symbol": symbol,
-        "interval": interval,
-        "market": used_market,
-        "requested_market": market,
-        "candles": candles,
-        "server_time": int(time.time() * 1000),
-        "refresh_seconds": _INTERVALS[interval],
-        "disclaimer": "public market data; reference only",
-    }
-    _cache[key] = (payload, time.time() + _INTERVALS[interval])
-    return {**payload, "cached": refresh_state == "shared"}
+    payload, state = _cache.get_or_load(key, prepare, ttl=_INTERVALS[interval], stale_ttl=900)
+    payload["candles"] = payload["candles"][-limit:]
+    return {**payload, "cached": state != "loaded", **({"stale": True} if state == "stale" else {})}
 
 
 def get_live_candles(
@@ -147,10 +130,6 @@ def get_live_candles(
         market = "spot"
 
     key = (symbol, interval, market)
-    hit = _live_cache.get(key)
-    now = time.time()
-    if hit and hit[1] > now:
-        return {**hit[0], "cached": True}
 
     # get_candles 와 같은 선물→현물 폴백. 히스토리는 현물로 떨어졌는데 움직이는
     # 봉만 선물을 고집하면 두 시세가 섞여 캔들이 튄다.
@@ -172,27 +151,13 @@ def get_live_candles(
                 raise NoSpotDataError("실시간 시세를 불러오지 못했습니다. 잠시 후 다시 시도하세요.")
         return candles, used_market
 
-    try:
-        if hit:
-            loaded, refresh_state = _refreshes.run(("live", key), load, stale_value=None)
-        else:
-            loaded, refresh_state = _refreshes.run(("live", key), load)
-    except Exception:
-        if hit:
-            return {**hit[0], "cached": True, "stale": True}
-        raise
-    if refresh_state == "stale":
-        return {**hit[0], "cached": True, "stale": True}
-    candles, used_market = loaded
+    def prepare():
+        candles, used_market = load()
+        return {
+            "symbol": symbol, "interval": interval, "market": used_market,
+            "requested_market": market, "candles": candles,
+            "server_time": int(time.time() * 1000), "refresh_seconds": _LIVE_REFRESH_SECONDS,
+        }
 
-    payload = {
-        "symbol": symbol,
-        "interval": interval,
-        "market": used_market,
-        "requested_market": market,
-        "candles": candles,
-        "server_time": int(now * 1000),
-        "refresh_seconds": _LIVE_REFRESH_SECONDS,
-    }
-    _live_cache[key] = (payload, now + _LIVE_REFRESH_SECONDS)
-    return {**payload, "cached": refresh_state == "shared"}
+    payload, state = _live_cache.get_or_load(key, prepare, ttl=_LIVE_REFRESH_SECONDS, stale_ttl=15)
+    return {**payload, "cached": state != "loaded", **({"stale": True} if state == "stale" else {})}

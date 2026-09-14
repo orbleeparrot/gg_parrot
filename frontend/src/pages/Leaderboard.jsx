@@ -7,7 +7,7 @@ import { PageHeader, EmptyState, Loading, ErrorNote } from "../components/Page.j
 import { api } from "../api.js";
 import CoinIcon from "../components/CoinIcon.jsx";
 import { getUserId } from "../lib/user.js";
-import { useAuth, isLoggedIn, getAuthUser, updateAuthUser } from "../lib/auth.js";
+import { useAuth, useAccountGuard, isLoggedIn, getAuthUser, updateAuthUser } from "../lib/auth.js";
 import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 import { applyVote, settleVote } from "../lib/leaderboardVotes.js";
 import StrategyDetails from "../components/StrategyDetails.jsx";
@@ -94,6 +94,12 @@ function ResetCountdown({ resetAt }) {
 }
 
 export default function Leaderboard() {
+  const { accountVersion } = useAuth();
+  return <AccountLeaderboard key={accountVersion} />;
+}
+
+function AccountLeaderboard() {
+  const isCurrentAccount = useAccountGuard();
   const uid = getUserId();
   const navigate = useNavigate();
   const location = useLocation();
@@ -114,12 +120,13 @@ export default function Leaderboard() {
   const [pendingFocus, setPendingFocus] = useState(null);
 
   const load = useCallback(async (signal) => {
+    if (!isCurrentAccount()) return;
     const focusRequest = focusRequestRef.current;
     try {
       const d = await api.leaderboard(uid, {
         signal, page, pageSize: 50, entryId: focusRequest?.entryId,
       });
-      if (signal?.aborted || focusRequest !== focusRequestRef.current) return;
+      if (!isCurrentAccount() || signal?.aborted || focusRequest !== focusRequestRef.current) return;
       if (d.snapshot_expired) {
         setPage(1);
         return;
@@ -138,12 +145,12 @@ export default function Leaderboard() {
         setError("현재 리더보드에서 이 매크로를 찾을 수 없어요. 잠시 후 다시 확인해 주세요.");
       }
     } catch (e) {
-      if (e?.name !== "AbortError") setError(String(e.message || e));
+      if (isCurrentAccount() && e?.name !== "AbortError") setError(String(e.message || e));
       if (signal) throw e;
     } finally {
-      if (!signal?.aborted) setBusy(false);
+      if (isCurrentAccount() && !signal?.aborted) setBusy(false);
     }
-  }, [uid, page, auth.token]);
+  }, [uid, page, auth.token, isCurrentAccount]);
 
   useEffect(() => {
     setItems([]);
@@ -185,6 +192,7 @@ export default function Leaderboard() {
   // 누르는 즉시 화면에 반영하고(낙관적 갱신), 서버 응답의 수치로 확정한다. 목록 전체를
   // 다시 받지 않는다 — 그 재조회(0.8초)가 체감 지연의 대부분이었다. 실패하면 되돌린다.
   async function vote(id, value) {
+    if (!isCurrentAccount()) return;
     let snapshot = null;
     setItems((current) => {
       snapshot = current;
@@ -192,8 +200,10 @@ export default function Leaderboard() {
     });
     try {
       const result = await api.leaderboardVote(id, uid, value);
+      if (!isCurrentAccount()) return;
       setItems((current) => settleVote(current, result));
     } catch (e) {
+      if (!isCurrentAccount()) return;
       if (snapshot) setItems(snapshot);
       setError(String(e.message || e));
     }
@@ -205,21 +215,24 @@ export default function Leaderboard() {
   }
 
   async function remove(entry) {
-    if (deleting) return;
+    if (deleting || !isCurrentAccount()) return;
     if (!window.confirm("이 매크로를 리더보드에서 삭제할까요? 되돌릴 수 없어요.")) return;
     setError("");
     setDeleting(entry.id);
     try {
       await api.leaderboardDelete(entry.id);
+      if (!isCurrentAccount()) return;
       await load();
     } catch (e) {
+      if (!isCurrentAccount()) return;
       setError(String(e.message || e));
     } finally {
-      setDeleting(0);
+      if (isCurrentAccount()) setDeleting(0);
     }
   }
 
   async function unlock(entry) {
+    if (!isCurrentAccount()) return;
     if (!isLoggedIn()) {
       const next = quickRunMode ? "%2Fleaderboard%3Ffrom%3Dquick-run" : "%2Fleaderboard";
       navigate(`/login?mode=signup&next=${next}`);
@@ -229,6 +242,7 @@ export default function Leaderboard() {
     setUnlocking(entry.id);
     try {
       const d = await api.leaderboardUnlock(entry.id);
+      if (!isCurrentAccount()) return;
       if (d.points_balance != null) {
         updateAuthUser({ ...getAuthUser(), points_balance: d.points_balance });
       }
@@ -238,13 +252,15 @@ export default function Leaderboard() {
       }
       await load(); // reveal the now-unlocked macro
     } catch (e) {
+      if (!isCurrentAccount()) return;
       setError(String(e.message || e));
     } finally {
-      setUnlocking(0);
+      if (isCurrentAccount()) setUnlocking(0);
     }
   }
 
   async function useForQuickRun(entry) {
+    if (!isCurrentAccount()) return;
     if (!isLoggedIn()) {
       navigate("/login?next=%2Fleaderboard%3Ffrom%3Dquick-run");
       return;
@@ -254,11 +270,13 @@ export default function Leaderboard() {
     try {
       if (!entry.for_sale) {
         const saved = await api.saveMyMacro(entry.macro, `리더보드 · ${entry.symbol}`);
+        if (!isCurrentAccount()) return;
         navigate("/?run=1&step=1", { state: { selectedMacroId: saved.item.id } });
         return;
       }
       navigate("/?run=1&step=1", { state: { selectedSourceRef: entry.id } });
     } catch (e) {
+      if (!isCurrentAccount()) return;
       setError(String(e.message || e));
       setUnlocking(0);
     }

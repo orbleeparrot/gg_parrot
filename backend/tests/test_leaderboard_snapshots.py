@@ -155,7 +155,9 @@ def test_entry_location_returns_bounded_target_page_without_private_leaks(isolat
         first = lb.list_entries(viewer_id='viewer', viewer_user_id=20, page=18,
                                 page_size=7, snapshot_id=version, entry_id=120)
         assert first['entry_location'] == {'entry_id': 120, 'rank': 1, 'page': 1}
-        assert first['page'] == 1 and len(first['items']) == 7 and len(queries) == 5
+        # The public generation metadata is reused; current entry access, votes
+        # and location still run their four bounded queries.
+        assert first['page'] == 1 and len(first['items']) == 7 and len(queries) == 4
         assert all(sql.lstrip().upper().startswith('SELECT') for sql in queries)
         assert not any('papersession' in sql.lower() for sql in queries)
         locator = next(sql for sql in queries if 'LIMIT' in sql and 'entry_id = ?' in sql)

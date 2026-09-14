@@ -279,7 +279,7 @@ def test_paper_ticker_collapses_concurrent_symbol_refreshes(monkeypatch):
 
 
 def test_hangang_collapses_concurrent_refreshes(monkeypatch):
-    hangang._cache = None
+    hangang._cache.clear()
     entered = threading.Event()
     release = threading.Event()
     calls = 0

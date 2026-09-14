@@ -1,12 +1,28 @@
 import { CHAT_SEEN_STORAGE_KEY, countUnseen, isOwnMessage, latestMessageId, readSeenId, writeSeenId } from "./chatBadge.js";
-import { mergeMessages } from "./chatFeed.js";
+import { CHAT_CACHE_LIMIT, mergeMessages, retainChatMessages } from "./chatFeed.js";
 
 const feeds = new Map();
 const listeners = new Map();
 const responseTimes = new Map();
+const touchedAt = new Map();
+const MAX_INACTIVE_SCOPES = 3;
+const INACTIVE_TTL_MS = 30 * 60_000;
 let listening = false;
 
+function pruneScopes(protectedScope) {
+  const inactive = [...feeds.keys()].filter((scope) => scope !== protectedScope && !listeners.get(scope)?.size)
+    .sort((a, b) => (touchedAt.get(b) || 0) - (touchedAt.get(a) || 0));
+  inactive.forEach((scope, index) => {
+    if (index >= MAX_INACTIVE_SCOPES || Date.now() - (touchedAt.get(scope) || 0) >= INACTIVE_TTL_MS) {
+      feeds.delete(scope); listeners.delete(scope); responseTimes.delete(scope); touchedAt.delete(scope);
+    }
+  });
+}
+export const chatCacheScopeCount = () => feeds.size;
+
 export function getChatFeed(scope) {
+  touchedAt.set(scope, Date.now());
+  pruneScopes(scope);
   if (!feeds.has(scope)) {
     feeds.set(scope, {
       items: [], loaded: false, seenId: readSeenId(scope), latestId: 0,
@@ -14,6 +30,7 @@ export function getChatFeed(scope) {
       unreadBase: 0, unreadSeenId: 0, unreadLatestId: 0, loadError: "", responseRevision: 0,
       pageLatestId: 0, countNeedsRefresh: false,
       metadataLoaded: false,
+      tailEvicted: false,
     });
   }
   return feeds.get(scope);
@@ -50,7 +67,11 @@ export function observeChat(scope, listener) {
   // A different tab may have advanced the cursor while this page was unmounted.
   const stored = readSeenId(scope);
   if (stored != null && stored > (getChatFeed(scope).seenId ?? -1)) update(scope, { seenId: stored });
-  return () => listeners.get(scope)?.delete(listener);
+  return () => {
+    listeners.get(scope)?.delete(listener);
+    if (!listeners.get(scope)?.size) listeners.delete(scope);
+    pruneScopes();
+  };
 }
 
 export function markChatSeen(scope, id) {
@@ -60,7 +81,7 @@ export function markChatSeen(scope, id) {
   if (next != null && (current.seenId == null || next > current.seenId)) update(scope, { seenId: next });
 }
 
-export function receiveChat(scope, data, { older = false, beforeId } = {}) {
+export function receiveChat(scope, data, { older = false, beforeId, forward = false, keepOlder = false } = {}) {
   const current = getChatFeed(scope);
   if (older && beforeId != null && Number(beforeId) !== Number(current.oldestId)) return;
   const dayStartMs = Math.max(current.dayStartMs, Number(data.day_start_ms) || 0);
@@ -80,12 +101,19 @@ export function receiveChat(scope, data, { older = false, beforeId } = {}) {
   // hundreds of rows. Restart its backwards pagination at the new page; a POST
   // ahead of that GET is not proof that the intervening history was fetched.
   const historyGap = !older && !delta && !reconcile && !metadataOnly && !newDay && current.loaded && data.items?.length > 0 && data.has_more && incomingOldest > current.pageLatestId;
-  let base = historyGap ? current.items.filter((item) => Number(item.id) >= incomingOldest) : current.items;
+  const restoringLatest = current.tailEvicted && !older && !delta && !reconcile && !metadataOnly;
+  let base = restoringLatest ? [] : historyGap ? current.items.filter((item) => Number(item.id) >= incomingOldest) : current.items;
   if (reconcile && data.missing_ids?.length) {
     const missing = new Set(data.missing_ids.map(Number));
     base = base.filter((item) => !missing.has(Number(item.id)));
   }
-  const items = !newDay && !data.items?.length && base === current.items ? current.items : mergeMessages(base, data.items, dayStartMs);
+  const incoming = current.tailEvicted && delta && !forward ? [] : data.items;
+  const merged = !newDay && !incoming?.length && base === current.items ? current.items : mergeMessages(base, incoming, dayStartMs);
+  const keepHead = older || keepOlder;
+  const trimmed = merged.length > CHAT_CACHE_LIMIT;
+  const items = retainChatMessages(merged, { older: keepHead });
+  const tailEvicted = newDay || restoringLatest ? false : forward ? !!data.has_more_new
+    : current.tailEvicted || (trimmed && keepHead);
   const latestId = Math.max(newDay || freshResponse ? 0 : current.latestId, Number(data.latest_id) || 0, latestMessageId(items));
   const responseSeen = data.seen_id == null ? null : Number(data.seen_id);
   const seenId = writeSeenId(Math.max(current.seenId ?? responseSeen ?? latestId, responseSeen ?? 0), scope);
@@ -107,17 +135,19 @@ export function receiveChat(scope, data, { older = false, beforeId } = {}) {
     countNeedsRefresh: useMetadata
       ? !metadataOnly && !delta && !reconcile && responseLatest !== pageLatestId
       : current.countNeedsRefresh || responseLatest > current.unreadLatestId,
-    oldestId: items[0]?.id ?? null,
-    hasMore: metadataOnly || delta || reconcile ? (newDay ? false : current.hasMore) : older || newDay || historyGap || !current.historyLoaded ? !!data.has_more : current.hasMore,
-    historyLoaded: newDay || historyGap ? older : current.historyLoaded || older,
+    oldestId: items[0]?.id ?? null, tailEvicted,
+    hasMore: trimmed && !keepHead ? true : metadataOnly || delta || reconcile ? (newDay ? false : current.hasMore) : older || newDay || historyGap || restoringLatest || !current.historyLoaded ? !!data.has_more : current.hasMore,
+    historyLoaded: newDay || historyGap || restoringLatest ? older : current.historyLoaded || older,
   }, true);
 }
 
 export function receiveChatPost(scope, message) {
   const current = getChatFeed(scope);
   if (!message) return;
-  const items = mergeMessages(current.items, [message], current.dayStartMs);
-  return update(scope, { items, latestId: Math.max(current.latestId, latestMessageId(items)) });
+  const merged = current.tailEvicted ? current.items : mergeMessages(current.items, [message], current.dayStartMs);
+  const items = retainChatMessages(merged);
+  return update(scope, { items, hasMore: current.hasMore || merged.length > items.length,
+    oldestId: items[0]?.id ?? null, latestId: Math.max(current.latestId, Number(message.id) || 0, latestMessageId(items)) });
 }
 
 export function setChatLoadError(scope, error) {

@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalS
 import { Link } from "react-router-dom";
 import { api } from "../api.js";
 import useNewsBriefings from "../hooks/useNewsBriefings.js";
-import { newsCache } from "../lib/newsBriefings.js";
+import useHotCoins from "../hooks/useHotCoins.js";
 import { communityPostIdentity, communitySummaryPresentation, hasPendingTranslation, historicalNewsLabel, newsPublishedLabel, newsSourceLabel } from "../lib/newsBriefings.js";
 import CoinIcon from "../components/CoinIcon.jsx";
 import MarketCarousel from "../components/MarketCarousel.jsx";
@@ -14,7 +14,6 @@ import "./NewsMobile.css";
 import InfoTooltip from "../components/InfoTooltip.jsx";
 
 const COIN_NEWS_CONCURRENCY = 2;
-const HOT_COINS_CACHE_KEY = "hot-coins";
 const RACER_NEWS_ROTATE_MS = 5_000;
 const MOBILE_NEWS_QUERY = "(max-width: 767px), (max-width: 1099px) and (pointer: coarse)";
 const mobileNewsSnapshot = () => typeof window !== "undefined" && window.matchMedia(MOBILE_NEWS_QUERY).matches;
@@ -455,35 +454,7 @@ export default function News() {
   const market = marketState?.data || null;
   const marketLoading = !marketState || ["queued", "loading"].includes(marketState.status);
   const marketError = marketState?.error || "";
-  // 경주마 목록도 캐시로 먼저 그린다 — 돌아온 순간 트리맵 자리가 잡히고, 최신 순위는 조용히 갱신된다.
-  const [coins, setCoins] = useState(() => newsCache.get(HOT_COINS_CACHE_KEY)?.data?.coins || []);
-  const [coinsLoading, setCoinsLoading] = useState(() => !newsCache.get(HOT_COINS_CACHE_KEY));
-  const [coinsError, setCoinsError] = useState("");
-
-  useEffect(() => {
-    let alive = true;
-
-    const controller = new AbortController();
-
-    api.hotCoins(10, { signal: controller.signal })
-      .then((response) => {
-        const next = response.coins || [];
-        newsCache.set(HOT_COINS_CACHE_KEY, { coins: next });
-        if (alive) setCoins(next);
-      })
-      .catch((reason) => {
-        // 캐시로 이미 그려져 있으면 갱신 실패를 굳이 알리지 않는다.
-        if (alive && reason?.name !== "AbortError" && !newsCache.get(HOT_COINS_CACHE_KEY)) setCoinsError(errorMessage(reason));
-      })
-      .finally(() => {
-        if (alive) setCoinsLoading(false);
-      });
-
-    return () => {
-      alive = false;
-      controller.abort();
-    };
-  }, []);
+  const { coins, loading: coinsLoading, error: coinsError } = useHotCoins();
 
   const summary = market?.overview ? splitSummary(market.overview) : null;
 

@@ -4,9 +4,12 @@
 // emphasizes. The durable outcome is still `completed_at`, written after a real
 // registration. The live step is derived from real guide state, so storage can
 // never pretend a backtest, paper session, or registration happened.
+import { getAuthScope } from "./auth.js";
+import { accountStorageKey, discardUnownedDrafts } from "./accountStorage.js";
+
 const KEY = "ggp_journey";
-const REGISTRATION_DRAFT_KEY = "ggp_registration_draft";
-const HERO_DRAFT_KEY = "ggp_hero_draft:v1";
+const registrationDraftKey = () => accountStorageKey("registration", getAuthScope());
+const heroDraftKey = () => accountStorageKey("hero", getAuthScope());
 const VERSION = 1;
 
 function read() {
@@ -78,7 +81,7 @@ export function completeJourney() {
 export function saveRegistrationDraft(macro, context = {}) {
   try {
     sessionStorage.setItem(
-      REGISTRATION_DRAFT_KEY,
+      registrationDraftKey(),
       JSON.stringify({
         version: VERSION,
         macro,
@@ -96,8 +99,10 @@ export function saveRegistrationDraft(macro, context = {}) {
 }
 
 function readRegistrationDraft(consume) {
+  const key = registrationDraftKey();
   try {
-    const raw = sessionStorage.getItem(REGISTRATION_DRAFT_KEY);
+    discardUnownedDrafts();
+    const raw = sessionStorage.getItem(key);
     const value = JSON.parse(raw || "null");
     const macro = value?.macro;
     const recent = Date.now() - Date.parse(value?.saved_at || "") <= 30 * 60 * 1000;
@@ -110,11 +115,11 @@ function readRegistrationDraft(consume) {
       macro.params &&
       typeof macro.params === "object";
     const valid = value?.version === VERSION && recent && structurallyValid;
-    if (consume || !valid) sessionStorage.removeItem(REGISTRATION_DRAFT_KEY);
+    if (consume || !valid) sessionStorage.removeItem(key);
     return valid ? value : null;
   } catch (_) {
     try {
-      sessionStorage.removeItem(REGISTRATION_DRAFT_KEY);
+      sessionStorage.removeItem(key);
     } catch (_) {}
     return null;
   }
@@ -134,7 +139,7 @@ export function takeRegistrationDraft() {
 export function saveHeroDraft(macro) {
   try {
     sessionStorage.setItem(
-      HERO_DRAFT_KEY,
+      heroDraftKey(),
       JSON.stringify({ version: VERSION, macro, saved_at: Date.now() })
     );
   } catch (_) {
@@ -143,8 +148,10 @@ export function saveHeroDraft(macro) {
 }
 
 export function readHeroDraft() {
+  const key = heroDraftKey();
   try {
-    const value = JSON.parse(sessionStorage.getItem(HERO_DRAFT_KEY) || "null");
+    discardUnownedDrafts();
+    const value = JSON.parse(sessionStorage.getItem(key) || "null");
     const validAge = Date.now() - Number(value?.saved_at || 0) <= 2 * 60 * 60 * 1000;
     const macro = value?.macro;
     const validEnums =
@@ -162,13 +169,13 @@ export function readHeroDraft() {
       typeof macro.params === "object" &&
       validEnums;
     if (value?.version !== VERSION || !validAge || !validMacro) {
-      sessionStorage.removeItem(HERO_DRAFT_KEY);
+      sessionStorage.removeItem(key);
       return null;
     }
     return macro;
   } catch (_) {
     try {
-      sessionStorage.removeItem(HERO_DRAFT_KEY);
+      sessionStorage.removeItem(key);
     } catch (_) {}
     return null;
   }

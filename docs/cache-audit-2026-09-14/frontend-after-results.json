@@ -1,0 +1,270 @@
+{
+  "files": 44,
+  "failed": [],
+  "results": [
+    {
+      "file": "frontend/tests/accountScope.test.js",
+      "exit_code": 0,
+      "stdout": "✔ guest work continues at login, then logout removes owned drafts and paper resumes (3.267667ms)\n✔ a different account cannot read or resurrect the previous account's pending save (0.423125ms)\n✔ same-account token renewal and profile edits preserve studio/paper work (0.454103ms)\n✔ a reauthentication draft is readable only after the same member signs in (1.61025ms)\n✔ reauthenticating as another member discards the outgoing member draft (0.512176ms)\n✔ legacy unscoped work is never assigned to the next guest or member (0.321361ms)\n✔ old account guards stay retired after A -> B -> A, including reused tokens (0.250557ms)\n✔ late unlock responses cannot change another account's points or navigate it (0.848445ms)\nℹ tests 8\nℹ suites 0\nℹ pass 8\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 14.131114\n",
+      "stderr": ""
+    },
+    {
+      "file": "frontend/tests/agentActivity.test.js",
+      "exit_code": 0,
+      "stdout": "✔ a routine connected heartbeat never produces a chat notification (1.505351ms)\n✔ normal volatility and small PnL changes stay out of the notification feed (0.436039ms)\n✔ an uncertain order never appears as a confirmed closed position (0.290384ms)\n✔ a close-and-stop request is visible before the runner confirms completion (3.664821ms)\n✔ position loss alerts remain available when chart candles fail to load (0.241807ms)\nℹ tests 5\nℹ suites 0\nℹ pass 5\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 12.17734\n",
+      "stderr": ""
+    },
+    {
+      "file": "frontend/tests/agentSignalEvents.test.js",
+      "exit_code": 0,
+      "stdout": "✔ ordinary strategy scans and waiting or empty whale snapshots do not create chat entries (2.100166ms)\n✔ a strategy signal keeps its identity when older bars shift its array index (0.313427ms)\n✔ strategy identity distinguishes intervals, sessions, and order sides (0.23053ms)\n✔ whale events contain actual large trades and no empty-state narration (3.172364ms)\n✔ persistent whale failures carry a connection condition instead of new observation time (0.176814ms)\n✔ pending and empty news responses stay quiet while real articles remain visible (0.568496ms)\n✔ news connection failures remain visible even during an initial pending snapshot (0.131659ms)\n✔ news identity survives translations, reorderings, and snapshot refreshes (0.269181ms)\n✔ article URLs take precedence over translated titles and stable server IDs remain unchanged (0.238916ms)\n✔ undated news keeps its first observation time in the ledger, not each refresh time (0.234108ms)\nℹ tests 10\nℹ suites 0\nℹ pass 10\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 13.968968\n",
+      "stderr": ""
+    },
+    {
+      "file": "frontend/tests/agentTimeline.test.js",
+      "exit_code": 0,
+      "stdout": "✔ repeated heartbeat and snapshot timestamps do not create notifications (2.967817ms)\n✔ position entry, exit, repeated entry and termination each appear exactly once (0.545752ms)\n✔ a connection incident does not repeat on polls but can recur after recovery (0.300358ms)\n✔ a stop request and terminal report do not repeat as their heartbeat ages (0.245666ms)\n✔ an uncertain-order warning does not repeat on connection or quantity updates (0.160594ms)\n✔ loss warnings require a risk threshold or worsening and resist boundary oscillation (0.305617ms)\n✔ missing position metrics do not rearm an ongoing loss incident (0.170935ms)\n✔ a sustained volatility regime does not alert on every closed bar or chart refresh (0.387634ms)\n✔ an article keeps its first timestamp and place across refreshes and translation (0.784778ms)\n✔ seen news survives disappearing responses and more than one screen of messages (0.907088ms)\n✔ a repeated source failure is one incident until the source recovers (0.270308ms)\n✔ whale collection retries and stale reads remain one incident until a successful snapshot (0.402617ms)\n✔ durable whale snapshots do not repeat reordered or temporarily missing trades (4.490476ms)\n✔ news retries do not resolve and re-announce the same connection failure (0.562519ms)\n✔ a different session gets its own baseline without retaining another macro's events (0.178274ms)\n✔ an untranslated article is first announced only when its Korean translation arrives (0.2065ms)\n✔ historical articles keep identity and publication dates through polls and translation corrections (0.355069ms)\n✔ a later verified publication date updates the label without creating another article (0.167002ms)\nℹ tests 18\nℹ suites 0\nℹ pass 18\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 21.49544\n",
+      "stderr": ""
+    },
+    {
+      "file": "frontend/tests/apiCachePolicy.test.js",
+      "exit_code": 0,
+      "stdout": "✔ public GETs omit credentials while private API reads and writes remain no-store (28.066342ms)\n✔ profile edits invalidate cached author names and leaderboard mutations invalidate slash choices (3.499359ms)\nℹ tests 2\nℹ suites 0\nℹ pass 2\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 37.352157\n",
+      "stderr": ""
+    },
+    {
+      "file": "frontend/tests/backtestBudget.test.js",
+      "exit_code": 0,
+      "stdout": "✔ one-year minute request is rejected and neither input nor fidelity changes (2.957378ms)\n✔ uses actual server cap and exact preset days (0.245447ms)\n✔ custom period boundary uses every original candle (0.217775ms)\n✔ short presets survive save and restore with unchanged candle interval (0.740575ms)\n✔ missing limits do not invent a local cap (0.173273ms)\nℹ tests 5\nℹ suites 0\nℹ pass 5\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 10.381276\n",
+      "stderr": ""
+    },
+    {
+      "file": "frontend/tests/boardListCache.test.js",
+      "exit_code": 0,
+      "stdout": "✔ reuses fresh lists, separates account/query keys, and expires (0.994212ms)\n✔ mutation invalidation prevents a late list from refilling the cache (0.284246ms)\n✔ failed requests are retried and cache capacity is bounded (0.487048ms)\n✔ detail updates cached counts without extending the freshness window (0.251617ms)\nℹ tests 4\nℹ suites 0\nℹ pass 4\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 8.813852\n",
+      "stderr": ""
+    },
+    {
+      "file": "frontend/tests/boardText.test.js",
+      "exit_code": 0,
+      "stdout": "✔ initialOf takes the first syllable or an uppercase letter, ? when empty (0.671788ms)\n✔ kstDateTime turns the board's KST label into a datetime attribute (0.192592ms)\n✔ boardTime shows relative time within a week, then MM.DD this year, YY.MM.DD before that (KST) (0.269704ms)\n✔ boardFullTime gives the detail label (0.119535ms)\n✔ pageWindow keeps the current page centred and fills five at the edges (4.290161ms)\nℹ tests 5\nℹ suites 0\nℹ pass 5\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 10.384278\n",
+      "stderr": ""
+    },
+    {
+      "file": "frontend/tests/candleChartData.test.js",
+      "exit_code": 0,
+      "stdout": "✔ adapts all OHLC values without rounding or changing the source (4.119443ms)\n✔ a new bar follows live, while a historical window stays at the same timestamps (0.472951ms)\n✔ incremental updates cannot retain stale candles after a short or rolling history (0.63884ms)\n✔ range handles a short initial history, restored older bars, and expired windows (0.308847ms)\n✔ autoscale includes visible bands, moving lines and average while clamping remote orders (0.53894ms)\n✔ axis tick precision retains sub-cent coins (0.131571ms)\nℹ tests 6\nℹ suites 0\nℹ pass 6\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 13.337449\n",
+      "stderr": ""
+    },
+    {
+      "file": "frontend/tests/chartStrategyPrimitive.test.js",
+      "exit_code": 0,
+      "stdout": "✔ indicator lines preserve warm-up and internal gaps, exact weights, and dash lengths (2.785117ms)\n✔ band shading stays beneath candles and cannot bridge missing indicator data (0.498539ms)\n✔ a short entry is a sell triangle above the high; short exit is a buy below the low (0.267271ms)\n✔ price lines keep numeric values and distinct labels, with no off-scale fake price label (0.455265ms)\n✔ RSI retains both zones, dashed thresholds, curve, and the short-side action labels (0.537775ms)\n✔ null price coordinates and detached lifecycle never turn into price-zero drawings (0.27495ms)\n✔ all-null RSI warm-up keeps its fixed zones and labels without drawing an invented RSI value (0.360668ms)\n✔ theme resolution runs during updates, not during each canvas frame (0.564841ms)\n✔ all A–K overlay and session specifications pass through drawing without mutation (29.67191ms)\nℹ tests 9\nℹ suites 0\nℹ pass 9\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 46.329604\n",
+      "stderr": ""
+    },
+    {
+      "file": "frontend/tests/chatApi.test.js",
+      "exit_code": 0,
+      "stdout": "✔ chat requests send only message text and support pagination/read cursors (28.587516ms)\n✔ a stalled chat request times out and releases its shared request slot (10.866021ms)\n✔ caller cancellation stays AbortError and successful requests clear deadlines (20.805881ms)\nℹ tests 3\nℹ suites 0\nℹ pass 3\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 65.478221\n",
+      "stderr": ""
+    },
+    {
+      "file": "frontend/tests/chatBadge.test.js",
+      "exit_code": 0,
+      "stdout": "✔ unseen count only includes messages newer than the last seen id (0.692741ms)\n✔ the badge reads as a count plus 'new' and caps at 99+ (0.111384ms)\n✔ the new-message divider sits before the first unseen message (0.14293ms)\nℹ tests 3\nℹ suites 0\nℹ pass 3\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 6.305295\n",
+      "stderr": ""
+    },
+    {
+      "file": "frontend/tests/chatMacro.test.js",
+      "exit_code": 0,
+      "stdout": "✔ macroText and macroIdsInText round-trip the token (1.567058ms)\n✔ splitMacroText puts a card where the token is and keeps the rest as text (0.40914ms)\n✔ a token without a card stays plain text (deleted or unknown entry) (0.228728ms)\nℹ tests 3\nℹ suites 0\nℹ pass 3\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 8.874257\n",
+      "stderr": ""
+    },
+    {
+      "file": "frontend/tests/chatReply.test.js",
+      "exit_code": 0,
+      "stdout": "✔ replyText prefixes the token once and keeps the message (0.767309ms)\n✔ stripReplyToken and replyTargetId read only a leading token (0.275154ms)\nℹ tests 2\nℹ suites 0\nℹ pass 2\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 7.545695\n",
+      "stderr": ""
+    },
+    {
+      "file": "frontend/tests/chatSlash.test.js",
+      "exit_code": 0,
+      "stdout": "✔ slashQuery reads the query only when the whole input starts with a slash (0.878094ms)\n✔ filterMacros matches symbol, author and strategy, and caps the list (0.92921ms)\n✔ applyMacroPick replaces the slash query with the token (0.164919ms)\nℹ tests 3\nℹ suites 0\nℹ pass 3\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 8.638415\n",
+      "stderr": ""
+    },
+    {
+      "file": "frontend/tests/chatState.test.js",
+      "exit_code": 0,
+      "stdout": "✔ ownership uses member ID; same names and anonymous legacy rows never impersonate a member (1.120983ms)\n✔ account cursors exclude the legacy shared cursor and only advance (0.234561ms)\n✔ empty initial anonymous feed establishes zero so its first arrival is unread (0.89077ms)\n✔ a feed cache preserves unread state between route subscriptions (0.384324ms)\n✔ polling replaces an author's photo without new messages or unread changes (0.363213ms)\n✔ other tabs advance the live badge immediately without moving a cursor backwards (0.349325ms)\n✔ a stale GET cannot remove a confirmed POST or increase unread after reading (1.139666ms)\n✔ server counts include unread rows outside the loaded 200; own messages are excluded (1.625994ms)\n✔ history pagination remains available after regular latest-page polling (0.36471ms)\n✔ midnight prunes yesterday while preserving a new-day POST ahead of its GET (0.334257ms)\n✔ late history counts never restore an older read baseline, even with newer arrivals (1.574749ms)\n✔ returning after over 200 arrivals resets disconnected history and can fill the gap (1.1232ms)\n✔ older-page metadata cannot mark newer messages that have not been fetched (0.569334ms)\n✔ a POST ahead of polling cannot read intervening messages that are absent (0.19395ms)\n✔ closed metadata initializes NEW correctly without claiming messages were loaded (0.221938ms)\n✔ unchanged deltas and reconciliation preserve store and message references (0.273735ms)\n✔ bounded deltas advance the read ceiling only through the received batch (0.317785ms)\n✔ reconciliation removes only requested missing IDs and refreshes historical cards (0.287987ms)\n✔ metadata day rollover clears stale history and rejects late yesterday responses (0.148912ms)\n✔ the rendered history window stays bounded and stable across live arrivals (0.559089ms)\nℹ tests 20\nℹ suites 0\nℹ pass 20\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 21.133322\n",
+      "stderr": ""
+    },
+    {
+      "file": "frontend/tests/chatStickers.test.js",
+      "exit_code": 0,
+      "stdout": "✔ a sticker message round-trips through its text token (0.706771ms)\n✔ only a whole-message token counts as a sticker (0.128304ms)\nℹ tests 2\nℹ suites 0\nℹ pass 2\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 5.884729\n",
+      "stderr": ""
+    },
+    {
+      "file": "frontend/tests/clientCachePolicy.test.js",
+      "exit_code": 0,
+      "stdout": "✔ two public consumers share one polling loop, keep data on failure and pause while hidden (2.994748ms)\n✔ symbol data expires and stale or empty results retry before the normal five minute TTL (0.641904ms)\n✔ a hidden-page late response cannot replace the resumed shared resource (1.372987ms)\n✔ news persistence bounds cardinality and UTF-8 bytes, evicts expired entries globally and restores safely (1.432496ms)\n✔ bounded chat history traverses evicted newer pages without losing older-page availability (3.171459ms)\n✔ new arrivals do not evict an older reading window and latest-page reload restores a contiguous page (1.507304ms)\n✔ inactive account chat caches are evicted while an observed account remains intact (0.468314ms)\nℹ tests 7\nℹ suites 0\nℹ pass 7\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 20.909944\n",
+      "stderr": ""
+    },
+    {
+      "file": "frontend/tests/communityNews.test.js",
+      "exit_code": 0,
+      "stdout": "✔ community source label exposes category, platform and author for both readers (1.106254ms)\n✔ publication labels use the actual ISO timestamp in KST when display metadata is absent (0.200744ms)\n✔ post IDs survive revised translations, backend title IDs and renamed authors (0.718573ms)\n✔ community opinions never become favorable position signals or expose supplied body summaries (0.175152ms)\n✔ repeated post observations update one row and historical posts never increment the badge (1.218432ms)\n✔ English community titles stay pending while original title and body never become display fallbacks (0.239711ms)\n✔ only ready Korean body summaries are displayed, with partial-body provenance (0.845718ms)\n✔ body summaries remain independent from completed headline translations (0.197342ms)\n✔ summary arrival and edits update the same live post without extra observations (0.47456ms)\nℹ tests 9\nℹ suites 0\nℹ pass 9\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 11.639533\n",
+      "stderr": ""
+    },
+    {
+      "file": "frontend/tests/leaderboardStrategy.test.js",
+      "exit_code": 0,
+      "stdout": "✔ separates values while preserving all strategy conditions (17.135573ms)\n✔ locked entries never expose even accidentally supplied details (0.17283ms)\n✔ DCA shows amount per buy in its quote currency, not a portfolio percentage (0.281117ms)\n✔ K distinguishes a long-to-short transition from a long-only variant (0.16473ms)\n✔ the short position comes from the macro (0.236746ms)\n✔ legacy prose and missing macro are preserved without invented values (0.118762ms)\n✔ invalid or absent capital does not become NaN or a default 100% (0.199784ms)\nℹ tests 7\nℹ suites 0\nℹ pass 7\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 24.57376\n",
+      "stderr": ""
+    },
+    {
+      "file": "frontend/tests/newsRequests.test.js",
+      "exit_code": 0,
+      "stdout": "✔ archived coin news shows its actual KST publication date without relabeling recent articles (1.448557ms)\n✔ only Korean headlines are displayed while old API English responses remain pending (0.95881ms)\n✔ market and coin translations automatically refresh only pending keys and stop when ready (4.467381ms)\n✔ ready headlines keep polling pending body summaries, then stop on ready or unavailable (0.795923ms)\n✔ slow source requests are limited to two concurrent keys with no overlapping retry (0.643095ms)\n✔ a pending translation retries at its deadline while another card remains loading (0.828008ms)\n✔ two stalled requests time out and release slots for the remaining cards (0.550577ms)\n✔ never-loaded cards precede retries when earlier slow cards repeatedly become due (0.576689ms)\n✔ a timed-out retry keeps ready headlines and discards its late response (0.425273ms)\n✔ manual retry uses a free slot while another card is still loading (0.465299ms)\n✔ an old translated snapshot keeps refreshing until fresh news arrives (0.34775ms)\n✔ translation retries respect server cooldown and back off instead of looping quickly (0.395471ms)\n✔ busy responses keep retrying at a bounded cadence until translation recovers (0.580446ms)\n✔ pending headlines survive repeated temporary failures while permanent client errors stop (0.532508ms)\n✔ hiding the page aborts pending requests and resuming waits for the existing cooldown (0.440554ms)\n✔ a late response from a hidden-page request cannot replace the resumed request (0.310854ms)\n✔ leaving a page discards late results and a fresh visit fetches the news again (0.265333ms)\n✔ createNewsCache restores from storage, drops entries past max age, and survives a broken store (0.571641ms)\n✔ a fresh cached briefing is shown at once and no request is sent (0.234176ms)\n✔ a stale cached briefing stays visible while it refreshes, then the cache is replaced (0.294345ms)\n✔ a failed periodic refresh retains ready articles and retries without discarding the cached response (1.405233ms)\n✔ prepared feeds poll partial results at 3 seconds and completed results at 30 seconds (0.323766ms)\n✔ unchanged periodic results preserve object identity and skip storage writes (0.367964ms)\n✔ pending thumbnails use normal polling instead of a permanent rapid retry (0.220684ms)\nℹ tests 24\nℹ suites 0\nℹ pass 24\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 24.93603\n",
+      "stderr": ""
+    },
+    {
+      "file": "frontend/tests/onchainHolderEvents.test.js",
+      "exit_code": 0,
+      "stdout": "✔ holder changes show neutral counts, their source, and the comparison window (1.624206ms)\n✔ initial baselines, unsupported coins, pending snapshots and unchanged balances stay quiet (0.846685ms)\n✔ holder observations reject invalid counts, identities and comparison periods (0.337873ms)\n✔ WETH and XRP events disclose the observed asset and the daily source cadence (0.329147ms)\n✔ valid holder observations remain visible during Binance outages without changing trade events (4.070171ms)\n✔ holder source links only point to the configured public explorers (0.278493ms)\n✔ repeated, missing and reordered holder snapshots never announce the same change twice (1.961503ms)\nℹ tests 7\nℹ suites 0\nℹ pass 7\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 15.601881\n",
+      "stderr": ""
+    },
+    {
+      "file": "frontend/tests/optimisticUpdates.test.js",
+      "exit_code": 0,
+      "stdout": "✔ a fresh like shows up instantly and toggles off on the second press (1.438454ms)\n✔ switching from like to dislike moves the count instead of double counting (0.145183ms)\n✔ the server tally overwrites only the voted entry (0.232053ms)\n✔ a sent chat message appears once even if polling already delivered it (0.288434ms)\nℹ tests 4\nℹ suites 0\nℹ pass 4\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 9.000132\n",
+      "stderr": ""
+    },
+    {
+      "file": "frontend/tests/paperMain.test.js",
+      "exit_code": 0,
+      "stdout": "✔ 세션이 없으면 '시작'(노랑) (1.466146ms)\n✔ 돌고 있으면 '중지'(빨강) (0.148723ms)\n✔ 중지된 세션이 있으면 '다시 시작'(노랑) (0.125178ms)\nℹ tests 3\nℹ suites 0\nℹ pass 3\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 8.291436\n",
+      "stderr": ""
+    },
+    {
+      "file": "frontend/tests/performanceAssets.test.js",
+      "exit_code": 0,
+      "stdout": "✔ designated web fonts swap in instead of staying on system fallbacks (1.789539ms)\n✔ home LCP mascot reserves its ratio and loads eagerly (0.34467ms)\n✔ hero vector stays inside its transfer budget (0.211901ms)\nℹ tests 3\nℹ suites 0\nℹ pass 3\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 9.028374\n",
+      "stderr": ""
+    },
+    {
+      "file": "frontend/tests/polling.test.js",
+      "exit_code": 0,
+      "stdout": "✔ adaptive poller never overlaps and backs off after failures (2.106844ms)\n✔ hidden poller aborts work and resumes immediately when visible (0.275155ms)\n✔ refreshes during a request coalesce, even when normal polling has finished (0.371674ms)\n✔ pending collection can refresh promptly then use the ready snapshot cadence (0.298247ms)\n✔ request coordinator deduplicates consumers and aborts only after all leave (1.119074ms)\n✔ a remounted consumer does not reuse the prior consumer's aborted request (0.456859ms)\nℹ tests 6\nℹ suites 0\nℹ pass 6\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 11.711574\n",
+      "stderr": ""
+    },
+    {
+      "file": "frontend/tests/pollingConsumers.test.js",
+      "exit_code": 0,
+      "stdout": "✔ ../src/components/ChatBox.jsx uses visibility-aware non-overlapping polling (1.434171ms)\n✔ ../src/pages/Leaderboard.jsx uses visibility-aware non-overlapping polling (0.249347ms)\n✔ ../src/components/RunnerSessions.jsx uses visibility-aware non-overlapping polling (0.198941ms)\n✔ ../src/components/MarketContext.jsx uses visibility-aware non-overlapping polling (0.182028ms)\n✔ ../src/components/HotCoinsMarquee.jsx uses visibility-aware non-overlapping polling (0.124013ms)\n✔ ../src/features/agents/positionNews/usePositionNewsFeature.js uses visibility-aware non-overlapping polling (0.15941ms)\n✔ ../src/features/agents/useWhaleActivity.js uses visibility-aware non-overlapping polling (0.094732ms)\n✔ ../src/hooks/usePaperSession.js uses visibility-aware non-overlapping polling (0.131413ms)\n✔ ../src/pages/RunnerDownload.jsx uses visibility-aware non-overlapping polling (0.434997ms)\n✔ position news retries only preflight AI capacity responses promptly (0.275484ms)\n✔ whale snapshot polling follows the server refresh cadence within safe bounds (0.236156ms)\nℹ tests 11\nℹ suites 0\nℹ pass 11\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 11.38195\n",
+      "stderr": ""
+    },
+    {
+      "file": "frontend/tests/portfolio.test.js",
+      "exit_code": 0,
+      "stdout": "✔ 제목 — 하나면 base, 셋까지는 가운뎃점, 넷부터는 '외 n종목' (0.875539ms)\n✔ 비중 — 균등 분할 (0.836659ms)\nℹ tests 2\nℹ suites 0\nℹ pass 2\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 8.472226\n",
+      "stderr": ""
+    },
+    {
+      "file": "frontend/tests/positionNewsEvents.test.js",
+      "exit_code": 0,
+      "stdout": "✔ successful empty collection does not create a chat notification (1.459486ms)\n✔ failed news requests are visible inside the activity stream (1.366825ms)\n✔ pending position news waits quietly until an article arrives (0.198689ms)\n✔ position news shows the article title and content summary without position labels (0.701395ms)\n✔ English headlines and summaries cannot enter the agent notification stream (0.195762ms)\nℹ tests 5\nℹ suites 0\nℹ pass 5\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 13.187394\n",
+      "stderr": ""
+    },
+    {
+      "file": "frontend/tests/positionNewsFeed.test.js",
+      "exit_code": 0,
+      "stdout": "✔ cursor changes append new articles and replace enrichment by stable ID (0.751856ms)\n✔ server reset discards stale cursor state (0.29868ms)\nℹ tests 2\nℹ suites 0\nℹ pass 2\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 6.323147\n",
+      "stderr": ""
+    },
+    {
+      "file": "frontend/tests/positionNewsPresentation.test.js",
+      "exit_code": 0,
+      "stdout": "✔ publication labels show the actual full date in KST without inventing unknown dates (0.939127ms)\n✔ searching, translating, no articles and archived results have distinct fixed notices (4.138785ms)\n✔ stale and failed collection never claim there are no matching articles (0.204262ms)\n✔ archived articles remain events while new-observation counts only include new live articles (0.718498ms)\nℹ tests 4\nℹ suites 0\nℹ pass 4\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 11.985296\n",
+      "stderr": ""
+    },
+    {
+      "file": "frontend/tests/profileAvatarApi.test.js",
+      "exit_code": 0,
+      "stdout": "✔ avatar mutations send the authenticated member and preserve multipart boundaries (31.968416ms)\n✔ stalled uploadAvatar times out and can be retried (1.893539ms)\n✔ stalled deleteAvatar times out and can be retried (2.03071ms)\n✔ profile edits send text and photo together; password and withdrawal secrets stay in request bodies (1.5321ms)\n✔ late account reads preserve edited profile fields while accepting fresh points (0.618753ms)\nℹ tests 5\nℹ suites 0\nℹ pass 5\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 44.358315\n",
+      "stderr": ""
+    },
+    {
+      "file": "frontend/tests/profileText.test.js",
+      "exit_code": 0,
+      "stdout": "✔ toMs reads ISO strings and numbers, null otherwise (0.868981ms)\n✔ stampKst shows MM.DD HH:MM this year and YY.MM.DD before, in KST (0.250734ms)\n✔ fullKst and joinedLabel (0.165285ms)\n✔ points formatting keeps the sign and the P suffix (14.844413ms)\n✔ ledger labels translate the reason and append the entry symbol from the ref (3.848067ms)\n✔ tierSteps marks done/current/todo from the ladder and sales count (0.987912ms)\n✔ tier captions (0.182095ms)\nℹ tests 7\nℹ suites 0\nℹ pass 7\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 27.441078\n",
+      "stderr": ""
+    },
+    {
+      "file": "frontend/tests/rum.test.js",
+      "exit_code": 0,
+      "stdout": "✔ Core Web Vital ratings use the published boundary values (0.870359ms)\n✔ RUM routes exclude queries, fragments, and identifier-shaped segments (0.404954ms)\n✔ RUM transport prefers sendBeacon and emits bounded anonymous JSON (2.106644ms)\n✔ RUM loads after the initial React render and observes CLS, INP, and LCP (0.537035ms)\n✔ navigation vitals stay attributed to the route where RUM started (1.136254ms)\n✔ pagehide drains queued performance entries before flushing (0.496633ms)\n✔ a fast first interaction is still reported as INP (0.412126ms)\nℹ tests 7\nℹ suites 0\nℹ pass 7\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 12.317369\n",
+      "stderr": ""
+    },
+    {
+      "file": "frontend/tests/runOutcome.test.js",
+      "exit_code": 0,
+      "stdout": "✔ a completed close-and-stop run reads as a closed-out result with the total pnl up front (1.636274ms)\n✔ stopping the macro while in position keeps the position visible and warns (0.385463ms)\n✔ an error or uncertain position never reads as a clean finish (0.238937ms)\n✔ elapsed time survives a year rollover and unknown labels (1.144175ms)\n✔ the close-and-stop confirmation warns about mainnet and adapts to a flat session (0.342123ms)\n✔ requesting a stop shows the result screen in a pending state, not a final figure (0.329111ms)\n✔ stopping only counts while the session is still running (0.148328ms)\nℹ tests 7\nℹ suites 0\nℹ pass 7\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 10.468542\n",
+      "stderr": ""
+    },
+    {
+      "file": "frontend/tests/runnerDevice.test.js",
+      "exit_code": 0,
+      "stdout": "✔ Windows desktop and touch PCs support the runner regardless of viewport (1.171756ms)\n✔ phone and tablet operating systems never offer a Windows launch (0.213332ms)\n✔ Mac, Linux, ChromeOS, and unknown platforms use PC handoff (0.215677ms)\nℹ tests 3\nℹ suites 0\nℹ pass 3\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 8.293494\n",
+      "stderr": ""
+    },
+    {
+      "file": "frontend/tests/runnerDownload.test.js",
+      "exit_code": 0,
+      "stdout": "✔ stale v5 deployment configuration upgrades to the published v6 runner (0.947577ms)\n✔ a later configured release remains usable (0.222269ms)\nℹ tests 2\nℹ suites 0\nℹ pass 2\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 8.160372\n",
+      "stderr": ""
+    },
+    {
+      "file": "frontend/tests/runnerLaunch.test.js",
+      "exit_code": 0,
+      "stdout": "✔ a new running session for the chosen macro is the launched one (0.871027ms)\n✔ sessions that were already running before the launch step are ignored (0.13397ms)\n✔ another macro or a stopped session never counts (0.129194ms)\n✔ legacy runners without a macro id match by symbol only (0.12153ms)\n✔ a rejected launch ticket becomes an 'outdated runner' phase with both versions (0.848982ms)\nℹ tests 5\nℹ suites 0\nℹ pass 5\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 9.080695\n",
+      "stderr": ""
+    },
+    {
+      "file": "frontend/tests/serviceWorker.test.js",
+      "exit_code": 0,
+      "stdout": "✔ worker caches only build assets and removes only its obsolete cache (28.876859ms)\n✔ API, authenticated, cross-origin and write requests bypass the worker (1.20604ms)\n✔ navigation stays network-first and private HTML is never stored (3.354288ms)\n✔ missing asset HTML, failures and no-store responses are not cached (1.750953ms)\n✔ Vercel SPA rewrite excludes APIs and static resources (0.429026ms)\nℹ tests 5\nℹ suites 0\nℹ pass 5\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 42.652643\n",
+      "stderr": ""
+    },
+    {
+      "file": "frontend/tests/strategyText.test.js",
+      "exit_code": 0,
+      "stdout": "✔ A 익절/손절 후 재진입 — 롱과 숏 문장 (2.315278ms)\n✔ B 지정가 밴드 — 가격 둘과 손절이 구로 나뉜다 (1.147307ms)\n✔ C 정기 분할매수 — 간격 일수와 회당 금액 (0.142326ms)\n✔ D 그리드 — 범위는 한 토큰, 격자 수는 숫자, 손절은 다른 구 (0.203825ms)\n✔ E 트레일링 스탑 — 발동 수익률과 되돌림 폭 (0.14067ms)\n✔ F RSI — 기간·진입·청산 임계값 (영문 뒤 괄호 안 숫자도 뗀다) (0.107743ms)\n✔ G 볼린저 — 기간과 σ, 쉼표는 숫자에 딸려 오지 않는다 (0.140647ms)\n✔ H 마틴게일 — 기본 주문·세이프티 횟수·익절 (0.116087ms)\n✔ I 변동성 돌파 — k 값 (0.129432ms)\n✔ J 이동평균 — 빠른/느린 기간 (SMA·EMA 뒤 공백 숫자) (0.212053ms)\n✔ K 하락 방어 전환 — 유니코드 마이너스·부분 매도·숏 익절/손절, 레버리지 구 (0.151881ms)\n✔ dropLeverage — 카드 머리 태그와 겹치는 레버리지 구를 뺀다 (0.221012ms)\n✔ 부호에 따른 등락 정보는 남겨 둔다 (0.142443ms)\n✔ 빈 문장은 빈 배열 (0.127077ms)\nℹ tests 14\nℹ suites 0\nℹ pass 14\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 13.313092\n",
+      "stderr": ""
+    },
+    {
+      "file": "frontend/tests/summaryText.test.js",
+      "exit_code": 0,
+      "stdout": "✔ a multi-line summary becomes a lead line plus body lines (1.537468ms)\n✔ a single block without line breaks splits at the first sentence (0.340266ms)\nℹ tests 2\nℹ suites 0\nℹ pass 2\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 8.762927\n",
+      "stderr": ""
+    },
+    {
+      "file": "frontend/tests/symbolSearch.test.js",
+      "exit_code": 0,
+      "stdout": "✔ 검색 — base 일치가 먼저, 그다음 앞머리, 그다음 포함 (9.761609ms)\n✔ 검색 — 대소문자·공백·기호를 무시하고, 이미 고른 종목은 뺀다 (0.402121ms)\n✔ resolveSymbol — base 만 쳐도 USDT 쌍으로, 없는 글자는 null (0.247131ms)\n✔ marketTags — 시장 표시 (0.177995ms)\nℹ tests 4\nℹ suites 0\nℹ pass 4\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 17.459785\n",
+      "stderr": ""
+    },
+    {
+      "file": "frontend/tests/treemap.test.js",
+      "exit_code": 0,
+      "stdout": "✔ tiles fill the whole rectangle with areas proportional to weight (1.314639ms)\n✔ the heaviest item lands top-left and tiles do not overlap (0.342897ms)\n✔ weight grows with change (square root) and zero or negative change still gets a small tile (0.73763ms)\nℹ tests 3\nℹ suites 0\nℹ pass 3\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 8.951296\n",
+      "stderr": ""
+    },
+    {
+      "file": "frontend/tests/validateDetailed.test.js",
+      "exit_code": 0,
+      "stdout": "✔ 기본 A 폼은 통과한다 (1.109312ms)\n✔ H 기본값은 추가매수 금액이 자금을 넘어 '최대 추가매수 횟수' 칸을 가리킨다 (0.293215ms)\n✔ 숏 A 는 손절이 없으면 '손절 기준' 칸 (1.052372ms)\n✔ D 는 상단이 하단보다 작으면 '상단 가격' 칸 (0.180183ms)\n✔ C 에 레버리지를 걸면 '레버리지' 칸 (0.139616ms)\n✔ K 는 방어 시작 하락폭이 비면 그 칸 (0.119797ms)\nℹ tests 6\nℹ suites 0\nℹ pass 6\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 8.961521\n",
+      "stderr": ""
+    }
+  ]
+}

@@ -98,33 +98,59 @@ export function newsRetryAfterSeconds(payload) {
  * 뉴스 응답 캐시 — 화면을 떠났다 돌아와도 마지막 응답을 바로 그린다.
  * 모듈 메모리 + sessionStorage 거울(새로고침에도 남는다). 저장소가 없거나 깨져 있어도 조용히 빈 캐시로 동작한다.
  */
-export function createNewsCache({ storage = null, storageKey = "ggp_news_cache_v1", maxAgeMs = 12 * 60 * 60 * 1000, now = Date.now } = {}) {
+export function createNewsCache({ storage = null, storageKey = "ggp_news_cache_v1", maxAgeMs = 12 * 60 * 60 * 1000,
+  maxEntries = 32, maxBytes = 1024 * 1024, now = Date.now } = {}) {
   const entries = new Map();
+  const sizes = new Map();
+  const byteLength = (value) => new TextEncoder().encode(JSON.stringify(value)).length;
+  let bytes = 2;
+  const remove = (key) => { bytes -= sizes.get(key) || 0; sizes.delete(key); entries.delete(key); };
+  const prune = () => {
+    let changed = false;
+    for (const [key, entry] of entries) {
+      if (now() - entry.storedAt > maxAgeMs || entry.storedAt > now() + 60_000) { remove(key); changed = true; }
+    }
+    while (entries.size && (entries.size > maxEntries || bytes > maxBytes)) { remove(entries.keys().next().value); changed = true; }
+    return changed;
+  };
+  const persist = () => {
+    try { storage?.setItem(storageKey, JSON.stringify(Object.fromEntries(entries))); } catch { /* 저장소 없이도 메모리 캐시로 동작 */ }
+  };
   try {
     const raw = storage?.getItem(storageKey);
-    if (raw) {
+    if (raw && new TextEncoder().encode(raw).length <= maxBytes * 2) {
       for (const [key, entry] of Object.entries(JSON.parse(raw))) {
-        if (entry && typeof entry === "object" && entry.data && Number.isFinite(entry.storedAt)) entries.set(key, entry);
+        if (!entry || typeof entry !== "object" || !entry.data || !Number.isFinite(entry.storedAt)) continue;
+        const size = byteLength({ [key]: entry });
+        entries.set(key, entry); sizes.set(key, size); bytes += size;
       }
-    }
+      if (prune()) persist();
+    } else if (raw) persist();
   } catch { /* 저장소 접근 불가·손상 — 메모리 캐시만 쓴다 */ }
-  const persist = () => {
-    try { storage?.setItem(storageKey, JSON.stringify(Object.fromEntries(entries))); } catch { /* 용량 초과 등 — 메모리 캐시는 유지 */ }
-  };
   return {
     get(key) {
+      if (prune()) persist();
       const entry = entries.get(key);
       if (!entry) return null;
-      if (now() - entry.storedAt > maxAgeMs) { entries.delete(key); return null; }
+      entries.delete(key); entries.set(key, entry);
       return entry;
     },
     set(key, data, storedAt = now()) {
+      const pruned = prune();
       const same = entries.get(key)?.data === data;
-      entries.set(key, { data, storedAt });
-      if (!same) persist();
+      const entry = { data, storedAt };
+      let size;
+      try { size = byteLength({ [key]: entry }); } catch { return; }
+      remove(key);
+      if (size <= maxBytes - 2) {
+        entries.set(key, entry); sizes.set(key, size); bytes += size;
+      }
+      const evicted = prune();
+      if (!same || pruned || evicted) persist();
     },
     isFresh(key, freshMs) { const entry = this.get(key); return Boolean(entry) && now() - entry.storedAt < freshMs; },
-    clear() { entries.clear(); persist(); },
+    clear() { entries.clear(); sizes.clear(); bytes = 2; persist(); },
+    size: () => entries.size,
   };
 }
 

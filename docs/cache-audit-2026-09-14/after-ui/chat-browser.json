@@ -1,0 +1,65 @@
+{
+  "passed": true,
+  "scenarios": {
+    "identity": {
+      "passed": true
+    },
+    "remount": {
+      "passed": true
+    },
+    "cross_tab": {
+      "passed": true
+    },
+    "cross_tab_auth": {
+      "passed": true
+    },
+    "empty_arrival": {
+      "passed": true
+    },
+    "closed_poll_and_delta": {
+      "passed": true
+    },
+    "macro_picker_waits_for_preparing_board": {
+      "passed": true
+    },
+    "macro_card_requests_an_off_page_entry": {
+      "passed": true
+    },
+    "scroll_unread": {
+      "passed": true
+    },
+    "load_failure": {
+      "passed": true
+    },
+    "post_get_race": {
+      "passed": true
+    },
+    "own_post_does_not_read_unfetched_messages": {
+      "passed": true
+    },
+    "read_sync_after_reload": {
+      "passed": true
+    },
+    "read_sync_retry_on_poll": {
+      "passed": true
+    },
+    "delayed_divider": {
+      "passed": true
+    },
+    "pagination": {
+      "passed": true
+    },
+    "history_gap_after_absence": {
+      "passed": true
+    },
+    "bounded_history_round_trip": {
+      "passed": true
+    },
+    "day_rollover": {
+      "passed": true
+    },
+    "anonymous": {
+      "passed": true
+    }
+  }
+}

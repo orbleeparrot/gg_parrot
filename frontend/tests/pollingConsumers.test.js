@@ -19,7 +19,7 @@ const consumers = [
 for (const relativePath of consumers) {
   test(`${relativePath} uses visibility-aware non-overlapping polling`, () => {
     const source = readFileSync(new URL(relativePath, import.meta.url), "utf8");
-    assert.match(source, /useAdaptivePolling/);
+    assert.match(source, /useAdaptivePolling|useHotCoins/);
     if (!relativePath.endsWith("Leaderboard.jsx")) {
       assert.doesNotMatch(source, /setInterval\s*\(/);
     }

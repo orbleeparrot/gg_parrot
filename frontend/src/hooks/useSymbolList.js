@@ -1,38 +1,16 @@
-// 거래 가능한 종목 목록(/api/symbols) — 한 번 받아 모듈에 두고 모든 조건 판이 같이 쓴다.
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 import { api } from "../api.js";
+import { createSharedResource } from "../lib/sharedResource.js";
 
-let cache = null;          // { items, fetchedAt }
-let inflight = null;       // Promise
-const listeners = new Set();
+const symbols = createSharedResource(async (signal) => {
+  const data = await api.symbols({ signal });
+  return { items: Array.isArray(data?.items) ? data.items : [], fetchedAt: Date.now(), stale: !!data?.stale };
+}, { ttlMs: 5 * 60_000, retryMs: 30_000, isStale: (data) => data.stale || !data.items.length });
 
-function notify() { for (const fn of listeners) fn(); }
-
-export function loadSymbolList(force = false) {
-  if (cache && !force) return Promise.resolve(cache);
-  if (inflight) return inflight;
-  inflight = api.symbols()
-    .then((data) => {
-      cache = { items: Array.isArray(data?.items) ? data.items : [], fetchedAt: Date.now(), stale: !!data?.stale };
-      return cache;
-    })
-    .finally(() => { inflight = null; notify(); });
-  notify();
-  return inflight;
-}
-
+export const loadSymbolList = (force = false) => symbols.refresh(force);
 export function useSymbolList() {
-  const [, bump] = useState(0);
-  const [error, setError] = useState("");
-  useEffect(() => {
-    const onChange = () => bump((n) => n + 1);
-    listeners.add(onChange);
-    if (!cache) loadSymbolList().catch((e) => setError(String(e?.message || e)));
-    return () => listeners.delete(onChange);
-  }, []);
-  const reload = () => { setError(""); return loadSymbolList(true).catch((e) => setError(String(e?.message || e))); };
-  return { items: cache?.items || null, loading: !cache && !!inflight, error, reload };
+  const state = useSyncExternalStore(symbols.subscribe, symbols.getSnapshot, symbols.getSnapshot);
+  return { items: state.data?.items || null, loading: state.loading, error: state.error,
+    reload: () => symbols.refresh(true).catch(() => {}) };
 }
-
-// 테스트·미리보기용 초기화
-export function resetSymbolList() { cache = null; inflight = null; }
+export const resetSymbolList = () => symbols.reset();

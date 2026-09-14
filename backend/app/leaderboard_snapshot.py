@@ -18,11 +18,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Field, SQLModel, select
 
 from .db import LeaderboardEntry, LeaderboardVote, MacroUnlock, get_session
+from .cache_runtime import ResponseCache
 
 DEFAULT_PAGE_SIZE = 50
 MAX_PAGE_SIZE = 100
 LEASE_MS = 90_000
 RETENTION_MS = 15 * 60_000
+_versions = ResponseCache("leaderboard_versions", max_entries=128, max_bytes=128_000,
+                          retry_seconds=1, max_retry_seconds=2)
 
 
 class LeaderboardSnapshotControl(SQLModel, table=True):
@@ -173,7 +176,24 @@ def publish_snapshot(token: str, date_kst: str, items: list[dict], *, now: Optio
             LeaderboardSnapshotVersion.created_ms < millis - RETENTION_MS,
             LeaderboardSnapshotVersion.id != version_id))
         db.commit()
+    _versions.clear()
     return version_id
+
+
+def _read_version(session, snapshot_id):
+    def load():
+        if snapshot_id:
+            row = session.get(LeaderboardSnapshotVersion, snapshot_id)
+        else:
+            row = session.exec(select(LeaderboardSnapshotVersion).join(
+                LeaderboardSnapshotControl,
+                LeaderboardSnapshotControl.current_version == LeaderboardSnapshotVersion.id,
+            ).where(LeaderboardSnapshotControl.key == "board")).first()
+        return row.model_dump() if row is not None else None
+    # Never move the request's DB session into a background thread. Only public
+    # generation metadata is cached; ownership/unlocks/votes stay current below.
+    value, _ = _versions.get_or_load((session.get_bind(), snapshot_id), load, ttl=1)
+    return LeaderboardSnapshotVersion(**value) if value is not None else None
 
 
 def read_board(viewer_id: str = "", viewer_user_id: Optional[int] = None, *, db=None,
@@ -185,13 +205,7 @@ def read_board(viewer_id: str = "", viewer_user_id: Optional[int] = None, *, db=
     page = max(1, int(page))
     page_size = max(1, min(MAX_PAGE_SIZE, int(page_size)))
     with nullcontext(db) if db is not None else get_session() as session:
-        if snapshot_id:
-            version = session.get(LeaderboardSnapshotVersion, snapshot_id)
-        else:
-            version = session.exec(select(LeaderboardSnapshotVersion).join(
-                LeaderboardSnapshotControl,
-                LeaderboardSnapshotControl.current_version == LeaderboardSnapshotVersion.id,
-            ).where(LeaderboardSnapshotControl.key == "board")).first()
+        version = _read_version(session, snapshot_id)
         if version is None:
             return {"items": [], "page": 1, "page_size": page_size, "total": 0,
                     "has_more": False, "snapshot_id": "", "snapshot_expired": bool(snapshot_id),

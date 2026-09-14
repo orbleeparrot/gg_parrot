@@ -18,7 +18,8 @@ from typing import Optional
 
 import httpx
 
-from .http_runtime import SingleFlightGroup, get_http_client
+from .http_runtime import get_http_client
+from .cache_runtime import ResponseCache
 
 _HANGANG_URL = os.environ.get("HANGANG_API_URL", "https://api.ivl.is/hangangtemp")
 
@@ -27,8 +28,7 @@ CACHE_SECONDS = float(os.environ.get("HANGANG_CACHE_SECONDS", "300"))
 TIMEOUT_SECONDS = float(os.environ.get("HANGANG_TIMEOUT_SECONDS", "8"))
 
 # Shared cache: (normalized_payload, expires_at). Single global entry.
-_cache: Optional[tuple[dict, float]] = None
-_refreshes = SingleFlightGroup()
+_cache = ResponseCache("hangang", max_entries=1, retry_seconds=30, max_retry_seconds=300)
 
 
 def _fmt_updated(date: str, t: str) -> Optional[str]:
@@ -69,33 +69,16 @@ def _fetch() -> Optional[dict]:
 def get_temp() -> dict:
     """Return the cached Hangang water temperature (fetches upstream at most once
     per cache window). Never raises; serves a stale cache on transient failure."""
-    global _cache
-    now = time.time()
-    if _cache and _cache[1] > now:
-        payload = dict(_cache[0])
-        payload["cached"] = True
-        return _envelope(payload)
-
-    if _cache:
-        fresh, refresh_state = _refreshes.run("hangang", _fetch, stale_value=None)
-    else:
-        fresh, refresh_state = _refreshes.run("hangang", _fetch)
-    if refresh_state == "stale":
-        payload = dict(_cache[0])
-        payload["cached"] = True
-        payload["stale"] = True
-        return _envelope(payload)
-    if fresh is not None:
-        _cache = (fresh, now + CACHE_SECONDS)
-        return _envelope({**fresh, "cached": refresh_state == "shared"})
-
-    # Upstream failed: serve the last good value (flagged stale) if we have one.
-    if _cache:
-        payload = dict(_cache[0])
-        payload["cached"] = True
-        payload["stale"] = True
-        return _envelope(payload)
-    return _envelope({"ok": False, "error": "upstream", "temperature": None})
+    def load():
+        data = _fetch()
+        if data is None:
+            raise RuntimeError("temperature source unavailable")
+        return _envelope(data)
+    try:
+        payload, state = _cache.get_or_load("temperature", load, ttl=CACHE_SECONDS, stale_ttl=3600)
+    except Exception:
+        return _envelope({"ok": False, "error": "upstream", "temperature": None})
+    return {**payload, "cached": state != "loaded", **({"stale": True} if state == "stale" else {})}
 
 
 def _envelope(payload: dict) -> dict:

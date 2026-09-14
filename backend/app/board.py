@@ -471,10 +471,17 @@ _view_lock = threading.Lock()
 
 
 def _comments(db, post_id: int) -> list[dict]:
-    rows = db.exec(select(BoardComment, UserAvatar.version)
+    # Join current identities in the existing single query. Historical comments
+    # may predate rename propagation; anonymous names must remain untouched.
+    rows = db.exec(select(BoardComment, UserAvatar.version, User.username, User.is_deleted)
+                   .outerjoin(User, User.id == BoardComment.author_user_id)
                    .outerjoin(UserAvatar, UserAvatar.user_id == BoardComment.author_user_id)
                    .where(BoardComment.post_id == post_id).order_by(BoardComment.id.asc())).all()
-    return _comment_tree([_comment_view(row, avatars.public_url(row.author_user_id, version)) for row, version in rows])
+    return _comment_tree([
+        _comment_view(row, None if deleted else avatars.public_url(row.author_user_id, version),
+                      username="탈퇴한 회원" if deleted else username)
+        for row, version, username, deleted in rows
+    ])
 
 
 def get_post(post_id: int, viewer_id: int | None = None, view_key: str | None = None, db=None) -> Optional[dict]:
@@ -678,11 +685,11 @@ def my_posts(user_id: int, limit: int = 50, db=None) -> list[dict]:
 # ---------------------------------------------------------------------------
 # 댓글 (계정 없이 이름+비밀번호)
 # ---------------------------------------------------------------------------
-def _comment_view(row: BoardComment, avatar_url: str | None = None) -> dict:
+def _comment_view(row: BoardComment, avatar_url: str | None = None, *, username: str | None = None) -> dict:
     return {
         "id": row.id,
         "post_id": row.post_id,
-        "username": row.username,
+        "username": row.username if username is None else username,
         "author_user_id": row.author_user_id,
         "author_avatar_url": avatar_url if row.author_user_id is not None else None,
         "parent_id": row.parent_id,
@@ -756,19 +763,20 @@ def edit_comment(comment_id: int, user: User, text: str, db=None) -> Optional[di
     if not text:
         raise ValueError("댓글 내용을 입력해 주세요.")
     with (nullcontext(db) if db is not None else get_session()) as db:
-        found = db.exec(select(BoardComment, UserAvatar.version)
+        found = db.exec(select(BoardComment, UserAvatar.version, User.username)
+            .outerjoin(User, User.id == BoardComment.author_user_id)
             .outerjoin(UserAvatar, UserAvatar.user_id == BoardComment.author_user_id)
             .where(BoardComment.id == comment_id)).first()
         if found is None:
             return None
-        row, version = found
+        row, version, username = found
         if row.author_user_id is None or row.author_user_id != user.id:
             raise PermissionError("본인이 쓴 댓글만 고칠 수 있어요.")
         require_clean_text(text[:MAX_COMMENT], "댓글")
         row.text = text[:MAX_COMMENT]
         row.updated_ms = int(_now_utc().timestamp() * 1000)
         db.add(row)
-        result = _comment_view(row, avatars.public_url(user.id, version))
+        result = _comment_view(row, avatars.public_url(user.id, version), username=username)
         db.commit()
         return result
 

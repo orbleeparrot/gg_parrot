@@ -30,9 +30,14 @@ export function mergeMessages(items, incoming, dayStartMs = 0) {
 }
 
 export const CHAT_WINDOW_SIZE = 200;
+export const CHAT_CACHE_LIMIT = 1000;
 
-// A fixed window bounds DOM work while retaining every fetched message in the
-// cache. Its upper ID stays stable when older pages or live arrivals are merged.
+export function retainChatMessages(items, { older = false, limit = CHAT_CACHE_LIMIT } = {}) {
+  return items.length <= limit ? items : older ? items.slice(0, limit) : items.slice(-limit);
+}
+
+// A fixed window bounds DOM work within the retained cache. Evicted pages are
+// read again by their server cursors; its upper ID stays stable during merges.
 export function chatWindow(items, endId = null, size = CHAT_WINDOW_SIZE) {
   const end = endId == null ? items.length : items.findIndex((item) => Number(item.id) > endId);
   const finish = end < 0 ? items.length : end;

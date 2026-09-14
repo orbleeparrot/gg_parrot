@@ -4,11 +4,28 @@ import { getToken } from "./lib/auth.js";
 import { createRequestCoordinator } from "./lib/requestCoordinator.js";
 import { withRequestTimeout } from "./lib/requestTimeout.js";
 import { createBoardListCache } from "./lib/boardListCache.js";
+import { invalidateLeaderboardCache } from "./lib/cacheEvents.js";
 
 const BASE = "";
 const RUNNER_SESSIONS_STREAM_PATH = "/api/me/runner/sessions/stream";
 const getRequests = createRequestCoordinator();
 const boardLists = createBoardListCache();
+const PUBLIC_READS = new Set([
+  "/api/news/market", "/api/hot-coins", "/api/symbols", "/api/candles", "/api/candles/live",
+  "/api/kimchi-premium", "/api/usdkrw", "/api/funding-rate", "/api/fear-greed", "/api/hangang-temp",
+  "/api/whale-activity", "/api/runner/download/info", "/api/auth/google/config", "/api/backtest/limits",
+  "/api/challenge/today",
+]);
+function publicRead(path, method) {
+  const pathname = path.split("?")[0];
+  return method === "GET" && (PUBLIC_READS.has(pathname) || /^\/api\/news\/coin\/[^/]+$/.test(pathname)
+    || /^\/api\/macros\/[^/]+$/.test(pathname));
+}
+async function leaderboardMutation(promise) {
+  const result = await promise;
+  invalidateLeaderboardCache();
+  return result;
+}
 
 function boardListPath(page, size, { sort = "new", q = "", field = "all" } = {}) {
   const params = new URLSearchParams({ page: String(page), size: String(size) });
@@ -56,13 +73,14 @@ async function jsonBody(res) {
 }
 
 async function req(path, opts = {}) {
-  const token = getToken();
+  const method = String(opts.method || "GET").toUpperCase();
+  const shared = publicRead(path, method);
+  const token = shared ? "" : getToken();
   const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
   if (token) headers["Authorization"] = `Bearer ${token}`;
-  const method = String(opts.method || "GET").toUpperCase();
   const { signal: callerSignal, timeoutMs, requestKey = "", ...fetchOptions } = opts;
   const execute = (signal) => withRequestTimeout(async (requestSignal) => {
-    const res = await fetch(BASE + path, { ...fetchOptions, method, headers, signal: requestSignal });
+    const res = await fetch(BASE + path, { ...fetchOptions, cache: shared ? (fetchOptions.cache || "default") : "no-store", credentials: shared ? "omit" : "same-origin", method, headers, signal: requestSignal });
     const body = await jsonBody(res);
     if (!res.ok) {
       const detail = typeof body.detail === "string"
@@ -89,7 +107,7 @@ async function reqForm(path, formData, options = {}) {
   const headers = {};
   if (token) headers["Authorization"] = `Bearer ${token}`;
   return withRequestTimeout(async (signal) => {
-    const res = await fetch(BASE + path, { method, headers, body: formData, signal });
+    const res = await fetch(BASE + path, { method, headers, body: formData, signal, cache: "no-store" });
     const body = await jsonBody(res);
     if (!res.ok) {
       const detail = typeof body.detail === "string"
@@ -120,9 +138,9 @@ export const api = {
   uploadAvatar: (image) => {
     const form = new FormData();
     form.append("image", image);
-    return reqForm("/api/me/avatar", form, { timeoutMs: 30_000 });
+    return boardMutation(reqForm("/api/me/avatar", form, { timeoutMs: 30_000 }));
   },
-  deleteAvatar: () => req("/api/me/avatar", { method: "DELETE", timeoutMs: 30_000 }),
+  deleteAvatar: () => boardMutation(req("/api/me/avatar", { method: "DELETE", timeoutMs: 30_000 })),
   deleteAccount: ({ confirmation, password, credential }, options = {}) => req("/api/me/account", {
     ...options, method: "DELETE", body: JSON.stringify({ confirmation, password, credential }), timeoutMs: 30_000,
   }),
@@ -132,7 +150,7 @@ export const api = {
     form.append("bio", bio || "");
     form.append("remove_avatar", String(removeAvatar));
     if (image) form.append("image", image);
-    return reqForm("/api/me/profile", form, { ...options, method: "PATCH", timeoutMs: 30_000 });
+    return boardMutation(reqForm("/api/me/profile", form, { ...options, method: "PATCH", timeoutMs: 30_000 }));
   },
   changePassword: ({ currentPassword, newPassword }, options = {}) =>
     req("/api/me/password", {
@@ -177,7 +195,7 @@ export const api = {
 
   cardUrl: (slug) => `/api/card/${slug}.png`,
   // 거래 가능한 종목 목록(현물 + USDT-M 선물) — 조건 판의 종목 검색은 이 안에서만 고른다.
-  symbols: () => req("/api/symbols"),
+  symbols: (options = {}) => req("/api/symbols", options),
   coinLogoUrl: (base) => `/api/coin-logo/${encodeURIComponent(base)}.png`,
 
   // kimchi premium (reference indicator; upbit vs binance×USDKRW)
@@ -304,18 +322,18 @@ export const api = {
     throw new Error("목록이 너무 커요. 리더보드 페이지에서 참가자를 찾아 주세요.");
   },
   leaderboardRegister: (macro, username, password, userId, mode) =>
-    req("/api/leaderboard/register", {
+    leaderboardMutation(req("/api/leaderboard/register", {
       method: "POST",
       body: JSON.stringify({ macro, username, password, user_id: userId, mode: mode || "live" }),
-    }),
+    })),
   leaderboardEdit: (entryId, macro, password, mode) =>
-    req(`/api/leaderboard/${entryId}/edit`, {
+    leaderboardMutation(req(`/api/leaderboard/${entryId}/edit`, {
       method: "POST",
       body: JSON.stringify({ macro, password: password || "", mode: mode || "live" }),
-    }),
+    })),
   // 계정 소유 엔트리 삭제 (로그인 필요, 소유자만).
   leaderboardDelete: (entryId) =>
-    req(`/api/leaderboard/${entryId}`, { method: "DELETE" }),
+    leaderboardMutation(req(`/api/leaderboard/${entryId}`, { method: "DELETE" })),
   leaderboardVote: (entryId, userId, value) =>
     req(`/api/leaderboard/${entryId}/vote`, {
       method: "POST",
@@ -323,7 +341,7 @@ export const api = {
     }),
   // 포인트를 소진해 매크로 공개+복사 (창작자에게 70% 분배). 로그인 필요.
   leaderboardUnlock: (entryId) =>
-    req(`/api/leaderboard/${entryId}/unlock`, { method: "POST" }),
+    leaderboardMutation(req(`/api/leaderboard/${entryId}/unlock`, { method: "POST" })),
 
   // leaderboard chat (daily KST)
   chatList: ({ beforeId, seenId, afterId, metadataOnly, messageIds, ...options } = {}) => {

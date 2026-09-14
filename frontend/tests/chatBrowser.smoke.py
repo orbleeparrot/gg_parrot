@@ -164,6 +164,10 @@ import React, {{ useState }} from {json.dumps(str(FRONTEND / 'node_modules/react
 import {{ createRoot }} from {json.dumps(str(FRONTEND / 'node_modules/react-dom/client.js'))};
 import ChatBox from {json.dumps(str(FRONTEND / 'src/components/ChatBox.jsx'))};
 import {{ setAuth, clearAuth }} from {json.dumps(str(FRONTEND / 'src/lib/auth.js'))};
+import {{ getChatFeed }} from {json.dumps(str(FRONTEND / 'src/lib/chatStore.js'))};
+import {{ invalidateLeaderboardCache }} from {json.dumps(str(FRONTEND / 'src/lib/cacheEvents.js'))};
+window.auditChatCache = () => getChatFeed('member:1');
+window.auditInvalidateMacros = invalidateLeaderboardCache;
 function Harness() {{
   const [mounted, setMounted] = useState(true);
   window.auditMount = setMounted;
@@ -352,12 +356,13 @@ def macro_picker_waits_for_preparing_board(suite):
     class MacroFixtures(Fixtures):
         preparing = True
         macro_calls = 0
+        author = "macro-author"
 
         def route(self, route):
             if urlparse(route.request.url).path == "/api/leaderboard":
                 self.macro_calls += 1
                 route.fulfill(json={"preparing": self.preparing, "has_more": False, "snapshot_id": "fixture",
-                                    "items": [] if self.preparing else [{"id": 1, "symbol": "BTCUSDT", "username": "macro-author", "human_summary": "example strategy"}]})
+                                    "items": [] if self.preparing else [{"id": 1, "symbol": "BTCUSDT", "username": self.author, "human_summary": "example strategy"}]})
             elif route.request.url == "https://bin.bnbstatic.com/static/assets/logos/BTC.png":
                 route.fulfill(status=204)  # Local image fixture; never contact the CDN.
             else:
@@ -375,6 +380,16 @@ def macro_picker_waits_for_preparing_board(suite):
     advance_poll(page)
     expect(page.get_by_role("option")).to_contain_text("BTCUSDT")
     assert fixture.macro_calls == 2
+    fixture.author = "refreshed-after-expiry"
+    page.clock.run_for(31_000)
+    settle(page)
+    expect(page.get_by_role("option")).to_contain_text(fixture.author)
+    assert fixture.macro_calls == 3
+    fixture.author = "refreshed-after-mutation"
+    page.evaluate("auditInvalidateMacros()")
+    settle(page)
+    expect(page.get_by_role("option")).to_contain_text(fixture.author)
+    assert fixture.macro_calls == 4
 
 
 def macro_card_requests_an_off_page_entry(suite):
@@ -586,6 +601,36 @@ def history_gap_after_absence(suite):
     assert page.locator(".chat-row").count() <= 200
 
 
+def bounded_history_round_trip(suite):
+    fixture = Fixtures([message(index) for index in range(1, 1206)])
+    page, _ = suite.page(fixture)
+    open_chat(page)
+    visited = set(page.locator(".chat-bubble").all_text_contents())
+    for _ in range(8):
+        button = page.get_by_role("button", name="이전 메시지 더 보기", exact=True)
+        if not button.count():
+            break
+        button.click()
+        settle(page)
+        assert page.locator(".chat-row").count() <= 200
+        assert page.evaluate("auditChatCache().items.length") <= 1000
+        visited.update(page.locator(".chat-bubble").all_text_contents())
+    assert visited == {f"message-{index}" for index in range(1, 1206)}
+    assert page.evaluate("auditChatCache().tailEvicted")
+    forward = set(page.locator(".chat-bubble").all_text_contents())
+    for _ in range(9):
+        button = page.get_by_role("button", name="다음 메시지 보기", exact=True)
+        if not button.count():
+            break
+        button.click()
+        settle(page)
+        assert page.evaluate("auditChatCache().items.length") <= 1000
+        forward.update(page.locator(".chat-bubble").all_text_contents())
+    assert forward == {f"message-{index}" for index in range(1, 1206)}
+    assert not page.evaluate("auditChatCache().tailEvicted")
+    assert any(query.get("after_id") == ["1000"] for query in fixture.get_queries)
+
+
 def day_rollover(suite):
     fixture = Fixtures([message(1), message(2)])
     page, _ = suite.page(fixture)
@@ -627,7 +672,7 @@ def main():
                              load_failure, post_get_race, own_post_does_not_read_unfetched_messages,
                              read_sync_after_reload, read_sync_retry_on_poll,
                              delayed_divider, pagination, history_gap_after_absence,
-                             day_rollover, anonymous):
+                             bounded_history_round_trip, day_rollover, anonymous):
                     suite = Suite(browser, f"http://127.0.0.1:{server.server_port}")
                     try:
                         test(suite)

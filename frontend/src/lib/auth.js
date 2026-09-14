@@ -1,6 +1,7 @@
 // Account auth state (token + user), kept in localStorage and exposed as a tiny
 // reactive store via useSyncExternalStore so header/pages update on login/logout.
-import { useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
+import { accountScope, transitionAccountStorage } from "./accountStorage.js";
 
 const TOKEN_KEY = "ggp_token";
 const USER_KEY = "ggp_user";
@@ -17,10 +18,16 @@ function read() {
   }
 }
 
-let state = read();
+let state = { ...read(), sessionVersion: 0, accountVersion: 0 };
+let revision = 0;
+let accountRevision = 0;
 
-function emit() {
-  state = read(); // new object reference so subscribers re-render
+function emit(options) {
+  const next = read();
+  if (state.token !== next.token || state.user?.id !== next.user?.id) revision += 1;
+  if (accountScope(state) !== accountScope(next)) accountRevision += 1;
+  transitionAccountStorage(accountScope(state), accountScope(next), options);
+  state = { ...next, sessionVersion: revision, accountVersion: accountRevision };
   listeners.forEach((l) => l());
 }
 
@@ -29,6 +36,9 @@ if (typeof window !== "undefined") {
   window.addEventListener("storage", (event) => {
     if (event.key === null || event.key === TOKEN_KEY || event.key === USER_KEY) emit();
   });
+  window.addEventListener("pageshow", (event) => {
+    if (event.persisted) emit(); // A history-restored page may have missed logout.
+  });
 }
 
 export function getToken() {
@@ -36,6 +46,26 @@ export function getToken() {
 }
 export function getAuthUser() {
   return state.user;
+}
+export function getAuthScope() {
+  return accountScope(state);
+}
+// Also rejects A -> B -> A transitions, even if a previously issued token is
+// reused. Call before awaiting; check again before applying an account result.
+export function captureAccountGuard({ accountOnly = false } = {}) {
+  const started = accountOnly ? accountRevision : revision;
+  return () => (accountOnly ? accountRevision : revision) === started;
+}
+// Use inside a component keyed by useAuth().accountVersion. A token renewal for
+// the same account keeps its draft and UI; another account retires old results.
+export function useAccountGuard() {
+  const owner = useRef(accountRevision);
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+  return useCallback(() => mounted.current && owner.current === accountRevision, []);
 }
 export function isLoggedIn() {
   return !!state.token;
@@ -60,10 +90,10 @@ export function mergeFetchedAuthUser(fetched, requested) {
   }
   return merged;
 }
-export function clearAuth() {
+export function clearAuth(options = {}) {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
-  emit();
+  emit(options);
 }
 
 function subscribe(l) {

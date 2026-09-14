@@ -80,6 +80,7 @@ from .db import User
 from . import whales as whales_mod
 from .card import render_card
 from .security import hash_password
+from .http_cache import public_news_response
 from .data import NoSpotDataError, average_daily_funding_pct, get_klines, resolve_period
 from .data import symbols as symbols_mod
 from .data.binance import backtest_limits
@@ -123,6 +124,8 @@ async def lifespan(app: FastAPI):
                     try:
                         ai_runtime_mod.close_ai_runtime()
                     finally:
+                        from .cache_runtime import close_cache_runtime
+                        await asyncio.to_thread(close_cache_runtime)
                         http_runtime_mod.close_http_runtime()
 
 
@@ -768,7 +771,7 @@ def candles(
 ) -> dict:
     """Recent OHLC candles for the live chart (public market data only).
 
-    Globally cached per (symbol, interval, limit, market) for a few seconds, so
+    Globally cached per (symbol, interval, market) and sliced to the requested limit, so
     many viewers collapse into at most one upstream call per window. The last
     candle is the in-progress bar (``closed: false``) and is never persisted to
     the shared kline cache, so it can't leak into a backtest.
@@ -807,10 +810,10 @@ def hot_coins(limit: int = 10) -> dict:
 
 
 @app.get("/api/news/market")
-def news_market() -> dict:
+def news_market(request: Request) -> Response:
     """백그라운드에서 준비한 시장 기사와 일별 요약을 DB에서 조회한다."""
     try:
-        return public_news_mod.get_market_news()
+        return public_news_response(request, public_news_mod.get_market_news())
     except news_mod.NewsTranslationBusyError as exc:
         raise HTTPException(status_code=429, detail=str(exc)) from exc
     except news_mod.NewsTranslationError as exc:
@@ -820,10 +823,10 @@ def news_market() -> dict:
 
 
 @app.get("/api/news/coin/{symbol}")
-def news_coin(symbol: str) -> dict:
+def news_coin(symbol: str, request: Request) -> Response:
     """준비된 코인 기사를 조회한다. 미수집 상태도 외부 호출 없이 반환한다."""
     try:
-        return public_news_mod.get_coin_news(symbol)
+        return public_news_response(request, public_news_mod.get_coin_news(symbol))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except news_mod.NewsTranslationBusyError as exc:
@@ -1294,10 +1297,15 @@ def board_comment_delete(comment_id: int, user: User = Depends(auth_mod.current_
 
 
 @app.get("/api/symbols")
-def symbols() -> dict:
+def symbols(response: Response) -> dict:
     """Tradable Binance USDT symbols (spot + USDT-M perpetual) for the builder's search — only these can be added."""
     try:
-        return symbols_mod.list_symbols()
+        data = symbols_mod.list_symbols()
+        response.headers["Cache-Control"] = (
+            "public, max-age=5, s-maxage=5" if data.get("stale") or not data.get("items")
+            else "public, max-age=300, s-maxage=300"
+        )
+        return data
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"종목 목록을 불러오지 못했어요: {type(exc).__name__}")
 

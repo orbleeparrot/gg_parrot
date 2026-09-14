@@ -11,6 +11,9 @@ from __future__ import annotations
 import math
 import os
 import sqlite3
+import threading
+from collections import OrderedDict
+from contextlib import contextmanager
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -19,6 +22,7 @@ import httpx
 import pandas as pd
 
 from ..http_runtime import SingleFlightGroup, get_http_client
+from ..cache_runtime import ResponseCache
 
 # Base host is env-configurable so a US-hosted deploy (where api.binance.com is
 # geo-blocked) can point at the public data mirror (data-api.binance.vision),
@@ -33,11 +37,12 @@ _TICKER = f"{_BINANCE_BASE}/api/v3/ticker/price"
 _FUTURES_BASE = os.environ.get("BINANCE_FAPI_BASE", "https://fapi.binance.com").rstrip("/")
 _FUT_KLINES = f"{_FUTURES_BASE}/fapi/v1/klines"
 _FUT_FUNDING = f"{_FUTURES_BASE}/fapi/v1/fundingRate"
-_CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "cache")
+_CACHE_DIR = os.environ.get("MARKET_CACHE_DIR") or os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "cache")
 _DB_PATH = os.path.join(_CACHE_DIR, "market.db")
 _MS_DAY = 86_400_000
 _INTERVAL_MS = {
     "1m": 60_000,
+    "3m": 3 * 60_000,
     "5m": 5 * 60_000,
     "15m": 15 * 60_000,
     "1h": 60 * 60_000,
@@ -109,33 +114,19 @@ def _cache_covers_window(
     """
     if cached is None or len(cached) == 0:
         return False
+    first, last = _normalized_coverage_window(interval, start_ms, end_ms)
     interval_ms = _INTERVAL_MS[interval]
-    expected = _expected_bar_count(interval, start_ms, end_ms)
-    if len(cached) < max(1, math.floor(expected * 0.95)):
-        return False
-
-    # Pandas 3 may store timezone-aware values at microsecond rather than
-    # nanosecond resolution, so normalize explicitly before integer conversion.
-    timestamps_ms = (
-        pd.to_datetime(cached["timestamp"], utc=True)
-        .to_numpy(dtype="datetime64[ms]")
-        .astype("int64")
-    )
-    if int(timestamps_ms[0]) > start_ms + interval_ms:
-        return False
-    if int(timestamps_ms[-1]) < end_ms - interval_ms:
-        return False
-    if len(timestamps_ms) > 1:
-        gaps = timestamps_ms[1:] - timestamps_ms[:-1]
-        if int(gaps.max()) > interval_ms:
-            return False
-    return True
+    expected = max(0, (last - first) // interval_ms + 1)
+    timestamps = pd.to_datetime(cached["timestamp"], utc=True).to_numpy(dtype="datetime64[ms]").astype("int64")
+    return (expected > 0 and len(timestamps) == expected and int(timestamps[0]) == first
+            and int(timestamps[-1]) == last
+            and (len(timestamps) == 1 or bool(((timestamps[1:] - timestamps[:-1]) == interval_ms).all())))
 
 
 def _normalized_coverage_window(interval: str, start_ms: int, end_ms: int) -> tuple[int, int]:
     interval_ms = _INTERVAL_MS[interval]
     first_open = math.ceil(start_ms / interval_ms) * interval_ms
-    last_open = (end_ms // interval_ms) * interval_ms
+    last_open = (min(end_ms, int(time.time() * 1000)) // interval_ms - 1) * interval_ms
     return int(first_open), int(last_open)
 
 
@@ -158,23 +149,50 @@ def resolve_period(preset: Optional[str], start: Optional[str], end: Optional[st
 
 
 # --- cache --------------------------------------------------------------
-def _conn() -> sqlite3.Connection:
-    os.makedirs(_CACHE_DIR, exist_ok=True)
-    conn = sqlite3.connect(_DB_PATH)
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS klines (
-               symbol TEXT, interval TEXT, open_time INTEGER,
-               open REAL, high REAL, low REAL, close REAL, volume REAL,
-               PRIMARY KEY (symbol, interval, open_time))"""
-    )
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS kline_coverage (
-               symbol TEXT, interval TEXT,
-               window_start INTEGER, window_end INTEGER,
-               checked_at_ms INTEGER,
-               PRIMARY KEY (symbol, interval, window_start, window_end))"""
-    )
-    return conn
+_schema_lock = threading.Lock()
+_schemas = OrderedDict()
+
+
+@contextmanager
+def _conn():
+    """Short-lived connections; old unverified rows are retained but never read.
+
+    Legacy rows may contain a once-open candle with no provenance. Marking all
+    of them settled would preserve incorrect prices, so they are lazily replaced
+    from upstream. No application/user table is touched by this migration.
+    """
+    os.makedirs(os.path.dirname(os.path.abspath(_DB_PATH)), exist_ok=True)
+    conn = sqlite3.connect(_DB_PATH, timeout=15)
+    try:
+        with _schema_lock:
+            stat = os.stat(_DB_PATH)
+            identity = (os.path.abspath(_DB_PATH), stat.st_dev, stat.st_ino)
+            if identity not in _schemas:
+                _initialize_schema(conn)
+                _schemas[identity] = True
+                while len(_schemas) > 32:
+                    _schemas.popitem(last=False)
+            _schemas.move_to_end(identity)
+        with conn:
+            yield conn
+    finally:
+        conn.close()
+
+
+def _initialize_schema(conn):
+    conn.execute("""CREATE TABLE IF NOT EXISTS klines (
+        symbol TEXT, interval TEXT, open_time INTEGER,
+        open REAL, high REAL, low REAL, close REAL, volume REAL,
+        settled_verified INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (symbol, interval, open_time))""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS kline_coverage (
+        symbol TEXT, interval TEXT, window_start INTEGER, window_end INTEGER,
+        checked_at_ms INTEGER, settled_version INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (symbol, interval, window_start, window_end))""")
+    for table, field in (("klines", "settled_verified"), ("kline_coverage", "settled_version")):
+        if field not in {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {field} INTEGER NOT NULL DEFAULT 0")
+    conn.commit()
 
 
 def _coverage_verified(
@@ -187,20 +205,35 @@ def _coverage_verified(
     with _conn() as conn:
         row = conn.execute(
             """SELECT 1 FROM kline_coverage
-               WHERE symbol=? AND interval=? AND window_start=? AND window_end=?""",
+               WHERE symbol=? AND interval=? AND window_start<=? AND window_end>=? AND settled_version=1""",
             (symbol, interval, window_start, window_end),
         ).fetchone()
     return row is not None
 
 
 def _mark_coverage(symbol: str, interval: str, start_ms: int, end_ms: int) -> None:
-    """Record a successfully completed upstream window, including empty prefixes."""
+    """Merge verified ranges so sliding backtests do not grow one row per poll."""
     window_start, window_end = _normalized_coverage_window(interval, start_ms, end_ms)
+    if window_start > window_end:
+        return
+    step = _INTERVAL_MS[interval]
     with _conn() as conn:
+        # Obtain the write lock before the read/merge to avoid losing another
+        # collector's verified range on a shared cache file.
+        conn.execute("BEGIN IMMEDIATE")
+        ranges = conn.execute("""SELECT window_start, window_end FROM kline_coverage
+            WHERE symbol=? AND interval=? AND settled_version=1 ORDER BY window_start""",
+            (symbol, interval)).fetchall()
+        for left, right in ranges:
+            if left <= window_end + step and right >= window_start - step:
+                window_start, window_end = min(left, window_start), max(right, window_end)
+        conn.execute("""DELETE FROM kline_coverage WHERE symbol=? AND interval=? AND
+            (settled_version!=1 OR (window_start<=? AND window_end>=?))""",
+            (symbol, interval, window_end, window_start))
         conn.execute(
             """INSERT OR REPLACE INTO kline_coverage
-               (symbol, interval, window_start, window_end, checked_at_ms)
-               VALUES (?, ?, ?, ?, ?)""",
+               (symbol, interval, window_start, window_end, checked_at_ms, settled_version)
+               VALUES (?, ?, ?, ?, ?, 1)""",
             (symbol, interval, window_start, window_end, int(time.time() * 1000)),
         )
 
@@ -209,7 +242,7 @@ def _read_cache(symbol: str, interval: str, start_ms: int, end_ms: int) -> pd.Da
     with _conn() as conn:
         rows = conn.execute(
             """SELECT open_time, open, high, low, close, volume FROM klines
-               WHERE symbol=? AND interval=? AND open_time BETWEEN ? AND ?
+               WHERE symbol=? AND interval=? AND open_time BETWEEN ? AND ? AND settled_verified=1
                ORDER BY open_time""",
             (symbol, interval, start_ms, end_ms),
         ).fetchall()
@@ -221,17 +254,47 @@ def _read_cache(symbol: str, interval: str, start_ms: int, end_ms: int) -> pd.Da
 
 
 def _write_cache(symbol: str, interval: str, raw: list[list]) -> None:
+    step = _INTERVAL_MS[interval]
+    now = int(time.time() * 1000)
+    closed = [k for k in raw if int(k[0]) + step <= now and int(k[6]) < now]
+    if not closed:
+        return
     with _conn() as conn:
-        conn.executemany(
-            """INSERT OR REPLACE INTO klines
-               (symbol, interval, open_time, open, high, low, close, volume)
-               VALUES (?,?,?,?,?,?,?,?)""",
-            [
-                (symbol, interval, int(k[0]), float(k[1]), float(k[2]),
-                 float(k[3]), float(k[4]), float(k[5]))
-                for k in raw
-            ],
-        )
+        conn.executemany("""INSERT INTO klines
+            (symbol, interval, open_time, open, high, low, close, volume, settled_verified)
+            VALUES (?,?,?,?,?,?,?,?,1)
+            ON CONFLICT(symbol, interval, open_time) DO UPDATE SET
+                open=excluded.open, high=excluded.high, low=excluded.low,
+                close=excluded.close, volume=excluded.volume, settled_verified=1
+            WHERE klines.settled_verified != 1 OR klines.open != excluded.open
+                OR klines.high != excluded.high OR klines.low != excluded.low
+                OR klines.close != excluded.close OR klines.volume != excluded.volume""", [
+                (symbol, interval, int(k[0]), *(float(k[index]) for index in range(1, 6)))
+                for k in closed])
+
+
+def _missing_ranges(symbol, interval, start_ms, end_ms, cached):
+    """Return only uncovered, closed bar ranges (end exclusive)."""
+    first, last = _normalized_coverage_window(interval, start_ms, end_ms)
+    step = _INTERVAL_MS[interval]
+    covered = []
+    if len(cached):
+        stamps = pd.to_datetime(cached["timestamp"], utc=True).to_numpy(dtype="datetime64[ms]").astype("int64")
+        covered.extend((int(stamp), int(stamp)) for stamp in stamps if int(stamp) % step == 0)
+    with _conn() as conn:
+        covered.extend(conn.execute("""SELECT window_start, window_end FROM kline_coverage
+            WHERE symbol=? AND interval=? AND settled_version=1
+            AND window_end>=? AND window_start<=?""", (symbol, interval, first, last)).fetchall())
+    cursor, missing = first, []
+    for left, right in sorted(covered):
+        if right < cursor or left > last:
+            continue
+        if left > cursor:
+            missing.append((cursor, min(left, last + step)))
+        cursor = max(cursor, right + step)
+    if cursor <= last:
+        missing.append((cursor, last + step))
+    return missing
 
 
 # --- network fetch ------------------------------------------------------
@@ -316,21 +379,21 @@ def get_ticker_price(symbol: str) -> Optional[float]:
 # Shared per-symbol price cache: many paper sessions on the same symbol reuse one
 # fetch instead of each hitting Binance (spec: read from a shared cache, don't
 # make one external call per entry).
-_price_cache: dict[str, tuple[float, float]] = {}
-_price_refreshes = SingleFlightGroup()
+_price_cache = ResponseCache("paper-price", max_entries=512, max_bytes=100_000, retry_seconds=2)
+_history_flights = SingleFlightGroup()
 
 
 def get_ticker_price_cached(symbol: str, ttl: float = 2.0) -> Optional[float]:
-    """Latest spot price, cached for ``ttl`` seconds per symbol."""
-    symbol = symbol.upper()
-    now = time.time()
-    hit = _price_cache.get(symbol)
-    if hit and hit[1] > now:
-        return hit[0]
-    price, _state = _price_refreshes.run(symbol, lambda: get_ticker_price(symbol))
-    if price is not None:
-        _price_cache[symbol] = (price, now + ttl)
-    return price
+    """Trade simulation must never execute against a stale fallback price."""
+    def load():
+        price = get_ticker_price(symbol.upper())
+        if price is None or price <= 0:
+            raise ValueError("Ticker unavailable")
+        return price
+    try:
+        return _price_cache.get_or_load(symbol.upper(), load, ttl=ttl)[0]
+    except Exception:
+        return None
 
 
 # --- public API ---------------------------------------------------------
@@ -372,40 +435,46 @@ def get_klines(
             "더 큰 캔들 간격을 선택해 주세요."
         )
 
-    cached = _read_cache(cache_symbol, interval, start_ms, end_ms)
-    if _coverage_verified(cache_symbol, interval, start_ms, end_ms) and len(cached) > 0:
-        return cached, "cache"
-    if _cache_covers_window(cached, interval, start_ms, end_ms):
-        return cached, "cache"
+    first_open, last_open = _normalized_coverage_window(interval, start_ms, end_ms)
+    step = _INTERVAL_MS[interval]
+    if first_open > last_open:
+        raise NoSpotDataError("요청한 기간에 마감된 봉이 아직 없습니다.")
+    closed_end = last_open + step
 
-    fetch_error: Exception | None = None
-    try:
-        raw = _fetch_binance(symbol, interval, start_ms, end_ms, url=url)
-        if raw:
-            _write_cache(cache_symbol, interval, raw)
-        # A normal pagination finish verifies the requested window even when a
-        # recently listed coin has no bars near its requested start.
-        _mark_coverage(cache_symbol, interval, start_ms, end_ms)
-        fresh = _read_cache(cache_symbol, interval, start_ms, end_ms)
-        if len(fresh) > 0:
-            return fresh, "binance-futures" if is_fut else "binance"
-    except Exception as exc:
-        fetch_error = exc
+    def load_window():
+        cached = _read_cache(cache_symbol, interval, first_open, last_open)
+        if (_coverage_verified(cache_symbol, interval, first_open, closed_end) and len(cached) > 0
+                or _cache_covers_window(cached, interval, first_open, closed_end)):
+            return cached, "cache"
+        fetch_error = None
+        try:
+            missing = _missing_ranges(cache_symbol, interval, first_open, closed_end, cached)
+            for left, right in missing:
+                raw = _fetch_binance(symbol, interval, left, right, url=url)
+                if raw:
+                    _write_cache(cache_symbol, interval, raw)
+                _mark_coverage(cache_symbol, interval, left, right)
+            _mark_coverage(cache_symbol, interval, first_open, closed_end)
+            fresh = _read_cache(cache_symbol, interval, first_open, last_open)
+            if len(fresh) > 0:
+                return fresh, "binance-futures" if is_fut else "binance"
+        except Exception as exc:
+            fetch_error = exc
+        if len(cached) > 0:
+            raise IncompleteMarketDataError(
+                "캐시된 시세가 요청 기간 전체를 포함하는지 확인하지 못했습니다. 잠시 후 다시 시도해 주세요."
+            ) from fetch_error
+        if fetch_error is not None and not _is_unknown_symbol(fetch_error):
+            raise NoSpotDataError(_transport_msg(fetch_error)) from fetch_error
+        if is_fut:
+            raise NoSpotDataError(NO_FUT_MSG)
+        if not allow_synthetic:
+            raise NoSpotDataError(NO_SPOT_MSG)
+        return _synthetic(symbol, start_ms, end_ms), "synthetic"
 
-    if len(cached) > 0:
-        raise IncompleteMarketDataError(
-            "캐시된 시세가 요청 기간 전체를 포함하는지 확인하지 못했습니다. "
-            "잠시 후 다시 시도해 주세요."
-        ) from fetch_error
-    # A transport failure (timeout, 429/451/5xx) is not "this coin has no market" —
-    # say so, or users chase a phantom symbol problem.
-    if fetch_error is not None and not _is_unknown_symbol(fetch_error):
-        raise NoSpotDataError(_transport_msg(fetch_error)) from fetch_error
-    if is_fut:
-        raise NoSpotDataError(NO_FUT_MSG)  # futures never fabricates
-    if not allow_synthetic:
-        raise NoSpotDataError(NO_SPOT_MSG)
-    return _synthetic(symbol, start_ms, end_ms), "synthetic"
+    key = (_DB_PATH, cache_symbol, interval, first_open, last_open, allow_synthetic)
+    frame, source = _history_flights.run(key, load_window)[0]
+    return frame.copy(deep=True), source
 
 
 def _is_unknown_symbol(exc: Exception) -> bool:
@@ -426,11 +495,8 @@ def _transport_msg(exc: Exception) -> str:
 
 
 # --- live klines (chart) -------------------------------------------------
-# The historical path above is deliberately cache-first: once a window is
-# covered it never re-hits Binance, and _write_cache stores whatever came back —
-# including the still-forming last bar. That is right for backtests (settled
-# bars only) but would freeze a live chart, so the chart uses its own path that
-# ALWAYS refetches and NEVER persists the in-progress bar.
+# Historical storage contains verified settled bars only. Live charts also
+# return the moving edge but never persist it.
 def get_recent_klines(
     symbol: str, interval: str = "1m", limit: int = 120, *, market: str = "spot"
 ) -> list[dict]:
@@ -476,7 +542,17 @@ def get_recent_klines(
 
 
 # --- funding rates (futures) --------------------------------------------
-def get_funding_history(symbol: str, start_ms: int, end_ms: int) -> list[tuple[int, float]]:
+_funding_cache = ResponseCache("funding-history", max_entries=128, max_bytes=8_000_000,
+                              retry_seconds=30, max_retry_seconds=300)
+
+
+class _PartialFundingError(RuntimeError):
+    def __init__(self, items):
+        super().__init__("Funding history incomplete")
+        self.items = items
+
+
+def _fetch_funding_history(symbol: str, start_ms: int, end_ms: int) -> list[tuple[int, float]]:
     """Historical USDT-M funding rates as ``[(fundingTime_ms, rate), ...]``.
 
     Funding settles every 8h (three times a day). ``rate`` is the raw per-interval
@@ -503,9 +579,23 @@ def get_funding_history(symbol: str, start_ms: int, end_ms: int) -> list[tuple[i
             if len(batch) < 1000:
                 break
             cursor = last + 1
-    except Exception:
-        return out  # partial/empty is fine; caller degrades gracefully
+    except Exception as error:
+        raise _PartialFundingError(out) from error
     return out
+
+
+def get_funding_history(symbol: str, start_ms: int, end_ms: int) -> list[tuple[int, float]]:
+    # Settled funding is immutable. A recent window has a shorter TTL in case
+    # the exchange publishes its latest settlement with a delay.
+    ttl = 86_400 if end_ms < int(time.time() * 1000) - 86_400_000 else 300
+    try:
+        return _funding_cache.get_or_load(
+            (symbol.upper(), start_ms, end_ms),
+            lambda: _fetch_funding_history(symbol.upper(), start_ms, end_ms), ttl=ttl)[0]
+    except _PartialFundingError as error:
+        return list(error.items)
+    except Exception:
+        return []
 
 
 def average_daily_funding_pct(symbol: str, start_ms: int, end_ms: int) -> Optional[float]:

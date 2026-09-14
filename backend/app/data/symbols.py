@@ -12,15 +12,16 @@ import threading
 import time
 from typing import Optional
 
-from ..http_runtime import get_http_client
+from ..http_runtime import get_http_client, run_parallel
+from ..cache_runtime import ResponseCache
 
 SPOT_EXCHANGE_INFO = "https://api.binance.com/api/v3/exchangeInfo"
 FUTURES_EXCHANGE_INFO = "https://fapi.binance.com/fapi/v1/exchangeInfo"
 CACHE_TTL_S = 6 * 3600
 QUOTE = "USDT"
 
-_lock = threading.Lock()
-_cache: dict = {"items": None, "fetched_at": 0.0}
+_cache = ResponseCache("symbols", max_entries=1, max_bytes=1_000_000,
+                       retry_seconds=30, max_retry_seconds=300, clock=lambda: time.time())
 
 
 def _spot_rows(doc: dict) -> dict[str, dict]:
@@ -60,37 +61,29 @@ def _merge(spot: dict[str, dict], fut: dict[str, dict]) -> list[dict]:
 
 def fetch_symbols() -> list[dict]:
     """Hit both exchangeInfo endpoints and return the merged rows (no cache)."""
-    client = get_http_client()
-    spot_doc = client.get(SPOT_EXCHANGE_INFO, timeout=20.0)
-    spot_doc.raise_for_status()
-    fut_doc = client.get(FUTURES_EXCHANGE_INFO, timeout=20.0)
-    fut_doc.raise_for_status()
-    return _merge(_spot_rows(spot_doc.json()), _futures_rows(fut_doc.json()))
+    def fetch(url):
+        response = get_http_client().get(url, timeout=20.0)
+        response.raise_for_status()
+        return response.json()
+    docs = run_parallel({"spot": lambda: fetch(SPOT_EXCHANGE_INFO),
+                         "futures": lambda: fetch(FUTURES_EXCHANGE_INFO)})
+    return _merge(_spot_rows(docs["spot"]), _futures_rows(docs["futures"]))
 
 
 def list_symbols(*, now: Optional[float] = None) -> dict:
-    """Cached symbol list: ``{"items": [...], "count": n, "fetched_at": epoch, "stale": bool}``."""
-    ts = time.time() if now is None else now
-    with _lock:
-        items = _cache["items"]
-        fresh = items is not None and ts - _cache["fetched_at"] < CACHE_TTL_S
-        if fresh:
-            return {"items": items, "count": len(items), "fetched_at": _cache["fetched_at"], "stale": False}
-        try:
-            items = fetch_symbols()
-            _cache["items"] = items
-            _cache["fetched_at"] = ts
-            return {"items": items, "count": len(items), "fetched_at": ts, "stale": False}
-        except Exception:
-            if _cache["items"] is not None:  # serve the stale list rather than nothing
-                return {"items": _cache["items"], "count": len(_cache["items"]), "fetched_at": _cache["fetched_at"], "stale": True}
-            raise
+    """Serve a bounded last-good list while refreshing outside the request."""
+    def load():
+        items = fetch_symbols()
+        if not items:
+            raise ValueError("Exchange returned an empty symbol list")
+        return {"items": items, "count": len(items),
+                "fetched_at": time.time() if now is None else now}
+    payload, state = _cache.get_or_load("usdt", load, ttl=CACHE_TTL_S, stale_ttl=86_400, now=now)
+    return {**payload, "stale": state == "stale"}
 
 
 def reset_cache() -> None:
-    with _lock:
-        _cache["items"] = None
-        _cache["fetched_at"] = 0.0
+    _cache.clear()
 
 
 # ── coin logo proxy (same-origin copy of Binance's public logo, for the share-card capture) ──

@@ -9,6 +9,7 @@ import { macroIdsInText, splitMacroText } from "../lib/chatMacro.js";
 import { replyText, stripReplyToken } from "../lib/chatReply.js";
 import { applyMacroPick, filterMacros, slashQuery } from "../lib/chatSlash.js";
 import { getUserId } from "../lib/user.js";
+import { leaderboardCacheVersion, subscribeLeaderboardCache } from "../lib/cacheEvents.js";
 import ReportDialog from "./ReportDialog.jsx";
 import CoinIcon from "./CoinIcon.jsx";
 import { chatUnseenCount, getChatFeed, markChatSeen, observeChat, receiveChat, receiveChatPost, setChatLoadError, visibleChatReadId } from "../lib/chatStore.js";
@@ -193,7 +194,9 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
     document.addEventListener("pointerdown", onPointerDown);
     return () => document.removeEventListener("pointerdown", onPointerDown);
   }, [shortcutsOpen]);
-  const [macroList, setMacroList] = useState(null); // 매크로 고르기 목록(한 번 받아 둔다)
+  const [macroList, setMacroList] = useState(null);
+  const macroVersion = useSyncExternalStore(subscribeLeaderboardCache, leaderboardCacheVersion, leaderboardCacheVersion);
+  const macroCacheRef = useRef({ at: 0, day: 0, version: -1 });
   const [macroPending, setMacroPending] = useState(false);
   const [pickIndex, setPickIndex] = useState(0);
   const [readError, setReadError] = useState("");
@@ -281,11 +284,12 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
     const mode = !open ? { metadataOnly: true }
       : !current.loaded ? {}
         : reconcile ? { messageIds: messageWindow.items.map((item) => item.id) }
+          : current.tailEvicted ? { metadataOnly: true }
           : { afterId: current.pageLatestId };
     const data = await api.chatList({ signal, seenId: current.seenId, ...mode });
     if (signal.aborted || !isCurrent()) return;
     serverSeenRef.current = Math.max(serverSeenRef.current, Number(data.server_seen_id) || 0);
-    receiveChat(scope, data);
+    receiveChat(scope, data, { keepOlder: windowEndId != null });
     if (readErrorRef.current) setReadRetry((value) => value + 1);
     if (open && (!current.loaded || reconcile)) lastReconcileRef.current = { time: Date.now(), window: windowEndId };
     // A reconciliation checks only displayed IDs. Follow it with a delta so new
@@ -488,7 +492,24 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
     }
   }
 
-  function jumpToLatest() {
+  async function jumpToLatest() {
+    if (getChatFeed(scope).tailEvicted) {
+      if (loadingOlder) return;
+      const controller = new AbortController();
+      pendingRequestsRef.current.add(controller);
+      setLoadingOlder(true);
+      try {
+        const data = await api.chatList({ signal: controller.signal, seenId: getChatFeed(scope).seenId });
+        if (controller.signal.aborted || !isCurrent()) return;
+        receiveChat(scope, data);
+      } catch (reason) {
+        if (!controller.signal.aborted && isCurrent()) setChatLoadError(scope, reason);
+        return;
+      } finally {
+        pendingRequestsRef.current.delete(controller);
+        if (isCurrent()) setLoadingOlder(false);
+      }
+    }
     setWindowEndId(null);
     stickToBottomRef.current = true;
     if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
@@ -526,8 +547,31 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
     }
   }
 
-  function showNewer() {
+  async function showNewer() {
     const nextEnd = visibleWindow.end + CHAT_WINDOW_SIZE;
+    if (visibleWindow.end >= items.length && feed.tailEvicted) {
+      if (loadingOlder) return;
+      const controller = new AbortController();
+      pendingRequestsRef.current.add(controller);
+      setLoadingOlder(true);
+      try {
+        const data = await api.chatList({ signal: controller.signal, afterId: items.at(-1)?.id, seenId: getChatFeed(scope).seenId });
+        if (controller.signal.aborted || !isCurrent()) return;
+        const merged = receiveChat(scope, data, { forward: true });
+        setWindowEndId(merged?.tailEvicted ? merged.items.at(-1)?.id : null);
+        stickToBottomRef.current = !merged?.tailEvicted;
+      } catch (reason) {
+        if (!controller.signal.aborted && isCurrent()) setChatLoadError(scope, reason);
+      } finally {
+        pendingRequestsRef.current.delete(controller);
+        if (isCurrent()) setLoadingOlder(false);
+      }
+      return;
+    }
+    if (nextEnd >= items.length && feed.tailEvicted) {
+      setWindowEndId(items.at(-1)?.id);
+      return;
+    }
     setWindowEndId(nextEnd >= items.length ? null : items[nextEnd - 1].id);
     stickToBottomRef.current = nextEnd >= items.length;
   }
@@ -548,6 +592,7 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
       stickToBottomRef.current = true;
       setWindowEndId(null);
       if (result?.message) receiveChatPost(scope, result.message);
+      if (getChatFeed(scope).tailEvicted) await jumpToLatest();
       refresh();
       return true;
     } catch (reason) {
@@ -571,7 +616,7 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
     }
   }
 
-  // `/` 로 매크로 고르기 — 오늘 리더보드 목록을 한 번 받아 두고 입력에 따라 걸러 보인다.
+  // Slash suggestions expire and follow successful registrations/edits/unlocks.
   const query = member ? slashQuery(text) : null;
   const picking = query !== null;
   const picks = picking ? filterMacros(macroList || [], query) : [];
@@ -579,7 +624,13 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
     if (!picking && macroPending) setMacroList(null);
   }, [picking, macroPending]);
   useEffect(() => {
-    if (!picking || macroList !== null) return undefined;
+    if (!picking) return undefined;
+    if (macroPending && macroList !== null) return undefined;
+    const cached = macroCacheRef.current;
+    if (macroList !== null && !macroPending && cached.day === feed.dayStartMs && cached.version === macroVersion && Date.now() - cached.at < 30_000) {
+      const expiry = window.setTimeout(() => setMacroList(null), 30_000 - (Date.now() - cached.at));
+      return () => window.clearTimeout(expiry);
+    }
     let alive = true;
     let timer;
     let attempts = 0;
@@ -594,6 +645,7 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
           else { setMacroPending(true); setMacroList([]); }
           return;
         }
+        macroCacheRef.current = { at: Date.now(), day: feed.dayStartMs, version: macroVersion };
         setMacroList(data?.entries || data?.items || []);
       } catch (reason) {
         if (alive && reason?.name !== "AbortError") { setMacroPending(true); setMacroList([]); }
@@ -601,7 +653,7 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
     };
     void loadMacros();
     return () => { alive = false; controller.abort(); window.clearTimeout(timer); };
-  }, [picking, macroList]);
+  }, [picking, macroList, macroVersion, feed.dayStartMs]);
   useEffect(() => { setPickIndex(0); }, [query]);
 
   function pickMacro(entry) {
@@ -711,9 +763,9 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
                 </Fragment>
               );
             })}
-            {visibleWindow.hasNewer ? <button type="button" className="chat-history" onClick={showNewer}>다음 메시지 보기</button> : null}
+            {visibleWindow.hasNewer || feed.tailEvicted ? <button type="button" className="chat-history" onClick={showNewer} disabled={loadingOlder}>다음 메시지 보기</button> : null}
           </div>
-          {(!atBottom || windowEndId != null) && loaded ? <button type="button" className="chat-jump" onClick={jumpToLatest}>{unseen ? `새 메시지 ${unseen}개 · 아래로` : "최신 메시지로 이동"}</button> : null}
+          {(!atBottom || windowEndId != null || feed.tailEvicted) && loaded ? <button type="button" className="chat-jump" onClick={jumpToLatest} disabled={loadingOlder}>{unseen ? `새 메시지 ${unseen}개 · 아래로` : "최신 메시지로 이동"}</button> : null}
           {member && stickerOpen ? (
             <div className="chat-sticker-tray" role="group" aria-label="스티커 고르기">
               {STICKERS.map((sticker) => <button key={sticker.id} type="button" className="chat-sticker-tile" onClick={() => sendSticker(sticker.id)} disabled={busy} aria-label={`${sticker.label} 스티커 보내기`}><img src={sticker.src} alt="" width="56" height="56" draggable="false" decoding="async" /><span>{sticker.label}</span></button>)}

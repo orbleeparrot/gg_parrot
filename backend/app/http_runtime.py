@@ -146,6 +146,11 @@ class SingleFlightGroup:
     A cold follower waits for the leader and receives its result.  When a stale
     value exists, followers return it immediately while the leader refreshes;
     this bounds upstream traffic without making every request wait on a slow API.
+
+    Legacy collectors store their results after run() returns and require this
+    synchronous leader contract. HTTP cache readers use cache_runtime.ResponseCache
+    instead: it publishes inside the flight and refreshes the first stale read
+    in the background, with bounded size and failure cooldowns.
     """
 
     def __init__(self) -> None:

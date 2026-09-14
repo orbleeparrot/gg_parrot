@@ -15,7 +15,8 @@ import os
 import time
 from typing import Optional
 
-from .http_runtime import SingleFlightGroup, get_http_client, run_parallel
+from .http_runtime import get_http_client, run_parallel
+from .cache_runtime import ResponseCache
 
 _UPBIT = "https://api.upbit.com/v1/ticker"
 # Env-configurable base so a US-hosted deploy can use data-api.binance.vision
@@ -33,11 +34,11 @@ _MARKETS: dict[str, tuple[str, str]] = {
 }
 
 CACHE_SECONDS = float(os.environ.get("KIMCHI_CACHE_SECONDS", "10"))
+FX_CACHE_SECONDS = max(60.0, float(os.environ.get("FX_CACHE_SECONDS", "3600")))
 FX_FALLBACK = float(os.environ.get("KIMCHI_FX_FALLBACK", "1380.0"))
 
 # component caches: key -> (value, expires_at)
-_cache: dict[str, tuple[float, float]] = {}
-_refreshes = SingleFlightGroup()
+_cache = ResponseCache("kimchi-components", max_entries=16, retry_seconds=15)
 
 
 def supported_symbols() -> list[str]:
@@ -51,85 +52,56 @@ def get_usdkrw() -> dict:
     source and in-memory cache as the kimchi premium; on failure it returns the
     fallback constant with ``is_fallback`` set so the UI can flag it as a guess.
     """
-    rate, is_fallback = _usdkrw()
-    return {
-        "usdkrw": round(rate, 2),
-        "is_fallback": is_fallback,
-        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-    }
+    payload, state = _fx_payload()
+    return {"usdkrw": round(payload["value"], 2), "is_fallback": state == "fallback",
+            "stale": state == "stale", "updated_at": payload["observed_at"]}
 
 
-def _cached(key: str) -> Optional[float]:
-    hit = _cache.get(key)
-    if hit and hit[1] > time.time():
-        return hit[0]
-    return None
-
-
-def _store(key: str, value: float) -> float:
-    _cache[key] = (value, time.time() + CACHE_SECONDS)
-    return value
+def _price(key, fetch):
+    def load():
+        value = fetch()
+        if value <= 0:
+            raise ValueError("Invalid market price")
+        return value
+    try:
+        return _cache.get_or_load(key, load, ttl=CACHE_SECONDS, stale_ttl=30)[0]
+    except Exception:
+        return None
 
 
 def _upbit_price(market: str) -> Optional[float]:
-    key = f"upbit:{market}"
-    hit = _cache.get(key)
-    cached = _cached(key)
-    if cached is not None:
-        return cached
-
-    def load():
-        try:
-            resp = get_http_client().get(_UPBIT, params={"markets": market})
-            resp.raise_for_status()
-            return _store(key, float(resp.json()[0]["trade_price"]))
-        except Exception:
-            return None
-
-    if hit:
-        return _refreshes.run(key, load, stale_value=hit[0])[0]
-    return _refreshes.run(key, load)[0]
+    def fetch():
+        response = get_http_client().get(_UPBIT, params={"markets": market})
+        response.raise_for_status()
+        return float(response.json()[0]["trade_price"])
+    return _price(f"upbit:{market}", fetch)
 
 
 def _binance_price(symbol: str) -> Optional[float]:
-    key = f"binance:{symbol}"
-    hit = _cache.get(key)
-    cached = _cached(key)
-    if cached is not None:
-        return cached
+    def fetch():
+        response = get_http_client().get(_BINANCE, params={"symbol": symbol})
+        response.raise_for_status()
+        return float(response.json()["price"])
+    return _price(f"binance:{symbol}", fetch)
 
+
+def _fx_payload():
     def load():
-        try:
-            resp = get_http_client().get(_BINANCE, params={"symbol": symbol})
-            resp.raise_for_status()
-            return _store(key, float(resp.json()["price"]))
-        except Exception:
-            return None
-
-    if hit:
-        return _refreshes.run(key, load, stale_value=hit[0])[0]
-    return _refreshes.run(key, load)[0]
+        response = get_http_client().get(_FX)
+        response.raise_for_status()
+        rate = float(response.json()["rates"]["KRW"])
+        if rate <= 0:
+            raise ValueError("Invalid exchange rate")
+        return {"value": rate, "observed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    try:
+        return _cache.get_or_load("fx:USDKRW", load, ttl=FX_CACHE_SECONDS, stale_ttl=86_400)
+    except Exception:
+        return {"value": FX_FALLBACK, "observed_at": None}, "fallback"
 
 
 def _usdkrw() -> tuple[float, bool]:
-    """Return (rate, is_fallback). Falls back to a constant when the FX API fails."""
-    key = "fx:USDKRW"
-    hit = _cache.get(key)
-    cached = _cached(key)
-    if cached is not None:
-        return cached, False
-
-    def load():
-        try:
-            resp = get_http_client().get(_FX)
-            resp.raise_for_status()
-            return _store(key, float(resp.json()["rates"]["KRW"])), False
-        except Exception:
-            return FX_FALLBACK, True
-
-    if hit:
-        return _refreshes.run(key, load, stale_value=(hit[0], False))[0]
-    return _refreshes.run(key, load)[0]
+    payload, state = _fx_payload()
+    return payload["value"], state == "fallback"
 
 
 def get_premium(symbol: str = "BTC") -> dict:
@@ -165,6 +137,18 @@ def get_premium(symbol: str = "BTC") -> dict:
         "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "disclaimer": "reference only; not investment advice",
     }
+    # Preserve each source's status instead of presenting a retained FX rate
+    # as a new observation. The value check avoids attaching newer metadata to
+    # a price that was read immediately before a background refresh finished.
+    fx_entry = _cache.peek("fx:USDKRW")
+    if fx_entry and fx_entry[0]["value"] == fx_rate:
+        result.update(fx_stale=fx_entry[1] == "stale",
+                      fx_observed_at=fx_entry[0]["observed_at"])
+    result["stale"] = bool(result.get("fx_stale"))
+    for key, value in ((f"upbit:{upbit_market}", upbit), (f"binance:{binance_symbol}", binance)):
+        entry = _cache.peek(key)
+        if entry and entry[0] == value and entry[1] == "stale":
+            result["stale"] = True
 
     if upbit is None or binance is None:
         result["ok"] = False

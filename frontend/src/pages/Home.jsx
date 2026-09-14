@@ -5,7 +5,7 @@ import {
   dismissJourney,
 } from "../lib/journey.js";
 import { lockBodyScroll } from "../lib/bodyScrollLock.js";
-import { isLoggedIn } from "../lib/auth.js";
+import { isLoggedIn, useAuth } from "../lib/auth.js";
 import { getRunnerDevice } from "../lib/runnerDevice.js";
 import "./HomeCommunity.css";
 import "./HomeMobile.css";
@@ -328,6 +328,11 @@ function HomeHeroRotator({ onLeaderboard, onGuide, paused = false }) {
 }
 
 export default function Home() {
+  const { accountVersion } = useAuth();
+  return <AccountHome key={accountVersion} />;
+}
+
+function AccountHome() {
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const [nestedDialogOpen, setNestedDialogOpen] = useState(false);

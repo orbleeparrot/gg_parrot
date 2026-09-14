@@ -24,3 +24,10 @@ if (typeof window.requestIdleCallback === "function") {
 } else {
   window.setTimeout(loadRum, 1_000);
 }
+
+// Static assets and a generic offline page only. Dev/HMR never installs a worker.
+if (import.meta.env.PROD && "serviceWorker" in navigator) {
+  const register = () => navigator.serviceWorker.register("/sw.js", { updateViaCache: "none" }).catch(() => {});
+  if (document.readyState === "complete") register();
+  else window.addEventListener("load", register, { once: true });
+}

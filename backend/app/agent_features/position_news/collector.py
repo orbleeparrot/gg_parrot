@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import logging
 import os
+import threading
 import time
 from copy import deepcopy
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Iterable
 
 from ... import news as news_mod
@@ -19,21 +22,32 @@ class NewsCollectionError(RuntimeError):
     pass
 
 
-def _localize_collected_payload(payload: dict, repo, now_ms=None) -> dict:
+def _localize_collected_payload(payload: dict, repo, now_ms=None, *, on_progress=None) -> dict:
     """Translate every title through the public shared cache, retaining raw work.
 
     Display responses omit unfinished translations. Collector storage keeps the
     original items so a temporary provider failure cannot lose an article.
     """
     items = [dict(item) for item in payload.get("items") or []]
+    def translated(values):
+        ready = []
+        for item in items:
+            original = item.get("original_title") or item.get("title")
+            if original in values:
+                ready.append({**item, "original_title": original, "title": values[original]})
+        if ready and on_progress:
+            on_progress({**payload, "items": ready})
     try:
-        localized = news_mod._localize_coin_news_items(items)
+        localized = _call_with_progress(news_mod._localize_coin_news_items, items,
+                                        on_progress=translated if on_progress else None)
     except Exception as exc:
         localized = []
         logging.getLogger(__name__).warning("Ticker title translation pending (%s); retaining raw articles for retry",
                                            type(exc).__name__)
     ready = {_article_identity(item): item for item in localized}
     merged = [{**item, **ready.get(_article_identity(item), {})} for item in items]
+    if on_progress:
+        on_progress({**payload, "items": merged})
     metadata = {}
     if any(classifier.is_community_item(item) for item in merged):
         try:
@@ -50,6 +64,96 @@ def _localize_collected_payload(payload: dict, repo, now_ms=None) -> dict:
                             "retry_after_seconds": 30}}
     result["community_summaries"] = community_progress({"items": merged, "community_summaries": metadata})["community_summaries"]
     return result
+
+
+def _call_with_progress(function, *args, on_progress=None, **kwargs):
+    """Keep injected source adapters compatible with the optional callback."""
+    parameters = inspect.signature(function).parameters.values()
+    if on_progress is not None and any(parameter.name == "on_progress" or
+                                       parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters):
+        kwargs["on_progress"] = on_progress
+    return function(*args, **kwargs)
+
+
+def _publish_articles(asset, payload, repo, *, analysis=None, on_publish=None, now_ms=None, enrichment_only=False):
+    writer = getattr(repo, "publish_articles", None)
+    if writer:
+        writer(asset, payload, analysis=analysis, now_ms=now_ms, enrichment_only=enrichment_only)
+    if on_publish:
+        on_publish(deepcopy(payload))
+
+
+class ArticlePublisher:
+    """Persist source completions immediately; translate on a bounded worker."""
+    def __init__(self, asset, repo, *, on_publish=None, now_ms=None, executor=None):
+        self.asset, self.repo = asset, repo
+        self.on_publish, self.now_ms = on_publish, now_ms
+        self.seen = set()
+        self.executor = executor
+        self.owns_executor = executor is None
+        self.futures = []
+        self.latest = {}
+        self.lock = threading.RLock()
+        self.closed = False
+
+    def prepared(self, payload, *, enrichment_only=False):
+        from .articles import _merge_item
+        with self.lock:
+            items = {_article_identity(item): item for item in self.latest.get("items") or []}
+            for item in payload.get("items") or []:
+                key = _article_identity(item)
+                items[key] = _merge_item(items.get(key, {}), item)
+            self.latest = {**self.latest, **payload, "items": list(items.values())}
+            _publish_articles(self.asset, self.latest, self.repo, on_publish=self.on_publish, now_ms=self.now_ms,
+                               enrichment_only=enrichment_only)
+
+    def __call__(self, payload):
+        self.prepared(payload)
+        if not getattr(self.repo, "publish_articles", None):
+            return
+        with self.lock:
+            if self.closed:
+                return
+            fresh = []
+            for item in payload.get("items") or []:
+                key = (_article_identity(item), str(item.get("community_body_hash") or ""))
+                if key not in self.seen:
+                    self.seen.add(key)
+                    fresh.append(item)
+            if not fresh:
+                return
+            if self.executor is None:
+                self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="news-article-enrich")
+            def work():
+                result = _localize_collected_payload({**payload, "items": fresh}, self.repo, self.now_ms,
+                    on_progress=lambda value: self.prepared(value, enrichment_only=True))
+                self.prepared(result, enrichment_only=True)
+            self.futures.append(self.executor.submit(work))
+
+    def finish(self):
+        with self.lock:
+            self.closed = True
+            futures = list(self.futures)
+        try:
+            for future in futures:
+                try:
+                    future.result()
+                except Exception:
+                    logging.getLogger(__name__).exception("Article enrichment will retry for %s", self.asset)
+        finally:
+            if self.owns_executor and self.executor is not None:
+                self.executor.shutdown(wait=True)
+
+
+def retry_article_enrichment(*, repo=None, now_ms=None):
+    repo = repo or _default_repository()
+    for asset, items in repo.pending_article_batches(now_ms=now_ms).items():
+        if not repo.claim_article_enrichment(asset, now_ms=now_ms):
+            continue
+        publish = lambda payload: _publish_articles(asset, payload, repo, now_ms=now_ms, enrichment_only=True)
+        payload = {"symbol": asset, "items": items}
+        result = _localize_collected_payload(payload, repo, now_ms, on_progress=publish)
+        publish(result)
 
 
 def community_progress(payload: dict) -> dict:
@@ -198,6 +302,7 @@ def collect_payload(
     allow_ai: bool = True,
     localize: bool = True,
     now_ms: int | None = None,
+    on_publish=None,
 ) -> dict:
     """Claim, analyze at most once, and persist one already-fetched ticker."""
     repo = repo or _default_repository()
@@ -218,10 +323,15 @@ def collect_payload(
         }
 
     snapshot_key = analysis_fingerprint(asset, items)
+    # A raw article is durable before any translation or model dependency.
+    _publish_articles(asset, news_payload, repo, on_publish=on_publish, now_ms=now_ms)
     # Translation has its own shared cache and retry lifecycle. Reused analysis
     # must not prevent an earlier unfinished translation from being retried.
     if localize:
-        news_payload = _localize_collected_payload(news_payload, repo, now_ms)
+        news_payload = _call_with_progress(_localize_collected_payload, news_payload, repo, now_ms,
+            on_progress=lambda payload: _publish_articles(asset, payload, repo,
+                                                          on_publish=on_publish, now_ms=now_ms, enrichment_only=True))
+        _publish_articles(asset, news_payload, repo, on_publish=on_publish, now_ms=now_ms, enrichment_only=True)
     progress = community_progress(news_payload)
     claim = repo.claim_snapshot(
         asset_symbol=asset,
@@ -284,8 +394,11 @@ def collect_payload(
         # stays fenced until final analysis, so reads can already show articles.
         if wants_ai and not claim.had_usable_analysis:
             baseline = classifier.analyze_headlines(claimed_items, coin_name, allow_ai=False)
-            repo.complete_snapshot(claim.snapshot_id, baseline,
+            baseline_saved = repo.complete_snapshot(claim.snapshot_id, baseline,
                 claim_token=claim.claim_token, keep_claim=True, now_ms=now_ms)
+            if baseline_saved is not False:
+                _publish_articles(asset, claimed_payload, repo, analysis=baseline,
+                                   on_publish=on_publish, now_ms=now_ms)
         analysis = reused_analysis if reused_analysis is not None else analyzer(
             claimed_items,
             coin_name,
@@ -315,6 +428,8 @@ def collect_payload(
             "used_ai_budget": reserved_ai,
             **progress,
         }
+    _publish_articles(asset, claimed_payload, repo, analysis=analysis,
+                       on_publish=on_publish, now_ms=now_ms, enrichment_only=True)
     return {
         "asset_symbol": asset,
         "snapshot_key": snapshot_key,
@@ -332,10 +447,14 @@ def browser_enrichment_enabled() -> bool:
     }
 
 
-def publish_initial_payload(symbol: str, payload: dict, *, repo=None, now_ms=None) -> dict:
+def publish_initial_payload(symbol: str, payload: dict, *, repo=None, now_ms=None, on_publish=None) -> dict:
     """Make the first headlines visible without a browser or a paid API call."""
     repo = repo or _default_repository()
     stored = repo.get_latest_snapshot(symbol)
+    if stored:
+        _publish_articles(symbol, stored.get("news_payload") or {}, repo,
+                           analysis=stored.get("analysis"), now_ms=now_ms)
+    _publish_articles(symbol, payload, repo, on_publish=on_publish, now_ms=now_ms)
     usable = [item for item in (stored or {}).get("news_payload", {}).get("items", [])
               if news_mod._within_coin_news_window(item) and news_mod._is_news_article_candidate(
                   {**item, "title": item.get("original_title") or item.get("title")})]
@@ -360,22 +479,36 @@ def publish_initial_payload(symbol: str, payload: dict, *, repo=None, now_ms=Non
             initial["community_summaries"] = community_progress({"items": initial["items"]})["community_summaries"]
             return collect_payload(symbol, initial, repo=repo, allow_ai=False,
                                    localize=False, now_ms=now_ms)
-        # Do not replace an existing complete browser/AI snapshot with a
-        # temporary RSS-only view on every refresh. A stale or filtered-out
-        # snapshot must not hold the first fresh headlines behind browser I/O.
+        previous = {_article_identity(item): item for item in usable}
+        incoming = {_article_identity(item): item for item in payload.get("items") or []}
+        if any(key not in previous for key in incoming):
+            from .articles import _merge_item
+            merged = dict(previous)
+            merged.update({key: _merge_item(previous.get(key, {}), item) for key, item in incoming.items()})
+            initial = {**payload, "items": news_mod._sort_news_items_newest_first(list(merged.values()))}
+            assessments = {_article_identity(item): assessment for item, assessment in zip(
+                stored.get("news_payload", {}).get("items", []), stored.get("analysis", {}).get("items", []))}
+            def retain_analysis(items, coin_name, **_kwargs):
+                baseline = classifier.analyze_headlines(items, coin_name, allow_ai=False)
+                baseline["items"] = [assessments.get(_article_identity(item), assessed)
+                                     for item, assessed in zip(items, baseline["items"])]
+                return baseline
+            return collect_payload(symbol, initial, repo=repo, analyzer=retain_analysis,
+                                   allow_ai=False, localize=False, now_ms=now_ms, on_publish=on_publish)
+        # Keep the richer snapshot when this discovery added no articles.
         return {"asset_symbol": symbol, "status": "reused", "used_ai_budget": False,
                 **community_progress(stored.get("news_payload") or {})}
     return collect_payload(symbol, payload, repo=repo, allow_ai=False,
-                           localize=False, now_ms=now_ms)
+                           localize=False, now_ms=now_ms, on_publish=on_publish)
 
 
-def enrich_payload(symbol: str, payload: dict, *, enricher=None) -> dict:
+def enrich_payload(symbol: str, payload: dict, *, enricher=None, on_progress=None) -> dict:
     """A browser outage must never remove already collected RSS articles."""
     if enricher is None and not browser_enrichment_enabled():
         return payload
     enricher = enricher or news_mod.enrich_coin_news_for_collector
     try:
-        return enricher(symbol, payload)
+        return _call_with_progress(enricher, symbol, payload, on_progress=on_progress)
     except Exception:
         logging.getLogger(__name__).exception("Browser enrichment failed for %s", symbol)
         return {**payload, "browser_enrichment": {"status": "error", "item_count": 0}}
@@ -390,6 +523,7 @@ def collect_ticker(
     analyzer: Callable[..., dict] | None = None,
     allow_ai: bool = True,
     now_ms: int | None = None,
+    on_publish=None,
 ) -> dict:
     """Publish RSS first, expand browser sources, then analyze the merged batch."""
     repo = repo or _default_repository()
@@ -401,9 +535,11 @@ def collect_ticker(
     token = repo.claim_collection(asset, now_ms=now_ms)
     if not token:
         return {"asset_symbol": asset, "status": "skipped", "used_ai_budget": False}
+    publisher = ArticlePublisher(asset, repo, on_publish=on_publish, now_ms=now_ms)
     try:
         try:
-            news_payload = fetcher(asset)
+            news_payload = _call_with_progress(fetcher, asset, on_progress=publisher)
+            publisher(news_payload)
         except Exception as exc:
             repo.mark_collection_outcome(asset, "error", error=str(exc), now_ms=now_ms)
             if enricher is None and not browser_enrichment_enabled():
@@ -411,13 +547,16 @@ def collect_ticker(
             news_payload = {"symbol": asset, "coin_name": asset, "items": [],
                             "sources": [{"name": "rss", "status": "error"}]}
         if enricher is not None or browser_enrichment_enabled():
-            publish_initial_payload(asset, news_payload, repo=repo, now_ms=now_ms)
+            publish_initial_payload(asset, news_payload, repo=repo, now_ms=now_ms, on_publish=on_publish)
             if not repo.renew_collection(asset, token, now_ms=now_ms):
                 return {"asset_symbol": asset, "status": "superseded", "used_ai_budget": False}
-            news_payload = enrich_payload(asset, news_payload, enricher=enricher)
+            news_payload = enrich_payload(asset, news_payload, enricher=enricher, on_progress=publisher)
+            publisher(news_payload)
+        publisher.finish()
         return collect_payload(asset, news_payload, repo=repo, analyzer=analyzer,
-                               allow_ai=allow_ai, now_ms=now_ms)
+                               allow_ai=allow_ai, now_ms=now_ms, on_publish=on_publish)
     finally:
+        publisher.finish()
         repo.finish_collection(asset, token, now_ms=now_ms)
 
 
@@ -450,6 +589,18 @@ def prune_community_summaries(*, now_ms=None) -> int:
     """Bounded worker maintenance, never part of an HTTP read or summary claim."""
     from ... import community_summary_repository
     return community_summary_repository.prune_summaries(retention_days=30, limit=500, now_ms=now_ms)
+
+
+def run_maintenance(*, retention_days=30, repo=None, now_ms=None):
+    repo = repo or _default_repository()
+    claim = getattr(repo, "claim_maintenance", None)
+    if claim and not claim(now_ms=now_ms):
+        return {"snapshots": 0, "community_summaries": 0}
+    prune_articles = getattr(repo, "prune_articles", None)
+    if prune_articles:
+        prune_articles(retention_days=retention_days, now_ms=now_ms)
+    return {"snapshots": repo.prune_snapshots(retention_days=retention_days, now_ms=now_ms),
+            "community_summaries": prune_community_summaries(now_ms=now_ms)}
 
 
 def run_collection_cycle(
@@ -498,6 +649,8 @@ def run_collection_cycle(
     deadline = time.monotonic() + max(10, int(os.environ.get("POSITION_NEWS_MAX_CYCLE_SECONDS", "60")))
     pending = []
     leases = {}
+    publishers = {}
+    enrichment_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="news-cycle-enrich")
     fetcher = fetcher or news_mod.fetch_coin_news_for_collector
     expand = not bootstrap_only and (enricher is not None or browser_enrichment_enabled())
     try:
@@ -514,9 +667,13 @@ def run_collection_cycle(
                 results.append({"asset_symbol": asset, "status": "skipped", "used_ai_budget": False})
                 continue
             leases[asset] = token
+            publisher = ArticlePublisher(asset, repo, now_ms=now_ms, executor=enrichment_pool)
+            publishers[asset] = publisher
             try:
                 try:
-                    payload = fetcher(asset)
+                    progress = publisher
+                    payload = _call_with_progress(fetcher, asset, on_progress=progress)
+                    progress(payload)
                 except Exception:
                     if not expand:
                         raise
@@ -526,6 +683,7 @@ def run_collection_cycle(
                     initial = collect_payload(asset, payload, repo=repo, allow_ai=False,
                                               localize=False, now_ms=now_ms)
                     results.append({**initial, "collection_stage": "rss_bootstrap"})
+                    publisher.finish()
                     repo.finish_collection(asset, token, now_ms=now_ms, next_delay_seconds=0)
                     leases.pop(asset)
                 else:
@@ -540,10 +698,12 @@ def run_collection_cycle(
                 leases.pop(asset)
 
         for asset, payload, initial in pending:
+            publisher = publishers[asset]
             if time.monotonic() >= deadline:
                 results.append({**(initial or {"asset_symbol": asset, "status": "skipped",
                                                "used_ai_budget": False}),
                                 "reason": "cycle_deadline", "browser_status": "deferred"})
+                publisher.finish()
                 repo.finish_collection(asset, leases.pop(asset), now_ms=now_ms, next_delay_seconds=60)
                 continue
             if not repo.renew_collection(asset, leases[asset], now_ms=now_ms):
@@ -551,7 +711,9 @@ def run_collection_cycle(
                 continue
             try:
                 if expand:
-                    payload = enrich_payload(asset, payload, enricher=enricher)
+                    payload = enrich_payload(asset, payload, enricher=enricher, on_progress=publisher)
+                    publisher(payload)
+                publisher.finish()
                 result = collect_payload(asset, payload, repo=repo, analyzer=analyzer,
                                          allow_ai=ai_used < ai_limit, now_ms=now_ms)
                 if payload.get("browser_enrichment"):
@@ -564,6 +726,9 @@ def run_collection_cycle(
             results.append(result)
             repo.finish_collection(asset, leases.pop(asset), now_ms=now_ms)
     finally:
+        for publisher in publishers.values():
+            publisher.finish()
+        enrichment_pool.shutdown(wait=True)
         for asset, token in leases.items():
             repo.finish_collection(asset, token, now_ms=now_ms)
 
@@ -573,10 +738,9 @@ def run_collection_cycle(
             1,
             int(os.environ.get("POSITION_NEWS_RETENTION_DAYS", "30")),
         )
-    removed = 0 if keep_days == 0 else repo.prune_snapshots(
-        retention_days=keep_days,
-        now_ms=now_ms,
-    )
+    maintenance = {"snapshots": 0, "community_summaries": 0} if keep_days == 0 else run_maintenance(
+        retention_days=keep_days, repo=repo, now_ms=now_ms)
+    removed = maintenance["snapshots"]
     summary = summarize_results(results, removed=removed)
-    summary["community_summaries_pruned"] = prune_community_summaries(now_ms=now_ms)
+    summary["community_summaries_pruned"] = maintenance["community_summaries"]
     return summary

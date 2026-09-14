@@ -10,6 +10,7 @@ from . import collector, repository
 
 logger = logging.getLogger(__name__)
 _runtime = None
+_enrichment_runtime = None
 _last_pruned = 0.0
 
 
@@ -23,14 +24,13 @@ def _bootstrap_only():
 def _cycle():
     global _last_pruned
     # The DB is authoritative across web instances and the optional worker.
-    # Native Render web instances store the first RSS result without Chromium.
-    # The read service joins shared translation work and exposes only Korean
-    # headlines, so raw bootstrap snapshots never become English alerts.
+    # Native Render web instances publish RSS without Chromium and prepare
+    # title translations in the worker. HTTP readers only read ready articles.
     # Prefect owns regular browser/AI work; stale snapshots still receive RSS
     # recovery here if the external worker is temporarily unavailable.
     result = collector.run_collection_cycle(retention_days=0, bootstrap_only=_bootstrap_only())
     if time.monotonic() - _last_pruned > 3600:
-        repository.prune_snapshots(retention_days=max(1, int(os.environ.get("POSITION_NEWS_RETENTION_DAYS", "30"))))
+        collector.run_maintenance(retention_days=max(1, int(os.environ.get("POSITION_NEWS_RETENTION_DAYS", "30"))))
         _last_pruned = time.monotonic()
     if result["ticker_count"]:
         logger.info("position news cycle: %s", result)
@@ -79,7 +79,7 @@ class CollectionRuntime:
 
 
 def start():
-    global _runtime
+    global _runtime, _enrichment_runtime
     if os.environ.get("POSITION_NEWS_EMBEDDED_ENABLED", "true").lower() in {"0", "false", "no"}:
         return
     if _runtime is None:
@@ -88,6 +88,9 @@ def start():
                     os.environ.get("POSITION_NEWS_COLLECTION_SECONDS", "300"))
         _runtime = CollectionRuntime(scan_seconds=max(1, int(os.environ.get("POSITION_NEWS_SCAN_SECONDS", "5"))))
         _runtime.start()
+    if _enrichment_runtime is None:
+        _enrichment_runtime = CollectionRuntime(cycle=collector.retry_article_enrichment, scan_seconds=5)
+        _enrichment_runtime.start()
 
 
 def request_collection():
@@ -96,7 +99,7 @@ def request_collection():
 
 
 async def stop():
-    global _runtime
+    global _runtime, _enrichment_runtime
     current, _runtime = _runtime, None
-    if current is not None:
-        await current.stop()
+    enrichment, _enrichment_runtime = _enrichment_runtime, None
+    await asyncio.gather(*(worker.stop() for worker in (current, enrichment) if worker is not None))

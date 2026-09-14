@@ -80,13 +80,16 @@ export function hasPendingCommunitySummaries(payload) {
 }
 
 export function hasPendingNewsWork(payload) {
-  return hasPendingTranslation(payload) || hasPendingCommunitySummaries(payload);
+  return hasPendingTranslation(payload) || hasPendingCommunitySummaries(payload)
+    || payload?.image_status === "pending" || payload?.collection?.status === "pending";
 }
 
 export function newsRetryAfterSeconds(payload) {
   const delays = [
     hasPendingTranslation(payload) ? payload?.translation?.retry_after_seconds : null,
     hasPendingCommunitySummaries(payload) ? payload?.community_summaries?.retry_after_seconds : null,
+    payload?.collection?.status === "pending" ? 3 : null,
+    payload?.image_status === "pending" ? 30 : null,
   ].map(Number).filter((value) => Number.isFinite(value) && value > 0);
   return delays.length ? Math.min(...delays) : 30;
 }
@@ -115,7 +118,11 @@ export function createNewsCache({ storage = null, storageKey = "ggp_news_cache_v
       if (now() - entry.storedAt > maxAgeMs) { entries.delete(key); return null; }
       return entry;
     },
-    set(key, data, storedAt = now()) { entries.set(key, { data, storedAt }); persist(); },
+    set(key, data, storedAt = now()) {
+      const same = entries.get(key)?.data === data;
+      entries.set(key, { data, storedAt });
+      if (!same) persist();
+    },
     isFresh(key, freshMs) { const entry = this.get(key); return Boolean(entry) && now() - entry.storedAt < freshMs; },
     clear() { entries.clear(); persist(); },
   };
@@ -150,7 +157,9 @@ export function createNewsBriefingQueue({
     const seeded = hit ? hit.data : null;
     const settled = Boolean(seeded) && now() - hit.storedAt < freshMs && !hasPendingNewsWork(seeded) && !seeded.stale;
     return [key, {
-      status: seeded ? "success" : "queued", data: seeded, error: "", dueAt: settled ? null : 0,
+      status: seeded ? "success" : "queued", data: seeded, error: "",
+      dueAt: settled ? (Number(seeded.refresh_seconds) > 0
+        ? hit.storedAt + Math.max(3, Number(seeded.refresh_seconds)) * 1000 : null) : 0,
       pendingAttempts: 0, failures: 0,
     }];
   }));
@@ -159,13 +168,22 @@ export function createNewsBriefingQueue({
   let active = false;
   let visible = true;
   let timer = null;
+  const notified = new Map();
   const notify = (key, record) => {
-    if (active) onChange(key, { status: record.status, data: record.data, error: record.error });
+    if (!active) return;
+    const next = { status: record.status, data: record.data, error: record.error };
+    const last = notified.get(key);
+    if (last && last.status === next.status && last.data === next.data && last.error === next.error) return;
+    notified.set(key, next);
+    onChange(key, next);
   };
   const retryDelay = (attempt, payload) => {
     const serverSeconds = newsRetryAfterSeconds(payload);
     const serverDelay = Number.isFinite(serverSeconds) && serverSeconds > 0
       ? Math.min(3_600_000, serverSeconds * 1000) : RETRY_MS;
+    // Active preparation is an inexpensive DB read. Follow its short delivery
+    // interval; transport failures still back off from the normal 30 seconds.
+    if (payload && Number(payload.refresh_seconds) > 0) return serverDelay;
     return Math.max(serverDelay, Math.min(MAX_RETRY_MS, RETRY_MS * (2 ** Math.min(attempt - 1, 4))));
   };
 
@@ -205,14 +223,17 @@ export function createNewsBriefingQueue({
     // One stalled source must not hold the other slot or the whole retry batch.
     Promise.race([response, interrupted]).then((payload) => {
       if (!current()) return;
-      record.data = prepareNewsResponse(payload);
+      const prepared = prepareNewsResponse(payload);
+      if (!record.data || JSON.stringify(record.data) !== JSON.stringify(prepared)) record.data = prepared;
       record.status = "success";
       record.failures = 0;
       cache?.set(key, record.data, now());
       record.pendingAttempts = hasPendingNewsWork(record.data) || record.data.stale
         ? record.pendingAttempts + 1 : 0;
       record.dueAt = record.pendingAttempts
-        ? now() + retryDelay(record.pendingAttempts, record.data) : null;
+        ? now() + retryDelay(record.pendingAttempts, record.data)
+        : Number(record.data.refresh_seconds) > 0
+          ? now() + Math.max(3, Number(record.data.refresh_seconds)) * 1000 : null;
     }).catch((reason) => {
       if (!current()) return;
       if (reason?.name === "AbortError") {

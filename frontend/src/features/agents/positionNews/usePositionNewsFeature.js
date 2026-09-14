@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../../api.js";
 import useAdaptivePolling from "../../../hooks/useAdaptivePolling.js";
-import { hasPendingNewsWork, newsRetryAfterSeconds } from "../../../lib/newsBriefings.js";
+import { mergePositionNews } from "./feed.js";
 
 const POLL_MS = 3000;
 const POSITION_NEWS_BUSY_RETRY_DELAYS_MS = [400, 1_200, 2_400];
@@ -29,10 +29,10 @@ function waitForRetry(milliseconds, signal) {
   });
 }
 
-async function requestPositionNewsWithBusyRetry(sessionId, signal) {
+async function requestPositionNewsWithBusyRetry(sessionId, signal, cursor) {
   for (let attempt = 0; ; attempt += 1) {
     try {
-      return await api.agentPositionNews(sessionId, { signal });
+      return await api.agentPositionNews(sessionId, { signal, cursor });
     } catch (reason) {
       if (
         reason?.status !== 429
@@ -48,6 +48,7 @@ async function requestPositionNewsWithBusyRetry(sessionId, signal) {
 export function usePositionNewsFeature(sessionId, running = true) {
   const [state, setState] = useState(EMPTY_STATE);
   const requestRef = useRef(0);
+  const cursorRef = useRef({ sessionId: null, cursor: undefined });
 
   const load = useCallback(async (targetSessionId, signal) => {
     if (!targetSessionId) return;
@@ -60,15 +61,16 @@ export function usePositionNewsFeature(sessionId, running = true) {
       error: "",
     }));
     try {
-      const data = await requestPositionNewsWithBusyRetry(targetSessionId, signal);
+      const cursor = String(cursorRef.current.sessionId) === String(targetSessionId)
+        ? cursorRef.current.cursor : undefined;
+      const data = await requestPositionNewsWithBusyRetry(targetSessionId, signal, cursor);
       if (requestRef.current === requestId) {
-        setState({ status: "ready", sessionId: targetSessionId, data, error: "" });
+        cursorRef.current = { sessionId: targetSessionId, cursor: data.cursor };
+        setState((current) => ({ status: "ready", sessionId: targetSessionId,
+          data: mergePositionNews(String(current.sessionId) === String(targetSessionId) ? current.data : null, data),
+          error: "" }));
       }
-      const waitingForTranslation = hasPendingNewsWork(data);
-      const translationDelay = Math.max(30000, Math.min(300000,
-        newsRetryAfterSeconds(data) * 1000));
-      return { nextPollMs: !running ? null : waitingForTranslation ? translationDelay
-        : data?.analysis_status === "pending" ? 3000 : 30000 };
+      return { nextPollMs: data.has_more ? 100 : !running ? null : POLL_MS };
     } catch (reason) {
       if (reason?.name === "AbortError") return;
       if (requestRef.current === requestId) {
@@ -101,6 +103,7 @@ export function usePositionNewsFeature(sessionId, running = true) {
     }
 
     setState({ status: "idle", sessionId, data: null, error: "" });
+    cursorRef.current = { sessionId, cursor: undefined };
     return () => {
       requestRef.current += 1;
     };

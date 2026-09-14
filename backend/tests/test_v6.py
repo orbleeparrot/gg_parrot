@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 import zipfile
 
+from tests.leaderboard_helpers import publish_ready_board
 import pytest
 from fastapi.testclient import TestClient
 
@@ -102,8 +103,8 @@ def test_leaderboard_register_list_vote(monkeypatch):
 
     monkeypatch.setattr(paper_mod, "start_session", fake_start)
     monkeypatch.setattr(
-        lb.paper_mod, "get_statuses",
-        lambda ids, *, db=None: {
+        lb, "_durable_statuses",
+        lambda db, ids: {
             sid: {
                 "current_return": 3.2,
                 "current_equity": 1032000.0,
@@ -122,6 +123,7 @@ def test_leaderboard_register_list_vote(monkeypatch):
     entry_id = reg.json()["entry"]["id"]
     assert "password" not in reg.text and "password_hash" not in reg.text  # never leaked
 
+    publish_ready_board()
     board = client.get("/api/leaderboard?user_id=u1").json()
     assert any(e["id"] == entry_id for e in board["items"])
     assert board["seconds_to_reset"] > 0

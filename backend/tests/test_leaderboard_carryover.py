@@ -1,8 +1,10 @@
 """Daily reset keeps the top 3: carry-over, streak counting, idempotency."""
 from __future__ import annotations
 
+import asyncio
 import secrets
 
+from tests.leaderboard_helpers import publish_ready_board
 import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import select
@@ -40,6 +42,7 @@ def _stub_paper(monkeypatch):
 
     monkeypatch.setattr("app.leaderboard.paper_mod.start_session", _fake_start)
     monkeypatch.setattr("app.leaderboard.paper_mod.get_statuses", _fake_statuses)
+    monkeypatch.setattr(lb, "_durable_statuses", lambda db, ids: _fake_statuses(ids, db=db))
     monkeypatch.setattr("app.leaderboard.paper_mod.stop_session", lambda sid: None)
     monkeypatch.setattr("app.main.paper_mod.start_session", _fake_start)
     yield returns
@@ -77,6 +80,8 @@ def _entry(entry_id: int) -> LeaderboardEntry:
 
 
 def _board_ids() -> set[int]:
+    asyncio.run(lb.ensure_today_carryover())
+    publish_ready_board()
     return {e["id"] for e in client.get("/api/leaderboard").json()["items"]}
 
 
@@ -99,12 +104,16 @@ def test_streak_counts_days_defended(_stub_paper):
     entry_id = _make_yesterday_entry(_stub_paper, ret=3.0, session_id=201)
     assert _entry(entry_id).streak_days == 1
 
+    asyncio.run(lb.ensure_today_carryover())
+    publish_ready_board()
     client.get("/api/leaderboard")
     row = _entry(entry_id)
     assert row.streak_days == 2
     assert row.created_ms == lb.today_start_ms()
     assert row.first_created_ms is not None, "원 등록 시각은 보존한다"
 
+    asyncio.run(lb.ensure_today_carryover())
+    publish_ready_board()
     view = next(e for e in client.get("/api/leaderboard").json()["items"] if e["id"] == entry_id)
     assert view["streak_days"] == 2 and view["defending"] is True
 
@@ -114,12 +123,16 @@ def test_carried_entry_keeps_its_session_and_accumulated_return(_stub_paper):
     entry_id = _make_yesterday_entry(_stub_paper, ret=8.25, session_id=202)
     row_before = _entry(entry_id)
 
+    asyncio.run(lb.ensure_today_carryover())
+    publish_ready_board()
     client.get("/api/leaderboard")
 
     row = _entry(entry_id)
     assert row.paper_session_id == 202, "페이퍼 세션을 새로 시작하면 안 된다"
     assert row.created_at == row_before.created_at, "등록 시각은 손대지 않는다"
 
+    asyncio.run(lb.ensure_today_carryover())
+    publish_ready_board()
     view = next(e for e in client.get("/api/leaderboard").json()["items"] if e["id"] == entry_id)
     assert view["return_pct"] == 8.25, "누적 수익률이 0으로 초기화되면 안 된다"
 
@@ -139,7 +152,10 @@ def test_finished_macro_defends_with_its_final_return(_stub_paper, monkeypatch):
         }
 
     monkeypatch.setattr("app.leaderboard.paper_mod.get_statuses", _stopped_statuses)
+    monkeypatch.setattr(lb, "_durable_statuses", lambda db, ids: _stopped_statuses(ids, db=db))
 
+    asyncio.run(lb.ensure_today_carryover())
+    publish_ready_board()
     items = client.get("/api/leaderboard").json()["items"]
     ranked = [e["id"] for e in items if e["id"] in (done_id, live_id)]
     assert ranked == [done_id, live_id], "종료된 매크로가 더 높은 수익률이면 위에 온다"
@@ -150,6 +166,8 @@ def test_finished_macro_defends_with_its_final_return(_stub_paper, monkeypatch):
 
 def test_streak_keeps_growing_across_days(_stub_paper, monkeypatch):
     entry_id = _make_yesterday_entry(_stub_paper, ret=3.0, session_id=301)
+    asyncio.run(lb.ensure_today_carryover())
+    publish_ready_board()
     client.get("/api/leaderboard")
 
     # 하루 더 흐른 척: 방어 중인 엔트리를 다시 어제로 돌리고 새 날짜로 이월한다.
@@ -160,8 +178,11 @@ def test_streak_keeps_growing_across_days(_stub_paper, monkeypatch):
         db.add(row)
         db.commit()
     monkeypatch.setattr(lb, "_carryover_done_date", None, raising=False)
-    monkeypatch.setattr(lb, "_today_kst", lambda: "2099-" + secrets.token_hex(3))
+    next_date = "2099-" + secrets.token_hex(3)
+    monkeypatch.setattr(lb, "_today_kst", lambda: next_date)
 
+    asyncio.run(lb.ensure_today_carryover())
+    publish_ready_board()
     client.get("/api/leaderboard")
     assert _entry(entry_id).streak_days == 3
 
@@ -169,8 +190,14 @@ def test_streak_keeps_growing_across_days(_stub_paper, monkeypatch):
 def test_carryover_runs_once_per_day(_stub_paper, _fresh_day):
     entry_id = _make_yesterday_entry(_stub_paper, ret=3.0, session_id=401)
 
+    asyncio.run(lb.ensure_today_carryover())
+    publish_ready_board()
     client.get("/api/leaderboard")
+    asyncio.run(lb.ensure_today_carryover())
+    publish_ready_board()
     client.get("/api/leaderboard")
+    asyncio.run(lb.ensure_today_carryover())
+    publish_ready_board()
     client.get("/api/leaderboard")
     assert _entry(entry_id).streak_days == 2, "재조회가 방어 일수를 더 올리면 안 된다"
 

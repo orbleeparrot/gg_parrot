@@ -7,6 +7,14 @@ import pytest
 from app.agent_features.position_news import classifier, service
 
 
+@pytest.fixture(autouse=True)
+def legacy_snapshot_projection(monkeypatch):
+    # This module verifies compatibility with pre-article-store snapshots;
+    # durable cursor delivery is exercised in test_position_news_articles.py.
+    from app.agent_features.position_news import repository
+    monkeypatch.setattr(repository, "read_article_feed", lambda *args, **kwargs: None)
+
+
 @pytest.mark.parametrize(
     ("side", "sentiment", "expected"),
     [
@@ -488,7 +496,8 @@ def test_translation_pending_article_recovers_without_losing_identity_or_sentime
         def rollback(self):
             events.append("released")
     translated = {raw[0]["title"]: "비트코인 ETF 승인", raw[1]["title"]: "비트코인 거래소 해킹"}
-    def localize(items):
+    def localize(items, **kwargs):
+        assert kwargs.get("wait_for_translation") is False
         assert events[-1] == "released"
         events.append("translation")
         return [{**item, "original_title": item["title"], "title": translated[item["title"]]}

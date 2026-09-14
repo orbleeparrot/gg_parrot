@@ -195,20 +195,22 @@ export const api = {
   },
 
   // 오늘의 AI 챌린지 (KST 하루 1회 생성; symbol + 🤖 이름)
-  challengeToday: (options = {}) => req("/api/challenge/today", options),
+  challengeToday: (options = {}) => req("/api/challenge/today", { timeoutMs: 10_000, ...options }),
 
   // '오늘의 경주마' hot coins (server-cached, shared across clients)
   hotCoins: (limit, options = {}) => req(`/api/hot-coins?limit=${limit || 10}`, options),
 
   // '오늘의 코인동향' — 시장·규제 뉴스 헤드라인 + AI 중립 개요 (KST 하루 1회 캐시)
-  newsMarket: (options = {}) => req("/api/news/market", options),
+  newsMarket: (options = {}) => req("/api/news/market", { timeoutMs: 10_000, ...options }),
   // '경주마 동향' — 서버가 Prefect DB 우선, 미수집 티커만 RSS fallback
-  newsCoin: (symbol, options = {}) => req(`/api/news/coin/${encodeURIComponent(symbol)}`, options),
+  newsCoin: (symbol, options = {}) => req(`/api/news/coin/${encodeURIComponent(symbol)}`, { timeoutMs: 10_000, ...options }),
   // 내 에이전트 기능 01 — 서버가 세션 소유권과 등록 매크로 방향을 확인한다.
   agentWhaleActivity: (sessionId, options = {}) =>
     req(`/api/me/agents/sessions/${sessionId}/whale-activity`, options),
-  agentPositionNews: (sessionId, options = {}) =>
-    req(`/api/me/agents/sessions/${encodeURIComponent(sessionId)}/position-news`, options),
+  agentPositionNews: (sessionId, { cursor, ...options } = {}) => {
+    const query = Number.isSafeInteger(cursor) ? `?cursor=${cursor}` : "";
+    return req(`/api/me/agents/sessions/${encodeURIComponent(sessionId)}/position-news${query}`, options);
+  },
   // 저장 매크로도 실행 세션 없이 같은 공용 snapshot을 조회한다.
   agentMacroPositionNews: (macroId, symbol = "") => {
     const path = `/api/me/agents/macros/${encodeURIComponent(macroId)}/position-news`;
@@ -281,7 +283,26 @@ export const api = {
     ),
 
   // 오늘의 리더보드 (daily KST paper-return board)
-  leaderboard: (userId, options = {}) => req(`/api/leaderboard?user_id=${encodeURIComponent(userId || "")}`, options),
+  leaderboard: (userId, options = {}) => {
+    const { page = 1, pageSize = 50, snapshotId = "", entryId = null, ...requestOptions } = options;
+    const query = new URLSearchParams({ user_id: userId || "", page: String(page), page_size: String(pageSize) });
+    if (snapshotId) query.set("snapshot_id", snapshotId);
+    if (entryId != null) query.set("entry_id", String(entryId));
+    return req(`/api/leaderboard?${query}`, { timeoutMs: 10_000, ...requestOptions });
+  },
+  leaderboardAll: async (userId, options = {}) => {
+    let snapshotId = "";
+    const items = [];
+    let result;
+    for (let page = 1; page <= 100; page += 1) {
+      result = await api.leaderboard(userId, { ...options, page, pageSize: 100, snapshotId });
+      if (result.snapshot_expired) throw new Error("리더보드가 갱신됐어요. 목록을 다시 열어 주세요.");
+      snapshotId = result.snapshot_id;
+      items.push(...(result.items || []));
+      if (!result.has_more) return { ...result, items };
+    }
+    throw new Error("목록이 너무 커요. 리더보드 페이지에서 참가자를 찾아 주세요.");
+  },
   leaderboardRegister: (macro, username, password, userId, mode) =>
     req("/api/leaderboard/register", {
       method: "POST",
@@ -305,10 +326,13 @@ export const api = {
     req(`/api/leaderboard/${entryId}/unlock`, { method: "POST" }),
 
   // leaderboard chat (daily KST)
-  chatList: ({ beforeId, seenId, ...options } = {}) => {
+  chatList: ({ beforeId, seenId, afterId, metadataOnly, messageIds, ...options } = {}) => {
     const query = new URLSearchParams();
     if (beforeId != null) query.set("before_id", String(beforeId));
     if (seenId != null) query.set("seen_id", String(seenId));
+    if (afterId != null) query.set("after_id", String(afterId));
+    if (metadataOnly) query.set("metadata_only", "true");
+    if (messageIds?.length) query.set("message_ids", messageIds.join(","));
     return req(`/api/chat${query.size ? `?${query}` : ""}`, { timeoutMs: 15_000, ...options });
   },
   chatPost: (text, options = {}) =>

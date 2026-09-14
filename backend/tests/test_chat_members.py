@@ -5,7 +5,7 @@ import secrets
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import delete, inspect
+from sqlalchemy import delete, event, inspect
 from sqlmodel import create_engine, select
 
 from app import auth, chat, db as db_mod
@@ -355,3 +355,159 @@ def test_reply_quotes_the_original_and_report_covers_chat(members):
                          headers=headers(other)).status_code == 409
     assert client().post("/api/board/reports", json={"target_type": "chat", "target_id": 999999, "reason": "spam"},
                          headers=headers(other)).status_code == 404
+
+
+def test_idle_poll_skips_messages_enrichment_and_extra_database_sessions(members):
+    reader, author = members
+    rows = seed_messages(250, account=author)
+    api = client()
+    auth_headers = headers(reader)
+    api.get("/api/chat", headers=auth_headers)
+    queries, checkouts = [], []
+
+    def capture(_conn, _cursor, statement, _parameters, _context, _many):
+        queries.append(statement.lower())
+
+    def checkout(*_args):
+        checkouts.append(True)
+
+    event.listen(db_mod._engine, "before_cursor_execute", capture)
+    event.listen(db_mod._engine, "checkout", checkout)
+    try:
+        for mode in ({"metadata_only": True}, {"after_id": rows[-1].id}):
+            queries.clear()
+            checkouts.clear()
+            response = api.get("/api/chat", headers=auth_headers,
+                               params={"seen_id": rows[-1].id, **mode})
+            assert response.status_code == 200, response.text
+            data = response.json()
+            assert data["items"] == []
+            assert data["unseen_count"] == 0
+            assert data["latest_id"] == rows[-1].id
+            assert len(queries) == 3  # auth, durable cursor, today's watermark
+            assert len(checkouts) == 1
+            assert not any("join useravatar" in sql or "leaderboardentry" in sql for sql in queries)
+            assert len(response.content) < 1000
+    finally:
+        event.remove(db_mod._engine, "before_cursor_execute", capture)
+        event.remove(db_mod._engine, "checkout", checkout)
+
+
+def test_deltas_are_bounded_and_never_skip_an_intermediate_batch(members):
+    reader, author = members
+    rows = seed_messages(451, account=author)
+    api = client()
+    first = api.get("/api/chat", params={"after_id": rows[0].id, "seen_id": 0}).json()
+    assert [item["id"] for item in first["items"]] == [row.id for row in rows[1:201]]
+    assert first["has_more_new"] is True
+    assert first["fetched_through_id"] == rows[200].id
+    assert first["latest_id"] == rows[-1].id
+    second = api.get("/api/chat", params={"after_id": first["fetched_through_id"]}).json()
+    third = api.get("/api/chat", params={"after_id": second["fetched_through_id"]}).json()
+    assert [item["id"] for item in second["items"] + third["items"]] == [row.id for row in rows[201:]]
+    assert third["has_more_new"] is False
+    assert third["fetched_through_id"] == rows[-1].id
+
+
+def test_reconciliation_updates_historical_photos_macros_and_deletions(members):
+    reader, author = members
+    rows = seed_messages(250, account=author)
+    entry_id = _entry(owner_user_id=author.id)
+    with get_session() as db:
+        row = db.get(ChatMessage, rows[0].id)
+        row.text = f"[macro:{entry_id}]"
+        db.add(row)
+        db.add(UserAvatar(user_id=author.id, version="reconciled", image_data=b"fixture"))
+        db.delete(db.get(ChatMessage, rows[1].id))
+        db.commit()
+    params = {"message_ids": f"{rows[0].id},{rows[1].id}"}
+    response = client().get("/api/chat", headers=headers(reader), params=params)
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["mode"] == "reconcile"
+    assert data["missing_ids"] == [rows[1].id]
+    assert [item["id"] for item in data["items"]] == [rows[0].id]
+    assert data["items"][0]["avatar_url"].endswith("?v=reconciled")
+    assert data["items"][0]["macros"][0]["locked"] is True
+    from app.db import MacroUnlock
+    with get_session() as db:
+        db.add(MacroUnlock(user_id=reader.id, entry_id=entry_id, price=100, created_at="2026-01-01T00:00:00Z"))
+        db.commit()
+    updated = client().get("/api/chat", headers=headers(reader), params=params).json()
+    assert updated["items"][0]["macros"][0]["locked"] is False
+
+
+def test_chat_query_modes_and_reconciliation_ids_are_validated():
+    api = client()
+    for params in ({"after_id": -1}, {"message_ids": "1,-2"}, {"message_ids": str(2**63)},
+                   {"message_ids": ",".join(str(i) for i in range(1, 202))},
+                   {"metadata_only": True, "after_id": 0}, {"before_id": 2, "after_id": 0}):
+        assert api.get("/api/chat", params=params).status_code == 422
+
+
+def test_macro_enrichment_projects_only_cards_and_caps_ids_before_query(members):
+    reader, author = members
+    ids = [_entry(owner_user_id=author.id) for _ in range(5)]
+    statements = []
+
+    def capture(_conn, _cursor, statement, parameters, _context, _many):
+        if "FROM leaderboardentry" in statement:
+            statements.append((statement, parameters))
+
+    event.listen(db_mod._engine, "before_cursor_execute", capture)
+    try:
+        with get_session() as db:
+            cards = chat._macro_cards(db, [" ".join(f"[macro:{i}]" for i in ids)], reader.id)
+        assert set(cards) == set(ids[:3])
+        assert len(statements) == 1
+        sql, parameters = statements[0]
+        assert "macro_json" not in sql and "password_hash" not in sql
+        assert len(parameters) == 3
+    finally:
+        event.remove(db_mod._engine, "before_cursor_execute", capture)
+
+
+def test_read_ack_uses_one_connection_and_no_post_commit_refresh(members):
+    reader, author = members
+    api = client()
+    auth_headers = headers(reader)
+    api.get("/api/chat", headers=auth_headers)
+    message = seed_messages(1, account=author)[0]
+    queries, checkouts = [], []
+
+    def capture(_conn, _cursor, statement, _parameters, _context, _many):
+        queries.append(statement.lower())
+
+    def checkout(*_args):
+        checkouts.append(True)
+
+    event.listen(db_mod._engine, "before_cursor_execute", capture)
+    event.listen(db_mod._engine, "checkout", checkout)
+    try:
+        response = api.put("/api/chat/read", headers=auth_headers, json={"last_seen_id": message.id})
+        assert response.status_code == 200, response.text
+        assert response.json() == {"seen_id": message.id}
+        assert len(checkouts) == 1
+        # SQLite also has BEGIN IMMEDIATE; production has these four statements.
+        statements = [sql for sql in queries if not sql.startswith("begin")]
+        assert len(statements) == 4
+        assert "on conflict" in statements[-1] and "returning" in statements[-1]
+    finally:
+        event.remove(db_mod._engine, "before_cursor_execute", capture)
+        event.remove(db_mod._engine, "checkout", checkout)
+
+
+def test_shared_session_lock_reloads_deleted_account_before_chat_write(members):
+    reader, _author = members
+    with get_session() as shared:
+        cached = shared.get(User, reader.id)
+        assert cached.is_deleted is False
+        with get_session() as other:
+            deleted = other.get(User, reader.id)
+            deleted.is_deleted = True
+            other.add(deleted)
+            other.commit()
+        with pytest.raises(ValueError, match="계정"):
+            chat.mark_read(cached, 0, db=shared)
+    with get_session() as db:
+        assert db.get(ChatReadState, reader.id) is None

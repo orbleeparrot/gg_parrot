@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
+import { Fragment, memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { api } from "../api.js";
 import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
@@ -12,10 +12,13 @@ import { getUserId } from "../lib/user.js";
 import ReportDialog from "./ReportDialog.jsx";
 import CoinIcon from "./CoinIcon.jsx";
 import { chatUnseenCount, getChatFeed, markChatSeen, observeChat, receiveChat, receiveChatPost, setChatLoadError, visibleChatReadId } from "../lib/chatStore.js";
+import { CHAT_WINDOW_SIZE, chatWindow } from "../lib/chatFeed.js";
 import UserAvatar, { AuthorAvatar } from "./UserAvatar.jsx";
 import "./ChatBox.css";
 
 const POLL_MS = 3000;
+const CLOSED_POLL_MS = 30_000;
+const RECONCILE_MS = 60_000;
 const FAB_ICON = "/brand/ggparrot-feather-terminal.svg";
 const EMPTY_FACE = "/brand/agent/ggparrot-agent-curious-v1.svg";
 const PLACEMENT_KEY = "chat:placement";      // 버튼을 끌어다 둔 자리(오른쪽·아래 여백 px) — 이 브라우저에만
@@ -127,7 +130,13 @@ function kstClock(now = Date.now()) {
 function MacroCard({ card, onClose }) {
   const goToEntry = () => {
     const row = document.getElementById(`leaderboard-entry-${card.entry_id}`);
-    if (!row) return;
+    if (!row) {
+      window.dispatchEvent(new CustomEvent("ggp:leaderboard-focus-entry", {
+        detail: { entryId: Number(card.entry_id) },
+      }));
+      onClose?.();
+      return;
+    }
     onClose?.();
     row.scrollIntoView({ behavior: "smooth", block: "center" });
     row.classList.add("is-flash");
@@ -147,12 +156,13 @@ function MacroCard({ card, onClose }) {
   );
 }
 
-export default function ChatBox(props) {
+const ChatBox = memo(function ChatBox(props) {
   const { token, user } = useAuth();
   const member = token && user?.id != null ? user : null;
   const scope = chatScope(member?.id);
   return <MemberChatBox key={scope} {...props} member={member} scope={scope} />;
-}
+});
+export default ChatBox;
 
 function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray = false }) {
   const mobilePlacement = useSyncExternalStore(subscribeMobilePlacement, isMobilePlacement, () => false);
@@ -162,6 +172,10 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
   const feed = useSyncExternalStore(subscribe, snapshot, snapshot);
   const { items, loaded, seenId, loadError } = feed;
   const [open, setOpen] = useState(defaultOpen);
+  const [windowEndId, setWindowEndId] = useState(null);
+  const visibleWindow = useMemo(() => chatWindow(items, windowEndId), [items, windowEndId]);
+  const lastReconcileRef = useRef({ time: 0, window: null });
+  useEffect(() => { setWindowEndId(null); }, [feed.dayStartMs]);
   const [text, setText] = useState("");
   const [error, setError] = useState("");
   const [menu, setMenu] = useState(null);      // 오른쪽 클릭 메뉴 {x, y, message}
@@ -180,8 +194,11 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
     return () => document.removeEventListener("pointerdown", onPointerDown);
   }, [shortcutsOpen]);
   const [macroList, setMacroList] = useState(null); // 매크로 고르기 목록(한 번 받아 둔다)
+  const [macroPending, setMacroPending] = useState(false);
   const [pickIndex, setPickIndex] = useState(0);
   const [readError, setReadError] = useState("");
+  const readErrorRef = useRef("");
+  readErrorRef.current = readError;
   const [busy, setBusy] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [readRetry, setReadRetry] = useState(0);
@@ -257,13 +274,26 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
   }, []);
 
   const load = useCallback(async (signal) => {
-    const data = await api.chatList({ signal, seenId: getChatFeed(scope).seenId });
+    const current = getChatFeed(scope);
+    const messageWindow = chatWindow(current.items, windowEndId);
+    const reconcile = open && current.loaded && messageWindow.items.length > 0 &&
+      (Date.now() - lastReconcileRef.current.time >= RECONCILE_MS || lastReconcileRef.current.window !== windowEndId);
+    const mode = !open ? { metadataOnly: true }
+      : !current.loaded ? {}
+        : reconcile ? { messageIds: messageWindow.items.map((item) => item.id) }
+          : { afterId: current.pageLatestId };
+    const data = await api.chatList({ signal, seenId: current.seenId, ...mode });
     if (signal.aborted || !isCurrent()) return;
     serverSeenRef.current = Math.max(serverSeenRef.current, Number(data.server_seen_id) || 0);
     receiveChat(scope, data);
-  }, [isCurrent, scope]);
+    if (readErrorRef.current) setReadRetry((value) => value + 1);
+    if (open && (!current.loaded || reconcile)) lastReconcileRef.current = { time: Date.now(), window: windowEndId };
+    // A reconciliation checks only displayed IDs. Follow it with a delta so new
+    // arrivals never wait for another regular polling interval.
+    return { nextPollMs: data.has_more_new || reconcile ? 0 : open ? POLL_MS : CLOSED_POLL_MS };
+  }, [isCurrent, open, scope, windowEndId]);
   const refresh = useAdaptivePolling(load, {
-    intervalMs: POLL_MS, maxIntervalMs: 60_000, pollKey: scope,
+    intervalMs: open ? POLL_MS : CLOSED_POLL_MS, maxIntervalMs: 60_000, pollKey: scope,
     onError: (reason) => { if (isCurrent() && reason?.name !== "AbortError") setChatLoadError(scope, reason); },
   });
 
@@ -277,18 +307,20 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
   // A local cursor can be ahead of another device. Keep failed writes pending
   // until a PUT or persisted server acknowledgement succeeds. Polls retry them.
   useEffect(() => {
-    if (!member || !loaded || seenId == null) return;
+    if (!member || !feed.metadataLoaded || seenId == null) return;
     if (seenId <= Math.max(syncedSeenRef.current, serverSeenRef.current)) {
       setReadError("");
       return;
     }
     if (syncingSeenRef.current) return;
     syncingSeenRef.current = true;
+    let acknowledged = false;
     const controller = new AbortController();
     pendingRequestsRef.current.add(controller);
     api.chatRead(seenId, { signal: controller.signal }).then((data) => {
       if (controller.signal.aborted || !isCurrent()) return;
       syncedSeenRef.current = Math.max(syncedSeenRef.current, Number(data.seen_id) || seenId);
+      acknowledged = true;
       markChatSeen(scope, data.seen_id ?? seenId);
       setReadError("");
     }).catch(() => {
@@ -296,20 +328,31 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
     }).finally(() => {
       pendingRequestsRef.current.delete(controller);
       syncingSeenRef.current = false;
+      // A cursor can advance while this PUT is in flight. An unchanged delta no
+      // longer re-renders the store, so explicitly drain the pending cursor.
+      if (acknowledged && isCurrent() && getChatFeed(scope).seenId > Math.max(syncedSeenRef.current, serverSeenRef.current)) {
+        setReadRetry((value) => value + 1);
+      }
     });
-  }, [feed.responseRevision, isCurrent, loaded, member, readRetry, scope, seenId]);
+  }, [feed.metadataLoaded, feed.responseRevision, isCurrent, member, readRetry, scope, seenId]);
+
+  useEffect(() => {
+    if (!readError) return undefined;
+    const timer = window.setTimeout(() => setReadRetry((value) => value + 1), CLOSED_POLL_MS);
+    return () => window.clearTimeout(timer);
+  }, [readError, readRetry]);
 
   const unseen = chatUnseenCount(feed, member?.id);
   const badge = badgeLabel(unseen);
 
   const markVisibleBottom = useCallback(() => {
     const element = listRef.current;
-    if (!open || !loaded || !element || document.hidden || !isCurrent()) return;
+    if (!open || !loaded || windowEndId != null || !element || document.hidden || !isCurrent()) return;
     const rect = element.getBoundingClientRect();
     const bottom = element.scrollHeight - element.scrollTop - element.clientHeight <= 3;
     const visible = element.clientHeight > 0 && rect.top >= 0 && rect.bottom <= window.innerHeight + 2;
     if (bottom && visible) markChatSeen(scope, visibleChatReadId(getChatFeed(scope)));
-  }, [isCurrent, loaded, open, scope]);
+  }, [isCurrent, loaded, open, scope, windowEndId]);
 
   useLayoutEffect(() => {
     if (!open || !loaded) return undefined;
@@ -319,9 +362,9 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
     }
     const element = listRef.current;
     if (element) {
-      const position = historyPositionRef.current;
-      if (position) {
-        element.scrollTop = position.top + element.scrollHeight - position.height;
+      const historyPosition = historyPositionRef.current;
+      if (historyPosition) {
+        element.scrollTop = historyPosition.top + element.scrollHeight - historyPosition.height;
         historyPositionRef.current = null;
       } else if (stickToBottomRef.current) {
         element.scrollTop = element.scrollHeight;
@@ -330,7 +373,7 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
     }
     const frame = window.requestAnimationFrame(markVisibleBottom);
     return () => window.cancelAnimationFrame(frame);
-  }, [items, loaded, markVisibleBottom, member?.id, open, seenId]);
+  }, [dividerId, items, loaded, markVisibleBottom, member?.id, open, seenId]);
 
   useEffect(() => {
     const onVisible = () => {
@@ -446,6 +489,7 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
   }
 
   function jumpToLatest() {
+    setWindowEndId(null);
     stickToBottomRef.current = true;
     if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
     setAtBottom(true);
@@ -453,6 +497,11 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
   }
 
   async function loadOlder() {
+    if (visibleWindow.hasOlder) {
+      stickToBottomRef.current = false;
+      setWindowEndId(items[visibleWindow.start - 1].id);
+      return;
+    }
     if (loadingOlder || !feed.hasMore || !feed.oldestId) return;
     const controller = new AbortController();
     pendingRequestsRef.current.add(controller);
@@ -461,10 +510,14 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
     try {
       const data = await api.chatList({ signal: controller.signal, beforeId, seenId: getChatFeed(scope).seenId });
       if (controller.signal.aborted || !isCurrent() || Number(getChatFeed(scope).oldestId) !== Number(beforeId)) return;
-      const element = listRef.current;
-      if (element) historyPositionRef.current = { top: element.scrollTop, height: element.scrollHeight };
       stickToBottomRef.current = false;
-      receiveChat(scope, data, { older: true, beforeId });
+      const element = listRef.current;
+      const position = element ? { top: element.scrollTop, height: element.scrollHeight } : null;
+      const merged = receiveChat(scope, data, { older: true, beforeId });
+      const nextEnd = merged?.items.length > CHAT_WINDOW_SIZE ? beforeId - 1 : null;
+      if (nextEnd == null) historyPositionRef.current = position;
+      setWindowEndId(nextEnd);
+      lastReconcileRef.current = { time: Date.now(), window: nextEnd };
     } catch (reason) {
       if (!controller.signal.aborted && isCurrent()) setChatLoadError(scope, reason);
     } finally {
@@ -472,6 +525,16 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
       if (isCurrent()) setLoadingOlder(false);
     }
   }
+
+  function showNewer() {
+    const nextEnd = visibleWindow.end + CHAT_WINDOW_SIZE;
+    setWindowEndId(nextEnd >= items.length ? null : items[nextEnd - 1].id);
+    stickToBottomRef.current = nextEnd >= items.length;
+  }
+
+  useLayoutEffect(() => {
+    if (listRef.current && windowEndId != null) listRef.current.scrollTop = 0;
+  }, [windowEndId]);
 
   async function post(body) {
     if (!member || busy || !body.trim() || !isCurrent()) return false;
@@ -483,6 +546,7 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
       const result = await api.chatPost(body.trim(), { signal: controller.signal });
       if (controller.signal.aborted || !isCurrent()) return false;
       stickToBottomRef.current = true;
+      setWindowEndId(null);
       if (result?.message) receiveChatPost(scope, result.message);
       refresh();
       return true;
@@ -512,12 +576,31 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
   const picking = query !== null;
   const picks = picking ? filterMacros(macroList || [], query) : [];
   useEffect(() => {
+    if (!picking && macroPending) setMacroList(null);
+  }, [picking, macroPending]);
+  useEffect(() => {
     if (!picking || macroList !== null) return undefined;
     let alive = true;
-    api.leaderboard(getUserId())
-      .then((data) => { if (alive) setMacroList(data?.entries || data?.items || []); })
-      .catch(() => { if (alive) setMacroList([]); });
-    return () => { alive = false; };
+    let timer;
+    let attempts = 0;
+    const controller = new AbortController();
+    setMacroPending(false);
+    const loadMacros = async () => {
+      try {
+        const data = await api.leaderboardAll(getUserId(), { signal: controller.signal });
+        if (!alive) return;
+        if (data.preparing) {
+          if (++attempts < 5) timer = window.setTimeout(loadMacros, POLL_MS);
+          else { setMacroPending(true); setMacroList([]); }
+          return;
+        }
+        setMacroList(data?.entries || data?.items || []);
+      } catch (reason) {
+        if (alive && reason?.name !== "AbortError") { setMacroPending(true); setMacroList([]); }
+      }
+    };
+    void loadMacros();
+    return () => { alive = false; controller.abort(); window.clearTimeout(timer); };
   }, [picking, macroList]);
   useEffect(() => { setPickIndex(0); }, [query]);
 
@@ -601,13 +684,13 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
             setAtBottom(bottom);
             markVisibleBottom();
           }}>
-            {loaded && feed.hasMore ? <button type="button" className="chat-history" onClick={loadOlder} disabled={loadingOlder}>{loadingOlder ? "불러오는 중…" : "이전 메시지 더 보기"}</button> : null}
+            {loaded && (feed.hasMore || visibleWindow.hasOlder) ? <button type="button" className="chat-history" onClick={loadOlder} disabled={loadingOlder}>{loadingOlder ? "불러오는 중…" : "이전 메시지 더 보기"}</button> : null}
             {!loaded ? (
               loadError ? <p className="chat-helper">대화를 불러오면 여기에 표시됩니다.</p> : <div className="chat-skeleton" aria-hidden="true"><i /><i /><i /></div>
             ) : items.length === 0 ? (
               <div className="chat-empty"><img src={EMPTY_FACE} alt="" width="56" height="56" draggable="false" /><strong>아직 조용해요.</strong><span>오늘 첫 채팅을 남겨봐요.</span></div>
-            ) : items.map((message, index) => {
-              const previous = index > 0 ? items[index - 1] : null;
+            ) : visibleWindow.items.map((message, index) => {
+              const previous = index > 0 ? visibleWindow.items[index - 1] : null;
               const showDivider = dividerId != null && message.id === dividerId;
               const continued = !showDivider && sameAuthor(previous, message);
               const mine = isOwnMessage(message, member?.id);
@@ -628,8 +711,9 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
                 </Fragment>
               );
             })}
+            {visibleWindow.hasNewer ? <button type="button" className="chat-history" onClick={showNewer}>다음 메시지 보기</button> : null}
           </div>
-          {!atBottom && loaded ? <button type="button" className="chat-jump" onClick={jumpToLatest}>{unseen ? `새 메시지 ${unseen}개 · 아래로` : "최신 메시지로 이동"}</button> : null}
+          {(!atBottom || windowEndId != null) && loaded ? <button type="button" className="chat-jump" onClick={jumpToLatest}>{unseen ? `새 메시지 ${unseen}개 · 아래로` : "최신 메시지로 이동"}</button> : null}
           {member && stickerOpen ? (
             <div className="chat-sticker-tray" role="group" aria-label="스티커 고르기">
               {STICKERS.map((sticker) => <button key={sticker.id} type="button" className="chat-sticker-tile" onClick={() => sendSticker(sticker.id)} disabled={busy} aria-label={`${sticker.label} 스티커 보내기`}><img src={sticker.src} alt="" width="56" height="56" draggable="false" decoding="async" /><span>{sticker.label}</span></button>)}
@@ -640,6 +724,8 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
             <div className="chat-picker" role="listbox" aria-label="매크로 고르기">
               {macroList === null ? (
                 <p className="chat-picker-empty">불러오는 중…</p>
+              ) : macroPending ? (
+                <button type="button" className="chat-history" onClick={() => setMacroList(null)}>매크로 목록 다시 불러오기</button>
               ) : picks.length === 0 ? (
                 <p className="chat-picker-empty">{macroList.length ? "맞는 매크로가 없어요." : "오늘 등록된 매크로가 없어요."}</p>
               ) : picks.map((entry, index) => (

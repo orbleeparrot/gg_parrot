@@ -407,3 +407,41 @@ test("a stale cached briefing stays visible while it refreshes, then the cache i
   assert.equal(cache.get("BTC").data.items[0].id, "a");
   h.queue.stop();
 });
+
+test("prepared feeds poll partial results at 3 seconds and completed results at 30 seconds", async () => {
+  let calls = 0;
+  const h = harness(async () => ++calls === 1
+    ? { ...pending, translation: { ...pending.translation, retry_after_seconds: 3 }, refresh_seconds: 3 }
+    : { ...ready, refresh_seconds: 30 });
+  h.queue.start();
+  await h.next();
+  assert.deepEqual(h.delays(), [3000]);
+  await h.next();
+  assert.deepEqual(h.delays(), [30000]);
+  await h.next();
+  assert.equal(calls, 3);
+  h.queue.stop();
+});
+
+test("unchanged periodic results preserve object identity and skip storage writes", async () => {
+  let writes = 0;
+  const cache = libs.createNewsCache({ storage: { getItem: () => null, setItem: () => { writes += 1; } } });
+  const h = harness(async () => ({ ...ready, refresh_seconds: 30 }), ["BTC"], { cache });
+  h.queue.start();
+  await h.next();
+  const state = h.states.get("BTC");
+  await h.next();
+  assert.equal(h.states.get("BTC"), state);
+  assert.equal(writes, 1);
+  h.queue.stop();
+});
+
+test("pending thumbnails use normal polling instead of a permanent rapid retry", async () => {
+  const h = harness(async () => ({ ...ready, image_status: "pending", refresh_seconds: 30 }));
+  h.queue.start();
+  await h.next();
+  assert.deepEqual(h.delays(), [30000]);
+  await h.next();
+  assert.deepEqual(h.delays(), [30000]);
+  h.queue.stop();
+});

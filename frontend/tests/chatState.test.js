@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { chatScope, countUnseen, isOwnMessage, readSeenId, sameAuthor, seenStorageKey, writeSeenId } from "../src/lib/chatBadge.js";
-import { mergeMessages } from "../src/lib/chatFeed.js";
+import { chatWindow, mergeMessages } from "../src/lib/chatFeed.js";
 import { chatUnseenCount, getChatFeed, markChatSeen, observeChat, receiveChat, receiveChatPost, visibleChatReadId } from "../src/lib/chatStore.js";
 
 const values = new Map();
@@ -196,4 +196,90 @@ test("a POST ahead of polling cannot read intervening messages that are absent",
   receiveChat(scope, response([msg(1), msg(2), msg(3, 1)], { seen_id: 1, unseen_count: 1 }));
   assert.equal(chatUnseenCount(getChatFeed(scope), 1), 1);
   assert.equal(visibleChatReadId(getChatFeed(scope)), 3);
+});
+
+test("closed metadata initializes NEW correctly without claiming messages were loaded", () => {
+  const scope = "test-closed-metadata";
+  receiveChat(scope, response([], { mode: "metadata", latest_id: 10, seen_id: null, unseen_count: 0 }));
+  assert.equal(getChatFeed(scope).loaded, false);
+  assert.equal(getChatFeed(scope).metadataLoaded, true);
+  assert.equal(getChatFeed(scope).seenId, 10);
+  assert.equal(visibleChatReadId(getChatFeed(scope)), 0);
+  receiveChat(scope, response([], { mode: "metadata", latest_id: 11, seen_id: 10, unseen_count: 1 }));
+  assert.equal(chatUnseenCount(getChatFeed(scope)), 1);
+  assert.equal(getChatFeed(scope).items.length, 0);
+  receiveChat(scope, response([msg(10), msg(11)], { seen_id: 10, unseen_count: 1 }));
+  assert.equal(getChatFeed(scope).loaded, true);
+  assert.equal(visibleChatReadId(getChatFeed(scope)), 11);
+});
+
+test("unchanged deltas and reconciliation preserve store and message references", () => {
+  const scope = "test-idle-delta";
+  receiveChat(scope, response([msg(1)], { seen_id: 1, unseen_count: 0, snapshot_ms: 1 }));
+  const before = getChatFeed(scope);
+  let notifications = 0;
+  const cleanup = observeChat(scope, () => { notifications += 1; });
+  receiveChat(scope, response([], { mode: "delta", latest_id: 1, after_id: 1,
+    fetched_through_id: 1, seen_id: 1, unseen_count: 0, snapshot_ms: 2 }));
+  assert.equal(getChatFeed(scope), before);
+  receiveChat(scope, response([{ ...msg(1) }], { mode: "reconcile", missing_ids: [],
+    seen_id: 1, unseen_count: 0, snapshot_ms: 3 }));
+  assert.equal(getChatFeed(scope), before);
+  assert.equal(notifications, 0);
+  cleanup();
+});
+
+test("bounded deltas advance the read ceiling only through the received batch", () => {
+  const scope = "test-batched-delta";
+  receiveChat(scope, response([msg(1)], { seen_id: 1, unseen_count: 0 }));
+  receiveChatPost(scope, msg(451, 1));
+  const incoming = Array.from({ length: 200 }, (_, index) => msg(index + 2));
+  receiveChat(scope, response(incoming, { mode: "delta", after_id: 1, latest_id: 451,
+    fetched_through_id: 201, has_more_new: true, seen_id: 1, unseen_count: 449 }));
+  assert.equal(visibleChatReadId(getChatFeed(scope)), 201);
+  assert.equal(getChatFeed(scope).latestId, 451);
+  assert.equal(getChatFeed(scope).countNeedsRefresh, false);
+});
+
+test("reconciliation removes only requested missing IDs and refreshes historical cards", () => {
+  const scope = "test-reconcile-history";
+  receiveChat(scope, response([msg(1), msg(2), msg(3)], { snapshot_ms: 1 }));
+  const unchanged = getChatFeed(scope).items[1];
+  receiveChat(scope, response([{ ...msg(1), avatar_url: "/new.webp", macros: [{ locked: false }] }], {
+    mode: "reconcile", missing_ids: [3], latest_id: 2, unseen_count: 2, snapshot_ms: 2,
+  }));
+  const feed = getChatFeed(scope);
+  assert.deepEqual(feed.items.map((item) => item.id), [1, 2]);
+  assert.equal(feed.items[0].avatar_url, "/new.webp");
+  assert.equal(feed.items[0].macros[0].locked, false);
+  assert.equal(feed.items[1], unchanged);
+  assert.equal(feed.latestId, 2);
+  assert.equal(chatUnseenCount(feed), 2);
+});
+
+test("metadata day rollover clears stale history and rejects late yesterday responses", () => {
+  const scope = "test-metadata-midnight";
+  receiveChat(scope, response([msg(1)]));
+  receiveChat(scope, response([], { mode: "metadata", day_start_ms: start + 86400000,
+    latest_id: 0, unseen_count: 0 }));
+  const current = getChatFeed(scope);
+  assert.equal(current.loaded, false);
+  assert.equal(current.items.length, 0);
+  receiveChat(scope, response([msg(1)]), { older: true });
+  assert.equal(getChatFeed(scope), current);
+});
+
+test("the rendered history window stays bounded and stable across live arrivals", () => {
+  const items = Array.from({ length: 1000 }, (_, index) => msg(index + 1));
+  const latest = chatWindow(items);
+  assert.equal(latest.items.length, 200);
+  assert.equal(latest.items[0].id, 801);
+  assert.equal(latest.hasOlder, true);
+  const previous = chatWindow(items, items[latest.start - 1].id);
+  assert.equal(previous.items[0].id, 601);
+  assert.equal(previous.items.at(-1).id, 800);
+  assert.equal(previous.hasNewer, true);
+  const arrived = chatWindow([...items, msg(1001)], 800);
+  assert.deepEqual(arrived.items, previous.items);
+  assert.equal(chatWindow(items, 200).hasOlder, false);
 });

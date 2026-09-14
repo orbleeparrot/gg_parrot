@@ -338,7 +338,7 @@ def _schedule(jobs):
             _queued.difference_update(j["summary_key"] for j in selected)
 
 
-def enrich_items(items, *, wait=False):
+def enrich_items(items, *, wait=False, schedule=True):
     """Preserve internal fields; public serializers must strip source bodies."""
     result = [dict(item) for item in items]
     jobs, item_keys = {}, {}
@@ -383,7 +383,7 @@ def enrich_items(items, *, wait=False):
         except Exception as exc:
             logger.warning("Community summary cache unavailable: reason=%s", type(exc).__name__)
         missing = [job for job in missing if not _remembered(job["summary_key"])]
-        if missing:
+        if missing and (wait or schedule):
             (_execute if wait else _schedule)(missing)
     for index, key in item_keys.items():
         summary = _remembered(key)

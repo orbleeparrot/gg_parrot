@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import re
+from contextlib import nullcontext
 from datetime import datetime, timezone
 
 from sqlalchemy import func, or_, text as sql_text
-from sqlmodel import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlmodel import Session, select
 
 from . import avatars
 from .db import ChatMessage, ChatReadState, LeaderboardEntry, User, UserAvatar, get_session
@@ -44,8 +47,9 @@ def _lock_member(db, user_id: int) -> User:
     """
     if db.get_bind().dialect.name == "sqlite":
         db.exec(sql_text("BEGIN IMMEDIATE"))
-    account = db.exec(select(User).where(User.id == user_id).with_for_update()).first()
-    if account is None:
+    account = db.exec(select(User).where(User.id == user_id).with_for_update()
+                      .execution_options(populate_existing=True)).first()
+    if account is None or account.is_deleted:
         raise ValueError("계정을 찾을 수 없어요. 다시 로그인해 주세요.")
     return account
 
@@ -57,14 +61,15 @@ def _latest_id(db, *, start_ms: int | None = None) -> int:
     return int(db.exec(query).one() or 0)
 
 
-def add_message(account: User, text: str) -> dict:
+def add_message(account: User, text: str, *, db: Session | None = None) -> dict:
+    user_id = int(account.id)
     text = (text or "").strip()
     if not text:
         raise ValueError("빈 메시지는 보낼 수 없습니다.")
     text = text[:MAX_LEN]
     require_clean_text(text, "메시지")
-    with get_session() as db:
-        author = _lock_member(db, int(account.id))
+    with nullcontext(db) if db is not None else get_session() as db:
+        author = _lock_member(db, user_id)
         # Timestamp after obtaining the lock: waiting senders must not insert an
         # old timestamp that falls outside the persisted rate-limit window.
         now = _now_utc()
@@ -85,42 +90,49 @@ def add_message(account: User, text: str) -> dict:
             created_ms=now_ms,
         )
         db.add(row)
+        db.flush()
+        result = _view(row, avatars.avatar_url(user_id, db=db),
+                       _macro_cards(db, [row.text], user_id), _reply_cards(db, [row.text]))
         db.commit()
-        db.refresh(row)
-        return _view(row, avatars.avatar_url(row.user_id, db=db),
-                     _macro_cards(db, [row.text], int(account.id)), _reply_cards(db, [row.text]))
+        return result
 
 
-def _member_seen_id(user_id: int) -> int:
-    with get_session() as db:
+def _member_seen_id(user_id: int, *, db: Session | None = None) -> int:
+    with nullcontext(db) if db is not None else get_session() as db:
         state = db.get(ChatReadState, user_id)
         if state is not None:
             return state.last_seen_id
-    with get_session() as db:
         _lock_member(db, user_id)
         # Another request may have initialized this member while we waited.
         state = db.get(ChatReadState, user_id)
         if state is None:
-            state = ChatReadState(user_id=user_id, last_seen_id=_latest_id(db))
+            seen = _latest_id(db)
+            state = ChatReadState(user_id=user_id, last_seen_id=seen)
             db.add(state)
             db.commit()
-            db.refresh(state)
+            return seen
         return state.last_seen_id
 
 
-def mark_read(account: User, last_seen_id: int) -> dict:
-    with get_session() as db:
-        _lock_member(db, int(account.id))
+def mark_read(account: User, last_seen_id: int, *, db: Session | None = None) -> dict:
+    user_id = int(account.id)
+    with nullcontext(db) if db is not None else get_session() as db:
+        _lock_member(db, user_id)
         target = min(max(0, last_seen_id), _latest_id(db))
-        state = db.get(ChatReadState, account.id)
-        if state is None:
-            state = ChatReadState(user_id=int(account.id), last_seen_id=target)
-        else:
-            state.last_seen_id = max(state.last_seen_id, target)
-        db.add(state)
+        sqlite = db.get_bind().dialect.name == "sqlite"
+        insert = sqlite_insert if sqlite else pg_insert
+        statement = insert(ChatReadState).values(user_id=user_id, last_seen_id=target)
+        highest = func.max if sqlite else func.greatest
+        statement = statement.on_conflict_do_update(
+            index_elements=[ChatReadState.user_id],
+            set_={"last_seen_id": highest(ChatReadState.last_seen_id, statement.excluded.last_seen_id)},
+            where=ChatReadState.last_seen_id < statement.excluded.last_seen_id,
+        ).returning(ChatReadState.last_seen_id)
+        seen = db.execute(statement).scalar_one_or_none()
+        if seen is None:
+            seen = db.exec(select(ChatReadState.last_seen_id).where(ChatReadState.user_id == user_id)).one()
         db.commit()
-        db.refresh(state)
-        return {"seen_id": state.last_seen_id}
+        return {"seen_id": int(seen)}
 
 
 def list_messages(
@@ -128,49 +140,73 @@ def list_messages(
     *,
     before_id: int | None = None,
     seen_id: int | None = None,
+    after_id: int | None = None,
+    metadata_only: bool = False,
+    message_ids: list[int] | None = None,
+    db: Session | None = None,
 ) -> dict:
     start_ms = today_start_ms()
-    server_seen = _member_seen_id(int(account.id)) if account is not None else None
-    with get_session() as db:
+    snapshot_ms = int(_now_utc().timestamp() * 1000)
+    user_id = int(account.id) if account is not None else None
+    with nullcontext(db) if db is not None else get_session() as db:
+        server_seen = _member_seen_id(user_id, db=db) if user_id is not None else None
         # Keep metadata independent of the requested historical page.
         latest_id = _latest_id(db, start_ms=start_ms)
         effective_seen = server_seen
         if seen_id is not None:
-            supplied_seen = min(max(0, seen_id), _latest_id(db))
+            # A cursor below today's latest ID is already bounded. Only a cursor
+            # ahead of it (including yesterday's cursor on an empty day) needs
+            # the all-time watermark.
+            known_ceiling = max(latest_id, server_seen or 0)
+            supplied_seen = min(max(0, seen_id), known_ceiling if seen_id <= known_ceiling else _latest_id(db))
             effective_seen = max(server_seen or 0, supplied_seen)
-        query = select(ChatMessage, UserAvatar.version).outerjoin(
-            UserAvatar, UserAvatar.user_id == ChatMessage.user_id,
-        ).where(
-            ChatMessage.created_ms >= start_ms, ChatMessage.id <= latest_id,
-        )
-        if before_id is not None:
-            query = query.where(ChatMessage.id < before_id)
-        rows = db.exec(query.order_by(ChatMessage.id.desc()).limit(MAX_LIST + 1)).all()
-        has_more = len(rows) > MAX_LIST
-        page = list(reversed(rows[:MAX_LIST]))
+        page = []
+        has_more = False
+        has_more_new = False
+        if not metadata_only and (message_ids is not None or after_id is None or after_id < latest_id):
+            query = select(ChatMessage, UserAvatar.version).outerjoin(
+                UserAvatar, UserAvatar.user_id == ChatMessage.user_id,
+            ).where(ChatMessage.created_ms >= start_ms, ChatMessage.id <= latest_id)
+            if message_ids is not None:
+                query = query.where(ChatMessage.id.in_(message_ids[:MAX_LIST]))
+            elif after_id is not None:
+                query = query.where(ChatMessage.id > after_id)
+            elif before_id is not None:
+                query = query.where(ChatMessage.id < before_id)
+            ascending = after_id is not None or message_ids is not None
+            rows = db.exec(query.order_by(ChatMessage.id.asc() if ascending else ChatMessage.id.desc()).limit(MAX_LIST + 1)).all()
+            has_more_new = after_id is not None and len(rows) > MAX_LIST
+            has_more = after_id is None and message_ids is None and len(rows) > MAX_LIST
+            page = rows[:MAX_LIST] if ascending else list(reversed(rows[:MAX_LIST]))
         texts = [row.text for row, _version in page]
-        cards = _macro_cards(db, texts, int(account.id) if account is not None else None)
+        cards = _macro_cards(db, texts, user_id)
         replies = _reply_cards(db, texts)
         items = [_view(row, avatars.public_url(row.user_id, version), cards, replies)
                  for row, version in page]
         unseen_count = 0
-        if effective_seen is not None:
+        if effective_seen is not None and effective_seen < latest_id:
             unseen_query = select(func.count(ChatMessage.id)).where(
                 ChatMessage.created_ms >= start_ms,
                 ChatMessage.id > effective_seen,
                 ChatMessage.id <= latest_id,
             )
-            if account is not None:
+            if user_id is not None:
                 unseen_query = unseen_query.where(or_(
-                    ChatMessage.user_id.is_(None), ChatMessage.user_id != account.id,
+                    ChatMessage.user_id.is_(None), ChatMessage.user_id != user_id,
                 ))
             unseen_count = int(db.exec(unseen_query).one())
     return {
         "items": items,
         "has_more": has_more,
+        "has_more_new": has_more_new,
+        "mode": "metadata" if metadata_only else "reconcile" if message_ids is not None else "delta" if after_id is not None else "snapshot",
+        "after_id": after_id,
+        "fetched_through_id": items[-1]["id"] if has_more_new else latest_id,
+        "missing_ids": sorted(set(message_ids or []) - {item["id"] for item in items}),
         "oldest_id": items[0]["id"] if items else None,
         "latest_id": latest_id,
         "day_start_ms": start_ms,
+        "snapshot_ms": snapshot_ms,
         "seen_id": effective_seen,
         "server_seen_id": server_seen,
         "unseen_count": unseen_count,
@@ -180,15 +216,23 @@ def list_messages(
 
 def _macro_cards(db, texts: list[str], viewer_user_id: int | None) -> dict[int, dict]:
     """본문에 실린 [macro:id] 들을 카드 자료로. 잠긴 매크로는 전략을 빼고 잠김만 알린다."""
-    ids: list[int] = []
+    ids: set[int] = set()
     for text in texts:
+        message_ids: list[int] = []
         for found in MACRO_TOKEN.findall(text or ""):
             entry_id = int(found)
-            if entry_id not in ids:
-                ids.append(entry_id)
+            if entry_id not in message_ids:
+                message_ids.append(entry_id)
+            if len(message_ids) == _MAX_MACRO_CARDS:
+                break
+        ids.update(message_ids)
     if not ids:
         return {}
-    rows = db.exec(select(LeaderboardEntry).where(LeaderboardEntry.id.in_(ids))).all()
+    rows = db.exec(select(
+        LeaderboardEntry.id, LeaderboardEntry.owner_user_id, LeaderboardEntry.symbol,
+        LeaderboardEntry.username, LeaderboardEntry.nickname, LeaderboardEntry.is_ai,
+        LeaderboardEntry.human_summary,
+    ).where(LeaderboardEntry.id.in_(ids))).all()
     unlocked = _unlocked_ids_for(db, viewer_user_id, [row.id for row in rows])
     cards = {}
     for row in rows:

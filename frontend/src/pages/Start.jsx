@@ -327,7 +327,7 @@ export default function Start({ onNestedDialogChange }) {
       return { ...current, requestId, loading: showLoading ? true : current.loading };
     });
 
-    api.leaderboard(getUserId()).then((data) => {
+    api.leaderboardAll(getUserId()).then((data) => {
       if (!mountedRef.current) return;
       const fetchedItems = Array.isArray(data.items) ? data.items : [];
       const synced = fetchedItems.some((item) => item.id === entry.id);

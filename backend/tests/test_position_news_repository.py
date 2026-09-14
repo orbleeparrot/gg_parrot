@@ -295,7 +295,7 @@ def test_collector_publishes_before_ai_and_persists_one_translation(db_engine, m
         assert repository.get_latest_snapshot("ARB")["news_payload"]["items"]
         return {"items": [{"sentiment": "positive", "summary": "아비트럼이 상승했습니다.", "confidence": "medium"}]}
     monkeypatch.setattr(classifier, "_generate_ai_analysis", analyze)
-    monkeypatch.setattr(news, "_request_korean_title_translations", lambda titles:
+    monkeypatch.setattr(news, "_request_korean_title_translations", lambda titles, **_kwargs:
                         translations.append(titles) or {"Arbitrum token soars": "아비트럼 토큰 급등"})
     payload = _news("ARB", "Arbitrum token soars")
     first = collector.collect_payload("ARB", payload)
@@ -321,7 +321,7 @@ def test_staged_collection_exposes_rss_before_browser_and_spends_once(db_engine,
         published = repository.get_latest_snapshot(symbol)
         assert published["news_payload"]["items"] == rss["items"]
         assert published["analysis"]["ai"] is False
-        assert paid == [] and translations == []
+        assert paid == []
         # An unchanged merged batch must still upgrade the initial rule result.
         return {**rss, "browser_enrichment": {"status": "ready"}}
 
@@ -329,7 +329,7 @@ def test_staged_collection_exposes_rss_before_browser_and_spends_once(db_engine,
         paid.append(allow_ai)
         return _analysis()
 
-    monkeypatch.setattr(news, "_request_korean_title_translations", lambda titles:
+    monkeypatch.setattr(news, "_request_korean_title_translations", lambda titles, **_kwargs:
                         translations.append(titles) or {"Arbitrum token soars": "아비트럼 토큰 급등"})
     result = collector.collect_ticker("ARB", fetcher=lambda _: payload,
                                       enricher=browser, analyzer=analyze)
@@ -373,8 +373,9 @@ def test_web_bootstrap_yields_lease_to_worker_and_recovers_stale_news(db_engine,
     monkeypatch.setattr(repository, "get_session", lambda: Session(db_engine))
     monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
     monkeypatch.setenv("POSITION_NEWS_COLLECTION_SECONDS", "300")
+    translations = []
     monkeypatch.setattr(collector, "_localize_collected_payload",
-                        lambda *_: pytest.fail("bootstrap must not call translation"))
+                        lambda payload, *args, **kwargs: translations.append(payload) or payload)
     with Session(db_engine) as db:
         db.add(RunSession(user_id=1, symbol="ARBUSDT", position_side="long", status="running",
                           started_at="1970-01-01T00:00:01Z", last_heartbeat_at="1970-01-01T00:00:01Z"))
@@ -384,6 +385,7 @@ def test_web_bootstrap_yields_lease_to_worker_and_recovers_stale_news(db_engine,
         bootstrap_only=True, now_ms=1_000, retention_days=0)
     assert result["items"][0]["collection_stage"] == "rss_bootstrap"
     assert result["ai_budget_used"] == 0
+    assert translations  # Bootstrap prepares titles without invoking direction analysis.
     assert repository.discover_tracked_symbols(bootstrap_only=True, due_only=True, now_ms=1_001) == []
     token = repository.claim_collection("ARB", now_ms=1_001)
     assert token  # Prefect need not wait another collection interval.

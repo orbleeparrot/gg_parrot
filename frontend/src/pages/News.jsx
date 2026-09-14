@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api.js";
 import useNewsBriefings from "../hooks/useNewsBriefings.js";
@@ -16,6 +16,13 @@ import InfoTooltip from "../components/InfoTooltip.jsx";
 const COIN_NEWS_CONCURRENCY = 2;
 const HOT_COINS_CACHE_KEY = "hot-coins";
 const RACER_NEWS_ROTATE_MS = 5_000;
+const MOBILE_NEWS_QUERY = "(max-width: 767px), (max-width: 1099px) and (pointer: coarse)";
+const mobileNewsSnapshot = () => typeof window !== "undefined" && window.matchMedia(MOBILE_NEWS_QUERY).matches;
+const subscribeMobileNews = (notify) => {
+  const query = window.matchMedia(MOBILE_NEWS_QUERY);
+  query.addEventListener("change", notify);
+  return () => query.removeEventListener("change", notify);
+};
 
 function coinOf(symbol) {
   return (symbol || "").replace(/USDT$|BUSD$|USDC$/, "");
@@ -269,8 +276,7 @@ function RacerTreemap({ coins, newsBySymbol, onRetry, tick }) {
 
 // Narrow screens use readable market rows; choosing a coin opens its full
 // headlines below the list without changing the desktop treemap's layout.
-function RacerMobileList({ coins, newsBySymbol, onRetry }) {
-  const [selectedSymbol, setSelectedSymbol] = useState(coins[0]?.symbol);
+function RacerMobileList({ coins, newsBySymbol, onRetry, selectedSymbol, onSelect }) {
   const reader = useRef(null);
   const selected = coins.find((coin) => coin.symbol === selectedSymbol) || coins[0];
   if (!selected) return null;
@@ -281,7 +287,7 @@ function RacerMobileList({ coins, newsBySymbol, onRetry }) {
   const pending = hasPendingTranslation(newsState?.data);
 
   function choose(symbol) {
-    setSelectedSymbol(symbol);
+    onSelect(symbol);
     window.requestAnimationFrame(() => reader.current?.scrollIntoView({
       block: "start",
       behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth",
@@ -330,7 +336,6 @@ function MobileArticleList({ base, items }) {
   useLayoutEffect(() => {
     const list = listRef.current;
     if (!list) return undefined;
-    list.scrollTop = 0;
 
     const measure = () => {
       const visibleRows = [...list.children].slice(0, 3);
@@ -370,7 +375,10 @@ function MobileArticleList({ base, items }) {
 }
 
 function RacerBriefing({ coins, loading, error }) {
-  const { newsBySymbol, retry } = useCoinNewsBriefings(coins);
+  const mobile = useSyncExternalStore(subscribeMobileNews, mobileNewsSnapshot, () => false);
+  const [selectedSymbol, setSelectedSymbol] = useState(null);
+  const selected = coins.find((coin) => coin.symbol === selectedSymbol) || coins[0];
+  const { newsBySymbol, retry } = useCoinNewsBriefings(mobile ? (selected ? [selected] : []) : coins);
   const [tick, setTick] = useState(0);
   const termTexts = coins.flatMap((coin) => (
     newsBySymbol[coin.symbol]?.data?.items || []
@@ -378,7 +386,7 @@ function RacerBriefing({ coins, loading, error }) {
 
   // 한 박자 — 모든 타일의 헤드라인이 같은 순간에 다음 기사로 넘어간다. 탭이 숨겨지면 멈춘다.
   useEffect(() => {
-    if (!coins.length) return undefined;
+    if (!coins.length || mobile) return undefined;
     let timer = 0;
     const start = () => {
       window.clearInterval(timer);
@@ -394,7 +402,7 @@ function RacerBriefing({ coins, loading, error }) {
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [coins.length]);
+  }, [coins.length, mobile]);
 
   return (
     <section className="news-briefing-section is-racers" aria-labelledby="racer-briefing-title">
@@ -417,7 +425,8 @@ function RacerBriefing({ coins, loading, error }) {
       {coins.length > 0 ? (
         <>
           <RacerTreemap coins={coins} newsBySymbol={newsBySymbol} onRetry={retry} tick={tick} />
-          <RacerMobileList coins={coins} newsBySymbol={newsBySymbol} onRetry={retry} />
+          <RacerMobileList coins={coins} newsBySymbol={newsBySymbol} onRetry={retry}
+            selectedSymbol={selected?.symbol} onSelect={setSelectedSymbol} />
           <TermChips texts={termTexts} />
         </>
       ) : null}
@@ -431,22 +440,8 @@ export default function News() {
     ["market"], (_key, signal) => api.newsMarket({ signal }), 1, { freshMs: 10 * 60 * 1000 },
   );
   const marketState = marketStates.market;
-  // 기사 사진(og:image)은 서버가 배경에서 채운다 — 아직이면 몇 번 더 조용히 받아 온다.
-  const [marketRefresh, setMarketRefresh] = useState({ data: null, attempts: 0 });
-  const market = marketRefresh.data || marketState?.data || null;
-  const imagesPending = market?.image_status === "pending" && marketRefresh.attempts < 3;
-  useEffect(() => {
-    if (!imagesPending) return undefined;
-    let alive = true;
-    const timer = window.setTimeout(() => {
-      api.newsMarket().then((next) => {
-        if (alive) setMarketRefresh((current) => ({ data: next, attempts: current.attempts + 1 }));
-      }).catch(() => {
-        if (alive) setMarketRefresh((current) => ({ ...current, attempts: current.attempts + 1 }));
-      });
-    }, 7_000);
-    return () => { alive = false; window.clearTimeout(timer); };
-  }, [imagesPending, marketRefresh.attempts]);
+  // Headlines, overview and image updates share one ordered response/cache.
+  const market = marketState?.data || null;
   const marketLoading = !marketState || ["queued", "loading"].includes(marketState.status);
   const marketError = marketState?.error || "";
   // 경주마 목록도 캐시로 먼저 그린다 — 돌아온 순간 트리맵 자리가 잡히고, 최신 순위는 조용히 갱신된다.

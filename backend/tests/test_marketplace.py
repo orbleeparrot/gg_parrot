@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import secrets
 
+from tests.leaderboard_helpers import publish_ready_board
 import pytest
 from fastapi.testclient import TestClient
 
@@ -67,6 +68,7 @@ def test_owned_entry_is_locked_for_others_and_open_for_owner():
 
     # A different account sees it LOCKED: no macro/summary, price shown.
     buyer_tok, _ = _signup()
+    publish_ready_board()
     listed = client.get("/api/leaderboard", headers=_auth(buyer_tok)).json()["items"]
     view = _find(listed, eid)
     assert view["for_sale"] is True
@@ -77,6 +79,7 @@ def test_owned_entry_is_locked_for_others_and_open_for_owner():
     assert view["symbol"] == "BTCUSDT"  # id·종목·등락률은 보임
 
     # The owner sees it unlocked.
+    publish_ready_board()
     owner_view = _find(client.get("/api/leaderboard", headers=_auth(seller_tok)).json()["items"], eid)
     assert owner_view["locked"] is False
     assert owner_view["macro"] is not None
@@ -158,6 +161,7 @@ def test_owner_can_delete_own_entry_others_cannot():
     # owner can
     assert client.delete(f"/api/leaderboard/{eid}", headers=_auth(seller_tok)).status_code == 200
     # and it's gone from the board
+    publish_ready_board()
     items = client.get("/api/leaderboard").json()["items"]
     assert all(e["id"] != eid for e in items)
 
@@ -193,5 +197,6 @@ def test_crown_after_enough_sales_and_likes(monkeypatch):
         client.post(f"/api/leaderboard/{eid}/vote",
                     json={"user_id": f"v{buyer['id']}", "value": 1})
 
+    publish_ready_board()
     listed = client.get("/api/leaderboard").json()["items"]
     assert _find(listed, eid)["crown"] is True

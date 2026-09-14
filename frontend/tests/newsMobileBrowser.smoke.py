@@ -42,6 +42,7 @@ class Fixture:
         self.hold_eth = False
         self.held = []
         self.calls = {}
+        self.periodic = False
 
     def route(self, route):
         url = urlsplit(route.request.url)
@@ -62,6 +63,9 @@ class Fixture:
             symbol = path.rsplit("/", 1)[-1]
             data = {"items": [article(symbol)], "translation": {"status": "ready"}}
             if symbol == "BTCUSDT": data["items"] = [article(symbol, index) for index in range(5)]
+            if self.periodic:
+                data["refresh_seconds"] = 3
+                data["items"][-1]["title"] += f" 갱신 {self.calls[path]}"
             if symbol == "ETHUSDT" and self.hold_eth:
                 self.held.append((route, data))
                 return
@@ -82,6 +86,8 @@ def open_page(browser, origin, fixture, width, theme, errors):
     context = browser.new_context(viewport={"width": width, "height": 1000}, color_scheme=theme, reduced_motion="reduce")
     context.route("**/*", fixture.route)
     page = context.new_page()
+    if fixture.periodic:
+        page.clock.install()
     page.on("pageerror", lambda error: errors.append(str(error)))
     page.goto(origin + "/news", wait_until="domcontentloaded")
     expect(page.locator(".news-racer-mobile-row")).to_have_count(10)
@@ -116,6 +122,7 @@ def main():
                         metrics = page.locator(".news-racer-mobile-row").evaluate_all("""rows => rows.map(row => ({height:row.getBoundingClientRect().height, overflow:row.scrollWidth>row.clientWidth, font:parseFloat(getComputedStyle(row.querySelector('.news-racer-mobile-price')).fontSize)}))""")
                         assert all(row["height"] >= 48 and not row["overflow"] and row["font"] >= 13 for row in metrics), metrics
                         expect(page.locator("#news-racer-mobile-reader a").filter(has_text="BTC 현물 ETF").first).to_be_visible()
+                        assert [path for path in fixture.calls if path.startswith("/api/news/coin/")] == ["/api/news/coin/BTCUSDT"]
                         article_list = page.get_by_role("list", name="BTC 뉴스 목록")
                         expect(article_list.locator(":scope > li")).to_have_count(5)
                         list_metrics = article_list.evaluate("""list => {
@@ -175,6 +182,20 @@ def main():
                     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), (width, theme)
                     checks.append(f"layout-selection-{width}-{theme}")
                     context.close()
+
+            fixture = Fixture()
+            fixture.periodic = True
+            context, page = open_page(browser, origin, fixture, 375, "dark", errors)
+            article_list = page.get_by_role("list", name="BTC 뉴스 목록")
+            expect(article_list.locator(":scope > li")).to_have_count(5)
+            article_list.evaluate("el => { el.scrollTop = 80; }")
+            before = article_list.evaluate("el => el.scrollTop")
+            page.clock.run_for(3500)
+            expect(article_list).to_contain_text("갱신 2")
+            assert article_list.evaluate("el => el.scrollTop") == before
+            assert [path for path in fixture.calls if path.startswith("/api/news/coin/")] == ["/api/news/coin/BTCUSDT"]
+            checks.append("incremental-refresh-preserves-scroll-and-only-fetches-selected-coin")
+            context.close()
 
             fixture = Fixture()
             fixture.hold_eth = True

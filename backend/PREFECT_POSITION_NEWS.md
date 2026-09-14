@@ -28,7 +28,7 @@ Prefect 60초 스케줄 → 수집 시각이 된 활성 티커 → RSS 수집·�
 
 ## 웹과 워커 역할
 
-Render 웹에서는 `POSITION_NEWS_EMBEDDED_BOOTSTRAP_ONLY=true`가 기본입니다. Chromium 없이 새 티커의 RSS와 규칙 분석을 공개하고, 유료 분석·번역은 호출하지 않습니다. 정상 공개 직후 다음 수집 시각을 바로 열어 두므로 Prefect의 확장을 5분 동안 막지 않습니다. 워커 장애로 결과가 수집 간격의 두 배 이상 오래되면 웹이 RSS로 갱신합니다.
+Render 웹에서는 `POSITION_NEWS_EMBEDDED_BOOTSTRAP_ONLY=true`가 기본입니다. 배경 작업이 Chromium 없이 새 티커의 RSS와 규칙 분석을 공개하고 제목 번역을 준비합니다. 유료 방향 분석은 Prefect가 담당합니다. 원문은 먼저 기사별로 저장하며, 제목이 준비될 때마다 같은 기사 ID의 revision을 갱신합니다. HTTP 조회는 준비된 DB 데이터만 읽고 3초마다 변경 커서를 확인합니다. 미완료 번역·본문 요약은 별도 배경 작업에서 재시도합니다. 정상 공개 후 다음 수집 시각을 바로 열어 두므로 Prefect의 확장을 5분 동안 막지 않습니다. 워커 장애로 결과가 수집 간격의 두 배 이상 오래되면 웹이 RSS로 갱신합니다.
 
 로컬 실행은 bootstrap 전용 모드가 기본으로 꺼져 있으며 웹 수집기가 전체 단계를 처리합니다. 외부 워커 없이 웹만 운영할 때는 `POSITION_NEWS_EMBEDDED_BOOTSTRAP_ONLY=false`로 설정하고 Chromium을 설치하세요. 요청 처리 스레드는 수집 완료를 기다리지 않습니다.
 

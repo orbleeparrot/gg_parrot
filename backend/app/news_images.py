@@ -45,6 +45,7 @@ _cache: dict[str, dict] = {}
 _lock = threading.Lock()
 _worker: threading.Thread | None = None
 _pending: list[str] = []
+_callbacks: dict[str, list[tuple[dict, object]]] = {}
 # Google 이 자동화로 보고 429/sorry 페이지를 주면 한동안 쉰다 — 더 두드리면 차단만 길어진다.
 _GOOGLE_COOLDOWN_SECONDS = 30 * 60
 _POLITE_DELAY_SECONDS = 1.5
@@ -183,6 +184,7 @@ def attach(items: list[dict]) -> str:
                 continue
             entry = _cache.get(str(item.get("url") or ""))
             if _fresh(entry):
+                item["image_resolved"] = True
                 if entry.get("image"):
                     item["image"] = entry["image"]
                 if entry.get("article_url"):
@@ -192,20 +194,29 @@ def attach(items: list[dict]) -> str:
     return "pending" if pending else "ready"
 
 
-def ensure_resolving(items: list[dict]) -> None:
+def ensure_resolving(items: list[dict], *, on_ready=None) -> None:
     """Queue unknown URLs and start the single worker if it is not running."""
     global _worker
     if not enabled():
         return
+    ready = []
     with _lock:
         for item in items[:_MAX_ITEMS_PER_PASS]:
             url = str(item.get("url") or "") if isinstance(item, dict) else ""
+            if url and on_ready is not None:
+                if _fresh(_cache.get(url)):
+                    ready.append(({**item, **_cache[url], "image_resolved": True}, on_ready))
+                else:
+                    # Bounded by one market batch per refresh and URL cache.
+                    _callbacks.setdefault(url, []).append((dict(item), on_ready))
             if url and not _fresh(_cache.get(url)) and url not in _pending:
                 _pending.append(url)
-        if not _pending or (_worker and _worker.is_alive()):
-            return
-        _worker = threading.Thread(target=_drain, name="news-images", daemon=True)
-        _worker.start()
+        if _pending and not (_worker and _worker.is_alive()):
+            _worker = threading.Thread(target=_drain, name="news-images", daemon=True)
+            _worker.start()
+    for item, callback in ready:
+        item.pop("expires_at", None)
+        callback(item)
 
 
 def _store(url: str, entry: dict) -> None:
@@ -230,11 +241,19 @@ def _drain() -> None:
             logger.info("news image lookup paused: google %s", exc)
             with _lock:
                 _pending.clear()
+                _callbacks.clear()
             return
         except Exception as exc:  # 이미지는 있으면 좋은 것 — 실패는 기록만 하고 넘어간다
             logger.info("news image unresolved: %s", type(exc).__name__)
             entry = {"article_url": "", "image": ""}
         _store(url, entry)
+        with _lock:
+            callbacks = _callbacks.pop(url, [])
+        for item, callback in callbacks:
+            try:
+                callback({**item, **entry, "image_resolved": True})
+            except Exception as exc:
+                logger.warning("Prepared news image update deferred: %s", type(exc).__name__)
         time.sleep(_POLITE_DELAY_SECONDS)
 
 
@@ -257,5 +276,6 @@ def reset_for_tests() -> None:
     with _lock:
         _cache.clear()
         _pending.clear()
+        _callbacks.clear()
         _worker = None
         _google_retry_at = 0.0

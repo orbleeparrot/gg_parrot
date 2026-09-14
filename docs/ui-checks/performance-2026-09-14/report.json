@@ -1,0 +1,19 @@
+{
+  "passed": true,
+  "checks": [
+    "layout-selection-320-light",
+    "layout-selection-320-dark",
+    "layout-selection-375-light",
+    "layout-selection-375-dark",
+    "layout-selection-767-light",
+    "layout-selection-767-dark",
+    "layout-selection-768-light",
+    "layout-selection-768-dark",
+    "layout-selection-1440-light",
+    "layout-selection-1440-dark",
+    "incremental-refresh-preserves-scroll-and-only-fetches-selected-coin",
+    "selected-news-loading-error-retry-empty-translation"
+  ],
+  "page_errors": [],
+  "build": "/tmp/ggp-performance-build"
+}

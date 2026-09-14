@@ -472,7 +472,6 @@ export function StudioOutcomes({ macro, result, perSymbol = [], valErr, strategy
           <button type="button" onClick={onShare} disabled={!!valErr || shareBusy} className="sd-act-row">
             <ActIcon name="link" /><span className="sd-act-t"><b>{shareBusy ? "저장 중…" : "공유 링크 보기"}</b><small>링크와 인증 카드 이미지를 받아요</small></span><i className="sd-act-chev" aria-hidden="true" />
           </button>
-          {!canRegister && <p className="sd-note text-amber-700">조건이 바뀌었어요 — 다시 테스트한 뒤 등록할 수 있어요.</p>}
           {error && <p className="sd-note is-error" role="alert">오류: {error}</p>}
         </div>
       </div>

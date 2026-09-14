@@ -7,6 +7,10 @@
 .sd-card-spec { min-width: 0; padding: 22px 22px 18px; display: flex; flex-direction: column; gap: 16px; }
 .sd-card-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .sd-card-coin { flex: none; border-radius: 50%; }
+/* 여러 종목 — 로고를 겹쳐 쌓는다(최대 5). 테두리 대신 outline 이라 로고 크기는 그대로. */
+.sd-card-coins { flex: none; display: flex; }
+.sd-card-coins .sd-card-coin { margin-left: -12px; outline: 2px solid rgb(var(--c-surface)); }
+.sd-card-coins .sd-card-coin:first-child { margin-left: 0; }
 .sd-card-id { min-width: 0; }
 .sd-card-ticker { line-height: 1; white-space: nowrap; }
 .sd-card-ticker strong { color: rgb(var(--c-slate-900)); font-size: 24px; font-weight: 800; letter-spacing: -.02em; }
@@ -24,6 +28,7 @@
 .sd-card-strategy .num { color: rgb(var(--c-amber-700)); font-size: 1.1em; font-weight: 800; letter-spacing: -.02em; }
 .sd-card-facts { margin: auto 0 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 18px; padding-top: 14px; border-top: 1px solid rgb(var(--c-slate-200)); }
 .sd-card-facts > div { min-width: 0; }
+.sd-card-facts > .is-wide { grid-column: 1 / -1; }
 .sd-card-facts dt { color: rgb(var(--c-slate-500)); font-size: 11px; font-weight: 600; }
 .sd-card-facts dd { margin: 2px 0 0; color: rgb(var(--c-slate-900)); font-size: 13px; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
 .sd-card-proof { position: relative; min-width: 0; padding: 22px 20px 16px; border-left: 1px dashed rgb(var(--c-slate-300)); display: flex; flex-direction: column; }
@@ -37,12 +42,19 @@
 .sd-card-stats { margin: 12px 0 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding-top: 12px; border-top: 1px dashed rgb(var(--c-slate-300)); }
 .sd-card-stats dt { color: rgb(var(--c-slate-500)); font-size: 11px; font-weight: 600; }
 .sd-card-stats dd { margin: 1px 0 0; color: rgb(var(--c-slate-900)); font-size: 15px; font-weight: 800; white-space: nowrap; }
+/* 종목별 결과 — 합산 아래 한 줄씩: 로고 · 티커 · 수익률(등락색) · MDD. */
+.sd-card-per { margin: 10px 0 0; padding: 10px 0 0; list-style: none; border-top: 1px dashed rgb(var(--c-slate-300)); display: grid; gap: 5px; }
+.sd-card-per li { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; }
+.sd-card-per-sym { flex: 1 1 auto; min-width: 0; color: rgb(var(--c-slate-700)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sd-card-per-ret { flex: none; }
+.sd-card-per-mdd { flex: none; color: rgb(var(--c-slate-500)); font-weight: 600; }
 .sd-card-src { margin-top: 8px; color: rgb(var(--c-slate-500)); font-size: 11px; font-weight: 500; }
 /* 카드가 좁으면(1300~1540px 창) 결과 면을 카드 아래 한 줄 띠로 — 수익률 · 자산곡선 · MDD/승률/매매. 카드가 길어지지 않아 동작 행도 그대로다. */
 @container (max-width: 620px) {
   .sd-card-in { grid-template-columns: minmax(0, 1fr); }
   .sd-card-strategy { --sd-strategy-max: 17px; }
-  .sd-card-proof { padding: 12px 18px; border-left: 0; border-top: 1px dashed rgb(var(--c-slate-300)); display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "k spark stats" "ret spark stats"; column-gap: 16px; align-items: center; }
+  .sd-card-proof { padding: 12px 18px; border-left: 0; border-top: 1px dashed rgb(var(--c-slate-300)); display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "k spark stats" "ret spark stats" "per per per"; column-gap: 16px; align-items: center; }
+  .sd-card-per { grid-area: per; margin-top: 8px; padding-top: 8px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 4px 16px; }
   .sd-card-eyebrow, .sd-card-src { display: none; }
   .sd-card-k { grid-area: k; align-self: end; padding-right: 0; }
   .sd-card-ret { grid-area: ret; align-self: start; }

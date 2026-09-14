@@ -79,7 +79,7 @@ function ShareDialog({ share, stale, busy, card, onClose, onRenew }) {
         logging: false,
         // html2canvas 는 overflow: hidden 인 한 줄 글자를 글자 상자 높이로 잘라 위아래가 깎인다. 복제본에서만 풀어 준다(어차피 한 줄에 맞춰져 있다).
         onclone: (doc) => {
-          doc.querySelectorAll(".sd-card-rule, .sd-card-k, .sd-card-strategy, .sd-card-ticker, .sd-card-facts dd").forEach((el) => { el.style.overflow = "visible"; el.style.textOverflow = "clip"; });
+          doc.querySelectorAll(".sd-card-rule, .sd-card-k, .sd-card-strategy, .sd-card-ticker, .sd-card-facts dd, .sd-card-per-sym").forEach((el) => { el.style.overflow = "visible"; el.style.textOverflow = "clip"; });
           // 카드의 노란 틴트 그라데이션은 반투명 색에서 시작하는데, html2canvas 는 반투명 → 불투명 사이를 탁하게 섞어 대각선 띠가 생긴다.
           // 복제본에는 같은 색을 미리 섞은 불투명 색으로 다시 칠한다.
           const root = getComputedStyle(document.documentElement);
@@ -659,6 +659,7 @@ export default function Studio() {
   const cardProps = {
     macro: testedMacro || currentMacro,
     result,
+    perSymbol,
     strategyEntry: { symbol: chartSymbols[0] || form.symbol || "—", human_summary: summary, macro: testedMacro || currentMacro, locked: false },
     periodLabel,
     dataSource,

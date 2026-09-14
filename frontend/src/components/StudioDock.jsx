@@ -445,13 +445,13 @@ function ActIcon({ name }) {
   );
 }
 
-export function StudioOutcomes({ macro, result, valErr, strategyEntry, periodLabel, dataSource = "", symbols = [], canRegister, onRegister, onShare, shareBusy = false }) {
+export function StudioOutcomes({ macro, result, perSymbol = [], valErr, strategyEntry, periodLabel, dataSource = "", symbols = [], canRegister, onRegister, onShare, shareBusy = false }) {
   const { quickRun, downloadMacro, launching, error } = useMacroActions(macro);
   const futures = macro.position_side === "short" || macro.leverage > 1;
   return (
     <div className="sd-outcomes">
       <div className="sd-done">
-        <MacroCard macro={macro} result={result} strategyEntry={strategyEntry} periodLabel={periodLabel} dataSource={dataSource} symbols={symbols} />
+        <MacroCard macro={macro} result={result} perSymbol={perSymbol} strategyEntry={strategyEntry} periodLabel={periodLabel} dataSource={dataSource} symbols={symbols} />
 
         <div className="sd-act">
           <button

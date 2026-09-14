@@ -7,6 +7,7 @@ import { quoteOf, baseOf } from "../lib/format.js";
 import { RULE_TYPES, CANDLE_INTERVALS } from "../lib/macro.js";
 import { leaderboardStrategy } from "../lib/leaderboardStrategy.js";
 import { strategyPhrases } from "../lib/strategyText.js";
+import { portfolioTitle, portfolioWeight } from "../lib/portfolio.js";
 import "./MacroCard.css";
 
 const pct = (v, digits = 2) => `${v >= 0 ? "+" : ""}${Number(v).toFixed(digits)}%`;
@@ -46,14 +47,15 @@ function macroFacts({ macro, symbol, symbols, result, futures }) {
   const quote = quoteOf(symbol);
   const interval = CANDLE_INTERVALS.find((i) => i.value === macro.candle_interval)?.label || "";
   const facts = [];
-  if (symbols.length > 1) facts.push({ k: `종목 ${symbols.length}개`, v: symbols.map(baseOf).join(" · "), num: true });
+  if (symbols.length > 1) facts.push({ k: `종목 ${symbols.length}개 · 자금 균등`, v: symbols.join(" · "), num: true, wide: true });
   facts.push({ k: "봉 간격", v: interval ? `${interval}봉` : "—" });
   if (macro.rule_type === "C") {
     facts.push({ k: "자금", v: p.amount_per_buy != null ? `회당 ${fmtN(p.amount_per_buy)} ${quote} · ${fmtN(p.interval_days || 0)}일마다` : "—" });
   } else {
     const capital = p.initial_capital ?? result?.initial_capital;
     const ratio = risk.invest_ratio != null ? `${fmtN(Number(risk.invest_ratio) * 100)}% 투입` : "";
-    facts.push({ k: "자금", v: [capital != null ? `${fmtN(capital, 2)} ${quote}` : "", ratio].filter(Boolean).join(" · ") || "—" });
+    const per = symbols.length > 1 ? `종목당 ${portfolioWeight(symbols.length).fraction}` : "";
+    facts.push({ k: "자금", v: [capital != null ? `${fmtN(capital, 2)} ${quote}` : "", ratio, per].filter(Boolean).join(" · ") || "—" });
   }
   const riskParts = [
     risk.stop_loss_pct != null ? `손절 -${fmtN(risk.stop_loss_pct)}%` : "",
@@ -124,7 +126,7 @@ function StrategyText({ text }) {
 
 
 // logoProxy — 공유 다이얼로그처럼 카드를 이미지로 뜰 때는 로고를 우리 서버(/api/coin-logo)로 받아 같은 출처가 되게 한다.
-export default function MacroCard({ macro, result, strategyEntry, periodLabel = "", dataSource = "", symbols = [], logoProxy = false, className = "" }) {
+export default function MacroCard({ macro, result, perSymbol = [], strategyEntry, periodLabel = "", dataSource = "", symbols = [], logoProxy = false, className = "" }) {
   const futures = macro.position_side === "short" || macro.leverage > 1;
   const leverage = macro.leverage || 1;
   const symbol = strategyEntry?.symbol || macro.symbol || "";
@@ -136,16 +138,28 @@ export default function MacroCard({ macro, result, strategyEntry, periodLabel = 
   const ruleLabel = RULE_TYPES[macro.rule_type]?.label || macro.rule_type || "";
   const facts = macroFacts({ macro, symbol, symbols, result, futures });
   const ret = Number(result?.final_return_pct ?? 0);
+  // 여러 종목이면 포트폴리오 카드 — 머리에 로고를 겹치고 티커를 나란히, 결과 면에는 합산 아래 종목별 줄.
+  const multi = symbols.length > 1;
+  const stack = multi ? symbols.slice(0, 5) : [symbol];
+  const perRows = multi && Array.isArray(perSymbol)
+    ? symbols.map((sym) => perSymbol.find((row) => row && row.symbol === sym)).filter(Boolean)
+    : [];
   return (
     <article className={"sd-card" + (className ? ` ${className}` : "")} aria-label="내 매크로 카드">
       <div className="sd-card-in">
       {/* 왼쪽 — 이 매크로가 무엇인지: 종목 · 포지션/시장 · 매매 방식 · 조건 문장 · 사양표 */}
       <div className="sd-card-spec">
         <div className="sd-card-head">
-          <CoinIcon symbol={symbol} size={44} className="sd-card-coin" alt="" proxy={logoProxy} />
+          {multi ? (
+            <span className="sd-card-coins" aria-hidden="true">
+              {stack.map((sym) => <CoinIcon key={sym} symbol={sym} size={40} className="sd-card-coin" alt="" proxy={logoProxy} />)}
+            </span>
+          ) : (
+            <CoinIcon symbol={symbol} size={44} className="sd-card-coin" alt="" proxy={logoProxy} />
+          )}
           <div className="sd-card-id">
-            <div className="sd-card-ticker num"><strong>{baseOf(symbol)}</strong><small>{quoteOf(symbol)}</small></div>
-            <div className="sd-card-rule" title="매매 방식">{ruleLabel}</div>
+            <div className="sd-card-ticker num"><strong>{multi ? portfolioTitle(symbols) : baseOf(symbol)}</strong><small>{quoteOf(symbol)}</small></div>
+            <div className="sd-card-rule" title="매매 방식">{ruleLabel}{multi ? ` · ${symbols.length}종목 자금 균등` : ""}</div>
           </div>
           <div className="sd-card-tags">
             <span className={"sd-card-side is-" + (side || "unknown")}>{sideLabel}</span>
@@ -155,14 +169,14 @@ export default function MacroCard({ macro, result, strategyEntry, periodLabel = 
         <StrategyText text={details?.description || ""} />
         <dl className="sd-card-facts">
           {facts.map((f) => (
-            <div key={f.k}><dt>{f.k}</dt><dd className={f.num ? "num" : undefined}>{f.v}</dd></div>
+            <div key={f.k} className={f.wide ? "is-wide" : undefined}><dt>{f.k}</dt><dd className={f.num ? "num" : undefined}>{f.v}</dd></div>
           ))}
         </dl>
       </div>
       {/* 오른쪽 — 이 매크로가 테스트에서 낸 것: 수익률 · 자산곡선 · MDD/승률/매매 */}
       <div className="sd-card-proof">
         <span className="sd-card-eyebrow num" aria-hidden="true">GGPARROT MACRO</span>
-        <span className="sd-card-k">백테스트 수익률{periodLabel ? ` · ${periodLabel}` : ""}</span>
+        <span className="sd-card-k">{multi ? "합산 수익률" : "백테스트 수익률"}{periodLabel ? ` · ${periodLabel}` : ""}</span>
         <strong className={"sd-card-ret num " + tone(ret)}>{pct(ret)}</strong>
         <CardSpark curve={result?.equity_curve} up={ret >= 0} />
         {result && (
@@ -171,6 +185,18 @@ export default function MacroCard({ macro, result, strategyEntry, periodLabel = 
             <div><dt>승률</dt><dd className="num">{Number(result.win_rate_pct).toFixed(1)}%</dd></div>
             <div><dt>매매</dt><dd><span className="num">{result.total_trades}</span>회</dd></div>
           </dl>
+        )}
+        {perRows.length > 0 && (
+          <ul className="sd-card-per" aria-label="종목별 결과">
+            {perRows.map((row) => (
+              <li key={row.symbol}>
+                <CoinIcon symbol={row.symbol} size={16} alt="" proxy={logoProxy} />
+                <span className="sd-card-per-sym num">{baseOf(row.symbol)}</span>
+                <span className={"sd-card-per-ret num " + tone(Number(row.final_return_pct))}>{pct(Number(row.final_return_pct))}</span>
+                <span className="sd-card-per-mdd num">MDD -{Number(row.mdd_pct).toFixed(1)}%</span>
+              </li>
+            ))}
+          </ul>
         )}
         {dataSource && <span className="sd-card-src">데이터 · {SOURCE_KO[dataSource] || dataSource}</span>}
       </div>

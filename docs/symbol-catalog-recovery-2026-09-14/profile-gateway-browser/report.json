@@ -1,0 +1,19 @@
+{
+  "passed": true,
+  "checks": [
+    "identity-before-activity-390",
+    "account-switch-and-activity-failure-390",
+    "same-account-manual-retry-after-json-503-390",
+    "html-502-automatic-recovery-retains-identity-390",
+    "exhausted-html-502-friendly-error-and-manual-recovery-390",
+    "identity-before-activity-1440",
+    "account-switch-and-activity-failure-1440",
+    "same-account-manual-retry-after-json-503-1440",
+    "html-502-automatic-recovery-retains-identity-1440",
+    "exhausted-html-502-friendly-error-and-manual-recovery-1440"
+  ],
+  "page_errors": [],
+  "frontend_build": "/tmp/ggp-api-recovery-build",
+  "build_index_sha256": "5c61a958f4a5b9e638e6d81436ddbf4fd3c2f17f5d73fd63c2fc55e517e5ade4",
+  "scope": "All APIs, avatars and WebSockets mocked; no production connections"
+}

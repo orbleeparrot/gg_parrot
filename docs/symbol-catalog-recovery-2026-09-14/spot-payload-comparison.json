@@ -1,0 +1,32 @@
+{
+  "checked_at": "2026-09-14T08:03:09.318153+00:00",
+  "source": "https://data-api.binance.vision/api/v3/exchangeInfo",
+  "filtered_parameters": {
+    "permissions": "SPOT",
+    "showPermissionSets": "false",
+    "symbolStatus": "TRADING"
+  },
+  "scope": "Two public metadata GETs from this verification host; not Render memory or startup measurements",
+  "requests": {
+    "original": {
+      "status": 200,
+      "response_bytes": 17589083,
+      "elapsed_seconds": 2.045,
+      "all_symbol_rows": 3698,
+      "tradable_usdt_spot_rows": 490,
+      "includes_dot": true
+    },
+    "filtered": {
+      "status": 200,
+      "response_bytes": 2477677,
+      "elapsed_seconds": 0.544,
+      "all_symbol_rows": 1365,
+      "tradable_usdt_spot_rows": 490,
+      "includes_dot": true
+    }
+  },
+  "same_tradable_usdt_spot_catalog": true,
+  "missing_after_filter": [],
+  "added_after_filter": [],
+  "response_reduction_pct": 85.91
+}

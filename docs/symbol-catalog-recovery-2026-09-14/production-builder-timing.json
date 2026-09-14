@@ -1,0 +1,490 @@
+{
+  "checked_at": "2026-09-14T08:06:10.796842+00:00",
+  "scope": "Production; anonymous fresh Chromium, no throttling, GET-only, no API mocks; one lab sample, not user RUM",
+  "responses": [
+    {
+      "url": "https://gg-parrot.vercel.app/api/fear-greed",
+      "status": 200,
+      "type": "application/json",
+      "request_id": "0e3b9af7c2ce4e8a9371f4df762605a9",
+      "server_timing": "app;dur=0.99"
+    },
+    {
+      "url": "https://gg-parrot.vercel.app/api/hangang-temp",
+      "status": 200,
+      "type": "application/json",
+      "request_id": "a02f05d1851e4741a70037beeee390c5",
+      "server_timing": "app;dur=1.09"
+    },
+    {
+      "url": "https://gg-parrot.vercel.app/api/backtest/limits",
+      "status": 200,
+      "type": "application/json",
+      "request_id": "b51afcf14d8c44a39f59e48b1a41b831",
+      "server_timing": "app;dur=0.44"
+    },
+    {
+      "url": "https://gg-parrot.vercel.app/api/kimchi-premium?symbol=BTC",
+      "status": 200,
+      "type": "application/json",
+      "request_id": "e45f498029b44e949e98f737642781e9",
+      "server_timing": "app;dur=0.76"
+    },
+    {
+      "url": "https://gg-parrot.vercel.app/api/candles?symbol=BTCUSDT&interval=1d&limit=300&market=spot",
+      "status": 200,
+      "type": "application/json",
+      "request_id": "3ce814173b104a399f290dbc9e7320a6",
+      "server_timing": "app;dur=3.32"
+    },
+    {
+      "url": "https://gg-parrot.vercel.app/api/usdkrw",
+      "status": 200,
+      "type": "application/json",
+      "request_id": "e3b5aefb29504ac58a14a57466f07560",
+      "server_timing": "app;dur=1.10"
+    },
+    {
+      "url": "https://gg-parrot.vercel.app/api/symbols",
+      "status": 503,
+      "type": "application/json",
+      "request_id": "6d558227506d4ee99dbb320812b28a6a",
+      "server_timing": "app;dur=51.78, upstream;dur=49.50;desc=\"1 call\""
+    },
+    {
+      "url": "https://gg-parrot.vercel.app/api/hot-coins?limit=10",
+      "status": 200,
+      "type": "application/json",
+      "request_id": "f902d2fb75b24471bf59659bb8c9776f",
+      "server_timing": "app;dur=1.04"
+    },
+    {
+      "url": "https://gg-parrot.vercel.app/api/candles?symbol=BTCUSDT&interval=1d&limit=300&market=spot",
+      "status": 200,
+      "type": "application/json",
+      "request_id": "215f03ba35824d90beaa751d9c2dfd31",
+      "server_timing": "app;dur=3.96"
+    },
+    {
+      "url": "https://gg-parrot.vercel.app/api/candles/live?symbol=BTCUSDT&interval=1d&market=spot",
+      "status": 200,
+      "type": "application/json",
+      "request_id": "3560c6f684f54a6984426581c0e22554",
+      "server_timing": "app;dur=103.29, upstream;dur=101.11;desc=\"1 call\""
+    },
+    {
+      "url": "https://gg-parrot.vercel.app/api/candles/live?symbol=BTCUSDT&interval=1d&market=spot",
+      "status": 200,
+      "type": "application/json",
+      "request_id": "2ea6e3ac11fd45b39f66e725e4b6032d",
+      "server_timing": "app;dur=0.70"
+    },
+    {
+      "url": "https://gg-parrot.vercel.app/api/candles/live?symbol=BTCUSDT&interval=1d&market=spot",
+      "status": 200,
+      "type": "application/json",
+      "request_id": "176531290fe845fb80b1f94002c4a0e1",
+      "server_timing": "app;dur=1.63"
+    }
+  ],
+  "page_errors": [],
+  "blocked_writes": [],
+  "dot_search": "종목 목록을 못 불러왔어요. 다시 시도",
+  "performance": {
+    "lcp": [
+      {
+        "ms": 2688,
+        "renderTime": 2688,
+        "loadTime": 0,
+        "size": 7310,
+        "tag": "STRONG",
+        "class": "candle-chart-current num text-slate-900",
+        "url": "",
+        "text": "77,895.00"
+      }
+    ],
+    "longTasks": [
+      {
+        "start": 581.7999992370605,
+        "duration": 1996,
+        "name": "self",
+        "attribution": [
+          {
+            "name": "unknown",
+            "containerType": "window",
+            "containerName": "",
+            "containerSrc": ""
+          }
+        ]
+      },
+      {
+        "start": 2585.5,
+        "duration": 60,
+        "name": "self",
+        "attribution": [
+          {
+            "name": "unknown",
+            "containerType": "window",
+            "containerName": "",
+            "containerSrc": ""
+          }
+        ]
+      }
+    ],
+    "priceDomChanges": [
+      {
+        "ms": 2577.2000007629395,
+        "text": "77,895.00",
+        "width": 170.515625,
+        "height": 36.796875,
+        "fontStatus": "loading",
+        "visibility": "visible"
+      },
+      {
+        "ms": 3514.400001525879,
+        "text": "77,782.23",
+        "width": 169.921875,
+        "height": 36.796875,
+        "fontStatus": "loaded",
+        "visibility": "visible"
+      }
+    ],
+    "priceNextFrames": [
+      {
+        "ms": 2629.2000007629395,
+        "text": "77,895.00"
+      },
+      {
+        "ms": 3527.1000022888184,
+        "text": "77,782.23"
+      }
+    ],
+    "firstPriceDomMs": 2577.2000007629395,
+    "fontEvents": [
+      {
+        "ms": 579.1000022888184,
+        "event": "loading"
+      },
+      {
+        "ms": 2661.5,
+        "event": "loadingdone"
+      }
+    ],
+    "paint": [
+      {
+        "name": "first-paint",
+        "entryType": "paint",
+        "startTime": 2688,
+        "duration": 0,
+        "navigationId": 6866,
+        "paintTime": 2632.7000007629395,
+        "presentationTime": 2688
+      },
+      {
+        "name": "first-contentful-paint",
+        "entryType": "paint",
+        "startTime": 2688,
+        "duration": 0,
+        "navigationId": 6866,
+        "paintTime": 2632.7000007629395,
+        "presentationTime": 2688
+      }
+    ],
+    "navigation": {
+      "name": "https://gg-parrot.vercel.app/builder",
+      "entryType": "navigation",
+      "startTime": 0,
+      "duration": 142.5,
+      "navigationId": 6866,
+      "initiatorType": "navigation",
+      "deliveryType": "",
+      "nextHopProtocol": "h2",
+      "renderBlockingStatus": "non-blocking",
+      "contentType": "text/html",
+      "contentEncoding": "br",
+      "workerStart": 0,
+      "workerRouterEvaluationStart": 0,
+      "workerCacheLookupStart": 0,
+      "workerMatchedSourceType": "",
+      "workerFinalSourceType": "",
+      "redirectStart": 0,
+      "redirectEnd": 0,
+      "fetchStart": 0.6000022888183594,
+      "domainLookupStart": 8.400001525878906,
+      "domainLookupEnd": 41.10000228881836,
+      "connectStart": 41.10000228881836,
+      "secureConnectionStart": 43.5,
+      "connectEnd": 52.20000076293945,
+      "requestStart": 52.400001525878906,
+      "responseStart": 55.900001525878906,
+      "firstInterimResponseStart": 55.900001525878906,
+      "finalResponseHeadersStart": 62.400001525878906,
+      "responseEnd": 63.5,
+      "transferSize": 2059,
+      "encodedBodySize": 1759,
+      "decodedBodySize": 4505,
+      "responseStatus": 200,
+      "serverTiming": [],
+      "unloadEventStart": 0,
+      "unloadEventEnd": 0,
+      "domInteractive": 73.20000076293945,
+      "domContentLoadedEventStart": 139.79999923706055,
+      "domContentLoadedEventEnd": 139.9000015258789,
+      "domComplete": 141.4000015258789,
+      "loadEventStart": 141.4000015258789,
+      "loadEventEnd": 142.5,
+      "type": "navigate",
+      "redirectCount": 0,
+      "activationStart": 0,
+      "criticalCHRestart": 0,
+      "notRestoredReasons": null,
+      "confidence": {
+        "randomizedTriggerRate": 0.4994798,
+        "value": "low"
+      }
+    },
+    "resources": [
+      {
+        "url": "https://gg-parrot.vercel.app/assets/index-BPLUD-4N.js",
+        "initiator": "script",
+        "start": 69,
+        "fetchStart": 69,
+        "responseStart": 95.70000076293945,
+        "responseEnd": 112.4000015258789,
+        "duration": 43.400001525878906,
+        "bytes": 177760
+      },
+      {
+        "url": "https://gg-parrot.vercel.app/assets/index-BRgJ2zl1.css",
+        "initiator": "link",
+        "start": 69.10000228881836,
+        "fetchStart": 69.10000228881836,
+        "responseStart": 112.20000076293945,
+        "responseEnd": 117.79999923706055,
+        "duration": 48.69999694824219,
+        "bytes": 42820
+      },
+      {
+        "url": "https://gg-parrot.vercel.app/assets/Studio-B4x75WP3.js",
+        "initiator": "script",
+        "start": 155.79999923706055,
+        "fetchStart": 155.79999923706055,
+        "responseStart": 172.79999923706055,
+        "responseEnd": 175.4000015258789,
+        "duration": 19.60000228881836,
+        "bytes": 22534
+      },
+      {
+        "url": "https://gg-parrot.vercel.app/assets/RegisterMacroModal-Dtj626-h.js",
+        "initiator": "script",
+        "start": 155.9000015258789,
+        "fetchStart": 155.9000015258789,
+        "responseStart": 178.5,
+        "responseEnd": 181.5,
+        "duration": 25.599998474121094,
+        "bytes": 13645
+      },
+      {
+        "url": "https://gg-parrot.vercel.app/assets/usdkrw-Ct8KO3GX.js",
+        "initiator": "script",
+        "start": 156,
+        "fetchStart": 156,
+        "responseStart": 175.4000015258789,
+        "responseEnd": 177.10000228881836,
+        "duration": 21.10000228881836,
+        "bytes": 839
+      },
+      {
+        "url": "https://gg-parrot.vercel.app/assets/CoinIcon-BuxvBrL4.js",
+        "initiator": "script",
+        "start": 156.10000228881836,
+        "fetchStart": 156.10000228881836,
+        "responseStart": 175.60000228881836,
+        "responseEnd": 179,
+        "duration": 22.89999771118164,
+        "bytes": 1021
+      },
+      {
+        "url": "https://gg-parrot.vercel.app/assets/user-CYdY1C23.js",
+        "initiator": "script",
+        "start": 156.10000228881836,
+        "fetchStart": 156.10000228881836,
+        "responseStart": 176.5,
+        "responseEnd": 181.29999923706055,
+        "duration": 25.199996948242188,
+        "bytes": 484
+      },
+      {
+        "url": "https://gg-parrot.vercel.app/assets/RegisterMacroModal-C4fjapZg.css",
+        "initiator": "link",
+        "start": 156.20000076293945,
+        "fetchStart": 156.20000076293945,
+        "responseStart": 171.29999923706055,
+        "responseEnd": 172.10000228881836,
+        "duration": 15.900001525878906,
+        "bytes": 2494
+      },
+      {
+        "url": "https://gg-parrot.vercel.app/assets/EquityChart-BWZXiywk.css",
+        "initiator": "link",
+        "start": 156.29999923706055,
+        "fetchStart": 156.29999923706055,
+        "responseStart": 171.60000228881836,
+        "responseEnd": 172.20000076293945,
+        "duration": 15.900001525878906,
+        "bytes": 774
+      },
+      {
+        "url": "https://gg-parrot.vercel.app/assets/EquityChart-JA-dH-I6.js",
+        "initiator": "script",
+        "start": 156.29999923706055,
+        "fetchStart": 156.29999923706055,
+        "responseStart": 214.5,
+        "responseEnd": 215.4000015258789,
+        "duration": 59.10000228881836,
+        "bytes": 3056
+      },
+      {
+        "url": "https://gg-parrot.vercel.app/assets/usePaperSession-BcfijZAc.js",
+        "initiator": "script",
+        "start": 156.4000015258789,
+        "fetchStart": 156.4000015258789,
+        "responseStart": 175.60000228881836,
+        "responseEnd": 176.70000076293945,
+        "duration": 20.299999237060547,
+        "bytes": 2041
+      },
+      {
+        "url": "https://gg-parrot.vercel.app/assets/PaperPanel-BaTg2Hb2.js",
+        "initiator": "script",
+        "start": 156.4000015258789,
+        "fetchStart": 156.4000015258789,
+        "responseStart": 175.4000015258789,
+        "responseEnd": 178.9000015258789,
+        "duration": 22.5,
+        "bytes": 5414
+      },
+      {
+        "url": "https://gg-parrot.vercel.app/assets/leaderboardStrategy-D0E3F02V.js",
+        "initiator": "script",
+        "start": 156.5,
+        "fetchStart": 156.5,
+        "responseStart": 178.79999923706055,
+        "responseEnd": 181.5,
+        "duration": 25,
+        "bytes": 984
+      },
+      {
+        "url": "https://gg-parrot.vercel.app/assets/Studio-CYPkRb1w.css",
+        "initiator": "link",
+        "start": 156.60000228881836,
+        "fetchStart": 156.60000228881836,
+        "responseStart": 176.79999923706055,
+        "responseEnd": 178.60000228881836,
+        "duration": 22,
+        "bytes": 6834
+      },
+      {
+        "url": "https://gg-parrot.vercel.app/api/candles?symbol=BTCUSDT&interval=1d&limit=300&market=spot",
+        "initiator": "fetch",
+        "start": 233.20000076293945,
+        "fetchStart": 233.20000076293945,
+        "responseStart": 419.10000228881836,
+        "responseEnd": 420.4000015258789,
+        "duration": 187.20000076293945,
+        "bytes": 9490
+      },
+      {
+        "url": "https://gg-parrot.vercel.app/assets/Pretendard-0-J3l54SbJ.woff2",
+        "initiator": "css",
+        "start": 337.70000076293945,
+        "fetchStart": 337.70000076293945,
+        "responseStart": 618.1000022888184,
+        "responseEnd": 649.2000007629395,
+        "duration": 311.5,
+        "bytes": 161576
+      },
+      {
+        "url": "https://gg-parrot.vercel.app/assets/JetBrainsMono-subset-DOv1q26X.woff2",
+        "initiator": "css",
+        "start": 338,
+        "fetchStart": 338,
+        "responseStart": 606.9000015258789,
+        "responseEnd": 613.6000022888184,
+        "duration": 275.60000228881836,
+        "bytes": 29520
+      },
+      {
+        "url": "https://gg-parrot.vercel.app/assets/Pretendard-5-mpVeL9tD.woff2",
+        "initiator": "css",
+        "start": 559.7999992370605,
+        "fetchStart": 559.7999992370605,
+        "responseStart": 598.4000015258789,
+        "responseEnd": 633.5,
+        "duration": 73.70000076293945,
+        "bytes": 250000
+      },
+      {
+        "url": "https://gg-parrot.vercel.app/assets/Pretendard-2-Dto07DTb.woff2",
+        "initiator": "css",
+        "start": 561,
+        "fetchStart": 561,
+        "responseStart": 622.7000007629395,
+        "responseEnd": 656.7999992370605,
+        "duration": 95.79999923706055,
+        "bytes": 217068
+      },
+      {
+        "url": "https://gg-parrot.vercel.app/assets/rum-iQZFhmxz.js",
+        "initiator": "script",
+        "start": 2649.900001525879,
+        "fetchStart": 2649.900001525879,
+        "responseStart": 2666.7000007629395,
+        "responseEnd": 2667.400001525879,
+        "duration": 17.5,
+        "bytes": 2149
+      },
+      {
+        "url": "https://gg-parrot.vercel.app/api/candles?symbol=BTCUSDT&interval=1d&limit=300&market=spot",
+        "initiator": "fetch",
+        "start": 3234.1000022888184,
+        "fetchStart": 3234.1000022888184,
+        "responseStart": 3412.7000007629395,
+        "responseEnd": 3414.900001525879,
+        "duration": 180.79999923706055,
+        "bytes": 9490
+      },
+      {
+        "url": "https://gg-parrot.vercel.app/api/candles/live?symbol=BTCUSDT&interval=1d&market=spot",
+        "initiator": "fetch",
+        "start": 3235,
+        "fetchStart": 3235,
+        "responseStart": 3507.900001525879,
+        "responseEnd": 3509.1000022888184,
+        "duration": 274.10000228881836,
+        "bytes": 524
+      },
+      {
+        "url": "https://gg-parrot.vercel.app/api/candles/live?symbol=BTCUSDT&interval=1d&market=spot",
+        "initiator": "fetch",
+        "start": 6512.200000762939,
+        "fetchStart": 6512.200000762939,
+        "responseStart": 6671.900001525879,
+        "responseEnd": 6673.400001525879,
+        "duration": 161.20000076293945,
+        "bytes": 537
+      },
+      {
+        "url": "https://gg-parrot.vercel.app/api/candles/live?symbol=BTCUSDT&interval=1d&market=spot",
+        "initiator": "fetch",
+        "start": 9676.400001525879,
+        "fetchStart": 9676.400001525879,
+        "responseStart": 9861.5,
+        "responseEnd": 9862.5,
+        "duration": 186.0999984741211,
+        "bytes": 537
+      }
+    ],
+    "slowResources": []
+  }
+}

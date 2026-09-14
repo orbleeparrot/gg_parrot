@@ -3,6 +3,7 @@
 import { getToken } from "./lib/auth.js";
 import { createRequestCoordinator } from "./lib/requestCoordinator.js";
 import { withRequestTimeout } from "./lib/requestTimeout.js";
+import { withGatewayRetry } from "./lib/requestRetry.js";
 import { createBoardListCache } from "./lib/boardListCache.js";
 import { invalidateLeaderboardCache } from "./lib/cacheEvents.js";
 
@@ -61,13 +62,16 @@ function websocketUrl(path) {
 
 async function jsonBody(res) {
   const text = await res.text();
-  if (!text) return {};
+  const gatewayError = [502, 503, 504].includes(res.status);
+  if (!text && !gatewayError) return {};
   try {
     return JSON.parse(text);
   } catch (_) {
-    const error = new Error("서버가 API 대신 페이지를 반환했어요.");
+    const error = new Error(gatewayError
+      ? "서버에 일시적으로 연결하지 못했어요. 잠시 후 다시 시도해 주세요."
+      : "서버가 API 대신 페이지를 반환했어요.");
     error.status = res.status;
-    error.code = "NON_JSON_RESPONSE";
+    error.code = gatewayError ? "TEMPORARY_SERVER_ERROR" : "NON_JSON_RESPONSE";
     throw error;
   }
 }
@@ -79,7 +83,7 @@ async function req(path, opts = {}) {
   const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
   if (token) headers["Authorization"] = `Bearer ${token}`;
   const { signal: callerSignal, timeoutMs, requestKey = "", ...fetchOptions } = opts;
-  const execute = (signal) => withRequestTimeout(async (requestSignal) => {
+  const execute = (signal) => withRequestTimeout((requestSignal) => withGatewayRetry(async () => {
     const res = await fetch(BASE + path, { ...fetchOptions, cache: shared ? (fetchOptions.cache || "default") : "no-store", credentials: shared ? "omit" : "same-origin", method, headers, signal: requestSignal });
     const body = await jsonBody(res);
     if (!res.ok) {
@@ -93,7 +97,7 @@ async function req(path, opts = {}) {
       throw error;
     }
     return body;
-  }, { signal, timeoutMs });
+  }, { method, signal: requestSignal }), { signal, timeoutMs });
   if (method !== "GET") return execute(callerSignal);
   const authScope = token || "anonymous";
   return getRequests.run(`${authScope}:${requestKey}:${path}`, execute, { signal: callerSignal });
@@ -134,7 +138,7 @@ export const api = {
   googleAuth: (credential) =>
     req("/api/auth/google", { method: "POST", body: JSON.stringify({ credential }) }),
   me: () => req("/api/auth/me"),
-  myDashboard: (options = {}) => req("/api/me/dashboard", options),
+  myDashboard: (options = {}) => req("/api/me/dashboard", { timeoutMs: 15_000, ...options }),
   // 오늘(KST)의 일일 퀘스트 — 완료 여부·보상·오늘 번 포인트.
   myQuests: (options = {}) => req("/api/me/quests", options),
   uploadAvatar: (image) => {
@@ -197,7 +201,7 @@ export const api = {
 
   cardUrl: (slug) => `/api/card/${slug}.png`,
   // 거래 가능한 종목 목록(현물 + USDT-M 선물) — 조건 판의 종목 검색은 이 안에서만 고른다.
-  symbols: (options = {}) => req("/api/symbols", options),
+  symbols: (options = {}) => req("/api/symbols", { timeoutMs: 25_000, ...options }),
   coinLogoUrl: (base) => `/api/coin-logo/${encodeURIComponent(base)}.png`,
 
   // kimchi premium (reference indicator; upbit vs binance×USDKRW)

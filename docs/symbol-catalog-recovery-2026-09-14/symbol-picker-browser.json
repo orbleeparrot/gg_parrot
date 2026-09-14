@@ -1,0 +1,19 @@
+{
+  "checks": [
+    {
+      "width": 1440,
+      "passed": true,
+      "symbol_requests": 2,
+      "scenario": "503 → retry with delayed response → popup stays open → DOTUSDT selected without refocusing"
+    },
+    {
+      "width": 390,
+      "passed": true,
+      "symbol_requests": 2,
+      "scenario": "503 → retry with delayed response → popup stays open → DOTUSDT selected without refocusing"
+    }
+  ],
+  "page_errors": [],
+  "frontend_build": "/tmp/ggp-api-recovery-build",
+  "scope": "All API and WebSocket traffic mocked; no production connections"
+}

@@ -181,20 +181,22 @@ def test_paper_price_never_uses_stale_values_for_execution(monkeypatch):
 
 
 def test_symbols_expired_request_does_not_hold_a_global_network_lock(monkeypatch):
-    monkeypatch.setattr(symbols, "fetch_symbols", lambda: [{"symbol": "BTCUSDT"}])
+    def rows(market, symbol):
+        return {symbol: {"symbol": symbol, "spot": market == "spot", "futures": market == "futures"}}
+    monkeypatch.setattr(symbols, "_fetch_market_rows", lambda market: rows(market, "BTCUSDT"))
     symbols.list_symbols(now=0)
     entered, release = threading.Event(), threading.Event()
-    def delayed():
+    def delayed(market):
         entered.set()
         assert release.wait(2)
-        return [{"symbol": "ETHUSDT"}]
-    monkeypatch.setattr(symbols, "fetch_symbols", delayed)
+        return rows(market, "ETHUSDT")
+    monkeypatch.setattr(symbols, "_fetch_market_rows", delayed)
     try:
         stale = symbols.list_symbols(now=symbols.CACHE_TTL_S + 1)
-        assert stale["items"] == [{"symbol": "BTCUSDT"}] and stale["stale"]
+        assert stale["items"] == [{"symbol": "BTCUSDT", "spot": True, "futures": True}] and stale["stale"]
         assert entered.wait(1)
         assert symbols.list_symbols(now=symbols.CACHE_TTL_S + 2)["stale"]
     finally:
         release.set()
         close_cache_runtime()
-    assert symbols.list_symbols(now=symbols.CACHE_TTL_S + 3)["items"] == [{"symbol": "ETHUSDT"}]
+    assert symbols.list_symbols(now=symbols.CACHE_TTL_S + 3)["items"] == [{"symbol": "ETHUSDT", "spot": True, "futures": True}]

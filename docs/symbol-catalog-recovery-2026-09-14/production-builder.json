@@ -1,0 +1,170 @@
+{
+  "checked_at": "2026-09-14T08:03:17.330892+00:00",
+  "scope": "Production; anonymous fresh Chromium, no throttling, GET-only, no API mocks; one lab sample, not user RUM",
+  "responses": [
+    {
+      "url": "https://gg-parrot.vercel.app/api/fear-greed",
+      "status": 200,
+      "type": "application/json",
+      "request_id": "c919fa26d75d46b9a122dfa98eb9197a",
+      "server_timing": "app;dur=0.84"
+    },
+    {
+      "url": "https://gg-parrot.vercel.app/api/hot-coins?limit=10",
+      "status": 200,
+      "type": "application/json",
+      "request_id": "0affc4c06ac542bd889692c9f2e5bba3",
+      "server_timing": "app;dur=1.72"
+    },
+    {
+      "url": "https://gg-parrot.vercel.app/api/candles?symbol=BTCUSDT&interval=1d&limit=300&market=spot",
+      "status": 200,
+      "type": "application/json",
+      "request_id": "7305c92ef96f4014a6edc01e3888bbe9",
+      "server_timing": "app;dur=3.65"
+    },
+    {
+      "url": "https://gg-parrot.vercel.app/api/symbols",
+      "status": 503,
+      "type": "application/json",
+      "request_id": "b3a48d03b77348c4acaaaf3e60c028d8",
+      "server_timing": "app;dur=49.29, upstream;dur=48.14;desc=\"1 call\""
+    },
+    {
+      "url": "https://gg-parrot.vercel.app/api/usdkrw",
+      "status": 200,
+      "type": "application/json",
+      "request_id": "2b555ad374df4159958e03d5bca225ff",
+      "server_timing": "app;dur=0.81"
+    },
+    {
+      "url": "https://gg-parrot.vercel.app/api/backtest/limits",
+      "status": 200,
+      "type": "application/json",
+      "request_id": "b51afcf14d8c44a39f59e48b1a41b831",
+      "server_timing": "app;dur=0.44"
+    },
+    {
+      "url": "https://gg-parrot.vercel.app/api/hangang-temp",
+      "status": 200,
+      "type": "application/json",
+      "request_id": "67bce163b84d4622bab8156e7030a483",
+      "server_timing": "app;dur=0.60"
+    },
+    {
+      "url": "https://gg-parrot.vercel.app/api/kimchi-premium?symbol=BTC",
+      "status": 200,
+      "type": "application/json",
+      "request_id": "9e92c8d7f53b4a3fb5248f4a0a74c157",
+      "server_timing": "app;dur=403.74, upstream;dur=774.47;desc=\"2 calls\""
+    },
+    {
+      "url": "https://gg-parrot.vercel.app/api/candles?symbol=BTCUSDT&interval=1d&limit=300&market=spot",
+      "status": 200,
+      "type": "application/json",
+      "request_id": "4fd828736fe4482298477dbd394c18dc",
+      "server_timing": "app;dur=3.38"
+    },
+    {
+      "url": "https://gg-parrot.vercel.app/api/candles/live?symbol=BTCUSDT&interval=1d&market=spot",
+      "status": 200,
+      "type": "application/json",
+      "request_id": "b054ef2573ca462590123e8e697677c0",
+      "server_timing": "app;dur=102.64, upstream;dur=100.91;desc=\"1 call\""
+    },
+    {
+      "url": "https://gg-parrot.vercel.app/api/candles/live?symbol=BTCUSDT&interval=1d&market=spot",
+      "status": 200,
+      "type": "application/json",
+      "request_id": "335252fad7664054a624a85b2f7b6830",
+      "server_timing": "app;dur=0.73"
+    },
+    {
+      "url": "https://gg-parrot.vercel.app/api/candles/live?symbol=BTCUSDT&interval=1d&market=spot",
+      "status": 200,
+      "type": "application/json",
+      "request_id": "4f3ab9d79db548a183521f13aee70b9a",
+      "server_timing": "app;dur=1.03"
+    }
+  ],
+  "page_errors": [],
+  "blocked_writes": [],
+  "dot_search": "종목 목록을 못 불러왔어요. 다시 시도",
+  "performance": {
+    "lcp": [
+      {
+        "ms": 4356,
+        "size": 7310,
+        "tag": "STRONG",
+        "class": "candle-chart-current num text-slate-900",
+        "url": "",
+        "text": "77,895.00"
+      }
+    ],
+    "navigation": {
+      "name": "https://gg-parrot.vercel.app/builder",
+      "entryType": "navigation",
+      "startTime": 0,
+      "duration": 152.0999984741211,
+      "navigationId": 4559,
+      "initiatorType": "navigation",
+      "deliveryType": "",
+      "nextHopProtocol": "h2",
+      "renderBlockingStatus": "non-blocking",
+      "contentType": "text/html",
+      "contentEncoding": "br",
+      "workerStart": 0,
+      "workerRouterEvaluationStart": 0,
+      "workerCacheLookupStart": 0,
+      "workerMatchedSourceType": "",
+      "workerFinalSourceType": "",
+      "redirectStart": 0,
+      "redirectEnd": 0,
+      "fetchStart": 0.40000152587890625,
+      "domainLookupStart": 7.900001525878906,
+      "domainLookupEnd": 40.5,
+      "connectStart": 40.5,
+      "secureConnectionStart": 42.599998474121094,
+      "connectEnd": 56.79999923706055,
+      "requestStart": 56.900001525878906,
+      "responseStart": 60.900001525878906,
+      "firstInterimResponseStart": 60.900001525878906,
+      "finalResponseHeadersStart": 69.9000015258789,
+      "responseEnd": 71,
+      "transferSize": 2059,
+      "encodedBodySize": 1759,
+      "decodedBodySize": 4505,
+      "responseStatus": 200,
+      "serverTiming": [],
+      "unloadEventStart": 0,
+      "unloadEventEnd": 0,
+      "domInteractive": 81,
+      "domContentLoadedEventStart": 149.5,
+      "domContentLoadedEventEnd": 149.5,
+      "domComplete": 151,
+      "loadEventStart": 151.20000076293945,
+      "loadEventEnd": 152.0999984741211,
+      "type": "navigate",
+      "redirectCount": 0,
+      "activationStart": 0,
+      "criticalCHRestart": 0,
+      "notRestoredReasons": null,
+      "confidence": {
+        "randomizedTriggerRate": 0.4994798,
+        "value": "low"
+      }
+    },
+    "slowResources": [
+      {
+        "url": "https://gg-parrot.vercel.app/api/kimchi-premium?symbol=BTC",
+        "ms": 667.7999992370605,
+        "bytes": 563
+      },
+      {
+        "url": "https://gg-parrot.vercel.app/api/hangang-temp",
+        "ms": 506.5,
+        "bytes": 470
+      }
+    ]
+  }
+}

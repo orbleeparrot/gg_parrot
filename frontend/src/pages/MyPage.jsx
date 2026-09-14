@@ -188,6 +188,7 @@ export default function MyPage() {
   // before the effect for the new account starts.
   const data = result?.token === token ? result.value : null;
   const [error, setError] = useState("");
+  const [reload, setReload] = useState(0);
   const [tierOpen, setTierOpen] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const param = searchParams.get("tab");
@@ -211,7 +212,7 @@ export default function MyPage() {
       setNow(Date.now());
     }).catch((reason) => { if (alive && reason.name !== "AbortError") setError(String(reason.message || reason)); });
     return () => { alive = false; controller.abort(); };
-  }, [navigate, token]);
+  }, [navigate, token, reload]);
 
   const symbolByEntry = useMemo(() => Object.fromEntries([...(data?.created || []), ...(data?.purchased || [])].map((item) => [item.entry_id, item.symbol])), [data]);
   if (!token) return null;
@@ -251,7 +252,7 @@ export default function MyPage() {
         </div>
       </div>
     </aside>
-    {error ? <ErrorNote>내 활동을 불러오지 못했어요: {error}</ErrorNote> : !data ? <ActivitySkeleton /> : <div className="me-content">
+    {error ? <div className="me-content"><ErrorNote><p>내 활동을 불러오지 못했어요: {error}</p><button type="button" className="me-card-action mt-3" onClick={() => setReload(value => value + 1)}>다시 시도</button></ErrorNote></div> : !data ? <ActivitySkeleton /> : <div className="me-content">
       <dl className={"me-stats" + (longStats ? " has-long-values" : "")}>{metrics.map(({ label, value, Icon, target, points }) => <div className={"me-stat" + (points ? " is-points" : "")} key={label}><dt><Icon size={20} aria-hidden="true" />{label}</dt><dd className="num">{value}</dd><button type="button" className="me-stat-link" aria-label={label + " 내역 보기"} onClick={() => pickTab(target)} /></div>)}</dl>
       <DailyQuests board={quests} />
       <nav className="me-section-nav" aria-label="프로필 메뉴">{SECTIONS.map(({ key, label, first, Icon }) => <button key={key} type="button" aria-pressed={section === key} onClick={() => pickTab(first)}><Icon size={22} aria-hidden="true" /><span>{label}</span></button>)}</nav>

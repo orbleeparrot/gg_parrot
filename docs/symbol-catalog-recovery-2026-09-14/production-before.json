@@ -1,0 +1,85 @@
+{
+  "checked_at": "2026-09-14T07:57:28.170701+00:00",
+  "scope": "Unauthenticated public GETs only; no private account data",
+  "responses": [
+    {
+      "url": "https://gg-parrot.vercel.app/api/health",
+      "status": 200,
+      "type": "application/json",
+      "cache": "private, no-store",
+      "seconds": 0.478,
+      "bytes": 117,
+      "ok": true
+    },
+    {
+      "url": "https://gg-parrot.vercel.app/api/backtest/limits",
+      "status": 200,
+      "type": "application/json",
+      "cache": "public, max-age=300, s-maxage=300",
+      "seconds": 0.249,
+      "bytes": 187
+    },
+    {
+      "url": "https://gg-parrot.vercel.app/api/hot-coins?limit=10",
+      "status": 200,
+      "type": "application/json",
+      "cache": "public, max-age=2, s-maxage=2",
+      "seconds": 0.332,
+      "bytes": 1120,
+      "stale": true
+    },
+    {
+      "url": "https://gg-parrot.vercel.app/api/kimchi-premium?symbol=BTC",
+      "status": 200,
+      "type": "application/json",
+      "cache": "public, max-age=1, s-maxage=1",
+      "seconds": 0.241,
+      "bytes": 407,
+      "ok": true,
+      "stale": false
+    },
+    {
+      "url": "https://gg-parrot.vercel.app/api/candles/live?symbol=BTCUSDT&interval=1d&market=spot",
+      "status": 200,
+      "type": "application/json",
+      "cache": "public, max-age=1, s-maxage=1",
+      "seconds": 0.968,
+      "bytes": 355
+    },
+    {
+      "url": "https://gg-parrot.vercel.app/api/symbols",
+      "status": 503,
+      "type": "application/json",
+      "cache": "private, no-store",
+      "seconds": 0.604,
+      "bytes": 72,
+      "prefix": "{\"detail\":\"종목 목록을 불러오지 못했어요: HTTPStatusError\"}"
+    },
+    {
+      "url": "https://gg-parrot.vercel.app/api/me/dashboard",
+      "status": 401,
+      "type": "application/json",
+      "cache": "private, no-store",
+      "seconds": 0.238,
+      "bytes": 39,
+      "prefix": "{\"detail\":\"로그인이 필요해요.\"}"
+    },
+    {
+      "url": "https://gg-parrot.onrender.com/api/health",
+      "status": 200,
+      "type": "application/json",
+      "cache": "private, no-store",
+      "seconds": 0.349,
+      "bytes": 117,
+      "ok": true
+    },
+    {
+      "url": "https://gg-parrot.onrender.com/api/backtest/limits",
+      "status": 200,
+      "type": "application/json",
+      "cache": "public, max-age=300, s-maxage=300",
+      "seconds": 0.283,
+      "bytes": 187
+    }
+  ]
+}

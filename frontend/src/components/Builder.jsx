@@ -211,7 +211,7 @@ function SymbolPicker({ value, onChange }) {
           <div className="bd-suggest" role="listbox" id={listId} aria-label="종목 검색 결과">
             {!items && loading && <div className="bd-suggest-note">종목 목록을 불러오는 중…</div>}
             {!items && !loading && error && (
-              <div className="bd-suggest-note">종목 목록을 못 불러왔어요. <button type="button" onClick={reload}>다시 시도</button></div>
+              <div className="bd-suggest-note">종목 목록을 못 불러왔어요. <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={reload}>다시 시도</button></div>
             )}
             {items && matches.length === 0 && <div className="bd-suggest-note">'{query.toUpperCase()}' 에 맞는 종목이 없어요.</div>}
             {matches.map((item, index) => (

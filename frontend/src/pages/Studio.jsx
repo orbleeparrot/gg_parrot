@@ -58,6 +58,38 @@ function UploadIcon() {
   );
 }
 
+// 빌더 종류 — 조건 판의 제목이 곧 드롭다운(`기본 빌더 ▾`). 지금은 기본 빌더뿐이고 프로 빌더는 업데이트 예정이라 메뉴에 비활성으로만 있다.
+// 프로가 열리면 항목의 disabled 를 떼고 고른 값으로 폼을 바꿔 끼운다.
+function BuilderModeMenu() {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef(null);
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDown = (event) => { if (!rootRef.current?.contains(event.target)) setOpen(false); };
+    const onKey = (event) => { if (event.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onDown); document.removeEventListener("keydown", onKey); };
+  }, [open]);
+  return (
+    <div className="studio-mode" ref={rootRef}>
+      <button type="button" className="studio-mode-btn" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+        기본 빌더<i className="studio-mode-chev" aria-hidden="true" />
+      </button>
+      {open && (
+        <div className="studio-mode-menu" role="menu" aria-label="빌더 종류">
+          <button type="button" role="menuitemradio" aria-checked="true" className="studio-mode-item is-on" onClick={() => setOpen(false)}>
+            <span className="studio-mode-check" aria-hidden="true">✓</span>기본 빌더
+          </button>
+          <button type="button" role="menuitemradio" aria-checked="false" disabled title="프로 빌더는 업데이트 예정이에요" className="studio-mode-item is-soon">
+            <span className="studio-mode-check" aria-hidden="true" />프로 빌더<span className="studio-soon-badge">업데이트 예정</span>
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // 저장·공유 — 매크로 등록 탭에서 여는 다이얼로그. 링크·인증 카드는 본문이 아니라 부속 결과라 화면에 늘 두지 않는다.
 function ShareDialog({ share, stale, busy, card, onClose, onRenew }) {
   const [copied, setCopied] = useState(false);
@@ -721,7 +753,7 @@ export default function Studio() {
         {/* ── 조건 ── */}
         <aside id="studio-conditions" className="studio-cond" aria-label="조건" {...split.panelProps}>
           <div className="studio-panel-head">
-            <h2 className="t-h2 text-slate-900">조건</h2>
+            <BuilderModeMenu />
             <div className="studio-head-right">
               {/* 매크로 파일 등록 — 가지고 있는 .ggm.json 을 내 매크로에 등록하고 조건에 불러온다. 로그인 전엔 로그인으로. */}
               {!slug && (token ? (
@@ -739,15 +771,6 @@ export default function Studio() {
               ) : (
                 <Link to="/login?next=%2Fbuilder" className="studio-cond-upload t-caption" aria-label="로그인 후 매크로 업로드" title="매크로 파일을 등록하려면 로그인이 필요해요"><UploadIcon /><span>매크로 업로드</span></Link>
               ))}
-            </div>
-          </div>
-          {/* 빌더 종류 — 기본 | 프로. 프로는 업데이트 예정이라 비활성 + 배지(사이드바의 '자동 매매 봇'과 같은 표기). 열리면 disabled 를 떼고 폼을 바꿔 끼운다. */}
-          <div className="studio-cond-mode">
-            <div className="seg studio-mode-seg" role="tablist" aria-label="빌더 종류">
-              <button type="button" role="tab" id="builder-tab-basic" aria-selected="true" className="seg-item seg-item-on">기본 빌더</button>
-              <button type="button" role="tab" id="builder-tab-pro" aria-selected="false" disabled title="프로 빌더는 업데이트 예정이에요" className="seg-item is-soon">
-                프로 빌더<span className="studio-soon-badge">업데이트 예정</span>
-              </button>
             </div>
           </div>
           <div className="studio-scroll studio-cond-body">

@@ -1,0 +1,19 @@
+{
+  "audit": "agents-stale-account-session-state",
+  "scope": "Loopback static server; all API and WebSocket responses mocked; external URLs blocked",
+  "frontend_build": "/tmp/ggp-performance-build",
+  "source": "frontend/src/pages/Agents.jsx",
+  "source_sha256": "e707389031e7cb8ff0b5abe1dbd59c4e93679ca02586e4c2c7e0fa1e24d128b9",
+  "expected_previous_account_chart_visible": false,
+  "observed": {
+    "current_account_id": 2,
+    "previous_account_chart_visible": true,
+    "previous_account_chart_label": "LINKUSDT 실시간 차트"
+  },
+  "second_account_requests": [
+    "/api/me/runner/sessions",
+    "/api/me/runner/sessions/stream-token"
+  ],
+  "blocked_external_requests": [],
+  "defect_reproduced": true
+}

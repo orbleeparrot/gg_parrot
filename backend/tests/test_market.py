@@ -264,3 +264,79 @@ def test_coverage_is_specific_to_market_symbol_and_interval(tmp_path, monkeypatc
     assert binance._coverage_verified("BTCUSDT", "1h", 0, binance._MS_DAY)
     assert not binance._coverage_verified("BTCUSDT#FUT", "1h", 0, binance._MS_DAY)
     assert not binance._coverage_verified("BTCUSDT", "1d", 0, binance._MS_DAY)
+
+
+# --- auto venue fallback + honest transport errors (2026-09-14) ---------
+def test_auto_spot_falls_back_to_futures_for_perp_only_symbol(monkeypatch):
+    from app import marketdata
+
+    calls = []
+
+    def fake_get_klines(symbol, start_ms, end_ms, *, interval, market, allow_synthetic):
+        calls.append(market)
+        if market == "spot":
+            raise binance.NoSpotDataError(binance.NO_SPOT_MSG)
+        return pd.DataFrame({"close": [1.0]}), "binance-futures"
+
+    monkeypatch.setattr(marketdata, "get_klines", fake_get_klines)
+    df, source = marketdata.fetch_klines_for_macro(_macro("long", 1), 0, 1)
+    assert calls == ["spot", "futures"] and source == "binance-futures"
+
+
+def test_auto_fallback_keeps_first_error_when_both_fail(monkeypatch):
+    from app import marketdata
+
+    def fake_get_klines(symbol, start_ms, end_ms, *, interval, market, allow_synthetic):
+        raise binance.NoSpotDataError(binance.NO_SPOT_MSG if market == "spot" else binance.NO_FUT_MSG)
+
+    monkeypatch.setattr(marketdata, "get_klines", fake_get_klines)
+    with pytest.raises(binance.NoSpotDataError, match="현물 시세"):
+        marketdata.fetch_klines_for_macro(_macro("long", 1), 0, 1)
+
+
+def test_explicit_market_never_falls_back(monkeypatch):
+    from app import marketdata
+
+    calls = []
+
+    def fake_get_klines(symbol, start_ms, end_ms, *, interval, market, allow_synthetic):
+        calls.append(market)
+        raise binance.NoSpotDataError(binance.NO_SPOT_MSG)
+
+    monkeypatch.setattr(marketdata, "get_klines", fake_get_klines)
+    with pytest.raises(binance.NoSpotDataError):
+        marketdata.fetch_klines_for_macro(_macro("long", 1, market="spot"), 0, 1)
+    assert calls == ["spot"]
+
+
+def _http_error(status: int, body):
+    import httpx
+    request = httpx.Request("GET", "https://api.binance.com/api/v3/klines")
+    response = httpx.Response(status, json=body, request=request)
+    return httpx.HTTPStatusError("boom", request=request, response=response)
+
+
+def test_unknown_symbol_is_reported_as_no_market():
+    assert binance._is_unknown_symbol(_http_error(400, {"code": -1121, "msg": "Invalid symbol."}))
+    assert not binance._is_unknown_symbol(_http_error(451, {"code": 0, "msg": "restricted"}))
+    assert not binance._is_unknown_symbol(TimeoutError())
+
+
+def test_transport_failure_message_names_the_cause(monkeypatch):
+    monkeypatch.setattr(binance, "_read_cache", lambda *a, **k: pd.DataFrame())
+    monkeypatch.setattr(binance, "_coverage_verified", lambda *a, **k: False)
+    monkeypatch.setattr(binance, "_cache_covers_window", lambda *a, **k: False)
+
+    def boom(*a, **k):
+        raise _http_error(451, {"msg": "restricted"})
+
+    monkeypatch.setattr(binance, "_fetch_binance", boom)
+    with pytest.raises(binance.NoSpotDataError, match="HTTP 451"):
+        binance.get_klines("BTCUSDT", 0, 86_400_000, interval="1d", market="spot", allow_synthetic=False)
+
+    def unknown(*a, **k):
+        raise _http_error(400, {"code": -1121, "msg": "Invalid symbol."})
+
+    monkeypatch.setattr(binance, "_fetch_binance", unknown)
+    with pytest.raises(binance.NoSpotDataError, match="현물 시세 데이터가 없어"):
+        binance.get_klines("NOPEUSDT", 0, 86_400_000, interval="1d", market="spot", allow_synthetic=False)

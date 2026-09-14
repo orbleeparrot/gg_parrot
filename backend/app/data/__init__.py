@@ -15,6 +15,9 @@ from .binance import (
 )
 
 __all__ = [
+    "coin_logo_png",
+    "list_symbols",
+    "reset_symbol_cache",
     "get_klines",
     "get_recent_klines",
     "get_ticker_price",
@@ -29,3 +32,4 @@ __all__ = [
     "TooManyBarsError",
     "NO_SPOT_MSG",
 ]
+from .symbols import coin_logo_png, list_symbols, reset_cache as reset_symbol_cache  # noqa: E402

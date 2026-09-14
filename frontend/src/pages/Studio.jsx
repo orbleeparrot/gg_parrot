@@ -4,6 +4,7 @@ import { Link, useLocation, useNavigate, useParams, useSearchParams } from "reac
 import Builder from "../components/Builder.jsx";
 import SimBadge from "../components/SimBadge.jsx";
 import { StudioTabs, StudioBacktest, StudioAiExplain, StudioOptimize, StudioPaper, StudioOutcomes } from "../components/StudioDock.jsx";
+import MacroCard from "../components/MacroCard.jsx";
 import usePaperSession from "../hooks/usePaperSession.js";
 import useStudioSplit from "../hooks/useStudioSplit.js";
 import CandleChart from "../components/CandleChart.jsx";
@@ -58,8 +59,39 @@ function UploadIcon() {
 }
 
 // 저장·공유 — 매크로 등록 탭에서 여는 다이얼로그. 링크·인증 카드는 본문이 아니라 부속 결과라 화면에 늘 두지 않는다.
-function ShareDialog({ share, stale, busy, onClose, onRenew }) {
+function ShareDialog({ share, stale, busy, card, onClose, onRenew }) {
   const [copied, setCopied] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const cardRef = useRef(null);
+  // 카드 이미지 — 화면의 트레이딩 카드를 그대로 그린다(html2canvas, 2배). 로고는 같은 출처 사본(/api/coin-logo)이라 캔버스에 실린다.
+  async function downloadCard() {
+    if (!cardRef.current) return;
+    setSaving(true); setSaveError("");
+    try {
+      const { default: html2canvas } = await import("html2canvas");
+      const node = cardRef.current;
+      const bg = getComputedStyle(node).getPropertyValue("--share-card-bg").trim() || null;
+      const canvas = await html2canvas(node, {
+        backgroundColor: bg,
+        scale: 2,
+        useCORS: true,
+        logging: false,
+        // html2canvas 는 overflow: hidden 인 한 줄 글자를 글자 상자 높이로 잘라 위아래가 깎인다. 복제본에서만 풀어 준다(어차피 한 줄에 맞춰져 있다).
+        onclone: (doc) => {
+          doc.querySelectorAll(".sd-card-rule, .sd-card-k, .sd-card-strategy, .sd-card-ticker, .sd-card-facts dd").forEach((el) => { el.style.overflow = "visible"; el.style.textOverflow = "clip"; });
+        },
+      });
+      const a = document.createElement("a");
+      a.href = canvas.toDataURL("image/png");
+      a.download = `${share.slug}.png`;
+      a.click();
+    } catch (e) {
+      setSaveError("카드 이미지를 만들지 못했어요. 잠시 후 다시 시도해 주세요.");
+    } finally {
+      setSaving(false);
+    }
+  }
   useEffect(() => {
     const onKey = (event) => { if (event.key === "Escape") onClose(); };
     document.addEventListener("keydown", onKey);
@@ -87,14 +119,17 @@ function ShareDialog({ share, stale, busy, onClose, onRenew }) {
           <input readOnly value={share.url} aria-label="공유 링크" className="field field-sm flex-1" onFocus={(event) => event.target.select()} />
           <button type="button" onClick={copy} className="btn btn-m btn-secondary shrink-0">{copied ? "복사했어요" : "링크 복사"}</button>
         </div>
-        <img src={api.cardUrl(share.slug)} alt="공유용 백테스트 인증 카드" className="mt-4" />
-        <a
-          href={api.cardUrl(share.slug)}
-          download={`${share.slug}.png`}
-          className="mt-3 inline-block t-small font-semibold text-slate-900 underline underline-offset-4 decoration-slate-300 hover:decoration-slate-900"
-        >
-          카드 이미지 내려받기
-        </a>
+        {card && (
+          <div ref={cardRef} className="studio-share-card">
+            <MacroCard {...card} logoProxy />
+          </div>
+        )}
+        <div className="mt-3 flex items-center gap-3 flex-wrap">
+          <button type="button" onClick={downloadCard} disabled={saving || !card} className="btn btn-m btn-secondary">
+            {saving ? "이미지 만드는 중…" : "카드 이미지 내려받기"}
+          </button>
+          {saveError && <span className="t-small text-red-600" role="alert">{saveError}</span>}
+        </div>
         <div className="confirm-dialog-actions">
           {stale && (
             <button type="button" onClick={onRenew} disabled={busy} className="btn btn-l w-full btn-primary">
@@ -604,6 +639,15 @@ export default function Studio() {
   const limitsRetry = limitsError ? (
     <button type="button" className="btn btn-s btn-secondary" onClick={() => loadTestLimits().catch(() => {})}>다시 확인</button>
   ) : null;
+  // 매크로 카드 재료 — 매크로 등록 탭과 공유 다이얼로그가 같은 카드를 그린다.
+  const cardProps = {
+    macro: testedMacro || currentMacro,
+    result,
+    strategyEntry: { symbol: chartSymbols[0] || form.symbol || "—", human_summary: summary, macro: testedMacro || currentMacro, locked: false },
+    periodLabel,
+    dataSource,
+    symbols: chartSymbols,
+  };
   const footAlert = (() => {
     if (limitsError && (!error || error === limitsError)) return { tone: "risk", text: limitsError, actions: limitsRetry };
     if (error) return { tone: "risk", text: `오류: ${error}`, actions: error === limitsError ? limitsRetry : null };
@@ -792,13 +836,8 @@ export default function Studio() {
 
             {dockTab === "done" && result && (
               <StudioOutcomes
-                macro={testedMacro || currentMacro}
+                {...cardProps}
                 valErr={valErr}
-                strategyEntry={{ symbol: chartSymbols[0] || form.symbol || "—", human_summary: summary, macro: testedMacro || currentMacro, locked: false }}
-                result={result}
-                periodLabel={periodLabel}
-                dataSource={dataSource}
-                symbols={chartSymbols}
                 canRegister={resultIsFresh}
                 onRegister={() => openRegistration(paper.mode)}
                 onShare={openShare}
@@ -814,6 +853,7 @@ export default function Studio() {
           share={share}
           stale={shareStale}
           busy={busy}
+          card={result ? cardProps : null}
           onClose={() => setShareOpen(false)}
           onRenew={async () => {
             const ok = await saveAndShare();

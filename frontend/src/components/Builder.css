@@ -76,3 +76,14 @@
 .builder-dense .bd-error { margin-top: 4px; color: rgb(var(--c-amber-700)); font-size: 11.5px; font-weight: 600; line-height: 1.4; }
 @keyframes bd-invalid-in { from { background: rgb(var(--c-brand) / .45); } to { background: rgb(var(--c-brand) / .12); } }
 @media (prefers-reduced-motion: reduce) { .builder-dense .is-invalid .field, .builder-dense .is-invalid .bd-seg { animation: none; } }
+/* 종목 검색 — 칩 줄 아래 떠 있는 목록(콤보박스). 실제 거래 가능한 종목만 뜨고, 그중에서만 고른다. */
+.builder-dense .bd-symbols { position: relative; }
+.builder-dense .bd-suggest { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 30; padding: 4px; border: 1px solid rgb(var(--c-slate-300)); border-radius: 10px; background: rgb(var(--c-surface)); box-shadow: 0 12px 28px rgb(var(--c-scrim) / .18); }
+.builder-dense .bd-suggest-item { width: 100%; height: 36px; display: flex; align-items: center; gap: 10px; padding: 0 8px; border-radius: 8px; text-align: left; color: rgb(var(--c-slate-900)); }
+.builder-dense .bd-suggest-item.is-on { background: rgb(var(--c-slate-100)); }
+.builder-dense .bd-suggest-sym { flex: 1 1 auto; min-width: 0; font-size: 13px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.builder-dense .bd-suggest-sym small { margin-left: 4px; color: rgb(var(--c-slate-500)); font-size: 11px; font-weight: 600; }
+.builder-dense .bd-suggest-tags { flex: none; display: flex; gap: 4px; }
+.builder-dense .bd-suggest-tags i { font-style: normal; height: 18px; padding: 0 6px; border-radius: 5px; background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-500)); font-size: 10.5px; font-weight: 700; line-height: 18px; }
+.builder-dense .bd-suggest-note { padding: 8px 10px; color: rgb(var(--c-slate-500)); font-size: 12px; line-height: 1.5; }
+.builder-dense .bd-suggest-note button { margin-left: 4px; color: rgb(var(--c-slate-900)); font-weight: 700; text-decoration: underline; text-underline-offset: 2px; }

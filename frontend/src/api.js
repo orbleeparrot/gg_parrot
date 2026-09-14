@@ -176,6 +176,9 @@ export const api = {
     }),
 
   cardUrl: (slug) => `/api/card/${slug}.png`,
+  // 거래 가능한 종목 목록(현물 + USDT-M 선물) — 조건 판의 종목 검색은 이 안에서만 고른다.
+  symbols: () => req("/api/symbols"),
+  coinLogoUrl: (base) => `/api/coin-logo/${encodeURIComponent(base)}.png`,
 
   // kimchi premium (reference indicator; upbit vs binance×USDKRW)
   kimchiPremium: (symbol, options = {}) => req(`/api/kimchi-premium?symbol=${encodeURIComponent(symbol || "BTC")}`, options),

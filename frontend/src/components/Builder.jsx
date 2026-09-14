@@ -1,4 +1,4 @@
-import { cloneElement, createContext, isValidElement, useContext, useId, useState } from "react";
+import { cloneElement, createContext, isValidElement, useContext, useEffect, useId, useRef, useState } from "react";
 import { RULE_TYPES, PERIOD_PRESETS, CANDLE_INTERVALS, MAX_LEVERAGE, withTypeDefaults } from "../lib/macro.js";
 import InfoTooltip from "./InfoTooltip.jsx";
 import { api } from "../api.js";
@@ -6,6 +6,8 @@ import { quoteOf, fmtKrw } from "../lib/format.js";
 import { useUsdKrw } from "../lib/usdkrw.js";
 import CoinIcon from "./CoinIcon.jsx";
 import "./Builder.css";
+import { useSymbolList } from "../hooks/useSymbolList.js";
+import { searchSymbols, resolveSymbol, marketTags } from "../lib/symbolSearch.js";
 
 // 촘촘한 판(variant="dense") — 직접 만들기의 좁은 조건 판용. Field·Group 이 이 값을 보고 규격을 바꾼다.
 const DenseContext = createContext(false);
@@ -129,39 +131,114 @@ function Group({ title, term, children, note, anchor }) {
 const inputCls = "field";
 
 // 종목 칩 — 쉼표 목록(form.symbol)을 칩으로 보여 주고, 입력칸에서 Enter·쉼표로 더한다. 값은 그대로 "BTCUSDT, ETHUSDT".
+// 종목 칩 — 실제 거래 가능한 종목(/api/symbols)만 들어간다. 글자를 치면 관련 종목이 아래 목록으로 뜨고,
+// Enter·클릭으로 고른다. `CHIP` 처럼 base 만 쳐도 CHIPUSDT 로 맞춘다. 목록에 없는 글자는 칩이 되지 않는다.
+const MAX_SYMBOLS = 5;
 function SymbolChips({ value, onChange, placeholder }) {
   const [draft, setDraft] = useState("");
+  const [open, setOpen] = useState(false);
+  const [cursor, setCursor] = useState(0);
+  const [note, setNote] = useState("");
+  const { items, loading, error, reload } = useSymbolList();
+  const rootRef = useRef(null);
+  const listId = useId().replace(/:/g, "");
   const symbols = String(value || "").split(",").map((part) => part.trim().toUpperCase()).filter(Boolean);
+  const query = draft.trim();
+  const matches = items && query ? searchSymbols(items, query, { limit: 8, exclude: symbols }) : [];
+  const showList = open && query.length > 0;
+
+  const add = (symbol) => {
+    if (!symbol) return;
+    if (symbols.includes(symbol)) { setDraft(""); setNote(""); return; }
+    if (symbols.length >= MAX_SYMBOLS) { setNote(`종목은 최대 ${MAX_SYMBOLS}개까지예요.`); return; }
+    onChange([...symbols, symbol].join(", "));
+    setDraft(""); setNote(""); setCursor(0);
+  };
+  // 입력한 글을 종목으로 — 목록에서 고른 줄이 있으면 그것, 아니면 글자 그대로 맞춰 본다.
   const commit = () => {
-    const added = draft.split(",").map((part) => part.trim().toUpperCase()).filter(Boolean);
-    if (!added.length) return;
-    const next = [...symbols];
-    for (const symbol of added) if (!next.includes(symbol)) next.push(symbol);
-    onChange(next.join(", "));
-    setDraft("");
+    if (!query) return;
+    if (!items) { setNote(error ? "종목 목록을 못 불러왔어요. 다시 시도해 주세요." : "종목 목록을 불러오는 중이에요."); return; }
+    const picked = matches.length ? matches[Math.min(cursor, matches.length - 1)].symbol : resolveSymbol(items, query);
+    if (!picked) { setNote(`'${query.toUpperCase()}' 는 거래 가능한 종목이 아니에요.`); return; }
+    add(picked);
   };
   const remove = (symbol) => onChange(symbols.filter((item) => item !== symbol).join(", "));
+
+  useEffect(() => { setCursor(0); }, [query]);
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDown = (event) => { if (!rootRef.current?.contains(event.target)) setOpen(false); };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [open]);
+
   return (
-    <div className="bd-chips">
-      {symbols.map((symbol) => (
-        <span key={symbol} className="bd-chip">
-          <CoinIcon symbol={symbol} size={14} alt="" />
-          <span className="num">{symbol}</span>
-          <button type="button" onClick={() => remove(symbol)} aria-label={`${symbol} 빼기`}>×</button>
-        </span>
-      ))}
-      <input
-        className="bd-chip-input num"
-        value={draft}
-        placeholder={symbols.length ? "+ 종목 추가" : placeholder}
-        aria-label="종목 추가"
-        onChange={(event) => setDraft(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === ",") { event.preventDefault(); commit(); }
-          else if (event.key === "Backspace" && !draft && symbols.length) remove(symbols[symbols.length - 1]);
-        }}
-        onBlur={commit}
-      />
+    <div className="bd-symbols" ref={rootRef}>
+      <div className="bd-chips">
+        {symbols.map((symbol) => (
+          <span key={symbol} className="bd-chip">
+            <CoinIcon symbol={symbol} size={14} alt="" />
+            <span className="num">{symbol}</span>
+            <button type="button" onClick={() => remove(symbol)} aria-label={`${symbol} 빼기`}>×</button>
+          </span>
+        ))}
+        <input
+          className="bd-chip-input num"
+          value={draft}
+          placeholder={symbols.length ? "+ 종목 검색" : placeholder}
+          aria-label="종목 검색"
+          role="combobox"
+          aria-expanded={showList}
+          aria-controls={listId}
+          aria-autocomplete="list"
+          aria-activedescendant={showList && matches[cursor] ? `${listId}-${matches[cursor].symbol}` : undefined}
+          autoComplete="off"
+          spellCheck={false}
+          onChange={(event) => { setDraft(event.target.value); setOpen(true); setNote(""); }}
+          onFocus={() => setOpen(true)}
+          onKeyDown={(event) => {
+            if (event.key === "ArrowDown") { event.preventDefault(); setOpen(true); setCursor((c) => Math.min(c + 1, Math.max(0, matches.length - 1))); }
+            else if (event.key === "ArrowUp") { event.preventDefault(); setCursor((c) => Math.max(0, c - 1)); }
+            else if (event.key === "Enter" || event.key === ",") { event.preventDefault(); commit(); }
+            else if (event.key === "Escape") { setOpen(false); }
+            else if (event.key === "Backspace" && !draft && symbols.length) remove(symbols[symbols.length - 1]);
+          }}
+          onBlur={() => {
+            // 목록의 클릭이 먼저 먹도록 잠깐 뒤에 닫는다. 글자가 종목과 정확히 맞으면 그때 칩으로 넣는다.
+            window.setTimeout(() => {
+              setOpen(false);
+              if (items && query && resolveSymbol(items, query)) add(resolveSymbol(items, query));
+            }, 120);
+          }}
+        />
+      </div>
+      {showList && (
+        <div className="bd-suggest" role="listbox" id={listId} aria-label="종목 검색 결과">
+          {!items && loading && <div className="bd-suggest-note">종목 목록을 불러오는 중…</div>}
+          {!items && !loading && error && (
+            <div className="bd-suggest-note">종목 목록을 못 불러왔어요. <button type="button" onClick={reload}>다시 시도</button></div>
+          )}
+          {items && matches.length === 0 && <div className="bd-suggest-note">'{query.toUpperCase()}' 에 맞는 종목이 없어요.</div>}
+          {matches.map((item, index) => (
+            <button
+              type="button"
+              key={item.symbol}
+              id={`${listId}-${item.symbol}`}
+              role="option"
+              aria-selected={index === cursor}
+              className={"bd-suggest-item" + (index === cursor ? " is-on" : "")}
+              onMouseDown={(event) => event.preventDefault()}
+              onMouseEnter={() => setCursor(index)}
+              onClick={() => add(item.symbol)}
+            >
+              <CoinIcon symbol={item.symbol} size={20} alt="" />
+              <span className="bd-suggest-sym num"><b>{item.base}</b><small>{item.quote}</small></span>
+              <span className="bd-suggest-tags" aria-hidden="true">{marketTags(item).map((tag) => <i key={tag}>{tag}</i>)}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      {note && <div className="bd-error" role="alert">{note}</div>}
     </div>
   );
 }

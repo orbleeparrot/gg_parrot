@@ -397,11 +397,32 @@ def get_klines(
             "캐시된 시세가 요청 기간 전체를 포함하는지 확인하지 못했습니다. "
             "잠시 후 다시 시도해 주세요."
         ) from fetch_error
+    # A transport failure (timeout, 429/451/5xx) is not "this coin has no market" —
+    # say so, or users chase a phantom symbol problem.
+    if fetch_error is not None and not _is_unknown_symbol(fetch_error):
+        raise NoSpotDataError(_transport_msg(fetch_error)) from fetch_error
     if is_fut:
         raise NoSpotDataError(NO_FUT_MSG)  # futures never fabricates
     if not allow_synthetic:
         raise NoSpotDataError(NO_SPOT_MSG)
     return _synthetic(symbol, start_ms, end_ms), "synthetic"
+
+
+def _is_unknown_symbol(exc: Exception) -> bool:
+    """Binance answers 400 ``{"code": -1121, "msg": "Invalid symbol."}`` for a symbol it does not list."""
+    resp = getattr(exc, "response", None)
+    if resp is None or getattr(resp, "status_code", None) != 400:
+        return False
+    try:
+        return int((resp.json() or {}).get("code", 0)) == -1121
+    except Exception:
+        return "Invalid symbol" in (getattr(resp, "text", "") or "")
+
+
+def _transport_msg(exc: Exception) -> str:
+    resp = getattr(exc, "response", None)
+    detail = f"HTTP {resp.status_code}" if resp is not None and getattr(resp, "status_code", None) else type(exc).__name__
+    return f"바이낸스 시세를 불러오지 못했어요({detail}). 잠시 후 다시 시도해 주세요."
 
 
 # --- live klines (chart) -------------------------------------------------

@@ -78,6 +78,7 @@ from . import whales as whales_mod
 from .card import render_card
 from .security import hash_password
 from .data import NoSpotDataError, average_daily_funding_pct, get_klines, resolve_period
+from .data import symbols as symbols_mod
 from .data.binance import backtest_limits
 from .marketdata import fetch_klines_for_macro
 from .db import MacroRow, get_session, init_db, request_session
@@ -1263,6 +1264,24 @@ def board_comment_delete(comment_id: int, user: User = Depends(auth_mod.current_
     if not board_mod.delete_comment(comment_id, user, db=db):
         raise HTTPException(status_code=403, detail="본인이 쓴 댓글만 지울 수 있어요.")
     return {"ok": True}
+
+
+@app.get("/api/symbols")
+def symbols() -> dict:
+    """Tradable Binance USDT symbols (spot + USDT-M perpetual) for the builder's search — only these can be added."""
+    try:
+        return symbols_mod.list_symbols()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"종목 목록을 불러오지 못했어요: {type(exc).__name__}")
+
+
+@app.get("/api/coin-logo/{base}.png")
+def coin_logo(base: str) -> Response:
+    """Same-origin copy of Binance's public coin logo so the share card can be captured as an image."""
+    png = symbols_mod.coin_logo_png(base)
+    if png is None:
+        raise HTTPException(status_code=404, detail="logo not found")
+    return Response(content=png, media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
 
 
 @app.get("/api/card/{slug}.png")

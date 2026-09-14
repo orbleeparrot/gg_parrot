@@ -10,7 +10,8 @@ import { baseOf } from "../lib/format.js";
 // 종목에서 깨진 이미지 아이콘이 뜨는 것보다 낫다.
 const LOGO_BASE = "https://bin.bnbstatic.com/static/assets/logos";
 
-export default function CoinIcon({ symbol, size = 36, className = "", alt }) {
+// proxy — 카드를 이미지로 뜰 때(html2canvas)는 다른 출처 이미지를 캔버스에 못 그리므로 우리 서버의 사본(/api/coin-logo)을 쓴다.
+export default function CoinIcon({ symbol, size = 36, className = "", alt, proxy = false }) {
   const [failed, setFailed] = useState(false);
   const base = baseOf(symbol || "");
   const label = base || "?";
@@ -31,7 +32,7 @@ export default function CoinIcon({ symbol, size = 36, className = "", alt }) {
 
   return (
     <img
-      src={`${LOGO_BASE}/${base}.png`}
+      src={proxy ? `/api/coin-logo/${encodeURIComponent(base)}.png` : `${LOGO_BASE}/${base}.png`}
       alt={alt ?? `${label} 로고`}
       width={size}
       height={size}
@@ -39,7 +40,8 @@ export default function CoinIcon({ symbol, size = 36, className = "", alt }) {
       /* 바이낸스 로고 CDN 은 리퍼러가 붙으면 핫링크로 보고 막는다(실측: 기본
          요청은 10종 전부 실패, no-referrer 면 통과). 로고는 공개 정적 파일이라
          리퍼러를 빼도 잃는 게 없다. */
-      referrerPolicy="no-referrer"
+      referrerPolicy={proxy ? undefined : "no-referrer"}
+      crossOrigin={proxy ? "anonymous" : undefined}
       draggable="false"
       className={`coin-icon ${className}`}
       style={style}

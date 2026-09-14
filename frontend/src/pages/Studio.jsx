@@ -656,14 +656,17 @@ export default function Studio() {
     <button type="button" className="btn btn-s btn-secondary" onClick={() => loadTestLimits().catch(() => {})}>다시 확인</button>
   ) : null;
   // 매크로 카드 재료 — 매크로 등록 탭과 공유 다이얼로그가 같은 카드를 그린다.
+  // 카드는 결과와 짝인 '테스트한 매크로'를 보여 준다. 종목도 그 매크로에서 읽는다 — 조건 판에서 종목을 빼도 다시 테스트하기 전엔 카드가 바뀌지 않는다.
+  const cardMacro = testedMacro || currentMacro;
+  const cardSymbols = Array.isArray(cardMacro.symbols) && cardMacro.symbols.length > 1 ? cardMacro.symbols : [cardMacro.symbol].filter(Boolean);
   const cardProps = {
-    macro: testedMacro || currentMacro,
+    macro: cardMacro,
     result,
     perSymbol,
-    strategyEntry: { symbol: chartSymbols[0] || form.symbol || "—", human_summary: summary, macro: testedMacro || currentMacro, locked: false },
+    strategyEntry: { symbol: cardSymbols[0] || "—", human_summary: summary, macro: cardMacro, locked: false },
     periodLabel,
     dataSource,
-    symbols: chartSymbols,
+    symbols: cardSymbols,
   };
   const footAlert = (() => {
     if (limitsError && (!error || error === limitsError)) return { tone: "risk", text: limitsError, actions: limitsRetry };

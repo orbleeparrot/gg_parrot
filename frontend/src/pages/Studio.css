@@ -40,7 +40,13 @@
 .studio-scroll { overflow: auto; min-height: 0; overscroll-behavior: contain; }
 
 /* 조건 — Builder 를 그대로 쓰되 좁은 열에 맞춰 2열로 접는다. 스크롤은 이 판 안에서만. */
-.studio-cond { grid-area: cond; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; border-right: 1px solid rgb(var(--c-slate-200)); }
+.studio-cond { grid-area: cond; min-height: 0; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; border-right: 1px solid rgb(var(--c-slate-200)); }
+/* 빌더 종류 segmented — 머리 아래 한 줄. 프로는 비활성이고 옆에 '업데이트 예정' 배지. */
+.studio-cond-mode { padding: 8px 16px 10px; }
+.studio-mode-seg { width: 100%; height: 32px; padding: 3px; display: flex; }
+.studio-mode-seg .seg-item { flex: 1; height: 24px; padding: 0 8px; justify-content: center; font-size: 12px; white-space: nowrap; }
+.studio-mode-seg .seg-item.is-soon { opacity: .6; cursor: not-allowed; }
+.studio-soon-badge { margin-left: 6px; height: 16px; padding: 0 5px; border-radius: 4px; background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-500)); font-size: 10px; font-weight: 700; line-height: 16px; }
 .studio-cond-body { padding: 0 16px 8px; overflow-x: hidden; } /* Builder(variant="dense") 가 절 사이 여백·괘선을 스스로 가진다. 말풍선이 넘쳐도 가로 스크롤은 없다. */
 .studio-cond-foot { padding: 12px 16px; border-top: 1px solid rgb(var(--c-slate-200)); display: grid; gap: 8px; }
 .studio-cond-foot .studio-foot-note { display: flex; align-items: center; justify-content: space-between; gap: 8px; }

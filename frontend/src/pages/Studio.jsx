@@ -741,6 +741,15 @@ export default function Studio() {
               ))}
             </div>
           </div>
+          {/* 빌더 종류 — 기본 | 프로. 프로는 업데이트 예정이라 비활성 + 배지(사이드바의 '자동 매매 봇'과 같은 표기). 열리면 disabled 를 떼고 폼을 바꿔 끼운다. */}
+          <div className="studio-cond-mode">
+            <div className="seg studio-mode-seg" role="tablist" aria-label="빌더 종류">
+              <button type="button" role="tab" id="builder-tab-basic" aria-selected="true" className="seg-item seg-item-on">기본 빌더</button>
+              <button type="button" role="tab" id="builder-tab-pro" aria-selected="false" disabled title="프로 빌더는 업데이트 예정이에요" className="seg-item is-soon">
+                프로 빌더<span className="studio-soon-badge">업데이트 예정</span>
+              </button>
+            </div>
+          </div>
           <div className="studio-scroll studio-cond-body">
             <Builder form={form} setForm={setForm} variant="dense" intervalOptions={intervalOptions} fieldError={fieldError} />
           </div>

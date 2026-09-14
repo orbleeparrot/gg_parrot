@@ -226,9 +226,9 @@
 /* 매크로 등록 — 왼쪽은 내 매크로를 담은 트레이딩 카드(산출물), 오른쪽은 카드와 같은 높이의 동작 목록, 그 아래 안내 상자.
    카드 안은 두 면: 왼쪽 "무엇인지"(종목 · 포지션/시장 · 매매 방식 · 조건 문장 · 사양표), 오른쪽 "테스트에서 낸 것"(수익률 · 자산곡선 · MDD/승률/매매). 절취선이 둘을 가른다. */
 .sd-done { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; align-items: stretch; min-height: 272px; padding-top: 2px; } /* 카드가 폭 대부분, 동작 목록은 오른쪽 300px · 둘의 높이는 같다(최소 272px) */
-/* 동작 목록 — 행 넷이 카드 높이를 똑같이 나눠 갖는다(첫 행만 노랑). 아이콘 칩 · 이름 · 한 줄 설명 · 갈매기. */
+/* 동작 목록 — 행 넷이 카드 높이를 똑같이 나눠 갖되 64px 까지만(첫 행만 노랑). 종목이 많아 카드가 길어져도 버튼이 따라 커지지 않는다. 아이콘 칩 · 이름 · 한 줄 설명 · 갈매기. */
 .sd-act { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-.sd-act-row { flex: 1 1 0; min-height: 48px; display: flex; align-items: center; gap: 12px; padding: 8px 12px 8px 12px; border: 1px solid rgb(var(--c-slate-300)); border-radius: 12px; background: transparent; color: rgb(var(--c-slate-900)); text-align: left; transition: background .12s; }
+.sd-act-row { flex: 1 1 0; min-height: 48px; max-height: 64px; display: flex; align-items: center; gap: 12px; padding: 8px 12px 8px 12px; border: 1px solid rgb(var(--c-slate-300)); border-radius: 12px; background: transparent; color: rgb(var(--c-slate-900)); text-align: left; transition: background .12s; }
 .sd-act-row:hover:not(:disabled) { background: rgb(var(--c-slate-100)); }
 .sd-act-row:disabled { opacity: .5; cursor: not-allowed; }
 .sd-act-row:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }

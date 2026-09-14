@@ -8,7 +8,7 @@
 .builder-dense .bd-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-items: start; }
 .builder-dense .bd-grid + .bd-grid { margin-top: 12px; }
 .builder-dense .bd-grid-1 { grid-template-columns: minmax(0, 1fr); }
-.builder-dense .bd-field { min-width: 0; display: grid; grid-row: span 3; grid-template-rows: subgrid; row-gap: 4px; align-self: stretch; }
+.builder-dense .bd-field { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); grid-row: span 3; grid-template-rows: subgrid; row-gap: 4px; align-self: stretch; } /* 열 폭을 칸에 묶는다 — 기본 auto 열은 한 줄짜리 내용(종목 행)만큼 칸 밖으로 자랐다 */
 .builder-dense .bd-field-wide { grid-column: 1 / -1; }
 /* 같은 행은 라벨·입력·설명의 기준선을 공유한다. 긴 라벨이 옆 입력칸을 밀어내지 않는다. */
 .builder-dense .bd-label { display: flex; align-items: center; align-self: end; gap: 2px; min-height: 18px; color: rgb(var(--c-slate-700)); font-size: 13px; font-weight: 600; line-height: 18px; word-break: keep-all; overflow-wrap: anywhere; }
@@ -69,7 +69,7 @@
 @keyframes bd-invalid-in { from { background: rgb(var(--c-brand) / .45); } to { background: rgb(var(--c-brand) / .12); } }
 @media (prefers-reduced-motion: reduce) { .builder-dense .is-invalid .field, .builder-dense .is-invalid .bd-seg { animation: none; } }
 /* 종목 고르기 — 검색창(위) + 고른 종목 행 목록(아래). 실제 거래 가능한 종목만 뜨고, 그중에서만 고른다. */
-.builder-dense .bd-symbols { position: relative; }
+.builder-dense .bd-symbols { position: relative; min-width: 0; container-type: inline-size; }
 .builder-dense .bd-search { position: relative; }
 .builder-dense .bd-search > svg { position: absolute; left: 10px; top: 50%; width: 14px; height: 14px; transform: translateY(-50%); fill: none; stroke: rgb(var(--c-slate-500)); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
 .builder-dense .bd-search input { width: 100%; height: 32px; padding: 0 9px 0 30px; border: 1px solid rgb(var(--c-slate-300)); border-radius: 8px; background: transparent; color: rgb(var(--c-slate-900)); font-size: 13px; font-weight: 600; }
@@ -91,8 +91,13 @@
 .builder-dense .bd-symrow:first-child { border-top: 0; }
 .builder-dense .bd-symrow-sym { flex: 1 1 auto; min-width: 0; color: rgb(var(--c-slate-900)); font-size: 13px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .builder-dense .bd-symrow-sym small { margin-left: 3px; color: rgb(var(--c-slate-500)); font-size: 10px; font-weight: 700; }
-.builder-dense .bd-symrow-tag { flex: none; height: 18px; padding: 0 6px; border-radius: 5px; background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-500)); font-size: 10.5px; font-weight: 700; line-height: 18px; white-space: nowrap; }
-.builder-dense .bd-symrow-w { flex: none; color: rgb(var(--c-slate-500)); font-size: 11px; font-weight: 600; white-space: nowrap; }
+.builder-dense .bd-symrow-tag { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; height: 18px; padding: 0 6px; border-radius: 5px; background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-500)); font-size: 10.5px; font-weight: 700; line-height: 18px; white-space: nowrap; }
+.builder-dense .bd-symrow-w { flex: 0 1 auto; min-width: 0; overflow: hidden; color: rgb(var(--c-slate-500)); font-size: 11px; font-weight: 600; white-space: nowrap; }
 .builder-dense .bd-symrow-x { flex: none; width: 28px; height: 28px; border-radius: 7px; color: rgb(var(--c-slate-500)); font-size: 16px; line-height: 1; display: grid; place-items: center; }
 .builder-dense .bd-symrow-x:hover { background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-900)); }
 .builder-dense .bd-symbols > .bd-hint { margin-top: 6px; }
+/* 두 열로 접혀 칸이 좁으면(≤250px) 행의 시장 태그를 숨기고 비중은 분수만. 로고 · 티커 · ✕ 는 늘 남는다. */
+@container (max-width: 250px) {
+  .builder-dense .bd-symrow-tag { display: none; }
+  .builder-dense .bd-symrow-w { font-size: 10.5px; }
+}

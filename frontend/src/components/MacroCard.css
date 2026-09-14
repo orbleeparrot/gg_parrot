@@ -2,7 +2,7 @@
    등락색은 카드 안에서 스스로 정한다(독 밖 다이얼로그에서도 같은 색). */
 .sd-card .is-up { color: rgb(var(--c-green-600)); }
 .sd-card .is-down { color: rgb(var(--c-red-600)); }
-.sd-card { position: relative; overflow: hidden; min-width: 0; container-type: inline-size; border: 1px solid rgb(var(--c-slate-300)); border-radius: 18px; background: linear-gradient(160deg, rgb(var(--c-brand) / .16), rgb(var(--c-surface)) 46%); box-shadow: 0 12px 30px rgb(var(--c-scrim) / .16); }
+.sd-card { position: relative; overflow: hidden; min-width: 0; container-type: inline-size; border: 1px solid rgb(var(--c-slate-300)); border-radius: 18px; background: linear-gradient(160deg, rgb(var(--c-brand) / .16), rgb(var(--c-surface)) 46%) rgb(var(--c-surface)); /* 면 색을 밑에 깐다 — 이미지로 뜰 때 투명 위에 틴트만 남지 않게 */ box-shadow: 0 12px 30px rgb(var(--c-scrim) / .16); }
 .sd-card-in { height: 100%; display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 38%); } /* 컨테이너 쿼리는 자손에만 걸리므로 두 면은 안쪽 상자가 나눈다 */
 .sd-card-spec { min-width: 0; padding: 22px 22px 18px; display: flex; flex-direction: column; gap: 16px; }
 .sd-card-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
@@ -36,9 +36,7 @@
 .sd-card-k { display: block; padding-right: 120px; color: rgb(var(--c-slate-500)); font-size: 11px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sd-card-ret { display: block; margin-top: 2px; color: rgb(var(--c-slate-900)); font-size: 26px; font-weight: 800; letter-spacing: -.02em; line-height: 1.1; white-space: nowrap; }
 .sd-card-spark { display: block; width: 100%; height: 64px; flex: 1 1 64px; min-height: 52px; margin-top: 12px; }
-.sd-card-spark-area { fill: currentColor; opacity: .12; }
-.sd-card-spark-line { fill: none; stroke: currentColor; stroke-width: 2; vector-effect: non-scaling-stroke; }
-.sd-card-spark-base { fill: none; stroke: rgb(var(--c-slate-400)); stroke-width: 1; stroke-dasharray: 3 3; opacity: .7; vector-effect: non-scaling-stroke; }
+/* 곡선의 색·두께는 MacroCard.jsx 의 SVG 속성이 정한다(이미지로 뜰 때 CSS 가 SVG 자식에 실리지 않아서). 여기서는 두지 않는다. */
 .sd-card-stats { margin: 12px 0 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding-top: 12px; border-top: 1px dashed rgb(var(--c-slate-300)); }
 .sd-card-stats dt { color: rgb(var(--c-slate-500)); font-size: 11px; font-weight: 600; }
 .sd-card-stats dd { margin: 1px 0 0; color: rgb(var(--c-slate-900)); font-size: 15px; font-weight: 800; white-space: nowrap; }

@@ -279,8 +279,8 @@
 
 /* 공유 다이얼로그 — 인증 카드가 넓어 확인 다이얼로그보다 조금 넓게. */
 .studio-share { max-width: 560px; }
-/* 다이얼로그 안의 트레이딩 카드 — 이미지로 뜰 때의 바탕색(--share-card-bg)은 면 색과 같다. 카드 폭이 620px 아래라 결과 면이 아래 띠로 온다. */
-.studio-share-card { --share-card-bg: rgb(var(--c-surface)); margin-top: 16px; }
+/* 다이얼로그 안의 트레이딩 카드 — 이미지로 뜰 때 이 상자가 그대로 그림이 된다(모서리 밖은 투명). 카드 폭이 620px 아래라 결과 면이 아래 띠로 온다. */
+.studio-share-card { margin-top: 16px; }
 .studio-share-card .sd-card { box-shadow: none; }
 
 @media (max-width: 1300px) {

@@ -96,36 +96,17 @@ function ShareDialog({ share, stale, busy, card, onClose, onRenew }) {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const cardRef = useRef(null);
-  // 카드 이미지 — 화면의 트레이딩 카드를 그대로 그린다(html2canvas, 2배). 로고는 같은 출처 사본(/api/coin-logo)이라 캔버스에 실린다.
+  // 카드 이미지 — 화면의 트레이딩 카드를 브라우저가 그린 그대로 뜬다(html-to-image: SVG foreignObject 로 같은 렌더링 엔진이 그린다, 2배).
+  // 폰트(Pretendard · JetBrains Mono)와 로고 사본(/api/coin-logo)이 모두 같은 출처라 그대로 실린다. 모서리 밖은 투명.
   async function downloadCard() {
     if (!cardRef.current) return;
     setSaving(true); setSaveError("");
     try {
-      const { default: html2canvas } = await import("html2canvas");
-      const node = cardRef.current;
-      const bg = getComputedStyle(node).getPropertyValue("--share-card-bg").trim() || null;
-      const canvas = await html2canvas(node, {
-        backgroundColor: bg,
-        scale: 2,
-        useCORS: true,
-        logging: false,
-        // html2canvas 는 overflow: hidden 인 한 줄 글자를 글자 상자 높이로 잘라 위아래가 깎인다. 복제본에서만 풀어 준다(어차피 한 줄에 맞춰져 있다).
-        onclone: (doc) => {
-          doc.querySelectorAll(".sd-card-rule, .sd-card-k, .sd-card-strategy, .sd-card-ticker, .sd-card-facts dd, .sd-card-per-sym").forEach((el) => { el.style.overflow = "visible"; el.style.textOverflow = "clip"; });
-          // 카드의 노란 틴트 그라데이션은 반투명 색에서 시작하는데, html2canvas 는 반투명 → 불투명 사이를 탁하게 섞어 대각선 띠가 생긴다.
-          // 복제본에는 같은 색을 미리 섞은 불투명 색으로 다시 칠한다.
-          const root = getComputedStyle(document.documentElement);
-          const rgb = (name) => root.getPropertyValue(name).trim().split(/[\s,]+/).map(Number);
-          const brand = rgb("--c-brand"); const surface = rgb("--c-surface");
-          if (brand.length === 3 && surface.length === 3 && brand.every(Number.isFinite) && surface.every(Number.isFinite)) {
-            const tint = brand.map((v, i) => Math.round(v * 0.16 + surface[i] * 0.84)).join(", ");
-            const card = doc.querySelector(".studio-share-card .sd-card"); // 독의 카드가 아니라 다이얼로그의 카드
-            if (card) card.style.background = `linear-gradient(160deg, rgb(${tint}), rgb(${surface.join(", ")}) 46%)`;
-          }
-        },
-      });
+      const { toPng } = await import("html-to-image");
+      if (document.fonts?.ready) await document.fonts.ready;
+      const dataUrl = await toPng(cardRef.current, { pixelRatio: 2, cacheBust: false });
       const a = document.createElement("a");
-      a.href = canvas.toDataURL("image/png");
+      a.href = dataUrl;
       a.download = `${share.slug}.png`;
       a.click();
     } catch (e) {

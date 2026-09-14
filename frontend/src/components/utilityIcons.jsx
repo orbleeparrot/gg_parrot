@@ -5,6 +5,7 @@ import { DownloadSimpleIcon } from "@phosphor-icons/react/dist/csr/DownloadSimpl
 import { QuestionIcon } from "@phosphor-icons/react/dist/csr/Question";
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { ListIcon } from "@phosphor-icons/react/dist/csr/List";
+import { KeyIcon as PhosphorKey } from "@phosphor-icons/react/dist/csr/Key";
 
 // Keep the library's native paths and fill; CSS only sizes and aligns icons.
 const iconProps = { size: 24, weight: "regular", "aria-hidden": true, focusable: false };
@@ -17,3 +18,4 @@ export function DownloadIcon() { return <DownloadSimpleIcon {...iconProps} />; }
 export function HelpIcon() { return <QuestionIcon {...iconProps} />; }
 export function ChevronDownIcon() { return <CaretDownIcon {...iconProps} />; }
 export function MenuIcon() { return <ListIcon {...iconProps} />; }
+export function KeyIcon() { return <PhosphorKey {...iconProps} />; }

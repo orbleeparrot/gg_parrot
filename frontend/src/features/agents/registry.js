@@ -1,4 +1,5 @@
 import { executionModule } from "./modules/execution.js";
+import { runnerLogModule } from "./modules/runnerLog.js";
 import { leaderModule } from "./modules/leader.js";
 import { positionNewsModule } from "./positionNews/index.js";
 import { riskModule } from "./modules/risk.js";
@@ -8,6 +9,7 @@ import { strategyModule } from "./modules/strategy.js";
 // entry. The shared activity stream remains only a renderer.
 export const AGENT_MODULES = [
   executionModule,
+  runnerLogModule,
   positionNewsModule,
   riskModule,
   strategyModule,

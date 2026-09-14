@@ -404,6 +404,27 @@ class RunSession(SQLModel, table=True):
     stopped_at: Optional[str] = None
     # 시작 요청에 실린 실행기 버전. v6 이하 exe 는 보내지 않아 빈 문자열로 남는다.
     runner_version: str = ""
+    # 매크로 출처 — web | file_verified | file_modified | file_unsigned (macro_signing 참고).
+    # 옛 실행기가 만든 세션은 빈 문자열.
+    macro_origin: str = ""
+    # 실행된 매크로의 짧은 지문(sha256 앞 12자리). 문의 시 어떤 설정이었는지 대조한다.
+    macro_digest: str = ""
+
+
+class RunSessionEvent(SQLModel, table=True):
+    """실행기가 올린 실행 이벤트 한 줄(시작·신호·주문·체결·오류·종료).
+
+    실행기 창에만 남던 로그를 서버에 쌓아, 문의가 오면 무슨 주문이 언제 나갔는지
+    확인할 수 있게 한다. 세션당 상한(runner.EVENT_CAP)을 넘으면 오래된 것부터 지운다.
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    session_id: int = Field(index=True)
+    user_id: int = Field(index=True)
+    ts: str  # 실행기 시각(ISO, 없으면 서버 수신 시각)
+    kind: str = "info"  # start | info | signal | order | fill | error | stop
+    message: str = ""
+    created_ms: int = Field(default=0, sa_type=BigInteger)
 
 
 class TickerNewsSnapshot(SQLModel, table=True):
@@ -800,6 +821,8 @@ def _migrate() -> None:
             "position_uncertain": "ALTER TABLE runsession ADD COLUMN position_uncertain BOOLEAN DEFAULT FALSE",
             "macro_json": "ALTER TABLE runsession ADD COLUMN macro_json TEXT DEFAULT ''",
             "user_macro_id": "ALTER TABLE runsession ADD COLUMN user_macro_id INTEGER",
+            "macro_origin": "ALTER TABLE runsession ADD COLUMN macro_origin TEXT DEFAULT ''",
+            "macro_digest": "ALTER TABLE runsession ADD COLUMN macro_digest TEXT DEFAULT ''",
         },
         "tickernewssnapshot": {
             "claim_token": "ALTER TABLE tickernewssnapshot ADD COLUMN claim_token TEXT DEFAULT ''",
@@ -889,6 +912,8 @@ _PG_ADDED_COLUMNS = {
         "macro_json": "TEXT DEFAULT ''", "position_uncertain": "BOOLEAN DEFAULT FALSE",
         "user_macro_id": "INTEGER",
         "runner_version": "TEXT DEFAULT ''",
+        "macro_origin": "TEXT DEFAULT ''",
+        "macro_digest": "TEXT DEFAULT ''",
     },
     "tickernewssnapshot": {
         "claim_token": "TEXT DEFAULT ''", "last_observed_at": "TEXT DEFAULT ''",

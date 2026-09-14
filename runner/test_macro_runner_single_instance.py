@@ -44,6 +44,8 @@ class RunnerActivationSafetyTests(unittest.TestCase):
         app.root = Mock()
         app.bot = None
         app.user_macro_id = None
+        app.macro_sig = None
+        app.macro_source = ""
         app._protocol_claim_busy = False
         app._log = Mock()
         app._begin_protocol_claim = Mock()

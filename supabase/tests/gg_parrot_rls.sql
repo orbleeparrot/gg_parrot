@@ -23,6 +23,7 @@ declare
     'runnerkey',
     'runnerlaunchticket',
     'runsession',
+    'runsessionevent',
     'tickernewsaibudget',
     'tickernewssnapshot',
     'tickernewsstate',

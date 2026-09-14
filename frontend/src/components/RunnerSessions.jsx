@@ -5,6 +5,7 @@ import { SectionTitle, EmptyRow } from "./Page.jsx";
 import CandleChart from "./CandleChart.jsx";
 import { computeSessionOverlay } from "../lib/indicators.js";
 import { RULE_TYPES } from "../lib/macro.js";
+import { macroOriginBadge } from "../lib/macroOrigin.js";
 import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 import ConfirmDialog from "./ConfirmDialog.jsx";
 import { describeDeleteConfirm, describeStopConfirm } from "../features/agents/runOutcome.js";
@@ -133,6 +134,7 @@ function SessionCard({ s, onStop, onDelete, busy }) {
   const [chartOpen, setChartOpen] = useState(true);
   const hasEntry = s.in_position && (s.entry_price ?? 0) > 0;
   const hasMacro = !!s.macro?.rule_type;
+  const origin = macroOriginBadge(s);
   const ruleLabel = hasMacro ? RULE_TYPES[s.macro.rule_type]?.label : "";
   const chartInterval = s.macro?.candle_interval || "5m";
   const overlay = useCallback(
@@ -155,6 +157,7 @@ function SessionCard({ s, onStop, onDelete, busy }) {
               {s.connected ? "🟢 연결됨" : "⚪ 연결 끊김"}
             </span>
           )}
+          {origin && <span className={origin.className} title={origin.title}>{origin.label}</span>}
           {stopping && <span className="badge badge-risk">종료 처리 중…</span>}
           {stopped && <span className="badge badge-flat">{s.status === "error" ? "오류 종료" : "종료됨"}</span>}
         </div>

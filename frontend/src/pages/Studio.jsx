@@ -80,6 +80,16 @@ function ShareDialog({ share, stale, busy, card, onClose, onRenew }) {
         // html2canvas 는 overflow: hidden 인 한 줄 글자를 글자 상자 높이로 잘라 위아래가 깎인다. 복제본에서만 풀어 준다(어차피 한 줄에 맞춰져 있다).
         onclone: (doc) => {
           doc.querySelectorAll(".sd-card-rule, .sd-card-k, .sd-card-strategy, .sd-card-ticker, .sd-card-facts dd").forEach((el) => { el.style.overflow = "visible"; el.style.textOverflow = "clip"; });
+          // 카드의 노란 틴트 그라데이션은 반투명 색에서 시작하는데, html2canvas 는 반투명 → 불투명 사이를 탁하게 섞어 대각선 띠가 생긴다.
+          // 복제본에는 같은 색을 미리 섞은 불투명 색으로 다시 칠한다.
+          const root = getComputedStyle(document.documentElement);
+          const rgb = (name) => root.getPropertyValue(name).trim().split(/[\s,]+/).map(Number);
+          const brand = rgb("--c-brand"); const surface = rgb("--c-surface");
+          if (brand.length === 3 && surface.length === 3 && brand.every(Number.isFinite) && surface.every(Number.isFinite)) {
+            const tint = brand.map((v, i) => Math.round(v * 0.16 + surface[i] * 0.84)).join(", ");
+            const card = doc.querySelector(".studio-share-card .sd-card"); // 독의 카드가 아니라 다이얼로그의 카드
+            if (card) card.style.background = `linear-gradient(160deg, rgb(${tint}), rgb(${surface.join(", ")}) 46%)`;
+          }
         },
       });
       const a = document.createElement("a");
@@ -280,7 +290,9 @@ export default function Studio() {
   useEffect(() => { if (paper.running) setDockTab("paper"); }, [paper.running]);
   useEffect(() => { if (!result) { setDockTab("bt"); setOptimized(false); } }, [result]);
 
-  // Clone flow: load a shared macro into the builder.
+  // Clone flow: load a shared macro into the builder, then run its backtest once so the
+  // receiver sees results, tabs and the card right away (the link stores conditions only).
+  const runBacktestRef = useRef(null);
   useEffect(() => {
     if (!slug) return;
     let alive = true;
@@ -289,13 +301,16 @@ export default function Studio() {
       .getMacro(slug)
       .then((data) => {
         if (!alive) return;
-        setForm(macroToForm(data.macro));
+        const loadedForm = macroToForm(data.macro);
+        setForm(loadedForm);
         setLoadedFrom(data.human_summary);
         setShare({
           slug,
           url: `${window.location.origin}/s/${slug}`,
-          macroKey: macroKey(buildMacro(macroToForm(data.macro))),
+          macroKey: macroKey(buildMacro(loadedForm)),
         });
+        setBusy(false);
+        return runBacktestRef.current?.(loadedForm);
       })
       .catch((reason) => alive && setError(String(reason.message || reason)))
       .finally(() => alive && setBusy(false));
@@ -361,6 +376,7 @@ export default function Studio() {
       if (requestId === requestIdRef.current) setBusy(false);
     }
   }, [loadTestLimits]);
+  runBacktestRef.current = runBacktest;
 
   // Consume all entry parameters in one place so two effects cannot restore
   // each other's deleted query keys. A login-return draft wins over starter

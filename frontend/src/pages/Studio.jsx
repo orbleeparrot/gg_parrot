@@ -104,7 +104,8 @@ function ShareDialog({ share, stale, busy, card, onClose, onRenew }) {
     try {
       const { toPng } = await import("html-to-image");
       if (document.fonts?.ready) await document.fonts.ready;
-      const dataUrl = await toPng(cardRef.current, { pixelRatio: 2, cacheBust: false });
+      // 캡처 상자의 바깥 여백(margin-top 16px)이 복제본에도 실려 카드가 아래로 밀리고 바닥이 잘렸다 — 복제본에서는 여백을 0 으로.
+      const dataUrl = await toPng(cardRef.current, { pixelRatio: 2, cacheBust: false, style: { margin: "0" } });
       const a = document.createElement("a");
       a.href = dataUrl;
       a.download = `${share.slug}.png`;

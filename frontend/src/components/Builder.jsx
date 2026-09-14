@@ -269,7 +269,7 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
   // 들어가 "무엇을 볼지 정하고 바로 아래에서 본다"가 한 덩어리로 읽힌다.
   const symbolField = (
     // 촘촘한 판은 도움말 문장 대신 라벨 옆 ⓘ 하나(용어 'symbols').
-    <Field label="종목" anchor="symbol" term={dense ? "symbols" : undefined} hint={dense ? undefined : "여러 종목은 쉼표로 나눠 써요. 자금은 종목 수만큼 균등하게 나눠요."}>
+    <Field label="종목" anchor="symbol" term={dense ? "symbols" : undefined} hint={dense ? undefined : "여러 종목은 쉼표로 나눠 써요. 자금을 종목 수만큼 균등하게 나눠 종목마다 따로 돌리고, 결과는 총합이에요."}>
       {dense ? (
         <SymbolChips value={form.symbol} onChange={(value) => setForm({ ...form, symbol: value })} placeholder="BTCUSDT" />
       ) : (

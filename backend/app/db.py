@@ -541,6 +541,21 @@ class DailyChallenge(SQLModel, table=True):
     last_error: str = ""
 
 
+class DailyQuestClaim(SQLModel, table=True):
+    """한 회원이 어느 KST 날짜에 어떤 일일 퀘스트를 완료했는지(하루 한 번 보상의 멱등 키)."""
+
+    __table_args__ = (
+        Index("ix_dailyquestclaim_user_date_key", "user_id", "date_kst", "quest_key", unique=True),
+    )
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(index=True)
+    date_kst: str  # YYYY-MM-DD (KST)
+    quest_key: str  # quests.QUESTS 의 key
+    reward: int = 0  # 그때 지급한 포인트(퀘스트 보상이 바뀌어도 기록은 남는다)
+    created_at: str
+    created_ms: int = Field(default=0, sa_type=BigInteger)
+
+
 class LeaderboardCarryover(SQLModel, table=True):
     """Idempotency record: one row per KST date whose top-N carry-over already ran."""
 
@@ -765,6 +780,18 @@ def _migrate() -> None:
         },
         "papertrade": {
             "symbol": "ALTER TABLE papertrade ADD COLUMN symbol TEXT DEFAULT ''",
+        },
+        # 게시판 편집기·추천(2026-09-10~): Postgres 쪽(_PG_ADDED_COLUMNS)에만 있어 SQLite 개발 DB 가 깨졌다.
+        "boardpost": {
+            "body_format": "ALTER TABLE boardpost ADD COLUMN body_format TEXT NOT NULL DEFAULT ''",
+            "views": "ALTER TABLE boardpost ADD COLUMN views INTEGER NOT NULL DEFAULT 0",
+            "likes": "ALTER TABLE boardpost ADD COLUMN likes INTEGER NOT NULL DEFAULT 0",
+            "dislikes": "ALTER TABLE boardpost ADD COLUMN dislikes INTEGER NOT NULL DEFAULT 0",
+        },
+        "boardcomment": {
+            "author_user_id": "ALTER TABLE boardcomment ADD COLUMN author_user_id INTEGER",
+            "parent_id": "ALTER TABLE boardcomment ADD COLUMN parent_id INTEGER",
+            "updated_ms": "ALTER TABLE boardcomment ADD COLUMN updated_ms INTEGER",
         },
         "macrorow": {
             "rep_leverage": "ALTER TABLE macrorow ADD COLUMN rep_leverage INTEGER DEFAULT 1",

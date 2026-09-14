@@ -117,6 +117,8 @@ export const api = {
     req("/api/auth/google", { method: "POST", body: JSON.stringify({ credential }) }),
   me: () => req("/api/auth/me"),
   myDashboard: (options = {}) => req("/api/me/dashboard", options),
+  // 오늘(KST)의 일일 퀘스트 — 완료 여부·보상·오늘 번 포인트.
+  myQuests: (options = {}) => req("/api/me/quests", options),
   uploadAvatar: (image) => {
     const form = new FormData();
     form.append("image", image);

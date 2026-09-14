@@ -64,6 +64,7 @@ from . import auth as auth_mod
 from . import avatars as avatars_mod
 from . import profile as profile_mod
 from . import points as points_mod
+from . import quests as quests_mod
 from . import account as account_mod
 from . import challenge as challenge_mod
 from . import runner as runner_mod
@@ -483,7 +484,17 @@ def me_dashboard(
     """My-page rollup: profile+tier, created/purchased macros, sales, ledger, 내 글."""
     d = account_mod.dashboard(user, db=db)
     d["my_posts"] = board_mod.my_posts(user.id, db=db)
+    d["quests"] = quests_mod.today(db, user)
     return d
+
+
+@app.get("/api/me/quests")
+def me_quests(
+    user: User = Depends(auth_mod.current_user_in_session),
+    db: Session = Depends(request_session),
+) -> dict:
+    """오늘(KST)의 일일 퀘스트와 완료 여부·오늘 번 포인트."""
+    return quests_mod.today(db, user)
 
 
 @app.get("/api/me/macros")
@@ -596,7 +607,11 @@ def get_backtest_limits() -> dict:
 
 
 @app.post("/api/backtest")
-def backtest(req: BacktestRequest) -> dict:
+def backtest(
+    req: BacktestRequest,
+    account: Optional[User] = Depends(auth_mod.optional_user_in_session),
+    db: Session = Depends(request_session),
+) -> dict:
     macro = req.macro
     if req.period_override is not None:
         macro = macro.model_copy(update={"period": req.period_override})
@@ -606,7 +621,10 @@ def backtest(req: BacktestRequest) -> dict:
         raise HTTPException(status_code=422, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    # 일일 퀘스트: 로그인 계정이 성공한 백테스트를 돌리면 하루 한 번 보상.
+    quest = quests_mod.complete(db, account, "backtest_run")
     return {
+        "quest": quest,
         "result": compact_backtest_result(result).model_dump(),
         "per_symbol": per_symbol,  # [] for single-symbol; portfolio breakdown otherwise
         "human_summary": human_summary(macro),
@@ -1212,13 +1230,18 @@ class CommentIn(BaseModel):
 def board_comment_add(post_id: int, req: CommentIn, user: User = Depends(auth_mod.current_user_in_session), db: Session = Depends(request_session)) -> dict:
     """댓글·답글 — 로그인 계정만, 닉네임은 계정 이름. parent_id 가 있으면 그 댓글의 답글."""
     try:
-        return {"comment": board_mod.add_comment(post_id, user, req.text, parent_id=req.parent_id, db=db)}
+        comment = board_mod.add_comment(post_id, user, req.text, parent_id=req.parent_id, db=db)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except board_mod.RateLimited as exc:
         raise HTTPException(status_code=429, detail=str(exc))
+    # 일일 퀘스트: 짧은 댓글로 채우는 걸 막기 위해 글자 수 하한을 둔다.
+    quest = None
+    if len(req.text.strip()) >= quests_mod.COMMENT_MIN_CHARS:
+        quest = quests_mod.complete(db, user, "board_comment")
+    return {"comment": comment, "quest": quest}
 
 
 class CommentEditIn(BaseModel):
@@ -1289,13 +1312,19 @@ def card(slug: str) -> Response:
 
 # --- paper (simulated) trading -----------------------------------------
 @app.post("/api/paper/start")
-async def paper_start(req: PaperStartRequest) -> dict:
+async def paper_start(
+    req: PaperStartRequest,
+    account: Optional[User] = Depends(auth_mod.optional_user_in_session),
+    db: Session = Depends(request_session),
+) -> dict:
     mode = "replay" if req.mode == "replay" else "live"
     try:
         info = await paper_mod.start_session(req.macro, req.symbol, mode)
     except NoSpotDataError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     info["disclaimer"] = "paper (simulated) trading; no real orders, no API keys"
+    # 일일 퀘스트: 로그인 계정이 페이퍼 세션을 시작하면 하루 한 번 보상.
+    info["quest"] = await run_in_threadpool(quests_mod.complete, db, account, "paper_start")
     return info
 
 

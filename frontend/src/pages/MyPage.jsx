@@ -21,6 +21,9 @@ import { MedalIcon } from "@phosphor-icons/react/dist/csr/Medal";
 import { DiamondIcon } from "@phosphor-icons/react/dist/csr/Diamond";
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { ImageIcon } from "@phosphor-icons/react/dist/csr/Image";
+import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
+import { CircleIcon } from "@phosphor-icons/react/dist/csr/Circle";
+import { ListChecksIcon } from "@phosphor-icons/react/dist/csr/ListChecks";
 import { formatPoints, fullKst, joinedLabel, ledgerLabel, signedPoints, stampKst, tierNextLabel, tierStepAt, tierSteps, toMs } from "../lib/profileText.js";
 import { ErrorNote } from "../components/Page.jsx";
 import CoinIcon from "../components/CoinIcon.jsx";
@@ -142,6 +145,35 @@ function Posts({ rows, now }) {
   ))}</ul>;
 }
 
+// 오늘의 일일 퀘스트 — 리더보드에 안 올리는 회원도 매일 포인트를 벌 수 있는 자리.
+// 완료 판정과 지급은 서버가 행동(백테스트·페이퍼·댓글) 시점에 하니 여기서는 보여 주기만 한다.
+function DailyQuests({ board }) {
+  if (!board || !board.quests?.length) return null;
+  const allDone = board.done_count === board.quests.length;
+  return (
+    <section className="me-quests" aria-labelledby="me-quests-title">
+      <header className="me-quests-heading">
+        <h2 id="me-quests-title"><ListChecksIcon size={22} aria-hidden="true" />오늘의 퀘스트<span className="num">{board.done_count}/{board.quests.length}</span></h2>
+        <p className="num">{allDone ? "오늘 퀘스트를 다 끝냈어요" : `오늘 ${formatPoints(board.earned)} / ${formatPoints(board.total)}`}</p>
+      </header>
+      <ul className="me-quest-list">
+        {board.quests.map((quest) => (
+          <li key={quest.key} className={"me-quest" + (quest.done ? " is-done" : "")}>
+            <span className="me-quest-state" aria-hidden="true">{quest.done ? <CheckCircleIcon size={22} weight="fill" /> : <CircleIcon size={22} />}</span>
+            <div className="me-quest-main">
+              <p>{quest.title}</p>
+              <span>{quest.hint}</span>
+            </div>
+            <strong className="me-quest-reward num">{quest.done ? "받음" : signedPoints(quest.reward)}</strong>
+            {!quest.done && quest.to ? <Link className="me-quest-go" to={quest.to} aria-label={quest.title + " 하러 가기"}><ArrowUpRightIcon size={18} aria-hidden="true" /></Link> : null}
+          </li>
+        ))}
+      </ul>
+      <p className="me-quest-note">매일 자정(KST)에 새로 열려요. 모은 포인트로 리더보드 매크로를 언락할 수 있어요.</p>
+    </section>
+  );
+}
+
 function ActivitySkeleton() {
   return <div className="me-content" aria-busy="true" aria-label="내 활동 불러오는 중"><div className="me-stats" aria-hidden="true">{[0, 1, 2].map((i) => <div key={i} className="me-stat"><span className="me-skeleton" /><span className="me-skeleton is-value" /></div>)}</div><div className="me-macro-grid" aria-hidden="true">{[0, 1].map((i) => <div key={i} className="me-macro-card me-loading-card"><span className="me-skeleton is-name" /><span className="me-skeleton" /><span className="me-skeleton" /></div>)}</div></div>;
 }
@@ -184,7 +216,7 @@ export default function MyPage() {
   const symbolByEntry = useMemo(() => Object.fromEntries([...(data?.created || []), ...(data?.purchased || [])].map((item) => [item.entry_id, item.symbol])), [data]);
   if (!token) return null;
 
-  const { tier, totals, created = [], purchased = [], sales = [], ledger = [], my_posts = [] } = data || {};
+  const { tier, totals, created = [], purchased = [], sales = [], ledger = [], my_posts = [], quests = null } = data || {};
   // Identity is already available from login/header hydration. It must not wait
   // for the independent sales, macro and ledger queries in the dashboard.
   const user = data ? (authUser?.id === data.user.id ? { ...data.user, ...authUser } : data.user) : authUser;
@@ -221,6 +253,7 @@ export default function MyPage() {
     </aside>
     {error ? <ErrorNote>내 활동을 불러오지 못했어요: {error}</ErrorNote> : !data ? <ActivitySkeleton /> : <div className="me-content">
       <dl className={"me-stats" + (longStats ? " has-long-values" : "")}>{metrics.map(({ label, value, Icon, target, points }) => <div className={"me-stat" + (points ? " is-points" : "")} key={label}><dt><Icon size={20} aria-hidden="true" />{label}</dt><dd className="num">{value}</dd><button type="button" className="me-stat-link" aria-label={label + " 내역 보기"} onClick={() => pickTab(target)} /></div>)}</dl>
+      <DailyQuests board={quests} />
       <nav className="me-section-nav" aria-label="프로필 메뉴">{SECTIONS.map(({ key, label, first, Icon }) => <button key={key} type="button" aria-pressed={section === key} onClick={() => pickTab(first)}><Icon size={22} aria-hidden="true" /><span>{label}</span></button>)}</nav>
       <section className={"me-workspace is-" + section} aria-labelledby="me-workspace-title">
         <header className="me-workspace-heading"><h2 id="me-workspace-title">{title}{section === "posts" ? <span className="num">{my_posts.length}</span> : null}</h2>{section === "macros" ? <Link to="/builder" className="me-create-link" aria-label="매크로 만들기"><PlusIcon size={18} aria-hidden="true" /><span>매크로 만들기</span></Link> : section === "posts" ? <Link to="/board/write" className="me-create-link"><PencilSimpleIcon size={18} aria-hidden="true" /><span>글쓰기</span></Link> : null}</header>

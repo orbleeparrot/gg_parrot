@@ -181,11 +181,9 @@ function CommunityEntryHero({ staticLayout = false }) {
             />
           </span>
           <div>
-            <span>전략·질문·정보</span>
             <h2>껄무새 게시판</h2>
             <p>코린이끼리 전략·질문·정보를 나눠요. (투자 조언 아님)</p>
           </div>
-          <span className="home-board-preview-write" aria-hidden="true">새 글 쓰기</span>
         </header> : null}
         <p id="home-community-preview-caption" className="home-community-preview-caption t-caption text-slate-500">게시글 미리보기</p>
         <div className="home-community-post-viewport">

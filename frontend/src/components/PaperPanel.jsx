@@ -222,8 +222,8 @@ export function PaperPanelView({ macro, valErr, onRegister, controller, nextStep
           </button>
         )}
         <span className="t-caption text-slate-500">
-          <span className="num">{macro.symbol}</span> · {(running ? startedMode : mode) === "replay" ? "리플레이" : "실시간"}
-          {status && status.last_price > 0 && (
+          <span className="num">{macro.symbols && macro.symbols.length > 1 ? macro.symbols.map(baseOf).join(" · ") : macro.symbol}</span> · {(running ? startedMode : mode) === "replay" ? "리플레이" : "실시간"}
+          {status && !(status.legs || []).length && status.last_price > 0 && (
             <> · 현재가 <span className="num">{fmtPrice(status.last_price)}</span> {quoteOf(macro.symbol)}</>
           )}
         </span>
@@ -287,6 +287,21 @@ export function PaperPanelView({ macro, valErr, onRegister, controller, nextStep
         </div>
       )}
 
+      {/* 멀티종목: 종목별 수익률 — 위 수익률은 총합, 자본은 종목 수로 나눠 각각 돌아간다 */}
+      {status && (status.legs || []).length > 1 && (
+        <div className="flex flex-wrap gap-x-4 gap-y-1 t-small" aria-label="종목별 현황">
+          {status.legs.map((leg) => (
+            <span key={leg.symbol} className="num">
+              <b className="text-slate-900">{baseOf(leg.symbol)}</b>{" "}
+              <span className={leg.current_return >= 0 ? "text-green-600" : "text-red-600"}>
+                {leg.current_return >= 0 ? "+" : ""}{Number(leg.current_return).toFixed(2)}%
+              </span>
+            </span>
+          ))}
+          <span className="t-caption text-slate-500">자본을 종목 수로 나눠 각각 돌리고, 수익률은 총합이에요.</span>
+        </div>
+      )}
+
       {/* register to leaderboard — surfaces right where the paper return shows,
           so a good run can go straight to the board without leaving the builder. */}
       {onRegister && (
@@ -330,8 +345,9 @@ export function PaperPanelView({ macro, valErr, onRegister, controller, nextStep
               <div className="flex items-center px-1 py-2 t-caption text-slate-700 bg-slate-50 sticky top-0">
                 <span className="w-20">시각</span>
                 <span className="w-16">구분</span>
+                {(status.legs || []).length > 1 && <span className="w-14">종목</span>}
                 <span className="flex-1 text-right">체결가 ({quoteOf(macro.symbol)})</span>
-                <span className="w-28 sm:w-44 text-right">수량 ({baseOf(macro.symbol)})</span>
+                <span className="w-28 sm:w-44 text-right">수량{(status.legs || []).length > 1 ? "" : ` (${baseOf(macro.symbol)})`}</span>
                 <span className="w-20 text-right">누적수익</span>
               </div>
               {(status.trades || []).length === 0 && (
@@ -348,11 +364,14 @@ export function PaperPanelView({ macro, valErr, onRegister, controller, nextStep
                   <span className={"font-semibold w-16 " + (SIDE_COLOR[t.side] || "")}>
                     {SIDE_KO[t.side] || t.side}
                   </span>
+                  {(status.legs || []).length > 1 && (
+                    <span className="w-14 font-semibold text-slate-700 num">{baseOf(t.symbol || macro.symbol)}</span>
+                  )}
                   <span className="text-slate-900 font-semibold flex-1 text-right num">
                     {fmtPrice(t.price)}
                   </span>
                   <span className="text-slate-500 w-28 sm:w-44 text-right num">
-                    {fmtQty(t.qty)}
+                    {fmtQty(t.qty)}{(status.legs || []).length > 1 ? ` ${baseOf(t.symbol || macro.symbol)}` : ""}
                   </span>
                   <span
                     className={

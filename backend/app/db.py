@@ -216,6 +216,8 @@ class PaperSession(SQLModel, table=True):
     liquidations: int = 0
     liquidated_loss: float = 0.0
     macro_json: str = ""
+    # 멀티종목(포트폴리오) 세션의 종목별 현황(JSON 배열). 단일 종목이면 빈 문자열.
+    legs_json: str = ""
 
 
 class LeaderboardEntry(SQLModel, table=True):
@@ -584,6 +586,8 @@ class PaperTrade(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     session_id: int = Field(index=True)
     ts: str
+    # 체결이 난 종목. 멀티종목 세션은 종목별로 다르고, 예전 행은 빈 문자열(세션 종목).
+    symbol: str = ""
     side: str  # buy | sell | short | cover
     price: float
     qty: float
@@ -757,6 +761,10 @@ def _migrate() -> None:
         "papersession": {
             "liquidations": "ALTER TABLE papersession ADD COLUMN liquidations INTEGER DEFAULT 0",
             "liquidated_loss": "ALTER TABLE papersession ADD COLUMN liquidated_loss FLOAT DEFAULT 0",
+            "legs_json": "ALTER TABLE papersession ADD COLUMN legs_json TEXT DEFAULT ''",
+        },
+        "papertrade": {
+            "symbol": "ALTER TABLE papertrade ADD COLUMN symbol TEXT DEFAULT ''",
         },
         "macrorow": {
             "rep_leverage": "ALTER TABLE macrorow ADD COLUMN rep_leverage INTEGER DEFAULT 1",
@@ -839,6 +847,8 @@ _PG_ADDED_COLUMNS = {
         "claimed_ms": "BIGINT DEFAULT 0", "last_error": "TEXT DEFAULT ''",
     },
     "leaderboardentry": {"streak_days": "INTEGER DEFAULT 1", "first_created_ms": "BIGINT"},
+    "papersession": {"legs_json": "TEXT DEFAULT ''"},
+    "papertrade": {"symbol": "TEXT DEFAULT ''"},
     "boardcomment": {"author_user_id": "INTEGER", "parent_id": "INTEGER", "updated_ms": "BIGINT"},
     "boardpost": {
         "body_format": "TEXT NOT NULL DEFAULT ''", "views": "INTEGER NOT NULL DEFAULT 0",

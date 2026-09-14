@@ -206,6 +206,14 @@
 .sd-paper-actions .sd-note { margin: 0; }
 .sd-paper-main { flex: none; width: 168px; padding-inline: 0; justify-content: center; font-size: 16px; }
 .sd-stat { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+/* 멀티종목 페이퍼 — 총합 상자 아래 종목별 수익률 한 줄씩(§6 table-row: 괘선만). */
+.sd-legs { margin-top: 8px; border-top: 1px solid rgb(var(--c-slate-200)); }
+.sd-leg { display: grid; grid-template-columns: 64px auto minmax(0, 1fr); gap: 10px; align-items: center; padding: 6px 4px; border-bottom: 1px solid rgb(var(--c-slate-200)); font-size: 13px; }
+.sd-leg-sym { font-weight: 700; color: rgb(var(--c-slate-900)); }
+.sd-leg-ret { font-weight: 700; }
+.sd-leg-px { color: rgb(var(--c-slate-500)); font-size: 12px; text-align: right; }
+.sd-leg-note { padding: 6px 4px 0; color: rgb(var(--c-slate-500)); font-size: 12px; }
+.sd-log-sym { display: inline-block; min-width: 42px; margin-right: 6px; color: rgb(var(--c-slate-700)); font-weight: 700; }
 .sd-log { min-width: 0; border: 1px solid rgb(var(--c-slate-200)); border-radius: 10px; overflow: hidden; font-size: 13px; align-self: start; }
 .sd-log-cap { display: flex; justify-content: space-between; gap: 10px; padding: 7px 10px; border-bottom: 1px solid rgb(var(--c-slate-200)); color: rgb(var(--c-slate-500)); font-weight: 600; }
 .sd-log-cap b { color: rgb(var(--c-slate-900)); }

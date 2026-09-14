@@ -3,12 +3,36 @@
 The catalog/transaction doubles never connect to the production database.
 """
 from copy import deepcopy
+from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.exc import OperationalError
 
 from app import db
+
+
+def test_supabase_migrations_have_unique_versions():
+    migrations = Path(__file__).resolve().parents[2] / "supabase" / "migrations"
+    versions = {}
+    for path in sorted(migrations.glob("*.sql")):
+        version = path.name.split("_", 1)[0]
+        assert version.isdigit(), path.name
+        assert version not in versions, f"duplicate version: {versions.get(version)} / {path.name}"
+        versions[version] = path.name
+
+
+@pytest.mark.parametrize("table", ["dailyquestclaim", "runsessionevent"])
+def test_new_private_member_tables_are_secured_on_app_boot(table):
+    state = current_schema()
+    state["tables"][table] = False
+    state["grants"] = {(table, role) for role in ("PUBLIC", "anon", "authenticated")}
+    assert db._pg_migration_statements(state) == [
+        f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY",
+        f"REVOKE ALL PRIVILEGES ON TABLE {table} FROM PUBLIC",
+        f"REVOKE ALL PRIVILEGES ON TABLE {table} FROM anon",
+        f"REVOKE ALL PRIVILEGES ON TABLE {table} FROM authenticated",
+    ]
 
 
 def test_existing_news_article_schema_adds_pending_column_before_index():

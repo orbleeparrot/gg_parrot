@@ -1,0 +1,27 @@
+{
+  "passed": 8,
+  "checks": [
+    "Switching accounts immediately hides the previous session, even when the new request fails",
+    "A late unlock cannot overwrite the new member's balance or navigate to the old member's macro",
+    "Same-member token renewal preserves current builder input before its save debounce",
+    "Another member receives independent builder state and old draft writes stay retired",
+    "Logout removes owned work rather than exposing it in guest mode",
+    "Guest-created work continues after login and becomes owned by that member",
+    "Rotating a header member key updates the already-open security panel immediately",
+    "A late member-key rotation cannot display the previous account's key after switching members"
+  ],
+  "frontend_build": "/tmp/ggp-main-integration-build",
+  "build_index_sha256": "909edcd0af7f7acfee0a230e7651f47a7330ae778d077eae6eb89bf8cb939840",
+  "source_sha256": {
+    "frontend/src/lib/auth.js": "2ea49540953b1918288aafe09cbe9d3dba646d6b914ed180a9336e908f0caf6e",
+    "frontend/src/lib/accountStorage.js": "344cc8fc18e1e63c584d83909cd168e6ded5c70dca8eacfa48d39e80186417c0",
+    "frontend/src/lib/studioSession.js": "3859af51826042704972cb3ca89bb0c702219f5af4a3df8047ea335d84a537fe",
+    "frontend/src/pages/Agents.jsx": "d73e00ce0fb90d9bd6fa4177ea45af6a37acb2287a4dddfb438877e15a78d834",
+    "frontend/src/pages/Leaderboard.jsx": "1f12d907ba76792f31853bd27d9b86c1a34635b2f1e7da22c8178b7369e51c9b",
+    "frontend/src/pages/Studio.jsx": "0fb96aac142f7fe2962df3cc72d04fc76e605b1e7698e6e62484c481b6673d19",
+    "frontend/src/lib/runnerKeyStore.js": "4a27f8d262a15d9ec71f3254dc4876a0edc163bebc26c1b54f221a0901e09a83",
+    "frontend/src/components/RunnerSessions.jsx": "c061c669425f88716460a8aae426f534dc91089e93cf85152762e7aaef07a58c"
+  },
+  "page_errors": [],
+  "scope": "All APIs and WebSockets mocked; no production connections"
+}

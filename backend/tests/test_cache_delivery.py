@@ -60,15 +60,18 @@ def test_personal_routes_never_allow_http_storage(monkeypatch):
     for target, name, value in (
         (main.auth_mod, "user_view", {"id": 101}),
         (main.account_mod, "dashboard", {"user": {"id": 101}}),
+        (main.quests_mod, "today", {"quests": [], "earned": 0}),
         (main.board_mod, "my_posts", []),
         (main.user_macros_mod, "list_macros", {"items": []}),
         (main.runner_mod, "get_or_create_key", {"key": "fixture-only"}),
         (main.runner_mod, "list_sessions", {"items": []}),
+        (main.runner_mod, "list_events", {"events": []}),
     ):
         monkeypatch.setattr(target, name, lambda *a, value=value, **k: value)
     client = TestClient(main.app)
     for path in ("/api/auth/me", "/api/me/dashboard", "/api/me/macros",
-                 "/api/me/runner/key", "/api/me/runner/sessions"):
+                 "/api/me/runner/key", "/api/me/runner/sessions", "/api/me/quests",
+                 "/api/me/runner/sessions/1/events"):
         response = client.get(path)
         assert response.status_code == 200
         assert response.headers["cache-control"] == "private, no-store"

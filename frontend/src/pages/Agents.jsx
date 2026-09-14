@@ -6,6 +6,8 @@ import { RULE_TYPES } from "../lib/macro.js";
 import { computeSessionOverlay } from "../lib/indicators.js";
 import { usePositionNewsFeature } from "../features/agents/positionNews/index.js";
 import { useWhaleActivity } from "../features/agents/useWhaleActivity.js";
+import { useRunnerLog } from "../features/agents/useRunnerLog.js";
+import { macroOriginBadge } from "../lib/macroOrigin.js";
 import AgentActivityStream from "../components/AgentActivityStream.jsx";
 import CandleChart from "../components/CandleChart.jsx";
 import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
@@ -57,6 +59,7 @@ function MacroDock({ sessions, selected, busy, onChange, onStop, onDelete }) {
   // 응답대기(실행 중이지만 heartbeat 끊김)와 오류·종료 항목만 목록에서 지운다.
   // 서버도 같은 기준으로 막으므로 버튼 상태와 실제 결과가 어긋나지 않는다.
   const removable = !connected;
+  const origin = macroOriginBadge(selected);
 
   return (
     <section className="agent-macro-dock" aria-label="매크로 세션 선택과 제어">
@@ -85,6 +88,8 @@ function MacroDock({ sessions, selected, busy, onChange, onStop, onDelete }) {
         <span>{statusText(selected)}</span>
         {/* v7+ 실행기만 버전을 보고한다. 빈 값이면 표시하지 않는다. */}
         {selected.runner_version ? <span className="agent-macro-dock-version num">실행기 v{selected.runner_version}</span> : null}
+        {/* 매크로 출처 — 서버가 파일 서명을 검증한 결과. 수정된 파일은 빨간 배지로 바로 보인다. */}
+        {origin ? <span className={origin.className} title={origin.title}>{origin.label}</span> : null}
       </div>
 
       <div className="agent-macro-dock-actions">
@@ -309,6 +314,7 @@ function AccountAgents() {
 
   const activePositionNews = usePositionNewsFeature(selected?.session_id, selected?.status === "running");
   const whaleActivity = useWhaleActivity(selected);
+  const runnerLog = useRunnerLog(selected);
 
   useEffect(() => {
     setChartSnapshot(null);
@@ -319,8 +325,8 @@ function AccountAgents() {
   const market = executionMarket(macro, selected);
   const activeChart = chartSnapshot?.symbol === selected?.symbol ? chartSnapshot : null;
   const featureStates = useMemo(
-    () => ({ position_news: activePositionNews, whale_activity: whaleActivity }),
-    [activePositionNews, whaleActivity],
+    () => ({ position_news: activePositionNews, whale_activity: whaleActivity, runner_log: runnerLog }),
+    [activePositionNews, whaleActivity, runnerLog],
   );
 
   const chartOverlay = useCallback((candles) => computeSessionOverlay(

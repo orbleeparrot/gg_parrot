@@ -62,12 +62,20 @@ export const REASON_KO = {
   signup_grant: "가입 보너스",
   unlock_spend: "매크로 언락",
   unlock_earn: "판매 수익",
+  quest: "일일 퀘스트",
   topup: "충전",
 };
 
 /** 포인트 내역 사유 — 아는 사유는 우리말, 모르는 사유는 원문 그대로. */
 export function reasonLabel(reason) {
   return REASON_KO[reason] || String(reason || "");
+}
+
+/** 일일 퀘스트 원장 ref(`2026-09-14:backtest_run`) → 퀘스트 이름. 아니면 "". */
+const QUEST_KO = { backtest_run: "백테스트", paper_start: "페이퍼 트레이딩", board_comment: "댓글" };
+export function refQuestLabel(ref) {
+  const m = /^\d{4}-\d{2}-\d{2}:([a-z_]+)$/.exec(String(ref || ""));
+  return m ? (QUEST_KO[m[1]] || "") : "";
 }
 
 /** `entry:123` → 123. 아니면 null. */
@@ -81,7 +89,9 @@ export function ledgerLabel(row, symbolByEntry = {}) {
   const base = reasonLabel(row?.reason);
   const id = refEntryId(row?.ref);
   const symbol = id != null ? symbolByEntry[id] : "";
-  return symbol ? `${base} · ${symbol}` : base;
+  if (symbol) return `${base} · ${symbol}`;
+  const quest = refQuestLabel(row?.ref);
+  return quest ? `${base} · ${quest}` : base;
 }
 
 // 백엔드 `_TIERS` 의 거울 — 사다리를 안 주는 옛 응답에서만 쓴다.

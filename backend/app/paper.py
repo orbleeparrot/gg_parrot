@@ -12,10 +12,15 @@ Assumptions / choices (see README):
     intraday fallback when candles are unavailable).
   * Single-process assumption: running sessions live in memory + SQLite. Fine
     for a demo; a multi-worker deploy would need a shared store.
+  * Multi-symbol (portfolio) macros mirror the backtest: the SAME rule runs on
+    every symbol as an independent leg with the capital split evenly, and the
+    session's equity/return is the sum over legs. Fills are tagged with the
+    leg's symbol so one log shows every coin.
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 import os
 import time
@@ -57,11 +62,54 @@ def _synthetic_intraday(symbol: str, n: int = 360) -> List[float]:
     return out
 
 
-class _Runner:
-    def __init__(self, session_id: int, sim, symbol: str, mode: str, initial: float):
-        self.session_id = session_id
-        self.sim = sim
+class _Leg:
+    """One symbol of a session: its own sim and its share of the capital."""
+
+    __slots__ = (
+        "symbol", "sim", "initial", "last_price", "equity", "ret",
+        "liquidations", "liquidated_loss", "replay_prices",
+    )
+
+    def __init__(self, symbol: str, sim, initial: float):
         self.symbol = symbol
+        self.sim = sim
+        self.initial = initial
+        self.last_price = 0.0
+        self.equity = initial
+        self.ret = 0.0
+        self.liquidations = 0
+        self.liquidated_loss = 0.0
+        self.replay_prices: List[float] = []
+
+    def view(self) -> dict:
+        return {
+            "symbol": self.symbol,
+            "virtual_balance": round(self.initial, 2),
+            "current_equity": round(self.equity, 2),
+            "current_return": round(self.ret, 4),
+            "last_price": round(self.last_price, 4),
+            "liquidations": self.liquidations,
+        }
+
+
+class _Runner:
+    def __init__(
+        self,
+        session_id: int,
+        sim,
+        symbol: str,
+        mode: str,
+        initial: float,
+        *,
+        legs: Optional[List[_Leg]] = None,
+    ):
+        self.session_id = session_id
+        # Single-symbol callers pass (sim, symbol, initial); a portfolio passes
+        # its legs and `initial` is the total. The first leg is the primary
+        # symbol so every existing single-symbol accessor keeps working.
+        self.legs: List[_Leg] = legs if legs else [_Leg(symbol, sim, initial)]
+        self.sim = self.legs[0].sim
+        self.symbol = self.legs[0].symbol
         self.mode = mode
         self.initial = initial
         self.stop_flag = False
@@ -71,13 +119,35 @@ class _Runner:
         self.ret = 0.0
         self.status = "running"
         self.recent: List[dict] = []
-        self.replay_prices: List[float] = []
         self.liquidations = 0
         self.liquidated_loss = 0.0
         self.last_checkpoint_monotonic = time.monotonic()
         self.finalize_lock: Optional[asyncio.Lock] = None
         self.finalized = False
         self.inflight_persist: Optional[asyncio.Task] = None
+
+    @property
+    def replay_prices(self) -> List[float]:
+        return self.legs[0].replay_prices
+
+    @replay_prices.setter
+    def replay_prices(self, prices: List[float]) -> None:
+        self.legs[0].replay_prices = prices
+
+    @property
+    def symbols(self) -> List[str]:
+        return [leg.symbol for leg in self.legs]
+
+    def is_portfolio(self) -> bool:
+        return len(self.legs) > 1
+
+    def leg_for(self, symbol: Optional[str]) -> _Leg:
+        if symbol is None:
+            return self.legs[0]
+        for leg in self.legs:
+            if leg.symbol == symbol:
+                return leg
+        raise KeyError(symbol)
 
 
 _running: Dict[int, _Runner] = {}
@@ -91,26 +161,38 @@ def _session_initial(macro: Macro) -> float:
 
 # --- lifecycle ----------------------------------------------------------
 async def start_session(macro: Macro, symbol: Optional[str], mode: str) -> dict:
-    symbol = (symbol or macro.symbol).upper()
+    # A portfolio macro runs every symbol (like the backtest); a single-symbol
+    # macro may be pointed at an explicit symbol by the caller.
+    if macro.is_portfolio():
+        symbols = macro.all_symbols()
+    else:
+        symbols = [(symbol or macro.symbol).upper()]
     # Refuse futures-only / delisted symbols: no real spot data -> no paper
     # session (raises NoSpotDataError -> 422 at the endpoint). Never run on a
     # synthetic fallback here.
-    await asyncio.to_thread(ensure_spot_available, symbol)
+    for sym in symbols:
+        await asyncio.to_thread(ensure_spot_available, sym)
     initial = _session_initial(macro)
-    sim = make_sim(macro, initial_capital=initial)
+    per_leg = initial / len(symbols)
+    legs: List[_Leg] = []
+    for sym in symbols:
+        leg_macro = macro.for_symbol(sym, per_leg) if len(symbols) > 1 else macro
+        legs.append(_Leg(sym, make_sim(leg_macro, initial_capital=per_leg), per_leg))
 
-    session_id = await asyncio.to_thread(_create_session, macro, symbol, mode, initial)
+    session_id = await asyncio.to_thread(_create_session, macro, symbols[0], mode, initial)
 
-    runner = _Runner(session_id, sim, symbol, mode, initial)
+    runner = _Runner(session_id, legs[0].sim, symbols[0], mode, initial, legs=legs)
     if mode == "replay":
-        runner.replay_prices = await asyncio.to_thread(_load_replay_prices, symbol)
+        for leg in runner.legs:
+            leg.replay_prices = await asyncio.to_thread(_load_replay_prices, leg.symbol)
 
     _running[session_id] = runner
     runner.task = asyncio.create_task(_run_loop(runner))
 
     return {
         "session_id": session_id,
-        "symbol": symbol,
+        "symbol": symbols[0],
+        "symbols": symbols,
         "mode": mode,
         "virtual_balance": initial,
         "status": "running",
@@ -157,23 +239,27 @@ async def _run_loop(runner: _Runner) -> None:
             # REPLAY_HOURS so time-based rules (max holding / cooldown / daily
             # loss) actually fire during the fast-forward instead of being
             # pinned to (near-constant) wall-clock time.
-            n = len(runner.replay_prices)
+            n = max(len(leg.replay_prices) for leg in runner.legs)
             base = datetime.now(timezone.utc) - timedelta(hours=REPLAY_HOURS)
             per = (REPLAY_HOURS * 3600.0) / max(1, n)
-            for i, price in enumerate(runner.replay_prices):
+            for i in range(n):
                 if runner.stop_flag:
                     break
-                fill = _tick(runner, price, base + timedelta(seconds=i * per))
-                await _checkpoint(runner, fill=fill)
+                ts = base + timedelta(seconds=i * per)
+                prices = [
+                    leg.replay_prices[i] if i < len(leg.replay_prices) else None
+                    for leg in runner.legs
+                ]
+                await _tick_and_checkpoint(runner, prices, ts)
                 await asyncio.sleep(REPLAY_SECONDS)
             await _finalize_async(runner)  # replay exhausted -> auto stop
         else:
             while not runner.stop_flag:
                 # Cached per-symbol: concurrent sessions on the same coin share one fetch.
-                price = await asyncio.to_thread(get_ticker_price_cached, runner.symbol)
-                if price is not None:
-                    fill = _tick(runner, price, datetime.now(timezone.utc))
-                    await _checkpoint(runner, fill=fill)
+                prices = await asyncio.gather(
+                    *(asyncio.to_thread(get_ticker_price_cached, leg.symbol) for leg in runner.legs)
+                )
+                await _tick_and_checkpoint(runner, list(prices), datetime.now(timezone.utc))
                 await asyncio.sleep(POLL_SECONDS)
     except asyncio.CancelledError:
         raise
@@ -183,15 +269,58 @@ async def _run_loop(runner: _Runner) -> None:
         await asyncio.shield(_finalize_async(runner))
 
 
-def _tick(runner: _Runner, price: float, ts: Optional[datetime] = None):
-    """Advance the simulation in memory and return a fill, if one occurred."""
-    runner.last_price = price
-    fill = runner.sim.step(price, ts)
-    runner.equity = runner.sim.equity(price)
-    runner.ret = (runner.equity - runner.initial) / runner.initial * 100.0
-    runner.liquidations = getattr(runner.sim, "liquidations", 0)
-    runner.liquidated_loss = getattr(runner.sim, "liquidated_loss", 0.0)
+def _tick(
+    runner: _Runner,
+    price: float,
+    ts: Optional[datetime] = None,
+    symbol: Optional[str] = None,
+):
+    """Advance one leg's simulation in memory and return a fill, if one occurred.
+
+    ``symbol`` picks the leg (default: the primary symbol). Session totals are
+    re-summed over every leg after each step.
+    """
+    leg = runner.leg_for(symbol)
+    leg.last_price = price
+    fill = leg.sim.step(price, ts)
+    leg.equity = leg.sim.equity(price)
+    leg.ret = (leg.equity - leg.initial) / leg.initial * 100.0
+    leg.liquidations = getattr(leg.sim, "liquidations", 0)
+    leg.liquidated_loss = getattr(leg.sim, "liquidated_loss", 0.0)
+    _aggregate(runner)
     return fill
+
+
+def _aggregate(runner: _Runner) -> None:
+    runner.last_price = runner.legs[0].last_price
+    runner.equity = sum(leg.equity for leg in runner.legs)
+    runner.ret = (runner.equity - runner.initial) / runner.initial * 100.0
+    runner.liquidations = sum(leg.liquidations for leg in runner.legs)
+    runner.liquidated_loss = sum(leg.liquidated_loss for leg in runner.legs)
+
+
+async def _tick_and_checkpoint(
+    runner: _Runner, prices: List[Optional[float]], ts: datetime
+) -> None:
+    """Step every leg that has a price this round, then persist.
+
+    Fills are durable immediately (one write per fill, tagged with its leg's
+    symbol); a round without fills only refreshes the coalesced snapshot.
+    """
+    fills: List[tuple] = []
+    ticked = False
+    for leg, price in zip(runner.legs, prices):
+        if price is None:
+            continue
+        ticked = True
+        fill = _tick(runner, price, ts, symbol=leg.symbol)
+        if fill is not None:
+            fills.append((leg.symbol, fill))
+    if fills:
+        for symbol, fill in fills:
+            await _checkpoint(runner, fill=fill, symbol=symbol)
+    elif ticked:
+        await _checkpoint(runner)
 
 
 def _snapshot(runner: _Runner) -> dict:
@@ -201,14 +330,18 @@ def _snapshot(runner: _Runner) -> dict:
         "return": round(runner.ret, 4),
         "liquidations": runner.liquidations,
         "liquidated_loss": round(runner.liquidated_loss, 4),
+        # Per-symbol breakdown; persisted so a stopped portfolio session still
+        # shows what each coin did.
+        "legs": [leg.view() for leg in runner.legs] if runner.is_portfolio() else [],
     }
 
 
-def _fill_payload(fill) -> Optional[dict]:
+def _fill_payload(fill, symbol: str = "") -> Optional[dict]:
     if fill is None:
         return None
     return {
         "ts": _now_iso(),
+        "symbol": symbol,
         "side": fill.side,
         "price": round(fill.price, 4),
         "qty": round(fill.qty, 8),
@@ -226,6 +359,8 @@ def _persist_checkpoint(snapshot: dict, fill: Optional[dict]) -> Optional[dict]:
         row.current_return = snapshot["return"]
         row.liquidations = snapshot["liquidations"]
         row.liquidated_loss = snapshot["liquidated_loss"]
+        if snapshot.get("legs"):
+            row.legs_json = json.dumps(snapshot["legs"])
         db.add(row)
         if fill:
             trade = PaperTrade(
@@ -236,21 +371,27 @@ def _persist_checkpoint(snapshot: dict, fill: Optional[dict]) -> Optional[dict]:
         db.commit()
         if fill:
             db.refresh(trade)
-            return {
-                "id": trade.id,
-                "ts": trade.ts,
-                "side": trade.side,
-                "price": trade.price,
-                "qty": trade.qty,
-                "return_at_trade": trade.return_at_trade,
-            }
+            return _trade_view(trade)
     return None
+
+
+def _trade_view(t: PaperTrade) -> dict:
+    return {
+        "id": t.id,
+        "ts": t.ts,
+        "symbol": getattr(t, "symbol", "") or "",
+        "side": t.side,
+        "price": t.price,
+        "qty": t.qty,
+        "return_at_trade": t.return_at_trade,
+    }
 
 
 async def _checkpoint(
     runner: _Runner,
     *,
     fill=None,
+    symbol: Optional[str] = None,
     force: bool = False,
     now: Optional[float] = None,
 ) -> None:
@@ -264,7 +405,7 @@ async def _checkpoint(
         asyncio.to_thread(
             _persist_checkpoint,
             _snapshot(runner),
-            _fill_payload(fill),
+            _fill_payload(fill, symbol or runner.symbol),
         )
     )
     runner.inflight_persist = write_task
@@ -290,6 +431,8 @@ def _persist_finalize(snapshot: dict) -> None:
             row.current_return = snapshot["return"]
             row.liquidations = snapshot["liquidations"]
             row.liquidated_loss = snapshot["liquidated_loss"]
+            if snapshot.get("legs"):
+                row.legs_json = json.dumps(snapshot["legs"])
             db.add(row)
             db.commit()
 
@@ -398,6 +541,8 @@ def get_status(session_id: int) -> Optional[dict]:
         return {
             "session_id": session_id,
             "symbol": runner.symbol,
+            "symbols": runner.symbols,
+            "legs": [leg.view() for leg in runner.legs] if runner.is_portfolio() else [],
             "mode": runner.mode,
             "status": runner.status,
             "virtual_balance": round(runner.initial, 2),
@@ -419,9 +564,12 @@ def get_status(session_id: int) -> Optional[dict]:
             .order_by(PaperTrade.id.desc())
             .limit(30)
         ).all()
+    legs = _stored_legs(row)
     return {
         "session_id": session_id,
         "symbol": row.symbol,
+        "symbols": [leg["symbol"] for leg in legs] or [row.symbol],
+        "legs": legs,
         "mode": row.mode,
         "status": row.status,
         "virtual_balance": round(row.virtual_balance, 2),
@@ -430,18 +578,19 @@ def get_status(session_id: int) -> Optional[dict]:
         "last_price": 0.0,
         "liquidations": getattr(row, "liquidations", 0) or 0,
         "liquidated_loss": round(getattr(row, "liquidated_loss", 0.0) or 0.0, 2),
-        "trades": [
-            {
-                "id": t.id,
-                "ts": t.ts,
-                "side": t.side,
-                "price": t.price,
-                "qty": t.qty,
-                "return_at_trade": t.return_at_trade,
-            }
-            for t in trades
-        ],
+        "trades": [_trade_view(t) for t in trades],
     }
+
+
+def _stored_legs(row: PaperSession) -> List[dict]:
+    raw = getattr(row, "legs_json", "") or ""
+    if not raw:
+        return []
+    try:
+        legs = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    return legs if isinstance(legs, list) else []
 
 
 def get_statuses(session_ids: List[int], *, db: Optional[Session] = None) -> Dict[int, dict]:
@@ -506,14 +655,4 @@ def get_trades(session_id: int) -> List[dict]:
             .where(PaperTrade.session_id == session_id)
             .order_by(PaperTrade.id.desc())
         ).all()
-    return [
-        {
-            "id": t.id,
-            "ts": t.ts,
-            "side": t.side,
-            "price": t.price,
-            "qty": t.qty,
-            "return_at_trade": t.return_at_trade,
-        }
-        for t in trades
-    ]
+    return [_trade_view(t) for t in trades]

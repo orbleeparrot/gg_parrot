@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { NavLink, useLocation } from "react-router-dom";
-import { DownloadIcon, HelpIcon } from "./utilityIcons.jsx";
+import { DownloadIcon, HelpIcon, KeyIcon } from "./utilityIcons.jsx";
 import { lockBodyScroll } from "../lib/bodyScrollLock.js";
 
 const NAV_LINKS = [
@@ -130,6 +130,9 @@ function NavigationContents({ onNavigate, tabIndex, mobile = false }) {
           <div className="site-drawer-tools">
             <NavLink to="/runner/install" onClick={onNavigate} tabIndex={tabIndex} className="site-drawer-tool">
               <DownloadIcon /><span>실행기 설치</span><small>Windows PC</small>
+            </NavLink>
+            <NavLink to="/mypage/settings?tab=security" onClick={onNavigate} tabIndex={tabIndex} className="site-drawer-tool">
+              <KeyIcon /><span>회원 키</span><small>실행기 ④번 칸</small>
             </NavLink>
             <NavLink to="/guide" onClick={onNavigate} tabIndex={tabIndex} className="site-drawer-tool">
               <HelpIcon /><span>FAQ</span>

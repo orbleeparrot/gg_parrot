@@ -1,7 +1,7 @@
 """Real-page account cache regression; local build + fully intercepted APIs/WS.
 
 Set FRONTEND_BUILD and BROWSER_EXECUTABLE_PATH. No backend, real account, or
-external API is used. The report is written to docs/cache-audit-2026-09-14/.
+external API is used. ACCOUNT_BROWSER_REPORT can override the report location.
 """
 from functools import partial
 from http.server import ThreadingHTTPServer
@@ -18,10 +18,10 @@ from playwright.sync_api import expect, sync_playwright
 ROOT = Path(__file__).resolve().parents[2]
 BUILD = Path(os.environ.get("FRONTEND_BUILD", "/tmp/ggp-cache-implementation-build")).resolve()
 CHROME = os.environ.get("BROWSER_EXECUTABLE_PATH", "/data/team/clcleh123/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome")
-OUTPUT = ROOT / "docs/cache-audit-2026-09-14/account-isolation-regression.json"
+OUTPUT = Path(os.environ.get("ACCOUNT_BROWSER_REPORT", str(ROOT / "docs/cache-audit-2026-09-14/account-isolation-regression.json")))
 USERS = {
-    "audit-a": {"id": 1, "username": "Account_A", "email": "a@example.invalid", "points_balance": 1000},
-    "audit-b": {"id": 2, "username": "Account_B", "email": "b@example.invalid", "points_balance": 900},
+    "audit-a": {"id": 1, "username": "Account_A", "email": "a@example.invalid", "points_balance": 1000, "bio": "", "avatar_url": None, "can_change_password": True},
+    "audit-b": {"id": 2, "username": "Account_B", "email": "b@example.invalid", "points_balance": 900, "bio": "", "avatar_url": None, "can_change_password": True},
 }
 USERS["audit-a-renewed"] = USERS["audit-a"]
 
@@ -44,6 +44,9 @@ class Fixture:
         self.b_sessions_fail = False
         self.hold_unlock = False
         self.held_unlocks = []
+        self.keys = {"audit-a": "A-initial-key", "audit-b": "B-initial-key"}
+        self.hold_rotation = False
+        self.held_rotations = []
         self.calls = []
         self.blocked = []
 
@@ -58,6 +61,14 @@ class Fixture:
         self.calls.append({"path": path, "token": token})
         if path == "/api/auth/me":
             route.fulfill(json={"user": USERS[token]})
+        elif path == "/api/me/runner/key":
+            route.fulfill(json={"key": self.keys[token]})
+        elif path == "/api/me/runner/key/regenerate":
+            if self.hold_rotation:
+                self.held_rotations.append(route)
+            else:
+                self.keys[token] = "A-rotated-key"
+                route.fulfill(json={"key": self.keys[token]})
         elif path == "/api/me/runner/sessions/stream-token":
             route.fulfill(status=503, json={"detail": "fixture uses polling"})
         elif path == "/api/me/runner/sessions":
@@ -178,6 +189,36 @@ def main():
             checks.append("Guest-created work continues after login and becomes owned by that member")
             context.close()
 
+            fixture = Fixture()
+            context, page = open_page("/mypage/settings?tab=security", fixture)
+            page.on("dialog", lambda dialog: dialog.accept())
+            page.get_by_role("button", name="회원 키 관리", exact=True).click()
+            # Password inputs have no textbox role, so identify by their label.
+            settings_key = page.locator("#profile-settings-member-key").get_by_label("회원 키", exact=True)
+            expect(settings_key).to_have_value("A-initial-key")
+            page.get_by_role("button", name="회원 키", exact=True).click()
+            header = page.get_by_role("dialog", name="껄무새 회원 키", exact=True)
+            expect(header.get_by_label("회원 키", exact=True)).to_have_value("A-initial-key")
+            header.get_by_role("button", name="재발급", exact=True).click()
+            expect(settings_key).to_have_value("A-rotated-key")
+            expect(header.get_by_label("회원 키", exact=True)).to_have_value("A-rotated-key")
+            checks.append("Rotating a header member key updates the already-open security panel immediately")
+
+            fixture.hold_rotation = True
+            header.get_by_role("button", name="재발급", exact=True).click()
+            page.wait_for_timeout(50)
+            assert fixture.held_rotations
+            switch(page, "audit-b")
+            expect(header).to_have_count(0)
+            page.get_by_role("button", name="회원 키 관리", exact=True).click()
+            expect(settings_key).to_have_value("B-initial-key")
+            for held in fixture.held_rotations:
+                held.fulfill(json={"key": "A-late-key"})
+            page.wait_for_timeout(100)
+            expect(settings_key).to_have_value("B-initial-key")
+            checks.append("A late member-key rotation cannot display the previous account's key after switching members")
+            context.close()
+
             assert not errors, errors
             browser.close()
     finally:
@@ -185,7 +226,8 @@ def main():
         server.server_close()
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     sources = ["frontend/src/lib/auth.js", "frontend/src/lib/accountStorage.js", "frontend/src/lib/studioSession.js",
-               "frontend/src/pages/Agents.jsx", "frontend/src/pages/Leaderboard.jsx", "frontend/src/pages/Studio.jsx"]
+               "frontend/src/pages/Agents.jsx", "frontend/src/pages/Leaderboard.jsx", "frontend/src/pages/Studio.jsx",
+               "frontend/src/lib/runnerKeyStore.js", "frontend/src/components/RunnerSessions.jsx"]
     OUTPUT.write_text(json.dumps({"passed": len(checks), "checks": checks, "frontend_build": str(BUILD),
                                   "build_index_sha256": hashlib.sha256((BUILD / "index.html").read_bytes()).hexdigest(),
                                   "source_sha256": {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in sources},

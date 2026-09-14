@@ -67,9 +67,11 @@ from . import auth as auth_mod
 from . import avatars as avatars_mod
 from . import profile as profile_mod
 from . import points as points_mod
+from . import quests as quests_mod
 from . import account as account_mod
 from . import challenge as challenge_mod
 from . import runner as runner_mod
+from . import macro_signing as macro_signing_mod
 from . import user_macros as user_macros_mod
 from .agent_features.position_news.router import router as position_news_router
 from .agent_features.position_news import runtime as position_news_runtime
@@ -295,6 +297,10 @@ class RunnerStartRequest(BaseModel):
     macro: Optional[dict] = None
     # 실행기 버전. v7 부터 보낸다. 있고 최소 버전 미만이면 세션을 만들지 않는다.
     runner_version: str = ""
+    # 매크로 파일에 동봉된 서명(`_sig`). 실행기 v7+ 가 파일을 열면 그대로 올린다.
+    # 서버가 검증해 세션 출처(원본/수정본)를 남긴다. 티켓 경로·옛 실행기는 None.
+    macro_sig: Optional[dict] = None
+    macro_source: str = ""  # web | file | "" (실행기가 스스로 밝히는 값, 참고용)
 
 
 class RunnerHeartbeatRequest(BaseModel):
@@ -307,6 +313,8 @@ class RunnerHeartbeatRequest(BaseModel):
     realized_pnl: float = 0.0
     unrealized_pct: float = 0.0
     note: str = ""
+    # 실행기 창 로그를 서버에 쌓는다(v7+). [{ts, kind, message}] — 한 번에 100개까지.
+    events: list[dict] = []
 
 
 class RunnerStoppedRequest(BaseModel):
@@ -314,6 +322,7 @@ class RunnerStoppedRequest(BaseModel):
     status: str = "stopped"  # stopped | error
     note: str = ""
     snapshot: Optional[dict] = None
+    events: list[dict] = []
 
 
 class RunnerStopRequest(BaseModel):
@@ -496,7 +505,17 @@ def me_dashboard(
     """My-page rollup: profile+tier, created/purchased macros, sales, ledger, 내 글."""
     d = account_mod.dashboard(user, db=db)
     d["my_posts"] = board_mod.my_posts(user.id, db=db)
+    d["quests"] = quests_mod.today(db, user)
     return d
+
+
+@app.get("/api/me/quests")
+def me_quests(
+    user: User = Depends(auth_mod.current_user_in_session),
+    db: Session = Depends(request_session),
+) -> dict:
+    """오늘(KST)의 일일 퀘스트와 완료 여부·오늘 번 포인트."""
+    return quests_mod.today(db, user)
 
 
 @app.get("/api/me/macros")
@@ -609,7 +628,11 @@ def get_backtest_limits() -> dict:
 
 
 @app.post("/api/backtest")
-def backtest(req: BacktestRequest) -> dict:
+def backtest(
+    req: BacktestRequest,
+    account: Optional[User] = Depends(auth_mod.optional_user_in_session),
+    db: Session = Depends(request_session),
+) -> dict:
     macro = req.macro
     if req.period_override is not None:
         macro = macro.model_copy(update={"period": req.period_override})
@@ -619,7 +642,10 @@ def backtest(req: BacktestRequest) -> dict:
         raise HTTPException(status_code=422, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    # 일일 퀘스트: 로그인 계정이 성공한 백테스트를 돌리면 하루 한 번 보상.
+    quest = quests_mod.complete(db, account, "backtest_run")
     return {
+        "quest": quest,
         "result": compact_backtest_result(result).model_dump(),
         "per_symbol": per_symbol,  # [] for single-symbol; portfolio breakdown otherwise
         "human_summary": human_summary(macro),
@@ -1243,13 +1269,18 @@ class CommentIn(BaseModel):
 def board_comment_add(post_id: int, req: CommentIn, user: User = Depends(auth_mod.current_user_in_session), db: Session = Depends(request_session)) -> dict:
     """댓글·답글 — 로그인 계정만, 닉네임은 계정 이름. parent_id 가 있으면 그 댓글의 답글."""
     try:
-        return {"comment": board_mod.add_comment(post_id, user, req.text, parent_id=req.parent_id, db=db)}
+        comment = board_mod.add_comment(post_id, user, req.text, parent_id=req.parent_id, db=db)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except board_mod.RateLimited as exc:
         raise HTTPException(status_code=429, detail=str(exc))
+    # 일일 퀘스트: 짧은 댓글로 채우는 걸 막기 위해 글자 수 하한을 둔다.
+    quest = None
+    if len(req.text.strip()) >= quests_mod.COMMENT_MIN_CHARS:
+        quest = quests_mod.complete(db, user, "board_comment")
+    return {"comment": comment, "quest": quest}
 
 
 class CommentEditIn(BaseModel):
@@ -1343,13 +1374,19 @@ def card(slug: str) -> Response:
 
 # --- paper (simulated) trading -----------------------------------------
 @app.post("/api/paper/start")
-async def paper_start(req: PaperStartRequest) -> dict:
+async def paper_start(
+    req: PaperStartRequest,
+    account: Optional[User] = Depends(auth_mod.optional_user_in_session),
+    db: Session = Depends(request_session),
+) -> dict:
     mode = "replay" if req.mode == "replay" else "live"
     try:
         info = await paper_mod.start_session(req.macro, req.symbol, mode)
     except NoSpotDataError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     info["disclaimer"] = "paper (simulated) trading; no real orders, no API keys"
+    # 일일 퀘스트: 로그인 계정이 페이퍼 세션을 시작하면 하루 한 번 보상.
+    info["quest"] = await run_in_threadpool(quests_mod.complete, db, account, "paper_start")
     return info
 
 
@@ -1395,6 +1432,9 @@ def realtrade_macro_file(req: BundleRequest) -> Response:
     macro = req.macro
     payload = macro.model_dump(mode="json")
     payload["human_summary"] = human_summary(macro)
+    # 서명 동봉 — 실행기가 시작할 때 같이 올리면 서버가 "원본 그대로인지" 판별한다.
+    # 파일을 손으로 고쳐 돌리면 세션에 '수정된 파일'로 남아 문의 대응이 가능해진다.
+    payload["_sig"] = macro_signing_mod.sign(macro)
     body = json.dumps(payload, ensure_ascii=False, indent=2)
     filename = f"macro-{macro.rule_type.value}-{macro.position_side.value}.ggm.json"
     return Response(
@@ -1471,7 +1511,9 @@ def runner_heartbeat(req: RunnerHeartbeatRequest, user: User = Depends(_runner_u
 
 @app.post("/api/runner/stopped")
 def runner_stopped(req: RunnerStoppedRequest, user: User = Depends(_runner_user)) -> dict:
-    return runner_mod.mark_stopped(user, req.session_id, req.status, req.note, snapshot=req.snapshot)
+    return runner_mod.mark_stopped(
+        user, req.session_id, req.status, req.note, snapshot=req.snapshot, events=req.events
+    )
 
 
 # 마이페이지용 ---------------------------------------------------------
@@ -1602,6 +1644,14 @@ def runner_request_stop(
     session_id: int, req: RunnerStopRequest, user: User = Depends(auth_mod.current_user)
 ) -> dict:
     return runner_mod.request_stop(user.id, session_id, req.mode)
+
+
+@app.get("/api/me/runner/sessions/{session_id}/events")
+def runner_session_events(
+    session_id: int, limit: int = 300, user: User = Depends(auth_mod.current_user)
+) -> dict:
+    """세션의 실행 로그(최신순) — 실행기가 heartbeat 로 올린 신호·주문·체결·오류."""
+    return runner_mod.list_events(user.id, session_id, limit=limit)
 
 
 @app.delete("/api/me/runner/sessions/{session_id}")

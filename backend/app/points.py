@@ -2,7 +2,7 @@
 
 The wallet (``User.points_balance``) is the source of truth; every mutation is
 mirrored into :class:`PointLedger` for an auditable history. All changes go
-through :func:`apply` so balance and ledger never drift, and debits can never
+through :func:`apply` or :func:`credit_current` so balance and ledger never drift, and debits can never
 push a balance below zero.
 
 The unlock economy: revealing/copying someone's leaderboard macro costs points;
@@ -13,6 +13,8 @@ plugs in here as new ``reason`` codes — the transfer logic stays the same.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+
+from sqlalchemy import update
 
 from .db import MacroUnlock, PointLedger, User
 
@@ -56,6 +58,31 @@ def apply(db, user: User, delta: int, reason: str, ref: str = "") -> None:
             created_ms=created_ms,
         )
     )
+
+
+def credit_current(db, user_id: int, delta: int, reason: str, ref: str = "") -> int | None:
+    """Credit a live account using the database balance, in the caller's transaction.
+
+    Long-running requests can hold an older User instance. SQL arithmetic keeps
+    rewards from overwriting a purchase or another reward committed meanwhile.
+    The update also serializes against account withdrawal; a deleted account
+    receives neither a reward nor a ledger row. Returns the resulting balance.
+    """
+    if delta <= 0:
+        raise ValueError("A credit must be positive.")
+    balance = db.exec(
+        update(User)
+        .where(User.id == user_id, User.is_deleted.is_(False))
+        .values(points_balance=User.points_balance + delta)
+        .returning(User.points_balance)
+        .execution_options(synchronize_session=False)
+    ).scalar_one_or_none()
+    if balance is None:
+        return None
+    created_at, created_ms = _now()
+    db.add(PointLedger(user_id=user_id, delta=delta, balance_after=balance,
+                       reason=reason, ref=ref, created_at=created_at, created_ms=created_ms))
+    return balance
 
 
 def creator_share(price: int) -> int:

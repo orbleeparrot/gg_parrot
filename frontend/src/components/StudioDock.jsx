@@ -317,7 +317,8 @@ export function StudioOptimize({ form, setForm, valErr, onResult }) {
 function macroLine(macro) {
   if (!macro) return "";
   const interval = CANDLE_INTERVALS.find((i) => i.value === macro.candle_interval)?.label || macro.candle_interval;
-  const parts = [macro.symbol, RULE_TYPES[macro.rule_type]?.label, macro.position_side === "short" ? "숏" : "롱", interval ? `${interval}봉` : "", `${macro.leverage || 1}배`];
+  const symbolLabel = macro.symbols && macro.symbols.length > 1 ? macro.symbols.map(baseOf).join("·") : macro.symbol;
+  const parts = [symbolLabel, RULE_TYPES[macro.rule_type]?.label, macro.position_side === "short" ? "숏" : "롱", interval ? `${interval}봉` : "", `${macro.leverage || 1}배`];
   return parts.filter(Boolean).join(" · ");
 }
 
@@ -328,6 +329,11 @@ export function StudioPaper({ macro, valErr, controller }) {
   const quote = quoteOf(macro.symbol);
   const base = baseOf(macro.symbol);
   const ret = status?.current_return ?? 0;
+  // 멀티종목: 서버가 종목별 현황(legs)을 주면 총합 아래에 종목별 수익률을 같이 보이고,
+  // 로그의 각 체결에는 어느 종목인지 표시한다(예전 체결 행은 symbol 이 비어 세션 종목).
+  const legs = status?.legs || [];
+  const portfolio = legs.length > 1;
+  const symbolsLabel = macro.symbols && macro.symbols.length > 1 ? macro.symbols.map(baseOf).join(" · ") : macro.symbol;
   const macroChanged = running && startedMacro && JSON.stringify(startedMacro) !== JSON.stringify(macro);
   const modeLabel = (value) => (value === "replay" ? "데모 리플레이" : "실시간");
   // 주 버튼 하나 — 시작 → 중지 → 다시 시작. 자리(왼쪽 아래 동작 줄)와 폭은 그대로, 문구와 색만 바뀐다.
@@ -380,6 +386,18 @@ export function StudioPaper({ macro, valErr, controller }) {
                 {(status.liquidations || 0) > 0 && <div className="sd-box-d num">잃은 금액 {fmtMoney(status.liquidated_loss || 0, macro.symbol)}</div>}
               </div>
             </div>
+            {portfolio && (
+              <div className="sd-legs" aria-label="종목별 현황">
+                {legs.map((leg) => (
+                  <div key={leg.symbol} className="sd-leg">
+                    <span className="sd-leg-sym num">{baseOf(leg.symbol)}</span>
+                    <span className={"sd-leg-ret num " + tone(leg.current_return)}>{pct(leg.current_return)}</span>
+                    {leg.last_price > 0 && <span className="sd-leg-px num">{fmtPrice(leg.last_price)}</span>}
+                  </div>
+                ))}
+                <div className="sd-leg-note">자본을 종목 수로 나눠 각각 돌리고, 위 수익률은 총합이에요.</div>
+              </div>
+            )}
             <div className={"sd-lock" + (macroChanged ? " is-warn" : "")}>
               시작 시점 설정 · <b>{macroLine(startedMacro || macro)}</b>
               {macroChanged && <> · 조건을 바꿨지만 이 세션은 시작 시점 설정으로 계속 돌아요. 반영하려면 재시작하세요.</>}
@@ -398,7 +416,7 @@ export function StudioPaper({ macro, valErr, controller }) {
             {main.label}
           </button>
           {running && macroChanged && <button type="button" onClick={restart} disabled={busy || !!valErr} className="btn btn-l btn-secondary">바뀐 설정으로 재시작</button>}
-          {!status && <span className="sd-note"><span className="num">{macro.symbol}</span> · {modeLabel(mode)}</span>}
+          {!status && <span className="sd-note"><span className="num">{symbolsLabel}</span> · {modeLabel(mode)}</span>}
         </div>
         {valErr && <p className="sd-note text-amber-700" role="alert">{valErr}</p>}
         {error && <p className="sd-note is-error" role="alert">오류: {error}</p>}
@@ -407,7 +425,8 @@ export function StudioPaper({ macro, valErr, controller }) {
       <div className="sd-log">
         <div className="sd-log-cap">
           <span>실시간 매매 로그 (최신순)</span>
-          {status && status.last_price > 0 && <span>현재가 <b className="num">{fmtPrice(status.last_price)}</b> {quote}</span>}
+          {status && !portfolio && status.last_price > 0 && <span>현재가 <b className="num">{fmtPrice(status.last_price)}</b> {quote}</span>}
+          {status && portfolio && <span>종목 <b className="num">{legs.length}</b>개 · 총합 기준</span>}
         </div>
         {!status ? (
           <div className="sd-log-empty"><b>백테스트가 괜찮으면 여기서 실제 시세로 돌려 봐요</b>결과가 쌓이는 동안 페이지를 닫아도 마이페이지에서 이어 볼 수 있어요.</div>
@@ -419,7 +438,10 @@ export function StudioPaper({ macro, valErr, controller }) {
               <div key={t.id} className="sd-log-row">
                 <span className="sd-log-t num">{String(t.ts).slice(11, 19)}</span>
                 <span className={"sd-log-side " + (SIDE_CLS[t.side] || "")}>{SIDE_KO[t.side] || t.side}</span>
-                <span className="sd-log-px num">{fmtPrice(t.price)} <small>{quote}</small> · {fmtQty(t.qty)} <small>{base}</small></span>
+                <span className="sd-log-px num">
+                  {portfolio && <b className="sd-log-sym">{baseOf(t.symbol || macro.symbol)}</b>}
+                  {fmtPrice(t.price)} <small>{quoteOf(t.symbol || macro.symbol)}</small> · {fmtQty(t.qty)} <small>{baseOf(t.symbol || macro.symbol)}</small>
+                </span>
                 <span className={"sd-log-pnl num " + tone(t.return_at_trade)}>{pct(t.return_at_trade)}</span>
               </div>
             ))}

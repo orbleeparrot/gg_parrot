@@ -216,6 +216,8 @@ class PaperSession(SQLModel, table=True):
     liquidations: int = 0
     liquidated_loss: float = 0.0
     macro_json: str = ""
+    # 멀티종목(포트폴리오) 세션의 종목별 현황(JSON 배열). 단일 종목이면 빈 문자열.
+    legs_json: str = ""
 
 
 class LeaderboardEntry(SQLModel, table=True):
@@ -402,6 +404,27 @@ class RunSession(SQLModel, table=True):
     stopped_at: Optional[str] = None
     # 시작 요청에 실린 실행기 버전. v6 이하 exe 는 보내지 않아 빈 문자열로 남는다.
     runner_version: str = ""
+    # 매크로 출처 — web | file_verified | file_modified | file_unsigned (macro_signing 참고).
+    # 옛 실행기가 만든 세션은 빈 문자열.
+    macro_origin: str = ""
+    # 실행된 매크로의 짧은 지문(sha256 앞 12자리). 문의 시 어떤 설정이었는지 대조한다.
+    macro_digest: str = ""
+
+
+class RunSessionEvent(SQLModel, table=True):
+    """실행기가 올린 실행 이벤트 한 줄(시작·신호·주문·체결·오류·종료).
+
+    실행기 창에만 남던 로그를 서버에 쌓아, 문의가 오면 무슨 주문이 언제 나갔는지
+    확인할 수 있게 한다. 세션당 상한(runner.EVENT_CAP)을 넘으면 오래된 것부터 지운다.
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    session_id: int = Field(index=True)
+    user_id: int = Field(index=True)
+    ts: str  # 실행기 시각(ISO, 없으면 서버 수신 시각)
+    kind: str = "info"  # start | info | signal | order | fill | error | stop
+    message: str = ""
+    created_ms: int = Field(default=0, sa_type=BigInteger)
 
 
 class TickerNewsSnapshot(SQLModel, table=True):
@@ -539,6 +562,21 @@ class DailyChallenge(SQLModel, table=True):
     last_error: str = ""
 
 
+class DailyQuestClaim(SQLModel, table=True):
+    """한 회원이 어느 KST 날짜에 어떤 일일 퀘스트를 완료했는지(하루 한 번 보상의 멱등 키)."""
+
+    __table_args__ = (
+        Index("ix_dailyquestclaim_user_date_key", "user_id", "date_kst", "quest_key", unique=True),
+    )
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(index=True)
+    date_kst: str  # YYYY-MM-DD (KST)
+    quest_key: str  # quests.QUESTS 의 key
+    reward: int = 0  # 그때 지급한 포인트(퀘스트 보상이 바뀌어도 기록은 남는다)
+    created_at: str
+    created_ms: int = Field(default=0, sa_type=BigInteger)
+
+
 class LeaderboardCarryover(SQLModel, table=True):
     """Idempotency record: one row per KST date whose top-N carry-over already ran."""
 
@@ -584,6 +622,8 @@ class PaperTrade(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     session_id: int = Field(index=True)
     ts: str
+    # 체결이 난 종목. 멀티종목 세션은 종목별로 다르고, 예전 행은 빈 문자열(세션 종목).
+    symbol: str = ""
     side: str  # buy | sell | short | cover
     price: float
     qty: float
@@ -757,6 +797,22 @@ def _migrate() -> None:
         "papersession": {
             "liquidations": "ALTER TABLE papersession ADD COLUMN liquidations INTEGER DEFAULT 0",
             "liquidated_loss": "ALTER TABLE papersession ADD COLUMN liquidated_loss FLOAT DEFAULT 0",
+            "legs_json": "ALTER TABLE papersession ADD COLUMN legs_json TEXT DEFAULT ''",
+        },
+        "papertrade": {
+            "symbol": "ALTER TABLE papertrade ADD COLUMN symbol TEXT DEFAULT ''",
+        },
+        # 게시판 편집기·추천(2026-09-10~): Postgres 쪽(_PG_ADDED_COLUMNS)에만 있어 SQLite 개발 DB 가 깨졌다.
+        "boardpost": {
+            "body_format": "ALTER TABLE boardpost ADD COLUMN body_format TEXT NOT NULL DEFAULT ''",
+            "views": "ALTER TABLE boardpost ADD COLUMN views INTEGER NOT NULL DEFAULT 0",
+            "likes": "ALTER TABLE boardpost ADD COLUMN likes INTEGER NOT NULL DEFAULT 0",
+            "dislikes": "ALTER TABLE boardpost ADD COLUMN dislikes INTEGER NOT NULL DEFAULT 0",
+        },
+        "boardcomment": {
+            "author_user_id": "ALTER TABLE boardcomment ADD COLUMN author_user_id INTEGER",
+            "parent_id": "ALTER TABLE boardcomment ADD COLUMN parent_id INTEGER",
+            "updated_ms": "ALTER TABLE boardcomment ADD COLUMN updated_ms INTEGER",
         },
         "macrorow": {
             "rep_leverage": "ALTER TABLE macrorow ADD COLUMN rep_leverage INTEGER DEFAULT 1",
@@ -765,6 +821,8 @@ def _migrate() -> None:
             "position_uncertain": "ALTER TABLE runsession ADD COLUMN position_uncertain BOOLEAN DEFAULT FALSE",
             "macro_json": "ALTER TABLE runsession ADD COLUMN macro_json TEXT DEFAULT ''",
             "user_macro_id": "ALTER TABLE runsession ADD COLUMN user_macro_id INTEGER",
+            "macro_origin": "ALTER TABLE runsession ADD COLUMN macro_origin TEXT DEFAULT ''",
+            "macro_digest": "ALTER TABLE runsession ADD COLUMN macro_digest TEXT DEFAULT ''",
         },
         "tickernewssnapshot": {
             "claim_token": "ALTER TABLE tickernewssnapshot ADD COLUMN claim_token TEXT DEFAULT ''",
@@ -849,6 +907,8 @@ _PG_ADDED_COLUMNS = {
         "claimed_ms": "BIGINT DEFAULT 0", "last_error": "TEXT DEFAULT ''",
     },
     "leaderboardentry": {"streak_days": "INTEGER DEFAULT 1", "first_created_ms": "BIGINT"},
+    "papersession": {"legs_json": "TEXT DEFAULT ''"},
+    "papertrade": {"symbol": "TEXT DEFAULT ''"},
     "boardcomment": {"author_user_id": "INTEGER", "parent_id": "INTEGER", "updated_ms": "BIGINT"},
     "boardpost": {
         "body_format": "TEXT NOT NULL DEFAULT ''", "views": "INTEGER NOT NULL DEFAULT 0",
@@ -862,6 +922,8 @@ _PG_ADDED_COLUMNS = {
         "macro_json": "TEXT DEFAULT ''", "position_uncertain": "BOOLEAN DEFAULT FALSE",
         "user_macro_id": "INTEGER",
         "runner_version": "TEXT DEFAULT ''",
+        "macro_origin": "TEXT DEFAULT ''",
+        "macro_digest": "TEXT DEFAULT ''",
     },
     "tickernewssnapshot": {
         "claim_token": "TEXT DEFAULT ''", "last_observed_at": "TEXT DEFAULT ''",
@@ -905,6 +967,7 @@ _PG_PRIVATE_CACHE_TABLES = (
     "newsarticlefeed", "newsarticle", "newsmaintenancelease", "publicnewslease",
     "leaderboardsnapshotcontrol", "leaderboardsnapshotversion", "leaderboardsnapshotitem",
     "leaderboardentrystats", "leaderboardchallengebot",
+    "dailyquestclaim", "runsessionevent",
 )
 _PG_MIGRATION_LOCK = 0x6767706172726F74  # Stable across web/worker processes and deployments.
 _PG_MIGRATION_ATTEMPTS = 3

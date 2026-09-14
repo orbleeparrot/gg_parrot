@@ -135,6 +135,8 @@ export const api = {
     req("/api/auth/google", { method: "POST", body: JSON.stringify({ credential }) }),
   me: () => req("/api/auth/me"),
   myDashboard: (options = {}) => req("/api/me/dashboard", options),
+  // 오늘(KST)의 일일 퀘스트 — 완료 여부·보상·오늘 번 포인트.
+  myQuests: (options = {}) => req("/api/me/quests", options),
   uploadAvatar: (image) => {
     const form = new FormData();
     form.append("image", image);
@@ -370,9 +372,12 @@ export const api = {
   runnerDownloadUrl: "/api/runner/download",
 
   // 매크로 실행기(exe) 연동 — 마이페이지용
-  runnerKey: () => req("/api/me/runner/key"),
+  runnerKey: (options = {}) => req("/api/me/runner/key", options),
   runnerKeyRegenerate: () => req("/api/me/runner/key/regenerate", { method: "POST" }),
   runnerSessions: (options = {}) => req("/api/me/runner/sessions", options),
+  // 세션 실행 로그(최신순) — 실행기가 heartbeat 로 올린 신호·주문·체결·오류.
+  runnerSessionEvents: (sessionId, options = {}) =>
+    req(`/api/me/runner/sessions/${encodeURIComponent(sessionId)}/events`, options),
   runnerSessionsStreamToken: () =>
     req("/api/me/runner/sessions/stream-token", { method: "POST" }),
   runnerSessionsStreamUrl: () => websocketUrl(RUNNER_SESSIONS_STREAM_PATH),

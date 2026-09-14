@@ -7,6 +7,7 @@ import { BrandLink } from "./SiteNavigation.jsx";
 import ThemeToggle from "./ThemeToggle.jsx";
 import UserAvatar from "./UserAvatar.jsx";
 import { DownloadIcon, HelpIcon, MenuIcon, UserIcon } from "./utilityIcons.jsx";
+import HeaderMemberKey from "./HeaderMemberKey.jsx";
 import "./SiteHeader.css";
 
 export default function SiteHeader({ hasSidebar, onOpenNavigation, menuButtonRef, navigationOpen }) {
@@ -32,6 +33,8 @@ export default function SiteHeader({ hasSidebar, onOpenNavigation, menuButtonRef
                 <span className="header-resource-label">실행기 설치</span>
                 <span className="header-tooltip" aria-hidden="true">실행기 설치</span>
               </NavLink>
+              {/* 실행기에 넣을 회원 키 — 설치 안내 바로 옆에서 꺼내 쓴다. */}
+              <HeaderMemberKey key={token || "guest"} />
               <NavLink to="/guide" className="header-control header-resource t-small" aria-label="FAQ">
                 <HelpIcon />
                 <span className="header-resource-label">FAQ</span>

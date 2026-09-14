@@ -13,6 +13,7 @@ import pytest
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
+REPORT = Path(os.environ.get("CACHE_VERIFICATION_REPORT", str(HERE / "backend-after-results.json"))).resolve()
 os.chdir(ROOT / "backend")
 sys.path.insert(0, str(ROOT / "backend"))
 original_connect = socket.socket.connect
@@ -46,7 +47,8 @@ class Report:
             "skipped": len(terminalreporter.stats.get("skipped", [])),
             "external_network": "blocked", "database": "temporary SQLite",
         }
-        (HERE / "backend-after-results.json").write_text(json.dumps(result, indent=2) + "\n")
+        REPORT.parent.mkdir(parents=True, exist_ok=True)
+        REPORT.write_text(json.dumps(result, indent=2) + "\n")
 
 
 raise SystemExit(pytest.main(["-q", "--disable-warnings", *arguments], plugins=[Report()]))

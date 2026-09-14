@@ -39,6 +39,27 @@
 .me-stat-link { position: absolute; inset: -12px 4px; padding: 0; border: 0; border-radius: 8px; background: transparent; cursor: pointer; }
 .me-stats.has-long-values { grid-template-columns: 1fr; gap: 16px; }
 .me-stats.has-long-values .me-stat { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; border-left: 0; }
+/* 오늘의 퀘스트 — 포인트 요약 아래 한 상자. 행 구분은 괘선, 완료는 노랑 체크. */
+.me-quests { padding: var(--me-group-gap) var(--me-inset); border: 1px solid rgb(var(--c-slate-200)); border-radius: 16px; background: rgb(var(--c-surface)); }
+.me-quests-heading { display: flex; align-items: baseline; justify-content: space-between; gap: var(--me-group-gap); }
+.me-quests-heading h2 { display: flex; align-items: center; gap: 8px; margin: 0; color: rgb(var(--c-slate-900)); font-size: 17px; font-weight: 750; letter-spacing: -.02em; }
+.me-quests-heading h2 svg { color: rgb(var(--c-brand-line)); }
+.me-quests-heading h2 > span { color: rgb(var(--c-slate-500)); font-size: 14px; font-weight: 600; }
+.me-quests-heading p { margin: 0; color: rgb(var(--c-slate-700)); font-size: 13px; font-weight: 600; white-space: nowrap; }
+.me-quest-list { margin: var(--me-label-gap) 0 0; padding: 0; list-style: none; }
+.me-quest { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto auto; align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid rgb(var(--c-slate-200)); }
+.me-quest-state { display: inline-grid; place-items: center; color: rgb(var(--c-slate-300)); }
+.me-quest.is-done .me-quest-state { color: rgb(var(--c-brand-line)); }
+.me-quest-main { min-width: 0; }
+.me-quest-main p { margin: 0; color: rgb(var(--c-slate-900)); font-size: 15px; font-weight: 600; line-height: 1.4; }
+.me-quest.is-done .me-quest-main p { color: rgb(var(--c-slate-500)); text-decoration: line-through; text-decoration-color: rgb(var(--c-slate-300)); }
+.me-quest-main span { display: block; color: rgb(var(--c-slate-500)); font-size: 12px; line-height: 1.5; }
+.me-quest-reward { color: rgb(var(--c-brand-line)); font-size: 15px; font-weight: 700; white-space: nowrap; }
+.me-quest.is-done .me-quest-reward { color: rgb(var(--c-slate-500)); font-weight: 600; }
+.me-quest-go { display: inline-grid; place-items: center; width: 36px; height: 36px; border-radius: 50%; color: rgb(var(--c-slate-700)); }
+.me-quest-go:hover { background: rgb(var(--c-slate-200)); }
+.me-quest-note { margin: var(--me-label-gap) 0 0; padding-top: var(--me-label-gap); border-top: 1px solid rgb(var(--c-slate-200)); color: rgb(var(--c-slate-500)); font-size: 12px; line-height: 1.5; }
+@media (max-width: 599px) { .me-quests { padding-inline: 16px; } .me-quests-heading { flex-direction: column; align-items: flex-start; gap: 4px; } .me-quest-main span { display: none; } }
 .me-section-nav { display: flex; gap: 32px; min-width: 0; border-bottom: 1px solid rgb(var(--c-slate-200)); }
 .me-section-nav button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 48px; padding: 0; border: 0; border-bottom: 2px solid transparent; background: transparent; color: rgb(var(--c-slate-500)); font-size: 15px; font-weight: 600; cursor: pointer; white-space: nowrap; }
 .me-section-nav button[aria-pressed="true"] { color: rgb(var(--c-slate-900)); border-bottom-color: rgb(var(--c-brand-line)); }

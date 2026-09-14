@@ -32,7 +32,8 @@ from fastapi import HTTPException
 from sqlalchemy import or_, update
 from sqlmodel import select
 
-from .db import RunnerKey, RunnerLaunchTicket, RunSession, User, UserMacro, get_session
+from . import macro_signing
+from .db import RunnerKey, RunnerLaunchTicket, RunSession, RunSessionEvent, User, UserMacro, get_session
 from .engine import Macro
 
 _KST = timezone(timedelta(hours=9))
@@ -53,6 +54,11 @@ LAUNCH_TICKET_TTL_SECONDS = 120
 _LAUNCH_TICKET_RE = re.compile(r"^[A-Za-z0-9_-]{43}$")
 # 활성으로 취급하는 종료 명령 값.
 _STOP_MODES = {"stop_only", "close_and_stop"}
+# 실행 이벤트 로그 — 세션당 보관 상한과 한 번의 보고에 받는 상한.
+EVENT_CAP = int(os.environ.get("RUNNER_EVENT_CAP", "500"))
+EVENT_BATCH_MAX = 100
+EVENT_MESSAGE_MAX = 300
+_EVENT_KINDS = {"start", "info", "signal", "order", "fill", "error", "stop"}
 
 
 class _SessionStreamHub:
@@ -426,6 +432,12 @@ def start_session(user: User, payload: dict) -> dict:
             )
 
     now = _now_iso()
+    # 매크로 출처: 티켓 경로면 web, 파일이면 동봉된 서명을 검증해 원본/수정본을 가른다.
+    macro_sig = payload.get("macro_sig")
+    macro_origin = macro_signing.classify_origin(
+        normalized_macro, user_macro_id=user_macro_id, sig=macro_sig if isinstance(macro_sig, dict) else None
+    )
+    macro_digest = macro_signing.digest(normalized_macro) if normalized_macro is not None else ""
     with get_session() as db:
         _active_account(db, user.id)
         if user_macro_id is not None:
@@ -470,11 +482,30 @@ def start_session(user: User, payload: dict) -> dict:
             started_at=now,
             last_heartbeat_at=now,
             runner_version=runner_version,
+            macro_origin=macro_origin,
+            macro_digest=macro_digest,
         )
         db.add(row)
         db.commit()
         db.refresh(row)
-        result = {"session_id": row.id, "poll_seconds": POLL_SECONDS}
+        # 첫 이벤트에 지문을 남긴다 — 문의가 오면 이 줄만 봐도 무엇을 돌렸는지 안다.
+        _append_events(db, row, [{
+            "ts": now,
+            "kind": "start",
+            "message": (
+                f"실행 시작 · 실행기 v{runner_version or '?'} · {'테스트넷' if row.testnet else '메인넷(실거래)'}"
+                f" · 매크로 {macro_signing.ORIGIN_LABELS.get(macro_origin, macro_origin)}"
+                + (f" · 지문 {macro_digest}" if macro_digest else "")
+            ),
+        }])
+        db.commit()
+        result = {
+            "session_id": row.id,
+            "poll_seconds": POLL_SECONDS,
+            "macro_origin": macro_origin,
+            "macro_origin_label": macro_signing.ORIGIN_LABELS.get(macro_origin, macro_origin),
+            "macro_digest": macro_digest,
+        }
     notify_sessions_changed(user.id)
     from .agent_features.position_news.runtime import request_collection
     request_collection()
@@ -489,6 +520,7 @@ def heartbeat(user: User, session_id: int, snapshot: dict) -> dict:
     응답 ``action`` : "continue" | "stop_only" | "close_and_stop".
     이미 서버에서 세션이 사라졌거나 종료됐다면 실행기도 멈추도록 "stop_only" 를 준다.
     """
+    events = snapshot.pop("events", None)
     with get_session() as db:
         row = db.get(RunSession, session_id)
         if row is None or row.user_id != user.id:
@@ -496,6 +528,7 @@ def heartbeat(user: User, session_id: int, snapshot: dict) -> dict:
             return {"action": "stop_only", "reason": "세션을 찾을 수 없어요."}
         if row.status != "running":
             return {"action": row.stop_mode or "stop_only", "reason": "이미 종료 처리된 세션이에요."}
+        _append_events(db, row, events)
 
         row.last_price = float(snapshot.get("last_price", row.last_price) or 0.0)
         row.in_position = bool(snapshot.get("in_position", False))
@@ -514,12 +547,22 @@ def heartbeat(user: User, session_id: int, snapshot: dict) -> dict:
     return {"action": action}
 
 
-def mark_stopped(user: User, session_id: int, status: str = "stopped", note: str = "", *, snapshot: dict | None = None) -> dict:
+def mark_stopped(
+    user: User,
+    session_id: int,
+    status: str = "stopped",
+    note: str = "",
+    *,
+    snapshot: dict | None = None,
+    events: list | None = None,
+) -> dict:
     """실행기가 종료(또는 오류 종료)를 확정 보고한다."""
     with get_session() as db:
         row = db.get(RunSession, session_id)
         if row is None or row.user_id != user.id:
             raise HTTPException(status_code=404, detail="세션을 찾을 수 없어요.")
+        already_final = row.status != "running"
+        _append_events(db, row, events)
         row.status = "error" if status == "error" else "stopped"
         if note:
             row.note = str(note)[:200]
@@ -543,9 +586,102 @@ def mark_stopped(user: User, session_id: int, status: str = "stopped", note: str
             row.status = "error"
             row.note = note or "청산 완료를 확인하지 못했어요. 거래소에서 포지션을 확인하세요."
         db.add(row)
+        # 같은 종료 보고를 재전송해도 종료 이벤트는 한 번만 남긴다.
+        if not already_final:
+            _append_events(db, row, [{
+                "ts": row.stopped_at,
+                "kind": "stop",
+                "message": ("오류 종료" if row.status == "error" else "종료")
+                + (f" · {row.note}" if row.note else "")
+                + f" · 누적 실현손익 {row.realized_pnl:+.2f} USDT"
+                + (" · 포지션 보유 중" if row.in_position else ""),
+            }])
         db.commit()
     notify_sessions_changed(user.id)
     return {"ok": True}
+
+
+# --- 실행 이벤트 로그 ------------------------------------------------------
+def _append_events(db, row: RunSession, events) -> int:
+    """실행기가 보낸 이벤트를 세션에 붙인다(정제·상한 적용). 커밋은 호출자가 한다."""
+    if not isinstance(events, list) or not events:
+        return 0
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    added = 0
+    for item in events[:EVENT_BATCH_MAX]:
+        if not isinstance(item, dict):
+            continue
+        message = str(item.get("message") or "").strip()
+        if not message:
+            continue
+        kind = str(item.get("kind") or "info").strip().lower()
+        if kind not in _EVENT_KINDS:
+            kind = "info"
+        ts = str(item.get("ts") or "").strip()[:32] or _now_iso()
+        db.add(RunSessionEvent(
+            session_id=row.id,
+            user_id=row.user_id,
+            ts=ts,
+            kind=kind,
+            message=message[:EVENT_MESSAGE_MAX],
+            created_ms=now_ms + added,  # 같은 배치 안 순서 보존
+        ))
+        added += 1
+    if added:
+        db.flush()
+        _trim_events(db, row.id)
+    return added
+
+
+def _trim_events(db, session_id: int) -> None:
+    from sqlalchemy import func
+
+    total = int(db.exec(
+        select(func.count(RunSessionEvent.id)).where(RunSessionEvent.session_id == session_id)
+    ).one())
+    overflow = total - EVENT_CAP
+    if overflow <= 0:
+        return
+    oldest = db.exec(
+        select(RunSessionEvent)
+        .where(RunSessionEvent.session_id == session_id)
+        .order_by(RunSessionEvent.id.asc())
+        .limit(overflow)
+    ).all()
+    for event in oldest:
+        db.delete(event)
+
+
+def _event_view(e: RunSessionEvent) -> dict:
+    return {
+        "id": e.id,
+        "ts": e.ts,
+        "ts_kst": _kst_label(e.ts),
+        "kind": e.kind,
+        "message": e.message,
+    }
+
+
+def list_events(user_id: int, session_id: int, limit: int = 300) -> dict:
+    """내 세션의 실행 로그(최신순)."""
+    with get_session() as db:
+        row = db.get(RunSession, session_id)
+        if row is None or row.user_id != user_id:
+            raise HTTPException(status_code=404, detail="세션을 찾을 수 없어요.")
+        rows = db.exec(
+            select(RunSessionEvent)
+            .where(RunSessionEvent.session_id == session_id)
+            .order_by(RunSessionEvent.id.desc())
+            .limit(max(1, min(int(limit), EVENT_CAP)))
+        ).all()
+        return {
+            "session_id": session_id,
+            "status": row.status,
+            "macro_origin": getattr(row, "macro_origin", "") or "",
+            "macro_origin_label": macro_signing.ORIGIN_LABELS.get(getattr(row, "macro_origin", "") or "", ""),
+            "macro_digest": getattr(row, "macro_digest", "") or "",
+            "events": [_event_view(e) for e in rows],
+        }
 
 
 # --- 마이페이지용: 목록 조회 / 종료 요청 -------------------------------
@@ -581,6 +717,9 @@ def _session_view(row: RunSession) -> dict:
         "stopping": stopping,
         "stop_mode": row.stop_mode,
         "runner_version": getattr(row, "runner_version", ""),
+        "macro_origin": getattr(row, "macro_origin", "") or "",
+        "macro_origin_label": macro_signing.ORIGIN_LABELS.get(getattr(row, "macro_origin", "") or "", ""),
+        "macro_digest": getattr(row, "macro_digest", "") or "",
         "connected": connected,
         "in_position": row.in_position,
         "position_uncertain": row.position_uncertain,
@@ -672,6 +811,9 @@ def delete_session(user_id: int, session_id: int) -> dict:
                 status_code=409,
                 detail="실행기가 아직 응답 중이에요. 먼저 종료한 뒤 목록에서 지울 수 있어요.",
             )
+        from sqlalchemy import delete as sql_delete
+
+        db.exec(sql_delete(RunSessionEvent).where(RunSessionEvent.session_id == session_id))
         db.delete(row)
         db.commit()
     notify_sessions_changed(user_id)

@@ -73,6 +73,29 @@
 
 
 
+/* 회원 키 팝오버 — 헤더 버튼 아래 작은 대화상자. 키 입력·복사·재발급은 RunnerKeyPanel(menu). */
+.header-key { position: relative; display: inline-flex; }
+.header-key-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 40;
+  width: min(360px, calc(100vw - 24px));
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid rgb(var(--c-slate-200));
+  border-radius: 12px;
+  background: rgb(var(--c-surface));
+  box-shadow: 0 12px 32px rgba(15, 23, 42, .14);
+  text-align: left;
+  white-space: normal;
+}
+.header-key-popover h2 { margin: 0; color: rgb(var(--c-slate-900)); }
+.header-key-popover p { margin: 0; line-height: 1.5; }
+.header-key-link { color: rgb(var(--c-slate-900)); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
+.dark .header-key-popover { box-shadow: 0 12px 32px rgba(0, 0, 0, .5); }
+
 @media (prefers-reduced-motion: no-preference) {
   .header-control::before { transition: background-color 120ms ease, color 120ms ease; }
   .header-control:hover > .header-tooltip { transition: opacity 120ms ease 500ms; }

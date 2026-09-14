@@ -1,0 +1,21 @@
+{
+  "main_base": "828c9f3",
+  "branch_before_integration": "8580468",
+  "frontend_build": "/tmp/ggp-main-integration-build",
+  "build_index_sha256": "909edcd0af7f7acfee0a230e7651f47a7330ae778d077eae6eb89bf8cb939840",
+  "service_worker_sha256": "992f8a05704607a4a972832ea046b0573dcb6122ea3812c892d4a4afc90f7aac",
+  "frontend_tests": {
+    "command": "node --test --test-isolation=none frontend/tests/*.test.js",
+    "passed": 281,
+    "failed": 0
+  },
+  "runner_tests": {
+    "command": "python -m unittest discover -s runner -p 'test_*.py'",
+    "passed": 58,
+    "skipped": 1,
+    "failed": 0,
+    "skip_reason": "Windows named-pipe integration test on Linux",
+    "verified_by": "independent runner integration review"
+  },
+  "scope": "Temporary SQLite and mocked APIs; no production DB or external trading calls"
+}

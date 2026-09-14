@@ -95,6 +95,24 @@ ORDER_CAP_BASIS = os.environ.get("ORDER_CAP_BASIS", "notional").lower()  # notio
 DEFAULT_TP_PCT = 3.0
 MAX_RETRIES = 3
 POLL_SECONDS = 5.0
+# 실행 로그를 서버에 올리는 버퍼 상한(heartbeat 한 번에 실어 보내는 최대 줄 수).
+EVENT_BUFFER_MAX = 100
+
+
+def _event_kind(msg: str) -> str:
+    """로그 한 줄을 서버 이벤트 종류로 분류한다(문의 대응용 색인)."""
+    m = msg.strip()
+    if m.startswith("[진입]") or m.startswith("[청산") or m.startswith("[강제청산"):
+        return "order"
+    if "체결" in m or m.lstrip().startswith("손익"):
+        return "fill"
+    if "오류" in m or "실패" in m:
+        return "error"
+    if "종료" in m:
+        return "stop"
+    if "진입 보류" in m or "신호" in m:
+        return "signal"
+    return "info"
 
 APP_TITLE = f"껄무새 매크로 실행기 v{RUNNER_VERSION}"
 
@@ -413,7 +431,32 @@ class ServerClient:
         self.base = base.rstrip("/")
         self.key = runner_key.strip()
         self.session_id = None
+        self.macro_origin = ""
         self._headers = {"X-Runner-Key": self.key, "Content-Type": "application/json"}
+        # 실행 창 로그를 서버에도 남긴다 — heartbeat 에 실어 보내고, 실패하면 다음에 다시.
+        self._events: list[dict] = []
+        self._events_lock = threading.Lock()
+
+    def push_event(self, kind: str, message: str) -> None:
+        with self._events_lock:
+            self._events.append({
+                "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "kind": kind,
+                "message": str(message)[:300],
+            })
+            if len(self._events) > EVENT_BUFFER_MAX:
+                del self._events[:-EVENT_BUFFER_MAX]
+
+    def _drain_events(self) -> list[dict]:
+        with self._events_lock:
+            batch, self._events = self._events, []
+        return batch
+
+    def _requeue_events(self, batch: list[dict]) -> None:
+        if not batch:
+            return
+        with self._events_lock:
+            self._events = (batch + self._events)[-EVENT_BUFFER_MAX:]
 
     def start(self, payload: dict) -> dict:
         r = requests.post(f"{self.base}/api/runner/start", json=payload,
@@ -421,6 +464,7 @@ class ServerClient:
         r.raise_for_status()
         data = r.json()
         self.session_id = data.get("session_id")
+        self.macro_origin = str(data.get("macro_origin") or "")
         return data
 
     def heartbeat(self, snapshot: dict) -> str:
@@ -430,12 +474,15 @@ class ServerClient:
             return "continue"
         body = dict(snapshot)
         body["session_id"] = self.session_id
+        events = self._drain_events()
+        body["events"] = events
         try:
             r = requests.post(f"{self.base}/api/runner/heartbeat", json=body,
                               headers=self._headers, timeout=10)
             r.raise_for_status()
             return r.json().get("action", "continue")
         except Exception:
+            self._requeue_events(events)
             return "continue"
 
     def stopped(self, status: str = "stopped", note: str = "", snapshot: dict | None = None) -> bool:
@@ -443,7 +490,10 @@ class ServerClient:
             return True
         # Repeating the same terminal snapshot is idempotent. A deploy or a
         # transient response failure must not silently lose the final state.
-        body = {"session_id": self.session_id, "status": status, "note": note, "snapshot": snapshot}
+        body = {
+            "session_id": self.session_id, "status": status, "note": note, "snapshot": snapshot,
+            "events": self._drain_events(),
+        }
         for attempt in range(MAX_RETRIES):
             try:
                 response = requests.post(
@@ -515,6 +565,10 @@ class BotThread(threading.Thread):
 
     def log(self, msg: str) -> None:
         self.on_log(msg)
+        try:
+            self.server.push_event(_event_kind(msg), msg)
+        except Exception:
+            pass  # 로그 전송은 매매를 막지 않는다
 
     def _sleep(self, seconds: float) -> None:
         # 종료 명령이 오면 즉시 깨어나도록 이벤트 기반 대기.
@@ -839,6 +893,9 @@ class RunnerApp:
         # Set only when the macro came from an authenticated web launch. A
         # manually opened file has no UserMacro row to associate with a run.
         self.user_macro_id: int | None = None
+        # 파일에 동봉된 서명(`_sig`)과 출처. 서버가 서명을 검증해 원본/수정본을 가른다.
+        self.macro_sig: dict | None = None
+        self.macro_source = ""
         self.macro_path = tk.StringVar(value="")
         self.live = tk.BooleanVar(value=False)   # 실거래(메인넷) 여부
         self.api_key = tk.StringVar(value="")
@@ -963,7 +1020,13 @@ class RunnerApp:
         # Clear first so a failed/manual replacement can never submit the ID
         # of a previously claimed web macro with different strategy contents.
         self.user_macro_id = None
+        self.macro_sig = None
+        self.macro_source = "file"
         self._render_macro_selection(macro, source_label)
+        sig = macro.get("_sig") if isinstance(macro, dict) else None
+        self.macro_sig = dict(sig) if isinstance(sig, dict) else None
+        if self.macro_sig is None:
+            self._log("이 매크로 파일엔 서명이 없어요(옛 파일). 서버에는 '서명 없는 파일'로 남아요.")
 
     def _apply_claimed_macro(
         self,
@@ -974,6 +1037,8 @@ class RunnerApp:
         """Apply a web-claimed macro and retain its optional UserMacro ID."""
 
         self.user_macro_id = None
+        self.macro_sig = None
+        self.macro_source = "web"
         if user_macro_id is not None and (
             isinstance(user_macro_id, bool)
             or not isinstance(user_macro_id, int)
@@ -992,7 +1057,7 @@ class RunnerApp:
             lev = max(1, int(macro.get("leverage", 1) or 1))
         except (TypeError, ValueError) as exc:
             raise ValueError("invalid macro leverage") from exc
-        self.macro = dict(macro)
+        self.macro = {k: v for k, v in macro.items() if k != "_sig"}
         self.macro_path.set(source_label)
         side = str(macro.get("position_side", "long"))
         market = _decide_market(side.lower(), lev)
@@ -1224,7 +1289,7 @@ class RunnerApp:
         server = ServerClient(self.member_key.get(), base=self.server_base)
         payload = self._build_start_payload(testnet)
         try:
-            server.start(payload)
+            started = server.start(payload)
         except Exception as exc:
             msg = str(exc)
             if "401" in msg:
@@ -1234,6 +1299,19 @@ class RunnerApp:
 
         self._log(f"세션 시작 (id={server.session_id}) · {payload['symbol']} · {payload['market']} · "
                   f"{'메인넷' if not testnet else '테스트넷'}")
+        origin_label = str((started.get("macro_origin_label") if isinstance(started, dict) else "") or "")
+        if origin_label:
+            self._log(f"매크로 출처: {origin_label}" + (f" · 지문 {started.get('macro_digest')}" if started.get("macro_digest") else ""))
+        if server.macro_origin == "file_modified":
+            # 웹에서 받은 뒤 손으로 고친 파일. 돌리는 건 막지 않되, 문의 시 지원 대상이
+            # 아니라는 걸 사용자도 알게 한다(서버 세션에도 '수정된 파일'로 남는다).
+            self._log("⚠ 이 매크로 파일은 웹에서 받은 원본과 달라요. 로컬에서 수정된 설정으로 실행돼요.")
+            messagebox.showwarning(
+                APP_TITLE,
+                "이 매크로 파일은 껄무새에서 받은 원본과 내용이 달라요.\n\n"
+                "로컬에서 수정한 설정 그대로 실행되며, 내 에이전트 화면에 '수정된 파일'로 표시돼요.\n"
+                "웹 설정과 다르게 동작해도 껄무새의 오류가 아닐 수 있어요.",
+            )
         self.bot = BotThread(
             self.macro, self.api_key.get().strip(), self.api_secret.get().strip(),
             testnet, server,
@@ -1266,6 +1344,13 @@ class RunnerApp:
         }
         if self.user_macro_id is not None:
             payload["user_macro_id"] = self.user_macro_id
+        # 파일 서명 — 서버가 검증해 세션 출처(원본/수정본)를 남긴다. 티켓 경로엔 없다.
+        macro_sig = getattr(self, "macro_sig", None)
+        if macro_sig is not None:
+            payload["macro_sig"] = macro_sig
+        macro_source = getattr(self, "macro_source", "")
+        if macro_source:
+            payload["macro_source"] = macro_source
         return payload
 
     def _stop(self, mode: str) -> None:

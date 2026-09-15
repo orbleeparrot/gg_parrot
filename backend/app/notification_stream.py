@@ -8,8 +8,10 @@
 2. 다른 프로세스(Prefect 워커의 기사·고래 수집기 등): 같은 트랜잭션에 ``pg_notify`` 를 실어
    보내고, 웹 프로세스의 LISTEN 연결이 받아 허브를 깨운다. Postgres 의 NOTIFY 는 커밋될 때만
    전달되므로 1 과 같은 의미다. SQLite(개발·테스트)에는 이 층이 없다.
-3. 브라우저: ``event_stream`` 이 SSE 로 안 읽은 수(``event: unread``)를 보낸다. 연결 직후 한 번,
-   그 뒤 허브가 깨울 때마다. 25초마다 주석 한 줄로 연결을 살린다(프록시 idle timeout).
+3. 브라우저: ``event_stream`` 이 SSE 로 안 읽은 수와 최신 알림 id(``event: unread``)를 보낸다.
+   연결 직후 한 번, 허브가 깨울 때마다(새 알림 본문 ``event: notification`` 과 함께), 그리고
+   조용할 때도 25초마다(keepalive 겸 안전망 — 허브가 놓친 변경(예: LISTEN 이 끊긴 사이 다른
+   프로세스가 쓴 알림)을 브라우저가 최신 id 비교로 알아채 가져온다).
 
 허브는 값을 들지 않는다 — 깨어난 스트림이 DB 에서 안 읽은 수를 다시 센다.
 """
@@ -175,8 +177,18 @@ def _fresh(user_id: int, after_id: int) -> list[dict]:
         return notifications.list_after(db, user_id, after_id)
 
 
-def unread_event(unread: int) -> str:
-    return f"event: unread\ndata: {json.dumps({'unread': int(unread)})}\n\n"
+def unread_event(unread: int, latest_id: Optional[int] = None) -> str:
+    data = {"unread": int(unread)}
+    if latest_id is not None:
+        data["latest_id"] = int(latest_id)
+    return f"event: unread\ndata: {json.dumps(data)}\n\n"
+
+
+def _state(user_id: int) -> tuple[int, int]:
+    from . import notifications
+
+    with get_session() as db:
+        return notifications.unread_count_for(db, user_id), notifications.latest_id_for(db, user_id)
 
 
 def notification_event(item: dict) -> str:
@@ -190,23 +202,26 @@ async def event_stream(user_id: int, token: str):
     try:
         yield "retry: 3000\n\n"
         # 연결 전에 있던 알림은 토스트로 다시 띄우지 않는다 — 이 뒤로 생긴 것만 보낸다.
-        last_id = await asyncio.to_thread(_latest_id, user_id)
-        yield unread_event(await asyncio.to_thread(_unread, user_id))
+        unread, last_id = await asyncio.to_thread(_state, user_id)
+        yield unread_event(unread, last_id)
         while True:
             try:
                 await asyncio.wait_for(changed.wait(), timeout=KEEPALIVE_SECONDS)
             except asyncio.TimeoutError:
-                # 토큰의 계정이 아직 유효한지(로그아웃·탈퇴하면 auth_version 이 바뀐다) 확인하고 살려 둔다.
+                # 토큰의 계정이 아직 유효한지(로그아웃·탈퇴하면 auth_version 이 바뀐다) 확인하고,
+                # 현재 상태를 실어 연결을 살린다. 허브가 놓친 변경은 브라우저가 latest_id 로 알아챈다.
                 try:
                     await asyncio.to_thread(auth.decode_stream_token, token, auth.NOTIFICATION_STREAM_PURPOSE, check_expiry=False)
                 except HTTPException:
                     return
-                yield ": ping\n\n"
+                unread, latest = await asyncio.to_thread(_state, user_id)
+                yield unread_event(unread, latest)
                 continue
             changed.clear()
             for item in await asyncio.to_thread(_fresh, user_id, last_id):
                 last_id = max(last_id, int(item["id"]))
                 yield notification_event(item)
-            yield unread_event(await asyncio.to_thread(_unread, user_id))
+            unread, latest = await asyncio.to_thread(_state, user_id)
+            yield unread_event(unread, latest)
     finally:
         hub.unsubscribe(user_id, subscription_id)

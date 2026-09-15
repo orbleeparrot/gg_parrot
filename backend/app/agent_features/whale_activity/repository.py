@@ -223,6 +223,7 @@ def store_result(symbol: str, market: str, token: str, payload: dict, *, now_ms=
     if not _owned(row, token, millis):
         return False
     previous = _decoded(row) or {}
+    first_observation = not row.last_success_ms  # 아래 update() 가 세션의 row 도 갱신하므로 먼저 읽는다
     items = _recent_items([*(previous.get("items") or []), *payload["items"]],
                           symbol=symbol, market=market, threshold=threshold, millis=millis)
     merged = {**payload, "items": items, "status": "ready" if items else "empty", "stale": False}
@@ -236,7 +237,7 @@ def store_result(symbol: str, market: str, token: str, payload: dict, *, now_ms=
              claim_token="", claimed_ms=0, consecutive_failures=0, last_error="", error_code="", collection_status="ready"))
     stored = result.rowcount == 1
     if stored:
-        _notify_fresh_trades(db, symbol, market, previous, items, first=not row.last_success_ms)
+        _notify_fresh_trades(db, symbol, market, previous, items, first=first_observation)
     db.commit()
     return stored
 

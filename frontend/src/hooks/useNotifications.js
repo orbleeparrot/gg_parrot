@@ -92,23 +92,28 @@ export default function useNotifications(token) {
     }
   }, [token, current, noteSeen]);
 
-  // 3) 폴링 — 새 id 가 보이면(스트림이 없을 때) 그 뒤를 받아 토스트로 띄운다
+  // 서버가 알려 준 최신 id 가 마지막으로 본 것보다 크면 그 뒤를 받아 토스트로 띄운다(폴링·SSE keepalive 공통).
+  const catchUp = useCallback(async (latestId, signal) => {
+    if (hasNewerNotifications(latestId, lastSeenRef.current)) {
+      try {
+        const fresh = await api.myNotifications({ after: lastSeenRef.current, signal });
+        if (current()) for (const item of fresh.items || []) showToast(item);
+      } catch (_) {
+        // 다음 신호에서 다시 시도한다
+      }
+    }
+    noteSeen(latestId);
+  }, [current, noteSeen, showToast]);
+
+  // 3) 폴링 — 스트림이 없을 때 20초, 있을 때는 2분 안전망
   const poll = useCallback(async (signal) => {
     if (!token) return { nextPollMs: POLL_MS };
     const data = await api.myNotificationsUnread({ signal });
     if (!current()) return { nextPollMs: POLL_MS };
     setUnread(Number(data.unread) || 0);
-    if (hasNewerNotifications(data.latest_id, lastSeenRef.current)) {
-      try {
-        const fresh = await api.myNotifications({ after: lastSeenRef.current, signal });
-        if (current()) for (const item of fresh.items || []) showToast(item);
-      } catch (_) {
-        // 다음 폴링에서 다시 시도한다
-      }
-    }
-    noteSeen(data.latest_id);
+    await catchUp(data.latest_id, signal);
     return { nextPollMs: liveRef.current ? POLL_LIVE_MS : POLL_MS };
-  }, [token, current, noteSeen, showToast]);
+  }, [token, current, catchUp]);
   const refresh = useAdaptivePolling(poll, {
     intervalMs: POLL_MS, maxIntervalMs: POLL_MAX_MS, enabled: Boolean(token), immediate: true, pollKey: token || "",
   });
@@ -192,9 +197,10 @@ export default function useNotifications(token) {
         if (item && current()) showToast(item);
       });
       source.addEventListener("unread", (event) => {
-        const count = parseUnreadEvent(event.data);
-        if (count === null || !current()) return;
-        setUnread(count);
+        const state = parseUnreadEvent(event.data);
+        if (state === null || !current()) return;
+        setUnread(state.unread);
+        if (state.latestId !== null) catchUp(state.latestId);
         if (openRef.current) load({ silent: true, markRead: true });
       });
       // 토큰 만료·서버 재시작·네트워크 끊김: 우리가 닫고 새 토큰으로 다시 붙는다(EventSource 의 자동 재연결은 옛 토큰을 쓴다).
@@ -220,7 +226,7 @@ export default function useNotifications(token) {
       document.removeEventListener("visibilitychange", onVisibility);
       drop();
     };
-  }, [token, current, load, showToast]);
+  }, [token, current, load, showToast, catchUp]);
 
   const markRead = useCallback(async (ids) => {
     const wanted = (ids || []).filter((id) => Number.isInteger(id));

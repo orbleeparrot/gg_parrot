@@ -78,10 +78,10 @@ test("SSE 재연결 간격 — 1초부터 두 배, 최대 30초, ±20% 흔들림
   assert.equal(streamRetryDelay(2, () => 1), 4800);
 });
 
-test("unread 이벤트 파싱 — 숫자만 받고 나머지는 무시", () => {
-  assert.equal(parseUnreadEvent('{"unread": 3}'), 3);
-  assert.equal(parseUnreadEvent('{"unread": "7"}'), 7);
-  assert.equal(parseUnreadEvent({ unread: 0 }), 0);
+test("unread 이벤트 파싱 — 수와 최신 id, 수가 아니면 무시", () => {
+  assert.deepEqual(parseUnreadEvent('{"unread": 3, "latest_id": 12}'), { unread: 3, latestId: 12 });
+  assert.deepEqual(parseUnreadEvent('{"unread": "7"}'), { unread: 7, latestId: null });
+  assert.deepEqual(parseUnreadEvent({ unread: 0, latest_id: 0 }), { unread: 0, latestId: 0 });
   assert.equal(parseUnreadEvent('{"unread": -1}'), null);
   assert.equal(parseUnreadEvent("not json"), null);
   assert.equal(parseUnreadEvent("{}"), null);

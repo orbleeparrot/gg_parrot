@@ -225,19 +225,25 @@ def test_event_stream_sends_the_count_now_pings_when_idle_and_wakes_after_a_comm
             notifications.notify(db, user["id"], "quest", "백테스트 퀘스트 완료", data={"points": 10})
             db.commit()  # 커밋 뒤 after_commit → 허브 → 스트림이 깨어난다
 
+    def parsed(chunk):
+        return json.loads(chunk.split("data: ", 1)[1].strip())
+
     async def scenario():
         gen = notification_stream.event_stream(user["id"], stream_token)
         assert await _next(gen) == "retry: 3000\n\n"
-        assert await _next(gen) == notification_stream.unread_event(before)
+        first = parsed(await _next(gen))
+        assert first["unread"] == before and first["latest_id"] >= 1
         assert notification_stream.hub.subscriber_count(user["id"]) == 1
-        assert await _next(gen) == ": ping\n\n", "아무 일 없으면 keepalive 주석만"
+        idle = await _next(gen)  # 아무 일 없어도 keepalive 로 현재 상태를 다시 보낸다
+        assert idle.startswith("event: unread\n") and parsed(idle) == first
         threading.Thread(target=later).start()
         pushed = await _next(gen)  # 새 알림 본문(토스트용) → 그 다음 안 읽은 수
         assert pushed.startswith("event: notification\nid: ")
-        payload = json.loads(pushed.split("data: ", 1)[1].strip())
+        payload = parsed(pushed)
         assert payload["title"] == "백테스트 퀘스트 완료" and payload["kind"] == "quest" and payload["data"]["points"] == 10
         assert payload["read"] is False
-        assert await _next(gen) == notification_stream.unread_event(before + 1)
+        after = parsed(await _next(gen))
+        assert after["unread"] == before + 1 and after["latest_id"] == payload["id"]
         await gen.aclose()
         assert notification_stream.hub.subscriber_count(user["id"]) == 0
 
@@ -254,6 +260,7 @@ def test_event_stream_ends_when_the_login_is_invalidated(monkeypatch):
         await _next(gen)
         first = await _next(gen)
         assert first.startswith("event: unread\ndata: ")
+        assert "latest_id" in first
         from app.db import User
         with get_session() as db:
             row = db.get(User, user["id"])

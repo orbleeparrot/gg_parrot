@@ -274,6 +274,44 @@ def test_runner_session_lifecycle_and_events_become_agent_notifications():
         assert notifications.notify_running_sessions(db, asset="ATOM", title="늦은 기사") == 0
 
 
+def test_whale_trades_notify_running_sessions_only_after_the_first_observation():
+    from datetime import datetime, timezone
+    from app.agent_features.whale_activity import repository as whales_repo
+
+    token, user = _signup()
+    key = _runner_key(token)
+    r = client.post("/api/runner/start", json={"symbol": "INJUSDT", "macro": {**_MACRO, "symbol": "INJUSDT"}}, headers=key)
+    assert r.status_code == 200, r.text
+    session_id = r.json()["session_id"]
+
+    def trade(agg, notional, side, at_ms):
+        return {"id": f"spot:INJUSDT:{agg}", "price": 20.0, "quantity": notional / 20.0, "notional": notional,
+                "side": side, "occurred_at": datetime.fromtimestamp(at_ms / 1000, timezone.utc).isoformat()}
+
+    def payload(items):
+        return {"status": "ready", "symbol": "INJUSDT", "market": "spot", "items": items, "threshold_quote": 100_000}
+
+    now = 1_800_000_000_000
+    tok = whales_repo.claim_collection("INJUSDT", "spot", now_ms=now)
+    assert tok and whales_repo.store_result("INJUSDT", "spot", tok, payload([trade(1, 150_000, "sell", now - 5_000)]), now_ms=now)
+    agent = [it for it in _personal(token)["items"] if it["kind"] == "agent"]
+    assert [it["data"]["event"] for it in agent] == ["start"], "첫 관측은 지난 체결이 한꺼번에 울리지 않게 건너뛴다"
+
+    later = now + 31_000
+    tok = whales_repo.claim_collection("INJUSDT", "spot", now_ms=later)
+    assert tok and whales_repo.store_result("INJUSDT", "spot", tok, payload([
+        trade(1, 150_000, "sell", now - 5_000), trade(2, 260_000, "buy", later - 3_000)]), now_ms=later)
+    latest = _personal(token)["items"][0]
+    assert latest["title"] == "INJUSDT 대형 체결 1건" and latest["session_id"] == session_id
+    assert "260,000" in latest["body"] and "매수" in latest["body"] and latest["data"]["event"] == "whale"
+
+    again = later + 31_000  # 같은 체결을 다시 봐도 새 알림은 없다
+    tok = whales_repo.claim_collection("INJUSDT", "spot", now_ms=again)
+    assert tok and whales_repo.store_result("INJUSDT", "spot", tok, payload([trade(2, 260_000, "buy", later - 3_000)]), now_ms=again)
+    assert sum(it["data"].get("event") == "whale" for it in _personal(token)["items"]) == 1
+    client.post("/api/runner/stopped", json={"session_id": session_id, "status": "stopped", "note": "포지션 없이 종료"}, headers=key)
+
+
 def test_admin_message_and_notice(monkeypatch):
     admin_token, admin = _signup()
     member_token, member = _signup()

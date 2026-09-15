@@ -119,12 +119,15 @@ export function parseNotificationEvent(data) {
   }
 }
 
-// 서버가 보낸 `event: unread` 의 data. 숫자가 아니면 null(무시).
+// 서버가 보낸 `event: unread` 의 data — { unread, latestId }. 수가 아니면 null(무시).
+// latestId 는 keepalive 에도 실려 오므로, 허브가 놓친 알림(다른 프로세스가 쓴 것)을 브라우저가 알아챈다.
 export function parseUnreadEvent(data) {
   try {
     const parsed = typeof data === "string" ? JSON.parse(data) : data;
     const count = Number(parsed?.unread);
-    return Number.isFinite(count) && count >= 0 ? Math.floor(count) : null;
+    if (!Number.isFinite(count) || count < 0) return null;
+    const latest = Number(parsed?.latest_id);
+    return { unread: Math.floor(count), latestId: Number.isFinite(latest) ? latest : null };
   } catch (_) {
     return null;
   }

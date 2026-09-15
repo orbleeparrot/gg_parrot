@@ -1017,6 +1017,8 @@ _PG_PRIVATE_CACHE_TABLES = (
     "leaderboardsnapshotcontrol", "leaderboardsnapshotversion", "leaderboardsnapshotitem",
     "leaderboardentrystats", "leaderboardchallengebot",
     "dailyquestclaim", "runsessionevent",
+    # 게시판 사진·추천·신고와 브라우저 뉴스 캐시 — create_all 로만 생겨 RLS 없이 anon 권한이 열려 있었다(2026-09-15).
+    "boardimage", "boardpostvote", "boardreport", "browsernewspagecache",
 )
 _PG_MIGRATION_LOCK = 0x6767706172726F74  # Stable across web/worker processes and deployments.
 _PG_MIGRATION_ATTEMPTS = 3

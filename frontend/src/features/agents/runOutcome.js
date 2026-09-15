@@ -1,4 +1,6 @@
 // 실행 종료 결과와 종료 확인 문구 — 화면 컴포넌트가 아니라 순수 함수로 두어 테스트한다.
+import { exitRules } from "../../lib/positionExits.js";
+
 const USDT = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const PRICE = new Intl.NumberFormat("en-US", { maximumFractionDigits: 6 });
 const QTY = new Intl.NumberFormat("en-US", { maximumFractionDigits: 6 });
@@ -142,6 +144,9 @@ export function describeRunOutcome(session) {
     { label: "종목·환경", value: `${s.symbol || "—"} · ${marketLabel(s)} · ${s.testnet ? "테스트넷" : "메인넷(실거래)"}` },
     { label: "종료 방식", value: stopModeLabel(s.stop_mode) },
     { label: "마지막 가격", value: Number(s.last_price) ? PRICE.format(Number(s.last_price)) : "—", numeric: true },
+    // 포지션 블록이 보여 주던 실행기 버전·출처와 청산 기준 — 결과 화면에서도 같은 자리에 남긴다.
+    { label: "실행기", value: [s.runner_version ? `v${s.runner_version}` : "", s.macro_origin_label || ""].filter(Boolean).join(" · ") || "—", numeric: true },
+    { label: "청산 기준", value: exitRules(s.macro, s.position_side).summary },
     {
       label: "남은 포지션",
       numeric: !!s.in_position,

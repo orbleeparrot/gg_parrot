@@ -408,7 +408,8 @@ function AccountAgents() {
 
             {/* 오른쪽 열: 평가손익 블록(제일 중요한 지표)이 위, 에이전트 기록이 아래. 차트는 실행 바 바로 아래부터 전체 높이. */}
             <div className="agent-side">
-              <PositionStrip session={selected} macro={macro} />
+              {/* 종료됐거나 종료 처리 중이면 오른쪽 열은 결과 화면이 맡는다 — 블록을 겹쳐 두지 않는다. */}
+              {selected.status === "running" && !selected.stopping ? <PositionStrip session={selected} macro={macro} /> : null}
               <AgentActivityStream
                 key={selected.session_id}
                 symbol={selected.symbol}

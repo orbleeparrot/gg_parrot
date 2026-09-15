@@ -111,3 +111,16 @@ test("결과 표정은 손익 부호를 따르고, 청산 직전 포지션이 �
   assert.equal(kept.avatar, "warning");
   assert.equal(kept.rows.find((row) => row.label === "평단").value, "100");
 });
+
+test("결과 행에 실행기 버전·출처와 청산 기준이 남는다", () => {
+  const base = { status: "stopped", note: "청산 완료 후 종료", stop_mode: "close_and_stop", symbol: "DOTUSDT", in_position: false,
+    started_kst: "09/15 10:00:00", stopped_kst: "09/15 12:14:00", last_price: 0.988, realized_pnl: -0.1,
+    runner_version: "7", macro_origin_label: "웹에서 바로 실행",
+    macro: { rule_type: "A", params: { take_profit_pct: 20 }, risk: { stop_loss_pct: 9 } } };
+  const outcome = describeRunOutcome(base);
+  assert.equal(outcome.rows.find((row) => row.label === "실행기").value, "v7 · 웹에서 바로 실행");
+  assert.equal(outcome.rows.find((row) => row.label === "청산 기준").value, "익절 +20% · 손절 -9%");
+  const legacy = describeRunOutcome({ ...base, runner_version: "", macro_origin_label: "", macro: null });
+  assert.equal(legacy.rows.find((row) => row.label === "실행기").value, "—");
+  assert.equal(legacy.rows.find((row) => row.label === "청산 기준").value, "전략 신호");
+});

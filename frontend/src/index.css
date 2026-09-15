@@ -543,6 +543,9 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 /* 포지션 블록(PositionStrip) — 오른쪽 열(에이전트 기록) 맨 위. 첫 줄: 상태 점 + 큰 평가손익 · 게이지,
    둘째 줄: 두 열 표. 상자·색 배경 없이 괘선으로만 나눈다. 수익 초록·손실 빨강은 봉 색과 같다. */
 .agent-side { display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; min-height: 0; container: agent-side / inline-size; }
+/* 블록이 없을 때(종료·결과 화면)도 기록은 둘째 줄(1fr)에 — contain: size 인 aside 가 auto 줄에 들어가면 높이가 0 이 된다. */
+.agent-side > .agent-position { grid-row: 1; }
+.agent-side > .agent-chat { grid-row: 2; }
 .agent-position { display: grid; border-bottom: 1px solid rgb(var(--c-slate-300)); background: rgb(var(--c-surface)); }
 .agent-position-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 24px; padding: 12px 16px 10px; }
 .agent-position-main { display: grid; gap: 3px; min-width: 0; }

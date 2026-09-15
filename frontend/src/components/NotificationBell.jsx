@@ -1,6 +1,7 @@
 // 헤더의 알림 종 — 프로필 바로 왼쪽. 안 읽은 수는 빨간 배지로, 누르면 회원 키와 같은
-// 대화상자에 최근 알림(개인 알림 + 공지)이 최신순으로 열린다. 행을 누르면 읽음 처리하고
-// 알림이 가리키는 화면(/agents, /board/12 …)으로 이동한다. 로그인 계정에만 보인다.
+// 대화상자에 최근 알림(개인 알림 + 공지)이 최신순으로 열린다. 여는 순간 모두 읽음이 되어
+// 배지가 사라지고(안 읽음 점은 이번 열람 동안만), 행을 누르면 알림이 가리키는 화면
+// (/agents, /board/12 …)으로 이동한다. 로그인 계정에만 보인다.
 import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth.js";
@@ -29,13 +30,13 @@ export default function NotificationBell() {
   const [open, setOpen] = useState(false);
   const rootRef = useRef(null);
   const buttonRef = useRef(null);
-  const { unread, items, loading, error, load, markRead, markAll } = useNotifications(token);
+  const { unread, items, loading, error, setPanelOpen } = useNotifications(token);
 
-  // 다른 페이지로 가면 닫고, 바깥 클릭·Esc 로도 닫는다. 열 때 목록을 새로 읽는다.
+  // 다른 페이지로 가면 닫고, 바깥 클릭·Esc 로도 닫는다. 열림 상태는 훅이 목록 읽기·읽음 처리에 쓴다.
   useEffect(() => { setOpen(false); }, [pathname]);
+  useEffect(() => { setPanelOpen(open); }, [open, setPanelOpen]);
   useEffect(() => {
     if (!open) return undefined;
-    load();
     const onPointer = (event) => { if (!rootRef.current?.contains(event.target)) setOpen(false); };
     const onKey = (event) => {
       if (event.key === "Escape") { setOpen(false); buttonRef.current?.focus(); }
@@ -46,7 +47,7 @@ export default function NotificationBell() {
       document.removeEventListener("pointerdown", onPointer);
       document.removeEventListener("keydown", onKey);
     };
-  }, [open, load]);
+  }, [open]);
 
   if (!token) return null;
 
@@ -60,7 +61,6 @@ export default function NotificationBell() {
     setOpen((value) => !value);
   };
   const onItem = (item) => {
-    if (!item.read) markRead([item.id]);
     setOpen(false);
     if (isInternalLink(item.link)) navigate(item.link);
   };
@@ -85,9 +85,6 @@ export default function NotificationBell() {
         <section id="header-notifications" className="header-bell-popover" role="dialog" aria-label="알림">
           <div className="header-bell-head">
             <h2 className="t-title">알림</h2>
-            {unread > 0 ? (
-              <button type="button" className="header-bell-all" onClick={markAll}>모두 읽음</button>
-            ) : null}
           </div>
           {items === null ? (
             <p className="header-bell-empty t-small text-slate-500" role="status">{error || "불러오는 중…"}</p>

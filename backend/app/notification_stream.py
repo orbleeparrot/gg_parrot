@@ -161,8 +161,27 @@ def _unread(user_id: int) -> int:
         return notifications.unread_count_for(db, user_id)
 
 
+def _latest_id(user_id: int) -> int:
+    from . import notifications
+
+    with get_session() as db:
+        return notifications.latest_id_for(db, user_id)
+
+
+def _fresh(user_id: int, after_id: int) -> list[dict]:
+    from . import notifications
+
+    with get_session() as db:
+        return notifications.list_after(db, user_id, after_id)
+
+
 def unread_event(unread: int) -> str:
     return f"event: unread\ndata: {json.dumps({'unread': int(unread)})}\n\n"
+
+
+def notification_event(item: dict) -> str:
+    """새 알림 한 건(토스트용). JSON 이라 줄바꿈은 이스케이프돼 SSE 한 줄에 들어간다."""
+    return f"event: notification\nid: {int(item['id'])}\ndata: {json.dumps(item, ensure_ascii=False)}\n\n"
 
 
 async def event_stream(user_id: int, token: str):
@@ -170,6 +189,8 @@ async def event_stream(user_id: int, token: str):
     subscription_id, changed = hub.subscribe(user_id)
     try:
         yield "retry: 3000\n\n"
+        # 연결 전에 있던 알림은 토스트로 다시 띄우지 않는다 — 이 뒤로 생긴 것만 보낸다.
+        last_id = await asyncio.to_thread(_latest_id, user_id)
         yield unread_event(await asyncio.to_thread(_unread, user_id))
         while True:
             try:
@@ -183,6 +204,9 @@ async def event_stream(user_id: int, token: str):
                 yield ": ping\n\n"
                 continue
             changed.clear()
+            for item in await asyncio.to_thread(_fresh, user_id, last_id):
+                last_id = max(last_id, int(item["id"]))
+                yield notification_event(item)
             yield unread_event(await asyncio.to_thread(_unread, user_id))
     finally:
         hub.unsubscribe(user_id, subscription_id)

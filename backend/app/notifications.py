@@ -26,7 +26,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Iterable, Optional
 
-from sqlalchemy import delete, func, update
+from sqlalchemy import and_, delete, func, or_, update
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 
@@ -263,13 +263,56 @@ def unread_count_for(db, user_id: int) -> int:
     return personal + notices
 
 
-def list_for(db, user: User, *, limit: int = 30, before_ms: Optional[int] = None) -> dict:
+def _visible_to(user_id: int, now_ms: int):
+    """이 계정에 보이는 알림: 개인 알림 + 최근 30일 공지."""
+    return or_(
+        NotificationMessage.user_id == user_id,
+        and_(NotificationMessage.user_id.is_(None), NotificationMessage.created_ms >= _notice_floor(now_ms)),
+    )
+
+
+def latest_id_for(db, user_id: int) -> int:
+    """이 계정에 보이는 알림 중 가장 큰 id(없으면 0). 스트림이 '이 뒤로 온 것'을 고를 기준."""
+    _, now_ms = _now()
+    value = db.exec(select(func.max(NotificationMessage.id)).where(_visible_to(user_id, now_ms))).one()
+    return int(value or 0)
+
+
+def list_after(db, user_id: int, after_id: int, *, limit: int = 20) -> list[dict]:
+    """``after_id`` 뒤에 생긴 알림을 오래된 순으로(토스트로 차례로 띄우기 좋게)."""
+    _, now_ms = _now()
+    rows = db.exec(
+        select(NotificationMessage)
+        .where(NotificationMessage.id > int(after_id), _visible_to(user_id, now_ms))
+        .order_by(NotificationMessage.id.asc())
+        .limit(max(1, min(PAGE_MAX, int(limit))))
+    ).all()
+    notice_ids = [row.id for row in rows if row.user_id is None]
+    seen = set(db.exec(
+        select(NotificationReceipt.message_id).where(
+            NotificationReceipt.user_id == user_id, NotificationReceipt.message_id.in_(notice_ids)
+        )
+    ).all()) if notice_ids else set()
+    return [
+        view(row, read=(row.read_ms is not None) if row.user_id is not None else (row.id in seen))
+        for row in rows
+    ]
+
+
+def list_for(db, user: User, *, limit: int = 30, before_ms: Optional[int] = None,
+             after_id: Optional[int] = None) -> dict:
     """최신순 목록(개인 알림 + 최근 공지) 한 페이지와 안 읽은 수.
 
     ``before_ms`` 보다 오래된 것만 주면 다음 페이지. ``next_before`` 가 None 이면 끝.
+    ``after_id`` 를 주면 그 뒤에 생긴 것만 오래된 순으로(폴링 모드의 토스트용).
     """
     limit = max(1, min(PAGE_MAX, int(limit)))
     _, now_ms = _now()
+    if after_id is not None:
+        return {
+            "items": list_after(db, user.id, after_id, limit=limit),
+            "unread": unread_count(db, user), "now_ms": now_ms, "next_before": None,
+        }
     personal = select(NotificationMessage).where(NotificationMessage.user_id == user.id)
     notices = select(NotificationMessage).where(
         NotificationMessage.user_id.is_(None),

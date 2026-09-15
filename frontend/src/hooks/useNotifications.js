@@ -5,6 +5,8 @@
 //  3) 폴링 — 적응형 폴러(채팅과 같은 것). 스트림이 없으면 20초, 붙어 있으면 2분 안전망.
 //     오류 시 지수 백오프, 숨김 시 중단, 탭 복귀 시 즉시 조회.
 // 목록은 패널을 열 때 읽고, 열려 있는 동안 위 신호가 오면 조용히 다시 읽는다.
+// 패널을 여는 것 자체가 읽음이다: 열 때(그리고 열린 채로 새로 들어올 때) 서버에 모두 읽음을 보내
+// 배지를 지운다. 방금 받아 온 목록의 안 읽음 점은 이번 열람 동안만 남겨 무엇이 새것인지 보여 준다.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api.js";
 import { getToken } from "../lib/auth.js";
@@ -24,8 +26,13 @@ export default function useNotifications(token) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [live, setLive] = useState(false); // SSE 가 붙어 있는지
+  const [panelOpen, setPanelOpen] = useState(false);
   const itemsRef = useRef(items);
   itemsRef.current = items;
+  const openRef = useRef(panelOpen);
+  openRef.current = panelOpen;
+  // 이번 열람에서 '새것'이었던 알림 id — 서버가 읽음 처리한 뒤 목록을 다시 받아도 점을 유지한다. 닫으면 비운다.
+  const freshRef = useRef(new Set());
   const unreadRef = useRef(unread);
   unreadRef.current = unread;
   const liveRef = useRef(live);
@@ -34,7 +41,7 @@ export default function useNotifications(token) {
   // 응답이 돌아왔을 때 아직 같은 계정인지 — 로그아웃·계정 전환 뒤의 늦은 응답은 버린다.
   const current = useCallback(() => Boolean(token) && getToken() === token, [token]);
 
-  const load = useCallback(async ({ silent = false } = {}) => {
+  const load = useCallback(async ({ silent = false, markRead = false } = {}) => {
     if (!token) return;
     if (!silent) {
       setLoading(true);
@@ -43,8 +50,19 @@ export default function useNotifications(token) {
     try {
       const data = await api.myNotifications();
       if (!current()) return;
-      setItems(Array.isArray(data.items) ? data.items : []);
+      let list = Array.isArray(data.items) ? data.items : [];
+      if (openRef.current) {
+        const fresh = freshRef.current;
+        for (const item of list) if (!item.read) fresh.add(item.id);
+        list = list.map((item) => (fresh.has(item.id) && item.read ? { ...item, read: false } : item));
+      }
+      setItems(list);
       setUnread(Number(data.unread) || 0);
+      if (markRead && Number(data.unread) > 0) {
+        // 열어서 봤으니 읽음 — 서버 상태를 맞추고 배지를 지운다(목록의 점은 이번 열람 동안 유지).
+        const done = await api.readNotifications({ all: true });
+        if (current()) setUnread(Number(done.unread) || 0);
+      }
     } catch (reason) {
       if (current() && !silent) setError(String(reason?.message || "알림을 불러오지 못했어요."));
     } finally {
@@ -72,6 +90,15 @@ export default function useNotifications(token) {
     }
   }, [token]);
 
+  // 패널을 열면 목록을 읽고 그 시점의 알림을 모두 읽음 처리한다. 닫으면 '새것' 표시를 비운다.
+  useEffect(() => {
+    if (!token || !panelOpen) {
+      freshRef.current = new Set();
+      return;
+    }
+    load({ markRead: true });
+  }, [token, panelOpen, load]);
+
   // 1) 내 행동 직후
   useEffect(() => {
     if (!token) return undefined;
@@ -80,7 +107,7 @@ export default function useNotifications(token) {
       clearTimeout(timer);
       timer = setTimeout(() => {
         refresh();
-        if (itemsRef.current !== null) load({ silent: true });
+        if (openRef.current) load({ silent: true, markRead: true });
       }, ACTIVITY_DEBOUNCE_MS);
     };
     window.addEventListener(ACTIVITY_EVENT, onActivity);
@@ -130,7 +157,7 @@ export default function useNotifications(token) {
         const count = parseUnreadEvent(event.data);
         if (count === null || !current()) return;
         setUnread(count);
-        if (itemsRef.current !== null) load({ silent: true });
+        if (openRef.current) load({ silent: true, markRead: true });
       });
       // 토큰 만료·서버 재시작·네트워크 끊김: 우리가 닫고 새 토큰으로 다시 붙는다(EventSource 의 자동 재연결은 옛 토큰을 쓴다).
       source.onerror = () => {
@@ -181,5 +208,5 @@ export default function useNotifications(token) {
     }
   }, [current]);
 
-  return { unread, items, loading, error, live, load, markRead, markAll, refreshUnread: refresh };
+  return { unread, items, loading, error, live, load, markRead, markAll, refreshUnread: refresh, setPanelOpen };
 }

@@ -533,11 +533,12 @@ class NotificationReadIn(BaseModel):
 def me_notifications(
     limit: int = Query(default=30, ge=1, le=notifications_mod.PAGE_MAX),
     before: Optional[int] = Query(default=None, ge=1),
+    after: Optional[int] = Query(default=None, ge=0),
     user: User = Depends(auth_mod.current_user_in_session),
     db: Session = Depends(request_session),
 ) -> dict:
-    """알림 목록(개인 알림 + 최근 공지, 최신순) 한 페이지와 안 읽은 수."""
-    return notifications_mod.list_for(db, user, limit=limit, before_ms=before)
+    """알림 목록(개인 알림 + 최근 공지, 최신순) 한 페이지와 안 읽은 수. ``after`` 는 그 id 뒤에 온 것만(오래된 순)."""
+    return notifications_mod.list_for(db, user, limit=limit, before_ms=before, after_id=after)
 
 
 @app.get("/api/me/notifications/unread")

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import secrets
 import threading
 import time
@@ -231,6 +232,11 @@ def test_event_stream_sends_the_count_now_pings_when_idle_and_wakes_after_a_comm
         assert notification_stream.hub.subscriber_count(user["id"]) == 1
         assert await _next(gen) == ": ping\n\n", "아무 일 없으면 keepalive 주석만"
         threading.Thread(target=later).start()
+        pushed = await _next(gen)  # 새 알림 본문(토스트용) → 그 다음 안 읽은 수
+        assert pushed.startswith("event: notification\nid: ")
+        payload = json.loads(pushed.split("data: ", 1)[1].strip())
+        assert payload["title"] == "백테스트 퀘스트 완료" and payload["kind"] == "quest" and payload["data"]["points"] == 10
+        assert payload["read"] is False
         assert await _next(gen) == notification_stream.unread_event(before + 1)
         await gen.aclose()
         assert notification_stream.hub.subscriber_count(user["id"]) == 0

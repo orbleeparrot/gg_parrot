@@ -155,6 +155,26 @@ def test_paging_by_before_ms():
     assert rest["next_before"] is None
 
 
+def test_after_id_returns_only_newer_items_oldest_first():
+    token, user = _signup()
+    with get_session() as db:
+        first = notifications.notify(db, user["id"], "admin", "첫 번째")
+        db.commit()
+        first_id = first.id
+    assert _items(token, after=first_id)["items"] == []
+    with get_session() as db:
+        notifications.notify(db, user["id"], "admin", "두 번째")
+        notifications.notify(db, user["id"], "admin", "세 번째")
+        assert notifications.latest_id_for(db, user["id"]) >= first_id
+        db.commit()
+    page = _items(token, after=first_id)
+    assert [it["title"] for it in page["items"]] == ["두 번째", "세 번째"]
+    assert page["next_before"] is None
+    assert page["unread"] >= 3
+    with get_session() as db:
+        assert notifications.list_after(db, user["id"], 0, limit=2) and len(notifications.list_after(db, user["id"], 0, limit=2)) == 2
+
+
 def test_macro_registered_and_sold_notifications():
     seller_token, seller = _signup()
     buyer_token, buyer = _signup()

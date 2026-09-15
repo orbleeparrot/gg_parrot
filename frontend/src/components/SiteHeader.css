@@ -141,20 +141,6 @@
 .dark .header-bell-popover { box-shadow: 0 12px 32px rgba(0, 0, 0, .5); }
 .header-bell-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 14px 16px 10px; }
 .header-bell-head h2 { margin: 0; color: rgb(var(--c-slate-900)); }
-.header-bell-all {
-  margin: -4px -8px -4px 0;
-  padding: 4px 8px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: rgb(var(--c-slate-700));
-  font: inherit;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.header-bell-all:hover { background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-900)); }
-.header-bell-all:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
 .header-bell-empty { margin: 0; padding: 6px 16px 20px; }
 .header-bell-list { list-style: none; margin: 0; padding: 0 0 6px; overflow-y: auto; overscroll-behavior: contain; }
 .header-bell-item {

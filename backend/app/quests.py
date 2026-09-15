@@ -17,6 +17,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm.attributes import set_committed_value
 from sqlmodel import select
 
+from . import notifications as notifications_mod
 from . import points as points_mod
 from .db import DailyQuestClaim, User
 
@@ -101,6 +102,12 @@ def complete(db, user: Optional[User], key: str) -> Optional[dict]:
                 created_at=created_at,
                 created_ms=created_ms,
             )
+        )
+        # 헤더 알림 — 보상과 같은 트랜잭션이라 중복 청구가 되돌아가면 알림도 같이 사라진다.
+        notifications_mod.notify(
+            db, user_id, "quest", f"퀘스트 완료 · {quest['title']}",
+            "오늘의 퀘스트 보상을 받았어요. 남은 퀘스트는 마이페이지에서 확인해요.", "/mypage",
+            data={"points": quest["reward"], "quest": key},
         )
         db.commit()
     except IntegrityError:

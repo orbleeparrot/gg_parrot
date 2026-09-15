@@ -130,6 +130,10 @@ def upsert_articles(asset_symbol: str, items: list[dict], *, analysis: dict | No
                    .execution_options(populate_existing=True)).all() if incoming else []
     existing = {row.article_id: row for row in rows}
     values = []
+    # 헤더 알림용: 이번 저장으로 처음 읽을 수 있게 된(한국어 제목 준비) 기사 제목. 피드가
+    # 비어 있던 첫 수집은 세지 않는다 — 세션을 켠 직후 30건이 한꺼번에 울리지 않게.
+    prior_ready = state.ready_count
+    fresh_titles = []
     for key, (item, assessment) in incoming.items():
         old = existing.get(key)
         old_item = json.loads(old.item_json) if old else {}
@@ -157,6 +161,8 @@ def upsert_articles(asset_symbol: str, items: list[dict], *, analysis: dict | No
         state.revision += 1
         state.item_count += int(old is None)
         state.ready_count += int(ready) - int(bool(old and old.ready))
+        if ready and not (old and old.ready):
+            fresh_titles.append(str(merged.get("title") or ""))
         values.append(dict(asset_symbol=scope, article_id=key, revision=state.revision,
                            ready=ready, enrichment_pending=enrichment_pending, item_json=item_json, assessment_json=assessment_json,
                            analysis_source=source, analysis_status=status,
@@ -171,6 +177,12 @@ def upsert_articles(asset_symbol: str, items: list[dict], *, analysis: dict | No
         db.exec(update(NewsArticle).where(NewsArticle.asset_symbol == scope,
                                          NewsArticle.article_id.in_(list(incoming)),
                                          NewsArticle.last_seen_ms < millis).values(last_seen_ms=millis))
+    if fresh_titles and prior_ready > 0:
+        from ... import notifications as notifications_mod
+        notifications_mod.notify_running_sessions(
+            db, asset=scope, title=f"{scope} 새 기사 {len(fresh_titles)}건", body=fresh_titles[0],
+            link="/agents", data={"event": "news", "asset": scope, "count": len(fresh_titles)},
+            ref=f"news:{scope}:{state.revision}")
     if payload is not None:
         metadata = json.loads(state.metadata_json)
         metadata.update({key: payload[key] for key in (

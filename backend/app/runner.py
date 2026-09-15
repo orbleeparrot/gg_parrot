@@ -33,6 +33,7 @@ from sqlalchemy import or_, update
 from sqlmodel import select
 
 from . import macro_signing
+from . import notifications as notifications_mod
 from .db import RunnerKey, RunnerLaunchTicket, RunSession, RunSessionEvent, User, UserMacro, get_session
 from .engine import Macro
 
@@ -59,6 +60,8 @@ EVENT_CAP = int(os.environ.get("RUNNER_EVENT_CAP", "500"))
 EVENT_BATCH_MAX = 100
 EVENT_MESSAGE_MAX = 300
 _EVENT_KINDS = {"start", "info", "signal", "order", "fill", "error", "stop"}
+# 이 종류의 실행 이벤트는 헤더 알림(에이전트)으로도 간다. start·stop 은 세션 알림이 따로 있고 info 는 로그일 뿐.
+_NOTIFY_EVENT_LABELS = {"signal": "신호", "order": "주문", "fill": "체결", "error": "오류"}
 
 
 class _SessionStreamHub:
@@ -498,6 +501,13 @@ def start_session(user: User, payload: dict) -> dict:
                 + (f" · 지문 {macro_digest}" if macro_digest else "")
             ),
         }])
+        # 헤더 알림(에이전트) — 어느 매크로가 어디서 돌기 시작했는지.
+        notifications_mod.notify(
+            db, user.id, "agent", f"{symbol} 매크로 실행 시작",
+            ("테스트넷" if row.testnet else "메인넷(실거래)") + (f" · {summary}" if summary else ""),
+            "/agents", session_id=row.id,
+            data={"event": "start", "symbol": symbol, "testnet": row.testnet},
+        )
         db.commit()
         result = {
             "session_id": row.id,
@@ -596,6 +606,16 @@ def mark_stopped(
                 + f" · 누적 실현손익 {row.realized_pnl:+.2f} USDT"
                 + (" · 포지션 보유 중" if row.in_position else ""),
             }])
+            notifications_mod.notify(
+                db, user.id, "agent",
+                f"{row.symbol} 매크로 {'오류 종료' if row.status == 'error' else '실행 종료'}",
+                (f"{row.note} · " if row.note else "")
+                + f"누적 실현손익 {row.realized_pnl:+.2f} USDT"
+                + (" · 포지션 보유 중" if row.in_position else ""),
+                "/agents", session_id=row.id,
+                data={"event": "error" if row.status == "error" else "stop",
+                      "symbol": row.symbol, "realized_pnl": row.realized_pnl},
+            )
         db.commit()
     notify_sessions_changed(user.id)
     return {"ok": True}
@@ -608,6 +628,7 @@ def _append_events(db, row: RunSession, events) -> int:
         return 0
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
     added = 0
+    notified = False
     for item in events[:EVENT_BATCH_MAX]:
         if not isinstance(item, dict):
             continue
@@ -627,9 +648,18 @@ def _append_events(db, row: RunSession, events) -> int:
             created_ms=now_ms + added,  # 같은 배치 안 순서 보존
         ))
         added += 1
+        if kind in _NOTIFY_EVENT_LABELS:
+            notifications_mod.notify(
+                db, row.user_id, "agent", f"{row.symbol} 매크로 · {_NOTIFY_EVENT_LABELS[kind]}",
+                message, "/agents", session_id=row.id,
+                data={"event": kind, "symbol": row.symbol}, trim=False,
+            )
+            notified = True
     if added:
         db.flush()
         _trim_events(db, row.id)
+        if notified:
+            notifications_mod.trim_user(db, row.user_id)
     return added
 
 

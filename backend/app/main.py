@@ -68,6 +68,7 @@ from . import avatars as avatars_mod
 from . import profile as profile_mod
 from . import points as points_mod
 from . import quests as quests_mod
+from . import notifications as notifications_mod
 from . import account as account_mod
 from . import challenge as challenge_mod
 from . import runner as runner_mod
@@ -516,6 +517,78 @@ def me_quests(
 ) -> dict:
     """오늘(KST)의 일일 퀘스트와 완료 여부·오늘 번 포인트."""
     return quests_mod.today(db, user)
+
+
+# 알림(헤더 종 아이콘) ---------------------------------------------------
+class NotificationReadIn(BaseModel):
+    ids: list[int] = []
+    all: bool = False
+
+
+@app.get("/api/me/notifications")
+def me_notifications(
+    limit: int = Query(default=30, ge=1, le=notifications_mod.PAGE_MAX),
+    before: Optional[int] = Query(default=None, ge=1),
+    user: User = Depends(auth_mod.current_user_in_session),
+    db: Session = Depends(request_session),
+) -> dict:
+    """알림 목록(개인 알림 + 최근 공지, 최신순) 한 페이지와 안 읽은 수."""
+    return notifications_mod.list_for(db, user, limit=limit, before_ms=before)
+
+
+@app.get("/api/me/notifications/unread")
+def me_notifications_unread(
+    user: User = Depends(auth_mod.current_user_in_session),
+    db: Session = Depends(request_session),
+) -> dict:
+    """헤더 배지용 — 안 읽은 알림 수만(가볍게 주기적으로 묻는다)."""
+    return {"unread": notifications_mod.unread_count(db, user)}
+
+
+@app.post("/api/me/notifications/read")
+def me_notifications_read(
+    req: NotificationReadIn,
+    user: User = Depends(auth_mod.current_user_in_session),
+    db: Session = Depends(request_session),
+) -> dict:
+    """읽음 처리 — ids 로 몇 개만, 또는 all 로 전부. 남은 안 읽은 수를 돌려준다."""
+    return {"unread": notifications_mod.mark_read(db, user, ids=req.ids, everything=req.all)}
+
+
+class AdminNotificationIn(BaseModel):
+    title: str
+    body: str = ""
+    link: str = ""
+    username: str = ""  # 받을 회원 아이디. 비우면 전체 공지
+
+
+@app.post("/api/admin/notifications")
+def admin_notification_send(
+    req: AdminNotificationIn,
+    admin: User = Depends(auth_mod.require_admin),
+    db: Session = Depends(request_session),
+) -> dict:
+    """관리자 메시지(한 회원) 또는 공지사항(전체)을 보낸다. ADMIN_USERNAMES 계정만."""
+    title = req.title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="제목을 입력해 주세요.")
+    target = None
+    username = req.username.strip()
+    if username:
+        target = db.exec(
+            select(User).where(User.username == username, User.is_deleted.is_(False))
+        ).first()
+        if target is None:
+            raise HTTPException(status_code=404, detail="받을 회원을 찾을 수 없어요.")
+    row = notifications_mod.notify(
+        db, target.id if target is not None else None, "admin" if target is not None else "notice",
+        title, req.body, req.link, data={"from": admin.username},
+    )
+    db.commit()
+    return {
+        "message": notifications_mod.view(row, read=False),
+        "recipient": target.username if target is not None else "all",
+    }
 
 
 @app.get("/api/me/macros")
@@ -972,6 +1045,12 @@ async def leaderboard_register(
             source_type="created",
             source_ref=str(entry["id"]),
             created_at=entry.get("created_at", ""),
+        )
+        # 헤더 알림 — 등록은 이미 끝났으니 알림 저장 실패가 응답을 막지 않는다(notify_now).
+        notifications_mod.notify_now(
+            account.id, "macro_registered", f"{macro.symbol} 매크로를 리더보드에 등록했어요",
+            "오늘 보드에서 순위와 언락 수익을 확인해요.", "/leaderboard",
+            data={"entry_id": entry["id"], "symbol": macro.symbol},
         )
     return {"entry": entry, "disclaimer": "paper (simulated) trading; reference only"}
 

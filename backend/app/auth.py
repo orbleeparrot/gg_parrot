@@ -385,6 +385,25 @@ def current_user_in_session(
     return session_user(authorization[7:].strip(), db=db)
 
 
+# --- 관리자 ---------------------------------------------------------------
+# 관리자 개념은 환경 변수 ADMIN_USERNAMES(쉼표로 구분한 회원 아이디)가 전부다.
+# 공지·관리자 메시지(POST /api/admin/notifications)만 이 문을 지난다.
+def admin_usernames() -> frozenset[str]:
+    raw = os.environ.get("ADMIN_USERNAMES", "")
+    return frozenset(name.strip().lower() for name in raw.split(",") if name.strip())
+
+
+def is_admin(user: User) -> bool:
+    return bool(user.username) and user.username.lower() in admin_usernames()
+
+
+def require_admin(user: User = Depends(current_user_in_session)) -> User:
+    """FastAPI dependency: 로그인 + ADMIN_USERNAMES 에 있는 계정만(아니면 403)."""
+    if not is_admin(user):
+        raise AuthError(403, "관리자만 쓸 수 있어요.")
+    return user
+
+
 def optional_user(authorization: Optional[str] = Header(default=None)) -> Optional[User]:
     """Like current_user but returns None instead of raising (for public+auth views)."""
     if not authorization or not authorization.lower().startswith("bearer "):

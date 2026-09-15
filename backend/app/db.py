@@ -6,7 +6,7 @@ import time
 from contextlib import contextmanager
 from typing import Iterator, Optional
 
-from sqlalchemy import BigInteger, Index, event
+from sqlalchemy import BigInteger, event, Index, Integer
 from sqlalchemy.exc import DBAPIError
 
 # epoch 밀리초를 담는 컬럼은 반드시 BIGINT 여야 한다. SQLite 의 INTEGER 는
@@ -174,6 +174,12 @@ class TracedSession(Session):
 
 def _is_sqlite() -> bool:
     return _engine.dialect.name == "sqlite"
+
+
+# 알림은 Supabase 의 알림 전용 스키마(notifications)에 둔다 — supabase/migrations 가 만든다.
+# SQLite(개발·테스트)에는 스키마가 없으니 같은 테이블을 기본 스키마에 만든다(notifications.py).
+NOTIFICATIONS_SCHEMA: Optional[str] = None if _is_sqlite() else "notifications"
+_EXTRA_SCHEMAS = tuple(schema for schema in (NOTIFICATIONS_SCHEMA,) if schema)
 
 
 class MacroRow(SQLModel, table=True):
@@ -774,6 +780,49 @@ class BoardComment(SQLModel, table=True):
     created_ms: int = Field(index=True, sa_type=BigInteger)
 
 
+
+class NotificationMessage(SQLModel, table=True):
+    """헤더 종 아이콘의 알림 한 건(notifications.py). ``user_id`` 가 None 이면 전체 공지.
+
+    Postgres 에서는 ``notifications.message`` (supabase/migrations 참고), SQLite 에서는
+    스키마 없이 ``message`` 다. 브라우저는 Data API 로 이 테이블에 접근하지 않는다.
+    """
+
+    __tablename__ = "message"
+    __table_args__ = (
+        Index("ix_notifications_message_user_created", "user_id", "created_ms"),
+        Index("ix_notifications_message_user_ref", "user_id", "kind", "ref"),
+        *(({"schema": NOTIFICATIONS_SCHEMA},) if NOTIFICATIONS_SCHEMA else ()),
+    )
+    id: Optional[int] = Field(
+        default=None, primary_key=True, sa_type=BigInteger().with_variant(Integer, "sqlite")
+    )
+    user_id: Optional[int] = None  # 받는 회원. None = 전체 공지
+    kind: str  # quest | macro_sold | macro_registered | comment | reply | agent | admin | notice
+    title: str
+    body: str = ""
+    link: str = ""  # 누르면 이동할 앱 경로
+    data_json: str = "{}"  # 종류별 부가 정보(points, entry_id, event …)
+    session_id: Optional[int] = None  # 에이전트 알림이 붙은 실행 세션(RunSession.id)
+    ref: str = ""  # 중복 방지 열쇠(같은 기사·체결 묶음을 다시 볼 때)
+    created_at: str
+    created_ms: int = Field(default=0, sa_type=BigInteger)
+    read_ms: Optional[int] = Field(default=None, sa_type=BigInteger)  # 개인 알림을 읽은 시각
+
+
+class NotificationReceipt(SQLModel, table=True):
+    """전체 공지를 어느 회원이 읽었는지(개인 알림은 NotificationMessage.read_ms 로 충분)."""
+
+    __tablename__ = "receipt"
+    __table_args__ = (
+        Index("ix_notifications_receipt_user", "user_id"),
+        *(({"schema": NOTIFICATIONS_SCHEMA},) if NOTIFICATIONS_SCHEMA else ()),
+    )
+    message_id: int = Field(primary_key=True, sa_type=BigInteger)
+    user_id: int = Field(primary_key=True)
+    read_ms: int = Field(default=0, sa_type=BigInteger)
+
+
 def _migrate() -> None:
     """Add columns introduced after a table was first created (SQLite create_all
     does not ALTER existing tables). Idempotent and safe to run every startup."""
@@ -996,7 +1045,16 @@ def _pg_schema_state(conn) -> dict:
         + ", ".join("'" + table + "'" for table in _PG_PRIVATE_CACHE_TABLES) + ") "
         "AND (a.grantee = 0 OR r.rolname IN ('anon', 'authenticated'))"
     )}
-    return {"tables": tables, "columns": columns, "indexes": indexes, "grants": grants}
+    state = {"tables": tables, "columns": columns, "indexes": indexes, "grants": grants}
+    if _EXTRA_SCHEMAS:
+        # 알림처럼 전용 스키마에 있는 테이블 — current_schema() 조회에는 안 잡히므로 따로 본다.
+        state["schema_tables"] = {(schema, name): rls for schema, name, rls in conn.exec_driver_sql(
+            "SELECT n.nspname, c.relname, c.relrowsecurity FROM pg_class c "
+            "JOIN pg_namespace n ON n.oid = c.relnamespace "
+            "WHERE c.relkind IN ('r', 'p') AND n.nspname IN ("
+            + ", ".join("'" + schema + "'" for schema in _EXTRA_SCHEMAS) + ")"
+        )}
+    return state
 
 
 def _pg_migration_statements(state: dict) -> list[str]:
@@ -1026,11 +1084,20 @@ def _pg_migration_statements(state: dict) -> list[str]:
         for role in ("PUBLIC", "anon", "authenticated"):
             if (table, role) in state["grants"]:
                 statements.append(f"REVOKE ALL PRIVILEGES ON TABLE {table} FROM {role}")
+    for (schema, table), rls in state.get("schema_tables", {}).items():
+        if not rls:
+            statements.append(f"ALTER TABLE {schema}.{table} ENABLE ROW LEVEL SECURITY")
     return statements
 
 
 def _pg_missing_tables(state: dict) -> bool:
-    return any(table.name not in state["tables"] for table in SQLModel.metadata.tables.values())
+    for table in SQLModel.metadata.tables.values():
+        if table.schema:
+            if (table.schema, table.name) not in state.get("schema_tables", {}):
+                return True
+        elif table.name not in state["tables"]:
+            return True
+    return False
 
 
 def _migrate_pg() -> None:
@@ -1050,6 +1117,9 @@ def _migrate_pg() -> None:
                 # Another boot can finish migration while this transaction waits.
                 state = _pg_schema_state(conn)
                 if _pg_missing_tables(state):
+                    # 전용 스키마는 supabase/migrations 가 만든다; 새 Postgres 라면 여기서 만든다.
+                    for schema in _EXTRA_SCHEMAS:
+                        conn.exec_driver_sql(f"CREATE SCHEMA IF NOT EXISTS {schema}")
                     SQLModel.metadata.create_all(conn)
                     state = _pg_schema_state(conn)
                 for ddl in _pg_migration_statements(state):

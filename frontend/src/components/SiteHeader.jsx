@@ -8,6 +8,7 @@ import ThemeToggle from "./ThemeToggle.jsx";
 import UserAvatar from "./UserAvatar.jsx";
 import { DownloadIcon, HelpIcon, MenuIcon, UserIcon } from "./utilityIcons.jsx";
 import HeaderMemberKey from "./HeaderMemberKey.jsx";
+import NotificationBell from "./NotificationBell.jsx";
 import "./SiteHeader.css";
 
 export default function SiteHeader({ hasSidebar, onOpenNavigation, menuButtonRef, navigationOpen }) {
@@ -44,6 +45,8 @@ export default function SiteHeader({ hasSidebar, onOpenNavigation, menuButtonRef
           ) : null}
           <div className="header-personal">
             <ThemeToggle />
+            {/* 알림 종 — 프로필 바로 왼쪽. 계정이 바뀌면 배지·목록도 새로 시작한다. */}
+            <NotificationBell key={"bell:" + (token || "guest")} />
             {/* Keep account hydration scoped to the current session. */}
             <ProfileLink key={token || "guest"} />
           </div>

@@ -235,8 +235,36 @@ def store_result(symbol: str, market: str, token: str, payload: dict, *, now_ms=
     ).values(payload_json=encoded, last_success_ms=millis, next_collection_ms=millis+INTERVAL_MS,
              claim_token="", claimed_ms=0, consecutive_failures=0, last_error="", error_code="", collection_status="ready"))
     stored = result.rowcount == 1
+    if stored:
+        _notify_fresh_trades(db, symbol, market, previous, items, first=not row.last_success_ms)
     db.commit()
     return stored
+
+
+def _notify_fresh_trades(db, symbol, market, previous, items, *, first):
+    """이번 관측에서 처음 본 대형 체결을 그 종목의 실행 세션 주인에게 알린다(헤더 알림).
+
+    첫 관측(``first``)은 세션을 켠 직후 지난 체결이 한꺼번에 울리는 것이라 건너뛴다.
+    """
+    if first:
+        return
+    seen = {str(item.get("id")) for item in (previous.get("items") or []) if isinstance(item, dict)}
+    fresh = [item for item in items if str(item.get("id")) not in seen]
+    if not fresh:
+        return
+    from ... import notifications as notifications_mod
+    biggest = max(fresh, key=lambda item: float(item.get("notional", 0)))
+    notional = float(biggest.get("notional", 0))
+    side = "매수" if biggest.get("side") == "buy" else "매도"
+    notifications_mod.notify_running_sessions(
+        db, symbol=symbol, market=market,
+        title=f"{symbol} 대형 체결 {len(fresh)}건",
+        body=f"최대 {notional:,.0f} USDT {side} · {market}",
+        link="/agents",
+        data={"event": "whale", "symbol": symbol, "market": market, "count": len(fresh),
+              "max_notional": round(notional, 2), "side": biggest.get("side")},
+        ref=f"whale:{symbol}:{market}:{max(str(item['id']) for item in fresh)}",
+    )
 
 
 def record_failure(symbol: str, market: str, token: str, *, error="", error_code="collector_error",

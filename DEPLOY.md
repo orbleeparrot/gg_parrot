@@ -47,6 +47,34 @@
 `backend/app/main.py` 가 이미 `allow_origins=["*"]` 라 별도 설정 불필요.
 운영 시 보안을 위해 Vercel 도메인만 허용하도록 좁히는 것을 권장.
 
+## 알림 스키마와 관리자 공지 (2026-09-15)
+
+헤더 종 아이콘의 알림은 Supabase 의 **알림 전용 스키마 `notifications`**(`message` · `receipt`)에 쌓입니다.
+`public` 과 분리돼 있고 Data API 에 노출하지 않으며(`supabase/config.toml` 의 `api.schemas` 에 없음)
+anon/authenticated 권한도 없습니다. 백엔드(`backend/app/notifications.py`)만 읽고 씁니다.
+
+- 마이그레이션: `supabase/migrations/20260915021932_notifications_schema.sql`. 적용은 Supabase CLI 로
+  `supabase db push --db-url "$DATABASE_URL"` (세션 풀러 주소 — 이 환경에서는 직접 연결이 막혀 `--password` 방식이 실패합니다).
+  2026-09-15 운영 DB 에 적용했고, `psql "$DATABASE_URL" -f supabase/tests/notifications_schema_rls.sql` 로 RLS·권한을 검증합니다.
+- 새 Postgres(스키마가 아직 없는 곳)에서는 백엔드가 부팅 때 `CREATE SCHEMA IF NOT EXISTS notifications` 후 테이블을 만듭니다(`db._migrate_pg`). SQLite 개발·테스트는 스키마 없이 같은 테이블을 씁니다.
+- 보관: 계정당 개인 알림 300건(넘치면 오래된 것부터 삭제), 전체 공지는 최근 30일치만 보입니다.
+
+**관리자 메시지·공지**는 환경 변수 `ADMIN_USERNAMES`(쉼표로 구분한 회원 아이디, 대소문자 무시)에 있는 계정만 보낼 수 있습니다.
+Render 의 웹 서비스에 넣어 두고, 그 계정으로 로그인한 토큰으로 호출합니다:
+
+```bash
+# 전체 공지 (username 을 비우면 모든 회원)
+curl -X POST https://gg-parrot.onrender.com/api/admin/notifications \
+  -H "Authorization: Bearer <관리자 토큰>" -H "Content-Type: application/json" \
+  -d '{"title": "9월 17일 새벽 2시 서버 점검", "body": "약 30분간 백테스트가 멈춰요.", "link": "/guide"}'
+# 한 회원에게 관리자 메시지
+curl -X POST https://gg-parrot.onrender.com/api/admin/notifications \
+  -H "Authorization: Bearer <관리자 토큰>" -H "Content-Type: application/json" \
+  -d '{"title": "리더보드 1위 축하드려요", "username": "coinwhale"}'
+```
+
+나머지 알림(퀘스트 완료·매크로 판매/등록·댓글/답글·에이전트 소식)은 해당 동작의 트랜잭션 안에서 자동으로 쌓입니다.
+
 ## 포지션 뉴스 중앙 워커
 
 웹은 새 티커의 RSS를 즉시 저장하고, Prefect worker는 Playwright 공개 페이지 수집과 AI 보강을 담당합니다. 루트

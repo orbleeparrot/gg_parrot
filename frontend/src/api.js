@@ -141,6 +141,11 @@ export const api = {
   myDashboard: (options = {}) => req("/api/me/dashboard", { timeoutMs: 15_000, ...options }),
   // 오늘(KST)의 일일 퀘스트 — 완료 여부·보상·오늘 번 포인트.
   myQuests: (options = {}) => req("/api/me/quests", options),
+  // 알림(헤더 종): 목록 · 안 읽은 수 · 읽음 처리
+  myNotifications: (options = {}) => req("/api/me/notifications", { timeoutMs: 10_000, ...options }),
+  myNotificationsUnread: (options = {}) => req("/api/me/notifications/unread", { timeoutMs: 8_000, ...options }),
+  readNotifications: ({ ids = [], all = false } = {}) =>
+    req("/api/me/notifications/read", { method: "POST", body: JSON.stringify({ ids, all }) }),
   uploadAvatar: (image) => {
     const form = new FormData();
     form.append("image", image);

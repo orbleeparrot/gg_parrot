@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api.js";
+import useFitLines from "../hooks/useFitLines.js";
 import useNewsBriefings from "../hooks/useNewsBriefings.js";
 import useHotCoins from "../hooks/useHotCoins.js";
 import { communityPostIdentity, communitySummaryPresentation, hasPendingTranslation, historicalNewsLabel, newsPublishedLabel, newsSourceLabel } from "../lib/newsBriefings.js";
@@ -444,6 +445,12 @@ function RacerBriefing({ coins, loading, error }) {
   );
 }
 
+function FitParagraph({ className, text, maxLines, minPx, children }) {
+  const ref = useRef(null);
+  useFitLines(ref, text, { maxLines, minPx });
+  return <p ref={ref} className={className}>{children}</p>;
+}
+
 export default function News() {
   // 시장 뉴스는 하루 단위 자료라 10분 안에 돌아오면 다시 받지 않는다.
   const { states: marketStates, retry: retryMarket } = useNewsBriefings(
@@ -472,9 +479,12 @@ export default function News() {
       >
         {summary ? (
           <div className="page-head-lead">
-            <p className="page-head-lead-first"><AnnotatedText text={summary.lead} /></p>
+            {/* 그날 요약이 길면 리드는 4줄, 본문은 7줄 안에 들어오도록 글자를 살짝 줄인다(최소 21px·15px). */}
+            <FitParagraph className="page-head-lead-first" text={summary.lead} maxLines={4} minPx={21}>
+              <AnnotatedText text={summary.lead} />
+            </FitParagraph>
             {summary.body.map((line, index) => (
-              <p key={index}><AnnotatedText text={line} /></p>
+              <FitParagraph key={index} text={line} maxLines={7} minPx={15}><AnnotatedText text={line} /></FitParagraph>
             ))}
           </div>
         ) : null}

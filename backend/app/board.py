@@ -27,6 +27,7 @@ from sqlalchemy.orm import defer
 from sqlmodel import select
 
 from . import avatars
+from . import notifications as notifications_mod
 from .moderation import require_clean_text
 from .db import BoardComment, BoardImage, BoardPost, BoardPostVote, BoardReport, ChatMessage, User, UserAvatar, get_session
 
@@ -728,8 +729,10 @@ def add_comment(post_id: int, user: User, text: str, parent_id: int | None = Non
     _check_rate(f"user:{user.id}")
     with (nullcontext(db) if db is not None else get_session()) as db:
         # Validate the post/reply and fetch the avatar version in one metadata query.
-        statement = select(BoardPost.id, UserAvatar.version, BoardComment.id.label("reply_id"),
-                           BoardComment.post_id.label("reply_post_id"), BoardComment.parent_id).select_from(BoardPost)
+        statement = select(BoardPost.id, BoardPost.author_user_id, BoardPost.title, UserAvatar.version,
+                           BoardComment.id.label("reply_id"), BoardComment.post_id.label("reply_post_id"),
+                           BoardComment.parent_id, BoardComment.author_user_id.label("reply_author_id")
+                           ).select_from(BoardPost)
         found = db.exec(statement.outerjoin(UserAvatar, UserAvatar.user_id == user.id)
                         .outerjoin(BoardComment, BoardComment.id == parent_id)
                         .where(BoardPost.id == post_id)).first()
@@ -752,6 +755,22 @@ def add_comment(post_id: int, user: User, text: str, parent_id: int | None = Non
         )
         db.add(row)
         db.flush()
+        # 헤더 알림 — 답글이면 그 댓글의 주인에게, 글쓴이에게는 따로(본인 것엔 보내지 않는다).
+        snippet = text[:80]
+        reply_author = found.reply_author_id if parent_id is not None else None
+        if reply_author is not None and reply_author != user.id:
+            notifications_mod.notify(
+                db, reply_author, "reply", f"{user.username} 님이 내 댓글에 답글을 남겼어요",
+                snippet, f"/board/{post_id}",
+                data={"post_id": post_id, "comment_id": row.id, "post_title": found.title[:60]},
+            )
+        if found.author_user_id != user.id and found.author_user_id != reply_author:
+            notifications_mod.notify(
+                db, found.author_user_id, "comment",
+                f"{user.username} 님이 내 글에 {'답글' if parent_id is not None else '댓글'}을 남겼어요",
+                f"{found.title[:40]} · {snippet}", f"/board/{post_id}",
+                data={"post_id": post_id, "comment_id": row.id, "post_title": found.title[:60]},
+            )
         result = _comment_view(row, avatars.public_url(user.id, found.version))
         db.commit()
         return result

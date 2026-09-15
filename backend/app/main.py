@@ -31,6 +31,7 @@ from fastapi import (
 )
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import StreamingResponse
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from sqlmodel import Session, select
@@ -68,6 +69,8 @@ from . import avatars as avatars_mod
 from . import profile as profile_mod
 from . import points as points_mod
 from . import quests as quests_mod
+from . import notifications as notifications_mod
+from . import notification_stream
 from . import account as account_mod
 from . import challenge as challenge_mod
 from . import runner as runner_mod
@@ -98,6 +101,7 @@ from .realtrade import build_bundle
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    notification_stream.start()  # Postgres 일 때 LISTEN — 다른 프로세스의 알림도 SSE 로 밀어 준다
     community_summaries_mod.start()
     leaderboard_runtime.start()
     public_news_mod.start()
@@ -106,6 +110,7 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        await notification_stream.stop()
         stopped = await asyncio.gather(
             leaderboard_runtime.stop(), public_news_mod.stop(),
             whale_activity_runtime.stop(), position_news_runtime.stop(),
@@ -516,6 +521,106 @@ def me_quests(
 ) -> dict:
     """오늘(KST)의 일일 퀘스트와 완료 여부·오늘 번 포인트."""
     return quests_mod.today(db, user)
+
+
+# 알림(헤더 종 아이콘) ---------------------------------------------------
+class NotificationReadIn(BaseModel):
+    ids: list[int] = []
+    all: bool = False
+
+
+@app.get("/api/me/notifications")
+def me_notifications(
+    limit: int = Query(default=30, ge=1, le=notifications_mod.PAGE_MAX),
+    before: Optional[int] = Query(default=None, ge=1),
+    after: Optional[int] = Query(default=None, ge=0),
+    user: User = Depends(auth_mod.current_user_in_session),
+    db: Session = Depends(request_session),
+) -> dict:
+    """알림 목록(개인 알림 + 최근 공지, 최신순) 한 페이지와 안 읽은 수. ``after`` 는 그 id 뒤에 온 것만(오래된 순)."""
+    return notifications_mod.list_for(db, user, limit=limit, before_ms=before, after_id=after)
+
+
+@app.get("/api/me/notifications/unread")
+def me_notifications_unread(
+    user: User = Depends(auth_mod.current_user_in_session),
+    db: Session = Depends(request_session),
+) -> dict:
+    """헤더 배지용 — 안 읽은 수와 가장 최근 알림 id(폴링 모드가 새 알림을 알아채 토스트로 띄우는 기준)."""
+    return {
+        "unread": notifications_mod.unread_count(db, user),
+        "latest_id": notifications_mod.latest_id_for(db, user.id),
+    }
+
+
+@app.post("/api/me/notifications/read")
+def me_notifications_read(
+    req: NotificationReadIn,
+    user: User = Depends(auth_mod.current_user_in_session),
+    db: Session = Depends(request_session),
+) -> dict:
+    """읽음 처리 — ids 로 몇 개만, 또는 all 로 전부. 남은 안 읽은 수를 돌려준다."""
+    return {"unread": notifications_mod.mark_read(db, user, ids=req.ids, everything=req.all)}
+
+
+@app.post("/api/me/notifications/stream-token")
+def me_notifications_stream_token(
+    response: Response,
+    user: User = Depends(auth_mod.current_user),
+) -> dict:
+    """알림 SSE 전용 단기 토큰 — EventSource 는 Authorization 헤더를 못 붙인다."""
+    response.headers["Cache-Control"] = "no-store"
+    return auth_mod.make_stream_token(user.id, auth_mod.NOTIFICATION_STREAM_PURPOSE)
+
+
+@app.get("/api/me/notifications/stream")
+async def me_notifications_stream(token: str = Query(default="", max_length=2048)) -> StreamingResponse:
+    """안 읽은 알림 수를 SSE 로 밀어 준다(event: unread). 브라우저의 폴링은 폴백으로 남는다."""
+    try:
+        user_id = await asyncio.to_thread(auth_mod.decode_stream_token, token, auth_mod.NOTIFICATION_STREAM_PURPOSE)
+    except HTTPException:
+        raise HTTPException(status_code=401, detail="알림 스트림 인증이 만료됐거나 유효하지 않아요.")
+    return StreamingResponse(
+        notification_stream.event_stream(user_id, token),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"},
+    )
+
+
+class AdminNotificationIn(BaseModel):
+    title: str
+    body: str = ""
+    link: str = ""
+    username: str = ""  # 받을 회원 아이디. 비우면 전체 공지
+
+
+@app.post("/api/admin/notifications")
+def admin_notification_send(
+    req: AdminNotificationIn,
+    admin: User = Depends(auth_mod.require_admin),
+    db: Session = Depends(request_session),
+) -> dict:
+    """관리자 메시지(한 회원) 또는 공지사항(전체)을 보낸다. ADMIN_USERNAMES 계정만."""
+    title = req.title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="제목을 입력해 주세요.")
+    target = None
+    username = req.username.strip()
+    if username:
+        target = db.exec(
+            select(User).where(User.username == username, User.is_deleted.is_(False))
+        ).first()
+        if target is None:
+            raise HTTPException(status_code=404, detail="받을 회원을 찾을 수 없어요.")
+    row = notifications_mod.notify(
+        db, target.id if target is not None else None, "admin" if target is not None else "notice",
+        title, req.body, req.link, data={"from": admin.username},
+    )
+    db.commit()
+    return {
+        "message": notifications_mod.view(row, read=False),
+        "recipient": target.username if target is not None else "all",
+    }
 
 
 @app.get("/api/me/macros")
@@ -972,6 +1077,12 @@ async def leaderboard_register(
             source_type="created",
             source_ref=str(entry["id"]),
             created_at=entry.get("created_at", ""),
+        )
+        # 헤더 알림 — 등록은 이미 끝났으니 알림 저장 실패가 응답을 막지 않는다(notify_now).
+        notifications_mod.notify_now(
+            account.id, "macro_registered", f"{macro.symbol} 매크로를 리더보드에 등록했어요",
+            "오늘 보드에서 순위와 언락 수익을 확인해요.", "/leaderboard",
+            data={"entry_id": entry["id"], "symbol": macro.symbol},
         )
     return {"entry": entry, "disclaimer": "paper (simulated) trading; reference only"}
 

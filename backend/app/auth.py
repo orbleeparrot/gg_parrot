@@ -118,6 +118,39 @@ def make_runner_session_stream_token(user_id: int) -> dict:
     }
 
 
+NOTIFICATION_STREAM_PURPOSE = "notification_stream"
+_STREAM_TOKEN_TTL_SECONDS = 60
+
+
+def make_stream_token(user_id: int, purpose: str, ttl_seconds: int = _STREAM_TOKEN_TTL_SECONDS) -> dict:
+    """단기·단일 목적 토큰(SSE 등 헤더를 못 붙이는 연결용). 일반 HTTP 엔드포인트에는 쓸 수 없다."""
+    now = _now()
+    user = get_user_by_id(user_id)
+    if user is None:
+        raise AuthError(401, "계정을 찾을 수 없어요.")
+    payload = {
+        "sub": str(user_id),
+        "ver": user.auth_version,
+        "purpose": purpose,
+        "jti": secrets.token_urlsafe(12),
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(seconds=ttl_seconds)).timestamp()),
+    }
+    return {"token": jwt.encode(payload, SECRET_KEY, algorithm=_JWT_ALGO), "expires_in": ttl_seconds}
+
+
+def decode_stream_token(token: str, purpose: str, *, check_expiry: bool = True) -> int:
+    """스트림 토큰을 검증하고 계정 id 를 돌려준다(목적이 다르거나 계정이 바뀌면 401)."""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[_JWT_ALGO], options={"verify_exp": check_expiry})
+        if payload.get("purpose") != purpose:
+            raise ValueError("wrong purpose")
+        _check_token_account(payload, get_user_by_id(int(payload["sub"])))
+        return int(payload["sub"])
+    except (jwt.PyJWTError, KeyError, ValueError):
+        raise AuthError(401, "실시간 연결 인증이 만료됐거나 유효하지 않아요.")
+
+
 def decode_runner_session_stream_token(token: str, *, check_expiry: bool = True) -> int:
     """Validate a sessions-stream token and return its account id."""
     try:
@@ -383,6 +416,25 @@ def current_user_in_session(
     if not authorization or not authorization.lower().startswith("bearer "):
         raise AuthError(401, "로그인이 필요해요.")
     return session_user(authorization[7:].strip(), db=db)
+
+
+# --- 관리자 ---------------------------------------------------------------
+# 관리자 개념은 환경 변수 ADMIN_USERNAMES(쉼표로 구분한 회원 아이디)가 전부다.
+# 공지·관리자 메시지(POST /api/admin/notifications)만 이 문을 지난다.
+def admin_usernames() -> frozenset[str]:
+    raw = os.environ.get("ADMIN_USERNAMES", "")
+    return frozenset(name.strip().lower() for name in raw.split(",") if name.strip())
+
+
+def is_admin(user: User) -> bool:
+    return bool(user.username) and user.username.lower() in admin_usernames()
+
+
+def require_admin(user: User = Depends(current_user_in_session)) -> User:
+    """FastAPI dependency: 로그인 + ADMIN_USERNAMES 에 있는 계정만(아니면 403)."""
+    if not is_admin(user):
+        raise AuthError(403, "관리자만 쓸 수 있어요.")
+    return user
 
 
 def optional_user(authorization: Optional[str] = Header(default=None)) -> Optional[User]:

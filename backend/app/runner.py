@@ -33,6 +33,7 @@ from sqlalchemy import or_, update
 from sqlmodel import select
 
 from . import macro_signing
+from . import notifications as notifications_mod
 from .db import RunnerKey, RunnerLaunchTicket, RunSession, RunSessionEvent, User, UserMacro, get_session
 from .engine import Macro
 
@@ -59,6 +60,11 @@ EVENT_CAP = int(os.environ.get("RUNNER_EVENT_CAP", "500"))
 EVENT_BATCH_MAX = 100
 EVENT_MESSAGE_MAX = 300
 _EVENT_KINDS = {"start", "info", "signal", "order", "fill", "error", "stop"}
+# 평가손익 알림: 마지막 알림 기준 이만큼 움직였거나(누적), 한 heartbeat 사이 이만큼 급변하면 알린다(%p).
+PNL_ALERT_STEP_PCT = 2.0
+PNL_ALERT_JUMP_PCT = 1.0
+# 이 종류의 실행 이벤트는 헤더 알림(에이전트)으로도 간다. start·stop 은 세션 알림이 따로 있고 info 는 로그일 뿐.
+_NOTIFY_EVENT_LABELS = {"signal": "신호", "order": "주문", "fill": "체결", "error": "오류"}
 
 
 class _SessionStreamHub:
@@ -498,6 +504,13 @@ def start_session(user: User, payload: dict) -> dict:
                 + (f" · 지문 {macro_digest}" if macro_digest else "")
             ),
         }])
+        # 헤더 알림(에이전트) — 어느 매크로가 어디서 돌기 시작했는지.
+        notifications_mod.notify(
+            db, user.id, "agent", f"{symbol} 매크로 실행 시작",
+            ("테스트넷" if row.testnet else "메인넷(실거래)") + (f" · {summary}" if summary else ""),
+            "/agents", session_id=row.id,
+            data={"event": "start", "symbol": symbol, "testnet": row.testnet},
+        )
         db.commit()
         result = {
             "session_id": row.id,
@@ -530,6 +543,7 @@ def heartbeat(user: User, session_id: int, snapshot: dict) -> dict:
             return {"action": row.stop_mode or "stop_only", "reason": "이미 종료 처리된 세션이에요."}
         _append_events(db, row, events)
 
+        previous_pct, previously_in_position = row.unrealized_pct, row.in_position
         row.last_price = float(snapshot.get("last_price", row.last_price) or 0.0)
         row.in_position = bool(snapshot.get("in_position", False))
         row.position_uncertain = bool(snapshot.get("position_uncertain", row.position_uncertain))
@@ -540,11 +554,47 @@ def heartbeat(user: User, session_id: int, snapshot: dict) -> dict:
         if "note" in snapshot:
             row.note = str(snapshot["note"])[:200]
         row.last_heartbeat_at = _now_iso()
+        _alert_pnl_move(db, row, previous_pct, previously_in_position)
         action = row.stop_mode if row.stop_mode in _STOP_MODES else "continue"
         db.add(row)
         db.commit()
     notify_sessions_changed(user.id)
     return {"action": action}
+
+
+def _alert_pnl_move(db, row: RunSession, previous_pct: float, previously_in_position: bool) -> bool:
+    """평가손익이 크게 움직이면 에이전트 알림을 남긴다(커밋은 호출자).
+
+    기준(``pnl_alert_pct``)은 마지막으로 알린 시점의 값이고 포지션이 새로 열리면 0 이다. 기준에서
+    ``PNL_ALERT_STEP_PCT`` 이상 움직였거나 직전 heartbeat 보다 ``PNL_ALERT_JUMP_PCT`` 이상 급변했을 때
+    한 번 알리고 기준을 옮긴다 — 경계에서 왔다 갔다 해도 같은 알림이 반복되지 않는다.
+    """
+    if not row.in_position:
+        row.pnl_alert_pct = 0.0
+        return False
+    if not previously_in_position:
+        row.pnl_alert_pct = 0.0
+    pct = float(row.unrealized_pct or 0.0)
+    moved = pct - float(row.pnl_alert_pct or 0.0)
+    jump = pct - float(previous_pct or 0.0) if previously_in_position else 0.0
+    sudden = abs(jump) >= PNL_ALERT_JUMP_PCT
+    if abs(moved) < PNL_ALERT_STEP_PCT and not sudden:
+        return False
+    delta = jump if sudden else moved
+    direction = "up" if delta > 0 else "down"
+    if sudden:
+        change = f"{jump:+.2f}%p 급{'등' if jump > 0 else '락'}"
+    else:
+        change = f"마지막 알림보다 {moved:+.2f}%p {'상승' if moved > 0 else '하락'}"
+    body = f"{change} · 평단 {row.entry_price:,.2f} → 현재가 {row.last_price:,.2f}"
+    notifications_mod.notify(
+        db, row.user_id, "agent", f"{row.symbol} 평가손익 {pct:+.2f}%", body, "/agents",
+        session_id=row.id,
+        data={"event": "pnl", "symbol": row.symbol, "pct": round(pct, 2), "delta": round(delta, 2),
+              "direction": direction, "sudden": sudden, "entry_price": row.entry_price, "last_price": row.last_price},
+    )
+    row.pnl_alert_pct = pct
+    return True
 
 
 def mark_stopped(
@@ -563,6 +613,11 @@ def mark_stopped(
             raise HTTPException(status_code=404, detail="세션을 찾을 수 없어요.")
         already_final = row.status != "running"
         _append_events(db, row, events)
+        if not already_final and row.in_position:
+            # 청산 후 종료는 아래에서 현재 포지션 값을 0 으로 지운다 — 결과 화면용으로 마지막 포지션을 남긴다.
+            row.final_entry_price = row.entry_price
+            row.final_position_qty = row.position_qty
+            row.final_unrealized_pct = row.unrealized_pct
         row.status = "error" if status == "error" else "stopped"
         if note:
             row.note = str(note)[:200]
@@ -596,6 +651,16 @@ def mark_stopped(
                 + f" · 누적 실현손익 {row.realized_pnl:+.2f} USDT"
                 + (" · 포지션 보유 중" if row.in_position else ""),
             }])
+            notifications_mod.notify(
+                db, user.id, "agent",
+                f"{row.symbol} 매크로 {'오류 종료' if row.status == 'error' else '실행 종료'}",
+                (f"{row.note} · " if row.note else "")
+                + f"누적 실현손익 {row.realized_pnl:+.2f} USDT"
+                + (" · 포지션 보유 중" if row.in_position else ""),
+                "/agents", session_id=row.id,
+                data={"event": "error" if row.status == "error" else "stop",
+                      "symbol": row.symbol, "realized_pnl": row.realized_pnl},
+            )
         db.commit()
     notify_sessions_changed(user.id)
     return {"ok": True}
@@ -608,6 +673,7 @@ def _append_events(db, row: RunSession, events) -> int:
         return 0
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
     added = 0
+    notified = False
     for item in events[:EVENT_BATCH_MAX]:
         if not isinstance(item, dict):
             continue
@@ -627,9 +693,18 @@ def _append_events(db, row: RunSession, events) -> int:
             created_ms=now_ms + added,  # 같은 배치 안 순서 보존
         ))
         added += 1
+        if kind in _NOTIFY_EVENT_LABELS:
+            notifications_mod.notify(
+                db, row.user_id, "agent", f"{row.symbol} 매크로 · {_NOTIFY_EVENT_LABELS[kind]}",
+                message, "/agents", session_id=row.id,
+                data={"event": kind, "symbol": row.symbol}, trim=False,
+            )
+            notified = True
     if added:
         db.flush()
         _trim_events(db, row.id)
+        if notified:
+            notifications_mod.trim_user(db, row.user_id)
     return added
 
 
@@ -728,6 +803,9 @@ def _session_view(row: RunSession) -> dict:
         "position_qty": row.position_qty,
         "realized_pnl": row.realized_pnl,
         "unrealized_pct": row.unrealized_pct,
+        "final_entry_price": getattr(row, "final_entry_price", 0.0) or 0.0,
+        "final_position_qty": getattr(row, "final_position_qty", 0.0) or 0.0,
+        "final_unrealized_pct": getattr(row, "final_unrealized_pct", 0.0) or 0.0,
         "note": row.note,
         "started_at": row.started_at,
         "started_kst": _kst_label(row.started_at),

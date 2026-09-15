@@ -6,7 +6,11 @@ declare
   function_signature text;
   owned_tables constant text[] := array[
     'boardcomment',
+    'boardimage',
     'boardpost',
+    'boardpostvote',
+    'boardreport',
+    'browsernewspagecache',
     'chatmessage',
     'dailychallenge',
     'dailyquestclaim',

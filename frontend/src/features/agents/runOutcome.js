@@ -1,4 +1,6 @@
 // 실행 종료 결과와 종료 확인 문구 — 화면 컴포넌트가 아니라 순수 함수로 두어 테스트한다.
+import { exitRules } from "../../lib/positionExits.js";
+
 const USDT = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const PRICE = new Intl.NumberFormat("en-US", { maximumFractionDigits: 6 });
 const QTY = new Intl.NumberFormat("en-US", { maximumFractionDigits: 6 });
@@ -6,6 +8,13 @@ const QTY = new Intl.NumberFormat("en-US", { maximumFractionDigits: 6 });
 function signOf(value) {
   const n = Number(value) || 0;
   return n > 0 ? "+" : n < 0 ? "−" : "";
+}
+
+const QUOTE_ASSETS = ["USDT", "BUSD", "USDC", "FDUSD", "TUSD", "USD"];
+function baseAsset(symbol) {
+  const value = String(symbol || "").toUpperCase();
+  const quote = QUOTE_ASSETS.find((q) => value.endsWith(q));
+  return quote ? value.slice(0, -quote.length) : value;
 }
 
 export function toneOf(value) {
@@ -110,15 +119,36 @@ export function describeRunOutcome(session) {
     detail = s.note || "";
   }
 
+  // 표정은 화면의 큰 숫자를 따른다: 청산했으면 총 실현손익, 포지션이 남았으면 그 평가손익의 부호.
+  // 손실이면 critical(화남), 이익이면 signal(환호), 0이면 calm. 포지션이 남은 채 이익·0이면 warning(남은 포지션 경고).
+  const finalQty = Number(s.final_position_qty) || 0;
+  const resultPct = keptPosition ? Number(s.unrealized_pct) || 0 : finalQty > 0 ? Number(s.final_unrealized_pct) || 0 : null;
+  const resultSign = keptPosition ? Math.sign(Number(s.unrealized_pct) || 0) : Math.sign(Number(s.realized_pnl) || 0);
+  if (!stopping && !uncertain && !failed) {
+    if (resultSign < 0) avatar = "critical";
+    else if (keptPosition) avatar = "warning";
+    else avatar = resultSign > 0 ? "signal" : "calm";
+  }
+
   // 아직 끝나지 않았으면 마지막 heartbeat 를 끝점으로 삼는다.
   const endedAt = s.stopped_kst || (stopping ? s.heartbeat_kst : "");
   const elapsed = elapsedLabel(s.started_kst, endedAt);
   const span = [s.started_kst, endedAt].filter(Boolean).join(" → ");
+  // 청산 직전(또는 남아 있는) 포지션의 평단·수량·평가손익 — 스트립에서 보던 서브 정보를 결과에도 남긴다.
+  const positionEntry = keptPosition ? Number(s.entry_price) || 0 : finalQty > 0 ? Number(s.final_entry_price) || 0 : 0;
+  const positionQty = keptPosition ? Number(s.position_qty) || 0 : finalQty;
+  const positionLabel = keptPosition ? "" : "(청산 직전)";
   const rows = [
     { label: "실행 시간", value: elapsed ? `${elapsed} · ${span}` : span || "—", numeric: true },
+    { label: `평단${positionLabel}`, value: positionEntry > 0 ? PRICE.format(positionEntry) : "—", numeric: true },
+    { label: `수량${positionLabel}`, value: positionQty > 0 ? `${QTY.format(positionQty)} ${baseAsset(s.symbol)}`.trim() : "—", numeric: true },
+    { label: "마지막 평가손익", value: resultPct !== null ? formatSignedPct(resultPct) : "—", numeric: true, tone: resultPct !== null ? toneOf(resultPct) : "" },
     { label: "종목·환경", value: `${s.symbol || "—"} · ${marketLabel(s)} · ${s.testnet ? "테스트넷" : "메인넷(실거래)"}` },
     { label: "종료 방식", value: stopModeLabel(s.stop_mode) },
     { label: "마지막 가격", value: Number(s.last_price) ? PRICE.format(Number(s.last_price)) : "—", numeric: true },
+    // 포지션 블록이 보여 주던 실행기 버전·출처와 청산 기준 — 결과 화면에서도 같은 자리에 남긴다.
+    { label: "실행기", value: [s.runner_version ? `v${s.runner_version}` : "", s.macro_origin_label || ""].filter(Boolean).join(" · ") || "—", numeric: true },
+    { label: "청산 기준", value: exitRules(s.macro, s.position_side).summary },
     {
       label: "남은 포지션",
       numeric: !!s.in_position,

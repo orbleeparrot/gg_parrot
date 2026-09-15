@@ -7,9 +7,9 @@ import { computeSessionOverlay } from "../lib/indicators.js";
 import { usePositionNewsFeature } from "../features/agents/positionNews/index.js";
 import { useWhaleActivity } from "../features/agents/useWhaleActivity.js";
 import { useRunnerLog } from "../features/agents/useRunnerLog.js";
-import { macroOriginBadge } from "../lib/macroOrigin.js";
 import AgentActivityStream from "../components/AgentActivityStream.jsx";
 import CandleChart from "../components/CandleChart.jsx";
+import PositionStrip from "../components/PositionStrip.jsx";
 import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 import { ErrorNote, Loading } from "../components/Page.jsx";
 import ConfirmDialog from "../components/ConfirmDialog.jsx";
@@ -40,18 +40,6 @@ function sessionOptionLabel(session) {
   return `${prefix}${session.symbol} · ${ruleLabel(session.macro)}${net}`;
 }
 
-function statusText(session) {
-  if (session.position_uncertain) return "포지션 확인 필요";
-  if (session.status === "error") return "실행 오류";
-  if (session.status !== "running") return "실행 종료";
-  if (session.stopping) return "종료 처리 중…";
-  if (session.in_position) {
-    const pct = Number(session.unrealized_pct ?? 0);
-    return `보유 중 · 평가손익 ${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`;
-  }
-  return session.connected ? "실행 중 · 무포지션" : "응답 확인 중";
-}
-
 function MacroDock({ sessions, selected, busy, onChange, onStop, onDelete }) {
   const running = selected.status === "running";
   const connected = running && selected.connected;
@@ -59,7 +47,6 @@ function MacroDock({ sessions, selected, busy, onChange, onStop, onDelete }) {
   // 응답대기(실행 중이지만 heartbeat 끊김)와 오류·종료 항목만 목록에서 지운다.
   // 서버도 같은 기준으로 막으므로 버튼 상태와 실제 결과가 어긋나지 않는다.
   const removable = !connected;
-  const origin = macroOriginBadge(selected);
 
   return (
     <section className="agent-macro-dock" aria-label="매크로 세션 선택과 제어">
@@ -83,15 +70,7 @@ function MacroDock({ sessions, selected, busy, onChange, onStop, onDelete }) {
         </span>
       </label>
 
-      <div className="agent-macro-dock-status" aria-label={`실행 상태: ${statusText(selected)}`}>
-        <i className={`agent-live-dot ${connected ? "is-running" : "is-checking"}`} aria-hidden="true" />
-        <span>{statusText(selected)}</span>
-        {/* v7+ 실행기만 버전을 보고한다. 빈 값이면 표시하지 않는다. */}
-        {selected.runner_version ? <span className="agent-macro-dock-version num">실행기 v{selected.runner_version}</span> : null}
-        {/* 매크로 출처 — 서버가 파일 서명을 검증한 결과. 수정된 파일은 빨간 배지로 바로 보인다. */}
-        {origin ? <span className={origin.className} title={origin.title}>{origin.label}</span> : null}
-      </div>
-
+      {/* 실행 상태·실행기 버전·매크로 출처는 오른쪽 열 위 포지션 블록(PositionStrip)이 맡는다. */}
       <div className="agent-macro-dock-actions">
         <button type="button" disabled={busy || stopping || !running} onClick={() => onStop("stop_only")} className="btn btn-m btn-secondary">매크로만 종료</button>
         <button type="button" disabled={busy || stopping || !running} onClick={() => onStop("close_and_stop")} className="btn btn-m btn-danger">청산 후 종료</button>
@@ -427,16 +406,21 @@ function AccountAgents() {
               </div>
             </section>
 
-            <AgentActivityStream
-              key={selected.session_id}
-              symbol={selected.symbol}
-              macro={macro}
-              session={selected}
-              candles={activeChart?.candles || []}
-              interval={activeChart?.interval || interval}
-              observedAt={activeChart?.serverTime || 0}
-              featureStates={featureStates}
-            />
+            {/* 오른쪽 열: 평가손익 블록(제일 중요한 지표)이 위, 에이전트 기록이 아래. 차트는 실행 바 바로 아래부터 전체 높이. */}
+            <div className="agent-side">
+              {/* 종료됐거나 종료 처리 중이면 오른쪽 열은 결과 화면이 맡는다 — 블록을 겹쳐 두지 않는다. */}
+              {selected.status === "running" && !selected.stopping ? <PositionStrip session={selected} macro={macro} /> : null}
+              <AgentActivityStream
+                key={selected.session_id}
+                symbol={selected.symbol}
+                macro={macro}
+                session={selected}
+                candles={activeChart?.candles || []}
+                interval={activeChart?.interval || interval}
+                observedAt={activeChart?.serverTime || 0}
+                featureStates={featureStates}
+              />
+            </div>
           </div>
 
           {activePositionNews.error ? <div className="agent-inline-error" role="status">포지션 맞춤 뉴스를 불러오지 못했어요. 다른 작업은 계속 갱신됩니다.</div> : null}

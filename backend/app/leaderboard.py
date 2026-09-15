@@ -20,6 +20,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 
 from . import paper as paper_mod
+from . import notifications as notifications_mod
 from . import points as points_mod
 from .db import (
     LeaderboardCarryover,
@@ -589,10 +590,17 @@ def unlock_entry(viewer: User, entry_id: int) -> dict:
                 raise UnlockError("작성자 계정을 찾을 수 없어요.", status=404)
             # charge viewer, pay creator 70%, record the unlock — all in one commit.
             # Read the price at call time so it stays configurable/testable.
-            points_mod.unlock_transfer(
+            share = points_mod.unlock_transfer(
                 db, viewer=viewer_row, creator=creator, entry_id=entry_id,
                 price=points_mod.UNLOCK_PRICE,
             )
+            if share > 0:
+                # 판 사람의 헤더 알림 — 포인트 원장과 같은 트랜잭션에 얹는다.
+                notifications_mod.notify(
+                    db, creator.id, "macro_sold", f"{row.symbol} 매크로가 팔렸어요",
+                    f"{viewer.username} 님이 언락했어요.", "/leaderboard",
+                    data={"points": share, "entry_id": entry_id, "buyer": viewer.username},
+                )
             db.commit()
             db.refresh(viewer_row)
 

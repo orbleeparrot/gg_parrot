@@ -10,8 +10,8 @@ from sqlmodel import Session, select
 
 from . import auth, avatars
 from .db import (BoardComment, BoardPost, ChatMessage, ChatReadState, DailyQuestClaim,
-                 LeaderboardEntry, RunnerKey, RunnerLaunchTicket, RunSession,
-                 RunSessionEvent, User, UserMacro, get_session)
+                 LeaderboardEntry, NotificationMessage, NotificationReceipt, RunnerKey,
+                 RunnerLaunchTicket, RunSession, RunSessionEvent, User, UserMacro, get_session)
 from . import points
 from .security import hash_password, verify_password
 
@@ -107,7 +107,7 @@ def delete_account(user_id: int, confirmation: str, password: str = "", credenti
             raise auth.AuthError(409, "실행 중인 매크로를 먼저 종료해 주세요. 연결이 끊긴 실행 기록은 내 에이전트에서 정리할 수 있어요.")
         avatars.set_avatar_in_session(db, user_id, None)
         for model in (ChatReadState, RunnerLaunchTicket, RunnerKey, RunSessionEvent,
-                      RunSession, DailyQuestClaim, UserMacro):
+                      RunSession, DailyQuestClaim, UserMacro, NotificationMessage, NotificationReceipt):
             db.exec(delete(model).where(model.user_id == user_id))
         db.exec(update(ChatMessage).where(ChatMessage.user_id == user_id).values(username="탈퇴한 회원"))
         db.exec(update(BoardPost).where(BoardPost.author_user_id == user_id).values(author_name="탈퇴한 회원"))

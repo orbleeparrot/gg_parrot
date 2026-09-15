@@ -10,6 +10,7 @@ import { useRunnerLog } from "../features/agents/useRunnerLog.js";
 import { macroOriginBadge } from "../lib/macroOrigin.js";
 import AgentActivityStream from "../components/AgentActivityStream.jsx";
 import CandleChart from "../components/CandleChart.jsx";
+import PositionStrip from "../components/PositionStrip.jsx";
 import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 import { ErrorNote, Loading } from "../components/Page.jsx";
 import ConfirmDialog from "../components/ConfirmDialog.jsx";
@@ -45,10 +46,8 @@ function statusText(session) {
   if (session.status === "error") return "실행 오류";
   if (session.status !== "running") return "실행 종료";
   if (session.stopping) return "종료 처리 중…";
-  if (session.in_position) {
-    const pct = Number(session.unrealized_pct ?? 0);
-    return `보유 중 · 평가손익 ${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`;
-  }
+  // 평가손익 숫자는 실행 바 아래 포지션 스트립이 크게 보여 준다 — 여기서는 상태만.
+  if (session.in_position) return "보유 중";
   return session.connected ? "실행 중 · 무포지션" : "응답 확인 중";
 }
 
@@ -410,6 +409,8 @@ function AccountAgents() {
             onStop={stopSession}
             onDelete={deleteSession}
           />
+          {/* 평가손익이 제일 중요한 지표 — 실행 바 바로 아래 한 줄로 크게 둔다(PositionStrip). */}
+          <PositionStrip session={selected} macro={macro} />
           <WorkspaceTabs selected={mobilePane} onSelect={setMobilePane} />
           <div className={`agent-console is-${mobilePane}`}>
             <section className="agent-chart-pane" aria-label={`${selected.symbol} 실시간 차트`}>

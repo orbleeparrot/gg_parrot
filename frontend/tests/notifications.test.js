@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  ACTIVITY_EVENT, badgeText, isInternalLink, kindLabel, markAllReadLocal, markReadLocal, parseUnreadEvent, pointsOf,
+  ACTIVITY_EVENT, appendToast, badgeText, hasNewerNotifications, isInternalLink, kindLabel, markAllReadLocal, markReadLocal,
+  parseNotificationEvent, parseUnreadEvent, pointsOf,
   relativeTime, shouldSignalActivity, streamRetryDelay, unreadAfter,
 } from "../src/lib/notifications.js";
 
@@ -84,4 +85,33 @@ test("unread 이벤트 파싱 — 숫자만 받고 나머지는 무시", () => {
   assert.equal(parseUnreadEvent('{"unread": -1}'), null);
   assert.equal(parseUnreadEvent("not json"), null);
   assert.equal(parseUnreadEvent("{}"), null);
+});
+
+test("토스트 큐 — 최신이 앞, 같은 id 는 한 번, 3개까지", () => {
+  let list = [];
+  list = appendToast(list, { id: 1, title: "a" }, { key: 1 });
+  list = appendToast(list, { id: 2, title: "b" }, { key: 2 });
+  list = appendToast(list, { id: 2, title: "b again" }, { key: 3 });
+  assert.deepEqual(list.map((t) => t.id), [2, 1]);
+  assert.equal(list[0].item.title, "b again");
+  list = appendToast(list, { id: 3 }, { key: 4 });
+  list = appendToast(list, { id: 4 }, { key: 5 });
+  assert.deepEqual(list.map((t) => t.id), [4, 3, 2]);
+  assert.deepEqual(appendToast(list, { id: "x" }), list);
+});
+
+test("폴링 모드의 새 알림 감지 — 기준이 없으면 잡기만, 더 큰 id 가 있으면 true", () => {
+  assert.equal(hasNewerNotifications(10, null), false);
+  assert.equal(hasNewerNotifications(10, undefined), false);
+  assert.equal(hasNewerNotifications(10, 10), false);
+  assert.equal(hasNewerNotifications(11, 10), true);
+  assert.equal(hasNewerNotifications("12", 10), true);
+  assert.equal(hasNewerNotifications(null, 10), false);
+});
+
+test("notification 이벤트 파싱 — id 와 제목이 있어야 한 건", () => {
+  assert.deepEqual(parseNotificationEvent('{"id": 5, "title": "t", "kind": "quest"}'), { id: 5, title: "t", kind: "quest" });
+  assert.equal(parseNotificationEvent('{"id": "x", "title": "t"}'), null);
+  assert.equal(parseNotificationEvent('{"id": 5}'), null);
+  assert.equal(parseNotificationEvent("nope"), null);
 });

@@ -546,8 +546,11 @@ def me_notifications_unread(
     user: User = Depends(auth_mod.current_user_in_session),
     db: Session = Depends(request_session),
 ) -> dict:
-    """헤더 배지용 — 안 읽은 알림 수만(가볍게 주기적으로 묻는다)."""
-    return {"unread": notifications_mod.unread_count(db, user)}
+    """헤더 배지용 — 안 읽은 수와 가장 최근 알림 id(폴링 모드가 새 알림을 알아채 토스트로 띄우는 기준)."""
+    return {
+        "unread": notifications_mod.unread_count(db, user),
+        "latest_id": notifications_mod.latest_id_for(db, user.id),
+    }
 
 
 @app.post("/api/me/notifications/read")

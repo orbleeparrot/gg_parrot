@@ -91,6 +91,34 @@ export function streamRetryDelay(attempt, random = Math.random) {
   return Math.round(base * (0.8 + 0.4 * random()));
 }
 
+// 토스트 큐: 최신이 앞, 같은 id 는 한 번만, 최대 TOAST_MAX 개(넘치면 오래된 것부터 뺀다).
+export const TOAST_MAX = 3;
+export function appendToast(toasts, item, { max = TOAST_MAX, key = 0 } = {}) {
+  const id = Number(item?.id);
+  if (!Number.isFinite(id)) return toasts || [];
+  const list = (toasts || []).filter((toast) => toast.id !== id);
+  return [{ id, item, key }, ...list].slice(0, max);
+}
+
+// 폴링 모드에서 새 알림이 생겼는지 — 마지막으로 본 id 보다 큰 id 가 서버에 있으면 그 뒤를 가져온다.
+export function hasNewerNotifications(latestId, lastSeenId) {
+  const latest = Number(latestId);
+  if (!Number.isFinite(latest)) return false;
+  if (lastSeenId === null || lastSeenId === undefined) return false; // 처음 본 값은 기준만 잡는다
+  return latest > Number(lastSeenId);
+}
+
+// 서버가 보낸 `event: notification` 의 data(알림 한 건). 모양이 아니면 null.
+export function parseNotificationEvent(data) {
+  try {
+    const parsed = typeof data === "string" ? JSON.parse(data) : data;
+    if (!parsed || !Number.isFinite(Number(parsed.id)) || typeof parsed.title !== "string") return null;
+    return parsed;
+  } catch (_) {
+    return null;
+  }
+}
+
 // 서버가 보낸 `event: unread` 의 data. 숫자가 아니면 null(무시).
 export function parseUnreadEvent(data) {
   try {

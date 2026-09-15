@@ -125,7 +125,8 @@ def test_mark_read_some_then_all():
     listing = _personal(author_token)
     notices = sum(it["scope"] == "notice" and not it["read"] for it in _items(author_token)["items"])
     assert listing["unread"] == 3 + notices and len(listing["items"]) == 3
-    assert client.get("/api/me/notifications/unread", headers=_auth(author_token)).json() == {"unread": 3 + notices}
+    light = client.get("/api/me/notifications/unread", headers=_auth(author_token)).json()
+    assert light["unread"] == 3 + notices and light["latest_id"] == listing["items"][0]["id"]
 
     first = listing["items"][0]["id"]
     r = client.post("/api/me/notifications/read", json={"ids": [first, 999_999]}, headers=_auth(author_token))

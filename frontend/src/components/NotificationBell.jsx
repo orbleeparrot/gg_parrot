@@ -7,21 +7,9 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth.js";
 import useNotifications from "../hooks/useNotifications.js";
 import { badgeText, isInternalLink, kindLabel, pointsOf, relativeTime } from "../lib/notifications.js";
-import {
-  ArrowBendUpLeftIcon, BellIcon, ChatCircleTextIcon, CoinsIcon, EnvelopeSimpleIcon,
-  MegaphoneIcon, RankingIcon, RobotIcon, TrophyIcon,
-} from "./utilityIcons.jsx";
-
-const KIND_ICONS = {
-  quest: TrophyIcon,
-  macro_sold: CoinsIcon,
-  macro_registered: RankingIcon,
-  comment: ChatCircleTextIcon,
-  reply: ArrowBendUpLeftIcon,
-  agent: RobotIcon,
-  admin: EnvelopeSimpleIcon,
-  notice: MegaphoneIcon,
-};
+import { BellIcon } from "./utilityIcons.jsx";
+import NotificationKindIcon from "./notificationKindIcon.jsx";
+import NotificationToasts from "./NotificationToasts.jsx";
 
 export default function NotificationBell() {
   const { token } = useAuth();
@@ -30,7 +18,7 @@ export default function NotificationBell() {
   const [open, setOpen] = useState(false);
   const rootRef = useRef(null);
   const buttonRef = useRef(null);
-  const { unread, items, loading, error, setPanelOpen } = useNotifications(token);
+  const { unread, items, loading, error, setPanelOpen, toasts, dismissToast, markRead } = useNotifications(token);
 
   // 다른 페이지로 가면 닫고, 바깥 클릭·Esc 로도 닫는다. 열림 상태는 훅이 목록 읽기·읽음 처리에 쓴다.
   useEffect(() => { setOpen(false); }, [pathname]);
@@ -64,9 +52,15 @@ export default function NotificationBell() {
     setOpen(false);
     if (isInternalLink(item.link)) navigate(item.link);
   };
+  // 토스트를 누르면 그 알림은 읽음(배지에서 빠진다)이고, 가리키는 화면으로 간다.
+  const onToast = (item) => {
+    if (!item.read) markRead([item.id]);
+    if (isInternalLink(item.link)) navigate(item.link);
+  };
 
   return (
     <div ref={rootRef} className="header-bell">
+      <NotificationToasts toasts={toasts} onDismiss={dismissToast} onOpen={onToast} />
       <button
         ref={buttonRef}
         type="button"
@@ -93,7 +87,6 @@ export default function NotificationBell() {
           ) : (
             <ul className="header-bell-list" aria-busy={loading || undefined}>
               {items.map((item) => {
-                const Icon = KIND_ICONS[item.kind] || BellIcon;
                 const points = pointsOf(item);
                 return (
                   <li key={item.id}>
@@ -102,7 +95,7 @@ export default function NotificationBell() {
                       className={"header-bell-item" + (item.read ? "" : " is-unread")}
                       onClick={() => onItem(item)}
                     >
-                      <span className="header-bell-icon" aria-hidden="true"><Icon /></span>
+                      <span className="header-bell-icon" aria-hidden="true"><NotificationKindIcon kind={item.kind} /></span>
                       <span className="header-bell-text">
                         <span className="header-bell-meta t-caption">
                           <span className="header-bell-kind">{kindLabel(item.kind)}</span>

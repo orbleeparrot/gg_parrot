@@ -69,3 +69,35 @@ export function unreadAfter(unread, items, ids) {
 export function isInternalLink(link) {
   return typeof link === "string" && link.startsWith("/") && !link.startsWith("//");
 }
+
+// --- 실시간 갱신 -----------------------------------------------------------
+// 로그인 계정의 쓰기 요청(백테스트·댓글·등록·언락…)이 끝나면 api.js 가 이 이벤트를 낸다.
+// 알림 훅은 이를 듣고 안 읽은 수를 바로 다시 묻는다 — 내가 방금 한 일의 결과는 폴링을 기다리지 않는다.
+export const ACTIVITY_EVENT = "ggp:activity";
+
+// 알림 자체를 읽는 요청과 로그인·가입은 알림을 만들지 않으니 신호에서 뺀다.
+export function shouldSignalActivity(method, path) {
+  const verb = String(method || "GET").toUpperCase();
+  if (verb === "GET" || verb === "HEAD" || verb === "OPTIONS") return false;
+  const pathname = String(path || "").split("?")[0];
+  return !pathname.startsWith("/api/me/notifications") && !pathname.startsWith("/api/auth/");
+}
+
+// SSE 재연결 간격: 1초부터 두 배씩, 최대 30초, ±20% 흔들림(모두 같은 순간에 다시 붙지 않게).
+export const STREAM_RETRY_MAX_MS = 30_000;
+export function streamRetryDelay(attempt, random = Math.random) {
+  const step = Math.max(0, Math.floor(Number(attempt) || 0));
+  const base = Math.min(STREAM_RETRY_MAX_MS, 1000 * 2 ** step);
+  return Math.round(base * (0.8 + 0.4 * random()));
+}
+
+// 서버가 보낸 `event: unread` 의 data. 숫자가 아니면 null(무시).
+export function parseUnreadEvent(data) {
+  try {
+    const parsed = typeof data === "string" ? JSON.parse(data) : data;
+    const count = Number(parsed?.unread);
+    return Number.isFinite(count) && count >= 0 ? Math.floor(count) : null;
+  } catch (_) {
+    return null;
+  }
+}

@@ -75,6 +75,17 @@ curl -X POST https://gg-parrot.onrender.com/api/admin/notifications \
 
 나머지 알림(퀘스트 완료·매크로 판매/등록·댓글/답글·에이전트 소식)은 해당 동작의 트랜잭션 안에서 자동으로 쌓입니다.
 
+**실시간 전달(SSE)** — 브라우저는 `POST /api/me/notifications/stream-token` 으로 60초짜리 단기 토큰을 받아
+`GET /api/me/notifications/stream?token=…` 에 EventSource 로 붙고, 서버가 `event: unread` 로 안 읽은 수를 밀어 줍니다.
+- 실행 세션 WebSocket 처럼 Vercel 리라이트를 거치지 않고 Render 주소(`https://gg-parrot.onrender.com`)에 바로 붙습니다
+  (`VITE_API_WS_BASE` 를 두면 그 주소를 http(s) 로 바꿔 씁니다). CORS 는 기존 `allow_origins=["*"]` 로 충분합니다.
+- 25초마다 주석 한 줄(`: ping`)로 프록시 idle timeout 을 넘기고, 그때 토큰의 계정이 아직 유효한지(로그아웃·탈퇴) 확인합니다.
+- 알림을 만든 트랜잭션이 **커밋된 뒤**에만 스트림을 깨웁니다(SQLAlchemy `after_commit`). 다른 프로세스(Prefect 워커의
+  기사·고래 수집기)가 만든 알림은 같은 트랜잭션에 실린 `pg_notify('ggp_notifications', …)` 를 웹 프로세스의 LISTEN 연결이 받아
+  전달합니다(`app/notification_stream.py`). LISTEN 은 세션 풀러(5432, session mode) 연결이 필요하며 트랜잭션 모드(6543)에서는
+  동작하지 않습니다. 연결이 끊기면 1초부터 두 배씩(최대 60초) 다시 붙고, 그동안은 브라우저 폴링(20초)이 메웁니다.
+- Render 웹 인스턴스가 여러 개가 되어도 LISTEN 은 인스턴스마다 하나씩이라 그대로 동작합니다(Redis 불필요).
+
 ## 포지션 뉴스 중앙 워커
 
 웹은 새 티커의 RSS를 즉시 저장하고, Prefect worker는 Playwright 공개 페이지 수집과 AI 보강을 담당합니다. 루트

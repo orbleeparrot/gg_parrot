@@ -6,9 +6,11 @@ import { withRequestTimeout } from "./lib/requestTimeout.js";
 import { withGatewayRetry } from "./lib/requestRetry.js";
 import { createBoardListCache } from "./lib/boardListCache.js";
 import { invalidateLeaderboardCache } from "./lib/cacheEvents.js";
+import { ACTIVITY_EVENT, shouldSignalActivity } from "./lib/notifications.js";
 
 const BASE = "";
 const RUNNER_SESSIONS_STREAM_PATH = "/api/me/runner/sessions/stream";
+const NOTIFICATIONS_STREAM_PATH = "/api/me/notifications/stream";
 const getRequests = createRequestCoordinator();
 const boardLists = createBoardListCache();
 const PUBLIC_READS = new Set([
@@ -59,6 +61,25 @@ function websocketUrl(path) {
 
   return `wss://gg-parrot.onrender.com${path}`;
 }
+// SSE(EventSource)는 WebSocket 과 같은 이유로 Vercel 리라이트를 거치지 않고 백엔드에 바로 붙는다.
+// 개발(Vite)에서는 같은 출처의 프록시를 쓰므로 상대 경로면 된다.
+function eventStreamUrl(path) {
+  const configuredBase = String(import.meta.env?.VITE_API_WS_BASE || "").trim();
+  if (configuredBase) {
+    return `${configuredBase.replace(/^ws:/i, "http:").replace(/^wss:/i, "https:").replace(/\/+$/, "")}${path}`;
+  }
+  if (import.meta.env?.DEV) return path;
+  return `https://gg-parrot.onrender.com${path}`;
+}
+// 로그인 계정의 쓰기 요청이 끝났다 — 알림 배지가 폴링을 기다리지 않고 바로 다시 묻는다(useNotifications).
+function signalActivity(path, method) {
+  if (typeof window === "undefined" || typeof window.dispatchEvent !== "function") return;
+  try {
+    window.dispatchEvent(new CustomEvent(ACTIVITY_EVENT, { detail: { path, method } }));
+  } catch (_) {
+    // CustomEvent 가 없는 환경(테스트)에서는 조용히 넘어간다
+  }
+}
 
 async function jsonBody(res) {
   const text = await res.text();
@@ -96,6 +117,7 @@ async function req(path, opts = {}) {
       error.status = res.status;
       throw error;
     }
+    if (token && shouldSignalActivity(method, path)) signalActivity(path, method);
     return body;
   }, { method, signal: requestSignal }), { signal, timeoutMs });
   if (method !== "GET") return execute(callerSignal);
@@ -146,6 +168,8 @@ export const api = {
   myNotificationsUnread: (options = {}) => req("/api/me/notifications/unread", { timeoutMs: 8_000, ...options }),
   readNotifications: ({ ids = [], all = false } = {}) =>
     req("/api/me/notifications/read", { method: "POST", body: JSON.stringify({ ids, all }) }),
+  notificationsStreamToken: () => req("/api/me/notifications/stream-token", { method: "POST", timeoutMs: 8_000 }),
+  notificationsStreamUrl: (token) => `${eventStreamUrl(NOTIFICATIONS_STREAM_PATH)}?token=${encodeURIComponent(token)}`,
   uploadAvatar: (image) => {
     const form = new FormData();
     form.append("image", image);

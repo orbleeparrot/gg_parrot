@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  badgeText, isInternalLink, kindLabel, markAllReadLocal, markReadLocal, pointsOf, relativeTime, unreadAfter,
+  ACTIVITY_EVENT, badgeText, isInternalLink, kindLabel, markAllReadLocal, markReadLocal, parseUnreadEvent, pointsOf,
+  relativeTime, shouldSignalActivity, streamRetryDelay, unreadAfter,
 } from "../src/lib/notifications.js";
 
 test("종류 라벨 — 아는 종류는 한국어, 모르는 종류는 '알림'", () => {
@@ -52,4 +53,35 @@ test("앱 안 경로만 따라간다", () => {
   assert.equal(isInternalLink("//evil.example"), false);
   assert.equal(isInternalLink("https://example.com"), false);
   assert.equal(isInternalLink(""), false);
+});
+
+test("활동 신호 — 쓰기 요청만, 알림 자체·인증 요청은 제외", () => {
+  assert.equal(shouldSignalActivity("POST", "/api/backtest"), true);
+  assert.equal(shouldSignalActivity("post", "/api/board/posts/3/comments?x=1"), true);
+  assert.equal(shouldSignalActivity("DELETE", "/api/me/macros/4"), true);
+  assert.equal(shouldSignalActivity("GET", "/api/backtest"), false);
+  assert.equal(shouldSignalActivity("POST", "/api/me/notifications/read"), false);
+  assert.equal(shouldSignalActivity("POST", "/api/me/notifications/stream-token"), false);
+  assert.equal(shouldSignalActivity("POST", "/api/auth/login"), false);
+  assert.equal(ACTIVITY_EVENT, "ggp:activity");
+});
+
+test("SSE 재연결 간격 — 1초부터 두 배, 최대 30초, ±20% 흔들림", () => {
+  const fixed = () => 0.5; // 흔들림 0
+  assert.equal(streamRetryDelay(0, fixed), 1000);
+  assert.equal(streamRetryDelay(1, fixed), 2000);
+  assert.equal(streamRetryDelay(3, fixed), 8000);
+  assert.equal(streamRetryDelay(10, fixed), 30_000);
+  assert.equal(streamRetryDelay(-2, fixed), 1000);
+  assert.equal(streamRetryDelay(2, () => 0), 3200);
+  assert.equal(streamRetryDelay(2, () => 1), 4800);
+});
+
+test("unread 이벤트 파싱 — 숫자만 받고 나머지는 무시", () => {
+  assert.equal(parseUnreadEvent('{"unread": 3}'), 3);
+  assert.equal(parseUnreadEvent('{"unread": "7"}'), 7);
+  assert.equal(parseUnreadEvent({ unread: 0 }), 0);
+  assert.equal(parseUnreadEvent('{"unread": -1}'), null);
+  assert.equal(parseUnreadEvent("not json"), null);
+  assert.equal(parseUnreadEvent("{}"), null);
 });

@@ -31,6 +31,7 @@ from fastapi import (
 )
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import StreamingResponse
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from sqlmodel import Session, select
@@ -69,6 +70,7 @@ from . import profile as profile_mod
 from . import points as points_mod
 from . import quests as quests_mod
 from . import notifications as notifications_mod
+from . import notification_stream
 from . import account as account_mod
 from . import challenge as challenge_mod
 from . import runner as runner_mod
@@ -99,6 +101,7 @@ from .realtrade import build_bundle
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    notification_stream.start()  # Postgres 일 때 LISTEN — 다른 프로세스의 알림도 SSE 로 밀어 준다
     community_summaries_mod.start()
     leaderboard_runtime.start()
     public_news_mod.start()
@@ -107,6 +110,7 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        await notification_stream.stop()
         stopped = await asyncio.gather(
             leaderboard_runtime.stop(), public_news_mod.stop(),
             whale_activity_runtime.stop(), position_news_runtime.stop(),
@@ -553,6 +557,30 @@ def me_notifications_read(
 ) -> dict:
     """읽음 처리 — ids 로 몇 개만, 또는 all 로 전부. 남은 안 읽은 수를 돌려준다."""
     return {"unread": notifications_mod.mark_read(db, user, ids=req.ids, everything=req.all)}
+
+
+@app.post("/api/me/notifications/stream-token")
+def me_notifications_stream_token(
+    response: Response,
+    user: User = Depends(auth_mod.current_user),
+) -> dict:
+    """알림 SSE 전용 단기 토큰 — EventSource 는 Authorization 헤더를 못 붙인다."""
+    response.headers["Cache-Control"] = "no-store"
+    return auth_mod.make_stream_token(user.id, auth_mod.NOTIFICATION_STREAM_PURPOSE)
+
+
+@app.get("/api/me/notifications/stream")
+async def me_notifications_stream(token: str = Query(default="", max_length=2048)) -> StreamingResponse:
+    """안 읽은 알림 수를 SSE 로 밀어 준다(event: unread). 브라우저의 폴링은 폴백으로 남는다."""
+    try:
+        user_id = await asyncio.to_thread(auth_mod.decode_stream_token, token, auth_mod.NOTIFICATION_STREAM_PURPOSE)
+    except HTTPException:
+        raise HTTPException(status_code=401, detail="알림 스트림 인증이 만료됐거나 유효하지 않아요.")
+    return StreamingResponse(
+        notification_stream.event_stream(user_id, token),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"},
+    )
 
 
 class AdminNotificationIn(BaseModel):

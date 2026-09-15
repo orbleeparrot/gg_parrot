@@ -118,6 +118,39 @@ def make_runner_session_stream_token(user_id: int) -> dict:
     }
 
 
+NOTIFICATION_STREAM_PURPOSE = "notification_stream"
+_STREAM_TOKEN_TTL_SECONDS = 60
+
+
+def make_stream_token(user_id: int, purpose: str, ttl_seconds: int = _STREAM_TOKEN_TTL_SECONDS) -> dict:
+    """단기·단일 목적 토큰(SSE 등 헤더를 못 붙이는 연결용). 일반 HTTP 엔드포인트에는 쓸 수 없다."""
+    now = _now()
+    user = get_user_by_id(user_id)
+    if user is None:
+        raise AuthError(401, "계정을 찾을 수 없어요.")
+    payload = {
+        "sub": str(user_id),
+        "ver": user.auth_version,
+        "purpose": purpose,
+        "jti": secrets.token_urlsafe(12),
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(seconds=ttl_seconds)).timestamp()),
+    }
+    return {"token": jwt.encode(payload, SECRET_KEY, algorithm=_JWT_ALGO), "expires_in": ttl_seconds}
+
+
+def decode_stream_token(token: str, purpose: str, *, check_expiry: bool = True) -> int:
+    """스트림 토큰을 검증하고 계정 id 를 돌려준다(목적이 다르거나 계정이 바뀌면 401)."""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[_JWT_ALGO], options={"verify_exp": check_expiry})
+        if payload.get("purpose") != purpose:
+            raise ValueError("wrong purpose")
+        _check_token_account(payload, get_user_by_id(int(payload["sub"])))
+        return int(payload["sub"])
+    except (jwt.PyJWTError, KeyError, ValueError):
+        raise AuthError(401, "실시간 연결 인증이 만료됐거나 유효하지 않아요.")
+
+
 def decode_runner_session_stream_token(token: str, *, check_expiry: bool = True) -> int:
     """Validate a sessions-stream token and return its account id."""
     try:

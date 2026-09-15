@@ -30,6 +30,7 @@ from sqlalchemy import delete, func, update
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 
+from . import notification_stream
 from .db import NotificationMessage, NotificationReceipt, RunSession, User, get_session
 
 log = logging.getLogger(__name__)
@@ -119,6 +120,8 @@ def notify(
     db.flush()
     if trim and user_id is not None:
         trim_user(db, user_id)
+    # 커밋되면 이 계정(공지면 모두)의 스트림을 깨운다 — 배지가 폴링을 기다리지 않게.
+    notification_stream.mark_changed(db, user_id)
     return row
 
 
@@ -240,17 +243,21 @@ def _seen_notices(user_id: int):
 
 def unread_count(db, user: User) -> int:
     """안 읽은 개인 알림 + 아직 읽음 기록이 없는 최근 공지."""
+    return unread_count_for(db, user.id)
+
+
+def unread_count_for(db, user_id: int) -> int:
     _, now_ms = _now()
     personal = int(db.exec(
         select(func.count(NotificationMessage.id)).where(
-            NotificationMessage.user_id == user.id, NotificationMessage.read_ms.is_(None)
+            NotificationMessage.user_id == user_id, NotificationMessage.read_ms.is_(None)
         )
     ).one())
     notices = int(db.exec(
         select(func.count(NotificationMessage.id)).where(
             NotificationMessage.user_id.is_(None),
             NotificationMessage.created_ms >= _notice_floor(now_ms),
-            NotificationMessage.id.not_in(_seen_notices(user.id)),
+            NotificationMessage.id.not_in(_seen_notices(user_id)),
         )
     ).one())
     return personal + notices
@@ -316,6 +323,7 @@ def mark_read(db, user: User, *, ids: Optional[Iterable[int]] = None, everything
     db.exec(personal.values(read_ms=now_ms).execution_options(synchronize_session=False))
     for message_id in db.exec(pending_notices).all():
         db.add(NotificationReceipt(message_id=message_id, user_id=user.id, read_ms=now_ms))
+    notification_stream.mark_changed(db, user.id)  # 다른 탭의 배지도 내려간다
     try:
         db.commit()
     except IntegrityError:

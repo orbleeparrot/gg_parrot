@@ -5,6 +5,7 @@ const AVATARS = {
   focused: "/brand/agent/ggparrot-agent-focused-v1.svg",
   warning: "/brand/agent/ggparrot-agent-warning-v1.svg",
   critical: "/brand/agent/ggparrot-agent-critical-v1.svg",
+  signal: "/brand/agent/ggparrot-agent-signal-v1.svg",
 };
 
 // 실행이 끝나면 에이전트 채팅 자리를 통째로 차지한다 — 알림 한 줄이 아니라 결과 화면.
@@ -33,7 +34,7 @@ export default function RunResultScreen({ session, onShowLog }) {
         {outcome.rows.map((row) => (
           <div key={row.label} className="agent-result-row">
             <dt>{row.label}</dt>
-            <dd className={row.numeric ? "num" : ""}>{row.value}</dd>
+            <dd className={`${row.numeric ? "num" : ""}${row.tone ? ` is-${row.tone}` : ""}`.trim()}>{row.value}</dd>
           </div>
         ))}
       </dl>

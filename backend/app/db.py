@@ -415,6 +415,13 @@ class RunSession(SQLModel, table=True):
     macro_origin: str = ""
     # 실행된 매크로의 짧은 지문(sha256 앞 12자리). 문의 시 어떤 설정이었는지 대조한다.
     macro_digest: str = ""
+    # 평가손익 급변 알림의 기준 — 마지막으로 알림을 보낸 시점의 평가손익(%). 포지션이 닫히면 0.
+    pnl_alert_pct: float = 0.0
+    # 종료 보고 때 복사해 둔 마지막 heartbeat 의 포지션 — 청산 후 종료는 현재 값을 0 으로 지우므로
+    # 결과 화면의 '청산 직전 평단·수량·평가손익'은 여기서 읽는다.
+    final_entry_price: float = 0.0
+    final_position_qty: float = 0.0
+    final_unrealized_pct: float = 0.0
 
 
 class RunSessionEvent(SQLModel, table=True):
@@ -872,6 +879,10 @@ def _migrate() -> None:
             "user_macro_id": "ALTER TABLE runsession ADD COLUMN user_macro_id INTEGER",
             "macro_origin": "ALTER TABLE runsession ADD COLUMN macro_origin TEXT DEFAULT ''",
             "macro_digest": "ALTER TABLE runsession ADD COLUMN macro_digest TEXT DEFAULT ''",
+            "pnl_alert_pct": "ALTER TABLE runsession ADD COLUMN pnl_alert_pct REAL DEFAULT 0",
+            "final_entry_price": "ALTER TABLE runsession ADD COLUMN final_entry_price REAL DEFAULT 0",
+            "final_position_qty": "ALTER TABLE runsession ADD COLUMN final_position_qty REAL DEFAULT 0",
+            "final_unrealized_pct": "ALTER TABLE runsession ADD COLUMN final_unrealized_pct REAL DEFAULT 0",
         },
         "tickernewssnapshot": {
             "claim_token": "ALTER TABLE tickernewssnapshot ADD COLUMN claim_token TEXT DEFAULT ''",
@@ -973,6 +984,10 @@ _PG_ADDED_COLUMNS = {
         "runner_version": "TEXT DEFAULT ''",
         "macro_origin": "TEXT DEFAULT ''",
         "macro_digest": "TEXT DEFAULT ''",
+        "pnl_alert_pct": "DOUBLE PRECISION NOT NULL DEFAULT 0",
+        "final_entry_price": "DOUBLE PRECISION NOT NULL DEFAULT 0",
+        "final_position_qty": "DOUBLE PRECISION NOT NULL DEFAULT 0",
+        "final_unrealized_pct": "DOUBLE PRECISION NOT NULL DEFAULT 0",
     },
     "tickernewssnapshot": {
         "claim_token": "TEXT DEFAULT ''", "last_observed_at": "TEXT DEFAULT ''",

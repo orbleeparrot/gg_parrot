@@ -8,6 +8,13 @@ function signOf(value) {
   return n > 0 ? "+" : n < 0 ? "−" : "";
 }
 
+const QUOTE_ASSETS = ["USDT", "BUSD", "USDC", "FDUSD", "TUSD", "USD"];
+function baseAsset(symbol) {
+  const value = String(symbol || "").toUpperCase();
+  const quote = QUOTE_ASSETS.find((q) => value.endsWith(q));
+  return quote ? value.slice(0, -quote.length) : value;
+}
+
 export function toneOf(value) {
   const n = Number(value) || 0;
   return n > 0 ? "up" : n < 0 ? "down" : "flat";
@@ -110,12 +117,28 @@ export function describeRunOutcome(session) {
     detail = s.note || "";
   }
 
+  // 표정은 결과의 부호를 따른다: 포지션이 남았으면 그 평가손익, 청산했으면 청산 직전 평가손익,
+  // 그것도 없으면(옛 실행기) 누적 실현손익. 이익이면 환호, 손실이면 놀람, 0이면 평온.
+  const finalQty = Number(s.final_position_qty) || 0;
+  const resultPct = keptPosition ? Number(s.unrealized_pct) || 0 : finalQty > 0 ? Number(s.final_unrealized_pct) || 0 : null;
+  const resultSign = resultPct !== null ? Math.sign(resultPct) : Math.sign(Number(s.realized_pnl) || 0);
+  if (!stopping && !uncertain && !failed) {
+    avatar = resultSign > 0 ? "signal" : resultSign < 0 ? "warning" : keptPosition ? "warning" : "calm";
+  }
+
   // 아직 끝나지 않았으면 마지막 heartbeat 를 끝점으로 삼는다.
   const endedAt = s.stopped_kst || (stopping ? s.heartbeat_kst : "");
   const elapsed = elapsedLabel(s.started_kst, endedAt);
   const span = [s.started_kst, endedAt].filter(Boolean).join(" → ");
+  // 청산 직전(또는 남아 있는) 포지션의 평단·수량·평가손익 — 스트립에서 보던 서브 정보를 결과에도 남긴다.
+  const positionEntry = keptPosition ? Number(s.entry_price) || 0 : finalQty > 0 ? Number(s.final_entry_price) || 0 : 0;
+  const positionQty = keptPosition ? Number(s.position_qty) || 0 : finalQty;
+  const positionLabel = keptPosition ? "" : "(청산 직전)";
   const rows = [
     { label: "실행 시간", value: elapsed ? `${elapsed} · ${span}` : span || "—", numeric: true },
+    { label: `평단${positionLabel}`, value: positionEntry > 0 ? PRICE.format(positionEntry) : "—", numeric: true },
+    { label: `수량${positionLabel}`, value: positionQty > 0 ? `${QTY.format(positionQty)} ${baseAsset(s.symbol)}`.trim() : "—", numeric: true },
+    { label: "마지막 평가손익", value: resultPct !== null ? formatSignedPct(resultPct) : "—", numeric: true, tone: resultPct !== null ? toneOf(resultPct) : "" },
     { label: "종목·환경", value: `${s.symbol || "—"} · ${marketLabel(s)} · ${s.testnet ? "테스트넷" : "메인넷(실거래)"}` },
     { label: "종료 방식", value: stopModeLabel(s.stop_mode) },
     { label: "마지막 가격", value: Number(s.last_price) ? PRICE.format(Number(s.last_price)) : "—", numeric: true },

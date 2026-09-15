@@ -4875,7 +4875,8 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 
 /* 시장·규제 캐러셀 — 기사 사진 위에 제목. 가운데만 선명, 양옆은 유리 너머처럼 흐리다(§7 의 유리를 카드 프레임에).
    자동으로 넘어가지 않는다. --offset(-2~2) 로 자리·크기·흐림이 정해진다. */
-.news-carousel { display: grid; gap: 12px; }
+/* 열 하나로 고정 — 점(dots)이 수십 개여도 열을 밀어 넓히지 못한다(카드가 열 밖으로 나가던 원인). */
+.news-carousel { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; min-width: 0; }
 .news-carousel-stage {
   --card-w: min(72%, 520px);
   position: relative;
@@ -5006,7 +5007,7 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 .news-carousel-arrow:hover { border-color: rgb(var(--c-brand-line)); color: rgb(var(--c-brand-line)); }
 .news-carousel-arrow:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
 .news-carousel-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 4px; }
-.news-carousel-dots { display: flex; align-items: center; gap: 6px; }
+.news-carousel-dots { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; }
 .news-carousel-dot {
   width: 6px;
   height: 6px;
@@ -8424,6 +8425,8 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 }
 .agent-result-pnl.is-up { color: rgb(var(--c-green-600)); }
 .agent-result-pnl.is-down { color: rgb(var(--c-red-600)); }
+.agent-result-row dd.is-up { color: rgb(var(--c-green-600)); }
+.agent-result-row dd.is-down { color: rgb(var(--c-red-600)); }
 .agent-result-rows { display: grid; margin: 0; }
 .agent-result-row {
   display: flex;

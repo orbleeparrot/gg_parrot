@@ -4,6 +4,7 @@
 // 화살표·키보드·스와이프·옆 카드 클릭으로만 움직인다. 사진이 없는 기사는
 // 어두운 면에 출처 이름으로 대신한다.
 import { useCallback, useEffect, useRef, useState } from "react";
+import { visibleDotIndexes } from "../lib/carouselDots.js";
 
 const VISIBLE_EACH_SIDE = 2;
 const SWIPE_THRESHOLD = 40;
@@ -102,7 +103,9 @@ export default function MarketCarousel({ items, ariaLabel = "시장·규제 헤�
       </div>
       <div className="news-carousel-foot">
         <div className="news-carousel-dots" role="tablist" aria-label="기사 순서">
-          {items.map((item, index) => (
+          {visibleDotIndexes(wrap(active, length), length).map((index) => {
+            const item = items[index];
+            return (
             <button
               key={item.id || index}
               type="button"
@@ -112,7 +115,8 @@ export default function MarketCarousel({ items, ariaLabel = "시장·규제 헤�
               className={`news-carousel-dot ${index === wrap(active, length) ? "is-on" : ""}`}
               onClick={() => setActive(index)}
             />
-          ))}
+            );
+          })}
         </div>
         <span className="news-carousel-count num" aria-live="polite">
           {wrap(active, length) + 1} <small>/ {length}</small>

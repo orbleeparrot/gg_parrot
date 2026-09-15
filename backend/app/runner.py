@@ -60,6 +60,9 @@ EVENT_CAP = int(os.environ.get("RUNNER_EVENT_CAP", "500"))
 EVENT_BATCH_MAX = 100
 EVENT_MESSAGE_MAX = 300
 _EVENT_KINDS = {"start", "info", "signal", "order", "fill", "error", "stop"}
+# 평가손익 알림: 마지막 알림 기준 이만큼 움직였거나(누적), 한 heartbeat 사이 이만큼 급변하면 알린다(%p).
+PNL_ALERT_STEP_PCT = 2.0
+PNL_ALERT_JUMP_PCT = 1.0
 # 이 종류의 실행 이벤트는 헤더 알림(에이전트)으로도 간다. start·stop 은 세션 알림이 따로 있고 info 는 로그일 뿐.
 _NOTIFY_EVENT_LABELS = {"signal": "신호", "order": "주문", "fill": "체결", "error": "오류"}
 
@@ -540,6 +543,7 @@ def heartbeat(user: User, session_id: int, snapshot: dict) -> dict:
             return {"action": row.stop_mode or "stop_only", "reason": "이미 종료 처리된 세션이에요."}
         _append_events(db, row, events)
 
+        previous_pct, previously_in_position = row.unrealized_pct, row.in_position
         row.last_price = float(snapshot.get("last_price", row.last_price) or 0.0)
         row.in_position = bool(snapshot.get("in_position", False))
         row.position_uncertain = bool(snapshot.get("position_uncertain", row.position_uncertain))
@@ -550,11 +554,47 @@ def heartbeat(user: User, session_id: int, snapshot: dict) -> dict:
         if "note" in snapshot:
             row.note = str(snapshot["note"])[:200]
         row.last_heartbeat_at = _now_iso()
+        _alert_pnl_move(db, row, previous_pct, previously_in_position)
         action = row.stop_mode if row.stop_mode in _STOP_MODES else "continue"
         db.add(row)
         db.commit()
     notify_sessions_changed(user.id)
     return {"action": action}
+
+
+def _alert_pnl_move(db, row: RunSession, previous_pct: float, previously_in_position: bool) -> bool:
+    """평가손익이 크게 움직이면 에이전트 알림을 남긴다(커밋은 호출자).
+
+    기준(``pnl_alert_pct``)은 마지막으로 알린 시점의 값이고 포지션이 새로 열리면 0 이다. 기준에서
+    ``PNL_ALERT_STEP_PCT`` 이상 움직였거나 직전 heartbeat 보다 ``PNL_ALERT_JUMP_PCT`` 이상 급변했을 때
+    한 번 알리고 기준을 옮긴다 — 경계에서 왔다 갔다 해도 같은 알림이 반복되지 않는다.
+    """
+    if not row.in_position:
+        row.pnl_alert_pct = 0.0
+        return False
+    if not previously_in_position:
+        row.pnl_alert_pct = 0.0
+    pct = float(row.unrealized_pct or 0.0)
+    moved = pct - float(row.pnl_alert_pct or 0.0)
+    jump = pct - float(previous_pct or 0.0) if previously_in_position else 0.0
+    sudden = abs(jump) >= PNL_ALERT_JUMP_PCT
+    if abs(moved) < PNL_ALERT_STEP_PCT and not sudden:
+        return False
+    delta = jump if sudden else moved
+    direction = "up" if delta > 0 else "down"
+    if sudden:
+        change = f"{jump:+.2f}%p 급{'등' if jump > 0 else '락'}"
+    else:
+        change = f"마지막 알림보다 {moved:+.2f}%p {'상승' if moved > 0 else '하락'}"
+    body = f"{change} · 평단 {row.entry_price:,.2f} → 현재가 {row.last_price:,.2f}"
+    notifications_mod.notify(
+        db, row.user_id, "agent", f"{row.symbol} 평가손익 {pct:+.2f}%", body, "/agents",
+        session_id=row.id,
+        data={"event": "pnl", "symbol": row.symbol, "pct": round(pct, 2), "delta": round(delta, 2),
+              "direction": direction, "sudden": sudden, "entry_price": row.entry_price, "last_price": row.last_price},
+    )
+    row.pnl_alert_pct = pct
+    return True
 
 
 def mark_stopped(
@@ -573,6 +613,11 @@ def mark_stopped(
             raise HTTPException(status_code=404, detail="세션을 찾을 수 없어요.")
         already_final = row.status != "running"
         _append_events(db, row, events)
+        if not already_final and row.in_position:
+            # 청산 후 종료는 아래에서 현재 포지션 값을 0 으로 지운다 — 결과 화면용으로 마지막 포지션을 남긴다.
+            row.final_entry_price = row.entry_price
+            row.final_position_qty = row.position_qty
+            row.final_unrealized_pct = row.unrealized_pct
         row.status = "error" if status == "error" else "stopped"
         if note:
             row.note = str(note)[:200]
@@ -758,6 +803,9 @@ def _session_view(row: RunSession) -> dict:
         "position_qty": row.position_qty,
         "realized_pnl": row.realized_pnl,
         "unrealized_pct": row.unrealized_pct,
+        "final_entry_price": getattr(row, "final_entry_price", 0.0) or 0.0,
+        "final_position_qty": getattr(row, "final_position_qty", 0.0) or 0.0,
+        "final_unrealized_pct": getattr(row, "final_unrealized_pct", 0.0) or 0.0,
         "note": row.note,
         "started_at": row.started_at,
         "started_kst": _kst_label(row.started_at),

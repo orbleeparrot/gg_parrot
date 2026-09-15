@@ -100,15 +100,22 @@ test("결과 표정은 손익 부호를 따르고, 청산 직전 포지션이 �
   assert.equal(win.rows.find((row) => row.label === "수량(청산 직전)").value, "0.0129 BTC");
   assert.deepEqual([win.rows.find((row) => row.label === "마지막 평가손익").value, win.rows.find((row) => row.label === "마지막 평가손익").tone], ["+3.42%", "up"]);
   const loss = describeRunOutcome({ ...base, realized_pnl: -18.4, final_entry_price: 74453.68, final_position_qty: 0.0129, final_unrealized_pct: -1.87 });
-  assert.equal(loss.avatar, "warning", "손실이면 웃지 않는다");
+  assert.equal(loss.avatar, "critical", "손실이면 화난 얼굴");
+  // 마지막 heartbeat 의 평가손익이 0 이어도 총 실현손익이 마이너스면 손실 얼굴 — 화면의 큰 숫자를 따른다
+  const lossFlatLast = describeRunOutcome({ ...base, realized_pnl: -0.1, final_entry_price: 0.989, final_position_qty: 101.21, final_unrealized_pct: 0 });
+  assert.equal(lossFlatLast.avatar, "critical");
+  const winFlatLast = describeRunOutcome({ ...base, realized_pnl: 12.5, final_entry_price: 0.989, final_position_qty: 101.21, final_unrealized_pct: -0.4 });
+  assert.equal(winFlatLast.avatar, "signal");
   assert.equal(loss.rows.find((row) => row.label === "마지막 평가손익").tone, "down");
-  const legacy = describeRunOutcome({ ...base, realized_pnl: -5 });  // 옛 실행기: 청산 직전 값이 없으면 누적 실현손익의 부호
-  assert.equal(legacy.avatar, "warning");
+  const legacy = describeRunOutcome({ ...base, realized_pnl: -5 });  // 옛 실행기: 청산 직전 값이 없어도 누적 실현손익의 부호
+  assert.equal(legacy.avatar, "critical");
   assert.equal(legacy.rows.find((row) => row.label === "평단(청산 직전)").value, "—");
   const flat = describeRunOutcome({ ...base, realized_pnl: 0 });
   assert.equal(flat.avatar, "calm");
   const kept = describeRunOutcome({ ...base, note: "", stop_mode: "stop_only", in_position: true, entry_price: 100, position_qty: 2, unrealized_pct: -0.5 });
-  assert.equal(kept.avatar, "warning");
+  assert.equal(kept.avatar, "critical", "남은 포지션이 손실이면 화난 얼굴");
+  const keptUp = describeRunOutcome({ ...base, note: "", stop_mode: "stop_only", in_position: true, entry_price: 100, position_qty: 2, unrealized_pct: 1.5 });
+  assert.equal(keptUp.avatar, "warning", "남은 포지션이 이익이어도 포지션이 남았다는 경고 얼굴");
   assert.equal(kept.rows.find((row) => row.label === "평단").value, "100");
 });
 

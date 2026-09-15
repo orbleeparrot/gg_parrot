@@ -119,13 +119,15 @@ export function describeRunOutcome(session) {
     detail = s.note || "";
   }
 
-  // 표정은 결과의 부호를 따른다: 포지션이 남았으면 그 평가손익, 청산했으면 청산 직전 평가손익,
-  // 그것도 없으면(옛 실행기) 누적 실현손익. 이익이면 환호, 손실이면 놀람, 0이면 평온.
+  // 표정은 화면의 큰 숫자를 따른다: 청산했으면 총 실현손익, 포지션이 남았으면 그 평가손익의 부호.
+  // 손실이면 critical(화남), 이익이면 signal(환호), 0이면 calm. 포지션이 남은 채 이익·0이면 warning(남은 포지션 경고).
   const finalQty = Number(s.final_position_qty) || 0;
   const resultPct = keptPosition ? Number(s.unrealized_pct) || 0 : finalQty > 0 ? Number(s.final_unrealized_pct) || 0 : null;
-  const resultSign = resultPct !== null ? Math.sign(resultPct) : Math.sign(Number(s.realized_pnl) || 0);
+  const resultSign = keptPosition ? Math.sign(Number(s.unrealized_pct) || 0) : Math.sign(Number(s.realized_pnl) || 0);
   if (!stopping && !uncertain && !failed) {
-    avatar = resultSign > 0 ? "signal" : resultSign < 0 ? "warning" : keptPosition ? "warning" : "calm";
+    if (resultSign < 0) avatar = "critical";
+    else if (keptPosition) avatar = "warning";
+    else avatar = resultSign > 0 ? "signal" : "calm";
   }
 
   // 아직 끝나지 않았으면 마지막 heartbeat 를 끝점으로 삼는다.

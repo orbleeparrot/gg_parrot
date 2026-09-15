@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import time
 from datetime import datetime, timezone
@@ -33,6 +34,7 @@ class NewsArticle(SQLModel, table=True):
         Index("ix_newsarticle_feed_revision", "asset_symbol", "ready", "revision"),
         Index("ix_newsarticle_last_seen", "last_seen_ms"),
         Index("ix_newsarticle_enrichment", "enrichment_pending", "last_seen_ms"),
+        Index("ix_newsarticle_enrichment_due", "enrichment_pending", "enrichment_next_ms"),
     )
     asset_symbol: str = Field(primary_key=True)
     article_id: str = Field(primary_key=True)
@@ -45,6 +47,35 @@ class NewsArticle(SQLModel, table=True):
     analysis_status: str = "pending"
     first_seen_ms: int = Field(sa_type=BigInteger)
     last_seen_ms: int = Field(sa_type=BigInteger)
+    # 저장 전 비교용 해시 — 같은 원본 항목(source_hash)이나 같은 본문(content_hash)이 다시 오면
+    # item_json 을 내려받지 않고 건너뛴다(egress 절감, 2026-09-16).
+    source_hash: str = ""
+    content_hash: str = ""
+    # 보강 재시도 백오프 — 시도 횟수와 다음 재시도 시각. 30초부터 두 배씩(최대 6시간), 상한 뒤엔 pending 을 끈다.
+    enrichment_attempts: int = 0
+    enrichment_next_ms: int = Field(default=0, sa_type=BigInteger)
+
+
+ENRICHMENT_RETRY_BASE_SECONDS = 30
+ENRICHMENT_RETRY_MAX_SECONDS = 6 * 3600
+
+
+def enrichment_max_attempts() -> int:
+    return max(1, int(os.environ.get("POSITION_NEWS_ENRICHMENT_MAX_ATTEMPTS", "12")))
+
+
+def enrichment_retry_delay_ms(attempts: int) -> int:
+    """``attempts`` 번째 실패 뒤 기다릴 시간: 30초 × 2^attempts, 최대 6시간."""
+    seconds = ENRICHMENT_RETRY_BASE_SECONDS * (2 ** max(0, int(attempts)))
+    return min(ENRICHMENT_RETRY_MAX_SECONDS, seconds) * 1000
+
+
+def item_hash(item: dict) -> str:
+    return hashlib.sha256(json.dumps(item, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:32]
+
+
+def text_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:32]
 
 
 class NewsMaintenanceLease(SQLModel, table=True):
@@ -125,16 +156,31 @@ def upsert_articles(asset_symbol: str, items: list[dict], *, analysis: dict | No
             continue
         key = article_id(item)
         incoming[key] = (dict(item), assessments[index] if index < len(assessments) else None)
+    # 1단계: 해시만 가볍게 읽어 같은 항목이 다시 온 행을 고른다 — 본문(item_json)은 내려받지 않는다.
+    digests = {key: item_hash(item) for key, (item, _assessment) in incoming.items()}
+    known = {row.article_id: (row.source_hash, row.content_hash) for row in db.exec(
+        select(NewsArticle.article_id, NewsArticle.source_hash, NewsArticle.content_hash)
+        .where(NewsArticle.asset_symbol == scope, NewsArticle.article_id.in_(list(incoming)))).all()} if incoming else {}
+    skipped = {
+        key for key, (item, assessment) in incoming.items()
+        if key in known and assessment is None
+        and (digests[key] == known[key][1] or (not enrichment_only and digests[key] == known[key][0]))
+    }
+    # 2단계: 새 행이거나 내용이 바뀐 행만 본문까지 읽는다.
+    wanted = [key for key in incoming if key in known and key not in skipped]
     rows = db.exec(select(NewsArticle).where(NewsArticle.asset_symbol == scope,
-                                           NewsArticle.article_id.in_(list(incoming)))
-                   .execution_options(populate_existing=True)).all() if incoming else []
+                                           NewsArticle.article_id.in_(wanted))
+                   .execution_options(populate_existing=True)).all() if wanted else []
     existing = {row.article_id: row for row in rows}
     values = []
+    hash_fixes = []  # 내용은 그대로인데 해시가 비어 있는(예전) 행 — 해시만 채워 다음부터 건너뛴다
     # 헤더 알림용: 이번 저장으로 처음 읽을 수 있게 된(한국어 제목 준비) 기사 제목. 피드가
     # 비어 있던 첫 수집은 세지 않는다 — 세션을 켠 직후 30건이 한꺼번에 울리지 않게.
     prior_ready = state.ready_count
     fresh_titles = []
     for key, (item, assessment) in incoming.items():
+        if key in skipped:
+            continue
         old = existing.get(key)
         old_item = json.loads(old.item_json) if old else {}
         if enrichment_only and (old is None or
@@ -154,10 +200,19 @@ def upsert_articles(asset_symbol: str, items: list[dict], *, analysis: dict | No
         ready = _ready(merged)
         enrichment_pending = not ready or bool(merged.get("content_type") == "community"
             and merged.get("community_body") and merged.get("community_summary_status") not in {"ready", "unavailable"})
+        content_hash = text_hash(item_json)
+        source_hash = old.source_hash if (enrichment_only and old) else digests[key]
         if old and (old.item_json, old.assessment_json, old.analysis_source, old.analysis_status, old.ready, old.enrichment_pending) == (
             item_json, assessment_json, source, status, ready, enrichment_pending
         ):
+            if (old.source_hash, old.content_hash) != (source_hash, content_hash):
+                hash_fixes.append((key, source_hash, content_hash))
             continue
+        # 백오프: 보강이 끝났거나 원본이 바뀌면 처음부터, 보강 재시도가 아직 못 끝낸 행은 예약을 유지한다.
+        if not enrichment_pending or old is None or not enrichment_only:
+            attempts, next_ms = 0, 0
+        else:
+            attempts, next_ms = old.enrichment_attempts, old.enrichment_next_ms
         state.revision += 1
         state.item_count += int(old is None)
         state.ready_count += int(ready) - int(bool(old and old.ready))
@@ -166,7 +221,12 @@ def upsert_articles(asset_symbol: str, items: list[dict], *, analysis: dict | No
         values.append(dict(asset_symbol=scope, article_id=key, revision=state.revision,
                            ready=ready, enrichment_pending=enrichment_pending, item_json=item_json, assessment_json=assessment_json,
                            analysis_source=source, analysis_status=status,
-                           first_seen_ms=old.first_seen_ms if old else millis, last_seen_ms=millis))
+                           first_seen_ms=old.first_seen_ms if old else millis, last_seen_ms=millis,
+                           source_hash=source_hash, content_hash=content_hash,
+                           enrichment_attempts=attempts, enrichment_next_ms=next_ms))
+    for key, source_hash, content_hash in hash_fixes:
+        db.exec(update(NewsArticle).where(NewsArticle.asset_symbol == scope, NewsArticle.article_id == key)
+                .values(source_hash=source_hash, content_hash=content_hash))
     if values:
         statement = insert(NewsArticle).values(values)
         db.exec(statement.on_conflict_do_update(
@@ -276,6 +336,49 @@ def claim_maintenance(name: str = "news-cache-prune", *, interval_seconds: int =
     return won
 
 
+def has_pending_articles(*, now_ms=None, db=None) -> bool:
+    """재시도 시각이 된 보강 대기 행이 하나라도 있는지 — 5초 스캔이 본문을 읽기 전에 묻는 가벼운 질문."""
+    if db is None:
+        with get_session() as owned:
+            return has_pending_articles(now_ms=now_ms, db=owned)
+    millis = int(time.time() * 1000) if now_ms is None else now_ms
+    return db.exec(select(NewsArticle.article_id).where(
+        NewsArticle.enrichment_pending.is_(True), NewsArticle.enrichment_next_ms <= millis).limit(1)).first() is not None
+
+
+def schedule_enrichment_retry(asset_symbol: str, article_ids, *, now_ms=None, db=None) -> dict:
+    """한 배치를 시도하기 전에 다음 재시도를 예약한다(실패해도 곧바로 다시 돌지 않게).
+
+    시도 횟수를 하나 올리고 30초 × 2^횟수(최대 6시간) 뒤로 미룬다. 상한(기본 12회)에 닿은 행은
+    ``enrichment_pending`` 을 꺼서 더는 읽지 않는다. 돌려주는 값은 {"scheduled": n, "given_up": m}.
+    """
+    if db is None:
+        with get_session() as owned:
+            return schedule_enrichment_retry(asset_symbol, article_ids, now_ms=now_ms, db=owned)
+    scope = str(asset_symbol).strip().upper()
+    ids = sorted({str(value) for value in article_ids if value})
+    if not ids:
+        return {"scheduled": 0, "given_up": 0}
+    millis = int(time.time() * 1000) if now_ms is None else now_ms
+    limit = enrichment_max_attempts()
+    by_attempts: dict[int, list[str]] = {}
+    for article_id_, attempts in db.exec(select(NewsArticle.article_id, NewsArticle.enrichment_attempts)
+                                         .where(NewsArticle.asset_symbol == scope, NewsArticle.article_id.in_(ids))).all():
+        by_attempts.setdefault(int(attempts or 0), []).append(article_id_)
+    scheduled = given_up = 0
+    for attempts, keys in by_attempts.items():
+        next_attempts = attempts + 1
+        values = {"enrichment_attempts": next_attempts, "enrichment_next_ms": millis + enrichment_retry_delay_ms(attempts)}
+        if next_attempts >= limit:
+            values["enrichment_pending"] = False
+            given_up += len(keys)
+        else:
+            scheduled += len(keys)
+        db.exec(update(NewsArticle).where(NewsArticle.asset_symbol == scope, NewsArticle.article_id.in_(keys)).values(**values))
+    db.commit()
+    return {"scheduled": scheduled, "given_up": given_up}
+
+
 def pending_article_batches(*, limit=50, now_ms=None, db=None):
     """Bound retry work independently of source collection and HTTP traffic."""
     if db is None:
@@ -285,6 +388,7 @@ def pending_article_batches(*, limit=50, now_ms=None, db=None):
     rows = db.exec(select(NewsArticle).outerjoin(NewsMaintenanceLease,
         NewsMaintenanceLease.name == ("article-enrichment:" + NewsArticle.asset_symbol)).where(
             NewsArticle.enrichment_pending.is_(True),
+            NewsArticle.enrichment_next_ms <= millis,
             or_(NewsMaintenanceLease.name.is_(None), NewsMaintenanceLease.next_run_ms <= millis),
         ).order_by(NewsArticle.last_seen_ms, NewsArticle.article_id).limit(max(1, min(100, limit)))).all()
     batches = {}

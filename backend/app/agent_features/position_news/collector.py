@@ -147,9 +147,17 @@ class ArticlePublisher:
 
 def retry_article_enrichment(*, repo=None, now_ms=None):
     repo = repo or _default_repository()
+    # 5초마다 도는 스캔 — 재시도 시각이 된 행이 없으면 본문을 읽지 않고 끝난다(EXISTS 한 번).
+    has_pending = getattr(repo, "has_pending_articles", None)
+    if has_pending is not None and not has_pending(now_ms=now_ms):
+        return
     for asset, items in repo.pending_article_batches(now_ms=now_ms).items():
         if not repo.claim_article_enrichment(asset, now_ms=now_ms):
             continue
+        # 시도하기 전에 다음 재시도를 예약한다 — 실패·예외가 나도 같은 행을 30초마다 다시 읽지 않는다.
+        schedule = getattr(repo, "schedule_enrichment_retry", None)
+        if schedule is not None:
+            schedule(asset, [item.get("id") or _article_identity_key(item) for item in items], now_ms=now_ms)
         publish = lambda payload: _publish_articles(asset, payload, repo, now_ms=now_ms, enrichment_only=True)
         payload = {"symbol": asset, "items": items}
         result = _localize_collected_payload(payload, repo, now_ms, on_progress=publish)
@@ -169,6 +177,11 @@ def community_progress(payload: dict) -> dict:
                 "ready_count": summaries["ready"], "pending_count": summaries["pending"],
                 "unavailable_count": summaries["unavailable"], "retry_after_seconds": 30,
                 **dict(payload.get("community_summaries") or {})}}
+
+
+def _article_identity_key(item: dict) -> str:
+    from .articles import article_id
+    return article_id(item)
 
 
 def _article_identity(item: dict) -> tuple[str, str, str]:

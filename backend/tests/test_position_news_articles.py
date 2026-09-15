@@ -3,8 +3,8 @@ from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier, Event
 
 import pytest
-from sqlalchemy import event
-from sqlmodel import Session, SQLModel, create_engine
+from sqlalchemy import event, update
+from sqlmodel import Session, SQLModel, create_engine, select
 
 from app import news
 from app.agent_features.position_news import articles, collector, repository, service
@@ -217,3 +217,102 @@ def test_image_patch_refreshes_an_already_cached_orm_article(engine):
         articles.upsert_articles("BTC", [{**raw, "title": "비트코인 ETF 승인", "original_title": raw["title"]}])
         articles.update_article_image("BTC", articles.article_id(raw), {"image_resolved": True}, db=db)
     assert articles.read_article_feed("BTC")["items"][0]["title"] == "비트코인 ETF 승인"
+
+
+def _select_statements(engine):
+    seen = []
+    def record(_conn, _cursor, statement, *_rest):
+        if statement.lstrip().upper().startswith("SELECT"):
+            seen.append(" ".join(statement.split()))
+    event.listen(engine, "before_cursor_execute", record)
+    return seen
+
+
+def test_identical_rediscovery_skips_reading_item_json_and_keeps_revision(engine):
+    raw = item("Bitcoin ETF approved")
+    articles.upsert_articles("BTC", [raw], now_ms=1000)
+    before = articles.read_article_feed("BTC")
+    seen = _select_statements(engine)
+    articles.upsert_articles("BTC", [raw], now_ms=2000)
+    assert not any("newsarticle.item_json" in statement for statement in seen), "같은 항목이 다시 오면 본문을 내려받지 않는다"
+    after = articles.read_article_feed("BTC")
+    assert after["cursor"] == before["cursor"], "내용이 그대로면 revision 도 그대로"
+    with Session(engine) as db:
+        row = db.exec(select(articles.NewsArticle)).one()
+        assert row.last_seen_ms == 2000, "관측 시각은 계속 갱신된다(정리 기준)"
+        assert row.source_hash == articles.item_hash(raw) and row.content_hash == articles.text_hash(row.item_json)
+    # 내용이 바뀐 항목은 본문을 읽고 revision 을 올린다
+    seen.clear()
+    articles.upsert_articles("BTC", [item("Bitcoin ETF approved", excerpt="새 요약")], now_ms=3000)
+    assert any("newsarticle.item_json" in statement for statement in seen)
+    assert articles.read_article_feed("BTC")["cursor"] == before["cursor"] + 1
+
+
+def test_legacy_rows_without_hashes_are_backfilled_then_skipped(engine):
+    raw = item("Bitcoin ETF approved")
+    articles.upsert_articles("BTC", [raw], now_ms=1000)
+    with Session(engine) as db:
+        db.exec(update(articles.NewsArticle).values(source_hash="", content_hash=""))
+        db.commit()
+    seen = _select_statements(engine)
+    articles.upsert_articles("BTC", [raw], now_ms=2000)  # 첫 번째: 본문을 읽어 비교하고 해시만 채운다
+    assert any("newsarticle.item_json" in statement for statement in seen)
+    seen.clear()
+    articles.upsert_articles("BTC", [raw], now_ms=3000)  # 두 번째부터 건너뛴다
+    assert not any("newsarticle.item_json" in statement for statement in seen)
+
+
+def test_unchanged_enrichment_publish_is_skipped_by_content_hash(engine):
+    raw = item("Bitcoin ETF approved")
+    articles.upsert_articles("BTC", [raw], now_ms=1000)
+    stored = articles.pending_article_batches(now_ms=1000)["BTC"]
+    seen = _select_statements(engine)
+    articles.upsert_articles("BTC", stored, now_ms=2000, enrichment_only=True)
+    assert not any("newsarticle.item_json" in statement for statement in seen)
+
+
+def test_enrichment_retries_back_off_exponentially_and_give_up(engine, monkeypatch):
+    monkeypatch.setenv("POSITION_NEWS_ENRICHMENT_MAX_ATTEMPTS", "3")
+    raw = item("Bitcoin ETF approved")
+    articles.upsert_articles("BTC", [raw], now_ms=1000)
+    calls = []
+    monkeypatch.setattr(news, "_localize_coin_news_items", lambda items, **_kwargs: calls.append(items) or [])
+    assert articles.has_pending_articles(now_ms=1000) is True
+    collector.retry_article_enrichment(now_ms=1000)          # 1번째 시도 → 30초 뒤
+    assert len(calls) == 1
+    assert articles.has_pending_articles(now_ms=30_999) is False
+    assert articles.pending_article_batches(now_ms=30_999) == {}
+    collector.retry_article_enrichment(now_ms=31_000)        # 2번째 시도 → 60초 뒤
+    assert len(calls) == 2
+    assert articles.pending_article_batches(now_ms=61_000) == {}, "리스는 풀렸지만 백오프(60초)가 아직이다"
+    assert articles.has_pending_articles(now_ms=91_000) is True
+    collector.retry_article_enrichment(now_ms=91_000)        # 3번째 시도 = 상한 → 포기
+    assert len(calls) == 3
+    with Session(engine) as db:
+        row = db.exec(select(articles.NewsArticle)).one()
+        assert row.enrichment_attempts == 3 and row.enrichment_pending is False
+    assert articles.has_pending_articles(now_ms=10_000_000) is False
+    collector.retry_article_enrichment(now_ms=10_000_000)
+    assert len(calls) == 3, "포기한 행은 더 읽지 않는다"
+
+
+def test_retry_delay_doubles_up_to_six_hours_and_success_resets_backoff(engine, monkeypatch):
+    assert [articles.enrichment_retry_delay_ms(n) // 1000 for n in (0, 1, 2, 3, 9, 10, 20)] == [30, 60, 120, 240, 15_360, 21_600, 21_600]
+    raw = item("Bitcoin ETF approved")
+    articles.upsert_articles("BTC", [raw], now_ms=1000)
+    monkeypatch.setattr(news, "_localize_coin_news_items", lambda items, **_kwargs: [])
+    collector.retry_article_enrichment(now_ms=1000)
+    with Session(engine) as db:
+        row = db.exec(select(articles.NewsArticle)).one()
+        assert (row.enrichment_attempts, row.enrichment_next_ms) == (1, 31_000)
+    # 원본이 바뀌어 다시 저장되면 백오프는 처음부터
+    articles.upsert_articles("BTC", [item("Bitcoin ETF approved", excerpt="바뀐 요약")], now_ms=5000)
+    with Session(engine) as db:
+        row = db.exec(select(articles.NewsArticle)).one()
+        assert (row.enrichment_attempts, row.enrichment_next_ms) == (0, 0)
+    # 번역이 끝나 보강이 완료되면 pending 이 꺼지고 백오프도 지운다
+    articles.upsert_articles("BTC", [{**raw, "excerpt": "바뀐 요약", "original_title": raw["title"], "title": "비트코인 ETF 승인"}],
+                             now_ms=6000, enrichment_only=True)
+    with Session(engine) as db:
+        row = db.exec(select(articles.NewsArticle)).one()
+        assert row.ready is True and row.enrichment_pending is False and row.enrichment_attempts == 0

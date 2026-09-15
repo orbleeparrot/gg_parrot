@@ -407,6 +407,22 @@ def pending_article_batches(*, limit=50, now_ms=None, db=None):
     return pending(limit=limit, now_ms=now_ms, db=db)
 
 
+def has_pending_articles(*, now_ms=None, db=None):
+    from .articles import has_pending_articles as pending
+    if db is None:
+        with get_session() as owned:
+            return has_pending_articles(now_ms=now_ms, db=owned)
+    return pending(now_ms=now_ms, db=db)
+
+
+def schedule_enrichment_retry(asset_symbol, article_ids, *, now_ms=None, db=None):
+    from .articles import schedule_enrichment_retry as schedule
+    if db is None:
+        with get_session() as owned:
+            return schedule_enrichment_retry(asset_symbol, article_ids, now_ms=now_ms, db=owned)
+    return schedule(asset_symbol, article_ids, now_ms=now_ms, db=db)
+
+
 def claim_article_enrichment(asset_symbol, *, now_ms=None, db=None):
     from .articles import claim_maintenance as claim
     if db is None:

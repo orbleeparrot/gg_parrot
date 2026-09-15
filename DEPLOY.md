@@ -86,6 +86,19 @@ curl -X POST https://gg-parrot.onrender.com/api/admin/notifications \
   동작하지 않습니다. 연결이 끊기면 1초부터 두 배씩(최대 60초) 다시 붙고, 그동안은 브라우저 폴링(20초)이 메웁니다.
 - Render 웹 인스턴스가 여러 개가 되어도 LISTEN 은 인스턴스마다 하나씩이라 그대로 동작합니다(Redis 불필요).
 
+## 포지션 뉴스 기사 보강 재시도와 Supabase egress (2026-09-16)
+
+9/14~15 Supabase egress 가 하루 1.7~3.2GB 로 뛴 원인은 기사 보강(제목 번역·커뮤니티 요약) 재시도였습니다.
+보강이 끝나지 않는 기사 1,700여 건을 웹 프로세스의 5초 스캔이 자산당 30초 리스마다 `item_json` 통째로 다시 읽고(하루 1.1GB),
+저장할 때마다 기존 행을 통째로 다시 읽었습니다(하루 0.6GB). 알림 기능의 쿼리는 수 KB 수준으로 무관합니다.
+
+- 재시도는 30초부터 두 배씩(최대 6시간) 미루고, `POSITION_NEWS_ENRICHMENT_MAX_ATTEMPTS`(기본 12) 뒤에는
+  `enrichment_pending` 을 꺼서 더는 읽지 않습니다(마이그레이션 `20260915233121`: `enrichment_attempts` · `enrichment_next_ms`).
+- 저장 전에는 `source_hash` · `content_hash` 만 읽어 같은 항목이 다시 온 행을 건너뛰고, 새 행이거나 바뀐 행만 본문을 읽습니다.
+- 5초 스캔은 그대로 두되, 재시도 시각이 된 행이 없으면 EXISTS 한 번으로 끝납니다.
+- 포기한 기사는 독자에게 보이지 않고 피드의 `translation.pending_count` 에는 남습니다(30일 뒤 정리).
+- 전송량은 Supabase 대시보드 Egress 그래프 또는 `pg_stat_statements` 의 `rows`(행 수 × 평균 1.8KB)로 확인합니다.
+
 ## 포지션 뉴스 중앙 워커
 
 웹은 새 티커의 RSS를 즉시 저장하고, Prefect worker는 Playwright 공개 페이지 수집과 AI 보강을 담당합니다. 루트

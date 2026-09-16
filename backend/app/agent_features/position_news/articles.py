@@ -343,10 +343,11 @@ def claim_maintenance(name: str = "news-cache-prune", *, interval_seconds: int =
     millis = int(time.time() * 1000) if now_ms is None else now_ms
     statement = _insert(db)(NewsMaintenanceLease).values(
         name=name, next_run_ms=millis + interval_seconds * 1000)
-    changed = db.exec(statement.on_conflict_do_update(
+    # 승패는 RETURNING 으로 가른다. 운영 Postgres(psycopg)에서 INSERT … ON CONFLICT 의 rowcount 는 -1 이라
+    # `rowcount == 1` 판정이 늘 졌고, 그 때문에 보강 재시도와 정리가 운영에서 한 번도 돌지 않았다(2026-09-16).
+    won = db.exec(statement.on_conflict_do_update(
         index_elements=[NewsMaintenanceLease.name], set_={"next_run_ms": statement.excluded.next_run_ms},
-        where=NewsMaintenanceLease.next_run_ms <= millis))
-    won = changed.rowcount == 1
+        where=NewsMaintenanceLease.next_run_ms <= millis).returning(NewsMaintenanceLease.name)).first() is not None
     db.commit()
     return won
 

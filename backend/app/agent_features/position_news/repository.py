@@ -564,8 +564,9 @@ def reserve_news_api_budget(
             index_elements=[TickerNewsAiBudget.budget_date_kst],
             set_={"used": TickerNewsAiBudget.used + 1, "updated_at": now_iso},
             where=TickerNewsAiBudget.used < limit,
-        )
-        if db.exec(statement).rowcount != 1:
+        ).returning(TickerNewsAiBudget.budget_date_kst)
+        # rowcount 대신 RETURNING — 운영 Postgres 에서 INSERT … ON CONFLICT 의 rowcount 는 -1 이다.
+        if db.exec(statement).first() is None:
             db.rollback()
             return False
     db.commit()

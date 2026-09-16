@@ -372,3 +372,20 @@ def test_retry_delay_caps_at_two_minutes_and_success_resets_backoff(engine, monk
     with Session(engine) as db:
         row = db.exec(select(articles.NewsArticle)).one()
         assert row.ready is True and row.enrichment_pending is False and row.enrichment_attempts == 0
+
+
+def test_lease_and_budget_claims_decide_by_returning_not_rowcount(engine, monkeypatch):
+    """운영 Postgres(psycopg)에서 INSERT … ON CONFLICT 의 rowcount 는 -1 이라 rowcount 판정은 늘 진다 — RETURNING 으로 가른다."""
+    seen = []
+    event.listen(engine, "before_cursor_execute", lambda _c, _cur, statement, *_r: seen.append(" ".join(statement.split())))
+    assert articles.claim_maintenance("article-enrichment:BTC", interval_seconds=30, now_ms=1000) is True
+    assert articles.claim_maintenance("article-enrichment:BTC", interval_seconds=30, now_ms=1001) is False, "리스가 살아 있으면 진다"
+    assert articles.claim_maintenance("article-enrichment:BTC", interval_seconds=30, now_ms=31_000) is True
+    claims = [s for s in seen if s.startswith("INSERT INTO newsmaintenancelease")]
+    assert claims and all("RETURNING" in s for s in claims)
+    monkeypatch.setattr(repository, "get_session", lambda: Session(engine))
+    seen.clear()
+    assert repository.reserve_news_api_budget(total_limit=2, daily_limit=1, now_ms=1000) is True
+    assert repository.reserve_news_api_budget(total_limit=2, daily_limit=1, now_ms=1000) is False, "하루 한도에 닿으면 진다"
+    budget = [s for s in seen if s.startswith("INSERT INTO tickernewsaibudget")]
+    assert budget and all("RETURNING" in s for s in budget)

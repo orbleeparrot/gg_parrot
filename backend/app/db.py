@@ -909,6 +909,10 @@ def _migrate() -> None:
             # Legacy rows need one enrichment pass; subsequent writes explicitly
             # set this flag from their current title/body completion state.
             "enrichment_pending": "ALTER TABLE newsarticle ADD COLUMN enrichment_pending BOOLEAN NOT NULL DEFAULT TRUE",
+            "source_hash": "ALTER TABLE newsarticle ADD COLUMN source_hash TEXT NOT NULL DEFAULT ''",
+            "content_hash": "ALTER TABLE newsarticle ADD COLUMN content_hash TEXT NOT NULL DEFAULT ''",
+            "enrichment_attempts": "ALTER TABLE newsarticle ADD COLUMN enrichment_attempts INTEGER NOT NULL DEFAULT 0",
+            "enrichment_next_ms": "ALTER TABLE newsarticle ADD COLUMN enrichment_next_ms INTEGER NOT NULL DEFAULT 0",
         },
         "dailychallenge": {
             "status": "ALTER TABLE dailychallenge ADD COLUMN status TEXT DEFAULT 'ready'",
@@ -959,7 +963,11 @@ def _migrate() -> None:
 
 
 _PG_ADDED_COLUMNS = {
-    "newsarticle": {"enrichment_pending": "BOOLEAN NOT NULL DEFAULT TRUE"},
+    "newsarticle": {
+        "enrichment_pending": "BOOLEAN NOT NULL DEFAULT TRUE",
+        "source_hash": "VARCHAR NOT NULL DEFAULT ''", "content_hash": "VARCHAR NOT NULL DEFAULT ''",
+        "enrichment_attempts": "INTEGER NOT NULL DEFAULT 0", "enrichment_next_ms": "BIGINT NOT NULL DEFAULT 0",
+    },
     "user": {"bio": "TEXT NOT NULL DEFAULT ''", "auth_version": "INTEGER NOT NULL DEFAULT 0", "is_deleted": "BOOLEAN NOT NULL DEFAULT FALSE"},
     "chatmessage": {"user_id": "INTEGER"},
     "dailychallenge": {
@@ -1006,6 +1014,7 @@ _PG_ADDED_COLUMNS = {
 }
 _PG_INDEXES = {
     "ix_newsarticle_enrichment": ("newsarticle", "enrichment_pending, last_seen_ms"),
+    "ix_newsarticle_enrichment_due": ("newsarticle", "enrichment_pending, enrichment_next_ms"),
     "ix_chatmessage_user_created_ms": ("chatmessage", "user_id, created_ms"),
     "ix_runsession_active_heartbeat": ("runsession", "status, last_heartbeat_at"),
     "ix_runsession_user_macro_id": ("runsession", "user_macro_id"),

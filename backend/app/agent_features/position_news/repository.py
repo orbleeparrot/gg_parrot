@@ -407,6 +407,46 @@ def pending_article_batches(*, limit=50, now_ms=None, db=None):
     return pending(limit=limit, now_ms=now_ms, db=db)
 
 
+def has_pending_articles(*, now_ms=None, db=None):
+    from .articles import has_pending_articles as pending
+    if db is None:
+        with get_session() as owned:
+            return has_pending_articles(now_ms=now_ms, db=owned)
+    return pending(now_ms=now_ms, db=db)
+
+
+def enrichment_stall(*, now_ms=None, db=None):
+    from .articles import enrichment_stall as stall
+    if db is None:
+        with get_session() as owned:
+            return enrichment_stall(now_ms=now_ms, db=owned)
+    return stall(now_ms=now_ms, db=db)
+
+
+def record_enrichment_pass(progressed, *, now_ms=None, db=None):
+    from .articles import record_enrichment_pass as record
+    if db is None:
+        with get_session() as owned:
+            return record_enrichment_pass(progressed, now_ms=now_ms, db=owned)
+    return record(progressed, now_ms=now_ms, db=db)
+
+
+def enrichment_snapshot(asset_symbol, article_ids, *, db=None):
+    from .articles import enrichment_snapshot as snapshot
+    if db is None:
+        with get_session() as owned:
+            return enrichment_snapshot(asset_symbol, article_ids, db=owned)
+    return snapshot(asset_symbol, article_ids, db=db)
+
+
+def settle_enrichment_batch(asset_symbol, before, *, now_ms=None, db=None):
+    from .articles import settle_enrichment_batch as settle
+    if db is None:
+        with get_session() as owned:
+            return settle_enrichment_batch(asset_symbol, before, now_ms=now_ms, db=owned)
+    return settle(asset_symbol, before, now_ms=now_ms, db=db)
+
+
 def claim_article_enrichment(asset_symbol, *, now_ms=None, db=None):
     from .articles import claim_maintenance as claim
     if db is None:

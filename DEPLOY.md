@@ -102,6 +102,9 @@ curl -X POST https://gg-parrot.onrender.com/api/admin/notifications \
 - 5초 스캔은 그대로 두되, 재시도 시각이 된 행이 없으면 EXISTS 한 번으로 끝납니다.
 - 포기한 기사는 독자에게 보이지 않고 피드의 `translation.pending_count` 에는 남습니다(30일 뒤 정리).
 - 전송량은 Supabase 대시보드 Egress 그래프 또는 `pg_stat_statements` 의 `rows`(행 수 × 평균 1.8KB)로 확인합니다.
+- 함정: 운영 Postgres(psycopg)에서 `INSERT … ON CONFLICT DO UPDATE` 의 `rowcount` 는 **-1** 입니다. 리스·예산 claim 을
+  `rowcount == 1` 로 판정하면 늘 지고(SQLite 테스트에서는 정상이라 안 드러남), 실제로 보강 재시도와 뉴스 API 예산 예약이
+  운영에서 한 번도 이기지 못했습니다(2026-09-16 발견). 승패는 `RETURNING` 으로 가릅니다.
 
 ## 포지션 뉴스 중앙 워커
 

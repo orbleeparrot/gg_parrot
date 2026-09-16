@@ -92,8 +92,12 @@ curl -X POST https://gg-parrot.onrender.com/api/admin/notifications \
 보강이 끝나지 않는 기사 1,700여 건을 웹 프로세스의 5초 스캔이 자산당 30초 리스마다 `item_json` 통째로 다시 읽고(하루 1.1GB),
 저장할 때마다 기존 행을 통째로 다시 읽었습니다(하루 0.6GB). 알림 기능의 쿼리는 수 KB 수준으로 무관합니다.
 
-- 재시도는 30초부터 두 배씩(최대 6시간) 미루고, `POSITION_NEWS_ENRICHMENT_MAX_ATTEMPTS`(기본 12) 뒤에는
-  `enrichment_pending` 을 꺼서 더는 읽지 않습니다(마이그레이션 `20260915233121`: `enrichment_attempts` · `enrichment_next_ms`).
+- 기사별 재시도 간격은 30초 → 60초 → 120초에서 멈춥니다(실시간이 중요하니 더 미루지 않습니다). 절약은 루프 전체의
+  '정체' 쉼이 맡습니다: 한 회차에 아무 진전이 없으면(공급자 막힘) `POSITION_NEWS_ENRICHMENT_STALL_SECONDS`(기본 60) 쉬고,
+  쉼이 끝나면 5행짜리 탐침만 보내 공급자가 돌아왔는지 봅니다. 탐침이 성공하면 바로 전체 재시도로 돌아갑니다.
+- 같은 배치의 다른 행은 진전하는데(공급자 정상) 혼자 계속 실패하는 행은 `POSITION_NEWS_ENRICHMENT_MAX_ATTEMPTS`(기본 5)에,
+  `POSITION_NEWS_ENRICHMENT_MAX_AGE_HOURS`(기본 6) 보다 오래된 기사는 나이로 포기합니다 — 늦은 뉴스는 번역돼도 쓸모가 없습니다.
+  (마이그레이션 `20260915233121`: `enrichment_attempts` · `enrichment_next_ms`; 정체 상태는 `newsmaintenancelease` 의 `article-enrichment-stall`)
 - 저장 전에는 `source_hash` · `content_hash` 만 읽어 같은 항목이 다시 온 행을 건너뛰고, 새 행이거나 바뀐 행만 본문을 읽습니다.
 - 5초 스캔은 그대로 두되, 재시도 시각이 된 행이 없으면 EXISTS 한 번으로 끝납니다.
 - 포기한 기사는 독자에게 보이지 않고 피드의 `translation.pending_count` 에는 남습니다(30일 뒤 정리).

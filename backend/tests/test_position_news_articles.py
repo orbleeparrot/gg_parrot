@@ -155,9 +155,11 @@ def test_pending_titles_retry_without_refetching_and_clear_pending_counter(engin
     collector.retry_article_enrichment(now_ms=1001)
     assert len(calls) == 1
     collector.retry_article_enrichment(now_ms=31_000)
+    assert len(calls) == 1, "진전 없는 회차 뒤엔 루프 전체가 60초 쉰다(공급자 막힘으로 본다)"
+    collector.retry_article_enrichment(now_ms=61_000)
     assert len(calls) == 2
     assert articles.read_article_feed("BTC")["translation"]["pending_count"] == 0
-    assert articles.pending_article_batches(now_ms=61_000) == {}
+    assert articles.pending_article_batches(now_ms=121_000) == {}
 
 
 def test_article_pruning_updates_pending_counts_without_resetting_cursor(engine):
@@ -271,40 +273,94 @@ def test_unchanged_enrichment_publish_is_skipped_by_content_hash(engine):
     assert not any("newsarticle.item_json" in statement for statement in seen)
 
 
-def test_enrichment_retries_back_off_exponentially_and_give_up(engine, monkeypatch):
-    monkeypatch.setenv("POSITION_NEWS_ENRICHMENT_MAX_ATTEMPTS", "3")
+def test_no_progress_stalls_the_loop_then_probes_and_recovers_fast(engine, monkeypatch):
     raw = item("Bitcoin ETF approved")
     articles.upsert_articles("BTC", [raw], now_ms=1000)
     calls = []
-    monkeypatch.setattr(news, "_localize_coin_news_items", lambda items, **_kwargs: calls.append(items) or [])
-    assert articles.has_pending_articles(now_ms=1000) is True
-    collector.retry_article_enrichment(now_ms=1000)          # 1번째 시도 → 30초 뒤
+    working = {"on": False}
+    def localize(items, **_kwargs):
+        calls.append(items)
+        return [{**it, "original_title": it["title"], "title": "비트코인 ETF 승인"} for it in items] if working["on"] else []
+    monkeypatch.setattr(news, "_localize_coin_news_items", localize)
+    collector.retry_article_enrichment(now_ms=1000)          # 진전 없음 → 60초 정체
     assert len(calls) == 1
-    assert articles.has_pending_articles(now_ms=30_999) is False
-    assert articles.pending_article_batches(now_ms=30_999) == {}
-    collector.retry_article_enrichment(now_ms=31_000)        # 2번째 시도 → 60초 뒤
-    assert len(calls) == 2
-    assert articles.pending_article_batches(now_ms=61_000) == {}, "리스는 풀렸지만 백오프(60초)가 아직이다"
-    assert articles.has_pending_articles(now_ms=91_000) is True
-    collector.retry_article_enrichment(now_ms=91_000)        # 3번째 시도 = 상한 → 포기
-    assert len(calls) == 3
     with Session(engine) as db:
         row = db.exec(select(articles.NewsArticle)).one()
-        assert row.enrichment_attempts == 3 and row.enrichment_pending is False
-    assert articles.has_pending_articles(now_ms=10_000_000) is False
-    collector.retry_article_enrichment(now_ms=10_000_000)
-    assert len(calls) == 3, "포기한 행은 더 읽지 않는다"
+        assert (row.enrichment_attempts, row.enrichment_next_ms) == (0, 31_000), "공급자가 막힌 회차는 실패로 세지 않고 30초 뒤로만 미룬다"
+    assert articles.enrichment_stall(now_ms=31_000) == {"stalled": True, "probing": True}
+    collector.retry_article_enrichment(now_ms=31_000)        # 행은 재시도 시각이 됐지만 루프가 쉬는 중
+    assert len(calls) == 1
+    collector.retry_article_enrichment(now_ms=61_000)        # 탐침 회차(5행) — 아직 실패 → 다시 60초
+    assert len(calls) == 2
+    assert articles.enrichment_stall(now_ms=100_000) == {"stalled": True, "probing": True}
+    working["on"] = True
+    collector.retry_article_enrichment(now_ms=121_000)       # 공급자 복구 → 탐침 성공 → 정체 해제
+    assert len(calls) == 3
+    assert articles.enrichment_stall(now_ms=121_000) == {"stalled": False, "probing": False}
+    assert articles.read_article_feed("BTC")["translation"]["pending_count"] == 0
+    assert articles.has_pending_articles(now_ms=200_000) is False
 
 
-def test_retry_delay_doubles_up_to_six_hours_and_success_resets_backoff(engine, monkeypatch):
-    assert [articles.enrichment_retry_delay_ms(n) // 1000 for n in (0, 1, 2, 3, 9, 10, 20)] == [30, 60, 120, 240, 15_360, 21_600, 21_600]
+def test_probe_batches_are_small_while_stalled_and_full_afterwards(engine, monkeypatch):
+    rows = [item(f"Bitcoin headline {index}", url=f"https://news.test/{index}") for index in range(8)]
+    articles.upsert_articles("BTC", rows, now_ms=1000)
+    sizes = []
+    monkeypatch.setattr(news, "_localize_coin_news_items", lambda items, **_kwargs: sizes.append(len(items)) or [])
+    collector.retry_article_enrichment(now_ms=1000)
+    assert sizes == [8], "정상 상태의 첫 회차는 전체 배치"
+    collector.retry_article_enrichment(now_ms=61_000)
+    assert sizes == [8, 5], "정체 뒤 탐침은 5행만 읽는다"
+
+
+def test_failures_count_only_when_the_provider_is_healthy_and_give_up_after_the_limit(engine, monkeypatch):
+    monkeypatch.setenv("POSITION_NEWS_ENRICHMENT_MAX_ATTEMPTS", "2")
+    good = item("Bitcoin ETF approved", url="https://news.test/good")
+    bad = item("看涨 STEEMUSDT 合约信号", url="https://news.test/bad")
+    articles.upsert_articles("BTC", [good, bad], now_ms=1000)
+    def localize(items, **_kwargs):
+        return [{**it, "original_title": it["title"], "title": "비트코인 ETF 승인"} for it in items if it["url"].endswith("good")]
+    monkeypatch.setattr(news, "_localize_coin_news_items", localize)
+    collector.retry_article_enrichment(now_ms=1000)          # good 진전 → 정상 회차 → bad 실패 1회(다음 60초 뒤)
+    with Session(engine) as db:
+        bad_row = db.exec(select(articles.NewsArticle).where(articles.NewsArticle.article_id == articles.article_id(bad))).one()
+        assert (bad_row.enrichment_attempts, bad_row.enrichment_next_ms, bad_row.enrichment_pending) == (1, 61_000, True)
+    # 이제 bad 만 남았다 — 혼자 실패하는 회차는 공급자 막힘과 구별할 수 없으니 실패로 세지 않고 정체로 본다
+    collector.retry_article_enrichment(now_ms=61_000)
+    with Session(engine) as db:
+        bad_row = db.exec(select(articles.NewsArticle).where(articles.NewsArticle.article_id == articles.article_id(bad))).one()
+        assert (bad_row.enrichment_attempts, bad_row.enrichment_pending) == (1, True)
+    # 새로 들어온 번역 가능한 기사와 함께 도는 회차에서 또 실패하면 상한(2회)에 닿아 포기한다
+    articles.upsert_articles("BTC", [item("Ether ETF approved", url="https://news.test/good2")], now_ms=200_000)
+    monkeypatch.setattr(news, "_localize_coin_news_items", lambda items, **_kwargs: [
+        {**it, "original_title": it["title"], "title": "이더리움 ETF 승인"} for it in items if it["url"].endswith("good2")])
+    collector.retry_article_enrichment(now_ms=200_000)
+    with Session(engine) as db:
+        bad_row = db.exec(select(articles.NewsArticle).where(articles.NewsArticle.article_id == articles.article_id(bad))).one()
+        assert (bad_row.enrichment_attempts, bad_row.enrichment_pending) == (2, False)
+    assert articles.has_pending_articles(now_ms=1_000_000) is False
+
+
+def test_articles_older_than_the_freshness_window_are_given_up(engine, monkeypatch):
+    raw = item("Bitcoin ETF approved")
+    articles.upsert_articles("BTC", [raw], now_ms=1000)
+    monkeypatch.setattr(news, "_localize_coin_news_items", lambda items, **_kwargs: [])
+    seven_hours = 1000 + 7 * 3600 * 1000
+    collector.retry_article_enrichment(now_ms=seven_hours)
+    with Session(engine) as db:
+        row = db.exec(select(articles.NewsArticle)).one()
+        assert row.enrichment_pending is False, "6시간 넘은 기사는 번역돼도 늦으니 포기한다"
+    assert articles.has_pending_articles(now_ms=seven_hours + 1) is False
+
+
+def test_retry_delay_caps_at_two_minutes_and_success_resets_backoff(engine, monkeypatch):
+    assert [articles.enrichment_retry_delay_ms(n) // 1000 for n in (0, 1, 2, 3, 9)] == [30, 60, 120, 120, 120]
     raw = item("Bitcoin ETF approved")
     articles.upsert_articles("BTC", [raw], now_ms=1000)
     monkeypatch.setattr(news, "_localize_coin_news_items", lambda items, **_kwargs: [])
     collector.retry_article_enrichment(now_ms=1000)
     with Session(engine) as db:
         row = db.exec(select(articles.NewsArticle)).one()
-        assert (row.enrichment_attempts, row.enrichment_next_ms) == (1, 31_000)
+        assert (row.enrichment_attempts, row.enrichment_next_ms) == (0, 31_000)
     # 원본이 바뀌어 다시 저장되면 백오프는 처음부터
     articles.upsert_articles("BTC", [item("Bitcoin ETF approved", excerpt="바뀐 요약")], now_ms=5000)
     with Session(engine) as db:

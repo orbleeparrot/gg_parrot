@@ -146,22 +146,44 @@ class ArticlePublisher:
 
 
 def retry_article_enrichment(*, repo=None, now_ms=None):
+    """보강(제목 번역·커뮤니티 요약)이 끝나지 않은 기사를 다시 시도한다 — 5초마다 불린다.
+
+    egress 를 지키는 세 겹: ① 재시도 시각이 된 행이 없으면 EXISTS 한 번으로 끝난다. ② 직전 회차에
+    아무 진전이 없었으면(공급자 막힘) 루프 전체가 쉬고, 쉼이 끝나면 작은 탐침만 보낸다 — 탐침이 성공하면
+    바로 전체 재시도로 돌아가므로 복구를 늦게 알아채지 않는다. ③ 행마다 30초 → 2분 간격(더 미루지 않는다).
+    """
     repo = repo or _default_repository()
-    # 5초마다 도는 스캔 — 재시도 시각이 된 행이 없으면 본문을 읽지 않고 끝난다(EXISTS 한 번).
     has_pending = getattr(repo, "has_pending_articles", None)
     if has_pending is not None and not has_pending(now_ms=now_ms):
         return
-    for asset, items in repo.pending_article_batches(now_ms=now_ms).items():
+    stall = getattr(repo, "enrichment_stall", None)
+    state = stall(now_ms=now_ms) if stall is not None else {"stalled": False, "probing": False}
+    if state["stalled"]:
+        return
+    from .articles import ENRICHMENT_PROBE_LIMIT
+    batches = repo.pending_article_batches(now_ms=now_ms, limit=ENRICHMENT_PROBE_LIMIT if state["probing"] else 50)
+    snapshot = getattr(repo, "enrichment_snapshot", None)
+    settle = getattr(repo, "settle_enrichment_batch", None)
+    progressed_total = 0
+    for asset, items in batches.items():
         if not repo.claim_article_enrichment(asset, now_ms=now_ms):
             continue
-        # 시도하기 전에 다음 재시도를 예약한다 — 실패·예외가 나도 같은 행을 30초마다 다시 읽지 않는다.
-        schedule = getattr(repo, "schedule_enrichment_retry", None)
-        if schedule is not None:
-            schedule(asset, [item.get("id") or _article_identity_key(item) for item in items], now_ms=now_ms)
+        ids = [item.get("id") or _article_identity_key(item) for item in items]
+        before = snapshot(asset, ids) if snapshot is not None else {}
         publish = lambda payload: _publish_articles(asset, payload, repo, now_ms=now_ms, enrichment_only=True)
         payload = {"symbol": asset, "items": items}
-        result = _localize_collected_payload(payload, repo, now_ms, on_progress=publish)
-        publish(result)
+        try:
+            result = _localize_collected_payload(payload, repo, now_ms, on_progress=publish)
+            publish(result)
+        finally:
+            if settle is not None and before:
+                # 진전한 행은 백오프를 지우고, 남은 행은 30초~2분 뒤로 미룬다(같은 배치에 진전이 있을 때만 실패로 센다).
+                progressed_total += settle(asset, before, now_ms=now_ms)["progressed"]
+        if state["probing"] and progressed_total:
+            break  # 탐침 성공 — 다음 스캔(5초 뒤)부터 전체 배치로 돌아간다
+    record = getattr(repo, "record_enrichment_pass", None)
+    if record is not None:
+        record(progressed_total > 0, now_ms=now_ms)
 
 
 def community_progress(payload: dict) -> dict:

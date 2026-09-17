@@ -238,6 +238,8 @@ def _request_summaries(jobs):
             # HTTP readers still return immediately; retries remain disabled.
             timeout=_request_timeout(),
             messages=[{"role": "user", "content": json.dumps(articles, ensure_ascii=False)}],
+            # 스레드풀에서 돌아 contextvar 가 안 넘어온다 — 용도는 인자로 직접 건넨다.
+            purpose="community_summaries",
         )
         content = "\n".join(block.text for block in response.content if getattr(block, "type", None) == "text").strip()
         if content.startswith("```"):

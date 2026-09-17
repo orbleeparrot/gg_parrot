@@ -30,6 +30,12 @@ async function leaderboardMutation(promise) {
   return result;
 }
 
+// 관리자 집계 기간은 서버가 7~90 으로 받는다. 범위 밖이면 기본 30.
+function adminDays(days) {
+  const n = Number(days);
+  return Number.isFinite(n) && n >= 7 && n <= 90 ? Math.round(n) : 30;
+}
+
 function boardListPath(page, size, { sort = "new", q = "", field = "all" } = {}) {
   const params = new URLSearchParams({ page: String(page), size: String(size) });
   if (sort && sort !== "new") params.set("sort", sort);
@@ -160,6 +166,13 @@ export const api = {
   googleAuth: (credential) =>
     req("/api/auth/google", { method: "POST", body: JSON.stringify({ credential }) }),
   me: () => req("/api/auth/me"),
+  // 관리자 대시보드(User.is_admin 계정만) — 유입·가입·매크로 지표와 뉴스 수집 현황
+  // 관리자 대시보드(require_admin). 집계는 서버가 60초 캐시하므로 여기서는 기간만 넘긴다.
+  adminUsers: (days = 30, options = {}) => req(`/api/admin/users?days=${adminDays(days)}`, { timeoutMs: 20_000, ...options }),
+  adminSignups: (days = 30, options = {}) => req(`/api/admin/signups?days=${adminDays(days)}`, { timeoutMs: 20_000, ...options }),
+  adminMacros: (days = 30, options = {}) => req(`/api/admin/macros?days=${adminDays(days)}`, { timeoutMs: 20_000, ...options }),
+  adminNews: (options = {}) => req("/api/admin/news", { timeoutMs: 20_000, ...options }),
+  adminCosts: (months = 6, options = {}) => req(`/api/admin/costs?months=${Math.min(24, Math.max(1, Number(months) || 6))}`, { timeoutMs: 20_000, ...options }),
   myDashboard: (options = {}) => req("/api/me/dashboard", { timeoutMs: 15_000, ...options }),
   // 오늘(KST)의 일일 퀘스트 — 완료 여부·보상·오늘 번 포인트.
   myQuests: (options = {}) => req("/api/me/quests", options),
@@ -378,6 +391,12 @@ export const api = {
   // 포인트를 소진해 매크로 공개+복사 (창작자에게 70% 분배). 로그인 필요.
   leaderboardUnlock: (entryId) =>
     leaderboardMutation(req(`/api/leaderboard/${entryId}/unlock`, { method: "POST" })),
+  // 매크로 지표 비콘 — 노출(목록에 보임)·열람(행동 버튼). 세션당 1회 dedupe 는 Leaderboard.jsx 가 맡고,
+  // 실패는 호출한 쪽이 삼킨다. 목록 5초 폴링 때문에 서버에서 요청마다 세지 않고 이렇게 보낸다.
+  leaderboardImpressions: (entryIds) =>
+    req("/api/leaderboard/impressions", { method: "POST", timeoutMs: 8_000, keepalive: true, body: JSON.stringify({ entry_ids: entryIds }) }),
+  leaderboardOpen: (entryId) =>
+    req(`/api/leaderboard/${entryId}/open`, { method: "POST", timeoutMs: 8_000, keepalive: true }),
 
   // leaderboard chat (daily KST)
   chatList: ({ beforeId, seenId, afterId, metadataOnly, messageIds, ...options } = {}) => {

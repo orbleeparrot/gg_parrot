@@ -22,6 +22,7 @@ from prefect.types.entrypoint import EntrypointType
 
 from .. import coindesk_api, news as news_mod
 from ..agent_features.position_news import collector, repository
+from ..collector_runs import RunRecorder
 from ..db import init_db
 
 _FLOW_TIMEOUT_SECONDS = max(
@@ -244,32 +245,35 @@ def coindesk_source_probe_flow(browser_budget_seconds: float | None = None) -> d
     No parameters accept arbitrary URLs, positions, or paid model requests.
     This flow has no schedule and shares the worker's one execution slot.
     """
-    configuration = {**effective_config(browser_budget_seconds), "collector_mode": "browser_source_probe"}
-    print(json.dumps({"configuration": configuration}, ensure_ascii=False))
-    descriptors = [
-        {"name": name, "publisher": "CoinDesk", "kind": kind, "scope": scope, "url": url}
-        for name, kind, scope, _query, url in news_mod._COINDESK_DISCOVERY_SOURCES
-    ]
-    started = time.monotonic()
-    results = (news_mod._cached_browser_pages(descriptors) if browser_budget_seconds is None else
-               news_mod._cached_browser_pages(descriptors, budget_seconds=configuration["browser_budget_seconds"]))
-    sources = [news_mod._browser_source_report(descriptor, results[news_mod._browser_page_key(descriptor)])
-               for descriptor in descriptors]
-    _log_browser_sources(sources)
-    successful = sum(source["status"] in {"ready", "empty"} for source in sources)
-    summary = {
-        "event": "browser_source_probe", "configuration": configuration,
-        "status": "ready" if successful == len(sources) else "partial" if successful else "error",
-        "source_count": len(sources), "successful_sources": successful,
-        "elapsed_ms": round((time.monotonic() - started) * 1000),
-        "sources": sources,
-    }
-    print(json.dumps(summary, ensure_ascii=False))
-    if successful != len(sources):
-        raise BrowserEnrichmentUnavailable(
-            f"CoinDesk 공개 페이지 진단: {len(sources) - successful}/{len(sources)}개 소스를 가져오지 못했습니다. "
-            "소스별 HTTP 응답·대기 시간·출판사 cooldown 로그를 확인하세요.", summary)
-    return summary
+    with RunRecorder("coindesk_probe") as run:
+        configuration = {**effective_config(browser_budget_seconds), "collector_mode": "browser_source_probe"}
+        print(json.dumps({"configuration": configuration}, ensure_ascii=False))
+        descriptors = [
+            {"name": name, "publisher": "CoinDesk", "kind": kind, "scope": scope, "url": url}
+            for name, kind, scope, _query, url in news_mod._COINDESK_DISCOVERY_SOURCES
+        ]
+        started = time.monotonic()
+        results = (news_mod._cached_browser_pages(descriptors) if browser_budget_seconds is None else
+                   news_mod._cached_browser_pages(descriptors, budget_seconds=configuration["browser_budget_seconds"]))
+        sources = [news_mod._browser_source_report(descriptor, results[news_mod._browser_page_key(descriptor)])
+                   for descriptor in descriptors]
+        _log_browser_sources(sources)
+        successful = sum(source["status"] in {"ready", "empty"} for source in sources)
+        summary = {
+            "event": "browser_source_probe", "configuration": configuration,
+            "status": "ready" if successful == len(sources) else "partial" if successful else "error",
+            "source_count": len(sources), "successful_sources": successful,
+            "elapsed_ms": round((time.monotonic() - started) * 1000),
+            "sources": sources,
+        }
+        run.report(summary, targets=len(sources), items=sum(int(source.get("item_count") or 0) for source in sources),
+                   failures=len(sources) - successful)
+        print(json.dumps(summary, ensure_ascii=False))
+        if successful != len(sources):
+            raise BrowserEnrichmentUnavailable(
+                f"CoinDesk 공개 페이지 진단: {len(sources) - successful}/{len(sources)}개 소스를 가져오지 못했습니다. "
+                "소스별 HTTP 응답·대기 시간·출판사 cooldown 로그를 확인하세요.", summary)
+        return summary
 
 
 @flow(
@@ -280,6 +284,12 @@ def coindesk_source_probe_flow(browser_budget_seconds: float | None = None) -> d
 )
 def collect_position_news_flow(browser_budget_seconds: float | None = None) -> dict:
     """Collect each shared ticker once within a bounded central cycle."""
+    # 관리자 표용 실행 기록. 요약은 본문이 넘기고, 예외는 그대로 통과하되 오류로 남는다.
+    with RunRecorder("position_news") as run:
+        return _collect_position_news_cycle(browser_budget_seconds, run)
+
+
+def _collect_position_news_cycle(browser_budget_seconds: float | None, run: RunRecorder) -> dict:
     config = effective_config(browser_budget_seconds)
     print(json.dumps({"configuration": config}, ensure_ascii=False))
     collection_seconds = max(
@@ -294,6 +304,7 @@ def collect_position_news_flow(browser_budget_seconds: float | None = None) -> d
     if schedule_lag > max_schedule_lag:
         summary = collector.summarize_results([])
         summary.update(run_status="skipped_late", schedule_lag_seconds=int(schedule_lag), configuration=config)
+        run.report(summary, status="skipped")
         print(json.dumps(summary, ensure_ascii=False))
         return summary
     max_tickers = max(
@@ -458,6 +469,8 @@ def collect_position_news_flow(browser_budget_seconds: float | None = None) -> d
         summary["run_status"] = "source_unavailable"
     elif browser_failures:
         summary["run_status"] = "degraded"
+    run.report(summary, status=str(summary.get("run_status") or "ok"), targets=summary["due_ticker_count"],
+               items=summary["stored"] + summary["reused"], failures=summary["error"] + summary["source_failed_count"])
     print(json.dumps(summary, ensure_ascii=False))
     if source_circuit_open:
         raise NewsSourceCircuitOpen(

@@ -26,6 +26,7 @@ from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types as genai_types
 
+from .api_usage import record_gemini_usage
 from .observability import timed_operation
 
 T = TypeVar("T")
@@ -137,8 +138,13 @@ class _Messages:
         system: str = "",
         messages: list[dict],
         timeout: float | None = None,
+        purpose: str = "",
     ) -> AiResponse:
-        """One request → text blocks. ``timeout`` is seconds, like the callers pass."""
+        """One request → text blocks. ``timeout`` is seconds, like the callers pass.
+
+        ``purpose`` is the call site's code (position_news, ai_explain, …) for the
+        usage ledger only — it never reaches the model.
+        """
         config = genai_types.GenerateContentConfig(
             system_instruction=system or None,
             max_output_tokens=int(max_tokens),
@@ -154,7 +160,17 @@ class _Messages:
                 model=model, contents=_to_contents(messages), config=config,
             )
         except (genai_errors.APIError, httpx.HTTPError) as error:
+            # 실패도 요청 한 건이다 — 여기서 세야 재시도·캐시 히트와 무관하게 과금 단위와 맞는다.
+            record_gemini_usage(model=model, purpose=purpose, usage=None, ok=False)
             raise _translate_error(error) from error
+        except Exception:
+            record_gemini_usage(model=model, purpose=purpose, usage=None, ok=False)
+            raise
+        # usage 는 AiResponse 에 싣지 않는다 — 응답은 캐시에 deep-copy 되어 되돌아오므로
+        # 거기 실으면 캐시 히트마다 다시 세게 된다.
+        record_gemini_usage(
+            model=model, purpose=purpose, usage=getattr(response, "usage_metadata", None), ok=True,
+        )
         # ``.text`` is None when the answer was blocked or empty; callers already
         # treat an empty block as "no answer", so hand them exactly that.
         return AiResponse(content=[TextBlock(text=response.text or "")])

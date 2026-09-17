@@ -71,8 +71,13 @@ function Field({ label, term, children, hint, anchor, wide = false, name, error 
           {term && <InfoTooltip term={term} />}
         </div>
         {renderedControl}
-        {error && <div id={errorId} className="bd-error" role="alert">{error}</div>}
-        {hint && <div id={hintId} className="bd-hint">{hint}</div>}
+        {/* 오류와 설명은 서브그리드의 셋째 줄 한 칸을 같이 쓴다 — 따로 두면 넷째 항목이 칸 밖으로 넘쳐 겹쳤다. */}
+        {(error || hint) && (
+          <div className="bd-foot">
+            {error && <div id={errorId} className="bd-error" role="alert">{error}</div>}
+            {hint && <div id={hintId} className="bd-hint">{hint}</div>}
+          </div>
+        )}
       </div>
     );
   }

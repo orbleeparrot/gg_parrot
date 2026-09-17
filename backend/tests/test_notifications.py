@@ -10,7 +10,7 @@ from sqlalchemy import delete
 from sqlmodel import select
 
 from app import notifications
-from app.db import MacroUnlock, NotificationMessage, get_session
+from app.db import MacroUnlock, NotificationMessage, User, get_session
 from app.main import app
 
 client = TestClient(app)
@@ -47,6 +47,15 @@ def _signup():
         "email": f"nt{tok}@ex.com", "username": f"nt_{tok}", "password": "password123",
     }).json()
     return body["token"], body["user"]
+
+
+def _make_admin(user_id: int):
+    """관리자 권한의 근거는 DB 컬럼 하나뿐이다(auth.is_admin) — 테스트도 같은 문으로 들어간다."""
+    with get_session() as db:
+        account = db.get(User, user_id)
+        account.is_admin = True
+        db.add(account)
+        db.commit()
 
 
 def _auth(token):
@@ -312,13 +321,13 @@ def test_whale_trades_notify_running_sessions_only_after_the_first_observation()
     client.post("/api/runner/stopped", json={"session_id": session_id, "status": "stopped", "note": "포지션 없이 종료"}, headers=key)
 
 
-def test_admin_message_and_notice(monkeypatch):
+def test_admin_message_and_notice():
     admin_token, admin = _signup()
     member_token, member = _signup()
     other_token, _ = _signup()
     body = {"title": "점검 안내", "body": "오늘 밤 서버 점검이 있어요.", "link": "/guide"}
     assert client.post("/api/admin/notifications", json=body, headers=_auth(member_token)).status_code == 403
-    monkeypatch.setenv("ADMIN_USERNAMES", f"someone_else, {admin['username'].upper()} ")
+    _make_admin(admin["id"])
 
     r = client.post("/api/admin/notifications", json=body, headers=_auth(admin_token))
     assert r.status_code == 200, r.text

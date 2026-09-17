@@ -20,6 +20,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 
 from . import paper as paper_mod
+from . import macro_events
 from . import notifications as notifications_mod
 from . import points as points_mod
 from .db import (
@@ -601,6 +602,8 @@ def unlock_entry(viewer: User, entry_id: int) -> dict:
                     f"{viewer.username} 님이 언락했어요.", "/leaderboard",
                     data={"points": share, "entry_id": entry_id, "buyer": viewer.username},
                 )
+            # 관리자 매크로 지표의 언락 카운터 — 결제와 같은 트랜잭션에 얹되(SAVEPOINT), 실패해도 결제는 막지 않는다.
+            macro_events.record_unlock(db, entry_id)
             db.commit()
             db.refresh(viewer_row)
 

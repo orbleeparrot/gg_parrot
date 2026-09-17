@@ -23,7 +23,9 @@
 .me-tier-icon.is-diamond { color: rgb(var(--c-sky-700)); }
 .me-bio { max-width: 38ch; margin: 0; color: rgb(var(--c-slate-700)); font-size: 14px; line-height: 24px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .me-identity-footer { width: 100%; }
-.me-profile-actions { display: flex; justify-content: center; width: 100%; }
+.me-profile-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px; width: 100%; }
+.me-admin-link { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px; padding-inline: 12px; border-radius: 8px; color: rgb(var(--c-sky-700)); font-size: 12px; font-weight: 700; text-decoration: none; }
+.me-admin-link:hover { background: rgb(var(--c-slate-200)); }
 .me-profile-actions > button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: rgb(var(--c-slate-700)); font-size: 12px; font-weight: 600; cursor: pointer; }
 .me-profile-actions > button { padding-inline: 12px; }
 .me-profile-actions > button:hover { background: rgb(var(--c-slate-200)); }

@@ -1950,6 +1950,7 @@ def _summarize(items: list[dict], *, label: str) -> Optional[str]:
                 max_tokens=600,
                 system=system,
                 messages=[{"role": "user", "content": user}],
+                purpose="market_news_summary",
             )
             for block in response.content:
                 if getattr(block, "type", None) == "text":
@@ -2693,6 +2694,8 @@ def _request_korean_title_translations(titles: list[str], *, claim_token: str = 
                 "role": "user",
                 "content": json.dumps(batch, ensure_ascii=False),
             }],
+            # 교정 라운드도 같은 용도로 센다 — 비용 표에서 '번역' 한 줄로 보이게.
+            purpose="title_translation",
         )
         batch_titles = [article["title"] for article in batch]
         requested_ids = {article["id"] for article in batch}
@@ -4022,6 +4025,7 @@ def enrich_coin_news_for_collector(symbol: str, rss_payload: dict, *, browser_bu
     now = datetime.now(timezone.utc)
     max_age_days = _news_archive_days()
     cutoff = now - timedelta(days=max_age_days)
+    page_reports = []
     for descriptor in descriptors:
         result = results[_browser_page_key(descriptor)]
         feed_source = f"{descriptor['publisher'].lower()}_{descriptor['kind']}_playwright"
@@ -4041,7 +4045,9 @@ def enrich_coin_news_for_collector(symbol: str, rss_payload: dict, *, browser_bu
         candidates.extend(items)
         successful += result.get("status") in {"ready", "empty", "partial"}
         incomplete += result.get("status") == "partial"
-        sources.append(_browser_source_report(descriptor, result, items=items, excluded_count=excluded_count))
+        page_reports.append(_browser_source_report(descriptor, result, items=items, excluded_count=excluded_count))
+    sources.extend(page_reports)
+    _record_collector_sources(page_reports)  # 페이지들을 'browser' 한 소스로 접어 하루 누적(관리자 표)
     # Community has separate slots: a new discussion cannot evict an article
     # or force the unchanged editorial batch through paid analysis again.
     merged = _public_news_candidates(candidates, limit=_MAX_COIN_ITEMS, include_archive=True)
@@ -4307,10 +4313,8 @@ def _collected_news_envelope(base: str, name: str, query: str, fetched_sources: 
     )
     google_items = [item for item in google_items if _within_coin_news_window(item)]
     coindesk_items = [item for item in coindesk_items if _within_coin_news_window(item)]
-    if (not google_available and not coindesk_available and not openeden_available and not api_available and not community_available
-            and not any(source["status"] == "ready" for source in extra_sources)):
-        if not partial:
-            raise NewsFetchError("모든 뉴스 RSS/API 소스 수집에 실패했습니다.")
+    all_failed = (not google_available and not coindesk_available and not openeden_available and not api_available
+                  and not community_available and not any(source["status"] == "ready" for source in extra_sources))
     items = _public_news_candidates(
         [*openeden_items, *current_api_items, *coindesk_items, *google_items, *extra_items, *community["items"]],
         limit=_MAX_COIN_ITEMS, include_archive=True)
@@ -4352,8 +4356,24 @@ def _collected_news_envelope(base: str, name: str, query: str, fetched_sources: 
     sources.extend(extra_sources)
     if community["source"]:
         sources.append(community["source"])
+    if not partial:
+        # 소스별 하루 누적(관리자 표)은 소스가 모두 모인 마지막 호출에서만 — 진행 중 호출마다 세면 부풀려진다.
+        # 전부 실패한 회차도 실패로 남겨야 하므로 raise 보다 먼저 센다.
+        _record_collector_sources(sources)
+        if all_failed:
+            raise NewsFetchError("모든 뉴스 RSS/API 소스 수집에 실패했습니다.", sources=sources)
     env["sources"] = sources
     return _with_news_history(env)
+
+
+def _record_collector_sources(sources: list[dict]) -> None:
+    """news.py 는 db 를 모듈 수준에서 import 하지 않는다 — 기록 모듈은 여기서 늦게 가져오고, 실패해도 수집을 막지 않는다."""
+    try:
+        from .collector_runs import bump_news_sources
+
+        bump_news_sources(sources, targets=1)
+    except Exception as exc:
+        logging.getLogger(__name__).warning("Collector source record skipped: %s", type(exc).__name__)
 
 
 def _load_latest_coin_snapshot(symbol: str) -> dict | None:

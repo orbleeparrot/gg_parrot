@@ -18,6 +18,7 @@ from prefect.runtime import flow_run
 from prefect.types.entrypoint import EntrypointType
 
 from ..agent_features.whale_activity import collector, repository
+from ..collector_runs import RunRecorder, bump_source_results
 from ..db import assert_shared_worker_database, init_db
 
 
@@ -48,25 +49,30 @@ def _schedule_lag_seconds():
 
 @flow(name="gg-parrot-whale-activity", retries=0, timeout_seconds=60, log_prints=True)
 def collect_whale_activity_flow():
-    config = collector.configuration()
-    print(json.dumps({"configuration": config}))
-    if _schedule_lag_seconds() > 120:
-        return {"status": "skipped_late", "configuration": config}
-    pairs = discover_pairs_task()
-    results, started = [], time.monotonic()
-    for pair in pairs:
-        if time.monotonic() - started > 12:
-            break
-        results.append(collect_pair_task.submit(pair["symbol"], pair["market"]).result())
-    pruned = repository.prune_inactive_states()
-    summary = {"event": "whale_collection", "active_pair_count": len(pairs),
-               "checked_pair_count": len(results), "failed_count": sum(row["status"] == "error" for row in results),
-               "deferred_pair_count": len(pairs) - len(results), "pruned": pruned,
-               "items": results, "configuration": config, "ai_calls": 0}
-    print(json.dumps(summary))
-    if summary["failed_count"]:
-        raise WhaleCollectionUnavailable(f"공개 체결 수집 {summary['failed_count']}건 실패; 이전 관측 유지, DB 재시도 간격 적용")
-    return summary
+    with RunRecorder("whale_activity") as run:  # 관리자 표용 실행 기록. 예외는 그대로 통과하되 오류로 남는다.
+        config = collector.configuration()
+        print(json.dumps({"configuration": config}))
+        if _schedule_lag_seconds() > 120:
+            run.report(status="skipped")
+            return {"status": "skipped_late", "configuration": config}
+        pairs = discover_pairs_task()
+        results, started = [], time.monotonic()
+        for pair in pairs:
+            if time.monotonic() - started > 12:
+                break
+            results.append(collect_pair_task.submit(pair["symbol"], pair["market"]).result())
+        pruned = repository.prune_inactive_states()
+        summary = {"event": "whale_collection", "active_pair_count": len(pairs),
+                   "checked_pair_count": len(results), "failed_count": sum(row["status"] == "error" for row in results),
+                   "deferred_pair_count": len(pairs) - len(results), "pruned": pruned,
+                   "items": results, "configuration": config, "ai_calls": 0}
+        run.report(summary, targets=len(pairs), items=sum(int(row.get("large_trade_count") or 0) for row in results),
+                   failures=summary["failed_count"])
+        bump_source_results("whale_activity", results, source_key_name="market", items_key="large_trade_count", subject_key="symbol")
+        print(json.dumps(summary))
+        if summary["failed_count"]:
+            raise WhaleCollectionUnavailable(f"공개 체결 수집 {summary['failed_count']}건 실패; 이전 관측 유지, DB 재시도 간격 적용")
+        return summary
 
 
 def create_deployment():

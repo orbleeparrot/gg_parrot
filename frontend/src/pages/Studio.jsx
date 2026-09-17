@@ -32,6 +32,8 @@ import {
 } from "../lib/journey.js";
 import { readStudioSession, writeStudioSession, studioPaperKey } from "../lib/studioSession.js";
 import { backtestBudget, validBacktestLimits } from "../lib/backtestBudget.js";
+import { recordEvent } from "../lib/visit.js";
+import ProductTour from "../components/ProductTour.jsx";
 import "./Studio.css";
 import "./StudioBudget.css";
 import "./StudioSplit.css";
@@ -60,7 +62,23 @@ function UploadIcon() {
 
 // 빌더 종류 — 조건 판의 제목이 곧 드롭다운(`기본 빌더 ▾`). 지금은 기본 빌더뿐이고 프로 빌더는 업데이트 예정이라 메뉴에 비활성으로만 있다.
 // 프로가 열리면 항목의 disabled 를 떼고 고른 값으로 폼을 바꿔 끼운다.
-function BuilderModeMenu() {
+// '사용법 안내' 프로덕트 투어 단계 — 각 anchor 는 조건 판·차트의 data-tour 요소를 가리킨다(cc8ba5e 에서 빠졌던 것을 복원).
+const TOUR_STEPS = [
+  { anchor: "market-briefing", title: "시장 브리핑", body: "먼저 시장 분위기를 확인해요. ‘시장 브리핑 보기’를 누르면 김치 프리미엄(국내외 가격 차이 · +김프/−역프)과 공포·탐욕 지수(0~100, 시장 심리)를 볼 수 있어요. 매매 전 참고용 지표예요." },
+  { anchor: "symbol", title: "종목 검색", body: "확인할 코인을 검색해서 골라요. 예: BTC. 실제 거래되는 종목만 추가되고, 여러 종목을 넣으면 자금을 종목 수만큼 균등하게 나눠 종목마다 따로 돌리고 결과는 총합이에요." },
+  { anchor: "strategy", title: "매매 방식 선택", body: "이동평균 크로스·볼린저·RSI 등 원하는 전략을 골라요. 라벨 옆 ⓘ에 마우스를 올리면 각 매매 방식이 어떤 규칙인지 설명을 확인할 수 있어요." },
+  { anchor: "position", title: "포지션", body: "오를 때 버는 롱(long), 내릴 때 버는 숏(short)을 정해요. 전략에 따라 숏이 막혀 있을 수 있어요." },
+  { anchor: "interval", title: "봉 간격", body: "지표 계산과 체결을 판정하는 캔들 단위예요. 1분·1시간·1일처럼 전략에 맞는 시간 단위를 골라요." },
+  { anchor: "period", title: "테스트 기간", body: "과거 어느 구간의 데이터로 확인할지 정해요. 최근 1년·6개월·3개월 또는 직접 기간을 지정할 수 있어요." },
+  { anchor: "chart", title: "실시간 차트 · 보조지표", body: "지금 고른 종목의 실시간 시세를 보여줘요. 선택한 매매 방식의 보조지표(예: 이동평균·볼린저 밴드)가 함께 그려지고, 설정값을 바꾸면 보조지표도 즉시 따라 바뀌는 걸 확인할 수 있어요." },
+  { anchor: "strategy-params", title: "전략 조건", body: "고른 매매 방식에만 필요한 세부 값을 정해요. 익절 기준·이동평균 기간·밴드 폭처럼 전략마다 항목이 달라져요." },
+  { anchor: "risk", title: "손실 제한", body: "한 번에 쓸 자금 비율과 손절 기준(%)을 정해요. 손절을 켜면 정해진 손실에서 자동으로 정리해 위험을 제한해요." },
+  { anchor: "advanced-risk", title: "고급 위험 관리", body: "하루 최대 손실·최대 보유 시간·손절 뒤 쉬는 시간 같은 추가 안전장치예요. 필요할 때만 설정하면 돼요." },
+  { anchor: "fees", title: "거래 비용과 펀딩비", body: "실제에 가깝게 수수료·체결 가격 차이(슬리피지)·펀딩비를 반영해요. ‘실제 펀딩비 가져오기’로 해당 기간 평균값을 자동으로 채울 수 있어요." },
+  { anchor: "leverage", title: "레버리지", body: "배수를 올리면 수익도 손실도 그만큼 커지고 청산 위험이 생겨요. 1배는 현물과 같아 청산이 없어요. 백테스트·모의에서만 적용돼요." },
+];
+
+function BuilderModeMenu({ onTour }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef(null);
   useEffect(() => {
@@ -84,6 +102,15 @@ function BuilderModeMenu() {
           <button type="button" role="menuitemradio" aria-checked="false" disabled title="프로 빌더는 업데이트 예정이에요" className="studio-mode-item is-soon">
             <span className="studio-mode-check" aria-hidden="true" />프로 빌더<span className="studio-soon-badge">업데이트 예정</span>
           </button>
+          {onTour ? (
+            <>
+              <hr className="studio-mode-sep" aria-hidden="true" />
+              {/* 항목별 설명 투어 — 화면 순서대로 각 칸을 비추며 설명한다. */}
+              <button type="button" role="menuitem" className="studio-mode-item" onClick={() => { setOpen(false); onTour(); }}>
+                <span className="studio-mode-check" aria-hidden="true">?</span>사용법 안내<small className="studio-mode-hint">화면 순서대로</small>
+              </button>
+            </>
+          ) : null}
         </div>
       )}
     </div>
@@ -217,6 +244,7 @@ function AccountStudio({ scope, allowRouterMacro }) {
   );
   const [dockTab, setDockTab] = useState(() => saved?.dockTab || "bt"); // 결과 독의 탭 — 백테스트 → AI 해설 → 최적화 → 페이퍼 → 매크로 등록
   const [shareOpen, setShareOpen] = useState(false); // 저장·공유 다이얼로그
+  const [tourOpen, setTourOpen] = useState(false); // '사용법 안내' 항목별 설명 투어
   const [optimized, setOptimized] = useState(() => !!saved?.optimized); // 최적화를 한 번이라도 돌렸는지(탭 앞 점)
   const [fileImportBusy, setFileImportBusy] = useState(false);
   const [fileImportError, setFileImportError] = useState("");
@@ -385,6 +413,8 @@ function AccountStudio({ scope, allowRouterMacro }) {
         if (budget?.error) setError(budget.error);
         return false;
       }
+      // 퍼널 '백테스트 실행' 단계 — 성공·실패와 무관하게 실행을 시작한 사실을 센다(예산에 막힌 시도는 위에서 걸러졌다).
+      recordEvent("backtest");
       const data = await api.backtest(macro);
       if (!isCurrentAccount() || requestId !== requestIdRef.current) return false;
       setTestedMacro(macro);
@@ -755,7 +785,7 @@ function AccountStudio({ scope, allowRouterMacro }) {
         {/* ── 조건 ── */}
         <aside id="studio-conditions" className="studio-cond" aria-label="조건" {...split.panelProps}>
           <div className="studio-panel-head">
-            <BuilderModeMenu />
+            <BuilderModeMenu onTour={() => setTourOpen(true)} />
             <div className="studio-head-right">
               {/* 매크로 파일 등록 — 가지고 있는 .ggm.json 을 내 매크로에 등록하고 조건에 불러온다. 로그인 전엔 로그인으로. */}
               {!slug && (token ? (
@@ -928,6 +958,7 @@ function AccountStudio({ scope, allowRouterMacro }) {
         />
       ) : null}
 
+      <ProductTour steps={TOUR_STEPS} open={tourOpen} onClose={() => setTourOpen(false)} />
     </div>
   );
 }

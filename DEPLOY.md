@@ -59,8 +59,7 @@ anon/authenticated 권한도 없습니다. 백엔드(`backend/app/notifications.
 - 새 Postgres(스키마가 아직 없는 곳)에서는 백엔드가 부팅 때 `CREATE SCHEMA IF NOT EXISTS notifications` 후 테이블을 만듭니다(`db._migrate_pg`). SQLite 개발·테스트는 스키마 없이 같은 테이블을 씁니다.
 - 보관: 계정당 개인 알림 300건(넘치면 오래된 것부터 삭제), 전체 공지는 최근 30일치만 보입니다.
 
-**관리자 메시지·공지**는 환경 변수 `ADMIN_USERNAMES`(쉼표로 구분한 회원 아이디, 대소문자 무시)에 있는 계정만 보낼 수 있습니다.
-Render 의 웹 서비스에 넣어 두고, 그 계정으로 로그인한 토큰으로 호출합니다:
+**관리자 메시지·공지**는 관리자 계정만 보낼 수 있습니다(아래 '관리자 지정'). 그 계정으로 로그인한 토큰으로 호출합니다:
 
 ```bash
 # 전체 공지 (username 을 비우면 모든 회원)
@@ -74,6 +73,25 @@ curl -X POST https://gg-parrot.onrender.com/api/admin/notifications \
 ```
 
 나머지 알림(퀘스트 완료·매크로 판매/등록·댓글/답글·에이전트 소식)은 해당 동작의 트랜잭션 안에서 자동으로 쌓입니다.
+
+## 관리자 지정
+
+관리자 권한의 근거는 **`user.is_admin` 컬럼 하나뿐**입니다(`auth.is_admin`). 환경 변수로 여는 경로는 2026-09-17 에 없앴습니다 —
+경로가 둘이면 "지금 누가 관리자인가"를 두 군데서 확인해야 하고, 배포 환경 설정만 바꿔도 권한이 생기기 때문입니다.
+마이그레이션은 컬럼만 만들고(기본 `false`), **누구에게 줄지는 저장소에 적지 않습니다**. 운영 DB 에서 직접 켭니다:
+
+```bash
+# 값은 출력하지 않는다 — DATABASE_URL 은 backend/.env 에서만 읽는다
+set -a && . <(grep -E "^DATABASE_URL=" backend/.env) && set +a
+psql "$DATABASE_URL" -c "update \"user\" set is_admin = true where lower(email) = '<계정 이메일>';"
+# 확인 (이메일은 찍지 않는다)
+psql "$DATABASE_URL" -At -c "select count(*) from \"user\" where is_admin;"
+# 회수
+psql "$DATABASE_URL" -c "update \"user\" set is_admin = false where lower(email) = '<계정 이메일>';"
+```
+
+관리자에게만 프로필에 '관리자 대시보드' 버튼이 보이고 `/api/admin/*` 가 열립니다. 컬럼이 없거나 마이그레이션이 덜 돌면
+전원 비관리자로 떨어집니다(잠기는 쪽이 안전). 배포 순서는 **마이그레이션 → 위 UPDATE → 앱 배포** 입니다.
 
 **실시간 전달(SSE)** — 브라우저는 `POST /api/me/notifications/stream-token` 으로 60초짜리 단기 토큰을 받아
 `GET /api/me/notifications/stream?token=…` 에 EventSource 로 붙고, 서버가 `event: unread` 로 안 읽은 수를 밀어 줍니다.

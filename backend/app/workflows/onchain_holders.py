@@ -8,6 +8,7 @@ from prefect import flow, serve, task
 from prefect.types.entrypoint import EntrypointType
 from ..agent_features.whale_activity import onchain_collector as collector
 from ..agent_features.whale_activity import onchain_repository as repository
+from ..collector_runs import RunRecorder, bump_source_results
 from ..db import assert_shared_worker_database, init_db
 from .whale_activity import _schedule_lag_seconds
 
@@ -32,22 +33,27 @@ def collect_coin_task(coin: str):
 
 @flow(name='gg-parrot-onchain-holders', retries=0, timeout_seconds=40, log_prints=True)
 def collect_onchain_holders_flow():
-    config = collector.configuration()
-    print(json.dumps({'configuration': config}))
-    if _schedule_lag_seconds() > 120:
-        return {'status': 'skipped_late', 'configuration': config}
-    coins = discover_coins_task()
-    # One bounded request per minute leaves the shared whale runner available
-    # for 30-second exchange observations. Durable oldest-first ordering is fair.
-    results = [collect_coin_task(coins[0])] if coins else []
-    summary = {'event': 'onchain_collection', 'due_coin_count': len(coins),
-               'checked_coin_count': len(results), 'deferred_coin_count': max(0, len(coins)-len(results)),
-               'failed_count': sum(row['status'] == 'error' for row in results),
-               'items': results, 'configuration': config, 'ai_calls': 0}
-    print(json.dumps(summary))
-    if summary['failed_count']:
-        raise OnchainCollectionUnavailable('온체인 잔고 수집 실패; 이전 관측 유지, DB 재시도 간격 적용')
-    return summary
+    with RunRecorder('onchain_holders') as run:  # 관리자 표용 실행 기록. 예외는 그대로 통과하되 오류로 남는다.
+        config = collector.configuration()
+        print(json.dumps({'configuration': config}))
+        if _schedule_lag_seconds() > 120:
+            run.report(status='skipped')
+            return {'status': 'skipped_late', 'configuration': config}
+        coins = discover_coins_task()
+        # One bounded request per minute leaves the shared whale runner available
+        # for 30-second exchange observations. Durable oldest-first ordering is fair.
+        results = [collect_coin_task(coins[0])] if coins else []
+        summary = {'event': 'onchain_collection', 'due_coin_count': len(coins),
+                   'checked_coin_count': len(results), 'deferred_coin_count': max(0, len(coins)-len(results)),
+                   'failed_count': sum(row['status'] == 'error' for row in results),
+                   'items': results, 'configuration': config, 'ai_calls': 0}
+        run.report(summary, targets=len(coins), items=sum(int(row.get('fetched_count') or 0) for row in results),
+                   failures=summary['failed_count'])
+        bump_source_results('onchain_holders', results, source_key_name='source', items_key='fetched_count', subject_key='coin')
+        print(json.dumps(summary))
+        if summary['failed_count']:
+            raise OnchainCollectionUnavailable('온체인 잔고 수집 실패; 이전 관측 유지, DB 재시도 간격 적용')
+        return summary
 
 
 def create_deployment():

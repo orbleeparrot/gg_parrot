@@ -15,6 +15,7 @@ from typing import Callable, Iterable
 
 from ... import news as news_mod
 from ...ai_runtime import ai_available, default_model
+from ...collector_runs import RunRecorder
 from . import classifier
 
 
@@ -165,22 +166,28 @@ def retry_article_enrichment(*, repo=None, now_ms=None):
     snapshot = getattr(repo, "enrichment_snapshot", None)
     settle = getattr(repo, "settle_enrichment_batch", None)
     progressed_total = 0
-    for asset, items in batches.items():
-        if not repo.claim_article_enrichment(asset, now_ms=now_ms):
-            continue
-        ids = [item.get("id") or _article_identity_key(item) for item in items]
-        before = snapshot(asset, ids) if snapshot is not None else {}
-        publish = lambda payload: _publish_articles(asset, payload, repo, now_ms=now_ms, enrichment_only=True)
-        payload = {"symbol": asset, "items": items}
-        try:
-            result = _localize_collected_payload(payload, repo, now_ms, on_progress=publish)
-            publish(result)
-        finally:
-            if settle is not None and before:
-                # 진전한 행은 백오프를 지우고, 남은 행은 30초~2분 뒤로 미룬다(같은 배치에 진전이 있을 때만 실패로 센다).
-                progressed_total += settle(asset, before, now_ms=now_ms)["progressed"]
-        if state["probing"] and progressed_total:
-            break  # 탐침 성공 — 다음 스캔(5초 뒤)부터 전체 배치로 돌아간다
+    # 관리자 표용 실행 기록은 실제로 배치를 처리한 회차만 남긴다(5초마다 빈 회차까지 쌓지 않는다).
+    with RunRecorder("article_enrichment", enabled=bool(batches)) as run:
+        run.targets = len(batches)
+        for asset, items in batches.items():
+            if not repo.claim_article_enrichment(asset, now_ms=now_ms):
+                continue
+            ids = [item.get("id") or _article_identity_key(item) for item in items]
+            before = snapshot(asset, ids) if snapshot is not None else {}
+            publish = lambda payload: _publish_articles(asset, payload, repo, now_ms=now_ms, enrichment_only=True)
+            payload = {"symbol": asset, "items": items}
+            try:
+                result = _localize_collected_payload(payload, repo, now_ms, on_progress=publish)
+                publish(result)
+            finally:
+                if settle is not None and before:
+                    # 진전한 행은 백오프를 지우고, 남은 행은 30초~2분 뒤로 미룬다(같은 배치에 진전이 있을 때만 실패로 센다).
+                    settled = settle(asset, before, now_ms=now_ms)
+                    progressed_total += settled["progressed"]
+                    run.items = progressed_total
+                    run.failures += int(settled.get("retry") or 0) + int(settled.get("given_up") or 0)
+            if state["probing"] and progressed_total:
+                break  # 탐침 성공 — 다음 스캔(5초 뒤)부터 전체 배치로 돌아간다
     record = getattr(repo, "record_enrichment_pass", None)
     if record is not None:
         record(progressed_total > 0, now_ms=now_ms)

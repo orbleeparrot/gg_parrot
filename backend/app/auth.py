@@ -174,6 +174,7 @@ def user_view(user: User, db: Session | None = None) -> dict:
         "points_balance": user.points_balance,
         "created_at": user.created_at,
         "avatar_url": avatars.avatar_url(user.id, db=db),
+        "is_admin": is_admin(user),
     }
 
 
@@ -427,11 +428,14 @@ def admin_usernames() -> frozenset[str]:
 
 
 def is_admin(user: User) -> bool:
+    """User.is_admin 이 켜진 계정, 또는 부트스트랩용 ADMIN_USERNAMES 에 있는 계정."""
+    if getattr(user, "is_admin", False):
+        return True
     return bool(user.username) and user.username.lower() in admin_usernames()
 
 
 def require_admin(user: User = Depends(current_user_in_session)) -> User:
-    """FastAPI dependency: 로그인 + ADMIN_USERNAMES 에 있는 계정만(아니면 403)."""
+    """FastAPI dependency: 로그인 + 관리자 계정만(아니면 403)."""
     if not is_admin(user):
         raise AuthError(403, "관리자만 쓸 수 있어요.")
     return user

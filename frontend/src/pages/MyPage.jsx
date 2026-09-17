@@ -6,6 +6,7 @@ import { clearAuth, getAuthUser, getToken, mergeFetchedAuthUser, updateAuthUser,
 import { SignOutIcon } from "@phosphor-icons/react/dist/csr/SignOut";
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
 import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
+import { ShieldCheckIcon } from "@phosphor-icons/react/dist/csr/ShieldCheck";
 import { SquaresFourIcon } from "@phosphor-icons/react/dist/csr/SquaresFour";
 import { ArrowsLeftRightIcon } from "@phosphor-icons/react/dist/csr/ArrowsLeftRight";
 import { ArticleIcon } from "@phosphor-icons/react/dist/csr/Article";
@@ -248,6 +249,8 @@ export default function MyPage() {
         {user?.bio ? <p className="me-bio">{user.bio}</p> : null}
         <div className="me-identity-footer"><p className="me-joined num">{user ? joinedLabel(user.created_at) : <span className="me-skeleton" aria-hidden="true" />}</p></div>
         <div className="me-profile-actions">
+          {/* 관리자 계정(User.is_admin)에게만 보이는 대시보드 입구 — 서버가 준 플래그로만 판단한다. */}
+          {user?.is_admin ? <Link to="/admin" className="me-admin-link"><ShieldCheckIcon size={18} aria-hidden="true" />관리자 대시보드</Link> : null}
           <button type="button" onClick={logout}><SignOutIcon size={18} aria-hidden="true" />로그아웃</button>
         </div>
       </div>

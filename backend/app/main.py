@@ -71,6 +71,7 @@ from . import points as points_mod
 from . import quests as quests_mod
 from . import notifications as notifications_mod
 from . import notification_stream
+from . import admin as admin_mod
 from . import account as account_mod
 from . import challenge as challenge_mod
 from . import runner as runner_mod
@@ -79,6 +80,7 @@ from . import user_macros as user_macros_mod
 from .agent_features.position_news.router import router as position_news_router
 from .agent_features.position_news import runtime as position_news_runtime
 from .agent_features.whale_activity import runtime as whale_activity_runtime
+from . import observability
 from .observability import observe_application, router as observability_router
 from fastapi import Depends
 from .db import User
@@ -585,6 +587,57 @@ async def me_notifications_stream(token: str = Query(default="", max_length=2048
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"},
     )
+
+
+class VisitIn(BaseModel):
+    path: str = "/"
+    referrer: str = ""
+    utm_source: str = ""
+    visitor: str = ""  # 브라우저 익명 id(서버는 해시만 저장)
+
+
+@app.post("/api/visit", status_code=204)
+def visit_record(
+    req: VisitIn,
+    request: Request,
+    account: Optional[User] = Depends(auth_mod.optional_user_in_session),
+    db: Session = Depends(request_session),
+) -> Response:
+    """화면 진입 한 건을 남긴다(관리자 대시보드의 유입 지표). 회원이면 회원 id 도 같이."""
+    _enforce_visit_rate_limit(request)
+    admin_mod.record_visit(db, path=req.path, referrer=req.referrer, utm_source=req.utm_source, visitor=req.visitor,
+                           user_id=account.id if account else None, secret=auth_mod.SECRET_KEY)
+    admin_mod.maybe_prune_visits(db)  # 90일 지난 행은 하루 한 번 정리
+    db.commit()
+    return Response(status_code=204)
+
+
+_visit_limiter = observability.SlidingWindowRateLimiter(limit=60, window_seconds=60.0, max_keys=5000)
+
+
+def _enforce_visit_rate_limit(request: Request) -> None:
+    key = (request.client.host if request.client else "") or "anon"
+    if _visit_limiter.retry_after(key):
+        raise HTTPException(status_code=429, detail="잠시 후 다시 시도해 주세요.")
+
+
+@app.get("/api/admin/overview")
+def admin_overview(
+    days: int = Query(default=30, ge=7, le=90),
+    admin: User = Depends(auth_mod.require_admin),
+    db: Session = Depends(request_session),
+) -> dict:
+    """관리자 대시보드 — 유입·가입·매크로 지표(최근 days 일)."""
+    return admin_mod.overview(db, days=days)
+
+
+@app.get("/api/admin/news")
+def admin_news(
+    admin: User = Depends(auth_mod.require_admin),
+    db: Session = Depends(request_session),
+) -> dict:
+    """관리자 대시보드 — 뉴스 수집(크롤링) 현황."""
+    return admin_mod.news_status(db)
 
 
 class AdminNotificationIn(BaseModel):

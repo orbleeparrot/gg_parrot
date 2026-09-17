@@ -160,6 +160,9 @@ export const api = {
   googleAuth: (credential) =>
     req("/api/auth/google", { method: "POST", body: JSON.stringify({ credential }) }),
   me: () => req("/api/auth/me"),
+  // 관리자 대시보드(User.is_admin 계정만) — 유입·가입·매크로 지표와 뉴스 수집 현황
+  adminOverview: (days = 30, options = {}) => req(`/api/admin/overview?days=${Number(days) || 30}`, { timeoutMs: 20_000, ...options }),
+  adminNews: (options = {}) => req("/api/admin/news", { timeoutMs: 20_000, ...options }),
   myDashboard: (options = {}) => req("/api/me/dashboard", { timeoutMs: 15_000, ...options }),
   // 오늘(KST)의 일일 퀘스트 — 완료 여부·보상·오늘 번 포인트.
   myQuests: (options = {}) => req("/api/me/quests", options),

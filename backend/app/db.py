@@ -270,6 +270,8 @@ class User(SQLModel, table=True):
     password_hash: str  # PBKDF2 (see security.py); never returned
     points_balance: int = Field(default=0)  # virtual points (no cash yet)
     created_at: str
+    # 관리자 — 프로필에 '관리자 대시보드' 버튼이 생기고 /api/admin/* 를 쓸 수 있다(admin.py). 기본 False.
+    is_admin: bool = False
 
 
 class UserAvatar(SQLModel, table=True):
@@ -788,6 +790,19 @@ class BoardComment(SQLModel, table=True):
 
 
 
+class Visit(SQLModel, table=True):
+    """화면 진입 한 건(관리자 대시보드의 유입 지표, admin.py). IP·UA 는 저장하지 않는다."""
+
+    id: Optional[int] = Field(default=None, primary_key=True, sa_type=BigInteger().with_variant(Integer, "sqlite"))
+    day_kst: str = Field(index=True)
+    path: str = ""
+    referrer_host: str = ""
+    utm_source: str = ""
+    visitor_hash: str = ""  # 브라우저 익명 id 의 해시(서버 비밀과 섞음)
+    user_id: Optional[int] = None
+    created_ms: int = Field(default=0, sa_type=BigInteger, index=True)
+
+
 class NotificationMessage(SQLModel, table=True):
     """헤더 종 아이콘의 알림 한 건(notifications.py). ``user_id`` 가 None 이면 전체 공지.
 
@@ -838,6 +853,7 @@ def _migrate() -> None:
             "bio": 'ALTER TABLE "user" ADD COLUMN bio TEXT NOT NULL DEFAULT \'\'',
             "auth_version": 'ALTER TABLE "user" ADD COLUMN auth_version INTEGER NOT NULL DEFAULT 0',
             "is_deleted": 'ALTER TABLE "user" ADD COLUMN is_deleted BOOLEAN NOT NULL DEFAULT FALSE',
+            "is_admin": 'ALTER TABLE "user" ADD COLUMN is_admin BOOLEAN NOT NULL DEFAULT FALSE',
         },
         "chatmessage": {
             "user_id": "ALTER TABLE chatmessage ADD COLUMN user_id INTEGER",
@@ -968,7 +984,8 @@ _PG_ADDED_COLUMNS = {
         "source_hash": "VARCHAR NOT NULL DEFAULT ''", "content_hash": "VARCHAR NOT NULL DEFAULT ''",
         "enrichment_attempts": "INTEGER NOT NULL DEFAULT 0", "enrichment_next_ms": "BIGINT NOT NULL DEFAULT 0",
     },
-    "user": {"bio": "TEXT NOT NULL DEFAULT ''", "auth_version": "INTEGER NOT NULL DEFAULT 0", "is_deleted": "BOOLEAN NOT NULL DEFAULT FALSE"},
+    "user": {"bio": "TEXT NOT NULL DEFAULT ''", "auth_version": "INTEGER NOT NULL DEFAULT 0", "is_deleted": "BOOLEAN NOT NULL DEFAULT FALSE",
+             "is_admin": "BOOLEAN NOT NULL DEFAULT FALSE"},
     "chatmessage": {"user_id": "INTEGER"},
     "dailychallenge": {
         "status": "TEXT DEFAULT 'ready'", "claim_token": "TEXT DEFAULT ''",
@@ -1043,6 +1060,7 @@ _PG_PRIVATE_CACHE_TABLES = (
     "dailyquestclaim", "runsessionevent",
     # 게시판 사진·추천·신고와 브라우저 뉴스 캐시 — create_all 로만 생겨 RLS 없이 anon 권한이 열려 있었다(2026-09-15).
     "boardimage", "boardpostvote", "boardreport", "browsernewspagecache",
+    "visit",
 )
 _PG_MIGRATION_LOCK = 0x6767706172726F74  # Stable across web/worker processes and deployments.
 _PG_MIGRATION_ATTEMPTS = 3

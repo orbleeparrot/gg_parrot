@@ -7,6 +7,7 @@ import Home from "./pages/Home.jsx";
 import HotCoinsMarquee from "./components/HotCoinsMarquee.jsx";
 import SiteNavigation from "./components/SiteNavigation.jsx";
 import SiteHeader from "./components/SiteHeader.jsx";
+import { recordVisit } from "./lib/visit.js";
 
 // Keep the first screen small and quick. The builder, charts, guide, and
 // community screens are fetched only when their route is opened.
@@ -25,6 +26,7 @@ const ResetPassword = lazy(() => import("./pages/ResetPassword.jsx"));
 const RunnerInstall = lazy(() => import("./pages/RunnerInstall.jsx"));
 const Guide = lazy(() => import("./pages/Guide.jsx"));
 const Support = lazy(() => import("./pages/Support.jsx"));
+const AdminDashboard = lazy(() => import("./pages/AdminDashboard.jsx"));
 
 function RouteChangeEffects() {
   const { pathname } = useLocation();
@@ -57,8 +59,11 @@ function RouteChangeEffects() {
       ? "빠른 실행"
       : pathname.startsWith("/login")
       ? "로그인"
+      : pathname.startsWith("/admin")
+      ? "관리자 대시보드"
       : "껄무새";
     document.title = section === "껄무새" ? section : `${section} · 껄무새`;
+    recordVisit(pathname);
     if (firstPath.current === pathname) return;
     firstPath.current = pathname;
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
@@ -186,6 +191,7 @@ export default function App() {
               <Route path="/runner" element={<LegacyRunnerRedirect />} />
               <Route path="/guide" element={<Guide />} />
               <Route path="/support" element={<Support />} />
+              <Route path="/admin" element={<AdminDashboard />} />
               <Route path="/news" element={<News />} />
               <Route path="/board" element={<Board />} />
               <Route path="/board/write" element={<BoardWrite />} />

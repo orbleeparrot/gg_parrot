@@ -1,0 +1,167 @@
+/* 관리자 대시보드 — 상자 없이 괘선과 크기로만 위계(DESIGN §1-3). 노랑 없음. 13px 이하는 weight ≥500.
+   위계: 페이지 제목 22/800 → 탭 제목 22/800 → 블록 제목 16/700 → 표 머리글 11.5/700 흐림 → 캡션 12/600 흐림.
+   색은 전부 index.css 의 --c-* 토큰. 차트 계열색은 여기서 --adm-s1~s5 로 묶고 .dark 에서만 바꾼다. */
+.admin-page {
+  --adm-ink: rgb(var(--c-slate-900));
+  --adm-ink-2: rgb(var(--c-slate-700));
+  --adm-muted: rgb(var(--c-slate-500));
+  --adm-line: rgb(var(--c-slate-200));
+  --adm-line-strong: rgb(var(--c-slate-300));
+  --adm-face: rgb(var(--c-slate-100));
+  --adm-up: rgb(var(--c-green-600));
+  --adm-down: rgb(var(--c-red-600));
+  --adm-warn: rgb(var(--c-amber-600));
+  --adm-s1: rgb(var(--c-slate-600));
+  --adm-s2: rgb(var(--c-sky-700));
+  --adm-s3: rgb(var(--c-amber-600));
+  --adm-s4: rgb(var(--c-indigo-500));
+  --adm-s5: rgb(var(--c-slate-300));
+  --adm-grid: rgb(var(--c-slate-200));
+  --adm-heat: var(--c-sky-700);
+  --adm-heat-max: 0.85;
+  width: 100%;
+  max-width: 1320px;
+  min-width: 0;
+  margin-inline: auto;
+  color: var(--adm-ink-2);
+  font-size: 14px;
+  line-height: 1.5;
+}
+/* 다크: 텍스트 사다리대로 작은 글씨 계열(s1)은 slate-700, 앰버는 어두운 바닥에서 읽히는 700 단계.
+   열지도는 밝은 하늘색 위에 밝은 글자가 얹히므로 최대 농도를 낮춘다. */
+.dark .admin-page {
+  --adm-warn: rgb(var(--c-amber-700));
+  --adm-s1: rgb(var(--c-slate-700));
+  --adm-s3: rgb(var(--c-amber-700));
+  --adm-heat-max: 0.55;
+}
+.admin-page .num { font-weight: 600; }
+
+/* ── 머리 ── */
+.adm-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin: 0 0 10px; }
+.adm-head h1 { margin: 0; font-size: 22px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.2; color: var(--adm-ink); }
+.adm-head-right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.adm-stamp { font-size: 12px; font-weight: 600; color: var(--adm-muted); }
+.adm-stamp.is-stale { color: var(--adm-down); }
+.adm-stamp button { margin-left: 6px; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.adm-range { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--adm-line); border-radius: 8px; }
+.adm-range button { min-height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: none; color: var(--adm-muted); font-size: 12px; font-weight: 700; cursor: pointer; }
+.adm-range button.is-on { background: var(--adm-face); color: var(--adm-ink); }
+
+/* ── 탭 ── */
+.adm-tabs { display: flex; gap: 2px; margin: 0 0 4px; border-bottom: 1px solid var(--adm-line); overflow-x: auto; scrollbar-width: none; }
+.adm-tabs::-webkit-scrollbar { display: none; }
+.adm-tabs a { flex: none; padding: 12px 16px; margin-bottom: -1px; border-bottom: 2px solid transparent; color: var(--adm-muted); font-size: 14px; font-weight: 600; text-decoration: none; white-space: nowrap; }
+.adm-tabs a.is-on { color: var(--adm-ink); border-bottom-color: var(--adm-ink); font-weight: 800; }
+.adm-tab-n { margin-left: 6px; padding: 0 6px; border-radius: 999px; background: rgb(var(--c-red-600) / 0.14); color: var(--adm-down); font-size: 11px; }
+
+.adm-tabhead { padding: 18px 0 6px; }
+.adm-tabhead h2 { margin: 0; font-size: 22px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.2; color: var(--adm-ink); }
+
+/* ── 용어 ── */
+.adm-terms { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 2px 32px; margin: 10px 0 0; padding: 12px 0; border-top: 1px solid var(--adm-line); border-bottom: 1px solid var(--adm-line); }
+.adm-terms div { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 8px; padding: 3px 0; font-size: 12.5px; line-height: 1.45; }
+.adm-terms dt { margin: 0; font-weight: 700; color: var(--adm-ink); }
+.adm-terms dd { margin: 0; font-weight: 500; color: var(--adm-muted); }
+
+/* ── KPI ── */
+.adm-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0 20px; margin: 4px 0 8px; }
+.adm-kpis div { padding: 14px 0 12px; border-bottom: 1px solid var(--adm-line); }
+.adm-kpis dt { margin: 0 0 4px; font-size: 11.5px; font-weight: 700; letter-spacing: 0.02em; color: var(--adm-muted); }
+.adm-kpis dd { margin: 0; font-size: 28px; line-height: 1.1; font-weight: 700; color: var(--adm-ink); white-space: nowrap; }
+.adm-kpis dd i { margin-left: 4px; font-style: normal; font-size: 13px; font-weight: 600; color: var(--adm-muted); }
+.adm-kpis dd.is-down { color: var(--adm-down); }
+.adm-kpis dd.is-warn { color: var(--adm-warn); }
+.adm-kpis dd.is-up { color: var(--adm-up); }
+
+/* ── 블록 ── */
+.adm-blk { padding: 22px 0 6px; min-width: 0; }
+.adm-blk-head { display: flex; align-items: baseline; gap: 12px; margin: 0 0 10px; flex-wrap: wrap; }
+.adm-blk-head h3 { margin: 0; font-size: 16px; font-weight: 700; letter-spacing: -0.01em; color: var(--adm-ink); }
+.adm-cap { font-size: 12px; font-weight: 600; color: var(--adm-muted); }
+.adm-blk-actions { margin-left: auto; }
+.adm-more { min-height: 28px; padding: 0 10px; border: 1px solid var(--adm-line-strong); border-radius: 6px; background: none; color: var(--adm-ink-2); font-size: 12px; font-weight: 700; cursor: pointer; }
+.adm-more:hover { background: var(--adm-face); }
+.adm-cols2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 40px; }
+.adm-cols3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 32px; }
+
+/* ── 표 ── */
+.adm-tbl { width: 100%; overflow-x: auto; }
+.adm-tbl table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.adm-tbl th { padding: 7px 10px 7px 0; border-bottom: 2px solid var(--adm-line-strong); text-align: left; font-size: 11.5px; font-weight: 700; letter-spacing: 0.02em; color: var(--adm-muted); white-space: nowrap; }
+.adm-tbl td { padding: 8px 10px 8px 0; border-bottom: 1px solid var(--adm-line); color: var(--adm-ink-2); font-weight: 500; white-space: nowrap; }
+.adm-tbl td.num, .adm-tbl th.num { text-align: right; }
+.adm-tbl th:last-child, .adm-tbl td:last-child { padding-right: 0; }
+.adm-tbl tr.adm-total td { border-top: 2px solid var(--adm-line-strong); font-weight: 700; color: var(--adm-ink); }
+.adm-tbl tr.adm-empty td { padding: 14px 0; text-align: center; color: var(--adm-muted); font-size: 12.5px; font-weight: 600; white-space: normal; }
+.adm-tbl td.adm-heat { text-align: right; color: var(--adm-ink); background: rgb(var(--adm-heat) / calc(var(--heat-a, 0) * var(--adm-heat-max))); }
+.adm-tbl td.adm-muted, .adm-muted { color: var(--adm-muted); }
+.adm-tbl td.adm-wrap { white-space: normal; min-width: 180px; }
+.adm-tbl .adm-err { display: inline-block; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+.adm-swatch { display: inline-block; width: 10px; height: 10px; margin-right: 8px; border-radius: 2px; vertical-align: -1px; }
+.adm-up { color: var(--adm-up); }
+.adm-down { color: var(--adm-down); }
+.adm-warn { color: var(--adm-warn); }
+.adm-empty-note { margin: 0; padding: 14px 0; border-top: 1px solid var(--adm-line); border-bottom: 1px solid var(--adm-line); text-align: center; color: var(--adm-muted); font-size: 12.5px; font-weight: 600; }
+
+/* ── 상태 알약 (뱃지 규격 12/700, 작은 상자는 허용) ── */
+.adm-pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 700; white-space: nowrap; }
+.adm-pill.is-ok { background: rgb(var(--c-green-600) / 0.14); color: var(--adm-up); }
+.adm-pill.is-bad { background: rgb(var(--c-red-600) / 0.14); color: var(--adm-down); }
+.adm-pill.is-wait { background: rgb(var(--c-amber-600) / 0.16); color: var(--adm-warn); }
+.adm-pill.is-off { background: var(--adm-face); color: var(--adm-muted); }
+
+/* ── 종목 상태판 ── */
+.adm-board { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 6px; }
+.adm-cell { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; align-items: center; gap: 6px; padding: 6px 8px; border: 1px solid var(--adm-line); border-radius: 6px; font-size: 12.5px; font-weight: 700; color: var(--adm-ink-2); }
+.adm-cell b { width: 8px; height: 8px; border-radius: 50%; background: var(--adm-line-strong); }
+.adm-cell b.is-ok { background: var(--adm-up); }
+.adm-cell b.is-bad { background: var(--adm-down); }
+.adm-cell b.is-wait { background: var(--adm-warn); }
+.adm-cell small { font-size: 11px; font-weight: 600; color: var(--adm-muted); white-space: nowrap; }
+
+/* ── 차트 ── */
+.adm-chart-wrap { width: 100%; min-width: 0; margin: 2px 0 6px; }
+.adm-chart { display: block; width: 100%; height: auto; touch-action: pan-y; }
+.adm-chart text { font-family: "JetBrains Mono", "Pretendard", ui-monospace, monospace; font-size: 11px; font-weight: 500; fill: var(--adm-muted); font-variant-numeric: tabular-nums; }
+.adm-chart .adm-lab { font-family: "Pretendard", system-ui, sans-serif; font-weight: 600; fill: var(--adm-ink-2); }
+.adm-chart .adm-axis-title { font-family: "Pretendard", system-ui, sans-serif; font-weight: 700; fill: var(--adm-muted); }
+.adm-chart .adm-strong { font-weight: 700; fill: var(--adm-ink); }
+.adm-chart .adm-on-bar { font-weight: 700; fill: rgb(var(--c-slate-50)); }
+.dark .adm-chart .adm-on-bar { fill: rgb(var(--c-brand-ink)); }
+.adm-chart .adm-grid { stroke: var(--adm-grid); stroke-width: 1; }
+.adm-chart .adm-axis { stroke: var(--adm-line-strong); stroke-width: 1; }
+.adm-chart .adm-endpoint { stroke: rgb(var(--c-slate-50)); stroke-width: 2; }
+.adm-chart .adm-hover-line { stroke: var(--adm-line-strong); stroke-width: 1; stroke-dasharray: 3 3; }
+.adm-chart .adm-hover-text { font-weight: 600; fill: var(--adm-ink); paint-order: stroke; stroke: rgb(var(--c-slate-50)); stroke-width: 3px; stroke-linejoin: round; }
+.adm-legend { display: flex; gap: 16px; flex-wrap: wrap; margin: 0 0 4px; font-size: 12px; font-weight: 700; color: var(--adm-muted); }
+.adm-legend b { display: inline-block; width: 12px; height: 12px; margin-right: 6px; border-radius: 3px; vertical-align: -2px; }
+.adm-legend b.is-line { height: 3px; vertical-align: 3px; }
+.adm-donut { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 20px; align-items: center; }
+.adm-donut svg { display: block; }
+.adm-donut-total { font-size: 15px; font-weight: 700; fill: var(--adm-ink); }
+
+/* ── 로딩 · 오류 ── */
+.adm-skel { padding: 18px 0; }
+.adm-skel-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0 20px; margin-bottom: 20px; }
+.adm-skel-kpis span { display: block; height: 58px; border-bottom: 1px solid var(--adm-line); background: linear-gradient(var(--adm-face), var(--adm-face)) 0 12px / 60% 28px no-repeat; }
+.adm-skel-chart { height: 220px; margin: 14px 0 22px; background: var(--adm-face); border-radius: 4px; }
+.adm-skel-row { height: 14px; margin: 14px 0; border-radius: 3px; background: var(--adm-face); }
+.adm-skel-chart, .adm-skel-row, .adm-skel-kpis span { animation: adm-pulse 1.6s ease-in-out infinite; }
+@keyframes adm-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+@media (prefers-reduced-motion: reduce) { .adm-skel-chart, .adm-skel-row, .adm-skel-kpis span { animation: none; } }
+.adm-error { padding: 40px 0; text-align: center; }
+.adm-error p { margin: 0 0 14px; font-size: 14px; font-weight: 600; color: var(--adm-ink-2); }
+.adm-retry { min-height: 40px; padding: 0 16px; border-radius: 12px; font-size: 14px; font-weight: 700; }
+
+/* ── 반응형 ── */
+@media (max-width: 900px) {
+  .adm-cols2, .adm-cols3 { grid-template-columns: minmax(0, 1fr); }
+  .adm-kpis dd { font-size: 22px; }
+}
+@media (max-width: 640px) {
+  .adm-terms div { grid-template-columns: 84px minmax(0, 1fr); }
+  .adm-donut { grid-template-columns: minmax(0, 1fr); justify-items: center; }
+  .adm-donut .adm-tbl { justify-self: stretch; }
+  .adm-head { gap: 10px; }
+}

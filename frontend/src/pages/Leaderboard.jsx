@@ -13,6 +13,45 @@ import { applyVote, settleVote } from "../lib/leaderboardVotes.js";
 import StrategyDetails from "../components/StrategyDetails.jsx";
 import "./LeaderboardMobile.css";
 
+// 매크로 지표 비콘 — 노출(목록에 보임)·열람(빌더로 가져오기 · 빠른 실행 · 언락 중 하나를 누름).
+// 세션당 매크로 1회만 — 목록은 5초마다 다시 오므로 렌더마다 세면 노출이 9배로 부푼다.
+// 중복 판정의 기준은 모듈 메모리 Set 이고, sessionStorage 는 새로고침을 넘기기 위한 씨앗·보관용일 뿐이다.
+// (sessionStorage 가 막힌 브라우저에서 저장소만 믿으면 5초 폴링마다 최대 100개 id 를 다시 보내
+// IP 제한 60회/분까지 서버에 upsert 를 때린다.)
+// 실패는 삼킨다: 지표 하나 잃는 것이지 화면 흐름을 막을 일이 아니다.
+const LB_SEEN_KEY = "ggp:lb_seen";
+const LB_OPEN_KEY = "ggp:lb_open";
+const IMPRESSION_BATCH = 100;
+function readIdSet(key) {
+  try {
+    const raw = JSON.parse(sessionStorage.getItem(key) || "[]");
+    return new Set(Array.isArray(raw) ? raw.map(Number).filter((n) => Number.isSafeInteger(n) && n > 0) : []);
+  } catch {
+    return new Set();
+  }
+}
+function writeIdSet(key, set) {
+  try { sessionStorage.setItem(key, JSON.stringify([...set].slice(-5000))); } catch { /* 저장 못 해도 메모리 Set 이 이번 세션의 중복은 막는다 */ }
+}
+// 모듈 로드 때 한 번만 저장소에서 씨앗을 읽는다. 이후엔 메모리가 진실.
+const seenMem = readIdSet(LB_SEEN_KEY);
+const openMem = readIdSet(LB_OPEN_KEY);
+function sendImpressions(ids) {
+  const fresh = [...new Set(ids.map(Number).filter((n) => Number.isSafeInteger(n) && n > 0 && !seenMem.has(n)))].slice(0, IMPRESSION_BATCH);
+  if (!fresh.length) return;
+  fresh.forEach((id) => seenMem.add(id));
+  writeIdSet(LB_SEEN_KEY, seenMem);
+  try { api.leaderboardImpressions(fresh).catch(() => {}); } catch { /* 비콘 */ }
+}
+function sendOpen(id) {
+  const entryId = Number(id);
+  if (!Number.isSafeInteger(entryId) || entryId < 1) return;
+  if (openMem.has(entryId)) return;
+  openMem.add(entryId);
+  writeIdSet(LB_OPEN_KEY, openMem);
+  try { api.leaderboardOpen(entryId).catch(() => {}); } catch { /* 비콘 */ }
+}
+
 const pad = (n) => String(n).padStart(2, "0");
 
 // 행 액션 아이콘 — 글자 버튼 셋이 오른쪽 끝에 몰리지 않게 아이콘으로 줄인다.
@@ -157,6 +196,12 @@ function AccountLeaderboard() {
     setBusy(true);
     setPage(1);
   }, [auth.token]);
+
+  // 노출 비콘 — 목록이 그려진 뒤, 이번 세션에서 아직 안 보낸 id 만. 화면을 기다리게 하지 않는다.
+  useEffect(() => {
+    if (!items.length) return;
+    sendImpressions(items.map((e) => e.id));
+  }, [items]);
 
   // Only the visible bounded page is refreshed. The countdown owns its timer.
   const refreshBoard = useAdaptivePolling(load, { intervalMs: 5_000, maxIntervalMs: 60_000, pollKey: `${auth.token}:${page}` });
@@ -405,7 +450,7 @@ function AccountLeaderboard() {
                   <div className="lb-command-actions" role="group" aria-label="매크로 이용">
                   {e.locked ? (
                     <button
-                      onClick={() => unlock(e)}
+                      onClick={() => { sendOpen(e.id); unlock(e); }}
                       disabled={unlocking === e.id}
                       className="lb-vote lb-unlock"
                       title={quickRunMode ? "포인트를 써서 언락하고 빠른 실행에 연결 (창작자에게 70% 적립)" : "포인트를 써서 매크로 공개+복사 (창작자에게 70% 적립)"}
@@ -416,7 +461,7 @@ function AccountLeaderboard() {
                     </button>
                   ) : quickRunMode ? (
                     <button
-                      onClick={() => useForQuickRun(e)}
+                      onClick={() => { sendOpen(e.id); useForQuickRun(e); }}
                       disabled={unlocking === e.id}
                       className="btn btn-s btn-secondary"
                       title="이 매크로를 빠른 실행에 연결"
@@ -425,7 +470,7 @@ function AccountLeaderboard() {
                     </button>
                   ) : (
                     <button
-                      onClick={() => copyToBuilder(e)}
+                      onClick={() => { sendOpen(e.id); copyToBuilder(e); }}
                       disabled={unlocking === e.id}
                       className="lb-icon-btn"
                       title="빌더로 복사"

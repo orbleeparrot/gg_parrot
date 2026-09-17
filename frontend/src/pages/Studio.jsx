@@ -32,6 +32,7 @@ import {
 } from "../lib/journey.js";
 import { readStudioSession, writeStudioSession, studioPaperKey } from "../lib/studioSession.js";
 import { backtestBudget, validBacktestLimits } from "../lib/backtestBudget.js";
+import { recordEvent } from "../lib/visit.js";
 import ProductTour from "../components/ProductTour.jsx";
 import "./Studio.css";
 import "./StudioBudget.css";
@@ -412,6 +413,8 @@ function AccountStudio({ scope, allowRouterMacro }) {
         if (budget?.error) setError(budget.error);
         return false;
       }
+      // 퍼널 '백테스트 실행' 단계 — 성공·실패와 무관하게 실행을 시작한 사실을 센다(예산에 막힌 시도는 위에서 걸러졌다).
+      recordEvent("backtest");
       const data = await api.backtest(macro);
       if (!isCurrentAccount() || requestId !== requestIdRef.current) return false;
       setTestedMacro(macro);

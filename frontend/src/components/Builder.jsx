@@ -699,7 +699,7 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
         const lev = Math.max(1, Math.round(Number(form.leverage) || 1));
         const risk = leverageRisk(lev);
         return (
-          <Group anchor="leverage"
+          <Group
             title="레버리지"
             term="leverage"
             anchor="leverage"

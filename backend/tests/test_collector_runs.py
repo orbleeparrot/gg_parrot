@@ -526,3 +526,47 @@ def test_onchain_flow_records_run_and_provider_source(monkeypatch):
     (row,) = _runs("onchain_holders")
     assert (row.status, row.targets, row.items, row.failures) == ("ok", 2, 40, 0)
     assert _sources("onchain_holders")["Blockscout"].items == 40
+
+
+def test_sources_table_folds_warming_and_worker_by_source_key():
+    """같은 크롤러를 공개 뉴스 워밍과 종목 뉴스 워커가 번갈아 불러도 화면에는 소스 하나로 합쳐 보인다.
+
+    운영에서는 워밍이 리스를 먼저 쥐는 일이 잦다 — 엔진으로 갈라 두면 그날 표가 통째로 빈다(2026-09-17).
+    """
+    now = 1_760_000_000_000
+    collector_runs.bump_sources(collector_runs.ENGINE_POSITION_NEWS,
+                                {"google": {"calls": 2, "items": 10, "failures": 0, "targets": 2, "success_ms": now}},
+                                now_ms=now)
+    collector_runs.bump_sources(collector_runs.ENGINE_PUBLIC_NEWS,
+                                {"google": {"calls": 3, "items": 5, "failures": 1, "targets": 3, "error": "HTTP 429",
+                                            "success_ms": 0}},
+                                now_ms=now + 1_000)
+    # 범위 단위 카운터는 소스 표에 끼면 안 된다(엔진 표의 몫).
+    collector_runs.bump_source(collector_runs.ENGINE_PUBLIC_NEWS, "ticker", calls=4, items=60, now_ms=now)
+
+    with get_session() as db:
+        report = collector_runs.engines_report(db, now_ms=now + 2_000)
+    rows = {row["source"]: row for row in report["sources"]}
+    assert "ticker" not in rows and "market" not in rows
+    google = rows["google"]
+    assert (google["calls"], google["items"], google["failures"], google["targets"]) == (5, 15, 1, 5)
+    assert google["failure_pct"] == 20.0 and google["last_error"] == "HTTP 429"
+    assert google["last_success_ms"] == now and google["label"] == "Google News RSS"
+
+
+def test_public_news_warming_records_sources_under_its_own_engine(monkeypatch):
+    """워밍 중 온 소스 기록은 버리지 않고 public_news 로 남긴다 — 버리면 소스 표가 종일 빈다."""
+    from app import public_news
+
+    seen = []
+    monkeypatch.setattr(collector_runs, "bump_news_sources",
+                        lambda sources, **kw: seen.append((len(sources), kw.get("engine"))))
+    plain = public_news._attribute_source_records(lambda sources: seen.append((len(sources), "passthrough")))
+
+    plain([{"name": "google_news_rss", "status": "ready", "item_count": 3}])
+    flag = public_news._warming.set(True)
+    try:
+        plain([{"name": "google_news_rss", "status": "ready", "item_count": 3}])
+    finally:
+        public_news._warming.reset(flag)
+    assert seen == [(1, "passthrough"), (1, collector_runs.ENGINE_PUBLIC_NEWS)]

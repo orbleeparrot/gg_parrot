@@ -291,6 +291,7 @@ def _generate_ai_analysis(items: list[dict], coin_name: str) -> dict:
             max_tokens=_MAX_TOKENS,
             system=system,
             messages=[{"role": "user", "content": user}],
+            purpose="position_news",
         )
         return parse_ai_analysis(_extract_text(response), len(items))
 

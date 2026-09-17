@@ -11,6 +11,7 @@ import asyncio
 import logging
 import json
 import os
+import re
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -31,9 +32,10 @@ from fastapi import (
 )
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.concurrency import run_in_threadpool
-from pydantic import BaseModel
+from starlette.datastructures import Headers
+from pydantic import BaseModel, Field
 from sqlmodel import Session, select
 
 # Load backend/.env (gitignored) for local dev so secrets like GEMINI_API_KEY are
@@ -72,6 +74,7 @@ from . import quests as quests_mod
 from . import notifications as notifications_mod
 from . import notification_stream
 from . import admin as admin_mod
+from . import macro_events
 from . import account as account_mod
 from . import challenge as challenge_mod
 from . import runner as runner_mod
@@ -589,11 +592,99 @@ async def me_notifications_stream(token: str = Query(default="", max_length=2048
     )
 
 
+# --- 비콘(익명 write 경로) — 입력 상한 · body 상한 · 방문자별 한도 ---------------------------------------
+# 문자열 상한은 프론트(lib/visit.js)가 자르는 길이 = admin.record_visit 가 저장하는 길이. 넘으면 조용히 자르지 않고 422 —
+# 정상 브라우저는 절대 넘지 않으니 넘는 건 스크립트다.
 class VisitIn(BaseModel):
-    path: str = "/"
-    referrer: str = ""
-    utm_source: str = ""
-    visitor: str = ""  # 브라우저 익명 id(서버는 해시만 저장)
+    kind: Literal["view", "event"] = "view"  # view(화면 진입) | event(행동: backtest 등)
+    path: str = Field("/", max_length=120)  # view 면 경로, event 면 행동 이름
+    view_key: str = Field("", max_length=64)  # 브라우저가 만든 페이지뷰 id — 재전송 무시·떠날 때 체류시간 갱신용
+    session_key: str = Field("", max_length=64)  # 30분 무활동이면 브라우저가 새로 만든다
+    referrer: str = Field("", max_length=300)
+    utm_source: str = Field("", max_length=60)
+    visitor: str = Field("", max_length=80)  # 브라우저 익명 id(서버는 해시만 저장)
+    is_new: bool = False
+    is_landing: bool = False
+    screen_w: int = 0
+
+
+class VisitLeaveIn(BaseModel):
+    view_key: str = Field("", max_length=64)
+    dwell_ms: int = 0
+
+
+class ImpressionsIn(BaseModel):
+    entry_ids: list[int] = Field(default_factory=list, max_length=macro_events.MAX_IMPRESSION_IDS)
+
+
+# 비콘은 익명·고빈도라 IP 별로 막는다(관측 RUM 과 같은 슬라이딩 창). 페이지뷰마다 진입 1 + 떠남 1.
+_visit_limiter = observability.SlidingWindowRateLimiter(limit=240, window_seconds=60.0, max_keys=5000)
+_leave_limiter = observability.SlidingWindowRateLimiter(limit=240, window_seconds=60.0, max_keys=5000)
+_impressions_limiter = observability.SlidingWindowRateLimiter(limit=60, window_seconds=60.0, max_keys=5000)
+_open_limiter = observability.SlidingWindowRateLimiter(limit=120, window_seconds=60.0, max_keys=5000)
+
+
+def _client_ip(request: Request) -> str:
+    """실제 클라이언트 IP — 프록시(Vercel rewrite → Render) 뒤라 client.host 는 라우터 주소다. 첫 X-Forwarded-For 홉을 우선한다."""
+    forwarded = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+    return forwarded or (request.client.host if request.client else "")
+
+
+def _enforce_beacon_rate_limit(limiter: observability.SlidingWindowRateLimiter, request: Request) -> None:
+    retry_after = limiter.retry_after(_client_ip(request) or "anon")
+    if retry_after:
+        raise HTTPException(status_code=429, detail="잠시 후 다시 시도해 주세요.", headers={"Retry-After": str(retry_after)})
+
+
+BEACON_MAX_BODY_BYTES = 4_096  # 관측 RUM(RUM_MAX_BODY_BYTES)과 같은 상한. 비콘 body 는 커야 수백 바이트다.
+_BEACON_PATH_RE = re.compile(r"^/api/(visit|visit/leave|leaderboard/impressions|leaderboard/\d+/open)/?$")
+
+
+class _BeaconBodyLimit:
+    """비콘 경로의 요청 body 를 BEACON_MAX_BODY_BYTES 로 막는 ASGI 미들웨어.
+
+    FastAPI 는 의존성보다 먼저 body 를 다 읽고 JSON 으로 푼다(fastapi.routing: request.body() → solve_dependencies). 그래서
+    스키마의 max_length 나 라우트 안의 검사는 5 MB body 가 이미 파싱된 뒤에야 돈다. 여기서는 Content-Length 가 크면 읽기
+    전에 413, 선언이 없거나(chunked) 거짓이면 받은 바이트를 세다가 넘는 순간 HTTPException(413) — FastAPI 는 body 를 읽는
+    중 미들웨어가 낸 HTTPException 을 그대로 다시 던지고 ExceptionMiddleware 가 응답으로 바꾼다.
+    """
+
+    def __init__(self, app, *, max_bytes: int = BEACON_MAX_BODY_BYTES) -> None:
+        self.app = app
+        self.max_bytes = max(1, int(max_bytes))
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http" or not _BEACON_PATH_RE.match(scope.get("path") or ""):
+            await self.app(scope, receive, send)
+            return
+        declared = Headers(scope=scope).get("content-length")
+        if declared is not None:
+            try:
+                size = int(declared)
+            except ValueError:
+                size = -1
+            if size < 0:
+                await JSONResponse({"detail": "Content-Length 가 올바르지 않아요."}, status_code=400)(scope, receive, send)
+                return
+            if size > self.max_bytes:
+                await JSONResponse({"detail": "비콘 body 가 너무 커요."}, status_code=413)(scope, receive, send)
+                return
+
+        received = 0
+
+        async def bounded_receive():
+            nonlocal received
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body") or b"")
+                if received > self.max_bytes:
+                    raise HTTPException(status_code=413, detail="비콘 body 가 너무 커요.")
+            return message
+
+        await self.app(scope, bounded_receive, send)
+
+
+app.add_middleware(_BeaconBodyLimit)
 
 
 @app.post("/api/visit", status_code=204)
@@ -603,32 +694,81 @@ def visit_record(
     account: Optional[User] = Depends(auth_mod.optional_user_in_session),
     db: Session = Depends(request_session),
 ) -> Response:
-    """화면 진입 한 건을 남긴다(관리자 대시보드의 유입 지표). 회원이면 회원 id 도 같이."""
-    _enforce_visit_rate_limit(request)
-    admin_mod.record_visit(db, path=req.path, referrer=req.referrer, utm_source=req.utm_source, visitor=req.visitor,
-                           user_id=account.id if account else None, secret=auth_mod.SECRET_KEY)
+    """화면 진입(view) 또는 행동(event) 한 건을 남긴다(관리자 대시보드의 사용자 지표). 회원이면 회원 id 도 같이."""
+    _enforce_beacon_rate_limit(_visit_limiter, request)
+    admin_mod.record_visit(
+        db, kind=req.kind, path=req.path, view_key=req.view_key, session_key=req.session_key, referrer=req.referrer,
+        utm_source=req.utm_source, visitor=req.visitor, is_new=req.is_new, is_landing=req.is_landing, screen_w=req.screen_w,
+        user_id=account.id if account else None, secret=auth_mod.SECRET_KEY,
+    )
     admin_mod.maybe_prune_visits(db)  # 90일 지난 행은 하루 한 번 정리
-    db.commit()
     return Response(status_code=204)
 
 
-_visit_limiter = observability.SlidingWindowRateLimiter(limit=60, window_seconds=60.0, max_keys=5000)
+@app.post("/api/visit/leave", status_code=204)
+def visit_leave(
+    req: VisitLeaveIn,
+    request: Request,
+    db: Session = Depends(request_session),
+) -> Response:
+    """페이지를 떠날 때(sendBeacon) 체류시간 — 같은 view_key 행에 max(기존, 값), 상한 6시간."""
+    _enforce_beacon_rate_limit(_leave_limiter, request)
+    admin_mod.record_leave(db, view_key=req.view_key, dwell_ms=req.dwell_ms)
+    return Response(status_code=204)
 
 
-def _enforce_visit_rate_limit(request: Request) -> None:
-    key = (request.client.host if request.client else "") or "anon"
-    if _visit_limiter.retry_after(key):
-        raise HTTPException(status_code=429, detail="잠시 후 다시 시도해 주세요.")
+@app.post("/api/leaderboard/impressions", status_code=204)
+def leaderboard_impressions(
+    req: ImpressionsIn,
+    request: Request,
+    db: Session = Depends(request_session),
+) -> Response:
+    """목록에 보인 엔트리들의 노출 +1(세션당 엔트리 1회는 브라우저가 지킨다). 100개 넘게 보내면 스키마가 422."""
+    _enforce_beacon_rate_limit(_impressions_limiter, request)
+    macro_events.record_impressions(db, req.entry_ids)
+    return Response(status_code=204)
 
 
-@app.get("/api/admin/overview")
-def admin_overview(
+@app.post("/api/leaderboard/{entry_id}/open", status_code=204)
+def leaderboard_open(
+    entry_id: int,
+    request: Request,
+    db: Session = Depends(request_session),
+) -> Response:
+    """열람 +1 — 매크로 행에서 빌더로 가져오기·빠른 실행·언락 중 하나를 눌렀을 때."""
+    _enforce_beacon_rate_limit(_open_limiter, request)
+    macro_events.record_open(db, entry_id)
+    return Response(status_code=204)
+
+
+@app.get("/api/admin/users")
+def admin_users(
     days: int = Query(default=30, ge=7, le=90),
     admin: User = Depends(auth_mod.require_admin),
     db: Session = Depends(request_session),
 ) -> dict:
-    """관리자 대시보드 — 유입·가입·매크로 지표(최근 days 일)."""
-    return admin_mod.overview(db, days=days)
+    """관리자 대시보드 — 사용자 지표(활성 사용자·세션·채널·페이지·기기, 최근 days 일)."""
+    return admin_mod.users_report(db, days=days)
+
+
+@app.get("/api/admin/signups")
+def admin_signups(
+    days: int = Query(default=30, ge=7, le=90),
+    admin: User = Depends(auth_mod.require_admin),
+    db: Session = Depends(request_session),
+) -> dict:
+    """관리자 대시보드 — 가입·전환 퍼널·코호트 리텐션·가입 방법."""
+    return admin_mod.signups_report(db, days=days)
+
+
+@app.get("/api/admin/macros")
+def admin_macros(
+    days: int = Query(default=30, ge=7, le=90),
+    admin: User = Depends(auth_mod.require_admin),
+    db: Session = Depends(request_session),
+) -> dict:
+    """관리자 대시보드 — 매크로 등록·노출·열람·언락·매출과 실행 세션."""
+    return admin_mod.macros_report(db, days=days)
 
 
 @app.get("/api/admin/news")
@@ -637,7 +777,17 @@ def admin_news(
     db: Session = Depends(request_session),
 ) -> dict:
     """관리자 대시보드 — 뉴스 수집(크롤링) 현황."""
-    return admin_mod.news_status(db)
+    return admin_mod.news_report(db)
+
+
+@app.get("/api/admin/costs")
+def admin_costs(
+    months: int = Query(default=6, ge=1, le=24),
+    admin: User = Depends(auth_mod.require_admin),
+    db: Session = Depends(request_session),
+) -> dict:
+    """관리자 대시보드 — 월별 비용(Gemini 토큰 추정 + 고정액)."""
+    return admin_mod.costs_report(db, months=months)
 
 
 class AdminNotificationIn(BaseModel):
@@ -1372,8 +1522,7 @@ def board_list(
 
 def _board_view_key(request: Request) -> str:
     """조회수용 방문자 키 — IP(프록시 뒤면 첫 X-Forwarded-For) + UA 해시. 저장하지 않고 메모리에서 30분만 기억한다."""
-    forwarded = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
-    ip = forwarded or (request.client.host if request.client else "")
+    ip = _client_ip(request)
     ua = request.headers.get("user-agent", "")
     return hashlib.sha1(f"{ip}|{ua}".encode()).hexdigest()[:16]
 

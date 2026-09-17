@@ -221,6 +221,7 @@ def generate_with_cache_status(
             max_tokens=_MAX_TOKENS,
             system=system,
             messages=[{"role": "user", "content": _USER_PROMPT + facts}],
+            purpose="ai_explain",
         )
         text = _extract_text(response)
         if not text:

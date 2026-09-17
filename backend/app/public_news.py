@@ -6,6 +6,7 @@ running worker through memory, but never fetch, translate or claim DB work.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import os
 import threading
@@ -18,6 +19,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlmodel import Field, SQLModel, select
 
 from . import news, news_images
+from .collector_runs import RunRecorder, bump_source
 from .db import get_session
 from .agent_features.position_news import articles, collector
 from .public_news_cache import responses as _responses
@@ -25,6 +27,31 @@ from .public_news_cache import responses as _responses
 logger = logging.getLogger(__name__)
 _runtime = None
 _INTERNAL = frozenset((*news._COMMUNITY_BODY_FIELDS, "assessment", "analysis"))
+# 종목 수집기가 리스를 못 잡았거나(skipped) 다른 실행에 밀려 결과를 버린(superseded) 회차. 관리자 표에는 '건너뜀'으로
+# 남기고 소스 호출·성공으로는 세지 않는다.
+_NOT_COLLECTED = frozenset({"skipped", "superseded"})
+# 공개 워밍 스레드 표시. run_parallel 이 copy_context 로 소스 로더 스레드에도 넘기므로 워밍 안의 모든 호출에 보인다.
+_warming = contextvars.ContextVar("public_news_warming", default=False)
+
+
+def _skip_source_records_while_warming(record):
+    """news._record_collector_sources 를 감싼다: 공개 워밍(_collect_ticker) 중 온 호출은 버린다.
+
+    news.py 의 소스 누적 훅은 호출 주체를 모르고 position_news 엔진으로만 쓴다. 그대로 두면 같은 fetch 가
+    position_news 소스(google·coindesk…)와 public_news/ticker 로 두 번 세어지고, 웹 프로세스가 워밍마다 소스 수만큼
+    upsert 를 더 한다 — 그 회차는 _record_refresh 가 이미 남긴다. 엔진 표시를 collector_runs 에 두는 게 제자리지만
+    이 모듈만 고치려 훅을 감싼다. 워밍 밖의 호출은 그대로 통과한다.
+    """
+    def guarded(sources):
+        if _warming.get():
+            return
+        record(sources)
+    guarded.__wrapped__ = record
+    return guarded
+
+
+if not hasattr(news._record_collector_sources, "__wrapped__"):
+    news._record_collector_sources = _skip_source_records_while_warming(news._record_collector_sources)
 
 
 class PublicNewsLease(SQLModel, table=True):
@@ -147,7 +174,7 @@ def _read_news(scope: str) -> dict:
     return _public_payload(scope, feed)
 
 
-def collect_market(*, claim_token=None) -> None:
+def collect_market(*, claim_token=None) -> dict:
     """Publish raw/ready articles before summary and optional image work."""
     as_of = news._kst_date()
     overview = news._load_durable_market_summary(as_of)
@@ -181,6 +208,46 @@ def collect_market(*, claim_token=None) -> None:
         # result; article text and the overview are already visible.
         news_images.ensure_resolving(result["items"], on_ready=lambda item:
             articles.update_article_image("MARKET", articles.article_id(item), item))
+    return result
+
+
+def _collect_ticker(scope: str) -> dict:
+    """공개 워밍은 브라우저·AI 없이 종목 수집기를 부른다. 저장한 기사 수는 결과에 없어 fetch 응답에서 센다."""
+    counted = {"items": 0}
+
+    def fetch(symbol, **kwargs):
+        payload = collector._call_with_progress(news.fetch_coin_news_for_collector, symbol, **kwargs)
+        counted["items"] = len(payload.get("items") or [])
+        return payload
+
+    # The collector's ticker lease is shared with the agent worker.
+    # Public prewarming performs no browser crawl or direction AI.
+    flag = _warming.set(True)
+    try:
+        result = collector.collect_ticker(scope, allow_ai=False, fetcher=fetch, enricher=lambda _symbol, payload: payload)
+    finally:
+        _warming.reset(flag)
+    return {**result, "item_count": counted["items"]}
+
+
+def _item_count(result) -> int:
+    if not isinstance(result, dict):
+        return 0
+    items = result.get("items")
+    return len(items) if isinstance(items, list) else int(result.get("item_count") or 0)
+
+
+def _record_refresh(run: RunRecorder, scope: str) -> None:
+    """범위 한 번의 결과를 관리자 표에 남긴다(실행 기록 + market/ticker 소스 누적). 절대 raise 하지 않는다."""
+    try:
+        run.finish()
+        if run.status == "skipped":
+            return  # 소스를 부르지 않은 회차 — 호출·성공으로 세지 않는다
+        failed = run.status == "error"
+        bump_source("public_news", "market" if scope == "MARKET" else "ticker", calls=1, targets=1, items=run.items,
+                    failures=1 if failed else 0, error=run.error, success_ms=0 if failed else run.finished_ms)
+    except Exception:
+        logger.warning("Public news run record skipped: scope=%s", scope)
 
 
 class PublicNewsRuntime:
@@ -228,22 +295,24 @@ class PublicNewsRuntime:
             return 30
         retry_seconds = 300
         worker = None
+        run = RunRecorder("public_news")  # 관리자 표용 실행 기록. 리스를 못 잡은 회차는 실행이 아니라 세지 않는다.
         try:
             if scope == "MARKET":
                 worker = asyncio.create_task(asyncio.to_thread(collect_market, claim_token=token))
             else:
-                # The collector's ticker lease is shared with the agent worker.
-                # Public prewarming performs no browser crawl or direction AI.
-                worker = asyncio.create_task(asyncio.to_thread(
-                    collector.collect_ticker, scope, allow_ai=False,
-                    enricher=lambda _symbol, payload: payload))
+                worker = asyncio.create_task(asyncio.to_thread(_collect_ticker, scope))
             while not worker.done():
                 done, _ = await asyncio.wait({worker}, timeout=20)
                 if not done:
                     await asyncio.to_thread(renew_work, scope, token)
-            await worker
+            result = await worker
+            status = str(result.get("status") or "ready") if isinstance(result, dict) else "ready"
+            collected = status not in _NOT_COLLECTED
+            run.report({"scope": scope, "status": status}, status=None if collected else "skipped",
+                       targets=1 if collected else 0, items=_item_count(result) if collected else 0)
         except Exception as exc:
             retry_seconds = 30
+            run.fail(exc)
             logger.warning("Public news preparation deferred: scope=%s reason=%s", scope, type(exc).__name__)
         finally:
             try:
@@ -251,6 +320,7 @@ class PublicNewsRuntime:
                     await asyncio.shield(worker)
             finally:
                 await asyncio.to_thread(finish_work, scope, token, retry_seconds=retry_seconds)
+                await asyncio.to_thread(_record_refresh, run, scope)
         return retry_seconds
 
     async def run(self):

@@ -88,6 +88,7 @@ def _ai_propose(symbol: str) -> list[dict]:
             max_tokens=_MAX_TOKENS,
             system=_SYSTEM,
             messages=[{"role": "user", "content": prompt}],
+            purpose="ai_challenge",
         )
         text = None
         for block in response.content:

@@ -791,16 +791,86 @@ class BoardComment(SQLModel, table=True):
 
 
 class Visit(SQLModel, table=True):
-    """화면 진입 한 건(관리자 대시보드의 유입 지표, admin.py). IP·UA 는 저장하지 않는다."""
+    """화면 진입(kind=view) 또는 행동(kind=event) 한 건 — 관리자 대시보드의 사용자 지표(admin.py). IP·UA 는 저장하지 않는다.
+
+    세션·신규 여부·기기는 브라우저가 판단해 보낸다(session_key 는 30분 무활동이면 새로, is_new 는 그 브라우저의 첫 방문).
+    체류시간(dwell_ms)은 페이지를 떠날 때 view_key 로 같은 행을 갱신한다. 채널은 서버가 유입 URL·utm 으로 분류한다.
+    """
 
     id: Optional[int] = Field(default=None, primary_key=True, sa_type=BigInteger().with_variant(Integer, "sqlite"))
     day_kst: str = Field(index=True)
-    path: str = ""
+    path: str = ""  # kind=event 면 행동 이름(backtest 등)
     referrer_host: str = ""
     utm_source: str = ""
     visitor_hash: str = ""  # 브라우저 익명 id 의 해시(서버 비밀과 섞음)
     user_id: Optional[int] = None
     created_ms: int = Field(default=0, sa_type=BigInteger, index=True)
+    kind: str = "view"  # view | event
+    session_key: str = Field(default="", index=True)
+    view_key: str = Field(default="", index=True)  # 브라우저가 만든 페이지뷰 id — 떠날 때 dwell_ms 갱신용
+    dwell_ms: int = Field(default=0, sa_type=BigInteger)
+    is_new: bool = False  # 그 브라우저의 첫 방문(세션)
+    is_landing: bool = False  # 세션의 첫 페이지뷰
+    channel: str = ""  # direct | search | referral | social | campaign
+    device: str = ""  # mobile | tablet | desktop
+    screen_w: int = 0
+
+
+class MacroEventDaily(SQLModel, table=True):
+    """리더보드 매크로별 하루 노출·열람·구매 수 — 클릭률(열람÷노출)·구매 전환율(구매÷열람)용(admin.py)."""
+
+    day_kst: str = Field(primary_key=True)
+    entry_id: int = Field(primary_key=True)
+    impressions: int = 0  # 목록 응답에 포함된 횟수
+    opens: int = 0  # 상세를 연 횟수
+    unlocks: int = 0  # 언락 횟수
+
+
+class CollectorRun(SQLModel, table=True):
+    """수집 엔진(Prefect flow · 웹 루프) 실행 한 번의 요약 — 관리자 '뉴스 수집 현황' 표(admin.py, collector_runs.py)."""
+
+    id: Optional[int] = Field(default=None, primary_key=True, sa_type=BigInteger().with_variant(Integer, "sqlite"))
+    engine: str = Field(index=True)  # position_news | whale_activity | onchain_holders | public_news | article_enrichment | coindesk_probe
+    day_kst: str = Field(index=True)
+    started_ms: int = Field(default=0, sa_type=BigInteger, index=True)
+    finished_ms: int = Field(default=0, sa_type=BigInteger)
+    status: str = "ok"  # ok | error | skipped
+    targets: int = 0  # 처리한 종목·페어·범위 수
+    items: int = 0  # 저장한 기사·거래 수
+    failures: int = 0  # 소스 호출 실패 수
+    error: str = ""
+    summary_json: str = "{}"
+
+
+class CollectorSourceDaily(SQLModel, table=True):
+    """소스(Google News RSS · CoinDesk API …)별 하루 호출·수집·실패 누적(collector_runs.py)."""
+
+    day_kst: str = Field(primary_key=True)
+    engine: str = Field(primary_key=True)
+    source: str = Field(primary_key=True)
+    calls: int = 0
+    items: int = 0
+    failures: int = 0
+    targets: int = 0  # 그날 이 소스로 시도한 종목 수(중복 포함 아님: 마지막 실행 기준)
+    last_error: str = ""
+    last_success_ms: int = Field(default=0, sa_type=BigInteger)
+    updated_ms: int = Field(default=0, sa_type=BigInteger)
+
+
+class ApiUsageDaily(SQLModel, table=True):
+    """유료 API 사용량 하루 누적(api_usage.py) — Gemini 는 응답 usage_metadata 토큰, 비용은 단가표로 추정."""
+
+    day_kst: str = Field(primary_key=True)
+    provider: str = Field(primary_key=True)  # gemini | coindesk
+    model: str = Field(primary_key=True, default="")
+    purpose: str = Field(primary_key=True, default="")  # position_news | title_translation | community_summaries | ai_explain | market_news_summary | ai_challenge
+    calls: int = 0
+    failures: int = 0
+    input_tokens: int = Field(default=0, sa_type=BigInteger)
+    output_tokens: int = Field(default=0, sa_type=BigInteger)
+    cached_tokens: int = Field(default=0, sa_type=BigInteger)
+    cost_micro_usd: int = Field(default=0, sa_type=BigInteger)  # 1 USD = 1,000,000
+    updated_ms: int = Field(default=0, sa_type=BigInteger)
 
 
 class NotificationMessage(SQLModel, table=True):
@@ -849,6 +919,17 @@ def _migrate() -> None:
     """Add columns introduced after a table was first created (SQLite create_all
     does not ALTER existing tables). Idempotent and safe to run every startup."""
     added = {
+        "visit": {
+            "kind": "ALTER TABLE visit ADD COLUMN kind TEXT NOT NULL DEFAULT 'view'",
+            "session_key": "ALTER TABLE visit ADD COLUMN session_key TEXT NOT NULL DEFAULT ''",
+            "view_key": "ALTER TABLE visit ADD COLUMN view_key TEXT NOT NULL DEFAULT ''",
+            "dwell_ms": "ALTER TABLE visit ADD COLUMN dwell_ms INTEGER NOT NULL DEFAULT 0",
+            "is_new": "ALTER TABLE visit ADD COLUMN is_new BOOLEAN NOT NULL DEFAULT FALSE",
+            "is_landing": "ALTER TABLE visit ADD COLUMN is_landing BOOLEAN NOT NULL DEFAULT FALSE",
+            "channel": "ALTER TABLE visit ADD COLUMN channel TEXT NOT NULL DEFAULT ''",
+            "device": "ALTER TABLE visit ADD COLUMN device TEXT NOT NULL DEFAULT ''",
+            "screen_w": "ALTER TABLE visit ADD COLUMN screen_w INTEGER NOT NULL DEFAULT 0",
+        },
         "user": {
             "bio": 'ALTER TABLE "user" ADD COLUMN bio TEXT NOT NULL DEFAULT \'\'',
             "auth_version": 'ALTER TABLE "user" ADD COLUMN auth_version INTEGER NOT NULL DEFAULT 0',
@@ -979,6 +1060,11 @@ def _migrate() -> None:
 
 
 _PG_ADDED_COLUMNS = {
+    "visit": {
+        "kind": "VARCHAR NOT NULL DEFAULT 'view'", "session_key": "VARCHAR NOT NULL DEFAULT ''", "view_key": "VARCHAR NOT NULL DEFAULT ''",
+        "dwell_ms": "BIGINT NOT NULL DEFAULT 0", "is_new": "BOOLEAN NOT NULL DEFAULT FALSE", "is_landing": "BOOLEAN NOT NULL DEFAULT FALSE",
+        "channel": "VARCHAR NOT NULL DEFAULT ''", "device": "VARCHAR NOT NULL DEFAULT ''", "screen_w": "INTEGER NOT NULL DEFAULT 0",
+    },
     "newsarticle": {
         "enrichment_pending": "BOOLEAN NOT NULL DEFAULT TRUE",
         "source_hash": "VARCHAR NOT NULL DEFAULT ''", "content_hash": "VARCHAR NOT NULL DEFAULT ''",
@@ -1060,7 +1146,7 @@ _PG_PRIVATE_CACHE_TABLES = (
     "dailyquestclaim", "runsessionevent",
     # 게시판 사진·추천·신고와 브라우저 뉴스 캐시 — create_all 로만 생겨 RLS 없이 anon 권한이 열려 있었다(2026-09-15).
     "boardimage", "boardpostvote", "boardreport", "browsernewspagecache",
-    "visit",
+    "visit", "macroeventdaily", "collectorrun", "collectorsourcedaily", "apiusagedaily",
 )
 _PG_MIGRATION_LOCK = 0x6767706172726F74  # Stable across web/worker processes and deployments.
 _PG_MIGRATION_ATTEMPTS = 3

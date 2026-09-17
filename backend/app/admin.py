@@ -1,6 +1,6 @@
 """관리자 대시보드 — 사용자(유입)·가입·매크로·뉴스 수집·비용 집계. 모두 읽기 전용이고 메모리 캐시를 거친다.
 
-관리자는 ``User.is_admin`` 이 켜진 계정(또는 부트스트랩용 ADMIN_USERNAMES, auth.require_admin). 응답 모양은
+관리자는 ``User.is_admin`` 이 켜진 계정뿐이다(auth.require_admin). 응답 모양은
 scratchpad 의 admin-contract 를 그대로 따른다 — 프론트(AdminDashboard.jsx)가 키 이름을 그대로 읽는다.
 
 비콘(``POST /api/visit``·``/api/visit/leave``)은 화면 진입(view) 과 행동(event) 한 건씩을 Visit 표에 남긴다.

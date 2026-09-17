@@ -68,6 +68,19 @@ def _view(**overrides) -> dict:
     return payload
 
 
+# --- 권한 ---------------------------------------------------------------------------------------
+def test_admin_comes_only_from_the_column_not_the_environment(monkeypatch):
+    """권한 경로는 DB 컬럼 하나뿐 — 환경 변수로 여는 옛 문(ADMIN_USERNAMES)이 되살아나면 여기서 잡힌다."""
+    token, user_id = _signup()
+    username = client.get("/api/auth/me", headers=_auth(token)).json()["user"]["username"]
+    monkeypatch.setenv("ADMIN_USERNAMES", f"someone_else, {username.upper()} ")
+    assert client.get("/api/admin/users", headers=_auth(token)).status_code == 403
+    assert client.get("/api/auth/me", headers=_auth(token)).json()["user"]["is_admin"] is False
+    _make_admin(user_id)
+    monkeypatch.delenv("ADMIN_USERNAMES", raising=False)
+    assert client.get("/api/admin/users", headers=_auth(token)).status_code == 200
+
+
 # --- 비콘 ---------------------------------------------------------------------------------------
 def test_view_beacon_stores_classified_row_without_raw_identity():
     token, user_id = _signup()

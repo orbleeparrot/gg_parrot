@@ -420,18 +420,13 @@ def current_user_in_session(
 
 
 # --- 관리자 ---------------------------------------------------------------
-# 관리자 개념은 환경 변수 ADMIN_USERNAMES(쉼표로 구분한 회원 아이디)가 전부다.
-# 공지·관리자 메시지(POST /api/admin/notifications)만 이 문을 지난다.
-def admin_usernames() -> frozenset[str]:
-    raw = os.environ.get("ADMIN_USERNAMES", "")
-    return frozenset(name.strip().lower() for name in raw.split(",") if name.strip())
-
-
+# 권한의 근거는 DB 컬럼 ``User.is_admin`` 하나뿐이다(2026-09-17). 예전에는 환경 변수
+# ADMIN_USERNAMES 도 같은 문을 열었는데, 경로가 둘이면 "지금 누가 관리자인가"를 두 군데서
+# 확인해야 하고 배포 환경 설정만 건드려도 권한이 생긴다. 부여는 운영 DB 에서 직접 한다
+# (DEPLOY.md). 컬럼이 없거나 마이그레이션이 덜 돌면 기본값 false 로 떨어져 잠기는 쪽이 안전하다.
 def is_admin(user: User) -> bool:
-    """User.is_admin 이 켜진 계정, 또는 부트스트랩용 ADMIN_USERNAMES 에 있는 계정."""
-    if getattr(user, "is_admin", False):
-        return True
-    return bool(user.username) and user.username.lower() in admin_usernames()
+    """관리자 계정인가. 근거는 ``User.is_admin`` 컬럼 하나뿐이다."""
+    return bool(getattr(user, "is_admin", False))
 
 
 def require_admin(user: User = Depends(current_user_in_session)) -> User:

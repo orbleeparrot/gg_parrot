@@ -1,5 +1,6 @@
 -- 관리자 대시보드 (2026-09-17)
--- ① user.is_admin — 관리자 플래그(기본 false). 두 계정만 켠다.
+-- ① user.is_admin — 관리자 플래그(기본 false). 컬럼만 만든다 — 누구에게 줄지는 이 파일에 적지 않는다
+--    (계정 식별자가 저장소에 남지 않게). 부여는 운영 DB 에서 한 번 직접(DEPLOY.md '관리자 지정').
 -- ② visit — 화면 진입·행동 비콘(세션·체류·채널·기기). IP·UA 없음.
 -- ③ macroeventdaily — 매크로별 하루 노출·열람·구매.
 -- ④ collectorrun / collectorsourcedaily — 수집 엔진 실행 요약·소스별 하루 누적.
@@ -7,7 +8,6 @@
 -- 모두 서버 전용: RLS 켜고 anon/authenticated 권한 회수(public 기본 ACL 이 열려 있으므로).
 
 alter table public."user" add column if not exists is_admin boolean not null default false;
-update public."user" set is_admin = true where lower(email) in ('hsrohsro1234@gmail.com', 'clcleh123@gmail.com');
 
 create table if not exists public.visit (
   id bigserial primary key,

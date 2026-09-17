@@ -803,7 +803,7 @@ def admin_notification_send(
     admin: User = Depends(auth_mod.require_admin),
     db: Session = Depends(request_session),
 ) -> dict:
-    """관리자 메시지(한 회원) 또는 공지사항(전체)을 보낸다. ADMIN_USERNAMES 계정만."""
+    """관리자 메시지(한 회원) 또는 공지사항(전체)을 보낸다. User.is_admin 계정만."""
     title = req.title.strip()
     if not title:
         raise HTTPException(status_code=400, detail="제목을 입력해 주세요.")

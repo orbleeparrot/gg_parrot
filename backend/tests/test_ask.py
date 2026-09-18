@@ -198,3 +198,86 @@ def test_ai_proposals_are_validated_and_filtered(monkeypatch):
     client_bad = _FakeClient("not json")
     monkeypatch.setattr(ask, "get_ai_client", lambda: client_bad)
     assert ask.propose_with_ai(req) == []
+
+
+_RETURNS = {"A": (4, 3, 8), "C": (2, 1, 12), "J": (9, 4, 6), "G": (6, 2, 5), "F": (7, 3, 2), "E": (5, 2, 4)}
+
+
+@pytest.fixture
+def _fake_backtest(monkeypatch):
+    """유형별로 정해진 수치를 돌려주는 가짜 백테스트 — 네트워크 없이 선별 결과를 예측할 수 있다."""
+    def fake_run_any(macro):
+        ret, mdd, trades = _RETURNS.get(macro.rule_type.value, (1, 1, 5))
+        return _result(ret, mdd, trades=trades), [], "test", macro.period.preset
+
+    monkeypatch.setattr("app.main._run_any", fake_run_any)
+    monkeypatch.setattr(ask, "ai_available", lambda: False)
+    monkeypatch.setattr(ask.ai_explain_mod, "ai_available", lambda: False)
+
+
+_BODY = {"risk_profile": "balanced", "market": "spot", "leverage": 1,
+         "symbols": ["BTCUSDT"], "period_preset": "3m", "interval": "1h"}
+
+
+def test_status_and_consent_flow(_fake_backtest):
+    token, _ = _signup()
+    st = client.get("/api/ask/status", headers=_auth(token)).json()
+    assert st == {"consented": False, "remaining_today": 5, "daily_limit": 5, "disclaimer_version": "ask-v1"}
+
+    res = client.post("/api/ask/macros", json=_BODY, headers=_auth(token))
+    assert res.status_code == 403
+
+    ok = client.post("/api/ask/consent", headers=_auth(token)).json()
+    assert ok == {"ok": True, "version": "ask-v1"}
+    assert client.get("/api/ask/status", headers=_auth(token)).json()["consented"] is True
+    assert client.get("/api/ask/status").status_code == 401
+
+
+def test_macros_returns_top3_distinct_types_and_records(_fake_backtest):
+    token, user_id = _signup()
+    client.post("/api/ask/consent", headers=_auth(token))
+    res = client.post("/api/ask/macros", json=_BODY, headers=_auth(token))
+    assert res.status_code == 200, res.text
+    data = res.json()
+    # 균형형 점수 = 수익률 - 0.5·MDD: J 7 > G 5 > E 4 > A 2.5 > C 1.5 ; F 는 거래 2회라 탈락
+    assert [r["rule_type"] for r in data["results"]] == ["J", "G", "E"]
+    first = data["results"][0]
+    assert first["metrics"] == {"final_return_pct": 9, "mdd_pct": 4, "win_rate_pct": 50.0, "total_trades": 6}
+    assert first["macro"]["symbol"] == "BTCUSDT" and first["macro"]["rule_type"] == "J"
+    assert first["explanation"]["headline"] and first["ai_generated"] is False
+    assert "추천" not in json.dumps(data, ensure_ascii=False)
+    assert data["disclaimer"] == ask.DISCLAIMER and data["disclaimer_version"] == "ask-v1"
+    assert data["remaining_today"] == 4 and data["ai_used"] is False and data["candidate_count"] > 3
+
+    with get_session() as db:
+        rows = db.exec(select(AskMacroSession).where(AskMacroSession.user_id == user_id)).all()
+        assert len(rows) == 1
+        assert json.loads(rows[0].request_json)["symbols"] == ["BTCUSDT"]
+        assert [r["rule_type"] for r in json.loads(rows[0].results_json)] == ["J", "G", "E"]
+        assert rows[0].day_kst == ask.today_kst()
+
+
+def test_macros_validation_and_daily_limit(_fake_backtest, monkeypatch):
+    token, _ = _signup()
+    client.post("/api/ask/consent", headers=_auth(token))
+    bad = dict(_BODY, risk_profile="stable", market="futures", leverage=2)
+    assert client.post("/api/ask/macros", json=bad, headers=_auth(token)).status_code == 422
+    assert client.post("/api/ask/macros", json=dict(_BODY, symbols=["A", "B", "C", "D"]), headers=_auth(token)).status_code == 422
+
+    monkeypatch.setenv("ASK_DAILY_LIMIT", "2")
+    assert client.post("/api/ask/macros", json=_BODY, headers=_auth(token)).json()["remaining_today"] == 1
+    assert client.post("/api/ask/macros", json=_BODY, headers=_auth(token)).json()["remaining_today"] == 0
+    res = client.post("/api/ask/macros", json=_BODY, headers=_auth(token))
+    assert res.status_code == 429 and "내일" in res.json()["detail"]
+
+
+def test_macros_with_no_candidates_returns_empty_results(_fake_backtest, monkeypatch):
+    token, _ = _signup()
+    client.post("/api/ask/consent", headers=_auth(token))
+
+    def boom(macro):
+        raise RuntimeError("no data")
+
+    monkeypatch.setattr("app.main._run_any", boom)
+    data = client.post("/api/ask/macros", json=_BODY, headers=_auth(token)).json()
+    assert data["results"] == [] and data["remaining_today"] == 4

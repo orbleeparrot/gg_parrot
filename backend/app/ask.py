@@ -317,3 +317,121 @@ def propose_with_ai(req: AskRequest) -> list[Candidate]:
             continue
         out.append(Candidate(_label(rule_type, req, [req.symbols[0]]) + " · AI 제안", macro, "ai"))
     return out
+
+
+class AskError(Exception):
+    def __init__(self, status: int, message: str):
+        super().__init__(message)
+        self.status = status
+        self.message = message
+
+
+def daily_limit() -> int:
+    try:
+        return max(0, int(os.environ.get("ASK_DAILY_LIMIT", "5")))
+    except ValueError:
+        return 5
+
+
+def time_budget_sec() -> float:
+    try:
+        return float(os.environ.get("ASK_TIME_BUDGET_SEC", "20"))
+    except ValueError:
+        return 20.0
+
+
+def _now() -> tuple[str, int]:
+    now = datetime.now(timezone.utc)
+    return now.strftime("%Y-%m-%dT%H:%M:%SZ"), int(now.timestamp() * 1000)
+
+
+def used_today(db: Session, user: User) -> int:
+    return int(db.exec(
+        select(func.count()).select_from(AskMacroSession)
+        .where(AskMacroSession.user_id == user.id, AskMacroSession.day_kst == today_kst())
+    ).one())
+
+
+def remaining_today(db: Session, user: User) -> int:
+    return max(0, daily_limit() - used_today(db, user))
+
+
+def consented(user: User) -> bool:
+    return getattr(user, "ask_consent_version", "") == DISCLAIMER_VERSION
+
+
+def status(db: Session, user: User) -> dict:
+    return {
+        "consented": consented(user),
+        "remaining_today": remaining_today(db, user),
+        "daily_limit": daily_limit(),
+        "disclaimer_version": DISCLAIMER_VERSION,
+    }
+
+
+def give_consent(db: Session, user: User) -> dict:
+    user.ask_consent_version = DISCLAIMER_VERSION
+    user.ask_consent_at = _now()[0]
+    db.add(user)
+    db.commit()
+    return {"ok": True, "version": DISCLAIMER_VERSION}
+
+
+def _metrics(result: BacktestResult) -> dict:
+    return {
+        "final_return_pct": result.final_return_pct,
+        "mdd_pct": result.mdd_pct,
+        "win_rate_pct": result.win_rate_pct,
+        "total_trades": result.total_trades,
+    }
+
+
+def _result_view(e: Evaluated) -> dict:
+    macro = e.candidate.macro
+    base = explain_result(macro, e.result)
+    explanation = ai_explain_mod.enrich(macro, e.result, base=base)
+    return {
+        "label": e.candidate.label,
+        "rule_type": macro.rule_type.value,
+        "source": e.candidate.source,
+        "macro": macro.model_dump(mode="json"),
+        "metrics": _metrics(e.result),
+        "explanation": explanation.model_dump(),
+        "ai_generated": explanation.source == "ai",
+    }
+
+
+def run_ask(db: Session, user: User, req: AskRequest, run_backtest: Callable[[Macro], BacktestResult]) -> dict:
+    if not consented(user):
+        raise AskError(403, "먼저 안내에 동의해 주세요.")
+    if remaining_today(db, user) <= 0:
+        raise AskError(429, f"오늘은 {daily_limit()}번 다 물어봤어요. 내일 다시 물어봐 주세요.")
+
+    started = time.monotonic()
+    ai_candidates = propose_with_ai(req)
+    candidates = (ai_candidates + build_templates(req))[:MAX_CANDIDATES]
+    evaluated = evaluate(candidates, run_backtest, time_budget_sec())
+    top = select_top(evaluated, req.risk_profile)
+    results = [_result_view(e) for e in top]
+    elapsed_ms = int((time.monotonic() - started) * 1000)
+
+    created_at, created_ms = _now()
+    db.add(AskMacroSession(
+        user_id=user.id, day_kst=today_kst(), request_json=json.dumps(req.model_dump(), ensure_ascii=False),
+        candidate_count=len(evaluated),
+        results_json=json.dumps(
+            [{"label": r["label"], "rule_type": r["rule_type"], "macro": r["macro"], "metrics": r["metrics"]} for r in results],
+            ensure_ascii=False),
+        disclaimer_version=DISCLAIMER_VERSION, ai_used=bool(ai_candidates), elapsed_ms=elapsed_ms,
+        created_at=created_at, created_ms=created_ms,
+    ))
+    db.commit()
+    return {
+        "results": results,
+        "candidate_count": len(evaluated),
+        "ai_used": bool(ai_candidates),
+        "disclaimer": DISCLAIMER,
+        "disclaimer_version": DISCLAIMER_VERSION,
+        "remaining_today": remaining_today(db, user),
+        "elapsed_ms": elapsed_ms,
+    }

@@ -165,3 +165,57 @@
   .adm-donut .adm-tbl { justify-self: stretch; }
   .adm-head { gap: 10px; }
 }
+
+/* ── 회원 관리 (탭 6) ── 목록 + 조치. 상자 대신 괘선, 노랑은 쓰지 않는다(조치 창의 CTA 만 예외).
+   조치 버튼은 표 안에 사는 작은 컨트롤이라 .btn 이 아니라 .adm-more 와 같은 괘선 버튼 규격을 쓴다. */
+.adm-mem-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px 16px; flex-wrap: wrap; padding: 0 0 12px; }
+.adm-mem-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.adm-mem-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; padding: 0 12px; border: 1px solid var(--adm-line-strong); border-radius: 999px; background: none; color: var(--adm-muted); font-size: 12.5px; font-weight: 700; cursor: pointer; }
+.adm-mem-chip:hover { background: var(--adm-face); color: var(--adm-ink); }
+.adm-mem-chip .num { font-size: 12px; font-weight: 600; color: var(--adm-muted); }
+.adm-mem-chip.is-on { background: var(--adm-ink); border-color: var(--adm-ink); color: rgb(var(--c-slate-50)); }
+.adm-mem-chip.is-on .num { color: rgb(var(--c-slate-50) / 0.75); }
+.adm-mem-search { display: inline-flex; align-items: center; }
+.adm-mem-search input { width: 240px; max-width: 100%; font-size: 13.5px; font-weight: 500; }
+
+/* 조치 결과는 토스트가 아니라 표 위 한 줄 — 실패면 하락색. 자리를 미리 비워 두지 않는다(표가 밀리지 않게 한 줄 고정). */
+.adm-mem-result { margin: 0 0 10px; padding: 8px 0; border-top: 1px solid var(--adm-line); border-bottom: 1px solid var(--adm-line); color: var(--adm-ink); font-size: 13px; font-weight: 600; }
+.adm-mem-result.is-bad { color: var(--adm-down); }
+
+.adm-mem-state { display: inline-flex; align-items: center; gap: 6px; }
+.adm-mem-admin { display: inline-block; padding: 1px 7px; border: 1px solid var(--adm-line-strong); border-radius: 999px; color: var(--adm-muted); font-size: 11px; font-weight: 700; }
+.adm-mem-acts { display: inline-flex; gap: 6px; }
+.adm-act { min-height: 28px; padding: 0 10px; border: 1px solid var(--adm-line-strong); border-radius: 6px; background: none; color: var(--adm-ink-2); font-size: 12px; font-weight: 700; white-space: nowrap; cursor: pointer; }
+.adm-act:hover:not(:disabled) { background: var(--adm-face); color: var(--adm-ink); }
+.adm-act.is-danger { color: var(--adm-down); border-color: rgb(var(--c-red-600) / 0.45); }
+.adm-act.is-danger:hover:not(:disabled) { background: rgb(var(--c-red-600) / 0.10); color: var(--adm-down); }
+.adm-act:disabled { opacity: 0.35; cursor: default; }
+
+.adm-mem-pager { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 14px 0 2px; }
+.adm-mem-pageno { font-size: 12.5px; font-weight: 600; color: var(--adm-muted); }
+.adm-mem-pageno b { color: var(--adm-ink); font-weight: 700; }
+.adm-mem-size { display: inline-flex; align-items: center; gap: 6px; margin-left: 6px; font-size: 12.5px; font-weight: 600; color: var(--adm-muted); }
+.adm-mem-size select { width: auto; min-width: 84px; font-size: 13px; font-weight: 600; }
+.adm-mem-total { margin-left: auto; font-size: 12.5px; font-weight: 600; color: var(--adm-muted); }
+.adm-mem-total b { color: var(--adm-ink); font-weight: 700; }
+
+/* ── 조치 창(ConfirmDialog · 메시지 폼) ── 창은 페이지 CSS 가 아니라 공용 .dialog 표면을 쓰고, 안쪽 칸만 여기서 맞춘다. */
+.adm-dlg-text { display: block; }
+.adm-dlg-reason { display: block; margin-top: 14px; font-size: 12.5px; font-weight: 700; color: rgb(var(--c-slate-700)); }
+.adm-dlg-reason input { display: block; width: 100%; margin-top: 6px; font-size: 14px; font-weight: 500; }
+.adm-msg-dialog { width: min(440px, 100%); }
+.adm-msg-field { display: block; margin-top: 14px; font-size: 12.5px; font-weight: 700; color: rgb(var(--c-slate-700)); }
+.adm-msg-field input, .adm-msg-field textarea { display: block; width: 100%; margin-top: 6px; font-size: 14px; font-weight: 500; }
+.adm-msg-body { height: auto; min-height: 88px; padding-block: 10px; resize: vertical; }
+.adm-msg-error { margin: 12px 0 0; color: rgb(var(--c-red-600)); font-size: 13px; font-weight: 600; }
+
+/* 390px — 표는 가로로 스크롤하고(공용 .adm-tbl) 조치 칸만 오른쪽에 붙여 둔다(스크롤 없이도 누를 수 있게). */
+@media (max-width: 640px) {
+  .adm-mem-bar { flex-direction: column; align-items: stretch; }
+  .adm-mem-search input { width: 100%; }
+  .adm-mem-wrap .adm-tbl th:last-child, .adm-mem-wrap .adm-tbl tr:not(.adm-empty) td:last-child {
+    position: sticky; right: 0; padding-left: 10px; background: rgb(var(--c-slate-50));
+    box-shadow: -10px 0 10px -10px rgb(var(--c-slate-900) / 0.35);
+  }
+  .adm-mem-total { margin-left: 0; }
+}

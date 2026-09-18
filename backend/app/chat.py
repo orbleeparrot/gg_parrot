@@ -11,6 +11,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlmodel import Session, select
 
 from . import avatars
+from .auth import assert_can_write
 from .db import ChatMessage, ChatReadState, LeaderboardEntry, User, UserAvatar, get_session
 from .leaderboard import _kst_hhmm, _unlocked_ids_for, today_start_ms
 from .moderation import require_clean_text
@@ -62,6 +63,7 @@ def _latest_id(db, *, start_ms: int | None = None) -> int:
 
 
 def add_message(account: User, text: str, *, db: Session | None = None) -> dict:
+    assert_can_write(account)  # 차단된 계정은 발언만 막는다(읽기는 그대로)
     user_id = int(account.id)
     text = (text or "").strip()
     if not text:

@@ -272,6 +272,13 @@ class User(SQLModel, table=True):
     created_at: str
     # 관리자 — 프로필에 '관리자 대시보드' 버튼이 생기고 /api/admin/* 를 쓸 수 있다(admin.py). 기본 False.
     is_admin: bool = False
+    # 차단 — 채팅·게시글·댓글을 쓸 수 없다(auth.assert_can_write). 로그인·열람은 그대로. 되돌릴 수 있다(members.py).
+    is_blocked: bool = False
+    blocked_at: str = ""
+    blocked_reason: str = ""
+    # 관리자 탈퇴로 지운 계정의 이메일 해시(서버 비밀과 섞음) — 같은 이메일로 다시 가입하지 못하게 막는다.
+    # 주소 자체는 남기지 않는다. 자기 탈퇴(프로필)는 이 값을 채우지 않아 재가입이 가능하다.
+    banned_email_hash: str = Field(default="", index=True)
 
 
 class UserAvatar(SQLModel, table=True):
@@ -935,6 +942,10 @@ def _migrate() -> None:
             "auth_version": 'ALTER TABLE "user" ADD COLUMN auth_version INTEGER NOT NULL DEFAULT 0',
             "is_deleted": 'ALTER TABLE "user" ADD COLUMN is_deleted BOOLEAN NOT NULL DEFAULT FALSE',
             "is_admin": 'ALTER TABLE "user" ADD COLUMN is_admin BOOLEAN NOT NULL DEFAULT FALSE',
+            "is_blocked": 'ALTER TABLE "user" ADD COLUMN is_blocked BOOLEAN NOT NULL DEFAULT FALSE',
+            "blocked_at": 'ALTER TABLE "user" ADD COLUMN blocked_at TEXT NOT NULL DEFAULT \'\'',
+            "blocked_reason": 'ALTER TABLE "user" ADD COLUMN blocked_reason TEXT NOT NULL DEFAULT \'\'',
+            "banned_email_hash": 'ALTER TABLE "user" ADD COLUMN banned_email_hash TEXT NOT NULL DEFAULT \'\'',
         },
         "chatmessage": {
             "user_id": "ALTER TABLE chatmessage ADD COLUMN user_id INTEGER",
@@ -1071,7 +1082,9 @@ _PG_ADDED_COLUMNS = {
         "enrichment_attempts": "INTEGER NOT NULL DEFAULT 0", "enrichment_next_ms": "BIGINT NOT NULL DEFAULT 0",
     },
     "user": {"bio": "TEXT NOT NULL DEFAULT ''", "auth_version": "INTEGER NOT NULL DEFAULT 0", "is_deleted": "BOOLEAN NOT NULL DEFAULT FALSE",
-             "is_admin": "BOOLEAN NOT NULL DEFAULT FALSE"},
+             "is_admin": "BOOLEAN NOT NULL DEFAULT FALSE", "is_blocked": "BOOLEAN NOT NULL DEFAULT FALSE",
+             "blocked_at": "VARCHAR NOT NULL DEFAULT ''", "blocked_reason": "VARCHAR NOT NULL DEFAULT ''",
+             "banned_email_hash": "VARCHAR NOT NULL DEFAULT ''"},
     "chatmessage": {"user_id": "INTEGER"},
     "dailychallenge": {
         "status": "TEXT DEFAULT 'ready'", "claim_token": "TEXT DEFAULT ''",

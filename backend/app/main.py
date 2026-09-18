@@ -74,6 +74,7 @@ from . import quests as quests_mod
 from . import notifications as notifications_mod
 from . import notification_stream
 from . import admin as admin_mod
+from . import members as members_mod
 from . import macro_events
 from . import account as account_mod
 from . import challenge as challenge_mod
@@ -769,6 +770,68 @@ def admin_macros(
 ) -> dict:
     """관리자 대시보드 — 매크로 등록·노출·열람·언락·매출과 실행 세션."""
     return admin_mod.macros_report(db, days=days)
+
+
+class MemberMessageIn(BaseModel):
+    title: str = Field(default="", max_length=members_mod.TITLE_MAX)
+    body: str = Field(default="", max_length=members_mod.BODY_MAX)
+    link: str = Field(default="", max_length=members_mod.LINK_MAX)
+
+
+class MemberBlockIn(BaseModel):
+    blocked: bool = True
+    reason: str = Field(default="", max_length=members_mod.REASON_MAX)
+
+
+class MemberRemoveIn(BaseModel):
+    reason: str = Field(default="", max_length=members_mod.REASON_MAX)
+
+
+@app.get("/api/admin/members")
+def admin_members(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=members_mod.PAGE_SIZE_DEFAULT, ge=10, le=members_mod.PAGE_SIZE_MAX),
+    q: str = Query(default="", max_length=members_mod.QUERY_MAX),
+    status: str = Query(default="all"),
+    sort: str = Query(default="recent"),
+    admin: User = Depends(auth_mod.require_admin),
+    db: Session = Depends(request_session),
+) -> dict:
+    """회원 목록(+페이징·검색·상태 필터). 이메일은 마스킹해서 내려간다."""
+    return members_mod.list_members(db, page=page, page_size=page_size, q=q, status=status, sort=sort)
+
+
+@app.post("/api/admin/members/{user_id}/message")
+def admin_member_message(
+    user_id: int,
+    req: MemberMessageIn,
+    admin: User = Depends(auth_mod.require_admin),
+    db: Session = Depends(request_session),
+) -> dict:
+    """그 회원의 알림창으로 관리자 메시지를 보낸다."""
+    return members_mod.send_message(db, admin, user_id, title=req.title, body=req.body, link=req.link)
+
+
+@app.post("/api/admin/members/{user_id}/block")
+def admin_member_block(
+    user_id: int,
+    req: MemberBlockIn,
+    admin: User = Depends(auth_mod.require_admin),
+    db: Session = Depends(request_session),
+) -> dict:
+    """차단·해제 — 채팅·게시글·댓글 쓰기만 막는다(로그인·열람은 그대로)."""
+    return members_mod.set_blocked(db, admin, user_id, blocked=req.blocked, reason=req.reason)
+
+
+@app.post("/api/admin/members/{user_id}/remove")
+def admin_member_remove(
+    user_id: int,
+    req: MemberRemoveIn,
+    admin: User = Depends(auth_mod.require_admin),
+    db: Session = Depends(request_session),
+) -> dict:
+    """관리자 탈퇴 — 계정을 지우고 같은 이메일 재가입을 막는다. 되돌릴 수 없다."""
+    return members_mod.remove_member(db, admin, user_id, reason=req.reason)
 
 
 @app.get("/api/admin/news")

@@ -2,9 +2,21 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from app.agent_features.position_news import classifier, service
+
+# 실시간 뉴스 창(POSITION_NEWS_BROWSER_MAX_AGE_DAYS, 기본 30일) 안쪽을 항상 가리킨다 —
+# 날짜를 박아 두면 창을 지나는 날 position_effect 가 unclear 로 바뀌어 테스트가 저절로 깨진다.
+def _ago(**delta):
+    return (datetime.now(timezone.utc) - timedelta(**delta)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+FIXTURE_UPDATED_AT = _ago(hours=2)
+FIXTURE_PUBLISHED_POSITIVE = _ago(hours=2, minutes=2)
+FIXTURE_PUBLISHED_NEGATIVE = _ago(hours=2, minutes=7)
 
 
 @pytest.fixture(autouse=True)
@@ -291,7 +303,7 @@ def _news_fixture():
     return {
         "symbol": "BTC",
         "coin_name": "비트코인",
-        "updated_at": "2026-08-19T04:57:00Z",
+        "updated_at": FIXTURE_UPDATED_AT,
         "refresh_seconds": 300,
         "items": [
             {
@@ -299,14 +311,14 @@ def _news_fixture():
                 "excerpt": "금융 당국이 비트코인 현물 ETF 출시를 승인했습니다.",
                 "source": "테스트뉴스",
                 "url": "https://news.example.com/positive",
-                "published": "2026-08-19T04:55:00Z",
+                "published": FIXTURE_PUBLISHED_POSITIVE,
             },
             {
                 "title": "거래소 해킹으로 출금 중단",
                 "excerpt": "거래소가 보안 사고를 확인하고 출금을 일시 중단했습니다.",
                 "source": "테스트뉴스",
                 "url": "https://news.example.com/negative",
-                "published": "2026-08-19T04:50:00Z",
+                "published": FIXTURE_PUBLISHED_NEGATIVE,
             },
         ],
     }
@@ -431,7 +443,7 @@ def test_request_path_keeps_snapshot_time_when_same_news_is_reobserved(monkeypat
         "position_side": "long",
     })
 
-    assert payload["updated_at"] == "2026-08-19T04:57:00Z"
+    assert payload["updated_at"] == FIXTURE_UPDATED_AT
     assert payload["collection"]["last_success_at"] == "2026-08-24T08:38:18Z"
 
 

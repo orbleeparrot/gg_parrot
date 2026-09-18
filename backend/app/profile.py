@@ -105,23 +105,33 @@ def delete_account(user_id: int, confirmation: str, password: str = "", credenti
         # Revoking the runner key must never silently remove control of a live run.
         if db.exec(select(RunSession.id).where(RunSession.user_id == user_id, RunSession.status == "running")).first() is not None:
             raise auth.AuthError(409, "실행 중인 매크로를 먼저 종료해 주세요. 연결이 끊긴 실행 기록은 내 에이전트에서 정리할 수 있어요.")
-        avatars.set_avatar_in_session(db, user_id, None)
-        for model in (ChatReadState, RunnerLaunchTicket, RunnerKey, RunSessionEvent,
-                      RunSession, DailyQuestClaim, UserMacro, NotificationMessage, NotificationReceipt):
-            db.exec(delete(model).where(model.user_id == user_id))
-        db.exec(update(ChatMessage).where(ChatMessage.user_id == user_id).values(username="탈퇴한 회원"))
-        db.exec(update(BoardPost).where(BoardPost.author_user_id == user_id).values(author_name="탈퇴한 회원"))
-        db.exec(update(BoardComment).where(BoardComment.author_user_id == user_id).values(username="탈퇴한 회원"))
-        db.exec(update(LeaderboardEntry).where(LeaderboardEntry.owner_user_id == user_id).values(username="탈퇴한 회원", nickname="탈퇴한 회원"))
-        if user.points_balance:
-            points.apply(db, user, -user.points_balance, "account_closed")
-        # Retain a non-identifying owner row for other members' purchases/ledger.
-        user.username = f"탈퇴회원_{user_id}_{secrets.token_hex(4)}"
-        user.email = f"deleted-{user_id}-{secrets.token_hex(8)}@account.invalid"
-        user.bio = ""
-        user.password_hash = ""
-        user.auth_version += 1
-        user.is_deleted = True
-        db.add(user)
+        close_account_rows(db, user)
         db.commit()
     return {"ok": True}
+
+
+def close_account_rows(db: Session, user: User) -> None:
+    """계정을 닫는 정리 — 본인 탈퇴와 관리자 탈퇴(members.remove_member)가 같은 절차를 쓴다. 커밋은 호출자가 한다.
+
+    남의 구매·원장이 가리키는 소유자 행은 지우지 않고 식별할 수 없게 바꿔 둔다. 재가입 차단은 여기서 하지 않는다
+    — 스스로 떠난 회원은 돌아올 수 있어야 하고, 관리자 탈퇴만 members.py 에서 이메일 해시를 남긴다.
+    """
+    user_id = user.id
+    avatars.set_avatar_in_session(db, user_id, None)
+    for model in (ChatReadState, RunnerLaunchTicket, RunnerKey, RunSessionEvent,
+                  RunSession, DailyQuestClaim, UserMacro, NotificationMessage, NotificationReceipt):
+        db.exec(delete(model).where(model.user_id == user_id))
+    db.exec(update(ChatMessage).where(ChatMessage.user_id == user_id).values(username="탈퇴한 회원"))
+    db.exec(update(BoardPost).where(BoardPost.author_user_id == user_id).values(author_name="탈퇴한 회원"))
+    db.exec(update(BoardComment).where(BoardComment.author_user_id == user_id).values(username="탈퇴한 회원"))
+    db.exec(update(LeaderboardEntry).where(LeaderboardEntry.owner_user_id == user_id).values(username="탈퇴한 회원", nickname="탈퇴한 회원"))
+    if user.points_balance:
+        points.apply(db, user, -user.points_balance, "account_closed")
+    user.username = f"탈퇴회원_{user_id}_{secrets.token_hex(4)}"
+    user.email = f"deleted-{user_id}-{secrets.token_hex(8)}@account.invalid"
+    user.bio = ""
+    user.password_hash = ""
+    user.auth_version += 1
+    user.is_blocked = False  # 탈퇴하면 차단 상태는 의미가 없다
+    user.is_deleted = True
+    db.add(user)

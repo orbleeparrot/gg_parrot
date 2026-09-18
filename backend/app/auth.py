@@ -9,6 +9,7 @@ always has a matching ledger entry.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import secrets
@@ -203,6 +204,7 @@ def signup(email: str, username: str, password: str) -> dict:
             raise AuthError(409, _GOOGLE_ONLY_ACCOUNT_DETAIL)
         if existing_email is not None:
             raise AuthError(409, "이미 가입된 이메일이에요.")
+        assert_signup_allowed(db, email)
         if db.exec(select(User).where(User.username == username)).first():
             raise AuthError(409, "이미 사용 중인 아이디예요.")
 
@@ -302,6 +304,7 @@ def google_auth(credential: str) -> dict:
         user = db.exec(select(User).where(User.email == email)).first()
         if user is not None:
             return {"token": make_token(user.id, user.auth_version), "user": user_view(user, db=db)}
+        assert_signup_allowed(db, email)  # 관리자 탈퇴로 막힌 주소는 구글로도 다시 가입할 수 없다
         username = _unique_username(db, info.get("name") or email.split("@")[0])
         user = User(
             email=email,
@@ -427,6 +430,36 @@ def current_user_in_session(
 def is_admin(user: User) -> bool:
     """관리자 계정인가. 근거는 ``User.is_admin`` 컬럼 하나뿐이다."""
     return bool(getattr(user, "is_admin", False))
+
+
+BLOCKED_WRITE_DETAIL = "이용이 제한된 계정이에요. 문의하기로 연락해 주세요."
+
+
+def assert_can_write(user: User) -> None:
+    """차단된 계정은 글을 쓸 수 없다 — 채팅·게시글·댓글의 서비스 함수 맨 앞에서 부른다.
+
+    라우터가 아니라 서비스(chat.add_message · board.create_post · board.add_comment)에서 막는다. 쓰기 경로가
+    새로 생겨도 같은 함수를 지나므로 빠뜨리기 어렵다. 읽기·로그인·백테스트는 막지 않는다 — 차단은 발언 제한이다.
+    """
+    if getattr(user, "is_blocked", False):
+        raise AuthError(403, BLOCKED_WRITE_DETAIL)
+
+
+def email_fingerprint(email: str) -> str:
+    """이메일을 서버 비밀과 섞어 해시 — 관리자 탈퇴로 지운 주소를 저장하지 않고 재가입만 막기 위한 값."""
+    value = str(email or "").strip().lower()
+    if not value:
+        return ""
+    return hashlib.sha256(f"signup-ban:{SECRET_KEY}:{value}".encode("utf-8")).hexdigest()
+
+
+def assert_signup_allowed(db: Session, email: str) -> None:
+    """관리자 탈퇴로 재가입이 막힌 이메일인지 본다 — 비밀번호 가입·구글 가입 양쪽에서 부른다."""
+    fingerprint = email_fingerprint(email)
+    if not fingerprint:
+        return
+    if db.exec(select(User.id).where(User.banned_email_hash == fingerprint)).first() is not None:
+        raise AuthError(403, "이 이메일로는 다시 가입할 수 없어요. 문의하기로 연락해 주세요.")
 
 
 def require_admin(user: User = Depends(current_user_in_session)) -> User:

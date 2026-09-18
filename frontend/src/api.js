@@ -5,6 +5,7 @@ import { createRequestCoordinator } from "./lib/requestCoordinator.js";
 import { withRequestTimeout } from "./lib/requestTimeout.js";
 import { withGatewayRetry } from "./lib/requestRetry.js";
 import { createBoardListCache } from "./lib/boardListCache.js";
+import { memberQueryString } from "./lib/memberList.js";
 import { invalidateLeaderboardCache } from "./lib/cacheEvents.js";
 import { ACTIVITY_EVENT, shouldSignalActivity } from "./lib/notifications.js";
 
@@ -173,6 +174,18 @@ export const api = {
   adminMacros: (days = 30, options = {}) => req(`/api/admin/macros?days=${adminDays(days)}`, { timeoutMs: 20_000, ...options }),
   adminNews: (options = {}) => req("/api/admin/news", { timeoutMs: 20_000, ...options }),
   adminCosts: (months = 6, options = {}) => req(`/api/admin/costs?months=${Math.min(24, Math.max(1, Number(months) || 6))}`, { timeoutMs: 20_000, ...options }),
+  // 회원 관리 — 목록(페이징·검색·상태 필터)과 행별 조치 세 가지. 조치 뒤에는 화면이 곧바로 목록을 다시 받는다.
+  adminMembers: (query = {}, options = {}) => req(`/api/admin/members?${memberQueryString(query)}`, { timeoutMs: 20_000, ...options }),
+  adminMemberMessage: (id, { title, body, link } = {}, options = {}) => req(`/api/admin/members/${id}/message`, {
+    ...options, method: "POST", body: JSON.stringify({ title, body: body || "", link: link || "" }), timeoutMs: 20_000,
+  }),
+  adminMemberBlock: (id, { blocked, reason } = {}, options = {}) => req(`/api/admin/members/${id}/block`, {
+    ...options, method: "POST", body: JSON.stringify({ blocked: Boolean(blocked), reason: reason || "" }), timeoutMs: 20_000,
+  }),
+  // 탈퇴 처리는 POST .../remove — DELETE 에 실은 본문은 클라이언트·프록시가 버리는 경우가 있어 계약을 바꿨다(2026-09-18).
+  adminMemberDelete: (id, { reason } = {}, options = {}) => req(`/api/admin/members/${id}/remove`, {
+    ...options, method: "POST", body: JSON.stringify({ reason: reason || "" }), timeoutMs: 30_000,
+  }),
   myDashboard: (options = {}) => req("/api/me/dashboard", { timeoutMs: 15_000, ...options }),
   // 오늘(KST)의 일일 퀘스트 — 완료 여부·보상·오늘 번 포인트.
   myQuests: (options = {}) => req("/api/me/quests", options),

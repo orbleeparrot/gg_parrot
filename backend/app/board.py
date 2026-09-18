@@ -27,6 +27,7 @@ from sqlalchemy.orm import defer
 from sqlmodel import select
 
 from . import avatars
+from .auth import assert_can_write
 from . import notifications as notifications_mod
 from .moderation import require_clean_text
 from .db import BoardComment, BoardImage, BoardPost, BoardPostVote, BoardReport, ChatMessage, User, UserAvatar, get_session
@@ -301,6 +302,7 @@ def create_post(user: User, title: str, body: str, images: list[tuple[bytes, str
 
     ``body_format="html"`` 이면 본문은 편집기 HTML — 새 사진 자리(`data-key="new:N"`)에 주소를 붙인 뒤 정제해 저장한다.
     """
+    assert_can_write(user)  # 차단된 계정은 발언만 막는다(읽기는 그대로)
     title = (title or "").strip()
     if not title:
         raise ValueError("제목을 입력해 주세요.")
@@ -721,6 +723,7 @@ def add_comment(post_id: int, user: User, text: str, parent_id: int | None = Non
 
     ``parent_id`` 가 있으면 답글. 답글의 답글은 같은 원댓글 아래로 붙인다(한 단계만).
     """
+    assert_can_write(user)  # 차단된 계정은 발언만 막는다(읽기는 그대로)
     text = (text or "").strip()
     if not text:
         raise ValueError("댓글 내용을 입력해 주세요.")

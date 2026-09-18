@@ -1,17 +1,23 @@
-// 관리자 대시보드 — 다섯 탭(사용자 · 가입/전환/유지 · 매크로 · 뉴스 수집 · API 비용).
+// 관리자 대시보드 — 여섯 탭(사용자 · 가입/전환/유지 · 매크로 · 뉴스 수집 · API 비용 · 회원 관리).
 // 탭·기간은 주소(?tab&days)에 있고, 문서가 보이는 동안 1분마다 다시 받는다. 숫자는 서버가 계산한 것을
 // 그대로 보여 주고, 합계 행처럼 화면에서 더하는 값도 서버 행에서만 더한다(없는 값은 "—").
-import { useCallback, useMemo, useRef, useState } from "react";
+// 회원 관리는 지표가 아니라 목록이라 쪽·검색·상태 필터까지 주소에 있고(?page&q&status&size), 기간은 무관해 숨긴다.
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useSearchParams } from "react-router-dom";
 import { api } from "../api.js";
 import { useAuth } from "../lib/auth.js";
 import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 import {
   AGGREGATION_START, BOARD_STATUS, CHANNEL_DETAIL, CHANNEL_LABELS, COST_METHOD_LABELS, DEVICE_LABELS, ENGINE_STATUS,
-  METHOD_LABELS, PAGE_LABELS, PURPOSE_LABELS, fmtDayTimeKst, fmtDuration, fmtInt, fmtLimit, fmtMonthLabel, fmtNum, fmtPct,
+  METHOD_LABELS, PAGE_LABELS, PURPOSE_LABELS, fmtDayTimeKst, fmtDuration, fmtInt, fmtKst, fmtLimit, fmtMonthLabel, fmtNum, fmtPct,
   fmtRelative, fmtSignedPct, fmtStamp, fmtTimeKst, fmtTokens, fmtUntil, fmtUsd, labelOf, ratioPct, sumBy, weightedMean,
 } from "../lib/adminFormat.js";
+import {
+  MEMBER_PAGE_SIZES, MEMBER_STATUSES, MEMBER_Q_MAX, blockActionKind, clampPage, memberActionError, memberEmail,
+  memberQueryString, memberResultLine, memberSearchParams, memberSignup, memberState, memberTier, pageCount, parseMemberQuery,
+} from "../lib/memberList.js";
 import { AdminBlock, AdminKpis, AdminTable, AdminTerms, ErrorBlock, RangePicker, Skeleton, StatusPill, TabNav } from "../components/admin/AdminBlocks.jsx";
+import { MemberActionDialogs, MemberRowActions } from "../components/admin/MemberActions.jsx";
 import {
   BarChart, Donut, FunnelChart, HBarChart, HeatCell, Legend, LineChart, SERIES, StackedChart, bucketHours,
 } from "../components/admin/AdminCharts.jsx";
@@ -23,6 +29,7 @@ const TABS = [
   { key: "macros", label: "매크로 지표" },
   { key: "news", label: "뉴스 수집 현황" },
   { key: "costs", label: "API 비용" },
+  { key: "members", label: "회원 관리" },
 ];
 const RANGED = new Set(["users", "signups", "macros"]);
 const RANGES = [7, 30, 90];
@@ -36,6 +43,7 @@ const FETCHERS = {
   macros: (days, o) => api.adminMacros(days, o),
   news: (_days, o) => api.adminNews(o),
   costs: (_days, o) => api.adminCosts(COST_MONTHS, o),
+  members: (_days, o, query) => api.adminMembers(query || {}, o),
 };
 
 function parseTab(value) {
@@ -49,14 +57,16 @@ function parseDays(value) {
 // 탭·기간별로 받은 응답을 기억해 두고, 돌아오면 먼저 보여 준 뒤 조용히 새로 받는다.
 // 돌려주는 값은 항상 "지금 키" 기준으로 고른다 — 탭을 바꾼 직후의 렌더에서 view 는 아직 이전 키의 응답이라,
 // 그대로 내보내면 새 탭 컴포넌트가 이전 탭 자료로 한 번 그려진다.
-function useAdminData(tab, days, enabled) {
+// 회원 관리는 같은 탭에서도 쪽·검색·필터마다 다른 응답이라 그 조회 조건까지 키에 넣는다 —
+// 키가 바뀌면 폴러가 새로 서고(진행 중 요청은 abort) 응답은 언제나 "지금 키" 것만 쓰인다.
+function useAdminData(tab, days, enabled, query = null) {
   const cacheRef = useRef(new Map());
-  const key = `${tab}:${days}`;
+  const key = `${tab}:${days}:${query ? memberQueryString(query) : ""}`;
   const [view, setView] = useState(() => ({ key, data: null, error: "", loading: true }));
   const [badges, setBadges] = useState({});
   const load = useCallback(async (signal) => {
     try {
-      const data = await FETCHERS[tab](days, { signal });
+      const data = await FETCHERS[tab](days, { signal }, query);
       cacheRef.current.set(key, data);
       setView({ key, data, error: "", loading: false });
       if (tab === "macros") setBadges((b) => ({ ...b, macros: sumBy(data?.sessions, "error") || 0 }));
@@ -67,7 +77,8 @@ function useAdminData(tab, days, enabled) {
       setView({ key, data: cacheRef.current.get(key) || null, error: e?.message || "불러오지 못했어요", loading: false });
       throw e;
     }
-  }, [tab, days, key]);
+    // query 는 key 에 녹아 있다 — 조회 조건이 바뀌면 key 가 바뀌고, 폴러는 key 로만 다시 선다.
+  }, [tab, days, key]); // eslint-disable-line react-hooks/exhaustive-deps
   const refresh = useAdaptivePolling(load, { intervalMs: 60_000, maxIntervalMs: 60_000, enabled, pollKey: key });
   const current = view.key === key
     ? view
@@ -81,18 +92,28 @@ export default function AdminDashboard() {
   const tab = parseTab(params.get("tab"));
   const days = parseDays(params.get("days"));
   const ranged = RANGED.has(tab);
-  const { data, error, loading, badges, refresh } = useAdminData(tab, ranged ? days : 0, Boolean(user?.is_admin));
+  // 회원 조회 조건은 주소가 원본 — 새로 고쳐도 같은 쪽·검색어·필터가 남는다.
+  const memberQuery = useMemo(() => (tab === "members" ? parseMemberQuery(params) : null), [tab, params]);
+  const { data, error, loading, badges, refresh } = useAdminData(tab, ranged ? days : 0, Boolean(user?.is_admin), memberQuery);
 
   const hrefFor = useCallback((nextTab) => {
+    // 보고 있는 탭을 다시 누를 때 조회 조건을 잃지 않는다.
+    if (nextTab === "members") return `?${memberQuery ? memberSearchParams(memberQuery) : new URLSearchParams({ tab: "members" })}`;
     const q = new URLSearchParams({ tab: nextTab });
     if (RANGED.has(nextTab) && days !== 30) q.set("days", String(days));
     return `?${q}`;
-  }, [days]);
+  }, [days, memberQuery]);
   const setDays = (d) => {
     const q = new URLSearchParams({ tab });
     if (d !== 30) q.set("days", String(d));
     setParams(q, { replace: true });
   };
+  // 조회 조건을 하나 바꾸면 나머지는 그대로, 쪽은 1로 되돌린다(쪽을 바꾼 게 아니라면).
+  const setMemberQuery = useCallback((next) => {
+    const merged = { ...(memberQuery || {}), ...next };
+    if (!("page" in next)) merged.page = 1;
+    setParams(memberSearchParams(merged), { replace: true });
+  }, [memberQuery, setParams]);
 
   if (!user) return <Navigate to="/login" replace />;
   if (!user.is_admin) return <Navigate to="/mypage" replace />;
@@ -118,13 +139,20 @@ export default function AdminDashboard() {
         </div>
       </div>
       <TabNav tabs={TABS} active={tab} hrefFor={hrefFor} badges={badgeLabels} />
-      {!data && loading ? <Skeleton /> : null}
-      {!data && !loading && error ? <ErrorBlock message={error} onRetry={refresh} /> : null}
+      {/* 회원 관리는 검색칸이 살아 있어야 해서(조회마다 화면이 사라지면 포커스를 잃는다) 스켈레톤·오류를 탭 안에서 다룬다. */}
+      {!data && loading && tab !== "members" ? <Skeleton /> : null}
+      {!data && !loading && error && tab !== "members" ? <ErrorBlock message={error} onRetry={refresh} /> : null}
       {data && tab === "users" ? <UsersTab data={data} days={days} /> : null}
       {data && tab === "signups" ? <SignupsTab data={data} days={days} /> : null}
       {data && tab === "macros" ? <MacrosTab data={data} days={days} /> : null}
       {data && tab === "news" ? <NewsTab data={data} /> : null}
       {data && tab === "costs" ? <CostsTab data={data} /> : null}
+      {tab === "members" ? (
+        <MembersTab
+          data={data} loading={loading} error={error} query={memberQuery}
+          selfId={user?.id ?? null} onQuery={setMemberQuery} onRefresh={refresh}
+        />
+      ) : null}
     </div>
   );
 }
@@ -579,6 +607,176 @@ function CostsTab({ data }) {
           { key: "coindesk_calls", label: "CoinDesk 호출", num: true, render: (r) => fmtInt(r.coindesk_calls) },
         ]} />
       </AdminBlock>
+    </>
+  );
+}
+
+// ── 탭 6 · 회원 관리 ────────────────────────────────────────────────────────────
+// 지표 탭과 달리 목록 + 조치다. 조회 조건은 주소에 있고(부모가 준다), 조치가 끝나면 곧바로 같은 쪽을 다시 받는다.
+// 결과는 토스트가 아니라 표 위 한 줄 — 무엇이 달라졌는지 남아 있어야 다음 조치를 판단할 수 있다.
+function MembersTab({ data, loading, error, query, selfId, onQuery, onRefresh }) {
+  const now = Date.now();
+  const counts = data?.counts || {};
+  const items = data?.items || [];
+  const total = data?.total;
+  const pages = Number(data?.total_pages) || pageCount(total, query.pageSize);
+  const page = clampPage(data?.page || query.page, pages);
+  const queryKey = memberQueryString(query);
+
+  const [term, setTerm] = useState(query.q);
+  const committedRef = useRef(query.q);
+  const [action, setAction] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+  const [dialogError, setDialogError] = useState("");
+  const aliveRef = useRef(true);
+  useEffect(() => { aliveRef.current = true; return () => { aliveRef.current = false; }; }, []);
+
+  // 주소가 밖에서 바뀌면(뒤로 가기·탭 재진입) 입력칸을 맞춘다.
+  useEffect(() => {
+    if (query.q === committedRef.current) return;
+    committedRef.current = query.q;
+    setTerm(query.q);
+  }, [query.q]);
+  // 검색은 300ms 디바운스 — 글자마다 요청하지 않고, 확정되면 1쪽으로 되돌린다.
+  useEffect(() => {
+    if (term.trim() === query.q) return undefined;
+    const timer = window.setTimeout(() => {
+      committedRef.current = term.trim();
+      onQuery({ q: term.trim() });
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [term, query.q, onQuery]);
+  // 조회 조건이 바뀌면 앞 조치의 결과 문구는 지운다(다른 쪽·다른 필터에 남아 있으면 오해를 부른다).
+  useEffect(() => { setResult(null); setDialogError(""); }, [queryKey]);
+
+  const closeDialog = useCallback(() => { setAction(null); setDialogError(""); }, []);
+
+  async function submitAction(payload) {
+    if (!action) return;
+    const { kind, member } = action;
+    setBusy(true);
+    setDialogError("");
+    try {
+      if (kind === "message") await api.adminMemberMessage(member.id, payload);
+      else if (kind === "block") await api.adminMemberBlock(member.id, { blocked: !member.is_blocked, reason: payload.reason });
+      else await api.adminMemberDelete(member.id, { reason: payload.reason });
+      if (!aliveRef.current) return;
+      setAction(null);
+      setResult({ text: memberResultLine(kind === "block" ? blockActionKind(member) : kind, member), bad: false });
+      onRefresh();
+    } catch (e) {
+      if (!aliveRef.current) return;
+      const message = memberActionError(e);
+      setResult({ text: message, bad: true });
+      // 메시지 폼은 창을 닫지 않는다 — 제목·내용을 다시 쓰게 만들지 않기 위해(오류 문구는 창 안에도 적는다).
+      if (kind === "message") setDialogError(message);
+      else setAction(null);
+    } finally {
+      if (aliveRef.current) setBusy(false);
+    }
+  }
+
+  const stale = Boolean(error && data);
+  return (
+    <>
+      <div className="adm-tabhead">
+        <h2>회원 관리</h2>
+        <AdminTerms items={[
+          ["메시지", "그 회원의 알림창으로 관리자 메시지를 보낸다(알림 kind admin). 접속 중이면 실시간 알림까지 뜬다"],
+          ["차단", "채팅·게시글·댓글을 쓸 수 없다. 로그인·열람·백테스트는 그대로. 되돌릴 수 있다"],
+          ["탈퇴", "계정을 지우고 내용은 ‘탈퇴한 회원’ 으로 익명화(포인트 회수). 되돌릴 수 없고 같은 이메일로 다시 가입할 수 없다"],
+          ["이메일", "서버가 마스킹해서 준다 (a***@gmail.com)"],
+          ["가입 방법", "구글 간편 가입 · 이메일 가입"],
+          ["등급", "포인트로 올라가는 회원 등급 (새싹 · 골드…)"],
+          ["구매 · 판매", "언락으로 산 매크로 수 · 내 매크로가 팔린 수"],
+          ["마지막 방문", `마지막 방문 기록 시각. 집계 시작 ${AGGREGATION_START}`],
+        ]} />
+      </div>
+      <AdminBlock
+        title="회원 목록"
+        caption={`총 ${fmtInt(total)}명 · ${fmtInt(page)} / ${fmtInt(pages)} 페이지 · 최신 가입 순`}
+        actions={stale ? <button type="button" className="adm-more" onClick={onRefresh}>다시 시도</button> : null}
+      >
+        <div className="adm-mem-bar">
+          <div className="adm-mem-chips" role="group" aria-label="상태 필터">
+            {MEMBER_STATUSES.map((s) => (
+              <button
+                key={s.key} type="button" className={`adm-mem-chip${query.status === s.key ? " is-on" : ""}`}
+                aria-pressed={query.status === s.key} onClick={() => onQuery({ status: s.key })}
+              >
+                {s.label}<span className="num">{fmtInt(counts[s.key])}</span>
+              </button>
+            ))}
+          </div>
+          <label className="adm-mem-search">
+            <span className="sr-only">회원 검색</span>
+            <input
+              type="search" className="field field-sm" value={term} maxLength={MEMBER_Q_MAX}
+              placeholder="아이디 · 이메일 검색" onChange={(e) => setTerm(e.target.value)}
+            />
+          </label>
+        </div>
+        {result ? <p className={`adm-mem-result${result.bad ? " is-bad" : ""}`} role="status">{result.text}</p> : null}
+        {!data && loading ? <Skeleton rows={6} /> : null}
+        {!data && !loading && error ? <ErrorBlock message={error} onRetry={onRefresh} /> : null}
+        {data ? (
+          <div className="adm-mem-wrap" aria-busy={loading || undefined}>
+            <AdminTable
+              rows={items} rowKey={(r) => r.id}
+              empty={query.q ? `‘${query.q}’ 검색 결과가 없어요` : "조건에 맞는 회원이 없어요"}
+              columns={[
+                { key: "username", label: "아이디" },
+                { key: "email_masked", label: "이메일", render: (r) => memberEmail(r) },
+                { key: "created_at", label: "가입일", render: (r) => fmtKst(r.created_at) },
+                { key: "signup_method", label: "가입 방법", render: (r) => memberSignup(r) },
+                { key: "tier_name", label: "등급", render: (r) => memberTier(r) },
+                { key: "points_balance", label: "포인트", num: true, render: (r) => fmtInt(r.points_balance) },
+                { key: "macros", label: "매크로", num: true, render: (r) => fmtInt(r.macros) },
+                { key: "posts", label: "글", num: true, render: (r) => fmtInt(r.posts) },
+                { key: "comments", label: "댓글", num: true, render: (r) => fmtInt(r.comments) },
+                { key: "unlocks_bought", label: "구매", num: true, render: (r) => fmtInt(r.unlocks_bought) },
+                { key: "sales", label: "판매", num: true, render: (r) => fmtInt(r.sales) },
+                { key: "last_seen_ms", label: "마지막 방문", render: (r) => fmtRelative(r.last_seen_ms, now) },
+                {
+                  key: "state",
+                  label: "상태",
+                  render: (r) => {
+                    const state = memberState(r);
+                    return (
+                      <span className="adm-mem-state" title={r.blocked_reason || undefined}>
+                        <StatusPill tone={state.tone}>{state.label}</StatusPill>
+                        {r.is_admin ? <span className="adm-mem-admin">관리자</span> : null}
+                      </span>
+                    );
+                  },
+                },
+                {
+                  key: "act",
+                  label: "조치",
+                  render: (r) => <MemberRowActions member={r} selfId={selfId} disabled={busy} onAction={setAction} />,
+                },
+              ]}
+            />
+          </div>
+        ) : null}
+        {/* 쪽 이동은 응답이 온 뒤에만 — 받기 전에는 "1 / 1 페이지 · 총 —명" 을 지어내지 않는다. */}
+        {data ? (
+        <div className="adm-mem-pager">
+          <button type="button" className="adm-act" disabled={page <= 1} onClick={() => onQuery({ page: page - 1 })}>이전</button>
+          <span className="adm-mem-pageno"><b className="num">{fmtInt(page)}</b> / <span className="num">{fmtInt(pages)}</span> 페이지</span>
+          <button type="button" className="adm-act" disabled={page >= pages} onClick={() => onQuery({ page: page + 1 })}>다음</button>
+          <label className="adm-mem-size">
+            <span>쪽당</span>
+            <select className="field field-sm" value={query.pageSize} onChange={(e) => onQuery({ pageSize: Number(e.target.value) })}>
+              {MEMBER_PAGE_SIZES.map((n) => <option key={n} value={n}>{n}명</option>)}
+            </select>
+          </label>
+          <span className="adm-mem-total">총 <b className="num">{fmtInt(total)}</b>명</span>
+        </div>
+        ) : null}
+      </AdminBlock>
+      <MemberActionDialogs action={action} busy={busy} error={dialogError} onSubmit={submitAction} onCancel={closeDialog} />
     </>
   );
 }

@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -20,8 +21,8 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import func
 from sqlmodel import Session, select
 
-from . import ai_explain as ai_explain_mod
 from .ai_runtime import ai_available, ai_cache_key, default_model, get_ai_client, get_ai_runtime
+from .data import NoSpotDataError
 from .db import AskMacroSession, User
 from .engine.backtest import BacktestResult
 from .engine.explain import explain_result
@@ -160,32 +161,42 @@ def _label(rule_type: str, req: AskRequest, symbols: list[str]) -> str:
 
 
 def build_templates(req: AskRequest) -> list[Candidate]:
-    """성향별 템플릿 후보. 첫 프리셋은 유형별로 '종목 전부 + 포트폴리오'를 함께 묶어서 추가하고, 두 번째 프리셋은 종목별·유형별로 추가한다. 우선순위가 낮은 유형이 상한(MAX_CANDIDATES)에 잘린다."""
+    """성향별 템플릿 후보.
+
+    상한(24)에 걸리면 뒤쪽부터 잘리므로 모든 유형의 단일 종목 후보가 먼저,
+    포트폴리오가 그다음, 두 번째 프리셋이 마지막에 오도록 순서를 정한다:
+    1) 유형 × 종목 전부의 첫 프리셋(단일 종목), 2) 종목이 2개 이상이면 유형별
+    포트폴리오(첫 프리셋), 3) 유형 × 종목 전부의 두 번째 프리셋(단일 종목).
+    """
     out: list[Candidate] = []
     types = _allowed_types(req)
+
+    # 1) 모든 유형 × 모든 종목의 첫 프리셋(단일 종목)
+    for rule_type in types:
+        for sym in req.symbols:
+            macro = _make_macro(req, rule_type, _PRESETS[rule_type][0], [sym])
+            if macro is not None:
+                out.append(Candidate(_label(rule_type, req, [sym]), macro, "template"))
+
+    # 2) 종목이 2개 이상이면 유형별 포트폴리오(첫 프리셋)
+    if len(req.symbols) > 1:
+        for rule_type in types:
+            macro = _make_macro(req, rule_type, _PRESETS[rule_type][0], req.symbols)
+            if macro is not None:
+                out.append(Candidate(_label(rule_type, req, req.symbols), macro, "template"))
+
+    # 3) 두 번째 이상 프리셋 — 종목별·유형별로 추가
     depth = max(len(_PRESETS[t]) for t in types)
-    for preset_idx in range(depth):
-        if preset_idx == 0:
-            # 첫 프리셋: 유형별로 '모든 종목 + 포트폴리오' 함께 추가
+    for preset_idx in range(1, depth):
+        for sym in req.symbols:
             for rule_type in types:
-                for sym in req.symbols:
-                    macro = _make_macro(req, rule_type, _PRESETS[rule_type][0], [sym])
-                    if macro is not None:
-                        out.append(Candidate(_label(rule_type, req, [sym]), macro, "template"))
-                if len(req.symbols) > 1:
-                    macro = _make_macro(req, rule_type, _PRESETS[rule_type][0], req.symbols)
-                    if macro is not None:
-                        out.append(Candidate(_label(rule_type, req, req.symbols), macro, "template"))
-        else:
-            # 두 번째 이상 프리셋: 종목별·유형별로 추가
-            for sym in req.symbols:
-                for rule_type in types:
-                    presets = _PRESETS[rule_type]
-                    if preset_idx >= len(presets):
-                        continue
-                    macro = _make_macro(req, rule_type, presets[preset_idx], [sym])
-                    if macro is not None:
-                        out.append(Candidate(_label(rule_type, req, [sym]), macro, "template"))
+                presets = _PRESETS[rule_type]
+                if preset_idx >= len(presets):
+                    continue
+                macro = _make_macro(req, rule_type, presets[preset_idx], [sym])
+                if macro is not None:
+                    out.append(Candidate(_label(rule_type, req, [sym]), macro, "template"))
+
     return out[:MAX_CANDIDATES]
 
 
@@ -288,6 +299,7 @@ def propose_with_ai(req: AskRequest) -> list[Candidate]:
         response = get_ai_client().messages.create(
             model=_AI_MODEL, max_tokens=_AI_MAX_TOKENS, system=system,
             messages=[{"role": "user", "content": prompt}], purpose="ask",
+            timeout=float(os.environ.get("ASK_AI_TIMEOUT_SEC", "6")),
         )
         text = next((b.text for b in response.content if getattr(b, "type", None) == "text"), None)
         if not text:
@@ -299,7 +311,7 @@ def propose_with_ai(req: AskRequest) -> list[Candidate]:
         return macros
 
     try:
-        proposed = get_ai_runtime().call(key, load)[0]
+        proposed = get_ai_runtime().call(key, load, retries=0)[0]
     except Exception:
         return []
 
@@ -388,8 +400,10 @@ def _metrics(result: BacktestResult) -> dict:
 
 def _result_view(e: Evaluated) -> dict:
     macro = e.candidate.macro
-    base = explain_result(macro, e.result)
-    explanation = ai_explain_mod.enrich(macro, e.result, base=base)
+    # v1 은 규칙 기반 explain_result 만 쓴다 — AI 해설(ai_explain.enrich)은 사이트 전체
+    # 일일 예산(AI_EXPLAIN_MAX_CALLS_PER_DAY)을 공유하는데, 여기선 한 번의 질문에 최대
+    # 3개 결과가 순차로 Gemini 를 부르게 되어 예산을 빠르게 갉아먹는다. 그래서 뺀다.
+    explanation = explain_result(macro, e.result)
     return {
         "label": e.candidate.label,
         "rule_type": macro.rule_type.value,
@@ -397,8 +411,14 @@ def _result_view(e: Evaluated) -> dict:
         "macro": macro.model_dump(mode="json"),
         "metrics": _metrics(e.result),
         "explanation": explanation.model_dump(),
-        "ai_generated": explanation.source == "ai",
+        "ai_generated": False,
     }
+
+
+# 사용자별로 동시에 한 번만 질문을 돌린다 — 락은 집합 조작(포함 검사+추가/제거)만 감싸고,
+# 백테스트가 도는 동안은 잡지 않는다.
+_IN_FLIGHT: set[int] = set()
+_IN_FLIGHT_LOCK = threading.Lock()
 
 
 def run_ask(db: Session, user: User, req: AskRequest, run_backtest: Callable[[Macro], BacktestResult]) -> dict:
@@ -407,31 +427,68 @@ def run_ask(db: Session, user: User, req: AskRequest, run_backtest: Callable[[Ma
     if remaining_today(db, user) <= 0:
         raise AskError(429, f"오늘은 {daily_limit()}번 다 물어봤어요. 내일 다시 물어봐 주세요.")
 
-    started = time.monotonic()
-    ai_candidates = propose_with_ai(req)
-    candidates = (ai_candidates + build_templates(req))[:MAX_CANDIDATES]
-    evaluated = evaluate(candidates, run_backtest, time_budget_sec())
-    top = select_top(evaluated, req.risk_profile)
-    results = [_result_view(e) for e in top]
-    elapsed_ms = int((time.monotonic() - started) * 1000)
+    with _IN_FLIGHT_LOCK:
+        if user.id in _IN_FLIGHT:
+            raise AskError(429, "아직 지난 질문을 돌리는 중이에요. 잠시만요.")
+        _IN_FLIGHT.add(user.id)
 
-    created_at, created_ms = _now()
-    db.add(AskMacroSession(
-        user_id=user.id, day_kst=today_kst(), request_json=json.dumps(req.model_dump(), ensure_ascii=False),
-        candidate_count=len(evaluated),
-        results_json=json.dumps(
-            [{"label": r["label"], "rule_type": r["rule_type"], "macro": r["macro"], "metrics": r["metrics"]} for r in results],
-            ensure_ascii=False),
-        disclaimer_version=DISCLAIMER_VERSION, ai_used=bool(ai_candidates), elapsed_ms=elapsed_ms,
-        created_at=created_at, created_ms=created_ms,
-    ))
-    db.commit()
-    return {
-        "results": results,
-        "candidate_count": len(evaluated),
-        "ai_used": bool(ai_candidates),
-        "disclaimer": DISCLAIMER,
-        "disclaimer_version": DISCLAIMER_VERSION,
-        "remaining_today": remaining_today(db, user),
-        "elapsed_ms": elapsed_ms,
-    }
+    try:
+        started = time.monotonic()
+        created_at, created_ms = _now()
+        # 위의 한도 검사와 이 저장 사이에 시간차가 있으면 동시 요청 여러 개가 함께
+        # 통과해 하루 한도를 넘길 수 있다 — 평가를 시작하기 전에 빈 자리표시 행을
+        # 먼저 커밋해서 그 check-then-insert 창을 닫는다. 실패하면 이 행은 지운다.
+        session_row = AskMacroSession(
+            user_id=user.id, day_kst=today_kst(),
+            request_json=json.dumps(req.model_dump(), ensure_ascii=False),
+            candidate_count=0, results_json="[]",
+            disclaimer_version=DISCLAIMER_VERSION, ai_used=False, elapsed_ms=0,
+            created_at=created_at, created_ms=created_ms,
+        )
+        db.add(session_row)
+        db.commit()
+
+        try:
+            failures: list[Exception] = []
+
+            def guarded(macro: Macro) -> BacktestResult:
+                try:
+                    return run_backtest(macro)
+                except Exception as exc:
+                    failures.append(exc)
+                    raise
+
+            ai_candidates = propose_with_ai(req)[:TOP_N]
+            candidates = (ai_candidates + build_templates(req))[:MAX_CANDIDATES]
+            evaluated = evaluate(candidates, guarded, time_budget_sec())
+            if not evaluated and failures and all(isinstance(f, NoSpotDataError) for f in failures):
+                raise AskError(422, "이 종목의 시세 데이터를 찾지 못했어요. 종목 이름을 확인해 주세요.")
+            top = select_top(evaluated, req.risk_profile)
+            results = [_result_view(e) for e in top]
+            elapsed_ms = int((time.monotonic() - started) * 1000)
+
+            session_row.candidate_count = len(evaluated)
+            session_row.results_json = json.dumps(
+                [{"label": r["label"], "rule_type": r["rule_type"], "macro": r["macro"], "metrics": r["metrics"]} for r in results],
+                ensure_ascii=False)
+            session_row.ai_used = bool(ai_candidates)
+            session_row.elapsed_ms = elapsed_ms
+            db.add(session_row)
+            db.commit()
+        except Exception:
+            db.delete(session_row)
+            db.commit()
+            raise
+
+        return {
+            "results": results,
+            "candidate_count": len(evaluated),
+            "ai_used": bool(ai_candidates),
+            "disclaimer": DISCLAIMER,
+            "disclaimer_version": DISCLAIMER_VERSION,
+            "remaining_today": remaining_today(db, user),
+            "elapsed_ms": elapsed_ms,
+        }
+    finally:
+        with _IN_FLIGHT_LOCK:
+            _IN_FLIGHT.discard(user.id)

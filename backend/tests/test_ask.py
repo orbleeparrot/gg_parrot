@@ -84,16 +84,22 @@ def test_templates_cover_every_symbol_first_and_add_a_portfolio():
     assert all("추천" not in c.label for c in cands)
 
 
-def test_templates_keep_portfolio_when_cap_is_hit():
-    req = ask.AskRequest(risk_profile="aggressive", symbols=["BTCUSDT", "ETHUSDT", "SOLUSDT"])
-    cands = ask.build_templates(req)
-    assert len(cands) == ask.MAX_CANDIDATES
-    portfolios = [c for c in cands if c.macro.symbols]
-    assert portfolios, "상한에 걸려도 포트폴리오 후보는 남아야 한다"
-    # 유형마다 종목 3개 + 포트폴리오 1개가 붙어 있고, 뒤쪽(낮은 우선순위) 유형이 잘린다.
-    first_type = cands[0].macro.rule_type.value
-    assert [c.macro.rule_type.value for c in cands[:4]] == [first_type] * 4
-    assert cands[3].macro.symbols == ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+def test_templates_cover_every_type_before_portfolios():
+    # 공격형 × 종목 3개: 유형 8개 × 종목 3개 = 24 로 단일 후보만으로 상한이 찬다 — 포트폴리오는 못 들어간다.
+    req3 = ask.AskRequest(risk_profile="aggressive", symbols=["BTCUSDT", "ETHUSDT", "SOLUSDT"])
+    cands3 = ask.build_templates(req3)
+    assert len(cands3) == ask.MAX_CANDIDATES
+    types3 = {c.macro.rule_type.value for c in cands3}
+    assert {"I", "H"} <= types3
+    assert [c for c in cands3 if c.macro.symbols] == []
+
+    # 공격형 × 종목 2개: 유형 8개 × 종목 2개(16) + 포트폴리오 8개 = 24 — 포트폴리오가 남고 모든 유형이 단일에 있다.
+    req2 = ask.AskRequest(risk_profile="aggressive", symbols=["BTCUSDT", "ETHUSDT"])
+    cands2 = ask.build_templates(req2)
+    portfolios2 = [c for c in cands2 if c.macro.symbols]
+    singles2 = [c for c in cands2 if not c.macro.symbols]
+    assert portfolios2
+    assert set(ask._allowed_types(req2)) <= {c.macro.rule_type.value for c in singles2}
 
 
 def _result(ret, mdd, trades=10, win=50.0):
@@ -168,7 +174,7 @@ class _FakeClient:
 
 def _fake_runtime():
     class RT:
-        def call(self, key, load):
+        def call(self, key, load, **kwargs):
             return load(), "miss"
     return RT()
 
@@ -212,7 +218,6 @@ def _fake_backtest(monkeypatch):
 
     monkeypatch.setattr("app.main._run_any", fake_run_any)
     monkeypatch.setattr(ask, "ai_available", lambda: False)
-    monkeypatch.setattr(ask.ai_explain_mod, "ai_available", lambda: False)
 
 
 _BODY = {"risk_profile": "balanced", "market": "spot", "leverage": 1,
@@ -281,3 +286,32 @@ def test_macros_with_no_candidates_returns_empty_results(_fake_backtest, monkeyp
     monkeypatch.setattr("app.main._run_any", boom)
     data = client.post("/api/ask/macros", json=_BODY, headers=_auth(token)).json()
     assert data["results"] == [] and data["remaining_today"] == 4
+
+
+def test_in_flight_guard_rejects_concurrent_ask(_fake_backtest):
+    token, user_id = _signup()
+    client.post("/api/ask/consent", headers=_auth(token))
+    ask._IN_FLIGHT.add(user_id)
+    try:
+        res = client.post("/api/ask/macros", json=_BODY, headers=_auth(token))
+        assert res.status_code == 429
+        assert "돌리는 중" in res.json()["detail"]
+    finally:
+        ask._IN_FLIGHT.discard(user_id)
+
+
+def test_failed_ask_does_not_consume_quota(_fake_backtest, monkeypatch):
+    token, user_id = _signup()
+    client.post("/api/ask/consent", headers=_auth(token))
+
+    def boom(macro):
+        raise ask.NoSpotDataError("no data")
+
+    monkeypatch.setattr("app.main._run_any", boom)
+    res = client.post("/api/ask/macros", json=_BODY, headers=_auth(token))
+    assert res.status_code == 422
+
+    assert client.get("/api/ask/status", headers=_auth(token)).json()["remaining_today"] == 5
+    with get_session() as db:
+        rows = db.exec(select(AskMacroSession).where(AskMacroSession.user_id == user_id)).all()
+        assert rows == []

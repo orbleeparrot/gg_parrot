@@ -77,12 +77,13 @@ AI 는 조합의 뼈대만 제안하고, 성과 숫자는 전부 기존 백테�
    - 성향별 템플릿 그리드(각 유형 파라미터 프리셋 2~3개, `initial_capital` 1,000,000):
      - stable: C(적립) · J(이평 교차) · G(밴드 회귀) · A(익절/손절)
      - balanced: stable + F(RSI) · E(트레일링)
-     - aggressive: balanced + I(변동성 돌파) · D(그리드) · H(세이프티 주문)
+     - aggressive: balanced + I(변동성 돌파) · H(세이프티 주문)
+     - D(그리드)·B(지정가 밴드)는 절대 가격 구간이 필요해 템플릿에서 제외. C(적립)는 레버리지를 못 쓰므로 선물이면 제외.
    - `candle_interval = interval`, `market`, `leverage`, `period.preset`, `position_side = long` 고정.
    - 심볼마다 단일 매크로 + 심볼 2개 이상이면 `symbols=[...]` 포트폴리오 매크로 1벌.
    - Gemini 제안: `ai_challenge` 의 프롬프트를 성향·시장·interval 인지형으로 확장한 `_ai_propose(req)`
      (허용 rule_type 은 성향 집합으로 제한, `Macro(**dict)` 검증, 실패분 폐기). 키 없으면 건너뜀.
-   - 총 ≤ 24개. 초과분은 템플릿 우선순위 뒤쪽부터 자른다.
+   - 총 ≤ 24개. 템플릿은 '각 유형의 첫 프리셋 × 모든 종목'을 먼저, 두 번째 프리셋을 나중에 넣고 초과분은 뒤에서 자른다.
 2. **백테스트** — 후보마다 `_run_any(macro)`; 예외는 그 후보만 건너뜀. 캔들은 기존 캐시를 공유.
 3. **필터** — 성향별 MDD 상한(stable 10 / balanced 20 / aggressive 없음), `total_trades >= 3`.
 4. **정렬 점수** — stable `return / max(mdd, 1)`, balanced `return - 0.5 * mdd`, aggressive `return`.
@@ -99,14 +100,15 @@ AI 는 조합의 뼈대만 제안하고, 성과 숫자는 전부 기존 백테�
   "candidate_count": 18, "disclaimer_version": "ask-v1", "remaining_today": 4 }
 ```
 
-- 한도: `ASK_DAILY_LIMIT` (기본 5) / 계정 / KST 날짜. `AskMacroSession` 행 수로 센다(성공 응답만 기록).
+- 한도: `ASK_DAILY_LIMIT` (기본 5) / 계정 / KST 날짜. `AskMacroSession` 의 (user_id, day_kst) 행 수로 센다(성공 응답만 기록).
+- `GET /api/ask/status` (로그인 필수) → `{consented, remaining_today, daily_limit, disclaimer_version}` — 모달을 열 때 0번 카드 표시 여부와 남은 횟수를 정한다.
 - 실행 시간 상한 `ASK_TIME_BUDGET_SEC` (기본 20): 넘으면 남은 후보는 건너뛰고 지금까지로 정렬.
 - Gemini 실패·키 없음은 조용히 템플릿만으로 진행. 응답 `ai_used` 로 구분.
 
 ### 4.3 DB
 - `user.ask_consent_version: str = ""`, `user.ask_consent_at: str = ""`
 - `askmacrosession` 테이블 (`AskMacroSession` SQLModel): id, user_id(index), request_json, candidate_count,
-  results_json, disclaimer_version, ai_used, elapsed_ms, created_at, created_ms(BigInteger), 인덱스 (user_id, created_ms).
+  results_json, disclaimer_version, ai_used, elapsed_ms, day_kst, created_at, created_ms(BigInteger), 인덱스 (user_id, day_kst).
 - sqlite `_migrate` ALTER + `_PG_ADDED_COLUMNS`, Supabase 마이그레이션 `2026091812xxxx_ask_macro_sessions.sql`
   (테이블 + user 컬럼 2개 + RLS 켜고 Data API 권한 회수), `supabase/tests/gg_parrot_rls.sql` 에 테이블 추가.
 

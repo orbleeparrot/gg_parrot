@@ -150,10 +150,12 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
   }, [open]);
 
   // 카드를 다 답하면 서버에 묻는다.
+  // "ready" 단계도 RUNNING_TEXT 를 그리므로(아래 렌더 참고) 여기서 "loading" 을 dispatch 하지 않는다 —
+  // dispatch 하면 state.phase 가 바뀌어 이 effect 의 의존성이 바뀌고, effect 가 스스로를 정리(alive=false)해
+  // 방금 시작한 요청의 결과를 영영 버리게 된다.
   useEffect(() => {
     if (state.phase !== "ready") return undefined;
     let alive = true;
-    dispatch({ type: "loading" });
     writeRecent(state.answers.symbols);
     api.askMacros(toRequest(state.answers))
       .then((data) => {

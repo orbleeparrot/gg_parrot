@@ -37,6 +37,8 @@
 }
 .studio-cond-upload:disabled { opacity: .5; cursor: not-allowed; }
 .studio-cond-upload:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
+/* 껄무새에게 물어볼까? — 업로드 버튼과 같은 꼴, 앞에 앵무새만 */
+.studio-cond-ask { margin-right: 6px; }
 .studio-scroll { overflow: auto; min-height: 0; overscroll-behavior: contain; }
 
 /* 조건 — Builder 를 그대로 쓰되 좁은 열에 맞춰 2열로 접는다. 스크롤은 이 판 안에서만. */

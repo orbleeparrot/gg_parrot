@@ -9,6 +9,9 @@ import usePaperSession from "../hooks/usePaperSession.js";
 import useStudioSplit from "../hooks/useStudioSplit.js";
 import CandleChart from "../components/CandleChart.jsx";
 import RegisterMacroModal from "../components/RegisterMacroModal.jsx";
+import AskParrotDialog from "../components/AskParrotDialog.jsx";
+import ConfirmDialog from "../components/ConfirmDialog.jsx";
+import { LOADED_TEXT } from "../lib/askCopy.js";
 import { EmptyState, Loading } from "../components/Page.jsx";
 import { api } from "../api.js";
 import { useAuth, useAccountGuard, getAuthScope } from "../lib/auth.js";
@@ -245,6 +248,36 @@ function AccountStudio({ scope, allowRouterMacro }) {
   const [dockTab, setDockTab] = useState(() => saved?.dockTab || "bt"); // 결과 독의 탭 — 백테스트 → AI 해설 → 최적화 → 페이퍼 → 매크로 등록
   const [shareOpen, setShareOpen] = useState(false); // 저장·공유 다이얼로그
   const [tourOpen, setTourOpen] = useState(false); // '사용법 안내' 항목별 설명 투어
+  // 껄무새에게 물어볼까? — 모달, 덮어쓰기 확인, 불러온 뒤 안내
+  const [askOpen, setAskOpen] = useState(() => searchParams.get("ask") === "1");
+  const [askPending, setAskPending] = useState(null); // {macro, label} — 조건 판에 입력이 있을 때 확인 대기
+  const [askNotice, setAskNotice] = useState("");
+
+  const applyAskMacro = useCallback((macro, label) => {
+    setForm(macroToForm(macro));
+    setLoadedFrom(`껄무새가 고른 후보 · ${label}`);
+    setAskPending(null);
+    setAskOpen(false);
+    setAskNotice(LOADED_TEXT);
+    recordEvent("ask_load");
+    if (searchParams.get("ask") === "1") {
+      const next = new URLSearchParams(searchParams);
+      next.delete("ask");
+      setSearchParams(next, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
+
+  const onAskLoad = useCallback((macro, label) => {
+    const untouched = JSON.stringify(form) === JSON.stringify(defaultForm());
+    if (untouched) applyAskMacro(macro, label);
+    else setAskPending({ macro, label });
+  }, [form, applyAskMacro]);
+
+  useEffect(() => {
+    if (!askNotice) return undefined;
+    const id = setTimeout(() => setAskNotice(""), 8000);
+    return () => clearTimeout(id);
+  }, [askNotice]);
   const [optimized, setOptimized] = useState(() => !!saved?.optimized); // 최적화를 한 번이라도 돌렸는지(탭 앞 점)
   const [fileImportBusy, setFileImportBusy] = useState(false);
   const [fileImportError, setFileImportError] = useState("");
@@ -787,6 +820,14 @@ function AccountStudio({ scope, allowRouterMacro }) {
           <div className="studio-panel-head">
             <BuilderModeMenu onTour={() => setTourOpen(true)} />
             <div className="studio-head-right">
+              {/* 껄무새에게 물어볼까? — 카드 다섯 장으로 후보 조합 3개. 로그인 전엔 로그인으로(기록을 남겨야 해서). */}
+              {!slug && (token ? (
+                <button type="button" className="studio-cond-upload studio-cond-ask t-caption" onClick={() => { setAskOpen(true); recordEvent("ask_open"); }} disabled={busy} aria-haspopup="dialog" aria-expanded={askOpen}>
+                  <span aria-hidden="true">🦜</span><span>껄무새에게 물어볼까?</span>
+                </button>
+              ) : (
+                <Link to="/login?next=%2Fbuilder%3Fask%3D1" className="studio-cond-upload studio-cond-ask t-caption" title="물어보려면 로그인이 필요해요"><span aria-hidden="true">🦜</span><span>껄무새에게 물어볼까?</span></Link>
+              ))}
               {/* 매크로 파일 등록 — 가지고 있는 .ggm.json 을 내 매크로에 등록하고 조건에 불러온다. 로그인 전엔 로그인으로. */}
               {!slug && (token ? (
                 <button
@@ -806,6 +847,7 @@ function AccountStudio({ scope, allowRouterMacro }) {
             </div>
           </div>
           <div className="studio-scroll studio-cond-body">
+            {askNotice ? <div className="notice t-small text-slate-700 mb-3" role="status">{askNotice}</div> : null}
             <Builder form={form} setForm={setForm} variant="dense" intervalOptions={intervalOptions} fieldError={fieldError} />
           </div>
           <div className="studio-cond-foot">
@@ -959,6 +1001,16 @@ function AccountStudio({ scope, allowRouterMacro }) {
       ) : null}
 
       <ProductTour steps={TOUR_STEPS} open={tourOpen} onClose={() => setTourOpen(false)} />
+
+      <AskParrotDialog open={askOpen} onClose={() => setAskOpen(false)} onLoad={onAskLoad} />
+      <ConfirmDialog
+        open={askPending != null}
+        title="지금 조건이 바뀌어요"
+        description="조건 판에 입력한 값을 껄무새가 고른 후보로 덮어써요. 계속할까요?"
+        confirmLabel="불러오기"
+        onConfirm={() => askPending && applyAskMacro(askPending.macro, askPending.label)}
+        onCancel={() => setAskPending(null)}
+      />
     </div>
   );
 }

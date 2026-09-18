@@ -142,3 +142,59 @@ def test_select_top_filters_scores_and_keeps_rule_types_distinct():
     assert ask.score("balanced", _result(10, 4)) == pytest.approx(8.0)
     assert ask.score("aggressive", _result(10, 40)) == pytest.approx(10.0)
     assert ask.select_top([], "stable") == []
+
+
+class _FakeBlock:
+    type = "text"
+
+    def __init__(self, text):
+        self.text = text
+
+
+class _FakeMessages:
+    def __init__(self, text):
+        self.text = text
+        self.calls = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        return type("R", (), {"content": [_FakeBlock(self.text)]})()
+
+
+class _FakeClient:
+    def __init__(self, text):
+        self.messages = _FakeMessages(text)
+
+
+def _fake_runtime():
+    class RT:
+        def call(self, key, load):
+            return load(), "miss"
+    return RT()
+
+
+def test_ai_proposals_are_validated_and_filtered(monkeypatch):
+    req = ask.AskRequest(risk_profile="stable", symbols=["BTCUSDT"], interval="1d")
+    monkeypatch.setattr(ask, "ai_available", lambda: False)
+    assert ask.propose_with_ai(req) == []
+
+    text = json.dumps({"macros": [
+        {"rule_type": "J", "params": {"ma_type": "EMA", "fast_period": 12, "slow_period": 26, "initial_capital": 1000000}},
+        {"rule_type": "H", "params": {"base_order_size": 1, "safety_order_size": 1, "price_deviation": 1, "take_profit": 1, "initial_capital": 1000000}},  # 안정형 밖 → 폐기
+        {"rule_type": "J", "symbol": "SOLUSDT", "params": {"ma_type": "SMA", "fast_period": 5, "slow_period": 20, "initial_capital": 1000000}},  # 종목 바꿔치기 → 요청 종목으로 고정
+        {"rule_type": "F", "params": {"rsi_period": "x"}},  # 스키마 불량 → 폐기
+    ]})
+    client_ok = _FakeClient(text)
+    monkeypatch.setattr(ask, "ai_available", lambda: True)
+    monkeypatch.setattr(ask, "get_ai_client", lambda: client_ok)
+    monkeypatch.setattr(ask, "get_ai_runtime", _fake_runtime)
+    out = ask.propose_with_ai(req)
+    assert [c.macro.rule_type.value for c in out] == ["J", "J"]
+    assert all(c.macro.symbol == "BTCUSDT" and c.macro.candle_interval == "1d" and c.source == "ai" for c in out)
+    assert all(c.macro.market == "spot" and c.macro.leverage == 1 for c in out)
+    system = client_ok.messages.calls[0]["system"]
+    assert "추천" not in system and "C, J, G, A" in system
+
+    client_bad = _FakeClient("not json")
+    monkeypatch.setattr(ask, "get_ai_client", lambda: client_bad)
+    assert ask.propose_with_ai(req) == []

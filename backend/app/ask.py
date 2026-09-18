@@ -242,3 +242,78 @@ def select_top(evaluated: list[Evaluated], profile: str, n: int = TOP_N) -> list
         if len(picked) >= n:
             break
     return picked
+
+
+_AI_MODEL = default_model()
+_AI_MAX_TOKENS = int(os.environ.get("GEMINI_ASK_MAX_TOKENS", "2048"))
+_AI_PROMPT_VERSION = "ask-v1"
+
+
+def _ai_system(req: AskRequest) -> str:
+    types = ", ".join(_allowed_types(req))
+    return (
+        "너는 코인 백테스트 교육 도구의 매크로 뼈대 생성기야. 사용자가 고른 종목과 조건으로 "
+        "서로 다른 스타일의 매크로 3개를 JSON 으로만 출력해(코드펜스 없이). 형식은 "
+        '{"macros":[{"rule_type":"J","params":{...},"risk":{"stop_loss_pct":3}}, ...]}. '
+        f"rule_type 은 {types} 중에서만 고르고 각 params 는 그 타입 스키마대로 채워. "
+        "initial_capital 은 1000000 으로. 종목·봉 간격·시장·레버리지는 서버가 정하니 넣지 마. "
+        "수익률이나 전망 같은 숫자를 지어내지 말고, 조언·권유 문구를 넣지 마."
+    )
+
+
+def _strip_fences(text: str) -> str:
+    t = text.strip()
+    if t.startswith("```"):
+        t = t.strip("`")
+        if "\n" in t:
+            first, rest = t.split("\n", 1)
+            if first.strip().lower() in ("json", ""):
+                t = rest
+    return t.strip()
+
+
+def propose_with_ai(req: AskRequest) -> list[Candidate]:
+    """Gemini 가 제안한 뼈대를 요청 조건(종목·봉·시장·레버리지)에 고정하고 스키마로 검증한다. 실패는 빈 리스트."""
+    if not ai_available():
+        return []
+    system = _ai_system(req)
+    prompt = (
+        f"종목: {', '.join(req.symbols)} · 성향: {PROFILES[req.risk_profile]['label']} · "
+        f"봉 간격: {req.interval} · 기간: {req.period_preset}. 매크로 3개를 JSON 으로."
+    )
+    key = ai_cache_key("ask", _AI_PROMPT_VERSION, _AI_MODEL,
+                       {"req": req.model_dump(), "system": system, "prompt": prompt, "max_tokens": _AI_MAX_TOKENS})
+
+    def load():
+        response = get_ai_client().messages.create(
+            model=_AI_MODEL, max_tokens=_AI_MAX_TOKENS, system=system,
+            messages=[{"role": "user", "content": prompt}], purpose="ask",
+        )
+        text = next((b.text for b in response.content if getattr(b, "type", None) == "text"), None)
+        if not text:
+            raise ValueError("empty ask response")
+        obj = json.loads(_strip_fences(text))
+        macros = obj.get("macros", obj if isinstance(obj, list) else [])
+        if not isinstance(macros, list):
+            raise ValueError("invalid ask response")
+        return macros
+
+    try:
+        proposed = get_ai_runtime().call(key, load)[0]
+    except Exception:
+        return []
+
+    allowed = set(_allowed_types(req))
+    out: list[Candidate] = []
+    for item in proposed:
+        if not isinstance(item, dict):
+            continue
+        rule_type = str(item.get("rule_type", "")).upper()
+        if rule_type not in allowed:
+            continue
+        preset = {"params": item.get("params") or {}, "risk": item.get("risk") or {}}
+        macro = _make_macro(req, rule_type, preset, [req.symbols[0]])
+        if macro is None:
+            continue
+        out.append(Candidate(_label(rule_type, req, [req.symbols[0]]) + " · AI 제안", macro, "ai"))
+    return out

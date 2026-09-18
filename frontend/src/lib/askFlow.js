@@ -98,7 +98,10 @@ export function reduce(state, action) {
       return { ...state, phase: "error", error: String(action.message || "잠시 뒤 다시 물어봐 주세요.") };
     case "followUp": {
       const { kind } = action;
+      // restart 은 대화에서 닫을 때도 쓰고 에러 상태에서도 쓰므로 모든 phase에서 허락
       if (kind === "restart") return initialState();
+      // 다른 follow-up 은 결과를 보여주는 phase 에서만 작동
+      if (state.phase !== "results") return state;
       if (kind === "symbols") {
         const next = { ...answers, symbols: [] };
         delete next.symbolsConfirmed;

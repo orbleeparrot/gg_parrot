@@ -87,3 +87,12 @@ test("safer from stable is a no-op, and stable clears futures", () => {
   assert.equal(reduce(s, { type: "error", message: "boom" }).phase, "error");
   assert.equal(reduce(s, { type: "loading" }).phase, "loading");
 });
+
+test("follow-ups other than restart are ignored outside the results phase", () => {
+  const fresh = initialState();
+  for (const kind of ["safer", "riskier", "symbols"]) assert.equal(reduce(fresh, { type: "followUp", kind }), fresh);
+  const mid = reduce(fresh, { type: "choose", step: "profile", value: "balanced" });
+  assert.equal(reduce(mid, { type: "followUp", kind: "riskier" }), mid);
+  const errored = reduce(mid, { type: "error", message: "boom" });
+  assert.deepEqual(reduce(errored, { type: "followUp", kind: "restart" }), initialState());
+});

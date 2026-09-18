@@ -272,6 +272,9 @@ class User(SQLModel, table=True):
     created_at: str
     # 관리자 — 프로필에 '관리자 대시보드' 버튼이 생기고 /api/admin/* 를 쓸 수 있다(admin.py). 기본 False.
     is_admin: bool = False
+    # 껄무새에게 물어볼까? — 고지 동의(버전·시각). 동의 버전이 현재 고지 버전과 다르면 다시 받는다.
+    ask_consent_version: str = ""
+    ask_consent_at: str = ""
 
 
 class UserAvatar(SQLModel, table=True):
@@ -588,6 +591,25 @@ class DailyQuestClaim(SQLModel, table=True):
     date_kst: str  # YYYY-MM-DD (KST)
     quest_key: str  # quests.QUESTS 의 key
     reward: int = 0  # 그때 지급한 포인트(퀘스트 보상이 바뀌어도 기록은 남는다)
+    created_at: str
+    created_ms: int = Field(default=0, sa_type=BigInteger)
+
+
+class AskMacroSession(SQLModel, table=True):
+    """'껄무새에게 물어볼까?' 한 번의 요청·결과 기록 — 하루 한도 계산과 문의 대응(무엇을 보여 줬는지)용."""
+
+    __table_args__ = (
+        Index("ix_askmacrosession_user_day", "user_id", "day_kst"),
+    )
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(index=True)
+    day_kst: str  # YYYY-MM-DD (KST) — 하루 한도 키
+    request_json: str = "{}"  # 카드 답변(ask.AskRequest)
+    candidate_count: int = 0  # 백테스트한 후보 수
+    results_json: str = "[]"  # 보여 준 상위 3개(매크로 + 지표)
+    disclaimer_version: str = ""  # 그때 화면에 붙은 고지 버전
+    ai_used: bool = False  # Gemini 제안이 후보에 들어갔는지
+    elapsed_ms: int = 0
     created_at: str
     created_ms: int = Field(default=0, sa_type=BigInteger)
 
@@ -935,6 +957,8 @@ def _migrate() -> None:
             "auth_version": 'ALTER TABLE "user" ADD COLUMN auth_version INTEGER NOT NULL DEFAULT 0',
             "is_deleted": 'ALTER TABLE "user" ADD COLUMN is_deleted BOOLEAN NOT NULL DEFAULT FALSE',
             "is_admin": 'ALTER TABLE "user" ADD COLUMN is_admin BOOLEAN NOT NULL DEFAULT FALSE',
+            "ask_consent_version": 'ALTER TABLE "user" ADD COLUMN ask_consent_version TEXT NOT NULL DEFAULT \'\'',
+            "ask_consent_at": 'ALTER TABLE "user" ADD COLUMN ask_consent_at TEXT NOT NULL DEFAULT \'\'',
         },
         "chatmessage": {
             "user_id": "ALTER TABLE chatmessage ADD COLUMN user_id INTEGER",
@@ -1071,7 +1095,7 @@ _PG_ADDED_COLUMNS = {
         "enrichment_attempts": "INTEGER NOT NULL DEFAULT 0", "enrichment_next_ms": "BIGINT NOT NULL DEFAULT 0",
     },
     "user": {"bio": "TEXT NOT NULL DEFAULT ''", "auth_version": "INTEGER NOT NULL DEFAULT 0", "is_deleted": "BOOLEAN NOT NULL DEFAULT FALSE",
-             "is_admin": "BOOLEAN NOT NULL DEFAULT FALSE"},
+             "is_admin": "BOOLEAN NOT NULL DEFAULT FALSE", "ask_consent_version": "VARCHAR NOT NULL DEFAULT ''", "ask_consent_at": "VARCHAR NOT NULL DEFAULT ''"},
     "chatmessage": {"user_id": "INTEGER"},
     "dailychallenge": {
         "status": "TEXT DEFAULT 'ready'", "claim_token": "TEXT DEFAULT ''",
@@ -1143,7 +1167,7 @@ _PG_PRIVATE_CACHE_TABLES = (
     "newsarticlefeed", "newsarticle", "newsmaintenancelease", "publicnewslease",
     "leaderboardsnapshotcontrol", "leaderboardsnapshotversion", "leaderboardsnapshotitem",
     "leaderboardentrystats", "leaderboardchallengebot",
-    "dailyquestclaim", "runsessionevent",
+    "dailyquestclaim", "runsessionevent", "askmacrosession",
     # 게시판 사진·추천·신고와 브라우저 뉴스 캐시 — create_all 로만 생겨 RLS 없이 anon 권한이 열려 있었다(2026-09-15).
     "boardimage", "boardpostvote", "boardreport", "browsernewspagecache",
     "visit", "macroeventdaily", "collectorrun", "collectorsourcedaily", "apiusagedaily",

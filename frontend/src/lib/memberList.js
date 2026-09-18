@@ -27,7 +27,8 @@ export function memberStatusLabel(key) {
 }
 
 // 가입 방법은 표에 들어가므로 짧게 — 용어 표에 "구글 간편 가입 · 이메일 가입" 을 적어 둔다.
-export const SIGNUP_LABELS = { google: "구글", email: "이메일" };
+// unknown = 탈퇴 행처럼 서버가 가입 방법을 추정하지 않는 계정(코드 그대로 "unknown" 이 찍히지 않게).
+export const SIGNUP_LABELS = { google: "구글", email: "이메일", unknown: "알 수 없음" };
 
 export function memberSignup(member) {
   const code = String(member?.signup_method ?? "").trim();

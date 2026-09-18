@@ -23,6 +23,7 @@ from sqlmodel import Session, select
 from . import auth, notifications
 from .account import _tier
 from .db import (BoardComment, BoardPost, MacroUnlock, PointLedger, RunSession, User, UserMacro, Visit)
+from .admin import signup_method_of
 from .profile import close_account_rows
 
 PAGE_SIZE_DEFAULT = 25
@@ -99,7 +100,7 @@ def member_view(user: User, stats: Optional[dict] = None) -> dict:
         "username": user.username,
         "email_masked": mask_email(user.email),
         "created_at": user.created_at,
-        "signup_method": "email" if user.password_hash else "google",
+        "signup_method": signup_method_of(user.signup_method, user.password_hash, user.is_deleted),
         "is_admin": bool(user.is_admin),
         "is_blocked": bool(user.is_blocked),
         "is_deleted": bool(user.is_deleted),

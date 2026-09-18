@@ -19,7 +19,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlmodel import Field, SQLModel, select
 
 from . import news, news_images
-from .collector_runs import RunRecorder, bump_source
+from .collector_runs import STATUS_CACHED, RunRecorder, bump_source, clean_error
 from .db import get_session
 from .agent_features.position_news import articles, collector
 from .public_news_cache import responses as _responses
@@ -181,9 +181,14 @@ def _read_news(scope: str) -> dict:
 
 
 def collect_market(*, claim_token=None) -> dict:
-    """Publish raw/ready articles before summary and optional image work."""
+    """Publish raw/ready articles before summary and optional image work.
+
+    돌려주는 dict 의 ``item_count`` 는 이번 회차에 **새로 저장한** 기사 수다 — 목록 길이(같은 8건을 회차마다 다시
+    세어 10.6배 부풀던 값)가 아니다(2026-09-18 점검). 소스 훅은 워밍 컨텍스트 안에서 불러 public_news 로 남긴다.
+    """
     as_of = news._kst_date()
     overview = news._load_durable_market_summary(as_of)
+    stats = {"inserted": 0}
     def publish(payload):
         with get_session() as db:
             if claim_token:
@@ -191,13 +196,17 @@ def collect_market(*, claim_token=None) -> dict:
                                 .with_for_update()).one_or_none()
                 if lease is None or lease.token != claim_token or lease.lease_until_ms <= int(time.time() * 1000):
                     raise RuntimeError("stale market news publication")
-            articles.upsert_articles("MARKET", payload.get("items", []), payload=payload, db=db)
+            articles.upsert_articles("MARKET", payload.get("items", []), payload=payload, db=db, stats=stats)
 
     def source_ready(payload):
         publish({**payload, "as_of": as_of, "overview": overview,
                  "ai": bool(overview), "collection_status": "pending"})
 
-    raw = news._fetch_public_news_payload(on_progress=source_ready)
+    flag = _warming.set(True)
+    try:
+        raw = news._fetch_public_news_payload(on_progress=source_ready)
+    finally:
+        _warming.reset(flag)
     raw.update(as_of=as_of, overview=overview, ai=bool(overview), collection_status="pending")
     publish(raw)
     result = news._localize_news_payload(raw, on_progress=publish)
@@ -214,33 +223,81 @@ def collect_market(*, claim_token=None) -> dict:
         # result; article text and the overview are already visible.
         news_images.ensure_resolving(result["items"], on_ready=lambda item:
             articles.update_article_image("MARKET", articles.article_id(item), item))
-    return result
+    return {**result, "item_count": stats["inserted"], "served_from_cache": not _any_source_attempted(raw.get("sources"))}
+
+
+def _any_source_attempted(sources) -> bool:
+    """envelope 의 소스 목록에 실제 HTTP 요청을 보낸 소스가 하나라도 있는가.
+
+    캐시·스냅샷으로만 응답한 회차(모든 소스가 cached 이거나 시도 안 함)는 '호출' 이 아니다 — 소스 행을 만들지
+    않고 실행만 캐시 응답으로 남긴다(A13). 호출 정의 = 실제 HTTP 요청.
+    """
+    for source in sources or []:
+        if not isinstance(source, dict) or source.get("cached"):
+            continue
+        if str(source.get("status") or "") in {"disabled", "skipped"}:
+            continue
+        return True
+    return False
+
+
+class _CountingRepository:
+    """종목 수집기의 저장소를 감싸 이번 회차에 **새로 insert 된** 기사 수를 센다(관리자 표의 '수집').
+
+    수집기는 결과에 저장 수를 돌려주지 않고, fetch 응답 길이는 캐시로 다시 내보낸 목록까지 세어 10.6배 부풀었다
+    (2026-09-18 점검). publish_articles 만 가로채고 나머지는 저장소 모듈에 그대로 위임한다. 보강 스레드의 저장
+    (enrichment_only)은 새 행을 만들지 않으므로 카운터 경쟁이 값을 틀리게 하지 않는다.
+    """
+
+    def __init__(self, repo, stats: dict):
+        self._repo, self.stats = repo, stats
+
+    def __getattr__(self, name):
+        return getattr(self._repo, name)
+
+    def publish_articles(self, asset_symbol, payload, *, analysis=None, now_ms=None, enrichment_only=False, db=None):
+        return articles.upsert_articles(asset_symbol, list(payload.get("items") or []), analysis=analysis, payload=payload,
+                                        now_ms=now_ms, enrichment_only=enrichment_only, db=db, stats=self.stats)
 
 
 def _collect_ticker(scope: str) -> dict:
-    """공개 워밍은 브라우저·AI 없이 종목 수집기를 부른다. 저장한 기사 수는 결과에 없어 fetch 응답에서 센다."""
-    counted = {"items": 0}
+    """공개 워밍은 브라우저·AI 없이 종목 수집기를 부른다. 결과의 item_count 는 새로 저장한 기사 수다."""
+    stats = {"inserted": 0}
+    # attempted: None = fetch 가 불리지 않음, True = HTTP 요청을 보냄(예외로 끝난 경우 포함), False = 캐시로만 응답.
+    # 예외로 끝난 fetch 를 '캐시 응답' 으로 남기면(예전: 기본값 False 가 그대로 남았다) 소스가 죽은 회차가 관리자
+    # 표에서 호출·실패 없이 '캐시 응답' 으로 보였다 — 수집기는 enricher 가 있으면 fetch 예외를 삼키고 회차를 이어 간다.
+    fetched = {"attempted": None, "error": ""}
 
     def fetch(symbol, **kwargs):
-        payload = collector._call_with_progress(news.fetch_coin_news_for_collector, symbol, **kwargs)
-        counted["items"] = len(payload.get("items") or [])
+        try:
+            payload = collector._call_with_progress(news.fetch_coin_news_for_collector, symbol, **kwargs)
+        except Exception as exc:
+            fetched["attempted"] = True
+            fetched["error"] = clean_error(exc)
+            raise
+        fetched["attempted"] = _any_source_attempted(payload.get("sources"))
         return payload
 
     # The collector's ticker lease is shared with the agent worker.
     # Public prewarming performs no browser crawl or direction AI.
     flag = _warming.set(True)
     try:
-        result = collector.collect_ticker(scope, allow_ai=False, fetcher=fetch, enricher=lambda _symbol, payload: payload)
+        result = collector.collect_ticker(scope, repo=_CountingRepository(collector._default_repository(), stats),
+                                          allow_ai=False, fetcher=fetch, enricher=lambda _symbol, payload: payload)
     finally:
         _warming.reset(flag)
-    return {**result, "item_count": counted["items"]}
+    return {**result, "item_count": stats["inserted"], "served_from_cache": fetched["attempted"] is False,
+            "fetch_error": fetched["error"]}
 
 
 def _item_count(result) -> int:
+    """실행 기록의 '수집' — 수집 함수가 센 새 저장 행(item_count)을 우선하고, 없으면 목록 길이."""
     if not isinstance(result, dict):
         return 0
+    if result.get("item_count") is not None:
+        return int(result.get("item_count") or 0)
     items = result.get("items")
-    return len(items) if isinstance(items, list) else int(result.get("item_count") or 0)
+    return len(items) if isinstance(items, list) else 0
 
 
 def _record_refresh(run: RunRecorder, scope: str) -> None:
@@ -249,9 +306,15 @@ def _record_refresh(run: RunRecorder, scope: str) -> None:
         run.finish()
         if run.status == "skipped":
             return  # 소스를 부르지 않은 회차 — 호출·성공으로 세지 않는다
+        if run.status == STATUS_CACHED:
+            return  # 캐시·스냅샷 응답 — HTTP 요청이 없었으니 소스 행(호출)을 만들지 않는다(A13)
         failed = run.status == "error"
+        # 소스 행의 날짜는 실행 시작일 — 자정을 넘긴 회차가 다음 날 행에 쌓이지 않게(A12).
+        # 실행이 ok 여도 fetch 가 예외로 끝난 회차(run.failures)는 소스 실패로 센다 — 호출은 있었고 성공은 아니다.
+        source_failed = failed or run.failures > 0
         bump_source("public_news", "market" if scope == "MARKET" else "ticker", calls=1, targets=1, items=run.items,
-                    failures=1 if failed else 0, error=run.error, success_ms=0 if failed else run.finished_ms)
+                    failures=1 if source_failed else 0, error=run.error, success_ms=0 if source_failed else run.finished_ms,
+                    day_kst=run.day_kst)
     except Exception:
         logger.warning("Public news run record skipped: scope=%s", scope)
 
@@ -314,8 +377,13 @@ class PublicNewsRuntime:
             result = await worker
             status = str(result.get("status") or "ready") if isinstance(result, dict) else "ready"
             collected = status not in _NOT_COLLECTED
-            run.report({"scope": scope, "status": status}, status=None if collected else "skipped",
-                       targets=1 if collected else 0, items=_item_count(result) if collected else 0)
+            cached = collected and bool(isinstance(result, dict) and result.get("served_from_cache"))
+            run_status = "skipped" if not collected else (STATUS_CACHED if cached else None)
+            # fetch 가 예외로 끝났는데 수집기가 삼키고 회차를 마친 경우 — 실행은 ok 지만 소스 실패 1 로 남긴다.
+            fetch_error = str(result.get("fetch_error") or "") if isinstance(result, dict) else ""
+            run.report({"scope": scope, "status": status, "served_from_cache": cached}, status=run_status,
+                       targets=1 if collected else 0, items=_item_count(result) if collected else 0,
+                       failures=1 if collected and fetch_error else 0, error=fetch_error)
         except Exception as exc:
             retry_seconds = 30
             run.fail(exc)

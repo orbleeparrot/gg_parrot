@@ -47,11 +47,26 @@ ENGINES: tuple[tuple[str, str, str, Optional[int]], ...] = (
     (ENGINE_POSITION_NEWS, "종목 뉴스 수집", "Prefect · gg-parrot-position-news", 60),
     (ENGINE_WHALE, "고래 거래 수집", "Prefect · gg-parrot-whale-activity", None),
     (ENGINE_ONCHAIN, "온체인 보유 수집", "Prefect · gg-parrot-onchain-holders", 60),
-    (ENGINE_PUBLIC_NEWS, "공개 뉴스 (코인동향)", "웹 · MARKET + 종목별", 300),
-    (ENGINE_ENRICHMENT, "기사 보강 (AI 요약)", "웹 · 5초 스캔", 120),
+    # 공개 뉴스의 '실행' 은 스케줄러 회차가 아니라 범위(MARKET · 종목) 갱신 한 번이다 — 문구에 적어 둔다.
+    (ENGINE_PUBLIC_NEWS, "공개 뉴스 (코인동향)", "웹 · MARKET + 종목별 · 범위마다 1회", 300),
+    # 보강은 5초마다 스캔하지만 실행 행은 일감이 있던 회차만 남긴다 — 빈 회차까지 쌓지 않는다.
+    (ENGINE_ENRICHMENT, "기사 보강 (AI 요약)", "웹 · 5초 스캔(일감 있을 때만 기록)", 120),
     (ENGINE_COINDESK_PROBE, "CoinDesk 소스 점검", "Prefect · 수동", 0),
 )
-STATUS_LABELS = {"ok": "정상", "delayed": "지연", "error": "오류", "idle": "대기"}
+STATUS_LABELS = {
+    "ok": "정상", "delayed": "지연", "error": "오류", "idle": "대기", "stalled": "정체 쉼",
+    # 실행 행에 남는 원래 상태 — flow 가 준 run_status 를 그대로 저장한다(A9). 화면 상태로는 '오류(소스 실패)'.
+    "degraded": "소스 실패", "source_unavailable": "소스 실패", "skipped": "건너뜀", "skipped_late": "건너뜀",
+    "cached": "캐시 응답",
+}
+# 소스를 부르지 않은 회차 — runs_today(일한 회차)에서 빼고 skipped_today 로 따로 센다.
+_SKIPPED_STATUSES = frozenset({"skipped", "skipped_late"})
+# 캐시·스냅샷으로 응답해 HTTP 요청이 없던 공개 뉴스 회차(public_news 만). 소스 행을 만들지 않고 따로 센다.
+STATUS_CACHED = "cached"
+# 최근 실행이 이 상태면 엔진은 '오류(소스 실패)' 다 — 예외 없이 끝났어도 소스가 죽어 있던 회차.
+_SOURCE_FAILED_STATUSES = frozenset({"degraded", "source_unavailable"})
+# 보강 정체가 이 배수 × 정체 쉼 시간보다 오래 이어지면 '정체 지속' 오류다(기본 60초 × 10 = 10분).
+ENRICHMENT_STALL_ERROR_MULTIPLIER = 10
 
 # 소스 키(CollectorSourceDaily.source) → 화면 라벨. 순서가 표 순서이고 모르는 키는 그대로 보여준다.
 SOURCE_LABELS: dict[str, str] = {
@@ -63,6 +78,11 @@ SOURCE_LABELS: dict[str, str] = {
     "cryptoslate_rss": "CryptoSlate RSS",
     "openeden": "OpenEden",
     "browser": "브라우저 보강 (Playwright)",
+    # 온체인·고래 엔진의 소스 — 소스별 표에 모든 엔진이 들어간다(A7). 키는 flow 결과의 source/market 값 그대로.
+    "blockscout": "Blockscout",
+    "xrpscan": "XRPScan",
+    "spot": "Binance 현물",
+    "futures": "Binance 선물",
 }
 # news.py 의 envelope 소스 이름 → 소스 키. 이름은 저장 스냅샷·Prefect 로그와 공유되므로 바꾸지 않고 여기서 접는다.
 _SOURCE_KEYS = {
@@ -247,9 +267,10 @@ def record_run(
 
 
 def _source_values(engine: str, source: str, *, millis: int, calls: int = 0, items: int = 0, failures: int = 0,
-                   targets: int = 0, error: str = "", success_ms: int = 0) -> dict:
+                   targets: int = 0, error: str = "", success_ms: int = 0, day: Optional[str] = None) -> dict:
+    # 날짜는 호출자가 실행 시작(started_ms) 기준으로 넘길 수 있다 — 자정을 넘긴 회차가 다음 날 행에 쌓이지 않게(A12).
     return {
-        "day_kst": day_kst(millis),
+        "day_kst": str(day or day_kst(millis)),
         "engine": str(engine or "")[:40],
         "source": str(source or "unknown")[:60],
         "calls": max(0, int(calls or 0)),
@@ -308,20 +329,22 @@ def bump_source(
     error: str = "",
     success_ms: int = 0,
     now_ms: Optional[int] = None,
+    day_kst: Optional[str] = None,
     db=None,
 ) -> bool:
-    """소스 하루 행에 더한다(오늘 KST 기준). 실패하면 False. 절대 raise 하지 않는다."""
+    """소스 하루 행에 더한다(기본은 오늘 KST, ``day_kst`` 로 실행 시작일을 넘길 수 있다). 실패하면 False. 절대 raise 하지 않는다."""
     try:
         millis = _now_ms(now_ms)
         _write_sources([_source_values(engine, source, millis=millis, calls=calls, items=items, failures=failures,
-                                       targets=targets, error=error, success_ms=success_ms)], db=db)
+                                       targets=targets, error=error, success_ms=success_ms, day=day_kst)], db=db)
         return True
     except Exception as error:
         _warn_throttled(f"{engine}/{source} 소스 누적 실패", error)
         return False
 
 
-def bump_sources(engine: str, buckets: dict, *, now_ms: Optional[int] = None, db=None) -> bool:
+def bump_sources(engine: str, buckets: dict, *, now_ms: Optional[int] = None, day_kst: Optional[str] = None,
+                 db=None) -> bool:
     """소스 키 → 누적값(``bump_source`` 의 키워드) 여러 개를 한 세션·한 트랜잭션·한 문장으로 더한다.
 
     한 종목의 뉴스 소스 5~8개를 소스마다 따로 커밋하면 수집 리스를 쥔 채 왕복이 그만큼 늘어난다. 실패하면 False.
@@ -329,7 +352,8 @@ def bump_sources(engine: str, buckets: dict, *, now_ms: Optional[int] = None, db
     """
     try:
         millis = _now_ms(now_ms)
-        rows = [_source_values(engine, source, millis=millis, **bucket) for source, bucket in (buckets or {}).items()]
+        rows = [_source_values(engine, source, millis=millis, day=day_kst, **bucket)
+                for source, bucket in (buckets or {}).items()]
         _write_sources(rows, db=db)
         return True
     except Exception as error:
@@ -338,7 +362,7 @@ def bump_sources(engine: str, buckets: dict, *, now_ms: Optional[int] = None, db
 
 
 def bump_source_results(engine: str, rows, *, source_key_name: str, items_key: str, subject_key: str,
-                        now_ms: Optional[int] = None) -> None:
+                        now_ms: Optional[int] = None, day_kst: Optional[str] = None) -> None:
     """flow 의 항목별 결과 목록(페어·코인)을 소스별로 접어 한 소스에 한 번만 쓴다.
 
     ``skipped`` 는 요청을 보내지 않은 것이라 호출로 세지 않고, ``error`` 만 실패다(``superseded`` 는 응답은
@@ -361,13 +385,13 @@ def bump_source_results(engine: str, rows, *, source_key_name: str, items_key: s
             else:
                 bucket["items"] += max(0, int(row.get(items_key) or 0))
                 bucket["success_ms"] = millis
-        bump_sources(engine, folded, now_ms=millis)
+        bump_sources(engine, folded, now_ms=millis, day_kst=day_kst)
     except Exception as error:
         _warn_throttled(f"{engine} 소스 결과 접기 실패", error)
 
 
 def bump_news_sources(sources, *, targets: int = 1, engine: str = ENGINE_POSITION_NEWS,
-                      now_ms: Optional[int] = None) -> None:
+                      now_ms: Optional[int] = None, day_kst: Optional[str] = None) -> None:
     """종목 뉴스 envelope 의 ``sources`` 목록(소스마다 한 항목)을 소스 키별로 누적한다. 절대 raise 하지 않는다.
 
     공유 캐시 히트(``cached``)는 호출이 아니므로 세지 않는다. 브라우저 페이지(``*_playwright``)는 한 종목에 여러
@@ -397,7 +421,7 @@ def bump_news_sources(sources, *, targets: int = 1, engine: str = ENGINE_POSITIO
                 bucket["items"] += max(0, int(source.get("item_count") or 0))
                 if status in _SUCCEEDED:
                     bucket["success_ms"] = millis
-        bump_sources(engine, folded, now_ms=millis)
+        bump_sources(engine, folded, now_ms=millis, day_kst=day_kst)
     except Exception as error:
         _warn_throttled("뉴스 소스 누적 실패", error)
 
@@ -441,6 +465,11 @@ class RunRecorder:
     def fail(self, error) -> None:
         self.status = "error"
         self.error = self.error or clean_error(error)
+
+    @property
+    def day_kst(self) -> str:
+        """이 실행이 속한 날(KST, 시작 시각 기준) — 소스 누적 훅이 같은 날 행에 쓰도록 넘긴다."""
+        return day_kst(self.started_ms)
 
     def finish(self, now_ms: Optional[int] = None):
         if not self.enabled:
@@ -511,14 +540,57 @@ def _enrichment_has_due_work(db, millis: int) -> bool:
         return True
 
 
+def _enrichment_stall_persisted(db, millis: int) -> bool:
+    """보강 정체가 '정체 쉼 × 10'(기본 10분)보다 오래 이어졌는가 — 공급자가 몇 시간 죽어 있어도 '정체 쉼' 만 보이던 문제.
+
+    5초 스캔에 DB 읽기를 더하지 않으려고 보고 시점에 CollectorRun 으로 판단한다. 기준은 **정체가 시작된 시각**이다:
+    마지막으로 진전한 실행(items > 0) 뒤에 온 첫 무진전 회차의 시작 시각. 마지막 진전 시각을 기준으로 재면 몇 시간
+    조용하다가(대기 기사 없음) 방금 막힌 첫 회차가 곧바로 '정체 지속' 으로 찍힌다 — 조용했던 시간은 정체가 아니다.
+    진전한 실행이 없으면 첫 실행이 곧 첫 무진전 회차이고, 실행 행이 하나도 없으면 리스가 걸린 시각(next_run - 쉼)이다.
+
+    리스가 만료됐는데 보강할 기사가 없으면 정체가 아니라 '대기' 다 — 마지막 회차가 무진전이었다는 흔적(리스 값)만
+    남은 채 큐가 빈 상태를 몇 시간째 오류로 보이지 않게.
+    """
+    try:
+        from .agent_features.position_news.articles import (ENRICHMENT_STALL_LEASE, NewsMaintenanceLease,
+                                                             enrichment_stall_seconds)
+        from .db import CollectorRun
+
+        lease = db.get(NewsMaintenanceLease, ENRICHMENT_STALL_LEASE)
+        lease_until = int(lease.next_run_ms or 0) if lease else 0
+        if lease_until <= 0:
+            return False  # 정체 상태가 아니다(마지막 회차에 진전이 있었다)
+        if lease_until <= millis and not _enrichment_has_due_work(db, millis):
+            return False  # 쉼이 끝났고 일감도 없다 — 정체가 아니라 놀고 있는 것
+        stall_ms = enrichment_stall_seconds() * 1000
+        limit_ms = stall_ms * ENRICHMENT_STALL_ERROR_MULTIPLIER
+        last_progress_started = int(db.exec(
+            select(func.max(CollectorRun.started_ms)).where(CollectorRun.engine == ENGINE_ENRICHMENT, CollectorRun.items > 0)
+        ).one() or 0)
+        stall_started = db.exec(
+            select(func.min(CollectorRun.started_ms))
+            .where(CollectorRun.engine == ENGINE_ENRICHMENT, CollectorRun.started_ms > last_progress_started)
+        ).one()
+        reference = int(stall_started or 0) or (lease_until - stall_ms)
+        return millis - reference > limit_ms
+    except Exception as error:
+        _warn_throttled("보강 정체 지속 판정 실패", error)
+        return False
+
+
 def _engine_status(engine: str, latest, *, millis: int, period_seconds: int, db) -> tuple[str, str]:
-    """상태와 라벨. 순서: 기록 없음 → 대기, 마지막이 오류 → 오류, (보강) 정체 쉼, 주기 3배 넘게 안 돎 → 지연, 그 외 정상."""
+    """상태와 라벨. 순서: 기록 없음 → 대기, 마지막이 오류·소스 실패 → 오류, (보강) 정체 지속 → 오류, 정체 쉼,
+    주기 3배 넘게 안 돎 → 지연, 그 외 정상."""
     if latest is None:
         return "idle", STATUS_LABELS["idle"]
     started_ms, finished_ms, status, _error = latest
     if str(status) == "error":
         return "error", STATUS_LABELS["error"]
+    if str(status) in _SOURCE_FAILED_STATUSES:
+        return "error", STATUS_LABELS[str(status)]
     if engine == ENGINE_ENRICHMENT:
+        if _enrichment_stall_persisted(db, millis):
+            return "error", "정체 지속"
         remaining = _stall_remaining_seconds(db, millis)
         if remaining > 0:
             return "stalled", f"정체 쉼 · {remaining}초 뒤 탐침"
@@ -538,14 +610,26 @@ def engines_report(db, *, now_ms: Optional[int] = None) -> dict:
     millis = _now_ms(now_ms)
     today = day_kst(millis)
 
-    totals = {
-        engine: (int(runs or 0), int(targets or 0), int(items or 0), int(failures or 0))
-        for engine, runs, targets, items, failures in db.exec(
-            select(CollectorRun.engine, func.count(CollectorRun.id), func.coalesce(func.sum(CollectorRun.targets), 0),
-                   func.coalesce(func.sum(CollectorRun.items), 0), func.coalesce(func.sum(CollectorRun.failures), 0))
-            .where(CollectorRun.day_kst == today).group_by(CollectorRun.engine)
-        ).all()
-    }
+    # 오늘 실행을 엔진·상태별로 한 번에 읽는다. '실행' 은 일한 회차(ok·error·소스 실패)만이고, 소스를 부르지 않은
+    # 회차(skipped)와 캐시로 응답한 회차(cached)는 따로 센다 — 뜻이 엔진마다 다르던 runs_today 를 통일(A10·A13).
+    totals: dict[str, dict] = {}
+    for engine, status, runs, targets, items, failures in db.exec(
+        select(CollectorRun.engine, CollectorRun.status, func.count(CollectorRun.id),
+               func.coalesce(func.sum(CollectorRun.targets), 0), func.coalesce(func.sum(CollectorRun.items), 0),
+               func.coalesce(func.sum(CollectorRun.failures), 0))
+        .where(CollectorRun.day_kst == today).group_by(CollectorRun.engine, CollectorRun.status)
+    ).all():
+        total = totals.setdefault(engine, {"runs": 0, "skipped": 0, "cached": 0, "targets": 0, "items": 0, "failures": 0})
+        status = str(status or "")
+        if status in _SKIPPED_STATUSES:
+            total["skipped"] += int(runs or 0)
+        elif status == STATUS_CACHED:
+            total["cached"] += int(runs or 0)
+        else:
+            total["runs"] += int(runs or 0)
+        total["targets"] += int(targets or 0)
+        total["items"] += int(items or 0)
+        total["failures"] += int(failures or 0)
 
     engines = []
     for engine, label, mode, configured in ENGINES:
@@ -553,25 +637,33 @@ def engines_report(db, *, now_ms: Optional[int] = None) -> dict:
             select(CollectorRun.started_ms, CollectorRun.finished_ms, CollectorRun.status, CollectorRun.error)
             .where(CollectorRun.engine == engine).order_by(CollectorRun.started_ms.desc()).limit(1)
         ).first()
+        # 마지막 오류는 오늘 것만 — 며칠 전 오류가 '정상' 엔진 옆에 계속 보이지 않게.
         last_error = db.exec(
-            select(CollectorRun.error).where(CollectorRun.engine == engine, CollectorRun.error != "")
+            select(CollectorRun.error).where(CollectorRun.engine == engine, CollectorRun.error != "",
+                                             CollectorRun.day_kst == today)
             .order_by(CollectorRun.started_ms.desc()).limit(1)
         ).first()
         period = _expected_period_seconds(engine, configured)
         status, status_label = _engine_status(engine, latest, millis=millis, period_seconds=period, db=db)
-        runs, targets, items, failures = totals.get(engine, (0, 0, 0, 0))
-        engines.append({
+        total = totals.get(engine, {"runs": 0, "skipped": 0, "cached": 0, "targets": 0, "items": 0, "failures": 0})
+        entry = {
             "engine": engine, "label": label, "mode": mode,
             "status": status, "status_label": status_label,
             "last_run_ms": int((latest[1] or latest[0]) if latest else 0),
-            "runs_today": runs, "targets_today": targets, "items_today": items, "failures_today": failures,
+            "runs_today": total["runs"], "skipped_today": total["skipped"],
+            "targets_today": total["targets"], "items_today": total["items"], "failures_today": total["failures"],
             "last_error": str(last_error or ""),
-        })
+        }
+        if engine == ENGINE_PUBLIC_NEWS:
+            entry["served_from_cache_today"] = total["cached"]  # 화면 캡션 "캐시 응답 N회 제외"
+        engines.append(entry)
 
+    # 시간대별 수집은 기사를 실제로 저장하는 두 엔진의 합이다 — 운영에서는 종목 뉴스 워커 대신 공개 뉴스 워밍이
+    # 대부분을 수집해, 종목 뉴스만 읽던 차트가 24칸 전부 0 이었다(2026-09-18 점검).
     hourly = [{"hour": hour, "items": 0, "failures": 0} for hour in range(24)]
     for started_ms, items, failures in db.exec(
         select(CollectorRun.started_ms, CollectorRun.items, CollectorRun.failures)
-        .where(CollectorRun.engine == ENGINE_POSITION_NEWS, CollectorRun.day_kst == today)
+        .where(CollectorRun.engine.in_((ENGINE_POSITION_NEWS, ENGINE_PUBLIC_NEWS)), CollectorRun.day_kst == today)
     ).all():
         bucket = hourly[_hour_kst(int(started_ms or 0))]
         bucket["items"] += int(items or 0)
@@ -579,17 +671,20 @@ def engines_report(db, *, now_ms: Optional[int] = None) -> dict:
 
     # 같은 크롤러(Google News RSS …)를 종목 뉴스 워커와 공개 뉴스 워밍이 번갈아 부른다 — 화면에는 소스가 하나로
     # 보여야 하므로 엔진별 행을 소스 키로 합친다. 합치지 않으면 그날 어느 프로세스가 리스를 쥐었는지에 따라 표가 빈다.
+    # 온체인·고래 엔진의 소스도 같은 표에 들어간다(빠지면 blockscout 실패가 화면에 없다). 어느 엔진의 소스인지는
+    # engine · engine_label 로 알린다(여러 엔진이 부른 소스는 '+' 로 잇는다).
     order = {key: index for index, key in enumerate(SOURCE_LABELS)}
+    engine_order = {engine: index for index, (engine, *_rest) in enumerate(ENGINES)}
+    engine_labels = {engine: label for engine, label, *_rest in ENGINES}
     folded: dict[str, dict] = {}
-    for row in db.exec(select(CollectorSourceDaily).where(
-        CollectorSourceDaily.day_kst == today,
-        CollectorSourceDaily.engine.in_((ENGINE_POSITION_NEWS, ENGINE_PUBLIC_NEWS)),
-    )).all():
+    for row in db.exec(select(CollectorSourceDaily).where(CollectorSourceDaily.day_kst == today)).all():
         if row.source in {"market", "ticker"}:
             continue  # 공개 뉴스의 범위 단위 카운터 — 소스가 아니라 엔진 표에 속한다
         bucket = folded.setdefault(row.source, {"source": row.source, "label": source_label(row.source),
                                                 "targets": 0, "calls": 0, "items": 0, "failures": 0,
-                                                "last_success_ms": 0, "last_error": "", "_updated_ms": 0})
+                                                "last_success_ms": 0, "last_error": "", "_updated_ms": 0,
+                                                "_engines": set()})
+        bucket["_engines"].add(str(row.engine or ""))
         bucket["targets"] += int(row.targets or 0)
         bucket["calls"] += int(row.calls or 0)
         bucket["items"] += int(row.items or 0)
@@ -601,8 +696,12 @@ def engines_report(db, *, now_ms: Optional[int] = None) -> dict:
     sources = []
     for bucket in folded.values():
         bucket.pop("_updated_ms", None)
+        engines_of = sorted(bucket.pop("_engines"), key=lambda engine: (engine_order.get(engine, len(engine_order)), engine))
+        bucket["engine"] = "+".join(engines_of)
+        bucket["engine_label"] = " + ".join(engine_labels.get(engine, engine) for engine in engines_of)
         calls = bucket["calls"]
-        bucket["failure_pct"] = round(bucket["failures"] * 100.0 / calls, 1) if calls else 0.0
+        # 호출이 없으면 실패율은 없다(0.0% 가 아니라 None — 가짜 숫자 금지).
+        bucket["failure_pct"] = round(bucket["failures"] * 100.0 / calls, 1) if calls else None
         sources.append(bucket)
     sources.sort(key=lambda row: (order.get(row["source"], len(order)), row["source"]))
     return {"engines": engines, "hourly": hourly, "sources": sources}

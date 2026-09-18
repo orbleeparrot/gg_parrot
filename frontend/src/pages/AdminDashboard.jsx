@@ -10,7 +10,8 @@ import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 import {
   AGGREGATION_START, BOARD_STATUS, CHANNEL_DETAIL, CHANNEL_LABELS, COST_METHOD_LABELS, DEVICE_LABELS, ENGINE_STATUS,
   METHOD_LABELS, PAGE_LABELS, PURPOSE_LABELS, fmtDayTimeKst, fmtDuration, fmtInt, fmtKst, fmtLimit, fmtMonthLabel, fmtNum, fmtPct,
-  fmtRelative, fmtSignedPct, fmtStamp, fmtTimeKst, fmtTokens, fmtUntil, fmtUsd, labelOf, ratioPct, sumBy, weightedMean,
+  fmtRelative, fmtSignedPct, fmtStamp, fmtTimeKst, fmtTokens, fmtUntil, fmtUsd, labelOf, meanBy, ratioPct, sinceNote, sumBy, sumOrNull,
+  weightedMean,
 } from "../lib/adminFormat.js";
 import {
   MEMBER_PAGE_SIZES, MEMBER_STATUSES, MEMBER_Q_MAX, blockActionKind, clampPage, memberActionError, memberEmail,
@@ -187,16 +188,21 @@ function UsersTab({ data, days }) {
   const daily = data.daily || [];
   const channels = data.channels || [];
   const { visible, all, toggle } = useRecentRows(daily);
+  const wholeWindow = all || daily.length <= 7;
   const sessionSum = sumBy(visible, "sessions");
-  // 활성·재방문은 날짜별 '서로 다른 브라우저' 수라 더하면 여러 날 온 사람이 겹쳐 센다(WAU 보다 커진다).
+  const since = data.coverage?.visits_since ?? null;
+  // 활성·신규·재방문은 날짜별 '서로 다른 브라우저' 수라 더하면 여러 날 온 사람이 겹쳐 센다(WAU 보다 커진다).
   // 보이는 창이 7일이면 WAU, 30일이면 MAU 를 그대로 쓰고, 그 밖(90일)과 재방문은 "—".
+  // 신규는 서버가 창 전체 distinct 로 준 kpis.new_visitors — 창 전체가 보일 때만 맞는 값이라 '최근 7일' 부분 보기엔 "—".
   const windowActive = visible.length === 7 ? k.wau : visible.length === 30 ? k.mau : null;
   const total = {
-    day: all || daily.length <= 7 ? `${days}일` : "최근 7일",
-    active: windowActive, new: sumBy(visible, "new"), returning: null,
+    day: wholeWindow ? `${days}일` : "최근 7일",
+    active: windowActive, new: wholeWindow ? (k.new_visitors ?? null) : null, returning: null,
     sessions: sessionSum, pageviews: sumBy(visible, "pageviews"),
     pv_per_session: sessionSum ? sumBy(visible, "pageviews") / sessionSum : null,
-    avg_session_sec: weightedMean(visible, "avg_session_sec", "sessions"),
+    // 일별 평균 세션 시간은 '체류가 측정된 세션'만의 평균인데 서버는 그 측정 세션 수를 주지 않는다 — sessions 로
+    // 가중하면 측정 안 된 세션까지 분모에 넣는 가짜 가중이라, 값이 있는 날들의 단순 평균(일별 평균의 평균)으로 둔다.
+    avg_session_sec: meanBy(visible, "avg_session_sec"),
     bounce_pct: weightedMean(visible, "bounce_pct", "sessions"),
   };
   const channelTotal = {
@@ -206,15 +212,23 @@ function UsersTab({ data, days }) {
     signup_rate_pct: weightedMean(channels, "signup_rate_pct", "new_visitors"),
   };
   const peak = data.peak_hours || [];
+  // 기기 '알 수 없음'(화면 너비 0)은 행으로 보이되 링·비율 분모에서 빠진다 — 서버 share_pct 의 분모와 같게.
+  const deviceColor = { mobile: SERIES.s2, desktop: SERIES.s1, tablet: SERIES.s5, unknown: SERIES.s4 };
+  const deviceParts = (data.devices || []).map((d, i) => ({
+    label: labelOf(DEVICE_LABELS, d.device, d.label), value: d.sessions, color: deviceColor[d.device] || [SERIES.s2, SERIES.s1, SERIES.s5, SERIES.s4][i % 4],
+    share_pct: d.share_pct ?? null, noRing: d.device === "unknown", avg_session_sec: d.avg_session_sec,
+  }));
   return (
     <>
       <div className="adm-tabhead">
         <h2>사용자 지표</h2>
         <AdminTerms items={[
-          ["활성 사용자", "그 기간에 한 번이라도 화면을 본 브라우저 수(로그인 여부 무관)"], ["DAU · WAU · MAU", "하루 · 7일 · 30일 활성 사용자"],
-          ["고착도", "DAU ÷ MAU. 매일 오는 비율"], ["세션", "한 방문 묶음. 30분 이상 쉬면 새 세션"], ["페이지뷰", "화면 진입 횟수"],
-          ["이탈률", "페이지 하나만 보고 떠난 세션 비율"], ["신규 · 재방문", "그 브라우저의 첫 방문인지"],
-          ["채널", "직접 · 검색 · 추천 링크 · 소셜 · 캠페인(utm)"], ["종료율", "그 페이지에서 세션이 끝난 비율"],
+          ["집계 시작", `${sinceNote(since, "방문 기록")} · 그 전 날짜는 측정 불가(—)`],
+          ["활성 사용자", "그 기간에 한 번이라도 화면을 본 브라우저 수(로그인 여부 무관 · 저장소가 막힌 브라우저는 제외)"], ["DAU · WAU · MAU", "하루 · 7일 · 30일 활성 사용자"],
+          ["고착도", "DAU ÷ MAU. 매일 오는 비율"], ["세션", "한 방문 묶음. 30분 이상 쉬면 새 세션"], ["페이지뷰", "화면 진입 횟수(즉시 리다이렉트는 제외)"],
+          ["세션 시간", "체류 합(탭을 숨긴 시간 제외). 마지막 화면의 체류를 모르면 그 화면은 빼고, 전부 모르면 그 세션은 평균에서 뺀다"],
+          ["이탈률", "페이지 하나만 보고 떠난 세션 비율"], ["신규 · 재방문", "그 브라우저의 첫 방문인지. 합계 행의 신규는 기간 전체의 서로 다른 브라우저 수"],
+          ["채널", "직접 · 검색 · 추천 링크 · 소셜 · 캠페인(utm). 신규 방문자는 첫 세션의 채널 하나에만"], ["종료율", "그 페이지에서 세션이 끝난 비율(30분 안에 아직 보고 있는 세션은 제외)"],
         ]} />
       </div>
       <AdminKpis items={[
@@ -228,13 +242,13 @@ function UsersTab({ data, days }) {
           { label: "MAU", data: series.mau, color: SERIES.s3 }, { label: "WAU", data: series.wau, color: SERIES.s2 }, { label: "DAU", data: series.dau, color: SERIES.s1 },
         ]} />
       </AdminBlock>
-      <AdminBlock title="일별 트래픽" caption={all ? `${days}일 전체` : `최근 7일 · ${days}일 전체는 ‘더 보기’`} actions={toggle}>
+      <AdminBlock title="일별 트래픽" caption={`${all ? `${days}일 전체` : `최근 7일 · ${days}일 전체는 ‘더 보기’`} · ${sinceNote(since)}`} actions={toggle}>
         <AdminTable rows={visible} total={total} rowKey={(r) => r.day} columns={[
           { key: "day", label: "날짜" }, { key: "active", label: "활성 사용자", num: true, render: (r) => fmtInt(r.active) },
           { key: "new", label: "신규", num: true, render: (r) => fmtInt(r.new) }, { key: "returning", label: "재방문", num: true, render: (r) => fmtInt(r.returning) },
           { key: "sessions", label: "세션", num: true, render: (r) => fmtInt(r.sessions) }, { key: "pageviews", label: "페이지뷰", num: true, render: (r) => fmtInt(r.pageviews) },
           { key: "pv_per_session", label: "페이지뷰/세션", num: true, render: (r) => fmtNum(r.pv_per_session, 2) },
-          { key: "avg_session_sec", label: "평균 세션 시간", num: true, render: (r) => fmtDuration(r.avg_session_sec) },
+          { key: "avg_session_sec", label: "평균 세션 시간 (체류 합)", num: true, render: (r) => fmtDuration(r.avg_session_sec) },
           { key: "bounce_pct", label: "이탈률", num: true, render: (r) => fmtPct(r.bounce_pct) },
         ]} />
       </AdminBlock>
@@ -267,9 +281,9 @@ function UsersTab({ data, days }) {
             { key: "signups", label: "가입", num: true, render: (r) => fmtInt(r.signups) },
           ]} />
         </AdminBlock>
-        <AdminBlock title="기기" caption={`${days}일 · 세션`}>
+        <AdminBlock title="기기" caption={`${days}일 · 세션 · ‘알 수 없음’(화면 너비 없음)은 비율 분모에서 제외`}>
           <Donut
-            parts={(data.devices || []).map((d, i) => ({ label: labelOf(DEVICE_LABELS, d.device, d.label), value: d.sessions, color: [SERIES.s2, SERIES.s1, SERIES.s5][i % 3], avg_session_sec: d.avg_session_sec }))}
+            parts={deviceParts}
             extraColumns={[{ key: "avg_session_sec", label: "평균 세션", num: true, render: (r) => fmtDuration(r.avg_session_sec) }]}
           />
         </AdminBlock>
@@ -289,33 +303,47 @@ function SignupsTab({ data, days }) {
   const dayList = series.days || [];
   const daily = data.daily || [];
   const { visible, all, toggle } = useRecentRows(daily);
+  const cov = data.coverage || {};
+  // 재방문율의 창은 방문 기록이 있는 날수까지만 — 기록이 창보다 짧으면 그 날수를 라벨에 적는다(값은 서버 계산 그대로).
+  const revisitDays = Number.isFinite(Number(data.revisit_days)) && data.revisit_days !== null ? Math.min(days, Number(data.revisit_days)) : days;
+  // 측정 가능한 날만 평균한다 — 퀘스트 기록 시작 전 날짜(null)를 0 으로 넣으면 평균이 내려앉는다.
+  const questDays = daily.filter((r) => r.quest_active !== null && r.quest_active !== undefined);
+  const questSum = sumOrNull(questDays, "quest_active");
+  // 집계 시작 전 날짜는 null 이라 창 전체가 그 앞이면 열이 통째로 비는데, sumBy 는 그때 0 을 돌려줘 합계에 "0" 이
+  // 찍혔다 — 가짜 숫자. sumOrNull 은 값을 하나도 못 보면 null → "—".
   const total = {
-    day: `${days}일`, signups: sumBy(daily, "signups"), signup_rate_pct: k.signup_rate_pct, deletions: sumBy(daily, "deletions"),
-    cumulative: daily.length ? daily[daily.length - 1].cumulative : null, first_backtest_same_day: sumBy(daily, "first_backtest_same_day"),
-    quest_active: daily.length ? `평균 ${fmtNum(sumBy(daily, "quest_active") / daily.length, 0)}` : "—",
+    day: `${days}일`, signups: sumBy(daily, "signups"), signup_rate_pct: k.signup_rate_pct ?? null, deletions: sumBy(daily, "deletions"),
+    cumulative: daily.length ? daily[daily.length - 1].cumulative : null, first_backtest_same_day: sumOrNull(daily, "first_backtest_same_day"),
+    quest_active: questSum != null && questDays.length ? `평균 ${fmtNum(questSum / questDays.length, 0)}` : "—",
   };
   const methods = data.methods || [];
   const methodTotal = {
     label: "합계", signups: sumBy(methods, "signups"), share_pct: methods.length ? 100 : null,
-    // D7 은 가입 뒤 7일이 지난 계정만 분모라 가입 수로 가중하면 어긋난다 — 서버가 준 전체 값을 쓴다.
-    d7_retention_pct: k.d7_retention_pct, first_backtest_same_day: sumBy(methods, "first_backtest_same_day"),
+    // D7 은 측정 가능한 계정만 분모라 가입 수로 가중하면 어긋난다 — 서버가 준 전체 값을 쓴다.
+    d7_retention_pct: k.d7_retention_pct ?? null, first_backtest_same_day: sumOrNull(methods, "first_backtest_same_day"),
   };
+  const cohorts = data.cohorts || [];
   return (
     <>
       <div className="adm-tabhead">
         <h2>가입 · 전환 · 유지</h2>
         <AdminTerms items={[
-          ["가입 전환율", "가입 ÷ 신규 방문자"], ["퍼널", `${days}일 안에 그 단계까지 간 사람 수`],
-          ["코호트 리텐션", "같은 주에 가입한 사람 중 N일 뒤 다시 방문한 비율"], ["재방문율", `${days}일 중 2일 이상 방문한 활성 사용자 비율`],
-          ["가입 당일 첫 백테스트", "가입한 날 백테스트를 실행한 계정"], ["퀘스트 활동 계정", "그날 일일 퀘스트를 1개 이상 완료한 계정"],
+          ["집계 시작", `방문 ${cov.visits_since || "기록 없음"} · 백테스트 이벤트 ${cov.events_since || "기록 없음"} · 퀘스트 ${cov.quests_since || "기록 없음"} · 그 전 날짜는 측정 불가(—)`],
+          ["가입 전환율", "당일 가입 ÷ 신규 방문자 — 같은 방문자 집합에서(방문 기록 시작 전은 —)"],
+          ["퍼널 (방문)", `${days}일 안 방문자 기준: 방문 → 직접 만들기 → 백테스트 → 가입`],
+          ["퍼널 (회원)", `${days}일 안 가입자 기준: 가입 → 매크로 등록 → 구매 → 에이전트 실행 (뒤 단계는 앞 단계의 부분집합)`],
+          ["코호트 리텐션", "같은 주에 가입한 사람 중 N일 뒤 다시 방문한 비율 · 방문 기록으로 잴 수 있는 회원만 분모 · 측정 불가는 —"],
+          ["재방문율", `최근 ${revisitDays}일 중 2일 이상 방문한 활성 사용자 비율`],
+          ["가입 당일 백테스트", "가입한 날 백테스트를 실행한 계정(백테스트 이벤트 ∪ 퀘스트 backtest_run)"], ["퀘스트 활동 계정", "그날 일일 퀘스트를 1개 이상 완료한 계정"],
+          ["탈퇴", "탈퇴 시각 기준 · 탈퇴 계정은 가입 수 · 코호트 · 가입 방법에서 제외"],
         ]} />
       </div>
       <AdminKpis items={[
         { label: "누적 회원", value: fmtInt(k.total_users) }, { label: `${days}일 가입`, value: fmtInt(k.signups) },
-        { label: "가입 전환율", value: fmtNum(k.signup_rate_pct), unit: "%" }, { label: `재방문율 (${days}일)`, value: fmtNum(k.revisit_pct), unit: "%" },
-        { label: "D7 리텐션", value: fmtNum(k.d7_retention_pct, 0), unit: "%" }, { label: "탈퇴 (누적)", value: fmtInt(k.deletions) },
+        { label: "가입 전환율", value: fmtNum(k.signup_rate_pct), unit: "%" }, { label: `재방문율 (${revisitDays}일)`, value: fmtNum(k.revisit_pct), unit: "%" },
+        { label: "D7 리텐션", value: fmtNum(k.d7_retention_pct, 1), unit: "%" }, { label: `탈퇴 (${days}일)`, value: fmtInt(k.deletions) },
       ]} />
-      <AdminBlock title="일별 가입과 전환율" caption={`${days}일 · 막대 = 가입, 점선 = 전환율`}>
+      <AdminBlock title="일별 가입과 전환율" caption={`${days}일 · 막대 = 가입, 점선 = 전환율 · ${sinceNote(cov.visits_since, "전환율 집계 시작")}`}>
         <Legend items={[{ label: "가입 (명)", color: SERIES.s1 }, { label: "가입 전환율 (%)", color: SERIES.s2, line: true }]} />
         <BarChart days={dayList} bars={[{ label: "가입", data: series.signups, color: SERIES.s1 }]} line={{ label: "전환율", data: series.signup_rate_pct, color: SERIES.s2 }} yTitle="가입 (명)" lineTitle="전환율 (%)" height={200} />
       </AdminBlock>
@@ -325,24 +353,37 @@ function SignupsTab({ data, days }) {
           { key: "signup_rate_pct", label: "가입 전환율", num: true, render: (r) => fmtPct(r.signup_rate_pct) },
           { key: "deletions", label: "탈퇴", num: true, render: (r) => fmtInt(r.deletions) },
           { key: "cumulative", label: "누적 회원", num: true, render: (r) => fmtInt(r.cumulative) },
-          { key: "first_backtest_same_day", label: "가입 당일 첫 백테스트", num: true, render: (r) => fmtInt(r.first_backtest_same_day) },
+          { key: "first_backtest_same_day", label: "가입 당일 백테스트", num: true, render: (r) => fmtInt(r.first_backtest_same_day) },
           { key: "quest_active", label: "퀘스트 활동 계정", num: true, render: (r) => (typeof r.quest_active === "string" ? r.quest_active : fmtInt(r.quest_active)) },
         ]} />
       </AdminBlock>
-      <AdminBlock title="전환 퍼널" caption={`${days}일 · 사람 수`}>
-        <FunnelChart steps={(data.funnel || []).map((s) => ({ label: s.label || s.key, count: s.count }))} />
-      </AdminBlock>
+      {/* 퍼널 둘 — 익명 방문자(방문 기록 이후)와 회원(창 안 가입자)은 집단·기간이 달라 한 퍼널에 이으면 '방문 대비 8,640%' 가 나온다. */}
       <div className="adm-cols2">
-        <AdminBlock title="가입 코호트 리텐션" caption="가입 주 기준 · 진할수록 높음 · — 는 아직 지나지 않음">
+        <AdminBlock title="전환 퍼널 · 방문자" caption={`${days}일 · 방문자 수 · ${sinceNote(cov.visits_since)}`}>
+          <FunnelChart title="방문자 전환 퍼널" firstLabel="방문" steps={data.funnel_acquisition || []} />
+        </AdminBlock>
+        <AdminBlock title="전환 퍼널 · 회원" caption={`${days}일 안 가입자 · 뒤 단계는 앞 단계의 부분집합`}>
+          <FunnelChart title="회원 전환 퍼널" firstLabel="가입" color={SERIES.s1} steps={data.funnel_members || []} />
+        </AdminBlock>
+      </div>
+      <div className="adm-cols2">
+        <AdminBlock title="가입 코호트 리텐션" caption="가입 주 기준 · 진할수록 높음 · — 는 아직 지나지 않았거나 측정 불가 · 잴 수 있는 회원만 분모">
           <div className="adm-tbl">
             <table>
-              <thead><tr><th scope="col">가입 주</th><th scope="col" className="num">가입</th>{["D1", "D3", "D7", "D14", "D30"].map((h) => <th key={h} scope="col" className="num">{h}</th>)}</tr></thead>
+              <thead>
+                <tr>
+                  <th scope="col">가입 주</th><th scope="col" className="num">가입</th><th scope="col" className="num">측정 가능</th>
+                  {["D1", "D3", "D7", "D14", "D30"].map((h) => <th key={h} scope="col" className="num">{h}</th>)}
+                </tr>
+              </thead>
               <tbody>
-                {(data.cohorts || []).length === 0 ? (
-                  <tr className="adm-empty"><td colSpan={7}>아직 데이터 없음 · 집계 시작 {AGGREGATION_START}</td></tr>
-                ) : (data.cohorts || []).map((c) => (
-                  <tr key={c.week}>
-                    <td>{c.week}</td><td className="num">{fmtInt(c.signups)}</td>
+                {cohorts.length === 0 ? (
+                  <tr className="adm-empty"><td colSpan={8}>아직 데이터 없음 · {sinceNote(cov.visits_since)}</td></tr>
+                ) : cohorts.map((c) => (
+                  <tr key={c.monday || c.week}>
+                    <td>{c.week}{c.partial ? <span className="adm-muted"> · 진행 중</span> : null}</td>
+                    <td className="num">{fmtInt(c.signups)}</td>
+                    <td className="num">{fmtInt(c.measurable)}</td>
                     {["d1", "d3", "d7", "d14", "d30"].map((key) => <HeatCell key={key} value={c[key]} />)}
                   </tr>
                 ))}
@@ -350,13 +391,13 @@ function SignupsTab({ data, days }) {
             </table>
           </div>
         </AdminBlock>
-        <AdminBlock title="가입 방법" caption={`${days}일`}>
+        <AdminBlock title="가입 방법" caption={`${days}일 · 탈퇴 제외`}>
           <AdminTable rows={methods} total={methodTotal} rowKey={(r) => r.method} columns={[
             { key: "method", label: "방법", render: (r) => r.label === "합계" ? r.label : labelOf(METHOD_LABELS, r.method, r.label) },
             { key: "signups", label: "가입", num: true, render: (r) => fmtInt(r.signups) },
             { key: "share_pct", label: "비율", num: true, render: (r) => fmtPct(r.share_pct) },
-            { key: "d7_retention_pct", label: "D7 리텐션", num: true, render: (r) => fmtPct(r.d7_retention_pct, 0) },
-            { key: "first_backtest_same_day", label: "가입 당일 첫 백테스트", num: true, render: (r) => fmtInt(r.first_backtest_same_day) },
+            { key: "d7_retention_pct", label: "D7 리텐션", num: true, render: (r) => fmtPct(r.d7_retention_pct, 1) },
+            { key: "first_backtest_same_day", label: "가입 당일 백테스트", num: true, render: (r) => fmtInt(r.first_backtest_same_day) },
           ]} />
         </AdminBlock>
       </div>
@@ -371,20 +412,29 @@ function MacrosTab({ data, days }) {
   const dayList = series.days || [];
   const daily = data.daily || [];
   const { visible, all, toggle } = useRecentRows(daily);
+  const eventsSince = data.coverage?.macro_events_since ?? null;
+  // 노출·열람·구매는 이벤트 표 시작 전 날짜가 null — 합계는 측정된 날만 더하고 비율은 그 합으로 낸다(분모 0 이면 —).
+  // 창 전체가 이벤트 표 시작 전이면 값이 하나도 없다 — 그때 sumBy 의 0 은 가짜 숫자라 sumOrNull 로 "—" 를 낸다.
+  const impressions = sumOrNull(daily, "impressions");
+  const opens = sumOrNull(daily, "opens");
+  const unlocks = sumOrNull(daily, "unlocks");
   const total = {
-    day: `${days}일`, registered: sumBy(daily, "registered"), impressions: sumBy(daily, "impressions"), opens: sumBy(daily, "opens"),
-    ctr_pct: ratioPct(sumBy(daily, "opens"), sumBy(daily, "impressions")), unlocks: sumBy(daily, "unlocks"),
-    cvr_pct: ratioPct(sumBy(daily, "unlocks"), sumBy(daily, "opens")), revenue_points: sumBy(daily, "revenue_points"), creator_points: sumBy(daily, "creator_points"),
+    day: `${days}일`, registered: sumBy(daily, "registered"), impressions, opens,
+    ctr_pct: ratioPct(opens, impressions), unlocks,
+    cvr_pct: ratioPct(unlocks, opens), revenue_points: sumBy(daily, "revenue_points"), creator_points: sumBy(daily, "creator_points"),
   };
+  const sessionsCaption = `현재${data.paper_liveness === "reported" ? " · 실행 중 = 5분 안 하트비트 · 모의 세션은 종료 보고 기준" : " · 실행 중 = 5분 안 하트비트"}`;
   return (
     <>
       <div className="adm-tabhead">
         <h2>매크로 지표</h2>
         <AdminTerms items={[
-          ["등록", "리더보드에 올린 매크로 수(AI 봇 제외)"], ["노출", "리더보드 목록에 보인 횟수(세션당 매크로 1회)"],
-          ["열람", "매크로 행에서 빌더로 가져오기 · 빠른 실행 · 언락 중 하나를 누름(세션당 매크로 1회)"], ["클릭률", "열람 ÷ 노출"],
-          ["구매", "언락(포인트로 잠금 해제)"], ["구매 전환율", "구매 ÷ 열람"], ["매출", "언락에 쓰인 포인트"],
+          ["집계 시작", `노출 · 열람 · 구매 ${sinceNote(eventsSince, "이벤트 집계 시작")} · 그 전 날짜는 측정 불가(—)`],
+          ["등록", "리더보드에 올린 매크로 수(AI 봇 제외)"], ["노출", "리더보드 목록에 보인 횟수(세션당 매크로 1회 · 자정을 넘기면 다시 1회)"],
+          ["열람", "매크로 행에서 빌더로 가져오기 · 빠른 실행 · 언락 중 하나를 누름(세션당 매크로 1회)"], ["클릭률", "열람 ÷ 노출 · 노출 집계 시작 전은 —"],
+          ["구매", "언락(포인트로 잠금 해제) · 열람과 같은 이벤트 표에서 센다"], ["구매 전환율", "구매 ÷ 열람 · 집계 시작 전은 —"], ["매출", "언락에 쓰인 포인트(언락 기록)"],
           ["제작자 수익", "제작자에게 간 포인트(포인트 원장 unlock_earn)"], ["모의 수익률", "그 매크로의 모의 세션 수익률"],
+          ["실행 중 · 응답 없음", "실행 중 = 5분 안에 하트비트가 온 실행 세션 · 응답 없음 = 실행 중 상태인데 하트비트가 끊긴 세션"],
         ]} />
       </div>
       <AdminKpis items={[
@@ -398,12 +448,12 @@ function MacrosTab({ data, days }) {
           <Legend items={[{ label: "등록", color: SERIES.s1 }, { label: "구매(언락)", color: SERIES.s2 }]} />
           <BarChart days={dayList} bars={[{ label: "등록", data: series.registered, color: SERIES.s1 }, { label: "구매", data: series.unlocks, color: SERIES.s2 }]} yTitle="건수 (건)" height={200} />
         </AdminBlock>
-        <AdminBlock title="일별 클릭률 · 구매 전환율" caption={`${days}일 · 선 · 집계 시작 ${AGGREGATION_START}`}>
+        <AdminBlock title="일별 클릭률 · 구매 전환율" caption={`${days}일 · 선 · ${sinceNote(eventsSince)}`}>
           <Legend items={[{ label: "클릭률", color: SERIES.s1, line: true }, { label: "구매 전환율", color: SERIES.s2, line: true }]} />
           <LineChart days={dayList} series={[{ label: "클릭률", data: series.ctr_pct, color: SERIES.s1 }, { label: "구매 전환율", data: series.cvr_pct, color: SERIES.s2 }]} yTitle="비율 (%)" unit="%" height={200} />
         </AdminBlock>
       </div>
-      <AdminBlock title="일별 매크로 활동" caption={`${all ? `${days}일 전체` : "최근 7일"} · 노출·열람 집계 시작 ${AGGREGATION_START}`} actions={toggle}>
+      <AdminBlock title="일별 매크로 활동" caption={`${all ? `${days}일 전체` : "최근 7일"} · 노출·열람·구매 ${sinceNote(eventsSince)}`} actions={toggle}>
         <AdminTable rows={visible} total={total} rowKey={(r) => r.day} columns={[
           { key: "day", label: "날짜" }, { key: "registered", label: "등록", num: true, render: (r) => fmtInt(r.registered) },
           { key: "impressions", label: "노출", num: true, render: (r) => fmtInt(r.impressions) }, { key: "opens", label: "열람", num: true, render: (r) => fmtInt(r.opens) },
@@ -425,10 +475,12 @@ function MacrosTab({ data, days }) {
           { key: "paper_return_pct", label: "모의 수익률", num: true, render: (r) => paperReturnCell(r.paper_return_pct) },
         ]} />
       </AdminBlock>
-      <AdminBlock title="에이전트 · 모의 세션" caption="현재">
+      <AdminBlock title="에이전트 · 모의 세션" caption={sessionsCaption}>
         <AdminTable rows={data.sessions || []} rowKey={(r) => r.kind} columns={[
           { key: "label", label: "종류", render: (r) => r.label || r.kind },
-          { key: "running", label: "실행 중", num: true, render: (r) => fmtInt(r.running) }, { key: "stopped", label: "종료", num: true, render: (r) => fmtInt(r.stopped) },
+          { key: "running", label: "실행 중", num: true, render: (r) => fmtInt(r.running) },
+          { key: "stale", label: "응답 없음", num: true, render: (r) => (r.stale === null || r.stale === undefined ? "—" : downIfPositive(r.stale)) },
+          { key: "stopped", label: "종료", num: true, render: (r) => fmtInt(r.stopped) },
           { key: "error", label: "오류", num: true, render: (r) => downIfPositive(r.error) },
           { key: "started_period", label: `${days}일 시작`, num: true, render: (r) => fmtInt(r.started_period) },
           { key: "mainnet", label: "메인넷 (실자금)", num: true, render: (r) => (r.mainnet === null || r.mainnet === undefined ? "—" : fmtInt(r.mainnet)) },
@@ -446,14 +498,24 @@ function NewsTab({ data }) {
   const board = data.board || [];
   const counts = board.reduce((acc, b) => { acc[b.status] = (acc[b.status] || 0) + 1; return acc; }, {});
   const sources = data.sources || [];
+  // 공개 뉴스가 캐시·스냅샷으로 응답한 회차는 소스 호출이 없어 소스별 표에 행을 만들지 않는다 — 캡션에 그 수를 적는다.
+  const cachedToday = (data.engines || []).find((e) => e?.engine === "public_news")?.served_from_cache_today;
+  const cachedNote = cachedToday === null || cachedToday === undefined ? "" : ` (캐시 응답 ${fmtInt(cachedToday)}회 제외)`;
   return (
     <>
       <div className="adm-tabhead">
         <h2>뉴스 수집 크롤링 현황</h2>
         <AdminTerms items={[
-          ["엔진", "Prefect 배포(worker) 또는 웹 프로세스 안의 수집 루프"], ["오늘", "KST 자정 이후"], ["실행", "flow 실행 횟수"],
-          ["대상", "처리한 종목 · 페어 수"], ["수집", "저장한 기사 · 거래 수"], ["실패", "소스 호출 실패 횟수"],
-          ["보강", "기사에 AI 요약 · 번역을 붙이는 단계"], ["정체 쉼", "무진전 회차 뒤 60초 쉬고 5행만 탐침"], ["백오프", "실패 뒤 다음 시도까지 늘린 간격"],
+          ["엔진", "Prefect 배포(worker) 또는 웹 프로세스 안의 수집 루프"], ["오늘", "KST 자정 이후"],
+          ["실행", "일한 회차(정상 + 오류). 건너뜀은 따로 센다 · 공개 뉴스는 범위 갱신 수 · 보강은 일감을 찾은 회차"],
+          ["대상", "처리한 종목 · 페어 · 지갑 수"],
+          // 엔진 표의 수집은 새로 저장한 행이지만, 소스별 표의 뉴스 소스는 회차마다 응답에 실린 항목 수(매 폴링마다
+          // 다시 나열되는 목록 포함)라 같은 말로 적으면 두 표의 숫자 차이를 오독한다 — 어느 표의 값인지 나눠 적는다.
+          ["수집", "엔진 표 = 새로 저장한 기사 · 거래 · 보유 행 수(캐시로 다시 내보낸 목록은 0) · 소스별 표 = 응답 항목 수(뉴스 소스) · 저장 행(온체인)"],
+          ["실패", "소스 호출 실패 횟수(보강은 재시도 소진으로 포기한 기사 수 · 다음 회차 연기는 실패가 아님)"],
+          ["보강", "기사에 AI 요약 · 번역을 붙이는 단계 · 웹 · 5초 스캔(일감 있을 때만 기록)"],
+          ["정체 쉼", "무진전 회차 뒤 60초 쉬고 5행만 탐침 · 10분 넘게 이어지면 오류(정체 지속)"], ["소스 실패", "최근 회차가 소스 불가 · 저하로 끝남"],
+          ["백오프", "실패 뒤 다음 시도까지 늘린 간격"],
         ]} />
       </div>
       <AdminKpis items={[
@@ -470,23 +532,25 @@ function NewsTab({ data }) {
           { key: "status", label: "상태", render: (r) => { const s = ENGINE_STATUS[r.status] || ENGINE_STATUS.idle; return <StatusPill tone={s.tone}>{r.status_label || s.label}</StatusPill>; } },
           { key: "last_run_ms", label: "마지막 실행", render: (r) => fmtRelative(r.last_run_ms, now) },
           { key: "runs_today", label: "오늘 실행", num: true, render: (r) => fmtInt(r.runs_today) },
+          { key: "skipped_today", label: "오늘 건너뜀", num: true, render: (r) => fmtInt(r.skipped_today) },
           { key: "targets_today", label: "오늘 대상", num: true, render: (r) => fmtInt(r.targets_today) },
           { key: "items_today", label: "오늘 수집", num: true, render: (r) => fmtInt(r.items_today) },
           { key: "failures_today", label: "오늘 실패", num: true, render: (r) => downIfPositive(r.failures_today) },
           { key: "last_error", label: "최근 오류", render: (r) => <span className="adm-err" title={r.last_error || ""}>{r.last_error || "—"}</span> },
         ]} />
       </AdminBlock>
-      <AdminBlock title="시간대별 수집 · 실패" caption="오늘 · 2시간 단위 · 누적 막대 · 종목 뉴스 엔진">
+      <AdminBlock title="시간대별 수집 · 실패" caption="오늘 · 2시간 단위 · 누적 막대 · 종목 뉴스 + 공개 뉴스">
         <Legend items={[{ label: "수집 기사", color: SERIES.s2 }, { label: "실패", color: SERIES.down }]} />
         <StackedChart cats={buckets.map((b) => b.label)} yTitle="건수 (건)" xTitle="시각 (KST)" height={200}
           series={[{ label: "수집 기사", data: buckets.map((b) => b.items), color: SERIES.s2 }, { label: "실패", data: buckets.map((b) => b.failures), color: SERIES.down }]} />
       </AdminBlock>
-      <AdminBlock title="소스별 수집" caption="오늘 · 종목 뉴스 엔진 내부">
-        <HBarChart title="소스별 수집 기사" unit="건" rows={sources.filter((s) => Number(s.items) > 0).sort((a, b) => Number(b.items) - Number(a.items)).map((s) => ({ label: s.label || s.source, value: s.items }))} />
-        <AdminTable rows={sources} rowKey={(r) => r.source} columns={[
+      <AdminBlock title="소스별 수집" caption={`오늘 · 공개 뉴스 + 종목 뉴스 엔진${cachedNote} · 온체인 · 고래 소스 포함 · 호출 = 실제 요청 · 수집 = 응답 항목 수(뉴스 소스) · 저장 행(온체인)`}>
+        <HBarChart title="소스별 수집" unit="건" rows={sources.filter((s) => Number(s.items) > 0).sort((a, b) => Number(b.items) - Number(a.items)).map((s) => ({ label: s.label || s.source, value: s.items }))} />
+        <AdminTable rows={sources} rowKey={(r) => `${r.engine || ""}:${r.source}`} columns={[
           { key: "label", label: "소스", render: (r) => r.label || r.source },
-          { key: "targets", label: "대상 종목", num: true, render: (r) => fmtInt(r.targets) }, { key: "calls", label: "호출", num: true, render: (r) => fmtInt(r.calls) },
-          { key: "items", label: "수집 기사", num: true, render: (r) => fmtInt(r.items) }, { key: "failures", label: "실패", num: true, render: (r) => downIfPositive(r.failures) },
+          { key: "engine_label", label: "엔진", render: (r) => r.engine_label || r.engine || "—" },
+          { key: "targets", label: "대상", num: true, render: (r) => fmtInt(r.targets) }, { key: "calls", label: "호출", num: true, render: (r) => fmtInt(r.calls) },
+          { key: "items", label: "수집", num: true, render: (r) => fmtInt(r.items) }, { key: "failures", label: "실패", num: true, render: (r) => downIfPositive(r.failures) },
           { key: "failure_pct", label: "실패율", num: true, render: (r) => fmtPct(r.failure_pct) },
           { key: "last_success_ms", label: "마지막 성공", render: (r) => fmtRelative(r.last_success_ms, now) },
           { key: "last_error", label: "최근 오류", render: (r) => <span className="adm-err" title={r.last_error || ""}>{r.last_error || "—"}</span> },
@@ -514,7 +578,7 @@ function NewsTab({ data }) {
             { key: "error", label: "오류", render: (r) => <span className="adm-err" title={r.error || ""}>{r.error || "—"}</span> },
           ]} />
         </AdminBlock>
-        <AdminBlock title="기사 보강 · 예산" caption="지금">
+        <AdminBlock title="기사 보강 · 예산" caption="지금 · 포기는 오늘 · 누적 두 줄">
           <AdminTable rows={data.enrichment || []} rowKey={(r) => r.key} columns={[
             { key: "label", label: "항목", render: (r) => r.label || r.key },
             { key: "value", label: "값", num: true, render: (r) => (typeof r.value === "number" ? fmtInt(r.value) : (r.value ?? "—")) },
@@ -551,7 +615,7 @@ function CostsTab({ data }) {
         <h2>API 비용</h2>
         <AdminTerms items={[
           ["추정 비용", "응답 토큰 수 × 모델 단가 (서버 설정값, 1M 토큰 기준)"], ["실제 청구액", "청구 API 로 받은 값(제공하는 곳만, 1~2일 지연)"],
-          ["구독형", "월 고정액을 설정값으로 넣은 항목"], ["용도", "Gemini 를 부르는 코드 위치 6곳"], ["통화", "USD"],
+          ["구독형", "월 고정액을 설정값으로 넣은 항목 · 이번 달은 경과일로 안분(*) · 시작 월 이전은 0"], ["용도", "Gemini 를 부르는 코드 위치 6곳"], ["통화", "USD"],
           [monthLabel, `1일 ~ ${fmtInt(data.month_days_elapsed)}일까지`],
         ]} />
       </div>
@@ -561,7 +625,7 @@ function CostsTab({ data }) {
         { label: "오늘 Gemini", value: fmtUsd(k.gemini_today_usd) },
       ]} />
       <div className="adm-cols2">
-        <AdminBlock title="월별 비용" caption={`최근 ${COST_MONTHS}개월 · 제공자별 누적 · USD`}>
+        <AdminBlock title="월별 비용" caption={`최근 ${COST_MONTHS}개월 · 제공자별 누적 · USD · 구독은 시작 월부터, 이번 달은 경과일 안분`}>
           <Legend items={[{ label: "Gemini", color: SERIES.s2 }, { label: "Render", color: SERIES.s1 }, { label: "Supabase", color: SERIES.s3 }, { label: "기타 (CoinDesk · Vercel · Prefect)", color: SERIES.s5 }]} />
           <StackedChart cats={monthly.map((m) => m.label || fmtMonthLabel(m.month, { current: m.month === data.month }))} yTitle="비용 (USD)" xTitle="월" prefix="$" digits={2} height={260}
             series={[
@@ -575,16 +639,17 @@ function CostsTab({ data }) {
           <Donut prefix="$" digits={2} parts={purposes.map((p, i) => ({ label: labelOf(PURPOSE_LABELS, p.purpose, p.label), value: p.cost_usd, color: palette[i % palette.length] }))} />
         </AdminBlock>
       </div>
-      <AdminBlock title="월별 청구 예상" caption={`${data.month || "—"} · 지난달 · USD`}>
+      <AdminBlock title="월별 청구 예상" caption={`${data.month || "—"} · 지난달 · USD · 구독은 경과일 안분(*) · 시작 월 이전 0`}>
         <AdminTable rows={providers} total={providerTotal} rowKey={(r) => r.provider} columns={[
           { key: "label", label: "제공자", render: (r) => r.label || r.provider },
-          { key: "method", label: "계산", render: (r) => (r.method ? labelOf(COST_METHOD_LABELS, r.method) : "") },
+          { key: "method", label: "계산", render: (r) => (r.method ? `${labelOf(COST_METHOD_LABELS, r.method)}${r.prorated ? " · 안분" : ""}` : "") },
           { key: "calls", label: "호출", num: true, render: (r) => (r.calls === null || r.calls === undefined ? "—" : fmtInt(r.calls)) },
           { key: "input_tokens", label: "입력 토큰", num: true, render: (r) => fmtTokens(r.input_tokens) },
           { key: "output_tokens", label: "출력 토큰", num: true, render: (r) => fmtTokens(r.output_tokens) },
-          { key: "month_usd", label: "이번 달", num: true, render: (r) => fmtUsd(r.month_usd) },
+          // 안분한 값은 * — 월말이 되면 설정값에 닿는다는 뜻(용어 표의 구독형 항목이 설명한다).
+          { key: "month_usd", label: "이번 달", num: true, render: (r) => `${fmtUsd(r.month_usd)}${r.prorated ? "*" : ""}` },
           { key: "last_month_usd", label: "지난달", num: true, render: (r) => fmtUsd(r.last_month_usd) },
-          { key: "plan", label: "요금제", render: (r) => r.plan || "" },
+          { key: "plan", label: "요금제", render: (r) => `${r.plan || ""}${r.since ? `${r.plan ? " · " : ""}${r.since}부터` : ""}` },
         ]} />
       </AdminBlock>
       <AdminBlock title="Gemini 용도별" caption="이번 달">

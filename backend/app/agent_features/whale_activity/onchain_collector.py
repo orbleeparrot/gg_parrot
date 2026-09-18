@@ -17,24 +17,29 @@ def collect_coin(coin, *, fetcher=None):
     if not token:
         return {'coin': coin, 'status': 'skipped', 'reason': 'not_due_or_claimed'}
     started = time.monotonic()
+    # 실패 결과에도 소스 이름(blockscout · xrpscan)을 싣는다 — 없으면 관리자 소스별 표가 실패를 이름 없는
+    # 'unknown' 소스에 쌓아 blockscout 실패율이 0% 로 보였다(2026-09-18 점검).
+    source = repository.SOURCES.get(coin)
     try:
         payload = (fetcher or whales.fetch_holder_observation)(coin)
     except whales.OnchainSourceError as exc:
         stored = repository.record_failure(coin, token, error_code=exc.code,
                                             delay_seconds=exc.retry_after_seconds)
-        return {'coin': coin, 'status': 'error' if stored else 'superseded',
+        return {'coin': coin, 'source': source, 'status': 'error' if stored else 'superseded',
                 'error_code': exc.code, 'http_status': exc.http_status,
                 'retry_after_seconds': exc.retry_after_seconds,
                 'elapsed_ms': round((time.monotonic()-started)*1000)}
     except Exception:
         stored = repository.record_failure(coin, token, error_code='invalid_response')
-        return {'coin': coin, 'status': 'error' if stored else 'superseded', 'error_code': 'invalid_response'}
+        return {'coin': coin, 'source': source, 'status': 'error' if stored else 'superseded',
+                'error_code': 'invalid_response'}
     # Storage failures propagate to Prefect instead of masquerading as HTTP success.
     try:
         stored = repository.store_result(coin, token, payload)
     except ValueError:
         stored = repository.record_failure(coin, token, error_code='invalid_response')
-        return {'coin': coin, 'status': 'error' if stored else 'superseded', 'error_code': 'invalid_response'}
+        return {'coin': coin, 'source': source, 'status': 'error' if stored else 'superseded',
+                'error_code': 'invalid_response'}
     return {'coin': coin, 'source': payload.get('source'), 'status': 'ready' if stored else 'superseded',
             'tracked_count': payload.get('tracked_count', 0), 'excluded_count': payload.get('excluded_count', 0),
             'fetched_count': payload.get('fetched_count', 0), 'http_status': payload.get('http_status'),

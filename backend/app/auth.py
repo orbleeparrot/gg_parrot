@@ -212,6 +212,7 @@ def signup(email: str, username: str, password: str) -> dict:
             email=email,
             username=username,
             password_hash=hash_password(password),
+            signup_method="email",  # 가입 방법은 여기서 한 번 적는다 — 해시 유무로 추정하면 탈퇴·재설정 때 바뀐다(admin.py)
             points_balance=0,
             created_at=_now().strftime("%Y-%m-%dT%H:%M:%SZ"),
         )
@@ -310,6 +311,7 @@ def google_auth(credential: str) -> dict:
             email=email,
             username=username,
             password_hash="",  # 외부(구글) 인증 — 로컬 비밀번호 없음
+            signup_method="google",  # 뒤에 비밀번호를 만들어도 '구글 가입' 으로 남는다
             points_balance=0,
             created_at=_now().strftime("%Y-%m-%dT%H:%M:%SZ"),
         )

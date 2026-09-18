@@ -75,6 +75,11 @@ services:
         value: "1"
       - key: AI_EXPLAIN_MAX_CALLS_PER_DAY
         value: "20"
+      # 껄무새에게 물어볼까? — 계정당 하루 횟수와 후보 백테스트 시간 예산(초). 넘으면 남은 후보는 건너뜁니다.
+      - key: ASK_DAILY_LIMIT
+        value: "5"
+      - key: ASK_TIME_BUDGET_SEC
+        value: "20"
       - key: NEWS_MARKET_SUMMARY_MAX_CALLS_PER_DAY
         value: "8"
       - key: GEMINI_NEWS_TRANSLATION_MAX_TOKENS

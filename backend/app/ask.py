@@ -1,0 +1,494 @@
+"""껄무새에게 물어볼까? — 카드 답변(성향·시장·종목·기간·빈도)으로 백테스트 상위 3개 조합을 찾는다.
+
+법적 설계를 코드로 강제한다:
+* 종목은 요청에 온 것만 쓴다(AI 가 종목을 고르는 경로 없음).
+* AI 는 매크로 '뼈대'(rule_type·params)만 제안하고 성과 숫자는 전부 백테스트가 계산한다.
+* 어디에도 '추천' 이라 쓰지 않는다 — 후보, 상위 조합.
+* 성향이 안정형이면 선물·H(세이프티 주문) 후보를 만들지 않는다.
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import threading
+import time
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Callable, Literal, Optional
+
+from pydantic import BaseModel, Field, field_validator, model_validator
+from sqlalchemy import func
+from sqlmodel import Session, select
+
+from .ai_runtime import ai_available, ai_cache_key, default_model, get_ai_client, get_ai_runtime
+from .data import NoSpotDataError
+from .db import AskMacroSession, User
+from .engine.backtest import BacktestResult
+from .engine.explain import explain_result
+from .engine.schema import Macro
+from .quests import today_kst
+
+DISCLAIMER_VERSION = "ask-v1"
+DISCLAIMER = "AI 가 과거 데이터로 고른 후보예요 · 투자 권유가 아니에요 · 과거 성과는 미래 수익을 보장하지 않아요"
+MAX_CANDIDATES = 24
+TOP_N = 3
+MIN_TRADES = 3
+CAPITAL = 1_000_000
+
+RiskProfile = Literal["stable", "balanced", "aggressive"]
+
+# 성향별 규칙 — 후보에 넣는 유형, MDD 상한, 선물 허용 여부. 순서는 템플릿 우선순위.
+PROFILES: dict[str, dict] = {
+    "stable": {"label": "안정형", "mdd_cap": 10.0, "rule_types": ("C", "J", "G", "A"), "futures": False},
+    "balanced": {"label": "균형형", "mdd_cap": 20.0, "rule_types": ("C", "J", "G", "A", "F", "E"), "futures": True},
+    "aggressive": {"label": "공격형", "mdd_cap": None, "rule_types": ("C", "J", "G", "A", "F", "E", "I", "H"), "futures": True},
+}
+
+RULE_LABELS = {
+    "A": "익절/손절 후 재진입", "C": "정기 분할매수", "E": "트레일링 스탑", "F": "RSI 조건",
+    "G": "볼린저밴드 회귀", "H": "세이프티 주문", "I": "변동성 돌파", "J": "이동평균 크로스",
+}
+
+_SYMBOL_RE = re.compile(r"^[A-Z0-9]{2,20}USDT$")
+
+
+class AskRequest(BaseModel):
+    risk_profile: RiskProfile
+    market: Literal["spot", "futures"] = "spot"
+    leverage: int = Field(default=1, ge=1, le=3)
+    symbols: list[str] = Field(min_length=1, max_length=3)
+    period_preset: Literal["3m", "6m", "1y"] = "3m"
+    interval: Literal["1h", "4h", "1d"] = "1h"
+
+    @field_validator("symbols")
+    @classmethod
+    def _normalize_symbols(cls, value: list[str]) -> list[str]:
+        seen: list[str] = []
+        for raw in value:
+            sym = str(raw).strip().upper()
+            if not _SYMBOL_RE.match(sym):
+                raise ValueError(f"종목은 USDT 페어여야 해요: {raw}")
+            if sym not in seen:
+                seen.append(sym)
+        if len(seen) > 3:
+            raise ValueError("종목은 최대 3개까지예요")
+        return seen
+
+    @model_validator(mode="after")
+    def _profile_rules(self) -> "AskRequest":
+        if self.market == "futures" and not PROFILES[self.risk_profile]["futures"]:
+            raise ValueError("안정형은 현물만 살펴봐요")
+        if self.market == "spot" and self.leverage != 1:
+            raise ValueError("현물은 레버리지를 쓸 수 없어요")
+        return self
+
+
+@dataclass
+class Candidate:
+    label: str
+    macro: Macro
+    source: str  # "template" | "ai"
+
+
+# 유형별 파라미터 프리셋. 절대 가격이 필요한 B·D 는 없다. C 는 initial_capital 을 스스로 계산한다.
+_PRESETS: dict[str, list[dict]] = {
+    "C": [
+        {"params": {"amount_per_buy": 50_000, "interval_days": 1}},
+        {"params": {"amount_per_buy": 100_000, "interval_days": 7}},
+    ],
+    "A": [
+        {"params": {"take_profit_pct": 3, "initial_capital": CAPITAL}, "risk": {"stop_loss_pct": 2}},
+        {"params": {"take_profit_pct": 5, "initial_capital": CAPITAL}, "risk": {"stop_loss_pct": 3}},
+    ],
+    "J": [
+        {"params": {"ma_type": "SMA", "fast_period": 20, "slow_period": 60, "initial_capital": CAPITAL}},
+        {"params": {"ma_type": "EMA", "fast_period": 10, "slow_period": 30, "initial_capital": CAPITAL}},
+    ],
+    "G": [
+        {"params": {"bb_period": 20, "bb_std": 2.0, "strategy": "reversion", "exit_target": "mid", "initial_capital": CAPITAL}},
+        {"params": {"bb_period": 20, "bb_std": 2.5, "strategy": "reversion", "exit_target": "opposite", "initial_capital": CAPITAL}},
+    ],
+    "F": [
+        {"params": {"rsi_period": 14, "entry_threshold": 30, "exit_threshold": 70, "initial_capital": CAPITAL}},
+        {"params": {"rsi_period": 14, "entry_threshold": 25, "exit_threshold": 65, "exit_mode": "both", "take_profit": 5, "initial_capital": CAPITAL}},
+    ],
+    "E": [
+        {"params": {"entry_mode": "immediate", "activation_profit": 5, "trail_percent": 3, "initial_capital": CAPITAL}},
+        {"params": {"entry_mode": "dip", "entry_dip": 3, "activation_profit": 4, "trail_percent": 2, "initial_capital": CAPITAL}},
+    ],
+    "I": [
+        {"params": {"k": 0.5, "exit_mode": "next_open", "initial_capital": CAPITAL}},
+        {"params": {"k": 0.6, "exit_mode": "trailing", "trail_percent": 2, "ma_filter_period": 20, "initial_capital": CAPITAL}},
+    ],
+    "H": [
+        {"params": {"base_order_size": 100_000, "safety_order_size": 100_000, "price_deviation": 2,
+                    "max_safety_orders": 5, "take_profit": 2, "initial_capital": CAPITAL}},
+    ],
+}
+
+
+def _allowed_types(req: AskRequest) -> tuple[str, ...]:
+    types = PROFILES[req.risk_profile]["rule_types"]
+    # C(DCA) 는 레버리지·선물을 못 쓴다.
+    if req.market == "futures":
+        types = tuple(t for t in types if t != "C")
+    return types
+
+
+def _make_macro(req: AskRequest, rule_type: str, preset: dict, symbols: list[str]) -> Optional[Macro]:
+    body = {
+        "symbol": symbols[0],
+        "symbols": symbols if len(symbols) > 1 else None,
+        "rule_type": rule_type,
+        "position_side": "long",
+        "candle_interval": req.interval,
+        "market": req.market,
+        "leverage": req.leverage if rule_type != "C" else 1,
+        "params": dict(preset["params"]),
+        "risk": dict(preset.get("risk", {})),
+        "period": {"preset": req.period_preset},
+    }
+    try:
+        return Macro(**body)
+    except Exception:
+        return None
+
+
+def _label(rule_type: str, req: AskRequest, symbols: list[str]) -> str:
+    where = "포트폴리오" if len(symbols) > 1 else symbols[0]
+    return f"{RULE_LABELS.get(rule_type, rule_type)} · {req.interval} · {where}"
+
+
+def build_templates(req: AskRequest) -> list[Candidate]:
+    """성향별 템플릿 후보.
+
+    상한(24)에 걸리면 뒤쪽부터 잘리므로 모든 유형의 단일 종목 후보가 먼저,
+    포트폴리오가 그다음, 두 번째 프리셋이 마지막에 오도록 순서를 정한다:
+    1) 유형 × 종목 전부의 첫 프리셋(단일 종목), 2) 종목이 2개 이상이면 유형별
+    포트폴리오(첫 프리셋), 3) 유형 × 종목 전부의 두 번째 프리셋(단일 종목).
+    """
+    out: list[Candidate] = []
+    types = _allowed_types(req)
+
+    # 1) 모든 유형 × 모든 종목의 첫 프리셋(단일 종목)
+    for rule_type in types:
+        for sym in req.symbols:
+            macro = _make_macro(req, rule_type, _PRESETS[rule_type][0], [sym])
+            if macro is not None:
+                out.append(Candidate(_label(rule_type, req, [sym]), macro, "template"))
+
+    # 2) 종목이 2개 이상이면 유형별 포트폴리오(첫 프리셋)
+    if len(req.symbols) > 1:
+        for rule_type in types:
+            macro = _make_macro(req, rule_type, _PRESETS[rule_type][0], req.symbols)
+            if macro is not None:
+                out.append(Candidate(_label(rule_type, req, req.symbols), macro, "template"))
+
+    # 3) 두 번째 이상 프리셋 — 종목별·유형별로 추가
+    depth = max(len(_PRESETS[t]) for t in types)
+    for preset_idx in range(1, depth):
+        for sym in req.symbols:
+            for rule_type in types:
+                presets = _PRESETS[rule_type]
+                if preset_idx >= len(presets):
+                    continue
+                macro = _make_macro(req, rule_type, presets[preset_idx], [sym])
+                if macro is not None:
+                    out.append(Candidate(_label(rule_type, req, [sym]), macro, "template"))
+
+    return out[:MAX_CANDIDATES]
+
+
+@dataclass
+class Evaluated:
+    candidate: Candidate
+    result: BacktestResult
+
+
+def evaluate(
+    candidates: list[Candidate],
+    run: Callable[[Macro], BacktestResult],
+    time_budget_sec: float,
+) -> list[Evaluated]:
+    """후보를 전부 백테스트한다. 실패한 후보는 건너뛰고, 시간 예산이 끝나면 남은 후보도 건너뛴다."""
+    started = time.monotonic()
+    out: list[Evaluated] = []
+    for cand in candidates:
+        if time.monotonic() - started > time_budget_sec:
+            break
+        try:
+            out.append(Evaluated(cand, run(cand.macro)))
+        except Exception:
+            continue
+    return out
+
+
+def score(profile: str, result: BacktestResult) -> float:
+    ret = float(result.final_return_pct)
+    mdd = float(result.mdd_pct)
+    if profile == "stable":
+        return ret / max(mdd, 1.0)
+    if profile == "balanced":
+        return ret - 0.5 * mdd
+    return ret
+
+
+def select_top(evaluated: list[Evaluated], profile: str, n: int = TOP_N) -> list[Evaluated]:
+    """MDD 상한·최소 거래 수로 거르고 성향 점수로 정렬해 상위 n개 — 같은 rule_type 은 하나만."""
+    cap = PROFILES[profile]["mdd_cap"]
+    pool = [
+        e for e in evaluated
+        if e.result.total_trades >= MIN_TRADES and (cap is None or float(e.result.mdd_pct) <= cap)
+    ]
+    pool.sort(key=lambda e: (score(profile, e.result), e.result.total_trades), reverse=True)
+    picked: list[Evaluated] = []
+    seen_types: set[str] = set()
+    for e in pool:
+        rt = e.candidate.macro.rule_type.value
+        if rt in seen_types:
+            continue
+        seen_types.add(rt)
+        picked.append(e)
+        if len(picked) >= n:
+            break
+    return picked
+
+
+_AI_MODEL = default_model()
+_AI_MAX_TOKENS = int(os.environ.get("GEMINI_ASK_MAX_TOKENS", "2048"))
+_AI_PROMPT_VERSION = "ask-v1"
+
+
+def _ai_system(req: AskRequest) -> str:
+    types = ", ".join(_allowed_types(req))
+    return (
+        "너는 코인 백테스트 교육 도구의 매크로 뼈대 생성기야. 사용자가 고른 종목과 조건으로 "
+        "서로 다른 스타일의 매크로 3개를 JSON 으로만 출력해(코드펜스 없이). 형식은 "
+        '{"macros":[{"rule_type":"J","params":{...},"risk":{"stop_loss_pct":3}}, ...]}. '
+        f"rule_type 은 {types} 중에서만 고르고 각 params 는 그 타입 스키마대로 채워. "
+        "initial_capital 은 1000000 으로. 종목·봉 간격·시장·레버리지는 서버가 정하니 넣지 마. "
+        "수익률이나 전망 같은 숫자를 지어내지 말고, 조언·권유 문구를 넣지 마."
+    )
+
+
+def _strip_fences(text: str) -> str:
+    t = text.strip()
+    if t.startswith("```"):
+        t = t.strip("`")
+        if "\n" in t:
+            first, rest = t.split("\n", 1)
+            if first.strip().lower() in ("json", ""):
+                t = rest
+    return t.strip()
+
+
+def propose_with_ai(req: AskRequest) -> list[Candidate]:
+    """Gemini 가 제안한 뼈대를 요청 조건(종목·봉·시장·레버리지)에 고정하고 스키마로 검증한다. 실패는 빈 리스트."""
+    if not ai_available():
+        return []
+    system = _ai_system(req)
+    prompt = (
+        f"종목: {', '.join(req.symbols)} · 성향: {PROFILES[req.risk_profile]['label']} · "
+        f"봉 간격: {req.interval} · 기간: {req.period_preset}. 매크로 3개를 JSON 으로."
+    )
+    key = ai_cache_key("ask", _AI_PROMPT_VERSION, _AI_MODEL,
+                       {"req": req.model_dump(), "system": system, "prompt": prompt, "max_tokens": _AI_MAX_TOKENS})
+
+    def load():
+        response = get_ai_client().messages.create(
+            model=_AI_MODEL, max_tokens=_AI_MAX_TOKENS, system=system,
+            messages=[{"role": "user", "content": prompt}], purpose="ask",
+            timeout=float(os.environ.get("ASK_AI_TIMEOUT_SEC", "6")),
+        )
+        text = next((b.text for b in response.content if getattr(b, "type", None) == "text"), None)
+        if not text:
+            raise ValueError("empty ask response")
+        obj = json.loads(_strip_fences(text))
+        macros = obj.get("macros", obj if isinstance(obj, list) else [])
+        if not isinstance(macros, list):
+            raise ValueError("invalid ask response")
+        return macros
+
+    try:
+        proposed = get_ai_runtime().call(key, load, retries=0)[0]
+    except Exception:
+        return []
+
+    allowed = set(_allowed_types(req))
+    out: list[Candidate] = []
+    for item in proposed:
+        if not isinstance(item, dict):
+            continue
+        rule_type = str(item.get("rule_type", "")).upper()
+        if rule_type not in allowed:
+            continue
+        preset = {"params": item.get("params") or {}, "risk": item.get("risk") or {}}
+        macro = _make_macro(req, rule_type, preset, [req.symbols[0]])
+        if macro is None:
+            continue
+        out.append(Candidate(_label(rule_type, req, [req.symbols[0]]) + " · AI 제안", macro, "ai"))
+    return out
+
+
+class AskError(Exception):
+    def __init__(self, status: int, message: str):
+        super().__init__(message)
+        self.status = status
+        self.message = message
+
+
+def daily_limit() -> int:
+    try:
+        return max(0, int(os.environ.get("ASK_DAILY_LIMIT", "5")))
+    except ValueError:
+        return 5
+
+
+def time_budget_sec() -> float:
+    try:
+        return float(os.environ.get("ASK_TIME_BUDGET_SEC", "20"))
+    except ValueError:
+        return 20.0
+
+
+def _now() -> tuple[str, int]:
+    now = datetime.now(timezone.utc)
+    return now.strftime("%Y-%m-%dT%H:%M:%SZ"), int(now.timestamp() * 1000)
+
+
+def used_today(db: Session, user: User) -> int:
+    return int(db.exec(
+        select(func.count()).select_from(AskMacroSession)
+        .where(AskMacroSession.user_id == user.id, AskMacroSession.day_kst == today_kst())
+    ).one())
+
+
+def remaining_today(db: Session, user: User) -> int:
+    return max(0, daily_limit() - used_today(db, user))
+
+
+def consented(user: User) -> bool:
+    return getattr(user, "ask_consent_version", "") == DISCLAIMER_VERSION
+
+
+def status(db: Session, user: User) -> dict:
+    return {
+        "consented": consented(user),
+        "remaining_today": remaining_today(db, user),
+        "daily_limit": daily_limit(),
+        "disclaimer_version": DISCLAIMER_VERSION,
+    }
+
+
+def give_consent(db: Session, user: User) -> dict:
+    user.ask_consent_version = DISCLAIMER_VERSION
+    user.ask_consent_at = _now()[0]
+    db.add(user)
+    db.commit()
+    return {"ok": True, "version": DISCLAIMER_VERSION}
+
+
+def _metrics(result: BacktestResult) -> dict:
+    return {
+        "final_return_pct": result.final_return_pct,
+        "mdd_pct": result.mdd_pct,
+        "win_rate_pct": result.win_rate_pct,
+        "total_trades": result.total_trades,
+    }
+
+
+def _result_view(e: Evaluated) -> dict:
+    macro = e.candidate.macro
+    # v1 은 규칙 기반 explain_result 만 쓴다 — AI 해설(ai_explain.enrich)은 사이트 전체
+    # 일일 예산(AI_EXPLAIN_MAX_CALLS_PER_DAY)을 공유하는데, 여기선 한 번의 질문에 최대
+    # 3개 결과가 순차로 Gemini 를 부르게 되어 예산을 빠르게 갉아먹는다. 그래서 뺀다.
+    explanation = explain_result(macro, e.result)
+    return {
+        "label": e.candidate.label,
+        "rule_type": macro.rule_type.value,
+        "source": e.candidate.source,
+        "macro": macro.model_dump(mode="json"),
+        "metrics": _metrics(e.result),
+        "explanation": explanation.model_dump(),
+        "ai_generated": False,
+    }
+
+
+# 사용자별로 동시에 한 번만 질문을 돌린다 — 락은 집합 조작(포함 검사+추가/제거)만 감싸고,
+# 백테스트가 도는 동안은 잡지 않는다.
+_IN_FLIGHT: set[int] = set()
+_IN_FLIGHT_LOCK = threading.Lock()
+
+
+def run_ask(db: Session, user: User, req: AskRequest, run_backtest: Callable[[Macro], BacktestResult]) -> dict:
+    if not consented(user):
+        raise AskError(403, "먼저 안내에 동의해 주세요.")
+    if remaining_today(db, user) <= 0:
+        raise AskError(429, f"오늘은 {daily_limit()}번 다 물어봤어요. 내일 다시 물어봐 주세요.")
+
+    with _IN_FLIGHT_LOCK:
+        if user.id in _IN_FLIGHT:
+            raise AskError(429, "아직 지난 질문을 돌리는 중이에요. 잠시만요.")
+        _IN_FLIGHT.add(user.id)
+
+    try:
+        started = time.monotonic()
+        created_at, created_ms = _now()
+        # 위의 한도 검사와 이 저장 사이에 시간차가 있으면 동시 요청 여러 개가 함께
+        # 통과해 하루 한도를 넘길 수 있다 — 평가를 시작하기 전에 빈 자리표시 행을
+        # 먼저 커밋해서 그 check-then-insert 창을 닫는다. 실패하면 이 행은 지운다.
+        session_row = AskMacroSession(
+            user_id=user.id, day_kst=today_kst(),
+            request_json=json.dumps(req.model_dump(), ensure_ascii=False),
+            candidate_count=0, results_json="[]",
+            disclaimer_version=DISCLAIMER_VERSION, ai_used=False, elapsed_ms=0,
+            created_at=created_at, created_ms=created_ms,
+        )
+        db.add(session_row)
+        db.commit()
+
+        try:
+            failures: list[Exception] = []
+
+            def guarded(macro: Macro) -> BacktestResult:
+                try:
+                    return run_backtest(macro)
+                except Exception as exc:
+                    failures.append(exc)
+                    raise
+
+            ai_candidates = propose_with_ai(req)[:TOP_N]
+            candidates = (ai_candidates + build_templates(req))[:MAX_CANDIDATES]
+            evaluated = evaluate(candidates, guarded, time_budget_sec())
+            if not evaluated and failures and all(isinstance(f, NoSpotDataError) for f in failures):
+                raise AskError(422, "이 종목의 시세 데이터를 찾지 못했어요. 종목 이름을 확인해 주세요.")
+            top = select_top(evaluated, req.risk_profile)
+            results = [_result_view(e) for e in top]
+            elapsed_ms = int((time.monotonic() - started) * 1000)
+
+            session_row.candidate_count = len(evaluated)
+            session_row.results_json = json.dumps(
+                [{"label": r["label"], "rule_type": r["rule_type"], "macro": r["macro"], "metrics": r["metrics"]} for r in results],
+                ensure_ascii=False)
+            session_row.ai_used = bool(ai_candidates)
+            session_row.elapsed_ms = elapsed_ms
+            db.add(session_row)
+            db.commit()
+        except Exception:
+            db.delete(session_row)
+            db.commit()
+            raise
+
+        return {
+            "results": results,
+            "candidate_count": len(evaluated),
+            "ai_used": bool(ai_candidates),
+            "disclaimer": DISCLAIMER,
+            "disclaimer_version": DISCLAIMER_VERSION,
+            "remaining_today": remaining_today(db, user),
+            "elapsed_ms": elapsed_ms,
+        }
+    finally:
+        with _IN_FLIGHT_LOCK:
+            _IN_FLIGHT.discard(user.id)

@@ -71,6 +71,7 @@ from . import avatars as avatars_mod
 from . import profile as profile_mod
 from . import points as points_mod
 from . import quests as quests_mod
+from . import ask as ask_mod
 from . import notifications as notifications_mod
 from . import notification_stream
 from . import admin as admin_mod
@@ -518,6 +519,35 @@ def me_dashboard(
     d["my_posts"] = board_mod.my_posts(user.id, db=db)
     d["quests"] = quests_mod.today(db, user)
     return d
+
+
+# ── 껄무새에게 물어볼까? — 카드 답변으로 백테스트 상위 3개 조합. 로그인 필수, 하루 한도, 고지 동의. ──
+@app.get("/api/ask/status")
+def ask_status(
+    account: User = Depends(auth_mod.current_user_in_session),
+    db: Session = Depends(request_session),
+) -> dict:
+    return ask_mod.status(db, account)
+
+
+@app.post("/api/ask/consent")
+def ask_consent(
+    account: User = Depends(auth_mod.current_user_in_session),
+    db: Session = Depends(request_session),
+) -> dict:
+    return ask_mod.give_consent(db, account)
+
+
+@app.post("/api/ask/macros")
+def ask_macros(
+    req: ask_mod.AskRequest,
+    account: User = Depends(auth_mod.current_user_in_session),
+    db: Session = Depends(request_session),
+) -> dict:
+    try:
+        return ask_mod.run_ask(db, account, req, lambda macro: _run_any(macro)[0])
+    except ask_mod.AskError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message)
 
 
 @app.get("/api/me/quests")

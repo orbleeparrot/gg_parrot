@@ -5,6 +5,7 @@ declare
   table_name text;
   function_signature text;
   owned_tables constant text[] := array[
+    'askmacrosession',
     'boardcomment',
     'boardimage',
     'boardpost',

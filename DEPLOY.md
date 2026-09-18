@@ -196,3 +196,7 @@ Prefect에서 `onchain_discovery`, `onchain_source`, `onchain_collection` 로그
 Prefect는 원자적인 ‘예약 상태일 때만 취소’를 제공하지 않으므로, 상태를 다시 확인하고 `Cancelling(force=False)`를 요청합니다. 인프라가 없는 예약은 서버에서 `Cancelled`로 전환하고, 완료된 실행에는 요청을 거절합니다. 확인 직후 오래된 수집이 시작되는 경합은 해당 유효 관측 시간을 이미 넘긴 수집에만 영향을 줍니다. 작업 기록을 삭제하거나 과거 실행을 `Pending`으로 되돌리지 않습니다. `collector_queue_cleanup`의 `retired`는 이러한 정상 정리를 뜻합니다.
 
 배포 뒤 네 Prefect 배포의 커밋·READY 상태, 같은 실행 ID에 연결된 태스크·소스 로그·최종 상태를 확인합니다. 체결·온체인 예약 지연과 `collector_queue_cleanup`을 확인하고, 공용 DB 및 공개 API의 세 소스 관측 시각을 대조합니다. 스레드에서 실행 중인 HTTP 요청은 취소 즉시 강제 종료하지 않으며, 제한된 실행이 끝난 뒤 자신이 실행한 `Cancelling` 상태를 마무리합니다. 기존 `Pending`/`Running` 기록을 일괄 변경하지 않습니다. Render 재시작이나 메모리 부족 여부는 워커 로그·메모리 지표로 별도 확인합니다.
+
+## 껄무새에게 물어볼까? (2026-09-18)
+
+이 기능은 요청당 최대 24개 후보를 백테스트하며, `ASK_DAILY_LIMIT`(기본 5회/일/계정)과 `ASK_TIME_BUDGET_SEC`(기본 20초)로 제한됩니다. Supabase 마이그레이션 `20260918120000_ask_macro_sessions.sql`이 필요하고, `GEMINI_API_KEY`가 없어도 템플릿 후보로만 동작합니다.

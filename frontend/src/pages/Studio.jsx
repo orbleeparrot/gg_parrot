@@ -249,7 +249,8 @@ function AccountStudio({ scope, allowRouterMacro }) {
   const [shareOpen, setShareOpen] = useState(false); // 저장·공유 다이얼로그
   const [tourOpen, setTourOpen] = useState(false); // '사용법 안내' 항목별 설명 투어
   // 껄무새에게 물어볼까? — 모달, 덮어쓰기 확인, 불러온 뒤 안내
-  const [askOpen, setAskOpen] = useState(() => searchParams.get("ask") === "1");
+  // 로그아웃 상태로 ?ask=1 이 와도 파라미터는 남겨 둔다 — 로그인 버튼의 next=/builder?ask=1 왕복이 그대로 통하도록.
+  const [askOpen, setAskOpen] = useState(() => Boolean(token) && searchParams.get("ask") === "1");
   const [askPending, setAskPending] = useState(null); // {macro, label} — 조건 판에 입력이 있을 때 확인 대기
   const [askNotice, setAskNotice] = useState("");
 
@@ -1002,7 +1003,7 @@ function AccountStudio({ scope, allowRouterMacro }) {
 
       <ProductTour steps={TOUR_STEPS} open={tourOpen} onClose={() => setTourOpen(false)} />
 
-      <AskParrotDialog open={askOpen} onClose={() => setAskOpen(false)} onLoad={onAskLoad} />
+      {token ? <AskParrotDialog open={askOpen} onClose={() => setAskOpen(false)} onLoad={onAskLoad} /> : null}
       <ConfirmDialog
         open={askPending != null}
         title="지금 조건이 바뀌어요"

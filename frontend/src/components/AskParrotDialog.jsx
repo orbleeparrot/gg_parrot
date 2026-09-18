@@ -153,6 +153,8 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
   // "ready" 단계도 RUNNING_TEXT 를 그리므로(아래 렌더 참고) 여기서 "loading" 을 dispatch 하지 않는다 —
   // dispatch 하면 state.phase 가 바뀌어 이 effect 의 의존성이 바뀌고, effect 가 스스로를 정리(alive=false)해
   // 방금 시작한 요청의 결과를 영영 버리게 된다.
+  // 개발 모드의 React.StrictMode 는 이 effect 를 두 번 실행한다 — "ready" 마다 요청이 두 번 나가고
+  // alive 덕에 두 번째 응답만 반영되니, 로컬 개발에서는 하루 한도가 실제보다 두 배 빨리 준다(운영은 영향 없음).
   useEffect(() => {
     if (state.phase !== "ready") return undefined;
     let alive = true;

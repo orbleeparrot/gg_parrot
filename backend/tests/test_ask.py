@@ -6,12 +6,12 @@ import secrets
 
 import pytest
 from fastapi.testclient import TestClient
-# from pydantic import ValidationError  # Task 2 에서 푼다
+from pydantic import ValidationError
 from sqlmodel import select
 
-# from app import ask  # Task 2 에서 푼다
+from app import ask
 from app.db import AskMacroSession, User, get_session
-# from app.engine import BacktestResult  # Task 2 에서 푼다
+from app.engine import BacktestResult
 from app.main import app
 
 client = TestClient(app)
@@ -43,3 +43,42 @@ def test_user_has_consent_columns_and_session_table_exists():
         db.commit()
         rows = db.exec(select(AskMacroSession).where(AskMacroSession.user_id == user_id)).all()
         assert len(rows) == 1 and rows[0].day_kst == "2026-09-18"
+
+
+def test_request_normalizes_symbols_and_rejects_bad_combos():
+    req = ask.AskRequest(risk_profile="balanced", symbols=[" btcusdt ", "BTCUSDT", "ethusdt"])
+    assert req.symbols == ["BTCUSDT", "ETHUSDT"]
+    with pytest.raises(ValidationError):
+        ask.AskRequest(risk_profile="stable", market="futures", leverage=2, symbols=["BTCUSDT"])
+    with pytest.raises(ValidationError):
+        ask.AskRequest(risk_profile="balanced", market="spot", leverage=2, symbols=["BTCUSDT"])
+    with pytest.raises(ValidationError):
+        ask.AskRequest(risk_profile="balanced", symbols=["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT"])
+    with pytest.raises(ValidationError):
+        ask.AskRequest(risk_profile="balanced", symbols=["BTC-KRW"])
+
+
+def test_templates_follow_profile_rules():
+    stable = ask.build_templates(ask.AskRequest(risk_profile="stable", symbols=["BTCUSDT"], interval="4h"))
+    types = {c.macro.rule_type.value for c in stable}
+    assert types == {"C", "J", "G", "A"}
+    assert all(c.macro.market == "spot" and c.macro.leverage == 1 for c in stable)
+    assert all(c.macro.candle_interval == "4h" and c.macro.period.preset == "3m" for c in stable)
+    assert all(c.source == "template" for c in stable)
+
+    aggressive = ask.build_templates(ask.AskRequest(
+        risk_profile="aggressive", market="futures", leverage=2, symbols=["BTCUSDT"]))
+    types = {c.macro.rule_type.value for c in aggressive}
+    assert "I" in types and "H" in types and "C" not in types  # C 는 레버리지를 못 쓴다
+    assert all(c.macro.leverage == 2 and c.macro.market == "futures" for c in aggressive)
+
+
+def test_templates_cover_every_symbol_first_and_add_a_portfolio():
+    req = ask.AskRequest(risk_profile="balanced", symbols=["BTCUSDT", "ETHUSDT", "SOLUSDT"])
+    cands = ask.build_templates(req)
+    assert len(cands) <= ask.MAX_CANDIDATES
+    first_preset = cands[: 3 * 6]  # 3 종목 × 6 유형의 첫 프리셋이 먼저
+    assert {c.macro.symbol for c in first_preset} == {"BTCUSDT", "ETHUSDT", "SOLUSDT"}
+    portfolios = [c for c in cands if c.macro.symbols]
+    assert portfolios and portfolios[0].macro.symbols == ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+    assert all("추천" not in c.label for c in cands)

@@ -34,24 +34,30 @@ _NOT_COLLECTED = frozenset({"skipped", "superseded"})
 _warming = contextvars.ContextVar("public_news_warming", default=False)
 
 
-def _skip_source_records_while_warming(record):
-    """news._record_collector_sources 를 감싼다: 공개 워밍(_collect_ticker) 중 온 호출은 버린다.
+def _attribute_source_records(record):
+    """news._record_collector_sources 를 감싼다: 공개 워밍(_collect_ticker) 중 온 호출은 public_news 엔진으로 남긴다.
 
-    news.py 의 소스 누적 훅은 호출 주체를 모르고 position_news 엔진으로만 쓴다. 그대로 두면 같은 fetch 가
-    position_news 소스(google·coindesk…)와 public_news/ticker 로 두 번 세어지고, 웹 프로세스가 워밍마다 소스 수만큼
-    upsert 를 더 한다 — 그 회차는 _record_refresh 가 이미 남긴다. 엔진 표시를 collector_runs 에 두는 게 제자리지만
-    이 모듈만 고치려 훅을 감싼다. 워밍 밖의 호출은 그대로 통과한다.
+    news.py 의 소스 누적 훅은 호출 주체를 모른 채 position_news 로만 쓴다. 운영에서는 이 워밍이 종목 수집 리스를
+    먼저 쥐는 일이 잦아, 그냥 버리면 '소스별 수집' 표가 종일 비어 버린다(2026-09-17 배포 직후 확인). 엔진만 바꿔
+    남기고 화면에서 소스 키로 합친다 — 범위 단위 카운터(public_news/ticker)와 층이 달라 중복으로 세지 않는다.
+    워밍 밖의 호출은 그대로 통과한다.
     """
     def guarded(sources):
-        if _warming.get():
+        if not _warming.get():
+            record(sources)
             return
-        record(sources)
+        try:
+            from .collector_runs import ENGINE_PUBLIC_NEWS, bump_news_sources
+
+            bump_news_sources(sources, targets=1, engine=ENGINE_PUBLIC_NEWS)
+        except Exception:
+            pass
     guarded.__wrapped__ = record
     return guarded
 
 
 if not hasattr(news._record_collector_sources, "__wrapped__"):
-    news._record_collector_sources = _skip_source_records_while_warming(news._record_collector_sources)
+    news._record_collector_sources = _attribute_source_records(news._record_collector_sources)
 
 
 class PublicNewsLease(SQLModel, table=True):

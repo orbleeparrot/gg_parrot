@@ -366,7 +366,8 @@ def bump_source_results(engine: str, rows, *, source_key_name: str, items_key: s
         _warn_throttled(f"{engine} 소스 결과 접기 실패", error)
 
 
-def bump_news_sources(sources, *, targets: int = 1, now_ms: Optional[int] = None) -> None:
+def bump_news_sources(sources, *, targets: int = 1, engine: str = ENGINE_POSITION_NEWS,
+                      now_ms: Optional[int] = None) -> None:
     """종목 뉴스 envelope 의 ``sources`` 목록(소스마다 한 항목)을 소스 키별로 누적한다. 절대 raise 하지 않는다.
 
     공유 캐시 히트(``cached``)는 호출이 아니므로 세지 않는다. 브라우저 페이지(``*_playwright``)는 한 종목에 여러
@@ -396,7 +397,7 @@ def bump_news_sources(sources, *, targets: int = 1, now_ms: Optional[int] = None
                 bucket["items"] += max(0, int(source.get("item_count") or 0))
                 if status in _SUCCEEDED:
                     bucket["success_ms"] = millis
-        bump_sources(ENGINE_POSITION_NEWS, folded, now_ms=millis)
+        bump_sources(engine, folded, now_ms=millis)
     except Exception as error:
         _warn_throttled("뉴스 소스 누적 실패", error)
 
@@ -576,18 +577,32 @@ def engines_report(db, *, now_ms: Optional[int] = None) -> dict:
         bucket["items"] += int(items or 0)
         bucket["failures"] += int(failures or 0)
 
+    # 같은 크롤러(Google News RSS …)를 종목 뉴스 워커와 공개 뉴스 워밍이 번갈아 부른다 — 화면에는 소스가 하나로
+    # 보여야 하므로 엔진별 행을 소스 키로 합친다. 합치지 않으면 그날 어느 프로세스가 리스를 쥐었는지에 따라 표가 빈다.
     order = {key: index for index, key in enumerate(SOURCE_LABELS)}
-    sources = []
+    folded: dict[str, dict] = {}
     for row in db.exec(select(CollectorSourceDaily).where(
-        CollectorSourceDaily.day_kst == today, CollectorSourceDaily.engine == ENGINE_POSITION_NEWS,
+        CollectorSourceDaily.day_kst == today,
+        CollectorSourceDaily.engine.in_((ENGINE_POSITION_NEWS, ENGINE_PUBLIC_NEWS)),
     )).all():
-        calls = int(row.calls or 0)
-        failures = int(row.failures or 0)
-        sources.append({
-            "source": row.source, "label": source_label(row.source),
-            "targets": int(row.targets or 0), "calls": calls, "items": int(row.items or 0), "failures": failures,
-            "failure_pct": round(failures * 100.0 / calls, 1) if calls else 0.0,
-            "last_success_ms": int(row.last_success_ms or 0), "last_error": str(row.last_error or ""),
-        })
+        if row.source in {"market", "ticker"}:
+            continue  # 공개 뉴스의 범위 단위 카운터 — 소스가 아니라 엔진 표에 속한다
+        bucket = folded.setdefault(row.source, {"source": row.source, "label": source_label(row.source),
+                                                "targets": 0, "calls": 0, "items": 0, "failures": 0,
+                                                "last_success_ms": 0, "last_error": "", "_updated_ms": 0})
+        bucket["targets"] += int(row.targets or 0)
+        bucket["calls"] += int(row.calls or 0)
+        bucket["items"] += int(row.items or 0)
+        bucket["failures"] += int(row.failures or 0)
+        bucket["last_success_ms"] = max(bucket["last_success_ms"], int(row.last_success_ms or 0))
+        if row.last_error and int(row.updated_ms or 0) >= bucket["_updated_ms"]:
+            bucket["last_error"] = str(row.last_error)
+            bucket["_updated_ms"] = int(row.updated_ms or 0)
+    sources = []
+    for bucket in folded.values():
+        bucket.pop("_updated_ms", None)
+        calls = bucket["calls"]
+        bucket["failure_pct"] = round(bucket["failures"] * 100.0 / calls, 1) if calls else 0.0
+        sources.append(bucket)
     sources.sort(key=lambda row: (order.get(row["source"], len(order)), row["source"]))
     return {"engines": engines, "hourly": hourly, "sources": sources}

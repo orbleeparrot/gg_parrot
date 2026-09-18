@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import secrets
 import time
+from datetime import datetime, timezone
 
 from sqlalchemy import delete, text as sql_text, update
 from sqlalchemy.exc import IntegrityError
@@ -134,4 +135,6 @@ def close_account_rows(db: Session, user: User) -> None:
     user.auth_version += 1
     user.is_blocked = False  # 탈퇴하면 차단 상태는 의미가 없다
     user.is_deleted = True
+    # 탈퇴한 날을 남긴다(관리자 가입 표의 날짜별 탈퇴 수). signup_method 는 지우지 않는다 — 해시를 비운 뒤에도 가입 방법은 사실이다.
+    user.deleted_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     db.add(user)

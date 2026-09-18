@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { DASH } from "../src/lib/adminFormat.js";
 import {
-  DEFAULT_MEMBER_QUERY, MEMBER_PAGE_SIZES, MEMBER_STATUSES, MEMBER_STATUS_KEYS, blockActionKind, canActOnMember, clampPage,
+  DEFAULT_MEMBER_QUERY, MEMBER_PAGE_SIZES, MEMBER_STATUSES, MEMBER_STATUS_KEYS, SIGNUP_LABELS, blockActionKind, canActOnMember, clampPage,
   memberActionError, memberActions, memberEmail, memberQueryString, memberResultLine, memberSearchParams, memberSignup,
   memberState, memberStatusLabel, memberTier, pageCount, parseMemberQuery,
 } from "../src/lib/memberList.js";
@@ -130,4 +130,11 @@ test("오류 문구: 서버의 한글 detail 을 그대로, 없으면 상태코�
   assert.equal(memberActionError({ status: 409 }), "실행 중인 매크로를 먼저 종료해 주세요.");
   assert.equal(memberActionError({}), "조치하지 못했어요.");
   assert.equal(memberActionError(null), "조치하지 못했어요.");
+});
+
+test("가입 방법 unknown: 탈퇴 행은 서버가 unknown 을 주므로 코드가 아니라 '알 수 없음' 으로 읽힌다", () => {
+  assert.equal(SIGNUP_LABELS.unknown, "알 수 없음");
+  assert.equal(memberSignup({ signup_method: "unknown" }), "알 수 없음");
+  // 다른 라벨은 그대로 — unknown 추가가 기존 매핑을 건드리지 않는다.
+  assert.deepEqual(Object.keys(SIGNUP_LABELS).sort(), ["email", "google", "unknown"]);
 });

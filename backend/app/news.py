@@ -4197,6 +4197,10 @@ def _fetch_public_news_payload(asset_symbol: str | None = None, *, on_progress=N
                                                    limit=_MAX_COIN_ITEMS, include_archive=True)
         sources.append(community["source"])
     payload["sources"] = sources
+    if asset_symbol is None:
+        # MARKET 범위도 소스별 하루 누적(관리자 표)에 남긴다 — 종목 경로에만 훅이 있어 MARKET 은 한 줄도 없었다
+        # (2026-09-18 점검). 최종 소스 목록으로 한 번만(진행 중 콜백마다 세지 않는다), 전부 실패한 회차는 raise 앞에서.
+        _record_collector_sources(sources)
     if not payload["items"] and not any(source.get("status") in {"ready", "empty", "partial"} for source in sources):
         raise NewsFetchError("모든 뉴스 RSS 소스 수집에 실패했습니다. 잠시 후 다시 시도해 주세요.", sources=sources)
     if asset_symbol:
@@ -4482,16 +4486,25 @@ def get_coin_news(symbol: str) -> dict:
             env["stale"] = bool(env.get("items"))
         return env
 
+    def serve_from_coin_cache(raw: dict) -> dict:
+        # _coin_cache 적중은 이번 호출에 HTTP 요청이 없었다는 뜻이다. 소스 목록은 처음 받아올 때의 상태(ready 등)를 그대로
+        # 담고 있어, 그대로 내보내면 수집 기록(_any_source_attempted)이 이 회차를 '실제 호출' 로 센다. 캐시 항목은
+        # 다음 적중이 또 쓰므로 건드리지 않고, 깊은 복사본의 소스에만 cached·attempted=False 를 표시한다.
+        env = serve_cached(raw)
+        env["sources"] = [{**source, "cached": True, "attempted": False} for source in deepcopy(env.get("sources") or [])
+                          if isinstance(source, dict)]
+        return env
+
     hit = _coin_cache.get(ckey)
     if hit and hit[1] > time.time():
-        env = serve_cached(hit[0])
+        env = serve_from_coin_cache(hit[0])
         _remember_coin_envelope(base, env)
         return env
 
     def load():
         fresh_hit = _coin_cache.get(ckey)
         if fresh_hit and fresh_hit[1] > time.time():
-            return serve_cached(fresh_hit[0])
+            return serve_from_coin_cache(fresh_hit[0])
         try:
             raw = _fetch_public_news_payload(base)
         except NewsFetchError as exc:

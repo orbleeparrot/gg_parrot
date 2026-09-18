@@ -166,6 +166,7 @@ def retry_article_enrichment(*, repo=None, now_ms=None):
     snapshot = getattr(repo, "enrichment_snapshot", None)
     settle = getattr(repo, "settle_enrichment_batch", None)
     progressed_total = 0
+    deferred_total = given_up_total = 0
     # 관리자 표용 실행 기록은 실제로 배치를 처리한 회차만 남긴다(5초마다 빈 회차까지 쌓지 않는다).
     with RunRecorder("article_enrichment", enabled=bool(batches)) as run:
         run.targets = len(batches)
@@ -184,8 +185,12 @@ def retry_article_enrichment(*, repo=None, now_ms=None):
                     # 진전한 행은 백오프를 지우고, 남은 행은 30초~2분 뒤로 미룬다(같은 배치에 진전이 있을 때만 실패로 센다).
                     settled = settle(asset, before, now_ms=now_ms)
                     progressed_total += settled["progressed"]
-                    run.items = progressed_total
-                    run.failures += int(settled.get("retry") or 0) + int(settled.get("given_up") or 0)
+                    deferred_total += int(settled.get("retry") or 0)
+                    given_up_total += int(settled.get("given_up") or 0)
+                    # '실패' 는 포기한 행만 — 다음 회차로 미룬 행(retry)까지 더하면 같은 기사가 회차마다 다시
+                    # 세어져 관리자 표가 50배 부풀었다(2026-09-18 점검). 미룬 수는 요약의 deferred 로만 남긴다.
+                    run.report({"progressed": progressed_total, "deferred": deferred_total, "given_up": given_up_total},
+                               items=progressed_total, failures=given_up_total)
             if state["probing"] and progressed_total:
                 break  # 탐침 성공 — 다음 스캔(5초 뒤)부터 전체 배치로 돌아간다
     record = getattr(repo, "record_enrichment_pass", None)

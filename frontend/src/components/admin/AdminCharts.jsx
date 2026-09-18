@@ -4,10 +4,17 @@
 // 애니메이션 없음 — reduced-motion 을 따로 신경 쓸 게 없다.
 import { useCallback, useRef, useState } from "react";
 import {
-  bucketHours, donutArcs, funnelLayout, gridValues, hBarLayout, nearestIndex, nearestSlot, polylinePoints,
-  seriesMax, stackTotals, tickIndexes, yScale,
+  bucketHours, donutArcs, funnelLayout, funnelRows, gridValues, hBarLayout, lastFiniteIndex, nearestIndex, nearestSlot,
+  polylinePoints, polylineSegments, seriesMax, stackTotals, tickIndexes, yScale,
 } from "../../lib/adminChartMath.js";
-import { EMPTY_NOTE, fmtDateTick, fmtInt, fmtNum, fmtPct } from "../../lib/adminFormat.js";
+import { DASH, EMPTY_NOTE, fmtDateTick, fmtInt, fmtNum, fmtPct } from "../../lib/adminFormat.js";
+
+// null 은 null 로 둔다 — 측정 시작 전 날짜를 0 으로 바꾸면 선이 바닥에 붙어 "그날 0%" 로 읽힌다.
+function numOrNull(v) {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
 import { AdminTable, EmptyNote } from "./AdminBlocks.jsx";
 
 export const SERIES = {
@@ -100,12 +107,14 @@ function HoverLabel({ W, T, bottom, x, lines }) {
   );
 }
 
-// 선 차트 — series: [{ label, data: number[], color, dashed? }], days: "YYYY-MM-DD"[]
+// 선 차트 — series: [{ label, data: (number|null)[], color, dashed? }], days: "YYYY-MM-DD"[]
+// null 구간은 선을 끊는다(측정 시작 전). 끝값은 마지막으로 값이 있는 날에 찍는다.
 export function LineChart({ series, days, yTitle, xTitle = "날짜 (KST)", unit = "", height = 220, digits = 1 }) {
+  const integerAxis = !unit && digits === 0; // 명·건 같은 정수 축은 눈금 간격을 1 이상으로 — 0.5 간격이 반올림돼 겹치지 않게
   const [ref, W] = useChartWidth();
   const [hover, setHover] = useState(null);
   const n = days.length;
-  const filled = series.map((s) => ({ ...s, data: Array.from({ length: n }, (_, i) => Number(s.data?.[i]) || 0) }));
+  const filled = series.map((s) => ({ ...s, data: Array.from({ length: n }, (_, i) => numOrNull(s.data?.[i])) }));
   const H = height;
   const L = 60;
   const R = 16;
@@ -113,7 +122,7 @@ export function LineChart({ series, days, yTitle, xTitle = "날짜 (KST)", unit 
   const B = 40;
   const innerW = W - L - R;
   const innerH = H - T - B;
-  const { step, yMax } = yScale(seriesMax(filled));
+  const { step, yMax } = yScale(seriesMax(filled), { minStep: integerAxis ? 1 : 0 });
   const x = (i) => L + (n > 1 ? (i / (n - 1)) * innerW : innerW / 2);
   const y = (v) => T + innerH - (v / yMax) * innerH;
   const fmt = (v) => fmtNum(v, digits);
@@ -127,18 +136,24 @@ export function LineChart({ series, days, yTitle, xTitle = "날짜 (KST)", unit 
         onPointerLeave={() => setHover(null)}
       >
         <Frame W={W} H={H} L={L} R={R} T={T} B={B} yMax={yMax} step={step} yTitle={yTitle} xTitle={xTitle} unit={unit} fmt={fmt} />
-        {filled.map((s) => (
-          <g key={s.label}>
-            <polyline
-              points={polylinePoints(s.data, x, y)} fill="none" stroke={s.color} strokeWidth="2.2" strokeLinejoin="round"
-              strokeDasharray={s.dashed ? "5 4" : undefined}
-            />
-            {s.data.map((v, i) => (ticks.has(i) && i !== n - 1 ? <circle key={i} cx={x(i)} cy={y(v)} r="3" fill={s.color} /> : null))}
-            {/* 끝점 — 표면색 링을 두른 점 + 끝값. 곡선이 어디서 끝났는지가 결론이다. */}
-            <circle className="adm-endpoint" cx={x(n - 1)} cy={y(s.data[n - 1])} r="4" fill={s.color} />
-            <text x={x(n - 1) - 7} y={y(s.data[n - 1]) - 8} textAnchor="end" style={{ fill: s.color, fontWeight: 700 }}>{fmt(s.data[n - 1])}{unit}</text>
-          </g>
-        ))}
+        {filled.map((s) => {
+          const end = lastFiniteIndex(s.data);
+          return (
+            <g key={s.label}>
+              {polylineSegments(s.data, x, y).map((seg) => (seg.single
+                ? <circle key={`p${seg.first.i}`} cx={x(seg.first.i)} cy={y(seg.first.v)} r="3" fill={s.color} />
+                : <polyline key={`s${seg.first.i}`} points={seg.points} fill="none" stroke={s.color} strokeWidth="2.2" strokeLinejoin="round" strokeDasharray={s.dashed ? "5 4" : undefined} />))}
+              {s.data.map((v, i) => (v !== null && ticks.has(i) && i !== end ? <circle key={i} cx={x(i)} cy={y(v)} r="3" fill={s.color} /> : null))}
+              {/* 끝점 — 표면색 링을 두른 점 + 끝값. 곡선이 어디서 끝났는지가 결론이다. */}
+              {end >= 0 ? (
+                <>
+                  <circle className="adm-endpoint" cx={x(end)} cy={y(s.data[end])} r="4" fill={s.color} />
+                  <text x={x(end) - 7} y={y(s.data[end]) - 8} textAnchor="end" style={{ fill: s.color, fontWeight: 700 }}>{fmt(s.data[end])}{unit}</text>
+                </>
+              ) : null}
+            </g>
+          );
+        })}
         <DateTicks days={days} T={T} innerH={innerH} x={x} />
         {hover != null ? (
           <HoverLabel W={W} T={T} bottom={T + innerH} x={x(hover)} lines={[{ text: fmtDateTick(days[hover]) }, ...filled.map((s) => ({ text: `${s.label} ${fmt(s.data[hover])}${unit}`, color: s.color }))]} />
@@ -150,11 +165,14 @@ export function LineChart({ series, days, yTitle, xTitle = "날짜 (KST)", unit 
 
 // 막대 차트(+오른쪽 축 점선) — bars: [{ label, data, color }], line?: { label, data, color }
 export function BarChart({ bars, line = null, days, yTitle, xTitle = "날짜 (KST)", unit = "", lineTitle = "", lineUnit = "%", height = 220 }) {
+  const integerAxis = !unit; // 막대는 건수(명·건)라 정수 눈금
   const [ref, W] = useChartWidth();
   const [hover, setHover] = useState(null);
   const n = days.length;
   const filled = bars.map((s) => ({ ...s, data: Array.from({ length: n }, (_, i) => Number(s.data?.[i]) || 0) }));
-  const lineData = line ? Array.from({ length: n }, (_, i) => Number(line.data?.[i]) || 0) : null;
+  // 오른쪽 축 선(전환율 등)은 null 을 지킨다 — 방문 기록 시작 전 날짜를 0% 로 그리지 않기 위해.
+  const lineData = line ? Array.from({ length: n }, (_, i) => numOrNull(line.data?.[i])) : null;
+  const lineEnd = lineData ? lastFiniteIndex(lineData) : -1;
   const H = height;
   const L = 56;
   const R = line ? 56 : 16;
@@ -162,12 +180,12 @@ export function BarChart({ bars, line = null, days, yTitle, xTitle = "날짜 (KS
   const B = 40;
   const innerW = W - L - R;
   const innerH = H - T - B;
-  const { step, yMax } = yScale(seriesMax(filled));
+  const { step, yMax } = yScale(seriesMax(filled), { minStep: integerAxis ? 1 : 0 });
   const y = (v) => T + innerH - (v / yMax) * innerH;
   const slot = n > 0 ? innerW / n : innerW;
   const bw = Math.max(2, (slot - Math.min(6, slot * 0.4)) / Math.max(1, filled.length));
   const cx = (i) => L + i * slot + slot / 2;
-  const lineScale = lineData ? yScale(Math.max(...lineData)) : null;
+  const lineScale = lineData ? yScale(seriesMax([{ data: lineData }])) : null;
   const ly = (v) => T + innerH - (v / lineScale.yMax) * innerH;
   const empty = n === 0 || (filled.every((s) => s.data.every((v) => !(v > 0))) && (!lineData || lineData.every((v) => !(v > 0))));
   if (empty) return <EmptyNote />;
@@ -188,9 +206,15 @@ export function BarChart({ bars, line = null, days, yTitle, xTitle = "날짜 (KS
               <text key={v} x={W - R + 8} y={ly(v) + 4} textAnchor="start" style={{ fill: line.color }}>{fmtNum(v, 1)}{lineUnit}</text>
             ))}
             <text className="adm-axis-title" transform={`translate(${W - 8} ${T + innerH / 2}) rotate(90)`} textAnchor="middle" style={{ fill: line.color }}>{lineTitle}</text>
-            <polyline points={polylinePoints(lineData, cx, ly)} fill="none" stroke={line.color} strokeWidth="2.2" strokeDasharray="5 4" />
-            <circle className="adm-endpoint" cx={cx(n - 1)} cy={ly(lineData[n - 1])} r="4" fill={line.color} />
-            <text x={cx(n - 1) - 7} y={ly(lineData[n - 1]) - 8} textAnchor="end" style={{ fill: line.color, fontWeight: 700 }}>{fmtNum(lineData[n - 1], 1)}{lineUnit}</text>
+            {polylineSegments(lineData, cx, ly).map((seg) => (seg.single
+              ? <circle key={`p${seg.first.i}`} cx={cx(seg.first.i)} cy={ly(seg.first.v)} r="3" fill={line.color} />
+              : <polyline key={`s${seg.first.i}`} points={seg.points} fill="none" stroke={line.color} strokeWidth="2.2" strokeDasharray="5 4" />))}
+            {lineEnd >= 0 ? (
+              <>
+                <circle className="adm-endpoint" cx={cx(lineEnd)} cy={ly(lineData[lineEnd])} r="4" fill={line.color} />
+                <text x={cx(lineEnd) - 7} y={ly(lineData[lineEnd]) - 8} textAnchor="end" style={{ fill: line.color, fontWeight: 700 }}>{fmtNum(lineData[lineEnd], 1)}{lineUnit}</text>
+              </>
+            ) : null}
           </g>
         ) : null}
         <DateTicks days={days} T={T} innerH={innerH} x={cx} />
@@ -249,45 +273,47 @@ export function HBarChart({ rows, unit = "", color = SERIES.s2, title = "" }) {
   );
 }
 
-// 퍼널 — steps: [{ label, count }]. 단계 간 전환율 + 첫 단계 대비.
-export function FunnelChart({ steps }) {
+// 퍼널 — steps: [{ key, label, count, pct_of_first?, pct_of_prev? }]. 단계 간 전환율 + 첫 단계 대비.
+// 비율은 서버 값이 우선(null 이면 "—"), 막대는 innerW 를 넘지 않는다(funnelRows). firstLabel 은 "방문 대비"의 '방문' 자리 —
+// 회원 퍼널은 첫 단계가 가입이라 "가입 대비" 로 읽혀야 한다.
+export function FunnelChart({ steps, firstLabel = "방문", title = "전환 퍼널", color = SERIES.s2 }) {
   const [ref, W] = useChartWidth();
   const { narrow, L, R, rowH } = funnelLayout(W);
   const T = 8;
-  const H = T + steps.length * rowH + 8;
-  const first = Number(steps[0]?.count) || 0;
+  const list = Array.isArray(steps) ? steps : [];
+  const H = T + list.length * rowH + 8;
+  const first = Number(list[0]?.count) || 0;
   const innerW = W - L - R;
-  if (steps.length === 0 || !(first > 0)) return <EmptyNote />;
+  if (list.length === 0 || !(first > 0)) return <EmptyNote />;
+  const rows = funnelRows(list, innerW);
   return (
     <div ref={ref} className="adm-chart-wrap">
-      <svg className="adm-chart" viewBox={`0 0 ${W} ${H}`} width={W} height={H} role="img" aria-label="전환 퍼널">
-        {steps.map((s, i) => {
+      <svg className="adm-chart" viewBox={`0 0 ${W} ${H}`} width={W} height={H} role="img" aria-label={title}>
+        {rows.map((r, i) => {
           const y = T + i * rowH;
-          const value = Number(s.count) || 0;
-          const w = Math.max(4, (value / first) * innerW);
-          const prevCount = Number(steps[i - 1]?.count) || 0;
-          const prev = i === 0 ? "—" : prevCount > 0 ? fmtPct((value / prevCount) * 100) : "—";
-          const fromFirst = fmtPct((value / first) * 100);
+          const w = r.width;
+          const prev = i === 0 ? DASH : fmtPct(r.pctPrev);
+          const fromFirst = fmtPct(r.pctFirst);
           const barY = narrow ? y + 22 : y + 8;
           const inside = w > 70;
           return (
-            <g key={s.label}>
+            <g key={r.key}>
               {narrow ? (
                 <>
-                  <text className="adm-lab" x={0} y={y + 14}>{i + 1}. {s.label}</text>
-                  <text x={W} y={y + 14} textAnchor="end">이전 대비 {prev} · 방문 대비 {fromFirst}</text>
+                  <text className="adm-lab" x={0} y={y + 14}>{i + 1}. {r.label}</text>
+                  <text x={W} y={y + 14} textAnchor="end">이전 대비 {prev} · {firstLabel} 대비 {fromFirst}</text>
                 </>
               ) : (
-                <text className="adm-lab" x={L - 12} y={y + 23} textAnchor="end">{i + 1}. {s.label}</text>
+                <text className="adm-lab" x={L - 12} y={y + 23} textAnchor="end">{i + 1}. {r.label}</text>
               )}
-              <rect x={L} y={barY} width={w} height="22" fill={SERIES.s2} opacity={1 - i * 0.09} rx="2" />
+              <rect x={L} y={barY} width={w} height="22" fill={color} opacity={1 - i * 0.09} rx="2" />
               {inside
-                ? <text x={L + w - 8} y={barY + 15} textAnchor="end" className="adm-on-bar">{fmtInt(value)}</text>
-                : <text x={L + w + 8} y={barY + 15} className="adm-strong">{fmtInt(value)}</text>}
+                ? <text x={L + w - 8} y={barY + 15} textAnchor="end" className="adm-on-bar">{fmtInt(r.count)}</text>
+                : <text x={L + w + 8} y={barY + 15} className="adm-strong">{fmtInt(r.count)}</text>}
               {!narrow ? (
                 <>
                   <text x={W - R + 120} y={y + 23} textAnchor="end">이전 대비 {prev}</text>
-                  <text x={W} y={y + 23} textAnchor="end">방문 대비 {fromFirst}</text>
+                  <text x={W} y={y + 23} textAnchor="end">{firstLabel} 대비 {fromFirst}</text>
                 </>
               ) : null}
             </g>
@@ -298,13 +324,22 @@ export function FunnelChart({ steps }) {
   );
 }
 
-// 도넛 + 옆 표 — parts: [{ label, value, color, extra?: {key: text} }]. 가운데는 합계.
+// 도넛 + 옆 표 — parts: [{ label, value, color, share_pct?, noRing?, ...extra }]. 가운데는 합계(모든 행).
+// share_pct 를 준 행은 서버 비율을 그대로(null 이면 "—"), 없으면 링에서 계산한다. noRing 행(기기 '알 수 없음')은
+// 표에는 남고 링·비율 분모에서만 빠진다 — 서버 share_pct 의 분모와 링의 분모가 같아야 표와 그림이 맞는다.
 export function Donut({ parts, size = 180, unit = "", prefix = "", digits = 0, extraColumns = [], empty = EMPTY_NOTE }) {
   const r = 62;
   const cx = size / 2;
   const cy = size / 2;
-  const { total, arcs } = donutArcs(parts, { cx, cy, r });
-  if (!(total > 0)) return <EmptyNote>{empty}</EmptyNote>;
+  const list = Array.isArray(parts) ? parts : [];
+  const { arcs } = donutArcs(list.filter((p) => !p?.noRing), { cx, cy, r });
+  const shareOf = new Map(arcs.map((a) => [a.label, a.share_pct]));
+  const rows = list.map((p) => ({
+    ...p,
+    share_pct: p?.share_pct !== undefined ? numOrNull(p.share_pct) : (shareOf.get(p?.label) ?? null),
+  }));
+  const grand = rows.reduce((acc, p) => acc + Math.max(0, Number(p?.value) || 0), 0);
+  if (!(grand > 0)) return <EmptyNote>{empty}</EmptyNote>;
   const fmtValue = (v) => `${prefix}${fmtNum(v, digits)}${unit}`;
   const columns = [
     { key: "label", label: "구분", render: (row) => <><b className="adm-swatch" style={{ background: row.color }} />{row.label}</> },
@@ -316,15 +351,16 @@ export function Donut({ parts, size = 180, unit = "", prefix = "", digits = 0, e
     <div className="adm-donut">
       <svg viewBox={`0 0 ${size} ${size}`} width={size} height={size} role="img" aria-label="구성비">
         {arcs.map((a) => <path key={a.label} d={a.d} fill="none" stroke={a.color} strokeWidth="26" />)}
-        <text x={cx} y={cy + 5} textAnchor="middle" className="adm-donut-total num">{fmtValue(total)}</text>
+        <text x={cx} y={cy + 5} textAnchor="middle" className="adm-donut-total num">{fmtValue(grand)}</text>
       </svg>
-      <AdminTable columns={columns} rows={arcs} rowKey={(row) => row.label} />
+      <AdminTable columns={columns} rows={rows} rowKey={(row) => row.label} />
     </div>
   );
 }
 
 // 누적 막대(범주형 x) — cats: string[], series: [{ label, data, color }]. 막대 위에 합계.
 export function StackedChart({ cats, series, yTitle, xTitle, unit = "", prefix = "", height = 220, digits = 0 }) {
+  const integerAxis = !unit && !prefix && digits === 0; // 비용($, 소수 2자리)은 제외
   const [ref, W] = useChartWidth();
   const [hover, setHover] = useState(null);
   const n = cats.length;
@@ -337,7 +373,7 @@ export function StackedChart({ cats, series, yTitle, xTitle, unit = "", prefix =
   const B = 40;
   const innerW = W - L - R;
   const innerH = H - T - B;
-  const { step, yMax } = yScale(Math.max(0, ...totals));
+  const { step, yMax } = yScale(Math.max(0, ...totals), { minStep: integerAxis ? 1 : 0 });
   const y = (v) => T + innerH - (v / yMax) * innerH;
   const slot = n > 0 ? innerW / n : innerW;
   const bw = Math.min(46, Math.max(4, slot - 8));
@@ -380,9 +416,11 @@ export function StackedChart({ cats, series, yTitle, xTitle, unit = "", prefix =
   );
 }
 
-// 열지도 칸(td) — 값이 클수록 진하게. null 은 "아직 지나지 않음".
+// 열지도 칸(td) — 값이 클수록 진하게. null 은 "아직 지나지 않음 · 측정 불가"(0% 가 아니다).
+// 소수 한 자리 — D7 0.5% 를 "0%" 로 버리면 '전원 이탈'로 읽힌다.
 export function HeatCell({ value, max = 70 }) {
-  if (value === null || value === undefined) return <td className="num adm-muted">—</td>;
-  const ratio = Math.min(1, Math.max(0, (Number(value) || 0) / max));
-  return <td className="num adm-heat" style={{ "--heat-a": ratio.toFixed(2) }}>{fmtPct(value, 0)}</td>;
+  const n = numOrNull(value);
+  if (n === null) return <td className="num adm-muted">{DASH}</td>;
+  const ratio = Math.min(1, Math.max(0, n / max));
+  return <td className="num adm-heat" style={{ "--heat-a": ratio.toFixed(2) }}>{fmtPct(n, 1)}</td>;
 }

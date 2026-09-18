@@ -43,13 +43,17 @@ def collect_onchain_holders_flow():
         # One bounded request per minute leaves the shared whale runner available
         # for 30-second exchange observations. Durable oldest-first ordering is fair.
         results = [collect_coin_task(coins[0])] if coins else []
+        # 관리자 표의 '수집' 은 저장한 보유 행(tracked)이다 — 원본 파싱 행(fetched)은 XRP 가 10,000행을 받아
+        # 48행만 저장하므로 208배로 부풀었다(2026-09-18 점검). fetched 는 요약에만 남긴다.
         summary = {'event': 'onchain_collection', 'due_coin_count': len(coins),
                    'checked_coin_count': len(results), 'deferred_coin_count': max(0, len(coins)-len(results)),
                    'failed_count': sum(row['status'] == 'error' for row in results),
+                   'fetched_count': sum(int(row.get('fetched_count') or 0) for row in results),
                    'items': results, 'configuration': config, 'ai_calls': 0}
-        run.report(summary, targets=len(coins), items=sum(int(row.get('fetched_count') or 0) for row in results),
+        run.report(summary, targets=len(coins), items=sum(int(row.get('tracked_count') or 0) for row in results),
                    failures=summary['failed_count'])
-        bump_source_results('onchain_holders', results, source_key_name='source', items_key='fetched_count', subject_key='coin')
+        bump_source_results('onchain_holders', results, source_key_name='source', items_key='tracked_count',
+                            subject_key='coin', day_kst=run.day_kst)
         print(json.dumps(summary))
         if summary['failed_count']:
             raise OnchainCollectionUnavailable('온체인 잔고 수집 실패; 이전 관측 유지, DB 재시도 간격 적용')

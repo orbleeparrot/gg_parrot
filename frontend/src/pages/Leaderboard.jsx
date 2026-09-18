@@ -11,6 +11,7 @@ import { useAuth, useAccountGuard, isLoggedIn, getAuthUser, updateAuthUser } fro
 import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 import { applyVote, settleVote } from "../lib/leaderboardVotes.js";
 import StrategyDetails from "../components/StrategyDetails.jsx";
+import { impressionKey } from "../lib/visit.js";
 import "./LeaderboardMobile.css";
 
 // 매크로 지표 비콘 — 노출(목록에 보임)·열람(빌더로 가져오기 · 빠른 실행 · 언락 중 하나를 누름).
@@ -18,37 +19,51 @@ import "./LeaderboardMobile.css";
 // 중복 판정의 기준은 모듈 메모리 Set 이고, sessionStorage 는 새로고침을 넘기기 위한 씨앗·보관용일 뿐이다.
 // (sessionStorage 가 막힌 브라우저에서 저장소만 믿으면 5초 폴링마다 최대 100개 id 를 다시 보내
 // IP 제한 60회/분까지 서버에 upsert 를 때린다.)
+// 키는 "KST 날짜:id" — 서버가 노출·열람을 day_kst 로 접으므로, 자정을 넘긴 세션은 다음 날 다시 1회 세야
+// 그날 클릭률의 분모가 비지 않는다(열람도 같은 키를 써야 분자·분모 규칙이 같다).
 // 실패는 삼킨다: 지표 하나 잃는 것이지 화면 흐름을 막을 일이 아니다.
 const LB_SEEN_KEY = "ggp:lb_seen";
 const LB_OPEN_KEY = "ggp:lb_open";
 const IMPRESSION_BATCH = 100;
-function readIdSet(key) {
+const KEY_RE = /^\d{4}-\d{2}-\d{2}:\d+$/;
+function readKeySet(key) {
   try {
     const raw = JSON.parse(sessionStorage.getItem(key) || "[]");
-    return new Set(Array.isArray(raw) ? raw.map(Number).filter((n) => Number.isSafeInteger(n) && n > 0) : []);
+    // 옛 형식(숫자 id 배열)은 버린다 — 날짜가 없으면 오늘 것인지 알 수 없다.
+    return new Set(Array.isArray(raw) ? raw.filter((k) => typeof k === "string" && KEY_RE.test(k)) : []);
   } catch {
     return new Set();
   }
 }
-function writeIdSet(key, set) {
+function writeKeySet(key, set) {
   try { sessionStorage.setItem(key, JSON.stringify([...set].slice(-5000))); } catch { /* 저장 못 해도 메모리 Set 이 이번 세션의 중복은 막는다 */ }
 }
 // 모듈 로드 때 한 번만 저장소에서 씨앗을 읽는다. 이후엔 메모리가 진실.
-const seenMem = readIdSet(LB_SEEN_KEY);
-const openMem = readIdSet(LB_OPEN_KEY);
+const seenMem = readKeySet(LB_SEEN_KEY);
+const openMem = readKeySet(LB_OPEN_KEY);
 function sendImpressions(ids) {
-  const fresh = [...new Set(ids.map(Number).filter((n) => Number.isSafeInteger(n) && n > 0 && !seenMem.has(n)))].slice(0, IMPRESSION_BATCH);
+  const now = Date.now();
+  const fresh = [];
+  const picked = new Set();
+  for (const raw of ids) {
+    const id = Number(raw);
+    if (!Number.isSafeInteger(id) || id < 1 || picked.has(id) || seenMem.has(impressionKey(id, now))) continue;
+    picked.add(id);
+    fresh.push(id);
+    if (fresh.length >= IMPRESSION_BATCH) break;
+  }
   if (!fresh.length) return;
-  fresh.forEach((id) => seenMem.add(id));
-  writeIdSet(LB_SEEN_KEY, seenMem);
+  fresh.forEach((id) => seenMem.add(impressionKey(id, now)));
+  writeKeySet(LB_SEEN_KEY, seenMem);
   try { api.leaderboardImpressions(fresh).catch(() => {}); } catch { /* 비콘 */ }
 }
 function sendOpen(id) {
   const entryId = Number(id);
   if (!Number.isSafeInteger(entryId) || entryId < 1) return;
-  if (openMem.has(entryId)) return;
-  openMem.add(entryId);
-  writeIdSet(LB_OPEN_KEY, openMem);
+  const key = impressionKey(entryId, Date.now());
+  if (openMem.has(key)) return;
+  openMem.add(key);
+  writeKeySet(LB_OPEN_KEY, openMem);
   try { api.leaderboardOpen(entryId).catch(() => {}); } catch { /* 비콘 */ }
 }
 

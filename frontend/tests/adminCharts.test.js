@@ -108,3 +108,58 @@ test("narrow layouts move labels above the bars instead of squeezing them", () =
   assert.equal(funnelLayout(390).narrow, true);
   assert.equal(funnelLayout(390).rowH, 58);
 });
+
+test("funnelRows: bar width never exceeds innerW, a step larger than the first (mismatched sets) gets no ratio", async () => {
+  const { funnelRows } = await import("../src/lib/adminChartMath.js");
+  // 방문 5 · 가입 432 — 옛 퍼널이 8,640% 를 그리며 막대가 화면 밖으로 나가던 자료.
+  const rows = funnelRows([{ key: "visit", label: "방문", count: 5 }, { key: "signup", label: "가입", count: 432 }], 600);
+  assert.equal(rows[0].width, 600);
+  assert.equal(rows[0].pctFirst, 100);
+  assert.equal(rows[0].pctPrev, null, "first step has no previous");
+  assert.equal(rows[1].width, 600, "clamped to innerW instead of 51,840px");
+  assert.equal(rows[1].pctFirst, null, "count > first → —");
+  assert.equal(rows[1].pctPrev, null);
+
+  const ok = funnelRows([{ label: "a", count: 100 }, { label: "b", count: 25 }, { label: "c", count: 0 }], 400);
+  assert.equal(ok[1].width, 100);
+  assert.equal(ok[1].pctFirst, 25);
+  assert.equal(ok[1].pctPrev, 25);
+  assert.equal(ok[2].width, 4, "zero still draws a sliver so the row is visible");
+  assert.equal(ok[2].pctFirst, 0);
+  assert.equal(ok[2].pctPrev, 0);
+  assert.equal(ok[2].label, "c");
+
+  // 서버가 pct 키를 준 행은 그 값이 진실 — null 은 "측정 불가"라 여기서 나눠 지어내지 않는다.
+  const server = funnelRows([
+    { key: "visit", count: 10, pct_of_first: 100, pct_of_prev: null },
+    { key: "builder", count: 4, pct_of_first: null, pct_of_prev: null },
+    { key: "backtest", count: 3, pct_of_first: 30, pct_of_prev: 75 },
+  ], 200);
+  assert.equal(server[1].pctFirst, null);
+  assert.equal(server[1].pctPrev, null);
+  assert.equal(server[2].pctFirst, 30);
+  assert.equal(server[2].pctPrev, 75);
+  assert.equal(server[1].label, "builder", "label falls back to the key");
+  assert.deepEqual(funnelRows(null, 100), []);
+  assert.equal(funnelRows([{ count: 0 }], 100)[0].width, 4, "first = 0 never divides by zero");
+});
+
+test("polylineSegments breaks the line at null (pre-coverage days are gaps, not zeros)", async () => {
+  const { lastFiniteIndex, polylineSegments } = await import("../src/lib/adminChartMath.js");
+  const x = (i) => i * 10;
+  const y = (v) => 100 - v;
+  const segs = polylineSegments([null, null, 5, 7, null, 2, null], x, y);
+  assert.equal(segs.length, 2);
+  assert.equal(segs[0].points, "20.0,95.0 30.0,93.0");
+  assert.equal(segs[0].single, false);
+  assert.deepEqual(segs[0].first, { i: 2, v: 5 });
+  assert.deepEqual(segs[0].last, { i: 3, v: 7 });
+  assert.equal(segs[1].single, true, "a lone point gets a dot instead of an invisible zero-length line");
+  assert.deepEqual(segs[1].first, { i: 5, v: 2 });
+  assert.deepEqual(polylineSegments([null, undefined, "x"], x, y), []);
+  assert.equal(polylineSegments([0, 0], x, y)[0].points, "0.0,100.0 10.0,100.0", "real zeros still draw");
+  assert.equal(lastFiniteIndex([1, 2, null, null]), 1);
+  assert.equal(lastFiniteIndex([null]), -1);
+  assert.equal(lastFiniteIndex([]), -1);
+  assert.equal(lastFiniteIndex([null, 0]), 1, "0 is a value");
+});

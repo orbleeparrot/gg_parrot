@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   CHANNEL_DETAIL, DASH, EMPTY_NOTE, fmtDateTick, fmtDayTimeKst, fmtDuration, fmtInt, fmtKst, fmtLimit, fmtMonthLabel, fmtNum,
   fmtPct, fmtRelative, fmtShortDay, fmtSignedPct, fmtStamp, fmtTimeKst, fmtTokens, fmtUntil, fmtUsd, isAllZero, labelOf,
-  ratioPct, sumBy, weightedMean,
+  meanBy, ratioPct, sumBy, sumOrNull, weightedMean,
 } from "../src/lib/adminFormat.js";
 
 test("missing values render as a dash, never as 0", () => {
@@ -102,4 +102,41 @@ test("labels prefer the server label, then the map, then the raw code", () => {
   assert.equal(labelOf(CHANNEL_DETAIL, "unknown_code"), "unknown_code");
   assert.equal(labelOf(CHANNEL_DETAIL, null), DASH);
   assert.match(EMPTY_NOTE, /집계 시작 2026-09-17/);
+});
+
+test("sinceNote prints the coverage date and never invents one when the table is empty", async () => {
+  const { DEVICE_LABELS, ENGINE_STATUS, METHOD_LABELS, sinceNote } = await import("../src/lib/adminFormat.js");
+  assert.equal(sinceNote("2026-09-17"), "집계 시작 2026-09-17");
+  assert.equal(sinceNote("2026-09-17", "방문 기록"), "방문 기록 2026-09-17");
+  assert.equal(sinceNote(null), "집계 시작 전 (기록 없음)");
+  assert.equal(sinceNote(""), "집계 시작 전 (기록 없음)");
+  assert.equal(sinceNote("nope"), "집계 시작 전 (기록 없음)");
+  assert.equal(DEVICE_LABELS.unknown, "알 수 없음");
+  assert.equal(METHOD_LABELS.unknown, "알 수 없음");
+  assert.equal(ENGINE_STATUS.skipped.tone, "off");
+  assert.equal(ENGINE_STATUS.degraded.tone, "bad");
+  assert.equal(ENGINE_STATUS.source_unavailable.label, "소스 실패");
+});
+
+test("sumOrNull: an all-null column sums to null (a dash), a real 0 stays 0", () => {
+  // 집계 시작 전 날짜만 있는 창 — sumBy 는 0 을 돌려줘 합계 행에 "0" 이 찍혔다(가짜 숫자).
+  assert.equal(sumOrNull([{ a: null }, { a: undefined }, {}], "a"), null);
+  assert.equal(sumOrNull([], "a"), null);
+  assert.equal(sumOrNull(null, "a"), null);
+  assert.equal(sumOrNull([{ a: null }, { a: 3 }, { a: "4" }], "a"), 7, "null rows are skipped, numeric strings count");
+  assert.equal(sumOrNull([{ a: 0 }, { a: null }], "a"), 0, "a measured 0 is a value, not an absence");
+  assert.equal(sumOrNull([{ a: "abc" }], "a"), null);
+  // 같은 입력에서 sumBy 는 0 — 두 함수의 차이가 곧 이 테스트의 이유.
+  assert.equal(sumBy([{ a: null }], "a"), 0);
+  assert.equal(fmtInt(sumOrNull([{ a: null }], "a")), DASH);
+});
+
+test("meanBy: simple mean over rows that have a value, null when none", () => {
+  // 평균 세션 시간의 합계 행 — 측정된 세션 수를 서버가 주지 않아 세션 수 가중은 가짜 가중. 값이 있는 날의 단순 평균.
+  assert.equal(meanBy([{ s: 60 }, { s: null }, { s: 120 }], "s"), 90);
+  assert.equal(meanBy([{ s: 0 }, { s: 30 }], "s"), 15, "a measured 0 counts");
+  assert.equal(meanBy([{ s: null }, {}], "s"), null);
+  assert.equal(meanBy([], "s"), null);
+  assert.equal(meanBy(undefined, "s"), null);
+  assert.equal(fmtDuration(meanBy([{ s: null }], "s")), DASH);
 });

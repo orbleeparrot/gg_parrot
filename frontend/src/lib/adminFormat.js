@@ -155,6 +155,32 @@ export function sumBy(rows, key) {
   return (rows || []).reduce((acc, row) => acc + (finite(row?.[key]) || 0), 0);
 }
 
+// 값이 하나도 없는 열의 합계 — sumBy 는 0 을 돌려줘 "0" 으로 찍힌다(가입 당일 백테스트 · 노출처럼 집계 시작 전
+// 날짜가 전부 null 인 창). 유한한 값을 한 번도 못 봤으면 null → 화면은 "—". 0 이 실제로 온 행은 값으로 센다.
+export function sumOrNull(rows, key) {
+  let acc = null;
+  for (const row of rows || []) {
+    const v = finite(row?.[key]);
+    if (v == null) continue;
+    acc = (acc ?? 0) + v;
+  }
+  return acc;
+}
+
+// 값이 있는 행만의 단순 평균(일별 평균의 평균). 가중치가 될 분모(측정된 세션 수)를 서버가 주지 않을 때 —
+// 세션 수로 가중하면 측정 안 된 세션까지 분모에 넣는 셈이라 가짜 가중이 된다. 값이 없으면 null.
+export function meanBy(rows, key) {
+  let sum = 0;
+  let n = 0;
+  for (const row of rows || []) {
+    const v = finite(row?.[key]);
+    if (v == null) continue;
+    sum += v;
+    n += 1;
+  }
+  return n ? sum / n : null;
+}
+
 // 이탈률·평균 세션처럼 행마다 비율인 값의 합계 행 — 세션 수로 가중 평균. 가중치 합 0 이면 null.
 export function weightedMean(rows, key, weightKey) {
   let num = 0;
@@ -181,13 +207,23 @@ export const CHANNEL_DETAIL = {
   direct: "직접 접속 (주소 · 북마크 · 앱)", search: "검색 (google · naver · bing)", referral: "추천 링크 (다른 사이트)",
   social: "소셜 (X · 카카오 · 유튜브)", campaign: "캠페인 (utm)",
 };
-export const DEVICE_LABELS = { mobile: "모바일", desktop: "데스크톱", tablet: "태블릿" };
-export const METHOD_LABELS = { google: "구글 간편 가입", email: "이메일 가입" };
+// unknown = 화면 너비 0 으로 온 세션(비율 분모에서 빠지지만 행은 보여 준다).
+export const DEVICE_LABELS = { mobile: "모바일", desktop: "데스크톱", tablet: "태블릿", unknown: "알 수 없음" };
+// unknown = 탈퇴 행처럼 가입 방법을 추정하지 않는 계정.
+export const METHOD_LABELS = { google: "구글 간편 가입", email: "이메일 가입", unknown: "알 수 없음" };
 export const COST_METHOD_LABELS = { estimate: "추정", calls: "호출 × 단가", fixed: "구독", api: "청구 API" };
+// 서버는 degraded/source_unavailable 을 error 로 접어 주지만, 원값이 그대로 와도 '소스 실패'로 읽히게 둔다.
 export const ENGINE_STATUS = {
   ok: { tone: "ok", label: "정상" }, delayed: { tone: "wait", label: "지연" }, error: { tone: "bad", label: "오류" },
-  stalled: { tone: "wait", label: "정체 쉼" }, idle: { tone: "off", label: "대기" },
+  stalled: { tone: "wait", label: "정체 쉼" }, idle: { tone: "off", label: "대기" }, skipped: { tone: "off", label: "건너뜀" },
+  degraded: { tone: "bad", label: "소스 실패" }, source_unavailable: { tone: "bad", label: "소스 실패" },
 };
+
+// "집계 시작 YYYY-MM-DD" 캡션 — coverage 가 null(표가 빔)이면 날짜를 지어내지 않는다.
+export function sinceNote(day, what = "집계 시작") {
+  const s = String(day || "");
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? `${what} ${s}` : `${what} 전 (기록 없음)`;
+}
 export const BOARD_STATUS = { ok: "정상", empty: "비어 있음", bad: "실패", wait: "수집 중" };
 export const PURPOSE_LABELS = {
   position_news: "종목 뉴스 분류 · 요약", title_translation: "뉴스 제목 한글 번역", community_summaries: "커뮤니티 글 요약",

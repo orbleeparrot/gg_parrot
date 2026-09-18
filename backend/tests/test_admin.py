@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import secrets
 import sys
 import types
@@ -133,7 +134,7 @@ def test_referrer_host_treats_own_site_as_direct():
     assert admin_mod.referrer_host("not a url") == ""
 
 
-@pytest.mark.parametrize("width, expected", [(0, "desktop"), (320, "mobile"), (767, "mobile"), (768, "tablet"), (1023, "tablet"), (1024, "desktop"), (2560, "desktop")])
+@pytest.mark.parametrize("width, expected", [(0, "unknown"), (320, "mobile"), (767, "mobile"), (768, "tablet"), (1023, "tablet"), (1024, "desktop"), (2560, "desktop")])
 def test_device_classification(width, expected):
     assert admin_mod.classify_device(width) == expected
 
@@ -294,46 +295,51 @@ def test_admin_endpoints_closed_unless_flag_set():
 def test_admin_report_shapes_follow_contract():
     headers = _admin_client()
     users = client.get("/api/admin/users?days=7", headers=headers).json()
-    assert set(users) == {"days", "generated_at", "kpis", "series", "daily", "channels", "sources", "pages", "devices", "peak_hours"}
+    assert set(users) == {"days", "generated_at", "coverage", "kpis", "series", "daily", "channels", "sources", "pages", "devices", "peak_hours"}
     assert users["days"] == 7 and users["generated_at"].endswith("Z")
-    assert set(users["kpis"]) == {"dau", "wau", "mau", "stickiness_pct", "online_5m", "bounce_pct_today", "avg_session_sec_today"}
+    assert set(users["coverage"]) == {"visits_since", "events_since", "macro_events_since", "quests_since"}
+    assert set(users["kpis"]) == {"dau", "wau", "mau", "stickiness_pct", "online_5m", "bounce_pct_today", "avg_session_sec_today", "new_visitors"}
     assert set(users["series"]) == {"days", "dau", "wau", "mau"} and all(len(users["series"][k]) == 7 for k in users["series"])
     assert len(users["daily"]) == 7 and users["daily"][-1]["day"] == users["series"]["days"][-1] == admin_mod._today_kst()
     assert set(users["daily"][0]) == {"day", "active", "new", "returning", "sessions", "pageviews", "pv_per_session", "avg_session_sec", "bounce_pct"}
     assert [c["channel"] for c in users["channels"]] == ["direct", "search", "referral", "social", "campaign"]
     assert set(users["channels"][0]) == {"channel", "label", "sessions", "share_pct", "new_visitors", "bounce_pct", "signup_rate_pct"}
-    assert [d["device"] for d in users["devices"]] == ["mobile", "desktop", "tablet"]
+    assert [d["device"] for d in users["devices"]] == ["mobile", "desktop", "tablet", "unknown"]
+    assert set(users["devices"][0]) == {"device", "label", "sessions", "share_pct", "avg_session_sec"} and users["devices"][3]["share_pct"] is None
     assert [h["hour"] for h in users["peak_hours"]] == list(range(24))
     assert len(users["sources"]) <= 10 and len(users["pages"]) <= 12
     if users["pages"]:
         assert set(users["pages"][0]) == {"path", "label", "pageviews", "avg_dwell_sec", "landings", "exit_pct"}
 
     signups = client.get("/api/admin/signups?days=7", headers=headers).json()
-    assert set(signups) == {"days", "generated_at", "kpis", "series", "daily", "funnel", "cohorts", "methods"}
-    assert set(signups["kpis"]) == {"total_users", "signups", "signup_rate_pct", "revisit_pct", "d7_retention_pct", "deletions"}
+    assert set(signups) == {"days", "generated_at", "coverage", "revisit_days", "kpis", "series", "daily", "funnel_acquisition", "funnel_members", "cohorts", "methods"}
+    assert set(signups["kpis"]) == {"total_users", "signups", "signup_rate_pct", "revisit_pct", "d7_retention_pct", "deletions", "new_visitors"}
     assert set(signups["series"]) == {"days", "signups", "signup_rate_pct"} and len(signups["series"]["signups"]) == 7
     assert len(signups["daily"]) == 7
     assert set(signups["daily"][0]) == {"day", "signups", "signup_rate_pct", "deletions", "cumulative", "first_backtest_same_day", "quest_active"}
-    assert [(f["step"], f["key"]) for f in signups["funnel"]] == list(enumerate(["visit", "builder", "backtest", "signup", "macro_register", "macro_unlock", "agent_start"], start=1))
+    assert [(f["step"], f["key"]) for f in signups["funnel_acquisition"]] == list(enumerate(["visit", "builder", "backtest", "signup"], start=1))
+    assert [(f["step"], f["key"]) for f in signups["funnel_members"]] == list(enumerate(["signup", "macro_register", "macro_unlock", "agent_start"], start=1))
+    assert all(set(f) == {"step", "key", "label", "count", "pct_of_first", "pct_of_prev"} for f in signups["funnel_acquisition"] + signups["funnel_members"])
     assert [m["method"] for m in signups["methods"]] == ["google", "email"]
     assert set(signups["methods"][0]) == {"method", "label", "signups", "share_pct", "d7_retention_pct", "first_backtest_same_day"}
-    assert signups["cohorts"] and set(signups["cohorts"][0]) == {"week", "signups", "d1", "d3", "d7", "d14", "d30"}
+    assert signups["cohorts"] and set(signups["cohorts"][0]) == {"week", "monday", "signups", "measurable", "partial", "d1", "d3", "d7", "d14", "d30"}
     assert signups["kpis"]["signups"] >= 1  # 이 테스트 파일이 만든 계정들
 
     macros = client.get("/api/admin/macros?days=7", headers=headers).json()
-    assert set(macros) == {"days", "generated_at", "kpis", "series", "daily", "top", "sessions"}
+    assert set(macros) == {"days", "generated_at", "coverage", "paper_liveness", "kpis", "series", "daily", "top", "sessions"}
+    assert macros["paper_liveness"] == "reported"
     assert set(macros["kpis"]) == {"registered", "unlocks", "revenue_points", "creator_points", "ctr_pct", "cvr_pct", "agents_running"}
     assert set(macros["series"]) == {"days", "registered", "unlocks", "ctr_pct", "cvr_pct"} and len(macros["series"]["ctr_pct"]) == 7
     assert len(macros["daily"]) == 7
     assert set(macros["daily"][0]) == {"day", "registered", "impressions", "opens", "ctr_pct", "unlocks", "cvr_pct", "revenue_points", "creator_points"}
     assert [s["kind"] for s in macros["sessions"]] == ["agent", "paper"]
-    assert set(macros["sessions"][0]) == {"kind", "label", "running", "stopped", "error", "started_period", "mainnet"}
+    assert set(macros["sessions"][0]) == {"kind", "label", "running", "stale", "stopped", "error", "started_period", "mainnet"}
     assert len(macros["top"]) <= 20
 
     news = client.get("/api/admin/news", headers=headers).json()
     assert set(news) == {"generated_at", "kpis", "engines", "hourly", "sources", "board", "failing", "enrichment"}
     assert set(news["kpis"]) == {"tickers_ok", "tickers_total", "tickers_failing", "articles_today", "failures_today", "pending", "ai_budget_used", "ai_budget_limit"}
-    assert [e["key"] for e in news["enrichment"]] == ["pending", "due", "given_up", "stall", "public_next", "ai_budget", "coindesk"]
+    assert [e["key"] for e in news["enrichment"]] == ["pending", "due", "given_up_today", "given_up", "stall", "public_next", "ai_budget", "coindesk"]
     assert all(set(e) == {"key", "label", "value"} for e in news["enrichment"])
 
     costs = client.get("/api/admin/costs?months=3", headers=headers).json()
@@ -380,26 +386,29 @@ def test_news_and_costs_pass_sibling_reports_through(monkeypatch):
 # --- 결정적 시나리오(격리된 SQLite) --------------------------------------------------------------------
 @pytest.fixture
 def scenario(tmp_path):
-    """방문자 2(v1 데스크톱·검색, v2 모바일·소셜) · 세션 2 · 이탈 1 · 당일 가입 1(v1=u1) · 10일 전 구글 가입(u2, 이틀 전 재방문) · 탈퇴 1.
+    """방문자 2(v1 데스크톱·검색, v2 모바일·소셜) · 세션 2 · 이탈 1 · 당일 가입 1(v1=u1) · 10일 전 구글 가입(u2, 이틀 전 재방문) ·
+    20일 전 가입해 이틀 전 탈퇴한 u3(가입 방법 기록 없음).
 
     공유 테스트 DB 에는 다른 테스트의 계정·방문이 섞이므로, 값을 정확히 맞추는 시나리오는 격리된 SQLite 파일에 만든다.
+    방문 기록은 10일 전(d10)부터, 이벤트·퀘스트 기록은 오늘부터 — coverage 가 그 날짜를 읽는다.
     """
     engine = create_engine(f"sqlite:///{tmp_path / 'admin-scenario.db'}")
     SQLModel.metadata.create_all(engine)
     _, now_ms = admin_mod._now()
-    base = now_ms - 240_000  # 4분 전 → online_5m 에도 잡힌다
+    base = now_ms - 240_000  # 4분 전 → online_5m 에도 잡히고, 30분 안이라 '아직 보고 있는' 세션(종료 아님)
     day = admin_mod.day_kst(base)
     d2, d10, d20 = admin_mod._shift_day(day, -2), admin_mod._shift_day(day, -10), admin_mod._shift_day(day, -20)
     noon = lambda d: admin_mod._day_start_ms(d) + 12 * 3_600_000  # noqa: E731
     iso = admin_mod._iso_from_ms
     with Session(engine) as db:
-        u1 = User(email="u1@ex.com", username="u1", password_hash="pbkdf2", created_at=iso(base))
-        u2 = User(email="u2@ex.com", username="u2", password_hash="", created_at=iso(noon(d10)))
-        u3 = User(email="u3@ex.com", username="u3", password_hash="pbkdf2", created_at=iso(noon(d20)), is_deleted=True)
+        u1 = User(email="u1@ex.com", username="u1", password_hash="pbkdf2", signup_method="email", created_at=iso(base))
+        u2 = User(email="u2@ex.com", username="u2", password_hash="", signup_method="google", created_at=iso(noon(d10)))
+        u3 = User(email="u3@ex.com", username="u3", password_hash="", created_at=iso(noon(d20)), is_deleted=True, deleted_at=iso(noon(d2)))
         db.add_all([u1, u2, u3])
         db.commit()
         db.refresh(u1), db.refresh(u2), db.refresh(u3)
-        v1 = dict(visitor_hash="v1", session_key="s1", channel="search", device="desktop", referrer_host="www.google.com", user_id=u1.id, is_new=True)
+        v1 = dict(visitor_hash="v1", session_key="s1", channel="search", device="desktop", referrer_host="www.google.com", user_id=u1.id,
+                  is_new=True, screen_w=1440)
         db.add_all([
             Visit(day_kst=day, path="/", created_ms=base, dwell_ms=5000, is_landing=True, view_key="k1", **v1),
             Visit(day_kst=day, path="/builder", created_ms=base + 60_000, dwell_ms=10_000, view_key="k2", **v1),
@@ -407,9 +416,9 @@ def scenario(tmp_path):
             Visit(day_kst=day, path="/leaderboard", created_ms=base + 5_000, is_landing=True, view_key="k4", visitor_hash="v2", session_key="s2",
                   channel="social", device="mobile", referrer_host="t.co", is_new=True, screen_w=390),
             Visit(day_kst=d10, path="/news", created_ms=noon(d10), is_landing=True, view_key="k5", visitor_hash="v3", session_key="s3",
-                  channel="direct", device="desktop", is_new=True, user_id=u2.id),
+                  channel="direct", device="desktop", is_new=True, user_id=u2.id, screen_w=1280),
             Visit(day_kst=d2, path="/news", created_ms=noon(d2), is_landing=True, view_key="k6", visitor_hash="v3", session_key="s4",
-                  channel="direct", device="desktop", user_id=u2.id),
+                  channel="direct", device="desktop", user_id=u2.id, screen_w=1280),
             DailyQuestClaim(user_id=u1.id, date_kst=day, quest_key="backtest_run", reward=10, created_at=iso(base), created_ms=base),
         ])
         db.commit()
@@ -421,59 +430,118 @@ def _by_day(rows, day):
 
 
 def test_users_scenario(scenario):
-    db, day, d2 = scenario["db"], scenario["day"], scenario["d2"]
+    db, day, d2, d10 = scenario["db"], scenario["day"], scenario["d2"], scenario["d10"]
     report = admin_mod._users_report(db, 7)
+    assert report["coverage"] == {"visits_since": d10, "events_since": day, "macro_events_since": None, "quests_since": day}
     today = _by_day(report["daily"], day)
+    # 세션 시간 = 체류 합: s1 은 5초 + 10초, s2 는 마지막 뷰의 체류를 몰라 제외 → 평균 15초(첫·끝 시각 차 35초가 아니다)
     assert today == {"day": day, "active": 2, "new": 2, "returning": 0, "sessions": 2, "pageviews": 3, "pv_per_session": 1.5,
-                     "avg_session_sec": 35, "bounce_pct": 50.0}
+                     "avg_session_sec": 15, "bounce_pct": 50.0}
     two_days_ago = _by_day(report["daily"], d2)
     assert (two_days_ago["active"], two_days_ago["new"], two_days_ago["returning"], two_days_ago["sessions"], two_days_ago["bounce_pct"]) == (1, 0, 1, 1, 100.0)
-    assert report["kpis"]["online_5m"] == 2 and report["kpis"]["wau"] == 3 and report["kpis"]["mau"] == 3
+    assert two_days_ago["avg_session_sec"] is None  # 유일한 뷰의 체류를 모른다 — 0초가 아니라 측정 불가
+    assert report["kpis"]["online_5m"] == 2 and report["kpis"]["wau"] == 3 and report["kpis"]["mau"] == 3 and report["kpis"]["new_visitors"] == 2
     if report["series"]["days"][-1] == day:
         assert report["kpis"]["dau"] == 2 and report["kpis"]["stickiness_pct"] == 66.7
-        assert report["kpis"]["bounce_pct_today"] == 50.0 and report["kpis"]["avg_session_sec_today"] == 35
+        assert report["kpis"]["bounce_pct_today"] == 50.0 and report["kpis"]["avg_session_sec_today"] == 15
     channels = {c["channel"]: c for c in report["channels"]}
     assert channels["search"] == {"channel": "search", "label": "검색", "sessions": 1, "share_pct": 33.3, "new_visitors": 1, "bounce_pct": 0.0, "signup_rate_pct": 100.0}
     assert (channels["social"]["sessions"], channels["social"]["bounce_pct"], channels["social"]["signup_rate_pct"]) == (1, 100.0, 0.0)
-    assert (channels["direct"]["sessions"], channels["direct"]["new_visitors"]) == (1, 0)
-    assert channels["referral"]["sessions"] == 0 and channels["campaign"]["sessions"] == 0
+    assert (channels["direct"]["sessions"], channels["direct"]["new_visitors"], channels["direct"]["signup_rate_pct"]) == (1, 0, None)
+    assert channels["referral"] == {"channel": "referral", "label": "추천 링크", "sessions": 0, "share_pct": 0.0, "new_visitors": 0, "bounce_pct": None, "signup_rate_pct": None}
     sources = {s["source"]: s for s in report["sources"]}
     assert sources["www.google.com"] == {"source": "www.google.com", "channel": "search", "sessions": 1, "signups": 1}
     assert sources["t.co"]["channel"] == "social" and sources["t.co"]["signups"] == 0
     pages = {p["path"]: p for p in report["pages"]}
+    # 4분 전 세션들은 아직 보고 있을 수 있어 종료로 세지 않는다. 이틀 전 /news 세션만 종료.
     assert pages["/"] == {"path": "/", "label": "홈", "pageviews": 1, "avg_dwell_sec": 5, "landings": 1, "exit_pct": 0.0}
-    assert pages["/builder"] == {"path": "/builder", "label": "직접 만들기", "pageviews": 1, "avg_dwell_sec": 10, "landings": 0, "exit_pct": 100.0}
-    assert (pages["/leaderboard"]["landings"], pages["/leaderboard"]["exit_pct"], pages["/leaderboard"]["avg_dwell_sec"]) == (1, 100.0, 0)
+    assert pages["/builder"] == {"path": "/builder", "label": "직접 만들기", "pageviews": 1, "avg_dwell_sec": 10, "landings": 0, "exit_pct": 0.0}
+    assert (pages["/leaderboard"]["landings"], pages["/leaderboard"]["exit_pct"], pages["/leaderboard"]["avg_dwell_sec"]) == (1, 0.0, None)
+    assert (pages["/news"]["pageviews"], pages["/news"]["exit_pct"]) == (1, 100.0)
     assert [p["path"] for p in report["pages"]] == ["/", "/builder", "/leaderboard", "/news"]
     devices = {d["device"]: d for d in report["devices"]}
-    assert (devices["mobile"]["sessions"], devices["desktop"]["sessions"], devices["tablet"]["sessions"]) == (1, 2, 0)
-    assert devices["desktop"]["avg_session_sec"] == 35 and devices["mobile"]["share_pct"] == 33.3
+    assert [d["device"] for d in report["devices"]] == ["mobile", "desktop", "tablet", "unknown"]
+    assert (devices["mobile"]["sessions"], devices["desktop"]["sessions"], devices["tablet"]["sessions"], devices["unknown"]["sessions"]) == (1, 2, 0, 0)
+    assert devices["desktop"]["avg_session_sec"] == 15 and devices["mobile"]["share_pct"] == 33.3 and devices["unknown"]["share_pct"] is None
     assert sum(h["sessions"] for h in report["peak_hours"]) == 3
 
 
+def test_channel_signup_rate_counts_only_signups_on_the_first_touch_day(tmp_path):
+    """채널 가입 전환의 분자는 signups_report 와 같다 — 신규로 온 **그날** 가입한 사람만(F4).
+    va: 1일 검색으로 처음 옴 → 3일 직접 접속 세션에서 가입 → 어느 채널의 전환도 아니다(예전엔 검색 100% 로 잡혔다).
+    vb: 1일 검색으로 처음 와 그날 가입 → 검색 채널 전환."""
+    engine = create_engine(f"sqlite:///{tmp_path / 'first-touch.db'}")
+    SQLModel.metadata.create_all(engine)
+    today = admin_mod._today_kst()
+    d1, d3 = admin_mod._shift_day(today, -6), admin_mod._shift_day(today, -4)
+    noon = lambda d: admin_mod._day_start_ms(d) + 12 * 3_600_000  # noqa: E731
+    iso = admin_mod._iso_from_ms
+    with Session(engine) as db:
+        ua = User(email="ua@ex.com", username="ua", password_hash="x", signup_method="email", created_at=iso(noon(d3)))
+        ub = User(email="ub@ex.com", username="ub", password_hash="x", signup_method="email", created_at=iso(noon(d1)))
+        db.add_all([ua, ub])
+        db.commit()
+        db.refresh(ua), db.refresh(ub)
+        search = dict(channel="search", referrer_host="www.google.com", device="desktop", screen_w=1440, is_landing=True, path="/")
+        db.add_all([
+            Visit(day_kst=d1, created_ms=noon(d1), visitor_hash="va", session_key="sa1", is_new=True, view_key="a1", **search),
+            Visit(day_kst=d3, created_ms=noon(d3), visitor_hash="va", session_key="sa2", view_key="a2", user_id=ua.id, path="/",
+                  channel="direct", device="desktop", screen_w=1440, is_landing=True),
+            Visit(day_kst=d1, created_ms=noon(d1) + 1000, visitor_hash="vb", session_key="sb1", is_new=True, view_key="b1", user_id=ub.id, **search),
+        ])
+        db.commit()
+        users = admin_mod._users_report(db, 7)
+        signups = admin_mod._signups_report(db, 7)
+    channels = {c["channel"]: c for c in users["channels"]}
+    assert (channels["search"]["new_visitors"], channels["search"]["signup_rate_pct"]) == (2, 50.0)
+    assert (channels["direct"]["new_visitors"], channels["direct"]["signup_rate_pct"]) == (0, None)
+    # 두 표가 같은 분자·분모를 쓴다: 신규 방문자 2 · 전환 1.
+    assert (signups["kpis"]["new_visitors"], signups["kpis"]["signup_rate_pct"]) == (2, 50.0)
+
+
 def test_signups_scenario_with_cohorts(scenario):
-    db, day, d10, d20 = scenario["db"], scenario["day"], scenario["d10"], scenario["d20"]
+    db, day, d2, d10, d20 = scenario["db"], scenario["day"], scenario["d2"], scenario["d10"], scenario["d20"]
     week = admin_mod._monday(day)
     report = admin_mod._signups_report(db, 7)
-    assert report["kpis"] == {"total_users": 2, "signups": 1, "signup_rate_pct": 50.0, "revisit_pct": 0.0, "d7_retention_pct": 0.0, "deletions": 1}
+    since_day = report["series"]["days"][0]
+    assert report["coverage"]["visits_since"] == d10 and report["revisit_days"] == 7
+    # 탈퇴(u3)는 회원 수·가입 수에 없고, 탈퇴 수는 탈퇴한 날(d2)에 찍힌다. 전환율 = 신규 방문자 2(v1·v2) 중 당일 가입 1.
+    assert report["kpis"] == {"total_users": 2, "signups": 1, "signup_rate_pct": 50.0, "revisit_pct": 0.0, "d7_retention_pct": None,
+                              "deletions": 1, "new_visitors": 2}
     today = _by_day(report["daily"], day)
-    assert (today["signups"], today["signup_rate_pct"], today["cumulative"], today["first_backtest_same_day"], today["quest_active"]) == (1, 50.0, 3, 1, 1)
-    assert today["deletions"] == (1 if report["series"]["days"][-1] == day else 0)
-    assert {f["key"]: f["count"] for f in report["funnel"]} == {"visit": 3, "builder": 1, "backtest": 1, "signup": 1, "macro_register": 0, "macro_unlock": 0, "agent_start": 0}
-    assert report["cohorts"] == [{"week": f"{week[5:]} 주", "signups": 1, "d1": None, "d3": None, "d7": None, "d14": None, "d30": None}]
+    assert (today["signups"], today["signup_rate_pct"], today["cumulative"], today["first_backtest_same_day"], today["quest_active"]) == (1, 50.0, 2, 1, 1)
+    assert today["deletions"] == 0
+    two_days_ago = _by_day(report["daily"], d2)
+    # 이틀 전: 신규 방문자가 없어 전환율 분모 0 → None. 이벤트·퀘스트 기록은 오늘부터라 그 전 날짜는 측정 불가(None).
+    assert (two_days_ago["deletions"], two_days_ago["signup_rate_pct"], two_days_ago["first_backtest_same_day"], two_days_ago["quest_active"]) == (1, None, None, None)
+    assert [(f["step"], f["key"], f["count"], f["pct_of_first"], f["pct_of_prev"]) for f in report["funnel_acquisition"]] == [
+        (1, "visit", 3, 100.0, None), (2, "builder", 1, 33.3, 33.3), (3, "backtest", 1, 33.3, 100.0), (4, "signup", 1, 33.3, 100.0)]
+    assert [(f["key"], f["count"], f["pct_of_first"], f["pct_of_prev"]) for f in report["funnel_members"]] == [
+        ("signup", 1, 100.0, None), ("macro_register", 0, 0.0, 0.0), ("macro_unlock", 0, 0.0, None), ("agent_start", 0, 0.0, None)]
+    cohorts = {c["monday"]: c for c in report["cohorts"]}
+    assert cohorts[week] == {"week": f"{week[5:]} 주", "monday": week, "signups": 1, "measurable": 1,
+                             "partial": week < since_day or admin_mod._shift_day(week, 6) > day,
+                             "d1": None, "d3": None, "d7": None, "d14": None, "d30": None}
+    assert admin_mod._monday(d20) not in cohorts  # 탈퇴 회원은 코호트에 없다
     methods = {m["method"]: m for m in report["methods"]}
-    assert methods["email"] == {"method": "email", "label": "이메일 가입", "signups": 1, "share_pct": 100.0, "d7_retention_pct": 0.0, "first_backtest_same_day": 1}
-    assert methods["google"]["signups"] == 0
+    assert methods["email"] == {"method": "email", "label": "이메일 가입", "signups": 1, "share_pct": 100.0, "d7_retention_pct": None, "first_backtest_same_day": 1}
+    assert methods["google"] == {"method": "google", "label": "구글 간편 가입", "signups": 0, "share_pct": 0.0, "d7_retention_pct": None, "first_backtest_same_day": 0}
 
     wide = admin_mod._signups_report(db, 30)
-    assert wide["kpis"]["signups"] == 3 and wide["kpis"]["d7_retention_pct"] == 50.0 and wide["kpis"]["revisit_pct"] == 33.3
-    cohorts = {c["week"]: c for c in wide["cohorts"]}
-    assert cohorts[f"{admin_mod._monday(d10)[5:]} 주"] == {"week": f"{admin_mod._monday(d10)[5:]} 주", "signups": 1, "d1": 100.0, "d3": 100.0, "d7": 100.0, "d14": None, "d30": None}
-    assert cohorts[f"{admin_mod._monday(d20)[5:]} 주"]["d14"] == 0.0 and cohorts[f"{admin_mod._monday(d20)[5:]} 주"]["d30"] is None
-    assert [c["week"] for c in wide["cohorts"]] == sorted(c["week"] for c in wide["cohorts"])
+    assert wide["kpis"]["signups"] == 2 and wide["kpis"]["d7_retention_pct"] == 100.0 and wide["kpis"]["revisit_pct"] == 33.3
+    assert wide["kpis"]["signup_rate_pct"] == 66.7 and wide["kpis"]["new_visitors"] == 3 and wide["kpis"]["deletions"] == 1
+    assert wide["revisit_days"] == 11  # 방문 기록은 11일치뿐 — 화면 라벨이 '최근 11일' 이 된다
+    assert _by_day(wide["daily"], d10)["signup_rate_pct"] == 100.0
+    assert _by_day(wide["daily"], d20) == {"day": d20, "signups": 0, "signup_rate_pct": None, "deletions": 0, "cumulative": 0,
+                                           "first_backtest_same_day": None, "quest_active": None}
+    cohorts = {c["monday"]: c for c in wide["cohorts"]}
+    old_week = admin_mod._monday(d10)
+    assert cohorts[old_week] == {"week": f"{old_week[5:]} 주", "monday": old_week, "signups": 1, "measurable": 1, "partial": False,
+                                 "d1": 100.0, "d3": 100.0, "d7": 100.0, "d14": None, "d30": None}
+    assert sorted(cohorts) == [old_week, week]
     methods = {m["method"]: m for m in wide["methods"]}
-    assert (methods["google"]["signups"], methods["google"]["share_pct"], methods["google"]["d7_retention_pct"]) == (1, 33.3, 100.0)
-    assert (methods["email"]["signups"], methods["email"]["share_pct"], methods["email"]["d7_retention_pct"]) == (2, 66.7, 0.0)
+    assert (methods["google"]["signups"], methods["google"]["share_pct"], methods["google"]["d7_retention_pct"]) == (1, 50.0, 100.0)
+    assert (methods["email"]["signups"], methods["email"]["share_pct"], methods["email"]["d7_retention_pct"]) == (1, 50.0, None)
 
 
 def test_macros_scenario(scenario):
@@ -490,21 +558,198 @@ def test_macros_scenario(scenario):
     db.add_all([entry, bot])
     db.commit()
     db.refresh(entry)
+    _, now_ms = admin_mod._now()
     db.add_all([
         MacroEventDaily(day_kst=day, entry_id=entry.id, impressions=10, opens=2, unlocks=1),
         MacroUnlock(user_id=u1, entry_id=entry.id, price=100, created_at=iso(base)),
         PointLedger(user_id=u2, delta=70, balance_after=70, reason="unlock_earn", ref=f"entry:{entry.id}", created_at=iso(base), created_ms=base),
-        RunSession(user_id=u2, started_at=iso(base), status="running", testnet=False),
+        RunSession(user_id=u2, started_at=iso(base), status="running", testnet=False, last_heartbeat_at=iso(now_ms - 60_000)),
+        # status 는 running 인데 하트비트가 6분 넘게 끊긴 세션 — 실행기가 죽은 것. 실행 중이 아니라 stale.
+        RunSession(user_id=u1, started_at=iso(base), status="running", testnet=False, last_heartbeat_at=iso(now_ms - 6 * 60_000)),
         RunSession(user_id=u1, started_at=iso(base), status="stopped", stopped_at=iso(base)),
     ])
     db.commit()
     report = admin_mod._macros_report(db, 7)
+    assert report["coverage"]["macro_events_since"] == day and report["paper_liveness"] == "reported"
     assert report["kpis"] == {"registered": 1, "unlocks": 1, "revenue_points": 100, "creator_points": 70, "ctr_pct": 20.0, "cvr_pct": 50.0, "agents_running": 1}
     assert _by_day(report["daily"], day) == {"day": day, "registered": 0, "impressions": 10, "opens": 2, "ctr_pct": 20.0, "unlocks": 1, "cvr_pct": 50.0,
                                              "revenue_points": 100, "creator_points": 70}
-    assert _by_day(report["daily"], d1)["registered"] == 1
+    # 카운터가 생기기 전날: 노출·열람·구매·비율은 측정 불가(None), 결제 기록에서 읽는 매출은 숫자.
+    assert _by_day(report["daily"], d1) == {"day": d1, "registered": 1, "impressions": None, "opens": None, "ctr_pct": None, "unlocks": None,
+                                            "cvr_pct": None, "revenue_points": 0, "creator_points": 0}
     assert report["top"] == [{"entry_id": entry.id, "name": "x" * 40, "creator": "u2", "symbol": "BTCUSDT", "registered_day": d1, "impressions": 10, "opens": 2,
                               "ctr_pct": 20.0, "unlocks": 1, "cvr_pct": 50.0, "revenue_points": 100, "creator_points": 70, "paper_return_pct": 12.35}]
     agent, paper_row = report["sessions"]
-    assert agent == {"kind": "agent", "label": "에이전트 (실행기)", "running": 1, "stopped": 1, "error": 0, "started_period": 2, "mainnet": 1}
-    assert paper_row == {"kind": "paper", "label": "모의 (페이퍼) 세션", "running": 1, "stopped": 0, "error": 0, "started_period": 1, "mainnet": 0}
+    assert agent == {"kind": "agent", "label": "에이전트 (실행기)", "running": 1, "stale": 1, "stopped": 1, "error": 0, "started_period": 3, "mainnet": 1}
+    assert paper_row == {"kind": "paper", "label": "모의 (페이퍼) 세션", "running": 1, "stale": 0, "stopped": 0, "error": 0, "started_period": 1, "mainnet": 0}
+
+
+# --- 정의 하나씩 --------------------------------------------------------------------------------------
+def test_pct_and_ratio_return_none_when_denominator_is_zero():
+    """가짜 0% 금지 — 분모가 없으면 값이 없다. JSON 으로는 null."""
+    assert admin_mod._pct(1, 0) is None and admin_mod._pct(0, 0) is None and admin_mod._ratio(3, 0) is None
+    assert admin_mod._pct(1, 4) == 25.0 and admin_mod._ratio(3, 2) == 1.5
+    assert json.dumps({"x": admin_mod._pct(1, 0)}) == '{"x": null}'
+
+
+def test_signup_method_rule_prefers_column_and_never_guesses_for_deleted_rows():
+    assert admin_mod.signup_method_of("google", True, False) == "google"  # 구글 가입 뒤 비밀번호를 만들어도 그대로
+    assert admin_mod.signup_method_of("email", False, False) == "email"
+    assert admin_mod.signup_method_of("", True, False) == "email" and admin_mod.signup_method_of("", False, False) == "google"
+    assert admin_mod.signup_method_of("", False, True) == "unknown"  # 탈퇴 행은 해시를 비우므로 추정하면 전부 구글이 된다
+
+
+def _rows(*views):
+    """(session_key, path, created_ms, dwell_ms, day, screen_w) → _view_rows 와 같은 열 순서."""
+    return [(key, path, ms, dwell, False, False, "direct", "desktop", f"vis-{key}", None, day, "", "", width)
+            for key, path, ms, dwell, day, width in sorted(views, key=lambda v: v[2])]
+
+
+def test_session_seconds_are_dwell_sums_and_unknown_tails_are_excluded():
+    _, now_ms = admin_mod._now()
+    t = now_ms - 3 * 3_600_000
+    day = admin_mod.day_kst(t)
+    rows = _rows(
+        ("a", "/", t, 0, day, 1440), ("a", "/news", t + 31 * 60_000, 0, day, 1440),  # 31분 간격 → 30분 상한, 마지막 뷰는 모름
+        ("b", "/guide", t, 0, day, 1440),  # 뷰 하나, 비콘 없음 → 세션 시간 모름
+        ("c", "/", t, 0, day, 1440), ("c", "/board", t + 10_000, 4000, day, 1440),  # 10초 간격 + 비콘 4초
+        ("d", "/", t, 0, day, 0),  # 화면 너비 0 → 기기 알 수 없음
+    )
+    sessions, pages = admin_mod._fold_sessions(rows, window_set={day}, now_ms=now_ms)
+    assert sessions["a"].seconds == 1800 and sessions["b"].seconds is None and sessions["c"].seconds == 14
+    assert admin_mod._avg_seconds(sessions.values()) == 907  # (1800 + 14) / 2 — b·d 는 분모에 없다
+    assert admin_mod._avg_seconds([sessions["b"]]) is None
+    assert sessions["d"].device == "unknown" and sessions["c"].device == "desktop"
+    # 페이지 체류도 같은 채움 규칙: '/' 는 a(1800초)·c(10초) 둘, /guide·/news·/board(비콘 4초) 는 아는 것만
+    assert (pages["/"]["dwell_sum"], pages["/"]["dwell_n"]) == (1_810_000, 2)
+    assert (pages["/guide"]["dwell_n"], pages["/news"]["dwell_n"], pages["/board"]["dwell_sum"]) == (0, 0, 4000)
+    # 세 시간 전 세션은 모두 끝났다 — 종료 페이지가 센다
+    assert (pages["/news"]["exits"], pages["/guide"]["exits"], pages["/board"]["exits"], pages["/"]["exits"]) == (1, 1, 1, 1)
+
+
+def test_live_sessions_are_not_exits_and_out_of_window_sessions_are_dropped():
+    _, now_ms = admin_mod._now()
+    today = admin_mod.day_kst(now_ms)
+    yesterday = admin_mod._shift_day(today, -1)
+    rows = _rows(
+        ("live", "/", now_ms - 20 * 60_000, 0, today, 1440), ("live", "/news", now_ms - 10 * 60_000, 0, today, 1440),  # 10분 전 마지막 뷰 → 아직 보는 중
+        ("old", "/", now_ms - 40 * 60_000, 0, today, 1440),  # 40분 전 → 종료
+        ("cross", "/", admin_mod._day_start_ms(today) - 60_000, 0, yesterday, 1440),  # 어제 시작한 세션의
+        ("cross", "/board", admin_mod._day_start_ms(today) + 60_000, 0, today, 1440),  # 오늘 뷰 — 세션 날짜(어제)가 창 밖이라 버린다
+    )
+    sessions, pages = admin_mod._fold_sessions(rows, window_set={today}, now_ms=now_ms)
+    assert set(sessions) == {"live", "old"}
+    assert (pages["/news"]["exits"], pages["/"]["exits"], pages["/board"]["views"]) == (0, 1, 0)
+    assert sum(s.views for s in sessions.values()) == sum(p["views"] for p in pages.values()) == 3
+
+
+def test_cohort_cells_before_visit_coverage_are_unmeasurable_not_churned(tmp_path):
+    """8/31 주 가입자 419명이 '전원 이탈 0%' 로 보이던 문제 — 가입+N 이 방문 기록 시작 전이면 분모에서 뺀다."""
+    engine = create_engine(f"sqlite:///{tmp_path / 'cohort.db'}")
+    SQLModel.metadata.create_all(engine)
+    today = admin_mod._today_kst()
+    d5, d6, d20 = (admin_mod._shift_day(today, -n) for n in (5, 6, 20))
+    noon = lambda d: admin_mod._day_start_ms(d) + 12 * 3_600_000  # noqa: E731
+    with Session(engine) as db:
+        old = User(email="o@ex.com", username="o", password_hash="x", signup_method="email", created_at=admin_mod._iso_from_ms(noon(d20)))
+        fresh = User(email="f@ex.com", username="f", password_hash="x", signup_method="email", created_at=admin_mod._iso_from_ms(noon(d6)))
+        db.add_all([old, fresh])
+        db.commit()
+        db.refresh(old), db.refresh(fresh)
+        # 방문 기록은 5일 전부터 — fresh 만 그날 다시 왔다
+        db.add(Visit(day_kst=d5, path="/", created_ms=noon(d5), visitor_hash="vf", session_key="sf", user_id=fresh.id, view_key="kf"))
+        db.commit()
+        report = admin_mod._signups_report(db, 30)
+    cohorts = {c["monday"]: c for c in report["cohorts"]}
+    old_row = cohorts[admin_mod._monday(d20)]
+    # old: 가입+1 ~ 가입+14 가 모두 방문 기록 이전 → 측정 불가(None). d30 은 아직 안 지남(None). 0% 가 어디에도 없다.
+    assert (old_row["measurable"], old_row["d1"], old_row["d3"], old_row["d7"], old_row["d14"], old_row["d30"]) == (0, None, None, None, None, None)
+    fresh_row = cohorts[admin_mod._monday(d6)]
+    # fresh: 가입+1 = d5 = 기록 시작일 → 측정 가능, 그날 왔으니 100%. 가입+3 = d3 도 측정 가능인데 안 왔으니 0%. 가입+7 은 미래.
+    assert (fresh_row["measurable"], fresh_row["d1"], fresh_row["d3"], fresh_row["d7"]) == (1, 100.0, 0.0, None)
+    assert report["kpis"]["d7_retention_pct"] is None  # 측정 가능한 회원이 없다 → 0% 가 아니라 None
+    assert report["coverage"]["visits_since"] == d5 and report["revisit_days"] == 6
+
+
+def test_signups_without_any_visit_rows_report_unmeasurable_rates(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'novisit.db'}")
+    SQLModel.metadata.create_all(engine)
+    with Session(engine) as db:
+        db.add(User(email="a@ex.com", username="a", password_hash="x", signup_method="email", created_at=admin_mod._now()[0]))
+        db.commit()
+        report = admin_mod._signups_report(db, 7)
+    assert report["coverage"] == {"visits_since": None, "events_since": None, "macro_events_since": None, "quests_since": None}
+    assert report["revisit_days"] is None and report["kpis"]["signup_rate_pct"] is None and report["kpis"]["revisit_pct"] is None
+    assert all(row["signup_rate_pct"] is None and row["first_backtest_same_day"] is None and row["quest_active"] is None for row in report["daily"])
+    assert report["cohorts"][-1]["measurable"] == 0 and report["kpis"]["signups"] == 1
+    assert report["methods"][1]["first_backtest_same_day"] is None
+
+
+def test_signup_records_method_and_close_keeps_it_while_stamping_deleted_at():
+    from app.profile import close_account_rows
+    _token, user_id = _signup()
+    with get_session() as db:
+        user = db.get(User, user_id)
+        assert user.signup_method == "email" and user.deleted_at == ""
+        close_account_rows(db, user)
+        db.commit()
+        db.refresh(user)
+        assert user.is_deleted and user.password_hash == "" and user.signup_method == "email"
+        assert user.deleted_at.endswith("Z") and admin_mod._kst_day_from_iso(user.deleted_at) == admin_mod._today_kst()
+
+
+def test_duplicate_view_key_race_is_swallowed_by_the_unique_index(monkeypatch):
+    """SELECT-then-INSERT 사이로 같은 비콘이 끼어들면 유니크 인덱스가 막고, 기록 함수는 경고 없이 None 을 돌려준다."""
+    payload = _view(path="/news")
+    assert client.post("/api/visit", json=payload).status_code == 204
+    monkeypatch.setattr(admin_mod, "_view_key_exists", lambda db, key: False)  # 사전 확인이 놓친 상황을 흉내 낸다
+    with get_session() as db:
+        assert admin_mod.record_visit(db, path="/board", view_key=payload["view_key"], user_id=None, secret="s") is None
+        rows = db.exec(select(Visit).where(Visit.view_key == payload["view_key"])).all()
+    assert len(rows) == 1 and rows[0].path == "/news"
+
+
+def test_init_db_boots_when_a_raced_duplicate_view_key_predates_the_unique_index(tmp_path, monkeypatch, caplog):
+    """인덱스가 생기기 전에 경쟁으로 들어온 중복 view_key 가 있는 개발 DB 도 기동해야 한다(F10) — 인덱스는 못 만들어도
+    경고만 남기고 넘어가며, 앞서 확정한 마이그레이션은 되돌리지 않는다."""
+    from app import db as db_mod
+    engine = create_engine(f"sqlite:///{tmp_path / 'dupes.db'}")
+    SQLModel.metadata.create_all(engine)
+    with Session(engine) as db:
+        db.add_all([Visit(day_kst="2026-09-18", path="/", view_key="dup"), Visit(day_kst="2026-09-18", path="/", view_key="dup")])
+        db.commit()
+    monkeypatch.setattr(db_mod, "_engine", engine)
+    with caplog.at_level(logging.WARNING, logger="app.db"):
+        db_mod.init_db()  # raise 하면 안 된다
+    assert any("ux_visit_view_key" in record.getMessage() for record in caplog.records)
+    with engine.connect() as conn:
+        indexes = {row[1] for row in conn.exec_driver_sql("PRAGMA index_list(visit)")}
+        rows = conn.exec_driver_sql("SELECT count(*) FROM visit WHERE view_key = 'dup'").scalar()
+    assert "ux_visit_view_key" not in indexes and rows == 2, "중복 행은 손대지 않고 인덱스만 건너뛴다"
+    assert "ix_newsarticle_enrichment" in {row[1] for row in engine.connect().exec_driver_sql("PRAGMA index_list(newsarticle)")}, \
+        "인덱스 실패 뒤의 마이그레이션도 계속 돈다"
+
+
+def test_online_5m_counts_a_view_that_is_still_being_read(monkeypatch):
+    """하트비트가 dwell 을 갱신하므로 8분 전에 열어 지금까지 읽고 있는 뷰도 '지금 접속' 이다."""
+    _, now_ms = admin_mod._now()
+    key = secrets.token_hex(6)
+    with get_session() as db:
+        db.add(Visit(day_kst=admin_mod.day_kst(now_ms), path="/news", created_ms=now_ms - 8 * 60_000, dwell_ms=0,
+                     visitor_hash="online-" + key, session_key=key, view_key=key))
+        db.commit()
+        before = admin_mod._online_5m(db, now_ms)
+        admin_mod.record_leave(db, view_key=key, dwell_ms=7 * 60_000)
+        assert admin_mod._online_5m(db, now_ms) == before + 1
+
+
+def test_report_cache_keys_include_the_kst_date(monkeypatch):
+    headers = _admin_client()
+    client.get("/api/admin/users?days=7", headers=headers)
+    client.get("/api/admin/signups?days=7", headers=headers)
+    client.get("/api/admin/macros?days=7", headers=headers)
+    today = admin_mod._today_kst()
+    assert {f"users:7:{today}", f"signups:7:{today}", f"macros:7:{today}"} <= set(admin_mod._cache)
+    monkeypatch.setattr(admin_mod, "_today_kst", lambda: "2099-01-01")  # 자정을 넘기면 캐시가 빗나가 새로 센다
+    client.get("/api/admin/users?days=7", headers=headers)
+    assert "users:7:2099-01-01" in admin_mod._cache

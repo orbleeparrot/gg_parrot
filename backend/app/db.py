@@ -1,6 +1,7 @@
 """SQLite persistence for macros (SQLModel)."""
 from __future__ import annotations
 
+import logging
 import os
 import time
 from contextlib import contextmanager
@@ -17,6 +18,8 @@ from sqlalchemy.exc import DBAPIError
 from sqlmodel import Field, Session, SQLModel, create_engine
 
 from .observability import record_timing
+
+logger = logging.getLogger(__name__)
 
 # Engine selection: DATABASE_URL (Supabase/Postgres) in prod, local SQLite otherwise.
 # This lets us develop & test on SQLite and run durable Postgres in deployment
@@ -279,6 +282,11 @@ class User(SQLModel, table=True):
     # 관리자 탈퇴로 지운 계정의 이메일 해시(서버 비밀과 섞음) — 같은 이메일로 다시 가입하지 못하게 막는다.
     # 주소 자체는 남기지 않는다. 자기 탈퇴(프로필)는 이 값을 채우지 않아 재가입이 가능하다.
     banned_email_hash: str = Field(default="", index=True)
+    # 탈퇴 시각(ISO). 없으면 탈퇴 수를 날짜별로 셀 수 없어 누적값이 '오늘'에 찍힌다(admin.py 가입 표).
+    deleted_at: str = ""
+    # 가입 방법 google | email — 가입 시점에 한 번 적는다. password_hash 유무로 추정하면 탈퇴(해시 삭제)·비밀번호
+    # 재설정(구글 계정에 해시 생김) 때 영구 재분류된다. 옛 행은 "" 이고 보고서가 살아 있는 행에 한해 추정한다.
+    signup_method: str = ""
 
 
 class UserAvatar(SQLModel, table=True):
@@ -946,6 +954,8 @@ def _migrate() -> None:
             "blocked_at": 'ALTER TABLE "user" ADD COLUMN blocked_at TEXT NOT NULL DEFAULT \'\'',
             "blocked_reason": 'ALTER TABLE "user" ADD COLUMN blocked_reason TEXT NOT NULL DEFAULT \'\'',
             "banned_email_hash": 'ALTER TABLE "user" ADD COLUMN banned_email_hash TEXT NOT NULL DEFAULT \'\'',
+            "deleted_at": 'ALTER TABLE "user" ADD COLUMN deleted_at TEXT NOT NULL DEFAULT \'\'',
+            "signup_method": 'ALTER TABLE "user" ADD COLUMN signup_method TEXT NOT NULL DEFAULT \'\'',
         },
         "chatmessage": {
             "user_id": "ALTER TABLE chatmessage ADD COLUMN user_id INTEGER",
@@ -1055,6 +1065,16 @@ def _migrate() -> None:
             "ON runsession (user_macro_id)"
         )
         conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_runsession_active_heartbeat ON runsession (status, last_heartbeat_at)")
+        # 같은 페이지뷰 비콘이 동시에 두 번 오면 SELECT-then-INSERT 가 둘 다 통과한다 — 유니크로 막고 admin.record_visit 이 중복을 삼킨다.
+        # 빈 값(이벤트 행·옛 행)은 많으므로 부분 인덱스. Postgres 는 마이그레이션 SQL(20260918052000)이 같은 인덱스를 만든다.
+        # 인덱스가 생기기 전에 경쟁으로 들어온 중복(view_key 같은 행 둘)이 있는 개발 DB 는 CREATE 가 실패한다 — 그래도
+        # 서버는 떠야 하므로 경고만 남기고 넘어간다(뷰가 두 배로 세는 것은 지표 문제이지 기동 실패 사유가 아니다).
+        conn.commit()  # 앞선 컬럼 추가는 확정해 둔다 — 아래 인덱스가 실패해도 되돌리지 않게.
+        try:
+            conn.exec_driver_sql("CREATE UNIQUE INDEX IF NOT EXISTS ux_visit_view_key ON visit (view_key) WHERE view_key <> ''")
+        except Exception as error:
+            logger.warning("ux_visit_view_key 인덱스를 만들지 못했다(view_key 중복 행이 있는가): %s", error)
+            conn.rollback()
         conn.exec_driver_sql(
             "CREATE INDEX IF NOT EXISTS ix_newstitletranslation_processing_status "
             "ON newstitletranslation (processing_status)"
@@ -1084,7 +1104,8 @@ _PG_ADDED_COLUMNS = {
     "user": {"bio": "TEXT NOT NULL DEFAULT ''", "auth_version": "INTEGER NOT NULL DEFAULT 0", "is_deleted": "BOOLEAN NOT NULL DEFAULT FALSE",
              "is_admin": "BOOLEAN NOT NULL DEFAULT FALSE", "is_blocked": "BOOLEAN NOT NULL DEFAULT FALSE",
              "blocked_at": "VARCHAR NOT NULL DEFAULT ''", "blocked_reason": "VARCHAR NOT NULL DEFAULT ''",
-             "banned_email_hash": "VARCHAR NOT NULL DEFAULT ''"},
+             "banned_email_hash": "VARCHAR NOT NULL DEFAULT ''", "deleted_at": "VARCHAR NOT NULL DEFAULT ''",
+             "signup_method": "VARCHAR NOT NULL DEFAULT ''"},
     "chatmessage": {"user_id": "INTEGER"},
     "dailychallenge": {
         "status": "TEXT DEFAULT 'ready'", "claim_token": "TEXT DEFAULT ''",

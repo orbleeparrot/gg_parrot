@@ -152,9 +152,12 @@ def test_costs_report_shape_and_totals(monkeypatch):
     current = monthly[-1]
     assert set(current["providers"]) >= {"gemini", "coindesk", "render", "supabase", "vercel", "prefect"}
     assert current["providers"]["gemini"] == 1.4 and current["providers"]["coindesk"] == 6.0
-    assert current["total_usd"] == 1.4 + 6.0 + 14 + 25
+    # 구독 고정비: 이번 달(9월, 17/30 경과)은 안분 — $14 → 7.93, $25 → 14.17. 시작 월(기본 지난달) 이전은 0.
+    assert (current["providers"]["render"], current["providers"]["supabase"]) == (7.93, 14.17)
+    assert current["total_usd"] == round(1.4 + 6.0 + 7.93 + 14.17, 2)
     assert monthly[-2]["providers"] == {"gemini": 1.4, "coindesk": 2.0, "render": 14.0, "supabase": 25.0, "vercel": 0.0, "prefect": 0.0}
-    assert monthly[0]["providers"]["gemini"] == 0.0 and monthly[0]["total_usd"] == 39.0
+    assert monthly[0]["providers"]["gemini"] == 0.0 and monthly[0]["total_usd"] == 0.0, "4월 구독비는 없던 비용"
+    assert [m["providers"]["render"] for m in monthly] == [0.0, 0.0, 0.0, 0.0, 14.0, 7.93]
 
     providers = report["providers"]
     assert [p["provider"] for p in providers] == ["gemini", "coindesk", "render", "supabase", "vercel", "prefect"]
@@ -165,11 +168,13 @@ def test_costs_report_shape_and_totals(monkeypatch):
     coindesk = providers[1]
     assert (coindesk["method"], coindesk["calls"], coindesk["month_usd"], coindesk["last_month_usd"]) == ("calls", 12, 6.0, 2.0)
     render = providers[2]
-    assert (render["label"], render["method"], render["month_usd"], render["plan"]) == ("Render (web + worker)", "fixed", 14.0, "Starter ×2")
+    assert (render["label"], render["method"], render["month_usd"], render["last_month_usd"], render["plan"]) == (
+        "Render (web + worker)", "fixed", 7.93, 14.0, "Starter ×2")
+    assert render["prorated"] is True and render["since"] == "2026-08"
 
     kpis = report["kpis"]
     assert kpis == {
-        "month_total_usd": round(1.4 + 6.0 + 39.0, 2), "last_month_total_usd": round(1.4 + 2.0 + 39.0, 2),
+        "month_total_usd": round(1.4 + 6.0 + 7.93 + 14.17, 2), "last_month_total_usd": round(1.4 + 2.0 + 39.0, 2),
         "gemini_month_usd": 1.4, "gemini_calls_month": 2, "gemini_failures_month": 1, "gemini_today_usd": 1.4,
     }
 
@@ -189,14 +194,39 @@ def test_costs_report_shape_and_totals(monkeypatch):
 
 
 def test_costs_report_fixed_costs_env_replaces_defaults_and_months_clamp(monkeypatch):
-    monkeypatch.setenv("ADMIN_FIXED_COSTS_JSON", json.dumps({"render": {"label": "R", "usd": 7, "plan": "x"}}))
+    monkeypatch.setenv("ADMIN_FIXED_COSTS_JSON", json.dumps({"render": {"label": "R", "usd": 30, "plan": "x"}}))
     with get_session() as db:
         report = api_usage.costs_report(db, months=2, now_ms=NOW_MS)
     assert [m["label"] for m in report["monthly"]] == ["8월", "9월*"]
-    assert report["monthly"][-1]["providers"] == {"gemini": 0.0, "coindesk": 0.0, "render": 7.0}
+    assert report["monthly"][-1]["providers"] == {"gemini": 0.0, "coindesk": 0.0, "render": 17.0}  # 30 × 17/30
     assert [p["provider"] for p in report["providers"]] == ["gemini", "coindesk", "render"]
     assert report["providers"][0]["label"] == "Gemini · gemini-3.5-flash-lite"  # 사용 기록이 없으면 기본 모델
-    assert report["kpis"]["month_total_usd"] == 7.0
+    assert report["kpis"]["month_total_usd"] == 17.0
+
+
+def test_fixed_costs_since_month_zeroes_earlier_months_and_prorates_the_current_one(monkeypatch):
+    """A4: since 가 있으면 그 전 달은 0, 이번 달은 경과일 안분, 지난 달은 전액. 잘못된 since 는 무시(기본 = 지난달)."""
+    monkeypatch.setenv("ADMIN_FIXED_COSTS_JSON", json.dumps({
+        "supabase": {"label": "S", "usd": 25, "since": "2026-06"},
+        "render": {"label": "R", "usd": 14, "since": "2026-09"},
+        "vercel": {"label": "V", "usd": 20, "since": "not-a-month"},
+    }))
+    assert api_usage.fixed_costs()["vercel"]["since"] == ""
+    with get_session() as db:
+        report = api_usage.costs_report(db, months=6, now_ms=NOW_MS)
+    by_month = {m["month"]: m["providers"] for m in report["monthly"]}
+    assert [by_month[m]["supabase"] for m in ("2026-04", "2026-05", "2026-06", "2026-07", "2026-08", "2026-09")] == [0.0, 0.0, 25.0, 25.0, 25.0, 14.17]
+    assert [by_month[m]["render"] for m in ("2026-07", "2026-08", "2026-09")] == [0.0, 0.0, 7.93]
+    assert [by_month[m]["vercel"] for m in ("2026-07", "2026-08", "2026-09")] == [0.0, 20.0, 11.33]
+    providers = {p["provider"]: p for p in report["providers"]}
+    assert (providers["render"]["month_usd"], providers["render"]["last_month_usd"], providers["render"]["since"]) == (7.93, 0.0, "2026-09")
+    assert (providers["supabase"]["month_usd"], providers["supabase"]["last_month_usd"]) == (14.17, 25.0)
+    assert report["kpis"]["last_month_total_usd"] == 45.0 and report["kpis"]["month_total_usd"] == round(14.17 + 7.93 + 11.33, 2)
+    # 함수 단위: 말일이면 전액, 1일이면 1/일수.
+    from datetime import date
+    assert api_usage.fixed_month_usd(31, "2026-10", today=date(2026, 10, 31), since="") == 31.0
+    assert api_usage.fixed_month_usd(31, "2026-10", today=date(2026, 10, 1), since="") == 1.0
+    assert api_usage.fixed_month_usd(31, "2026-09", today=date(2026, 10, 1), since="2026-10") == 0.0
 
 
 # --- 어댑터: create() 가 용도와 함께 기록한다 -----------------------------------

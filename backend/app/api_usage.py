@@ -11,6 +11,7 @@ Gemini 는 응답의 ``usage_metadata`` 토큰을 호출마다 ``ApiUsageDaily``
 """
 from __future__ import annotations
 
+import calendar
 import json
 import logging
 import os
@@ -55,6 +56,8 @@ PURPOSES: tuple[tuple[str, str, Optional[tuple[str, int]]], ...] = (
 NO_LIMIT_LABEL = "없음"
 
 # 구독형 고정액. 청구 API 가 없는 제공자는 요금제 금액을 설정값으로 둔다(ADMIN_FIXED_COSTS_JSON 이 통째로 대체).
+# 항목마다 선택 필드 ``since: "YYYY-MM"`` — 구독 시작 월. 그 전 달은 0 이다(없던 비용을 만들지 않는다).
+# 없으면 보고 시점의 '지난달'부터로 본다. 이번 달은 경과일로 안분한다(costs_report).
 DEFAULT_FIXED_COSTS = {
     "render": {"label": "Render (web + worker)", "usd": 14, "plan": "Starter ×2"},
     "supabase": {"label": "Supabase", "usd": 25, "plan": "Pro"},
@@ -64,6 +67,7 @@ DEFAULT_FIXED_COSTS = {
 
 _COINDESK_PREFIX = "coindesk_news:"
 _DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 
 _warn_lock = threading.Lock()
 _last_warn_monotonic: Optional[float] = None
@@ -134,13 +138,30 @@ def fixed_costs() -> dict[str, dict]:
             usd = max(0.0, float(entry.get("usd") or 0))
         except (TypeError, ValueError):
             usd = 0.0
+        since = str(entry.get("since") or "").strip()
         result[str(key)] = {
             "label": str(entry.get("label") or key),
             "usd": usd,
             "plan": str(entry.get("plan") or ""),
             "method": str(entry.get("method") or "fixed"),
+            "since": since if _MONTH_RE.match(since) else "",
         }
     return result
+
+
+def fixed_month_usd(usd: float, month: str, *, today: date, since: str) -> float:
+    """구독 고정액의 한 달 몫(USD, 2자리).
+
+    시작 월(``since``, "YYYY-MM") 이전은 0 — 4~8월에 $39 씩 넣어 없던 비용 $234 를 만든 적이 있다(2026-09-18 점검).
+    이번 달은 ``usd × 경과일 / 그 달 일수`` 로 안분한다(월 중순에 한 달치를 전부 보이지 않게). 지난 달들은 전액.
+    """
+    if since and month < since:
+        return 0.0
+    current = _month_key(today)
+    if month == current:
+        days_in_month = calendar.monthrange(today.year, today.month)[1]
+        return round(float(usd) * today.day / days_in_month, 2)
+    return round(float(usd), 2)
 
 
 def daily_limit_for(purpose: str):
@@ -339,6 +360,8 @@ def costs_report(db, *, months: int = MONTHS_DEFAULT, now_ms: Optional[int] = No
         coindesk_by_month[day[:7]] = coindesk_by_month.get(day[:7], 0) + used
 
     fixed = fixed_costs()
+    # 시작 월이 없는 구독은 지난달부터로 본다 — 기록이 없는 과거 달까지 소급해 채우지 않는다.
+    fixed_since = {name: entry["since"] or last_month for name, entry in fixed.items()}
 
     monthly = []
     for start in month_starts:
@@ -349,7 +372,7 @@ def costs_report(db, *, months: int = MONTHS_DEFAULT, now_ms: Optional[int] = No
             "coindesk": round(coindesk_by_month.get(key, 0) * coindesk_price, 2),
         }
         for name, entry in fixed.items():
-            providers[name] = round(entry["usd"], 2)
+            providers[name] = fixed_month_usd(entry["usd"], key, today=today, since=fixed_since[name])
         monthly.append({
             "month": key,
             "label": f"{start.month}월" + ("*" if key == current_month else ""),
@@ -399,9 +422,11 @@ def costs_report(db, *, months: int = MONTHS_DEFAULT, now_ms: Optional[int] = No
             "failures": None,
             "input_tokens": None,
             "output_tokens": None,
-            "month_usd": round(entry["usd"], 2),
-            "last_month_usd": round(entry["usd"], 2),
+            "month_usd": fixed_month_usd(entry["usd"], current_month, today=today, since=fixed_since[name]),
+            "last_month_usd": fixed_month_usd(entry["usd"], last_month, today=today, since=fixed_since[name]),
             "plan": entry["plan"],
+            "prorated": True,  # 화면 캡션용: 이번 달은 경과일 안분, 시작 월 이전은 0
+            "since": fixed_since[name],
         })
 
     purposes = []

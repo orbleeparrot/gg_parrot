@@ -63,6 +63,65 @@ export function polylinePoints(values, x, y) {
   return values.map((v, i) => `${x(i).toFixed(1)},${y(Number(v) || 0).toFixed(1)}`).join(" ");
 }
 
+function finiteOrNull(v) {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+// 선을 null 에서 끊는다 — 측정 시작일 이전 구간(서버가 null)을 0 으로 그리면 "그날 전환율 0%" 라는 가짜 결론이 된다.
+// 점 하나짜리 구간은 선이 안 보이므로 single 로 표시해 점으로 찍는다.
+export function polylineSegments(values, x, y) {
+  const segments = [];
+  let run = [];
+  (values || []).forEach((v, i) => {
+    const n = finiteOrNull(v);
+    if (n === null) {
+      if (run.length) segments.push(run);
+      run = [];
+      return;
+    }
+    run.push({ i, v: n });
+  });
+  if (run.length) segments.push(run);
+  return segments.map((pts) => ({
+    points: pts.map((p) => `${x(p.i).toFixed(1)},${y(p.v).toFixed(1)}`).join(" "),
+    single: pts.length === 1,
+    first: pts[0],
+    last: pts[pts.length - 1],
+  }));
+}
+
+// 마지막으로 값이 있는 index — 끝값 라벨은 여기 찍는다(오늘이 null 이면 어제 값이 끝값). 없으면 -1.
+export function lastFiniteIndex(values) {
+  for (let i = (values || []).length - 1; i >= 0; i -= 1) if (finiteOrNull(values[i]) !== null) return i;
+  return -1;
+}
+
+// 퍼널 행 — 막대 폭은 innerW 를 넘지 않고(8,640% 가 화면 밖으로 나가 숫자가 안 보이던 문제), 뒤 단계가 앞 단계보다
+// 크면 집합이 어긋난 자료라 비율은 null("—"). 서버가 pct_of_first/pct_of_prev 키를 준 행은 그 값을 그대로 쓴다
+// (null 이면 null — 서버가 "측정 불가"라고 한 것을 여기서 나눠 지어내지 않는다). 키가 없을 때만 count 로 계산.
+export function funnelRows(steps, innerW) {
+  const list = Array.isArray(steps) ? steps : [];
+  const first = Math.max(0, Number(list[0]?.count) || 0);
+  const width = Math.max(0, Number(innerW) || 0);
+  return list.map((s, i) => {
+    const count = Math.max(0, Number(s?.count) || 0);
+    const prev = i === 0 ? null : Math.max(0, Number(list[i - 1]?.count) || 0);
+    const overFirst = count > first;
+    const overPrev = prev !== null && count > prev;
+    const w = first > 0 ? Math.min(width, Math.max(4, (count / first) * width)) : 4;
+    const serverFirst = s && typeof s === "object" && "pct_of_first" in s;
+    const serverPrev = s && typeof s === "object" && "pct_of_prev" in s;
+    let pctFirst = serverFirst ? finiteOrNull(s.pct_of_first) : (first > 0 ? (count / first) * 100 : null);
+    let pctPrev = serverPrev ? finiteOrNull(s.pct_of_prev) : (prev > 0 ? (count / prev) * 100 : null);
+    if (i === 0) pctPrev = null;
+    if (overFirst) pctFirst = null;
+    if (overFirst || overPrev) pctPrev = null;
+    return { key: s?.key ?? String(i), label: s?.label || s?.key || `${i + 1}`, count, width: w, pctFirst, pctPrev };
+  });
+}
+
 // 포인터 x(px, viewBox 좌표) → 가장 가까운 점 index (선 차트) / 칸 index (막대 차트).
 export function nearestIndex(px, left, innerW, n) {
   if (!(n > 1) || !(innerW > 0)) return 0;

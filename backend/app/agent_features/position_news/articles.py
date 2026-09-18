@@ -145,16 +145,20 @@ def _insert(db):
 def upsert_articles(asset_symbol: str, items: list[dict], *, analysis: dict | None = None,
                     payload: dict | None = None, now_ms: int | None = None,
                     enrichment_only: bool = False,
-                    db: Session | None = None) -> int:
+                    db: Session | None = None, stats: dict | None = None) -> int:
     """Commit discovered/translated articles without waiting for sibling work.
 
     The feed lock serializes revisions. One batch upsert preserves stable IDs,
     completed translations and higher-quality analysis across source refreshes.
+
+    ``stats`` 를 넘기면 이번 저장으로 **새로 insert 된** 행 수를 ``stats["inserted"]`` 에 더한다 — 관리자 표의
+    '수집' 은 저장한 새 기사 수여야 하는데, 반환값(revision)이나 목록 길이로는 알 수 없다. Postgres 의
+    INSERT … ON CONFLICT rowcount 는 -1 이라 못 믿으므로, 저장 전에 읽은 기존 id(known)에 없던 키를 센다.
     """
     if db is None:
         with get_session() as owned:
             return upsert_articles(asset_symbol, items, analysis=analysis, payload=payload,
-                                   now_ms=now_ms, enrichment_only=enrichment_only, db=owned)
+                                   now_ms=now_ms, enrichment_only=enrichment_only, db=owned, stats=stats)
     scope = str(asset_symbol).strip().upper()
     if not scope:
         raise ValueError("news feed scope is required")
@@ -193,6 +197,7 @@ def upsert_articles(asset_symbol: str, items: list[dict], *, analysis: dict | No
     # 비어 있던 첫 수집은 세지 않는다 — 세션을 켠 직후 30건이 한꺼번에 울리지 않게.
     prior_ready = state.ready_count
     fresh_titles = []
+    inserted = 0
     for key, (item, assessment) in incoming.items():
         if key in skipped:
             continue
@@ -230,6 +235,7 @@ def upsert_articles(asset_symbol: str, items: list[dict], *, analysis: dict | No
             attempts, next_ms = old.enrichment_attempts, old.enrichment_next_ms
         state.revision += 1
         state.item_count += int(old is None)
+        inserted += int(old is None)
         state.ready_count += int(ready) - int(bool(old and old.ready))
         if ready and not (old and old.ready):
             fresh_titles.append(str(merged.get("title") or ""))
@@ -268,6 +274,10 @@ def upsert_articles(asset_symbol: str, items: list[dict], *, analysis: dict | No
     state.updated_ms = max(state.updated_ms, millis)
     revision = state.revision
     db.add(state)
+    # 카운터는 commit 전(피드 행 잠금 안)에 더한다 — commit 이 잠금을 풀고 나서 더하면 같은 stats 를 쓰는 다른 저장이
+    # 사이에 끼어들 수 있고, commit 이 실패한 저장의 행 수가 '수집' 에 더해질 수도 있다.
+    if stats is not None:
+        stats["inserted"] = int(stats.get("inserted") or 0) + inserted
     db.commit()
     # A worker and an HTTP reader may share a process. External workers are
     # observed through the short read TTL; local publications are visible now.

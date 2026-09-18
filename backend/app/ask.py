@@ -187,3 +187,58 @@ def build_templates(req: AskRequest) -> list[Candidate]:
                     if macro is not None:
                         out.append(Candidate(_label(rule_type, req, [sym]), macro, "template"))
     return out[:MAX_CANDIDATES]
+
+
+@dataclass
+class Evaluated:
+    candidate: Candidate
+    result: BacktestResult
+
+
+def evaluate(
+    candidates: list[Candidate],
+    run: Callable[[Macro], BacktestResult],
+    time_budget_sec: float,
+) -> list[Evaluated]:
+    """후보를 전부 백테스트한다. 실패한 후보는 건너뛰고, 시간 예산이 끝나면 남은 후보도 건너뛴다."""
+    started = time.monotonic()
+    out: list[Evaluated] = []
+    for cand in candidates:
+        if time.monotonic() - started > time_budget_sec:
+            break
+        try:
+            out.append(Evaluated(cand, run(cand.macro)))
+        except Exception:
+            continue
+    return out
+
+
+def score(profile: str, result: BacktestResult) -> float:
+    ret = float(result.final_return_pct)
+    mdd = float(result.mdd_pct)
+    if profile == "stable":
+        return ret / max(mdd, 1.0)
+    if profile == "balanced":
+        return ret - 0.5 * mdd
+    return ret
+
+
+def select_top(evaluated: list[Evaluated], profile: str, n: int = TOP_N) -> list[Evaluated]:
+    """MDD 상한·최소 거래 수로 거르고 성향 점수로 정렬해 상위 n개 — 같은 rule_type 은 하나만."""
+    cap = PROFILES[profile]["mdd_cap"]
+    pool = [
+        e for e in evaluated
+        if e.result.total_trades >= MIN_TRADES and (cap is None or float(e.result.mdd_pct) <= cap)
+    ]
+    pool.sort(key=lambda e: (score(profile, e.result), e.result.total_trades), reverse=True)
+    picked: list[Evaluated] = []
+    seen_types: set[str] = set()
+    for e in pool:
+        rt = e.candidate.macro.rule_type.value
+        if rt in seen_types:
+            continue
+        seen_types.add(rt)
+        picked.append(e)
+        if len(picked) >= n:
+            break
+    return picked

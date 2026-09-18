@@ -94,3 +94,51 @@ def test_templates_keep_portfolio_when_cap_is_hit():
     first_type = cands[0].macro.rule_type.value
     assert [c.macro.rule_type.value for c in cands[:4]] == [first_type] * 4
     assert cands[3].macro.symbols == ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+
+
+def _result(ret, mdd, trades=10, win=50.0):
+    return BacktestResult(
+        initial_capital=1.0, final_equity=1.0 + ret / 100, final_return_pct=ret, mdd_pct=mdd,
+        win_rate_pct=win, total_trades=trades, trades=[], equity_curve=[],
+    )
+
+
+def _cand(rule_type, symbol="BTCUSDT"):
+    req = ask.AskRequest(risk_profile="aggressive", symbols=[symbol])
+    preset = ask._PRESETS[rule_type][0]
+    return ask.Candidate(f"{rule_type} · 1h · {symbol}", ask._make_macro(req, rule_type, preset, [symbol]), "template")
+
+
+def test_evaluate_skips_failures_and_respects_time_budget(monkeypatch):
+    def run(macro):
+        if macro.rule_type.value == "F":
+            raise RuntimeError("no data")
+        return _result(5, 3)
+
+    out = ask.evaluate([_cand("A"), _cand("F"), _cand("J")], run, time_budget_sec=60)
+    assert [e.candidate.macro.rule_type.value for e in out] == ["A", "J"]
+
+    clock = iter([0.0, 0.0, 100.0, 100.0, 100.0])
+    monkeypatch.setattr(ask.time, "monotonic", lambda: next(clock))
+    out = ask.evaluate([_cand("A"), _cand("J"), _cand("E")], run, time_budget_sec=10)
+    assert len(out) == 1  # 예산이 끝나면 남은 후보는 건너뛴다
+
+
+def test_select_top_filters_scores_and_keeps_rule_types_distinct():
+    ev = [
+        ask.Evaluated(_cand("A"), _result(30, 25)),   # 균형형 MDD 상한(20) 초과 → 탈락
+        ask.Evaluated(_cand("J"), _result(12, 4)),
+        ask.Evaluated(_cand("J", "ETHUSDT"), _result(11, 3)),  # 같은 유형 두 번째 → 다양성으로 탈락
+        ask.Evaluated(_cand("G"), _result(8, 2)),
+        ask.Evaluated(_cand("E"), _result(9, 2, trades=2)),    # 거래 2회 → 탈락
+        ask.Evaluated(_cand("F"), _result(3, 1)),
+    ]
+    top = ask.select_top(ev, "balanced")
+    assert [e.candidate.macro.rule_type.value for e in top] == ["J", "G", "F"]
+
+    # 안정형은 수익률 ÷ MDD, 공격형은 수익률만 본다.
+    assert ask.score("stable", _result(10, 5)) == pytest.approx(2.0)
+    assert ask.score("stable", _result(10, 0.2)) == pytest.approx(10.0)  # MDD 는 1 아래로 나누지 않는다
+    assert ask.score("balanced", _result(10, 4)) == pytest.approx(8.0)
+    assert ask.score("aggressive", _result(10, 40)) == pytest.approx(10.0)
+    assert ask.select_top([], "stable") == []

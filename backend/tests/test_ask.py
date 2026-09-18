@@ -82,3 +82,15 @@ def test_templates_cover_every_symbol_first_and_add_a_portfolio():
     portfolios = [c for c in cands if c.macro.symbols]
     assert portfolios and portfolios[0].macro.symbols == ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
     assert all("추천" not in c.label for c in cands)
+
+
+def test_templates_keep_portfolio_when_cap_is_hit():
+    req = ask.AskRequest(risk_profile="aggressive", symbols=["BTCUSDT", "ETHUSDT", "SOLUSDT"])
+    cands = ask.build_templates(req)
+    assert len(cands) == ask.MAX_CANDIDATES
+    portfolios = [c for c in cands if c.macro.symbols]
+    assert portfolios, "상한에 걸려도 포트폴리오 후보는 남아야 한다"
+    # 유형마다 종목 3개 + 포트폴리오 1개가 붙어 있고, 뒤쪽(낮은 우선순위) 유형이 잘린다.
+    first_type = cands[0].macro.rule_type.value
+    assert [c.macro.rule_type.value for c in cands[:4]] == [first_type] * 4
+    assert cands[3].macro.symbols == ["BTCUSDT", "ETHUSDT", "SOLUSDT"]

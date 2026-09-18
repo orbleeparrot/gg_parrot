@@ -160,23 +160,30 @@ def _label(rule_type: str, req: AskRequest, symbols: list[str]) -> str:
 
 
 def build_templates(req: AskRequest) -> list[Candidate]:
-    """성향별 템플릿 후보. '각 유형의 첫 프리셋 × 모든 종목' 을 먼저 채우고, 두 번째 프리셋은 뒤에 붙인다."""
+    """성향별 템플릿 후보. 첫 프리셋은 유형별로 '종목 전부 + 포트폴리오'를 함께 묶어서 추가하고, 두 번째 프리셋은 종목별·유형별로 추가한다. 우선순위가 낮은 유형이 상한(MAX_CANDIDATES)에 잘린다."""
     out: list[Candidate] = []
     types = _allowed_types(req)
     depth = max(len(_PRESETS[t]) for t in types)
     for preset_idx in range(depth):
-        for sym in req.symbols:
+        if preset_idx == 0:
+            # 첫 프리셋: 유형별로 '모든 종목 + 포트폴리오' 함께 추가
             for rule_type in types:
-                presets = _PRESETS[rule_type]
-                if preset_idx >= len(presets):
-                    continue
-                macro = _make_macro(req, rule_type, presets[preset_idx], [sym])
-                if macro is not None:
-                    out.append(Candidate(_label(rule_type, req, [sym]), macro, "template"))
-        if preset_idx == 0 and len(req.symbols) > 1:
-            # 종목 2개 이상이면 자본을 나눠 함께 돌리는 포트폴리오 후보도 한 벌.
-            for rule_type in types:
-                macro = _make_macro(req, rule_type, _PRESETS[rule_type][0], req.symbols)
-                if macro is not None:
-                    out.append(Candidate(_label(rule_type, req, req.symbols), macro, "template"))
+                for sym in req.symbols:
+                    macro = _make_macro(req, rule_type, _PRESETS[rule_type][0], [sym])
+                    if macro is not None:
+                        out.append(Candidate(_label(rule_type, req, [sym]), macro, "template"))
+                if len(req.symbols) > 1:
+                    macro = _make_macro(req, rule_type, _PRESETS[rule_type][0], req.symbols)
+                    if macro is not None:
+                        out.append(Candidate(_label(rule_type, req, req.symbols), macro, "template"))
+        else:
+            # 두 번째 이상 프리셋: 종목별·유형별로 추가
+            for sym in req.symbols:
+                for rule_type in types:
+                    presets = _PRESETS[rule_type]
+                    if preset_idx >= len(presets):
+                        continue
+                    macro = _make_macro(req, rule_type, presets[preset_idx], [sym])
+                    if macro is not None:
+                        out.append(Candidate(_label(rule_type, req, [sym]), macro, "template"))
     return out[:MAX_CANDIDATES]

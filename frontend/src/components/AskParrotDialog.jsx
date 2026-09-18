@@ -3,12 +3,14 @@
 import { useEffect, useId, useReducer, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api } from "../api.js";
+import { useSymbolList } from "../hooks/useSymbolList.js";
 import {
-  CONSENT_TEXT, DISCLAIMER, FEW_RESULTS_TEXT, FOLLOW_UPS, INTERVALS, LEVERAGES, MARKETS, NO_RESULTS_TEXT,
+  CONSENT_TEXT, DISCLAIMER, FEW_RESULTS_TEXT, FOLLOW_UPS, INTERVALS, LEVERAGES, MARKETS, NO_QUOTA_TEXT, NO_RESULTS_TEXT,
   PERIODS, POPULAR_SYMBOLS, PROFILES, RUNNING_TEXT, STABLE_NO_FUTURES, STEP_PROMPTS,
 } from "../lib/askCopy.js";
 import { MAX_SYMBOLS, STEPS, answerLabel, canChooseFutures, initialState, reduce, toRequest } from "../lib/askFlow.js";
 import { RULE_TYPES } from "../lib/macro.js";
+import { resolveSymbol, searchSymbols } from "../lib/symbolSearch.js";
 import "./AskParrotDialog.css";
 
 const PCT = (v) => `${Number(v) >= 0 ? "+" : ""}${Number(v).toFixed(2)}%`;
@@ -41,9 +43,9 @@ function settingLines(macro) {
   return lines.slice(0, 3);
 }
 
-function Chips({ options, value, onPick }) {
+function Chips({ options, value, onPick, label }) {
   return (
-    <div className="ask-chips" role="group">
+    <div className="ask-chips" role="group" aria-label={label}>
       {options.map((opt) => (
         <button key={opt.value} type="button" className="ask-chip t-small" aria-pressed={value === opt.value} onClick={() => onPick(opt.value)}>
           {opt.label}{opt.hint ? <span className="ask-chip-hint">{opt.hint}</span> : null}
@@ -55,15 +57,27 @@ function Chips({ options, value, onPick }) {
 
 function SymbolsCard({ answers, dispatch }) {
   const [query, setQuery] = useState("");
-  const recent = readRecent().filter((s) => !POPULAR_SYMBOLS.includes(s));
-  const add = () => {
-    const sym = query.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
-    if (!sym) return;
-    dispatch({ type: "toggleSymbol", symbol: sym.endsWith("USDT") ? sym : `${sym}USDT` });
-    setQuery("");
-  };
-  const chips = [...recent, ...POPULAR_SYMBOLS, ...answers.symbols.filter((s) => !recent.includes(s) && !POPULAR_SYMBOLS.includes(s))];
+  const [note, setNote] = useState("");
+  const { items } = useSymbolList();
+  // 최근 칩은 실제 거래 가능한 종목 목록이 로드되면 그 안에 있는 것만 남긴다.
+  const recent = readRecent().filter((s) => !POPULAR_SYMBOLS.includes(s) && (!items || items.some((it) => it.symbol === s)));
+  const q = query.trim();
+  const matches = items && q ? searchSymbols(items, q, { limit: 8, exclude: answers.symbols }) : [];
   const full = answers.symbols.length >= MAX_SYMBOLS;
+
+  const pick = (symbol) => {
+    dispatch({ type: "toggleSymbol", symbol });
+    setQuery("");
+    setNote("");
+  };
+  const add = () => {
+    if (!q) return;
+    const resolved = items ? resolveSymbol(items, q) : null;
+    if (!resolved) { setNote("목록에 없는 종목이에요"); return; }
+    pick(resolved);
+  };
+
+  const chips = [...recent, ...POPULAR_SYMBOLS, ...answers.symbols.filter((s) => !recent.includes(s) && !POPULAR_SYMBOLS.includes(s))];
   return (
     <>
       <div className="ask-chips">
@@ -75,17 +89,27 @@ function SymbolsCard({ answers, dispatch }) {
       </div>
       <div className="ask-symbol-search">
         <input className="input" value={query} placeholder="종목 검색 (예: AVAX)" aria-label="종목 검색" disabled={full}
-          onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); add(); } }} />
+          onChange={(e) => { setQuery(e.target.value); setNote(""); }}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); add(); } }} />
         <button type="button" className="btn btn-s btn-secondary" onClick={add} disabled={full}>추가</button>
         <button type="button" className="btn btn-s btn-primary" disabled={answers.symbols.length === 0}
           onClick={() => dispatch({ type: "confirmSymbols" })}>이 종목으로</button>
       </div>
+      {matches.length > 0 ? (
+        <div className="ask-chips">
+          {matches.map((item) => (
+            <button key={item.symbol} type="button" className="ask-chip t-small" disabled={full}
+              onClick={() => pick(item.symbol)}>{item.symbol.replace(/USDT$/, "")}</button>
+          ))}
+        </div>
+      ) : null}
+      {note ? <p className="t-caption text-slate-500">{note}</p> : null}
     </>
   );
 }
 
 function StepCard({ step, answers, dispatch }) {
-  if (step === "profile") return <Chips options={PROFILES} value={answers.profile} onPick={(v) => dispatch({ type: "choose", step, value: v })} />;
+  if (step === "profile") return <Chips options={PROFILES} value={answers.profile} label={STEP_PROMPTS[step]} onPick={(v) => dispatch({ type: "choose", step, value: v })} />;
   if (step === "market") {
     const futuresOk = canChooseFutures(answers);
     return (
@@ -100,8 +124,8 @@ function StepCard({ step, answers, dispatch }) {
     );
   }
   if (step === "symbols") return <SymbolsCard answers={answers} dispatch={dispatch} />;
-  if (step === "period") return <Chips options={PERIODS} value={answers.period} onPick={(v) => dispatch({ type: "choose", step, value: v })} />;
-  if (step === "interval") return <Chips options={INTERVALS} value={answers.interval} onPick={(v) => dispatch({ type: "choose", step, value: v })} />;
+  if (step === "period") return <Chips options={PERIODS} value={answers.period} label={STEP_PROMPTS[step]} onPick={(v) => dispatch({ type: "choose", step, value: v })} />;
+  if (step === "interval") return <Chips options={INTERVALS} value={answers.interval} label={STEP_PROMPTS[step]} onPick={(v) => dispatch({ type: "choose", step, value: v })} />;
   return null;
 }
 
@@ -140,6 +164,8 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
   const [consentBusy, setConsentBusy] = useState(false);
   const titleId = useId();
   const threadRef = useRef(null);
+  // 서버에 요청이 나가 있는 동안(ready 는 요청을 보내는 순간부터 응답까지)은 취소할 수 없다.
+  const busy = state.phase === "ready" || state.phase === "loading";
 
   // 열 때 동의 상태·남은 횟수를 읽는다. 닫으면 상태를 버린다.
   useEffect(() => {
@@ -172,10 +198,11 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
   useEffect(() => { threadRef.current?.lastElementChild?.scrollIntoView?.({ block: "nearest" }); }, [state.step, state.phase]);
   useEffect(() => {
     if (!open) return undefined;
-    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    // 요청이 도는 중에는 Esc 로도 닫지 못한다(F5: 중간 취소 금지).
+    const onKey = (e) => { if (e.key === "Escape" && !busy) onClose(); };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  }, [open, onClose, busy]);
 
   if (!open) return null;
 
@@ -202,7 +229,7 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
           <h2 id={titleId} className="t-h4 text-slate-900">껄무새에게 물어볼까?</h2>
           <div className="flex items-center gap-3">
             {status && !status.error ? <span className="t-caption text-slate-500">오늘 {status.remaining_today}/{status.daily_limit}번 남음</span> : null}
-            <button type="button" onClick={onClose} className="btn btn-s btn-ghost text-xl leading-none" aria-label="닫기">×</button>
+            <button type="button" onClick={onClose} disabled={busy} className="btn btn-s btn-ghost text-xl leading-none" aria-label="닫기">×</button>
           </div>
         </div>
 
@@ -219,15 +246,19 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
               {answeredSteps.map((s) => (
                 <div key={s} className="contents">
                   <div className="ask-bubble ask-bubble-parrot t-small">{STEP_PROMPTS[s]}</div>
-                  <button type="button" className="ask-bubble ask-bubble-me t-small" title="다시 고르기" onClick={() => dispatch({ type: "back", step: s })}>{answerLabel(s, state.answers)}</button>
+                  <button type="button" className="ask-bubble ask-bubble-me t-small" title="다시 고르기" disabled={busy} onClick={() => dispatch({ type: "back", step: s })}>{answerLabel(s, state.answers)}</button>
                 </div>
               ))}
 
               {state.phase === "cards" ? (
-                <>
-                  <div className="ask-bubble ask-bubble-parrot t-small">{STEP_PROMPTS[state.step]}</div>
-                  <StepCard step={state.step} answers={state.answers} dispatch={dispatch} />
-                </>
+                noQuota && answeredSteps.length === 0 ? (
+                  <div className="ask-bubble ask-bubble-parrot t-small" role="status">{NO_QUOTA_TEXT}</div>
+                ) : (
+                  <>
+                    <div className="ask-bubble ask-bubble-parrot t-small">{STEP_PROMPTS[state.step]}</div>
+                    <StepCard step={state.step} answers={state.answers} dispatch={dispatch} />
+                  </>
+                )
               ) : null}
 
               {state.phase === "loading" || state.phase === "ready" ? <div className="ask-bubble ask-bubble-parrot t-small" role="status">{RUNNING_TEXT}</div> : null}
@@ -251,11 +282,19 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
                   ) : null}
                   <div className="ask-disclaimer" role="note">{DISCLAIMER}</div>
                   <div className="ask-followups">
-                    {FOLLOW_UPS.map((f) => (
-                      <button key={f.kind} type="button" className="btn btn-s btn-secondary"
-                        disabled={noQuota && f.kind !== "restart"} title={noQuota && f.kind !== "restart" ? "오늘 횟수를 다 썼어요" : undefined}
-                        onClick={() => dispatch({ type: "followUp", kind: f.kind })}>{f.label}</button>
-                    ))}
+                    {FOLLOW_UPS.map((f) => {
+                      const quotaBlocked = noQuota && f.kind !== "restart";
+                      // 안정형에서 "더 안정적으로", 공격형에서 "더 공격적으로"는 갈 곳이 없다.
+                      const edgeBlocked = (f.kind === "safer" && state.answers.profile === "stable")
+                        || (f.kind === "riskier" && state.answers.profile === "aggressive");
+                      const disabled = quotaBlocked || edgeBlocked;
+                      const title = quotaBlocked ? "오늘 횟수를 다 썼어요" : edgeBlocked ? "이미 그쪽 끝이에요" : undefined;
+                      return (
+                        <button key={f.kind} type="button" className="btn btn-s btn-secondary"
+                          disabled={disabled} title={title}
+                          onClick={() => dispatch({ type: "followUp", kind: f.kind })}>{f.label}</button>
+                      );
+                    })}
                   </div>
                 </>
               ) : null}

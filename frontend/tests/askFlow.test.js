@@ -83,7 +83,10 @@ test("safer from stable is a no-op, and stable clears futures", () => {
   s = reduce(s, { type: "results", results: [], remaining: 1 });
   const safer = reduce(s, { type: "followUp", kind: "safer" });
   assert.deepEqual([safer.answers.profile, safer.answers.market, safer.answers.leverage], ["stable", "spot", 1]);
-  assert.equal(reduce(safer, { type: "followUp", kind: "safer" }), safer);
+  // safer.phase 는 이미 "ready" 라 결과 phase 가 아니어도 followUp 이 no-op 으로 보인다 —
+  // 진짜로 확인하려면 결과 phase 로 옮긴 뒤에도 안정형에서 "safer" 가 no-op 인지 봐야 한다.
+  const saferResults = reduce(safer, { type: "results", results: [], remaining: 1 });
+  assert.equal(reduce(saferResults, { type: "followUp", kind: "safer" }), saferResults);
   assert.equal(reduce(s, { type: "error", message: "boom" }).phase, "error");
   assert.equal(reduce(s, { type: "loading" }).phase, "loading");
 });

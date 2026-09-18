@@ -45,6 +45,7 @@ export const FOLLOW_UPS = [
   { kind: "restart", label: "처음부터" },
 ];
 
+export const NO_QUOTA_TEXT = "오늘은 다 물어봤어요. 내일 다시 물어봐 주세요.";
 export const RUNNING_TEXT = "돌려 볼게요… 후보를 백테스트하는 중이에요";
 export const FEW_RESULTS_TEXT = "이 조건에선 후보가 적었어요 — 기간이나 빈도를 바꿔 보세요";
 export const NO_RESULTS_TEXT = "이 조건으론 살아남은 후보가 없었어요. 조건을 바꿔 다시 물어봐요.";

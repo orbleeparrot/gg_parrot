@@ -179,7 +179,7 @@ export const api = {
   // 껄무새에게 물어볼까? — 고지 동의 상태·남은 횟수 / 동의 / 상위 3개 조합
   askStatus: (options = {}) => req("/api/ask/status", options),
   askConsent: () => req("/api/ask/consent", { method: "POST" }),
-  askMacros: (body, options = {}) => req("/api/ask/macros", { method: "POST", body: JSON.stringify(body), timeoutMs: 45_000, ...options }),
+  askMacros: (body, options = {}) => req("/api/ask/macros", { method: "POST", body: JSON.stringify(body), timeoutMs: 60_000, ...options }),
   // 알림(헤더 종): 목록 · 안 읽은 수 · 읽음 처리
   myNotifications: ({ after, ...options } = {}) =>
     req(`/api/me/notifications${Number.isFinite(Number(after)) && after !== undefined ? `?after=${Number(after)}` : ""}`, { timeoutMs: 10_000, ...options }),

@@ -1,6 +1,8 @@
 /* 껄무새에게 물어볼까? — 말풍선 + 칩 카드 모달.
    색은 전부 index.css 의 --c-* 토큰(rgb 삼중값)만 쓴다 — .dark 에서 토큰이 뒤집히므로 여기에 다크 규칙을 따로 두지 않는다. */
 .ask-thread { display: flex; flex-direction: column; gap: 12px; }
+.ask-title { display: inline-flex; align-items: center; gap: 8px; }
+.ask-title-face { width: 28px; height: 28px; display: block; }
 
 /* 말풍선 — 껄무새는 면(slate-100) 위 제목색, 나는 브랜드 노랑 위 브랜드 잉크 */
 .ask-bubble { max-width: 88%; padding: 10px 14px; border-radius: 16px; line-height: 1.5; }

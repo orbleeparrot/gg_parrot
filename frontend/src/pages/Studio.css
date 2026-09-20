@@ -37,8 +37,38 @@
 }
 .studio-cond-upload:disabled { opacity: .5; cursor: not-allowed; }
 .studio-cond-upload:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
-/* 껄무새에게 물어볼까? — 업로드 버튼과 같은 꼴, 앞에 앵무새만 */
-.studio-cond-ask { margin-right: 6px; }
+/* 껄무새에게 물어볼까? — 조건 판 머리에서 눈에 띄는 브랜드 노랑 알약. 왼쪽에 '호기심' 표정 껄무새.
+   처음 열릴 때 껄무새가 세 번 갸웃해서 시선을 끈다(움직임 줄이기 설정에선 정지). */
+.studio-cond-ask {
+  flex: none; height: 30px; padding: 0 12px 0 4px; margin-right: 4px;
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 0; border-radius: 999px; cursor: pointer; white-space: nowrap; text-decoration: none;
+  background: rgb(var(--c-brand)); color: rgb(var(--c-brand-ink)); font-weight: 700;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .12), 0 0 0 0 rgba(252, 213, 53, .55);
+  transition: background-color .15s ease, box-shadow .15s ease, transform .15s ease;
+}
+.studio-cond-ask-face { width: 24px; height: 24px; display: block; transform-origin: 50% 80%; }
+@media (hover: hover) {
+  .studio-cond-ask:hover:not(:disabled) { background: rgb(var(--c-brand-hover)); transform: translateY(-1px); box-shadow: 0 3px 8px rgba(0, 0, 0, .16); }
+}
+.studio-cond-ask:disabled { opacity: .5; cursor: not-allowed; }
+.studio-cond-ask:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
+@media (pointer: coarse) { .studio-cond-ask { height: 40px; padding-right: 14px; } }
+@keyframes studio-ask-tilt {
+  0%, 60%, 100% { transform: rotate(0); }
+  70% { transform: rotate(-12deg); }
+  80% { transform: rotate(10deg); }
+  90% { transform: rotate(-6deg); }
+}
+@keyframes studio-ask-glow {
+  0%, 100% { box-shadow: 0 1px 2px rgba(0, 0, 0, .12), 0 0 0 0 rgba(252, 213, 53, .55); }
+  50% { box-shadow: 0 1px 2px rgba(0, 0, 0, .12), 0 0 0 6px rgba(252, 213, 53, 0); }
+}
+.studio-cond-ask-face { animation: studio-ask-tilt 2.4s ease-in-out 1s 3; }
+.studio-cond-ask { animation: studio-ask-glow 2.4s ease-in-out 1s 3; }
+@media (prefers-reduced-motion: reduce) { .studio-cond-ask, .studio-cond-ask-face { animation: none; } }
+/* 좁은 폭에선 글자를 숨기고 껄무새만 남긴다 — 알약은 그대로. */
+@media (max-width: 420px) { .studio-cond-ask > span { display: none; } .studio-cond-ask { padding: 0 6px 0 4px; } }
 .studio-scroll { overflow: auto; min-height: 0; overscroll-behavior: contain; }
 
 /* 조건 — Builder 를 그대로 쓰되 좁은 열에 맞춰 2열로 접는다. 스크롤은 이 판 안에서만. */

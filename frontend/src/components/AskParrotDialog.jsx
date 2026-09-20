@@ -15,6 +15,8 @@ import { RULE_TYPES } from "../lib/macro.js";
 import { resolveSymbol, searchSymbols } from "../lib/symbolSearch.js";
 import "./AskParrotDialog.css";
 
+// 제목·버튼에 쓰는 껄무새 — 에이전트 표정 중 '호기심'(brand/README.md).
+const ASK_MASCOT = "/brand/agent/ggparrot-agent-curious-v1.svg";
 const PCT = (v) => `${Number(v) >= 0 ? "+" : ""}${Number(v).toFixed(2)}%`;
 const RECENT_KEY = "ggparrot.ask.recentSymbols";
 
@@ -233,7 +235,10 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
     <div className="scrim fixed inset-x-0 bottom-0 top-16 z-[80] flex items-start justify-center p-2 sm:p-4 overflow-y-auto">
       <div role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} className="dialog w-full max-w-2xl my-4 sm:my-8">
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 sticky top-0 bg-surface rounded-t-[20px] z-10">
-          <h2 id={titleId} className="t-h4 text-slate-900">껄무새에게 물어볼까?</h2>
+          <h2 id={titleId} className="t-h4 text-slate-900 ask-title">
+            <img src={ASK_MASCOT} alt="" width="100" height="100" className="ask-title-face" aria-hidden="true" />
+            껄무새에게 물어볼까?
+          </h2>
           <div className="flex items-center gap-3">
             {status && !status.error ? <span className="t-caption text-slate-500">오늘 {status.remaining_today}/{status.daily_limit}번 남음</span> : null}
             <button type="button" onClick={onClose} disabled={busy} className="btn btn-s btn-ghost text-xl leading-none" aria-label="닫기">×</button>

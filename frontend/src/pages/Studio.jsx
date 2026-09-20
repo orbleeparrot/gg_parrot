@@ -12,6 +12,8 @@ import RegisterMacroModal from "../components/RegisterMacroModal.jsx";
 import AskParrotDialog from "../components/AskParrotDialog.jsx";
 import ConfirmDialog from "../components/ConfirmDialog.jsx";
 import { LOADED_TEXT } from "../lib/askCopy.js";
+// 물어볼까? 버튼의 껄무새 — 에이전트 표정 중 '호기심'(brand/README.md).
+const ASK_MASCOT = "/brand/agent/ggparrot-agent-curious-v1.svg";
 import { EmptyState, Loading } from "../components/Page.jsx";
 import { api } from "../api.js";
 import { useAuth, useAccountGuard, getAuthScope } from "../lib/auth.js";
@@ -823,11 +825,15 @@ function AccountStudio({ scope, allowRouterMacro }) {
             <div className="studio-head-right">
               {/* 껄무새에게 물어볼까? — 카드 다섯 장으로 후보 조합 3개. 로그인 전엔 로그인으로(기록을 남겨야 해서). */}
               {!slug && (token ? (
-                <button type="button" className="studio-cond-upload studio-cond-ask t-caption" onClick={() => { setAskOpen(true); recordEvent("ask_open"); }} disabled={busy} aria-haspopup="dialog" aria-expanded={askOpen}>
-                  <span aria-hidden="true">🦜</span><span>껄무새에게 물어볼까?</span>
+                <button type="button" className="studio-cond-ask t-small" onClick={() => { setAskOpen(true); recordEvent("ask_open"); }} disabled={busy} aria-haspopup="dialog" aria-expanded={askOpen}>
+                  <img src={ASK_MASCOT} alt="" width="100" height="100" className="studio-cond-ask-face" aria-hidden="true" />
+                  <span>껄무새에게 물어볼까?</span>
                 </button>
               ) : (
-                <Link to="/login?next=%2Fbuilder%3Fask%3D1" className="studio-cond-upload studio-cond-ask t-caption" title="물어보려면 로그인이 필요해요"><span aria-hidden="true">🦜</span><span>껄무새에게 물어볼까?</span></Link>
+                <Link to="/login?next=%2Fbuilder%3Fask%3D1" className="studio-cond-ask t-small" title="물어보려면 로그인이 필요해요">
+                  <img src={ASK_MASCOT} alt="" width="100" height="100" className="studio-cond-ask-face" aria-hidden="true" />
+                  <span>껄무새에게 물어볼까?</span>
+                </Link>
               ))}
               {/* 매크로 파일 등록 — 가지고 있는 .ggm.json 을 내 매크로에 등록하고 조건에 불러온다. 로그인 전엔 로그인으로. */}
               {!slug && (token ? (

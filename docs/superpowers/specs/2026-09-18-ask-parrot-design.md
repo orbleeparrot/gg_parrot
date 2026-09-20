@@ -148,3 +148,49 @@ AI 는 조합의 뼈대만 제안하고, 성과 숫자는 전부 기존 백테�
 ## 8. 확정한 결정
 
 ① 무료 + 하루 5회 ② 로그인 필수 ③ 진입점은 직접 만들기(Studio)만 ④ 종목 최대 3개 ⑤ 결과 3개는 규칙 유형이 서로 다르게
+
+## 9. 단타형 (v1.1, 2026-09-21)
+
+공격형 위에 네 번째 성향 **단타형(`scalper`)** 을 둔다. 고르면 뒤 카드의 기간·봉 선택지가 짧은 쪽으로 바뀐다. 기존 세 성향의 카드·후보·점수는 바뀌지 않는다.
+
+### 9.1 제약이 정한 짝
+- 백테스트 봉 상한 `MAX_BACKTEST_BARS`(기본 20,000)를 넘지 않게 봉 × 기간을 고정한다: **1분 봉은 최근 1주만**, 5분·15분 봉은 최근 1주 또는 1개월. (`PERIOD_PRESET_DAYS` 에 있는 `1w`·`1m` 만 쓰고 새 프리셋은 만들지 않는다.)
+- 종목은 **최대 2개** (1분 봉 1주치 = 종목당 10,080봉을 새로 받아야 하므로 시간 예산 20초를 지키기 위해).
+- 수수료·슬리피지(기본 0.1%/편도 + 0.05%)는 그대로 둔다. 짧은 봉에서 결과가 대부분 마이너스로 나오는 것은 숨기지 않고 보여 준다 — 그것이 이 도구의 교육적 가치이며 "권유"와 더 멀어지는 길이다.
+
+### 9.2 카드
+| 카드 | 안정·균형·공격 | 단타형 |
+|---|---|---|
+| 1 성향 | 안정형 / 균형형 / 공격형 | + **단타형** (힌트 "짧은 봉, 빠르게 · 제한 없음") |
+| 2 시장 | 현물 / 선물 1~3x | 동일 |
+| 3 종목 | 최대 3개 | **최대 2개** (말풍선 "(최대 2개)") |
+| 4 기간 | 3개월 / 6개월 / 1년 | **최근 1주 / 최근 1개월** |
+| 5 빈도 | 자주 1h / 보통 4h / 느긋하게 1d | **초단타 1분 / 단타 5분 / 빠르게 15분** — 기간이 1개월이면 1분 칩 비활성 + "1분 봉은 최근 1주까지만 살펴봐요" |
+
+- 후속 버튼 "더 공격적으로"는 공격형 → 단타형으로 한 칸 더 간다. 성향이 단타형 ↔ 그 외로 바뀌면 기간·봉 답은 지우고(선택지가 달라서), 종목이 새 상한을 넘으면 종목 답도 지운다 → 결과가 아니라 해당 카드로 돌아간다.
+- 단타형 결과 화면에는 고정 고지 아래 한 줄을 더 보인다: **"짧은 봉은 수수료·슬리피지 영향이 커요 · 실행기보다 페이퍼 트레이딩으로 먼저 확인해요"**. 모든 결과 카드의 지표 밑에 "수수료 {commission}% · 슬리피지 {slippage}% 포함"(매크로의 `fees`)을 작게 표시한다.
+
+### 9.3 백엔드
+- `PROFILES["scalper"] = {label:"단타형", mdd_cap:None, rule_types:("A","E","F","G","J"), futures:True, short:True, max_symbols:2, min_trades:10}`. 기존 세 성향은 `short:False, max_symbols:3, min_trades:3` 을 명시한다. I(변동성 돌파)는 일봉 논리, C·H 는 짧은 봉에 의미가 없어 뺀다.
+- 단타형 전용 프리셋 `_SCALPER_PRESETS` (짧은 봉에 맞춘 값):
+  - A: tp 1.0 / sl 0.7 · tp 1.5 / sl 1.0
+  - E: activation 1.5 / trail 0.8 · dip 1.0 → activation 1.2 / trail 0.6
+  - F: rsi 7, 25/75 · rsi 14, 30/70, exit both, tp 1.5
+  - G: bb 20 · 2.0σ mid · bb 20 · 2.5σ opposite
+  - J: EMA 5/13 · EMA 9/21
+  `_presets_for(req)` 가 성향에 따라 `_SCALPER_PRESETS` 또는 `_PRESETS` 를 돌려주고 `build_templates` 는 그것을 쓴다.
+- `AskRequest`: `interval` 에 `1m|5m|15m`, `period_preset` 에 `1w|1m` 을 더하되 검증으로 묶는다 — 단타형이 아니면 interval ∈ {1h,4h,1d}, period ∈ {3m,6m,1y}; 단타형이면 interval ∈ {1m,5m,15m}, period ∈ {1w,1m}, `interval == "1m"` 이면 `period == "1w"`, 종목 ≤ `max_symbols`. 위반은 422(한국어 메시지).
+- `select_top` 의 최소 거래 수는 `PROFILES[profile]["min_trades"]`. 점수는 단타형도 수익률만(공격형과 같다).
+- 응답·기록 형식은 그대로. `remaining_today`·한도·동의도 그대로.
+
+### 9.4 프론트
+- `askCopy.js`: `PROFILES` 에 scalper, `SHORT_PERIODS`, `SHORT_INTERVALS`, `ONE_MINUTE_NEEDS_WEEK` 힌트, `SCALPER_NOTE`, `FEES_NOTE(commission, slippage)`; `STEP_PROMPTS.symbols` 는 상한을 받는 함수 `symbolsPrompt(max)` 로.
+- `askFlow.js`: `isShort(profile)`, `maxSymbols(profile)`, `periodOptions(profile)`, `intervalOptions(profile, period)` (각 옵션에 `disabled`·`hint`), `PROFILE_ORDER` 끝에 `scalper`. 리듀서는 period/interval 을 성향별 목록으로 검증하고 비활성 옵션을 거부한다. `toggleSymbol` 은 `maxSymbols(profile)` 로 막는다. followUp safer/riskier 는 §9.2 규칙대로 답을 지운다.
+- `AskParrotDialog.jsx`: `Chips` 가 옵션별 `disabled`·`title` 을 지원; period/interval 카드가 성향별 옵션을 쓴다; 종목 카드 상한·말풍선이 성향을 따른다; 결과에 `FEES_NOTE`, 단타형이면 `SCALPER_NOTE`.
+
+### 9.5 테스트
+- 백엔드: 단타형 후보에 C·H·I 없음과 프리셋 값(A tp 1.0); 단타형이 아닌데 `5m`/`1w` → 422; 단타형에 `1h`/`3m` → 422; `1m`+`1m` → 422; 단타형 종목 3개 → 422; `select_top` 이 단타형에서 거래 9회 후보를 거른다; `1m`+`1w` 단타형 요청이 200.
+- 프론트: 단타형 기간/봉 옵션·1분 비활성 규칙; 종목 상한 2; 공격형 → 단타형 followUp 이 기간·봉을 지우고 기간 카드로 감; 단타형 → 공격형도 같음; `toRequest` 가 `5m`/`1w` 를 그대로 보냄.
+
+### 9.6 v1.1 제외
+실행기 바로 실행 · 2주 프리셋 · 단타형 전용 점수식 · 관리자 집계

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { STEPS, initialState, reduce, toRequest, canChooseFutures, answerLabel } from "../src/lib/askFlow.js";
+import { STEPS, initialState, reduce, toRequest, canChooseFutures, answerLabel, periodOptions, intervalOptions, maxSymbols, isShort } from "../src/lib/askFlow.js";
 
 const walk = (...actions) => actions.reduce(reduce, initialState());
 
@@ -98,4 +98,70 @@ test("follow-ups other than restart are ignored outside the results phase", () =
   assert.equal(reduce(mid, { type: "followUp", kind: "riskier" }), mid);
   const errored = reduce(mid, { type: "error", message: "boom" });
   assert.deepEqual(reduce(errored, { type: "followUp", kind: "restart" }), initialState());
+});
+
+test("scalper unlocks short periods and intervals, and 1m needs 1w", () => {
+  assert.deepEqual(periodOptions("aggressive").map((o) => o.value), ["3m", "6m", "1y"]);
+  assert.deepEqual(periodOptions("scalper").map((o) => o.value), ["1w", "1m"]);
+  assert.deepEqual(intervalOptions("balanced", "3m").map((o) => o.value), ["1h", "4h", "1d"]);
+  const week = intervalOptions("scalper", "1w");
+  assert.deepEqual(week.map((o) => [o.value, !!o.disabled]), [["1m", false], ["5m", false], ["15m", false]]);
+  const month = intervalOptions("scalper", "1m");
+  assert.deepEqual(month.map((o) => [o.value, !!o.disabled]), [["1m", true], ["5m", false], ["15m", false]]);
+  assert.match(month[0].title, /1주/);
+  assert.equal(isShort("scalper"), true);
+  assert.equal(maxSymbols("scalper"), 2);
+  assert.equal(maxSymbols("stable"), 3);
+});
+
+test("scalper flow validates against its own option lists", () => {
+  let s = walk({ type: "choose", step: "profile", value: "scalper" }, { type: "choose", step: "market", value: { market: "spot", leverage: 1 } });
+  for (const sym of ["BTCUSDT", "ETHUSDT", "SOLUSDT"]) s = reduce(s, { type: "toggleSymbol", symbol: sym });
+  assert.deepEqual(s.answers.symbols, ["BTCUSDT", "ETHUSDT"]);  // 단타형은 2개까지
+  s = reduce(s, { type: "confirmSymbols" });
+  assert.equal(reduce(s, { type: "choose", step: "period", value: "3m" }), s);  // 긴 기간 거부
+  s = reduce(s, { type: "choose", step: "period", value: "1m" });
+  assert.equal(reduce(s, { type: "choose", step: "interval", value: "1m" }), s);  // 1개월 + 1분 거부
+  assert.equal(reduce(s, { type: "choose", step: "interval", value: "1h" }), s);  // 긴 봉 거부
+  s = reduce(s, { type: "choose", step: "interval", value: "5m" });
+  assert.equal(s.phase, "ready");
+  assert.deepEqual(toRequest(s.answers), { risk_profile: "scalper", market: "spot", leverage: 1, symbols: ["BTCUSDT", "ETHUSDT"], period_preset: "1m", interval: "5m" });
+  // 기존 성향은 짧은 옵션을 거부
+  const slow = walk({ type: "choose", step: "profile", value: "balanced" }, { type: "choose", step: "market", value: { market: "spot", leverage: 1 } }, { type: "toggleSymbol", symbol: "BTCUSDT" }, { type: "confirmSymbols" });
+  assert.equal(reduce(slow, { type: "choose", step: "period", value: "1w" }), slow);
+});
+
+test("riskier from aggressive becomes scalper and clears period/interval (and oversized symbols)", () => {
+  let s = walk(
+    { type: "choose", step: "profile", value: "aggressive" }, { type: "choose", step: "market", value: { market: "futures", leverage: 2 } },
+    { type: "toggleSymbol", symbol: "BTCUSDT" }, { type: "toggleSymbol", symbol: "ETHUSDT" }, { type: "toggleSymbol", symbol: "SOLUSDT" }, { type: "confirmSymbols" },
+    { type: "choose", step: "period", value: "3m" }, { type: "choose", step: "interval", value: "1h" },
+  );
+  s = reduce(s, { type: "results", results: [], remaining: 3 });
+  const r = reduce(s, { type: "followUp", kind: "riskier" });
+  assert.equal(r.answers.profile, "scalper");
+  assert.equal(r.answers.market, "futures");  // 시장은 유지
+  assert.deepEqual(r.answers.symbols, []);     // 3개 > 2개 상한 → 비움
+  assert.equal(r.answers.period, null);
+  assert.equal(r.answers.interval, null);
+  assert.equal(r.step, "symbols");
+  assert.equal(r.phase, "cards");
+  assert.equal(reduce(r, { type: "followUp", kind: "riskier" }), r);  // results phase 아님 → no-op
+});
+
+test("safer from scalper becomes aggressive, keeps ≤2 symbols, clears period/interval", () => {
+  let s = walk(
+    { type: "choose", step: "profile", value: "scalper" }, { type: "choose", step: "market", value: { market: "spot", leverage: 1 } },
+    { type: "toggleSymbol", symbol: "BTCUSDT" }, { type: "confirmSymbols" },
+    { type: "choose", step: "period", value: "1w" }, { type: "choose", step: "interval", value: "1m" },
+  );
+  s = reduce(s, { type: "results", results: [], remaining: 3 });
+  const r = reduce(s, { type: "followUp", kind: "safer" });
+  assert.equal(r.answers.profile, "aggressive");
+  assert.deepEqual(r.answers.symbols, ["BTCUSDT"]);
+  assert.equal(r.answers.symbolsConfirmed, true);
+  assert.equal(r.answers.period, null);
+  assert.equal(r.step, "period");
+  assert.equal(r.phase, "cards");
+  assert.equal(answerLabel("interval", { ...s.answers }), "초단타 (1분 봉)");
 });

@@ -15,6 +15,7 @@ export const PROFILES = [
   { value: "stable", label: "안정형", hint: "-10%까지" },
   { value: "balanced", label: "균형형", hint: "-20%까지" },
   { value: "aggressive", label: "공격형", hint: "제한 없음" },
+  { value: "scalper", label: "단타형", hint: "짧은 봉, 빠르게 · 제한 없음" },
 ];
 
 export const MARKETS = [
@@ -44,6 +45,21 @@ export const FOLLOW_UPS = [
   { kind: "symbols", label: "다른 종목으로" },
   { kind: "restart", label: "처음부터" },
 ];
+
+// 단타형 — 백테스트 봉 상한(20,000)을 넘지 않는 짧은 짝만. 1분 봉은 최근 1주까지.
+export const SHORT_PERIODS = [
+  { value: "1w", label: "최근 1주" },
+  { value: "1m", label: "최근 1개월" },
+];
+export const SHORT_INTERVALS = [
+  { value: "1m", label: "초단타", hint: "1분 봉" },
+  { value: "5m", label: "단타", hint: "5분 봉" },
+  { value: "15m", label: "빠르게", hint: "15분 봉" },
+];
+export const ONE_MINUTE_NEEDS_WEEK = "1분 봉은 최근 1주까지만 살펴봐요";
+export const SCALPER_NOTE = "짧은 봉은 수수료·슬리피지 영향이 커요 · 실행기보다 페이퍼 트레이딩으로 먼저 확인해요";
+export const feesNote = (commission, slippage) => `수수료 ${commission}% · 슬리피지 ${slippage}% 포함`;
+export const symbolsPrompt = (max) => `어떤 종목이 궁금해요? (최대 ${max}개)`;
 
 export const NO_QUOTA_TEXT = "오늘은 다 물어봤어요. 내일 다시 물어봐 주세요.";
 export const RUNNING_TEXT = "돌려 볼게요… 후보를 백테스트하는 중이에요";

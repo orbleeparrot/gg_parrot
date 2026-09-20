@@ -1,10 +1,19 @@
 // 껄무새에게 물어볼까? — 카드 상태 머신(순수 리듀서). UI 는 이 상태만 그린다.
-// 규칙: 안정형은 선물을 못 고른다 · 종목 최대 3개 · 뒤로 가면 그 뒤 답은 지운다 · 자유 입력 없음.
-import { INTERVALS, LEVERAGES, MARKETS, PERIODS, PROFILES } from "./askCopy.js";
+// 규칙: 안정형은 선물을 못 고른다 · 종목 최대 3개(단타형은 2개) · 뒤로 가면 그 뒤 답은 지운다 · 자유 입력 없음.
+import { INTERVALS, LEVERAGES, MARKETS, ONE_MINUTE_NEEDS_WEEK, PERIODS, PROFILES, SHORT_INTERVALS, SHORT_PERIODS } from "./askCopy.js";
 
 export const STEPS = ["profile", "market", "symbols", "period", "interval"];
-export const MAX_SYMBOLS = 3;
-const PROFILE_ORDER = ["stable", "balanced", "aggressive"];
+export const PROFILE_ORDER = ["stable", "balanced", "aggressive", "scalper"];
+export const MAX_SYMBOLS = 3;  // 긴 성향 기본값 — 실제 상한은 maxSymbols(profile)
+
+export function isShort(profile) { return profile === "scalper"; }
+export function maxSymbols(profile) { return isShort(profile) ? 2 : MAX_SYMBOLS; }
+export function periodOptions(profile) { return isShort(profile) ? SHORT_PERIODS : PERIODS; }
+// 1분 봉은 최근 1주까지만 — 기간이 1개월이면 1분 칩을 비활성으로 돌려준다.
+export function intervalOptions(profile, period) {
+  if (!isShort(profile)) return INTERVALS;
+  return SHORT_INTERVALS.map((o) => (o.value === "1m" && period === "1m" ? { ...o, disabled: true, title: ONE_MINUTE_NEEDS_WEEK } : o));
+}
 
 function emptyAnswers() {
   return { profile: null, market: null, leverage: 1, symbols: [], period: null, interval: null };
@@ -63,11 +72,12 @@ export function reduce(state, action) {
         return settle(state, { ...clearFrom(answers, "market"), market, leverage });
       }
       if (step === "period") {
-        if (!PERIODS.some((p) => p.value === value)) return state;
+        if (!periodOptions(answers.profile).some((p) => p.value === value)) return state;
         return settle(state, { ...clearFrom(answers, "period"), period: value });
       }
       if (step === "interval") {
-        if (!INTERVALS.some((i) => i.value === value)) return state;
+        const opt = intervalOptions(answers.profile, answers.period).find((i) => i.value === value);
+        if (!opt || opt.disabled) return state;
         return settle(state, { ...answers, interval: value });
       }
       return state;
@@ -76,7 +86,7 @@ export function reduce(state, action) {
       const symbol = String(action.symbol || "").trim().toUpperCase();
       if (!symbol) return state;
       const has = answers.symbols.includes(symbol);
-      if (!has && answers.symbols.length >= MAX_SYMBOLS) return state;
+      if (!has && answers.symbols.length >= maxSymbols(answers.profile)) return state;
       const symbols = has ? answers.symbols.filter((s) => s !== symbol) : [...answers.symbols, symbol];
       const next = { ...answers, symbols };
       delete next.symbolsConfirmed;
@@ -114,6 +124,9 @@ export function reduce(state, action) {
         const profile = PROFILE_ORDER[nextIdx];
         const next = { ...answers, profile };
         if (profile === "stable" && next.market === "futures") { next.market = "spot"; next.leverage = 1; }
+        // 단타형 ↔ 그 외는 기간·봉 선택지가 달라 답을 지운다. 종목이 새 상한을 넘으면 종목도 지운다.
+        if (isShort(profile) !== isShort(answers.profile)) { next.period = null; next.interval = null; }
+        if (next.symbols.length > maxSymbols(profile)) { next.symbols = []; delete next.symbolsConfirmed; }
         return { ...settle(state, next), results: null };
       }
       return state;
@@ -142,9 +155,9 @@ export function answerLabel(step, answers) {
     return MARKETS.find((m) => m.value === answers.market)?.label ?? "";
   }
   if (step === "symbols") return answers.symbols.join(", ");
-  if (step === "period") return PERIODS.find((p) => p.value === answers.period)?.label ?? "";
+  if (step === "period") return [...PERIODS, ...SHORT_PERIODS].find((p) => p.value === answers.period)?.label ?? "";
   if (step === "interval") {
-    const found = INTERVALS.find((i) => i.value === answers.interval);
+    const found = [...INTERVALS, ...SHORT_INTERVALS].find((i) => i.value === answers.interval);
     return found ? `${found.label} (${found.hint})` : "";
   }
   return "";

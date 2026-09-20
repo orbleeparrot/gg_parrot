@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import secrets
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -10,6 +11,7 @@ from pydantic import ValidationError
 from sqlmodel import select
 
 from app import ask
+from app.data.binance import MAX_BACKTEST_BARS, PERIOD_PRESET_DAYS, _expected_bar_count
 from app.db import AskMacroSession, User, get_session
 from app.engine import BacktestResult
 from app.main import app
@@ -315,3 +317,111 @@ def test_failed_ask_does_not_consume_quota(_fake_backtest, monkeypatch):
     with get_session() as db:
         rows = db.exec(select(AskMacroSession).where(AskMacroSession.user_id == user_id)).all()
         assert rows == []
+
+
+def test_scalper_profile_candidates_use_short_presets_and_skip_slow_types():
+    req = ask.AskRequest(risk_profile="scalper", symbols=["BTCUSDT"], period_preset="1w", interval="5m")
+    cands = ask.build_templates(req)
+    types = {c.macro.rule_type.value for c in cands}
+    assert types == {"A", "E", "F", "G", "J"}
+    a_first = next(c for c in cands if c.macro.rule_type.value == "A")
+    assert a_first.macro.params["take_profit_pct"] == 1.0 and a_first.macro.risk.stop_loss_pct == 0.7
+    e_first = next(c for c in cands if c.macro.rule_type.value == "E")
+    assert e_first.macro.risk.stop_loss_pct == 0.7
+    j_first = next(c for c in cands if c.macro.rule_type.value == "J")
+    assert (j_first.macro.params["ma_type"], j_first.macro.params["fast_period"], j_first.macro.params["slow_period"]) == ("EMA", 5, 13)
+    assert all(c.macro.candle_interval == "5m" and c.macro.period.preset == "1w" for c in cands)
+    # 기존 성향은 그대로 긴 프리셋
+    slow = ask.build_templates(ask.AskRequest(risk_profile="aggressive", symbols=["BTCUSDT"]))
+    assert next(c for c in slow if c.macro.rule_type.value == "A").macro.params["take_profit_pct"] == 3
+
+
+def test_scalper_request_pairs_interval_and_period():
+    ok = ask.AskRequest(risk_profile="scalper", symbols=["BTCUSDT"], period_preset="1w", interval="1m")
+    assert (ok.interval, ok.period_preset) == ("1m", "1w")
+    ask.AskRequest(risk_profile="scalper", symbols=["BTCUSDT", "ETHUSDT"], period_preset="1m", interval="15m")
+    with pytest.raises(ValidationError, match="1분 봉"):
+        ask.AskRequest(risk_profile="scalper", symbols=["BTCUSDT"], period_preset="1m", interval="1m")
+    with pytest.raises(ValidationError):
+        ask.AskRequest(risk_profile="scalper", symbols=["BTCUSDT"], period_preset="3m", interval="5m")
+    with pytest.raises(ValidationError):
+        ask.AskRequest(risk_profile="scalper", symbols=["BTCUSDT"], period_preset="1w", interval="1h")
+    with pytest.raises(ValidationError, match="2개"):
+        ask.AskRequest(risk_profile="scalper", symbols=["BTCUSDT", "ETHUSDT", "SOLUSDT"], period_preset="1w", interval="5m")
+
+
+def test_non_scalper_request_rejects_short_options():
+    with pytest.raises(ValidationError):
+        ask.AskRequest(risk_profile="aggressive", symbols=["BTCUSDT"], period_preset="1w", interval="1h")
+    with pytest.raises(ValidationError):
+        ask.AskRequest(risk_profile="balanced", symbols=["BTCUSDT"], period_preset="3m", interval="5m")
+    # 기본값은 그대로 유효
+    assert ask.AskRequest(risk_profile="stable", symbols=["BTCUSDT"]).interval == "1h"
+
+
+def test_select_top_uses_profile_min_trades():
+    def cand(rule_type):
+        req = ask.AskRequest(risk_profile="scalper", symbols=["BTCUSDT"], period_preset="1w", interval="5m")
+        return ask.Candidate(f"{rule_type}", ask._make_macro(req, rule_type, ask._SCALPER_PRESETS[rule_type][0], ["BTCUSDT"]), "template")
+    ev = [ask.Evaluated(cand("A"), _result(5, 2, trades=9)), ask.Evaluated(cand("J"), _result(3, 2, trades=10))]
+    assert [e.candidate.macro.rule_type.value for e in ask.select_top(ev, "scalper")] == ["J"]
+    assert [e.candidate.macro.rule_type.value for e in ask.select_top(ev, "aggressive")] == ["A", "J"]
+
+
+def test_scalper_ask_end_to_end(_fake_backtest):
+    token, _ = _signup()
+    client.post("/api/ask/consent", headers=_auth(token))
+    body = {"risk_profile": "scalper", "market": "spot", "leverage": 1, "symbols": ["BTCUSDT"], "period_preset": "1w", "interval": "1m"}
+    res = client.post("/api/ask/macros", json=body, headers=_auth(token))
+    assert res.status_code == 200, res.text
+    data = res.json()
+    # _RETURNS: 거래 수 A 8·J 6·G 5·F 2·E 4 → 전부 10 미만이라 단타형 최소 거래 수에 걸려 결과 없음
+    assert data["results"] == [] and data["candidate_count"] > 0
+    assert all(r["macro"]["candle_interval"] == "1m" for r in data["results"])
+    bad = dict(body, period_preset="1m")
+    assert client.post("/api/ask/macros", json=bad, headers=_auth(token)).status_code == 422
+
+
+def test_scalper_ask_returns_short_macros_when_trades_suffice(_fake_backtest, monkeypatch):
+    def fake_run_any(macro):
+        return _result(4, 2, trades=12), [], "test", macro.period.preset
+
+    monkeypatch.setattr("app.main._run_any", fake_run_any)
+    token, _ = _signup()
+    client.post("/api/ask/consent", headers=_auth(token))
+    body = {"risk_profile": "scalper", "market": "spot", "leverage": 1,
+            "symbols": ["BTCUSDT"], "period_preset": "1w", "interval": "1m"}
+    res = client.post("/api/ask/macros", json=body, headers=_auth(token))
+    assert res.status_code == 200, res.text
+    data = res.json()
+    results = data["results"]
+    assert len(results) == 3
+    rule_types = [r["rule_type"] for r in results]
+    assert len(set(rule_types)) == len(rule_types)
+    assert set(rule_types) <= {"A", "E", "F", "G", "J"}
+    for r in results:
+        macro = r["macro"]
+        assert macro["candle_interval"] == "1m"
+        assert macro["period"]["preset"] == "1w"
+        assert "fees" in macro and macro["fees"].get("commission_pct") is not None
+    assert data["remaining_today"] == 4
+
+
+def test_every_reachable_pair_fits_backtest_bar_cap():
+    # ask.py 의 봉×기간 짝 검증 규칙은 오직 이 상한(MAX_BACKTEST_BARS)을 넘기지 않기 위해 존재한다.
+    now_ms = int(time.time() * 1000)
+    for profile, cfg in ask.PROFILES.items():
+        short = cfg["short"]
+        intervals = ask.SHORT_INTERVALS if short else ask.LONG_INTERVALS
+        periods = ask.SHORT_PERIODS if short else ask.LONG_PERIODS
+        for interval in intervals:
+            for period in periods:
+                try:
+                    ask.AskRequest(risk_profile=profile, symbols=["BTCUSDT"],
+                                    period_preset=period, interval=interval)
+                except ValidationError:
+                    continue
+                days = PERIOD_PRESET_DAYS[period]
+                start_ms = now_ms - days * 86_400_000
+                bars = _expected_bar_count(interval, start_ms, now_ms)
+                assert bars <= MAX_BACKTEST_BARS

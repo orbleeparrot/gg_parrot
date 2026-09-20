@@ -36,14 +36,26 @@ TOP_N = 3
 MIN_TRADES = 3
 CAPITAL = 1_000_000
 
-RiskProfile = Literal["stable", "balanced", "aggressive"]
+RiskProfile = Literal["stable", "balanced", "aggressive", "scalper"]
 
-# 성향별 규칙 — 후보에 넣는 유형, MDD 상한, 선물 허용 여부. 순서는 템플릿 우선순위.
+# 성향별 규칙 — 후보에 넣는 유형, MDD 상한, 선물 허용, 짧은 봉 여부(short), 종목 상한, 최소 거래 수.
+# 순서는 템플릿 우선순위. 단타형은 짧은 봉 전용이라 I(일봉 논리)·C·H(짧은 봉에 의미 없음)를 뺀다.
 PROFILES: dict[str, dict] = {
-    "stable": {"label": "안정형", "mdd_cap": 10.0, "rule_types": ("C", "J", "G", "A"), "futures": False},
-    "balanced": {"label": "균형형", "mdd_cap": 20.0, "rule_types": ("C", "J", "G", "A", "F", "E"), "futures": True},
-    "aggressive": {"label": "공격형", "mdd_cap": None, "rule_types": ("C", "J", "G", "A", "F", "E", "I", "H"), "futures": True},
+    "stable": {"label": "안정형", "mdd_cap": 10.0, "rule_types": ("C", "J", "G", "A"), "futures": False,
+               "short": False, "max_symbols": 3, "min_trades": 3},
+    "balanced": {"label": "균형형", "mdd_cap": 20.0, "rule_types": ("C", "J", "G", "A", "F", "E"), "futures": True,
+                 "short": False, "max_symbols": 3, "min_trades": 3},
+    "aggressive": {"label": "공격형", "mdd_cap": None, "rule_types": ("C", "J", "G", "A", "F", "E", "I", "H"), "futures": True,
+                   "short": False, "max_symbols": 3, "min_trades": 3},
+    "scalper": {"label": "단타형", "mdd_cap": None, "rule_types": ("A", "E", "F", "G", "J"), "futures": True,
+                "short": True, "max_symbols": 2, "min_trades": 10},
 }
+
+# 봉 × 기간 짝 — 백테스트 봉 상한(MAX_BACKTEST_BARS=20,000)을 넘지 않는 조합만.
+LONG_INTERVALS = ("1h", "4h", "1d")
+LONG_PERIODS = ("3m", "6m", "1y")
+SHORT_INTERVALS = ("1m", "5m", "15m")
+SHORT_PERIODS = ("1w", "1m")
 
 RULE_LABELS = {
     "A": "익절/손절 후 재진입", "C": "정기 분할매수", "E": "트레일링 스탑", "F": "RSI 조건",
@@ -58,8 +70,8 @@ class AskRequest(BaseModel):
     market: Literal["spot", "futures"] = "spot"
     leverage: int = Field(default=1, ge=1, le=3)
     symbols: list[str] = Field(min_length=1, max_length=3)
-    period_preset: Literal["3m", "6m", "1y"] = "3m"
-    interval: Literal["1h", "4h", "1d"] = "1h"
+    period_preset: Literal["3m", "6m", "1y", "1w", "1m"] = "3m"
+    interval: Literal["1h", "4h", "1d", "1m", "5m", "15m"] = "1h"
 
     @field_validator("symbols")
     @classmethod
@@ -71,16 +83,24 @@ class AskRequest(BaseModel):
                 raise ValueError(f"종목은 USDT 페어여야 해요: {raw}")
             if sym not in seen:
                 seen.append(sym)
-        if len(seen) > 3:
-            raise ValueError("종목은 최대 3개까지예요")
         return seen
 
     @model_validator(mode="after")
     def _profile_rules(self) -> "AskRequest":
-        if self.market == "futures" and not PROFILES[self.risk_profile]["futures"]:
+        profile = PROFILES[self.risk_profile]
+        if self.market == "futures" and not profile["futures"]:
             raise ValueError("안정형은 현물만 살펴봐요")
         if self.market == "spot" and self.leverage != 1:
             raise ValueError("현물은 레버리지를 쓸 수 없어요")
+        if len(self.symbols) > profile["max_symbols"]:
+            raise ValueError(f"{profile['label']}은 종목을 최대 {profile['max_symbols']}개까지 살펴봐요")
+        if profile["short"]:
+            if self.interval not in SHORT_INTERVALS or self.period_preset not in SHORT_PERIODS:
+                raise ValueError("단타형은 1분·5분·15분 봉으로 최근 1주 또는 1개월만 살펴봐요")
+            if self.interval == "1m" and self.period_preset != "1w":
+                raise ValueError("1분 봉은 최근 1주까지만 살펴봐요")
+        elif self.interval not in LONG_INTERVALS or self.period_preset not in LONG_PERIODS:
+            raise ValueError("이 성향은 1시간·4시간·하루 봉으로 최근 3개월 이상을 살펴봐요")
         return self
 
 
@@ -127,6 +147,36 @@ _PRESETS: dict[str, list[dict]] = {
     ],
 }
 
+# 단타형 전용 프리셋 — 짧은 봉에 맞춘 좁은 익절·손절·지표 기간.
+_SCALPER_PRESETS: dict[str, list[dict]] = {
+    "A": [
+        {"params": {"take_profit_pct": 1.0, "initial_capital": CAPITAL}, "risk": {"stop_loss_pct": 0.7}},
+        {"params": {"take_profit_pct": 1.5, "initial_capital": CAPITAL}, "risk": {"stop_loss_pct": 1.0}},
+    ],
+    "E": [
+        {"params": {"entry_mode": "immediate", "activation_profit": 1.5, "trail_percent": 0.8, "initial_capital": CAPITAL},
+         "risk": {"stop_loss_pct": 0.7}},
+        {"params": {"entry_mode": "dip", "entry_dip": 1.0, "activation_profit": 1.2, "trail_percent": 0.6, "initial_capital": CAPITAL},
+         "risk": {"stop_loss_pct": 0.5}},
+    ],
+    "F": [
+        {"params": {"rsi_period": 7, "entry_threshold": 25, "exit_threshold": 75, "initial_capital": CAPITAL}},
+        {"params": {"rsi_period": 14, "entry_threshold": 30, "exit_threshold": 70, "exit_mode": "both", "take_profit": 1.5, "initial_capital": CAPITAL}},
+    ],
+    "G": [
+        {"params": {"bb_period": 20, "bb_std": 2.0, "strategy": "reversion", "exit_target": "mid", "initial_capital": CAPITAL}},
+        {"params": {"bb_period": 20, "bb_std": 2.5, "strategy": "reversion", "exit_target": "opposite", "initial_capital": CAPITAL}},
+    ],
+    "J": [
+        {"params": {"ma_type": "EMA", "fast_period": 5, "slow_period": 13, "initial_capital": CAPITAL}},
+        {"params": {"ma_type": "EMA", "fast_period": 9, "slow_period": 21, "initial_capital": CAPITAL}},
+    ],
+}
+
+
+def _presets_for(req: AskRequest) -> dict[str, list[dict]]:
+    return _SCALPER_PRESETS if PROFILES[req.risk_profile]["short"] else _PRESETS
+
 
 def _allowed_types(req: AskRequest) -> tuple[str, ...]:
     types = PROFILES[req.risk_profile]["rule_types"]
@@ -170,30 +220,31 @@ def build_templates(req: AskRequest) -> list[Candidate]:
     """
     out: list[Candidate] = []
     types = _allowed_types(req)
+    presets = _presets_for(req)
 
     # 1) 모든 유형 × 모든 종목의 첫 프리셋(단일 종목)
     for rule_type in types:
         for sym in req.symbols:
-            macro = _make_macro(req, rule_type, _PRESETS[rule_type][0], [sym])
+            macro = _make_macro(req, rule_type, presets[rule_type][0], [sym])
             if macro is not None:
                 out.append(Candidate(_label(rule_type, req, [sym]), macro, "template"))
 
     # 2) 종목이 2개 이상이면 유형별 포트폴리오(첫 프리셋)
     if len(req.symbols) > 1:
         for rule_type in types:
-            macro = _make_macro(req, rule_type, _PRESETS[rule_type][0], req.symbols)
+            macro = _make_macro(req, rule_type, presets[rule_type][0], req.symbols)
             if macro is not None:
                 out.append(Candidate(_label(rule_type, req, req.symbols), macro, "template"))
 
     # 3) 두 번째 이상 프리셋 — 종목별·유형별로 추가
-    depth = max(len(_PRESETS[t]) for t in types)
+    depth = max(len(presets[t]) for t in types)
     for preset_idx in range(1, depth):
         for sym in req.symbols:
             for rule_type in types:
-                presets = _PRESETS[rule_type]
-                if preset_idx >= len(presets):
+                type_presets = presets[rule_type]
+                if preset_idx >= len(type_presets):
                     continue
-                macro = _make_macro(req, rule_type, presets[preset_idx], [sym])
+                macro = _make_macro(req, rule_type, type_presets[preset_idx], [sym])
                 if macro is not None:
                     out.append(Candidate(_label(rule_type, req, [sym]), macro, "template"))
 
@@ -237,9 +288,10 @@ def score(profile: str, result: BacktestResult) -> float:
 def select_top(evaluated: list[Evaluated], profile: str, n: int = TOP_N) -> list[Evaluated]:
     """MDD 상한·최소 거래 수로 거르고 성향 점수로 정렬해 상위 n개 — 같은 rule_type 은 하나만."""
     cap = PROFILES[profile]["mdd_cap"]
+    min_trades = PROFILES[profile]["min_trades"]
     pool = [
         e for e in evaluated
-        if e.result.total_trades >= MIN_TRADES and (cap is None or float(e.result.mdd_pct) <= cap)
+        if e.result.total_trades >= min_trades and (cap is None or float(e.result.mdd_pct) <= cap)
     ]
     pool.sort(key=lambda e: (score(profile, e.result), e.result.total_trades), reverse=True)
     picked: list[Evaluated] = []

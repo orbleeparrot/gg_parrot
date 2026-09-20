@@ -174,7 +174,7 @@ AI 는 조합의 뼈대만 제안하고, 성과 숫자는 전부 기존 백테�
 - `PROFILES["scalper"] = {label:"단타형", mdd_cap:None, rule_types:("A","E","F","G","J"), futures:True, short:True, max_symbols:2, min_trades:10}`. 기존 세 성향은 `short:False, max_symbols:3, min_trades:3` 을 명시한다. I(변동성 돌파)는 일봉 논리, C·H 는 짧은 봉에 의미가 없어 뺀다.
 - 단타형 전용 프리셋 `_SCALPER_PRESETS` (짧은 봉에 맞춘 값):
   - A: tp 1.0 / sl 0.7 · tp 1.5 / sl 1.0
-  - E: activation 1.5 / trail 0.8 · dip 1.0 → activation 1.2 / trail 0.6
+  - E: activation 1.5 / trail 0.8 · 손절 0.7 · dip 1.0 → activation 1.2 / trail 0.6 · 손절 0.5
   - F: rsi 7, 25/75 · rsi 14, 30/70, exit both, tp 1.5
   - G: bb 20 · 2.0σ mid · bb 20 · 2.5σ opposite
   - J: EMA 5/13 · EMA 9/21

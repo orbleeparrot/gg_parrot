@@ -5,10 +5,12 @@ import { createPortal } from "react-dom";
 import { api } from "../api.js";
 import { useSymbolList } from "../hooks/useSymbolList.js";
 import {
-  CONSENT_TEXT, DISCLAIMER, FEW_RESULTS_TEXT, FOLLOW_UPS, INTERVALS, LEVERAGES, MARKETS, NO_QUOTA_TEXT, NO_RESULTS_TEXT,
-  PERIODS, POPULAR_SYMBOLS, PROFILES, RUNNING_TEXT, STABLE_NO_FUTURES, STEP_PROMPTS,
+  CONSENT_TEXT, DISCLAIMER, FEW_RESULTS_TEXT, FOLLOW_UPS, LEVERAGES, MARKETS, NO_QUOTA_TEXT, NO_RESULTS_TEXT,
+  POPULAR_SYMBOLS, PROFILES, RUNNING_TEXT, SCALPER_NOTE, STABLE_NO_FUTURES, STEP_PROMPTS, feesNote, symbolsPrompt,
 } from "../lib/askCopy.js";
-import { MAX_SYMBOLS, STEPS, answerLabel, canChooseFutures, initialState, reduce, toRequest } from "../lib/askFlow.js";
+import {
+  STEPS, answerLabel, canChooseFutures, initialState, intervalOptions, isShort, maxSymbols, periodOptions, reduce, toRequest,
+} from "../lib/askFlow.js";
 import { RULE_TYPES } from "../lib/macro.js";
 import { resolveSymbol, searchSymbols } from "../lib/symbolSearch.js";
 import "./AskParrotDialog.css";
@@ -47,10 +49,12 @@ function Chips({ options, value, onPick, label }) {
   return (
     <div className="ask-chips" role="group" aria-label={label}>
       {options.map((opt) => (
-        <button key={opt.value} type="button" className="ask-chip t-small" aria-pressed={value === opt.value} onClick={() => onPick(opt.value)}>
+        <button key={opt.value} type="button" className="ask-chip t-small" aria-pressed={value === opt.value}
+          disabled={!!opt.disabled} title={opt.title} onClick={() => onPick(opt.value)}>
           {opt.label}{opt.hint ? <span className="ask-chip-hint">{opt.hint}</span> : null}
         </button>
       ))}
+      {options.some((opt) => opt.disabled && opt.title) ? <span className="t-caption text-slate-500">{options.find((opt) => opt.disabled && opt.title).title}</span> : null}
     </div>
   );
 }
@@ -63,7 +67,7 @@ function SymbolsCard({ answers, dispatch }) {
   const recent = readRecent().filter((s) => !POPULAR_SYMBOLS.includes(s) && (!items || items.some((it) => it.symbol === s)));
   const q = query.trim();
   const matches = items && q ? searchSymbols(items, q, { limit: 8, exclude: answers.symbols }) : [];
-  const full = answers.symbols.length >= MAX_SYMBOLS;
+  const full = answers.symbols.length >= maxSymbols(answers.profile);
 
   const pick = (symbol) => {
     dispatch({ type: "toggleSymbol", symbol });
@@ -124,8 +128,8 @@ function StepCard({ step, answers, dispatch }) {
     );
   }
   if (step === "symbols") return <SymbolsCard answers={answers} dispatch={dispatch} />;
-  if (step === "period") return <Chips options={PERIODS} value={answers.period} label={STEP_PROMPTS[step]} onPick={(v) => dispatch({ type: "choose", step, value: v })} />;
-  if (step === "interval") return <Chips options={INTERVALS} value={answers.interval} label={STEP_PROMPTS[step]} onPick={(v) => dispatch({ type: "choose", step, value: v })} />;
+  if (step === "period") return <Chips options={periodOptions(answers.profile)} value={answers.period} label={STEP_PROMPTS[step]} onPick={(v) => dispatch({ type: "choose", step, value: v })} />;
+  if (step === "interval") return <Chips options={intervalOptions(answers.profile, answers.period)} value={answers.interval} label={STEP_PROMPTS[step]} onPick={(v) => dispatch({ type: "choose", step, value: v })} />;
   return null;
 }
 
@@ -143,6 +147,7 @@ function ResultCard({ item, onLoad }) {
         <div><dt>승률</dt><dd className="num">{Number(m.win_rate_pct).toFixed(0)}%</dd></div>
         <div><dt>거래</dt><dd className="num">{m.total_trades}회</dd></div>
       </dl>
+      <p className="t-caption text-slate-500">{feesNote(item.macro?.fees?.commission_pct ?? 0.1, item.macro?.fees?.slippage_pct ?? 0.05)}</p>
       <ul className="ask-card-settings">{settingLines(item.macro).map((line) => <li key={line}>{line}</li>)}</ul>
       {item.explanation ? (
         <div className="ask-card-why">
@@ -218,6 +223,8 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
     }
   };
 
+  const promptFor = (step) => (step === "symbols" ? symbolsPrompt(maxSymbols(state.answers.profile)) : STEP_PROMPTS[step]);
+
   const isAnswered = (s) => (s === "symbols" ? state.answers.symbolsConfirmed === true : state.answers[s] != null);
   const answeredSteps = STEPS.filter(isAnswered).filter((s) => state.phase !== "cards" || STEPS.indexOf(s) < STEPS.indexOf(state.step));
   const noQuota = status && !status.error && status.remaining_today <= 0;
@@ -245,7 +252,7 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
             <div className="ask-thread" ref={threadRef}>
               {answeredSteps.map((s) => (
                 <div key={s} className="contents">
-                  <div className="ask-bubble ask-bubble-parrot t-small">{STEP_PROMPTS[s]}</div>
+                  <div className="ask-bubble ask-bubble-parrot t-small">{promptFor(s)}</div>
                   <button type="button" className="ask-bubble ask-bubble-me t-small" title="다시 고르기" disabled={busy} onClick={() => dispatch({ type: "back", step: s })}>{answerLabel(s, state.answers)}</button>
                 </div>
               ))}
@@ -255,7 +262,7 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
                   <div className="ask-bubble ask-bubble-parrot t-small" role="status">{NO_QUOTA_TEXT}</div>
                 ) : (
                   <>
-                    <div className="ask-bubble ask-bubble-parrot t-small">{STEP_PROMPTS[state.step]}</div>
+                    <div className="ask-bubble ask-bubble-parrot t-small">{promptFor(state.step)}</div>
                     <StepCard step={state.step} answers={state.answers} dispatch={dispatch} />
                   </>
                 )
@@ -281,6 +288,7 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
                     </div>
                   ) : null}
                   <div className="ask-disclaimer" role="note">{DISCLAIMER}</div>
+                  {isShort(state.answers.profile) ? <div className="ask-disclaimer" role="note">{SCALPER_NOTE}</div> : null}
                   <div className="ask-followups">
                     {FOLLOW_UPS.map((f) => {
                       const quotaBlocked = noQuota && f.kind !== "restart";

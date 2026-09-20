@@ -68,7 +68,9 @@
 .studio-cond-ask { animation: studio-ask-glow 2.4s ease-in-out 1s 3; }
 @media (prefers-reduced-motion: reduce) { .studio-cond-ask, .studio-cond-ask-face { animation: none; } }
 /* 좁은 폭에선 글자를 숨기고 껄무새만 남긴다 — 알약은 그대로. */
-@media (max-width: 420px) { .studio-cond-ask > span { display: none; } .studio-cond-ask { padding: 0 6px 0 4px; } }
+@media (max-width: 420px) { .studio-panel-head .studio-cond-ask > span { display: none; } .studio-cond-ask { padding: 0 6px 0 4px; } }
+/* 결과 빈 상태 안의 같은 알약 — 갸웃·글로우는 머리 버튼 한 곳에서만 돈다. */
+.studio-dock .studio-cond-ask, .studio-dock .studio-cond-ask-face { animation: none; }
 .studio-scroll { overflow: auto; min-height: 0; overscroll-behavior: contain; }
 
 /* 조건 — Builder 를 그대로 쓰되 좁은 열에 맞춰 2열로 접는다. 스크롤은 이 판 안에서만. */

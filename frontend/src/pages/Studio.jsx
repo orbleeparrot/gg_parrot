@@ -931,7 +931,23 @@ function AccountStudio({ scope, allowRouterMacro }) {
                 busy ? (
                   <Loading label="백테스트 결과를 계산하고 있어요…" />
                 ) : (
-                  <EmptyState title="아직 계산한 결과가 없어요">
+                  <EmptyState
+                    title="아직 계산한 결과가 없어요"
+                    action={!slug ? (
+                      // 뭘 골라야 할지 모르는 첫 방문자용 — 조건 판 머리의 노랑 알약과 같은 버튼.
+                      token ? (
+                        <button type="button" className="studio-cond-ask t-small" onClick={() => { setAskOpen(true); recordEvent("ask_open_empty"); }} disabled={busy} aria-haspopup="dialog" aria-expanded={askOpen}>
+                          <img src={ASK_MASCOT} alt="" width="100" height="100" className="studio-cond-ask-face" aria-hidden="true" />
+                          <span>뭘 고를지 모르겠다면, 껄무새에게 물어볼까?</span>
+                        </button>
+                      ) : (
+                        <Link to="/login?next=%2Fbuilder%3Fask%3D1" className="studio-cond-ask t-small" title="물어보려면 로그인이 필요해요">
+                          <img src={ASK_MASCOT} alt="" width="100" height="100" className="studio-cond-ask-face" aria-hidden="true" />
+                          <span>뭘 고를지 모르겠다면, 껄무새에게 물어볼까?</span>
+                        </Link>
+                      )
+                    ) : null}
+                  >
                     왼쪽 조건을 고른 뒤 <b className="text-slate-900">이 조건으로 백테스트</b>를 누르면 여기와 차트에 바로 나와요.
                   </EmptyState>
                 )

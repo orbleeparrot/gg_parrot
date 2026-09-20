@@ -7,6 +7,7 @@ import {
 import { lockBodyScroll } from "../lib/bodyScrollLock.js";
 import { isLoggedIn, useAuth } from "../lib/auth.js";
 import { getRunnerDevice } from "../lib/runnerDevice.js";
+import { recordEvent } from "../lib/visit.js";
 import "./HomeCommunity.css";
 import "./HomeMobile.css";
 
@@ -24,7 +25,7 @@ const FOCUSABLE =
 const HERO_SLIDE_DWELL_MS = 15_000;
 const HERO_SLIDE_EXIT_MS = 560;
 
-function HomeEntryHero({ onLeaderboard, onGuide, staticLayout = false }) {
+function HomeEntryHero({ onLeaderboard, onGuide, onAsk, staticLayout = false }) {
   const mobileDevice = getRunnerDevice().isMobile;
   return (
     <section
@@ -76,6 +77,19 @@ function HomeEntryHero({ onLeaderboard, onGuide, staticLayout = false }) {
             <img src="/brand/navigation/ggparrot-nav-builder.svg" alt="" width="88" height="88" draggable="false" />
           </span>
           <span className="home-entry-choice-copy"><strong>직접 만들기</strong><small>안내를 따라 종목 검색부터 전략·조건·백테스트·등록까지 순서대로 내 매크로를 만들어요.</small></span>
+          <span className="home-entry-choice-arrow" aria-hidden="true">→</span>
+        </button>
+        {/* 뭘 골라야 할지 모르는 사람용 세 번째 길 — 카드 5장에 답하면 백테스트 상위 3개 조합. 작은 카드로 둘 아래에. */}
+        <button
+          type="button"
+          data-home-ask-trigger
+          onClick={onAsk}
+          className="home-entry-choice is-ask"
+        >
+          <span className="home-entry-choice-art" aria-hidden="true">
+            <img src="/brand/agent/ggparrot-agent-curious-v1.svg" alt="" width="88" height="88" draggable="false" />
+          </span>
+          <span className="home-entry-choice-copy"><strong>뭘 고를지 모르겠다면, 껄무새에게 물어볼까?</strong><small>성향·종목만 고르면 과거 데이터로 돌려 본 후보 조합 3개를 보여 줘요.</small></span>
           <span className="home-entry-choice-arrow" aria-hidden="true">→</span>
         </button>
       </nav>
@@ -197,7 +211,7 @@ function CommunityEntryHero({ staticLayout = false }) {
   );
 }
 
-function HomeHeroRotator({ onLeaderboard, onGuide, paused = false }) {
+function HomeHeroRotator({ onLeaderboard, onGuide, onAsk, paused = false }) {
   const [mobile, setMobile] = useState(() => typeof window !== "undefined" && window.matchMedia("(max-width: 1099px)").matches);
   const [activeSlide, setActiveSlide] = useState(0);
   const [outgoingSlide, setOutgoingSlide] = useState(null);
@@ -261,7 +275,7 @@ function HomeHeroRotator({ onLeaderboard, onGuide, paused = false }) {
   if (mobile) {
     return (
       <div className="home-mobile-stack">
-        <HomeEntryHero onLeaderboard={onLeaderboard} onGuide={onGuide} staticLayout />
+        <HomeEntryHero onLeaderboard={onLeaderboard} onGuide={onGuide} onAsk={onAsk} staticLayout />
         <CommunityEntryHero staticLayout />
       </div>
     );
@@ -296,7 +310,7 @@ function HomeHeroRotator({ onLeaderboard, onGuide, paused = false }) {
                 inert={!isActive ? "" : undefined}
               >
                 {index === 0 ? (
-                  <HomeEntryHero onLeaderboard={onLeaderboard} onGuide={onGuide} />
+                  <HomeEntryHero onLeaderboard={onLeaderboard} onGuide={onGuide} onAsk={onAsk} />
                 ) : (
                   <CommunityEntryHero />
                 )}
@@ -409,6 +423,13 @@ function AccountHome() {
     if (!isLoggedIn()) { requireLogin("/?guide=1&tour=build"); return; }
     openGuide();
   }, [openGuide, requireLogin]);
+
+  // 껄무새에게 물어볼까? — 빌더가 열리면서 바로 카드가 뜬다. 기록을 남겨야 해서 로그인 필수.
+  const startAsk = useCallback(() => {
+    recordEvent("home_ask");
+    if (!isLoggedIn()) { requireLogin("/builder?ask=1"); return; }
+    navigate("/builder?ask=1");
+  }, [navigate, requireLogin]);
 
   const closeOverlay = useCallback(() => {
     if (guideOpen) {
@@ -555,6 +576,7 @@ function AccountHome() {
           <HomeHeroRotator
             onLeaderboard={startLeaderboard}
             onGuide={startGuide}
+            onAsk={startAsk}
             paused={overlayOpen}
           />
         )}

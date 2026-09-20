@@ -3067,6 +3067,21 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   background: rgb(var(--c-brand-hover));
 }
 
+/* 세 번째 길 — 껄무새에게 물어볼까?: 두 카드보다 낮은 알약형. 노란 테두리·흰 면으로 1순위 카드와 겹치지 않게. */
+.home-entry-choice.is-ask {
+  min-height: 72px;
+  padding: 8px 20px 8px 10px;
+  grid-template-columns: 56px minmax(0, 1fr) auto;
+  gap: 12px;
+  border-color: rgb(var(--c-brand));
+  border-radius: 999px;
+}
+.home-entry-choice.is-ask:hover { background: rgb(var(--c-brand) / 0.12); border-color: rgb(var(--c-brand-hover)); }
+.home-entry-choice.is-ask .home-entry-choice-art { width: 56px; height: 56px; }
+.home-entry-choice.is-ask .home-entry-choice-art img { width: 56px; height: 56px; }
+.home-entry-choice.is-ask strong { font-size: 17px; }
+.home-entry-choice.is-ask small { margin-top: 2px; }
+
 .home-entry-choice strong,
 .home-entry-choice small {
   display: block;

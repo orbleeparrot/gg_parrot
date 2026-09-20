@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import secrets
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -10,6 +11,7 @@ from pydantic import ValidationError
 from sqlmodel import select
 
 from app import ask
+from app.data.binance import MAX_BACKTEST_BARS, PERIOD_PRESET_DAYS, _expected_bar_count
 from app.db import AskMacroSession, User, get_session
 from app.engine import BacktestResult
 from app.main import app
@@ -324,6 +326,8 @@ def test_scalper_profile_candidates_use_short_presets_and_skip_slow_types():
     assert types == {"A", "E", "F", "G", "J"}
     a_first = next(c for c in cands if c.macro.rule_type.value == "A")
     assert a_first.macro.params["take_profit_pct"] == 1.0 and a_first.macro.risk.stop_loss_pct == 0.7
+    e_first = next(c for c in cands if c.macro.rule_type.value == "E")
+    assert e_first.macro.risk.stop_loss_pct == 0.7
     j_first = next(c for c in cands if c.macro.rule_type.value == "J")
     assert (j_first.macro.params["ma_type"], j_first.macro.params["fast_period"], j_first.macro.params["slow_period"]) == ("EMA", 5, 13)
     assert all(c.macro.candle_interval == "5m" and c.macro.period.preset == "1w" for c in cands)
@@ -376,3 +380,48 @@ def test_scalper_ask_end_to_end(_fake_backtest):
     assert all(r["macro"]["candle_interval"] == "1m" for r in data["results"])
     bad = dict(body, period_preset="1m")
     assert client.post("/api/ask/macros", json=bad, headers=_auth(token)).status_code == 422
+
+
+def test_scalper_ask_returns_short_macros_when_trades_suffice(_fake_backtest, monkeypatch):
+    def fake_run_any(macro):
+        return _result(4, 2, trades=12), [], "test", macro.period.preset
+
+    monkeypatch.setattr("app.main._run_any", fake_run_any)
+    token, _ = _signup()
+    client.post("/api/ask/consent", headers=_auth(token))
+    body = {"risk_profile": "scalper", "market": "spot", "leverage": 1,
+            "symbols": ["BTCUSDT"], "period_preset": "1w", "interval": "1m"}
+    res = client.post("/api/ask/macros", json=body, headers=_auth(token))
+    assert res.status_code == 200, res.text
+    data = res.json()
+    results = data["results"]
+    assert len(results) == 3
+    rule_types = [r["rule_type"] for r in results]
+    assert len(set(rule_types)) == len(rule_types)
+    assert set(rule_types) <= {"A", "E", "F", "G", "J"}
+    for r in results:
+        macro = r["macro"]
+        assert macro["candle_interval"] == "1m"
+        assert macro["period"]["preset"] == "1w"
+        assert "fees" in macro and macro["fees"].get("commission_pct") is not None
+    assert data["remaining_today"] == 4
+
+
+def test_every_reachable_pair_fits_backtest_bar_cap():
+    # ask.py 의 봉×기간 짝 검증 규칙은 오직 이 상한(MAX_BACKTEST_BARS)을 넘기지 않기 위해 존재한다.
+    now_ms = int(time.time() * 1000)
+    for profile, cfg in ask.PROFILES.items():
+        short = cfg["short"]
+        intervals = ask.SHORT_INTERVALS if short else ask.LONG_INTERVALS
+        periods = ask.SHORT_PERIODS if short else ask.LONG_PERIODS
+        for interval in intervals:
+            for period in periods:
+                try:
+                    ask.AskRequest(risk_profile=profile, symbols=["BTCUSDT"],
+                                    period_preset=period, interval=interval)
+                except ValidationError:
+                    continue
+                days = PERIOD_PRESET_DAYS[period]
+                start_ms = now_ms - days * 86_400_000
+                bars = _expected_bar_count(interval, start_ms, now_ms)
+                assert bars <= MAX_BACKTEST_BARS

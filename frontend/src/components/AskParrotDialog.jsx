@@ -9,7 +9,7 @@ import {
   POPULAR_SYMBOLS, PROFILES, RUNNING_TEXT, SCALPER_NOTE, STABLE_NO_FUTURES, STEP_PROMPTS, feesNote, symbolsPrompt,
 } from "../lib/askCopy.js";
 import {
-  STEPS, answerLabel, canChooseFutures, initialState, intervalOptions, isShort, maxSymbols, periodOptions, reduce, toRequest,
+  PROFILE_ORDER, STEPS, answerLabel, canChooseFutures, initialState, intervalOptions, isShort, maxSymbols, periodOptions, reduce, toRequest,
 } from "../lib/askFlow.js";
 import { RULE_TYPES } from "../lib/macro.js";
 import { resolveSymbol, searchSymbols } from "../lib/symbolSearch.js";
@@ -292,9 +292,10 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
                   <div className="ask-followups">
                     {FOLLOW_UPS.map((f) => {
                       const quotaBlocked = noQuota && f.kind !== "restart";
-                      // 안정형에서 "더 안정적으로", 공격형에서 "더 공격적으로"는 갈 곳이 없다.
-                      const edgeBlocked = (f.kind === "safer" && state.answers.profile === "stable")
-                        || (f.kind === "riskier" && state.answers.profile === "aggressive");
+                      // PROFILE_ORDER 양쪽 끝(안정형 "더 안정적으로", 단타형 "더 공격적으로")은 갈 곳이 없다.
+                      const idx = PROFILE_ORDER.indexOf(state.answers.profile);
+                      const edgeBlocked = (f.kind === "safer" && idx <= 0)
+                        || (f.kind === "riskier" && idx >= PROFILE_ORDER.length - 1);
                       const disabled = quotaBlocked || edgeBlocked;
                       const title = quotaBlocked ? "오늘 횟수를 다 썼어요" : edgeBlocked ? "이미 그쪽 끝이에요" : undefined;
                       return (

@@ -1,5 +1,5 @@
 // 껄무새에게 물어볼까? — 카드 상태 머신(순수 리듀서). UI 는 이 상태만 그린다.
-// 규칙: 안정형은 선물을 못 고른다 · 종목 최대 3개 · 뒤로 가면 그 뒤 답은 지운다 · 자유 입력 없음.
+// 규칙: 안정형은 선물을 못 고른다 · 종목 최대 3개(단타형은 2개) · 뒤로 가면 그 뒤 답은 지운다 · 자유 입력 없음.
 import { INTERVALS, LEVERAGES, MARKETS, ONE_MINUTE_NEEDS_WEEK, PERIODS, PROFILES, SHORT_INTERVALS, SHORT_PERIODS } from "./askCopy.js";
 
 export const STEPS = ["profile", "market", "symbols", "period", "interval"];

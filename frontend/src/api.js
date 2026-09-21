@@ -415,9 +415,10 @@ export const api = {
   leaderboardOpen: (entryId) =>
     req(`/api/leaderboard/${entryId}/open`, { method: "POST", timeoutMs: 8_000, keepalive: true }),
 
-  // leaderboard chat (daily KST)
-  chatList: ({ beforeId, seenId, afterId, metadataOnly, messageIds, ...options } = {}) => {
+  // leaderboard chat (daily KST) — roomId 가 있으면 전략방(방 생성 이후 전부)
+  chatList: ({ beforeId, seenId, afterId, metadataOnly, messageIds, roomId, ...options } = {}) => {
     const query = new URLSearchParams();
+    if (roomId) query.set("room_id", String(roomId));
     if (beforeId != null) query.set("before_id", String(beforeId));
     if (seenId != null) query.set("seen_id", String(seenId));
     if (afterId != null) query.set("after_id", String(afterId));
@@ -425,10 +426,17 @@ export const api = {
     if (messageIds?.length) query.set("message_ids", messageIds.join(","));
     return req(`/api/chat${query.size ? `?${query}` : ""}`, { timeoutMs: 15_000, ...options });
   },
-  chatPost: (text, options = {}) =>
-    req("/api/chat", { timeoutMs: 15_000, ...options, method: "POST", body: JSON.stringify({ text }) }),
-  chatRead: (lastSeenId, options = {}) =>
-    req("/api/chat/read", { timeoutMs: 15_000, ...options, method: "PUT", body: JSON.stringify({ last_seen_id: lastSeenId }) }),
+  chatPost: (text, { roomId, ...options } = {}) =>
+    req("/api/chat", { timeoutMs: 15_000, ...options, method: "POST", body: JSON.stringify(roomId ? { text, room_id: roomId } : { text }) }),
+  chatRead: (lastSeenId, { roomId, ...options } = {}) =>
+    req("/api/chat/read", { timeoutMs: 15_000, ...options, method: "PUT", body: JSON.stringify(roomId ? { last_seen_id: lastSeenId, room_id: roomId } : { last_seen_id: lastSeenId }) }),
+
+  // 전략방
+  roomsList: (options = {}) => req("/api/rooms", { timeoutMs: 15_000, ...options }),
+  roomCreate: (body, options = {}) => req("/api/rooms", { timeoutMs: 15_000, ...options, method: "POST", body: JSON.stringify(body) }),
+  roomJoin: (roomId, options = {}) => req(`/api/rooms/${roomId}/join`, { timeoutMs: 15_000, ...options, method: "POST" }),
+  roomLeave: (roomId, options = {}) => req(`/api/rooms/${roomId}/leave`, { timeoutMs: 15_000, ...options, method: "DELETE" }),
+  roomExtend: (roomId, options = {}) => req(`/api/rooms/${roomId}/extend`, { timeoutMs: 15_000, ...options, method: "POST" }),
 
   // paper (simulated) trading
   paperStart: (macro, symbol, mode) =>

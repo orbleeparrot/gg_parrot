@@ -61,3 +61,33 @@ test("caller cancellation stays AbortError and successful requests clear deadlin
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(completedSignal.aborted, false);
 });
+
+test("chat and room requests carry room_id", async (t) => {
+  const calls = [];
+  t.mock.method(globalThis, "fetch", async (url, options) => {
+    calls.push({ url, ...options });
+    return new Response(JSON.stringify({ items: [] }), { status: 200 });
+  });
+  await api.chatList({ roomId: 12, afterId: 3 });
+  await api.chatPost("hi", { roomId: 12 });
+  await api.chatRead(9, { roomId: 12 });
+  await api.chatPost("public");
+  await api.roomsList();
+  await api.roomCreate({ title: "t", capacity: 3, entry_fee: 50, consent: true });
+  await api.roomJoin(12);
+  await api.roomLeave(12);
+  await api.roomExtend(12);
+  const q = new URL(calls[0].url, "https://fixture.invalid").searchParams;
+  assert.equal(q.get("room_id"), "12");
+  assert.equal(q.get("after_id"), "3");
+  assert.deepEqual(JSON.parse(calls[1].body), { text: "hi", room_id: 12 });
+  assert.deepEqual(JSON.parse(calls[2].body), { last_seen_id: 9, room_id: 12 });
+  assert.deepEqual(JSON.parse(calls[3].body), { text: "public" });
+  assert.equal(calls[4].url, "/api/rooms");
+  assert.equal(calls[5].method, "POST");
+  assert.deepEqual(JSON.parse(calls[5].body), { title: "t", capacity: 3, entry_fee: 50, consent: true });
+  assert.equal(calls[6].url, "/api/rooms/12/join");
+  assert.equal(calls[7].method, "DELETE");
+  assert.equal(calls[7].url, "/api/rooms/12/leave");
+  assert.equal(calls[8].url, "/api/rooms/12/extend");
+});

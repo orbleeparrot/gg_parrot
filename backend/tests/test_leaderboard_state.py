@@ -235,3 +235,95 @@ def test_get_status_exposes_state_in_memory_and_from_db(monkeypatch):
     paper._running[session_id] = runner
     live = paper.get_status(session_id)
     assert live["state"]["in_position"] is True and live["state"]["legs"][0]["symbol"] == "ETHUSDT"
+
+
+# ---------------------------------------------------------------------------
+# Task 3: 리더보드 행 상태 파생 + 엔트리 뷰 새 키
+# ---------------------------------------------------------------------------
+from types import SimpleNamespace
+
+from app import leaderboard
+
+
+def test_derive_row_state_priority():
+    d = leaderboard.derive_row_state
+    assert d(None, {}) == "none"
+    assert d("stopped", {"in_position": True}) == "stopped"
+    assert d("running", {"halted_today": True, "in_position": True}) == "halted"
+    assert d("running", {"in_position": True, "trade_count": 3}) == "holding"
+    assert d("running", {"in_position": False, "trade_count": 2}) == "exited"
+    assert d("running", {"in_position": False, "trade_count": 0}) == "waiting"
+    assert d("running", {}) == "waiting"
+
+
+def _row(**over):
+    base = dict(id=1, user_id="u", nickname="n", username="user", owner_user_id=42, is_ai=False,
+                symbol="BTCUSDT", macro_json="{}", human_summary="비밀 전략", paper_session_id=9,
+                created_at="2026-09-21T00:00:00Z", created_ms=1, streak_days=1, first_created_ms=None)
+    base.update(over)
+    return SimpleNamespace(**base)
+
+
+def test_entry_view_exposes_state_even_when_locked():
+    row = _row()
+    status = {"current_return": 1.5, "current_equity": 1015.0, "status": "running", "mode": "live", "virtual_balance": 1000.0,
+              "state": {"in_position": True, "halted_today": False, "cooldown_until_ms": None, "trade_count": 1,
+                        "last_fill_ms": 1_700_000_000_000, "last_fill_side": "buy", "last_fill_return": 0.0, "last_fill_kind": "",
+                        "last_price": 101.0, "checkpoint_ms": 1_700_000_005_000,
+                        "legs": [{"symbol": "BTCUSDT", "qty": 2.0, "dir": 1, "entry_price": 100.0, "last_price": 101.0, "in_position": True}]}}
+    view = leaderboard._entry_view(row, {}, viewer_id="x", viewer_user_id=7, paper_status=status)
+    assert view["locked"] is True and view["human_summary"] == "" and view["macro"] is None
+    assert view["state"] == "holding" and view["trade_count"] == 1 and view["last_fill_kst"] is not None
+    assert view["virtual_balance"] == 1000.0 and view["legs"][0]["qty"] == 2.0 and view["last_price"] == 101.0
+    assert view["last_fill_kind"] == "" and view["last_fill_return"] == 0.0 and view["cooldown_until_ms"] is None
+    assert view["checkpoint_ms"] == 1_700_000_005_000
+    assert view["return_pct"] == 1.5 and view["paper_status"] == "running"
+    none_view = leaderboard._entry_view(row, {}, viewer_id="x", viewer_user_id=7, paper_status=None)
+    assert none_view["state"] == "none" and none_view["legs"] == [] and none_view["trade_count"] == 0
+    assert none_view["virtual_balance"] is None and none_view["last_fill_kst"] is None and none_view["last_fill_kind"] == ""
+
+
+def test_entry_view_state_without_session_or_state_json():
+    # paper_session_id 없음 → get_status 호출 없이 none
+    view = leaderboard._entry_view(_row(paper_session_id=None), {}, viewer_id="u", viewer_user_id=42)
+    assert view["state"] == "none" and view["legs"] == [] and view["trade_count"] == 0 and view["paper_status"] == "none"
+    # 구 행: status 는 있으나 state 가 비어 있음 → running 이면 waiting, stopped 면 stopped
+    running = {"current_return": 0.0, "current_equity": 1000.0, "status": "running", "mode": "live", "virtual_balance": 1000.0, "state": {}}
+    assert leaderboard._entry_view(_row(), {}, viewer_id="u", paper_status=running)["state"] == "waiting"
+    stopped = dict(running, status="stopped")
+    assert leaderboard._entry_view(_row(), {}, viewer_id="u", paper_status=stopped)["state"] == "stopped"
+
+
+def test_entry_view_falls_back_to_get_status(monkeypatch):
+    calls = []
+
+    def fake_get_status(session_id):
+        calls.append(session_id)
+        return {"current_return": -0.5, "current_equity": 995.0, "status": "running", "mode": "live", "virtual_balance": 1000.0,
+                "state": {"in_position": False, "halted_today": True, "trade_count": 2, "legs": []}}
+
+    monkeypatch.setattr(leaderboard.paper_mod, "get_status", fake_get_status)
+    view = leaderboard._entry_view(_row(), {}, viewer_id="u")
+    assert calls == [9]  # 상태 dict 는 한 번만 조회
+    assert view["state"] == "halted" and view["trade_count"] == 2 and view["return_pct"] == -0.5
+
+
+def test_durable_statuses_carry_state_and_virtual_balance():
+    engine = create_engine("sqlite://", echo=False)
+    SQLModel.metadata.create_all(engine)
+    with Session(engine) as db:
+        fresh = PaperSession(macro_id="m3", symbol="BTCUSDT", mode="live", status="running",
+                             started_at="2026-09-21T00:00:00Z", virtual_balance=1_000, current_equity=1_010, current_return=1.0,
+                             state_json=json.dumps({"in_position": True, "trade_count": 1, "legs": []}))
+        legacy = PaperSession(macro_id="m4", symbol="ETHUSDT", mode="live", status="stopped",
+                              started_at="2026-09-21T00:00:00Z", virtual_balance=500, current_equity=500, current_return=0.0)
+        db.add(fresh)
+        db.add(legacy)
+        db.commit()
+        db.refresh(fresh)
+        db.refresh(legacy)
+        statuses = leaderboard._durable_statuses(db, [fresh.id, legacy.id, 999_999])
+    assert set(statuses) == {fresh.id, legacy.id}
+    assert statuses[fresh.id]["virtual_balance"] == 1_000 and statuses[fresh.id]["state"]["trade_count"] == 1
+    assert statuses[fresh.id]["current_return"] == 1.0 and statuses[fresh.id]["status"] == "running"
+    assert statuses[legacy.id]["state"] == {} and statuses[legacy.id]["virtual_balance"] == 500

@@ -244,6 +244,21 @@ def _live_return(
     )
 
 
+def derive_row_state(session_status: str | None, state: dict) -> str:
+    """리더보드 행 상태 — 스펙 §4 우선순위. 세션이 없으면 none."""
+    if not session_status:
+        return "none"
+    if session_status != "running":
+        return "stopped"
+    if state.get("halted_today"):
+        return "halted"
+    if state.get("in_position"):
+        return "holding"
+    if int(state.get("trade_count") or 0) > 0:
+        return "exited"
+    return "waiting"
+
+
 def _entry_view(
     row: LeaderboardEntry,
     tally: dict,
@@ -254,7 +269,15 @@ def _entry_view(
     crown_owner_ids: frozenset = frozenset(),
     paper_status=_STATUS_NOT_PROVIDED,
 ) -> dict:
-    ret, equity, pstatus, mode = _live_return(row.paper_session_id, paper_status)
+    # 상태 dict 는 한 번만 얻는다 — 수익률(_live_return)과 실시간 상태 키가 같은 스냅샷을 본다.
+    if row.paper_session_id is None:
+        status = None
+    elif paper_status is _STATUS_NOT_PROVIDED:
+        status = paper_mod.get_status(row.paper_session_id)
+    else:
+        status = paper_status
+    ret, equity, pstatus, mode = _live_return(row.paper_session_id, status)
+    state = (status or {}).get("state") or {}
     likes = tally.get("likes", 0)
     dislikes = tally.get("dislikes", 0)
     my_vote = tally.get("by_user", {}).get(viewer_id, 0)
@@ -291,6 +314,17 @@ def _entry_view(
         "paper_status": pstatus,
         "mode": mode,
         "paper_session_id": row.paper_session_id,
+        # 실시간 상태 — 잠긴(locked) 항목에도 노출된다(전략 내용이 아니라 진행 상황이므로).
+        "state": derive_row_state(status.get("status") if status else None, state),
+        "trade_count": int(state.get("trade_count") or 0),
+        "last_fill_kst": _kst_hhmm(state["last_fill_ms"]) if state.get("last_fill_ms") else None,
+        "last_fill_kind": state.get("last_fill_kind", ""),
+        "last_fill_return": state.get("last_fill_return"),
+        "cooldown_until_ms": state.get("cooldown_until_ms"),
+        "last_price": state.get("last_price"),
+        "checkpoint_ms": state.get("checkpoint_ms"),
+        "virtual_balance": (status or {}).get("virtual_balance"),
+        "legs": list(state.get("legs") or []),
         "likes": likes,
         "dislikes": dislikes,
         "score": likes - dislikes,
@@ -371,10 +405,12 @@ def _durable_statuses(db, ids: list[int]) -> dict[int, dict]:
     """Background rankings use the same durable checkpoints across web workers."""
     if not ids:
         return {}
-    return {sid: {"current_return": ret, "current_equity": equity, "status": status, "mode": mode}
-            for sid, ret, equity, status, mode in db.exec(select(
+    return {sid: {"current_return": ret, "current_equity": equity, "status": status, "mode": mode,
+                  "virtual_balance": vb, "state": paper_mod.parse_state(state_json)}
+            for sid, ret, equity, status, mode, vb, state_json in db.exec(select(
                 PaperSession.id, PaperSession.current_return, PaperSession.current_equity,
                 PaperSession.status, PaperSession.mode,
+                PaperSession.virtual_balance, PaperSession.state_json,
             ).where(PaperSession.id.in_(ids))).all()}
 
 

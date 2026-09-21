@@ -11,8 +11,9 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlmodel import Session, select
 
 from . import avatars
+from . import rooms as rooms_mod
 from .auth import assert_can_write
-from .db import ChatMessage, ChatReadState, LeaderboardEntry, User, UserAvatar, get_session
+from .db import ChatMessage, ChatReadState, ChatRoomMember, LeaderboardEntry, User, UserAvatar, get_session
 from .leaderboard import _kst_hhmm, _unlocked_ids_for, today_start_ms
 from .moderation import require_clean_text
 
@@ -55,14 +56,29 @@ def _lock_member(db, user_id: int) -> User:
     return account
 
 
-def _latest_id(db, *, start_ms: int | None = None) -> int:
+def _latest_id(db, *, start_ms: int | None = None, room_id: int | None = None) -> int:
     query = select(func.max(ChatMessage.id))
+    if room_id is None:
+        query = query.where(ChatMessage.room_id.is_(None))
+    else:
+        query = query.where(ChatMessage.room_id == room_id)
     if start_ms is not None:
         query = query.where(ChatMessage.created_ms >= start_ms)
     return int(db.exec(query).one() or 0)
 
 
-def add_message(account: User, text: str, *, db: Session | None = None) -> dict:
+def _require_room_member(db, user_id: int | None, room_id: int):
+    """방 메시지는 멤버만. (room, member) 를 돌려준다. 만료·폐쇄된 방도 읽기는 된다."""
+    if user_id is None:
+        raise ValueError("로그인이 필요해요.")
+    room = rooms_mod.get_room(db, room_id)
+    member = db.get(ChatRoomMember, (room.id, user_id))
+    if member is None:
+        raise rooms_mod.RoomError(403, "이 전략방의 멤버만 볼 수 있어요.")
+    return room, member
+
+
+def add_message(account: User, text: str, *, room_id: int | None = None, db: Session | None = None) -> dict:
     assert_can_write(account)  # 차단된 계정은 발언만 막는다(읽기는 그대로)
     user_id = int(account.id)
     text = (text or "").strip()
@@ -84,12 +100,17 @@ def add_message(account: User, text: str, *, db: Session | None = None) -> dict:
         ).one()
         if recent_count >= _RATE_MAX:
             raise RateLimited("메시지를 너무 빠르게 보냈어요. 잠시 후 다시 시도하세요.")
+        if room_id is not None:
+            room, _ = _require_room_member(db, author.id, room_id)
+            if not rooms_mod.is_open(room, now_ms):
+                raise rooms_mod.RoomError(410, "이 전략방은 끝났어요.")
         row = ChatMessage(
             user_id=author.id,
             username=author.username,
             text=text,
             created_at=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
             created_ms=now_ms,
+            room_id=room_id,
         )
         db.add(row)
         db.flush()
@@ -99,8 +120,11 @@ def add_message(account: User, text: str, *, db: Session | None = None) -> dict:
         return result
 
 
-def _member_seen_id(user_id: int, *, db: Session | None = None) -> int:
+def _member_seen_id(user_id: int, *, room_id: int | None = None, db: Session | None = None) -> int:
     with nullcontext(db) if db is not None else get_session() as db:
+        if room_id is not None:
+            _, member = _require_room_member(db, user_id, room_id)
+            return int(member.last_seen_id)
         state = db.get(ChatReadState, user_id)
         if state is not None:
             return state.last_seen_id
@@ -116,9 +140,18 @@ def _member_seen_id(user_id: int, *, db: Session | None = None) -> int:
         return state.last_seen_id
 
 
-def mark_read(account: User, last_seen_id: int, *, db: Session | None = None) -> dict:
+def mark_read(account: User, last_seen_id: int, *, room_id: int | None = None, db: Session | None = None) -> dict:
     user_id = int(account.id)
     with nullcontext(db) if db is not None else get_session() as db:
+        if room_id is not None:
+            _lock_member(db, user_id)
+            room, member = _require_room_member(db, user_id, room_id)
+            target = min(max(0, last_seen_id), _latest_id(db, room_id=room.id))
+            if target > member.last_seen_id:
+                member.last_seen_id = target
+                db.add(member)
+            db.commit()
+            return {"seen_id": int(member.last_seen_id)}
         _lock_member(db, user_id)
         target = min(max(0, last_seen_id), _latest_id(db))
         sqlite = db.get_bind().dialect.name == "sqlite"
@@ -140,6 +173,7 @@ def mark_read(account: User, last_seen_id: int, *, db: Session | None = None) ->
 def list_messages(
     account: User | None = None,
     *,
+    room_id: int | None = None,
     before_id: int | None = None,
     seen_id: int | None = None,
     after_id: int | None = None,
@@ -147,20 +181,30 @@ def list_messages(
     message_ids: list[int] | None = None,
     db: Session | None = None,
 ) -> dict:
-    start_ms = today_start_ms()
     snapshot_ms = int(_now_utc().timestamp() * 1000)
     user_id = int(account.id) if account is not None else None
+    room = None
     with nullcontext(db) if db is not None else get_session() as db:
-        server_seen = _member_seen_id(user_id, db=db) if user_id is not None else None
+        if room_id is not None:
+            # 방 모드: 멤버만, 방이 생긴 뒤 메시지만, 읽음 커서는 멤버 행.
+            room, member = _require_room_member(db, user_id, room_id)
+            start_ms = int(room.created_ms)
+            server_seen = int(member.last_seen_id)
+        else:
+            start_ms = today_start_ms()
+            server_seen = _member_seen_id(user_id, db=db) if user_id is not None else None
+        room_filter = ChatMessage.room_id.is_(None) if room_id is None else ChatMessage.room_id == room_id
+        # 공개방은 예전처럼 room_id 없이 부른다(기본값 None 이 room_id IS NULL 조건을 건다).
+        room_kw = {} if room_id is None else {"room_id": room_id}
         # Keep metadata independent of the requested historical page.
-        latest_id = _latest_id(db, start_ms=start_ms)
+        latest_id = _latest_id(db, start_ms=start_ms, **room_kw)
         effective_seen = server_seen
         if seen_id is not None:
             # A cursor below today's latest ID is already bounded. Only a cursor
             # ahead of it (including yesterday's cursor on an empty day) needs
             # the all-time watermark.
             known_ceiling = max(latest_id, server_seen or 0)
-            supplied_seen = min(max(0, seen_id), known_ceiling if seen_id <= known_ceiling else _latest_id(db))
+            supplied_seen = min(max(0, seen_id), known_ceiling if seen_id <= known_ceiling else _latest_id(db, **room_kw))
             effective_seen = max(server_seen or 0, supplied_seen)
         page = []
         has_more = False
@@ -168,7 +212,7 @@ def list_messages(
         if not metadata_only and (message_ids is not None or after_id is None or after_id < latest_id):
             query = select(ChatMessage, UserAvatar.version).outerjoin(
                 UserAvatar, UserAvatar.user_id == ChatMessage.user_id,
-            ).where(ChatMessage.created_ms >= start_ms, ChatMessage.id <= latest_id)
+            ).where(ChatMessage.created_ms >= start_ms, ChatMessage.id <= latest_id, room_filter)
             if message_ids is not None:
                 query = query.where(ChatMessage.id.in_(message_ids[:MAX_LIST]))
             elif after_id is not None:
@@ -191,13 +235,15 @@ def list_messages(
                 ChatMessage.created_ms >= start_ms,
                 ChatMessage.id > effective_seen,
                 ChatMessage.id <= latest_id,
+                room_filter,
             )
             if user_id is not None:
                 unseen_query = unseen_query.where(or_(
                     ChatMessage.user_id.is_(None), ChatMessage.user_id != user_id,
                 ))
             unseen_count = int(db.exec(unseen_query).one())
-    return {
+        room_payload = rooms_mod.room_view(db, room, user_id, now_ms=snapshot_ms) if room is not None else None
+    result = {
         "items": items,
         "has_more": has_more,
         "has_more_new": has_more_new,
@@ -212,8 +258,12 @@ def list_messages(
         "seen_id": effective_seen,
         "server_seen_id": server_seen,
         "unseen_count": unseen_count,
-        "disclaimer": "채팅 내용은 투자 조언이 아니며, 매매 판단과 책임은 본인에게 있습니다.",
+        "disclaimer": rooms_mod.DISCLAIMER if room is not None
+        else "채팅 내용은 투자 조언이 아니며, 매매 판단과 책임은 본인에게 있습니다.",
     }
+    if room_payload is not None:
+        result["room"] = room_payload
+    return result
 
 
 def _macro_cards(db, texts: list[str], viewer_user_id: int | None) -> dict[int, dict]:

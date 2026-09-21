@@ -283,3 +283,48 @@ def test_list_rooms_view_shape_matches_single_view():
     item = next(room for room in listed["items"] if room["id"] == room_id)
     assert item == joined_room
     assert item["member_count"] == 2
+
+
+def test_room_messages_are_member_only_and_scoped():
+    owner_tok, owner_id = _signup()
+    room_id = _create(owner_tok, entry_fee=0).json()["room"]["id"]
+    # 공개 채팅 메시지는 방에 섞이지 않는다
+    assert client.post("/api/chat", json={"text": "공개 안녕"}, headers=_auth(owner_tok)).status_code == 200
+    r = client.post("/api/chat", json={"text": "방 안녕", "room_id": room_id}, headers=_auth(owner_tok))
+    assert r.status_code == 200, r.text
+    outsider_tok, _ = _signup()
+    assert client.get(f"/api/chat?room_id={room_id}", headers=_auth(outsider_tok)).status_code == 403
+    assert client.post("/api/chat", json={"text": "몰래", "room_id": room_id}, headers=_auth(outsider_tok)).status_code == 403
+    assert client.get(f"/api/chat?room_id={room_id}").status_code == 401
+    guest_tok, guest_id = _signup()
+    client.post(f"/api/rooms/{room_id}/join", headers=_auth(guest_tok))
+    body = client.get(f"/api/chat?room_id={room_id}", headers=_auth(guest_tok)).json()
+    texts = [m["text"] for m in body["items"]]
+    assert texts == ["방 안녕"]
+    assert body["room"]["id"] == room_id and body["day_start_ms"] == body["room"]["created_ms"]
+    public = client.get("/api/chat", headers=_auth(guest_tok)).json()
+    assert "방 안녕" not in [m["text"] for m in public["items"]]
+    assert "room" not in public
+    # 방 읽음 커서는 멤버 행에 남는다
+    last_id = body["items"][-1]["id"]
+    assert client.put("/api/chat/read", json={"last_seen_id": last_id, "room_id": room_id}, headers=_auth(guest_tok)).json() == {"seen_id": last_id}
+    with get_session() as db:
+        assert db.get(ChatRoomMember, (room_id, guest_id)).last_seen_id == last_id
+    again = client.get(f"/api/chat?room_id={room_id}", headers=_auth(guest_tok)).json()
+    assert again["seen_id"] == last_id and again["unseen_count"] == 0
+
+
+def test_room_messages_before_creation_are_hidden_and_expired_room_is_read_only():
+    owner_tok, owner_id = _signup()
+    room_id = _create(owner_tok, entry_fee=0).json()["room"]["id"]
+    with get_session() as db:
+        db.add(ChatMessage(user_id=owner_id, username="x", text="옛날", created_at="2020-01-01T00:00:00Z", created_ms=1, room_id=room_id))
+        db.commit()
+    client.post("/api/chat", json={"text": "지금", "room_id": room_id}, headers=_auth(owner_tok))
+    body = client.get(f"/api/chat?room_id={room_id}", headers=_auth(owner_tok)).json()
+    assert [m["text"] for m in body["items"]] == ["지금"]
+    _backdate_room(room_id, expires_in_ms=-1)
+    assert client.get(f"/api/chat?room_id={room_id}", headers=_auth(owner_tok)).status_code == 200
+    r = client.post("/api/chat", json={"text": "늦음", "room_id": room_id}, headers=_auth(owner_tok))
+    assert r.status_code == 410
+    assert client.get("/api/chat?room_id=999999", headers=_auth(owner_tok)).status_code == 404

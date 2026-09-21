@@ -373,10 +373,12 @@ class VoteRequest(BaseModel):
 
 class ChatPostRequest(BaseModel):
     text: str
+    room_id: Optional[int] = None
 
 
 class ChatReadRequest(BaseModel):
     last_seen_id: int
+    room_id: Optional[int] = None
 
 
 class RoomCreateRequest(BaseModel):
@@ -1503,6 +1505,7 @@ async def leaderboard_delete(entry_id: int, account: User = Depends(auth_mod.cur
 # --- leaderboard chat (daily KST board) ---------------------------------
 @app.get("/api/chat")
 def chat_list(
+    room_id: Optional[int] = Query(default=None, ge=1),
     before_id: Optional[int] = Query(default=None, ge=1, le=2**63 - 1),
     seen_id: Optional[int] = Query(default=None, ge=0),
     after_id: Optional[int] = Query(default=None, ge=0, le=2**63 - 1),
@@ -1517,8 +1520,10 @@ def chat_list(
     if sum((before_id is not None, after_id is not None, metadata_only, ids is not None)) > 1:
         raise HTTPException(422, "메시지 조회 방식을 하나만 선택해 주세요.")
     try:
-        return chat_mod.list_messages(account, before_id=before_id, seen_id=seen_id,
+        return chat_mod.list_messages(account, room_id=room_id, before_id=before_id, seen_id=seen_id,
                                       after_id=after_id, metadata_only=metadata_only, message_ids=ids, db=db)
+    except rooms_mod.RoomError as exc:
+        raise HTTPException(exc.status, exc.message) from exc
     except ValueError as exc:
         raise HTTPException(401, str(exc)) from exc
 
@@ -1527,7 +1532,9 @@ def chat_list(
 def chat_post(req: ChatPostRequest, account: User = Depends(auth_mod.current_user_in_session),
               db: Session = Depends(request_session)) -> dict:
     try:
-        msg = chat_mod.add_message(account, req.text, db=db)
+        msg = chat_mod.add_message(account, req.text, room_id=req.room_id, db=db)
+    except rooms_mod.RoomError as exc:
+        raise HTTPException(exc.status, exc.message) from exc
     except chat_mod.RateLimited as exc:
         raise HTTPException(status_code=429, detail=str(exc))
     except ValueError as exc:
@@ -1539,7 +1546,9 @@ def chat_post(req: ChatPostRequest, account: User = Depends(auth_mod.current_use
 def chat_read(req: ChatReadRequest, account: User = Depends(auth_mod.current_user_in_session),
               db: Session = Depends(request_session)) -> dict:
     try:
-        return chat_mod.mark_read(account, req.last_seen_id, db=db)
+        return chat_mod.mark_read(account, req.last_seen_id, room_id=req.room_id, db=db)
+    except rooms_mod.RoomError as exc:
+        raise HTTPException(exc.status, exc.message) from exc
     except ValueError as exc:
         raise HTTPException(401, str(exc)) from exc
 

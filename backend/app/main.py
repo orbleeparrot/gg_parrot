@@ -12,6 +12,7 @@ import logging
 import json
 import os
 import re
+import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -98,6 +99,7 @@ from .data import NoSpotDataError, average_daily_funding_pct, get_klines, resolv
 from .data import symbols as symbols_mod
 from .data.binance import backtest_limits
 from .marketdata import fetch_klines_for_macro
+from . import marketdata as marketdata_mod
 from .db import MacroRow, get_session, init_db, request_session
 from .engine import BacktestResult, Macro, Period, compact_backtest_result, human_summary
 from .engine.backtest import run_backtest
@@ -1234,6 +1236,18 @@ def live_candles(
         raise HTTPException(status_code=422, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/prices")
+def prices(symbols: str = Query(default="", max_length=700)) -> dict:
+    """공개 일괄 시세 — 리더보드 보유 중 행의 미실현 수익률용.
+
+    전 종목 시세를 한 번에 받아 2초 캐시 — 요청당 상류 호출 최대 1회.
+    """
+    wanted = list(dict.fromkeys(s.strip().upper() for s in symbols.split(",") if s.strip()))
+    if not wanted or len(wanted) > marketdata_mod.MAX_PRICE_SYMBOLS or any(not marketdata_mod.SYMBOL_RE.match(s) for s in wanted):
+        raise HTTPException(422, "종목 형식이 잘못됐어요.")
+    return {"prices": marketdata_mod.batch_prices(wanted), "ms": int(time.time() * 1000)}
 
 
 @app.get("/api/hot-coins")

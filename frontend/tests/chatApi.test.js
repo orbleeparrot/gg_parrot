@@ -91,3 +91,13 @@ test("chat and room requests carry room_id", async (t) => {
   assert.equal(calls[7].url, "/api/rooms/12/leave");
   assert.equal(calls[8].url, "/api/rooms/12/extend");
 });
+
+test("prices request is a public read with comma-joined symbols", async (t) => {
+  const calls = [];
+  t.mock.method(globalThis, "fetch", async (url, options) => { calls.push({ url, ...options }); return new Response(JSON.stringify({ prices: {} }), { status: 200 }); });
+  await api.prices(["BTCUSDT", "ETHUSDT"]);
+  const u = new URL(calls[0].url, "https://fixture.invalid");
+  assert.equal(u.pathname, "/api/prices");
+  assert.equal(u.searchParams.get("symbols"), "BTCUSDT,ETHUSDT");
+  assert.equal(calls[0].credentials, "omit");
+});

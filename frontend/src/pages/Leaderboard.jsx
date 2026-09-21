@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import SimBadge from "../components/SimBadge.jsx";
 import RegisterMacroModal from "../components/RegisterMacroModal.jsx";
@@ -12,6 +12,8 @@ import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 import { applyVote, settleVote } from "../lib/leaderboardVotes.js";
 import StrategyDetails from "../components/StrategyDetails.jsx";
 import { impressionKey } from "../lib/visit.js";
+import { isLive, liveReturn, stateLine, symbolsOf } from "../lib/leaderboardState.js";
+import { LIVE_TITLE } from "../lib/leaderboardCopy.js";
 import "./LeaderboardMobile.css";
 
 // 매크로 지표 비콘 — 노출(목록에 보임)·열람(빌더로 가져오기 · 빠른 실행 · 언락 중 하나를 누름).
@@ -105,10 +107,12 @@ function CopyIcon() {
 }
 const fmtCountdown = (s) => `${pad(Math.floor(s / 3600))}:${pad(Math.floor((s % 3600) / 60))}:${pad(s % 60)}`;
 
-function ret(e) {
-  if (e.return_pct == null) return { text: "집계중…", cls: "text-slate-500" };
-  const up = e.return_pct >= 0;
-  return { text: `${up ? "+" : ""}${e.return_pct.toFixed(2)}%`, cls: up ? "text-green-600" : "text-red-600" };
+// 보유 중 행은 현재가(3초 시세)로 미실현 수익률을 다시 계산하고, 나머지는 서버 값 그대로.
+function ret(e, prices, now) {
+  const value = liveReturn(e, prices, now);
+  if (value == null) return { text: "집계중…", cls: "text-slate-500", live: false };
+  const up = value >= 0;
+  return { text: `${up ? "+" : ""}${value.toFixed(2)}%`, cls: up ? "text-green-600" : "text-red-600", live: isLive(e, prices, now) };
 }
 
 function registrationLabel(entry) {
@@ -220,6 +224,32 @@ function AccountLeaderboard() {
 
   // Only the visible bounded page is refreshed. The countdown owns its timer.
   const refreshBoard = useAdaptivePolling(load, { intervalMs: 5_000, maxIntervalMs: 60_000, pollKey: `${auth.token}:${page}` });
+
+  // 보유 중 행의 현재가 — 들고 있는 종목만 3초마다 일괄 조회(없으면 폴링 자체를 안 돈다).
+  // 실패는 폴러에 던져 백오프(최대 30초)를 타게 하고, 그때까지는 마지막 값·서버 수익률로 그린다.
+  const [prices, setPrices] = useState({});
+  const symbols = useMemo(() => symbolsOf(items), [items]);
+  const loadPrices = useCallback(async (signal) => {
+    if (!symbols.length) return;
+    try {
+      const d = await api.prices(symbols, { signal });
+      setPrices((p) => ({ ...p, ...(d?.prices || {}) }));
+    } catch (e) {
+      if (e?.name !== "AbortError") throw e;
+    }
+  }, [symbols]);
+  useAdaptivePolling(loadPrices, {
+    intervalMs: 3_000,
+    maxIntervalMs: 30_000,
+    enabled: symbols.length > 0,
+    pollKey: `prices:${symbols.join(",")}`,
+  });
+  // 쿨다운 "n분" 표기용 — 30초면 충분하다.
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNowMs(Date.now()), 30_000);
+    return () => window.clearInterval(id);
+  }, []);
   useEffect(() => {
     if (!registeredId) return;
     // A newly registered entry can need one background refresh before it has a rank.
@@ -401,7 +431,8 @@ function AccountLeaderboard() {
             <span role="columnheader" className="lb-col-actions">반응</span>
           </div>
           {items.map((e, idx) => {
-            const r = ret(e);
+            const r = ret(e, prices, nowMs);
+            const line = stateLine(e, nowMs);
             const rank = e.rank || ((page - 1) * 50 + idx + 1);
             const top3 = rank <= 3;
             return (
@@ -438,8 +469,16 @@ function AccountLeaderboard() {
                     <span className="lb-mobile-badges"><EntryBadges entry={e} top3={top3} /></span>
                   </div>
                 </div>
-                <div className={"lb-return num " + r.cls} role="cell" aria-label={`수익률 ${r.text}`}>
-                  <span className="lb-return-value">{r.text}</span>
+                <div
+                  className={"lb-return num " + r.cls}
+                  role="cell"
+                  aria-label={`수익률 ${r.text}${r.live ? " (실시간)" : ""}${line ? ` · ${line.text}` : ""}`}
+                >
+                  <span className="lb-return-value">
+                    {r.text}
+                    {r.live ? <i className="lb-live-dot" aria-hidden="true" title={LIVE_TITLE} /> : null}
+                  </span>
+                  {line ? <span className={`lb-state is-${line.tone}`}>{line.text}</span> : null}
                 </div>
                 <div className="lb-actions" role="cell">
                   <div className="lb-reactions" role="group" aria-label="매크로 반응">

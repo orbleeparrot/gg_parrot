@@ -18,6 +18,7 @@ _PUBLIC_SECONDS = {
     "/api/fear-greed": 30,
     "/api/hangang-temp": 30,
     "/api/kimchi-premium": 1,
+    "/api/prices": 2,
     "/api/usdkrw": 30,
     "/api/funding-rate": 5,
     "/api/backtest/limits": 300,

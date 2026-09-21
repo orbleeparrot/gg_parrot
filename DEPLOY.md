@@ -207,3 +207,9 @@ Prefect는 원자적인 ‘예약 상태일 때만 취소’를 제공하지 않
 - 포인트 상수는 `backend/app/rooms.py` 상단(생성 100·연장 50·입장료 0~300·정원 2~10·7일). 환경변수 없음.
 - 환불 없음. 관리자 폐쇄: `POST /api/admin/rooms/{id}/close`.
 - **포인트 현금화(충전/환전)를 도입할 때 이 기능을 다시 심사한다** — 스펙 `docs/superpowers/specs/2026-09-21-chat-rooms-design.md` §2.
+
+## 리더보드 실시간 상태
+
+- 마이그레이션: `supabase/migrations/20260921150000_paper_session_state.sql` (papersession.state_json). 기동 시 `_PG_ADDED_COLUMNS`도 보강하므로 순서는 무관.
+- `PAPER_CHECKPOINT_SECONDS` 기본 10초(이전 20초). DB 쓰기가 부담되면 환경변수로 되돌린다.
+- `GET /api/prices`는 공개 읽기, 전 종목 시세를 한 번에 받아 2초 캐시(요청당 상류 호출 최대 1회).

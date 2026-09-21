@@ -18,7 +18,7 @@ const PUBLIC_READS = new Set([
   "/api/news/market", "/api/hot-coins", "/api/symbols", "/api/candles", "/api/candles/live",
   "/api/kimchi-premium", "/api/usdkrw", "/api/funding-rate", "/api/fear-greed", "/api/hangang-temp",
   "/api/whale-activity", "/api/runner/download/info", "/api/auth/google/config", "/api/backtest/limits",
-  "/api/challenge/today",
+  "/api/challenge/today", "/api/prices",
 ]);
 function publicRead(path, method) {
   const pathname = path.split("?")[0];
@@ -365,6 +365,10 @@ export const api = {
         `&interval=${encodeURIComponent(interval || "1m")}` +
         `&market=${encodeURIComponent(market === "futures" ? "futures" : "spot")}`
     ),
+
+  // 리더보드 보유 중 행의 미실현 수익률용 공개 일괄 시세 (최대 30종목, 2s 캐시)
+  prices: (symbols, options = {}) =>
+    req(`/api/prices?symbols=${encodeURIComponent(symbols.join(","))}`, { timeoutMs: 8_000, ...options }),
 
   // 오늘의 리더보드 (daily KST paper-return board)
   leaderboard: (userId, options = {}) => {

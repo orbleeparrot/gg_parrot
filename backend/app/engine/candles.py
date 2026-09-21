@@ -185,6 +185,41 @@ class CandleSim:
         unreal = sum(l.qty * (price - l.fill) for l in self.lots)
         return self.cash + margin + unreal
 
+    def state(self) -> dict:
+        """리더보드가 그리는 포지션 상태 — 조회만, 부작용 없음(stepper.PositionSim.state 와 같은 키)."""
+        cooldown = self._cooldown_until
+        held = self.in_position()
+        return {
+            "in_position": held,
+            "dir": 1 if self.side is PositionSide.LONG else -1,
+            "qty": float(abs(self.total_qty())),
+            "entry_price": float(self.avg_entry()) if held else 0.0,
+            "cooldown_until_ms": int(cooldown.timestamp() * 1000) if cooldown is not None else None,
+            "halted_today": self._halted_day is not None and self._halted_day == self._day,
+        }
+
+    def restore(self, equity: float, *, in_position: bool, qty: float, entry_price: float,
+                last_price: float, cooldown_until_ms: Optional[int] = None) -> None:
+        """재기동 복구 — 마지막 체크포인트의 자산·포지션에서 이어 간다.
+
+        여러 롯을 평단 하나로 합쳐 되살리고, 현금은 ``equity(last_price) == equity`` 가 되도록 역산한다.
+        수수료는 체결 때 이미 반영됐으므로 0. 일일 손실 기준선·보유 시간은 복구 시점부터 새로 센다.
+        """
+        self.lots = []
+        self.cash = float(equity)
+        self._entry_time = None
+        if in_position and qty > 0 and entry_price > 0:
+            margin = float(qty) * float(entry_price) / self.leverage
+            self.lots.append(_Lot(qty=float(qty), fill=float(entry_price), margin=margin))
+            if self.side is PositionSide.SHORT:
+                self.cash = float(equity) - float(qty) * (float(entry_price) - float(last_price))
+            else:
+                self.cash = float(equity) - margin - float(qty) * (float(last_price) - float(entry_price))
+            self._entry_time = datetime.now(timezone.utc)
+        self._cooldown_until = (
+            datetime.fromtimestamp(cooldown_until_ms / 1000, timezone.utc) if cooldown_until_ms else None
+        )
+
     def _fill(self, side: str, price: float, qty: float, mark: float) -> Fill:
         eq = self.equity(mark)
         ret = (eq - self.initial_capital) / self.initial_capital * 100.0
@@ -999,6 +1034,12 @@ class CandleAggregatorSim:
 
     def equity(self, price: float) -> float:
         return self.inner.equity(price)
+
+    def state(self) -> dict:
+        return self.inner.state()
+
+    def restore(self, equity: float, **position) -> None:
+        self.inner.restore(equity, **position)
 
     @property
     def initial_capital(self) -> float:

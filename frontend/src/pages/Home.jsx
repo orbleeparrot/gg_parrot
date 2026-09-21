@@ -55,7 +55,7 @@ function HomeEntryHero({ onLeaderboard, onGuide, onAsk, staticLayout = false }) 
           type="button"
           data-home-ask-trigger
           onClick={onAsk}
-          className="home-entry-choice"
+          className="home-entry-choice is-ask"
         >
           <span className="home-entry-choice-art" aria-hidden="true">
             <img src="/brand/agent/ggparrot-agent-curious-v1.svg" alt="" width="88" height="88" draggable="false" />

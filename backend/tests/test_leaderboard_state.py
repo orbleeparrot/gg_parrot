@@ -476,3 +476,68 @@ def _run(coro):
         if executor is not None:
             executor.shutdown(wait=True)
         loop.close()
+
+
+# --- 캔들형(D~J) 시뮬레이터도 상태를 내놓고 복구된다 --------------------------
+# RSI·볼린저·EMA·트레일링 봇이 리더보드 대부분인데 CandleSim 엔 state()/restore() 가 없어
+# 항상 '진입 대기'로 보였고, 복구 때 자산이 초기 자본으로 리셋됐다(2026-09-21 프로덕션).
+def _rsi_macro(**over):
+    base = {
+        "name": "rsi", "symbol": "SYNUSDT", "rule_type": "F", "position_side": "long",
+        "market": "spot", "leverage": 1, "candle_interval": "1h", "period": {"preset": "3m"},
+        "params": {"rsi_period": 14, "entry_threshold": 30, "exit_threshold": 70, "initial_capital": 1000},
+        "risk": {"stop_loss_pct": 3, "daily_max_loss_pct": 0, "cooldown_minutes": 0, "max_holding_hours": 0},
+        "fees": {"commission_pct": 0, "slippage_pct": 0},
+    }
+    base.update(over)
+    return Macro.model_validate(base)
+
+
+def test_candle_sim_state_and_restore_round_trip():
+    sim = make_sim(_rsi_macro(), 1_000.0)  # CandleAggregatorSim
+    assert sim.state() == {"in_position": False, "dir": 1, "qty": 0.0, "entry_price": 0.0, "cooldown_until_ms": None, "halted_today": False}
+    sim.restore(1_214.56, in_position=True, qty=2000.0, entry_price=0.5, last_price=0.6072, cooldown_until_ms=None)
+    st = sim.state()
+    assert st["in_position"] is True and st["qty"] == 2000.0 and abs(st["entry_price"] - 0.5) < 1e-9
+    assert abs(sim.equity(0.6072) - 1_214.56) < 1e-6
+    flat = make_sim(_rsi_macro(), 1_000.0)
+    flat.restore(1_214.56, in_position=False, qty=0.0, entry_price=0.0, last_price=0.0)
+    assert flat.state()["in_position"] is False and abs(flat.equity(0.6) - 1_214.56) < 1e-9
+
+
+def test_rebuild_runner_keeps_equity_for_candle_sessions():
+    info = {"id": 136, "symbol": "SYNUSDT", "macro_json": _rsi_macro().model_dump_json(), "virtual_balance": 1_000_000.0,
+            "current_equity": 1_214_567.0, "legs": [], "state": {}, "trades": []}
+    runner = paper._rebuild_runner(info)
+    assert abs(runner.equity - 1_214_567.0) < 1e-6 and abs(runner.ret - 21.4567) < 1e-4
+    assert abs(runner.sim.equity(0.6) - 1_214_567.0) < 1e-6  # 첫 틱에서 초기 자본으로 되돌아가지 않는다
+
+
+def test_one_off_repair_restores_returns_only_before_expiry(monkeypatch):
+    from app import paper_repair
+    from sqlalchemy.pool import StaticPool
+    engine = create_engine("sqlite://", echo=False, poolclass=StaticPool, connect_args={"check_same_thread": False})
+    SQLModel.metadata.create_all(engine)
+    with Session(engine) as db:
+        rows = [
+            PaperSession(id=136, macro_id="m", symbol="SYNUSDT", mode="live", status="running", started_at="x",
+                         virtual_balance=1_000_000.0, current_equity=1_000_000.0, current_return=0.0, state_json="{}"),
+            PaperSession(id=150, macro_id="m", symbol="CELRUSDT", mode="live", status="stopped", started_at="x",
+                         virtual_balance=1_000_000.0, current_equity=1_000_000.0, current_return=0.0),
+        ]
+        for r in rows:
+            db.add(r)
+        db.commit()
+
+    @contextmanager
+    def factory():
+        with Session(engine) as db:
+            yield db
+
+    monkeypatch.setattr(paper_repair, "get_session", factory)
+    assert paper_repair.apply_one_off_repair(now=datetime(2026, 9, 21, 12, 0, tzinfo=timezone.utc)) == 1
+    with Session(engine) as db:
+        row = db.get(PaperSession, 136)
+        assert row.current_return == 21.4567 and abs(row.current_equity - 1_214_567.0) < 1e-3 and row.state_json == ""
+        assert db.get(PaperSession, 150).current_return == 0.0  # stopped 는 건드리지 않는다
+    assert paper_repair.apply_one_off_repair(now=datetime(2026, 9, 22, 0, 0, tzinfo=timezone.utc)) == 0

@@ -52,6 +52,7 @@ except ImportError:
 from . import chart as chart_mod
 from . import chat as chat_mod
 from . import rooms as rooms_mod
+from . import paper_repair as paper_repair_mod
 from . import feargreed as feargreed_mod
 from . import hangang as hangang_mod
 from . import hotcoins as hotcoins_mod
@@ -113,6 +114,7 @@ async def lifespan(app: FastAPI):
     init_db()
     # 재배포로 끊긴 페이퍼 세션을 되살린다 — 실패해도 서버는 떠야 하므로 로그만 남긴다.
     try:
+        await asyncio.to_thread(paper_repair_mod.apply_one_off_repair)  # 2026-09-22 만료, 그 뒤 지운다
         await paper_mod.resume_running_sessions()
     except Exception:
         logging.getLogger(__name__).exception("paper session resume failed at startup")

@@ -23,6 +23,7 @@ test("liveReturn moves with price for a long, inversely for a short, sums a port
 test("stateLine renders the five states", () => {
   const now = 1_700_000_000_000;
   assert.deepEqual(stateLine({ state: "waiting", symbol: "BTCUSDT", last_price: 96412.1, trade_count: 0 }, now), { text: "진입 대기 · BTC 96,412.1", tone: "muted" });
+  assert.deepEqual(stateLine({ state: "waiting", symbol: "ONEUSDT", last_price: null, trade_count: 0 }, now), { text: "진입 대기", tone: "muted" });
   assert.deepEqual(stateLine({ ...holding, trade_count: 1, legs: [{ ...holding.legs[0], entry_price: 100 }] }, now), { text: "보유 중 · 진입가 100 · 거래 1회", tone: "live" });
   assert.deepEqual(stateLine({ state: "exited", last_fill_kst: "12:41", last_fill_kind: "tp", last_fill_return: 1.8, cooldown_until_ms: null, trade_count: 2 }, now), { text: "12:41 익절 +1.80% · 재진입 대기 · 거래 2회", tone: "good" });
   assert.deepEqual(stateLine({ state: "exited", last_fill_kst: "12:41", last_fill_kind: "sl", last_fill_return: -0.9, cooldown_until_ms: now + 14 * 60_000 + 1, trade_count: 2 }, now), { text: "12:41 손절 -0.90% · 쿨다운 15분 · 거래 2회", tone: "bad" });

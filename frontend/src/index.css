@@ -8925,9 +8925,8 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   font-weight: 500;
 }
 .lb-summary.is-locked { color: rgb(var(--c-slate-500)); }
-.lb-return { text-align: right; font-size: 16px; font-weight: 700; white-space: nowrap; }
 /* 수익률 아래 한 줄 상태 캡션(대기·보유·청산·중단·종료). 보유 중이면 숫자 옆 초록 점이 숨 쉰다. */
-.lb-return { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+.lb-return { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; text-align: right; font-size: 16px; font-weight: 700; white-space: nowrap; }
 .lb-state { font-size: 11px; line-height: 1.3; font-weight: 600; white-space: nowrap; color: rgb(var(--c-slate-500)); }
 .lb-state.is-live { color: rgb(var(--c-indigo-700)); }
 .lb-state.is-good { color: rgb(var(--c-green-700)); }

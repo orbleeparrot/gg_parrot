@@ -28,8 +28,11 @@ export function stateLine(entry, now = Date.now()) {
   if (!entry || !entry.state || entry.state === "none") return null;
   const trades = entry.trade_count > 0 ? [TRADES(entry.trade_count)] : [];
   switch (entry.state) {
-    case "waiting":
-      return { text: [`${WAITING} · ${base(entry.symbol)} ${fmtPrice(entry.last_price ?? 0)}`, ...trades].join(" · "), tone: "muted" };
+    case "waiting": {
+      // 시세가 아직 없는 행(러너 체크포인트 전·구 행)은 "ONE 0" 대신 종목·가격을 뺀다.
+      const quote = Number.isFinite(entry.last_price) && entry.last_price > 0 ? `${base(entry.symbol)} ${fmtPrice(entry.last_price)}` : null;
+      return { text: [WAITING, quote, ...trades].filter(Boolean).join(" · "), tone: "muted" };
+    }
     case "holding": {
       const leg = (entry.legs || []).find((l) => l.in_position);
       return { text: [HOLDING, leg ? ENTRY_AT(fmtPrice(leg.entry_price)) : null, ...trades].filter(Boolean).join(" · "), tone: "live" };

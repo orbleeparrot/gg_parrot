@@ -226,7 +226,7 @@ function AccountLeaderboard() {
   const refreshBoard = useAdaptivePolling(load, { intervalMs: 5_000, maxIntervalMs: 60_000, pollKey: `${auth.token}:${page}` });
 
   // 보유 중 행의 현재가 — 들고 있는 종목만 3초마다 일괄 조회(없으면 폴링 자체를 안 돈다).
-  // 실패는 삼킨다: 다음 틱에 다시 오고, 그때까지는 마지막 값·서버 수익률로 그린다.
+  // 실패는 폴러에 던져 백오프(최대 30초)를 타게 하고, 그때까지는 마지막 값·서버 수익률로 그린다.
   const [prices, setPrices] = useState({});
   const symbols = useMemo(() => symbolsOf(items), [items]);
   const loadPrices = useCallback(async (signal) => {
@@ -234,7 +234,9 @@ function AccountLeaderboard() {
     try {
       const d = await api.prices(symbols, { signal });
       setPrices((p) => ({ ...p, ...(d?.prices || {}) }));
-    } catch { /* 다음 틱 */ }
+    } catch (e) {
+      if (e?.name !== "AbortError") throw e;
+    }
   }, [symbols]);
   useAdaptivePolling(loadPrices, {
     intervalMs: 3_000,
@@ -467,7 +469,11 @@ function AccountLeaderboard() {
                     <span className="lb-mobile-badges"><EntryBadges entry={e} top3={top3} /></span>
                   </div>
                 </div>
-                <div className={"lb-return num " + r.cls} role="cell" aria-label={`수익률 ${r.text}`}>
+                <div
+                  className={"lb-return num " + r.cls}
+                  role="cell"
+                  aria-label={`수익률 ${r.text}${r.live ? " (실시간)" : ""}${line ? ` · ${line.text}` : ""}`}
+                >
                   <span className="lb-return-value">
                     {r.text}
                     {r.live ? <i className="lb-live-dot" aria-hidden="true" title={LIVE_TITLE} /> : null}

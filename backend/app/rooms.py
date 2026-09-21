@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from sqlalchemy import func
+from sqlalchemy import text as sql_text
 from sqlmodel import Session, select
 
 from . import avatars, points
@@ -35,6 +36,9 @@ DISCLAIMER = "전략방 대화는 투자 조언이 아니며, 매매 판단과 �
 CONSENT_TEXT = "전략방에서 특정 코인 매수·매도를 권유하거나 수익을 보장하는 발언을 하지 않겠습니다. 위반하면 방이 닫힐 수 있어요."
 
 
+# 잠금 순서: 방 행 → 회원 행(id 오름차순). 모든 쓰기가 같은 순서라 교착이 없다.
+
+
 class RoomError(Exception):
     def __init__(self, status: int, message: str):
         super().__init__(message)
@@ -47,10 +51,26 @@ def _now():
     return now.strftime("%Y-%m-%dT%H:%M:%SZ"), int(now.timestamp() * 1000)
 
 
-def _lock_member(db, user_id: int) -> User:
-    from .chat import _lock_member as lock  # 같은 잠금 규칙(sqlite BEGIN IMMEDIATE / pg FOR UPDATE)
+def _begin_write(db) -> None:
+    """sqlite 는 SELECT FOR UPDATE 가 없어 트랜잭션 첫 문장에서 쓰기 예약을 잡는다(chat._lock_member 와 같은 이유). 반드시 첫 DB 문장."""
+    if db.get_bind().dialect.name == "sqlite":
+        db.exec(sql_text("BEGIN IMMEDIATE"))
 
-    return lock(db, user_id)
+
+def _lock_user(db, user_id: int) -> User:
+    account = db.exec(select(User).where(User.id == int(user_id)).with_for_update()
+                      .execution_options(populate_existing=True)).first()
+    if account is None or account.is_deleted:
+        raise RoomError(401, "계정을 찾을 수 없어요. 다시 로그인해 주세요.")
+    return account
+
+
+def _lock_room(db, room_id: int) -> ChatRoom:
+    room = db.exec(select(ChatRoom).where(ChatRoom.id == int(room_id)).with_for_update()
+                   .execution_options(populate_existing=True)).first()
+    if room is None:
+        raise RoomError(404, "전략방을 찾을 수 없어요.")
+    return room
 
 
 def is_open(room: ChatRoom, now_ms: int) -> bool:
@@ -101,7 +121,8 @@ def _validate_create(title: str, capacity: int, entry_fee: int) -> str:
 def create_room(db: Session, account: User, *, title: str, capacity: int, entry_fee: int, consent: bool) -> dict:
     assert_can_write(account)
     title = _validate_create(title, capacity, entry_fee)
-    owner = _lock_member(db, int(account.id))
+    _begin_write(db)
+    owner = _lock_user(db, int(account.id))
     if not owner.room_consent_at and not consent:
         raise RoomError(422, "전략방을 만들려면 안내에 동의해 주세요.")
     made_today = db.exec(select(func.count(ChatRoom.id)).where(
@@ -141,26 +162,35 @@ def _account_age_ms(user: User, now_ms: int) -> int:
 
 def join_room(db: Session, account: User, room_id: int) -> dict:
     assert_can_write(account)
-    guest = _lock_member(db, int(account.id))  # 잔액 경합 방지 — 방 행보다 먼저 잠근다
-    room = db.exec(select(ChatRoom).where(ChatRoom.id == int(room_id)).with_for_update()).first()
-    if room is None:
-        raise RoomError(404, "전략방을 찾을 수 없어요.")
+    _begin_write(db)
+    room = _lock_room(db, room_id)  # 잠금 순서: 방 행 먼저
     joined_at, now_ms = _now()
     if not is_open(room, now_ms):
         raise RoomError(410, "이 전략방은 끝났어요.")
-    if db.get(ChatRoomMember, (room.id, guest.id)) is not None:
+    if db.get(ChatRoomMember, (room.id, int(account.id))) is not None:
         raise RoomError(409, "이미 들어와 있는 방이에요.")
     if _member_count(db, room.id) >= room.capacity:
         raise RoomError(409, "정원이 다 찼어요.")
+    # 이제 회원 행들 — id 오름차순으로 잠근다(extend_room 과 같은 전역 순서라 교착이 없다).
+    ids = sorted({int(account.id), room.owner_id})
+    locked: dict[int, User] = {}
+    for uid in ids:
+        if uid == room.owner_id:
+            try:
+                locked[uid] = _lock_user(db, uid)
+            except RoomError:
+                locked[uid] = None  # 방장 계정이 지워졌으면 정산만 건너뛴다 — 입장 자체는 막지 않는다
+        else:
+            locked[uid] = _lock_user(db, uid)
+    guest = locked[int(account.id)]
+    owner = locked.get(room.owner_id)
     if room.entry_fee > 0 and _account_age_ms(guest, now_ms) < MIN_ACCOUNT_AGE_FOR_PAID_MS:
         raise RoomError(403, "가입 3일 후부터 유료 전략방에 들어갈 수 있어요.")
     if room.entry_fee > 0:
         points.apply(db, guest, -room.entry_fee, "room_join", f"room:{room.id}")  # 부족하면 InsufficientPoints
         share = points.creator_share(room.entry_fee)
-        if share > 0:
-            owner = db.exec(select(User).where(User.id == room.owner_id).with_for_update()).first()
-            if owner is not None and not owner.is_deleted:
-                points.apply(db, owner, share, "room_host_earn", f"room:{room.id}")
+        if share > 0 and owner is not None:
+            points.apply(db, owner, share, "room_host_earn", f"room:{room.id}")
     db.add(ChatRoomMember(room_id=room.id, user_id=guest.id, paid=room.entry_fee, joined_at=joined_at, joined_ms=now_ms))
     db.commit()
     db.refresh(room)
@@ -180,12 +210,12 @@ def leave_room(db: Session, account: User, room_id: int) -> dict:
 
 
 def extend_room(db: Session, account: User, room_id: int) -> dict:
-    owner = _lock_member(db, int(account.id))
-    room = db.exec(select(ChatRoom).where(ChatRoom.id == int(room_id)).with_for_update()).first()
-    if room is None:
-        raise RoomError(404, "전략방을 찾을 수 없어요.")
-    if room.owner_id != owner.id:
+    assert_can_write(account)
+    _begin_write(db)
+    room = _lock_room(db, room_id)  # 잠금 순서: 방 행 먼저, 그다음 회원 행
+    if room.owner_id != int(account.id):
         raise RoomError(403, "방장만 연장할 수 있어요.")
+    owner = _lock_user(db, int(account.id))
     _, now_ms = _now()
     if not is_open(room, now_ms):
         raise RoomError(410, "이 전략방은 끝났어요.")

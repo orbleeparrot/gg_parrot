@@ -347,3 +347,31 @@ def test_reply_card_cannot_quote_a_room_message_in_public_chat():
     # 같은 방 안의 인용은 그대로 된다
     same = client.post("/api/chat", json={"text": f"[reply:{secret_id}] 같은 방", "room_id": room_id}, headers=_auth(owner_tok)).json()["message"]
     assert same["reply_to"]["id"] == secret_id
+
+
+def test_create_room_rejects_profane_title_with_422():
+    token, _ = _signup()
+    r = _create(token, title="씨발 전략방")
+    assert r.status_code == 422, r.text
+    detail = r.json()["detail"]
+    assert isinstance(detail, str) and detail != ""
+
+
+def test_admin_closed_room_rejects_writes_but_allows_reads():
+    owner_tok, _ = _signup()
+    room_id = _create(owner_tok, entry_fee=0).json()["room"]["id"]
+    posted = client.post("/api/chat", json={"text": "닫히기 전", "room_id": room_id}, headers=_auth(owner_tok))
+    assert posted.status_code == 200, posted.text
+    admin_tok, admin_id = _signup()
+    with get_session() as db:
+        user = db.get(User, admin_id)
+        user.is_admin = True
+        db.add(user)
+        db.commit()
+    closed = client.post(f"/api/admin/rooms/{room_id}/close", headers=_auth(admin_tok))
+    assert closed.status_code == 200 and closed.json()["room"]["closed_reason"] == "admin"
+    r = client.post("/api/chat", json={"text": "닫힌 후", "room_id": room_id}, headers=_auth(owner_tok))
+    assert r.status_code == 410
+    body = client.get(f"/api/chat?room_id={room_id}", headers=_auth(owner_tok))
+    assert body.status_code == 200
+    assert "닫히기 전" in [m["text"] for m in body.json()["items"]]

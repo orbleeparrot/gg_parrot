@@ -1,4 +1,4 @@
-// 전략방 — 문구 한곳. "리딩방"이라는 말은 쓰지 않는다.
+// 전략방 — 문구 한곳. 유료 리딩 뉘앙스의 표현은 쓰지 않는다.
 export const TAB_ALL = "전체";
 export const TAB_FIND = "방 찾기";
 export const ROOM_NOTICE = "전략방 대화는 투자 조언이 아니에요. 매수·매도 권유와 수익 보장 발언은 금지돼요.";

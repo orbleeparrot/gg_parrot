@@ -1213,6 +1213,7 @@ _PG_INDEXES = {
     "ix_newsarticle_enrichment": ("newsarticle", "enrichment_pending, last_seen_ms"),
     "ix_newsarticle_enrichment_due": ("newsarticle", "enrichment_pending, enrichment_next_ms"),
     "ix_chatmessage_user_created_ms": ("chatmessage", "user_id, created_ms"),
+    "ix_chatmessage_room_id": ("chatmessage", "room_id"),
     "ix_runsession_active_heartbeat": ("runsession", "status, last_heartbeat_at"),
     "ix_runsession_user_macro_id": ("runsession", "user_macro_id"),
     "ix_newstitletranslation_processing_status": ("newstitletranslation", "processing_status"),

@@ -132,7 +132,10 @@ def _validate_create(title: str, capacity: int, entry_fee: int) -> str:
     title = (title or "").strip()
     if not TITLE_MIN <= len(title) <= TITLE_MAX:
         raise RoomError(422, f"방 제목은 {TITLE_MIN}~{TITLE_MAX}자로 적어 주세요.")
-    require_clean_text(title, "방 제목")
+    try:
+        require_clean_text(title, "방 제목")
+    except ValueError as exc:
+        raise RoomError(422, str(exc)) from exc
     if not MIN_CAPACITY <= int(capacity) <= MAX_CAPACITY:
         raise RoomError(422, f"정원은 {MIN_CAPACITY}~{MAX_CAPACITY}명이에요.")
     if not 0 <= int(entry_fee) <= MAX_ENTRY_FEE:

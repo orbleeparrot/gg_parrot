@@ -195,12 +195,18 @@ const ChatBox = memo(function ChatBox({ defaultOpen = false, ...props }) {
   const roomsPanel = activeTab === "find" ? (
     <RoomsPanel member={member} data={rooms} onChanged={refreshRooms} onEnter={(id) => { refreshRooms(); setActiveTab(`room:${id}`); }} />
   ) : null;
-  return <MemberChatBox key={scope} {...props} member={member} scope={scope} open={open} setOpen={setOpen} roomId={roomId} room={room}
-                        tabs={tabs} activeTab={activeTab} onSelectTab={setActiveTab} roomsPanel={roomsPanel} onRoomsChanged={refreshRooms} />;
+  // 시트가 닫히면 활성 탭도 전체로 — FAB 배지·닫힘 폴링이 다시 공개 채팅을 기준으로 돌게.
+  const handleSetOpen = useCallback((next) => {
+    setOpen(next);
+    if (!next) setActiveTab("all");
+  }, []);
+  return <MemberChatBox key={scope} {...props} member={member} scope={scope} open={open} setOpen={handleSetOpen} roomId={roomId} room={room}
+                        tabs={tabs} activeTab={activeTab} onSelectTab={setActiveTab} roomsPanel={roomsPanel} onRoomsChanged={refreshRooms}
+                        extendCost={rooms?.extend_cost ?? 50} />;
 });
 export default ChatBox;
 
-function MemberChatBox({ member, scope, open, setOpen, roomId = 0, room = null, tabs, activeTab, onSelectTab, roomsPanel, onRoomsChanged, defaultStickerTray = false }) {
+function MemberChatBox({ member, scope, open, setOpen, roomId = 0, room = null, tabs, activeTab, onSelectTab, roomsPanel, onRoomsChanged, extendCost = 50, defaultStickerTray = false }) {
   const mobilePlacement = useSyncExternalStore(subscribeMobilePlacement, isMobilePlacement, () => false);
   const panelId = useId();
   const subscribe = useCallback((listener) => observeChat(scope, listener), [scope]);
@@ -803,7 +809,7 @@ function MemberChatBox({ member, scope, open, setOpen, roomId = 0, room = null, 
             <div className="chat-room-bar">
               <span className="chat-room-notice">{ROOM_NOTICE}</span>
               {currentRoom?.is_owner
-                ? (currentRoom?.can_extend ? <button type="button" className="chat-room-action" onClick={extendRoom} disabled={roomBusy}>{EXTEND_LABEL(50)}</button> : <span className="chat-room-owner" title={OWNER_CANNOT_LEAVE}>방장</span>)
+                ? (currentRoom?.can_extend ? <button type="button" className="chat-room-action" onClick={extendRoom} disabled={roomBusy}>{EXTEND_LABEL(extendCost)}</button> : <span className="chat-room-owner" title={OWNER_CANNOT_LEAVE}>방장</span>)
                 : <button type="button" className="chat-room-action" onClick={() => setLeaving(true)} disabled={roomBusy}>나가기</button>}
             </div>
           ) : null}

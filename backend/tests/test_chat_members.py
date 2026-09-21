@@ -278,6 +278,7 @@ def test_postgres_chat_migration_preserves_legacy_authors_and_secures_read_state
         "ALTER TABLE chatmessage ADD COLUMN IF NOT EXISTS user_id INTEGER",
         "ALTER TABLE chatmessage ADD COLUMN IF NOT EXISTS room_id INTEGER",
         "CREATE INDEX IF NOT EXISTS ix_chatmessage_user_created_ms ON chatmessage (user_id, created_ms)",
+        "CREATE INDEX IF NOT EXISTS ix_chatmessage_room_id ON chatmessage (room_id)",
         "ALTER TABLE chatmessage ENABLE ROW LEVEL SECURITY",
         "ALTER TABLE chatreadstate ENABLE ROW LEVEL SECURITY",
         "REVOKE ALL PRIVILEGES ON TABLE chatreadstate FROM PUBLIC",

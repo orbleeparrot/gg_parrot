@@ -122,3 +122,91 @@ def create_room(db: Session, account: User, *, title: str, capacity: int, entry_
     db.commit()
     db.refresh(room)
     return {"room": room_view(db, room, owner.id, now_ms=now_ms), "points_balance": owner.points_balance}
+
+
+def get_room(db, room_id: int) -> ChatRoom:
+    room = db.get(ChatRoom, int(room_id))
+    if room is None:
+        raise RoomError(404, "전략방을 찾을 수 없어요.")
+    return room
+
+
+def _account_age_ms(user: User, now_ms: int) -> int:
+    try:
+        created = datetime.strptime(user.created_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return 0
+    return now_ms - int(created.timestamp() * 1000)
+
+
+def join_room(db: Session, account: User, room_id: int) -> dict:
+    assert_can_write(account)
+    guest = _lock_member(db, int(account.id))  # 잔액 경합 방지 — 방 행보다 먼저 잠근다
+    room = db.exec(select(ChatRoom).where(ChatRoom.id == int(room_id)).with_for_update()).first()
+    if room is None:
+        raise RoomError(404, "전략방을 찾을 수 없어요.")
+    joined_at, now_ms = _now()
+    if not is_open(room, now_ms):
+        raise RoomError(410, "이 전략방은 끝났어요.")
+    if db.get(ChatRoomMember, (room.id, guest.id)) is not None:
+        raise RoomError(409, "이미 들어와 있는 방이에요.")
+    if _member_count(db, room.id) >= room.capacity:
+        raise RoomError(409, "정원이 다 찼어요.")
+    if room.entry_fee > 0 and _account_age_ms(guest, now_ms) < MIN_ACCOUNT_AGE_FOR_PAID_MS:
+        raise RoomError(403, "가입 3일 후부터 유료 전략방에 들어갈 수 있어요.")
+    if room.entry_fee > 0:
+        points.apply(db, guest, -room.entry_fee, "room_join", f"room:{room.id}")  # 부족하면 InsufficientPoints
+        share = points.creator_share(room.entry_fee)
+        if share > 0:
+            owner = db.exec(select(User).where(User.id == room.owner_id).with_for_update()).first()
+            if owner is not None and not owner.is_deleted:
+                points.apply(db, owner, share, "room_host_earn", f"room:{room.id}")
+    db.add(ChatRoomMember(room_id=room.id, user_id=guest.id, paid=room.entry_fee, joined_at=joined_at, joined_ms=now_ms))
+    db.commit()
+    db.refresh(room)
+    return {"room": room_view(db, room, guest.id, now_ms=now_ms), "points_balance": guest.points_balance}
+
+
+def leave_room(db: Session, account: User, room_id: int) -> dict:
+    room = get_room(db, room_id)
+    if room.owner_id == account.id:
+        raise RoomError(403, "방장은 나갈 수 없어요. 방은 만료일에 자동으로 끝나요.")
+    member = db.get(ChatRoomMember, (room.id, int(account.id)))
+    if member is None:
+        raise RoomError(404, "들어와 있는 방이 아니에요.")
+    db.delete(member)  # 환불 없음 — 포인트는 건드리지 않는다
+    db.commit()
+    return {"ok": True}
+
+
+def extend_room(db: Session, account: User, room_id: int) -> dict:
+    owner = _lock_member(db, int(account.id))
+    room = db.exec(select(ChatRoom).where(ChatRoom.id == int(room_id)).with_for_update()).first()
+    if room is None:
+        raise RoomError(404, "전략방을 찾을 수 없어요.")
+    if room.owner_id != owner.id:
+        raise RoomError(403, "방장만 연장할 수 있어요.")
+    _, now_ms = _now()
+    if not is_open(room, now_ms):
+        raise RoomError(410, "이 전략방은 끝났어요.")
+    if room.expires_ms - now_ms > ROOM_EXTEND_WINDOW_MS:
+        raise RoomError(409, "만료 하루 전부터 연장할 수 있어요.")
+    points.apply(db, owner, -ROOM_EXTEND_COST, "room_extend", f"room:{room.id}")
+    room.expires_ms += ROOM_TTL_MS
+    room.extended_count += 1
+    db.add(room)
+    db.commit()
+    db.refresh(room)
+    return {"room": room_view(db, room, owner.id, now_ms=now_ms), "points_balance": owner.points_balance}
+
+
+def close_room_by_admin(db: Session, room_id: int) -> dict:
+    room = get_room(db, room_id)
+    closed_at, now_ms = _now()
+    if not room.closed_reason:
+        room.closed_reason = "admin"
+        room.closed_at = closed_at
+        db.add(room)
+        db.commit()
+        db.refresh(room)
+    return {"room": room_view(db, room, None, now_ms=now_ms)}

@@ -124,3 +124,131 @@ def test_create_room_needs_points_and_open_account():
         db.add(user)
         db.commit()
     assert _create(token).status_code == 403
+
+
+def _backdate_room(room_id, *, created_ago_ms=0, expires_in_ms=None):
+    with get_session() as db:
+        room = db.get(ChatRoom, room_id)
+        now_ms = int(time.time() * 1000)
+        room.created_ms = now_ms - created_ago_ms
+        if expires_in_ms is not None:
+            room.expires_ms = now_ms + expires_in_ms
+        db.add(room)
+        db.commit()
+
+
+def test_join_paid_room_splits_70_30_and_free_room_writes_no_ledger():
+    owner_tok, owner_id = _signup()
+    room_id = _create(owner_tok, entry_fee=100).json()["room"]["id"]
+    owner_before = _balance(owner_id)
+    guest_tok, guest_id = _signup()
+    guest_before = _balance(guest_id)
+    r = client.post(f"/api/rooms/{room_id}/join", headers=_auth(guest_tok))
+    assert r.status_code == 200, r.text
+    assert r.json()["points_balance"] == guest_before - 100
+    assert r.json()["room"]["member_count"] == 2 and r.json()["room"]["is_member"]
+    assert _balance(owner_id) == owner_before + 70
+    g = _ledger(guest_id)[-1]
+    o = _ledger(owner_id)[-1]
+    assert (g.delta, g.reason, g.ref) == (-100, "room_join", f"room:{room_id}")
+    assert (o.delta, o.reason, o.ref) == (70, "room_host_earn", f"room:{room_id}")
+    with get_session() as db:
+        assert db.get(ChatRoomMember, (room_id, guest_id)).paid == 100
+
+    free_owner, _ = _signup()
+    free_id = _create(free_owner, entry_fee=0).json()["room"]["id"]
+    newbie_tok, newbie_id = _signup(age_days=0)  # 방금 가입 — 무료방은 들어갈 수 있다
+    ledger_before = len(_ledger(newbie_id))
+    assert client.post(f"/api/rooms/{free_id}/join", headers=_auth(newbie_tok)).status_code == 200
+    assert len(_ledger(newbie_id)) == ledger_before
+
+
+def test_join_rejects_duplicate_full_young_and_broke():
+    owner_tok, _ = _signup()
+    room_id = _create(owner_tok, capacity=2, entry_fee=50).json()["room"]["id"]
+    guest_tok, guest_id = _signup()
+    assert client.post(f"/api/rooms/{room_id}/join", headers=_auth(guest_tok)).status_code == 200
+    assert client.post(f"/api/rooms/{room_id}/join", headers=_auth(guest_tok)).status_code == 409
+    third_tok, _ = _signup()
+    r = client.post(f"/api/rooms/{room_id}/join", headers=_auth(third_tok))
+    assert r.status_code == 409 and "정원" in r.json()["detail"]
+
+    big_owner, _ = _signup()
+    big_id = _create(big_owner, capacity=5, entry_fee=50).json()["room"]["id"]
+    young_tok, _ = _signup(age_days=1)
+    assert client.post(f"/api/rooms/{big_id}/join", headers=_auth(young_tok)).status_code == 403
+    broke_tok, broke_id = _signup()
+    with get_session() as db:
+        user = db.get(User, broke_id)
+        user.points_balance = 49
+        db.add(user)
+        db.commit()
+    r = client.post(f"/api/rooms/{big_id}/join", headers=_auth(broke_tok))
+    assert r.status_code == 402
+    with get_session() as db:
+        assert db.get(ChatRoomMember, (big_id, broke_id)) is None
+    assert _balance(broke_id) == 49
+
+
+def test_join_expired_or_closed_room_is_410():
+    owner_tok, _ = _signup()
+    room_id = _create(owner_tok, entry_fee=0).json()["room"]["id"]
+    _backdate_room(room_id, expires_in_ms=-1)
+    guest_tok, _ = _signup()
+    r = client.post(f"/api/rooms/{room_id}/join", headers=_auth(guest_tok))
+    assert r.status_code == 410
+
+
+def test_leave_frees_seat_without_refund_and_owner_cannot_leave():
+    owner_tok, owner_id = _signup()
+    room_id = _create(owner_tok, entry_fee=100).json()["room"]["id"]
+    guest_tok, guest_id = _signup()
+    client.post(f"/api/rooms/{room_id}/join", headers=_auth(guest_tok))
+    after_join = _balance(guest_id)
+    owner_after_join = _balance(owner_id)
+    assert client.delete(f"/api/rooms/{room_id}/leave", headers=_auth(guest_tok)).json() == {"ok": True}
+    assert _balance(guest_id) == after_join and _balance(owner_id) == owner_after_join
+    with get_session() as db:
+        assert db.get(ChatRoomMember, (room_id, guest_id)) is None
+    # 다시 들어오면 다시 낸다
+    assert client.post(f"/api/rooms/{room_id}/join", headers=_auth(guest_tok)).status_code == 200
+    assert _balance(guest_id) == after_join - 100
+    r = client.delete(f"/api/rooms/{room_id}/leave", headers=_auth(owner_tok))
+    assert r.status_code == 403
+
+
+def test_extend_only_in_last_day_and_only_owner():
+    owner_tok, owner_id = _signup()
+    room_id = _create(owner_tok, entry_fee=0).json()["room"]["id"]
+    assert client.post(f"/api/rooms/{room_id}/extend", headers=_auth(owner_tok)).status_code == 409
+    _backdate_room(room_id, expires_in_ms=3600 * 1000)
+    guest_tok, _ = _signup()
+    client.post(f"/api/rooms/{room_id}/join", headers=_auth(guest_tok))
+    assert client.post(f"/api/rooms/{room_id}/extend", headers=_auth(guest_tok)).status_code == 403
+    before = _balance(owner_id)
+    r = client.post(f"/api/rooms/{room_id}/extend", headers=_auth(owner_tok))
+    assert r.status_code == 200, r.text
+    assert r.json()["points_balance"] == before - 50
+    room = r.json()["room"]
+    assert room["extended_count"] == 1
+    assert room["expires_ms"] - int(time.time() * 1000) > 7 * 24 * 3600 * 1000
+    assert _ledger(owner_id)[-1].reason == "room_extend"
+
+
+def test_admin_close_blocks_join_and_extend():
+    owner_tok, _ = _signup()
+    room_id = _create(owner_tok, entry_fee=0).json()["room"]["id"]
+    admin_tok, admin_id = _signup()
+    with get_session() as db:
+        user = db.get(User, admin_id)
+        user.is_admin = True
+        db.add(user)
+        db.commit()
+    r = client.post(f"/api/admin/rooms/{room_id}/close", headers=_auth(admin_tok))
+    assert r.status_code == 200 and r.json()["room"]["closed_reason"] == "admin"
+    guest_tok, _ = _signup()
+    assert client.post(f"/api/rooms/{room_id}/join", headers=_auth(guest_tok)).status_code == 410
+    _backdate_room(room_id, expires_in_ms=3600 * 1000)
+    assert client.post(f"/api/rooms/{room_id}/extend", headers=_auth(owner_tok)).status_code == 410
+    plain_tok, _ = _signup()
+    assert client.post(f"/api/admin/rooms/{room_id}/close", headers=_auth(plain_tok)).status_code == 403

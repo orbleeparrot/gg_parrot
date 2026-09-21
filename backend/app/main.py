@@ -1564,6 +1564,44 @@ def rooms_create(req: RoomCreateRequest, account: User = Depends(auth_mod.curren
         raise _room_http(exc)
 
 
+@app.post("/api/rooms/{room_id}/join")
+def rooms_join(room_id: int, account: User = Depends(auth_mod.current_user_in_session),
+               db: Session = Depends(request_session)) -> dict:
+    try:
+        return rooms_mod.join_room(db, account, room_id)
+    except (rooms_mod.RoomError, points_mod.InsufficientPoints) as exc:
+        db.rollback()
+        raise _room_http(exc)
+
+
+@app.delete("/api/rooms/{room_id}/leave")
+def rooms_leave(room_id: int, account: User = Depends(auth_mod.current_user_in_session),
+                db: Session = Depends(request_session)) -> dict:
+    try:
+        return rooms_mod.leave_room(db, account, room_id)
+    except rooms_mod.RoomError as exc:
+        raise _room_http(exc)
+
+
+@app.post("/api/rooms/{room_id}/extend")
+def rooms_extend(room_id: int, account: User = Depends(auth_mod.current_user_in_session),
+                 db: Session = Depends(request_session)) -> dict:
+    try:
+        return rooms_mod.extend_room(db, account, room_id)
+    except (rooms_mod.RoomError, points_mod.InsufficientPoints) as exc:
+        db.rollback()
+        raise _room_http(exc)
+
+
+@app.post("/api/admin/rooms/{room_id}/close")
+def admin_room_close(room_id: int, admin: User = Depends(auth_mod.require_admin),
+                     db: Session = Depends(request_session)) -> dict:
+    try:
+        return rooms_mod.close_room_by_admin(db, room_id)
+    except rooms_mod.RoomError as exc:
+        raise _room_http(exc)
+
+
 # --- 껄무새 게시판 -------------------------------------------------------
 @app.post("/api/board/posts")
 async def board_create(

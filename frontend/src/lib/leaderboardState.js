@@ -6,6 +6,7 @@ const base = (symbol) => String(symbol || "").replace(/USDT$/, "");
 
 export function isLive(entry, prices) {
   if (entry?.state !== "holding" || !(entry.virtual_balance > 0)) return false;
+  if (!Number.isFinite(entry.equity)) return false;
   const held = (entry.legs || []).filter((l) => l.in_position);
   return held.length > 0 && held.every((l) => Number.isFinite(prices?.[l.symbol]));
 }

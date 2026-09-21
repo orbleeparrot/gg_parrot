@@ -14,8 +14,10 @@ test("liveReturn moves with price for a long, inversely for a short, sums a port
   assert.equal(liveReturn(port, { BTCUSDT: 101 }), 1.5);               // ETH 없음 → 서버값
   assert.equal(liveReturn({ ...holding, state: "waiting" }, { BTCUSDT: 101 }), 1.5);
   assert.equal(liveReturn({ ...holding, virtual_balance: null }, { BTCUSDT: 101 }), 1.5);
+  assert.equal(liveReturn({ ...holding, equity: undefined }, { BTCUSDT: 101 }), 1.5);
   assert.equal(isLive(holding, { BTCUSDT: 101 }), true);
   assert.equal(isLive(holding, {}), false);
+  assert.equal(isLive({ ...holding, equity: null }, { BTCUSDT: 101 }), false);
 });
 
 test("stateLine renders the five states", () => {

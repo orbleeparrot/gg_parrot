@@ -200,3 +200,10 @@ Prefect는 원자적인 ‘예약 상태일 때만 취소’를 제공하지 않
 ## 껄무새에게 물어볼까? (2026-09-18)
 
 이 기능은 요청당 최대 24개 후보를 백테스트하며, `ASK_DAILY_LIMIT`(기본 5회/일/계정)과 `ASK_TIME_BUDGET_SEC`(기본 20초)로 제한됩니다. Supabase 마이그레이션 `20260918120000_ask_macro_sessions.sql`이 필요하고, `GEMINI_API_KEY`가 없어도 템플릿 후보로만 동작합니다.
+
+## 전략방 (소그룹 유료 채팅)
+
+- 마이그레이션: `supabase/migrations/20260921120000_chat_rooms.sql` (chatroom·chatroommember, chatmessage.room_id, user.room_consent_at). 서버 기동 시 `_PG_ADDED_COLUMNS` 가 컬럼을 보강하지만 테이블·RLS 는 마이그레이션이 만든다 — 배포 전에 적용.
+- 포인트 상수는 `backend/app/rooms.py` 상단(생성 100·연장 50·입장료 0~300·정원 2~10·7일). 환경변수 없음.
+- 환불 없음. 관리자 폐쇄: `POST /api/admin/rooms/{id}/close`.
+- **포인트 현금화(충전/환전)를 도입할 때 이 기능을 다시 심사한다** — 스펙 `docs/superpowers/specs/2026-09-21-chat-rooms-design.md` §2.

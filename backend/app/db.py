@@ -290,6 +290,8 @@ class User(SQLModel, table=True):
     # 껄무새에게 물어볼까? — 고지 동의(버전·시각). 동의 버전이 현재 고지 버전과 다르면 다시 받는다.
     ask_consent_version: str = ""
     ask_consent_at: str = ""
+    # 전략방 — 방 만들 때 한 번 받는 동의(투자 권유·수익 보장 발언 금지) 시각. 비어 있으면 아직 동의 전.
+    room_consent_at: str = ""
 
 
 class UserAvatar(SQLModel, table=True):
@@ -650,6 +652,8 @@ class ChatMessage(SQLModel, table=True):
     text: str
     created_at: str  # UTC ISO
     created_ms: int = Field(index=True, sa_type=BigInteger)  # epoch ms
+    # 전략방 메시지면 그 방 id. NULL 이면 기존 공개(리더보드) 채팅.
+    room_id: Optional[int] = Field(default=None, index=True)
 
 
 class ChatReadState(SQLModel, table=True):
@@ -657,6 +661,33 @@ class ChatReadState(SQLModel, table=True):
 
     user_id: int = Field(primary_key=True)
     last_seen_id: int = Field(default=0)
+
+
+class ChatRoom(SQLModel, table=True):
+    """전략방 — 회원이 만드는 소그룹 채팅(최대 10명, 포인트 입장료, 7일 만료). rooms.py 가 규칙을 맡는다."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    owner_id: int = Field(index=True)
+    title: str
+    capacity: int  # 방장 포함 정원 2~10
+    entry_fee: int  # 0~300 포인트
+    created_at: str
+    created_ms: int = Field(index=True, sa_type=BigInteger)
+    expires_ms: int = Field(index=True, sa_type=BigInteger)  # 생성 + 7일, 연장하면 += 7일
+    extended_count: int = 0
+    closed_reason: str = ""  # "" | "admin" — 관리자가 닫은 방만 값이 있다
+    closed_at: str = ""
+
+
+class ChatRoomMember(SQLModel, table=True):
+    """방 멤버 한 명. 이 행이 곧 방의 읽음 상태(last_seen_id)이기도 하다. 방장도 paid=0 으로 한 행."""
+
+    room_id: int = Field(primary_key=True, index=True)
+    user_id: int = Field(primary_key=True, index=True)
+    paid: int = 0  # 실제 낸 포인트 — 환불은 없으므로 기록용
+    joined_at: str
+    joined_ms: int = Field(sa_type=BigInteger)
+    last_seen_id: int = 0
 
 
 class LeaderboardVote(SQLModel, table=True):
@@ -980,9 +1011,11 @@ def _migrate() -> None:
             "signup_method": 'ALTER TABLE "user" ADD COLUMN signup_method TEXT NOT NULL DEFAULT \'\'',
             "ask_consent_version": 'ALTER TABLE "user" ADD COLUMN ask_consent_version TEXT NOT NULL DEFAULT \'\'',
             "ask_consent_at": 'ALTER TABLE "user" ADD COLUMN ask_consent_at TEXT NOT NULL DEFAULT \'\'',
+            "room_consent_at": 'ALTER TABLE "user" ADD COLUMN room_consent_at TEXT NOT NULL DEFAULT \'\'',
         },
         "chatmessage": {
             "user_id": "ALTER TABLE chatmessage ADD COLUMN user_id INTEGER",
+            "room_id": "ALTER TABLE chatmessage ADD COLUMN room_id INTEGER",
         },
         "leaderboardentry": {
             "username": "ALTER TABLE leaderboardentry ADD COLUMN username TEXT DEFAULT ''",
@@ -1084,6 +1117,7 @@ def _migrate() -> None:
             "CREATE INDEX IF NOT EXISTS ix_chatmessage_user_created_ms "
             "ON chatmessage (user_id, created_ms)"
         )
+        conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_chatmessage_room_id ON chatmessage (room_id)")
         conn.exec_driver_sql(
             "CREATE INDEX IF NOT EXISTS ix_runsession_user_macro_id "
             "ON runsession (user_macro_id)"
@@ -1130,8 +1164,9 @@ _PG_ADDED_COLUMNS = {
              "blocked_at": "VARCHAR NOT NULL DEFAULT ''", "blocked_reason": "VARCHAR NOT NULL DEFAULT ''",
              "banned_email_hash": "VARCHAR NOT NULL DEFAULT ''", "deleted_at": "VARCHAR NOT NULL DEFAULT ''",
              "signup_method": "VARCHAR NOT NULL DEFAULT ''",
-             "ask_consent_version": "VARCHAR NOT NULL DEFAULT ''", "ask_consent_at": "VARCHAR NOT NULL DEFAULT ''"},
-    "chatmessage": {"user_id": "INTEGER"},
+             "ask_consent_version": "VARCHAR NOT NULL DEFAULT ''", "ask_consent_at": "VARCHAR NOT NULL DEFAULT ''",
+             "room_consent_at": "VARCHAR NOT NULL DEFAULT ''"},
+    "chatmessage": {"user_id": "INTEGER", "room_id": "INTEGER"},
     "dailychallenge": {
         "status": "TEXT DEFAULT 'ready'", "claim_token": "TEXT DEFAULT ''",
         "claimed_ms": "BIGINT DEFAULT 0", "last_error": "TEXT DEFAULT ''",
@@ -1178,6 +1213,7 @@ _PG_INDEXES = {
     "ix_newsarticle_enrichment": ("newsarticle", "enrichment_pending, last_seen_ms"),
     "ix_newsarticle_enrichment_due": ("newsarticle", "enrichment_pending, enrichment_next_ms"),
     "ix_chatmessage_user_created_ms": ("chatmessage", "user_id, created_ms"),
+    "ix_chatmessage_room_id": ("chatmessage", "room_id"),
     "ix_runsession_active_heartbeat": ("runsession", "status, last_heartbeat_at"),
     "ix_runsession_user_macro_id": ("runsession", "user_macro_id"),
     "ix_newstitletranslation_processing_status": ("newstitletranslation", "processing_status"),
@@ -1202,7 +1238,7 @@ _PG_PRIVATE_CACHE_TABLES = (
     "newsarticlefeed", "newsarticle", "newsmaintenancelease", "publicnewslease",
     "leaderboardsnapshotcontrol", "leaderboardsnapshotversion", "leaderboardsnapshotitem",
     "leaderboardentrystats", "leaderboardchallengebot",
-    "dailyquestclaim", "runsessionevent", "askmacrosession",
+    "dailyquestclaim", "runsessionevent", "askmacrosession", "chatroom", "chatroommember",
     # 게시판 사진·추천·신고와 브라우저 뉴스 캐시 — create_all 로만 생겨 RLS 없이 anon 권한이 열려 있었다(2026-09-15).
     "boardimage", "boardpostvote", "boardreport", "browsernewspagecache",
     "visit", "macroeventdaily", "collectorrun", "collectorsourcedaily", "apiusagedaily",

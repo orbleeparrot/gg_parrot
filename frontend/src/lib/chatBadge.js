@@ -1,8 +1,9 @@
 // Account-scoped cursors. The old shared v1 value cannot identify its reader.
 export const CHAT_SEEN_STORAGE_KEY = "ggparrot:chat-seen:v2";
 
-export function chatScope(userId) {
-  return userId == null ? "anon" : `member:${userId}`;
+export function chatScope(userId, roomId = 0) {
+  if (userId == null) return "anon";
+  return roomId ? `member:${userId}:room:${roomId}` : `member:${userId}`;
 }
 
 export function seenStorageKey(scope = "anon") {

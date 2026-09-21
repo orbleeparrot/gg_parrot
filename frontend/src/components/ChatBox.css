@@ -43,3 +43,19 @@
   width: min(380px, calc(100vw - 32px - env(safe-area-inset-left) - env(safe-area-inset-right)));
   max-height: calc(var(--chat-visible-height, 100dvh) - var(--site-topbar-h, 64px) - 48px - 40px - env(safe-area-inset-bottom));
 }
+
+/* 전략방 탭 줄 — 머리 아래 한 줄. 색은 토큰만. */
+.chat-tabs { display: flex; gap: 4px; padding: 6px 10px 0; overflow-x: auto; scrollbar-width: none; border-bottom: 1px solid rgb(var(--c-slate-200)); }
+.chat-tabs::-webkit-scrollbar { display: none; }
+.chat-tab { flex: 0 0 auto; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 6px 10px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: rgb(var(--c-slate-600)); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.chat-tab.is-active { color: rgb(var(--c-slate-900)); border-bottom-color: rgb(var(--c-brand)); }
+.chat-tab.is-ended { opacity: .55; }
+.chat-tab:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: -2px; }
+.chat-room-bar { display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-700)); font-size: 12px; }
+.chat-room-notice { flex: 1; min-width: 0; }
+.chat-room-action { flex: 0 0 auto; border: 1px solid rgb(var(--c-slate-300)); border-radius: 999px; padding: 3px 10px; background: rgb(var(--c-surface)); color: rgb(var(--c-slate-900)); font: inherit; font-size: 12px; cursor: pointer; }
+.chat-room-action:disabled { cursor: wait; opacity: .65; }
+.chat-room-action:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
+.chat-room-owner { flex: 0 0 auto; font-weight: 700; color: rgb(var(--c-slate-900)); }
+/* 방 찾기 패널은 .chat-log 자리를 그대로 차지한다(위 :not(.chat-log) 규칙보다 뒤에 와야 한다). */
+.chat-sheet > .rooms-panel { flex: 1 1 0; min-height: 0; }

@@ -2,15 +2,19 @@ import { Fragment, memo, useCallback, useEffect, useId, useLayoutEffect, useMemo
 import { createPortal } from "react-dom";
 import { api } from "../api.js";
 import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
-import { getAuthUser, getToken, useAuth } from "../lib/auth.js";
+import { getAuthUser, getToken, updateAuthUser, useAuth } from "../lib/auth.js";
 import { badgeLabel, chatScope, firstUnseenId, isOwnMessage, sameAuthor } from "../lib/chatBadge.js";
 import { STICKERS, stickerFromText, stickerText } from "../lib/chatStickers.js";
 import { macroIdsInText, splitMacroText } from "../lib/chatMacro.js";
 import { replyText, stripReplyToken } from "../lib/chatReply.js";
 import { applyMacroPick, filterMacros, slashQuery } from "../lib/chatSlash.js";
 import { getUserId } from "../lib/user.js";
+import { remainingLabel, roomTabs } from "../lib/roomFlow.js";
+import { ENDED, EXTEND_LABEL, LEAVE_CONFIRM, OWNER_CANNOT_LEAVE, ROOM_EMPTY, ROOM_NOTICE, TAB_ALL } from "../lib/roomsCopy.js";
 import { leaderboardCacheVersion, subscribeLeaderboardCache } from "../lib/cacheEvents.js";
 import ReportDialog from "./ReportDialog.jsx";
+import ConfirmDialog from "./ConfirmDialog.jsx";
+import RoomsPanel from "./RoomsPanel.jsx";
 import CoinIcon from "./CoinIcon.jsx";
 import { chatUnseenCount, getChatFeed, markChatSeen, observeChat, receiveChat, receiveChatPost, setChatLoadError, visibleChatReadId } from "../lib/chatStore.js";
 import { CHAT_WINDOW_SIZE, chatWindow } from "../lib/chatFeed.js";
@@ -157,22 +161,52 @@ function MacroCard({ card, onClose }) {
   );
 }
 
-const ChatBox = memo(function ChatBox(props) {
+// 탭 상태와 방 목록은 래퍼가 든다 — MemberChatBox 는 scope 마다 다시 마운트되므로 방을 오가도 목록은 남는다.
+const ChatBox = memo(function ChatBox({ defaultOpen = false, ...props }) {
   const { token, user } = useAuth();
   const member = token && user?.id != null ? user : null;
-  const scope = chatScope(member?.id);
-  return <MemberChatBox key={scope} {...props} member={member} scope={scope} />;
+  // 열림 상태도 래퍼에 — 방 탭을 바꿔 안쪽이 다시 마운트돼도 시트가 닫히지 않게. 계정이 바뀌면 닫는다.
+  const [open, setOpen] = useState(defaultOpen);
+  const openedForRef = useRef(member?.id);
+  useEffect(() => {
+    if (openedForRef.current === member?.id) return;
+    openedForRef.current = member?.id;
+    setOpen(false);
+  }, [member?.id]);
+  const [activeTab, setActiveTab] = useState("all");   // "all" | "find" | "room:{id}"
+  const [rooms, setRooms] = useState(null);            // {items, mine, ...} — 로그인 상태에서만
+  const [roomsVersion, setRoomsVersion] = useState(0);
+  const [loadedVersion, setLoadedVersion] = useState(-1); // rooms 가 어느 refresh 요청의 응답인지
+  const refreshRooms = useCallback(() => setRoomsVersion((v) => v + 1), []);
+  useEffect(() => {
+    if (!member) { setRooms(null); setActiveTab("all"); return undefined; }
+    const controller = new AbortController();
+    api.roomsList({ signal: controller.signal }).then((data) => { setRooms(data); setLoadedVersion(roomsVersion); }).catch(() => {});
+    return () => controller.abort();
+  }, [member?.id, roomsVersion]); // eslint-disable-line react-hooks/exhaustive-deps
+  const roomId = activeTab.startsWith("room:") ? Number(activeTab.slice(5)) : 0;
+  // 방금 들어간 방은 새 목록이 오기 전까지 열린 방 목록(items)에서 찾는다.
+  const room = roomId ? [...(rooms?.mine || []), ...(rooms?.items || [])].find((r) => r.id === roomId) || null : null;
+  useEffect(() => {  // 목록에서 사라진 방(만료 7일 경과·나감)이 활성 탭이면 전체로 — 최신 목록으로만 판단한다
+    if (roomId && rooms && loadedVersion === roomsVersion && !(rooms.mine || []).some((r) => r.id === roomId)) setActiveTab("all");
+  }, [roomId, rooms, loadedVersion, roomsVersion]);
+  const tabs = member ? roomTabs(rooms?.mine || [], roomId) : [{ key: "all", label: TAB_ALL }];
+  const scope = chatScope(member?.id, roomId);
+  const roomsPanel = activeTab === "find" ? (
+    <RoomsPanel member={member} data={rooms} onChanged={refreshRooms} onEnter={(id) => { refreshRooms(); setActiveTab(`room:${id}`); }} />
+  ) : null;
+  return <MemberChatBox key={scope} {...props} member={member} scope={scope} open={open} setOpen={setOpen} roomId={roomId} room={room}
+                        tabs={tabs} activeTab={activeTab} onSelectTab={setActiveTab} roomsPanel={roomsPanel} onRoomsChanged={refreshRooms} />;
 });
 export default ChatBox;
 
-function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray = false }) {
+function MemberChatBox({ member, scope, open, setOpen, roomId = 0, room = null, tabs, activeTab, onSelectTab, roomsPanel, onRoomsChanged, defaultStickerTray = false }) {
   const mobilePlacement = useSyncExternalStore(subscribeMobilePlacement, isMobilePlacement, () => false);
   const panelId = useId();
   const subscribe = useCallback((listener) => observeChat(scope, listener), [scope]);
   const snapshot = useCallback(() => getChatFeed(scope), [scope]);
   const feed = useSyncExternalStore(subscribe, snapshot, snapshot);
   const { items, loaded, seenId, loadError } = feed;
-  const [open, setOpen] = useState(defaultOpen);
   const [windowEndId, setWindowEndId] = useState(null);
   const visibleWindow = useMemo(() => chatWindow(items, windowEndId), [items, windowEndId]);
   const lastReconcileRef = useRef({ time: 0, window: null });
@@ -182,6 +216,10 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
   const [menu, setMenu] = useState(null);      // 오른쪽 클릭 메뉴 {x, y, message}
   const [replyTo, setReplyTo] = useState(null); // 답장 대상 메시지
   const [reporting, setReporting] = useState(null); // 신고할 메시지
+  const [leaving, setLeaving] = useState(false);    // 나가기 확인 창
+  const [roomBusy, setRoomBusy] = useState(false);
+  const [liveRoom, setLiveRoom] = useState(null);   // chatList 응답의 방 정보(인원·열림 최신값)
+  const currentRoom = liveRoom || room;
   const [copiedId, setCopiedId] = useState(0);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const shortcutsRef = useRef(null);
@@ -266,7 +304,7 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
     };
   }, [mobilePlacement]);
 
-  const isCurrent = useCallback(() => mountedRef.current && chatScope(getToken() ? getAuthUser()?.id : null) === scope, [scope]);
+  const isCurrent = useCallback(() => mountedRef.current && chatScope(getToken() ? getAuthUser()?.id : null, roomId) === scope, [roomId, scope]);
   useEffect(() => {
     mountedRef.current = true;
     const pending = pendingRequestsRef.current;
@@ -286,8 +324,9 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
         : reconcile ? { messageIds: messageWindow.items.map((item) => item.id) }
           : current.tailEvicted ? { metadataOnly: true }
           : { afterId: current.pageLatestId };
-    const data = await api.chatList({ signal, seenId: current.seenId, ...mode });
+    const data = await api.chatList({ signal, roomId, seenId: current.seenId, ...mode });
     if (signal.aborted || !isCurrent()) return;
+    if (data.room) setLiveRoom(data.room);
     serverSeenRef.current = Math.max(serverSeenRef.current, Number(data.server_seen_id) || 0);
     receiveChat(scope, data, { keepOlder: windowEndId != null });
     if (readErrorRef.current) setReadRetry((value) => value + 1);
@@ -295,7 +334,7 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
     // A reconciliation checks only displayed IDs. Follow it with a delta so new
     // arrivals never wait for another regular polling interval.
     return { nextPollMs: data.has_more_new || reconcile ? 0 : open ? POLL_MS : CLOSED_POLL_MS };
-  }, [isCurrent, open, scope, windowEndId]);
+  }, [isCurrent, open, roomId, scope, windowEndId]);
   const refresh = useAdaptivePolling(load, {
     intervalMs: open ? POLL_MS : CLOSED_POLL_MS, maxIntervalMs: 60_000, pollKey: scope,
     onError: (reason) => { if (isCurrent() && reason?.name !== "AbortError") setChatLoadError(scope, reason); },
@@ -321,7 +360,7 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
     let acknowledged = false;
     const controller = new AbortController();
     pendingRequestsRef.current.add(controller);
-    api.chatRead(seenId, { signal: controller.signal }).then((data) => {
+    api.chatRead(seenId, { roomId, signal: controller.signal }).then((data) => {
       if (controller.signal.aborted || !isCurrent()) return;
       syncedSeenRef.current = Math.max(syncedSeenRef.current, Number(data.seen_id) || seenId);
       acknowledged = true;
@@ -338,7 +377,7 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
         setReadRetry((value) => value + 1);
       }
     });
-  }, [feed.metadataLoaded, feed.responseRevision, isCurrent, member, readRetry, scope, seenId]);
+  }, [feed.metadataLoaded, feed.responseRevision, isCurrent, member, readRetry, roomId, scope, seenId]);
 
   useEffect(() => {
     if (!readError) return undefined;
@@ -397,7 +436,7 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
     setDividerId(null);
     setStickerOpen(false);
     setOpen(false);
-  }, []);
+  }, [setOpen]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -499,7 +538,7 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
       pendingRequestsRef.current.add(controller);
       setLoadingOlder(true);
       try {
-        const data = await api.chatList({ signal: controller.signal, seenId: getChatFeed(scope).seenId });
+        const data = await api.chatList({ signal: controller.signal, roomId, seenId: getChatFeed(scope).seenId });
         if (controller.signal.aborted || !isCurrent()) return;
         receiveChat(scope, data);
       } catch (reason) {
@@ -529,7 +568,7 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
     setLoadingOlder(true);
     const beforeId = feed.oldestId;
     try {
-      const data = await api.chatList({ signal: controller.signal, beforeId, seenId: getChatFeed(scope).seenId });
+      const data = await api.chatList({ signal: controller.signal, roomId, beforeId, seenId: getChatFeed(scope).seenId });
       if (controller.signal.aborted || !isCurrent() || Number(getChatFeed(scope).oldestId) !== Number(beforeId)) return;
       stickToBottomRef.current = false;
       const element = listRef.current;
@@ -555,7 +594,7 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
       pendingRequestsRef.current.add(controller);
       setLoadingOlder(true);
       try {
-        const data = await api.chatList({ signal: controller.signal, afterId: items.at(-1)?.id, seenId: getChatFeed(scope).seenId });
+        const data = await api.chatList({ signal: controller.signal, roomId, afterId: items.at(-1)?.id, seenId: getChatFeed(scope).seenId });
         if (controller.signal.aborted || !isCurrent()) return;
         const merged = receiveChat(scope, data, { forward: true });
         setWindowEndId(merged?.tailEvicted ? merged.items.at(-1)?.id : null);
@@ -587,7 +626,7 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
     const controller = new AbortController();
     pendingRequestsRef.current.add(controller);
     try {
-      const result = await api.chatPost(body.trim(), { signal: controller.signal });
+      const result = await api.chatPost(body.trim(), { roomId, signal: controller.signal });
       if (controller.signal.aborted || !isCurrent()) return false;
       stickToBottomRef.current = true;
       setWindowEndId(null);
@@ -703,12 +742,39 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
     await post(stickerText(id));
   }
 
+  // 전략방 — 나가기(멤버)·연장(방장, 만료 하루 전부터). 목록은 래퍼가 다시 받는다.
+  async function leaveRoom() {
+    setRoomBusy(true);
+    try { await api.roomLeave(roomId); setLeaving(false); onRoomsChanged?.(); onSelectTab?.("all"); }
+    catch (reason) { setError(reason?.message || "나가지 못했어요."); }
+    finally { setRoomBusy(false); }
+  }
+  async function extendRoom() {
+    setRoomBusy(true);
+    try {
+      const data = await api.roomExtend(roomId);
+      setLiveRoom(data.room);
+      if (data.points_balance != null) updateAuthUser({ ...getAuthUser(), points_balance: data.points_balance });
+      onRoomsChanged?.();
+    } catch (reason) { setError(reason?.message || "연장하지 못했어요."); }
+    finally { setRoomBusy(false); }
+  }
+
   return (
     <div className={`chat-float${dragging ? " is-dragging" : ""}${mobilePlacement ? " is-mobile-fixed" : ""}`} ref={rootRef} style={!mobilePlacement && placement ? { right: placement.right, bottom: placement.bottom } : undefined}>
       {open ? (
         <section id={panelId} className="chat-sheet" role="dialog" aria-label="리더보드 채팅" style={opacity < 1 ? { "--chat-sheet-opacity": opacity } : undefined}>
           <header className="chat-head">
-            <div className="chat-head-title"><h3>리더보드 채팅</h3><p>KST <span className="num">{kstClock()}</span> · 오늘의 대화</p></div>
+            <div className="chat-head-title">
+              {roomId && currentRoom ? (
+                <>
+                  <h3>{currentRoom.title}</h3>
+                  <p>👥 <span className="num">{currentRoom.member_count}/{currentRoom.capacity}</span> · ⏳ {remainingLabel(currentRoom.expires_ms)}{currentRoom.entry_fee ? <> · <span className="num">{currentRoom.entry_fee}</span>P</> : " · 무료"}</p>
+                </>
+              ) : (
+                <><h3>리더보드 채팅</h3><p>KST <span className="num">{kstClock()}</span> · 오늘의 대화</p></>
+              )}
+            </div>
             <div className="chat-head-tools">
               <label className="chat-opacity" title={`투명도 ${Math.round((1 - opacity) * 100)}%`}>
                 <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M2.5 12s3.5-6.5 9.5-6.5 9.5 6.5 9.5 6.5-3.5 6.5-9.5 6.5S2.5 12 2.5 12Z" /><circle cx="12" cy="12" r="3" /></svg>
@@ -723,6 +789,25 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
               <button type="button" className="chat-close" onClick={close} aria-label="채팅 닫기"><svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m4 4 8 8M12 4l-8 8" /></svg></button>
             </div>
           </header>
+          {member ? (
+            <nav className="chat-tabs" aria-label="채팅방">
+              {tabs.map((tab) => (
+                <button key={tab.key} type="button" className={`chat-tab${activeTab === tab.key ? " is-active" : ""}${tab.ended ? " is-ended" : ""}`}
+                        aria-pressed={activeTab === tab.key} onClick={() => onSelectTab(tab.key)} title={tab.ended ? ENDED : undefined}>
+                  {tab.label}
+                </button>
+              ))}
+            </nav>
+          ) : null}
+          {roomId ? (
+            <div className="chat-room-bar">
+              <span className="chat-room-notice">{ROOM_NOTICE}</span>
+              {currentRoom?.is_owner
+                ? (currentRoom?.can_extend ? <button type="button" className="chat-room-action" onClick={extendRoom} disabled={roomBusy}>{EXTEND_LABEL(50)}</button> : <span className="chat-room-owner" title={OWNER_CANNOT_LEAVE}>방장</span>)
+                : <button type="button" className="chat-room-action" onClick={() => setLeaving(true)} disabled={roomBusy}>나가기</button>}
+            </div>
+          ) : null}
+          {roomsPanel ? roomsPanel : (<>
           {loadError || readError ? (
             <div className="chat-status is-error" role="alert">
               <span>{loadError ? "채팅을 불러오지 못했어요. 연결을 확인해 주세요." : readError}</span>
@@ -740,7 +825,7 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
             {!loaded ? (
               loadError ? <p className="chat-helper">대화를 불러오면 여기에 표시됩니다.</p> : <div className="chat-skeleton" aria-hidden="true"><i /><i /><i /></div>
             ) : items.length === 0 ? (
-              <div className="chat-empty"><img src={EMPTY_FACE} alt="" width="56" height="56" draggable="false" /><strong>아직 조용해요.</strong><span>오늘 첫 채팅을 남겨봐요.</span></div>
+              <div className="chat-empty"><img src={EMPTY_FACE} alt="" width="56" height="56" draggable="false" />{roomId ? <strong>{ROOM_EMPTY}</strong> : <><strong>아직 조용해요.</strong><span>오늘 첫 채팅을 남겨봐요.</span></>}</div>
             ) : visibleWindow.items.map((message, index) => {
               const previous = index > 0 ? visibleWindow.items[index - 1] : null;
               const showDivider = dividerId != null && message.id === dividerId;
@@ -811,7 +896,9 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
           {member && macroIdsInText(text).length ? (
             <p className="chat-macro-hint">매크로 <b className="num">{macroIdsInText(text).length}</b>개를 언급했어요. 보내면 카드로 보여요.</p>
           ) : null}
-          {member ? (
+          {roomId && currentRoom && !currentRoom.is_open ? (
+            <div className="chat-login-prompt"><span>{ENDED}</span></div>
+          ) : member ? (
             <form onSubmit={send} className="chat-composer">
               <span className="chat-name-chip chat-member-name" aria-label={`로그인 회원 ${member.username}`}><UserAvatar src={member.avatar_url} name={member.username} size={24} /><span className="chat-member-label">{member.username}</span></span>
               <button type="button" className={`chat-sticker-btn${stickerOpen ? " is-on" : ""}`} onClick={() => setStickerOpen((tray) => !tray)} aria-expanded={stickerOpen} aria-label={stickerOpen ? "스티커 닫기" : "스티커 열기"} title="스티커" disabled={busy}><img src={STICKERS[0].src} alt="" width="22" height="22" draggable="false" decoding="async" /></button>
@@ -847,6 +934,7 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
             </form>
           ) : <div className="chat-login-prompt"><span>회원으로 로그인하고 대화에 참여해 보세요.</span><a href="/login?next=%2Fleaderboard">로그인</a></div>}
           {error ? <p className="chat-helper is-error" role="alert">{error}</p> : <span className="chat-composer-gap" aria-hidden="true" />}
+          </>)}
           {/* 메뉴는 body 에 띄운다 — 채팅 시트 안에 두면 시트의 스크롤·변형에 잘린다. */}
           {menu ? createPortal(
             <div className="chat-menu" style={{ left: menu.x, top: menu.y }} role="menu" aria-label="메시지 메뉴" onPointerDown={(event) => event.stopPropagation()}>
@@ -884,6 +972,7 @@ function MemberChatBox({ member, scope, defaultOpen = false, defaultStickerTray 
             </div>
           ) : null}
           <ReportDialog open={Boolean(reporting)} targetType="chat" targetId={reporting?.id} label="메시지" onClose={() => setReporting(null)} />
+          <ConfirmDialog open={leaving} title="전략방 나가기" description={LEAVE_CONFIRM} confirmLabel="나가기" busy={roomBusy} onConfirm={leaveRoom} onCancel={() => setLeaving(false)} />
         </section>
       ) : null}
       <button type="button" className={`chat-fab${open ? " is-open" : ""}${unseen ? " has-news" : ""}${dragging ? " is-dragging" : ""}`} onClick={onFabClick} onPointerDown={mobilePlacement ? undefined : onFabPointerDown} onPointerMove={mobilePlacement ? undefined : onFabPointerMove} onPointerUp={mobilePlacement ? undefined : onFabPointerEnd} onPointerCancel={mobilePlacement ? undefined : onFabPointerEnd} title={mobilePlacement ? undefined : "끌어서 옮길 수 있어요"} aria-expanded={open} aria-controls={open ? panelId : undefined} aria-label={open ? "채팅 닫기" : badge ? `채팅 열기, 새 메시지 ${unseen}개` : "채팅 열기"}>

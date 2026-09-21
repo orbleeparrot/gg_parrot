@@ -252,3 +252,23 @@ def test_admin_close_blocks_join_and_extend():
     assert client.post(f"/api/rooms/{room_id}/extend", headers=_auth(owner_tok)).status_code == 410
     plain_tok, _ = _signup()
     assert client.post(f"/api/admin/rooms/{room_id}/close", headers=_auth(plain_tok)).status_code == 403
+
+
+def test_list_rooms_shows_open_rooms_and_my_rooms_including_expired():
+    a_tok, a_id = _signup()
+    open_id = _create(a_tok, title="열린 방", entry_fee=0).json()["room"]["id"]
+    b_tok, _ = _signup()
+    gone_id = _create(b_tok, title="끝난 방", entry_fee=0).json()["room"]["id"]
+    me_tok, me_id = _signup()
+    client.post(f"/api/rooms/{gone_id}/join", headers=_auth(me_tok))
+    _backdate_room(gone_id, expires_in_ms=-1)
+    r = client.get("/api/rooms", headers=_auth(me_tok))
+    assert r.status_code == 200
+    body = r.json()
+    ids = [room["id"] for room in body["items"]]
+    assert open_id in ids and gone_id not in ids
+    mine = {room["id"]: room for room in body["mine"]}
+    assert gone_id in mine and mine[gone_id]["is_open"] is False and mine[gone_id]["is_member"]
+    assert open_id not in mine
+    assert body["consented"] is False and body["create_cost"] == 100 and "disclaimer" in body
+    assert client.get("/api/rooms").status_code == 401

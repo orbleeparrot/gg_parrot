@@ -1553,6 +1553,12 @@ def _room_http(exc: Exception) -> HTTPException:
     raise exc
 
 
+@app.get("/api/rooms")
+def rooms_list(account: User = Depends(auth_mod.current_user_in_session),
+               db: Session = Depends(request_session)) -> dict:
+    return rooms_mod.list_rooms(db, account)
+
+
 @app.post("/api/rooms")
 def rooms_create(req: RoomCreateRequest, account: User = Depends(auth_mod.current_user_in_session),
                  db: Session = Depends(request_session)) -> dict:

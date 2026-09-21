@@ -240,3 +240,26 @@ def close_room_by_admin(db: Session, room_id: int) -> dict:
         db.commit()
         db.refresh(room)
     return {"room": room_view(db, room, None, now_ms=now_ms)}
+
+
+def list_rooms(db: Session, account: User) -> dict:
+    _, now_ms = _now()
+    viewer_id = int(account.id)
+    open_rows = db.exec(select(ChatRoom).where(
+        ChatRoom.closed_reason == "", ChatRoom.expires_ms > now_ms,
+    ).order_by(ChatRoom.created_ms.desc()).limit(LIST_LIMIT)).all()
+    mine_rows = db.exec(select(ChatRoom).join(ChatRoomMember, ChatRoomMember.room_id == ChatRoom.id).where(
+        ChatRoomMember.user_id == viewer_id, ChatRoom.expires_ms > now_ms - MINE_GRACE_MS,
+    ).order_by(ChatRoom.created_ms.desc())).all()
+    return {
+        "items": [room_view(db, room, viewer_id, now_ms=now_ms) for room in open_rows],
+        "mine": [room_view(db, room, viewer_id, now_ms=now_ms) for room in mine_rows],
+        "server_ms": now_ms,
+        "disclaimer": DISCLAIMER,
+        "consent_text": CONSENT_TEXT,
+        "consented": bool(account.room_consent_at),
+        "create_cost": ROOM_CREATE_COST,
+        "extend_cost": ROOM_EXTEND_COST,
+        "max_entry_fee": MAX_ENTRY_FEE,
+        "max_capacity": MAX_CAPACITY,
+    }

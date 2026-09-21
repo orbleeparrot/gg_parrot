@@ -50,6 +50,19 @@ function HomeEntryHero({ onLeaderboard, onGuide, onAsk, staticLayout = false }) 
             매크로 실행기는 윈도우 PC 환경에서 실행할 수 있어요. 아래 두 가지 모두 웹에서 준비하고, 실행은 내 윈도우 PC에서 이어져요.
           </p>
         </div>
+        {/* 뭘 골라야 할지 모르는 사람용 첫 번째 길 — 카드 5장에 답하면 백테스트 상위 3개 조합. 다른 두 카드와 같은 꼴, 노란 테두리로만 구분. */}
+        <button
+          type="button"
+          data-home-ask-trigger
+          onClick={onAsk}
+          className="home-entry-choice is-ask"
+        >
+          <span className="home-entry-choice-art" aria-hidden="true">
+            <img src="/brand/agent/ggparrot-agent-curious-v1.svg" alt="" width="88" height="88" draggable="false" />
+          </span>
+          <span className="home-entry-choice-copy"><strong>껄무새에게 물어볼까?</strong><small>뭘 고를지 모르겠다면 — 성향·종목만 고르면 후보 조합 3개를 보여 줘요.</small></span>
+          <span className="home-entry-choice-arrow" aria-hidden="true">→</span>
+        </button>
         <button
           type="button"
           data-home-entry-primary
@@ -77,19 +90,6 @@ function HomeEntryHero({ onLeaderboard, onGuide, onAsk, staticLayout = false }) 
             <img src="/brand/navigation/ggparrot-nav-builder.svg" alt="" width="88" height="88" draggable="false" />
           </span>
           <span className="home-entry-choice-copy"><strong>직접 만들기</strong><small>안내를 따라 종목 검색부터 전략·조건·백테스트·등록까지 순서대로 내 매크로를 만들어요.</small></span>
-          <span className="home-entry-choice-arrow" aria-hidden="true">→</span>
-        </button>
-        {/* 뭘 골라야 할지 모르는 사람용 세 번째 길 — 카드 5장에 답하면 백테스트 상위 3개 조합. 작은 카드로 둘 아래에. */}
-        <button
-          type="button"
-          data-home-ask-trigger
-          onClick={onAsk}
-          className="home-entry-choice is-ask"
-        >
-          <span className="home-entry-choice-art" aria-hidden="true">
-            <img src="/brand/agent/ggparrot-agent-curious-v1.svg" alt="" width="88" height="88" draggable="false" />
-          </span>
-          <span className="home-entry-choice-copy"><strong>뭘 고를지 모르겠다면, 껄무새에게 물어볼까?</strong><small>성향·종목만 고르면 과거 데이터로 돌려 본 후보 조합 3개를 보여 줘요.</small></span>
           <span className="home-entry-choice-arrow" aria-hidden="true">→</span>
         </button>
       </nav>

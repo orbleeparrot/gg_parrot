@@ -13,6 +13,8 @@ declare
     'boardreport',
     'browsernewspagecache',
     'chatmessage',
+    'chatroom',
+    'chatroommember',
     'dailychallenge',
     'dailyquestclaim',
     'leaderboardcarryover',

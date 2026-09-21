@@ -270,6 +270,18 @@ class PositionSim:
             return self.cash + self.margin + self.qty * (price - self.entry_fill)
         return self.cash + self.qty * (self.entry_fill - price)
 
+    def state(self) -> dict:
+        """리더보드가 그리는 포지션 상태 — 조회만, 부작용 없음."""
+        cooldown = self._cooldown_until
+        return {
+            "in_position": bool(self.in_pos),
+            "dir": 1 if self.side is PositionSide.LONG else -1,
+            "qty": float(self.qty),
+            "entry_price": float(self.entry_fill) if self.in_pos else 0.0,
+            "cooldown_until_ms": int(cooldown.timestamp() * 1000) if cooldown is not None else None,
+            "halted_today": self._halted_day is not None and self._halted_day == self._day,
+        }
+
     def _fill(self, side: str, price: float, qty: float, mark: float) -> Fill:
         eq = self.equity(mark)
         ret = (eq - self.initial_capital) / self.initial_capital * 100.0
@@ -373,6 +385,18 @@ class DcaSim:
 
     def equity(self, price: float) -> float:
         return self.cash + self.qty * price
+
+    def state(self) -> dict:
+        """리더보드가 그리는 DCA 상태 — 조회만, 부작용 없음."""
+        held = self.qty > 0
+        return {
+            "in_position": held,
+            "dir": 1,
+            "qty": float(self.qty),
+            "entry_price": float(self.cost_basis / self.qty) if held else 0.0,
+            "cooldown_until_ms": None,
+            "halted_today": self._halted_day is not None and self._halted_day == self._day,
+        }
 
     def _fill(self, side: str, price: float, qty: float, mark: float) -> Fill:
         eq = self.equity(mark)

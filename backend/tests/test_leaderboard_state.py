@@ -3,8 +3,14 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+from fastapi.testclient import TestClient
+
+from app.main import app
+from app import marketdata
 from app.engine import Macro
 from app.engine.stepper import DcaSim, PositionSim, make_sim
+
+client = TestClient(app)
 
 
 def _macro(rule="A", **over):
@@ -327,3 +333,12 @@ def test_durable_statuses_carry_state_and_virtual_balance():
     assert statuses[fresh.id]["virtual_balance"] == 1_000 and statuses[fresh.id]["state"]["trade_count"] == 1
     assert statuses[fresh.id]["current_return"] == 1.0 and statuses[fresh.id]["status"] == "running"
     assert statuses[legacy.id]["state"] == {} and statuses[legacy.id]["virtual_balance"] == 500
+
+
+def test_prices_endpoint_validates_and_skips_failures(monkeypatch):
+    monkeypatch.setattr(marketdata, "get_ticker_price_cached", lambda s: {"BTCUSDT": 100.5, "ETHUSDT": None}.get(s))
+    r = client.get("/api/prices?symbols=btcusdt,ETHUSDT")
+    assert r.status_code == 200 and r.json()["prices"] == {"BTCUSDT": 100.5} and isinstance(r.json()["ms"], int)
+    assert client.get("/api/prices?symbols=BTC-KRW").status_code == 422
+    assert client.get("/api/prices?symbols=").status_code == 422
+    assert client.get("/api/prices?symbols=" + ",".join(f"S{i}USDT" for i in range(31))).status_code == 422

@@ -213,3 +213,4 @@ Prefect는 원자적인 ‘예약 상태일 때만 취소’를 제공하지 않
 - 마이그레이션: `supabase/migrations/20260921150000_paper_session_state.sql` (papersession.state_json). 기동 시 `_PG_ADDED_COLUMNS`도 보강하므로 순서는 무관.
 - `PAPER_CHECKPOINT_SECONDS` 기본 10초(이전 20초). DB 쓰기가 부담되면 환경변수로 되돌린다.
 - `GET /api/prices`는 공개 읽기, 전 종목 시세를 한 번에 받아 2초 캐시(요청당 상류 호출 최대 1회).
+- **재기동 복구**: 기동 시 `running` 페이퍼 세션을 DB 값(자산·포지션·체결)으로 되살린다(`paper.resume_running_sessions`). 재배포로 프로세스가 강제 종료돼도 리더보드가 멈추지 않는다. 리플레이 세션은 닫힌다. 복구 전까지 행은 `복구 중…`으로 보인다.

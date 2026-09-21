@@ -111,6 +111,11 @@ from .realtrade import build_bundle
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    # 재배포로 끊긴 페이퍼 세션을 되살린다 — 실패해도 서버는 떠야 하므로 로그만 남긴다.
+    try:
+        await paper_mod.resume_running_sessions()
+    except Exception:
+        logging.getLogger(__name__).exception("paper session resume failed at startup")
     notification_stream.start()  # Postgres 일 때 LISTEN — 다른 프로세스의 알림도 SSE 로 밀어 준다
     community_summaries_mod.start()
     leaderboard_runtime.start()

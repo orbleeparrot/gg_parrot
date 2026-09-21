@@ -1,4 +1,4 @@
-import { COOLDOWN, ENTRY_AT, HALTED, HOLDING, KIND, REENTRY, STOPPED, TRADES, WAITING } from "./leaderboardCopy.js";
+import { COOLDOWN, ENTRY_AT, HALTED, HOLDING, KIND, RECOVERING, REENTRY, STOPPED, TRADES, WAITING } from "./leaderboardCopy.js";
 
 const fmtPct = (v) => `${v >= 0 ? "+" : ""}${Number(v).toFixed(2)}%`;
 const fmtPrice = (v) => Number(v).toLocaleString("en-US", { maximumFractionDigits: 4 });
@@ -26,8 +26,16 @@ export function cooldownLabel(untilMs, now = Date.now()) {
   return COOLDOWN(Math.ceil((untilMs - now) / 60_000));
 }
 
+// 서버는 running 이라는데 체크포인트가 없거나 오래됐다 — 재배포로 끊긴 세션이 되살아나는 중(또는 아직 못 살아남).
+export const STALE_AFTER_MS = 90_000;
+export function isRecovering(entry, now = Date.now()) {
+  if (!entry || !["waiting", "holding", "exited"].includes(entry.state)) return false;
+  return !Number.isFinite(entry.checkpoint_ms) || now - entry.checkpoint_ms > STALE_AFTER_MS;
+}
+
 export function stateLine(entry, now = Date.now()) {
   if (!entry || !entry.state || entry.state === "none") return null;
+  if (isRecovering(entry, now)) return { text: RECOVERING, tone: "muted" };
   const trades = entry.trade_count > 0 ? [TRADES(entry.trade_count)] : [];
   switch (entry.state) {
     case "waiting": {

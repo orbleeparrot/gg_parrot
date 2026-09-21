@@ -1239,8 +1239,11 @@ def live_candles(
 
 
 @app.get("/api/prices")
-def prices(symbols: str = Query(..., max_length=700)) -> dict:
-    """공개 일괄 시세 — 리더보드 보유 중 행의 미실현 수익률용."""
+def prices(symbols: str = Query(default="", max_length=700)) -> dict:
+    """공개 일괄 시세 — 리더보드 보유 중 행의 미실현 수익률용.
+
+    전 종목 시세를 한 번에 받아 2초 캐시 — 요청당 상류 호출 최대 1회.
+    """
     wanted = list(dict.fromkeys(s.strip().upper() for s in symbols.split(",") if s.strip()))
     if not wanted or len(wanted) > marketdata_mod.MAX_PRICE_SYMBOLS or any(not marketdata_mod.SYMBOL_RE.match(s) for s in wanted):
         raise HTTPException(422, "종목 형식이 잘못됐어요.")

@@ -336,9 +336,20 @@ def test_durable_statuses_carry_state_and_virtual_balance():
 
 
 def test_prices_endpoint_validates_and_skips_failures(monkeypatch):
-    monkeypatch.setattr(marketdata, "get_ticker_price_cached", lambda s: {"BTCUSDT": 100.5, "ETHUSDT": None}.get(s))
+    calls = {"n": 0}
+
+    def fake_fetch_all_prices():
+        calls["n"] += 1
+        return {"BTCUSDT": 100.5}
+
+    monkeypatch.setattr(marketdata, "fetch_all_prices", fake_fetch_all_prices)
+    marketdata._all_prices_cache.clear()
     r = client.get("/api/prices?symbols=btcusdt,ETHUSDT")
     assert r.status_code == 200 and r.json()["prices"] == {"BTCUSDT": 100.5} and isinstance(r.json()["ms"], int)
+    client.get("/api/prices?symbols=BTCUSDT")
+    assert calls["n"] == 1  # 2초 캐시 — 두 번째 요청은 상류를 다시 부르지 않는다
     assert client.get("/api/prices?symbols=BTC-KRW").status_code == 422
     assert client.get("/api/prices?symbols=").status_code == 422
+    r_missing = client.get("/api/prices")
+    assert r_missing.status_code == 422 and r_missing.json()["detail"] == "종목 형식이 잘못됐어요."
     assert client.get("/api/prices?symbols=" + ",".join(f"S{i}USDT" for i in range(31))).status_code == 422

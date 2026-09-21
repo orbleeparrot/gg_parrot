@@ -70,19 +70,20 @@ def test_checkpoint_batches_equity_but_persists_a_fill_immediately(monkeypatch):
     monkeypatch.setattr(paper, "_persist_checkpoint", persist)
     runner = _runner()
     runner.last_checkpoint_monotonic = 100.0
+    window = paper.CHECKPOINT_SECONDS  # 기본 10s (PAPER_CHECKPOINT_SECONDS)
 
-    _run(paper._checkpoint(runner, now=110.0))
+    _run(paper._checkpoint(runner, now=100.0 + window / 2))
     assert calls == []
 
-    _run(paper._checkpoint(runner, now=121.0))
+    _run(paper._checkpoint(runner, now=100.0 + window + 1.0))
     assert len(calls) == 1
     assert calls[0][2] != threading.current_thread().name
 
     fill = SimpleNamespace(side="sell", price=101.0, qty=2.0, return_pct=1.0)
-    _run(paper._checkpoint(runner, fill=fill, now=122.0))
+    _run(paper._checkpoint(runner, fill=fill, now=100.0 + window + 2.0))
     assert len(calls) == 2
     assert runner.recent[0]["id"] == 11
-    assert runner.last_checkpoint_monotonic == 122.0
+    assert runner.last_checkpoint_monotonic == 100.0 + window + 2.0
 
 
 def test_checkpoint_database_wait_does_not_block_the_event_loop(monkeypatch):

@@ -37,7 +37,7 @@ from .engine.stepper import make_sim
 POLL_SECONDS = float(os.environ.get("PAPER_POLL_SECONDS", "3"))
 REPLAY_SECONDS = float(os.environ.get("PAPER_REPLAY_SECONDS", "0.4"))
 REPLAY_HOURS = int(os.environ.get("PAPER_REPLAY_HOURS", "6"))
-CHECKPOINT_SECONDS = max(1.0, float(os.environ.get("PAPER_CHECKPOINT_SECONDS", "20")))
+CHECKPOINT_SECONDS = max(1.0, float(os.environ.get("PAPER_CHECKPOINT_SECONDS", "10")))
 _RECENT_CAP = 200
 
 
@@ -125,6 +125,10 @@ class _Runner:
         self.finalize_lock: Optional[asyncio.Lock] = None
         self.finalized = False
         self.inflight_persist: Optional[asyncio.Task] = None
+        # 리더보드 행 상태용 체결 요약 — _note_fill 이 채우고 _state_view 가 읽는다.
+        self.trade_count = 0
+        self.last_fill: Optional[dict] = None
+        self.last_entry_return: Optional[float] = None
 
     @property
     def replay_prices(self) -> List[float]:
@@ -316,11 +320,68 @@ async def _tick_and_checkpoint(
         fill = _tick(runner, price, ts, symbol=leg.symbol)
         if fill is not None:
             fills.append((leg.symbol, fill))
+            _note_fill(runner, fill, leg.symbol)
     if fills:
         for symbol, fill in fills:
             await _checkpoint(runner, fill=fill, symbol=symbol)
     elif ticked:
         await _checkpoint(runner)
+
+
+_EXIT_SIDES = {"sell", "cover"}
+
+
+def sim_state(sim) -> dict:
+    """state() 가 없는 시뮬레이터(테스트 더미 등)에는 '포지션 없음' 기본값."""
+    getter = getattr(sim, "state", None)
+    if getter is None:
+        return {"in_position": False, "dir": 1, "qty": 0.0, "entry_price": 0.0, "cooldown_until_ms": None, "halted_today": False}
+    return getter()
+
+
+def _note_fill(runner: _Runner, fill, symbol: str) -> None:
+    """체결 하나를 러너의 상태 요약에 반영 — 횟수·마지막 체결·익절/손절 구분."""
+    runner.trade_count += 1
+    kind = ""
+    if fill.side in _EXIT_SIDES:
+        kind = "exit" if runner.last_entry_return is None else ("tp" if fill.return_pct > runner.last_entry_return else "sl")
+    else:
+        runner.last_entry_return = float(fill.return_pct)
+    runner.last_fill = {"ms": _now_ms(), "side": fill.side, "return": round(float(fill.return_pct), 4), "kind": kind, "symbol": symbol}
+
+
+def _state_view(runner: _Runner) -> dict:
+    """리더보드 행 상태(포지션·체결 요약) — 체크포인트마다 state_json 으로 저장된다."""
+    legs = []
+    cooldowns = []
+    for leg in runner.legs:
+        st = sim_state(leg.sim)
+        legs.append({"symbol": leg.symbol, "qty": round(st["qty"], 8), "dir": st["dir"],
+                     "entry_price": round(st["entry_price"], 4), "last_price": round(leg.last_price, 4),
+                     "in_position": bool(st["in_position"])})
+        if st["cooldown_until_ms"] is not None:
+            cooldowns.append(int(st["cooldown_until_ms"]))
+    last = runner.last_fill or {}
+    return {
+        "in_position": any(l["in_position"] for l in legs),
+        "halted_today": any(sim_state(leg.sim)["halted_today"] for leg in runner.legs),
+        "cooldown_until_ms": max(cooldowns) if cooldowns else None,
+        "trade_count": runner.trade_count,
+        "last_fill_ms": last.get("ms"), "last_fill_side": last.get("side", ""),
+        "last_fill_return": last.get("return"), "last_fill_kind": last.get("kind", ""),
+        "last_price": round(runner.last_price, 4), "checkpoint_ms": _now_ms(), "legs": legs,
+    }
+
+
+def parse_state(text) -> dict:
+    """state_json 문자열 → dict. 비었거나 깨졌으면 {} (구 행·마이그레이션 전 행)."""
+    if not text:
+        return {}
+    try:
+        data = json.loads(text)
+    except (TypeError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def _snapshot(runner: _Runner) -> dict:
@@ -333,6 +394,7 @@ def _snapshot(runner: _Runner) -> dict:
         # Per-symbol breakdown; persisted so a stopped portfolio session still
         # shows what each coin did.
         "legs": [leg.view() for leg in runner.legs] if runner.is_portfolio() else [],
+        "state": _state_view(runner),
     }
 
 
@@ -361,6 +423,7 @@ def _persist_checkpoint(snapshot: dict, fill: Optional[dict]) -> Optional[dict]:
         row.liquidated_loss = snapshot["liquidated_loss"]
         if snapshot.get("legs"):
             row.legs_json = json.dumps(snapshot["legs"])
+        row.state_json = json.dumps(snapshot.get("state") or {})
         db.add(row)
         if fill:
             trade = PaperTrade(
@@ -433,6 +496,7 @@ def _persist_finalize(snapshot: dict) -> None:
             row.liquidated_loss = snapshot["liquidated_loss"]
             if snapshot.get("legs"):
                 row.legs_json = json.dumps(snapshot["legs"])
+            row.state_json = json.dumps(snapshot.get("state") or {})
             db.add(row)
             db.commit()
 
@@ -552,6 +616,7 @@ def get_status(session_id: int) -> Optional[dict]:
             "liquidations": runner.liquidations,
             "liquidated_loss": round(runner.liquidated_loss, 2),
             "trades": runner.recent[:30],
+            "state": _state_view(runner),
         }
 
     with get_session() as db:
@@ -579,6 +644,7 @@ def get_status(session_id: int) -> Optional[dict]:
         "liquidations": getattr(row, "liquidations", 0) or 0,
         "liquidated_loss": round(getattr(row, "liquidated_loss", 0.0) or 0.0, 2),
         "trades": [_trade_view(t) for t in trades],
+        "state": parse_state(getattr(row, "state_json", "")),
     }
 
 

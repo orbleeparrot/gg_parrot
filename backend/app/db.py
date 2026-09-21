@@ -227,6 +227,8 @@ class PaperSession(SQLModel, table=True):
     macro_json: str = ""
     # 멀티종목(포트폴리오) 세션의 종목별 현황(JSON 배열). 단일 종목이면 빈 문자열.
     legs_json: str = ""
+    # 리더보드 행 상태(포지션·체결 요약) — paper._state_view 가 체크포인트마다 쓴다.
+    state_json: str = ""
 
 
 class LeaderboardEntry(SQLModel, table=True):
@@ -1029,6 +1031,7 @@ def _migrate() -> None:
             "liquidations": "ALTER TABLE papersession ADD COLUMN liquidations INTEGER DEFAULT 0",
             "liquidated_loss": "ALTER TABLE papersession ADD COLUMN liquidated_loss FLOAT DEFAULT 0",
             "legs_json": "ALTER TABLE papersession ADD COLUMN legs_json TEXT DEFAULT ''",
+            "state_json": "ALTER TABLE papersession ADD COLUMN state_json TEXT DEFAULT ''",
         },
         "papertrade": {
             "symbol": "ALTER TABLE papertrade ADD COLUMN symbol TEXT DEFAULT ''",
@@ -1172,7 +1175,7 @@ _PG_ADDED_COLUMNS = {
         "claimed_ms": "BIGINT DEFAULT 0", "last_error": "TEXT DEFAULT ''",
     },
     "leaderboardentry": {"streak_days": "INTEGER DEFAULT 1", "first_created_ms": "BIGINT"},
-    "papersession": {"legs_json": "TEXT DEFAULT ''"},
+    "papersession": {"legs_json": "TEXT DEFAULT ''", "state_json": "TEXT DEFAULT ''"},
     "papertrade": {"symbol": "TEXT DEFAULT ''"},
     "boardcomment": {"author_user_id": "INTEGER", "parent_id": "INTEGER", "updated_ms": "BIGINT"},
     "boardpost": {

@@ -180,6 +180,26 @@ def send_message(db: Session, admin: User, user_id: int, *, title: str, body: st
     return {"ok": True, "recipient": user.username}
 
 
+def make_reset_link(db: Session, admin: User, user_id: int) -> dict:
+    """비밀번호 재설정 링크를 만들어 관리자에게 돌려준다 — 본인에게 직접 전해 주는 용도.
+
+    비밀번호는 해시라 누구도 원문을 볼 수 없다. 메일 발송(RESEND)이 안 되는 환경에서 회원이 비밀번호를
+    잊었을 때 쓰는 우회로다. 링크는 기존 /api/auth/reset 과 같은 토큰(30분, 1회성: 쓰면 auth_version 이 올라
+    무효)이고, 관리자 계정·자기 계정·탈퇴 계정에는 만들지 않는다.
+    """
+    user = _target(db, user_id, admin, action="reset")
+    if user.is_admin:
+        raise HTTPException(status_code=400, detail="관리자 계정의 링크는 여기서 만들 수 없어요.")
+    token = auth._make_reset_token(user.id)
+    base = auth._FRONTEND_BASE_URL or ""
+    return {
+        "ok": True,
+        "recipient": user.username,
+        "link": f"{base}/reset?token={token}",
+        "expires_min": auth._RESET_TTL_MIN,
+    }
+
+
 def set_blocked(db: Session, admin: User, user_id: int, *, blocked: bool, reason: str = "") -> dict:
     """차단·해제. 차단은 쓰기만 막으므로 세션을 끊지 않는다(로그인·열람은 그대로)."""
     user = _target(db, user_id, admin, action="block")

@@ -96,11 +96,11 @@ test("상태 알약: 탈퇴가 차단을 덮고, 관리자는 상태가 아니�
 
 test("조치 노출: 탈퇴·자기 계정은 전부 숨김, 관리자는 메시지만", () => {
   const plain = { id: 7, is_admin: false, is_blocked: false, is_deleted: false };
-  assert.deepEqual(memberActions(plain, 1), { message: true, block: true, remove: true });
-  assert.deepEqual(memberActions({ ...plain, is_admin: true }, 1), { message: true, block: false, remove: false });
-  assert.deepEqual(memberActions({ ...plain, is_deleted: true }, 1), { message: false, block: false, remove: false });
+  assert.deepEqual(memberActions(plain, 1), { message: true, block: true, remove: true, reset: true });
+  assert.deepEqual(memberActions({ ...plain, is_admin: true }, 1), { message: true, block: false, remove: false, reset: false });
+  assert.deepEqual(memberActions({ ...plain, is_deleted: true }, 1), { message: false, block: false, remove: false, reset: false });
   // 자기 계정은 아이디가 문자열로 와도 같은 계정으로 본다.
-  assert.deepEqual(memberActions(plain, "7"), { message: false, block: false, remove: false });
+  assert.deepEqual(memberActions(plain, "7"), { message: false, block: false, remove: false, reset: false });
   assert.equal(canActOnMember(plain, 1), true);
   assert.equal(canActOnMember({ ...plain, is_deleted: true }, 1), false);
   assert.equal(canActOnMember({ ...plain, is_admin: true }, 1), true);

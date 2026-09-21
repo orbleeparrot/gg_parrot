@@ -859,6 +859,16 @@ def admin_member_message(
     return members_mod.send_message(db, admin, user_id, title=req.title, body=req.body, link=req.link)
 
 
+@app.post("/api/admin/members/{user_id}/reset-link")
+def admin_member_reset_link(
+    user_id: int,
+    admin: User = Depends(auth_mod.require_admin),
+    db: Session = Depends(request_session),
+) -> dict:
+    """비밀번호 재설정 링크(30분) — 관리자가 본인에게 직접 전해 준다. 비밀번호 원문은 어디에도 없다."""
+    return members_mod.make_reset_link(db, admin, user_id)
+
+
 @app.post("/api/admin/members/{user_id}/block")
 def admin_member_block(
     user_id: int,

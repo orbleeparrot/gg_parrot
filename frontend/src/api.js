@@ -179,6 +179,7 @@ export const api = {
   adminMemberMessage: (id, { title, body, link } = {}, options = {}) => req(`/api/admin/members/${id}/message`, {
     ...options, method: "POST", body: JSON.stringify({ title, body: body || "", link: link || "" }), timeoutMs: 20_000,
   }),
+  adminMemberResetLink: (id, options = {}) => req(`/api/admin/members/${id}/reset-link`, { ...options, method: "POST" }),
   adminMemberBlock: (id, { blocked, reason } = {}, options = {}) => req(`/api/admin/members/${id}/block`, {
     ...options, method: "POST", body: JSON.stringify({ blocked: Boolean(blocked), reason: reason || "" }), timeoutMs: 20_000,
   }),

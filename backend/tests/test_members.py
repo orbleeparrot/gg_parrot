@@ -239,3 +239,27 @@ def test_mask_email_helper():
     assert members_mod.mask_email("hsrohsro1234@gmail.com") == "h***@gmail.com"
     assert members_mod.mask_email("deleted-9-abc@account.invalid") == "(탈퇴)"
     assert members_mod.mask_email("") == "" and members_mod.mask_email("broken") == ""
+
+
+# --- 비밀번호 재설정 링크 -------------------------------------------------------------------
+# 비밀번호는 해시라 알려줄 수 없다. 메일 발송이 안 되는 환경에서도 관리자가 링크를 만들어 본인에게 전해 주게 한다.
+def test_admin_can_make_a_reset_link_that_actually_resets_the_password():
+    headers, _admin_user = _admin()
+    token, user, email = _signup("rst")
+    r = client.post(f"/api/admin/members/{user['id']}/reset-link", headers=headers)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["recipient"] == user["username"] and body["expires_min"] > 0
+    assert "/reset?token=" in body["link"]
+    reset_token = body["link"].split("token=", 1)[1]
+    assert client.post("/api/auth/reset", json={"token": reset_token, "password": "newpass456"}).status_code == 200
+    assert client.post("/api/auth/login", json={"email": email, "password": "newpass456"}).status_code == 200
+    assert client.post("/api/auth/login", json={"email": email, "password": "password123"}).status_code == 401
+
+
+def test_reset_link_guards():
+    headers, admin_user = _admin()
+    token, user, _email = _signup("rsg")
+    assert client.post(f"/api/admin/members/{user['id']}/reset-link", headers=_auth(token)).status_code == 403
+    assert client.post(f"/api/admin/members/{admin_user['id']}/reset-link", headers=headers).status_code == 400
+    assert client.post("/api/admin/members/999999/reset-link", headers=headers).status_code == 404

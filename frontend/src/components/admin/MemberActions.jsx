@@ -22,6 +22,9 @@ export function MemberRowActions({ member, selfId = null, disabled = false, onAc
           {member.is_blocked ? "차단 해제" : "차단"}
         </button>
       ) : null}
+      {allowed.reset ? (
+        <button type="button" className="adm-act" disabled={disabled} onClick={() => onAction({ kind: "reset", member })}>재설정 링크</button>
+      ) : null}
       {allowed.remove ? (
         <button type="button" className="adm-act is-danger" disabled={disabled} onClick={() => onAction({ kind: "delete", member })}>탈퇴</button>
       ) : null}
@@ -111,6 +114,10 @@ export function MemberActionDialogs({ action, busy = false, error = "", onSubmit
     );
   }
 
+  if (kind === "reset") {
+    return <ResetLinkDialog name={name} link={action.link} expires={action.expires_min} busy={busy} error={error} onSubmit={onSubmit} onCancel={onCancel} />;
+  }
+
   if (kind !== "message") return null;
   const canSend = form.title.trim().length > 0 && !busy;
   return createPortal(
@@ -151,6 +158,70 @@ export function MemberActionDialogs({ action, busy = false, error = "", onSubmit
           <button type="button" className="btn btn-l w-full btn-ghost" disabled={busy} onClick={onCancel}>취소</button>
         </div>
       </form>
+    </div>,
+    document.body,
+  );
+}
+
+// 비밀번호 재설정 링크 — 비밀번호는 해시라 알려줄 수 없다. 만들기 전엔 확인 창, 만든 뒤엔 링크와 복사 버튼.
+// 링크는 30분·1회성이라 관리자가 본인에게 카톡 등으로 바로 전해 주는 용도다.
+function ResetLinkDialog({ name, link, expires, busy, error, onSubmit, onCancel }) {
+  const [copied, setCopied] = useState(false);
+  const titleId = useId();
+  useEffect(() => { setCopied(false); }, [link]);
+  useEffect(() => {
+    if (!link) return undefined;
+    const onKey = (e) => { if (e.key === "Escape") { e.preventDefault(); onCancel?.(); } };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [link, onCancel]);
+  const absolute = link && !/^https?:/i.test(link) && typeof window !== "undefined" ? `${window.location.origin}${link}` : link;
+  const minutes = expires || 30;
+
+  if (!link) {
+    return (
+      <ConfirmDialog
+        open
+        title={`${name} 님의 비밀번호 재설정 링크를 만들까요?`}
+        description={(
+          <span className="adm-dlg-text">
+            비밀번호는 서버에도 없어 알려줄 수 없어요. 대신 새 비밀번호를 정할 수 있는 링크를 만들어 드리니 본인에게 직접 전해 주세요.
+            링크는 {minutes}분 동안만 유효하고 한 번 쓰면 무효가 돼요.
+          </span>
+        )}
+        warning={error || undefined}
+        confirmLabel="링크 만들기"
+        busy={busy}
+        onConfirm={() => onSubmit({})}
+        onCancel={onCancel}
+      />
+    );
+  }
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(absolute);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
+    } catch {
+      window.prompt("링크를 복사해 주세요.", absolute);
+    }
+  }
+
+  return createPortal(
+    <div className="scrim fixed inset-0 z-[90] grid place-items-center p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) onCancel?.(); }}>
+      <div role="dialog" aria-modal="true" aria-labelledby={titleId} className="dialog confirm-dialog adm-msg-dialog">
+        <h2 id={titleId} className="t-h4 text-slate-900">{name} 님 재설정 링크</h2>
+        <p className="mt-3 t-small text-slate-700">본인에게 이 링크를 전해 주세요. {minutes}분 안에 열어 새 비밀번호를 정하면 돼요. 한 번 쓰면 무효가 됩니다.</p>
+        <label className="adm-msg-field">
+          <span>링크</span>
+          <input type="text" className="field field-sm num" value={absolute} readOnly onFocus={(e) => e.target.select()} />
+        </label>
+        <div className="confirm-dialog-actions">
+          <button type="button" className="btn btn-l w-full btn-primary" onClick={copy}>{copied ? "복사했어요" : "링크 복사"}</button>
+          <button type="button" className="btn btn-l w-full btn-ghost" onClick={onCancel}>닫기</button>
+        </div>
+      </div>
     </div>,
     document.body,
   );

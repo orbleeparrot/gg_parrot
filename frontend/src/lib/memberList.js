@@ -54,11 +54,11 @@ export function memberState(member) {
 // 행마다 어떤 버튼을 보여 줄지 — 서버가 400 으로 막는 버튼은 화면에도 두지 않는다(2026-09-18 확정).
 // 탈퇴한 계정은 전부 숨김 · 관리자 계정은 차단·탈퇴가 막히지만 메시지는 보낼 수 있다 · 자기 계정은 아무것도 못 한다.
 export function memberActions(member, selfId = null) {
-  const none = { message: false, block: false, remove: false };
+  const none = { message: false, block: false, remove: false, reset: false };
   if (!member || member.is_deleted) return none;
   if (selfId != null && String(member.id) === String(selfId)) return none;
-  if (member.is_admin) return { message: true, block: false, remove: false };
-  return { message: true, block: true, remove: true };
+  if (member.is_admin) return { message: true, block: false, remove: false, reset: false };
+  return { message: true, block: true, remove: true, reset: true };
 }
 
 export function canActOnMember(member, selfId = null) {
@@ -138,6 +138,7 @@ export function memberResultLine(kind, member) {
   if (kind === "block") return `${name} 님을 차단했어요 — 채팅·게시글·댓글을 쓸 수 없어요(로그인·열람·백테스트는 그대로).`;
   if (kind === "unblock") return `${name} 님의 차단을 해제했어요.`;
   if (kind === "delete") return `${name} 님을 탈퇴 처리했어요 — 같은 이메일로 다시 가입할 수 없어요.`;
+  if (kind === "reset") return `${name} 님의 비밀번호 재설정 링크를 만들었어요 — 본인에게 직접 전해 주세요.`;
   return `${name} 님에게 조치했어요.`;
 }
 

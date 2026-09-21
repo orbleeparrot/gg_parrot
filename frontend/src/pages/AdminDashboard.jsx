@@ -725,6 +725,14 @@ function MembersTab({ data, loading, error, query, selfId, onQuery, onRefresh })
     try {
       if (kind === "message") await api.adminMemberMessage(member.id, payload);
       else if (kind === "block") await api.adminMemberBlock(member.id, { blocked: !member.is_blocked, reason: payload.reason });
+      else if (kind === "reset") {
+        // 링크는 창 안에 보여 준다 — 닫으면 다시 만들어야 하므로 창을 유지한다.
+        const made = await api.adminMemberResetLink(member.id);
+        if (!aliveRef.current) return;
+        setAction({ kind: "reset", member, link: made.link, expires_min: made.expires_min });
+        setResult({ text: memberResultLine("reset", member), bad: false });
+        return;
+      }
       else await api.adminMemberDelete(member.id, { reason: payload.reason });
       if (!aliveRef.current) return;
       setAction(null);
@@ -735,7 +743,7 @@ function MembersTab({ data, loading, error, query, selfId, onQuery, onRefresh })
       const message = memberActionError(e);
       setResult({ text: message, bad: true });
       // 메시지 폼은 창을 닫지 않는다 — 제목·내용을 다시 쓰게 만들지 않기 위해(오류 문구는 창 안에도 적는다).
-      if (kind === "message") setDialogError(message);
+      if (kind === "message" || kind === "reset") setDialogError(message);
       else setAction(null);
     } finally {
       if (aliveRef.current) setBusy(false);
@@ -749,6 +757,7 @@ function MembersTab({ data, loading, error, query, selfId, onQuery, onRefresh })
         <h2>회원 관리</h2>
         <AdminTerms items={[
           ["메시지", "그 회원의 알림창으로 관리자 메시지를 보낸다(알림 kind admin). 접속 중이면 실시간 알림까지 뜬다"],
+          ["재설정 링크", "비밀번호는 해시라 알려줄 수 없다. 30분·1회성 재설정 링크를 만들어 본인에게 직접 전해 준다"],
           ["차단", "채팅·게시글·댓글을 쓸 수 없다. 로그인·열람·백테스트는 그대로. 되돌릴 수 있다"],
           ["탈퇴", "계정을 지우고 내용은 ‘탈퇴한 회원’ 으로 익명화(포인트 회수). 되돌릴 수 없고 같은 이메일로 다시 가입할 수 없다"],
           ["이메일", "서버가 마스킹해서 준다 (a***@gmail.com)"],

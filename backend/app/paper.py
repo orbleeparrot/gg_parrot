@@ -128,7 +128,9 @@ class _Runner:
         # 리더보드 행 상태용 체결 요약 — _note_fill 이 채우고 _state_view 가 읽는다.
         self.trade_count = 0
         self.last_fill: Optional[dict] = None
-        self.last_entry_return: Optional[float] = None
+        # 종목별 진입 시점 누적 수익률 — Fill.return_pct 는 세션 누적값이라 포트폴리오에서
+        # 다른 레그의 진입과 섞이지 않도록 심볼로 나눠 둔다.
+        self.entry_returns: Dict[str, float] = {}
 
     @property
     def replay_prices(self) -> List[float]:
@@ -344,9 +346,10 @@ def _note_fill(runner: _Runner, fill, symbol: str) -> None:
     runner.trade_count += 1
     kind = ""
     if fill.side in _EXIT_SIDES:
-        kind = "exit" if runner.last_entry_return is None else ("tp" if fill.return_pct > runner.last_entry_return else "sl")
+        entry_return = runner.entry_returns.pop(symbol, None)
+        kind = "exit" if entry_return is None else ("tp" if fill.return_pct > entry_return else "sl")
     else:
-        runner.last_entry_return = float(fill.return_pct)
+        runner.entry_returns[symbol] = float(fill.return_pct)
     runner.last_fill = {"ms": _now_ms(), "side": fill.side, "return": round(float(fill.return_pct), 4), "kind": kind, "symbol": symbol}
 
 

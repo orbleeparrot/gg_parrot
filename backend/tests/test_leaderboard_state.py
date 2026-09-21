@@ -110,6 +110,25 @@ def test_snapshot_state_tracks_fills_and_kind():
     paper._note_fill(runner, Fill(side="buy", price=100.0, qty=2.0, equity_after=998.0, return_pct=-0.2), "BTCUSDT")
     paper._note_fill(runner, loss, "BTCUSDT")
     assert paper._snapshot(runner)["state"]["last_fill_kind"] == "sl"
+    assert runner.entry_returns == {}
+
+
+def test_note_fill_judges_tp_sl_per_symbol_in_portfolio():
+    # Fill.return_pct 는 세션 누적 수익률: A 진입 0.0 → B 진입 1.0 → A 청산 0.5.
+    # 러너 전체 기준(마지막 진입 1.0)이면 A 는 잘못 "sl"; 종목별 기준(0.0)이면 "tp".
+    runner = paper._Runner(9, _StatefulSim(), "BTCUSDT", "live", 1_000.0)
+    paper._note_fill(runner, Fill(side="buy", price=100.0, qty=1.0, equity_after=1_000.0, return_pct=0.0), "BTCUSDT")
+    paper._note_fill(runner, Fill(side="buy", price=10.0, qty=1.0, equity_after=1_010.0, return_pct=1.0), "ETHUSDT")
+    assert runner.entry_returns == {"BTCUSDT": 0.0, "ETHUSDT": 1.0}
+    paper._note_fill(runner, Fill(side="sell", price=100.5, qty=1.0, equity_after=1_005.0, return_pct=0.5), "BTCUSDT")
+    st = paper._snapshot(runner)["state"]
+    assert st["last_fill_kind"] == "tp" and st["last_fill_side"] == "sell" and st["trade_count"] == 3
+    assert runner.entry_returns == {"ETHUSDT": 1.0}  # B 의 진입 기준은 그대로
+    paper._note_fill(runner, Fill(side="sell", price=9.0, qty=1.0, equity_after=1_004.0, return_pct=0.4), "ETHUSDT")
+    assert paper._snapshot(runner)["state"]["last_fill_kind"] == "sl"
+    # 진입 기록이 없는 종목의 청산(재시작 후 등)은 "exit"
+    paper._note_fill(runner, Fill(side="cover", price=1.0, qty=1.0, equity_after=1_004.0, return_pct=0.4), "SOLUSDT")
+    assert paper._snapshot(runner)["state"]["last_fill_kind"] == "exit"
 
 
 def test_snapshot_state_tolerates_sim_without_state():

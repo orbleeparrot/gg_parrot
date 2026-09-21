@@ -52,21 +52,18 @@ class ChatRoomMember(SQLModel, table=True):
     user_id: int = PK part (index)
     paid: int                        # 실제 낸 포인트 (방장은 0)
     joined_at: str; joined_ms: int (BigInteger)
+    last_seen_id: int = 0            # 이 방의 읽음 커서 (공개방의 ChatReadState 역할)
 
 class ChatMessage:  # 기존
     room_id: Optional[int] = Field(default=None, index=True)   # NULL = 공개방
 
-class ChatReadState:  # 기존 — PK 를 (user_id, room_id) 로
-    user_id: int = PK part
-    room_id: int = Field(default=0, primary_key=True)          # 0 = 공개방
-    last_seen_id: int = 0
+class ChatReadState:  # 기존 그대로 — 공개방 전용. PK 를 바꾸지 않는다.
 
 class User:  # 기존
     room_consent_at: str = ""        # 방 생성 동의 시각 (최초 1회)
 ```
 
-- ChatReadState PK 변경은 sqlite `_migrate` 에서 "테이블 재생성 + 복사(room_id=0)" 로, Postgres 는 마이그레이션
-  SQL 로 처리한다. 기존 행은 전부 공개방(room_id=0)이다.
+- 방 읽음 커서는 `ChatRoomMember.last_seen_id` 에 둔다 — 멤버 행이 곧 읽음 상태라 PK 마이그레이션이 필요 없다.
 - `_PG_ADDED_COLUMNS` 에 `chatmessage.room_id`, `user.room_consent_at` 추가. `_PG_PRIVATE_CACHE_TABLES` 에
   `chatroom`, `chatroommember` 추가. Supabase 마이그레이션 `supabase/migrations/20260921120000_chat_rooms.sql`
   (테이블·RLS deny-all·인덱스), `supabase/tests/gg_parrot_rls.sql` 목록에 두 테이블 추가.

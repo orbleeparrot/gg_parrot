@@ -328,3 +328,22 @@ def test_room_messages_before_creation_are_hidden_and_expired_room_is_read_only(
     r = client.post("/api/chat", json={"text": "늦음", "room_id": room_id}, headers=_auth(owner_tok))
     assert r.status_code == 410
     assert client.get("/api/chat?room_id=999999", headers=_auth(owner_tok)).status_code == 404
+
+
+def test_reply_card_cannot_quote_a_room_message_in_public_chat():
+    owner_tok, _ = _signup()
+    room_id = _create(owner_tok, entry_fee=0).json()["room"]["id"]
+    secret_id = client.post("/api/chat", json={"text": "비밀", "room_id": room_id}, headers=_auth(owner_tok)).json()["message"]["id"]
+    # 공개 채팅에서 방 메시지를 인용하면 카드가 비어야 한다
+    public = client.post("/api/chat", json={"text": f"[reply:{secret_id}] 공개"}, headers=_auth(owner_tok)).json()["message"]
+    assert public["reply_to"] is None
+    listed = client.get("/api/chat", headers=_auth(owner_tok)).json()
+    assert next(m for m in listed["items"] if m["id"] == public["id"])["reply_to"] is None
+    # 반대로 방 안에서 공개 메시지를 인용해도 카드가 비어야 한다
+    room_msg = client.post("/api/chat", json={"text": f"[reply:{public['id']}] 방", "room_id": room_id}, headers=_auth(owner_tok)).json()["message"]
+    assert room_msg["reply_to"] is None
+    room_listed = client.get(f"/api/chat?room_id={room_id}", headers=_auth(owner_tok)).json()
+    assert next(m for m in room_listed["items"] if m["id"] == room_msg["id"])["reply_to"] is None
+    # 같은 방 안의 인용은 그대로 된다
+    same = client.post("/api/chat", json={"text": f"[reply:{secret_id}] 같은 방", "room_id": room_id}, headers=_auth(owner_tok)).json()["message"]
+    assert same["reply_to"]["id"] == secret_id

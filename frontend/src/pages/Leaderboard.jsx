@@ -108,11 +108,11 @@ function CopyIcon() {
 const fmtCountdown = (s) => `${pad(Math.floor(s / 3600))}:${pad(Math.floor((s % 3600) / 60))}:${pad(s % 60)}`;
 
 // 보유 중 행은 현재가(3초 시세)로 미실현 수익률을 다시 계산하고, 나머지는 서버 값 그대로.
-function ret(e, prices) {
-  const value = liveReturn(e, prices);
+function ret(e, prices, now) {
+  const value = liveReturn(e, prices, now);
   if (value == null) return { text: "집계중…", cls: "text-slate-500", live: false };
   const up = value >= 0;
-  return { text: `${up ? "+" : ""}${value.toFixed(2)}%`, cls: up ? "text-green-600" : "text-red-600", live: isLive(e, prices) };
+  return { text: `${up ? "+" : ""}${value.toFixed(2)}%`, cls: up ? "text-green-600" : "text-red-600", live: isLive(e, prices, now) };
 }
 
 function registrationLabel(entry) {
@@ -431,7 +431,7 @@ function AccountLeaderboard() {
             <span role="columnheader" className="lb-col-actions">반응</span>
           </div>
           {items.map((e, idx) => {
-            const r = ret(e, prices);
+            const r = ret(e, prices, nowMs);
             const line = stateLine(e, nowMs);
             const rank = e.rank || ((page - 1) * 50 + idx + 1);
             const top3 = rank <= 3;

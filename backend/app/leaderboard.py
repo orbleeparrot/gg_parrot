@@ -300,6 +300,12 @@ def _entry_view(
             macro = None
         summary = row.human_summary
 
+    # 잠긴 행은 진행 상황(state·trade_count·시각 등)은 보여주되, 유료 파라미터로
+    # 역산 가능한 값(진입가·쿨다운·직전 체결 수익률)은 가린다.
+    legs = list(state.get("legs") or [])
+    if not unlocked:
+        legs = [dict(leg, entry_price=0.0) for leg in legs]
+
     # NOTE: password_hash is intentionally never included in the view.
     return {
         "id": row.id,
@@ -319,12 +325,12 @@ def _entry_view(
         "trade_count": int(state.get("trade_count") or 0),
         "last_fill_kst": _kst_hhmm(state["last_fill_ms"]) if state.get("last_fill_ms") else None,
         "last_fill_kind": state.get("last_fill_kind", ""),
-        "last_fill_return": state.get("last_fill_return"),
-        "cooldown_until_ms": state.get("cooldown_until_ms"),
+        "last_fill_return": state.get("last_fill_return") if unlocked else None,
+        "cooldown_until_ms": state.get("cooldown_until_ms") if unlocked else None,
         "last_price": state.get("last_price"),
         "checkpoint_ms": state.get("checkpoint_ms"),
         "virtual_balance": (status or {}).get("virtual_balance"),
-        "legs": list(state.get("legs") or []),
+        "legs": legs,
         "likes": likes,
         "dislikes": dislikes,
         "score": likes - dislikes,

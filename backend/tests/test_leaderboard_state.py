@@ -273,20 +273,31 @@ def _row(**over):
 def test_entry_view_exposes_state_even_when_locked():
     row = _row()
     status = {"current_return": 1.5, "current_equity": 1015.0, "status": "running", "mode": "live", "virtual_balance": 1000.0,
-              "state": {"in_position": True, "halted_today": False, "cooldown_until_ms": None, "trade_count": 1,
-                        "last_fill_ms": 1_700_000_000_000, "last_fill_side": "buy", "last_fill_return": 0.0, "last_fill_kind": "",
+              "state": {"in_position": True, "halted_today": False, "cooldown_until_ms": 1_700_000_100_000, "trade_count": 1,
+                        "last_fill_ms": 1_700_000_000_000, "last_fill_side": "buy", "last_fill_return": 1.8, "last_fill_kind": "",
                         "last_price": 101.0, "checkpoint_ms": 1_700_000_005_000,
                         "legs": [{"symbol": "BTCUSDT", "qty": 2.0, "dir": 1, "entry_price": 100.0, "last_price": 101.0, "in_position": True}]}}
+    # viewer_user_id=7 은 row 의 owner(42)가 아니고 unlocked_ids 에도 없으므로 잠긴 뷰다.
     view = leaderboard._entry_view(row, {}, viewer_id="x", viewer_user_id=7, paper_status=status)
     assert view["locked"] is True and view["human_summary"] == "" and view["macro"] is None
     assert view["state"] == "holding" and view["trade_count"] == 1 and view["last_fill_kst"] is not None
     assert view["virtual_balance"] == 1000.0 and view["legs"][0]["qty"] == 2.0 and view["last_price"] == 101.0
-    assert view["last_fill_kind"] == "" and view["last_fill_return"] == 0.0 and view["cooldown_until_ms"] is None
+    # 유료 파라미터로 역산 가능한 값은 잠긴 행에서 가려진다: 진입가·쿨다운·직전 체결 수익률.
+    assert view["legs"][0]["entry_price"] == 0.0
+    assert view["last_fill_return"] is None and view["cooldown_until_ms"] is None
+    assert view["last_fill_kind"] == ""
     assert view["checkpoint_ms"] == 1_700_000_005_000
     assert view["return_pct"] == 1.5 and view["paper_status"] == "running"
     none_view = leaderboard._entry_view(row, {}, viewer_id="x", viewer_user_id=7, paper_status=None)
     assert none_view["state"] == "none" and none_view["legs"] == [] and none_view["trade_count"] == 0
     assert none_view["virtual_balance"] is None and none_view["last_fill_kst"] is None and none_view["last_fill_kind"] == ""
+
+    # viewer_user_id=42 는 row 의 owner 이므로 잠기지 않은 뷰: 값이 그대로 노출된다.
+    owner_view = leaderboard._entry_view(row, {}, viewer_id="x", viewer_user_id=42, paper_status=status)
+    assert owner_view["locked"] is False
+    assert owner_view["legs"][0]["entry_price"] == 100.0
+    assert owner_view["last_fill_return"] == 1.8
+    assert owner_view["cooldown_until_ms"] == 1_700_000_100_000
 
 
 def test_entry_view_state_without_session_or_state_json():

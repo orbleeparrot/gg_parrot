@@ -4,15 +4,17 @@ const fmtPct = (v) => `${v >= 0 ? "+" : ""}${Number(v).toFixed(2)}%`;
 const fmtPrice = (v) => Number(v).toLocaleString("en-US", { maximumFractionDigits: 4 });
 const base = (symbol) => String(symbol || "").replace(/USDT$/, "");
 
-export function isLive(entry, prices) {
+export function isLive(entry, prices, now = Date.now()) {
   if (entry?.state !== "holding" || !(entry.virtual_balance > 0)) return false;
   if (!Number.isFinite(entry.equity)) return false;
+  // 러너가 죽었는데 마지막 체크포인트만 남은 고아 세션은 "실시간"이 아니다 — 90초 넘으면 서버값으로 폴백.
+  if (!Number.isFinite(entry.checkpoint_ms) || now - entry.checkpoint_ms > 90_000) return false;
   const held = (entry.legs || []).filter((l) => l.in_position);
   return held.length > 0 && held.every((l) => Number.isFinite(prices?.[l.symbol]));
 }
 
-export function liveReturn(entry, prices) {
-  if (!isLive(entry, prices)) return entry?.return_pct ?? null;
+export function liveReturn(entry, prices, now = Date.now()) {
+  if (!isLive(entry, prices, now)) return entry?.return_pct ?? null;
   const delta = (entry.legs || []).filter((l) => l.in_position)
     .reduce((sum, l) => sum + l.qty * (prices[l.symbol] - l.last_price) * (l.dir || 1), 0);
   const equity = entry.equity + delta;
@@ -35,7 +37,9 @@ export function stateLine(entry, now = Date.now()) {
     }
     case "holding": {
       const leg = (entry.legs || []).find((l) => l.in_position);
-      return { text: [HOLDING, leg ? ENTRY_AT(fmtPrice(leg.entry_price)) : null, ...trades].filter(Boolean).join(" · "), tone: "live" };
+      // 잠긴 행은 서버가 entry_price 를 0으로 가린다 — 그런 값으로 "진입가 0"을 보여주지 않는다.
+      const entryAt = leg && leg.entry_price > 0 ? ENTRY_AT(fmtPrice(leg.entry_price)) : null;
+      return { text: [HOLDING, entryAt, ...trades].filter(Boolean).join(" · "), tone: "live" };
     }
     case "exited": {
       const kind = KIND[entry.last_fill_kind] || KIND.exit;

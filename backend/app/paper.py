@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import math
 import os
 import time
@@ -39,6 +40,7 @@ REPLAY_SECONDS = float(os.environ.get("PAPER_REPLAY_SECONDS", "0.4"))
 REPLAY_HOURS = int(os.environ.get("PAPER_REPLAY_HOURS", "6"))
 CHECKPOINT_SECONDS = max(1.0, float(os.environ.get("PAPER_CHECKPOINT_SECONDS", "10")))
 _RECENT_CAP = 200
+log = logging.getLogger(__name__)
 
 
 def _now_iso() -> str:
@@ -193,7 +195,7 @@ async def start_session(macro: Macro, symbol: Optional[str], mode: str) -> dict:
             leg.replay_prices = await asyncio.to_thread(_load_replay_prices, leg.symbol)
 
     _running[session_id] = runner
-    runner.task = asyncio.create_task(_run_loop(runner))
+    _spawn_loop(runner)
 
     return {
         "session_id": session_id,
@@ -203,6 +205,140 @@ async def start_session(macro: Macro, symbol: Optional[str], mode: str) -> dict:
         "virtual_balance": initial,
         "status": "running",
     }
+
+
+def _spawn_loop(runner: _Runner) -> None:
+    runner.task = asyncio.create_task(_run_loop(runner))
+
+
+# --- 재기동 복구 ----------------------------------------------------------
+# Render 재배포는 프로세스를 강제로 끊어 종료 훅(shutdown_running_sessions)이 못 돌 수 있다.
+# 그러면 DB 에는 running 인데 루프는 없는 세션이 남고, 리더보드 수익률은 마지막 체크포인트에
+# 박제된다(2026-09-21 프로덕션 8행 전부). 기동 시 running 세션을 되살려 자산·포지션·체결 요약을
+# 이어 간다. 리플레이 세션은 되살릴 가격 창이 없으니 닫는다.
+_EXIT_SIDES_ALL = {"sell", "cover"}
+
+
+def _load_resumable() -> tuple[list[dict], list[int]]:
+    """running 세션을 (되살릴 것, 닫을 것) 으로 나눠 필요한 값만 dict 로 꺼낸다 — 워커 스레드용."""
+    revive: list[dict] = []
+    close: list[int] = []
+    with get_session() as db:
+        rows = db.exec(select(PaperSession).where(PaperSession.status == "running")).all()
+        for row in rows:
+            if row.mode != "live" or not row.macro_json:
+                close.append(int(row.id))
+                continue
+            trades = db.exec(
+                select(PaperTrade).where(PaperTrade.session_id == row.id).order_by(PaperTrade.id.asc())
+            ).all()
+            revive.append({
+                "id": int(row.id),
+                "symbol": row.symbol,
+                "macro_json": row.macro_json,
+                "virtual_balance": float(row.virtual_balance or 0.0),
+                "current_equity": float(row.current_equity or 0.0),
+                "legs": _stored_legs(row),
+                "state": parse_state(getattr(row, "state_json", "")),
+                "trades": [
+                    {"symbol": t.symbol, "side": t.side, "return_at_trade": float(t.return_at_trade), "ts": t.ts}
+                    for t in trades
+                ],
+            })
+        for sid in close:
+            row = db.get(PaperSession, sid)
+            if row is not None and row.status == "running":
+                row.status = "stopped"
+                row.stopped_at = _now_iso()
+                db.add(row)
+        if close:
+            db.commit()
+    return revive, close
+
+
+def _ts_ms(ts: str) -> int:
+    try:
+        return int(datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp() * 1000)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _rebuild_runner(info: dict) -> _Runner:
+    """한 세션의 러너를 DB 값으로 다시 만든다(루프는 띄우지 않는다)."""
+    macro = Macro.model_validate_json(info["macro_json"])
+    symbols = macro.all_symbols() if macro.is_portfolio() else [str(info["symbol"] or macro.symbol).upper()]
+    initial = info["virtual_balance"] or _session_initial(macro)
+    per_leg = initial / len(symbols)
+    leg_equity = {leg.get("symbol"): float(leg.get("current_equity") or 0.0) for leg in info["legs"]}
+    leg_state = {leg.get("symbol"): leg for leg in (info["state"].get("legs") or [])}
+    legs: List[_Leg] = []
+    for sym in symbols:
+        leg_macro = macro.for_symbol(sym, per_leg) if len(symbols) > 1 else macro
+        sim = make_sim(leg_macro, initial_capital=per_leg)
+        equity = leg_equity.get(sym) if len(symbols) > 1 else info["current_equity"]
+        if not equity or equity <= 0:
+            equity = per_leg
+        st = leg_state.get(sym) or {}
+        restore = getattr(sim, "restore", None)
+        if restore is not None:
+            restore(
+                equity,
+                in_position=bool(st.get("in_position")),
+                qty=float(st.get("qty") or 0.0),
+                entry_price=float(st.get("entry_price") or 0.0),
+                last_price=float(st.get("last_price") or 0.0),
+                cooldown_until_ms=info["state"].get("cooldown_until_ms"),
+            )
+        leg = _Leg(sym, sim, per_leg)
+        leg.equity = float(equity)
+        leg.ret = (leg.equity - per_leg) / per_leg * 100.0
+        leg.last_price = float(st.get("last_price") or 0.0)
+        legs.append(leg)
+    runner = _Runner(info["id"], legs[0].sim, symbols[0], "live", initial, legs=legs)
+    _aggregate(runner)
+    # 체결 요약은 DB 의 체결 행으로 다시 센다 — 메모리 카운터는 프로세스와 함께 사라졌다.
+    trades = info["trades"]
+    runner.trade_count = len(trades)
+    entry_returns: Dict[str, float] = {}
+    last_kind = ""
+    for t in trades:
+        sym = t["symbol"] or symbols[0]
+        if t["side"] in _EXIT_SIDES_ALL:
+            base = entry_returns.pop(sym, None)
+            last_kind = "exit" if base is None else ("tp" if t["return_at_trade"] > base else "sl")
+        else:
+            entry_returns[sym] = t["return_at_trade"]
+            last_kind = ""
+    runner.entry_returns = entry_returns
+    if trades:
+        last = trades[-1]
+        runner.last_fill = {
+            "ms": _ts_ms(last["ts"]), "side": last["side"], "return": round(last["return_at_trade"], 4),
+            "kind": last_kind, "symbol": last["symbol"] or symbols[0],
+        }
+    return runner
+
+
+async def resume_running_sessions() -> int:
+    """기동 시 running 세션을 되살린다. 되살린 수를 돌려준다; 실패한 세션은 건너뛰고 로그만 남긴다."""
+    revive, closed = await asyncio.to_thread(_load_resumable)
+    if closed:
+        log.info("paper resume: closed %d non-resumable running session(s)", len(closed))
+    count = 0
+    for info in revive:
+        if info["id"] in _running:
+            continue
+        try:
+            runner = _rebuild_runner(info)
+        except Exception:
+            log.exception("paper resume: session %s could not be rebuilt; leaving it as is", info["id"])
+            continue
+        _running[info["id"]] = runner
+        _spawn_loop(runner)
+        count += 1
+    if count:
+        log.info("paper resume: revived %d session(s)", count)
+    return count
 
 
 def _create_session(macro: Macro, symbol: str, mode: str, initial: float) -> int:

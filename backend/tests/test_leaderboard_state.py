@@ -364,3 +364,115 @@ def test_prices_endpoint_validates_and_skips_failures(monkeypatch):
     r_missing = client.get("/api/prices")
     assert r_missing.status_code == 422 and r_missing.json()["detail"] == "종목 형식이 잘못됐어요."
     assert client.get("/api/prices?symbols=" + ",".join(f"S{i}USDT" for i in range(31))).status_code == 422
+
+
+# --- 재배포 후 세션 복구 ---------------------------------------------------
+# Render 재배포는 프로세스를 강제로 끊어 종료 훅이 안 돌 수 있고, 기동 시 running 세션을 되살리는
+# 코드가 없어 리더보드 수익률이 마지막 체크포인트에 박제됐다(2026-09-21 프로덕션 8행 전부).
+from app.db import PaperTrade
+
+
+def test_position_sim_restore_rebuilds_a_held_position_and_flat_cash():
+    sim = make_sim(_macro("A", market="futures", leverage=2, risk={"stop_loss_pct": 1, "daily_max_loss_pct": 0, "cooldown_minutes": 30, "max_holding_hours": 0}), 1_000.0)
+    sim.restore(1_050.0, in_position=True, qty=20.0, entry_price=100.0, last_price=102.5, cooldown_until_ms=None)
+    st = sim.state()
+    assert st["in_position"] is True and st["qty"] == 20.0 and st["entry_price"] == 100.0
+    assert abs(sim.equity(102.5) - 1_050.0) < 1e-6  # 복구 직후 자산이 체크포인트 값과 같다
+    assert sim.liq_price is not None  # 레버리지면 청산가도 다시 세운다
+    sim.step(101.0)
+    assert abs(sim.equity(101.0) - 1_020.0) < 1e-6  # 이후 가격 변화가 그대로 반영
+
+    flat = make_sim(_macro("A"), 1_000.0)
+    flat.restore(1_339.87, in_position=False, qty=0.0, entry_price=0.0, last_price=0.0, cooldown_until_ms=1_700_000_000_000)
+    assert flat.state()["in_position"] is False and flat.cash == 1_339.87
+    assert flat.state()["cooldown_until_ms"] == 1_700_000_000_000
+
+
+def test_dca_sim_restore_rebuilds_accumulated_position():
+    sim = make_sim(_macro("C"), 1_000.0)
+    sim.restore(1_100.0, in_position=True, qty=5.0, entry_price=100.0, last_price=120.0)
+    assert sim.state()["in_position"] is True and abs(sim.state()["entry_price"] - 100.0) < 1e-9
+    assert abs(sim.equity(120.0) - 1_100.0) < 1e-6
+
+
+def _resume_db(rows):
+    # resume 는 워커 스레드에서 읽으므로 스레드 간에 같은 메모리 DB 를 공유해야 한다.
+    from sqlalchemy.pool import StaticPool
+    engine = create_engine("sqlite://", echo=False, poolclass=StaticPool, connect_args={"check_same_thread": False})
+    SQLModel.metadata.create_all(engine)
+    ids = []
+    with Session(engine) as db:
+        for row, trades in rows:
+            db.add(row)
+            db.commit()
+            db.refresh(row)
+            ids.append(row.id)
+            for t in trades:
+                db.add(PaperTrade(session_id=row.id, **t))
+            db.commit()
+
+    @contextmanager
+    def session_factory():
+        with Session(engine) as db:
+            yield db
+
+    return engine, session_factory, ids
+
+
+def test_resume_running_sessions_revives_zombies_and_restores_state(monkeypatch):
+    macro_json = _macro("A").model_dump_json()
+    zombie = PaperSession(macro_id="m", symbol="ONEUSDT", mode="live", status="running", started_at="2026-09-17T00:00:00Z",
+                          virtual_balance=1_000.0, current_equity=1_339.87, current_return=33.987, macro_json=macro_json, state_json="")
+    held_state = {"in_position": True, "halted_today": False, "cooldown_until_ms": None, "trade_count": 3,
+                  "last_fill_ms": 1, "last_fill_side": "buy", "last_fill_return": 0.5, "last_fill_kind": "", "last_price": 102.0,
+                  "checkpoint_ms": 1, "legs": [{"symbol": "BTCUSDT", "qty": 10.0, "dir": 1, "entry_price": 100.0, "last_price": 102.0, "in_position": True}]}
+    held = PaperSession(macro_id="m", symbol="BTCUSDT", mode="live", status="running", started_at="2026-09-21T00:00:00Z",
+                        virtual_balance=1_000.0, current_equity=1_020.0, current_return=2.0, macro_json=macro_json, state_json=json.dumps(held_state))
+    replay = PaperSession(macro_id="m", symbol="ETHUSDT", mode="replay", status="running", started_at="2026-09-21T00:00:00Z",
+                          virtual_balance=1_000.0, current_equity=990.0, current_return=-1.0, macro_json=macro_json)
+    stopped = PaperSession(macro_id="m", symbol="SOLUSDT", mode="live", status="stopped", started_at="2026-09-21T00:00:00Z",
+                           virtual_balance=1_000.0, current_equity=1_000.0, current_return=0.0, macro_json=macro_json)
+    trades = [
+        {"ts": "2026-09-19T00:00:00Z", "symbol": "ONEUSDT", "side": "buy", "price": 1.0, "qty": 1000.0, "return_at_trade": 0.0},
+        {"ts": "2026-09-19T01:00:00Z", "symbol": "ONEUSDT", "side": "sell", "price": 1.1, "qty": 1000.0, "return_at_trade": 10.0},
+    ]
+    held_trades = [
+        {"ts": "2026-09-21T00:00:00Z", "symbol": "BTCUSDT", "side": "buy", "price": 90.0, "qty": 10.0, "return_at_trade": 0.0},
+        {"ts": "2026-09-21T01:00:00Z", "symbol": "BTCUSDT", "side": "sell", "price": 95.0, "qty": 10.0, "return_at_trade": 0.5},
+        {"ts": "2026-09-21T02:00:00Z", "symbol": "BTCUSDT", "side": "buy", "price": 100.0, "qty": 10.0, "return_at_trade": 0.5},
+    ]
+    engine, factory, ids = _resume_db([(zombie, trades), (held, held_trades), (replay, []), (stopped, [])])
+    monkeypatch.setattr(paper, "get_session", factory)
+    started = []
+    monkeypatch.setattr(paper, "_spawn_loop", lambda runner: started.append(runner.session_id))  # 루프는 띄우지 않는다
+    paper._running.clear()
+    try:
+        revived = _run(paper.resume_running_sessions())
+        assert revived == 2 and len(started) == 2
+        z = paper._running[ids[0]]
+        assert z.equity == 1_339.87 and abs(z.ret - 33.987) < 1e-3 and z.sim.state()["in_position"] is False
+        assert z.trade_count == 2 and z.last_fill["side"] == "sell" and z.last_fill["kind"] == "tp"
+        h = paper._running[ids[1]]
+        assert h.sim.state()["in_position"] is True and h.sim.state()["qty"] == 10.0 and h.sim.state()["entry_price"] == 100.0
+        assert h.trade_count == 3 and h.last_fill["side"] == "buy" and h.entry_returns == {"BTCUSDT": 0.5}
+        assert paper._snapshot(h)["state"]["in_position"] is True
+        with Session(engine) as db:
+            assert db.get(PaperSession, ids[2]).status == "stopped"  # 리플레이는 되살리지 않고 닫는다
+            assert db.get(PaperSession, ids[3]).status == "stopped"
+        assert ids[2] not in paper._running and ids[3] not in paper._running
+    finally:
+        paper._running.clear()
+
+
+def _run(coro):
+    """test_paper_persistence 와 같은 방식 — 실행기 종료 대기 문제를 피해 새 루프에서 돌린다."""
+    import asyncio as _asyncio
+    loop = _asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        executor = getattr(loop, "_default_executor", None)
+        loop._default_executor = None
+        if executor is not None:
+            executor.shutdown(wait=True)
+        loop.close()

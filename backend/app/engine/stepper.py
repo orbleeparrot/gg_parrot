@@ -8,7 +8,7 @@ logic — only the data source differs. This is the single source of truth for
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 from .leverage import liquidation_price
@@ -282,6 +282,38 @@ class PositionSim:
             "halted_today": self._halted_day is not None and self._halted_day == self._day,
         }
 
+    def restore(self, equity: float, *, in_position: bool, qty: float, entry_price: float,
+                last_price: float, cooldown_until_ms: Optional[int] = None) -> None:
+        """재기동 복구 — 마지막 체크포인트의 자산·포지션에서 이어 간다.
+
+        포지션이 있으면 수량·진입가를 되살리고, 현금은 ``equity(last_price) == equity`` 가 되도록
+        역산한다(수수료는 이미 체결 시점에 반영돼 있어 0 으로 둔다). 일일 손실 기준선·보유 시간은
+        복구 시점부터 새로 센다.
+        """
+        self.in_pos = False
+        self.qty = 0.0
+        self.entry_fill = 0.0
+        self.entry_commission = 0.0
+        self.margin = 0.0
+        self.liq_price = None
+        self._entry_time = None
+        self.cash = float(equity)
+        if in_position and qty > 0 and entry_price > 0:
+            self.in_pos = True
+            self.qty = float(qty)
+            self.entry_fill = float(entry_price)
+            # 진입 때와 같은 장부: 롱은 마진을 현금에서 떼어 두고, 숏은 현금에 남긴다(_liquidate 가 그때 뺀다).
+            self.margin = self.qty * self.entry_fill / self.leverage
+            if self.side is PositionSide.LONG:
+                self.cash = float(equity) - self.margin - self.qty * (float(last_price) - self.entry_fill)
+            else:
+                self.cash = float(equity) - self.qty * (self.entry_fill - float(last_price))
+            self.liq_price = liquidation_price(self.entry_fill, self.leverage, self.side, commission_pct=self.comm)
+            self._entry_time = datetime.now(timezone.utc)
+        self._cooldown_until = (
+            datetime.fromtimestamp(cooldown_until_ms / 1000, timezone.utc) if cooldown_until_ms else None
+        )
+
     def _fill(self, side: str, price: float, qty: float, mark: float) -> Fill:
         eq = self.equity(mark)
         ret = (eq - self.initial_capital) / self.initial_capital * 100.0
@@ -397,6 +429,17 @@ class DcaSim:
             "cooldown_until_ms": None,
             "halted_today": self._halted_day is not None and self._halted_day == self._day,
         }
+
+    def restore(self, equity: float, *, in_position: bool, qty: float, entry_price: float,
+                last_price: float, cooldown_until_ms: Optional[int] = None) -> None:
+        """재기동 복구 — 누적 수량·평단을 되살리고 현금은 ``equity(last_price) == equity`` 로 역산."""
+        self.qty = 0.0
+        self.cost_basis = 0.0
+        self.cash = float(equity)
+        if in_position and qty > 0 and entry_price > 0:
+            self.qty = float(qty)
+            self.cost_basis = self.qty * float(entry_price)
+            self.cash = float(equity) - self.qty * float(last_price)
 
     def _fill(self, side: str, price: float, qty: float, mark: float) -> Fill:
         eq = self.equity(mark)

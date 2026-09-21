@@ -14,7 +14,7 @@ from sqlmodel import Session, select
 
 from . import avatars, points
 from .auth import AuthError, assert_can_write
-from .db import ChatRoom, ChatRoomMember, User
+from .db import ChatRoom, ChatRoomMember, User, UserAvatar
 from .leaderboard import today_start_ms
 from .moderation import require_clean_text
 
@@ -81,29 +81,51 @@ def _member_count(db, room_id: int) -> int:
     return int(db.exec(select(func.count(ChatRoomMember.user_id)).where(ChatRoomMember.room_id == room_id)).one() or 0)
 
 
+def room_views(db, rooms: list[ChatRoom], viewer_id: int | None, *, now_ms: int) -> list[dict]:
+    """room_view 를 방 개수와 무관하게 고정된(최대 4개) 쿼리로 일괄 계산한다."""
+    if not rooms:
+        return []
+    ids = [room.id for room in rooms]
+    owner_ids = {room.owner_id for room in rooms}
+    usernames = {uid: username for uid, username in
+                 db.exec(select(User.id, User.username).where(User.id.in_(owner_ids))).all()}
+    avatar_versions = {uid: version for uid, version in
+                       db.exec(select(UserAvatar.user_id, UserAvatar.version).where(UserAvatar.user_id.in_(owner_ids))).all()}
+    counts = {room_id: int(count) for room_id, count in
+             db.exec(select(ChatRoomMember.room_id, func.count(ChatRoomMember.user_id))
+                     .where(ChatRoomMember.room_id.in_(ids)).group_by(ChatRoomMember.room_id)).all()}
+    members: dict[int, ChatRoomMember] = {}
+    if viewer_id is not None:
+        members = {m.room_id: m for m in db.exec(select(ChatRoomMember).where(
+            ChatRoomMember.room_id.in_(ids), ChatRoomMember.user_id == viewer_id,
+        )).all()}
+    views = []
+    for room in rooms:
+        member = members.get(room.id)
+        is_owner = viewer_id == room.owner_id
+        views.append({
+            "id": room.id,
+            "title": room.title,
+            "owner_username": usernames.get(room.owner_id, ""),
+            "owner_avatar_url": avatars.public_url(room.owner_id, avatar_versions.get(room.owner_id)),
+            "capacity": room.capacity,
+            "member_count": counts.get(room.id, 0),
+            "entry_fee": room.entry_fee,
+            "created_ms": room.created_ms,
+            "expires_ms": room.expires_ms,
+            "extended_count": room.extended_count,
+            "is_open": is_open(room, now_ms),
+            "closed_reason": room.closed_reason,
+            "is_member": member is not None,
+            "is_owner": is_owner,
+            "can_extend": is_owner and is_open(room, now_ms) and room.expires_ms - now_ms <= ROOM_EXTEND_WINDOW_MS,
+            "last_seen_id": member.last_seen_id if member else 0,
+        })
+    return views
+
+
 def room_view(db, room: ChatRoom, viewer_id: int | None, *, now_ms: int | None = None) -> dict:
-    now_ms = now_ms if now_ms is not None else _now()[1]
-    owner = db.get(User, room.owner_id)
-    member = db.get(ChatRoomMember, (room.id, viewer_id)) if viewer_id is not None else None
-    is_owner = viewer_id == room.owner_id
-    return {
-        "id": room.id,
-        "title": room.title,
-        "owner_username": owner.username if owner else "",
-        "owner_avatar_url": avatars.avatar_url(room.owner_id, db=db),
-        "capacity": room.capacity,
-        "member_count": _member_count(db, room.id),
-        "entry_fee": room.entry_fee,
-        "created_ms": room.created_ms,
-        "expires_ms": room.expires_ms,
-        "extended_count": room.extended_count,
-        "is_open": is_open(room, now_ms),
-        "closed_reason": room.closed_reason,
-        "is_member": member is not None,
-        "is_owner": is_owner,
-        "can_extend": is_owner and is_open(room, now_ms) and room.expires_ms - now_ms <= ROOM_EXTEND_WINDOW_MS,
-        "last_seen_id": member.last_seen_id if member else 0,
-    }
+    return room_views(db, [room], viewer_id, now_ms=now_ms if now_ms is not None else _now()[1])[0]
 
 
 def _validate_create(title: str, capacity: int, entry_fee: int) -> str:
@@ -252,8 +274,8 @@ def list_rooms(db: Session, account: User) -> dict:
         ChatRoomMember.user_id == viewer_id, ChatRoom.expires_ms > now_ms - MINE_GRACE_MS,
     ).order_by(ChatRoom.created_ms.desc())).all()
     return {
-        "items": [room_view(db, room, viewer_id, now_ms=now_ms) for room in open_rows],
-        "mine": [room_view(db, room, viewer_id, now_ms=now_ms) for room in mine_rows],
+        "items": room_views(db, open_rows, viewer_id, now_ms=now_ms),
+        "mine": room_views(db, mine_rows, viewer_id, now_ms=now_ms),
         "server_ms": now_ms,
         "disclaimer": DISCLAIMER,
         "consent_text": CONSENT_TEXT,

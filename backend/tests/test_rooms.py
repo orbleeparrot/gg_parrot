@@ -272,3 +272,14 @@ def test_list_rooms_shows_open_rooms_and_my_rooms_including_expired():
     assert open_id not in mine
     assert body["consented"] is False and body["create_cost"] == 100 and "disclaimer" in body
     assert client.get("/api/rooms").status_code == 401
+
+
+def test_list_rooms_view_shape_matches_single_view():
+    owner_tok, _ = _signup()
+    room_id = _create(owner_tok, entry_fee=0).json()["room"]["id"]
+    guest_tok, _ = _signup()
+    joined_room = client.post(f"/api/rooms/{room_id}/join", headers=_auth(guest_tok)).json()["room"]
+    listed = client.get("/api/rooms", headers=_auth(guest_tok)).json()
+    item = next(room for room in listed["items"] if room["id"] == room_id)
+    assert item == joined_room
+    assert item["member_count"] == 2

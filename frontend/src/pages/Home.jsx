@@ -55,7 +55,7 @@ function HomeEntryHero({ onLeaderboard, onGuide, onAsk, staticLayout = false }) 
           type="button"
           data-home-ask-trigger
           onClick={onAsk}
-          className="home-entry-choice is-ask"
+          className="home-entry-choice"
         >
           <span className="home-entry-choice-art" aria-hidden="true">
             <img src="/brand/agent/ggparrot-agent-curious-v1.svg" alt="" width="88" height="88" draggable="false" />
@@ -68,7 +68,7 @@ function HomeEntryHero({ onLeaderboard, onGuide, onAsk, staticLayout = false }) 
           data-home-entry-primary
           data-home-carousel-primary
           onClick={onLeaderboard}
-          className="home-entry-choice is-primary"
+          className="home-entry-choice"
         >
           <span className="home-entry-choice-art" aria-hidden="true">
             <img src="/brand/navigation/ggparrot-nav-leaderboard.svg" alt="" width="88" height="88" draggable="false" />

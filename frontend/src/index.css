@@ -3056,21 +3056,7 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   outline-offset: 3px;
 }
 
-.home-entry-choice.is-primary {
-  border-color: rgb(var(--c-brand));
-  color: rgb(var(--c-brand-ink));
-  background: rgb(var(--c-brand));
-}
-
-.home-entry-choice.is-primary:hover {
-  border-color: rgb(var(--c-brand-hover));
-  background: rgb(var(--c-brand-hover));
-}
-
-/* 첫 번째 길 — 껄무새에게 물어볼까?: 다른 두 카드와 같은 꼴(높이·모서리·그림 크기·폰 규칙까지 상속).
-   흰 면에 노란 테두리로만 구분해 바로 아래 노랑 면의 '빠른 실행' 카드와 겹치지 않게. */
-.home-entry-choice.is-ask { border-color: rgb(var(--c-brand)); }
-.home-entry-choice.is-ask:hover { background: rgb(var(--c-brand) / 0.12); border-color: rgb(var(--c-brand-hover)); }
+/* 세 카드(물어볼까·빠른 실행·직접 만들기)는 전부 같은 꼴 — 색으로 어느 하나를 띄우지 않는다. */
 
 .home-entry-choice strong,
 .home-entry-choice small {
@@ -3112,11 +3098,6 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   line-height: 1.5;
   font-weight: 600;
   word-break: keep-all;
-}
-
-.home-entry-choice.is-primary small {
-  color: rgb(var(--c-brand-ink));
-  opacity: 0.76;
 }
 
 .home-entry-choice-arrow {

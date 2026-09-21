@@ -50,6 +50,7 @@ except ImportError:
 
 from . import chart as chart_mod
 from . import chat as chat_mod
+from . import rooms as rooms_mod
 from . import feargreed as feargreed_mod
 from . import hangang as hangang_mod
 from . import hotcoins as hotcoins_mod
@@ -376,6 +377,13 @@ class ChatPostRequest(BaseModel):
 
 class ChatReadRequest(BaseModel):
     last_seen_id: int
+
+
+class RoomCreateRequest(BaseModel):
+    title: str
+    capacity: int
+    entry_fee: int = 0
+    consent: bool = False
 
 
 # --- endpoints ----------------------------------------------------------
@@ -1534,6 +1542,26 @@ def chat_read(req: ChatReadRequest, account: User = Depends(auth_mod.current_use
         return chat_mod.mark_read(account, req.last_seen_id, db=db)
     except ValueError as exc:
         raise HTTPException(401, str(exc)) from exc
+
+
+# --- 전략방 ---------------------------------------------------------------
+def _room_http(exc: Exception) -> HTTPException:
+    if isinstance(exc, rooms_mod.RoomError):
+        return HTTPException(exc.status, exc.message)
+    if isinstance(exc, points_mod.InsufficientPoints):
+        return HTTPException(402, str(exc))
+    raise exc
+
+
+@app.post("/api/rooms")
+def rooms_create(req: RoomCreateRequest, account: User = Depends(auth_mod.current_user_in_session),
+                 db: Session = Depends(request_session)) -> dict:
+    try:
+        return rooms_mod.create_room(db, account, title=req.title, capacity=req.capacity,
+                                     entry_fee=req.entry_fee, consent=req.consent)
+    except (rooms_mod.RoomError, points_mod.InsufficientPoints) as exc:
+        db.rollback()
+        raise _room_http(exc)
 
 
 # --- 껄무새 게시판 -------------------------------------------------------

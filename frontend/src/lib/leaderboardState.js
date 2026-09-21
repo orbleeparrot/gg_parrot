@@ -1,4 +1,4 @@
-import { COOLDOWN, ENTRY_AT, HALTED, HOLDING, KIND, RECOVERING, REENTRY, STOPPED, TRADES, WAITING } from "./leaderboardCopy.js";
+import { COOLDOWN, ENTRY_AT, HALTED, HOLDING, KIND, RECOVERING, REENTRY, STATE_HELP, STOPPED, TRADES, WAITING } from "./leaderboardCopy.js";
 
 const fmtPct = (v) => `${v >= 0 ? "+" : ""}${Number(v).toFixed(2)}%`;
 const fmtPrice = (v) => Number(v).toLocaleString("en-US", { maximumFractionDigits: 4 });
@@ -70,4 +70,11 @@ export function symbolsOf(items) {
     for (const l of e.legs || []) if (l.in_position && !out.includes(l.symbol)) out.push(l.symbol);
   }
   return out.slice(0, 30);
+}
+
+// 행 캡션에 붙는 설명(title) — 상태별 한 문장.
+export function stateHelp(entry, now = Date.now()) {
+  if (!entry || !entry.state || entry.state === "none") return "";
+  if (isRecovering(entry, now)) return STATE_HELP.recovering;
+  return STATE_HELP[entry.state] || "";
 }

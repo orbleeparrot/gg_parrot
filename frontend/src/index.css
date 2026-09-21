@@ -8865,7 +8865,7 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
      그래야 머리글과 모든 행의 열이 같은 자리에서 시작한다. 반응 열은 아이콘 3개 폭. */
   --lb-actions-w: 196px;                   /* 투표 알약 2개(아이콘+수) + 자물쇠·가격 알약(또는 복사 아이콘)이 한 줄 */
   --lb-return-gap: 32px;                   /* 수익률 숫자와 반응 버튼 사이 숨 — 열 간격 16px 만으로는 붙어 보인다 */
-  --lb-columns: 32px 36px minmax(220px, 1fr) minmax(0, 1.35fr) calc(104px + var(--lb-return-gap)) var(--lb-actions-w);
+  --lb-columns: 32px 36px minmax(220px, 1fr) minmax(0, 1.2fr) calc(240px + var(--lb-return-gap)) var(--lb-actions-w);  /* 수익률 칸은 상태 캡션 한 줄이 들어갈 폭 */
   --lb-areas: "rank coin name summary return actions";
   padding-bottom: 88px; /* 마지막 행이 떠 있는 채팅 버튼 위로 올라올 여지 */
 }
@@ -8927,7 +8927,16 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 .lb-summary.is-locked { color: rgb(var(--c-slate-500)); }
 /* 수익률 아래 한 줄 상태 캡션(대기·보유·청산·중단·종료). 보유 중이면 숫자 옆 초록 점이 숨 쉰다. */
 .lb-return { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; text-align: right; font-size: 16px; font-weight: 700; white-space: nowrap; }
-.lb-state { font-size: 11px; line-height: 1.3; font-weight: 600; white-space: normal; max-width: 100%; text-align: right; overflow-wrap: anywhere; color: rgb(var(--c-slate-500)); }
+.lb-state { font-size: 11px; line-height: 1.3; font-weight: 600; white-space: normal; max-width: 100%; text-align: right; overflow-wrap: anywhere; color: rgb(var(--c-slate-500)); cursor: help; }
+/* 수익률 머리글의 상태 설명 — ⓘ 에 마우스를 올리면(또는 포커스) 다섯 상태가 무엇인지 보여 준다. */
+.lb-col-return { position: relative; }
+.lb-state-help { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; margin-left: 4px; border-radius: 999px; border: 1px solid rgb(var(--c-slate-300)); background: rgb(var(--c-surface)); color: rgb(var(--c-slate-600)); font-size: 10px; font-weight: 700; line-height: 1; cursor: help; vertical-align: middle; }
+.lb-state-help:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
+.lb-state-legend { display: none; position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; width: 260px; padding: 10px 12px; border: 1px solid rgb(var(--c-slate-200)); border-radius: 10px; background: rgb(var(--c-surface)); color: rgb(var(--c-slate-700)); box-shadow: 0 8px 24px rgb(var(--c-slate-900) / 0.12); font-size: 12px; font-weight: 500; line-height: 1.5; text-align: left; white-space: normal; }
+.lb-state-legend dt { font-weight: 700; color: rgb(var(--c-slate-900)); }
+.lb-state-legend dd { margin: 0 0 6px; }
+.lb-state-legend dd:last-child { margin-bottom: 0; }
+.lb-col-return:hover .lb-state-legend, .lb-col-return:focus-within .lb-state-legend { display: block; }
 .lb-state.is-live { color: rgb(var(--c-indigo-700)); }
 .lb-state.is-good { color: rgb(var(--c-green-700)); }
 .lb-state.is-bad { color: rgb(var(--c-red-700)); }
@@ -9029,7 +9038,7 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   /* 전략이 이름 아래로 내려온다 — 배치는 영역으로 못 박는다 */
   .lb-board {
     --lb-return-gap: 20px;
-    --lb-columns: 28px 36px minmax(0, 1fr) calc(96px + var(--lb-return-gap)) var(--lb-actions-w);
+    --lb-columns: 28px 36px minmax(0, 1fr) calc(168px + var(--lb-return-gap)) var(--lb-actions-w);
     --lb-areas: "rank coin name return actions" "rank coin summary summary summary";
   }
   .lb-row-head { grid-template-areas: "rank coin name return actions"; }

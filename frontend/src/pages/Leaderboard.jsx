@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import SimBadge from "../components/SimBadge.jsx";
 import RegisterMacroModal from "../components/RegisterMacroModal.jsx";
@@ -12,8 +12,8 @@ import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 import { applyVote, settleVote } from "../lib/leaderboardVotes.js";
 import StrategyDetails from "../components/StrategyDetails.jsx";
 import { impressionKey } from "../lib/visit.js";
-import { isLive, liveReturn, stateLine, symbolsOf } from "../lib/leaderboardState.js";
-import { LIVE_TITLE } from "../lib/leaderboardCopy.js";
+import { isLive, liveReturn, stateHelp, stateLine, symbolsOf } from "../lib/leaderboardState.js";
+import { LIVE_TITLE, STATE_LEGEND } from "../lib/leaderboardCopy.js";
 import "./LeaderboardMobile.css";
 
 // 매크로 지표 비콘 — 노출(목록에 보임)·열람(빌더로 가져오기 · 빠른 실행 · 언락 중 하나를 누름).
@@ -427,7 +427,13 @@ function AccountLeaderboard() {
             <span aria-hidden="true" className="lb-col-coin" />
             <span role="columnheader" className="lb-col-name">매크로</span>
             <span role="columnheader" className="lb-col-summary">전략</span>
-            <span role="columnheader" className="lb-col-return">수익률</span>
+            <span role="columnheader" className="lb-col-return">
+              수익률
+              <button type="button" className="lb-state-help" aria-label="수익률 아래 상태 설명" aria-describedby="lb-state-legend">i</button>
+              <dl id="lb-state-legend" className="lb-state-legend" role="tooltip">
+                {STATE_LEGEND.map(([name, desc]) => <Fragment key={name}><dt>{name}</dt><dd>{desc}</dd></Fragment>)}
+              </dl>
+            </span>
             <span role="columnheader" className="lb-col-actions">반응</span>
           </div>
           {items.map((e, idx) => {
@@ -478,7 +484,7 @@ function AccountLeaderboard() {
                     {r.text}
                     {r.live ? <i className="lb-live-dot" aria-hidden="true" title={LIVE_TITLE} /> : null}
                   </span>
-                  {line ? <span className={`lb-state is-${line.tone}`}>{line.text}</span> : null}
+                  {line ? <span className={`lb-state is-${line.tone}`} title={stateHelp(e, nowMs)}>{line.text}</span> : null}
                 </div>
                 <div className="lb-actions" role="cell">
                   <div className="lb-reactions" role="group" aria-label="매크로 반응">

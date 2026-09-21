@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { cooldownLabel, isLive, liveReturn, stateLine, symbolsOf } from "../src/lib/leaderboardState.js";
+import { cooldownLabel, isLive, liveReturn, stateHelp, stateLine, symbolsOf } from "../src/lib/leaderboardState.js";
 
 const holding = { state: "holding", return_pct: 1.5, equity: 1015, virtual_balance: 1000, checkpoint_ms: 1_700_000_000_000,
   legs: [{ symbol: "BTCUSDT", qty: 2, dir: 1, last_price: 100, in_position: true }] };
@@ -54,4 +54,14 @@ test("stateLine says 복구 중 for running rows without a fresh checkpoint", ()
   assert.deepEqual(stateLine({ state: "holding", checkpoint_ms: now - 5 * 60_000, legs: [], trade_count: 2 }, now), { text: "복구 중…", tone: "muted" });
   assert.equal(stateLine({ state: "waiting", checkpoint_ms: now - 10_000, symbol: "ONEUSDT", last_price: 1.2, trade_count: 0 }, now).text, "진입 대기 · ONE 1.2");
   assert.equal(stateLine({ state: "stopped", return_pct: 0.4, trade_count: 0 }, now).text, "종료됨 · 최종 +0.40%");
+});
+
+test("stateHelp explains the state and, when there are trades, the trade count", () => {
+  const now = 1_700_000_000_000;
+  assert.match(stateHelp({ state: "waiting", checkpoint_ms: now, trade_count: 0 }, now), /^진입 대기/);
+  assert.doesNotMatch(stateHelp({ state: "waiting", checkpoint_ms: now, trade_count: 0 }, now), /거래 N회/);
+  const withTrades = stateHelp({ state: "exited", checkpoint_ms: now, trade_count: 4 }, now);
+  assert.match(withTrades, /^청산/);
+  assert.match(withTrades, /거래 N회: 등록 이후 체결 횟수/);
+  assert.equal(stateHelp({ state: "waiting", trade_count: 3 }, now), "복구 중: 서버 재시작 직후예요. 잠시 뒤 상태가 채워져요.");
 });

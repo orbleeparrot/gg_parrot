@@ -1,4 +1,4 @@
-import { COOLDOWN, ENTRY_AT, HALTED, HOLDING, KIND, RECOVERING, REENTRY, STATE_HELP, STOPPED, TRADES, WAITING } from "./leaderboardCopy.js";
+import { COOLDOWN, ENTRY_AT, HALTED, HOLDING, KIND, RECOVERING, REENTRY, STATE_HELP, STOPPED, TRADES, TRADES_HELP, WAITING } from "./leaderboardCopy.js";
 
 const fmtPct = (v) => `${v >= 0 ? "+" : ""}${Number(v).toFixed(2)}%`;
 const fmtPrice = (v) => Number(v).toLocaleString("en-US", { maximumFractionDigits: 4 });
@@ -76,5 +76,7 @@ export function symbolsOf(items) {
 export function stateHelp(entry, now = Date.now()) {
   if (!entry || !entry.state || entry.state === "none") return "";
   if (isRecovering(entry, now)) return STATE_HELP.recovering;
-  return STATE_HELP[entry.state] || "";
+  const head = STATE_HELP[entry.state] || "";
+  return entry.trade_count > 0 ? `${head}
+${TRADES_HELP}` : head;
 }

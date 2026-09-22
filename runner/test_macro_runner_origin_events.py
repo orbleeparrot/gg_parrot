@@ -71,7 +71,7 @@ class EventUploadTests(unittest.TestCase):
         # 전송 실패면 버렸다가 다음 heartbeat 에 다시 실어 보낸다.
         client.push_event("fill", "손익 +1.00%")
         with patch.object(macro_runner.requests, "post", side_effect=RuntimeError("down")):
-            self.assertEqual(client.heartbeat({}), "continue")
+            self.assertEqual(client.heartbeat({}), {"action": "continue", "commands": [], "offline": True})
         with patch.object(macro_runner.requests, "post", return_value=ok) as post:
             client.heartbeat({})
         self.assertEqual([e["message"] for e in post.call_args.kwargs["json"]["events"]], ["손익 +1.00%"])

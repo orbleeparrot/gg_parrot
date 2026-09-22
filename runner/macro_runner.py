@@ -37,6 +37,7 @@ import sys
 import threading
 import time
 import uuid
+from collections import deque
 from decimal import Decimal, ROUND_DOWN
 from pathlib import Path
 
@@ -92,7 +93,6 @@ SERVER_BASE = os.environ.get("GGP_SERVER_BASE", "https://gg-parrot.onrender.com"
 LOCAL_SERVER_BASE = "http://127.0.0.1:8000"
 MAX_ORDER_USDT = float(os.environ.get("MAX_ORDER_USDT", "100"))   # 1회 주문 상한(USDT)
 ORDER_CAP_BASIS = os.environ.get("ORDER_CAP_BASIS", "notional").lower()  # notional | margin
-DEFAULT_TP_PCT = 3.0
 MAX_RETRIES = 3
 POLL_SECONDS = 5.0
 # 실행 로그를 서버에 올리는 버퍼 상한(heartbeat 한 번에 실어 보내는 최대 줄 수).
@@ -102,7 +102,7 @@ EVENT_BUFFER_MAX = 100
 def _event_kind(msg: str) -> str:
     """로그 한 줄을 서버 이벤트 종류로 분류한다(문의 대응용 색인)."""
     m = msg.strip()
-    if m.startswith("[진입]") or m.startswith("[청산") or m.startswith("[강제청산"):
+    if m.startswith("[진입]") or m.startswith("[청산") or m.startswith("[강제청산") or m.startswith("[손절]"):
         return "order"
     if "체결" in m or m.lstrip().startswith("손익"):
         return "fill"
@@ -294,16 +294,12 @@ def _order_qty(price, step, min_notional, budget, leverage, market) -> tuple[flo
 
 
 def _strategy_targets(macro: dict) -> dict:
+    """로컬에 남는 값만 — 진입/청산 판단은 서버(v8)가 하고, 여기선 안전망(손절·리스크)과 자본만 본다."""
     p = macro.get("params", {})
     risk = macro.get("risk", {})
-    rule = macro.get("rule_type", "A")
-    tp = p.get("take_profit_pct") or p.get("take_profit") or p.get("tp")
     return {
-        "rule": rule,
-        "tp_pct": float(tp) if tp else None,
+        "rule": macro.get("rule_type", "A"),
         "sl_pct": float(risk["stop_loss_pct"]) if risk.get("stop_loss_pct") else None,
-        "buy_price": float(p["buy_price"]) if p.get("buy_price") else None,
-        "sell_price": float(p["sell_price"]) if p.get("sell_price") else None,
         "invest_ratio": float(risk.get("invest_ratio", 1.0)),
         "capital": float(p.get("initial_capital", 0) or 0),
         "risk": risk,
@@ -375,41 +371,11 @@ class RiskGuard:
         if self.daily_max_loss and self._daily_loss_pct() <= -float(self.daily_max_loss):
             self._halted_day = self._day
 
-
-def _was_stop_exit(t, price, entry, side) -> bool:
-    if t["sl_pct"] is None or entry <= 0:
-        return False
-    if side == "long":
-        return price <= entry * (1 - t["sl_pct"] / 100.0)
-    return price >= entry * (1 + t["sl_pct"] / 100.0)
-
-
-def _should_enter(t, price, side) -> bool:
-    if t["rule"] == "B":
-        if side == "long" and t["buy_price"]:
-            return price <= t["buy_price"]
-        if side == "short" and t["sell_price"]:
-            return price >= t["sell_price"]
-    return True
-
-
-def _should_exit(t, price, entry, side) -> bool:
-    tp = t["tp_pct"] if t["tp_pct"] is not None else (None if t["rule"] == "B" else DEFAULT_TP_PCT)
-    if side == "long":
-        if t["rule"] == "B" and t["sell_price"] and price >= t["sell_price"]:
-            return True
-        if tp is not None and price >= entry * (1 + tp / 100.0):
-            return True
-        if t["sl_pct"] is not None and price <= entry * (1 - t["sl_pct"] / 100.0):
-            return True
-    else:
-        if t["rule"] == "B" and t["buy_price"] and price <= t["buy_price"]:
-            return True
-        if tp is not None and price <= entry * (1 - tp / 100.0):
-            return True
-        if t["sl_pct"] is not None and price >= entry * (1 + t["sl_pct"] / 100.0):
-            return True
-    return False
+    def on_partial_exit(self, pnl_usdt: float) -> None:
+        """부분 청산(서버 명령): 실현손익만 일일 집계에 더하고 보유시간은 그대로."""
+        self._day_pnl += pnl_usdt
+        if self.daily_max_loss and self._daily_loss_pct() <= -float(self.daily_max_loss):
+            self._halted_day = self._day
 
 
 def _pnl_usdt(qty, entry, price, side) -> float:
@@ -436,6 +402,8 @@ class ServerClient:
         # 실행 창 로그를 서버에도 남긴다 — heartbeat 에 실어 보내고, 실패하면 다음에 다시.
         self._events: list[dict] = []
         self._events_lock = threading.Lock()
+        # 명령 실행 결과(ack). 전송에 실패하면 다음 heartbeat 앞머리에 다시 실어 보낸다.
+        self.unsent_acks: list[dict] = []
 
     def push_event(self, kind: str, message: str) -> None:
         with self._events_lock:
@@ -467,23 +435,29 @@ class ServerClient:
         self.macro_origin = str(data.get("macro_origin") or "")
         return data
 
-    def heartbeat(self, snapshot: dict) -> str:
-        """상태를 올리고 종료명령(continue|stop_only|close_and_stop)을 받는다.
-        네트워크 오류 시엔 'continue' 로 간주(로컬 매매는 계속, 로컬 종료는 항상 가능)."""
+    def heartbeat(self, snapshot: dict, acks: list[dict] | None = None) -> dict:
+        """상태와 명령 실행 결과(acks)를 올리고 {"action", "commands"} 를 받는다.
+        action 은 continue|stop_only|close_and_stop, commands 는 서버 전략이 낸 미실행 주문 명령(seq 순).
+        네트워크 오류면 action="continue", commands=[], offline=True — 진입은 멈추고(명령 없음) 로컬 안전망만 돈다."""
         if self.session_id is None:
-            return "continue"
+            return {"action": "continue", "commands": []}
         body = dict(snapshot)
         body["session_id"] = self.session_id
         events = self._drain_events()
         body["events"] = events
+        pending = list(getattr(self, "unsent_acks", None) or []) + list(acks or [])
+        self.unsent_acks = []
+        body["acks"] = pending
         try:
             r = requests.post(f"{self.base}/api/runner/heartbeat", json=body,
                               headers=self._headers, timeout=10)
             r.raise_for_status()
-            return r.json().get("action", "continue")
+            data = r.json() or {}
+            return {"action": data.get("action", "continue"), "commands": list(data.get("commands") or [])}
         except Exception:
             self._requeue_events(events)
-            return "continue"
+            self.unsent_acks = pending
+            return {"action": "continue", "commands": [], "offline": True}
 
     def stopped(self, status: str = "stopped", note: str = "", snapshot: dict | None = None) -> bool:
         if self.session_id is None:
@@ -551,6 +525,12 @@ class BotThread(threading.Thread):
         self.realized = 0.0
         self.position_uncertain = False
         self.position_dust_qty = 0.0
+
+        # v8 서버 신호: 명령의 notional_frac 은 매크로 초기자본 기준. 실행 결과는 다음 heartbeat 의 acks 로 보고.
+        self.capital = float((macro.get("params") or {}).get("initial_capital") or 0) or MAX_ORDER_USDT
+        self._done_command_ids: deque = deque(maxlen=200)  # 같은 명령 id 는 한 번만 실행(ack 유실 시 재전송 대비)
+        self.pending_acks: list[dict] = []
+        self._offline_logged = False
 
     # --- GUI → 스레드 명령 --------------------------------------
     def set_command(self, mode: str) -> None:
@@ -623,7 +603,15 @@ class BotThread(threading.Thread):
         return float(self.client.get_symbol_ticker(symbol=self.symbol)["price"])
 
     def _place(self, side_word: str, qty: float, reduce_only: bool = False) -> bool:
-        closing = reduce_only or self.in_position
+        """시장가 주문 하나를 넣고 체결을 확인한 뒤 보유 상태를 갱신한다.
+
+        포지션 방향(롱=BUY, 숏=SELL)과 같은 주문은 보유 중이라도 '추가 진입'(가중평균), 반대 방향 또는
+        reduce_only 는 '청산'이다. 보유 수량보다 적게 파는 청산은 부분 청산 — 남는 수량이 있어도 정상.
+        """
+        open_word = "BUY" if self.side == "long" else "SELL"
+        closing = reduce_only or (self.in_position and side_word != open_word)
+        sellable = _round_step(self.held_qty, self.step) if self.held_qty > 0 else 0.0
+        partial_close = closing and sellable > 0 and (sellable - qty) >= (self.step or 1e-12)
         client_id = "ggp-" + uuid.uuid4().hex[:28]
         kwargs = dict(symbol=self.symbol, side=side_word, type="MARKET",
                       quantity=qty, newClientOrderId=client_id,
@@ -703,12 +691,17 @@ class BotThread(threading.Thread):
                     dust_only = True
                 if (not self.held_qty or dust_only) and not self.position_uncertain:
                     self.entry_price = 0.0
+            elif self.in_position and self.held_qty > 0 and self.entry_price > 0 and average:
+                # 추가 진입(그리드·마틴게일): 보유 수량을 더하고 진입가는 가중평균.
+                prev_qty, prev_entry = self.held_qty, self.entry_price
+                self.held_qty = prev_qty + acquired
+                self.entry_price = (prev_qty * prev_entry + acquired * average) / self.held_qty
             else:
                 self.entry_price, self.held_qty = average, acquired
         # Unknown submission may have opened a real position even if the order
         # query failed. Never turn that uncertainty into a flat snapshot.
         self.in_position = (self.held_qty > 0 and not dust_only) or self.position_uncertain
-        if order.get("status") != "FILLED" or self.position_uncertain or (closing and self.in_position):
+        if order.get("status") != "FILLED" or self.position_uncertain or (closing and self.in_position and not partial_close):
             raise RuntimeError(f"주문 상태 {order.get('status', 'unknown')} — 체결 완료를 확인하지 못했습니다. 거래소에서 주문과 포지션을 확인하세요.")
         self.log(f"  ✓ {side_word}{' (청산)' if reduce_only else ''} 체결: id={order.get('orderId')} 수량={executed}")
         return True
@@ -750,6 +743,76 @@ class BotThread(threading.Thread):
         close_word = "SELL" if self.side == "long" else "BUY"
         reduce = self.market == "futures"
         return self._place(close_word, _round_step(self.held_qty, self.step), reduce_only=reduce)
+
+    # --- v8 서버 신호: 로컬 안전망 + 명령 실행 ------------------------
+    def _local_stop_loss(self, price: float) -> bool:
+        """서버와 끊겨도 손절은 된다 — 로컬에 남긴 유일한 청산 판단. 서버 손절 명령이 뒤에 오면 보유 0 이라 무주문 ack."""
+        sl = (self.macro.get("risk") or {}).get("stop_loss_pct")
+        if not sl or not self.in_position or self.entry_price <= 0:
+            return False
+        sl = float(sl) / 100.0
+        return price <= self.entry_price * (1 - sl) if self.side == "long" else price >= self.entry_price * (1 + sl)
+
+    def _execute_command(self, cmd: dict, price: float) -> dict:
+        """서버 명령 하나를 실행하고 ack 를 만든다. 같은 id 는 한 번만(서버가 ack 를 놓쳤을 때 재전송 대비)."""
+        cid = cmd.get("id")
+        ack = {"command_id": cid, "ok": True, "executed_qty": 0.0, "fill_price": 0.0, "error": ""}
+        if cid in self._done_command_ids:
+            return ack
+        self._done_command_ids.append(cid)
+        action = str(cmd.get("action", "")).lower()
+        reason = str(cmd.get("reason") or "")
+        uncertain_before = getattr(self, "position_uncertain", False)
+        try:
+            if action not in ("buy", "short", "sell", "cover"):
+                raise RuntimeError(f"알 수 없는 명령 {action}")
+            if uncertain_before:
+                raise RuntimeError("포지션을 확인하지 못해 추가 주문을 보내지 않습니다. 거래소에서 주문과 포지션을 확인하세요.")
+            if action in ("buy", "short"):
+                notional = min(self.capital * float(cmd.get("notional_frac") or 0.0), MAX_ORDER_USDT)
+                qty, _ = _order_qty(price, self.step, 0, notional, self.leverage, self.market)
+                if qty <= 0:
+                    raise RuntimeError("주문 수량이 최소 단위보다 작아요.")
+                word = "BUY" if action == "buy" else "SELL"
+                self.log(f"[신호] {reason} → {word} {qty} {self.symbol} @ {price}")
+                prev_qty, prev_entry = (self.held_qty, self.entry_price) if self.in_position else (0.0, 0.0)
+                if not self._place(word, qty):
+                    raise RuntimeError("주문이 체결되지 않았어요.")
+                filled_qty, filled_px = self._last_fill_qty, self._last_fill_price
+                if prev_qty > 0 and filled_qty > 0:
+                    # 추가 진입(그리드·마틴게일): _place 가 더한 수량으로 진입가를 가중평균한다.
+                    added = self.held_qty - prev_qty
+                    if added <= 0:
+                        added = filled_qty
+                        self.held_qty = prev_qty + added
+                    self.entry_price = (prev_qty * prev_entry + added * filled_px) / self.held_qty
+                    self.in_position = True
+                ack.update(executed_qty=filled_qty, fill_price=filled_px)
+            else:  # sell / cover
+                if not self.in_position or self.held_qty <= 0:
+                    self.log(f"[신호] {reason} → 보유 없음, 건너뜀")
+                    return ack
+                frac = float(cmd.get("qty_frac") or 1.0)
+                self.log(f"[신호] {reason} → {'전량' if frac >= 0.999 else f'{frac:.0%}'} 청산 @ {price}")
+                if frac >= 0.999:
+                    if not self._close_position():
+                        raise RuntimeError("청산 주문이 체결되지 않았어요.")
+                else:
+                    qty = _round_step(self.held_qty * frac, self.step)
+                    if qty <= 0:
+                        raise RuntimeError("부분 청산 수량이 최소 단위보다 작아요.")
+                    word = "SELL" if self.side == "long" else "BUY"
+                    if not self._place(word, qty, reduce_only=(self.market == "futures")):
+                        raise RuntimeError("부분 청산 주문이 체결되지 않았어요.")
+                ack.update(executed_qty=self._last_fill_qty, fill_price=self._last_fill_price)
+        except Exception as exc:
+            if getattr(self, "position_uncertain", False) and not uncertain_before:
+                # 이 주문으로 포지션이 불확실해졌다 — 명령을 계속 받을 상태가 아니다. 루프를 끝내고
+                # 오류 상태로 종료 보고한다(사용자가 거래소에서 확인). 서버 명령은 만료로 정리된다.
+                raise
+            ack.update(ok=False, error=str(exc)[:200])
+            self.log(f"  ⚠ 명령 실행 실패: {exc}")
+        return ack
 
     def _snapshot(self) -> dict:
         price = getattr(self, "last_price", 0.0)
@@ -796,47 +859,66 @@ class BotThread(threading.Thread):
                 except Exception as exc:
                     self.log(f"  일시 오류(시세): {exc} — {POLL_SECONDS:.0f}초 후 재시도")
                     snapshot = {**self._snapshot(), "note": "시세 연결 재시도 중 · 마지막 확인 가격"}
-                    action = self.server.heartbeat(snapshot)
+                    reply = self.server.heartbeat(snapshot, acks=self.pending_acks)
+                    self.pending_acks = []
+                    action = reply.get("action", "continue")
                     if action in ("stop_only", "close_and_stop"):
                         self.set_command(action)
                     self._sleep(POLL_SECONDS)
                     continue
                 guard.roll_day()
 
-                # 3) 진입/청산 로직
-                if not self.in_position:
-                    blocked, why = guard.entry_blocked()
-                    if blocked:
-                        self.log(f"  ⏸ 진입 보류: {why}")
-                    elif _should_enter(t, price, self.side):
-                        budget = t["capital"] * t["invest_ratio"] if t["capital"] else MAX_ORDER_USDT
-                        qty, notional = _order_qty(price, self.step, 0, budget, self.leverage, self.market)
-                        if qty > 0:
-                            open_word = "BUY" if self.side == "long" else "SELL"
-                            self.log(f"[진입] {price} → {open_word} {qty} {self.symbol}")
-                            if self._place(open_word, qty):
-                                guard.on_entry()
-                else:
+                # 3) 로컬 안전망 — 일일 손실·최대 보유시간(RiskGuard) + 손절. 진입 판단은 서버가 한다.
+                if self.in_position:
                     unreal = _pnl_usdt(self.held_qty, self.entry_price, price, self.side)
                     forced, why = guard.force_close(unreal)
-                    if forced or _should_exit(t, price, self.entry_price, self.side):
-                        tag = f"[강제청산: {why}]" if forced else "[청산 신호]"
-                        self.log(f"{tag} {price} (진입 {self.entry_price})")
+                    stop = self._local_stop_loss(price)
+                    if forced or stop:
+                        self.log(f"[{'강제청산: ' + why if forced else '손절'}] {price} (진입 {self.entry_price})")
                         entry_price, realized_before = self.entry_price, self.realized
                         if self._close_position():
                             pnl = self.realized - realized_before
                             self.log(f"  손익 {_pnl_pct(entry_price, self._last_fill_price, self.side):+.2f}% "
                                      f"({pnl:+.2f} USDT) · 누적 {self.realized:+.2f} USDT")
-                            was_stop = not forced and _was_stop_exit(t, price, entry_price, self.side)
-                            guard.on_exit(pnl, was_stop)
+                            guard.on_exit(pnl, was_stop=stop)
 
-                # 4) 상태 스냅샷 + 하트비트
+                # 4) 하트비트 — 상태·ack 를 올리고 명령을 받아 순서대로 실행
                 snap = self._snapshot()
                 self.on_status(snap)
-                action = self.server.heartbeat(snap)
+                reply = self.server.heartbeat(snap, acks=self.pending_acks)
+                self.pending_acks = []
+                if reply.get("offline"):
+                    if not self._offline_logged:
+                        self.log("서버 연결 재시도 중 — 신호 대기(진입 없음, 손절만 로컬에서 봅니다)")
+                        self._offline_logged = True
+                else:
+                    self._offline_logged = False
+                action = reply.get("action", "continue")
                 if action in ("stop_only", "close_and_stop"):
                     self.log(f"원격 종료 명령 수신: {action}")
                     self.set_command(action)
+                else:
+                    for cmd in reply.get("commands") or []:
+                        kind = str(cmd.get("action", "")).lower()
+                        is_entry = kind in ("buy", "short")
+                        blocked, why = guard.entry_blocked()
+                        if blocked and is_entry:
+                            self.log(f"  ⏸ 진입 보류: {why}")
+                            self.pending_acks.append({"command_id": cmd.get("id"), "ok": False, "executed_qty": 0.0,
+                                                      "fill_price": 0.0, "error": f"로컬 리스크 보류: {why}"})
+                            continue
+                        realized_before, was_flat = self.realized, not self.in_position
+                        ack = self._execute_command(cmd, price)
+                        if ack["ok"] and ack["executed_qty"] > 0:
+                            # 서버 명령의 결과도 로컬 안전망(일일 손실·보유시간)에 반영한다.
+                            if is_entry:
+                                if was_flat:  # 추가 진입은 보유시간 기준을 바꾸지 않는다
+                                    guard.on_entry()
+                            elif not self.in_position:
+                                guard.on_exit(self.realized - realized_before, was_stop=False)
+                            else:
+                                guard.on_partial_exit(self.realized - realized_before)
+                        self.pending_acks.append(ack)
 
                 # 5) 대기(종료 명령 시 즉시 깨어남)
                 self._sleep(POLL_SECONDS)

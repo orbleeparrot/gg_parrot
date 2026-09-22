@@ -113,7 +113,7 @@ class RunnerActivationSafetyTests(unittest.TestCase):
             app._claim_protocol_ticket(self.launch)
 
         sent = fake_requests.post.call_args.kwargs["json"]
-        self.assertEqual(sent["runner_version"], "7")
+        self.assertEqual(sent["runner_version"], "8")
         self.assertEqual(sent["ticket"], self.launch.ticket)
         self.assertNotIn("api_key", sent)
         self.assertNotIn("api_secret", sent)
@@ -172,7 +172,7 @@ class RunnerActivationSafetyTests(unittest.TestCase):
         self.assertEqual(app.user_macro_id, 73)
         self.assertEqual(payload["user_macro_id"], 73)
         self.assertEqual(payload["symbol"], "BTCUSDT")
-        self.assertEqual(payload["runner_version"], "7")
+        self.assertEqual(payload["runner_version"], "8")
         self.assertNotIn("api_key", payload)
         self.assertNotIn("api_secret", payload)
 

@@ -44,9 +44,9 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-try:
-    from runner import credentials as credentials_mod
-except ImportError:  # PyInstaller 단일 파일: 같은 폴더의 모듈
+try:  # package import (tests) / direct script import (PyInstaller build)
+    from . import credentials as credentials_mod
+except ImportError:
     import credentials as credentials_mod
 
 try:

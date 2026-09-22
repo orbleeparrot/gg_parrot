@@ -28,7 +28,7 @@ from typing import Deque, List, Optional
 
 from .leverage import liquidation_price
 from .schema import Macro, PositionSide, RuleType
-from .stepper import Fill, buy_fill, sell_fill
+from .stepper import Fill, _fill_meta, buy_fill, sell_fill
 
 
 # --- incremental indicators (shared by backtest + paper) ----------------
@@ -220,16 +220,17 @@ class CandleSim:
             datetime.fromtimestamp(cooldown_until_ms / 1000, timezone.utc) if cooldown_until_ms else None
         )
 
-    def _fill(self, side: str, price: float, qty: float, mark: float) -> Fill:
+    def _fill(self, side: str, price: float, qty: float, mark: float, reason: str = "") -> Fill:
         eq = self.equity(mark)
         ret = (eq - self.initial_capital) / self.initial_capital * 100.0
-        return Fill(side=side, price=price, qty=qty, equity_after=eq, return_pct=ret)
+        return Fill(side=side, price=price, qty=qty, equity_after=eq, return_pct=ret,
+                    **_fill_meta(side, qty, abs(self.total_qty()), reason))
 
     # -- long open / short open / close ----------------------------------
     # ``margin`` is the equity the caller commits; the position controls
     # ``margin × leverage`` of notional. At leverage 1 the two are equal, so the
     # cash math below is byte-for-byte the old spot behaviour.
-    def _open_long(self, margin: float, close: float, ts: datetime, mark: float) -> Optional[Fill]:
+    def _open_long(self, margin: float, close: float, ts: datetime, mark: float, *, reason: str = "진입") -> Optional[Fill]:
         margin = min(margin, self.cash)
         if margin <= 1e-9:
             return None
@@ -240,9 +241,9 @@ class CandleSim:
         self.lots.append(_Lot(qty=qty, fill=f, margin=margin))
         if self._entry_time is None:
             self._entry_time = ts
-        return self._fill("buy", f, qty, mark)
+        return self._fill("buy", f, qty, mark, reason)
 
-    def _open_short(self, close: float, ts: datetime, mark: float) -> Optional[Fill]:
+    def _open_short(self, close: float, ts: datetime, mark: float, *, reason: str = "진입") -> Optional[Fill]:
         margin = self.invest_ratio * self.cash
         if margin <= 1e-9:
             return None
@@ -252,9 +253,9 @@ class CandleSim:
         self.cash -= notional * self.comm / 100.0
         self.lots.append(_Lot(qty=qty, fill=f, margin=margin))
         self._entry_time = ts
-        return self._fill("short", f, qty, mark)
+        return self._fill("short", f, qty, mark, reason)
 
-    def _close_all(self, close: float, mark: float, *, is_stop: bool, ts: datetime) -> Optional[Fill]:
+    def _close_all(self, close: float, mark: float, *, is_stop: bool, ts: datetime, reason: Optional[str] = None) -> Optional[Fill]:
         if not self.in_position():
             return None
         qty = self.total_qty()
@@ -278,7 +279,7 @@ class CandleSim:
         self._entry_time = None
         if is_stop and self.cooldown_minutes > 0:
             self._cooldown_until = ts + timedelta(minutes=self.cooldown_minutes)
-        return self._fill(side, f, qty, mark)
+        return self._fill(side, f, qty, mark, reason if reason is not None else ("손절" if is_stop else "청산"))
 
     def _reduce_long(self, fraction: float, close: float, mark: float, ts: datetime) -> Optional[Fill]:
         """Sell ``fraction`` (0<f<=1) of the long book at ``close``.
@@ -306,7 +307,7 @@ class CandleSim:
         self.lots = [l for l in self.lots if l.qty > 1e-12]
         if not self.lots:
             self._entry_time = None
-        return self._fill("sell", f, sold_qty, mark)
+        return self._fill("sell", f, sold_qty, mark, "부분 청산")
 
     def _liquidate_all(self, px: float, mark: float, ts: datetime) -> Optional[Fill]:
         """Isolated liquidation: the whole committed margin is lost (전액 손실).
@@ -330,7 +331,7 @@ class CandleSim:
         self._entry_time = None
         if self.cooldown_minutes > 0:
             self._cooldown_until = ts + timedelta(minutes=self.cooldown_minutes)
-        return self._fill(side, px, qty, mark)
+        return self._fill(side, px, qty, mark, "강제 청산")
 
     # -- common risk ------------------------------------------------------
     def _entry_blocked(self, ts: datetime) -> bool:
@@ -528,7 +529,7 @@ class GridSim(CandleSim):
                 self.cash += lot.margin + lot.qty * (f - lot.fill) - exit_comm
                 self.closed_trades.append(lot.qty * (f - lot.fill) - exit_comm)
                 self._remove_lot(lot)
-                fills.append(self._fill("sell", f, lot.qty, c))
+                fills.append(self._fill("sell", f, lot.qty, c, f"격자 {sell_level:g} 도달 · 매도"))
         # Buys: any buy level reached by low that we don't already hold. ``per_grid``
         # is the committed margin; the lot controls ``per_grid × leverage`` notional.
         for i in range(len(self.levels) - 1):
@@ -697,18 +698,20 @@ class _IndicatorSim(CandleSim):
         super().__init__(macro, initial_capital)
         self._pending: Optional[str] = None  # "enter" | "exit" | None
         self.tp = self.p.get("take_profit")
+        self._signal_note = ""  # 마지막 판정의 한 줄 근거 — Fill.reason 에 실린다
 
     def _strategy(self, o, h, l, c, ts, fills):
         # 1) execute the pending decision from the previous closed bar, at open.
         if self._pending == "exit" and self.in_position():
-            f = self._close_all(o, o, is_stop=False, ts=ts)
+            f = self._close_all(o, o, is_stop=False, ts=ts, reason=f"{self._signal_note} · 청산" if self._signal_note else None)
             if f:
                 fills.append(f)
         elif self._pending == "enter" and not self.in_position() and not self._entry_blocked(ts):
+            reason = f"{self._signal_note} · 진입" if self._signal_note else "진입"
             if self.side is PositionSide.SHORT:
-                f = self._open_short(o, ts, c)
+                f = self._open_short(o, ts, c, reason=reason)
             else:
-                f = self._open_long(self.invest_ratio * self.cash, o, ts, c)
+                f = self._open_long(self.invest_ratio * self.cash, o, ts, c, reason=reason)
             if f:
                 fills.append(f)
         self._pending = None
@@ -763,9 +766,11 @@ class RSISim(_IndicatorSim):
         self._exit_streak = self._exit_streak + 1 if exit_hit else 0
         if not self.in_position():
             if self._entry_streak >= self.confirm:
+                self._signal_note = f"RSI {v:.1f} {'≥' if short else '≤'} {self.exit_th if short else self.entry_th:g}"
                 self._pending = "enter"
         else:
             if self.exit_mode in ("indicator", "both") and self._exit_streak >= self.confirm:
+                self._signal_note = f"RSI {v:.1f} {'≤' if short else '≥'} {self.entry_th if short else self.exit_th:g}"
                 self._pending = "exit"
 
 
@@ -799,6 +804,7 @@ class BollingerSim(_IndicatorSim):
                 short_entry = close <= lower
             hit = short_entry if short else long_entry
             if hit and squeezed:
+                self._signal_note = f"볼린저 {'상단' if short else '하단'} {(upper if short else lower):.4g} 이탈"
                 self._pending = "enter"
         else:
             if self.exit_target == "mid":
@@ -806,6 +812,8 @@ class BollingerSim(_IndicatorSim):
             else:  # opposite band
                 exit_hit = close >= upper if not short else close <= lower
             if exit_hit:
+                level = mid if self.exit_target == "mid" else (upper if not short else lower)
+                self._signal_note = f"볼린저 {'중심' if self.exit_target == 'mid' else ('하단' if short else '상단')} {level:.4g} 도달"
                 self._pending = "exit"
 
 
@@ -840,9 +848,11 @@ class MACrossSim(_IndicatorSim):
         exit_now = self._golden_streak >= self.confirm if short else self._dead_streak >= self.confirm
         if not self.in_position():
             if enter_now:
+                self._signal_note = "데드크로스" if short else "골든크로스"
                 self._pending = "enter"
         else:
             if self.exit_signal in ("dead_cross", "both") and exit_now:
+                self._signal_note = "골든크로스" if short else "데드크로스"
                 self._pending = "exit"
 
 

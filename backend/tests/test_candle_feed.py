@@ -33,7 +33,9 @@ def test_poll_once_delivers_only_new_closed_candles_in_order():
     async def cb(symbol, candle):
         got.append((symbol, candle))
 
-    sub = feed.subscribe("BTCUSDT", "5m", "spot", cb)
+    # since_t: 웜업(history)이 이미 소비했다고 가정하는 마지막 봉의 t. 두 마감봉보다
+    # 더 과거로 주면(now - 1_200_000 은 4간격 전) 둘 다 "새 봉"으로 남는다.
+    sub = feed.subscribe("BTCUSDT", "5m", "spot", cb, since_t=now - 1_200_000)
     key = ("BTCUSDT", "5m", "spot")
     delivered = _run(feed.poll_once(key))
     assert [c.c for c in delivered] == [1.0, 2.0]
@@ -41,6 +43,32 @@ def test_poll_once_delivers_only_new_closed_candles_in_order():
     assert _run(feed.poll_once(key)) == []  # 같은 봉은 두 번 배달하지 않는다
     feed.unsubscribe(sub)
     assert key not in feed._subs
+
+
+def test_subscribe_without_since_t_skips_already_closed_candles():
+    now = 1_700_000_600_000
+    rows = [_k(now - 900_000, 1.0), _k(now - 600_000, 2.0), _k(now - 300_000, 3.0, closed=False)]
+
+    async def fetch(symbol, interval, limit, market):
+        return rows
+
+    feed = CandleFeed(fetch=fetch, now_ms=lambda: now, sleep=lambda s: asyncio.sleep(0))
+
+    async def cb(symbol, candle):
+        pass
+
+    sub = feed.subscribe("BTCUSDT", "5m", "spot", cb)  # since_t 없음 — 웜업을 안 거친 구독
+    key = ("BTCUSDT", "5m", "spot")
+    # 이미 마감돼 있던 두 봉(now-900_000, now-600_000)은 웜업을 거치지 않았어도 다시
+    # 배달되지 않는다 — 커서가 "지금 진행 중인 봉"의 바로 앞자리에서 시작하기 때문.
+    assert _run(feed.poll_once(key)) == []
+
+    # 커서 바로 다음 자리(= 지금 진행 중인 봉의 open time)가 마감되어 돌아오면 배달된다.
+    open_t = CandleFeed.next_close_ms("5m", now) - 300_000  # 1_700_000_400_000
+    rows[2] = _k(open_t, 9.0)
+    delivered = _run(feed.poll_once(key))
+    assert [c.c for c in delivered] == [9.0]
+    feed.unsubscribe(sub)
 
 
 def test_callback_exception_does_not_break_other_subscribers():
@@ -56,8 +84,10 @@ def test_callback_exception_does_not_break_other_subscribers():
     async def good(symbol, candle):
         seen.append(candle.c)
 
-    feed.subscribe("ETHUSDT", "1h", "spot", bad)
-    feed.subscribe("ETHUSDT", "1h", "spot", good)
+    # since_t=0: 이 테스트의 초점은 "구독자 격리" 지 커서 위치가 아니므로, 고정 fetch가
+    # 돌려주는 봉이 항상 새 봉으로 잡히도록 커서를 충분히 과거로 둔다.
+    feed.subscribe("ETHUSDT", "1h", "spot", bad, since_t=0)
+    feed.subscribe("ETHUSDT", "1h", "spot", good, since_t=0)
     _run(feed.poll_once(("ETHUSDT", "1h", "spot")))
     assert seen == [5.0]
 

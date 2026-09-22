@@ -52,13 +52,28 @@ class CandleFeed:
         self._helper_loops: Dict[Key, asyncio.AbstractEventLoop] = {}
 
     # -- 구독 -----------------------------------------------------------
-    def subscribe(self, symbol: str, interval: str, market: str, callback: Callback) -> Subscription:
+    def subscribe(
+        self, symbol: str, interval: str, market: str, callback: Callback,
+        *, since_t: Optional[int] = None,
+    ) -> Subscription:
+        """새 구독을 등록한다.
+
+        ``since_t`` — 호출자가 ``history()`` 로 웜업한 마지막 봉의 open time(ms).
+        이미 소비한 봉을 poll_once 가 다시 배달하면 지표(RSI/MA 등) 상태가 중복
+        누적되고 체결이 겹칠 수 있다. 새 구독이면 이 값을 커서로 삼아 그 봉까지는
+        건너뛰고, 그 뒤에 마감되는 봉부터만 새 봉으로 취급한다. 값을 안 주면
+        지금 진행 중인 봉만 다음 마감 대상으로 본다(그 전에 이미 마감된 봉은 전부
+        건너뜀 — 다음 마감 시각에서 한 간격을 뺀 자리가 "지금 진행 중인 봉의 open
+        time - 1ms" 이므로, 그 봉이 마감되어야 비로소 배달된다).
+        """
         key: Key = (symbol.upper(), interval, market)
         sub = Subscription(key, callback)
         self._subs.setdefault(key, []).append(sub)
         if key not in self._tasks:
-            # 최초 poll_once 는 _last_t 미기록(-1 기본값)이라 그 시점의 fetch(limit=3)에
-            # 담긴 마감봉을 그대로 새 봉으로 배달한다 — 깊은 웜업은 history 로 따로 받는다.
+            self._last_t[key] = (
+                since_t if since_t is not None
+                else self.next_close_ms(interval, self._now_ms()) - _INTERVAL_MS[interval] - 1
+            )
             # subscribe()는 실행 중인 이벤트 루프 밖(동기 문맥)에서도 불릴 수 있다 —
             # 그럴 땐 새 루프를 만들어 태스크를 얹어 두고, unsubscribe 에서 정리한다.
             try:
@@ -71,6 +86,9 @@ class CandleFeed:
             self._tasks[key] = loop.create_task(self._run(key))
             if helper is not None:
                 self._helper_loops[key] = helper
+        # 이미 도는 피드에 다른 구독자가 (다른) since_t 로 합류하는 경우: 커서는
+        # 이미 돌고 있는 피드가 기준이다. since_t 로 뒤로 돌리면 먼저 있던 구독자가
+        # 이미 받은 봉을 다시 받게 되므로, 기존 커서를 그대로 둔다(아무 것도 하지 않음).
         return sub
 
     def unsubscribe(self, sub: Subscription) -> None:

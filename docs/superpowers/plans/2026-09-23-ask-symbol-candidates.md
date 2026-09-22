@@ -824,7 +824,7 @@ EOF
 
 - [ ] **Step 1: 실패하는 테스트를 쓴다**
 
-`backend/tests/test_ask.py` 에 추가한다.
+`backend/tests/test_ask.py` 에 추가한다. 파일 상단 import 에 `from app import ask_candidates as ac` 를 더한다.
 
 ```python
 def _consent(tok):
@@ -963,15 +963,41 @@ class CandidatesRequest(BaseModel):
         return self
 
 
+_CANDIDATE_PROMPT_VERSION = "ask-cand-v1"
+_CANDIDATE_SYSTEM = (
+    "너는 주어진 목록 안에서만 종목 후보를 고르는 도우미다. "
+    "목록에 없는 종목은 절대 쓰지 마라. 가격이나 수익률을 예측하지 마라. "
+    "JSON 배열만 출력해라."
+)
+
+
 def _candidate_ai() -> Optional[Callable[[str], str]]:
-    """후보 선별에 쓸 AI 호출자. 쓸 수 없으면 None(규칙 폴백)."""
+    """후보 선별에 쓸 AI 호출자. 쓸 수 없으면 None(규칙 폴백).
+
+    기존 ``propose_with_ai`` 와 같은 경로를 쓴다 — 클라이언트는 messages.create,
+    호출은 ``get_ai_runtime().call`` 로 감싸 캐시·재시도 정책을 공유한다.
+    """
     if not ai_available():
         return None
 
     def ask_ai(prompt: str) -> str:
-        client = get_ai_client()
-        return client.generate(model=default_model(), prompt=prompt,
-                               timeout=get_ai_runtime().timeout_seconds)
+        key = ai_cache_key("ask-candidates", _CANDIDATE_PROMPT_VERSION, _AI_MODEL,
+                           {"system": _CANDIDATE_SYSTEM, "prompt": prompt,
+                            "max_tokens": _AI_MAX_TOKENS})
+
+        def load():
+            response = get_ai_client().messages.create(
+                model=_AI_MODEL, max_tokens=_AI_MAX_TOKENS, system=_CANDIDATE_SYSTEM,
+                messages=[{"role": "user", "content": prompt}], purpose="ask-candidates",
+                timeout=float(os.environ.get("ASK_AI_TIMEOUT_SEC", "6")),
+            )
+            text = next((b.text for b in response.content
+                         if getattr(b, "type", None) == "text"), None)
+            if not text:
+                raise ValueError("empty candidate response")
+            return text
+
+        return get_ai_runtime().call(key, load, retries=0)[0]
 
     return ask_ai
 

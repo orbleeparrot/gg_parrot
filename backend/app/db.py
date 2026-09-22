@@ -446,6 +446,9 @@ class RunSession(SQLModel, table=True):
     final_entry_price: float = 0.0
     final_position_qty: float = 0.0
     final_unrealized_pct: float = 0.0
+    # 서버 신호(v8+) 세션의 드라이버 상태(JSON, paper.state_json 과 같은 형식). 체크포인트마다 갱신,
+    # 재기동 복구에 쓴다. 구버전 실행기 세션은 빈 문자열.
+    state_json: str = ""
 
 
 class RunSessionEvent(SQLModel, table=True):
@@ -462,6 +465,33 @@ class RunSessionEvent(SQLModel, table=True):
     kind: str = "info"  # start | info | signal | order | fill | error | stop
     message: str = ""
     created_ms: int = Field(default=0, sa_type=BigInteger)
+
+
+class RunnerCommand(SQLModel, table=True):
+    """서버가 실행기에 내리는 주문 명령 한 줄(v8+).
+
+    엔진 Fill 을 비율로 바꿔 둔다 — 진입은 초기자본 대비 금액 비율, 청산은 보유 수량 대비 비율.
+    실행기는 heartbeat 응답으로 pending 을 받아 실행하고 다음 heartbeat 의 acks 로 결과를 보고한다.
+    TTL 이 지난 pending 은 expired — 늦은 진입 신호를 뒤늦게 실행하지 않는다.
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    session_id: int = Field(index=True)
+    seq: int = 0
+    action: str = ""  # buy | sell | short | cover
+    notional_frac: float = 0.0
+    qty_frac: float = 0.0
+    signal_price: float = 0.0
+    reason: str = ""
+    status: str = Field(default="pending", index=True)  # pending | acked | failed | expired
+    attempts: int = 0
+    created_at: str = ""
+    created_ms: int = Field(default=0, sa_type=BigInteger)
+    expires_ms: int = Field(default=0, sa_type=BigInteger)
+    acked_at: str = ""
+    executed_qty: float = 0.0
+    fill_price: float = 0.0
+    error: str = ""
 
 
 class TickerNewsSnapshot(SQLModel, table=True):
@@ -1061,6 +1091,7 @@ def _migrate() -> None:
             "final_entry_price": "ALTER TABLE runsession ADD COLUMN final_entry_price REAL DEFAULT 0",
             "final_position_qty": "ALTER TABLE runsession ADD COLUMN final_position_qty REAL DEFAULT 0",
             "final_unrealized_pct": "ALTER TABLE runsession ADD COLUMN final_unrealized_pct REAL DEFAULT 0",
+            "state_json": "ALTER TABLE runsession ADD COLUMN state_json TEXT DEFAULT ''",
         },
         "tickernewssnapshot": {
             "claim_token": "ALTER TABLE tickernewssnapshot ADD COLUMN claim_token TEXT DEFAULT ''",
@@ -1196,6 +1227,7 @@ _PG_ADDED_COLUMNS = {
         "final_entry_price": "DOUBLE PRECISION NOT NULL DEFAULT 0",
         "final_position_qty": "DOUBLE PRECISION NOT NULL DEFAULT 0",
         "final_unrealized_pct": "DOUBLE PRECISION NOT NULL DEFAULT 0",
+        "state_json": "TEXT DEFAULT ''",
     },
     "tickernewssnapshot": {
         "claim_token": "TEXT DEFAULT ''", "last_observed_at": "TEXT DEFAULT ''",
@@ -1241,7 +1273,7 @@ _PG_PRIVATE_CACHE_TABLES = (
     "newsarticlefeed", "newsarticle", "newsmaintenancelease", "publicnewslease",
     "leaderboardsnapshotcontrol", "leaderboardsnapshotversion", "leaderboardsnapshotitem",
     "leaderboardentrystats", "leaderboardchallengebot",
-    "dailyquestclaim", "runsessionevent", "askmacrosession", "chatroom", "chatroommember",
+    "dailyquestclaim", "runsessionevent", "askmacrosession", "chatroom", "chatroommember", "runnercommand",
     # 게시판 사진·추천·신고와 브라우저 뉴스 캐시 — create_all 로만 생겨 RLS 없이 anon 권한이 열려 있었다(2026-09-15).
     "boardimage", "boardpostvote", "boardreport", "browsernewspagecache",
     "visit", "macroeventdaily", "collectorrun", "collectorsourcedaily", "apiusagedaily",

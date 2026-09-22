@@ -33,6 +33,7 @@ from sqlmodel import Session, select
 from .data import ensure_spot_available, get_klines, get_ticker_price_cached
 from .db import PaperSession, PaperTrade, get_session
 from .engine import Macro, RuleType
+from .engine.candle_feed import feed  # 모듈 이름으로 참조 — 테스트가 monkeypatch 한다
 from .engine.driver import Leg, StrategyDriver, sim_state  # noqa: F401 (sim_state 재export)
 from .engine.stepper import make_sim
 
@@ -41,6 +42,7 @@ from .engine.stepper import make_sim
 _Leg = Leg
 
 POLL_SECONDS = float(os.environ.get("PAPER_POLL_SECONDS", "3"))
+WARMUP_CANDLES = 500  # MA slow_period ≤ 400 을 덮는다
 REPLAY_SECONDS = float(os.environ.get("PAPER_REPLAY_SECONDS", "0.4"))
 REPLAY_HOURS = int(os.environ.get("PAPER_REPLAY_HOURS", "6"))
 CHECKPOINT_SECONDS = max(1.0, float(os.environ.get("PAPER_CHECKPOINT_SECONDS", "10")))
@@ -89,6 +91,7 @@ class _Runner:
         self.mode = mode
         self.initial = initial
         self.stop_flag = False
+        self.subs: list = []  # 마감봉 피드 구독 — 캔들형만 채워진다(_attach_feed/_detach_feed)
         self.task: Optional[asyncio.Task] = None
         self.status = "running"
         self.recent: List[dict] = []
@@ -135,6 +138,53 @@ def _session_initial(macro: Macro) -> float:
     return float(macro.initial_capital or 1_000_000.0)
 
 
+# --- 마감봉 피드 ----------------------------------------------------------
+async def _attach_feed(runner: _Runner) -> None:
+    """캔들형 세션: 과거 마감봉으로 웜업하고 새 마감봉을 구독한다. 틱형은 아무것도 하지 않는다."""
+    keys = runner.driver.candle_keys()
+    if not keys:
+        return
+    history: Dict[str, list] = {}
+    for symbol, interval, market in keys:
+        try:
+            history[symbol] = await feed.history(symbol, interval, market, WARMUP_CANDLES)
+        except Exception:
+            log.exception("paper %s: warmup history failed for %s — starting cold", runner.session_id, symbol)
+    runner.driver.warmup(history)
+
+    async def on_candle(symbol: str, candle) -> None:
+        if runner.stop_flag:
+            return
+        runner.driver.push_candle(symbol, candle)
+
+    subs = []
+    for symbol, interval, market in keys:
+        hist = history.get(symbol)
+        since_t = hist[-1][0] if hist else None  # Candle.t — 인덱스로 읽어 테스트 더미(tuple)도 받는다
+        subs.append(feed.subscribe(symbol, interval, market, on_candle, since_t=since_t))
+    runner.subs = subs
+
+
+def _detach_feed(runner: _Runner) -> None:
+    for sub in getattr(runner, "subs", []):
+        try:
+            feed.unsubscribe(sub)
+        except Exception:
+            log.exception("paper %s: unsubscribe failed", runner.session_id)
+    runner.subs = []
+
+
+async def _attach_feed_for_resume(runner: _Runner, info: dict) -> None:
+    """복구는 웜업 → 복구 순서다: 웜업이 장부를 비우므로 체크포인트 상태를 그 뒤에 얹는다."""
+    await _attach_feed(runner)
+    if runner.driver.candle_keys():
+        runner.driver.restore(
+            info["state"],
+            leg_equity={leg.get("symbol"): float(leg.get("current_equity") or 0.0) for leg in info["legs"]},
+            total_equity=float(info["current_equity"] or 0.0),
+        )
+
+
 # --- lifecycle ----------------------------------------------------------
 async def start_session(macro: Macro, symbol: Optional[str], mode: str) -> dict:
     # A portfolio macro runs every symbol (like the backtest); a single-symbol
@@ -162,6 +212,8 @@ async def start_session(macro: Macro, symbol: Optional[str], mode: str) -> dict:
     if mode == "replay":
         for leg in runner.legs:
             leg.replay_prices = await asyncio.to_thread(_load_replay_prices, leg.symbol)
+    if mode == "live":
+        await _attach_feed(runner)
 
     _running[session_id] = runner
     _spawn_loop(runner)
@@ -255,6 +307,7 @@ async def resume_running_sessions() -> int:
         except Exception:
             log.exception("paper resume: session %s could not be rebuilt; leaving it as is", info["id"])
             continue
+        await _attach_feed_for_resume(runner, info)
         _running[info["id"]] = runner
         _spawn_loop(runner)
         count += 1
@@ -516,6 +569,7 @@ async def _finalize_async(runner: _Runner) -> None:
     async with runner.finalize_lock:
         if runner.finalized:
             return
+        _detach_feed(runner)
         pending = runner.inflight_persist
         if pending is not None:
             try:
@@ -582,6 +636,7 @@ async def shutdown_running_sessions() -> None:
 
     for runner in runners:
         runner.stop_flag = True
+        _detach_feed(runner)
 
     tasks = [
         runner.task

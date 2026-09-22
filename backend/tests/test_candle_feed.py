@@ -37,6 +37,9 @@ def test_poll_once_delivers_only_new_closed_candles_in_order():
     # 더 과거로 주면(now - 1_200_000 은 4간격 전) 둘 다 "새 봉"으로 남는다.
     sub = feed.subscribe("BTCUSDT", "5m", "spot", cb, since_t=now - 1_200_000)
     key = ("BTCUSDT", "5m", "spot")
+    # 실행 중인 이벤트 루프 밖에서 subscribe 했으므로 백그라운드 폴링 태스크는 없다 —
+    # 이 테스트처럼 poll_once 를 직접 몰아서 부르는 호출자만 정상 동작한다.
+    assert key not in feed._tasks
     delivered = _run(feed.poll_once(key))
     assert [c.c for c in delivered] == [1.0, 2.0]
     assert got == [("BTCUSDT", Candle(now - 900_000, 1.0, 1.0, 1.0, 1.0)), ("BTCUSDT", Candle(now - 600_000, 2.0, 2.0, 2.0, 2.0))]

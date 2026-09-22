@@ -49,7 +49,6 @@ class CandleFeed:
         self._subs: Dict[Key, List[Subscription]] = {}
         self._tasks: Dict[Key, asyncio.Task] = {}
         self._last_t: Dict[Key, int] = {}
-        self._helper_loops: Dict[Key, asyncio.AbstractEventLoop] = {}
 
     # -- 구독 -----------------------------------------------------------
     def subscribe(
@@ -68,24 +67,28 @@ class CandleFeed:
         """
         key: Key = (symbol.upper(), interval, market)
         sub = Subscription(key, callback)
+        is_new = key not in self._subs  # 이 키의 첫 구독자인지 — _tasks 는 루프가 없으면
+        # 영영 채워지지 않을 수 있으므로 "새 키" 판정 기준으로 쓸 수 없다.
         self._subs.setdefault(key, []).append(sub)
-        if key not in self._tasks:
+        if is_new:
             self._last_t[key] = (
                 since_t if since_t is not None
                 else self.next_close_ms(interval, self._now_ms()) - _INTERVAL_MS[interval] - 1
             )
-            # subscribe()는 실행 중인 이벤트 루프 밖(동기 문맥)에서도 불릴 수 있다 —
-            # 그럴 땐 새 루프를 만들어 태스크를 얹어 두고, unsubscribe 에서 정리한다.
+            # 실행 중인 이벤트 루프가 없으면 백그라운드 폴링 태스크를 얹을 곳이 없다.
+            # 숨겨진 헬퍼 루프를 새로 만들어 얹어봤자 아무도 돌리지 않으면 그저 새는
+            # 자원일 뿐이다 — 조용히 실패하는 대신 경고를 남기고 태스크 생성을 건너뛴다.
+            # 구독/커서는 그대로 등록되므로, poll_once 를 직접 호출하는 호출자(테스트 등)는
+            # 정상 동작한다.
             try:
                 loop = asyncio.get_running_loop()
-                helper = None
             except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                helper = loop
-            self._tasks[key] = loop.create_task(self._run(key))
-            if helper is not None:
-                self._helper_loops[key] = helper
+                log.warning(
+                    "candle feed: no running event loop — %s %s will not be polled until "
+                    "subscribed from the loop", symbol, interval,
+                )
+            else:
+                self._tasks[key] = loop.create_task(self._run(key))
         # 이미 도는 피드에 다른 구독자가 (다른) since_t 로 합류하는 경우: 커서는
         # 이미 돌고 있는 피드가 기준이다. since_t 로 뒤로 돌리면 먼저 있던 구독자가
         # 이미 받은 봉을 다시 받게 되므로, 기존 커서를 그대로 둔다(아무 것도 하지 않음).
@@ -103,16 +106,6 @@ class CandleFeed:
             task = self._tasks.pop(sub.key, None)
             if task is not None:
                 task.cancel()
-            helper = self._helper_loops.pop(sub.key, None)
-            if helper is not None:
-                # 태스크가 실제로 돈 적 없는 헬퍼 루프라도, 취소된 코루틴을 한 번
-                # 돌려 정리한 뒤 닫아야 "coroutine was never awaited" 경고가 없다.
-                if task is not None:
-                    try:
-                        helper.run_until_complete(task)
-                    except (asyncio.CancelledError, Exception):
-                        pass
-                helper.close()
 
     # -- 시각 -----------------------------------------------------------
     @staticmethod
@@ -133,7 +126,10 @@ class CandleFeed:
         last = self._last_t.get(key, -1)
         fresh = sorted((_to_candle(r) for r in rows if r.get("closed") and int(r["t"]) > last), key=lambda c: c.t)
         for candle in fresh:
-            self._last_t[key] = candle.t
+            # 콜백 안에서 unsubscribe 되어 마지막 구독자가 사라지면 _last_t 항목도 함께
+            # 지워진다 — 그 뒤에 여기서 다시 써 넣으면 이미 정리된 키가 되살아난다.
+            if key in self._subs:
+                self._last_t[key] = candle.t
             for sub in list(self._subs.get(key, [])):
                 try:
                     await sub.callback(symbol, candle)

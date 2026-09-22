@@ -22,8 +22,8 @@ heartbeat 응답 `commands` 로 내려 주면 주문만 넣고, 다음 heartbeat
 로컬에 남은 판단은 안전망(손절 %, 일일 손실, 최대 보유시간)뿐입니다 — 서버와 끊기면 진입은 멈추고 손절만 됩니다.
 v7 이하로는 A/B(익절·손절, 지정가) 매크로만 시작할 수 있고, 지표형(C~K)은 426 으로 거절됩니다.
 
-- 명령 한 건 = `{"id","seq","action"(buy|sell|short|cover),"notional_frac","qty_frac","signal_price","reason","expires_ms"}`. `notional_frac` 은 매크로 초기자본 기준 비율(1회 주문 상한 `MAX_ORDER_USDT` 적용), `qty_frac` 은 보유 수량 기준 비율(≥0.999 면 전량 청산).
-- ack 한 건 = `{"command_id","ok","executed_qty","fill_price","error"}`. 같은 `id` 는 한 번만 실행하고, 다시 오면 재실행 없이 `ok` 로 다시 ack 합니다(서버가 ack 를 놓친 경우). 보유가 없는데 청산 명령이 오면 주문 없이 `ok, executed_qty=0`.
+- 명령 한 건 = `{"id","seq","action"(롱 매크로: buy|sell, 숏 매크로: short|cover — 방향이 맞지 않는 명령은 주문 없이 `ok=false` 로 거절),"notional_frac","qty_frac","signal_price","reason","expires_ms"}`. `notional_frac` 은 매크로 초기자본 기준 비율(1회 주문 상한 `MAX_ORDER_USDT` 적용), `qty_frac` 은 보유 수량 기준 비율(≥0.999 면 전량 청산).
+- ack 한 건 = `{"command_id","ok","executed_qty","fill_price","error"}`. `ok` 로 ack 한 `id` 가 다시 오면 재실행 없이 `ok` 로 다시 ack 합니다(서버가 ack 를 놓친 경우). 실패한 명령은 기록하지 않으므로, 서버가 청산 실패를 같은 `id` 로 재전송(최대 3회)하면 다시 실행합니다. 보유가 없는데 청산 명령이 오면 주문 없이 `ok, executed_qty=0`.
 - heartbeat 전송에 실패하면 ack 는 버리지 않고 다음 heartbeat 앞머리에 다시 실립니다. 서버 쪽 명령은 90초 뒤 만료됩니다.
 - 보유 중 같은 방향 주문은 추가 진입(진입가 가중평균), 반대 방향은 청산입니다. 주문 결과가 불확실하면(응답 유실 등) 명령을 더 받지 않고 오류 상태로 종료해 사용자가 거래소에서 확인하게 합니다.
 - 이 변경은 exe 재빌드(runner-v8)가 있어야 실제 사용자에게 적용됩니다.

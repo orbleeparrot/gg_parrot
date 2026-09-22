@@ -528,7 +528,7 @@ class BotThread(threading.Thread):
 
         # v8 서버 신호: 명령의 notional_frac 은 매크로 초기자본 기준. 실행 결과는 다음 heartbeat 의 acks 로 보고.
         self.capital = float((macro.get("params") or {}).get("initial_capital") or 0) or MAX_ORDER_USDT
-        self._done_command_ids: deque = deque(maxlen=200)  # 같은 명령 id 는 한 번만 실행(ack 유실 시 재전송 대비)
+        self._done_command_ids: deque = deque(maxlen=200)  # ok 로 ack 한 명령 id — 재전송돼도 다시 실행하지 않는다
         self.pending_acks: list[dict] = []
         self._offline_logged = False
 
@@ -754,18 +754,24 @@ class BotThread(threading.Thread):
         return price <= self.entry_price * (1 - sl) if self.side == "long" else price >= self.entry_price * (1 + sl)
 
     def _execute_command(self, cmd: dict, price: float) -> dict:
-        """서버 명령 하나를 실행하고 ack 를 만든다. 같은 id 는 한 번만(서버가 ack 를 놓쳤을 때 재전송 대비)."""
+        """서버 명령 하나를 실행하고 ack 를 만든다.
+
+        성공(ok) 으로 ack 한 id 는 다시 와도 실행하지 않고 ok 로 재응답한다(서버가 ack 를 놓친 경우).
+        실패한 명령은 기록하지 않는다 — 서버가 청산 실패를 같은 id 로 재전송하면 다시 실행해야 한다.
+        """
         cid = cmd.get("id")
         ack = {"command_id": cid, "ok": True, "executed_qty": 0.0, "fill_price": 0.0, "error": ""}
         if cid in self._done_command_ids:
             return ack
-        self._done_command_ids.append(cid)
         action = str(cmd.get("action", "")).lower()
         reason = str(cmd.get("reason") or "")
         uncertain_before = getattr(self, "position_uncertain", False)
         try:
             if action not in ("buy", "short", "sell", "cover"):
                 raise RuntimeError(f"알 수 없는 명령 {action}")
+            if action not in (("buy", "sell") if self.side == "long" else ("short", "cover")):
+                # 숏 매크로에 buy 가 오면 실제 롱이 열리고 봇은 그걸 청산할 수 없다 — 주문 없이 거절.
+                raise RuntimeError(f"매크로 방향과 맞지 않는 명령이에요: {action}")
             if uncertain_before:
                 raise RuntimeError("포지션을 확인하지 못해 추가 주문을 보내지 않습니다. 거래소에서 주문과 포지션을 확인하세요.")
             if action in ("buy", "short"):
@@ -791,6 +797,7 @@ class BotThread(threading.Thread):
             else:  # sell / cover
                 if not self.in_position or self.held_qty <= 0:
                     self.log(f"[신호] {reason} → 보유 없음, 건너뜀")
+                    self._done_command_ids.append(cid)
                     return ack
                 frac = float(cmd.get("qty_frac") or 1.0)
                 self.log(f"[신호] {reason} → {'전량' if frac >= 0.999 else f'{frac:.0%}'} 청산 @ {price}")
@@ -812,6 +819,8 @@ class BotThread(threading.Thread):
                 raise
             ack.update(ok=False, error=str(exc)[:200])
             self.log(f"  ⚠ 명령 실행 실패: {exc}")
+        if ack["ok"]:
+            self._done_command_ids.append(cid)
         return ack
 
     def _snapshot(self) -> dict:

@@ -149,6 +149,92 @@ class CommandExecutionTests(unittest.TestCase):
         self.assertTrue(bot.position_uncertain)
         self.assertEqual(bot.client.create_order.call_count, 1)
 
+    def test_failed_exit_resent_with_same_id_is_executed_again(self):
+        bot = _bot(in_position=True, held=1000.0, entry=0.01)
+        bot._close_position = Mock(side_effect=[RuntimeError("주문 상태 EXPIRED"), True])
+        cmd = {"id": 20, "action": "sell", "notional_frac": 0.0, "qty_frac": 1.0, "reason": "청산"}
+        first = bot._execute_command(cmd, price=0.012)
+        self.assertFalse(first["ok"])
+        bot._last_fill_qty, bot._last_fill_price = 1000.0, 0.012
+        second = bot._execute_command(cmd, price=0.012)
+        self.assertTrue(second["ok"])
+        self.assertEqual(bot._close_position.call_count, 2)
+        self.assertEqual(second["executed_qty"], 1000.0)
+
+    def test_ok_acked_id_resent_is_not_executed_again(self):
+        bot = _bot(in_position=True, held=1000.0, entry=0.01)
+        bot._close_position = Mock(return_value=True)
+        bot._last_fill_qty, bot._last_fill_price = 1000.0, 0.012
+        cmd = {"id": 21, "action": "sell", "notional_frac": 0.0, "qty_frac": 1.0, "reason": "청산"}
+        bot._execute_command(cmd, price=0.012)
+        bot.in_position, bot.held_qty = False, 0.0
+        again = bot._execute_command(cmd, price=0.012)
+        self.assertEqual(bot._close_position.call_count, 1)
+        self.assertTrue(again["ok"])
+
+    def test_noop_exit_when_flat_is_recorded_as_done(self):
+        bot = _bot()
+        bot._place = Mock()
+        cmd = {"id": 22, "action": "sell", "notional_frac": 0.0, "qty_frac": 1.0, "reason": "청산"}
+        bot._execute_command(cmd, price=0.01)
+        self.assertIn(22, bot._done_command_ids)
+
+    def test_buy_command_to_short_bot_is_rejected_without_order(self):
+        bot = _bot()
+        bot.side, bot.market = "short", "futures"
+        bot._place = Mock()
+        ack = bot._execute_command({"id": 23, "action": "buy", "notional_frac": 1.0, "qty_frac": 0.0, "reason": "진입"}, price=0.01)
+        bot._place.assert_not_called()
+        self.assertFalse(ack["ok"])
+        self.assertIn("매크로 방향과 맞지 않는 명령이에요: buy", ack["error"])
+        self.assertNotIn(23, bot._done_command_ids)
+
+    def test_cover_command_to_long_bot_is_rejected_without_order(self):
+        bot = _bot(in_position=True, held=1000.0, entry=0.01)
+        bot._place, bot._close_position = Mock(), Mock()
+        for action in ("short", "cover"):
+            ack = bot._execute_command({"id": 24, "action": action, "notional_frac": 1.0, "qty_frac": 1.0, "reason": "x"}, price=0.01)
+            self.assertFalse(ack["ok"])
+            self.assertIn(f"매크로 방향과 맞지 않는 명령이에요: {action}", ack["error"])
+        bot._place.assert_not_called()
+        bot._close_position.assert_not_called()
+
+    def test_real_place_futures_short_add_partial_cover_and_full_cover(self):
+        bot = _bot(in_position=True, held=1000.0, entry=0.010)
+        bot.side, bot.market = "short", "futures"
+        # 1) 추가 숏(SELL, reduceOnly 없음): 수량 합산·가중평균, 실현손익 없음
+        bot.client.futures_create_order.return_value = {"orderId": 1, "status": "FILLED", "executedQty": "1000", "avgPrice": "0.012"}
+        ack = bot._execute_command({"id": 30, "action": "short", "notional_frac": 0.375, "qty_frac": 0.0, "reason": "격자"}, price=0.012)
+        self.assertTrue(ack["ok"], ack)
+        kwargs = bot.client.futures_create_order.call_args.kwargs
+        self.assertEqual(kwargs["side"], "SELL")
+        self.assertNotIn("reduceOnly", kwargs)
+        self.assertTrue(bot.in_position)
+        self.assertAlmostEqual(bot.held_qty, 2000.0)
+        self.assertAlmostEqual(bot.entry_price, 0.011)
+        self.assertEqual(bot.realized, 0.0)
+        # 2) 부분 커버(BUY reduceOnly): 숏 손익 = qty × (진입 − 체결), 잔량 유지
+        bot.client.futures_create_order.return_value = {"orderId": 2, "status": "FILLED", "executedQty": "1000", "avgPrice": "0.010"}
+        ack = bot._execute_command({"id": 31, "action": "cover", "notional_frac": 0.0, "qty_frac": 0.5, "reason": "부분 청산"}, price=0.010)
+        self.assertTrue(ack["ok"], ack)
+        kwargs = bot.client.futures_create_order.call_args.kwargs
+        self.assertEqual((kwargs["side"], kwargs["reduceOnly"], kwargs["quantity"]), ("BUY", "true", 1000.0))
+        self.assertTrue(bot.in_position)
+        self.assertAlmostEqual(bot.held_qty, 1000.0)
+        self.assertAlmostEqual(bot.entry_price, 0.011)
+        self.assertAlmostEqual(bot.realized, 1.0)  # 1000 × (0.011 − 0.010)
+        # 3) 전량 커버: 플랫
+        bot.client.futures_create_order.return_value = {"orderId": 3, "status": "FILLED", "executedQty": "1000", "avgPrice": "0.012"}
+        ack = bot._execute_command({"id": 32, "action": "cover", "notional_frac": 0.0, "qty_frac": 1.0, "reason": "청산"}, price=0.012)
+        self.assertTrue(ack["ok"], ack)
+        kwargs = bot.client.futures_create_order.call_args.kwargs
+        self.assertEqual((kwargs["side"], kwargs["reduceOnly"]), ("BUY", "true"))
+        self.assertFalse(bot.in_position)
+        self.assertEqual(bot.held_qty, 0.0)
+        self.assertEqual(bot.entry_price, 0.0)
+        self.assertAlmostEqual(bot.realized, 0.0)  # +1.0 − 1000 × (0.012 − 0.011)
+        self.assertEqual(bot.client.futures_create_order.call_count, 3)
+
     def test_unknown_action_acks_error(self):
         bot = _bot()
         ack = bot._execute_command({"id": 16, "action": "hold", "notional_frac": 0.0, "qty_frac": 0.0, "reason": ""}, price=0.01)

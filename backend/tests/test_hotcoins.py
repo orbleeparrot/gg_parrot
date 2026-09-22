@@ -75,3 +75,30 @@ def test_endpoint_empty_on_fetch_failure(monkeypatch):
     r = client.get("/api/hot-coins").json()
     assert r["coins"] == []
     assert r.get("error") == "binance"
+
+
+def _t2(symbol, change, price, qvol, high, low):
+    return {"symbol": symbol, "priceChangePercent": str(change), "lastPrice": str(price),
+            "quoteVolume": str(qvol), "highPrice": str(high), "lowPrice": str(low)}
+
+
+def test_range_pct_from_high_low():
+    assert hc.ticker_range_pct(_t2("BTCUSDT", 1.0, 100, 1, 110, 100)) == 10.0
+    # high/low 가 없거나 0 이면 0.0 (옛 응답·이상값 방어)
+    assert hc.ticker_range_pct(_t("BTCUSDT", 1.0, 100, 1)) == 0.0
+    assert hc.ticker_range_pct(_t2("BTCUSDT", 1.0, 100, 1, 110, 0)) == 0.0
+
+
+def test_selection_carries_range_pct():
+    coins = hc.select_hot_coins(
+        [_t2("BTCUSDT", 1.0, 100, 1_000_000_000, 105, 100)],
+        limit=10, min_quote_volume=10_000_000, candidate_pool=100)
+    assert coins[0]["range_pct"] == 5.0
+
+
+def test_get_cached_tickers_returns_none_when_load_fails(monkeypatch):
+    # 캐시 자체를 비우지 않고, 캐시가 부를 로더를 실패하게 만들어 확인한다.
+    monkeypatch.setattr(hc, "_load_ticker_payload", lambda: (_ for _ in ()).throw(RuntimeError("down")))
+    monkeypatch.setattr(hc._cache, "get_or_load",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("down")))
+    assert hc.get_cached_tickers() is None

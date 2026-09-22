@@ -48,6 +48,18 @@ def _is_leverage_token(base: str) -> bool:
     return False
 
 
+def ticker_range_pct(t: dict) -> float:
+    """24시간 고가/저가로 본 하루 변동폭(%). 값이 없거나 이상하면 0.0 — 같은 티커 응답만 쓴다."""
+    try:
+        high = float(t["highPrice"])
+        low = float(t["lowPrice"])
+    except (KeyError, ValueError, TypeError):
+        return 0.0
+    if low <= 0 or high < low:
+        return 0.0
+    return round((high - low) / low * 100.0, 2)
+
+
 def select_hot_coins(
     tickers: list[dict],
     *,
@@ -79,6 +91,7 @@ def select_hot_coins(
                 "change_pct": round(change_pct, 2),
                 "last_price": last_price,
                 "quote_volume": round(quote_volume, 2),
+                "range_pct": ticker_range_pct(t),
             }
         )
 
@@ -102,17 +115,32 @@ def _fetch_tickers() -> Optional[list[dict]]:
         return None
 
 
+def _load_ticker_payload() -> dict:
+    tickers = _fetch_tickers()
+    if not tickers:
+        raise RuntimeError("hot coin source unavailable")
+    return {"tickers": tickers,
+            "coins": select_hot_coins(tickers, limit=50),
+            "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+
+
+def get_cached_tickers() -> Optional[list[dict]]:
+    """캐시된 24시간 티커 원본. 후보 풀이 같은 캐시를 재사용하려고 쓴다(추가 호출 없음)."""
+    try:
+        payload, _state = _cache.get_or_load("binance:24h", _load_ticker_payload,
+                                             ttl=CACHE_SECONDS, stale_ttl=300)
+    except Exception:
+        return None
+    tickers = payload.get("tickers")
+    return tickers if isinstance(tickers, list) else None
+
+
 def get_hot_coins(limit: int = 10) -> dict:
     """Return the cached hot-coins list (fetches Binance at most once per window)."""
     limit = max(1, min(int(limit), 50))
-    def load():
-        tickers = _fetch_tickers()
-        if not tickers:
-            raise RuntimeError("hot coin source unavailable")
-        return {"coins": select_hot_coins(tickers, limit=50),
-                "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
     try:
-        payload, state = _cache.get_or_load("binance:24h", load, ttl=CACHE_SECONDS, stale_ttl=300)
+        payload, state = _cache.get_or_load("binance:24h", _load_ticker_payload,
+                                            ttl=CACHE_SECONDS, stale_ttl=300)
     except Exception:
         return _envelope([], cached=False, error="binance")
     return {**_envelope(payload["coins"][:limit], cached=state != "loaded", stale=state == "stale"),

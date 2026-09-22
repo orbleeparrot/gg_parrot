@@ -59,12 +59,21 @@ _STOP_MODES = {"stop_only", "close_and_stop"}
 EVENT_CAP = int(os.environ.get("RUNNER_EVENT_CAP", "500"))
 EVENT_BATCH_MAX = 100
 EVENT_MESSAGE_MAX = 300
-_EVENT_KINDS = {"start", "info", "signal", "order", "fill", "error", "stop"}
+_EVENT_KINDS = {"start", "info", "signal", "order", "fill", "error", "stop", "warn"}
 # 평가손익 알림: 마지막 알림 기준 이만큼 움직였거나(누적), 한 heartbeat 사이 이만큼 급변하면 알린다(%p).
 PNL_ALERT_STEP_PCT = 2.0
 PNL_ALERT_JUMP_PCT = 1.0
 # 이 종류의 실행 이벤트는 헤더 알림(에이전트)으로도 간다. start·stop 은 세션 알림이 따로 있고 info 는 로그일 뿐.
 _NOTIFY_EVENT_LABELS = {"signal": "신호", "order": "주문", "fill": "체결", "error": "오류"}
+
+# 서버 신호 프로토콜(v8+): 실행기는 판단하지 않고 heartbeat 응답의 명령만 실행한다.
+SIGNAL_MIN_VERSION = os.environ.get("RUNNER_SIGNAL_MIN_VERSION", "8").strip() or "8"
+
+
+def supports_signals(version: str) -> bool:
+    """실행기가 서버 신호 프로토콜(v8+)을 쓰는가. 숫자 아닌 값·빈 값은 미지원."""
+    v = (version or "").strip()
+    return v.isascii() and v.isdigit() and len(v) <= 6 and int(v) >= int(SIGNAL_MIN_VERSION)
 
 
 class _SessionStreamHub:

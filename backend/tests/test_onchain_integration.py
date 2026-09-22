@@ -151,8 +151,13 @@ def test_real_owned_session_filters_events_before_macro_start(monkeypatch):
             'email': name+'@example.invalid', 'username': name, 'password': 'password123'}).json()
         auth = {'Authorization': 'Bearer '+account['token']}
         key = client.get('/api/me/runner/key', headers=auth).json()['key']
+        # 2026-09-22: 매크로 없는 구버전 시작은 426 — 규칙 A 매크로를 실어 세션을 만든다.
         session_id = client.post('/api/runner/start', headers={'X-Runner-Key': key},
-                                 json={'symbol': 'ETHUSDT'}).json()['session_id']
+                                 json={'symbol': 'ETHUSDT', 'macro': {
+                                     'symbol': 'ETHUSDT', 'rule_type': 'A', 'position_side': 'long',
+                                     'params': {'take_profit_pct': 3.0, 'initial_capital': 1000},
+                                     'risk': {'invest_ratio': 0.5, 'stop_loss_pct': 2.0}, 'period': {'preset': '3m'}}}
+                                 ).json()['session_id']
         response = client.get(f'/api/me/agents/sessions/{session_id}/whale-activity', headers=auth)
         assert response.status_code == 200
         assert response.json()['onchain']['coin'] == 'WETH'

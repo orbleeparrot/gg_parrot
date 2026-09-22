@@ -34,8 +34,9 @@ from sqlmodel import select
 
 from . import macro_signing
 from . import notifications as notifications_mod
+from . import runner_engine  # runner_engine 은 runner 를 함수 안에서 늦게 import 한다 — 순환 없음
 from .db import RunnerKey, RunnerLaunchTicket, RunSession, RunSessionEvent, User, UserMacro, get_session
-from .engine import Macro
+from .engine import Macro, RuleType
 
 _KST = timezone(timedelta(hours=9))
 
@@ -74,6 +75,16 @@ def supports_signals(version: str) -> bool:
     """실행기가 서버 신호 프로토콜(v8+)을 쓰는가. 숫자 아닌 값·빈 값은 미지원."""
     v = (version or "").strip()
     return v.isascii() and v.isdigit() and len(v) <= 6 and int(v) >= int(SIGNAL_MIN_VERSION)
+
+
+SIGNAL_REQUIRED_DETAIL = "지표형 매크로는 실행기 v8 이상이 필요해요. 실행기를 업데이트해 주세요."
+MACRO_REQUIRED_DETAIL = "실행기 v8 은 매크로 설정을 함께 보내야 해요."
+
+
+def needs_signals(macro: Optional[Macro]) -> bool:
+    """A/B(익절·손절 재진입, 지정가 밴드)는 실행기 로컬 로직이 맞다. 그 외는 서버 신호가 필요하다.
+    매크로를 안 보낸 구버전(v6)은 판단할 수 없으므로 '필요'로 본다."""
+    return macro is None or macro.rule_type not in (RuleType.A, RuleType.B)
 
 
 class _SessionStreamHub:
@@ -336,8 +347,12 @@ def mark_launch_ticket_rejected(ticket: str, runner_version: str) -> None:
         return
 
 
-def claim_launch_ticket(ticket: str) -> dict:
-    """Atomically consume a launch ticket and return its local-runner payload."""
+def claim_launch_ticket(ticket: str, runner_version: str = "") -> dict:
+    """Atomically consume a launch ticket and return its local-runner payload.
+
+    ``runner_version`` 은 최소 버전 검사를 통과한 값이다. 여기서는 매크로 종류를 보고 한 번 더 가른다 —
+    지표형 매크로는 서버 신호(v8+)가 필요하므로 구버전에는 티켓을 내주지 않는다(티켓은 살려 둔다).
+    """
     raw_ticket = (ticket or "").strip()
     if not _LAUNCH_TICKET_RE.fullmatch(raw_ticket):
         raise _ticket_error(404, "유효한 실행 연결 요청을 찾을 수 없어요.")
@@ -370,6 +385,12 @@ def claim_launch_ticket(ticket: str) -> dict:
             macro = Macro.model_validate_json(macro_row.macro_json)
         except (TypeError, ValueError):
             raise _ticket_error(422, "저장된 매크로 형식이 올바르지 않아요.")
+        if not supports_signals(runner_version) and needs_signals(macro):
+            # 구버전 실행기 + 지표형 매크로: 거절 사실만 남기고(웹이 상태 조회로 알아챔) 티켓은 소비하지 않는다.
+            # mark_launch_ticket_rejected 는 자기 세션을 여니 BEGIN IMMEDIATE 잠금을 먼저 푼다.
+            db.rollback()
+            mark_launch_ticket_rejected(raw_ticket, runner_version)
+            raise _ticket_error(426, SIGNAL_REQUIRED_DETAIL)
 
         # The conditional UPDATE is the single-use boundary. Concurrent claims
         # can both read the row above, but only one can change claimed_at.
@@ -430,6 +451,14 @@ def start_session(user: User, payload: dict) -> dict:
         except (TypeError, ValueError):
             macro_json = ""
             normalized_macro = None
+
+    # 버전 게이트(2026-09-22 결정): v8+ 는 서버가 전략을 돌리므로 매크로가 필수(422).
+    # v8 미만은 A/B 만 로컬 판단으로 돌릴 수 있고, 지표형이거나 매크로를 안 보내 판별 불가면 426.
+    signal_runner = supports_signals(runner_version)
+    if signal_runner and normalized_macro is None:
+        raise HTTPException(status_code=422, detail=MACRO_REQUIRED_DETAIL)
+    if not signal_runner and needs_signals(normalized_macro):
+        raise HTTPException(status_code=426, detail=SIGNAL_REQUIRED_DETAIL)
 
     raw_user_macro_id = payload.get("user_macro_id")
     user_macro_id: Optional[int] = None
@@ -529,6 +558,9 @@ def start_session(user: User, payload: dict) -> dict:
             "macro_digest": macro_digest,
         }
     notify_sessions_changed(user.id)
+    if signal_runner:
+        # v8+: 서버 측 전략 드라이버를 이벤트 루프에 올린다(웜업·구독·틱 루프는 runner_engine 이 맡는다).
+        runner_engine.schedule_start(result["session_id"])
     from .agent_features.position_news.runtime import request_collection
     request_collection()
     from .agent_features.whale_activity.runtime import request_collection as request_whale_collection
@@ -541,15 +573,19 @@ def heartbeat(user: User, session_id: int, snapshot: dict) -> dict:
 
     응답 ``action`` : "continue" | "stop_only" | "close_and_stop".
     이미 서버에서 세션이 사라졌거나 종료됐다면 실행기도 멈추도록 "stop_only" 를 준다.
+
+    v8+ 실행기에는 ``commands`` 로 서버 전략이 낸 미실행 주문 명령을 함께 주고, 요청의 ``acks`` 로
+    직전 명령의 실행 결과를 받는다. 구버전에는 항상 빈 리스트(무해).
     """
     events = snapshot.pop("events", None)
+    acks = snapshot.pop("acks", None)
     with get_session() as db:
         row = db.get(RunSession, session_id)
         if row is None or row.user_id != user.id:
             # 세션이 없어졌으면 실행기가 안전하게 멈추도록 종료 지시.
-            return {"action": "stop_only", "reason": "세션을 찾을 수 없어요."}
+            return {"action": "stop_only", "reason": "세션을 찾을 수 없어요.", "commands": []}
         if row.status != "running":
-            return {"action": row.stop_mode or "stop_only", "reason": "이미 종료 처리된 세션이에요."}
+            return {"action": row.stop_mode or "stop_only", "reason": "이미 종료 처리된 세션이에요.", "commands": []}
         _append_events(db, row, events)
 
         previous_pct, previously_in_position = row.unrealized_pct, row.in_position
@@ -564,11 +600,18 @@ def heartbeat(user: User, session_id: int, snapshot: dict) -> dict:
             row.note = str(snapshot["note"])[:200]
         row.last_heartbeat_at = _now_iso()
         _alert_pnl_move(db, row, previous_pct, previously_in_position)
+        commands: list = []
+        if supports_signals(row.runner_version):
+            # ack 반영 → 만료 정리 후 남은 명령 → 서버 전략과 실행기 포지션 유무 대조(경고만).
+            now_ms = runner_engine._now_ms()
+            runner_engine.apply_acks(db, row, acks or [], now_ms)
+            commands = runner_engine.pending_commands(db, row, now_ms)
+            runner_engine.check_position_mismatch(db, row, row.in_position)
         action = row.stop_mode if row.stop_mode in _STOP_MODES else "continue"
         db.add(row)
         db.commit()
     notify_sessions_changed(user.id)
-    return {"action": action}
+    return {"action": action, "commands": commands}
 
 
 def _alert_pnl_move(db, row: RunSession, previous_pct: float, previously_in_position: bool) -> bool:
@@ -672,6 +715,8 @@ def mark_stopped(
             )
         db.commit()
     notify_sessions_changed(user.id)
+    # v8+ 라면 서버 측 드라이버도 내린다(구버전·이미 없는 세션이면 runner_engine 이 무시한다).
+    runner_engine.schedule_stop(session_id)
     return {"ok": True}
 
 

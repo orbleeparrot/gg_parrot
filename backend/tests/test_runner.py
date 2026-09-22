@@ -42,15 +42,25 @@ def _auth(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 
-def _save_macro(token: str, symbol: str = "BTCUSDT") -> dict:
-    macro = {
+def _rule_a(symbol: str = "BTCUSDT", side: str = "long", leverage: int = 1) -> dict:
+    """구버전(v8 미만) 실행기가 시작할 수 있는 규칙 A 매크로.
+
+    2026-09-22 결정: 매크로를 안 보내는 구버전 시작은 지표형 여부를 판별할 수 없어 426 으로 막힌다.
+    세션 자체가 아니라 그 뒤(heartbeat·종료·삭제·알림)를 검증하는 테스트는 이 매크로를 실어 시작한다.
+    """
+    return {
         "symbol": symbol,
         "rule_type": "A",
-        "position_side": "long",
+        "position_side": side,
+        "leverage": leverage,
         "params": {"take_profit_pct": 3.0, "initial_capital": 1000000},
         "risk": {"invest_ratio": 0.5, "stop_loss_pct": 2.0},
         "period": {"preset": "3m"},
     }
+
+
+def _save_macro(token: str, symbol: str = "BTCUSDT") -> dict:
+    macro = _rule_a(symbol)
     response = client.post(
         "/api/me/macros",
         json={"macro": macro, "name": "빠른 실행 테스트"},
@@ -77,7 +87,7 @@ def test_key_regenerate_changes_and_invalidates_old():
     r = client.post("/api/runner/start", json={"symbol": "BTCUSDT"}, headers={"X-Runner-Key": old})
     assert r.status_code == 401
     # 새 키는 동작
-    r2 = client.post("/api/runner/start", json={"symbol": "BTCUSDT"}, headers={"X-Runner-Key": new})
+    r2 = client.post("/api/runner/start", json={"symbol": "BTCUSDT", "macro": _rule_a()}, headers={"X-Runner-Key": new})
     assert r2.status_code == 200
 
 
@@ -222,7 +232,7 @@ def test_start_records_runner_version_and_rejects_outdated():
     headers = {"X-Runner-Key": key}
 
     # v7+ 실행기: 버전이 세션에 남는다.
-    started = client.post("/api/runner/start", json={"symbol": "BTCUSDT", "runner_version": "7"}, headers=headers)
+    started = client.post("/api/runner/start", json={"symbol": "BTCUSDT", "runner_version": "7", "macro": _rule_a()}, headers=headers)
     assert started.status_code == 200, started.text
     sessions = client.get("/api/me/runner/sessions", headers=_auth(token)).json()
     session = next(s for s in sessions["active"] if s["session_id"] == started.json()["session_id"])
@@ -233,8 +243,11 @@ def test_start_records_runner_version_and_rejects_outdated():
     assert old.status_code == 426
     assert "업데이트" in old.json()["detail"]
 
-    # 버전을 안 보내는 예전 실행기는 아직 허용(빈 값으로 기록).
-    legacy = client.post("/api/runner/start", json={"symbol": "ETHUSDT"}, headers=headers)
+    # 버전을 안 보내는 예전 실행기: 매크로 없이는 426(2026-09-22 결정: 구버전+판별불가 매크로 차단),
+    # A/B 매크로를 실으면 아직 허용(빈 값으로 기록).
+    blocked = client.post("/api/runner/start", json={"symbol": "ETHUSDT"}, headers=headers)
+    assert blocked.status_code == 426 and blocked.json()["detail"] == runner_mod.SIGNAL_REQUIRED_DETAIL
+    legacy = client.post("/api/runner/start", json={"symbol": "ETHUSDT", "macro": _rule_a("ETHUSDT")}, headers=headers)
     assert legacy.status_code == 200
     sessions = client.get("/api/me/runner/sessions", headers=_auth(token)).json()
     legacy_view = next(s for s in sessions["active"] if s["session_id"] == legacy.json()["session_id"])
@@ -352,7 +365,7 @@ def test_full_lifecycle_stop_only():
     start = client.post(
         "/api/runner/start",
         json={"symbol": "ethusdt", "position_side": "short", "leverage": 3,
-              "human_summary": "테스트 매크로"},
+              "human_summary": "테스트 매크로", "macro": _rule_a("ETHUSDT", "short", 3)},
         headers={"X-Runner-Key": key},
     ).json()
     sid = start["session_id"]
@@ -440,7 +453,8 @@ def test_saved_macro_id_rejects_missing_macro_mismatch_and_foreign_owner():
         json={"user_macro_id": saved["id"], "symbol": saved["symbol"]},
         headers={"X-Runner-Key": owner_key},
     )
-    assert missing.status_code == 422
+    # 2026-09-22 결정: 매크로 없는 구버전 시작은 내 매크로 ID 검사보다 먼저 426 으로 막힌다.
+    assert missing.status_code == 426
 
     changed_macro = json.loads(json.dumps(saved["macro"]))
     changed_macro["symbol"] = "ETHUSDT"
@@ -472,7 +486,7 @@ def test_legacy_runner_can_start_without_saved_macro_id():
     key = client.get("/api/me/runner/key", headers=_auth(token)).json()["key"]
     started = client.post(
         "/api/runner/start",
-        json={"symbol": "BTCUSDT"},
+        json={"symbol": "BTCUSDT", "macro": _rule_a()},
         headers={"X-Runner-Key": key},
     )
     assert started.status_code == 200
@@ -577,7 +591,7 @@ def test_session_list_limit_never_hides_running_sessions():
     for index in range(4):
         response = client.post(
             "/api/runner/start",
-            json={"symbol": f"RUN{index}USDT"},
+            json={"symbol": f"RUN{index}USDT", "macro": _rule_a(f"RUN{index}USDT")},
             headers={"X-Runner-Key": key},
         )
         assert response.status_code == 200
@@ -593,7 +607,7 @@ def test_session_list_limit_never_hides_running_sessions():
 def test_request_stop_close_and_stop_action():
     token = _signup()
     key = client.get("/api/me/runner/key", headers=_auth(token)).json()["key"]
-    sid = client.post("/api/runner/start", json={"symbol": "BTCUSDT"},
+    sid = client.post("/api/runner/start", json={"symbol": "BTCUSDT", "macro": _rule_a()},
                       headers={"X-Runner-Key": key}).json()["session_id"]
     client.post(f"/api/me/runner/sessions/{sid}/request-stop",
                 json={"mode": "close_and_stop"}, headers=_auth(token))
@@ -605,7 +619,7 @@ def test_request_stop_close_and_stop_action():
 def test_invalid_stop_mode_rejected():
     token = _signup()
     key = client.get("/api/me/runner/key", headers=_auth(token)).json()["key"]
-    sid = client.post("/api/runner/start", json={"symbol": "BTCUSDT"},
+    sid = client.post("/api/runner/start", json={"symbol": "BTCUSDT", "macro": _rule_a()},
                       headers={"X-Runner-Key": key}).json()["session_id"]
     r = client.post(f"/api/me/runner/sessions/{sid}/request-stop",
                     json={"mode": "nuke"}, headers=_auth(token))
@@ -616,7 +630,7 @@ def test_cannot_stop_another_users_session():
     # A 가 세션을 만들고, B 가 종료를 시도하면 404(소유권 경계).
     token_a = _signup()
     key_a = client.get("/api/me/runner/key", headers=_auth(token_a)).json()["key"]
-    sid = client.post("/api/runner/start", json={"symbol": "BTCUSDT"},
+    sid = client.post("/api/runner/start", json={"symbol": "BTCUSDT", "macro": _rule_a()},
                       headers={"X-Runner-Key": key_a}).json()["session_id"]
     token_b = _signup()
     r = client.post(f"/api/me/runner/sessions/{sid}/request-stop",
@@ -629,7 +643,7 @@ def test_position_news_uses_owned_session_symbol_and_registered_direction(monkey
     key = client.get("/api/me/runner/key", headers=_auth(token)).json()["key"]
     sid = client.post(
         "/api/runner/start",
-        json={"symbol": "ETHUSDT", "position_side": "short"},
+        json={"symbol": "ETHUSDT", "position_side": "short", "macro": _rule_a("ETHUSDT", "short")},
         headers={"X-Runner-Key": key},
     ).json()["session_id"]
     captured = {}
@@ -655,7 +669,7 @@ def test_position_news_hides_another_users_session(monkeypatch):
     owner_key = client.get("/api/me/runner/key", headers=_auth(owner)).json()["key"]
     sid = client.post(
         "/api/runner/start",
-        json={"symbol": "BTCUSDT", "position_side": "long"},
+        json={"symbol": "BTCUSDT", "position_side": "long", "macro": _rule_a()},
         headers={"X-Runner-Key": owner_key},
     ).json()["session_id"]
     stranger = _signup()
@@ -704,7 +718,7 @@ def test_delete_removes_error_session_from_recent():
     key = client.get("/api/me/runner/key", headers=_auth(token)).json()["key"]
     sid = client.post(
         "/api/runner/start",
-        json={"symbol": "BTCUSDT", "human_summary": "오류로 끝날 세션"},
+        json={"symbol": "BTCUSDT", "human_summary": "오류로 끝날 세션", "macro": _rule_a()},
         headers={"X-Runner-Key": key},
     ).json()["session_id"]
     client.post(
@@ -729,7 +743,7 @@ def test_delete_removes_running_session_whose_runner_stopped_answering():
     key = client.get("/api/me/runner/key", headers=_auth(token)).json()["key"]
     sid = client.post(
         "/api/runner/start",
-        json={"symbol": "SOLUSDT"},
+        json={"symbol": "SOLUSDT", "macro": _rule_a("SOLUSDT")},
         headers={"X-Runner-Key": key},
     ).json()["session_id"]
 
@@ -756,7 +770,7 @@ def test_delete_rejects_other_users_session():
     stranger = _signup()
     key = client.get("/api/me/runner/key", headers=_auth(owner)).json()["key"]
     sid = client.post(
-        "/api/runner/start", json={"symbol": "BTCUSDT"}, headers={"X-Runner-Key": key},
+        "/api/runner/start", json={"symbol": "BTCUSDT", "macro": _rule_a()}, headers={"X-Runner-Key": key},
     ).json()["session_id"]
     client.post(
         "/api/runner/stopped",

@@ -188,7 +188,8 @@ def test_events_are_private_to_the_owner_and_capped(monkeypatch):
     monkeypatch.setattr(runner_mod, "EVENT_CAP", 5)
     token = _signup()
     headers = _runner_key(token)
-    sid = _start(headers, {"symbol": "BTCUSDT"})["session_id"]
+    # 2026-09-22: 매크로 없는 구버전 시작은 426 — 이 테스트의 관심사(이벤트 상한·소유권)를 위해 A 매크로를 보낸다.
+    sid = _start(headers, {"symbol": "BTCUSDT", "macro": _MACRO})["session_id"]
     for i in range(8):
         client.post("/api/runner/heartbeat", json={
             "session_id": sid, "events": [{"kind": "info", "message": f"tick {i}"}],

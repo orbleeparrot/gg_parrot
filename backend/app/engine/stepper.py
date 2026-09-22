@@ -35,6 +35,19 @@ class Fill:
     qty: float
     equity_after: float
     return_pct: float
+    # 실행기 명령·로그용 메타. 사유는 사람이 읽는 한 줄("RSI 23.1 ≤ 25 · 진입"), 직전 수량은
+    # 청산 비율(qty / qty_before)을 낼 때 쓴다. 장부가 이미 바뀐 뒤 _fill 이 불리므로 되계산한다.
+    reason: str = ""
+    qty_before: float = 0.0
+
+
+EXIT_SIDES = frozenset({"sell", "cover"})
+_DEFAULT_REASON = {"buy": "진입", "short": "진입", "sell": "청산", "cover": "청산"}
+
+
+def _fill_meta(side: str, qty: float, qty_after: float, reason: str) -> dict:
+    before = qty_after + qty if side in EXIT_SIDES else max(0.0, qty_after - qty)
+    return {"reason": reason or _DEFAULT_REASON.get(side, ""), "qty_before": float(before)}
 
 
 class PositionSim:
@@ -153,7 +166,7 @@ class PositionSim:
         self._entry_time = None
         if is_stop and self.cooldown_minutes > 0 and ts is not None:
             self._cooldown_until = ts + timedelta(minutes=self.cooldown_minutes)
-        return self._fill(side, f, traded_qty, mark)
+        return self._fill(side, f, traded_qty, mark, reason="손절" if is_stop else "청산")
 
     def _liquidate(self, mark: float, ts: Optional[datetime] = None) -> Fill:
         """Force-close a leveraged position: the whole committed margin is lost
@@ -175,7 +188,7 @@ class PositionSim:
         self._entry_time = None
         if self.cooldown_minutes > 0 and ts is not None:
             self._cooldown_until = ts + timedelta(minutes=self.cooldown_minutes)
-        return self._fill(side, px, traded_qty, mark)
+        return self._fill(side, px, traded_qty, mark, reason="강제 청산")
 
     # -- time-based common risk (inert unless a timestamp is supplied) -----
     def _roll_day(self, c: float, ts: Optional[datetime]) -> None:
@@ -314,10 +327,11 @@ class PositionSim:
             datetime.fromtimestamp(cooldown_until_ms / 1000, timezone.utc) if cooldown_until_ms else None
         )
 
-    def _fill(self, side: str, price: float, qty: float, mark: float) -> Fill:
+    def _fill(self, side: str, price: float, qty: float, mark: float, reason: str = "") -> Fill:
         eq = self.equity(mark)
         ret = (eq - self.initial_capital) / self.initial_capital * 100.0
-        return Fill(side=side, price=price, qty=qty, equity_after=eq, return_pct=ret)
+        return Fill(side=side, price=price, qty=qty, equity_after=eq, return_pct=ret,
+                    **_fill_meta(side, qty, self.qty if self.in_pos else 0.0, reason))
 
 
 class DcaSim:
@@ -384,7 +398,7 @@ class DcaSim:
                 self.qty = 0.0
                 self.cost_basis = 0.0
                 self.stopped = True
-                fill = self._fill("sell", f, traded, c)
+                fill = self._fill("sell", f, traded, c, reason="손절")
 
         # Daily-max-loss: once today's equity is down past the threshold, buy no
         # more for the rest of the day (position is kept — DCA holds).
@@ -441,10 +455,11 @@ class DcaSim:
             self.cost_basis = self.qty * float(entry_price)
             self.cash = float(equity) - self.qty * float(last_price)
 
-    def _fill(self, side: str, price: float, qty: float, mark: float) -> Fill:
+    def _fill(self, side: str, price: float, qty: float, mark: float, reason: str = "") -> Fill:
         eq = self.equity(mark)
         ret = (eq - self.initial_capital) / self.initial_capital * 100.0
-        return Fill(side=side, price=price, qty=qty, equity_after=eq, return_pct=ret)
+        return Fill(side=side, price=price, qty=qty, equity_after=eq, return_pct=ret,
+                    **_fill_meta(side, qty, self.qty, reason))
 
 
 def make_sim(macro: Macro, initial_capital: Optional[float] = None):
@@ -452,10 +467,10 @@ def make_sim(macro: Macro, initial_capital: Optional[float] = None):
     from .schema import CANDLE_TYPES
 
     if macro.rule_type in CANDLE_TYPES:
-        # Types D~J are candle-based; aggregate ticks into candles for paper.
-        from .candles import CandleAggregatorSim
+        # Types D~K are candle-based; real closed candles arrive via CandleFeed → on_candle.
+        from .candles import LiveCandleSim
 
-        return CandleAggregatorSim(macro, initial_capital=initial_capital)
+        return LiveCandleSim(macro, initial_capital=initial_capital)
     if macro.rule_type is RuleType.C:
         base = initial_capital if initial_capital is not None else 1_000_000.0
         return DcaSim(macro, initial_capital=base, max_buys=None)

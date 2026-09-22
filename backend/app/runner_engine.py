@@ -1,0 +1,557 @@
+"""실행기(실계좌) 세션의 서버 측 전략 드라이버.
+
+실행기 v8 은 스스로 진입/청산을 판단하지 않는다. 세션마다 여기서 StrategyDriver 를 돌려(페이퍼와 같은
+엔진·같은 마감봉) Fill 을 RunnerCommand 로 바꿔 두면, 실행기가 heartbeat 응답으로 받아 주문만 넣고
+다음 heartbeat 의 acks 로 결과를 보고한다.
+
+수명: runner.start_session → schedule_start → start_driver(웜업·구독·틱 루프) … mark_stopped → schedule_stop.
+재기동 시 resume_running_runner_sessions 가 state_json 으로 이어 간다.
+
+이 모듈은 HTTP 를 모른다 — 드라이버 수명·Fill→명령·ack/만료만 맡고, API 는 runner.py 가 붙인다.
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import os
+import time
+from datetime import datetime, timezone
+from typing import Dict, List, Optional
+
+from sqlmodel import select
+
+from .data import get_ticker_price_cached  # 모듈 이름으로 참조 — 테스트가 monkeypatch 한다
+from .db import RunnerCommand, RunSession, get_session
+from .engine import Macro
+from .engine.candle_feed import feed  # 모듈 이름으로 참조 — 테스트가 monkeypatch 한다
+from .engine.driver import Leg, StrategyDriver
+from .engine.stepper import EXIT_SIDES, Fill, make_sim
+
+log = logging.getLogger(__name__)
+
+# 페이퍼와 같은 주기로 시세를 본다(env 도 공유).
+POLL_SECONDS = float(os.environ.get("PAPER_POLL_SECONDS", "3"))
+CHECKPOINT_SECONDS = max(1.0, float(os.environ.get("PAPER_CHECKPOINT_SECONDS", "10")))
+# 이 시간 안에 실행기가 가져가지 않은 명령은 만료 — 늦은 진입 신호를 뒤늦게 실행하지 않는다.
+COMMAND_TTL_SECONDS = float(os.environ.get("COMMAND_TTL_SECONDS", "90"))
+EXIT_RETRY_MAX = 3  # 청산은 실패해도 이만큼 다시 시도한다(포지션이 남으면 위험)
+# 같은 세션의 직전 명령과 action·signal_price 가 같고 이 시간 안이면 새로 넣지 않는다 — 롤링 배포로 옛/새 프로세스가
+# 같은 세션 드라이버를 잠깐 둘 다 돌릴 때 같은 신호가 두 번 실주문으로 나가는 걸 막는다.
+COMMAND_DEDUPE_SECONDS = float(os.environ.get("COMMAND_DEDUPE_SECONDS", "60"))
+# 실행기 heartbeat 가 이만큼 끊기면 세션을 서버가 닫고 드라이버를 내린다 — 죽은 실행기의 드라이버가 영영 돌며
+# 아무도 실행하지 않을 명령을 쌓지 않게. 마이페이지의 '연결 끊김'(30초)보다 훨씬 길게 잡아 잠깐의 끊김은 견딘다.
+STALE_RUNNER_SECONDS = float(os.environ.get("RUNNER_STALE_SECONDS", "3600"))
+STALE_RUNNER_NOTE = "실행기 연결 끊김 — 서버 전략을 자동 종료했어요"
+WARMUP_CANDLES = 500
+FALLBACK_CAPITAL = 100.0  # 실행기 MAX_ORDER_USDT 기본과 같다
+EXIT_FAIL_NOTE = "청산 실패 — 확인 필요"
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _now_ms() -> int:
+    return int(time.time() * 1000)
+
+
+class _Live:
+    """돌고 있는 세션 하나 — 드라이버·틱 태스크·마감봉 구독."""
+
+    __slots__ = ("session_id", "driver", "task", "subs", "stop_flag", "last_checkpoint", "unsaved")
+
+    def __init__(self, session_id: int, driver: StrategyDriver) -> None:
+        self.session_id = session_id
+        self.driver = driver
+        self.task: Optional[asyncio.Task] = None
+        self.subs: list = []
+        self.stop_flag = False
+        self.last_checkpoint = 0.0
+        # DB 저장에 실패한 체결 (fill, 그 시점 state_json) — 다음 틱에서 먼저 다시 저장한다.
+        # 엔진은 이미 큐에서 뺐으므로 여기 두지 않으면 신호가 사라진다.
+        self.unsaved: List[tuple] = []
+
+
+_drivers: Dict[int, _Live] = {}
+_starting: set = set()  # start_driver 가 첫 await 전에 표시 — 동시 호출이 드라이버를 둘 만들지 않게
+_loop: Optional[asyncio.AbstractEventLoop] = None
+_scheduled: set = set()  # _schedule 이 만든 태스크의 강한 참조 — GC 로 사라지지 않게(끝나면 뺀다)
+
+
+# --- 스레드 → 루프 -------------------------------------------------------
+def install(loop: asyncio.AbstractEventLoop) -> None:
+    """lifespan 이 부른다. 이후 schedule_* 가 요청 스레드에서 루프로 작업을 넘길 수 있다."""
+    global _loop
+    _loop = loop
+
+
+def _schedule(coro_factory, label: str) -> None:
+    if _loop is None or _loop.is_closed():
+        log.warning("runner engine: no event loop installed; skipping %s", label)
+        return
+
+    def _spawn() -> None:
+        task = _loop.create_task(coro_factory(), name=f"runner_engine:{label}")
+        _scheduled.add(task)
+        task.add_done_callback(_scheduled.discard)
+
+    _loop.call_soon_threadsafe(_spawn)
+
+
+def schedule_start(session_id: int) -> None:
+    _schedule(lambda: start_driver(session_id), f"start_driver({session_id})")
+
+
+def schedule_stop(session_id: int) -> None:
+    _schedule(lambda: stop_driver(session_id), f"stop_driver({session_id})")
+
+
+# --- 드라이버 ------------------------------------------------------------
+def build_driver(macro: Macro, symbol: str) -> StrategyDriver:
+    """실행기 세션은 종목 하나 — 초기자본은 매크로 값, 없으면 실행기 기본 주문 한도."""
+    initial = float(macro.initial_capital or FALLBACK_CAPITAL)
+    sym = (symbol or macro.symbol).upper()
+    return StrategyDriver([Leg(sym, make_sim(macro, initial_capital=initial), initial)], initial, macro=macro)
+
+
+START_FAIL_NOTE = "서버 전략 시작 실패 — 매크로 설정을 확인해 주세요"
+
+
+def _load_session(session_id: int) -> Optional[dict]:
+    """running 세션의 드라이버 재료. 없거나 running 이 아니면 None — macro_json 이 비어 있어도 돌려준다(호출자가 실패를 기록)."""
+    with get_session() as db:
+        row = db.get(RunSession, session_id)
+        if row is None or row.status != "running":
+            return None
+        return {"symbol": row.symbol, "macro_json": row.macro_json, "state_json": row.state_json}
+
+
+def _note_start_failure(session_id: int) -> None:
+    """드라이버를 못 만들었다는 걸 세션 note·error 이벤트로 남긴다(최선 노력 — 실패해도 호출자가 삼킨다).
+
+    조용히 실패하면 실행기는 '연결됨' 인데 신호가 영영 안 오는 세션이 된다 — 사용자가 마이페이지에서 알아야 한다.
+    """
+    from .runner import _append_events  # 늦은 import: runner ↔ runner_engine 순환 방지
+
+    with get_session() as db:
+        row = db.get(RunSession, session_id)
+        if row is None:
+            return
+        row.note = START_FAIL_NOTE
+        db.add(row)
+        _append_events(db, row, [{"ts": _now_iso(), "kind": "error",
+                                  "message": "⚠ 서버 전략을 시작하지 못했어요 — 매크로 설정이 비어 있거나 올바르지 않아 실행기는 신호를 받지 못합니다."}])
+        db.commit()
+
+
+async def start_driver(session_id: int) -> bool:
+    """DB 의 macro_json 으로 드라이버를 만들고 웜업 → (복구) → 구독 → 틱 루프. 이미 돌면(또는 시작 중이면) True."""
+    if session_id in _drivers or session_id in _starting:
+        return True
+    _starting.add(session_id)
+    try:
+        return await _start_driver(session_id)
+    finally:
+        _starting.discard(session_id)
+
+
+async def _start_driver(session_id: int) -> bool:
+    info = await asyncio.to_thread(_load_session, session_id)
+    if info is None:
+        return False
+    try:
+        if not info["macro_json"]:
+            raise ValueError("macro_json is empty")
+        macro = Macro.model_validate_json(info["macro_json"])
+        driver = build_driver(macro, info["symbol"])
+    except Exception:
+        log.exception("runner engine: session %s macro invalid", session_id)
+        try:
+            await asyncio.to_thread(_note_start_failure, session_id)
+        except Exception:
+            log.exception("runner engine: session %s could not record start failure", session_id)
+        return False
+    live = _Live(session_id, driver)
+    keys = driver.candle_keys()
+    history: Dict[str, list] = {}
+    for symbol, interval, market in keys:
+        try:
+            history[symbol] = await feed.history(symbol, interval, market, WARMUP_CANDLES)
+        except Exception:
+            log.exception("runner engine: warmup failed for %s — starting cold", symbol)
+    driver.warmup(history)
+    # 복구는 웜업 뒤 — 웜업이 장부를 비운다. 자산은 초기자본 기준(실계좌 손익은 실행기가 안다).
+    from .paper import parse_state  # 늦은 import: paper ↔ runner_engine 순환 방지
+    state = parse_state(info["state_json"])
+    if state:
+        driver.restore(state, leg_equity={}, total_equity=driver.initial)
+        driver.trade_count = int(state.get("trade_count") or 0)
+
+    async def on_candle(symbol: str, candle) -> None:
+        if not live.stop_flag:
+            driver.push_candle(symbol, candle)
+
+    subs = []
+    for symbol, interval, market in keys:
+        hist = history.get(symbol)
+        since_t = hist[-1][0] if hist else None  # Candle.t — 인덱스로 읽어 테스트 더미(tuple)도 받는다
+        subs.append(feed.subscribe(symbol, interval, market, on_candle, since_t=since_t))
+    live.subs = subs
+    _drivers[session_id] = live
+    live.task = asyncio.get_running_loop().create_task(_run(live))
+    return True
+
+
+async def stop_driver(session_id: int) -> None:
+    live = _drivers.pop(session_id, None)
+    if live is None:
+        return
+    live.stop_flag = True
+    for sub in live.subs:
+        try:
+            feed.unsubscribe(sub)
+        except Exception:
+            log.exception("runner engine: unsubscribe failed")
+    live.subs = []
+    if live.task is not None and live.task is not asyncio.current_task():
+        live.task.cancel()
+
+
+async def shutdown_drivers() -> int:
+    """프로세스 종료(lifespan) — 돌고 있는 드라이버를 전부 멈추고 틱 태스크가 끝나길 기다린다(최선 노력).
+
+    롤링 배포에서 옛 프로세스가 종료 신호를 받은 뒤에도 드라이버를 계속 돌리면 새 프로세스의 드라이버와
+    같은 신호를 두 번 명령으로 남긴다. 세션 상태(DB)는 건드리지 않는다 — 새 프로세스가 state_json 으로 이어 간다.
+    """
+    ids = list(_drivers)
+    tasks = []
+    for sid in ids:
+        live = _drivers.get(sid)
+        task = live.task if live is not None else None
+        try:
+            await stop_driver(sid)
+        except Exception:
+            log.exception("runner engine shutdown: session %s stop failed", sid)
+        if task is not None and task is not asyncio.current_task():
+            tasks.append(task)
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+    if ids:
+        log.info("runner engine shutdown: stopped %d driver(s)", len(ids))
+    return len(ids)
+
+
+LOOP_ERROR_NOTE = "서버 전략 루프 오류 — 확인 필요"
+
+
+async def _run(live: _Live) -> None:
+    try:
+        while not live.stop_flag:
+            await _tick_once(live)
+            await asyncio.sleep(POLL_SECONDS)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        # 틱 한 번의 저장 실패는 _tick_once 가 삼킨다 — 여기까지 온 건 예상 못 한 오류. 세션에 흔적을 남긴다.
+        log.exception("runner engine: session %s loop died", live.session_id)
+        try:
+            await asyncio.to_thread(_note_loop_error, live.session_id)
+        except Exception:
+            log.exception("runner engine: session %s could not record loop error", live.session_id)
+    finally:
+        # 세션이 DB 에서 running 이 아니게 돼 루프가 스스로 멈춘 경우(또는 예외) — 등록·구독을 정리한다.
+        # stop_driver 가 먼저 뺐으면 아무것도 안 한다(자기 태스크는 취소하지 않는다).
+        if _drivers.get(live.session_id) is live:
+            await stop_driver(live.session_id)
+
+
+def _note_loop_error(session_id: int) -> None:
+    """루프가 죽었다는 걸 세션 note·이벤트로 남긴다(최선 노력 — 실패해도 호출자가 삼킨다)."""
+    from .runner import _append_events  # 늦은 import: runner ↔ runner_engine 순환 방지
+
+    with get_session() as db:
+        row = db.get(RunSession, session_id)
+        if row is None:
+            return
+        row.note = LOOP_ERROR_NOTE
+        db.add(row)
+        _append_events(db, row, [{"ts": _now_iso(), "kind": "error",
+                                  "message": "⚠ 서버 전략 루프가 오류로 멈췄어요 — 실행기는 새 신호를 받지 못합니다. 세션을 다시 시작해 주세요."}])
+        db.commit()
+
+
+async def _tick_once(live: _Live) -> None:
+    """(저장 못 한 체결 먼저) → 시세 한 번 → 틱 → 체결이면 명령 기록 → 주기적 체크포인트.
+
+    드라이버 상태(state_json)는 루프 스레드에서 스냅샷해 워커에 문자열로 넘긴다 — 마감봉 콜백이
+    루프에서 sim 을 바꾸는 동안 워커가 state() 를 읽으면 반쪽 상태가 저장될 수 있다.
+    """
+    if live.unsaved:
+        try:
+            for fill, state_json in list(live.unsaved):
+                await asyncio.to_thread(_persist_fill, live, fill, state_json)
+                live.unsaved.pop(0)
+        except Exception:
+            log.exception("runner engine: session %s still cannot persist %d fill(s) — not draining further",
+                          live.session_id, len(live.unsaved))
+            return
+        live.last_checkpoint = time.monotonic()
+    try:
+        price = await asyncio.to_thread(get_ticker_price_cached, live.driver.symbol)
+    except Exception:
+        price = None
+    if not price:
+        return
+    fill = live.driver.tick(float(price), datetime.now(timezone.utc))
+    state_json = json.dumps(live.driver.state())
+    if fill is not None:
+        try:
+            await asyncio.to_thread(_persist_fill, live, fill, state_json)
+        except Exception:
+            live.unsaved.append((fill, state_json))
+            log.exception("runner engine: session %s persist fill failed — will retry next tick", live.session_id)
+            return
+        live.last_checkpoint = time.monotonic()
+    elif time.monotonic() - live.last_checkpoint >= CHECKPOINT_SECONDS:
+        try:
+            await asyncio.to_thread(_persist_state, live, state_json)
+        except Exception:
+            log.exception("runner engine: session %s checkpoint failed", live.session_id)
+        live.last_checkpoint = time.monotonic()
+
+
+def _runner_is_stale(row: RunSession, now: datetime) -> bool:
+    """마지막 heartbeat(없으면 시작 시각)가 STALE_RUNNER_SECONDS 보다 오래됐는가. 시각을 못 읽으면 False(보수적)."""
+    from .runner import _parse_iso  # 늦은 import: runner ↔ runner_engine 순환 방지
+
+    last = _parse_iso(row.last_heartbeat_at or "") or _parse_iso(row.started_at or "")
+    return last is not None and (now - last).total_seconds() > STALE_RUNNER_SECONDS
+
+
+def _persist_state(live: _Live, state_json: str) -> None:
+    """체크포인트. 실행기 heartbeat 가 오래 끊긴 세션은 여기서 닫고(stopped) 루프도 멈춘다."""
+    from .runner import _append_events, notify_sessions_changed  # 늦은 import: runner ↔ runner_engine 순환 방지
+
+    with get_session() as db:
+        row = db.get(RunSession, live.session_id)
+        if row is None or row.status != "running":
+            live.stop_flag = True
+            return
+        row.state_json = state_json
+        now = datetime.now(timezone.utc)
+        if _runner_is_stale(row, now):
+            row.status = "stopped"
+            row.stopped_at = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+            row.note = STALE_RUNNER_NOTE
+            db.add(row)
+            _append_events(db, row, [{"ts": row.stopped_at, "kind": "stop",
+                                      "message": f"종료 · {STALE_RUNNER_NOTE}"
+                                                 + f" · 마지막 heartbeat {row.last_heartbeat_at or '없음'}"
+                                                 + (" · 포지션 보유 중" if row.in_position else "")}])
+            db.commit()
+            log.warning("runner engine: session %s runner stale (last heartbeat %s) — stopped session and driver",
+                        live.session_id, row.last_heartbeat_at)
+            live.stop_flag = True  # 루프의 finally 가 등록·구독을 정리한다
+            user_id = row.user_id
+        else:
+            db.add(row)
+            db.commit()
+            return
+    try:
+        notify_sessions_changed(user_id)
+    except Exception:
+        log.exception("runner engine: session %s stale-stop notify failed", live.session_id)
+
+
+def _persist_fill(live: _Live, fill: Fill, state_json: str) -> None:
+    from .runner import _append_events  # 늦은 import: runner ↔ runner_engine 순환 방지
+
+    with get_session() as db:
+        row = db.get(RunSession, live.session_id)
+        if row is None or row.status != "running":
+            live.stop_flag = True
+            return
+        cmd, created = upsert_command(db, row, command_from_fill(fill, live.driver.initial), _now_ms())
+        row.state_json = state_json
+        db.add(row)
+        if created:  # 중복(다른 프로세스가 이미 같은 명령을 남김)이면 신호 이벤트도 다시 쓰지 않는다
+            _append_events(db, row, [{"ts": _now_iso(), "kind": "signal",
+                                      "message": f"[신호 #{cmd.seq}] {cmd.reason} → {cmd.action.upper()} @ {fill.price:g}"}])
+        db.commit()
+
+
+# --- Fill → 명령 -----------------------------------------------------------
+def command_from_fill(fill: Fill, initial: float) -> dict:
+    """진입은 초기자본 대비 금액 비율, 청산은 직전 보유 수량 대비 비율(모르면 전량)."""
+    if fill.side in EXIT_SIDES:
+        frac = 1.0 if fill.qty_before <= 0 else min(1.0, fill.qty / fill.qty_before)
+        if frac >= 0.999:
+            frac = 1.0
+        return {"action": fill.side, "notional_frac": 0.0, "qty_frac": float(frac),
+                "signal_price": float(fill.price), "reason": fill.reason or "청산"}
+    notional = fill.qty * fill.price
+    return {"action": fill.side, "notional_frac": float(notional / initial) if initial > 0 else 0.0, "qty_frac": 0.0,
+            "signal_price": float(fill.price), "reason": fill.reason or "진입"}
+
+
+def upsert_command(db, row: RunSession, cmd: dict, now_ms: int) -> tuple[RunnerCommand, bool]:
+    """세션 안에서 seq 를 이어 pending 명령을 넣는다(flush 만, 커밋은 호출자). ``(행, 새로 넣었는지)``.
+
+    직전 명령이 같은 action·signal_price 이고 COMMAND_DEDUPE_SECONDS 안에 만들어졌으며 아직 살아 있으면(pending/acked)
+    같은 신호의 중복으로 보고 그 행을 그대로 돌려준다(롤링 배포 겹침 대비). failed/expired 는 다시 넣는다.
+    """
+    last = db.exec(select(RunnerCommand).where(RunnerCommand.session_id == row.id).order_by(RunnerCommand.seq.desc())).first()
+    if (
+        last is not None
+        and last.action == cmd["action"]
+        and float(last.signal_price) == float(cmd["signal_price"])
+        and last.status in ("pending", "acked")
+        and 0 <= now_ms - int(last.created_ms) <= int(COMMAND_DEDUPE_SECONDS * 1000)
+    ):
+        log.warning("runner engine: session %s duplicate %s @ %s within %ss — reusing command #%s",
+                    row.id, cmd["action"], cmd["signal_price"], COMMAND_DEDUPE_SECONDS, last.seq)
+        return last, False
+    item = RunnerCommand(session_id=row.id, seq=int(last.seq if last is not None else 0) + 1, action=cmd["action"],
+                         notional_frac=cmd["notional_frac"], qty_frac=cmd["qty_frac"], signal_price=cmd["signal_price"],
+                         reason=str(cmd["reason"])[:200], status="pending", created_at=_now_iso(), created_ms=now_ms,
+                         expires_ms=now_ms + int(COMMAND_TTL_SECONDS * 1000))
+    db.add(item)
+    db.flush()
+    return item, True
+
+
+def insert_command(db, row: RunSession, cmd: dict, now_ms: int) -> RunnerCommand:
+    """``upsert_command`` 의 행만 — 중복이면 기존 행이 돌아온다(호출자는 새 행이라고 가정하면 안 된다)."""
+    return upsert_command(db, row, cmd, now_ms)[0]
+
+
+def _view(c: RunnerCommand) -> dict:
+    # expires_ms 는 응답 형식 유지를 위해 항상 실린다. 서버는 진입(buy/short)만 이 시각에 만료시키고 청산(sell/cover)은
+    # ack 될 때까지 pending 으로 둔다 — 실행기 쪽에서는 청산의 expires_ms 를 만료 근거로 쓰면 안 된다.
+    return {"id": c.id, "seq": c.seq, "action": c.action, "notional_frac": c.notional_frac, "qty_frac": c.qty_frac,
+            "signal_price": c.signal_price, "reason": c.reason, "expires_ms": c.expires_ms}
+
+
+def pending_commands(db, row: RunSession, now_ms: int) -> List[dict]:
+    """TTL 지난 pending **진입** 은 expired 로 바꾸고, 남은 pending 을 seq 순으로 응답용 dict 로 돌려준다.
+
+    청산은 만료시키지 않는다 — 늦더라도 실제 포지션을 닫아야 하며, 만료로 버리면 실행기에 포지션이 남는다.
+    """
+    rows = db.exec(select(RunnerCommand).where(RunnerCommand.session_id == row.id, RunnerCommand.status == "pending")
+                   .order_by(RunnerCommand.seq.asc())).all()
+    out = []
+    for c in rows:
+        if c.action not in EXIT_SIDES and c.expires_ms <= now_ms:
+            c.status = "expired"
+            db.add(c)
+            continue
+        out.append(_view(c))
+    return out
+
+
+def apply_acks(db, row: RunSession, acks: list, now_ms: int) -> None:
+    """실행기의 실행 결과 보고. 성공은 acked, 청산 실패는 EXIT_RETRY_MAX 까지 재시도, 진입 실패는 바로 failed."""
+    from .runner import _append_events  # 늦은 import: runner ↔ runner_engine 순환 방지
+
+    if not isinstance(acks, list):
+        return
+    events = []
+    for ack in acks[:100]:
+        if not isinstance(ack, dict):
+            continue
+        try:
+            cmd = db.get(RunnerCommand, int(ack.get("command_id")))
+        except (TypeError, ValueError):
+            continue
+        if cmd is None or cmd.session_id != row.id:
+            continue
+        ok = bool(ack.get("ok"))
+        if cmd.status == "expired" and not ok:
+            continue  # 만료된 명령의 실패 보고는 의미 없다(이미 버린 신호)
+        if cmd.status not in ("pending", "expired"):
+            continue
+        # expired + ok: 실행기가 만료 직전에 이미 실행한 경우 — 실제 주문이 나갔으니 acked 로 기록한다.
+        cmd.attempts += 1
+        cmd.acked_at = _now_iso()
+        cmd.executed_qty = float(ack.get("executed_qty") or 0.0)
+        cmd.fill_price = float(ack.get("fill_price") or 0.0)
+        cmd.error = str(ack.get("error") or "")[:200]
+        if ok:
+            cmd.status = "acked"
+            if cmd.action in EXIT_SIDES and row.note == EXIT_FAIL_NOTE:
+                row.note = ""  # 재시도 끝에 청산이 됐다 — 실패 메모는 더 이상 사실이 아니다
+            events.append({"ts": cmd.acked_at, "kind": "order",
+                           "message": f"[주문 #{cmd.seq}] {cmd.action.upper()} 체결 {cmd.executed_qty:g} @ {cmd.fill_price:g} · {cmd.reason}"})
+        elif cmd.action in EXIT_SIDES and cmd.attempts < EXIT_RETRY_MAX:
+            cmd.status = "pending"
+            cmd.expires_ms = now_ms + int(COMMAND_TTL_SECONDS * 1000)
+            row.note = EXIT_FAIL_NOTE
+            events.append({"ts": cmd.acked_at, "kind": "error",
+                           "message": f"⚠ 청산 주문 실패({cmd.attempts}/{EXIT_RETRY_MAX}) — 다시 시도합니다 · {cmd.error}"})
+        elif cmd.action in EXIT_SIDES:
+            cmd.status = "failed"
+            row.note = EXIT_FAIL_NOTE
+            events.append({"ts": cmd.acked_at, "kind": "error",
+                           "message": f"⚠ 청산 주문이 {EXIT_RETRY_MAX}회 실패했어요 — 거래소에서 포지션을 확인해 주세요 · {cmd.error}"})
+        else:
+            cmd.status = "failed"
+            events.append({"ts": cmd.acked_at, "kind": "error",
+                           "message": f"⚠ 진입 실패 — 이번 사이클은 건너뜁니다 · {cmd.error}"})
+        db.add(cmd)
+    if events:
+        db.add(row)
+        _append_events(db, row, events)
+
+
+_MISMATCH_NOTED: set = set()  # session_id — 연속 중복 경고 방지(프로세스 메모리)
+
+
+def check_position_mismatch(db, row: RunSession, reported_in_position: bool) -> None:
+    """서버 전략의 포지션 유무와 실행기 보고가 다르면 한 번 경고. 다시 일치하면 다음 불일치에 또 1회.
+
+    명령이 pending 인 동안은 실행기가 아직 못 따라온 것뿐이라 비교하지 않는다.
+    """
+    from .paper import parse_state  # 늦은 import: paper ↔ runner_engine 순환 방지
+    from .runner import _append_events  # 늦은 import: runner ↔ runner_engine 순환 방지
+
+    state = parse_state(row.state_json)
+    if not state:
+        return
+    pending = db.exec(select(RunnerCommand.id).where(RunnerCommand.session_id == row.id, RunnerCommand.status == "pending")).first()
+    if pending is not None:
+        return
+    expected = bool(state.get("in_position"))
+    if expected == bool(reported_in_position):
+        _MISMATCH_NOTED.discard(row.id)
+        return
+    if row.id in _MISMATCH_NOTED:
+        return
+    _MISMATCH_NOTED.add(row.id)
+    _append_events(db, row, [{"ts": _now_iso(), "kind": "warn",
+                              "message": ("서버 전략은 포지션 보유 중인데 실행기는 비어 있어요" if expected
+                                          else "서버 전략은 비어 있는데 실행기는 포지션을 들고 있어요")
+                                         + " — 거래소 포지션을 확인해 주세요."}])
+
+
+# --- 재기동 복구 -------------------------------------------------------------
+def _running_v8_ids() -> List[int]:
+    from .runner import supports_signals  # 늦은 import: runner ↔ runner_engine 순환 방지
+
+    with get_session() as db:
+        rows = db.exec(select(RunSession.id, RunSession.runner_version).where(RunSession.status == "running")).all()
+    return [int(sid) for sid, ver in rows if supports_signals(str(ver or ""))]
+
+
+async def resume_running_runner_sessions() -> int:
+    """서버 재기동 — running 상태의 v8+ 세션 드라이버를 state_json 에서 되살린다."""
+    count = 0
+    for sid in await asyncio.to_thread(_running_v8_ids):
+        try:
+            if await start_driver(sid):
+                count += 1
+        except Exception:
+            log.exception("runner engine resume: session %s failed", sid)
+    if count:
+        log.info("runner engine resume: revived %d session(s)", count)
+    return count

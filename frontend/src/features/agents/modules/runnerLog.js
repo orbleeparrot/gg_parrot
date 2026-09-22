@@ -9,19 +9,20 @@ const KIND_LABEL = {
   fill: "체결",
   error: "오류",
   stop: "종료",
+  warn: "주의",
 };
 
 function severityFor(kind) {
   if (kind === "error") return "critical";
   if (kind === "order" || kind === "fill") return "signal";
-  if (kind === "stop") return "warning";
+  if (kind === "stop" || kind === "warn") return "warning";
   return "info";
 }
 
 function expressionFor(kind) {
   if (kind === "error") return "critical";
   if (kind === "order" || kind === "fill") return "signal";
-  if (kind === "stop") return "warning";
+  if (kind === "stop" || kind === "warn") return "warning";
   if (kind === "start") return "focused";
   return "calm";
 }

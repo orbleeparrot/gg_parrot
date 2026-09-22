@@ -7,7 +7,9 @@ candles, look-ahead bias is structurally impossible for the indicator types:
 
   * Indicator types (F/G/J): the signal is decided on a bar's CLOSE and the fill
     happens at the NEXT bar's OPEN (a one-bar ``_pending`` order). Never on the
-    in-progress bar.
+    in-progress bar. Live (``LiveCandleSim``) executes that pending order on the
+    first tick after the closed bar arrives via ``execute_pending`` — same "next
+    open" semantics, seconds instead of a full interval late.
   * Price-level types (D/E/H/I): levels are known in advance, so fills happen
     intrabar against the bar high/low. When a long bar touches both a take-profit
     (high) and a stop-loss (low) in the same candle, the stop wins (conservative)
@@ -20,7 +22,6 @@ All sims expose the same tiny contract used by both drivers::
 """
 from __future__ import annotations
 
-import os
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -28,7 +29,7 @@ from typing import Deque, List, Optional
 
 from .leverage import liquidation_price
 from .schema import Macro, PositionSide, RuleType
-from .stepper import Fill, buy_fill, sell_fill
+from .stepper import Fill, _fill_meta, buy_fill, sell_fill
 
 
 # --- incremental indicators (shared by backtest + paper) ----------------
@@ -198,6 +199,36 @@ class CandleSim:
             "halted_today": self._halted_day is not None and self._halted_day == self._day,
         }
 
+    # -- 실봉 웜업 ---------------------------------------------------------
+    def reset_book(self) -> None:
+        """장부·포지션·공통 리스크 상태를 시작값으로. 지표 상태는 건드리지 않는다(웜업용)."""
+        self.cash = self.initial_capital
+        self.lots = []
+        self.closed_trades = []
+        self.same_bar_sl = 0
+        self.liquidations = 0
+        self.liquidated_loss = 0.0
+        self._day = None
+        self._day_start_equity = self.initial_capital
+        self._halted_day = None
+        self._cooldown_until = None
+        self._entry_time = None
+        self.stopped = False
+        self._reset_position_state()
+
+    def _reset_position_state(self) -> None:
+        """포지션이 있어야 의미 있는 전략 상태를 되돌린다. 기본은 없음 — 하위 sim 이 덮어쓴다."""
+
+    def warmup(self, candles) -> None:
+        """과거 마감봉으로 지표·전략 상태를 채운다. 그동안의 가상 체결은 버리고 장부만 되돌린다.
+
+        _IndicatorSim 의 ``_pending`` 은 남긴다 — 백테스트가 다음 봉 시가에 실행하는 의도와 같다.
+        """
+        for t_ms, o, h, l, c in candles:
+            ts = datetime.fromtimestamp(int(t_ms) / 1000, timezone.utc)
+            self.on_candle(float(o), float(h), float(l), float(c), ts)
+        self.reset_book()
+
     def restore(self, equity: float, *, in_position: bool, qty: float, entry_price: float,
                 last_price: float, cooldown_until_ms: Optional[int] = None) -> None:
         """재기동 복구 — 마지막 체크포인트의 자산·포지션에서 이어 간다.
@@ -220,16 +251,17 @@ class CandleSim:
             datetime.fromtimestamp(cooldown_until_ms / 1000, timezone.utc) if cooldown_until_ms else None
         )
 
-    def _fill(self, side: str, price: float, qty: float, mark: float) -> Fill:
+    def _fill(self, side: str, price: float, qty: float, mark: float, reason: str = "") -> Fill:
         eq = self.equity(mark)
         ret = (eq - self.initial_capital) / self.initial_capital * 100.0
-        return Fill(side=side, price=price, qty=qty, equity_after=eq, return_pct=ret)
+        return Fill(side=side, price=price, qty=qty, equity_after=eq, return_pct=ret,
+                    **_fill_meta(side, qty, abs(self.total_qty()), reason))
 
     # -- long open / short open / close ----------------------------------
     # ``margin`` is the equity the caller commits; the position controls
     # ``margin × leverage`` of notional. At leverage 1 the two are equal, so the
     # cash math below is byte-for-byte the old spot behaviour.
-    def _open_long(self, margin: float, close: float, ts: datetime, mark: float) -> Optional[Fill]:
+    def _open_long(self, margin: float, close: float, ts: datetime, mark: float, *, reason: str = "진입") -> Optional[Fill]:
         margin = min(margin, self.cash)
         if margin <= 1e-9:
             return None
@@ -240,9 +272,9 @@ class CandleSim:
         self.lots.append(_Lot(qty=qty, fill=f, margin=margin))
         if self._entry_time is None:
             self._entry_time = ts
-        return self._fill("buy", f, qty, mark)
+        return self._fill("buy", f, qty, mark, reason)
 
-    def _open_short(self, close: float, ts: datetime, mark: float) -> Optional[Fill]:
+    def _open_short(self, close: float, ts: datetime, mark: float, *, reason: str = "진입") -> Optional[Fill]:
         margin = self.invest_ratio * self.cash
         if margin <= 1e-9:
             return None
@@ -252,9 +284,9 @@ class CandleSim:
         self.cash -= notional * self.comm / 100.0
         self.lots.append(_Lot(qty=qty, fill=f, margin=margin))
         self._entry_time = ts
-        return self._fill("short", f, qty, mark)
+        return self._fill("short", f, qty, mark, reason)
 
-    def _close_all(self, close: float, mark: float, *, is_stop: bool, ts: datetime) -> Optional[Fill]:
+    def _close_all(self, close: float, mark: float, *, is_stop: bool, ts: datetime, reason: Optional[str] = None) -> Optional[Fill]:
         if not self.in_position():
             return None
         qty = self.total_qty()
@@ -278,7 +310,7 @@ class CandleSim:
         self._entry_time = None
         if is_stop and self.cooldown_minutes > 0:
             self._cooldown_until = ts + timedelta(minutes=self.cooldown_minutes)
-        return self._fill(side, f, qty, mark)
+        return self._fill(side, f, qty, mark, reason if reason is not None else ("손절" if is_stop else "청산"))
 
     def _reduce_long(self, fraction: float, close: float, mark: float, ts: datetime) -> Optional[Fill]:
         """Sell ``fraction`` (0<f<=1) of the long book at ``close``.
@@ -306,7 +338,7 @@ class CandleSim:
         self.lots = [l for l in self.lots if l.qty > 1e-12]
         if not self.lots:
             self._entry_time = None
-        return self._fill("sell", f, sold_qty, mark)
+        return self._fill("sell", f, sold_qty, mark, "부분 청산")
 
     def _liquidate_all(self, px: float, mark: float, ts: datetime) -> Optional[Fill]:
         """Isolated liquidation: the whole committed margin is lost (전액 손실).
@@ -330,7 +362,7 @@ class CandleSim:
         self._entry_time = None
         if self.cooldown_minutes > 0:
             self._cooldown_until = ts + timedelta(minutes=self.cooldown_minutes)
-        return self._fill(side, px, qty, mark)
+        return self._fill(side, px, qty, mark, "강제 청산")
 
     # -- common risk ------------------------------------------------------
     def _entry_blocked(self, ts: datetime) -> bool:
@@ -435,6 +467,11 @@ class TrailingSim(CandleSim):
         self._armed = False
         self._ref: Optional[float] = None  # reference for dip entry
 
+    def _reset_position_state(self) -> None:
+        self._peak = 0.0
+        self._armed = False
+        self._ref = None
+
     def _strategy(self, o, h, l, c, ts, fills):
         if self._common_risk(o, h, l, c, ts, fills):
             if not self.reenter:
@@ -498,6 +535,9 @@ class GridSim(CandleSim):
         # holdings[i] = lot bought at level i, awaiting sell at level i+1
         self.holdings: dict[int, _Lot] = {}
 
+    def _reset_position_state(self) -> None:
+        self.holdings = {}
+
     def _strategy(self, o, h, l, c, ts, fills):
         # Stop-loss / daily / holding first (may liquidate whole book).
         if self._common_risk(o, h, l, c, ts, fills):
@@ -528,7 +568,7 @@ class GridSim(CandleSim):
                 self.cash += lot.margin + lot.qty * (f - lot.fill) - exit_comm
                 self.closed_trades.append(lot.qty * (f - lot.fill) - exit_comm)
                 self._remove_lot(lot)
-                fills.append(self._fill("sell", f, lot.qty, c))
+                fills.append(self._fill("sell", f, lot.qty, c, f"격자 {sell_level:g} 도달 · 매도"))
         # Buys: any buy level reached by low that we don't already hold. ``per_grid``
         # is the committed margin; the lot controls ``per_grid × leverage`` notional.
         for i in range(len(self.levels) - 1):
@@ -569,6 +609,10 @@ class MartingaleSim(CandleSim):
         self.tp = float(self.p["take_profit"])
         self._so_done = 0
         self._base_price = 0.0  # price of the base order (deviation reference)
+
+    def _reset_position_state(self) -> None:
+        self._so_done = 0
+        self._base_price = 0.0
 
     def _next_so_price(self) -> float:
         # cumulative deviation with step scaling
@@ -640,13 +684,28 @@ class BreakoutSim(CandleSim):
         self._peak = 0.0
         self._exit_next_open = False
 
-    def _strategy(self, o, h, l, c, ts, fills):
-        # next_open exit: close yesterday's breakout at today's open.
+    def _reset_position_state(self) -> None:
+        self._peak = 0.0
+        self._exit_next_open = False
+
+    def execute_pending(self, price: float, ts: datetime) -> List[Fill]:
+        """어제 돌파 진입의 '다음 봉 시가 청산' 을 ``price`` 에 실행하고 플래그를 지운다.
+
+        백테스트는 다음 봉의 시가(``_strategy`` 의 ``o``)로 부르고, 실시간(LiveCandleSim.step)은 봉이
+        도착한 뒤 첫 3초 틱 가격으로 부른다 — 마감봉만 오는 실시간에서 다음 ``on_candle`` 을 기다리면
+        한 간격을 통째로 늦게 체결하기 때문이다.
+        """
+        fills: List[Fill] = []
         if self._exit_next_open and self.in_position():
-            f = self._close_all(o, o, is_stop=False, ts=ts)
+            f = self._close_all(price, price, is_stop=False, ts=ts)
             if f:
                 fills.append(f)
-            self._exit_next_open = False
+        self._exit_next_open = False
+        return fills
+
+    def _strategy(self, o, h, l, c, ts, fills):
+        # next_open exit: close yesterday's breakout at today's open.
+        fills += self.execute_pending(o, ts)
 
         if self._common_risk(o, h, l, c, ts, fills):
             self._exit_next_open = False
@@ -697,21 +756,36 @@ class _IndicatorSim(CandleSim):
         super().__init__(macro, initial_capital)
         self._pending: Optional[str] = None  # "enter" | "exit" | None
         self.tp = self.p.get("take_profit")
+        self._signal_note = ""  # 마지막 판정의 한 줄 근거 — Fill.reason 에 실린다
 
-    def _strategy(self, o, h, l, c, ts, fills):
-        # 1) execute the pending decision from the previous closed bar, at open.
+    def execute_pending(self, price: float, ts: datetime, mark: Optional[float] = None) -> List[Fill]:
+        """직전 마감봉에서 정한 ``_pending`` 의도를 ``price`` 에 실행하고 의도를 지운다.
+
+        백테스트는 다음 봉의 시가(``_strategy`` 의 ``o``)로 부른다. 실시간(LiveCandleSim.step)은 마감봉만
+        받으므로 다음 ``on_candle`` 을 기다리면 한 간격을 통째로 늦게 체결한다 — 봉이 도착한 뒤 첫 3초 틱
+        가격으로 불러 "다음 시가" 의미를 몇 초 안에 맞춘다. ``mark`` 는 Fill 의 평가 기준가(기본 ``price``).
+        """
+        mark = price if mark is None else mark
+        fills: List[Fill] = []
         if self._pending == "exit" and self.in_position():
-            f = self._close_all(o, o, is_stop=False, ts=ts)
+            f = self._close_all(price, price, is_stop=False, ts=ts,
+                                reason=f"{self._signal_note} · 청산" if self._signal_note else None)
             if f:
                 fills.append(f)
         elif self._pending == "enter" and not self.in_position() and not self._entry_blocked(ts):
+            reason = f"{self._signal_note} · 진입" if self._signal_note else "진입"
             if self.side is PositionSide.SHORT:
-                f = self._open_short(o, ts, c)
+                f = self._open_short(price, ts, mark, reason=reason)
             else:
-                f = self._open_long(self.invest_ratio * self.cash, o, ts, c)
+                f = self._open_long(self.invest_ratio * self.cash, price, ts, mark, reason=reason)
             if f:
                 fills.append(f)
         self._pending = None
+        return fills
+
+    def _strategy(self, o, h, l, c, ts, fills):
+        # 1) execute the pending decision from the previous closed bar, at open (mark = close, as before).
+        fills += self.execute_pending(o, ts, mark=c)
 
         # 2) common risk (stop-loss / daily / holding) intrabar.
         if self._common_risk(o, h, l, c, ts, fills):
@@ -763,9 +837,11 @@ class RSISim(_IndicatorSim):
         self._exit_streak = self._exit_streak + 1 if exit_hit else 0
         if not self.in_position():
             if self._entry_streak >= self.confirm:
+                self._signal_note = f"RSI {v:.1f} {'≥' if short else '≤'} {self.exit_th if short else self.entry_th:g}"
                 self._pending = "enter"
         else:
             if self.exit_mode in ("indicator", "both") and self._exit_streak >= self.confirm:
+                self._signal_note = f"RSI {v:.1f} {'≤' if short else '≥'} {self.entry_th if short else self.exit_th:g}"
                 self._pending = "exit"
 
 
@@ -799,6 +875,7 @@ class BollingerSim(_IndicatorSim):
                 short_entry = close <= lower
             hit = short_entry if short else long_entry
             if hit and squeezed:
+                self._signal_note = f"볼린저 {'상단' if short else '하단'} {(upper if short else lower):.4g} 이탈"
                 self._pending = "enter"
         else:
             if self.exit_target == "mid":
@@ -806,6 +883,8 @@ class BollingerSim(_IndicatorSim):
             else:  # opposite band
                 exit_hit = close >= upper if not short else close <= lower
             if exit_hit:
+                level = mid if self.exit_target == "mid" else (upper if not short else lower)
+                self._signal_note = f"볼린저 {'중심' if self.exit_target == 'mid' else ('하단' if short else '상단')} {level:.4g} 도달"
                 self._pending = "exit"
 
 
@@ -840,9 +919,11 @@ class MACrossSim(_IndicatorSim):
         exit_now = self._golden_streak >= self.confirm if short else self._dead_streak >= self.confirm
         if not self.in_position():
             if enter_now:
+                self._signal_note = "데드크로스" if short else "골든크로스"
                 self._pending = "enter"
         else:
             if self.exit_signal in ("dead_cross", "both") and exit_now:
+                self._signal_note = "골든크로스" if short else "데드크로스"
                 self._pending = "exit"
 
 
@@ -883,6 +964,9 @@ class SarSim(CandleSim):
         self.reenter = bool(self.p.get("reenter_long_after", True))
         self._phase = "long"  # "long" | "short"
         self._defended = False  # partial exit already taken for the current long leg
+
+    def _reset_position_state(self) -> None:
+        self._reset_after_flat()
 
     def _reset_after_flat(self) -> None:
         self.side = PositionSide.LONG
@@ -991,46 +1075,39 @@ def make_candle_sim(macro: Macro, initial_capital: Optional[float] = None) -> Ca
     return cls(macro, initial_capital=initial_capital)
 
 
-# --- paper adapter: aggregate live ticks into candles -------------------
-# Indicator/level strategies are candle-based, but paper trading receives one
-# tick at a time. This wrapper builds synthetic candles from N consecutive
-# ticks and evaluates the sim on candle CLOSE only (never intra-candle), which
-# is exactly the "봉 마감 기준" rule the spec asks for in real time. Fills are
-# queued so the paper loop can drain them one per tick, matching its interface.
-_TICKS_PER_CANDLE = max(1, int(os.environ.get("PAPER_CANDLE_TICKS", "3")))
+# --- paper/runner adapter: real closed candles ---------------------------
+# 캔들형 전략은 봉 마감에만 판단한다. 실시간에서는 CandleFeed 가 바이낸스 마감봉을 밀어 주고
+# (on_candle), 3초 틱은 평가 갱신과 체결 큐 드레인만 한다(step). 이전의 "3틱=1봉" 합성은 없다.
+class LiveCandleSim:
+    """Wrap a :class:`CandleSim` behind the stepper's ``step(price)`` contract, fed by real candles."""
 
-
-class CandleAggregatorSim:
-    """Wrap a :class:`CandleSim` behind the stepper's ``step(price)`` contract."""
-
-    def __init__(self, macro: Macro, initial_capital: Optional[float] = None,
-                 ticks_per_candle: int = _TICKS_PER_CANDLE) -> None:
+    def __init__(self, macro: Macro, initial_capital: Optional[float] = None) -> None:
         self.inner = make_candle_sim(macro, initial_capital=initial_capital)
-        self.n = ticks_per_candle
-        self._o: Optional[float] = None
-        self._h = 0.0
-        self._l = 0.0
-        self._c = 0.0
-        self._count = 0
         self._queue: deque[Fill] = deque()
 
     def step(self, price: float, ts: Optional[datetime] = None) -> Optional[Fill]:
-        if self._o is None:
-            self._o = self._h = self._l = self._c = price
-        else:
-            self._h = max(self._h, price)
-            self._l = min(self._l, price)
-            self._c = price
-        self._count += 1
-        if self._count >= self.n:
-            # Caller-supplied sim-time (paper replay uses a virtual clock so
-            # time-based rules are demonstrable); fall back to wall-clock.
-            when = ts if ts is not None else datetime.now(timezone.utc)
-            for f in self.inner.on_candle(self._o, self._h, self._l, self._c, when):
-                self._queue.append(f)
-            self._o = None
-            self._count = 0
+        """큐의 Fill 하나를 꺼내 준다. 큐가 비었고 sim 에 '다음 시가' 의도가 걸려 있으면 이 틱 가격에 실행한다.
+
+        마감봉만 오는 실시간에서는 봉 N 마감에 정한 의도를 봉 N+1 의 on_candle 까지 기다리면 한 간격
+        늦게(N+1 마감 무렵) 체결된다. 봉이 온 뒤 첫 틱(≈ N+1 시가)에 실행해 백테스트의 "다음 시가" 와 맞춘다.
+        """
+        if not self._queue:
+            execute = getattr(self.inner, "execute_pending", None)
+            if execute is not None:
+                self._queue.extend(execute(float(price), ts or datetime.now(timezone.utc)))
         return self._queue.popleft() if self._queue else None
+
+    def on_candle(self, o: float, h: float, l: float, c: float, ts: datetime) -> int:
+        fills = self.inner.on_candle(o, h, l, c, ts)
+        self._queue.extend(fills)
+        return len(fills)
+
+    def pending(self) -> int:
+        return len(self._queue)
+
+    def warmup(self, candles) -> None:
+        self.inner.warmup(candles)
+        self._queue.clear()
 
     def equity(self, price: float) -> float:
         return self.inner.equity(price)
@@ -1038,12 +1115,10 @@ class CandleAggregatorSim:
     def state(self) -> dict:
         return self.inner.state()
 
-    def restore(self, equity: float, **position) -> None:
-        self.inner.restore(equity, **position)
-
-    @property
-    def initial_capital(self) -> float:
-        return self.inner.initial_capital
+    def restore(self, equity: float, *, in_position: bool, qty: float, entry_price: float,
+                last_price: float, cooldown_until_ms: Optional[int] = None) -> None:
+        self.inner.restore(equity, in_position=in_position, qty=qty, entry_price=entry_price,
+                           last_price=last_price, cooldown_until_ms=cooldown_until_ms)
 
     @property
     def liquidations(self) -> int:

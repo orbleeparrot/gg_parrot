@@ -1,4 +1,5 @@
 import unittest
+from collections import deque
 from unittest.mock import Mock, patch
 
 from runner.test_macro_runner_single_instance import macro_runner
@@ -29,8 +30,10 @@ class RunnerExecutionTests(unittest.TestCase):
         bot.set_command = Mock()
         bot._sleep = Mock()
         bot.server = Mock()
-        bot.server.heartbeat.return_value = "continue"
+        bot.server.heartbeat.return_value = {"action": "continue", "commands": []}
         bot.on_status, bot.on_finish = Mock(), Mock()
+        bot.capital, bot.pending_acks, bot._offline_logged = 500.0, [], False
+        bot._done_command_ids = deque(maxlen=200)
 
     def test_ack_is_not_a_confirmed_fill(self):
         bot = self.bot()
@@ -56,37 +59,65 @@ class RunnerExecutionTests(unittest.TestCase):
         self.assertEqual(bot.held_qty, 0)
         self.assertEqual(bot.realized, 12)
 
+    BUY = {"id": 1, "action": "buy", "notional_frac": 1.0, "qty_frac": 0.0, "reason": "진입"}
+    SELL = {"id": 2, "action": "sell", "notional_frac": 0.0, "qty_frac": 1.0, "reason": "청산"}
+
+    def test_no_server_command_means_no_order(self):
+        bot = self.bot()
+        bot.in_position, bot.held_qty, bot.entry_price = False, 0, 0
+        self.prepare_run(bot)
+        bot.run()
+        bot.client.futures_create_order.assert_not_called()
+        snapshot = bot.server.stopped.call_args.kwargs["snapshot"]
+        self.assertFalse(snapshot["in_position"])
+
     def test_entry_snapshot_uses_exchange_fill_instead_of_quote_and_requested_qty(self):
         bot = self.bot()
         bot.in_position, bot.held_qty, bot.entry_price = False, 0, 0
         self.prepare_run(bot)
+        bot.server.heartbeat.return_value = {"action": "continue", "commands": [self.BUY]}
         bot.client.futures_create_order.return_value = {"status": "FILLED", "executedQty": "0.75", "avgPrice": "106"}
-        with patch.object(macro_runner, "_should_enter", return_value=True):
-            bot.run()
+        bot.run()
         snapshot = bot.server.stopped.call_args.kwargs["snapshot"]
         self.assertTrue(snapshot["in_position"])
         self.assertEqual(snapshot["entry_price"], 106)
         self.assertEqual(snapshot["position_qty"], .75)
+        self.assertEqual(bot.pending_acks[0]["command_id"], 1)
+        self.assertTrue(bot.pending_acks[0]["ok"])
+        self.assertEqual(bot.pending_acks[0]["executed_qty"], .75)
 
-    def test_automatic_exit_uses_confirmed_fill_for_final_pnl(self):
+    def test_server_exit_uses_confirmed_fill_for_final_pnl(self):
         bot = self.bot()
         self.prepare_run(bot)
+        bot.server.heartbeat.return_value = {"action": "continue", "commands": [self.SELL]}
         bot.client.futures_create_order.return_value = {"status": "FILLED", "executedQty": "2", "avgPrice": "106"}
-        with patch.object(macro_runner, "_should_exit", return_value=True):
-            bot.run()
+        bot.run()
         snapshot = bot.server.stopped.call_args.kwargs["snapshot"]
         self.assertFalse(snapshot["in_position"])
         self.assertEqual(snapshot["position_qty"], 0)
         self.assertEqual(snapshot["realized_pnl"], 12)
+        self.assertEqual(bot.pending_acks[0]["fill_price"], 106)
+
+    def test_local_stop_loss_exit_uses_confirmed_fill_for_final_pnl(self):
+        bot = self.bot()
+        self.prepare_run(bot)
+        bot.macro["risk"]["stop_loss_pct"] = 3
+        bot._price.return_value = 96.0
+        bot.client.futures_create_order.return_value = {"status": "FILLED", "executedQty": "2", "avgPrice": "95"}
+        bot.run()
+        snapshot = bot.server.stopped.call_args.kwargs["snapshot"]
+        self.assertFalse(snapshot["in_position"])
+        self.assertEqual(snapshot["realized_pnl"], -10)
+        self.assertEqual(bot.pending_acks, [])  # 로컬 손절은 서버 명령이 아니므로 ack 가 없다
 
     def test_ambiguous_entry_never_reports_flat_and_never_submits_again(self):
         bot = self.bot()
         bot.in_position, bot.held_qty, bot.entry_price = False, 0, 0
         self.prepare_run(bot)
+        bot.server.heartbeat.return_value = {"action": "continue", "commands": [self.BUY]}
         bot.client.futures_create_order.side_effect = TimeoutError()
         bot.client.futures_get_order.side_effect = TimeoutError()
-        with patch.object(macro_runner, "_should_enter", return_value=True):
-            bot.run()
+        bot.run()
         self.assertEqual(bot.server.stopped.call_args.args[0], "error")
         snapshot = bot.server.stopped.call_args.kwargs["snapshot"]
         self.assertTrue(snapshot["in_position"])
@@ -210,8 +241,10 @@ class RunnerExecutionTests(unittest.TestCase):
         bot._price.side_effect = RuntimeError("price source offline")
         bot._sleep = Mock()
         bot.server = Mock()
-        bot.server.heartbeat.return_value = "stop_only"
+        bot.server.heartbeat.return_value = {"action": "stop_only", "commands": []}
         bot.on_status, bot.on_finish = Mock(), Mock()
+        bot.capital, bot.pending_acks, bot._offline_logged = 500.0, [], False
+        bot._done_command_ids = deque(maxlen=200)
         bot.run()
         bot.server.heartbeat.assert_called_once()
         bot.set_command.assert_called_once_with("stop_only")

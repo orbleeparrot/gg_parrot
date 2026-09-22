@@ -33,9 +33,16 @@ from sqlmodel import Session, select
 from .data import ensure_spot_available, get_klines, get_ticker_price_cached
 from .db import PaperSession, PaperTrade, get_session
 from .engine import Macro, RuleType
+from .engine.candle_feed import feed  # 모듈 이름으로 참조 — 테스트가 monkeypatch 한다
+from .engine.driver import Leg, StrategyDriver, sim_state  # noqa: F401 (sim_state 재export)
 from .engine.stepper import make_sim
 
+# 시뮬레이션 코어(레그·틱·체결 요약·상태)는 engine.driver 로 옮겼다. 여기서는 DB·체크포인트·
+# 리더보드 관심사만 남기고, 옛 이름들은 테스트 호환용 별칭·래퍼로 유지한다.
+_Leg = Leg
+
 POLL_SECONDS = float(os.environ.get("PAPER_POLL_SECONDS", "3"))
+WARMUP_CANDLES = 500  # MA slow_period ≤ 400 을 덮는다
 REPLAY_SECONDS = float(os.environ.get("PAPER_REPLAY_SECONDS", "0.4"))
 REPLAY_HOURS = int(os.environ.get("PAPER_REPLAY_HOURS", "6"))
 CHECKPOINT_SECONDS = max(1.0, float(os.environ.get("PAPER_CHECKPOINT_SECONDS", "10")))
@@ -64,36 +71,6 @@ def _synthetic_intraday(symbol: str, n: int = 360) -> List[float]:
     return out
 
 
-class _Leg:
-    """One symbol of a session: its own sim and its share of the capital."""
-
-    __slots__ = (
-        "symbol", "sim", "initial", "last_price", "equity", "ret",
-        "liquidations", "liquidated_loss", "replay_prices",
-    )
-
-    def __init__(self, symbol: str, sim, initial: float):
-        self.symbol = symbol
-        self.sim = sim
-        self.initial = initial
-        self.last_price = 0.0
-        self.equity = initial
-        self.ret = 0.0
-        self.liquidations = 0
-        self.liquidated_loss = 0.0
-        self.replay_prices: List[float] = []
-
-    def view(self) -> dict:
-        return {
-            "symbol": self.symbol,
-            "virtual_balance": round(self.initial, 2),
-            "current_equity": round(self.equity, 2),
-            "current_return": round(self.ret, 4),
-            "last_price": round(self.last_price, 4),
-            "liquidations": self.liquidations,
-        }
-
-
 class _Runner:
     def __init__(
         self,
@@ -103,36 +80,39 @@ class _Runner:
         mode: str,
         initial: float,
         *,
-        legs: Optional[List[_Leg]] = None,
+        legs: Optional[List[Leg]] = None,
     ):
         self.session_id = session_id
         # Single-symbol callers pass (sim, symbol, initial); a portfolio passes
         # its legs and `initial` is the total. The first leg is the primary
         # symbol so every existing single-symbol accessor keeps working.
-        self.legs: List[_Leg] = legs if legs else [_Leg(symbol, sim, initial)]
-        self.sim = self.legs[0].sim
-        self.symbol = self.legs[0].symbol
+        # 시뮬레이션 코어는 드라이버가 들고, 러너는 세션 수명(루프·체크포인트·종료)만 챙긴다.
+        self.driver = StrategyDriver(legs if legs else [Leg(symbol, sim, initial)], initial)
         self.mode = mode
         self.initial = initial
         self.stop_flag = False
+        self.subs: list = []  # 마감봉 피드 구독 — 캔들형만 채워진다(_attach_feed/_detach_feed)
         self.task: Optional[asyncio.Task] = None
-        self.last_price = 0.0
-        self.equity = initial
-        self.ret = 0.0
         self.status = "running"
         self.recent: List[dict] = []
-        self.liquidations = 0
-        self.liquidated_loss = 0.0
         self.last_checkpoint_monotonic = time.monotonic()
         self.finalize_lock: Optional[asyncio.Lock] = None
         self.finalized = False
         self.inflight_persist: Optional[asyncio.Task] = None
-        # 리더보드 행 상태용 체결 요약 — _note_fill 이 채우고 _state_view 가 읽는다.
-        self.trade_count = 0
-        self.last_fill: Optional[dict] = None
-        # 종목별 진입 시점 누적 수익률 — Fill.return_pct 는 세션 누적값이라 포트폴리오에서
-        # 다른 레그의 진입과 섞이지 않도록 심볼로 나눠 둔다.
-        self.entry_returns: Dict[str, float] = {}
+
+    # 드라이버 위임 — 테스트·상태 뷰가 옛 이름으로 읽고, 일부는 대입도 한다.
+    legs = property(lambda self: self.driver.legs)
+    sim = property(lambda self: self.driver.sim)
+    symbol = property(lambda self: self.driver.symbol)
+    symbols = property(lambda self: self.driver.symbols)
+    last_price = property(lambda self: self.driver.last_price)
+    equity = property(lambda self: self.driver.equity)
+    ret = property(lambda self: self.driver.ret)
+    liquidations = property(lambda self: self.driver.liquidations)
+    liquidated_loss = property(lambda self: self.driver.liquidated_loss)
+    trade_count = property(lambda self: self.driver.trade_count, lambda self, v: setattr(self.driver, "trade_count", v))
+    last_fill = property(lambda self: self.driver.last_fill, lambda self, v: setattr(self.driver, "last_fill", v))
+    entry_returns = property(lambda self: self.driver.entry_returns, lambda self, v: setattr(self.driver, "entry_returns", v))
 
     @property
     def replay_prices(self) -> List[float]:
@@ -142,20 +122,11 @@ class _Runner:
     def replay_prices(self, prices: List[float]) -> None:
         self.legs[0].replay_prices = prices
 
-    @property
-    def symbols(self) -> List[str]:
-        return [leg.symbol for leg in self.legs]
-
     def is_portfolio(self) -> bool:
-        return len(self.legs) > 1
+        return self.driver.is_portfolio()
 
-    def leg_for(self, symbol: Optional[str]) -> _Leg:
-        if symbol is None:
-            return self.legs[0]
-        for leg in self.legs:
-            if leg.symbol == symbol:
-                return leg
-        raise KeyError(symbol)
+    def leg_for(self, symbol: Optional[str]) -> Leg:
+        return self.driver.leg_for(symbol)
 
 
 _running: Dict[int, _Runner] = {}
@@ -165,6 +136,53 @@ def _session_initial(macro: Macro) -> float:
     if macro.rule_type is RuleType.C:
         return 1_000_000.0
     return float(macro.initial_capital or 1_000_000.0)
+
+
+# --- 마감봉 피드 ----------------------------------------------------------
+async def _attach_feed(runner: _Runner) -> None:
+    """캔들형 세션: 과거 마감봉으로 웜업하고 새 마감봉을 구독한다. 틱형은 아무것도 하지 않는다."""
+    keys = runner.driver.candle_keys()
+    if not keys:
+        return
+    history: Dict[str, list] = {}
+    for symbol, interval, market in keys:
+        try:
+            history[symbol] = await feed.history(symbol, interval, market, WARMUP_CANDLES)
+        except Exception:
+            log.exception("paper %s: warmup history failed for %s — starting cold", runner.session_id, symbol)
+    runner.driver.warmup(history)
+
+    async def on_candle(symbol: str, candle) -> None:
+        if runner.stop_flag:
+            return
+        runner.driver.push_candle(symbol, candle)
+
+    subs = []
+    for symbol, interval, market in keys:
+        hist = history.get(symbol)
+        since_t = hist[-1][0] if hist else None  # Candle.t — 인덱스로 읽어 테스트 더미(tuple)도 받는다
+        subs.append(feed.subscribe(symbol, interval, market, on_candle, since_t=since_t))
+    runner.subs = subs
+
+
+def _detach_feed(runner: _Runner) -> None:
+    for sub in getattr(runner, "subs", []):
+        try:
+            feed.unsubscribe(sub)
+        except Exception:
+            log.exception("paper %s: unsubscribe failed", runner.session_id)
+    runner.subs = []
+
+
+async def _attach_feed_for_resume(runner: _Runner, info: dict) -> None:
+    """복구는 웜업 → 복구 순서다: 웜업이 장부를 비우므로 체크포인트 상태를 그 뒤에 얹는다."""
+    await _attach_feed(runner)
+    if runner.driver.candle_keys():
+        runner.driver.restore(
+            info["state"],
+            leg_equity={leg.get("symbol"): float(leg.get("current_equity") or 0.0) for leg in info["legs"]},
+            total_equity=float(info["current_equity"] or 0.0),
+        )
 
 
 # --- lifecycle ----------------------------------------------------------
@@ -182,17 +200,20 @@ async def start_session(macro: Macro, symbol: Optional[str], mode: str) -> dict:
         await asyncio.to_thread(ensure_spot_available, sym)
     initial = _session_initial(macro)
     per_leg = initial / len(symbols)
-    legs: List[_Leg] = []
+    legs: List[Leg] = []
     for sym in symbols:
         leg_macro = macro.for_symbol(sym, per_leg) if len(symbols) > 1 else macro
-        legs.append(_Leg(sym, make_sim(leg_macro, initial_capital=per_leg), per_leg))
+        legs.append(Leg(sym, make_sim(leg_macro, initial_capital=per_leg), per_leg))
 
     session_id = await asyncio.to_thread(_create_session, macro, symbols[0], mode, initial)
 
     runner = _Runner(session_id, legs[0].sim, symbols[0], mode, initial, legs=legs)
+    runner.driver.macro = macro  # 캔들 피드 구독 키(종목·간격·시장)를 드라이버가 매크로에서 읽는다
     if mode == "replay":
         for leg in runner.legs:
             leg.replay_prices = await asyncio.to_thread(_load_replay_prices, leg.symbol)
+    if mode == "live":
+        await _attach_feed(runner)
 
     _running[session_id] = runner
     _spawn_loop(runner)
@@ -216,9 +237,6 @@ def _spawn_loop(runner: _Runner) -> None:
 # 그러면 DB 에는 running 인데 루프는 없는 세션이 남고, 리더보드 수익률은 마지막 체크포인트에
 # 박제된다(2026-09-21 프로덕션 8행 전부). 기동 시 running 세션을 되살려 자산·포지션·체결 요약을
 # 이어 간다. 리플레이 세션은 되살릴 가격 창이 없으니 닫는다.
-_EXIT_SIDES_ALL = {"sell", "cover"}
-
-
 def _load_resumable() -> tuple[list[dict], list[int]]:
     """running 세션을 (되살릴 것, 닫을 것) 으로 나눠 필요한 값만 dict 로 꺼낸다 — 워커 스레드용."""
     revive: list[dict] = []
@@ -256,13 +274,6 @@ def _load_resumable() -> tuple[list[dict], list[int]]:
     return revive, close
 
 
-def _ts_ms(ts: str) -> int:
-    try:
-        return int(datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp() * 1000)
-    except (TypeError, ValueError):
-        return 0
-
-
 def _rebuild_runner(info: dict) -> _Runner:
     """한 세션의 러너를 DB 값으로 다시 만든다(루프는 띄우지 않는다)."""
     macro = Macro.model_validate_json(info["macro_json"])
@@ -270,52 +281,15 @@ def _rebuild_runner(info: dict) -> _Runner:
     initial = info["virtual_balance"] or _session_initial(macro)
     per_leg = initial / len(symbols)
     leg_equity = {leg.get("symbol"): float(leg.get("current_equity") or 0.0) for leg in info["legs"]}
-    leg_state = {leg.get("symbol"): leg for leg in (info["state"].get("legs") or [])}
-    legs: List[_Leg] = []
+    legs: List[Leg] = []
     for sym in symbols:
         leg_macro = macro.for_symbol(sym, per_leg) if len(symbols) > 1 else macro
-        sim = make_sim(leg_macro, initial_capital=per_leg)
-        equity = leg_equity.get(sym) if len(symbols) > 1 else info["current_equity"]
-        if not equity or equity <= 0:
-            equity = per_leg
-        st = leg_state.get(sym) or {}
-        restore = getattr(sim, "restore", None)
-        if restore is not None:
-            restore(
-                equity,
-                in_position=bool(st.get("in_position")),
-                qty=float(st.get("qty") or 0.0),
-                entry_price=float(st.get("entry_price") or 0.0),
-                last_price=float(st.get("last_price") or 0.0),
-                cooldown_until_ms=info["state"].get("cooldown_until_ms"),
-            )
-        leg = _Leg(sym, sim, per_leg)
-        leg.equity = float(equity)
-        leg.ret = (leg.equity - per_leg) / per_leg * 100.0
-        leg.last_price = float(st.get("last_price") or 0.0)
-        legs.append(leg)
+        legs.append(Leg(sym, make_sim(leg_macro, initial_capital=per_leg), per_leg))
     runner = _Runner(info["id"], legs[0].sim, symbols[0], "live", initial, legs=legs)
-    _aggregate(runner)
-    # 체결 요약은 DB 의 체결 행으로 다시 센다 — 메모리 카운터는 프로세스와 함께 사라졌다.
-    trades = info["trades"]
-    runner.trade_count = len(trades)
-    entry_returns: Dict[str, float] = {}
-    last_kind = ""
-    for t in trades:
-        sym = t["symbol"] or symbols[0]
-        if t["side"] in _EXIT_SIDES_ALL:
-            base = entry_returns.pop(sym, None)
-            last_kind = "exit" if base is None else ("tp" if t["return_at_trade"] > base else "sl")
-        else:
-            entry_returns[sym] = t["return_at_trade"]
-            last_kind = ""
-    runner.entry_returns = entry_returns
-    if trades:
-        last = trades[-1]
-        runner.last_fill = {
-            "ms": _ts_ms(last["ts"]), "side": last["side"], "return": round(last["return_at_trade"], 4),
-            "kind": last_kind, "symbol": last["symbol"] or symbols[0],
-        }
+    runner.driver.macro = macro
+    # 자산·포지션은 체크포인트 상태로, 체결 요약은 DB 체결 행으로 되살린다.
+    runner.driver.restore(info["state"], leg_equity=leg_equity, total_equity=float(info["current_equity"] or 0.0))
+    runner.driver.restore_fills(info["trades"])
     return runner
 
 
@@ -333,6 +307,7 @@ async def resume_running_sessions() -> int:
         except Exception:
             log.exception("paper resume: session %s could not be rebuilt; leaving it as is", info["id"])
             continue
+        await _attach_feed_for_resume(runner, info)
         _running[info["id"]] = runner
         _spawn_loop(runner)
         count += 1
@@ -411,34 +386,29 @@ async def _run_loop(runner: _Runner) -> None:
         await asyncio.shield(_finalize_async(runner))
 
 
+# --- 드라이버 위임 래퍼(테스트 호환) ------------------------------------------
 def _tick(
     runner: _Runner,
     price: float,
     ts: Optional[datetime] = None,
     symbol: Optional[str] = None,
 ):
-    """Advance one leg's simulation in memory and return a fill, if one occurred.
-
-    ``symbol`` picks the leg (default: the primary symbol). Session totals are
-    re-summed over every leg after each step.
-    """
-    leg = runner.leg_for(symbol)
-    leg.last_price = price
-    fill = leg.sim.step(price, ts)
-    leg.equity = leg.sim.equity(price)
-    leg.ret = (leg.equity - leg.initial) / leg.initial * 100.0
-    leg.liquidations = getattr(leg.sim, "liquidations", 0)
-    leg.liquidated_loss = getattr(leg.sim, "liquidated_loss", 0.0)
-    _aggregate(runner)
-    return fill
+    """한 레그를 한 틱 진행하고 체결이 있으면 돌려준다 — 체결 요약(_note_fill)까지 드라이버가 센다."""
+    return runner.driver.tick(price, ts, symbol)
 
 
 def _aggregate(runner: _Runner) -> None:
-    runner.last_price = runner.legs[0].last_price
-    runner.equity = sum(leg.equity for leg in runner.legs)
-    runner.ret = (runner.equity - runner.initial) / runner.initial * 100.0
-    runner.liquidations = sum(leg.liquidations for leg in runner.legs)
-    runner.liquidated_loss = sum(leg.liquidated_loss for leg in runner.legs)
+    runner.driver.aggregate()
+
+
+def _note_fill(runner: _Runner, fill, symbol: str) -> None:
+    """체결 하나를 상태 요약에 반영 — 횟수·마지막 체결·익절/손절 구분."""
+    runner.driver.note_fill(fill, symbol)
+
+
+def _state_view(runner: _Runner) -> dict:
+    """리더보드 행 상태(포지션·체결 요약) — 체크포인트마다 state_json 으로 저장된다."""
+    return runner.driver.state()
 
 
 async def _tick_and_checkpoint(
@@ -455,61 +425,14 @@ async def _tick_and_checkpoint(
         if price is None:
             continue
         ticked = True
-        fill = _tick(runner, price, ts, symbol=leg.symbol)
+        fill = _tick(runner, price, ts, symbol=leg.symbol)  # 체결 요약은 driver.tick 이 이미 셌다
         if fill is not None:
             fills.append((leg.symbol, fill))
-            _note_fill(runner, fill, leg.symbol)
     if fills:
         for symbol, fill in fills:
             await _checkpoint(runner, fill=fill, symbol=symbol)
     elif ticked:
         await _checkpoint(runner)
-
-
-_EXIT_SIDES = {"sell", "cover"}
-
-
-def sim_state(sim) -> dict:
-    """state() 가 없는 시뮬레이터(테스트 더미 등)에는 '포지션 없음' 기본값."""
-    getter = getattr(sim, "state", None)
-    if getter is None:
-        return {"in_position": False, "dir": 1, "qty": 0.0, "entry_price": 0.0, "cooldown_until_ms": None, "halted_today": False}
-    return getter()
-
-
-def _note_fill(runner: _Runner, fill, symbol: str) -> None:
-    """체결 하나를 러너의 상태 요약에 반영 — 횟수·마지막 체결·익절/손절 구분."""
-    runner.trade_count += 1
-    kind = ""
-    if fill.side in _EXIT_SIDES:
-        entry_return = runner.entry_returns.pop(symbol, None)
-        kind = "exit" if entry_return is None else ("tp" if fill.return_pct > entry_return else "sl")
-    else:
-        runner.entry_returns[symbol] = float(fill.return_pct)
-    runner.last_fill = {"ms": _now_ms(), "side": fill.side, "return": round(float(fill.return_pct), 4), "kind": kind, "symbol": symbol}
-
-
-def _state_view(runner: _Runner) -> dict:
-    """리더보드 행 상태(포지션·체결 요약) — 체크포인트마다 state_json 으로 저장된다."""
-    legs = []
-    cooldowns = []
-    for leg in runner.legs:
-        st = sim_state(leg.sim)
-        legs.append({"symbol": leg.symbol, "qty": round(st["qty"], 8), "dir": st["dir"],
-                     "entry_price": round(st["entry_price"], 4), "last_price": round(leg.last_price, 4),
-                     "in_position": bool(st["in_position"])})
-        if st["cooldown_until_ms"] is not None:
-            cooldowns.append(int(st["cooldown_until_ms"]))
-    last = runner.last_fill or {}
-    return {
-        "in_position": any(l["in_position"] for l in legs),
-        "halted_today": any(sim_state(leg.sim)["halted_today"] for leg in runner.legs),
-        "cooldown_until_ms": max(cooldowns) if cooldowns else None,
-        "trade_count": runner.trade_count,
-        "last_fill_ms": last.get("ms"), "last_fill_side": last.get("side", ""),
-        "last_fill_return": last.get("return"), "last_fill_kind": last.get("kind", ""),
-        "last_price": round(runner.last_price, 4), "checkpoint_ms": _now_ms(), "legs": legs,
-    }
 
 
 def parse_state(text) -> dict:
@@ -646,6 +569,7 @@ async def _finalize_async(runner: _Runner) -> None:
     async with runner.finalize_lock:
         if runner.finalized:
             return
+        _detach_feed(runner)
         pending = runner.inflight_persist
         if pending is not None:
             try:
@@ -712,6 +636,7 @@ async def shutdown_running_sessions() -> None:
 
     for runner in runners:
         runner.stop_flag = True
+        _detach_feed(runner)
 
     tasks = [
         runner.task

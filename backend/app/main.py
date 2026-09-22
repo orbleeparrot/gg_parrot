@@ -65,6 +65,7 @@ from . import leaderboard_runtime
 from . import optimize as optimize_mod
 from . import optimize_runtime as optimize_runtime_mod
 from . import paper as paper_mod
+from . import runner_engine as runner_engine_mod
 from . import ai_explain as ai_explain_mod
 from . import ai_runtime as ai_runtime_mod
 from . import community_summaries as community_summaries_mod
@@ -116,6 +117,13 @@ async def lifespan(app: FastAPI):
         await paper_mod.resume_running_sessions()
     except Exception:
         logging.getLogger(__name__).exception("paper session resume failed at startup")
+    # 실행기(v8+) 세션의 서버 측 전략 드라이버 — 요청 스레드가 루프로 작업을 넘길 수 있게 먼저 루프를 등록하고,
+    # 재배포로 끊긴 running 세션을 state_json 에서 되살린다. 역시 실패해도 서버는 뜬다.
+    runner_engine_mod.install(asyncio.get_running_loop())
+    try:
+        await runner_engine_mod.resume_running_runner_sessions()
+    except Exception:
+        logging.getLogger(__name__).exception("runner engine resume failed at startup")
     notification_stream.start()  # Postgres 일 때 LISTEN — 다른 프로세스의 알림도 SSE 로 밀어 준다
     community_summaries_mod.start()
     leaderboard_runtime.start()
@@ -134,6 +142,11 @@ async def lifespan(app: FastAPI):
         for result in stopped:
             if isinstance(result, BaseException):
                 logging.getLogger(__name__).error("Background worker shutdown failed: %s", type(result).__name__)
+        try:
+            # 실행기 세션 드라이버를 먼저 멈춘다 — 롤링 배포에서 새 프로세스와 겹쳐 같은 명령을 두 번 남기지 않게.
+            await runner_engine_mod.shutdown_drivers()
+        except Exception:
+            logging.getLogger(__name__).exception("runner engine shutdown failed")
         try:
             await paper_mod.shutdown_running_sessions()
         finally:
@@ -335,6 +348,8 @@ class RunnerHeartbeatRequest(BaseModel):
     note: str = ""
     # 실행기 창 로그를 서버에 쌓는다(v7+). [{ts, kind, message}] — 한 번에 100개까지.
     events: list[dict] = []
+    # v8: 직전 heartbeat 로 받은 명령의 실행 결과 [{command_id, ok, executed_qty, fill_price, error}]
+    acks: list[dict] = []
 
 
 class RunnerStoppedRequest(BaseModel):
@@ -1986,7 +2001,7 @@ def runner_launch_ticket_claim(
             detail=f"실행기 v{_RUNNER_MIN_VERSION or '6'} 이상으로 업데이트해 주세요.",
             headers={"Cache-Control": "no-store"},
         )
-    return runner_mod.claim_launch_ticket(req.ticket)
+    return runner_mod.claim_launch_ticket(req.ticket, runner_version=current)
 
 
 def _runner_version_supported(current: str) -> bool:

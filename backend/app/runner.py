@@ -34,8 +34,9 @@ from sqlmodel import select
 
 from . import macro_signing
 from . import notifications as notifications_mod
+from . import runner_engine  # runner_engine 은 runner 를 함수 안에서 늦게 import 한다 — 순환 없음
 from .db import RunnerKey, RunnerLaunchTicket, RunSession, RunSessionEvent, User, UserMacro, get_session
-from .engine import Macro
+from .engine import Macro, RuleType
 
 _KST = timezone(timedelta(hours=9))
 
@@ -59,12 +60,38 @@ _STOP_MODES = {"stop_only", "close_and_stop"}
 EVENT_CAP = int(os.environ.get("RUNNER_EVENT_CAP", "500"))
 EVENT_BATCH_MAX = 100
 EVENT_MESSAGE_MAX = 300
-_EVENT_KINDS = {"start", "info", "signal", "order", "fill", "error", "stop"}
+_EVENT_KINDS = {"start", "info", "signal", "order", "fill", "error", "stop", "warn"}
 # 평가손익 알림: 마지막 알림 기준 이만큼 움직였거나(누적), 한 heartbeat 사이 이만큼 급변하면 알린다(%p).
 PNL_ALERT_STEP_PCT = 2.0
 PNL_ALERT_JUMP_PCT = 1.0
 # 이 종류의 실행 이벤트는 헤더 알림(에이전트)으로도 간다. start·stop 은 세션 알림이 따로 있고 info 는 로그일 뿐.
 _NOTIFY_EVENT_LABELS = {"signal": "신호", "order": "주문", "fill": "체결", "error": "오류"}
+
+# 서버 신호 프로토콜(v8+): 실행기는 판단하지 않고 heartbeat 응답의 명령만 실행한다.
+SIGNAL_MIN_VERSION = os.environ.get("RUNNER_SIGNAL_MIN_VERSION", "8").strip() or "8"
+
+
+def supports_signals(version: str) -> bool:
+    """실행기가 서버 신호 프로토콜(v8+)을 쓰는가. 숫자 아닌 값·빈 값은 미지원."""
+    v = (version or "").strip()
+    return v.isascii() and v.isdigit() and len(v) <= 6 and int(v) >= int(SIGNAL_MIN_VERSION)
+
+
+SIGNAL_REQUIRED_DETAIL = "지표형 매크로는 실행기 v8 이상이 필요해요. 실행기를 업데이트해 주세요."
+MACRO_REQUIRED_DETAIL = "실행기 v8 은 매크로 설정을 함께 보내야 해요."
+# 실행기로는 아직 돌릴 수 없는 매크로 유형(모든 실행기 버전). C(적립식)는 서버가 3초 틱을 세어 분할 매수하는
+# 규칙이라 봉·명령 모델과 맞지 않고, K(SAR)는 롱↔숏 전환(flip-to-short)을 실행기가 표현할 수 없다.
+# v7 도 C 를 로컬에서 잘못(무조건 진입) 돌렸으므로 버전과 무관하게 막는다.
+RUNNER_UNSUPPORTED_RULES = frozenset({RuleType.C, RuleType.K})
+UNSUPPORTED_RULE_DETAIL = "실행기는 아직 이 매크로 유형(적립식·SAR)을 지원하지 않아요."
+# 서버(runner_engine)가 세션 note 에 쓰는 마커 — 실행기 heartbeat 의 note 가 덮어쓰면 안 된다.
+_SERVER_NOTE_MARKERS = (runner_engine.EXIT_FAIL_NOTE, runner_engine.LOOP_ERROR_NOTE, runner_engine.START_FAIL_NOTE)
+
+
+def needs_signals(macro: Optional[Macro]) -> bool:
+    """A/B(익절·손절 재진입, 지정가 밴드)는 실행기 로컬 로직이 맞다. 그 외는 서버 신호가 필요하다.
+    매크로를 안 보낸 구버전(v6)은 판단할 수 없으므로 '필요'로 본다."""
+    return macro is None or macro.rule_type not in (RuleType.A, RuleType.B)
 
 
 class _SessionStreamHub:
@@ -327,8 +354,12 @@ def mark_launch_ticket_rejected(ticket: str, runner_version: str) -> None:
         return
 
 
-def claim_launch_ticket(ticket: str) -> dict:
-    """Atomically consume a launch ticket and return its local-runner payload."""
+def claim_launch_ticket(ticket: str, runner_version: str = "") -> dict:
+    """Atomically consume a launch ticket and return its local-runner payload.
+
+    ``runner_version`` 은 최소 버전 검사를 통과한 값이다. 여기서는 매크로 종류를 보고 한 번 더 가른다 —
+    지표형 매크로는 서버 신호(v8+)가 필요하므로 구버전에는 티켓을 내주지 않는다(티켓은 살려 둔다).
+    """
     raw_ticket = (ticket or "").strip()
     if not _LAUNCH_TICKET_RE.fullmatch(raw_ticket):
         raise _ticket_error(404, "유효한 실행 연결 요청을 찾을 수 없어요.")
@@ -361,6 +392,17 @@ def claim_launch_ticket(ticket: str) -> dict:
             macro = Macro.model_validate_json(macro_row.macro_json)
         except (TypeError, ValueError):
             raise _ticket_error(422, "저장된 매크로 형식이 올바르지 않아요.")
+        if macro.rule_type in RUNNER_UNSUPPORTED_RULES:
+            # 실행기가 못 돌리는 유형은 버전과 무관하게 거절 — 업데이트로 풀리는 문제가 아니므로 버전 게이트(426)보다
+            # 먼저 보고, '거절(업데이트 필요)' 표시도 하지 않고 티켓도 소비하지 않는다(잠금만 푼다).
+            db.rollback()
+            raise _ticket_error(422, UNSUPPORTED_RULE_DETAIL)
+        if not supports_signals(runner_version) and needs_signals(macro):
+            # 구버전 실행기 + 지표형 매크로: 거절 사실만 남기고(웹이 상태 조회로 알아챔) 티켓은 소비하지 않는다.
+            # mark_launch_ticket_rejected 는 자기 세션을 여니 BEGIN IMMEDIATE 잠금을 먼저 푼다.
+            db.rollback()
+            mark_launch_ticket_rejected(raw_ticket, runner_version)
+            raise _ticket_error(426, SIGNAL_REQUIRED_DETAIL)
 
         # The conditional UPDATE is the single-use boundary. Concurrent claims
         # can both read the row above, but only one can change claimed_at.
@@ -422,6 +464,17 @@ def start_session(user: User, payload: dict) -> dict:
             macro_json = ""
             normalized_macro = None
 
+    # 버전 게이트(2026-09-22 결정): v8+ 는 서버가 전략을 돌리므로 매크로가 필수(422).
+    # v8 미만은 A/B 만 로컬 판단으로 돌릴 수 있고, 지표형이거나 매크로를 안 보내 판별 불가면 426.
+    signal_runner = supports_signals(runner_version)
+    if signal_runner and normalized_macro is None:
+        raise HTTPException(status_code=422, detail=MACRO_REQUIRED_DETAIL)
+    if normalized_macro is not None and normalized_macro.rule_type in RUNNER_UNSUPPORTED_RULES:
+        # 적립식(C)·SAR(K)는 어느 실행기 버전으로도 돌리지 않는다(위 주석 참고) — 업데이트 안내(426)보다 먼저 알린다.
+        raise HTTPException(status_code=422, detail=UNSUPPORTED_RULE_DETAIL)
+    if not signal_runner and needs_signals(normalized_macro):
+        raise HTTPException(status_code=426, detail=SIGNAL_REQUIRED_DETAIL)
+
     raw_user_macro_id = payload.get("user_macro_id")
     user_macro_id: Optional[int] = None
     if raw_user_macro_id is not None:
@@ -431,11 +484,7 @@ def start_session(user: User, payload: dict) -> dict:
             raise HTTPException(status_code=422, detail="내 매크로 ID가 올바르지 않아요.")
         if user_macro_id <= 0:
             raise HTTPException(status_code=422, detail="내 매크로 ID가 올바르지 않아요.")
-        if normalized_macro is None:
-            raise HTTPException(
-                status_code=422,
-                detail="내 매크로 세션에는 정규화된 매크로 설정이 필요해요.",
-            )
+        # 매크로 본문이 없는 경우는 위 버전 게이트가 이미 걸렀다(v8+ 는 422, 그 미만은 426).
 
     now = _now_iso()
     # 매크로 출처: 티켓 경로면 web, 파일이면 동봉된 서명을 검증해 원본/수정본을 가른다.
@@ -520,6 +569,9 @@ def start_session(user: User, payload: dict) -> dict:
             "macro_digest": macro_digest,
         }
     notify_sessions_changed(user.id)
+    if signal_runner:
+        # v8+: 서버 측 전략 드라이버를 이벤트 루프에 올린다(웜업·구독·틱 루프는 runner_engine 이 맡는다).
+        runner_engine.schedule_start(result["session_id"])
     from .agent_features.position_news.runtime import request_collection
     request_collection()
     from .agent_features.whale_activity.runtime import request_collection as request_whale_collection
@@ -532,15 +584,19 @@ def heartbeat(user: User, session_id: int, snapshot: dict) -> dict:
 
     응답 ``action`` : "continue" | "stop_only" | "close_and_stop".
     이미 서버에서 세션이 사라졌거나 종료됐다면 실행기도 멈추도록 "stop_only" 를 준다.
+
+    v8+ 실행기에는 ``commands`` 로 서버 전략이 낸 미실행 주문 명령을 함께 주고, 요청의 ``acks`` 로
+    직전 명령의 실행 결과를 받는다. 구버전에는 항상 빈 리스트(무해).
     """
     events = snapshot.pop("events", None)
+    acks = snapshot.pop("acks", None)
     with get_session() as db:
         row = db.get(RunSession, session_id)
         if row is None or row.user_id != user.id:
             # 세션이 없어졌으면 실행기가 안전하게 멈추도록 종료 지시.
-            return {"action": "stop_only", "reason": "세션을 찾을 수 없어요."}
+            return {"action": "stop_only", "reason": "세션을 찾을 수 없어요.", "commands": []}
         if row.status != "running":
-            return {"action": row.stop_mode or "stop_only", "reason": "이미 종료 처리된 세션이에요."}
+            return {"action": row.stop_mode or "stop_only", "reason": "이미 종료 처리된 세션이에요.", "commands": []}
         _append_events(db, row, events)
 
         previous_pct, previously_in_position = row.unrealized_pct, row.in_position
@@ -551,15 +607,29 @@ def heartbeat(user: User, session_id: int, snapshot: dict) -> dict:
         row.position_qty = float(snapshot.get("position_qty", 0.0) or 0.0)
         row.realized_pnl = float(snapshot.get("realized_pnl", 0.0) or 0.0)
         row.unrealized_pct = float(snapshot.get("unrealized_pct", 0.0) or 0.0)
-        if "note" in snapshot:
+        # 실행기는 매 heartbeat 에 note(기본 "") 를 보낸다 — 서버가 쓴 마커(청산 실패·루프 오류)는 덮어쓰지 않는다.
+        # 마커는 runner_engine 이 청산 성공 ack 등에서 스스로 지운다.
+        if "note" in snapshot and row.note not in _SERVER_NOTE_MARKERS:
             row.note = str(snapshot["note"])[:200]
         row.last_heartbeat_at = _now_iso()
         _alert_pnl_move(db, row, previous_pct, previously_in_position)
         action = row.stop_mode if row.stop_mode in _STOP_MODES else "continue"
+        commands: list = []
+        if supports_signals(row.runner_version):
+            # ack 반영 → 만료 정리 후 남은 명령 → 서버 전략과 실행기 포지션 유무 대조(경고만).
+            now_ms = runner_engine._now_ms()
+            runner_engine.apply_acks(db, row, acks or [], now_ms)
+            commands = runner_engine.pending_commands(db, row, now_ms)
+            if not row.position_uncertain:
+                # 실행기 스스로 포지션을 모르는 상태면 대조할 근거가 없다.
+                runner_engine.check_position_mismatch(db, row, row.in_position)
+            if action != "continue":
+                # 종료 중인 세션엔 매매 명령을 주지 않는다(명령 행은 그대로 — 만료로 정리된다).
+                commands = []
         db.add(row)
         db.commit()
     notify_sessions_changed(user.id)
-    return {"action": action}
+    return {"action": action, "commands": commands}
 
 
 def _alert_pnl_move(db, row: RunSession, previous_pct: float, previously_in_position: bool) -> bool:
@@ -663,6 +733,8 @@ def mark_stopped(
             )
         db.commit()
     notify_sessions_changed(user.id)
+    # v8+ 라면 서버 측 드라이버도 내린다(구버전·이미 없는 세션이면 runner_engine 이 무시한다).
+    runner_engine.schedule_stop(session_id)
     return {"ok": True}
 
 

@@ -30,8 +30,13 @@ def test_web_lifespan_collects_new_ticker_and_preserves_close_result(monkeypatch
         auth = {"Authorization": f"Bearer {account['token']}"}
         key = client.get("/api/me/runner/key", headers=auth).json()["key"]
         runner_auth = {"X-Runner-Key": key}
+        # 2026-09-22: 매크로 없는 구버전 시작은 426 — 규칙 A 매크로를 실어 세션을 만든다.
         session_id = client.post("/api/runner/start", headers=runner_auth,
-                                 json={"symbol": ticker + "USDT"}).json()["session_id"]
+                                 json={"symbol": ticker + "USDT", "macro": {
+                                     "symbol": ticker + "USDT", "rule_type": "A", "position_side": "long",
+                                     "params": {"take_profit_pct": 3.0, "initial_capital": 1000},
+                                     "risk": {"invest_ratio": 0.5, "stop_loss_pct": 2.0}, "period": {"preset": "3m"}}}
+                                 ).json()["session_id"]
         path = f"/api/me/agents/sessions/{session_id}/position-news"
         deadline = time.monotonic() + 5
         payload = {}

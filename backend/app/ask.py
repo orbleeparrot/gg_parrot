@@ -23,7 +23,8 @@ from sqlmodel import Session, select
 
 from .ai_runtime import ai_available, ai_cache_key, default_model, get_ai_client, get_ai_runtime
 from .data import NoSpotDataError
-from .db import AskMacroSession, User
+from . import points as points_mod
+from .db import AskExtraCredit, AskMacroSession, User
 from .engine.backtest import BacktestResult
 from .engine.explain import explain_result
 from .engine.schema import Macro
@@ -409,15 +410,70 @@ def _now() -> tuple[str, int]:
     return now.strftime("%Y-%m-%dT%H:%M:%SZ"), int(now.timestamp() * 1000)
 
 
+# 포인트로 횟수 추가 (2026-09-22): 무료 한도를 다 쓴 뒤 1회 EXTRA_PRICE 포인트, 하루 EXTRA_DAILY_CAP 회까지.
+EXTRA_PRICE = 30
+EXTRA_DAILY_CAP = 5
+
+
 def used_today(db: Session, user: User) -> int:
+    """오늘 무료 한도에서 쓴 횟수 — 추가권으로 물어본 세션(paid)은 세지 않는다."""
     return int(db.exec(
         select(func.count()).select_from(AskMacroSession)
-        .where(AskMacroSession.user_id == user.id, AskMacroSession.day_kst == today_kst())
+        .where(AskMacroSession.user_id == user.id, AskMacroSession.day_kst == today_kst(),
+               AskMacroSession.paid == False)  # noqa: E712 — SQL 비교
     ).one())
 
 
-def remaining_today(db: Session, user: User) -> int:
+def free_remaining_today(db: Session, user: User) -> int:
     return max(0, daily_limit() - used_today(db, user))
+
+
+def _credits_today(db: Session, user: User) -> list[AskExtraCredit]:
+    return list(db.exec(
+        select(AskExtraCredit)
+        .where(AskExtraCredit.user_id == user.id, AskExtraCredit.day_kst == today_kst())
+        .order_by(AskExtraCredit.id.asc())
+    ).all())
+
+
+def _unused_credit(db: Session, user: User) -> Optional[AskExtraCredit]:
+    for credit in _credits_today(db, user):
+        if credit.used_session_id is None:
+            return credit
+    return None
+
+
+def extra_left_today(db: Session, user: User) -> int:
+    return max(0, EXTRA_DAILY_CAP - len(_credits_today(db, user)))
+
+
+def remaining_today(db: Session, user: User) -> int:
+    """오늘 물어볼 수 있는 횟수 = 무료 남은 수 + 아직 안 쓴 추가권 수."""
+    unused = sum(1 for c in _credits_today(db, user) if c.used_session_id is None)
+    return free_remaining_today(db, user) + unused
+
+
+def buy_extra(db: Session, user: User) -> dict:
+    """추가권 1회를 포인트로 산다. 무료가 남아 있으면 팔지 않는다(실수 결제 방지)."""
+    if free_remaining_today(db, user) > 0:
+        raise AskError(409, "아직 무료 횟수가 남아 있어요. 다 쓴 뒤에 추가할 수 있어요.")
+    if extra_left_today(db, user) <= 0:
+        raise AskError(429, f"오늘은 추가 {EXTRA_DAILY_CAP}회까지만 살 수 있어요. 내일 다시 물어봐 주세요.")
+    created_at, created_ms = _now()
+    try:
+        points_mod.apply(db, user, -EXTRA_PRICE, "ask_extra", ref=f"ask_extra:{today_kst()}")
+    except points_mod.InsufficientPoints as exc:
+        raise AskError(402, str(exc))
+    db.add(AskExtraCredit(user_id=user.id, day_kst=today_kst(), price=EXTRA_PRICE,
+                          created_at=created_at, created_ms=created_ms))
+    db.commit()
+    db.refresh(user)
+    return {
+        "ok": True,
+        "remaining_today": remaining_today(db, user),
+        "extra_left_today": extra_left_today(db, user),
+        "points_balance": user.points_balance,
+    }
 
 
 def consented(user: User) -> bool:
@@ -430,6 +486,9 @@ def status(db: Session, user: User) -> dict:
         "remaining_today": remaining_today(db, user),
         "daily_limit": daily_limit(),
         "disclaimer_version": DISCLAIMER_VERSION,
+        "extra_price": EXTRA_PRICE,
+        "extra_left_today": extra_left_today(db, user),
+        "points_balance": int(user.points_balance or 0),
     }
 
 
@@ -490,15 +549,23 @@ def run_ask(db: Session, user: User, req: AskRequest, run_backtest: Callable[[Ma
         # 위의 한도 검사와 이 저장 사이에 시간차가 있으면 동시 요청 여러 개가 함께
         # 통과해 하루 한도를 넘길 수 있다 — 평가를 시작하기 전에 빈 자리표시 행을
         # 먼저 커밋해서 그 check-then-insert 창을 닫는다. 실패하면 이 행은 지운다.
+        # 무료가 남았으면 무료로, 아니면 안 쓴 추가권 하나를 이 세션에 붙인다.
+        credit = None if free_remaining_today(db, user) > 0 else _unused_credit(db, user)
         session_row = AskMacroSession(
             user_id=user.id, day_kst=today_kst(),
             request_json=json.dumps(req.model_dump(), ensure_ascii=False),
             candidate_count=0, results_json="[]",
             disclaimer_version=DISCLAIMER_VERSION, ai_used=False, elapsed_ms=0,
             created_at=created_at, created_ms=created_ms,
+            paid=credit is not None,
         )
         db.add(session_row)
         db.commit()
+        if credit is not None:
+            db.refresh(session_row)
+            credit.used_session_id = session_row.id
+            db.add(credit)
+            db.commit()
 
         try:
             failures: list[Exception] = []
@@ -528,6 +595,10 @@ def run_ask(db: Session, user: User, req: AskRequest, run_backtest: Callable[[Ma
             db.add(session_row)
             db.commit()
         except Exception:
+            # 실패한 질문은 횟수를 돌려준다 — 세션 행을 지우고, 추가권이면 다시 '안 씀'으로.
+            if credit is not None:
+                credit.used_session_id = None
+                db.add(credit)
             db.delete(session_row)
             db.commit()
             raise

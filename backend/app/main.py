@@ -570,6 +570,18 @@ def ask_consent(
     return ask_mod.give_consent(db, account)
 
 
+@app.post("/api/ask/extra")
+def ask_extra(
+    account: User = Depends(auth_mod.current_user_in_session),
+    db: Session = Depends(request_session),
+) -> dict:
+    """무료 횟수를 다 쓴 뒤 포인트로 1회 추가(하루 상한 있음)."""
+    try:
+        return ask_mod.buy_extra(db, account)
+    except ask_mod.AskError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message)
+
+
 @app.post("/api/ask/macros")
 def ask_macros(
     req: ask_mod.AskRequest,

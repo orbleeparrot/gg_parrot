@@ -661,6 +661,24 @@ class AskMacroSession(SQLModel, table=True):
     elapsed_ms: int = 0
     created_at: str
     created_ms: int = Field(default=0, sa_type=BigInteger)
+    # 포인트로 산 추가 횟수로 물어본 것인지(2026-09-22). 무료 한도 계산에서 제외한다.
+    paid: bool = False
+
+
+class AskExtraCredit(SQLModel, table=True):
+    """포인트로 산 '물어볼까' 추가 1회(2026-09-22). 하루(KST) 단위로 사며, 쓰면 세션 id 가 붙는다.
+
+    실패한 질문은 세션 행을 지우면서 used_session_id 도 비워 추가권을 돌려준다.
+    """
+
+    __table_args__ = (Index("ix_askextracredit_user_day", "user_id", "day_kst"),)
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(index=True)
+    day_kst: str
+    price: int = 0
+    created_at: str
+    created_ms: int = Field(default=0, sa_type=BigInteger)
+    used_session_id: Optional[int] = None
 
 
 class LeaderboardCarryover(SQLModel, table=True):
@@ -1081,6 +1099,9 @@ def _migrate() -> None:
         "macrorow": {
             "rep_leverage": "ALTER TABLE macrorow ADD COLUMN rep_leverage INTEGER DEFAULT 1",
         },
+        "askmacrosession": {
+            "paid": "ALTER TABLE askmacrosession ADD COLUMN paid BOOLEAN NOT NULL DEFAULT FALSE",
+        },
         "runsession": {
             "position_uncertain": "ALTER TABLE runsession ADD COLUMN position_uncertain BOOLEAN DEFAULT FALSE",
             "macro_json": "ALTER TABLE runsession ADD COLUMN macro_json TEXT DEFAULT ''",
@@ -1217,6 +1238,7 @@ _PG_ADDED_COLUMNS = {
         "processing_status": "TEXT DEFAULT 'ready'", "claim_token": "TEXT DEFAULT ''",
         "claimed_ms": "BIGINT DEFAULT 0",
     },
+    "askmacrosession": {"paid": "BOOLEAN NOT NULL DEFAULT FALSE"},
     "runsession": {
         "macro_json": "TEXT DEFAULT ''", "position_uncertain": "BOOLEAN DEFAULT FALSE",
         "user_macro_id": "INTEGER",
@@ -1273,7 +1295,7 @@ _PG_PRIVATE_CACHE_TABLES = (
     "newsarticlefeed", "newsarticle", "newsmaintenancelease", "publicnewslease",
     "leaderboardsnapshotcontrol", "leaderboardsnapshotversion", "leaderboardsnapshotitem",
     "leaderboardentrystats", "leaderboardchallengebot",
-    "dailyquestclaim", "runsessionevent", "askmacrosession", "chatroom", "chatroommember", "runnercommand",
+    "dailyquestclaim", "runsessionevent", "askmacrosession", "askextracredit", "chatroom", "chatroommember", "runnercommand",
     # 게시판 사진·추천·신고와 브라우저 뉴스 캐시 — create_all 로만 생겨 RLS 없이 anon 권한이 열려 있었다(2026-09-15).
     "boardimage", "boardpostvote", "boardreport", "browsernewspagecache",
     "visit", "macroeventdaily", "collectorrun", "collectorsourcedaily", "apiusagedaily",

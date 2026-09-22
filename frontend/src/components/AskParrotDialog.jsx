@@ -9,7 +9,7 @@ import {
   POPULAR_SYMBOLS, PROFILES, RUNNING_TEXT, SCALPER_NOTE, STABLE_NO_FUTURES, STEP_PROMPTS, feesNote, symbolsPrompt,
 } from "../lib/askCopy.js";
 import {
-  PROFILE_ORDER, STEPS, answerLabel, canChooseFutures, initialState, intervalOptions, isShort, maxSymbols, periodOptions, reduce, toRequest,
+  PROFILE_ORDER, STEPS, answerLabel, canChooseFutures, extraOffer, initialState, intervalOptions, isShort, maxSymbols, periodOptions, reduce, toRequest,
 } from "../lib/askFlow.js";
 import { RULE_TYPES } from "../lib/macro.js";
 import { resolveSymbol, searchSymbols } from "../lib/symbolSearch.js";
@@ -169,6 +169,8 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
   const [state, dispatch] = useReducer(reduce, undefined, initialState);
   const [status, setStatus] = useState(null); // {consented, remaining_today, daily_limit} | {error:true}
   const [consentBusy, setConsentBusy] = useState(false);
+  const [extraBusy, setExtraBusy] = useState(false);
+  const [extraError, setExtraError] = useState("");
   const titleId = useId();
   const threadRef = useRef(null);
   // 서버에 요청이 나가 있는 동안(ready 는 요청을 보내는 순간부터 응답까지)은 취소할 수 없다.
@@ -225,11 +227,34 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
     }
   };
 
+  // 포인트로 1번 더 — 서버가 잔액·상한을 다시 검사하고, 성공하면 남은 횟수와 잔액을 그대로 돌려준다.
+  const buyExtra = async () => {
+    setExtraBusy(true);
+    setExtraError("");
+    try {
+      const r = await api.askExtra();
+      setStatus((s) => (s && !s.error ? { ...s, remaining_today: r.remaining_today, extra_left_today: r.extra_left_today, points_balance: r.points_balance } : s));
+    } catch (err) {
+      setExtraError(err?.message || "지금은 추가할 수 없어요. 잠시 뒤 다시 시도해 주세요.");
+    } finally {
+      setExtraBusy(false);
+    }
+  };
+
   const promptFor = (step) => (step === "symbols" ? symbolsPrompt(maxSymbols(state.answers.profile)) : STEP_PROMPTS[step]);
 
   const isAnswered = (s) => (s === "symbols" ? state.answers.symbolsConfirmed === true : state.answers[s] != null);
   const answeredSteps = STEPS.filter(isAnswered).filter((s) => state.phase !== "cards" || STEPS.indexOf(s) < STEPS.indexOf(state.step));
   const noQuota = status && !status.error && status.remaining_today <= 0;
+  const offer = extraOffer(status);
+  const extraBlock = offer.show ? (
+    <div className="ask-extra" role="group" aria-label="포인트로 횟수 추가">
+      <button type="button" className="btn btn-s btn-primary" disabled={!offer.canBuy || extraBusy} onClick={buyExtra}>
+        {extraBusy ? "추가하는 중…" : offer.label}
+      </button>
+      <span className="t-caption text-slate-500">{extraError || offer.note}</span>
+    </div>
+  ) : null;
 
   return createPortal(
     <div className="scrim fixed inset-x-0 bottom-0 top-16 z-[80] flex items-start justify-center p-2 sm:p-4 overflow-y-auto">
@@ -264,7 +289,10 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
 
               {state.phase === "cards" ? (
                 noQuota && answeredSteps.length === 0 ? (
-                  <div className="ask-bubble ask-bubble-parrot t-small" role="status">{NO_QUOTA_TEXT}</div>
+                  <>
+                    <div className="ask-bubble ask-bubble-parrot t-small" role="status">{NO_QUOTA_TEXT}</div>
+                    {extraBlock}
+                  </>
                 ) : (
                   <>
                     <div className="ask-bubble ask-bubble-parrot t-small">{promptFor(state.step)}</div>
@@ -294,6 +322,7 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
                   ) : null}
                   <div className="ask-disclaimer" role="note">{DISCLAIMER}</div>
                   {isShort(state.answers.profile) ? <div className="ask-disclaimer" role="note">{SCALPER_NOTE}</div> : null}
+                  {extraBlock}
                   <div className="ask-followups">
                     {FOLLOW_UPS.map((f) => {
                       const quotaBlocked = noQuota && f.kind !== "restart";

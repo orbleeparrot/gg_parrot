@@ -18,6 +18,7 @@ main.position_news_runtime.stop = AsyncMock()
 main.paper_mod.shutdown_running_sessions = AsyncMock()
 main.paper_mod.resume_running_sessions = AsyncMock()
 main.runner_engine_mod.resume_running_runner_sessions = AsyncMock()
+main.runner_engine_mod.shutdown_drivers = AsyncMock()
 main.optimize_runtime_mod.shutdown = Mock()
 main.ai_runtime_mod.close_ai_runtime = Mock()
 main.http_runtime_mod.close_http_runtime = Mock()
@@ -27,6 +28,10 @@ async def start():
         main.position_news_runtime.start.assert_called_once_with()
 asyncio.run(start())
 main.init_db.assert_called_once_with()
+main.paper_mod.resume_running_sessions.assert_awaited_once_with()
+main.runner_engine_mod.resume_running_runner_sessions.assert_awaited_once_with()
+main.paper_mod.shutdown_running_sessions.assert_awaited_once_with()
+main.runner_engine_mod.shutdown_drivers.assert_awaited_once_with()
 '''
     env = {**os.environ, "DATABASE_URL": "", "SQLITE_PATH": str(tmp_path / "untouched.db"),
            "GEMINI_API_KEY": "", "COINDESK_API_KEY": "", "PREFECT_API_URL": ""}

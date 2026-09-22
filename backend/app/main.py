@@ -143,6 +143,11 @@ async def lifespan(app: FastAPI):
             if isinstance(result, BaseException):
                 logging.getLogger(__name__).error("Background worker shutdown failed: %s", type(result).__name__)
         try:
+            # 실행기 세션 드라이버를 먼저 멈춘다 — 롤링 배포에서 새 프로세스와 겹쳐 같은 명령을 두 번 남기지 않게.
+            await runner_engine_mod.shutdown_drivers()
+        except Exception:
+            logging.getLogger(__name__).exception("runner engine shutdown failed")
+        try:
             await paper_mod.shutdown_running_sessions()
         finally:
             try:

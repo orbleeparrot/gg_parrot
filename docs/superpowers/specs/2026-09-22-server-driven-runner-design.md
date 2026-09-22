@@ -47,7 +47,7 @@
 ### 4.1 `engine/candle_feed.py` — 마감봉 피드
 
 - `CandleFeed.subscribe(symbol, interval, market, callback) -> Subscription`, `unsubscribe(sub)`.
-  `subscribe(..., since_t=None)`: 구독 시점 커서. 웜업한 호출자는 마지막 웜업 봉의 `t`를 넘겨 그 봉 이후만 받는다; 없으면 현재 진행 중인 봉부터. 실행 중인 루프 밖에서 부르면 경고만 남기고 폴링 태스크를 만들지 않는다(테스트용).
+  `subscribe(..., since_t=None)`: 구독 시점 커서. 웜업한 호출자는 마지막 웜업 봉의 `t`를 넘겨 그 봉 이후만 받는다; 없으면 현재 진행 중인 봉부터. 이미 도는 키에 합류하면 키 커서는 그대로 두고, `since_t` 는 구독자에 저장해 `t ≤ since_t` 인 봉을 그 구독자에게만 건너뛴다(웜업으로 이미 본 봉을 두 번 받지 않게). 실행 중인 루프 밖에서 부르면 경고만 남기고 폴링 태스크를 만들지 않는다(테스트용).
   키 `(symbol, interval, market)`마다 asyncio 태스크 1개. 구독자가 0이 되면 태스크 종료.
 - 루프: 다음 봉 마감 시각(`_INTERVAL_MS` 경계) + `CANDLE_GRACE_SECONDS`(기본 2)까지 잠들고, `get_recent_klines(symbol, interval,
   limit=3, market)`을 스레드에서 호출해 `closed=True`이고 `t > last_delivered_t`인 봉을 오름차순으로 콜백에 전달. 아직 새 마감봉이
@@ -59,7 +59,10 @@
 ### 4.2 `engine/candles.py` — 실봉 어댑터·웜업
 
 - `CandleAggregatorSim` 제거 → `LiveCandleSim`:
-  - `step(price, ts)`: 전략을 돌리지 **않는다**. 큐에 있는 Fill 하나를 꺼내 준다(없으면 None). 페이퍼 루프의 3초 틱과 호환.
+  - `step(price, ts)`: 전략(지표 판정)을 돌리지 **않는다**. 큐에 있는 Fill 하나를 꺼내 준다(없으면 None). 큐가 비었고 sim 에
+    "다음 봉 시가" 의도가 걸려 있으면(`_IndicatorSim._pending`, `BreakoutSim._exit_next_open`) `inner.execute_pending(price, ts)` 로
+    이 틱 가격에 실행한다 — 마감봉만 오는 실시간에서 다음 `on_candle` 을 기다리면 한 간격 늦게(N+1 마감 무렵) 체결되기 때문.
+    백테스트는 `_strategy` 가 같은 `execute_pending(o, ts)` 를 다음 봉 시가로 부르므로 동작이 같다. 페이퍼 루프의 3초 틱과 호환.
   - `on_candle(o, h, l, c, ts)`: `inner.on_candle(...)`의 Fill들을 큐에 넣는다. 피드 콜백이 부른다.
   - `equity/state/restore`는 `inner`에 위임(기존 `CandleAggregatorSim`과 같음).
 - `CandleSim.warmup(candles)`: 봉을 순서대로 `on_candle`에 넣어 지표·전략 내부 상태를 채운 뒤 `reset_book()`으로 장부를 되돌린다.
@@ -113,8 +116,15 @@ class StrategyDriver:
 - 청산(`sell`/`cover`): `qty_frac = fill.qty / (sim이 Fill 직전 보유한 수량)`; 전량이면 1.0. 드라이버가 Fill 직전 수량을 함께 넘긴다.
 - `reason`은 sim이 Fill에 실어 준다(`Fill.reason: str = ""` 필드 추가; 각 sim의 `_open_long/_close_all` 호출부가 채운다. 채우지
   않으면 `"진입"`/`"청산"`/`"손절"`/`"강제 청산"` 기본값).
-- `expires_ms = created_ms + COMMAND_TTL_SECONDS`(기본 90). 만료된 pending 명령은 heartbeat에서 `expired`로 바꾸고 보내지 않는다 —
-  10분 전 진입 신호를 뒤늦게 실행하면 안 된다.
+- `expires_ms = created_ms + COMMAND_TTL_SECONDS`(기본 90). 만료된 pending **진입** 명령은 heartbeat에서 `expired`로 바꾸고 보내지
+  않는다 — 10분 전 진입 신호를 뒤늦게 실행하면 안 된다. **청산(`sell`/`cover`)은 만료시키지 않는다** — 늦더라도 실제 포지션을
+  닫아야 한다(`expires_ms` 필드는 형식 유지를 위해 실리지만 서버는 청산에 적용하지 않는다). 만료된 명령에 `ok=true` ack 가 오면
+  (실행기가 만료 직전에 실행한 경우) `acked` 로 받아들이고, 실패 ack 는 무시한다.
+- 중복 방지: 같은 세션의 직전 명령과 `action`·`signal_price` 가 같고 `COMMAND_DEDUPE_SECONDS`(기본 60) 안이며 `pending|acked` 면
+  새로 넣지 않고 그 행을 재사용한다(롤링 배포로 옛/새 프로세스가 잠깐 같은 드라이버를 둘 다 돌릴 때). lifespan 종료 시
+  `runner_engine.shutdown_drivers()` 가 드라이버를 모두 내린다.
+- 죽은 실행기: 체크포인트에서 `last_heartbeat_at` 이 `STALE_RUNNER_SECONDS`(기본 3600, env `RUNNER_STALE_SECONDS`)보다 오래됐으면
+  세션을 `stopped` 로 닫고(`note` "실행기 연결 끊김 — 서버 전략을 자동 종료했어요", `stop` 이벤트) 드라이버를 멈춘다.
 
 **heartbeat 프로토콜 (v8)**
 
@@ -145,6 +155,10 @@ class StrategyDriver:
   v8 미만(빈 값 포함)이고 `rule_type ∉ {A, B}`이면 **426** `"지표형 매크로는 실행기 v8 이상이 필요해요. 실행기를 업데이트해 주세요."`
   (`_RUNNER_SIGNAL_MIN_VERSION = "8"`, 환경변수 `RUNNER_SIGNAL_MIN_VERSION`). `launch-tickets/claim`도 같은 규칙으로 거절해 웹
   화면이 업데이트를 안내할 수 있게 한다. 매크로를 안 보내는 v6는 규칙을 판별할 수 없으므로 전부 426 이다(업데이트 유도).
+  규칙 **C(적립식)·K(SAR)** 는 실행기로 돌리지 않는다(`RUNNER_UNSUPPORTED_RULES`) — C 는 서버가 3초 틱을 세어 분할 매수하는
+  규칙이라 봉·명령 모델과 맞지 않고, K 는 롱↔숏 전환을 실행기가 표현할 수 없다. 어느 버전이든 `start`·`claim` 모두 **422**
+  `"실행기는 아직 이 매크로 유형(적립식·SAR)을 지원하지 않아요."`(426 보다 먼저 판정, 티켓은 소비도 거절 표시도 하지 않는다).
+- 드라이버를 못 만들면(매크로 비었음·깨짐) 세션 `note` "서버 전략 시작 실패 — 매크로 설정을 확인해 주세요" + `error` 이벤트.
 - `heartbeat`: 위 프로토콜. 세션의 마지막 heartbeat가 `COMMAND_TTL_SECONDS`보다 오래됐어도 드라이버는 계속 돈다(리더보드처럼 상태는
   이어짐). 명령은 만료로 정리된다.
 - `mark_stopped`/`request_stop(close_and_stop)`: 드라이버 정지·피드 해제. `close_and_stop`은 기존처럼 실행기가 로컬에서 전량 청산.
@@ -179,8 +193,9 @@ class StrategyDriver:
 
 ## 5. 봉 타이밍과 지연
 
-봉 마감 → 피드 폴링(+2s) → sim → 명령 DB → 다음 heartbeat(≤5s) → 주문. 전체 **약 3~8초**. 백테스트는 마감가에 체결하므로 실계좌는
-그만큼 슬리피지가 더 있다 — 매크로의 `slippage_pct`가 그걸 흡수하는 값이다. 리더보드도 같은 봉으로 돌아가므로 페이퍼 수익률이
+봉 마감 → 피드 폴링(+2s) → sim(의도) → 다음 3초 틱에 체결(`execute_pending`) → 명령 DB → 다음 heartbeat(≤5s) → 주문. 전체
+**약 3~10초**. 백테스트는 다음 봉 시가에 체결하므로 실계좌는 그 몇 초만큼 슬리피지가 더 있다 — 매크로의 `slippage_pct`가 그걸
+흡수하는 값이다. 리더보드도 같은 봉으로 돌아가므로 페이퍼 수익률이
 백테스트 곡선과 같은 리듬으로 움직인다.
 
 ## 6. 테스트

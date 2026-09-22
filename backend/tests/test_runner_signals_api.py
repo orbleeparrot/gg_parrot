@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 from app import runner as runner_mod
 from app import runner_engine as eng
-from app.db import RunnerCommand, RunSession, get_session
+from app.db import RunnerCommand, RunnerLaunchTicket, RunSession, get_session
 from app.main import app
 from tests.test_runner import _auth, _signup
 
@@ -16,6 +16,13 @@ RSI = {"symbol": "ONEUSDT", "rule_type": "F", "position_side": "long", "market":
        "risk": {"invest_ratio": 1.0}, "fees": {"commission_pct": 0.1, "slippage_pct": 0.05}}
 A = {"symbol": "BTCUSDT", "rule_type": "A", "position_side": "long", "params": {"take_profit_pct": 3.0, "initial_capital": 1000},
      "risk": {"invest_ratio": 0.5, "stop_loss_pct": 2.0}, "period": {"preset": "3m"}}
+DCA = {"symbol": "BTCUSDT", "rule_type": "C", "position_side": "long", "market": "spot", "leverage": 1, "candle_interval": "1h",
+       "period": {"preset": "3m"}, "params": {"amount_per_buy": 100, "interval_days": 1, "initial_capital": 1000},
+       "risk": {"stop_loss_pct": 5}, "fees": {"commission_pct": 0, "slippage_pct": 0}}
+SAR = {"symbol": "BTCUSDT", "rule_type": "K", "position_side": "long", "market": "futures", "leverage": 1, "candle_interval": "1h",
+       "period": {"preset": "3m"}, "params": {"drop_trigger_pct": 5, "partial_exit_pct": 50, "flip_to_short": True,
+                                              "short_take_profit_pct": 3, "short_stop_loss_pct": 2, "initial_capital": 1000},
+       "risk": {"stop_loss_pct": 0}, "fees": {"commission_pct": 0, "slippage_pct": 0}}
 
 
 def _key(token):
@@ -51,6 +58,23 @@ def test_old_runner_can_still_start_rule_a():
     key = _key(_signup())
     assert _start(key, A, "7").status_code == 200
     assert _start(key, A, "").status_code == 200  # 버전 없는 실행기도 A/B 는 로컬 판단으로 충분하다
+
+
+def test_unsupported_rule_types_are_rejected_for_every_runner_version(monkeypatch):
+    """C(적립식)·K(SAR)는 실행기로 못 돌린다 — v7 도, v8 도 422. 세션도 드라이버도 만들지 않는다."""
+    scheduled = []
+    monkeypatch.setattr(eng, "schedule_start", lambda sid: scheduled.append(sid))
+    token = _signup()
+    key = _key(token)
+    for macro in (DCA, SAR):
+        for version in ("7", "8", ""):
+            r = _start(key, macro, version)
+            assert r.status_code == 422, (macro["rule_type"], version, r.json())
+            assert r.json()["detail"] == runner_mod.UNSUPPORTED_RULE_DETAIL
+    assert scheduled == []
+    sessions = client.get("/api/me/runner/sessions", headers=_auth(token)).json()
+    assert sessions["active"] == [] and sessions["recent"] == []
+    assert _start(key, A, "7").status_code == 200  # A 는 여전히 v7 로 시작된다
 
 
 def test_v8_requires_macro_and_schedules_driver(monkeypatch):
@@ -194,6 +218,20 @@ def test_claim_rejects_old_runner_for_indicator_macro():
     # 티켓은 살아 있다 — v8 실행기가 이어서 받아갈 수 있다.
     ok = client.post("/api/runner/launch-tickets/claim", json={"ticket": ticket, "runner_version": "8"})
     assert ok.status_code == 200 and ok.json()["macro"]["rule_type"] == "F"
+
+
+def test_claim_rejects_unsupported_rule_types_without_consuming_ticket():
+    token = _signup()
+    for macro in (DCA, SAR):
+        launch_id, ticket = _ticket(token, macro)
+        for version in ("7", "8"):
+            r = client.post("/api/runner/launch-tickets/claim", json={"ticket": ticket, "runner_version": version})
+            assert r.status_code == 422 and r.json()["detail"] == runner_mod.UNSUPPORTED_RULE_DETAIL
+        status = client.get(f"/api/me/runner/launch-tickets/{launch_id}", headers=_auth(token)).json()
+        assert status["status"] != "rejected" and status["status"] != "claimed"  # 거절 표시도, 소비도 하지 않는다
+        with get_session() as db:
+            row = db.get(RunnerLaunchTicket, launch_id)
+            assert row.claimed_at == "" and row.rejected_at == ""
 
 
 def test_claim_allows_old_runner_for_rule_a():

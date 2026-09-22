@@ -35,8 +35,9 @@ def _rsi_json():
 
 
 def _session(**over):
+    now = eng._now_iso()  # start_session 처럼 시작 시각·마지막 heartbeat 를 지금으로 — 오래된 값이면 체크포인트가 세션을 닫는다
     fields = dict(user_id=1, symbol="ONEUSDT", position_side="long", leverage=1, market="spot",
-                  status="running", started_at="2026-09-22T00:00:00Z", runner_version="8", macro_json=_rsi_json())
+                  status="running", started_at=now, last_heartbeat_at=now, runner_version="8", macro_json=_rsi_json())
     fields.update(over)
     with get_session() as db:
         row = RunSession(**fields)
@@ -87,6 +88,125 @@ def test_pending_commands_expire_and_order_by_seq():
             assert first.status == "expired"
     finally:
         _cleanup(sid)
+
+
+def test_exit_commands_never_expire_but_entries_do():
+    """청산은 TTL 이 지나도 pending 으로 남아 실행기에 다시 간다 — 버리면 포지션이 남는다. 진입은 만료된다."""
+    sid = _session()
+    try:
+        with get_session() as db:
+            row = db.get(RunSession, sid)
+            eng.insert_command(db, row, {"action": "sell", "notional_frac": 0.0, "qty_frac": 1.0, "signal_price": 1.0, "reason": "청산"}, now_ms=1_000)
+            eng.insert_command(db, row, {"action": "buy", "notional_frac": 1.0, "qty_frac": 0.0, "signal_price": 1.1, "reason": "진입"}, now_ms=2_000)
+            eng.insert_command(db, row, {"action": "cover", "notional_frac": 0.0, "qty_frac": 1.0, "signal_price": 1.2, "reason": "청산"}, now_ms=3_000)
+            db.commit()
+            out = eng.pending_commands(db, row, now_ms=10_000_000)  # TTL(90s) 훨씬 뒤
+            db.commit()
+            assert [(c["seq"], c["action"]) for c in out] == [(1, "sell"), (3, "cover")]
+            assert out[0]["expires_ms"] == 1_000 + 90_000  # 필드는 그대로 실린다(형식 유지) — 서버는 청산에 만료를 적용하지 않는다
+            statuses = {c.seq: c.status for c in db.exec(select(RunnerCommand).where(RunnerCommand.session_id == sid)).all()}
+            assert statuses == {1: "pending", 2: "expired", 3: "pending"}
+    finally:
+        _cleanup(sid)
+
+
+def test_ok_ack_on_expired_command_is_accepted_but_failure_is_ignored():
+    """실행기가 만료 직전에 실행한 명령의 ok ack 는 받아들인다(실주문이 나갔다). 만료 명령의 실패 ack 는 무시."""
+    sid = _session()
+    try:
+        with get_session() as db:
+            row = db.get(RunSession, sid)
+            a = eng.insert_command(db, row, {"action": "buy", "notional_frac": 1.0, "qty_frac": 0.0, "signal_price": 1.0, "reason": "진입"}, now_ms=1_000)
+            b = eng.insert_command(db, row, {"action": "buy", "notional_frac": 1.0, "qty_frac": 0.0, "signal_price": 1.5, "reason": "진입"}, now_ms=1_000)
+            db.commit()
+            assert eng.pending_commands(db, row, now_ms=500_000) == []
+            db.commit()
+            db.refresh(a); db.refresh(b)
+            assert a.status == "expired" and b.status == "expired"
+            eng.apply_acks(db, row, [{"command_id": a.id, "ok": True, "executed_qty": 30.0, "fill_price": 1.01},
+                                     {"command_id": b.id, "ok": False, "error": "timeout"}], now_ms=500_001)
+            db.commit()
+            db.refresh(a); db.refresh(b)
+            assert a.status == "acked" and a.executed_qty == 30.0 and a.fill_price == 1.01 and a.attempts == 1
+            assert b.status == "expired" and b.attempts == 0 and b.error == ""
+            kinds = [e.kind for e in db.exec(select(RunSessionEvent).where(RunSessionEvent.session_id == sid)).all()]
+            assert kinds == ["order"]
+    finally:
+        _cleanup(sid)
+
+
+def test_insert_command_dedupes_same_signal_within_window():
+    """직전 명령과 action·signal_price 가 같고 60초 안이면 기존 행을 돌려준다(롤링 배포 겹침). 죽은 명령·다른 신호는 새로."""
+    sid = _session()
+    try:
+        with get_session() as db:
+            row = db.get(RunSession, sid)
+            same = {"action": "buy", "notional_frac": 1.0, "qty_frac": 0.0, "signal_price": 1.0, "reason": "진입"}
+            first, created = eng.upsert_command(db, row, same, now_ms=10_000)
+            assert created is True and first.seq == 1
+            dup, created = eng.upsert_command(db, row, dict(same), now_ms=10_000 + 59_000)
+            assert created is False and dup.id == first.id
+            assert eng.insert_command(db, row, dict(same), now_ms=10_000 + 30_000).id == first.id
+            first.status = "acked"  # 실행기가 이미 실행한 명령도 창 안이면 중복으로 본다
+            db.add(first)
+            db.flush()
+            assert eng.upsert_command(db, row, dict(same), now_ms=10_000 + 40_000)[1] is False
+            other_price, created = eng.upsert_command(db, row, {**same, "signal_price": 1.01}, now_ms=10_000 + 40_000)
+            assert created is True and other_price.seq == 2
+            late, created = eng.upsert_command(db, row, {**same, "signal_price": 1.01}, now_ms=10_000 + 40_000 + 61_000)
+            assert created is True and late.seq == 3  # 창 밖이면 새 명령
+            late.status = "failed"
+            db.add(late)
+            db.flush()
+            again, created = eng.upsert_command(db, row, {**same, "signal_price": 1.01}, now_ms=10_000 + 40_000 + 62_000)
+            assert created is True and again.seq == 4  # failed/expired 는 다시 넣는다
+            db.commit()
+    finally:
+        _cleanup(sid)
+
+
+def test_persist_fill_skips_signal_event_for_duplicate_command(monkeypatch):
+    sid = _session()
+    fake = _RsiFeed()
+    monkeypatch.setattr(eng, "feed", fake)
+    monkeypatch.setattr(eng, "_run", _no_loop)
+    try:
+        loop = asyncio.new_event_loop()
+        assert loop.run_until_complete(eng.start_driver(sid)) is True
+        live = eng._drivers[sid]
+        fill = Fill("buy", 50.0, 0.64, 32.0, 0.0, reason="RSI 1.0 ≤ 25 · 진입", qty_before=0.0)
+        eng._persist_fill(live, fill, "{}")
+        eng._persist_fill(live, fill, "{}")  # 다른 프로세스가 같은 신호를 이미 남긴 상황과 같다
+        with get_session() as db:
+            cmds = db.exec(select(RunnerCommand).where(RunnerCommand.session_id == sid)).all()
+            assert len(cmds) == 1
+            kinds = [e.kind for e in db.exec(select(RunSessionEvent).where(RunSessionEvent.session_id == sid)).all()]
+            assert kinds == ["signal"]
+        loop.run_until_complete(eng.stop_driver(sid))
+    finally:
+        _cleanup(sid)
+
+
+def test_shutdown_drivers_stops_every_live_driver(monkeypatch):
+    a, b = _session(), _session()
+    fake = _RsiFeed()
+    monkeypatch.setattr(eng, "feed", fake)
+    monkeypatch.setattr(eng, "get_ticker_price_cached", lambda s: 50.0)
+    monkeypatch.setattr(eng, "POLL_SECONDS", 0.01)
+
+    async def scenario():
+        assert await eng.start_driver(a) and await eng.start_driver(b)
+        tasks = [eng._drivers[a].task, eng._drivers[b].task]
+        assert await eng.shutdown_drivers() == 2
+        assert eng._drivers == {} and fake.subs == []
+        assert all(t.done() for t in tasks)
+        assert await eng.shutdown_drivers() == 0  # 비어 있으면 아무것도 안 한다
+
+    try:
+        asyncio.new_event_loop().run_until_complete(scenario())
+    finally:
+        _cleanup(a)
+        _cleanup(b)
 
 
 def test_ack_ok_marks_acked_and_logs_order_event():
@@ -188,7 +308,7 @@ def test_start_driver_warms_up_subscribes_and_writes_commands_on_fill(monkeypatc
         since = []
 
         async def history(self, symbol, interval, market, n):
-            return [(i, 100 - i, 100 - i, 100 - i, 100 - i) for i in range(20)]
+            return [(i, 100, 100, 100, 100) for i in range(20)]  # 평탄한 웜업 — 의도 없이 시작한다
 
         def subscribe(self, symbol, interval, market, cb, *, since_t=None):
             self.subs.append(cb)
@@ -200,7 +320,7 @@ def test_start_driver_warms_up_subscribes_and_writes_commands_on_fill(monkeypatc
 
     fake = FakeFeed()
     monkeypatch.setattr(eng, "feed", fake)
-    monkeypatch.setattr(eng, "get_ticker_price_cached", lambda s: 50.0)
+    monkeypatch.setattr(eng, "get_ticker_price_cached", lambda s: 91.0)
     monkeypatch.setattr(eng, "_run", _no_loop)
 
     async def scenario():
@@ -208,19 +328,24 @@ def test_start_driver_warms_up_subscribes_and_writes_commands_on_fill(monkeypatc
         live = eng._drivers[sid]
         assert fake.subs and live.driver.state()["in_position"] is False
         assert fake.since == [19]  # 웜업 마지막 봉의 t 로 커서를 시딩 — 같은 봉을 두 번 받지 않는다
-        for c in (50, 50):  # 웜업 끝 RSI(7) 낮음 → enter → 다음 봉 시가 체결
-            await fake.subs[0]("ONEUSDT", (0, c, c, c, c))
-        await eng._tick_once(live)  # 큐 드레인 → 명령 기록
+        await eng._tick_once(live)  # 의도가 없으면 틱은 시세 갱신뿐
+        await fake.subs[0]("ONEUSDT", (0, 90, 90, 90, 90))  # 급락 봉 마감 → RSI(7) 0 → enter 의도(체결은 아직)
+        assert live.driver.state()["in_position"] is False
+        await eng._tick_once(live)  # 봉 뒤 첫 틱(≈ 다음 시가)에 체결 → 명령 기록
         with get_session() as db:
             cmds = db.exec(select(RunnerCommand).where(RunnerCommand.session_id == sid)).all()
             assert [c.action for c in cmds] == ["buy"] and cmds[0].reason.startswith("RSI ")
             assert cmds[0].status == "pending" and cmds[0].seq == 1
-            assert abs(cmds[0].signal_price - 50.025) < 1e-9  # 시가 50 + 슬리피지 0.05% — 엔진 체결가 그대로
+            assert abs(cmds[0].signal_price - 91.0 * 1.0005) < 1e-9  # 틱 가격 91 + 슬리피지 0.05% — 엔진 체결가 그대로
             assert abs(cmds[0].notional_frac - 1.0) < 1e-6 and cmds[0].qty_frac == 0.0  # invest_ratio 1.0 → 초기자본 전액
             row = db.get(RunSession, sid)
             assert json.loads(row.state_json)["in_position"] is True
             kinds = [e.kind for e in db.exec(select(RunSessionEvent).where(RunSessionEvent.session_id == sid)).all()]
             assert kinds == ["signal"]
+        await fake.subs[0]("ONEUSDT", (0, 91, 91, 91, 91))  # 다음 봉이 같은 의도를 다시 체결하지 않는다
+        await eng._tick_once(live)
+        with get_session() as db:
+            assert len(db.exec(select(RunnerCommand).where(RunnerCommand.session_id == sid)).all()) == 1
         await eng.stop_driver(sid)
         assert sid not in eng._drivers and fake.subs == []
 
@@ -428,6 +553,52 @@ def test_loop_cleans_up_when_session_stops_in_db(monkeypatch):
         _cleanup(sid)
 
 
+def test_checkpoint_stops_session_when_runner_heartbeat_is_stale(monkeypatch):
+    """실행기가 1시간 넘게 heartbeat 를 안 보내면 체크포인트가 세션을 닫고(stopped·stop 이벤트) 루프를 멈춘다."""
+    sid = _session(last_heartbeat_at="2026-09-22T00:00:00Z", in_position=True)  # 오래전
+    fresh = _session(last_heartbeat_at=eng._now_iso())
+    fake = _RsiFeed()
+    monkeypatch.setattr(eng, "feed", fake)
+    monkeypatch.setattr(eng, "_run", _no_loop)
+
+    async def scenario():
+        assert await eng.start_driver(sid) and await eng.start_driver(fresh)
+        stale_live, fresh_live = eng._drivers[sid], eng._drivers[fresh]
+        eng._persist_state(fresh_live, "{}")
+        assert fresh_live.stop_flag is False  # 최근 heartbeat 면 그대로
+        eng._persist_state(stale_live, '{"in_position": true}')
+        assert stale_live.stop_flag is True
+        with get_session() as db:
+            row = db.get(RunSession, sid)
+            assert row.status == "stopped" and row.stopped_at and row.note == eng.STALE_RUNNER_NOTE
+            assert row.state_json == '{"in_position": true}'
+            events = db.exec(select(RunSessionEvent).where(RunSessionEvent.session_id == sid)).all()
+            assert [e.kind for e in events] == ["stop"] and "포지션 보유 중" in events[0].message
+            assert db.get(RunSession, fresh).status == "running"
+        await eng.stop_driver(sid)
+        await eng.stop_driver(fresh)
+
+    try:
+        asyncio.new_event_loop().run_until_complete(scenario())
+    finally:
+        _cleanup(sid)
+        _cleanup(fresh)
+
+
+def test_stale_runner_threshold_falls_back_to_started_at_and_tolerates_bad_iso():
+    from datetime import datetime, timezone
+    now = datetime(2026, 9, 22, 12, 0, 0, tzinfo=timezone.utc)
+    row = RunSession(user_id=1, started_at="2026-09-22T11:59:00Z", last_heartbeat_at="")
+    assert eng._runner_is_stale(row, now) is False
+    row.started_at = "2026-09-22T09:00:00Z"
+    assert eng._runner_is_stale(row, now) is True
+    row.last_heartbeat_at = "2026-09-22T11:30:00Z"  # heartbeat 가 있으면 그게 기준
+    assert eng._runner_is_stale(row, now) is False
+    row.last_heartbeat_at = "garbage"
+    row.started_at = "also garbage"
+    assert eng._runner_is_stale(row, now) is False  # 못 읽으면 닫지 않는다
+
+
 def test_start_driver_refuses_missing_or_stopped_session():
     sid = _session(status="stopped")
     try:
@@ -435,6 +606,24 @@ def test_start_driver_refuses_missing_or_stopped_session():
         assert loop.run_until_complete(eng.start_driver(sid)) is False
         assert loop.run_until_complete(eng.start_driver(999_999_999)) is False
         assert sid not in eng._drivers
+        with get_session() as db:  # 종료된 세션은 '시작 실패' 로 표시하지 않는다
+            assert db.get(RunSession, sid).note == ""
+            assert db.exec(select(RunSessionEvent).where(RunSessionEvent.session_id == sid)).all() == []
+    finally:
+        _cleanup(sid)
+
+
+@pytest.mark.parametrize("macro_json", ["", "{not json", '{"symbol": "ONEUSDT"}'])
+def test_start_driver_failure_on_running_session_is_noted(macro_json):
+    """running 세션인데 매크로가 비었거나 깨져 드라이버를 못 만들면 note·error 이벤트로 알린다 — 조용히 죽지 않는다."""
+    sid = _session(macro_json=macro_json)
+    try:
+        assert asyncio.new_event_loop().run_until_complete(eng.start_driver(sid)) is False
+        assert sid not in eng._drivers
+        with get_session() as db:
+            assert db.get(RunSession, sid).note == eng.START_FAIL_NOTE
+            events = db.exec(select(RunSessionEvent).where(RunSessionEvent.session_id == sid)).all()
+            assert [e.kind for e in events] == ["error"] and "시작하지 못했어요" in events[0].message
     finally:
         _cleanup(sid)
 

@@ -79,8 +79,13 @@ def supports_signals(version: str) -> bool:
 
 SIGNAL_REQUIRED_DETAIL = "지표형 매크로는 실행기 v8 이상이 필요해요. 실행기를 업데이트해 주세요."
 MACRO_REQUIRED_DETAIL = "실행기 v8 은 매크로 설정을 함께 보내야 해요."
+# 실행기로는 아직 돌릴 수 없는 매크로 유형(모든 실행기 버전). C(적립식)는 서버가 3초 틱을 세어 분할 매수하는
+# 규칙이라 봉·명령 모델과 맞지 않고, K(SAR)는 롱↔숏 전환(flip-to-short)을 실행기가 표현할 수 없다.
+# v7 도 C 를 로컬에서 잘못(무조건 진입) 돌렸으므로 버전과 무관하게 막는다.
+RUNNER_UNSUPPORTED_RULES = frozenset({RuleType.C, RuleType.K})
+UNSUPPORTED_RULE_DETAIL = "실행기는 아직 이 매크로 유형(적립식·SAR)을 지원하지 않아요."
 # 서버(runner_engine)가 세션 note 에 쓰는 마커 — 실행기 heartbeat 의 note 가 덮어쓰면 안 된다.
-_SERVER_NOTE_MARKERS = (runner_engine.EXIT_FAIL_NOTE, runner_engine.LOOP_ERROR_NOTE)
+_SERVER_NOTE_MARKERS = (runner_engine.EXIT_FAIL_NOTE, runner_engine.LOOP_ERROR_NOTE, runner_engine.START_FAIL_NOTE)
 
 
 def needs_signals(macro: Optional[Macro]) -> bool:
@@ -387,6 +392,11 @@ def claim_launch_ticket(ticket: str, runner_version: str = "") -> dict:
             macro = Macro.model_validate_json(macro_row.macro_json)
         except (TypeError, ValueError):
             raise _ticket_error(422, "저장된 매크로 형식이 올바르지 않아요.")
+        if macro.rule_type in RUNNER_UNSUPPORTED_RULES:
+            # 실행기가 못 돌리는 유형은 버전과 무관하게 거절 — 업데이트로 풀리는 문제가 아니므로 버전 게이트(426)보다
+            # 먼저 보고, '거절(업데이트 필요)' 표시도 하지 않고 티켓도 소비하지 않는다(잠금만 푼다).
+            db.rollback()
+            raise _ticket_error(422, UNSUPPORTED_RULE_DETAIL)
         if not supports_signals(runner_version) and needs_signals(macro):
             # 구버전 실행기 + 지표형 매크로: 거절 사실만 남기고(웹이 상태 조회로 알아챔) 티켓은 소비하지 않는다.
             # mark_launch_ticket_rejected 는 자기 세션을 여니 BEGIN IMMEDIATE 잠금을 먼저 푼다.
@@ -459,6 +469,9 @@ def start_session(user: User, payload: dict) -> dict:
     signal_runner = supports_signals(runner_version)
     if signal_runner and normalized_macro is None:
         raise HTTPException(status_code=422, detail=MACRO_REQUIRED_DETAIL)
+    if normalized_macro is not None and normalized_macro.rule_type in RUNNER_UNSUPPORTED_RULES:
+        # 적립식(C)·SAR(K)는 어느 실행기 버전으로도 돌리지 않는다(위 주석 참고) — 업데이트 안내(426)보다 먼저 알린다.
+        raise HTTPException(status_code=422, detail=UNSUPPORTED_RULE_DETAIL)
     if not signal_runner and needs_signals(normalized_macro):
         raise HTTPException(status_code=426, detail=SIGNAL_REQUIRED_DETAIL)
 

@@ -215,3 +215,67 @@ def test_new_entry_is_not_marked_as_defending(_stub_paper):
         paper_session_id=None,
     )
     assert view["streak_days"] == 1 and view["defending"] is False
+
+
+# --- 순위 포인트 보상 (2026-09-22): 자정 이월 때 어제 최종 순위로 지급, 사람 1명당 최고 순위 1번, 봇 제외 ------
+from app.db import NotificationMessage, PointLedger, User
+
+
+def _user(points: int = 0) -> int:
+    with get_session() as db:
+        u = User(email=f"lb{secrets.token_hex(3)}@ex.com", username=f"lb_{secrets.token_hex(3)}",
+                 password_hash="x", points_balance=points, created_at="2026-09-22T00:00:00Z")
+        db.add(u)
+        db.commit()
+        db.refresh(u)
+        return u.id
+
+
+def _owned_yesterday_entry(returns, *, ret, session_id, owner_id, is_ai=False, streak_days=1) -> int:
+    entry_id = _make_yesterday_entry(returns, ret=ret, session_id=session_id)
+    with get_session() as db:
+        row = db.get(LeaderboardEntry, entry_id)
+        row.owner_user_id = owner_id
+        row.is_ai = is_ai
+        row.streak_days = streak_days
+        db.add(row)
+        db.commit()
+    return entry_id
+
+
+def _balance(uid: int) -> int:
+    with get_session() as db:
+        return db.get(User, uid).points_balance
+
+
+def test_rank_rewards_are_paid_once_at_carryover(_stub_paper, _fresh_day):
+    first, second, third, fourth, eleventh = (_user() for _ in range(5))
+    bot = _user()
+    _owned_yesterday_entry(_stub_paper, ret=9.0, session_id=301, owner_id=first)
+    _owned_yesterday_entry(_stub_paper, ret=8.0, session_id=302, owner_id=second)
+    _owned_yesterday_entry(_stub_paper, ret=7.0, session_id=303, owner_id=third)
+    _owned_yesterday_entry(_stub_paper, ret=6.0, session_id=304, owner_id=fourth)
+    _owned_yesterday_entry(_stub_paper, ret=5.5, session_id=305, owner_id=bot, is_ai=True)  # 봇은 순위에 끼지만 보상 없음
+    for i in range(6):
+        _owned_yesterday_entry(_stub_paper, ret=5.0 - i * 0.1, session_id=310 + i, owner_id=fourth)  # 같은 사람 여러 개
+    _owned_yesterday_entry(_stub_paper, ret=0.5, session_id=320, owner_id=eleventh)  # 12등
+
+    asyncio.run(lb.ensure_today_carryover())
+    asyncio.run(lb.ensure_today_carryover())  # 두 번 불러도 한 번만
+
+    assert _balance(first) == 100 and _balance(second) == 60 and _balance(third) == 40
+    assert _balance(fourth) == 15  # 4등 한 번만(그 사람의 다른 엔트리는 무시)
+    assert _balance(bot) == 0 and _balance(eleventh) == 0
+    with get_session() as db:
+        rows = db.exec(select(PointLedger).where(PointLedger.reason == "leaderboard_rank", PointLedger.user_id == first)).all()
+        assert [r.delta for r in rows] == [100] and rows[0].ref == f"lb:{_fresh_day}:1"
+        note = db.exec(select(NotificationMessage).where(NotificationMessage.user_id == first, NotificationMessage.kind == "quest")).first()
+        assert note is not None and "1등" in note.title and "100P" in note.title
+
+
+def test_defending_top_three_gets_streak_bonus_capped(_stub_paper, _fresh_day):
+    day2, day7 = _user(), _user()
+    _owned_yesterday_entry(_stub_paper, ret=9.0, session_id=331, owner_id=day2, streak_days=2)  # 어제까지 2일째 → +10
+    _owned_yesterday_entry(_stub_paper, ret=8.0, session_id=332, owner_id=day7, streak_days=7)  # 7일째 → +60 → 상한 50
+    asyncio.run(lb.ensure_today_carryover())
+    assert _balance(day2) == 110 and _balance(day7) == 110

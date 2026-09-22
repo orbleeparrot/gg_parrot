@@ -8411,6 +8411,7 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 .agent-result-pnl-label { color: rgb(var(--c-slate-500)); font-size: 13px; font-weight: 700; }
 .agent-result-pnl-sub { color: rgb(var(--c-slate-500)); font-size: 13px; }
 .agent-position-note { display: block; color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 500; margin-top: 2px; }
+.lb-reward-note { margin-left: 6px; color: rgb(var(--c-slate-500)); cursor: help; }
 .agent-result-pnl {
   color: rgb(var(--c-slate-900));
   font-size: clamp(36px, 9cqi, 56px);

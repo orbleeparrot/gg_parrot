@@ -8452,6 +8452,15 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 .confirm-dialog { width: 100%; max-width: 400px; padding: 24px; }
 .confirm-dialog-actions { display: grid; gap: 8px; margin-top: 24px; }
 
+/* 개발자 노트 팝업 (2026-09-22) — 확인 대화상자와 같은 틀, 항목은 아이콘 + 한 줄 */
+.devnote { width: 100%; max-width: 440px; padding: 24px; }
+.devnote-list { display: grid; gap: 12px; margin-top: 16px; padding: 0; list-style: none; }
+.devnote-item { display: flex; gap: 10px; align-items: flex-start; line-height: 1.5; }
+.devnote-icon { flex: 0 0 auto; font-size: 18px; line-height: 1.3; }
+.devnote-link { color: rgb(var(--c-slate-900)); font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
+.devnote-check { display: flex; align-items: center; gap: 8px; margin-top: 18px; cursor: pointer; }
+.devnote-check input { width: 16px; height: 16px; accent-color: rgb(var(--c-brand)); }
+
 /* Hallmark · component: floating chat · genre: modern-minimal · theme: DESIGN.md (locked)
  * states: default · hover · focus · active · disabled · loading · error · success
  * contrast: pass (46–50)

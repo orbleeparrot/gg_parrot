@@ -124,3 +124,18 @@ export function toneOf(value) {
   const v = Number(value) || 0;
   return v > 0 ? "is-up" : v < 0 ? "is-down" : "";
 }
+
+// 포지션 블록의 큰 숫자 — 서버가 투입금(invested_usdt)과 총수익률(return_pct)을 주면 그걸 앞세우고,
+// 진입가 대비 평가손익은 보조 문구로. 투입금이 없는 옛 세션은 예전처럼 진입가 대비 %만.
+export function headlineReturn(session) {
+  const invested = Number(session?.invested_usdt) || 0;
+  const total = session?.return_pct;
+  if (invested > 0 && total !== null && total !== undefined && Number.isFinite(Number(total))) {
+    const investedText = `투입 ${invested.toLocaleString("en-US", { maximumFractionDigits: 2 })} USDT`;
+    const note = session?.in_position
+      ? `진입가 대비 ${fmtSignedPct(session.unrealized_pct)} · ${investedText}`
+      : `실현 ${fmtSignedMoney(session?.realized_pnl, session?.symbol)} · ${investedText}`;
+    return { pct: Number(total), label: "투입금 대비 총수익률", note };
+  }
+  return { pct: Number(session?.unrealized_pct) || 0, label: "평가손익", note: "" };
+}

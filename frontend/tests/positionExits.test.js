@@ -78,3 +78,15 @@ test("평가손익 금액 · 부호 표기 · 실행 시간", () => {
   assert.equal(runningFor("2026-09-15T09:59:40Z", t0), "1분 미만");
   assert.equal(runningFor("", t0), "");
 });
+
+// 투입금 대비 총수익률 (2026-09-22): 구동 중 큰 숫자는 서버 return_pct, 진입가 대비 %는 보조로.
+import { headlineReturn } from "../src/lib/positionExits.js";
+
+test("headlineReturn prefers total return over invested capital and keeps entry-based pct as a note", () => {
+  const live = headlineReturn({ in_position: true, unrealized_pct: 1.2, realized_pnl: 0.4, invested_usdt: 40, return_pct: 2.2 });
+  assert.deepEqual(live, { pct: 2.2, label: "투입금 대비 총수익률", note: "진입가 대비 +1.20% · 투입 40 USDT" });
+  const flat = headlineReturn({ in_position: false, unrealized_pct: 0, realized_pnl: 0.8, invested_usdt: 40, return_pct: 2.0 });
+  assert.deepEqual(flat, { pct: 2.0, label: "투입금 대비 총수익률", note: "실현 +0.80 USDT · 투입 40 USDT" });
+  const legacy = headlineReturn({ in_position: true, unrealized_pct: 1.2, realized_pnl: 0, invested_usdt: 0, return_pct: null });
+  assert.deepEqual(legacy, { pct: 1.2, label: "평가손익", note: "" });
+});

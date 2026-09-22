@@ -29,3 +29,7 @@ export const STATE_LEGEND = [
   ["거래 N회", "등록 이후 체결된 횟수(진입·청산 각각 1회). 익절·손절 뒤 다시 진입하면 계속 늘어요"],
 ];
 export const TRADES_HELP = "거래 N회: 등록 이후 체결 횟수예요. 진입 1회 + 청산 1회 = 2회. 재진입할수록 늘어요.";
+
+// 순위 포인트 보상 (2026-09-22) — 자정 이월 때 어제 최종 순위로 지급(backend/app/leaderboard.py RANK_REWARDS 와 같은 값).
+export const REWARD_NOTE = "· 순위권 포인트 보상 ⓘ";
+export const REWARD_HELP = "매일 자정 어제 순위로 지급 — 1등 100P · 2등 60P · 3등 40P · 4~10등 15P. 상위 3등을 연속으로 지키면 하루당 +10P(최대 +50P). 1인 1회, AI 봇 제외.";

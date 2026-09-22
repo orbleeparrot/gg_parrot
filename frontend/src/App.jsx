@@ -7,6 +7,7 @@ import Home from "./pages/Home.jsx";
 import HotCoinsMarquee from "./components/HotCoinsMarquee.jsx";
 import SiteNavigation from "./components/SiteNavigation.jsx";
 import SiteHeader from "./components/SiteHeader.jsx";
+import DevNoteDialog from "./components/DevNoteDialog.jsx";
 import { recordVisit } from "./lib/visit.js";
 
 // Keep the first screen small and quick. The builder, charts, guide, and
@@ -179,6 +180,7 @@ export default function App() {
                 : "site-main py-6 sm:py-8"}
         >
           <RouteChangeEffects />
+          <DevNoteDialog />
           <Suspense fallback={<RouteLoading />}>
             <Routes>
               <Route path="/" element={<HomeRoute />} />

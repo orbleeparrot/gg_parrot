@@ -517,6 +517,9 @@ def _carry_previous_day_top(db=None) -> int:
         ]
         _sort_board(ranked, key=lambda t: (t[1], t[0].created_at))
 
+        # 순위 보상은 이월(streak +1) 전에 준다 — 어제까지 지킨 일수로 유지 보너스를 센다.
+        _pay_rank_rewards(db, ranked, _today_kst())
+
         carried = 0
         for row, _ in ranked[:KEEP_TOP_N]:
             if row.first_created_ms is None:
@@ -528,6 +531,53 @@ def _carry_previous_day_top(db=None) -> int:
         if owned:
             db.commit()
     return carried
+
+
+# --- 순위 포인트 보상 (2026-09-22) ---------------------------------------------
+# 자정 이월 때 어제 최종 순위로 지급한다. 사람(owner_user_id)당 최고 순위 하나만, AI 봇은 제외.
+# 상위 3등을 연속으로 지키면 하루당 +10P(최대 +50P). 이월 트랜잭션 안에서 한 번만 돈다.
+RANK_REWARDS = {1: 100, 2: 60, 3: 40}
+RANK_REWARD_4_TO_10 = 15
+STREAK_BONUS_PER_DAY = 10
+STREAK_BONUS_CAP = 50
+RANK_REWARD_REASON = "leaderboard_rank"
+
+
+def rank_reward(rank: int, streak_days: int) -> int:
+    """rank 는 1부터. streak_days 는 어제까지 보드에 있던 일수(1 = 어제 등록)."""
+    if rank in RANK_REWARDS:
+        base = RANK_REWARDS[rank]
+        bonus = min(STREAK_BONUS_CAP, STREAK_BONUS_PER_DAY * max(0, int(streak_days or 1) - 1))
+        return base + bonus
+    if 4 <= rank <= 10:
+        return RANK_REWARD_4_TO_10
+    return 0
+
+
+def _pay_rank_rewards(db, ranked, date_kst: str) -> int:
+    """ranked 는 (entry, return) 을 순위순으로. 지급한 사람 수를 돌려준다(커밋은 호출자)."""
+    paid: set[int] = set()
+    count = 0
+    for rank, (row, _) in enumerate(ranked, start=1):
+        owner = getattr(row, "owner_user_id", None)
+        if owner is None or getattr(row, "is_ai", False) or owner in paid:
+            continue
+        paid.add(owner)  # 같은 사람의 낮은 순위 엔트리는 건너뛴다
+        amount = rank_reward(rank, getattr(row, "streak_days", 1))
+        if amount <= 0:
+            continue
+        user = db.get(User, owner)
+        if user is None or getattr(user, "is_deleted", False):
+            continue
+        ref = f"lb:{date_kst}:{rank}"
+        points_mod.apply(db, user, amount, RANK_REWARD_REASON, ref=ref)
+        notifications_mod.notify(
+            db, owner, "quest", f"어제 리더보드 {rank}등 · +{amount}P",
+            f"{row.symbol} · {row.human_summary[:60]}" + (" · 유지 보너스 포함" if amount > RANK_REWARDS.get(rank, amount) else ""),
+            "/leaderboard", ref=ref,
+        )
+        count += 1
+    return count
 
 
 def _perform_carryover(date_kst: str) -> int:

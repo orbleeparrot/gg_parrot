@@ -13,7 +13,7 @@ import { applyVote, settleVote } from "../lib/leaderboardVotes.js";
 import StrategyDetails from "../components/StrategyDetails.jsx";
 import { impressionKey } from "../lib/visit.js";
 import { isLive, liveReturn, stateHelp, stateLine, symbolsOf } from "../lib/leaderboardState.js";
-import { LIVE_TITLE, STATE_LEGEND } from "../lib/leaderboardCopy.js";
+import { LIVE_TITLE, REWARD_HELP, REWARD_NOTE, STATE_LEGEND } from "../lib/leaderboardCopy.js";
 import "./LeaderboardMobile.css";
 
 // 매크로 지표 비콘 — 노출(목록에 보임)·열람(빌더로 가져오기 · 빠른 실행 · 언락 중 하나를 누름).
@@ -376,7 +376,12 @@ function AccountLeaderboard() {
     <div className="leaderboard-page">
       <PageHeader
         title="오늘의 리더보드"
-        meta={<><span className="lb-reset-prefix">리더보드 </span>초기화 <ResetCountdown resetAt={resetAt} /></>}
+        meta={(
+          <>
+            <span className="lb-reset-prefix">리더보드 </span>초기화 <ResetCountdown resetAt={resetAt} />
+            <span className="lb-reward-note" title={REWARD_HELP}>{REWARD_NOTE}</span>
+          </>
+        )}
         actions={(
           <>
             <SimBadge className="lg:hidden" />

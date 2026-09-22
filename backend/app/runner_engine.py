@@ -52,7 +52,7 @@ def _now_ms() -> int:
 class _Live:
     """돌고 있는 세션 하나 — 드라이버·틱 태스크·마감봉 구독."""
 
-    __slots__ = ("session_id", "driver", "task", "subs", "stop_flag", "last_checkpoint")
+    __slots__ = ("session_id", "driver", "task", "subs", "stop_flag", "last_checkpoint", "unsaved")
 
     def __init__(self, session_id: int, driver: StrategyDriver) -> None:
         self.session_id = session_id
@@ -61,10 +61,15 @@ class _Live:
         self.subs: list = []
         self.stop_flag = False
         self.last_checkpoint = 0.0
+        # DB 저장에 실패한 체결 (fill, 그 시점 state_json) — 다음 틱에서 먼저 다시 저장한다.
+        # 엔진은 이미 큐에서 뺐으므로 여기 두지 않으면 신호가 사라진다.
+        self.unsaved: List[tuple] = []
 
 
 _drivers: Dict[int, _Live] = {}
+_starting: set = set()  # start_driver 가 첫 await 전에 표시 — 동시 호출이 드라이버를 둘 만들지 않게
 _loop: Optional[asyncio.AbstractEventLoop] = None
+_scheduled: set = set()  # _schedule 이 만든 태스크의 강한 참조 — GC 로 사라지지 않게(끝나면 뺀다)
 
 
 # --- 스레드 → 루프 -------------------------------------------------------
@@ -74,19 +79,25 @@ def install(loop: asyncio.AbstractEventLoop) -> None:
     _loop = loop
 
 
-def _schedule(coro_factory) -> None:
+def _schedule(coro_factory, label: str) -> None:
     if _loop is None or _loop.is_closed():
-        log.warning("runner engine: no event loop installed; skipping %s", getattr(coro_factory, "__name__", "task"))
+        log.warning("runner engine: no event loop installed; skipping %s", label)
         return
-    _loop.call_soon_threadsafe(lambda: _loop.create_task(coro_factory()))
+
+    def _spawn() -> None:
+        task = _loop.create_task(coro_factory(), name=f"runner_engine:{label}")
+        _scheduled.add(task)
+        task.add_done_callback(_scheduled.discard)
+
+    _loop.call_soon_threadsafe(_spawn)
 
 
 def schedule_start(session_id: int) -> None:
-    _schedule(lambda: start_driver(session_id))
+    _schedule(lambda: start_driver(session_id), f"start_driver({session_id})")
 
 
 def schedule_stop(session_id: int) -> None:
-    _schedule(lambda: stop_driver(session_id))
+    _schedule(lambda: stop_driver(session_id), f"stop_driver({session_id})")
 
 
 # --- 드라이버 ------------------------------------------------------------
@@ -106,9 +117,17 @@ def _load_session(session_id: int) -> Optional[dict]:
 
 
 async def start_driver(session_id: int) -> bool:
-    """DB 의 macro_json 으로 드라이버를 만들고 웜업 → (복구) → 구독 → 틱 루프. 이미 돌면 True."""
-    if session_id in _drivers:
+    """DB 의 macro_json 으로 드라이버를 만들고 웜업 → (복구) → 구독 → 틱 루프. 이미 돌면(또는 시작 중이면) True."""
+    if session_id in _drivers or session_id in _starting:
         return True
+    _starting.add(session_id)
+    try:
+        return await _start_driver(session_id)
+    finally:
+        _starting.discard(session_id)
+
+
+async def _start_driver(session_id: int) -> bool:
     info = await asyncio.to_thread(_load_session, session_id)
     if info is None:
         return False
@@ -164,6 +183,9 @@ async def stop_driver(session_id: int) -> None:
         live.task.cancel()
 
 
+LOOP_ERROR_NOTE = "서버 전략 루프 오류 — 확인 필요"
+
+
 async def _run(live: _Live) -> None:
     try:
         while not live.stop_flag:
@@ -172,7 +194,12 @@ async def _run(live: _Live) -> None:
     except asyncio.CancelledError:
         raise
     except Exception:
+        # 틱 한 번의 저장 실패는 _tick_once 가 삼킨다 — 여기까지 온 건 예상 못 한 오류. 세션에 흔적을 남긴다.
         log.exception("runner engine: session %s loop died", live.session_id)
+        try:
+            await asyncio.to_thread(_note_loop_error, live.session_id)
+        except Exception:
+            log.exception("runner engine: session %s could not record loop error", live.session_id)
     finally:
         # 세션이 DB 에서 running 이 아니게 돼 루프가 스스로 멈춘 경우(또는 예외) — 등록·구독을 정리한다.
         # stop_driver 가 먼저 뺐으면 아무것도 안 한다(자기 태스크는 취소하지 않는다).
@@ -180,8 +207,37 @@ async def _run(live: _Live) -> None:
             await stop_driver(live.session_id)
 
 
+def _note_loop_error(session_id: int) -> None:
+    """루프가 죽었다는 걸 세션 note·이벤트로 남긴다(최선 노력 — 실패해도 호출자가 삼킨다)."""
+    from .runner import _append_events  # 늦은 import: runner ↔ runner_engine 순환 방지
+
+    with get_session() as db:
+        row = db.get(RunSession, session_id)
+        if row is None:
+            return
+        row.note = LOOP_ERROR_NOTE
+        db.add(row)
+        _append_events(db, row, [{"ts": _now_iso(), "kind": "error",
+                                  "message": "⚠ 서버 전략 루프가 오류로 멈췄어요 — 실행기는 새 신호를 받지 못합니다. 세션을 다시 시작해 주세요."}])
+        db.commit()
+
+
 async def _tick_once(live: _Live) -> None:
-    """시세 한 번 → 틱 → 체결이면 명령 기록 → 주기적 체크포인트."""
+    """(저장 못 한 체결 먼저) → 시세 한 번 → 틱 → 체결이면 명령 기록 → 주기적 체크포인트.
+
+    드라이버 상태(state_json)는 루프 스레드에서 스냅샷해 워커에 문자열로 넘긴다 — 마감봉 콜백이
+    루프에서 sim 을 바꾸는 동안 워커가 state() 를 읽으면 반쪽 상태가 저장될 수 있다.
+    """
+    if live.unsaved:
+        try:
+            for fill, state_json in list(live.unsaved):
+                await asyncio.to_thread(_persist_fill, live, fill, state_json)
+                live.unsaved.pop(0)
+        except Exception:
+            log.exception("runner engine: session %s still cannot persist %d fill(s) — not draining further",
+                          live.session_id, len(live.unsaved))
+            return
+        live.last_checkpoint = time.monotonic()
     try:
         price = await asyncio.to_thread(get_ticker_price_cached, live.driver.symbol)
     except Exception:
@@ -189,26 +245,35 @@ async def _tick_once(live: _Live) -> None:
     if not price:
         return
     fill = live.driver.tick(float(price), datetime.now(timezone.utc))
+    state_json = json.dumps(live.driver.state())
     if fill is not None:
-        await asyncio.to_thread(_persist_fill, live, fill)
+        try:
+            await asyncio.to_thread(_persist_fill, live, fill, state_json)
+        except Exception:
+            live.unsaved.append((fill, state_json))
+            log.exception("runner engine: session %s persist fill failed — will retry next tick", live.session_id)
+            return
         live.last_checkpoint = time.monotonic()
     elif time.monotonic() - live.last_checkpoint >= CHECKPOINT_SECONDS:
-        await asyncio.to_thread(_persist_state, live)
+        try:
+            await asyncio.to_thread(_persist_state, live, state_json)
+        except Exception:
+            log.exception("runner engine: session %s checkpoint failed", live.session_id)
         live.last_checkpoint = time.monotonic()
 
 
-def _persist_state(live: _Live) -> None:
+def _persist_state(live: _Live, state_json: str) -> None:
     with get_session() as db:
         row = db.get(RunSession, live.session_id)
         if row is None or row.status != "running":
             live.stop_flag = True
             return
-        row.state_json = json.dumps(live.driver.state())
+        row.state_json = state_json
         db.add(row)
         db.commit()
 
 
-def _persist_fill(live: _Live, fill: Fill) -> None:
+def _persist_fill(live: _Live, fill: Fill, state_json: str) -> None:
     from .runner import _append_events  # 늦은 import: runner ↔ runner_engine 순환 방지
 
     with get_session() as db:
@@ -217,7 +282,7 @@ def _persist_fill(live: _Live, fill: Fill) -> None:
             live.stop_flag = True
             return
         cmd = insert_command(db, row, command_from_fill(fill, live.driver.initial), _now_ms())
-        row.state_json = json.dumps(live.driver.state())
+        row.state_json = state_json
         db.add(row)
         _append_events(db, row, [{"ts": _now_iso(), "kind": "signal",
                                   "message": f"[신호 #{cmd.seq}] {cmd.reason} → {cmd.action.upper()} @ {fill.price:g}"}])
@@ -293,6 +358,8 @@ def apply_acks(db, row: RunSession, acks: list, now_ms: int) -> None:
         cmd.error = str(ack.get("error") or "")[:200]
         if ok:
             cmd.status = "acked"
+            if cmd.action in EXIT_SIDES and row.note == EXIT_FAIL_NOTE:
+                row.note = ""  # 재시도 끝에 청산이 됐다 — 실패 메모는 더 이상 사실이 아니다
             events.append({"ts": cmd.acked_at, "kind": "order",
                            "message": f"[주문 #{cmd.seq}] {cmd.action.upper()} 체결 {cmd.executed_qty:g} @ {cmd.fill_price:g} · {cmd.reason}"})
         elif cmd.action in EXIT_SIDES and cmd.attempts < EXIT_RETRY_MAX:

@@ -125,6 +125,25 @@ def test_failed_exit_is_retried_three_times_then_failed_and_noted():
         _cleanup(sid)
 
 
+def test_ack_ok_after_retry_clears_exit_fail_note():
+    sid = _session()
+    try:
+        with get_session() as db:
+            row = db.get(RunSession, sid)
+            cmd = eng.insert_command(db, row, {"action": "sell", "notional_frac": 0.0, "qty_frac": 1.0, "signal_price": 1.0, "reason": "청산"}, now_ms=1_000)
+            db.commit()
+            eng.apply_acks(db, row, [{"command_id": cmd.id, "ok": False, "error": "insufficient"}], now_ms=2_000)
+            db.commit()
+            assert row.note == eng.EXIT_FAIL_NOTE
+            eng.apply_acks(db, row, [{"command_id": cmd.id, "ok": True, "executed_qty": 1.0, "fill_price": 1.0}], now_ms=3_000)
+            db.commit()
+            db.refresh(cmd)
+            db.refresh(row)
+            assert cmd.status == "acked" and row.note == ""
+    finally:
+        _cleanup(sid)
+
+
 def test_failed_entry_is_final():
     sid = _session()
     try:
@@ -244,6 +263,130 @@ def test_start_driver_restores_checkpoint_after_warmup(monkeypatch):
         asyncio.new_event_loop().run_until_complete(scenario())
     finally:
         _cleanup(sid)
+
+
+class _RsiFeed:
+    """급락 웜업 + 구독 기록 — start_driver 시나리오 공용 더미."""
+
+    def __init__(self):
+        self.subs = []
+
+    async def history(self, symbol, interval, market, n):
+        return [(i, 100 - i, 100 - i, 100 - i, 100 - i) for i in range(20)]
+
+    def subscribe(self, symbol, interval, market, cb, **kwargs):
+        self.subs.append(cb)
+        return ("sub", symbol)
+
+    def unsubscribe(self, sub):
+        self.subs.clear()
+
+
+def test_concurrent_start_driver_creates_one_driver(monkeypatch):
+    """같은 세션을 동시에 두 번 시작해도 드라이버·구독은 하나 — 명령이 두 번 나가면 실주문이 두 번 나간다."""
+    sid = _session()
+    fake = _RsiFeed()
+    monkeypatch.setattr(eng, "feed", fake)
+    monkeypatch.setattr(eng, "_run", _no_loop)
+
+    async def scenario():
+        results = await asyncio.gather(eng.start_driver(sid), eng.start_driver(sid), eng.start_driver(sid))
+        assert results == [True, True, True]
+        assert list(eng._drivers) == [sid] and len(fake.subs) == 1 and sid not in eng._starting
+        await eng.stop_driver(sid)
+        assert eng._drivers == {} and fake.subs == []
+
+    try:
+        asyncio.new_event_loop().run_until_complete(scenario())
+    finally:
+        _cleanup(sid)
+
+
+def test_persist_failure_keeps_fill_and_retries_next_tick(monkeypatch):
+    """DB 저장이 한 번 실패해도 체결(신호)은 사라지지 않고 다음 틱에 명령으로 기록된다."""
+    sid = _session()
+    fake = _RsiFeed()
+    monkeypatch.setattr(eng, "feed", fake)
+    monkeypatch.setattr(eng, "get_ticker_price_cached", lambda s: 50.0)
+    monkeypatch.setattr(eng, "_run", _no_loop)
+    real_persist = eng._persist_fill
+    calls = []
+
+    def flaky(live, fill, state_json):
+        calls.append(fill)
+        if len(calls) == 1:
+            raise RuntimeError("db down")
+        real_persist(live, fill, state_json)
+
+    monkeypatch.setattr(eng, "_persist_fill", flaky)
+
+    async def scenario():
+        assert await eng.start_driver(sid) is True
+        live = eng._drivers[sid]
+        for c in (50, 50):
+            await fake.subs[0]("ONEUSDT", (0, c, c, c, c))
+        await eng._tick_once(live)  # 첫 저장 실패 → unsaved 에 보관
+        assert len(live.unsaved) == 1 and live.stop_flag is False
+        with get_session() as db:
+            assert db.exec(select(RunnerCommand).where(RunnerCommand.session_id == sid)).all() == []
+        await eng._tick_once(live)  # 다음 틱: 먼저 다시 저장
+        assert live.unsaved == [] and len(calls) == 2
+        with get_session() as db:
+            cmds = db.exec(select(RunnerCommand).where(RunnerCommand.session_id == sid)).all()
+            assert [c.action for c in cmds] == ["buy"]
+            assert json.loads(db.get(RunSession, sid).state_json)["in_position"] is True
+        await eng.stop_driver(sid)
+
+    try:
+        asyncio.new_event_loop().run_until_complete(scenario())
+    finally:
+        _cleanup(sid)
+
+
+def test_loop_death_notes_session_and_cleans_up(monkeypatch):
+    """루프가 예상 못 한 오류로 죽으면 세션 note·error 이벤트를 남기고 등록·구독을 정리한다."""
+    sid = _session()
+    fake = _RsiFeed()
+    monkeypatch.setattr(eng, "feed", fake)
+
+    async def boom(live):
+        raise RuntimeError("unexpected")
+
+    monkeypatch.setattr(eng, "_tick_once", boom)
+
+    async def scenario():
+        assert await eng.start_driver(sid) is True
+        live = eng._drivers[sid]
+        await asyncio.wait_for(live.task, timeout=5)
+        assert sid not in eng._drivers and fake.subs == []
+        with get_session() as db:
+            assert db.get(RunSession, sid).note == eng.LOOP_ERROR_NOTE
+            kinds = [e.kind for e in db.exec(select(RunSessionEvent).where(RunSessionEvent.session_id == sid)).all()]
+            assert kinds == ["error"]
+
+    try:
+        asyncio.new_event_loop().run_until_complete(scenario())
+    finally:
+        _cleanup(sid)
+
+
+def test_schedule_runs_on_installed_loop(monkeypatch):
+    started = []
+
+    async def fake_start(session_id):
+        started.append(session_id)
+        return True
+
+    monkeypatch.setattr(eng, "start_driver", fake_start)
+    loop = asyncio.new_event_loop()
+    try:
+        eng.install(loop)
+        eng.schedule_start(7)
+        loop.run_until_complete(asyncio.sleep(0.01))
+        assert started == [7] and eng._scheduled == set()
+    finally:
+        monkeypatch.setattr(eng, "_loop", None)
+        loop.close()
 
 
 def test_loop_cleans_up_when_session_stops_in_db(monkeypatch):

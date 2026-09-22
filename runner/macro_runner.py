@@ -44,6 +44,11 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
+try:  # package import (tests) / direct script import (PyInstaller build)
+    from . import credentials as credentials_mod
+except ImportError:
+    import credentials as credentials_mod
+
 try:
     import requests
 except ImportError:  # 사용자에게 친절히 안내
@@ -114,6 +119,23 @@ def _event_kind(msg: str) -> str:
         return "signal"
     return "info"
 
+_LOG_ICONS = {"signal": "🔔", "order": "▶", "fill": "✓", "error": "⚠", "stop": "■", "info": "·"}
+
+
+def _log_style(msg: str) -> tuple[str, str]:
+    """로그 한 줄의 (태그, 아이콘) — 종류별 색·아이콘으로 읽기 쉽게 그린다."""
+    kind = _event_kind(msg)
+    return kind, _LOG_ICONS.get(kind, "·")
+
+
+# --- 화면 색·글꼴 (껄무새 웹과 같은 톤) ---------------------------------------
+UI = {
+    "bg": "#F6F7F9", "card": "#FFFFFF", "border": "#E5E7EB", "ink": "#111827", "muted": "#6B7280",
+    "brand": "#F5C542", "brand_hover": "#EAB308", "brand_ink": "#1F1300",
+    "ok": "#16A34A", "warn": "#D97706", "danger": "#DC2626",
+    "log_bg": "#0F172A", "log_fg": "#CBD5E1",
+}
+FONT = "맑은 고딕"
 APP_TITLE = f"껄무새 매크로 실행기 v{RUNNER_VERSION}"
 
 
@@ -992,6 +1014,16 @@ class RunnerApp:
         self.api_key = tk.StringVar(value="")
         self.api_secret = tk.StringVar(value="")
         self.member_key = tk.StringVar(value=os.environ.get("GGP_MEMBER_KEY", ""))
+        # 이 PC에 키 기억하기 — DPAPI 파일이 있으면 세 칸을 채우고 체크를 켠다. 못 풀면(다른 PC) 빈 칸.
+        self.remember = tk.BooleanVar(value=False)
+        self.credentials_path = credentials_mod.default_path()
+        self._remembered = credentials_mod.load(self.credentials_path) if credentials_mod.supported() else None
+        if self._remembered:
+            self.api_key.set(self._remembered["api_key"])
+            self.api_secret.set(self._remembered["api_secret"])
+            if self._remembered["member_key"] and not self.member_key.get():
+                self.member_key.set(self._remembered["member_key"])
+            self.remember.set(True)
         self.server_base = SERVER_BASE
         self._protocol_claim_busy = False
         self._protocol_registration_thread: threading.Thread | None = None
@@ -1007,74 +1039,125 @@ class RunnerApp:
             self.root.after(0, self._begin_protocol_claim, protocol_launch)
 
     # --- 화면 구성 ----------------------------------------------
+    def _apply_theme(self) -> None:
+        """ttk 'clam' 위에 껄무새 톤을 입힌다 — 노랑 포인트, 흰 카드, 연회색 바탕."""
+        style = ttk.Style(self.root)
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+        self.root.configure(bg=UI["bg"])
+        style.configure(".", background=UI["bg"], foreground=UI["ink"], font=(FONT, 10))
+        style.configure("Card.TFrame", background=UI["card"])
+        style.configure("Card.TLabel", background=UI["card"], foreground=UI["ink"])
+        style.configure("CardTitle.TLabel", background=UI["card"], foreground=UI["ink"], font=(FONT, 11, "bold"))
+        style.configure("CardMuted.TLabel", background=UI["card"], foreground=UI["muted"], font=(FONT, 9))
+        style.configure("Title.TLabel", background=UI["bg"], foreground=UI["ink"], font=(FONT, 16, "bold"))
+        style.configure("Badge.TLabel", background=UI["brand"], foreground=UI["brand_ink"], font=(FONT, 9, "bold"), padding=(8, 2))
+        style.configure("Status.TLabel", background=UI["bg"], foreground=UI["muted"], font=(FONT, 10, "bold"))
+        style.configure("TEntry", fieldbackground="#FFFFFF", bordercolor=UI["border"], lightcolor=UI["border"],
+                        darkcolor=UI["border"], padding=6)
+        style.configure("TCheckbutton", background=UI["card"], foreground=UI["ink"])
+        style.map("TCheckbutton", background=[("active", UI["card"])])
+        style.configure("Primary.TButton", background=UI["brand"], foreground=UI["brand_ink"], bordercolor=UI["brand"],
+                        font=(FONT, 10, "bold"), padding=(14, 7))
+        style.map("Primary.TButton", background=[("active", UI["brand_hover"]), ("disabled", "#FBE9A6")],
+                  foreground=[("disabled", "#8A7A3A")])
+        style.configure("Ghost.TButton", background=UI["card"], foreground=UI["ink"], bordercolor=UI["border"], padding=(12, 7))
+        style.map("Ghost.TButton", background=[("active", "#F3F4F6"), ("disabled", UI["card"])],
+                  foreground=[("disabled", "#B0B5BE")])
+        style.configure("Danger.TButton", background=UI["card"], foreground=UI["danger"], bordercolor=UI["border"], padding=(12, 7))
+        style.map("Danger.TButton", background=[("active", "#FEF2F2"), ("disabled", UI["card"])],
+                  foreground=[("disabled", "#E8B4B4")])
+
+    def _card(self, parent, title: str, desc: str = "") -> ttk.Frame:
+        """흰 카드 한 장: 제목 + 한 줄 설명. 내용은 돌려주는 프레임에 붙인다."""
+        outer = tk.Frame(parent, bg=UI["border"], padx=1, pady=1)  # 1px 테두리
+        outer.pack(fill="x", padx=16, pady=(0, 10))
+        card = ttk.Frame(outer, style="Card.TFrame", padding=(14, 10, 14, 12))
+        card.pack(fill="x")
+        ttk.Label(card, text=title, style="CardTitle.TLabel").pack(anchor="w")
+        if desc:
+            ttk.Label(card, text=desc, style="CardMuted.TLabel").pack(anchor="w", pady=(0, 6))
+        return card
+
     def _build(self) -> None:
         self.root.title(APP_TITLE)
-        self.root.geometry("640x680")
-        pad = dict(padx=12, pady=6)
+        self.root.geometry("680x760")
+        self.root.minsize(600, 620)
+        self._apply_theme()
 
-        head = ttk.Frame(self.root)
-        head.pack(fill="x", **pad)
-        ttk.Label(
-            head,
-            text="🦜 껄무새 매크로 실행기",
-            font=("맑은 고딕", 15, "bold"),
-        ).pack(side="left")
-        ttk.Label(
-            head,
-            text=f"v{RUNNER_VERSION}",
-            foreground="#666",
-            font=("맑은 고딕", 10, "bold"),
-        ).pack(side="left", padx=(8, 0), pady=(4, 0))
-
-        # ① 매크로 파일
-        f1 = ttk.LabelFrame(self.root, text="① 매크로 파일 (.ggm.json)")
-        f1.pack(fill="x", **pad)
-        row = ttk.Frame(f1); row.pack(fill="x", padx=8, pady=8)
-        ttk.Entry(row, textvariable=self.macro_path, state="readonly").pack(side="left", fill="x", expand=True)
-        self.pick_btn = ttk.Button(row, text="파일 선택", command=self._pick_file)
-        self.pick_btn.pack(side="left", padx=(8, 0))
-        self.macro_summary = ttk.Label(f1, text="아직 선택 안 됨", foreground="#666")
-        self.macro_summary.pack(anchor="w", padx=8, pady=(0, 8))
-
-        # ② 실거래 여부
-        f2 = ttk.LabelFrame(self.root, text="② 바이낸스 실거래 여부")
-        f2.pack(fill="x", **pad)
-        ttk.Checkbutton(f2, text="실거래(메인넷) 사용 — 체크하면 실제 자금이 움직여요",
-                        variable=self.live, command=self._on_live_toggle).pack(anchor="w", padx=8, pady=8)
-        self.live_note = ttk.Label(f2, text="현재: 테스트넷 (가짜 자금)", foreground="#0a0")
-        self.live_note.pack(anchor="w", padx=8, pady=(0, 8))
-
-        # ③ API 키
-        f3 = ttk.LabelFrame(self.root, text="③ 바이낸스 API 키 / 시크릿 (로컬에서만 사용·서버 전송 안 함)")
-        f3.pack(fill="x", **pad)
-        ttk.Label(f3, text="API Key").pack(anchor="w", padx=8, pady=(8, 0))
-        ttk.Entry(f3, textvariable=self.api_key).pack(fill="x", padx=8)
-        ttk.Label(f3, text="API Secret").pack(anchor="w", padx=8, pady=(6, 0))
-        ttk.Entry(f3, textvariable=self.api_secret, show="•").pack(fill="x", padx=8, pady=(0, 8))
-
-        # ④ 회원 키
-        f4 = ttk.LabelFrame(self.root, text="④ 껄무새 회원 키 (마이페이지에서 발급)")
-        f4.pack(fill="x", **pad)
-        ttk.Entry(f4, textvariable=self.member_key).pack(fill="x", padx=8, pady=8)
-
-        # 실행/종료 버튼
-        btns = ttk.Frame(self.root); btns.pack(fill="x", **pad)
-        self.start_btn = ttk.Button(btns, text="▶ 매크로 시작", command=self._start)
-        self.start_btn.pack(side="left")
-        self.stop_btn = ttk.Button(btns, text="■ 매크로만 종료", command=lambda: self._stop("stop_only"),
-                                   state="disabled")
-        self.stop_btn.pack(side="left", padx=(8, 0))
-        self.close_btn = ttk.Button(btns, text="■ 청산 후 종료", command=lambda: self._stop("close_and_stop"),
-                                    state="disabled")
-        self.close_btn.pack(side="left", padx=(8, 0))
-        self.status_lbl = ttk.Label(btns, text="대기 중", foreground="#666")
+        # 헤더: 이름 · 버전 배지 · 상태
+        head = ttk.Frame(self.root, padding=(16, 14, 16, 8))
+        head.pack(fill="x")
+        ttk.Label(head, text="🦜 껄무새 매크로 실행기", style="Title.TLabel").pack(side="left")
+        ttk.Label(head, text=f"v{RUNNER_VERSION}", style="Badge.TLabel").pack(side="left", padx=(10, 0), pady=(3, 0))
+        self.status_lbl = ttk.Label(head, text="● 대기 중", style="Status.TLabel", foreground=UI["muted"])
         self.status_lbl.pack(side="right")
 
+        # 매크로
+        f1 = self._card(self.root, "매크로", "웹에서 내려받은 .ggm.json 파일을 고르거나, 웹의 '실행기로 열기'로 바로 연결돼요.")
+        row = ttk.Frame(f1, style="Card.TFrame"); row.pack(fill="x")
+        ttk.Entry(row, textvariable=self.macro_path, state="readonly").pack(side="left", fill="x", expand=True)
+        self.pick_btn = ttk.Button(row, text="파일 선택", style="Ghost.TButton", command=self._pick_file)
+        self.pick_btn.pack(side="left", padx=(8, 0))
+        self.macro_summary = ttk.Label(f1, text="아직 선택 안 됨", style="CardMuted.TLabel")
+        self.macro_summary.pack(anchor="w", pady=(6, 0))
+
+        # 실거래 여부
+        f2 = self._card(self.root, "거래 대상", "기본은 테스트넷(가짜 자금)이에요. 실거래는 체크해야만 켜져요.")
+        ttk.Checkbutton(f2, text="실거래(메인넷) 사용 — 체크하면 실제 자금이 움직여요",
+                        variable=self.live, command=self._on_live_toggle).pack(anchor="w")
+        self.live_note = ttk.Label(f2, text="현재: 테스트넷 (가짜 자금)", style="Card.TLabel", foreground=UI["ok"])
+        self.live_note.pack(anchor="w", pady=(4, 0))
+
+        # 키
+        f3 = self._card(self.root, "바이낸스 API 키 · 껄무새 회원 키",
+                        "키는 이 PC에서만 쓰이고 서버로 보내지 않아요. 회원 키는 마이페이지에서 발급해요.")
+        grid = ttk.Frame(f3, style="Card.TFrame"); grid.pack(fill="x")
+        grid.columnconfigure(1, weight=1)
+        for i, (label, var, show) in enumerate((
+            ("API Key", self.api_key, ""), ("API Secret", self.api_secret, "•"), ("회원 키", self.member_key, ""),
+        )):
+            ttk.Label(grid, text=label, style="Card.TLabel", width=11).grid(row=i, column=0, sticky="w", pady=3)
+            ttk.Entry(grid, textvariable=var, show=show).grid(row=i, column=1, sticky="ew", pady=3)
+        if credentials_mod.supported():
+            remember_row = ttk.Frame(f3, style="Card.TFrame"); remember_row.pack(fill="x", pady=(8, 0))
+            ttk.Checkbutton(remember_row, text="이 PC에 키 기억하기 (Windows 계정으로 암호화)",
+                            variable=self.remember).pack(side="left")
+            ttk.Button(remember_row, text="저장된 키 지우기", style="Ghost.TButton",
+                       command=self._forget_credentials).pack(side="right")
+
+        # 실행/종료 버튼
+        btns = ttk.Frame(self.root, padding=(16, 2, 16, 8))
+        btns.pack(fill="x")
+        self.start_btn = ttk.Button(btns, text="▶  매크로 시작", style="Primary.TButton", command=self._start)
+        self.start_btn.pack(side="left")
+        self.stop_btn = ttk.Button(btns, text="매크로만 종료", style="Ghost.TButton",
+                                   command=lambda: self._stop("stop_only"), state="disabled")
+        self.stop_btn.pack(side="left", padx=(8, 0))
+        self.close_btn = ttk.Button(btns, text="청산 후 종료", style="Danger.TButton",
+                                    command=lambda: self._stop("close_and_stop"), state="disabled")
+        self.close_btn.pack(side="left", padx=(8, 0))
+
         # 로그
-        ttk.Label(self.root, text="실행 로그").pack(anchor="w", padx=12)
-        self.log_box = tk.Text(self.root, height=14, wrap="word", state="disabled",
-                               bg="#0b0e14", fg="#c9d1d9", font=("Consolas", 9))
-        self.log_box.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        log_card = tk.Frame(self.root, bg=UI["border"], padx=1, pady=1)
+        log_card.pack(fill="both", expand=True, padx=16, pady=(0, 16))
+        log_head = tk.Frame(log_card, bg=UI["log_bg"])
+        log_head.pack(fill="x")
+        tk.Label(log_head, text="실행 로그", bg=UI["log_bg"], fg="#94A3B8", font=(FONT, 9, "bold"),
+                 padx=12, pady=6).pack(side="left")
+        self.log_box = tk.Text(log_card, height=12, wrap="word", state="disabled", bd=0, highlightthickness=0,
+                               bg=UI["log_bg"], fg=UI["log_fg"], font=("Consolas", 9), padx=12, pady=6,
+                               spacing1=1, spacing3=1)
+        self.log_box.pack(fill="both", expand=True)
+        self.log_box.tag_configure("time", foreground="#64748B")
+        self.log_box.tag_configure("signal", foreground="#93C5FD")
+        self.log_box.tag_configure("order", foreground=UI["brand"])
+        self.log_box.tag_configure("fill", foreground="#86EFAC")
+        self.log_box.tag_configure("error", foreground="#FCA5A5")
+        self.log_box.tag_configure("stop", foreground="#94A3B8")
+        self.log_box.tag_configure("info", foreground=UI["log_fg"])
 
         if requests is None:
             self._log("⚠ 'requests' 모듈이 없어요. requirements.txt 를 설치해 주세요.")
@@ -1082,9 +1165,9 @@ class RunnerApp:
     # --- 이벤트 -------------------------------------------------
     def _on_live_toggle(self) -> None:
         if self.live.get():
-            self.live_note.config(text="현재: ⚠ 메인넷 (실제 자금이 움직입니다)", foreground="#c00")
+            self.live_note.config(text="현재: ⚠ 메인넷 (실제 자금이 움직여요)", foreground=UI["danger"])
         else:
-            self.live_note.config(text="현재: 테스트넷 (가짜 자금)", foreground="#0a0")
+            self.live_note.config(text="현재: 테스트넷 (가짜 자금)", foreground=UI["ok"])
 
     def _pick_file(self) -> None:
         path = filedialog.askopenfilename(
@@ -1177,7 +1260,7 @@ class RunnerApp:
         if requests is None:
             self._protocol_claim_failed()
             return
-        self.status_lbl.config(text="웹 연결 확인 중…", foreground="#c60")
+        self.status_lbl.config(text="● 웹 연결 확인 중…", foreground=UI["warn"])
         self.start_btn.config(state="disabled")
         self.pick_btn.config(state="disabled")
         self._log("웹에서 선택한 매크로를 안전하게 연결하고 있어요.")
@@ -1191,7 +1274,7 @@ class RunnerApp:
     def _begin_protocol_registration(self) -> None:
         """Install the per-user URI handler off the Tk main thread."""
 
-        self.status_lbl.config(text=f"v{RUNNER_VERSION} 연결 준비 중…", foreground="#c60")
+        self.status_lbl.config(text=f"● v{RUNNER_VERSION} 연결 준비 중…", foreground=UI["warn"])
         self._log(f"브라우저 빠른 연결을 v{RUNNER_VERSION}로 준비하고 있어요.")
         self._protocol_registration_thread = threading.Thread(
             target=self._register_protocol_worker,
@@ -1218,12 +1301,12 @@ class RunnerApp:
     def _finish_protocol_registration(self, success: bool) -> None:
         if success:
             self.status_lbl.config(
-                text=f"브라우저 연결 준비됨 · v{RUNNER_VERSION}",
-                foreground="#0a0",
+                text=f"● 브라우저 연결 준비됨 · v{RUNNER_VERSION}",
+                foreground=UI["ok"],
             )
             self._log(f"브라우저 빠른 연결 준비가 끝났어요. (v{RUNNER_VERSION})")
             return
-        self.status_lbl.config(text="브라우저 연결 준비 실패", foreground="#c00")
+        self.status_lbl.config(text="● 브라우저 연결 준비 실패", foreground=UI["danger"])
         self._log("브라우저 빠른 연결을 준비하지 못했지만 실행기는 그대로 사용할 수 있어요.")
 
     def _claim_protocol_ticket(self, launch: ProtocolLaunch) -> None:
@@ -1302,15 +1385,17 @@ class RunnerApp:
         # A web launch may only prepare the form.  Exchange credentials never
         # arrive through the URI/server, testnet is restored explicitly, and
         # _start() is intentionally not called here.
-        self.api_key.set("")
-        self.api_secret.set("")
+        # 기억해 둔 거래소 키가 있으면 그대로 두고, 없으면 빈 칸(웹 연결은 키를 실어 오지 않는다).
+        if not self._remembered:
+            self.api_key.set("")
+            self.api_secret.set("")
         self.member_key.set(runner_key.strip())
         self.server_base = claim_base
         self.live.set(False)
         self._on_live_toggle()
         self.pick_btn.config(state="normal")
         self.start_btn.config(state="normal")
-        self.status_lbl.config(text="웹 연결됨 · 시작 전", foreground="#0a0")
+        self.status_lbl.config(text="● 웹 연결됨 · 시작 전", foreground=UI["ok"])
         self._log("웹 매크로와 껄무새 계정을 연결했어요. 테스트넷 설정을 확인한 뒤 직접 시작해 주세요.")
         _bring_window_to_front(self.root)
 
@@ -1320,7 +1405,7 @@ class RunnerApp:
         running = self.bot is not None
         self.pick_btn.config(state="disabled" if running else "normal")
         self.start_btn.config(state="disabled" if running else "normal")
-        self.status_lbl.config(text="웹 연결 실패", foreground="#c00")
+        self.status_lbl.config(text="● 웹 연결 실패", foreground=UI["danger"])
         self._log("웹 연결 요청을 확인하지 못했어요. 사이트로 돌아가 다시 시도해 주세요.")
 
     def handle_external_activation(self, launch: ProtocolLaunch | None) -> None:
@@ -1377,6 +1462,7 @@ class RunnerApp:
                 f"({self.macro.get('symbol')} · {side})\n계속할까요?"):
                 return
 
+        self._persist_credentials()
         server = ServerClient(self.member_key.get(), base=self.server_base)
         payload = self._build_start_payload(testnet)
         try:
@@ -1412,6 +1498,28 @@ class RunnerApp:
         )
         self.bot.start()
         self._set_running(True)
+
+    def _persist_credentials(self) -> None:
+        """'기억하기' 체크대로 저장/삭제. 실패해도 매매를 막지 않는다(로그만)."""
+        if not credentials_mod.supported():
+            return
+        values = {"api_key": self.api_key.get().strip(), "api_secret": self.api_secret.get().strip(),
+                  "member_key": self.member_key.get().strip()}
+        try:
+            credentials_mod.apply_choice(self.credentials_path, bool(self.remember.get()), values)
+            self._remembered = values if self.remember.get() else None
+            if self.remember.get():
+                self._log("키를 이 PC에 저장했어요 (Windows 계정으로 암호화 · 서버 전송 없음).")
+        except Exception as exc:
+            self._log(f"⚠ 키 저장에 실패했어요: {exc}")
+
+    def _forget_credentials(self) -> None:
+        credentials_mod.clear(self.credentials_path)
+        self._remembered = None
+        self.remember.set(False)
+        self.api_key.set("")
+        self.api_secret.set("")
+        self._log("저장된 키를 지웠어요.")
 
     def _build_start_payload(self, testnet: bool) -> dict:
         """Build the server payload without ever including exchange secrets."""
@@ -1451,7 +1559,7 @@ class RunnerApp:
         if not messagebox.askyesno(APP_TITLE, f"{label} 할까요?"):
             return
         self.bot.set_command(mode)
-        self.status_lbl.config(text="종료 처리 중…", foreground="#c60")
+        self.status_lbl.config(text="● 종료 처리 중…", foreground=UI["warn"])
 
     # --- 스레드-세이프 콜백 (GUI 는 메인스레드에서만 갱신) --------
     def _log_threadsafe(self, msg: str) -> None:
@@ -1464,21 +1572,26 @@ class RunnerApp:
         self.root.after(0, self._on_finish, status, note)
 
     def _log(self, msg: str) -> None:
+        tag, icon = _log_style(msg)
         self.log_box.config(state="normal")
-        self.log_box.insert("end", time.strftime("[%H:%M:%S] ") + msg + "\n")
+        self.log_box.insert("end", time.strftime("%H:%M:%S  "), ("time",))
+        text = msg.strip()
+        if text.startswith(icon):  # 메시지가 이미 같은 기호로 시작하면 두 번 붙이지 않는다
+            text = text[len(icon):].strip()
+        self.log_box.insert("end", f"{icon} {text}\n", (tag,))
         self.log_box.see("end")
         self.log_box.config(state="disabled")
 
     def _render_status(self, snap: dict) -> None:
         pos = "보유" if snap.get("in_position") else "무포지션"
         self.status_lbl.config(
-            text=f"실행 중 · {snap.get('last_price', 0):g} · {pos} · "
+            text=f"● 실행 중 · {snap.get('last_price', 0):g} · {pos} · "
                  f"누적 {snap.get('realized_pnl', 0):+.2f} USDT",
-            foreground="#0a0")
+            foreground=UI["ok"])
 
     def _on_finish(self, status: str, note: str) -> None:
         self._log(f"종료됨 ({status}){' · ' + note if note else ''}")
-        self.status_lbl.config(text=f"종료됨 · {note or status}", foreground="#666")
+        self.status_lbl.config(text=f"● 종료됨 · {note or status}", foreground=UI["muted"])
         self._set_running(False)
         self.bot = None
 

@@ -407,3 +407,14 @@ class HeartbeatProtocolTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LogStylingTests(unittest.TestCase):
+    """실행 로그는 종류별로 색·아이콘을 달리 그린다(기능 아님, 디자인)."""
+
+    def test_log_tag_and_icon_follow_event_kind(self):
+        self.assertEqual(macro_runner._log_style("[신호 #3] RSI 23 ≤ 25 · 진입 → BUY 1 ONEUSDT"), ("signal", "🔔"))
+        self.assertEqual(macro_runner._log_style("  ✓ BUY 체결: id=1 수량=3"), ("fill", "✓"))
+        self.assertEqual(macro_runner._log_style("  ⚠ 명령 실행 실패: boom"), ("error", "⚠"))
+        self.assertEqual(macro_runner._log_style("종료됨 (stopped)"), ("stop", "■"))
+        self.assertEqual(macro_runner._log_style("세션 시작 (id=1)"), ("info", "·"))

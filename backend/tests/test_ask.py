@@ -12,7 +12,7 @@ from sqlmodel import select
 
 from app import ask
 from app.data.binance import MAX_BACKTEST_BARS, PERIOD_PRESET_DAYS, _expected_bar_count
-from app.db import AskMacroSession, User, get_session
+from app.db import AskMacroSession, PointLedger, User, get_session
 from app.engine import BacktestResult
 from app.main import app
 
@@ -229,7 +229,8 @@ _BODY = {"risk_profile": "balanced", "market": "spot", "leverage": 1,
 def test_status_and_consent_flow(_fake_backtest):
     token, _ = _signup()
     st = client.get("/api/ask/status", headers=_auth(token)).json()
-    assert st == {"consented": False, "remaining_today": 5, "daily_limit": 5, "disclaimer_version": "ask-v1"}
+    assert st == {"consented": False, "remaining_today": 5, "daily_limit": 5, "disclaimer_version": "ask-v1",
+                  "extra_price": 30, "extra_left_today": 5, "points_balance": 1000}
 
     res = client.post("/api/ask/macros", json=_BODY, headers=_auth(token))
     assert res.status_code == 403
@@ -425,3 +426,83 @@ def test_every_reachable_pair_fits_backtest_bar_cap():
                 start_ms = now_ms - days * 86_400_000
                 bars = _expected_bar_count(interval, start_ms, now_ms)
                 assert bars <= MAX_BACKTEST_BARS
+
+
+# --- 포인트로 횟수 추가 (2026-09-22): 무료 5회 소진 후 1회 30P, 하루 추가 상한 5회 ---------------
+def _set_points(user_id: int, balance: int) -> None:
+    with get_session() as db:
+        u = db.get(User, user_id)
+        u.points_balance = balance
+        db.add(u)
+        db.commit()
+
+
+def test_status_exposes_extra_price_and_points(_fake_backtest):
+    token, uid = _signup()
+    _set_points(uid, 100)
+    st = client.get("/api/ask/status", headers=_auth(token)).json()
+    assert st["extra_price"] == 30 and st["extra_left_today"] == 5 and st["points_balance"] == 100
+
+
+def test_extra_credit_is_only_purchasable_after_free_quota_is_gone(_fake_backtest, monkeypatch):
+    token, uid = _signup()
+    client.post("/api/ask/consent", headers=_auth(token))
+    _set_points(uid, 100)
+    res = client.post("/api/ask/extra", headers=_auth(token))
+    assert res.status_code == 409 and "무료" in res.json()["detail"]
+
+
+def test_extra_credit_costs_points_and_adds_one_ask(_fake_backtest, monkeypatch):
+    token, uid = _signup()
+    client.post("/api/ask/consent", headers=_auth(token))
+    monkeypatch.setenv("ASK_DAILY_LIMIT", "1")
+    _set_points(uid, 100)
+    assert client.post("/api/ask/macros", json=_BODY, headers=_auth(token)).json()["remaining_today"] == 0
+    res = client.post("/api/ask/extra", headers=_auth(token))
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["remaining_today"] == 1 and body["points_balance"] == 70 and body["extra_left_today"] == 4
+    with get_session() as db:
+        ledger = db.exec(select(PointLedger).where(PointLedger.user_id == uid, PointLedger.reason == "ask_extra")).all()
+        assert [l.delta for l in ledger] == [-30]
+    run = client.post("/api/ask/macros", json=_BODY, headers=_auth(token))
+    assert run.status_code == 200 and run.json()["remaining_today"] == 0
+    with get_session() as db:
+        rows = db.exec(select(AskMacroSession).where(AskMacroSession.user_id == uid).order_by(AskMacroSession.id)).all()
+        assert [r.paid for r in rows] == [False, True]
+    assert client.post("/api/ask/macros", json=_BODY, headers=_auth(token)).status_code == 429
+
+
+def test_extra_credit_rejects_when_points_are_short(_fake_backtest, monkeypatch):
+    token, uid = _signup()
+    client.post("/api/ask/consent", headers=_auth(token))
+    monkeypatch.setenv("ASK_DAILY_LIMIT", "0")
+    _set_points(uid, 29)
+    res = client.post("/api/ask/extra", headers=_auth(token))
+    assert res.status_code == 402 and "부족" in res.json()["detail"]
+    assert client.get("/api/ask/status", headers=_auth(token)).json()["points_balance"] == 29
+
+
+def test_extra_credit_daily_cap_is_five(_fake_backtest, monkeypatch):
+    token, uid = _signup()
+    client.post("/api/ask/consent", headers=_auth(token))
+    monkeypatch.setenv("ASK_DAILY_LIMIT", "0")
+    _set_points(uid, 1000)
+    for i in range(5):
+        assert client.post("/api/ask/extra", headers=_auth(token)).status_code == 200, i
+    res = client.post("/api/ask/extra", headers=_auth(token))
+    assert res.status_code == 429 and "추가" in res.json()["detail"]
+    st = client.get("/api/ask/status", headers=_auth(token)).json()
+    assert st["remaining_today"] == 5 and st["extra_left_today"] == 0 and st["points_balance"] == 850
+
+
+def test_failed_ask_returns_the_extra_credit(_fake_backtest, monkeypatch):
+    token, uid = _signup()
+    client.post("/api/ask/consent", headers=_auth(token))
+    monkeypatch.setenv("ASK_DAILY_LIMIT", "0")
+    _set_points(uid, 100)
+    assert client.post("/api/ask/extra", headers=_auth(token)).status_code == 200
+    monkeypatch.setattr(ask, "build_templates", lambda req: (_ for _ in ()).throw(RuntimeError("boom")))
+    with pytest.raises(RuntimeError):  # TestClient 는 서버 예외를 그대로 올린다
+        client.post("/api/ask/macros", json=_BODY, headers=_auth(token))
+    assert client.get("/api/ask/status", headers=_auth(token)).json()["remaining_today"] == 1

@@ -79,6 +79,8 @@ def supports_signals(version: str) -> bool:
 
 SIGNAL_REQUIRED_DETAIL = "지표형 매크로는 실행기 v8 이상이 필요해요. 실행기를 업데이트해 주세요."
 MACRO_REQUIRED_DETAIL = "실행기 v8 은 매크로 설정을 함께 보내야 해요."
+# 서버(runner_engine)가 세션 note 에 쓰는 마커 — 실행기 heartbeat 의 note 가 덮어쓰면 안 된다.
+_SERVER_NOTE_MARKERS = (runner_engine.EXIT_FAIL_NOTE, runner_engine.LOOP_ERROR_NOTE)
 
 
 def needs_signals(macro: Optional[Macro]) -> bool:
@@ -469,11 +471,7 @@ def start_session(user: User, payload: dict) -> dict:
             raise HTTPException(status_code=422, detail="내 매크로 ID가 올바르지 않아요.")
         if user_macro_id <= 0:
             raise HTTPException(status_code=422, detail="내 매크로 ID가 올바르지 않아요.")
-        if normalized_macro is None:
-            raise HTTPException(
-                status_code=422,
-                detail="내 매크로 세션에는 정규화된 매크로 설정이 필요해요.",
-            )
+        # 매크로 본문이 없는 경우는 위 버전 게이트가 이미 걸렀다(v8+ 는 422, 그 미만은 426).
 
     now = _now_iso()
     # 매크로 출처: 티켓 경로면 web, 파일이면 동봉된 서명을 검증해 원본/수정본을 가른다.
@@ -596,18 +594,25 @@ def heartbeat(user: User, session_id: int, snapshot: dict) -> dict:
         row.position_qty = float(snapshot.get("position_qty", 0.0) or 0.0)
         row.realized_pnl = float(snapshot.get("realized_pnl", 0.0) or 0.0)
         row.unrealized_pct = float(snapshot.get("unrealized_pct", 0.0) or 0.0)
-        if "note" in snapshot:
+        # 실행기는 매 heartbeat 에 note(기본 "") 를 보낸다 — 서버가 쓴 마커(청산 실패·루프 오류)는 덮어쓰지 않는다.
+        # 마커는 runner_engine 이 청산 성공 ack 등에서 스스로 지운다.
+        if "note" in snapshot and row.note not in _SERVER_NOTE_MARKERS:
             row.note = str(snapshot["note"])[:200]
         row.last_heartbeat_at = _now_iso()
         _alert_pnl_move(db, row, previous_pct, previously_in_position)
+        action = row.stop_mode if row.stop_mode in _STOP_MODES else "continue"
         commands: list = []
         if supports_signals(row.runner_version):
             # ack 반영 → 만료 정리 후 남은 명령 → 서버 전략과 실행기 포지션 유무 대조(경고만).
             now_ms = runner_engine._now_ms()
             runner_engine.apply_acks(db, row, acks or [], now_ms)
             commands = runner_engine.pending_commands(db, row, now_ms)
-            runner_engine.check_position_mismatch(db, row, row.in_position)
-        action = row.stop_mode if row.stop_mode in _STOP_MODES else "continue"
+            if not row.position_uncertain:
+                # 실행기 스스로 포지션을 모르는 상태면 대조할 근거가 없다.
+                runner_engine.check_position_mismatch(db, row, row.in_position)
+            if action != "continue":
+                # 종료 중인 세션엔 매매 명령을 주지 않는다(명령 행은 그대로 — 만료로 정리된다).
+                commands = []
         db.add(row)
         db.commit()
     notify_sessions_changed(user.id)

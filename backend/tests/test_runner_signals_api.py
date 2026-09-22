@@ -60,6 +60,10 @@ def test_v8_requires_macro_and_schedules_driver(monkeypatch):
     key = _key(_signup())
     no_macro = client.post("/api/runner/start", json={"symbol": "ONEUSDT", "runner_version": "8"}, headers={"X-Runner-Key": key})
     assert no_macro.status_code == 422 and no_macro.json()["detail"] == runner_mod.MACRO_REQUIRED_DETAIL
+    # 내 매크로 ID 만 보내고 매크로 본문이 없어도 같은 422 — 게이트가 ID 검사보다 먼저 선다.
+    id_only = client.post("/api/runner/start", json={"symbol": "ONEUSDT", "runner_version": "8", "user_macro_id": 1},
+                          headers={"X-Runner-Key": key})
+    assert id_only.status_code == 422 and id_only.json()["detail"] == runner_mod.MACRO_REQUIRED_DETAIL
     r = _start(key, RSI, "8")
     assert r.status_code == 200 and scheduled == [r.json()["session_id"]]
     _stop(key, r.json()["session_id"])
@@ -106,6 +110,71 @@ def test_old_runner_heartbeat_has_empty_commands(monkeypatch):
     sid = _start(key, A, "7").json()["session_id"]
     hb = client.post("/api/runner/heartbeat", json={"session_id": sid, "last_price": 100.0}, headers={"X-Runner-Key": key}).json()
     assert hb == {"action": "continue", "commands": []}
+
+
+def _v8_session_with_command(monkeypatch, action="buy"):
+    monkeypatch.setattr(eng, "schedule_start", lambda sid: None)
+    monkeypatch.setattr(eng, "schedule_stop", lambda sid: None)
+    token = _signup()
+    key = _key(token)
+    sid = _start(key, RSI, "8").json()["session_id"]
+    with get_session() as db:
+        row = db.get(RunSession, sid)
+        cmd = eng.insert_command(db, row, {"action": action, "notional_frac": 1.0, "qty_frac": 1.0 if action == "sell" else 0.0,
+                                           "signal_price": 0.01, "reason": "t"}, now_ms=eng._now_ms())
+        db.commit()
+        cmd_id = cmd.id
+    return token, key, sid, cmd_id
+
+
+def _hb(key, sid, **extra):
+    body = {"session_id": sid, "last_price": 0.01, **extra}
+    return client.post("/api/runner/heartbeat", json=body, headers={"X-Runner-Key": key}).json()
+
+
+def _note(sid):
+    with get_session() as db:
+        return db.get(RunSession, sid).note
+
+
+def test_heartbeat_keeps_server_owned_note_until_exit_succeeds(monkeypatch):
+    # 실행기는 매 heartbeat 에 note(기본 "") 를 보낸다 — 서버가 쓴 '청산 실패' 메모를 덮어쓰면 안 된다.
+    _, key, sid, cmd_id = _v8_session_with_command(monkeypatch, action="sell")
+    _hb(key, sid, in_position=True, note="", acks=[{"command_id": cmd_id, "ok": False, "error": "insufficient balance"}])
+    assert _note(sid) == eng.EXIT_FAIL_NOTE
+    body = _hb(key, sid, in_position=True, note="")  # acks 없음, note "" — 메모는 살아 있어야 한다
+    assert _note(sid) == eng.EXIT_FAIL_NOTE and [c["id"] for c in body["commands"]] == [cmd_id]
+    _hb(key, sid, in_position=True, note="실행기 메모")  # 실행기 메모도 서버 마커를 덮지 못한다
+    assert _note(sid) == eng.EXIT_FAIL_NOTE
+    _hb(key, sid, in_position=False, note="", acks=[{"command_id": cmd_id, "ok": True, "executed_qty": 3000, "fill_price": 0.01}])
+    assert _note(sid) == ""  # 청산 성공 → 마커 해제
+    _hb(key, sid, in_position=False, note="정상 메모")  # 마커가 없으면 실행기 note 가 그대로 들어간다
+    assert _note(sid) == "정상 메모"
+    _stop(key, sid)
+
+
+def test_heartbeat_returns_no_commands_while_stopping(monkeypatch):
+    token, key, sid, cmd_id = _v8_session_with_command(monkeypatch)
+    client.post(f"/api/me/runner/sessions/{sid}/request-stop", json={"mode": "close_and_stop"}, headers=_auth(token))
+    body = _hb(key, sid, in_position=False)
+    assert body["action"] == "close_and_stop" and body["commands"] == []  # 종료 중엔 매매 명령을 주지 않는다
+    with get_session() as db:
+        assert db.get(RunnerCommand, cmd_id).status == "pending"  # 명령 자체는 건드리지 않는다
+    _stop(key, sid)
+
+
+def test_position_mismatch_skipped_when_runner_uncertain(monkeypatch):
+    monkeypatch.setattr(eng, "schedule_start", lambda sid: None)
+    monkeypatch.setattr(eng, "schedule_stop", lambda sid: None)
+    calls = []
+    monkeypatch.setattr(eng, "check_position_mismatch", lambda db, row, reported: calls.append(reported))
+    key = _key(_signup())
+    sid = _start(key, RSI, "8").json()["session_id"]
+    _hb(key, sid, in_position=True, position_uncertain=True)
+    assert calls == []  # 실행기 스스로 포지션을 모르면 대조하지 않는다
+    _hb(key, sid, in_position=True, position_uncertain=False)
+    assert calls == [True]
+    _stop(key, sid)
 
 
 def _ticket(token, macro):

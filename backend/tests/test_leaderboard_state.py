@@ -494,7 +494,7 @@ def _rsi_macro(**over):
 
 
 def test_candle_sim_state_and_restore_round_trip():
-    sim = make_sim(_rsi_macro(), 1_000.0)  # CandleAggregatorSim
+    sim = make_sim(_rsi_macro(), 1_000.0)  # LiveCandleSim
     assert sim.state() == {"in_position": False, "dir": 1, "qty": 0.0, "entry_price": 0.0, "cooldown_until_ms": None, "halted_today": False}
     sim.restore(1_214.56, in_position=True, qty=2000.0, entry_price=0.5, last_price=0.6072, cooldown_until_ms=None)
     st = sim.state()

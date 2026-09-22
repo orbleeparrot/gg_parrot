@@ -467,10 +467,10 @@ def make_sim(macro: Macro, initial_capital: Optional[float] = None):
     from .schema import CANDLE_TYPES
 
     if macro.rule_type in CANDLE_TYPES:
-        # Types D~J are candle-based; aggregate ticks into candles for paper.
-        from .candles import CandleAggregatorSim
+        # Types D~K are candle-based; real closed candles arrive via CandleFeed → on_candle.
+        from .candles import LiveCandleSim
 
-        return CandleAggregatorSim(macro, initial_capital=initial_capital)
+        return LiveCandleSim(macro, initial_capital=initial_capital)
     if macro.rule_type is RuleType.C:
         base = initial_capital if initial_capital is not None else 1_000_000.0
         return DcaSim(macro, initial_capital=base, max_buys=None)

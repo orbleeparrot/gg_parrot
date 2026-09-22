@@ -108,7 +108,7 @@ API 응답의 `data_source` 필드:
 - **자금 사전검증:** H는 최대 물타기, D는 전 격자 체결 시 필요자금이 `initial_capital × invest_ratio`를 넘으면 저장 반려.
 - **숏 대칭:** F·G·J는 params 그대로 두고 엔진에서 방향 반전(D·E·H·I는 롱 전용).
 - **공통 고급 리스크(전 타입):** `risk.daily_max_loss_pct`(당일 거래 중단), `risk.max_holding_hours`(강제 청산), `risk.cooldown_minutes`(손절 후 재진입 금지).
-- **재사용:** 페이퍼 트레이딩도 동일 캔들 엔진을 사용하며, 실시간 틱을 봉으로 집계해 **봉 마감 기준**으로 평가(`CandleAggregatorSim`, `PAPER_CANDLE_TICKS` 조절).
+- **재사용:** 페이퍼 트레이딩과 실행기 신호도 동일 캔들 엔진을 사용하며, 바이낸스 **실제 마감봉**을 받아 봉 마감 기준으로 평가(`LiveCandleSim` + `CandleFeed`).
 
 ---
 

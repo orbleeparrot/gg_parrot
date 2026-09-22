@@ -119,8 +119,7 @@ class StrategyDriver:
 
 요청(`RunnerHeartbeatRequest`)에 추가:
 ```json
-"acks": [{"command_id": 12, "ok": true, "executed_qty": 0.5, "fill_price": 0.0123, "error": ""}],
-"protocol": 2
+"acks": [{"command_id": 12, "ok": true, "executed_qty": 0.5, "fill_price": 0.0123, "error": ""}]
 ```
 응답에 추가:
 ```json
@@ -139,20 +138,21 @@ class StrategyDriver:
 
 **세션 수명**
 
-- `start_session`: 실행기 `protocol ≥ 2`(=v8)이면 `macro` 필수(없으면 422), 드라이버 생성·웜업·피드 구독·`_drivers[session_id]`.
-  `protocol < 2`이고 `rule_type ∉ {A, B}`이면 **426** `"지표형 매크로는 실행기 v8 이상이 필요해요. 실행기를 업데이트해 주세요."`
+- 서버 주도 여부는 `RunSession.runner_version`(이미 저장함)으로 판단한다: `int(runner_version) ≥ 8`이면 서버 주도.
+- `start_session`: v8 이상이면 `macro` 필수(없으면 422), 드라이버 생성·웜업·피드 구독·`_drivers[session_id]`.
+  v8 미만(빈 값 포함)이고 `rule_type ∉ {A, B}`이면 **426** `"지표형 매크로는 실행기 v8 이상이 필요해요. 실행기를 업데이트해 주세요."`
   (`_RUNNER_SIGNAL_MIN_VERSION = "8"`, 환경변수 `RUNNER_SIGNAL_MIN_VERSION`). `launch-tickets/claim`도 같은 규칙으로 거절해 웹
   화면이 업데이트를 안내할 수 있게 한다.
 - `heartbeat`: 위 프로토콜. 세션의 마지막 heartbeat가 `COMMAND_TTL_SECONDS`보다 오래됐어도 드라이버는 계속 돈다(리더보드처럼 상태는
   이어짐). 명령은 만료로 정리된다.
 - `mark_stopped`/`request_stop(close_and_stop)`: 드라이버 정지·피드 해제. `close_and_stop`은 기존처럼 실행기가 로컬에서 전량 청산.
-- 기동 시 `resume_running_runner_sessions()`: `RunSession.status == "running"`이고 `protocol ≥ 2`인 세션을 `state_json`으로 복구 +
-  웜업 + 구독(페이퍼 `resume_running_sessions`와 같은 패턴, `main.py` lifespan에 추가). 구버전 세션(`state_json == ""`)은 건드리지
+- 기동 시 `resume_running_runner_sessions()`: `RunSession.status == "running"`이고 v8 이상인 세션을 `state_json`으로 복구 +
+  웜업 + 구독(페이퍼 `resume_running_sessions`와 같은 패턴, `main.py` lifespan에 추가). 구버전 세션은 건드리지
   않는다(실행기 로컬 로직이 계속 돈다).
 
 ### 4.5 실행기 (`runner/macro_runner.py`, v8)
 
-- `RUNNER_VERSION = "8"`, heartbeat에 `protocol: 2`, `acks` 동봉. start payload에 `macro`는 이미 보낸다.
+- `RUNNER_VERSION = "8"`(start payload의 `runner_version`), heartbeat에 `acks` 동봉. start payload에 `macro`는 이미 보낸다.
 - 삭제: `_should_enter`, `_should_exit`, `_was_stop_exit`, `DEFAULT_TP_PCT`, `_strategy_targets`의 `tp/buy_price/sell_price`.
 - `BotThread.run` 루프:
   1. 종료 명령 확인(기존)

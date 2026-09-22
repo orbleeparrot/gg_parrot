@@ -398,7 +398,7 @@ class DcaSim:
                 self.qty = 0.0
                 self.cost_basis = 0.0
                 self.stopped = True
-                fill = self._fill("sell", f, traded, c)
+                fill = self._fill("sell", f, traded, c, reason="손절")
 
         # Daily-max-loss: once today's equity is down past the threshold, buy no
         # more for the rest of the day (position is kept — DCA holds).

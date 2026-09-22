@@ -51,3 +51,23 @@ def test_candle_sim_indicator_reason_names_the_signal():
     assert fills[0].reason.startswith("RSI ") and fills[0].reason.endswith("· 진입")
     assert fills[1].reason.startswith("RSI ") and fills[1].reason.endswith("· 청산")
     assert abs(fills[1].qty_before - fills[0].qty) < 1e-9
+
+
+def _dca():
+    return Macro.model_validate({
+        "symbol": "BTCUSDT", "rule_type": "C", "position_side": "long", "market": "spot", "leverage": 1,
+        "candle_interval": "1h", "period": {"preset": "3m"},
+        "params": {"amount_per_buy": 100, "interval_days": 1},
+        "risk": {"stop_loss_pct": 5, "daily_max_loss_pct": 0, "cooldown_minutes": 0, "max_holding_hours": 0},
+        "fees": {"commission_pct": 0, "slippage_pct": 0},
+    })
+
+
+def test_dca_sim_stop_loss_fill_reason_is_stop_loss():
+    sim = make_sim(_dca(), 1000.0)
+    t = datetime(2026, 9, 22, tzinfo=timezone.utc)
+    buy = sim.step(100.0, t)
+    assert buy.side == "buy"
+    sell = sim.step(90.0, t)  # -10% on the lot, past the 5% stop
+    assert sell.side == "sell" and sell.reason == "손절"
+    assert abs(sell.qty_before - sell.qty) < 1e-12

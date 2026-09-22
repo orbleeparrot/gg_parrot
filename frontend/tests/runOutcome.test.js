@@ -131,3 +131,15 @@ test("결과 행에 실행기 버전·출처와 청산 기준이 남는다", () 
   assert.equal(legacy.rows.find((row) => row.label === "실행기").value, "—");
   assert.equal(legacy.rows.find((row) => row.label === "청산 기준").value, "전략 신호");
 });
+
+// 투입금 대비 총수익률 (2026-09-22): 서버가 return_pct/invested_usdt 를 주면 큰 숫자는 %로, USDT 는 옆에.
+test("total return over invested capital leads the result when the server provides it", () => {
+  const outcome = describeRunOutcome({ ...base, realized_pnl: 1.2, invested_usdt: 40, return_pct: 3.0 });
+  assert.equal(outcome.pnl.text, "+3.00%");
+  assert.equal(outcome.pnl.sub, "+1.20 USDT · 투입 40 USDT");
+  assert.equal(outcome.pnl.tone, "up");
+  const legacy = describeRunOutcome({ ...base, realized_pnl: 1.2, invested_usdt: 0, return_pct: null });
+  assert.equal(legacy.pnl.text, "+1.20 USDT");
+  assert.equal(legacy.pnl.sub, "");
+  assert.ok(outcome.rows.some((r) => r.label === "투입금" && r.value === "40 USDT"));
+});

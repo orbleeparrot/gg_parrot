@@ -605,6 +605,8 @@ def heartbeat(user: User, session_id: int, snapshot: dict) -> dict:
         row.position_uncertain = bool(snapshot.get("position_uncertain", row.position_uncertain))
         row.entry_price = float(snapshot.get("entry_price", 0.0) or 0.0)
         row.position_qty = float(snapshot.get("position_qty", 0.0) or 0.0)
+        _track_invested(row)
+        _track_invested(row)
         row.realized_pnl = float(snapshot.get("realized_pnl", 0.0) or 0.0)
         row.unrealized_pct = float(snapshot.get("unrealized_pct", 0.0) or 0.0)
         # 실행기는 매 heartbeat 에 note(기본 "") 를 보낸다 — 서버가 쓴 마커(청산 실패·루프 오류)는 덮어쓰지 않는다.
@@ -703,6 +705,7 @@ def mark_stopped(
                     if not math.isfinite(value):
                         raise HTTPException(status_code=422, detail="최종 포지션 값이 올바르지 않아요.")
                     setattr(row, field, value)
+            _track_invested(row)  # 종료 직전 스냅샷의 포지션도 투입금에 반영
         elif status == "stopped" and note in {"청산 완료 후 종료", "포지션 없이 종료"}:
             # v5 explicitly reports these outcomes without a final snapshot.
             row.in_position = False
@@ -840,6 +843,46 @@ def _is_connected(row: RunSession) -> bool:
     return (datetime.now(timezone.utc) - hb).total_seconds() <= STALE_SECONDS
 
 
+def _track_invested(row: RunSession) -> None:
+    """투입금 = 세션 동안 실제로 들어간 최대 금액(수량×진입가). 줄어들지 않는다(부분 청산해도 분모는 그대로)."""
+    notional = float(row.position_qty or 0.0) * float(row.entry_price or 0.0)
+    if notional > float(getattr(row, "invested_usdt", 0.0) or 0.0):
+        row.invested_usdt = notional
+
+
+def session_returns(row: RunSession) -> dict:
+    """투입금 대비 수익률. 평가손익(USDT)은 실행기가 보낸 진입가 대비 %를 현재 보유 금액에 곱해 되계산한다."""
+    invested = float(getattr(row, "invested_usdt", 0.0) or 0.0)
+    held = float(row.position_qty or 0.0) * float(row.entry_price or 0.0) if row.in_position else 0.0
+    unrealized = held * float(row.unrealized_pct or 0.0) / 100.0
+    realized = float(row.realized_pnl or 0.0)
+    if invested <= 0:
+        return {"invested_usdt": 0.0, "unrealized_usdt": unrealized, "total_return_pct": None, "final_return_pct": None}
+    return {
+        "invested_usdt": round(invested, 4),
+        "unrealized_usdt": round(unrealized, 4),
+        "total_return_pct": round((realized + unrealized) / invested * 100.0, 4),
+        "final_return_pct": round(realized / invested * 100.0, 4),
+    }
+
+
+def _track_invested(row: RunSession) -> None:
+    """투입금 = 수량×진입가의 세션 최대값. 포지션을 키우면 올라가고, 줄이거나 닫아도 내려가지 않는다."""
+    if row.in_position and row.position_qty > 0 and row.entry_price > 0:
+        row.invested_usdt = max(float(getattr(row, "invested_usdt", 0.0) or 0.0), row.position_qty * row.entry_price)
+
+
+def total_return_pct(row: RunSession) -> Optional[float]:
+    """투입금 대비 총수익률(%) = (누적 실현손익 + 지금 포지션의 평가손익) / 투입금. 투입금이 0 이면 None."""
+    invested = float(getattr(row, "invested_usdt", 0.0) or 0.0)
+    if invested <= 0:
+        return None
+    unrealized = 0.0
+    if row.in_position and row.position_qty > 0 and row.entry_price > 0:
+        unrealized = row.position_qty * row.entry_price * float(row.unrealized_pct or 0.0) / 100.0
+    return round((float(row.realized_pnl or 0.0) + unrealized) / invested * 100.0, 4)
+
+
 def _session_view(row: RunSession) -> dict:
     connected = _is_connected(row)
     # 실행기가 종료 명령을 받아 정리 중인 상태(플래그는 섰지만 아직 확정 보고 전).
@@ -873,11 +916,14 @@ def _session_view(row: RunSession) -> dict:
         "last_price": row.last_price,
         "entry_price": row.entry_price,
         "position_qty": row.position_qty,
+        "invested_usdt": float(getattr(row, "invested_usdt", 0.0) or 0.0),
+        "return_pct": total_return_pct(row),
         "realized_pnl": row.realized_pnl,
         "unrealized_pct": row.unrealized_pct,
         "final_entry_price": getattr(row, "final_entry_price", 0.0) or 0.0,
         "final_position_qty": getattr(row, "final_position_qty", 0.0) or 0.0,
         "final_unrealized_pct": getattr(row, "final_unrealized_pct", 0.0) or 0.0,
+        **session_returns(row),
         "note": row.note,
         "started_at": row.started_at,
         "started_kst": _kst_label(row.started_at),

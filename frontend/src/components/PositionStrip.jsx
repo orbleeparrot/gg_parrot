@@ -5,7 +5,7 @@
 import { useEffect, useState } from "react";
 import { fmtPrice, fmtQty } from "../lib/format.js";
 import {
-  exitRules, fmtSignedMoney, fmtSignedPct, gaugeModel, runningFor, toneOf, unrealizedMoney,
+  exitRules, fmtSignedMoney, fmtSignedPct, gaugeModel, headlineReturn, runningFor, toneOf, unrealizedMoney,
 } from "../lib/positionExits.js";
 
 function useMinuteTick() {
@@ -40,7 +40,7 @@ export function positionState(session) {
   if (!running) return { label: "실행 종료", dot: "is-off" };
   if (session.stopping) return { label: "종료 처리 중…", dot: "is-checking" };
   if (!session.connected) return { label: "응답 확인 중", dot: "is-checking" };
-  if (session.in_position) return { label: "평가손익", dot: "is-running" };
+  if (session.in_position) return { label: headlineReturn(session).label, dot: "is-running" };
   return { label: "무포지션 · 대기 중", dot: "is-running" };
 }
 
@@ -54,6 +54,7 @@ export default function PositionStrip({ session, macro }) {
   const money = inPosition ? unrealizedMoney(session) : null;
   const gauge = inPosition ? gaugeModel(pct, rules) : { show: false };
   const realized = Number(session.realized_pnl ?? 0);
+  const headline = headlineReturn(session);
   const state = positionState(session);
   const elapsed = runningFor(session.started_at, now);
   const runner = [session.runner_version ? `v${session.runner_version}` : "", session.macro_origin_label || ""].filter(Boolean).join(" · ");
@@ -67,9 +68,15 @@ export default function PositionStrip({ session, macro }) {
             {state.label}
           </span>
           {inPosition ? (
-            <span className={"agent-position-pct num " + toneOf(pct)}>
-              {fmtSignedPct(pct)}
+            <span className={"agent-position-pct num " + toneOf(headline.pct)}>
+              {fmtSignedPct(headline.pct)}
               {money !== null ? <small className="num">{fmtSignedMoney(money, session.symbol)}</small> : null}
+              {headline.note ? <small className="agent-position-note">{headline.note}</small> : null}
+            </span>
+          ) : headline.note ? (
+            <span className="agent-position-idle">
+              {headline.label} <b className={"num " + toneOf(headline.pct)}>{fmtSignedPct(headline.pct)}</b>
+              <small className="agent-position-note">{headline.note}</small>
             </span>
           ) : (
             <span className="agent-position-idle">
@@ -91,6 +98,7 @@ export default function PositionStrip({ session, macro }) {
         <div><dt>현재가</dt><dd className="num">{Number(session.last_price) > 0 ? fmtPrice(session.last_price) : "—"}</dd></div>
         <div><dt>{running ? "실행 시간" : "실행했던 시간"}</dt><dd className="num">{elapsed || "—"}</dd></div>
         <div><dt>실현손익 · 누적</dt><dd className={"num " + toneOf(realized)}>{fmtSignedMoney(realized, session.symbol)}</dd></div>
+        <div><dt>투입금</dt><dd className="num">{Number(session.invested_usdt) > 0 ? `${Number(session.invested_usdt).toLocaleString("en-US", { maximumFractionDigits: 2 })} USDT` : "—"}</dd></div>
         <div><dt>실행기</dt><dd className="num">{runner || "—"}</dd></div>
         <div className="is-wide"><dt>청산 기준</dt><dd>{rules.summary}</dd></div>
       </dl>

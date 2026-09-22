@@ -449,6 +449,11 @@ class RunSession(SQLModel, table=True):
     # 서버 신호(v8+) 세션의 드라이버 상태(JSON, paper.state_json 과 같은 형식). 체크포인트마다 갱신,
     # 재기동 복구에 쓴다. 구버전 실행기 세션은 빈 문자열.
     state_json: str = ""
+    # 투입금(USDT) — 세션 중 실제로 들어간 최대 금액(수량×진입가의 최대값). '투입금 대비 총수익률'의 분모.
+    # 매크로의 시작 자금은 실계좌에 들어간 돈이 아니라(주문 상한) 분모로 쓰면 오해를 낳는다(2026-09-22).
+    invested_usdt: float = 0.0
+    # 투입금(USDT) — 세션 동안 실제로 들어간 최대 금액(수량×진입가의 최대값). 수익률의 분모(2026-09-22).
+    invested_usdt: float = 0.0
 
 
 class RunSessionEvent(SQLModel, table=True):
@@ -1113,6 +1118,8 @@ def _migrate() -> None:
             "final_position_qty": "ALTER TABLE runsession ADD COLUMN final_position_qty REAL DEFAULT 0",
             "final_unrealized_pct": "ALTER TABLE runsession ADD COLUMN final_unrealized_pct REAL DEFAULT 0",
             "state_json": "ALTER TABLE runsession ADD COLUMN state_json TEXT DEFAULT ''",
+            "invested_usdt": "ALTER TABLE runsession ADD COLUMN invested_usdt REAL DEFAULT 0",
+            "invested_usdt": "ALTER TABLE runsession ADD COLUMN invested_usdt REAL DEFAULT 0",
         },
         "tickernewssnapshot": {
             "claim_token": "ALTER TABLE tickernewssnapshot ADD COLUMN claim_token TEXT DEFAULT ''",
@@ -1250,6 +1257,8 @@ _PG_ADDED_COLUMNS = {
         "final_position_qty": "DOUBLE PRECISION NOT NULL DEFAULT 0",
         "final_unrealized_pct": "DOUBLE PRECISION NOT NULL DEFAULT 0",
         "state_json": "TEXT DEFAULT ''",
+        "invested_usdt": "DOUBLE PRECISION NOT NULL DEFAULT 0",
+        "invested_usdt": "DOUBLE PRECISION NOT NULL DEFAULT 0",
     },
     "tickernewssnapshot": {
         "claim_token": "TEXT DEFAULT ''", "last_observed_at": "TEXT DEFAULT ''",

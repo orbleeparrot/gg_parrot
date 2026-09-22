@@ -24,10 +24,11 @@ export default function RunResultScreen({ session, onShowLog }) {
       </div>
 
       <div className="agent-result-pnl-block">
-        <span className="agent-result-pnl-label">총 실현손익</span>
+        <span className="agent-result-pnl-label">{outcome.pnl.sub ? "투입금 대비 총수익률" : "총 실현손익"}</span>
         <strong className={`agent-result-pnl num is-${outcome.pnl.tone}${outcome.pending ? " is-pending" : ""}`}>
           {outcome.pnl.text}
         </strong>
+        {outcome.pnl.sub ? <span className="agent-result-pnl-sub num">{outcome.pnl.sub}</span> : null}
       </div>
 
       <dl className="agent-result-rows">

@@ -4,6 +4,7 @@ import { exitRules } from "../../lib/positionExits.js";
 const USDT = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const PRICE = new Intl.NumberFormat("en-US", { maximumFractionDigits: 6 });
 const QTY = new Intl.NumberFormat("en-US", { maximumFractionDigits: 6 });
+const MONEY = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 });
 
 function signOf(value) {
   const n = Number(value) || 0;
@@ -138,8 +139,10 @@ export function describeRunOutcome(session) {
   const positionEntry = keptPosition ? Number(s.entry_price) || 0 : finalQty > 0 ? Number(s.final_entry_price) || 0 : 0;
   const positionQty = keptPosition ? Number(s.position_qty) || 0 : finalQty;
   const positionLabel = keptPosition ? "" : "(청산 직전)";
+  const hasReturn = Number(s.invested_usdt) > 0 && s.return_pct !== null && s.return_pct !== undefined;
   const rows = [
     { label: "실행 시간", value: elapsed ? `${elapsed} · ${span}` : span || "—", numeric: true },
+    { label: "투입금", value: hasReturn ? `${MONEY.format(Number(s.invested_usdt))} USDT` : "—", numeric: true },
     { label: `평단${positionLabel}`, value: positionEntry > 0 ? PRICE.format(positionEntry) : "—", numeric: true },
     { label: `수량${positionLabel}`, value: positionQty > 0 ? `${QTY.format(positionQty)} ${baseAsset(s.symbol)}`.trim() : "—", numeric: true },
     { label: "마지막 평가손익", value: resultPct !== null ? formatSignedPct(resultPct) : "—", numeric: true, tone: resultPct !== null ? toneOf(resultPct) : "" },
@@ -161,9 +164,14 @@ export function describeRunOutcome(session) {
   return {
     eyebrow, title, detail, tone, avatar, pending: stopping,
     // 처리 중에는 확정 수치를 주장하지 않는다.
+    // 큰 숫자는 '투입금 대비 총수익률'(서버 return_pct) — 시작 자금이 아니라 실제로 들어간 최대 금액이 분모.
+    // 투입금이 없는 옛 세션은 예전처럼 USDT 절대값만.
     pnl: stopping
-      ? { value: null, text: "집계 중", tone: "flat" }
-      : { value: Number(s.realized_pnl) || 0, text: formatSignedUsdt(s.realized_pnl), tone: toneOf(s.realized_pnl) },
+      ? { value: null, text: "집계 중", tone: "flat", sub: "" }
+      : hasReturn
+        ? { value: Number(s.return_pct), text: formatSignedPct(s.return_pct), tone: toneOf(s.return_pct),
+            sub: `${formatSignedUsdt(s.realized_pnl)} · 투입 ${MONEY.format(Number(s.invested_usdt))} USDT` }
+        : { value: Number(s.realized_pnl) || 0, text: formatSignedUsdt(s.realized_pnl), tone: toneOf(s.realized_pnl), sub: "" },
     rows,
   };
 }

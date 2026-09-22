@@ -47,6 +47,7 @@
 ### 4.1 `engine/candle_feed.py` — 마감봉 피드
 
 - `CandleFeed.subscribe(symbol, interval, market, callback) -> Subscription`, `unsubscribe(sub)`.
+  `subscribe(..., since_t=None)`: 구독 시점 커서. 웜업한 호출자는 마지막 웜업 봉의 `t`를 넘겨 그 봉 이후만 받는다; 없으면 현재 진행 중인 봉부터. 실행 중인 루프 밖에서 부르면 경고만 남기고 폴링 태스크를 만들지 않는다(테스트용).
   키 `(symbol, interval, market)`마다 asyncio 태스크 1개. 구독자가 0이 되면 태스크 종료.
 - 루프: 다음 봉 마감 시각(`_INTERVAL_MS` 경계) + `CANDLE_GRACE_SECONDS`(기본 2)까지 잠들고, `get_recent_klines(symbol, interval,
   limit=3, market)`을 스레드에서 호출해 `closed=True`이고 `t > last_delivered_t`인 봉을 오름차순으로 콜백에 전달. 아직 새 마감봉이
@@ -80,7 +81,7 @@ class StrategyDriver:
     def __init__(self, macro: Macro, initial: float, *, symbols: list[str])
     legs: list[Leg]; initial; equity; ret; last_price; trade_count; last_fill; entry_returns
     def tick(self, symbol, price, ts) -> Optional[Fill]        # = 기존 paper._tick + _note_fill
-    async def push_candle(self, symbol, candle) -> None          # LiveCandleSim.on_candle 위임(캔들형만)
+    def push_candle(self, symbol, candle) -> int                # LiveCandleSim.on_candle 위임(캔들형만) — 동기, 큐에 넣은 Fill 수
     def candle_keys(self) -> list[tuple[symbol, interval, market]]   # 캔들형이면 레그별 키, 아니면 []
     def state(self) -> dict                                      # = 기존 paper._state_view
     def restore(self, state: dict, trades: list[dict]) -> None   # = 기존 _rebuild_runner 의 sim.restore 부분
@@ -102,7 +103,7 @@ class StrategyDriver:
 - `RunSession.state_json: str = ""` — 드라이버 상태(페이퍼와 같은 형식). 체크포인트 10초(`PAPER_CHECKPOINT_SECONDS` 공유).
 - 새 테이블 `RunnerCommand`: `id`, `session_id(index)`, `seq`(세션 내 1부터), `action`(`buy|sell|short|cover`),
   `notional_frac: float`(진입: 초기자본 대비 주문 금액 비율), `qty_frac: float`(청산: 보유 수량 대비 비율, 1.0=전량),
-  `signal_price`, `reason`(사람이 읽는 한 줄, 예: `RSI 23.1 ≤ 25 · 진입`), `created_at`, `expires_at`,
+  `signal_price`, `reason`(사람이 읽는 한 줄, 예: `RSI 23.1 ≤ 25 · 진입`), `created_at`, `created_ms`, `expires_ms`(만료 시각 ms), `attempts`,
   `status`(`pending|acked|failed|expired`), `acked_at`, `executed_qty`, `fill_price`, `error`.
 - Supabase 마이그레이션 `20260922120000_runner_commands.sql` + sqlite `_migrate` + `_PG_ADDED_COLUMNS["runsession"]`.
 
@@ -112,7 +113,7 @@ class StrategyDriver:
 - 청산(`sell`/`cover`): `qty_frac = fill.qty / (sim이 Fill 직전 보유한 수량)`; 전량이면 1.0. 드라이버가 Fill 직전 수량을 함께 넘긴다.
 - `reason`은 sim이 Fill에 실어 준다(`Fill.reason: str = ""` 필드 추가; 각 sim의 `_open_long/_close_all` 호출부가 채운다. 채우지
   않으면 `"진입"`/`"청산"`/`"손절"`/`"강제 청산"` 기본값).
-- `expires_at = created_at + COMMAND_TTL_SECONDS`(기본 90). 만료된 pending 명령은 heartbeat에서 `expired`로 바꾸고 보내지 않는다 —
+- `expires_ms = created_ms + COMMAND_TTL_SECONDS`(기본 90). 만료된 pending 명령은 heartbeat에서 `expired`로 바꾸고 보내지 않는다 —
   10분 전 진입 신호를 뒤늦게 실행하면 안 된다.
 
 **heartbeat 프로토콜 (v8)**
@@ -124,17 +125,18 @@ class StrategyDriver:
 응답에 추가:
 ```json
 "commands": [{"id": 13, "seq": 4, "action": "sell", "qty_frac": 1.0, "notional_frac": 0.0,
-              "signal_price": 0.0127, "reason": "RSI 76.2 ≥ 75 · 청산", "expires_at": "…"}]
+              "signal_price": 0.0127, "reason": "RSI 76.2 ≥ 75 · 청산", "expires_ms": 1758540000000}]
 ```
 - 서버: `acks` 처리(status·executed_qty·fill_price·error 저장, 세션 이벤트 `order` 기록) → 만료 처리 → `pending`을 `seq` 순으로 응답.
-- 실행기: `commands`를 순서대로 실행, 결과를 **다음 heartbeat**의 `acks`로 보고. 같은 `id`를 두 번 받으면(ack가 유실된 경우) 실행하지 않고
-  다시 ack만 한다(실행기 메모리에 최근 ack 200개 유지).
+- 실행기: `commands`를 순서대로 실행, 결과를 **다음 heartbeat**의 `acks`로 보고. ok로 ack한 `id`를 두 번 받으면(ack가 유실된 경우) 실행하지 않고
+  다시 ack만 한다(실행기 메모리에 최근 ok ack 200개 유지).
 - 청산 실패(`ok=false`)는 세션 `note`를 `"청산 실패 — 확인 필요"`로 두고 같은 명령을 `pending`으로 되돌려 다음 heartbeat에 재전송,
   최대 3회. 3회 실패면 `failed`로 두고 알림(`notifications.notify` agent).
+- 응답 `action`이 종료 모드(`stop_only`/`close_and_stop`)면 `commands`는 항상 빈 배열이다. 같은 `id`가 다시 오는 경우는 실패한 청산의 재전송뿐이므로 실행기는 **ok로 ack한 id만** 중복 제거하고, 실패한 명령이 같은 id로 다시 오면 다시 실행한다.
 - 진입 실패는 `failed`로 끝낸다. sim은 가상 포지션을 갖고 실행기는 비어 있으므로, 다음 청산 명령은 실행기에서 `held_qty == 0`이라
   주문 없이 `ok=true, executed_qty=0`으로 ack된다. 세션 이벤트에 `⚠ 진입 실패 — 이번 사이클은 건너뜁니다`를 남긴다.
 - 불일치 감지: heartbeat의 `in_position`과 드라이버 `state()["in_position"]`이 다르면(명령 pending이 없을 때) 이벤트 `warn` 1회
-  기록(연속 중복 방지).
+  기록(연속 중복 방지). 실행기가 `position_uncertain`을 보고하면 판정하지 않는다.
 
 **세션 수명**
 
@@ -142,7 +144,7 @@ class StrategyDriver:
 - `start_session`: v8 이상이면 `macro` 필수(없으면 422), 드라이버 생성·웜업·피드 구독·`_drivers[session_id]`.
   v8 미만(빈 값 포함)이고 `rule_type ∉ {A, B}`이면 **426** `"지표형 매크로는 실행기 v8 이상이 필요해요. 실행기를 업데이트해 주세요."`
   (`_RUNNER_SIGNAL_MIN_VERSION = "8"`, 환경변수 `RUNNER_SIGNAL_MIN_VERSION`). `launch-tickets/claim`도 같은 규칙으로 거절해 웹
-  화면이 업데이트를 안내할 수 있게 한다.
+  화면이 업데이트를 안내할 수 있게 한다. 매크로를 안 보내는 v6는 규칙을 판별할 수 없으므로 전부 426 이다(업데이트 유도).
 - `heartbeat`: 위 프로토콜. 세션의 마지막 heartbeat가 `COMMAND_TTL_SECONDS`보다 오래됐어도 드라이버는 계속 돈다(리더보드처럼 상태는
   이어짐). 명령은 만료로 정리된다.
 - `mark_stopped`/`request_stop(close_and_stop)`: 드라이버 정지·피드 해제. `close_and_stop`은 기존처럼 실행기가 로컬에서 전량 청산.

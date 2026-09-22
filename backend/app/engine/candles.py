@@ -7,7 +7,9 @@ candles, look-ahead bias is structurally impossible for the indicator types:
 
   * Indicator types (F/G/J): the signal is decided on a bar's CLOSE and the fill
     happens at the NEXT bar's OPEN (a one-bar ``_pending`` order). Never on the
-    in-progress bar.
+    in-progress bar. Live (``LiveCandleSim``) executes that pending order on the
+    first tick after the closed bar arrives via ``execute_pending`` — same "next
+    open" semantics, seconds instead of a full interval late.
   * Price-level types (D/E/H/I): levels are known in advance, so fills happen
     intrabar against the bar high/low. When a long bar touches both a take-profit
     (high) and a stop-loss (low) in the same candle, the stop wins (conservative)
@@ -686,13 +688,24 @@ class BreakoutSim(CandleSim):
         self._peak = 0.0
         self._exit_next_open = False
 
-    def _strategy(self, o, h, l, c, ts, fills):
-        # next_open exit: close yesterday's breakout at today's open.
+    def execute_pending(self, price: float, ts: datetime) -> List[Fill]:
+        """어제 돌파 진입의 '다음 봉 시가 청산' 을 ``price`` 에 실행하고 플래그를 지운다.
+
+        백테스트는 다음 봉의 시가(``_strategy`` 의 ``o``)로 부르고, 실시간(LiveCandleSim.step)은 봉이
+        도착한 뒤 첫 3초 틱 가격으로 부른다 — 마감봉만 오는 실시간에서 다음 ``on_candle`` 을 기다리면
+        한 간격을 통째로 늦게 체결하기 때문이다.
+        """
+        fills: List[Fill] = []
         if self._exit_next_open and self.in_position():
-            f = self._close_all(o, o, is_stop=False, ts=ts)
+            f = self._close_all(price, price, is_stop=False, ts=ts)
             if f:
                 fills.append(f)
-            self._exit_next_open = False
+        self._exit_next_open = False
+        return fills
+
+    def _strategy(self, o, h, l, c, ts, fills):
+        # next_open exit: close yesterday's breakout at today's open.
+        fills += self.execute_pending(o, ts)
 
         if self._common_risk(o, h, l, c, ts, fills):
             self._exit_next_open = False
@@ -745,21 +758,34 @@ class _IndicatorSim(CandleSim):
         self.tp = self.p.get("take_profit")
         self._signal_note = ""  # 마지막 판정의 한 줄 근거 — Fill.reason 에 실린다
 
-    def _strategy(self, o, h, l, c, ts, fills):
-        # 1) execute the pending decision from the previous closed bar, at open.
+    def execute_pending(self, price: float, ts: datetime, mark: Optional[float] = None) -> List[Fill]:
+        """직전 마감봉에서 정한 ``_pending`` 의도를 ``price`` 에 실행하고 의도를 지운다.
+
+        백테스트는 다음 봉의 시가(``_strategy`` 의 ``o``)로 부른다. 실시간(LiveCandleSim.step)은 마감봉만
+        받으므로 다음 ``on_candle`` 을 기다리면 한 간격을 통째로 늦게 체결한다 — 봉이 도착한 뒤 첫 3초 틱
+        가격으로 불러 "다음 시가" 의미를 몇 초 안에 맞춘다. ``mark`` 는 Fill 의 평가 기준가(기본 ``price``).
+        """
+        mark = price if mark is None else mark
+        fills: List[Fill] = []
         if self._pending == "exit" and self.in_position():
-            f = self._close_all(o, o, is_stop=False, ts=ts, reason=f"{self._signal_note} · 청산" if self._signal_note else None)
+            f = self._close_all(price, price, is_stop=False, ts=ts,
+                                reason=f"{self._signal_note} · 청산" if self._signal_note else None)
             if f:
                 fills.append(f)
         elif self._pending == "enter" and not self.in_position() and not self._entry_blocked(ts):
             reason = f"{self._signal_note} · 진입" if self._signal_note else "진입"
             if self.side is PositionSide.SHORT:
-                f = self._open_short(o, ts, c, reason=reason)
+                f = self._open_short(price, ts, mark, reason=reason)
             else:
-                f = self._open_long(self.invest_ratio * self.cash, o, ts, c, reason=reason)
+                f = self._open_long(self.invest_ratio * self.cash, price, ts, mark, reason=reason)
             if f:
                 fills.append(f)
         self._pending = None
+        return fills
+
+    def _strategy(self, o, h, l, c, ts, fills):
+        # 1) execute the pending decision from the previous closed bar, at open (mark = close, as before).
+        fills += self.execute_pending(o, ts, mark=c)
 
         # 2) common risk (stop-loss / daily / holding) intrabar.
         if self._common_risk(o, h, l, c, ts, fills):
@@ -1060,6 +1086,15 @@ class LiveCandleSim:
         self._queue: deque[Fill] = deque()
 
     def step(self, price: float, ts: Optional[datetime] = None) -> Optional[Fill]:
+        """큐의 Fill 하나를 꺼내 준다. 큐가 비었고 sim 에 '다음 시가' 의도가 걸려 있으면 이 틱 가격에 실행한다.
+
+        마감봉만 오는 실시간에서는 봉 N 마감에 정한 의도를 봉 N+1 의 on_candle 까지 기다리면 한 간격
+        늦게(N+1 마감 무렵) 체결된다. 봉이 온 뒤 첫 틱(≈ N+1 시가)에 실행해 백테스트의 "다음 시가" 와 맞춘다.
+        """
+        if not self._queue:
+            execute = getattr(self.inner, "execute_pending", None)
+            if execute is not None:
+                self._queue.extend(execute(float(price), ts or datetime.now(timezone.utc)))
         return self._queue.popleft() if self._queue else None
 
     def on_candle(self, o: float, h: float, l: float, c: float, ts: datetime) -> int:

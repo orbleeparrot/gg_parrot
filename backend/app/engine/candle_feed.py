@@ -26,11 +26,14 @@ RETRY_STEP_SECONDS = 2.0
 
 
 class Subscription:
-    __slots__ = ("key", "callback")
+    __slots__ = ("key", "callback", "since_t")
 
-    def __init__(self, key: Key, callback: Callback) -> None:
+    def __init__(self, key: Key, callback: Callback, since_t: Optional[int] = None) -> None:
         self.key = key
         self.callback = callback
+        # 이 구독자가 이미 소비한(웜업한) 마지막 봉의 t. 키 커서(_last_t)가 이보다 뒤처져 있으면
+        # 그 사이 봉은 이 구독자에게만 건너뛴다 — 웜업에 포함된 봉을 다시 받으면 지표가 이중 누적된다.
+        self.since_t = since_t
 
 
 async def _default_fetch(symbol: str, interval: str, limit: int, market: str) -> list[dict]:
@@ -66,7 +69,7 @@ class CandleFeed:
         time - 1ms" 이므로, 그 봉이 마감되어야 비로소 배달된다).
         """
         key: Key = (symbol.upper(), interval, market)
-        sub = Subscription(key, callback)
+        sub = Subscription(key, callback, since_t)
         is_new = key not in self._subs  # 이 키의 첫 구독자인지 — _tasks 는 루프가 없으면
         # 영영 채워지지 않을 수 있으므로 "새 키" 판정 기준으로 쓸 수 없다.
         self._subs.setdefault(key, []).append(sub)
@@ -89,9 +92,11 @@ class CandleFeed:
                 )
             else:
                 self._tasks[key] = loop.create_task(self._run(key))
-        # 이미 도는 피드에 다른 구독자가 (다른) since_t 로 합류하는 경우: 커서는
+        # 이미 도는 피드에 다른 구독자가 (다른) since_t 로 합류하는 경우: 키 커서는
         # 이미 돌고 있는 피드가 기준이다. since_t 로 뒤로 돌리면 먼저 있던 구독자가
-        # 이미 받은 봉을 다시 받게 되므로, 기존 커서를 그대로 둔다(아무 것도 하지 않음).
+        # 이미 받은 봉을 다시 받게 되므로 기존 커서는 그대로 둔다. 반대로 키 커서가 새 구독자의
+        # since_t 보다 뒤처져 있으면(먼저 온 구독자가 아직 못 받은 봉을 새 구독자는 웜업으로 이미
+        # 소비한 경우) poll_once 가 구독자별 since_t 로 그 봉을 새 구독자에게만 건너뛴다.
         return sub
 
     def unsubscribe(self, sub: Subscription) -> None:
@@ -131,6 +136,8 @@ class CandleFeed:
             if key in self._subs:
                 self._last_t[key] = candle.t
             for sub in list(self._subs.get(key, [])):
+                if sub.since_t is not None and candle.t <= sub.since_t:
+                    continue  # 이 구독자는 웜업으로 이미 본 봉 — 두 번 주지 않는다
                 try:
                     await sub.callback(symbol, candle)
                 except Exception:

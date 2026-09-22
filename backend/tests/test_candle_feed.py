@@ -95,6 +95,35 @@ def test_callback_exception_does_not_break_other_subscribers():
     assert seen == [5.0]
 
 
+def test_late_subscriber_with_newer_since_t_skips_candles_it_already_warmed_up():
+    """키 커서가 뒤처진 피드에 더 최근 since_t 로 합류한 구독자는 웜업에 포함된 봉을 다시 받지 않는다.
+    먼저 있던 구독자는 그대로 받는다(키 커서는 건드리지 않음)."""
+    now = 1_700_000_600_000
+    t1, t2 = now - 900_000, now - 600_000
+    rows = [_k(t1, 1.0), _k(t2, 2.0), _k(now - 300_000, 3.0, closed=False)]
+
+    async def fetch(symbol, interval, limit, market):
+        return rows
+
+    feed = CandleFeed(fetch=fetch, now_ms=lambda: now, sleep=lambda s: asyncio.sleep(0))
+    first, late = [], []
+
+    async def cb_first(symbol, candle):
+        first.append(candle.t)
+
+    async def cb_late(symbol, candle):
+        late.append(candle.t)
+
+    key = ("BTCUSDT", "5m", "spot")
+    feed.subscribe("BTCUSDT", "5m", "spot", cb_first, since_t=now - 1_200_000)  # 커서: 두 봉 다 아직 안 받음
+    feed.subscribe("BTCUSDT", "5m", "spot", cb_late, since_t=t1)  # 웜업이 t1 까지 소비한 늦은 구독자
+    assert feed._last_t[key] == now - 1_200_000  # 키 커서는 그대로
+    _run(feed.poll_once(key))
+    assert first == [t1, t2]
+    assert late == [t2]  # t1 은 이미 웜업으로 봤으니 건너뛴다
+    assert _run(feed.poll_once(key)) == []
+
+
 def test_history_returns_closed_candles_oldest_first():
     async def fetch(symbol, interval, limit, market):
         assert limit == 4  # n + 1: 마지막 진행 중 봉을 뺀다

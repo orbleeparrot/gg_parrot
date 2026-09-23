@@ -452,8 +452,6 @@ class RunSession(SQLModel, table=True):
     # 투입금(USDT) — 세션 중 실제로 들어간 최대 금액(수량×진입가의 최대값). '투입금 대비 총수익률'의 분모.
     # 매크로의 시작 자금은 실계좌에 들어간 돈이 아니라(주문 상한) 분모로 쓰면 오해를 낳는다(2026-09-22).
     invested_usdt: float = 0.0
-    # 투입금(USDT) — 세션 동안 실제로 들어간 최대 금액(수량×진입가의 최대값). 수익률의 분모(2026-09-22).
-    invested_usdt: float = 0.0
 
 
 class RunSessionEvent(SQLModel, table=True):
@@ -1128,7 +1126,6 @@ def _migrate() -> None:
             "final_unrealized_pct": "ALTER TABLE runsession ADD COLUMN final_unrealized_pct REAL DEFAULT 0",
             "state_json": "ALTER TABLE runsession ADD COLUMN state_json TEXT DEFAULT ''",
             "invested_usdt": "ALTER TABLE runsession ADD COLUMN invested_usdt REAL DEFAULT 0",
-            "invested_usdt": "ALTER TABLE runsession ADD COLUMN invested_usdt REAL DEFAULT 0",
         },
         "tickernewssnapshot": {
             "claim_token": "ALTER TABLE tickernewssnapshot ADD COLUMN claim_token TEXT DEFAULT ''",
@@ -1272,7 +1269,6 @@ _PG_ADDED_COLUMNS = {
         "final_position_qty": "DOUBLE PRECISION NOT NULL DEFAULT 0",
         "final_unrealized_pct": "DOUBLE PRECISION NOT NULL DEFAULT 0",
         "state_json": "TEXT DEFAULT ''",
-        "invested_usdt": "DOUBLE PRECISION NOT NULL DEFAULT 0",
         "invested_usdt": "DOUBLE PRECISION NOT NULL DEFAULT 0",
     },
     "tickernewssnapshot": {

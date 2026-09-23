@@ -58,6 +58,29 @@ LONG_PERIODS = ("3m", "6m", "1y")
 SHORT_INTERVALS = ("1m", "5m", "15m")
 SHORT_PERIODS = ("1w", "1m")
 
+# v2(2026-09-23) — 카드가 사람 말을 받고 서버가 기술 값으로 바꾼다.
+HORIZONS = ("days", "weeks", "months", "long")
+WATCH_LEVELS = ("rarely", "sometimes", "often")
+
+_HORIZON_PERIOD = {"days": "1w", "weeks": "3m", "months": "6m", "long": "1y"}
+# 단타형은 짧은 구간만 — SHORT_PERIODS = ("1w", "1m"). 여기의 1m 은 1개월이다.
+_HORIZON_PERIOD_SHORT = {"days": "1w", "weeks": "1m", "months": "1m", "long": "1m"}
+_WATCH_INTERVAL = {"rarely": "1d", "sometimes": "4h", "often": "1h"}
+_WATCH_INTERVAL_SHORT = {"rarely": "15m", "sometimes": "5m", "often": "1m"}
+
+
+def to_period(profile: str, horizon: str) -> str:
+    table = _HORIZON_PERIOD_SHORT if PROFILES[profile]["short"] else _HORIZON_PERIOD
+    return table.get(horizon, table["weeks"])
+
+
+def to_interval(profile: str, watch: str, period: str) -> str:
+    if not PROFILES[profile]["short"]:
+        return _WATCH_INTERVAL.get(watch, _WATCH_INTERVAL["sometimes"])
+    interval = _WATCH_INTERVAL_SHORT.get(watch, _WATCH_INTERVAL_SHORT["sometimes"])
+    # 1분 봉은 최근 1주 구간에서만 쓸 수 있다(백테스트 봉 상한).
+    return "5m" if interval == "1m" and period != "1w" else interval
+
 RULE_LABELS = {
     "A": "익절/손절 후 재진입", "C": "정기 분할매수", "E": "트레일링 스탑", "F": "RSI 조건",
     "G": "볼린저밴드 회귀", "H": "세이프티 주문", "I": "변동성 돌파", "J": "이동평균 크로스",

@@ -506,3 +506,32 @@ def test_failed_ask_returns_the_extra_credit(_fake_backtest, monkeypatch):
     with pytest.raises(RuntimeError):  # TestClient 는 서버 예외를 그대로 올린다
         client.post("/api/ask/macros", json=_BODY, headers=_auth(token))
     assert client.get("/api/ask/status", headers=_auth(token)).json()["remaining_today"] == 1
+
+
+def test_horizon_maps_to_backtest_period():
+    assert ask.to_period("balanced", "days") == "1w"
+    assert ask.to_period("balanced", "weeks") == "3m"
+    assert ask.to_period("balanced", "months") == "6m"
+    assert ask.to_period("balanced", "long") == "1y"
+
+
+def test_scalper_period_is_clamped_to_short_presets():
+    # 단타형은 짧은 구간만 — 1m 은 1개월이다(봉의 1분이 아니다)
+    assert ask.to_period("scalper", "days") == "1w"
+    assert ask.to_period("scalper", "weeks") == "1m"
+    assert ask.to_period("scalper", "months") == "1m"
+    assert ask.to_period("scalper", "long") == "1m"
+
+
+def test_watch_maps_to_interval():
+    assert ask.to_interval("balanced", "rarely", "6m") == "1d"
+    assert ask.to_interval("balanced", "sometimes", "6m") == "4h"
+    assert ask.to_interval("balanced", "often", "6m") == "1h"
+
+
+def test_scalper_watch_maps_to_short_intervals():
+    assert ask.to_interval("scalper", "rarely", "1m") == "15m"
+    assert ask.to_interval("scalper", "sometimes", "1m") == "5m"
+    # 1분 봉은 구간이 1주일 때만 — 아니면 5분으로 낮춘다
+    assert ask.to_interval("scalper", "often", "1w") == "1m"
+    assert ask.to_interval("scalper", "often", "1m") == "5m"

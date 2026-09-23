@@ -1,182 +1,120 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { STEPS, initialState, reduce, toRequest, canChooseFutures, answerLabel, periodOptions, intervalOptions, maxSymbols, isShort } from "../src/lib/askFlow.js";
+import { STEPS, initialState, reduce, toCandidatesRequest, toAskRequest, canChooseFutures } from "../src/lib/askFlow.js";
 
-const walk = (...actions) => actions.reduce(reduce, initialState());
+const CANDS = [
+  { symbol: "AAAUSDT", base: "AAA", reason: "거래가 활발해요", volume_rank: 1, range_pct: 1, change_pct: 1 },
+  { symbol: "BBBUSDT", base: "BBB", reason: "변동이 적당해요", volume_rank: 2, range_pct: 5, change_pct: 1 },
+  { symbol: "CCCUSDT", base: "CCC", reason: "변동이 커요", volume_rank: 3, range_pct: 20, change_pct: 1 },
+];
 
-test("cards run in order and the state becomes ready after the last answer", () => {
-  assert.deepEqual(STEPS, ["profile", "market", "symbols", "period", "interval"]);
+function cards(profile = "balanced") {
   let s = initialState();
-  assert.equal(s.step, "profile");
-  s = reduce(s, { type: "choose", step: "profile", value: "balanced" });
-  assert.equal(s.step, "market");
-  s = reduce(s, { type: "choose", step: "market", value: { market: "futures", leverage: 2 } });
-  assert.equal(s.step, "symbols");
-  s = reduce(s, { type: "toggleSymbol", symbol: "btcusdt" });
-  s = reduce(s, { type: "toggleSymbol", symbol: "ETHUSDT" });
-  assert.deepEqual(s.answers.symbols, ["BTCUSDT", "ETHUSDT"]);
-  assert.equal(s.step, "symbols");
-  s = reduce(s, { type: "confirmSymbols" });
-  assert.equal(s.step, "period");
-  s = reduce(s, { type: "choose", step: "period", value: "6m" });
-  s = reduce(s, { type: "choose", step: "interval", value: "4h" });
-  assert.equal(s.phase, "ready");
-  assert.deepEqual(toRequest(s.answers), {
-    risk_profile: "balanced", market: "futures", leverage: 2, symbols: ["BTCUSDT", "ETHUSDT"], period_preset: "6m", interval: "4h",
+  s = reduce(s, { type: "choose", step: "profile", value: profile });
+  s = reduce(s, { type: "choose", step: "market", value: { market: "spot", leverage: 1 } });
+  s = reduce(s, { type: "choose", step: "horizon", value: "weeks" });
+  s = reduce(s, { type: "choose", step: "watch", value: "sometimes" });
+  return s;
+}
+
+function withCandidates() {
+  return reduce(cards(), {
+    type: "candidates",
+    session: { id: 7, remaining: 4 },
+    candidates: CANDS,
+    manualSymbols: ["BTCUSDT"],
   });
-  assert.equal(answerLabel("market", s.answers), "선물 2x");
+}
+
+test("cards are four and end ready", () => {
+  assert.deepEqual(STEPS, ["profile", "market", "horizon", "watch"]);
+  const s = cards();
+  assert.equal(s.phase, "ready");
+  assert.deepEqual(toCandidatesRequest(s.answers), {
+    risk_profile: "balanced", market: "spot", leverage: 1,
+    invest_horizon: "weeks", watch_frequency: "sometimes",
+  });
 });
 
 test("stable profile cannot choose futures", () => {
   let s = reduce(initialState(), { type: "choose", step: "profile", value: "stable" });
   assert.equal(canChooseFutures(s.answers), false);
-  const rejected = reduce(s, { type: "choose", step: "market", value: { market: "futures", leverage: 1 } });
-  assert.equal(rejected, s);
-  s = reduce(s, { type: "choose", step: "market", value: { market: "spot", leverage: 1 } });
-  assert.equal(s.step, "symbols");
+  s = reduce(s, { type: "choose", step: "market", value: { market: "futures", leverage: 2 } });
+  assert.equal(s.answers.market, null);
 });
 
-test("symbols: max three, dedupe, confirm needs at least one", () => {
-  let s = walk({ type: "choose", step: "profile", value: "aggressive" }, { type: "choose", step: "market", value: { market: "spot", leverage: 1 } });
-  const empty = reduce(s, { type: "confirmSymbols" });
-  assert.equal(empty, s);
-  for (const sym of ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "BTCUSDT"]) s = reduce(s, { type: "toggleSymbol", symbol: sym });
-  assert.deepEqual(s.answers.symbols, ["ETHUSDT", "SOLUSDT"]);  // 4번째 거부, 마지막 BTC 토글로 제거
+test("candidates phase holds the session and the list", () => {
+  const s = withCandidates();
+  assert.equal(s.phase, "candidates");
+  assert.equal(s.session.id, 7);
+  assert.equal(s.candidates.length, 3);
+  assert.deepEqual(s.manualSymbols, ["BTCUSDT"]);
 });
 
-test("going back clears later answers; follow-ups jump to the right card", () => {
-  let s = walk(
-    { type: "choose", step: "profile", value: "balanced" },
-    { type: "choose", step: "market", value: { market: "spot", leverage: 1 } },
-    { type: "toggleSymbol", symbol: "BTCUSDT" }, { type: "confirmSymbols" },
-    { type: "choose", step: "period", value: "3m" }, { type: "choose", step: "interval", value: "1d" },
-  );
-  assert.equal(s.phase, "ready");
-  const back = reduce(s, { type: "back", step: "market" });
-  assert.equal(back.step, "market");
-  assert.equal(back.phase, "cards");
-  assert.deepEqual(back.answers, { profile: "balanced", market: null, leverage: 1, symbols: [], period: null, interval: null });
-
-  const results = reduce(s, { type: "results", results: [{ label: "x" }], remaining: 4 });
-  assert.equal(results.phase, "results");
-  const safer = reduce(results, { type: "followUp", kind: "safer" });
-  assert.equal(safer.answers.profile, "stable");
-  assert.equal(safer.phase, "ready");
-  const riskier = reduce(results, { type: "followUp", kind: "riskier" });
-  assert.equal(riskier.answers.profile, "aggressive");
-  const other = reduce(results, { type: "followUp", kind: "symbols" });
-  assert.equal(other.step, "symbols");
-  assert.deepEqual(other.answers.symbols, []);
-  assert.equal(other.answers.period, "3m");  // 뒤 카드 답은 유지
-  const again = reduce(other, { type: "toggleSymbol", symbol: "ETHUSDT" });
-  assert.equal(reduce(again, { type: "confirmSymbols" }).phase, "ready");
-  assert.deepEqual(reduce(results, { type: "followUp", kind: "restart" }), initialState());
+test("only one symbol can be chosen", () => {
+  let s = reduce(withCandidates(), { type: "chooseSymbol", symbol: "aaausdt" });
+  assert.equal(s.answers.symbol, "AAAUSDT");
+  s = reduce(s, { type: "chooseSymbol", symbol: "BBBUSDT" });
+  assert.equal(s.answers.symbol, "BBBUSDT");
+  assert.deepEqual(toAskRequest(s), { session_id: 7, symbol: "BBBUSDT" });
 });
 
-test("safer from stable is a no-op, and stable clears futures", () => {
-  let s = walk(
-    { type: "choose", step: "profile", value: "balanced" },
-    { type: "choose", step: "market", value: { market: "futures", leverage: 3 } },
-    { type: "toggleSymbol", symbol: "BTCUSDT" }, { type: "confirmSymbols" },
-    { type: "choose", step: "period", value: "3m" }, { type: "choose", step: "interval", value: "1h" },
-  );
+test("a symbol outside the candidates and manual list is ignored", () => {
+  const s = reduce(withCandidates(), { type: "chooseSymbol", symbol: "SCAMUSDT" });
+  assert.equal(s.answers.symbol, null);
+});
+
+test("a manual symbol is accepted", () => {
+  const s = reduce(withCandidates(), { type: "chooseSymbol", symbol: "BTCUSDT" });
+  assert.equal(s.answers.symbol, "BTCUSDT");
+});
+
+test("going back to a card drops the session, candidates and results", () => {
+  let s = reduce(withCandidates(), { type: "chooseSymbol", symbol: "AAAUSDT" });
+  s = reduce(s, { type: "results", results: [{ label: "x" }], remaining: 3 });
+  s = reduce(s, { type: "back", step: "horizon" });
+  assert.equal(s.phase, "cards");
+  assert.equal(s.session, null);
+  assert.deepEqual(s.candidates, []);
+  assert.equal(s.results, null);
+  assert.equal(s.answers.symbol, null);
+  assert.equal(s.answers.horizon, null);
+});
+
+test("'다른 종목으로' returns to the candidates and keeps the session", () => {
+  let s = reduce(withCandidates(), { type: "chooseSymbol", symbol: "AAAUSDT" });
+  s = reduce(s, { type: "results", results: [{ label: "x" }], remaining: 3 });
+  s = reduce(s, { type: "followUp", kind: "symbols" });
+  assert.equal(s.phase, "candidates");
+  assert.equal(s.session.id, 7);
+  assert.equal(s.candidates.length, 3);
+  assert.equal(s.answers.symbol, null);
+});
+
+test("'안전하게' changes the profile and returns to the cards (a new use)", () => {
+  let s = reduce(withCandidates(), { type: "chooseSymbol", symbol: "AAAUSDT" });
+  s = reduce(s, { type: "results", results: [{ label: "x" }], remaining: 3 });
+  s = reduce(s, { type: "followUp", kind: "safer" });
+  assert.equal(s.answers.profile, "stable");
+  assert.equal(s.phase, "ready");   // 나머지 답은 남아 있어 바로 제출 가능
+  assert.equal(s.session, null);    // 세션은 버린다 — 다시 제출하면 새로 차감
+  assert.deepEqual(s.candidates, []);
+});
+
+test("changing to stable drops a futures answer", () => {
+  let s = cards("balanced");
+  s = reduce(s, { type: "choose", step: "market", value: { market: "futures", leverage: 2 } });
+  s = reduce(s, { type: "choose", step: "horizon", value: "weeks" });
+  s = reduce(s, { type: "choose", step: "watch", value: "sometimes" });
+  s = reduce(s, { type: "candidates", session: { id: 1, remaining: 1 }, candidates: CANDS, manualSymbols: [] });
   s = reduce(s, { type: "results", results: [], remaining: 1 });
-  const safer = reduce(s, { type: "followUp", kind: "safer" });
-  assert.deepEqual([safer.answers.profile, safer.answers.market, safer.answers.leverage], ["stable", "spot", 1]);
-  // safer.phase 는 이미 "ready" 라 결과 phase 가 아니어도 followUp 이 no-op 으로 보인다 —
-  // 진짜로 확인하려면 결과 phase 로 옮긴 뒤에도 안정형에서 "safer" 가 no-op 인지 봐야 한다.
-  const saferResults = reduce(safer, { type: "results", results: [], remaining: 1 });
-  assert.equal(reduce(saferResults, { type: "followUp", kind: "safer" }), saferResults);
-  assert.equal(reduce(s, { type: "error", message: "boom" }).phase, "error");
-  assert.equal(reduce(s, { type: "loading" }).phase, "loading");
+  s = reduce(s, { type: "followUp", kind: "safer" });
+  assert.equal(s.answers.profile, "stable");
+  assert.equal(s.answers.market, "spot");
+  assert.equal(s.answers.leverage, 1);
 });
 
-test("follow-ups other than restart are ignored outside the results phase", () => {
-  const fresh = initialState();
-  for (const kind of ["safer", "riskier", "symbols"]) assert.equal(reduce(fresh, { type: "followUp", kind }), fresh);
-  const mid = reduce(fresh, { type: "choose", step: "profile", value: "balanced" });
-  assert.equal(reduce(mid, { type: "followUp", kind: "riskier" }), mid);
-  const errored = reduce(mid, { type: "error", message: "boom" });
-  assert.deepEqual(reduce(errored, { type: "followUp", kind: "restart" }), initialState());
-});
-
-test("scalper unlocks short periods and intervals, and 1m needs 1w", () => {
-  assert.deepEqual(periodOptions("aggressive").map((o) => o.value), ["3m", "6m", "1y"]);
-  assert.deepEqual(periodOptions("scalper").map((o) => o.value), ["1w", "1m"]);
-  assert.deepEqual(intervalOptions("balanced", "3m").map((o) => o.value), ["1h", "4h", "1d"]);
-  const week = intervalOptions("scalper", "1w");
-  assert.deepEqual(week.map((o) => [o.value, !!o.disabled]), [["1m", false], ["5m", false], ["15m", false]]);
-  const month = intervalOptions("scalper", "1m");
-  assert.deepEqual(month.map((o) => [o.value, !!o.disabled]), [["1m", true], ["5m", false], ["15m", false]]);
-  assert.match(month[0].title, /1주/);
-  assert.equal(isShort("scalper"), true);
-  assert.equal(maxSymbols("scalper"), 2);
-  assert.equal(maxSymbols("stable"), 3);
-});
-
-test("scalper flow validates against its own option lists", () => {
-  let s = walk({ type: "choose", step: "profile", value: "scalper" }, { type: "choose", step: "market", value: { market: "spot", leverage: 1 } });
-  for (const sym of ["BTCUSDT", "ETHUSDT", "SOLUSDT"]) s = reduce(s, { type: "toggleSymbol", symbol: sym });
-  assert.deepEqual(s.answers.symbols, ["BTCUSDT", "ETHUSDT"]);  // 단타형은 2개까지
-  s = reduce(s, { type: "confirmSymbols" });
-  assert.equal(reduce(s, { type: "choose", step: "period", value: "3m" }), s);  // 긴 기간 거부
-  s = reduce(s, { type: "choose", step: "period", value: "1m" });
-  assert.equal(reduce(s, { type: "choose", step: "interval", value: "1m" }), s);  // 1개월 + 1분 거부
-  assert.equal(reduce(s, { type: "choose", step: "interval", value: "1h" }), s);  // 긴 봉 거부
-  s = reduce(s, { type: "choose", step: "interval", value: "5m" });
-  assert.equal(s.phase, "ready");
-  assert.deepEqual(toRequest(s.answers), { risk_profile: "scalper", market: "spot", leverage: 1, symbols: ["BTCUSDT", "ETHUSDT"], period_preset: "1m", interval: "5m" });
-  // 기존 성향은 짧은 옵션을 거부
-  const slow = walk({ type: "choose", step: "profile", value: "balanced" }, { type: "choose", step: "market", value: { market: "spot", leverage: 1 } }, { type: "toggleSymbol", symbol: "BTCUSDT" }, { type: "confirmSymbols" });
-  assert.equal(reduce(slow, { type: "choose", step: "period", value: "1w" }), slow);
-});
-
-test("riskier from aggressive becomes scalper and clears period/interval (and oversized symbols)", () => {
-  let s = walk(
-    { type: "choose", step: "profile", value: "aggressive" }, { type: "choose", step: "market", value: { market: "futures", leverage: 2 } },
-    { type: "toggleSymbol", symbol: "BTCUSDT" }, { type: "toggleSymbol", symbol: "ETHUSDT" }, { type: "toggleSymbol", symbol: "SOLUSDT" }, { type: "confirmSymbols" },
-    { type: "choose", step: "period", value: "3m" }, { type: "choose", step: "interval", value: "1h" },
-  );
-  s = reduce(s, { type: "results", results: [], remaining: 3 });
-  const r = reduce(s, { type: "followUp", kind: "riskier" });
-  assert.equal(r.answers.profile, "scalper");
-  assert.equal(r.answers.market, "futures");  // 시장은 유지
-  assert.deepEqual(r.answers.symbols, []);     // 3개 > 2개 상한 → 비움
-  assert.equal(r.answers.period, null);
-  assert.equal(r.answers.interval, null);
-  assert.equal(r.step, "symbols");
-  assert.equal(r.phase, "cards");
-  assert.equal(reduce(r, { type: "followUp", kind: "riskier" }), r);  // results phase 아님 → no-op
-});
-
-test("safer from scalper becomes aggressive, keeps ≤2 symbols, clears period/interval", () => {
-  let s = walk(
-    { type: "choose", step: "profile", value: "scalper" }, { type: "choose", step: "market", value: { market: "spot", leverage: 1 } },
-    { type: "toggleSymbol", symbol: "BTCUSDT" }, { type: "confirmSymbols" },
-    { type: "choose", step: "period", value: "1w" }, { type: "choose", step: "interval", value: "1m" },
-  );
-  s = reduce(s, { type: "results", results: [], remaining: 3 });
-  const r = reduce(s, { type: "followUp", kind: "safer" });
-  assert.equal(r.answers.profile, "aggressive");
-  assert.deepEqual(r.answers.symbols, ["BTCUSDT"]);
-  assert.equal(r.answers.symbolsConfirmed, true);
-  assert.equal(r.answers.period, null);
-  assert.equal(r.step, "period");
-  assert.equal(r.phase, "cards");
-  assert.equal(answerLabel("interval", { ...s.answers }), "초단타 (1분 봉)");
-});
-
-// 포인트로 횟수 추가 (2026-09-22): 무료를 다 쓴 뒤에만, 포인트가 충분할 때만, 하루 상한 안에서만 살 수 있다.
-import { extraOffer } from "../src/lib/askFlow.js";
-
-test("extraOffer: offered only when free quota is gone, with points and cap left", () => {
-  const base = { remaining_today: 0, daily_limit: 5, extra_price: 30, extra_left_today: 5, points_balance: 100 };
-  assert.deepEqual(extraOffer(base), { show: true, canBuy: true, label: "30P로 1번 더 물어보기", note: "보유 100P · 오늘 5번 더 살 수 있어요" });
-  assert.equal(extraOffer({ ...base, remaining_today: 2 }).show, false);
-  const poor = extraOffer({ ...base, points_balance: 29 });
-  assert.equal(poor.show, true); assert.equal(poor.canBuy, false); assert.match(poor.note, /부족/);
-  const capped = extraOffer({ ...base, extra_left_today: 0 });
-  assert.equal(capped.show, true); assert.equal(capped.canBuy, false); assert.match(capped.note, /내일/);
-  assert.equal(extraOffer(null).show, false);
-  assert.equal(extraOffer({ error: true }).show, false);
+test("restart clears everything", () => {
+  const s = reduce(withCandidates(), { type: "followUp", kind: "restart" });
+  assert.deepEqual(s, initialState());
 });

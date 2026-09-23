@@ -6,9 +6,8 @@ export const CONSENT_TEXT = "과거 데이터로 조합을 찾아 주는 도구�
 export const STEP_PROMPTS = {
   profile: "손실은 어디까지 견딜 수 있어요?",
   market: "어느 시장에서요?",
-  symbols: "어떤 종목이 궁금해요? (최대 3개)",
-  period: "어느 기간을 살펴볼까요?",
-  interval: "얼마나 자주 사고팔고 싶어요?",
+  horizon: "얼마나 길게 굴릴 거예요?",
+  watch: "하루에 얼마나 자주 볼 수 있어요?",
 };
 
 export const PROFILES = [
@@ -27,17 +26,21 @@ export const STABLE_NO_FUTURES = "안정형은 현물만 살펴봐요";
 
 export const POPULAR_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT"];
 
-export const PERIODS = [
-  { value: "3m", label: "최근 3개월" },
-  { value: "6m", label: "최근 6개월" },
-  { value: "1y", label: "최근 1년" },
+export const HORIZONS = [
+  { value: "days", label: "며칠", hint: "짧게 보고 정리" },
+  { value: "weeks", label: "몇 주", hint: "적당히" },
+  { value: "months", label: "몇 달", hint: "느긋하게" },
+  { value: "long", label: "길게", hint: "오래 들고" },
 ];
 
-export const INTERVALS = [
-  { value: "1h", label: "자주", hint: "1시간 봉" },
-  { value: "4h", label: "보통", hint: "4시간 봉" },
-  { value: "1d", label: "느긋하게", hint: "하루 봉" },
+export const WATCH_LEVELS = [
+  { value: "rarely", label: "거의 못 봐요", hint: "하루 한 번쯤" },
+  { value: "sometimes", label: "가끔 봐요", hint: "몇 시간에 한 번" },
+  { value: "often", label: "수시로 봐요", hint: "자주 확인" },
 ];
+
+export const CANDIDATES_PROMPT = "성향에 맞는 종목을 골라 봤어요. 하나를 고르면 매크로 후보를 보여 드릴게요.";
+export const MANUAL_PICK_LABEL = "직접 고를래요";
 
 export const FOLLOW_UPS = [
   { kind: "safer", label: "더 안정적으로" },
@@ -46,20 +49,8 @@ export const FOLLOW_UPS = [
   { kind: "restart", label: "처음부터" },
 ];
 
-// 단타형 — 백테스트 봉 상한(20,000)을 넘지 않는 짧은 짝만. 1분 봉은 최근 1주까지.
-export const SHORT_PERIODS = [
-  { value: "1w", label: "최근 1주" },
-  { value: "1m", label: "최근 1개월" },
-];
-export const SHORT_INTERVALS = [
-  { value: "1m", label: "초단타", hint: "1분 봉" },
-  { value: "5m", label: "단타", hint: "5분 봉" },
-  { value: "15m", label: "빠르게", hint: "15분 봉" },
-];
-export const ONE_MINUTE_NEEDS_WEEK = "1분 봉은 최근 1주까지만 살펴봐요";
 export const SCALPER_NOTE = "짧은 봉은 수수료·슬리피지 영향이 커요 · 실행기보다 페이퍼 트레이딩으로 먼저 확인해요";
 export const feesNote = (commission, slippage) => `수수료 ${commission}% · 슬리피지 ${slippage}% 포함`;
-export const symbolsPrompt = (max) => `어떤 종목이 궁금해요? (최대 ${max}개)`;
 
 export const NO_QUOTA_TEXT = "오늘은 다 물어봤어요. 내일 다시 물어봐 주세요.";
 export const RUNNING_TEXT = "돌려 볼게요… 후보를 백테스트하는 중이에요";

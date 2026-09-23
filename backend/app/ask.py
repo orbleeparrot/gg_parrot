@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import threading
@@ -23,6 +24,7 @@ from sqlmodel import Session, select
 
 from .ai_runtime import ai_available, ai_cache_key, default_model, get_ai_client, get_ai_runtime
 from .data import NoSpotDataError
+from .data import symbols as symbols_mod
 from . import ask_candidates, hotcoins
 from .ask_candidates import MAX_PICKS, MIN_PICKS
 from . import points as points_mod
@@ -31,6 +33,8 @@ from .engine.backtest import BacktestResult
 from .engine.explain import explain_result
 from .engine.schema import Macro
 from .quests import today_kst
+
+log = logging.getLogger(__name__)
 
 DISCLAIMER_VERSION = "ask-v2"
 DISCLAIMER = "AI 가 과거 데이터로 고른 후보예요 · 투자 권유가 아니에요 · 과거 성과는 미래 수익을 보장하지 않아요"
@@ -316,14 +320,38 @@ def evaluate(
     return out
 
 
-def score(profile: str, result: BacktestResult) -> float:
+def excess_over_hold(result: BacktestResult) -> float:
+    """'그냥 들고 있었을 때' 대비 몇 %p 나은가. 홀딩 기준이 없으면 절대 수익률을 그대로 쓴다.
+
+    화면(explain.py)은 이미 홀딩 대비를 가장 중요한 틀로 보여 주는데, 정작 어떤 조합을
+    보여 줄지는 절대 수익률로 골라서 "이게 1등" 이라고 해 놓고 바로 밑에서 "홀딩이 나았어"
+    라고 말하는 엇갈림이 있었다. 고르는 기준을 화면이 말하는 기준에 맞춘다.
+    """
     ret = float(result.final_return_pct)
+    hold = result.buy_hold_return_pct
+    return ret if hold is None else ret - float(hold)
+
+
+def score(profile: str, result: BacktestResult) -> float:
+    ret = excess_over_hold(result)
     mdd = float(result.mdd_pct)
     if profile == "stable":
         return ret / max(mdd, 1.0)
     if profile == "balanced":
         return ret - 0.5 * mdd
     return ret
+
+
+def all_lost_to_hold(picked: list["Evaluated"]) -> bool:
+    """보여 줄 조합이 하나도 홀딩을 못 이겼는가 — 그러면 화면 맨 위에서 먼저 알린다.
+
+    홀딩 기준을 못 구한 결과가 섞여 있으면 '졌다' 고 단정하지 않는다(빈 목록도 마찬가지).
+    """
+    if not picked:
+        return False
+    return all(e.result.buy_hold_return_pct is not None
+               and float(e.result.final_return_pct) < float(e.result.buy_hold_return_pct)
+               for e in picked)
 
 
 def select_top(evaluated: list[Evaluated], profile: str, n: int = TOP_N) -> list[Evaluated]:
@@ -646,13 +674,31 @@ def _candidates_record(row: AskMacroSession) -> tuple[list[dict], bool]:
     return (saved if isinstance(saved, list) else []), False
 
 
-def _allowed_symbols(row: AskMacroSession) -> set[str]:
+def _tradable_symbols(market: str) -> set[str]:
+    """이 시장에서 실제로 거래되는 USDT 심볼 — 빌더 검색창이 쓰는 그 목록(캐시됨)."""
+    items = symbols_mod.list_symbols().get("items") or []
+    return {str(i.get("symbol", "")) for i in items if isinstance(i, dict) and i.get(market)}
+
+
+def _allowed_symbols(row: AskMacroSession, market: str) -> set[str]:
+    """이 세션에서 고를 수 있는 종목.
+
+    세션 후보 + 빠른 선택 칩(MANUAL_SYMBOLS) + '직접 고를래요' 로 검색해 고른 종목.
+    검색을 허용해도 AI 가 지어낸 심볼은 못 들어온다 — 사람이 거래 가능 목록에서 직접 고른
+    것만 통과하므로, 오히려 "종목은 사용자가 고른 것만" 에 더 가깝다.
+    거래 목록을 못 받으면(업스트림 장애) 넓히지 않고 후보 + 칩으로만 둔다.
+    """
     items, _ai_used = _candidates_record(row)
     try:
         picked = {c["symbol"] for c in items if isinstance(c, dict)}
     except Exception:
         picked = set()
-    return picked | set(MANUAL_SYMBOLS)
+    base = picked | set(MANUAL_SYMBOLS)
+    try:
+        return base | _tradable_symbols(market)
+    except Exception:
+        log.warning("ask: 거래 가능 종목 목록을 받지 못해 직접 고르기를 기본 목록으로 제한합니다", exc_info=True)
+        return base
 
 
 def run_ask(db: Session, user: User, req: AskRequest, run_backtest: Callable[[Macro], BacktestResult]) -> dict:
@@ -663,7 +709,7 @@ def run_ask(db: Session, user: User, req: AskRequest, run_backtest: Callable[[Ma
     if not consented(user):
         raise AskError(403, "먼저 안내에 동의해 주세요.")
     row, answers = _load_flow(db, user, req.session_id)
-    if req.symbol not in _allowed_symbols(row):
+    if req.symbol not in _allowed_symbols(row, answers.market):
         raise AskError(422, "이번 질문에서 살펴볼 수 있는 종목이 아니에요.")
 
     with _IN_FLIGHT_LOCK:
@@ -690,6 +736,7 @@ def run_ask(db: Session, user: User, req: AskRequest, run_backtest: Callable[[Ma
             raise AskError(422, "이 종목의 시세 데이터를 찾지 못했어요. 다른 종목을 골라 주세요.")
         top = select_top(evaluated, plan.risk_profile)
         results = [_result_view(e) for e in top]
+        lost_to_hold = all_lost_to_hold(top)
         elapsed_ms = int((time.monotonic() - started) * 1000)
 
         # 성공했을 때만 호출 수를 센다 — 실패한 시도로 예산을 깎지 않는다.
@@ -709,6 +756,8 @@ def run_ask(db: Session, user: User, req: AskRequest, run_backtest: Callable[[Ma
 
     return {
         "results": results,
+        # 보여 준 조합이 전부 '그냥 들고 있기' 에 졌으면 화면 맨 위에서 먼저 알린다.
+        "all_lost_to_hold": lost_to_hold,
         "remaining_today": remaining_today(db, user),
         "disclaimer": DISCLAIMER,
         "disclaimer_version": DISCLAIMER_VERSION,

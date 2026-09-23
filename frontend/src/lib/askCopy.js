@@ -55,3 +55,10 @@ export const RUNNING_TEXT = "돌려 볼게요… 후보를 백테스트하는 �
 export const FEW_RESULTS_TEXT = "이 조건에선 후보가 적었어요 — 기간이나 빈도를 바꿔 보세요";
 export const NO_RESULTS_TEXT = "이 조건으론 살아남은 후보가 없었어요. 조건을 바꿔 다시 물어봐요.";
 export const LOADED_TEXT = "조건 판에 불러왔어요. 숫자 한 번 보고 백테스트부터 돌려 보세요";
+
+// 보여 준 조합이 전부 '그냥 들고 있기' 에 졌을 때 (2026-09-23) — 매크로가 늘 답은 아니라고 먼저 말한다.
+export const LOST_TO_HOLD_TEXT = "이번엔 그냥 사서 들고 있는 게 더 나았어요. 아래는 그래도 나은 편이었던 조합이에요.";
+
+// 직접 고를래요 — 거래 가능한 종목을 검색해서 고른다.
+export const MANUAL_SEARCH_PLACEHOLDER = "종목 검색 (예: AVAX)";
+export const MANUAL_SEARCH_MISS = "목록에 없는 종목이에요";

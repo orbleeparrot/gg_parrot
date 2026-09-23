@@ -4,10 +4,13 @@ import { useEffect, useId, useReducer, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api } from "../api.js";
 import {
-  CANDIDATES_PROMPT, CONSENT_TEXT, DISCLAIMER, FEW_RESULTS_TEXT, FOLLOW_UPS, HORIZONS, LEVERAGES, MANUAL_PICK_LABEL,
+  CANDIDATES_PROMPT, CONSENT_TEXT, DISCLAIMER, FEW_RESULTS_TEXT, FOLLOW_UPS, HORIZONS, LEVERAGES,
+  LOST_TO_HOLD_TEXT, MANUAL_PICK_LABEL, MANUAL_SEARCH_MISS, MANUAL_SEARCH_PLACEHOLDER,
   MARKETS, NO_QUOTA_TEXT, NO_RESULTS_TEXT, PROFILES, RUNNING_TEXT, SCALPER_NOTE, STABLE_NO_FUTURES, STEP_PROMPTS,
   WATCH_LEVELS, feesNote,
 } from "../lib/askCopy.js";
+import { useSymbolList } from "../hooks/useSymbolList.js";
+import { resolveSymbol, searchSymbols } from "../lib/symbolSearch.js";
 import {
   PROFILE_ORDER, STEPS, answerLabel, canChooseFutures, extraOffer, initialState, reduce, toAskRequest,
   toCandidatesRequest,
@@ -50,6 +53,57 @@ function Chips({ options, value, onPick, label }) {
       ))}
       {options.some((opt) => opt.disabled && opt.title) ? <span className="t-caption text-slate-500">{options.find((opt) => opt.disabled && opt.title).title}</span> : null}
     </div>
+  );
+}
+
+// 직접 고를래요 — 빠른 선택 칩 + 거래 가능 종목 검색(빌더 검색창과 같은 목록).
+function ManualPick({ chips, onPick }) {
+  const [query, setQuery] = useState("");
+  const [note, setNote] = useState("");
+  const { items } = useSymbolList();
+  const q = query.trim();
+  const matches = items && q ? searchSymbols(items, q, { limit: 8 }) : [];
+
+  const add = () => {
+    if (!q) return;
+    const resolved = items ? resolveSymbol(items, q) : null;
+    if (!resolved) { setNote(MANUAL_SEARCH_MISS); return; }
+    setQuery("");
+    setNote("");
+    onPick(resolved, true);
+  };
+
+  return (
+    <details>
+      <summary className="t-small text-slate-500">{MANUAL_PICK_LABEL}</summary>
+      {chips.length ? (
+        <div className="ask-chips">
+          {chips.map((sym) => (
+            <button key={sym} type="button" className="ask-chip t-small" onClick={() => onPick(sym)}>{sym.replace(/USDT$/, "")}</button>
+          ))}
+        </div>
+      ) : null}
+      <div className="ask-symbol-search">
+        <input
+          className="input"
+          value={query}
+          placeholder={MANUAL_SEARCH_PLACEHOLDER}
+          aria-label="종목 검색"
+          onChange={(e) => { setQuery(e.target.value); setNote(""); }}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); add(); } }}
+        />
+        <button type="button" className="btn btn-s btn-secondary" onClick={add}>고르기</button>
+      </div>
+      {matches.length ? (
+        <div className="ask-chips">
+          {matches.map((item) => (
+            <button key={item.symbol} type="button" className="ask-chip t-small"
+              onClick={() => { setQuery(""); setNote(""); onPick(item.symbol, true); }}>{item.symbol.replace(/USDT$/, "")}</button>
+          ))}
+        </div>
+      ) : null}
+      {note ? <p className="t-caption text-slate-500">{note}</p> : null}
+    </details>
   );
 }
 
@@ -191,14 +245,14 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
   };
 
   // 후보(또는 직접 고르기)에서 종목을 하나 고르면 바로 매크로 후보를 받는다 — 이 요청은 차감 없음.
-  const pickSymbol = async (symbol) => {
-    const next = reduce(state, { type: "chooseSymbol", symbol });
+  const pickSymbol = async (symbol, resolved = false) => {
+    const next = reduce(state, { type: "chooseSymbol", symbol, resolved });
     if (!next.answers.symbol) return;
-    dispatch({ type: "chooseSymbol", symbol });
+    dispatch({ type: "chooseSymbol", symbol, resolved });
     dispatch({ type: "loadingResults" });
     try {
       const data = await api.askMacros(toAskRequest(next));
-      dispatch({ type: "results", results: data.results, remaining: data.remaining_today });
+      dispatch({ type: "results", results: data.results, lostToHold: data.all_lost_to_hold, remaining: data.remaining_today });
     } catch (e) {
       dispatch({ type: "error", message: e.message });
     }
@@ -295,16 +349,7 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
                       {state.candidates.map((c) => <CandidateCard key={c.symbol} c={c} onPick={pickSymbol} />)}
                     </div>
                   ) : null}
-                  {state.manualSymbols.length ? (
-                    <details>
-                      <summary className="t-small text-slate-500">{MANUAL_PICK_LABEL}</summary>
-                      <div className="ask-chips">
-                        {state.manualSymbols.map((sym) => (
-                          <button key={sym} type="button" className="ask-chip t-small" onClick={() => pickSymbol(sym)}>{sym.replace(/USDT$/, "")}</button>
-                        ))}
-                      </div>
-                    </details>
-                  ) : null}
+                  <ManualPick chips={state.manualSymbols} onPick={pickSymbol} />
                   <div className="ask-disclaimer" role="note">{DISCLAIMER}</div>
                 </>
               ) : null}
@@ -314,6 +359,7 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
                   <div className="ask-bubble ask-bubble-parrot t-small">
                     {state.results.length === 0 ? NO_RESULTS_TEXT : state.results.length < 3 ? FEW_RESULTS_TEXT : "과거 데이터로 돌려 본 후보 중 상위 3개예요."}
                   </div>
+                  {state.lostToHold ? <div className="ask-hold-note" role="note">{LOST_TO_HOLD_TEXT}</div> : null}
                   {state.results.length ? (
                     <div className="ask-results">
                       {state.results.map((item) => <ResultCard key={item.label + item.rule_type} item={item} onLoad={onLoad} />)}

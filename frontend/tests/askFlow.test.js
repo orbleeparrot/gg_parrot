@@ -118,3 +118,20 @@ test("restart clears everything", () => {
   const s = reduce(withCandidates(), { type: "followUp", kind: "restart" });
   assert.deepEqual(s, initialState());
 });
+
+// 직접 고를래요 — 검색으로 거래 가능 목록에서 고른 종목도 받는다 (2026-09-23)
+test("a symbol resolved from the tradable list is accepted", () => {
+  const s = reduce(withCandidates(), { type: "chooseSymbol", symbol: "mubarakusdt", resolved: true });
+  assert.equal(s.answers.symbol, "MUBARAKUSDT");
+  assert.deepEqual(toAskRequest(s), { session_id: 7, symbol: "MUBARAKUSDT" });
+});
+
+test("an unresolved symbol outside the lists is still ignored", () => {
+  const s = reduce(withCandidates(), { type: "chooseSymbol", symbol: "MUBARAKUSDT" });
+  assert.equal(s.answers.symbol, null);
+});
+
+test("a resolved symbol that is not shaped like a pair is ignored", () => {
+  const s = reduce(withCandidates(), { type: "chooseSymbol", symbol: "NOT A SYMBOL", resolved: true });
+  assert.equal(s.answers.symbol, null);
+});

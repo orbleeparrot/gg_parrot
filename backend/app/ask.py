@@ -13,7 +13,7 @@ import os
 import re
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Callable, Literal, Optional
 
@@ -95,42 +95,18 @@ _SYMBOL_RE = re.compile(r"^[A-Z0-9]{2,20}USDT$")
 
 
 class AskRequest(BaseModel):
-    risk_profile: RiskProfile
-    market: Literal["spot", "futures"] = "spot"
-    leverage: int = Field(default=1, ge=1, le=3)
-    symbols: list[str] = Field(min_length=1, max_length=3)
-    period_preset: Literal["3m", "6m", "1y", "1w", "1m"] = "3m"
-    interval: Literal["1h", "4h", "1d", "1m", "5m", "15m"] = "1h"
+    """v2 — 흐름 세션에서 답변을 꺼내 쓰므로 종목만 받는다(클라이언트 위변조 차단)."""
 
-    @field_validator("symbols")
+    session_id: int
+    symbol: str
+
+    @field_validator("symbol")
     @classmethod
-    def _normalize_symbols(cls, value: list[str]) -> list[str]:
-        seen: list[str] = []
-        for raw in value:
-            sym = str(raw).strip().upper()
-            if not _SYMBOL_RE.match(sym):
-                raise ValueError(f"종목은 USDT 페어여야 해요: {raw}")
-            if sym not in seen:
-                seen.append(sym)
-        return seen
-
-    @model_validator(mode="after")
-    def _profile_rules(self) -> "AskRequest":
-        profile = PROFILES[self.risk_profile]
-        if self.market == "futures" and not profile["futures"]:
-            raise ValueError("안정형은 현물만 살펴봐요")
-        if self.market == "spot" and self.leverage != 1:
-            raise ValueError("현물은 레버리지를 쓸 수 없어요")
-        if len(self.symbols) > profile["max_symbols"]:
-            raise ValueError(f"{profile['label']}은 종목을 최대 {profile['max_symbols']}개까지 살펴봐요")
-        if profile["short"]:
-            if self.interval not in SHORT_INTERVALS or self.period_preset not in SHORT_PERIODS:
-                raise ValueError("단타형은 1분·5분·15분 봉으로 최근 1주 또는 1개월만 살펴봐요")
-            if self.interval == "1m" and self.period_preset != "1w":
-                raise ValueError("1분 봉은 최근 1주까지만 살펴봐요")
-        elif self.interval not in LONG_INTERVALS or self.period_preset not in LONG_PERIODS:
-            raise ValueError("이 성향은 1시간·4시간·하루 봉으로 최근 3개월 이상을 살펴봐요")
-        return self
+    def _normalize_symbol(cls, value: str) -> str:
+        sym = str(value or "").strip().upper()
+        if not _SYMBOL_RE.match(sym):
+            raise ValueError("종목 이름이 올바르지 않아요")
+        return sym
 
 
 class CandidatesRequest(BaseModel):
@@ -219,11 +195,31 @@ _SCALPER_PRESETS: dict[str, list[dict]] = {
 }
 
 
-def _presets_for(req: AskRequest) -> dict[str, list[dict]]:
+@dataclass
+class _Plan:
+    """세션 답변 + 고른 종목 → 기존 후보 생성 코드가 읽는 모양."""
+    risk_profile: str
+    market: str
+    leverage: int
+    symbols: list[str]
+    period_preset: str
+    interval: str
+
+
+def _plan(answers: CandidatesRequest, symbol: str) -> _Plan:
+    period = to_period(answers.risk_profile, answers.invest_horizon)
+    return _Plan(
+        risk_profile=answers.risk_profile, market=answers.market, leverage=answers.leverage,
+        symbols=[symbol], period_preset=period,
+        interval=to_interval(answers.risk_profile, answers.watch_frequency, period),
+    )
+
+
+def _presets_for(req: _Plan) -> dict[str, list[dict]]:
     return _SCALPER_PRESETS if PROFILES[req.risk_profile]["short"] else _PRESETS
 
 
-def _allowed_types(req: AskRequest) -> tuple[str, ...]:
+def _allowed_types(req: _Plan) -> tuple[str, ...]:
     types = PROFILES[req.risk_profile]["rule_types"]
     # C(DCA) 는 레버리지·선물을 못 쓴다.
     if req.market == "futures":
@@ -231,7 +227,7 @@ def _allowed_types(req: AskRequest) -> tuple[str, ...]:
     return types
 
 
-def _make_macro(req: AskRequest, rule_type: str, preset: dict, symbols: list[str]) -> Optional[Macro]:
+def _make_macro(req: _Plan, rule_type: str, preset: dict, symbols: list[str]) -> Optional[Macro]:
     body = {
         "symbol": symbols[0],
         "symbols": symbols if len(symbols) > 1 else None,
@@ -250,12 +246,12 @@ def _make_macro(req: AskRequest, rule_type: str, preset: dict, symbols: list[str
         return None
 
 
-def _label(rule_type: str, req: AskRequest, symbols: list[str]) -> str:
+def _label(rule_type: str, req: _Plan, symbols: list[str]) -> str:
     where = "포트폴리오" if len(symbols) > 1 else symbols[0]
     return f"{RULE_LABELS.get(rule_type, rule_type)} · {req.interval} · {where}"
 
 
-def build_templates(req: AskRequest) -> list[Candidate]:
+def build_templates(req: _Plan) -> list[Candidate]:
     """성향별 템플릿 후보.
 
     상한(24)에 걸리면 뒤쪽부터 잘리므로 모든 유형의 단일 종목 후보가 먼저,
@@ -357,7 +353,7 @@ _AI_MAX_TOKENS = int(os.environ.get("GEMINI_ASK_MAX_TOKENS", "2048"))
 _AI_PROMPT_VERSION = "ask-v1"
 
 
-def _ai_system(req: AskRequest) -> str:
+def _ai_system(req: _Plan) -> str:
     types = ", ".join(_allowed_types(req))
     return (
         "너는 코인 백테스트 교육 도구의 매크로 뼈대 생성기야. 사용자가 고른 종목과 조건으로 "
@@ -380,7 +376,7 @@ def _strip_fences(text: str) -> str:
     return t.strip()
 
 
-def propose_with_ai(req: AskRequest) -> list[Candidate]:
+def propose_with_ai(req: _Plan) -> list[Candidate]:
     """Gemini 가 제안한 뼈대를 요청 조건(종목·봉·시장·레버리지)에 고정하고 스키마로 검증한다. 실패는 빈 리스트."""
     if not ai_available():
         return []
@@ -390,7 +386,7 @@ def propose_with_ai(req: AskRequest) -> list[Candidate]:
         f"봉 간격: {req.interval} · 기간: {req.period_preset}. 매크로 3개를 JSON 으로."
     )
     key = ai_cache_key("ask", _AI_PROMPT_VERSION, _AI_MODEL,
-                       {"req": req.model_dump(), "system": system, "prompt": prompt, "max_tokens": _AI_MAX_TOKENS})
+                       {"req": asdict(req), "system": system, "prompt": prompt, "max_tokens": _AI_MAX_TOKENS})
 
     def load():
         response = get_ai_client().messages.create(
@@ -615,11 +611,41 @@ _IN_FLIGHT: set[int] = set()
 _IN_FLIGHT_LOCK = threading.Lock()
 
 
+def _load_flow(db: Session, user: User, session_id: int) -> tuple[AskMacroSession, CandidatesRequest]:
+    """세션 행을 찾아 만료·상한·소유자를 검사하고 저장된 카드 답변을 돌려준다."""
+    row = db.get(AskMacroSession, session_id)
+    if row is None or row.user_id != user.id:
+        raise AskError(404, "질문 기록을 찾지 못했어요. 처음부터 다시 물어봐 주세요.")
+    _, now_ms = _now()
+    if row.expires_ms and row.expires_ms <= now_ms:
+        raise AskError(410, "질문한 지 오래됐어요. 처음부터 다시 물어봐 주세요.")
+    if row.ask_count >= MAX_ASKS_PER_SESSION:
+        raise AskError(409, "이번 질문에서 살펴볼 수 있는 종목을 다 봤어요. 다시 물어봐 주세요.")
+    try:
+        answers = CandidatesRequest(**json.loads(row.request_json))
+    except Exception:
+        raise AskError(410, "질문 기록이 오래된 형식이에요. 처음부터 다시 물어봐 주세요.")
+    return row, answers
+
+
+def _allowed_symbols(row: AskMacroSession) -> set[str]:
+    try:
+        picked = {c["symbol"] for c in json.loads(row.candidates_json)}
+    except Exception:
+        picked = set()
+    return picked | set(MANUAL_SYMBOLS)
+
+
 def run_ask(db: Session, user: User, req: AskRequest, run_backtest: Callable[[Macro], BacktestResult]) -> dict:
+    """흐름 세션에서 종목을 골라 매크로 후보를 낸다 — 차감 없음(하루 한도는 후보를 낼 때 이미 셌다).
+
+    성공했을 때만 세션의 호출 수(ask_count)를 센다 — 실패한 시도로 세션 예산을 깎지 않는다.
+    """
     if not consented(user):
         raise AskError(403, "먼저 안내에 동의해 주세요.")
-    if remaining_today(db, user) <= 0:
-        raise AskError(429, f"오늘은 {daily_limit()}번 다 물어봤어요. 내일 다시 물어봐 주세요.")
+    row, answers = _load_flow(db, user, req.session_id)
+    if req.symbol not in _allowed_symbols(row):
+        raise AskError(422, "이번 질문에서 살펴볼 수 있는 종목이 아니에요.")
 
     with _IN_FLIGHT_LOCK:
         if user.id in _IN_FLIGHT:
@@ -628,76 +654,46 @@ def run_ask(db: Session, user: User, req: AskRequest, run_backtest: Callable[[Ma
 
     try:
         started = time.monotonic()
-        created_at, created_ms = _now()
-        # 위의 한도 검사와 이 저장 사이에 시간차가 있으면 동시 요청 여러 개가 함께
-        # 통과해 하루 한도를 넘길 수 있다 — 평가를 시작하기 전에 빈 자리표시 행을
-        # 먼저 커밋해서 그 check-then-insert 창을 닫는다. 실패하면 이 행은 지운다.
-        # 무료가 남았으면 무료로, 아니면 안 쓴 추가권 하나를 이 세션에 붙인다.
-        credit = None if free_remaining_today(db, user) > 0 else _unused_credit(db, user)
-        session_row = AskMacroSession(
-            user_id=user.id, day_kst=today_kst(),
-            request_json=json.dumps(req.model_dump(), ensure_ascii=False),
-            candidate_count=0, results_json="[]",
-            disclaimer_version=DISCLAIMER_VERSION, ai_used=False, elapsed_ms=0,
-            created_at=created_at, created_ms=created_ms,
-            paid=credit is not None,
-        )
-        db.add(session_row)
+        plan = _plan(answers, req.symbol)
+        failures: list[Exception] = []
+
+        def guarded(macro: Macro) -> BacktestResult:
+            try:
+                return run_backtest(macro)
+            except Exception as exc:
+                failures.append(exc)
+                raise
+
+        ai_candidates = propose_with_ai(plan)[:TOP_N]
+        candidates = (ai_candidates + build_templates(plan))[:MAX_CANDIDATES]
+        evaluated = evaluate(candidates, guarded, time_budget_sec())
+        if not evaluated and failures and all(isinstance(f, NoSpotDataError) for f in failures):
+            raise AskError(422, "이 종목의 시세 데이터를 찾지 못했어요. 다른 종목을 골라 주세요.")
+        top = select_top(evaluated, plan.risk_profile)
+        results = [_result_view(e) for e in top]
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+
+        # 성공했을 때만 호출 수를 센다 — 실패한 시도로 예산을 깎지 않는다.
+        row.ask_count += 1
+        row.chosen_symbol = req.symbol
+        row.candidate_count = len(evaluated)
+        row.results_json = json.dumps(
+            [{"label": r["label"], "rule_type": r["rule_type"], "macro": r["macro"],
+              "metrics": r["metrics"]} for r in results], ensure_ascii=False)
+        row.ai_used = bool(ai_candidates)
+        row.elapsed_ms = elapsed_ms
+        db.add(row)
         db.commit()
-        if credit is not None:
-            db.refresh(session_row)
-            credit.used_session_id = session_row.id
-            db.add(credit)
-            db.commit()
-
-        try:
-            failures: list[Exception] = []
-
-            def guarded(macro: Macro) -> BacktestResult:
-                try:
-                    return run_backtest(macro)
-                except Exception as exc:
-                    failures.append(exc)
-                    raise
-
-            ai_candidates = propose_with_ai(req)[:TOP_N]
-            candidates = (ai_candidates + build_templates(req))[:MAX_CANDIDATES]
-            evaluated = evaluate(candidates, guarded, time_budget_sec())
-            if not evaluated and failures and all(isinstance(f, NoSpotDataError) for f in failures):
-                raise AskError(422, "이 종목의 시세 데이터를 찾지 못했어요. 종목 이름을 확인해 주세요.")
-            top = select_top(evaluated, req.risk_profile)
-            results = [_result_view(e) for e in top]
-            elapsed_ms = int((time.monotonic() - started) * 1000)
-
-            session_row.candidate_count = len(evaluated)
-            session_row.results_json = json.dumps(
-                [{"label": r["label"], "rule_type": r["rule_type"], "macro": r["macro"], "metrics": r["metrics"]} for r in results],
-                ensure_ascii=False)
-            session_row.ai_used = bool(ai_candidates)
-            session_row.elapsed_ms = elapsed_ms
-            db.add(session_row)
-            db.commit()
-        except Exception:
-            # 실패한 질문은 횟수를 돌려준다 — 세션 행을 지우고, 추가권이면 다시 '안 씀'으로.
-            if credit is not None:
-                credit.used_session_id = None
-                db.add(credit)
-            db.delete(session_row)
-            db.commit()
-            raise
-
-        return {
-            "results": results,
-            "candidate_count": len(evaluated),
-            "ai_used": bool(ai_candidates),
-            "disclaimer": DISCLAIMER,
-            "disclaimer_version": DISCLAIMER_VERSION,
-            "remaining_today": remaining_today(db, user),
-            "elapsed_ms": elapsed_ms,
-        }
     finally:
         with _IN_FLIGHT_LOCK:
             _IN_FLIGHT.discard(user.id)
+
+    return {
+        "results": results,
+        "remaining_today": remaining_today(db, user),
+        "disclaimer": DISCLAIMER,
+        "disclaimer_version": DISCLAIMER_VERSION,
+    }
 
 
 def run_candidates(db: Session, user: User, req: CandidatesRequest) -> dict:

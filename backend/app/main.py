@@ -36,7 +36,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import Headers
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from sqlmodel import Session, select
 
 # Load backend/.env (gitignored) for local dev so secrets like GEMINI_API_KEY are
@@ -582,12 +582,24 @@ def ask_extra(
         raise HTTPException(status_code=exc.status, detail=exc.message)
 
 
-@app.post("/api/ask/macros")
-def ask_macros(
-    req: ask_mod.AskRequest,
+@app.post("/api/ask")
+def ask_route(
+    body: dict,
     account: User = Depends(auth_mod.current_user_in_session),
     db: Session = Depends(request_session),
 ) -> dict:
+    """세션(Task 6)에서 종목을 골라 매크로 후보를 낸다 — 차감 없음.
+
+    옛 번들(session_id 없이 symbols 를 보내던 v1 모양)이 캐시에 남아 있을 수 있어,
+    pydantic 검증 전에 원본 본문으로 먼저 걸러 새로고침 안내를 준다.
+    """
+    if "session_id" not in body:
+        raise HTTPException(status_code=422, detail="화면을 새로고침한 뒤 다시 물어봐 주세요.")
+    try:
+        req = ask_mod.AskRequest(**body)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422,
+                            detail=str(exc.errors()[0].get("msg", "요청이 올바르지 않아요")))
     try:
         return ask_mod.run_ask(db, account, req, lambda macro: _run_any(macro)[0])
     except ask_mod.AskError as exc:

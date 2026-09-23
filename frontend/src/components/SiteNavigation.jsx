@@ -9,10 +9,10 @@ const NAV_LINKS = [
   { to: "/builder", label: "직접 만들기", icon: "builder", matches: ["/builder", "/s/"] },
   { to: "/leaderboard", label: "리더보드", icon: "leaderboard", matches: ["/leaderboard", "/gallery"] },
   { to: "/news", label: "코인동향", icon: "news", matches: ["/news"] },
-  { to: "/admin/news-test", label: "뉴스 판단 테스트", icon: "news", end: true, adminOnly: true },
   { to: "/board", label: "게시판", icon: "board", matches: ["/board"] },
   // 준비 중인 페이지 — 링크가 아니라 자리만 잡는다(배지 `업데이트 예정`, 비활성). 열리면 to 를 살리고 soon 을 뗀다.
   { to: "/bots", label: "자동 매매 봇", icon: "agent", matches: ["/bots"], soon: true, soonLabel: "업데이트 예정" },
+  { to: "/admin/news-test", label: "뉴스 판단 테스트", icon: "news", end: true, adminOnly: true, badge: "BETA" },
 ];
 
 const NAV_ICON_SOURCES = {
@@ -110,10 +110,16 @@ function NavigationList({ pathname, onNavigate, tabIndex }) {
             onClick={onNavigate}
             tabIndex={tabIndex}
             aria-current={active ? "page" : undefined}
+            aria-label={link.badge ? link.label : undefined}
             className={`site-side-link ${active ? "is-active" : ""}`}
           >
             <span className="site-side-icon" aria-hidden="true"><NavIcon name={link.icon} /></span>
-            <span className="site-side-label">{link.label}</span>
+            {link.badge ? (
+              <span className="site-side-label-row">
+                <span className="site-side-label">{link.label}</span>
+                <span className="site-side-badge is-beta">{link.badge}</span>
+              </span>
+            ) : <span className="site-side-label">{link.label}</span>}
           </NavLink>
         );
       })}

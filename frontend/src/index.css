@@ -1763,6 +1763,7 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 .site-side-link.is-soon .site-side-icon-glyph { opacity: 0.45; }
 .site-side-label-row { min-width: 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .site-side-badge { flex: none; display: inline-flex; align-items: center; height: 20px; padding: 0 7px; border-radius: 6px; background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-500)); font-size: 11px; font-weight: 700; letter-spacing: 0.01em; white-space: nowrap; }
+.site-side-badge.is-beta { background: rgb(var(--c-brand-line) / 0.14); color: rgb(var(--c-brand-line)); }
 
 .site-sidebar-bottom {
   margin-top: auto;

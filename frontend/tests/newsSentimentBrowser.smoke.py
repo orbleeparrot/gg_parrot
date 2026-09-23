@@ -102,6 +102,8 @@ def main():
                 menu = nav.get_by_role("link", name="뉴스 판단 테스트", exact=True)
                 expect(menu).to_be_visible()
                 expect(menu).to_have_attribute("aria-current", "page")
+                expect(menu.locator(".site-side-badge.is-beta")).to_have_text("BETA")
+                expect(nav.locator(".site-side-list > :last-child")).to_have_attribute("href", "/admin/news-test")
                 menu.click()
                 if width < 768:
                     expect(nav).to_have_attribute("aria-hidden", "true")

@@ -582,6 +582,19 @@ def ask_extra(
         raise HTTPException(status_code=exc.status, detail=exc.message)
 
 
+# 물어볼까 — 검증 실패를 한국어 한 문장으로. pydantic 영문 메시지는 절대 사용자에게 내보내지 않는다.
+_ASK_BAD_REQUEST = "고른 내용이 올바르지 않아요. 카드를 다시 골라 주세요."
+
+
+def _ask_validation_message(exc: ValidationError) -> str:
+    """우리가 쓴 한국어 검증 문구가 있으면 그걸, 없으면 기본 한 문장을 돌려준다."""
+    for err in exc.errors():
+        msg = re.sub(r"^Value error,\s*", "", str(err.get("msg", "")))
+        if re.search(r"[가-힣]", msg):
+            return msg
+    return _ASK_BAD_REQUEST
+
+
 @app.post("/api/ask/macros")
 def ask_macros(
     body: dict,
@@ -598,8 +611,7 @@ def ask_macros(
     try:
         req = ask_mod.AskRequest(**body)
     except ValidationError as exc:
-        raise HTTPException(status_code=422,
-                            detail=str(exc.errors()[0].get("msg", "요청이 올바르지 않아요")))
+        raise HTTPException(status_code=422, detail=_ask_validation_message(exc))
     try:
         return ask_mod.run_ask(db, account, req, lambda macro: _run_any(macro)[0])
     except ask_mod.AskError as exc:
@@ -608,11 +620,19 @@ def ask_macros(
 
 @app.post("/api/ask/candidates")
 def ask_candidates_route(
-    req: ask_mod.CandidatesRequest,
+    body: dict,
     account: User = Depends(auth_mod.current_user_in_session),
     db: Session = Depends(request_session),
 ) -> dict:
-    """카드 답변으로 종목 후보를 낸다 — 하루 횟수는 여기서만 차감된다."""
+    """카드 답변으로 종목 후보를 낸다 — 하루 횟수는 여기서만 차감된다.
+
+    본문을 dict 로 받아 직접 검증한다 — FastAPI 기본 422 는 영문 pydantic 오류 목록이라
+    프런트가 그대로 한국어 말풍선에 찍어 버린다(한국어 문구 규칙 위반).
+    """
+    try:
+        req = ask_mod.CandidatesRequest(**body)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=_ask_validation_message(exc))
     try:
         return ask_mod.run_candidates(db, account, req)
     except ask_mod.AskError as exc:

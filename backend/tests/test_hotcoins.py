@@ -102,3 +102,71 @@ def test_get_cached_tickers_returns_none_when_load_fails(monkeypatch):
     monkeypatch.setattr(hc._cache, "get_or_load",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("down")))
     assert hc.get_cached_tickers() is None
+
+
+def _t3(symbol, change, price, qvol, high, low, weighted):
+    """실제 바이낸스 24시간 응답 모양 — weightedAvgPrice 까지 있는 티커."""
+    return {"symbol": symbol, "priceChangePercent": str(change), "lastPrice": str(price),
+            "quoteVolume": str(qvol), "highPrice": str(high), "lowPrice": str(low),
+            "weightedAvgPrice": str(weighted)}
+
+
+def _usde():
+    """실제로 후보에 올라왔던 USDE 의 숫자 — 값은 1.0 에 붙어 있는데 저가 한 번이 0.92 로 찍혔다."""
+    return _t3("USDEUSDT", 0.01, 0.9999, 5e8, 1.0006, 0.9202, 0.9995)
+
+
+def test_cache_stores_trimmed_payload_for_a_full_exchange_response(monkeypatch):
+    # 거래소 응답 전체(2천 종목)를 통째로 캐시에 넣으면 1.6MB 라 상한에 걸려 버려지고,
+    # 그러면 매 요청이 바이낸스를 그대로 때린다. 투영을 저장해 실제로 캐시되는지 본다.
+    calls = {"n": 0}
+
+    def fake_fetch():
+        calls["n"] += 1
+        out = []
+        for i in range(2000):
+            price = 0.00001234 + i
+            out.append(_t3(f"SYM{i:04d}USDT", 1.23 + i % 7, f"{price:.8f}", 1e7 + i * 1e6,
+                           f"{price * 1.08:.8f}", f"{price * 0.93:.8f}", f"{price * 1.01:.8f}"))
+        return out
+
+    hc._cache.clear()
+    monkeypatch.setattr(hc, "_fetch_tickers", fake_fetch)
+    oversized_before = hc._cache.statistics()["oversized"]
+    for _ in range(5):
+        assert hc.get_hot_coins(10)["coins"]
+    stats = hc._cache.statistics()
+    assert calls["n"] == 1                                   # 캐시 창 안에서는 한 번만 부른다
+    assert stats["entries"] == 1                             # 실제로 들어갔다
+    assert stats["oversized"] == oversized_before            # 상한에 걸려 버려지지 않았다
+    assert stats["size_bytes"] <= hc._cache.max_bytes
+    assert len(hc.get_cached_tickers()) == hc.CACHE_TOP_SYMBOLS
+
+
+def test_trimmed_tickers_keep_the_fields_the_pool_needs():
+    trimmed = hc.trim_tickers([_usde(), _t3("ETHBTC", 1.0, 0.05, 9e8, 0.06, 0.04, 0.05)], top=10)
+    assert [t["symbol"] for t in trimmed] == ["USDEUSDT"]     # USDT 페어만 남는다
+    assert set(trimmed[0]) == {"symbol", "quoteVolume", "lastPrice", "priceChangePercent",
+                               "highPrice", "lowPrice", "weightedAvgPrice"}
+
+
+def test_trimmed_tickers_keep_the_biggest_by_quote_volume():
+    tickers = [_t3(f"S{i}USDT", 5.0, 10 + i, (i + 1) * 1e7, 11 + i, 9 + i, 10 + i) for i in range(6)]
+    assert [t["symbol"] for t in hc.trim_tickers(tickers, top=2)] == ["S5USDT", "S4USDT"]
+
+
+def test_pegged_asset_never_survives_selection():
+    # 목록(_STABLE_BASES)에 USDE 를 넣은 것과, 목록이 낡아도 걸리는 일반 판정 — 둘 다 확인한다.
+    coins = hc.select_hot_coins([_usde()], limit=10, min_quote_volume=10_000_000, candidate_pool=100)
+    assert coins == []
+    unlisted = dict(_usde(), symbol="NEWPEGUSDT")
+    assert hc.select_hot_coins([unlisted], limit=10, min_quote_volume=10_000_000,
+                               candidate_pool=100) == []
+
+
+def test_range_pct_ignores_a_single_wick_but_keeps_a_real_move():
+    # 저가 한 번이 0.92 로 찍힌 USDE — 원본 고저 계산이면 8%대로 잡혀 중간 순위에 끼어들었다.
+    assert hc.ticker_range_pct(_usde()) < 1.0
+    # 실제로 오르내린 코인은 두 반폭이 비슷해 값이 거의 줄지 않는다.
+    real = _t3("DOGEUSDT", 8.0, 0.22, 5e8, 0.23, 0.19, 0.21)
+    assert hc.ticker_range_pct(real) > 15.0

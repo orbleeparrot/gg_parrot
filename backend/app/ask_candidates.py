@@ -51,17 +51,40 @@ REASON_MAX = 80
 # 이유 문구에 들어가면 안 되는 말 — 들어가면 그 이유만 규칙 문구로 바꾼다.
 BANNED_WORDS = ("추천", "보장", "확실", "무조건", "급등", "필승", "몰빵")
 _PROFIT_PROMISE = re.compile(r"\d+\s*%.*(수익|상승|오름|벌)")
-
-_FALLBACK = {
-    "stable": "거래가 가장 활발하고 하루 변동이 작은 편이에요.",
-    "balanced": "거래가 활발하면서 하루 변동도 지나치지 않은 편이에요.",
-    "aggressive": "거래가 활발하고 하루 변동이 큰 편이에요.",
-    "scalper": "거래가 가장 활발해서 짧은 봉에서도 사고팔기 쉬운 편이에요.",
-}
+# AI 가 지어낸 '통계' 를 막는다 — 화면의 숫자는 서버가 계산해 붙인 줄에만 있어야 한다.
+# 퍼센트 기호, 또는 숫자 바로 뒤의 순위·배수·화폐 단위. '20일선' 같은 멀쩡한 숫자는 통과시킨다.
+_FAKE_STAT = re.compile(r"[%％]|\d\s*(?:위|배|원|달러|퍼센트|프로|억)")
 
 
 def fallback_reason(profile: str, coin: dict) -> str:
-    return _FALLBACK.get(profile, _FALLBACK["balanced"])
+    """AI 없이 서버 숫자만으로 쓰는 한 줄 — 코인마다 달라야 화면이 고장 난 것처럼 보이지 않는다.
+
+    성향은 이미 풀 정렬에 반영돼 있으므로, 문구는 그 코인의 거래대금 순위와
+    하루 변동폭을 구간으로 나눠 고른다. 숫자 자체는 문장에 넣지 않는다(서버가 따로 붙인다).
+    """
+    try:
+        rank = int(coin.get("volume_rank") or 0)
+    except (TypeError, ValueError):
+        rank = 0
+    try:
+        range_pct = float(coin.get("range_pct") or 0.0)
+    except (TypeError, ValueError):
+        range_pct = 0.0
+
+    if 0 < rank <= 3:
+        traded = "거래가 가장 활발한 편이라 사고팔 때 잘 밀리지 않아요"
+    elif 0 < rank <= 10:
+        traded = "거래가 활발한 편이라 사고팔기 어렵지 않아요"
+    else:
+        traded = "거래대금 상위권이라 유동성은 갖춘 편이에요"
+
+    if range_pct < 3.0:
+        moves = "하루 움직임이 작아 느긋하게 볼 수 있어요"
+    elif range_pct < 8.0:
+        moves = "하루 움직임이 지나치지 않은 편이에요"
+    else:
+        moves = "하루 움직임이 커서 신호가 자주 나오는 편이에요"
+    return f"{traded} · {moves}"
 
 
 def _clean_reason(text: object, profile: str, coin: dict) -> str:
@@ -69,6 +92,8 @@ def _clean_reason(text: object, profile: str, coin: dict) -> str:
     if not reason:
         return fallback_reason(profile, coin)
     if any(word in reason for word in BANNED_WORDS) or _PROFIT_PROMISE.search(reason):
+        return fallback_reason(profile, coin)
+    if _FAKE_STAT.search(reason):
         return fallback_reason(profile, coin)
     return reason[:REASON_MAX]
 

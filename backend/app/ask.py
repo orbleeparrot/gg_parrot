@@ -617,7 +617,8 @@ def _load_flow(db: Session, user: User, session_id: int) -> tuple[AskMacroSessio
     if row is None or row.user_id != user.id:
         raise AskError(404, "질문 기록을 찾지 못했어요. 처음부터 다시 물어봐 주세요.")
     _, now_ms = _now()
-    if row.expires_ms and row.expires_ms <= now_ms:
+    # expires_ms 가 0 인 행(옛 기록·마이그레이션 기본값)도 만료로 본다 — 영원한 세션을 만들지 않는다.
+    if not row.expires_ms or row.expires_ms <= now_ms:
         raise AskError(410, "질문한 지 오래됐어요. 처음부터 다시 물어봐 주세요.")
     if row.ask_count >= MAX_ASKS_PER_SESSION:
         raise AskError(409, "이번 질문에서 살펴볼 수 있는 종목을 다 봤어요. 다시 물어봐 주세요.")
@@ -628,9 +629,27 @@ def _load_flow(db: Session, user: User, session_id: int) -> tuple[AskMacroSessio
     return row, answers
 
 
-def _allowed_symbols(row: AskMacroSession) -> set[str]:
+def _candidates_record(row: AskMacroSession) -> tuple[list[dict], bool]:
+    """세션에 남긴 후보 목록과 '그 목록을 AI 가 골랐는지'.
+
+    후보 단계의 ai_used 는 "무엇을 보여 줬는가" 를 설명하는 감사 기록이라, 매크로 단계가
+    같은 컬럼을 덮어쓰면 복구할 수 없다. 그래서 후보와 한 묶음으로 candidates_json 에 담는다.
+    옛 행(후보 배열만 들어 있는 모양)도 그대로 읽는다.
+    """
     try:
-        picked = {c["symbol"] for c in json.loads(row.candidates_json)}
+        saved = json.loads(row.candidates_json)
+    except Exception:
+        return [], False
+    if isinstance(saved, dict):
+        items = saved.get("items")
+        return (items if isinstance(items, list) else []), bool(saved.get("ai_used"))
+    return (saved if isinstance(saved, list) else []), False
+
+
+def _allowed_symbols(row: AskMacroSession) -> set[str]:
+    items, _ai_used = _candidates_record(row)
+    try:
+        picked = {c["symbol"] for c in items if isinstance(c, dict)}
     except Exception:
         picked = set()
     return picked | set(MANUAL_SYMBOLS)
@@ -680,7 +699,7 @@ def run_ask(db: Session, user: User, req: AskRequest, run_backtest: Callable[[Ma
         row.results_json = json.dumps(
             [{"label": r["label"], "rule_type": r["rule_type"], "macro": r["macro"],
               "metrics": r["metrics"]} for r in results], ensure_ascii=False)
-        row.ai_used = bool(ai_candidates)
+        row.ai_used = bool(ai_candidates)  # 매크로 단계 기록(후보 단계 것은 candidates_json 안에 있다)
         row.elapsed_ms = elapsed_ms
         db.add(row)
         db.commit()
@@ -704,6 +723,22 @@ def run_candidates(db: Session, user: User, req: CandidatesRequest) -> dict:
     """
     if not consented(user):
         raise AskError(403, "먼저 안내에 동의해 주세요.")
+
+    # 차감이 일어나는 곳이라 run_ask 와 같은 사용자별 락을 건다 — 같은 사람이 동시에 두 번
+    # 보내면 둘 다 한도 검사를 통과해 두 번 차감될 수 있다.
+    with _IN_FLIGHT_LOCK:
+        if user.id in _IN_FLIGHT:
+            raise AskError(429, "아직 지난 질문을 돌리는 중이에요. 잠시만요.")
+        _IN_FLIGHT.add(user.id)
+    try:
+        return _run_candidates(db, user, req)
+    finally:
+        with _IN_FLIGHT_LOCK:
+            _IN_FLIGHT.discard(user.id)
+
+
+def _run_candidates(db: Session, user: User, req: CandidatesRequest) -> dict:
+    """run_candidates 의 알맹이 — 락을 잡은 채로 한도 검사·차감·후보 생성을 한다."""
     if remaining_today(db, user) <= 0:
         raise AskError(429, f"오늘은 {daily_limit()}번 다 물어봤어요. 내일 다시 물어봐 주세요.")
 
@@ -746,7 +781,9 @@ def run_candidates(db: Session, user: User, req: CandidatesRequest) -> dict:
         db.commit()
         raise
 
-    row.candidates_json = json.dumps(candidates, ensure_ascii=False)
+    # 후보 단계의 ai_used 는 후보와 한 묶음으로 남긴다 — 매크로 단계가 row.ai_used 를 덮어써도
+    # "이 목록을 AI 가 골랐는지" 는 그대로 남아야 한다(설계 문서 2장의 방어 장치).
+    row.candidates_json = json.dumps({"ai_used": ai_used, "items": candidates}, ensure_ascii=False)
     row.ai_used = ai_used
     db.add(row)
     db.commit()

@@ -208,3 +208,62 @@ def test_session_has_flow_columns():
         assert row.ask_count == 0
         db.delete(row)
         db.commit()
+
+
+# --- 페그 자산은 후보가 되면 안 된다 (2026-09-23 점검에서 USDE 가 균형형 후보로 나왔다) -------
+def _usde():
+    """실제 USDE 숫자 — 값은 1.0 에 붙어 있는데 저가 한 번이 0.92 로 찍혀 변동폭이 커 보였다."""
+    return {"symbol": "USDEUSDT", "priceChangePercent": "0.01", "lastPrice": "0.9999",
+            "quoteVolume": "500000000", "highPrice": "1.0006", "lowPrice": "0.9202",
+            "weightedAvgPrice": "0.9995"}
+
+
+def test_pegged_asset_is_never_a_candidate_for_any_profile():
+    tickers = _tickers() + [_usde()]
+    for profile in ("stable", "balanced", "aggressive", "scalper"):
+        pool = ac.build_pool(tickers, profile=profile, size=10)
+        assert "USDEUSDT" not in [c["symbol"] for c in pool], profile
+
+
+def test_real_coin_keeps_its_range_pct_under_the_wick_resistant_measure():
+    # 실제로 오르내린 코인은 값이 무너지지 않아야 한다 — 안 그러면 공격형 정렬이 뒤집힌다.
+    real = {"symbol": "REALUSDT", "priceChangePercent": "8.0", "lastPrice": "0.22",
+            "quoteVolume": "500000000", "highPrice": "0.23", "lowPrice": "0.19",
+            "weightedAvgPrice": "0.21"}
+    pool = ac.build_pool([real], profile="aggressive", size=10)
+    assert pool[0]["range_pct"] > 15.0
+
+
+# --- 이유 문구는 서버가 붙인 숫자 줄 옆에 놓인다 — AI 가 지어낸 통계는 막는다 ------------------
+def test_invented_statistics_in_a_reason_fall_back_to_the_rule_sentence():
+    coin = next(c for c in _pool() if c["symbol"] == "MIDUSDT")
+    for text in ("거래대금 1위라 안전해요", "하루 변동 30% 라 신호가 자주 나와요",
+                 "평소보다 3배 활발해요", "하루 거래대금이 5억 원이에요"):
+        picks = ac.validate_picks([{"symbol": "MIDUSDT", "reason": text}], _pool(), "balanced")
+        reason = next(p["reason"] for p in picks if p["symbol"] == "MIDUSDT")
+        assert reason == ac.fallback_reason("balanced", coin), text
+
+
+def test_a_harmless_number_in_a_reason_is_kept():
+    picks = ac.validate_picks(
+        [{"symbol": "MIDUSDT", "reason": "20일선 근처에서 천천히 움직이고 있어요"}],
+        _pool(), "balanced")
+    reason = next(p["reason"] for p in picks if p["symbol"] == "MIDUSDT")
+    assert reason == "20일선 근처에서 천천히 움직이고 있어요"
+
+
+def test_fallback_reasons_differ_between_clearly_different_coins():
+    # AI 가 없을 때 카드 3~4장이 똑같은 문장을 달고 나오면 화면이 고장 난 것처럼 보인다.
+    calm = {"symbol": "CALMUSDT", "base": "CALM", "volume_rank": 1, "range_pct": 1.0}
+    wild = {"symbol": "WILDUSDT", "base": "WILD", "volume_rank": 25, "range_pct": 20.0}
+    assert ac.fallback_reason("balanced", calm) != ac.fallback_reason("balanced", wild)
+    assert "추천" not in ac.fallback_reason("balanced", calm)
+    assert len(ac.fallback_reason("balanced", wild)) <= ac.REASON_MAX
+
+
+def test_rule_only_candidates_do_not_all_share_one_sentence():
+    tickers = _tickers() + [_t("EXTRAUSDT", 600_000_000, 140, 100)]
+    pool = ac.build_pool(tickers, profile="balanced", size=10)
+    picks, ai_used = ac.choose(pool, profile="balanced", horizon="weeks", watch="sometimes")
+    assert ai_used is False
+    assert len({p["reason"] for p in picks}) > 1

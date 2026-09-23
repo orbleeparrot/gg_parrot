@@ -24,8 +24,6 @@ export const MARKETS = [
 export const LEVERAGES = [1, 2, 3];
 export const STABLE_NO_FUTURES = "안정형은 현물만 살펴봐요";
 
-export const POPULAR_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT"];
-
 export const HORIZONS = [
   { value: "days", label: "며칠", hint: "짧게 보고 정리" },
   { value: "weeks", label: "몇 주", hint: "적당히" },

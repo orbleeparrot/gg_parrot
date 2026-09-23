@@ -33,10 +33,33 @@ CACHE_SECONDS = float(os.environ.get("HOTCOINS_CACHE_SECONDS", "45"))
 # Leverage-token suffixes (e.g. BTCUP / ETHDOWN / XRPBULL / SOLBEAR).
 _LEV_SUFFIXES = ("UP", "DOWN", "BULL", "BEAR", "HALF", "HEDGE")
 # Stable/fiat bases whose *USDT pair is effectively a currency peg, not a coin.
+# 새 페그 자산이 계속 생기므로 목록만 믿지 않는다 — 아래 _is_pegged 로 한 번 더 거른다.
 _STABLE_BASES = frozenset(
     {"USDC", "BUSD", "TUSD", "FDUSD", "USDP", "DAI", "UST", "USTC", "PAX", "GUSD",
-     "EUR", "GBP", "AUD", "TRY", "BRL", "RUB", "JPY", "NGN", "ZAR"}
+     "EUR", "GBP", "AUD", "TRY", "BRL", "RUB", "JPY", "NGN", "ZAR",
+     # 2024~2026 에 상장된 페그 자산들
+     "USDE", "USD1", "PYUSD", "RLUSD", "USDD", "USDS", "USDG", "USDY", "USDF",
+     "USDX", "USDJ", "USDB", "LUSD", "SUSD", "CRVUSD", "XUSD", "AEUR", "EURI"}
 )
+
+# 1.0 에 붙어 있는 자산 판정 — 값이 거의 안 움직이는 페그를 매매 후보로 내보내지 않는다.
+_PEG_PRICE_TOLERANCE = 0.02   # 1.0 에서 ±2%
+_PEG_CHANGE_TOLERANCE = 0.5   # 24시간 등락 ±0.5%
+
+
+def _is_pegged(t: dict, change_pct: float, last_price: float) -> bool:
+    """1.0 근처에 머물면서 하루 등락이 거의 없으면 페그로 본다.
+
+    한 번 찍힌 lastPrice 보다 24시간 가중평균(weightedAvgPrice)이 안정적이라 그쪽을 먼저 쓴다.
+    """
+    try:
+        price = float(t["weightedAvgPrice"])
+    except (KeyError, ValueError, TypeError):
+        price = last_price
+    if price <= 0:
+        return False
+    return (abs(price - 1.0) <= _PEG_PRICE_TOLERANCE
+            and abs(change_pct) <= _PEG_CHANGE_TOLERANCE)
 
 
 def _is_leverage_token(base: str) -> bool:
@@ -49,7 +72,14 @@ def _is_leverage_token(base: str) -> bool:
 
 
 def ticker_range_pct(t: dict) -> float:
-    """24시간 고가/저가로 본 하루 변동폭(%). 값이 없거나 이상하면 0.0 — 같은 티커 응답만 쓴다."""
+    """하루 변동폭(%) — 한쪽 꼬리 한 번에 휘둘리지 않게 '대칭 반폭' 으로 잰다.
+
+    ``2 × min(고가-가중평균, 가중평균-저가) / 가중평균 × 100``.
+    저가가 한 번만 크게 튀어나온 티커(스테이블에서 흔하다)는 좁은 쪽 반폭이 거의 0 이라
+    값이 0 에 가깝게 나오고, 실제로 오르내린 코인은 두 반폭이 비슷해 값이 거의 줄지 않는다.
+    가중평균이 없거나 고가/저가 밖에 있는 응답은 예전처럼 고가/저가 원본으로 잰다.
+    값이 없거나 이상하면 0.0 — 같은 티커 응답만 쓴다.
+    """
     try:
         high = float(t["highPrice"])
         low = float(t["lowPrice"])
@@ -57,7 +87,14 @@ def ticker_range_pct(t: dict) -> float:
         return 0.0
     if low <= 0 or high < low:
         return 0.0
-    return round((high - low) / low * 100.0, 2)
+    try:
+        weighted = float(t["weightedAvgPrice"])
+    except (KeyError, ValueError, TypeError):
+        weighted = 0.0
+    if weighted <= 0 or not (low <= weighted <= high):
+        return round((high - low) / low * 100.0, 2)
+    half = min(high - weighted, weighted - low)
+    return round(2.0 * half / weighted * 100.0, 2)
 
 
 def select_hot_coins(
@@ -84,6 +121,8 @@ def select_hot_coins(
             continue
         if quote_volume < min_quote_volume:
             continue
+        if _is_pegged(t, change_pct, last_price):
+            continue
         candidates.append(
             {
                 "symbol": symbol,
@@ -102,8 +141,42 @@ def select_hot_coins(
     return pool[: max(1, limit)]
 
 
+# 캐시에 넣을 티커 수 — 거래대금 상위 이만큼만 남긴다. 바이낸스 24시간 응답 원본은
+# 1.6MB 라 캐시 상한(max_bytes)에 걸려 통째로 버려졌고, 그러면 모든 요청이 거래소를
+# 그대로 때린다(weight-80 → 418/차단 위험). 투영을 저장해 "캐시 창마다 한 번" 을 지킨다.
+CACHE_TOP_SYMBOLS = int(os.environ.get("HOTCOINS_CACHE_TOP", "500"))
+# 캐시에 남기는 필드 — 소비자(select_hot_coins·ask_candidates.build_pool)가 읽는 것만.
+_KEEP_FIELDS = ("lastPrice", "priceChangePercent", "highPrice", "lowPrice", "weightedAvgPrice")
+
+
+def trim_tickers(tickers: list[dict], *, top: int = CACHE_TOP_SYMBOLS) -> list[dict]:
+    """캐시에 넣을 투영 — USDT 페어 중 거래대금 상위 ``top`` 개, 쓰는 필드만 숫자로.
+
+    고른 뒤에도 원본 티커와 같은 열쇠 이름을 쓰므로 ``select_hot_coins`` 는 그대로 읽는다.
+    """
+    rows: list[dict] = []
+    for t in tickers:
+        symbol = str(t.get("symbol", ""))
+        if not symbol.endswith("USDT"):
+            continue
+        try:
+            quote_volume = float(t["quoteVolume"])
+        except (KeyError, ValueError, TypeError):
+            continue
+        row: dict = {"symbol": symbol, "quoteVolume": round(quote_volume, 2)}
+        for field in _KEEP_FIELDS:
+            try:
+                row[field] = float(t[field])
+            except (KeyError, ValueError, TypeError):
+                continue
+        rows.append(row)
+    rows.sort(key=lambda r: r["quoteVolume"], reverse=True)
+    return rows[: max(1, top)]
+
+
 # One normalized source result; different list lengths reuse it.
-_cache = ResponseCache("hot-coins", max_entries=1, max_bytes=100_000, retry_seconds=15)
+# max_bytes 는 투영(상위 500개 ≒ 110KB)이 넉넉히 들어가되 원본(1.6MB)은 여전히 거부하는 값.
+_cache = ResponseCache("hot-coins", max_entries=1, max_bytes=400_000, retry_seconds=15)
 
 def _fetch_tickers() -> Optional[list[dict]]:
     try:
@@ -119,13 +192,14 @@ def _load_ticker_payload() -> dict:
     tickers = _fetch_tickers()
     if not tickers:
         raise RuntimeError("hot coin source unavailable")
-    return {"tickers": tickers,
-            "coins": select_hot_coins(tickers, limit=50),
+    trimmed = trim_tickers(tickers)
+    return {"tickers": trimmed,
+            "coins": select_hot_coins(trimmed, limit=50),
             "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
 
 
 def get_cached_tickers() -> Optional[list[dict]]:
-    """캐시된 24시간 티커 원본. 후보 풀이 같은 캐시를 재사용하려고 쓴다(추가 호출 없음)."""
+    """캐시된 24시간 티커(거래대금 상위 투영). 후보 풀이 같은 캐시를 재사용한다(추가 호출 없음)."""
     try:
         payload, _state = _cache.get_or_load("binance:24h", _load_ticker_payload,
                                              ttl=CACHE_SECONDS, stale_ttl=300)

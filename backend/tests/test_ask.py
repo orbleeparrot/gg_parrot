@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import secrets
 import time
 
@@ -738,3 +739,96 @@ def test_old_request_shape_gets_refresh_hint(monkeypatch):
                     headers=_auth(tok))
     assert r.status_code == 422
     assert "새로고침" in r.text
+
+
+def test_candidates_request_rejects_leverage_on_spot(monkeypatch):
+    # 현물 + 레버리지는 CandidatesRequest 규칙 — 모델과 라우트 양쪽에서 막힌다.
+    with pytest.raises(ValidationError):
+        ask.CandidatesRequest(risk_profile="balanced", market="spot", leverage=2,
+                              invest_horizon="weeks", watch_frequency="sometimes")
+    monkeypatch.setattr(ask.hotcoins, "get_cached_tickers", lambda: _fake_tickers())
+    monkeypatch.setattr(ask, "_candidate_ai", lambda: None)
+    tok, _ = _signup()
+    _consent(tok)
+    r = client.post("/api/ask/candidates", json=_candidates_body(market="spot", leverage=2),
+                    headers=_auth(tok))
+    assert r.status_code == 422
+    assert "레버리지" in r.json()["detail"]
+
+
+def test_validation_errors_are_korean_sentences(monkeypatch):
+    # pydantic 영문 메시지가 그대로 한국어 말풍선에 찍히면 안 된다 — 두 경로 모두 한 문장이다.
+    tok, _ = _signup()
+    _consent(tok)
+    bad_cards = client.post("/api/ask/candidates", json=_candidates_body(invest_horizon="forever"),
+                            headers=_auth(tok))
+    assert bad_cards.status_code == 422
+    detail = bad_cards.json()["detail"]
+    assert isinstance(detail, str) and re.search(r"[가-힣]", detail)
+    assert "Input should be" not in detail and "field required" not in detail
+
+    bad_symbol = client.post("/api/ask/macros", json={"session_id": 1, "symbol": "BTC-KRW"},
+                             headers=_auth(tok))
+    assert bad_symbol.status_code == 422
+    assert bad_symbol.json()["detail"] == "종목 이름이 올바르지 않아요"
+
+
+def test_session_without_expiry_is_treated_as_expired(monkeypatch):
+    # expires_ms 가 0 인 행(옛 기록)이 영원히 살아 있으면 30분 만료가 뚫린다.
+    tok, _ = _signup()
+    flow = _start_flow(tok, monkeypatch)
+    with get_session() as db:
+        row = db.get(AskMacroSession, flow["session_id"])
+        row.expires_ms = 0
+        db.add(row)
+        db.commit()
+    r = client.post("/api/ask/macros", json={"session_id": flow["session_id"], "symbol": "BTCUSDT"},
+                    headers=_auth(tok))
+    assert r.status_code == 410
+
+
+def test_in_flight_guard_rejects_concurrent_candidates(monkeypatch):
+    # 차감이 일어나는 곳이라 동시 요청 두 개가 다 통과하면 하루 횟수가 두 번 깎인다.
+    monkeypatch.setattr(ask.hotcoins, "get_cached_tickers", lambda: _fake_tickers())
+    monkeypatch.setattr(ask, "_candidate_ai", lambda: None)
+    tok, user_id = _signup()
+    _consent(tok)
+    before = client.get("/api/ask/status", headers=_auth(tok)).json()["remaining_today"]
+    ask._IN_FLIGHT.add(user_id)
+    try:
+        r = client.post("/api/ask/candidates", json=_candidates_body(), headers=_auth(tok))
+        assert r.status_code == 429 and "돌리는 중" in r.json()["detail"]
+    finally:
+        ask._IN_FLIGHT.discard(user_id)
+    after = client.get("/api/ask/status", headers=_auth(tok)).json()["remaining_today"]
+    assert after == before  # 막힌 요청은 차감하지 않는다
+
+
+def test_candidate_stage_ai_flag_survives_a_later_macro_call(_fake_backtest, monkeypatch):
+    # 설계 2장 — "무엇을 보여 줬는지"가 법적 방어 장치라, 그 목록을 AI 가 골랐는지도
+    # 매크로 단계가 row.ai_used 를 덮어쓴 뒤까지 남아 있어야 한다.
+    monkeypatch.setattr(ask.hotcoins, "get_cached_tickers", lambda: _fake_tickers())
+    monkeypatch.setattr(ask, "_candidate_ai",
+                        lambda: (lambda prompt: json.dumps(
+                            [{"symbol": "AAAUSDT", "reason": "거래가 활발해요"},
+                             {"symbol": "BBBUSDT", "reason": "움직임이 적당해요"},
+                             {"symbol": "CCCUSDT", "reason": "움직임이 큰 편이에요"}],
+                            ensure_ascii=False)))
+    tok, _ = _signup()
+    _consent(tok)
+    flow = client.post("/api/ask/candidates", json=_candidates_body(), headers=_auth(tok)).json()
+    with get_session() as db:
+        row = db.get(AskMacroSession, flow["session_id"])
+        items, cand_ai_used = ask._candidates_record(row)
+        assert cand_ai_used is True and len(items) >= ac.MIN_PICKS
+
+    # 매크로 단계는 AI 를 쓰지 않는다(_fake_backtest 가 ai_available 을 끈다) → row.ai_used 는 False 가 된다.
+    r = client.post("/api/ask/macros",
+                    json={"session_id": flow["session_id"], "symbol": "AAAUSDT"},
+                    headers=_auth(tok))
+    assert r.status_code == 200, r.text
+    with get_session() as db:
+        row = db.get(AskMacroSession, flow["session_id"])
+        assert row.ai_used is False                       # 매크로 단계 기록은 덮어써도
+        assert ask._candidates_record(row)[1] is True     # 후보 단계 기록은 남는다
+        assert [c["symbol"] for c in ask._candidates_record(row)[0]]

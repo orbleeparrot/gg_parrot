@@ -658,16 +658,21 @@ class AskMacroSession(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     user_id: int = Field(index=True)
     day_kst: str  # YYYY-MM-DD (KST) — 하루 한도 키
-    request_json: str = "{}"  # 카드 답변(ask.AskRequest)
+    request_json: str = "{}"  # 카드 답변(ask.CandidatesRequest)
     candidate_count: int = 0  # 백테스트한 후보 수
     results_json: str = "[]"  # 보여 준 상위 3개(매크로 + 지표)
     disclaimer_version: str = ""  # 그때 화면에 붙은 고지 버전
-    ai_used: bool = False  # Gemini 제안이 후보에 들어갔는지
+    ai_used: bool = False  # 매크로 단계에서 Gemini 제안이 후보에 들어갔는지(후보 단계 것은 candidates_json 안)
     elapsed_ms: int = 0
     created_at: str
     created_ms: int = Field(default=0, sa_type=BigInteger)
     # 포인트로 산 추가 횟수로 물어본 것인지(2026-09-22). 무료 한도 계산에서 제외한다.
     paid: bool = False
+    # v2(2026-09-23) — 흐름 세션: 후보를 낼 때 행을 먼저 만들고 종목 선택 뒤 결과를 채운다.
+    candidates_json: str = "[]"  # 보여 준 후보·이유와 그때의 ai_used(문의 대응·감사)
+    chosen_symbol: str = ""      # 사용자가 고른 종목
+    expires_ms: int = Field(default=0, sa_type=BigInteger)  # 세션 유효 시한
+    ask_count: int = 0           # 이 세션으로 매크로를 만든 횟수(상한)
 
 
 class AskExtraCredit(SQLModel, table=True):
@@ -1106,6 +1111,10 @@ def _migrate() -> None:
         },
         "askmacrosession": {
             "paid": "ALTER TABLE askmacrosession ADD COLUMN paid BOOLEAN NOT NULL DEFAULT FALSE",
+            "candidates_json": "ALTER TABLE askmacrosession ADD COLUMN candidates_json TEXT NOT NULL DEFAULT '[]'",
+            "chosen_symbol": "ALTER TABLE askmacrosession ADD COLUMN chosen_symbol TEXT NOT NULL DEFAULT ''",
+            "expires_ms": "ALTER TABLE askmacrosession ADD COLUMN expires_ms BIGINT NOT NULL DEFAULT 0",
+            "ask_count": "ALTER TABLE askmacrosession ADD COLUMN ask_count INTEGER NOT NULL DEFAULT 0",
         },
         "runsession": {
             "position_uncertain": "ALTER TABLE runsession ADD COLUMN position_uncertain BOOLEAN DEFAULT FALSE",
@@ -1245,7 +1254,13 @@ _PG_ADDED_COLUMNS = {
         "processing_status": "TEXT DEFAULT 'ready'", "claim_token": "TEXT DEFAULT ''",
         "claimed_ms": "BIGINT DEFAULT 0",
     },
-    "askmacrosession": {"paid": "BOOLEAN NOT NULL DEFAULT FALSE"},
+    "askmacrosession": {
+        "paid": "BOOLEAN NOT NULL DEFAULT FALSE",
+        "candidates_json": "TEXT NOT NULL DEFAULT '[]'",
+        "chosen_symbol": "TEXT NOT NULL DEFAULT ''",
+        "expires_ms": "BIGINT NOT NULL DEFAULT 0",
+        "ask_count": "INTEGER NOT NULL DEFAULT 0",
+    },
     "runsession": {
         "macro_json": "TEXT DEFAULT ''", "position_uncertain": "BOOLEAN DEFAULT FALSE",
         "user_macro_id": "INTEGER",

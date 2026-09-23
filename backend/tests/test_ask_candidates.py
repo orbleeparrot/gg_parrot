@@ -1,0 +1,285 @@
+"""물어볼까 v2 — 종목 후보 풀과 AI 선별 검증."""
+from __future__ import annotations
+
+from app import ask_candidates as ac
+from app.db import AskMacroSession, get_session
+
+
+def _t(symbol, qvol, high, low, change=1.0):
+    return {"symbol": symbol, "priceChangePercent": str(change), "lastPrice": str(low),
+            "quoteVolume": str(qvol), "highPrice": str(high), "lowPrice": str(low)}
+
+
+def _tickers():
+    # 변동폭: CALM 1% · MID 5% · WILD 20%, 거래대금은 CALM > MID > WILD
+    return [
+        _t("CALMUSDT", 900_000_000, 101, 100),
+        _t("MIDUSDT", 800_000_000, 105, 100),
+        _t("WILDUSDT", 700_000_000, 120, 100),
+        _t("USDCUSDT", 950_000_000, 101, 100),      # 스테이블 → 제외
+        _t("BTCUPUSDT", 850_000_000, 130, 100),     # 레버리지 토큰 → 제외
+        _t("TINYUSDT", 5_000, 200, 100),            # 거래대금 미달 → 제외
+    ]
+
+
+def test_pool_drops_stable_leverage_and_illiquid():
+    pool = ac.build_pool(_tickers(), profile="balanced", size=10)
+    symbols = [c["symbol"] for c in pool]
+    assert "USDCUSDT" not in symbols
+    assert "BTCUPUSDT" not in symbols
+    assert "TINYUSDT" not in symbols
+
+
+def test_pool_carries_volume_rank_by_quote_volume():
+    pool = ac.build_pool(_tickers(), profile="balanced", size=10)
+    ranks = {c["symbol"]: c["volume_rank"] for c in pool}
+    assert ranks["CALMUSDT"] == 1
+    assert ranks["MIDUSDT"] == 2
+    assert ranks["WILDUSDT"] == 3
+
+
+def test_stable_profile_prefers_calm_coins():
+    pool = ac.build_pool(_tickers(), profile="stable", size=3)
+    assert pool[0]["symbol"] == "CALMUSDT"
+
+
+def test_aggressive_profile_prefers_wild_coins():
+    pool = ac.build_pool(_tickers(), profile="aggressive", size=3)
+    assert pool[0]["symbol"] == "WILDUSDT"
+
+
+def test_balanced_profile_prefers_middle_volatility():
+    pool = ac.build_pool(_tickers(), profile="balanced", size=3)
+    assert pool[0]["symbol"] == "MIDUSDT"
+
+
+def test_scalper_profile_prefers_wild_among_most_traded():
+    pool = ac.build_pool(_tickers(), profile="scalper", size=3)
+    assert pool[0]["symbol"] == "WILDUSDT"
+
+
+def test_pool_size_is_capped():
+    assert len(ac.build_pool(_tickers(), profile="balanced", size=2)) == 2
+
+
+import json
+
+
+def _pool():
+    return ac.build_pool(_tickers(), profile="balanced", size=10)
+
+
+def _ai(payload):
+    return lambda prompt: json.dumps(payload, ensure_ascii=False)
+
+
+def test_picks_outside_pool_are_dropped():
+    picks = ac.validate_picks(
+        [{"symbol": "SCAMUSDT", "reason": "좋아 보여요"},
+         {"symbol": "MIDUSDT", "reason": "거래가 활발해요"}],
+        _pool(), "balanced")
+    symbols = [p["symbol"] for p in picks]
+    assert "SCAMUSDT" not in symbols
+    assert "MIDUSDT" in symbols
+
+
+def test_banned_words_are_replaced_with_fallback_reason():
+    picks = ac.validate_picks(
+        [{"symbol": "MIDUSDT", "reason": "무조건 오르는 종목이라 수익을 보장해요"}],
+        _pool(), "balanced")
+    reason = next(p["reason"] for p in picks if p["symbol"] == "MIDUSDT")
+    assert "보장" not in reason and "무조건" not in reason
+    assert reason == ac.fallback_reason("balanced", next(c for c in _pool() if c["symbol"] == "MIDUSDT"))
+
+
+def test_short_ai_answer_is_topped_up_from_pool_order():
+    picks = ac.validate_picks([{"symbol": "MIDUSDT", "reason": "거래가 활발해요"}],
+                              _pool(), "balanced")
+    assert len(picks) >= ac.MIN_PICKS
+
+
+def test_too_many_picks_are_cut():
+    # _pool() 은 유효 심볼이 3개뿐이라, 자르는 동작을 실제로 보려면 MAX_PICKS(4)
+    # 보다 많은 유효 심볼이 있는 풀이 필요하다. 딱 4개만 넣으면 자르는 코드를
+    # 지워도 테스트가 통과해버리므로 5개를 넣는다.
+    tickers = _tickers() + [
+        _t("EXTRAUSDT", 600_000_000, 110, 100),
+        _t("EXTRA2USDT", 500_000_000, 108, 100),
+    ]
+    pool = ac.build_pool(tickers, profile="balanced", size=10)
+    assert len(pool) == 5
+    raw = [{"symbol": c["symbol"], "reason": "거래가 활발해요"} for c in pool]
+    assert len(ac.validate_picks(raw, pool, "balanced")) == ac.MAX_PICKS
+
+
+def test_long_reason_is_trimmed():
+    picks = ac.validate_picks([{"symbol": "MIDUSDT", "reason": "가" * 200}], _pool(), "balanced")
+    reason = next(p["reason"] for p in picks if p["symbol"] == "MIDUSDT")
+    assert len(reason) <= ac.REASON_MAX
+
+
+def test_duplicate_symbols_are_collapsed():
+    raw = [{"symbol": "MIDUSDT", "reason": "하나"}, {"symbol": "MIDUSDT", "reason": "둘"}]
+    picks = ac.validate_picks(raw, _pool(), "balanced")
+    assert [p["symbol"] for p in picks].count("MIDUSDT") == 1
+
+
+def test_picks_carry_server_computed_numbers():
+    picks = ac.validate_picks([{"symbol": "MIDUSDT", "reason": "거래가 활발해요"}],
+                              _pool(), "balanced")
+    mid = next(p for p in picks if p["symbol"] == "MIDUSDT")
+    assert mid["range_pct"] == 5.0
+    assert mid["volume_rank"] == 2
+    assert mid["base"] == "MID"
+
+
+def test_choose_uses_ai_when_it_answers():
+    picks, ai_used = ac.choose(
+        _pool(), profile="balanced", horizon="weeks", watch="sometimes",
+        ask_ai=_ai([{"symbol": "WILDUSDT", "reason": "변동이 커서 신호가 자주 나와요"},
+                    {"symbol": "MIDUSDT", "reason": "거래가 활발해요"},
+                    {"symbol": "CALMUSDT", "reason": "하루 변동이 작아요"}]))
+    assert ai_used is True
+    assert [p["symbol"] for p in picks][:3] == ["WILDUSDT", "MIDUSDT", "CALMUSDT"]
+
+
+def test_choose_falls_back_when_ai_raises():
+    def boom(prompt):
+        raise RuntimeError("gemini down")
+
+    picks, ai_used = ac.choose(_pool(), profile="stable", horizon="months",
+                               watch="rarely", ask_ai=boom)
+    assert ai_used is False
+    assert len(picks) >= ac.MIN_PICKS
+    assert all(p["reason"] for p in picks)
+
+
+def test_choose_falls_back_when_ai_returns_garbage():
+    picks, ai_used = ac.choose(_pool(), profile="stable", horizon="months",
+                               watch="rarely", ask_ai=lambda p: "not json at all")
+    assert ai_used is False
+    assert len(picks) >= ac.MIN_PICKS
+
+
+def test_prompt_never_says_recommend():
+    prompt = ac.build_prompt(_pool(), profile="balanced", horizon="weeks", watch="sometimes")
+    assert "추천" not in prompt
+
+
+def test_choose_reports_ai_used_false_when_all_ai_symbols_are_outside_pool():
+    # AI 가 JSON 은 제대로 돌려줘도 풀 밖 심볼뿐이면, 결과는 전부 규칙 폴백이므로
+    # ai_used 는 False 여야 한다 — 이게 이 태스크가 막으려는 바로 그 상황이다.
+    picks, ai_used = ac.choose(
+        _pool(), profile="balanced", horizon="weeks", watch="sometimes",
+        ask_ai=_ai([{"symbol": "SCAMUSDT", "reason": "좋아 보여요"},
+                    {"symbol": "FAKEUSDT", "reason": "많이 올라요"}]))
+    assert ai_used is False
+    assert len(picks) >= ac.MIN_PICKS
+
+
+def test_profit_promise_pattern_is_replaced_with_fallback_reason():
+    picks = ac.validate_picks(
+        [{"symbol": "MIDUSDT", "reason": "하루 5% 씩 수익 나는 흐름이에요"}],
+        _pool(), "balanced")
+    reason = next(p["reason"] for p in picks if p["symbol"] == "MIDUSDT")
+    assert reason == ac.fallback_reason("balanced", next(c for c in _pool() if c["symbol"] == "MIDUSDT"))
+
+
+def test_symbol_normalization_trims_whitespace_and_case():
+    picks = ac.validate_picks(
+        [{"symbol": "  midusdt  ", "reason": "거래가 활발해요"}],
+        _pool(), "balanced")
+    assert any(p["symbol"] == "MIDUSDT" for p in picks)
+
+
+def test_session_has_flow_columns():
+    with get_session() as db:
+        row = AskMacroSession(
+            user_id=1, day_kst="2026-09-23", request_json="{}", candidate_count=0,
+            results_json="[]", disclaimer_version="ask-v2", ai_used=False, elapsed_ms=0,
+            created_at="2026-09-23T00:00:00Z", created_ms=1,
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        assert row.candidates_json == "[]"
+        assert row.chosen_symbol == ""
+        assert row.expires_ms == 0
+        assert row.ask_count == 0
+        db.delete(row)
+        db.commit()
+
+
+# --- 페그 자산은 후보가 되면 안 된다 (2026-09-23 점검에서 USDE 가 균형형 후보로 나왔다) -------
+def _usde():
+    """실제 USDE 숫자 — 값은 1.0 에 붙어 있는데 저가 한 번이 0.92 로 찍혀 변동폭이 커 보였다."""
+    return {"symbol": "USDEUSDT", "priceChangePercent": "0.01", "lastPrice": "0.9999",
+            "quoteVolume": "500000000", "highPrice": "1.0006", "lowPrice": "0.9202",
+            "weightedAvgPrice": "0.9995"}
+
+
+def test_pegged_asset_is_never_a_candidate_for_any_profile():
+    tickers = _tickers() + [_usde()]
+    for profile in ("stable", "balanced", "aggressive", "scalper"):
+        pool = ac.build_pool(tickers, profile=profile, size=10)
+        assert "USDEUSDT" not in [c["symbol"] for c in pool], profile
+
+
+def test_real_coin_keeps_its_range_pct_under_the_wick_resistant_measure():
+    # 실제로 오르내린 코인은 값이 무너지지 않아야 한다 — 안 그러면 공격형 정렬이 뒤집힌다.
+    real = {"symbol": "REALUSDT", "priceChangePercent": "8.0", "lastPrice": "0.22",
+            "quoteVolume": "500000000", "highPrice": "0.23", "lowPrice": "0.19",
+            "weightedAvgPrice": "0.21"}
+    pool = ac.build_pool([real], profile="aggressive", size=10)
+    assert pool[0]["range_pct"] > 15.0
+
+
+# --- 이유 문구는 서버가 붙인 숫자 줄 옆에 놓인다 — AI 가 지어낸 통계는 막는다 ------------------
+def test_invented_statistics_in_a_reason_fall_back_to_the_rule_sentence():
+    coin = next(c for c in _pool() if c["symbol"] == "MIDUSDT")
+    for text in ("거래대금 1위라 안전해요", "하루 변동 30% 라 신호가 자주 나와요",
+                 "평소보다 3배 활발해요", "하루 거래대금이 5억 원이에요"):
+        picks = ac.validate_picks([{"symbol": "MIDUSDT", "reason": text}], _pool(), "balanced")
+        reason = next(p["reason"] for p in picks if p["symbol"] == "MIDUSDT")
+        assert reason == ac.fallback_reason("balanced", coin), text
+
+
+def test_a_harmless_number_in_a_reason_is_kept():
+    picks = ac.validate_picks(
+        [{"symbol": "MIDUSDT", "reason": "20일선 근처에서 천천히 움직이고 있어요"}],
+        _pool(), "balanced")
+    reason = next(p["reason"] for p in picks if p["symbol"] == "MIDUSDT")
+    assert reason == "20일선 근처에서 천천히 움직이고 있어요"
+
+
+def test_fallback_reasons_differ_between_clearly_different_coins():
+    # AI 가 없을 때 카드 3~4장이 똑같은 문장을 달고 나오면 화면이 고장 난 것처럼 보인다.
+    calm = {"symbol": "CALMUSDT", "base": "CALM", "volume_rank": 1, "range_pct": 1.0}
+    wild = {"symbol": "WILDUSDT", "base": "WILD", "volume_rank": 25, "range_pct": 20.0}
+    assert ac.fallback_reason("balanced", calm) != ac.fallback_reason("balanced", wild)
+    assert "추천" not in ac.fallback_reason("balanced", calm)
+    assert len(ac.fallback_reason("balanced", wild)) <= ac.REASON_MAX
+
+
+def test_rule_only_candidates_do_not_all_share_one_sentence():
+    tickers = _tickers() + [_t("EXTRAUSDT", 600_000_000, 140, 100)]
+    pool = ac.build_pool(tickers, profile="balanced", size=10)
+    picks, ai_used = ac.choose(pool, profile="balanced", horizon="weeks", watch="sometimes")
+    assert ai_used is False
+    assert len({p["reason"] for p in picks}) > 1
+
+
+def test_stable_profile_never_ranks_a_one_sided_pump_ahead_of_a_calm_coin():
+    # 안정형은 range_pct 오름차순이라, 한쪽으로만 쭉 간 날의 코인이 '가장 잔잔한' 자리에
+    # 올라오면 가장 위험을 피하려는 사람에게 그날의 최대 급등주를 첫 카드로 내미는 셈이 된다.
+    def full(symbol, change, high, low, weighted, qvol):
+        return {"symbol": symbol, "priceChangePercent": str(change), "lastPrice": str(weighted),
+                "quoteVolume": str(qvol), "highPrice": str(high), "lowPrice": str(low),
+                "weightedAvgPrice": str(weighted)}
+
+    pump = full("PUMPUSDT", 30, 1.30, 1.00, 1.295, 900_000_000)      # 고가 부근에서 마감
+    calm = full("QUIETUSDT", 0.4, 101.5, 98.5, 100.0, 800_000_000)   # 진짜로 잔잔한 코인
+    pool = ac.build_pool([pump, calm], profile="stable", size=10)
+    assert [c["symbol"] for c in pool][0] == "QUIETUSDT"
+    ranked = {c["symbol"]: c["range_pct"] for c in pool}
+    assert ranked["PUMPUSDT"] > ranked["QUIETUSDT"]

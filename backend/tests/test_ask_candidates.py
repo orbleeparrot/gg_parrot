@@ -98,9 +98,15 @@ def test_short_ai_answer_is_topped_up_from_pool_order():
 
 
 def test_too_many_picks_are_cut():
-    # _pool() 은 유효 심볼이 3개뿐이라 자르는 걸 보려면 하나 더 있는 풀이 필요하다.
-    tickers = _tickers() + [_t("EXTRAUSDT", 600_000_000, 110, 100)]
+    # _pool() 은 유효 심볼이 3개뿐이라, 자르는 동작을 실제로 보려면 MAX_PICKS(4)
+    # 보다 많은 유효 심볼이 있는 풀이 필요하다. 딱 4개만 넣으면 자르는 코드를
+    # 지워도 테스트가 통과해버리므로 5개를 넣는다.
+    tickers = _tickers() + [
+        _t("EXTRAUSDT", 600_000_000, 110, 100),
+        _t("EXTRA2USDT", 500_000_000, 108, 100),
+    ]
     pool = ac.build_pool(tickers, profile="balanced", size=10)
+    assert len(pool) == 5
     raw = [{"symbol": c["symbol"], "reason": "거래가 활발해요"} for c in pool]
     assert len(ac.validate_picks(raw, pool, "balanced")) == ac.MAX_PICKS
 
@@ -157,3 +163,29 @@ def test_choose_falls_back_when_ai_returns_garbage():
 def test_prompt_never_says_recommend():
     prompt = ac.build_prompt(_pool(), profile="balanced", horizon="weeks", watch="sometimes")
     assert "추천" not in prompt
+
+
+def test_choose_reports_ai_used_false_when_all_ai_symbols_are_outside_pool():
+    # AI 가 JSON 은 제대로 돌려줘도 풀 밖 심볼뿐이면, 결과는 전부 규칙 폴백이므로
+    # ai_used 는 False 여야 한다 — 이게 이 태스크가 막으려는 바로 그 상황이다.
+    picks, ai_used = ac.choose(
+        _pool(), profile="balanced", horizon="weeks", watch="sometimes",
+        ask_ai=_ai([{"symbol": "SCAMUSDT", "reason": "좋아 보여요"},
+                    {"symbol": "FAKEUSDT", "reason": "많이 올라요"}]))
+    assert ai_used is False
+    assert len(picks) >= ac.MIN_PICKS
+
+
+def test_profit_promise_pattern_is_replaced_with_fallback_reason():
+    picks = ac.validate_picks(
+        [{"symbol": "MIDUSDT", "reason": "하루 5% 씩 수익 나는 흐름이에요"}],
+        _pool(), "balanced")
+    reason = next(p["reason"] for p in picks if p["symbol"] == "MIDUSDT")
+    assert reason == ac.fallback_reason("balanced", next(c for c in _pool() if c["symbol"] == "MIDUSDT"))
+
+
+def test_symbol_normalization_trims_whitespace_and_case():
+    picks = ac.validate_picks(
+        [{"symbol": "  midusdt  ", "reason": "거래가 활발해요"}],
+        _pool(), "balanced")
+    assert any(p["symbol"] == "MIDUSDT" for p in picks)

@@ -138,16 +138,35 @@ def _parse(text: str) -> object:
     return json.loads(body[start : end + 1])
 
 
+def _matched_symbols(raw: object, pool: list[dict]) -> set[str]:
+    """raw 안에서 풀에 실제로 있는 심볼만 골라낸다 — ai_used 판정에 쓴다."""
+    pool_symbols = {c["symbol"] for c in pool}
+    matched: set[str] = set()
+    for item in raw if isinstance(raw, list) else []:
+        if not isinstance(item, dict):
+            continue
+        symbol = str(item.get("symbol", "")).strip().upper()
+        if symbol in pool_symbols:
+            matched.add(symbol)
+    return matched
+
+
 def choose(pool: list[dict], *, profile: str, horizon: str, watch: str,
            ask_ai: Optional[Callable[[str], str]] = None) -> tuple[list[dict], bool]:
-    """후보와 ai_used 를 돌려준다. AI 가 죽거나 이상한 답을 하면 규칙만으로 채운다."""
+    """후보와 ai_used 를 돌려준다. AI 가 죽거나 이상한 답을 하면 규칙만으로 채운다.
+
+    ai_used 는 "AI 가 고른 것 중 하나라도 검증을 통과해 결과에 남았는가" 를 뜻한다.
+    AI 응답이 JSON 으로는 파싱돼도 전부 풀 밖 심볼이라 하나도 못 살아남았다면,
+    결과는 규칙 폴백과 똑같으므로 ai_used 는 False 여야 한다.
+    """
     if not pool:
         return [], False
     if ask_ai is not None:
         try:
-            picks = validate_picks(_parse(ask_ai(build_prompt(
-                pool, profile=profile, horizon=horizon, watch=watch))), pool, profile)
-            if picks:
+            parsed = _parse(ask_ai(build_prompt(
+                pool, profile=profile, horizon=horizon, watch=watch)))
+            picks = validate_picks(parsed, pool, profile)
+            if _matched_symbols(parsed, pool):
                 return picks, True
         except Exception:
             pass

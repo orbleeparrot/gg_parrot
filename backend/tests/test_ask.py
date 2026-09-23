@@ -110,10 +110,11 @@ def test_templates_cover_every_type_before_portfolios():
     assert set(ask._allowed_types(req2)) <= {c.macro.rule_type.value for c in singles2}
 
 
-def _result(ret, mdd, trades=10, win=50.0):
+def _result(ret, mdd, trades=10, win=50.0, bh=None):
     return BacktestResult(
         initial_capital=1.0, final_equity=1.0 + ret / 100, final_return_pct=ret, mdd_pct=mdd,
         win_rate_pct=win, total_trades=trades, trades=[], equity_curve=[],
+        buy_hold_return_pct=bh,
     )
 
 
@@ -832,3 +833,99 @@ def test_candidate_stage_ai_flag_survives_a_later_macro_call(_fake_backtest, mon
         assert row.ai_used is False                       # 매크로 단계 기록은 덮어써도
         assert ask._candidates_record(row)[1] is True     # 후보 단계 기록은 남는다
         assert [c["symbol"] for c in ask._candidates_record(row)[0]]
+
+
+# --- 홀딩 대비로 고른다 (2026-09-23) -------------------------------------
+# 그냥 들고 있는 것보다 나은 조합을 위로 올린다. 절대 수익률로 뽑아 놓고 화면에서
+# "홀딩이 나았어" 라고 말하던 엇갈림을 없앤다.
+
+def test_score_uses_excess_over_holding():
+    # 같은 +10% 라도 홀딩이 +30% 였으면 -20, +3% 였으면 +7.
+    assert ask.score("aggressive", _result(10, 5, bh=30)) == pytest.approx(-20.0)
+    assert ask.score("aggressive", _result(10, 5, bh=3)) == pytest.approx(7.0)
+    assert ask.score("balanced", _result(10, 4, bh=2)) == pytest.approx(6.0)   # 8 - 0.5*4
+    assert ask.score("stable", _result(10, 5, bh=5)) == pytest.approx(1.0)     # 5 / 5
+
+
+def test_score_falls_back_to_absolute_return_without_holding_data():
+    # 시세가 모자라 홀딩 기준을 못 구한 경우엔 예전처럼 절대 수익률로 본다.
+    assert ask.score("aggressive", _result(10, 40)) == pytest.approx(10.0)
+    assert ask.score("stable", _result(10, 5)) == pytest.approx(2.0)
+    assert ask.score("balanced", _result(10, 4)) == pytest.approx(8.0)
+
+
+def test_select_top_prefers_beating_holding_over_bigger_absolute_return():
+    ev = [
+        ask.Evaluated(_cand("A"), _result(30, 5, bh=90)),   # 커 보이지만 홀딩에 60%p 뒤짐
+        ask.Evaluated(_cand("J"), _result(8, 5, bh=1)),     # 작아도 홀딩을 7%p 이김
+    ]
+    top = ask.select_top(ev, "aggressive")
+    assert [e.candidate.macro.rule_type.value for e in top] == ["J", "A"]
+
+
+def test_lost_to_hold_is_true_only_when_every_result_lost():
+    beat = ask.Evaluated(_cand("J"), _result(8, 5, bh=1))
+    lost = ask.Evaluated(_cand("A"), _result(30, 5, bh=90))
+    assert ask.all_lost_to_hold([lost]) is True
+    assert ask.all_lost_to_hold([lost, beat]) is False
+    assert ask.all_lost_to_hold([]) is False
+    # 홀딩 기준이 없으면 "졌다" 고 말하지 않는다.
+    assert ask.all_lost_to_hold([ask.Evaluated(_cand("G"), _result(5, 2))]) is False
+
+
+# --- 직접 고를래요: 거래 가능한 종목이면 받는다 (2026-09-23) ----------------
+# v1 물어볼까엔 종목 검색창이 있었다. v2 가 고정 5개로 좁혀 버렸던 것을 되돌린다.
+
+def _flow_row(db, user_id, market="spot"):
+    from app.db import AskMacroSession as _S
+    row = _S(user_id=user_id, day_kst="2026-09-23",
+             request_json=json.dumps({"risk_profile": "balanced", "market": market, "leverage": 1,
+                                      "invest_horizon": "weeks", "watch_frequency": "sometimes"}),
+             candidate_count=0, results_json="[]", disclaimer_version="ask-v2", ai_used=False,
+             elapsed_ms=0, created_at="2026-09-23T00:00:00Z", created_ms=1,
+             candidates_json=json.dumps({"ai_used": False, "items": [{"symbol": "AAAUSDT"}]}),
+             chosen_symbol="", expires_ms=9_999_999_999_999, ask_count=0)
+    db.add(row); db.commit(); db.refresh(row)
+    return row
+
+
+def _fake_symbol_list(monkeypatch, items):
+    monkeypatch.setattr(ask, "_tradable_symbols",
+                        lambda market: {i["symbol"] for i in items if i.get(market)})
+
+
+def test_allowed_symbols_accepts_any_tradable_symbol(monkeypatch):
+    _, user_id = _signup()
+    with get_session() as db:
+        row = _flow_row(db, user_id)
+        _fake_symbol_list(monkeypatch, [{"symbol": "MUBARAKUSDT", "spot": True}])
+        allowed = ask._allowed_symbols(row, "spot")
+        assert "MUBARAKUSDT" in allowed   # 검색으로 고른 것
+        assert "AAAUSDT" in allowed       # 세션 후보
+        assert "BTCUSDT" in allowed       # 빠른 선택 칩
+        assert "NOPEUSDT" not in allowed  # 거래 목록에 없음
+
+
+def test_allowed_symbols_respects_the_sessions_market(monkeypatch):
+    _, user_id = _signup()
+    with get_session() as db:
+        row = _flow_row(db, user_id, market="futures")
+        _fake_symbol_list(monkeypatch, [{"symbol": "SPOTONLYUSDT", "spot": True},
+                                        {"symbol": "PERPUSDT", "spot": False, "futures": True}])
+        allowed = ask._allowed_symbols(row, "futures")
+        assert "PERPUSDT" in allowed
+        assert "SPOTONLYUSDT" not in allowed
+
+
+def test_allowed_symbols_falls_back_when_symbol_source_is_down(monkeypatch):
+    _, user_id = _signup()
+    with get_session() as db:
+        row = _flow_row(db, user_id)
+
+        def boom(market):
+            raise RuntimeError("binance down")
+
+        monkeypatch.setattr(ask, "_tradable_symbols", boom)
+        allowed = ask._allowed_symbols(row, "spot")
+        assert "BTCUSDT" in allowed and "AAAUSDT" in allowed
+        assert "MUBARAKUSDT" not in allowed  # 목록을 못 받으면 넓히지 않는다

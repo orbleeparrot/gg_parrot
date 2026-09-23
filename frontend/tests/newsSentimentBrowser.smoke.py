@@ -8,7 +8,8 @@ import threading
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
+import hashlib
 from playwright.sync_api import sync_playwright, expect
 
 BUILD = Path(os.environ.get("FRONTEND_BUILD", "/tmp/ggp-semif-build"))
@@ -27,12 +28,11 @@ class Handler(SimpleHTTPRequestHandler):
 
 class Fixtures:
     def __init__(self):
-        self.calls = []
-        self.pending = []
-        self.feeds = 0
-        self.offline = False
-        self.fail = False
+        self.snapshot = {"model": "semif-test:0.1.1", "enabled": True, "connected": True, "detail": "", "current": None,
+                         "history": [], "stats": {"completed": 0, "pending": 2, "failed": 0, "average_ms": None}}
         self.unexpected = []
+        self.reads = 0
+        self.unchanged = 0
     def route(self, route):
         url = urlsplit(route.request.url)
         if url.hostname != "127.0.0.1":
@@ -40,18 +40,14 @@ class Fixtures:
         path = url.path
         if not path.startswith("/api/"):
             route.continue_(); return
-        if path == "/api/admin/news-test/status":
-            route.fulfill(json={"model": "semif-test:0.1.1", "ready": not self.offline, "detail": "모델 서버에 연결할 수 없어요." if self.offline else ""}); return
-        if path == "/api/admin/news-test/articles":
-            self.feeds += 1
-            route.fulfill(json={"items": NEWS[:2] if self.feeds == 1 else NEWS[2:] if self.feeds == 2 else [], "cursor": str(self.feeds)}); return
-        if path == "/api/admin/news-test/analyze":
-            self.calls.append(route.request.post_data_json["id"])
-            if self.fail:
-                route.fulfill(status=502, json={"detail": "모델 응답에서 판단 결과를 읽을 수 없어요."})
-            else:
-                self.pending.append(route)
-            return
+        if path == "/api/admin/news-test/results":
+            assert route.request.method == "GET", "Browser must never schedule inference"
+            self.reads += 1
+            version = hashlib.md5(json.dumps(self.snapshot, sort_keys=True).encode()).hexdigest()
+            if parse_qs(url.query).get('after') == [version]:
+                self.unchanged += 1
+                route.fulfill(json={"unchanged": True, "version": version}); return
+            route.fulfill(json={**self.snapshot, "version": version, "server_now_ms": int(__import__('time').time() * 1000)}); return
         if path == "/api/me/notifications/stream-token":
             route.fulfill(status=503, json={"detail": "No stream in UI fixture"}); return
         fixtures = {"/api/auth/me": {"user": USER}, "/api/kimchi-premium": {"ok": True, "premium_pct": .82},
@@ -60,8 +56,16 @@ class Fixtures:
         if path not in fixtures:
             self.unexpected.append(path)
         route.fulfill(json=fixtures.get(path, {}))
+    def processing(self, index):
+        previous = self.snapshot['current']
+        if previous and previous.get('result'):
+            self.snapshot['history'].insert(0, previous)
+        self.snapshot['current'] = {'article': NEWS[index], 'status': 'processing', 'started_at': int(__import__('time').time()*1000), 'result': None}
     def finish(self, verdict="bullish", elapsed=1234):
-        self.pending.pop(0).fulfill(json={"verdict": verdict, "elapsed_ms": elapsed, "model_ms": 1200, "load_ms": 30, "reason": "수집된 내용의 시장 영향을 요약한 검증용 판단입니다."})
+        self.snapshot['current'] = {**self.snapshot['current'], 'status': 'ready', 'result': {"verdict": verdict, "elapsed_ms": elapsed, "model_ms": 1200, "load_ms": 30, "probabilities": {"bullish": .8 if verdict == "bullish" else .1, "bearish": .8 if verdict == "bearish" else .1, "neutral": .1}}}
+        self.snapshot['stats']['completed'] += 1
+        self.snapshot['stats']['pending'] -= 1
+        self.snapshot['stats']['average_ms'] = elapsed
 
 def until(page, predicate):
     for _ in range(100):
@@ -88,40 +92,47 @@ def main():
                 page.goto(f"http://127.0.0.1:{server.server_port}/admin/news-test")
                 if page.get_by_role("button", name="확인했어요", exact=True).count():
                     page.get_by_role("button", name="확인했어요", exact=True).click()
-                expect(page.get_by_role("button", name="테스트 시작", exact=True)).to_be_enabled()
-                page.get_by_role("button", name="테스트 시작", exact=True).click()
-                until(page, lambda: len(fixture.pending) == 1)
+                expect(page.get_by_role("button", name="테스트 시작", exact=True)).to_have_count(0)
+                # Sidebar entry is shared by desktop and mobile, with active styling.
+                if width < 768:
+                    page.get_by_role("button", name="페이지 메뉴 열기").click()
+                    nav = page.locator("#site-mobile-navigation")
+                else:
+                    nav = page.locator(".site-sidebar")
+                menu = nav.get_by_role("link", name="뉴스 판단 테스트", exact=True)
+                expect(menu).to_be_visible()
+                expect(menu).to_have_attribute("aria-current", "page")
+                menu.click()
+                if width < 768:
+                    expect(nav).to_have_attribute("aria-hidden", "true")
+                # Server starts work while the browser merely observes.
+                fixture.processing(0)
                 expect(page.locator(".st-verdict strong")).to_have_text("판단 중")
                 first_clock = page.locator(".st-timing strong").inner_text()
                 page.wait_for_timeout(150)
                 assert page.locator(".st-timing strong").inner_text() != first_clock
+                until(page, lambda: fixture.unchanged > 0)
                 fixture.finish()
                 expect(page.locator(".st-verdict strong")).to_have_text("호재")
                 expect(page.locator(".st-timing strong")).to_contain_text("1.23")
-                until(page, lambda: len(fixture.pending) == 1)
+                fixture.processing(1)
                 expect(page.locator(".st-history li")).to_have_count(1)
                 fixture.finish("bearish", 2456)
                 expect(page.locator(".st-verdict strong")).to_have_text("악재")
-                page.get_by_role("button", name="중지", exact=True).click()
-                assert len(fixture.calls) == 2
                 assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth"), f"overflow: {width}"
                 page.screenshot(path=str(OUTPUT / f"news-test-{width}-{theme}.png"), full_page=True)
                 page.locator(".st-history li button").click()
                 expect(page.locator(".st-verdict strong")).to_have_text("호재")
                 page.get_by_role("button", name="현재 뉴스로 돌아가기").click()
                 expect(page.locator(".st-verdict strong")).to_have_text("악재")
-                # New feed arrival and a model error must not fabricate a result.
-                fixture.fail = True
-                page.get_by_role("button", name="다시 시작", exact=True).click()
-                expect(page.locator(".st-error")).to_contain_text("모델 응답")
-                expect(page.locator(".st-verdict strong")).to_have_text("판단 대기")
-                assert len(fixture.calls) == 3
-                page.get_by_role("button", name="기록 초기화").click()
-                expect(page.locator(".st-history li")).to_have_count(0)
-                fixture.offline = True
-                page.get_by_role("button", name="테스트 시작", exact=True).click()
-                expect(page.locator(".st-error")).to_contain_text("연결할 수 없어요")
-                assert len(fixture.calls) == 3
+                # Reload preserves server results; no start request is sent.
+                page.reload()
+                expect(page.locator(".st-verdict strong")).to_have_text("악재")
+                expect(page.locator(".st-history li")).to_have_count(1)
+                fixture.snapshot['enabled'] = False
+                fixture.snapshot['detail'] = '자동 판단 서버 연결이 필요해요.'
+                expect(page.locator(".st-error")).to_contain_text("서버 연결")
+                assert fixture.reads > 2
                 assert not errors, errors
                 assert not fixture.unexpected, fixture.unexpected
                 checks.append({"width": width, "theme": theme, "passed": True})

@@ -60,6 +60,7 @@ from . import kimchi as kimchi_mod
 from . import news as news_mod
 from . import public_news as public_news_mod
 from .news_sentiment_test import router as news_sentiment_test_router
+from . import news_sentiment
 from . import board as board_mod
 from . import leaderboard as leaderboard_mod
 from . import leaderboard_runtime
@@ -131,6 +132,7 @@ async def lifespan(app: FastAPI):
     public_news_mod.start()
     position_news_runtime.start()
     whale_activity_runtime.start()
+    news_sentiment.start()
     try:
         yield
     finally:
@@ -138,6 +140,7 @@ async def lifespan(app: FastAPI):
         stopped = await asyncio.gather(
             leaderboard_runtime.stop(), public_news_mod.stop(),
             whale_activity_runtime.stop(), position_news_runtime.stop(),
+            news_sentiment.stop(),
             return_exceptions=True,
         )
         for result in stopped:

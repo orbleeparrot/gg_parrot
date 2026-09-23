@@ -234,7 +234,7 @@ def test_status_and_consent_flow(_fake_backtest):
                   "extra_price": 30, "extra_left_today": 5, "points_balance": 1000}
 
     # 동의 전엔 세션이 있든 없든(여기선 없는 session_id) 종목 선택 자체가 막힌다 — consented() 가 먼저 걸린다.
-    res = client.post("/api/ask", json={"session_id": 1, "symbol": "BTCUSDT"}, headers=_auth(token))
+    res = client.post("/api/ask/macros", json={"session_id": 1, "symbol": "BTCUSDT"}, headers=_auth(token))
     assert res.status_code == 403
 
     ok = client.post("/api/ask/consent", headers=_auth(token)).json()
@@ -252,7 +252,7 @@ def test_ask_returns_top3_distinct_types_and_records(_fake_backtest, monkeypatch
     client.post("/api/ask/consent", headers=_auth(token))
     flow = client.post("/api/ask/candidates", json=_candidates_body(), headers=_auth(token)).json()
 
-    res = client.post("/api/ask", json={"session_id": flow["session_id"], "symbol": "BTCUSDT"},
+    res = client.post("/api/ask/macros", json={"session_id": flow["session_id"], "symbol": "BTCUSDT"},
                       headers=_auth(token))
     assert res.status_code == 200, res.text
     data = res.json()
@@ -304,7 +304,7 @@ def test_ask_with_no_candidates_returns_empty_results(_fake_backtest, monkeypatc
         raise RuntimeError("no data")
 
     monkeypatch.setattr("app.main._run_any", boom)
-    data = client.post("/api/ask", json={"session_id": flow["session_id"], "symbol": "BTCUSDT"},
+    data = client.post("/api/ask/macros", json={"session_id": flow["session_id"], "symbol": "BTCUSDT"},
                        headers=_auth(token)).json()
     assert data["results"] == [] and data["remaining_today"] == 4
 
@@ -317,7 +317,7 @@ def test_in_flight_guard_rejects_concurrent_ask(_fake_backtest, monkeypatch):
     flow = client.post("/api/ask/candidates", json=_candidates_body(), headers=_auth(token)).json()
     ask._IN_FLIGHT.add(user_id)
     try:
-        res = client.post("/api/ask", json={"session_id": flow["session_id"], "symbol": "BTCUSDT"},
+        res = client.post("/api/ask/macros", json={"session_id": flow["session_id"], "symbol": "BTCUSDT"},
                           headers=_auth(token))
         assert res.status_code == 429
         assert "돌리는 중" in res.json()["detail"]
@@ -338,7 +338,7 @@ def test_failed_ask_does_not_consume_session_budget(_fake_backtest, monkeypatch)
         raise ask.NoSpotDataError("no data")
 
     monkeypatch.setattr("app.main._run_any", boom)
-    res = client.post("/api/ask", json={"session_id": flow["session_id"], "symbol": "BTCUSDT"},
+    res = client.post("/api/ask/macros", json={"session_id": flow["session_id"], "symbol": "BTCUSDT"},
                       headers=_auth(token))
     assert res.status_code == 422
 
@@ -390,7 +390,7 @@ def test_scalper_ask_end_to_end(_fake_backtest, monkeypatch):
     flow = client.post("/api/ask/candidates",
                        json=_candidates_body(risk_profile="scalper", invest_horizon="days", watch_frequency="often"),
                        headers=_auth(token)).json()
-    res = client.post("/api/ask", json={"session_id": flow["session_id"], "symbol": "BTCUSDT"},
+    res = client.post("/api/ask/macros", json={"session_id": flow["session_id"], "symbol": "BTCUSDT"},
                       headers=_auth(token))
     assert res.status_code == 200, res.text
     data = res.json()
@@ -414,7 +414,7 @@ def test_scalper_ask_returns_short_macros_when_trades_suffice(_fake_backtest, mo
     flow = client.post("/api/ask/candidates",
                        json=_candidates_body(risk_profile="scalper", invest_horizon="days", watch_frequency="often"),
                        headers=_auth(token)).json()
-    res = client.post("/api/ask", json={"session_id": flow["session_id"], "symbol": "BTCUSDT"},
+    res = client.post("/api/ask/macros", json={"session_id": flow["session_id"], "symbol": "BTCUSDT"},
                       headers=_auth(token))
     assert res.status_code == 200, res.text
     data = res.json()
@@ -670,7 +670,7 @@ def test_choosing_symbol_does_not_consume_a_use(monkeypatch):
     flow = _start_flow(tok, monkeypatch)
     before = client.get("/api/ask/status", headers=_auth(tok)).json()["remaining_today"]
     symbol = flow["candidates"][0]["symbol"]
-    r = client.post("/api/ask", json={"session_id": flow["session_id"], "symbol": symbol},
+    r = client.post("/api/ask/macros", json={"session_id": flow["session_id"], "symbol": symbol},
                     headers=_auth(tok))
     assert r.status_code in (200, 422)  # 시세가 없으면 422 — 차감 여부만 본다
     after = client.get("/api/ask/status", headers=_auth(tok)).json()["remaining_today"]
@@ -680,7 +680,7 @@ def test_choosing_symbol_does_not_consume_a_use(monkeypatch):
 def test_symbol_outside_candidates_and_manual_list_is_rejected(monkeypatch):
     tok, _ = _signup()
     flow = _start_flow(tok, monkeypatch)
-    r = client.post("/api/ask", json={"session_id": flow["session_id"], "symbol": "SCAMUSDT"},
+    r = client.post("/api/ask/macros", json={"session_id": flow["session_id"], "symbol": "SCAMUSDT"},
                     headers=_auth(tok))
     assert r.status_code == 422
 
@@ -688,7 +688,7 @@ def test_symbol_outside_candidates_and_manual_list_is_rejected(monkeypatch):
 def test_manual_symbol_is_allowed(monkeypatch):
     tok, _ = _signup()
     flow = _start_flow(tok, monkeypatch)
-    r = client.post("/api/ask", json={"session_id": flow["session_id"], "symbol": "BTCUSDT"},
+    r = client.post("/api/ask/macros", json={"session_id": flow["session_id"], "symbol": "BTCUSDT"},
                     headers=_auth(tok))
     assert r.status_code != 422 or "찾지 못" in r.text  # 목록 거부(422)는 아니어야 한다
 
@@ -701,7 +701,7 @@ def test_expired_session_is_rejected(monkeypatch):
         row.expires_ms = 1
         db.add(row)
         db.commit()
-    r = client.post("/api/ask", json={"session_id": flow["session_id"], "symbol": "BTCUSDT"},
+    r = client.post("/api/ask/macros", json={"session_id": flow["session_id"], "symbol": "BTCUSDT"},
                     headers=_auth(tok))
     assert r.status_code == 410
 
@@ -714,7 +714,7 @@ def test_session_call_budget_is_enforced(monkeypatch):
         row.ask_count = ask.MAX_ASKS_PER_SESSION
         db.add(row)
         db.commit()
-    r = client.post("/api/ask", json={"session_id": flow["session_id"], "symbol": "BTCUSDT"},
+    r = client.post("/api/ask/macros", json={"session_id": flow["session_id"], "symbol": "BTCUSDT"},
                     headers=_auth(tok))
     assert r.status_code == 409
 
@@ -724,7 +724,7 @@ def test_other_users_session_is_not_readable(monkeypatch):
     flow = _start_flow(tok_a, monkeypatch)
     tok_b, _ = _signup()
     _consent(tok_b)
-    r = client.post("/api/ask", json={"session_id": flow["session_id"], "symbol": "BTCUSDT"},
+    r = client.post("/api/ask/macros", json={"session_id": flow["session_id"], "symbol": "BTCUSDT"},
                     headers=_auth(tok_b))
     assert r.status_code == 404
 
@@ -732,7 +732,7 @@ def test_other_users_session_is_not_readable(monkeypatch):
 def test_old_request_shape_gets_refresh_hint(monkeypatch):
     tok, _ = _signup()
     _consent(tok)
-    r = client.post("/api/ask", json={"risk_profile": "balanced", "market": "spot",
+    r = client.post("/api/ask/macros", json={"risk_profile": "balanced", "market": "spot",
                                       "leverage": 1, "symbols": ["BTCUSDT"],
                                       "period_preset": "6m", "interval": "4h"},
                     headers=_auth(tok))

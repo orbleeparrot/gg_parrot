@@ -2,7 +2,6 @@ import { useEffect, useRef } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { DownloadIcon, HelpIcon, KeyIcon } from "./utilityIcons.jsx";
 import { lockBodyScroll } from "../lib/bodyScrollLock.js";
-import { useAuth } from "../lib/auth.js";
 
 const NAV_LINKS = [
   { to: "/agents", label: "내 에이전트", icon: "agent", matches: ["/agents"] },
@@ -12,7 +11,6 @@ const NAV_LINKS = [
   { to: "/board", label: "게시판", icon: "board", matches: ["/board"] },
   // 준비 중인 페이지 — 링크가 아니라 자리만 잡는다(배지 `업데이트 예정`, 비활성). 열리면 to 를 살리고 soon 을 뗀다.
   { to: "/bots", label: "자동 매매 봇", icon: "agent", matches: ["/bots"], soon: true, soonLabel: "업데이트 예정" },
-  { to: "/admin/news-test", label: "뉴스 판단 테스트", icon: "news", end: true, adminOnly: true, badge: "BETA" },
 ];
 
 const NAV_ICON_SOURCES = {
@@ -86,10 +84,9 @@ function pathIsActive(pathname, link) {
 }
 
 function NavigationList({ pathname, onNavigate, tabIndex }) {
-  const { user } = useAuth();
   return (
     <div className="site-side-list">
-      {NAV_LINKS.filter((link) => !link.adminOnly || user?.is_admin).map((link) => {
+      {NAV_LINKS.map((link) => {
         const active = pathIsActive(pathname, link);
         if (link.soon) {
           return (
@@ -110,16 +107,10 @@ function NavigationList({ pathname, onNavigate, tabIndex }) {
             onClick={onNavigate}
             tabIndex={tabIndex}
             aria-current={active ? "page" : undefined}
-            aria-label={link.badge ? link.label : undefined}
             className={`site-side-link ${active ? "is-active" : ""}`}
           >
             <span className="site-side-icon" aria-hidden="true"><NavIcon name={link.icon} /></span>
-            {link.badge ? (
-              <span className="site-side-label-row">
-                <span className="site-side-label">{link.label}</span>
-                <span className="site-side-badge is-beta">{link.badge}</span>
-              </span>
-            ) : <span className="site-side-label">{link.label}</span>}
+            <span className="site-side-label">{link.label}</span>
           </NavLink>
         );
       })}

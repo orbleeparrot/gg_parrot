@@ -1104,7 +1104,7 @@ EOF
 ### Task 7: `run_ask` 를 세션 기반으로 바꾸기 (차감 없음·6회 상한·30분 만료)
 
 **Files:**
-- Modify: `backend/app/ask.py` — `AskRequest`, `run_ask` · `backend/app/main.py` — `/api/ask`
+- Modify: `backend/app/ask.py` — `AskRequest`, `run_ask` · `backend/app/main.py` — `/api/ask/macros`
 - Test: `backend/tests/test_ask.py`
 
 **Interfaces:**
@@ -1112,7 +1112,7 @@ EOF
 - Produces:
   - `ask.AskRequest`: `session_id: int`, `symbol: str`
   - `ask.run_ask(db, user, req, run_backtest) -> dict` — 반환에 `remaining_today` 포함, 차감 없음
-  - 갱신된 `POST /api/ask` — `session_id` 없는 옛 요청에 새로고침 안내(422)
+  - 갱신된 `POST /api/ask/macros` — `session_id` 없는 옛 요청에 새로고침 안내(422)
 
 - [ ] **Step 1: 실패하는 테스트를 쓴다**
 
@@ -1330,14 +1330,14 @@ def run_ask(db: Session, user: User, req: AskRequest,
 
 `_Plan` 은 `req.symbols`/`req.period_preset`/`req.interval`/`req.risk_profile`/`req.market`/`req.leverage` 만 읽히므로 기존 `build_templates`·`_make_macro`·`_allowed_types`·`_presets_for`·`propose_with_ai`·`_label` 은 **그대로 둔다** (타입 힌트만 `AskRequest` → `_Plan` 으로 바꾼다).
 
-- [ ] **Step 4: `/api/ask` 라우트를 새 요청 모양에 맞춘다**
+- [ ] **Step 4: `/api/ask/macros` 라우트를 새 요청 모양에 맞춘다**
 
 `run_ask` 의 요청 모양이 바뀌었으므로 라우트도 이 태스크에서 같이 고친다. 옛 번들이 보내는 요청(`symbols` 가 있고 `session_id` 가 없음)은 pydantic 검증 전에 걸러야 안내 문구를 줄 수 있으므로, 원본 본문을 받아 판별한다.
 
-`backend/app/main.py` 의 기존 `@app.post("/api/ask")` 핸들러를 바꾼다.
+`backend/app/main.py` 의 기존 `@app.post("/api/ask/macros")` 핸들러를 바꾼다(경로는 그대로 둔다).
 
 ```python
-@app.post("/api/ask")
+@app.post("/api/ask/macros")
 def ask_route(body: dict, user: User = Depends(auth_mod.current_user)) -> dict:
     if "session_id" not in body:
         # 옛 번들이 캐시에 남아 있을 때 — 배포 직후 한 번 겪는다.
@@ -1789,7 +1789,7 @@ EOF
 
 **Interfaces:**
 - Consumes: `askFlow` 액션 (Task 8), `/api/ask/candidates` (Task 6)
-- Produces: `api.askCandidates(body)`, `api.ask(body)` (기존 이름 유지, 본문만 바뀜)
+- Produces: `api.askCandidates(body)`, `api.askMacros(body)` (기존 이름·경로 유지, 본문만 바뀜)
 
 - [ ] **Step 1: API 함수를 더한다**
 
@@ -1799,7 +1799,7 @@ EOF
   askCandidates: (body) => post("/api/ask/candidates", body),
 ```
 
-기존 `ask` 는 그대로 두고 호출부에서 새 본문(`{ session_id, symbol }`)을 넘긴다.
+기존 `askMacros`(경로 `/api/ask/macros`)는 그대로 두고 호출부에서 새 본문(`{ session_id, symbol }`)을 넘긴다.
 
 - [ ] **Step 2: 대화 흐름을 새 액션에 맞춘다**
 
@@ -1834,7 +1834,7 @@ EOF
     dispatch({ type: "chooseSymbol", symbol });
     dispatch({ type: "loadingResults" });
     try {
-      const data = await api.ask({ session_id: next.session.id, symbol: next.answers.symbol });
+      const data = await api.askMacros({ session_id: next.session.id, symbol: next.answers.symbol });
       dispatch({ type: "results", results: data.results, remaining: data.remaining_today });
     } catch (e) {
       dispatch({ type: "error", message: e.message });

@@ -1,0 +1,20 @@
+{
+  "data": "synthetic fixtures, not real inference",
+  "checks": [
+    {
+      "width": 1440,
+      "theme": "dark",
+      "passed": true
+    },
+    {
+      "width": 390,
+      "theme": "dark",
+      "passed": true
+    },
+    {
+      "width": 320,
+      "theme": "light",
+      "passed": true
+    }
+  ]
+}

@@ -28,6 +28,7 @@ const RunnerInstall = lazy(() => import("./pages/RunnerInstall.jsx"));
 const Guide = lazy(() => import("./pages/Guide.jsx"));
 const Support = lazy(() => import("./pages/Support.jsx"));
 const AdminDashboard = lazy(() => import("./pages/AdminDashboard.jsx"));
+const NewsSentimentTest = lazy(() => import("./pages/NewsSentimentTest.jsx"));
 
 function RouteChangeEffects() {
   const { pathname } = useLocation();
@@ -60,6 +61,8 @@ function RouteChangeEffects() {
       ? "빠른 실행"
       : pathname.startsWith("/login")
       ? "로그인"
+      : pathname === "/admin/news-test"
+      ? "뉴스 판단 테스트"
       : pathname.startsWith("/admin")
       ? "관리자 대시보드"
       : "껄무새";
@@ -194,6 +197,7 @@ export default function App() {
               <Route path="/guide" element={<Guide />} />
               <Route path="/support" element={<Support />} />
               <Route path="/admin" element={<AdminDashboard />} />
+              <Route path="/admin/news-test" element={<NewsSentimentTest />} />
               <Route path="/news" element={<News />} />
               <Route path="/board" element={<Board />} />
               <Route path="/board/write" element={<BoardWrite />} />

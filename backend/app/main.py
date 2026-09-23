@@ -59,6 +59,7 @@ from . import http_runtime as http_runtime_mod
 from . import kimchi as kimchi_mod
 from . import news as news_mod
 from . import public_news as public_news_mod
+from .news_sentiment_test import router as news_sentiment_test_router
 from . import board as board_mod
 from . import leaderboard as leaderboard_mod
 from . import leaderboard_runtime
@@ -167,6 +168,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Coin Macro Backtest & Share (Simulation only)", lifespan=lifespan)
 app.include_router(position_news_router)
 app.include_router(observability_router)
+app.include_router(news_sentiment_test_router)
 
 # Schema initialization belongs to lifespan, before serving requests. Importing
 # route definitions must not run DDL against a database used by live macros.

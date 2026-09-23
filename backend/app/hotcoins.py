@@ -72,13 +72,22 @@ def _is_leverage_token(base: str) -> bool:
 
 
 def ticker_range_pct(t: dict) -> float:
-    """하루 변동폭(%) — 한쪽 꼬리 한 번에 휘둘리지 않게 '대칭 반폭' 으로 잰다.
+    """하루 변동폭(%) — '대칭 반폭' 과 '하루 등락' 중 큰 값.
 
-    ``2 × min(고가-가중평균, 가중평균-저가) / 가중평균 × 100``.
-    저가가 한 번만 크게 튀어나온 티커(스테이블에서 흔하다)는 좁은 쪽 반폭이 거의 0 이라
-    값이 0 에 가깝게 나오고, 실제로 오르내린 코인은 두 반폭이 비슷해 값이 거의 줄지 않는다.
-    가중평균이 없거나 고가/저가 밖에 있는 응답은 예전처럼 고가/저가 원본으로 잰다.
-    값이 없거나 이상하면 0.0 — 같은 티커 응답만 쓴다.
+    두 측정을 같이 쓴다. 어느 한쪽만으로는 아래 두 가지를 동시에 못 가린다.
+
+    * 대칭 반폭 ``2 × min(고가-가중평균, 가중평균-저가) / 가중평균 × 100``
+      — 값이 하루 종일 한자리에 붙어 있었는데 저가만 한 번 튀어나온 티커(스테이블에서 흔하다)를
+      걸러낸다. 좁은 쪽 반폭이 거의 0 이기 때문이다.
+      그런데 **한쪽으로만 쭉 간 날**(갭 상승 뒤 고가 부근에서 마감)도 좁은 쪽 반폭이 작아
+      이 값만 쓰면 하루 30% 오른 코인이 0.8% 로 나온다.
+    * 하루 등락 ``|priceChangePercent|`` — 한쪽으로 간 날에는 크고, 붙어 있던 페그의
+      일회성 꼬리에는 0 에 가깝다. 딱 반폭이 못 보는 자리를 메운다.
+
+    그래서 둘 중 큰 값을 쓴다. 하루에 실제로 움직인 폭은 적어도 순매수·순매도만큼은 되므로
+    등락률은 하한으로서 타당하고, 반폭은 꼬리를 뺀 '몸통' 폭이라 그보다 클 때만 이긴다.
+    가중평균이 없거나 고가/저가 밖에 있는 응답은 예전처럼 고가/저가 원본을 몸통으로 쓴다.
+    고가/저가가 없거나 이상하면 0.0 — 같은 티커 응답만 쓴다.
     """
     try:
         high = float(t["highPrice"])
@@ -92,9 +101,14 @@ def ticker_range_pct(t: dict) -> float:
     except (KeyError, ValueError, TypeError):
         weighted = 0.0
     if weighted <= 0 or not (low <= weighted <= high):
-        return round((high - low) / low * 100.0, 2)
-    half = min(high - weighted, weighted - low)
-    return round(2.0 * half / weighted * 100.0, 2)
+        body = (high - low) / low * 100.0
+    else:
+        body = 2.0 * min(high - weighted, weighted - low) / weighted * 100.0
+    try:
+        change = abs(float(t["priceChangePercent"]))
+    except (KeyError, ValueError, TypeError):
+        change = 0.0
+    return round(max(body, change), 2)
 
 
 def select_hot_coins(

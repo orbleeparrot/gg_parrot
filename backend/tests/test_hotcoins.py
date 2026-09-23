@@ -170,3 +170,40 @@ def test_range_pct_ignores_a_single_wick_but_keeps_a_real_move():
     # 실제로 오르내린 코인은 두 반폭이 비슷해 값이 거의 줄지 않는다.
     real = _t3("DOGEUSDT", 8.0, 0.22, 5e8, 0.23, 0.19, 0.21)
     assert hc.ticker_range_pct(real) > 15.0
+
+
+# 대칭 반폭만 쓰면 '한쪽으로만 간 날'도 반폭이 작아 0 에 가깝게 나온다 — 하루 등락을 하한으로
+# 같이 본다. 네 가지 모양을 한자리에 못 박는다.
+def _one_sided_pump():
+    """갭 상승 뒤 고가 부근에서 마감 — 가중평균이 고가에 붙어 있어 좁은 쪽 반폭이 거의 0 이다."""
+    return _t3("PUMPUSDT", 30, 1.29, 5e8, 1.30, 1.00, 1.295)
+
+
+def _one_sided_dump():
+    """반대 모양 — 급락해 저가 부근에서 마감."""
+    return _t3("DUMPUSDT", -28, 1.005, 5e8, 1.30, 1.00, 1.005)
+
+
+def test_range_pct_of_a_one_sided_pump_is_large():
+    assert hc.ticker_range_pct(_one_sided_pump()) >= 28.0
+
+
+def test_range_pct_of_a_one_sided_dump_is_large():
+    assert hc.ticker_range_pct(_one_sided_dump()) >= 25.0
+
+
+def test_range_pct_of_a_wick_stays_small_and_the_coin_is_dropped():
+    assert hc.ticker_range_pct(_usde()) < 1.0
+    assert hc.select_hot_coins([_usde()], limit=10, min_quote_volume=10_000_000,
+                               candidate_pool=100) == []
+
+
+def test_range_pct_of_a_two_sided_mover_does_not_collapse():
+    real = _t3("DOGEUSDT", 8.0, 0.22, 5e8, 0.23, 0.19, 0.21)
+    assert hc.ticker_range_pct(real) > 15.0
+
+
+def test_a_one_sided_pump_never_looks_calmer_than_a_calm_coin():
+    calm = _t3("CALMUSDT", 0.4, 100, 5e8, 101.5, 98.5, 100.0)
+    assert hc.ticker_range_pct(_one_sided_pump()) > hc.ticker_range_pct(calm)
+    assert hc.ticker_range_pct(_one_sided_dump()) > hc.ticker_range_pct(calm)

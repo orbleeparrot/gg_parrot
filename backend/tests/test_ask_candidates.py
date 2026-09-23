@@ -267,3 +267,19 @@ def test_rule_only_candidates_do_not_all_share_one_sentence():
     picks, ai_used = ac.choose(pool, profile="balanced", horizon="weeks", watch="sometimes")
     assert ai_used is False
     assert len({p["reason"] for p in picks}) > 1
+
+
+def test_stable_profile_never_ranks_a_one_sided_pump_ahead_of_a_calm_coin():
+    # 안정형은 range_pct 오름차순이라, 한쪽으로만 쭉 간 날의 코인이 '가장 잔잔한' 자리에
+    # 올라오면 가장 위험을 피하려는 사람에게 그날의 최대 급등주를 첫 카드로 내미는 셈이 된다.
+    def full(symbol, change, high, low, weighted, qvol):
+        return {"symbol": symbol, "priceChangePercent": str(change), "lastPrice": str(weighted),
+                "quoteVolume": str(qvol), "highPrice": str(high), "lowPrice": str(low),
+                "weightedAvgPrice": str(weighted)}
+
+    pump = full("PUMPUSDT", 30, 1.30, 1.00, 1.295, 900_000_000)      # 고가 부근에서 마감
+    calm = full("QUIETUSDT", 0.4, 101.5, 98.5, 100.0, 800_000_000)   # 진짜로 잔잔한 코인
+    pool = ac.build_pool([pump, calm], profile="stable", size=10)
+    assert [c["symbol"] for c in pool][0] == "QUIETUSDT"
+    ranked = {c["symbol"]: c["range_pct"] for c in pool}
+    assert ranked["PUMPUSDT"] > ranked["QUIETUSDT"]

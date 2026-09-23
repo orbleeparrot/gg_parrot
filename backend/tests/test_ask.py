@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from sqlmodel import select
 
 from app import ask
+from app import ask_candidates as ac
 from app.data.binance import MAX_BACKTEST_BARS, PERIOD_PRESET_DAYS, _expected_bar_count
 from app.db import AskMacroSession, PointLedger, User, get_session
 from app.engine import BacktestResult
@@ -229,14 +230,14 @@ _BODY = {"risk_profile": "balanced", "market": "spot", "leverage": 1,
 def test_status_and_consent_flow(_fake_backtest):
     token, _ = _signup()
     st = client.get("/api/ask/status", headers=_auth(token)).json()
-    assert st == {"consented": False, "remaining_today": 5, "daily_limit": 5, "disclaimer_version": "ask-v1",
+    assert st == {"consented": False, "remaining_today": 5, "daily_limit": 5, "disclaimer_version": "ask-v2",
                   "extra_price": 30, "extra_left_today": 5, "points_balance": 1000}
 
     res = client.post("/api/ask/macros", json=_BODY, headers=_auth(token))
     assert res.status_code == 403
 
     ok = client.post("/api/ask/consent", headers=_auth(token)).json()
-    assert ok == {"ok": True, "version": "ask-v1"}
+    assert ok == {"ok": True, "version": "ask-v2"}
     assert client.get("/api/ask/status", headers=_auth(token)).json()["consented"] is True
     assert client.get("/api/ask/status").status_code == 401
 
@@ -254,7 +255,7 @@ def test_macros_returns_top3_distinct_types_and_records(_fake_backtest):
     assert first["macro"]["symbol"] == "BTCUSDT" and first["macro"]["rule_type"] == "J"
     assert first["explanation"]["headline"] and first["ai_generated"] is False
     assert "추천" not in json.dumps(data, ensure_ascii=False)
-    assert data["disclaimer"] == ask.DISCLAIMER and data["disclaimer_version"] == "ask-v1"
+    assert data["disclaimer"] == ask.DISCLAIMER and data["disclaimer_version"] == "ask-v2"
     assert data["remaining_today"] == 4 and data["ai_used"] is False and data["candidate_count"] > 3
 
     with get_session() as db:
@@ -535,3 +536,97 @@ def test_scalper_watch_maps_to_short_intervals():
     # 1분 봉은 구간이 1주일 때만 — 아니면 5분으로 낮춘다
     assert ask.to_interval("scalper", "often", "1w") == "1m"
     assert ask.to_interval("scalper", "often", "1m") == "5m"
+
+
+def _consent(tok):
+    client.post("/api/ask/consent", headers=_auth(tok))
+
+
+def _candidates_body(**over):
+    body = {"risk_profile": "balanced", "market": "spot", "leverage": 1,
+            "invest_horizon": "weeks", "watch_frequency": "sometimes"}
+    body.update(over)
+    return body
+
+
+def _fake_tickers():
+    def t(symbol, qvol, high, low):
+        return {"symbol": symbol, "priceChangePercent": "1.0", "lastPrice": str(low),
+                "quoteVolume": str(qvol), "highPrice": str(high), "lowPrice": str(low)}
+    return [t("AAAUSDT", 900_000_000, 101, 100), t("BBBUSDT", 800_000_000, 105, 100),
+            t("CCCUSDT", 700_000_000, 120, 100), t("DDDUSDT", 600_000_000, 110, 100)]
+
+
+def test_candidates_consume_exactly_one_use(monkeypatch):
+    monkeypatch.setattr(ask.hotcoins, "get_cached_tickers", lambda: _fake_tickers())
+    monkeypatch.setattr(ask, "_candidate_ai", lambda: None)  # AI 없이 규칙 폴백
+    tok, user_id = _signup()
+    _consent(tok)
+    before = client.get("/api/ask/status", headers=_auth(tok)).json()["remaining_today"]
+    body = client.post("/api/ask/candidates", json=_candidates_body(), headers=_auth(tok))
+    assert body.status_code == 200, body.text
+    data = body.json()
+    assert data["session_id"]
+    assert ac.MIN_PICKS <= len(data["candidates"]) <= ac.MAX_PICKS
+    assert all(c["reason"] for c in data["candidates"])
+    after = client.get("/api/ask/status", headers=_auth(tok)).json()["remaining_today"]
+    assert after == before - 1
+
+
+def test_candidates_survive_ai_failure(monkeypatch):
+    monkeypatch.setattr(ask.hotcoins, "get_cached_tickers", lambda: _fake_tickers())
+
+    def boom():
+        def ask_ai(prompt):
+            raise RuntimeError("gemini down")
+        return ask_ai
+
+    monkeypatch.setattr(ask, "_candidate_ai", boom)
+    tok, _ = _signup()
+    _consent(tok)
+    r = client.post("/api/ask/candidates", json=_candidates_body(), headers=_auth(tok))
+    assert r.status_code == 200
+    assert len(r.json()["candidates"]) >= 3
+
+
+def test_candidates_record_pool_and_expiry(monkeypatch):
+    monkeypatch.setattr(ask.hotcoins, "get_cached_tickers", lambda: _fake_tickers())
+    monkeypatch.setattr(ask, "_candidate_ai", lambda: None)
+    tok, user_id = _signup()
+    _consent(tok)
+    sid = client.post("/api/ask/candidates", json=_candidates_body(),
+                      headers=_auth(tok)).json()["session_id"]
+    with get_session() as db:
+        row = db.get(AskMacroSession, sid)
+        assert row.disclaimer_version == "ask-v2"
+        assert json.loads(row.candidates_json)
+        assert row.expires_ms > row.created_ms
+        assert row.ask_count == 0
+
+
+def test_candidates_need_consent():
+    tok, _ = _signup()
+    r = client.post("/api/ask/candidates", json=_candidates_body(), headers=_auth(tok))
+    assert r.status_code == 403
+
+
+def test_candidates_reject_futures_for_stable_profile(monkeypatch):
+    monkeypatch.setattr(ask.hotcoins, "get_cached_tickers", lambda: _fake_tickers())
+    monkeypatch.setattr(ask, "_candidate_ai", lambda: None)
+    tok, _ = _signup()
+    _consent(tok)
+    r = client.post("/api/ask/candidates",
+                    json=_candidates_body(risk_profile="stable", market="futures", leverage=2),
+                    headers=_auth(tok))
+    assert r.status_code == 422
+
+
+def test_candidates_refund_when_source_is_down(monkeypatch):
+    monkeypatch.setattr(ask.hotcoins, "get_cached_tickers", lambda: None)
+    tok, _ = _signup()
+    _consent(tok)
+    before = client.get("/api/ask/status", headers=_auth(tok)).json()["remaining_today"]
+    r = client.post("/api/ask/candidates", json=_candidates_body(), headers=_auth(tok))
+    assert r.status_code == 503
+    after = client.get("/api/ask/status", headers=_auth(tok)).json()["remaining_today"]
+    assert after == before

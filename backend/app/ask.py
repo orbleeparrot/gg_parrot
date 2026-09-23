@@ -23,6 +23,8 @@ from sqlmodel import Session, select
 
 from .ai_runtime import ai_available, ai_cache_key, default_model, get_ai_client, get_ai_runtime
 from .data import NoSpotDataError
+from . import ask_candidates, hotcoins
+from .ask_candidates import MAX_PICKS, MIN_PICKS
 from . import points as points_mod
 from .db import AskExtraCredit, AskMacroSession, User
 from .engine.backtest import BacktestResult
@@ -30,12 +32,15 @@ from .engine.explain import explain_result
 from .engine.schema import Macro
 from .quests import today_kst
 
-DISCLAIMER_VERSION = "ask-v1"
+DISCLAIMER_VERSION = "ask-v2"
 DISCLAIMER = "AI 가 과거 데이터로 고른 후보예요 · 투자 권유가 아니에요 · 과거 성과는 미래 수익을 보장하지 않아요"
 MAX_CANDIDATES = 24
 TOP_N = 3
 MIN_TRADES = 3
 CAPITAL = 1_000_000
+SESSION_TTL_MS = 30 * 60 * 1000
+MAX_ASKS_PER_SESSION = 6
+MANUAL_SYMBOLS = ("BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT")
 
 RiskProfile = Literal["stable", "balanced", "aggressive", "scalper"]
 
@@ -125,6 +130,22 @@ class AskRequest(BaseModel):
                 raise ValueError("1분 봉은 최근 1주까지만 살펴봐요")
         elif self.interval not in LONG_INTERVALS or self.period_preset not in LONG_PERIODS:
             raise ValueError("이 성향은 1시간·4시간·하루 봉으로 최근 3개월 이상을 살펴봐요")
+        return self
+
+
+class CandidatesRequest(BaseModel):
+    risk_profile: RiskProfile
+    market: Literal["spot", "futures"]
+    leverage: int = Field(default=1, ge=1, le=3)
+    invest_horizon: Literal["days", "weeks", "months", "long"]
+    watch_frequency: Literal["rarely", "sometimes", "often"]
+
+    @model_validator(mode="after")
+    def _profile_rules(self) -> "CandidatesRequest":
+        if self.market == "futures" and not PROFILES[self.risk_profile]["futures"]:
+            raise ValueError(f"{PROFILES[self.risk_profile]['label']}은 현물만 살펴봐요")
+        if self.market == "spot" and self.leverage != 1:
+            raise ValueError("현물은 레버리지를 쓰지 않아요")
         return self
 
 
@@ -407,6 +428,45 @@ def propose_with_ai(req: AskRequest) -> list[Candidate]:
     return out
 
 
+_CANDIDATE_PROMPT_VERSION = "ask-cand-v1"
+_CANDIDATE_SYSTEM = (
+    "너는 주어진 목록 안에서만 종목 후보를 고르는 도우미다. "
+    "목록에 없는 종목은 절대 쓰지 마라. 가격이나 수익률을 예측하지 마라. "
+    "JSON 배열만 출력해라."
+)
+
+
+def _candidate_ai() -> Optional[Callable[[str], str]]:
+    """후보 선별에 쓸 AI 호출자. 쓸 수 없으면 None(규칙 폴백).
+
+    기존 ``propose_with_ai`` 와 같은 경로를 쓴다 — 클라이언트는 messages.create,
+    호출은 ``get_ai_runtime().call`` 로 감싸 캐시·재시도 정책을 공유한다.
+    """
+    if not ai_available():
+        return None
+
+    def ask_ai(prompt: str) -> str:
+        key = ai_cache_key("ask-candidates", _CANDIDATE_PROMPT_VERSION, _AI_MODEL,
+                           {"system": _CANDIDATE_SYSTEM, "prompt": prompt,
+                            "max_tokens": _AI_MAX_TOKENS})
+
+        def load():
+            response = get_ai_client().messages.create(
+                model=_AI_MODEL, max_tokens=_AI_MAX_TOKENS, system=_CANDIDATE_SYSTEM,
+                messages=[{"role": "user", "content": prompt}], purpose="ask-candidates",
+                timeout=float(os.environ.get("ASK_AI_TIMEOUT_SEC", "6")),
+            )
+            text = next((b.text for b in response.content
+                         if getattr(b, "type", None) == "text"), None)
+            if not text:
+                raise ValueError("empty candidate response")
+            return text
+
+        return get_ai_runtime().call(key, load, retries=0)[0]
+
+    return ask_ai
+
+
 class AskError(Exception):
     def __init__(self, status: int, message: str):
         super().__init__(message)
@@ -638,3 +698,66 @@ def run_ask(db: Session, user: User, req: AskRequest, run_backtest: Callable[[Ma
     finally:
         with _IN_FLIGHT_LOCK:
             _IN_FLIGHT.discard(user.id)
+
+
+def run_candidates(db: Session, user: User, req: CandidatesRequest) -> dict:
+    """카드 답변으로 종목 후보를 낸다 — 하루 한도는 이 함수에서만 차감된다.
+
+    v1 의 run_ask 와 같은 순서를 따른다: 한도 검사 뒤 자리표시 행을 먼저 커밋해
+    check-then-insert 창을 닫고, 후보를 못 내면 행을 지우고 추가권도 돌려준다.
+    """
+    if not consented(user):
+        raise AskError(403, "먼저 안내에 동의해 주세요.")
+    if remaining_today(db, user) <= 0:
+        raise AskError(429, f"오늘은 {daily_limit()}번 다 물어봤어요. 내일 다시 물어봐 주세요.")
+
+    created_at, created_ms = _now()
+    credit = None if free_remaining_today(db, user) > 0 else _unused_credit(db, user)
+    # 한도 검사와 저장 사이의 창을 닫으려고 행을 먼저 커밋한다(v1 과 같은 이유).
+    row = AskMacroSession(
+        user_id=user.id, day_kst=today_kst(),
+        request_json=json.dumps(req.model_dump(), ensure_ascii=False),
+        candidate_count=0, results_json="[]",
+        disclaimer_version=DISCLAIMER_VERSION, ai_used=False, elapsed_ms=0,
+        created_at=created_at, created_ms=created_ms, paid=credit is not None,
+        candidates_json="[]", chosen_symbol="", expires_ms=created_ms + SESSION_TTL_MS,
+        ask_count=0,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    if credit is not None:
+        credit.used_session_id = row.id
+        db.add(credit)
+        db.commit()
+
+    try:
+        tickers = hotcoins.get_cached_tickers()
+        if not tickers:
+            raise AskError(503, "지금 시세 목록을 불러오지 못했어요. 잠시 뒤 다시 물어봐 주세요.")
+        pool = ask_candidates.build_pool(tickers, profile=req.risk_profile)
+        if not pool:
+            raise AskError(503, "지금 살펴볼 종목을 찾지 못했어요. 잠시 뒤 다시 물어봐 주세요.")
+        candidates, ai_used = ask_candidates.choose(
+            pool, profile=req.risk_profile, horizon=req.invest_horizon,
+            watch=req.watch_frequency, ask_ai=_candidate_ai())
+    except Exception:
+        # 후보를 못 냈으면 횟수를 돌려준다 — 행을 지우고 추가권은 다시 '안 씀'으로.
+        if credit is not None:
+            credit.used_session_id = None
+            db.add(credit)
+        db.delete(row)
+        db.commit()
+        raise
+
+    row.candidates_json = json.dumps(candidates, ensure_ascii=False)
+    row.ai_used = ai_used
+    db.add(row)
+    db.commit()
+    return {
+        "session_id": row.id,
+        "candidates": candidates,
+        "manual_symbols": list(MANUAL_SYMBOLS),
+        "remaining_today": remaining_today(db, user),
+        "disclaimer": DISCLAIMER,
+    }

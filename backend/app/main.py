@@ -594,6 +594,19 @@ def ask_macros(
         raise HTTPException(status_code=exc.status, detail=exc.message)
 
 
+@app.post("/api/ask/candidates")
+def ask_candidates_route(
+    req: ask_mod.CandidatesRequest,
+    account: User = Depends(auth_mod.current_user_in_session),
+    db: Session = Depends(request_session),
+) -> dict:
+    """카드 답변으로 종목 후보를 낸다 — 하루 횟수는 여기서만 차감된다."""
+    try:
+        return ask_mod.run_candidates(db, account, req)
+    except ask_mod.AskError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message)
+
+
 @app.get("/api/me/quests")
 def me_quests(
     user: User = Depends(auth_mod.current_user_in_session),

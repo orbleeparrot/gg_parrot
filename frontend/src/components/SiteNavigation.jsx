@@ -2,12 +2,14 @@ import { useEffect, useRef } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { DownloadIcon, HelpIcon, KeyIcon } from "./utilityIcons.jsx";
 import { lockBodyScroll } from "../lib/bodyScrollLock.js";
+import { useAuth } from "../lib/auth.js";
 
 const NAV_LINKS = [
   { to: "/agents", label: "내 에이전트", icon: "agent", matches: ["/agents"] },
   { to: "/builder", label: "직접 만들기", icon: "builder", matches: ["/builder", "/s/"] },
   { to: "/leaderboard", label: "리더보드", icon: "leaderboard", matches: ["/leaderboard", "/gallery"] },
   { to: "/news", label: "코인동향", icon: "news", matches: ["/news"] },
+  { to: "/admin/news-test", label: "뉴스 판단 테스트", icon: "news", end: true, adminOnly: true },
   { to: "/board", label: "게시판", icon: "board", matches: ["/board"] },
   // 준비 중인 페이지 — 링크가 아니라 자리만 잡는다(배지 `업데이트 예정`, 비활성). 열리면 to 를 살리고 soon 을 뗀다.
   { to: "/bots", label: "자동 매매 봇", icon: "agent", matches: ["/bots"], soon: true, soonLabel: "업데이트 예정" },
@@ -84,9 +86,10 @@ function pathIsActive(pathname, link) {
 }
 
 function NavigationList({ pathname, onNavigate, tabIndex }) {
+  const { user } = useAuth();
   return (
     <div className="site-side-list">
-      {NAV_LINKS.map((link) => {
+      {NAV_LINKS.filter((link) => !link.adminOnly || user?.is_admin).map((link) => {
         const active = pathIsActive(pathname, link);
         if (link.soon) {
           return (

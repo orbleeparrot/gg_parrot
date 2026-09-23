@@ -274,6 +274,9 @@ def upsert_articles(asset_symbol: str, items: list[dict], *, analysis: dict | No
     state.updated_ms = max(state.updated_ms, millis)
     revision = state.revision
     db.add(state)
+    # Article persistence and its automatic classification job commit together.
+    from ...news_sentiment import enqueue as enqueue_sentiment
+    enqueue_sentiment(db, scope, {key: item for key, (item, _) in incoming.items()}, millis)
     # 카운터는 commit 전(피드 행 잠금 안)에 더한다 — commit 이 잠금을 풀고 나서 더하면 같은 stats 를 쓰는 다른 저장이
     # 사이에 끼어들 수 있고, commit 이 실패한 저장의 행 수가 '수집' 에 더해질 수도 있다.
     if stats is not None:

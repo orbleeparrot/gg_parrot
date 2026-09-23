@@ -173,6 +173,7 @@ export const api = {
   adminSignups: (days = 30, options = {}) => req(`/api/admin/signups?days=${adminDays(days)}`, { timeoutMs: 20_000, ...options }),
   adminMacros: (days = 30, options = {}) => req(`/api/admin/macros?days=${adminDays(days)}`, { timeoutMs: 20_000, ...options }),
   adminNews: (options = {}) => req("/api/admin/news", { timeoutMs: 20_000, ...options }),
+  newsTestResults: (after = "", options = {}) => req(`/api/admin/news-test/results?after=${encodeURIComponent(after)}`, { timeoutMs: 10_000, ...options }),
   adminCosts: (months = 6, options = {}) => req(`/api/admin/costs?months=${Math.min(24, Math.max(1, Number(months) || 6))}`, { timeoutMs: 20_000, ...options }),
   // 회원 관리 — 목록(페이징·검색·상태 필터)과 행별 조치 세 가지. 조치 뒤에는 화면이 곧바로 목록을 다시 받는다.
   adminMembers: (query = {}, options = {}) => req(`/api/admin/members?${memberQueryString(query)}`, { timeoutMs: 20_000, ...options }),

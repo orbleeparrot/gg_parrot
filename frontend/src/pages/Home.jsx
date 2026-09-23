@@ -25,7 +25,7 @@ const FOCUSABLE =
 const HERO_SLIDE_DWELL_MS = 15_000;
 const HERO_SLIDE_EXIT_MS = 560;
 
-function HomeEntryHero({ onLeaderboard, onGuide, onAsk, staticLayout = false }) {
+function HomeEntryHero({ onLeaderboard, onAsk, staticLayout = false }) {
   const mobileDevice = getRunnerDevice().isMobile;
   return (
     <section
@@ -77,19 +77,6 @@ function HomeEntryHero({ onLeaderboard, onGuide, onAsk, staticLayout = false }) 
             <strong>{mobileDevice ? "매크로 둘러보기" : "빠른 실행"}</strong>
             <small>{mobileDevice ? "인기 전략과 성과를 살펴보고, 실행은 Windows PC에서 이어가요." : "커뮤니티 인기 전략을 골라 바로 실행해요. 마음에 드는 매크로를 그대로 실행기로 돌릴 수 있어요."}</small>
           </span>
-          <span className="home-entry-choice-arrow" aria-hidden="true">→</span>
-        </button>
-        <button
-          type="button"
-          data-home-guide-trigger
-          aria-haspopup="dialog"
-          onClick={onGuide}
-          className="home-entry-choice"
-        >
-          <span className="home-entry-choice-art" aria-hidden="true">
-            <img src="/brand/navigation/ggparrot-nav-builder.svg" alt="" width="88" height="88" draggable="false" />
-          </span>
-          <span className="home-entry-choice-copy"><strong>직접 만들기</strong><small>안내를 따라 종목 검색부터 전략·조건·백테스트·등록까지 순서대로 내 매크로를 만들어요.</small></span>
           <span className="home-entry-choice-arrow" aria-hidden="true">→</span>
         </button>
       </nav>
@@ -211,7 +198,7 @@ function CommunityEntryHero({ staticLayout = false }) {
   );
 }
 
-function HomeHeroRotator({ onLeaderboard, onGuide, onAsk, paused = false }) {
+function HomeHeroRotator({ onLeaderboard, onAsk, paused = false }) {
   const [mobile, setMobile] = useState(() => typeof window !== "undefined" && window.matchMedia("(max-width: 1099px)").matches);
   const [activeSlide, setActiveSlide] = useState(0);
   const [outgoingSlide, setOutgoingSlide] = useState(null);
@@ -275,7 +262,7 @@ function HomeHeroRotator({ onLeaderboard, onGuide, onAsk, paused = false }) {
   if (mobile) {
     return (
       <div className="home-mobile-stack">
-        <HomeEntryHero onLeaderboard={onLeaderboard} onGuide={onGuide} onAsk={onAsk} staticLayout />
+        <HomeEntryHero onLeaderboard={onLeaderboard} onAsk={onAsk} staticLayout />
         <CommunityEntryHero staticLayout />
       </div>
     );
@@ -310,7 +297,7 @@ function HomeHeroRotator({ onLeaderboard, onGuide, onAsk, paused = false }) {
                 inert={!isActive ? "" : undefined}
               >
                 {index === 0 ? (
-                  <HomeEntryHero onLeaderboard={onLeaderboard} onGuide={onGuide} onAsk={onAsk} />
+                  <HomeEntryHero onLeaderboard={onLeaderboard} onAsk={onAsk} />
                 ) : (
                   <CommunityEntryHero />
                 )}
@@ -400,29 +387,12 @@ function AccountHome() {
     }, { replace: true });
   }, [setSearchParams]);
 
-  const openGuide = useCallback(() => {
-    beginJourney();
-    setSearchParams((current) => {
-      const next = new URLSearchParams(current);
-      next.set("guide", "1");
-      next.set("tour", "build");
-      next.delete("help");
-      next.delete("resume");
-      return next;
-    });
-  }, [setSearchParams]);
-
   // 모바일은 공개 전략을 먼저 둘러본다. PC의 실행 플로우와 직접 만들기는 로그인이 필요하다.
   const startLeaderboard = useCallback(() => {
     if (getRunnerDevice().isMobile) { navigate("/leaderboard"); return; }
     if (!isLoggedIn()) { requireLogin("/?run=1&step=1&view=leaderboard"); return; }
     openLeaderboardRun();
   }, [navigate, openLeaderboardRun, requireLogin]);
-
-  const startGuide = useCallback(() => {
-    if (!isLoggedIn()) { requireLogin("/?guide=1&tour=build"); return; }
-    openGuide();
-  }, [openGuide, requireLogin]);
 
   // 껄무새에게 물어볼까? — 빌더가 열리면서 바로 카드가 뜬다. 기록을 남겨야 해서 로그인 필수.
   const startAsk = useCallback(() => {
@@ -556,7 +526,7 @@ function AccountHome() {
       const previous = previousFocusRef.current;
       const fallback = previous?.isConnected && previous !== document.body
         ? previous
-        : document.querySelector("[data-home-carousel-primary], [data-home-entry-primary], [data-home-guide-trigger]");
+        : document.querySelector("[data-home-carousel-primary], [data-home-entry-primary]");
       window.requestAnimationFrame(() => fallback?.focus?.({ preventScroll: true }));
     };
   }, [closeOverlay, overlayOpen]);
@@ -575,7 +545,6 @@ function AccountHome() {
         ) : (
           <HomeHeroRotator
             onLeaderboard={startLeaderboard}
-            onGuide={startGuide}
             onAsk={startAsk}
             paused={overlayOpen}
           />

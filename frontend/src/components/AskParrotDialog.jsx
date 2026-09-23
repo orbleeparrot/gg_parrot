@@ -1,31 +1,23 @@
-// 껄무새에게 물어볼까? — 카드(칩) 다섯 장으로 답을 받아 백테스트 상위 3개 조합을 보여 준다.
-// 자유 입력은 종목 검색 하나뿐. 결과의 숫자는 전부 서버 백테스트가 계산한 값이다.
+// 껄무새에게 물어볼까? — 카드(칩) 네 장으로 답을 받아 종목 후보를 보여 주고,
+// 그중 하나를 고르면 매크로 후보를 보여 준다. 결과의 숫자는 전부 서버가 계산한 값이다.
 import { useEffect, useId, useReducer, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api } from "../api.js";
-import { useSymbolList } from "../hooks/useSymbolList.js";
 import {
-  CONSENT_TEXT, DISCLAIMER, FEW_RESULTS_TEXT, FOLLOW_UPS, LEVERAGES, MARKETS, NO_QUOTA_TEXT, NO_RESULTS_TEXT,
-  POPULAR_SYMBOLS, PROFILES, RUNNING_TEXT, SCALPER_NOTE, STABLE_NO_FUTURES, STEP_PROMPTS, feesNote, symbolsPrompt,
+  CANDIDATES_PROMPT, CONSENT_TEXT, DISCLAIMER, FEW_RESULTS_TEXT, FOLLOW_UPS, HORIZONS, LEVERAGES, MANUAL_PICK_LABEL,
+  MARKETS, NO_QUOTA_TEXT, NO_RESULTS_TEXT, PROFILES, RUNNING_TEXT, SCALPER_NOTE, STABLE_NO_FUTURES, STEP_PROMPTS,
+  WATCH_LEVELS, feesNote,
 } from "../lib/askCopy.js";
 import {
-  PROFILE_ORDER, STEPS, answerLabel, canChooseFutures, extraOffer, initialState, intervalOptions, isShort, maxSymbols, periodOptions, reduce, toRequest,
+  PROFILE_ORDER, STEPS, answerLabel, canChooseFutures, extraOffer, initialState, reduce, toAskRequest,
+  toCandidatesRequest,
 } from "../lib/askFlow.js";
 import { RULE_TYPES } from "../lib/macro.js";
-import { resolveSymbol, searchSymbols } from "../lib/symbolSearch.js";
 import "./AskParrotDialog.css";
 
 // 제목·버튼에 쓰는 껄무새 — 에이전트 표정 중 '호기심'(brand/README.md).
 const ASK_MASCOT = "/brand/agent/ggparrot-agent-curious-v1.svg";
 const PCT = (v) => `${Number(v) >= 0 ? "+" : ""}${Number(v).toFixed(2)}%`;
-const RECENT_KEY = "ggparrot.ask.recentSymbols";
-
-function readRecent() {
-  try { return JSON.parse(localStorage.getItem(RECENT_KEY) || "[]").filter(Boolean).slice(0, 5); } catch { return []; }
-}
-function writeRecent(symbols) {
-  try { localStorage.setItem(RECENT_KEY, JSON.stringify([...new Set([...symbols, ...readRecent()])].slice(0, 5))); } catch { /* 저장 못 해도 동작 */ }
-}
 
 // 결과 카드의 핵심 설정 3줄 — 파라미터를 사람이 읽는 문장으로.
 function settingLines(macro) {
@@ -61,59 +53,6 @@ function Chips({ options, value, onPick, label }) {
   );
 }
 
-function SymbolsCard({ answers, dispatch }) {
-  const [query, setQuery] = useState("");
-  const [note, setNote] = useState("");
-  const { items } = useSymbolList();
-  // 최근 칩은 실제 거래 가능한 종목 목록이 로드되면 그 안에 있는 것만 남긴다.
-  const recent = readRecent().filter((s) => !POPULAR_SYMBOLS.includes(s) && (!items || items.some((it) => it.symbol === s)));
-  const q = query.trim();
-  const matches = items && q ? searchSymbols(items, q, { limit: 8, exclude: answers.symbols }) : [];
-  const full = answers.symbols.length >= maxSymbols(answers.profile);
-
-  const pick = (symbol) => {
-    dispatch({ type: "toggleSymbol", symbol });
-    setQuery("");
-    setNote("");
-  };
-  const add = () => {
-    if (!q) return;
-    const resolved = items ? resolveSymbol(items, q) : null;
-    if (!resolved) { setNote("목록에 없는 종목이에요"); return; }
-    pick(resolved);
-  };
-
-  const chips = [...recent, ...POPULAR_SYMBOLS, ...answers.symbols.filter((s) => !recent.includes(s) && !POPULAR_SYMBOLS.includes(s))];
-  return (
-    <>
-      <div className="ask-chips">
-        {chips.map((sym) => (
-          <button key={sym} type="button" className="ask-chip t-small" aria-pressed={answers.symbols.includes(sym)}
-            disabled={!answers.symbols.includes(sym) && full}
-            onClick={() => dispatch({ type: "toggleSymbol", symbol: sym })}>{sym.replace(/USDT$/, "")}</button>
-        ))}
-      </div>
-      <div className="ask-symbol-search">
-        <input className="input" value={query} placeholder="종목 검색 (예: AVAX)" aria-label="종목 검색" disabled={full}
-          onChange={(e) => { setQuery(e.target.value); setNote(""); }}
-          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); add(); } }} />
-        <button type="button" className="btn btn-s btn-secondary" onClick={add} disabled={full}>추가</button>
-        <button type="button" className="btn btn-s btn-primary" disabled={answers.symbols.length === 0}
-          onClick={() => dispatch({ type: "confirmSymbols" })}>이 종목으로</button>
-      </div>
-      {matches.length > 0 ? (
-        <div className="ask-chips">
-          {matches.map((item) => (
-            <button key={item.symbol} type="button" className="ask-chip t-small" disabled={full}
-              onClick={() => pick(item.symbol)}>{item.symbol.replace(/USDT$/, "")}</button>
-          ))}
-        </div>
-      ) : null}
-      {note ? <p className="t-caption text-slate-500">{note}</p> : null}
-    </>
-  );
-}
-
 function StepCard({ step, answers, dispatch }) {
   if (step === "profile") return <Chips options={PROFILES} value={answers.profile} label={STEP_PROMPTS[step]} onPick={(v) => dispatch({ type: "choose", step, value: v })} />;
   if (step === "market") {
@@ -129,10 +68,23 @@ function StepCard({ step, answers, dispatch }) {
       </div>
     );
   }
-  if (step === "symbols") return <SymbolsCard answers={answers} dispatch={dispatch} />;
-  if (step === "period") return <Chips options={periodOptions(answers.profile)} value={answers.period} label={STEP_PROMPTS[step]} onPick={(v) => dispatch({ type: "choose", step, value: v })} />;
-  if (step === "interval") return <Chips options={intervalOptions(answers.profile, answers.period)} value={answers.interval} label={STEP_PROMPTS[step]} onPick={(v) => dispatch({ type: "choose", step, value: v })} />;
+  if (step === "horizon") return <Chips options={HORIZONS} value={answers.horizon} label={STEP_PROMPTS[step]} onPick={(v) => dispatch({ type: "choose", step, value: v })} />;
+  if (step === "watch") return <Chips options={WATCH_LEVELS} value={answers.watch} label={STEP_PROMPTS[step]} onPick={(v) => dispatch({ type: "choose", step, value: v })} />;
   return null;
+}
+
+function CandidateCard({ c, onPick }) {
+  return (
+    <button type="button" className="ask-cand" onClick={() => onPick(c.symbol)}>
+      <span className="ask-cand-head">
+        <strong>{c.base}</strong>
+        <span className="ask-cand-stats num">
+          거래대금 {c.volume_rank}위 · 하루 변동 {c.range_pct}%
+        </span>
+      </span>
+      <span className="ask-cand-reason">{c.reason}</span>
+    </button>
+  );
 }
 
 function ResultCard({ item, onLoad }) {
@@ -173,8 +125,8 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
   const [extraError, setExtraError] = useState("");
   const titleId = useId();
   const threadRef = useRef(null);
-  // 서버에 요청이 나가 있는 동안(ready 는 요청을 보내는 순간부터 응답까지)은 취소할 수 없다.
-  const busy = state.phase === "ready" || state.phase === "loading";
+  // 서버에 요청이 나가 있는 동안은 취소할 수 없다.
+  const busy = state.phase === "loadingCandidates" || state.phase === "loadingResults";
 
   // 열 때 동의 상태·남은 횟수를 읽는다. 닫으면 상태를 버린다.
   useEffect(() => {
@@ -184,30 +136,10 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
     return () => { alive = false; setStatus(null); dispatch({ type: "followUp", kind: "restart" }); };
   }, [open]);
 
-  // 카드를 다 답하면 서버에 묻는다.
-  // "ready" 단계도 RUNNING_TEXT 를 그리므로(아래 렌더 참고) 여기서 "loading" 을 dispatch 하지 않는다 —
-  // dispatch 하면 state.phase 가 바뀌어 이 effect 의 의존성이 바뀌고, effect 가 스스로를 정리(alive=false)해
-  // 방금 시작한 요청의 결과를 영영 버리게 된다.
-  // 개발 모드의 React.StrictMode 는 이 effect 를 두 번 실행한다 — "ready" 마다 요청이 두 번 나가고
-  // alive 덕에 두 번째 응답만 반영되니, 로컬 개발에서는 하루 한도가 실제보다 두 배 빨리 준다(운영은 영향 없음).
-  useEffect(() => {
-    if (state.phase !== "ready") return undefined;
-    let alive = true;
-    writeRecent(state.answers.symbols);
-    api.askMacros(toRequest(state.answers))
-      .then((data) => {
-        if (!alive) return;
-        dispatch({ type: "results", results: data.results, remaining: data.remaining_today });
-        setStatus((s) => (s && !s.error ? { ...s, remaining_today: data.remaining_today } : s));
-      })
-      .catch((err) => { if (alive) dispatch({ type: "error", message: err?.message || "잠시 뒤 다시 물어봐 주세요." }); });
-    return () => { alive = false; };
-  }, [state.phase, state.answers]);
-
   useEffect(() => { threadRef.current?.lastElementChild?.scrollIntoView?.({ block: "nearest" }); }, [state.step, state.phase]);
   useEffect(() => {
     if (!open) return undefined;
-    // 요청이 도는 중에는 Esc 로도 닫지 못한다(F5: 중간 취소 금지).
+    // 요청이 도는 중에는 Esc 로도 닫지 못한다(중간 취소 금지).
     const onKey = (e) => { if (e.key === "Escape" && !busy) onClose(); };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
@@ -241,9 +173,38 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
     }
   };
 
-  const promptFor = (step) => (step === "symbols" ? symbolsPrompt(maxSymbols(state.answers.profile)) : STEP_PROMPTS[step]);
+  // 카드 네 장에 다 답하면(phase "ready") 이 버튼으로 종목 후보를 받는다 — 하루 횟수는 여기서 차감된다.
+  const submitCards = async () => {
+    dispatch({ type: "loadingCandidates" });
+    try {
+      const data = await api.askCandidates(toCandidatesRequest(state.answers));
+      dispatch({
+        type: "candidates",
+        session: { id: data.session_id, remaining: data.remaining_today },
+        candidates: data.candidates,
+        manualSymbols: data.manual_symbols,
+      });
+      setStatus((s) => (s && !s.error ? { ...s, remaining_today: data.remaining_today } : s));
+    } catch (e) {
+      dispatch({ type: "error", message: e.message });
+    }
+  };
 
-  const isAnswered = (s) => (s === "symbols" ? state.answers.symbolsConfirmed === true : state.answers[s] != null);
+  // 후보(또는 직접 고르기)에서 종목을 하나 고르면 바로 매크로 후보를 받는다 — 이 요청은 차감 없음.
+  const pickSymbol = async (symbol) => {
+    const next = reduce(state, { type: "chooseSymbol", symbol });
+    if (!next.answers.symbol) return;
+    dispatch({ type: "chooseSymbol", symbol });
+    dispatch({ type: "loadingResults" });
+    try {
+      const data = await api.askMacros(toAskRequest(next));
+      dispatch({ type: "results", results: data.results, remaining: data.remaining_today });
+    } catch (e) {
+      dispatch({ type: "error", message: e.message });
+    }
+  };
+
+  const isAnswered = (s) => state.answers[s] != null;
   const answeredSteps = STEPS.filter(isAnswered).filter((s) => state.phase !== "cards" || STEPS.indexOf(s) < STEPS.indexOf(state.step));
   const noQuota = status && !status.error && status.remaining_today <= 0;
   const offer = extraOffer(status);
@@ -255,6 +216,13 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
       <span className="t-caption text-slate-500">{extraError || offer.note}</span>
     </div>
   ) : null;
+
+  // 성향을 바꾸는 두 버튼(안전하게/공격적으로)은 세션을 버리고 새로 후보를 받으므로 하루 횟수가 하나 더 든다.
+  const followLabel = (f) => {
+    if (f.kind === "safer") return `안전하게 (횟수 1회 더 써요 · 남은 ${state.remaining}회)`;
+    if (f.kind === "riskier") return `공격적으로 (횟수 1회 더 써요 · 남은 ${state.remaining}회)`;
+    return f.label;
+  };
 
   return createPortal(
     <div className="scrim fixed inset-x-0 bottom-0 top-16 z-[80] flex items-start justify-center p-2 sm:p-4 overflow-y-auto">
@@ -282,7 +250,7 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
             <div className="ask-thread" ref={threadRef}>
               {answeredSteps.map((s) => (
                 <div key={s} className="contents">
-                  <div className="ask-bubble ask-bubble-parrot t-small">{promptFor(s)}</div>
+                  <div className="ask-bubble ask-bubble-parrot t-small">{STEP_PROMPTS[s]}</div>
                   <button type="button" className="ask-bubble ask-bubble-me t-small" title="다시 고르기" disabled={busy} onClick={() => dispatch({ type: "back", step: s })}>{answerLabel(s, state.answers)}</button>
                 </div>
               ))}
@@ -295,18 +263,49 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
                   </>
                 ) : (
                   <>
-                    <div className="ask-bubble ask-bubble-parrot t-small">{promptFor(state.step)}</div>
+                    <div className="ask-bubble ask-bubble-parrot t-small">{STEP_PROMPTS[state.step]}</div>
                     <StepCard step={state.step} answers={state.answers} dispatch={dispatch} />
                   </>
                 )
               ) : null}
 
-              {state.phase === "loading" || state.phase === "ready" ? <div className="ask-bubble ask-bubble-parrot t-small" role="status">{RUNNING_TEXT}</div> : null}
+              {state.phase === "ready" ? (
+                <>
+                  <div className="ask-bubble ask-bubble-parrot t-small">네 가지 답 다 됐어요. 성향에 맞는 종목 후보를 볼까요?</div>
+                  <div><button type="button" className="btn btn-m btn-primary" onClick={submitCards}>후보 보기</button></div>
+                </>
+              ) : null}
+
+              {state.phase === "loadingCandidates" || state.phase === "loadingResults" ? (
+                <div className="ask-bubble ask-bubble-parrot t-small" role="status">{RUNNING_TEXT}</div>
+              ) : null}
 
               {state.phase === "error" ? (
                 <>
                   <div className="ask-bubble ask-bubble-parrot t-small" role="alert">{state.error}</div>
                   <div className="ask-followups"><button type="button" className="btn btn-s btn-secondary" onClick={() => dispatch({ type: "followUp", kind: "restart" })}>처음부터</button></div>
+                </>
+              ) : null}
+
+              {state.phase === "candidates" ? (
+                <>
+                  <div className="ask-bubble ask-bubble-parrot t-small">{CANDIDATES_PROMPT}</div>
+                  {state.candidates.length ? (
+                    <div className="ask-cand-list">
+                      {state.candidates.map((c) => <CandidateCard key={c.symbol} c={c} onPick={pickSymbol} />)}
+                    </div>
+                  ) : null}
+                  {state.manualSymbols.length ? (
+                    <details>
+                      <summary className="t-small text-slate-500">{MANUAL_PICK_LABEL}</summary>
+                      <div className="ask-chips">
+                        {state.manualSymbols.map((sym) => (
+                          <button key={sym} type="button" className="ask-chip t-small" onClick={() => pickSymbol(sym)}>{sym.replace(/USDT$/, "")}</button>
+                        ))}
+                      </div>
+                    </details>
+                  ) : null}
+                  <div className="ask-disclaimer" role="note">{DISCLAIMER}</div>
                 </>
               ) : null}
 
@@ -321,12 +320,12 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
                     </div>
                   ) : null}
                   <div className="ask-disclaimer" role="note">{DISCLAIMER}</div>
-                  {isShort(state.answers.profile) ? <div className="ask-disclaimer" role="note">{SCALPER_NOTE}</div> : null}
+                  {state.answers.profile === "scalper" ? <div className="ask-disclaimer" role="note">{SCALPER_NOTE}</div> : null}
                   {extraBlock}
                   <div className="ask-followups">
                     {FOLLOW_UPS.map((f) => {
-                      const quotaBlocked = noQuota && f.kind !== "restart";
-                      // PROFILE_ORDER 양쪽 끝(안정형 "더 안정적으로", 단타형 "더 공격적으로")은 갈 곳이 없다.
+                      const quotaBlocked = noQuota && (f.kind === "safer" || f.kind === "riskier");
+                      // PROFILE_ORDER 양쪽 끝(안정형 "안전하게", 단타형 "공격적으로")은 갈 곳이 없다.
                       const idx = PROFILE_ORDER.indexOf(state.answers.profile);
                       const edgeBlocked = (f.kind === "safer" && idx <= 0)
                         || (f.kind === "riskier" && idx >= PROFILE_ORDER.length - 1);
@@ -335,7 +334,7 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
                       return (
                         <button key={f.kind} type="button" className="btn btn-s btn-secondary"
                           disabled={disabled} title={title}
-                          onClick={() => dispatch({ type: "followUp", kind: f.kind })}>{f.label}</button>
+                          onClick={() => dispatch({ type: "followUp", kind: f.kind })}>{followLabel(f)}</button>
                       );
                     })}
                   </div>

@@ -47,3 +47,17 @@
 
 /* 포인트로 횟수 추가 (2026-09-22) — 한도 안내 말풍선 아래 버튼 + 잔액/상한 한 줄 */
 .ask-extra { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 8px; }
+
+/* 종목 후보 카드 (2026-09-23) — 후보 화면에서 종목 하나를 고르는 버튼 */
+.ask-cand {
+  display: flex; flex-direction: column; gap: 4px; width: 100%;
+  padding: 12px 14px; text-align: left;
+  border: 1px solid var(--line, #e2e8f0); border-radius: 12px;
+  background: #fff; cursor: pointer;
+}
+.ask-cand:hover { border-color: #94a3b8; background: #f8fafc; }
+.ask-cand-head { display: flex; align-items: baseline; gap: 8px; justify-content: space-between; }
+.ask-cand-head strong { font-size: 15px; }
+.ask-cand-stats { font-size: 12px; color: #64748b; }
+.ask-cand-reason { font-size: 13px; color: #334155; line-height: 1.5; }
+.ask-cand-list { display: flex; flex-direction: column; gap: 8px; }

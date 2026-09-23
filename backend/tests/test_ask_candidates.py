@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from app import ask_candidates as ac
+from app.db import AskMacroSession, get_session
 
 
 def _t(symbol, qvol, high, low, change=1.0):
@@ -189,3 +190,21 @@ def test_symbol_normalization_trims_whitespace_and_case():
         [{"symbol": "  midusdt  ", "reason": "거래가 활발해요"}],
         _pool(), "balanced")
     assert any(p["symbol"] == "MIDUSDT" for p in picks)
+
+
+def test_session_has_flow_columns():
+    with get_session() as db:
+        row = AskMacroSession(
+            user_id=1, day_kst="2026-09-23", request_json="{}", candidate_count=0,
+            results_json="[]", disclaimer_version="ask-v2", ai_used=False, elapsed_ms=0,
+            created_at="2026-09-23T00:00:00Z", created_ms=1,
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        assert row.candidates_json == "[]"
+        assert row.chosen_symbol == ""
+        assert row.expires_ms == 0
+        assert row.ask_count == 0
+        db.delete(row)
+        db.commit()

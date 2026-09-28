@@ -211,6 +211,8 @@ def test_costs_report_shape_and_totals(monkeypatch):
     assert kpis == {
         "month_total_usd": round(5.5 + 6.0 + 22.67 + 14.17, 2), "last_month_total_usd": round(5.5 + 2.0 + 65.0, 2),
         "gemini_month_usd": 5.5, "gemini_calls_month": 2, "gemini_failures_month": 1, "gemini_today_usd": 5.5,
+        # 실패도 호출이라 오늘 호출 2 · 실패 1 이다 — 토큰 0 인 실패가 섞였는지 화면에서 보인다.
+        "gemini_failures_today": 1, "gemini_calls_today": 2,
     }
 
     purposes = report["purposes"]

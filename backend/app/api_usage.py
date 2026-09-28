@@ -488,6 +488,9 @@ def costs_report(db, *, months: int = MONTHS_DEFAULT, now_ms: Optional[int] = No
             "gemini_calls_month": gemini_month["calls"],
             "gemini_failures_month": gemini_month["failures"],
             "gemini_today_usd": _usd(today_usage["cost_micro_usd"]),
+            # 실패는 토큰 0 으로 기록된다 — 호출은 많은데 비용이 0 이면 절약이 아니라 장애다.
+            "gemini_failures_today": today_usage["failures"],
+            "gemini_calls_today": today_usage["calls"],
         },
         "monthly": monthly,
         "providers": providers,

@@ -601,11 +601,12 @@ function CostsTab({ data }) {
   const other = (m) => ["coindesk", "vercel", "prefect"].reduce((acc, p) => acc + (Number(m.providers?.[p]) || 0), 0);
   const providerTotal = { label: "합계", method: "", month_usd: sumBy(providers, "month_usd"), last_month_usd: sumBy(providers, "last_month_usd"), plan: "" };
   const purposeTotal = {
-    label: "합계", code: "", calls: sumBy(purposes, "calls"), input_tokens: sumBy(purposes, "input_tokens"),
+    label: "합계", code: "", calls: sumBy(purposes, "calls"), failures: sumBy(purposes, "failures"), input_tokens: sumBy(purposes, "input_tokens"),
     output_tokens: sumBy(purposes, "output_tokens"), cost_usd: sumBy(purposes, "cost_usd"), daily_limit: "",
   };
   const dailyTotal = {
-    day: all || daily.length <= 7 ? `${daily.length}일` : "최근 7일", gemini_calls: sumBy(visible, "gemini_calls"), input_tokens: sumBy(visible, "input_tokens"),
+    day: all || daily.length <= 7 ? `${daily.length}일` : "최근 7일", gemini_calls: sumBy(visible, "gemini_calls"), failures: sumBy(visible, "failures"),
+    input_tokens: sumBy(visible, "input_tokens"),
     output_tokens: sumBy(visible, "output_tokens"), cost_usd: sumBy(visible, "cost_usd"), coindesk_calls: sumBy(visible, "coindesk_calls"),
   };
   const palette = [SERIES.s2, SERIES.s1, SERIES.s3, SERIES.s4, SERIES.s5, SERIES_6];
@@ -616,6 +617,7 @@ function CostsTab({ data }) {
         <AdminTerms items={[
           ["추정 비용", "응답 토큰 수 × 모델 단가 (서버 설정값, 1M 토큰 기준)"], ["실제 청구액", "청구 API 로 받은 값(제공하는 곳만, 1~2일 지연)"],
           ["구독형", "월 고정액을 설정값으로 넣은 항목 · 이번 달은 경과일로 안분(*) · 시작 월 이전은 0"], ["용도", "Gemini 를 부르는 코드 위치 6곳"], ["통화", "USD"],
+          ["실패", "응답을 못 받은 호출 · 토큰이 0 이라 비용에 안 잡힌다(호출은 많은데 비용이 0 이면 장애다)"],
           [monthLabel, `1일 ~ ${fmtInt(data.month_days_elapsed)}일까지`],
         ]} />
       </div>
@@ -623,6 +625,8 @@ function CostsTab({ data }) {
         { label: "이번 달 추정 합계", value: fmtUsd(k.month_total_usd) }, { label: "지난달", value: fmtUsd(k.last_month_total_usd) },
         { label: "이번 달 Gemini", value: fmtUsd(k.gemini_month_usd) }, { label: "Gemini 호출", value: fmtInt(k.gemini_calls_month) },
         { label: "오늘 Gemini", value: fmtUsd(k.gemini_today_usd) },
+        { label: "오늘 실패", value: `${fmtInt(k.gemini_failures_today)} / ${fmtInt(k.gemini_calls_today)}`,
+          tone: Number(k.gemini_failures_today) > 0 ? "down" : undefined },
       ]} />
       <div className="adm-cols2">
         <AdminBlock title="월별 비용" caption={`최근 ${COST_MONTHS}개월 · 제공자별 누적 · USD · 구독은 시작 월부터, 이번 달은 경과일 안분`}>
@@ -657,6 +661,7 @@ function CostsTab({ data }) {
           { key: "label", label: "용도", render: (r) => r.label === "합계" ? r.label : labelOf(PURPOSE_LABELS, r.purpose, r.label) },
           { key: "code", label: "코드", render: (r) => r.code ?? r.purpose ?? "" },
           { key: "calls", label: "호출", num: true, render: (r) => fmtInt(r.calls) },
+          { key: "failures", label: "실패", num: true, render: (r) => downIfPositive(r.failures) },
           { key: "input_tokens", label: "입력 토큰", num: true, render: (r) => fmtTokens(r.input_tokens) },
           { key: "output_tokens", label: "출력 토큰", num: true, render: (r) => fmtTokens(r.output_tokens) },
           { key: "cost_usd", label: "추정 비용", num: true, render: (r) => fmtUsd(r.cost_usd) },
@@ -666,6 +671,7 @@ function CostsTab({ data }) {
       <AdminBlock title="일별 사용" caption={all ? `${daily.length}일 전체` : "최근 7일"} actions={toggle}>
         <AdminTable rows={visible} total={dailyTotal} rowKey={(r) => r.day} columns={[
           { key: "day", label: "날짜" }, { key: "gemini_calls", label: "Gemini 호출", num: true, render: (r) => fmtInt(r.gemini_calls) },
+          { key: "failures", label: "실패", num: true, render: (r) => downIfPositive(r.failures) },
           { key: "input_tokens", label: "입력 토큰", num: true, render: (r) => fmtTokens(r.input_tokens) },
           { key: "output_tokens", label: "출력 토큰", num: true, render: (r) => fmtTokens(r.output_tokens) },
           { key: "cost_usd", label: "추정 비용", num: true, render: (r) => fmtUsd(r.cost_usd) },

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import time
 import uuid
@@ -29,6 +30,7 @@ from ...db import (
     get_session,
 )
 
+logger = logging.getLogger(__name__)
 
 _USABLE_STATUSES = {"ready", "degraded", "rate_limited"}
 _CLAIM_TIMEOUT_MS = max(
@@ -210,6 +212,24 @@ def _record_success(
 def _retry_delay_ms(attempts: int) -> int:
     exponent = max(0, min(12, attempts - 1))
     return min(_MAX_DEGRADED_RETRY_MS, _DEGRADED_RETRY_MS * (2 ** exponent))
+
+
+# 검증을 끝내 통과하지 못하는 제목은 수집 주기(5분)마다 다시 번역돼 하루 수백 번
+# 유료 호출을 만들었다. 시도할 때마다 대기를 두 배로 늘리고, 예산을 다 쓰면
+# 포기한다. 지시문(prompt_version)을 고쳐 배포하면 예산을 새로 받는다.
+TITLE_TRANSLATION_MAX_ATTEMPTS = max(
+    1,
+    int(os.environ.get("NEWS_TITLE_TRANSLATION_MAX_ATTEMPTS", "5")),
+)
+_TITLE_TRANSLATION_BASE_RETRY_MS = max(
+    30,
+    int(os.environ.get("NEWS_TITLE_TRANSLATION_RETRY_SECONDS", "300")),
+) * 1000
+
+
+def title_translation_retry_delay_ms(attempts: int) -> int:
+    exponent = max(0, min(12, attempts - 1))
+    return min(_MAX_DEGRADED_RETRY_MS, _TITLE_TRANSLATION_BASE_RETRY_MS * (2 ** exponent))
 
 
 def discover_tracked_symbols(
@@ -614,6 +634,7 @@ def claim_title_translations(
     titles: list[str],
     *,
     rejected_titles: list[str] | None = None,
+    prompt_version: str = "",
     lease_ms: int = _TITLE_TRANSLATION_CLAIM_LEASE_MS,
     retry_ms: int = 300_000,
     now_ms: int | None = None,
@@ -625,6 +646,7 @@ def claim_title_translations(
             return claim_title_translations(
                 titles,
                 rejected_titles=rejected_titles,
+                prompt_version=prompt_version,
                 lease_ms=lease_ms,
                 retry_ms=retry_ms,
                 now_ms=now_ms,
@@ -643,39 +665,69 @@ def claim_title_translations(
     # deadlock. SQLite's first write serializes the equivalent transaction.
     by_hash = {_title_hash(title): title for title in unique_titles}
     ordered = sorted(by_hash)
+    version = str(prompt_version or "")
     insert = postgres_insert if db.get_bind().dialect.name == "postgresql" else sqlite_insert
     db.exec(insert(NewsTitleTranslation).values([
         dict(title_hash=key, original_title=by_hash[key], processing_status="pending",
-             claim_token=token, claimed_ms=millis, updated_at=now_iso, updated_ms=millis)
+             claim_token=token, claimed_ms=millis, updated_at=now_iso, updated_ms=millis,
+             attempts=1, next_retry_ms=millis + title_translation_retry_delay_ms(1),
+             prompt_version=version)
         for key in ordered
     ]).on_conflict_do_nothing(index_elements=[NewsTitleTranslation.title_hash]))
     rows = db.exec(select(NewsTitleTranslation).where(NewsTitleTranslation.title_hash.in_(ordered))
                    .order_by(NewsTitleTranslation.title_hash).with_for_update()).all()
     by_title = {row.original_title: row for row in rows}
-    reclaim = []
+    # 시도 횟수가 행마다 달라 같은 횟수끼리 묶어 한 번씩 갱신한다(최대 예산 만큼).
+    reclaim: dict[int, list[str]] = {}
+    abandon = []
     for title in unique_titles:
         row = by_title.get(title)
         if row is None:
             result["waiting"].append(title)
-        elif row.claim_token == token:
+            continue
+        if row.claim_token == token:
             result["claimed"].append(title)
-        elif row.processing_status == "ready" and row.translated_title and title not in rejected:
+            continue
+        if row.processing_status == "ready" and row.translated_title and title not in rejected:
             result["cached"][title] = row.translated_title
+            continue
+        # 지시문이 바뀌면 예전 실패는 잊는다 — 고친 지시문으로 다시 해 볼 값어치가 있다.
+        renewed = str(row.prompt_version or "") != version
+        used = 0 if renewed else int(row.attempts or 0)
+        if not (title in rejected or row.processing_status != "pending"
+                or int(row.claimed_ms or 0) <= millis - max(1, int(lease_ms))):
+            # 다른 일꾼이 아직 붙들고 있다 — 재시도 예산과는 무관하다.
+            result["waiting"].append(title)
+        elif used >= TITLE_TRANSLATION_MAX_ATTEMPTS:
+            if row.processing_status != "failed":
+                abandon.append(row.title_hash)
+            result["deferred"].append(title)
+        elif (not renewed and row.processing_status != "pending"
+              and int(row.next_retry_ms or 0) > millis):
+            # 자리가 'pending' 인 채 임대가 끝났다면 앞 일꾼이 죽은 것이다.
+            # 그건 유료 재시도가 아니라 복구라서 대기를 걸지 않는다.
+            result["deferred"].append(title)
         elif (row.processing_status == "error" and title not in rejected
               and int(row.updated_ms or 0) + max(0, int(retry_ms)) > millis):
             result["deferred"].append(title)
-        elif (title in rejected or row.processing_status != "pending"
-              or int(row.claimed_ms or 0) <= millis - max(1, int(lease_ms))):
-            reclaim.append(row.title_hash)
-            result["claimed"].append(title)
         else:
-            result["waiting"].append(title)
-    if reclaim:
+            reclaim.setdefault(used, []).append(row.title_hash)
+            result["claimed"].append(title)
+    for used, hashes in reclaim.items():
         # Rows remain locked through this update/commit; the returned token
         # fences subsequent renewal, completion and release just as before.
-        db.exec(update(NewsTitleTranslation).where(NewsTitleTranslation.title_hash.in_(reclaim)).values(
+        db.exec(update(NewsTitleTranslation).where(NewsTitleTranslation.title_hash.in_(hashes)).values(
             translated_title="", processing_status="pending", claim_token=token,
-            claimed_ms=millis, updated_at=now_iso, updated_ms=millis))
+            claimed_ms=millis, updated_at=now_iso, updated_ms=millis,
+            attempts=used + 1, prompt_version=version,
+            next_retry_ms=millis + title_translation_retry_delay_ms(used + 1)))
+    if abandon:
+        db.exec(update(NewsTitleTranslation).where(NewsTitleTranslation.title_hash.in_(abandon)).values(
+            processing_status="failed", claim_token="", claimed_ms=0,
+            updated_at=now_iso, updated_ms=millis))
+        logger.warning(
+            "News title translation abandoned after %d attempts: count=%d title_hashes=%s",
+            TITLE_TRANSLATION_MAX_ATTEMPTS, len(abandon), ",".join(h[:12] for h in abandon[:5]))
     db.commit()
     result["claim_token"] = token if result["claimed"] else ""
     return result
@@ -715,19 +767,23 @@ def store_title_translations(
             NewsTitleTranslation.claim_token == claim_token,
         ).values(translated_title=case(values, value=NewsTitleTranslation.title_hash),
                  processing_status="ready", claim_token="", claimed_ms=0,
-                 updated_at=now_iso, updated_ms=millis))
+                 updated_at=now_iso, updated_ms=millis,
+                 # 쓸 수 있는 번역이 나왔으면 재시도 예산은 처음부터 다시 센다.
+                 attempts=0, next_retry_ms=0))
     else:
         insert = postgres_insert if db.get_bind().dialect.name == "postgresql" else sqlite_insert
         statement = insert(NewsTitleTranslation).values([
             dict(title_hash=_title_hash(original), original_title=original,
                  translated_title=translated, processing_status="ready", claim_token="",
-                 claimed_ms=0, updated_at=now_iso, updated_ms=millis)
+                 claimed_ms=0, updated_at=now_iso, updated_ms=millis,
+                 attempts=0, next_retry_ms=0)
             for original, translated in cleaned.items()
         ])
         db.exec(statement.on_conflict_do_update(
             index_elements=[NewsTitleTranslation.title_hash],
             set_={key: getattr(statement.excluded, key) for key in (
-                "translated_title", "processing_status", "claim_token", "claimed_ms", "updated_at", "updated_ms")},
+                "translated_title", "processing_status", "claim_token", "claimed_ms",
+                "updated_at", "updated_ms", "attempts", "next_retry_ms")},
             where=NewsTitleTranslation.original_title == statement.excluded.original_title))
     db.commit()
 
@@ -785,10 +841,16 @@ def release_title_translation_claims(
     *,
     claim_token: str,
     retry_immediately: bool = False,
+    provider_error: bool = False,
     now_ms: int | None = None,
     db: Session | None = None,
 ) -> None:
-    """Release claims, distinguishing local capacity from a provider failure."""
+    """Release claims, distinguishing local capacity from a provider failure.
+
+    재시도 예산은 '모델이 쓸 수 없는 답을 냈다' 를 세는 것이다. 로컬 혼잡
+    (retry_immediately)과 제공자 장애(provider_error)는 예산을 쓰지 않는다 —
+    장애가 몇 시간 이어져도 멀쩡한 제목을 영영 버리지 않게 한다.
+    """
     if not claim_token or not titles:
         return
     if db is None:
@@ -797,6 +859,7 @@ def release_title_translation_claims(
                 titles,
                 claim_token=claim_token,
                 retry_immediately=retry_immediately,
+                provider_error=provider_error,
                 now_ms=now_ms,
                 db=owned,
             )
@@ -816,6 +879,10 @@ def release_title_translation_claims(
             claimed_ms=0,
             updated_at=now_iso,
             updated_ms=millis,
+            **({"attempts": case((NewsTitleTranslation.attempts > 0,
+                                  NewsTitleTranslation.attempts - 1), else_=0)}
+               if retry_immediately or provider_error else {}),
+            **({"next_retry_ms": 0} if retry_immediately else {}),
         )
     )
     db.commit()

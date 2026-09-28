@@ -600,6 +600,11 @@ class NewsTitleTranslation(SQLModel, table=True):
     claimed_ms: int = Field(default=0, sa_type=BigInteger, index=True)
     updated_at: str = ""
     updated_ms: int = Field(default=0, sa_type=BigInteger, index=True)
+    # 검증에 걸린 번역을 무한히 다시 사는 것을 막는 예산. 성공하면 0 으로 돌아가고,
+    # 지시문(prompt_version)이 바뀌면 포기한 제목도 예산을 새로 받는다.
+    attempts: int = Field(default=0)
+    next_retry_ms: int = Field(default=0, sa_type=BigInteger, index=True)
+    prompt_version: str = Field(default="", max_length=160)
 
 
 class CommunityPostSummary(SQLModel, table=True):
@@ -617,6 +622,10 @@ class CommunityPostSummary(SQLModel, table=True):
     claim_token: str = ""
     claimed_ms: int = Field(default=0, sa_type=BigInteger, index=True)
     updated_ms: int = Field(default=0, sa_type=BigInteger, index=True)
+    # 제목 번역과 같은 재시도 예산. 요약 키에 이미 prompt_version 이 들어 있어,
+    # 지시문이 바뀌면 다른 행이 생기므로 여기에는 따로 두지 않는다.
+    attempts: int = Field(default=0)
+    next_retry_ms: int = Field(default=0, sa_type=BigInteger, index=True)
 
 
 class DailyChallenge(SQLModel, table=True):
@@ -1147,6 +1156,13 @@ def _migrate() -> None:
             "processing_status": "ALTER TABLE newstitletranslation ADD COLUMN processing_status TEXT DEFAULT 'ready'",
             "claim_token": "ALTER TABLE newstitletranslation ADD COLUMN claim_token TEXT DEFAULT ''",
             "claimed_ms": "ALTER TABLE newstitletranslation ADD COLUMN claimed_ms INTEGER DEFAULT 0",
+            "attempts": "ALTER TABLE newstitletranslation ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0",
+            "next_retry_ms": "ALTER TABLE newstitletranslation ADD COLUMN next_retry_ms INTEGER NOT NULL DEFAULT 0",
+            "prompt_version": "ALTER TABLE newstitletranslation ADD COLUMN prompt_version TEXT NOT NULL DEFAULT ''",
+        },
+        "communitypostsummary": {
+            "attempts": "ALTER TABLE communitypostsummary ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0",
+            "next_retry_ms": "ALTER TABLE communitypostsummary ADD COLUMN next_retry_ms INTEGER NOT NULL DEFAULT 0",
         },
         "newsarticle": {
             # Legacy rows need one enrichment pass; subsequent writes explicitly
@@ -1250,6 +1266,11 @@ _PG_ADDED_COLUMNS = {
     "newstitletranslation": {
         "processing_status": "TEXT DEFAULT 'ready'", "claim_token": "TEXT DEFAULT ''",
         "claimed_ms": "BIGINT DEFAULT 0",
+        "attempts": "INTEGER NOT NULL DEFAULT 0", "next_retry_ms": "BIGINT NOT NULL DEFAULT 0",
+        "prompt_version": "TEXT NOT NULL DEFAULT ''",
+    },
+    "communitypostsummary": {
+        "attempts": "INTEGER NOT NULL DEFAULT 0", "next_retry_ms": "BIGINT NOT NULL DEFAULT 0",
     },
     "askmacrosession": {
         "paid": "BOOLEAN NOT NULL DEFAULT FALSE",
@@ -1299,7 +1320,8 @@ _PG_INDEXES = {
 _PG_BIGINT_COLUMNS = {
     "onchainholderstate": ("last_success_ms", "last_attempt_ms", "next_collection_ms", "claimed_ms", "observation_seq"),
     "whaletradestate": ("last_success_ms", "last_attempt_ms", "next_collection_ms", "claimed_ms"),
-    "communitypostsummary": ("claimed_ms", "updated_ms"),
+    "communitypostsummary": ("claimed_ms", "updated_ms", "next_retry_ms"),
+    "newstitletranslation": ("claimed_ms", "updated_ms", "next_retry_ms"),
     "tickernewssnapshot": (
         "collected_ms", "claimed_ms", "last_observed_ms", "last_observation_seq",
         "next_retry_ms", "completed_ms",

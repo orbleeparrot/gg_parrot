@@ -2784,6 +2784,9 @@ def _claim_durable_title_translations(
     return claim_title_translations(
         titles,
         rejected_titles=rejected_titles,
+        # 지시문·모델이 바뀌면 포기했던 제목도 재시도 예산을 새로 받는다.
+        prompt_version=f"{_TITLE_TRANSLATION_PROMPT_VERSION}:"
+                       f"{os.environ.get('GEMINI_MODEL', _GEMINI_MODEL)}",
     )
 
 
@@ -2809,6 +2812,7 @@ def _release_durable_title_translation_claims(
     *,
     claim_token: str,
     retry_immediately: bool = False,
+    provider_error: bool = False,
 ) -> None:
     if not titles or not claim_token or not os.environ.get("DATABASE_URL"):
         return
@@ -2819,6 +2823,7 @@ def _release_durable_title_translation_claims(
     try:
         release_title_translation_claims(
             titles, claim_token=claim_token, retry_immediately=retry_immediately,
+            provider_error=provider_error,
         )
     except Exception:
         return
@@ -2943,9 +2948,12 @@ def _translate_title_batch(titles: list[str], *, claim_token: str = "", on_progr
         ) from exc
     except Exception as exc:
         _defer_title_translations(titles)
+        # 제공자를 부르다 터진 것 — 모델이 쓸 수 없는 답을 낸 게 아니다.
+        # 재시도 예산을 쓰지 않아야 장애가 길어져도 제목을 영영 버리지 않는다.
         _release_durable_title_translation_claims(
             titles,
             claim_token=claim_token,
+            provider_error=True,
         )
         raise NewsTranslationError(
             "영문 뉴스 제목 번역에 실패했습니다. 잠시 후 다시 시도해 주세요."

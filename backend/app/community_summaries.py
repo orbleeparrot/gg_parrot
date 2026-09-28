@@ -269,7 +269,7 @@ def _execute(jobs, *, background=False):
             return
         batch = jobs[offset:offset + _BATCH_SIZE]
         claimed, token = [], ""
-        retry_immediately = False
+        retry_immediately = provider_error = False
         try:
             claim = repository.claim_summaries(
                 batch, rejected_keys=[j["summary_key"] for j in batch if j.get("rejected")])
@@ -298,10 +298,14 @@ def _execute(jobs, *, background=False):
         except Exception as exc:
             # No bodies, credentials, provider responses, or database URLs in logs.
             logger.warning("Community body summary deferred: reason=%s", type(exc).__name__)
+            # 제공자·저장소가 터진 것이지 모델이 쓸 수 없는 답을 낸 게 아니다.
+            provider_error = True
         finally:
             if claimed and token:
                 try:
-                    repository.release_claims(claimed, claim_token=token, retry_immediately=retry_immediately)
+                    repository.release_claims(claimed, claim_token=token,
+                                              retry_immediately=retry_immediately,
+                                              provider_error=provider_error)
                 except Exception as exc:
                     logger.warning("Community summary claim release deferred: reason=%s", type(exc).__name__)
 

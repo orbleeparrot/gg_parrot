@@ -187,12 +187,12 @@ def test_costs_report_shape_and_totals(monkeypatch):
     current = monthly[-1]
     assert set(current["providers"]) >= {"gemini", "coindesk", "render", "supabase", "vercel", "prefect"}
     assert current["providers"]["gemini"] == 5.5 and current["providers"]["coindesk"] == 6.0
-    # 구독 고정비: 이번 달(9월, 17/30 경과)은 안분 — $14 → 7.93, $25 → 14.17. 시작 월(기본 지난달) 이전은 0.
-    assert (current["providers"]["render"], current["providers"]["supabase"]) == (7.93, 14.17)
-    assert current["total_usd"] == round(5.5 + 6.0 + 7.93 + 14.17, 2)
-    assert monthly[-2]["providers"] == {"gemini": 5.5, "coindesk": 2.0, "render": 14.0, "supabase": 25.0, "vercel": 0.0, "prefect": 0.0}
+    # 구독 고정비: 이번 달(9월, 17/30 경과)은 안분 — $40 → 22.67, $25 → 14.17. 시작 월(기본 지난달) 이전은 0.
+    assert (current["providers"]["render"], current["providers"]["supabase"]) == (22.67, 14.17)
+    assert current["total_usd"] == round(5.5 + 6.0 + 22.67 + 14.17, 2)
+    assert monthly[-2]["providers"] == {"gemini": 5.5, "coindesk": 2.0, "render": 40.0, "supabase": 25.0, "vercel": 0.0, "prefect": 0.0}
     assert monthly[0]["providers"]["gemini"] == 0.0 and monthly[0]["total_usd"] == 0.0, "4월 구독비는 없던 비용"
-    assert [m["providers"]["render"] for m in monthly] == [0.0, 0.0, 0.0, 0.0, 14.0, 7.93]
+    assert [m["providers"]["render"] for m in monthly] == [0.0, 0.0, 0.0, 0.0, 40.0, 22.67]
 
     providers = report["providers"]
     assert [p["provider"] for p in providers] == ["gemini", "coindesk", "render", "supabase", "vercel", "prefect"]
@@ -204,12 +204,12 @@ def test_costs_report_shape_and_totals(monkeypatch):
     assert (coindesk["method"], coindesk["calls"], coindesk["month_usd"], coindesk["last_month_usd"]) == ("calls", 12, 6.0, 2.0)
     render = providers[2]
     assert (render["label"], render["method"], render["month_usd"], render["last_month_usd"], render["plan"]) == (
-        "Render (web + worker)", "fixed", 7.93, 14.0, "Starter ×2")
+        "Render (web + worker)", "fixed", 22.67, 40.0, "Pro (구독 + 사용량)")
     assert render["prorated"] is True and render["since"] == "2026-08"
 
     kpis = report["kpis"]
     assert kpis == {
-        "month_total_usd": round(5.5 + 6.0 + 7.93 + 14.17, 2), "last_month_total_usd": round(5.5 + 2.0 + 39.0, 2),
+        "month_total_usd": round(5.5 + 6.0 + 22.67 + 14.17, 2), "last_month_total_usd": round(5.5 + 2.0 + 65.0, 2),
         "gemini_month_usd": 5.5, "gemini_calls_month": 2, "gemini_failures_month": 1, "gemini_today_usd": 5.5,
     }
 

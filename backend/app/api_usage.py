@@ -62,7 +62,10 @@ NO_LIMIT_LABEL = "없음"
 # 항목마다 선택 필드 ``since: "YYYY-MM"`` — 구독 시작 월. 그 전 달은 0 이다(없던 비용을 만들지 않는다).
 # 없으면 보고 시점의 '지난달'부터로 본다. 이번 달은 경과일로 안분한다(costs_report).
 DEFAULT_FIXED_COSTS = {
-    "render": {"label": "Render (web + worker)", "usd": 14, "plan": "Starter ×2"},
+    # 2026-09-28 정정 — 실제 청구는 Pro 다(청구 화면: 이달 예상 $39.71 = 작업공간
+    # 구독 $22.52 + 서비스 $12.70 + 대역폭 $0.60). Starter ×2 $14 로 남아 있어
+    # 화면이 Render 를 매달 약 $25 적게 잡았다. 서비스·대역폭은 달마다 변해 어림값이다.
+    "render": {"label": "Render (web + worker)", "usd": 40, "plan": "Pro (구독 + 사용량)"},
     "supabase": {"label": "Supabase", "usd": 25, "plan": "Pro"},
     "vercel": {"label": "Vercel", "usd": 0, "plan": "Hobby"},
     "prefect": {"label": "Prefect Cloud", "usd": 0, "plan": "Free"},

@@ -60,17 +60,28 @@ def test_usage_tokens_treats_none_as_zero_and_thoughts_as_output():
     assert api_usage.usage_tokens({"prompt_token_count": 7, "candidates_token_count": 3})["input_tokens"] == 7
 
 
+def test_default_prices_match_the_published_flash_lite_rates():
+    """기본 단가는 구글 공시가와 같아야 한다 — 어긋나면 화면이 실제 청구액을 못 맞춘다.
+
+    ai.google.dev/gemini-api/docs/pricing 의 Gemini 3.5 Flash-Lite 유료 등급:
+    입력 $0.30 / 출력 $2.50 / 캐시 읽기 $0.03 (1M 토큰당).
+    """
+    assert api_usage.gemini_prices("gemini-3.5-flash-lite") == {
+        "input": 0.30, "output": 2.50, "cached": 0.03,
+    }
+
+
 def test_cost_uses_default_price_table_and_bills_cached_input_cheaper():
-    # 1M 토큰당 $0.10 / $0.40 / $0.025 → 토큰 하나가 그 값의 micro USD.
-    assert api_usage.cost_micro_usd("m", input_tokens=1000, output_tokens=250, cached_tokens=200) == 80 + 5 + 100
+    # 1M 토큰당 $0.30 / $2.50 / $0.03 → 토큰 하나가 그 값의 micro USD.
+    assert api_usage.cost_micro_usd("m", input_tokens=1000, output_tokens=250, cached_tokens=200) == 240 + 6 + 625
     assert api_usage.cost_micro_usd("m", input_tokens=0, output_tokens=0) == 0
 
 
 def test_price_env_and_per_model_override(monkeypatch):
     monkeypatch.setenv("GEMINI_PRICE_INPUT_USD_PER_M", "0.5")
     monkeypatch.setenv("GEMINI_PRICES_JSON", json.dumps({"gemini-pro": {"input": 1.0, "output": 2.0}}))
-    assert api_usage.gemini_prices("gemini-pro") == {"input": 1.0, "output": 2.0, "cached": 0.025}
-    assert api_usage.gemini_prices("gemini-3.5-flash-lite") == {"input": 0.5, "output": 0.40, "cached": 0.025}
+    assert api_usage.gemini_prices("gemini-pro") == {"input": 1.0, "output": 2.0, "cached": 0.03}
+    assert api_usage.gemini_prices("gemini-3.5-flash-lite") == {"input": 0.5, "output": 2.50, "cached": 0.03}
     assert api_usage.cost_micro_usd("gemini-pro", input_tokens=1000, output_tokens=100) == 1000 + 200
 
     monkeypatch.setenv("GEMINI_PRICES_JSON", "{not json")
@@ -91,7 +102,7 @@ def test_record_accumulates_calls_tokens_cost_and_failures_per_day_row():
     explain = rows[0]
     assert (explain["calls"], explain["failures"]) == (3, 1)
     assert (explain["input_tokens"], explain["output_tokens"]) == (1500, 300)
-    assert explain["cost_micro_usd"] == 150 + 120
+    assert explain["cost_micro_usd"] == 450 + 750
     assert explain["updated_ms"] == NOW_MS + 2000
 
 
@@ -123,7 +134,7 @@ def test_record_never_raises_and_warns_at_most_once_per_minute(caplog):
 
 # --- 보고 ------------------------------------------------------------------
 def _seed_report_rows():
-    big = _usage(10_000_000, 1_000_000)  # $1.00 + $0.40
+    big = _usage(10_000_000, 1_000_000)  # $3.00 + $2.50
     august = int(datetime(2026, 8, 20, 12, 0, tzinfo=_KST).timestamp() * 1000)
     assert api_usage.record_gemini_usage(model="gemini-3.5-flash-lite", purpose="position_news", usage=big, now_ms=NOW_MS)
     assert api_usage.record_gemini_usage(model="gemini-3.5-flash-lite", purpose="title_translation", usage=None, ok=False, now_ms=NOW_MS)
@@ -133,6 +144,30 @@ def _seed_report_rows():
         db.add(TickerNewsAiBudget(budget_date_kst="coindesk_news:2026-08-20", used=4, updated_at=""))
         db.add(TickerNewsAiBudget(budget_date_kst="coindesk_news:lifetime", used=999, updated_at=""))
         db.commit()
+
+
+def test_report_reprices_old_rows_from_their_stored_tokens():
+    """단가를 고치면 지난 기록도 같이 맞아야 한다 — 저장된 추정액을 믿지 않는다.
+
+    비용은 (모델, 토큰) 에서 나오는 파생값이다. 기록 시점 단가가 틀렸으면 저장된
+    금액도 틀린 채 굳는다. 보고는 토큰에서 다시 계산한다.
+    """
+    with get_session() as db:
+        db.add(ApiUsageDaily(
+            day_kst=TODAY, provider="gemini", model="gemini-3.5-flash-lite",
+            purpose="title_translation", calls=1, failures=0,
+            input_tokens=1_000_000, output_tokens=1_000_000, cached_tokens=0,
+            cost_micro_usd=500_000,  # 옛 단가로 굳은 $0.50
+            updated_ms=NOW_MS))
+        db.commit()
+
+    with get_session() as db:
+        report = api_usage.costs_report(db, months=6, now_ms=NOW_MS)
+
+    # 공시가로 다시 계산하면 $0.30 + $2.50 = $2.80 이다.
+    assert report["kpis"]["gemini_month_usd"] == 2.80
+    translation = next(p for p in report["purposes"] if p["purpose"] == "title_translation")
+    assert translation["cost_usd"] == 2.80
 
 
 def test_costs_report_shape_and_totals(monkeypatch):
@@ -151,11 +186,11 @@ def test_costs_report_shape_and_totals(monkeypatch):
     assert [m["label"] for m in monthly] == ["4월", "5월", "6월", "7월", "8월", "9월*"]
     current = monthly[-1]
     assert set(current["providers"]) >= {"gemini", "coindesk", "render", "supabase", "vercel", "prefect"}
-    assert current["providers"]["gemini"] == 1.4 and current["providers"]["coindesk"] == 6.0
+    assert current["providers"]["gemini"] == 5.5 and current["providers"]["coindesk"] == 6.0
     # 구독 고정비: 이번 달(9월, 17/30 경과)은 안분 — $14 → 7.93, $25 → 14.17. 시작 월(기본 지난달) 이전은 0.
     assert (current["providers"]["render"], current["providers"]["supabase"]) == (7.93, 14.17)
-    assert current["total_usd"] == round(1.4 + 6.0 + 7.93 + 14.17, 2)
-    assert monthly[-2]["providers"] == {"gemini": 1.4, "coindesk": 2.0, "render": 14.0, "supabase": 25.0, "vercel": 0.0, "prefect": 0.0}
+    assert current["total_usd"] == round(5.5 + 6.0 + 7.93 + 14.17, 2)
+    assert monthly[-2]["providers"] == {"gemini": 5.5, "coindesk": 2.0, "render": 14.0, "supabase": 25.0, "vercel": 0.0, "prefect": 0.0}
     assert monthly[0]["providers"]["gemini"] == 0.0 and monthly[0]["total_usd"] == 0.0, "4월 구독비는 없던 비용"
     assert [m["providers"]["render"] for m in monthly] == [0.0, 0.0, 0.0, 0.0, 14.0, 7.93]
 
@@ -164,7 +199,7 @@ def test_costs_report_shape_and_totals(monkeypatch):
     gemini = providers[0]
     assert gemini["label"] == "Gemini · gemini-3.5-flash-lite" and gemini["method"] == "estimate"
     assert (gemini["calls"], gemini["failures"], gemini["input_tokens"], gemini["output_tokens"]) == (2, 1, 10_000_000, 1_000_000)
-    assert (gemini["month_usd"], gemini["last_month_usd"]) == (1.4, 1.4)
+    assert (gemini["month_usd"], gemini["last_month_usd"]) == (5.5, 5.5)
     coindesk = providers[1]
     assert (coindesk["method"], coindesk["calls"], coindesk["month_usd"], coindesk["last_month_usd"]) == ("calls", 12, 6.0, 2.0)
     render = providers[2]
@@ -174,14 +209,14 @@ def test_costs_report_shape_and_totals(monkeypatch):
 
     kpis = report["kpis"]
     assert kpis == {
-        "month_total_usd": round(1.4 + 6.0 + 7.93 + 14.17, 2), "last_month_total_usd": round(1.4 + 2.0 + 39.0, 2),
-        "gemini_month_usd": 1.4, "gemini_calls_month": 2, "gemini_failures_month": 1, "gemini_today_usd": 1.4,
+        "month_total_usd": round(5.5 + 6.0 + 7.93 + 14.17, 2), "last_month_total_usd": round(5.5 + 2.0 + 39.0, 2),
+        "gemini_month_usd": 5.5, "gemini_calls_month": 2, "gemini_failures_month": 1, "gemini_today_usd": 5.5,
     }
 
     purposes = report["purposes"]
     assert [p["code"] for p in purposes] == ["position_news", "title_translation", "community_summaries",
                                              "ai_explain", "market_news_summary", "ai_challenge"]
-    assert purposes[0]["label"] == "종목 뉴스 분류 · 요약" and purposes[0]["calls"] == 1 and purposes[0]["cost_usd"] == 1.4
+    assert purposes[0]["label"] == "종목 뉴스 분류 · 요약" and purposes[0]["calls"] == 1 and purposes[0]["cost_usd"] == 5.5
     assert purposes[0]["daily_limit"] == 1000  # env 가 있으면 그 값
     assert purposes[1]["failures"] == 1 and purposes[1]["daily_limit"] == "없음"
     assert purposes[3]["calls"] == 0  # 8월 행은 이번 달 표에 없다
@@ -189,8 +224,8 @@ def test_costs_report_shape_and_totals(monkeypatch):
 
     daily = report["daily"]
     assert len(daily) == 30 and daily[-1]["day"] == TODAY and daily[0]["day"] == "2026-08-19"
-    assert (daily[-1]["gemini_calls"], daily[-1]["cost_usd"], daily[-1]["coindesk_calls"]) == (2, 1.4, 12)
-    assert (daily[1]["gemini_calls"], daily[1]["cost_usd"], daily[1]["coindesk_calls"]) == (1, 1.4, 4)
+    assert (daily[-1]["gemini_calls"], daily[-1]["cost_usd"], daily[-1]["coindesk_calls"]) == (2, 5.5, 12)
+    assert (daily[1]["gemini_calls"], daily[1]["cost_usd"], daily[1]["coindesk_calls"]) == (1, 5.5, 4)
 
 
 def test_costs_report_fixed_costs_env_replaces_defaults_and_months_clamp(monkeypatch):

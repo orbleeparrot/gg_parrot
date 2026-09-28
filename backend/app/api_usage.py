@@ -35,8 +35,11 @@ WARN_INTERVAL_SECONDS = 60.0
 DAILY_DAYS = 30
 MONTHS_DEFAULT = 6
 
-# 1M 토큰당 USD. 3.5 Flash-Lite 기준값이며 env 로 바꾼다(모델별 재정의는 GEMINI_PRICES_JSON).
-_DEFAULT_PRICES = {"input": 0.10, "output": 0.40, "cached": 0.025}
+# 1M 토큰당 USD. Gemini 3.5 Flash-Lite 유료 등급 공시가이며 env 로 바꾼다
+# (모델별 재정의는 GEMINI_PRICES_JSON). 출처: ai.google.dev/gemini-api/docs/pricing.
+# 2026-09-28 정정 — 이전 값($0.10/$0.40/$0.025)은 출시 전 단가라 화면이 실제 청구액의
+# 1/4~1/5 만 보여 줬다. 단가를 바꾸면 지난달 수치도 같이 다시 계산된다(토큰만 저장한다).
+_DEFAULT_PRICES = {"input": 0.30, "output": 2.50, "cached": 0.03}
 _PRICE_ENV = {
     "input": "GEMINI_PRICE_INPUT_USD_PER_M",
     "output": "GEMINI_PRICE_OUTPUT_USD_PER_M",
@@ -340,7 +343,18 @@ def costs_report(db, *, months: int = MONTHS_DEFAULT, now_ms: Optional[int] = No
 
     def add(target: dict, row: ApiUsageDaily) -> None:
         for name in _ACCUMULATED:
+            if name == "cost_micro_usd":
+                continue
             target[name] += int(getattr(row, name) or 0)
+        # 비용은 (모델, 토큰) 에서 나오는 파생값이다. 저장된 금액은 기록 시점 단가로
+        # 굳어 있어, 단가 설정이 틀렸으면 지난 기록까지 틀린 채 남는다. 여기서 다시
+        # 계산해 단가를 고치면 과거 수치도 함께 맞게 한다. 저장 컬럼은 그대로 둔다.
+        target["cost_micro_usd"] += cost_micro_usd(
+            row.model or "",
+            input_tokens=int(row.input_tokens or 0),
+            output_tokens=int(row.output_tokens or 0),
+            cached_tokens=int(row.cached_tokens or 0),
+        )
 
     by_month: dict[str, dict] = {}
     by_day: dict[str, dict] = {}

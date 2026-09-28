@@ -3,7 +3,7 @@
 // 그대로 보여 주고, 합계 행처럼 화면에서 더하는 값도 서버 행에서만 더한다(없는 값은 "—").
 // 회원 관리는 지표가 아니라 목록이라 쪽·검색·상태 필터까지 주소에 있고(?page&q&status&size), 기간은 무관해 숨긴다.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, Navigate, useSearchParams } from "react-router-dom";
+import { Navigate, useSearchParams } from "react-router-dom";
 import { api } from "../api.js";
 import { useAuth } from "../lib/auth.js";
 import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
@@ -130,7 +130,6 @@ export default function AdminDashboard() {
       <div className="adm-head">
         <h1>관리자 대시보드</h1>
         <div className="adm-head-right">
-          {tab === "news" ? <Link to="/admin/news-test" className="btn btn-s btn-secondary">뉴스 판단 테스트</Link> : null}
           {ranged ? <RangePicker value={days} options={RANGES} onChange={setDays} /> : null}
           {data ? (
             <span className={`adm-stamp${stale ? " is-stale" : ""}`} role="status">

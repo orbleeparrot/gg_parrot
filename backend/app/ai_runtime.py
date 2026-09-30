@@ -236,7 +236,8 @@ class AiCallRuntime:
             1,
             int(cache_max_entries if cache_max_entries is not None else os.environ.get("AI_CACHE_MAX_ENTRIES", "512")),
         )
-        self._retries = max(0, int(retries if retries is not None else os.environ.get("AI_RETRIES", "1")))
+        # One initial attempt + at most one retry, regardless of stale env values.
+        self._retries = min(1, max(0, int(retries if retries is not None else os.environ.get("AI_RETRIES", "1"))))
         self._backoff = max(
             0.0,
             float(
@@ -288,7 +289,7 @@ class AiCallRuntime:
         *,
         retries: int | None = None,
     ) -> tuple[T, str]:
-        retry_limit = self._retries if retries is None else max(0, int(retries))
+        retry_limit = self._retries if retries is None else min(1, max(0, int(retries)))
         with self._lock:
             cached = self._cache_get_locked(key)
             if cached is not None:

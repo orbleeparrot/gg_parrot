@@ -140,7 +140,8 @@ def test_all_invalid_attempts_raise_instead_of_caching_empty_result(provider):
     for _ in range(2):
         with pytest.raises(ValueError, match='no valid items'):
             news._request_korean_title_translations([SECOND])
-    assert len(requests) == 4
+    # Re-entering the failed job must not grant a third/fourth paid request.
+    assert len(requests) == 2
 
 
 def test_complete_first_response_does_not_pay_for_correction(provider):

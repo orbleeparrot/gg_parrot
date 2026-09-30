@@ -80,7 +80,7 @@
    글자는 티커(JetBrains Mono) + 종목명, 출처는 색·아이콘으로만: 껄무새 = AI 뱃지(노랑 매트릭스) · 리더보드·공유 = 인디고 · 업로드 = 시안 · 가이드 = 초록 · 없음 = 괘선.
    시각 높이는 22px 이지만 누르는 영역은 ::before 로 44px(§5 터치). 드롭다운은 제목 메뉴(.studio-mode-menu)를 그대로 쓴다.
    Hallmark · component: macro-source badge · states: default · hover · focus · active · disabled · loading · error · success · contrast: pass */
-.studio-src { position: relative; margin-left: auto; min-width: 0; max-width: 60%; display: flex; }
+.studio-src { position: relative; margin-left: auto; min-width: 0; max-width: 66%; display: flex; }
 .studio-src-badge {
   position: relative; display: inline-flex; align-items: center; gap: 6px; height: 22px; max-width: 100%; padding: 0 7px 0 8px;
   border: 0; border-radius: 6px; background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-900));
@@ -397,3 +397,5 @@ a.studio-mode-item { text-decoration: none; }
 .studio-src-menu .studio-src-lead .studio-src-ic { width: 20px; height: 20px; margin: 0; }
 .studio-src-menu .studio-src-lead .studio-src-dot { width: 11px; height: 11px; }
 .studio-src-check { margin-left: auto; width: 18px; height: 18px; flex: none; display: grid; place-items: center; border-radius: 50%; background: rgb(var(--c-slate-900)); color: rgb(var(--c-surface)); font-size: 10.5px; font-weight: 800; }
+/* 처음 들어왔을 때(출처 없음) — 배지가 '껄무새에게 물어볼까?' 입구: 껄무새 얼굴 + AI 뱃지 색 */
+.studio-src-badge.is-prompt { background: var(--badge-ai-bg); color: var(--badge-ai-fg); }

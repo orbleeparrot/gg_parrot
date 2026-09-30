@@ -31,7 +31,9 @@ export default function MacroSourceMenu({
   const btnRef = useRef(null);
   const menuId = useId();
   const badge = macroSourceBadge(source, symbol);
-  const tone = flash?.kind === "error" ? "error" : flash?.kind === "success" ? "success" : busy ? "loading" : badge.tone;
+  // 처음 들어와 아직 출처가 없으면 배지가 곧 '껄무새에게 물어볼까?' 입구다(공유 링크 화면 제외).
+  const prompt = badge.kind === "none" && !shared;
+  const tone = flash?.kind === "error" ? "error" : flash?.kind === "success" ? "success" : busy ? "loading" : prompt ? "prompt" : badge.tone;
 
   useEffect(() => {
     if (!open) return undefined;
@@ -44,13 +46,14 @@ export default function MacroSourceMenu({
 
   const pick = (fn) => () => { setOpen(false); fn?.(); };
   const displayTicker = badge.ticker || "—";
-  const aria = busy ? "매크로 파일 읽는 중" : `매크로 출처 · ${badge.title}`;
+  const aria = busy ? "매크로 파일 읽는 중" : prompt ? "껄무새에게 물어볼까? · 매크로 출처 고르기" : `매크로 출처 · ${badge.title}`;
 
   // 배지 안 글자 — 로딩·오류·성공은 잠깐 다른 글자를 보여 준다(자세한 사유는 판 아래 알림 줄).
   let inner;
   if (tone === "loading") inner = <><span className="studio-src-spin" aria-hidden="true" /><span className="studio-src-nm">파일 읽는 중</span></>;
   else if (tone === "error") inner = <span className="studio-src-nm">{flash.text || "파일을 읽지 못했어요"}</span>;
   else if (tone === "success") inner = <><span className="studio-src-tk num">{displayTicker}</span><span className="studio-src-nm">{flash.text || "등록 완료"}</span></>;
+  else if (tone === "prompt") inner = <><SrcIcon kind="ask" /><span className="studio-src-nm">껄무새에게 물어볼까?</span></>;
   else inner = (
     <>
       <SrcIcon kind={badge.kind} />

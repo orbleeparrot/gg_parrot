@@ -20,6 +20,7 @@ from sqlmodel import Session, select
 
 from . import db as db_mod
 from .db import CommunityPostSummary, get_session
+from .news_ai_budget import MAX_CALLS as MAX_ATTEMPTS
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +28,7 @@ LEASE_MS = 180_000
 RETRY_MS = 300_000
 # 검증을 끝내 통과하지 못하는 글은 수집 주기마다 다시 요약돼 유료 호출을 되풀이했다.
 # 시도할 때마다 대기를 두 배로 늘리고, 예산을 다 쓰면 포기한다. 요약 키에
-# prompt_version 이 들어 있어 지시문을 고치면 새 행이 생기고 예산도 새로 시작된다.
-MAX_ATTEMPTS = 10  # actual provider-call lifetime ceiling is enforced by news_ai_budget
+# prompt_version 변경으로 결과 행이 바뀌어도 news_ai_budget의 실제 호출 예산은 유지된다.
 _MAX_RETRY_MS = 6 * 60 * 60 * 1000
 CACHE_TTL_MS = 30 * 86_400_000
 _MAX_BATCH = 100

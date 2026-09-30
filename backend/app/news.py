@@ -36,6 +36,7 @@ import httpx
 
 from .http_runtime import SingleFlightGroup, get_http_client, run_parallel
 from .ai_runtime import AiBusyError, ai_cache_key, default_model, get_ai_client, get_ai_runtime
+from .news_ai_budget import MARKET_SUMMARY_MAX_CALLS_PER_DAY
 from . import binance_square
 
 _GOOGLE_NEWS = "https://news.google.com/rss/search"
@@ -451,10 +452,8 @@ logger = logging.getLogger(__name__)
 
 _SUMMARY_PROMPT_VERSION = "market-news-summary-v3"
 _MARKET_SUMMARY_RETRY_SECONDS = 30.0
-_MARKET_SUMMARY_MAX_CALLS_PER_DAY = max(
-    0,
-    int(os.environ.get("NEWS_MARKET_SUMMARY_MAX_CALLS_PER_DAY", "20")),
-)
+# Hard cap: legacy Render/local environment values must not raise it.
+_MARKET_SUMMARY_MAX_CALLS_PER_DAY = MARKET_SUMMARY_MAX_CALLS_PER_DAY
 
 _DISCLAIMER = (
     "정보 제공용이며 투자자문이 아닙니다. 요약은 AI가 생성했을 수 있으니 "

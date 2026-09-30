@@ -584,6 +584,13 @@ class BrowserNewsPageCache(SQLModel, table=True):
     updated_ms: int = Field(sa_type=BigInteger, index=True)
 
 
+class NewsAiItemBudget(SQLModel, table=True):
+    """Lifetime provider-call reservations, independent of result-cache eviction."""
+
+    budget_key: str = Field(primary_key=True, max_length=96)
+    calls: int = Field(default=0)
+
+
 class NewsTitleTranslation(SQLModel, table=True):
     """One shared translation per normalized news title.
 
@@ -1332,7 +1339,7 @@ _PG_BIGINT_COLUMNS = {
     ),
 }
 _PG_PRIVATE_CACHE_TABLES = (
-    "newstitletranslation", "communitypostsummary", "whaletradestate", "onchainholderstate",
+    "newstitletranslation", "communitypostsummary", "newsaiitembudget", "whaletradestate", "onchainholderstate",
     "chatmessage", "chatreadstate", "useravatar",
     "newsarticlefeed", "newsarticle", "newsmaintenancelease", "publicnewslease",
     "leaderboardsnapshotcontrol", "leaderboardsnapshotversion", "leaderboardsnapshotitem",

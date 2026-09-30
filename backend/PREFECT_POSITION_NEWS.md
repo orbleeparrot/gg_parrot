@@ -92,12 +92,20 @@ BINANCE_SQUARE_ENABLED=true
 BINANCE_SQUARE_CACHE_SECONDS=300
 BINANCE_SQUARE_MAX_ITEMS=5
 BINANCE_SQUARE_MAX_AGE_DAYS=7
-GEMINI_MODEL=gemini-3.5-flash-lite
-GEMINI_POSITION_NEWS_MAX_TOKENS=512
+OPENAI_MODEL=gpt-6-luna
+OPENAI_POSITION_NEWS_MAX_TOKENS=512
 POSITION_NEWS_REQUIRE_POSTGRES=true
 ```
 
 `POSITION_NEWS_BROWSER_FALLBACK_ENABLED`는 이전 설정입니다. 현재 확장은 `POSITION_NEWS_BROWSER_ENRICHMENT_ENABLED`로 제어합니다. 기사·번역과 일일 예산은 DB에 저장하고, 번역 실패 시 원문을 보존합니다. 기사와 분석 순서를 함께 보존하며, 오류·빈 결과가 마지막 정상 스냅샷을 삭제하지 않습니다.
+
+제목 번역과 커뮤니티 본문 요약은 각각 **동일 입력당 API 요청 최대 10회**입니다. 제목의 교정 요청도 별도 1회로 세고, 응답 검증 실패·JSON 오류·타임아웃도 차감합니다. 로컬 동시성 대기로 제공자를 호출하지 않았으면 차감하지 않습니다. 신규 기사 전체를 번역하는 동작에는 일일 기사 수 제한을 두지 않습니다.
+
+누적 횟수는 `newsaiitembudget`에 저장합니다. 제목은 원문 제목으로, 요약은 게시글 ID와 원문 본문 해시로 식별하며 웹·Prefect가 공유합니다. 캐시 정리·서버 재시작·모델/프롬프트 변경으로 초기화하지 않습니다. 편집으로 본문이 달라진 게시글은 새 입력입니다. 카운터 DB가 사용 불가하면 API 호출도 보류합니다. 이 표는 결과 캐시와 함께 삭제하면 안 됩니다.
+
+검증되지 않은 제목은 공개 피드에서 제외하고, 10회를 소진한 미완료 커뮤니티 요약은 `failed`로 표시해 해당 게시글도 숨깁니다. 원문은 내부 수집 데이터에만 남습니다. 과거 `ready` 표시가 남은 기사도 읽을 때 재검증합니다.
+
+배포 시 `20260930090000_news_ai_item_call_limit.sql`을 적용하거나 백엔드/워커의 `init_db()`로 신규 표를 생성합니다(RLS 활성화·클라이언트 권한 차단 포함). 웹과 워커를 모두 새 코드로 재시작해야 하며, 이전 코드로 실행 중인 작업에는 이 제한이 적용되지 않습니다. 배포 이전의 정확한 항목별 API 횟수는 복원할 수 없어 새 카운터는 적용 시점부터 누적됩니다.
 
 전체 구조는 [에이전트 실행 구조](../docs/agent-runtime.md), Render 설정은 루트 `render.yaml`과 `render.prefect-worker.example.yaml`을 참고하세요.
 

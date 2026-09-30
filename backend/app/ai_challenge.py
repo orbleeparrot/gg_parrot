@@ -1,4 +1,4 @@
-"""Generate the daily challenge's macros (Gemini, with a safe template fallback).
+"""Generate the daily challenge's macros (OpenAI, with a safe template fallback).
 
 The model proposes a few beginner-friendly macros for the chosen symbol; every
 proposal is validated against the real :class:`Macro` schema and anything invalid
@@ -15,7 +15,7 @@ from .ai_runtime import ai_available, ai_cache_key, default_model, get_ai_client
 from .engine.schema import Macro
 
 _MODEL = default_model()
-_MAX_TOKENS = int(os.environ.get("GEMINI_CHALLENGE_MAX_TOKENS", "2048"))
+_MAX_TOKENS = int(os.environ.get("OPENAI_CHALLENGE_MAX_TOKENS", "2048"))
 _PROMPT_VERSION = "daily-challenge-v2"
 
 _SYSTEM = (

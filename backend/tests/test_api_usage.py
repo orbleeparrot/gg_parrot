@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
-from google.genai import errors as genai_errors
+import openai
 from sqlalchemy import delete
 from sqlmodel import select
 
@@ -127,7 +127,7 @@ def test_record_never_raises_and_warns_at_most_once_per_minute(caplog):
         assert api_usage.record_gemini_usage(model="m", purpose="x", usage=_usage(), db=broken) is False
         assert api_usage.record_gemini_usage(model="m", purpose="x", usage=_usage(), db=broken) is False
     assert broken.rolled_back == 2  # 빌린 세션은 실패한 트랜잭션 채로 돌려주지 않는다
-    warnings = [r for r in caplog.records if "Gemini 사용량 기록 실패" in r.getMessage()]
+    warnings = [r for r in caplog.records if "AI 사용량 기록 실패" in r.getMessage()]
     assert len(warnings) == 1 and "no database" in warnings[0].getMessage()
     assert _rows() == []
 
@@ -190,19 +190,19 @@ def test_costs_report_shape_and_totals(monkeypatch):
     # 구독 고정비: 이번 달(9월, 17/30 경과)은 안분 — $40 → 22.67, $25 → 14.17. 시작 월(기본 지난달) 이전은 0.
     assert (current["providers"]["render"], current["providers"]["supabase"]) == (22.67, 14.17)
     assert current["total_usd"] == round(5.5 + 6.0 + 22.67 + 14.17, 2)
-    assert monthly[-2]["providers"] == {"gemini": 5.5, "coindesk": 2.0, "render": 40.0, "supabase": 25.0, "vercel": 0.0, "prefect": 0.0}
+    assert monthly[-2]["providers"] == {"openai": 0.0, "gemini": 5.5, "coindesk": 2.0, "render": 40.0, "supabase": 25.0, "vercel": 0.0, "prefect": 0.0}
     assert monthly[0]["providers"]["gemini"] == 0.0 and monthly[0]["total_usd"] == 0.0, "4월 구독비는 없던 비용"
     assert [m["providers"]["render"] for m in monthly] == [0.0, 0.0, 0.0, 0.0, 40.0, 22.67]
 
     providers = report["providers"]
-    assert [p["provider"] for p in providers] == ["gemini", "coindesk", "render", "supabase", "vercel", "prefect"]
-    gemini = providers[0]
+    assert [p["provider"] for p in providers] == ["openai", "gemini", "coindesk", "render", "supabase", "vercel", "prefect"]
+    gemini = providers[1]
     assert gemini["label"] == "Gemini · gemini-3.5-flash-lite" and gemini["method"] == "estimate"
     assert (gemini["calls"], gemini["failures"], gemini["input_tokens"], gemini["output_tokens"]) == (2, 1, 10_000_000, 1_000_000)
     assert (gemini["month_usd"], gemini["last_month_usd"]) == (5.5, 5.5)
-    coindesk = providers[1]
+    coindesk = providers[2]
     assert (coindesk["method"], coindesk["calls"], coindesk["month_usd"], coindesk["last_month_usd"]) == ("calls", 12, 6.0, 2.0)
-    render = providers[2]
+    render = providers[3]
     assert (render["label"], render["method"], render["month_usd"], render["last_month_usd"], render["plan"]) == (
         "Render (web + worker)", "fixed", 22.67, 40.0, "Pro (구독 + 사용량)")
     assert render["prorated"] is True and render["since"] == "2026-08"
@@ -213,6 +213,8 @@ def test_costs_report_shape_and_totals(monkeypatch):
         "gemini_month_usd": 5.5, "gemini_calls_month": 2, "gemini_failures_month": 1, "gemini_today_usd": 5.5,
         # 실패도 호출이라 오늘 호출 2 · 실패 1 이다 — 토큰 0 인 실패가 섞였는지 화면에서 보인다.
         "gemini_failures_today": 1, "gemini_calls_today": 2,
+        "ai_month_usd": 5.5, "ai_calls_month": 2, "ai_today_usd": 5.5,
+        "ai_failures_today": 1, "ai_calls_today": 2,
     }
 
     purposes = report["purposes"]
@@ -235,9 +237,9 @@ def test_costs_report_fixed_costs_env_replaces_defaults_and_months_clamp(monkeyp
     with get_session() as db:
         report = api_usage.costs_report(db, months=2, now_ms=NOW_MS)
     assert [m["label"] for m in report["monthly"]] == ["8월", "9월*"]
-    assert report["monthly"][-1]["providers"] == {"gemini": 0.0, "coindesk": 0.0, "render": 17.0}  # 30 × 17/30
-    assert [p["provider"] for p in report["providers"]] == ["gemini", "coindesk", "render"]
-    assert report["providers"][0]["label"] == "Gemini · gemini-3.5-flash-lite"  # 사용 기록이 없으면 기본 모델
+    assert report["monthly"][-1]["providers"] == {"openai": 0.0, "gemini": 0.0, "coindesk": 0.0, "render": 17.0}  # 30 × 17/30
+    assert [p["provider"] for p in report["providers"]] == ["openai", "gemini", "coindesk", "render"]
+    assert report["providers"][0]["label"] == "OpenAI · gpt-6-luna (max)"
     assert report["kpis"]["month_total_usd"] == 17.0
 
 
@@ -272,30 +274,49 @@ class _FakeModels:
         self.outcome = outcome
         self.usage = usage
 
-    def generate_content(self, **kwargs):
+    def create(self, **kwargs):
         if isinstance(self.outcome, Exception):
             raise self.outcome
-        return SimpleNamespace(text=self.outcome, usage_metadata=self.usage)
+        return SimpleNamespace(output_text=self.outcome, usage=self.usage, status="completed")
 
 
 def _messages(outcome, usage=None):
-    return ai_runtime._Messages(SimpleNamespace(models=_FakeModels(outcome, usage)))
+    return ai_runtime._Messages(SimpleNamespace(responses=_FakeModels(outcome, usage)))
 
 
 def test_adapter_records_success_with_purpose_tokens_and_model():
-    response = _messages("답", _usage(1000, 200, thoughts=50)).create(
-        model="gemini-3.5-flash-lite", max_tokens=10, messages=[{"role": "user", "content": "q"}], purpose="ai_explain",
+    response = _messages("답", {"input_tokens": 1000, "output_tokens": 250, "output_tokens_details": {"reasoning_tokens": 50}}).create(
+        model="gpt-6-luna", max_tokens=10, messages=[{"role": "user", "content": "q"}], purpose="ai_explain",
     )
     assert response.content[0].text == "답"
     assert not hasattr(response, "usage")  # 캐시로 복사되는 응답에는 싣지 않는다
     (row,) = _rows()
-    assert (row["model"], row["purpose"], row["calls"], row["failures"]) == ("gemini-3.5-flash-lite", "ai_explain", 1, 0)
+    assert (row["provider"], row["model"], row["purpose"], row["calls"], row["failures"]) == ("openai", "gpt-6-luna", "ai_explain", 1, 0)
     assert (row["input_tokens"], row["output_tokens"]) == (1000, 250)
+
+
+def test_mixed_provider_report_preserves_openai_request_cost_and_gemini_history():
+    _seed_report_rows()
+    # Daily accumulated input exceeds the long-context threshold, but neither
+    # individual request does. The report must NOT reprice it as one huge call.
+    for _ in range(2):
+        assert api_usage.record_openai_usage(model="gpt-6-luna", purpose="title_translation",
+            usage={"input_tokens": 200000, "input_tokens_details": {"cached_tokens": 10000, "cache_write_tokens": 20000},
+                   "output_tokens": 20000, "output_tokens_details": {"reasoning_tokens": 19000}}, now_ms=NOW_MS)
+    with get_session() as db:
+        report = api_usage.costs_report(db, now_ms=NOW_MS)
+    providers = {row["provider"]: row for row in report["providers"]}
+    assert providers["openai"]["month_usd"] == 0.06
+    assert providers["gemini"]["month_usd"] == 5.5
+    assert report["kpis"]["ai_calls_month"] == 4
+    assert report["kpis"]["gemini_calls_month"] == 2
+    assert report["daily"][-1]["openai_calls"] == 2
+    assert providers["openai"]["output_tokens"] == 40000
 
 
 def test_adapter_records_failures_for_provider_and_transport_errors():
     with pytest.raises(ai_runtime.AiRateLimitError):
-        _messages(genai_errors.APIError(429, {"error": {"message": "slow down"}})).create(
+        _messages(openai.APIStatusError("slow down", response=httpx.Response(429, request=httpx.Request("POST", "https://api.openai.com/v1/responses")), body=None)).create(
             model="m", max_tokens=1, messages=[{"role": "user", "content": "q"}], purpose="position_news",
         )
     with pytest.raises(ai_runtime.AiConnectionError):
@@ -308,7 +329,7 @@ def test_adapter_records_failures_for_provider_and_transport_errors():
 
 def test_adapter_purpose_defaults_to_empty_and_ledger_failure_does_not_break_the_call(monkeypatch):
     seen = []
-    monkeypatch.setattr(ai_runtime, "record_gemini_usage", lambda **kw: seen.append(kw))
+    monkeypatch.setattr(ai_runtime, "record_openai_usage", lambda **kw: seen.append(kw))
     response = _messages("ok", _usage(3, 1)).create(model="m", max_tokens=1, messages=[{"role": "user", "content": "q"}])
     assert response.content[0].text == "ok"
     assert seen[0]["purpose"] == "" and seen[0]["ok"] is True and seen[0]["usage"].prompt_token_count == 3

@@ -34,7 +34,7 @@ main.paper_mod.shutdown_running_sessions.assert_awaited_once_with()
 main.runner_engine_mod.shutdown_drivers.assert_awaited_once_with()
 '''
     env = {**os.environ, "DATABASE_URL": "", "SQLITE_PATH": str(tmp_path / "untouched.db"),
-           "GEMINI_API_KEY": "", "COINDESK_API_KEY": "", "PREFECT_API_URL": ""}
+           "OPENAI_API_KEY": "", "COINDESK_API_KEY": "", "PREFECT_API_URL": ""}
     result = subprocess.run([sys.executable, "-c", script], env=env, capture_output=True, text=True, timeout=20)
     assert result.returncode == 0, result.stderr
     assert not (tmp_path / "untouched.db").exists()

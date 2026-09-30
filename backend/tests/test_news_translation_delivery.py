@@ -18,7 +18,7 @@ def isolated_translation(monkeypatch):
 
 
 def test_first_pass_is_published_before_correction_and_only_missing_claims_are_renewed(monkeypatch):
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     first, second = "Arbitrum token update 731", "Arbitrum token update 732"
     published, renewed = {}, []
     calls = 0
@@ -47,7 +47,7 @@ def test_first_pass_is_published_before_correction_and_only_missing_claims_are_r
 
 @pytest.mark.parametrize("legacy_limit", ["0", "1", "20"])
 def test_translation_provider_has_no_daily_quota(monkeypatch, legacy_limit):
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("NEWS_TRANSLATION_MAX_CALLS_PER_DAY", legacy_limit)
     monkeypatch.setattr(repository, "reserve_ai_budget", lambda **_: pytest.fail("translation has no daily budget"))
     calls = []
@@ -140,7 +140,7 @@ def test_a_failed_batch_does_not_discard_later_batches(monkeypatch):
 def test_long_headline_reaches_translator_without_losing_final_facts(monkeypatch):
     title = "Arbitrum " + "network expansion " * 20 + "reaches $50M"
     korean = "아비트럼 네트워크 확장 규모 $50M 도달"
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     def create(**kwargs):
         article = json.loads(kwargs["messages"][0]["content"])[0]
         assert article["title"] == title

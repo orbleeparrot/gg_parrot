@@ -1,11 +1,9 @@
-"""Bounded, retry-aware runtime shared by every Gemini call path.
+"""Bounded, retry-aware OpenAI Responses runtime shared by every AI call path.
 
 Every AI feature in the app speaks one tiny contract — a system instruction plus
 user turns in, text blocks out — through ``get_ai_client().messages.create``.
-That surface is deliberately provider-agnostic (it predates Gemini: the app ran
-on Anthropic first), which is why swapping the model provider touches this
-module only. Call sites and their test fakes never import an SDK, never see an
-SDK exception, and never read an API key.
+That surface is deliberately provider-agnostic. Call sites and their test fakes
+never import an SDK or see an SDK exception. Provider selection happens here.
 """
 from __future__ import annotations
 
@@ -22,24 +20,21 @@ from dataclasses import dataclass, field
 from typing import Callable, TypeVar
 
 import httpx
-from google import genai
-from google.genai import errors as genai_errors
-from google.genai import types as genai_types
+import openai
 
-from .api_usage import record_gemini_usage
+from .api_usage import record_openai_usage
 from .observability import timed_operation
 
 T = TypeVar("T")
 
-# 기본 모델. 3.5 Flash-Lite 는 thinking_level 기본이 'minimal' 이라 분류·번역·JSON 추출
-# 같은 이 앱의 짧은 작업에 맞고, 출력 토큰을 생각에 쓰지 않아 max_tokens 예산이 그대로
-# 본문에 쓰인다. 바꾸려면 GEMINI_MODEL 하나만 바꾸면 된다 — 모든 호출 지점이 이걸 읽는다.
-DEFAULT_MODEL = "gemini-3.5-flash-lite"
+# All features share this target; no old-provider fallback.
+DEFAULT_MODEL = "gpt-6-luna"
+REASONING_EFFORT = "max"
 
 
 def ai_api_key() -> str:
-    """The server-side Gemini key; empty means every AI feature is off."""
-    return str(os.environ.get("GEMINI_API_KEY") or "").strip()
+    """The server-side OpenAI key; empty means every AI feature is off."""
+    return str(os.environ.get("OPENAI_API_KEY") or "").strip()
 
 
 def ai_available() -> bool:
@@ -47,7 +42,7 @@ def ai_available() -> bool:
 
 
 def default_model() -> str:
-    return str(os.environ.get("GEMINI_MODEL") or "").strip() or DEFAULT_MODEL
+    return str(os.environ.get("OPENAI_MODEL") or "").strip() or DEFAULT_MODEL
 
 
 class AiBusyError(RuntimeError):
@@ -80,12 +75,13 @@ class AiStatusError(AiProviderError):
 
 
 def _translate_error(error: BaseException) -> AiProviderError:
-    if isinstance(error, genai_errors.APIError):
-        code = int(getattr(error, "code", 0) or 0)
-        message = str(getattr(error, "message", "") or error)
-        # Google answers an invalid key with 400 INVALID_ARGUMENT, not 401 — read
-        # the message so the user sees "키가 유효하지 않아요" rather than a generic failure.
-        if code in (401, 403) or "api key" in message.lower():
+    if isinstance(error, openai.APIConnectionError):
+        return AiConnectionError("OpenAI connection failed")
+    if isinstance(error, openai.APIStatusError):
+        code = int(error.status_code)
+        # Do not propagate provider error bodies (may echo credentials/prompts).
+        message = f"OpenAI HTTP {code}"
+        if code in (401, 403):
             return AiAuthError(message, status_code=code)
         if code == 429:
             return AiRateLimitError(message, status_code=code)
@@ -107,27 +103,27 @@ class AiResponse:
     content: list[TextBlock] = field(default_factory=list)
 
 
-def _to_contents(messages: list[dict]) -> list[genai_types.Content]:
-    """Anthropic-style ``[{role, content}]`` → Gemini ``Content`` turns."""
+def _to_contents(messages: list[dict]) -> list[dict]:
+    """Shared text-only contract → Responses input turns, preserving roles."""
     contents = []
     for message in messages:
-        role = "model" if message.get("role") == "assistant" else "user"
+        role = "assistant" if message.get("role") == "assistant" else "user"
         content = message.get("content")
         if isinstance(content, str):
-            parts = [genai_types.Part(text=content)]
+            text = content
         else:
             # Only text parts are used anywhere in the app; anything else is
             # stringified so a stray dict can't silently vanish from the prompt.
-            parts = [
-                genai_types.Part(text=p if isinstance(p, str) else json.dumps(p, ensure_ascii=False))
+            text = "\n".join(
+                p if isinstance(p, str) else str(p.get("text", json.dumps(p, ensure_ascii=False)))
                 for p in (content or [])
-            ]
-        contents.append(genai_types.Content(role=role, parts=parts))
+            )
+        contents.append({"role": role, "content": text})
     return contents
 
 
 class _Messages:
-    def __init__(self, client: genai.Client) -> None:
+    def __init__(self, client: openai.OpenAI) -> None:
         self._client = client
 
     def create(
@@ -145,35 +141,34 @@ class _Messages:
         ``purpose`` is the call site's code (position_news, ai_explain, …) for the
         usage ledger only — it never reaches the model.
         """
-        config = genai_types.GenerateContentConfig(
-            system_instruction=system or None,
-            max_output_tokens=int(max_tokens),
-            http_options=(
-                genai_types.HttpOptions(timeout=int(float(timeout) * 1000)) if timeout else None
-            ),
-            # No tools anywhere in the app; opting out skips the SDK's function-
-            # calling loop and the warning it logs about it on every process.
-            automatic_function_calling=genai_types.AutomaticFunctionCallingConfig(disable=True),
-        )
+        # Responses counts reasoning + visible output together. Keep both bounded.
+        reserve = max(0, min(16384, int(os.environ.get("OPENAI_REASONING_TOKEN_RESERVE", "4096"))))
+        output_limit = max(16, min(32768, int(max_tokens) + reserve))
+        kwargs = {"timeout": float(timeout)} if timeout is not None else {}
         try:
-            response = self._client.models.generate_content(
-                model=model, contents=_to_contents(messages), config=config,
+            response = self._client.responses.create(
+                model=model, input=_to_contents(messages), instructions=system,
+                reasoning={"effort": REASONING_EFFORT},
+                max_output_tokens=output_limit, store=False, **kwargs,
             )
-        except (genai_errors.APIError, httpx.HTTPError) as error:
+        except (openai.APIError, httpx.HTTPError) as error:
             # 실패도 요청 한 건이다 — 여기서 세야 재시도·캐시 히트와 무관하게 과금 단위와 맞는다.
-            record_gemini_usage(model=model, purpose=purpose, usage=None, ok=False)
+            record_openai_usage(model=model, purpose=purpose, usage=None, ok=False)
             raise _translate_error(error) from error
         except Exception:
-            record_gemini_usage(model=model, purpose=purpose, usage=None, ok=False)
+            record_openai_usage(model=model, purpose=purpose, usage=None, ok=False)
             raise
         # usage 는 AiResponse 에 싣지 않는다 — 응답은 캐시에 deep-copy 되어 되돌아오므로
         # 거기 실으면 캐시 히트마다 다시 세게 된다.
-        record_gemini_usage(
-            model=model, purpose=purpose, usage=getattr(response, "usage_metadata", None), ok=True,
+        complete = response.status == "completed"
+        record_openai_usage(
+            model=getattr(response, "model", model), purpose=purpose,
+            usage=getattr(response, "usage", None), ok=complete,
         )
-        # ``.text`` is None when the answer was blocked or empty; callers already
-        # treat an empty block as "no answer", so hand them exactly that.
-        return AiResponse(content=[TextBlock(text=response.text or "")])
+        if not complete:
+            # Count billed incomplete responses, but never cache/display truncated JSON.
+            raise AiStatusError("OpenAI response incomplete; no automatic retry")
+        return AiResponse(content=[TextBlock(text=response.output_text or "")])
 
 
 class AiClient:
@@ -181,14 +176,11 @@ class AiClient:
     everywhere; holds one HTTP client for the process."""
 
     def __init__(self, *, api_key: str, timeout_seconds: float) -> None:
-        self._client = genai.Client(
+        self._client = openai.OpenAI(
             api_key=api_key,
-            http_options=genai_types.HttpOptions(
-                timeout=int(timeout_seconds * 1000),
-                # The runtime below owns retries (bounded, cached, single-flight);
-                # SDK-level retries on top would multiply paid calls.
-                retry_options=genai_types.HttpRetryOptions(attempts=1),
-            ),
+            base_url="https://api.openai.com/v1",
+            timeout=timeout_seconds,
+            max_retries=0,
         )
         self.messages = _Messages(self._client)
 
@@ -363,7 +355,7 @@ def _client_timeout_seconds() -> float:
         float(
             os.environ.get(
                 "AI_TIMEOUT_SECONDS",
-                os.environ.get("GEMINI_POSITION_NEWS_TIMEOUT_SECONDS", "15"),
+                os.environ.get("OPENAI_POSITION_NEWS_TIMEOUT_SECONDS", "60"),
             )
         ),
     )
@@ -382,7 +374,7 @@ def get_ai_client() -> AiClient:
                 pass
         key = ai_api_key()
         if not key:
-            raise AiAuthError("서버에 GEMINI_API_KEY 가 설정되지 않았어요.", status_code=401)
+            raise AiAuthError("서버에 OPENAI_API_KEY 가 설정되지 않았어요.", status_code=401)
         _client = factory(api_key=key, timeout_seconds=_client_timeout_seconds())
         _client_factory = factory
         return _client

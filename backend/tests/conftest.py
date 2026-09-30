@@ -11,7 +11,7 @@ import os
 import tempfile
 import pytest
 
-for _key in ("DATABASE_URL", "GEMINI_API_KEY", "COINDESK_API_KEY", "PREFECT_API_URL"):
+for _key in ("DATABASE_URL", "OPENAI_API_KEY", "GEMINI_API_KEY", "COINDESK_API_KEY", "PREFECT_API_URL"):
     os.environ[_key] = ""
 
 _TMP = tempfile.NamedTemporaryFile(prefix="ggp-test-", suffix=".db", delete=False)
@@ -38,6 +38,13 @@ def initialize_isolated_database():
 
 @pytest.fixture(autouse=True)
 def isolate_runtime_caches(tmp_path, monkeypatch):
+    # Durable provider counters must survive calls within a test, not leak
+    # between independent tests sharing the session's isolated database.
+    from sqlmodel import delete
+    from app.db import NewsAiItemBudget, get_session
+    with get_session() as db:
+        db.exec(delete(NewsAiItemBudget))
+        db.commit()
     # Historical candle tests must never reuse backend/cache/market.db. Shared
     # response caches also must not outlive each test's DB/loader fixtures.
     from app.data import binance

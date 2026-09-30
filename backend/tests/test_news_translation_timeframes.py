@@ -57,7 +57,7 @@ def test_ambiguous_lowercase_m_must_keep_the_original_notation():
 
 
 def test_provider_gets_minute_fact_and_repair_rejects_cached_million_result(monkeypatch):
-    monkeypatch.setenv("GEMINI_API_KEY", "fixture-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "fixture-key")
     requests = []
     replies = [WRONG, CORRECT]
     def create(**kwargs):

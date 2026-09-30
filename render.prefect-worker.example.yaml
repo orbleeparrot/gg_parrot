@@ -49,9 +49,13 @@ services:
         sync: false
       - key: PREFECT_API_KEY
         sync: false
-      - key: GEMINI_API_KEY
+      - key: OPENAI_API_KEY
         sync: false
-      - key: GEMINI_MODEL
-        value: "gemini-3.5-flash-lite"
-      - key: GEMINI_POSITION_NEWS_MAX_TOKENS
+      - key: OPENAI_MODEL
+        value: "gpt-6-luna"
+      - key: OPENAI_REASONING_TOKEN_RESERVE
+        value: "4096"
+      - key: AI_TIMEOUT_SECONDS
+        value: "60"
+      - key: OPENAI_POSITION_NEWS_MAX_TOKENS
         value: "512"

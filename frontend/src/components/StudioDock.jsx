@@ -13,6 +13,7 @@ import { fmtMoney, fmtMoneyCompact, fmtKrw, fmtPrice, fmtQty, quoteOf, baseOf } 
 import { buildMacro, RULE_TYPES, CANDLE_INTERVALS } from "../lib/macro.js";
 import { paperMainButton } from "../lib/paperMain.js";
 import { useUsdKrw } from "../lib/usdkrw.js";
+import { Icon } from "./icons.jsx";
 
 const AI_MASCOT = "/brand/navigation/ggparrot-nav-agent.svg";
 const SIDE_KO = { buy: "매수", sell: "매도", short: "숏 진입", cover: "숏 청산" };
@@ -286,7 +287,7 @@ export function StudioOptimize({ form, setForm, valErr, onResult }) {
       <div className="sd-opt-side">
         {best && (
           <div className="sd-box">
-            <div className="sd-box-k">★ 최적 · 주변까지 고르게 좋은 구간</div>
+            <div className="sd-box-k"><Icon name="star" size={12} fill="currentColor" strokeWidth={1.5} className="ui-icon-inline" /> 최적 · 주변까지 고르게 좋은 구간</div>
             <div className="sd-box-v">익절 <span className="num">{best.tp}%</span> · 손절 <span className="num">{best.sl}%</span></div>
           </div>
         )}
@@ -453,16 +454,11 @@ export function StudioPaper({ macro, valErr, controller }) {
 }
 
 // ── 매크로 등록 — 왼쪽은 내가 만든 매크로를 담은 트레이딩 카드(산출물), 오른쪽은 같은 높이의 동작 목록(리더보드 등록만 노랑), 그 아래 실행기 안내 상자 ──
-const ACT_ICON = {
-  board: <path d="M3.5 16.5h13M6 16.5V9.5M10 16.5v-11M14 16.5v-4" />,
-  run: <path d="M3.5 4.5h13v9h-13zM7.5 16.5h5M10 13.5v3" />,
-  download: <path d="M10 3v10M6 9l4 4 4-4M4 16.5h12" />,
-  link: <path d="M8 12a3 3 0 0 0 4.2 0l3-3a3 3 0 0 0-4.2-4.2l-1 1M12 8a3 3 0 0 0-4.2 0l-3 3a3 3 0 0 0 4.2 4.2l1-1" />,
-};
+const ACT_ICON = { board: "trophy", run: "monitor", download: "download", link: "link" }; // 공용 Lucide 아이콘(리더보드 = 트로피)
 function ActIcon({ name }) {
   return (
     <span className="sd-act-ic" aria-hidden="true">
-      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{ACT_ICON[name]}</svg>
+      <Icon name={ACT_ICON[name]} size={16} />
     </span>
   );
 }

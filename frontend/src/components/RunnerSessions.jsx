@@ -12,6 +12,7 @@ import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 import ConfirmDialog from "./ConfirmDialog.jsx";
 import { describeDeleteConfirm, describeStopConfirm } from "../features/agents/runOutcome.js";
 import "./RunnerKeyPanel.css";
+import { Icon } from "./icons.jsx";
 
 // 내 매크로 실행 현황 — 실행기(exe)가 올리는 세션을 실시간으로 보여주고,
 // 원격 종료(매크로만 / 청산 후)를 요청한다.
@@ -230,7 +231,7 @@ function SessionCard({ s, onStop, onDelete, busy }) {
                 <span className="ml-2 t-caption text-slate-400">무포지션 — 평단 없음</span>
               )}
             </span>
-            <span className="t-caption text-slate-400" aria-hidden="true">{chartOpen ? "접기 ↑" : "펼치기 ↓"}</span>
+            <span className="t-caption text-slate-400 inline-flex items-center gap-1" aria-hidden="true">{chartOpen ? "접기" : "펼치기"}<Icon name={chartOpen ? "chevronUp" : "chevronDown"} size={14} /></span>
           </button>
           {chartOpen && (
             <CandleChart

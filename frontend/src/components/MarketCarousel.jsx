@@ -5,6 +5,7 @@
 // 어두운 면에 출처 이름으로 대신한다.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { visibleDotIndexes } from "../lib/carouselDots.js";
+import { Icon } from "./icons.jsx";
 
 const VISIBLE_EACH_SIDE = 2;
 const SWIPE_THRESHOLD = 40;
@@ -88,7 +89,7 @@ export default function MarketCarousel({ items, ariaLabel = "시장·규제 헤�
                 <span className="news-carousel-meta">
                   <span className="news-carousel-source">{item.source}</span>
                   {item.time ? <span className="news-carousel-time">{item.time}</span> : null}
-                  {isActive && item.url ? <span className="news-carousel-open">원문 열기 ↗</span> : null}
+                  {isActive && item.url ? <span className="news-carousel-open">원문 열기 <Icon name="arrowUpRight" size={14} className="ui-icon-inline" /></span> : null}
                 </span>
               </span>
             </Tag>

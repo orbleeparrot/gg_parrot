@@ -8,6 +8,7 @@ import { advanceActivityTimeline, emptyActivityTimeline } from "../features/agen
 import { countNewObservations, positionNewsNotice, publicationLabel, publicationTime } from "../features/agents/positionNews/presentation.js";
 import RunResultScreen from "./RunResultScreen.jsx";
 import CommunityBodySummary from "./CommunityBodySummary.jsx";
+import { Icon } from "./icons.jsx";
 const PLAN_LABELS = { free: "FREE", plus: "PLUS", pro: "PRO" };
 const EMPTY_FEATURE_STATES = {};
 const SECOND_MS = 1000;
@@ -300,7 +301,7 @@ export default function AgentActivityStream({
                     <footer>
                       {event.sourceUrl ? (
                         <a href={event.sourceUrl} target="_blank" rel="noopener noreferrer" aria-label={`${event.sourceLabel} 원문 보기, 새 창`}>
-                          {event.sourceLabel} · 원문 보기 ↗
+                          {event.sourceLabel} · 원문 보기 <Icon name="arrowUpRight" size={14} className="ui-icon-inline" />
                         </a>
                       ) : (
                         <span>{event.sourceLabel}</span>
@@ -337,7 +338,7 @@ export default function AgentActivityStream({
         </div>
         {newMessageCount > 0 ? (
           <button type="button" className="agent-new-message" onClick={scrollToLatest}>
-            새 관측 {newMessageCount}개 ↓
+            새 관측 {newMessageCount}개 <Icon name="arrowDown" size={14} className="ui-icon-inline" />
           </button>
         ) : null}
       </div>

@@ -43,6 +43,7 @@ import ProductTour from "../components/ProductTour.jsx";
 import "./Studio.css";
 import "./StudioBudget.css";
 import "./StudioSplit.css";
+import { Icon } from "../components/icons.jsx";
 
 const MAX_MACRO_FILE_BYTES = 2 * 1024 * 1024;
 
@@ -95,7 +96,7 @@ function BuilderModeMenu({ onTour }) {
       {open && (
         <div className="studio-mode-menu" role="menu" aria-label="빌더 종류">
           <button type="button" role="menuitemradio" aria-checked="true" className="studio-mode-item is-on" onClick={() => setOpen(false)}>
-            <span className="studio-mode-check" aria-hidden="true">✓</span>기본 빌더
+            <span className="studio-mode-check" aria-hidden="true"><Icon name="check" size={14} strokeWidth={2.5} /></span>기본 빌더
           </button>
           <button type="button" role="menuitemradio" aria-checked="false" disabled title="프로 빌더는 업데이트 예정이에요" className="studio-mode-item is-soon">
             <span className="studio-mode-check" aria-hidden="true" />프로 빌더<span className="studio-soon-badge">업데이트 예정</span>
@@ -105,7 +106,7 @@ function BuilderModeMenu({ onTour }) {
               <hr className="studio-mode-sep" aria-hidden="true" />
               {/* 항목별 설명 투어 — 화면 순서대로 각 칸을 비추며 설명한다. */}
               <button type="button" role="menuitem" className="studio-mode-item" onClick={() => { setOpen(false); onTour(); }}>
-                <span className="studio-mode-check" aria-hidden="true">?</span>사용법 안내<small className="studio-mode-hint">화면 순서대로</small>
+                <span className="studio-mode-check" aria-hidden="true"><Icon name="circleHelp" size={15} /></span>사용법 안내<small className="studio-mode-hint">화면 순서대로</small>
               </button>
             </>
           ) : null}

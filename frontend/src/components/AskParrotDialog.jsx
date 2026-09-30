@@ -29,6 +29,7 @@ import { coinName } from "../lib/macroSource.js";
 import { baseOf, quoteOf } from "../lib/format.js";
 import { RULE_TYPES } from "../lib/macro.js";
 import "./AskParrotDialog.css";
+import { Icon } from "./icons.jsx";
 
 // 껄무새 얼굴 — 에이전트 표정 중 '호기심'(brand/README.md).
 const ASK_MASCOT = "/brand/agent/ggparrot-agent-curious-v1.svg";
@@ -599,7 +600,7 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
           <img src={ASK_MASCOT} alt="" width="28" height="28" className="ask-head-face" aria-hidden="true" />
           <h2 id={titleId} className="ask-title">껄무새에게 물어볼까?</h2>
           {status && !status.error && status.daily_limit ? <span className="ask-quota num">오늘 {status.remaining_today}/{status.daily_limit}번 남음</span> : null}
-          <button type="button" onClick={onClose} disabled={busy} className="ask-x" aria-label="닫기">×</button>
+          <button type="button" onClick={onClose} disabled={busy} className="ask-x" aria-label="닫기"><Icon name="x" size={20} /></button>
         </header>
         <div className="ask-body" ref={bodyRef}>
           {showProgress ? (

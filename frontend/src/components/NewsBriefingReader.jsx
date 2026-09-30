@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import CommunityBodySummary from "./CommunityBodySummary.jsx";
+import { Icon } from "./icons.jsx";
 
 const TICK_MS = 520;
 const DEFAULT_VISIBLE_ROWS = 4;
@@ -29,7 +30,7 @@ export default function NewsBriefingReader({
   empty = "지금은 읽을 항목이 없어요.",
   queueLabel = "읽는 순서",
   rotateMs = 5_000,
-  actionLabel = "원문 열기 ↗",
+  actionLabel = "원문 열기",
   onActivate,
   headingAs: Heading = "h3",
   queueOnly = false,
@@ -180,7 +181,7 @@ export default function NewsBriefingReader({
                 {active.time ? <span>{active.time}</span> : null}
               </p>
               {active.url ? (
-                <a href={active.url} target="_blank" rel="noopener noreferrer">{actionLabel}</a>
+                <a href={active.url} target="_blank" rel="noopener noreferrer">{actionLabel} <Icon name="arrowUpRight" size={14} className="ui-icon-inline" /></a>
               ) : onActivate ? (
                 <button type="button" onClick={() => activate(active)}>{actionLabel}</button>
               ) : null}
@@ -229,13 +230,13 @@ export default function NewsBriefingReader({
                       </span>
                     </span>
                     <CommunityBodySummary summary={item.community.summary} />
-                    <span className="news-reader-row-arrow" aria-hidden="true">{item.url ? "↗" : "→"}</span>
+                    <span className="news-reader-row-arrow" aria-hidden="true"><Icon name={item.url ? "arrowUpRight" : "chevronRight"} size={16} /></span>
                   </>
                 ) : queueOnly ? (
                   <>
                     <span className="news-reader-row-title">{item.title}</span>
                     <span className="news-reader-row-source">{item.rowLabel || item.source || "출처 미상"}</span>
-                    <span className="news-reader-row-arrow" aria-hidden="true">{item.url ? "↗" : "→"}</span>
+                    <span className="news-reader-row-arrow" aria-hidden="true"><Icon name={item.url ? "arrowUpRight" : "chevronRight"} size={16} /></span>
                   </>
                 ) : (
                   <>
@@ -243,7 +244,7 @@ export default function NewsBriefingReader({
                     <span className="news-reader-row-title">{item.title}</span>
                     {item.rowValue ? <strong className={`news-reader-row-value num ${item.tone || ""}`}>{item.rowValue}</strong> : null}
                     {item.time ? <span className="news-reader-row-time">{item.time}</span> : null}
-                    <span className="news-reader-row-arrow" aria-hidden="true">{item.url ? "↗" : "→"}</span>
+                    <span className="news-reader-row-arrow" aria-hidden="true"><Icon name={item.url ? "arrowUpRight" : "chevronRight"} size={16} /></span>
                   </>
                 )
               );

@@ -1,3 +1,5 @@
+import { Icon } from "./icons.jsx";
+
 const STEPS = [
   {
     title: "조건 정하기",
@@ -28,7 +30,7 @@ export default function JourneySteps({ current = 0, compact = false }) {
             aria-current={active ? "step" : undefined}
           >
             <span className="journey-node num" aria-hidden="true">
-              {done ? "✓" : String(index + 1).padStart(2, "0")}
+              {done ? <Icon name="check" size={14} strokeWidth={3} /> : String(index + 1).padStart(2, "0")}
             </span>
             <span className="min-w-0">
               <span className={"block t-small font-semibold " + (active || done ? "text-slate-900" : "text-slate-700")}>

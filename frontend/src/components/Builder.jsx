@@ -9,6 +9,7 @@ import CoinIcon from "./CoinIcon.jsx";
 import "./Builder.css";
 import { useSymbolList } from "../hooks/useSymbolList.js";
 import { searchSymbols, resolveSymbol, marketTags } from "../lib/symbolSearch.js";
+import { Icon } from "./icons.jsx";
 
 // 촘촘한 판(variant="dense") — 직접 만들기의 좁은 조건 판용. Field·Group 이 이 값을 보고 규격을 바꾼다.
 const DenseContext = createContext(false);
@@ -251,7 +252,7 @@ function SymbolPicker({ value, onChange }) {
                 <span className="bd-symrow-sym num"><b>{baseOf(symbol)}</b><small>{quoteOf(symbol)}</small></span>
                 {tags.length > 0 && <span className="bd-symrow-tag">{tags.join("·")}</span>}
                 <span className="bd-symrow-w num" title="자금 비중 · 종목 수만큼 균등">{weight.fraction} · {weight.percent}</span>
-                <button type="button" className="bd-symrow-x" onClick={() => remove(symbol)} aria-label={`${symbol} 빼기`}>×</button>
+                <button type="button" className="bd-symrow-x" onClick={() => remove(symbol)} aria-label={`${symbol} 빼기`}><Icon name="x" size={14} strokeWidth={2.25} /></button>
               </li>
             );
           })}

@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { macroSourceBadge } from "../lib/macroSource.js";
 import CheckIcon from "./CheckIcon.jsx";
+import { Icon } from "./icons.jsx";
 
 // 조건 판 머리의 매크로 출처 배지 + 드롭다운 (2026-09-23).
 // 배지 하나가 '지금 조건이 어디서 왔는지'를 색·아이콘으로, '무슨 종목인지'를 티커 + 종목명으로 보여 준다.
@@ -11,16 +12,9 @@ const ASK_MASCOT = "/brand/agent/ggparrot-agent-curious-v1.svg";
 
 function SrcIcon({ kind }) {
   if (kind === "ask") return <img src={ASK_MASCOT} alt="" width="100" height="100" className="studio-src-face" aria-hidden="true" />;
-  const paths = {
-    board: <path d="M3.5 16.5h13M6 16.5V9.5M10 16.5v-11M14 16.5v-4" />, // 실행 독 '리더보드 등록' 과 같은 순위 막대
-    file: <path d="M10 13.5V3M6 7l4-4 4 4M17 12.5v3a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-3" />, // 옛 '매크로 업로드' 버튼 화살표
-    guide: <path d="M4 4.5h12v11H4zM7 8h6M7 11h4" />,
-  };
-  const d = paths[kind];
-  if (!d) return <span className="studio-src-dot" aria-hidden="true" />;
-  return (
-    <svg viewBox="0 0 20 20" className="studio-src-ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{d}</svg>
-  );
+  // 리더보드 = 트로피 · 업로드 = 업로드 화살표 · 시작 가이드 = 펼친 책 · 직접 설정 = 연필 (공용 Lucide 아이콘)
+  const name = { board: "trophy", file: "upload", guide: "bookOpen", none: "pencilLine" }[kind];
+  return name ? <Icon name={name} size={16} strokeWidth={2} className="studio-src-ic" /> : null;
 }
 
 export default function MacroSourceMenu({

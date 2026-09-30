@@ -8,6 +8,7 @@ import { getUserId } from "../lib/user.js";
 import { captureAccountGuard, clearAuth, getToken, useAuth } from "../lib/auth.js";
 import { lockBodyScroll } from "../lib/bodyScrollLock.js";
 import { saveRegistrationDraft } from "../lib/journey.js";
+import { Icon } from "./icons.jsx";
 
 const FOCUSABLE =
   'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -226,7 +227,7 @@ export default function RegisterMacroModal({
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 sticky top-0 bg-surface rounded-t-[20px] z-10">
           <h2 id={titleId} className="t-h4 text-slate-900">{title}</h2>
           <button ref={closeButtonRef} onClick={onClose} disabled={busy}
-            className="btn btn-s btn-ghost text-xl leading-none" aria-label="닫기">×</button>
+            className="btn btn-s btn-ghost leading-none" aria-label="닫기"><Icon name="x" size={20} /></button>
         </div>
 
         <div className="px-6 py-6 space-y-5">

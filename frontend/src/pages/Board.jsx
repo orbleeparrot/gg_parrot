@@ -9,6 +9,7 @@ import { writePath } from "../lib/boardPaths.js";
 import { ChevronLeftIcon, ChevronRightIcon, ImageIcon, SearchIcon } from "../components/boardIcons.jsx";
 import { AuthorAvatar } from "../components/UserAvatar.jsx";
 import "./Board.css";
+import { Icon } from "../components/icons.jsx";
 
 // 한 쪽의 글 수는 화면 높이에 맞춘다 — 표가 스크롤 없이 페이지 이동 바로 위까지 차게.
 const ROW_PX = 43; // .board-row 42 + 괘선 1
@@ -92,7 +93,7 @@ function SearchBar({ q, field, onSearch }) {
       <SelectMenu value={where} options={FIELDS} onChange={setWhere} label="검색 범위" className="board-select" />
       <span className="board-search">
         <input value={draft} onChange={(e) => setDraft(e.target.value)} className="field field-sm" placeholder="검색어" aria-label="검색어" maxLength={80} />
-        {q ? <button type="button" className="board-search-clear" aria-label="검색 지우기" onClick={() => onSearch({ q: "", field: "all" })}>✕</button> : null}
+        {q ? <button type="button" className="board-search-clear" aria-label="검색 지우기" onClick={() => onSearch({ q: "", field: "all" })}><Icon name="x" size={16} /></button> : null}
         <button type="submit" className="board-search-go" aria-label="검색"><SearchIcon /></button>
       </span>
     </form>

@@ -22,9 +22,9 @@ function contentSource(item) {
 // 경주마 동향의 콘텐츠 유형 — 드롭다운 대신 segmented 버튼(DESIGN.md §6, 한 가지만 고르는 필터).
 // 시장·규제 헤드라인은 거르지 않는다(커뮤니티 글에는 이미 '사실 확인 안 됨' 표시가 붙는다).
 const CONTENT_SCOPES = [
+  { value: "all", label: "전체" },
   { value: "news", label: "보도 기사" },
   { value: "community", label: "커뮤니티" },
-  { value: "all", label: "전체" },
 ];
 
 function ContentFilter({ value, onChange }) {

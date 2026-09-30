@@ -396,6 +396,6 @@ a.studio-mode-item { text-decoration: none; }
 .studio-src-menu .studio-src-lead .studio-src-face { width: 24px; height: 24px; margin: 0; }
 .studio-src-menu .studio-src-lead .studio-src-ic { width: 20px; height: 20px; margin: 0; }
 .studio-src-menu .studio-src-lead .studio-src-dot { width: 11px; height: 11px; }
-.studio-src-check { margin-left: auto; width: 18px; height: 18px; flex: none; display: grid; place-items: center; border-radius: 50%; background: rgb(var(--c-slate-900)); color: rgb(var(--c-surface)); font-size: 10.5px; font-weight: 800; }
+.studio-src-check { margin-left: auto; flex: none; color: rgb(var(--c-slate-900)); } /* Lucide check 18px — 원·배경 없이 선 하나 */
 /* 처음 들어왔을 때(출처 없음) — 배지가 '껄무새에게 물어볼까?' 입구: 껄무새 얼굴 + AI 뱃지 색 */
 .studio-src-badge.is-prompt { background: var(--badge-ai-bg); color: var(--badge-ai-fg); }

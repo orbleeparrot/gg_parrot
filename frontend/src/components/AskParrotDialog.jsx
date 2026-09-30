@@ -6,6 +6,7 @@ import { Fragment, useCallback, useEffect, useId, useReducer, useRef, useState }
 import { createPortal } from "react-dom";
 import { api } from "../api.js";
 import CoinIcon from "./CoinIcon.jsx";
+import CheckIcon from "./CheckIcon.jsx";
 import {
   BACK_TO_STEP, CANDIDATES_PROMPT, COMPARE_TITLE, CONDITION_LABEL, CONSENT_BUTTON, CONSENT_TEXT, DISCLAIMER,
   FOLLOW_UPS, FOLLOW_UPS_TITLE, HOLD_LABEL, HORIZONS, LEGEND_BASE, LEGEND_EQUITY, LEVERAGES, LOAD_BUTTON,
@@ -500,7 +501,7 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
               className={"ask-opt ask-in" + (picked === idx ? " is-picked" : picked != null ? " is-dim" : "")}
               style={inStyle(idx + 1)} aria-pressed={picked === idx} onClick={() => choose(opt, idx)}>
               <span className="ask-opt-l"><span className="ask-key num" aria-hidden="true">{idx + 1}</span>{opt.label}</span>
-              <span className="ask-opt-r">{opt.hint ? <small>{opt.hint}</small> : null}<span className="ask-check" aria-hidden="true">✓</span></span>
+              <span className="ask-opt-r">{opt.hint ? <small>{opt.hint}</small> : null}<span className="ask-check" aria-hidden="true"><CheckIcon size={13} strokeWidth={3} /></span></span>
             </button>
           ))}
         </div>

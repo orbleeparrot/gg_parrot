@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { kindLabel, pointsOf } from "../lib/notifications.js";
 import NotificationKindIcon from "./notificationKindIcon.jsx";
+import { Icon } from "./icons.jsx";
 
 export const TOAST_HOLD_MS = 5000;
 
@@ -72,7 +73,7 @@ function Toast({ toast, onDismiss, onOpen }) {
           aria-label="알림 닫기"
           onClick={(event) => { event.stopPropagation(); leave(); }}
         >
-          ×
+          <Icon name="x" size={16} />
         </button>
         {points ? <b className="ggp-toast-points num">+{points.toLocaleString("ko-KR")} P</b> : null}
       </span>

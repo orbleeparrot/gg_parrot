@@ -29,7 +29,7 @@ from . import ask_candidates, hotcoins
 from .ask_candidates import MAX_PICKS, MIN_PICKS
 from . import points as points_mod
 from .db import AskExtraCredit, AskMacroSession, User
-from .engine.backtest import BacktestResult
+from .engine.backtest import BacktestResult, _lttb_equity_points
 from .engine.explain import explain_result
 from .engine.schema import Macro
 from .quests import today_kst
@@ -616,6 +616,16 @@ def _metrics(result: BacktestResult) -> dict:
     }
 
 
+CURVE_POINTS = 40
+
+
+def _curve(result: BacktestResult) -> list[float]:
+    """자산곡선을 모양을 지키며 점 40개로 줄인다(백테스트 차트와 같은 LTTB) — 카드의 작은 곡선용."""
+    if not result.equity_curve:
+        return []
+    return [round(float(p.equity), 4) for p in _lttb_equity_points(result.equity_curve, CURVE_POINTS)]
+
+
 def _result_view(e: Evaluated) -> dict:
     macro = e.candidate.macro
     # v1 은 규칙 기반 explain_result 만 쓴다 — AI 해설(ai_explain.enrich)은 사이트 전체
@@ -628,6 +638,11 @@ def _result_view(e: Evaluated) -> dict:
         "source": e.candidate.source,
         "macro": macro.model_dump(mode="json"),
         "metrics": _metrics(e.result),
+        # 결과 카드의 비교용(2026-09-30) — '그냥 들고 있기' 수익률과 자산곡선 미리보기(점 40개).
+        # metrics 는 세션 기록(results_json)과 같은 모양으로 두고, 화면에만 쓰는 값은 옆에 싣는다.
+        "hold_return_pct": e.result.buy_hold_return_pct,
+        "initial_capital": e.result.initial_capital,
+        "curve": _curve(e.result),
         "explanation": explanation.model_dump(),
         "ai_generated": False,
     }

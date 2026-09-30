@@ -20,6 +20,7 @@ import { chatUnseenCount, getChatFeed, markChatSeen, observeChat, receiveChat, r
 import { CHAT_WINDOW_SIZE, chatWindow } from "../lib/chatFeed.js";
 import UserAvatar, { AuthorAvatar } from "./UserAvatar.jsx";
 import "./ChatBox.css";
+import { Icon } from "./icons.jsx";
 
 const POLL_MS = 3000;
 const CLOSED_POLL_MS = 30_000;
@@ -895,7 +896,7 @@ function MemberChatBox({ member, scope, open, setOpen, roomId = 0, room = null, 
             <p className="chat-reply-bar">
               <span className="chat-reply-to"><b>{replyTo.username}</b>에게 답장</span>
               <span className="chat-reply-excerpt">{stripReplyToken(replyTo.text)}</span>
-              <button type="button" onClick={() => setReplyTo(null)} aria-label="답장 취소">✕</button>
+              <button type="button" onClick={() => setReplyTo(null)} aria-label="답장 취소"><Icon name="x" size={14} strokeWidth={2.25} /></button>
             </p>
           ) : null}
           {/* 붙여넣은 매크로 링크 — 보내면 카드로 바뀐다는 걸 미리 알려 준다. */}

@@ -1,7 +1,6 @@
 /* 조건 패널의 너비는 드래그 값, 차트와 결과는 남는 공간을 사용한다. */
-.studio-page > .studio-banner { grid-row: 1; }
 .studio-page > .studio-work {
-  grid-row: 2;
+  grid-row: 1;
   grid-template-columns: var(--studio-condition-width, 336px) var(--studio-divider-width, 1px) minmax(0, 1fr);
   grid-template-areas: "cond split chart" "cond split dock";
 }

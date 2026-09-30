@@ -10,6 +10,7 @@ import { getRunnerDevice } from "../lib/runnerDevice.js";
 import { recordEvent } from "../lib/visit.js";
 import "./HomeCommunity.css";
 import "./HomeMobile.css";
+import { Icon } from "../components/icons.jsx";
 
 const StartGuide = lazy(() => import("./Start.jsx"));
 const RunnerFlow = lazy(() => import("./RunnerDownload.jsx"));
@@ -61,7 +62,7 @@ function HomeEntryHero({ onLeaderboard, onAsk, staticLayout = false }) {
             <img src="/brand/agent/ggparrot-agent-curious-v1.svg" alt="" width="88" height="88" draggable="false" />
           </span>
           <span className="home-entry-choice-copy"><strong>껄무새에게 물어볼까?</strong><small>뭘 고를지 모르겠다면 — 성향·종목만 고르면 후보 조합 3개를 보여 줘요.</small></span>
-          <span className="home-entry-choice-arrow" aria-hidden="true">→</span>
+          <span className="home-entry-choice-arrow" aria-hidden="true"><Icon name="arrowRight" size={18} /></span>
         </button>
         <button
           type="button"
@@ -77,7 +78,7 @@ function HomeEntryHero({ onLeaderboard, onAsk, staticLayout = false }) {
             <strong>{mobileDevice ? "매크로 둘러보기" : "빠른 실행"}</strong>
             <small>{mobileDevice ? "인기 전략과 성과를 살펴보고, 실행은 Windows PC에서 이어가요." : "커뮤니티 인기 전략을 골라 바로 실행해요. 마음에 드는 매크로를 그대로 실행기로 돌릴 수 있어요."}</small>
           </span>
-          <span className="home-entry-choice-arrow" aria-hidden="true">→</span>
+          <span className="home-entry-choice-arrow" aria-hidden="true"><Icon name="arrowRight" size={18} /></span>
         </button>
       </nav>
 
@@ -165,7 +166,7 @@ function CommunityEntryHero({ staticLayout = false }) {
         </dl> : null}
         <div className="home-community-actions" aria-label="커뮤니티 둘러보기">
           <Link to="/board" data-home-carousel-primary className="home-community-action is-primary">
-            게시판 둘러보기 <span aria-hidden="true">→</span>
+            게시판 둘러보기 <Icon name="arrowRight" size={16} className="ui-icon-inline" />
           </Link>
         </div>
       </div>
@@ -573,7 +574,7 @@ function AccountHome() {
               </button>
               <button type="button" onClick={closeOverlay} className="onboarding-close" aria-label="껄무새 가이드라인 닫기">
                 <span className="hidden sm:inline">나중에 이어보기</span>
-                <span aria-hidden="true">×</span>
+                <Icon name="x" size={16} />
               </button>
             </header>
             <div className="onboarding-tour-viewport">

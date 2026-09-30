@@ -9,10 +9,7 @@
   padding: 0;
   overflow: hidden;
 }
-.studio-page { height: 100%; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
-
-/* 위 알림 줄 — 불러온 매크로·등록 이어가기·파일 등록 결과처럼 가끔 생기는 것만. */
-.studio-banner { padding: 8px var(--site-gutter) 0; display: grid; gap: 6px; }
+.studio-page { height: 100%; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
 
 /* ── 세 판 ── */
 .studio-work {
@@ -25,20 +22,8 @@
 }
 .studio-panel-head { min-height: 44px; display: flex; align-items: center; gap: 10px; padding: 0 16px; border-bottom: 1px solid rgb(var(--c-slate-200)); }
 .studio-panel-head h2 { margin: 0; }
-.studio-panel-head .studio-head-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
-/* 파일 등록은 아이콘과 짧은 이름을 함께 표시한다. */
-.studio-cond-upload { flex: none; height: 28px; padding: 0; display: inline-flex; align-items: center; justify-content: center; gap: 4px; border: 0; border-radius: 4px; color: rgb(var(--c-slate-500)); background: transparent; cursor: pointer; white-space: nowrap; text-decoration: none; }
-.studio-cond-upload > svg { display: block; width: 16px; height: 16px; }
-@media (hover: hover) {
-  .studio-cond-upload:hover:not(:disabled) { background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-900)); }
-}
-@media (pointer: coarse) {
-  .studio-cond-upload { height: 44px; }
-}
-.studio-cond-upload:disabled { opacity: .5; cursor: not-allowed; }
-.studio-cond-upload:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
-/* 껄무새에게 물어볼까? — 조건 판 머리에서 눈에 띄는 브랜드 노랑 알약. 왼쪽에 '호기심' 표정 껄무새.
-   처음 열릴 때 껄무새가 세 번 갸웃해서 시선을 끈다(움직임 줄이기 설정에선 정지). */
+/* 껄무새에게 물어볼까? — 결과 빈 상태의 브랜드 노랑 알약. 왼쪽에 '호기심' 표정 껄무새.
+   (2026-09-23 조건 판 머리에서는 빠졌다 — 머리는 출처 배지 하나만 둔다. .studio-src 참고) */
 .studio-cond-ask {
   flex: none; height: 30px; padding: 0 12px 0 4px; margin-right: 4px;
   display: inline-flex; align-items: center; gap: 6px;
@@ -90,6 +75,55 @@
 .studio-mode-check { width: 14px; flex: none; color: rgb(var(--c-slate-900)); font-size: 12px; }
 .studio-mode-sep { margin: 4px 6px; border: 0; border-top: 1px solid rgb(var(--c-slate-200)); }
 .studio-mode-hint { margin-left: auto; padding-left: 10px; color: rgb(var(--c-slate-500)); font-size: 11px; font-weight: 600; }
+
+/* ── 매크로 출처 배지 (2026-09-23) — 제목 오른쪽 끝의 배지 하나. DESIGN.md §6 badge: 22px · radius 6 · 12/700.
+   글자는 티커(JetBrains Mono) + 종목명, 출처는 색·아이콘으로만: 껄무새 = AI 뱃지(노랑 매트릭스) · 리더보드·공유 = 인디고 · 업로드 = 시안 · 가이드 = 초록 · 없음 = 괘선.
+   시각 높이는 22px 이지만 누르는 영역은 ::before 로 44px(§5 터치). 드롭다운은 제목 메뉴(.studio-mode-menu)를 그대로 쓴다.
+   Hallmark · component: macro-source badge · states: default · hover · focus · active · disabled · loading · error · success · contrast: pass */
+.studio-src { position: relative; margin-left: auto; min-width: 0; max-width: 66%; display: flex; }
+.studio-src-badge {
+  position: relative; display: inline-flex; align-items: center; gap: 6px; height: 22px; max-width: 100%; padding: 0 7px 0 8px;
+  border: 0; border-radius: 6px; background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-900));
+  font-size: 12px; font-weight: 700; line-height: 1; white-space: nowrap; cursor: pointer;
+}
+.studio-src-badge::before { content: ""; position: absolute; inset: -11px 0; }
+.studio-src-tk { font-size: 11px; font-weight: 700; letter-spacing: .02em; }
+.studio-src-nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.studio-src-chev { width: 5px; height: 5px; margin: -3px 0 0 1px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(45deg); opacity: .75; flex: none; }
+.studio-src-face { width: 16px; height: 16px; margin-left: -3px; display: block; flex: none; }
+.studio-src-ic { width: 14px; height: 14px; margin-left: -2px; flex: none; }
+.studio-src-dot { width: 8px; height: 8px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px rgb(var(--c-slate-400)); flex: none; }
+/* 출처별 색 — 구조는 같고 색만 바뀐다 */
+.studio-src-badge.is-ask { background: var(--badge-ai-bg); color: var(--badge-ai-fg); }
+.studio-src-badge.is-board { background: rgb(var(--c-indigo-50)); color: rgb(var(--c-indigo-800)); }
+.studio-src-badge.is-file { background: rgb(var(--c-cyan-100)); color: rgb(var(--c-cyan-800)); }
+.studio-src-badge.is-guide { background: rgb(var(--c-green-50)); color: rgb(var(--c-green-700)); }
+.studio-src-badge.is-none { background: transparent; color: rgb(var(--c-slate-500)); box-shadow: inset 0 0 0 1px rgb(var(--c-slate-300)); }
+/* 상태 */
+@media (hover: hover) {
+  .studio-src-badge:hover:not(:disabled) { box-shadow: inset 0 0 0 999px rgb(var(--c-slate-900) / .06); }
+  .studio-src-badge.is-none:hover:not(:disabled) { box-shadow: inset 0 0 0 1px rgb(var(--c-slate-500)); }
+}
+.studio-src-badge:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
+.studio-src-badge:active, .studio-src-badge[aria-expanded="true"] { box-shadow: inset 0 0 0 999px rgb(var(--c-slate-900) / .12); }
+.studio-src-badge:disabled { opacity: .5; cursor: not-allowed; box-shadow: none; }
+.studio-src-badge.is-loading { color: rgb(var(--c-slate-500)); background: rgb(var(--c-slate-100)); cursor: progress; }
+.studio-src-spin { width: 11px; height: 11px; border-radius: 50%; border: 1.5px solid rgb(var(--c-slate-300)); border-top-color: rgb(var(--c-slate-700)); animation: studio-src-spin .8s linear infinite; flex: none; }
+@keyframes studio-src-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .studio-src-spin { animation: none; } }
+.studio-src-badge.is-error { background: rgb(var(--c-red-100)); color: rgb(var(--c-red-800)); }
+.studio-src-badge.is-success { background: rgb(var(--c-green-50)); color: rgb(var(--c-green-700)); }
+/* 드롭다운 — 오른쪽 정렬, 항목 앞에 배지와 같은 색의 출처 아이콘 */
+.studio-src-menu { left: auto; right: 0; }
+.studio-src-lead { width: 16px; height: 16px; flex: none; display: inline-flex; align-items: center; justify-content: center; }
+.studio-src-lead .studio-src-face { margin: 0; }
+.studio-src-lead .studio-src-ic { width: 16px; height: 16px; margin: 0; }
+.studio-src-lead.is-ask { color: var(--badge-ai-fg); }
+.studio-src-lead.is-board { color: rgb(var(--c-indigo-800)); }
+.studio-src-lead.is-file { color: rgb(var(--c-cyan-800)); }
+.studio-src-lead.is-guide { color: rgb(var(--c-green-700)); }
+.studio-mode-item:disabled { color: rgb(var(--c-slate-500)); cursor: not-allowed; }
+a.studio-mode-item { text-decoration: none; }
 .studio-soon-badge { margin-left: 6px; height: 16px; padding: 0 5px; border-radius: 4px; background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-500)); font-size: 10px; font-weight: 700; line-height: 16px; }
 .studio-cond-body { padding: 0 16px 8px; overflow-x: hidden; } /* Builder(variant="dense") 가 절 사이 여백·괘선을 스스로 가진다. 말풍선이 넘쳐도 가로 스크롤은 없다. */
 .studio-cond-foot { padding: 12px 16px; border-top: 1px solid rgb(var(--c-slate-200)); display: grid; gap: 8px; }
@@ -346,3 +380,22 @@
   .studio-cond .studio-scroll, .studio-dock .studio-scroll, .studio-chart .studio-scroll { overflow: visible; }
   .studio-dock-body { min-height: 320px; }
 }
+
+/* 2026-09-30 — 출처 배지·메뉴: 높이는 촘촘하게(배지 24px · 항목 36px), 아이콘만 크게(메뉴 24px · 배지 20px).
+   선택 표시는 왼쪽 칸이 아니라 오른쪽 끝의 체크 원. 제목 메뉴(.studio-mode-menu 단독)는 그대로. */
+.studio-src-badge { height: 24px; gap: 5px; padding: 0 8px 0 7px; border-radius: 7px; font-size: 12.5px; }
+.studio-src-badge::before { inset: -10px 0; }
+.studio-src-tk { font-size: 11.5px; }
+.studio-src-face { width: 20px; height: 20px; margin: -2px 0 -2px -3px; }
+.studio-src-ic { width: 16px; height: 16px; margin-left: -2px; }
+.studio-src-dot { width: 9px; height: 9px; }
+.studio-src-menu { min-width: 236px; padding: 4px; border-radius: 10px; }
+.studio-src-menu .studio-mode-item { height: 36px; gap: 8px; padding: 0 10px 0 8px; font-size: 13.5px; }
+.studio-src-menu .studio-mode-hint { font-size: 11.5px; }
+.studio-src-menu .studio-src-lead { width: 24px; height: 24px; }
+.studio-src-menu .studio-src-lead .studio-src-face { width: 24px; height: 24px; margin: 0; }
+.studio-src-menu .studio-src-lead .studio-src-ic { width: 20px; height: 20px; margin: 0; }
+.studio-src-menu .studio-src-lead .studio-src-dot { width: 11px; height: 11px; }
+.studio-src-check { margin-left: auto; flex: none; color: rgb(var(--c-slate-900)); } /* Lucide check 18px — 원·배경 없이 선 하나 */
+/* 처음 들어왔을 때(출처 없음) — 배지가 '껄무새에게 물어볼까?' 입구: 껄무새 얼굴 + AI 뱃지 색 */
+.studio-src-badge.is-prompt { background: var(--badge-ai-bg); color: var(--badge-ai-fg); }

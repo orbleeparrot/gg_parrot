@@ -9099,3 +9099,7 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   .agent-chart-pane, .agent-chat { grid-row: 2; grid-column: 1; }
   .agent-position-pct { font-size: 28px; }
 }
+
+/* 공용 선 아이콘(components/icons.jsx, Lucide) — 글 줄 안에 놓일 때는 글자 기준선에 맞춘다. */
+.ui-icon { display: inline-block; flex: none; }
+.ui-icon-inline { vertical-align: -0.15em; }

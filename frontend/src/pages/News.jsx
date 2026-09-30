@@ -13,6 +13,23 @@ import { splitSummary } from "../lib/summaryText.js";
 import { layoutTreemap, racerWeight } from "../lib/treemap.js";
 import "./NewsMobile.css";
 import InfoTooltip from "../components/InfoTooltip.jsx";
+import { filterNewsContent, newsContentLabel } from "../lib/newsContent.js";
+
+function contentSource(item) {
+  return `${newsContentLabel(item)} · ${newsSourceLabel(item)}`;
+}
+
+function ContentFilter({ value, onChange }) {
+  return <div className="news-content-filter">
+    <label>콘텐츠 유형 <select value={value} onChange={(event) => onChange(event.target.value)}>
+      <option value="news">보도 기사</option>
+      <option value="community">커뮤니티 의견</option>
+      <option value="all">전체</option>
+    </select></label>
+    <p>{value === 'news' ? '커뮤니티 매매 의견은 제외해요. 해당 유형의 기사가 없으면 목록이 비어 있을 수 있어요.'
+      : '커뮤니티 글은 작성자의 주장·매매 의견이며, 보도 기사나 검증된 투자 정보가 아니에요.'}</p>
+  </div>;
+}
 
 const COIN_NEWS_CONCURRENCY = 2;
 const RACER_NEWS_ROTATE_MS = 5_000;
@@ -85,7 +102,7 @@ function MarketBriefing({ market, loading, error, onRetry }) {
     () => (market?.items || []).map((item) => ({
       id: communityPostIdentity(item) || item.url || item.title,
       title: item.title,
-      source: newsSourceLabel(item),
+      source: contentSource(item),
       time: historicalNewsLabel(item) || newsPublishedLabel(item),
       image: item.image || "",
       url: item.article_url || item.url,
@@ -213,7 +230,7 @@ function TileNews({ base, newsState, tick, onRetry, symbol, lines }) {
           {excerptLines > 0 ? <span className="news-map-news-excerpt">{summary.text}</span> : null}
         </a>
         <span className="news-map-news-meta">
-          <span className="news-map-news-source">{newsSourceLabel(item)}</span>
+          <span className="news-map-news-source">{contentSource(item)}</span>
           {time ? <span className="news-map-news-time">{time}</span> : null}
           {status === "error" ? <NewsRefreshRetry onRetry={() => onRetry(symbol)} />
             : <span className="news-map-news-count num" aria-hidden="true">{index + 1}/{items.length}</span>}
@@ -375,7 +392,7 @@ function MobileArticleList({ base, items }) {
               <li key={communityPostIdentity(item) || item.url || `${item.title}-${index}`}>
                 <a href={item.article_url || item.url || undefined} target="_blank" rel="noreferrer noopener">
                   <strong>{item.title}</strong>
-                  <span className="news-racer-mobile-article-meta"><span>{newsSourceLabel(item)}</span><span>{historicalNewsLabel(item) || newsPublishedLabel(item)}</span></span>
+                  <span className="news-racer-mobile-article-meta"><span>{contentSource(item)}</span><span>{historicalNewsLabel(item) || newsPublishedLabel(item)}</span></span>
                 </a>
                 {summary ? <div className="news-racer-mobile-summary"><span>{summary.label}</span>{summary.text ? <p>{summary.text}</p> : null}</div> : null}
               </li>
@@ -385,11 +402,14 @@ function MobileArticleList({ base, items }) {
   );
 }
 
-function RacerBriefing({ coins, loading, error }) {
+function RacerBriefing({ coins, loading, error, contentScope }) {
   const mobile = useSyncExternalStore(subscribeMobileNews, mobileNewsSnapshot, () => false);
   const [selectedSymbol, setSelectedSymbol] = useState(null);
   const selected = coins.find((coin) => coin.symbol === selectedSymbol) || coins[0];
-  const { newsBySymbol, retry } = useCoinNewsBriefings(mobile ? (selected ? [selected] : []) : coins);
+  const { newsBySymbol: unfilteredNews, retry } = useCoinNewsBriefings(mobile ? (selected ? [selected] : []) : coins);
+  const newsBySymbol = useMemo(() => Object.fromEntries(Object.entries(unfilteredNews).map(([symbol, state]) => [
+    symbol, state.data ? { ...state, data: { ...state.data, items: filterNewsContent(state.data.items, contentScope) } } : state,
+  ])), [unfilteredNews, contentScope]);
   const [tick, setTick] = useState(0);
   const termTexts = coins.flatMap((coin) => (
     newsBySymbol[coin.symbol]?.data?.items || []
@@ -452,6 +472,7 @@ function FitParagraph({ className, text, maxLines, minPx, children }) {
 }
 
 export default function News() {
+  const [contentScope, setContentScope] = useState('news');
   // 시장 뉴스는 하루 단위 자료라 10분 안에 돌아오면 다시 받지 않는다.
   const { states: marketStates, retry: retryMarket } = useNewsBriefings(
     ["market"], (_key, signal) => api.newsMarket({ signal }), 1, { freshMs: 10 * 60 * 1000 },
@@ -459,6 +480,8 @@ export default function News() {
   const marketState = marketStates.market;
   // Headlines, overview and image updates share one ordered response/cache.
   const market = marketState?.data || null;
+  const filteredMarket = useMemo(() => market ? { ...market, items: filterNewsContent(market.items, contentScope) } : null,
+    [market, contentScope]);
   const marketLoading = !marketState || ["queued", "loading"].includes(marketState.status);
   const marketError = marketState?.error || "";
   const { coins, loading: coinsLoading, error: coinsError } = useHotCoins();
@@ -467,6 +490,7 @@ export default function News() {
 
   return (
     <div className="news-briefing-page">
+      <ContentFilter value={contentScope} onChange={setContentScope} />
       {/* 위 줄: 왼쪽은 제목·기준일·AI 요약, 오른쪽은 시장·규제 헤드라인. 아래 줄: 경주마 트리맵. */}
       <div className="news-top">
       <div className="news-top-copy">
@@ -496,11 +520,11 @@ export default function News() {
           : "경주마 선정과 뉴스는 참고용이며 투자 권유가 아니에요."}
       </p>
       </div>
-      <MarketBriefing market={market} loading={marketLoading} error={marketError} onRetry={() => retryMarket("market")} />
+      <MarketBriefing market={filteredMarket} loading={marketLoading} error={marketError} onRetry={() => retryMarket("market")} />
       </div>
 
       <div className="news-briefing-grid">
-        <RacerBriefing coins={coins} loading={coinsLoading} error={coinsError} />
+        <RacerBriefing coins={coins} loading={coinsLoading} error={coinsError} contentScope={contentScope} />
       </div>
     </div>
   );

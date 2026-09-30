@@ -14,6 +14,26 @@ from app.ai_runtime import AiBusyError
 from app.agent_features.position_news import repository
 
 
+@pytest.fixture
+def fixed_news_clock(monkeypatch):
+    """Keep dated news fixtures recent regardless of when CI runs.
+
+    Freeze both clocks: cache expiry uses time.time, article age uses datetime.
+    Do not bypass the production age filter or change its historical threshold.
+    """
+    now = datetime(2026, 8, 26, 1, 10, tzinfo=timezone.utc)
+
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now.astimezone(tz) if tz is not None else now.replace(tzinfo=None)
+
+    monkeypatch.setattr(news, "datetime", FixedDatetime)
+    monkeypatch.setattr(news.time, "time", lambda: now.timestamp())
+    monkeypatch.setattr(news, "_coin_cache", {})
+    return now
+
+
 @pytest.fixture(autouse=True)
 def isolated_title_retry_backoff(monkeypatch):
     # Asset-catalog I/O has its own test suite; these RSS unit tests stay offline.
@@ -222,7 +242,7 @@ def test_empty_public_news_is_cached_without_repeated_source_calls(monkeypatch):
     assert calls == [True]
 
 
-def test_market_news_retries_transient_ai_summary_without_refetching_headlines(monkeypatch):
+def test_market_news_retries_transient_ai_summary_without_refetching_headlines(monkeypatch, fixed_news_clock):
     item = {
         "title": "비트코인 시장 새 소식",
         "source": "테스트 매체",
@@ -342,8 +362,7 @@ def test_market_summary_does_not_call_the_model_when_budget_is_exhausted(monkeyp
     assert api_calls == []
 
 
-def test_coin_news_prefers_central_snapshot_for_collected_asset(monkeypatch):
-    monkeypatch.setattr(news.time, "time", lambda: 1_777_173_000)
+def test_coin_news_prefers_central_snapshot_for_collected_asset(monkeypatch, fixed_news_clock):
     item = {
         "title": "중앙 수집기가 저장한 비트코인 소식",
         "source": "테스트 매체",
@@ -358,13 +377,13 @@ def test_coin_news_prefers_central_snapshot_for_collected_asset(monkeypatch):
             "coin_name": "비트코인",
             "label": "비트코인 뉴스",
             "items": [item],
-            "updated_at": "2026-08-24T04:10:00Z",
+            "updated_at": fixed_news_clock.isoformat(),
             "refresh_seconds": 300,
         },
         "collection": {
             "status": "ready",
-            "last_success_at": "2026-08-24T04:10:00Z",
-            "last_success_ms": 1_777_173_000_000,
+            "last_success_at": fixed_news_clock.isoformat(),
+            "last_success_ms": int(fixed_news_clock.timestamp() * 1000),
         },
     }
     loaded = []
@@ -1203,7 +1222,7 @@ def test_market_news_localizes_titles_before_summary_and_preserves_source_cache(
     assert news._cache["market"][0]["items"][0]["title"] == english
 
 
-def test_coin_news_reuses_active_snapshot_outside_fixed_universe(monkeypatch):
+def test_coin_news_reuses_active_snapshot_outside_fixed_universe(monkeypatch, fixed_news_clock):
     news._coin_cache.clear()
     item = {
         "title": "활성 수집기가 저장한 버블맵스 소식",

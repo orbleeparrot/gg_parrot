@@ -380,3 +380,20 @@ a.studio-mode-item { text-decoration: none; }
   .studio-cond .studio-scroll, .studio-dock .studio-scroll, .studio-chart .studio-scroll { overflow: visible; }
   .studio-dock-body { min-height: 320px; }
 }
+
+/* 2026-09-30 — 출처 배지·메뉴: 높이는 촘촘하게(배지 24px · 항목 36px), 아이콘만 크게(메뉴 24px · 배지 20px).
+   선택 표시는 왼쪽 칸이 아니라 오른쪽 끝의 체크 원. 제목 메뉴(.studio-mode-menu 단독)는 그대로. */
+.studio-src-badge { height: 24px; gap: 5px; padding: 0 8px 0 7px; border-radius: 7px; font-size: 12.5px; }
+.studio-src-badge::before { inset: -10px 0; }
+.studio-src-tk { font-size: 11.5px; }
+.studio-src-face { width: 20px; height: 20px; margin: -2px 0 -2px -3px; }
+.studio-src-ic { width: 16px; height: 16px; margin-left: -2px; }
+.studio-src-dot { width: 9px; height: 9px; }
+.studio-src-menu { min-width: 236px; padding: 4px; border-radius: 10px; }
+.studio-src-menu .studio-mode-item { height: 36px; gap: 8px; padding: 0 10px 0 8px; font-size: 13.5px; }
+.studio-src-menu .studio-mode-hint { font-size: 11.5px; }
+.studio-src-menu .studio-src-lead { width: 24px; height: 24px; }
+.studio-src-menu .studio-src-lead .studio-src-face { width: 24px; height: 24px; margin: 0; }
+.studio-src-menu .studio-src-lead .studio-src-ic { width: 20px; height: 20px; margin: 0; }
+.studio-src-menu .studio-src-lead .studio-src-dot { width: 11px; height: 11px; }
+.studio-src-check { margin-left: auto; width: 18px; height: 18px; flex: none; display: grid; place-items: center; border-radius: 50%; background: rgb(var(--c-slate-900)); color: rgb(var(--c-surface)); font-size: 10.5px; font-weight: 800; }

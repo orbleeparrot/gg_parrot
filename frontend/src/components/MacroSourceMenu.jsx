@@ -80,25 +80,21 @@ export default function MacroSourceMenu({
         <div id={menuId} className="studio-mode-menu studio-src-menu" role="menu" aria-label="매크로 출처">
           {!shared && (token ? (
             <button type="button" role="menuitemradio" aria-checked={badge.kind === "ask"} className={"studio-mode-item" + (badge.kind === "ask" ? " is-on" : "")} onClick={pick(onAsk)}>
-              <span className="studio-mode-check" aria-hidden="true">{badge.kind === "ask" ? "✓" : ""}</span>
               <span className="studio-src-lead is-ask"><SrcIcon kind="ask" /></span>껄무새 후보
-              {badge.kind === "ask" && <span className="studio-mode-hint num">{badge.ticker}</span>}
+              {badge.kind === "ask" ? <span className="studio-src-check" aria-hidden="true">✓</span> : null}
             </button>
           ) : (
             <Link to="/login?next=%2Fbuilder%3Fask%3D1" role="menuitem" className={"studio-mode-item" + (badge.kind === "ask" ? " is-on" : "")} onClick={() => setOpen(false)} title="물어보려면 로그인이 필요해요">
-              <span className="studio-mode-check" aria-hidden="true">{badge.kind === "ask" ? "✓" : ""}</span>
-              <span className="studio-src-lead is-ask"><SrcIcon kind="ask" /></span>껄무새 후보<span className="studio-mode-hint">로그인</span>
+              <span className="studio-src-lead is-ask"><SrcIcon kind="ask" /></span>껄무새 후보{badge.kind === "ask" ? <span className="studio-src-check" aria-hidden="true">✓</span> : <span className="studio-mode-hint">로그인</span>}
             </Link>
           ))}
           <button type="button" role="menuitemradio" aria-checked={badge.kind === "board"} className={"studio-mode-item" + (badge.kind === "board" ? " is-on" : "")} onClick={pick(onBoard)}>
-            <span className="studio-mode-check" aria-hidden="true">{badge.kind === "board" ? "✓" : ""}</span>
             <span className="studio-src-lead is-board"><SrcIcon kind="board" /></span>리더보드에서 가져오기
-            <span className={"studio-mode-hint" + (badge.kind === "board" ? " num" : "")}>{badge.kind === "board" ? badge.ticker : "→"}</span>
+            {badge.kind === "board" ? <span className="studio-src-check" aria-hidden="true">✓</span> : null}
           </button>
           <button type="button" role="menuitemradio" aria-checked={badge.kind === "none"} className={"studio-mode-item" + (badge.kind === "none" ? " is-on" : "")} onClick={pick(onReset)}>
-            <span className="studio-mode-check" aria-hidden="true">{badge.kind === "none" ? "✓" : ""}</span>
             <span className="studio-src-lead is-none"><SrcIcon kind="none" /></span>직접 설정
-            {badge.kind !== "none" && <span className="studio-mode-hint">해제</span>}
+            {badge.kind !== "none" ? <span className="studio-mode-hint">해제</span> : <span className="studio-src-check" aria-hidden="true">✓</span>}
           </button>
           {!shared && (
             <>

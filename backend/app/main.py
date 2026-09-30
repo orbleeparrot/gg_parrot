@@ -39,7 +39,7 @@ from starlette.datastructures import Headers
 from pydantic import BaseModel, Field, ValidationError
 from sqlmodel import Session, select
 
-# Load backend/.env (gitignored) for local dev so secrets like GEMINI_API_KEY are
+# Load backend/.env (gitignored) for local dev so secrets like OPENAI_API_KEY are
 # available before any module reads os.environ. No-op in prod (Render injects env
 # vars) and when python-dotenv isn't installed.
 try:
@@ -83,6 +83,7 @@ from . import macro_events
 from . import account as account_mod
 from . import challenge as challenge_mod
 from . import runner as runner_mod
+from .runner_release import MIN_SUPPORTED_RUNNER_VERSION, resolve_runner_release
 from . import macro_signing as macro_signing_mod
 from . import user_macros as user_macros_mod
 from .agent_features.position_news.router import router as position_news_router
@@ -725,6 +726,7 @@ class VisitIn(BaseModel):
     visitor: str = Field("", max_length=80)  # 브라우저 익명 id(서버는 해시만 저장)
     is_new: bool = False
     is_landing: bool = False
+    is_internal: bool = False  # QA opt-in only; never grants permissions
     screen_w: int = 0
 
 
@@ -820,6 +822,7 @@ def visit_record(
         db, kind=req.kind, path=req.path, view_key=req.view_key, session_key=req.session_key, referrer=req.referrer,
         utm_source=req.utm_source, visitor=req.visitor, is_new=req.is_new, is_landing=req.is_landing, screen_w=req.screen_w,
         user_id=account.id if account else None, secret=auth_mod.SECRET_KEY,
+        is_internal=req.is_internal or bool(account and account.is_admin),
     )
     admin_mod.maybe_prune_visits(db)  # 90일 지난 행은 하루 한 번 정리
     return Response(status_code=204)
@@ -864,11 +867,12 @@ def leaderboard_open(
 @app.get("/api/admin/users")
 def admin_users(
     days: int = Query(default=30, ge=7, le=90),
+    include_internal: bool = Query(default=False),
     admin: User = Depends(auth_mod.require_admin),
     db: Session = Depends(request_session),
 ) -> dict:
     """관리자 대시보드 — 사용자 지표(활성 사용자·세션·채널·페이지·기기, 최근 days 일)."""
-    return admin_mod.users_report(db, days=days)
+    return admin_mod.users_report(db, days=days, include_internal=include_internal)
 
 
 @app.get("/api/admin/signups")
@@ -978,7 +982,7 @@ def admin_costs(
     admin: User = Depends(auth_mod.require_admin),
     db: Session = Depends(request_session),
 ) -> dict:
-    """관리자 대시보드 — 월별 비용(Gemini 토큰 추정 + 고정액)."""
+    """관리자 대시보드 — 월별 비용(OpenAI 토큰 추정 + 고정액)."""
     return admin_mod.costs_report(db, months=months)
 
 
@@ -1160,7 +1164,7 @@ def backtest(
 
 @app.post("/api/explain/ai")
 def explain_ai(req: ExplainAiRequest) -> dict:
-    """On-demand AI 원인 분석 using the server Gemini key. Always returns a valid
+    """On-demand AI 원인 분석 using the server OpenAI key. Always returns a valid
     ``explanation``: on any AI failure it falls back to the rule-based one (same
     schema) and reports ``ai_error`` so the UI can hint why."""
     macro = req.macro
@@ -2055,7 +2059,7 @@ def runner_launch_ticket_claim(
         runner_mod.mark_launch_ticket_rejected(req.ticket, current)
         raise HTTPException(
             status_code=426,
-            detail=f"실행기 v{_RUNNER_MIN_VERSION or '6'} 이상으로 업데이트해 주세요.",
+            detail=f"실행기 v{_RUNNER_MIN_VERSION or MIN_SUPPORTED_RUNNER_VERSION} 이상으로 업데이트해 주세요.",
             headers={"Cache-Control": "no-store"},
         )
     return runner_mod.claim_launch_ticket(req.ticket, runner_version=current)
@@ -2063,7 +2067,7 @@ def runner_launch_ticket_claim(
 
 def _runner_version_supported(current: str) -> bool:
     """실행기가 최소 버전 이상인가. 숫자 아닌 값은 미지원으로 본다."""
-    required = _RUNNER_MIN_VERSION or "6"
+    required = _RUNNER_MIN_VERSION or MIN_SUPPORTED_RUNNER_VERSION
     try:
         return (
             current.isascii()
@@ -2086,7 +2090,7 @@ def runner_start(req: RunnerStartRequest, user: User = Depends(_runner_user)) ->
     if version and not _runner_version_supported(version):
         raise HTTPException(
             status_code=426,
-            detail=f"실행기 v{_RUNNER_MIN_VERSION or '6'} 이상으로 업데이트해 주세요.",
+            detail=f"실행기 v{_RUNNER_MIN_VERSION or MIN_SUPPORTED_RUNNER_VERSION} 이상으로 업데이트해 주세요.",
         )
     return runner_mod.start_session(user, req.model_dump())
 
@@ -2260,27 +2264,13 @@ _RUNNER_EXE_PATH = os.environ.get("RUNNER_EXE_PATH") or os.path.join(
 )
 
 
-# v6 adds confirmed fills and authoritative final position reporting.
-_RUNNER_V6_URL = "https://github.com/orbleeparrot/gg_parrot/releases/download/runner-v6/ggparrot-runner.exe"
-_RUNNER_DOWNLOAD_URL = os.environ.get("RUNNER_DOWNLOAD_URL", "").strip() or _RUNNER_V6_URL
-# Upgrade stale official release configuration after the immutable v6 asset is published.
-if _RUNNER_DOWNLOAD_URL in {
-    _RUNNER_V6_URL.replace("runner-v6", f"runner-v{version}") for version in range(1, 6)
-}:
-    _RUNNER_DOWNLOAD_URL = _RUNNER_V6_URL
-_RUNNER_SUPPORT_DEFAULT = "true" if _RUNNER_DOWNLOAD_URL == _RUNNER_V6_URL else "false"
-_RUNNER_SUPPORTS_LAUNCH = os.environ.get(
-    "RUNNER_SUPPORTS_LAUNCH", _RUNNER_SUPPORT_DEFAULT
-).strip().lower() in {"1", "true", "yes"}
+# Do not let stale Blueprint/env values downgrade a published official runner.
+_RUNNER_RELEASE = resolve_runner_release(os.environ)
+_RUNNER_DOWNLOAD_URL = _RUNNER_RELEASE["url"]
+_RUNNER_SUPPORTS_LAUNCH = _RUNNER_RELEASE["supports_launch"]
 _RUNNER_LAUNCH_SCHEME = "ggparrot" if _RUNNER_SUPPORTS_LAUNCH else ""
-_RUNNER_MIN_VERSION = (
-    os.environ.get("RUNNER_MIN_VERSION", "6").strip() or "6"
-) if _RUNNER_SUPPORTS_LAUNCH else ""
-_RUNNER_EXE_VERSION = os.environ.get("RUNNER_EXE_VERSION", "").strip()
-if _RUNNER_DOWNLOAD_URL == _RUNNER_V6_URL:
-    _RUNNER_EXE_VERSION = "6"
-    if _RUNNER_SUPPORTS_LAUNCH:
-        _RUNNER_MIN_VERSION = "6"
+_RUNNER_MIN_VERSION = _RUNNER_RELEASE["min_runner_version"]
+_RUNNER_EXE_VERSION = _RUNNER_RELEASE["version"]
 
 
 def _runner_launch_capabilities() -> dict:
@@ -2292,8 +2282,9 @@ def _runner_launch_capabilities() -> dict:
 
 
 @app.get("/api/runner/download/info")
-def runner_download_info() -> dict:
+def runner_download_info(response: Response) -> dict:
     """실행기 파일의 준비 여부/크기/버전/외부링크. 다운로드 페이지가 버튼 상태를 정한다."""
+    response.headers["Cache-Control"] = "no-store"
     if _RUNNER_DOWNLOAD_URL:
         return {
             "available": True,
@@ -2320,7 +2311,7 @@ def runner_download():
     if _RUNNER_DOWNLOAD_URL:
         from fastapi.responses import RedirectResponse
 
-        return RedirectResponse(_RUNNER_DOWNLOAD_URL)
+        return RedirectResponse(_RUNNER_DOWNLOAD_URL, headers={"Cache-Control": "no-store"})
     if not os.path.isfile(_RUNNER_EXE_PATH):
         raise HTTPException(status_code=404, detail="실행기 파일이 아직 준비되지 않았어요.")
     from fastapi.responses import FileResponse

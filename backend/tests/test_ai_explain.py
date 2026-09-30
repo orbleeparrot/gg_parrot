@@ -1,7 +1,7 @@
 """AI 원인 분석 층 (Gemini) — server key gating, fallback, parsing.
 
 No real network calls: the shared AI client factory is monkeypatched. The key is
-read from the server env GEMINI_API_KEY (no user-supplied key).
+read from the server env OPENAI_API_KEY (no user-supplied key).
 """
 from __future__ import annotations
 
@@ -90,7 +90,7 @@ def _good_json():
 
 
 def test_no_key_returns_rule_based(monkeypatch):
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     assert ai_explain.ai_available() is False
     out = ai_explain.enrich(_macro(), _result())
     assert isinstance(out, Explanation)
@@ -98,7 +98,7 @@ def test_no_key_returns_rule_based(monkeypatch):
 
 
 def test_server_key_generates_ai(monkeypatch):
-    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "gemini-test-key")
     captured = {}
     _patch_ai_client(monkeypatch, _good_json(), captured)
     out = ai_explain.generate(_macro(), _result())
@@ -109,27 +109,27 @@ def test_server_key_generates_ai(monkeypatch):
 
 
 def test_enrich_uses_env_key(monkeypatch):
-    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "gemini-test-key")
     _patch_ai_client(monkeypatch, _good_json())
     assert ai_explain.enrich(_macro(), _result()).source == "ai"
 
 
 def test_code_fenced_json_is_parsed(monkeypatch):
-    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "gemini-test-key")
     fenced = "```json\n" + _good_json() + "\n```"
     _patch_ai_client(monkeypatch, fenced)
     assert ai_explain.generate(_macro(), _result()).source == "ai"
 
 
 def test_points_capped_at_five(monkeypatch):
-    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "gemini-test-key")
     many = json.dumps({"mood": "win", "headline": "원인", "points": [f"p{i}" for i in range(8)]})
     _patch_ai_client(monkeypatch, many)
     assert len(ai_explain.generate(_macro(), _result()).points) == 5
 
 
 def test_incomplete_reply_raises_aierror(monkeypatch):
-    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "gemini-test-key")
     bad = json.dumps({"mood": "win", "headline": "", "points": []})
     _patch_ai_client(monkeypatch, bad)
     with pytest.raises(AiError):
@@ -137,7 +137,7 @@ def test_incomplete_reply_raises_aierror(monkeypatch):
 
 
 def test_generic_failure_falls_back_in_enrich(monkeypatch):
-    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "gemini-test-key")
     _patch_ai_client(monkeypatch, RuntimeError("boom"))
     assert ai_explain.enrich(_macro(), _result()).source == "rule"
 
@@ -198,7 +198,7 @@ def test_ai_explain_budget_fails_closed_when_shared_database_is_unavailable(monk
 
 
 def test_ai_explain_budget_is_charged_only_for_uncached_api_load(monkeypatch):
-    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "gemini-test-key")
     reservations = []
     monkeypatch.setattr(
         ai_explain,
@@ -217,7 +217,7 @@ def test_ai_explain_budget_is_charged_only_for_uncached_api_load(monkeypatch):
 
 
 def test_ai_explain_rejects_uncached_call_when_daily_budget_is_exhausted(monkeypatch):
-    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "gemini-test-key")
     monkeypatch.setattr(
         ai_explain,
         "_reserve_ai_explain_call",
@@ -235,7 +235,7 @@ def test_ai_explain_rejects_uncached_call_when_daily_budget_is_exhausted(monkeyp
 
 
 def test_endpoint_reports_ai_unavailable_without_key(monkeypatch):
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     def fake_klines(symbol, start_ms, end_ms, *, interval, market, allow_synthetic):
         assert (symbol, interval, market, allow_synthetic) == ("BTCUSDT", "1d", "spot", False)
         assert start_ms < end_ms

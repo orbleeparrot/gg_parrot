@@ -8,20 +8,28 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import time
 import uuid
 
-from sqlalchemy import delete, or_, update
+from sqlalchemy import case, delete, or_, update
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from . import db as db_mod
 from .db import CommunityPostSummary, get_session
 
+logger = logging.getLogger(__name__)
+
 LEASE_MS = 180_000
 RETRY_MS = 300_000
+# 검증을 끝내 통과하지 못하는 글은 수집 주기마다 다시 요약돼 유료 호출을 되풀이했다.
+# 시도할 때마다 대기를 두 배로 늘리고, 예산을 다 쓰면 포기한다. 요약 키에
+# prompt_version 이 들어 있어 지시문을 고치면 새 행이 생기고 예산도 새로 시작된다.
+MAX_ATTEMPTS = 10  # actual provider-call lifetime ceiling is enforced by news_ai_budget
+_MAX_RETRY_MS = 6 * 60 * 60 * 1000
 CACHE_TTL_MS = 30 * 86_400_000
 _MAX_BATCH = 100
 _MAX_LEASE_MS = 600_000
@@ -67,6 +75,11 @@ def _matches(row, identity):
     return all(getattr(row, name) == value for name, value in identity.items())
 
 
+def retry_delay_ms(attempts: int) -> int:
+    exponent = max(0, min(12, attempts - 1))
+    return min(_MAX_RETRY_MS, RETRY_MS * (2 ** exponent))
+
+
 def get_summaries(requests: list[dict], *, now_ms: int | None = None, db: Session | None = None) -> dict[str, str]:
     requested = _requests(requests)
     if not requested:
@@ -109,7 +122,8 @@ def claim_summaries(requests: list[dict], *, rejected_keys: list[str] | None = N
         row = rows.get(key)
         if row is None:
             candidate = CommunityPostSummary(summary_key=key, **identity, processing_status="pending",
-                                             claim_token=token, claimed_ms=millis, updated_ms=millis)
+                                             claim_token=token, claimed_ms=millis, updated_ms=millis,
+                                             attempts=1, next_retry_ms=millis + retry_delay_ms(1))
             try:
                 with db.begin_nested():
                     db.add(candidate)
@@ -134,6 +148,22 @@ def claim_summaries(requests: list[dict], *, rejected_keys: list[str] | None = N
         if row.processing_status == "pending" and row.claimed_ms > stale_before:
             result["waiting"].append(key)
             continue
+        used = int(row.attempts or 0)
+        if used >= MAX_ATTEMPTS:
+            # 예산을 다 썼다 — 원문 그대로 두고 다시는 유료로 부르지 않는다.
+            if row.processing_status != "failed":
+                db.exec(update(CommunityPostSummary).where(
+                    CommunityPostSummary.summary_key == key).values(
+                    processing_status="failed", claim_token="", claimed_ms=0, updated_ms=millis))
+                logger.warning("Community summary abandoned after %d attempts: post_id=%s",
+                               MAX_ATTEMPTS, row.post_id)
+            result["deferred"].append(key)
+            continue
+        # 자리가 'pending' 인 채 임대가 끝났다면 앞 일꾼이 죽은 것이다. 그건 유료
+        # 재시도가 아니라 복구라서 대기를 걸지 않는다.
+        if row.processing_status != "pending" and int(row.next_retry_ms or 0) > millis:
+            result["deferred"].append(key)
+            continue
         changed = db.exec(update(CommunityPostSummary).where(
             CommunityPostSummary.summary_key == key,
             CommunityPostSummary.claim_token == row.claim_token,
@@ -142,7 +172,8 @@ def claim_summaries(requests: list[dict], *, rejected_keys: list[str] | None = N
             CommunityPostSummary.updated_ms == row.updated_ms,
             CommunityPostSummary.summary_ko == row.summary_ko,
         ).values(summary_ko="", processing_status="pending", claim_token=token,
-                 claimed_ms=millis, updated_ms=millis))
+                 claimed_ms=millis, updated_ms=millis,
+                 attempts=used + 1, next_retry_ms=millis + retry_delay_ms(used + 1)))
         result["claimed" if changed.rowcount == 1 else "waiting"].append(key)
     db.commit()
     result["claim_token"] = token if result["claimed"] else ""
@@ -167,7 +198,9 @@ def store_summaries(summaries: dict[str, str], *, claim_token: str,
             CommunityPostSummary.summary_key == key,
             CommunityPostSummary.processing_status == "pending",
             CommunityPostSummary.claim_token == claim_token,
-        ).values(summary_ko=summary, processing_status="ready", claim_token="", claimed_ms=0, updated_ms=millis))
+        ).values(summary_ko=summary, processing_status="ready", claim_token="", claimed_ms=0,
+                 # 쓸 수 있는 요약이 나왔으면 재시도 예산은 처음부터 다시 센다.
+                 updated_ms=millis, attempts=0, next_retry_ms=0))
         if changed.rowcount == 1:
             stored.append(key)
     db.commit()
@@ -197,20 +230,27 @@ def renew_claims(keys: list[str], *, claim_token: str, now_ms: int | None = None
 
 
 def release_claims(keys: list[str], *, claim_token: str, retry_immediately: bool = False,
+                   provider_error: bool = False,
                    now_ms: int | None = None, db: Session | None = None) -> int:
+    """재시도 예산은 '모델이 쓸 수 없는 답을 냈다' 만 센다 — 로컬 혼잡과
+    제공자 장애는 예산을 돌려받는다."""
     keys = _keys(keys)
     if not keys or not claim_token:
         return 0
     if db is None:
         with get_session() as owned:
             return release_claims(keys, claim_token=claim_token, retry_immediately=retry_immediately,
-                                  now_ms=now_ms, db=owned)
+                                  provider_error=provider_error, now_ms=now_ms, db=owned)
     changed = db.exec(update(CommunityPostSummary).where(
         CommunityPostSummary.summary_key.in_(keys),
         CommunityPostSummary.processing_status == "pending",
         CommunityPostSummary.claim_token == claim_token,
     ).values(processing_status="retryable" if retry_immediately else "error",
-             claim_token="", claimed_ms=0, updated_ms=_millis(now_ms)))
+             claim_token="", claimed_ms=0, updated_ms=_millis(now_ms),
+             **({"attempts": case((CommunityPostSummary.attempts > 0,
+                                   CommunityPostSummary.attempts - 1), else_=0)}
+                if retry_immediately or provider_error else {}),
+             **({"next_retry_ms": 0} if retry_immediately else {})))
     db.commit()
     return int(changed.rowcount)
 

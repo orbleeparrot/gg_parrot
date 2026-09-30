@@ -295,14 +295,14 @@ def test_admin_endpoints_closed_unless_flag_set():
 def test_admin_report_shapes_follow_contract():
     headers = _admin_client()
     users = client.get("/api/admin/users?days=7", headers=headers).json()
-    assert set(users) == {"days", "generated_at", "coverage", "kpis", "series", "daily", "channels", "sources", "pages", "devices", "peak_hours"}
+    assert set(users) == {"days", "generated_at", "coverage", "kpis", "series", "daily", "channels", "sources", "pages", "devices", "peak_hours", "traffic"}
     assert users["days"] == 7 and users["generated_at"].endswith("Z")
     assert set(users["coverage"]) == {"visits_since", "events_since", "macro_events_since", "quests_since"}
-    assert set(users["kpis"]) == {"dau", "wau", "mau", "stickiness_pct", "online_5m", "bounce_pct_today", "avg_session_sec_today", "new_visitors"}
+    assert set(users["kpis"]) == {"dau", "wau", "mau", "stickiness_pct", "online_5m", "bounce_pct_today", "avg_session_sec_today", "new_visitors", "logged_in_accounts"}
     assert set(users["series"]) == {"days", "dau", "wau", "mau"} and all(len(users["series"][k]) == 7 for k in users["series"])
     assert len(users["daily"]) == 7 and users["daily"][-1]["day"] == users["series"]["days"][-1] == admin_mod._today_kst()
     assert set(users["daily"][0]) == {"day", "active", "new", "returning", "sessions", "pageviews", "pv_per_session", "avg_session_sec", "bounce_pct"}
-    assert [c["channel"] for c in users["channels"]] == ["direct", "search", "referral", "social", "campaign"]
+    assert [c["channel"] for c in users["channels"]] == ["direct", "search", "referral", "social", "campaign", "internal"]
     assert set(users["channels"][0]) == {"channel", "label", "sessions", "share_pct", "new_visitors", "bounce_pct", "signup_rate_pct"}
     assert [d["device"] for d in users["devices"]] == ["mobile", "desktop", "tablet", "unknown"]
     assert set(users["devices"][0]) == {"device", "label", "sessions", "share_pct", "avg_session_sec"} and users["devices"][3]["share_pct"] is None
@@ -337,7 +337,7 @@ def test_admin_report_shapes_follow_contract():
     assert len(macros["top"]) <= 20
 
     news = client.get("/api/admin/news", headers=headers).json()
-    assert set(news) == {"generated_at", "kpis", "engines", "hourly", "sources", "board", "failing", "enrichment"}
+    assert set(news) == {"generated_at", "kpis", "engines", "hourly", "sources", "board", "failing", "enrichment", "pipeline"}
     assert set(news["kpis"]) == {"tickers_ok", "tickers_total", "tickers_failing", "articles_today", "failures_today", "pending", "ai_budget_used", "ai_budget_limit"}
     assert [e["key"] for e in news["enrichment"]] == ["pending", "due", "given_up_today", "given_up", "stall", "public_next", "ai_budget", "coindesk"]
     assert all(set(e) == {"key", "label", "value"} for e in news["enrichment"])
@@ -749,7 +749,7 @@ def test_report_cache_keys_include_the_kst_date(monkeypatch):
     client.get("/api/admin/signups?days=7", headers=headers)
     client.get("/api/admin/macros?days=7", headers=headers)
     today = admin_mod._today_kst()
-    assert {f"users:7:{today}", f"signups:7:{today}", f"macros:7:{today}"} <= set(admin_mod._cache)
+    assert {f"users:7:{today}:False", f"signups:7:{today}", f"macros:7:{today}"} <= set(admin_mod._cache)
     monkeypatch.setattr(admin_mod, "_today_kst", lambda: "2099-01-01")  # 자정을 넘기면 캐시가 빗나가 새로 센다
     client.get("/api/admin/users?days=7", headers=headers)
-    assert "users:7:2099-01-01" in admin_mod._cache
+    assert "users:7:2099-01-01:False" in admin_mod._cache

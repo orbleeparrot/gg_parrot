@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag (for example runner-v6)"
+        description: "New immutable release tag matching runner/installation.py (do not rebuild an existing release)"
         required: true
-        default: "runner-v6"
+        default: "runner-v9"
 
 permissions:
   contents: write

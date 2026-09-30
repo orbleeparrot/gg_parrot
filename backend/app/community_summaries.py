@@ -17,6 +17,7 @@ from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 
 from .ai_runtime import AiBusyError, ai_cache_key, default_model, get_ai_client, get_ai_runtime
+from . import news_ai_budget
 
 logger = logging.getLogger(__name__)
 PROMPT_VERSION = "community-body-summary-ko-v1"
@@ -71,7 +72,7 @@ def _request_timeout():
 
 
 def configuration():
-    return {"enabled": bool(os.environ.get("GEMINI_API_KEY", "").strip()),
+    return {"enabled": bool(os.environ.get("OPENAI_API_KEY", "").strip()),
             "model": _model(), "prompt_version": PROMPT_VERSION,
             "max_body_chars": MAX_BODY_CHARS, "batch_size": _BATCH_SIZE,
             "cache_retention_days": 30, "daily_limit": None,
@@ -232,12 +233,17 @@ def _request_summaries(jobs):
     key = ai_cache_key("community-summary", PROMPT_VERSION, _model(), {"items": articles, "system": system})
 
     def request():
+        allowed = news_ai_budget.reserve('summary', [news_ai_budget.summary_identity(j) for j in jobs])
+        selected = [j for j in jobs if news_ai_budget.summary_identity(j) in allowed]
+        if not selected:
+            return {}
+        batch = [{"id": j["summary_key"], "body": j["body"]} for j in selected]
         response = get_ai_client().messages.create(
             model=_model(), max_tokens=2200, system=system,
             # Full-body batches need more time than the shared headline default.
             # HTTP readers still return immediately; retries remain disabled.
             timeout=_request_timeout(),
-            messages=[{"role": "user", "content": json.dumps(articles, ensure_ascii=False)}],
+            messages=[{"role": "user", "content": json.dumps(batch, ensure_ascii=False)}],
             # 스레드풀에서 돌아 contextvar 가 안 넘어온다 — 용도는 인자로 직접 건넨다.
             purpose="community_summaries",
         )
@@ -245,7 +251,7 @@ def _request_summaries(jobs):
         if content.startswith("```"):
             content = re.sub(r"^```(?:json)?\s*|\s*```$", "", content)
         parsed = json.loads(content)
-        by_key = {j["summary_key"]: j for j in jobs}
+        by_key = {j["summary_key"]: j for j in selected}
         valid = {}
         for item in parsed.get("items", []):
             if not isinstance(item, dict):
@@ -261,7 +267,7 @@ def _request_summaries(jobs):
 
 
 def _execute(jobs, *, background=False):
-    if not os.environ.get("GEMINI_API_KEY", "").strip():
+    if not os.environ.get("OPENAI_API_KEY", "").strip():
         return
     repository = _repository()
     for offset in range(0, len(jobs), _BATCH_SIZE):
@@ -269,7 +275,7 @@ def _execute(jobs, *, background=False):
             return
         batch = jobs[offset:offset + _BATCH_SIZE]
         claimed, token = [], ""
-        retry_immediately = False
+        retry_immediately = provider_error = False
         try:
             claim = repository.claim_summaries(
                 batch, rejected_keys=[j["summary_key"] for j in batch if j.get("rejected")])
@@ -298,17 +304,21 @@ def _execute(jobs, *, background=False):
         except Exception as exc:
             # No bodies, credentials, provider responses, or database URLs in logs.
             logger.warning("Community body summary deferred: reason=%s", type(exc).__name__)
+            # 제공자·저장소가 터진 것이지 모델이 쓸 수 없는 답을 낸 게 아니다.
+            provider_error = True
         finally:
             if claimed and token:
                 try:
-                    repository.release_claims(claimed, claim_token=token, retry_immediately=retry_immediately)
+                    repository.release_claims(claimed, claim_token=token,
+                                              retry_immediately=retry_immediately,
+                                              provider_error=provider_error)
                 except Exception as exc:
                     logger.warning("Community summary claim release deferred: reason=%s", type(exc).__name__)
 
 
 def _schedule(jobs):
     global _executor
-    if not os.environ.get("GEMINI_API_KEY", "").strip():
+    if not os.environ.get("OPENAI_API_KEY", "").strip():
         return
     with _lock:
         if _stopping:
@@ -350,6 +360,8 @@ def enrich_items(items, *, wait=False, schedule=True):
             continue
         body = str(item.get("community_body") or "").strip()
         if not body:
+            if item.get('community_summary_status') == 'failed':
+                continue
             # A service may project an already enriched internal snapshot. Do not
             # discard its summary just because the raw body was removed there.
             if item.get("community_summary_status") == "ready" and item.get("community_summary"):
@@ -385,8 +397,21 @@ def enrich_items(items, *, wait=False, schedule=True):
         except Exception as exc:
             logger.warning("Community summary cache unavailable: reason=%s", type(exc).__name__)
         missing = [job for job in missing if not _remembered(job["summary_key"])]
-        if missing and (wait or schedule):
-            (_execute if wait else _schedule)(missing)
+        try:
+            blocked = news_ai_budget.exhausted('summary', [news_ai_budget.summary_identity(j) for j in missing])
+        except Exception:
+            blocked = set()  # The reservation still fails closed before any paid call.
+        eligible = [j for j in missing if news_ai_budget.summary_identity(j) not in blocked]
+        if eligible and (wait or schedule):
+            (_execute if wait else _schedule)(eligible)
+        if wait:
+            try:
+                blocked = news_ai_budget.exhausted('summary', [news_ai_budget.summary_identity(j) for j in missing])
+            except Exception:
+                pass
+        for index, key in item_keys.items():
+            if news_ai_budget.summary_identity(jobs[key]) in blocked and not _remembered(key):
+                result[index]['community_summary_status'] = 'failed'
     for index, key in item_keys.items():
         summary = _remembered(key)
         if summary:
@@ -394,6 +419,9 @@ def enrich_items(items, *, wait=False, schedule=True):
             result[index]["community_summary_status"] = "ready"
     pending = sum(item.get("content_type") == "community" and item.get("community_summary_status") == "pending" for item in result)
     metadata = {"status": "partial" if pending else "ready", "pending_count": pending}
+    failed = sum(item.get('community_summary_status') == 'failed' for item in result)
+    if failed:
+        metadata['failed_count'] = failed
     if pending:
         metadata["retry_after_seconds"] = 30
     return result, metadata

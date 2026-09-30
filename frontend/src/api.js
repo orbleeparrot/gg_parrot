@@ -169,7 +169,7 @@ export const api = {
   me: () => req("/api/auth/me"),
   // 관리자 대시보드(User.is_admin 계정만) — 유입·가입·매크로 지표와 뉴스 수집 현황
   // 관리자 대시보드(require_admin). 집계는 서버가 60초 캐시하므로 여기서는 기간만 넘긴다.
-  adminUsers: (days = 30, options = {}) => req(`/api/admin/users?days=${adminDays(days)}`, { timeoutMs: 20_000, ...options }),
+  adminUsers: (days = 30, { includeInternal = false, ...options } = {}) => req(`/api/admin/users?days=${adminDays(days)}&include_internal=${Boolean(includeInternal)}`, { timeoutMs: 20_000, ...options }),
   adminSignups: (days = 30, options = {}) => req(`/api/admin/signups?days=${adminDays(days)}`, { timeoutMs: 20_000, ...options }),
   adminMacros: (days = 30, options = {}) => req(`/api/admin/macros?days=${adminDays(days)}`, { timeoutMs: 20_000, ...options }),
   adminNews: (options = {}) => req("/api/admin/news", { timeoutMs: 20_000, ...options }),
@@ -195,8 +195,8 @@ export const api = {
   askConsent: () => req("/api/ask/consent", { method: "POST" }),
   askExtra: () => req("/api/ask/extra", { method: "POST" }),
   // 카드 네 장의 답으로 종목 후보를 받는다 — 하루 횟수는 이 호출에서 차감된다.
-  askCandidates: (body) => req("/api/ask/candidates", { method: "POST", body: JSON.stringify(body) }),
-  askMacros: (body, options = {}) => req("/api/ask/macros", { method: "POST", body: JSON.stringify(body), timeoutMs: 60_000, ...options }),
+  askCandidates: (body) => req("/api/ask/candidates", { method: "POST", body: JSON.stringify(body), timeoutMs: 90_000 }),
+  askMacros: (body, options = {}) => req("/api/ask/macros", { method: "POST", body: JSON.stringify(body), timeoutMs: 90_000, ...options }),
   // 알림(헤더 종): 목록 · 안 읽은 수 · 읽음 처리
   myNotifications: ({ after, ...options } = {}) =>
     req(`/api/me/notifications${Number.isFinite(Number(after)) && after !== undefined ? `?after=${Number(after)}` : ""}`, { timeoutMs: 10_000, ...options }),

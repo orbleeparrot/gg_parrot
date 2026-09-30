@@ -48,9 +48,9 @@ services:
       - key: BINANCE_API_BASE
         value: "https://data-api.binance.vision"
       - key: RUNNER_DOWNLOAD_URL
-        value: "https://github.com/orbleeparrot/gg_parrot/releases/download/runner-v6/ggparrot-runner.exe"
+        value: "https://github.com/orbleeparrot/gg_parrot/releases/download/runner-v9/ggparrot-runner.exe"
       - key: RUNNER_EXE_VERSION
-        value: "6"
+        value: "9"
       - key: RUNNER_SUPPORTS_LAUNCH
         value: "true"
       - key: RUNNER_MIN_VERSION
@@ -63,12 +63,16 @@ services:
       # Google Identity Services의 공개 OAuth 2.0 Web client ID.
       - key: GOOGLE_CLIENT_ID
         sync: false
-      # Gemini 설정을 AI 해설·요약과 코인동향 제목 번역이 함께 사용합니다.
+      # OpenAI 설정을 AI 해설·요약과 코인동향 제목 번역이 함께 사용합니다.
       # 중복 제목은 Postgres 캐시를 재사용하고, 새 영문 제목은 전부 번역합니다.
-      - key: GEMINI_API_KEY
+      - key: OPENAI_API_KEY
         sync: false
-      - key: GEMINI_MODEL
-        value: "gemini-3.5-flash-lite"
+      - key: OPENAI_MODEL
+        value: "gpt-6-luna"
+      - key: OPENAI_REASONING_TOKEN_RESERVE
+        value: "4096"
+      - key: AI_TIMEOUT_SECONDS
+        value: "60"
       # 코인동향은 시장 1건 + 종목 2건만 동시에 요청하고, AI 포화 시에는
       # 웹 요청 스레드를 오래 점유하지 않도록 짧게 대기한 뒤 재시도 응답을 줍니다.
       - key: AI_ACQUIRE_TIMEOUT_SECONDS
@@ -81,8 +85,8 @@ services:
       - key: ASK_TIME_BUDGET_SEC
         value: "20"
       - key: NEWS_MARKET_SUMMARY_MAX_CALLS_PER_DAY
-        value: "8"
-      - key: GEMINI_NEWS_TRANSLATION_MAX_TOKENS
+        value: "20"
+      - key: OPENAI_NEWS_TRANSLATION_MAX_TOKENS
         value: "2048"
 
   # Prefect Cloud가 실행 이력과 스케줄을 관리하고, 실제 RSS 수집/DB 저장은
@@ -143,9 +147,13 @@ services:
       - key: PREFECT_API_KEY
         sync: false
       # 선택 사항입니다. 비워 두면 규칙 기반 분석만 저장합니다.
-      - key: GEMINI_API_KEY
+      - key: OPENAI_API_KEY
         sync: false
-      - key: GEMINI_MODEL
-        value: "gemini-3.5-flash-lite"
-      - key: GEMINI_POSITION_NEWS_MAX_TOKENS
+      - key: OPENAI_MODEL
+        value: "gpt-6-luna"
+      - key: OPENAI_REASONING_TOKEN_RESERVE
+        value: "4096"
+      - key: AI_TIMEOUT_SECONDS
+        value: "60"
+      - key: OPENAI_POSITION_NEWS_MAX_TOKENS
         value: "512"

@@ -60,14 +60,14 @@ function parseDays(value) {
 // 그대로 내보내면 새 탭 컴포넌트가 이전 탭 자료로 한 번 그려진다.
 // 회원 관리는 같은 탭에서도 쪽·검색·필터마다 다른 응답이라 그 조회 조건까지 키에 넣는다 —
 // 키가 바뀌면 폴러가 새로 서고(진행 중 요청은 abort) 응답은 언제나 "지금 키" 것만 쓰인다.
-function useAdminData(tab, days, enabled, query = null) {
+function useAdminData(tab, days, enabled, query = null, includeInternal = false) {
   const cacheRef = useRef(new Map());
-  const key = `${tab}:${days}:${query ? memberQueryString(query) : ""}`;
+  const key = `${tab}:${days}:${query ? memberQueryString(query) : ""}:${includeInternal}`;
   const [view, setView] = useState(() => ({ key, data: null, error: "", loading: true }));
   const [badges, setBadges] = useState({});
   const load = useCallback(async (signal) => {
     try {
-      const data = await FETCHERS[tab](days, { signal }, query);
+      const data = await FETCHERS[tab](days, { signal, ...(tab === 'users' ? { includeInternal } : {}) }, query);
       cacheRef.current.set(key, data);
       setView({ key, data, error: "", loading: false });
       if (tab === "macros") setBadges((b) => ({ ...b, macros: sumBy(data?.sessions, "error") || 0 }));
@@ -93,9 +93,10 @@ export default function AdminDashboard() {
   const tab = parseTab(params.get("tab"));
   const days = parseDays(params.get("days"));
   const ranged = RANGED.has(tab);
+  const includeInternal = params.get('include_internal') === 'true';
   // 회원 조회 조건은 주소가 원본 — 새로 고쳐도 같은 쪽·검색어·필터가 남는다.
   const memberQuery = useMemo(() => (tab === "members" ? parseMemberQuery(params) : null), [tab, params]);
-  const { data, error, loading, badges, refresh } = useAdminData(tab, ranged ? days : 0, Boolean(user?.is_admin), memberQuery);
+  const { data, error, loading, badges, refresh } = useAdminData(tab, ranged ? days : 0, Boolean(user?.is_admin), memberQuery, includeInternal);
 
   const hrefFor = useCallback((nextTab) => {
     // 보고 있는 탭을 다시 누를 때 조회 조건을 잃지 않는다.
@@ -105,8 +106,8 @@ export default function AdminDashboard() {
     return `?${q}`;
   }, [days, memberQuery]);
   const setDays = (d) => {
-    const q = new URLSearchParams({ tab });
-    if (d !== 30) q.set("days", String(d));
+    const q = new URLSearchParams(params);
+    if (d !== 30) q.set("days", String(d)); else q.delete("days");
     setParams(q, { replace: true });
   };
   // 조회 조건을 하나 바꾸면 나머지는 그대로, 쪽은 1로 되돌린다(쪽을 바꾼 게 아니라면).
@@ -140,6 +141,15 @@ export default function AdminDashboard() {
         </div>
       </div>
       <TabNav tabs={TABS} active={tab} hrefFor={hrefFor} badges={badgeLabels} />
+      {tab === 'users' ? <div className="adm-traffic-filter">
+        <label><input type="checkbox" checked={includeInternal} onChange={(event) => {
+          const next = new URLSearchParams(params);
+          if (event.target.checked) next.set('include_internal', 'true'); else next.delete('include_internal');
+          setParams(next, { replace: true });
+        }} /> 관리자·QA 방문 포함</label>
+        <p>기본값은 내부 방문 제외입니다. QA 브라우저는 주소에 ?qa=1을 붙여 표시하고 ?qa=0으로 해제하세요.
+          과거에 표시하지 않은 익명 점검 방문은 구분할 수 없습니다.</p>
+      </div> : null}
       {/* 회원 관리는 검색칸이 살아 있어야 해서(조회마다 화면이 사라지면 포커스를 잃는다) 스켈레톤·오류를 탭 안에서 다룬다. */}
       {!data && loading && tab !== "members" ? <Skeleton /> : null}
       {!data && !loading && error && tab !== "members" ? <ErrorBlock message={error} onRetry={refresh} /> : null}
@@ -224,7 +234,7 @@ function UsersTab({ data, days }) {
         <h2>사용자 지표</h2>
         <AdminTerms items={[
           ["집계 시작", `${sinceNote(since, "방문 기록")} · 그 전 날짜는 측정 불가(—)`],
-          ["활성 사용자", "그 기간에 한 번이라도 화면을 본 브라우저 수(로그인 여부 무관 · 저장소가 막힌 브라우저는 제외)"], ["DAU · WAU · MAU", "하루 · 7일 · 30일 활성 사용자"],
+          ["활성 브라우저", "익명 브라우저 ID 기준이며 사람 수가 아닙니다. 한 사람이 여러 기기를 쓰면 여러 개로 집계됩니다."], ["로그인 계정", "조회 기간에 방문한 서로 다른 로그인 계정 수. 실제 사람 수를 추정하지 않습니다."], ["DAU · WAU · MAU", "하루 · 7일 · 30일 활성 브라우저"],
           ["고착도", "DAU ÷ MAU. 매일 오는 비율"], ["세션", "한 방문 묶음. 30분 이상 쉬면 새 세션"], ["페이지뷰", "화면 진입 횟수(즉시 리다이렉트는 제외)"],
           ["세션 시간", "체류 합(탭을 숨긴 시간 제외). 마지막 화면의 체류를 모르면 그 화면은 빼고, 전부 모르면 그 세션은 평균에서 뺀다"],
           ["이탈률", "페이지 하나만 보고 떠난 세션 비율"], ["신규 · 재방문", "그 브라우저의 첫 방문인지. 합계 행의 신규는 기간 전체의 서로 다른 브라우저 수"],
@@ -235,16 +245,17 @@ function UsersTab({ data, days }) {
         { label: "DAU (오늘)", value: fmtInt(k.dau) }, { label: "WAU (7일)", value: fmtInt(k.wau) }, { label: "MAU (30일)", value: fmtInt(k.mau) },
         { label: "고착도", value: fmtNum(k.stickiness_pct), unit: "%" }, { label: "지금 접속 중", value: fmtInt(k.online_5m), unit: "5분" },
         { label: "오늘 이탈률", value: fmtNum(k.bounce_pct_today), unit: "%" }, { label: "평균 세션 (오늘)", value: fmtDuration(k.avg_session_sec_today) },
+        { label: "로그인 계정 (기간)", value: fmtInt(k.logged_in_accounts), unit: "계정" },
       ]} />
-      <AdminBlock title="활성 사용자 추이" caption={`${days}일 · 선 그래프`}>
+      <AdminBlock title="활성 브라우저 추이" caption={`${days}일 · 브라우저 ID 기준 · 사람 수 아님`}>
         <Legend items={[{ label: "DAU", color: SERIES.s1, line: true }, { label: "WAU", color: SERIES.s2, line: true }, { label: "MAU", color: SERIES.s3, line: true }]} />
-        <LineChart days={dayList} yTitle="활성 사용자 (명)" digits={0} series={[
+        <LineChart days={dayList} yTitle="활성 브라우저 (개)" digits={0} series={[
           { label: "MAU", data: series.mau, color: SERIES.s3 }, { label: "WAU", data: series.wau, color: SERIES.s2 }, { label: "DAU", data: series.dau, color: SERIES.s1 },
         ]} />
       </AdminBlock>
       <AdminBlock title="일별 트래픽" caption={`${all ? `${days}일 전체` : `최근 7일 · ${days}일 전체는 ‘더 보기’`} · ${sinceNote(since)}`} actions={toggle}>
         <AdminTable rows={visible} total={total} rowKey={(r) => r.day} columns={[
-          { key: "day", label: "날짜" }, { key: "active", label: "활성 사용자", num: true, render: (r) => fmtInt(r.active) },
+          { key: "day", label: "날짜" }, { key: "active", label: "활성 브라우저", num: true, render: (r) => fmtInt(r.active) },
           { key: "new", label: "신규", num: true, render: (r) => fmtInt(r.new) }, { key: "returning", label: "재방문", num: true, render: (r) => fmtInt(r.returning) },
           { key: "sessions", label: "세션", num: true, render: (r) => fmtInt(r.sessions) }, { key: "pageviews", label: "페이지뷰", num: true, render: (r) => fmtInt(r.pageviews) },
           { key: "pv_per_session", label: "페이지뷰/세션", num: true, render: (r) => fmtNum(r.pv_per_session, 2) },
@@ -526,8 +537,21 @@ function NewsTab({ data }) {
         { label: "보강 대기 기사", value: fmtInt(k.pending), tone: Number(k.pending) > 0 ? "warn" : undefined },
         { label: "뉴스 AI 예산 (오늘)", value: fmtInt(k.ai_budget_used), unit: `/ ${fmtInt(k.ai_budget_limit)}` },
       ]} />
-      <AdminBlock title="크롤링 엔진" caption="지금 · 오늘">
-        <AdminTable rows={data.engines || []} rowKey={(r) => r.engine} columns={[
+      <AdminBlock title="수집 · 번역 · 요약 단계" caption="번역·본문 요약은 현재 모델 기준, 시장 요약은 일별 공유 결과입니다. 오류 작업은 재시도 대기·한도 소진을 포함합니다. 처리 중은 유효한 작업 점유, 대기는 저장된 대기 상태이며 —는 미측정입니다. 실패는 오늘 누적 호출·수집 실패입니다.">
+        <AdminTable rows={data.pipeline || []} rowKey={(r) => r.key} columns={[
+          { key: 'label', label: '단계' },
+          { key: 'status_label', label: '상태' },
+          { key: 'last_success_ms', label: '마지막 성공 (KST)', render: (r) => fmtDayTimeKst(r.last_success_ms) },
+          { key: 'completed_today', label: '오늘 완료', num: true, render: (r) => fmtInt(r.completed_today) },
+          { key: 'count_unit', label: '집계 단위' },
+          { key: 'processing', label: '처리 중', num: true, render: (r) => r.processing == null ? '—' : fmtInt(r.processing) },
+          { key: 'pending', label: '대기', num: true, render: (r) => r.pending == null ? '—' : fmtInt(r.pending) },
+          { key: 'errors', label: '오류 작업', num: true, render: (r) => r.errors == null ? '—' : downIfPositive(r.errors) },
+          { key: 'failures_today', label: '오늘 호출·수집 실패', num: true, render: (r) => downIfPositive(r.failures_today) },
+        ]} />
+      </AdminBlock>
+      <AdminBlock title="크롤링 엔진" caption="지금 · 오늘 · AI 처리 상태는 위 단계별 표에서 확인">
+        <AdminTable rows={(data.engines || []).filter((r) => r.engine !== 'article_enrichment')} rowKey={(r) => r.engine} columns={[
           { key: "label", label: "엔진", render: (r) => r.label || r.engine }, { key: "mode", label: "실행 방식" },
           { key: "status", label: "상태", render: (r) => { const s = ENGINE_STATUS[r.status] || ENGINE_STATUS.idle; return <StatusPill tone={s.tone}>{r.status_label || s.label}</StatusPill>; } },
           { key: "last_run_ms", label: "마지막 실행", render: (r) => fmtRelative(r.last_run_ms, now) },
@@ -601,11 +625,12 @@ function CostsTab({ data }) {
   const other = (m) => ["coindesk", "vercel", "prefect"].reduce((acc, p) => acc + (Number(m.providers?.[p]) || 0), 0);
   const providerTotal = { label: "합계", method: "", month_usd: sumBy(providers, "month_usd"), last_month_usd: sumBy(providers, "last_month_usd"), plan: "" };
   const purposeTotal = {
-    label: "합계", code: "", calls: sumBy(purposes, "calls"), input_tokens: sumBy(purposes, "input_tokens"),
+    label: "합계", code: "", calls: sumBy(purposes, "calls"), failures: sumBy(purposes, "failures"), input_tokens: sumBy(purposes, "input_tokens"),
     output_tokens: sumBy(purposes, "output_tokens"), cost_usd: sumBy(purposes, "cost_usd"), daily_limit: "",
   };
   const dailyTotal = {
-    day: all || daily.length <= 7 ? `${daily.length}일` : "최근 7일", gemini_calls: sumBy(visible, "gemini_calls"), input_tokens: sumBy(visible, "input_tokens"),
+    day: all || daily.length <= 7 ? `${daily.length}일` : "최근 7일", ai_calls: sumBy(visible, "ai_calls"), failures: sumBy(visible, "failures"),
+    input_tokens: sumBy(visible, "input_tokens"),
     output_tokens: sumBy(visible, "output_tokens"), cost_usd: sumBy(visible, "cost_usd"), coindesk_calls: sumBy(visible, "coindesk_calls"),
   };
   const palette = [SERIES.s2, SERIES.s1, SERIES.s3, SERIES.s4, SERIES.s5, SERIES_6];
@@ -615,27 +640,31 @@ function CostsTab({ data }) {
         <h2>API 비용</h2>
         <AdminTerms items={[
           ["추정 비용", "응답 토큰 수 × 모델 단가 (서버 설정값, 1M 토큰 기준)"], ["실제 청구액", "청구 API 로 받은 값(제공하는 곳만, 1~2일 지연)"],
-          ["구독형", "월 고정액을 설정값으로 넣은 항목 · 이번 달은 경과일로 안분(*) · 시작 월 이전은 0"], ["용도", "Gemini 를 부르는 코드 위치 6곳"], ["통화", "USD"],
+          ["구독형", "월 고정액을 설정값으로 넣은 항목 · 이번 달은 경과일로 안분(*) · 시작 월 이전은 0"], ["용도", "AI API 호출 기능별 집계"], ["통화", "USD"],
+          ["실패", "오류·미완성 응답도 호출로 집계. 사용량을 못 받은 요청의 실제 청구액은 확인할 수 없습니다."],
           [monthLabel, `1일 ~ ${fmtInt(data.month_days_elapsed)}일까지`],
         ]} />
       </div>
       <AdminKpis items={[
         { label: "이번 달 추정 합계", value: fmtUsd(k.month_total_usd) }, { label: "지난달", value: fmtUsd(k.last_month_total_usd) },
-        { label: "이번 달 Gemini", value: fmtUsd(k.gemini_month_usd) }, { label: "Gemini 호출", value: fmtInt(k.gemini_calls_month) },
-        { label: "오늘 Gemini", value: fmtUsd(k.gemini_today_usd) },
+        { label: "이번 달 AI", value: fmtUsd(k.ai_month_usd) }, { label: "AI 호출", value: fmtInt(k.ai_calls_month) },
+        { label: "오늘 AI", value: fmtUsd(k.ai_today_usd) },
+        { label: "오늘 실패", value: `${fmtInt(k.ai_failures_today)} / ${fmtInt(k.ai_calls_today)}`,
+          tone: Number(k.ai_failures_today) > 0 ? "down" : undefined },
       ]} />
       <div className="adm-cols2">
         <AdminBlock title="월별 비용" caption={`최근 ${COST_MONTHS}개월 · 제공자별 누적 · USD · 구독은 시작 월부터, 이번 달은 경과일 안분`}>
-          <Legend items={[{ label: "Gemini", color: SERIES.s2 }, { label: "Render", color: SERIES.s1 }, { label: "Supabase", color: SERIES.s3 }, { label: "기타 (CoinDesk · Vercel · Prefect)", color: SERIES.s5 }]} />
+          <Legend items={[{ label: "OpenAI", color: SERIES.s4 }, { label: "Gemini (이전)", color: SERIES.s2 }, { label: "Render", color: SERIES.s1 }, { label: "Supabase", color: SERIES.s3 }, { label: "기타 (CoinDesk · Vercel · Prefect)", color: SERIES.s5 }]} />
           <StackedChart cats={monthly.map((m) => m.label || fmtMonthLabel(m.month, { current: m.month === data.month }))} yTitle="비용 (USD)" xTitle="월" prefix="$" digits={2} height={260}
             series={[
+              { label: "OpenAI", data: monthly.map((m) => Number(m.providers?.openai) || 0), color: SERIES.s4 },
               { label: "Gemini", data: monthly.map((m) => Number(m.providers?.gemini) || 0), color: SERIES.s2 },
               { label: "Render", data: monthly.map((m) => Number(m.providers?.render) || 0), color: SERIES.s1 },
               { label: "Supabase", data: monthly.map((m) => Number(m.providers?.supabase) || 0), color: SERIES.s3 },
               { label: "기타", data: monthly.map(other), color: SERIES.s5 },
             ]} />
         </AdminBlock>
-        <AdminBlock title="Gemini 용도별 비용" caption="이번 달 · USD">
+        <AdminBlock title="AI 용도별 비용" caption="이번 달 · USD">
           <Donut prefix="$" digits={2} parts={purposes.map((p, i) => ({ label: labelOf(PURPOSE_LABELS, p.purpose, p.label), value: p.cost_usd, color: palette[i % palette.length] }))} />
         </AdminBlock>
       </div>
@@ -652,11 +681,12 @@ function CostsTab({ data }) {
           { key: "plan", label: "요금제", render: (r) => `${r.plan || ""}${r.since ? `${r.plan ? " · " : ""}${r.since}부터` : ""}` },
         ]} />
       </AdminBlock>
-      <AdminBlock title="Gemini 용도별" caption="이번 달">
+      <AdminBlock title="AI 용도별" caption="이번 달">
         <AdminTable rows={purposes} total={purposeTotal} rowKey={(r) => r.purpose} columns={[
           { key: "label", label: "용도", render: (r) => r.label === "합계" ? r.label : labelOf(PURPOSE_LABELS, r.purpose, r.label) },
           { key: "code", label: "코드", render: (r) => r.code ?? r.purpose ?? "" },
           { key: "calls", label: "호출", num: true, render: (r) => fmtInt(r.calls) },
+          { key: "failures", label: "실패", num: true, render: (r) => downIfPositive(r.failures) },
           { key: "input_tokens", label: "입력 토큰", num: true, render: (r) => fmtTokens(r.input_tokens) },
           { key: "output_tokens", label: "출력 토큰", num: true, render: (r) => fmtTokens(r.output_tokens) },
           { key: "cost_usd", label: "추정 비용", num: true, render: (r) => fmtUsd(r.cost_usd) },
@@ -665,7 +695,8 @@ function CostsTab({ data }) {
       </AdminBlock>
       <AdminBlock title="일별 사용" caption={all ? `${daily.length}일 전체` : "최근 7일"} actions={toggle}>
         <AdminTable rows={visible} total={dailyTotal} rowKey={(r) => r.day} columns={[
-          { key: "day", label: "날짜" }, { key: "gemini_calls", label: "Gemini 호출", num: true, render: (r) => fmtInt(r.gemini_calls) },
+          { key: "day", label: "날짜" }, { key: "ai_calls", label: "AI 호출", num: true, render: (r) => fmtInt(r.ai_calls) },
+          { key: "failures", label: "실패", num: true, render: (r) => downIfPositive(r.failures) },
           { key: "input_tokens", label: "입력 토큰", num: true, render: (r) => fmtTokens(r.input_tokens) },
           { key: "output_tokens", label: "출력 토큰", num: true, render: (r) => fmtTokens(r.output_tokens) },
           { key: "cost_usd", label: "추정 비용", num: true, render: (r) => fmtUsd(r.cost_usd) },

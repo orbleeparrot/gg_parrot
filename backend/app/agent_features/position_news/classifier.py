@@ -16,7 +16,7 @@ from ...ai_runtime import ai_available, ai_cache_key, default_model, get_ai_clie
 FEATURE_VERSION = 2
 PROMPT_VERSION = "position-news-article-summary-v3"
 _DEFAULT_MODEL = default_model()
-_MAX_TOKENS = max(128, int(os.environ.get("GEMINI_POSITION_NEWS_MAX_TOKENS", "500")))
+_MAX_TOKENS = max(128, int(os.environ.get("OPENAI_POSITION_NEWS_MAX_TOKENS", "500")))
 _MAX_AI_SUMMARY_ITEMS = max(
     1,
     min(5, int(os.environ.get("POSITION_NEWS_MAX_AI_SUMMARY_ITEMS", "3"))),

@@ -43,7 +43,7 @@ class Cache:
 def cache(monkeypatch):
     repository = Cache()
     monkeypatch.setattr(summaries, "_repository", lambda: repository)
-    monkeypatch.setenv("GEMINI_API_KEY", "test-not-a-real-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-not-a-real-key")
     summaries.clear_memory_cache()
     return repository
 

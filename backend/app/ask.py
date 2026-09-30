@@ -377,7 +377,7 @@ def select_top(evaluated: list[Evaluated], profile: str, n: int = TOP_N) -> list
 
 
 _AI_MODEL = default_model()
-_AI_MAX_TOKENS = int(os.environ.get("GEMINI_ASK_MAX_TOKENS", "2048"))
+_AI_MAX_TOKENS = int(os.environ.get("OPENAI_ASK_MAX_TOKENS", "2048"))
 _AI_PROMPT_VERSION = "ask-v1"
 
 
@@ -405,7 +405,7 @@ def _strip_fences(text: str) -> str:
 
 
 def propose_with_ai(req: _Plan) -> list[Candidate]:
-    """Gemini 가 제안한 뼈대를 요청 조건(종목·봉·시장·레버리지)에 고정하고 스키마로 검증한다. 실패는 빈 리스트."""
+    """OpenAI 가 제안한 뼈대를 요청 조건(종목·봉·시장·레버리지)에 고정하고 스키마로 검증한다. 실패는 빈 리스트."""
     if not ai_available():
         return []
     system = _ai_system(req)
@@ -420,7 +420,7 @@ def propose_with_ai(req: _Plan) -> list[Candidate]:
         response = get_ai_client().messages.create(
             model=_AI_MODEL, max_tokens=_AI_MAX_TOKENS, system=system,
             messages=[{"role": "user", "content": prompt}], purpose="ask",
-            timeout=float(os.environ.get("ASK_AI_TIMEOUT_SEC", "6")),
+            timeout=float(os.environ.get("ASK_AI_TIMEOUT_SEC", "45")),
         )
         text = next((b.text for b in response.content if getattr(b, "type", None) == "text"), None)
         if not text:
@@ -478,7 +478,7 @@ def _candidate_ai() -> Optional[Callable[[str], str]]:
             response = get_ai_client().messages.create(
                 model=_AI_MODEL, max_tokens=_AI_MAX_TOKENS, system=_CANDIDATE_SYSTEM,
                 messages=[{"role": "user", "content": prompt}], purpose="ask-candidates",
-                timeout=float(os.environ.get("ASK_AI_TIMEOUT_SEC", "6")),
+                timeout=float(os.environ.get("ASK_AI_TIMEOUT_SEC", "45")),
             )
             text = next((b.text for b in response.content
                          if getattr(b, "type", None) == "text"), None)
@@ -620,7 +620,7 @@ def _result_view(e: Evaluated) -> dict:
     macro = e.candidate.macro
     # v1 은 규칙 기반 explain_result 만 쓴다 — AI 해설(ai_explain.enrich)은 사이트 전체
     # 일일 예산(AI_EXPLAIN_MAX_CALLS_PER_DAY)을 공유하는데, 여기선 한 번의 질문에 최대
-    # 3개 결과가 순차로 Gemini 를 부르게 되어 예산을 빠르게 갉아먹는다. 그래서 뺀다.
+    # 3개 결과가 순차로 OpenAI 를 부르게 되어 예산을 빠르게 갉아먹는다. 그래서 뺀다.
     explanation = explain_result(macro, e.result)
     return {
         "label": e.candidate.label,

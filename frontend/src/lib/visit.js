@@ -17,6 +17,20 @@ import { getToken } from "./auth.js";
 export const VISITOR_KEY = "ggp:visitor";
 export const FIRST_SEEN_KEY = "ggp:first_seen";
 export const SESSION_KEY = "ggp:session";
+export const INTERNAL_VISIT_KEY = "ggp:internal-visit";
+
+// Explicit QA opt-in (?qa=1), persisted on this browser. ?qa=0 turns it off.
+// This self-reported flag only excludes analytics; it never authorizes access.
+export function internalVisit(search = "", storage, navigator = {}) {
+  const choice = new URLSearchParams(search).get("qa");
+  try {
+    if (choice === "1" || choice === "0") storage?.setItem(INTERNAL_VISIT_KEY, choice);
+    return Boolean(navigator.webdriver) || choice === "1"
+      || (choice !== "0" && storage?.getItem(INTERNAL_VISIT_KEY) === "1");
+  } catch {
+    return Boolean(navigator.webdriver) || choice === "1";
+  }
+}
 export const SESSION_IDLE_MS = 30 * 60 * 1000;
 export const MAX_DWELL_MS = 6 * 60 * 60 * 1000;
 export const HEARTBEAT_MS = 60 * 1000;
@@ -103,7 +117,7 @@ export function impressionKey(id, ms) {
 // 순수: 서버 계약대로 body 를 만든다. path 는 쿼리·해시를 뗀 경로(`:id` 정규화는 서버).
 export function visitPayload(pathname, {
   kind = "view", referrer = "", search = "", utm = "", visitor = "", viewKey = "", sessionKey = "",
-  isNew = false, isLanding = false, screenW = 0,
+  isNew = false, isLanding = false, screenW = 0, isInternal = false,
 } = {}) {
   return {
     kind,
@@ -115,6 +129,7 @@ export function visitPayload(pathname, {
     visitor: String(visitor || ""),
     is_new: Boolean(isNew),
     is_landing: Boolean(isLanding),
+    ...(isInternal ? { is_internal: true } : {}),
     screen_w: Math.max(0, Math.round(Number(screenW) || 0)),
   };
 }
@@ -297,6 +312,7 @@ export function createVisitTracker({
     }
     send(visitPayload(pathname, {
       kind: "view", referrer: doc?.referrer || "", search, utm: s.utm, visitor, viewKey, sessionKey: s.key,
+      isInternal: internalVisit(search, local, nav),
       // 방문자를 못 세는 브라우저는 첫 방문인지도 알 수 없다 — 신규로 지어내지 않는다.
       isNew: visitor ? isNew : false, isLanding: s.is_landing, screenW: win?.innerWidth || 0,
     }));
@@ -333,6 +349,7 @@ export function createVisitTracker({
     const visitor = visitorId();
     send(visitPayload(name, {
       kind: "event", utm: s.utm, visitor, viewKey: makeKey(), sessionKey: s.key,
+      isInternal: internalVisit(win?.location?.search || "", local, nav),
       isNew: visitor ? isNew : false, isLanding: s.is_landing, screenW: win?.innerWidth || 0,
     }));
   }

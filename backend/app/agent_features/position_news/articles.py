@@ -111,6 +111,8 @@ def article_id(item: dict) -> str:
 
 def _ready(item: dict) -> bool:
     from ... import news
+    if item.get('translation_status') == 'failed' or item.get('community_summary_status') == 'failed':
+        return False
     title = str(item.get("title") or "")
     original = str(item.get("original_title") or "")
     return bool(re.search(r"[가-힣]", title)) and not news._title_needs_korean_translation(title) and (
@@ -311,6 +313,9 @@ def read_article_feed(asset_symbol: str, *, after_revision: int | None = None,
     rows = rows[:bound]
     if has_more:
         cursor = rows[-1].revision
+    # Revalidate old ready flags too. Keep cursor progression based on raw rows,
+    # and filter assessments with the same rows so sentiment never shifts.
+    rows = [row for row in rows if _ready(json.loads(row.item_json))]
     items = [json.loads(row.item_json) for row in rows]
     pending = max(0, state.item_count - state.ready_count)
     result = {**json.loads(state.metadata_json), "items": items, "cursor": cursor,

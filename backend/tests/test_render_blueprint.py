@@ -23,7 +23,7 @@ def test_render_blueprint_includes_position_news_background_worker():
     assert '- key: AI_EXPLAIN_MAX_CALLS_PER_DAY\n        value: "20"' in web
     assert '- key: AI_ACQUIRE_TIMEOUT_SECONDS\n        value: "1"' in web
     assert (
-        '- key: NEWS_MARKET_SUMMARY_MAX_CALLS_PER_DAY\n        value: "8"'
+        '- key: NEWS_MARKET_SUMMARY_MAX_CALLS_PER_DAY\n        value: "20"'
         in web
     )
     assert (
@@ -55,7 +55,7 @@ def test_render_blueprint_includes_position_news_background_worker():
     ).read_text(encoding="utf-8")
     assert "OPENAI_API_KEY=" in env_example
     assert "OPENAI_MODEL=" in env_example
-    assert "NEWS_MARKET_SUMMARY_MAX_CALLS_PER_DAY=3" in env_example
+    assert "NEWS_MARKET_SUMMARY_MAX_CALLS_PER_DAY=20" in env_example
     assert "AI_ACQUIRE_TIMEOUT_SECONDS=1" in env_example
     assert "NEWS_TITLE_TRANSLATION_ENABLED" not in env_example
     assert "NEWS_TITLE_TRANSLATION_MAX_CALLS_PER_DAY" not in env_example

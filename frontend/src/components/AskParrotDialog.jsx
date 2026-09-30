@@ -279,13 +279,13 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
   const [extraError, setExtraError] = useState("");
   const [leaving, setLeaving] = useState(false); // 다음 장으로 넘어가기 전 퇴장 중
   const [picked, setPicked] = useState(null); // 방금 고른 선택지(체크 표시 뒤 넘어간다)
-  const [slide, setSlide] = useState({ i: 0, dir: 0 }); // 휴대폰 카드 넘기기
+  const [active, setActive] = useState(0); // 휴대폰에서 지금 보고 있는 카드
   const narrow = useMedia(NARROW_QUERY);
   const reducedMotion = useMedia("(prefers-reduced-motion: reduce)");
   const titleId = useId();
   const bodyRef = useRef(null);
   const timers = useRef([]);
-  const swipeRef = useRef(null);
+  const trackRef = useRef(null);
   // 서버에 요청이 나가 있는 동안은 취소할 수 없다.
   const busy = state.phase === "loadingCandidates" || state.phase === "loadingResults";
   const lock = busy || leaving || picked != null;
@@ -319,7 +319,7 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
 
   const stageKey = `${status ? (status.error ? "e" : status.consented ? "c" : "n") : "-"}:${state.phase}:${state.step}:${state.answers.symbol || ""}`;
   useEffect(() => { setPicked(null); bodyRef.current?.scrollTo?.({ top: 0 }); }, [stageKey]);
-  useEffect(() => { setSlide({ i: 0, dir: 0 }); }, [state.results]);
+  useEffect(() => { setActive(0); trackRef.current?.scrollTo?.({ left: 0 }); }, [state.results]);
 
   const noQuota = status && !status.error && status.remaining_today <= 0;
   const answeredSteps = STEPS.filter((s) => state.answers[s] != null)
@@ -328,18 +328,32 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
   const options = asking && state.phase === "cards" ? stepOptions(state.step, state.answers) : [];
   const results = state.phase === "results" ? state.results || [] : [];
   const carousel = narrow && results.length > 0;
-  const current = carousel ? results[Math.min(slide.i, results.length - 1)] : null;
+  const current = carousel ? results[Math.min(active, results.length - 1)] : null;
 
   const choose = (opt, index) => {
     if (lock || opt.disabled) return;
     setPicked(index);
     later(T.pick, () => leaveThen(() => dispatch({ type: "choose", step: state.step, value: opt.value })));
   };
-  const go = (dir) => {
-    setSlide((s) => {
-      const i = Math.max(0, Math.min(results.length - 1, s.i + dir));
-      return i === s.i ? s : { i, dir };
+  // 휴대폰 카드 — 가로 스크롤 스냅. 손가락으로 밀면 한 장씩 멈추고, 점을 누르거나 ←→ 키로도 옮긴다.
+  const slideTo = (i) => {
+    const track = trackRef.current;
+    const el = track?.children?.[i];
+    if (!track || !el) return;
+    track.scrollTo({ left: el.offsetLeft - (track.clientWidth - el.clientWidth) / 2, behavior: reducedMotion ? "auto" : "smooth" });
+  };
+  const go = (dir) => slideTo(Math.max(0, Math.min(results.length - 1, active + dir)));
+  const onTrackScroll = () => {
+    const track = trackRef.current;
+    if (!track || !track.children.length) return;
+    const mid = track.scrollLeft + track.clientWidth / 2;
+    let best = 0;
+    let dist = Infinity;
+    Array.from(track.children).forEach((el, i) => {
+      const d = Math.abs(el.offsetLeft + el.clientWidth / 2 - mid);
+      if (d < dist) { dist = d; best = i; }
     });
+    if (best !== active) setActive(best);
   };
 
   useEffect(() => {
@@ -545,20 +559,22 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
         ) : null}
         {carousel ? (
           <div className="ask-car ask-in" style={inStyle(2)}>
-            <div
-              className="ask-mcs ask-car-view"
-              onPointerDown={(e) => { swipeRef.current = e.clientX; }}
-              onPointerUp={(e) => { const x = swipeRef.current; swipeRef.current = null; if (x == null) return; const dx = e.clientX - x; if (Math.abs(dx) > 44) go(dx < 0 ? 1 : -1); }}
-            >
-              <div key={slide.i} className={"ask-car-slide" + (slide.dir > 0 ? " from-right" : slide.dir < 0 ? " from-left" : "")}>
-                <ResultCard item={current} rank={slide.i + 1} best={slide.i === 0} compact onLoad={onLoad} />
-              </div>
+            <div className="ask-car-track" ref={trackRef} onScroll={onTrackScroll} aria-roledescription="carousel" aria-label="매크로 후보">
+              {results.map((item, idx) => (
+                <div key={item.label + item.rule_type} className={"ask-car-slide" + (idx === active ? " is-on" : "")}
+                  aria-roledescription="slide" aria-label={`${idx + 1} / ${results.length}`} onClick={() => idx !== active && slideTo(idx)}>
+                  <div className="ask-mcs"><ResultCard item={item} rank={idx + 1} best={idx === 0} compact onLoad={onLoad} /></div>
+                </div>
+              ))}
             </div>
             <div className="ask-car-nav">
-              <button type="button" className="ask-arr" aria-label={PREV_LABEL} disabled={slide.i === 0} onClick={() => go(-1)}><i className="is-l" /></button>
-              <span className="ask-car-dots" aria-hidden="true">{results.map((r, idx) => <i key={r.label + r.rule_type} className={idx === slide.i ? "is-on" : ""} />)}</span>
-              <span className="ask-car-cnt num" aria-live="polite">{slide.i + 1} / {results.length}</span>
-              <button type="button" className="ask-arr" aria-label={NEXT_LABEL} disabled={slide.i >= results.length - 1} onClick={() => go(1)}><i className="is-r" /></button>
+              <span className="ask-car-dots">
+                {results.map((r, idx) => (
+                  <button key={r.label + r.rule_type} type="button" className={idx === active ? "is-on" : ""}
+                    aria-label={`${idx + 1}위 조합 보기`} aria-current={idx === active} onClick={() => slideTo(idx)} />
+                ))}
+              </span>
+              <span className="ask-car-cnt" aria-live="polite"><b className="num">{active + 1}</b> / {results.length} · 옆으로 밀어서 보기</span>
             </div>
           </div>
         ) : null}

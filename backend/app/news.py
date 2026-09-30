@@ -453,7 +453,7 @@ _SUMMARY_PROMPT_VERSION = "market-news-summary-v3"
 _MARKET_SUMMARY_RETRY_SECONDS = 30.0
 _MARKET_SUMMARY_MAX_CALLS_PER_DAY = max(
     0,
-    int(os.environ.get("NEWS_MARKET_SUMMARY_MAX_CALLS_PER_DAY", "6")),
+    int(os.environ.get("NEWS_MARKET_SUMMARY_MAX_CALLS_PER_DAY", "20")),
 )
 
 _DISCLAIMER = (

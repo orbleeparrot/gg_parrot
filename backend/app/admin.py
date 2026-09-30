@@ -1068,6 +1068,6 @@ def _costs_report(db, months: int) -> dict:
         today = _today_kst()
         return {
             "generated_at": generated_at, "month": today[:7], "month_days_elapsed": int(today[8:10]),
-            "kpis": {"month_total_usd": 0.0, "last_month_total_usd": 0.0, "gemini_month_usd": 0.0, "gemini_calls_month": 0, "gemini_today_usd": 0.0},
+            "kpis": {"month_total_usd": 0.0, "last_month_total_usd": 0.0, "gemini_month_usd": 0.0, "gemini_calls_month": 0, "gemini_today_usd": 0.0, "ai_month_usd": 0.0, "ai_calls_month": 0, "ai_today_usd": 0.0},
             "monthly": [], "providers": [], "purposes": [], "daily": [],
         }

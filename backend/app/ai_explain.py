@@ -1,7 +1,7 @@
-"""AI 원인 분석(껄무새 해설의 AI 층) — Gemini.
+"""AI 원인 분석(껄무새 해설의 AI 층) — OpenAI.
 
 SERVER-SIDE ONLY. Every call goes through :mod:`ai_runtime`, which reads the key
-from ``GEMINI_API_KEY`` in the environment (local .env for dev, Render env for
+from ``OPENAI_API_KEY`` in the environment (local .env for dev, Render env for
 deploy) — never hardcoded, never logged, never returned to the client. There is
 NO user-supplied key: if the server key is set the feature is on for everyone; if
 not, callers fall back to the deterministic rule-based explanation.
@@ -37,9 +37,9 @@ from .ai_runtime import (
     get_ai_runtime,
 )
 
-# 모델은 GEMINI_MODEL 하나로 앱 전체가 함께 바뀐다(ai_runtime.default_model).
+# 모델은 OPENAI_MODEL 하나로 앱 전체가 함께 바뀐다(ai_runtime.default_model).
 _DEFAULT_MODEL = default_model()
-_MAX_TOKENS = int(os.environ.get("GEMINI_MAX_TOKENS", "2048"))
+_MAX_TOKENS = int(os.environ.get("OPENAI_MAX_TOKENS", "2048"))
 _MAX_CALLS_PER_DAY = max(
     0,
     int(os.environ.get("AI_EXPLAIN_MAX_CALLS_PER_DAY", "20")),
@@ -197,7 +197,7 @@ def generate_with_cache_status(
 ) -> tuple[Explanation, str]:
     """Return an explanation and ``loaded|cached|shared`` runtime state."""
     if not ai_available():
-        raise AiError("서버에 Gemini 키가 설정되지 않았어요.")
+        raise AiError("서버에 OpenAI 키가 설정되지 않았어요.")
     system = _SYSTEM
     if per_symbol:
         system += (
@@ -250,13 +250,13 @@ def generate_with_cache_status(
     except AiBusyError:
         raise AiError("AI 요청이 몰려 있어요. 잠시 후 다시 시도해 주세요.")
     except AiAuthError:
-        raise AiError("Gemini 키가 유효하지 않거나 권한이 없어요.")
+        raise AiError("OpenAI 키가 유효하지 않거나 권한이 없어요.")
     except AiRateLimitError:
         raise AiError("요청이 몰렸어요(레이트 리밋). 잠시 후 다시 시도해 주세요.")
     except AiStatusError as exc:
         detail = str(exc).lower()
         if "quota" in detail or "billing" in detail:
-            raise AiError("Gemini 사용량 한도에 걸렸어요. Google AI Studio 에서 결제/한도를 확인해 주세요.")
+            raise AiError("OpenAI 사용량 한도에 걸렸어요. OpenAI Platform 에서 결제/한도를 확인해 주세요.")
         raise AiError("AI 호출에 실패했어요.")
     except AiConnectionError:
         raise AiError("네트워크 오류로 AI 호출에 실패했어요. 잠시 후 다시 시도해 주세요.")

@@ -63,7 +63,7 @@ _TITLE_TRANSLATION_MAX_TOKENS = max(
     256,
     min(
         2_048,
-        int(os.environ.get("GEMINI_NEWS_TRANSLATION_MAX_TOKENS", "2048")),
+        int(os.environ.get("OPENAI_NEWS_TRANSLATION_MAX_TOKENS", "2048")),
     ),
 )
 _TITLE_TRANSLATION_CACHE_MAX_ENTRIES = max(
@@ -445,8 +445,8 @@ _GOOGLE_LOCALES = {
     "en": {"hl": "en-US", "gl": "US", "ceid": "US:en"},
 }
 
-# 요약(개요)은 Gemini 키가 있을 때만. 시장 페이지에 하루 1회.
-_GEMINI_MODEL = default_model()
+# 요약(개요)은 OpenAI 키가 있을 때만. 시장 페이지에 하루 1회.
+_OPENAI_MODEL = default_model()
 logger = logging.getLogger(__name__)
 
 _SUMMARY_PROMPT_VERSION = "market-news-summary-v3"
@@ -1867,7 +1867,7 @@ def _reserve_durable_market_summary_budget(*, daily_limit: int) -> bool:
 def _reserve_market_summary_call() -> bool:
     global _market_summary_budget
     if (
-        not os.environ.get("GEMINI_API_KEY")
+        not os.environ.get("OPENAI_API_KEY")
         or _MARKET_SUMMARY_MAX_CALLS_PER_DAY <= 0
     ):
         return False
@@ -1917,7 +1917,7 @@ def _plain_summary_text(text: object) -> str:
 
 def _summarize(items: list[dict], *, label: str) -> Optional[str]:
     """헤드라인만 근거로 한 중립 개요(3~4줄). 실패하면 None(개요 생략)."""
-    if not items or not os.environ.get("GEMINI_API_KEY"):
+    if not items or not os.environ.get("OPENAI_API_KEY"):
         return None
     try:
         headlines = "\n".join(f"- {it['title']} ({it['source']})" for it in items)
@@ -1938,7 +1938,7 @@ def _summarize(items: list[dict], *, label: str) -> Optional[str]:
         key = ai_cache_key(
             "market-news-summary",
             _SUMMARY_PROMPT_VERSION,
-            _GEMINI_MODEL,
+            _OPENAI_MODEL,
             {"label": label, "system": system, "headlines": headlines},
         )
 
@@ -1946,7 +1946,7 @@ def _summarize(items: list[dict], *, label: str) -> Optional[str]:
             if not _reserve_market_summary_call():
                 raise RuntimeError("market news summary daily budget exhausted")
             response = get_ai_client().messages.create(
-                model=_GEMINI_MODEL,
+                model=_OPENAI_MODEL,
                 max_tokens=600,
                 system=system,
                 messages=[{"role": "user", "content": user}],
@@ -1966,7 +1966,7 @@ def _summarize(items: list[dict], *, label: str) -> Optional[str]:
 
 
 def _title_translation_api_key() -> str:
-    return str(os.environ.get("GEMINI_API_KEY") or "").strip()
+    return str(os.environ.get("OPENAI_API_KEY") or "").strip()
 
 
 def _normalize_news_title(title: object) -> str:
@@ -2628,11 +2628,11 @@ def _request_korean_title_translations(titles: list[str], *, claim_token: str = 
         return {}
     if not _title_translation_api_key():
         raise NewsTranslationError(
-            "영문 뉴스 제목 번역에 필요한 GEMINI_API_KEY가 없습니다."
+            "영문 뉴스 제목 번역에 필요한 OPENAI_API_KEY가 없습니다."
         )
     selected_model = os.environ.get(
-        "GEMINI_MODEL",
-        _GEMINI_MODEL,
+        "OPENAI_MODEL",
+        _OPENAI_MODEL,
     )
     articles = []
     for title in titles:
@@ -2682,6 +2682,11 @@ def _request_korean_title_translations(titles: list[str], *, claim_token: str = 
     )
 
     def request_batch(batch: list[dict], *, correction: bool = False):
+        from . import news_ai_budget
+        allowed = news_ai_budget.reserve('title', [article['title'] for article in batch])
+        batch = [article for article in batch if article['title'] in allowed]
+        if not batch:
+            return {}, {}, False
         # Every displayed headline must be translated, regardless of today's
         # traffic. Exact-title cache/claims and batching prevent duplicate work;
         # legacy daily-limit environment variables intentionally have no effect.
@@ -2786,7 +2791,7 @@ def _claim_durable_title_translations(
         rejected_titles=rejected_titles,
         # 지시문·모델이 바뀌면 포기했던 제목도 재시도 예산을 새로 받는다.
         prompt_version=f"{_TITLE_TRANSLATION_PROMPT_VERSION}:"
-                       f"{os.environ.get('GEMINI_MODEL', _GEMINI_MODEL)}",
+                       f"{os.environ.get('OPENAI_MODEL', _OPENAI_MODEL)}",
     )
 
 
@@ -2988,6 +2993,15 @@ def _ensure_title_translations(titles: list[str], *, on_progress=None) -> None:
     if not missing:
         return
 
+    from . import news_ai_budget
+    try:
+        exhausted = news_ai_budget.exhausted('title', missing)
+    except Exception as exc:
+        raise NewsTranslationError('뉴스 번역 호출 한도를 확인하지 못했습니다.') from exc
+    missing = [title for title in missing if title not in exhausted]
+    if not missing:
+        return
+
     if not os.environ.get("DATABASE_URL"):
         # Local/SQLite mode has no cross-process coordinator. Serialize cache
         # misses so overlapping request batches still translate each title once.
@@ -3046,7 +3060,7 @@ def _ensure_title_translations(titles: list[str], *, on_progress=None) -> None:
 
 
 def _localize_coin_news_items(items: list[dict], *, wait_for_translation=True, on_progress=None) -> list[dict]:
-    localized = [dict(item) for item in items]
+    localized = [dict(item) for item in items if item.get('translation_status') != 'failed']
     titles = []
     seen = set()
     source_titles_by_index: dict[int, str] = {}
@@ -3098,7 +3112,7 @@ def _localize_coin_news_items(items: list[dict], *, wait_for_translation=True, o
     ]
     if unresolved:
         logger.warning(
-            "뉴스 제목 %d건의 번역을 재시도할 때까지 기사 표시를 보류합니다: %s",
+            "한국어 번역이 검증되지 않은 기사 %d건의 표시를 보류합니다: %s",
             len(unresolved),
             [_title_translation_id(title) for title in unresolved[:3]],
         )
@@ -3197,6 +3211,7 @@ def _localize_news_payload(payload: dict, *, wait_for_translation=True, on_progr
     result["items"] = [
         {key: value for key, value in item.items() if key not in _COMMUNITY_BODY_FIELDS}
         for item in enriched
+        if item.get('community_summary_status') != 'failed'
     ]
     result["community_summaries"] = summary_status
     return result
@@ -3260,7 +3275,7 @@ def get_market_news() -> dict:
     if result.get("overview"):
         result["overview"] = _plain_summary_text(result["overview"]) or result["overview"]
     elif result["items"] and (not cached or (
-        os.environ.get("GEMINI_API_KEY") and now >= _market_summary_retry_at
+        os.environ.get("OPENAI_API_KEY") and now >= _market_summary_retry_at
     )):
         overview = _load_durable_market_summary(day)
         if overview is None:
@@ -3271,7 +3286,7 @@ def get_market_news() -> dict:
         result["ai"] = overview is not None
         _market_summary_retry_at = (
             now + _MARKET_SUMMARY_RETRY_SECONDS
-            if os.environ.get("GEMINI_API_KEY") and overview is None else 0.0
+            if os.environ.get("OPENAI_API_KEY") and overview is None else 0.0
         )
     if raw.get("items"):
         # Never cache the filtered public list: its pending titles would be

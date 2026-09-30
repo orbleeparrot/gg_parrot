@@ -84,7 +84,7 @@ def test_captured_german_dollar_currency_is_not_a_us_ticker():
 
 def test_request_supplies_required_amounts_and_currency_without_relaxing_validation(monkeypatch):
     requests = []
-    monkeypatch.setenv('GEMINI_API_KEY', 'test-key')
+    monkeypatch.setenv('OPENAI_API_KEY', 'test-key')
     class Messages:
         def create(self, **kwargs):
             requests.append(kwargs)

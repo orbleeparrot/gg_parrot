@@ -189,20 +189,20 @@ def test_shared_ai_client_has_timeout_and_sdk_retries_disabled(monkeypatch):
             pass
 
     ai_runtime.close_ai_runtime()
-    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
-    monkeypatch.setattr(ai_runtime.genai, "Client", Client)
+    monkeypatch.setenv("OPENAI_API_KEY", "gemini-test-key")
+    monkeypatch.setattr(ai_runtime.openai, "OpenAI", Client)
     assert ai_runtime.get_ai_client() is ai_runtime.get_ai_client()
     assert len(created) == 1
-    http = created[0]["http_options"]
-    assert http.timeout > 0  # milliseconds
+    assert created[0]["timeout"] > 0
     # The runtime owns retries; the SDK must not retry underneath it.
-    assert http.retry_options.attempts <= 1
+    assert created[0]["max_retries"] == 0
+    assert created[0]["base_url"] == "https://api.openai.com/v1"
     ai_runtime.close_ai_runtime()
 
 
 def test_shared_ai_client_refuses_to_start_without_a_key(monkeypatch):
     ai_runtime.close_ai_runtime()
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     with pytest.raises(ai_runtime.AiAuthError):
         ai_runtime.get_ai_client()
 
@@ -219,47 +219,48 @@ def test_all_ai_callers_use_the_guarded_runtime():
         assert "genai." not in source and "anthropic" not in source, module.__name__
 
 
-# --- Gemini adapter: the only code that touches the SDK ---------------------
+# --- OpenAI adapter: the only code that touches the SDK ---------------------
 class _FakeModels:
     def __init__(self, outcome):
         self.outcome = outcome
         self.calls = []
 
-    def generate_content(self, **kwargs):
+    def create(self, **kwargs):
         self.calls.append(kwargs)
         if isinstance(self.outcome, Exception):
             raise self.outcome
-        return type("Resp", (), {"text": self.outcome})()
+        return type("Resp", (), {"output_text": self.outcome, "status": "completed"})()
 
 
 def _messages(outcome):
     models = _FakeModels(outcome)
-    client = type("Client", (), {"models": models})()
+    client = type("Client", (), {"responses": models})()
     return ai_runtime._Messages(client), models
 
 
-def test_adapter_maps_the_shared_contract_onto_generate_content():
+def test_adapter_maps_the_shared_contract_onto_responses():
     messages, models = _messages("답변껄")
     response = messages.create(
-        model="gemini-3.5-flash-lite", max_tokens=321, system="시스템 지시",
+        model="gpt-6-luna", max_tokens=321, system="시스템 지시",
         messages=[{"role": "user", "content": "질문"}], timeout=2.5,
     )
     assert [(b.type, b.text) for b in response.content] == [("text", "답변껄")]
     call = models.calls[0]
-    assert call["model"] == "gemini-3.5-flash-lite"
-    assert call["config"].system_instruction == "시스템 지시"
-    assert call["config"].max_output_tokens == 321
-    assert call["config"].http_options.timeout == 2500  # seconds in, milliseconds out
-    turn = call["contents"][0]
-    assert turn.role == "user" and turn.parts[0].text == "질문"
+    assert call["model"] == "gpt-6-luna"
+    assert call["instructions"] == "시스템 지시"
+    assert call["max_output_tokens"] == 321 + 4096
+    assert call["reasoning"] == {"effort": "max"}
+    assert call["store"] is False
+    assert call["timeout"] == 2.5
+    assert call["input"] == [{"role": "user", "content": "질문"}]
 
 
-def test_adapter_turns_assistant_role_into_model_turn():
+def test_adapter_preserves_assistant_role():
     messages, models = _messages("ok")
     messages.create(model="m", max_tokens=1, messages=[
         {"role": "user", "content": "a"}, {"role": "assistant", "content": "b"},
     ])
-    assert [c.role for c in models.calls[0]["contents"]] == ["user", "model"]
+    assert [c["role"] for c in models.calls[0]["input"]] == ["user", "assistant"]
 
 
 def test_adapter_hands_back_an_empty_block_when_the_model_returns_nothing():
@@ -276,7 +277,8 @@ def test_adapter_hands_back_an_empty_block_when_the_model_returns_nothing():
     (400, ai_runtime.AiStatusError, False),
 ])
 def test_adapter_translates_provider_errors(code, expected, transient):
-    error = ai_runtime.genai_errors.APIError(code, {"error": {"message": "nope", "status": "X"}})
+    import httpx
+    error = ai_runtime.openai.APIStatusError("nope", response=httpx.Response(code, request=httpx.Request("POST", "https://api.openai.com/v1/responses")), body=None)
     messages, _ = _messages(error)
     with pytest.raises(expected) as raised:
         messages.create(model="m", max_tokens=1, messages=[{"role": "user", "content": "x"}])
@@ -284,13 +286,13 @@ def test_adapter_translates_provider_errors(code, expected, transient):
     assert ai_runtime._provider_transient(raised.value) is transient
 
 
-def test_adapter_reads_googles_400_invalid_key_as_an_auth_error():
-    error = ai_runtime.genai_errors.APIError(
-        400, {"error": {"message": "API key not valid. Please pass a valid API key.", "status": "INVALID_ARGUMENT"}},
-    )
+def test_adapter_does_not_expose_provider_error_bodies():
+    import httpx
+    error = ai_runtime.openai.APIStatusError("SECRET_FROM_PROVIDER", response=httpx.Response(401, request=httpx.Request("POST", "https://api.openai.com/v1/responses")), body=None)
     messages, _ = _messages(error)
-    with pytest.raises(ai_runtime.AiAuthError):
+    with pytest.raises(ai_runtime.AiAuthError) as raised:
         messages.create(model="m", max_tokens=1, messages=[{"role": "user", "content": "x"}])
+    assert "SECRET_FROM_PROVIDER" not in str(raised.value)
 
 
 def test_adapter_treats_network_failures_as_transient():

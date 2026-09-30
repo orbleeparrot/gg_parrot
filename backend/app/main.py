@@ -39,7 +39,7 @@ from starlette.datastructures import Headers
 from pydantic import BaseModel, Field, ValidationError
 from sqlmodel import Session, select
 
-# Load backend/.env (gitignored) for local dev so secrets like GEMINI_API_KEY are
+# Load backend/.env (gitignored) for local dev so secrets like OPENAI_API_KEY are
 # available before any module reads os.environ. No-op in prod (Render injects env
 # vars) and when python-dotenv isn't installed.
 try:
@@ -978,7 +978,7 @@ def admin_costs(
     admin: User = Depends(auth_mod.require_admin),
     db: Session = Depends(request_session),
 ) -> dict:
-    """관리자 대시보드 — 월별 비용(Gemini 토큰 추정 + 고정액)."""
+    """관리자 대시보드 — 월별 비용(OpenAI 토큰 추정 + 고정액)."""
     return admin_mod.costs_report(db, months=months)
 
 
@@ -1160,7 +1160,7 @@ def backtest(
 
 @app.post("/api/explain/ai")
 def explain_ai(req: ExplainAiRequest) -> dict:
-    """On-demand AI 원인 분석 using the server Gemini key. Always returns a valid
+    """On-demand AI 원인 분석 using the server OpenAI key. Always returns a valid
     ``explanation``: on any AI failure it falls back to the rule-based one (same
     schema) and reports ``ai_error`` so the UI can hint why."""
     macro = req.macro

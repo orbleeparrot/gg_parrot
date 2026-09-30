@@ -195,8 +195,8 @@ export const api = {
   askConsent: () => req("/api/ask/consent", { method: "POST" }),
   askExtra: () => req("/api/ask/extra", { method: "POST" }),
   // 카드 네 장의 답으로 종목 후보를 받는다 — 하루 횟수는 이 호출에서 차감된다.
-  askCandidates: (body) => req("/api/ask/candidates", { method: "POST", body: JSON.stringify(body) }),
-  askMacros: (body, options = {}) => req("/api/ask/macros", { method: "POST", body: JSON.stringify(body), timeoutMs: 60_000, ...options }),
+  askCandidates: (body) => req("/api/ask/candidates", { method: "POST", body: JSON.stringify(body), timeoutMs: 90_000 }),
+  askMacros: (body, options = {}) => req("/api/ask/macros", { method: "POST", body: JSON.stringify(body), timeoutMs: 90_000, ...options }),
   // 알림(헤더 종): 목록 · 안 읽은 수 · 읽음 처리
   myNotifications: ({ after, ...options } = {}) =>
     req(`/api/me/notifications${Number.isFinite(Number(after)) && after !== undefined ? `?after=${Number(after)}` : ""}`, { timeoutMs: 10_000, ...options }),

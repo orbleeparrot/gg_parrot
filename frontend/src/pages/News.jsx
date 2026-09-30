@@ -19,16 +19,25 @@ function contentSource(item) {
   return `${newsContentLabel(item)} · ${newsSourceLabel(item)}`;
 }
 
+// 경주마 동향의 콘텐츠 유형 — 드롭다운 대신 segmented 버튼(DESIGN.md §6, 한 가지만 고르는 필터).
+// 시장·규제 헤드라인은 거르지 않는다(커뮤니티 글에는 이미 '사실 확인 안 됨' 표시가 붙는다).
+const CONTENT_SCOPES = [
+  { value: "news", label: "보도 기사" },
+  { value: "community", label: "커뮤니티" },
+  { value: "all", label: "전체" },
+];
+
 function ContentFilter({ value, onChange }) {
-  return <div className="news-content-filter">
-    <label>콘텐츠 유형 <select value={value} onChange={(event) => onChange(event.target.value)}>
-      <option value="news">보도 기사</option>
-      <option value="community">커뮤니티 의견</option>
-      <option value="all">전체</option>
-    </select></label>
-    <p>{value === 'news' ? '커뮤니티 매매 의견은 제외해요. 해당 유형의 기사가 없으면 목록이 비어 있을 수 있어요.'
-      : '커뮤니티 글은 작성자의 주장·매매 의견이며, 보도 기사나 검증된 투자 정보가 아니에요.'}</p>
-  </div>;
+  return (
+    <div className="seg news-content-seg" role="group" aria-label="경주마 뉴스 콘텐츠 유형">
+      {CONTENT_SCOPES.map((scope) => (
+        <button key={scope.value} type="button" aria-pressed={value === scope.value}
+          className={"seg-item" + (value === scope.value ? " seg-item-on" : "")} onClick={() => onChange(scope.value)}>
+          {scope.label}
+        </button>
+      ))}
+    </div>
+  );
 }
 
 const COIN_NEWS_CONCURRENCY = 2;
@@ -73,12 +82,13 @@ function useCoinNewsBriefings(coins) {
   return { newsBySymbol, retry };
 }
 
-function BriefingSectionHeader({ id, title, description, count, countLabel, pendingLabel }) {
+function BriefingSectionHeader({ id, title, description, count, countLabel, pendingLabel, actions = null }) {
   return (
     <header className="news-briefing-section-head">
       <div className="news-briefing-section-title">
         <h2 id={id}>{title}</h2>
         <InfoTooltip text={description} label={`${title} 설명`} placement="bottom" />
+        {actions}
       </div>
       <span className="news-briefing-section-status" aria-live="polite">
         {Number.isFinite(count) && count > 0 ? (
@@ -402,7 +412,8 @@ function MobileArticleList({ base, items }) {
   );
 }
 
-function RacerBriefing({ coins, loading, error, contentScope }) {
+function RacerBriefing({ coins, loading, error }) {
+  const [contentScope, setContentScope] = useState("news");
   const mobile = useSyncExternalStore(subscribeMobileNews, mobileNewsSnapshot, () => false);
   const [selectedSymbol, setSelectedSymbol] = useState(null);
   const selected = coins.find((coin) => coin.symbol === selectedSymbol) || coins[0];
@@ -444,7 +455,11 @@ function RacerBriefing({ coins, loading, error, contentScope }) {
         count={coins.length}
         countLabel="종목"
         pendingLabel="시장 확인 중"
+        actions={<ContentFilter value={contentScope} onChange={setContentScope} />}
       />
+      {contentScope !== "news" ? (
+        <p className="news-content-note">커뮤니티 글은 작성자의 주장·매매 의견이며, 보도 기사나 검증된 투자 정보가 아니에요.</p>
+      ) : null}
 
       {loading ? <Loading label="오늘의 경주마를 확인하는 중…" /> : null}
       {error ? <ErrorNote>경주마 정보를 불러오지 못했어요: {error}</ErrorNote> : null}
@@ -472,7 +487,6 @@ function FitParagraph({ className, text, maxLines, minPx, children }) {
 }
 
 export default function News() {
-  const [contentScope, setContentScope] = useState('news');
   // 시장 뉴스는 하루 단위 자료라 10분 안에 돌아오면 다시 받지 않는다.
   const { states: marketStates, retry: retryMarket } = useNewsBriefings(
     ["market"], (_key, signal) => api.newsMarket({ signal }), 1, { freshMs: 10 * 60 * 1000 },
@@ -480,8 +494,6 @@ export default function News() {
   const marketState = marketStates.market;
   // Headlines, overview and image updates share one ordered response/cache.
   const market = marketState?.data || null;
-  const filteredMarket = useMemo(() => market ? { ...market, items: filterNewsContent(market.items, contentScope) } : null,
-    [market, contentScope]);
   const marketLoading = !marketState || ["queued", "loading"].includes(marketState.status);
   const marketError = marketState?.error || "";
   const { coins, loading: coinsLoading, error: coinsError } = useHotCoins();
@@ -490,7 +502,6 @@ export default function News() {
 
   return (
     <div className="news-briefing-page">
-      <ContentFilter value={contentScope} onChange={setContentScope} />
       {/* 위 줄: 왼쪽은 제목·기준일·AI 요약, 오른쪽은 시장·규제 헤드라인. 아래 줄: 경주마 트리맵. */}
       <div className="news-top">
       <div className="news-top-copy">
@@ -520,11 +531,11 @@ export default function News() {
           : "경주마 선정과 뉴스는 참고용이며 투자 권유가 아니에요."}
       </p>
       </div>
-      <MarketBriefing market={filteredMarket} loading={marketLoading} error={marketError} onRetry={() => retryMarket("market")} />
+      <MarketBriefing market={market} loading={marketLoading} error={marketError} onRetry={() => retryMarket("market")} />
       </div>
 
       <div className="news-briefing-grid">
-        <RacerBriefing coins={coins} loading={coinsLoading} error={coinsError} contentScope={contentScope} />
+        <RacerBriefing coins={coins} loading={coinsLoading} error={coinsError} />
       </div>
     </div>
   );

@@ -17,6 +17,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from ... import news as news_mod
+from ...news_ai_budget import MAX_CALLS as TITLE_TRANSLATION_MAX_ATTEMPTS
 from ...db import (
     BrowserNewsPageCache,
     MarketNewsSummary,
@@ -216,8 +217,7 @@ def _retry_delay_ms(attempts: int) -> int:
 
 # 검증을 끝내 통과하지 못하는 제목은 수집 주기(5분)마다 다시 번역돼 하루 수백 번
 # 유료 호출을 만들었다. 시도할 때마다 대기를 두 배로 늘리고, 예산을 다 쓰면
-# 포기한다. 지시문(prompt_version)을 고쳐 배포하면 예산을 새로 받는다.
-TITLE_TRANSLATION_MAX_ATTEMPTS = 10  # corrections also debit news_ai_budget; never exceed 10 actual calls
+# 포기한다. 실제 호출 예산은 지시문·모델 변경이나 재배포로 초기화하지 않는다.
 _TITLE_TRANSLATION_BASE_RETRY_MS = max(
     30,
     int(os.environ.get("NEWS_TITLE_TRANSLATION_RETRY_SECONDS", "300")),

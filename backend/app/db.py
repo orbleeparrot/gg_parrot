@@ -607,8 +607,8 @@ class NewsTitleTranslation(SQLModel, table=True):
     claimed_ms: int = Field(default=0, sa_type=BigInteger, index=True)
     updated_at: str = ""
     updated_ms: int = Field(default=0, sa_type=BigInteger, index=True)
-    # 검증에 걸린 번역을 무한히 다시 사는 것을 막는 예산. 성공하면 0 으로 돌아가고,
-    # 지시문(prompt_version)이 바뀌면 포기한 제목도 예산을 새로 받는다.
+    # 결과 행의 실패 횟수. 성공·지시문 변경으로 바뀔 수 있으나, 실제 과금 호출
+    # 누적 상한은 NewsAiItemBudget에 별도로 보존되며 초기화하지 않는다.
     attempts: int = Field(default=0)
     next_retry_ms: int = Field(default=0, sa_type=BigInteger, index=True)
     prompt_version: str = Field(default="", max_length=160)

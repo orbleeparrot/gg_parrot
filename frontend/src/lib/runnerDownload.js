@@ -1,18 +1,23 @@
 // 실행기(exe) 배포 정보 한 곳.
 //
 // 서버가 알려주는 다운로드 주소는 배포 변수가 서로 다른 시점에 갱신되면 옛 버전을
-// 가리킬 수 있다. 그 보정(구버전이면 공식 v6 로 되돌리기, 자동 연결 지원 여부,
+// 가리킬 수 있다. 그 보정(구버전이면 현재 공식 릴리스로 올리기, 자동 연결 지원 여부,
 // 표시할 버전)이 화면마다 다르게 구현되면 한쪽만 고쳐지는 일이 생긴다 — 실행
 // 마법사와 설치 안내 화면이 같은 판단을 쓰도록 여기에 모아 둔다.
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api.js";
 
-export const OFFICIAL_RUNNER_VERSION = "6";
+export const OFFICIAL_RUNNER_VERSION = "9";
+const MIN_SUPPORTED_RUNNER_VERSION = "6";
 export const OFFICIAL_RUNNER_DOWNLOAD_URL =
-  "https://github.com/orbleeparrot/gg_parrot/releases/download/runner-v6/ggparrot-runner.exe";
+  "https://github.com/orbleeparrot/gg_parrot/releases/download/runner-v9/ggparrot-runner.exe";
+
+const officialVersion = (url) => String(url || "").match(
+  /^https:\/\/github\.com\/orbleeparrot\/gg_parrot\/releases\/download\/runner-v([0-9]{1,6})\/ggparrot-runner\.exe$/,
+)?.[1] || "";
 
 // 이 PC 에서 실행기를 한 번 열었는지. 옛 불리언 키는 버전을 구분하지 못해서
-// v6 를 실제로 연 것과 구버전 등록이 남은 것을 섞어 버렸다.
+// 현재 릴리스를 실제로 연 것과 구버전 등록이 남은 것을 섞어 버렸다.
 export const RUNNER_OPENED_STORAGE_KEY = "ggparrot:runner-opened-version";
 export const LEGACY_RUNNER_OPENED_STORAGE_KEY = "ggparrot:runner-opened";
 
@@ -39,9 +44,10 @@ export function resolveRunnerDownload(downloadInfo, downloadError) {
   const reportedUrl = downloadInfo?.available
     ? downloadInfo.url || api.runnerDownloadUrl
     : OFFICIAL_RUNNER_DOWNLOAD_URL;
-  // 체결 확인·최종 상태 보고를 지원하는 v6를 기본으로 안내한다.
-  const reportedIsOutdated = /\/runner-v(?:1|2|3|4|5)\//i.test(reportedUrl);
+  const reportedVersion = officialVersion(reportedUrl);
+  const reportedIsOutdated = !!reportedVersion && Number(reportedVersion) < Number(OFFICIAL_RUNNER_VERSION);
   const url = reportedIsOutdated ? OFFICIAL_RUNNER_DOWNLOAD_URL : reportedUrl;
+  const releaseVersion = officialVersion(url);
   const launchReported = downloadInfo != null
     && Object.prototype.hasOwnProperty.call(downloadInfo, "supports_launch");
   return {
@@ -52,16 +58,16 @@ export function resolveRunnerDownload(downloadInfo, downloadError) {
     url,
     isExternal: /^https?:\/\//i.test(url),
     supportsLaunch: reportedIsOutdated || downloadInfo?.supports_launch === true
-      || (!launchReported && /\/runner-v6\//.test(url)),
+      || (!launchReported && !!releaseVersion),
     version: String(
       reportedIsOutdated
         ? OFFICIAL_RUNNER_VERSION
-        : downloadInfo?.version || (/\/runner-v6\//.test(url) ? OFFICIAL_RUNNER_VERSION : ""),
+        : releaseVersion || downloadInfo?.version || "",
     ),
     minVersion: String(
-      reportedIsOutdated
-        ? OFFICIAL_RUNNER_VERSION
-        : downloadInfo?.min_runner_version || OFFICIAL_RUNNER_VERSION,
+      releaseVersion
+        ? Math.max(Number(MIN_SUPPORTED_RUNNER_VERSION), Number(downloadInfo?.min_runner_version) || 0)
+        : downloadInfo?.min_runner_version || MIN_SUPPORTED_RUNNER_VERSION,
     ),
     size: downloadInfo?.size || 0,
     state: !checked

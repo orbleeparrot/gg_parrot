@@ -11,7 +11,7 @@ import { Icon } from "./icons.jsx";
 
 export const TOAST_HOLD_MS = 5000;
 
-function useHeaderBottom() {
+export function useHeaderBottom() {
   const [top, setTop] = useState(64);
   useEffect(() => {
     const measure = () => {

@@ -4,6 +4,7 @@ import SimBadge from "../components/SimBadge.jsx";
 import RegisterMacroModal from "../components/RegisterMacroModal.jsx";
 import ChatBox from "../components/ChatBox.jsx";
 import ConfirmDialog from "../components/ConfirmDialog.jsx";
+import AppToast from "../components/AppToast.jsx";
 import { PageHeader, EmptyState, Loading, ErrorNote } from "../components/Page.jsx";
 import { api } from "../api.js";
 import CoinIcon from "../components/CoinIcon.jsx";
@@ -181,7 +182,12 @@ function AccountLeaderboard() {
   const location = useLocation();
   const quickRunMode = new URLSearchParams(location.search).get("from") === "quick-run";
   const registeredId = Number(location.state?.registeredId) || null;
-  const justRegistered = !!location.state?.justRegistered;
+  // 등록 완료는 페이지 배너가 아니라 토스트로 한 번만 — 새로고침·뒤로가기로 다시 뜨지 않게 기록에서 지운다.
+  const [registeredToast, setRegisteredToast] = useState(() => !!location.state?.justRegistered);
+  useEffect(() => {
+    if (!location.state?.justRegistered) return;
+    navigate(`${location.pathname}${location.search}`, { replace: true, state: { ...location.state, justRegistered: false } });
+  }, [location, navigate]);
   const auth = useAuth();
   const [items, setItems] = useState([]);
   const [unlocking, setUnlocking] = useState(0); // entry id being unlocked
@@ -505,10 +511,13 @@ function AccountLeaderboard() {
         </div>
       ) : null}
 
-      {justRegistered ? (
-        <div className="notice-good mb-5 t-small text-slate-700" role="status">
-          등록을 완료했어요. 같은 설정으로 모의 수익률 집계를 시작했어요.
-        </div>
+      {registeredToast ? (
+        <AppToast
+          label="리더보드 등록"
+          title="등록을 완료했어요"
+          body="같은 설정으로 모의 수익률 집계를 시작했어요."
+          onClose={() => setRegisteredToast(false)}
+        />
       ) : null}
 
       {busy && <Loading />}

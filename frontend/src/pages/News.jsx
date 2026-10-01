@@ -13,6 +13,32 @@ import { splitSummary } from "../lib/summaryText.js";
 import { layoutTreemap, racerWeight } from "../lib/treemap.js";
 import "./NewsMobile.css";
 import InfoTooltip from "../components/InfoTooltip.jsx";
+import { filterNewsContent, newsContentLabel } from "../lib/newsContent.js";
+
+function contentSource(item) {
+  return `${newsContentLabel(item)} · ${newsSourceLabel(item)}`;
+}
+
+// 경주마 동향의 콘텐츠 유형 — 드롭다운 대신 segmented 버튼(DESIGN.md §6, 한 가지만 고르는 필터).
+// 시장·규제 헤드라인은 거르지 않는다(커뮤니티 글에는 이미 '사실 확인 안 됨' 표시가 붙는다).
+const CONTENT_SCOPES = [
+  { value: "all", label: "전체" },
+  { value: "news", label: "보도 기사" },
+  { value: "community", label: "커뮤니티" },
+];
+
+function ContentFilter({ value, onChange }) {
+  return (
+    <div className="seg news-content-seg" role="group" aria-label="경주마 뉴스 콘텐츠 유형">
+      {CONTENT_SCOPES.map((scope) => (
+        <button key={scope.value} type="button" aria-pressed={value === scope.value}
+          className={"seg-item" + (value === scope.value ? " seg-item-on" : "")} onClick={() => onChange(scope.value)}>
+          {scope.label}
+        </button>
+      ))}
+    </div>
+  );
+}
 
 const COIN_NEWS_CONCURRENCY = 2;
 const RACER_NEWS_ROTATE_MS = 5_000;
@@ -56,12 +82,13 @@ function useCoinNewsBriefings(coins) {
   return { newsBySymbol, retry };
 }
 
-function BriefingSectionHeader({ id, title, description, count, countLabel, pendingLabel }) {
+function BriefingSectionHeader({ id, title, description, count, countLabel, pendingLabel, actions = null }) {
   return (
     <header className="news-briefing-section-head">
       <div className="news-briefing-section-title">
         <h2 id={id}>{title}</h2>
         <InfoTooltip text={description} label={`${title} 설명`} placement="bottom" />
+        {actions}
       </div>
       <span className="news-briefing-section-status" aria-live="polite">
         {Number.isFinite(count) && count > 0 ? (
@@ -85,7 +112,7 @@ function MarketBriefing({ market, loading, error, onRetry }) {
     () => (market?.items || []).map((item) => ({
       id: communityPostIdentity(item) || item.url || item.title,
       title: item.title,
-      source: newsSourceLabel(item),
+      source: contentSource(item),
       time: historicalNewsLabel(item) || newsPublishedLabel(item),
       image: item.image || "",
       url: item.article_url || item.url,
@@ -213,7 +240,7 @@ function TileNews({ base, newsState, tick, onRetry, symbol, lines }) {
           {excerptLines > 0 ? <span className="news-map-news-excerpt">{summary.text}</span> : null}
         </a>
         <span className="news-map-news-meta">
-          <span className="news-map-news-source">{newsSourceLabel(item)}</span>
+          <span className="news-map-news-source">{contentSource(item)}</span>
           {time ? <span className="news-map-news-time">{time}</span> : null}
           {status === "error" ? <NewsRefreshRetry onRetry={() => onRetry(symbol)} />
             : <span className="news-map-news-count num" aria-hidden="true">{index + 1}/{items.length}</span>}
@@ -375,7 +402,7 @@ function MobileArticleList({ base, items }) {
               <li key={communityPostIdentity(item) || item.url || `${item.title}-${index}`}>
                 <a href={item.article_url || item.url || undefined} target="_blank" rel="noreferrer noopener">
                   <strong>{item.title}</strong>
-                  <span className="news-racer-mobile-article-meta"><span>{newsSourceLabel(item)}</span><span>{historicalNewsLabel(item) || newsPublishedLabel(item)}</span></span>
+                  <span className="news-racer-mobile-article-meta"><span>{contentSource(item)}</span><span>{historicalNewsLabel(item) || newsPublishedLabel(item)}</span></span>
                 </a>
                 {summary ? <div className="news-racer-mobile-summary"><span>{summary.label}</span>{summary.text ? <p>{summary.text}</p> : null}</div> : null}
               </li>
@@ -386,10 +413,14 @@ function MobileArticleList({ base, items }) {
 }
 
 function RacerBriefing({ coins, loading, error }) {
+  const [contentScope, setContentScope] = useState("news");
   const mobile = useSyncExternalStore(subscribeMobileNews, mobileNewsSnapshot, () => false);
   const [selectedSymbol, setSelectedSymbol] = useState(null);
   const selected = coins.find((coin) => coin.symbol === selectedSymbol) || coins[0];
-  const { newsBySymbol, retry } = useCoinNewsBriefings(mobile ? (selected ? [selected] : []) : coins);
+  const { newsBySymbol: unfilteredNews, retry } = useCoinNewsBriefings(mobile ? (selected ? [selected] : []) : coins);
+  const newsBySymbol = useMemo(() => Object.fromEntries(Object.entries(unfilteredNews).map(([symbol, state]) => [
+    symbol, state.data ? { ...state, data: { ...state.data, items: filterNewsContent(state.data.items, contentScope) } } : state,
+  ])), [unfilteredNews, contentScope]);
   const [tick, setTick] = useState(0);
   const termTexts = coins.flatMap((coin) => (
     newsBySymbol[coin.symbol]?.data?.items || []
@@ -424,7 +455,11 @@ function RacerBriefing({ coins, loading, error }) {
         count={coins.length}
         countLabel="종목"
         pendingLabel="시장 확인 중"
+        actions={<ContentFilter value={contentScope} onChange={setContentScope} />}
       />
+      {contentScope !== "news" ? (
+        <p className="news-content-note">커뮤니티 글은 작성자의 주장·매매 의견이며, 보도 기사나 검증된 투자 정보가 아니에요.</p>
+      ) : null}
 
       {loading ? <Loading label="오늘의 경주마를 확인하는 중…" /> : null}
       {error ? <ErrorNote>경주마 정보를 불러오지 못했어요: {error}</ErrorNote> : null}

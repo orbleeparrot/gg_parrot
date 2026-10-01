@@ -21,7 +21,7 @@ def test_actual_failed_title_accepts_complete_korean_translation(original, trans
 def test_lowercase_tail_does_not_create_tickers_from_uppercase_prose():
     for original in (CFG, CFG.split(" to the higher")[0]):
         assert news._translation_protected_upper_tokens(original) == ("CFG", "TP1", "TP2")
-    assert news._valid_title_translation(CFG, CFG_KO)
+    assert news._title_translation_is_clean(CFG, CFG_KO)
 
 
 @pytest.mark.parametrize("original, translated", [
@@ -29,11 +29,11 @@ def test_lowercase_tail_does_not_create_tickers_from_uppercase_prose():
     ("XYZQ MOVED TO THE SAME DAILY TARGET — this is a recap", "XYZQ 같은 일봉 목표로 이동 — 요약"),
 ])
 def test_alternate_grammar_shapes_translate_prose_and_preserve_unknown_subject(original, translated):
-    assert news._valid_title_translation(original, translated)
+    assert news._title_translation_is_clean(original, translated)
     if original.startswith("XYZQ"):
         assert "XYZQ" in news._translation_protected_upper_tokens(original)
-        assert not news._valid_title_translation(original, translated.replace("XYZQ", ""))
-        assert not news._valid_title_translation(original, translated.replace("XYZQ", "BTC"))
+        assert not news._title_translation_is_clean(original, translated.replace("XYZQ", ""))
+        assert not news._title_translation_is_clean(original, translated.replace("XYZQ", "BTC"))
 
 
 @pytest.mark.parametrize("before, after", [
@@ -41,7 +41,7 @@ def test_alternate_grammar_shapes_translate_prose_and_preserve_unknown_subject(o
     ("6.16%", "6.61%"), ("6.16%", "6.16"),
 ])
 def test_uppercase_prose_detection_does_not_relax_assets_targets_or_numbers(before, after):
-    assert not news._valid_title_translation(CFG, CFG_KO.replace(before, after))
+    assert not news._title_translation_is_clean(CFG, CFG_KO.replace(before, after))
 
 
 @pytest.mark.parametrize("original, identifier", [
@@ -58,8 +58,8 @@ def test_explicit_assets_acronyms_and_identifiers_survive_uppercase_sentences(or
 
 
 def test_ordinary_unknown_tickers_and_short_abbreviations_keep_existing_protection():
-    assert news._valid_title_translation("XYZQ rallies 3%", "XYZQ 3% 상승")
-    assert not news._valid_title_translation("XYZQ rallies 3%", "BTC 3% 상승")
+    assert news._title_translation_is_clean("XYZQ rallies 3%", "XYZQ 3% 상승")
+    assert not news._title_translation_is_clean("XYZQ rallies 3%", "BTC 3% 상승")
     assert "TA" in news._translation_protected_upper_tokens("FIL Price Filecoin TA FIL Technical Analysis")
 
 
@@ -82,4 +82,4 @@ def test_company_single_letter_suffix_requires_the_full_company_context():
     ("376개", "377개"), ("3,521 BTC", "3,520 BTC"), ("BTC", "ETH"), ("10곳", "11곳"),
 ])
 def test_company_suffix_handling_preserves_company_currency_and_every_quantity(before, after):
-    assert not news._valid_title_translation(CAPITAL_B, CAPITAL_B_KO.replace(before, after))
+    assert not news._title_translation_is_clean(CAPITAL_B, CAPITAL_B_KO.replace(before, after))

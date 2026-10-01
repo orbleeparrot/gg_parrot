@@ -10,6 +10,7 @@ import { fmtSize, isRunnerOpened, markRunnerOpened, useRunnerDownload } from "..
 import { findLaunchedSession, launchPhaseFromTicketStatus } from "../lib/runnerLaunch.js";
 import { getRunnerDevice } from "../lib/runnerDevice.js";
 import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
+import { Icon } from "../components/icons.jsx";
 
 const BINANCE_KEY_GUIDE_STORAGE_PREFIX = "ggparrot:binance-testnet-key-ready:v1";
 
@@ -926,7 +927,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
             : runnerDownloadState === "error"
               ? "확인 실패"
               : "배포 정보 없음";
-    const mark = runnerReady ? "✓" : runnerDownloadState === "loading" ? "…" : runnerAvailable ? "↓" : "—";
+    const mark = runnerReady ? <Icon name="check" size={18} strokeWidth={2.5} /> : runnerDownloadState === "loading" ? "…" : runnerAvailable ? <Icon name="download" size={18} /> : "—";
     const heading = runnerReady
       ? "실행기 받기를 눌렀어요. 받은 파일을 한 번 직접 실행했다면 준비된 거예요."
       : downloadStarted
@@ -1018,7 +1019,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
             rel="noopener noreferrer"
             className="btn btn-m btn-secondary runner-wizard-api-link"
           >
-            {keyGuide.linkLabel} <span aria-hidden="true">↗</span>
+            {keyGuide.linkLabel} <Icon name="arrowUpRight" size={14} className="ui-icon-inline" />
           </a>
           <span className="runner-wizard-api-domain">공식 페이지 · {keyGuide.domain} · 새 탭</span>
         </div>
@@ -1141,7 +1142,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
         <Workspace title="새 실행기가 필요해요" status="업데이트 필요">
           <MacroSummary item={selected} compact />
           <div className="runner-wizard-launch-panel is-warning">
-            <span className="runner-wizard-launch-mark" aria-hidden="true">↓</span>
+            <span className="runner-wizard-launch-mark" aria-hidden="true"><Icon name="download" size={18} /></span>
             <div>
               <h2>현재 배포된 실행기는 웹에서 바로 열기를 지원하지 않아요.</h2>
               <p>최신 실행기를 받은 뒤 다시 시도하거나, 매크로 파일을 받아 기존 방식으로 연결할 수 있어요.</p>
@@ -1262,7 +1263,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
       return (
         <Workspace title="실행기가 열렸어요" status="자동 연결됨">
           <div className="runner-wizard-launch-panel is-success" role="status">
-            <span className="runner-wizard-launch-mark" aria-hidden="true">✓</span>
+            <span className="runner-wizard-launch-mark" aria-hidden="true"><Icon name="check" size={18} strokeWidth={2.5} /></span>
             <div>
               <h2>계정과 매크로가 실행기에 전달됐어요.</h2>
               <p>{selected?.name} · {selected?.symbol} · 테스트넷 기본</p>
@@ -1287,7 +1288,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
       <Workspace title="실행기에서 시작" status="테스트넷 기본">
         <MacroSummary item={selected} compact />
         <div className="runner-wizard-launch-panel is-ready">
-          <span className="runner-wizard-launch-mark" aria-hidden="true">↗</span>
+          <span className="runner-wizard-launch-mark" aria-hidden="true"><Icon name="arrowUpRight" size={18} /></span>
           <div>
             <h2>계정과 매크로가 준비됐어요.</h2>
             <p>아래 ‘실행기 열기’를 누르면 일회성 연결 정보가 실행기로 전달돼요.</p>

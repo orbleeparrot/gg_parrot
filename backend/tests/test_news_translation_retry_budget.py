@@ -58,14 +58,14 @@ def _attempt(db, *, now_ms, rejected=True, version=VERSION, succeed=False):
     return True
 
 
-def test_rejected_title_waits_longer_after_each_failed_attempt(db):
+def test_rejected_title_retries_once_then_stops(db):
     assert _attempt(db, now_ms=NOW) is True
     # 첫 실패 뒤에는 기본 대기(5분) 안에 다시 점유되지 않는다.
     assert _attempt(db, now_ms=NOW + 299_000) is False
     assert _attempt(db, now_ms=NOW + 300_001) is True
-    # 두 번째 실패 뒤 대기는 두 배(10분)로 늘어난다.
+    # 두 번째 실패 뒤에는 시간이 지나도 세 번째 유료 작업을 점유하지 않는다.
     assert _attempt(db, now_ms=NOW + 300_001 + 599_000) is False
-    assert _attempt(db, now_ms=NOW + 300_001 + 600_001) is True
+    assert _attempt(db, now_ms=NOW + 300_001 + 600_001) is False
 
 
 def test_rejected_title_is_abandoned_after_the_attempt_budget(db):
@@ -151,3 +151,17 @@ def test_rejected_community_summary_waits_longer_after_each_attempt(db):
     assert _summary_attempt(db, request, now_ms=NOW) is True
     assert _summary_attempt(db, request, now_ms=NOW + 299_000) is False
     assert _summary_attempt(db, request, now_ms=NOW + 300_200) is True
+
+
+def test_stored_translation_records_quality_warning_without_blocking(db):
+    original = "BTC drops -3%"
+    claim = repository.claim_title_translations([original], prompt_version=VERSION, now_ms=NOW, db=db)
+    repository.store_title_translations({original: "BTC 3% 상승"}, claim_token=claim["claim_token"],
+                                        now_ms=NOW + 100, db=db)
+    repository.store_title_translations({TITLE: "비트코인 ETF 자금 유입 사상 최대"}, now_ms=NOW + 200, db=db)
+    from app.db import NewsTitleTranslation
+    from sqlmodel import select
+    rows = {row.original_title: row for row in db.exec(select(NewsTitleTranslation)).all()}
+    assert rows[original].processing_status == "ready"
+    assert rows[original].quality_warning == "fact_mismatch"
+    assert rows[TITLE].quality_warning == ""

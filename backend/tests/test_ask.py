@@ -929,3 +929,21 @@ def test_allowed_symbols_falls_back_when_symbol_source_is_down(monkeypatch):
         allowed = ask._allowed_symbols(row, "spot")
         assert "BTCUSDT" in allowed and "AAAUSDT" in allowed
         assert "MUBARAKUSDT" not in allowed  # 목록을 못 받으면 넓히지 않는다
+
+
+def test_result_view_carries_hold_return_and_a_small_curve():
+    # 결과 카드(2026-09-30)가 '그냥 들고 있기' 대비와 자산곡선을 그리도록 옆 칸에 싣는다 — metrics 모양은 그대로.
+    from app.engine.backtest import EquityPoint
+    curve = [EquityPoint(t=f"2026-01-01T{h:02d}:00:00", equity=1000 + h * 3 + (h % 5)) for h in range(24)] * 5
+    result = BacktestResult(
+        initial_capital=1000.0, final_equity=1100.0, final_return_pct=10.0, mdd_pct=4.0,
+        win_rate_pct=55.0, total_trades=8, trades=[], equity_curve=curve, buy_hold_return_pct=14.5,
+    )
+    view = ask._result_view(ask.Evaluated(_cand("A"), result))
+    assert view["metrics"] == {"final_return_pct": 10.0, "mdd_pct": 4.0, "win_rate_pct": 55.0, "total_trades": 8}
+    assert view["hold_return_pct"] == 14.5 and view["initial_capital"] == 1000.0
+    assert len(view["curve"]) == ask.CURVE_POINTS
+    assert view["curve"][0] == curve[0].equity and view["curve"][-1] == curve[-1].equity
+
+    empty = ask._result_view(ask.Evaluated(_cand("A"), _result(3, 1, bh=None)))
+    assert empty["curve"] == [] and empty["hold_return_pct"] is None

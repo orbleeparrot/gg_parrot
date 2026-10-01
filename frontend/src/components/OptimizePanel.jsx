@@ -2,6 +2,7 @@ import { useState } from "react";
 import { api } from "../api.js";
 import { buildMacro } from "../lib/macro.js";
 import InfoTooltip from "./InfoTooltip.jsx";
+import { Icon } from "./icons.jsx";
 
 // 수익률 격자의 발산(diverging) 스케일.
 //
@@ -235,7 +236,7 @@ export default function OptimizePanel({ form, setForm, valErr, onResult }) {
                                 {c.oos_return_pct.toFixed(1)}%
                               </span>
                             )}
-                            {best && <span className="block text-[11px] font-bold">★ 최적</span>}
+                            {best && <span className="block text-[11px] font-bold"><Icon name="star" size={11} fill="currentColor" strokeWidth={1.5} className="ui-icon-inline" /> 최적</span>}
                             {cur && !best && <span className="block text-[11px] font-semibold">현재</span>}
                           </button>
                         </td>

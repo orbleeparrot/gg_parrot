@@ -85,3 +85,13 @@
   .news-briefing-page .news-term-chip .info-trigger.info-trigger::after { inset: -5px -2px; }
   .news-racer-mobile :is(button, a):focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
 }
+/* 경주마 동향 제목 오른쪽의 콘텐츠 유형 버튼(공용 .seg) — 제목 줄에 맞춰 조금 낮게. */
+.news-content-seg { margin-left: 12px; }
+.news-content-seg .seg-item { height: 32px; padding: 0 12px; font-size: 13px; }
+.news-content-note { margin: -8px 0 16px; font-size: 12px; color: rgb(var(--c-slate-500)); }
+@media (max-width: 639px) {
+  .news-briefing-section-title { flex-wrap: wrap; row-gap: 10px; }
+  .news-content-seg { margin-left: 0; width: 100%; }
+  .news-content-seg .seg-item { flex: 1; justify-content: center; }
+  .news-content-note { margin-top: 0; }
+}

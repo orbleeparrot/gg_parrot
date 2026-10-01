@@ -169,7 +169,7 @@ export const api = {
   me: () => req("/api/auth/me"),
   // 관리자 대시보드(User.is_admin 계정만) — 유입·가입·매크로 지표와 뉴스 수집 현황
   // 관리자 대시보드(require_admin). 집계는 서버가 60초 캐시하므로 여기서는 기간만 넘긴다.
-  adminUsers: (days = 30, options = {}) => req(`/api/admin/users?days=${adminDays(days)}`, { timeoutMs: 20_000, ...options }),
+  adminUsers: (days = 30, { includeInternal = false, ...options } = {}) => req(`/api/admin/users?days=${adminDays(days)}&include_internal=${Boolean(includeInternal)}`, { timeoutMs: 20_000, ...options }),
   adminSignups: (days = 30, options = {}) => req(`/api/admin/signups?days=${adminDays(days)}`, { timeoutMs: 20_000, ...options }),
   adminMacros: (days = 30, options = {}) => req(`/api/admin/macros?days=${adminDays(days)}`, { timeoutMs: 20_000, ...options }),
   adminNews: (options = {}) => req("/api/admin/news", { timeoutMs: 20_000, ...options }),

@@ -11,7 +11,8 @@ import CandleChart from "../components/CandleChart.jsx";
 import RegisterMacroModal from "../components/RegisterMacroModal.jsx";
 import AskParrotDialog from "../components/AskParrotDialog.jsx";
 import ConfirmDialog from "../components/ConfirmDialog.jsx";
-import { LOADED_TEXT } from "../lib/askCopy.js";
+import MacroSourceMenu from "../components/MacroSourceMenu.jsx";
+import { readMacroSource } from "../lib/macroSource.js";
 // 물어볼까? 버튼의 껄무새 — 에이전트 표정 중 '호기심'(brand/README.md).
 const ASK_MASCOT = "/brand/agent/ggparrot-agent-curious-v1.svg";
 import { EmptyState, Loading } from "../components/Page.jsx";
@@ -42,6 +43,7 @@ import ProductTour from "../components/ProductTour.jsx";
 import "./Studio.css";
 import "./StudioBudget.css";
 import "./StudioSplit.css";
+import { Icon } from "../components/icons.jsx";
 
 const MAX_MACRO_FILE_BYTES = 2 * 1024 * 1024;
 
@@ -57,14 +59,6 @@ function periodLabelOf(macro) {
 }
 
 // 매크로 파일 등록 아이콘 — 트레이 위로 올라가는 화살표.
-function UploadIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M12 16V3M7 8l5-5 5 5M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-    </svg>
-  );
-}
-
 // 빌더 종류 — 조건 판의 제목이 곧 드롭다운(`기본 빌더 ▾`). 지금은 기본 빌더뿐이고 프로 빌더는 업데이트 예정이라 메뉴에 비활성으로만 있다.
 // 프로가 열리면 항목의 disabled 를 떼고 고른 값으로 폼을 바꿔 끼운다.
 // '사용법 안내' 프로덕트 투어 단계 — 각 anchor 는 조건 판·차트의 data-tour 요소를 가리킨다(cc8ba5e 에서 빠졌던 것을 복원).
@@ -102,7 +96,7 @@ function BuilderModeMenu({ onTour }) {
       {open && (
         <div className="studio-mode-menu" role="menu" aria-label="빌더 종류">
           <button type="button" role="menuitemradio" aria-checked="true" className="studio-mode-item is-on" onClick={() => setOpen(false)}>
-            <span className="studio-mode-check" aria-hidden="true">✓</span>기본 빌더
+            <span className="studio-mode-check" aria-hidden="true"><Icon name="check" size={14} strokeWidth={2.5} /></span>기본 빌더
           </button>
           <button type="button" role="menuitemradio" aria-checked="false" disabled title="프로 빌더는 업데이트 예정이에요" className="studio-mode-item is-soon">
             <span className="studio-mode-check" aria-hidden="true" />프로 빌더<span className="studio-soon-badge">업데이트 예정</span>
@@ -112,7 +106,7 @@ function BuilderModeMenu({ onTour }) {
               <hr className="studio-mode-sep" aria-hidden="true" />
               {/* 항목별 설명 투어 — 화면 순서대로 각 칸을 비추며 설명한다. */}
               <button type="button" role="menuitem" className="studio-mode-item" onClick={() => { setOpen(false); onTour(); }}>
-                <span className="studio-mode-check" aria-hidden="true">?</span>사용법 안내<small className="studio-mode-hint">화면 순서대로</small>
+                <span className="studio-mode-check" aria-hidden="true"><Icon name="circleHelp" size={15} /></span>사용법 안내<small className="studio-mode-hint">화면 순서대로</small>
               </button>
             </>
           ) : null}
@@ -236,7 +230,8 @@ function AccountStudio({ scope, allowRouterMacro }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [share, setShare] = useState(() => saved?.share || null);
-  const [loadedFrom, setLoadedFrom] = useState(() => saved?.loadedFrom || "");
+  // 조건이 어디서 왔는지 — 머리의 출처 배지가 보여 준다({kind, label}). 옛 세션의 문자열 값은 버린다.
+  const [macroSource, setMacroSource] = useState(() => readMacroSource(saved?.macroSource));
   const [runLeverage, setRunLeverage] = useState(() => saved?.runLeverage || 1);
   const [autoRun, setAutoRun] = useState(() => saved?.autoRun ?? true);
   const [registerOpen, setRegisterOpen] = useState(false);
@@ -250,18 +245,16 @@ function AccountStudio({ scope, allowRouterMacro }) {
   const [dockTab, setDockTab] = useState(() => saved?.dockTab || "bt"); // 결과 독의 탭 — 백테스트 → AI 해설 → 최적화 → 페이퍼 → 매크로 등록
   const [shareOpen, setShareOpen] = useState(false); // 저장·공유 다이얼로그
   const [tourOpen, setTourOpen] = useState(false); // '사용법 안내' 항목별 설명 투어
-  // 껄무새에게 물어볼까? — 모달, 덮어쓰기 확인, 불러온 뒤 안내
+  // 껄무새에게 물어볼까? — 모달, 덮어쓰기 확인. 불러온 뒤 안내 줄은 없다 — 머리의 출처 배지가 곧 안내다(2026-09-23).
   // 로그아웃 상태로 ?ask=1 이 와도 파라미터는 남겨 둔다 — 로그인 버튼의 next=/builder?ask=1 왕복이 그대로 통하도록.
   const [askOpen, setAskOpen] = useState(() => Boolean(token) && searchParams.get("ask") === "1");
   const [askPending, setAskPending] = useState(null); // {macro, label} — 조건 판에 입력이 있을 때 확인 대기
-  const [askNotice, setAskNotice] = useState("");
 
   const applyAskMacro = useCallback((macro, label) => {
     setForm(macroToForm(macro));
-    setLoadedFrom(`껄무새가 고른 후보 · ${label}`);
+    setMacroSource({ kind: "ask", label });
     setAskPending(null);
     setAskOpen(false);
-    setAskNotice(LOADED_TEXT);
     recordEvent("ask_load");
     if (searchParams.get("ask") === "1") {
       const next = new URLSearchParams(searchParams);
@@ -276,15 +269,11 @@ function AccountStudio({ scope, allowRouterMacro }) {
     else setAskPending({ macro, label });
   }, [form, applyAskMacro]);
 
-  useEffect(() => {
-    if (!askNotice) return undefined;
-    const id = setTimeout(() => setAskNotice(""), 8000);
-    return () => clearTimeout(id);
-  }, [askNotice]);
   const [optimized, setOptimized] = useState(() => !!saved?.optimized); // 최적화를 한 번이라도 돌렸는지(탭 앞 점)
   const [fileImportBusy, setFileImportBusy] = useState(false);
   const [fileImportError, setFileImportError] = useState("");
   const [fileImportSuccess, setFileImportSuccess] = useState("");
+  const [fileImportFlash, setFileImportFlash] = useState(null); // 배지 안 잠깐 표시 {kind: "error"|"success", text}
   const macroFileInputRef = useRef(null);
   const requestIdRef = useRef(0);
   // 복원한 결과가 지금 조건과 같으면 자동 테스트가 바로 다시 돌지 않게 마지막 시도 키를 맞춰 둔다.
@@ -369,10 +358,10 @@ function AccountStudio({ scope, allowRouterMacro }) {
   useEffect(() => {
     if (slug) return undefined;
     const timer = window.setTimeout(() => { if (isCurrentAccount()) writeStudioSession({
-      form, result, testedMacro, perSymbol, explanation, summary, dataSource, periodLabel, share, loadedFrom, runLeverage, autoRun, dockTab, optimized,
+      form, result, testedMacro, perSymbol, explanation, summary, dataSource, periodLabel, share, macroSource, runLeverage, autoRun, dockTab, optimized,
     }, scope); }, 300);
     return () => window.clearTimeout(timer);
-  }, [scope, isCurrentAccount, slug, form, result, testedMacro, perSymbol, explanation, summary, dataSource, periodLabel, share, loadedFrom, runLeverage, autoRun, dockTab, optimized]);
+  }, [scope, isCurrentAccount, slug, form, result, testedMacro, perSymbol, explanation, summary, dataSource, periodLabel, share, macroSource, runLeverage, autoRun, dockTab, optimized]);
   // 차트 오버레이 — 지금 매크로 설정 그대로 보조지표(볼린저 밴드·매수/매도 구간 등)를 얹는다. form 이 바뀌면 즉시 따라간다.
   const overlay = useCallback((candles) => computeStrategyOverlay(form, candles), [form]);
 
@@ -393,7 +382,7 @@ function AccountStudio({ scope, allowRouterMacro }) {
         if (!alive) return;
         const loadedForm = macroToForm(data.macro);
         setForm(loadedForm);
-        setLoadedFrom(data.human_summary);
+        setMacroSource({ kind: "shared", label: data.human_summary || "" });
         setShare({
           slug,
           url: `${window.location.origin}/s/${slug}`,
@@ -415,11 +404,7 @@ function AccountStudio({ scope, allowRouterMacro }) {
     const macro = location.state?.macro;
     if (!macro || !allowRouterMacro) return;
     setForm(macroToForm(macro));
-    setLoadedFrom(
-      location.state?.source === "hero-guide"
-        ? "시작 가이드에서 고른 설정"
-        : "리더보드에서 복사한 매크로"
-    );
+    setMacroSource({ kind: location.state?.source === "hero-guide" ? "guide" : "board", label: "" });
     navigate(location.pathname + location.search, { replace: true, state: null });
   }, [allowRouterMacro, location.pathname, location.search, location.state, navigate]);
 
@@ -522,10 +507,8 @@ function AccountStudio({ scope, allowRouterMacro }) {
 
       setForm(restored);
       setRegistrationMode(draft.context?.mode === "replay" ? "replay" : "live");
-      setLoadedFrom("로그인 완료 · 등록 전 결과를 다시 확인하는 중");
       runBacktest(restored).then((ok) => {
         if (resumeRequestId !== resumeRequestIdRef.current || !ok) return;
-        setLoadedFrom("로그인 완료 · 같은 설정으로 백테스트를 다시 확인했어요");
         setRegisterOpen(true);
       });
       return;
@@ -539,7 +522,7 @@ function AccountStudio({ scope, allowRouterMacro }) {
       }
       try {
         setForm(macroToForm(heroMacro));
-        setLoadedFrom("시작 가이드에서 고른 설정");
+        setMacroSource({ kind: "guide", label: "" });
       } catch (_) {
         setError("시작 가이드 설정을 읽지 못했어요. 조건을 다시 정해 주세요.");
       }
@@ -664,9 +647,10 @@ function AccountStudio({ scope, allowRouterMacro }) {
       setDataSource("");
       setPeriodLabel("");
       setShare(null);
-      setLoadedFrom(`내 매크로 등록 완료 · ${data?.item?.name || name}`);
+      setMacroSource({ kind: "file", label: data?.item?.name || name });
       setError("");
-      setFileImportSuccess("내 매크로에 등록하고 아래 조건 편집기에 불러왔어요. 백테스트로 설정을 다시 확인해 주세요.");
+      setFileImportSuccess("내 매크로에 등록하고 조건 편집기에 불러왔어요. 백테스트로 설정을 다시 확인해 주세요.");
+      setFileImportFlash({ kind: "success", text: "등록 완료" });
     } catch (reason) {
       if (!isCurrentAccount()) return;
       const message = String(reason.message || reason);
@@ -677,10 +661,17 @@ function AccountStudio({ scope, allowRouterMacro }) {
             ? "로그인이 만료됐어요. 다시 로그인한 뒤 등록해 주세요."
             : `매크로 파일을 등록하지 못했어요: ${message}`,
       );
+      setFileImportFlash({ kind: "error", text: "파일을 읽지 못했어요" });
     } finally {
       if (isCurrentAccount()) setFileImportBusy(false);
     }
   }
+
+  useEffect(() => {
+    if (!fileImportFlash) return undefined;
+    const id = setTimeout(() => setFileImportFlash(null), 2500);
+    return () => clearTimeout(id);
+  }, [fileImportFlash]);
 
   function onMacroFileChange(event) {
     const file = event.target.files?.[0];
@@ -769,6 +760,12 @@ function AccountStudio({ scope, allowRouterMacro }) {
     symbols: cardSymbols,
   };
   const footAlert = (() => {
+    if (fileImportError) {
+      return {
+        tone: "risk", text: fileImportError,
+        actions: <button type="button" className="btn btn-s btn-secondary" onClick={() => setFileImportError("")}>닫기</button>,
+      };
+    }
     if (limitsError && (!error || error === limitsError)) return { tone: "risk", text: limitsError, actions: limitsRetry };
     if (error) return { tone: "risk", text: `오류: ${error}`, actions: error === limitsError ? limitsRetry : null };
     if (valErr && !fieldErrorKey) return { tone: "warn", text: valErr, actions: null }; // 칸이 정해진 오류는 그 칸에 표시된다
@@ -787,6 +784,12 @@ function AccountStudio({ scope, allowRouterMacro }) {
       ) : null;
       return { tone: "warn", text, actions };
     }
+    if (hasRegistrationDraft) {
+      return {
+        tone: "warn", text: "로그인 화면으로 가기 전에 테스트한 등록 설정이 남아 있어요.",
+        actions: <button type="button" onClick={() => navigate("/builder?guide=1&register=1")} className="btn btn-s btn-secondary">등록 계속하기</button>,
+      };
+    }
     return null;
   })();
 
@@ -801,60 +804,28 @@ function AccountStudio({ scope, allowRouterMacro }) {
         aria-label="껄무새 매크로 파일 등록"
       />
 
-      {(hasRegistrationDraft || fileImportError || fileImportSuccess || loadedFrom) && (
-        <div className="studio-banner">
-          {loadedFrom && <p className="t-small text-slate-700">불러온 매크로 · <b className="text-slate-900">{loadedFrom}</b></p>}
-          {hasRegistrationDraft && (
-            <div className="notice t-small text-slate-700 flex items-center justify-between gap-4 flex-wrap">
-              <span>로그인 화면으로 가기 전에 테스트한 등록 설정이 남아 있어요.</span>
-              <button type="button" onClick={() => navigate("/builder?guide=1&register=1")} className="btn btn-s btn-secondary">
-                등록 계속하기
-              </button>
-            </div>
-          )}
-          {fileImportError && <p className="t-small text-red-600" role="alert">{fileImportError}</p>}
-          {fileImportSuccess && <p className="t-small text-green-700" role="status">{fileImportSuccess}</p>}
-        </div>
-      )}
-
       <div ref={split.workRef} className="studio-work" data-conditions-collapsed={split.collapsed} style={{ "--studio-condition-width": `${split.width}px` }}>
         {/* ── 조건 ── */}
         <aside id="studio-conditions" className="studio-cond" aria-label="조건" {...split.panelProps}>
           <div className="studio-panel-head">
             <BuilderModeMenu onTour={() => setTourOpen(true)} />
-            <div className="studio-head-right">
-              {/* 껄무새에게 물어볼까? — 카드 다섯 장으로 후보 조합 3개. 로그인 전엔 로그인으로(기록을 남겨야 해서). */}
-              {!slug && (token ? (
-                <button type="button" className="studio-cond-ask t-small" onClick={() => { setAskOpen(true); recordEvent("ask_open"); }} disabled={busy} aria-haspopup="dialog" aria-expanded={askOpen}>
-                  <img src={ASK_MASCOT} alt="" width="100" height="100" className="studio-cond-ask-face" aria-hidden="true" />
-                  <span>껄무새에게 물어볼까?</span>
-                </button>
-              ) : (
-                <Link to="/login?next=%2Fbuilder%3Fask%3D1" className="studio-cond-ask t-small" title="물어보려면 로그인이 필요해요">
-                  <img src={ASK_MASCOT} alt="" width="100" height="100" className="studio-cond-ask-face" aria-hidden="true" />
-                  <span>껄무새에게 물어볼까?</span>
-                </Link>
-              ))}
-              {/* 매크로 파일 등록 — 가지고 있는 .ggm.json 을 내 매크로에 등록하고 조건에 불러온다. 로그인 전엔 로그인으로. */}
-              {!slug && (token ? (
-                <button
-                  type="button"
-                  className="studio-cond-upload t-caption"
-                  onClick={() => macroFileInputRef.current?.click()}
-                  disabled={fileImportBusy || busy}
-                  aria-label={fileImportBusy ? "매크로 업로드 중" : "매크로 업로드 (.ggm.json)"}
-                  title={fileImportBusy ? "업로드 중…" : "매크로 업로드 (.ggm.json)"}
-                >
-                  <UploadIcon />
-                  <span>{fileImportBusy ? "업로드 중…" : "매크로 업로드"}</span>
-                </button>
-              ) : (
-                <Link to="/login?next=%2Fbuilder" className="studio-cond-upload t-caption" aria-label="로그인 후 매크로 업로드" title="매크로 파일을 등록하려면 로그인이 필요해요"><UploadIcon /><span>매크로 업로드</span></Link>
-              ))}
-            </div>
+            {/* 매크로 출처 배지 — 껄무새 후보·리더보드·업로드·가이드 중 어디서 온 조건인지 색으로, 종목은 티커+이름으로. 누르면 다른 출처를 고르는 드롭다운. */}
+            <MacroSourceMenu
+              source={macroSource}
+              symbol={form.symbol}
+              token={token}
+              shared={Boolean(slug)}
+              disabled={busy && !fileImportBusy}
+              busy={fileImportBusy}
+              flash={fileImportFlash}
+              onAsk={() => { setAskOpen(true); recordEvent("ask_open"); }}
+              onUpload={() => macroFileInputRef.current?.click()}
+              onBoard={() => navigate("/leaderboard")}
+              onReset={() => setMacroSource(null)}
+            />
           </div>
           <div className="studio-scroll studio-cond-body">
-            {askNotice ? <div className="notice t-small text-slate-700 mb-3" role="status">{askNotice}</div> : null}
+            {fileImportSuccess && <p className="sr-only" role="status">{fileImportSuccess}</p>}
             <Builder form={form} setForm={setForm} variant="dense" intervalOptions={intervalOptions} fieldError={fieldError} />
           </div>
           <div className="studio-cond-foot">

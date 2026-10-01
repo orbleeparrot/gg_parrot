@@ -556,7 +556,7 @@ def test_title_translation_parser_accepts_fenced_json_and_stable_ids():
         "비트코인 가격 $78,000 근처, OP 28% 급등",
     ],
 )
-def test_title_translation_parser_rejects_changed_numbers_or_tickers(
+def test_title_translation_parser_records_changed_numbers_or_tickers(
     translated_title,
 ):
     original = "BTC price near $78,000 as ARB jumps 28%"
@@ -569,7 +569,9 @@ def test_title_translation_parser_rejects_changed_numbers_or_tickers(
         + '"}]}'
     )
 
-    assert news._parse_korean_title_translations(payload, [original]) == {}
+    # 숫자·통화·티커·영어 잔존은 더 이상 막지 않고 품질 경고로 기록한다.
+    assert news._parse_korean_title_translations(payload, [original]) == {original: translated_title}
+    assert news._title_translation_quality_issue(original, translated_title)
 
 
 @pytest.mark.parametrize(
@@ -580,7 +582,7 @@ def test_title_translation_parser_rejects_changed_numbers_or_tickers(
         "Bitcoin Price Soars After ETF Approval 관련 소식",
     ],
 )
-def test_title_translation_parser_rejects_partial_english_output(partial):
+def test_title_translation_parser_records_partial_english_output(partial):
     original = (
         "Bitcoin Price Soars After ETF Approval"
         if partial.startswith("Bitcoin Price")
@@ -592,10 +594,13 @@ def test_title_translation_parser_rejects_partial_english_output(partial):
         ensure_ascii=False,
     )
 
-    assert news._parse_korean_title_translations(payload, [original]) == {}
+    # 숫자·통화·티커·영어 잔존은 더 이상 막지 않고 품질 경고로 기록한다.
+    expected = news._normalize_title_translation(original, partial)
+    assert news._parse_korean_title_translations(payload, [original]) == {original: expected}
+    assert news._title_translation_quality_issue(original, expected)
 
 
-def test_title_translation_parser_rejects_hyphenated_english_prose():
+def test_title_translation_parser_records_hyphenated_english_prose():
     original = "Bitcoin sees record-breaking rally"
     translated = "비트코인 record-breaking 랠리"
     title_id = hashlib.sha256(original.encode("utf-8")).hexdigest()[:16]
@@ -604,7 +609,9 @@ def test_title_translation_parser_rejects_hyphenated_english_prose():
         ensure_ascii=False,
     )
 
-    assert news._parse_korean_title_translations(payload, [original]) == {}
+    # 숫자·통화·티커·영어 잔존은 더 이상 막지 않고 품질 경고로 기록한다.
+    assert news._parse_korean_title_translations(payload, [original]) == {original: translated}
+    assert news._title_translation_quality_issue(original, translated)
 
 
 def test_title_translation_parser_allows_one_embedded_proper_name():
@@ -684,7 +691,7 @@ def test_title_translation_parser_handles_uppercase_headlines_and_identifiers(
     }
 
 
-def test_title_translation_parser_rejects_uppercase_prose_with_korean_suffix():
+def test_title_translation_parser_records_uppercase_prose_with_korean_suffix():
     original = "BITCOIN PRICE SURGES"
     translated = "BITCOIN PRICE SURGES 관련 소식"
     title_id = hashlib.sha256(original.encode("utf-8")).hexdigest()[:16]
@@ -693,11 +700,13 @@ def test_title_translation_parser_rejects_uppercase_prose_with_korean_suffix():
         ensure_ascii=False,
     )
 
-    assert news._parse_korean_title_translations(payload, [original]) == {}
+    # 숫자·통화·티커·영어 잔존은 더 이상 막지 않고 품질 경고로 기록한다.
+    assert news._parse_korean_title_translations(payload, [original]) == {original: translated}
+    assert news._title_translation_quality_issue(original, translated)
 
 
 @pytest.mark.parametrize("translated_title", ["BTC 3% 상승", "BTC +3% 상승"])
-def test_title_translation_parser_rejects_lost_or_reversed_numeric_sign(
+def test_title_translation_parser_records_lost_or_reversed_numeric_sign(
     translated_title,
 ):
     original = "BTC drops -3%"
@@ -710,7 +719,9 @@ def test_title_translation_parser_rejects_lost_or_reversed_numeric_sign(
         + '"}]}'
     )
 
-    assert news._parse_korean_title_translations(payload, [original]) == {}
+    # 숫자·통화·티커·영어 잔존은 더 이상 막지 않고 품질 경고로 기록한다.
+    assert news._parse_korean_title_translations(payload, [original]) == {original: translated_title}
+    assert news._title_translation_quality_issue(original, translated_title)
 
 
 def test_title_translation_parser_accepts_equivalent_compact_usd_amount():
@@ -2811,7 +2822,7 @@ def test_fact_check_still_rejects_invented_or_dropped_numbers():
         ("Anthropic’s $35 billion AI deal", "앤스로픽의 35억 달러 AI 계약"),  # 350억이 맞다
     ]
     for original, translated in bad:
-        assert not news._valid_title_translation(original, translated), (original, translated)
+        assert not news._title_translation_is_clean(original, translated), (original, translated)
 
 
 # --- 시장 요약을 하루 단위로 Postgres 에 저장 — 재배포마다 결제하지 않게 ------------
@@ -3500,9 +3511,9 @@ def test_real_rejected_project_name_translations_are_normalized_and_preserve_fac
 
 
 def test_cashtag_is_not_currency_but_real_dollar_amount_still_is():
-    assert news._valid_title_translation("$WLD Momentum Builds", "WLD 상승 모멘텀 강화")
-    assert not news._valid_title_translation("$WLD targets $0.50", "WLD 0.50원 목표")
-    assert not news._valid_title_translation("$WLD Momentum Builds", "BTC 상승 모멘텀 강화")
+    assert news._title_translation_is_clean("$WLD Momentum Builds", "WLD 상승 모멘텀 강화")
+    assert not news._title_translation_is_clean("$WLD targets $0.50", "WLD 0.50원 목표")
+    assert not news._title_translation_is_clean("$WLD Momentum Builds", "BTC 상승 모멘텀 강화")
 
 
 def test_stale_snapshot_refreshes_from_rss_using_collection_observation(monkeypatch):
@@ -3586,7 +3597,7 @@ def test_translation_accepts_spaced_korean_amounts_and_currency_particles(source
     ("Fund raises $300M in 2026", "펀드, 3억2026달러 조달"),
 ])
 def test_translation_spaced_amounts_still_reject_changed_facts(source, translated):
-    assert not news._valid_title_translation(source, translated)
+    assert not news._title_translation_is_clean(source, translated)
 
 
 def test_spaced_korean_amount_does_not_absorb_independent_percent_or_year():
@@ -3595,9 +3606,9 @@ def test_spaced_korean_amount_does_not_absorb_independent_percent_or_year():
 
 
 def test_uppercase_question_word_is_prose_but_explicit_cashtag_remains_protected():
-    assert news._valid_title_translation(
+    assert news._title_translation_is_clean(
         "ICP labeled ‘weakest among 60 cryptos’ – Can Internet Computer ride Fed sentiment past THIS?",
         "‘암호화폐 60종 중 최약체’로 지목된 ICP…인터넷컴퓨터, 연준 관련 기대감 타고 이 수준 넘을까?",
     )
-    assert not news._valid_title_translation("$THIS token gains 5%", "토큰 가격 5% 상승")
-    assert news._valid_title_translation("$THIS token gains 5%", "$THIS 토큰 가격 5% 상승")
+    assert not news._title_translation_is_clean("$THIS token gains 5%", "토큰 가격 5% 상승")
+    assert news._title_translation_is_clean("$THIS token gains 5%", "$THIS 토큰 가격 5% 상승")

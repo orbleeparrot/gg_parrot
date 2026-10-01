@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { Icon } from "./icons.jsx";
 
 // 가벼운 프로덕트 투어(온보딩). steps 의 각 항목이 data-tour="<anchor>" 요소를
 // 스포트라이트로 비추고, 그 옆에 설명 카드를 띄운다. 대상이 화면에 없으면
@@ -203,7 +204,7 @@ export default function ProductTour({ steps, open, onClose }) {
       >
         <div className="tour-card-top">
           <span className="tour-card-step num">{index + 1} / {steps.length}</span>
-          <button type="button" className="tour-card-close" onClick={onClose} aria-label="사용법 안내 닫기">×</button>
+          <button type="button" className="tour-card-close" onClick={onClose} aria-label="사용법 안내 닫기"><Icon name="x" size={18} /></button>
         </div>
         <h3 id="tour-card-title" className="tour-card-title">{step.title}</h3>
         <p className="tour-card-body">{step.body}</p>

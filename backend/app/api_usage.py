@@ -54,7 +54,7 @@ PURPOSES: tuple[tuple[str, str, Optional[tuple[str, int]]], ...] = (
     ("title_translation", "뉴스 제목 한글 번역", None),
     ("community_summaries", "커뮤니티 글 요약", None),
     ("ai_explain", "백테스트 AI 해설", ("AI_EXPLAIN_MAX_CALLS_PER_DAY", 20)),
-    ("market_news_summary", "시장 브리핑 요약", ("NEWS_MARKET_SUMMARY_MAX_CALLS_PER_DAY", 20)),
+    ("market_news_summary", "시장 브리핑 요약", ("NEWS_MARKET_SUMMARY_MAX_CALLS_PER_DAY", 2)),
     ("ai_challenge", "일일 챌린지 생성", None),
 )
 NO_LIMIT_LABEL = "없음"
@@ -173,6 +173,9 @@ def fixed_month_usd(usd: float, month: str, *, today: date, since: str) -> float
 
 def daily_limit_for(purpose: str):
     """화면의 '일일 한도' — 실제 코드가 읽는 env 와 그 기본값을 그대로 보여준다."""
+    if purpose == 'market_news_summary':
+        from .news_ai_budget import MARKET_SUMMARY_MAX_CALLS_PER_DAY
+        return MARKET_SUMMARY_MAX_CALLS_PER_DAY
     for code, _label, limit in PURPOSES:
         if code != purpose:
             continue
@@ -479,9 +482,10 @@ def costs_report(db, *, months: int = MONTHS_DEFAULT, now_ms: Optional[int] = No
     }]
     openai_month = provider_months.get((PROVIDER_OPENAI, current_month), bucket())
     openai_last = provider_months.get((PROVIDER_OPENAI, last_month), bucket())
-    from .ai_runtime import default_model
+    from .ai_runtime import REASONING_EFFORT, default_model
     providers.insert(0, {
-        "provider": PROVIDER_OPENAI, "label": f"OpenAI · {default_model()} (max)",
+        # 추론 수준은 설정값(OPENAI_REASONING_EFFORT)을 그대로 보여준다 — 글자로 박아 두면 바뀐 걸 못 따라간다.
+        "provider": PROVIDER_OPENAI, "label": f"OpenAI · {default_model()} ({REASONING_EFFORT})",
         "method": "estimate", "calls": openai_month["calls"], "failures": openai_month["failures"],
         "input_tokens": openai_month["input_tokens"], "output_tokens": openai_month["output_tokens"],
         "month_usd": _usd(openai_month["cost_micro_usd"]), "last_month_usd": _usd(openai_last["cost_micro_usd"]),

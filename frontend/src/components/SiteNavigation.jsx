@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { DownloadIcon, HelpIcon, KeyIcon } from "./utilityIcons.jsx";
 import { lockBodyScroll } from "../lib/bodyScrollLock.js";
+import { Icon } from "./icons.jsx";
 
 const NAV_LINKS = [
   { to: "/agents", label: "내 에이전트", icon: "agent", matches: ["/agents"] },
@@ -205,7 +206,7 @@ export default function SiteNavigation({ mobileOpen, onClose, triggerRef }) {
         aria-hidden={!mobileOpen}
         inert={mobileOpen ? undefined : ""}
       >
-        <button type="button" onClick={onClose} className="site-drawer-close" aria-label="메뉴 닫기">×</button>
+        <button type="button" onClick={onClose} className="site-drawer-close" aria-label="메뉴 닫기"><Icon name="x" size={22} /></button>
         <NavigationContents mobile onNavigate={onClose} tabIndex={mobileOpen ? undefined : -1} />
       </aside>
     </>

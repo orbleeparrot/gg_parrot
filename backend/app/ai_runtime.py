@@ -29,7 +29,10 @@ T = TypeVar("T")
 
 # All features share this target; no old-provider fallback.
 DEFAULT_MODEL = "gpt-6-luna"
-REASONING_EFFORT = "max"
+# 2026-10-01 사용자 결정: 모든 기능 none. 제목 번역 실측에서 max 는 추론만으로 출력 한도를
+# 다 써서 응답이 잘렸고(20배치 중 12개), none 도 품질 차이가 보이지 않았다.
+# 되돌릴 땐 코드 대신 OPENAI_REASONING_EFFORT 로(none|low|medium|high|xhigh|max).
+REASONING_EFFORT = str(os.environ.get("OPENAI_REASONING_EFFORT") or "").strip() or "none"
 
 
 def ai_api_key() -> str:
@@ -135,6 +138,8 @@ class _Messages:
         messages: list[dict],
         timeout: float | None = None,
         purpose: str = "",
+        reasoning_effort: str | None = None,
+        json_schema: dict | None = None,
     ) -> AiResponse:
         """One request → text blocks. ``timeout`` is seconds, like the callers pass.
 
@@ -145,10 +150,15 @@ class _Messages:
         reserve = max(0, min(16384, int(os.environ.get("OPENAI_REASONING_TOKEN_RESERVE", "4096"))))
         output_limit = max(16, min(32768, int(max_tokens) + reserve))
         kwargs = {"timeout": float(timeout)} if timeout is not None else {}
+        if json_schema is not None:
+            # Structured Outputs: 키 이름·JSON 형식을 OpenAI 쪽에서 강제한다. 낮은 추론에서
+            # 모델이 title_ko 를 title 로 바꿔 써서 배치를 통째로 버리던 것을 막는다.
+            kwargs["text"] = {"format": {"type": "json_schema", "name": json_schema["name"],
+                                         "strict": True, "schema": json_schema["schema"]}}
         try:
             response = self._client.responses.create(
                 model=model, input=_to_contents(messages), instructions=system,
-                reasoning={"effort": REASONING_EFFORT},
+                reasoning={"effort": reasoning_effort or REASONING_EFFORT},
                 max_output_tokens=output_limit, store=False, **kwargs,
             )
         except (openai.APIError, httpx.HTTPError) as error:
@@ -236,7 +246,8 @@ class AiCallRuntime:
             1,
             int(cache_max_entries if cache_max_entries is not None else os.environ.get("AI_CACHE_MAX_ENTRIES", "512")),
         )
-        self._retries = max(0, int(retries if retries is not None else os.environ.get("AI_RETRIES", "1")))
+        # One initial attempt + at most one retry, regardless of stale env values.
+        self._retries = min(1, max(0, int(retries if retries is not None else os.environ.get("AI_RETRIES", "1"))))
         self._backoff = max(
             0.0,
             float(
@@ -288,7 +299,7 @@ class AiCallRuntime:
         *,
         retries: int | None = None,
     ) -> tuple[T, str]:
-        retry_limit = self._retries if retries is None else max(0, int(retries))
+        retry_limit = self._retries if retries is None else min(1, max(0, int(retries)))
         with self._lock:
             cached = self._cache_get_locked(key)
             if cached is not None:

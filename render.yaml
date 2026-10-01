@@ -85,7 +85,7 @@ services:
       - key: ASK_TIME_BUDGET_SEC
         value: "20"
       - key: NEWS_MARKET_SUMMARY_MAX_CALLS_PER_DAY
-        value: "20"
+        value: "2"
       - key: OPENAI_NEWS_TRANSLATION_MAX_TOKENS
         value: "2048"
 

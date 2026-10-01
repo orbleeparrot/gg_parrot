@@ -224,7 +224,7 @@ def test_costs_report_shape_and_totals(monkeypatch):
     assert purposes[0]["daily_limit"] == 1000  # env 가 있으면 그 값
     assert purposes[1]["failures"] == 1 and purposes[1]["daily_limit"] == "없음"
     assert purposes[3]["calls"] == 0  # 8월 행은 이번 달 표에 없다
-    assert (purposes[3]["daily_limit"], purposes[4]["daily_limit"]) == (20, 20)  # env 없으면 코드 기본값
+    assert (purposes[3]["daily_limit"], purposes[4]["daily_limit"]) == (20, 2)  # 시장 요약은 고정 상한
 
     daily = report["daily"]
     assert len(daily) == 30 and daily[-1]["day"] == TODAY and daily[0]["day"] == "2026-08-19"
@@ -239,7 +239,7 @@ def test_costs_report_fixed_costs_env_replaces_defaults_and_months_clamp(monkeyp
     assert [m["label"] for m in report["monthly"]] == ["8월", "9월*"]
     assert report["monthly"][-1]["providers"] == {"openai": 0.0, "gemini": 0.0, "coindesk": 0.0, "render": 17.0}  # 30 × 17/30
     assert [p["provider"] for p in report["providers"]] == ["openai", "gemini", "coindesk", "render"]
-    assert report["providers"][0]["label"] == "OpenAI · gpt-6-luna (max)"
+    assert report["providers"][0]["label"] == "OpenAI · gpt-6-luna (none)"
     assert report["kpis"]["month_total_usd"] == 17.0
 
 

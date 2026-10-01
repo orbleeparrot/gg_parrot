@@ -10,7 +10,7 @@ from app import news
 ])
 def test_identifier_repetition_does_not_reject_korean_translation(translated):
     original = "FIL Price Filecoin TA FIL Technical Analysis"
-    assert news._valid_title_translation(original, translated)
+    assert news._title_translation_is_clean(original, translated)
 
 
 @pytest.mark.parametrize("translated", [
@@ -20,10 +20,10 @@ def test_identifier_repetition_does_not_reject_korean_translation(translated):
 ])
 def test_missing_or_changed_identifiers_remain_invalid(translated):
     original = "FIL Price Filecoin TA FIL Technical Analysis"
-    assert not news._valid_title_translation(original, translated)
+    assert not news._title_translation_is_clean(original, translated)
 
 
 def test_repeated_numbers_remain_facts_even_when_identifiers_repeat():
     original = "BTC rises 5%, ETH follows with 5%"
-    assert news._valid_title_translation(original, "BTC 5% 상승, ETH도 5% 상승")
-    assert not news._valid_title_translation(original, "BTC와 ETH 5% 상승")
+    assert news._title_translation_is_clean(original, "BTC 5% 상승, ETH도 5% 상승")
+    assert not news._title_translation_is_clean(original, "BTC와 ETH 5% 상승")

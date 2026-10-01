@@ -15,6 +15,7 @@ import {
   moveWithin,
   insertRelative,
 } from "../lib/resultLayout.js";
+import { Icon } from "./icons.jsx";
 
 const AI_EXPLAIN_MASCOT = "/brand/navigation/ggparrot-nav-agent.svg";
 
@@ -158,8 +159,8 @@ function dragProps(id, onDragState, onDropOn) {
 function MoveButtons({ label, canUp, canDown, onMove, className = "result-block-moves" }) {
   return (
     <span className={className}>
-      <button type="button" onClick={onMove.bind(null, -1)} disabled={!canUp} aria-label={`${label} 위로`}>↑</button>
-      <button type="button" onClick={onMove.bind(null, 1)} disabled={!canDown} aria-label={`${label} 아래로`}>↓</button>
+      <button type="button" onClick={onMove.bind(null, -1)} disabled={!canUp} aria-label={`${label} 위로`}><Icon name="chevronUp" size={16} /></button>
+      <button type="button" onClick={onMove.bind(null, 1)} disabled={!canDown} aria-label={`${label} 아래로`}><Icon name="chevronDown" size={16} /></button>
     </span>
   );
 }

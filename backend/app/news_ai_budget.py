@@ -15,7 +15,9 @@ from sqlmodel import select
 from . import db as db_mod
 from .db import NewsAiItemBudget, get_session
 
-MAX_CALLS = 10
+# Includes the first request and any correction, across processes/days/models.
+MAX_CALLS = 2
+MARKET_SUMMARY_MAX_CALLS_PER_DAY = 2
 
 
 def _keys(kind: str, identities: list[str]) -> dict[str, str]:

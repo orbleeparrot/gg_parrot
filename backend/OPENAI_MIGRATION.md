@@ -1,7 +1,8 @@
 # OpenAI 전환 (2026-09-30)
 
 모든 앱 AI 요청은 `app/ai_runtime.py`의 공식 OpenAI SDK Responses API를 사용합니다.
-기본 모델은 `gpt-6-luna`, 추론 수준은 `max`로 고정합니다. Gemini/Anthropic 키로 돌아가는 대체 경로는 없습니다.
+기본 모델은 `gpt-6-luna`, 추론 수준은 **`none`** 입니다(2026-10-01 `max`에서 변경, `OPENAI_REASONING_EFFORT`로 바꿀 수 있음).
+제목 번역 실측(운영 제목 100건 × 추론 6단계)에서 `max`는 추론만으로 출력 한도를 다 써 20배치 중 12개가 잘렸고, `none`과 품질 차이는 보이지 않았습니다. Gemini/Anthropic 키로 돌아가는 대체 경로는 없습니다.
 키는 서버의 `OPENAI_API_KEY` 하나만 사용하며 소스·브라우저·로그에 포함하지 않습니다.
 
 ## 호출 목록
@@ -27,7 +28,6 @@
   실패·타임아웃도 차감하며 모델 변경·재배포로 초기화하지 않습니다.
 - `OPENAI_REASONING_TOKEN_RESERVE=4096`을 기존 답변 토큰 한도에 더합니다.
   Responses의 `max_output_tokens`는 추론+본문 합계이며 요청 전체 상한은 32768입니다.
-  추론 수준 `max`는 무제한 출력이나 재시도를 의미하지 않습니다.
 - `incomplete` 응답도 usage를 기록하지만 잘린 답변은 반환·캐시하지 않습니다.
 - OpenAI의 출력 토큰에는 추론이 이미 포함되므로 두 번 합산하지 않습니다.
   캐시 읽기·쓰기, 장문 요청 할증을 반영합니다. Gemini 과거 사용 기록은 별도 제공자로 보존합니다.

@@ -726,6 +726,7 @@ class VisitIn(BaseModel):
     visitor: str = Field("", max_length=80)  # 브라우저 익명 id(서버는 해시만 저장)
     is_new: bool = False
     is_landing: bool = False
+    is_internal: bool = False  # QA opt-in only; never grants permissions
     screen_w: int = 0
 
 
@@ -821,6 +822,7 @@ def visit_record(
         db, kind=req.kind, path=req.path, view_key=req.view_key, session_key=req.session_key, referrer=req.referrer,
         utm_source=req.utm_source, visitor=req.visitor, is_new=req.is_new, is_landing=req.is_landing, screen_w=req.screen_w,
         user_id=account.id if account else None, secret=auth_mod.SECRET_KEY,
+        is_internal=req.is_internal or bool(account and account.is_admin),
     )
     admin_mod.maybe_prune_visits(db)  # 90일 지난 행은 하루 한 번 정리
     return Response(status_code=204)
@@ -865,11 +867,12 @@ def leaderboard_open(
 @app.get("/api/admin/users")
 def admin_users(
     days: int = Query(default=30, ge=7, le=90),
+    include_internal: bool = Query(default=False),
     admin: User = Depends(auth_mod.require_admin),
     db: Session = Depends(request_session),
 ) -> dict:
     """관리자 대시보드 — 사용자 지표(활성 사용자·세션·채널·페이지·기기, 최근 days 일)."""
-    return admin_mod.users_report(db, days=days)
+    return admin_mod.users_report(db, days=days, include_internal=include_internal)
 
 
 @app.get("/api/admin/signups")

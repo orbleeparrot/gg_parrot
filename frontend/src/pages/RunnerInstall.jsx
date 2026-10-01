@@ -9,6 +9,7 @@ import { useAuth } from "../lib/auth.js";
 import { fmtSize, isRunnerOpened, markRunnerOpened, useRunnerDownload } from "../lib/runnerDownload.js";
 import { getRunnerDevice } from "../lib/runnerDevice.js";
 import "./RunnerInstall.css";
+import { Icon } from "../components/icons.jsx";
 
 export default function RunnerInstall() {
   const device = getRunnerDevice();
@@ -120,7 +121,7 @@ function WindowsRunnerInstall() {
                 className="btn btn-l btn-secondary runner-install-button"
               >
                 {opened ? "매크로 선택하기" : "실행했어요 · 매크로 선택"}
-                <span aria-hidden="true">→</span>
+                <Icon name="arrowRight" size={16} className="ui-icon-inline" />
               </Link>
               <p className="t-small text-slate-700">
                 실행 후에는 <Link to="/agents" className="runner-install-inline-link">내 에이전트</Link>에서 실시간 차트와 손익을 확인하고 원격으로 종료할 수 있어요.

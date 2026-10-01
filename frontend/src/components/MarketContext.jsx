@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api.js";
 import InfoTooltip from "./InfoTooltip.jsx";
 import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
+import { Icon } from "./icons.jsx";
 
 const KIMCHI_POLL_MS = Number(import.meta.env?.VITE_KIMCHI_POLL_MS) || 15000;
 const FEAR_GREED_POLL_MS = Number(import.meta.env?.VITE_FEARGREED_POLL_MS) || 600000;
@@ -177,7 +178,7 @@ export default function MarketContext() {
         <section id="market-context-panel" className="market-context-panel" aria-label="시장 참고 지표 상세">
           <header>
             <div><span className="num">MARKET PULSE</span><strong>오늘의 시장 참고 지표</strong></div>
-            <p className="market-disclaimer"><span aria-hidden="true">⚠️</span> 투자 조언이나 매매 신호가 아닌 참고 정보</p>
+            <p className="market-disclaimer"><Icon name="triangleAlert" size={14} className="ui-icon-inline" /> 투자 조언이나 매매 신호가 아닌 참고 정보</p>
           </header>
 
           <div className="market-detail-row is-kimchi">

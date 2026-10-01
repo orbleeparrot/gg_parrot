@@ -54,7 +54,7 @@ def fake_provider(monkeypatch, module, *, kind, mode='invalid'):
 
 
 @pytest.mark.parametrize('mode', ['invalid', 'malformed', 'timeout'])
-def test_titles_stop_at_ten_provider_calls_across_days_and_cache_resets(isolated, monkeypatch, mode):
+def test_titles_stop_at_two_provider_calls_across_days_and_cache_resets(isolated, monkeypatch, mode):
     _, clock, runtime = isolated
     calls = fake_provider(monkeypatch, news, kind='title', mode=mode)
     for cycle in range(400):
@@ -65,12 +65,12 @@ def test_titles_stop_at_ten_provider_calls_across_days_and_cache_resets(isolated
             news._title_translation_retry_at.clear()
             monkeypatch.setenv('OPENAI_MODEL', 'another-model')
         news._localize_coin_news_items([{'title': TITLE}])
-    assert len(calls) == 10
+    assert len(calls) == 2
     assert news._localize_coin_news_items([{'title': TITLE}]) == []
 
 
 @pytest.mark.parametrize('mode', ['invalid', 'malformed', 'timeout'])
-def test_summary_validation_and_transport_failures_stop_at_ten(isolated, monkeypatch, mode):
+def test_summary_validation_and_transport_failures_stop_at_two(isolated, monkeypatch, mode):
     _, clock, runtime = isolated
     calls = fake_provider(monkeypatch, community_summaries, kind='summary', mode=mode)
     item = {'content_type': 'community', 'community_post_id': '123456',
@@ -82,20 +82,20 @@ def test_summary_validation_and_transport_failures_stop_at_ten(isolated, monkeyp
             community_summaries.clear_memory_cache()
             monkeypatch.setenv('OPENAI_MODEL', 'another-model')
         community_summaries.enrich_items([item], wait=True)
-    assert len(calls) == 10
+    assert len(calls) == 2
     assert community_summaries.enrich_items([item], wait=True)[0][0]['community_summary_status'] == 'failed'
 
 
-def test_concurrent_workers_share_one_ten_call_budget(isolated):
+def test_concurrent_workers_share_one_two_call_budget(isolated):
     with ThreadPoolExecutor(max_workers=8) as pool:
         accepted = list(pool.map(lambda _: bool(budget.reserve('title', [TITLE])), range(40)))
-    assert sum(accepted) == 10
+    assert sum(accepted) == 2
     assert budget.reserve('title', [TITLE]) == set()
     assert budget.reserve('title', ['Other news']) == {'Other news'}
 
 
-def test_last_title_slot_cannot_trigger_an_eleventh_correction(isolated, monkeypatch):
-    for _ in range(9):
+def test_last_title_slot_cannot_trigger_a_third_correction(isolated, monkeypatch):
+    for _ in range(1):
         budget.reserve('title', [TITLE])
     calls = fake_provider(monkeypatch, news, kind='title')
     assert news._localize_coin_news_items([{'title': TITLE}]) == []
@@ -142,7 +142,7 @@ def test_stale_ready_flag_cannot_expose_failed_title_or_misalign_analysis(isolat
 
 
 def test_exhausted_item_does_not_block_other_titles_in_same_batch(isolated, monkeypatch):
-    for _ in range(10):
+    for _ in range(2):
         budget.reserve('title', [TITLE])
     calls = fake_provider(monkeypatch, news, kind='title', mode='valid')
     other = 'Bitcoin ETF inflows surge'
@@ -159,7 +159,7 @@ def test_busy_runtime_does_not_consume_provider_budget(isolated, monkeypatch):
     calls = fake_provider(monkeypatch, news, kind='title')
     news._localize_coin_news_items([{'title': TITLE}])
     assert calls == []
-    assert sum(bool(budget.reserve('title', [TITLE])) for _ in range(20)) == 10
+    assert sum(bool(budget.reserve('title', [TITLE])) for _ in range(20)) == 2
 
 
 def test_failed_summary_without_body_stays_failed_and_hidden(isolated):
@@ -171,8 +171,8 @@ def test_failed_summary_without_body_stays_failed_and_hidden(isolated):
     assert not articles._ready(enriched[0])
 
 
-def test_success_on_tenth_call_remains_visible(isolated, monkeypatch):
-    for _ in range(9):
+def test_success_on_second_call_remains_visible(isolated, monkeypatch):
+    for _ in range(1):
         budget.reserve('title', [TITLE])
     calls = fake_provider(monkeypatch, news, kind='title', mode='valid')
     result = news._localize_coin_news_items([{'title': TITLE}])
@@ -180,3 +180,50 @@ def test_success_on_tenth_call_remains_visible(isolated, monkeypatch):
     assert len(calls) == 1
     assert news._localize_coin_news_items([{'title': TITLE}]) == result
     assert len(calls) == 1
+
+
+def test_existing_over_limit_reservations_are_not_reset(isolated):
+    from app.db import NewsAiItemBudget
+    engine, _, _ = isolated
+    key = budget._keys('title', [TITLE])[TITLE]
+    with Session(engine) as db:
+        db.add(NewsAiItemBudget(budget_key=key, calls=8))
+        db.commit()
+    assert budget.reserve('title', [TITLE]) == set()
+    assert budget.exhausted('title', [TITLE]) == {TITLE}
+    with Session(engine) as db:
+        assert db.get(NewsAiItemBudget, key).calls == 8
+
+
+def test_market_cap_and_cost_display_ignore_legacy_high_env(monkeypatch):
+    from app import api_usage
+    monkeypatch.setenv('NEWS_MARKET_SUMMARY_MAX_CALLS_PER_DAY', '20')
+    assert news._MARKET_SUMMARY_MAX_CALLS_PER_DAY == 2
+    assert api_usage.daily_limit_for('market_news_summary') == 2
+
+
+def test_runtime_never_makes_more_than_two_attempts_even_with_high_overrides(monkeypatch):
+    monkeypatch.setenv('AI_RETRIES', '8')
+    for configured, override in [(None, None), (8, None), (None, 8)]:
+        runtime = ai_runtime.AiCallRuntime(retries=configured, sleeper=lambda _: None,
+                                         is_transient=lambda _: True)
+        calls = []
+        def fail():
+            calls.append(1)
+            raise TimeoutError('no network')
+        with pytest.raises(TimeoutError):
+            runtime.call('cap', fail, retries=override)
+        assert len(calls) == 2
+
+
+def test_market_summary_provider_calls_share_two_slots_across_repeated_jobs(isolated, monkeypatch):
+    monkeypatch.setenv('DATABASE_URL', 'postgresql://not-used-in-this-test')
+    calls = []
+    def fail(**kwargs):
+        calls.append(1)
+        raise TimeoutError('no network')
+    monkeypatch.setattr(news, 'get_ai_client', lambda: SimpleNamespace(messages=SimpleNamespace(create=fail)))
+    for i in range(10):
+        assert news._summarize([{'title': f'기사 {i}', 'source': '테스트'}], label='시장') is None
+    assert len(calls) == 2
+    assert news._reserve_market_summary_call() is False

@@ -607,11 +607,14 @@ class NewsTitleTranslation(SQLModel, table=True):
     claimed_ms: int = Field(default=0, sa_type=BigInteger, index=True)
     updated_at: str = ""
     updated_ms: int = Field(default=0, sa_type=BigInteger, index=True)
-    # 검증에 걸린 번역을 무한히 다시 사는 것을 막는 예산. 성공하면 0 으로 돌아가고,
-    # 지시문(prompt_version)이 바뀌면 포기한 제목도 예산을 새로 받는다.
+    # 결과 행의 실패 횟수. 성공·지시문 변경으로 바뀔 수 있으나, 실제 과금 호출
+    # 누적 상한은 NewsAiItemBudget에 별도로 보존되며 초기화하지 않는다.
     attempts: int = Field(default=0)
     next_retry_ms: int = Field(default=0, sa_type=BigInteger, index=True)
     prompt_version: str = Field(default="", max_length=160)
+    # 숫자·통화·티커·영어 잔존 검사는 더 이상 번역을 막지 않고 여기 사유만 남긴다
+    # (fact_mismatch | untranslated_prose). 표본 점검용.
+    quality_warning: str = Field(default="", max_length=40)
 
 
 class CommunityPostSummary(SQLModel, table=True):
@@ -1166,6 +1169,7 @@ def _migrate() -> None:
             "attempts": "ALTER TABLE newstitletranslation ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0",
             "next_retry_ms": "ALTER TABLE newstitletranslation ADD COLUMN next_retry_ms INTEGER NOT NULL DEFAULT 0",
             "prompt_version": "ALTER TABLE newstitletranslation ADD COLUMN prompt_version TEXT NOT NULL DEFAULT ''",
+            "quality_warning": "ALTER TABLE newstitletranslation ADD COLUMN quality_warning TEXT NOT NULL DEFAULT \'\'",
         },
         "communitypostsummary": {
             "attempts": "ALTER TABLE communitypostsummary ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0",
@@ -1275,6 +1279,7 @@ _PG_ADDED_COLUMNS = {
         "claimed_ms": "BIGINT DEFAULT 0",
         "attempts": "INTEGER NOT NULL DEFAULT 0", "next_retry_ms": "BIGINT NOT NULL DEFAULT 0",
         "prompt_version": "TEXT NOT NULL DEFAULT ''",
+        "quality_warning": "TEXT NOT NULL DEFAULT ''",
     },
     "communitypostsummary": {
         "attempts": "INTEGER NOT NULL DEFAULT 0", "next_retry_ms": "BIGINT NOT NULL DEFAULT 0",

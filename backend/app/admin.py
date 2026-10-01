@@ -30,7 +30,7 @@ from importlib import import_module
 from typing import Callable, Optional
 from urllib.parse import urlsplit
 
-from sqlalchemy import delete, func, or_, update
+from sqlalchemy import and_, case, delete, func, or_, update
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 
@@ -62,7 +62,7 @@ _SOCIAL_SUFFIXES = ("t.co", "twitter.com", "x.com")  # 정확히 이 호스트�
 _SOCIAL_TOKENS = ("facebook.", "instagram.", "youtube.", "kakao", "telegram", "discord", "reddit", "threads")
 _OWN_HOSTS = ("gg-parrot.vercel.app", "localhost", "127.0.0.1")
 
-CHANNELS = (("direct", "직접 접속"), ("search", "검색"), ("referral", "추천 링크"), ("social", "소셜"), ("campaign", "캠페인 (utm)"))
+CHANNELS = (("direct", "직접 접속"), ("search", "검색"), ("referral", "추천 링크"), ("social", "소셜"), ("campaign", "캠페인 (utm)"), ("internal", "내부 · QA"))
 DEVICES = (("mobile", "모바일"), ("desktop", "데스크톱"), ("tablet", "태블릿"))
 DEVICE_UNKNOWN = ("unknown", "알 수 없음")  # 화면 너비를 모르는 뷰 — 표에는 보이되 비율 분모에서 뺀다
 PAGE_LABELS = {
@@ -109,7 +109,8 @@ def _shift_day(day: str, offset: int) -> str:
 
 
 def _days_back(days: int) -> list[str]:
-    today = datetime.now(timezone.utc).astimezone(_KST).date()
+    # 오늘은 _today_kst() 하나에서만 읽는다 — 캐시 키·집계 창이 서로 다른 '오늘'을 보지 않게.
+    today = datetime.strptime(_today_kst(), "%Y-%m-%d").date()
     return [(today - timedelta(days=offset)).strftime("%Y-%m-%d") for offset in range(days - 1, -1, -1)]
 
 
@@ -273,7 +274,7 @@ def _view_key_exists(db, view_key: str) -> bool:
 
 def record_visit(db, *, kind: str = "view", path: str = "/", view_key: str = "", session_key: str = "", referrer: str = "",
                  utm_source: str = "", visitor: str = "", is_new: bool = False, is_landing: bool = False, screen_w: int = 0,
-                 user_id: Optional[int], secret: str) -> Optional[Visit]:
+                 user_id: Optional[int], secret: str, is_internal: bool = False) -> Optional[Visit]:
     """비콘 한 건을 Visit 행으로. 같은 view_key 재전송·모르는 행동 이름은 조용히 버린다. 실패해도 예외를 내지 않는다."""
     kind = "event" if kind == "event" else "view"
     view_key = str(view_key or "").strip()[:64]
@@ -293,7 +294,8 @@ def record_visit(db, *, kind: str = "view", path: str = "/", view_key: str = "",
         row = Visit(
             day_kst=day_kst(ms), path=stored_path, referrer_host=host, utm_source=utm, visitor_hash=visitor_hash(visitor, secret),
             user_id=user_id, created_ms=ms, kind=kind, session_key=str(session_key or "").strip()[:64], view_key=view_key,
-            dwell_ms=0, is_new=bool(is_new), is_landing=bool(is_landing), channel=classify_channel(host, utm),
+            dwell_ms=0, is_new=bool(is_new), is_landing=bool(is_landing),
+            channel="internal" if is_internal or stored_path == "/admin" or stored_path.startswith("/admin/") else classify_channel(host, utm),
             device=classify_device(screen_w), screen_w=max(0, min(int(screen_w or 0), 100_000)),
         )
         db.add(row)
@@ -466,19 +468,35 @@ def _avg_seconds(group) -> Optional[int]:
     return round(sum(measured) / len(measured)) if measured else None
 
 
-def _view_rows(db, since_day: str):
+def _visit_filters(include_internal: bool = False):
+    """Exclude known internal sessions, including anonymous views before admin login.
+
+    QA is an opt-in analytics label, never an authorization claim. Historical
+    unlabelled anonymous QA cannot be identified retroactively.
+    """
+    if include_internal:
+        return ()
+    admins = select(User.id).where(User.is_admin.is_(True))
+    internal = or_(Visit.channel == "internal", Visit.path == "/admin", Visit.path.like("/admin/%"),
+                   Visit.user_id.in_(admins))
+    sessions = select(Visit.session_key).where(internal, Visit.session_key != "").distinct()
+    return (Visit.channel != "internal", Visit.path != "/admin", ~Visit.path.like("/admin/%"),
+            or_(Visit.user_id.is_(None), Visit.user_id.not_in(admins)), Visit.session_key.not_in(sessions))
+
+
+def _view_rows(db, since_day: str, *, include_internal: bool = False):
     return db.exec(
         select(Visit.session_key, Visit.path, Visit.created_ms, Visit.dwell_ms, Visit.is_new, Visit.is_landing, Visit.channel,
                Visit.device, Visit.visitor_hash, Visit.user_id, Visit.day_kst, Visit.referrer_host, Visit.utm_source, Visit.screen_w)
-        .where(Visit.kind == "view", Visit.day_kst >= since_day).order_by(Visit.created_ms, Visit.id)
+        .where(Visit.kind == "view", Visit.day_kst >= since_day, *_visit_filters(include_internal)).order_by(Visit.created_ms, Visit.id)
     ).all()
 
 
-def _visitor_days(db, since_day: str) -> dict[str, set[str]]:
+def _visitor_days(db, since_day: str, *, include_internal: bool = False) -> dict[str, set[str]]:
     """날짜별 활성 방문자 집합 — WAU/MAU 창 합집합과 재방문율 재료."""
     per_day: dict[str, set[str]] = defaultdict(set)
     for day, visitor in db.exec(select(Visit.day_kst, Visit.visitor_hash)
-                                .where(Visit.kind == "view", Visit.day_kst >= since_day, Visit.visitor_hash != "").distinct()).all():
+                                .where(Visit.kind == "view", Visit.day_kst >= since_day, Visit.visitor_hash != "", *_visit_filters(include_internal)).distinct()).all():
         per_day[day].add(visitor)
     return per_day
 
@@ -501,16 +519,16 @@ def _window_union(per_day: dict[str, set[str]], day: str, span: int) -> int:
     return len(union)
 
 
-def _online_5m(db, now_ms: int) -> int:
+def _online_5m(db, now_ms: int, *, include_internal: bool = False) -> int:
     """최근 5분 안에 보고 있던 distinct 방문자 — 하트비트가 dwell_ms 를 갱신하므로 '뷰 시작 + 체류' 가 5분 안이면 접속 중.
     created_ms 조건은 인덱스를 타기 위한 하한(체류 상한 6시간)."""
     cutoff = now_ms - 300_000
     return int(db.exec(select(func.count(func.distinct(Visit.visitor_hash)))
                        .where(Visit.kind == "view", Visit.visitor_hash != "", Visit.created_ms >= cutoff - DWELL_CAP_MS,
-                              Visit.created_ms + Visit.dwell_ms >= cutoff)).one())
+                              Visit.created_ms + Visit.dwell_ms >= cutoff, *_visit_filters(include_internal))).one())
 
 
-def _coverage(db) -> dict:
+def _coverage(db, *, include_internal: bool = False) -> dict:
     """각 기록의 시작일 — 그 전 날짜는 '측정 불가'(None) 이지 0 이 아니다. 하드코딩하지 않고 표에서 min 을 읽는다."""
     def first(column, *criteria) -> Optional[str]:
         statement = select(func.min(column))
@@ -518,35 +536,36 @@ def _coverage(db) -> dict:
             statement = statement.where(*criteria)
         value = db.exec(statement).one()
         return str(value) if value else None
-    return {"visits_since": first(Visit.day_kst, Visit.kind == "view"), "events_since": first(Visit.day_kst, Visit.kind == "event"),
+    return {"visits_since": first(Visit.day_kst, Visit.kind == "view", *_visit_filters(include_internal)),
+            "events_since": first(Visit.day_kst, Visit.kind == "event", *_visit_filters(include_internal)),
             "macro_events_since": first(MacroEventDaily.day_kst), "quests_since": first(DailyQuestClaim.date_kst)}
 
 
-def users_report(db, *, days: int = DAYS_DEFAULT) -> dict:
+def users_report(db, *, days: int = DAYS_DEFAULT, include_internal: bool = False) -> dict:
     """날짜 단위 집계는 캐시(5분)에서, '지금 접속' 은 캐시가 맞아도 새로 센다 — 그 값만 실시간이어야 한다."""
     days = _clamp_days(days)
-    key = f"users:{days}:{_today_kst()}"  # 자정을 넘기면 창이 바뀌므로 날짜가 키에 들어간다
+    key = f"users:{days}:{_today_kst()}:{include_internal}"
     report = _cache_get(key)
     if report is None:
-        report = _users_report(db, days)
+        report = _users_report(db, days, include_internal=include_internal)
         _cache_put(key, report)
         return report
     _, now_ms = _now()
-    return {**report, "kpis": {**report["kpis"], "online_5m": _online_5m(db, now_ms)}}
+    return {**report, "kpis": {**report["kpis"], "online_5m": _online_5m(db, now_ms, include_internal=include_internal)}}
 
 
-def _users_report(db, days: int) -> dict:
+def _users_report(db, days: int, *, include_internal: bool = False) -> dict:
     window = _days_back(days)
     since_day, today = window[0], window[-1]
     window_set = set(window)
     generated_at, now_ms = _now()
 
-    per_day = _visitor_days(db, _shift_day(since_day, -(MAU_SPAN - 1)))
-    online_5m = _online_5m(db, now_ms)
+    per_day = _visitor_days(db, _shift_day(since_day, -(MAU_SPAN - 1)), include_internal=include_internal)
+    online_5m = _online_5m(db, now_ms, include_internal=include_internal)
     # 창 하루 전부터 읽어 자정을 넘긴 세션이 잘리지 않게 하고, 세션 날짜가 창 밖이면 fold 가 버린다.
-    sessions, pages = _fold_sessions(_view_rows(db, _shift_day(since_day, -1)), window_set=window_set, now_ms=now_ms)
+    sessions, pages = _fold_sessions(_view_rows(db, _shift_day(since_day, -1), include_internal=include_internal), window_set=window_set, now_ms=now_ms)
     signup_days = _signup_days(db, _day_start_ms(since_day))
-    coverage = _coverage(db)
+    coverage = _coverage(db, include_internal=include_internal)
 
     by_day: dict[str, list[_Session]] = defaultdict(list)
     for session in sessions.values():
@@ -627,10 +646,12 @@ def _users_report(db, days: int) -> dict:
     mau_today = _window_union(per_day, today, MAU_SPAN)
     return {
         "days": days, "generated_at": generated_at, "coverage": coverage,
+        "traffic": {"include_internal": include_internal, "visitor_unit": "browser", "account_unit": "logged_in_account"},
         "kpis": {"dau": today_row["active"], "wau": _window_union(per_day, today, WAU_SPAN), "mau": mau_today,
                  "stickiness_pct": _pct(today_row["active"], mau_today), "online_5m": online_5m,
                  "bounce_pct_today": today_row["bounce_pct"], "avg_session_sec_today": today_row["avg_session_sec"],
-                 "new_visitors": len(new_visitor_set)},
+                 "new_visitors": len(new_visitor_set),
+                 "logged_in_accounts": len({user for session in sessions.values() for user in session.users})},
         "series": {"days": window, "dau": [row["active"] for row in daily],
                    "wau": [_window_union(per_day, day, WAU_SPAN) for day in window], "mau": [_window_union(per_day, day, MAU_SPAN) for day in window]},
         "daily": daily, "channels": channels, "sources": sources, "pages": page_rows, "devices": devices,
@@ -696,7 +717,7 @@ def _signups_report(db, days: int) -> dict:
     signup_visitors: set[str] = set()
     for day, visitor, user_id, is_new in db.exec(
             select(Visit.day_kst, Visit.visitor_hash, Visit.user_id, Visit.is_new)
-            .where(Visit.kind == "view", Visit.day_kst >= cohort_since).distinct()).all():
+            .where(Visit.kind == "view", Visit.day_kst >= cohort_since, *_visit_filters()).distinct()).all():
         if user_id:
             user_views[int(user_id)].add(day)
         if not visitor or day not in window_set:
@@ -724,7 +745,7 @@ def _signups_report(db, days: int) -> dict:
 
     backtest_events = {(int(user_id), day) for user_id, day in db.exec(
         select(Visit.user_id, Visit.day_kst)
-        .where(Visit.kind == "event", Visit.path == "backtest", Visit.user_id.is_not(None), Visit.day_kst >= since_day).distinct()).all()}
+        .where(Visit.kind == "event", Visit.path == "backtest", Visit.user_id.is_not(None), Visit.day_kst >= since_day, *_visit_filters()).distinct()).all()}
     backtest_claims = {(int(user_id), day) for user_id, day in db.exec(
         select(DailyQuestClaim.user_id, DailyQuestClaim.date_kst)
         .where(DailyQuestClaim.quest_key == "backtest_run", DailyQuestClaim.date_kst >= since_day)).all()}
@@ -764,10 +785,10 @@ def _signups_report(db, days: int) -> dict:
     acquisition = _funnel(FUNNEL_ACQUISITION_STEPS, {
         "visit": active,
         "builder": int(db.exec(select(func.count(func.distinct(Visit.visitor_hash))).where(
-            Visit.kind == "view", Visit.visitor_hash != "", Visit.day_kst >= since_day,
+            Visit.kind == "view", Visit.visitor_hash != "", Visit.day_kst >= since_day, *_visit_filters(),
             or_(Visit.path == "/builder", Visit.path.like("/s/%")))).one()),
         "backtest": int(db.exec(select(func.count(func.distinct(Visit.visitor_hash))).where(
-            Visit.kind == "event", Visit.path == "backtest", Visit.visitor_hash != "", Visit.day_kst >= since_day)).one()),
+            Visit.kind == "event", Visit.path == "backtest", Visit.visitor_hash != "", Visit.day_kst >= since_day, *_visit_filters())).one()),
         "signup": len(signup_visitors),
     })
     # 퍼널 ② 회원(회원 키, 창 안 가입자): 뒤 단계는 앞 단계의 부분집합 — 옛 회원의 구매를 이번 창 가입자 수로 나누지 않는다.
@@ -961,6 +982,83 @@ def news_report(db) -> dict:
     return _cached("news", lambda: _news_report(db), ttl=NEWS_CACHE_TTL_SECONDS)
 
 
+def news_pipeline_report(db, *, now_ms: int, today_start: int) -> list[dict]:
+    """Separate source collection from current-model AI jobs; no AI calls.
+
+    Job counts are current persisted states, not cumulative request failures.
+    A live claim indicates processing, not a guarantee of provider progress.
+    """
+    from .ai_runtime import default_model
+    from .community_summaries import PROMPT_VERSION
+    from .community_summary_repository import LEASE_MS
+    from .agent_features.position_news.repository import _CLAIM_TIMEOUT_MS, _TITLE_TRANSLATION_CLAIM_LEASE_MS
+    from .db import ApiUsageDaily, CommunityPostSummary, MarketNewsSummary, NewsTitleTranslation, TickerNewsState
+    from .news import _TITLE_TRANSLATION_PROMPT_VERSION
+    from .public_news import PublicNewsLease
+
+    source_engines = ('position_news', 'public_news')
+    success, items, failures = db.exec(select(
+        func.max(case((CollectorRun.status.in_(['ok', 'empty']), CollectorRun.finished_ms), else_=0)),
+        func.coalesce(func.sum(case((and_(CollectorRun.started_ms >= today_start,
+            CollectorRun.status.not_in(['cached', 'skipped', 'skipped_late'])), CollectorRun.items), else_=0)), 0),
+        func.coalesce(func.sum(case((CollectorRun.started_ms >= today_start, CollectorRun.failures), else_=0)), 0),
+    ).where(CollectorRun.engine.in_(source_engines))).one()
+    collecting = and_(TickerNewsState.collection_claim_token != '',
+                      TickerNewsState.collection_claimed_ms > now_ms - _CLAIM_TIMEOUT_MS)
+    waiting, processing, errors = db.exec(select(
+        func.sum(case((and_(TickerNewsState.collection_status == 'pending', ~collecting), 1), else_=0)),
+        func.sum(case((collecting, 1), else_=0)),
+        func.sum(case((TickerNewsState.collection_status == 'error', 1), else_=0)),
+    )).one()
+    active_public = db.exec(select(func.count()).select_from(PublicNewsLease).where(
+        PublicNewsLease.token != '', PublicNewsLease.lease_until_ms > now_ms)).one()
+    processing = int(processing or 0) + int(active_public)
+    stages = [dict(key='collection', label='기사 수집', count_unit='완료: 저장 행 / 상태: 수집 범위',
+                   last_success_ms=int(success or 0), completed_today=int(items), failures_today=int(failures),
+                   pending=int(waiting or 0), processing=processing, errors=int(errors or 0),
+                   status='processing' if processing else 'recorded' if success else 'idle',
+                   status_label='수집 중' if processing else '수집 기록 있음' if success else '기록 없음')]
+    model = default_model()
+    for key, label, table, version, purpose in (
+        ('translation', '제목 번역', NewsTitleTranslation, _TITLE_TRANSLATION_PROMPT_VERSION, 'title_translation'),
+        ('summary', '커뮤니티 본문 요약', CommunityPostSummary, PROMPT_VERSION, 'community_summaries'),
+    ):
+        lease_ms = _TITLE_TRANSLATION_CLAIM_LEASE_MS if key == 'translation' else LEASE_MS
+        live = and_(table.processing_status == 'pending', table.claimed_ms > now_ms - lease_ms)
+        ready = table.processing_status == 'ready'
+        last_success, complete, pending, processing, errors, last_error = db.exec(select(
+            func.max(case((ready, table.updated_ms), else_=0)),
+            func.sum(case((and_(ready, table.updated_ms >= today_start), 1), else_=0)),
+            func.sum(case((and_(table.processing_status.in_(['pending', 'retryable']), ~live), 1), else_=0)),
+            func.sum(case((live, 1), else_=0)),
+            func.sum(case((table.processing_status.in_(['error', 'failed']), 1), else_=0)),
+            func.max(case((table.processing_status.in_(['error', 'failed']), table.updated_ms), else_=0)),
+        ).where(table.prompt_version == f'{version}:{model}')).one()
+        pending, processing, errors = int(pending or 0), int(processing or 0), int(errors or 0)
+        status = 'processing' if processing else 'waiting' if pending else 'attention' if errors else 'ready' if last_success else 'idle'
+        calls, api_failures = db.exec(select(func.coalesce(func.sum(ApiUsageDaily.calls), 0),
+            func.coalesce(func.sum(ApiUsageDaily.failures), 0)).where(
+                ApiUsageDaily.provider == 'openai', ApiUsageDaily.model == model,
+                ApiUsageDaily.purpose == purpose, ApiUsageDaily.day_kst == day_kst(now_ms))).one()
+        stages.append(dict(key=key, label=label, count_unit='고유 제목' if key == 'translation' else '게시글·본문',
+            model=model, last_success_ms=int(last_success or 0), completed_today=int(complete or 0),
+            last_error_ms=int(last_error or 0), pending=pending, processing=processing, errors=errors,
+            calls_today=int(calls), failures_today=int(api_failures), status=status,
+            status_label={'processing': '처리 중', 'waiting': '대기 작업 있음', 'attention': '오류 확인 필요',
+                          'ready': '완료', 'idle': '기록 없음'}[status]))
+    market = db.get(MarketNewsSummary, f'market_news_summary:{day_kst(now_ms)}')
+    market_ready = bool(market and market.overview.strip())
+    market_success = db.exec(select(func.max(MarketNewsSummary.updated_ms)).where(MarketNewsSummary.overview != '')).one()
+    market_failures = db.exec(select(func.coalesce(func.sum(ApiUsageDaily.failures), 0)).where(
+        ApiUsageDaily.provider == 'openai', ApiUsageDaily.model == model,
+        ApiUsageDaily.purpose == 'market_news_summary', ApiUsageDaily.day_kst == day_kst(now_ms))).one()
+    stages.append(dict(key='market_summary', label='오늘의 시장 요약', count_unit='일별 공유 요약 · 모델 공통',
+        last_success_ms=int(market_success or 0), completed_today=int(market_ready), pending=None, processing=None,
+        errors=None, failures_today=int(market_failures), status='ready' if market_ready else 'missing',
+        status_label='오늘 요약 있음' if market_ready else '오늘 요약 없음'))
+    return stages
+
+
 def _engines_report(db) -> dict:
     """수집 엔진·시간대·소스 표는 collector_runs 가 만든다. 모듈이 없거나 터지면 빈 표 — 나머지 화면은 살린다."""
     try:
@@ -1044,6 +1142,7 @@ def _news_report(db) -> dict:
                  "tickers_failing": len(failing), "articles_today": articles_today, "failures_today": failures_today, "pending": pending,
                  "ai_budget_used": budgets.get(today, 0), "ai_budget_limit": ai_limit},
         "engines": engines["engines"], "hourly": engines["hourly"], "sources": engines["sources"],
+        "pipeline": news_pipeline_report(db, now_ms=now_ms, today_start=today_start),
         "board": board, "failing": failing, "enrichment": enrichment,
     }
 

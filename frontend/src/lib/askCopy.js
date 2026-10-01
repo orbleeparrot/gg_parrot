@@ -62,3 +62,27 @@ export const LOST_TO_HOLD_TEXT = "이번엔 그냥 사서 들고 있는 게 더 
 // 직접 고를래요 — 거래 가능한 종목을 검색해서 고른다.
 export const MANUAL_SEARCH_PLACEHOLDER = "종목 검색 (예: AVAX)";
 export const MANUAL_SEARCH_MISS = "목록에 없는 종목이에요";
+
+// 2026-09-30 재설계 — 한 장에 한 질문 · 가로 카드 · 비교 줄에서 쓰는 문구.
+export const TOP_RESULTS_TEXT = "과거 데이터로 돌려 본 후보 중 상위 3개예요.";
+export const READY_TEXT = "네 가지 답 다 됐어요. 성향에 맞는 종목 후보를 볼까요?";
+export const READY_BUTTON = "후보 보기";
+export const readyCostNote = (left) => `누르면 오늘 횟수 1회를 써요 · 남은 ${left}회`;
+export const OPENING_TEXT = "잠깐만요…";
+export const UNAVAILABLE_TEXT = "지금은 물어볼 수 없어요. 잠시 뒤 다시 열어 주세요.";
+export const CONSENT_BUTTON = "알겠어요";
+export const RESTART_LABEL = "처음부터";
+export const LOAD_BUTTON = "조건 판에 불러오기";
+export const WHY_TITLE = "왜 이 조합?";
+export const COMPARE_TITLE = "한눈에 비교";
+export const HOLD_LABEL = "그냥 들고 있기";
+export const VS_HOLD_LABEL = "들고 있기 대비";
+export const FOLLOW_UPS_TITLE = "다시 물어보기";
+export const SPOT_HINT = "레버리지 없음";
+export const LEGEND_EQUITY = "매크로 자산";
+export const LEGEND_BASE = "본전";
+export const RETURN_LABEL = "백테스트 수익률";
+export const CONDITION_LABEL = "조건";
+export const PREV_LABEL = "이전 조합";
+export const NEXT_LABEL = "다음 조합";
+export const BACK_TO_STEP = "이 질문으로 돌아가기";

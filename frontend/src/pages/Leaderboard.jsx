@@ -528,7 +528,7 @@ function AccountLeaderboard() {
           순위 | 로고 | 매크로(이름·배지·등록) | 전략 | 수익률 | 반응. 넓은 화면에선 전략이
           자기 열을 갖고, 좁아지면 이름 아래로 내려온다. 1·2·3위는 금·은·동 + '방어전' 배지. */}
       {!busy && items.length > 0 ? (
-        <div className="lb-board" role="table" aria-label="오늘의 리더보드">
+        <div className={`lb-board${!quickRunMode && !items.some((e) => e.locked) ? " is-lean-actions" : ""}`} role="table" aria-label="오늘의 리더보드">
           <div className="lb-row lb-row-head" role="row">
             <span role="columnheader" className="lb-col-rank">순위</span>
             <span aria-hidden="true" className="lb-col-coin" />

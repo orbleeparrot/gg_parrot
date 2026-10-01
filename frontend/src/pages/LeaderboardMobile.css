@@ -154,11 +154,10 @@
 /* 1100px 이상은 전략 열이 있는 표 그대로. 1100~1399px 에선 전략 열이 좁아 'QNT USD…' 로 잘렸다 —
    열은 두고 전략을 두 줄까지 접어 행 높이로 받는다(2026-10-02). */
 @media (min-width: 1100px) and (max-width: 1399px) {
-  /* 반응 칸은 복사 아이콘이 우클릭 메뉴로 빠져 좋아요·싫어요 두 개만 — 196 → 128px.
-     수익률 칸은 상태 캡션이 두 줄로 접히도록 176px. 남는 폭이 전략 열로 간다. */
+  /* 반응 칸은 board 의 --lb-actions-w(언락 행이 없으면 120px). 수익률 칸은 196px — 남는 폭이 전략 열로 간다. */
   .leaderboard-page .lb-board {
     --lb-return-gap: 12px;
-    --lb-columns: 28px 36px minmax(180px, 1fr) minmax(0, 1.3fr) calc(176px + var(--lb-return-gap)) 128px;
+    --lb-columns: 28px 36px minmax(180px, 1fr) minmax(0, 1.3fr) calc(196px + var(--lb-return-gap)) var(--lb-actions-w);
   }
   .leaderboard-page .lb-summary { align-self: center; }
   .leaderboard-page .lb-summary .lb-strategy-facts {

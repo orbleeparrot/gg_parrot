@@ -239,7 +239,7 @@ def test_costs_report_fixed_costs_env_replaces_defaults_and_months_clamp(monkeyp
     assert [m["label"] for m in report["monthly"]] == ["8월", "9월*"]
     assert report["monthly"][-1]["providers"] == {"openai": 0.0, "gemini": 0.0, "coindesk": 0.0, "render": 17.0}  # 30 × 17/30
     assert [p["provider"] for p in report["providers"]] == ["openai", "gemini", "coindesk", "render"]
-    assert report["providers"][0]["label"] == "OpenAI · gpt-6-luna (max)"
+    assert report["providers"][0]["label"] == "OpenAI · gpt-6-luna (none)"
     assert report["kpis"]["month_total_usd"] == 17.0
 
 

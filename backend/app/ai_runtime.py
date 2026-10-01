@@ -29,7 +29,10 @@ T = TypeVar("T")
 
 # All features share this target; no old-provider fallback.
 DEFAULT_MODEL = "gpt-6-luna"
-REASONING_EFFORT = "max"
+# 2026-10-01 사용자 결정: 모든 기능 none. 제목 번역 실측에서 max 는 추론만으로 출력 한도를
+# 다 써서 응답이 잘렸고(20배치 중 12개), none 도 품질 차이가 보이지 않았다.
+# 되돌릴 땐 코드 대신 OPENAI_REASONING_EFFORT 로(none|low|medium|high|xhigh|max).
+REASONING_EFFORT = str(os.environ.get("OPENAI_REASONING_EFFORT") or "").strip() or "none"
 
 
 def ai_api_key() -> str:

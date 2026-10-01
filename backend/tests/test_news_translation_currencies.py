@@ -17,7 +17,7 @@ from app import news
     ("$WLD targets $0.50", "$WLD, 0.50달러 목표"),
 ])
 def test_korean_currency_labels_preserve_the_original_amount(original, translated):
-    assert news._valid_title_translation(original, translated)
+    assert news._title_translation_is_clean(original, translated)
 
 
 @pytest.mark.parametrize("original,translated", [
@@ -34,7 +34,7 @@ def test_korean_currency_labels_preserve_the_original_amount(original, translate
     ("$WLD targets $0.50", "$WLD, 0.50원 목표"),
 ])
 def test_currency_number_and_ticker_changes_remain_invalid(original, translated):
-    assert not news._valid_title_translation(original, translated)
+    assert not news._title_translation_is_clean(original, translated)
 
 
 @pytest.mark.parametrize("text", ["원 토큰 개발", "정책 100원칙 발표", "100명의 위원", "유로파 프로젝트 발표"])
@@ -46,11 +46,11 @@ def test_long_publisher_headline_can_keep_all_translated_content():
     original = "Bitcoin network update includes " + "security and developer improvements, " * 20 + "$25M funding"
     translated = "비트코인 네트워크 업데이트에 " + "보안 개선과 개발자 환경 개선, " * 20 + "2500만 달러 자금 조달 포함"
     assert len(original) > 300 and len(translated) > 300
-    assert news._valid_title_translation(original, translated)
-    assert not news._valid_title_translation(original, translated.replace("2500만", "3500만"))
+    assert news._title_translation_is_clean(original, translated)
+    assert not news._title_translation_is_clean(original, translated.replace("2500만", "3500만"))
 
 
 def test_long_headline_limit_still_rejects_unbounded_model_output():
-    assert not news._valid_title_translation("Bitcoin network improves", "비트코인 " + "개선 " * 200)
+    assert not news._title_translation_is_clean("Bitcoin network improves", "비트코인 " + "개선 " * 200)
     original = "Bitcoin network improves " * 100
-    assert not news._valid_title_translation(original, "비트코인 " + "개선 " * 600)
+    assert not news._title_translation_is_clean(original, "비트코인 " + "개선 " * 600)

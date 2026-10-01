@@ -413,8 +413,8 @@ def test_same_line_ticker_tag_footer_does_not_establish_relevance():
 def test_directional_prose_is_translated_while_ticker_stays_intact():
     title = "LONG $CFG structure is readable"
     assert news._translation_protected_upper_tokens(title) == ("CFG",)
-    assert not news._valid_title_translation(title, "LONG $CFG 구조가 명확하다")
-    assert news._valid_title_translation(title, "$CFG 롱 포지션 구조가 명확하다")
+    assert not news._title_translation_is_clean(title, "LONG $CFG 구조가 명확하다")
+    assert news._title_translation_is_clean(title, "$CFG 롱 포지션 구조가 명확하다")
 
 
 def test_community_passes_translation_pipeline(monkeypatch):

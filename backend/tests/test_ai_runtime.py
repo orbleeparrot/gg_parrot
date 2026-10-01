@@ -249,10 +249,26 @@ def test_adapter_maps_the_shared_contract_onto_responses():
     assert call["model"] == "gpt-6-luna"
     assert call["instructions"] == "시스템 지시"
     assert call["max_output_tokens"] == 321 + 4096
-    assert call["reasoning"] == {"effort": "max"}
+    assert call["reasoning"] == {"effort": "none"}
     assert call["store"] is False
     assert call["timeout"] == 2.5
     assert call["input"] == [{"role": "user", "content": "질문"}]
+
+
+def test_adapter_applies_per_call_effort_and_strict_json_schema():
+    messages, models = _messages('{"items":[]}')
+    schema = {"name": "demo", "schema": {"type": "object", "additionalProperties": False,
+                                         "required": ["items"], "properties": {"items": {"type": "array"}}}}
+    messages.create(model="gpt-6-luna", max_tokens=100, messages=[{"role": "user", "content": "x"}],
+                    reasoning_effort="none", json_schema=schema)
+    call = models.calls[0]
+    assert call["reasoning"] == {"effort": "none"}
+    assert call["text"] == {"format": {"type": "json_schema", "name": "demo", "strict": True,
+                                       "schema": schema["schema"]}}
+    # 지정하지 않은 호출은 예전 그대로다.
+    messages.create(model="gpt-6-luna", max_tokens=100, messages=[{"role": "user", "content": "x"}])
+    assert models.calls[1]["reasoning"] == {"effort": "none"}
+    assert "text" not in models.calls[1]
 
 
 def test_adapter_preserves_assistant_role():

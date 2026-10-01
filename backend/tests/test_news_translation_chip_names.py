@@ -20,7 +20,7 @@ from app import news
 def test_captured_provider_output_normalizes_only_confirmed_names(original, response, expected):
     payload = json.dumps({"items": [{"id": news._title_translation_id(original), "title_ko": response}]})
     assert news._parse_korean_title_translations(payload, [original]) == {original: expected}
-    assert news._valid_title_translation(original, expected)
+    assert news._title_translation_is_clean(original, expected)
 
 
 @pytest.mark.parametrize("original,response", [
@@ -32,7 +32,7 @@ def test_captured_provider_output_normalizes_only_confirmed_names(original, resp
 def test_company_normalization_does_not_allow_ordinary_prose_or_arbitrary_names(original, response):
     normalized = news._normalize_title_translation(original, response)
     assert "불리시" not in normalized
-    assert not news._valid_title_translation(original, normalized)
+    assert not news._title_translation_is_clean(original, normalized)
 
 
 @pytest.mark.parametrize("response", [
@@ -40,14 +40,16 @@ def test_company_normalization_does_not_allow_ordinary_prose_or_arbitrary_names(
     "Bullish, USD.AI에 1억 원 GPU 파이낸싱 지원",
     "Bullish, USD.AI에 1억 달러 파이낸싱 지원",
 ])
-def test_name_normalization_still_rejects_changed_amount_currency_or_lost_identifier(response):
+def test_name_normalization_still_records_changed_amount_currency_or_lost_identifier(response):
     original = "Bullish Backs USD.AI With $100M GPU Financing"
     payload = json.dumps({"items": [{"id": news._title_translation_id(original), "title_ko": response}]})
-    assert news._parse_korean_title_translations(payload, [original]) == {}
+    # 바뀐 금액·통화·사라진 식별자는 막지 않고 품질 경고로 남긴다.
+    parsed = news._parse_korean_title_translations(payload, [original])
+    assert news._title_translation_quality_issue(original, parsed[original])
 
 
 def test_tradoor_normalization_does_not_change_or_remove_other_token_symbols():
     original = "AI News: Tradoor Sinks, TAO Stabilizes, USD.AI Surges"
     for changed in ("BTC", ""):
         response = f"AI 뉴스: Tradoor 하락, {changed} 안정세, USD.AI 급등"
-        assert not news._valid_title_translation(original, news._normalize_title_translation(original, response))
+        assert not news._title_translation_is_clean(original, news._normalize_title_translation(original, response))

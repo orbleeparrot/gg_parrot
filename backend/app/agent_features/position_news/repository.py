@@ -754,6 +754,8 @@ def store_title_translations(
                if str(original or "").strip() and str(translated or "").strip()}
     if not cleaned:
         return
+    warnings = {_title_hash(original): news_mod._title_translation_quality_issue(original, translated)
+                for original, translated in cleaned.items()}
     if claim_token:
         values = {_title_hash(original): translated for original, translated in cleaned.items()}
         originals = {_title_hash(original): original for original in cleaned}
@@ -763,6 +765,7 @@ def store_title_translations(
             NewsTitleTranslation.processing_status == "pending",
             NewsTitleTranslation.claim_token == claim_token,
         ).values(translated_title=case(values, value=NewsTitleTranslation.title_hash),
+                 quality_warning=case(warnings, value=NewsTitleTranslation.title_hash),
                  processing_status="ready", claim_token="", claimed_ms=0,
                  updated_at=now_iso, updated_ms=millis,
                  # 쓸 수 있는 번역이 나왔으면 재시도 예산은 처음부터 다시 센다.
@@ -773,14 +776,15 @@ def store_title_translations(
             dict(title_hash=_title_hash(original), original_title=original,
                  translated_title=translated, processing_status="ready", claim_token="",
                  claimed_ms=0, updated_at=now_iso, updated_ms=millis,
-                 attempts=0, next_retry_ms=0)
+                 attempts=0, next_retry_ms=0,
+                 quality_warning=warnings[_title_hash(original)])
             for original, translated in cleaned.items()
         ])
         db.exec(statement.on_conflict_do_update(
             index_elements=[NewsTitleTranslation.title_hash],
             set_={key: getattr(statement.excluded, key) for key in (
                 "translated_title", "processing_status", "claim_token", "claimed_ms",
-                "updated_at", "updated_ms", "attempts", "next_retry_ms")},
+                "updated_at", "updated_ms", "attempts", "next_retry_ms", "quality_warning")},
             where=NewsTitleTranslation.original_title == statement.excluded.original_title))
     db.commit()
 

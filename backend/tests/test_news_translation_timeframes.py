@@ -25,7 +25,7 @@ WRONG = "공매도 경보 | CHIP 1,500만 급속 변동"
 ])
 def test_clear_timeframes_preserve_numbers_and_time_units(original, translated, facts):
     assert news._translation_fact_tokens(original)[0] == facts
-    assert news._valid_title_translation(original, translated)
+    assert news._title_translation_is_clean(original, translated)
 
 
 @pytest.mark.parametrize("translated", [
@@ -33,7 +33,7 @@ def test_clear_timeframes_preserve_numbers_and_time_units(original, translated, 
     CORRECT.replace("15분봉", "16분봉"), CORRECT.replace("CHIP", "BTC"),
 ])
 def test_captured_million_error_and_missing_or_changed_timeframe_are_rejected(translated):
-    assert not news._valid_title_translation(ORIGINAL, translated)
+    assert not news._title_translation_is_clean(ORIGINAL, translated)
 
 
 @pytest.mark.parametrize("original, translated", [
@@ -44,19 +44,20 @@ def test_captured_million_error_and_missing_or_changed_timeframe_are_rejected(tr
 ])
 def test_monetary_million_notation_retains_its_value(original, translated):
     assert news._translation_fact_tokens(original)[0] == (("15000000", "number"),)
-    assert news._valid_title_translation(original, translated)
-    assert not news._valid_title_translation(original, translated.replace("1,500만", "15분"))
+    assert news._title_translation_is_clean(original, translated)
+    assert not news._title_translation_is_clean(original, translated.replace("1,500만", "15분"))
 
 
 def test_ambiguous_lowercase_m_must_keep_the_original_notation():
     original = "Metric reaches 15m"
     assert news._translation_fact_tokens(original)[0] == (("15", "literal:m"),)
-    assert news._valid_title_translation(original, "지표, 15m 도달")
-    assert not news._valid_title_translation(original, "지표, 15분 도달")
-    assert not news._valid_title_translation(original, "지표, 1,500만 도달")
+    assert news._title_translation_is_clean(original, "지표, 15m 도달")
+    assert not news._title_translation_is_clean(original, "지표, 15분 도달")
+    assert not news._title_translation_is_clean(original, "지표, 1,500만 도달")
 
 
-def test_provider_gets_minute_fact_and_repair_rejects_cached_million_result(monkeypatch):
+def test_provider_gets_minute_fact_and_million_result_is_recorded_not_repaired(monkeypatch):
+    # 15m→1,500만 같은 수치 오역은 더 이상 교정 호출을 부르지 않고 품질 경고로 남는다.
     monkeypatch.setenv("OPENAI_API_KEY", "fixture-key")
     requests = []
     replies = [WRONG, CORRECT]
@@ -68,17 +69,17 @@ def test_provider_gets_minute_fact_and_repair_rejects_cached_million_result(monk
     monkeypatch.setattr(news, "get_ai_client", lambda: SimpleNamespace(messages=SimpleNamespace(create=create)))
     runtime = AiCallRuntime(max_concurrent=1, acquire_timeout_seconds=0.01, cache_ttl_seconds=900)
     monkeypatch.setattr(news, "get_ai_runtime", lambda: runtime)
-    assert news._request_korean_title_translations([ORIGINAL]) == {ORIGINAL: CORRECT}
-    assert len(requests) == 2
+    assert news._request_korean_title_translations([ORIGINAL]) == {ORIGINAL: WRONG}
+    assert len(requests) == 1
     first = json.loads(requests[0]["messages"][0]["content"])[0]
     assert first["protected_numbers"] == [{"value": "15", "unit": "minute"}]
     assert "15분(봉)이지 1,500만이 아니고" in requests[0]["system"]
-    second = json.loads(requests[1]["messages"][0]["content"])[0]
-    assert second["previous_title_ko"] == WRONG
-    assert second["failure_reason"] == "fact_mismatch"
+    assert requests[0]["reasoning_effort"] == "none"
+    assert requests[0]["json_schema"]["schema"]["properties"]["items"]["items"]["required"] == ["id", "title_ko"]
+    assert news._title_translation_quality_issue(ORIGINAL, WRONG) == "fact_mismatch"
 
 
-def test_invalid_durable_minute_translation_is_reclaimed_without_changing_title_id(monkeypatch):
+def test_durable_translation_with_quality_warning_is_served_not_reclaimed(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://fixture.invalid/news")
     monkeypatch.setattr(news, "_title_translation_cache", {ORIGINAL: WRONG})
     monkeypatch.setattr(news, "_title_translation_retry_at", {})
@@ -94,7 +95,8 @@ def test_invalid_durable_minute_translation_is_reclaimed_without_changing_title_
     monkeypatch.setattr(news, "_translate_claimed_titles", translate)
     title_id = news._title_translation_id(ORIGINAL)
     news._ensure_title_translations([ORIGINAL])
-    assert claims == [([ORIGINAL], [ORIGINAL])]
-    assert batches == [([ORIGINAL], "fixture-claim")]
-    assert news._title_translation_cache == {ORIGINAL: CORRECT}
+    # 품질 경고만 있는 번역은 다시 사지 않는다 — 재번역 호출이 비용을 되살리지 않게.
+    assert claims == []
+    assert batches == []
+    assert news._title_translation_cache == {ORIGINAL: WRONG}
     assert news._title_translation_id(ORIGINAL) == title_id

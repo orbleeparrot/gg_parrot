@@ -42,10 +42,10 @@ def test_only_openai_key_and_model_are_used(monkeypatch):
     monkeypatch.delenv("OPENAI_MODEL", raising=False)
     assert not ai_runtime.ai_available()
     assert ai_runtime.default_model() == "gpt-6-luna"
-    assert ai_runtime.REASONING_EFFORT == "max"
+    assert ai_runtime.REASONING_EFFORT == "none"
 
 
-def test_real_sdk_sends_one_max_responses_request_even_on_429(monkeypatch):
+def test_real_sdk_sends_one_responses_request_even_on_429(monkeypatch):
     requests = []
     monkeypatch.setattr(ai_runtime, "record_openai_usage", lambda **kw: None)
     def handler(request):
@@ -60,7 +60,7 @@ def test_real_sdk_sends_one_max_responses_request_even_on_429(monkeypatch):
     payload = json.loads(requests[0].content)
     assert requests[0].url.path == "/v1/responses"
     assert payload["model"] == "gpt-6-luna"
-    assert payload["reasoning"] == {"effort": "max"}
+    assert payload["reasoning"] == {"effort": "none"}
     assert payload["max_output_tokens"] == 4608
     assert payload["store"] is False
 

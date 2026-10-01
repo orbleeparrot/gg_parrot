@@ -12,7 +12,9 @@ FIRST = 'Bitcoin rallies'
 FIRST_KO = '비트코인 상승'
 SECOND = "Grove Finance buys 37.8M CFG tokens, deepening stake in Centrifuge's $1.27B real-world asset platform"
 SECOND_KO = '그로브 파이낸스, 3780만 CFG 토큰 매입...센트리퓨지의 12억7000만 달러 규모 실물자산 플랫폼에 지분 강화'
-SECOND_BAD = SECOND_KO.replace('달러 ', '')
+# 교정 라운드는 최소 확인(한글·id·길이)에 걸린 답만 다시 부른다 — 원문을 그대로 돌려준 경우.
+# 숫자·통화 오류는 이제 막지 않고 품질 경고로 기록한다.
+SECOND_BAD = SECOND
 
 
 def response(*pairs):
@@ -47,7 +49,7 @@ def test_only_rejected_title_is_corrected_with_original_facts_and_previous_outpu
     assert len(correction) == 1
     assert correction[0]['title'] == SECOND
     assert correction[0]['previous_title_ko'] == SECOND_BAD
-    assert correction[0]['failure_reason'] == 'fact_mismatch'
+    assert correction[0]['failure_reason'] == 'not_korean'
     assert correction[0]['protected_terms'] == ['CFG']
     assert correction[0]['protected_numbers'] == [
         {'value': '1270000000', 'unit': 'number'}, {'value': '37800000', 'unit': 'number'}]
@@ -120,9 +122,9 @@ def test_correction_transport_failure_preserves_success_and_defers_only_missing_
 
 @pytest.mark.parametrize('second_attempt', [
     SECOND_BAD,
-    SECOND_KO.replace('3780만', '3781만'),
-    SECOND_KO.replace('달러', '원'),
-    SECOND_KO.replace('CFG', 'BTC'),
+    '',
+    'Grove Finance buys CFG tokens',
+    '그로브 ' * 400,  # 길이 상한 초과
 ])
 def test_second_invalid_output_never_triggers_third_call_or_overwrites_success(provider, second_attempt):
     requests, replies = provider

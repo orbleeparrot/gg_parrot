@@ -612,6 +612,9 @@ class NewsTitleTranslation(SQLModel, table=True):
     attempts: int = Field(default=0)
     next_retry_ms: int = Field(default=0, sa_type=BigInteger, index=True)
     prompt_version: str = Field(default="", max_length=160)
+    # 숫자·통화·티커·영어 잔존 검사는 더 이상 번역을 막지 않고 여기 사유만 남긴다
+    # (fact_mismatch | untranslated_prose). 표본 점검용.
+    quality_warning: str = Field(default="", max_length=40)
 
 
 class CommunityPostSummary(SQLModel, table=True):
@@ -1166,6 +1169,7 @@ def _migrate() -> None:
             "attempts": "ALTER TABLE newstitletranslation ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0",
             "next_retry_ms": "ALTER TABLE newstitletranslation ADD COLUMN next_retry_ms INTEGER NOT NULL DEFAULT 0",
             "prompt_version": "ALTER TABLE newstitletranslation ADD COLUMN prompt_version TEXT NOT NULL DEFAULT ''",
+            "quality_warning": "ALTER TABLE newstitletranslation ADD COLUMN quality_warning TEXT NOT NULL DEFAULT \'\'",
         },
         "communitypostsummary": {
             "attempts": "ALTER TABLE communitypostsummary ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0",
@@ -1275,6 +1279,7 @@ _PG_ADDED_COLUMNS = {
         "claimed_ms": "BIGINT DEFAULT 0",
         "attempts": "INTEGER NOT NULL DEFAULT 0", "next_retry_ms": "BIGINT NOT NULL DEFAULT 0",
         "prompt_version": "TEXT NOT NULL DEFAULT ''",
+        "quality_warning": "TEXT NOT NULL DEFAULT ''",
     },
     "communitypostsummary": {
         "attempts": "INTEGER NOT NULL DEFAULT 0", "next_retry_ms": "BIGINT NOT NULL DEFAULT 0",

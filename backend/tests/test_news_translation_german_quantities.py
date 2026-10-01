@@ -41,7 +41,7 @@ def test_captured_responses_preserve_facts_after_narrow_normalization(original, 
     WLD_RESPONSE.replace('WLD 토큰', 'BTC 토큰'),
 ])
 def test_german_quantity_support_still_rejects_changed_facts(response):
-    assert not news._valid_title_translation(WLD, news._normalize_title_translation(WLD, response))
+    assert not news._title_translation_is_clean(WLD, news._normalize_title_translation(WLD, response))
 
 
 @pytest.mark.parametrize('original,translated', [
@@ -62,8 +62,8 @@ def test_english_decimal_and_scale_meaning_is_unchanged():
 
 
 def test_captured_currency_omission_is_rejected_until_model_preserves_usd():
-    assert not news._valid_title_translation(DOT, DOT_RESPONSE)
-    assert news._valid_title_translation(DOT, DOT_RESPONSE.replace('79K', '$79K'))
+    assert not news._title_translation_is_clean(DOT, DOT_RESPONSE)
+    assert news._title_translation_is_clean(DOT, DOT_RESPONSE.replace('79K', '$79K'))
 
 
 def test_captured_german_dollar_currency_is_not_a_us_ticker():
@@ -75,9 +75,9 @@ def test_captured_german_dollar_currency_is_not_a_us_ticker():
     normalized = news._normalize_title_translation(WLD, response)
     assert '3억8000만 달러의' in normalized
     assert 'US' not in news._translation_protected_upper_tokens(WLD)
-    assert news._valid_title_translation(WLD, normalized)
-    assert not news._valid_title_translation(WLD, normalized.replace('달러의', '원의'))
-    assert not news._valid_title_translation(WLD, normalized.replace('ORBS', 'ORCA'))
+    assert news._title_translation_is_clean(WLD, normalized)
+    assert not news._title_translation_is_clean(WLD, normalized.replace('달러의', '원의'))
+    assert not news._title_translation_is_clean(WLD, normalized.replace('ORBS', 'ORCA'))
     assert news._normalize_title_translation(WLD, '3억8000만 USD.AI 토큰') == '3억8000만 USD.AI 토큰'
     assert 'US' in news._translation_protected_upper_tokens('US token rises')
 

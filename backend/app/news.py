@@ -60,6 +60,22 @@ _OPENEDEN_MAX_AGE_DAYS = 30
 _TITLE_TRANSLATION_PROMPT_VERSION = "coin-news-title-ko-v9"
 _TITLE_TRANSLATION_BATCH_SIZE = 10
 _TITLE_TRANSLATION_RETRY_SECONDS = 300
+# 2026-10-01 실측(운영 제목 100건 × 추론 6단계): 형식을 json_schema 로 강제하면 none 도
+# 실패 0% · 호출당 약 4초였고, max 는 추론만으로 출력 한도를 다 써서 20배치 중 12개가
+# 잘렸다(한도를 32,768·300초로 풀어도 남음). 번역 품질 차이는 보이지 않았다.
+_TITLE_TRANSLATION_REASONING_EFFORT = (
+    str(os.environ.get("OPENAI_TITLE_TRANSLATION_REASONING_EFFORT") or "").strip() or "none"
+)
+_TITLE_TRANSLATION_SCHEMA = {
+    "name": "title_translations",
+    "schema": {
+        "type": "object", "additionalProperties": False, "required": ["items"],
+        "properties": {"items": {"type": "array", "items": {
+            "type": "object", "additionalProperties": False, "required": ["id", "title_ko"],
+            "properties": {"id": {"type": "string"}, "title_ko": {"type": "string"}},
+        }}},
+    },
+}
 _TITLE_TRANSLATION_MAX_TOKENS = max(
     256,
     min(
@@ -2525,6 +2541,13 @@ def _translation_has_untranslated_prose(original: str, value: str) -> bool:
 
 
 def _valid_title_translation(original: str, translated: object) -> bool:
+    """번역을 막는 최소 확인 — 비어 있지 않고, 원문과 다르고, 한글이 있고, 길이가 정상.
+
+    숫자·통화·티커·영어 잔존 검사는 더 이상 막지 않는다(``_title_translation_quality_issue``
+    가 사유만 기록). 원문 언어의 단위(1小时·73万·美元·24 horas)를 한국어 쪽과 대칭으로
+    읽지 못해 정확한 번역 30건 중 27건을 탈락시켰고, 탈락한 제목은 호출 상한 뒤 영영
+    누락됐다(2026-10-01 실측).
+    """
     value = _normalize_news_title(translated)
     # The DB stores unbounded text. Keep ordinary titles bounded, while allowing
     # complete translations of longer publisher headlines instead of retrying
@@ -2535,9 +2558,26 @@ def _valid_title_translation(original: str, translated: object) -> bool:
         and value != original
         and len(value) <= max_length
         and re.search(r"[가-힣]", value)
-        and not _translation_has_untranslated_prose(original, value)
-        and _translation_preserves_facts(original, value)
     )
+
+
+def _title_translation_is_clean(original: str, translated: object) -> bool:
+    """예전의 엄격한 기준(최소 확인 + 품질 경고 없음). 번역을 막지 않고, 기록 규칙의 기준선이다."""
+    return _valid_title_translation(original, translated) and not _title_translation_quality_issue(
+        original, translated)
+
+
+def _title_translation_quality_issue(original: str, translated: object) -> str:
+    """기록만 하는 품질 경고. 비어 있으면 문제 없음. 예외는 삼킨다 — 기록이 번역을 막지 않게."""
+    try:
+        value = _normalize_news_title(translated)
+        if not _translation_preserves_facts(original, value):
+            return "fact_mismatch"
+        if _translation_has_untranslated_prose(original, value):
+            return "untranslated_prose"
+    except Exception:
+        return ""
+    return ""
 
 
 def _title_has_localizable_asset_alias(title: str) -> bool:
@@ -2602,6 +2642,10 @@ def _parse_korean_title_translations(text: str, titles: list[str]) -> dict[str, 
         title_ko = _normalize_title_translation(original, raw.get("title_ko"))
         if not _valid_title_translation(original, title_ko):
             continue
+        issue = _title_translation_quality_issue(original, title_ko)
+        if issue:
+            logger.warning("News title translation accepted with quality warning: title_id=%s reason=%s",
+                           _title_translation_id(original), issue)
         translated[original] = title_ko
     return translated
 
@@ -2615,10 +2659,6 @@ def _title_translation_failure_reason(original: str, translated: object) -> str:
         return "not_korean"
     if len(value) > max(300, min(1500, len(original) * 2)):
         return "title_too_long"
-    if not _translation_preserves_facts(original, value):
-        return "fact_mismatch"
-    if _translation_has_untranslated_prose(original, value):
-        return "untranslated_prose"
     return "invalid_title"
 
 
@@ -2700,6 +2740,8 @@ def _request_korean_title_translations(titles: list[str], *, claim_token: str = 
             }],
             # 교정 라운드도 같은 용도로 센다 — 비용 표에서 '번역' 한 줄로 보이게.
             purpose="title_translation",
+            reasoning_effort=_TITLE_TRANSLATION_REASONING_EFFORT,
+            json_schema=_TITLE_TRANSLATION_SCHEMA,
         )
         batch_titles = [article["title"] for article in batch]
         requested_ids = {article["id"] for article in batch}

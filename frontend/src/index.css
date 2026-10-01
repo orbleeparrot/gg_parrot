@@ -8893,6 +8893,19 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 }
 .lb-row:last-child { border-bottom: 0; }
 .lb-row.is-registered { box-shadow: inset 2px 0 0 rgb(var(--c-brand)); padding-left: 12px; }
+/* 내 매크로 — 행 둘레 외곽선. 내용 정렬이 다른 행과 같도록 바깥으로 12px 넓힌다. */
+.lb-board { --lb-mine-line: var(--c-indigo-500); }  /* '내 것' 뱃지와 같은 남색 — 순위 금색·수익률 초록/빨강과 겹치지 않게(2026-10-01 사용자 선택) */
+.lb-row.is-mine {
+  margin-inline: -12px; padding-inline: 12px;
+  border-radius: 12px; border-bottom-color: transparent;
+  box-shadow: inset 0 0 0 1.5px rgb(var(--lb-mine-line));
+}
+.lb-row.is-mine.is-registered { box-shadow: inset 0 0 0 1.5px rgb(var(--lb-mine-line)), inset 3px 0 0 rgb(var(--c-brand)); }
+.lb-row { -webkit-touch-callout: none; }
+.lb-menu { min-width: 176px; }
+.lb-menu button { gap: 10px; }
+.lb-menu svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.lb-menu button.is-danger { color: rgb(var(--c-red-600)); }
 .lb-row-head {
   padding: 8px 0 10px;
   color: rgb(var(--c-slate-500));
@@ -9026,7 +9039,13 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 
 .chat-macro-hint { margin: 0 12px 4px; color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 500; }
 .chat-macro-hint b { color: rgb(var(--c-slate-700)); }
-.chat-macro-summary { color: rgb(var(--c-slate-700)); font-size: 12px; line-height: 1.45; font-weight: 500; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.chat-macro-summary { color: rgb(var(--c-slate-700)); font-size: 12px; line-height: 1.45; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 좁은 말풍선 안 — 종목·글쓴이 / 현재 수익률(크게) / 전략 한 줄, 세 줄로 쌓는다. */
+.chat-macro { align-items: flex-start; }
+.chat-macro-body { flex: 1 1 auto; }
+.chat-macro-head b { flex: none; white-space: nowrap; }
+.chat-macro-author { min-width: 0; }
+.chat-macro-return { font-size: 22px; font-weight: 700; line-height: 1.15; white-space: nowrap; }
 
 /* 언락 — 같은 알약에 자물쇠 + 가격. 포인트가 나가는 동작이라 가격만 브랜드 금색. */
 .lb-unlock .num { color: rgb(var(--c-brand-line)); }

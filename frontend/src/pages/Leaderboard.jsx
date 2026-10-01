@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import SimBadge from "../components/SimBadge.jsx";
 import RegisterMacroModal from "../components/RegisterMacroModal.jsx";
 import ChatBox from "../components/ChatBox.jsx";
+import ConfirmDialog from "../components/ConfirmDialog.jsx";
 import { PageHeader, EmptyState, Loading, ErrorNote } from "../components/Page.jsx";
 import { api } from "../api.js";
 import CoinIcon from "../components/CoinIcon.jsx";
@@ -105,6 +106,23 @@ function CopyIcon() {
     </svg>
   );
 }
+function EditIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+    </svg>
+  );
+}
+function TrashIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M3 6h18" />
+      <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+    </svg>
+  );
+}
 const fmtCountdown = (s) => `${pad(Math.floor(s / 3600))}:${pad(Math.floor((s % 3600) / 60))}:${pad(s % 60)}`;
 
 // 보유 중 행은 현재가(3초 시세)로 미실현 수익률을 다시 계산하고, 나머지는 서버 값 그대로.
@@ -174,6 +192,9 @@ function AccountLeaderboard() {
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState("");
   const [modal, setModal] = useState(false); // false | {edit?: entry}
+  const [rowMenu, setRowMenu] = useState(null); // {entry, x, y} — 오른쪽 클릭·길게 누르기 메뉴
+  const [confirmDelete, setConfirmDelete] = useState(null); // 삭제를 확인할 entry
+  const longPressRef = useRef({ timer: 0, x: 0, y: 0, openedAt: 0 });
   const focusRequestRef = useRef(null);
   const [pendingFocus, setPendingFocus] = useState(null);
 
@@ -299,6 +320,88 @@ function AccountLeaderboard() {
     }
   }
 
+  // 복사·수정·삭제는 행 안의 버튼 대신 오른쪽 클릭(휴대폰은 길게 누르기) 메뉴로 — 버튼이 줄을 늘려
+  // 내 매크로 행만 높아지던 것을 없앤다. 쓸 수 있는 항목이 없으면 브라우저 기본 메뉴를 그대로 둔다.
+  function rowMenuItems(entry) {
+    const out = [];
+    if (!entry.locked && !quickRunMode) out.push("copy");
+    if (entry.is_owner || (entry.is_mine && !entry.for_sale)) out.push("edit");
+    if (entry.is_owner) out.push("delete");
+    return out;
+  }
+
+  function openRowMenu(event, entry, point) {
+    if (!rowMenuItems(entry).length) return;
+    event.preventDefault();
+    let x = point?.x ?? event.clientX;
+    let y = point?.y ?? event.clientY;
+    if (!x && !y) {
+      // 키보드(메뉴 키·Shift+F10)로 열면 좌표가 없다 — 행 오른쪽 위에 띄운다.
+      const rect = event.currentTarget.getBoundingClientRect();
+      x = rect.right - 180;
+      y = rect.top + 12;
+    }
+    const width = 176;
+    const height = 8 + 38 * rowMenuItems(entry).length;
+    setRowMenu({
+      entry,
+      x: Math.max(8, Math.min(x, window.innerWidth - width - 8)),
+      y: Math.max(8, Math.min(y, window.innerHeight - height - 8)),
+    });
+  }
+
+  function startLongPress(event, entry) {
+    if (event.pointerType !== "touch" || !rowMenuItems(entry).length) return;
+    const press = longPressRef.current;
+    window.clearTimeout(press.timer);
+    press.x = event.clientX;
+    press.y = event.clientY;
+    const target = event.currentTarget;
+    press.timer = window.setTimeout(() => {
+      press.openedAt = Date.now();
+      openRowMenu({ preventDefault() {}, currentTarget: target, clientX: press.x, clientY: press.y }, entry);
+    }, 550);
+  }
+
+  function cancelLongPress(event) {
+    const press = longPressRef.current;
+    if (event?.type === "pointermove" && Math.hypot(event.clientX - press.x, event.clientY - press.y) < 10) return;
+    window.clearTimeout(press.timer);
+  }
+
+  function onRowContextMenu(event, entry) {
+    // 안드로이드는 길게 누르면 contextmenu 도 보낸다 — 방금 연 메뉴를 다시 열지 않는다.
+    if (Date.now() - longPressRef.current.openedAt < 800) { event.preventDefault(); return; }
+    openRowMenu(event, entry);
+  }
+
+  useEffect(() => {
+    if (!rowMenu) return undefined;
+    const close_ = () => setRowMenu(null);
+    const onPointer = (event) => { if (!event.target.closest?.(".lb-menu")) close_(); };
+    const onKey = (event) => { if (event.key === "Escape") { event.preventDefault(); close_(); } };
+    document.addEventListener("pointerdown", onPointer);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("resize", close_);
+    window.addEventListener("scroll", close_, true);
+    document.querySelector(".lb-menu button")?.focus();
+    return () => {
+      document.removeEventListener("pointerdown", onPointer);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", close_);
+      window.removeEventListener("scroll", close_, true);
+    };
+  }, [rowMenu]);
+
+  function runRowMenu(action) {
+    const entry = rowMenu?.entry;
+    setRowMenu(null);
+    if (!entry) return;
+    if (action === "copy") { sendOpen(entry.id); copyToBuilder(entry); }
+    else if (action === "edit") setModal({ edit: entry });
+    else if (action === "delete") setConfirmDelete(entry);
+  }
+
   function copyToBuilder(entry) {
     // Reuse the clone/prefill path: pass the full macro to the builder via state.
     navigate("/builder", { state: { macro: entry.macro } });
@@ -306,7 +409,6 @@ function AccountLeaderboard() {
 
   async function remove(entry) {
     if (deleting || !isCurrentAccount()) return;
-    if (!window.confirm("이 매크로를 리더보드에서 삭제할까요? 되돌릴 수 없어요.")) return;
     setError("");
     setDeleting(entry.id);
     try {
@@ -451,8 +553,13 @@ function AccountLeaderboard() {
                 key={e.id}
                 id={`leaderboard-entry-${e.id}`}
                 tabIndex={-1}
-                className={`lb-row${registeredId === e.id ? " is-registered" : ""}`}
+                className={`lb-row${registeredId === e.id ? " is-registered" : ""}${e.is_owner || e.is_mine ? " is-mine" : ""}`}
                 role="row"
+                onContextMenu={(event) => onRowContextMenu(event, e)}
+                onPointerDown={(event) => startLongPress(event, e)}
+                onPointerUp={cancelLongPress}
+                onPointerCancel={cancelLongPress}
+                onPointerMove={cancelLongPress}
               >
                 <div className={`lb-rank num is-${rank}`} role="cell" aria-label={`${rank}위`}>{rank}</div>
                 <CoinIcon symbol={e.symbol} size={36} className="lb-coin" alt="" />
@@ -533,36 +640,7 @@ function AccountLeaderboard() {
                     >
                       {unlocking === e.id ? "저장 중…" : "이 매크로 사용"}
                     </button>
-                  ) : (
-                    <button
-                      onClick={() => { sendOpen(e.id); copyToBuilder(e); }}
-                      disabled={unlocking === e.id}
-                      className="lb-icon-btn"
-                      title="빌더로 복사"
-                      aria-label="빌더로 복사"
-                    >
-                      <CopyIcon />
-                    </button>
-                  )}
-                  {(e.is_owner || (e.is_mine && !e.for_sale)) && (
-                    <button
-                      onClick={() => setModal({ edit: e })}
-                      className="btn btn-s btn-secondary"
-                      title={e.is_owner ? "내 매크로 수정" : "비밀번호 확인 후 수정"}
-                    >
-                      수정
-                    </button>
-                  )}
-                  {e.is_owner && (
-                    <button
-                      onClick={() => remove(e)}
-                      disabled={deleting === e.id}
-                      className="btn btn-s btn-secondary text-red-600 hover:text-red-700"
-                      title="내 매크로 삭제"
-                    >
-                      {deleting === e.id ? "삭제 중…" : "삭제"}
-                    </button>
-                  )}
+                  ) : null}
                   </div>
                 </div>
               </div>
@@ -578,6 +656,47 @@ function AccountLeaderboard() {
           <button className="btn btn-s btn-secondary" disabled={!board.has_more} onClick={() => { setBusy(true); setPage((value) => value + 1); }}>다음</button>
         </nav>
       )}
+
+      {rowMenu && (
+        <div
+          className="chat-menu lb-menu"
+          role="menu"
+          aria-label={`${rowMenu.entry.username || rowMenu.entry.nickname} 매크로 메뉴`}
+          style={{ left: rowMenu.x, top: rowMenu.y }}
+          onContextMenu={(event) => event.preventDefault()}
+          onKeyDown={(event) => {
+            if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+            event.preventDefault();
+            const buttons = [...event.currentTarget.querySelectorAll("button")];
+            const at = buttons.indexOf(document.activeElement);
+            buttons[(at + (event.key === "ArrowDown" ? 1 : buttons.length - 1)) % buttons.length]?.focus();
+          }}
+        >
+          {rowMenuItems(rowMenu.entry).map((action) => (
+            <button
+              key={action}
+              type="button"
+              role="menuitem"
+              className={action === "delete" ? "is-danger" : undefined}
+              onClick={() => runRowMenu(action)}
+            >
+              {action === "copy" ? <CopyIcon /> : action === "edit" ? <EditIcon /> : <TrashIcon />}
+              {action === "copy" ? "빌더로 복사" : action === "edit" ? (rowMenu.entry.is_owner ? "수정" : "수정 (비밀번호 확인)") : "삭제"}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <ConfirmDialog
+        open={!!confirmDelete}
+        title="이 매크로를 삭제할까요?"
+        description="리더보드에서 내려가고 되돌릴 수 없어요."
+        confirmLabel={deleting ? "삭제 중…" : "삭제"}
+        tone="danger"
+        busy={!!deleting}
+        onCancel={() => setConfirmDelete(null)}
+        onConfirm={async () => { const entry = confirmDelete; await remove(entry); setConfirmDelete(null); }}
+      />
 
       {modal && (
         <RegisterMacroModal

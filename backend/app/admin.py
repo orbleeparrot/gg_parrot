@@ -109,7 +109,8 @@ def _shift_day(day: str, offset: int) -> str:
 
 
 def _days_back(days: int) -> list[str]:
-    today = datetime.now(timezone.utc).astimezone(_KST).date()
+    # 오늘은 _today_kst() 하나에서만 읽는다 — 캐시 키·집계 창이 서로 다른 '오늘'을 보지 않게.
+    today = datetime.strptime(_today_kst(), "%Y-%m-%d").date()
     return [(today - timedelta(days=offset)).strftime("%Y-%m-%d") for offset in range(days - 1, -1, -1)]
 
 

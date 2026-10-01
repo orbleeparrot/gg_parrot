@@ -110,3 +110,42 @@
   .leaderboard-page .lb-unlock { color: rgb(var(--c-brand-line)); }
   .leaderboard-page .lb-actions button:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
 }
+
+/* 768px 이상(마우스) · 1100px 이상(터치 포함) — 예전 6열 표는 눌려 전략이 'QNT USD…' 로 잘리고
+   수익률 칸에 상태 캡션이 겹쳐 행 높이가 76~139px 로 들쭉날쭉했다(2026-10-01).
+   넓은 화면도 같은 원칙으로, 행을 넉넉한 세 줄로 고정한다: 이름·배지·등록 / 전략 / 상태. 각 줄은 한 줄(넘치면 말줄임)이라 모든 행 높이가 같고,
+   수익률(22px)과 반응은 세 줄 전체의 세로 가운데에 홀로 선다. */
+@media (min-width: 768px) and (pointer: fine), (min-width: 1100px) {
+  .leaderboard-page .lb-board {
+    --lb-return-gap: 0px;
+    --lb-columns: 32px 36px minmax(0, 1fr) minmax(112px, auto) 120px;
+    --lb-areas: "rank coin name return actions" "rank coin summary return actions" "rank coin state return actions";
+  }
+  .leaderboard-page .lb-row { column-gap: 16px; row-gap: 4px; padding-block: 18px; align-items: center; }
+  .leaderboard-page .lb-row-head { grid-template-areas: "rank coin name return actions"; grid-template-rows: auto; }
+  .leaderboard-page .lb-row-head .lb-col-summary { display: none; }
+  .leaderboard-page .lb-row-head .lb-col-return { padding-right: 0; }
+  .leaderboard-page .lb-rank,
+  .leaderboard-page .lb-coin,
+  .leaderboard-page .lb-actions { align-self: center; }
+  .leaderboard-page .lb-rank { font-size: 22px; }
+
+  /* 1줄: 이름 · 배지 · 등록 — 한 줄 */
+  .leaderboard-page .lb-name { display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; }
+  .leaderboard-page .lb-name-line { flex-wrap: nowrap; min-width: 0; overflow: hidden; }
+  .leaderboard-page .lb-name .lb-title { flex: 0 1 auto; min-width: 0; font-size: 17px; }
+  .leaderboard-page .lb-name .lb-meta { flex: none; margin: 0; white-space: nowrap; font-size: 12px; }
+  .leaderboard-page .lb-name .lb-meta::before { content: "·"; margin-right: 6px; color: rgb(var(--c-slate-400)); }
+
+  /* 2줄: 전략 — 한 줄 말줄임 */
+  .leaderboard-page .lb-entry-details { display: contents; }
+  .leaderboard-page .lb-summary { grid-area: summary; display: block; min-width: 0; -webkit-line-clamp: unset; overflow: hidden; }
+  .leaderboard-page .lb-summary .lb-strategy-facts { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* 수익률은 숫자만, 상태 캡션은 3줄로 */
+  .leaderboard-page .lb-return { display: contents; }
+  .leaderboard-page .lb-return-value { grid-area: return; justify-self: end; align-self: center; display: inline-flex; align-items: center; font-size: 22px; line-height: 1.2; font-weight: 800; letter-spacing: -.02em; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .leaderboard-page .lb-state { grid-area: state; min-width: 0; max-width: none; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; line-height: 1.5; }
+
+  .leaderboard-page .lb-actions { justify-content: flex-end; flex-wrap: nowrap; }
+}

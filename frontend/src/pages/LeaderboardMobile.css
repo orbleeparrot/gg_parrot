@@ -111,11 +111,11 @@
   .leaderboard-page .lb-actions button:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
 }
 
-/* 768px 이상(마우스) · 1100px 이상(터치 포함) — 예전 6열 표는 눌려 전략이 'QNT USD…' 로 잘리고
+/* 768~1099px(마우스) — 원래부터 전략 열이 없는 구간. 예전엔 수익률 칸에 전략이 'QNT USD…' 로 잘리고
    수익률 칸에 상태 캡션이 겹쳐 행 높이가 76~139px 로 들쭉날쭉했다(2026-10-01).
-   넓은 화면도 같은 원칙으로, 행을 넉넉한 세 줄로 고정한다: 이름·배지·등록 / 전략 / 상태. 각 줄은 한 줄(넘치면 말줄임)이라 모든 행 높이가 같고,
+   행을 넉넉한 세 줄로 고정한다: 이름·배지·등록 / 전략 / 상태. 각 줄은 한 줄(넘치면 말줄임)이라 모든 행 높이가 같고,
    수익률(22px)과 반응은 세 줄 전체의 세로 가운데에 홀로 선다. */
-@media (min-width: 768px) and (pointer: fine), (min-width: 1100px) {
+@media (min-width: 768px) and (max-width: 1099px) and (pointer: fine) {
   .leaderboard-page .lb-board {
     --lb-return-gap: 0px;
     --lb-columns: 32px 36px minmax(0, 1fr) minmax(112px, auto) 120px;
@@ -148,4 +148,19 @@
   .leaderboard-page .lb-state { grid-area: state; min-width: 0; max-width: none; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; line-height: 1.5; }
 
   .leaderboard-page .lb-actions { justify-content: flex-end; flex-wrap: nowrap; }
+}
+
+/* 1100px 이상은 전략 열이 있는 표 그대로. 1100~1399px 에선 전략 열이 좁아 'QNT USD…' 로 잘렸다 —
+   열은 두고 전략을 두 줄까지 접어 행 높이로 받는다(2026-10-02). */
+@media (min-width: 1100px) and (max-width: 1399px) {
+  /* 반응 칸은 복사 아이콘이 우클릭 메뉴로 빠져 좋아요·싫어요 두 개만 — 196 → 128px.
+     수익률 칸은 상태 캡션이 두 줄로 접히도록 176px. 남는 폭이 전략 열로 간다. */
+  .leaderboard-page .lb-board {
+    --lb-return-gap: 12px;
+    --lb-columns: 28px 36px minmax(180px, 1fr) minmax(0, 1.3fr) calc(176px + var(--lb-return-gap)) 128px;
+  }
+  .leaderboard-page .lb-summary { align-self: center; }
+  .leaderboard-page .lb-summary .lb-strategy-facts {
+    white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  }
 }

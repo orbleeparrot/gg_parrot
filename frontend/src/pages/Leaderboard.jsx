@@ -596,7 +596,14 @@ function AccountLeaderboard() {
                     {r.text}
                     {r.live ? <i className="lb-live-dot" aria-hidden="true" title={LIVE_TITLE} /> : null}
                   </span>
-                  {line ? <span className={`lb-state is-${line.tone}`} title={stateHelp(e, nowMs)}>{line.text}</span> : null}
+                  {line ? (
+                    <span className={`lb-state is-${line.tone}`} title={stateHelp(e, nowMs)}>
+                      {/* ' · ' 로 나눈 조각 안에서는 줄을 바꾸지 않는다 — '거래 / 2회' 처럼 말이 쪼개지지 않게. */}
+                      {line.text.split(" · ").map((part, index, parts) => (
+                        <Fragment key={index}>{index ? " " : null}<span className="lb-state-part">{part}{index < parts.length - 1 ? " ·" : null}</span></Fragment>
+                      ))}
+                    </span>
+                  ) : null}
                 </div>
                 <div className="lb-actions" role="cell">
                   <div className="lb-reactions" role="group" aria-label="매크로 반응">

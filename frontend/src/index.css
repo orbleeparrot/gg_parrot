@@ -8962,6 +8962,7 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 .lb-state-legend dd { margin: 0 0 6px; }
 .lb-state-legend dd:last-child { margin-bottom: 0; }
 .lb-col-return:hover .lb-state-legend, .lb-col-return:focus-within .lb-state-legend { display: block; }
+.lb-state-part { white-space: nowrap; }
 .lb-state.is-live { color: rgb(var(--c-indigo-700)); }
 .lb-state.is-good { color: rgb(var(--c-green-700)); }
 .lb-state.is-bad { color: rgb(var(--c-red-700)); }

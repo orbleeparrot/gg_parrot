@@ -36,7 +36,8 @@
   .leaderboard-page .lb-board {
     --lb-return-gap: 0px;
     --lb-columns: 28px 32px minmax(0, 1fr) auto;
-    --lb-areas: "rank coin name return" "rank . meta meta" "rank . details details" "rank . state actions";
+    /* 상태 캡션은 한 줄 전체 폭 — 반응과 나눠 쓰면 좁아져 '보유 중 · / 진입가 · / 거래' 세 줄로 끊겼다. */
+    --lb-areas: "rank coin name return" "rank . meta meta" "rank . details details" "rank . state state" "rank . actions actions";
     padding-bottom: 0;
   }
   .leaderboard-page .lb-row { column-gap: 10px; row-gap: 6px; padding-block: 18px; align-items: center; }
@@ -79,7 +80,7 @@
   .leaderboard-page .lb-summary.is-locked .lb-summary-text { display: none; }
   .leaderboard-page .lb-mobile-locked { display: inline; }
 
-  .leaderboard-page .lb-actions { grid-area: actions; justify-self: end; justify-content: flex-end; align-items: center; gap: 8px; }
+  .leaderboard-page .lb-actions { grid-area: actions; justify-self: start; justify-content: flex-start; align-items: center; gap: 8px; margin-left: -4px; }
   .leaderboard-page .lb-reactions,
   .leaderboard-page .lb-command-actions { display: flex; align-items: center; flex-wrap: nowrap; gap: 8px; min-width: 0; max-width: 100%; }
   .leaderboard-page .lb-command-actions { justify-content: flex-end; margin-left: auto; }

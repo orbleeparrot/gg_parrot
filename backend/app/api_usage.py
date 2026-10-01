@@ -482,9 +482,10 @@ def costs_report(db, *, months: int = MONTHS_DEFAULT, now_ms: Optional[int] = No
     }]
     openai_month = provider_months.get((PROVIDER_OPENAI, current_month), bucket())
     openai_last = provider_months.get((PROVIDER_OPENAI, last_month), bucket())
-    from .ai_runtime import default_model
+    from .ai_runtime import REASONING_EFFORT, default_model
     providers.insert(0, {
-        "provider": PROVIDER_OPENAI, "label": f"OpenAI · {default_model()} (max)",
+        # 추론 수준은 설정값(OPENAI_REASONING_EFFORT)을 그대로 보여준다 — 글자로 박아 두면 바뀐 걸 못 따라간다.
+        "provider": PROVIDER_OPENAI, "label": f"OpenAI · {default_model()} ({REASONING_EFFORT})",
         "method": "estimate", "calls": openai_month["calls"], "failures": openai_month["failures"],
         "input_tokens": openai_month["input_tokens"], "output_tokens": openai_month["output_tokens"],
         "month_usd": _usd(openai_month["cost_micro_usd"]), "last_month_usd": _usd(openai_last["cost_micro_usd"]),

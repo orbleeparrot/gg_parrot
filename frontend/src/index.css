@@ -8902,7 +8902,8 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   border-radius: 12px; border-bottom-color: transparent;
   box-shadow: inset 0 0 0 1.5px rgb(var(--lb-mine-line));
 }
-.lb-row.is-mine.is-registered { box-shadow: inset 0 0 0 1.5px rgb(var(--lb-mine-line)), inset 3px 0 0 rgb(var(--c-brand)); }
+/* 방금 등록한 행도 내 매크로다 — 노란 왼쪽 줄을 외곽선 위에 겹치지 않는다(2026-10-02). */
+.lb-row.is-mine.is-registered { box-shadow: inset 0 0 0 1.5px rgb(var(--lb-mine-line)); }
 .lb-row { -webkit-touch-callout: none; }
 .lb-menu { min-width: 176px; }
 .lb-menu button { gap: 10px; }

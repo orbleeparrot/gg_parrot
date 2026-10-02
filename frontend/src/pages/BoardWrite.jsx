@@ -12,6 +12,9 @@ const MAX_IMAGES = 10;
 // 저장은 글자 + `[사진n]` 자리 표시로 하고, 글 보기가 그 자리에 사진을 끼운다.
 function Composer({ initial, onSaved, onCancel }) {
   const [title, setTitle] = useState(initial?.title || "");
+  // [공지] — 관리자에게만 보인다. 공지는 목록의 모든 쪽 맨 위에 고정된다.
+  const isAdmin = !!useAuth().user?.is_admin;
+  const [notice, setNotice] = useState(!!initial?.isNotice);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const editor = useRef(null);
@@ -23,8 +26,8 @@ function Composer({ initial, onSaved, onCancel }) {
     setBusy(true);
     try {
       const post = initial?.id
-        ? await api.boardUpdate(initial.id, { title: title.trim(), body: html, bodyFormat: "html", images: files })
-        : await api.boardCreate({ title: title.trim(), body: html, bodyFormat: "html", images: files });
+        ? await api.boardUpdate(initial.id, { title: title.trim(), body: html, bodyFormat: "html", images: files, ...(isAdmin ? { isNotice: notice } : {}) })
+        : await api.boardCreate({ title: title.trim(), body: html, bodyFormat: "html", images: files, isNotice: isAdmin && notice });
       onSaved(post);
     } catch (e) {
       setErr(String(e.message || e));
@@ -35,6 +38,13 @@ function Composer({ initial, onSaved, onCancel }) {
 
   return (
     <section className="board-composer" aria-label={initial?.id ? "글 수정" : "새 글 쓰기"}>
+      {isAdmin ? (
+        <label className="board-notice-toggle">
+          <input type="checkbox" checked={notice} onChange={(e) => setNotice(e.target.checked)} />
+          <span className="board-notice-tag">공지</span>
+          공지로 올리기 — 목록의 모든 쪽 맨 위에 고정돼요
+        </label>
+      ) : null}
       <label className="board-field-label">
         제목
         <input
@@ -92,7 +102,7 @@ export default function BoardWrite() {
         navigate(`/board/${id}`, { replace: true }); // 남의 글은 보기로
         return;
       }
-      setInitial({ id: post.id, title: post.title, bodyHtml: post.body_html || "" });
+      setInitial({ id: post.id, title: post.title, bodyHtml: post.body_html || "", isNotice: !!post.is_notice });
     }).catch((e) => { if (alive) setLoadError(String(e.message || e)); });
     return () => { alive = false; };
   }, [editing, id, navigate, token, user]);

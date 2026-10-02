@@ -320,19 +320,21 @@ export const api = {
   boardVote: (id, value) => boardMutation(req(`/api/board/posts/${id}/vote`, { method: "POST", body: JSON.stringify({ value }) })),
   boardGet: (id, options = {}) => req(`/api/board/posts/${id}`, options).then(post => { boardLists.updatePost(post); return post; }),
   // 글 작성(로그인 필요) — title/body + 선택 이미지(File). multipart 전송.
-  boardCreate: ({ title, body, bodyFormat = "text", images = [] }) => {
+  boardCreate: ({ title, body, bodyFormat = "text", images = [], isNotice = false }) => {
     const fd = new FormData();
     fd.append("title", title);
     fd.append("body", body || "");
     fd.append("body_format", bodyFormat);
+    if (isNotice) fd.append("is_notice", "true");
     for (const file of images) fd.append("images", file);
     return boardMutation(reqForm("/api/board/posts", fd));
   },
-  boardUpdate: (id, { title, body, bodyFormat = "text", keepImageIds = [], images = [] }) => {
+  boardUpdate: (id, { title, body, bodyFormat = "text", keepImageIds = [], images = [], isNotice }) => {
     const fd = new FormData();
     fd.append("title", title);
     fd.append("body", body || "");
     fd.append("body_format", bodyFormat);
+    if (typeof isNotice === "boolean") fd.append("is_notice", isNotice ? "true" : "false");
     fd.append("keep_image_ids", keepImageIds.join(","));
     for (const file of images) fd.append("images", file);
     return boardMutation(reqForm(`/api/board/posts/${id}`, fd, { method: "PUT" }));

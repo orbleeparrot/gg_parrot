@@ -22,7 +22,7 @@ from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from typing import Deque, Optional
 
-from sqlalchemy import delete, func, literal, or_, update
+from sqlalchemy import and_, case, delete, func, literal, or_, update
 from sqlalchemy.orm import defer
 from sqlmodel import select
 
@@ -265,6 +265,7 @@ def _post_list_view(row: BoardPost, comment_count: int, avatar_url: str | None =
         "views": int(row.views or 0),
         "likes": int(row.likes or 0),
         "dislikes": int(row.dislikes or 0),
+        "is_notice": bool(getattr(row, "is_notice", False)),
         "created_kst": _kst_display(row.created_ms),
         "created_ms": row.created_ms,
     }
@@ -288,6 +289,7 @@ def _post_detail_view(row: BoardPost, comments: list[dict], avatar_url: str | No
         "likes": int(row.likes or 0),
         "dislikes": int(row.dislikes or 0),
         "my_vote": my_vote,
+        "is_notice": bool(getattr(row, "is_notice", False)),
         "body_format": row.body_format or "text",
         "body_html": (row.body or "") if row.body_format == "html" else _legacy_html(row.body or "", views),
         "created_kst": _kst_display(row.created_ms),
@@ -296,13 +298,19 @@ def _post_detail_view(row: BoardPost, comments: list[dict], avatar_url: str | No
     }
 
 
+NOTICE_LIMIT = 10  # 목록 위에 고정하는 공지 최대 개수(최신순)
+NOTICE_ADMIN_ONLY = "공지는 관리자만 올릴 수 있어요."
+
+
 def create_post(user: User, title: str, body: str, images: list[tuple[bytes, str]] | None = None,
-                body_format: str = "text", db=None) -> dict:
+                body_format: str = "text", db=None, is_notice: bool = False) -> dict:
     """글 작성. ``images`` 는 validate_image 를 거친 (bytes, mime) 목록 — 순서대로 붙는다.
 
     ``body_format="html"`` 이면 본문은 편집기 HTML — 새 사진 자리(`data-key="new:N"`)에 주소를 붙인 뒤 정제해 저장한다.
     """
     assert_can_write(user)  # 차단된 계정은 발언만 막는다(읽기는 그대로)
+    if is_notice and not getattr(user, "is_admin", False):
+        raise PermissionError(NOTICE_ADMIN_ONLY)
     title = (title or "").strip()
     if not title:
         raise ValueError("제목을 입력해 주세요.")
@@ -325,6 +333,7 @@ def create_post(user: User, title: str, body: str, images: list[tuple[bytes, str
         body_format="html" if is_html else "",
         image_mime="",
         image_data=None,
+        is_notice=bool(is_notice),
         created_at=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
         created_ms=now_ms,
     )
@@ -407,36 +416,49 @@ def list_posts(page: int = 1, size: int = PAGE_SIZE_DEFAULT, sort: str = "new", 
             BoardPost.dislikes,
             ((func.coalesce(func.length(BoardPost.image_data), 0) > 0) | (func.coalesce(image_counts.c.n, 0) > 0)).label("has_image"),
             func.coalesce(comment_counts.c.n, 0).label("comment_count"),
-            func.count().over().label("total"),
         )
         .outerjoin(comment_counts, comment_counts.c.post_id == BoardPost.id)
         .outerjoin(image_counts, image_counts.c.post_id == BoardPost.id)
         .outerjoin(UserAvatar, UserAvatar.user_id == BoardPost.author_user_id)
     )
+    # 공지와 일반 글을 **한 쿼리**로 — is_notice 로 나눈 창 함수가 각자 순번·개수를 매긴다.
+    # 공지는 정렬·검색과 상관없이 최신순 NOTICE_LIMIT 건, 일반 글은 고른 정렬의 이 쪽만 남긴다.
     if q:
-        statement = statement.where(search_clause())
+        statement = statement.where(or_(BoardPost.is_notice == True, search_clause()))  # noqa: E712
     order = {
         "new": (BoardPost.created_ms.desc(),),
         "likes": (BoardPost.likes.desc(), BoardPost.created_ms.desc()),
         "views": (BoardPost.views.desc(), BoardPost.created_ms.desc()),
         "comments": (func.coalesce(comment_counts.c.n, 0).desc(), BoardPost.created_ms.desc()),
     }[sort]
-    statement = statement.order_by(*order).offset((page - 1) * size).limit(size)
+    notice_first = case((BoardPost.is_notice == True, BoardPost.created_ms), else_=0).desc()  # noqa: E712
+    ranked = statement.add_columns(
+        BoardPost.is_notice.label("is_notice"),
+        func.row_number().over(partition_by=BoardPost.is_notice, order_by=(notice_first, *order)).label("rn"),
+        func.count().over(partition_by=BoardPost.is_notice).label("part_total"),
+    ).subquery()
+    start = (page - 1) * size
+    final = select(*ranked.c).where(or_(
+        and_(ranked.c.is_notice == True, ranked.c.rn <= NOTICE_LIMIT),  # noqa: E712
+        and_(ranked.c.is_notice == False, ranked.c.rn > start, ranked.c.rn <= start + size),  # noqa: E712
+    )).order_by(ranked.c.is_notice.desc(), ranked.c.rn)
     with get_session() as db:
         # This public, read-only query does not need BEGIN/ROLLBACK round trips.
         # SQLAlchemy restores the connection's normal isolation on pool return;
         # authenticated writes continue to use ordinary transactions.
         db.connection(execution_options={"isolation_level": "AUTOCOMMIT"})
-        rows = db.exec(statement).all()
-        if rows:
-            total = int(rows[0].total)
+        rows = db.exec(final).all()
+        regular = [r for r in rows if not r.is_notice]
+        if regular:
+            total = int(regular[0].part_total)
         else:
-            count_stmt = select(func.count(BoardPost.id))
+            count_stmt = select(func.count(BoardPost.id)).where(BoardPost.is_notice == False)  # noqa: E712
             if q:
                 count_stmt = count_stmt.where(search_clause())
             total = int(db.exec(count_stmt).one() or 0)
-        items = [
-            {
+
+        def _row(r, notice=False):
+            return {
                 "id": r.id,
                 "title": r.title,
                 "snippet": _snippet(r.body or "", r.body_format or ""),
@@ -448,14 +470,16 @@ def list_posts(page: int = 1, size: int = PAGE_SIZE_DEFAULT, sort: str = "new", 
                 "likes": int(r.likes or 0),
                 "dislikes": int(r.dislikes or 0),
                 "comment_count": int(r.comment_count or 0),
+                "is_notice": notice,
                 "created_kst": _kst_display(r.created_ms),
                 "created_ms": r.created_ms,
             }
-            for r in rows
-        ]
+        items = [_row(r) for r in regular]
+        notices = [_row(r, True) for r in rows if r.is_notice]
     pages = max(1, (total + size - 1) // size)
     return {
         "items": items,
+        "notices": notices,
         "sort": sort,
         "q": q,
         "field": field,
@@ -584,8 +608,8 @@ def get_post_image(post_id: int, image_id: int) -> Optional[tuple[bytes, str]]:
 
 def update_post(post_id: int, user: User, title: str, body: str,
                 keep_image_ids: list[int], new_images: list[tuple[bytes, str]] | None = None,
-                body_format: str = "text", db=None) -> Optional[dict]:
-    """작성자 본인만 수정. 새 사진은 뒤에 순서대로 붙인다.
+                body_format: str = "text", db=None, is_notice: bool | None = None) -> Optional[dict]:
+    """작성자 본인만 수정. ``is_notice`` 는 관리자만 바꿀 수 있고 None 이면 그대로 둔다. 새 사진은 뒤에 순서대로 붙인다.
 
     옛 형식은 남길 사진 id 목록(``keep_image_ids``)에 없는 사진을 지운다. HTML 형식은 **본문이 가리키는 사진이 곧 남길 사진**이라
     목록을 보지 않는다. 반환: 수정된 상세 뷰. 글이 없으면 None, 남의 글이면 PermissionError.
@@ -605,6 +629,10 @@ def update_post(post_id: int, user: User, title: str, body: str,
         row, legacy_image = found
         if row.author_user_id != user.id:
             raise PermissionError("본인이 쓴 글만 고칠 수 있어요.")
+        if is_notice is not None and bool(is_notice) != bool(row.is_notice):
+            if not getattr(user, "is_admin", False):
+                raise PermissionError(NOTICE_ADMIN_ONLY)
+            row.is_notice = bool(is_notice)
         require_clean_text(title, "제목")
         if not is_html:
             require_clean_text(body, "본문")

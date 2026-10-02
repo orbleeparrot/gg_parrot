@@ -280,7 +280,10 @@ export default function BoardPost() {
       {post ? (
         <>
           <article className="board-post-main">
-            <h1 className="board-post-title">{post.title}</h1>
+            <h1 className={`board-post-title${post.is_notice ? " is-notice" : ""}`}>
+              {post.is_notice ? <span className="board-notice-tag">공지</span> : null}
+              {post.title}
+            </h1>
             {/* 괘선 띠 — 글쓴이(사진은 눌러 크게) | N분 전 · 조회 N | 편집·삭제. 댓글 수는 아래 댓글 구획 제목에만. */}
             <div className="board-post-strip">
               <span className="board-post-author">

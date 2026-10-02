@@ -32,10 +32,8 @@ export function useMacroActions(macro) {
   const navigate = useNavigate();
   const [launching, setLaunching] = useState(false);
   const [error, setError] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
   const macroKey = JSON.stringify(macro);
-  useEffect(() => { setSaved(false); setError(""); }, [macroKey]);
+  useEffect(() => { setError(""); }, [macroKey]);
 
   // 빠른 실행 — 지금 만든 매크로를 내 라이브러리에 저장하고 실행기 연결 플로우로 바로 간다.
   // 리더보드의 '빠른 실행에 사용'과 같은 길이라 실행 화면은 하나만 유지한다.
@@ -59,22 +57,9 @@ export function useMacroActions(macro) {
     }
   }
 
-  async function saveMacro() {
-    if (!isLoggedIn()) {
-      navigate("/login?next=%2Fbuilder");
-      return;
-    }
-    setError(""); setSaving(true);
-    try {
-      await api.saveMyMacro(macro, `${exchangeLabel(macro.exchange)} · ${macro.symbol || "매크로"}`);
-      setSaved(true);
-    } catch (reason) { setError(String(reason.message || reason)); }
-    finally { setSaving(false); }
-  }
-
   async function downloadMacro() {
     if (isDomestic(macro.exchange)) {
-      setError("국내 거래소 실거래 실행기 파일은 아직 지원하지 않아요. 내 매크로에 저장해 주세요.");
+      setError("국내 거래소 실거래 실행기 파일은 아직 지원하지 않아요.");
       return;
     }
     setError("");
@@ -85,11 +70,11 @@ export function useMacroActions(macro) {
     }
   }
 
-  return { quickRun, downloadMacro, saveMacro, launching, saving, saved, error };
+  return { quickRun, downloadMacro, launching, error };
 }
 
 export function PaperNextSteps({ macro, valErr, primary = "quickRun", onRegister = null, canRegister = true, result = null, paperStatus = null }) {
-  const { quickRun, downloadMacro, saveMacro, launching, saving, saved, error } = useMacroActions(macro);
+  const { quickRun, downloadMacro, launching, error } = useMacroActions(macro);
   const registerFirst = primary === "register";
   const domestic = isDomestic(macro.exchange);
   const paperRet = paperStatus?.current_return;
@@ -158,7 +143,6 @@ export function PaperNextSteps({ macro, valErr, primary = "quickRun", onRegister
         </div></>}
         {error && <div className="t-small text-red-600" role="alert">오류: {error}</div>}
         <div className="flex items-center gap-3 flex-wrap">
-          {domestic && <button onClick={saveMacro} disabled={!!valErr || saving || saved} className="btn btn-l btn-primary">{saving ? "저장 중…" : saved ? "내 매크로에 저장됨" : "내 매크로에 저장"}</button>}
           <button onClick={quickRun} disabled={!!valErr || launching || domestic} title={domestic ? "국내 거래소 실행기 직접 연결 미지원" : undefined} className={"btn btn-l " + (registerFirst || domestic ? "btn-secondary" : "btn-primary")}>
             {launching ? "실행 준비 중…" : "빠른 실행"}
           </button>

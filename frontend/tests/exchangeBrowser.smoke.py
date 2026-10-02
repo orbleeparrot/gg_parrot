@@ -257,6 +257,8 @@ def main():
             run = page.get_by_role("button", name="이 조건으로 백테스트", exact=True)
             expect(run).to_be_enabled()
             run.click()
+            page.get_by_role("tab", name="매크로 등록", exact=True).click()
+            expect(page.locator(".sd-act .sd-act-t b")).to_have_text(["리더보드 등록", "빠른 실행", "매크로 파일 내려받기", "공유 링크 보기"])
             paper_tab = page.get_by_role("tab", name="페이퍼 트레이딩", exact=True)
             expect(paper_tab).to_be_enabled(timeout=10000)
             paper_tab.click()

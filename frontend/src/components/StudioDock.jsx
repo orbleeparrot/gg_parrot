@@ -467,7 +467,7 @@ function ActIcon({ name }) {
 }
 
 export function StudioOutcomes({ macro, result, perSymbol = [], valErr, strategyEntry, periodLabel, dataSource = "", symbols = [], canRegister, onRegister, onShare, shareBusy = false }) {
-  const { quickRun, downloadMacro, saveMacro, launching, saving, saved, error } = useMacroActions(macro);
+  const { quickRun, downloadMacro, launching, error } = useMacroActions(macro);
   const futures = macro.position_side === "short" || macro.leverage > 1;
   const domestic = isDomestic(macro.exchange);
   return (
@@ -485,9 +485,6 @@ export function StudioOutcomes({ macro, result, perSymbol = [], valErr, strategy
           >
             <ActIcon name="board" /><span className="sd-act-t"><b>리더보드 등록</b><small>오늘의 리더보드에 올려 다른 사람과 겨뤄요</small></span><i className="sd-act-chev" aria-hidden="true" />
           </button>
-          {domestic && <button type="button" onClick={saveMacro} disabled={!!valErr || saving || saved} className="sd-act-row">
-            <ActIcon name="download" /><span className="sd-act-t"><b>{saving ? "저장 중…" : saved ? "내 매크로에 저장됨" : "내 매크로에 저장"}</b><small>국내 거래소 설정을 라이브러리에 보관해요</small></span><i className="sd-act-chev" aria-hidden="true" />
-          </button>}
           <button type="button" onClick={quickRun} disabled={!!valErr || launching || domestic} title={domestic ? "국내 거래소 실행기 직접 연결은 아직 지원하지 않아요" : undefined} className="sd-act-row">
             <ActIcon name="run" /><span className="sd-act-t"><b>{launching ? "실행 준비 중…" : "빠른 실행"}</b><small>{domestic ? "국내 거래소 실행기 직접 연결 미지원" : "내 PC 실행기로 바로 넘겨요"}</small></span><i className="sd-act-chev" aria-hidden="true" />
           </button>

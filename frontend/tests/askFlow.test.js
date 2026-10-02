@@ -192,15 +192,17 @@ test("Binance pair shape requires a 1-to-20 character base and excludes native K
   assert.equal(reduce(domestic, { type: "chooseSymbol", symbol: "KRW-T", resolved: true }).answers.symbol, "KRW-T");
 });
 
-test("금액 입력칸은 세 자리마다 쉼표를 넣고, 값은 쉼표 없이 읽는다", async () => {
+test("금액 입력칸은 세 자리마다 쉼표 — KRW 는 정수, USDT 는 소수 둘째 자리까지", async () => {
   const { formatAmountInput, parseAmountInput, validBalance } = await import("../src/lib/askFlow.js");
-  assert.equal(formatAmountInput("1234567"), "1,234,567");
-  assert.equal(formatAmountInput("1,2345"), "12,345");
-  assert.equal(formatAmountInput("0001000"), "1,000");
-  assert.equal(formatAmountInput("1234.5678"), "1,234.5678");
-  assert.equal(formatAmountInput("12.3.4"), "12.34");
-  assert.equal(formatAmountInput(".5"), "0.5");
-  assert.equal(formatAmountInput("abc"), "");
+  assert.equal(formatAmountInput("1234567", "KRW"), "1,234,567");
+  assert.equal(formatAmountInput("1,2345", "KRW"), "12,345");
+  assert.equal(formatAmountInput("0001000", "KRW"), "1,000");
+  assert.equal(formatAmountInput("1234.56", "KRW"), "123,456");
+  assert.equal(formatAmountInput("1234.5678", "USDT"), "1,234.56");
+  assert.equal(formatAmountInput("1234.", "USDT"), "1,234.");
+  assert.equal(formatAmountInput("12.3.4", "USDT"), "12.34");
+  assert.equal(formatAmountInput(".5", "USDT"), "0.5");
+  assert.equal(formatAmountInput("abc", "USDT"), "");
   assert.equal(parseAmountInput("1,234,567"), "1234567");
   assert.ok(validBalance(parseAmountInput("100,000")));
   assert.ok(!validBalance(parseAmountInput("0")));

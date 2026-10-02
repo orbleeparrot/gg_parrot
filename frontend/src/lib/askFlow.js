@@ -12,13 +12,15 @@ export function canChooseFutures(answers) {
   return !isDomestic(answers.exchange) && answers.profile !== "stable";
 }
 
-// 금액 입력칸 — 세 자리마다 쉼표(1,000). 숫자·소수점 하나만 남기고, 소수 부분은 친 그대로 둔다.
-export function formatAmountInput(raw) {
+// 금액 입력칸 — 세 자리마다 쉼표. KRW 는 원 단위 정수(1,000,000), USDT 는 미국 달러처럼
+// 소수 둘째 자리까지(1,234.56). 숫자·소수점 하나만 남긴다.
+export function formatAmountInput(raw, quote = "USDT") {
+  const decimals = quote === "KRW" ? 0 : 2;
   const clean = String(raw ?? "").replace(/[^0-9.]/g, "");
-  const dot = clean.indexOf(".");
-  const intPart = (dot < 0 ? clean : clean.slice(0, dot)).replace(/^0+(?=\d)/, "");
+  const dot = decimals ? clean.indexOf(".") : -1;
+  const intPart = (dot < 0 ? clean.replace(/\./g, "") : clean.slice(0, dot)).replace(/^0+(?=\d)/, "");
   const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-  return dot < 0 ? grouped : `${grouped || "0"}.${clean.slice(dot + 1).replace(/\./g, "")}`;
+  return dot < 0 ? grouped : `${grouped || "0"}.${clean.slice(dot + 1).replace(/\./g, "").slice(0, decimals)}`;
 }
 export const parseAmountInput = (text) => String(text ?? "").replace(/,/g, "");
 

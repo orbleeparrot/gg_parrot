@@ -105,14 +105,14 @@ function BalanceInput({ exchange, disabled, onSubmit }) {
       onSubmit(Number(amount));
     }}>
       <div className="ask-balance-field">
-        <input id="ask-manual-balance" ref={inputRef} className="input num" type="text" inputMode="decimal" autoComplete="off" value={value}
+        <input id="ask-manual-balance" ref={inputRef} className="input num" type="text" inputMode={quote === "KRW" ? "numeric" : "decimal"} autoComplete="off" value={value}
           aria-label={`${exchangeLabel(exchange)} 사용할 금액 (${quote})`}
           aria-describedby="ask-balance-note" aria-invalid={!!error} disabled={disabled} autoFocus
           onChange={(event) => {
             const { value: raw, selectionStart } = event.target;
             caret.current = raw.slice(0, selectionStart ?? raw.length).replace(/[^0-9.]/g, "").length;
-            setValue(formatAmountInput(raw)); setError("");
-          }} placeholder={quote === "KRW" ? "예: 100,000" : "예: 100"} />
+            setValue(formatAmountInput(raw, quote)); setError("");
+          }} placeholder={quote === "KRW" ? "예: 100,000" : "예: 1,000.00"} />
         <span>{quote}</span>
       </div>
       <p id="ask-balance-note" className="ask-caption">{BALANCE_NOTE}</p>

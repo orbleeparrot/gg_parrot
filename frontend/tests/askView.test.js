@@ -38,7 +38,7 @@ test("whyPoints: ahead of hold is positive; other templates and unknown sentence
 });
 
 test("whyHeadline drops the leading parrot emoji only", () => {
-  assert.equal(whyHeadline("🦜 벌긴 벌었는데… 그냥 들고 있는 게 나았어 (껄무새.jpg)"), "벌긴 벌었는데… 그냥 들고 있는 게 나았어 (껄무새.jpg)");
+  assert.equal(whyHeadline("🦜 벌긴 벌었는데… 그냥 들고 있는 게 나았어"), "벌긴 벌었는데… 그냥 들고 있는 게 나았어");
   assert.equal(whyHeadline("플러스로 마감했어"), "플러스로 마감했어");
 });
 

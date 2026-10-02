@@ -11,6 +11,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlmodel import Session, select
 
 from . import avatars
+from . import paper as paper_mod
 from . import rooms as rooms_mod
 from .auth import assert_can_write
 from .db import ChatMessage, ChatReadState, ChatRoomMember, LeaderboardEntry, User, UserAvatar, get_session
@@ -280,9 +281,14 @@ def _macro_cards(db, texts: list[str], viewer_user_id: int | None) -> dict[int, 
     rows = db.exec(select(
         LeaderboardEntry.id, LeaderboardEntry.owner_user_id, LeaderboardEntry.symbol,
         LeaderboardEntry.username, LeaderboardEntry.nickname, LeaderboardEntry.is_ai,
-        LeaderboardEntry.human_summary,
+        LeaderboardEntry.human_summary, LeaderboardEntry.paper_session_id,
     ).where(LeaderboardEntry.id.in_(ids))).all()
     unlocked = _unlocked_ids_for(db, viewer_user_id, [row.id for row in rows])
+    # 수익률은 리더보드에 누구에게나 공개된 값이라 잠긴 매크로도 보여준다. 세션들을 한 번에 읽는다.
+    try:
+        statuses = paper_mod.get_statuses([row.paper_session_id for row in rows], db=db)
+    except Exception:
+        statuses = {}
     cards = {}
     for row in rows:
         has_owner = row.owner_user_id is not None
@@ -295,6 +301,7 @@ def _macro_cards(db, texts: list[str], viewer_user_id: int | None) -> dict[int, 
             "is_ai": bool(row.is_ai),
             "locked": not visible,
             "human_summary": row.human_summary if visible else "",
+            "return_pct": (statuses.get(row.paper_session_id) or {}).get("current_return"),
         }
     return cards
 

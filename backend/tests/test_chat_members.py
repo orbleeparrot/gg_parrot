@@ -311,6 +311,8 @@ def test_macro_mention_becomes_a_card_and_hides_locked_strategy(members):
     assert cards[0]["locked"] is False and cards[0]["human_summary"] == "1일봉 · 20일선 돌파"
     assert cards[0]["symbol"] == "BTCUSDT" and cards[0]["username"] == "tester"
     assert cards[1]["locked"] is True and cards[1]["human_summary"] == ""  # 잠긴 전략은 새지 않는다
+    # 수익률은 리더보드에 공개된 값 — 잠긴 카드에도 자리가 있다(세션이 없으면 None).
+    assert all("return_pct" in card for card in cards)
 
     listed = client().get("/api/chat", headers=headers(author)).json()["items"][-1]
     assert [c["entry_id"] for c in listed["macros"]] == [free_id, owned_id]

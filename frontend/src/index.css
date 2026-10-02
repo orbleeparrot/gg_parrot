@@ -488,6 +488,9 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   background: rgb(var(--c-surface));
 }
 .agent-macro-dock > * { min-height: 82px; padding: 10px 14px; }
+/* 실행 중이 있을 때 실행 바 맨 앞에 '실행 중 n · 종료 기록 n' 전환, 종료 기록에서 연 세션은 '종료 기록' 돌아가기. */
+.agent-macro-dock.has-lead { grid-template-columns: auto minmax(220px, 1fr) auto; }
+.agent-macro-dock-lead { display: flex; align-items: center; }
 .agent-macro-dock > * + * { border-left: 1px solid rgb(var(--c-slate-200)); }
 .agent-macro-dock-picker { display: grid; min-width: 0; align-content: center; gap: 5px; color: rgb(var(--c-slate-500)); font-size: 13px; font-weight: 700; }
 /* 셀렉트는 내용에 맞는 폭(최대 320px)으로, 옆에 44px '+' 아이콘 버튼. 줄 전체를 늘리지 않는다. */
@@ -869,6 +872,8 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 
 @media (max-width: 900px) {
   .agent-workspace { grid-template-rows: auto 44px minmax(0, 1fr); }
+  .agent-macro-dock.has-lead { grid-template-columns: minmax(0, 1fr) auto; }
+  .agent-macro-dock.has-lead > .agent-macro-dock-lead { grid-column: 1 / -1; min-height: 56px; border-left: 0; border-bottom: 1px solid rgb(var(--c-slate-200)); }
   .agent-workspace-tabs {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));

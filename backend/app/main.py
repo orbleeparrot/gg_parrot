@@ -2246,6 +2246,18 @@ def runner_session_events(
     return runner_mod.list_events(user.id, session_id, limit=limit)
 
 
+class RunnerPinRequest(BaseModel):
+    pinned: bool
+
+
+@app.put("/api/me/runner/sessions/{session_id}/pin")
+def runner_pin_session(
+    session_id: int, req: RunnerPinRequest, user: User = Depends(auth_mod.current_user)
+) -> dict:
+    """종료 기록 보관 켜기/끄기 — 보관한 기록은 30건·30일 자동 정리에서 빠진다(10건까지)."""
+    return runner_mod.set_pinned(user.id, session_id, req.pinned)
+
+
 @app.delete("/api/me/runner/sessions/{session_id}")
 def runner_delete_session(
     session_id: int, user: User = Depends(auth_mod.current_user)

@@ -432,6 +432,8 @@ class RunSession(SQLModel, table=True):
     started_at: str
     last_heartbeat_at: str = ""
     stopped_at: Optional[str] = None
+    # 사용자가 '보관'한 종료 기록 — 30건·30일 자동 정리에서 빠진다(계정당 10건까지, runner.PIN_LIMIT).
+    pinned: bool = False
     # 시작 요청에 실린 실행기 버전. v6 이하 exe 는 보내지 않아 빈 문자열로 남는다.
     runner_version: str = ""
     # 매크로 출처 — web | file_verified | file_modified | file_unsigned (macro_signing 참고).
@@ -1145,6 +1147,7 @@ def _migrate() -> None:
             "final_unrealized_pct": "ALTER TABLE runsession ADD COLUMN final_unrealized_pct REAL DEFAULT 0",
             "state_json": "ALTER TABLE runsession ADD COLUMN state_json TEXT DEFAULT ''",
             "invested_usdt": "ALTER TABLE runsession ADD COLUMN invested_usdt REAL DEFAULT 0",
+            "pinned": "ALTER TABLE runsession ADD COLUMN pinned BOOLEAN DEFAULT FALSE",
         },
         "tickernewssnapshot": {
             "claim_token": "ALTER TABLE tickernewssnapshot ADD COLUMN claim_token TEXT DEFAULT ''",
@@ -1303,6 +1306,7 @@ _PG_ADDED_COLUMNS = {
         "final_unrealized_pct": "DOUBLE PRECISION NOT NULL DEFAULT 0",
         "state_json": "TEXT DEFAULT ''",
         "invested_usdt": "DOUBLE PRECISION NOT NULL DEFAULT 0",
+        "pinned": "BOOLEAN NOT NULL DEFAULT FALSE",
     },
     "tickernewssnapshot": {
         "claim_token": "TEXT DEFAULT ''", "last_observed_at": "TEXT DEFAULT ''",

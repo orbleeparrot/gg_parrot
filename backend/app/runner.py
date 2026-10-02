@@ -35,7 +35,7 @@ from sqlmodel import select
 from . import macro_signing
 from . import notifications as notifications_mod
 from . import runner_engine  # runner_engine 은 runner 를 함수 안에서 늦게 import 한다 — 순환 없음
-from .db import RunnerKey, RunnerLaunchTicket, RunSession, RunSessionEvent, User, UserMacro, get_session
+from .db import RunnerCommand, RunnerKey, RunnerLaunchTicket, RunSession, RunSessionEvent, User, UserMacro, get_session
 from .engine import Macro, RuleType
 
 _KST = timezone(timedelta(hours=9))
@@ -735,6 +735,12 @@ def mark_stopped(
                       "symbol": row.symbol, "realized_pnl": row.realized_pnl},
             )
         db.commit()
+        if not already_final:
+            # 기록이 하나 늘어난 순간에만 정리한다 — 몇 초마다 부르는 목록 조회는 쿼리 한 번으로 둔다.
+            try:
+                prune_ended_sessions(user.id, db)
+            except Exception:
+                db.rollback()
     notify_sessions_changed(user.id)
     # v8+ 라면 서버 측 드라이버도 내린다(구버전·이미 없는 세션이면 runner_engine 이 무시한다).
     runner_engine.schedule_stop(session_id)
@@ -926,21 +932,69 @@ def _session_view(row: RunSession) -> dict:
         **session_returns(row),
         "note": row.note,
         "started_at": row.started_at,
+        "stopped_at": row.stopped_at or "",
+        "pinned": bool(getattr(row, "pinned", False)),
         "started_kst": _kst_label(row.started_at),
         "heartbeat_kst": _kst_label(row.last_heartbeat_at),
         "stopped_kst": _kst_label(row.stopped_at or ""),
     }
 
 
-def list_sessions(user_id: int, limit: int = 20, db=None) -> dict:
-    """All active sessions plus up to ``limit`` recently ended sessions."""
+# 종료 기록 보관 — 계정마다 보관하지 않은 종료 세션은 최근 30건·30일까지만 남긴다(2026-10-02).
+# 사용자가 '보관'한 기록은 정리에서 빠지되 10건까지. 정리할 때 세션의 이벤트·실행 명령도 같이 지운다.
+# 정리는 세션이 끝날 때(mark_stopped)와 보관을 풀 때 한다.
+HISTORY_KEEP = 30
+HISTORY_DAYS = 30
+PIN_LIMIT = 10
+
+
+def _ended_at(row: RunSession) -> Optional[datetime]:
+    raw = row.stopped_at or row.last_heartbeat_at or row.started_at or ""
+    try:
+        return datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _delete_session_rows(db, session_ids: list[int]) -> None:
+    from sqlalchemy import delete as sql_delete
+
+    if not session_ids:
+        return
+    db.exec(sql_delete(RunSessionEvent).where(RunSessionEvent.session_id.in_(session_ids)))
+    db.exec(sql_delete(RunnerCommand).where(RunnerCommand.session_id.in_(session_ids)))
+    db.exec(sql_delete(RunSession).where(RunSession.id.in_(session_ids)))
+
+
+def prune_ended_sessions(user_id: int, db, *, now: Optional[datetime] = None) -> int:
+    """보관하지 않은 종료 기록을 최근 HISTORY_KEEP 건 · HISTORY_DAYS 일만 남기고 지운다. 지운 개수를 돌려준다."""
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=HISTORY_DAYS)
+    rows = db.exec(
+        select(RunSession)
+        .where(RunSession.user_id == user_id, RunSession.status != "running", RunSession.pinned == False)  # noqa: E712
+        .order_by(RunSession.id.desc())
+    ).all()
+    doomed = []
+    for index, row in enumerate(rows):
+        ended = _ended_at(row)
+        if index >= HISTORY_KEEP or (ended is not None and ended < cutoff):
+            doomed.append(row.id)
+    _delete_session_rows(db, doomed)
+    if doomed:
+        db.commit()
+    return len(doomed)
+
+
+def list_sessions(user_id: int, limit: int = HISTORY_KEEP + PIN_LIMIT, db=None) -> dict:
+    """All active sessions plus the retained ended sessions (최근 30건 + 보관 10건까지)."""
     recent_limit = max(0, min(int(limit), 100))
     filters = [RunSession.status == "running"]
     if recent_limit:
         recent_ids = (
             select(RunSession.id)
             .where(RunSession.user_id == user_id, RunSession.status != "running")
-            .order_by(RunSession.id.desc())
+            .order_by(RunSession.pinned.desc(), RunSession.id.desc())
             .limit(recent_limit)
         )
         filters.append(RunSession.id.in_(recent_ids))
@@ -955,7 +1009,35 @@ def list_sessions(user_id: int, limit: int = 20, db=None) -> dict:
     recent_rows = [row for row in rows if row.status != "running"]
     active = [_session_view(r) for r in active_rows]
     recent = [_session_view(r) for r in recent_rows]
-    return {"active": active, "recent": recent, "poll_seconds": POLL_SECONDS}
+    return {
+        "active": active, "recent": recent, "poll_seconds": POLL_SECONDS,
+        "history_policy": {"keep": HISTORY_KEEP, "days": HISTORY_DAYS, "pin_limit": PIN_LIMIT},
+    }
+
+
+def set_pinned(user_id: int, session_id: int, pinned: bool) -> dict:
+    """종료 기록 보관 켜기/끄기. 실행 중 세션은 정리 대상이 아니라 보관할 필요가 없다."""
+    with get_session() as db:
+        row = db.get(RunSession, session_id)
+        if row is None or row.user_id != user_id:
+            raise HTTPException(status_code=404, detail="세션을 찾을 수 없어요.")
+        if pinned and row.status == "running":
+            raise HTTPException(status_code=409, detail="실행 중인 에이전트는 종료된 뒤에 보관할 수 있어요.")
+        if pinned and not row.pinned:
+            count = len(db.exec(select(RunSession.id).where(
+                RunSession.user_id == user_id, RunSession.pinned == True)).all())  # noqa: E712
+            if count >= PIN_LIMIT:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"보관은 {PIN_LIMIT}건까지예요. 다른 기록의 보관을 먼저 풀어 주세요.",
+                )
+        row.pinned = bool(pinned)
+        db.add(row)
+        db.commit()
+        if not pinned:
+            prune_ended_sessions(user_id, db)  # 보관을 풀어 30건·30일 밖이 된 기록은 바로 정리
+    notify_sessions_changed(user_id)
+    return {"ok": True, "session_id": session_id, "pinned": bool(pinned)}
 
 
 def get_owned_session(user_id: int, session_id: int, db=None) -> dict:
@@ -1007,10 +1089,8 @@ def delete_session(user_id: int, session_id: int) -> dict:
                 status_code=409,
                 detail="실행기가 아직 응답 중이에요. 먼저 종료한 뒤 목록에서 지울 수 있어요.",
             )
-        from sqlalchemy import delete as sql_delete
-
-        db.exec(sql_delete(RunSessionEvent).where(RunSessionEvent.session_id == session_id))
-        db.delete(row)
+        # 이벤트·실행 명령도 같이 지운다(예전엔 실행 명령이 남아 쌓였다).
+        _delete_session_rows(db, [session_id])
         db.commit()
     notify_sessions_changed(user_id)
     return {"ok": True, "deleted_session_id": session_id}

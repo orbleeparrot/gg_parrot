@@ -14,6 +14,8 @@ import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 import { ErrorNote, Loading } from "../components/Page.jsx";
 import ConfirmDialog from "../components/ConfirmDialog.jsx";
 import { describeDeleteConfirm, describeStopConfirm } from "../features/agents/runOutcome.js";
+import { AgentHistoryList, AgentIdle, AgentViewTabs } from "../components/AgentHistory.jsx";
+import { runPeriodLabel } from "../features/agents/history.js";
 
 const SESSION_STREAM_PROTOCOL = "ggparrot.sessions.v1";
 const SESSION_RECONNECT_MAX_MS = 30000;
@@ -40,7 +42,7 @@ function sessionOptionLabel(session) {
   return `${prefix}${session.symbol} · ${ruleLabel(session.macro)}${net}`;
 }
 
-function MacroDock({ sessions, selected, busy, onChange, onStop, onDelete }) {
+function MacroDock({ sessions, selected, busy, onChange, onStop, onDelete, lead = null }) {
   const running = selected.status === "running";
   const connected = running && selected.connected;
   const stopping = selected.stopping;
@@ -49,7 +51,8 @@ function MacroDock({ sessions, selected, busy, onChange, onStop, onDelete }) {
   const removable = !connected;
 
   return (
-    <section className="agent-macro-dock" aria-label="매크로 세션 선택과 제어">
+    <section className={`agent-macro-dock${lead ? " has-lead" : ""}`} aria-label="매크로 세션 선택과 제어">
+      {lead ? <div className="agent-macro-dock-lead">{lead}</div> : null}
       <label className="agent-macro-dock-picker">
         <span className="sr-only">매크로 세션 선택</span>
         <span className="agent-macro-picker-row">
@@ -88,28 +91,38 @@ function MacroDock({ sessions, selected, busy, onChange, onStop, onDelete }) {
   );
 }
 
+// 종료 기록에서 연 세션의 실행 바 — 돌아가기 · 무엇을 보고 있는지 · 보관 · 목록에서 삭제.
+function HistoryDock({ session, busy, pinBusy, onBack, onTogglePin, onDelete }) {
+  return (
+    <section className="agent-macro-dock has-lead" aria-label="종료 기록 보기">
+      <div className="agent-macro-dock-lead">
+        <button type="button" className="agent-back" onClick={onBack}>
+          <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M10 3 5 8l5 5" /></svg>
+          종료 기록
+        </button>
+      </div>
+      <div className="agent-macro-dock-picker">
+        <span className="agent-detail-label">
+          {sessionOptionLabel(session).replace(/^(종료|오류) · /, "")}
+          <small>{runPeriodLabel(session.started_at, session.stopped_at)}</small>
+        </span>
+      </div>
+      <div className="agent-macro-dock-actions">
+        <button type="button" className="btn btn-m btn-secondary" aria-pressed={!!session.pinned} disabled={pinBusy === session.session_id} onClick={() => onTogglePin(session)}>
+          {session.pinned ? "보관 풀기" : "보관하기"}
+        </button>
+        <button type="button" className="btn btn-m btn-ghost" disabled={busy} onClick={onDelete}>목록에서 삭제</button>
+      </div>
+    </section>
+  );
+}
+
 function WorkspaceTabs({ selected, onSelect }) {
   return (
     <div className="agent-workspace-tabs" aria-label="에이전트 작업 화면">
       <button type="button" className={selected === "chart" ? "is-active" : ""} aria-pressed={selected === "chart"} onClick={() => onSelect("chart")}>차트</button>
       <button type="button" className={selected === "chat" ? "is-active" : ""} aria-pressed={selected === "chat"} onClick={() => onSelect("chat")}>에이전트</button>
     </div>
-  );
-}
-
-function EmptyLibrary() {
-  return (
-    <section className="agent-empty">
-      <p className="t-caption text-slate-500">실행 중 매크로 없음</p>
-      <h2 className="t-h3 text-slate-900">지금 실행기에서 구동 중인 매크로가 없어요.</h2>
-      <p className="t-small text-slate-700 measure">
-        껄무새 매크로 실행기에 매크로 파일(.ggm.json)을 넣고 시작하면, 이 화면에서 실시간 차트와 함께 상태를 확인하고 바로 종료할 수 있어요.
-      </p>
-      <div className="agent-empty-actions">
-        <Link to="/?run=1&step=1" className="btn btn-l btn-primary">실행 가이드 보기</Link>
-        <Link to="/builder" className="btn btn-l btn-secondary">직접 만들기</Link>
-      </div>
-    </section>
   );
 }
 
@@ -132,6 +145,7 @@ function AccountAgents() {
   // 종료 요청을 서버 왕복 전에 화면에 먼저 반영한다: { id, mode }
   const [pendingStop, setPendingStop] = useState(null);
   const [mobilePane, setMobilePane] = useState("chart");
+  const [pinBusy, setPinBusy] = useState(0);
   const sessionSnapshotRevision = useRef(0);
   const lastStreamMessageAt = useRef(0);
   const [streamConnected, setStreamConnected] = useState(false);
@@ -260,16 +274,16 @@ function AccountAgents() {
   // 아니라 러너가 보고하는 active 세션을 그대로 쓴다. 단, 종료와 동시에 사라지는
   // 오류 상태는 같은 매크로가 다시 실행되기 전까지 최신 1건을 함께 보존한다.
   const activeSessions = useMemo(() => sessions?.active || [], [sessions]);
-  // Keep terminal sessions visible so the user can verify the close result.
+  const recentSessions = useMemo(() => sessions?.recent || [], [sessions]);
+  // 드롭다운은 실행 중인 것만 고른다. 종료된 세션은 종료 기록 목록에서 연다(2026-10-02).
   const sessionOptions = useMemo(() => {
-    const all = [...activeSessions, ...(sessions?.recent || [])];
-    if (!pendingStop) return all;
-    return all.map((session) => (
+    if (!pendingStop) return activeSessions;
+    return activeSessions.map((session) => (
       session.session_id === pendingStop.id && session.status === "running" && !session.stopping
         ? { ...session, stopping: true, stop_mode: pendingStop.mode }
         : session
     ));
-  }, [activeSessions, pendingStop, sessions]);
+  }, [activeSessions, pendingStop]);
 
   // 서버가 같은 상태를 보고하면 낙관적 표시를 거둔다.
   useEffect(() => {
@@ -279,13 +293,21 @@ function AccountAgents() {
     if (!reported || reported.stopping || reported.status !== "running") setPendingStop(null);
   }, [activeSessions, pendingStop, sessions]);
   const selectedId = searchParams.get("session");
+  const view = searchParams.get("view") === "history" ? "history" : "live";
+  // 종료 기록에서 연 세션(또는 방금 종료해 기록으로 넘어간 세션)은 결과 화면으로 본다.
+  const historySession = useMemo(
+    () => recentSessions.find((session) => String(session.session_id) === selectedId) || null,
+    [recentSessions, selectedId],
+  );
+  const mode = historySession ? "detail" : activeSessions.length ? (view === "history" ? "history" : "live") : "overview";
   const selected = useMemo(() => {
-    if (!sessionOptions.length) return null;
+    if (historySession) return historySession;
+    if (mode !== "live" || !sessionOptions.length) return null;
     return sessionOptions.find((session) => String(session.session_id) === selectedId) || sessionOptions[0];
-  }, [selectedId, sessionOptions]);
+  }, [historySession, mode, selectedId, sessionOptions]);
 
   useEffect(() => {
-    if (!selected || String(selected.session_id) === selectedId) return;
+    if (mode !== "live" || !selected || String(selected.session_id) === selectedId) return;
     const next = new URLSearchParams(searchParams);
     next.set("session", String(selected.session_id));
     setSearchParams(next, { replace: true });
@@ -322,6 +344,41 @@ function AccountAgents() {
     setMobilePane("chart");
   }
 
+  function showView(nextView) {
+    const next = new URLSearchParams(searchParams);
+    next.delete("session");
+    if (nextView === "history") next.set("view", "history");
+    else next.delete("view");
+    setSearchParams(next);
+  }
+
+  function openHistory(session) {
+    const next = new URLSearchParams(searchParams);
+    next.delete("view");
+    next.set("session", String(session.session_id));
+    setSearchParams(next);
+    setMobilePane("chart");
+  }
+
+  function backToHistory() {
+    showView(activeSessions.length ? "history" : "live");
+  }
+
+  async function togglePin(session) {
+    if (pinBusy || !isCurrentAccount()) return;
+    setPinBusy(session.session_id);
+    try {
+      await api.runnerPinSession(session.session_id, !session.pinned);
+      if (!isCurrentAccount()) return;
+      setError("");
+      await loadSessions();
+    } catch (reason) {
+      if (isCurrentAccount()) setError(String(reason.message || reason));
+    } finally {
+      if (isCurrentAccount()) setPinBusy(0);
+    }
+  }
+
   function stopSession(mode) {
     if (!selected) return;
     setPending({ type: "stop", mode });
@@ -350,6 +407,7 @@ function AccountAgents() {
         if (!isCurrentAccount()) return;
         const next = new URLSearchParams(searchParams);
         next.delete("session");
+        if (target.status !== "running" && activeSessions.length) next.set("view", "history");
         setSearchParams(next, { replace: true });
       }
       if (!isCurrentAccount()) return;
@@ -377,18 +435,42 @@ function AccountAgents() {
     <div className="agent-page">
       {!streamConnected && sessions ? <p className="t-caption text-slate-500" role="status">실시간 연결 복구 중 · 5초마다 실행 상태 확인</p> : null}
       {error ? <ErrorNote>실행 상태 오류: {error}</ErrorNote> : null}
-      {sessions && sessionOptions.length === 0 ? <EmptyLibrary /> : null}
+      {sessions && mode === "overview" ? (
+        <div className="agent-overview">
+          <AgentIdle last={recentSessions[0] || null} />
+          <AgentHistoryList sessions={recentSessions} policy={sessions.history_policy} pinBusy={pinBusy} onOpen={openHistory} onTogglePin={togglePin} />
+        </div>
+      ) : null}
+
+      {sessions && mode === "history" ? (
+        <div className="agent-overview">
+          <AgentViewTabs view="history" activeCount={activeSessions.length} historyCount={recentSessions.length} onSelect={showView} />
+          <AgentHistoryList sessions={recentSessions} policy={sessions.history_policy} pinBusy={pinBusy} onOpen={openHistory} onTogglePin={togglePin} />
+        </div>
+      ) : null}
 
       {selected ? (
         <div className="agent-workspace">
-          <MacroDock
-            sessions={sessionOptions}
-            selected={selected}
-            busy={busy}
-            onChange={changeSession}
-            onStop={stopSession}
-            onDelete={deleteSession}
-          />
+          {mode === "detail" ? (
+            <HistoryDock
+              session={selected}
+              busy={busy}
+              pinBusy={pinBusy}
+              onBack={backToHistory}
+              onTogglePin={togglePin}
+              onDelete={deleteSession}
+            />
+          ) : (
+            <MacroDock
+              sessions={sessionOptions}
+              selected={selected}
+              busy={busy}
+              onChange={changeSession}
+              onStop={stopSession}
+              onDelete={deleteSession}
+              lead={<AgentViewTabs view="live" activeCount={activeSessions.length} historyCount={recentSessions.length} onSelect={showView} />}
+            />
+          )}
           <WorkspaceTabs selected={mobilePane} onSelect={setMobilePane} />
           <div className={`agent-console is-${mobilePane}`}>
             <section className="agent-chart-pane" aria-label={`${selected.symbol} 실시간 차트`}>

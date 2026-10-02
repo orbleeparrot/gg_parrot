@@ -401,7 +401,7 @@ class RunSession(SQLModel, table=True):
 
     __table_args__ = (Index("ix_runsession_active_heartbeat", "status", "last_heartbeat_at"),)
     id: Optional[int] = Field(default=None, primary_key=True)
-    user_id: int = Field(index=True)
+    user_id: int = Field(index=True, foreign_key="user.id")  # 2026-10-02 외래키(마이그레이션 20261002100000)
     # Stable account-library identity. Nullable for sessions created by legacy
     # runners that only uploaded an anonymous macro JSON snapshot.
     user_macro_id: Optional[int] = Field(default=None, index=True)

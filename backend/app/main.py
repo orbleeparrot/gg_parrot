@@ -825,6 +825,7 @@ def visit_record(
         is_internal=req.is_internal or bool(account and account.is_admin),
     )
     admin_mod.maybe_prune_visits(db)  # 90일 지난 행은 하루 한 번 정리
+    runner_mod.maybe_prune_all_ended_sessions(db)  # 종료 기록 30건·30일 정리도 하루 한 번(보관 제외)
     return Response(status_code=204)
 
 

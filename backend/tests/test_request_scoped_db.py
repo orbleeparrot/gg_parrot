@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 from sqlalchemy import event
 from sqlmodel import Session, SQLModel, create_engine
 
@@ -179,14 +181,17 @@ def test_runner_session_poll_uses_one_query_and_keeps_all_active_rows(monkeypatc
         db.add(user)
         db.commit()
         db.refresh(user)
+        # 종료 기록은 30일이 지나면 목록에서 빠진다 — 날짜를 박지 않고 지금 기준으로 둔다.
+        recent = datetime.now(timezone.utc) - timedelta(days=1)
         for index, status in enumerate(("running", "stopped", "running", "error"), start=1):
+            stamp = (recent + timedelta(seconds=index)).strftime("%Y-%m-%dT%H:%M:%SZ")
             db.add(
                 RunSession(
                     user_id=user.id,
                     symbol=f"C{index}USDT",
                     status=status,
-                    started_at=f"2026-08-26T00:00:0{index}Z",
-                    last_heartbeat_at=f"2026-08-26T00:00:0{index}Z",
+                    started_at=stamp,
+                    last_heartbeat_at=stamp,
                 )
             )
         db.commit()

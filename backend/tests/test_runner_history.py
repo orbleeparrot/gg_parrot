@@ -121,3 +121,39 @@ def test_stopping_a_session_prunes_the_31st_oldest(user_id):
     with get_session() as db:
         assert db.get(RunSession, oldest) is None
         assert db.get(RunSession, live.id) is not None
+
+
+def _ended_at(db, user_id, ended, pinned=False):
+    row = RunSession(user_id=user_id, symbol="BTCUSDT", status="stopped", pinned=pinned,
+                     started_at=_iso(ended - timedelta(minutes=5)), stopped_at=_iso(ended))
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row.id
+
+
+def test_list_hides_expired_records_before_cleanup_runs(user_id):
+    real_now = datetime.now(timezone.utc)
+    with get_session() as db:
+        fresh = _ended_at(db, user_id, real_now - timedelta(days=2))
+        expired = _ended_at(db, user_id, real_now - timedelta(days=31))
+        kept = _ended_at(db, user_id, real_now - timedelta(days=60), pinned=True)
+    shown = {row["session_id"] for row in runner_mod.list_sessions(user_id)["recent"]}
+    assert fresh in shown and kept in shown and expired not in shown
+    with get_session() as db:
+        assert db.get(RunSession, expired) is not None  # 숨겼을 뿐 아직 지우지 않았다
+
+
+def test_daily_cleanup_removes_expired_records_across_accounts(user_id):
+    with get_session() as db:
+        expired = _ended(db, user_id, days_ago=40)
+        pinned = _ended(db, user_id, days_ago=40, pinned=True)
+        for _ in range(32):
+            _ended(db, user_id, days_ago=1)
+        removed = runner_mod.prune_all_ended_sessions(db, now=NOW)
+        assert removed >= 3  # 기간 1건 + 30건 초과 2건
+        assert db.get(RunSession, expired) is None
+        assert db.get(RunSession, pinned) is not None
+        left = db.exec(select(RunSession).where(
+            RunSession.user_id == user_id, RunSession.pinned == False)).all()  # noqa: E712
+        assert len(left) == 30

@@ -29,7 +29,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import HTTPException
-from sqlalchemy import or_, update
+from sqlalchemy import func, or_, update
 from sqlmodel import select
 
 from . import macro_signing
@@ -942,7 +942,8 @@ def _session_view(row: RunSession) -> dict:
 
 # 종료 기록 보관 — 계정마다 보관하지 않은 종료 세션은 최근 30건·30일까지만 남긴다(2026-10-02).
 # 사용자가 '보관'한 기록은 정리에서 빠지되 10건까지. 정리할 때 세션의 이벤트·실행 명령도 같이 지운다.
-# 정리는 세션이 끝날 때(mark_stopped)와 보관을 풀 때 한다.
+# 정리는 세션이 끝날 때(mark_stopped)·보관을 풀 때, 그리고 하루 한 번 전체 계정(maybe_prune_all_ended_sessions).
+# 목록은 정리와 무관하게 기간이 지난 기록을 바로 뺀다.
 HISTORY_KEEP = 30
 HISTORY_DAYS = 30
 PIN_LIMIT = 10
@@ -986,14 +987,65 @@ def prune_ended_sessions(user_id: int, db, *, now: Optional[datetime] = None) ->
     return len(doomed)
 
 
+def _iso_utc(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+_DAILY_PRUNE_MS = 24 * 3_600_000
+_last_daily_prune_ms = 0
+_daily_prune_lock = threading.Lock()
+
+
+def prune_all_ended_sessions(db, *, now: Optional[datetime] = None) -> int:
+    """모든 계정의 종료 기록을 정리한다 — 기간(30일)이 지난 것은 한 번에, 30건을 넘긴 계정은 계정별로."""
+    now = now or datetime.now(timezone.utc)
+    cutoff = _iso_utc(now - timedelta(days=HISTORY_DAYS))
+    expired = db.exec(select(RunSession.id).where(
+        RunSession.status != "running", RunSession.pinned == False,  # noqa: E712
+        func.coalesce(RunSession.stopped_at, RunSession.started_at) < cutoff,
+    )).all()
+    _delete_session_rows(db, list(expired))
+    db.commit()
+    removed = len(expired)
+    over = db.exec(
+        select(RunSession.user_id)
+        .where(RunSession.status != "running", RunSession.pinned == False)  # noqa: E712
+        .group_by(RunSession.user_id)
+        .having(func.count(RunSession.id) > HISTORY_KEEP)
+    ).all()
+    for user_id in over:
+        removed += prune_ended_sessions(user_id, db, now=now)
+    return removed
+
+
+def maybe_prune_all_ended_sessions(db) -> int:
+    """하루에 한 번만 전체 정리를 돈다(별도 스케줄러 없이, 방문 비콘 정리와 같은 방식). 실패해도 요청은 성공."""
+    global _last_daily_prune_ms
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    with _daily_prune_lock:
+        if now_ms - _last_daily_prune_ms < _DAILY_PRUNE_MS:
+            return 0
+        _last_daily_prune_ms = now_ms
+    try:
+        return prune_all_ended_sessions(db)
+    except Exception:
+        db.rollback()
+        return 0
+
+
 def list_sessions(user_id: int, limit: int = HISTORY_KEEP + PIN_LIMIT, db=None) -> dict:
     """All active sessions plus the retained ended sessions (최근 30건 + 보관 10건까지)."""
     recent_limit = max(0, min(int(limit), 100))
     filters = [RunSession.status == "running"]
     if recent_limit:
+        # 기간이 지난 기록은 정리가 아직 돌지 않았어도 화면에서 바로 뺀다(보관한 기록은 예외).
+        cutoff = _iso_utc(datetime.now(timezone.utc) - timedelta(days=HISTORY_DAYS))
         recent_ids = (
             select(RunSession.id)
-            .where(RunSession.user_id == user_id, RunSession.status != "running")
+            .where(
+                RunSession.user_id == user_id, RunSession.status != "running",
+                or_(RunSession.pinned == True, func.coalesce(RunSession.stopped_at, RunSession.started_at) >= cutoff),  # noqa: E712
+            )
             .order_by(RunSession.pinned.desc(), RunSession.id.desc())
             .limit(recent_limit)
         )

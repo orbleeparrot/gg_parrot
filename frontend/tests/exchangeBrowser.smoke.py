@@ -33,6 +33,9 @@ class Fixture(fixtures.Fixture):
         self.pending_upbit = []
         self.ask_requests = []
         self.paper_macro = None
+        self.catalogue_bases = {}
+        self.hold_catalogue = ""
+        self.pending_catalogues = []
 
     def route(self, route):
         parsed = urlsplit(route.request.url)
@@ -43,10 +46,10 @@ class Fixture(fixtures.Fixture):
         exchange = query.get("exchange", ["binance"])[0]
         if parsed.path == "/api/symbols":
             self.symbol_exchanges.append(exchange)
-            domestic = exchange != "binance"
-            symbols = ["BTC", "ETH"]
-            route.fulfill(json={"exchange": exchange, "fetched_at": time.time(), "stale": False,
-                                "items": [{"symbol": f"KRW-{base}" if domestic else f"{base}USDT", "base": base, "quote": "KRW" if domestic else "USDT", "spot": True, "futures": not domestic} for base in symbols]})
+            if exchange == self.hold_catalogue:
+                self.pending_catalogues.append((route, exchange))
+                return
+            self.fulfill_catalogue(route, exchange)
             return
         if parsed.path in {"/api/candles", "/api/candles/live"}:
             self.candle_markets.append((exchange, query.get("symbol", [""])[0]))
@@ -74,6 +77,12 @@ class Fixture(fixtures.Fixture):
             route.fulfill(json={"session_id": 99, "status": "running", "current_equity": self.paper_macro["params"]["initial_capital"], "current_return": 0, "last_price": 100, "trades": [], "liquidations": 0})
             return
         super().route(route)
+
+    def fulfill_catalogue(self, route, exchange):
+        domestic = exchange != "binance"
+        symbols = self.catalogue_bases.get(exchange, ["BTC", "ETH"])
+        route.fulfill(json={"exchange": exchange, "fetched_at": time.time(), "stale": False,
+                            "items": [{"symbol": f"KRW-{base}" if domestic else f"{base}USDT", "base": base, "quote": "KRW" if domestic else "USDT", "spot": True, "futures": not domestic} for base in symbols]})
 
     @staticmethod
     def fulfill_candles(route, exchange):
@@ -118,15 +127,16 @@ def main():
                 exchange.select_option("upbit")
                 expect(page.get_by_role("button", name="숏", exact=True)).to_be_disabled()
                 expect(page.get_by_role("spinbutton", name="시작 자금 (KRW)", exact=True)).to_have_value("")
-                expect(page.get_by_role("button", name="KRW-BTC 빼기", exact=True)).to_have_count(0)
-                pick_btc(page)
+                expect(page.get_by_role("button", name="KRW-BTC 빼기", exact=True)).to_be_visible()
                 page.wait_for_timeout(100)
                 assert fixture.pending_upbit, "Upbit request must be in flight"
                 exchange.select_option("bithumb")
-                pick_btc(page)
+                expect(page.get_by_role("button", name="KRW-BTC 빼기", exact=True)).to_be_visible()
                 market = page.locator(".studio-chart .candle-chart-market")
                 expect(market).to_contain_text("빗썸")
                 expect(market).to_contain_text("3,000,000")
+                expect(page.locator(".candle-chart-current")).to_have_text("3,000,000")
+                expect(page.locator(".candle-ohlc-cell .num")).to_have_text(["3,000,000"] * 4)
                 for pending in fixture.pending_upbit:
                     fixture.fulfill_candles(pending, "upbit")
                 page.wait_for_timeout(100)
@@ -142,8 +152,57 @@ def main():
                 expect(page.get_by_role("group", name="봉 간격 (조건에서 정해요)").locator(".is-unavailable")).to_have_count(5)
                 assert set(fixture.symbol_exchanges) == {"binance", "upbit", "bithumb"}, fixture.symbol_exchanges
                 assert ("bithumb", "KRW-BTC") in fixture.candle_markets
+                exchange.select_option("binance")
+                expect(page.get_by_role("button", name="BTCUSDT 빼기", exact=True)).to_be_visible()
+                expect(page.locator(".candle-chart-current")).to_have_text("100.00")
                 checks.append({"width": width, "passed": True, "scenario": "native exchange symbols, money reset, short/SAR block, daily DCA, and late chart response isolation"})
                 context.close()
+
+            context = browser.new_context(viewport={"width": 1440, "height": 1000}, service_workers="block")
+            fixture = Fixture()
+            fixture.catalogue_bases["upbit"] = ["ETH"]
+            context.route("**/*", fixture.route)
+            context.route_web_socket("**/*", lambda socket: socket.close())
+            page = context.new_page()
+            install_note_handler(page)
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            page.goto(f"http://127.0.0.1:{server.server_port}/builder")
+            page.get_by_label("거래소", exact=True).select_option("upbit")
+            expect(page.get_by_text("새 거래소에 같은 종목이 없어 비웠어요.", exact=False)).to_be_visible()
+            expect(page.get_by_role("button", name="KRW-BTC 빼기", exact=True)).to_have_count(0)
+            search = page.get_by_role("combobox", name="종목 검색")
+            search.fill("ETH")
+            page.get_by_role("option", name="KRW-ETH", exact=True).click()
+            page.get_by_label("거래소", exact=True).select_option("binance")
+            expect(page.get_by_role("button", name="ETHUSDT 빼기", exact=True)).to_be_visible()
+            checks.append({"passed": True, "scenario": "unlisted BTC is cleared; manually selected ETH survives return to Binance"})
+            context.close()
+
+            context = browser.new_context(viewport={"width": 1440, "height": 1000}, service_workers="block")
+            fixture = Fixture()
+            fixture.hold_catalogue = "upbit"
+            context.route("**/*", fixture.route)
+            context.route_web_socket("**/*", lambda socket: socket.close())
+            page = context.new_page()
+            install_note_handler(page)
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            page.goto(f"http://127.0.0.1:{server.server_port}/?guide=1&tour=asset")
+            exchange = page.get_by_label("사용할 거래소", exact=True)
+            exchange.select_option("upbit")
+            expect(page.get_by_text("새 거래소의 종목을 확인하고 있어요.", exact=False)).to_be_visible()
+            exchange.select_option("bithumb")
+            ticker = page.get_by_label("차트로 확인할 종목 검색", exact=True)
+            expect(ticker).to_have_value("KRW-BTC")
+            page.get_by_label("시작 자금 (KRW)", exact=True).fill("777777")
+            ticker.fill("ETH")
+            for pending, venue in fixture.pending_catalogues:
+                fixture.fulfill_catalogue(pending, venue)
+            page.wait_for_timeout(150)
+            expect(exchange).to_have_value("bithumb")
+            expect(ticker).to_have_value("ETH")
+            expect(page.get_by_label("시작 자금 (KRW)", exact=True)).to_have_value("777777")
+            checks.append({"passed": True, "scenario": "late old-venue catalogue cannot replace a new exchange or manually edited ticker/capital"})
+            context.close()
 
             context = browser.new_context(viewport={"width": 1440, "height": 1000}, service_workers="block", reduced_motion="reduce")
             fixture = Fixture()

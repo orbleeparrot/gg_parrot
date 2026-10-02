@@ -202,6 +202,13 @@ def main():
             page.get_by_role("button", name="숏", exact=True).click()
             expect(page.locator(".candle-source")).to_contain_text("선물 요청 → 현물 대체")
             expect(page.locator(".candle-chart-live")).to_be_visible()
+            source = page.locator(".candle-source")
+            assert source.get_attribute("open") is None
+            assert "과거봉:" not in source.inner_text(), "Verbose provenance should be collapsed by default"
+            source.locator("summary").click()
+            expect(source).to_contain_text("과거봉:")
+            expect(source.locator("div")).to_be_visible()
+            source.locator("summary").click()
             page.wait_for_timeout(3500)
             live_calls = [call for call in fixture.chart_calls if call["live"]]
             assert live_calls and all(call["market"] == "spot" for call in live_calls), fixture.chart_calls
@@ -219,16 +226,19 @@ def main():
 
             fixture.phase = "error"
             expect(page.locator(".candle-source")).to_contain_text("실시간: 오류", timeout=10000)
+            expect(page.locator(".candle-source summary")).to_contain_text("실시간: 오류")
             expect(page.locator(".candle-chart-live")).to_have_count(0)
             expect(page.locator(".candle-chart-current")).to_have_text("100.00")
             fixture.phase = "fresh"
             expect(page.locator(".candle-chart-live")).to_be_visible(timeout=10000)
             fixture.phase = "stale"
             expect(page.locator(".candle-source")).to_contain_text("지연 · 캐시 시세", timeout=10000)
+            expect(page.locator(".candle-source summary")).to_contain_text("지연 · 캐시 시세")
             expect(page.locator(".candle-chart-live")).to_have_count(0)
             expect(page.locator(".candle-chart-current")).to_have_text("100.00")
             fixture.phase = "awaiting"
             expect(page.locator(".candle-source")).to_contain_text("진행봉 갱신 대기", timeout=10000)
+            expect(page.locator(".candle-source summary")).to_contain_text("진행봉 갱신 대기")
             expect(page.locator(".candle-chart-live")).to_have_count(0)
             checks.append("live errors, origin-stale data and unconfirmed closed-time candles suppress LIVE and retain valid prices")
 

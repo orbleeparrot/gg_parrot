@@ -107,6 +107,10 @@ def main():
                         results.get_by_role("button", name="다시 시도", exact=True).click()
                     else:
                         expect(page.get_by_text("마지막 확인한 종목 목록이에요.", exact=False)).to_be_visible()
+                        expect(page.get_by_role("button", name="KRW-BTC 빼기", exact=True)).to_be_visible()
+                        search.press("Escape")
+                        page.get_by_role("button", name="KRW-BTC 빼기", exact=True).click()
+                        search.fill("BTC")
                         expect(results.get_by_role("option", name="KRW-BTC", exact=True)).to_be_visible()
                         page.get_by_role("button", name="다시 확인", exact=True).click()
                     search.fill("NEW")

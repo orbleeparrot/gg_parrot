@@ -34,14 +34,14 @@ const INTERVALS = [
 ];
 
 // --- inspector panel: OHLC of the hovered (or latest) bar ---------------
-function BarReadout({ bar, live }) {
+function BarReadout({ bar, live, quote }) {
   if (!bar) return null;
   const rise = bar.c >= bar.o;
   const pct = bar.o ? ((bar.c - bar.o) / bar.o) * 100 : 0;
   const cell = (label, v) => (
     <span className="candle-ohlc-cell whitespace-nowrap">
       <span className="text-slate-500">{label}</span>{" "}
-      <span className="num font-semibold text-slate-900">{fmtPrice(v)}</span>
+      <span className="num font-semibold text-slate-900">{fmtPrice(v, quote)}</span>
     </span>
   );
   return (
@@ -110,7 +110,7 @@ function MarketPrice({ bar, quote, changePct }) {
   return (
     <div className="candle-chart-price-row">
       <span className="candle-chart-price">
-        <strong className="candle-chart-current num text-slate-900">{fmtPrice(bar.c)}</strong>
+        <strong className="candle-chart-current num text-slate-900">{fmtPrice(bar.c, quote)}</strong>
         <span className="candle-chart-quote t-caption text-slate-500">{quote}</span>
       </span>
       <RangeChange percent={changePct} />
@@ -124,14 +124,24 @@ function SourceStatus({ feed, now }) {
     meta.stale ? "지연 · 캐시 시세" : meta.awaiting ? "진행봉 갱신 대기" :
       !meta.fetchedAt ? "원천 수집 시각 확인 대기" : edge && !isChartFresh(meta, now) ? "갱신 대기" : meta.cached ? "캐시" : "확인";
   const time = (meta) => meta?.fetchedAt ? ` · ${chartTimeKst(meta.fetchedAt)} KST` : "";
+  const warning = [
+    mismatch && "시장 변경 감지 · 전체 시세 재확인",
+    (liveError || !isChartFresh(live, now)) && `실시간: ${status(live, liveError, true)}`,
+    (historyError || history?.stale) && `과거봉: ${status(history, historyError)}`,
+  ].filter(Boolean).join(" · ");
   return (
-    <div className="candle-source t-caption text-slate-500" role="status" aria-live="polite">
-      <span>{source ? `${exchangeLabel(source.exchange)} ${source.market === "futures" ? "선물" : "현물"}` : "시세 출처 확인 중"} · KST (UTC+9)</span>
-      {source?.fallback && <span className="text-amber-700"> · 선물 요청 → 현물 대체</span>}
-      <span> · 과거봉: {status(history, historyError)}{time(history)}</span>
-      <span> · 실시간: {status(live, liveError, true)}{time(live)}</span>
-      {mismatch && <span> · 시장 변경 감지 · 전체 시세 재확인</span>}
-    </div>
+    <details className="candle-source t-caption text-slate-500">
+      <summary className="cursor-pointer" aria-label="시세 출처와 갱신 상태">
+        {source ? `${exchangeLabel(source.exchange)} ${source.market === "futures" ? "선물" : "현물"}` : "시세 출처 확인 중"} · 시세 정보
+        {source?.fallback && <span className="text-amber-700"> · 선물 요청 → 현물 대체</span>}
+        {warning && <span className="text-amber-700" role="status" aria-live="polite"> · {warning}</span>}
+      </summary>
+      <div className="pt-1">
+        <span>KST (UTC+9) · 수집 시각은 봉 시작 시각과 달라요.</span>
+        <span> · 과거봉: {status(history, historyError)}{time(history)}</span>
+        <span> · 실시간: {status(live, liveError, true)}{time(live)}</span>
+      </div>
+    </details>
   );
 }
 
@@ -413,7 +423,7 @@ export default function CandleChart({
         )}
         {view.length > 0 && (
           <div className="candle-chart-stage">
-            <div className="candle-chart-readout"><BarReadout bar={inspected} live={live && fresh && !last.closed} /></div>
+            <div className="candle-chart-readout"><BarReadout bar={inspected} quote={quote} live={live && fresh && !last.closed} /></div>
             <div className="candle-chart-plot">
               {plot}
             </div>
@@ -468,7 +478,7 @@ export default function CandleChart({
 
       {/* OHLC read-out: hovered bar, or the latest one when not hovering */}
       <div className="candle-chart-readout">
-        <BarReadout bar={inspected} live={live && fresh && last && !last.closed} />
+        <BarReadout bar={inspected} quote={quote} live={live && fresh && last && !last.closed} />
       </div>
 
       {/* 보조지표 범례 */}

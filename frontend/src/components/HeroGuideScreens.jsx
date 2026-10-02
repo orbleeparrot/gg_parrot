@@ -1,5 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
-import { RULE_TYPES, withTypeDefaults, withExchangeDefaults, macroToForm } from "../lib/macro.js";
+import { RULE_TYPES, withTypeDefaults, macroToForm } from "../lib/macro.js";
+import { useExchangeSwitch } from "../hooks/useExchangeSwitch.js";
 import { computeStrategyOverlay } from "../lib/indicators.js";
 import { EXCHANGES, isDomestic, normalizeExchange, normalizeSymbolForExchange, quoteForExchange } from "../lib/exchanges.js";
 import { baseOf } from "../lib/format.js";
@@ -183,17 +184,13 @@ export function AssetScene({ form, setForm, error, searchError = "", busy = fals
   const domestic = isDomestic(exchange);
   const quote = quoteForExchange(exchange);
   const choices = ["BTC", "ETH", "SOL", "XRP"].map((base) => normalizeSymbolForExchange(base, exchange));
-  const [exchangeNotice, setExchangeNotice] = useState("");
+  const { switchExchange, exchangeNotice } = useExchangeSwitch(form, setForm);
   const helpId = "hero-symbol-help";
   const errorId = "hero-symbol-error";
   return (
     <div className="hero-form-block">
       <label htmlFor="hero-exchange" className="block t-small font-semibold text-slate-700 mb-2">사용할 거래소</label>
-      <select id="hero-exchange" className="field mb-4" value={exchange} disabled={busy} onChange={(event) => {
-        const value = event.target.value;
-        setForm((current) => withExchangeDefaults(current, value));
-        setExchangeNotice("거래소가 바뀌어 종목·가격·금액을 초기화했어요. 자동 환산하지 않으니 다시 입력해 주세요.");
-      }}>
+      <select id="hero-exchange" className="field mb-4" value={exchange} disabled={busy} onChange={(event) => switchExchange(event.target.value)}>
         {EXCHANGES.map((item) => <option key={item.value} value={item.value}>{item.label} · {item.quote}</option>)}
       </select>
       {domestic && <p className="mb-4 t-small text-amber-700">원화 현물 전용이에요. 숏·선물·레버리지는 사용할 수 없고, 국내 거래소 실행기 직접 연결은 아직 지원하지 않아요.</p>}

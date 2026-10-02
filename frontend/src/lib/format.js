@@ -21,7 +21,7 @@ export function baseOf(symbol) {
 }
 
 // Price: keep enough significant decimals for sub-cent coins (VANRY ~0.0077).
-export function fmtPrice(p) {
+export function fmtPrice(p, symbol = "") {
   const n = Number(p);
   if (!isFinite(n)) return String(p);
   const abs = Math.abs(n);
@@ -31,7 +31,9 @@ export function fmtPrice(p) {
   else if (abs >= 0.01) dp = 5;
   else if (abs >= 0.0001) dp = 6;
   else dp = 8;
-  return n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: dp });
+  // Hide artificial .00 on won prices, but never round a real fractional quote
+  // to zero (or change the underlying candle/strategy values).
+  return n.toLocaleString("en-US", { minimumFractionDigits: quoteOf(symbol) === "KRW" ? 0 : 2, maximumFractionDigits: dp });
 }
 
 // Money amount + quote unit, e.g. "1,000,000 USDT".

@@ -4,7 +4,8 @@
 // carries its own params block (see TYPE_DEFAULTS / buildParams) and shares the
 // common envelope (candle_interval + advanced risk). Field names match the
 // backend pydantic models exactly so clone (macroToForm) is a direct Object.assign.
-import { isDomestic, normalizeExchange, quoteForExchange } from "./exchanges.js";
+import { isDomestic, normalizeExchange, normalizeSymbolForExchange, quoteForExchange } from "./exchanges.js";
+import { baseOf } from "./format.js";
 
 // Demo safety cap on leverage (mirrors backend MAX_LEVERAGE default). Leverage is
 // a backtest/paper-only condition — C (DCA) is excluded and forced to 1x.
@@ -150,10 +151,14 @@ export function withTypeDefaults(form, rt) {
 
 const EXCHANGE_MONEY_FIELDS = ["initial_capital", "amount_per_buy", "buy_price", "sell_price", "lower_price", "upper_price", "per_grid_invest", "base_order_size", "safety_order_size"];
 
-export function withExchangeDefaults(form, value) {
+export function withExchangeDefaults(form, value, items = []) {
   const exchange = normalizeExchange(value);
   if (exchange === normalizeExchange(form.exchange)) return form;
-  const next = { ...form, exchange, symbol: "", funding_pct: 0 };
+  const listed = new Set(items.map((item) => item.symbol));
+  const symbol = [...new Set(String(form.symbol || "").split(",")
+    .map((value) => normalizeSymbolForExchange(baseOf(value.trim()), exchange))
+    .filter((value) => listed.has(value)))].join(",");
+  const next = { ...form, exchange, symbol, funding_pct: 0 };
   for (const key of EXCHANGE_MONEY_FIELDS) next[key] = "";
   if (isDomestic(exchange)) {
     Object.assign(next, { position_side: "long", leverage: 1, market: "spot", flip_to_short: false });

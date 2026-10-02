@@ -1,5 +1,5 @@
 import { cloneElement, createContext, isValidElement, useContext, useEffect, useId, useRef, useState } from "react";
-import { RULE_TYPES, PERIOD_PRESETS, CANDLE_INTERVALS, MAX_LEVERAGE, withTypeDefaults, withExchangeDefaults } from "../lib/macro.js";
+import { RULE_TYPES, PERIOD_PRESETS, CANDLE_INTERVALS, MAX_LEVERAGE, withTypeDefaults } from "../lib/macro.js";
 import { EXCHANGES, isDomestic, normalizeExchange, quoteForExchange } from "../lib/exchanges.js";
 import InfoTooltip from "./InfoTooltip.jsx";
 import { api } from "../api.js";
@@ -9,6 +9,7 @@ import { useUsdKrw } from "../lib/usdkrw.js";
 import CoinIcon from "./CoinIcon.jsx";
 import "./Builder.css";
 import { useSymbolList } from "../hooks/useSymbolList.js";
+import { useExchangeSwitch } from "../hooks/useExchangeSwitch.js";
 import { searchSymbols, resolveSymbol, marketTags } from "../lib/symbolSearch.js";
 import { Icon } from "./icons.jsx";
 
@@ -300,7 +301,7 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
   const allowShort = meta.allowShort && !domestic;
   const quote = quoteForExchange(exchange);
   const moneySymbol = form.symbol || (domestic ? "KRW-BTC" : "BTCUSDT");
-  const [exchangeNotice, setExchangeNotice] = useState("");
+  const { switchExchange, exchangeNotice } = useExchangeSwitch(form, setForm);
   const { rate: krwRate } = useUsdKrw();
   const [fundingBusy, setFundingBusy] = useState(false);
   const [fundingMsg, setFundingMsg] = useState("");
@@ -393,12 +394,7 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
   );
   const exchangeField = (
     <Field name="exchange" error={errOf("exchange")} label="거래소" anchor="exchange" hint={domestic ? "원화 현물 전용 · 숏·레버리지·선물은 사용할 수 없어요." : "USDT 현물·선물"}>
-      <select className={fieldCls("exchange", inputCls)} value={exchange} onChange={(event) => {
-        const next = withExchangeDefaults(form, event.target.value);
-        if (next === form) return;
-        setForm(next);
-        setExchangeNotice("거래소가 바뀌어 종목·가격·금액 조건을 초기화했어요. 새 거래소 기준으로 다시 입력해 주세요. 자동 환산하지 않아요.");
-      }}>
+      <select className={fieldCls("exchange", inputCls)} value={exchange} onChange={(event) => switchExchange(event.target.value)}>
         {EXCHANGES.map((item) => <option key={item.value} value={item.value}>{item.label} · {item.quote}</option>)}
       </select>
     </Field>

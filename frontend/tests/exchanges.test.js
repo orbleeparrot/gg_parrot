@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { EXCHANGES, normalizeExchange, quoteForExchange, isDomestic, marketKey, normalizeSymbolForExchange } from "../src/lib/exchanges.js";
-import { baseOf, quoteOf, fmtMoney, fmtKrw } from "../src/lib/format.js";
+import { baseOf, quoteOf, fmtMoney, fmtKrw, fmtPrice } from "../src/lib/format.js";
 import { defaultForm, buildMacro, macroToForm, validateDetailed, withExchangeDefaults, withTypeDefaults } from "../src/lib/macro.js";
 import { resolveSymbol, searchSymbols } from "../src/lib/symbolSearch.js";
 
@@ -26,6 +26,25 @@ test("native Korean markets have a KRW quote and the correct coin base", () => {
   assert.equal(normalizeSymbolForExchange("btc", "upbit"), "KRW-BTC");
   assert.equal(normalizeSymbolForExchange("KRW-BTC", "bithumb"), "KRW-BTC");
   assert.equal(normalizeSymbolForExchange("btc", "binance"), "BTCUSDT");
+});
+
+test("KRW chart prices omit artificial decimals without losing actual quote precision", () => {
+  assert.equal(fmtPrice(116434000, "KRW-BTC"), "116,434,000");
+  assert.equal(fmtPrice(116434000, "KRW"), "116,434,000");
+  assert.equal(fmtPrice(123.45, "KRW-ETH"), "123.45");
+  assert.equal(fmtPrice(0.0077, "KRW-TEST"), "0.0077");
+  assert.equal(fmtPrice(0.0077, "BTCUSDT"), "0.0077");
+  assert.equal(fmtPrice(1000), "1,000.00");
+});
+
+test("exchange switches retain only assets listed on the target exchange", () => {
+  const listed = [{ symbol: "KRW-BTC" }, { symbol: "KRW-T" }];
+  const form = { ...defaultForm(), symbol: "BTCUSDT,ETHUSDT,TUSDT" };
+  assert.equal(withExchangeDefaults(form, "upbit", listed).symbol, "KRW-BTC,KRW-T");
+  assert.equal(withExchangeDefaults(form, "bithumb", []).symbol, "");
+  assert.equal(withExchangeDefaults({ ...form, exchange: "upbit", symbol: "KRW-BTC" }, "binance", [{ symbol: "BTCUSDT" }]).symbol, "BTCUSDT");
+  assert.equal(withExchangeDefaults({ ...form, exchange: "upbit", symbol: "KRW-BTC" }, "bithumb", listed).symbol, "KRW-BTC");
+  assert.equal(withExchangeDefaults(form, "upbit", listed).initial_capital, "");
 });
 
 test("domestic symbol search retains native identity and exclusions", () => {

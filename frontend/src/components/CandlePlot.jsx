@@ -207,7 +207,7 @@ const CandlePlot = forwardRef(function CandlePlot({ candles, overlay, symbol, ex
     state.changing = true;
     state.rows = candles;
     state.overlay = overlay;
-    series.applyOptions({ priceFormat: { type: "custom", formatter: fmtPrice, minMove: priceMinMove(candles.at(-1).c) } });
+    series.applyOptions({ priceFormat: { type: "custom", formatter: (value) => fmtPrice(value, symbol), minMove: priceMinMove(candles.at(-1).c) } });
     if (canUpdate) {
       for (let i = Math.max(0, state.data.length - 2); i < next.length; i++) {
         if (!sameCandleData(state.data[i], next[i])) series.update(next[i], i < state.data.length - 1);
@@ -244,7 +244,7 @@ const CandlePlot = forwardRef(function CandlePlot({ candles, overlay, symbol, ex
       state.hover = index < 0 ? null : index;
       callbacks.current.onHover?.(state.hover);
     }
-  }, [candles, overlay, studio]);
+  }, [candles, overlay, studio, symbol]);
 
   return (
     <div ref={host} className={`financial-candle-plot${expanded ? " is-expanded" : ""}${overlay?.rsi ? " has-rsi" : ""}`} tabIndex={0} role="group" aria-label={`${symbol} 캔들 차트. 방향키로 봉 정보 확인, Home·End로 처음·마지막 봉, Escape로 해제`}>

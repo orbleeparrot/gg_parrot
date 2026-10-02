@@ -539,7 +539,9 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
             <button key={opt.key} type="button" disabled={opt.disabled} title={opt.title}
               className={"ask-opt ask-in" + (picked === idx ? " is-picked" : picked != null ? " is-dim" : "")}
               style={inStyle(idx + 1)} aria-pressed={picked === idx} onClick={() => choose(opt, idx)}>
-              <span className="ask-opt-l"><span className="ask-key num" aria-hidden="true">{idx + 1}</span>{opt.label}</span>
+              <span className="ask-opt-l"><span className="ask-key num" aria-hidden="true">{idx + 1}</span>
+                {state.step === "exchange" && <img className="ask-exchange-logo" src={`/exchanges/${opt.value}.${opt.value === "binance" ? "svg" : "png"}`} width="16" height="16" alt="" aria-hidden="true" draggable="false" />}
+                {opt.label}</span>
               <span className="ask-opt-r">{opt.hint ? <small>{opt.hint}</small> : null}<span className="ask-check" aria-hidden="true"><CheckIcon size={13} strokeWidth={3} /></span></span>
             </button>
           ))}

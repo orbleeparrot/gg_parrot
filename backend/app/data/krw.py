@@ -23,6 +23,10 @@ BASES = {"upbit": "https://api.upbit.com", "bithumb": "https://api.bithumb.com"}
 REQUEST_GAP_SECONDS = .15  # below the documented 10 requests/sec public limit
 MAX_PAGES = 100
 MAX_HISTORY_SECONDS = 45.0
+SYMBOL_CACHE_TTL_SECONDS = 60
+# This is the total age since the last successful fetch, not five extra
+# minutes after freshness expires. Failed refreshes never extend this bound.
+SYMBOL_MAX_AGE_SECONDS = 300
 _KST = timezone(timedelta(hours=9))
 _locks = {exchange: threading.Lock() for exchange in BASES}
 _next_request = {exchange: 0.0 for exchange in BASES}
@@ -93,9 +97,15 @@ def list_symbols(exchange: str = "upbit", *, now=None) -> dict:
             raise ValueError("거래소 KRW 종목 목록이 비어 있습니다.")
         return {"items": sorted(items, key=lambda row: row["symbol"]),
                 "fetched_at": time.time() if now is None else now}
-    payload, state = _symbols_cache.get_or_load(exchange, load, ttl=6 * 3600, stale_ttl=24 * 3600, now=now)
+    payload, state = _symbols_cache.get_or_load(
+        exchange, load, ttl=SYMBOL_CACHE_TTL_SECONDS,
+        stale_ttl=SYMBOL_MAX_AGE_SECONDS - SYMBOL_CACHE_TTL_SECONDS, now=now,
+    )
+    served_at = time.time() if now is None else now
     return {**payload, "count": len(payload["items"]), "exchange": exchange, "quote_currency": "KRW",
             "stale": state == "stale", "partial": False,
+            "cache_age_seconds": max(0, served_at - payload["fetched_at"]),
+            "refresh_seconds": SYMBOL_CACHE_TTL_SECONDS, "max_age_seconds": SYMBOL_MAX_AGE_SECONDS,
             "sources": {"spot": {"status": "stale" if state == "stale" else "ready",
                                    "fetched_at": payload["fetched_at"]}}}
 

@@ -3,12 +3,10 @@ import { CandlestickSeries, LineSeries, createChart, CrosshairMode, LineStyle, P
 import { fmtPrice } from "../lib/format.js";
 import { StrategyPrimitive, resolveChartColor, RSI_SCALE_MARGINS } from "../lib/chartStrategyPrimitive.js";
 import { candleData, canUpdateCandleData, sameCandleData, constrainCandleRange, restoreCandleRange, overlayPriceRange, priceMinMove } from "../lib/candleChartData.js";
+import { chartClockKst, chartDateKst, chartTimeKst } from "../lib/chartSource.js";
 import "./CandlePlot.css";
 
-const fullTime = (time) => {
-  const date = new Date(Number(time) * 1000);
-  return `${date.getMonth() + 1}/${date.getDate()} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
-};
+const fullTime = (time) => `${chartTimeKst(Number(time) * 1000)} KST`;
 
 function palette(element) {
   const resolve = (value) => resolveChartColor(value, element);
@@ -55,8 +53,8 @@ const CandlePlot = forwardRef(function CandlePlot({ candles, overlay, symbol, ex
         shiftVisibleRangeOnNewBar: false,
         minBarSpacing: 0.001,
         tickMarkFormatter: (time, kind) => {
-          const d = new Date(Number(time) * 1000);
-          return kind < 3 ? `${d.getMonth() + 1}/${d.getDate()}` : `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+          const ms = Number(time) * 1000;
+          return kind < 3 ? chartDateKst(ms) : chartClockKst(ms);
         },
       },
       localization: { locale: "ko-KR", timeFormatter: fullTime },

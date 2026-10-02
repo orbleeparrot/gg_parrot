@@ -6,6 +6,7 @@ backend connection, paid AI call, image, or activity-report file is created.
 import importlib.util
 import json
 import threading
+import time
 from functools import partial
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -38,7 +39,8 @@ class Fixture(fixtures.Fixture):
             self.symbol_exchanges.append(exchange)
             domestic = exchange != "binance"
             symbols = ["BTC", "ETH"]
-            route.fulfill(json={"items": [{"symbol": f"KRW-{base}" if domestic else f"{base}USDT", "base": base, "quote": "KRW" if domestic else "USDT", "spot": True, "futures": not domestic} for base in symbols]})
+            route.fulfill(json={"exchange": exchange, "fetched_at": time.time(), "stale": False,
+                                "items": [{"symbol": f"KRW-{base}" if domestic else f"{base}USDT", "base": base, "quote": "KRW" if domestic else "USDT", "spot": True, "futures": not domestic} for base in symbols]})
             return
         if parsed.path in {"/api/candles", "/api/candles/live"}:
             self.candle_markets.append((exchange, query.get("symbol", [""])[0]))

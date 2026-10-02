@@ -97,7 +97,7 @@ RULE_LABELS = {
     "G": "볼린저밴드 회귀", "H": "세이프티 주문", "I": "변동성 돌파", "J": "이동평균 크로스",
 }
 
-_SYMBOL_RE = re.compile(r"^(?:[A-Z0-9]{2,20}USDT|KRW-[A-Z0-9]{1,20})$")
+_SYMBOL_RE = re.compile(r"^(?:[A-Z0-9]{1,20}USDT|KRW-[A-Z0-9]{1,20})$")
 
 
 class AskRequest(BaseModel):

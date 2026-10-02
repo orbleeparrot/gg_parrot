@@ -148,8 +148,9 @@ function SymbolPicker({ value, onChange, exchange = "binance" }) {
   const [open, setOpen] = useState(false);
   const [cursor, setCursor] = useState(0);
   const [note, setNote] = useState("");
-  const { items, loading, error, reload } = useSymbolList(exchange);
+  const { items, loading, error, reload, stale, canChoose } = useSymbolList(exchange);
   const rootRef = useRef(null);
+  const blurTimer = useRef(null);
   const listId = useId().replace(/:/g, "");
   const symbols = String(value || "").split(",").map((part) => part.trim().toUpperCase()).filter(Boolean);
   const query = draft.trim();
@@ -163,6 +164,7 @@ function SymbolPicker({ value, onChange, exchange = "binance" }) {
     if (!symbol) return;
     if (symbols.includes(symbol)) { setDraft(""); setNote(""); return; }
     if (full) { setNote(`종목은 최대 ${MAX_SYMBOLS}개까지예요.`); return; }
+    if (!canChoose(symbol)) { setNote("종목 목록이 변경되었거나 오래되었어요. 다시 확인한 뒤 선택해 주세요."); reload(); return; }
     onChange([...symbols, symbol].join(", "));
     setDraft(""); setNote(""); setCursor(0);
   };
@@ -176,6 +178,7 @@ function SymbolPicker({ value, onChange, exchange = "binance" }) {
   const remove = (symbol) => { onChange(symbols.filter((item) => item !== symbol).join(", ")); setNote(""); };
 
   useEffect(() => { setCursor(0); }, [query]);
+  useEffect(() => () => window.clearTimeout(blurTimer.current), []);
   useEffect(() => {
     if (!open) return undefined;
     const onDown = (event) => { if (!rootRef.current?.contains(event.target)) setOpen(false); };
@@ -185,6 +188,7 @@ function SymbolPicker({ value, onChange, exchange = "binance" }) {
 
   return (
     <div className="bd-symbols" ref={rootRef}>
+      {items && stale && <div className="bd-suggest-note" role="status">마지막 확인한 종목 목록이에요. 새 상장·거래 종료가 아직 반영되지 않았을 수 있어요. <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={reload}>다시 확인</button></div>}
       <div className={"bd-search" + (full ? " is-full" : "")}>
         <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="9" cy="9" r="5.5" /><path d="M13.5 13.5 17 17" /></svg>
         <input
@@ -200,7 +204,7 @@ function SymbolPicker({ value, onChange, exchange = "binance" }) {
           spellCheck={false}
           disabled={full}
           onChange={(event) => { setDraft(event.target.value); setOpen(true); setNote(""); }}
-          onFocus={() => setOpen(true)}
+          onFocus={() => { window.clearTimeout(blurTimer.current); setOpen(true); }}
           onKeyDown={(event) => {
             if (event.key === "ArrowDown") { event.preventDefault(); setOpen(true); setCursor((c) => Math.min(c + 1, Math.max(0, matches.length - 1))); }
             else if (event.key === "ArrowUp") { event.preventDefault(); setCursor((c) => Math.max(0, c - 1)); }
@@ -209,7 +213,9 @@ function SymbolPicker({ value, onChange, exchange = "binance" }) {
           }}
           onBlur={() => {
             // 목록의 클릭이 먼저 먹도록 잠깐 뒤에 닫는다. 글자가 종목과 정확히 맞으면 그때 넣는다.
-            window.setTimeout(() => {
+            window.clearTimeout(blurTimer.current);
+            blurTimer.current = window.setTimeout(() => {
+              blurTimer.current = null;
               setOpen(false);
               if (items && query && resolveSymbol(items, query)) add(resolveSymbol(items, query));
             }, 120);
@@ -379,7 +385,7 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
     // 촘촘한 판은 도움말 문장 대신 라벨 옆 ⓘ 하나(용어 'symbols').
     <Field label="종목" anchor="symbol" term={dense ? "symbols" : undefined} hint={dense ? undefined : "여러 종목은 쉼표로 나눠 써요. 자금을 종목 수만큼 균등하게 나눠 종목마다 따로 돌리고, 결과는 총합이에요."}>
       {dense ? (
-        <SymbolPicker key={exchange} exchange={exchange} value={form.symbol} onChange={(value) => setForm({ ...form, symbol: value })} />
+        <SymbolPicker key={exchange} exchange={exchange} value={form.symbol} onChange={(value) => setForm((current) => normalizeExchange(current.exchange) === exchange ? { ...current, symbol: value } : current)} />
       ) : (
         <input className={inputCls} value={form.symbol} onChange={set("symbol")} placeholder={domestic ? "KRW-BTC 또는 KRW-BTC, KRW-ETH" : "BTCUSDT 또는 BTCUSDT, ETHUSDT"} />
       )}

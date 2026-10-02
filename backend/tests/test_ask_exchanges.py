@@ -136,3 +136,58 @@ def test_domestic_listing_failure_is_closed_not_candidate_fallback(monkeypatch):
                           created_at="2026-10-02T00:00:00Z", created_ms=1,
                           candidates_json=json.dumps({"items": [{"symbol": "KRW-SCAM"}]}))
     assert ask._allowed_symbols(row, "spot", "bithumb") == set()
+
+
+@pytest.mark.parametrize("symbol", [" tusdt ", "0USDT", "A" * 20 + "USDT", "KRW-T"])
+def test_ask_pair_shape_allows_one_to_twenty_character_bases(symbol):
+    assert ask.AskRequest(session_id=1, symbol=symbol).symbol == symbol.strip().upper()
+
+
+@pytest.mark.parametrize("symbol", ["USDT", "A" * 21 + "USDT", "T-USDT", "TUSDT,BTCUSDT", "KRW-", "KRW-" + "A" * 21])
+def test_ask_pair_shape_rejects_empty_oversized_or_mixed_bases(symbol):
+    with pytest.raises(ValidationError):
+        ask.AskRequest(session_id=1, symbol=symbol)
+
+
+@pytest.mark.parametrize("source", ["candidate", "manual", "resolved"])
+def test_one_letter_binance_candidate_pool_and_server_listing_revalidation(monkeypatch, source):
+    monkeypatch.setattr(ask.hotcoins, "get_cached_tickers", lambda: [
+        dict(symbol="TUSDT", quoteVolume="900000000", lastPrice="0.01",
+             highPrice="0.012", lowPrice="0.009", priceChangePercent="2")
+    ])
+    monkeypatch.setattr(ask.symbols_mod, "list_symbols", lambda: {
+        "items": [{"symbol": "TUSDT", "spot": True, "futures": False}]
+    })
+    monkeypatch.setattr(ask, "_candidate_ai", lambda: None)
+    monkeypatch.setattr(ask, "propose_with_ai", lambda plan: [])
+    with get_session() as db:
+        suffix = secrets.token_hex(4)
+        user = User(username=f"ask_pair_{suffix}", email=f"{suffix}@example.test", password_hash="",
+                    created_at="2026-10-02T00:00:00Z", ask_consent_version=ask.DISCLAIMER_VERSION)
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+        response = ask.run_candidates(db, user, answers(account_balance=250))
+        assert [candidate["symbol"] for candidate in response["candidates"]] == ["TUSDT"]
+        if source != "candidate":
+            row = db.get(AskMacroSession, response["session_id"])
+            row.candidates_json = json.dumps({"items": [{"symbol": "AAAUSDT"}], "ai_used": False})
+            db.add(row)
+            db.commit()
+        if source == "manual":
+            monkeypatch.setattr(ask, "MANUAL_SYMBOLS", ("TUSDT",))
+        seen = []
+
+        def backtest(macro):
+            seen.append(macro)
+            return BacktestResult(initial_capital=250, final_equity=265, final_return_pct=6,
+                                  mdd_pct=1, win_rate_pct=60, total_trades=10, trades=[], equity_curve=[])
+
+        result = ask.run_ask(db, user, ask.AskRequest(session_id=response["session_id"], symbol=" tusdt ", resolved=source == "resolved"), backtest)
+        assert result["results"] and seen
+        assert all(macro.symbol == "TUSDT" and macro.exchange == "binance" for macro in seen)
+        for symbol in ("SUSDT", "KRW-T"):
+            with pytest.raises(ask.AskError) as exc:
+                # Client-side resolved flags cannot bypass the server's actual market listing.
+                ask.run_ask(db, user, ask.AskRequest(session_id=response["session_id"], symbol=symbol, resolved=True), backtest)
+            assert exc.value.status == 422

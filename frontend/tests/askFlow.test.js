@@ -168,3 +168,26 @@ test("a resolved symbol that is not shaped like a pair is ignored", () => {
   const s = reduce(withCandidates(), { type: "chooseSymbol", symbol: "NOT A SYMBOL", resolved: true });
   assert.equal(s.answers.symbol, null);
 });
+
+test("a one-letter Binance base is accepted from candidates, manual chips, and resolved search", () => {
+  for (const source of ["candidate", "manual", "resolved"]) {
+    const state = withCandidates();
+    if (source === "candidate") state.candidates = [{ symbol: "TUSDT", base: "T" }];
+    if (source === "manual") state.manualSymbols = ["TUSDT"];
+    const next = reduce(state, { type: "chooseSymbol", symbol: " tusdt ", resolved: source === "resolved" });
+    assert.equal(next.answers.symbol, "TUSDT", source);
+    assert.deepEqual(toAskRequest(next), { session_id: 7, symbol: "TUSDT" });
+  }
+});
+
+test("Binance pair shape requires a 1-to-20 character base and excludes native KRW pairs", () => {
+  for (const base of ["T", "0", "A".repeat(20)]) {
+    assert.equal(reduce(withCandidates(), { type: "chooseSymbol", symbol: `${base}USDT`, resolved: true }).answers.symbol, `${base}USDT`);
+  }
+  for (const symbol of ["USDT", "A".repeat(21) + "USDT", "KRW-T", "T-USDT", "TUSDT,BTCUSDT"]) {
+    assert.equal(reduce(withCandidates(), { type: "chooseSymbol", symbol, resolved: true }).answers.symbol, null);
+  }
+  assert.equal(reduce(withCandidates(), { type: "chooseSymbol", symbol: "TUSDT" }).answers.symbol, null);
+  const domestic = reduce(initialState(), { type: "choose", step: "exchange", value: "upbit" });
+  assert.equal(reduce(domestic, { type: "chooseSymbol", symbol: "KRW-T", resolved: true }).answers.symbol, "KRW-T");
+});

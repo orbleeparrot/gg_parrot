@@ -1946,6 +1946,7 @@ def symbols(response: Response, exchange: Exchange = "binance") -> dict:
         data = symbols_mod.list_symbols(**({"exchange": exchange} if exchange != "binance" else {}))
         response.headers["Cache-Control"] = (
             "public, max-age=5, s-maxage=5" if data.get("stale") or not data.get("items")
+            else "public, max-age=15, s-maxage=15, stale-while-revalidate=45" if exchange != "binance"
             else "public, max-age=300, s-maxage=300"
         )
         return data

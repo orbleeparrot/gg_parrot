@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Optional
 
 from .data import NoSpotDataError, get_recent_klines
 from .cache_runtime import ResponseCache
@@ -45,10 +44,40 @@ _LIVE_REFRESH_SECONDS = 3.0
 # The latest two bars use a separate, short cache.  A 1d chart may refresh its
 # 300-bar history only once a minute, but its open candle still has to move.
 _live_cache = ResponseCache("chart-live", max_entries=512, max_bytes=2_000_000)
+_CANDLE_DURATION_MS = {
+    "1m": 60_000, "3m": 180_000, "5m": 300_000, "15m": 900_000,
+    "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000,
+}
 
 
 def supported_intervals() -> list[str]:
     return list(_INTERVALS)
+
+
+def _with_freshness(payload: dict, state: str) -> dict:
+    """Describe the cached data without mistaking response time for data time.
+
+    ``fetched_at_ms`` records when an upstream read completed, not its latest
+    trade time. Candle ``t`` stays the original exchange candle-open timestamp.
+    Time passing alone cannot confirm the final price of a cached open candle.
+    """
+    server_time = int(time.time() * 1000)
+    candles = payload["candles"]
+    stale = state == "stale"
+    duration = _CANDLE_DURATION_MS[payload["interval"]]
+    awaiting = stale or any(
+        row.get("closed") is False and int(row["t"]) + duration <= server_time
+        for row in candles
+    )
+    return {
+        **payload,
+        "server_time": server_time,
+        "cache_age_ms": max(0, server_time - payload["fetched_at_ms"]),
+        "latest_candle_open_time_ms": int(candles[-1]["t"]) if candles else None,
+        "cached": state != "loaded",
+        "stale": stale,
+        "awaiting_candle_refresh": awaiting,
+    }
 
 
 def get_candles(
@@ -109,14 +138,15 @@ def get_candles(
             "symbol": symbol, "interval": interval, "market": used_market,
             "exchange": exchange, "quote_currency": quote_currency(exchange),
             "requested_market": market, "candles": candles,
-            "server_time": int(time.time() * 1000),
+            "source": f"{exchange}:{used_market}", "fallback": used_market != market,
+            "fetched_at_ms": int(time.time() * 1000),
             "refresh_seconds": _INTERVALS[interval],
             "disclaimer": "public market data; reference only",
         }
 
     payload, state = _cache.get_or_load(key, prepare, ttl=_INTERVALS[interval], stale_ttl=900)
     payload["candles"] = payload["candles"][-limit:]
-    return {**payload, "cached": state != "loaded", **({"stale": True} if state == "stale" else {})}
+    return _with_freshness(payload, state)
 
 
 def get_live_candles(
@@ -147,8 +177,9 @@ def get_live_candles(
     key = (symbol, interval, market) if exchange == "binance" else (symbol, interval, market, exchange)
     exchange_args = {} if exchange == "binance" else {"exchange": exchange}
 
-    # get_candles 와 같은 선물→현물 폴백. 히스토리는 현물로 떨어졌는데 움직이는
-    # 봉만 선물을 고집하면 두 시세가 섞여 캔들이 튄다.
+    # Keep the same futures -> spot fallback as history. The independent caches
+    # may recover at different times: consumers must compare actual `source`
+    # before merging, or request the live edge using history's actual market.
     def load():
         used_market = market
         try:
@@ -173,8 +204,13 @@ def get_live_candles(
             "symbol": symbol, "interval": interval, "market": used_market,
             "exchange": exchange, "quote_currency": quote_currency(exchange),
             "requested_market": market, "candles": candles,
-            "server_time": int(time.time() * 1000), "refresh_seconds": _LIVE_REFRESH_SECONDS,
+            "source": f"{exchange}:{used_market}", "fallback": used_market != market,
+            "fetched_at_ms": int(time.time() * 1000), "refresh_seconds": _LIVE_REFRESH_SECONDS,
         }
 
-    payload, state = _live_cache.get_or_load(key, prepare, ttl=_LIVE_REFRESH_SECONDS, stale_ttl=15)
-    return {**payload, "cached": state != "loaded", **({"stale": True} if state == "stale" else {})}
+    # Normal 3-second refreshes must deliver their newly verified price instead
+    # of an SWR stale response that clients correctly refuse to treat as LIVE.
+    payload, state = _live_cache.get_or_load(
+        key, prepare, ttl=_LIVE_REFRESH_SECONDS, stale_ttl=15, wait_for_refresh=True,
+    )
+    return _with_freshness(payload, state)

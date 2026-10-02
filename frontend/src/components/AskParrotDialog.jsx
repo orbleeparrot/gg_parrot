@@ -223,24 +223,31 @@ function CandidateRow({ c, marketText, onPick, disabled, i }) {
 function ManualPick({ chips, onPick, disabled, i, exchange }) {
   const [query, setQuery] = useState("");
   const [note, setNote] = useState("");
-  const { items } = useSymbolList(exchange);
+  const { items, loading, error, reload, stale, canChoose } = useSymbolList(exchange);
   const q = query.trim();
   const matches = items && q ? searchSymbols(items, q, { limit: 8 }) : [];
-  const add = () => {
-    if (!q) return;
-    const resolved = items ? resolveSymbol(items, q) : null;
-    if (!resolved) { setNote(MANUAL_SEARCH_MISS); return; }
+  const pick = (symbol, resolved = false) => {
+    if (disabled) return;
+    if (!canChoose(symbol)) { setNote("종목 목록이 변경되었거나 오래되었어요. 다시 확인한 뒤 선택해 주세요."); reload(); return; }
     setQuery("");
     setNote("");
-    onPick(resolved, true);
+    onPick(symbol, resolved);
+  };
+  const add = () => {
+    if (!q) return;
+    if (!items) { setNote(loading ? "종목 목록을 불러오는 중이에요." : error || "종목 목록을 다시 확인해 주세요."); return; }
+    const resolved = items ? resolveSymbol(items, q) : null;
+    if (!resolved) { setNote(MANUAL_SEARCH_MISS); return; }
+    pick(resolved, true);
   };
   return (
     <section className="ask-manual ask-in" style={inStyle(i)} aria-label={MANUAL_PICK_LABEL}>
       <h4 className="ask-manual-t">{MANUAL_PICK_LABEL}</h4>
+      {stale || error ? <p className="ask-miss" role="status">{items ? "마지막 확인한 목록이에요. 새 상장·거래 종료가 아직 반영되지 않았을 수 있어요." : error || "종목 목록을 확인하고 있어요."} <button type="button" className="btn btn-s btn-secondary" onClick={reload}>다시 확인</button></p> : null}
       {chips.length ? (
         <div className="ask-chips">
           {chips.map((sym) => (
-            <button key={sym} type="button" className="ask-chip num" disabled={disabled} onClick={() => onPick(sym)}>
+            <button key={sym} type="button" className="ask-chip num" disabled={disabled} onClick={() => pick(sym)}>
               <CoinIcon symbol={sym} size={16} alt="" className="ask-logo" />{baseOf(sym)}
             </button>
           ))}
@@ -250,6 +257,7 @@ function ManualPick({ chips, onPick, disabled, i, exchange }) {
         <input
           className="input"
           value={query}
+          disabled={disabled}
           placeholder={MANUAL_SEARCH_PLACEHOLDER}
           aria-label="종목 검색"
           onChange={(e) => { setQuery(e.target.value); setNote(""); }}
@@ -261,7 +269,7 @@ function ManualPick({ chips, onPick, disabled, i, exchange }) {
         <div className="ask-chips">
           {matches.map((item) => (
             <button key={item.symbol} type="button" className="ask-chip num" disabled={disabled}
-              onClick={() => { setQuery(""); setNote(""); onPick(item.symbol, true); }}>
+              onClick={() => pick(item.symbol, true)}>
               <CoinIcon symbol={item.symbol} size={16} alt="" className="ask-logo" />{baseOf(item.symbol)}
             </button>
           ))}

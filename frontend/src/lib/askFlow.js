@@ -6,7 +6,7 @@ import { EXCHANGES, exchangeLabel, isDomestic, quoteForExchange } from "./exchan
 export const STEPS = ["exchange", "balance", "profile", "market", "horizon", "watch"];
 export const PROFILE_ORDER = ["stable", "balanced", "aggressive", "scalper"];
 // 바이낸스 USDT 짝 모양 — 서버의 _SYMBOL_RE 와 같은 규칙.
-const SYMBOL_RE = /^[A-Z0-9]{2,20}USDT$/;
+const SYMBOL_RE = /^[A-Z0-9]{1,20}USDT$/;
 
 export function canChooseFutures(answers) {
   return !isDomestic(answers.exchange) && answers.profile !== "stable";

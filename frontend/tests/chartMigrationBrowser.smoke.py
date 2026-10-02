@@ -1,17 +1,18 @@
 """Real React chart integration; every API response is intercepted, never stored.
 
-Run against Vite with PYTHONPATH containing Playwright. Results stay in the repo:
+Run against Vite with PYTHONPATH containing Playwright. Results stay outside Git:
   CHART_TEST_BASE_URL=http://127.0.0.1:5173 python frontend/tests/chartMigrationBrowser.smoke.py
 """
 import json
 import math
 import os
+import time
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 from playwright.sync_api import sync_playwright, expect
 
 ROOT = Path(__file__).resolve().parents[2]
-OUTPUT = ROOT / "docs/chart-migration-preview/integration"
+OUTPUT = Path(os.environ.get("CHART_BROWSER_REPORT_DIR", "/tmp/ggp-chart-migration-integration"))
 BASE = os.environ.get("CHART_TEST_BASE_URL", "http://127.0.0.1:5173")
 CHROMIUM = os.environ.get("BROWSER_EXECUTABLE_PATH", "/data/team/clcleh123/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome")
 START = 1767225600000
@@ -56,7 +57,14 @@ def route_handler(route):
             status, payload = 503, {"detail": "차트 검증용 연결 오류"}
         else:
             data = [] if phase["mode"] == "empty" else bars(interval, phase["tick"])
-            payload = {"candles": data[-2:] if live else data, "server_time": START + 301 * INTERVALS[interval], "refresh_seconds": 2 if live else 3600, "stale": False}
+            now = int(time.time() * 1000)
+            query = parse_qs(parsed.query)
+            payload = {"candles": data[-2:] if live else data, "server_time": now,
+                       "fetched_at_ms": now, "cache_age_ms": 0,
+                       "exchange": query.get("exchange", ["binance"])[0],
+                       "symbol": query.get("symbol", ["BTCUSDT"])[0], "interval": interval,
+                       "market": query.get("market", ["spot"])[0],
+                       "refresh_seconds": 2 if live else 3600, "stale": False}
     elif parsed.path.endswith("/auth/me"):
         payload = {"user": {"id": 1, "username": "차트 검증", "email": "chart@example.invalid"}}
     elif parsed.path.endswith("/runner/sessions/stream-token"):
@@ -99,7 +107,10 @@ def verify_case(page, config, width):
         accessible = section.text_content()
         for label in (str(spec["rsi"]["entry"]), str(spec["rsi"]["exit"]), spec["rsi"].get("lowLabel", ""), spec["rsi"].get("highLabel", "")):
             assert label in accessible, (config, "missing RSI threshold/meaning", label)
-    assert "BTCUSDT" in text and "USDT" in text and "LIVE" in text, (config, text)
+    assert "BTCUSDT" in text and "USDT" in text, (config, text)
+    # These fixed renderer rows are historical/future fixtures, not an active
+    # candle. A fresh response timestamp must not label them as live.
+    assert "LIVE" not in text, (config, text)
     assert all(label in text for label in ("시", "고", "저", "종")), (config, "OHLC labels")
     assert state["data"][-1]["candles"] == bars(), (config, "data changed")
     assert state["data"][-1]["market"] == "spot" and state["data"][-1]["stale"] is False
@@ -147,7 +158,7 @@ def verify_interactions(page):
     expect(section.get_by_role("button", name="최신", exact=True)).to_be_visible()
     assert section.locator(".candle-ohlc-time").inner_text() == historical_time, "buffer rollover changed historical viewport"
     section.get_by_role("button", name="최신", exact=True).click()
-    expect(section.get_by_text("LIVE", exact=True)).to_be_visible()
+    expect(section.get_by_text("LIVE", exact=True)).to_have_count(0)
     default_allowed = chart.evaluate("element => element.dispatchEvent(new WheelEvent('wheel', {deltaY:-100,ctrlKey:true,bubbles:true,cancelable:true}))")
     assert default_allowed, "browser zoom shortcut prevented"
     assert page.evaluate("chartFixture.inspect().data.at(-1).candles.length") == 300
@@ -161,7 +172,7 @@ def verify_interactions(page):
     section.get_by_label("차트 봉 간격", exact=True).select_option("5m")
     page.wait_for_function("chartFixture.inspect().data.at(-1).interval === '5m'")
     assert page.evaluate("chartFixture.inspect().data.at(-1).candles") == bars("5m")
-    expect(section.get_by_text("LIVE", exact=True)).to_be_visible()
+    expect(section.get_by_text("LIVE", exact=True)).to_have_count(0)
     report["interactions"].extend(["zoom buttons", "drag remains active after unchanged live poll", "keyboard Home/End/arrows/Escape", "live append retains historical viewport", "latest returns to live", "browser zoom shortcut preserved", "300-bar cap", "live failure retains chart", "controlled interval reset"])
     box = chart.bounding_box()
     page.mouse.move(box["x"] + box["width"] * .3, box["y"] + 90)

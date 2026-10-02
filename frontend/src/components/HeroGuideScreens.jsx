@@ -1,8 +1,9 @@
-import { lazy, Suspense, useCallback, useEffect, useState } from "react";
-import { RULE_TYPES, withTypeDefaults, withExchangeDefaults } from "../lib/macro.js";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { RULE_TYPES, withTypeDefaults, withExchangeDefaults, macroToForm } from "../lib/macro.js";
 import { computeStrategyOverlay } from "../lib/indicators.js";
 import { EXCHANGES, isDomestic, normalizeExchange, normalizeSymbolForExchange, quoteForExchange } from "../lib/exchanges.js";
 import { baseOf } from "../lib/format.js";
+import { resolveChartMarket } from "../lib/chartSource.js";
 
 const ResultView = lazy(() => import("./ResultView.jsx"));
 const PaperPanelView = lazy(() =>
@@ -408,6 +409,7 @@ export function ConditionWorkbench({ screen, form, setForm, error }) {
           <CandleChart
             symbol={symbol}
             exchange={form.exchange || "binance"}
+            market={resolveChartMarket(form)}
             interval={form.candle_interval}
             onIntervalChange={(value) => setForm((current) => ({ ...current, candle_interval: value }))}
             disabledIntervals={isDomestic(form.exchange) && form.rule_type === "C" ? ["1m", "5m", "15m", "1h", "4h"].map((value) => ({ value, title: "국내 정기 분할매수는 일봉 전용이에요" })) : []}
@@ -425,12 +427,13 @@ export function ConditionWorkbench({ screen, form, setForm, error }) {
 
 export function BacktestScene({ form, backtest }) {
   const hasResult = !!backtest.result;
-  const chartSymbol = String(backtest.testedMacro?.symbol || form.symbol || "")
+  const chartForm = useMemo(() => backtest.testedMacro ? macroToForm(backtest.testedMacro) : form, [backtest.testedMacro, form]);
+  const chartSymbol = String(chartForm.symbol || "")
     .split(",")[0]
     .trim()
     .toUpperCase();
   // 결과와 같은 조건을 실시간 차트에 그대로 얹어 보조지표까지 보여준다.
-  const overlay = useCallback((candles) => computeStrategyOverlay(form, candles), [form]);
+  const overlay = useCallback((candles) => computeStrategyOverlay(chartForm, candles), [chartForm]);
 
   return (
     <section className="hero-live-output" aria-label="실제 백테스트 결과">
@@ -448,9 +451,10 @@ export function BacktestScene({ form, backtest }) {
           <Suspense fallback={<SceneLoading label="차트 불러오는 중…" />}>
             <CandleChart
               symbol={chartSymbol}
-              exchange={backtest.testedMacro?.exchange || form.exchange || "binance"}
-              defaultInterval={form.candle_interval || "1m"}
-              disabledIntervals={isDomestic(form.exchange) && form.rule_type === "C" ? ["1m", "5m", "15m", "1h", "4h"].map((value) => ({ value, title: "국내 정기 분할매수는 일봉 전용이에요" })) : []}
+              exchange={chartForm.exchange || "binance"}
+              market={resolveChartMarket(chartForm)}
+              interval={chartForm.candle_interval || "1m"}
+              disabledIntervals={isDomestic(chartForm.exchange) && chartForm.rule_type === "C" ? ["1m", "5m", "15m", "1h", "4h"].map((value) => ({ value, title: "국내 정기 분할매수는 일봉 전용이에요" })) : []}
               overlay={overlay}
               compact
             />

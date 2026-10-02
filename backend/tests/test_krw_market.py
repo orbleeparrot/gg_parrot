@@ -217,3 +217,90 @@ def test_bithumb_kst_grid_preserves_native_utc_open_and_verified_coverage(monkey
     assert first.equals(second) and len(calls) == 1
     assert first.iloc[0]["timestamp"].value // 1_000_000 == start
     assert first.iloc[-1]["timestamp"].value // 1_000_000 == start + step
+
+
+@pytest.mark.parametrize("exchange", ["upbit", "bithumb"])
+def test_symbol_catalog_refreshes_listing_and_delisting_after_sixty_seconds(monkeypatch, exchange):
+    from app.cache_runtime import close_cache_runtime
+    clock = [1_800_000_000.0]
+    monkeypatch.setattr(krw.time, "time", lambda: clock[0])
+    monkeypatch.setattr(krw._symbols_cache, "clock", lambda: clock[0])
+    markets = ["KRW-BTC", "KRW-OLD"]
+    calls = []
+    def request(actual_exchange, path, params):
+        calls.append(actual_exchange)
+        return [{"market": market} for market in markets]
+    monkeypatch.setattr(krw, "_request", request)
+
+    original = krw.list_symbols(exchange)
+    markets[:] = ["KRW-BTC", "KRW-NEW"]
+    clock[0] += 59
+    assert krw.list_symbols(exchange)["items"] == original["items"]
+    assert calls == [exchange]
+    clock[0] += 2
+    refreshing = krw.list_symbols(exchange)
+    close_cache_runtime()
+    updated = krw.list_symbols(exchange)
+
+    assert refreshing["stale"] is True
+    assert refreshing["sources"]["spot"]["status"] == "stale"
+    assert refreshing["fetched_at"] == original["fetched_at"]
+    assert refreshing["cache_age_seconds"] == 61
+    assert updated["stale"] is False
+    assert [row["symbol"] for row in updated["items"]] == ["KRW-BTC", "KRW-NEW"]
+    assert updated["fetched_at"] == clock[0] and updated["cache_age_seconds"] == 0
+    assert updated["refresh_seconds"] == 60 and updated["max_age_seconds"] == 300
+    assert calls == [exchange, exchange]
+
+
+def test_symbol_catalog_outage_cannot_extend_last_good_list_beyond_five_minutes(monkeypatch):
+    from app.cache_runtime import close_cache_runtime
+    clock = [1_800_000_000.0]
+    monkeypatch.setattr(krw.time, "time", lambda: clock[0])
+    monkeypatch.setattr(krw._symbols_cache, "clock", lambda: clock[0])
+    monkeypatch.setattr(krw, "_request", lambda *args: [{"market": "KRW-BTC"}])
+    original = krw.list_symbols("upbit")
+    def unavailable(*args):
+        raise RuntimeError("exchange unavailable")
+    monkeypatch.setattr(krw, "_request", unavailable)
+    clock[0] += 61
+    stale = krw.list_symbols("upbit")
+    close_cache_runtime()
+
+    assert stale["stale"] is True and stale["fetched_at"] == original["fetched_at"]
+    assert stale["cache_age_seconds"] == 61
+    clock[0] = original["fetched_at"] + 299
+    almost_expired = krw.list_symbols("upbit")
+    close_cache_runtime()
+    assert almost_expired["stale"] is True and almost_expired["cache_age_seconds"] == 299
+    clock[0] = original["fetched_at"] + 300
+    with pytest.raises(RuntimeError, match="exchange unavailable"):
+        krw.list_symbols("upbit")
+
+
+def test_symbol_catalog_refresh_isolated_by_exchange(monkeypatch):
+    from app.cache_runtime import close_cache_runtime
+    clock = [1_800_000_000.0]
+    monkeypatch.setattr(krw.time, "time", lambda: clock[0])
+    monkeypatch.setattr(krw._symbols_cache, "clock", lambda: clock[0])
+    ready = {"upbit": True, "bithumb": True}
+    markets = {"upbit": ["KRW-BTC"], "bithumb": ["KRW-BTC", "KRW-OLD"]}
+    def request(exchange, path, params):
+        if not ready[exchange]:
+            raise RuntimeError("exchange unavailable")
+        return [{"market": market} for market in markets[exchange]]
+    monkeypatch.setattr(krw, "_request", request)
+    upbit = krw.list_symbols("upbit")
+    bithumb = krw.list_symbols("bithumb")
+    clock[0] += 61
+    markets["upbit"].append("KRW-NEW")
+    ready["bithumb"] = False
+    krw.list_symbols("upbit")
+    stale = krw.list_symbols("bithumb")
+    close_cache_runtime()
+
+    refreshed = krw.list_symbols("upbit")
+    assert refreshed["stale"] is False and refreshed["count"] == 2
+    assert refreshed["fetched_at"] != upbit["fetched_at"]
+    assert stale["stale"] is True and stale["items"] == bithumb["items"]
+    assert krw.list_symbols("bithumb")["sources"]["spot"]["status"] == "stale"

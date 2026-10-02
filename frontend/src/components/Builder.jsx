@@ -479,9 +479,9 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
     </div>
   );
 
-  // 국내(원화) 거래소 제약 — 포지션·레버리지 등 설정값 바로 아래 노란 경고 글씨(다른 경고와 같은 꼴).
+  // 국내(원화) 거래소 제약 — 거래소 고르기 바로 아래 노란 경고 글씨(거래소가 정한 제약이라서).
   const domesticWarning = domestic
-    ? <p className="t-caption text-amber-700" role="note">원화 현물 전용 · 숏·레버리지·선물은 사용할 수 없어요.</p>
+    ? <p className="bd-domestic-warning t-caption text-amber-700" role="note">원화 현물 전용 · 숏·레버리지·선물은 사용할 수 없어요.</p>
     : null;
 
   // 차트를 정하는 값들 — 종목·매매 방식·포지션·봉 간격·기간. 차트 섹션 안으로
@@ -489,17 +489,16 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
   const basicSettings = dense ? (
     <section className="bd-sec">
       <div className="bd-grid">{exchangeField}</div>
+      {domesticWarning}
       <div className="bd-grid">{symbolField}{strategyField}</div>
       <div className="bd-grid">{positionField}{intervalField}{periodField}</div>
-      {domesticWarning}
       {customRange}
     </section>
   ) : (
     <div className="space-y-5">
-      {exchangeField}
+      <div className="space-y-2">{exchangeField}{domesticWarning}</div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 gap-y-5">{symbolField}{strategyField}</div>
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">{positionField}{intervalField}{periodField}</div>
-      {domesticWarning}
       {customRange}
     </div>
   );

@@ -103,6 +103,19 @@ def pick_btc(page):
     choice.click()
 
 
+EXCHANGE_LABELS = {"binance": "바이낸스", "upbit": "업비트", "bithumb": "빗썸"}
+
+
+def builder_exchange(page, value):
+    """직접 만들기의 거래소 segmented 버튼 (2026-10-02, 드롭다운에서 바뀜)."""
+    return page.get_by_role("group", name="거래소", exact=True).get_by_role("button", name=EXCHANGE_LABELS[value], exact=True)
+
+
+def pick_exchange(page, value):
+    builder_exchange(page, value).click()
+    expect(builder_exchange(page, value)).to_have_attribute("aria-pressed", "true")
+
+
 def main():
     assert (fixtures.BUILD / "index.html").is_file(), "Build frontend and set FRONTEND_BUILD"
     fixtures.profile.BUILD = fixtures.BUILD
@@ -121,16 +134,15 @@ def main():
                 install_note_handler(page)
                 page.on("pageerror", lambda error: errors.append(str(error)))
                 page.goto(f"http://127.0.0.1:{server.server_port}/builder")
-                exchange = page.get_by_label("거래소", exact=True)
-                expect(exchange).to_have_value("binance")
+                expect(builder_exchange(page, "binance")).to_have_attribute("aria-pressed", "true")
                 expect(page.get_by_role("button", name="숏", exact=True)).to_be_enabled()
-                exchange.select_option("upbit")
+                pick_exchange(page, "upbit")
                 expect(page.get_by_role("button", name="숏", exact=True)).to_be_disabled()
                 expect(page.get_by_role("spinbutton", name="시작 자금 (KRW)", exact=True)).to_have_value("")
                 expect(page.get_by_role("button", name="KRW-BTC 빼기", exact=True)).to_be_visible()
                 page.wait_for_timeout(100)
                 assert fixture.pending_upbit, "Upbit request must be in flight"
-                exchange.select_option("bithumb")
+                pick_exchange(page, "bithumb")
                 expect(page.get_by_role("button", name="KRW-BTC 빼기", exact=True)).to_be_visible()
                 market = page.locator(".studio-chart .candle-chart-market")
                 expect(market).to_contain_text("빗썸")
@@ -152,7 +164,7 @@ def main():
                 expect(page.get_by_role("group", name="봉 간격 (조건에서 정해요)").locator(".is-unavailable")).to_have_count(5)
                 assert set(fixture.symbol_exchanges) == {"binance", "upbit", "bithumb"}, fixture.symbol_exchanges
                 assert ("bithumb", "KRW-BTC") in fixture.candle_markets
-                exchange.select_option("binance")
+                pick_exchange(page, "binance")
                 expect(page.get_by_role("button", name="BTCUSDT 빼기", exact=True)).to_be_visible()
                 expect(page.locator(".candle-chart-current")).to_have_text("100.00")
                 checks.append({"width": width, "passed": True, "scenario": "native exchange symbols, money reset, short/SAR block, daily DCA, and late chart response isolation"})
@@ -167,13 +179,14 @@ def main():
             install_note_handler(page)
             page.on("pageerror", lambda error: errors.append(str(error)))
             page.goto(f"http://127.0.0.1:{server.server_port}/builder")
-            page.get_by_label("거래소", exact=True).select_option("upbit")
-            expect(page.get_by_text("새 거래소에 같은 종목이 없어 비웠어요.", exact=False)).to_be_visible()
+            pick_exchange(page, "upbit")
+            page.wait_for_function("() => !document.querySelector('.bd-symrow')")
+            page.wait_for_timeout(300)
             expect(page.get_by_role("button", name="KRW-BTC 빼기", exact=True)).to_have_count(0)
             search = page.get_by_role("combobox", name="종목 검색")
             search.fill("ETH")
             page.get_by_role("option", name="KRW-ETH", exact=True).click()
-            page.get_by_label("거래소", exact=True).select_option("binance")
+            pick_exchange(page, "binance")
             expect(page.get_by_role("button", name="ETHUSDT 빼기", exact=True)).to_be_visible()
             checks.append({"passed": True, "scenario": "unlisted BTC is cleared; manually selected ETH survives return to Binance"})
             context.close()
@@ -249,7 +262,7 @@ def main():
             paper_tab.click()
             page.locator(".sd-paper-main").click()
             expect(page.locator(".sd-stat")).to_contain_text("현재 평가금액 (USDT)")
-            page.get_by_label("거래소", exact=True).select_option("bithumb")
+            pick_exchange(page, "bithumb")
             expect(page.locator(".sd-stat")).to_contain_text("현재 평가금액 (USDT)")
             expect(page.locator(".sd-lock.is-warn")).to_contain_text("바이낸스")
             page.get_by_role("tab", name="백테스트", exact=True).click()

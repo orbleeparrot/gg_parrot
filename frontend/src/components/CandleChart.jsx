@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api.js";
 import { fmtPrice, quoteOf } from "../lib/format.js";
-import { exchangeLabel, normalizeExchange } from "../lib/exchanges.js";
+import { exchangeLabel, isDomestic, normalizeExchange } from "../lib/exchanges.js";
 import { applyChartHistory, applyChartLive, chartTimeKst, createChartStream, isChartFresh, isChartLive } from "../lib/chartSource.js";
 import CandlePlot from "./CandlePlot.jsx";
 
@@ -34,7 +34,7 @@ const INTERVALS = [
 ];
 
 // --- inspector panel: OHLC of the hovered (or latest) bar ---------------
-function BarReadout({ bar, live, quote }) {
+function BarReadout({ bar, live, quote, extra = null }) {
   if (!bar) return null;
   const rise = bar.c >= bar.o;
   const pct = bar.o ? ((bar.c - bar.o) / bar.o) * 100 : 0;
@@ -57,6 +57,7 @@ function BarReadout({ bar, live, quote }) {
           {pct.toFixed(2)}%
         </span>
       </div>
+      {extra}
       {live && (
         <span className="candle-chart-live inline-flex items-center gap-1.5 t-caption font-bold text-red-600">
           <span aria-hidden="true" className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse motion-reduce:animate-none" />
@@ -118,7 +119,7 @@ function MarketPrice({ bar, quote, changePct }) {
   );
 }
 
-function SourceStatus({ feed, now }) {
+function SourceStatus({ feed, now, inline = false }) {
   const { source, history, live, historyError, liveError, mismatch } = feed;
   const status = (meta, error, edge = false) => error ? "오류 · 마지막 시세 유지" : !meta ? "확인 대기" :
     meta.stale ? "지연 · 캐시 시세" : meta.awaiting ? "진행봉 갱신 대기" :
@@ -129,10 +130,16 @@ function SourceStatus({ feed, now }) {
     (liveError || !isChartFresh(live, now)) && `실시간: ${status(live, liveError, true)}`,
     (historyError || history?.stale) && `과거봉: ${status(history, historyError)}`,
   ].filter(Boolean).join(" · ");
+  // inline — 직접 만들기 차트의 OHLC 줄 끝에 붙는다. 거래소 이름은 차트 제목에 이미 있으니 빼고,
+  // 국내는 현물뿐이라 시장도 뺀다(2026-10-02, 두 줄 중복 정리).
+  const market = source?.market === "futures" ? "선물" : "현물";
+  const label = !source ? "시세 출처 확인 중 · 시세 정보"
+    : inline ? (isDomestic(source.exchange) ? "시세 정보" : `${market} · 시세 정보`)
+      : `${exchangeLabel(source.exchange)} ${market} · 시세 정보`;
   return (
-    <details className="candle-source t-caption text-slate-500">
-      <summary className="cursor-pointer" aria-label="시세 출처와 갱신 상태">
-        {source ? `${exchangeLabel(source.exchange)} ${source.market === "futures" ? "선물" : "현물"}` : "시세 출처 확인 중"} · 시세 정보
+    <details className={"candle-source t-caption text-slate-500" + (inline ? " is-inline" : "")}>
+      <summary className="cursor-pointer" aria-label="시세 출처와 갱신 상태" title={inline ? [label, source?.fallback && "선물 요청 → 현물 대체", warning].filter(Boolean).join(" · ") : undefined}>
+        {label}
         {source?.fallback && <span className="text-amber-700"> · 선물 요청 → 현물 대체</span>}
         {warning && <span className="text-amber-700" role="status" aria-live="polite"> · {warning}</span>}
       </summary>
@@ -415,7 +422,7 @@ export default function CandleChart({
           )}
         </div>
 
-        <SourceStatus feed={feed} now={now} />
+        {view.length === 0 && <SourceStatus feed={feed} now={now} />}
 
         {error && <div className="notice-warn py-6 t-small text-slate-700">차트를 불러오지 못했어요: {error}</div>}
         {!error && (!candles || !candles.length) && (
@@ -423,7 +430,7 @@ export default function CandleChart({
         )}
         {view.length > 0 && (
           <div className="candle-chart-stage">
-            <div className="candle-chart-readout"><BarReadout bar={inspected} quote={quote} live={live && fresh && !last.closed} /></div>
+            <div className="candle-chart-readout"><BarReadout bar={inspected} quote={quote} live={live && fresh && !last.closed} extra={<SourceStatus feed={feed} now={now} inline />} /></div>
             <div className="candle-chart-plot">
               {plot}
             </div>

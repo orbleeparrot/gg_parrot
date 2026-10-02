@@ -7,6 +7,7 @@
 .builder-dense .bd-h .t-caption { flex-basis: 100%; margin-left: 0; font-size: 12px; font-weight: 500; }
 .builder-dense .bd-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-items: start; }
 .builder-dense .bd-grid + .bd-grid { margin-top: 12px; }
+.builder-dense .bd-domestic-warning { margin: 6px 0 12px; }
 .builder-dense .bd-grid-1 { grid-template-columns: minmax(0, 1fr); }
 .builder-dense .bd-field { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); grid-row: span 3; grid-template-rows: subgrid; row-gap: 4px; align-self: stretch; } /* 열 폭을 칸에 묶는다 — 기본 auto 열은 한 줄짜리 내용(종목 행)만큼 칸 밖으로 자랐다 */
 .builder-dense .bd-field-wide { grid-column: 1 / -1; }

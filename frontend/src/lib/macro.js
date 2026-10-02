@@ -4,6 +4,7 @@
 // carries its own params block (see TYPE_DEFAULTS / buildParams) and shares the
 // common envelope (candle_interval + advanced risk). Field names match the
 // backend pydantic models exactly so clone (macroToForm) is a direct Object.assign.
+import { isDomestic, normalizeExchange, quoteForExchange } from "./exchanges.js";
 
 // Demo safety cap on leverage (mirrors backend MAX_LEVERAGE default). Leverage is
 // a backtest/paper-only condition — C (DCA) is excluded and forced to 1x.
@@ -82,6 +83,7 @@ export const TYPE_DEFAULTS = {
 
 export function defaultForm() {
   return {
+    exchange: "binance",
     symbol: "BTCUSDT",
     rule_type: "A",
     position_side: "long",
@@ -133,6 +135,31 @@ export function withTypeDefaults(form, rt) {
   if (TYPE_DEFAULTS[rt]) Object.assign(next, TYPE_DEFAULTS[rt]);
   if (!RULE_TYPES[rt].allowShort) next.position_side = "long";
   if (rt === "C") next.leverage = 1; // DCA is leverage-excluded (1x fixed)
+  if (isDomestic(form.exchange)) {
+    next.position_side = "long";
+    next.leverage = 1;
+    next.market = "spot";
+    next.funding_pct = 0;
+    next.flip_to_short = false;
+    if (rt === "C") next.candle_interval = "1d";
+    // Changing strategy must not repopulate reset money fields in the wrong units.
+    for (const key of EXCHANGE_MONEY_FIELDS) if (key in (TYPE_DEFAULTS[rt] || {})) next[key] = form[key] ?? "";
+  }
+  return next;
+}
+
+const EXCHANGE_MONEY_FIELDS = ["initial_capital", "amount_per_buy", "buy_price", "sell_price", "lower_price", "upper_price", "per_grid_invest", "base_order_size", "safety_order_size"];
+
+export function withExchangeDefaults(form, value) {
+  const exchange = normalizeExchange(value);
+  if (exchange === normalizeExchange(form.exchange)) return form;
+  const next = { ...form, exchange, symbol: "", funding_pct: 0 };
+  for (const key of EXCHANGE_MONEY_FIELDS) next[key] = "";
+  if (isDomestic(exchange)) {
+    Object.assign(next, { position_side: "long", leverage: 1, market: "spot", flip_to_short: false });
+    if (next.rule_type === "K") next.rule_type = "A";
+    if (next.rule_type === "C") next.candle_interval = "1d";
+  } else next.market = "auto";
   return next;
 }
 
@@ -156,6 +183,27 @@ export function validateDetailed(form) {
   const meta = RULE_TYPES[rt];
   const isShort = form.position_side === "short";
   const fail = (field, message) => ({ field, message });
+
+  let exchange;
+  try { exchange = normalizeExchange(form.exchange); }
+  catch (_) { return fail("exchange", "지원하지 않는 거래소예요."); }
+  const domestic = isDomestic(exchange);
+  const symbols = String(form.symbol || "").split(",").map((value) => value.trim().toUpperCase()).filter(Boolean);
+  const symbolPattern = domestic ? /^KRW-[A-Z0-9]{1,20}$/ : /^[A-Z0-9]{1,20}USDT$/;
+  if (!symbols.length || symbols.length > 5 || !symbols.every((symbol) => symbolPattern.test(symbol))) return fail("symbol", domestic ? "선택한 거래소의 KRW 종목을 골라 주세요." : "바이낸스 USDT 종목을 골라 주세요.");
+  if (domestic) {
+    if (isShort) return fail("position_side", "업비트·빗썸 원화 현물에서는 숏을 사용할 수 없어요.");
+    if (num(form.leverage) !== 1) return fail("leverage", "국내 원화 현물은 레버리지 없이 1배로만 사용해요.");
+    if (form.market === "futures") return fail("market", "국내 원화 현물에서는 선물 시장을 사용할 수 없어요.");
+    if (rt === "K") return fail("rule_type", "K 숏 전환 전략은 바이낸스 선물에서만 사용할 수 있어요.");
+    if (rt === "C" && form.candle_interval !== "1d") return fail("candle_interval", "국내 정기 분할매수는 일봉으로만 확인해요.");
+    if (num(form.funding_pct || 0) !== 0) return fail("funding_pct", "원화 현물에는 선물 펀딩비를 적용하지 않아요.");
+  }
+  if (!(num(form.initial_capital) > 0)) return fail("initial_capital", "시작 자금을 선택한 거래소의 통화로 다시 입력해 주세요.");
+  if (rt === "C" && !(num(form.amount_per_buy) > 0)) return fail("amount_per_buy", "한 번에 살 금액을 입력해 주세요.");
+  if (rt === "B") for (const key of ["buy_price", "sell_price"]) if (!(num(form[key]) > 0)) return fail(key, "선택한 거래소의 가격을 입력해 주세요.");
+  if (rt === "D" && !(num(form.lower_price) > 0)) return fail("lower_price", "선택한 거래소의 가격 범위를 입력해 주세요.");
+  if (rt === "H") for (const key of ["base_order_size", "safety_order_size"]) if (!(num(form[key]) > 0)) return fail(key, "선택한 거래소의 매수 금액을 입력해 주세요.");
 
   // Short A/B must set a stop loss (short loss is theoretically unbounded).
   if (isShort && (rt === "A" || rt === "B") && (!form.use_stop_loss || !(form.stop_loss_pct > 0))) {
@@ -214,7 +262,7 @@ function buildParams(rt, form) {
     case "B":
       return { buy_price: num(form.buy_price), sell_price: num(form.sell_price), initial_capital: num(form.initial_capital) };
     case "C":
-      return { amount_per_buy: num(form.amount_per_buy), interval_days: num(form.interval_days) };
+      return { amount_per_buy: num(form.amount_per_buy), interval_days: num(form.interval_days), initial_capital: num(form.initial_capital) };
     case "D":
       return {
         lower_price: num(form.lower_price), upper_price: num(form.upper_price), grid_count: num(form.grid_count),
@@ -282,6 +330,8 @@ export function buildMacro(form) {
     .filter(Boolean);
   const uniq = [...new Set(syms)];
   return {
+    exchange: normalizeExchange(form.exchange),
+    quote_currency: quoteForExchange(form.exchange),
     symbol: uniq[0] || "BTCUSDT",
     symbols: uniq.length > 1 ? uniq.slice(0, 5) : null,
     rule_type: rt,
@@ -314,6 +364,7 @@ export function buildMacro(form) {
 // Load a stored macro JSON back into editable form state (clone flow).
 export function macroToForm(macro) {
   const f = defaultForm();
+  f.exchange = normalizeExchange(macro.exchange);
   f.symbol = macro.symbols && macro.symbols.length > 1 ? macro.symbols.join(", ") : macro.symbol;
   f.rule_type = macro.rule_type;
   f.position_side = macro.position_side;

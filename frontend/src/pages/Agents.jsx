@@ -324,7 +324,8 @@ function AccountAgents() {
   const macro = selected?.macro || null;
   const interval = macro?.candle_interval || "1d";
   const market = executionMarket(macro, selected);
-  const activeChart = chartSnapshot?.symbol === selected?.symbol ? chartSnapshot : null;
+  const exchange = macro?.exchange || "binance";
+  const activeChart = chartSnapshot?.symbol === selected?.symbol && (chartSnapshot.exchange || "binance") === exchange ? chartSnapshot : null;
   const featureStates = useMemo(
     () => ({ position_news: activePositionNews, whale_activity: whaleActivity, runner_log: runnerLog }),
     [activePositionNews, whaleActivity, runnerLog],
@@ -476,8 +477,9 @@ function AccountAgents() {
             <section className="agent-chart-pane" aria-label={`${selected.symbol} 실시간 차트`}>
               <div className="agent-chart-stage">
                 <CandleChart
-                  key={`${selected.session_id}-${market}`}
+                  key={`${selected.session_id}-${exchange}-${market}`}
                   symbol={selected.symbol}
+                  exchange={exchange}
                   market={market}
                   defaultInterval={interval}
                   expanded

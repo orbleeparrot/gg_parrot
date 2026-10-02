@@ -20,7 +20,7 @@ from typing import Optional
 
 from .engine import Macro
 
-SIG_VERSION = 1
+SIG_VERSION = 2
 
 # 세션에 남는 출처 값과 화면 표기.
 ORIGIN_WEB = "web"  # 웹 '빠른 실행' 티켓 — 서버가 매크로를 직접 넘김
@@ -44,10 +44,14 @@ def _key() -> bytes:
     return hashlib.sha256(b"ggparrot-macro-file:" + secret.encode("utf-8")).digest()
 
 
-def canonical_bytes(macro: Macro) -> bytes:
+def canonical_bytes(macro: Macro, *, version: int = SIG_VERSION) -> bytes:
     """서명 대상 — 정규화된 매크로를 키 정렬 JSON 으로 직렬화한 바이트."""
+    data = macro.model_dump(mode="json")
+    if version == 1:
+        data.pop("exchange", None)
+        data.pop("quote_currency", None)
     return json.dumps(
-        macro.model_dump(mode="json"), sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        data, sort_keys=True, separators=(",", ":"), ensure_ascii=False
     ).encode("utf-8")
 
 
@@ -56,8 +60,8 @@ def digest(macro: Macro) -> str:
     return hashlib.sha256(canonical_bytes(macro)).hexdigest()[:12]
 
 
-def _mac(macro: Macro) -> str:
-    return hmac.new(_key(), canonical_bytes(macro), hashlib.sha256).hexdigest()
+def _mac(macro: Macro, *, version: int = SIG_VERSION) -> str:
+    return hmac.new(_key(), canonical_bytes(macro, version=version), hashlib.sha256).hexdigest()
 
 
 def sign(macro: Macro) -> dict:
@@ -78,9 +82,12 @@ def verify(macro: Macro, sig: Optional[dict]) -> bool:
     # contain any JSON value; classify malformed signatures without a 500.
     if (not isinstance(given, str) or len(given) != 64
             or any(char not in "0123456789abcdef" for char in given)
-            or sig.get("v") != SIG_VERSION):
+            or sig.get("v") not in (1, SIG_VERSION)):
         return False
-    return hmac.compare_digest(given, _mac(macro))
+    version = sig["v"]
+    if version == 1 and (macro.exchange != "binance" or macro.quote_currency != "USDT"):
+        return False
+    return hmac.compare_digest(given, _mac(macro, version=version))
 
 
 def classify_origin(macro: Optional[Macro], *, user_macro_id: Optional[int], sig: Optional[dict]) -> str:

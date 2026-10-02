@@ -39,6 +39,8 @@ class Explanation(BaseModel):
 
 def _coin(symbol: str) -> str:
     s = symbol.upper()
+    if s.startswith("KRW-"):
+        return s[4:]
     for q in ("USDT", "BUSD", "USDC", "USD"):
         if s.endswith(q):
             return s[: -len(q)]

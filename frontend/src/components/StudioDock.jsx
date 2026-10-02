@@ -14,6 +14,7 @@ import { buildMacro, RULE_TYPES, CANDLE_INTERVALS } from "../lib/macro.js";
 import { paperMainButton } from "../lib/paperMain.js";
 import { useUsdKrw } from "../lib/usdkrw.js";
 import { Icon } from "./icons.jsx";
+import { exchangeLabel, isDomestic } from "../lib/exchanges.js";
 
 const AI_MASCOT = "/brand/navigation/ggparrot-nav-agent.svg";
 const SIDE_KO = { buy: "매수", sell: "매도", short: "숏 진입", cover: "숏 청산" };
@@ -71,7 +72,7 @@ export function StudioBacktest({ result: r, perSymbol, periodLabel, symbol, leve
   // 원래 ResultView 의 정보 세트 그대로(수익률·홀딩 비교 · 최종 평가금액+원화 · MDD · 승률 · 총 매매 횟수 · 샤프 · 손익비 · 최대 연속손절),
   // 관련된 것끼리 한 칸에: 수익률↔홀딩 비교, 평가금액↔원화, MDD↔연속손절, 승률↔매매 횟수. 없던 지표는 만들지 않는다.
   const streak = r.max_consecutive_losses || 0;
-  const krw = fmtKrw(r.final_equity, krwRate); // "≈ 10.3억원"
+  const krw = fmtKrw(r.final_equity, krwRate, symbol);
   const krwMatch = /^(≈?\s*[\d.,]+)(.*)$/.exec(krw || "");
   // 숫자에만 .num(고정폭) — 한글까지 고정폭 클래스에 넣으면 한글이 대체 글꼴로 빠져 글자가 깨져 보인다.
   const kpis = [
@@ -104,7 +105,7 @@ export function StudioBacktest({ result: r, perSymbol, periodLabel, symbol, leve
           <div className="t-title">기간 중 <span className="num">{liq}</span>번 청산됐어요 (전액 손실)</div>
           <div className="mt-1 t-small">
             레버리지 <span className="num">{leverage}</span>배라 청산으로 잃은 금액 <b className="num">{fmtMoney(r.liquidated_loss || 0, symbol)}</b>
-            {fmtKrw(r.liquidated_loss || 0, krwRate) && <span className="num"> ({fmtKrw(r.liquidated_loss || 0, krwRate)})</span>}.
+            {fmtKrw(r.liquidated_loss || 0, krwRate, symbol) && <span className="num"> ({fmtKrw(r.liquidated_loss || 0, krwRate, symbol)})</span>}.
             <InfoTooltip term="liquidation" />
           </div>
         </div>
@@ -319,13 +320,15 @@ function macroLine(macro) {
   if (!macro) return "";
   const interval = CANDLE_INTERVALS.find((i) => i.value === macro.candle_interval)?.label || macro.candle_interval;
   const symbolLabel = macro.symbols && macro.symbols.length > 1 ? macro.symbols.map(baseOf).join("·") : macro.symbol;
-  const parts = [symbolLabel, RULE_TYPES[macro.rule_type]?.label, macro.position_side === "short" ? "숏" : "롱", interval ? `${interval}봉` : "", `${macro.leverage || 1}배`];
+  const parts = [exchangeLabel(macro.exchange), symbolLabel, RULE_TYPES[macro.rule_type]?.label, macro.position_side === "short" ? "숏" : "롱", interval ? `${interval}봉` : "", `${macro.leverage || 1}배`];
   return parts.filter(Boolean).join(" · ");
 }
 
 // ── 페이퍼 트레이딩 — 왼쪽 상태 상자, 오른쪽 매매 로그 ──
-export function StudioPaper({ macro, valErr, controller }) {
+export function StudioPaper({ macro: currentMacro, valErr, controller }) {
   const { status, mode, setMode, busy, error, startedMacro, startedMode, running, start, stop, restart } = controller;
+  // A session's balances keep their original market/currency after builder edits.
+  const macro = status && startedMacro ? startedMacro : currentMacro;
   const { rate: krwRate } = useUsdKrw();
   const quote = quoteOf(macro.symbol);
   const base = baseOf(macro.symbol);
@@ -335,7 +338,7 @@ export function StudioPaper({ macro, valErr, controller }) {
   const legs = status?.legs || [];
   const portfolio = legs.length > 1;
   const symbolsLabel = macro.symbols && macro.symbols.length > 1 ? macro.symbols.map(baseOf).join(" · ") : macro.symbol;
-  const macroChanged = running && startedMacro && JSON.stringify(startedMacro) !== JSON.stringify(macro);
+  const macroChanged = running && startedMacro && JSON.stringify(startedMacro) !== JSON.stringify(currentMacro);
   const modeLabel = (value) => (value === "replay" ? "데모 리플레이" : "실시간");
   // 주 버튼 하나 — 시작 → 중지 → 다시 시작. 자리(왼쪽 아래 동작 줄)와 폭은 그대로, 문구와 색만 바뀐다.
   const main = paperMainButton({ running, hasSession: !!status, busy });
@@ -379,7 +382,7 @@ export function StudioPaper({ macro, valErr, controller }) {
               <div className="sd-box">
                 <div className="sd-box-k">현재 평가금액 ({quote})</div>
                 <div className="sd-box-v num" title={fmtMoney(status.current_equity, macro.symbol)}>{fmtMoneyCompact(status.current_equity, macro.symbol)}</div>
-                {fmtKrw(status.current_equity, krwRate) && <div className="sd-box-d num">{fmtKrw(status.current_equity, krwRate)}</div>}
+                {fmtKrw(status.current_equity, krwRate, macro.symbol) && <div className="sd-box-d num">{fmtKrw(status.current_equity, krwRate, macro.symbol)}</div>}
               </div>
               <div className="sd-box">
                 <div className="sd-box-k">청산</div>
@@ -464,8 +467,9 @@ function ActIcon({ name }) {
 }
 
 export function StudioOutcomes({ macro, result, perSymbol = [], valErr, strategyEntry, periodLabel, dataSource = "", symbols = [], canRegister, onRegister, onShare, shareBusy = false }) {
-  const { quickRun, downloadMacro, launching, error } = useMacroActions(macro);
+  const { quickRun, downloadMacro, saveMacro, launching, saving, saved, error } = useMacroActions(macro);
   const futures = macro.position_side === "short" || macro.leverage > 1;
+  const domestic = isDomestic(macro.exchange);
   return (
     <div className="sd-outcomes">
       <div className="sd-done">
@@ -481,11 +485,14 @@ export function StudioOutcomes({ macro, result, perSymbol = [], valErr, strategy
           >
             <ActIcon name="board" /><span className="sd-act-t"><b>리더보드 등록</b><small>오늘의 리더보드에 올려 다른 사람과 겨뤄요</small></span><i className="sd-act-chev" aria-hidden="true" />
           </button>
-          <button type="button" onClick={quickRun} disabled={!!valErr || launching} className="sd-act-row">
-            <ActIcon name="run" /><span className="sd-act-t"><b>{launching ? "실행 준비 중…" : "빠른 실행"}</b><small>내 PC 실행기로 바로 넘겨요</small></span><i className="sd-act-chev" aria-hidden="true" />
+          {domestic && <button type="button" onClick={saveMacro} disabled={!!valErr || saving || saved} className="sd-act-row">
+            <ActIcon name="download" /><span className="sd-act-t"><b>{saving ? "저장 중…" : saved ? "내 매크로에 저장됨" : "내 매크로에 저장"}</b><small>국내 거래소 설정을 라이브러리에 보관해요</small></span><i className="sd-act-chev" aria-hidden="true" />
+          </button>}
+          <button type="button" onClick={quickRun} disabled={!!valErr || launching || domestic} title={domestic ? "국내 거래소 실행기 직접 연결은 아직 지원하지 않아요" : undefined} className="sd-act-row">
+            <ActIcon name="run" /><span className="sd-act-t"><b>{launching ? "실행 준비 중…" : "빠른 실행"}</b><small>{domestic ? "국내 거래소 실행기 직접 연결 미지원" : "내 PC 실행기로 바로 넘겨요"}</small></span><i className="sd-act-chev" aria-hidden="true" />
           </button>
-          <button type="button" onClick={downloadMacro} disabled={!!valErr} className="sd-act-row">
-            <ActIcon name="download" /><span className="sd-act-t"><b>매크로 파일 내려받기</b><small>.ggm.json 파일로 저장해요</small></span><i className="sd-act-chev" aria-hidden="true" />
+          <button type="button" onClick={downloadMacro} disabled={!!valErr || domestic} title={domestic ? "국내 거래소 실거래 실행기 파일은 아직 지원하지 않아요" : undefined} className="sd-act-row">
+            <ActIcon name="download" /><span className="sd-act-t"><b>매크로 파일 내려받기</b><small>{domestic ? "국내 거래소 실거래 실행기 파일 미지원" : ".ggm.json 파일로 저장해요"}</small></span><i className="sd-act-chev" aria-hidden="true" />
           </button>
           <button type="button" onClick={onShare} disabled={!!valErr || shareBusy} className="sd-act-row">
             <ActIcon name="link" /><span className="sd-act-t"><b>{shareBusy ? "저장 중…" : "공유 링크 보기"}</b><small>링크와 인증 카드 이미지를 받아요</small></span><i className="sd-act-chev" aria-hidden="true" />
@@ -496,7 +503,10 @@ export function StudioOutcomes({ macro, result, perSymbol = [], valErr, strategy
 
       {/* 실행기 실거래 안내 — 제목 줄(무엇인지) + 두 열(진행 방법 · 알아 둘 것). 상자와 색은 원래의 호박색 alert 그대로.
           흐름은 지금 프로젝트 기준: 빠른 실행 마법사(테스트넷 · 웹이 실행기를 열어 줌) → 실거래는 파일을 실행기에서 직접 → 상태·종료는 내 에이전트. */}
-      <section className="alert alert-warn sd-runner" aria-labelledby="sd-runner-title">
+      {domestic ? <section className="alert alert-warn sd-runner" aria-labelledby="sd-runner-title">
+        <h3 id="sd-runner-title" className="sd-runner-title">국내 거래소 지원 범위</h3>
+        <p className="sd-runner-foot">{exchangeLabel(macro.exchange)} 원화 시세·백테스트·모의매매·리더보드 등록과 매크로 저장을 지원해요. 실제 계좌 연결과 실행기 주문은 아직 지원하지 않아요. 국내 원화 현물에서는 숏·선물·레버리지를 사용할 수 없어요.</p>
+      </section> : <section className="alert alert-warn sd-runner" aria-labelledby="sd-runner-title">
         <div className="sd-runner-head">
           <h3 id="sd-runner-title" className="sd-runner-title">실거래 실행법</h3>
         </div>
@@ -524,7 +534,7 @@ export function StudioOutcomes({ macro, result, perSymbol = [], valErr, strategy
           실행기는 내 Windows PC 에서 주문을 처리하는 프로그램이에요(설치 없이 실행 · Windows 10 이상).
           웹은 주문을 내지 않고, 실행 중 상태와 종료는 <b>내 에이전트</b>에서 봐요.
         </p>
-      </section>
+      </section>}
     </div>
   );
 }

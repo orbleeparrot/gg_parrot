@@ -4,6 +4,8 @@ export const DISCLAIMER = "AI 가 과거 데이터로 고른 후보예요 · 투
 export const CONSENT_TEXT = "과거 데이터로 조합을 찾아 주는 도구예요. 투자 권유가 아니고, 결과가 미래 수익을 뜻하지 않아요.";
 
 export const STEP_PROMPTS = {
+  exchange: "어느 거래소를 사용할 거예요?",
+  balance: "현재 그 거래소에서 사용할 수 있는 잔액은 얼마예요?",
   profile: "손실은 어디까지 견딜 수 있어요?",
   market: "어느 시장에서요?",
   horizon: "얼마나 길게 굴릴 거예요?",
@@ -23,6 +25,9 @@ export const MARKETS = [
 ];
 export const LEVERAGES = [1, 2, 3];
 export const STABLE_NO_FUTURES = "안정형은 현물만 살펴봐요";
+export const DOMESTIC_SPOT_ONLY = "업비트·빗썸은 원화 현물만 살펴봐요. 공매도·선물·레버리지는 선택할 수 없어요.";
+export const BALANCE_NOTE = "직접 입력하는 전략 예산이에요. 실제 계좌를 조회하거나 자금을 이동하지 않아요.";
+export const BALANCE_ERROR = "0보다 큰 잔액을 숫자로 입력해 주세요.";
 
 export const HORIZONS = [
   { value: "days", label: "며칠", hint: "짧게 보고 정리" },
@@ -65,7 +70,7 @@ export const MANUAL_SEARCH_MISS = "목록에 없는 종목이에요";
 
 // 2026-09-30 재설계 — 한 장에 한 질문 · 가로 카드 · 비교 줄에서 쓰는 문구.
 export const TOP_RESULTS_TEXT = "과거 데이터로 돌려 본 후보 중 상위 3개예요.";
-export const READY_TEXT = "네 가지 답 다 됐어요. 성향에 맞는 종목 후보를 볼까요?";
+export const READY_TEXT = "거래소와 잔액, 네 가지 조건을 받았어요. 성향에 맞는 종목 후보를 볼까요?";
 export const READY_BUTTON = "후보 보기";
 export const readyCostNote = (left) => `누르면 오늘 횟수 1회를 써요 · 남은 ${left}회`;
 export const OPENING_TEXT = "잠깐만요…";

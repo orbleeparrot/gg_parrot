@@ -16,6 +16,7 @@ from typing import Optional
 
 from .data import NoSpotDataError, get_recent_klines
 from .cache_runtime import ResponseCache
+from .exchanges import normalize_exchange, quote_currency, validate_symbol
 
 # Supported intervals -> how long a chart response stays fresh. This value is
 # both the server cache TTL and the poll interval the client is told to use.
@@ -55,6 +56,7 @@ def get_candles(
     interval: str = DEFAULT_INTERVAL,
     limit: int = 120,
     market: str = "spot",
+    exchange: str = "binance",
 ) -> dict:
     """Cached recent candles for ``symbol``.
 
@@ -62,15 +64,21 @@ def get_candles(
     cached copy to fall back on (surfaced as a 422 by the route).
     """
     symbol = (symbol or "").upper().strip()
+    exchange = normalize_exchange(exchange)
     if not symbol:
         raise NoSpotDataError("종목(symbol)을 입력하세요.")
+    symbol = validate_symbol(symbol, exchange)
+    if exchange != "binance":
+        if market != "spot":
+            raise ValueError("업비트·빗썸은 KRW 현물 차트만 지원합니다.")
     if interval not in _INTERVALS:
         interval = DEFAULT_INTERVAL
     if market not in ("spot", "futures"):
         market = "spot"
     limit = max(10, min(int(limit), MAX_LIMIT))
 
-    key = (symbol, interval, market)
+    key = (symbol, interval, market) if exchange == "binance" else (symbol, interval, market, exchange)
+    exchange_args = {} if exchange == "binance" else {"exchange": exchange}
 
     # 선물 호스트(fapi)는 배포 리전에서 차단될 수 있다 — 현물은 미러
     # (BINANCE_API_BASE)로 우회하지만 선물엔 대응 미러가 없다. 그래서 선물을
@@ -80,10 +88,10 @@ def get_candles(
     def load():
         used_market = market
         try:
-            candles = get_recent_klines(symbol, interval=interval, limit=MAX_LIMIT, market=market)
+            candles = get_recent_klines(symbol, interval=interval, limit=MAX_LIMIT, market=market, **exchange_args)
         except Exception as first_error:
             candles = None
-            if market == "futures":
+            if exchange == "binance" and market == "futures":
                 try:
                     candles = get_recent_klines(symbol, interval=interval, limit=MAX_LIMIT, market="spot")
                     used_market = "spot"
@@ -99,6 +107,7 @@ def get_candles(
         candles, used_market = load()
         return {
             "symbol": symbol, "interval": interval, "market": used_market,
+            "exchange": exchange, "quote_currency": quote_currency(exchange),
             "requested_market": market, "candles": candles,
             "server_time": int(time.time() * 1000),
             "refresh_seconds": _INTERVALS[interval],
@@ -114,6 +123,7 @@ def get_live_candles(
     symbol: str,
     interval: str = DEFAULT_INTERVAL,
     market: str = "spot",
+    exchange: str = "binance",
 ) -> dict:
     """Return only the latest two candles on a fixed live cadence.
 
@@ -122,24 +132,30 @@ def get_live_candles(
     detecting a newly-opened bar for long intervals such as 1d.
     """
     symbol = (symbol or "").upper().strip()
+    exchange = normalize_exchange(exchange)
     if not symbol:
         raise NoSpotDataError("종목(symbol)을 입력하세요.")
+    symbol = validate_symbol(symbol, exchange)
+    if exchange != "binance":
+        if market != "spot":
+            raise ValueError("업비트·빗썸은 KRW 현물 차트만 지원합니다.")
     if interval not in _INTERVALS:
         interval = DEFAULT_INTERVAL
     if market not in ("spot", "futures"):
         market = "spot"
 
-    key = (symbol, interval, market)
+    key = (symbol, interval, market) if exchange == "binance" else (symbol, interval, market, exchange)
+    exchange_args = {} if exchange == "binance" else {"exchange": exchange}
 
     # get_candles 와 같은 선물→현물 폴백. 히스토리는 현물로 떨어졌는데 움직이는
     # 봉만 선물을 고집하면 두 시세가 섞여 캔들이 튄다.
     def load():
         used_market = market
         try:
-            candles = get_recent_klines(symbol, interval=interval, limit=2, market=market)
+            candles = get_recent_klines(symbol, interval=interval, limit=2, market=market, **exchange_args)
         except Exception as first_error:
             candles = None
-            if market == "futures":
+            if exchange == "binance" and market == "futures":
                 try:
                     candles = get_recent_klines(symbol, interval=interval, limit=2, market="spot")
                     used_market = "spot"
@@ -155,6 +171,7 @@ def get_live_candles(
         candles, used_market = load()
         return {
             "symbol": symbol, "interval": interval, "market": used_market,
+            "exchange": exchange, "quote_currency": quote_currency(exchange),
             "requested_market": market, "candles": candles,
             "server_time": int(time.time() * 1000), "refresh_seconds": _LIVE_REFRESH_SECONDS,
         }

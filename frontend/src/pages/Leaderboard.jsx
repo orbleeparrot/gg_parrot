@@ -16,6 +16,8 @@ import StrategyDetails from "../components/StrategyDetails.jsx";
 import { impressionKey } from "../lib/visit.js";
 import { isLive, liveReturn, stateHelp, stateLine, symbolsOf } from "../lib/leaderboardState.js";
 import { LIVE_TITLE, REWARD_HELP, REWARD_NOTE, STATE_LEGEND } from "../lib/leaderboardCopy.js";
+import { EXCHANGES, exchangeLabel, isDomestic, marketKey } from "../lib/exchanges.js";
+import { baseOf } from "../lib/format.js";
 import "./LeaderboardMobile.css";
 
 // 매크로 지표 비콘 — 노출(목록에 보임)·열람(빌더로 가져오기 · 빠른 실행 · 언락 중 하나를 누름).
@@ -255,21 +257,26 @@ function AccountLeaderboard() {
   // 보유 중 행의 현재가 — 들고 있는 종목만 3초마다 일괄 조회(없으면 폴링 자체를 안 돈다).
   // 실패는 폴러에 던져 백오프(최대 30초)를 타게 하고, 그때까지는 마지막 값·서버 수익률로 그린다.
   const [prices, setPrices] = useState({});
-  const symbols = useMemo(() => symbolsOf(items), [items]);
+  const priceGroups = useMemo(() => EXCHANGES.map(({ value: exchange }) => ({
+    exchange, symbols: symbolsOf(items, exchange),
+  })).filter((group) => group.symbols.length), [items]);
   const loadPrices = useCallback(async (signal) => {
-    if (!symbols.length) return;
+    if (!priceGroups.length) return;
     try {
-      const d = await api.prices(symbols, { signal });
-      setPrices((p) => ({ ...p, ...(d?.prices || {}) }));
+      const batches = await Promise.all(priceGroups.map(async ({ exchange, symbols }) => {
+        const d = await api.prices(symbols, { exchange, signal });
+        return Object.fromEntries(Object.entries(d?.prices || {}).map(([symbol, price]) => [marketKey(exchange, symbol), price]));
+      }));
+      if (!signal?.aborted) setPrices((p) => Object.assign({}, p, ...batches));
     } catch (e) {
       if (e?.name !== "AbortError") throw e;
     }
-  }, [symbols]);
+  }, [priceGroups]);
   useAdaptivePolling(loadPrices, {
     intervalMs: 3_000,
     maxIntervalMs: 30_000,
-    enabled: symbols.length > 0,
-    pollKey: `prices:${symbols.join(",")}`,
+    enabled: priceGroups.length > 0,
+    pollKey: `prices:${priceGroups.map((g) => `${g.exchange}:${g.symbols.join(",")}`).join(";")}`,
   });
   // 쿨다운 "n분" 표기용 — 30초면 충분하다.
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -444,7 +451,7 @@ function AccountLeaderboard() {
       if (d.points_balance != null) {
         updateAuthUser({ ...getAuthUser(), points_balance: d.points_balance });
       }
-      if (quickRunMode && d.user_macro?.id) {
+      if (quickRunMode && d.user_macro?.id && !isDomestic(entry.exchange)) {
         navigate("/?run=1&step=1", { state: { selectedMacroId: d.user_macro.id } });
         return;
       }
@@ -459,6 +466,10 @@ function AccountLeaderboard() {
 
   async function useForQuickRun(entry) {
     if (!isCurrentAccount()) return;
+    if (isDomestic(entry.exchange)) {
+      setError("국내 거래소 매크로는 백테스트·저장만 지원합니다. 실행기 직접 연결은 지원하지 않아요.");
+      return;
+    }
     if (!isLoggedIn()) {
       navigate("/login?next=%2Fleaderboard%3Ffrom%3Dquick-run");
       return;
@@ -575,14 +586,14 @@ function AccountLeaderboard() {
                 <div className="lb-name" role="cell">
                   <div className="lb-name-line">
                     <span className="lb-mobile-symbol num">
-                      <strong>{e.symbol.replace(/USDT$/, "")}</strong>
-                      {e.symbol.endsWith("USDT") ? <small>USDT</small> : null}
+                      <strong>{baseOf(e.symbol)}</strong>
+                      <small>{e.quote_currency || "USDT"}</small>
                     </span>
                     <span className="lb-title">{e.username || e.nickname}</span>
                     <EntryBadges entry={e} top3={top3} />
                   </div>
                   <div className="lb-meta t-caption text-slate-500">
-                    {registrationLabel(e)}
+                    <span className="badge" aria-label="거래소">{exchangeLabel(e.exchange)}</span>{" · "}{registrationLabel(e)}
                   </div>
                 </div>
                 <div className="lb-entry-details" role="presentation">
@@ -650,11 +661,11 @@ function AccountLeaderboard() {
                   ) : quickRunMode ? (
                     <button
                       onClick={() => { sendOpen(e.id); useForQuickRun(e); }}
-                      disabled={unlocking === e.id}
+                      disabled={unlocking === e.id || isDomestic(e.exchange)}
                       className="btn btn-s btn-secondary"
-                      title="이 매크로를 빠른 실행에 연결"
+                      title={isDomestic(e.exchange) ? "국내 거래소 실행기 직접 연결 미지원" : "이 매크로를 빠른 실행에 연결"}
                     >
-                      {unlocking === e.id ? "저장 중…" : "이 매크로 사용"}
+                      {isDomestic(e.exchange) ? "실행기 미지원" : unlocking === e.id ? "저장 중…" : "이 매크로 사용"}
                     </button>
                   ) : null}
                   </div>

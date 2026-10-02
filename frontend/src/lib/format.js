@@ -1,20 +1,21 @@
 // Money/price/quantity formatting.
 //
-// Unit basis (from the engine logic): prices come from Binance quoted in the
-// symbol's QUOTE asset (USDT for *USDT pairs). qty = capital / price, so all
+// Unit basis: prices use the exchange's native quote asset. qty = capital / price, so all
 // money amounts (initial_capital, equity, amount_per_buy) are denominated in
-// that quote currency — i.e. USDT (≈ USD), NOT KRW. `qty` is a COIN COUNT.
+// that quote currency — USDT on Binance or KRW on domestic KRW markets. `qty` is a COIN COUNT.
 
-const QUOTES = ["USDT", "BUSD", "USDC", "FDUSD", "TUSD", "USD"];
+const QUOTES = ["USDT", "BUSD", "USDC", "FDUSD", "TUSD", "USD", "KRW"];
 
 export function quoteOf(symbol) {
   const s = (symbol || "").toUpperCase();
+  if (s.startsWith("KRW-")) return "KRW";
   for (const q of QUOTES) if (s.endsWith(q)) return q;
   return "USDT";
 }
 
 export function baseOf(symbol) {
   const s = (symbol || "").toUpperCase();
+  if (s.startsWith("KRW-")) return s.slice(4);
   const q = quoteOf(s);
   return s.endsWith(q) ? s.slice(0, -q.length) : s;
 }
@@ -58,7 +59,8 @@ export function fmtMoneyCompact(value, symbol) {
 // Approximate KRW for a USDT amount, e.g. "≈ 138만원". REFERENCE ONLY — the app
 // is denominated in USDT; this is a rough convenience conversion at `rate`
 // (USD→KRW). Returns "" when the rate is missing so callers can skip rendering.
-export function fmtKrw(usdtValue, rate) {
+export function fmtKrw(usdtValue, rate, symbol = "") {
+  if (quoteOf(symbol) === "KRW") return ""; // Never convert native won amounts again.
   const won = Number(usdtValue) * Number(rate);
   if (!isFinite(won) || !isFinite(Number(rate)) || Number(rate) <= 0) return "";
   return `≈ ${krwShort(won)}`;

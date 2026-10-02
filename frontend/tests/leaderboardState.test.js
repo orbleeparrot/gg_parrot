@@ -5,6 +5,15 @@ import { cooldownLabel, isLive, liveReturn, stateHelp, stateLine, symbolsOf } fr
 const holding = { state: "holding", return_pct: 1.5, equity: 1015, virtual_balance: 1000, checkpoint_ms: 1_700_000_000_000,
   legs: [{ symbol: "BTCUSDT", qty: 2, dir: 1, last_price: 100, in_position: true }] };
 
+test("same KRW symbol on two exchanges never shares the live price", () => {
+  const entry = { ...holding, exchange: "upbit", legs: [{ ...holding.legs[0], symbol: "KRW-BTC" }] };
+  const now = holding.checkpoint_ms + 1000;
+  assert.equal(isLive(entry, { "bithumb:KRW-BTC": 200, "KRW-BTC": 300 }, now), false);
+  assert.equal(liveReturn(entry, { "upbit:KRW-BTC": 101, "bithumb:KRW-BTC": 200 }, now), 1.7);
+  assert.deepEqual(symbolsOf([entry, holding], "upbit"), ["KRW-BTC"]);
+  assert.deepEqual(symbolsOf([entry, holding], "binance"), ["BTCUSDT"]);
+});
+
 test("liveReturn moves with price for a long, inversely for a short, sums a portfolio, falls back without prices", () => {
   const now = 1_700_000_010_000; // 체크포인트 10초 후 — 90초 실시간 창 안
   assert.equal(liveReturn(holding, { BTCUSDT: 101 }, now), 1.7);           // 1015 + 2*1 = 1017 → 1.7%

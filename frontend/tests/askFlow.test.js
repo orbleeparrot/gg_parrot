@@ -10,6 +10,8 @@ const CANDS = [
 
 function cards(profile = "balanced") {
   let s = initialState();
+  s = reduce(s, { type: "choose", step: "exchange", value: "binance" });
+  s = reduce(s, { type: "choose", step: "balance", value: 250 });
   s = reduce(s, { type: "choose", step: "profile", value: profile });
   s = reduce(s, { type: "choose", step: "market", value: { market: "spot", leverage: 1 } });
   s = reduce(s, { type: "choose", step: "horizon", value: "weeks" });
@@ -26,14 +28,45 @@ function withCandidates() {
   });
 }
 
-test("cards are four and end ready", () => {
-  assert.deepEqual(STEPS, ["profile", "market", "horizon", "watch"]);
+test("exchange and manual balance precede profile cards and end ready", () => {
+  assert.equal(initialState().step, "exchange");
+  assert.deepEqual(STEPS, ["exchange", "balance", "profile", "market", "horizon", "watch"]);
   const s = cards();
   assert.equal(s.phase, "ready");
   assert.deepEqual(toCandidatesRequest(s.answers), {
+    exchange: "binance", account_balance: 250,
     risk_profile: "balanced", market: "spot", leverage: 1,
     invest_horizon: "weeks", watch_frequency: "sometimes",
   });
+});
+
+test("manual balance must be positive and finite before progressing", () => {
+  const s = reduce(initialState(), { type: "choose", step: "exchange", value: "upbit" });
+  assert.equal(s.step, "balance");
+  for (const value of [0, -1, "", "Infinity", NaN, true]) {
+    assert.equal(reduce(s, { type: "choose", step: "balance", value }).answers.balance, null);
+  }
+  const next = reduce(s, { type: "choose", step: "balance", value: "150000" });
+  assert.equal(next.answers.balance, 150000);
+  assert.equal(next.step, "profile");
+});
+
+test("domestic exchange cannot choose futures or a USDT pair", () => {
+  let s = reduce(initialState(), { type: "choose", step: "exchange", value: "bithumb" });
+  s = reduce(s, { type: "choose", step: "balance", value: 100000 });
+  s = reduce(s, { type: "choose", step: "profile", value: "aggressive" });
+  assert.equal(canChooseFutures(s.answers), false);
+  assert.equal(reduce(s, { type: "choose", step: "market", value: { market: "futures", leverage: 2 } }).answers.market, null);
+  assert.equal(reduce(s, { type: "chooseSymbol", symbol: "BTCUSDT", resolved: true }).answers.symbol, null);
+  assert.equal(reduce(s, { type: "chooseSymbol", symbol: "KRW-BTC", resolved: true }).answers.symbol, "KRW-BTC");
+});
+
+test("changing exchange clears balance and the server candidate session", () => {
+  const s = reduce(withCandidates(), { type: "choose", step: "exchange", value: "upbit" });
+  assert.equal(s.answers.balance, null);
+  assert.equal(s.answers.profile, null);
+  assert.equal(s.session, null);
+  assert.deepEqual(s.candidates, []);
 });
 
 test("stable profile cannot choose futures", () => {

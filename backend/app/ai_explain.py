@@ -137,6 +137,8 @@ def _facts(macro: Macro, r: BacktestResult, per_symbol=None) -> str:
     data = {
             "요약": human_summary(macro),
             "종목": macro.symbol,
+            "거래소": macro.exchange,
+            "자금·가격_단위": macro.quote_currency,
             "레버리지": macro.leverage,
             "최종수익률%": r.final_return_pct,
             "그냥홀딩수익률%": r.buy_hold_return_pct,

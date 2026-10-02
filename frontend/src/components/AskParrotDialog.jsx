@@ -8,7 +8,7 @@ import { api } from "../api.js";
 import CoinIcon from "./CoinIcon.jsx";
 import CheckIcon from "./CheckIcon.jsx";
 import {
-  BACK_TO_STEP, CANDIDATES_PROMPT, COMPARE_TITLE, CONDITION_LABEL, CONSENT_BUTTON, CONSENT_TEXT, DISCLAIMER,
+  BACK_TO_STEP, BALANCE_ERROR, BALANCE_NOTE, CANDIDATES_PROMPT, COMPARE_TITLE, CONDITION_LABEL, CONSENT_BUTTON, CONSENT_TEXT, DISCLAIMER, DOMESTIC_SPOT_ONLY,
   FOLLOW_UPS, FOLLOW_UPS_TITLE, HOLD_LABEL, HORIZONS, LEGEND_BASE, LEGEND_EQUITY, LEVERAGES, LOAD_BUTTON,
   LOST_TO_HOLD_TEXT, MANUAL_PICK_LABEL, MANUAL_SEARCH_MISS, MANUAL_SEARCH_PLACEHOLDER, MARKETS, NEXT_LABEL,
   NO_QUOTA_TEXT, OPENING_TEXT, PREV_LABEL, PROFILES, READY_BUTTON, READY_TEXT, RESTART_LABEL, RETURN_LABEL,
@@ -19,7 +19,7 @@ import { useSymbolList } from "../hooks/useSymbolList.js";
 import { resolveSymbol, searchSymbols } from "../lib/symbolSearch.js";
 import {
   PROFILE_ORDER, STEPS, answerLabel, canChooseFutures, extraOffer, initialState, reduce, toAskRequest,
-  toCandidatesRequest,
+  toCandidatesRequest, validBalance,
 } from "../lib/askFlow.js";
 import {
   coinTint, conditionLines, holdDiff, holdOf, intervalLabel, marketLabel, numberParts, resultsHeadline,
@@ -28,6 +28,7 @@ import {
 import { coinName } from "../lib/macroSource.js";
 import { baseOf, quoteOf } from "../lib/format.js";
 import { RULE_TYPES } from "../lib/macro.js";
+import { EXCHANGES, exchangeLabel, isDomestic, quoteForExchange } from "../lib/exchanges.js";
 import "./AskParrotDialog.css";
 import { Icon } from "./icons.jsx";
 
@@ -66,17 +67,43 @@ const inStyle = (i, extra) => ({ "--i": i, ...extra });
 
 // 질문 한 장의 선택지.
 function stepOptions(step, answers) {
+  if (step === "exchange") return EXCHANGES.map((item) => ({ key: item.value, label: item.label, hint: item.quote, value: item.value }));
   if (step === "profile") return PROFILES.map((p) => ({ key: p.value, label: p.label, hint: p.hint, value: p.value }));
   if (step === "market") {
     const ok = canChooseFutures(answers);
     return [
       { key: "spot", label: MARKETS[0].label, hint: SPOT_HINT, value: { market: "spot", leverage: 1 } },
-      ...LEVERAGES.map((lev) => ({ key: `futures-${lev}`, label: `${MARKETS[1].label} ${lev}x`, hint: "", value: { market: "futures", leverage: lev }, disabled: !ok, title: ok ? undefined : STABLE_NO_FUTURES })),
+      ...LEVERAGES.map((lev) => ({ key: `futures-${lev}`, label: `${MARKETS[1].label} ${lev}x`, hint: "", value: { market: "futures", leverage: lev }, disabled: !ok, title: ok ? undefined : isDomestic(answers.exchange) ? DOMESTIC_SPOT_ONLY : STABLE_NO_FUTURES })),
     ];
   }
   if (step === "horizon") return HORIZONS.map((h) => ({ key: h.value, label: h.label, hint: h.hint, value: h.value }));
   if (step === "watch") return WATCH_LEVELS.map((w) => ({ key: w.value, label: w.label, hint: w.hint, value: w.value }));
   return [];
+}
+
+function BalanceInput({ exchange, disabled, onSubmit }) {
+  const [value, setValue] = useState("");
+  const [error, setError] = useState("");
+  const quote = quoteForExchange(exchange);
+  return (
+    <form className="ask-balance ask-in" style={inStyle(1)} onSubmit={(event) => {
+      event.preventDefault();
+      if (disabled) return;
+      if (!validBalance(value)) { setError(BALANCE_ERROR); return; }
+      onSubmit(Number(value));
+    }}>
+      <label htmlFor="ask-manual-balance">{exchangeLabel(exchange)} 사용 가능 {quote} 잔액</label>
+      <div className="ask-balance-field">
+        <input id="ask-manual-balance" className="input num" type="number" inputMode="decimal" step="any" min="0" value={value}
+          aria-describedby="ask-balance-note" aria-invalid={!!error} disabled={disabled} autoFocus
+          onChange={(event) => { setValue(event.target.value); setError(""); }} placeholder={quote === "KRW" ? "예: 100000" : "예: 100"} />
+        <span>{quote}</span>
+      </div>
+      <p id="ask-balance-note" className="ask-caption">{BALANCE_NOTE}</p>
+      {error ? <p className="ask-miss" role="alert">{error}</p> : null}
+      <button type="submit" className="btn btn-m btn-primary" disabled={disabled || !validBalance(value)}>다음</button>
+    </form>
+  );
 }
 
 function Spark({ item }) {
@@ -142,6 +169,7 @@ function ResultCard({ item, rank, best, compact = false, onLoad }) {
           <span className="ask-mc-rule">{name}{by ? <em> · {by}</em> : null}</span>
         </span>
         <span className="ask-mc-tags">
+          <span className="ask-tag">{exchangeLabel(macro.exchange)}</span>
           <span className="ask-tag">{marketLabel(macro)}</span>
           {intervalLabel(macro) ? <span className="ask-tag num">{intervalLabel(macro)}</span> : null}
         </span>
@@ -192,10 +220,10 @@ function CandidateRow({ c, marketText, onPick, disabled, i }) {
 }
 
 // 직접 고를래요 — 빠른 선택 칩 + 거래 가능 종목 검색(빌더 검색창과 같은 목록).
-function ManualPick({ chips, onPick, disabled, i }) {
+function ManualPick({ chips, onPick, disabled, i, exchange }) {
   const [query, setQuery] = useState("");
   const [note, setNote] = useState("");
-  const { items } = useSymbolList();
+  const { items } = useSymbolList(exchange);
   const q = query.trim();
   const matches = items && q ? searchSymbols(items, q, { limit: 8 }) : [];
   const add = () => {
@@ -467,7 +495,7 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
     </div>
   );
 
-  const marketText = state.answers.market === "futures" ? `${MARKETS[1].label} ${state.answers.leverage}x` : MARKETS[0].label;
+  const marketText = `${exchangeLabel(state.answers.exchange)} · ${state.answers.market === "futures" ? `${MARKETS[1].label} ${state.answers.leverage}x` : MARKETS[0].label}`;
   const hold = holdOf(results);
 
   let stage;
@@ -496,6 +524,8 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
     stage = (
       <>
         <h3 className="ask-q ask-in" style={inStyle(0)}>{STEP_PROMPTS[state.step]}</h3>
+        {state.step === "balance" ? <BalanceInput exchange={state.answers.exchange} disabled={lock}
+          onSubmit={(value) => leaveThen(() => dispatch({ type: "choose", step: "balance", value }))} /> : (
         <div className={"ask-opts" + (two ? " is-two" : "")} role="group" aria-label={STEP_PROMPTS[state.step]}>
           {options.map((opt, idx) => (
             <button key={opt.key} type="button" disabled={opt.disabled} title={opt.title}
@@ -505,8 +535,8 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
               <span className="ask-opt-r">{opt.hint ? <small>{opt.hint}</small> : null}<span className="ask-check" aria-hidden="true"><CheckIcon size={13} strokeWidth={3} /></span></span>
             </button>
           ))}
-        </div>
-        {state.step === "market" && !canChooseFutures(state.answers) ? <p className="ask-note ask-in" style={inStyle(options.length + 1)}>{STABLE_NO_FUTURES}</p> : null}
+        </div>)}
+        {state.step === "market" && !canChooseFutures(state.answers) ? <p className="ask-note ask-in" style={inStyle(options.length + 1)}>{isDomestic(state.answers.exchange) ? DOMESTIC_SPOT_ONLY : STABLE_NO_FUTURES}</p> : null}
       </>
     );
   } else if (state.phase === "ready") {
@@ -537,7 +567,7 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
             {state.candidates.map((c, idx) => <CandidateRow key={c.symbol} c={c} i={idx + 1} marketText={marketText} disabled={lock} onPick={(sym) => leaveThen(() => pickSymbol(sym))} />)}
           </div>
         ) : null}
-        <ManualPick chips={state.manualSymbols} i={n + 1} disabled={lock} onPick={(sym, resolved) => leaveThen(() => pickSymbol(sym, resolved))} />
+        <ManualPick chips={state.manualSymbols} i={n + 1} exchange={state.answers.exchange} disabled={lock} onPick={(sym, resolved) => leaveThen(() => pickSymbol(sym, resolved))} />
         <p className="ask-disc ask-in" style={inStyle(n + 2)} role="note">{DISCLAIMER}</p>
       </>
     );

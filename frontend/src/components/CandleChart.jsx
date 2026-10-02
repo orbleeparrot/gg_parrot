@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api.js";
 import { fmtPrice, quoteOf } from "../lib/format.js";
+import { exchangeLabel, normalizeExchange } from "../lib/exchanges.js";
 import CandlePlot from "./CandlePlot.jsx";
 
 // Market-data orchestration and chart controls. CandlePlot owns the renderer.
@@ -132,6 +133,7 @@ function MarketPrice({ bar, quote, changePct }) {
 
 export default function CandleChart({
   symbol,
+  exchange: exchangeValue = "binance",
   market = "spot",
   defaultInterval = "1m",
   interval: controlledInterval,
@@ -149,6 +151,7 @@ export default function CandleChart({
   // 고를 수 없는 봉 간격(예: 테스트 기간에서 봉 수 한도를 넘는 것) — [{ value, title }]. 도구줄 segmented 에서 비활성.
   disabledIntervals = [],
 }) {
+  const exchange = normalizeExchange(exchangeValue);
   const studio = variant === "studio";
   const disabledIntervalMap = Object.fromEntries((disabledIntervals || []).map((item) => [item.value, item.title || "이 테스트 기간에서는 고를 수 없어요"]));
   const [localInterval, setLocalInterval] = useState(defaultInterval);
@@ -168,6 +171,7 @@ export default function CandleChart({
   const interval = controlledInterval ?? localInterval;
 
   const changeInterval = (value) => {
+    if (disabledIntervalMap[value]) return;
     if (controlledInterval == null) setLocalInterval(value);
     onIntervalChange?.(value);
   };
@@ -181,15 +185,16 @@ export default function CandleChart({
     async function load(showSpinner) {
       if (showSpinner) {
         setLoading(true);
-        loadStateRef.current?.({ status: "loading", symbol, interval, error: "" });
+        loadStateRef.current?.({ status: "loading", exchange, symbol, interval, error: "" });
       }
       try {
-        const d = await api.candles(symbol, interval, BUFFER, market);
+        const d = await api.candles(symbol, interval, BUFFER, market, exchange);
         if (!alive) return;
         const nextCandles = d.candles || [];
         candlesRef.current = nextCandles;
         setCandles(nextCandles);
         dataRef.current?.({
+          exchange,
           symbol,
           market,
           interval,
@@ -200,6 +205,7 @@ export default function CandleChart({
         setError("");
         loadStateRef.current?.({
           status: nextCandles.length > 0 ? "ready" : "error",
+          exchange,
           symbol,
           interval,
           error: nextCandles.length > 0 ? "" : "표시할 시세가 없어요.",
@@ -209,7 +215,7 @@ export default function CandleChart({
         if (alive) {
           const message = String(e.message || e);
           setError(message);
-          loadStateRef.current?.({ status: "error", symbol, interval, error: message });
+          loadStateRef.current?.({ status: "error", exchange, symbol, interval, error: message });
         }
       } finally {
         if (alive && showSpinner) setLoading(false);
@@ -243,7 +249,7 @@ export default function CandleChart({
       clearTimeout(timer.current);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [symbol, interval, market]);
+  }, [exchange, symbol, interval, market]);
 
   // Keep the in-progress candle moving independently from the full-buffer
   // refresh. Failures here deliberately keep the last good chart on screen;
@@ -257,13 +263,14 @@ export default function CandleChart({
       liveTimer.current = window.setTimeout(async () => {
         if (!document.hidden) {
           try {
-            const d = await api.liveCandles(symbol, interval, market);
+            const d = await api.liveCandles(symbol, interval, market, exchange);
             if (!alive) return;
             const merged = mergeLiveCandles(candlesRef.current, d.candles || []);
             if (merged && merged !== candlesRef.current) {
               candlesRef.current = merged;
               setCandles(merged);
               dataRef.current?.({
+                exchange,
                 symbol,
                 market,
                 interval,
@@ -286,7 +293,7 @@ export default function CandleChart({
       alive = false;
       window.clearTimeout(liveTimer.current);
     };
-  }, [symbol, interval, market]);
+  }, [exchange, symbol, interval, market]);
 
   const total = candles?.length || 0;
   const maxZoom = Math.max(MIN_ZOOM, total);
@@ -332,7 +339,7 @@ export default function CandleChart({
       <div className="candle-chart is-studio">
         <div className="candle-chart-toolbar">
           <div className="candle-chart-market">
-            <h3 className="candle-chart-symbol t-caption text-slate-500"><span className="num">{title || symbol}</span></h3>
+            <h3 className="candle-chart-symbol t-caption text-slate-500">{exchangeLabel(exchange)} · <span className="num">{title || symbol}</span></h3>
             <MarketPrice bar={last} quote={quote} changePct={changePct} />
           </div>
           <div className="candle-chart-controls">
@@ -383,7 +390,7 @@ export default function CandleChart({
     <div className={`candle-chart pt-4 border-t border-slate-200 ${minimal ? "is-minimal" : ""}`}>
       <div className="candle-chart-toolbar flex items-center justify-between flex-wrap gap-2">
         <div className="candle-chart-market">
-          <h3 className="candle-chart-symbol t-caption text-slate-500"><span className="num">{title || symbol}</span></h3>
+          <h3 className="candle-chart-symbol t-caption text-slate-500">{exchangeLabel(exchange)} · <span className="num">{title || symbol}</span></h3>
           <MarketPrice bar={last} quote={quote} changePct={changePct} />
         </div>
 
@@ -411,7 +418,7 @@ export default function CandleChart({
             className="field field-sm w-auto"
           >
             {INTERVALS.map((o) => (
-              <option key={o.value} value={o.value}>{o.label}</option>
+              <option key={o.value} value={o.value} disabled={!!disabledIntervalMap[o.value]} title={disabledIntervalMap[o.value]}>{o.label}</option>
             ))}
           </select>
         </div>

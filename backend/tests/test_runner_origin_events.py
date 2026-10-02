@@ -57,7 +57,7 @@ def _download_file() -> dict:
 def test_macro_file_carries_a_signature_that_verifies():
     file = _download_file()
     sig = file["_sig"]
-    assert sig["v"] == 1 and sig["alg"] == "HMAC-SHA256" and len(sig["hmac"]) == 64
+    assert sig["v"] == macro_signing.SIG_VERSION and sig["alg"] == "HMAC-SHA256" and len(sig["hmac"]) == 64
     macro = Macro.model_validate(file)  # `_sig`·human_summary 는 무시된다
     assert macro_signing.verify(macro, sig)
 

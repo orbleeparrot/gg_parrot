@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api.js";
 import { isLoggedIn } from "../lib/auth.js";
@@ -6,6 +6,7 @@ import InfoTooltip from "./InfoTooltip.jsx";
 import { baseOf, fmtMoney, fmtMoneyCompact, fmtKrw, fmtPrice, fmtQty, quoteOf } from "../lib/format.js";
 import { useUsdKrw } from "../lib/usdkrw.js";
 import usePaperSession from "../hooks/usePaperSession.js";
+import { exchangeLabel, isDomestic } from "../lib/exchanges.js";
 
 const SIDE_KO = { buy: "매수", sell: "매도", short: "숏 진입", cover: "숏 청산" };
 const SIDE_COLOR = {
@@ -31,10 +32,18 @@ export function useMacroActions(macro) {
   const navigate = useNavigate();
   const [launching, setLaunching] = useState(false);
   const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const macroKey = JSON.stringify(macro);
+  useEffect(() => { setSaved(false); setError(""); }, [macroKey]);
 
   // 빠른 실행 — 지금 만든 매크로를 내 라이브러리에 저장하고 실행기 연결 플로우로 바로 간다.
   // 리더보드의 '빠른 실행에 사용'과 같은 길이라 실행 화면은 하나만 유지한다.
   async function quickRun() {
+    if (isDomestic(macro.exchange)) {
+      setError("국내 거래소 실행기 직접 연결은 아직 지원하지 않아요.");
+      return;
+    }
     if (!isLoggedIn()) {
       navigate("/login?next=%2Fbuilder&notice=%EB%A1%9C%EA%B7%B8%EC%9D%B8%20%ED%9B%84%20%EC%9D%B4%EC%9A%A9%ED%95%A0%20%EC%88%98%20%EC%9E%88%EC%96%B4%EC%9A%94.");
       return;
@@ -50,7 +59,24 @@ export function useMacroActions(macro) {
     }
   }
 
+  async function saveMacro() {
+    if (!isLoggedIn()) {
+      navigate("/login?next=%2Fbuilder");
+      return;
+    }
+    setError(""); setSaving(true);
+    try {
+      await api.saveMyMacro(macro, `${exchangeLabel(macro.exchange)} · ${macro.symbol || "매크로"}`);
+      setSaved(true);
+    } catch (reason) { setError(String(reason.message || reason)); }
+    finally { setSaving(false); }
+  }
+
   async function downloadMacro() {
+    if (isDomestic(macro.exchange)) {
+      setError("국내 거래소 실거래 실행기 파일은 아직 지원하지 않아요. 내 매크로에 저장해 주세요.");
+      return;
+    }
     setError("");
     try {
       await api.downloadMacroFile(macro);
@@ -59,12 +85,13 @@ export function useMacroActions(macro) {
     }
   }
 
-  return { quickRun, downloadMacro, launching, error };
+  return { quickRun, downloadMacro, saveMacro, launching, saving, saved, error };
 }
 
 export function PaperNextSteps({ macro, valErr, primary = "quickRun", onRegister = null, canRegister = true, result = null, paperStatus = null }) {
-  const { quickRun, downloadMacro, launching, error } = useMacroActions(macro);
+  const { quickRun, downloadMacro, saveMacro, launching, saving, saved, error } = useMacroActions(macro);
   const registerFirst = primary === "register";
+  const domestic = isDomestic(macro.exchange);
   const paperRet = paperStatus?.current_return;
 
   return (
@@ -103,8 +130,8 @@ export function PaperNextSteps({ macro, valErr, primary = "quickRun", onRegister
       {/* real-trade: 매크로 파일(.ggm.json)만 내려받아 '껄무새 매크로 실행기'에 넣는다.
           실행기가 실제 주문을 실행하므로(기본 테스트넷) 아래 문구는 그 위험을 축소하지 않는다. */}
       <div className="alert alert-warn space-y-3">
-        <div className="t-title">동작 검증 완료 → 매크로 실행기로 실거래</div>
-        <p className="t-small">
+        <div className="t-title">{domestic ? "국내 거래소 매크로 저장" : "동작 검증 완료 → 매크로 실행기로 실거래"}</div>
+        {domestic ? <p className="t-small">{exchangeLabel(macro.exchange)} 원화 시세·백테스트·모의매매와 저장을 지원해요. 실행기 직접 연결·실거래 주문은 아직 지원하지 않아요.</p> : <><p className="t-small">
           터미널·파이썬 설치 없이 <b>껄무새 매크로 실행기</b>(프로그램)에 이 매크로 파일을 넣고 돌려요.
           실행 현황과 원격 종료는 <b>마이페이지</b>에서 확인해요.
         </p>
@@ -128,25 +155,26 @@ export function PaperNextSteps({ macro, valErr, primary = "quickRun", onRegister
             <li>실제 자금은 실행기에서 <b>실거래(메인넷) 체크</b>를 켜야 움직여요(경고 확인 단계 있음).</li>
             <li>API 키는 실행기 로컬에서만 쓰고 서버로 전송·저장하지 않아요. 출금 기능은 없어요.</li>
           </ul>
-        </div>
+        </div></>}
         {error && <div className="t-small text-red-600" role="alert">오류: {error}</div>}
         <div className="flex items-center gap-3 flex-wrap">
-          <button onClick={quickRun} disabled={!!valErr || launching} className={"btn btn-l " + (registerFirst ? "btn-secondary" : "btn-primary")}>
+          {domestic && <button onClick={saveMacro} disabled={!!valErr || saving || saved} className="btn btn-l btn-primary">{saving ? "저장 중…" : saved ? "내 매크로에 저장됨" : "내 매크로에 저장"}</button>}
+          <button onClick={quickRun} disabled={!!valErr || launching || domestic} title={domestic ? "국내 거래소 실행기 직접 연결 미지원" : undefined} className={"btn btn-l " + (registerFirst || domestic ? "btn-secondary" : "btn-primary")}>
             {launching ? "실행 준비 중…" : "빠른 실행"}
           </button>
-          <button onClick={downloadMacro} disabled={!!valErr} className="btn btn-l btn-secondary">
+          <button onClick={downloadMacro} disabled={!!valErr || domestic} title={domestic ? "국내 거래소 실거래 실행기 파일 미지원" : undefined} className="btn btn-l btn-secondary">
             매크로 파일 내려받기 (.ggm.json)
           </button>
-          <Link to="/?run=1&step=1" className="t-small font-semibold text-slate-900 underline underline-offset-4 decoration-slate-300 hover:decoration-slate-900">
+          {!domestic && <Link to="/?run=1&step=1" className="t-small font-semibold text-slate-900 underline underline-offset-4 decoration-slate-300 hover:decoration-slate-900">
             사용법 →
-          </Link>
+          </Link>}
         </div>
       </div>
     </div>
   );
 }
 
-export function PaperPanelView({ macro, valErr, onRegister, controller, nextSteps = true }) {
+export function PaperPanelView({ macro: currentMacro, valErr, onRegister, controller, nextSteps = true }) {
   const {
     session,
     status,
@@ -162,6 +190,7 @@ export function PaperPanelView({ macro, valErr, onRegister, controller, nextStep
     stop,
     restart,
   } = controller;
+  const macro = status && startedMacro ? startedMacro : currentMacro;
   const { rate: krwRate } = useUsdKrw();
   const ret = status?.current_return ?? 0;
   const up = ret >= 0;
@@ -169,7 +198,7 @@ export function PaperPanelView({ macro, valErr, onRegister, controller, nextStep
   // above can change independently. Flag the drift so the user knows the live
   // figures don't reflect their latest edits until they restart.
   const macroChanged =
-    running && startedMacro && JSON.stringify(startedMacro) !== JSON.stringify(macro);
+    running && startedMacro && JSON.stringify(startedMacro) !== JSON.stringify(currentMacro);
 
   return (
     // 도구 패널도 상자를 쓰지 않는다 — 구획은 괘선 하나로 충분하다(§1-3).
@@ -253,7 +282,7 @@ export function PaperPanelView({ macro, valErr, onRegister, controller, nextStep
       )}
 
       <p className="t-caption text-slate-500">
-        금액 단위는 <b className="text-slate-700">{quoteOf(macro.symbol)}</b>(미국 달러 기준) · 원화(≈)는 참고용 근사치 · 수량 단위는 코인 개수({baseOf(macro.symbol)})예요.
+        금액 단위는 <b className="text-slate-700">{quoteOf(macro.symbol)}</b>{isDomestic(macro.exchange) ? "(원화 기준)" : "(미국 달러 기준) · 원화(≈)는 참고용 근사치"} · 수량 단위는 코인 개수({baseOf(macro.symbol)})예요.
       </p>
 
       {valErr && <div className="t-small text-amber-700" role="alert">{valErr}</div>}
@@ -267,8 +296,8 @@ export function PaperPanelView({ macro, valErr, onRegister, controller, nextStep
             <div className="t-h2 truncate num text-slate-900" title={fmtMoney(status.current_equity, macro.symbol)}>
               {fmtMoneyCompact(status.current_equity, macro.symbol)}
             </div>
-            {fmtKrw(status.current_equity, krwRate) && (
-              <div className="t-caption text-slate-500 truncate num">{fmtKrw(status.current_equity, krwRate)}</div>
+            {fmtKrw(status.current_equity, krwRate, macro.symbol) && (
+              <div className="t-caption text-slate-500 truncate num">{fmtKrw(status.current_equity, krwRate, macro.symbol)}</div>
             )}
           </div>
           <div className="min-w-0">
@@ -327,7 +356,7 @@ export function PaperPanelView({ macro, valErr, onRegister, controller, nextStep
           <div className="t-title"><span className="num">{status.liquidations}</span>번 청산됐어요 (전액 손실)</div>
           <div className="t-small mt-2">
             청산으로 잃은 금액 <b className="num">{fmtMoney(status.liquidated_loss || 0, macro.symbol)}</b>
-            {fmtKrw(status.liquidated_loss || 0, krwRate) && <span className="num"> ({fmtKrw(status.liquidated_loss || 0, krwRate)})</span>}
+            {fmtKrw(status.liquidated_loss || 0, krwRate, macro.symbol) && <span className="num"> ({fmtKrw(status.liquidated_loss || 0, krwRate, macro.symbol)})</span>}
             {" "}· 레버리지 <span className="num">{macro.leverage}</span>배의 위험을 모의로 확인했어요.
           </div>
         </div>
@@ -389,7 +418,7 @@ export function PaperPanelView({ macro, valErr, onRegister, controller, nextStep
         </div>
       )}
 
-      {nextSteps && <PaperNextSteps macro={macro} valErr={valErr} />}
+      {nextSteps && <PaperNextSteps macro={currentMacro} valErr={valErr} />}
     </section>
   );
 }

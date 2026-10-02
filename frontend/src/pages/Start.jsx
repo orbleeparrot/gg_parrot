@@ -18,6 +18,7 @@ import usePaperSession from "../hooks/usePaperSession.js";
 import { RULE_TYPES, PERIOD_PRESETS, buildMacro, defaultForm, macroToForm, validate } from "../lib/macro.js";
 import { GUIDE_CHAPTERS as CHAPTERS } from "../lib/guideFlow.js";
 import { api } from "../api.js";
+import { exchangeLabel, isDomestic, normalizeSymbolForExchange } from "../lib/exchanges.js";
 import { getUserId } from "../lib/user.js";
 import { isLoggedIn, useAuth, useAccountGuard } from "../lib/auth.js";
 import {
@@ -38,7 +39,7 @@ function initialForm() {
   if (!saved) return defaultForm();
   try {
     const restored = macroToForm(saved);
-    if (restored.rule_type === "H") {
+    if (restored.rule_type === "H" && !isDomestic(restored.exchange)) {
       restored.initial_capital = Math.max(Number(restored.initial_capital) || 0, 10000000);
     }
     return restored;
@@ -153,10 +154,8 @@ function periodSummary(form) {
   return PERIOD_PRESETS.find((item) => item.value === form.preset)?.label || "직접 지정";
 }
 
-function normalizeGuideSymbol(value) {
-  const symbol = String(value || "").trim().toUpperCase();
-  if (!symbol || symbol.endsWith("USDT")) return symbol;
-  return `${symbol}USDT`;
+function normalizeGuideSymbol(value, exchange = "binance") {
+  return normalizeSymbolForExchange(value, exchange);
 }
 
 function workspaceLabel(screen) {
@@ -273,7 +272,9 @@ function screenError(screen, form) {
     const symbols = form.symbol.split(",").map((value) => value.trim()).filter(Boolean);
     if (symbols.length === 0) return "종목을 입력해 주세요.";
     if (symbols.length > 1) return "빠른 가이드에서는 종목 하나만 입력해 주세요. 여러 종목은 전체 빌더에서 설정할 수 있어요.";
-    if (!symbols.every((value) => /^[A-Z0-9]+$/.test(value))) return "종목은 영문과 숫자로 입력해 주세요.";
+    const pattern = isDomestic(form.exchange) ? /^(KRW-)?[A-Z0-9]+$/ : /^[A-Z0-9]+$/;
+    if (!symbols.every((value) => pattern.test(value))) return "선택한 거래소의 종목 코드를 입력해 주세요.";
+    if (!(Number(form.initial_capital) > 0)) return "시작 자금을 선택한 거래소의 통화로 입력해 주세요.";
   }
   if (screen.kind === "condition") return conditionError(screen.field, form);
   if (screen.kind === "risk" && form.use_stop_loss && !(Number(form.stop_loss_pct) > 0)) {
@@ -318,6 +319,7 @@ function AccountStart({ onNestedDialogChange }) {
   const resumeHandledRef = useRef(false);
   const resumeRequestIdRef = useRef(0);
   const boardRequestIdRef = useRef(0);
+  const assetSearchIdRef = useRef(0);
   const mountedRef = useRef(false);
   const previousScreenKindRef = useRef("");
 
@@ -418,8 +420,11 @@ function AccountStart({ onNestedDialogChange }) {
   }, [isCurrentAccount, macro]);
 
   useEffect(() => {
+    // A late symbol check must not advance a changed exchange, symbol or step.
+    assetSearchIdRef.current += 1;
+    setSymbolSearchBusy(false);
     setSymbolSearchError("");
-  }, [form.symbol]);
+  }, [form.exchange, form.symbol, form.candle_interval, screen.id]);
 
   useEffect(() => {
     saveJourneyStep(screen.id);
@@ -589,6 +594,14 @@ function AccountStart({ onNestedDialogChange }) {
       const saved = await api.saveMyMacro(runnable, `${symbol || "BTCUSDT"} 매크로`);
       if (!isCurrentAccount()) return;
       completeJourney();
+      if (isDomestic(runnable.exchange)) {
+        // Saving and leaderboard registration are supported; do not hand a KRW
+        // macro to the currently Binance-only execution wizard.
+        const registerScreen = screens.find((candidate) => candidate.kind === "register");
+        if (registerScreen) goTo(registerScreen);
+        setResumeError("매크로를 내 라이브러리에 저장했어요. 업비트·빗썸 실행기 직접 연결은 아직 지원하지 않아요. 리더보드 모의 집계는 등록할 수 있어요.");
+        return;
+      }
       // flow=build → 실행 마법사가 '매크로 빌드~연결·실행' 8단계 진행바로 이어서 표시한다.
       navigate("/?run=1&step=2&flow=build", { state: { selectedMacroId: saved.item.id } });
     } catch (reason) {
@@ -611,24 +624,29 @@ function AccountStart({ onNestedDialogChange }) {
     if (!nextScreen) return;
 
     if (screen.kind === "asset") {
-      const symbol = normalizeGuideSymbol(form.symbol);
+      const symbol = normalizeGuideSymbol(form.symbol, form.exchange);
+      const requestId = ++assetSearchIdRef.current;
+      const checkedKey = currentKey;
+      const isCurrentCheck = () => mountedRef.current && isCurrentAccount() &&
+        assetSearchIdRef.current === requestId && currentKeyRef.current === checkedKey &&
+        screenKindRef.current === "asset";
       setSymbolSearchBusy(true);
       setSymbolSearchError("");
       try {
-        const data = await api.candles(symbol, form.candle_interval, 300);
-        if (!isCurrentAccount()) return;
+        const data = await api.candles(symbol, form.candle_interval, 300, "spot", form.exchange || "binance");
+        if (!isCurrentCheck()) return;
         if (!Array.isArray(data.candles) || data.candles.length === 0) throw new Error("NO_CANDLES");
         setForm((current) => ({ ...current, symbol }));
         goTo(nextScreen);
       } catch (reason) {
-        if (!isCurrentAccount()) return;
+        if (!isCurrentCheck()) return;
         setSymbolSearchError(
           reason?.status === 422
-            ? "바이낸스 현물에서 이 종목을 찾지 못했어요. BTC 또는 BTCUSDT처럼 다시 검색해 주세요."
+            ? `${exchangeLabel(form.exchange)} 현물에서 이 종목을 찾지 못했어요. 선택한 거래소의 종목 코드로 다시 검색해 주세요.`
             : "지금 시세 서버에 연결하지 못했어요. 잠시 후 다시 확인해 주세요.",
         );
       } finally {
-        if (isCurrentAccount()) setSymbolSearchBusy(false);
+        if (isCurrentCheck()) setSymbolSearchBusy(false);
       }
       return;
     }
@@ -782,7 +800,7 @@ function AccountStart({ onNestedDialogChange }) {
             </header>
             {showWorkspaceContext ? (
               <dl className="hero-workspace-context" aria-label="현재 가이드 설정">
-                <div><dt>종목</dt><dd className="num">{macro.symbol}</dd></div>
+                <div><dt>거래소·종목</dt><dd><span>{exchangeLabel(macro.exchange)}</span> · <span className="num">{macro.symbol}</span></dd></div>
                 <div><dt>전략</dt><dd className="hero-workspace-strategy">{RULE_TYPES[macro.rule_type]?.label || macro.rule_type}</dd></div>
                 <div><dt>손실 제한</dt><dd className="num">{macro.risk?.stop_loss_pct == null ? "사용 안 함" : `${macro.risk.stop_loss_pct}%`}</dd></div>
                 <div><dt>기간</dt><dd>{periodSummary(form)}</dd></div>
@@ -840,7 +858,7 @@ function AccountStart({ onNestedDialogChange }) {
               <p className="hero-tour-action-note" role="status">위에서 실제 등록을 완료하면 다음 안내가 열려요.</p>
             ) : (
               <button type="button" onClick={advance} disabled={footerDisabled} className="btn btn-l btn-primary hero-tour-next">
-                {actionLabel(screen, backtest, paperController, paperReady, registrationReady, symbolSearchBusy)}
+                {screen.kind === "paper" && paperReady && isDomestic(form.exchange) ? "세션을 마치고 매크로 저장" : actionLabel(screen, backtest, paperController, paperReady, registrationReady, symbolSearchBusy)}
               </button>
             )}
           </div>

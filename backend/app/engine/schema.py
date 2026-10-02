@@ -11,10 +11,13 @@ and runs on the shared candle engine (``engine.candles``).
 from __future__ import annotations
 
 import enum
+import math
 import os
 from typing import ClassVar, Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
+
+from ..exchanges import Exchange, is_domestic, quote_currency as exchange_quote, validate_symbol
 
 # Upper bound on macro leverage (demo safety cap). Env-tunable; the builder mirrors
 # this default. Leverage is a backtest/paper-only concept (never applied to real
@@ -254,6 +257,8 @@ def required_param_names(rule_type: "RuleType") -> tuple[str, ...]:
 class Macro(BaseModel):
     macro_id: Optional[str] = None
     share_slug: Optional[str] = None
+    exchange: Exchange = "binance"
+    quote_currency: Optional[Literal["USDT", "KRW"]] = None
     symbol: str = "BTCUSDT"
     # Multi-symbol (portfolio) backtest: run the SAME rule on each symbol with the
     # capital split evenly, then aggregate. None/[]/single => normal single-symbol.
@@ -281,13 +286,21 @@ class Macro(BaseModel):
 
     @model_validator(mode="after")
     def _validate(self) -> "Macro":
+        expected_quote = exchange_quote(self.exchange)
+        if self.quote_currency is not None and self.quote_currency != expected_quote:
+            raise ValueError("quote_currency must match the selected exchange")
+        self.quote_currency = expected_quote
+        normalized_symbol = validate_symbol(self.symbol, self.exchange)
+        # v1 file signatures used the exact single Binance symbol spelling.
+        if is_domestic(self.exchange):
+            self.symbol = normalized_symbol
         # Normalize the portfolio symbol list (upper, dedup, keep order). The
         # primary `symbol` is always the first entry so single-symbol paths and
         # slug/summary logic keep working unchanged.
         if self.symbols:
             seen: list[str] = []
             for s in self.symbols:
-                su = str(s).strip().upper()
+                su = validate_symbol(s, self.exchange)
                 if su and su not in seen:
                     seen.append(su)
             if len(seen) > self.MAX_SYMBOLS:
@@ -297,6 +310,21 @@ class Macro(BaseModel):
                 self.symbols = seen if len(seen) > 1 else None
             else:
                 self.symbols = None
+
+        if is_domestic(self.exchange):
+            if self.position_side is not PositionSide.LONG or self.leverage != 1:
+                raise ValueError("국내 현물 매크로는 매수(long)·1배만 지원합니다")
+            if self.market == "futures" or self.fees.funding_pct != 0:
+                raise ValueError("국내 현물에는 선물·펀딩비를 적용할 수 없습니다")
+            if self.rule_type is RuleType.K:
+                raise ValueError("국내 현물에서는 공매도 전환 전략(K)을 사용할 수 없습니다")
+            if self.rule_type is RuleType.C and self.candle_interval != "1d":
+                raise ValueError("국내 적립식 매크로는 날짜 간격을 계산하는 일봉을 사용합니다")
+
+        if self.rule_type is RuleType.C and "initial_capital" in self.params:
+            budget = float(self.params["initial_capital"])
+            if not math.isfinite(budget) or budget <= 0:
+                raise ValueError("DCA initial_capital must be finite and positive")
 
         if self.candle_interval not in _VALID_INTERVALS:
             raise ValueError(f"candle_interval must be one of {sorted(_VALID_INTERVALS)}")
@@ -393,6 +421,8 @@ class Macro(BaseModel):
         "auto" mirrors the real bot: short OR leverage>1 needs futures, else
         spot. An explicit "spot"/"futures" is honored as-is.
         """
+        if is_domestic(self.exchange):
+            return "spot"
         if self.market in ("spot", "futures"):
             return self.market
         # K flips to short mid-run, so it always needs futures (spot can't short).

@@ -265,7 +265,8 @@ export const api = {
 
   cardUrl: (slug) => `/api/card/${slug}.png`,
   // 거래 가능한 종목 목록(현물 + USDT-M 선물) — 조건 판의 종목 검색은 이 안에서만 고른다.
-  symbols: (options = {}) => req("/api/symbols", { timeoutMs: 25_000, ...options }),
+  symbols: ({ exchange = "binance", ...options } = {}) =>
+    req(`/api/symbols?exchange=${encodeURIComponent(exchange)}`, { timeoutMs: 25_000, ...options }),
   coinLogoUrl: (base) => `/api/coin-logo/${encodeURIComponent(base)}.png`,
 
   // kimchi premium (reference indicator; upbit vs binance×USDKRW)
@@ -357,22 +358,22 @@ export const api = {
   whaleActivity: () => req("/api/whale-activity"),
 
   // 실시간 봉차트용 최근 캔들 (서버 캐시; 마지막 봉은 진행 중이라 closed=false)
-  candles: (symbol, interval, limit, market = "spot") =>
+  candles: (symbol, interval, limit, market = "spot", exchange = "binance") =>
     req(
       `/api/candles?symbol=${encodeURIComponent(symbol)}` +
         `&interval=${encodeURIComponent(interval || "1m")}&limit=${limit || 120}` +
-        `&market=${encodeURIComponent(market === "futures" ? "futures" : "spot")}`
+        `&market=${encodeURIComponent(market === "futures" ? "futures" : "spot")}&exchange=${encodeURIComponent(exchange)}`
     ),
-  liveCandles: (symbol, interval, market = "spot") =>
+  liveCandles: (symbol, interval, market = "spot", exchange = "binance") =>
     req(
       `/api/candles/live?symbol=${encodeURIComponent(symbol)}` +
         `&interval=${encodeURIComponent(interval || "1m")}` +
-        `&market=${encodeURIComponent(market === "futures" ? "futures" : "spot")}`
+        `&market=${encodeURIComponent(market === "futures" ? "futures" : "spot")}&exchange=${encodeURIComponent(exchange)}`
     ),
 
   // 리더보드 보유 중 행의 미실현 수익률용 공개 일괄 시세 (최대 30종목, 2s 캐시)
-  prices: (symbols, options = {}) =>
-    req(`/api/prices?symbols=${encodeURIComponent(symbols.join(","))}`, { timeoutMs: 8_000, ...options }),
+  prices: (symbols, { exchange = "binance", ...options } = {}) =>
+    req(`/api/prices?symbols=${encodeURIComponent(symbols.join(","))}&exchange=${encodeURIComponent(exchange)}`, { timeoutMs: 8_000, ...options }),
 
   // 오늘의 리더보드 (daily KST paper-return board)
   leaderboard: (userId, options = {}) => {

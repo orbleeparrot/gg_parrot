@@ -1,7 +1,7 @@
 """FastAPI app: macro create/fetch, backtest, gallery, share card.
 
-No exchange order APIs. Only the public Binance klines endpoint is used, for
-historical data. Every returned result represents a PAST SIMULATION.
+Public Binance/Upbit/Bithumb data powers historical simulations. Domestic
+account authentication and order execution are deliberately not connected.
 """
 from __future__ import annotations
 
@@ -102,6 +102,7 @@ from .data import symbols as symbols_mod
 from .data.binance import backtest_limits
 from .marketdata import fetch_klines_for_macro
 from . import marketdata as marketdata_mod
+from .exchanges import Exchange, capabilities, is_domestic, validate_symbol
 from .db import MacroRow, get_session, init_db, request_session
 from .engine import BacktestResult, Macro, Period, compact_backtest_result, human_summary
 from .engine.backtest import run_backtest
@@ -321,6 +322,7 @@ class RunnerStartRequest(BaseModel):
     # normalized macro equality before creating the session.
     user_macro_id: Optional[int] = None
     symbol: str
+    exchange: Exchange = "binance"
     position_side: str = "long"
     leverage: int = 1
     market: str = ""  # spot | futures | "" (서버가 방향/레버리지로 결정)
@@ -1229,6 +1231,7 @@ def funding_rate(
     preset: str = "1y",
     start: Optional[str] = None,
     end: Optional[str] = None,
+    exchange: Exchange = "binance",
 ) -> dict:
     """Average *daily* USDT-M funding cost (%) for a symbol over the period.
 
@@ -1236,6 +1239,10 @@ def funding_rate(
     ``available`` is False (and the pct null) when the symbol has no perp market
     or the funding API is unreachable — the UI keeps the user's manual value.
     """
+    if is_domestic(exchange):
+        return {"symbol": symbol.upper(), "exchange": exchange,
+                "avg_daily_funding_pct": None, "available": False,
+                "note": "국내 현물에는 펀딩비가 없습니다"}
     try:
         start_ms, end_ms = resolve_period(preset, start, end)
     except ValueError as exc:
@@ -1298,6 +1305,7 @@ def candles(
     interval: str = chart_mod.DEFAULT_INTERVAL,
     limit: int = 120,
     market: str = "spot",
+    exchange: Exchange = "binance",
 ) -> dict:
     """Recent OHLC candles for the live chart (public market data only).
 
@@ -1307,7 +1315,8 @@ def candles(
     the shared kline cache, so it can't leak into a backtest.
     """
     try:
-        return chart_mod.get_candles(symbol, interval=interval, limit=limit, market=market)
+        kwargs = {"exchange": exchange} if exchange != "binance" else {}
+        return chart_mod.get_candles(symbol, interval=interval, limit=limit, market=market, **kwargs)
     except NoSpotDataError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     except Exception as exc:
@@ -1319,10 +1328,12 @@ def live_candles(
     symbol: str,
     interval: str = chart_mod.DEFAULT_INTERVAL,
     market: str = "spot",
+    exchange: Exchange = "binance",
 ) -> dict:
     """Latest two public candles for the chart's moving live edge."""
     try:
-        return chart_mod.get_live_candles(symbol, interval=interval, market=market)
+        kwargs = {"exchange": exchange} if exchange != "binance" else {}
+        return chart_mod.get_live_candles(symbol, interval=interval, market=market, **kwargs)
     except NoSpotDataError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     except Exception as exc:
@@ -1330,15 +1341,23 @@ def live_candles(
 
 
 @app.get("/api/prices")
-def prices(symbols: str = Query(default="", max_length=700)) -> dict:
+def prices(symbols: str = Query(default="", max_length=700), exchange: Exchange = "binance") -> dict:
     """공개 일괄 시세 — 리더보드 보유 중 행의 미실현 수익률용.
 
     전 종목 시세를 한 번에 받아 2초 캐시 — 요청당 상류 호출 최대 1회.
     """
     wanted = list(dict.fromkeys(s.strip().upper() for s in symbols.split(",") if s.strip()))
-    if not wanted or len(wanted) > marketdata_mod.MAX_PRICE_SYMBOLS or any(not marketdata_mod.SYMBOL_RE.match(s) for s in wanted):
+    try:
+        wanted = [validate_symbol(s, exchange) for s in wanted]
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if (not wanted or len(wanted) > marketdata_mod.MAX_PRICE_SYMBOLS
+            or (exchange == "binance" and any(not marketdata_mod.SYMBOL_RE.match(s) for s in wanted))):
         raise HTTPException(422, "종목 형식이 잘못됐어요.")
-    return {"prices": marketdata_mod.batch_prices(wanted), "ms": int(time.time() * 1000)}
+    kwargs = {"exchange": exchange} if exchange != "binance" else {}
+    return {"prices": marketdata_mod.batch_prices(wanted, **kwargs),
+            "exchange": exchange, "quote_currency": capabilities(exchange)["quote_currency"],
+            "ms": int(time.time() * 1000)}
 
 
 @app.get("/api/hot-coins")
@@ -1920,10 +1939,10 @@ def board_comment_delete(comment_id: int, user: User = Depends(auth_mod.current_
 
 
 @app.get("/api/symbols")
-def symbols(response: Response) -> dict:
-    """Tradable Binance USDT symbols (spot + USDT-M perpetual) for the builder's search — only these can be added."""
+def symbols(response: Response, exchange: Exchange = "binance") -> dict:
+    """Exchange-specific USDT or native KRW market catalogue for symbol search."""
     try:
-        data = symbols_mod.list_symbols()
+        data = symbols_mod.list_symbols(**({"exchange": exchange} if exchange != "binance" else {}))
         response.headers["Cache-Control"] = (
             "public, max-age=5, s-maxage=5" if data.get("stale") or not data.get("items")
             else "public, max-age=300, s-maxage=300"
@@ -1931,6 +1950,11 @@ def symbols(response: Response) -> dict:
         return data
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"종목 목록을 불러오지 못했어요: {type(exc).__name__}")
+
+
+@app.get("/api/exchanges")
+def exchanges() -> dict:
+    return {"items": [capabilities(exchange) for exchange in ("binance", "upbit", "bithumb")]}
 
 
 @app.get("/api/coin-logo/{base}.png")
@@ -2004,6 +2028,8 @@ def paper_trades(session_id: int) -> dict:
 # --- real-trade executable bundle (real orders; default testnet/fake funds) -----------
 @app.post("/api/realtrade/bundle")
 def realtrade_bundle(req: BundleRequest) -> Response:
+    if is_domestic(req.macro.exchange):
+        raise HTTPException(422, runner_mod.DOMESTIC_RUNNER_DETAIL)
     data = build_bundle(req.macro)
     filename = f"realtrade-bot-{req.macro.rule_type.value}-{req.macro.position_side.value}.zip"
     return Response(
@@ -2022,6 +2048,8 @@ def realtrade_macro_file(req: BundleRequest) -> Response:
     실행기에 넣으면 된다(human_summary 동봉).
     """
     macro = req.macro
+    if is_domestic(macro.exchange):
+        raise HTTPException(422, runner_mod.DOMESTIC_RUNNER_DETAIL)
     payload = macro.model_dump(mode="json")
     payload["human_summary"] = human_summary(macro)
     # 서명 동봉 — 실행기가 시작할 때 같이 올리면 서버가 "원본 그대로인지" 판별한다.

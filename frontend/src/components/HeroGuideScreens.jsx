@@ -1,6 +1,8 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from "react";
-import { RULE_TYPES, withTypeDefaults } from "../lib/macro.js";
+import { RULE_TYPES, withTypeDefaults, withExchangeDefaults } from "../lib/macro.js";
 import { computeStrategyOverlay } from "../lib/indicators.js";
+import { EXCHANGES, isDomestic, normalizeExchange, normalizeSymbolForExchange, quoteForExchange } from "../lib/exchanges.js";
+import { baseOf } from "../lib/format.js";
 
 const ResultView = lazy(() => import("./ResultView.jsx"));
 const PaperPanelView = lazy(() =>
@@ -130,7 +132,7 @@ export function getConditionFields(ruleType, form = {}) {
   if (ruleType === "I" && form.exit_mode === "take_profit") {
     fields.push(number("take_profit", "익절 기준", "돌파 뒤 몇 % 오르면 정리할까요?", "%", "선택한 익절 방식에 필요한 값이에요."));
   }
-  return fields;
+  return fields.map((field) => field.suffix === "USDT" ? { ...field, suffix: quoteForExchange(form.exchange) } : field);
 }
 
 export function conditionError(field, form) {
@@ -148,10 +150,10 @@ export function conditionError(field, form) {
 }
 
 function ruleSentence(form) {
-  const coin = (form.symbol || "BTCUSDT").split(",")[0].trim().replace(/USDT$/i, "") || "BTC";
+  const coin = baseOf((form.symbol || "BTCUSDT").split(",")[0].trim()) || "BTC";
   const type = form.rule_type;
   if (type === "A") return `${coin}가 ${form.take_profit_pct}% 오르면 이익을 확정하고, ${form.stop_loss_pct}% 내리면 손실을 제한해요.`;
-  if (type === "C") return `${coin}를 ${form.interval_days}일마다 ${Number(form.amount_per_buy || 0).toLocaleString()} USDT씩 나눠 사요.`;
+  if (type === "C") return `${coin}를 ${form.interval_days}일마다 ${Number(form.amount_per_buy || 0).toLocaleString()} ${quoteForExchange(form.exchange)}씩 나눠 사요.`;
   if (type === "J") return `${coin}의 ${form.fast_period}봉 평균이 ${form.slow_period}봉 평균을 위로 지나면 진입해요.`;
   return `${coin}에 ${RULE_TYPES[type]?.label?.replace(/^[A-K] · /, "") || "선택한 전략"} 규칙을 적용해요.`;
 }
@@ -176,18 +178,34 @@ export function BuildScene({ form }) {
 }
 
 export function AssetScene({ form, setForm, error, searchError = "", busy = false }) {
-  const choices = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT"];
+  const exchange = normalizeExchange(form.exchange);
+  const domestic = isDomestic(exchange);
+  const quote = quoteForExchange(exchange);
+  const choices = ["BTC", "ETH", "SOL", "XRP"].map((base) => normalizeSymbolForExchange(base, exchange));
+  const [exchangeNotice, setExchangeNotice] = useState("");
   const helpId = "hero-symbol-help";
   const errorId = "hero-symbol-error";
   return (
     <div className="hero-form-block">
+      <label htmlFor="hero-exchange" className="block t-small font-semibold text-slate-700 mb-2">사용할 거래소</label>
+      <select id="hero-exchange" className="field mb-4" value={exchange} disabled={busy} onChange={(event) => {
+        const value = event.target.value;
+        setForm((current) => withExchangeDefaults(current, value));
+        setExchangeNotice("거래소가 바뀌어 종목·가격·금액을 초기화했어요. 자동 환산하지 않으니 다시 입력해 주세요.");
+      }}>
+        {EXCHANGES.map((item) => <option key={item.value} value={item.value}>{item.label} · {item.quote}</option>)}
+      </select>
+      {domestic && <p className="mb-4 t-small text-amber-700">원화 현물 전용이에요. 숏·선물·레버리지는 사용할 수 없고, 국내 거래소 실행기 직접 연결은 아직 지원하지 않아요.</p>}
+      {exchangeNotice && <p className="mb-4 t-small text-amber-700" role="status">{exchangeNotice}</p>}
+      <label htmlFor="hero-capital" className="block t-small font-semibold text-slate-700 mb-2">시작 자금 ({quote})</label>
+      <input id="hero-capital" className="field num mb-5" type="number" min="0.0001" step="any" value={form.initial_capital} disabled={busy} onChange={(event) => setForm((current) => ({ ...current, initial_capital: event.target.value }))} />
       <label htmlFor="hero-symbol" className="block t-small font-semibold text-slate-700 mb-2">차트로 확인할 종목 검색</label>
       <input
         id="hero-symbol"
         type="search"
         className="field t-title num"
         value={form.symbol}
-        placeholder="예: BTCUSDT"
+        placeholder={domestic ? "예: BTC 또는 KRW-BTC" : "예: BTC 또는 BTCUSDT"}
         enterKeyHint="search"
         onChange={(event) => setForm((current) => ({ ...current, symbol: event.target.value.toUpperCase() }))}
         onBlur={() => setForm((current) => ({ ...current, symbol: current.symbol.trim().toUpperCase() }))}
@@ -207,7 +225,7 @@ export function AssetScene({ form, setForm, error, searchError = "", busy = fals
             disabled={busy}
             onClick={() => setForm((current) => ({ ...current, symbol }))}
           >
-            {symbol.replace("USDT", "")}
+            {baseOf(symbol)}
           </button>
         ))}
       </div>
@@ -223,8 +241,10 @@ export function StrategyScene({ form, setForm }) {
     // H's default safety-order ladder needs 6.3M at worst. The quick guide does
     // not expose capital sizing, so give this preset enough demo capital before
     // handing it to the complete Builder.
-    if (value === "H") next.initial_capital = Math.max(Number(next.initial_capital) || 0, 10000000);
-    else if (current.rule_type === "H" && ["A", "B", "C"].includes(value)) next.initial_capital = 1000000;
+    if (!isDomestic(current.exchange)) {
+      if (value === "H") next.initial_capital = Math.max(Number(next.initial_capital) || 0, 10000000);
+      else if (current.rule_type === "H" && ["A", "B", "C"].includes(value)) next.initial_capital = 1000000;
+    }
     return next;
   });
   return (
@@ -232,7 +252,7 @@ export function StrategyScene({ form, setForm }) {
       <label htmlFor="hero-strategy" className="block t-small font-semibold text-slate-700 mb-2">매매 전략</label>
       <select id="hero-strategy" className="field t-label" value={form.rule_type} onChange={(event) => choose(event.target.value)}>
         {Object.entries(RULE_TYPES).map(([key, value]) => (
-          <option key={key} value={key}>{value.label}</option>
+          <option key={key} value={key} disabled={isDomestic(form.exchange) && key === "K"}>{value.label}{isDomestic(form.exchange) && key === "K" ? " · 국내 현물 불가" : ""}</option>
         ))}
       </select>
       <p className="mt-4 t-body text-slate-600">{STRATEGY_COPY[form.rule_type]}</p>
@@ -387,8 +407,10 @@ export function ConditionWorkbench({ screen, form, setForm, error }) {
         <Suspense fallback={<SceneLoading label="조건 참고 차트 불러오는 중…" />}>
           <CandleChart
             symbol={symbol}
+            exchange={form.exchange || "binance"}
             interval={form.candle_interval}
             onIntervalChange={(value) => setForm((current) => ({ ...current, candle_interval: value }))}
+            disabledIntervals={isDomestic(form.exchange) && form.rule_type === "C" ? ["1m", "5m", "15m", "1h", "4h"].map((value) => ({ value, title: "국내 정기 분할매수는 일봉 전용이에요" })) : []}
             overlay={overlay}
             compact
           />
@@ -426,7 +448,9 @@ export function BacktestScene({ form, backtest }) {
           <Suspense fallback={<SceneLoading label="차트 불러오는 중…" />}>
             <CandleChart
               symbol={chartSymbol}
+              exchange={backtest.testedMacro?.exchange || form.exchange || "binance"}
               defaultInterval={form.candle_interval || "1m"}
+              disabledIntervals={isDomestic(form.exchange) && form.rule_type === "C" ? ["1m", "5m", "15m", "1h", "4h"].map((value) => ({ value, title: "국내 정기 분할매수는 일봉 전용이에요" })) : []}
               overlay={overlay}
               compact
             />

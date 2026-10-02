@@ -33,6 +33,7 @@ from .db import (
     get_session,
 )
 from .security import verify_password
+from .exchanges import normalize_exchange, quote_currency
 
 KST = timezone(timedelta(hours=9))
 DAY_MS = 24 * 60 * 60 * 1000
@@ -291,11 +292,17 @@ def _entry_view(
 
     streak = max(1, int(row.streak_days or 1))
 
+    try:
+        stored_macro = json.loads(row.macro_json)
+        exchange = normalize_exchange(stored_macro.get("exchange"))
+    except (ValueError, TypeError, AttributeError):
+        stored_macro = None
+        exchange = "binance"
     macro = None
     summary = ""
     if unlocked:
         try:
-            macro = json.loads(row.macro_json)
+            macro = stored_macro
         except (ValueError, TypeError):
             macro = None
         summary = row.human_summary
@@ -312,6 +319,8 @@ def _entry_view(
         "username": row.username or row.nickname,
         "nickname": row.nickname,
         "symbol": row.symbol,
+        "exchange": exchange,
+        "quote_currency": quote_currency(exchange),
         # Locked: summary/macro withheld so only id·종목·등락률이 노출된다.
         "human_summary": summary,
         "macro": macro,  # for "매크로 복사하기 → 빌더" prefill (unlocked only)

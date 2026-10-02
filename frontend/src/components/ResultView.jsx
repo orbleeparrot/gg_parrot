@@ -2,7 +2,7 @@ import { useState } from "react";
 import EquityChart from "./EquityChart.jsx";
 import SimBadge from "./SimBadge.jsx";
 import InfoTooltip from "./InfoTooltip.jsx";
-import { fmtMoney, fmtMoneyCompact, fmtKrw } from "../lib/format.js";
+import { fmtMoney, fmtMoneyCompact, fmtKrw, baseOf } from "../lib/format.js";
 import { useUsdKrw } from "../lib/usdkrw.js";
 import {
   RESULT_BLOCKS,
@@ -242,7 +242,6 @@ function Stat({
 
 function PerSymbolTable({ rows }) {
   if (!rows || rows.length === 0) return null;
-  const coin = (s) => (s || "").replace(/USDT$|BUSD$|USDC$/, "");
   return (
     <div className="pt-2">
       <div className="t-title text-slate-900 mb-3">
@@ -265,7 +264,7 @@ function PerSymbolTable({ rows }) {
               const up = (r.final_return_pct ?? 0) >= 0;
               return (
                 <tr key={r.symbol} className="border-b border-slate-200 last:border-0 t-label">
-                  <td className="py-3 font-semibold text-slate-900">{coin(r.symbol)}</td>
+                  <td className="py-3 font-semibold text-slate-900">{baseOf(r.symbol)}</td>
                   <td className={"text-right font-bold num " + (up ? "text-green-600" : "text-red-600")}>
                     {up ? "+" : ""}{(r.final_return_pct ?? 0).toFixed(2)}%
                   </td>
@@ -384,7 +383,7 @@ export default function ResultView({
       label: "최종 평가금액",
       value: fmtMoneyCompact(r.final_equity, symbol),
       title: fmtMoney(r.final_equity, symbol),
-      sub: fmtKrw(r.final_equity, krwRate),
+      sub: fmtKrw(r.final_equity, krwRate, symbol),
     },
     sharpe: {
       label: "샤프지수",
@@ -509,8 +508,8 @@ export default function ResultView({
           <div className="mt-2 t-small">
             레버리지 <span className="num">{leverage}</span>배라 청산으로 잃은 금액{" "}
             <b className="num">{fmtMoney(r.liquidated_loss || 0, symbol)}</b>
-            {fmtKrw(r.liquidated_loss || 0, krwRate) && (
-              <span className="font-normal num"> ({fmtKrw(r.liquidated_loss || 0, krwRate)})</span>
+            {fmtKrw(r.liquidated_loss || 0, krwRate, symbol) && (
+              <span className="font-normal num"> ({fmtKrw(r.liquidated_loss || 0, krwRate, symbol)})</span>
             )}
             . 레버리지는 가격이 조금만 반대로 움직여도 투입 증거금을 전부 잃게 만들어요.
             <InfoTooltip term="liquidation" />

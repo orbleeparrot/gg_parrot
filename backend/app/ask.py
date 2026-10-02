@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import threading
@@ -32,6 +33,7 @@ from .db import AskExtraCredit, AskMacroSession, User
 from .engine.backtest import BacktestResult, _lttb_equity_points
 from .engine.explain import explain_result
 from .engine.schema import Macro
+from .exchanges import is_domestic, normalize_exchange, quote_currency
 from .quests import today_kst
 
 log = logging.getLogger(__name__)
@@ -95,7 +97,7 @@ RULE_LABELS = {
     "G": "볼린저밴드 회귀", "H": "세이프티 주문", "I": "변동성 돌파", "J": "이동평균 크로스",
 }
 
-_SYMBOL_RE = re.compile(r"^[A-Z0-9]{2,20}USDT$")
+_SYMBOL_RE = re.compile(r"^(?:[A-Z0-9]{2,20}USDT|KRW-[A-Z0-9]{1,20})$")
 
 
 class AskRequest(BaseModel):
@@ -114,14 +116,38 @@ class AskRequest(BaseModel):
 
 
 class CandidatesRequest(BaseModel):
+    # A manual strategy budget, not a verified exchange account balance.
+    # Missing values retain compatibility with existing Binance sessions.
+    exchange: str = "binance"
+    account_balance: float = Field(default=CAPITAL, gt=0, allow_inf_nan=False)
     risk_profile: RiskProfile
     market: Literal["spot", "futures"]
     leverage: int = Field(default=1, ge=1, le=3)
     invest_horizon: Literal["days", "weeks", "months", "long"]
     watch_frequency: Literal["rarely", "sometimes", "often"]
 
+    @field_validator("exchange", mode="before")
+    @classmethod
+    def _exchange(cls, value):
+        return normalize_exchange(value)
+
+    @field_validator("account_balance", mode="before")
+    @classmethod
+    def _balance(cls, value):
+        if isinstance(value, bool):
+            raise ValueError("잔액은 0보다 큰 숫자로 입력해 주세요")
+        return value
+
+    @property
+    def quote_currency(self) -> str:
+        return quote_currency(self.exchange)
+
     @model_validator(mode="after")
     def _profile_rules(self) -> "CandidatesRequest":
+        if is_domestic(self.exchange) and "account_balance" not in self.model_fields_set:
+            raise ValueError("원화 거래소에서 사용할 잔액을 입력해 주세요")
+        if is_domestic(self.exchange) and (self.market != "spot" or self.leverage != 1):
+            raise ValueError("업비트·빗썸은 원화 현물만 살펴봐요. 공매도·선물·레버리지는 지원하지 않아요")
         if self.market == "futures" and not PROFILES[self.risk_profile]["futures"]:
             raise ValueError(f"{PROFILES[self.risk_profile]['label']}은 현물만 살펴봐요")
         if self.market == "spot" and self.leverage != 1:
@@ -208,6 +234,8 @@ class _Plan:
     symbols: list[str]
     period_preset: str
     interval: str
+    exchange: str = "binance"
+    account_balance: float = CAPITAL
 
 
 def _plan(answers: CandidatesRequest, symbol: str) -> _Plan:
@@ -216,6 +244,7 @@ def _plan(answers: CandidatesRequest, symbol: str) -> _Plan:
         risk_profile=answers.risk_profile, market=answers.market, leverage=answers.leverage,
         symbols=[symbol], period_preset=period,
         interval=to_interval(answers.risk_profile, answers.watch_frequency, period),
+        exchange=answers.exchange, account_balance=answers.account_balance,
     )
 
 
@@ -232,15 +261,37 @@ def _allowed_types(req: _Plan) -> tuple[str, ...]:
 
 
 def _make_macro(req: _Plan, rule_type: str, preset: dict, symbols: list[str]) -> Optional[Macro]:
+    params = dict(preset["params"])
+    capital = float(req.account_balance)
+    old_capital = params.get("initial_capital", CAPITAL)
+    try:
+        old_capital = float(old_capital)
+        if not math.isfinite(old_capital) or old_capital <= 0:
+            return None
+        factor = capital / old_capital
+        # Absolute amounts must retain their budget proportions across currencies.
+        for key in ("base_order_size", "safety_order_size", "per_grid_invest"):
+            if params.get(key) is not None:
+                params[key] = float(params[key]) * factor
+        if rule_type == "C":
+            from .data.binance import PERIOD_PRESET_DAYS
+            interval_days = max(1, int(params["interval_days"]))
+            buys = PERIOD_PRESET_DAYS[req.period_preset] // interval_days + 1
+            params["amount_per_buy"] = capital / buys
+        params["initial_capital"] = capital
+    except (ValueError, TypeError, KeyError, OverflowError):
+        return None
     body = {
+        "exchange": req.exchange,
+        "quote_currency": quote_currency(req.exchange),
         "symbol": symbols[0],
         "symbols": symbols if len(symbols) > 1 else None,
         "rule_type": rule_type,
         "position_side": "long",
-        "candle_interval": req.interval,
+        "candle_interval": "1d" if rule_type == "C" else req.interval,
         "market": req.market,
         "leverage": req.leverage if rule_type != "C" else 1,
-        "params": dict(preset["params"]),
+        "params": params,
         "risk": dict(preset.get("risk", {})),
         "period": {"preset": req.period_preset},
     }
@@ -378,7 +429,7 @@ def select_top(evaluated: list[Evaluated], profile: str, n: int = TOP_N) -> list
 
 _AI_MODEL = default_model()
 _AI_MAX_TOKENS = int(os.environ.get("OPENAI_ASK_MAX_TOKENS", "2048"))
-_AI_PROMPT_VERSION = "ask-v1"
+_AI_PROMPT_VERSION = "ask-exchange-budget-v2"
 
 
 def _ai_system(req: _Plan) -> str:
@@ -388,7 +439,9 @@ def _ai_system(req: _Plan) -> str:
         "서로 다른 스타일의 매크로 3개를 JSON 으로만 출력해(코드펜스 없이). 형식은 "
         '{"macros":[{"rule_type":"J","params":{...},"risk":{"stop_loss_pct":3}}, ...]}. '
         f"rule_type 은 {types} 중에서만 고르고 각 params 는 그 타입 스키마대로 채워. "
-        "initial_capital 은 1000000 으로. 종목·봉 간격·시장·레버리지는 서버가 정하니 넣지 마. "
+        f"거래소는 {req.exchange}, 사용자 입력 전략 예산은 {req.account_balance:g} {quote_currency(req.exchange)}야. "
+        f"initial_capital 은 {req.account_balance:g} 으로, 절대 주문 금액은 이 예산 안에서 정해. "
+        "거래소·종목·봉 간격·시장·레버리지는 서버가 정하니 넣지 마. "
         "수익률이나 전망 같은 숫자를 지어내지 말고, 조언·권유 문구를 넣지 마."
     )
 
@@ -452,7 +505,7 @@ def propose_with_ai(req: _Plan) -> list[Candidate]:
     return out
 
 
-_CANDIDATE_PROMPT_VERSION = "ask-cand-v1"
+_CANDIDATE_PROMPT_VERSION = "ask-cand-exchange-budget-v2"
 _CANDIDATE_SYSTEM = (
     "너는 주어진 목록 안에서만 종목 후보를 고르는 도우미다. "
     "목록에 없는 종목은 절대 쓰지 마라. 가격이나 수익률을 예측하지 마라. "
@@ -689,13 +742,14 @@ def _candidates_record(row: AskMacroSession) -> tuple[list[dict], bool]:
     return (saved if isinstance(saved, list) else []), False
 
 
-def _tradable_symbols(market: str) -> set[str]:
-    """이 시장에서 실제로 거래되는 USDT 심볼 — 빌더 검색창이 쓰는 그 목록(캐시됨)."""
-    items = symbols_mod.list_symbols().get("items") or []
+def _tradable_symbols(market: str, exchange: str = "binance") -> set[str]:
+    """Selected exchange's actual listings, shared with builder search."""
+    listing = symbols_mod.list_symbols() if exchange == "binance" else symbols_mod.list_symbols(exchange=exchange)
+    items = listing.get("items") or []
     return {str(i.get("symbol", "")) for i in items if isinstance(i, dict) and i.get(market)}
 
 
-def _allowed_symbols(row: AskMacroSession, market: str) -> set[str]:
+def _allowed_symbols(row: AskMacroSession, market: str, exchange: str = "binance") -> set[str]:
     """이 세션에서 고를 수 있는 종목.
 
     세션 후보 + 빠른 선택 칩(MANUAL_SYMBOLS) + '직접 고를래요' 로 검색해 고른 종목.
@@ -708,12 +762,15 @@ def _allowed_symbols(row: AskMacroSession, market: str) -> set[str]:
         picked = {c["symbol"] for c in items if isinstance(c, dict)}
     except Exception:
         picked = set()
-    base = picked | set(MANUAL_SYMBOLS)
+    base = picked | (set(MANUAL_SYMBOLS) if exchange == "binance" else set())
     try:
-        return base | _tradable_symbols(market)
+        actual = _tradable_symbols(market) if exchange == "binance" else _tradable_symbols(market, exchange)
+        # Native KRW symbols are venue-specific; a stale/fabricated candidate
+        # must not bypass the venue's actual listing check.
+        return actual if is_domestic(exchange) else base | actual
     except Exception:
         log.warning("ask: 거래 가능 종목 목록을 받지 못해 직접 고르기를 기본 목록으로 제한합니다", exc_info=True)
-        return base
+        return set() if is_domestic(exchange) else base
 
 
 def run_ask(db: Session, user: User, req: AskRequest, run_backtest: Callable[[Macro], BacktestResult]) -> dict:
@@ -724,7 +781,8 @@ def run_ask(db: Session, user: User, req: AskRequest, run_backtest: Callable[[Ma
     if not consented(user):
         raise AskError(403, "먼저 안내에 동의해 주세요.")
     row, answers = _load_flow(db, user, req.session_id)
-    if req.symbol not in _allowed_symbols(row, answers.market):
+    native = req.symbol.startswith("KRW-") if is_domestic(answers.exchange) else req.symbol.endswith("USDT")
+    if not native or req.symbol not in _allowed_symbols(row, answers.market, answers.exchange):
         raise AskError(422, "이번 질문에서 살펴볼 수 있는 종목이 아니에요.")
 
     with _IN_FLIGHT_LOCK:
@@ -827,15 +885,23 @@ def _run_candidates(db: Session, user: User, req: CandidatesRequest) -> dict:
         db.commit()
 
     try:
-        tickers = hotcoins.get_cached_tickers()
+        if is_domestic(req.exchange):
+            from .data.krw import get_all_tickers
+            tickers = get_all_tickers(req.exchange)
+        else:
+            tickers = hotcoins.get_cached_tickers()
         if not tickers:
             raise AskError(503, "지금 시세 목록을 불러오지 못했어요. 잠시 뒤 다시 물어봐 주세요.")
-        pool = ask_candidates.build_pool(tickers, profile=req.risk_profile)
+        pool = ask_candidates.build_pool(tickers, profile=req.risk_profile, exchange=req.exchange)
+        if is_domestic(req.exchange):
+            actual = _tradable_symbols(req.market, req.exchange)
+            pool = [coin for coin in pool if coin["symbol"] in actual]
         if not pool:
             raise AskError(503, "지금 살펴볼 종목을 찾지 못했어요. 잠시 뒤 다시 물어봐 주세요.")
         candidates, ai_used = ask_candidates.choose(
             pool, profile=req.risk_profile, horizon=req.invest_horizon,
-            watch=req.watch_frequency, ask_ai=_candidate_ai())
+            watch=req.watch_frequency, ask_ai=_candidate_ai(),
+            exchange=req.exchange, account_balance=req.account_balance)
     except Exception:
         # 후보를 못 냈으면 횟수를 돌려준다 — 행을 지우고 추가권은 다시 '안 씀'으로.
         if credit is not None:
@@ -854,7 +920,10 @@ def _run_candidates(db: Session, user: User, req: CandidatesRequest) -> dict:
     return {
         "session_id": row.id,
         "candidates": candidates,
-        "manual_symbols": list(MANUAL_SYMBOLS),
+        "manual_symbols": list(MANUAL_SYMBOLS) if req.exchange == "binance" else [c["symbol"] for c in candidates],
+        "exchange": req.exchange,
+        "quote_currency": req.quote_currency,
+        "account_balance": req.account_balance,
         "remaining_today": remaining_today(db, user),
         "disclaimer": DISCLAIMER,
     }

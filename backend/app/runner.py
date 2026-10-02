@@ -252,6 +252,14 @@ def _ticket_error(status_code: int, detail: str) -> HTTPException:
     )
 
 
+DOMESTIC_RUNNER_DETAIL = "업비트·빗썸은 종목·차트·백테스트만 지원하며, 실행기 직접 연결은 지원하지 않습니다."
+
+
+def _require_binance_macro(macro: Macro) -> None:
+    if macro.exchange != "binance":
+        raise _ticket_error(422, DOMESTIC_RUNNER_DETAIL)
+
+
 def create_launch_ticket(
     user_id: int,
     user_macro_id: int,
@@ -272,6 +280,12 @@ def create_launch_ticket(
         macro_row = db.get(UserMacro, user_macro_id)
         if macro_row is None or macro_row.user_id != user_id:
             raise _ticket_error(404, "내 매크로를 찾을 수 없어요.")
+
+        try:
+            macro = Macro.model_validate_json(macro_row.macro_json)
+        except (TypeError, ValueError):
+            raise _ticket_error(422, "저장된 매크로 형식이 올바르지 않아요.")
+        _require_binance_macro(macro)
 
         row = RunnerLaunchTicket(
             user_id=user_id,
@@ -392,6 +406,7 @@ def claim_launch_ticket(ticket: str, runner_version: str = "") -> dict:
             macro = Macro.model_validate_json(macro_row.macro_json)
         except (TypeError, ValueError):
             raise _ticket_error(422, "저장된 매크로 형식이 올바르지 않아요.")
+        _require_binance_macro(macro)
         if macro.rule_type in RUNNER_UNSUPPORTED_RULES:
             # 실행기가 못 돌리는 유형은 버전과 무관하게 거절 — 업데이트로 풀리는 문제가 아니므로 버전 게이트(426)보다
             # 먼저 보고, '거절(업데이트 필요)' 표시도 하지 않고 티켓도 소비하지 않는다(잠금만 푼다).
@@ -441,6 +456,10 @@ def claim_launch_ticket(ticket: str, runner_version: str = "") -> dict:
 def start_session(user: User, payload: dict) -> dict:
     """실행기가 매크로 구동을 시작할 때 세션을 만든다. session_id 를 돌려준다."""
     symbol = str(payload.get("symbol", "")).upper()
+    raw_macro = payload.get("macro")
+    if (payload.get("exchange", "binance") != "binance" or symbol.startswith("KRW-")
+            or (isinstance(raw_macro, dict) and raw_macro.get("exchange", "binance") != "binance")):
+        raise _ticket_error(422, DOMESTIC_RUNNER_DETAIL)
     side = str(payload.get("position_side", "long")).lower()
     leverage = max(1, int(payload.get("leverage", 1) or 1))
     market = str(payload.get("market", "")).lower()
@@ -457,6 +476,7 @@ def start_session(user: User, payload: dict) -> dict:
     if isinstance(macro, dict):
         try:
             normalized_macro = Macro.model_validate(macro)
+            _require_binance_macro(normalized_macro)
             dumped = normalized_macro.model_dump_json()
             if len(dumped) <= 20000:  # 방어적 상한(정상 매크로는 ~1KB)
                 macro_json = dumped

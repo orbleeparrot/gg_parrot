@@ -9,24 +9,52 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from typing import Callable, Optional
 
 from .hotcoins import MIN_QUOTE_VOLUME, select_hot_coins
+from .exchanges import is_domestic, normalize_exchange, quote_currency
 
 POOL_SIZE = 10
 # 거래대금 상위 몇 개 안에서 성향별 정렬을 할지 — 유동성 없는 코인이 후보에 오르지 않게 한다.
 LIQUID_TOP = 40
 SCALPER_LIQUID_TOP = 15
+MIN_KRW_QUOTE_VOLUME = 1_000_000_000  # Separate KRW liquidity floor; never compare it with USDT.
+_STABLE_BASES = frozenset({"USDT", "USDC", "TUSD", "DAI", "USDD", "FDUSD", "BUSD", "USDP", "USD1"})
 
 
-def build_pool(tickers: list[dict], *, profile: str, size: int = POOL_SIZE) -> list[dict]:
+def _krw_coins(tickers: list[dict]) -> list[dict]:
+    coins = []
+    for row in tickers:
+        symbol = str(row.get("symbol", ""))
+        if not re.fullmatch(r"KRW-[A-Z0-9]{1,20}", symbol) or symbol[4:] in _STABLE_BASES:
+            continue
+        try:
+            volume, change, price, high, low = (float(row[key]) for key in
+                ("quoteVolume", "priceChangePercent", "lastPrice", "highPrice", "lowPrice"))
+        except (KeyError, ValueError, TypeError):
+            continue
+        if not all(math.isfinite(v) for v in (volume, change, price, high, low)):
+            continue
+        if volume < MIN_KRW_QUOTE_VOLUME or price <= 0 or low <= 0 or high < low:
+            continue
+        coins.append({"symbol": symbol, "base": symbol[4:], "quote_currency": "KRW",
+                      "change_pct": round(change, 2), "last_price": price,
+                      "quote_volume": round(volume, 2), "range_pct": round((high - low) / low * 100, 2)})
+    return coins
+
+
+def build_pool(tickers: list[dict], *, profile: str, size: int = POOL_SIZE, exchange: str = "binance") -> list[dict]:
     """성향에 맞는 후보 풀. AI 는 이 목록 밖으로 나갈 수 없다."""
-    coins = select_hot_coins(tickers, limit=500, min_quote_volume=MIN_QUOTE_VOLUME,
-                             candidate_pool=500)
+    exchange = normalize_exchange(exchange)
+    coins = _krw_coins(tickers) if is_domestic(exchange) else select_hot_coins(
+        tickers, limit=500, min_quote_volume=MIN_QUOTE_VOLUME, candidate_pool=500)
     coins.sort(key=lambda c: c["quote_volume"], reverse=True)
     for rank, coin in enumerate(coins, start=1):
         coin["volume_rank"] = rank
+        coin["exchange"] = exchange
+        coin["quote_currency"] = quote_currency(exchange)
 
     top = SCALPER_LIQUID_TOP if profile == "scalper" else LIQUID_TOP
     pool = coins[:top]
@@ -100,6 +128,7 @@ def _clean_reason(text: object, profile: str, coin: dict) -> str:
 
 def _view(coin: dict, reason: str) -> dict:
     return {"symbol": coin["symbol"], "base": coin["base"], "reason": reason,
+            "exchange": coin.get("exchange", "binance"), "quote_currency": coin.get("quote_currency", "USDT"),
             "volume_rank": coin["volume_rank"], "range_pct": coin["range_pct"],
             "change_pct": coin["change_pct"]}
 
@@ -134,14 +163,17 @@ _HORIZON_WORDS = {"days": "며칠", "weeks": "몇 주", "months": "몇 달", "lo
 _WATCH_WORDS = {"rarely": "거의 못 봐요", "sometimes": "가끔 봐요", "often": "수시로 봐요"}
 
 
-def build_prompt(pool: list[dict], *, profile: str, horizon: str, watch: str) -> str:
+def build_prompt(pool: list[dict], *, profile: str, horizon: str, watch: str,
+                 exchange: str = "binance", account_balance: float | None = None) -> str:
     lines = [
         f"- {c['symbol']} · 거래대금 {c['volume_rank']}위 · 하루 변동폭 {c['range_pct']}% "
         f"· 24시간 {c['change_pct']:+}%"
         for c in pool
     ]
+    budget = f" · 사용자 입력 전략 예산: {account_balance!r}" if account_balance is not None else ""
     return (
         "아래 목록에서만 골라 주세요. 목록에 없는 종목은 절대 쓰지 마세요.\n"
+        f"거래소: {exchange} · 거래 통화: {quote_currency(exchange)}{budget}\n"
         f"투자 성향: {profile} · 투자 기간: {_HORIZON_WORDS.get(horizon, horizon)} "
         f"· 시세를 보는 빈도: {_WATCH_WORDS.get(watch, watch)}\n\n"
         + "\n".join(lines)
@@ -177,7 +209,8 @@ def _matched_symbols(raw: object, pool: list[dict]) -> set[str]:
 
 
 def choose(pool: list[dict], *, profile: str, horizon: str, watch: str,
-           ask_ai: Optional[Callable[[str], str]] = None) -> tuple[list[dict], bool]:
+           ask_ai: Optional[Callable[[str], str]] = None,
+           exchange: str = "binance", account_balance: float | None = None) -> tuple[list[dict], bool]:
     """후보와 ai_used 를 돌려준다. AI 가 죽거나 이상한 답을 하면 규칙만으로 채운다.
 
     ai_used 는 "AI 가 고른 것 중 하나라도 검증을 통과해 결과에 남았는가" 를 뜻한다.
@@ -189,7 +222,8 @@ def choose(pool: list[dict], *, profile: str, horizon: str, watch: str,
     if ask_ai is not None:
         try:
             parsed = _parse(ask_ai(build_prompt(
-                pool, profile=profile, horizon=horizon, watch=watch)))
+                pool, profile=profile, horizon=horizon, watch=watch,
+                exchange=exchange, account_balance=account_balance)))
             picks = validate_picks(parsed, pool, profile)
             if _matched_symbols(parsed, pool):
                 return picks, True

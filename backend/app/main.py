@@ -1748,6 +1748,7 @@ async def board_create(
     title: str = Form(...),
     body: str = Form(""),
     body_format: str = Form("text"),
+    is_notice: bool = Form(False),
     images: list[UploadFile] = File(default=[]),
     image: Optional[UploadFile] = File(default=None),
     user: User = Depends(auth_mod.current_user_in_session),
@@ -1767,7 +1768,10 @@ async def board_create(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
     try:
-        return await run_in_threadpool(board_mod.create_post, user, title, body, validated, body_format=body_format, db=db)
+        return await run_in_threadpool(board_mod.create_post, user, title, body, validated, body_format=body_format, db=db,
+                                       is_notice=is_notice)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -1779,6 +1783,7 @@ async def board_update(
     body: str = Form(""),
     body_format: str = Form("text"),
     keep_image_ids: str = Form(""),
+    is_notice: Optional[bool] = Form(None),
     images: list[UploadFile] = File(default=[]),
     user: User = Depends(auth_mod.current_user_in_session),
     db: Session = Depends(request_session),
@@ -1797,7 +1802,7 @@ async def board_update(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
     try:
-        view = await run_in_threadpool(board_mod.update_post, post_id, user, title, body, keep, validated, body_format=body_format, db=db)
+        view = await run_in_threadpool(board_mod.update_post, post_id, user, title, body, keep, validated, body_format=body_format, db=db, is_notice=is_notice)
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc))
     except ValueError as exc:

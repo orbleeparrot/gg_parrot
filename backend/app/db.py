@@ -878,6 +878,8 @@ class BoardPost(SQLModel, table=True):
     views: int = 0  # 조회수 — 같은 방문자는 30분에 한 번만 센다
     likes: int = 0  # 추천 수(BoardPostVote 합계를 복제해 둔 것 — 목록 정렬용)
     dislikes: int = 0
+    # [공지] — 관리자만 올리고, 목록의 모든 쪽 맨 위에 고정된다(일반 목록에서는 빠진다). 2026-10-02
+    is_notice: bool = Field(default=False, index=True)
     created_at: str  # UTC ISO
     created_ms: int = Field(index=True, sa_type=BigInteger)
 
@@ -1135,6 +1137,9 @@ def _migrate() -> None:
             "expires_ms": "ALTER TABLE askmacrosession ADD COLUMN expires_ms BIGINT NOT NULL DEFAULT 0",
             "ask_count": "ALTER TABLE askmacrosession ADD COLUMN ask_count INTEGER NOT NULL DEFAULT 0",
         },
+        "boardpost": {
+            "is_notice": "ALTER TABLE boardpost ADD COLUMN is_notice BOOLEAN DEFAULT FALSE",
+        },
         "runsession": {
             "position_uncertain": "ALTER TABLE runsession ADD COLUMN position_uncertain BOOLEAN DEFAULT FALSE",
             "macro_json": "ALTER TABLE runsession ADD COLUMN macro_json TEXT DEFAULT ''",
@@ -1293,6 +1298,9 @@ _PG_ADDED_COLUMNS = {
         "chosen_symbol": "TEXT NOT NULL DEFAULT ''",
         "expires_ms": "BIGINT NOT NULL DEFAULT 0",
         "ask_count": "INTEGER NOT NULL DEFAULT 0",
+    },
+    "boardpost": {
+        "is_notice": "BOOLEAN NOT NULL DEFAULT FALSE",
     },
     "runsession": {
         "macro_json": "TEXT DEFAULT ''", "position_uncertain": "BOOLEAN DEFAULT FALSE",

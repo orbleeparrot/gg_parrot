@@ -357,3 +357,18 @@
 .board-comment-login { margin: 16px 0 0; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; color: rgb(var(--c-slate-700)); font-size: 14px; font-weight: 500; }
 .board-react-hint { margin: 0; text-align: center; color: rgb(var(--c-slate-500)); font-size: 13px; font-weight: 500; }
 .board-form-error { min-height: 1lh; margin: 0; color: rgb(var(--c-red-600)); font-size: 13px; font-weight: 600; }
+
+/* [공지] — 관리자만 올리고 모든 쪽 맨 위에 고정. 제목을 완전히 다른 글자색으로(2026-10-02). 색은 --board-notice 하나로 정한다. */
+.board-table, .board-post-title, .board-composer { --board-notice: var(--c-red-600); }
+.board-notice-tag {
+  display: inline-flex; align-items: center; flex: none; height: 20px; padding: 0 7px; margin-right: 8px; border-radius: 6px;
+  background: rgb(var(--board-notice) / .12); color: rgb(var(--board-notice)); font-size: 12px; font-weight: 800; letter-spacing: .02em;
+}
+.board-row.is-notice { background: rgb(var(--board-notice) / .05); }
+.board-row.is-notice .board-title-text,
+.board-row.is-notice:visited .board-title-text { color: rgb(var(--board-notice)); font-weight: 800; }
+.board-post-title.is-notice { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; color: rgb(var(--board-notice)); }
+.board-post-title.is-notice .board-notice-tag { height: 26px; font-size: 14px; }
+.board-notice-toggle { display: flex; align-items: center; gap: 8px; padding: 10px 12px; margin-bottom: 4px; border: 1px solid rgb(var(--c-slate-200)); border-radius: 10px; color: rgb(var(--c-slate-700)); font-size: 14px; font-weight: 600; cursor: pointer; }
+.board-notice-toggle input { width: 18px; height: 18px; accent-color: rgb(var(--board-notice)); }
+.board-notice-toggle .board-notice-tag { margin-right: 0; }

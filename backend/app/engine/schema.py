@@ -238,6 +238,19 @@ _REQUIRED_PARAMS: dict[RuleType, tuple[str, ...]] = {
 _VALID_INTERVALS = frozenset({"1m", "5m", "15m", "1h", "4h", "1d"})
 
 
+def required_param_names(rule_type: "RuleType") -> tuple[str, ...]:
+    """Params that must be present for this rule type — the schema is the source.
+
+    Prompt builders read this instead of copying field names by hand: a new
+    required field reaches the prompt on its own instead of silently failing
+    every proposal.
+    """
+    model = _PARAMS_MODEL.get(rule_type)
+    if model is None:
+        return _REQUIRED_PARAMS.get(rule_type, ())
+    return tuple(name for name, field in model.model_fields.items() if field.is_required())
+
+
 class Macro(BaseModel):
     macro_id: Optional[str] = None
     share_slug: Optional[str] = None

@@ -8,23 +8,48 @@ challenge ALWAYS has exactly N valid macros — even with no key or a bad respon
 from __future__ import annotations
 
 import json
+import logging
 import os
 from typing import Optional
 
 from .ai_runtime import ai_available, ai_cache_key, default_model, get_ai_client, get_ai_runtime
-from .engine.schema import Macro
+from .engine.schema import Macro, RuleType, required_param_names
+
+logger = logging.getLogger(__name__)
 
 _MODEL = default_model()
 _MAX_TOKENS = int(os.environ.get("OPENAI_CHALLENGE_MAX_TOKENS", "2048"))
-_PROMPT_VERSION = "daily-challenge-v2"
+# v3 — params 필드 이름을 스키마에서 생성해 알려준다(v2 는 '{...}' 로 생략해
+# 모델이 이름을 추측했고, 그래서 제안이 전부 검증에서 떨어졌다).
+_PROMPT_VERSION = "daily-challenge-v3"
+
+# 모델에게 허용하는 타입과 사람이 읽을 이름.
+_OFFERED_TYPES = (("A", "익절/손절"), ("E", "트레일링"), ("F", "RSI"), ("J", "이평크로스"))
+
+
+def _params_spec() -> str:
+    """타입별 필수 params 이름을 스키마에서 뽑아 한 줄로 만든다.
+
+    손으로 적지 않는다 — 스키마에 필수 필드가 생기면 프롬프트가 따라간다.
+    """
+    parts = []
+    for code, label in _OFFERED_TYPES:
+        names = required_param_names(RuleType(code))
+        parts.append(f"{code}({label})={', '.join(names)}" if names else f"{code}({label})=없음")
+    return " · ".join(parts)
+
 
 _SYSTEM = (
     "너는 코인 백테스트 교육 데모의 전략 생성기야. 주어진 종목으로 초보용 매크로 "
     "3개를 서로 다른 스타일로 제안해. 코드펜스 없이 JSON만 출력하고 형식은 "
-    '{"macros":[{"rule_type":"A","candle_interval":"1h","params":{...},'
+    '{"macros":[{"rule_type":"A","candle_interval":"1h",'
+    '"params":{"take_profit_pct":5,"initial_capital":1000000},'
     '"risk":{"stop_loss_pct":3},"position_side":"long"}, ...]}. '
-    "rule_type 은 A(익절/손절), E(트레일링), F(RSI), J(이평크로스) 중에서만 고르고 "
-    "각 params 는 그 타입에 맞게 채워. initial_capital 은 1000000 으로. "
+    f"rule_type 은 {', '.join(f'{code}({label})' for code, label in _OFFERED_TYPES)} "
+    "중에서만 고르고, params 는 아래 이름을 그대로 써(다른 이름을 지으면 버려져). "
+    f"{_params_spec()}. "
+    "J 는 fast_period < slow_period 여야 해. initial_capital 은 1000000 으로. "
+    "candle_interval 은 1m, 5m, 15m, 1h, 4h, 1d 중에서 골라. "
     "레버리지·숏은 쓰지 마(long, 레버리지 1). 투자 조언 문구는 넣지 마."
 )
 
@@ -112,7 +137,9 @@ def generate_macros(symbol: str, n: int = 3) -> list[dict]:
     if ai_available():
         try:
             proposed = _ai_propose(symbol)
-        except Exception:
+        except Exception as exc:
+            logger.warning("daily challenge AI proposal failed: symbol=%s reason=%s",
+                           symbol, type(exc).__name__)
             proposed = []
 
     valid: list[dict] = []
@@ -122,6 +149,11 @@ def generate_macros(symbol: str, n: int = 3) -> list[dict]:
             valid.append(v)
         if len(valid) >= n:
             break
+    # 전부 떨어지면 템플릿이 조용히 메워 화면은 정상으로 보인다 — 수를 남긴다.
+    if proposed and len(valid) < len(proposed):
+        logger.warning(
+            "daily challenge AI macros dropped by schema: symbol=%s proposed=%d kept=%d",
+            symbol, len(proposed), len(valid))
     # Top up (or fully fall back) with deterministic templates.
     for t in _templates(symbol):
         if len(valid) >= n:

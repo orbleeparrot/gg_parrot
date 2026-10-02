@@ -16,7 +16,7 @@ import StrategyDetails from "../components/StrategyDetails.jsx";
 import { impressionKey } from "../lib/visit.js";
 import { isLive, liveReturn, stateHelp, stateLine, symbolsOf } from "../lib/leaderboardState.js";
 import { LIVE_TITLE, REWARD_HELP, REWARD_NOTE, STATE_LEGEND } from "../lib/leaderboardCopy.js";
-import { EXCHANGES, exchangeLabel, isDomestic, marketKey } from "../lib/exchanges.js";
+import { EXCHANGES, exchangeLabel, exchangeLogo, isDomestic, marketKey } from "../lib/exchanges.js";
 import { baseOf } from "../lib/format.js";
 import "./LeaderboardMobile.css";
 
@@ -582,7 +582,11 @@ function AccountLeaderboard() {
                 onPointerMove={cancelLongPress}
               >
                 <div className={`lb-rank num is-${rank}`} role="cell" aria-label={`${rank}위`}>{rank}</div>
-                <CoinIcon symbol={e.symbol} size={36} className="lb-coin" alt="" />
+                {/* 거래소는 배지 대신 코인 로고 모서리의 작은 거래소 로고로(2026-10-02, 시안 A). */}
+                <span className="lb-coin" role="cell" title={exchangeLabel(e.exchange)}>
+                  <CoinIcon symbol={e.symbol} size={36} className="lb-coin-img" alt="" />
+                  <img className="lb-coin-exchange" src={exchangeLogo(e.exchange)} width="14" height="14" alt={exchangeLabel(e.exchange)} draggable="false" />
+                </span>
                 <div className="lb-name" role="cell">
                   <div className="lb-name-line">
                     <span className="lb-mobile-symbol num">
@@ -593,7 +597,7 @@ function AccountLeaderboard() {
                     <EntryBadges entry={e} top3={top3} />
                   </div>
                   <div className="lb-meta t-caption text-slate-500">
-                    <span className="badge" aria-label="거래소">{exchangeLabel(e.exchange)}</span>{" · "}{registrationLabel(e)}
+                    {registrationLabel(e)}
                   </div>
                 </div>
                 <div className="lb-entry-details" role="presentation">

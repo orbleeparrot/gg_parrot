@@ -14,6 +14,7 @@ export function normalizeExchange(value) {
 
 export const exchangeLabel = (value) => EXCHANGES.find((item) => item.value === normalizeExchange(value)).label;
 export const quoteForExchange = (value) => EXCHANGES.find((item) => item.value === normalizeExchange(value)).quote;
+export const exchangeLogo = (value) => { const exchange = normalizeExchange(value); return `/exchanges/${exchange}.${exchange === "binance" ? "svg" : "png"}`; };
 export const isDomestic = (value) => normalizeExchange(value) !== "binance";
 export const marketKey = (exchange, symbol) => `${normalizeExchange(exchange)}:${String(symbol || "").trim().toUpperCase()}`;
 

@@ -10,9 +10,9 @@ export function searchSymbols(items, query, { limit = 8, exclude = [] } = {}) {
   const skip = new Set(exclude.map(clean));
   const ranked = [];
   for (const item of items) {
-    if (skip.has(item.symbol)) continue;
-    const base = String(item.base || "").toUpperCase();
-    const symbol = String(item.symbol || "").toUpperCase();
+    if (skip.has(clean(item.symbol))) continue;
+    const base = clean(item.base);
+    const symbol = clean(item.symbol);
     let score = -1;
     if (base === q || symbol === q) score = 0;
     else if (base.startsWith(q)) score = 1;
@@ -29,7 +29,7 @@ export function searchSymbols(items, query, { limit = 8, exclude = [] } = {}) {
 export function resolveSymbol(items, text) {
   const q = clean(text);
   if (!q || !Array.isArray(items)) return null;
-  const bySymbol = new Map(items.map((item) => [String(item.symbol).toUpperCase(), item]));
+  const bySymbol = new Map(items.map((item) => [clean(item.symbol), item]));
   if (bySymbol.has(q)) return bySymbol.get(q).symbol;
   if (bySymbol.has(`${q}USDT`)) return bySymbol.get(`${q}USDT`).symbol;
   const byBase = items.find((item) => String(item.base || "").toUpperCase() === q);

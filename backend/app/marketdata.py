@@ -14,8 +14,9 @@ from .data import NoSpotDataError, get_klines
 from .data.binance import _TICKER
 from .engine import Macro
 from .http_runtime import get_http_client
+from .exchanges import normalize_exchange
 
-SYMBOL_RE = re.compile(r"^[A-Z0-9]{2,20}USDT$")
+SYMBOL_RE = re.compile(r"^[A-Z0-9]{1,20}USDT$")
 MAX_PRICE_SYMBOLS = 30
 
 
@@ -47,8 +48,15 @@ def all_prices_cached(ttl: float = 2.0) -> dict[str, float]:
         return {}
 
 
-def batch_prices(symbols: list[str]) -> dict[str, float]:
+def batch_prices(symbols: list[str], *, exchange: str = "binance") -> dict[str, float]:
     """리더보드 실시간 미실현용 일괄 시세 — 전 종목 스냅샷을 2s 캐시 공유, 못 받은 종목은 생략."""
+    exchange = normalize_exchange(exchange)
+    if exchange != "binance":
+        from .data import krw
+        try:
+            return krw.batch_prices(symbols, exchange)
+        except Exception:
+            return {}
     table = all_prices_cached()
     return {symbol: table[symbol] for symbol in symbols if symbol in table}
 
@@ -61,13 +69,16 @@ def fetch_klines_for_macro(macro: Macro, start_ms: int, end_ms: int) -> tuple[pd
     explicitly forced market ("spot"/"futures") is never overridden.
     """
     market = macro.resolved_market()
+    exchange = getattr(macro, "exchange", "binance")
+    exchange_args = {} if exchange == "binance" else {"exchange": exchange}
     try:
         return get_klines(
             macro.symbol, start_ms, end_ms,
             interval=macro.candle_interval, market=market, allow_synthetic=False,
+            **exchange_args,
         )
     except NoSpotDataError as first:
-        if macro.market != "auto":
+        if exchange != "binance" or macro.market != "auto":
             raise
         # "auto" may pick the wrong venue for a coin listed on only one of them
         # (perp-only like 1000PEPEUSDT, or spot-only). Try the other one before giving up.

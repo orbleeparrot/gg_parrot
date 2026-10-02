@@ -359,6 +359,10 @@ class DcaSim:
         self.amount_per_buy = float(p["amount_per_buy"])
         self.interval = max(1, int(p["interval_days"]))
         self.max_buys = max_buys
+        # Existing Binance macros retain their original bar-count semantics.
+        # Domestic DCA must not turn a 3-second live poll into a daily buy.
+        self.calendar_interval = getattr(macro, "exchange", "binance") != "binance"
+        self._next_dca_buy: Optional[datetime] = None
 
         self.initial_capital = float(initial_capital)
         self.cash = self.initial_capital
@@ -378,6 +382,8 @@ class DcaSim:
     def step(self, price: float, ts: Optional[datetime] = None) -> Optional[Fill]:
         c = price
         fill: Optional[Fill] = None
+        if self.calendar_interval and ts is not None:
+            ts = ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts.astimezone(timezone.utc)
 
         # Day roll for daily-max-loss (inert when ts is None).
         if ts is not None:
@@ -409,10 +415,13 @@ class DcaSim:
 
         # Scheduled buy.
         halted_today = self._halted_day is not None and self._halted_day == self._day
+        scheduled = self._step % self.interval == 0
+        if self.calendar_interval:
+            scheduled = ts is not None and (self._next_dca_buy is None or ts >= self._next_dca_buy)
         can_buy = (
             not self.stopped
             and not halted_today
-            and self._step % self.interval == 0
+            and scheduled
             and (self.max_buys is None or self.buys_done < self.max_buys)
             and self.cash >= self.amount_per_buy
         )
@@ -424,6 +433,8 @@ class DcaSim:
             self.cash -= self.amount_per_buy
             self.cost_basis += self.amount_per_buy
             self.buys_done += 1
+            if self.calendar_interval:
+                self._next_dca_buy = ts + timedelta(days=self.interval)
             fill = self._fill("buy", f, invest / f, c)
 
         self._step += 1
@@ -435,7 +446,7 @@ class DcaSim:
     def state(self) -> dict:
         """리더보드가 그리는 DCA 상태 — 조회만, 부작용 없음."""
         held = self.qty > 0
-        return {
+        state = {
             "in_position": held,
             "dir": 1,
             "qty": float(self.qty),
@@ -443,6 +454,10 @@ class DcaSim:
             "cooldown_until_ms": None,
             "halted_today": self._halted_day is not None and self._halted_day == self._day,
         }
+        if self.calendar_interval:
+            state["dca_next_buy_ms"] = int(self._next_dca_buy.timestamp() * 1000) if self._next_dca_buy else None
+            state["dca_stopped"] = self.stopped
+        return state
 
     def restore(self, equity: float, *, in_position: bool, qty: float, entry_price: float,
                 last_price: float, cooldown_until_ms: Optional[int] = None) -> None:
@@ -454,6 +469,17 @@ class DcaSim:
             self.qty = float(qty)
             self.cost_basis = self.qty * float(entry_price)
             self.cash = float(equity) - self.qty * float(last_price)
+            if self.calendar_interval:
+                # A legacy/incomplete checkpoint must not immediately repeat a
+                # buy. The exact saved schedule is restored by the driver hook.
+                self._next_dca_buy = datetime.now(timezone.utc) + timedelta(days=self.interval)
+
+    def restore_dca_schedule(self, next_buy_ms, *, stopped: bool = False) -> None:
+        if not self.calendar_interval:
+            return
+        if next_buy_ms is not None:
+            self._next_dca_buy = datetime.fromtimestamp(int(next_buy_ms) / 1000, timezone.utc)
+        self.stopped = bool(stopped)
 
     def _fill(self, side: str, price: float, qty: float, mark: float, reason: str = "") -> Fill:
         eq = self.equity(mark)
@@ -472,6 +498,6 @@ def make_sim(macro: Macro, initial_capital: Optional[float] = None):
 
         return LiveCandleSim(macro, initial_capital=initial_capital)
     if macro.rule_type is RuleType.C:
-        base = initial_capital if initial_capital is not None else 1_000_000.0
+        base = initial_capital if initial_capital is not None else (macro.initial_capital or 1_000_000.0)
         return DcaSim(macro, initial_capital=base, max_buys=None)
     return PositionSim(macro, initial_capital=initial_capital)

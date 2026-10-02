@@ -44,7 +44,8 @@
   .leaderboard-page .lb-row-head { display: none; }
   .leaderboard-page .lb-rank { align-self: start; padding-top: 3px; font-size: 22px; line-height: 1.2; font-weight: 800; font-variant-numeric: tabular-nums; text-align: left; }
   /* CoinIcon supplies inline dimensions; max dimensions keep the mobile logo at 32px. */
-  .leaderboard-page .lb-coin { max-width: 32px; max-height: 32px; }
+  .leaderboard-page .lb-coin { width: 32px; height: 32px; }
+  .leaderboard-page .lb-coin-exchange { width: 16px; height: 16px; right: -3px; bottom: -3px; }
   .leaderboard-page .lb-name .lb-title,
   .leaderboard-page .lb-name .badge,
   .leaderboard-page .lb-name .lb-meta { display: none; }

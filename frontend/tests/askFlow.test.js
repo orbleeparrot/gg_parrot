@@ -10,6 +10,8 @@ const CANDS = [
 
 function cards(profile = "balanced") {
   let s = initialState();
+  s = reduce(s, { type: "choose", step: "exchange", value: "binance" });
+  s = reduce(s, { type: "choose", step: "balance", value: 250 });
   s = reduce(s, { type: "choose", step: "profile", value: profile });
   s = reduce(s, { type: "choose", step: "market", value: { market: "spot", leverage: 1 } });
   s = reduce(s, { type: "choose", step: "horizon", value: "weeks" });
@@ -26,14 +28,45 @@ function withCandidates() {
   });
 }
 
-test("cards are four and end ready", () => {
-  assert.deepEqual(STEPS, ["profile", "market", "horizon", "watch"]);
+test("exchange and manual balance precede profile cards and end ready", () => {
+  assert.equal(initialState().step, "exchange");
+  assert.deepEqual(STEPS, ["exchange", "balance", "profile", "market", "horizon", "watch"]);
   const s = cards();
   assert.equal(s.phase, "ready");
   assert.deepEqual(toCandidatesRequest(s.answers), {
+    exchange: "binance", account_balance: 250,
     risk_profile: "balanced", market: "spot", leverage: 1,
     invest_horizon: "weeks", watch_frequency: "sometimes",
   });
+});
+
+test("manual balance must be positive and finite before progressing", () => {
+  const s = reduce(initialState(), { type: "choose", step: "exchange", value: "upbit" });
+  assert.equal(s.step, "balance");
+  for (const value of [0, -1, "", "Infinity", NaN, true]) {
+    assert.equal(reduce(s, { type: "choose", step: "balance", value }).answers.balance, null);
+  }
+  const next = reduce(s, { type: "choose", step: "balance", value: "150000" });
+  assert.equal(next.answers.balance, 150000);
+  assert.equal(next.step, "profile");
+});
+
+test("domestic exchange cannot choose futures or a USDT pair", () => {
+  let s = reduce(initialState(), { type: "choose", step: "exchange", value: "bithumb" });
+  s = reduce(s, { type: "choose", step: "balance", value: 100000 });
+  s = reduce(s, { type: "choose", step: "profile", value: "aggressive" });
+  assert.equal(canChooseFutures(s.answers), false);
+  assert.equal(reduce(s, { type: "choose", step: "market", value: { market: "futures", leverage: 2 } }).answers.market, null);
+  assert.equal(reduce(s, { type: "chooseSymbol", symbol: "BTCUSDT", resolved: true }).answers.symbol, null);
+  assert.equal(reduce(s, { type: "chooseSymbol", symbol: "KRW-BTC", resolved: true }).answers.symbol, "KRW-BTC");
+});
+
+test("changing exchange clears balance and the server candidate session", () => {
+  const s = reduce(withCandidates(), { type: "choose", step: "exchange", value: "upbit" });
+  assert.equal(s.answers.balance, null);
+  assert.equal(s.answers.profile, null);
+  assert.equal(s.session, null);
+  assert.deepEqual(s.candidates, []);
 });
 
 test("stable profile cannot choose futures", () => {
@@ -134,4 +167,43 @@ test("an unresolved symbol outside the lists is still ignored", () => {
 test("a resolved symbol that is not shaped like a pair is ignored", () => {
   const s = reduce(withCandidates(), { type: "chooseSymbol", symbol: "NOT A SYMBOL", resolved: true });
   assert.equal(s.answers.symbol, null);
+});
+
+test("a one-letter Binance base is accepted from candidates, manual chips, and resolved search", () => {
+  for (const source of ["candidate", "manual", "resolved"]) {
+    const state = withCandidates();
+    if (source === "candidate") state.candidates = [{ symbol: "TUSDT", base: "T" }];
+    if (source === "manual") state.manualSymbols = ["TUSDT"];
+    const next = reduce(state, { type: "chooseSymbol", symbol: " tusdt ", resolved: source === "resolved" });
+    assert.equal(next.answers.symbol, "TUSDT", source);
+    assert.deepEqual(toAskRequest(next), { session_id: 7, symbol: "TUSDT" });
+  }
+});
+
+test("Binance pair shape requires a 1-to-20 character base and excludes native KRW pairs", () => {
+  for (const base of ["T", "0", "A".repeat(20)]) {
+    assert.equal(reduce(withCandidates(), { type: "chooseSymbol", symbol: `${base}USDT`, resolved: true }).answers.symbol, `${base}USDT`);
+  }
+  for (const symbol of ["USDT", "A".repeat(21) + "USDT", "KRW-T", "T-USDT", "TUSDT,BTCUSDT"]) {
+    assert.equal(reduce(withCandidates(), { type: "chooseSymbol", symbol, resolved: true }).answers.symbol, null);
+  }
+  assert.equal(reduce(withCandidates(), { type: "chooseSymbol", symbol: "TUSDT" }).answers.symbol, null);
+  const domestic = reduce(initialState(), { type: "choose", step: "exchange", value: "upbit" });
+  assert.equal(reduce(domestic, { type: "chooseSymbol", symbol: "KRW-T", resolved: true }).answers.symbol, "KRW-T");
+});
+
+test("금액 입력칸은 세 자리마다 쉼표 — KRW 는 정수, USDT 는 소수 둘째 자리까지", async () => {
+  const { formatAmountInput, parseAmountInput, validBalance } = await import("../src/lib/askFlow.js");
+  assert.equal(formatAmountInput("1234567", "KRW"), "1,234,567");
+  assert.equal(formatAmountInput("1,2345", "KRW"), "12,345");
+  assert.equal(formatAmountInput("0001000", "KRW"), "1,000");
+  assert.equal(formatAmountInput("1234.56", "KRW"), "123,456");
+  assert.equal(formatAmountInput("1234.5678", "USDT"), "1,234.56");
+  assert.equal(formatAmountInput("1234.", "USDT"), "1,234.");
+  assert.equal(formatAmountInput("12.3.4", "USDT"), "12.34");
+  assert.equal(formatAmountInput(".5", "USDT"), "0.5");
+  assert.equal(formatAmountInput("abc", "USDT"), "");
+  assert.equal(parseAmountInput("1,234,567"), "1234567");
+  assert.ok(validBalance(parseAmountInput("100,000")));
+  assert.ok(!validBalance(parseAmountInput("0")));
 });

@@ -401,7 +401,7 @@ class RunSession(SQLModel, table=True):
 
     __table_args__ = (Index("ix_runsession_active_heartbeat", "status", "last_heartbeat_at"),)
     id: Optional[int] = Field(default=None, primary_key=True)
-    user_id: int = Field(index=True)
+    user_id: int = Field(index=True, foreign_key="user.id")  # 2026-10-02 외래키(마이그레이션 20261002100000)
     # Stable account-library identity. Nullable for sessions created by legacy
     # runners that only uploaded an anonymous macro JSON snapshot.
     user_macro_id: Optional[int] = Field(default=None, index=True)
@@ -432,6 +432,8 @@ class RunSession(SQLModel, table=True):
     started_at: str
     last_heartbeat_at: str = ""
     stopped_at: Optional[str] = None
+    # 사용자가 '보관'한 종료 기록 — 30건·30일 자동 정리에서 빠진다(계정당 10건까지, runner.PIN_LIMIT).
+    pinned: bool = False
     # 시작 요청에 실린 실행기 버전. v6 이하 exe 는 보내지 않아 빈 문자열로 남는다.
     runner_version: str = ""
     # 매크로 출처 — web | file_verified | file_modified | file_unsigned (macro_signing 참고).
@@ -876,8 +878,24 @@ class BoardPost(SQLModel, table=True):
     views: int = 0  # 조회수 — 같은 방문자는 30분에 한 번만 센다
     likes: int = 0  # 추천 수(BoardPostVote 합계를 복제해 둔 것 — 목록 정렬용)
     dislikes: int = 0
+    # [공지] — 관리자만 올리고, 목록의 모든 쪽 맨 위에 고정된다(일반 목록에서는 빠진다). 2026-10-02
+    is_notice: bool = Field(default=False, index=True)
     created_at: str  # UTC ISO
     created_ms: int = Field(index=True, sa_type=BigInteger)
+
+
+class DevNote(SQLModel, table=True):
+    """개발자 노트 — 관리자가 '개발자 노트에 적용하기'를 켜고 올린 [공지]를 AI 가 노트 양식으로 정리한 결과.
+
+    가장 최근 행이 사이트 첫 진입 배너(DevNoteDialog)에 뜬다. payload_json 은 devnotes.normalize 를 거친
+    {id, date, eyebrow, title, items:[{icon, title, text, link, link_label}]} 이다. 2026-10-02
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    post_id: int = Field(index=True)
+    payload_json: str = ""
+    created_at: str = ""
+    created_ms: int = Field(default=0, index=True, sa_type=BigInteger)
 
 
 class BoardImage(SQLModel, table=True):
@@ -1133,6 +1151,9 @@ def _migrate() -> None:
             "expires_ms": "ALTER TABLE askmacrosession ADD COLUMN expires_ms BIGINT NOT NULL DEFAULT 0",
             "ask_count": "ALTER TABLE askmacrosession ADD COLUMN ask_count INTEGER NOT NULL DEFAULT 0",
         },
+        "boardpost": {
+            "is_notice": "ALTER TABLE boardpost ADD COLUMN is_notice BOOLEAN DEFAULT FALSE",
+        },
         "runsession": {
             "position_uncertain": "ALTER TABLE runsession ADD COLUMN position_uncertain BOOLEAN DEFAULT FALSE",
             "macro_json": "ALTER TABLE runsession ADD COLUMN macro_json TEXT DEFAULT ''",
@@ -1145,6 +1166,7 @@ def _migrate() -> None:
             "final_unrealized_pct": "ALTER TABLE runsession ADD COLUMN final_unrealized_pct REAL DEFAULT 0",
             "state_json": "ALTER TABLE runsession ADD COLUMN state_json TEXT DEFAULT ''",
             "invested_usdt": "ALTER TABLE runsession ADD COLUMN invested_usdt REAL DEFAULT 0",
+            "pinned": "ALTER TABLE runsession ADD COLUMN pinned BOOLEAN DEFAULT FALSE",
         },
         "tickernewssnapshot": {
             "claim_token": "ALTER TABLE tickernewssnapshot ADD COLUMN claim_token TEXT DEFAULT ''",
@@ -1291,6 +1313,9 @@ _PG_ADDED_COLUMNS = {
         "expires_ms": "BIGINT NOT NULL DEFAULT 0",
         "ask_count": "INTEGER NOT NULL DEFAULT 0",
     },
+    "boardpost": {
+        "is_notice": "BOOLEAN NOT NULL DEFAULT FALSE",
+    },
     "runsession": {
         "macro_json": "TEXT DEFAULT ''", "position_uncertain": "BOOLEAN DEFAULT FALSE",
         "user_macro_id": "INTEGER",
@@ -1303,6 +1328,7 @@ _PG_ADDED_COLUMNS = {
         "final_unrealized_pct": "DOUBLE PRECISION NOT NULL DEFAULT 0",
         "state_json": "TEXT DEFAULT ''",
         "invested_usdt": "DOUBLE PRECISION NOT NULL DEFAULT 0",
+        "pinned": "BOOLEAN NOT NULL DEFAULT FALSE",
     },
     "tickernewssnapshot": {
         "claim_token": "TEXT DEFAULT ''", "last_observed_at": "TEXT DEFAULT ''",
@@ -1353,6 +1379,7 @@ _PG_PRIVATE_CACHE_TABLES = (
     # 게시판 사진·추천·신고와 브라우저 뉴스 캐시 — create_all 로만 생겨 RLS 없이 anon 권한이 열려 있었다(2026-09-15).
     "boardimage", "boardpostvote", "boardreport", "browsernewspagecache",
     "visit", "macroeventdaily", "collectorrun", "collectorsourcedaily", "apiusagedaily",
+    "devnote",
 )
 _PG_MIGRATION_LOCK = 0x6767706172726F74  # Stable across web/worker processes and deployments.
 _PG_MIGRATION_ATTEMPTS = 3

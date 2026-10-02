@@ -488,6 +488,9 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   background: rgb(var(--c-surface));
 }
 .agent-macro-dock > * { min-height: 82px; padding: 10px 14px; }
+/* 실행 중이 있을 때 실행 바 맨 앞에 '실행 중 n · 종료 기록 n' 전환, 종료 기록에서 연 세션은 '종료 기록' 돌아가기. */
+.agent-macro-dock.has-lead { grid-template-columns: auto minmax(220px, 1fr) auto; }
+.agent-macro-dock-lead { display: flex; align-items: center; }
 .agent-macro-dock > * + * { border-left: 1px solid rgb(var(--c-slate-200)); }
 .agent-macro-dock-picker { display: grid; min-width: 0; align-content: center; gap: 5px; color: rgb(var(--c-slate-500)); font-size: 13px; font-weight: 700; }
 /* 셀렉트는 내용에 맞는 폭(최대 320px)으로, 옆에 44px '+' 아이콘 버튼. 줄 전체를 늘리지 않는다. */
@@ -869,6 +872,8 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 
 @media (max-width: 900px) {
   .agent-workspace { grid-template-rows: auto 44px minmax(0, 1fr); }
+  .agent-macro-dock.has-lead { grid-template-columns: minmax(0, 1fr) auto; }
+  .agent-macro-dock.has-lead > .agent-macro-dock-lead { grid-column: 1 / -1; min-height: 56px; border-left: 0; border-bottom: 1px solid rgb(var(--c-slate-200)); }
   .agent-workspace-tabs {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -8456,13 +8461,6 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 .confirm-dialog-actions { display: grid; gap: 8px; margin-top: 24px; }
 
 /* 개발자 노트 팝업 (2026-09-22) — 확인 대화상자와 같은 틀, 항목은 아이콘 + 한 줄 */
-.devnote { width: 100%; max-width: 440px; padding: 24px; }
-.devnote-list { display: grid; gap: 12px; margin-top: 16px; padding: 0; list-style: none; }
-.devnote-item { display: flex; gap: 10px; align-items: flex-start; line-height: 1.5; }
-.devnote-icon { flex: 0 0 auto; font-size: 18px; line-height: 1.3; }
-.devnote-link { color: rgb(var(--c-slate-900)); font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
-.devnote-check { display: flex; align-items: center; gap: 8px; margin-top: 18px; cursor: pointer; }
-.devnote-check input { width: 16px; height: 16px; accent-color: rgb(var(--c-brand)); }
 
 /* Hallmark · component: floating chat · genre: modern-minimal · theme: DESIGN.md (locked)
  * states: default · hover · focus · active · disabled · loading · error · success
@@ -8928,7 +8926,10 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 .lb-rank.is-1 { color: rgb(var(--lb-gold)); }
 .lb-rank.is-2 { color: rgb(var(--lb-silver)); }
 .lb-rank.is-3 { color: rgb(var(--lb-bronze)); }
-.lb-coin { justify-self: center; }
+.lb-coin { justify-self: center; position: relative; display: block; width: 36px; height: 36px; }
+.lb-coin-img { display: block; width: 100%; height: 100%; }
+/* 코인 로고 오른쪽 아래 — 어느 거래소의 종목인지. 바탕색 테두리로 코인 로고와 떼어 놓는다. */
+.lb-coin-exchange { position: absolute; right: -4px; bottom: -4px; width: 18px; height: 18px; padding: 2px; border-radius: 999px; background: rgb(var(--c-surface)); box-shadow: 0 0 0 1px rgb(var(--c-slate-200)); object-fit: contain; }
 .lb-name { min-width: 0; }
 .lb-title {
   max-width: 100%;

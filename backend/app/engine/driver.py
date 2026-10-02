@@ -157,6 +157,9 @@ class StrategyDriver:
             legs.append({"symbol": leg.symbol, "qty": round(st["qty"], 8), "dir": st["dir"],
                          "entry_price": round(st["entry_price"], 4), "last_price": round(leg.last_price, 4),
                          "in_position": bool(st["in_position"])})
+            if "dca_next_buy_ms" in st:
+                legs[-1]["dca_next_buy_ms"] = st["dca_next_buy_ms"]
+                legs[-1]["dca_stopped"] = bool(st.get("dca_stopped"))
             if st["cooldown_until_ms"] is not None:
                 cooldowns.append(int(st["cooldown_until_ms"]))
         last = self.last_fill or {}
@@ -183,6 +186,9 @@ class StrategyDriver:
                 restore(equity, in_position=bool(st.get("in_position")), qty=float(st.get("qty") or 0.0),
                         entry_price=float(st.get("entry_price") or 0.0), last_price=float(st.get("last_price") or 0.0),
                         cooldown_until_ms=state.get("cooldown_until_ms"))
+            restore_schedule = getattr(leg.sim, "restore_dca_schedule", None)
+            if restore_schedule is not None and "dca_next_buy_ms" in st:
+                restore_schedule(st["dca_next_buy_ms"], stopped=bool(st.get("dca_stopped")))
             leg.equity = float(equity)
             leg.ret = (leg.equity - leg.initial) / leg.initial * 100.0
             leg.last_price = float(st.get("last_price") or 0.0)

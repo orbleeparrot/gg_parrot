@@ -30,6 +30,7 @@ import {
   validateDetailed,
 } from "../lib/macro.js";
 import { computeStrategyOverlay } from "../lib/indicators.js";
+import { isDomestic, normalizeExchange } from "../lib/exchanges.js";
 import {
   completeJourney,
   peekRegistrationDraft,
@@ -304,6 +305,9 @@ function AccountStudio({ scope, allowRouterMacro }) {
   const budgetBlocked = !!testBudget && !testBudget.allowed;
   // 봉 간격 선택지 — 지금 테스트 기간에서 봉 수 한도를 넘는 간격은 고를 수 없게. 한도 숫자는 보여 주지 않는다.
   const intervalOptions = useMemo(() => CANDLE_INTERVALS.map((option) => {
+    if (isDomestic(form.exchange) && form.rule_type === "C" && option.value !== "1d") {
+      return { ...option, disabled: true, title: "국내 적립식 매수는 일봉으로 계산해요" };
+    }
     if (!testLimits) return option;
     const budget = backtestBudget({ ...form, candle_interval: option.value }, testLimits);
     const blocked = !!budget && !budget.allowed && !budget.error;
@@ -868,12 +872,13 @@ function AccountStudio({ scope, allowRouterMacro }) {
         <section className="studio-chart" aria-label="실시간 차트 · 보조지표" data-tour="chart">
           <div className={"studio-chart-body" + (chartSymbols.length > 1 ? " is-multi" : "")}>
             {chartSymbols.length > 0 ? (
-              // 시장은 넘기지 않는다(= 현물). 보조지표는 rule_type·포지션·전략 조건만 보고 그려져
-              // 레버리지와 무관하다. interval 은 controlled — 조건의 '봉 간격'과 차트 툴바가 같은 값을 가리킨다.
+              // Native exchange candles keep KRW prices distinct from Binance USDT.
               chartSymbols.map((symbol) => (
                 <CandleChart
-                  key={symbol}
+                  key={`${normalizeExchange(form.exchange)}:${symbol}`}
                   symbol={symbol}
+                  exchange={form.exchange || "binance"}
+                  market={isDomestic(form.exchange) ? "spot" : form.market === "futures" || (form.market === "auto" && (form.rule_type === "K" || form.position_side === "short" || Number(form.leverage) > 1)) ? "futures" : "spot"}
                   interval={form.candle_interval || "1m"}
                   onIntervalChange={(value) => setForm((f) => ({ ...f, candle_interval: value }))}
                   overlay={overlay}
@@ -882,7 +887,7 @@ function AccountStudio({ scope, allowRouterMacro }) {
                 />
               ))
             ) : (
-              <EmptyState title="종목을 입력하면 차트가 나와요">왼쪽 조건의 종목 칸에 BTCUSDT 처럼 적어 주세요.</EmptyState>
+              <EmptyState title="종목을 입력하면 차트가 나와요">왼쪽 조건에서 선택한 거래소의 종목을 골라 주세요.</EmptyState>
             )}
           </div>
         </section>

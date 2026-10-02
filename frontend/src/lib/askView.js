@@ -1,6 +1,7 @@
 // 껄무새에게 물어볼까? 결과·후보 카드가 보여 줄 값을 만드는 순수 함수들 (2026-09-30 재설계).
 // 숫자는 전부 서버가 계산한 값이고, 여기서는 모양만 바꾼다 — 없는 값을 만들어 내지 않는다.
 import { FEW_RESULTS_TEXT, NO_RESULTS_TEXT, TOP_RESULTS_TEXT } from "./askCopy.js";
+import { quoteForExchange } from "./exchanges.js";
 
 const num = (v) => (v == null || v === "" || Number.isNaN(Number(v)) ? null : Number(v));
 
@@ -38,14 +39,15 @@ export function resultsHeadline(count) {
 export function conditionLines(macro) {
   const p = macro?.params || {};
   const r = macro?.risk || {};
+  const quote = quoteForExchange(macro?.exchange);
   const lines = [];
   switch (macro?.rule_type) {
     case "A": lines.push(`익절 +${p.take_profit_pct}%`, r.stop_loss_pct != null ? `손절 -${r.stop_loss_pct}%` : "손절 없음"); break;
-    case "C": lines.push(`${p.interval_days}일마다 ${Number(p.amount_per_buy).toLocaleString()}원씩 매수`); break;
+    case "C": lines.push(`${p.interval_days}일마다 ${Number(p.amount_per_buy).toLocaleString()} ${quote}씩 매수`); break;
     case "E": lines.push(`+${p.activation_profit}% 뒤 트레일링 시작`, `고점 대비 -${p.trail_percent}% 에 청산`); break;
     case "F": lines.push(`RSI(${p.rsi_period}) ${p.entry_threshold} 아래 매수`, `${p.exit_threshold} 위 매도`); break;
     case "G": lines.push(`볼린저(${p.bb_period}, ${p.bb_std}σ) 하단 매수`, p.exit_target === "mid" ? "중심선 매도" : "상단 매도"); break;
-    case "H": lines.push(`기본 ${Number(p.base_order_size).toLocaleString()} + 세이프티 ${p.max_safety_orders}회`, `평단 +${p.take_profit}% 익절`); break;
+    case "H": lines.push(`기본 ${Number(p.base_order_size).toLocaleString()} ${quote} + 세이프티 ${p.max_safety_orders}회`, `평단 +${p.take_profit}% 익절`); break;
     case "I": lines.push(`변동성 돌파 k=${p.k}`, p.exit_mode === "next_open" ? "다음 봉 시가 청산" : `청산: ${p.exit_mode}`); break;
     case "J": lines.push(`${p.ma_type} ${p.fast_period}/${p.slow_period} 골든크로스 매수`, "데드크로스 매도"); break;
     default: break;

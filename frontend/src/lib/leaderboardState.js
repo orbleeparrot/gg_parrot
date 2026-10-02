@@ -1,8 +1,12 @@
 import { COOLDOWN, ENTRY_AT, HALTED, HOLDING, KIND, RECOVERING, REENTRY, STATE_HELP, STOPPED, TRADES, TRADES_HELP, WAITING } from "./leaderboardCopy.js";
+import { marketKey } from "./exchanges.js";
+import { baseOf } from "./format.js";
 
 const fmtPct = (v) => `${v >= 0 ? "+" : ""}${Number(v).toFixed(2)}%`;
 const fmtPrice = (v) => Number(v).toLocaleString("en-US", { maximumFractionDigits: 4 });
-const base = (symbol) => String(symbol || "").replace(/USDT$/, "");
+const base = baseOf;
+const priceFor = (entry, prices, symbol) => prices?.[marketKey(entry.exchange, symbol)]
+  ?? (entry.exchange == null || entry.exchange === "binance" ? prices?.[symbol] : undefined);
 
 export function isLive(entry, prices, now = Date.now()) {
   if (entry?.state !== "holding" || !(entry.virtual_balance > 0)) return false;
@@ -10,13 +14,13 @@ export function isLive(entry, prices, now = Date.now()) {
   // 러너가 죽었는데 마지막 체크포인트만 남은 고아 세션은 "실시간"이 아니다 — 90초 넘으면 서버값으로 폴백.
   if (!Number.isFinite(entry.checkpoint_ms) || now - entry.checkpoint_ms > 90_000) return false;
   const held = (entry.legs || []).filter((l) => l.in_position);
-  return held.length > 0 && held.every((l) => Number.isFinite(prices?.[l.symbol]));
+  return held.length > 0 && held.every((l) => Number.isFinite(priceFor(entry, prices, l.symbol)));
 }
 
 export function liveReturn(entry, prices, now = Date.now()) {
   if (!isLive(entry, prices, now)) return entry?.return_pct ?? null;
   const delta = (entry.legs || []).filter((l) => l.in_position)
-    .reduce((sum, l) => sum + l.qty * (prices[l.symbol] - l.last_price) * (l.dir || 1), 0);
+    .reduce((sum, l) => sum + l.qty * (priceFor(entry, prices, l.symbol) - l.last_price) * (l.dir || 1), 0);
   const equity = entry.equity + delta;
   return Math.round(((equity - entry.virtual_balance) / entry.virtual_balance) * 100 * 100) / 100;
 }
@@ -63,9 +67,10 @@ export function stateLine(entry, now = Date.now()) {
   }
 }
 
-export function symbolsOf(items) {
+export function symbolsOf(items, exchange = null) {
   const out = [];
   for (const e of items || []) {
+    if (exchange && (e.exchange || "binance") !== exchange) continue;
     if (e?.state !== "holding") continue;
     for (const l of e.legs || []) if (l.in_position && !out.includes(l.symbol)) out.push(l.symbol);
   }

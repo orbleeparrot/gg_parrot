@@ -120,15 +120,17 @@ function SkeletonRows({ count = MIN_ROWS }) {
 
 // 글 한 줄 — 추천수(퀘이사존식 왼쪽 숫자) | 제목 [댓글수] (사진) | 글쓴이 | 시각 | 조회. 행 전체가 링크.
 export function PostRow({ post, now, current = false }) {
+  const notice = !!post.is_notice;
   const time = boardTime(post.created_ms, now);
   const isToday = /전$/.test(time);
   const full = boardFullTime(post.created_ms) || post.created_kst;
   const when = kstDateTime(post.created_kst);
   return (
-    <li className="board-item">
-      <Link to={`/board/${post.id}`} className={`board-row${current ? " is-current" : ""}`} aria-current={current ? "page" : undefined} aria-label={`${post.title}${post.comment_count > 0 ? `, 댓글 ${post.comment_count}개` : ""}${post.has_image ? ", 사진 첨부" : ""}, ${post.author_name}, ${full}, 조회 ${post.views || 0}, 추천 ${post.likes || 0}`}>
+    <li className={`board-item${notice ? " is-notice" : ""}`}>
+      <Link to={`/board/${post.id}`} className={`board-row${current ? " is-current" : ""}${notice ? " is-notice" : ""}`} aria-current={current ? "page" : undefined} aria-label={`${notice ? "공지, " : ""}${post.title}${post.comment_count > 0 ? `, 댓글 ${post.comment_count}개` : ""}${post.has_image ? ", 사진 첨부" : ""}, ${post.author_name}, ${full}, 조회 ${post.views || 0}, 추천 ${post.likes || 0}`}>
         <span className={`board-likes num${post.likes > 0 ? " is-hot" : ""}`} aria-hidden="true">{post.likes || 0}</span>
         <span className="board-title">
+          {notice ? <span className="board-notice-tag" aria-hidden="true">공지</span> : null}
           <span className="board-title-text">{post.title}</span>
           {post.comment_count > 0 ? <span className="board-count num" aria-hidden="true">{post.comment_count}</span> : null}
           {post.has_image ? <span className="board-mark" aria-hidden="true"><ImageIcon /></span> : null}
@@ -194,13 +196,14 @@ export default function Board() {
 
       {data && (
         <>
-          {data.items.length === 0 ? (
+          {data.items.length === 0 && !(data.notices || []).length ? (
             q
               ? <EmptyState title={`‘${q}’ 검색 결과가 없어요`}>다른 말로 검색해 보세요.</EmptyState>
               : <EmptyState title="아직 글이 없어요">첫 글을 남겨봐요.</EmptyState>
           ) : (
             <ul className={`board-table${busy ? " is-busy" : ""}`} aria-busy={busy || undefined} aria-label="글 목록">
               <TableHead />
+              {(data.notices || []).map((post) => <PostRow key={`notice-${post.id}`} post={post} now={now} />)}
               {data.items.map((post) => <PostRow key={post.id} post={post} now={now} />)}
             </ul>
           )}

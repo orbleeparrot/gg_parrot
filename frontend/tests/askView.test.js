@@ -82,3 +82,9 @@ test("sparkPaths draws inside the box with a break-even baseline", () => {
   assert.equal(sparkPaths([1000], 1000), null);
   assert.equal(sparkPaths(null, 1000), null);
 });
+
+test("absolute order conditions display the selected exchange quote", () => {
+  assert.deepEqual(conditionLines({ exchange: "binance", rule_type: "C", params: { interval_days: 7, amount_per_buy: 10 } }), ["7일마다 10 USDT씩 매수"]);
+  assert.deepEqual(conditionLines({ exchange: "upbit", rule_type: "C", params: { interval_days: 7, amount_per_buy: 10000 } }), ["7일마다 10,000 KRW씩 매수"]);
+  assert.match(conditionLines({ exchange: "bithumb", rule_type: "H", params: { base_order_size: 50000, max_safety_orders: 3, take_profit: 2 } })[0], /50,000 KRW/);
+});

@@ -30,7 +30,8 @@ from typing import Dict, List, Optional
 
 from sqlmodel import Session, select
 
-from .data import ensure_spot_available, get_klines, get_ticker_price_cached
+from .data import NoSpotDataError, ensure_spot_available, get_klines, get_ticker_price_cached
+from .exchanges import normalize_exchange, quote_currency
 from .db import PaperSession, PaperTrade, get_session
 from .engine import Macro, RuleType
 from .engine.candle_feed import feed  # 모듈 이름으로 참조 — 테스트가 monkeypatch 한다
@@ -134,7 +135,7 @@ _running: Dict[int, _Runner] = {}
 
 def _session_initial(macro: Macro) -> float:
     if macro.rule_type is RuleType.C:
-        return 1_000_000.0
+        return float(macro.initial_capital or 1_000_000.0)
     return float(macro.initial_capital or 1_000_000.0)
 
 
@@ -145,9 +146,11 @@ async def _attach_feed(runner: _Runner) -> None:
     if not keys:
         return
     history: Dict[str, list] = {}
+    exchange = getattr(runner.driver.macro, "exchange", "binance")
+    exchange_args = {} if exchange == "binance" else {"exchange": exchange}
     for symbol, interval, market in keys:
         try:
-            history[symbol] = await feed.history(symbol, interval, market, WARMUP_CANDLES)
+            history[symbol] = await feed.history(symbol, interval, market, WARMUP_CANDLES, **exchange_args)
         except Exception:
             log.exception("paper %s: warmup history failed for %s — starting cold", runner.session_id, symbol)
     runner.driver.warmup(history)
@@ -161,7 +164,7 @@ async def _attach_feed(runner: _Runner) -> None:
     for symbol, interval, market in keys:
         hist = history.get(symbol)
         since_t = hist[-1][0] if hist else None  # Candle.t — 인덱스로 읽어 테스트 더미(tuple)도 받는다
-        subs.append(feed.subscribe(symbol, interval, market, on_candle, since_t=since_t))
+        subs.append(feed.subscribe(symbol, interval, market, on_candle, since_t=since_t, **exchange_args))
     runner.subs = subs
 
 
@@ -197,7 +200,8 @@ async def start_session(macro: Macro, symbol: Optional[str], mode: str) -> dict:
     # session (raises NoSpotDataError -> 422 at the endpoint). Never run on a
     # synthetic fallback here.
     for sym in symbols:
-        await asyncio.to_thread(ensure_spot_available, sym)
+        exchange_args = {} if macro.exchange == "binance" else {"exchange": macro.exchange}
+        await asyncio.to_thread(ensure_spot_available, sym, **exchange_args)
     initial = _session_initial(macro)
     per_leg = initial / len(symbols)
     legs: List[Leg] = []
@@ -205,13 +209,19 @@ async def start_session(macro: Macro, symbol: Optional[str], mode: str) -> dict:
         leg_macro = macro.for_symbol(sym, per_leg) if len(symbols) > 1 else macro
         legs.append(Leg(sym, make_sim(leg_macro, initial_capital=per_leg), per_leg))
 
+    replay_prices = {}
+    if mode == "replay":
+        for sym in symbols:
+            exchange_args = {} if macro.exchange == "binance" else {"exchange": macro.exchange}
+            replay_prices[sym] = await asyncio.to_thread(_load_replay_prices, sym, **exchange_args)
+    # Do not leave a durable running session when history retrieval failed.
     session_id = await asyncio.to_thread(_create_session, macro, symbols[0], mode, initial)
 
     runner = _Runner(session_id, legs[0].sim, symbols[0], mode, initial, legs=legs)
     runner.driver.macro = macro  # 캔들 피드 구독 키(종목·간격·시장)를 드라이버가 매크로에서 읽는다
     if mode == "replay":
         for leg in runner.legs:
-            leg.replay_prices = await asyncio.to_thread(_load_replay_prices, leg.symbol)
+            leg.replay_prices = replay_prices[leg.symbol]
     if mode == "live":
         await _attach_feed(runner)
 
@@ -221,6 +231,8 @@ async def start_session(macro: Macro, symbol: Optional[str], mode: str) -> dict:
     return {
         "session_id": session_id,
         "symbol": symbols[0],
+        "exchange": macro.exchange,
+        "quote_currency": macro.quote_currency,
         "symbols": symbols,
         "mode": mode,
         "virtual_balance": initial,
@@ -336,15 +348,22 @@ def _create_session(macro: Macro, symbol: str, mode: str, initial: float) -> int
         return int(row.id)
 
 
-def _load_replay_prices(symbol: str) -> List[float]:
+def _load_replay_prices(symbol: str, *, exchange="binance") -> List[float]:
     end = _now_ms()
     start = end - REPLAY_HOURS * 3600 * 1000
     try:
-        df, _ = get_klines(symbol, start, end, interval="1m")
+        exchange_args = {} if exchange == "binance" else {"exchange": exchange}
+        df, _ = get_klines(symbol, start, end, interval="1m", **exchange_args)
         prices = [float(x) for x in df["close"].tolist()]
     except Exception:
+        if exchange != "binance":
+            raise
         prices = []
     if len(prices) < 30:
+        if exchange != "binance":
+            if not prices:
+                raise NoSpotDataError("재생할 KRW 과거 시세가 없습니다.")
+            return prices
         prices = _synthetic_intraday(symbol)
     return prices
 
@@ -374,7 +393,9 @@ async def _run_loop(runner: _Runner) -> None:
             while not runner.stop_flag:
                 # Cached per-symbol: concurrent sessions on the same coin share one fetch.
                 prices = await asyncio.gather(
-                    *(asyncio.to_thread(get_ticker_price_cached, leg.symbol) for leg in runner.legs)
+                    *(asyncio.to_thread(get_ticker_price_cached, leg.symbol,
+                                       **({} if getattr(runner.driver.macro, "exchange", "binance") == "binance"
+                                          else {"exchange": runner.driver.macro.exchange})) for leg in runner.legs)
                 )
                 await _tick_and_checkpoint(runner, list(prices), datetime.now(timezone.utc))
                 await asyncio.sleep(POLL_SECONDS)
@@ -663,6 +684,14 @@ async def shutdown_running_sessions() -> None:
         ) from finalize_errors[0]
 
 
+def _market_identity(macro_json: str) -> dict:
+    try:
+        exchange = normalize_exchange(json.loads(macro_json or "{}").get("exchange", "binance"))
+    except (TypeError, ValueError, AttributeError):
+        exchange = "binance"
+    return {"exchange": exchange, "quote_currency": quote_currency(exchange)}
+
+
 def get_status(session_id: int) -> Optional[dict]:
     runner = _running.get(session_id)
     if runner:
@@ -670,6 +699,8 @@ def get_status(session_id: int) -> Optional[dict]:
             "session_id": session_id,
             "symbol": runner.symbol,
             "symbols": runner.symbols,
+            "exchange": getattr(runner.driver.macro, "exchange", "binance"),
+            "quote_currency": quote_currency(getattr(runner.driver.macro, "exchange", "binance")),
             "legs": [leg.view() for leg in runner.legs] if runner.is_portfolio() else [],
             "mode": runner.mode,
             "status": runner.status,
@@ -698,6 +729,7 @@ def get_status(session_id: int) -> Optional[dict]:
         "session_id": session_id,
         "symbol": row.symbol,
         "symbols": [leg["symbol"] for leg in legs] or [row.symbol],
+        **_market_identity(row.macro_json),
         "legs": legs,
         "mode": row.mode,
         "status": row.status,

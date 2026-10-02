@@ -7,6 +7,7 @@
 .builder-dense .bd-h .t-caption { flex-basis: 100%; margin-left: 0; font-size: 12px; font-weight: 500; }
 .builder-dense .bd-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-items: start; }
 .builder-dense .bd-grid + .bd-grid { margin-top: 12px; }
+.builder-dense .bd-domestic-warning { margin: 6px 0 12px; }
 .builder-dense .bd-grid-1 { grid-template-columns: minmax(0, 1fr); }
 .builder-dense .bd-field { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); grid-row: span 3; grid-template-rows: subgrid; row-gap: 4px; align-self: stretch; } /* 열 폭을 칸에 묶는다 — 기본 auto 열은 한 줄짜리 내용(종목 행)만큼 칸 밖으로 자랐다 */
 .builder-dense .bd-field-wide { grid-column: 1 / -1; }
@@ -22,6 +23,8 @@
 .builder-dense .bd-unit input::-webkit-inner-spin-button, .builder-dense .bd-unit input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 .builder-dense .bd-unit-tag { position: absolute; right: 9px; top: 18px; transform: translateY(-50%); color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 500; pointer-events: none; }
 /* 포지션 segmented */
+.bd-seg-exchange .seg-item { display: inline-flex; align-items: center; gap: 5px; }
+.bd-exchange-logo { width: 16px; height: 16px; flex: none; object-fit: contain; border-radius: 3px; }
 .builder-dense .bd-seg { height: 36px; padding: 3px; width: 100%; }
 .builder-dense .bd-seg .seg-item { flex: 1; justify-content: center; height: 28px; padding: 0 10px; font-size: 13px; }
 .builder-dense .bd-seg .seg-item:disabled { opacity: .45; cursor: not-allowed; }

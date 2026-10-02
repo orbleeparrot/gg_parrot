@@ -19,6 +19,7 @@ from sqlmodel import Field, SQLModel, select
 
 from .db import LeaderboardEntry, LeaderboardVote, MacroUnlock, get_session
 from .cache_runtime import ResponseCache
+from .exchanges import normalize_exchange, quote_currency
 
 DEFAULT_PAGE_SIZE = 50
 MAX_PAGE_SIZE = 100
@@ -241,6 +242,12 @@ def read_board(viewer_id: str = "", viewer_user_id: Optional[int] = None, *, db=
         items = []
         for item, eid, anonymous_id, owner_id, macro_json, summary, username, nickname, likes, dislikes in records:
             value = json.loads(item.public_json)
+            # Old snapshots need the same public venue tag without revealing paid params.
+            try:
+                venue = normalize_exchange(json.loads(macro_json).get("exchange"))
+            except (ValueError, TypeError, AttributeError):
+                venue = "binance"
+            value.update(exchange=venue, quote_currency=quote_currency(venue))
             is_owner = viewer_user_id is not None and owner_id == viewer_user_id
             visible = owner_id is None or is_owner or eid in unlocked
             value.update(rank=item.rank, username=username or nickname, nickname=nickname,

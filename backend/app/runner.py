@@ -29,13 +29,13 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import HTTPException
-from sqlalchemy import or_, update
+from sqlalchemy import func, or_, update
 from sqlmodel import select
 
 from . import macro_signing
 from . import notifications as notifications_mod
 from . import runner_engine  # runner_engine 은 runner 를 함수 안에서 늦게 import 한다 — 순환 없음
-from .db import RunnerKey, RunnerLaunchTicket, RunSession, RunSessionEvent, User, UserMacro, get_session
+from .db import RunnerCommand, RunnerKey, RunnerLaunchTicket, RunSession, RunSessionEvent, User, UserMacro, get_session
 from .engine import Macro, RuleType
 
 _KST = timezone(timedelta(hours=9))
@@ -252,6 +252,14 @@ def _ticket_error(status_code: int, detail: str) -> HTTPException:
     )
 
 
+DOMESTIC_RUNNER_DETAIL = "업비트·빗썸은 종목·차트·백테스트만 지원하며, 실행기 직접 연결은 지원하지 않습니다."
+
+
+def _require_binance_macro(macro: Macro) -> None:
+    if macro.exchange != "binance":
+        raise _ticket_error(422, DOMESTIC_RUNNER_DETAIL)
+
+
 def create_launch_ticket(
     user_id: int,
     user_macro_id: int,
@@ -272,6 +280,12 @@ def create_launch_ticket(
         macro_row = db.get(UserMacro, user_macro_id)
         if macro_row is None or macro_row.user_id != user_id:
             raise _ticket_error(404, "내 매크로를 찾을 수 없어요.")
+
+        try:
+            macro = Macro.model_validate_json(macro_row.macro_json)
+        except (TypeError, ValueError):
+            raise _ticket_error(422, "저장된 매크로 형식이 올바르지 않아요.")
+        _require_binance_macro(macro)
 
         row = RunnerLaunchTicket(
             user_id=user_id,
@@ -392,6 +406,7 @@ def claim_launch_ticket(ticket: str, runner_version: str = "") -> dict:
             macro = Macro.model_validate_json(macro_row.macro_json)
         except (TypeError, ValueError):
             raise _ticket_error(422, "저장된 매크로 형식이 올바르지 않아요.")
+        _require_binance_macro(macro)
         if macro.rule_type in RUNNER_UNSUPPORTED_RULES:
             # 실행기가 못 돌리는 유형은 버전과 무관하게 거절 — 업데이트로 풀리는 문제가 아니므로 버전 게이트(426)보다
             # 먼저 보고, '거절(업데이트 필요)' 표시도 하지 않고 티켓도 소비하지 않는다(잠금만 푼다).
@@ -441,6 +456,10 @@ def claim_launch_ticket(ticket: str, runner_version: str = "") -> dict:
 def start_session(user: User, payload: dict) -> dict:
     """실행기가 매크로 구동을 시작할 때 세션을 만든다. session_id 를 돌려준다."""
     symbol = str(payload.get("symbol", "")).upper()
+    raw_macro = payload.get("macro")
+    if (payload.get("exchange", "binance") != "binance" or symbol.startswith("KRW-")
+            or (isinstance(raw_macro, dict) and raw_macro.get("exchange", "binance") != "binance")):
+        raise _ticket_error(422, DOMESTIC_RUNNER_DETAIL)
     side = str(payload.get("position_side", "long")).lower()
     leverage = max(1, int(payload.get("leverage", 1) or 1))
     market = str(payload.get("market", "")).lower()
@@ -457,6 +476,7 @@ def start_session(user: User, payload: dict) -> dict:
     if isinstance(macro, dict):
         try:
             normalized_macro = Macro.model_validate(macro)
+            _require_binance_macro(normalized_macro)
             dumped = normalized_macro.model_dump_json()
             if len(dumped) <= 20000:  # 방어적 상한(정상 매크로는 ~1KB)
                 macro_json = dumped
@@ -735,6 +755,12 @@ def mark_stopped(
                       "symbol": row.symbol, "realized_pnl": row.realized_pnl},
             )
         db.commit()
+        if not already_final:
+            # 기록이 하나 늘어난 순간에만 정리한다 — 몇 초마다 부르는 목록 조회는 쿼리 한 번으로 둔다.
+            try:
+                prune_ended_sessions(user.id, db)
+            except Exception:
+                db.rollback()
     notify_sessions_changed(user.id)
     # v8+ 라면 서버 측 드라이버도 내린다(구버전·이미 없는 세션이면 runner_engine 이 무시한다).
     runner_engine.schedule_stop(session_id)
@@ -926,21 +952,121 @@ def _session_view(row: RunSession) -> dict:
         **session_returns(row),
         "note": row.note,
         "started_at": row.started_at,
+        "stopped_at": row.stopped_at or "",
+        "pinned": bool(getattr(row, "pinned", False)),
         "started_kst": _kst_label(row.started_at),
         "heartbeat_kst": _kst_label(row.last_heartbeat_at),
         "stopped_kst": _kst_label(row.stopped_at or ""),
     }
 
 
-def list_sessions(user_id: int, limit: int = 20, db=None) -> dict:
-    """All active sessions plus up to ``limit`` recently ended sessions."""
+# 종료 기록 보관 — 계정마다 보관하지 않은 종료 세션은 최근 30건·30일까지만 남긴다(2026-10-02).
+# 사용자가 '보관'한 기록은 정리에서 빠지되 10건까지. 정리할 때 세션의 이벤트·실행 명령도 같이 지운다.
+# 정리는 세션이 끝날 때(mark_stopped)·보관을 풀 때, 그리고 하루 한 번 전체 계정(maybe_prune_all_ended_sessions).
+# 목록은 정리와 무관하게 기간이 지난 기록을 바로 뺀다.
+HISTORY_KEEP = 30
+HISTORY_DAYS = 30
+PIN_LIMIT = 10
+
+
+def _ended_at(row: RunSession) -> Optional[datetime]:
+    raw = row.stopped_at or row.last_heartbeat_at or row.started_at or ""
+    try:
+        return datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _delete_session_rows(db, session_ids: list[int]) -> None:
+    from sqlalchemy import delete as sql_delete
+
+    if not session_ids:
+        return
+    db.exec(sql_delete(RunSessionEvent).where(RunSessionEvent.session_id.in_(session_ids)))
+    db.exec(sql_delete(RunnerCommand).where(RunnerCommand.session_id.in_(session_ids)))
+    db.exec(sql_delete(RunSession).where(RunSession.id.in_(session_ids)))
+
+
+def prune_ended_sessions(user_id: int, db, *, now: Optional[datetime] = None) -> int:
+    """보관하지 않은 종료 기록을 최근 HISTORY_KEEP 건 · HISTORY_DAYS 일만 남기고 지운다. 지운 개수를 돌려준다."""
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=HISTORY_DAYS)
+    rows = db.exec(
+        select(RunSession)
+        .where(RunSession.user_id == user_id, RunSession.status != "running", RunSession.pinned == False)  # noqa: E712
+        .order_by(RunSession.id.desc())
+    ).all()
+    doomed = []
+    for index, row in enumerate(rows):
+        ended = _ended_at(row)
+        if index >= HISTORY_KEEP or (ended is not None and ended < cutoff):
+            doomed.append(row.id)
+    _delete_session_rows(db, doomed)
+    if doomed:
+        db.commit()
+    return len(doomed)
+
+
+def _iso_utc(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+_DAILY_PRUNE_MS = 24 * 3_600_000
+_last_daily_prune_ms = 0
+_daily_prune_lock = threading.Lock()
+
+
+def prune_all_ended_sessions(db, *, now: Optional[datetime] = None) -> int:
+    """모든 계정의 종료 기록을 정리한다 — 기간(30일)이 지난 것은 한 번에, 30건을 넘긴 계정은 계정별로."""
+    now = now or datetime.now(timezone.utc)
+    cutoff = _iso_utc(now - timedelta(days=HISTORY_DAYS))
+    expired = db.exec(select(RunSession.id).where(
+        RunSession.status != "running", RunSession.pinned == False,  # noqa: E712
+        func.coalesce(RunSession.stopped_at, RunSession.started_at) < cutoff,
+    )).all()
+    _delete_session_rows(db, list(expired))
+    db.commit()
+    removed = len(expired)
+    over = db.exec(
+        select(RunSession.user_id)
+        .where(RunSession.status != "running", RunSession.pinned == False)  # noqa: E712
+        .group_by(RunSession.user_id)
+        .having(func.count(RunSession.id) > HISTORY_KEEP)
+    ).all()
+    for user_id in over:
+        removed += prune_ended_sessions(user_id, db, now=now)
+    return removed
+
+
+def maybe_prune_all_ended_sessions(db) -> int:
+    """하루에 한 번만 전체 정리를 돈다(별도 스케줄러 없이, 방문 비콘 정리와 같은 방식). 실패해도 요청은 성공."""
+    global _last_daily_prune_ms
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    with _daily_prune_lock:
+        if now_ms - _last_daily_prune_ms < _DAILY_PRUNE_MS:
+            return 0
+        _last_daily_prune_ms = now_ms
+    try:
+        return prune_all_ended_sessions(db)
+    except Exception:
+        db.rollback()
+        return 0
+
+
+def list_sessions(user_id: int, limit: int = HISTORY_KEEP + PIN_LIMIT, db=None) -> dict:
+    """All active sessions plus the retained ended sessions (최근 30건 + 보관 10건까지)."""
     recent_limit = max(0, min(int(limit), 100))
     filters = [RunSession.status == "running"]
     if recent_limit:
+        # 기간이 지난 기록은 정리가 아직 돌지 않았어도 화면에서 바로 뺀다(보관한 기록은 예외).
+        cutoff = _iso_utc(datetime.now(timezone.utc) - timedelta(days=HISTORY_DAYS))
         recent_ids = (
             select(RunSession.id)
-            .where(RunSession.user_id == user_id, RunSession.status != "running")
-            .order_by(RunSession.id.desc())
+            .where(
+                RunSession.user_id == user_id, RunSession.status != "running",
+                or_(RunSession.pinned == True, func.coalesce(RunSession.stopped_at, RunSession.started_at) >= cutoff),  # noqa: E712
+            )
+            .order_by(RunSession.pinned.desc(), RunSession.id.desc())
             .limit(recent_limit)
         )
         filters.append(RunSession.id.in_(recent_ids))
@@ -955,7 +1081,35 @@ def list_sessions(user_id: int, limit: int = 20, db=None) -> dict:
     recent_rows = [row for row in rows if row.status != "running"]
     active = [_session_view(r) for r in active_rows]
     recent = [_session_view(r) for r in recent_rows]
-    return {"active": active, "recent": recent, "poll_seconds": POLL_SECONDS}
+    return {
+        "active": active, "recent": recent, "poll_seconds": POLL_SECONDS,
+        "history_policy": {"keep": HISTORY_KEEP, "days": HISTORY_DAYS, "pin_limit": PIN_LIMIT},
+    }
+
+
+def set_pinned(user_id: int, session_id: int, pinned: bool) -> dict:
+    """종료 기록 보관 켜기/끄기. 실행 중 세션은 정리 대상이 아니라 보관할 필요가 없다."""
+    with get_session() as db:
+        row = db.get(RunSession, session_id)
+        if row is None or row.user_id != user_id:
+            raise HTTPException(status_code=404, detail="세션을 찾을 수 없어요.")
+        if pinned and row.status == "running":
+            raise HTTPException(status_code=409, detail="실행 중인 에이전트는 종료된 뒤에 보관할 수 있어요.")
+        if pinned and not row.pinned:
+            count = len(db.exec(select(RunSession.id).where(
+                RunSession.user_id == user_id, RunSession.pinned == True)).all())  # noqa: E712
+            if count >= PIN_LIMIT:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"보관은 {PIN_LIMIT}건까지예요. 다른 기록의 보관을 먼저 풀어 주세요.",
+                )
+        row.pinned = bool(pinned)
+        db.add(row)
+        db.commit()
+        if not pinned:
+            prune_ended_sessions(user_id, db)  # 보관을 풀어 30건·30일 밖이 된 기록은 바로 정리
+    notify_sessions_changed(user_id)
+    return {"ok": True, "session_id": session_id, "pinned": bool(pinned)}
 
 
 def get_owned_session(user_id: int, session_id: int, db=None) -> dict:
@@ -1007,10 +1161,8 @@ def delete_session(user_id: int, session_id: int) -> dict:
                 status_code=409,
                 detail="실행기가 아직 응답 중이에요. 먼저 종료한 뒤 목록에서 지울 수 있어요.",
             )
-        from sqlalchemy import delete as sql_delete
-
-        db.exec(sql_delete(RunSessionEvent).where(RunSessionEvent.session_id == session_id))
-        db.delete(row)
+        # 이벤트·실행 명령도 같이 지운다(예전엔 실행 명령이 남아 쌓였다).
+        _delete_session_rows(db, [session_id])
         db.commit()
     notify_sessions_changed(user_id)
     return {"ok": True, "deleted_session_id": session_id}

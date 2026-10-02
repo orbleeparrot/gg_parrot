@@ -71,7 +71,8 @@ def test_templates_follow_profile_rules():
     types = {c.macro.rule_type.value for c in stable}
     assert types == {"C", "J", "G", "A"}
     assert all(c.macro.market == "spot" and c.macro.leverage == 1 for c in stable)
-    assert all(c.macro.candle_interval == "4h" and c.macro.period.preset == "3m" for c in stable)
+    assert all(c.macro.candle_interval == ("1d" if c.macro.rule_type.value == "C" else "4h")
+               and c.macro.period.preset == "3m" for c in stable)
     assert all(c.source == "template" for c in stable)
 
     aggressive = ask.build_templates(_mkplan(

@@ -5,6 +5,7 @@ import { Fragment, useLayoutEffect, useRef } from "react";
 import CoinIcon from "./CoinIcon.jsx";
 import { quoteOf, baseOf } from "../lib/format.js";
 import { RULE_TYPES, CANDLE_INTERVALS } from "../lib/macro.js";
+import { exchangeLabel } from "../lib/exchanges.js";
 import { leaderboardStrategy } from "../lib/leaderboardStrategy.js";
 import { strategyPhrases } from "../lib/strategyText.js";
 import { portfolioTitle, portfolioWeight } from "../lib/portfolio.js";
@@ -38,7 +39,7 @@ function CardSpark({ curve, up }) {
 
 const fmtN = (v, digits = 8) => Number(v).toLocaleString("en-US", { maximumFractionDigits: digits });
 // 데이터 출처 — 서버의 source 값(cache · binance · binance-futures · synthetic)을 사람 말로.
-const SOURCE_KO = { cache: "바이낸스 (캐시)", binance: "바이낸스 현물", "binance-futures": "바이낸스 선물(USDT-M)", synthetic: "합성 데이터 (오프라인)" };
+const SOURCE_KO = { cache: "거래소 시세 (캐시)", binance: "바이낸스 현물", "binance-futures": "바이낸스 선물(USDT-M)", upbit: "업비트 원화 현물", "upbit:spot": "업비트 원화 현물", bithumb: "빗썸 원화 현물", "bithumb:spot": "빗썸 원화 현물", synthetic: "합성 데이터 (오프라인)" };
 
 // 카드의 사양표 — 매크로 파일에 실제로 들어가는 조건만(종목 · 봉 간격 · 자금 · 위험 관리 · 비용). 없는 값은 만들지 않는다.
 function macroFacts({ macro, symbol, symbols, result, futures }) {
@@ -163,6 +164,7 @@ export default function MacroCard({ macro, result, perSymbol = [], strategyEntry
             <div className="sd-card-rule" title="매매 방식">{ruleLabel}{multi ? ` · ${symbols.length}종목 자금 균등` : ""}</div>
           </div>
           <div className="sd-card-tags">
+            <span className="sd-card-tag">{exchangeLabel(macro.exchange)}</span>
             <span className={"sd-card-side is-" + (side || "unknown")}>{sideLabel}</span>
             <span className="sd-card-tag">{marketLabel}</span>
           </div>

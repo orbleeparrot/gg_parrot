@@ -31,7 +31,7 @@ def _macro_name(macro: Macro, name: str = "") -> str:
     clean = " ".join((name or "").strip().split())[:60]
     if clean:
         return clean
-    coin = macro.symbol.removesuffix("USDT") or macro.symbol
+    coin = macro.symbol.removeprefix("KRW-").removesuffix("USDT") or macro.symbol
     return f"{coin} 매크로"
 
 
@@ -44,6 +44,8 @@ def _view(row: UserMacro) -> dict:
         "id": row.id,
         "name": row.name,
         "symbol": row.symbol,
+        "exchange": (macro or {}).get("exchange", "binance"),
+        "quote_currency": (macro or {}).get("quote_currency") or ("KRW" if (macro or {}).get("exchange") in ("upbit", "bithumb") else "USDT"),
         "rule_type": row.rule_type,
         "position_side": row.position_side,
         "human_summary": row.human_summary,
@@ -57,7 +59,7 @@ def _view(row: UserMacro) -> dict:
 
 def _same_macro(left: str, right: str) -> bool:
     try:
-        return json.loads(left) == json.loads(right)
+        return Macro.model_validate_json(left).model_dump(mode="json") == Macro.model_validate_json(right).model_dump(mode="json")
     except (TypeError, ValueError):
         return False
 

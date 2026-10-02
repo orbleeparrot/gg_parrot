@@ -1,0 +1,106 @@
+/* 내 에이전트 — 첫 화면(실행 중 없음) · 종료 기록 괘선 목록 · 실행 중/종료 기록 전환. 2026-10-02 */
+
+.agent-view-tabs { display: inline-flex; gap: 2px; padding: 3px; border-radius: 10px; background: rgb(var(--c-slate-100)); }
+.agent-view-tabs button { display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 14px; border-radius: 8px; color: rgb(var(--c-slate-600)); font-size: 14px; font-weight: 700; cursor: pointer; }
+.agent-view-tabs button .num { color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 700; }
+.agent-view-tabs button.is-active { background: rgb(var(--c-surface)); color: rgb(var(--c-slate-900)); box-shadow: 0 1px 2px rgb(var(--c-slate-900) / .12); }
+.agent-view-tabs button:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 1px; }
+
+/* 첫 화면·종료 기록 — 차트 작업면(가장자리까지 꽉 참)과 달리 페이지 여백을 둔다. 페이지는 스크롤하지 않고 이 판만 스크롤한다. */
+.agent-overview { flex: 1; display: grid; align-content: start; gap: 28px; min-height: 0; overflow-y: auto; padding: 24px 28px 40px; }
+@media (max-width: 767px) { .agent-overview { padding: 16px 16px 96px; gap: 22px; } }
+
+/* 첫 화면 — 집중한 껄무새 + 한 줄 제목 + 마지막 실행 + 실행 버튼 */
+.agent-idle { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 24px; padding: 28px 28px; border: 1px solid rgb(var(--c-slate-200)); border-radius: 16px; background: rgb(var(--c-slate-50, var(--c-slate-100))); }
+.agent-idle-art { width: 88px; height: 88px; display: block; }
+.agent-idle-body { min-width: 0; }
+.agent-idle h2 { margin: 0; color: rgb(var(--c-slate-900)); font-size: 24px; font-weight: 800; letter-spacing: -.02em; line-height: 1.3; text-wrap: balance; }
+.agent-idle p { margin: 6px 0 0; max-width: 60ch; color: rgb(var(--c-slate-600)); font-size: 15px; line-height: 1.55; }
+.agent-idle .agent-idle-last { margin-top: 12px; color: rgb(var(--c-slate-700)); font-size: 14px; }
+.agent-idle .agent-idle-last b { color: rgb(var(--c-slate-900)); }
+.agent-idle-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+
+/* 종료 기록 */
+.agent-history { display: grid; gap: 12px; min-width: 0; }
+.agent-history-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px 16px; flex-wrap: wrap; }
+.agent-history-head h3 { margin: 0; display: inline-flex; align-items: baseline; gap: 8px; color: rgb(var(--c-slate-900)); font-size: 18px; font-weight: 800; }
+.agent-history-head h3 .num { color: rgb(var(--c-slate-500)); font-size: 14px; font-weight: 700; }
+.agent-history-head p { margin: 0; color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 500; }
+.agent-history-head p b { color: rgb(var(--c-slate-700)); font-weight: 700; }
+.agent-history-empty { margin: 0; padding: 24px 0; border-block: 1px solid rgb(var(--c-slate-200)); color: rgb(var(--c-slate-500)); font-size: 14px; }
+
+.agent-history-table { min-width: 0; }
+.agent-history-row {
+  display: grid;
+  grid-template-columns: 32px minmax(120px, .9fr) minmax(180px, 1.6fr) minmax(190px, 1.1fr) 132px 128px 40px;
+  grid-template-areas: "coin symbol strategy when end pnl pin" ". . note note note note note";
+  align-items: center;
+  column-gap: 16px;
+  row-gap: 2px;
+  padding: 14px 8px;
+  border-bottom: 1px solid rgb(var(--c-slate-200));
+  border-radius: 0;
+  cursor: pointer;
+}
+.agent-history-row:not(.is-head):hover { background: rgb(var(--c-slate-100)); }
+.agent-history-row:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: -2px; }
+.agent-history-row.is-head { padding-block: 6px 10px; border-bottom-color: rgb(var(--c-slate-300)); color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 600; cursor: default; }
+.agent-history-row.is-head > :nth-child(2) { grid-area: symbol; } .agent-history-row.is-head > :nth-child(3) { grid-area: strategy; }
+.agent-history-row.is-head > :nth-child(4) { grid-area: when; } .agent-history-row.is-head > :nth-child(5) { grid-area: end; }
+.agent-history-row.is-head > :nth-child(6) { grid-area: pnl; } .agent-history-row.is-head > :nth-child(7) { grid-area: pin; }
+.agent-history-row .is-right { text-align: right; } .agent-history-row .is-center { text-align: center; }
+
+.agent-history-coin { grid-area: coin; max-width: 32px; max-height: 32px; }
+.agent-history-symbol { grid-area: symbol; min-width: 0; line-height: 1.25; }
+.agent-history-symbol b { color: rgb(var(--c-slate-900)); font-size: 16px; font-weight: 800; letter-spacing: -.02em; }
+.agent-history-symbol small { margin-left: 3px; color: rgb(var(--c-slate-500)); font-size: 10px; font-weight: 600; }
+.agent-history-env { display: block; margin-top: 2px; color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 500; }
+.agent-history-strategy { grid-area: strategy; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: rgb(var(--c-slate-700)); font-size: 14px; font-weight: 500; }
+/* 실행 시간 — 길이를 크게, 날짜 범위는 그 아래 작게 */
+.agent-history-when { grid-area: when; display: grid; gap: 2px; min-width: 0; }
+.agent-history-when b { color: rgb(var(--c-slate-900)); font-size: 14px; font-weight: 700; }
+.agent-history-when span { color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agent-history-end { grid-area: end; display: inline-flex; align-items: center; gap: 6px; color: rgb(var(--c-slate-700)); font-size: 13px; font-weight: 600; white-space: nowrap; }
+.agent-history-end i { width: 7px; height: 7px; flex: none; border-radius: 999px; background: rgb(var(--c-slate-400)); }
+.agent-history-end.is-warn { color: rgb(var(--c-amber-700)); }
+.agent-history-end.is-warn i { background: rgb(var(--c-amber-600)); }
+.agent-history-pnl { grid-area: pnl; text-align: right; font-size: 15px; font-weight: 800; white-space: nowrap; }
+.agent-history-pnl.is-up { color: rgb(var(--c-green-600)); }
+.agent-history-pnl.is-down { color: rgb(var(--c-red-600)); }
+.agent-history-pnl.is-flat { color: rgb(var(--c-slate-500)); }
+.agent-history-pin-cell { grid-area: pin; display: grid; place-items: center; }
+.agent-history-pin { position: relative; display: grid; place-items: center; width: 32px; height: 32px; border-radius: 8px; color: rgb(var(--c-slate-400)); cursor: pointer; }
+.agent-history-pin::after { content: ""; position: absolute; inset: -6px; }
+.agent-history-pin svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linejoin: round; }
+.agent-history-pin:hover { background: rgb(var(--c-slate-200)); color: rgb(var(--c-slate-700)); }
+.agent-history-pin.is-on { color: rgb(var(--c-brand-line)); }
+.agent-history-pin.is-on svg { fill: currentColor; }
+.agent-history-pin:disabled { opacity: .5; cursor: wait; }
+.agent-history-pin:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 1px; }
+.agent-history-note { grid-area: note; color: rgb(var(--c-amber-700)); font-size: 12px; font-weight: 500; overflow-wrap: anywhere; }
+
+/* 종료 기록에서 연 세션 — 실행 바 왼쪽의 '종료 기록으로' */
+.agent-back { display: inline-flex; align-items: center; gap: 6px; height: 40px; padding: 0 12px 0 8px; border-radius: 10px; color: rgb(var(--c-slate-700)); font-size: 14px; font-weight: 700; cursor: pointer; }
+.agent-back:hover { background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-900)); }
+.agent-back svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.agent-detail-label { display: inline-flex; align-items: center; gap: 8px; min-width: 0; color: rgb(var(--c-slate-900)); font-size: 15px; font-weight: 700; }
+.agent-detail-label small { color: rgb(var(--c-slate-500)); font-size: 13px; font-weight: 500; }
+
+/* 휴대폰 — 한 행을 세 줄로: 로고·종목·실현손익 / 전략 / 실행 시간 · 종료 · 보관 */
+@media (max-width: 767px) {
+  .agent-idle { grid-template-columns: 1fr; gap: 14px; padding: 20px; }
+  .agent-idle-art { width: 72px; height: 72px; }
+  .agent-idle h2 { font-size: 20px; }
+  .agent-idle-actions .btn { flex: 1 1 auto; }
+  .agent-history-row.is-head { display: none; }
+  .agent-history-row {
+    grid-template-columns: 32px minmax(0, 1fr) auto 36px;
+    grid-template-areas: "coin symbol pnl pin" ". strategy strategy strategy" ". when when when" ". end end end" ". note note note";
+    row-gap: 4px;
+    column-gap: 12px;
+    padding: 16px 4px;
+  }
+  .agent-history-strategy { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .agent-history-when { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
+  .agent-history-pnl { font-size: 16px; }
+}

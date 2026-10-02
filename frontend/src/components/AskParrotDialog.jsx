@@ -2,13 +2,13 @@
 // 매크로 카드 짜임의 가로 카드로(E), 휴대폰에서는 매크로 후보를 좌우 화살표로 한 장씩 넘긴다(F).
 // 흐름(askFlow 리듀서)과 서버 호출은 그대로이고, 결과의 숫자는 전부 서버가 계산한 값이다.
 // 움직임은 토스 모션 값(120 눌림 · 200 전환 · 320 등장, 튕김 없음)만 쓴다 — AskParrotDialog.css.
-import { Fragment, useCallback, useEffect, useId, useReducer, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useReducer, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api } from "../api.js";
 import CoinIcon from "./CoinIcon.jsx";
 import CheckIcon from "./CheckIcon.jsx";
 import {
-  BACK_TO_STEP, CANDIDATES_PROMPT, COMPARE_TITLE, CONDITION_LABEL, CONSENT_BUTTON, CONSENT_TEXT, DISCLAIMER,
+  BACK_TO_STEP, BALANCE_ERROR, BALANCE_NOTE, CANDIDATES_PROMPT, COMPARE_TITLE, CONDITION_LABEL, CONSENT_BUTTON, CONSENT_TEXT, DISCLAIMER, DOMESTIC_SPOT_ONLY,
   FOLLOW_UPS, FOLLOW_UPS_TITLE, HOLD_LABEL, HORIZONS, LEGEND_BASE, LEGEND_EQUITY, LEVERAGES, LOAD_BUTTON,
   LOST_TO_HOLD_TEXT, MANUAL_PICK_LABEL, MANUAL_SEARCH_MISS, MANUAL_SEARCH_PLACEHOLDER, MARKETS, NEXT_LABEL,
   NO_QUOTA_TEXT, OPENING_TEXT, PREV_LABEL, PROFILES, READY_BUTTON, READY_TEXT, RESTART_LABEL, RETURN_LABEL,
@@ -19,7 +19,7 @@ import { useSymbolList } from "../hooks/useSymbolList.js";
 import { resolveSymbol, searchSymbols } from "../lib/symbolSearch.js";
 import {
   PROFILE_ORDER, STEPS, answerLabel, canChooseFutures, extraOffer, initialState, reduce, toAskRequest,
-  toCandidatesRequest,
+  toCandidatesRequest, validBalance, formatAmountInput, parseAmountInput,
 } from "../lib/askFlow.js";
 import {
   coinTint, conditionLines, holdDiff, holdOf, intervalLabel, marketLabel, numberParts, resultsHeadline,
@@ -28,6 +28,7 @@ import {
 import { coinName } from "../lib/macroSource.js";
 import { baseOf, quoteOf } from "../lib/format.js";
 import { RULE_TYPES } from "../lib/macro.js";
+import { EXCHANGES, exchangeLabel, isDomestic, quoteForExchange } from "../lib/exchanges.js";
 import "./AskParrotDialog.css";
 import { Icon } from "./icons.jsx";
 
@@ -66,17 +67,59 @@ const inStyle = (i, extra) => ({ "--i": i, ...extra });
 
 // 질문 한 장의 선택지.
 function stepOptions(step, answers) {
+  if (step === "exchange") return EXCHANGES.map((item) => ({ key: item.value, label: item.label, hint: item.quote, value: item.value }));
   if (step === "profile") return PROFILES.map((p) => ({ key: p.value, label: p.label, hint: p.hint, value: p.value }));
   if (step === "market") {
     const ok = canChooseFutures(answers);
     return [
       { key: "spot", label: MARKETS[0].label, hint: SPOT_HINT, value: { market: "spot", leverage: 1 } },
-      ...LEVERAGES.map((lev) => ({ key: `futures-${lev}`, label: `${MARKETS[1].label} ${lev}x`, hint: "", value: { market: "futures", leverage: lev }, disabled: !ok, title: ok ? undefined : STABLE_NO_FUTURES })),
+      ...LEVERAGES.map((lev) => ({ key: `futures-${lev}`, label: `${MARKETS[1].label} ${lev}x`, hint: "", value: { market: "futures", leverage: lev }, disabled: !ok, title: ok ? undefined : isDomestic(answers.exchange) ? DOMESTIC_SPOT_ONLY : STABLE_NO_FUTURES })),
     ];
   }
   if (step === "horizon") return HORIZONS.map((h) => ({ key: h.value, label: h.label, hint: h.hint, value: h.value }));
   if (step === "watch") return WATCH_LEVELS.map((w) => ({ key: w.value, label: w.label, hint: w.hint, value: w.value }));
   return [];
+}
+
+function BalanceInput({ exchange, disabled, onSubmit }) {
+  const [value, setValue] = useState("");
+  const [error, setError] = useState("");
+  const inputRef = useRef(null);
+  const caret = useRef(null);
+  const quote = quoteForExchange(exchange);
+  const amount = parseAmountInput(value);
+  // 쉼표를 넣고 빼도 커서가 끝으로 튀지 않게 — 커서 앞 숫자 개수를 기억했다가 같은 자리로.
+  useLayoutEffect(() => {
+    const input = inputRef.current;
+    if (caret.current == null || !input) return;
+    let seen = 0, at = 0;
+    while (at < value.length && seen < caret.current) { if (/[0-9.]/.test(value[at])) seen += 1; at += 1; }
+    input.setSelectionRange(at, at);
+    caret.current = null;
+  }, [value]);
+  return (
+    <form className="ask-balance ask-in" style={inStyle(1)} onSubmit={(event) => {
+      event.preventDefault();
+      if (disabled) return;
+      if (!validBalance(amount)) { setError(BALANCE_ERROR); return; }
+      onSubmit(Number(amount));
+    }}>
+      <div className="ask-balance-field">
+        <input id="ask-manual-balance" ref={inputRef} className="input num" type="text" inputMode={quote === "KRW" ? "numeric" : "decimal"} autoComplete="off" value={value}
+          aria-label={`${exchangeLabel(exchange)} 사용할 금액 (${quote})`}
+          aria-describedby="ask-balance-note" aria-invalid={!!error} disabled={disabled} autoFocus
+          onChange={(event) => {
+            const { value: raw, selectionStart } = event.target;
+            caret.current = raw.slice(0, selectionStart ?? raw.length).replace(/[^0-9.]/g, "").length;
+            setValue(formatAmountInput(raw, quote)); setError("");
+          }} placeholder={quote === "KRW" ? "예: 100,000" : "예: 1,000.00"} />
+        <span>{quote}</span>
+      </div>
+      <p id="ask-balance-note" className="ask-caption">{BALANCE_NOTE}</p>
+      {error ? <p className="ask-miss" role="alert">{error}</p> : null}
+      <button type="submit" className="btn btn-m btn-primary" disabled={disabled || !validBalance(amount)}>다음</button>
+    </form>
+  );
 }
 
 function Spark({ item }) {
@@ -142,6 +185,7 @@ function ResultCard({ item, rank, best, compact = false, onLoad }) {
           <span className="ask-mc-rule">{name}{by ? <em> · {by}</em> : null}</span>
         </span>
         <span className="ask-mc-tags">
+          <span className="ask-tag">{exchangeLabel(macro.exchange)}</span>
           <span className="ask-tag">{marketLabel(macro)}</span>
           {intervalLabel(macro) ? <span className="ask-tag num">{intervalLabel(macro)}</span> : null}
         </span>
@@ -192,27 +236,34 @@ function CandidateRow({ c, marketText, onPick, disabled, i }) {
 }
 
 // 직접 고를래요 — 빠른 선택 칩 + 거래 가능 종목 검색(빌더 검색창과 같은 목록).
-function ManualPick({ chips, onPick, disabled, i }) {
+function ManualPick({ chips, onPick, disabled, i, exchange }) {
   const [query, setQuery] = useState("");
   const [note, setNote] = useState("");
-  const { items } = useSymbolList();
+  const { items, loading, error, reload, stale, canChoose } = useSymbolList(exchange);
   const q = query.trim();
   const matches = items && q ? searchSymbols(items, q, { limit: 8 }) : [];
-  const add = () => {
-    if (!q) return;
-    const resolved = items ? resolveSymbol(items, q) : null;
-    if (!resolved) { setNote(MANUAL_SEARCH_MISS); return; }
+  const pick = (symbol, resolved = false) => {
+    if (disabled) return;
+    if (!canChoose(symbol)) { setNote("종목 목록이 변경되었거나 오래되었어요. 다시 확인한 뒤 선택해 주세요."); reload(); return; }
     setQuery("");
     setNote("");
-    onPick(resolved, true);
+    onPick(symbol, resolved);
+  };
+  const add = () => {
+    if (!q) return;
+    if (!items) { setNote(loading ? "종목 목록을 불러오는 중이에요." : error || "종목 목록을 다시 확인해 주세요."); return; }
+    const resolved = items ? resolveSymbol(items, q) : null;
+    if (!resolved) { setNote(MANUAL_SEARCH_MISS); return; }
+    pick(resolved, true);
   };
   return (
     <section className="ask-manual ask-in" style={inStyle(i)} aria-label={MANUAL_PICK_LABEL}>
       <h4 className="ask-manual-t">{MANUAL_PICK_LABEL}</h4>
+      {stale || error ? <p className="ask-miss" role="status">{items ? "마지막 확인한 목록이에요. 새 상장·거래 종료가 아직 반영되지 않았을 수 있어요." : error || "종목 목록을 확인하고 있어요."} <button type="button" className="btn btn-s btn-secondary" onClick={reload}>다시 확인</button></p> : null}
       {chips.length ? (
         <div className="ask-chips">
           {chips.map((sym) => (
-            <button key={sym} type="button" className="ask-chip num" disabled={disabled} onClick={() => onPick(sym)}>
+            <button key={sym} type="button" className="ask-chip num" disabled={disabled} onClick={() => pick(sym)}>
               <CoinIcon symbol={sym} size={16} alt="" className="ask-logo" />{baseOf(sym)}
             </button>
           ))}
@@ -222,6 +273,7 @@ function ManualPick({ chips, onPick, disabled, i }) {
         <input
           className="input"
           value={query}
+          disabled={disabled}
           placeholder={MANUAL_SEARCH_PLACEHOLDER}
           aria-label="종목 검색"
           onChange={(e) => { setQuery(e.target.value); setNote(""); }}
@@ -233,7 +285,7 @@ function ManualPick({ chips, onPick, disabled, i }) {
         <div className="ask-chips">
           {matches.map((item) => (
             <button key={item.symbol} type="button" className="ask-chip num" disabled={disabled}
-              onClick={() => { setQuery(""); setNote(""); onPick(item.symbol, true); }}>
+              onClick={() => pick(item.symbol, true)}>
               <CoinIcon symbol={item.symbol} size={16} alt="" className="ask-logo" />{baseOf(item.symbol)}
             </button>
           ))}
@@ -467,7 +519,7 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
     </div>
   );
 
-  const marketText = state.answers.market === "futures" ? `${MARKETS[1].label} ${state.answers.leverage}x` : MARKETS[0].label;
+  const marketText = `${exchangeLabel(state.answers.exchange)} · ${state.answers.market === "futures" ? `${MARKETS[1].label} ${state.answers.leverage}x` : MARKETS[0].label}`;
   const hold = holdOf(results);
 
   let stage;
@@ -496,17 +548,21 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
     stage = (
       <>
         <h3 className="ask-q ask-in" style={inStyle(0)}>{STEP_PROMPTS[state.step]}</h3>
+        {state.step === "balance" ? <BalanceInput exchange={state.answers.exchange} disabled={lock}
+          onSubmit={(value) => leaveThen(() => dispatch({ type: "choose", step: "balance", value }))} /> : (
         <div className={"ask-opts" + (two ? " is-two" : "")} role="group" aria-label={STEP_PROMPTS[state.step]}>
           {options.map((opt, idx) => (
             <button key={opt.key} type="button" disabled={opt.disabled} title={opt.title}
               className={"ask-opt ask-in" + (picked === idx ? " is-picked" : picked != null ? " is-dim" : "")}
               style={inStyle(idx + 1)} aria-pressed={picked === idx} onClick={() => choose(opt, idx)}>
-              <span className="ask-opt-l"><span className="ask-key num" aria-hidden="true">{idx + 1}</span>{opt.label}</span>
+              <span className="ask-opt-l"><span className="ask-key num" aria-hidden="true">{idx + 1}</span>
+                {state.step === "exchange" && <img className="ask-exchange-logo" src={`/exchanges/${opt.value}.${opt.value === "binance" ? "svg" : "png"}`} width="16" height="16" alt="" aria-hidden="true" draggable="false" />}
+                {opt.label}</span>
               <span className="ask-opt-r">{opt.hint ? <small>{opt.hint}</small> : null}<span className="ask-check" aria-hidden="true"><CheckIcon size={13} strokeWidth={3} /></span></span>
             </button>
           ))}
-        </div>
-        {state.step === "market" && !canChooseFutures(state.answers) ? <p className="ask-note ask-in" style={inStyle(options.length + 1)}>{STABLE_NO_FUTURES}</p> : null}
+        </div>)}
+        {state.step === "market" && !canChooseFutures(state.answers) ? <p className="ask-note ask-in" style={inStyle(options.length + 1)}>{isDomestic(state.answers.exchange) ? DOMESTIC_SPOT_ONLY : STABLE_NO_FUTURES}</p> : null}
       </>
     );
   } else if (state.phase === "ready") {
@@ -537,7 +593,7 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
             {state.candidates.map((c, idx) => <CandidateRow key={c.symbol} c={c} i={idx + 1} marketText={marketText} disabled={lock} onPick={(sym) => leaveThen(() => pickSymbol(sym))} />)}
           </div>
         ) : null}
-        <ManualPick chips={state.manualSymbols} i={n + 1} disabled={lock} onPick={(sym, resolved) => leaveThen(() => pickSymbol(sym, resolved))} />
+        <ManualPick chips={state.manualSymbols} i={n + 1} exchange={state.answers.exchange} disabled={lock} onPick={(sym, resolved) => leaveThen(() => pickSymbol(sym, resolved))} />
         <p className="ask-disc ask-in" style={inStyle(n + 2)} role="note">{DISCLAIMER}</p>
       </>
     );

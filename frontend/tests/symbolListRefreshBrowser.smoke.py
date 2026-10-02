@@ -10,9 +10,10 @@ from urllib.parse import parse_qs, urlsplit
 
 from playwright.sync_api import expect, sync_playwright
 
-spec = importlib.util.spec_from_file_location("symbol_refresh_fixture", Path(__file__).with_name("accountIsolationBrowser.smoke.py"))
-fixtures = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(fixtures)
+spec = importlib.util.spec_from_file_location("symbol_refresh_fixture", Path(__file__).with_name("exchangeBrowser.smoke.py"))
+exchange_fixture = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(exchange_fixture)
+fixtures = exchange_fixture.fixtures
 
 
 class Fixture(fixtures.Fixture):
@@ -55,7 +56,7 @@ def main():
             context.route("**/*", fixture.route)
             context.route_web_socket("**/*", lambda socket: socket.close())
             page = context.new_page()
-            page.add_init_script("sessionStorage.setItem('devnote:closed','2026-09-22')")
+            exchange_fixture.install_note_handler(page)
             page.on("pageerror", lambda error: errors.append(str(error)))
             page.goto(f"http://127.0.0.1:{server.server_port}/builder")
             page.get_by_role("button", name="BTCUSDT 빼기", exact=True).click()
@@ -92,7 +93,7 @@ def main():
                     context.route("**/*", fixture.route)
                     context.route_web_socket("**/*", lambda socket: socket.close())
                     page = context.new_page()
-                    page.add_init_script("sessionStorage.setItem('devnote:closed','2026-09-22')")
+                    exchange_fixture.install_note_handler(page)
                     page.on("pageerror", lambda error: errors.append(str(error)))
                     page.goto(f"http://127.0.0.1:{server.server_port}/builder")
                     exchange = page.get_by_label("거래소", exact=True)

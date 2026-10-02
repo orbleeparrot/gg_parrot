@@ -107,7 +107,7 @@ def context_for(browser, server, fixture, errors):
     context.route("**/*", fixture.route)
     context.route_web_socket("**/*", lambda socket: socket.close())
     page = context.new_page()
-    page.add_init_script("sessionStorage.setItem('devnote:closed','2026-09-22')")
+    exchange_fixture.install_note_handler(page)
     page.on("pageerror", lambda error: errors.append(str(error)))
     return context, page, f"http://127.0.0.1:{server.server_port}"
 

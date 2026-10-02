@@ -19,6 +19,12 @@ fixtures = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(fixtures)
 
 
+def install_note_handler(page):
+    """Close update announcements normally, without pinning a note version."""
+    note = page.locator('.devnote[role="dialog"]')
+    page.add_locator_handler(note, lambda: note.get_by_role("button", name="확인했어요", exact=True).click())
+
+
 class Fixture(fixtures.Fixture):
     def __init__(self):
         super().__init__()
@@ -103,7 +109,7 @@ def main():
                 context.route("**/*", fixture.route)
                 context.route_web_socket("**/*", lambda socket: socket.close())
                 page = context.new_page()
-                page.add_init_script("sessionStorage.setItem('devnote:closed','2026-09-22')")
+                install_note_handler(page)
                 page.on("pageerror", lambda error: errors.append(str(error)))
                 page.goto(f"http://127.0.0.1:{server.server_port}/builder")
                 exchange = page.get_by_label("거래소", exact=True)
@@ -144,7 +150,7 @@ def main():
             context.route("**/*", fixture.route)
             context.route_web_socket("**/*", lambda socket: socket.close())
             page = context.new_page()
-            page.add_init_script("sessionStorage.setItem('devnote:closed','2026-09-22')")
+            install_note_handler(page)
             page.on("pageerror", lambda error: errors.append(str(error)))
             page.goto(f"http://127.0.0.1:{server.server_port}/?guide=1&tour=asset")
             exchange = page.get_by_label("사용할 거래소", exact=True)
@@ -173,7 +179,7 @@ def main():
             context.route("**/*", fixture.route)
             context.route_web_socket("**/*", lambda socket: socket.close())
             page = context.new_page()
-            page.add_init_script("sessionStorage.setItem('devnote:closed','2026-09-22')")
+            install_note_handler(page)
             page.on("pageerror", lambda error: errors.append(str(error)))
             page.goto(f"http://127.0.0.1:{server.server_port}/builder")
             run = page.get_by_role("button", name="이 조건으로 백테스트", exact=True)
@@ -199,7 +205,8 @@ def main():
             context.route_web_socket("**/*", lambda socket: socket.close())
             page = context.new_page()
             page.on("pageerror", lambda error: errors.append(str(error)))
-            page.add_init_script("sessionStorage.setItem('devnote:closed','2026-09-22');localStorage.setItem('ggp_token','audit-a');localStorage.setItem('ggp_user'," + json.dumps(json.dumps(fixtures.USERS["audit-a"])) + ")")
+            install_note_handler(page)
+            page.add_init_script("localStorage.setItem('ggp_token','audit-a');localStorage.setItem('ggp_user'," + json.dumps(json.dumps(fixtures.USERS["audit-a"])) + ")")
             page.goto(f"http://127.0.0.1:{server.server_port}/builder?ask=1")
             dialog = page.get_by_role("dialog", name="껄무새에게 물어볼까?", exact=True)
             expect(dialog.get_by_role("heading", name="어느 거래소를 사용할 거예요?", exact=True)).to_be_visible()

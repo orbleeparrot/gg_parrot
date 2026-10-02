@@ -83,6 +83,7 @@ from . import macro_events
 from . import account as account_mod
 from . import challenge as challenge_mod
 from . import runner as runner_mod
+from . import devnotes as devnotes_mod
 from .runner_release import MIN_SUPPORTED_RUNNER_VERSION, resolve_runner_release
 from . import macro_signing as macro_signing_mod
 from . import user_macros as user_macros_mod
@@ -1749,6 +1750,7 @@ async def board_create(
     body: str = Form(""),
     body_format: str = Form("text"),
     is_notice: bool = Form(False),
+    apply_devnote: bool = Form(False),
     images: list[UploadFile] = File(default=[]),
     image: Optional[UploadFile] = File(default=None),
     user: User = Depends(auth_mod.current_user_in_session),
@@ -1768,12 +1770,29 @@ async def board_create(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
     try:
-        return await run_in_threadpool(board_mod.create_post, user, title, body, validated, body_format=body_format, db=db,
+        view = await run_in_threadpool(board_mod.create_post, user, title, body, validated, body_format=body_format, db=db,
                                        is_notice=is_notice)
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    return await _with_devnote(view, apply_devnote, user, db)
+
+
+async def _with_devnote(view: dict, apply_devnote: bool, user: User, db: Session) -> dict:
+    """'개발자 노트에 적용하기'를 켠 관리자 [공지]면 AI 로 노트를 만든다. 글 저장과 분리 — 실패해도 글은 남는다."""
+    if not (apply_devnote and view.get("is_notice") and getattr(user, "is_admin", False)):
+        return view
+    db.commit()  # 요청 세션의 글 쓰기를 먼저 확정해 노트 생성이 같은 글을 읽게 한다
+    result = await run_in_threadpool(devnotes_mod.apply_from_post, view["id"])
+    return {**view, "devnote": result}
+
+
+@app.get("/api/devnote/current")
+def devnote_current(response: Response) -> dict:
+    """사이트 첫 진입 배너의 개발자 노트(가장 최근 것). 없으면 note: null — 화면은 기본 노트를 쓴다."""
+    response.headers["Cache-Control"] = "public, max-age=60"
+    return {"note": devnotes_mod.current()}
 
 
 @app.put("/api/board/posts/{post_id}")
@@ -1784,6 +1803,7 @@ async def board_update(
     body_format: str = Form("text"),
     keep_image_ids: str = Form(""),
     is_notice: Optional[bool] = Form(None),
+    apply_devnote: bool = Form(False),
     images: list[UploadFile] = File(default=[]),
     user: User = Depends(auth_mod.current_user_in_session),
     db: Session = Depends(request_session),
@@ -1809,7 +1829,7 @@ async def board_update(
         raise HTTPException(status_code=400, detail=str(exc))
     if view is None:
         raise HTTPException(status_code=404, detail="글을 찾을 수 없어요.")
-    return view
+    return await _with_devnote(view, apply_devnote, user, db)
 
 
 @app.get("/api/board/posts")

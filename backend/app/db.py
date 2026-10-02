@@ -884,6 +884,20 @@ class BoardPost(SQLModel, table=True):
     created_ms: int = Field(index=True, sa_type=BigInteger)
 
 
+class DevNote(SQLModel, table=True):
+    """개발자 노트 — 관리자가 '개발자 노트에 적용하기'를 켜고 올린 [공지]를 AI 가 노트 양식으로 정리한 결과.
+
+    가장 최근 행이 사이트 첫 진입 배너(DevNoteDialog)에 뜬다. payload_json 은 devnotes.normalize 를 거친
+    {id, date, eyebrow, title, items:[{icon, title, text, link, link_label}]} 이다. 2026-10-02
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    post_id: int = Field(index=True)
+    payload_json: str = ""
+    created_at: str = ""
+    created_ms: int = Field(default=0, index=True, sa_type=BigInteger)
+
+
 class BoardImage(SQLModel, table=True):
     """게시글에 붙은 사진 — 글 하나에 여러 장(순서 유지). 바이트를 DB에 두는 이유는 BoardPost 와 같다.
 
@@ -1365,6 +1379,7 @@ _PG_PRIVATE_CACHE_TABLES = (
     # 게시판 사진·추천·신고와 브라우저 뉴스 캐시 — create_all 로만 생겨 RLS 없이 anon 권한이 열려 있었다(2026-09-15).
     "boardimage", "boardpostvote", "boardreport", "browsernewspagecache",
     "visit", "macroeventdaily", "collectorrun", "collectorsourcedaily", "apiusagedaily",
+    "devnote",
 )
 _PG_MIGRATION_LOCK = 0x6767706172726F74  # Stable across web/worker processes and deployments.
 _PG_MIGRATION_ATTEMPTS = 3

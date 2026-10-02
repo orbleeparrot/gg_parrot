@@ -1,5 +1,6 @@
 // 개발자 노트 팝업 — 사이트에 들어오면 한 번 보여 주는 "이번에 바뀐 것". 문구는 한 줄씩, 쉬운 말로.
-// 새 노트를 내려면 CURRENT_NOTE 의 id 를 바꾼다(그러면 '오늘 하루만 보기'를 눌렀던 사람에게도 다시 뜬다).
+// 노트는 서버(/api/devnote/current)가 준다 — 관리자가 '개발자 노트에 적용하기'로 올린 [공지]를 AI 가 정리한 것.
+// 서버에 노트가 없거나 못 읽으면 아래 CURRENT_NOTE 를 쓴다. id 가 바뀌면 '오늘 하루 보지 않기'를 눌렀던 사람에게도 다시 뜬다.
 // 저장은 브라우저 안에서만(개인 편의) — 서버는 모른다.
 
 export const CURRENT_NOTE = {
@@ -23,7 +24,8 @@ export const CURRENT_NOTE = {
       icon: "bookmark",
       title: "종료 기록 · 보관",
       text: "내 에이전트에서 끝난 실행은 종료 기록으로 모여요. 보관한 기록은 30일이 지나도 남아요.",
-      action: { label: "내 에이전트 보기", to: "/agents" },
+      link: "/agents",
+      link_label: "내 에이전트 보기",
     },
     {
       icon: "trendingUp",

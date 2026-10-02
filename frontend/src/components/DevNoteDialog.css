@@ -11,8 +11,8 @@
 .devnote-chip { display: inline-flex; align-items: center; height: 26px; padding: 0 10px; border-radius: 999px; background: var(--dn-yellow); color: var(--dn-yellow-ink); font-size: 12px; font-weight: 800; letter-spacing: .02em; }
 
 .devnote-hero { position: relative; min-height: 250px; padding: 24px 24px 0; overflow: hidden; border-bottom: 1px solid rgb(255 255 255 / .1); color: var(--dn-yellow); }
-.devnote-hero h2 { position: relative; z-index: 1; margin: 18px 0 0; font-size: 38px; line-height: 1.12; font-weight: 900; letter-spacing: -.04em; }
-.devnote-hero-art { position: absolute; right: -30px; bottom: -40px; width: 230px; height: auto; pointer-events: none; }
+.devnote-hero h2 { position: relative; z-index: 1; max-width: 5.3em; margin: 18px 0 0; font-size: 38px; line-height: 1.12; font-weight: 900; letter-spacing: -.04em; word-break: keep-all; text-wrap: balance; }
+.devnote-hero-art { position: absolute; right: -22px; bottom: -36px; width: 215px; height: auto; pointer-events: none; } /* 정지 SVG(선글라스 껄무새) — 움직이는 관절 그림은 쓰지 않는다 */
 
 .devnote-items { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 16px; margin: 0; padding: 22px 24px 4px; list-style: none; }
 .devnote-items li { display: grid; align-content: start; gap: 8px; }

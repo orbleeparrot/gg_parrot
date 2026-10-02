@@ -12,6 +12,8 @@ import { ThumbDownIcon, ThumbUpIcon } from "../components/boardIcons.jsx";
 import { PostRow, TableHead } from "./Board.jsx";
 import { editPath, writePath } from "../lib/boardPaths.js";
 import { AuthorAvatar } from "../components/UserAvatar.jsx";
+import AppToast from "../components/AppToast.jsx";
+import { DevNoteBanner } from "../components/DevNoteDialog.jsx";
 import "./Board.css";
 
 // 댓글 쓰기 — 로그인 계정만, 닉네임은 계정 이름(왼쪽에 사진과 함께). 로그인 전에는 안내 한 줄.
@@ -216,6 +218,23 @@ export default function BoardPost() {
   const [err, setErr] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  // 개발자 노트 — 글쓰기에서 '개발자 노트에 적용하기'로 올렸으면 결과를 토스트로 한 번 알리고, 관리자는 배너를 미리 본다.
+  const location = useLocation();
+  const [devnoteResult, setDevnoteResult] = useState(() => location.state?.devnote || null);
+  const [previewNote, setPreviewNote] = useState(null);
+  useEffect(() => {
+    if (!location.state?.devnote) return;
+    navigate(location.pathname, { replace: true, state: null });
+  }, [location, navigate]);
+  async function openDevnotePreview() {
+    try {
+      const data = await api.devnoteCurrent();
+      if (data?.note) setPreviewNote(data.note);
+      else setDevnoteResult({ status: "failed", message: "아직 만든 개발자 노트가 없어요." });
+    } catch (reason) {
+      setDevnoteResult({ status: "failed", message: String(reason.message || reason) });
+    }
+  }
 
   useEffect(() => {
     const controller = new AbortController();
@@ -301,6 +320,9 @@ export default function BoardPost() {
               </span>
               {isMine ? (
                 <span className="board-post-actions">
+                  {post.is_notice && user?.is_admin ? (
+                    <button type="button" onClick={openDevnotePreview} className="btn btn-s btn-ghost">개발자 노트 미리보기</button>
+                  ) : null}
                   <Link to={editPath(post.id)} className="btn btn-s btn-ghost">편집</Link>
                   <button type="button" onClick={() => setConfirmDelete(true)} disabled={deleting} className="btn btn-s btn-ghost is-danger">
                     {deleting ? "지우는 중…" : "삭제"}
@@ -365,7 +387,16 @@ export default function BoardPost() {
 
 
           <ReportDialog open={reportOpen} targetType="post" targetId={post.id} label="글" onClose={() => setReportOpen(false)} />
-          <ConfirmDialog
+          {devnoteResult ? (
+        <AppToast
+          label="개발자 노트"
+          title={devnoteResult.status === "ready" ? "개발자 노트를 만들었어요" : "개발자 노트를 만들지 못했어요"}
+          body={devnoteResult.status === "ready" ? "사이트에 처음 들어오는 사람에게 이 공지로 만든 업데이트 배너가 떠요." : devnoteResult.message || ""}
+          onClose={() => setDevnoteResult(null)}
+        />
+      ) : null}
+      {previewNote ? <DevNoteBanner note={previewNote} onClose={() => setPreviewNote(null)} /> : null}
+      <ConfirmDialog
             open={confirmDelete}
             title="이 글을 삭제할까요?"
             description="글과 달린 댓글이 함께 지워지고 되돌릴 수 없어요."

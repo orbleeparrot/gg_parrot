@@ -219,7 +219,7 @@ def test_costs_report_shape_and_totals(monkeypatch):
 
     purposes = report["purposes"]
     assert [p["code"] for p in purposes] == ["position_news", "title_translation", "community_summaries",
-                                             "ai_explain", "market_news_summary", "ai_challenge"]
+                                             "ai_explain", "market_news_summary", "ai_challenge", "devnote"]
     assert purposes[0]["label"] == "종목 뉴스 분류 · 요약" and purposes[0]["calls"] == 1 and purposes[0]["cost_usd"] == 5.5
     assert purposes[0]["daily_limit"] == 1000  # env 가 있으면 그 값
     assert purposes[1]["failures"] == 1 and purposes[1]["daily_limit"] == "없음"

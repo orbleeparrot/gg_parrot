@@ -301,7 +301,8 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
   const allowShort = meta.allowShort && !domestic;
   const quote = quoteForExchange(exchange);
   const moneySymbol = form.symbol || (domestic ? "KRW-BTC" : "BTCUSDT");
-  const { switchExchange, exchangeNotice } = useExchangeSwitch(form, setForm);
+  // 거래소를 바꿀 때 종목 유지·비움 안내는 화면에 띄우지 않는다(2026-10-02) — 종목 칸이 그대로 보여 준다.
+  const { switchExchange } = useExchangeSwitch(form, setForm);
   const { rate: krwRate } = useUsdKrw();
   const [fundingBusy, setFundingBusy] = useState(false);
   const [fundingMsg, setFundingMsg] = useState("");
@@ -393,10 +394,22 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
     </Field>
   );
   const exchangeField = (
-    <Field name="exchange" error={errOf("exchange")} label="거래소" anchor="exchange" hint={domestic ? "원화 현물 전용 · 숏·레버리지·선물은 사용할 수 없어요." : "USDT 현물·선물"}>
-      <select className={fieldCls("exchange", inputCls)} value={exchange} onChange={(event) => switchExchange(event.target.value)}>
-        {EXCHANGES.map((item) => <option key={item.value} value={item.value}>{item.label} · {item.quote}</option>)}
-      </select>
+    // 세 거래소를 포지션처럼 한 줄 segmented 로 — 드롭다운보다 한 번에 읽힌다(2026-10-02).
+    <Field name="exchange" error={errOf("exchange")} label="거래소" anchor="exchange">
+      <div className={"seg bd-seg bd-seg-exchange" + (dense ? "" : " w-full")} role="group" aria-label="거래소">
+        {EXCHANGES.map((item) => (
+          <button
+            key={item.value}
+            type="button"
+            onClick={() => { if (item.value !== exchange) switchExchange(item.value); }}
+            aria-pressed={item.value === exchange}
+            title={`${item.label} · ${item.quote}`}
+            className={"seg-item " + (item.value === exchange ? "seg-item-on" : "")}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
     </Field>
   );
   const strategyField = (
@@ -465,22 +478,27 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
     </div>
   );
 
+  // 국내(원화) 거래소 제약 — 포지션·레버리지 등 설정값 바로 아래 노란 경고 글씨(다른 경고와 같은 꼴).
+  const domesticWarning = domestic
+    ? <p className="t-caption text-amber-700" role="note">원화 현물 전용 · 숏·레버리지·선물은 사용할 수 없어요.</p>
+    : null;
+
   // 차트를 정하는 값들 — 종목·매매 방식·포지션·봉 간격·기간. 차트 섹션 안으로
   // 들어가 "무엇을 볼지 정하고 바로 아래에서 본다"가 한 덩어리로 읽힌다.
   const basicSettings = dense ? (
     <section className="bd-sec">
       <div className="bd-grid">{exchangeField}</div>
-      {exchangeNotice && <p className="bd-hint" role="status">{exchangeNotice}</p>}
       <div className="bd-grid">{symbolField}{strategyField}</div>
       <div className="bd-grid">{positionField}{intervalField}{periodField}</div>
+      {domesticWarning}
       {customRange}
     </section>
   ) : (
     <div className="space-y-5">
       {exchangeField}
-      {exchangeNotice && <p className="t-small text-amber-700" role="status">{exchangeNotice}</p>}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 gap-y-5">{symbolField}{strategyField}</div>
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">{positionField}{intervalField}{periodField}</div>
+      {domesticWarning}
       {customRange}
     </div>
   );

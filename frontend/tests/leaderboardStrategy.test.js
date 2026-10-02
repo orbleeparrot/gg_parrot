@@ -46,3 +46,16 @@ test("invalid or absent capital does not become NaN or a default 100%", () => {
     assert.equal(leaderboardStrategy(entry({ macro: { risk: { invest_ratio } } })).capital, null);
   }
 });
+
+test("국내 거래소 요약 앞의 '업비트 · KRW 현물' 은 전략 칸에서 뺀다", () => {
+  const entry = {
+    symbol: "KRW-ICX", exchange: "upbit",
+    human_summary: "업비트 · KRW 현물 · ICX · 롱 · 변동성 돌파 (k=0.6) · 자금 100% 투입",
+    macro: { rule_type: "I", position_side: "long", params: { k: 0.6 }, risk: { invest_ratio: 1 } },
+  };
+  const details = leaderboardStrategy(entry);
+  assert.equal(details.description, "변동성 돌파 (k=0.6)");
+  assert.ok(!/업비트|빗썸|바이낸스|KRW 현물/.test(details.description));
+  const bithumb = leaderboardStrategy({ ...entry, exchange: "bithumb", human_summary: entry.human_summary.replace("업비트", "빗썸") });
+  assert.equal(bithumb.description, "변동성 돌파 (k=0.6)");
+});

@@ -316,7 +316,6 @@
 .ask-rh.is-compact .ask-face { width: 24px !important; height: 24px !important; }
 @media (max-width: 640px) { .ask-hold { padding: 8px 12px; font-size: 12.5px; } }
 .ask-balance { display: grid; gap: 14px; width: min(100%, 440px); margin: 0 auto; }
-.ask-balance label { font-size: 14px; font-weight: 700; }
 .ask-balance-field { display: flex; align-items: center; gap: 12px; }
 .ask-balance-field input { flex: 1; min-width: 0; }
 .ask-balance-field > span { font-weight: 700; }

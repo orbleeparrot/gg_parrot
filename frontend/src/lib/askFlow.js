@@ -12,6 +12,16 @@ export function canChooseFutures(answers) {
   return !isDomestic(answers.exchange) && answers.profile !== "stable";
 }
 
+// 금액 입력칸 — 세 자리마다 쉼표(1,000). 숫자·소수점 하나만 남기고, 소수 부분은 친 그대로 둔다.
+export function formatAmountInput(raw) {
+  const clean = String(raw ?? "").replace(/[^0-9.]/g, "");
+  const dot = clean.indexOf(".");
+  const intPart = (dot < 0 ? clean : clean.slice(0, dot)).replace(/^0+(?=\d)/, "");
+  const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return dot < 0 ? grouped : `${grouped || "0"}.${clean.slice(dot + 1).replace(/\./g, "")}`;
+}
+export const parseAmountInput = (text) => String(text ?? "").replace(/,/g, "");
+
 export function validBalance(value) {
   return typeof value !== "boolean" && value != null && String(value).trim() !== "" && Number.isFinite(Number(value)) && Number(value) > 0;
 }

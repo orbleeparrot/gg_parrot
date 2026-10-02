@@ -191,3 +191,17 @@ test("Binance pair shape requires a 1-to-20 character base and excludes native K
   const domestic = reduce(initialState(), { type: "choose", step: "exchange", value: "upbit" });
   assert.equal(reduce(domestic, { type: "chooseSymbol", symbol: "KRW-T", resolved: true }).answers.symbol, "KRW-T");
 });
+
+test("금액 입력칸은 세 자리마다 쉼표를 넣고, 값은 쉼표 없이 읽는다", async () => {
+  const { formatAmountInput, parseAmountInput, validBalance } = await import("../src/lib/askFlow.js");
+  assert.equal(formatAmountInput("1234567"), "1,234,567");
+  assert.equal(formatAmountInput("1,2345"), "12,345");
+  assert.equal(formatAmountInput("0001000"), "1,000");
+  assert.equal(formatAmountInput("1234.5678"), "1,234.5678");
+  assert.equal(formatAmountInput("12.3.4"), "12.34");
+  assert.equal(formatAmountInput(".5"), "0.5");
+  assert.equal(formatAmountInput("abc"), "");
+  assert.equal(parseAmountInput("1,234,567"), "1234567");
+  assert.ok(validBalance(parseAmountInput("100,000")));
+  assert.ok(!validBalance(parseAmountInput("0")));
+});

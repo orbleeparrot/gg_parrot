@@ -2,7 +2,7 @@
 // 매크로 카드 짜임의 가로 카드로(E), 휴대폰에서는 매크로 후보를 좌우 화살표로 한 장씩 넘긴다(F).
 // 흐름(askFlow 리듀서)과 서버 호출은 그대로이고, 결과의 숫자는 전부 서버가 계산한 값이다.
 // 움직임은 토스 모션 값(120 눌림 · 200 전환 · 320 등장, 튕김 없음)만 쓴다 — AskParrotDialog.css.
-import { Fragment, useCallback, useEffect, useId, useReducer, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useReducer, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api } from "../api.js";
 import CoinIcon from "./CoinIcon.jsx";
@@ -19,7 +19,7 @@ import { useSymbolList } from "../hooks/useSymbolList.js";
 import { resolveSymbol, searchSymbols } from "../lib/symbolSearch.js";
 import {
   PROFILE_ORDER, STEPS, answerLabel, canChooseFutures, extraOffer, initialState, reduce, toAskRequest,
-  toCandidatesRequest, validBalance,
+  toCandidatesRequest, validBalance, formatAmountInput, parseAmountInput,
 } from "../lib/askFlow.js";
 import {
   coinTint, conditionLines, holdDiff, holdOf, intervalLabel, marketLabel, numberParts, resultsHeadline,
@@ -84,24 +84,40 @@ function stepOptions(step, answers) {
 function BalanceInput({ exchange, disabled, onSubmit }) {
   const [value, setValue] = useState("");
   const [error, setError] = useState("");
+  const inputRef = useRef(null);
+  const caret = useRef(null);
   const quote = quoteForExchange(exchange);
+  const amount = parseAmountInput(value);
+  // 쉼표를 넣고 빼도 커서가 끝으로 튀지 않게 — 커서 앞 숫자 개수를 기억했다가 같은 자리로.
+  useLayoutEffect(() => {
+    const input = inputRef.current;
+    if (caret.current == null || !input) return;
+    let seen = 0, at = 0;
+    while (at < value.length && seen < caret.current) { if (/[0-9.]/.test(value[at])) seen += 1; at += 1; }
+    input.setSelectionRange(at, at);
+    caret.current = null;
+  }, [value]);
   return (
     <form className="ask-balance ask-in" style={inStyle(1)} onSubmit={(event) => {
       event.preventDefault();
       if (disabled) return;
-      if (!validBalance(value)) { setError(BALANCE_ERROR); return; }
-      onSubmit(Number(value));
+      if (!validBalance(amount)) { setError(BALANCE_ERROR); return; }
+      onSubmit(Number(amount));
     }}>
-      <label htmlFor="ask-manual-balance">{exchangeLabel(exchange)} 사용 가능 {quote} 잔액</label>
       <div className="ask-balance-field">
-        <input id="ask-manual-balance" className="input num" type="number" inputMode="decimal" step="any" min="0" value={value}
+        <input id="ask-manual-balance" ref={inputRef} className="input num" type="text" inputMode="decimal" autoComplete="off" value={value}
+          aria-label={`${exchangeLabel(exchange)} 사용할 금액 (${quote})`}
           aria-describedby="ask-balance-note" aria-invalid={!!error} disabled={disabled} autoFocus
-          onChange={(event) => { setValue(event.target.value); setError(""); }} placeholder={quote === "KRW" ? "예: 100000" : "예: 100"} />
+          onChange={(event) => {
+            const { value: raw, selectionStart } = event.target;
+            caret.current = raw.slice(0, selectionStart ?? raw.length).replace(/[^0-9.]/g, "").length;
+            setValue(formatAmountInput(raw)); setError("");
+          }} placeholder={quote === "KRW" ? "예: 100,000" : "예: 100"} />
         <span>{quote}</span>
       </div>
       <p id="ask-balance-note" className="ask-caption">{BALANCE_NOTE}</p>
       {error ? <p className="ask-miss" role="alert">{error}</p> : null}
-      <button type="submit" className="btn btn-m btn-primary" disabled={disabled || !validBalance(value)}>다음</button>
+      <button type="submit" className="btn btn-m btn-primary" disabled={disabled || !validBalance(amount)}>다음</button>
     </form>
   );
 }

@@ -406,6 +406,7 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
             title={`${item.label} · ${item.quote}`}
             className={"seg-item " + (item.value === exchange ? "seg-item-on" : "")}
           >
+            <img className="bd-exchange-logo" src={`/exchanges/${item.value}.${item.value === "binance" ? "svg" : "png"}`} width="16" height="16" alt="" aria-hidden="true" draggable="false" />
             {item.label}
           </button>
         ))}

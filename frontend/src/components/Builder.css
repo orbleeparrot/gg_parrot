@@ -22,6 +22,8 @@
 .builder-dense .bd-unit input::-webkit-inner-spin-button, .builder-dense .bd-unit input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 .builder-dense .bd-unit-tag { position: absolute; right: 9px; top: 18px; transform: translateY(-50%); color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 500; pointer-events: none; }
 /* 포지션 segmented */
+.bd-seg-exchange .seg-item { display: inline-flex; align-items: center; gap: 5px; }
+.bd-exchange-logo { width: 16px; height: 16px; flex: none; object-fit: contain; border-radius: 3px; }
 .builder-dense .bd-seg { height: 36px; padding: 3px; width: 100%; }
 .builder-dense .bd-seg .seg-item { flex: 1; justify-content: center; height: 28px; padding: 0 10px; font-size: 13px; }
 .builder-dense .bd-seg .seg-item:disabled { opacity: .45; cursor: not-allowed; }

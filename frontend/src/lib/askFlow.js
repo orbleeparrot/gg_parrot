@@ -1,23 +1,40 @@
 // 껄무새에게 물어볼까? v2 — 카드 상태 머신(순수 리듀서). UI 는 이 상태만 그린다.
 // 규칙: 안정형은 선물을 못 고른다 · 종목은 후보/직접 고르기 목록에서 하나만 · 뒤로 가면 세션을 버린다 · 자유 입력 없음.
 import { HORIZONS, LEVERAGES, MARKETS, PROFILES, WATCH_LEVELS } from "./askCopy.js";
+import { EXCHANGES, exchangeLabel, isDomestic, quoteForExchange } from "./exchanges.js";
 
-export const STEPS = ["profile", "market", "horizon", "watch"];
+export const STEPS = ["exchange", "balance", "profile", "market", "horizon", "watch"];
 export const PROFILE_ORDER = ["stable", "balanced", "aggressive", "scalper"];
 // 바이낸스 USDT 짝 모양 — 서버의 _SYMBOL_RE 와 같은 규칙.
-const SYMBOL_RE = /^[A-Z0-9]{2,20}USDT$/;
+const SYMBOL_RE = /^[A-Z0-9]{1,20}USDT$/;
 
 export function canChooseFutures(answers) {
-  return answers.profile !== "stable";
+  return !isDomestic(answers.exchange) && answers.profile !== "stable";
+}
+
+// 금액 입력칸 — 세 자리마다 쉼표. KRW 는 원 단위 정수(1,000,000), USDT 는 미국 달러처럼
+// 소수 둘째 자리까지(1,234.56). 숫자·소수점 하나만 남긴다.
+export function formatAmountInput(raw, quote = "USDT") {
+  const decimals = quote === "KRW" ? 0 : 2;
+  const clean = String(raw ?? "").replace(/[^0-9.]/g, "");
+  const dot = decimals ? clean.indexOf(".") : -1;
+  const intPart = (dot < 0 ? clean.replace(/\./g, "") : clean.slice(0, dot)).replace(/^0+(?=\d)/, "");
+  const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return dot < 0 ? grouped : `${grouped || "0"}.${clean.slice(dot + 1).replace(/\./g, "").slice(0, decimals)}`;
+}
+export const parseAmountInput = (text) => String(text ?? "").replace(/,/g, "");
+
+export function validBalance(value) {
+  return typeof value !== "boolean" && value != null && String(value).trim() !== "" && Number.isFinite(Number(value)) && Number(value) > 0;
 }
 
 function emptyAnswers() {
-  return { profile: null, market: null, leverage: 1, horizon: null, watch: null, symbol: null };
+  return { exchange: null, balance: null, profile: null, market: null, leverage: 1, horizon: null, watch: null, symbol: null };
 }
 
 export function initialState() {
   return {
-    step: "profile", answers: emptyAnswers(), phase: "cards",
+    step: "exchange", answers: emptyAnswers(), phase: "cards",
     session: null, candidates: [], manualSymbols: [],
     results: null, lostToHold: false, remaining: null, error: "",
   };
@@ -60,6 +77,14 @@ export function reduce(state, action) {
   switch (action.type) {
     case "choose": {
       const { step, value } = action;
+      if (step === "exchange") {
+        if (!EXCHANGES.some((item) => item.value === value)) return state;
+        return settle(dropFlow(state), { ...clearFrom(answers, "exchange"), exchange: value });
+      }
+      if (step === "balance") {
+        if (!answers.exchange || !validBalance(value)) return state;
+        return settle(dropFlow(state), { ...clearFrom(answers, "balance"), balance: Number(value) });
+      }
       if (step === "profile") {
         if (!PROFILES.some((p) => p.value === value)) return state;
         return settle(dropFlow(state), { ...clearFrom(answers, "profile"), profile: value });
@@ -98,7 +123,8 @@ export function reduce(state, action) {
       if (!symbol) return state;
       // resolved 는 '직접 고를래요' 검색이 거래 가능 목록에서 실제로 찾아낸 종목이라는 뜻.
       // 그 경우에도 짝 모양은 확인하고, 최종 판정은 서버가 다시 한다.
-      const ok = action.resolved ? SYMBOL_RE.test(symbol) : allowedSymbols(state).has(symbol);
+      const shape = isDomestic(answers.exchange) ? /^KRW-[A-Z0-9]{1,20}$/.test(symbol) : SYMBOL_RE.test(symbol);
+      const ok = shape && (action.resolved || allowedSymbols(state).has(symbol));
       if (!ok) return state;
       return { ...state, answers: { ...answers, symbol }, error: "" };
     }
@@ -143,6 +169,8 @@ export function reduce(state, action) {
 
 export function toCandidatesRequest(answers) {
   return {
+    exchange: answers.exchange,
+    account_balance: answers.balance,
     risk_profile: answers.profile,
     market: answers.market,
     leverage: answers.market === "futures" ? answers.leverage : 1,
@@ -157,6 +185,8 @@ export function toAskRequest(state) {
 
 // 내 말풍선에 쓰는 답 라벨.
 export function answerLabel(step, answers) {
+  if (step === "exchange") return answers.exchange ? exchangeLabel(answers.exchange) : "";
+  if (step === "balance") return `${Number(answers.balance).toLocaleString("ko-KR", { maximumFractionDigits: 8 })} ${quoteForExchange(answers.exchange)}`;
   if (step === "profile") return PROFILES.find((p) => p.value === answers.profile)?.label ?? "";
   if (step === "market") {
     if (answers.market === "futures") return `선물 ${answers.leverage}x`;

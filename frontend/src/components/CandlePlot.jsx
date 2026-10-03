@@ -3,12 +3,10 @@ import { CandlestickSeries, LineSeries, createChart, CrosshairMode, LineStyle, P
 import { fmtPrice } from "../lib/format.js";
 import { StrategyPrimitive, resolveChartColor, RSI_SCALE_MARGINS } from "../lib/chartStrategyPrimitive.js";
 import { candleData, canUpdateCandleData, sameCandleData, constrainCandleRange, restoreCandleRange, overlayPriceRange, priceMinMove } from "../lib/candleChartData.js";
+import { chartClockKst, chartDateKst, chartTimeKst } from "../lib/chartSource.js";
 import "./CandlePlot.css";
 
-const fullTime = (time) => {
-  const date = new Date(Number(time) * 1000);
-  return `${date.getMonth() + 1}/${date.getDate()} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
-};
+const fullTime = (time) => `${chartTimeKst(Number(time) * 1000)} KST`;
 
 function palette(element) {
   const resolve = (value) => resolveChartColor(value, element);
@@ -55,8 +53,8 @@ const CandlePlot = forwardRef(function CandlePlot({ candles, overlay, symbol, ex
         shiftVisibleRangeOnNewBar: false,
         minBarSpacing: 0.001,
         tickMarkFormatter: (time, kind) => {
-          const d = new Date(Number(time) * 1000);
-          return kind < 3 ? `${d.getMonth() + 1}/${d.getDate()}` : `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+          const ms = Number(time) * 1000;
+          return kind < 3 ? chartDateKst(ms) : chartClockKst(ms);
         },
       },
       localization: { locale: "ko-KR", timeFormatter: fullTime },
@@ -209,7 +207,7 @@ const CandlePlot = forwardRef(function CandlePlot({ candles, overlay, symbol, ex
     state.changing = true;
     state.rows = candles;
     state.overlay = overlay;
-    series.applyOptions({ priceFormat: { type: "custom", formatter: fmtPrice, minMove: priceMinMove(candles.at(-1).c) } });
+    series.applyOptions({ priceFormat: { type: "custom", formatter: (value) => fmtPrice(value, symbol), minMove: priceMinMove(candles.at(-1).c) } });
     if (canUpdate) {
       for (let i = Math.max(0, state.data.length - 2); i < next.length; i++) {
         if (!sameCandleData(state.data[i], next[i])) series.update(next[i], i < state.data.length - 1);
@@ -246,7 +244,7 @@ const CandlePlot = forwardRef(function CandlePlot({ candles, overlay, symbol, ex
       state.hover = index < 0 ? null : index;
       callbacks.current.onHover?.(state.hover);
     }
-  }, [candles, overlay, studio]);
+  }, [candles, overlay, studio, symbol]);
 
   return (
     <div ref={host} className={`financial-candle-plot${expanded ? " is-expanded" : ""}${overlay?.rsi ? " has-rsi" : ""}`} tabIndex={0} role="group" aria-label={`${symbol} 캔들 차트. 방향키로 봉 정보 확인, Home·End로 처음·마지막 봉, Escape로 해제`}>

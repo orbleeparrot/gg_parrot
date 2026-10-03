@@ -38,7 +38,7 @@ test("whyPoints: ahead of hold is positive; other templates and unknown sentence
 });
 
 test("whyHeadline drops the leading parrot emoji only", () => {
-  assert.equal(whyHeadline("🦜 벌긴 벌었는데… 그냥 들고 있는 게 나았어 (껄무새.jpg)"), "벌긴 벌었는데… 그냥 들고 있는 게 나았어 (껄무새.jpg)");
+  assert.equal(whyHeadline("🦜 벌긴 벌었는데… 그냥 들고 있는 게 나았어"), "벌긴 벌었는데… 그냥 들고 있는 게 나았어");
   assert.equal(whyHeadline("플러스로 마감했어"), "플러스로 마감했어");
 });
 
@@ -81,4 +81,10 @@ test("sparkPaths draws inside the box with a break-even baseline", () => {
   assert.match(p.base, /^M0 [\d.]+ H100$/);
   assert.equal(sparkPaths([1000], 1000), null);
   assert.equal(sparkPaths(null, 1000), null);
+});
+
+test("absolute order conditions display the selected exchange quote", () => {
+  assert.deepEqual(conditionLines({ exchange: "binance", rule_type: "C", params: { interval_days: 7, amount_per_buy: 10 } }), ["7일마다 10 USDT씩 매수"]);
+  assert.deepEqual(conditionLines({ exchange: "upbit", rule_type: "C", params: { interval_days: 7, amount_per_buy: 10000 } }), ["7일마다 10,000 KRW씩 매수"]);
+  assert.match(conditionLines({ exchange: "bithumb", rule_type: "H", params: { base_order_size: 50000, max_safety_orders: 3, take_profit: 2 } })[0], /50,000 KRW/);
 });

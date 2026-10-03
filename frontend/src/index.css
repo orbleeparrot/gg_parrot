@@ -488,6 +488,9 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   background: rgb(var(--c-surface));
 }
 .agent-macro-dock > * { min-height: 82px; padding: 10px 14px; }
+/* 실행 중이 있을 때 실행 바 맨 앞에 '실행 중 n · 종료 기록 n' 전환, 종료 기록에서 연 세션은 '종료 기록' 돌아가기. */
+.agent-macro-dock.has-lead { grid-template-columns: auto minmax(220px, 1fr) auto; }
+.agent-macro-dock-lead { display: flex; align-items: center; }
 .agent-macro-dock > * + * { border-left: 1px solid rgb(var(--c-slate-200)); }
 .agent-macro-dock-picker { display: grid; min-width: 0; align-content: center; gap: 5px; color: rgb(var(--c-slate-500)); font-size: 13px; font-weight: 700; }
 /* 셀렉트는 내용에 맞는 폭(최대 320px)으로, 옆에 44px '+' 아이콘 버튼. 줄 전체를 늘리지 않는다. */
@@ -869,6 +872,8 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 
 @media (max-width: 900px) {
   .agent-workspace { grid-template-rows: auto 44px minmax(0, 1fr); }
+  .agent-macro-dock.has-lead { grid-template-columns: minmax(0, 1fr) auto; }
+  .agent-macro-dock.has-lead > .agent-macro-dock-lead { grid-column: 1 / -1; min-height: 56px; border-left: 0; border-bottom: 1px solid rgb(var(--c-slate-200)); }
   .agent-workspace-tabs {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -8456,13 +8461,6 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 .confirm-dialog-actions { display: grid; gap: 8px; margin-top: 24px; }
 
 /* 개발자 노트 팝업 (2026-09-22) — 확인 대화상자와 같은 틀, 항목은 아이콘 + 한 줄 */
-.devnote { width: 100%; max-width: 440px; padding: 24px; }
-.devnote-list { display: grid; gap: 12px; margin-top: 16px; padding: 0; list-style: none; }
-.devnote-item { display: flex; gap: 10px; align-items: flex-start; line-height: 1.5; }
-.devnote-icon { flex: 0 0 auto; font-size: 18px; line-height: 1.3; }
-.devnote-link { color: rgb(var(--c-slate-900)); font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
-.devnote-check { display: flex; align-items: center; gap: 8px; margin-top: 18px; cursor: pointer; }
-.devnote-check input { width: 16px; height: 16px; accent-color: rgb(var(--c-brand)); }
 
 /* Hallmark · component: floating chat · genre: modern-minimal · theme: DESIGN.md (locked)
  * states: default · hover · focus · active · disabled · loading · error · success
@@ -8876,11 +8874,13 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   /* 행마다 그리드를 따로 계산하므로 유동 열(name·summary) 외에는 폭을 고정한다 —
      그래야 머리글과 모든 행의 열이 같은 자리에서 시작한다. 반응 열은 아이콘 3개 폭. */
   --lb-actions-w: 196px;                   /* 투표 알약 2개(아이콘+수) + 자물쇠·가격 알약(또는 복사 아이콘)이 한 줄 */
-  --lb-return-gap: 32px;                   /* 수익률 숫자와 반응 버튼 사이 숨 — 열 간격 16px 만으로는 붙어 보인다 */
-  --lb-columns: 32px 36px minmax(220px, 1fr) minmax(0, 1.2fr) calc(240px + var(--lb-return-gap)) var(--lb-actions-w);  /* 수익률 칸은 상태 캡션 한 줄이 들어갈 폭 */
+  --lb-return-gap: 16px;                   /* 수익률 숫자와 반응 버튼 사이 숨 */
+  --lb-columns: 32px 36px minmax(220px, 1fr) minmax(0, 1.2fr) calc(280px + var(--lb-return-gap)) var(--lb-actions-w);  /* 수익률 칸은 상태 캡션 한 줄이 들어갈 폭 */
   --lb-areas: "rank coin name summary return actions";
   padding-bottom: 88px; /* 마지막 행이 떠 있는 채팅 버튼 위로 올라올 여지 */
 }
+/* 언락·빠른 실행 버튼이 있는 행이 하나도 없으면 반응 칸은 좋아요·싫어요 두 알약 폭 — 남는 폭은 수익률 칸으로(2026-10-02). */
+.lb-board.is-lean-actions { --lb-actions-w: 120px; }
 .lb-row {
   display: grid;
   grid-template-columns: var(--lb-columns);
@@ -8893,6 +8893,20 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 }
 .lb-row:last-child { border-bottom: 0; }
 .lb-row.is-registered { box-shadow: inset 2px 0 0 rgb(var(--c-brand)); padding-left: 12px; }
+/* 내 매크로 — 행 둘레 외곽선. 내용 정렬이 다른 행과 같도록 바깥으로 12px 넓힌다. */
+.lb-board { --lb-mine-line: var(--c-indigo-500); }  /* '내 것' 뱃지와 같은 남색 — 순위 금색·수익률 초록/빨강과 겹치지 않게(2026-10-01 사용자 선택) */
+.lb-row.is-mine {
+  margin-inline: -12px; padding-inline: 12px;
+  border-radius: 12px; border-bottom-color: transparent;
+  box-shadow: inset 0 0 0 1.5px rgb(var(--lb-mine-line));
+}
+/* 방금 등록한 행도 내 매크로다 — 노란 왼쪽 줄을 외곽선 위에 겹치지 않는다(2026-10-02). */
+.lb-row.is-mine.is-registered { box-shadow: inset 0 0 0 1.5px rgb(var(--lb-mine-line)); }
+.lb-row { -webkit-touch-callout: none; }
+.lb-menu { min-width: 176px; }
+.lb-menu button { gap: 10px; }
+.lb-menu svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.lb-menu button.is-danger { color: rgb(var(--c-red-600)); }
 .lb-row-head {
   padding: 8px 0 10px;
   color: rgb(var(--c-slate-500));
@@ -8912,7 +8926,10 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 .lb-rank.is-1 { color: rgb(var(--lb-gold)); }
 .lb-rank.is-2 { color: rgb(var(--lb-silver)); }
 .lb-rank.is-3 { color: rgb(var(--lb-bronze)); }
-.lb-coin { justify-self: center; }
+.lb-coin { justify-self: center; position: relative; display: block; width: 36px; height: 36px; }
+.lb-coin-img { display: block; width: 100%; height: 100%; }
+/* 코인 로고 오른쪽 아래 — 어느 거래소의 종목인지. 바탕색 테두리로 코인 로고와 떼어 놓는다. */
+.lb-coin-exchange { position: absolute; right: -4px; bottom: -4px; width: 18px; height: 18px; padding: 2px; border-radius: 999px; background: rgb(var(--c-surface)); box-shadow: 0 0 0 1px rgb(var(--c-slate-200)); object-fit: contain; }
 .lb-name { min-width: 0; }
 .lb-title {
   max-width: 100%;
@@ -8938,7 +8955,7 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 }
 .lb-summary.is-locked { color: rgb(var(--c-slate-500)); }
 /* 수익률 아래 한 줄 상태 캡션(대기·보유·청산·중단·종료). 보유 중이면 숫자 옆 초록 점이 숨 쉰다. */
-.lb-return { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; text-align: right; font-size: 16px; font-weight: 700; white-space: nowrap; }
+.lb-return { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; text-align: right; font-size: 20px; font-weight: 800; letter-spacing: -.01em; white-space: nowrap; }
 .lb-state { font-size: 11px; line-height: 1.3; font-weight: 600; white-space: normal; max-width: 100%; text-align: right; overflow-wrap: anywhere; color: rgb(var(--c-slate-500)); cursor: help; }
 /* 수익률 머리글의 상태 설명 — ⓘ 에 마우스를 올리면(또는 포커스) 다섯 상태가 무엇인지 보여 준다. */
 .lb-col-return { position: relative; }
@@ -8949,6 +8966,7 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 .lb-state-legend dd { margin: 0 0 6px; }
 .lb-state-legend dd:last-child { margin-bottom: 0; }
 .lb-col-return:hover .lb-state-legend, .lb-col-return:focus-within .lb-state-legend { display: block; }
+.lb-state-part { white-space: nowrap; }
 .lb-state.is-live { color: rgb(var(--c-indigo-700)); }
 .lb-state.is-good { color: rgb(var(--c-green-700)); }
 .lb-state.is-bad { color: rgb(var(--c-red-700)); }
@@ -9026,7 +9044,13 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 
 .chat-macro-hint { margin: 0 12px 4px; color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 500; }
 .chat-macro-hint b { color: rgb(var(--c-slate-700)); }
-.chat-macro-summary { color: rgb(var(--c-slate-700)); font-size: 12px; line-height: 1.45; font-weight: 500; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.chat-macro-summary { color: rgb(var(--c-slate-700)); font-size: 12px; line-height: 1.45; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 좁은 말풍선 안 — 종목·글쓴이 / 현재 수익률(크게) / 전략 한 줄, 세 줄로 쌓는다. */
+.chat-macro { align-items: flex-start; }
+.chat-macro-body { flex: 1 1 auto; }
+.chat-macro-head b { flex: none; white-space: nowrap; }
+.chat-macro-author { min-width: 0; }
+.chat-macro-return { font-size: 22px; font-weight: 700; line-height: 1.15; white-space: nowrap; }
 
 /* 언락 — 같은 알약에 자물쇠 + 가격. 포인트가 나가는 동작이라 가격만 브랜드 금색. */
 .lb-unlock .num { color: rgb(var(--c-brand-line)); }

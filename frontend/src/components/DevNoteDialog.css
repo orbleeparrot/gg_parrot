@@ -1,0 +1,35 @@
+/* 개발자 노트 — 다크 팸플릿 배너(2026-10-02 사용자 선택). 테마와 상관없이 잉크 바탕 · 노랑 대형 활자 ·
+   관절 껄무새 · 바뀐 것은 두 칸 타일(좁으면 한 칸). 색은 이 배너 안에서만 쓰는 고정값이다. */
+.devnote {
+  --dn-bg: #0d1117; --dn-ink: #f3f5f8; --dn-muted: #aab3c0; --dn-faint: #8b95a3; --dn-yellow: #fcd535; --dn-yellow-ink: #1b1600;
+  position: relative; width: 100%; max-width: 440px; max-height: calc(100dvh - 32px); overflow: hidden auto;
+  border-radius: 24px; background: var(--dn-bg); color: var(--dn-ink); box-shadow: 0 24px 64px rgb(5 12 22 / .45);
+}
+.devnote-x { position: absolute; top: 12px; right: 12px; z-index: 2; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 999px; color: var(--dn-ink); background: rgb(255 255 255 / .08); cursor: pointer; }
+.devnote-x:hover { background: rgb(255 255 255 / .16); }
+.devnote-x:focus-visible, .devnote-later:focus-visible, .devnote-action:focus-visible { outline: 2px solid var(--dn-yellow); outline-offset: 2px; }
+.devnote-chip { display: inline-flex; align-items: center; height: 26px; padding: 0 10px; border-radius: 999px; background: var(--dn-yellow); color: var(--dn-yellow-ink); font-size: 12px; font-weight: 800; letter-spacing: .02em; }
+
+.devnote-hero { position: relative; min-height: 250px; padding: 24px 24px 0; overflow: hidden; border-bottom: 1px solid rgb(255 255 255 / .1); color: var(--dn-yellow); }
+.devnote-hero h2 { position: relative; z-index: 1; max-width: 5.3em; margin: 18px 0 0; font-size: 38px; line-height: 1.12; font-weight: 900; letter-spacing: -.04em; word-break: keep-all; text-wrap: balance; }
+.devnote-hero-art { position: absolute; right: -22px; bottom: -36px; width: 215px; height: auto; pointer-events: none; } /* 정지 SVG(선글라스 껄무새) — 움직이는 관절 그림은 쓰지 않는다 */
+
+.devnote-items { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 16px; margin: 0; padding: 22px 24px 4px; list-style: none; }
+.devnote-items li { display: grid; align-content: start; gap: 8px; }
+.devnote-item-icon { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 12px; background: rgb(252 213 53 / .14); color: var(--dn-yellow); }
+.devnote-item-text { display: grid; gap: 2px; min-width: 0; }
+.devnote-item-text b { font-size: 15px; font-weight: 800; letter-spacing: -.01em; }
+.devnote-item-text > span { color: var(--dn-muted); font-size: 13px; line-height: 1.5; font-weight: 500; }
+.devnote-action { display: inline-flex; align-items: center; gap: 4px; margin-top: 6px; color: var(--dn-yellow); font-size: 13px; font-weight: 800; text-decoration: underline; text-underline-offset: 3px; }
+
+.devnote-foot { padding: 18px 24px 16px; }
+.devnote-later { display: block; margin: 10px auto 0; padding: 6px 10px; border-radius: 8px; color: var(--dn-faint); font-size: 13px; font-weight: 600; cursor: pointer; }
+.devnote-later:hover { color: var(--dn-ink); }
+
+@media (max-width: 420px) {
+  .devnote-hero h2 { font-size: 32px; }
+  .devnote-hero-art { width: 190px; }
+  .devnote-hero { min-height: 210px; }
+  .devnote-items { grid-template-columns: 1fr; gap: 14px; padding-top: 18px; }
+  .devnote-items li { grid-template-columns: 36px minmax(0, 1fr); gap: 12px; }
+}

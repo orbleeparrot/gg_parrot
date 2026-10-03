@@ -17,6 +17,7 @@
 | 일일 챌린지 | `app/ai_challenge.py` | `ai_challenge` |
 | 매크로 제안 | `app/ask.py` | `ask` |
 | 매크로 후보 제안 | `app/ask.py` | `ask-candidates` |
+| 개발자 노트 정리(관리자 공지 → 배너 양식) | `app/devnotes.py` | `devnote` |
 
 크롤링·RSS·거래소 API·규칙 기반 fallback은 생성형 AI API가 아니며 변경하지 않습니다.
 `tests/test_openai_migration.py`가 전체 앱을 검색해 호출 목록과 구 공급자 키·SDK 잔존 여부를 검사합니다.

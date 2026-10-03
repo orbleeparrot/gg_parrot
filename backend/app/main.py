@@ -1,7 +1,7 @@
 """FastAPI app: macro create/fetch, backtest, gallery, share card.
 
-No exchange order APIs. Only the public Binance klines endpoint is used, for
-historical data. Every returned result represents a PAST SIMULATION.
+Public Binance/Upbit/Bithumb data powers historical simulations. Domestic
+account authentication and order execution are deliberately not connected.
 """
 from __future__ import annotations
 
@@ -83,6 +83,7 @@ from . import macro_events
 from . import account as account_mod
 from . import challenge as challenge_mod
 from . import runner as runner_mod
+from . import devnotes as devnotes_mod
 from .runner_release import MIN_SUPPORTED_RUNNER_VERSION, resolve_runner_release
 from . import macro_signing as macro_signing_mod
 from . import user_macros as user_macros_mod
@@ -102,6 +103,7 @@ from .data import symbols as symbols_mod
 from .data.binance import backtest_limits
 from .marketdata import fetch_klines_for_macro
 from . import marketdata as marketdata_mod
+from .exchanges import Exchange, capabilities, is_domestic, validate_symbol
 from .db import MacroRow, get_session, init_db, request_session
 from .engine import BacktestResult, Macro, Period, compact_backtest_result, human_summary
 from .engine.backtest import run_backtest
@@ -321,6 +323,7 @@ class RunnerStartRequest(BaseModel):
     # normalized macro equality before creating the session.
     user_macro_id: Optional[int] = None
     symbol: str
+    exchange: Exchange = "binance"
     position_side: str = "long"
     leverage: int = 1
     market: str = ""  # spot | futures | "" (서버가 방향/레버리지로 결정)
@@ -825,6 +828,7 @@ def visit_record(
         is_internal=req.is_internal or bool(account and account.is_admin),
     )
     admin_mod.maybe_prune_visits(db)  # 90일 지난 행은 하루 한 번 정리
+    runner_mod.maybe_prune_all_ended_sessions(db)  # 종료 기록 30건·30일 정리도 하루 한 번(보관 제외)
     return Response(status_code=204)
 
 
@@ -1229,6 +1233,7 @@ def funding_rate(
     preset: str = "1y",
     start: Optional[str] = None,
     end: Optional[str] = None,
+    exchange: Exchange = "binance",
 ) -> dict:
     """Average *daily* USDT-M funding cost (%) for a symbol over the period.
 
@@ -1236,6 +1241,10 @@ def funding_rate(
     ``available`` is False (and the pct null) when the symbol has no perp market
     or the funding API is unreachable — the UI keeps the user's manual value.
     """
+    if is_domestic(exchange):
+        return {"symbol": symbol.upper(), "exchange": exchange,
+                "avg_daily_funding_pct": None, "available": False,
+                "note": "국내 현물에는 펀딩비가 없습니다"}
     try:
         start_ms, end_ms = resolve_period(preset, start, end)
     except ValueError as exc:
@@ -1298,6 +1307,7 @@ def candles(
     interval: str = chart_mod.DEFAULT_INTERVAL,
     limit: int = 120,
     market: str = "spot",
+    exchange: Exchange = "binance",
 ) -> dict:
     """Recent OHLC candles for the live chart (public market data only).
 
@@ -1307,7 +1317,8 @@ def candles(
     the shared kline cache, so it can't leak into a backtest.
     """
     try:
-        return chart_mod.get_candles(symbol, interval=interval, limit=limit, market=market)
+        kwargs = {"exchange": exchange} if exchange != "binance" else {}
+        return chart_mod.get_candles(symbol, interval=interval, limit=limit, market=market, **kwargs)
     except NoSpotDataError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     except Exception as exc:
@@ -1319,10 +1330,12 @@ def live_candles(
     symbol: str,
     interval: str = chart_mod.DEFAULT_INTERVAL,
     market: str = "spot",
+    exchange: Exchange = "binance",
 ) -> dict:
     """Latest two public candles for the chart's moving live edge."""
     try:
-        return chart_mod.get_live_candles(symbol, interval=interval, market=market)
+        kwargs = {"exchange": exchange} if exchange != "binance" else {}
+        return chart_mod.get_live_candles(symbol, interval=interval, market=market, **kwargs)
     except NoSpotDataError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     except Exception as exc:
@@ -1330,15 +1343,23 @@ def live_candles(
 
 
 @app.get("/api/prices")
-def prices(symbols: str = Query(default="", max_length=700)) -> dict:
+def prices(symbols: str = Query(default="", max_length=700), exchange: Exchange = "binance") -> dict:
     """공개 일괄 시세 — 리더보드 보유 중 행의 미실현 수익률용.
 
     전 종목 시세를 한 번에 받아 2초 캐시 — 요청당 상류 호출 최대 1회.
     """
     wanted = list(dict.fromkeys(s.strip().upper() for s in symbols.split(",") if s.strip()))
-    if not wanted or len(wanted) > marketdata_mod.MAX_PRICE_SYMBOLS or any(not marketdata_mod.SYMBOL_RE.match(s) for s in wanted):
+    try:
+        wanted = [validate_symbol(s, exchange) for s in wanted]
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if (not wanted or len(wanted) > marketdata_mod.MAX_PRICE_SYMBOLS
+            or (exchange == "binance" and any(not marketdata_mod.SYMBOL_RE.match(s) for s in wanted))):
         raise HTTPException(422, "종목 형식이 잘못됐어요.")
-    return {"prices": marketdata_mod.batch_prices(wanted), "ms": int(time.time() * 1000)}
+    kwargs = {"exchange": exchange} if exchange != "binance" else {}
+    return {"prices": marketdata_mod.batch_prices(wanted, **kwargs),
+            "exchange": exchange, "quote_currency": capabilities(exchange)["quote_currency"],
+            "ms": int(time.time() * 1000)}
 
 
 @app.get("/api/hot-coins")
@@ -1728,6 +1749,8 @@ async def board_create(
     title: str = Form(...),
     body: str = Form(""),
     body_format: str = Form("text"),
+    is_notice: bool = Form(False),
+    apply_devnote: bool = Form(False),
     images: list[UploadFile] = File(default=[]),
     image: Optional[UploadFile] = File(default=None),
     user: User = Depends(auth_mod.current_user_in_session),
@@ -1747,9 +1770,29 @@ async def board_create(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
     try:
-        return await run_in_threadpool(board_mod.create_post, user, title, body, validated, body_format=body_format, db=db)
+        view = await run_in_threadpool(board_mod.create_post, user, title, body, validated, body_format=body_format, db=db,
+                                       is_notice=is_notice)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    return await _with_devnote(view, apply_devnote, user, db)
+
+
+async def _with_devnote(view: dict, apply_devnote: bool, user: User, db: Session) -> dict:
+    """'개발자 노트에 적용하기'를 켠 관리자 [공지]면 AI 로 노트를 만든다. 글 저장과 분리 — 실패해도 글은 남는다."""
+    if not (apply_devnote and view.get("is_notice") and getattr(user, "is_admin", False)):
+        return view
+    db.commit()  # 요청 세션의 글 쓰기를 먼저 확정해 노트 생성이 같은 글을 읽게 한다
+    result = await run_in_threadpool(devnotes_mod.apply_from_post, view["id"])
+    return {**view, "devnote": result}
+
+
+@app.get("/api/devnote/current")
+def devnote_current(response: Response) -> dict:
+    """사이트 첫 진입 배너의 개발자 노트(가장 최근 것). 없으면 note: null — 화면은 기본 노트를 쓴다."""
+    response.headers["Cache-Control"] = "public, max-age=60"
+    return {"note": devnotes_mod.current()}
 
 
 @app.put("/api/board/posts/{post_id}")
@@ -1759,6 +1802,8 @@ async def board_update(
     body: str = Form(""),
     body_format: str = Form("text"),
     keep_image_ids: str = Form(""),
+    is_notice: Optional[bool] = Form(None),
+    apply_devnote: bool = Form(False),
     images: list[UploadFile] = File(default=[]),
     user: User = Depends(auth_mod.current_user_in_session),
     db: Session = Depends(request_session),
@@ -1777,14 +1822,14 @@ async def board_update(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
     try:
-        view = await run_in_threadpool(board_mod.update_post, post_id, user, title, body, keep, validated, body_format=body_format, db=db)
+        view = await run_in_threadpool(board_mod.update_post, post_id, user, title, body, keep, validated, body_format=body_format, db=db, is_notice=is_notice)
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     if view is None:
         raise HTTPException(status_code=404, detail="글을 찾을 수 없어요.")
-    return view
+    return await _with_devnote(view, apply_devnote, user, db)
 
 
 @app.get("/api/board/posts")
@@ -1920,17 +1965,23 @@ def board_comment_delete(comment_id: int, user: User = Depends(auth_mod.current_
 
 
 @app.get("/api/symbols")
-def symbols(response: Response) -> dict:
-    """Tradable Binance USDT symbols (spot + USDT-M perpetual) for the builder's search — only these can be added."""
+def symbols(response: Response, exchange: Exchange = "binance") -> dict:
+    """Exchange-specific USDT or native KRW market catalogue for symbol search."""
     try:
-        data = symbols_mod.list_symbols()
+        data = symbols_mod.list_symbols(**({"exchange": exchange} if exchange != "binance" else {}))
         response.headers["Cache-Control"] = (
             "public, max-age=5, s-maxage=5" if data.get("stale") or not data.get("items")
+            else "public, max-age=15, s-maxage=15, stale-while-revalidate=45" if exchange != "binance"
             else "public, max-age=300, s-maxage=300"
         )
         return data
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"종목 목록을 불러오지 못했어요: {type(exc).__name__}")
+
+
+@app.get("/api/exchanges")
+def exchanges() -> dict:
+    return {"items": [capabilities(exchange) for exchange in ("binance", "upbit", "bithumb")]}
 
 
 @app.get("/api/coin-logo/{base}.png")
@@ -2004,6 +2055,8 @@ def paper_trades(session_id: int) -> dict:
 # --- real-trade executable bundle (real orders; default testnet/fake funds) -----------
 @app.post("/api/realtrade/bundle")
 def realtrade_bundle(req: BundleRequest) -> Response:
+    if is_domestic(req.macro.exchange):
+        raise HTTPException(422, runner_mod.DOMESTIC_RUNNER_DETAIL)
     data = build_bundle(req.macro)
     filename = f"realtrade-bot-{req.macro.rule_type.value}-{req.macro.position_side.value}.zip"
     return Response(
@@ -2022,6 +2075,8 @@ def realtrade_macro_file(req: BundleRequest) -> Response:
     실행기에 넣으면 된다(human_summary 동봉).
     """
     macro = req.macro
+    if is_domestic(macro.exchange):
+        raise HTTPException(422, runner_mod.DOMESTIC_RUNNER_DETAIL)
     payload = macro.model_dump(mode="json")
     payload["human_summary"] = human_summary(macro)
     # 서명 동봉 — 실행기가 시작할 때 같이 올리면 서버가 "원본 그대로인지" 판별한다.
@@ -2244,6 +2299,18 @@ def runner_session_events(
 ) -> dict:
     """세션의 실행 로그(최신순) — 실행기가 heartbeat 로 올린 신호·주문·체결·오류."""
     return runner_mod.list_events(user.id, session_id, limit=limit)
+
+
+class RunnerPinRequest(BaseModel):
+    pinned: bool
+
+
+@app.put("/api/me/runner/sessions/{session_id}/pin")
+def runner_pin_session(
+    session_id: int, req: RunnerPinRequest, user: User = Depends(auth_mod.current_user)
+) -> dict:
+    """종료 기록 보관 켜기/끄기 — 보관한 기록은 30건·30일 자동 정리에서 빠진다(10건까지)."""
+    return runner_mod.set_pinned(user.id, session_id, req.pinned)
 
 
 @app.delete("/api/me/runner/sessions/{session_id}")

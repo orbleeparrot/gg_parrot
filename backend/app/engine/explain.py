@@ -39,6 +39,8 @@ class Explanation(BaseModel):
 
 def _coin(symbol: str) -> str:
     s = symbol.upper()
+    if s.startswith("KRW-"):
+        return s[4:]
     for q in ("USDT", "BUSD", "USDC", "USD"):
         if s.endswith(q):
             return s[: -len(q)]
@@ -72,7 +74,7 @@ _HEADLINES = {
     "liquidated": "🦜 껄……. 청산당했어. 레버리지가 널 잡아먹었다.",
     "crash": "🦜 이건 좀 아팠겠다. 크게 물렸어.",
     "loss": "🦜 아쉽! 이번 판은 마이너스로 끝났어.",
-    "lost_to_hold": "🦜 벌긴 벌었는데… 그냥 들고 있는 게 나았어 (껄무새.jpg)",
+    "lost_to_hold": "🦜 벌긴 벌었는데… 그냥 들고 있는 게 나았어",
     "win": "🦜 오, 좀 하는데? 플러스로 마감했어.",
     "big_win": "🦜 대박! 이번 기간엔 아주 잘 먹혔어.",
 }

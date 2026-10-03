@@ -111,7 +111,7 @@ def _market_symbols(market: str, now: Optional[float]):
         return None, "unavailable", exc
 
 
-def list_symbols(*, now: Optional[float] = None) -> dict:
+def _list_binance_symbols(*, now: Optional[float] = None) -> dict:
     """Return verified symbols from every available market, with source freshness."""
     results = run_parallel({market: lambda market=market: _market_symbols(market, now)
                             for market in _market_caches})
@@ -135,9 +135,20 @@ def list_symbols(*, now: Optional[float] = None) -> dict:
     }
 
 
+def list_symbols(*, now: Optional[float] = None, exchange: str = "binance") -> dict:
+    from ..exchanges import normalize_exchange
+    exchange = normalize_exchange(exchange)
+    if exchange == "binance":
+        return {**_list_binance_symbols(now=now), "exchange": exchange, "quote_currency": "USDT"}
+    from . import krw
+    return krw.list_symbols(exchange, now=now)
+
+
 def reset_cache() -> None:
     for cache in _market_caches.values():
         cache.clear()
+    from . import krw
+    krw.reset_cache()
 
 
 # ── coin logo proxy (same-origin copy of Binance's public logo, for the share-card capture) ──

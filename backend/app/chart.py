@@ -12,10 +12,10 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Optional
 
 from .data import NoSpotDataError, get_recent_klines
 from .cache_runtime import ResponseCache
+from .exchanges import normalize_exchange, quote_currency, validate_symbol
 
 # Supported intervals -> how long a chart response stays fresh. This value is
 # both the server cache TTL and the poll interval the client is told to use.
@@ -44,10 +44,40 @@ _LIVE_REFRESH_SECONDS = 3.0
 # The latest two bars use a separate, short cache.  A 1d chart may refresh its
 # 300-bar history only once a minute, but its open candle still has to move.
 _live_cache = ResponseCache("chart-live", max_entries=512, max_bytes=2_000_000)
+_CANDLE_DURATION_MS = {
+    "1m": 60_000, "3m": 180_000, "5m": 300_000, "15m": 900_000,
+    "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000,
+}
 
 
 def supported_intervals() -> list[str]:
     return list(_INTERVALS)
+
+
+def _with_freshness(payload: dict, state: str) -> dict:
+    """Describe the cached data without mistaking response time for data time.
+
+    ``fetched_at_ms`` records when an upstream read completed, not its latest
+    trade time. Candle ``t`` stays the original exchange candle-open timestamp.
+    Time passing alone cannot confirm the final price of a cached open candle.
+    """
+    server_time = int(time.time() * 1000)
+    candles = payload["candles"]
+    stale = state == "stale"
+    duration = _CANDLE_DURATION_MS[payload["interval"]]
+    awaiting = stale or any(
+        row.get("closed") is False and int(row["t"]) + duration <= server_time
+        for row in candles
+    )
+    return {
+        **payload,
+        "server_time": server_time,
+        "cache_age_ms": max(0, server_time - payload["fetched_at_ms"]),
+        "latest_candle_open_time_ms": int(candles[-1]["t"]) if candles else None,
+        "cached": state != "loaded",
+        "stale": stale,
+        "awaiting_candle_refresh": awaiting,
+    }
 
 
 def get_candles(
@@ -55,6 +85,7 @@ def get_candles(
     interval: str = DEFAULT_INTERVAL,
     limit: int = 120,
     market: str = "spot",
+    exchange: str = "binance",
 ) -> dict:
     """Cached recent candles for ``symbol``.
 
@@ -62,15 +93,21 @@ def get_candles(
     cached copy to fall back on (surfaced as a 422 by the route).
     """
     symbol = (symbol or "").upper().strip()
+    exchange = normalize_exchange(exchange)
     if not symbol:
         raise NoSpotDataError("종목(symbol)을 입력하세요.")
+    symbol = validate_symbol(symbol, exchange)
+    if exchange != "binance":
+        if market != "spot":
+            raise ValueError("업비트·빗썸은 KRW 현물 차트만 지원합니다.")
     if interval not in _INTERVALS:
         interval = DEFAULT_INTERVAL
     if market not in ("spot", "futures"):
         market = "spot"
     limit = max(10, min(int(limit), MAX_LIMIT))
 
-    key = (symbol, interval, market)
+    key = (symbol, interval, market) if exchange == "binance" else (symbol, interval, market, exchange)
+    exchange_args = {} if exchange == "binance" else {"exchange": exchange}
 
     # 선물 호스트(fapi)는 배포 리전에서 차단될 수 있다 — 현물은 미러
     # (BINANCE_API_BASE)로 우회하지만 선물엔 대응 미러가 없다. 그래서 선물을
@@ -80,10 +117,10 @@ def get_candles(
     def load():
         used_market = market
         try:
-            candles = get_recent_klines(symbol, interval=interval, limit=MAX_LIMIT, market=market)
+            candles = get_recent_klines(symbol, interval=interval, limit=MAX_LIMIT, market=market, **exchange_args)
         except Exception as first_error:
             candles = None
-            if market == "futures":
+            if exchange == "binance" and market == "futures":
                 try:
                     candles = get_recent_klines(symbol, interval=interval, limit=MAX_LIMIT, market="spot")
                     used_market = "spot"
@@ -99,21 +136,24 @@ def get_candles(
         candles, used_market = load()
         return {
             "symbol": symbol, "interval": interval, "market": used_market,
+            "exchange": exchange, "quote_currency": quote_currency(exchange),
             "requested_market": market, "candles": candles,
-            "server_time": int(time.time() * 1000),
+            "source": f"{exchange}:{used_market}", "fallback": used_market != market,
+            "fetched_at_ms": int(time.time() * 1000),
             "refresh_seconds": _INTERVALS[interval],
             "disclaimer": "public market data; reference only",
         }
 
     payload, state = _cache.get_or_load(key, prepare, ttl=_INTERVALS[interval], stale_ttl=900)
     payload["candles"] = payload["candles"][-limit:]
-    return {**payload, "cached": state != "loaded", **({"stale": True} if state == "stale" else {})}
+    return _with_freshness(payload, state)
 
 
 def get_live_candles(
     symbol: str,
     interval: str = DEFAULT_INTERVAL,
     market: str = "spot",
+    exchange: str = "binance",
 ) -> dict:
     """Return only the latest two candles on a fixed live cadence.
 
@@ -122,24 +162,31 @@ def get_live_candles(
     detecting a newly-opened bar for long intervals such as 1d.
     """
     symbol = (symbol or "").upper().strip()
+    exchange = normalize_exchange(exchange)
     if not symbol:
         raise NoSpotDataError("종목(symbol)을 입력하세요.")
+    symbol = validate_symbol(symbol, exchange)
+    if exchange != "binance":
+        if market != "spot":
+            raise ValueError("업비트·빗썸은 KRW 현물 차트만 지원합니다.")
     if interval not in _INTERVALS:
         interval = DEFAULT_INTERVAL
     if market not in ("spot", "futures"):
         market = "spot"
 
-    key = (symbol, interval, market)
+    key = (symbol, interval, market) if exchange == "binance" else (symbol, interval, market, exchange)
+    exchange_args = {} if exchange == "binance" else {"exchange": exchange}
 
-    # get_candles 와 같은 선물→현물 폴백. 히스토리는 현물로 떨어졌는데 움직이는
-    # 봉만 선물을 고집하면 두 시세가 섞여 캔들이 튄다.
+    # Keep the same futures -> spot fallback as history. The independent caches
+    # may recover at different times: consumers must compare actual `source`
+    # before merging, or request the live edge using history's actual market.
     def load():
         used_market = market
         try:
-            candles = get_recent_klines(symbol, interval=interval, limit=2, market=market)
+            candles = get_recent_klines(symbol, interval=interval, limit=2, market=market, **exchange_args)
         except Exception as first_error:
             candles = None
-            if market == "futures":
+            if exchange == "binance" and market == "futures":
                 try:
                     candles = get_recent_klines(symbol, interval=interval, limit=2, market="spot")
                     used_market = "spot"
@@ -155,9 +202,15 @@ def get_live_candles(
         candles, used_market = load()
         return {
             "symbol": symbol, "interval": interval, "market": used_market,
+            "exchange": exchange, "quote_currency": quote_currency(exchange),
             "requested_market": market, "candles": candles,
-            "server_time": int(time.time() * 1000), "refresh_seconds": _LIVE_REFRESH_SECONDS,
+            "source": f"{exchange}:{used_market}", "fallback": used_market != market,
+            "fetched_at_ms": int(time.time() * 1000), "refresh_seconds": _LIVE_REFRESH_SECONDS,
         }
 
-    payload, state = _live_cache.get_or_load(key, prepare, ttl=_LIVE_REFRESH_SECONDS, stale_ttl=15)
-    return {**payload, "cached": state != "loaded", **({"stale": True} if state == "stale" else {})}
+    # Normal 3-second refreshes must deliver their newly verified price instead
+    # of an SWR stale response that clients correctly refuse to treat as LIVE.
+    payload, state = _live_cache.get_or_load(
+        key, prepare, ttl=_LIVE_REFRESH_SECONDS, stale_ttl=15, wait_for_refresh=True,
+    )
+    return _with_freshness(payload, state)

@@ -6,6 +6,8 @@ from .schema import Macro, PositionSide, RuleType
 
 def _coin(symbol: str) -> str:
     s = symbol.upper()
+    if s.startswith("KRW-"):
+        return s[4:]
     for quote in ("USDT", "BUSD", "USDC", "USD"):
         if s.endswith(quote):
             return s[: -len(quote)]
@@ -69,6 +71,9 @@ def human_summary(macro: Macro) -> str:
         mode_ko = "격리" if macro.margin_mode == "isolated" else macro.margin_mode
         parts.append(f"{macro.leverage}배 레버리지({mode_ko})")
 
+    if macro.exchange != "binance":
+        from ..exchanges import capabilities
+        parts.insert(0, f"{capabilities(macro.exchange)['label']} · KRW 현물")
     return " · ".join(parts)
 
 

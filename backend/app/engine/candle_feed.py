@@ -12,12 +12,14 @@ import time
 from collections import namedtuple
 from typing import Awaitable, Callable, Dict, List, Optional, Tuple
 
-from ..data.binance import _INTERVAL_MS, get_recent_klines
+from ..data.binance import _INTERVAL_MS
+from ..data import get_recent_klines
+from ..exchanges import normalize_exchange
 
 log = logging.getLogger(__name__)
 
 Candle = namedtuple("Candle", "t o h l c")
-Key = Tuple[str, str, str]  # (symbol, interval, market)
+Key = tuple  # Binance legacy (symbol, interval, market); KRW adds exchange
 Callback = Callable[[str, Candle], Awaitable[None]]
 
 GRACE_SECONDS = float(os.environ.get("CANDLE_GRACE_SECONDS", "2"))
@@ -36,8 +38,13 @@ class Subscription:
         self.since_t = since_t
 
 
-async def _default_fetch(symbol: str, interval: str, limit: int, market: str) -> list[dict]:
-    return await asyncio.to_thread(get_recent_klines, symbol, interval, limit, market=market)
+async def _default_fetch(symbol: str, interval: str, limit: int, market: str, *, exchange="binance") -> list[dict]:
+    kwargs = {} if exchange == "binance" else {"exchange": exchange}
+    return await asyncio.to_thread(get_recent_klines, symbol, interval, limit, market=market, **kwargs)
+
+
+def _unpack(key):
+    return (*key, "binance") if len(key) == 3 else key
 
 
 def _to_candle(row: dict) -> Candle:
@@ -56,7 +63,7 @@ class CandleFeed:
     # -- 구독 -----------------------------------------------------------
     def subscribe(
         self, symbol: str, interval: str, market: str, callback: Callback,
-        *, since_t: Optional[int] = None,
+        *, since_t: Optional[int] = None, exchange: str = "binance",
     ) -> Subscription:
         """새 구독을 등록한다.
 
@@ -68,7 +75,12 @@ class CandleFeed:
         건너뜀 — 다음 마감 시각에서 한 간격을 뺀 자리가 "지금 진행 중인 봉의 open
         time - 1ms" 이므로, 그 봉이 마감되어야 비로소 배달된다).
         """
+        exchange = normalize_exchange(exchange)
+        if exchange != "binance" and market != "spot":
+            raise ValueError("국내 거래소는 현물 캔들만 지원합니다.")
         key: Key = (symbol.upper(), interval, market)
+        if exchange != "binance":
+            key = (*key, exchange)
         sub = Subscription(key, callback, since_t)
         is_new = key not in self._subs  # 이 키의 첫 구독자인지 — _tasks 는 루프가 없으면
         # 영영 채워지지 않을 수 있으므로 "새 키" 판정 기준으로 쓸 수 없다.
@@ -76,7 +88,7 @@ class CandleFeed:
         if is_new:
             self._last_t[key] = (
                 since_t if since_t is not None
-                else self.next_close_ms(interval, self._now_ms()) - _INTERVAL_MS[interval] - 1
+                else self.next_close_ms(interval, self._now_ms(), exchange=exchange) - _INTERVAL_MS[interval] - 1
             )
             # 실행 중인 이벤트 루프가 없으면 백그라운드 폴링 태스크를 얹을 곳이 없다.
             # 숨겨진 헬퍼 루프를 새로 만들어 얹어봤자 아무도 돌리지 않으면 그저 새는
@@ -114,20 +126,29 @@ class CandleFeed:
 
     # -- 시각 -----------------------------------------------------------
     @staticmethod
-    def next_close_ms(interval: str, now_ms: int) -> int:
+    def next_close_ms(interval: str, now_ms: int, *, exchange: str = "binance") -> int:
         step = _INTERVAL_MS[interval]
-        return (now_ms // step + 1) * step
+        offset = 0
+        if exchange != "binance":
+            from ..data.krw import interval_grid_offset
+            offset = interval_grid_offset(exchange, interval)
+        return ((now_ms - offset) // step + 1) * step + offset
 
     # -- 조회 -----------------------------------------------------------
-    async def history(self, symbol: str, interval: str, market: str, n: int) -> List[Candle]:
+    async def history(self, symbol: str, interval: str, market: str, n: int, *, exchange: str = "binance") -> List[Candle]:
         n = max(1, min(int(n), 999))
-        rows = await self._fetch(symbol.upper(), interval, n + 1, market)
+        exchange = normalize_exchange(exchange)
+        if exchange != "binance" and market != "spot":
+            raise ValueError("국내 거래소는 현물 캔들만 지원합니다.")
+        kwargs = {} if exchange == "binance" else {"exchange": exchange}
+        rows = await self._fetch(symbol.upper(), interval, n + 1, market, **kwargs)
         closed = [_to_candle(r) for r in rows if r.get("closed")]
         return closed[-n:]
 
     async def poll_once(self, key: Key) -> List[Candle]:
-        symbol, interval, market = key
-        rows = await self._fetch(symbol, interval, 3, market)
+        symbol, interval, market, exchange = _unpack(key)
+        kwargs = {} if exchange == "binance" else {"exchange": exchange}
+        rows = await self._fetch(symbol, interval, 3, market, **kwargs)
         last = self._last_t.get(key, -1)
         fresh = sorted((_to_candle(r) for r in rows if r.get("closed") and int(r["t"]) > last), key=lambda c: c.t)
         for candle in fresh:
@@ -146,10 +167,10 @@ class CandleFeed:
 
     # -- 루프 -----------------------------------------------------------
     async def _run(self, key: Key) -> None:
-        symbol, interval, market = key
+        symbol, interval, market, exchange = _unpack(key)
         try:
             while key in self._subs:
-                target = self.next_close_ms(interval, self._now_ms()) + int(GRACE_SECONDS * 1000)
+                target = self.next_close_ms(interval, self._now_ms(), exchange=exchange) + int(GRACE_SECONDS * 1000)
                 await self._sleep(max(0.0, (target - self._now_ms()) / 1000.0))
                 deadline = self._now_ms() + int(RETRY_SECONDS * 1000)
                 while key in self._subs:

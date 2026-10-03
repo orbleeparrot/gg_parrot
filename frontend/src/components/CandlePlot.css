@@ -52,3 +52,14 @@
   .candle-chart.is-studio .candle-chart-stage .candle-chart-plot { min-height: 240px; }
   .candle-chart.is-studio .candle-chart-stage .candle-chart-plot:has(.has-rsi) { min-height: 350px; }
 }
+
+/* 직접 만들기 — 시세 출처를 OHLC 바로 뒤, 남는 폭 안에 붙인다. 경고가 붙어 길어져도 줄을 넘기지 않고
+   말줄임(전체 문구는 title) — 줄 수가 바뀌면 차트가 밀려 마우스 아래 십자선이 생긴다. 펼친 내용은 팝오버. */
+.candle-readout-row:has(.candle-source.is-inline) .candle-ohlc { flex: 0 1 auto; }
+.candle-readout-row .candle-source.is-inline { position: relative; flex: 1 1 0; min-width: 6.5em; max-width: max-content; }
+.candle-source.is-inline summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; list-style-position: inside; }
+.candle-source.is-inline > div { position: absolute; right: 0; top: calc(100% + 4px); z-index: 5; width: max-content; max-width: min(420px, 80vw); padding: 8px 10px; border: 1px solid rgb(var(--c-slate-200)); border-radius: 8px; background: rgb(var(--c-surface)); box-shadow: 0 4px 12px rgb(var(--c-slate-900) / .12); white-space: normal; }
+@media (max-width: 639px) {
+  .candle-readout-row:has(.candle-source.is-inline) .candle-ohlc { flex: 1 1 0; }
+  .candle-readout-row .candle-source.is-inline { flex: none; min-width: 0; max-width: 40%; }
+}

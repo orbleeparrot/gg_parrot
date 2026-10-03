@@ -529,7 +529,7 @@ def canonical_asset_symbol(symbol: str) -> str:
 
 def canonical_market_symbol(symbol: str) -> str:
     value = str(symbol or "").strip().upper()
-    return value if re.fullmatch(r"[A-Z0-9]{1,21}", value) else ""
+    return value if re.fullmatch(r"(?:KRW-)?[A-Z0-9]{1,21}", value) else ""
 
 
 def asset_from_market_symbol(symbol: str) -> str:
@@ -537,6 +537,8 @@ def asset_from_market_symbol(symbol: str) -> str:
     value = canonical_market_symbol(symbol)
     if not value:
         return value
+    if value.startswith("KRW-"):
+        return canonical_asset_symbol(value[4:])
     if value in _MARKET_QUOTES:
         return value
     for quote in _MARKET_QUOTES:

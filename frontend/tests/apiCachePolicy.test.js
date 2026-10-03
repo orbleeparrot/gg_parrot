@@ -33,6 +33,21 @@ test("public GETs omit credentials while private API reads and writes remain no-
   }
 });
 
+test("domestic symbol catalogue refreshes revalidate the browser cache without account credentials", async (t) => {
+  accountFixture(t);
+  const requests = [];
+  t.mock.method(globalThis, "fetch", async (path, options) => { requests.push({ path, ...options }); return new Response("{}"); });
+  await api.symbols({ exchange: "upbit" });
+  await api.symbols({ exchange: "bithumb" });
+  for (const request of requests) {
+    assert.equal(request.cache, "no-cache");
+    assert.equal(request.credentials, "omit");
+    assert.equal(request.headers.Authorization, undefined);
+  }
+  assert.ok(requests[0].path.endsWith("exchange=upbit"));
+  assert.ok(requests[1].path.endsWith("exchange=bithumb"));
+});
+
 test("profile edits invalidate cached author names and leaderboard mutations invalidate slash choices", async (t) => {
   accountFixture(t);
   let gets = 0, author = "old";

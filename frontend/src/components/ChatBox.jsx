@@ -132,8 +132,15 @@ function kstClock(now = Date.now()) {
 
 // A member switch remounts transient UI and aborts the previous member's requests.
 // Feed/read state lives outside the route, in a separate cache for each account.
-// 매크로 언급 카드 — 종목 로고·종목·글쓴이·전략 한 줄. 누르면 리더보드의 그 행으로 간다.
+// 매크로 언급 카드 — 종목 로고·종목·글쓴이·전략 한 줄 + 현재 수익률(크게). 누르면 리더보드의 그 행으로 간다.
+function macroReturn(value) {
+  if (value == null || !Number.isFinite(Number(value))) return { text: "집계중", cls: "text-slate-500" };
+  const number = Number(value);
+  return { text: `${number >= 0 ? "+" : ""}${number.toFixed(2)}%`, cls: number >= 0 ? "text-green-600" : "text-red-600" };
+}
+
 function MacroCard({ card, onClose }) {
+  const ret = macroReturn(card.return_pct);
   const goToEntry = () => {
     const row = document.getElementById(`leaderboard-entry-${card.entry_id}`);
     if (!row) {
@@ -156,7 +163,8 @@ function MacroCard({ card, onClose }) {
           <b className="num">{card.symbol}</b>
           <span className="chat-macro-author">{card.is_ai ? "🤖 " : ""}{card.username}</span>
         </span>
-        <span className="chat-macro-summary">{card.locked ? "잠긴 매크로 · 리더보드에서 언락하면 전략이 보여요" : card.human_summary || "전략 설명 없음"}</span>
+        <span className={`chat-macro-return num ${ret.cls}`} aria-label={`현재 수익률 ${ret.text}`}>{ret.text}</span>
+        <span className="chat-macro-summary" title={card.locked ? undefined : card.human_summary || undefined}>{card.locked ? "잠긴 매크로 · 언락하면 전략이 보여요" : card.human_summary || "전략 설명 없음"}</span>
       </span>
     </button>
   );

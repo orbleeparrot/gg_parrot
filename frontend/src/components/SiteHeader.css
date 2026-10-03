@@ -217,6 +217,7 @@
 .ggp-toast:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
 .ggp-toast-icon { display: inline-grid; place-items: center; width: 20px; height: 20px; margin-top: 2px; color: rgb(var(--c-slate-500)); }
 .ggp-toast-icon > svg { width: 20px; height: 20px; }
+.ggp-toast-icon.is-done { color: rgb(var(--c-green-600)); } /* 앱 토스트(AppToast) — 방금 한 일이 끝났다 */
 .ggp-toast-text { display: grid; gap: 2px; min-width: 0; }
 .ggp-toast-meta { display: flex; gap: 6px; color: rgb(var(--c-slate-500)); }
 .ggp-toast-meta > span + span::before { content: "·"; margin-right: 6px; }

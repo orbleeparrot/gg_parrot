@@ -265,7 +265,8 @@ export const api = {
 
   cardUrl: (slug) => `/api/card/${slug}.png`,
   // 거래 가능한 종목 목록(현물 + USDT-M 선물) — 조건 판의 종목 검색은 이 안에서만 고른다.
-  symbols: (options = {}) => req("/api/symbols", { timeoutMs: 25_000, ...options }),
+  symbols: ({ exchange = "binance", ...options } = {}) =>
+    req(`/api/symbols?exchange=${encodeURIComponent(exchange)}`, { timeoutMs: 25_000, cache: exchange === "binance" ? "default" : "no-cache", ...options }),
   coinLogoUrl: (base) => `/api/coin-logo/${encodeURIComponent(base)}.png`,
 
   // kimchi premium (reference indicator; upbit vs binance×USDKRW)
@@ -319,19 +320,24 @@ export const api = {
   boardVote: (id, value) => boardMutation(req(`/api/board/posts/${id}/vote`, { method: "POST", body: JSON.stringify({ value }) })),
   boardGet: (id, options = {}) => req(`/api/board/posts/${id}`, options).then(post => { boardLists.updatePost(post); return post; }),
   // 글 작성(로그인 필요) — title/body + 선택 이미지(File). multipart 전송.
-  boardCreate: ({ title, body, bodyFormat = "text", images = [] }) => {
+  devnoteCurrent: (options = {}) => req("/api/devnote/current", { timeoutMs: 8000, ...options }),
+  boardCreate: ({ title, body, bodyFormat = "text", images = [], isNotice = false, applyDevnote = false }) => {
     const fd = new FormData();
     fd.append("title", title);
     fd.append("body", body || "");
     fd.append("body_format", bodyFormat);
+    if (isNotice) fd.append("is_notice", "true");
+    if (isNotice && applyDevnote) fd.append("apply_devnote", "true");
     for (const file of images) fd.append("images", file);
     return boardMutation(reqForm("/api/board/posts", fd));
   },
-  boardUpdate: (id, { title, body, bodyFormat = "text", keepImageIds = [], images = [] }) => {
+  boardUpdate: (id, { title, body, bodyFormat = "text", keepImageIds = [], images = [], isNotice, applyDevnote = false }) => {
     const fd = new FormData();
     fd.append("title", title);
     fd.append("body", body || "");
     fd.append("body_format", bodyFormat);
+    if (typeof isNotice === "boolean") fd.append("is_notice", isNotice ? "true" : "false");
+    if (isNotice && applyDevnote) fd.append("apply_devnote", "true");
     fd.append("keep_image_ids", keepImageIds.join(","));
     for (const file of images) fd.append("images", file);
     return boardMutation(reqForm(`/api/board/posts/${id}`, fd, { method: "PUT" }));
@@ -357,22 +363,22 @@ export const api = {
   whaleActivity: () => req("/api/whale-activity"),
 
   // 실시간 봉차트용 최근 캔들 (서버 캐시; 마지막 봉은 진행 중이라 closed=false)
-  candles: (symbol, interval, limit, market = "spot") =>
+  candles: (symbol, interval, limit, market = "spot", exchange = "binance") =>
     req(
       `/api/candles?symbol=${encodeURIComponent(symbol)}` +
         `&interval=${encodeURIComponent(interval || "1m")}&limit=${limit || 120}` +
-        `&market=${encodeURIComponent(market === "futures" ? "futures" : "spot")}`
+        `&market=${encodeURIComponent(market === "futures" ? "futures" : "spot")}&exchange=${encodeURIComponent(exchange)}`
     ),
-  liveCandles: (symbol, interval, market = "spot") =>
+  liveCandles: (symbol, interval, market = "spot", exchange = "binance") =>
     req(
       `/api/candles/live?symbol=${encodeURIComponent(symbol)}` +
         `&interval=${encodeURIComponent(interval || "1m")}` +
-        `&market=${encodeURIComponent(market === "futures" ? "futures" : "spot")}`
+        `&market=${encodeURIComponent(market === "futures" ? "futures" : "spot")}&exchange=${encodeURIComponent(exchange)}`
     ),
 
   // 리더보드 보유 중 행의 미실현 수익률용 공개 일괄 시세 (최대 30종목, 2s 캐시)
-  prices: (symbols, options = {}) =>
-    req(`/api/prices?symbols=${encodeURIComponent(symbols.join(","))}`, { timeoutMs: 8_000, ...options }),
+  prices: (symbols, { exchange = "binance", ...options } = {}) =>
+    req(`/api/prices?symbols=${encodeURIComponent(symbols.join(","))}&exchange=${encodeURIComponent(exchange)}`, { timeoutMs: 8_000, ...options }),
 
   // 오늘의 리더보드 (daily KST paper-return board)
   leaderboard: (userId, options = {}) => {
@@ -481,6 +487,8 @@ export const api = {
     }),
   // mode: "stop_only"(매크로만) | "close_and_stop"(청산 후 종료)
   // 응답이 끊겼거나 이미 끝난 세션만 지울 수 있다(살아 있는 실행은 409).
+  runnerPinSession: (sessionId, pinned) =>
+    req(`/api/me/runner/sessions/${sessionId}/pin`, { method: "PUT", body: JSON.stringify({ pinned: !!pinned }) }),
   runnerDeleteSession: (sessionId) =>
     req(`/api/me/runner/sessions/${sessionId}`, { method: "DELETE" }),
   runnerRequestStop: (sessionId, mode) =>

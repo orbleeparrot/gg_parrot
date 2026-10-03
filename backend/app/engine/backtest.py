@@ -294,9 +294,10 @@ def _run_dca(macro: Macro, df: pd.DataFrame) -> BacktestResult:
     # Plan the buys up front so the return base matches the original engine,
     # then drive the shared DcaSim (same machine paper uses).
     num_buys = (n - 1) // interval + 1 if n > 0 else 0
-    initial_capital = max(num_buys * amount_per_buy, 1e-9)
+    initial_capital = float(macro.params.get("initial_capital") or max(num_buys * amount_per_buy, 1e-9))
 
-    sim = DcaSim(macro, initial_capital=initial_capital, max_buys=num_buys)
+    sim = DcaSim(macro, initial_capital=initial_capital,
+                 max_buys=None if macro.exchange != "binance" else num_buys)
     equity_curve: List[EquityPoint] = []
     for i in range(n):
         c = closes[i]
@@ -313,7 +314,7 @@ def _run_dca(macro: Macro, df: pd.DataFrame) -> BacktestResult:
     return _metrics(
         equity_curve,
         closed_trades=[],
-        total_trades=num_buys,
+        total_trades=sim.buys_done if macro.initial_capital is not None else num_buys,
         initial_capital=initial_capital,
         win_rate_override=win_rate,
         buy_hold_return_pct=_buy_hold_return_pct(closes),

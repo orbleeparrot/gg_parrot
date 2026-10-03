@@ -3,7 +3,9 @@
 Only public projections belong here. Each caller chooses its acceptable stale
 age; trading execution deliberately opts out of stale prices. Loader results
 are published inside the flight, so even the first stale reader returns without
-waiting and a late response after clear() cannot repopulate an invalidated cache.
+waiting by default. Callers needing a freshly verified live edge can instead
+wait for that shared refresh, keeping old values only as bounded failure fallback.
+A late response after clear() cannot repopulate an invalidated cache.
 """
 from __future__ import annotations
 
@@ -143,7 +145,14 @@ class ResponseCache:
                 "in_flight": len(self._flights), "max_entries": self.max_entries,
                 "max_bytes": self.max_bytes}
 
-    def get_or_load(self, key, loader, *, ttl, stale_ttl=0, now=None):
+    def get_or_load(self, key, loader, *, ttl, stale_ttl=0, now=None, wait_for_refresh=False):
+        """Return a fresh value or an explicitly bounded stale fallback.
+
+        The default remains stale-while-revalidate. ``wait_for_refresh`` joins
+        or leads the same single flight but waits for successful refresh, so a
+        routine refresh is not labelled stale. Failures and their cooldown can
+        still use the last good entry, never past its original hard age limit.
+        """
         stamp = self.clock() if now is None else now
         with self._lock:
             self._purge(stamp)
@@ -165,7 +174,7 @@ class ResponseCache:
                     return deepcopy(entry.value), "stale"
                 future = Future()
                 self._flights[key] = future
-            if entry is not None:
+            if entry is not None and (not wait_for_refresh or deferred):
                 self._counts["stale"] += 1
                 if deferred:
                     self._counts["cooldown"] += 1
@@ -185,7 +194,24 @@ class ResponseCache:
                 generation = self._generation
         if leader:
             self._load(key, loader, future, generation, ttl, stale_ttl, now)
-        return deepcopy(future.result()), "loaded" if leader else "shared"
+        try:
+            value = future.result()
+        except Exception:
+            if wait_for_refresh:
+                # The upstream read may have taken long enough to outlive the
+                # old entry, or another caller may have invalidated it. Re-read
+                # the current cache instead of returning our captured entry.
+                with self._lock:
+                    completed_at = self.clock() if now is None else now
+                    self._purge(completed_at)
+                    fallback = self._entries.get(key)
+                    if fallback is not None:
+                        self._entries.move_to_end(key)
+                        state = "cached" if fallback.expires > completed_at else "stale"
+                        self._counts["hit" if state == "cached" else "stale"] += 1
+                        return deepcopy(fallback.value), state
+            raise
+        return deepcopy(value), "loaded" if leader else "shared"
 
     def _load(self, key, loader, future, generation, ttl, stale_ttl, now):
         try:

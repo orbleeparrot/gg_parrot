@@ -1,5 +1,6 @@
 import { cloneElement, createContext, isValidElement, useContext, useEffect, useId, useRef, useState } from "react";
 import { RULE_TYPES, PERIOD_PRESETS, CANDLE_INTERVALS, MAX_LEVERAGE, withTypeDefaults } from "../lib/macro.js";
+import { EXCHANGES, isDomestic, normalizeExchange, quoteForExchange } from "../lib/exchanges.js";
 import InfoTooltip from "./InfoTooltip.jsx";
 import { api } from "../api.js";
 import { quoteOf, baseOf, fmtKrw } from "../lib/format.js";
@@ -8,6 +9,7 @@ import { useUsdKrw } from "../lib/usdkrw.js";
 import CoinIcon from "./CoinIcon.jsx";
 import "./Builder.css";
 import { useSymbolList } from "../hooks/useSymbolList.js";
+import { useExchangeSwitch } from "../hooks/useExchangeSwitch.js";
 import { searchSymbols, resolveSymbol, marketTags } from "../lib/symbolSearch.js";
 import { Icon } from "./icons.jsx";
 
@@ -17,6 +19,7 @@ const DenseContext = createContext(false);
 // USDT amount plus an approximate KRW reference (when a rate is available).
 const money = (v, symbol, rate) => {
   const usdt = `${Number(v || 0).toLocaleString("en-US")} ${quoteOf(symbol)}`;
+  if (quoteOf(symbol) === "KRW") return usdt;
   const krw = rate ? fmtKrw(v, rate) : "";
   return krw ? `${usdt} · ${krw}` : usdt;
 };
@@ -141,13 +144,14 @@ const inputCls = "field";
 // 종목 고르기 — 위는 검색창, 아래는 고른 종목의 행 목록(로고 · 티커 · 시장 · 비중 · 빼기). 실제 거래 가능한 종목(/api/symbols)만 들어간다.
 // 글자를 치면 관련 종목이 검색창 아래 목록으로 뜨고 Enter·클릭으로 고른다. `CHIP` 처럼 base 만 쳐도 CHIPUSDT 로 맞춘다.
 const MAX_SYMBOLS = 5;
-function SymbolPicker({ value, onChange }) {
+function SymbolPicker({ value, onChange, exchange = "binance" }) {
   const [draft, setDraft] = useState("");
   const [open, setOpen] = useState(false);
   const [cursor, setCursor] = useState(0);
   const [note, setNote] = useState("");
-  const { items, loading, error, reload } = useSymbolList();
+  const { items, loading, error, reload, stale, canChoose } = useSymbolList(exchange);
   const rootRef = useRef(null);
+  const blurTimer = useRef(null);
   const listId = useId().replace(/:/g, "");
   const symbols = String(value || "").split(",").map((part) => part.trim().toUpperCase()).filter(Boolean);
   const query = draft.trim();
@@ -161,6 +165,7 @@ function SymbolPicker({ value, onChange }) {
     if (!symbol) return;
     if (symbols.includes(symbol)) { setDraft(""); setNote(""); return; }
     if (full) { setNote(`종목은 최대 ${MAX_SYMBOLS}개까지예요.`); return; }
+    if (!canChoose(symbol)) { setNote("종목 목록이 변경되었거나 오래되었어요. 다시 확인한 뒤 선택해 주세요."); reload(); return; }
     onChange([...symbols, symbol].join(", "));
     setDraft(""); setNote(""); setCursor(0);
   };
@@ -174,6 +179,7 @@ function SymbolPicker({ value, onChange }) {
   const remove = (symbol) => { onChange(symbols.filter((item) => item !== symbol).join(", ")); setNote(""); };
 
   useEffect(() => { setCursor(0); }, [query]);
+  useEffect(() => () => window.clearTimeout(blurTimer.current), []);
   useEffect(() => {
     if (!open) return undefined;
     const onDown = (event) => { if (!rootRef.current?.contains(event.target)) setOpen(false); };
@@ -183,6 +189,7 @@ function SymbolPicker({ value, onChange }) {
 
   return (
     <div className="bd-symbols" ref={rootRef}>
+      {items && stale && <div className="bd-suggest-note" role="status">마지막 확인한 종목 목록이에요. 새 상장·거래 종료가 아직 반영되지 않았을 수 있어요. <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={reload}>다시 확인</button></div>}
       <div className={"bd-search" + (full ? " is-full" : "")}>
         <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="9" cy="9" r="5.5" /><path d="M13.5 13.5 17 17" /></svg>
         <input
@@ -198,7 +205,7 @@ function SymbolPicker({ value, onChange }) {
           spellCheck={false}
           disabled={full}
           onChange={(event) => { setDraft(event.target.value); setOpen(true); setNote(""); }}
-          onFocus={() => setOpen(true)}
+          onFocus={() => { window.clearTimeout(blurTimer.current); setOpen(true); }}
           onKeyDown={(event) => {
             if (event.key === "ArrowDown") { event.preventDefault(); setOpen(true); setCursor((c) => Math.min(c + 1, Math.max(0, matches.length - 1))); }
             else if (event.key === "ArrowUp") { event.preventDefault(); setCursor((c) => Math.max(0, c - 1)); }
@@ -207,7 +214,9 @@ function SymbolPicker({ value, onChange }) {
           }}
           onBlur={() => {
             // 목록의 클릭이 먼저 먹도록 잠깐 뒤에 닫는다. 글자가 종목과 정확히 맞으면 그때 넣는다.
-            window.setTimeout(() => {
+            window.clearTimeout(blurTimer.current);
+            blurTimer.current = window.setTimeout(() => {
+              blurTimer.current = null;
               setOpen(false);
               if (items && query && resolveSymbol(items, query)) add(resolveSymbol(items, query));
             }, 120);
@@ -226,6 +235,7 @@ function SymbolPicker({ value, onChange }) {
                 key={item.symbol}
                 id={`${listId}-${item.symbol}`}
                 role="option"
+                aria-label={item.symbol}
                 aria-selected={index === cursor}
                 className={"bd-suggest-item" + (index === cursor ? " is-on" : "")}
                 onMouseDown={(event) => event.preventDefault()}
@@ -286,6 +296,13 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
   const rt = form.rule_type;
   const meta = RULE_TYPES[rt];
   const isShort = form.position_side === "short";
+  const exchange = normalizeExchange(form.exchange);
+  const domestic = isDomestic(exchange);
+  const allowShort = meta.allowShort && !domestic;
+  const quote = quoteForExchange(exchange);
+  const moneySymbol = form.symbol || (domestic ? "KRW-BTC" : "BTCUSDT");
+  // 거래소를 바꿀 때 종목 유지·비움 안내는 화면에 띄우지 않는다(2026-10-02) — 종목 칸이 그대로 보여 준다.
+  const { switchExchange } = useExchangeSwitch(form, setForm);
   const { rate: krwRate } = useUsdKrw();
   const [fundingBusy, setFundingBusy] = useState(false);
   const [fundingMsg, setFundingMsg] = useState("");
@@ -296,7 +313,7 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
     try {
       const d = await api.fundingRate(form.symbol.toUpperCase(), form.preset, form.start, form.end);
       if (d.available && d.avg_daily_funding_pct != null) {
-        setForm((f) => ({ ...f, funding_pct: d.avg_daily_funding_pct }));
+        setForm((f) => normalizeExchange(f.exchange) === exchange ? ({ ...f, funding_pct: d.avg_daily_funding_pct }) : f);
         setFundingMsg(`실제 평균 펀딩비 적용: 일 ${d.avg_daily_funding_pct}%`);
       } else {
         setFundingMsg("이 종목은 선물 펀딩 데이터가 없어요 (현물 전용일 수 있음).");
@@ -360,8 +377,8 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
     ) : (
       input
     );
-  const cap = num("initial_capital", `시작 자금 (${quoteOf(form.symbol)})`, {
-    hint: money(form.initial_capital, form.symbol, krwRate),
+  const cap = num("initial_capital", `시작 자금 (${quote})`, {
+    hint: money(form.initial_capital, moneySymbol, krwRate),
   });
 
   // 차트를 정하는 값들 — 종목·매매 방식·포지션·봉 간격·기간. 차트 섹션 안으로
@@ -370,17 +387,37 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
     // 촘촘한 판은 도움말 문장 대신 라벨 옆 ⓘ 하나(용어 'symbols').
     <Field label="종목" anchor="symbol" term={dense ? "symbols" : undefined} hint={dense ? undefined : "여러 종목은 쉼표로 나눠 써요. 자금을 종목 수만큼 균등하게 나눠 종목마다 따로 돌리고, 결과는 총합이에요."}>
       {dense ? (
-        <SymbolPicker value={form.symbol} onChange={(value) => setForm({ ...form, symbol: value })} />
+        <SymbolPicker key={exchange} exchange={exchange} value={form.symbol} onChange={(value) => setForm((current) => normalizeExchange(current.exchange) === exchange ? { ...current, symbol: value } : current)} />
       ) : (
-        <input className={inputCls} value={form.symbol} onChange={set("symbol")} placeholder="BTCUSDT 또는 BTCUSDT, ETHUSDT" />
+        <input className={inputCls} value={form.symbol} onChange={set("symbol")} placeholder={domestic ? "KRW-BTC 또는 KRW-BTC, KRW-ETH" : "BTCUSDT 또는 BTCUSDT, ETHUSDT"} />
       )}
+    </Field>
+  );
+  const exchangeField = (
+    // 세 거래소를 포지션처럼 한 줄 segmented 로 — 드롭다운보다 한 번에 읽힌다(2026-10-02).
+    <Field name="exchange" error={errOf("exchange")} label="거래소" anchor="exchange">
+      <div className={"seg bd-seg bd-seg-exchange" + (dense ? "" : " w-full")} role="group" aria-label="거래소">
+        {EXCHANGES.map((item) => (
+          <button
+            key={item.value}
+            type="button"
+            onClick={() => { if (item.value !== exchange) switchExchange(item.value); }}
+            aria-pressed={item.value === exchange}
+            title={`${item.label} · ${item.quote}`}
+            className={"seg-item " + (item.value === exchange ? "seg-item-on" : "")}
+          >
+            <img className="bd-exchange-logo" src={`/exchanges/${item.value}.${item.value === "binance" ? "svg" : "png"}`} width="16" height="16" alt="" aria-hidden="true" draggable="false" />
+            {item.label}
+          </button>
+        ))}
+      </div>
     </Field>
   );
   const strategyField = (
     <Field label="매매 방식" anchor="strategy" term={`strat_${rt}`}>
       <select className={inputCls} value={rt} onChange={(e) => setForm(withTypeDefaults(form, e.target.value))}>
         {Object.entries(RULE_TYPES).map(([k, v]) => (
-          <option key={k} value={k}>{v.label}</option>
+          <option key={k} value={k} disabled={domestic && k === "K"}>{v.label}{domestic && k === "K" ? " · 국내 현물 불가" : ""}</option>
         ))}
       </select>
     </Field>
@@ -399,8 +436,8 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
         <button
           type="button"
           onClick={() => setForm({ ...form, position_side: "short" })}
-          disabled={!meta.allowShort}
-          title={!meta.allowShort ? "이 매매 방식은 숏을 지원하지 않아요" : undefined}
+          disabled={!allowShort}
+          title={!allowShort ? (domestic ? "국내 원화 현물에서는 숏을 사용할 수 없어요" : "이 매매 방식은 숏을 지원하지 않아요") : undefined}
           aria-pressed={isShort}
           className={"seg-item " + (isShort ? "seg-item-on" : "")}
         >
@@ -410,13 +447,14 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
     </Field>
   ) : (
     <Field name="position_side" error={errOf("position_side")} label="포지션" anchor="position" hint={positionHint}>
-      <select className={fieldCls("position_side", inputCls)} value={form.position_side} onChange={set("position_side")} disabled={!meta.allowShort}>
+      <select className={fieldCls("position_side", inputCls)} value={form.position_side} onChange={set("position_side")} disabled={!allowShort}>
         <option value="long">롱 (long)</option>
-        <option value="short" disabled={!meta.allowShort}>숏 (short)</option>
+        <option value="short" disabled={!allowShort}>숏 (short)</option>
       </select>
     </Field>
   );
-  const intervalField = sel("candle_interval", "봉 간격", intervalOptions || CANDLE_INTERVALS, {
+  const intervalChoices = (intervalOptions || CANDLE_INTERVALS).map((item) => domestic && rt === "C" && item.value !== "1d" ? { ...item, disabled: true, title: "국내 정기 분할매수는 일봉으로만 확인해요" } : item);
+  const intervalField = sel("candle_interval", "봉 간격", intervalChoices, {
     term: "candle_interval",
     anchor: "interval",
     hint: meta.indicator ? "지표 계산 기준(필수)" : "체결 판정 기준",
@@ -441,16 +479,24 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
     </div>
   );
 
+  // 국내(원화) 거래소 제약 — 거래소 고르기 바로 아래 노란 경고 글씨(거래소가 정한 제약이라서).
+  const domesticWarning = domestic
+    ? <p className="bd-domestic-warning t-caption text-amber-700" role="note">원화 현물 전용 · 숏·레버리지·선물은 사용할 수 없어요.</p>
+    : null;
+
   // 차트를 정하는 값들 — 종목·매매 방식·포지션·봉 간격·기간. 차트 섹션 안으로
   // 들어가 "무엇을 볼지 정하고 바로 아래에서 본다"가 한 덩어리로 읽힌다.
   const basicSettings = dense ? (
     <section className="bd-sec">
+      <div className="bd-grid">{exchangeField}</div>
+      {domesticWarning}
       <div className="bd-grid">{symbolField}{strategyField}</div>
       <div className="bd-grid">{positionField}{intervalField}{periodField}</div>
       {customRange}
     </section>
   ) : (
     <div className="space-y-5">
+      <div className="space-y-2">{exchangeField}{domesticWarning}</div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 gap-y-5">{symbolField}{strategyField}</div>
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">{positionField}{intervalField}{periodField}</div>
       {customRange}
@@ -474,25 +520,26 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
         )}
         {rt === "B" && (
           <div className={g3}>
-            {num("buy_price", `살 가격 (${quoteOf(form.symbol)})`, { term: "limit_order", hint: isShort ? "숏을 되사서 정리할 가격이에요" : undefined })}
-            {num("sell_price", `팔 가격 (${quoteOf(form.symbol)})`, { term: "limit_order", hint: isShort ? "팔아서 숏에 들어갈 가격이에요" : undefined })}
+            {num("buy_price", `살 가격 (${quote})`, { term: "limit_order", hint: isShort ? "숏을 되사서 정리할 가격이에요" : undefined })}
+            {num("sell_price", `팔 가격 (${quote})`, { term: "limit_order", hint: isShort ? "팔아서 숏에 들어갈 가격이에요" : undefined })}
             {cap}
           </div>
         )}
         {rt === "C" && (
           <div className={g2}>
-            {num("amount_per_buy", `한 번에 살 금액 (${quoteOf(form.symbol)})`, { term: "dca", hint: money(form.amount_per_buy, form.symbol, krwRate) })}
+            {cap}
+            {num("amount_per_buy", `한 번에 살 금액 (${quote})`, { term: "dca", hint: money(form.amount_per_buy, moneySymbol, krwRate) })}
             {num("interval_days", "매수 간격 (일)", { term: "dca" })}
           </div>
         )}
 
         {rt === "D" && (
           <div className={g2}>
-            {num("lower_price", `가격 범위 하단 (${quoteOf(form.symbol)})`, { term: "grid" })}
-            {num("upper_price", `가격 범위 상단 (${quoteOf(form.symbol)})`, { term: "grid" })}
+            {num("lower_price", `가격 범위 하단 (${quote})`, { term: "grid" })}
+            {num("upper_price", `가격 범위 상단 (${quote})`, { term: "grid" })}
             {num("grid_count", "나눌 칸 수", { term: "grid_count", step: "1" })}
             {sel("grid_mode", "칸 간격", [{ value: "arithmetic", label: "같은 금액 간격" }, { value: "geometric", label: "같은 비율 간격" }], { term: "grid_mode" })}
-            {num("per_grid_invest", `격자당 투입액 (빈칸=균등, ${quoteOf(form.symbol)})`, { denseLabel: "격자당 투입액", unit: quoteOf(form.symbol), hint: "비우면 예산을 격자 수로 균등 분배", wide: true })}
+            {num("per_grid_invest", `격자당 투입액 (빈칸=균등, ${quote})`, { denseLabel: "격자당 투입액", unit: quote, hint: "비우면 예산을 격자 수로 균등 분배", wide: true })}
             {sel("band_exit_action", "가격 범위를 벗어나면", [{ value: "stop", label: "전량 정리하고 중단" }, { value: "hold", label: "보유 유지" }], { wide: true })}
             <div className={g2full}>
               {chk("rebalance_on_start", "시작 가격에 맞춰 칸 다시 배치")}
@@ -550,8 +597,8 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
 
         {rt === "H" && (
           <div className={g2}>
-            {num("base_order_size", `처음 살 금액 (${quoteOf(form.symbol)})`, { term: "martingale" })}
-            {num("safety_order_size", `첫 추가매수 금액 (${quoteOf(form.symbol)})`, { term: "safety_order" })}
+            {num("base_order_size", `처음 살 금액 (${quote})`, { term: "martingale" })}
+            {num("safety_order_size", `첫 추가매수 금액 (${quote})`, { term: "safety_order" })}
             {num("price_deviation", "추가매수할 하락 간격 (%)", { hint: "가격이 이만큼 더 내릴 때마다 추가로 사요" })}
             {num("max_safety_orders", "최대 추가매수 횟수", { step: "1" })}
             {num("safety_order_step_scale", "하락 간격 배율")}
@@ -672,15 +719,15 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
       {/* fees */}
       <details className={dense ? "bd-sec bd-details" : "pt-5 border-t border-slate-200"} data-tour="fees">
         <summary className={dense ? "bd-sum" : "t-label text-slate-700 cursor-pointer"}>
-          거래 비용과 펀딩비
+          {domestic ? "거래 비용" : "거래 비용과 펀딩비"}
           {dense && <small className="num">수수료 {form.commission_pct}% · 슬리피지 {form.slippage_pct}%</small>}
         </summary>
         <div className={g3m}>
           {num("commission_pct", "거래 수수료 (%)", { term: "commission", step: "0.01" })}
           {num("slippage_pct", "체결 가격 차이 (%)", { term: "slippage", step: "0.01" })}
-          {num("funding_pct", dense ? "하루 펀딩비 · 숏" : "하루 펀딩비 (숏, %)", { step: "0.01", unit: dense ? "%" : undefined })}
+          {!domestic && num("funding_pct", dense ? "하루 펀딩비 · 숏" : "하루 펀딩비 (숏, %)", { step: "0.01", unit: dense ? "%" : undefined })}
         </div>
-        <div className="mt-3 flex items-center gap-2 flex-wrap">
+        {!domestic && <div className="mt-3 flex items-center gap-2 flex-wrap">
           <button
             type="button"
             onClick={loadFunding}
@@ -692,11 +739,11 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
           <span className="t-caption text-slate-500">
             {fundingMsg || "선물 시장의 실제 평균 펀딩비(일)를 이 기간 기준으로 가져와 채워요."}
           </span>
-        </div>
+        </div>}
       </details>
 
       {/* leverage — a macro condition (backtest/paper only; C is excluded) */}
-      {rt !== "C" && (() => {
+      {!domestic && rt !== "C" && (() => {
         const lev = Math.max(1, Math.round(Number(form.leverage) || 1));
         const risk = leverageRisk(lev);
         return (

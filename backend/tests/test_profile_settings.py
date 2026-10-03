@@ -144,7 +144,9 @@ def test_withdrawal_requires_confirmation_and_password_and_preserves_other_membe
         for model in (RunSession, RunSessionEvent, DailyQuestClaim):
             assert db.exec(select(model).where(model.user_id == uid)).first() is None
             assert db.exec(select(model).where(model.user_id == other["user"]["id"])).first() is not None
-        assert len(db.exec(select(MacroUnlock).where(MacroUnlock.entry_id == post["id"])).all()) == 2
+        # 다른 테스트가 같은 번호로 남긴 언락이 섞이지 않게 이 테스트의 두 회원 것만 센다.
+        assert len(db.exec(select(MacroUnlock).where(
+            MacroUnlock.entry_id == post["id"], MacroUnlock.user_id.in_([uid, other["user"]["id"]]))).all()) == 2
         assert db.exec(select(PointLedger).where(PointLedger.user_id == uid, PointLedger.reason == "account_closed")).first() is not None
     assert client.get("/api/auth/me", headers=headers(other)).status_code == 200
 

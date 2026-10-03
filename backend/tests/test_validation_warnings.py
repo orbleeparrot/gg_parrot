@@ -3,6 +3,8 @@
 경고가 헛돌면 사용자가 무시하게 되고 기능이 죽는다. 떠야 할 때 뜨고
 안 떠야 할 때 안 뜨는 것을 골든 케이스로 고정한다.
 """
+from datetime import datetime, timedelta
+
 from app.engine.backtest import EquityPoint
 from app.engine import validation
 
@@ -38,15 +40,33 @@ FOUR_DAY_STRADDLE = curve([
 ])
 
 
-def three_months(march_day, first_gain):
-    """1/25 ~ 3/march_day 의 세 달 곡선. 총 증가 100 중 1월이 first_gain 을 번다."""
-    rest = 100.0 - first_gain
-    return curve([
-        ("2026-01-25T00:00:00Z", 100.0),
-        ("2026-01-31T00:00:00Z", 100.0 + first_gain),
-        ("2026-02-28T00:00:00Z", 100.0 + first_gain + rest / 2),
-        (f"2026-03-{march_day:02d}T00:00:00Z", 200.0),
-    ])
+def dense(start, days, gain_on):
+    """하루 한 점씩 찍은 촘촘한 곡선 — 엔진이 캔들마다 한 점을 내는 모양이다.
+
+    start 날짜에서 100 으로 출발해, 하루 지날 때마다 gain_on(그날 날짜) 만큼 늘어난다.
+    """
+    equity, points = 100.0, []
+    for offset in range(days + 1):
+        day = start + timedelta(days=offset)
+        if offset:
+            equity += gain_on(day)
+        points.append((day.strftime("%Y-%m-%dT00:00:00Z"), equity))
+    return curve(points)
+
+
+def by_month(start, days, totals):
+    """달별 총 증가분(totals: {월: 금액})을 그 달의 날들에 고르게 나눈 촘촘한 곡선."""
+    steps = {}
+    for offset in range(1, days + 1):
+        month = (start + timedelta(days=offset)).month
+        steps[month] = steps.get(month, 0) + 1
+    return dense(start, days, lambda day: totals.get(day.month, 0.0) / steps[day.month])
+
+
+def warn(c):
+    """거래는 충분하고 나머지 입력은 건강한 상태에서 곡선만 바꿔 본다."""
+    return validation.warnings(curve=c, total_trades=120,
+                               window_returns=[9.0, 11.0], top_trade_share_pct=14.0)
 
 
 def test_an_overfit_curve_raises_every_warning():
@@ -115,33 +135,66 @@ def test_a_four_day_backtest_across_a_month_end_is_not_concentration():
                                window_returns=[9.0, 11.0], top_trade_share_pct=14.0) == []
 
 
-def test_three_calendar_months_inside_the_span_floor_do_not_fire():
-    """세 달에 걸쳐도 45일 미만이면 세지 않는다(1/25 ~ 3/10 = 44일)."""
-    short = three_months(10, first_gain=80.0)
-    assert validation.concentration(short)["months"] == 3
-    assert validation.concentration(short)["top_month_share_pct"] >= 70.0
-    assert validation.warnings(curve=short, total_trades=120,
-                               window_returns=[9.0, 11.0], top_trade_share_pct=14.0) == []
+def test_a_dense_growth_slowdown_is_not_concentration():
+    """성장이 둔해진 것뿐인 60일 곡선 — 과최적화가 아니다. 이 라운드의 회귀 시험.
+
+    1/31 에서 출발해 28일은 하루 +1, 이후는 하루 +0.35. 가장자리 달(1월 · 4월)은
+    번 돈이 거의 없어 실질 구간이 둘뿐이고, 몫이 70% 를 넘는다. 45일 하한이면 켜졌다.
+    """
+    start = datetime(2026, 1, 31)
+    slowdown = dense(start, 60, lambda day: 1.0 if (day - start).days <= 28 else 0.35)
+    spread = validation.concentration(slowdown)
+    # 선행 조건: 45일 하한으로는 막지 못하는 모양이어야 이 시험이 의미가 있다.
+    assert spread["months"] >= validation.MIN_MONTHS_FOR_CONCENTRATION
+    assert spread["top_month_share_pct"] >= validation.TOP_MONTH_SHARE_LIMIT
+    assert validation._span_days(slowdown) >= 45.0
+    assert warn(slowdown) == []
 
 
-def test_span_floor_is_inclusive_at_45_days():
-    """1/25 ~ 3/11 = 정확히 45일 — 이때부터 센다."""
-    edge = three_months(11, first_gain=80.0)
-    assert validation.warnings(curve=edge, total_trades=120,
-                               window_returns=[9.0, 11.0], top_trade_share_pct=14.0) \
-        == ["한_구간_집중"]
+def test_a_dense_curve_with_one_month_holding_the_gain_still_fires():
+    """하한을 90일로 올려도 규칙이 죽지 않는다 — 120일 중 2월 한 달만 번 곡선."""
+    spike = by_month(datetime(2026, 1, 1), 120, {2: 100.0})
+    assert validation.concentration(spike)["top_month_share_pct"] == 100.0
+    assert warn(spike) == ["한_구간_집중"]
+
+
+def test_a_dense_constant_growth_curve_is_not_concentration():
+    """매일 같은 만큼 느는 120일 곡선은 달마다 번 돈이 고르다."""
+    steady = dense(datetime(2026, 1, 1), 120, lambda day: 1.0)
+    assert validation.concentration(steady)["top_month_share_pct"] < 40.0
+    assert warn(steady) == []
+
+
+def test_span_floor_is_inclusive_at_90_days():
+    """1/1 ~ 4/1 = 정확히 90일부터 센다. 하루 모자란 3/31 까지는 안 센다."""
+    totals = {2: 100.0}
+    just_under = by_month(datetime(2026, 1, 1), 89, totals)
+    exactly = by_month(datetime(2026, 1, 1), 90, totals)
+    assert validation.concentration(just_under)["months"] >= 3
+    assert validation._span_days(just_under) == 89.0
+    assert validation._span_days(exactly) == 90.0
+    assert warn(just_under) == []
+    assert warn(exactly) == ["한_구간_집중"]
 
 
 def test_month_share_limit_is_pinned_at_the_boundary():
     """몫 70.0 은 켜지고(이상), 71.0 도 켜지고, 69.0 은 안 켜진다."""
-    def run(first_gain):
-        return validation.warnings(curve=three_months(31, first_gain=first_gain),
-                                   total_trades=120, window_returns=[9.0, 11.0],
-                                   top_trade_share_pct=14.0)
-    assert validation.concentration(three_months(31, 70.0))["top_month_share_pct"] == 70.0
-    assert run(71.0) == ["한_구간_집중"]
-    assert run(70.0) == ["한_구간_집중"]
-    assert run(69.0) == []
+    def spread(first_gain):
+        rest = (100.0 - first_gain) / 2
+        return by_month(datetime(2026, 1, 1), 120, {1: first_gain, 2: rest, 3: rest})
+    assert validation.concentration(spread(70.0))["top_month_share_pct"] == 70.0
+    assert warn(spread(71.0)) == ["한_구간_집중"]
+    assert warn(spread(70.0)) == ["한_구간_집중"]
+    assert warn(spread(69.0)) == []
+
+
+def test_a_curve_with_mixed_timestamp_styles_is_not_measured_not_a_crash():
+    """시각 표기가 섞여(Z 있음 · 없음) 기간을 못 재면 집중 규칙은 켜지 않는다."""
+    mixed = curve([
+        ("2026-01-01T00:00:00", 100.0), ("2026-01-31T00:00:00Z", 280.0),
+        ("2026-02-28T00:00:00Z", 285.0), ("2026-04-30T00:00:00Z", 290.0),
+    ])
+    assert warn(mixed) == []
 
 
 def test_trade_count_limit_is_pinned_at_the_boundary():
@@ -183,3 +236,6 @@ def test_an_unmeasured_last_window_is_not_a_warning_and_not_a_crash():
     assert validation.warnings(window_returns=[3.0, None], **kwargs) == []
     assert validation.warnings(window_returns=[3.0, float("nan")], **kwargs) == []
     assert validation.warnings(window_returns=[3.0, "n/a"], **kwargs) == []
+    # 마지막이 아닌 자리의 None 은 영향이 없다 — 판정은 마지막 구간만 본다.
+    assert validation.warnings(window_returns=[None, -3.0], **kwargs) == ["후반부_음수"]
+    assert validation.warnings(window_returns=[None, 3.0], **kwargs) == []

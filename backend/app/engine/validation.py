@@ -165,9 +165,16 @@ def calmar(curve, mdd_pct: float) -> float | None:
 TOP_MONTH_SHARE_LIMIT = 70.0   # 한 달이 번 돈의 이만큼 이상이면 집중
 # 집중 판정에는 달 수와 기간이 모두 필요하다. 달이 둘뿐이면 70/30 으로만 갈려도
 # 몫이 70% 를 넘어 신호에 정보가 없고, 달 수는 '걸친 달력 달' 이라 월말을 낀 며칠짜리
-# 구간도 2 개월이 된다. 그래서 3 개월 이상 + 45 일 이상일 때만 센다.
+# 구간도 2 개월이 된다. 가장자리 달은 번 돈이 거의 없는 조각이라 45~89일 구간은
+# 실질 구간이 둘뿐일 수 있다(성장이 둔해지기만 해도 70% 를 넘는다). 90일이면 온전한
+# 두 달 + 가장자리가 들어 최대 달이 조각이 아닌 진짜 구간과 겨룬다. 그래서 3 개월
+# 이상 + 90 일 이상일 때만 센다.
+# 비용: 90일 미만 백테스트에는 한_구간_집중 이 뜨지 않는다. 얇은 표본은 표본_부족 이
+# 직접 잡고, 헛경고로 네 경고 모두를 무시하게 되는 쪽보다 덜 경고하는 쪽이 낫다.
+# 가정: 곡선이 촘촘하다(엔진은 캔들마다 한 점). 며칠에 한 점뿐인 성긴 곡선은 대상이
+# 아니다.
 MIN_MONTHS_FOR_CONCENTRATION = 3
-MIN_SPAN_DAYS_FOR_CONCENTRATION = 45.0
+MIN_SPAN_DAYS_FOR_CONCENTRATION = 90.0
 MIN_TRADES = 10                # 이보다 적으면 통계로 못 쓴다
 TOP_TRADE_SHARE_LIMIT = 50.0   # 상위 몇 거래가 수익의 절반 이상이면 운에 가깝다
 
@@ -175,11 +182,17 @@ WARNING_CODES = ("한_구간_집중", "표본_부족", "후반부_음수", "거�
 
 
 def _span_days(curve) -> float:
-    """곡선의 처음과 끝 시각 사이 일수. 점이 2 개 미만이면 0."""
+    """곡선의 처음과 끝 시각 사이 일수. 점이 2 개 미만이거나 잴 수 없으면 0.
+
+    시각 표기가 섞여(Z 있음 · 없음) 비교할 수 없으면 못 잰 것으로 보고 0 을 낸다.
+    """
     stamps = [stamp for stamp, _ in _points(curve)]
     if len(stamps) < 2:
         return 0.0
-    return (max(stamps) - min(stamps)).total_seconds() / _DAY_SECONDS
+    try:
+        return (max(stamps) - min(stamps)).total_seconds() / _DAY_SECONDS
+    except TypeError:
+        return 0.0
 
 
 def _last_window(window_returns) -> float | None:

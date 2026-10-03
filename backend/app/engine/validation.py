@@ -154,3 +154,37 @@ def calmar(curve, mdd_pct: float) -> float | None:
     if not math.isfinite(result):
         return None
     return round(result, 2)
+
+
+# --- 과최적화 경고 -----------------------------------------------------------
+# 임계값은 합성 곡선(tests/test_validation_warnings.py)으로 맞춘 값이다. 바꾸면
+# 그 시험이 먼저 깨진다.
+TOP_MONTH_SHARE_LIMIT = 70.0   # 한 달이 번 돈의 이만큼 이상이면 집중
+MIN_MONTHS_FOR_CONCENTRATION = 2  # 한 달뿐인 구간은 몫이 늘 100% 라 집중을 판정할 수 없다
+MIN_TRADES = 10                # 이보다 적으면 통계로 못 쓴다
+TOP_TRADE_SHARE_LIMIT = 50.0   # 상위 몇 거래가 수익의 절반 이상이면 운에 가깝다
+
+WARNING_CODES = ("한_구간_집중", "표본_부족", "후반부_음수", "거래_집중")
+
+
+def warnings(*, curve, total_trades: int, window_returns: list[float],
+             top_trade_share_pct: float | None) -> list[str]:
+    """켜진 경고 코드들. 순서는 WARNING_CODES 와 같다.
+
+    입력이 없는 항목은 경고를 만들지 않는다 — 모르는 것과 나쁜 것은 다르다.
+    한 달 안에 끝나는 짧은 구간은 집중 경고를 내지 않는다(몫이 항상 100%). 그런
+    구간은 거래 수로 따로 켜지는 표본 부족이 맡는다.
+    """
+    found = []
+    spread = concentration(curve)
+    share = spread["top_month_share_pct"]
+    if (share is not None and spread["months"] >= MIN_MONTHS_FOR_CONCENTRATION
+            and share >= TOP_MONTH_SHARE_LIMIT):
+        found.append("한_구간_집중")
+    if int(total_trades or 0) < MIN_TRADES:
+        found.append("표본_부족")
+    if len(window_returns or []) >= 2 and float(window_returns[-1]) < 0:
+        found.append("후반부_음수")
+    if top_trade_share_pct is not None and float(top_trade_share_pct) >= TOP_TRADE_SHARE_LIMIT:
+        found.append("거래_집중")
+    return [code for code in WARNING_CODES if code in found]

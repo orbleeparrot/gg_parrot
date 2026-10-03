@@ -2,6 +2,9 @@
 
 ``equity_curve`` 하나로 월별 수익 · 집중도 · 낙폭 구간 · 소르티노 · 칼마를 낸다.
 거래가 없어 곡선이 비거나 짧으면 지표 대신 None 을 돌려준다(0 으로 나누지 않는다).
+
+같은 곡선과 구간별 수익 · 거래 수로 과최적화 경고 코드(``warnings``)도 낸다. 경고는
+서버의 결정론적 규칙이며, 재야 할 값이 없으면(구간 수익이 비었거나 None) 경고하지 않는다.
 """
 from __future__ import annotations
 
@@ -157,14 +160,37 @@ def calmar(curve, mdd_pct: float) -> float | None:
 
 
 # --- 과최적화 경고 -----------------------------------------------------------
-# 임계값은 합성 곡선(tests/test_validation_warnings.py)으로 맞춘 값이다. 바꾸면
-# 그 시험이 먼저 깨진다.
+# 임계값은 합성 곡선(tests/test_validation_warnings.py)의 경계값 시험으로 고정돼
+# 있다. 바꾸면 그 시험이 먼저 깨진다.
 TOP_MONTH_SHARE_LIMIT = 70.0   # 한 달이 번 돈의 이만큼 이상이면 집중
-MIN_MONTHS_FOR_CONCENTRATION = 2  # 한 달뿐인 구간은 몫이 늘 100% 라 집중을 판정할 수 없다
+# 집중 판정에는 달 수와 기간이 모두 필요하다. 달이 둘뿐이면 70/30 으로만 갈려도
+# 몫이 70% 를 넘어 신호에 정보가 없고, 달 수는 '걸친 달력 달' 이라 월말을 낀 며칠짜리
+# 구간도 2 개월이 된다. 그래서 3 개월 이상 + 45 일 이상일 때만 센다.
+MIN_MONTHS_FOR_CONCENTRATION = 3
+MIN_SPAN_DAYS_FOR_CONCENTRATION = 45.0
 MIN_TRADES = 10                # 이보다 적으면 통계로 못 쓴다
 TOP_TRADE_SHARE_LIMIT = 50.0   # 상위 몇 거래가 수익의 절반 이상이면 운에 가깝다
 
 WARNING_CODES = ("한_구간_집중", "표본_부족", "후반부_음수", "거래_집중")
+
+
+def _span_days(curve) -> float:
+    """곡선의 처음과 끝 시각 사이 일수. 점이 2 개 미만이면 0."""
+    stamps = [stamp for stamp, _ in _points(curve)]
+    if len(stamps) < 2:
+        return 0.0
+    return (max(stamps) - min(stamps)).total_seconds() / _DAY_SECONDS
+
+
+def _last_window(window_returns) -> float | None:
+    """마지막 구간 수익(%). 구간이 둘 미만이거나 값이 숫자가 아니면 None(못 잼)."""
+    if not window_returns or len(window_returns) < 2:
+        return None
+    try:
+        last = float(window_returns[-1])
+    except (TypeError, ValueError):
+        return None
+    return last if math.isfinite(last) else None
 
 
 def warnings(*, curve, total_trades: int, window_returns: list[float],
@@ -172,18 +198,20 @@ def warnings(*, curve, total_trades: int, window_returns: list[float],
     """켜진 경고 코드들. 순서는 WARNING_CODES 와 같다.
 
     입력이 없는 항목은 경고를 만들지 않는다 — 모르는 것과 나쁜 것은 다르다.
-    한 달 안에 끝나는 짧은 구간은 집중 경고를 내지 않는다(몫이 항상 100%). 그런
-    구간은 거래 수로 따로 켜지는 표본 부족이 맡는다.
+    짧은 구간은 집중 경고를 내지 않는다(몫이 달 수에 따라 거의 정해져 버린다).
+    그런 구간은 거래 수로 따로 켜지는 표본 부족이 맡는다.
     """
     found = []
     spread = concentration(curve)
     share = spread["top_month_share_pct"]
     if (share is not None and spread["months"] >= MIN_MONTHS_FOR_CONCENTRATION
+            and _span_days(curve) >= MIN_SPAN_DAYS_FOR_CONCENTRATION
             and share >= TOP_MONTH_SHARE_LIMIT):
         found.append("한_구간_집중")
     if int(total_trades or 0) < MIN_TRADES:
         found.append("표본_부족")
-    if len(window_returns or []) >= 2 and float(window_returns[-1]) < 0:
+    last = _last_window(window_returns)
+    if last is not None and last < 0:
         found.append("후반부_음수")
     if top_trade_share_pct is not None and float(top_trade_share_pct) >= TOP_TRADE_SHARE_LIMIT:
         found.append("거래_집중")

@@ -120,16 +120,37 @@ def sortino(curve) -> float | None:
     return round((sum(rets) / len(rets)) / deviation * math.sqrt(len(rets)), 2)
 
 
+# 연환산은 최소 이만큼의 기간이 있어야 의미가 있다. 몇 시간짜리 구간을 1년으로
+# 늘리면 1.2 배 수익이 1.2 의 8760 제곱이 되어 값이 터지거나 무의미해진다.
+_MIN_CALMAR_DAYS = 30.0
+
+
 def calmar(curve, mdd_pct: float) -> float | None:
-    """연수익 / 최대낙폭. 전문가가 먼저 보는 값이다."""
+    """연수익 / 최대낙폭. 전문가가 먼저 보는 값이다.
+
+    어떤 곡선이 와도 예외를 내지 않는다. 낙폭이 없거나, 끝 자산이 0 이하이거나,
+    기간이 너무 짧거나, 결과가 유한한 수가 아니면 None 이다.
+    """
     points = _points(curve)
-    if len(points) < 2 or mdd_pct is None or float(mdd_pct) <= 0:
+    if len(points) < 2 or mdd_pct is None:
+        return None
+    try:
+        mdd = float(mdd_pct)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(mdd) or mdd <= 0:
         return None
     start, end = points[0][1], points[-1][1]
-    if start <= 0:
+    if start <= 0 or end <= 0:
         return None
-    years = (points[-1][0] - points[0][0]).total_seconds() / (_DAY_SECONDS * 365.0)
-    if years <= 0:
+    days = (points[-1][0] - points[0][0]).total_seconds() / _DAY_SECONDS
+    if days < _MIN_CALMAR_DAYS:
         return None
-    annual = ((end / start) ** (1.0 / years) - 1.0) * 100.0
-    return round(annual / float(mdd_pct), 2)
+    try:
+        annual = ((end / start) ** (365.0 / days) - 1.0) * 100.0
+        result = annual / mdd
+    except (OverflowError, ZeroDivisionError):
+        return None
+    if not math.isfinite(result):
+        return None
+    return round(result, 2)

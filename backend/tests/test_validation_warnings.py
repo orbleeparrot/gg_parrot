@@ -152,7 +152,7 @@ def test_a_dense_growth_slowdown_is_not_concentration():
 
 
 def test_a_dense_curve_with_one_month_holding_the_gain_still_fires():
-    """하한을 90일로 올려도 규칙이 죽지 않는다 — 120일 중 2월 한 달만 번 곡선."""
+    """기간 하한이 있어도 규칙이 죽지 않는다 — 120일 중 2월 한 달만 번 곡선."""
     spike = by_month(datetime(2026, 1, 1), 120, {2: 100.0})
     assert validation.concentration(spike)["top_month_share_pct"] == 100.0
     assert warn(spike) == ["한_구간_집중"]
@@ -165,16 +165,41 @@ def test_a_dense_constant_growth_curve_is_not_concentration():
     assert warn(steady) == []
 
 
-def test_span_floor_is_inclusive_at_90_days():
-    """1/1 ~ 4/1 = 정확히 90일부터 센다. 하루 모자란 3/31 까지는 안 센다."""
+def test_span_floor_is_inclusive_at_85_days():
+    """1/1 ~ 3/27 = 정확히 85일부터 센다. 하루 모자란 3/26 까지는 안 센다."""
     totals = {2: 100.0}
-    just_under = by_month(datetime(2026, 1, 1), 89, totals)
-    exactly = by_month(datetime(2026, 1, 1), 90, totals)
+    just_under = by_month(datetime(2026, 1, 1), 84, totals)
+    exactly = by_month(datetime(2026, 1, 1), 85, totals)
     assert validation.concentration(just_under)["months"] >= 3
-    assert validation._span_days(just_under) == 89.0
-    assert validation._span_days(exactly) == 90.0
+    assert validation._span_days(just_under) == 84.0
+    assert validation._span_days(exactly) == 85.0
     assert warn(just_under) == []
     assert warn(exactly) == ["한_구간_집중"]
+
+
+def test_the_default_3m_daily_preset_span_is_covered():
+    """기본 기간(3m, 일봉)은 캔들 경계 정규화 뒤 정확히 89.0일이다 — 규칙이 꺼지면 안 된다.
+
+    하한을 90 으로 두면 기본 모양에서 한 달 몰빵 곡선도 못 잡는다. 이 시험이 그걸 막는다.
+    """
+    for start in (datetime(2026, 1, 1), datetime(2026, 1, 20)):
+        spike = by_month(start, 89, {(start + timedelta(days=40)).month: 100.0})
+        assert validation._span_days(spike) == 89.0
+        assert validation.concentration(spike)["top_month_share_pct"] == 100.0
+        assert warn(spike) == ["한_구간_집중"]
+
+
+def test_a_dense_slowdown_in_the_85_to_89_day_band_is_not_concentration():
+    """85~89일 구간에서도 성장이 2.9 배 둔해진 것뿐인 곡선은 경고하지 않는다.
+
+    45일 하한을 깬 모양(하루 +1 을 28일, 이후 +0.35)을 시작일을 바꿔가며 고정한다.
+    시작일: 연초, 월 중순, 연말(해 넘김), 1/31.
+    """
+    for start in (datetime(2026, 1, 1), datetime(2026, 1, 15),
+                  datetime(2025, 12, 20), datetime(2026, 1, 31)):
+        for days in range(85, 90):
+            slowdown = dense(start, days, lambda day, s=start: 1.0 if (day - s).days <= 28 else 0.35)
+            assert warn(slowdown) == [], (start, days)
 
 
 def test_month_share_limit_is_pinned_at_the_boundary():

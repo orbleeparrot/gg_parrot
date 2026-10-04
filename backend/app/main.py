@@ -1168,6 +1168,11 @@ def backtest(
     }
 
 
+# 한 번 부르면 백테스트를 최대 13 번(전체 1 + 구간 12) 돌리는데 로그인도 쿼터도 없다. 크레딧은
+# 깎지 않되 증폭만 IP 별로 막는다 — 키 · 429 모양은 비콘과 같은 헬퍼를 쓴다.
+_validate_limiter = observability.SlidingWindowRateLimiter(limit=30, window_seconds=60.0, max_keys=5000)
+
+
 class ValidateIn(BaseModel):
     macro: dict
     # 구간 수는 캔들 수보다 크게 잡아 봐야 의미가 없고, 구간마다 백테스트를 한 번씩 돌리므로 위를 막는다.
@@ -1175,12 +1180,13 @@ class ValidateIn(BaseModel):
 
 
 @app.post("/api/validate")
-def validate_macro(body: ValidateIn) -> dict:
+def validate_macro(body: ValidateIn, request: Request) -> dict:
     """백테스트 결과에 검증 레이어(월별 · 집중도 · 낙폭 · 소르티노 · 칼마 · 구간별 · 경고)를 얹는다.
 
     판정은 서버의 결정론적 규칙이 내고 AI 는 부르지 않는다. 캔들은 한 번만 받아 전체 백테스트와
     구간별 백테스트가 함께 쓰며, 거래소 · 종목은 매크로가 정한 대로 따라간다.
     """
+    _enforce_beacon_rate_limit(_validate_limiter, request)
     try:
         macro = Macro.model_validate(body.macro)
     except ValidationError as exc:
@@ -1193,6 +1199,10 @@ def validate_macro(body: ValidateIn) -> dict:
 
     try:
         start_ms, end_ms = resolve_period(macro.period.preset, macro.period.start, macro.period.end)
+    except ValueError as exc:
+        # 상태는 /api/backtest 와 같은 400 이되, 영어 원문 대신 한국어로 알린다.
+        raise HTTPException(status_code=400, detail="기간 설정을 확인해 주세요. 프리셋 이름이나 시작 · 끝 날짜가 올바르지 않습니다.") from exc
+    try:
         df, _source = fetch_klines_for_macro(macro, start_ms, end_ms)
         result = run_backtest(macro, df)
     except NoSpotDataError as exc:

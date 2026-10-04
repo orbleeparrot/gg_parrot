@@ -201,7 +201,8 @@ def _summarize_trade_share(closed_trades: List[float]) -> Optional[float]:
     """
     wins = sorted((pnl for pnl in closed_trades if pnl > 0), reverse=True)
     total = sum(wins)
-    if not wins or total <= 0:
+    # 합이 넘쳐(inf) 몫이 nan 이 되면 응답을 JSON 으로 낼 수 없다 — 못 잰 값으로 둔다.
+    if not wins or not math.isfinite(total) or total <= 0:
         return None
     return round(sum(wins[:TOP_TRADES]) / total * 100.0, 2)
 

@@ -60,7 +60,7 @@
 
 /* 조건 — Builder 를 그대로 쓰되 좁은 열에 맞춰 2열로 접는다. 스크롤은 이 판 안에서만. */
 .studio-cond { grid-area: cond; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; border-right: 1px solid rgb(var(--c-slate-200)); }
-/* 빌더 종류 — 조건 판의 제목이 곧 드롭다운. `기본 빌더 ▾` 를 누르면 메뉴에 기본(✓)과 프로(비활성 · '업데이트 예정' 배지). */
+/* 빌더 종류 — 조건 판의 제목이 곧 드롭다운. `기본 빌더 ▾` 를 누르면 메뉴에 기본(✓)과 '프로로 열기'(지금 조건을 들고 /builder/pro 로). */
 .studio-mode { position: relative; min-width: 0; }
 .studio-mode-btn { display: inline-flex; align-items: center; gap: 8px; height: 36px; margin-left: -6px; padding: 0 8px 0 6px; border-radius: 8px; color: rgb(var(--c-slate-900)); font-size: 20px; font-weight: 800; letter-spacing: -.02em; white-space: nowrap; }
 .studio-mode-btn:hover { background: rgb(var(--c-slate-100)); }
@@ -71,7 +71,6 @@
 .studio-mode-item { width: 100%; height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 10px 0 8px; border-radius: 8px; color: rgb(var(--c-slate-900)); font-size: 13px; font-weight: 700; text-align: left; white-space: nowrap; }
 .studio-mode-item:hover:not(:disabled) { background: rgb(var(--c-slate-100)); }
 .studio-mode-item.is-on { background: rgb(var(--c-slate-100)); }
-.studio-mode-item.is-soon { color: rgb(var(--c-slate-500)); cursor: not-allowed; }
 .studio-mode-check { width: 14px; flex: none; color: rgb(var(--c-slate-900)); font-size: 12px; }
 .studio-mode-sep { margin: 4px 6px; border: 0; border-top: 1px solid rgb(var(--c-slate-200)); }
 .studio-mode-hint { margin-left: auto; padding-left: 10px; color: rgb(var(--c-slate-500)); font-size: 11px; font-weight: 600; }
@@ -124,7 +123,6 @@
 .studio-src-lead.is-guide { color: rgb(var(--c-green-700)); }
 .studio-mode-item:disabled { color: rgb(var(--c-slate-500)); cursor: not-allowed; }
 a.studio-mode-item { text-decoration: none; }
-.studio-soon-badge { margin-left: 6px; height: 16px; padding: 0 5px; border-radius: 4px; background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-500)); font-size: 10px; font-weight: 700; line-height: 16px; }
 .studio-cond-body { padding: 0 16px 8px; overflow-x: hidden; } /* Builder(variant="dense") 가 절 사이 여백·괘선을 스스로 가진다. 말풍선이 넘쳐도 가로 스크롤은 없다. */
 .studio-cond-foot { padding: 12px 16px; border-top: 1px solid rgb(var(--c-slate-200)); display: grid; gap: 8px; }
 .studio-cond-foot .studio-foot-note { display: flex; align-items: center; justify-content: space-between; gap: 8px; }

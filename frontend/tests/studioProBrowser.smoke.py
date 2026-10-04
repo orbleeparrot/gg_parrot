@@ -183,6 +183,16 @@ def main():
         run_validation()
         expect(page.locator('.pro-report')).to_be_visible()
         assert validate_calls[-1]['macro']['candle_interval'] == '1h', validate_calls[-1]['macro']
+
+        # 8. 손댄 · 낡은 history.state 로 열어도 화면이 비지 않는다(새로고침해도 state 가 남는다).
+        for bad in ({}, [], {'rule_type': 'Z'}):
+            errors.clear()
+            page.goto(BASE + '/builder/pro')
+            page.evaluate('macro => window.history.replaceState({usr: {macro}, key: "bad", idx: 0}, "")', bad)
+            page.reload()
+            expect(page.get_by_role('button', name='검증하기', exact=True)).to_be_visible()
+            assert not errors, (bad, errors)
+        checks.append('손댄 history.state({} · [] · rule_type Z) 로 새로고침해도 프로 빌더가 그려지고 기본 조건으로 시작')
         browser.close()
         checks.append('/builder 의 프로로 열기 → /builder/pro, 고른 봉 간격(1h)이 따라와 검증 요청에 실린다')
     assert not errors, errors

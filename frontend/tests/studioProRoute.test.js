@@ -75,7 +75,7 @@ test("기본 빌더에서 프로로 열 수 있고 지금 조건이 따라간다
   assert.match(studioJsx, /프로로 열기/);
   assert.match(studioJsx, /navigate\("\/builder\/pro", \{ state: \{ macro: currentMacro \} \}\)/);
   assert.match(page, /location\.state/);
-  assert.match(page, /macroToForm\(/);
+  assert.match(page, /seedForm\(location\.state\)/);
 });
 
 test("금지한 권유 표현을 화면 · 스타일에 쓰지 않는다", () => {

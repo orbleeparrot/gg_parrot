@@ -108,6 +108,8 @@ from .db import MacroRow, get_session, init_db, request_session
 from .engine import BacktestResult, Macro, Period, compact_backtest_result, human_summary
 from .engine.backtest import run_backtest
 from .engine import portfolio as portfolio_mod
+from .engine import validation as validation_mod
+from .engine import walkforward as walkforward_mod
 from .engine.explain import explain_result
 from .engine.summary import _coin
 from .realtrade import build_bundle
@@ -1163,6 +1165,57 @@ def backtest(
         # 스키마로 이 자리를 덮어써도 프론트는 그대로 렌더링됨.
         "explanation": explain_result(macro, result).model_dump(),
         "disclaimer": "past simulation only; not real trading",
+    }
+
+
+class ValidateIn(BaseModel):
+    macro: dict
+    # 구간 수는 캔들 수보다 크게 잡아 봐야 의미가 없고, 구간마다 백테스트를 한 번씩 돌리므로 위를 막는다.
+    windows: int = Field(default=walkforward_mod.DEFAULT_WINDOWS, ge=2, le=12)
+
+
+@app.post("/api/validate")
+def validate_macro(body: ValidateIn) -> dict:
+    """백테스트 결과에 검증 레이어(월별 · 집중도 · 낙폭 · 소르티노 · 칼마 · 구간별 · 경고)를 얹는다.
+
+    판정은 서버의 결정론적 규칙이 내고 AI 는 부르지 않는다. 캔들은 한 번만 받아 전체 백테스트와
+    구간별 백테스트가 함께 쓰며, 거래소 · 종목은 매크로가 정한 대로 따라간다.
+    """
+    try:
+        macro = Macro.model_validate(body.macro)
+    except ValidationError as exc:
+        # 영어 검증 문구 대신 어느 항목이 문제인지만 한국어로 알린다.
+        fields = ", ".join(dict.fromkeys(
+            ".".join(str(part) for part in err["loc"]) or "macro" for err in exc.errors()))
+        raise HTTPException(status_code=422, detail=f"매크로 설정을 확인해 주세요: {fields}") from exc
+    if macro.is_portfolio():
+        raise HTTPException(status_code=422, detail="여러 종목 포트폴리오 매크로는 아직 검증할 수 없습니다. 종목 하나로 나눠 검증해 주세요.")
+
+    try:
+        start_ms, end_ms = resolve_period(macro.period.preset, macro.period.start, macro.period.end)
+        df, _source = fetch_klines_for_macro(macro, start_ms, end_ms)
+        result = run_backtest(macro, df)
+    except NoSpotDataError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:  # noqa: BLE001 — /api/backtest 와 같이 실패 사유를 400 으로 돌려준다
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    windows = walkforward_mod.run_windows(macro, df, body.windows)
+    # 검증 지표는 줄이기 전 전체 곡선으로 센다(compact 는 응답의 result 에만 쓴다).
+    curve = result.equity_curve
+    return {
+        "result": compact_backtest_result(result).model_dump(),
+        "monthly": validation_mod.monthly_returns(curve),
+        "concentration": validation_mod.concentration(curve),
+        "drawdown": validation_mod.drawdown_window(curve),
+        "sortino": validation_mod.sortino(curve),
+        "calmar": validation_mod.calmar(curve, result.mdd_pct),  # 못 재면 None → null
+        "windows": windows,
+        "warnings": validation_mod.warnings(
+            curve=curve, total_trades=result.total_trades,
+            # 걸러 내지 않고 순서 그대로 넘긴다 — 마지막 구간이 실패했으면 '못 잼' 으로 판정된다.
+            window_returns=[w["return_pct"] for w in windows],
+            top_trade_share_pct=result.top_trade_share_pct),
     }
 
 

@@ -63,6 +63,8 @@ class BacktestResult(BaseModel):
     profit_factor: Optional[float] = None
     # Longest run of consecutive losing trades (a streak-risk read-out).
     max_consecutive_losses: int = 0
+    # 상위 세 거래가 번 돈에서 차지하는 몫(%). 이긴 거래가 없으면 None.
+    top_trade_share_pct: Optional[float] = None
 
 
 BACKTEST_EQUITY_MAX_POINTS = max(
@@ -189,6 +191,21 @@ def _max_consecutive_losses(closed_trades: List[float]) -> int:
     return worst
 
 
+TOP_TRADES = 3
+
+
+def _summarize_trade_share(closed_trades: List[float]) -> Optional[float]:
+    """상위 세 거래가 '번 돈' 에서 차지하는 몫(%). 이긴 거래가 없으면 None.
+
+    한두 번의 대박이 수익의 대부분이면 전략이 아니라 운에 가깝다.
+    """
+    wins = sorted((pnl for pnl in closed_trades if pnl > 0), reverse=True)
+    total = sum(wins)
+    if not wins or total <= 0:
+        return None
+    return round(sum(wins[:TOP_TRADES]) / total * 100.0, 2)
+
+
 def _metrics(
     equity_curve: List[EquityPoint],
     closed_trades: List[float],
@@ -240,6 +257,7 @@ def _metrics(
         sharpe=_sharpe(equity_curve, periods_per_year),
         profit_factor=_profit_factor(closed_trades),
         max_consecutive_losses=_max_consecutive_losses(closed_trades),
+        top_trade_share_pct=_summarize_trade_share(closed_trades),
     )
 
 

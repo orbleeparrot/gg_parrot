@@ -78,7 +78,7 @@ const TOUR_STEPS = [
   { anchor: "leverage", title: "레버리지", body: "배수를 올리면 수익도 손실도 그만큼 커지고 청산 위험이 생겨요. 1배는 현물과 같아 청산이 없어요. 백테스트·모의에서만 적용돼요." },
 ];
 
-function BuilderModeMenu({ onTour }) {
+function BuilderModeMenu({ onTour, onOpenPro }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef(null);
   useEffect(() => {
@@ -99,8 +99,9 @@ function BuilderModeMenu({ onTour }) {
           <button type="button" role="menuitemradio" aria-checked="true" className="studio-mode-item is-on" onClick={() => setOpen(false)}>
             <span className="studio-mode-check" aria-hidden="true"><Icon name="check" size={14} strokeWidth={2.5} /></span>기본 빌더
           </button>
-          <button type="button" role="menuitemradio" aria-checked="false" disabled title="프로 빌더는 업데이트 예정이에요" className="studio-mode-item is-soon">
-            <span className="studio-mode-check" aria-hidden="true" />프로 빌더<span className="studio-soon-badge">업데이트 예정</span>
+          {/* 지금 만든 조건을 그대로 들고 프로 빌더(/builder/pro)로 간다. */}
+          <button type="button" role="menuitem" className="studio-mode-item" onClick={() => { setOpen(false); onOpenPro?.(); }}>
+            <span className="studio-mode-check" aria-hidden="true" />프로로 열기<small className="studio-mode-hint">지금 조건 그대로</small>
           </button>
           {onTour ? (
             <>
@@ -812,7 +813,7 @@ function AccountStudio({ scope, allowRouterMacro }) {
         {/* ── 조건 ── */}
         <aside id="studio-conditions" className="studio-cond" aria-label="조건" {...split.panelProps}>
           <div className="studio-panel-head">
-            <BuilderModeMenu onTour={() => setTourOpen(true)} />
+            <BuilderModeMenu onTour={() => setTourOpen(true)} onOpenPro={() => navigate("/builder/pro", { state: { macro: currentMacro } })} />
             {/* 매크로 출처 배지 — 껄무새 후보·리더보드·업로드·가이드 중 어디서 온 조건인지 색으로, 종목은 티커+이름으로. 누르면 다른 출처를 고르는 드롭다운. */}
             <MacroSourceMenu
               source={macroSource}

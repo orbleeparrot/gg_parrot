@@ -1,15 +1,32 @@
 // 프로 빌더 — 기존 조건 판(Builder) + 검증 결과 + 근거. 코치 패널 자리는 별도 계획에서 채운다.
 import { useRef, useState } from "react";
+import { useLocation } from "react-router-dom";
 import Builder from "../components/Builder.jsx";
 import { api } from "../api.js";
-import { buildMacro, defaultForm, validateDetailed } from "../lib/macro.js";
+import { buildMacro, defaultForm, macroToForm, validateDetailed } from "../lib/macro.js";
 import { analysisLabel, warningText, windowBars } from "../lib/validationView.js";
 import { barScale, headlineNote, metricText } from "../lib/validationFormat.js";
 import "./StudioPro.css";
 
 const WINDOW_COUNT = 4;
+// 서버(/api/validate)가 여러 종목 매크로에 내는 문구와 같다 — 요청 한 번과 분당 한도를 아낀다.
+const PORTFOLIO_MESSAGE = "여러 종목 포트폴리오 매크로는 아직 검증할 수 없습니다. 종목 하나로 나눠 검증해 주세요.";
+
+// 기본 빌더의 '프로로 열기' 가 state.macro 로 지금 조건을 넘긴다. 읽을 수 없는 값이면 기본 조건으로 시작한다.
+function seedForm(state) {
+  const macro = state?.macro;
+  if (!macro || typeof macro !== "object") return defaultForm();
+  try {
+    return macroToForm(macro);
+  } catch (_) {
+    return defaultForm();
+  }
+}
 
 const errorText = (err, fallback) => (err && typeof err.message === "string" && err.message ? err.message : fallback);
+const dayOf = (stamp) => (typeof stamp === "string" && stamp ? stamp.slice(0, 10) : "");
+// 가장 깊었던 낙폭의 고점 ~ 바닥 날짜. 낙폭이 없거나 날짜를 읽을 수 없으면 줄표.
+const drawdownSpan = (drawdown) => (dayOf(drawdown?.start) && dayOf(drawdown?.trough) ? `${dayOf(drawdown.start)} ~ ${dayOf(drawdown.trough)}` : "—");
 const safeLink = (url) => typeof url === "string" && /^https?:\/\//i.test(url);
 
 function Metric({ label, value, note }) {
@@ -97,7 +114,8 @@ function Evidence({ rows }) {
 }
 
 export default function StudioPro() {
-  const [form, setForm] = useState(defaultForm);
+  const location = useLocation();
+  const [form, setForm] = useState(() => seedForm(location.state));
   const [formError, setFormError] = useState(null);
   const [report, setReport] = useState(null);
   const [analysis, setAnalysis] = useState(null);
@@ -107,9 +125,11 @@ export default function StudioPro() {
   const [explaining, setExplaining] = useState(false);
   const [stale, setStale] = useState(false);
   const runId = useRef(0);
+  const formVersion = useRef(0); // 조건을 고칠 때마다 올린다 — 도착한 결과가 어느 조건의 것인지 가린다
 
   // 조건을 고치면 화면의 결과는 이전 설정의 것이다 — 지우지 않고 '지난 결과' 로 표시한다.
   const editForm = (next) => {
+    formVersion.current += 1;
     setForm(next);
     setFormError(null);
     setStale(true);
@@ -122,8 +142,13 @@ export default function StudioPro() {
       setFormError(problem);
       return;
     }
-    const mine = ++runId.current;
     const macro = buildMacro(form);
+    if (macro.symbols) {
+      setFormError({ message: PORTFOLIO_MESSAGE });
+      return;
+    }
+    const mine = ++runId.current;
+    const startedAt = formVersion.current;
     setFormError(null);
     setBusy(true);
     setRunError("");
@@ -142,7 +167,8 @@ export default function StudioPro() {
     }
     if (runId.current !== mine) return;
     setReport(next ?? {});
-    setStale(false);
+    // 요청이 도는 동안 조건을 고쳤다면 받은 결과는 이전 조건의 것이다 — 지난 결과 표시를 유지한다.
+    setStale(formVersion.current !== startedAt);
     setBusy(false);
     setExplaining(true);
     try {
@@ -157,6 +183,7 @@ export default function StudioPro() {
   }
 
   const result = report?.result ?? {};
+  const drawdown = report?.drawdown ?? null;
   const warnings = (Array.isArray(report?.warnings) ? report.warnings : []).map(warningText).filter(Boolean);
   const monthly = Array.isArray(report?.monthly) ? report.monthly : [];
 
@@ -189,10 +216,20 @@ export default function StudioPro() {
             <Metric label="단순 보유 수익률" value={metricText(result.buy_hold_return_pct, { suffix: "%" })} />
             <Metric label="최대 낙폭" value={metricText(result.mdd_pct, { suffix: "%" })} />
             <Metric label="거래 수" value={metricText(result.total_trades, { digits: 0 })} />
+            <Metric label="샤프" value={metricText(result.sharpe)} />
             <Metric label="소르티노" value={metricText(report.sortino)} note={report.sortino == null ? "측정하지 못했어요" : ""} />
             <Metric label="칼마" value={metricText(report.calmar)} note={report.calmar == null ? "측정하지 못했어요" : ""} />
+            <Metric label="손익비" value={metricText(result.profit_factor)} />
+            <Metric label="최대 연속 손실" value={metricText(result.max_consecutive_losses, { digits: 0, suffix: "회" })} />
             <Metric label="가장 많이 번 달의 몫" value={metricText(report.concentration?.top_month_share_pct, { suffix: "%" })} />
-            <Metric label="가장 깊은 낙폭" value={metricText(report.drawdown?.depth_pct, { suffix: "%" })} />
+            <Metric label="상위 거래 몫" value={metricText(result.top_trade_share_pct, { suffix: "%" })} />
+            <Metric label="가장 깊은 낙폭" value={metricText(drawdown?.depth_pct, { suffix: "%" })} />
+            <Metric label="낙폭 시기" value={drawdownSpan(drawdown)} />
+            <Metric
+              label="회복까지"
+              value={metricText(drawdown?.recovery_days, { digits: 0, suffix: "일" })}
+              note={drawdown && drawdown.recovery_days == null ? "아직 회복하지 못했어요" : ""}
+            />
           </dl>
 
           <h3>구간별 성과</h3>

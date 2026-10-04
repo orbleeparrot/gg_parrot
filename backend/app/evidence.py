@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import logging
 import math
-import re
 import statistics
 from datetime import date, datetime, timedelta, timezone, tzinfo
 
@@ -254,11 +253,15 @@ def market_evidence(df, benchmark_df, *, tz: tzinfo = timezone.utc,
 # 어떤 실패도 호출자까지 올리지 않고 이유를 담아 돌려준다. 없는 기사는 지어내지 않는다.
 
 HEADLINE_WINDOW_DAYS = 1
-_ASSET_SHAPE = re.compile(r"[A-Z0-9]{1,20}")
+# 한 번의 과거 조회에서 거둬 아카이브에 넣는 상한. 아카이브를 채우는 것이 이 층의 목적(스펙 7.4)이라
+# 보여 주는 개수(news_archive.MAX_ROWS)보다 훨씬 크게 잡는다. 2026-10-02 에 같은 검색어로 50 건을 확인했다.
+HARVEST_LIMIT = 50
+# 아카이브에서 읽어 '날짜에 가장 가까운 것' 을 고르는 후보 상한. 창이 48 시간이라 하루 수백 건이어도 담는다.
+_CANDIDATES = 500
+_MS_PER_DAY = 86_400_000
 # 이유 문자열은 프런트가 그대로 갈라 쓰므로 바꾸지 않는다.
 _NO_NEWS = {"items": [], "found": False, "reason": "보존_범위_밖"}
 _LOOKUP_FAILED = {"items": [], "found": False, "reason": "조회_실패"}
-_MS_PER_DAY = 86_400_000
 
 
 def _day_bounds(date_label: str) -> tuple[int, int]:
@@ -281,10 +284,11 @@ def historical_query(asset: str, date_label: str) -> str:
     창이 비대칭인 것은 의도다. Google News 의 ``after:`` 는 그 날짜를 포함하고 ``before:`` 는
     포함하지 않으므로, 끝 날짜를 하루 더 밀어야 마지막 날 기사가 들어온다. 2026-03-14 이면
     ``after:2026-03-13 before:2026-03-16`` 이고, 이 문자열로 50 건이 돌아와 게재 시각이 모두 범위
-    안인 것을 2026-10-02 에 확인했다. asset 은 검색 연산자를 끼워 넣을 수 없게 코인 모양만 받는다.
+    안인 것을 2026-10-02 에 확인했다. asset 은 검색 연산자를 끼워 넣을 수 없게 코인 모양만
+    받는다(news.canonical_asset_symbol — 아니면 ValueError).
     """
-    if not _ASSET_SHAPE.fullmatch(str(asset or "")):
-        raise ValueError("asset 은 영문 대문자·숫자 20 자 이내의 코인 이름이어야 한다")
+    if asset != news.canonical_asset_symbol(asset) or not asset:
+        raise ValueError("asset 은 영문 대문자·숫자만 있는 코인 이름이어야 한다")
     day = datetime.strptime(date_label, "%Y-%m-%d")
     after = (day - timedelta(days=HEADLINE_WINDOW_DAYS)).strftime("%Y-%m-%d")
     before = (day + timedelta(days=HEADLINE_WINDOW_DAYS + 1)).strftime("%Y-%m-%d")
@@ -292,11 +296,17 @@ def historical_query(asset: str, date_label: str) -> str:
 
 
 def _published_ms(value) -> int | None:
-    """페처가 주는 ISO-8601 게재 시각을 UTC 밀리초로. 못 읽으면 None."""
+    """페처가 주는 ISO-8601 게재 시각을 UTC 밀리초로. 못 읽으면 None.
+
+    범위는 여기서 따지지 않는다 — 2009~2100 밖의 값은 news_archive 가 걸러 낸다.
+    """
     if not value:
         return None
     try:
-        moment = datetime.fromisoformat(str(value))
+        text = str(value).strip()
+        if text.endswith(("Z", "z")):
+            text = text[:-1] + "+00:00"
+        moment = datetime.fromisoformat(text)
         if moment.tzinfo is None:
             moment = moment.replace(tzinfo=timezone.utc)
         return int(moment.timestamp() * 1000)
@@ -308,16 +318,17 @@ def fetch_historical(asset: str, date_label: str) -> list[dict]:
     """과거 구간 뉴스 — 기존 Google News 페처(news._fetch_news)를 검색어만 바꿔 쓴다.
 
     돌려주는 모양은 news_archive.store 가 받는 ``{title, source, url, published_ms}`` 이고
-    오래된 순이다. 게재 시각을 못 읽은 항목은 보관할 수 없고 근거로도 못 쓰므로 버리며, 조회
-    구간(_day_bounds) 밖 항목도 버린다. strict=True 라서 전송 실패는 NewsFetchError 로 올라온다
-    (빈 목록은 '가져왔는데 없다' 만 뜻한다). 그 예외를 다루는 것은 headlines 의 몫이다.
+    오래된 순이다. 게재 시각을 못 읽은 항목만 버린다(보관도 근거도 못 한다). 조회 구간 밖 항목은
+    버리지 않는다 — 검색어가 구간 끝 하루를 일부러 더 요청하므로 그 날 기사도 정확한 날짜가 붙은
+    진짜 기사이고, 아카이브에 쌓아 두면 이웃 날짜를 조회할 때 곧바로 적중한다. 무엇을 보여 줄지는
+    headlines 가 정한다. strict=True 라서 전송 실패는 NewsFetchError 로 올라온다(빈 목록은 '가져왔는데
+    없다' 만 뜻한다). 그 예외를 다루는 것은 headlines 의 몫이다.
     """
-    start_ms, end_ms = _day_bounds(date_label)
-    raw = news._fetch_news(historical_query(asset, date_label), strict=True)
+    raw = news._fetch_news(historical_query(asset, date_label), limit=HARVEST_LIMIT, strict=True)
     items = []
     for entry in raw or []:
         published_ms = _published_ms(entry.get("published"))
-        if published_ms is None or not start_ms <= published_ms <= end_ms:
+        if published_ms is None:
             continue
         items.append({"title": entry.get("title"), "source": entry.get("source"),
                       "url": entry.get("url"), "published_ms": published_ms})
@@ -325,21 +336,40 @@ def fetch_historical(asset: str, date_label: str) -> list[dict]:
     return items
 
 
+def _from_archive(asset: str, date_label: str) -> list[dict]:
+    """아카이브에서 그 날짜 창의 제목을 읽어, 날짜에 가장 가까운 news_archive.MAX_ROWS 건을 오래된 순으로.
+
+    lookup 은 창의 맨 앞(= 전날 새벽)부터 오래된 순으로 주므로 앞에서 자르면 '그날 무슨 일이
+    있었나' 에 가장 안 맞는 기사만 남는다. 그래서 넉넉히 읽어 서버 쪽에서 고른다. 기준은 그 날짜의
+    UTC 정오다 — UTC 하루와 KST 하루(UTC 로 전날 15 시 ~ 그날 15 시)의 어디에 닿아도 크게
+    치우치지 않는 가운데다. 거리가 같으면 오래된 쪽을 먼저 둔다.
+    """
+    start_ms, end_ms = _day_bounds(date_label)
+    rows = news_archive.lookup(asset, start_ms=start_ms, end_ms=end_ms, limit=_CANDIDATES)
+    center = start_ms + HEADLINE_WINDOW_DAYS * _MS_PER_DAY + _MS_PER_DAY // 2
+    closest = sorted(rows, key=lambda row: (abs(row["published_ms"] - center), row["published_ms"]))
+    return sorted(closest[:news_archive.MAX_ROWS], key=lambda row: row["published_ms"])
+
+
 def headlines(asset: str, date: str) -> dict:
     """그 날짜의 제목들. 2 층(아카이브 DB) 먼저, 없으면 3 층(과거 조회)이고 조회 결과는 아카이브를 채운다.
 
     ``asset`` 은 이미 코인으로 줄인 값("BTC")이다 — news_archive 와 같은 규약이다. 마켓 심볼
-    (KRW-BTC · BTCUSDT)에서 줄이는 일은 호출자가 news.asset_from_market_symbol 로 한다.
-    ``date`` 는 'YYYY-MM-DD' 다.
+    (KRW-BTC · BTCUSDT)에서 줄이는 일은 호출자가 news.asset_from_market_symbol 로 한다. 여기서는
+    공백과 대소문자만 맞춘다(아카이브와 같다). ``date`` 는 'YYYY-MM-DD' 다.
+
+    보여 주는 것은 언제나 아카이브가 가진 것이다. 조회 직후에도 store 가 받아들인 행을 다시 읽어
+    보여 주므로(제목 자르기 · URL 거르기 · 날짜 범위가 store 에서 일어난다) 첫 호출과 이후 호출이
+    같은 것을 보여 준다. 최대 news_archive.MAX_ROWS 건이고 날짜에 가까운 것부터 고른다.
 
     돌려주는 값은 ``{"items", "found", "reason"}`` 이다. reason 은 찾았으면 빈 문자열, 조회는
-    됐는데 없으면 '보존_범위_밖', 조회가 실패했거나 입력을 읽을 수 없으면 '조회_실패'. 못 찾는 것은
-    정상 경로라 예외를 올리지 않고 경고 로그만 남긴다. 아카이브에 못 쓰는 것도 이미 찾은 근거를
-    버릴 이유가 아니므로 삼킨다.
+    됐는데 보여 줄 것이 없으면 '보존_범위_밖', 조회가 실패했거나 입력을 읽을 수 없으면 '조회_실패'.
+    못 찾는 것은 정상 경로라 예외를 올리지 않고 경고 로그만 남긴다. 아카이브에 못 쓰는 것도
+    기능을 막을 이유가 아니므로 삼킨다.
     """
+    asset = str(asset or "").strip().upper()
     try:
-        start_ms, end_ms = _day_bounds(date)
-        cached = news_archive.lookup(asset, start_ms=start_ms, end_ms=end_ms)
+        cached = _from_archive(asset, date)
     except Exception as exc:  # noqa: BLE001 — 근거가 기능을 막지 않는다
         logger.warning("headline archive lookup failed: asset=%s date=%s reason=%s",
                        asset, date, type(exc).__name__)
@@ -356,7 +386,11 @@ def headlines(asset: str, date: str) -> dict:
         return dict(_NO_NEWS)
     try:
         news_archive.store(asset, fetched)
+        stored = _from_archive(asset, date)
     except Exception as exc:  # noqa: BLE001
         logger.warning("headline archive fill failed: asset=%s date=%s reason=%s",
                        asset, date, type(exc).__name__)
-    return {"items": fetched[:news_archive.MAX_ROWS], "found": True, "reason": ""}
+        return dict(_LOOKUP_FAILED)
+    if not stored:
+        return dict(_NO_NEWS)
+    return {"items": stored, "found": True, "reason": ""}

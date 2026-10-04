@@ -249,6 +249,18 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ macro, period_override: periodOverride || null }),
     }),
+  // 프로 빌더 검증 — 같은 매크로를 구간으로 나눠 다시 돌리고 월별 · 집중도 · 낙폭 · 경고를 얹는다.
+  validate: (macro, windows) =>
+    req("/api/validate", {
+      method: "POST",
+      body: JSON.stringify({ macro, windows }),
+    }),
+  // 검증 결과 해설. summary 는 validate 응답을 그대로 넘겨도 된다. 서버가 근거 행을 모아 함께 내려준다.
+  validateExplain: (macro, summary) =>
+    req("/api/validate/explain", {
+      method: "POST",
+      body: JSON.stringify({ macro, summary }),
+    }),
   // 껄무새 AI 원인 분석 (온디맨드). 서버 Gemini 키 사용. 키 없거나 실패 시
   // 규칙기반 해설 + ai_error 로 폴백해 응답.
   explainAi: (macro, periodOverride) =>

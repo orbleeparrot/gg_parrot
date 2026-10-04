@@ -13,6 +13,7 @@ import { recordVisit } from "./lib/visit.js";
 // Keep the first screen small and quick. The builder, charts, guide, and
 // community screens are fetched only when their route is opened.
 const Studio = lazy(() => import("./pages/Studio.jsx"));
+const StudioPro = lazy(() => import("./pages/StudioPro.jsx"));
 const Leaderboard = lazy(() => import("./pages/Leaderboard.jsx"));
 const Auth = lazy(() => import("./pages/Auth.jsx"));
 const MyPage = lazy(() => import("./pages/MyPage.jsx"));
@@ -185,6 +186,7 @@ export default function App() {
             <Routes>
               <Route path="/" element={<HomeRoute />} />
               <Route path="/builder" element={<Studio />} />
+              <Route path="/builder/pro" element={<StudioPro />} />
               <Route path="/s/:slug" element={<Studio />} />
               <Route path="/mypage" element={<MyPage />} />
               <Route path="/mypage/settings" element={<ProfileSettings />} />

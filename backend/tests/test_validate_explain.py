@@ -671,9 +671,43 @@ def test_the_plans_own_natural_phrasing_of_a_spread_warning_is_kept(monkeypatch)
     "뒤쪽 구간에서 대부분 손실이 났습니다.",
     "대부분 손실이 뒤쪽 구간에서 났습니다.",
     "대부분이 뒤쪽 구간에서 마이너스입니다.",
+    "최근 대부분의 구간에서 손실이 났습니다.",
+    "대부분 구간에서 마이너스입니다.",
+    "대부분의 기간 동안 손실이 났습니다.",
+    "대부분의 시기에 횡보했고 마지막에는 음수입니다.",
+    "대부분의 구간이 음수입니다.",
+    "뒤쪽 대부분의 구간은 마이너스입니다.",
 ])
 def test_a_late_loss_sentence_with_a_majority_word_does_not_fill_in_for_a_spread_warning(text):
     """대부분 이 후반부_음수 문장에 섞여도 한_구간_집중을 대신 채우면 안 된다."""
     payload = {"warnings": ["한_구간_집중", "후반부_음수"], "evidence": []}
     assert not validate_explain._anchored(text, "한_구간_집중")
     assert validate_explain._rejection(text, payload) == "missing_warning:한_구간_집중"
+
+
+@pytest.mark.parametrize("text", [
+    "수익의 대부분이 첫 구간에서 나왔습니다.",
+    "수익의 대다수가 한 구간에서 나왔습니다.",
+    "대부분이 특정 시기에서 나왔습니다.",
+    "대부분이 일부 시기에서 나왔습니다.",
+    "대부분이 한 시기에서 나왔습니다.",
+    "대부분이 특정 구간에서 나왔습니다.",
+    "수익 대부분이 한 달에 몰렸습니다.",
+])
+def test_the_majority_phrasings_that_do_express_a_spread_are_kept(text):
+    assert validate_explain._rejection(text, {"warnings": ["한_구간_집중"], "evidence": []}) is None
+
+
+@pytest.mark.parametrize("text", [
+    "대부분의 수익이 한 구간에서 나왔습니다.",
+    "첫 구간에서 수익 대부분이 나왔습니다.",
+    "짧은 기간에 수익 대부분이 나왔습니다.",
+])
+def test_the_known_false_rejections_stay_rejected(text):
+    """넓히지 않기로 한 것들 — 폴백으로 가는 쪽이 안전하다."""
+    assert validate_explain._rejection(text, {"warnings": ["한_구간_집중"], "evidence": []})         == "missing_warning:한_구간_집중"
+
+
+def test_a_majority_word_before_a_period_word_is_rejected_with_the_real_reason():
+    payload = {"warnings": ["한_구간_집중", "후반부_음수"], "evidence": []}
+    assert validate_explain._rejection("최근 대부분의 구간에서 손실이 났습니다.", payload)         == "missing_warning:한_구간_집중"

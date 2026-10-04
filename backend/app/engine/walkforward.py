@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 import logging
-import numbers
+import math
 
 import pandas as pd
 
@@ -22,15 +22,9 @@ logger = logging.getLogger(__name__)
 MIN_ROWS_PER_WINDOW = 2
 DEFAULT_WINDOWS = 4
 
-# 엔진이 읽는 열은 timestamp 이고, 저장소에서 막 읽은 프레임에는 open_time(밀리초)이 있다.
-_TIME_COLUMNS = ("timestamp", "open_time")
-
-
-def _time_column(df) -> str | None:
-    for column in _TIME_COLUMNS:
-        if column in getattr(df, "columns", ()):
-            return column
-    return None
+# 엔진(run_backtest)이 읽는 시각 열은 이 하나다. 저장소가 돌려주는 캔들 프레임도 이 열만 낸다.
+# 정수 시각을 다른 단위로 해석해 표기하면 엔진이 보는 날짜와 어긋나므로, 값은 있는 그대로만 쓴다.
+TIME_COLUMN = "timestamp"
 
 
 def split_frame(df, windows: int) -> list:
@@ -38,15 +32,16 @@ def split_frame(df, windows: int) -> list:
 
     나눠떨어지지 않는 나머지 행은 마지막 구간이 받는다. 그래서 행이 빠지거나 겹치지 않고,
     마지막 구간이 사용자가 고른 기간의 끝까지 닿는다.
+
+    정렬은 방어 차원이다 — 지금 호출자는 정렬된 프레임을 넘기고, 엔진도 안에서 같은 정렬을
+    한다(``run_backtest``). 같은 시각 행은 입력 순서를 유지하며 입력 프레임은 바꾸지 않는다.
     """
     rows = len(df)
-    count = max(1, min(int(windows), rows // MIN_ROWS_PER_WINDOW))
     if rows < MIN_ROWS_PER_WINDOW:
         return []
-    column = _time_column(df)
-    if column is not None:
-        # 순서가 뒤섞여 들어와도 구간이 시간 순이 되도록 정렬한다(같은 시각은 입력 순서 유지).
-        df = df.sort_values(column, kind="stable")
+    count = max(1, min(int(windows), rows // MIN_ROWS_PER_WINDOW))
+    if TIME_COLUMN in df.columns:
+        df = df.sort_values(TIME_COLUMN, kind="stable")
     if count <= 1:
         return [df]
     size = rows // count
@@ -56,11 +51,9 @@ def split_frame(df, windows: int) -> list:
 
 
 def _label(value) -> str:
-    """시각 한 개를 ISO 문자열로 — 밀리초 정수와 datetime 을 모두 받는다."""
+    """시각 한 개를 ISO 문자열로. 결측은 빈 문자열."""
     if pd.isna(value):
         return ""
-    if isinstance(value, numbers.Real) and not isinstance(value, bool):
-        value = pd.to_datetime(int(value), unit="ms", utc=True)
     if hasattr(value, "isoformat"):
         return value.isoformat()
     return str(value)
@@ -68,17 +61,21 @@ def _label(value) -> str:
 
 def _edge(part) -> tuple[str, str]:
     """구간의 첫·마지막 시각. 비었거나 시각 열이 없으면 ("", "") — UI 가 그대로 그릴 수 있다."""
-    column = _time_column(part)
-    if column is None or len(part) == 0:
+    if TIME_COLUMN not in part.columns or len(part) == 0:
         return "", ""
-    try:
-        return _label(part[column].iloc[0]), _label(part[column].iloc[-1])
-    except (KeyError, IndexError, ValueError, TypeError, OverflowError):
-        return "", ""
+    return _label(part[TIME_COLUMN].iloc[0]), _label(part[TIME_COLUMN].iloc[-1])
+
+
+def _failed(index: int, start: str, end: str, reason: str) -> dict:
+    return {"index": index, "start": start, "end": end,
+            "return_pct": None, "trades": 0, "error": reason}
 
 
 def run_windows(macro: Macro, df, windows: int = DEFAULT_WINDOWS) -> list[dict]:
-    """구간별 성과. 실패한 구간은 return_pct=None 과 error 로 남는다(0.0 으로 꾸미지 않는다)."""
+    """구간별 성과. 실패한 구간은 return_pct=None 과 error 로 남는다(0.0 으로 꾸미지 않는다).
+
+    수익률이 nan · inf 로 나온 구간도 실패로 센다 — 숫자가 아닌 값은 JSON 으로 내보낼 수 없다.
+    """
     rows = []
     for index, part in enumerate(split_frame(df, windows), start=1):
         start, end = _edge(part)
@@ -87,10 +84,14 @@ def run_windows(macro: Macro, df, windows: int = DEFAULT_WINDOWS) -> list[dict]:
         except Exception as exc:  # noqa: BLE001 — 한 구간 실패가 전체를 막지 않는다
             logger.warning("walk-forward window failed: index=%d reason=%s",
                            index, type(exc).__name__)
-            rows.append({"index": index, "start": start, "end": end,
-                         "return_pct": None, "trades": 0, "error": type(exc).__name__})
+            rows.append(_failed(index, start, end, type(exc).__name__))
+            continue
+        value = float(result.final_return_pct)
+        if not math.isfinite(value):
+            logger.warning("walk-forward window non-finite: index=%d", index)
+            rows.append(_failed(index, start, end, "NonFiniteReturn"))
             continue
         rows.append({"index": index, "start": start, "end": end,
-                     "return_pct": round(float(result.final_return_pct), 2),
+                     "return_pct": round(value, 2),
                      "trades": int(result.total_trades), "error": ""})
     return rows

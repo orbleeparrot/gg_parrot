@@ -52,7 +52,9 @@ def test_split_frame_never_emits_an_empty_slice():
 
 def test_split_frame_cuts_in_time_order_even_if_rows_arrive_shuffled():
     shuffled = frame(40).sample(frac=1.0, random_state=7)
+    before = shuffled.copy()
     parts = walkforward.split_frame(shuffled, 4)
+    pd.testing.assert_frame_equal(shuffled, before)
     firsts = [part["timestamp"].iloc[0] for part in parts]
     assert firsts == sorted(firsts)
     assert all(part["timestamp"].is_monotonic_increasing for part in parts)
@@ -72,8 +74,8 @@ def test_run_windows_labels_windows_with_iso_times_ending_at_the_period_end():
     assert rows[-1]["end"] == source["timestamp"].iloc[-1].isoformat()
 
 
-def test_run_windows_calls_the_engine_once_per_window_on_slices_of_the_given_frame(monkeypatch):
-    """캔들은 한 번 받은 것을 자를 뿐 — 구간 수만큼 엔진만 불리고 입력 프레임은 그대로다."""
+def test_run_windows_calls_the_engine_once_per_window_with_equal_slices_and_leaves_input_alone(monkeypatch):
+    """엔진 호출 횟수와 구간 크기, 입력 프레임 불변을 본다. 내부 조회가 숨어 있는지까지는 이 시험이 잡지 못한다."""
     seen = []
 
     def spy(macro_arg, df):
@@ -128,11 +130,52 @@ def test_run_windows_on_a_frame_too_short_for_any_window_returns_nothing():
     assert walkforward.run_windows(macro(), frame(1), windows=4) == []
 
 
-def test_edge_labels_use_open_time_millis_when_there_is_no_timestamp_column():
-    ms = pd.DataFrame({"open_time": [1_767_225_600_000, 1_767_312_000_000]})
-    assert walkforward._edge(ms) == ("2026-01-01T00:00:00+00:00", "2026-01-02T00:00:00+00:00")
-
-
 def test_edge_labels_on_an_empty_or_unlabelled_slice_are_renderable_strings():
     assert walkforward._edge(frame(5).iloc[0:0]) == ("", "")
     assert walkforward._edge(pd.DataFrame({"close": [1.0, 2.0]})) == ("", "")
+
+
+def test_edge_labels_missing_timestamp_values_as_empty_strings():
+    part = pd.DataFrame({"timestamp": [pd.NaT, pd.NaT], "close": [1.0, 2.0]})
+    assert walkforward._edge(part) == ("", "")
+
+
+def test_a_frame_with_only_open_time_is_not_treated_as_candles():
+    """엔진이 읽는 열은 timestamp 하나다 — open_time 만 있는 프레임은 구간 표기도 비운다."""
+    part = pd.DataFrame({"open_time": [1_767_225_600_000, 1_767_312_000_000]})
+    assert walkforward._edge(part) == ("", "")
+
+
+class _Result:
+    def __init__(self, value):
+        self.final_return_pct = value
+        self.total_trades = 3
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_a_non_finite_return_is_a_failed_window_not_a_number(monkeypatch, bad):
+    """nan/inf 는 JSON 직렬화에서 터진다 — 숫자도 실패도 아닌 행을 내지 않는다."""
+    monkeypatch.setattr(walkforward, "run_backtest", lambda macro_arg, df: _Result(bad))
+    rows = walkforward.run_windows(macro(), frame(40), windows=2)
+    assert [row["index"] for row in rows] == [1, 2]
+    for row in rows:
+        assert row["return_pct"] is None and row["trades"] == 0 and row["error"]
+
+
+def test_exactly_the_minimum_rows_gives_one_window_even_when_four_are_asked():
+    parts = walkforward.split_frame(frame(walkforward.MIN_ROWS_PER_WINDOW), 4)
+    assert [len(part) for part in parts] == [walkforward.MIN_ROWS_PER_WINDOW]
+
+
+def test_a_negative_window_count_still_gives_one_window_with_every_row():
+    parts = walkforward.split_frame(frame(10), -3)
+    assert [len(part) for part in parts] == [10]
+
+
+def test_duplicate_timestamps_keep_every_row_in_input_order():
+    source = frame(8)
+    source["timestamp"] = source["timestamp"].iloc[0]
+    source["close"] = [float(i) for i in range(8)]
+    parts = walkforward.split_frame(source, 2)
+    assert [len(part) for part in parts] == [4, 4]
+    assert pd.concat(parts)["close"].tolist() == [float(i) for i in range(8)]

@@ -291,8 +291,8 @@ def test_the_first_lookup_fills_the_real_archive_and_the_second_is_served_from_i
     assert stored_counts == [3], "store 가 실제로 받아들인 것은 날짜·주소가 정상인 3 건뿐"
     assert sorted(r.title for r in _archived(db)) == ["그날 기사", "다음날 기사", "전날 기사"]
     assert first["found"] is True
-    # 조회 창은 전날 0 시 ~ 다음날 0 시 UTC 라 다음날 09 시 기사는 이 날짜에는 안 보인다.
-    assert [r["title"] for r in first["items"]] == ["전날 기사", "그날 기사"], \
+    # 화면 구간은 검색어와 같은 사흘(전날·당일·다음날)이라 store 가 받은 3 건이 모두 보인다.
+    assert [r["title"] for r in first["items"]] == ["전날 기사", "그날 기사", "다음날 기사"], \
         "보이는 것은 아카이브가 가진 것이다 — store 가 거른 것은 안 보인다"
 
     _no_network(monkeypatch)  # 두 번째는 네트워크 없이 아카이브에서만
@@ -302,3 +302,25 @@ def test_the_first_lookup_fills_the_real_archive_and_the_second_is_served_from_i
     # 이웃 날짜 조회가 곧바로 적중한다 — 다음날 기사를 버리지 않은 덕이다.
     assert [r["title"] for r in evidence.headlines("BTC", "2026-03-15")["items"]] == \
         ["그날 기사", "다음날 기사"]
+
+
+def test_a_feed_with_only_the_next_day_is_shown_and_not_refetched(db, monkeypatch):
+    fetches = []
+
+    def fake(query, **kwargs):
+        fetches.append(query)
+        return [_feed_item("다음날 기사", "2026-03-15T09:00:00+00:00", "https://x.test/next")]
+    monkeypatch.setattr(news, "_fetch_news", fake)
+
+    first = evidence.headlines("BTC", DATE)
+    assert first["found"] is True and [r["title"] for r in first["items"]] == ["다음날 기사"]
+
+    _no_network(monkeypatch)  # 화면 구간이 검색 구간과 같으면 아카이브만으로 두 번째가 된다
+    assert evidence.headlines("BTC", DATE) == first
+    assert len(fetches) == 1
+
+
+def test_the_display_window_matches_the_query_window():
+    start, end = evidence._day_bounds(DATE)
+    assert start == _ms("2026-03-13T00:00:00+00:00")  # after:2026-03-13 (포함)
+    assert end + 1 == _ms("2026-03-16T00:00:00+00:00")  # before:2026-03-16 (제외)

@@ -265,16 +265,22 @@ _LOOKUP_FAILED = {"items": [], "found": False, "reason": "조회_실패"}
 
 
 def _day_bounds(date_label: str) -> tuple[int, int]:
-    """'YYYY-MM-DD' 날짜의 ±HEADLINE_WINDOW_DAYS 일 구간을 UTC 밀리초 (시작, 끝) 으로.
+    """'YYYY-MM-DD' 날짜의 조회 구간을 UTC 밀리초 (시작, 끝) 으로. 양 끝을 포함한다.
+
+    검색어(historical_query)가 요청한 날짜와 정확히 같다 — 시작은 D − WINDOW 일 0 시(``after:`` 는
+    포함), 끝은 D + WINDOW + 1 일 0 시 직전(``before:`` 는 제외)이라 D − 1, D, D + 1 의 사흘이다.
+    구간이 어긋나면 검색으로 받아 쌓은 기사가 화면 구간 밖이 되어, 보여 줄 것이 없다고 나오면서
+    조회가 매번 되풀이된다.
 
     날짜 라벨이 KST 로 매겨졌을 수 있다(market_evidence 의 tz). 그래도 시간대 인자를 따로 받지
-    않는다 — 라벨의 UTC 0 시를 가운데로 앞뒤 하루씩이면 폭이 48 시간이라, KST 하루의 실제 구간
-    (전날 UTC 15 시 ~ 그날 UTC 15 시)도 UTC 하루(0 시 ~ 24 시)도 모두 안에 들어온다. 호출자가
-    지킬 짝 인자를 늘리지 않으려는 선택이다.
+    않는다 — 라벨의 UTC 0 시를 가운데로 앞뒤 하루씩이면 KST 하루의 실제 구간(전날 UTC 15 시 ~ 그날
+    UTC 15 시)도 UTC 하루(0 시 ~ 24 시)도 모두 안에 들어온다. 호출자가 지킬 짝 인자를 늘리지 않으려는
+    선택이다. 화면에 무엇을 보일지는 구간이 아니라 _from_archive 가 날짜에 가까운 순으로 고른다.
     """
     day = datetime.strptime(date_label, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-    start_ms = int(day.timestamp() * 1000) - HEADLINE_WINDOW_DAYS * _MS_PER_DAY
-    end_ms = int(day.timestamp() * 1000) + HEADLINE_WINDOW_DAYS * _MS_PER_DAY
+    midnight_ms = int(day.timestamp() * 1000)
+    start_ms = midnight_ms - HEADLINE_WINDOW_DAYS * _MS_PER_DAY
+    end_ms = midnight_ms + (HEADLINE_WINDOW_DAYS + 1) * _MS_PER_DAY - 1
     return start_ms, end_ms
 
 
@@ -366,6 +372,10 @@ def headlines(asset: str, date: str) -> dict:
     됐는데 보여 줄 것이 없으면 '보존_범위_밖', 조회가 실패했거나 입력을 읽을 수 없으면 '조회_실패'.
     못 찾는 것은 정상 경로라 예외를 올리지 않고 경고 로그만 남긴다. 아카이브에 못 쓰는 것도
     기능을 막을 이유가 아니므로 삼킨다.
+    주의: news_archive 의 store · lookup 은 실패를 스스로 삼키고 0 · 빈 목록을 돌려주도록 만들어져
+    있다. 그래서 DB 장애는 여기서 예외로 보이지 않고 '조회_실패' 가 아니라 '보존_범위_밖' 으로
+    읽힌다(조회 뒤 다시 읽어도 비어 있으므로). '조회_실패' 는 날짜·asset 입력 오류, 과거 조회(전송)
+    실패, 그리고 아카이브 함수가 실제로 예외를 던진 경우에만 나온다.
     """
     asset = str(asset or "").strip().upper()
     try:

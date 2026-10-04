@@ -628,12 +628,13 @@ class NewsHeadlineArchive(SQLModel, table=True):
     asset_symbol 은 거래소 마켓이 아니라 코인(BTC)이다 — KRW-BTC 와 BTCUSDT 가 같은 행을 쓴다.
     """
 
-    archive_key: str = Field(primary_key=True, max_length=64)  # sha256(코인+URL)
+    archive_key: str = Field(primary_key=True, max_length=64)  # sha256(코인 + 정규화한 URL 전체)
     asset_symbol: str = Field(max_length=20)
     published_ms: int = Field(default=0, sa_type=BigInteger)
     title: str = Field(default="", max_length=500)
     source: str = Field(default="", max_length=120)
-    url: str = Field(default="", max_length=1000)
+    # 길이 상한은 코드(news_archive._URL_MAX)에만 있다. 열은 무제한이라 자르지 않고, 넘는 URL 은 건너뛴다.
+    url: str = ""
 
     __table_args__ = (Index("ix_newsheadlinearchive_asset_published", "asset_symbol", "published_ms"),)
 

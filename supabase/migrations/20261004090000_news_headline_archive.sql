@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS public.newsheadlinearchive (
     published_ms bigint NOT NULL DEFAULT 0,
     title varchar(500) NOT NULL DEFAULT '',
     source varchar(120) NOT NULL DEFAULT '',
-    url varchar(1000) NOT NULL DEFAULT ''
+    url text NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS ix_newsheadlinearchive_asset_published
     ON public.newsheadlinearchive (asset_symbol, published_ms);

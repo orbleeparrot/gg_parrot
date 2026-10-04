@@ -17,7 +17,7 @@ import re
 import time
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from typing import List, Literal, Optional
 
 from fastapi import (
@@ -1248,6 +1248,22 @@ _BENCHMARK_DOMESTIC = "KRW-BTC"
 _BENCHMARK_GLOBAL = "BTCUSDT"
 
 
+def _daily_label_tz(exchange: str | None) -> tzinfo:
+    """일봉 날짜 라벨을 매길 시간대. 일봉이 열리는 경계(data/krw.interval_grid_offset)에서 끌어낸다.
+
+    빗썸 일봉은 KST 0 시에 열리고 업비트 · 바이낸스는 UTC 0 시에 열린다. 날짜가 하루 어긋나면
+    엉뚱한 날의 뉴스를 찾는다. 거래소 이름을 여기 다시 적지 않아, 경계가 UTC 가 아닌 거래소가
+    늘어도 그쪽 규칙만 고치면 따라온다. 경계가 UTC 0 시와 같으면 UTC 다.
+    """
+    if krw_mod.interval_grid_offset(exchange, "1d") == 0:
+        return timezone.utc
+    # 일봉이 UTC 로 offset 밀리초 시점에 열리면, 그 거래소의 하루는 UTC 기준 -offset(하루 모듈로) 만큼 앞선 시간대다.
+    ahead_ms = (-krw_mod.interval_grid_offset(exchange, "1d")) % 86_400_000
+    if ahead_ms > 43_200_000:
+        ahead_ms -= 86_400_000
+    return timezone(timedelta(milliseconds=ahead_ms))
+
+
 class ExplainIn(BaseModel):
     macro: dict
     # /api/validate 의 응답을 그대로 받아도 되고 지표만 납작하게 보내도 된다. 읽는 쪽이 필요한 값만 고른다.
@@ -1364,12 +1380,10 @@ def validate_explain_route(body: ExplainIn, request: Request) -> dict:
             # 기대한 실패(데이터 없음)와 코드 결함을 로그에서 가르도록 종목 · 거래소 · 예외 문구를 남긴다.
             logging.getLogger(__name__).warning(
                 "explain benchmark candles unavailable: exchange=%s benchmark=%s reason=%s: %s",
-                macro.exchange, benchmark, type(exc).__name__, exc, exc_info=True)
+                macro.exchange, benchmark, type(exc).__name__, exc)
             benchmark_df = None
 
-    # 빗썸 일봉은 KST 0 시에 열리고 업비트 · 바이낸스는 UTC 0 시에 열린다(data/krw.interval_grid_offset).
-    # 날짜가 하루 어긋나면 엉뚱한 날의 뉴스를 찾는다.
-    tz = krw_mod._KST if macro.exchange == "bithumb" else timezone.utc
+    tz = _daily_label_tz(macro.exchange)
     rows = _plain_json(evidence_mod.market_evidence(
         df, benchmark_df, tz=tz, limit=EXPLAIN_EVIDENCE_LIMIT))
     # 아카이브 키는 코인이다 — KRW-BTC 와 BTCUSDT 가 같은 근거를 보려면 같은 규칙으로 줄여야 한다.

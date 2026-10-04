@@ -61,9 +61,14 @@ test("실패한 구간 · 못 잰 값 · 근거 못 찾음을 공용 규칙으�
   assert.match(page, /metricText\(/);
 });
 
-test("검증 중 조건을 고친 결과는 지난 결과로 남는다", () => {
-  assert.match(page, /formVersion/);
-  assert.doesNotMatch(page, /setStale\(false\)/, "도착한 결과를 무조건 최신으로 두지 않는다");
+test("지난 결과 표시는 setForm 호출 횟수가 아니라 조건의 값 비교로 낸다", () => {
+  // 공용 조건 판은 값이 그대로인 갱신도 보낸다(펀딩비 적용 두 번, 거래소 전환 뒤 늦은 종목 복원).
+  // 호출마다 '바뀜' 으로 치면 방금 나온 결과가 지난 결과로 둔갑한다 — 값 비교(sameForm)는 validationView 시험이 본다.
+  const code = stripComments(page);
+  assert.match(code, /sameForm\(form, reportForm\)/, "지금 조건과 결과를 만든 조건을 값으로 견준다");
+  assert.match(code, /setReportForm\(startedWith\)/, "결과와 함께 그 결과를 만든 조건을 담는다");
+  assert.match(code, /<Builder form=\{form\} setForm=\{setForm\} \/>/, "setForm 을 감싸 호출마다 고침으로 세지 않는다");
+  assert.doesNotMatch(code, /setStale\(|formVersion/, "별도 stale 상태나 호출 횟수 세기를 두지 않는다");
 });
 
 test("두 검증 요청에는 시간 상한이 있다", () => {

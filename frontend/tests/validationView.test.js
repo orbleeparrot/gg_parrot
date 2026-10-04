@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { analysisLabel, warningText, windowBars } from "../src/lib/validationView.js";
+import { readFileSync } from "node:fs";
+import {
+  analysisLabel, KNOWN_WARNING_CODES, sameForm, UNKNOWN_WARNING_TEXT, warningText, windowBars,
+} from "../src/lib/validationView.js";
 
 test("경고 코드 네 개는 모두 사람이 읽는 문장이 된다", () => {
   assert.match(warningText("한_구간_집중"), /한 구간/);
@@ -9,10 +12,39 @@ test("경고 코드 네 개는 모두 사람이 읽는 문장이 된다", () => 
   assert.match(warningText("거래_집중"), /거래/);
 });
 
-test("모르는 경고 코드는 식별자 대신 빈 문자열이 된다", () => {
+test("모르는 경고 코드는 식별자 대신 일반 문장이 된다 — 화면에서 말없이 사라지지 않는다", () => {
+  assert.equal(UNKNOWN_WARNING_TEXT, "서버가 새 경고를 표시했어요");
   for (const code of ["없는_코드", "", undefined, null, 42, "toString", "__proto__"]) {
-    assert.equal(warningText(code), "");
+    assert.equal(warningText(code), UNKNOWN_WARNING_TEXT);
   }
+});
+
+test("화면이 아는 경고 코드는 백엔드 WARNING_CODES 와 같은 목록이다", () => {
+  const source = readFileSync(new URL("../../backend/app/engine/validation.py", import.meta.url), "utf8");
+  const match = source.match(/^WARNING_CODES\s*=\s*\(([^)]*)\)/m);
+  assert.ok(match, "백엔드 WARNING_CODES 를 못 읽었다 — 이 시험이 아무것도 보지 않는 것이다");
+  const backend = [...match[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+  assert.ok(backend.length >= 4);
+  assert.deepEqual([...KNOWN_WARNING_CODES].sort(), [...backend].sort(),
+    "백엔드가 코드를 더하거나 바꾸면 화면 문장도 같이 고쳐야 한다");
+  for (const code of backend) assert.notEqual(warningText(code), UNKNOWN_WARNING_TEXT, `${code} 문장이 없다`);
+});
+
+test("sameForm 은 같은 내용이면 객체가 달라도 같다고 본다", () => {
+  const base = { symbol: "BTCUSDT", funding_pct: 0.01, params: { a: [1, 2] }, symbols: null };
+  assert.ok(sameForm(base, base));
+  assert.ok(sameForm(base, { ...base, params: { a: [1, 2] } }), "펀딩비 적용을 두 번 눌러 같은 값이 되는 경우");
+  assert.ok(sameForm({ x: NaN }, { x: NaN }));
+});
+
+test("sameForm 은 값이 하나라도 다르면 다르다고 본다", () => {
+  const base = { symbol: "BTCUSDT", funding_pct: 0.01, params: { a: [1, 2] } };
+  assert.ok(!sameForm(base, { ...base, funding_pct: 0.02 }));
+  assert.ok(!sameForm(base, { ...base, params: { a: [1, 3] } }));
+  assert.ok(!sameForm(base, { ...base, extra: 1 }));
+  assert.ok(!sameForm({ a: undefined }, { b: undefined }), "키가 다르면 값이 둘 다 undefined 여도 다르다");
+  assert.ok(!sameForm({ a: [] }, { a: {} }));
+  assert.ok(!sameForm(null, {}));
 });
 
 test("실패한 구간은 막대 대신 표시로 남고 값은 null 이다", () => {
@@ -54,7 +86,7 @@ test("빈 입력에도 터지지 않는다", () => {
   assert.deepEqual(windowBars(undefined), []);
   assert.deepEqual(windowBars([]), []);
   assert.deepEqual(windowBars("nope"), []);
-  assert.equal(warningText(), "");
+  assert.equal(warningText(), UNKNOWN_WARNING_TEXT);
   assert.equal(analysisLabel(), "자동 요약");
 });
 

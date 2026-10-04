@@ -6,9 +6,29 @@ const WARNING_TEXT = Object.freeze({
   거래_집중: "소수의 거래가 수익의 절반 이상을 만들었어요",
 });
 
-// 모르는 코드는 빈 문자열 — 식별자가 그대로 화면에 나가지 않게 한다.
+// 서버가 이 화면이 모르는 경고 코드를 보내면 코드 이름 대신 이 문장을 보인다. 화면에서 경고가
+// 말없이 사라지면 "분석은 좋은 말을 하지 않는다" 가 깨진다 — 모르면 모른다고 드러낸다.
+export const UNKNOWN_WARNING_TEXT = "서버가 새 경고를 표시했어요";
+
+// 이 화면이 아는 코드 목록. 백엔드 engine/validation.py 의 WARNING_CODES 와 같아야 하며 시험이 맞춘다.
+export const KNOWN_WARNING_CODES = Object.freeze(Object.keys(WARNING_TEXT));
+
+// 모르는 코드(문자열이 아닌 값 포함)는 식별자를 그대로 내지 않고 일반 문장으로 바꾼다.
 export function warningText(code) {
-  return typeof code === "string" && Object.hasOwn(WARNING_TEXT, code) ? WARNING_TEXT[code] : "";
+  return typeof code === "string" && Object.hasOwn(WARNING_TEXT, code) ? WARNING_TEXT[code] : UNKNOWN_WARNING_TEXT;
+}
+
+// 조건 판의 값이 같은지 — 값으로 견준다(같은 객체가 아니라 같은 내용). '조건을 바꿨어요' 는 화면에 있는
+// 결과를 만든 조건과 지금 조건이 다를 때만 떠야 하는데, 조건 판은 값이 안 변하는 갱신도 setForm 으로
+// 보내므로(실제 펀딩비 적용을 두 번 누름, 거래소 전환 뒤 늦게 도착하는 종목 복원) 호출 횟수로 세지 않는다.
+export function sameForm(a, b) {
+  if (Object.is(a, b)) return true;
+  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  const keysA = Object.keys(a);
+  const keysB = Object.keys(b);
+  if (keysA.length !== keysB.length) return false;
+  return keysA.every((key) => Object.hasOwn(b, key) && sameForm(a[key], b[key]));
 }
 
 // 구간 하나당 막대 하나. 실행하지 못한 구간(return_pct 가 null 이거나 없음)은

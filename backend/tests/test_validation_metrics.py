@@ -136,3 +136,40 @@ def test_calmar_is_none_when_the_drawdown_is_not_a_finite_number():
 def test_calmar_is_none_when_there_was_no_drawdown():
     rows = curve([("2026-01-01T00:00:00Z", 100.0), ("2026-12-31T00:00:00Z", 200.0)])
     assert validation.calmar(rows, 0.0) is None
+
+
+# --- inf · nan 이 곡선에 끼어도 JSON 으로 낼 수 있는 값만 돌려준다 -------------------------
+
+import json
+
+INF_CURVE = [("2026-01-01T00:00:00Z", 100.0), ("2026-01-31T00:00:00Z", 110.0),
+             ("2026-02-28T00:00:00Z", float("inf")), ("2026-03-31T00:00:00Z", 120.0),
+             ("2026-04-30T00:00:00Z", 130.0)]
+
+
+def test_monthly_returns_never_emits_a_non_finite_pct():
+    rows = validation.monthly_returns(curve(INF_CURVE))
+    assert [r["month"] for r in rows] == ["2026-01", "2026-02", "2026-03", "2026-04"]
+    assert rows[1]["pct"] is None  # inf 로 가는 달은 못 잰 값
+    assert rows[0]["pct"] == 10.0  # 멀쩡한 달은 그대로
+    json.dumps(rows, allow_nan=False)
+
+
+def test_concentration_never_emits_a_non_finite_share():
+    result = validation.concentration(curve(INF_CURVE))
+    assert result["top_month_share_pct"] is None and result["months"] == 4
+    json.dumps(result, allow_nan=False)
+
+
+def test_sortino_never_emits_a_non_finite_value():
+    points = [("2026-01-01T00:00:00Z", 100.0), ("2026-01-02T00:00:00Z", 90.0),
+              ("2026-01-03T00:00:00Z", float("inf")), ("2026-01-04T00:00:00Z", 100.0)]
+    assert validation.sortino(curve(points)) is None
+
+
+def test_nan_equity_is_also_not_emitted():
+    points = [("2026-01-01T00:00:00Z", 100.0), ("2026-02-01T00:00:00Z", float("nan")),
+              ("2026-03-01T00:00:00Z", 120.0), ("2026-04-01T00:00:00Z", 130.0)]
+    json.dumps({"m": validation.monthly_returns(curve(points)),
+                "c": validation.concentration(curve(points)),
+                "s": validation.sortino(curve(points))}, allow_nan=False)

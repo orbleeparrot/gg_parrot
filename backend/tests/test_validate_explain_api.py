@@ -286,6 +286,16 @@ def test_a_failing_benchmark_leaves_the_verdict_empty_not_the_request_failed(cli
     assert rows and all(row["verdict"] == "" and row["btc_change_pct"] is None for row in rows)
 
 
+def test_the_expected_benchmark_failure_is_logged_without_a_stack_trace(client, caplog):
+    """기준 종목 자료가 없는 것은 기대한 실패다 — 호출마다 스택을 남기지 않고 종목 · 거래소 · 문구만 남긴다."""
+    client.state_["fail"].add("BTCUSDT")
+    with caplog.at_level("WARNING"):
+        post(client, macro=macro_body("ETHUSDT"))
+    records = [r for r in caplog.records if "benchmark candles unavailable" in r.getMessage()]
+    assert records and all(r.exc_info is None for r in records)
+    assert "BTCUSDT" in records[0].getMessage() and "no candles" in records[0].getMessage()
+
+
 def test_evidence_is_built_from_daily_candles_even_for_an_hourly_macro(client):
     post(client, macro=macro_body("ETHUSDT", candle_interval="1h"))
     assert {f[2] for f in client.state_["fetched"]} == {"1d"}

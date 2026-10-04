@@ -5,7 +5,7 @@ import Builder from "../components/Builder.jsx";
 import { api } from "../api.js";
 import { buildMacro, validateDetailed } from "../lib/macro.js";
 import { seedForm } from "../lib/studioProSeed.js";
-import { analysisLabel, warningText, windowBars } from "../lib/validationView.js";
+import { analysisLabel, sameForm, warningText, windowBars } from "../lib/validationView.js";
 import { barScale, headlineNote, metricText } from "../lib/validationFormat.js";
 import "./StudioPro.css";
 
@@ -106,39 +106,37 @@ function Evidence({ rows }) {
 export default function StudioPro() {
   const location = useLocation();
   const [form, setForm] = useState(() => seedForm(location.state));
-  const [formError, setFormError] = useState(null);
+  const [formError, setFormError] = useState(null); // { message, form } — 그 오류가 난 조건을 함께 담는다
   const [report, setReport] = useState(null);
+  const [reportForm, setReportForm] = useState(null); // 화면의 결과를 만든 조건
   const [analysis, setAnalysis] = useState(null);
   const [runError, setRunError] = useState("");
   const [explainError, setExplainError] = useState("");
   const [busy, setBusy] = useState(false);
   const [explaining, setExplaining] = useState(false);
-  const [stale, setStale] = useState(false);
   const runId = useRef(0);
-  const formVersion = useRef(0); // 조건을 고칠 때마다 올린다 — 도착한 결과가 어느 조건의 것인지 가린다
 
   // 조건을 고치면 화면의 결과는 이전 설정의 것이다 — 지우지 않고 '지난 결과' 로 표시한다.
-  const editForm = (next) => {
-    formVersion.current += 1;
-    setForm(next);
-    setFormError(null);
-    setStale(true);
-  };
+  // 고쳤는지는 setForm 이 불린 횟수가 아니라 값으로 가린다. 공용 조건 판은 값이 그대로인 갱신도
+  // (때로는 await 뒤에 늦게) 보내므로, 호출마다 '바뀜' 으로 치면 방금 나온 결과가 지난 결과로 둔갑한다.
+  // 그래서 따로 상태를 두지 않고 매 그림마다 '결과를 만든 조건' 과 '지금 조건' 을 견줘 낸다.
+  const stale = report !== null && reportForm !== null && !sameForm(form, reportForm);
+  const shownFormError = formError && sameForm(formError.form, form) ? formError : null;
 
   async function runValidation() {
     // 조건 판이 이미 보여 주는 입력 검증을 요청 전에도 한 번 거친다 — 서버까지 보낼 필요 없는 오류를 여기서 막는다.
     const problem = validateDetailed(form);
     if (problem) {
-      setFormError(problem);
+      setFormError({ ...problem, form });
       return;
     }
     const macro = buildMacro(form);
     if (macro.symbols) {
-      setFormError({ message: PORTFOLIO_MESSAGE });
+      setFormError({ message: PORTFOLIO_MESSAGE, form });
       return;
     }
     const mine = ++runId.current;
-    const startedAt = formVersion.current;
+    const startedWith = form; // 이 요청이 보낸 조건 — 요청 중에 고치면 도착한 결과는 이 값과 달라진다
     setFormError(null);
     setBusy(true);
     setRunError("");
@@ -156,9 +154,9 @@ export default function StudioPro() {
       return;
     }
     if (runId.current !== mine) return;
+    // 요청이 도는 동안 조건을 고쳤다면 받은 결과는 이전 조건의 것이다 — 지난 결과 표시가 저절로 뜬다.
     setReport(next ?? {});
-    // 요청이 도는 동안 조건을 고쳤다면 받은 결과는 이전 조건의 것이다 — 지난 결과 표시를 유지한다.
-    setStale(formVersion.current !== startedAt);
+    setReportForm(startedWith);
     setBusy(false);
     setExplaining(true);
     try {
@@ -174,15 +172,16 @@ export default function StudioPro() {
 
   const result = report?.result ?? {};
   const drawdown = report?.drawdown ?? null;
-  const warnings = (Array.isArray(report?.warnings) ? report.warnings : []).map(warningText).filter(Boolean);
+  // 모르는 코드가 여럿이어도 같은 일반 문장은 한 줄만 보인다.
+  const warnings = [...new Set((Array.isArray(report?.warnings) ? report.warnings : []).map(warningText))];
   const monthly = Array.isArray(report?.monthly) ? report.monthly : [];
 
   return (
     <div className="pro">
       <h1 className="pro-title">프로 빌더</h1>
       <section className="pro-build" aria-label="조건">
-        <Builder form={form} setForm={editForm} />
-        {formError ? <p className="pro-error" role="alert">{formError.message}</p> : null}
+        <Builder form={form} setForm={setForm} />
+        {shownFormError ? <p className="pro-error" role="alert">{shownFormError.message}</p> : null}
         <button type="button" className="pro-run" onClick={runValidation} disabled={busy}>
           {busy ? "검증 중…" : "검증하기"}
         </button>

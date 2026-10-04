@@ -38,8 +38,9 @@ def monthly_returns(curve) -> list[dict]:
     rows = []
     for month in months:
         end = last_of_month[month]
-        rows.append({"month": month,
-                     "pct": round((end / base - 1.0) * 100.0, 2) if base > 0 else 0.0})
+        pct = round((end / base - 1.0) * 100.0, 2) if base > 0 else 0.0
+        # 자산에 inf · nan 이 끼면 수익률이 유한하지 않다 — JSON 으로 낼 수 없으니 못 잰 값(None)으로 둔다.
+        rows.append({"month": month, "pct": pct if math.isfinite(pct) else None})
         base = end
     return rows
 
@@ -65,9 +66,12 @@ def concentration(curve) -> dict:
         if end > base:
             gains.append(end - base)
         base = end
-    if not gains:
+    total = sum(gains)
+    # 합이 넘치거나(inf) 몫이 nan 이 되면 JSON 으로 낼 수 없다 — 못 잰 값으로 둔다.
+    if not gains or not math.isfinite(total) or total <= 0:
         return {"top_month_share_pct": None, "months": len(months)}
-    return {"top_month_share_pct": round(max(gains) / sum(gains) * 100.0, 2),
+    share = max(gains) / total * 100.0
+    return {"top_month_share_pct": round(share, 2) if math.isfinite(share) else None,
             "months": len(months)}
 
 
@@ -120,7 +124,9 @@ def sortino(curve) -> float | None:
     deviation = math.sqrt(sum(r * r for r in downside) / len(downside))
     if deviation <= 0:
         return None
-    return round((sum(rets) / len(rets)) / deviation * math.sqrt(len(rets)), 2)
+    result = (sum(rets) / len(rets)) / deviation * math.sqrt(len(rets))
+    # 수익률이나 하방 편차가 inf · nan 이면 결과도 유한하지 않다 — 못 잰 값으로 둔다.
+    return round(result, 2) if math.isfinite(result) else None
 
 
 # 연환산은 최소 이만큼의 기간이 있어야 의미가 있다. 몇 시간짜리 구간을 1년으로
@@ -172,7 +178,9 @@ TOP_MONTH_SHARE_LIMIT = 70.0   # 한 달이 번 돈의 이만큼 이상이면 �
 # 모양에서 이 규칙이 아예 꺼진다(4h 는 90.67일, 1h 는 90.92일). 그래서 85 일이다.
 # 비용: 85일 미만 백테스트에는 한_구간_집중 이 뜨지 않는다(얇은 표본은 표본_부족 이
 # 직접 잡는다). 85~89일 구간에서 급격히 둔해지는 곡선이 켜질 위험은 남지만 검증한
-# 범위에서는 나오지 않았다(시험으로 고정).
+# 범위에서는 나오지 않았다(시험으로 고정). 잰 값: 85~89일 구간에서 이 규칙이 켜지려면
+# 처음 달 대 나중 달의 증가분 비가 대략 4.5:1 이상으로 가팔라야 하고(90일 이상은 약 5:1),
+# 이 하한을 낮추게 만든 2.86:1 모양은 85~89일에서도 켜지지 않는다.
 # 가정: 곡선이 촘촘하다(엔진은 캔들마다 한 점). 며칠에 한 점뿐인 성긴 곡선은 대상이
 # 아니다.
 MIN_MONTHS_FOR_CONCENTRATION = 3

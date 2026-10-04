@@ -40,6 +40,14 @@ def _warnings(caplog):
     return [r for r in caplog.records if r.levelno == logging.WARNING]
 
 
+@pytest.fixture(autouse=True)
+def _fresh_fetch_guards():
+    """부정 메모와 프로세스 상한은 모듈 상태라 시험끼리 새지 않게 매번 비운다."""
+    evidence.reset_fetch_guards()
+    yield
+    evidence.reset_fetch_guards()
+
+
 @pytest.fixture
 def db(tmp_path, monkeypatch):
     engine = create_engine(f"sqlite:///{tmp_path / 'archive.db'}",
@@ -324,3 +332,135 @@ def test_the_display_window_matches_the_query_window():
     start, end = evidence._day_bounds(DATE)
     assert start == _ms("2026-03-13T00:00:00+00:00")  # after:2026-03-13 (포함)
     assert end + 1 == _ms("2026-03-16T00:00:00+00:00")  # before:2026-03-16 (제외)
+
+
+# --- 과거 조회 보호: 부정 메모 · 프로세스 전체 상한 ----------------------------------------
+
+class Clock:
+    def __init__(self):
+        self.now = 1000.0
+
+    def __call__(self):
+        return self.now
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    fake = Clock()
+    monkeypatch.setattr(evidence, "_clock", fake)
+    return fake
+
+
+def _counting_fetch(monkeypatch, result):
+    calls = []
+
+    def fetch(asset, date):
+        calls.append((asset, date))
+        return result() if callable(result) else result
+    monkeypatch.setattr(evidence, "fetch_historical", fetch)
+    return calls
+
+
+def test_an_empty_answer_is_remembered_so_the_same_date_is_not_asked_again(monkeypatch, clock):
+    FakeArchive(monkeypatch)
+    calls = _counting_fetch(monkeypatch, [])
+    for _ in range(5):
+        assert evidence.headlines("BTC", DATE) == {"items": [], "found": False, "reason": "보존_범위_밖"}
+    assert len(calls) == 1, "빈 날짜를 누를 때마다 Google 에 다시 묻는다"
+
+
+def test_the_memo_is_per_asset_and_date(monkeypatch, clock):
+    FakeArchive(monkeypatch)
+    calls = _counting_fetch(monkeypatch, [])
+    evidence.headlines("BTC", DATE)
+    evidence.headlines("ETH", DATE)
+    evidence.headlines("BTC", "2026-03-15")
+    assert len(calls) == 3
+
+
+def test_the_memo_expires_and_a_later_lookup_can_succeed(monkeypatch, clock):
+    archive = FakeArchive(monkeypatch)
+    answers = [[], [_row("늦게 생긴 기사", NOON)]]
+    calls = _counting_fetch(monkeypatch, lambda: answers[len(calls) - 1])
+    assert evidence.headlines("BTC", DATE)["found"] is False
+    clock.now += evidence.NEGATIVE_MEMO_TTL_SECONDS - 1
+    assert evidence.headlines("BTC", DATE)["found"] is False and len(calls) == 1
+    clock.now += 2
+    found = evidence.headlines("BTC", DATE)
+    assert found["found"] is True and found["items"][0]["title"] == "늦게 생긴 기사"
+    assert len(calls) == 2 and archive.rows
+
+
+def test_the_archive_is_read_before_the_memo_so_a_filled_archive_wins(monkeypatch, clock):
+    archive = FakeArchive(monkeypatch)
+    _counting_fetch(monkeypatch, [])
+    assert evidence.headlines("BTC", DATE)["found"] is False
+    archive.rows.append(_row("수집기가 채움", NOON))
+    assert evidence.headlines("BTC", DATE)["found"] is True
+
+
+def test_nothing_remembered_is_written_to_the_permanent_archive(monkeypatch, clock, db):
+    _counting_fetch(monkeypatch, [])
+    evidence.headlines("BTC", DATE)
+    assert _archived(db) == []
+
+
+def test_a_store_that_accepts_nothing_is_remembered_too(monkeypatch, clock):
+    archive = FakeArchive(monkeypatch)
+    monkeypatch.setattr(news_archive, "store", lambda asset, items: 0)  # 아무것도 못 받는다
+    calls = _counting_fetch(monkeypatch, [_row("거부될 기사", NOON)])
+    assert evidence.headlines("BTC", DATE)["reason"] == "보존_범위_밖"
+    assert evidence.headlines("BTC", DATE)["reason"] == "보존_범위_밖"
+    assert len(calls) == 1 and archive.rows == []
+
+
+def test_a_transport_failure_is_not_remembered(monkeypatch, clock):
+    FakeArchive(monkeypatch)
+    outcomes = iter([TimeoutError("slow"), [_row("복구", NOON)]])
+
+    def fetch(asset, date):
+        outcome = next(outcomes)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+    monkeypatch.setattr(evidence, "fetch_historical", fetch)
+    assert evidence.headlines("BTC", DATE)["reason"] == "조회_실패"
+    assert evidence.headlines("BTC", DATE)["found"] is True
+
+
+def test_the_memo_stays_bounded(monkeypatch, clock):
+    monkeypatch.setattr(evidence, "_NEGATIVE_MEMO_MAX", 3)
+    for day in range(1, 8):
+        evidence._remember_empty("BTC", f"2026-03-{day:02d}")
+    assert len(evidence._negative_memo) == 3
+    assert evidence._known_empty("BTC", "2026-03-07") and not evidence._known_empty("BTC", "2026-03-01")
+
+
+def test_the_process_wide_cap_stops_outbound_calls_without_raising(monkeypatch, clock):
+    FakeArchive(monkeypatch)
+    calls = _counting_fetch(monkeypatch, [])
+    limit = evidence.HISTORICAL_FETCH_LIMIT_PER_MINUTE
+    # 서로 다른 날짜 — 메모로는 못 막고, 키(IP)를 바꿔 가며 보내는 호출을 흉내 낸다.
+    dates = [f"2025-{m:02d}-{d:02d}" for m in range(1, 5) for d in range(1, 29)]
+    results = [evidence.headlines("BTC", day) for day in dates[:limit + 5]]
+    assert len(calls) == limit
+    assert results[limit - 1]["reason"] == "보존_범위_밖"
+    assert all(r == {"items": [], "found": False, "reason": "조회_실패"} for r in results[limit:])
+
+
+def test_a_capped_lookup_is_not_remembered_and_works_once_the_window_passes(monkeypatch, clock):
+    FakeArchive(monkeypatch)
+    calls = _counting_fetch(monkeypatch, [])
+    for index in range(evidence.HISTORICAL_FETCH_LIMIT_PER_MINUTE):
+        evidence.headlines("BTC", f"2025-01-{index + 1:02d}")
+    assert evidence.headlines("BTC", "2025-03-01")["reason"] == "조회_실패"
+    clock.now += 61
+    assert evidence.headlines("BTC", "2025-03-01")["reason"] == "보존_범위_밖"
+    assert ("BTC", "2025-03-01") in calls
+
+
+def test_archive_hits_do_not_spend_the_cap(monkeypatch, clock):
+    FakeArchive(monkeypatch, [_row("있음", NOON)])
+    monkeypatch.setattr(evidence, "fetch_historical", lambda *a: pytest.fail("DB 적중"))
+    for _ in range(evidence.HISTORICAL_FETCH_LIMIT_PER_MINUTE * 3):
+        assert evidence.headlines("BTC", DATE)["found"] is True

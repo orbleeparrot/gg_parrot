@@ -16,9 +16,12 @@ from __future__ import annotations
 import logging
 import math
 import statistics
+import threading
+import time
+from collections import OrderedDict
 from datetime import date, datetime, timedelta, timezone, tzinfo
 
-from . import news, news_archive
+from . import news, news_archive, observability
 
 logger = logging.getLogger(__name__)
 
@@ -256,12 +259,73 @@ HEADLINE_WINDOW_DAYS = 1
 # 한 번의 과거 조회에서 거둬 아카이브에 넣는 상한. 아카이브를 채우는 것이 이 층의 목적(스펙 7.4)이라
 # 보여 주는 개수(news_archive.MAX_ROWS)보다 훨씬 크게 잡는다. 2026-10-02 에 같은 검색어로 50 건을 확인했다.
 HARVEST_LIMIT = 50
-# 아카이브에서 읽어 '날짜에 가장 가까운 것' 을 고르는 후보 상한. 창이 48 시간이라 하루 수백 건이어도 담는다.
+# 아카이브에서 읽어 '날짜에 가장 가까운 것' 을 고르는 후보 상한. 조회 창이 72 시간(D−1 0 시 ~ D+2 0 시 직전)이라
+# 500 건이면 하루 평균 약 166 건까지 담는다. 그보다 몰리면 lookup 이 오래된 순으로 주므로 창의 뒤쪽(D+1)부터
+# 후보에서 빠지지만, 보여 줄 기사는 날짜 정오에 가까운 것이라 가운데 날짜의 기사는 먼저 담긴다.
 _CANDIDATES = 500
 _MS_PER_DAY = 86_400_000
 # 이유 문자열은 프런트가 그대로 갈라 쓰므로 바꾸지 않는다.
 _NO_NEWS = {"items": [], "found": False, "reason": "보존_범위_밖"}
 _LOOKUP_FAILED = {"items": [], "found": False, "reason": "조회_실패"}
+
+# --- 과거 조회 보호 ------------------------------------------------------------------
+# 이 조회는 운영 일일 뉴스 수집기와 같은 Google News 페처를 쓴다. 호출이 몰려 Google 이 429 를 주면 이미 나간
+# 기능까지 같이 나빠지므로, 라우트의 IP 별 상한과 별개로 이 층이 스스로 두 겹으로 막는다.
+#
+# 1) 부정 메모: '조회는 됐는데 그 (코인, 날짜) 에 기사가 없다' 는 답을 프로세스 메모리에 잠깐 기억한다.
+#    스펙 7.6 대로 깊은 과거는 비는 날이 흔해서, 기억하지 않으면 검증하기를 누를 때마다 같은 빈 날짜를
+#    Google 에 다시 묻는다. 영구 아카이브에는 아무것도 쓰지 않는다(없다는 사실을 보존하지 않는다).
+#    12 시간으로 둔 이유: '몇 달 전 그날 Google 에 기사가 없다' 는 답은 빨리 바뀌지 않으니 길어도 되고,
+#    그래도 만료되면 다시 물어 늦게 생긴 기사를 놓치지 않는다. 가까운 날짜는 일일 수집기가 아카이브를
+#    채우는데, 아카이브를 먼저 읽으므로 메모가 그 기사를 가리지 않는다. 조회 실패(전송 오류)는 기억하지 않는다.
+NEGATIVE_MEMO_TTL_SECONDS = 12 * 3600
+_NEGATIVE_MEMO_MAX = 2048
+# 2) 프로세스 전체 상한: 키를 IP 로 쪼개지 않고 한 키로 센다. 요청의 X-Forwarded-For 를 돌려 가며 보내도
+#    밖으로 나가는 과거 조회 수는 이 상한을 넘지 못한다. 한 번의 검증이 최대 3 번(EXPLAIN_EVIDENCE_LIMIT)
+#    조회하므로 분당 30 번이면 정상 사용에는 넉넉하다. 이 프로세스 안의 수라서 워커가 N 개면 실제 상한은 N 배다.
+HISTORICAL_FETCH_LIMIT_PER_MINUTE = 30
+_FETCH_CAP_KEY = "historical-news"
+
+_clock = time.monotonic  # 시험이 시간을 움직이려고 바꿔 끼운다
+_negative_memo: "OrderedDict[tuple[str, str], float]" = OrderedDict()  # (코인, 날짜) -> 만료 시각
+_negative_lock = threading.Lock()
+_fetch_cap = observability.SlidingWindowRateLimiter(
+    limit=HISTORICAL_FETCH_LIMIT_PER_MINUTE, window_seconds=60.0, max_keys=1)
+
+
+def reset_fetch_guards() -> None:
+    """부정 메모와 프로세스 상한의 기록을 비운다. 시험이 서로 새지 않도록 쓴다."""
+    global _fetch_cap
+    with _negative_lock:
+        _negative_memo.clear()
+    _fetch_cap = observability.SlidingWindowRateLimiter(
+        limit=HISTORICAL_FETCH_LIMIT_PER_MINUTE, window_seconds=60.0, max_keys=1)
+
+
+def _known_empty(asset: str, date_label: str) -> bool:
+    """최근에 조회했는데 기사가 없었던 (코인, 날짜) 인가. 만료된 기록은 지운다."""
+    key = (asset, date_label)
+    with _negative_lock:
+        expires = _negative_memo.get(key)
+        if expires is None:
+            return False
+        if _clock() >= expires:
+            del _negative_memo[key]
+            return False
+        return True
+
+
+def _remember_empty(asset: str, date_label: str) -> None:
+    """기사가 없었다는 답을 TTL 동안 기억한다. 크기를 넘으면 만료된 것부터, 그래도 넘으면 오래된 것부터 버린다."""
+    now = _clock()
+    with _negative_lock:
+        _negative_memo[(asset, date_label)] = now + NEGATIVE_MEMO_TTL_SECONDS
+        _negative_memo.move_to_end((asset, date_label))
+        if len(_negative_memo) > _NEGATIVE_MEMO_MAX:
+            for key in [k for k, expires in _negative_memo.items() if expires <= now]:
+                del _negative_memo[key]
+        while len(_negative_memo) > _NEGATIVE_MEMO_MAX:
+            _negative_memo.popitem(last=False)
 
 
 def _day_bounds(date_label: str) -> tuple[int, int]:
@@ -372,6 +436,9 @@ def headlines(asset: str, date: str) -> dict:
     됐는데 보여 줄 것이 없으면 '보존_범위_밖', 조회가 실패했거나 입력을 읽을 수 없으면 '조회_실패'.
     못 찾는 것은 정상 경로라 예외를 올리지 않고 경고 로그만 남긴다. 아카이브에 못 쓰는 것도
     기능을 막을 이유가 아니므로 삼킨다.
+    과거 조회는 두 겹으로 막혀 있다. 기사가 없다는 답은 NEGATIVE_MEMO_TTL_SECONDS 동안 기억해 같은 (코인, 날짜)
+    를 다시 묻지 않고('보존_범위_밖'), 프로세스 전체로 분당 HISTORICAL_FETCH_LIMIT_PER_MINUTE 번을 넘는 조회는
+    나가지 않고 '조회_실패' 로 답한다(조회를 안 한 것이라 '없다' 가 아니다). 둘 다 예외를 올리지 않는다.
     주의: news_archive 의 store · lookup 은 실패를 스스로 삼키고 0 · 빈 목록을 돌려주도록 만들어져
     있다. 그래서 DB 장애는 여기서 예외로 보이지 않고 '조회_실패' 가 아니라 '보존_범위_밖' 으로
     읽힌다(조회 뒤 다시 읽어도 비어 있으므로). '조회_실패' 는 날짜·asset 입력 오류, 과거 조회(전송)
@@ -386,6 +453,13 @@ def headlines(asset: str, date: str) -> dict:
         return dict(_LOOKUP_FAILED)
     if cached:
         return {"items": cached, "found": True, "reason": ""}
+    if _known_empty(asset, date):
+        return dict(_NO_NEWS)
+    if _fetch_cap.retry_after(_FETCH_CAP_KEY, now=_clock()):
+        # 조회를 하지 않았으므로 '없다' 가 아니라 '못 알아봤다' 다. 기억하지 않아 한도가 풀리면 곧 다시 물을 수 있다.
+        logger.warning("historical headline lookup skipped: process-wide cap reached asset=%s date=%s",
+                       asset, date)
+        return dict(_LOOKUP_FAILED)
     try:
         fetched = fetch_historical(asset, date)
     except Exception as exc:  # noqa: BLE001 — 타임아웃 · 5xx · 깨진 응답 모두 '조회 실패'
@@ -393,6 +467,7 @@ def headlines(asset: str, date: str) -> dict:
                        asset, date, type(exc).__name__)
         return dict(_LOOKUP_FAILED)
     if not fetched:
+        _remember_empty(asset, date)
         return dict(_NO_NEWS)
     try:
         news_archive.store(asset, fetched)
@@ -402,5 +477,6 @@ def headlines(asset: str, date: str) -> dict:
                        asset, date, type(exc).__name__)
         return dict(_LOOKUP_FAILED)
     if not stored:
+        _remember_empty(asset, date)
         return dict(_NO_NEWS)
     return {"items": stored, "found": True, "reason": ""}

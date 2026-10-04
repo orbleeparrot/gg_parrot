@@ -35,11 +35,16 @@ def _number(value) -> float | None:
 def _moment(value) -> datetime | None:
     """시각 값을 UTC 기준 시각(tz 있는 datetime)으로. 읽을 수 없으면(NaT 등) None.
 
-    tz 정보가 없는 시각은 UTC 로 본다(적재기가 내는 값이 UTC 다).
+    tz 정보가 없는 시각은 UTC 로 본다(적재기가 내는 값이 UTC 다). pd.NaT 는 datetime 의 하위
+    값이라 isinstance 를 통과하므로 자기 자신과 같지 않다는 점으로 먼저 걸러야 한다.
     """
+    if value is None or value != value:
+        return None
     try:
         moment = value.to_pydatetime(warn=False) if hasattr(value, "to_pydatetime") else value
         if isinstance(moment, datetime):
+            if moment != moment:
+                return None
             if moment.tzinfo is None:
                 moment = moment.replace(tzinfo=timezone.utc)
             return moment
@@ -67,10 +72,16 @@ def _series(df, tz: tzinfo = timezone.utc):
     """(날짜, 종가, 거래량) 세 리스트 — 길이가 같고, 못 읽은 칸은 None.
 
     ``timestamp`` 나 ``close`` 열이 없으면 빈 리스트 셋. ``volume`` 이 없으면 거래량만 전부 None.
-    시각을 읽은 행끼리 ``timestamp`` 로 안정 정렬한다 — 변동률은 이웃한 두 행의 차이라, 순서가
-    섞인 프레임은 '평소' 만 부풀려 급등을 조용히 놓치고 빈 결과를 낸다(틀린 날짜보다 알아채기
-    어렵다). 적재기가 돌려주는 프레임이 정렬돼 있다는 보장이 없어서 여기서 보장한다. 시각을 못
-    읽은 행은 제 자리에 그대로 둔다(날짜는 None) — 그 행을 옮기면 이웃이 아니던 두 날이 이웃이 된다.
+
+    순서 보장:
+    - 모든 행의 시각을 읽었으면 ``timestamp`` 로 안정 정렬한다. 변동률은 이웃한 두 행의 차이라,
+      순서가 섞인 프레임은 '평소' 만 부풀려 급등을 조용히 놓치고 빈 결과를 낸다(틀린 날짜보다
+      알아채기 어렵다). 적재기가 돌려주는 프레임이 정렬돼 있다는 보장이 없어서 여기서 보장한다.
+    - 못 읽은 행이 있으면 정렬하지 않는다. 그 행이 원래 어느 날 사이에 있었는지 알 수 없어서,
+      어디에 두든 이웃이 아니던 두 날이 이웃이 되어 급등이 엉뚱한 날로 찍힌다. 읽은 행들이 이미
+      오름차순이면 받은 순서를 믿고 못 읽은 행의 날짜만 None 으로 둔다(앞뒤 변동은 건너뜀).
+      오름차순이 아니면 믿을 수 없으므로 날짜를 모두 None 으로 돌려 빈 결과로 닫는다 — 틀린 날짜가
+      뉴스 검색까지 흘러가는 것보다 근거 칸이 비는 편이 낫다.
     """
     try:
         moments = [_moment(value) for value in df["timestamp"]]
@@ -83,16 +94,15 @@ def _series(df, tz: tzinfo = timezone.utc):
         volumes = [None] * len(closes)
     if len(volumes) != len(closes) or len(moments) != len(closes):
         return [], [], []
-    slots = [index for index, moment in enumerate(moments) if moment is not None]
-    order = sorted(slots, key=lambda index: moments[index])
-    stamps: list = [None] * len(closes)
-    ordered_closes = list(closes)
-    ordered_volumes = list(volumes)
-    for slot, source in zip(slots, order):
-        stamps[slot] = _label(moments[source], tz)
-        ordered_closes[slot] = closes[source]
-        ordered_volumes[slot] = volumes[source]
-    return stamps, ordered_closes, ordered_volumes
+    known = [moment for moment in moments if moment is not None]
+    if len(known) == len(moments):
+        order = sorted(range(len(moments)), key=lambda index: moments[index])
+        return ([_label(moments[index], tz) for index in order],
+                [closes[index] for index in order],
+                [volumes[index] for index in order])
+    if any(before > after for before, after in zip(known, known[1:])):
+        return [None] * len(closes), closes, volumes
+    return [_label(moment, tz) for moment in moments], closes, volumes
 
 
 def _changes(closes, stamps) -> list[float | None]:

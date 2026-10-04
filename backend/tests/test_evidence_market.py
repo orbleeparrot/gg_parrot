@@ -174,12 +174,60 @@ def test_an_unreadable_timestamp_does_not_disturb_the_other_days():
     assert evidence.anomalies(df) == [{"date": "2026-03-21", "change_pct": 31.0, "volume_ratio": 1.0}]
 
 
-def test_an_unreadable_timestamp_stays_in_its_slot_when_the_frame_is_out_of_order():
-    closes = [100.0] * 20 + [131.0] + [131.0] * 8 + [5000.0]
+def test_nat_is_not_a_moment():
+    """pd.NaT 는 datetime 의 하위 값이라 그대로 두면 정렬 키로 새어 순서를 망가뜨린다."""
+    assert evidence._moment(pd.NaT) is None
+    assert evidence._moment(float("nan")) is None
+    assert evidence._moment(None) is None
+
+
+def _spike_frame_with_nat(rows):
+    closes = [100.0] * 20 + [131.0] + [131.0] * 9
     df = frame(closes)
-    df.loc[29, "timestamp"] = pd.NaT
-    reversed_df = df.iloc[::-1].reset_index(drop=True)      # 시각을 모르는 행이 맨 앞으로
-    assert evidence.anomalies(reversed_df) == [{"date": "2026-03-21", "change_pct": 31.0, "volume_ratio": 1.0}]
+    for row in rows:
+        df.loc[row, "timestamp"] = pd.NaT
+    return df
+
+
+@pytest.mark.parametrize("nat_row", [0, 20, 29])
+def test_a_reversed_frame_with_an_unreadable_timestamp_is_refused_not_misdated(nat_row):
+    """순서가 뒤바뀐 프레임에서 못 읽은 행의 자리는 알 수 없다 — 틀린 날짜를 내느니 비운다."""
+    reversed_df = _spike_frame_with_nat([nat_row]).iloc[::-1].reset_index(drop=True)
+    assert evidence.anomalies(reversed_df) == []
+
+
+@pytest.mark.parametrize("seed", range(8))
+def test_a_shuffled_frame_with_an_unreadable_timestamp_is_refused(seed):
+    shuffled = _spike_frame_with_nat([7, 20]).sample(frac=1, random_state=seed).reset_index(drop=True)
+    assert evidence.anomalies(shuffled) == []
+    rows = [{"date": "2026-03-21", "change_pct": 31.0, "volume_ratio": 1.0}]
+    out = evidence.market_context(rows, shuffled, tz=UTC)
+    assert out[0]["verdict"] == "" and out[0]["btc_change_pct"] is None
+
+
+@pytest.mark.parametrize("seed", range(8))
+def test_a_shuffled_frame_without_gaps_is_still_sorted(seed):
+    closes = [100.0] * 20 + [131.0] + [131.0] * 9
+    shuffled = frame(closes).sample(frac=1, random_state=seed).reset_index(drop=True)
+    assert evidence.anomalies(shuffled) == evidence.anomalies(frame(closes))
+
+
+def test_sorting_keeps_every_close_with_its_own_date_and_leaves_the_callers_frame_alone():
+    closes = [float(100 + day) for day in range(30)]          # 종가가 곧 날짜 번호
+    shuffled = frame(closes).sample(frac=1, random_state=3).reset_index(drop=True)
+    before = shuffled.copy()
+    stamps, ordered, _volumes = evidence._series(shuffled)
+    assert stamps == sorted(stamps) and len(set(stamps)) == 30
+    assert [int(close) - 100 for close in ordered] == list(range(30))
+    assert stamps[0] == "2026-03-01" and stamps[-1] == "2026-03-30"
+    pd.testing.assert_frame_equal(shuffled, before)
+
+
+def test_a_sorted_frame_with_interleaved_unreadable_timestamps_keeps_working():
+    df = _spike_frame_with_nat([5, 12])
+    assert evidence.anomalies(df) == [{"date": "2026-03-21", "change_pct": 31.0, "volume_ratio": 1.0}]
+    stamps, _closes, _volumes = evidence._series(df)
+    assert stamps[5] is None and stamps[12] is None and stamps[20] == "2026-03-21"
 
 
 def test_a_frame_without_the_expected_columns_returns_nothing():

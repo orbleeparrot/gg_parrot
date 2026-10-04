@@ -223,6 +223,32 @@ def test_sorting_keeps_every_close_with_its_own_date_and_leaves_the_callers_fram
     pd.testing.assert_frame_equal(shuffled, before)
 
 
+def test_a_reversed_frame_is_refused_even_when_the_unreadable_row_is_far_from_the_move():
+    """NaT 가 급등 행과 떨어져 있으면 건너뛰기만으로는 안 막힌다 — 순서를 못 믿어 닫아야 한다.
+
+    닫지 않으면 뒤집힌 가격 흐름(131 → 100)이 3/20 의 -23.66% 로 찍힌다.
+    """
+    reversed_df = _spike_frame_with_nat([5]).iloc[::-1].reset_index(drop=True)
+    assert evidence.anomalies(reversed_df) == []
+
+
+def test_two_candles_with_the_same_timestamp_are_still_in_order():
+    """중복 시각은 캔들 자료에서 있을 수 있다 — 오름차순(같음 허용)이므로 닫지 않는다."""
+    df = _spike_frame_with_nat([5])
+    df.loc[11, "timestamp"] = df.loc[10, "timestamp"]
+    assert evidence.anomalies(df) == [{"date": "2026-03-21", "change_pct": 31.0, "volume_ratio": 1.0}]
+
+
+def test_a_single_adjacent_swap_is_enough_to_refuse():
+    """읽은 행 중 이웃한 두 행만 뒤바뀌어도 순서를 못 믿는다(한 칸 건너 비교로는 못 잡는다)."""
+    closes = [100.0] * 15 + [131.0] * 15                    # 3/16 에 급등
+    df = frame(closes)
+    df.loc[5, "timestamp"] = pd.NaT
+    stamp_14, stamp_15 = df.loc[14, "timestamp"], df.loc[15, "timestamp"]
+    df.loc[14, "timestamp"], df.loc[15, "timestamp"] = stamp_15, stamp_14
+    assert evidence.anomalies(df) == []
+
+
 def test_a_sorted_frame_with_interleaved_unreadable_timestamps_keeps_working():
     df = _spike_frame_with_nat([5, 12])
     assert evidence.anomalies(df) == [{"date": "2026-03-21", "change_pct": 31.0, "volume_ratio": 1.0}]

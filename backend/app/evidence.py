@@ -36,11 +36,15 @@ def _moment(value) -> datetime | None:
     """시각 값을 UTC 기준 시각(tz 있는 datetime)으로. 읽을 수 없으면(NaT 등) None.
 
     tz 정보가 없는 시각은 UTC 로 본다(적재기가 내는 값이 UTC 다). pd.NaT 는 datetime 의 하위
-    값이라 isinstance 를 통과하므로 자기 자신과 같지 않다는 점으로 먼저 걸러야 한다.
+    값이라 isinstance 를 통과하므로 자기 자신과 같지 않다는 점으로 먼저 걸러야 한다. 이 검사는
+    try 안에 둔다 — pd.NA 는 ``!=`` 가 pd.NA 를 돌려줘 bool 변환에서 TypeError 가 나는데, 밖에 두면
+    그 한 행이 프레임 전체를 버리게 만든다(안에 두면 str 경로로 떨어져 None).
     """
-    if value is None or value != value:
+    if value is None:
         return None
     try:
+        if value != value:
+            return None
         moment = value.to_pydatetime(warn=False) if hasattr(value, "to_pydatetime") else value
         if isinstance(moment, datetime):
             if moment != moment:
@@ -81,7 +85,11 @@ def _series(df, tz: tzinfo = timezone.utc):
       어디에 두든 이웃이 아니던 두 날이 이웃이 되어 급등이 엉뚱한 날로 찍힌다. 읽은 행들이 이미
       오름차순이면 받은 순서를 믿고 못 읽은 행의 날짜만 None 으로 둔다(앞뒤 변동은 건너뜀).
       오름차순이 아니면 믿을 수 없으므로 날짜를 모두 None 으로 돌려 빈 결과로 닫는다 — 틀린 날짜가
-      뉴스 검색까지 흘러가는 것보다 근거 칸이 비는 편이 낫다.
+      뉴스 검색까지 흘러가는 것보다 근거 칸이 비는 편이 낫다. 같은 시각이 겹치는 것은 오름차순으로
+      본다(캔들 자료에 있을 수 있다).
+    한계: 못 읽은 행 '하나만' 제자리를 벗어나고 읽은 행들은 오름차순이면 이를 알아낼 단서가 없어
+    받은 순서를 믿으므로, 그 행에 닿은 급등이 하루 늦게 찍힐 수 있다(순서 위반이 읽은 행에
+    드러나는 경우만 닫을 수 있다).
     """
     try:
         moments = [_moment(value) for value in df["timestamp"]]
@@ -152,7 +160,8 @@ def anomalies(df, *, sigma: float = SIGMA, limit: int = MAX_ANOMALIES,
 
     tz 는 날짜를 매기는 시간대다(기본 UTC). 일봉이 KST 0 시(= UTC 전날 15 시)에 열리는
     프레임은 KST 를 넘겨야 그 거래소의 날짜와 같아진다. UTC 0 시에 열리는 프레임은 기본 그대로
-    둔다. 시각을 읽을 수 없는 행에 닿거나 거기서 떠나는 변동은 날짜를 매길 수 없어 건너뛴다.
+    둔다. 시각을 읽을 수 없는 행에 닿거나 거기서 떠나는 변동은 날짜를 매길 수 없어 건너뛰고,
+    읽을 수 없는 행이 있는데 읽은 행의 순서도 오름차순이 아닌 프레임은 빈 결과를 돌려준다.
     기준 종목과 함께 쓸 때는 두 쪽의 tz 가 어긋나지 않게 market_evidence 를 쓴다.
     """
     try:

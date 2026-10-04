@@ -3,8 +3,9 @@
 1 층(이 파일의 anomalies/market_context)은 이미 받고 있는 캔들만 쓰므로 전 구간에서
 항상 된다. "왜 올랐나" 보다 "시장 전체인가 이 종목인가" 가 먼저 할 질문이다.
 
-순수 함수만 둔다 — 네트워크 · DB · 시계 · AI 를 쓰지 않고, 프레임은 호출자가 이미 가진 것을
-받는다. 프레임은 운영 캔들 모양(``timestamp`` · ``close`` · ``volume`` 열)이며, 어느 거래소의
+1 층은 순수 함수만 둔다 — 네트워크 · DB · 시계 · AI 를 쓰지 않고, 프레임은 호출자가 이미 가진 것을
+받는다. 2·3 층(맨 아래 headlines)만 아카이브 DB 와 Google News 를 쓰며, 그곳은 어떤 실패도 밖으로
+던지지 않는다. 프레임은 운영 캔들 모양(``timestamp`` · ``close`` · ``volume`` 열)이며, 어느 거래소의
 것이든 상관없다. 어떤 기준 종목을 쓸지는 호출자가 고른다.
 
 돌려주는 값은 모두 JSON 으로 그대로 직렬화된다(nan · inf 를 내지 않는다). 변동률을 못 구하는
@@ -12,9 +13,15 @@
 """
 from __future__ import annotations
 
+import logging
 import math
+import re
 import statistics
-from datetime import date, datetime, timezone, tzinfo
+from datetime import date, datetime, timedelta, timezone, tzinfo
+
+from . import news, news_archive
+
+logger = logging.getLogger(__name__)
 
 SIGMA = 2.0
 MAX_ANOMALIES = 5
@@ -240,3 +247,116 @@ def market_evidence(df, benchmark_df, *, tz: tzinfo = timezone.utc,
     """
     found = anomalies(df, sigma=sigma, limit=limit, tz=tz)
     return market_context(found, benchmark_df, tz=tz)
+
+
+# --- 2·3 층 근거 -------------------------------------------------------------
+# 이 아래는 1 층과 달리 아카이브 DB 와 Google News 를 쓴다. 근거를 못 찾는 것은 정상 경로라서
+# 어떤 실패도 호출자까지 올리지 않고 이유를 담아 돌려준다. 없는 기사는 지어내지 않는다.
+
+HEADLINE_WINDOW_DAYS = 1
+_ASSET_SHAPE = re.compile(r"[A-Z0-9]{1,20}")
+# 이유 문자열은 프런트가 그대로 갈라 쓰므로 바꾸지 않는다.
+_NO_NEWS = {"items": [], "found": False, "reason": "보존_범위_밖"}
+_LOOKUP_FAILED = {"items": [], "found": False, "reason": "조회_실패"}
+_MS_PER_DAY = 86_400_000
+
+
+def _day_bounds(date_label: str) -> tuple[int, int]:
+    """'YYYY-MM-DD' 날짜의 ±HEADLINE_WINDOW_DAYS 일 구간을 UTC 밀리초 (시작, 끝) 으로.
+
+    날짜 라벨이 KST 로 매겨졌을 수 있다(market_evidence 의 tz). 그래도 시간대 인자를 따로 받지
+    않는다 — 라벨의 UTC 0 시를 가운데로 앞뒤 하루씩이면 폭이 48 시간이라, KST 하루의 실제 구간
+    (전날 UTC 15 시 ~ 그날 UTC 15 시)도 UTC 하루(0 시 ~ 24 시)도 모두 안에 들어온다. 호출자가
+    지킬 짝 인자를 늘리지 않으려는 선택이다.
+    """
+    day = datetime.strptime(date_label, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    start_ms = int(day.timestamp() * 1000) - HEADLINE_WINDOW_DAYS * _MS_PER_DAY
+    end_ms = int(day.timestamp() * 1000) + HEADLINE_WINDOW_DAYS * _MS_PER_DAY
+    return start_ms, end_ms
+
+
+def historical_query(asset: str, date_label: str) -> str:
+    """Google News 검색어 — 그 날짜 ±HEADLINE_WINDOW_DAYS 일을 날짜 연산자로 좁힌다.
+
+    창이 비대칭인 것은 의도다. Google News 의 ``after:`` 는 그 날짜를 포함하고 ``before:`` 는
+    포함하지 않으므로, 끝 날짜를 하루 더 밀어야 마지막 날 기사가 들어온다. 2026-03-14 이면
+    ``after:2026-03-13 before:2026-03-16`` 이고, 이 문자열로 50 건이 돌아와 게재 시각이 모두 범위
+    안인 것을 2026-10-02 에 확인했다. asset 은 검색 연산자를 끼워 넣을 수 없게 코인 모양만 받는다.
+    """
+    if not _ASSET_SHAPE.fullmatch(str(asset or "")):
+        raise ValueError("asset 은 영문 대문자·숫자 20 자 이내의 코인 이름이어야 한다")
+    day = datetime.strptime(date_label, "%Y-%m-%d")
+    after = (day - timedelta(days=HEADLINE_WINDOW_DAYS)).strftime("%Y-%m-%d")
+    before = (day + timedelta(days=HEADLINE_WINDOW_DAYS + 1)).strftime("%Y-%m-%d")
+    return f"{asset} crypto after:{after} before:{before}"
+
+
+def _published_ms(value) -> int | None:
+    """페처가 주는 ISO-8601 게재 시각을 UTC 밀리초로. 못 읽으면 None."""
+    if not value:
+        return None
+    try:
+        moment = datetime.fromisoformat(str(value))
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=timezone.utc)
+        return int(moment.timestamp() * 1000)
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
+def fetch_historical(asset: str, date_label: str) -> list[dict]:
+    """과거 구간 뉴스 — 기존 Google News 페처(news._fetch_news)를 검색어만 바꿔 쓴다.
+
+    돌려주는 모양은 news_archive.store 가 받는 ``{title, source, url, published_ms}`` 이고
+    오래된 순이다. 게재 시각을 못 읽은 항목은 보관할 수 없고 근거로도 못 쓰므로 버리며, 조회
+    구간(_day_bounds) 밖 항목도 버린다. strict=True 라서 전송 실패는 NewsFetchError 로 올라온다
+    (빈 목록은 '가져왔는데 없다' 만 뜻한다). 그 예외를 다루는 것은 headlines 의 몫이다.
+    """
+    start_ms, end_ms = _day_bounds(date_label)
+    raw = news._fetch_news(historical_query(asset, date_label), strict=True)
+    items = []
+    for entry in raw or []:
+        published_ms = _published_ms(entry.get("published"))
+        if published_ms is None or not start_ms <= published_ms <= end_ms:
+            continue
+        items.append({"title": entry.get("title"), "source": entry.get("source"),
+                      "url": entry.get("url"), "published_ms": published_ms})
+    items.sort(key=lambda item: item["published_ms"])
+    return items
+
+
+def headlines(asset: str, date: str) -> dict:
+    """그 날짜의 제목들. 2 층(아카이브 DB) 먼저, 없으면 3 층(과거 조회)이고 조회 결과는 아카이브를 채운다.
+
+    ``asset`` 은 이미 코인으로 줄인 값("BTC")이다 — news_archive 와 같은 규약이다. 마켓 심볼
+    (KRW-BTC · BTCUSDT)에서 줄이는 일은 호출자가 news.asset_from_market_symbol 로 한다.
+    ``date`` 는 'YYYY-MM-DD' 다.
+
+    돌려주는 값은 ``{"items", "found", "reason"}`` 이다. reason 은 찾았으면 빈 문자열, 조회는
+    됐는데 없으면 '보존_범위_밖', 조회가 실패했거나 입력을 읽을 수 없으면 '조회_실패'. 못 찾는 것은
+    정상 경로라 예외를 올리지 않고 경고 로그만 남긴다. 아카이브에 못 쓰는 것도 이미 찾은 근거를
+    버릴 이유가 아니므로 삼킨다.
+    """
+    try:
+        start_ms, end_ms = _day_bounds(date)
+        cached = news_archive.lookup(asset, start_ms=start_ms, end_ms=end_ms)
+    except Exception as exc:  # noqa: BLE001 — 근거가 기능을 막지 않는다
+        logger.warning("headline archive lookup failed: asset=%s date=%s reason=%s",
+                       asset, date, type(exc).__name__)
+        return dict(_LOOKUP_FAILED)
+    if cached:
+        return {"items": cached, "found": True, "reason": ""}
+    try:
+        fetched = fetch_historical(asset, date)
+    except Exception as exc:  # noqa: BLE001 — 타임아웃 · 5xx · 깨진 응답 모두 '조회 실패'
+        logger.warning("historical headline lookup failed: asset=%s date=%s reason=%s",
+                       asset, date, type(exc).__name__)
+        return dict(_LOOKUP_FAILED)
+    if not fetched:
+        return dict(_NO_NEWS)
+    try:
+        news_archive.store(asset, fetched)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("headline archive fill failed: asset=%s date=%s reason=%s",
+                       asset, date, type(exc).__name__)
+    return {"items": fetched[:news_archive.MAX_ROWS], "found": True, "reason": ""}

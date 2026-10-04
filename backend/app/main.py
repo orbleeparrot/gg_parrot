@@ -10,6 +10,8 @@ import hashlib
 import asyncio
 import logging
 import json
+import math
+import numbers
 import os
 import re
 import time
@@ -91,6 +93,8 @@ from .agent_features.position_news.router import router as position_news_router
 from .agent_features.position_news import runtime as position_news_runtime
 from .agent_features.whale_activity import runtime as whale_activity_runtime
 from . import observability
+from . import evidence as evidence_mod
+from . import validate_explain as validate_explain_mod
 from .observability import observe_application, router as observability_router
 from fastapi import Depends
 from .db import User
@@ -100,6 +104,7 @@ from .security import hash_password
 from .http_cache import public_news_response
 from .data import NoSpotDataError, average_daily_funding_pct, get_klines, resolve_period
 from .data import symbols as symbols_mod
+from .data import krw as krw_mod
 from .data.binance import backtest_limits
 from .marketdata import fetch_klines_for_macro
 from . import marketdata as marketdata_mod
@@ -1227,6 +1232,144 @@ def validate_macro(body: ValidateIn, request: Request) -> dict:
             window_returns=[w["return_pct"] for w in windows],
             top_trade_share_pct=result.top_trade_share_pct),
     }
+
+
+# 해설 라우트의 호출 상한(스펙 6.2). 일일 쿼터는 두지 않는다 — 다시 검증하는 것이 이 제품의 생명줄이라서다.
+# 규칙을 어겨 버려진 답은 캐시되지 않아(다시 돌리면 진짜 문장을 받도록 일부러 그렇게 했다) 반복 호출을
+# 막아 주는 것이 이 상한뿐이다. 분당 20 번이면 설정을 바꿔 가며 다시 검증하는 데는 넉넉하고, 모델 호출은 묶는다.
+_explain_limiter = observability.SlidingWindowRateLimiter(limit=20, window_seconds=60.0, max_keys=5000)
+# 근거로 찾는 튄 날의 수. 날마다 헤드라인 조회(아카이브 → 없으면 Google News)가 한 번씩 나가므로 작게 잡는다.
+EXPLAIN_EVIDENCE_LIMIT = 3
+_EXPLAIN_MAX_WINDOWS = 12  # /api/validate 가 받는 구간 수의 상한과 같다
+# 어느 거래소 매크로든 같은 거래소의 시장 대표 종목과 견준다 — 거래소가 달라지면 봉 경계가 어긋난다.
+_BENCHMARK_DOMESTIC = "KRW-BTC"
+_BENCHMARK_GLOBAL = "BTCUSDT"
+
+
+class ExplainIn(BaseModel):
+    macro: dict
+    # /api/validate 의 응답을 그대로 받아도 되고 지표만 납작하게 보내도 된다. 읽는 쪽이 필요한 값만 고른다.
+    summary: dict
+
+
+def _plain_number(value, *, whole: bool = False):
+    """유한한 실수(whole 이면 정수)만 파이썬 기본 숫자로. 불리언 · 문자열 · nan · inf 는 None.
+
+    pandas 에서 나온 값은 numpy 정수일 수 있고 json.dumps 는 그것을 받지 않는다.
+    """
+    if isinstance(value, bool) or not isinstance(value, numbers.Real):
+        return None
+    number = float(value)
+    if not math.isfinite(number):
+        return None
+    return int(round(number)) if whole else number
+
+
+def _plain_json(value):
+    """응답에 실을 값을 JSON 이 그대로 받는 모양(dict · list · 문자열 · 파이썬 숫자 · None)으로."""
+    if isinstance(value, dict):
+        return {str(key): _plain_json(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain_json(item) for item in value]
+    if value is None or isinstance(value, (bool, str)):
+        return value
+    if isinstance(value, numbers.Integral):
+        return int(value)
+    return _plain_number(value)
+
+
+_EXPLAIN_NUMBERS = ("final_return_pct", "buy_hold_return_pct", "mdd_pct", "calmar", "sortino",
+                    "top_month_share_pct", "top_trade_share_pct")
+
+
+def _explain_facts(summary: dict) -> dict:
+    """검증 결과에서 해설이 판정에 쓰는 값만 납작하게 고른다.
+
+    /api/validate 응답은 지표를 result · concentration 아래에 두므로, 그대로 넘기면 해설이 숫자를 하나도
+    못 본다. 납작한 요약과 응답 원형을 모두 받는다. 읽을 수 없는 값은 None 으로 두고(못 잰 칼마도
+    그렇다) 알려진 경고 코드만 남긴다 — 이 밖의 키와 자유 문장은 프롬프트에도 캐시 키에도 들어가지 않는다.
+    """
+    nests = [summary] + [summary[key] for key in ("result", "concentration") if isinstance(summary.get(key), dict)]
+
+    def find(key):
+        return next((nest[key] for nest in nests if key in nest), _MISSING)
+
+    facts: dict = {}
+    for key in _EXPLAIN_NUMBERS:
+        if (value := find(key)) is not _MISSING:
+            facts[key] = _plain_number(value)
+    if (value := find("total_trades")) is not _MISSING:
+        facts["total_trades"] = _plain_number(value, whole=True)
+    if isinstance(windows := summary.get("windows"), list):
+        # 구간 행({return_pct, ...})이 와도 수익률 숫자만 남긴다. 실패한 구간은 None 그대로다.
+        facts["windows"] = [
+            _plain_number(item.get("return_pct") if isinstance(item, dict) else item)
+            for item in windows[:_EXPLAIN_MAX_WINDOWS]]
+    if isinstance(codes := summary.get("warnings"), list):
+        facts["warnings"] = list(dict.fromkeys(
+            code for code in codes if isinstance(code, str) and code in validation_mod.WARNING_CODES))
+    return facts
+
+
+_MISSING = object()
+
+
+@app.post("/api/validate/explain")
+def validate_explain_route(body: ExplainIn, request: Request) -> dict:
+    """검증 결과 해설. 근거는 서버가 모아서 넘기고 AI 는 설명만 한다.
+
+    튄 날을 찾아 같은 거래소의 대표 종목과 견주고(시장인가 종목인가), 날마다 서버가 실제로 찾은
+    헤드라인만 붙인다. 못 찾았으면 빈 목록 그대로 넘긴다 — 없는 기사는 지어내지 않는다.
+    """
+    _enforce_beacon_rate_limit(_explain_limiter, request)
+    try:
+        macro = Macro.model_validate(body.macro)
+    except ValidationError as exc:
+        fields = ", ".join(dict.fromkeys(
+            ".".join(str(part) for part in err["loc"]) or "macro" for err in exc.errors()))
+        raise HTTPException(status_code=422, detail=f"매크로 설정을 확인해 주세요: {fields}") from exc
+    if macro.is_portfolio():
+        raise HTTPException(status_code=422, detail="여러 종목 포트폴리오 매크로는 아직 검증할 수 없습니다. 종목 하나로 나눠 검증해 주세요.")
+
+    try:
+        start_ms, end_ms = resolve_period(macro.period.preset, macro.period.start, macro.period.end)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="기간 설정을 확인해 주세요. 프리셋 이름이나 시작 · 끝 날짜가 올바르지 않습니다.") from exc
+
+    # 근거는 일간 변동 기준이라 일봉으로 받는다(시간봉을 넣으면 같은 날짜가 여러 번 나온다).
+    daily = macro if macro.candle_interval == "1d" else macro.model_copy(update={"candle_interval": "1d"})
+    try:
+        df, _source = fetch_klines_for_macro(daily, start_ms, end_ms)
+    except NoSpotDataError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:  # noqa: BLE001 — /api/validate 와 같이 실패 사유를 400 으로 돌려준다
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    # 기준 종목은 매크로의 거래소에서 고른다. 국내 거래소에 USDT 심볼을 넣으면 model_copy 는 검증을 다시
+    # 돌리지 않아 에러 없이 엉뚱한 시장을 받아 온다. 종목이 기준 자체면 받아 둔 프레임을 다시 쓴다.
+    benchmark = _BENCHMARK_DOMESTIC if is_domestic(macro.exchange) else _BENCHMARK_GLOBAL
+    if daily.symbol == benchmark:
+        benchmark_df = df
+    else:
+        try:
+            benchmark_df, _ = fetch_klines_for_macro(
+                daily.model_copy(update={"symbol": benchmark, "symbols": None}), start_ms, end_ms)
+        except Exception as exc:  # noqa: BLE001 — 시장 비교가 안 되면 판정만 비우고 해설은 계속한다
+            logging.getLogger(__name__).warning("explain benchmark candles unavailable: reason=%s", type(exc).__name__)
+            benchmark_df = None
+
+    # 빗썸 일봉은 KST 0 시에 열리고 업비트 · 바이낸스는 UTC 0 시에 열린다(data/krw.interval_grid_offset).
+    # 날짜가 하루 어긋나면 엉뚱한 날의 뉴스를 찾는다.
+    tz = krw_mod._KST if macro.exchange == "bithumb" else timezone.utc
+    rows = _plain_json(evidence_mod.market_evidence(
+        df, benchmark_df, tz=tz, limit=EXPLAIN_EVIDENCE_LIMIT))
+    # 아카이브 키는 코인이다 — KRW-BTC 와 BTCUSDT 가 같은 근거를 보려면 같은 규칙으로 줄여야 한다.
+    asset = news_mod.asset_from_market_symbol(macro.symbol)
+    for row in rows:
+        row["headlines"] = _plain_json(evidence_mod.headlines(asset, row["date"]))
+
+    out = validate_explain_mod.explain({**_explain_facts(body.summary), "evidence": rows})
+    return {"text": out["text"], "source": out["source"], "evidence": rows}
 
 
 @app.post("/api/explain/ai")

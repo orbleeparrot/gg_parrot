@@ -619,6 +619,25 @@ class NewsTitleTranslation(SQLModel, table=True):
     quality_warning: str = Field(default="", max_length=40)
 
 
+class NewsHeadlineArchive(SQLModel, table=True):
+    """근거용 제목 아카이브 — 본문 없이 제목·날짜·출처만 무기한 보관한다.
+
+    기사 본문과 요약은 기존대로 30 일 뒤 지워진다(collector.run_maintenance).
+    백테스트의 과거 구간에 근거를 붙이려면 그 뒤로도 제목이 남아 있어야 한다.
+    행당 약 200 바이트라 하루 200 건이어도 연 15MB 수준이다.
+    asset_symbol 은 거래소 마켓이 아니라 코인(BTC)이다 — KRW-BTC 와 BTCUSDT 가 같은 행을 쓴다.
+    """
+
+    archive_key: str = Field(primary_key=True, max_length=64)  # sha256(코인+URL)
+    asset_symbol: str = Field(max_length=20)
+    published_ms: int = Field(default=0, sa_type=BigInteger)
+    title: str = Field(default="", max_length=500)
+    source: str = Field(default="", max_length=120)
+    url: str = Field(default="", max_length=1000)
+
+    __table_args__ = (Index("ix_newsheadlinearchive_asset_published", "asset_symbol", "published_ms"),)
+
+
 class CommunityPostSummary(SQLModel, table=True):
     """One fenced Korean summary per public post body and model/prompt version.
 
@@ -1360,6 +1379,7 @@ _PG_BIGINT_COLUMNS = {
     "whaletradestate": ("last_success_ms", "last_attempt_ms", "next_collection_ms", "claimed_ms"),
     "communitypostsummary": ("claimed_ms", "updated_ms", "next_retry_ms"),
     "newstitletranslation": ("claimed_ms", "updated_ms", "next_retry_ms"),
+    "newsheadlinearchive": ("published_ms",),
     "tickernewssnapshot": (
         "collected_ms", "claimed_ms", "last_observed_ms", "last_observation_seq",
         "next_retry_ms", "completed_ms",
@@ -1379,7 +1399,7 @@ _PG_PRIVATE_CACHE_TABLES = (
     # 게시판 사진·추천·신고와 브라우저 뉴스 캐시 — create_all 로만 생겨 RLS 없이 anon 권한이 열려 있었다(2026-09-15).
     "boardimage", "boardpostvote", "boardreport", "browsernewspagecache",
     "visit", "macroeventdaily", "collectorrun", "collectorsourcedaily", "apiusagedaily",
-    "devnote",
+    "devnote", "newsheadlinearchive",
 )
 _PG_MIGRATION_LOCK = 0x6767706172726F74  # Stable across web/worker processes and deployments.
 _PG_MIGRATION_ATTEMPTS = 3

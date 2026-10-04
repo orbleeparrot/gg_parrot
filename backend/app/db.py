@@ -992,6 +992,7 @@ class MacroEventDaily(SQLModel, table=True):
 class CollectorRun(SQLModel, table=True):
     """수집 엔진(Prefect flow · 웹 루프) 실행 한 번의 요약 — 관리자 '뉴스 수집 현황' 표(admin.py, collector_runs.py)."""
 
+    __table_args__ = (Index("ux_collectorrun_empty_bucket", "engine", "status", "empty_bucket_ms", unique=True),)
     id: Optional[int] = Field(default=None, primary_key=True, sa_type=BigInteger().with_variant(Integer, "sqlite"))
     engine: str = Field(index=True)  # position_news | whale_activity | onchain_holders | public_news | article_enrichment | coindesk_probe
     day_kst: str = Field(index=True)
@@ -1003,6 +1004,9 @@ class CollectorRun(SQLModel, table=True):
     failures: int = 0  # 소스 호출 실패 수
     error: str = ""
     summary_json: str = "{}"
+    run_count: int = Field(default=1, sa_column_kwargs={"server_default": "1"})
+    # 빈 회차는 엔진·상태·시작 시간대별 한 행에 합산한다.
+    empty_bucket_ms: Optional[int] = Field(default=None, sa_type=BigInteger)
 
 
 class CollectorSourceDaily(SQLModel, table=True):
@@ -1220,6 +1224,10 @@ def _migrate() -> None:
     added.setdefault("runsession", {})["runner_version"] = (
         "ALTER TABLE runsession ADD COLUMN runner_version TEXT DEFAULT ''"
     )
+    added["collectorrun"] = {
+        "run_count": "ALTER TABLE collectorrun ADD COLUMN run_count INTEGER NOT NULL DEFAULT 1",
+        "empty_bucket_ms": "ALTER TABLE collectorrun ADD COLUMN empty_bucket_ms BIGINT",
+    }
     with _engine.connect() as conn:
         for table, cols in added.items():
             existing = {row[1] for row in conn.exec_driver_sql(f"PRAGMA table_info({table})")}
@@ -1240,6 +1248,10 @@ def _migrate() -> None:
             "ON runsession (user_macro_id)"
         )
         conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_runsession_active_heartbeat ON runsession (status, last_heartbeat_at)")
+        conn.exec_driver_sql(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_collectorrun_empty_bucket "
+            "ON collectorrun (engine, status, empty_bucket_ms)"
+        )
         # 같은 페이지뷰 비콘이 동시에 두 번 오면 SELECT-then-INSERT 가 둘 다 통과한다 — 유니크로 막고 admin.record_visit 이 중복을 삼킨다.
         # 빈 값(이벤트 행·옛 행)은 많으므로 부분 인덱스. Postgres 는 마이그레이션 SQL(20260918052000)이 같은 인덱스를 만든다.
         # 인덱스가 생기기 전에 경쟁으로 들어온 중복(view_key 같은 행 둘)이 있는 개발 DB 는 CREATE 가 실패한다 — 그래도
@@ -1266,6 +1278,7 @@ def _migrate() -> None:
 
 
 _PG_ADDED_COLUMNS = {
+    "collectorrun": {"run_count": "INTEGER NOT NULL DEFAULT 1", "empty_bucket_ms": "BIGINT"},
     "visit": {
         "kind": "VARCHAR NOT NULL DEFAULT 'view'", "session_key": "VARCHAR NOT NULL DEFAULT ''", "view_key": "VARCHAR NOT NULL DEFAULT ''",
         "dwell_ms": "BIGINT NOT NULL DEFAULT 0", "is_new": "BOOLEAN NOT NULL DEFAULT FALSE", "is_landing": "BOOLEAN NOT NULL DEFAULT FALSE",
@@ -1355,6 +1368,9 @@ _PG_INDEXES = {
     "ix_newstitletranslation_processing_status": ("newstitletranslation", "processing_status"),
     "ix_newstitletranslation_claimed_ms": ("newstitletranslation", "claimed_ms"),
 }
+_PG_UNIQUE_INDEXES = {
+    "ux_collectorrun_empty_bucket": ("collectorrun", "engine, status, empty_bucket_ms"),
+}
 _PG_BIGINT_COLUMNS = {
     "onchainholderstate": ("last_success_ms", "last_attempt_ms", "next_collection_ms", "claimed_ms", "observation_seq"),
     "whaletradestate": ("last_success_ms", "last_attempt_ms", "next_collection_ms", "claimed_ms"),
@@ -1439,6 +1455,9 @@ def _pg_migration_statements(state: dict) -> list[str]:
     for name, (table, columns) in _PG_INDEXES.items():
         if table in state["tables"] and name not in state["indexes"]:
             statements.append(f"CREATE INDEX IF NOT EXISTS {name} ON {table} ({columns})")
+    for name, (table, columns) in _PG_UNIQUE_INDEXES.items():
+        if table in state["tables"] and name not in state["indexes"]:
+            statements.append(f"CREATE UNIQUE INDEX IF NOT EXISTS {name} ON {table} ({columns})")
     for table in _PG_PRIVATE_CACHE_TABLES:
         if table not in state["tables"]:
             continue

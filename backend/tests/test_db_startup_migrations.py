@@ -48,6 +48,38 @@ def test_existing_news_article_schema_adds_pending_column_before_index():
     assert statements.index(column) < statements.index(index)
 
 
+def test_existing_collector_history_adds_rollup_columns_before_unique_index():
+    state = current_schema()
+    for column in ("run_count", "empty_bucket_ms"):
+        state["columns"].pop(("collectorrun", column))
+    state["indexes"].discard("ux_collectorrun_empty_bucket")
+    assert db._pg_migration_statements(state) == [
+        "ALTER TABLE collectorrun ADD COLUMN IF NOT EXISTS run_count INTEGER NOT NULL DEFAULT 1",
+        "ALTER TABLE collectorrun ADD COLUMN IF NOT EXISTS empty_bucket_ms BIGINT",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_collectorrun_empty_bucket ON collectorrun (engine, status, empty_bucket_ms)",
+    ]
+
+
+def test_existing_sqlite_collector_history_survives_upgrade(tmp_path, monkeypatch):
+    engine = create_engine(f"sqlite:///{tmp_path / 'older-collector.db'}")
+    monkeypatch.setattr(db, "_engine", engine)
+    with engine.begin() as conn:
+        conn.exec_driver_sql("""CREATE TABLE collectorrun (
+            id INTEGER PRIMARY KEY, engine VARCHAR NOT NULL, day_kst VARCHAR NOT NULL,
+            started_ms BIGINT NOT NULL, finished_ms BIGINT NOT NULL, status VARCHAR NOT NULL,
+            targets INTEGER NOT NULL, items INTEGER NOT NULL, failures INTEGER NOT NULL,
+            error VARCHAR NOT NULL, summary_json VARCHAR NOT NULL)""")
+        conn.exec_driver_sql("INSERT INTO collectorrun VALUES (1, 'position_news', '2026-10-04', 1, 2, 'error', 1, 0, 1, 'preserved', '{}')")
+    try:
+        db.init_db()
+        db.init_db()
+        with db.get_session() as session:
+            row = session.get(db.CollectorRun, 1)
+            assert row.error == "preserved" and row.run_count == 1 and row.empty_bucket_ms is None
+    finally:
+        engine.dispose()
+
+
 def test_existing_sqlite_news_rows_survive_startup_upgrade(tmp_path, monkeypatch):
     from sqlalchemy import inspect
     from app.agent_features.position_news import articles
@@ -85,7 +117,7 @@ def current_schema():
         "tables": {table.name: table.name in db._PG_PRIVATE_CACHE_TABLES
                    for table in db.SQLModel.metadata.tables.values()},
         "columns": columns,
-        "indexes": set(db._PG_INDEXES),
+        "indexes": set(db._PG_INDEXES) | set(db._PG_UNIQUE_INDEXES),
         "grants": set(),
     }
 

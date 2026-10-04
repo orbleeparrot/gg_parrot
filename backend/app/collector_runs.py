@@ -1,7 +1,7 @@
 """수집 엔진 실행 기록 — 관리자 '뉴스 수집 현황' 탭의 크롤링 엔진·시간대별·소스별 표의 데이터.
 
-두 표에 쓴다. ``CollectorRun`` 은 실행 한 번(Prefect flow 한 회차, 공개 뉴스 범위 한 번, 보강 배치 한 회차)의
-요약이고, ``CollectorSourceDaily`` 는 소스(Google News RSS · CoinDesk API · Playwright …)별 하루 누적이다.
+두 표에 쓴다. ``CollectorRun`` 은 처리·오류 회차의 개별 요약과 빈 회차의 시간 단위 합산이고,
+``CollectorSourceDaily`` 는 소스(Google News RSS · CoinDesk API · Playwright …)별 하루 누적이다.
 flow 는 지금도 요약 dict 를 stdout 에 찍지만 Prefect 로그는 화면에서 못 읽으니 같은 값을 표에 남긴다.
 
 기록은 모두 best-effort 다: 표가 없거나 DB 가 죽어도 수집 흐름을 절대 막지 않는다(예외는 삼키고 1분에 한 번만
@@ -30,6 +30,7 @@ _KST = timezone(timedelta(hours=9))
 WARN_INTERVAL_SECONDS = 60.0
 RUN_RETENTION_DAYS = 14
 PRUNE_EVERY_MS = 3_600_000
+EMPTY_RUN_BUCKET_MS = 3_600_000
 SUMMARY_MAX_BYTES = 8 * 1024
 ERROR_MAX_CHARS = 300
 _SUMMARY_LIST_MAX = 20
@@ -185,6 +186,32 @@ def source_label(key: str) -> str:
 
 
 # --- 기록 --------------------------------------------------------------------------
+def _persist_run(db, row) -> None:
+    """빈 회차만 원자적으로 합산한다. NULL 버킷인 처리·오류 행은 언제나 개별 저장한다."""
+    from .db import CollectorRun
+
+    if row.empty_bucket_ms is None:
+        db.add(row)
+        db.flush()
+        db.expunge(row)
+        return
+    statement = _insert_for(db)(CollectorRun).values(row.model_dump(exclude={"id"}))
+    excluded = statement.excluded
+    # 늦게 끝난 이전 회차가 최신 하트비트나 요약을 되돌리지 않는다.
+    newer = excluded.started_ms >= CollectorRun.started_ms
+    statement = statement.on_conflict_do_update(
+        index_elements=["engine", "status", "empty_bucket_ms"],
+        set_={
+            "run_count": CollectorRun.run_count + excluded.run_count,
+            "started_ms": case((newer, excluded.started_ms), else_=CollectorRun.started_ms),
+            "finished_ms": case((excluded.finished_ms > CollectorRun.finished_ms, excluded.finished_ms),
+                                else_=CollectorRun.finished_ms),
+            "summary_json": case((newer, excluded.summary_json), else_=CollectorRun.summary_json),
+        },
+    ).returning(CollectorRun.id, CollectorRun.run_count, CollectorRun.started_ms, CollectorRun.finished_ms)
+    row.id, row.run_count, row.started_ms, row.finished_ms = db.execute(statement).one()
+
+
 def prune_runs(db, *, now_ms: Optional[int] = None, retention_days: int = RUN_RETENTION_DAYS) -> int:
     from .db import CollectorRun
 
@@ -222,7 +249,7 @@ def record_run(
     summary=None,
     db=None,
 ):
-    """실행 한 건을 남긴다. 돌려주는 값은 저장된 CollectorRun 행, 실패하면 None. 절대 raise 하지 않는다."""
+    """처리·오류는 개별, 대상·수집·실패가 없는 정상/건너뜀 회차는 시간 단위로 남긴다."""
     try:
         from .db import CollectorRun
 
@@ -240,20 +267,20 @@ def record_run(
             error=clean_error(error),
             summary_json=compact_summary(summary),
         )
+        if (row.engine != ENGINE_COINDESK_PROBE
+                and row.status in {"ok", "empty", "cached", "skipped", "skipped_late"}
+                and not (row.targets or row.items or row.failures or row.error)):
+            row.empty_bucket_ms = (started or finished) // EMPTY_RUN_BUCKET_MS * EMPTY_RUN_BUCKET_MS
         # flush 로 id 를 받고(INSERT … RETURNING / lastrowid) 커밋 전에 세션에서 떼어 낸다 — 커밋이 행을 만료시키지
         # 않으니 refresh(행 전체 SELECT, summary_json 포함) 없이도 돌려준 값을 세션이 닫힌 뒤에 읽을 수 있다.
         if db is None:
             with _session() as owned:
-                owned.add(row)
-                owned.flush()
-                owned.expunge(row)
+                _persist_run(owned, row)
                 owned.commit()
                 _maybe_prune(owned, finished)
         else:
             try:
-                db.add(row)
-                db.flush()
-                db.expunge(row)
+                _persist_run(db, row)
                 db.commit()
             except Exception:
                 # 빌린 세션을 실패한 트랜잭션 채로 돌려주면 호출자의 다음 쿼리까지 깨진다.
@@ -614,7 +641,7 @@ def engines_report(db, *, now_ms: Optional[int] = None) -> dict:
     # 회차(skipped)와 캐시로 응답한 회차(cached)는 따로 센다 — 뜻이 엔진마다 다르던 runs_today 를 통일(A10·A13).
     totals: dict[str, dict] = {}
     for engine, status, runs, targets, items, failures in db.exec(
-        select(CollectorRun.engine, CollectorRun.status, func.count(CollectorRun.id),
+        select(CollectorRun.engine, CollectorRun.status, func.sum(CollectorRun.run_count),
                func.coalesce(func.sum(CollectorRun.targets), 0), func.coalesce(func.sum(CollectorRun.items), 0),
                func.coalesce(func.sum(CollectorRun.failures), 0))
         .where(CollectorRun.day_kst == today).group_by(CollectorRun.engine, CollectorRun.status)

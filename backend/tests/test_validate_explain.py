@@ -44,9 +44,11 @@ class _StubRuntime:
 
     def __init__(self):
         self.keys = []
+        self.retries = []
 
     def call(self, key, loader, *, retries=None):
         self.keys.append(key)
+        self.retries.append(retries)
         return loader(), "loaded"
 
 
@@ -189,7 +191,7 @@ def test_profit_first_is_fine_when_the_server_raised_no_warning(monkeypatch):
 
 def test_a_warning_first_answer_is_kept(monkeypatch):
     _answers(monkeypatch,
-             "거래가 14 회뿐이라 통계로 쓰기 어렵습니다. 수익의 대부분이 첫 구간에서 나왔습니다.")
+             "거래가 14 회뿐이라 통계로 쓰기 어렵습니다. 수익이 첫 구간에 몰렸습니다.")
     out = validate_explain.explain(PAYLOAD)
     assert out["source"] == "ai"
     assert set(out) == {"text", "source"}, "판정이 될 만한 필드를 더 싣지 않는다"
@@ -229,9 +231,15 @@ def test_a_trade_count_sentence_does_not_stand_in_for_trade_concentration():
     assert validate_explain._rejection("거래 표본이 적습니다.", payload) == "missing_warning:거래_집중"
 
 
-def test_an_unknown_warning_code_rejects_the_answer(monkeypatch):
+def test_an_unknown_warning_code_rejects_the_answer_with_its_real_reason(monkeypatch, caplog):
+    """확인할 수 없는 코드는 KeyError 로 새지 않고 이유 코드로 버려진다."""
     _answers(monkeypatch, LEAD)
-    assert _source({**PAYLOAD, "warnings": ["새_경고"]}) == "fallback"
+    with caplog.at_level(logging.WARNING, logger=validate_explain.logger.name):
+        assert _source({**PAYLOAD, "warnings": ["새_경고"]}) == "fallback"
+    messages = " ".join(r.getMessage() for r in caplog.records)
+    assert "unknown_warning:새_경고" in messages
+    assert "KeyError" not in messages
+    assert validate_explain._rejection(LEAD, {"warnings": ["새_경고"], "evidence": []})         == "unknown_warning:새_경고"
 
 
 def test_the_fallback_says_every_warning_the_server_raised():
@@ -485,3 +493,166 @@ def test_a_provider_failure_is_not_cached_either(monkeypatch, real_runtime):
 def test_the_cost_screen_lists_this_feature_without_a_daily_cap():
     rows = {code: (label, limit) for code, label, limit in api_usage.PURPOSES}
     assert rows["validate_explain"] == ("검증 결과 해설", None)
+
+
+# --- 2차 보강 ---------------------------------------------------------------------
+
+@pytest.mark.parametrize("text,code", [
+    ("수익의 62% 가 소수의 거래에서 나왔습니다.", "거래_집중"),
+    ("수익의 80% 이상이 한 구간에 몰렸습니다.", "한_구간_집중"),
+])
+def test_a_share_of_profit_sentence_is_not_a_profit_lead(text, code):
+    """수익의 N% 는 몫을 말하는 경고 문장이다. 조사 '의' 를 수익 숫자로 읽으면 안 된다."""
+    assert validate_explain._rejection(text, {"warnings": [code], "evidence": []}) is None
+
+
+def test_the_fallback_sentence_for_concentration_is_not_a_profit_lead():
+    payload = {"warnings": ["한_구간_집중"], "final_return_pct": 142.0, "evidence": []}
+    assert validate_explain._rejection(validate_explain._fallback(payload), payload) is None
+
+
+RETURNS = {"final_return_pct": 142.0, "buy_hold_return_pct": 38.0, "evidence": []}
+
+
+@pytest.mark.parametrize("text,warnings", [
+    ("검증 기간 동안 성과는 142% 로 홀딩의 38% 보다 높았습니다. 다만 한 구간에 쏠렸습니다.",
+     ["한_구간_집중"]),
+    ("최근 1년 성과는 142% 였고 홀딩은 38% 였습니다. 표본이 적고 한 구간에 쏠렸습니다.",
+     ["한_구간_집중", "표본_부족"]),
+])
+def test_a_loose_time_word_does_not_make_a_profit_lead_a_warning(text, warnings):
+    """기간 · 최근 은 낱말이 있다고 경고를 말한 것이 아니다 — 쏠림 말이 없으니 첫 문장이 경고가 아니다."""
+    payload = {**RETURNS, "warnings": warnings}
+    assert validate_explain._rejection(text, payload) == "warning_not_first"
+
+
+def test_a_return_figure_before_the_warning_is_a_profit_lead():
+    """위치 규칙 — 낱말 목록에 없는 표현이라도 수익 숫자가 경고보다 앞서면 수익부터 말한 것이다."""
+    payload = {**RETURNS, "warnings": ["표본_부족", "한_구간_집중"]}
+    text = "142% 의 성과였지만 표본이 적습니다. 한 구간에 쏠렸습니다."
+    assert validate_explain._rejection(text, payload) == "profit_lead"
+
+
+def test_a_return_figure_after_the_warning_is_fine():
+    payload = {**RETURNS, "warnings": ["표본_부족", "한_구간_집중"]}
+    text = "표본이 적어서 142% 라는 성과는 믿기 어렵습니다. 한 구간에 쏠렸습니다."
+    assert validate_explain._rejection(text, payload) is None
+
+
+def test_a_longer_number_is_not_mistaken_for_the_return_figure():
+    payload = {**RETURNS, "warnings": ["표본_부족"]}
+    text = "1142% 와 38.5% 는 숫자일 뿐이고 표본이 적습니다."
+    assert validate_explain._rejection(text, payload) is None
+
+
+def test_the_other_warning_overlap_no_longer_fills_in_for_a_missing_one():
+    """구간 · 집중 을 두 코드가 함께 쓰던 때의 오통과. 후반부 문장은 한_구간을, 한_구간 문장은 거래_집중을 못 채운다."""
+    tail = validate_explain._rejection("마지막 구간 성과가 음수입니다.",
+                                       {"warnings": ["한_구간_집중", "후반부_음수"], "evidence": []})
+    assert tail == "missing_warning:한_구간_집중"
+    spread = validate_explain._rejection("수익이 한 시기에 집중됐습니다.",
+                                         {"warnings": ["거래_집중", "한_구간_집중"], "evidence": []})
+    assert spread == "missing_warning:거래_집중"
+    assert not validate_explain._anchored("마지막 구간 성과가 음수입니다", "한_구간_집중")
+    assert not validate_explain._anchored("수익이 한 시기에 집중됐습니다", "거래_집중")
+
+
+def test_the_spread_warning_needs_both_a_span_word_and_a_lean_word():
+    assert not validate_explain._anchored("한 구간입니다", "한_구간_집중")
+    assert not validate_explain._anchored("수익이 쏠렸습니다", "한_구간_집중")
+    assert validate_explain._anchored("한 달에 편중됐습니다", "한_구간_집중")
+
+
+@pytest.mark.parametrize("code,sentence", [
+    ("표본_부족", "거래가 14번뿐입니다."),
+    ("표본_부족", "거래 수가 14건에 그쳤습니다."),
+    ("거래_집중", "일부 거래가 수익 대부분을 만들었습니다."),
+    ("거래_집중", "특정 거래 한두 건이 수익을 만들었습니다."),
+    ("한_구간_집중", "수익이 일부 시점에 편중되어 있습니다."),
+    ("후반부_음수", "뒷부분 구간에서는 손실이 났습니다."),
+    ("후반부_음수", "끝으로 갈수록 마이너스입니다."),
+])
+def test_natural_phrasings_of_each_warning_are_kept(code, sentence):
+    assert validate_explain._rejection(sentence, {"warnings": [code], "evidence": []}) is None
+
+
+def test_a_bare_word_for_times_is_not_a_sample_size_anchor():
+    assert not validate_explain._anchored("한 번에 정리하면 이렇습니다", "표본_부족")
+
+
+def test_an_intro_sentence_that_announces_the_warnings_counts_as_first():
+    text = "이번 검증에서 경고가 두 가지 나왔습니다. 표본이 적고 수익이 한 구간에 쏠렸습니다."
+    assert validate_explain._rejection(text, PAYLOAD) is None
+
+
+def test_an_intro_sentence_does_not_excuse_a_figure_ahead_of_it():
+    payload = {**RETURNS, "warnings": ["표본_부족"]}
+    text = "142% 를 냈지만 경고가 있습니다. 표본이 적습니다."
+    assert validate_explain._rejection(text, payload) == "profit_lead"
+
+
+@pytest.mark.parametrize("sentence", [
+    "미래 수익을 보장할 수 없습니다.",
+    "앞으로의 성과가 보장되지는 않습니다.",
+    "이 구성이 안전하지는 않습니다.",
+    "이 구성은 안전하지 못합니다.",
+    "결과가 확실치 않습니다.",
+    "결과가 확실하지않습니다.",
+    "결과가 확실하지 않습니다.",
+])
+def test_more_cautious_negated_forms_are_kept(sentence):
+    assert validate_explain._banned_hit(sentence) is None
+
+
+@pytest.mark.parametrize("sentence", [
+    "이 결과는 확실합니다.",
+    "성과를 보장합니다.",
+    "이 구성은 안전합니다.",
+    "지불보장 입니다.",
+    "이 전략은 비추천 입니다.",
+    "이 전략은 유망하지 않습니다.",
+    "무조건하지 않습니다.",
+])
+def test_the_extra_tails_do_not_open_a_door_for_the_other_banned_words(sentence):
+    assert validate_explain._banned_hit(sentence) is not None
+
+
+def test_an_abbreviated_year_is_not_an_unpaired_quote(monkeypatch):
+    _answers(monkeypatch, f"{LEAD} '24년 대비 거래가 줄었습니다.")
+    assert _source() == "ai"
+
+
+def test_an_abbreviated_year_does_not_swallow_a_real_quote(monkeypatch):
+    _answers(monkeypatch, f"{LEAD} '24년 대비 '바이낸스 상장 공지' 기사가 있었습니다.")
+    assert _source(WITH_EVIDENCE) == "fallback"
+
+
+@pytest.mark.parametrize("fragment", ["traders' 반응이 있었습니다.", "5' 간격입니다.",
+                                      "ETF' 상장 기사입니다.", "'제목이 이어집니다."])
+def test_no_other_bare_apostrophe_is_exempt(monkeypatch, fragment):
+    _answers(monkeypatch, f"{LEAD} {fragment}")
+    assert _source() == "fallback"
+
+
+def test_the_share_figures_reach_the_model(monkeypatch):
+    calls = _answers(monkeypatch, LEAD)
+    validate_explain.explain({**PAYLOAD, "top_month_share_pct": 71.234, "top_trade_share_pct": 62.0})
+    assert calls[0]["top_month_share_pct"] == 71.23
+    assert calls[0]["top_trade_share_pct"] == 62.0
+
+
+def test_the_call_is_made_with_no_retry(monkeypatch, runtime):
+    """재시도가 켜진 채 부르면 실패한 공급자 호출이 두 번 청구된다. 기본 런타임 설정과 무관하게 0 이다."""
+    _answers(monkeypatch, LEAD)
+    validate_explain.explain(PAYLOAD)
+    assert runtime.retries == [0]
+
+
+def test_a_year_apostrophe_next_to_a_real_supplied_quote_keeps_the_real_one(monkeypatch):
+    _answers(monkeypatch, f"{LEAD} '24년 3월 '{TITLE}' 기사가 있었습니다.")
+    assert _source(WITH_EVIDENCE) == "ai"
+
+
+def test_the_bare_negative_tail_is_matched_only_right_after_the_word():
+    assert validate_explain._NEGATED_TAIL.match("는 않습니다")
+    assert validate_explain._banned_hit("확실하다고 합니다") is not None

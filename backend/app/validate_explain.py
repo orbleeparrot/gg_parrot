@@ -35,7 +35,9 @@ BANNED_WORDS = ("추천", "보장", "확실", "무조건", "유망", "안전", "
 # (비추천 같은) 그대로 판정처럼 읽히므로 어떤 경우에도 면제하지 않는다.
 _NEGATABLE = ("확실", "보장", "안전")
 _NEGATION_PREFIXES = "불비미"           # 불확실 · 미보장 · 비안전
-_NEGATED_TAILS = ("하지 않", "되지 않")  # 확실하지 않습니다 · 보장되지 않습니다
+# 부정형 꼬리 — 낱말 바로 뒤에 와야 한다: 확실하지 않습니다 · 보장되지는 않습니다 ·
+# 안전하지 못합니다 · 확실치 않습니다 · 보장할 수 없습니다 · 확실하지않(띄어쓰기 없음).
+_NEGATED_TAIL = re.compile(r"(?:(?:하|되)지는?\s?(?:않|못)|치\s?않|할\s?수\s?없|는\s?않)")
 _HANGUL = re.compile(r"[가-힣]")
 
 # 프롬프트는 3~5 문장을 요구한다. 1200 자는 그 몇 배라서, 넘으면 규칙을 어긴 글이다.
@@ -47,7 +49,8 @@ MAX_CHARS = 1200
 # ('수익은 약 142%' · '142% 의 수익'). 낱말 목록만으로는 끝이 없어서, 아래 첫 문장 닻 규칙이
 # 나머지를 막는다.
 _PROFIT_WORDS = ("수익률", "벌었", "앞섰", "이겼", "상회", "웃돌", "넘어섰")
-_PROFIT_FIGURE = re.compile(r"수익\S*\s*(?:약|총)?\s*[+-]?\d")
+# 조사는 이 넷만 본다. 의 는 뺀다 — '수익의 62% 가 소수의 거래에서' 는 거래_집중을 말하는 문장이다.
+_PROFIT_FIGURE = re.compile(r"수익(?:이|은|을|금)?\s*(?:약|총)?\s*[+-]?\d")
 _FIGURE_PROFIT = re.compile(r"[+-]?\d[\d.,]*\s*%\s*(?:의\s*)?(?:수익|이익|상승|올랐|올렸)")
 
 # 인용 표시 쌍. 「」 『』 《》 〈〉 “” "" ‘’ '' 가 모두 인용이다. 아스키 ''·‘’ 는 영어
@@ -60,12 +63,13 @@ _QUOTE_SPANS = (
     re.compile(r"〈(.*?)〉", re.S),
     re.compile(r"“(.*?)”", re.S),
     re.compile(r'"(.*?)"', re.S),
-    re.compile(r"(?<![A-Za-z0-9])‘(.*?)’(?![A-Za-z0-9])", re.S),
-    re.compile(r"(?<![A-Za-z0-9])'(.*?)'(?![A-Za-z0-9])", re.S),
+    re.compile(r"(?<![A-Za-z0-9])‘(?!\d\d)(.*?)’(?![A-Za-z0-9])", re.S),
+    re.compile(r"(?<![A-Za-z0-9])'(?!\d\d)(.*?)'(?![A-Za-z0-9])", re.S),
 )
 # 짝이 맞는 구간을 걷어 낸 뒤에도 남는 인용 표시는 짝 없는 인용이다(가짜 제목이 닫히지 않은
-# 따옴표 뒤에 숨는 길을 막는다). 홑따옴표는 영문에 붙은 소유격만 빼고 모두 세운다.
-_STRAY_QUOTE = re.compile(r"""[「」『』《》〈〉“”"]|(?<![A-Za-z0-9])['‘]|['’](?![A-Za-z0-9])""")
+# 따옴표 뒤에 숨는 길을 막는다). 홑따옴표는 영문에 붙은 소유격과 줄인 연도('24년, 바로 뒤에
+# 숫자 두 자리)만 빼고 모두 세운다. traders' 반응 · 5' 간격 · ETF' 상장 은 그대로 걸린다.
+_STRAY_QUOTE = re.compile(r"""[「」『』《》〈〉“”"]|(?<![A-Za-z0-9])['‘](?!\d\d)|['’](?![A-Za-z0-9])""")
 _NEWS_WORDS = re.compile(r"기사|뉴스|헤드라인")
 
 # v2 — 공급자에 보내는 입력을 _model_input 으로 줄여서(허용 필드만, 링크 · 시각 제거, 소수 둘째 자리).
@@ -73,27 +77,31 @@ _PROMPT_VERSION = "validate-explain-v2"
 
 # 서버 경고 코드 → 한 줄. 키가 engine.validation.WARNING_CODES 와 같은지는 시험이 지킨다.
 _WARNING_TEXT = {
-    "한_구간_집중": "수익 대부분이 한 구간에서 나왔습니다",
+    "한_구간_집중": "수익 대부분이 한 구간에 몰렸습니다",
     "표본_부족": "거래 표본이 적어 통계로 쓰기 어렵습니다",
     "후반부_음수": "뒤쪽 구간에서 성과가 음수입니다",
     "거래_집중": "소수의 거래가 수익의 절반 이상을 만들었습니다",
 }
 
-# 서버 경고 코드 → 그 경고를 말하는 글에 나올 법한 낱말들(하나라도 있으면 말한 것으로 본다).
-# 하나의 낱말로 못 박으면 좋은 글을 잘못 버리므로 여러 낱말 중 하나로 한다. 거래_집중은
-# '거래' 한 글자가 표본_부족 문장으로도 채워지므로 일부러 좁게 잡았다.
+# 서버 경고 코드 → 그 경고를 말하는 글에 나올 법한 낱말 묶음들. 묶음 안에서는 하나만 있으면
+# 되고(any-of), 묶음이 여럿이면 모두 있어야 한다(한_구간_집중은 구간 말 + 쏠림 말 한 쌍).
+# 낱말은 정규식이다('번' 은 숫자 뒤에서만). 하나의 낱말로 못 박으면 좋은 글을 잘못 버리므로
+# 여러 낱말 중 하나로 하되, 코드끼리 낱말을 나눠 쓰지 않게 했다 — 구간 · 집중 을 두 코드가
+# 함께 쓰면 후반부_음수 문장이 한_구간_집중을, 한_구간_집중 문장이 거래_집중을 대신 채운다.
 _WARNING_ANCHORS = {
-    "한_구간_집중": ("구간", "집중", "몰", "쏠", "기간", "시기"),
-    "표본_부족": ("표본", "샘플", "횟수", "건수", "통계"),
-    "후반부_음수": ("후반", "뒤쪽", "마지막", "최근", "음수"),
-    "거래_집중": ("소수", "몇 건", "절반", "집중"),
+    "한_구간_집중": (("구간", "기간", "시기", "시점", "한 달"),
+                 ("집중", "몰", "쏠", "편중", "치우")),
+    "표본_부족": (("표본", "샘플", "횟수", "건수", "거래 수", "통계", r"\d\s*번"),),
+    "후반부_음수": (("후반", "뒤쪽", "뒷부분", "마지막", "최근", "음수", "마이너스"),),
+    "거래_집중": (("소수", "몇 건", "절반", "일부 거래", "특정 거래"),),
 }
 _NO_WARNING_TEXT = "서버 판정에서 걸린 항목은 없습니다."
 
 # 입력 허용 필드. explain 이 신뢰 경계라서 이 밖의 키(요청 번호 · 시각 · 사용자 입력 이름 등
 # 자유 문장)는 프롬프트에도 캐시 키에도 들어가지 않는다.
 _ALLOWED_KEYS = ("final_return_pct", "buy_hold_return_pct", "mdd_pct", "total_trades",
-                 "calmar", "sortino", "windows", "top_trade_share_pct", "warnings", "evidence")
+                 "calmar", "sortino", "windows", "top_trade_share_pct", "top_month_share_pct",
+                 "warnings", "evidence")
 
 _SYSTEM = (
     "너는 백테스트 검증 결과를 설명하는 분석가야. 주어진 숫자와 경고만 쓰고 "
@@ -209,7 +217,7 @@ def _first_sentence(text: str) -> str:
 
 def _negated(text: str, at: int, word: str) -> bool:
     """확실 · 보장 · 안전이 부정형(불확실 · 보장되지 않습니다)으로 쓰였는가."""
-    if text.startswith(_NEGATED_TAILS, at + len(word)):
+    if _NEGATED_TAIL.match(text, at + len(word)):
         return True
     if at >= 1 and text[at - 1] in _NEGATION_PREFIXES:
         # 접두어가 낱말 머리일 때만. 앞이 한글이면 지불보장 처럼 다른 낱말의 끝 글자다.
@@ -229,7 +237,38 @@ def _banned_hit(text: str) -> str | None:
 
 
 def _anchored(text: str, code: str) -> bool:
-    return any(anchor in text for anchor in _WARNING_ANCHORS[code])
+    """그 경고의 낱말 묶음마다 하나 이상 글에 있는가."""
+    return all(any(re.search(word, text) for word in group) for group in _WARNING_ANCHORS[code])
+
+
+def _warning_mark(head: str, codes: list[str]) -> int | None:
+    """첫 문장에서 경고를 말하기 시작하는 자리(경고라는 말이나 켜진 경고의 낱말이 처음 나온 곳)."""
+    starts = [m.start() for word in ("경고",) for m in re.finditer(word, head)]
+    for code in codes:
+        for group in _WARNING_ANCHORS[code]:
+            for word in group:
+                starts += [m.start() for m in re.finditer(word, head)]
+    return min(starts) if starts else None
+
+
+def _return_figure(head: str, payload: dict) -> int | None:
+    """첫 문장에서 서버가 준 수익 숫자(전략 · 홀딩, 42%)가 처음 나온 자리."""
+    forms: set[str] = set()
+    for key in ("final_return_pct", "buy_hold_return_pct"):
+        try:
+            value = float(payload.get(key))
+        except (TypeError, ValueError):
+            continue
+        if value != value or value in (float("inf"), float("-inf")):
+            continue
+        for places in (0, 1, 2):
+            shown = f"{abs(value):.{places}f}"
+            forms.add(shown.rstrip("0").rstrip(".") if "." in shown else shown)
+    if not forms:
+        return None
+    pattern = r"(?<![\d.,])(?:%s)(?!\d|\.\d)\s*%%" % "|".join(re.escape(form) for form in forms)
+    found = re.search(pattern, head)
+    return found.start() if found else None
 
 
 def _rejection(text, payload: dict) -> str | None:
@@ -262,11 +301,16 @@ def _rejection(text, payload: dict) -> str | None:
     if (any(word in head for word in _PROFIT_WORDS)
             or _PROFIT_FIGURE.search(head) or _FIGURE_PROFIT.search(head)):
         return "profit_lead"
+    # 수익 숫자가 경고를 말하기 전에 나오면 수익부터 말한 것이다(낱말 목록에 없는 표현도 잡는다).
+    figure, mark = _return_figure(head, payload), _warning_mark(head, codes)
+    if figure is not None and mark is not None and figure < mark:
+        return "profit_lead"
     for code in codes:
         if not _anchored(text, code):
             return f"missing_warning:{code}"
-    # 첫 문장이 켜진 경고 중 하나를 말해야 한다 — 경고부터 말하라는 규칙의 빈틈을 닫는다.
-    if not any(_anchored(head, code) for code in codes):
+    # 첫 문장이 경고를 말해야 한다 — '경고가 두 가지 나왔습니다' 같은 안내 문장도 괜찮고,
+    # 아니면 켜진 경고 중 하나를 온전히 말해야 한다.
+    if "경고" not in head and not any(_anchored(head, code) for code in codes):
         return "warning_not_first"
     return None
 

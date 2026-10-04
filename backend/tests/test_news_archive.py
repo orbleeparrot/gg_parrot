@@ -236,6 +236,33 @@ def test_one_failing_chunk_does_not_lose_the_others(db, monkeypatch, caplog):
     assert len(rows(db)) == 50 and warnings(caplog)
 
 
+def test_failure_after_a_committed_chunk_reports_what_was_really_stored(db, monkeypatch, caplog):
+    calls = {"n": 0}
+
+    class SecondChunkAndRollbackFail(Session):
+        def exec(self, *args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise RuntimeError("second chunk rejected")
+            return super().exec(*args, **kwargs)
+
+        def rollback(self):
+            raise RuntimeError("rollback failed too")
+
+    monkeypatch.setattr(news_archive, "get_session", lambda: SecondChunkAndRollbackFail(db))
+    items = [item(0, f"기사 {i}", url=f"https://example.test/r{i}") for i in range(150)]
+    with caplog.at_level(logging.WARNING, logger=news_archive.logger.name):
+        assert news_archive.store("BTC", items) == 100
+    assert len(rows(db)) == 100
+
+
+def test_urls_differing_only_in_a_non_utf8_percent_escape_stay_separate(db):
+    urls = ["https://example.test/a?q=%ff", "https://example.test/a?q=%fe",
+            "https://example.test/k?q=%B0%A1", "https://example.test/k?q=%B0%A2"]
+    assert news_archive.store("BTC", [item(0, url=u) for u in urls]) == 4
+    assert sorted(row.url for row in rows(db)) == sorted(urls)
+
+
 @pytest.mark.parametrize("bad", [None, "x", 5, [], ["x"], object()])
 def test_a_malformed_item_is_skipped_and_the_rest_are_kept(db, bad):
     assert news_archive.store("BTC", [bad, item(0, "멀쩡한 기사")]) == 1

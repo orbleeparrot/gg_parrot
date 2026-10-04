@@ -18,7 +18,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
-from urllib.parse import parse_qsl, urlencode, urlsplit
+from urllib.parse import urlsplit
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -67,10 +67,14 @@ def _normalized_url(url: str) -> str:
     port = parts.port
     if port and port != _DEFAULT_PORTS[parts.scheme.lower()]:
         host = f"{host}:{port}"
-    query = sorted((k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)
-                   if k.lower() not in _TRACKING_PARAMS and not k.lower().startswith("utm_"))
+    # 질의는 디코딩하지 않고 '&' 로 자른 원문 토막으로 비교한다. 디코딩하면 EUC-KR 같은 UTF-8 이
+    # 아닌 퍼센트 인코딩(%B0%A1 ...)이 모두 U+FFFD 로 뭉쳐 서로 다른 기사가 한 열쇠가 된다.
+    # 조각(#)은 버린다 — #/news/123 같은 해시 라우트 기사 주소는 구분하지 못하는 알려진 손실이다.
+    tokens = sorted(token for token in parts.query.split("&")
+                    if token and token.split("=", 1)[0].lower() not in _TRACKING_PARAMS
+                    and not token.lower().startswith("utm_"))
     path = parts.path.rstrip("/")
-    return f"https://{host}{path}" + (f"?{urlencode(query)}" if query else "")
+    return f"https://{host}{path}" + (f"?{'&'.join(tokens)}" if tokens else "")
 
 
 def _published_ms(value):
@@ -85,7 +89,11 @@ def _published_ms(value):
 
 
 def _row(asset: str, item) -> dict | None:
-    """항목 하나를 저장할 행으로. 못 쓰는 항목이면 None — 한 항목 때문에 묶음을 버리지 않는다."""
+    """항목 하나를 저장할 행으로. 못 쓰는 항목이면 None — 한 항목 때문에 묶음을 버리지 않는다.
+
+    주의: store 는 묶음마다 따로 커밋하므로 도중에 실패하면 앞 묶음은 이미 기록돼 있다. 키가 결정적이고
+    삽입이 DO NOTHING 이라 같은 입력으로 다시 불러도 안전하다.
+    """
     if not isinstance(item, dict):
         return None
     try:
@@ -112,8 +120,9 @@ def store(asset: str, items: list[dict]) -> int:
     """쓸 수 있는 항목만 적재하고, 실제로 새로 들어간 행 수를 돌려준다.
 
     같은 코인·같은 기사(정규화한 URL 기준)는 한 번만 들어가며 이미 있는 행은 세지 않는다.
-    어떤 실패도 밖으로 던지지 않고 0(또는 그때까지 들어간 수)을 돌려준다.
+    어떤 실패도 밖으로 던지지 않는다. 도중에 실패하면 그때까지 실제로 들어간 수를 돌려준다.
     """
+    inserted = 0
     try:
         asset = _asset(asset)
         if not asset:
@@ -126,7 +135,6 @@ def store(asset: str, items: list[dict]) -> int:
                 rows.append(row)
         if not rows:
             return 0
-        inserted = 0
         with get_session() as db:
             insert = pg_insert if db.get_bind().dialect.name == "postgresql" else sqlite_insert
             # 묶음마다 따로 커밋한다 — 한 묶음이 거부돼도 이미 들어간 것과 나머지는 살린다.
@@ -146,7 +154,7 @@ def store(asset: str, items: list[dict]) -> int:
         return inserted
     except Exception:
         logger.warning("뉴스 제목 아카이브 저장 실패 (asset=%r)", asset, exc_info=True)
-        return 0
+        return inserted
 
 
 def lookup(asset: str, *, start_ms: int, end_ms: int, limit: int = MAX_ROWS) -> list[dict]:
@@ -156,7 +164,7 @@ def lookup(asset: str, *, start_ms: int, end_ms: int, limit: int = MAX_ROWS) -> 
         # 구간은 int64 안으로 눌러 담는다. 무한대·숫자 아님은 int() 가 던져 아래에서 빈 목록이 된다.
         start_ms = max(-_INT64_MAX, min(_INT64_MAX, int(start_ms)))
         end_ms = max(-_INT64_MAX, min(_INT64_MAX, int(end_ms)))
-        limit = max(1, min(int(limit), 1000))
+        limit = max(1, int(limit))
         if not asset or end_ms < start_ms:
             return []
         with get_session() as db:

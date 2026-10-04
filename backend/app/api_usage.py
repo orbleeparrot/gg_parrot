@@ -57,6 +57,8 @@ PURPOSES: tuple[tuple[str, str, Optional[tuple[str, int]]], ...] = (
     ("market_news_summary", "시장 브리핑 요약", ("NEWS_MARKET_SUMMARY_MAX_CALLS_PER_DAY", 2)),
     ("ai_challenge", "일일 챌린지 생성", None),
     ("devnote", "개발자 노트 생성", None),
+    # 한도를 두지 않는다 — 한도가 걸리면 다시 검증해 보는 일이 막히고, 다시 검증하는 것이 이 기능의 목적이다.
+    ("validate_explain", "검증 결과 해설", None),
 )
 NO_LIMIT_LABEL = "없음"
 

@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -55,6 +56,81 @@ def _run_row(engine, *, age_s, status="ok", error="", items=0, failures=0, targe
 
 
 # --- 기록 ------------------------------------------------------------------------
+def test_empty_runs_share_an_hourly_row_without_losing_counts_or_heartbeat():
+    ids = set()
+    for index in range(60):
+        started = NOW_MS + index * 30_000
+        row = collector_runs.record_run("position_news", started_ms=started, finished_ms=started + 1000,
+                                        summary={"ticker_count": 0, "sequence": index})
+        assert row is not None
+        ids.add(row.id)
+    assert len(ids) == 1
+    (stored,) = _runs("position_news")
+    assert stored.run_count == 60 and stored.empty_bucket_ms == NOW_MS
+    assert stored.started_ms == NOW_MS + 59 * 30_000
+    assert stored.finished_ms == stored.started_ms + 1000
+    assert json.loads(stored.summary_json)["sequence"] == 59
+    with get_session() as db:
+        entry = next(row for row in collector_runs.engines_report(db, now_ms=stored.finished_ms + 1000)["engines"]
+                     if row["engine"] == "position_news")
+    assert (entry["runs_today"], entry["last_run_ms"], entry["status"]) == (60, stored.finished_ms, "ok")
+
+
+def test_empty_rollups_separate_hours_days_engines_and_statuses():
+    for engine, status, millis in (
+        ("position_news", "ok", NOW_MS), ("position_news", "ok", NOW_MS + 1000),
+        ("position_news", "skipped", NOW_MS), ("whale_activity", "ok", NOW_MS),
+        ("position_news", "ok", NOW_MS + 3_600_000),
+        ("position_news", "ok", NOW_MS + 86_400_000),
+    ):
+        assert collector_runs.record_run(engine, status=status, started_ms=millis, finished_ms=millis)
+    rows = _runs()
+    assert len(rows) == 5 and sum(row.run_count for row in rows) == 6
+    with get_session() as db:
+        by = {row["engine"]: row for row in collector_runs.engines_report(db, now_ms=NOW_MS + 3_600_000)["engines"]}
+    assert (by["position_news"]["runs_today"], by["position_news"]["skipped_today"]) == (3, 1)
+    assert by["whale_activity"]["runs_today"] == 1
+
+
+@pytest.mark.parametrize("values", [
+    {"targets": 1}, {"items": 1}, {"failures": 1}, {"error": "source warning"},
+    {"status": "error"}, {"status": "degraded"}, {"status": "source_unavailable"},
+    {"engine": "coindesk_probe"},
+])
+def test_work_errors_and_manual_probes_keep_individual_history(values):
+    for index in range(2):
+        args = {"engine": "position_news", "started_ms": NOW_MS + index, "finished_ms": NOW_MS + index, **values}
+        assert collector_runs.record_run(**args)
+    rows = _runs()
+    assert len(rows) == 2 and all(row.run_count == 1 and row.empty_bucket_ms is None for row in rows)
+
+
+def test_late_empty_run_does_not_rewind_latest_status_or_summary():
+    collector_runs.record_run("position_news", started_ms=NOW_MS + 60_000, finished_ms=NOW_MS + 61_000,
+                              summary={"new": True})
+    collector_runs.record_run("position_news", started_ms=NOW_MS, finished_ms=NOW_MS + 1000,
+                              summary={"new": False})
+    (row,) = _runs()
+    assert row.run_count == 2
+    assert (row.started_ms, row.finished_ms) == (NOW_MS + 60_000, NOW_MS + 61_000)
+    assert json.loads(row.summary_json) == {"new": True}
+    collector_runs.record_run("position_news", started_ms=NOW_MS + 70_000, finished_ms=NOW_MS + 71_000, status="error")
+    with get_session() as db:
+        entry = next(row for row in collector_runs.engines_report(db, now_ms=NOW_MS + 72_000)["engines"]
+                     if row["engine"] == "position_news")
+    assert (entry["status"], entry["runs_today"]) == ("error", 3)
+
+
+def test_concurrent_empty_recorders_add_counts_instead_of_overwriting():
+    def record(index):
+        return collector_runs.record_run("whale_activity", started_ms=NOW_MS + index, finished_ms=NOW_MS + index)
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        rows = list(executor.map(record, range(40)))
+    assert all(row is not None for row in rows)
+    (stored,) = _runs()
+    assert stored.run_count == 40 and stored.started_ms == NOW_MS + 39
+
+
 def test_record_run_compacts_summary_and_trims_error():
     summary = {"ticker_count": 2, "items": [{"asset_symbol": "BTC"}] * 3, "browser_failed_tickers": ["BTC"],
                "configuration": {"collector_mode": "rss"}}
@@ -119,7 +195,9 @@ def test_record_run_prunes_rows_older_than_retention_once_per_hour(monkeypatch):
         db.add(CollectorRun(engine="whale_activity", day_kst="2026-08-28", started_ms=old, finished_ms=old))
         db.commit()
     collector_runs.record_run("whale_activity", started_ms=NOW_MS, finished_ms=NOW_MS)
-    assert sorted(row.started_ms for row in _runs("whale_activity")) == [old, NOW_MS, NOW_MS], "한 시간 안에는 다시 지우지 않는다"
+    rows = _runs("whale_activity")
+    assert sorted(row.started_ms for row in rows) == [old, NOW_MS], "한 시간 안에는 다시 지우지 않는다"
+    assert sum(row.run_count for row in rows) == 3, "같은 시간대의 빈 두 회차는 합산한다"
 
 
 def test_recording_never_raises_when_the_database_is_unavailable(monkeypatch, caplog):
@@ -698,7 +776,7 @@ def test_public_news_ticker_skips_are_not_calls_and_warming_does_not_count_posit
     monkeypatch.setattr(public_news.collector, "collect_ticker",
                         lambda scope, **_: {"asset_symbol": scope, "status": "superseded", "used_ai_budget": False})
     assert asyncio.run(runtime.refresh("ETH")) == 300
-    assert [row.status for row in _runs("public_news")] == ["skipped", "skipped"]
+    assert [(row.status, row.run_count) for row in _runs("public_news")] == [("skipped", 2)]
     assert _sources("public_news") == {}
 
     # 워밍이 부른 fetch 안에서 news.py 의 소스 누적 훅이 불려도 position_news 소스로 세지 않는다(이중 집계·upsert 절감).
@@ -716,7 +794,7 @@ def test_public_news_ticker_skips_are_not_calls_and_warming_does_not_count_posit
     assert asyncio.run(runtime.refresh("SOL")) == 300
     assert _sources("position_news") == {}, "워밍이 부른 fetch 는 position_news 소스가 아니다"
     assert (_sources("public_news")["ticker"].calls, _sources("public_news")["ticker"].items) == (1, 0), "저장한 새 행이 없으면 수집 0"
-    assert [row.status for row in _runs("public_news")] == ["skipped", "skipped", "ok"]
+    assert [(row.status, row.run_count) for row in _runs("public_news")] == [("skipped", 2), ("ok", 1)]
 
     news._record_collector_sources(envelope_sources)  # 워밍 밖(Prefect flow 등)의 호출은 그대로 기록된다
     assert (_sources("position_news")["google"].calls, _sources("position_news")["google"].items) == (1, 3)

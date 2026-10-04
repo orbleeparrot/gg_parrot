@@ -57,3 +57,42 @@ test("빈 입력에도 터지지 않는다", () => {
   assert.equal(warningText(), "");
   assert.equal(analysisLabel(), "자동 요약");
 });
+
+test("Infinity 와 -Infinity 는 막대 길이가 될 수 없어 실패로 남는다", () => {
+  const bars = windowBars([
+    { index: 1, return_pct: Infinity },
+    { index: 2, return_pct: -Infinity },
+  ]);
+  assert.deepEqual(bars[0], { index: 1, pct: null, failed: true });
+  assert.deepEqual(bars[1], { index: 2, pct: null, failed: true });
+});
+
+test("숫자처럼 생긴 문자열은 숫자로 받아들이지 않는다", () => {
+  const [bar] = windowBars([{ index: 1, return_pct: "12.5" }]);
+  assert.deepEqual(bar, { index: 1, pct: null, failed: true });
+});
+
+test("-0 은 실패가 아니라 값이고 -0 그대로 넘어간다", () => {
+  const [bar] = windowBars([{ index: 1, return_pct: -0 }]);
+  assert.equal(bar.failed, false);
+  assert.ok(Object.is(bar.pct, -0));
+});
+
+test("문자열처럼 행동하는 값은 'ai' 로 쳐 주지 않는다", () => {
+  assert.equal(analysisLabel(new String("ai")), "자동 요약");
+  assert.equal(analysisLabel({ toString() { return "ai"; } }), "자동 요약");
+  assert.equal(analysisLabel({ valueOf() { return "ai"; } }), "자동 요약");
+  assert.equal(analysisLabel(["ai"]), "자동 요약");
+});
+
+test("경고 문장은 코드가 아니라 서로 다른 한국어 문장이다", () => {
+  const codes = ["한_구간_집중", "표본_부족", "후반부_음수", "거래_집중"];
+  const texts = codes.map(warningText);
+  for (const [i, text] of texts.entries()) {
+    assert.notEqual(text, "");
+    assert.notEqual(text, codes[i]);
+    assert.ok(!text.includes("_"), `${codes[i]} 문장에 식별자 흔적이 있다`);
+    assert.match(text, /요$/);
+  }
+  assert.equal(new Set(texts).size, codes.length);
+});

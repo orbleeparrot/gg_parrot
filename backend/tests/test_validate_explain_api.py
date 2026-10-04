@@ -5,15 +5,19 @@ payload 는 상태에 남겨, 서버가 무엇을 모델에 넘겼는지를 직�
 """
 import json
 import math
+from datetime import timezone
 
 import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
 from app import evidence, main, validate_explain
-from app.data import NoSpotDataError
+from app.data import NoSpotDataError, krw
 
 SPIKE_UP, SPIKE_DOWN = 80, 100  # 합성 캔들에서 크게 튀는 두 날(색인)
+BENCHMARKS = {"BTCUSDT", "KRW-BTC"}
+# 두 번째 조회(기준 종목)는 코인이 오른 날(+20%) 같이 +12% 올라 '시장', 코인이 내린 날(-15%) 반대로 +5% 올라 '종목'이다.
+BENCH_UP, BENCH_DOWN = 0.12, 0.05
 
 
 def macro_body(symbol="BTCUSDT", exchange=None, **extra):
@@ -45,12 +49,14 @@ VALIDATE_RESPONSE = {
 }
 
 
-def candles(offset_hours=0, rows=120, up=SPIKE_UP, down=SPIKE_DOWN):
-    """일봉 합성 프레임. 두 날이 크게 튄다. offset_hours 가 -9 면 KST 0 시에 열리는 봉(빗썸)이다."""
+def candles(offset_hours=0, rows=120, up=SPIKE_UP, down=SPIKE_DOWN, up_move=0.2, down_move=-0.15):
+    """일봉 합성 프레임. 두 날이 크게 튄다. offset_hours 가 -9 면 KST 0 시에 열리는 봉(빗썸)이다.
+
+    up_move · down_move 는 그 두 날의 등락(비율)이다 — 기준 종목 프레임은 이것을 달리 줘서 코인과 구별한다."""
     stamps = pd.date_range("2026-01-01", periods=rows, freq="1D", tz="UTC") + pd.Timedelta(hours=offset_hours)
     close, level = [], 100.0
     for i in range(rows):
-        level *= 1 + 0.004 * math.sin(i * 1.7) + (0.2 if i == up else 0) - (0.15 if i == down else 0)
+        level *= 1 + 0.004 * math.sin(i * 1.7) + (up_move if i == up else 0) + (down_move if i == down else 0)
         close.append(level)
     volume = [40.0 if i in (up, down) else 10.0 for i in range(rows)]
     return pd.DataFrame({"timestamp": stamps, "open": close, "high": close, "low": close,
@@ -68,13 +74,22 @@ def fresh_limiter():
 @pytest.fixture
 def client(monkeypatch):
     """캔들 · 헤드라인 · 해설을 모두 막은 클라이언트. 서버가 한 일을 state_ 에 남긴다."""
-    state = {"fetched": [], "headlines": [], "payloads": [], "offset": 0, "fail": set()}
+    state = {"fetched": [], "headlines": [], "payloads": [], "offset": 0, "fail": set(), "tz": []}
 
     def fake_fetch(macro, start_ms, end_ms):
         state["fetched"].append((macro.symbol, macro.exchange, macro.candle_interval))
         if macro.symbol in state["fail"]:
             raise NoSpotDataError("no candles")
+        if len(state["fetched"]) > 1 and macro.symbol in BENCHMARKS:
+            # 두 번째 조회(기준 종목)는 코인과 다른 프레임을 준다 — 서버가 엉뚱한 프레임을 넘기면 값이 달라져 드러난다.
+            return candles(state["offset"], up_move=BENCH_UP, down_move=BENCH_DOWN), "synthetic"
         return candles(state["offset"]), "synthetic"
+
+    real_market_evidence = evidence.market_evidence
+
+    def spy_market_evidence(*args, **kwargs):
+        state["tz"].append(kwargs.get("tz"))
+        return real_market_evidence(*args, **kwargs)
 
     def fake_headlines(asset, date):
         state["headlines"].append((asset, date))
@@ -87,10 +102,15 @@ def client(monkeypatch):
 
     monkeypatch.setattr(main, "fetch_klines_for_macro", fake_fetch)
     monkeypatch.setattr(evidence, "headlines", fake_headlines)
+    monkeypatch.setattr(evidence, "market_evidence", spy_market_evidence)
     monkeypatch.setattr(validate_explain, "explain", fake_explain)
     test_client = TestClient(main.app)
     test_client.state_ = state
     return test_client
+
+
+def day(index):
+    return (pd.Timestamp("2026-01-01") + pd.Timedelta(days=index)).date().isoformat()
 
 
 def post(client, macro=None, summary=None):
@@ -211,6 +231,32 @@ def test_binance_altcoin_is_compared_with_btcusdt(client):
     assert [f[0] for f in client.state_["fetched"]] == ["ETHUSDT", "BTCUSDT"]
 
 
+def test_the_benchmark_frame_is_what_the_verdict_is_judged_against(client):
+    """기준 종목 프레임이 실제로 쓰인다 — 엉뚱한 프레임이나 None 을 넘기면 값이 달라진다."""
+    rows = {row["date"]: row for row in post(client, macro=macro_body("ETHUSDT")).json()["evidence"]}
+    up, down = rows[day(SPIKE_UP)], rows[day(SPIKE_DOWN)]
+    assert up["change_pct"] > 15 and 9 < up["btc_change_pct"] < 15 and up["verdict"] == "시장"
+    assert down["change_pct"] < -10 and 3 < down["btc_change_pct"] < 8 and down["verdict"] == "종목"
+    assert all(row["btc_change_pct"] != row["change_pct"] for row in rows.values()), "코인 자신의 프레임이 아니다"
+
+
+@pytest.mark.parametrize("exchange, symbol, benchmark", [
+    ("bithumb", "KRW-ETH", "KRW-BTC"), ("upbit", "KRW-ETH", "KRW-BTC"), (None, "ETHUSDT", "BTCUSDT")])
+def test_the_benchmark_is_fetched_from_the_macros_own_exchange(client, exchange, symbol, benchmark):
+    """국내 거래소는 모두 KRW-BTC 와 견준다 — 조건이 한 거래소만 가리키면 나머지는 USDT 시장을 받는다."""
+    post(client, macro=macro_body(symbol, exchange=exchange))
+    venue = exchange or "binance"
+    assert client.state_["fetched"] == [(symbol, venue, "1d"), (benchmark, venue, "1d")]
+
+
+@pytest.mark.parametrize("exchange, symbol, expected", [
+    ("bithumb", "KRW-BTC", krw._KST), ("upbit", "KRW-BTC", timezone.utc), (None, "BTCUSDT", timezone.utc)])
+def test_only_bithumb_dates_are_labelled_in_kst(client, exchange, symbol, expected):
+    """interval_grid_offset: 빗썸 봉은 KST 경계, 업비트는 UTC 경계. 날짜 기준 규칙 자체를 본다."""
+    post(client, macro=macro_body(symbol, exchange=exchange))
+    assert client.state_["tz"] == [expected]
+
+
 def test_the_benchmark_frame_is_reused_when_the_asset_is_the_benchmark(client):
     post(client)
     assert [f[0] for f in client.state_["fetched"]] == ["BTCUSDT"]
@@ -254,7 +300,6 @@ def test_headlines_are_looked_up_by_the_coin_not_the_market_pair(client, symbol,
 
 def test_bithumb_dates_follow_kst_and_upbit_dates_follow_utc(client):
     """빗썸 일봉은 KST 0 시(= UTC 전날 15 시)에 열린다. UTC 날짜로 매기면 하루 앞서 엉뚱한 날 뉴스를 찾는다."""
-    day = lambda i: (pd.Timestamp("2026-01-01") + pd.Timedelta(days=i)).date().isoformat()
     client.state_["offset"] = -9
     bithumb = post(client, macro=macro_body("KRW-BTC", exchange="bithumb")).json()["evidence"]
     assert {row["date"] for row in bithumb} == {day(SPIKE_UP), day(SPIKE_DOWN)}

@@ -1237,6 +1237,8 @@ def validate_macro(body: ValidateIn, request: Request) -> dict:
 # 해설 라우트의 호출 상한(스펙 6.2). 일일 쿼터는 두지 않는다 — 다시 검증하는 것이 이 제품의 생명줄이라서다.
 # 규칙을 어겨 버려진 답은 캐시되지 않아(다시 돌리면 진짜 문장을 받도록 일부러 그렇게 했다) 반복 호출을
 # 막아 주는 것이 이 상한뿐이다. 분당 20 번이면 설정을 바꿔 가며 다시 검증하는 데는 넉넉하고, 모델 호출은 묶는다.
+# 키는 첫 X-Forwarded-For 홉이라(비콘 라우트와 같다) 그 헤더를 돌려 가며 보내면 상한을 피할 수 있다. 여기서는
+# 이 상한이 모델 비용과 Google News 조회의 유일한 제한이니, 값을 손볼 때 이 점을 함께 보라.
 _explain_limiter = observability.SlidingWindowRateLimiter(limit=20, window_seconds=60.0, max_keys=5000)
 # 근거로 찾는 튄 날의 수. 날마다 헤드라인 조회(아카이브 → 없으면 Google News)가 한 번씩 나가므로 작게 잡는다.
 EXPLAIN_EVIDENCE_LIMIT = 3
@@ -1320,6 +1322,10 @@ def validate_explain_route(body: ExplainIn, request: Request) -> dict:
 
     튄 날을 찾아 같은 거래소의 대표 종목과 견주고(시장인가 종목인가), 날마다 서버가 실제로 찾은
     헤드라인만 붙인다. 못 찾았으면 빈 목록 그대로 넘긴다 — 없는 기사는 지어내지 않는다.
+
+    신뢰 경계: summary 의 숫자와 어떤 경고가 켜졌는지는 클라이언트가 보낸 그대로 쓴다(다시 계산하지
+    않는다). 서버가 모으는 것은 근거 행(튄 날 · 시장 비교 · 헤드라인)뿐이다. 그래서 클라이언트가 경고를
+    빼고 보내면 해설은 '걸린 항목 없음' 으로 읽는다 — '서버 판정' 은 /api/validate 가 낸 판정을 뜻한다.
     """
     _enforce_beacon_rate_limit(_explain_limiter, request)
     try:
@@ -1355,7 +1361,10 @@ def validate_explain_route(body: ExplainIn, request: Request) -> dict:
             benchmark_df, _ = fetch_klines_for_macro(
                 daily.model_copy(update={"symbol": benchmark, "symbols": None}), start_ms, end_ms)
         except Exception as exc:  # noqa: BLE001 — 시장 비교가 안 되면 판정만 비우고 해설은 계속한다
-            logging.getLogger(__name__).warning("explain benchmark candles unavailable: reason=%s", type(exc).__name__)
+            # 기대한 실패(데이터 없음)와 코드 결함을 로그에서 가르도록 종목 · 거래소 · 예외 문구를 남긴다.
+            logging.getLogger(__name__).warning(
+                "explain benchmark candles unavailable: exchange=%s benchmark=%s reason=%s: %s",
+                macro.exchange, benchmark, type(exc).__name__, exc, exc_info=True)
             benchmark_df = None
 
     # 빗썸 일봉은 KST 0 시에 열리고 업비트 · 바이낸스는 UTC 0 시에 열린다(data/krw.interval_grid_offset).

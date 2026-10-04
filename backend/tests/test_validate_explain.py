@@ -656,3 +656,24 @@ def test_a_year_apostrophe_next_to_a_real_supplied_quote_keeps_the_real_one(monk
 def test_the_bare_negative_tail_is_matched_only_right_after_the_word():
     assert validate_explain._NEGATED_TAIL.match("는 않습니다")
     assert validate_explain._banned_hit("확실하다고 합니다") is not None
+
+
+def test_the_plans_own_natural_phrasing_of_a_spread_warning_is_kept(monkeypatch):
+    """'수익의 대부분이 첫 구간에서 나왔습니다' 는 한 구간 쏠림을 말한다."""
+    _answers(monkeypatch,
+             "거래가 14 회뿐이라 통계로 쓰기 어렵습니다. 수익의 대부분이 첫 구간에서 나왔습니다.")
+    assert _source() == "ai"
+    for text in ("수익의 대다수가 한 구간에서 나왔습니다.", "대부분이 특정 시기에서 나왔습니다."):
+        assert validate_explain._rejection(text, {"warnings": ["한_구간_집중"], "evidence": []}) is None
+
+
+@pytest.mark.parametrize("text", [
+    "뒤쪽 구간에서 대부분 손실이 났습니다.",
+    "대부분 손실이 뒤쪽 구간에서 났습니다.",
+    "대부분이 뒤쪽 구간에서 마이너스입니다.",
+])
+def test_a_late_loss_sentence_with_a_majority_word_does_not_fill_in_for_a_spread_warning(text):
+    """대부분 이 후반부_음수 문장에 섞여도 한_구간_집중을 대신 채우면 안 된다."""
+    payload = {"warnings": ["한_구간_집중", "후반부_음수"], "evidence": []}
+    assert not validate_explain._anchored(text, "한_구간_집중")
+    assert validate_explain._rejection(text, payload) == "missing_warning:한_구간_집중"

@@ -13,6 +13,8 @@ import pytest
 from app import evidence
 from app.data.krw import _KST
 
+UTC = timezone.utc
+
 
 def frame(closes, volumes=None, *, with_volume=True, start="2026-03-01", tz="UTC"):
     stamps = pd.date_range(start, periods=len(closes), freq="1D", tz=tz)
@@ -144,17 +146,40 @@ def test_a_return_that_overflows_is_dropped_not_reported_as_inf():
     assert_json_safe(rows)
 
 
-def test_an_unreadable_timestamp_never_becomes_a_date():
-    """시각을 못 읽은 행은 정렬에서 맨 뒤로 가고, 날짜 자리에 'NaT' 가 새지 않는다.
+def test_a_move_touching_an_unreadable_timestamp_is_skipped_never_attributed_to_a_neighbour():
+    """시각을 못 읽은 행에 닿거나 거기서 떠나는 변동은 날짜를 매길 수 없으므로 건너뛴다.
 
-    그 행에 닿았던 급등은 시각을 아는 다음 행(3/22, 처음 새 가격으로 관찰된 날)의 것이 된다.
+    3/21 에 실제로 닿은 급등을 3/22 로 옮겨 적으면 뉴스 검색이 하루 어긋난다 — 차라리 비운다.
     """
     closes = [100.0] * 20 + [131.0] + [131.0] * 9
     df = frame(closes)
     df.loc[20, "timestamp"] = pd.NaT
     rows = evidence.anomalies(df)
-    assert rows == [{"date": "2026-03-22", "change_pct": 31.0, "volume_ratio": 1.0}]
+    assert rows == []
     assert_json_safe(rows)
+
+
+def test_a_one_day_spike_on_an_unreadable_timestamp_leaves_no_half_of_it_behind():
+    closes = [100.0] * 20 + [131.0] + [100.0] * 9          # 올랐다가 바로 돌아옴
+    df = frame(closes)
+    df.loc[20, "timestamp"] = pd.NaT
+    assert evidence.anomalies(df) == []
+
+
+def test_an_unreadable_timestamp_does_not_disturb_the_other_days():
+    """뒤의 못 읽은 행(가격이 튀어도)은 평소 측정에 들어가지 않고, 다른 급등은 제 날짜로 나온다."""
+    closes = [100.0] * 20 + [131.0] + [131.0] * 8 + [5000.0]
+    df = frame(closes)
+    df.loc[29, "timestamp"] = pd.NaT
+    assert evidence.anomalies(df) == [{"date": "2026-03-21", "change_pct": 31.0, "volume_ratio": 1.0}]
+
+
+def test_an_unreadable_timestamp_stays_in_its_slot_when_the_frame_is_out_of_order():
+    closes = [100.0] * 20 + [131.0] + [131.0] * 8 + [5000.0]
+    df = frame(closes)
+    df.loc[29, "timestamp"] = pd.NaT
+    reversed_df = df.iloc[::-1].reset_index(drop=True)      # 시각을 모르는 행이 맨 앞으로
+    assert evidence.anomalies(reversed_df) == [{"date": "2026-03-21", "change_pct": 31.0, "volume_ratio": 1.0}]
 
 
 def test_a_frame_without_the_expected_columns_returns_nothing():
@@ -191,7 +216,7 @@ def test_market_context_separates_a_market_day_from_a_coin_day():
     rows = [{"date": "2026-03-21", "change_pct": 31.0, "volume_ratio": 8.0},
             {"date": "2026-03-25", "change_pct": 9.0, "volume_ratio": 1.2}]
     btc = frame([100.0] * 20 + [131.0] + [139.0] * 9)
-    out = evidence.market_context(rows, btc)
+    out = evidence.market_context(rows, btc, tz=UTC)
     assert out[0]["verdict"] == "시장"      # 기준 종목도 같이 31% 올랐다
     assert out[1]["verdict"] == "종목"      # 기준 종목은 조용한데 이 종목만
     assert out[0]["btc_change_pct"] == 31.0
@@ -201,7 +226,7 @@ def test_market_context_separates_a_market_day_from_a_coin_day():
 def test_market_context_compares_the_same_day_not_the_day_before():
     rows = [{"date": "2026-03-22", "change_pct": 6.0, "volume_ratio": 1.0}]
     btc = frame([100.0] * 20 + [131.0] + [139.0] * 9)    # 3/22 에 +6.1%
-    out = evidence.market_context(rows, btc)
+    out = evidence.market_context(rows, btc, tz=UTC)
     assert out[0]["btc_change_pct"] == 6.11
     assert out[0]["verdict"] == "시장"
 
@@ -210,7 +235,7 @@ def test_no_benchmark_data_for_the_date_leaves_the_verdict_empty():
     """기준 종목 자료가 없다는 것은 '종목 탓' 의 근거가 아니다."""
     rows = [{"date": "2025-01-01", "change_pct": 31.0, "volume_ratio": 8.0}]
     btc = frame([100.0] * 30)
-    out = evidence.market_context(rows, btc)
+    out = evidence.market_context(rows, btc, tz=UTC)
     assert out[0]["verdict"] == ""
     assert out[0]["btc_change_pct"] is None
     assert out[0]["date"] == "2025-01-01"
@@ -219,14 +244,14 @@ def test_no_benchmark_data_for_the_date_leaves_the_verdict_empty():
 @pytest.mark.parametrize("benchmark", [None, pd.DataFrame(), pd.DataFrame({"close": [1.0, 2.0]})])
 def test_an_unusable_benchmark_frame_leaves_every_verdict_empty(benchmark):
     rows = [{"date": "2026-03-21", "change_pct": 31.0, "volume_ratio": 8.0}]
-    out = evidence.market_context(rows, benchmark)
+    out = evidence.market_context(rows, benchmark, tz=UTC)
     assert out[0]["verdict"] == "" and out[0]["btc_change_pct"] is None
 
 
 def test_a_benchmark_day_with_an_unusable_price_has_no_verdict():
     rows = [{"date": "2026-03-21", "change_pct": 31.0, "volume_ratio": 8.0}]
     closes = [100.0] * 20 + [0.0] + [100.0] * 9           # 3/21 은 기준 가격이 0
-    out = evidence.market_context(rows, frame(closes))
+    out = evidence.market_context(rows, frame(closes), tz=UTC)
     assert out[0]["verdict"] == "" and out[0]["btc_change_pct"] is None
     assert_json_safe(out)
 
@@ -236,22 +261,22 @@ def test_market_context_does_not_decide_a_row_that_has_no_move():
     rows = [{"date": "2026-03-21", "change_pct": 0.0, "volume_ratio": None},
             {"date": "2026-03-21", "change_pct": float("nan"), "volume_ratio": None},
             {"date": "2026-03-21", "volume_ratio": None}]
-    out = evidence.market_context(rows, btc)
+    out = evidence.market_context(rows, btc, tz=UTC)
     assert [row["verdict"] for row in out] == ["", "", ""]
 
 
 def test_market_context_with_no_rows_is_empty_and_leaves_inputs_alone():
     btc = frame([100.0] * 30)
-    assert evidence.market_context([], btc) == []
-    assert evidence.market_context(None, btc) == []
+    assert evidence.market_context([], btc, tz=UTC) == []
+    assert evidence.market_context(None, btc, tz=UTC) == []
     rows = [{"date": "2026-03-21", "change_pct": 31.0, "volume_ratio": 8.0}]
-    evidence.market_context(rows, btc)
+    evidence.market_context(rows, btc, tz=UTC)
     assert rows == [{"date": "2026-03-21", "change_pct": 31.0, "volume_ratio": 8.0}]
 
 
 def test_market_context_output_is_json_encodable_end_to_end():
     closes = [100.0] * 20 + [131.0] + [131.0] * 9
-    out = evidence.market_context(evidence.anomalies(frame(closes)), frame(closes))
+    out = evidence.market_context(evidence.anomalies(frame(closes)), frame(closes), tz=UTC)
     assert out and out[0]["verdict"] == "시장"
     assert_json_safe(out)
 
@@ -273,7 +298,7 @@ def benchmark_moving(pct, *, day=20):
 ])
 def test_the_verdict_needs_the_same_direction_and_enough_magnitude(own, bench, verdict):
     rows = [{"date": "2026-03-21", "change_pct": own, "volume_ratio": 1.0}]
-    out = evidence.market_context(rows, benchmark_moving(bench))
+    out = evidence.market_context(rows, benchmark_moving(bench), tz=UTC)
     assert out[0]["verdict"] == verdict
     assert out[0]["btc_change_pct"] == bench
 
@@ -281,14 +306,14 @@ def test_the_verdict_needs_the_same_direction_and_enough_magnitude(own, bench, v
 def test_a_flat_benchmark_day_is_data_so_the_coin_alone_moved():
     """기준 종목이 정확히 0 이면 '자료 있음 · 안 움직임' → 종목. 자료 없음(None → 빈 판정)과 다르다."""
     rows = [{"date": "2026-03-21", "change_pct": 31.0, "volume_ratio": 1.0}]
-    out = evidence.market_context(rows, frame([100.0] * 30))
+    out = evidence.market_context(rows, frame([100.0] * 30), tz=UTC)
     assert out[0]["btc_change_pct"] == 0.0
     assert out[0]["verdict"] == "종목"
 
 
 def test_a_coin_change_of_exactly_zero_is_left_undecided_even_if_the_benchmark_moved():
     rows = [{"date": "2026-03-21", "change_pct": 0, "volume_ratio": None}]
-    out = evidence.market_context(rows, benchmark_moving(31.0))
+    out = evidence.market_context(rows, benchmark_moving(31.0), tz=UTC)
     assert out[0]["verdict"] == ""
     assert out[0]["btc_change_pct"] == 31.0
 
@@ -367,10 +392,10 @@ def test_a_shuffled_frame_gives_the_same_answer_as_a_sorted_one():
     shuffled = frame(closes).sample(frac=1, random_state=7).reset_index(drop=True)
     assert evidence.anomalies(shuffled) == evidence.anomalies(frame(closes))
     rows = [{"date": "2026-03-21", "change_pct": 31.0, "volume_ratio": 1.0}]
-    assert evidence.market_context(rows, shuffled) == evidence.market_context(rows, frame(closes))
+    assert evidence.market_context(rows, shuffled, tz=UTC) == evidence.market_context(rows, frame(closes), tz=UTC)
 
 
-# ── 날짜 기준(tz): 국내 거래소 일봉은 KST 0 시에 열린다 ────────────────────────
+# ── 날짜 기준(tz): 일봉이 KST 0 시에 열리는 프레임 ──────────────────────────────
 
 def kst_midnight_frame(closes):
     """3/1 00:00 KST 에 열려 하루 간격으로 이어지는 일봉 — UTC 로는 전날 15:00."""
@@ -402,5 +427,68 @@ def test_market_context_matches_dates_in_the_same_timezone():
     assert out[0]["verdict"] == "시장" and out[0]["btc_change_pct"] == 31.0
     # 날짜 기준을 어긋나게 주면 기준 종목의 급등이 3/20 에 붙어 3/21 은 조용한 날로 읽힌다 —
     # 그래서 anomalies 와 market_context 에 같은 tz 를 넘겨야 한다.
-    mismatched = evidence.market_context(rows, df)[0]
+    mismatched = evidence.market_context(rows, df, tz=UTC)[0]
     assert mismatched["btc_change_pct"] == 0.0 and mismatched["verdict"] == "종목"
+
+
+# ── 기본 sigma(2.0) 는 z 1.5 쯤은 거르고 z 2.5 쯤은 잡는다 ────────────────────
+
+def closes_from_changes(changes_pct, start=100.0):
+    closes = [start]
+    for pct in changes_pct:
+        closes.append(closes[-1] * (1 + pct / 100.0))
+    return closes
+
+
+def test_the_default_sigma_keeps_a_z_of_two_and_a_half_and_drops_a_z_of_one_and_a_half():
+    changes = [1.0 if index % 2 == 0 else -1.0 for index in range(36)]
+    changes.insert(10, 1.8)       # 평소의 약 1.6 배
+    changes.insert(25, -2.8)      # 평소의 약 2.5 배(내림도 센다)
+    closes = closes_from_changes(changes)
+    realised = [(after / before - 1.0) * 100.0 for before, after in zip(closes, closes[1:])]
+    deviation = statistics.pstdev(realised)
+    assert 1.5 < abs(realised[10]) / deviation < 1.9          # 이 시험의 전제
+    assert 2.1 < abs(realised[25]) / deviation < 3.0
+    rows = evidence.anomalies(frame(closes))                    # sigma 를 넘기지 않는다
+    assert [row["date"] for row in rows] == ["2026-03-27"]      # 변동 index 25 → 종가 index 26
+    assert rows[0]["change_pct"] == -2.8
+
+
+# ── 한 번에: market_evidence ──────────────────────────────────────────────────
+
+def test_market_evidence_labels_both_halves_in_one_timezone():
+    closes = [100.0] * 20 + [131.0] + [131.0] * 9
+    df = kst_midnight_frame(closes)
+    kst = evidence.market_evidence(df, df, tz=_KST)
+    assert kst == [{"date": "2026-03-21", "change_pct": 31.0, "volume_ratio": 1.0,
+                    "btc_change_pct": 31.0, "verdict": "시장"}]
+    utc = evidence.market_evidence(df, df)                      # 기본 UTC — 두 쪽 모두 3/20
+    assert utc[0]["date"] == "2026-03-20" and utc[0]["verdict"] == "시장"
+    assert_json_safe(kst)
+
+
+def test_market_evidence_hands_the_same_tz_sigma_and_limit_to_both_halves(monkeypatch):
+    seen = {}
+
+    def fake_anomalies(df, *, sigma, limit, tz):
+        seen["anomalies"] = (sigma, limit, tz)
+        return [{"date": "2026-03-21", "change_pct": 5.0, "volume_ratio": None}]
+
+    def fake_context(rows, benchmark, *, tz):
+        seen["context"] = tz
+        return rows
+
+    monkeypatch.setattr(evidence, "anomalies", fake_anomalies)
+    monkeypatch.setattr(evidence, "market_context", fake_context)
+    evidence.market_evidence("df", "benchmark", tz=_KST, sigma=3.0, limit=2)
+    assert seen["anomalies"] == (3.0, 2, _KST)
+    assert seen["context"] is _KST
+
+
+def test_market_evidence_with_nothing_unusual_is_an_empty_list():
+    assert evidence.market_evidence(frame([100.0] * 30), frame([100.0] * 30), tz=UTC) == []
+
+
+def test_market_context_requires_the_timezone_to_be_named():
+    with pytest.raises(TypeError):
+        evidence.market_context([], frame([100.0] * 30))

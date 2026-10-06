@@ -119,6 +119,10 @@ def build_driver(macro: Macro, symbol: str) -> StrategyDriver:
 
 
 START_FAIL_NOTE = "서버 전략 시작 실패 — 매크로 설정을 확인해 주세요"
+# 실행기는 macro["symbol"] 하나만 읽으므로 여러 종목 매크로를 되살리면 첫 종목에 전액이 들어간다.
+# 새 세션은 runner.py 의 관문 세 곳이 막지만, 그 관문이 생기기 **전에** 시작해 지금도 running 인 세션은
+# 서버가 재기동할 때마다 되살아난다 — 되살리지 않고 세션을 닫아 사용자가 마이페이지에서 이유를 읽게 한다.
+PORTFOLIO_REFUSED_NOTE = "여러 종목 매크로 — 서버 전략을 시작하지 않고 세션을 닫았어요"
 
 
 def _load_session(session_id: int) -> Optional[dict]:
@@ -148,6 +152,41 @@ def _note_start_failure(session_id: int) -> None:
         db.commit()
 
 
+def _is_portfolio_session(session_id: int) -> bool:
+    """running 세션의 저장된 매크로가 여러 종목인가. 못 읽으면 False — 그쪽은 _start_driver 가 '시작 실패' 로 기록한다."""
+    info = _load_session(session_id)
+    if info is None or not info["macro_json"]:
+        return False
+    try:
+        return Macro.model_validate_json(info["macro_json"]).is_portfolio()
+    except Exception:
+        return False
+
+
+def _refuse_portfolio_session(session_id: int) -> None:
+    """여러 종목 세션을 닫는다 — note·stop 이벤트로 이유를 남긴다(최선 노력).
+
+    'running 인데 신호가 영영 안 오는 세션' 으로 남겨 두면 사용자는 실행기가 돌고 있다고 믿는다.
+    """
+    from .runner import _append_events  # 늦은 import: runner ↔ runner_engine 순환 방지
+
+    with get_session() as db:
+        row = db.get(RunSession, session_id)
+        if row is None or row.status != "running":
+            return
+        row.status = "stopped"
+        row.stopped_at = _now_iso()
+        row.note = PORTFOLIO_REFUSED_NOTE
+        db.add(row)
+        _append_events(db, row, [{"ts": row.stopped_at, "kind": "stop",
+                                  "message": f"종료 · {PORTFOLIO_REFUSED_NOTE}"
+                                             + " — 실행기는 종목 하나만 읽어 첫 종목에 전액이 들어갑니다."
+                                               " 종목 하나로 나눠 다시 시작해 주세요."
+                                             + (" · 포지션 보유 중" if row.in_position else "")}])
+        db.commit()
+    log.warning("runner engine: session %s macro is multi-symbol — refused and stopped", session_id)
+
+
 async def start_driver(session_id: int) -> bool:
     """DB 의 macro_json 으로 드라이버를 만들고 웜업 → (복구) → 구독 → 틱 루프. 이미 돌면(또는 시작 중이면) True."""
     if session_id in _drivers or session_id in _starting:
@@ -174,6 +213,14 @@ async def _start_driver(session_id: int) -> bool:
             await asyncio.to_thread(_note_start_failure, session_id)
         except Exception:
             log.exception("runner engine: session %s could not record start failure", session_id)
+        return False
+    if macro.is_portfolio():
+        # build_driver 는 레그 하나만 만든다 — 되살리면 매크로의 초기자본 전액이 첫 종목에 들어간다(실돈 주문).
+        # 관문이 생기기 전에 시작한 세션이 재기동마다 여기로 오므로, 모든 시작 경로의 마지막 관문이 여기다.
+        try:
+            await asyncio.to_thread(_refuse_portfolio_session, session_id)
+        except Exception:
+            log.exception("runner engine: session %s could not record portfolio refusal", session_id)
         return False
     live = _Live(session_id, driver, macro.exchange)
     # 국내 거래소는 거래소 인자를 실어 보낸다. 바이낸스는 인자 없이 부르는 옛 호출 모양을 그대로 둔다(candle_feed 와 같은 규칙).
@@ -554,6 +601,11 @@ async def resume_running_runner_sessions() -> int:
     count = 0
     for sid in await asyncio.to_thread(_running_v8_ids):
         try:
+            # 여러 종목 세션은 시작을 **시도하지도** 않는다 — 관문이 생기기 전에 시작해 아직 running 인
+            # 세션이 재기동마다 되살아나 첫 종목에 전액을 넣는다. 여기서 닫고 넘어간다.
+            if await asyncio.to_thread(_is_portfolio_session, sid):
+                await asyncio.to_thread(_refuse_portfolio_session, sid)
+                continue
             if await start_driver(sid):
                 count += 1
         except Exception:

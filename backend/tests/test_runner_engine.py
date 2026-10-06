@@ -666,3 +666,83 @@ def test_resume_starts_running_v8_session(monkeypatch):
         assert n == 1 and started == [sid]
     finally:
         _cleanup(sid)
+
+
+def _portfolio_json():
+    """여러 종목 매크로 — 실행기는 symbol 하나만 읽으므로 되살리면 첫 종목에 전액이 들어간다."""
+    return Macro.model_validate({
+        "symbol": "ONEUSDT", "symbols": ["ONEUSDT", "TWOUSDT"], "rule_type": "F",
+        "position_side": "long", "market": "spot", "leverage": 1,
+        "candle_interval": "5m", "period": {"preset": "1w"},
+        "params": {"rsi_period": 7, "entry_threshold": 25, "exit_threshold": 75, "initial_capital": 32},
+        "risk": {"invest_ratio": 1.0, "cooldown_minutes": 0}, "fees": {"commission_pct": 0.1, "slippage_pct": 0.05},
+    }).model_dump_json()
+
+
+def test_start_driver_refuses_a_running_multi_symbol_session():
+    """관문이 생기기 전에 시작해 아직 running 인 여러 종목 세션 — 재기동마다 되살아나면 실돈이 첫 종목에 전액 들어간다."""
+    sid = _session(macro_json=_portfolio_json())
+    try:
+        assert asyncio.new_event_loop().run_until_complete(eng.start_driver(sid)) is False
+        assert sid not in eng._drivers
+        with get_session() as db:
+            row = db.get(RunSession, sid)
+            # running 인 채로 두면 "연결됨인데 신호가 안 오는 세션" 이 된다 — 닫고, 이유를 남긴다.
+            assert row.status == "stopped" and row.stopped_at
+            assert row.note == eng.PORTFOLIO_REFUSED_NOTE
+            events = db.exec(select(RunSessionEvent).where(RunSessionEvent.session_id == sid)).all()
+            assert [e.kind for e in events] == ["stop"]
+            assert "여러 종목" in events[0].message and "종목 하나로 나눠" in events[0].message
+    finally:
+        _cleanup(sid)
+
+
+def test_start_driver_still_starts_a_single_symbol_session(monkeypatch):
+    """관문이 단일 종목을 함께 막지 않는다 — 막으면 위 시험은 '전부 거절' 로도 통과한다."""
+
+    class FlatFeed:
+        async def history(self, symbol, interval, market, n):
+            return [(i, 100, 100, 100, 100) for i in range(20)]
+
+        def subscribe(self, symbol, interval, market, cb, *, since_t=None):
+            return ("sub", symbol)
+
+        def unsubscribe(self, sub):
+            pass
+
+    monkeypatch.setattr(eng, "feed", FlatFeed())
+    monkeypatch.setattr(eng, "_run", _no_loop)
+    sid = _session()
+    try:
+        assert asyncio.new_event_loop().run_until_complete(eng.start_driver(sid)) is True
+        with get_session() as db:
+            row = db.get(RunSession, sid)
+            assert row.status == "running" and row.note == ""
+    finally:
+        eng._drivers.pop(sid, None)
+        _cleanup(sid)
+
+
+def test_resume_refuses_multi_symbol_sessions_without_attempting_to_start(monkeypatch):
+    """재기동 복구 — 여러 종목 세션은 드라이버 시작을 시도하지도 않고 닫는다."""
+    bad = _session(macro_json=_portfolio_json())
+    good = _session()
+    started = []
+
+    async def fake_start(session_id):
+        started.append(session_id)
+        return True
+
+    monkeypatch.setattr(eng, "start_driver", fake_start)
+    try:
+        n = asyncio.new_event_loop().run_until_complete(eng.resume_running_runner_sessions())
+        assert started == [good] and n == 1  # 단일 종목만 되살린다
+        with get_session() as db:
+            row = db.get(RunSession, bad)
+            assert row.status == "stopped" and row.note == eng.PORTFOLIO_REFUSED_NOTE
+            events = db.exec(select(RunSessionEvent).where(RunSessionEvent.session_id == bad)).all()
+            assert [e.kind for e in events] == ["stop"]
+            assert db.get(RunSession, good).status == "running"
+    finally:
+        _cleanup(bad)
+        _cleanup(good)

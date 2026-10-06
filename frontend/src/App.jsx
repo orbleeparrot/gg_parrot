@@ -8,6 +8,7 @@ import HotCoinsMarquee from "./components/HotCoinsMarquee.jsx";
 import SiteNavigation from "./components/SiteNavigation.jsx";
 import SiteHeader from "./components/SiteHeader.jsx";
 import DevNoteDialog from "./components/DevNoteDialog.jsx";
+import RouteErrorBoundary from "./components/RouteErrorBoundary.jsx";
 import { recordVisit } from "./lib/visit.js";
 
 // Keep the first screen small and quick. The builder, charts, guide, and
@@ -182,6 +183,7 @@ export default function App() {
         >
           <RouteChangeEffects />
           <DevNoteDialog />
+          <RouteErrorBoundary>
           <Suspense fallback={<RouteLoading />}>
             <Routes>
               <Route path="/" element={<HomeRoute />} />
@@ -209,6 +211,7 @@ export default function App() {
               <Route path="*" element={<NotFound />} />
             </Routes>
           </Suspense>
+          </RouteErrorBoundary>
         </main>
         {hasMarquee ? <HotCoinsMarquee /> : null}
       </div>

@@ -154,10 +154,12 @@ def test_an_invalid_macro_gets_a_korean_422(client):
     assert not client.state_["payloads"]
 
 
-def test_a_portfolio_macro_is_rejected(client):
-    response = post(client, macro=macro_body(symbols=["BTCUSDT", "ETHUSDT"]))
-    assert response.status_code == 422
-    assert not client.state_["fetched"]
+def test_a_portfolio_macro_explains_from_its_first_leg(client):
+    """묶음은 거절하지 않고 대표 종목(첫 레그)의 일봉으로 근거를 만든다."""
+    response = post(client, macro=macro_body(symbols=["ETHUSDT", "BTCUSDT"]))
+    assert response.status_code == 200
+    assert client.state_["fetched"][0][0] == "ETHUSDT"
+    assert client.state_["fetched"][0][2] == "1d"
 
 
 def test_a_bad_period_is_a_400_in_korean(client):

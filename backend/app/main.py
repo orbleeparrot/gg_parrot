@@ -1227,8 +1227,6 @@ def validate_macro(body: ValidateIn, request: Request) -> dict:
         fields = ", ".join(dict.fromkeys(
             ".".join(str(part) for part in err["loc"]) or "macro" for err in exc.errors()))
         raise HTTPException(status_code=422, detail=f"매크로 설정을 확인해 주세요: {fields}") from exc
-    if macro.is_portfolio():
-        raise HTTPException(status_code=422, detail="여러 종목 포트폴리오 매크로는 아직 검증할 수 없습니다. 종목 하나로 나눠 검증해 주세요.")
 
     try:
         start_ms, end_ms = resolve_period(macro.period.preset, macro.period.start, macro.period.end)
@@ -1236,14 +1234,28 @@ def validate_macro(body: ValidateIn, request: Request) -> dict:
         # 상태는 /api/backtest 와 같은 400 이되, 영어 원문 대신 한국어로 알린다.
         raise HTTPException(status_code=400, detail="기간 설정을 확인해 주세요. 프리셋 이름이나 시작 · 끝 날짜가 올바르지 않습니다.") from exc
     try:
-        df, _source = fetch_klines_for_macro(macro, start_ms, end_ms)
-        result = run_backtest(macro, df)
+        if macro.is_portfolio():
+            # 묶음은 레그마다 캔들을 받아 합산한다. 창도 같은 프레임으로 자른다 —
+            # 백테스트와 검증이 같은 답을 내야 한다.
+            # 캔들을 두 번 받는다(_run_portfolio_backtest 안에서 한 번, 창을 위해 또 한 번).
+            # 한 번으로 줄이려면 그 함수의 반환을 바꿔야 해서 이번 범위 밖이다.
+            result, _per_symbol, _source, _period = _run_portfolio_backtest(macro, start_ms, end_ms)
+            frames = {}
+            base = macro.initial_capital
+            for spec in macro.leg_specs():
+                cap = (base * spec.weight / 100.0) if base else None
+                leg_df, _s = fetch_klines_for_macro(macro.for_leg(spec, cap), start_ms, end_ms)
+                frames[spec.symbol] = leg_df
+            windows = walkforward_mod.run_bundle_windows(macro, frames, body.windows)
+        else:
+            df, _source = fetch_klines_for_macro(macro, start_ms, end_ms)
+            result = run_backtest(macro, df)
+            windows = walkforward_mod.run_windows(macro, df, body.windows)
     except NoSpotDataError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     except Exception as exc:  # noqa: BLE001 — /api/backtest 와 같이 실패 사유를 400 으로 돌려준다
         raise HTTPException(status_code=400, detail=str(exc))
 
-    windows = walkforward_mod.run_windows(macro, df, body.windows)
     # 검증 지표는 줄이기 전 전체 곡선으로 센다(compact 는 응답의 result 에만 쓴다).
     curve = result.equity_curve
     return {
@@ -1378,8 +1390,6 @@ def validate_explain_route(body: ExplainIn, request: Request) -> dict:
         fields = ", ".join(dict.fromkeys(
             ".".join(str(part) for part in err["loc"]) or "macro" for err in exc.errors()))
         raise HTTPException(status_code=422, detail=f"매크로 설정을 확인해 주세요: {fields}") from exc
-    if macro.is_portfolio():
-        raise HTTPException(status_code=422, detail="여러 종목 포트폴리오 매크로는 아직 검증할 수 없습니다. 종목 하나로 나눠 검증해 주세요.")
 
     try:
         start_ms, end_ms = resolve_period(macro.period.preset, macro.period.start, macro.period.end)
@@ -1387,7 +1397,13 @@ def validate_explain_route(body: ExplainIn, request: Request) -> dict:
         raise HTTPException(status_code=400, detail="기간 설정을 확인해 주세요. 프리셋 이름이나 시작 · 끝 날짜가 올바르지 않습니다.") from exc
 
     # 근거는 일간 변동 기준이라 일봉으로 받는다(시간봉을 넣으면 같은 날짜가 여러 번 나온다).
-    daily = macro if macro.candle_interval == "1d" else macro.model_copy(update={"candle_interval": "1d"})
+    # 묶음은 대표 종목(첫 레그)의 일봉으로 근거를 만든다. 근거는 가격 흐름 해설이라
+    # 레그별로 나누면 읽을 수 없게 길어진다.
+    base_macro = macro
+    if macro.is_portfolio():
+        base_macro = macro.for_leg(macro.leg_specs()[0], macro.initial_capital)
+    daily = base_macro if base_macro.candle_interval == "1d" \
+        else base_macro.model_copy(update={"candle_interval": "1d"})
     try:
         df, _source = fetch_klines_for_macro(daily, start_ms, end_ms)
     except NoSpotDataError as exc:
@@ -1415,7 +1431,7 @@ def validate_explain_route(body: ExplainIn, request: Request) -> dict:
     rows = _plain_json(evidence_mod.market_evidence(
         df, benchmark_df, tz=tz, limit=EXPLAIN_EVIDENCE_LIMIT))
     # 아카이브 키는 코인이다 — KRW-BTC 와 BTCUSDT 가 같은 근거를 보려면 같은 규칙으로 줄여야 한다.
-    asset = news_mod.asset_from_market_symbol(macro.symbol)
+    asset = news_mod.asset_from_market_symbol(base_macro.symbol)
     for row in rows:
         row["headlines"] = _plain_json(evidence_mod.headlines(asset, row["date"]))
 

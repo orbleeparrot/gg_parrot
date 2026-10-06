@@ -95,3 +95,37 @@ def run_windows(macro: Macro, df, windows: int = DEFAULT_WINDOWS) -> list[dict]:
                      "return_pct": round(value, 2),
                      "trades": int(result.total_trades), "error": ""})
     return rows
+
+
+def run_bundle_windows(macro: Macro, frames: dict, windows: int = DEFAULT_WINDOWS) -> list[dict]:
+    """묶음의 구간별 성과. 창은 **시각 기준**으로 자른다.
+
+    행 수로 자르면 레그마다 봉 수가 달라 경계가 어긋난다 — 묶음에서는 모든 레그가 같은
+    기간을 보아야 한도가 뜻을 가진다. 수익률은 레그 합산(``portfolio.aggregate``)이다.
+    """
+    # 함수 안에서 불러온다 — walkforward <- portfolio_backtest <- backtest 순환을 피한다.
+    from . import portfolio as portfolio_mod
+    from .portfolio_backtest import run_bundle, split_frames_by_time
+
+    rows = []
+    for index, part in enumerate(split_frames_by_time(frames, windows), start=1):
+        times = [pd.Timestamp(t) for df in part.values()
+                 for t in (df[TIME_COLUMN] if TIME_COLUMN in df.columns else [])]
+        start = _label(min(times)) if times else ""
+        end = _label(max(times)) if times else ""
+        try:
+            results = run_bundle(macro, part)
+            agg, _per = portfolio_mod.aggregate(results, candle_interval=macro.candle_interval)
+        except Exception as exc:  # noqa: BLE001 — 한 구간 실패가 전체를 막지 않는다
+            logger.warning("bundle walk-forward window failed: index=%d reason=%s",
+                           index, type(exc).__name__)
+            rows.append(_failed(index, start, end, type(exc).__name__))
+            continue
+        value = float(agg.final_return_pct)
+        if not math.isfinite(value):
+            rows.append(_failed(index, start, end, "NonFiniteReturn"))
+            continue
+        rows.append({"index": index, "start": start, "end": end,
+                     "return_pct": round(value, 2),
+                     "trades": int(agg.total_trades), "error": ""})
+    return rows

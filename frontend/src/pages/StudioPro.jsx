@@ -15,8 +15,6 @@ import { barScale, headlineNote, metricText } from "../lib/validationFormat.js";
 import "./StudioPro.css";
 
 const WINDOW_COUNT = 4;
-// 서버(/api/validate)가 여러 종목 매크로에 내는 문구와 같다 — 요청 한 번과 분당 한도를 아낀다.
-const PORTFOLIO_MESSAGE = "여러 종목 포트폴리오 매크로는 아직 검증할 수 없습니다. 종목 하나로 나눠 검증해 주세요.";
 
 const errorText = (err, fallback) => (err && typeof err.message === "string" && err.message ? err.message : fallback);
 const dayOf = (stamp) => (typeof stamp === "string" && stamp ? stamp.slice(0, 10) : "");
@@ -178,10 +176,6 @@ export default function StudioPro() {
       return;
     }
     const macro = buildMacro(form);
-    if (macro.symbols) {
-      setFormError({ message: PORTFOLIO_MESSAGE, form });
-      return;
-    }
     const mine = ++runId.current;
     const startedWith = form; // 이 요청이 보낸 조건 — 요청 중에 고치면 도착한 결과는 이 값과 달라진다
     setFormError(null);

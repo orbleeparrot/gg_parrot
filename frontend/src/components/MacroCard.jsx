@@ -4,7 +4,7 @@
 import { Fragment, useLayoutEffect, useRef } from "react";
 import CoinIcon from "./CoinIcon.jsx";
 import { quoteOf, baseOf } from "../lib/format.js";
-import { RULE_TYPES, CANDLE_INTERVALS } from "../lib/macro.js";
+import { RULE_TYPES, CANDLE_INTERVALS, entryFilterPhrase } from "../lib/macro.js";
 import { exchangeLabel } from "../lib/exchanges.js";
 import { leaderboardStrategy } from "../lib/leaderboardStrategy.js";
 import { strategyPhrases } from "../lib/strategyText.js";
@@ -51,6 +51,9 @@ function macroFacts({ macro, symbol, symbols, result, futures }) {
   const facts = [];
   if (symbols.length > 1) facts.push({ k: `종목 ${symbols.length}개 · 자금 균등`, v: symbols.join(" · "), num: true, wide: true });
   facts.push({ k: "봉 간격", v: interval ? `${interval}봉` : "—" });
+  // 진입 필터가 걸린 매크로만 — 조건 문장은 한 줄 맞춤에 잘릴 수 있고, 필터는 그 끝에 붙는다. 이 칸은 줄바꿈으로 끝까지 보인다.
+  const entryCondition = entryFilterPhrase(macro.entry_filter);
+  if (entryCondition) facts.push({ k: "진입 조건", v: entryCondition, wide: true });
   if (macro.rule_type === "C") {
     facts.push({ k: "자금", v: p.amount_per_buy != null ? `회당 ${fmtN(p.amount_per_buy)} ${quote} · ${fmtN(p.interval_days || 0)}일마다` : "—" });
   } else {

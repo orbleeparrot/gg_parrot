@@ -35,6 +35,31 @@ export const FILTER_KINDS = Object.freeze([
   { value: "volume", label: "거래량 배수" },
 ]);
 
+// 진입 필터를 사람 말 한 구로 — 서버 요약의 "진입 조건: …" 뒤 문구(backend entry_filter.py note())와 같은 말이다.
+// 요약 한 줄은 맨 끝에 붙어 말줄임에 잘리므로, 카드 사양표 · 리더보드 전략 칸은 이 구를 따로 그린다. 필터가 없거나 모르는 종류면 null.
+export function entryFilterPhrase(filter) {
+  if (!filter || typeof filter !== "object") return null;
+  const p = filter.params || {};
+  const has = (v) => v !== null && v !== undefined && v !== "";
+  switch (filter.kind) {
+    case "ma":
+      return `${p.period}봉 ${p.ma_type ?? "SMA"} 이동평균 ${p.side === "below" ? "아래" : "위"}`;
+    case "rsi":
+      if (has(p.min) && has(p.max)) return `RSI(${p.period}) ${Number(p.min)}~${Number(p.max)}`;
+      if (has(p.max)) return `RSI(${p.period}) ${Number(p.max)} 이하`;
+      if (has(p.min)) return `RSI(${p.period}) ${Number(p.min)} 이상`;
+      return null;
+    case "bb": {
+      const zone = { below_lower: "하단 밖", above_upper: "상단 밖", inside: "밴드 안" }[p.zone ?? "inside"];
+      return zone ? `볼린저(${p.period}, ${Number(p.num_std)}σ) ${zone}` : null;
+    }
+    case "volume":
+      return `거래량이 ${p.period}봉 평균의 ${Number(p.multiple)}배 이상`;
+    default:
+      return null;
+  }
+}
+
 export const PERIOD_PRESETS = [
   { value: "1y", label: "최근 1년" },
   { value: "6m", label: "최근 6개월" },

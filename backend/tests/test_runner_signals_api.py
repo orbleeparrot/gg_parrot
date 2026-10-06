@@ -1,11 +1,12 @@
 """서버 신호 실행기 API — 구버전 차단(426), v8 매크로 필수(422), heartbeat commands/acks."""
+import json
 from urllib.parse import parse_qs, urlsplit
 
 from fastapi.testclient import TestClient
 
 from app import runner as runner_mod
 from app import runner_engine as eng
-from app.db import RunnerCommand, RunnerLaunchTicket, RunSession, get_session
+from app.db import RunnerCommand, RunnerLaunchTicket, RunSession, UserMacro, get_session
 from app.main import app
 from tests.test_runner import _auth, _signup
 
@@ -23,6 +24,8 @@ SAR = {"symbol": "BTCUSDT", "rule_type": "K", "position_side": "long", "market":
        "period": {"preset": "3m"}, "params": {"drop_trigger_pct": 5, "partial_exit_pct": 50, "flip_to_short": True,
                                               "short_take_profit_pct": 3, "short_stop_loss_pct": 2, "initial_capital": 1000},
        "risk": {"stop_loss_pct": 0}, "fees": {"commission_pct": 0, "slippage_pct": 0}}
+# 여러 종목 포트폴리오 — 실행기는 macro["symbol"] 하나만 읽으므로 어느 버전으로도 돌릴 수 없다.
+PORTFOLIO = {**A, "symbols": ["BTCUSDT", "ETHUSDT"]}
 
 
 def _key(token):
@@ -239,3 +242,49 @@ def test_claim_allows_old_runner_for_rule_a():
     _, ticket = _ticket(token, A)
     r = client.post("/api/runner/launch-tickets/claim", json={"ticket": ticket, "runner_version": "7"})
     assert r.status_code == 200 and r.json()["macro"]["rule_type"] == "A"
+
+
+def test_portfolio_macro_is_rejected_for_every_runner_version(monkeypatch):
+    """여러 종목 매크로는 실행기로 못 돌린다 — 실행기가 첫 종목에 전액을 넣기 때문. 세션도 드라이버도 만들지 않는다."""
+    scheduled = []
+    monkeypatch.setattr(eng, "schedule_start", lambda sid: scheduled.append(sid))
+    monkeypatch.setattr(eng, "schedule_stop", lambda sid: None)
+    token = _signup()
+    key = _key(token)
+    for version in ("7", "8", "10", ""):
+        r = _start(key, PORTFOLIO, version)
+        assert r.status_code == 422, (version, r.json())
+        assert r.json()["detail"] == runner_mod.PORTFOLIO_UNSUPPORTED_DETAIL
+    assert scheduled == []
+    sessions = client.get("/api/me/runner/sessions", headers=_auth(token)).json()
+    assert sessions["active"] == [] and sessions["recent"] == []
+    assert _start(key, A, "10").status_code == 200  # 같은 규칙의 단일 종목은 그대로 시작된다
+
+
+def test_portfolio_macro_cannot_get_a_launch_ticket():
+    """발급 시점에 막는다 — 실행기는 청구 실패의 사유 문구를 버리므로, 여기서 막아야 사용자가 이유를 읽는다."""
+    token = _signup()
+    saved = client.post("/api/me/macros", json={"macro": PORTFOLIO, "name": "t"}, headers=_auth(token)).json()["item"]
+    r = client.post("/api/me/runner/launch-tickets", json={"user_macro_id": saved["id"], "testnet": True}, headers=_auth(token))
+    assert r.status_code == 422 and r.json()["detail"] == runner_mod.PORTFOLIO_UNSUPPORTED_DETAIL
+
+
+def test_claim_rejects_macro_that_became_a_portfolio_after_the_ticket():
+    """발급 뒤 매크로가 여러 종목으로 바뀌는 120초 창 — 청구는 저장된 매크로를 다시 읽으므로 여기서도 막아야 한다."""
+    token = _signup()
+    saved = client.post("/api/me/macros", json={"macro": A, "name": "t"}, headers=_auth(token)).json()["item"]
+    created = client.post("/api/me/runner/launch-tickets", json={"user_macro_id": saved["id"], "testnet": True},
+                          headers=_auth(token)).json()
+    ticket = parse_qs(urlsplit(created["launch_url"]).query)["ticket"][0]
+    with get_session() as db:
+        row = db.get(UserMacro, saved["id"])
+        row.macro_json = json.dumps(PORTFOLIO)
+        db.add(row)
+        db.commit()
+    r = client.post("/api/runner/launch-tickets/claim", json={"ticket": ticket, "runner_version": "10"})
+    assert r.status_code == 422 and r.json()["detail"] == runner_mod.PORTFOLIO_UNSUPPORTED_DETAIL
+    status = client.get(f"/api/me/runner/launch-tickets/{created['launch_id']}", headers=_auth(token)).json()
+    assert status["status"] != "rejected" and status["status"] != "claimed"  # 업데이트로 풀리는 문제가 아니다
+    with get_session() as db:
+        row = db.get(RunnerLaunchTicket, created["launch_id"])
+        assert row.claimed_at == "" and row.rejected_at == ""

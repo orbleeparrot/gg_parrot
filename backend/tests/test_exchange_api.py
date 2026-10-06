@@ -35,7 +35,11 @@ def test_public_market_routes_preserve_exchange(monkeypatch):
 @pytest.mark.parametrize("path", ["/api/realtrade/bundle", "/api/realtrade/macro-file"])
 def test_domestic_cannot_download_binance_runner_file(path):
     with TestClient(app) as client:
-        assert client.post(path, json={"macro": DOMESTIC}).status_code == 422
+        res = client.post(path, json={"macro": DOMESTIC})
+        assert res.status_code == 422
+        # 파일은 바이낸스 전용이라고 범위로 말한다 — 실행기 직접 연결이 안 된다고 거짓말하지 않는다.
+        assert "바이낸스 전용" in res.json()["detail"]
+        assert "지원하지 않" not in res.json()["detail"]
 
 
 def test_domestic_save_round_trip_and_inconsistent_start_blocked(monkeypatch):

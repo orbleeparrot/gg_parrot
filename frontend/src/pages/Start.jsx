@@ -594,14 +594,6 @@ function AccountStart({ onNestedDialogChange }) {
       const saved = await api.saveMyMacro(runnable, `${symbol || "BTCUSDT"} 매크로`);
       if (!isCurrentAccount()) return;
       completeJourney();
-      if (isDomestic(runnable.exchange)) {
-        // Saving and leaderboard registration are supported; do not hand a KRW
-        // macro to the currently Binance-only execution wizard.
-        const registerScreen = screens.find((candidate) => candidate.kind === "register");
-        if (registerScreen) goTo(registerScreen);
-        setResumeError("매크로를 내 라이브러리에 저장했어요. 업비트·빗썸 실행기 직접 연결은 아직 지원하지 않아요. 리더보드 모의 집계는 등록할 수 있어요.");
-        return;
-      }
       // flow=build → 실행 마법사가 '매크로 빌드~연결·실행' 8단계 진행바로 이어서 표시한다.
       navigate("/?run=1&step=2&flow=build", { state: { selectedMacroId: saved.item.id } });
     } catch (reason) {
@@ -858,7 +850,7 @@ function AccountStart({ onNestedDialogChange }) {
               <p className="hero-tour-action-note" role="status">위에서 실제 등록을 완료하면 다음 안내가 열려요.</p>
             ) : (
               <button type="button" onClick={advance} disabled={footerDisabled} className="btn btn-l btn-primary hero-tour-next">
-                {screen.kind === "paper" && paperReady && isDomestic(form.exchange) ? "세션을 마치고 매크로 저장" : actionLabel(screen, backtest, paperController, paperReady, registrationReady, symbolSearchBusy)}
+                {actionLabel(screen, backtest, paperController, paperReady, registrationReady, symbolSearchBusy)}
               </button>
             )}
           </div>

@@ -265,7 +265,7 @@ def _ticket_error(status_code: int, detail: str) -> HTTPException:
     )
 
 
-DOMESTIC_RUNNER_DETAIL = "업비트·빗썸은 종목·차트·백테스트만 지원하며, 실행기 직접 연결은 지원하지 않습니다."
+DOMESTIC_RUNNER_DETAIL = "매크로 파일은 바이낸스 전용입니다. 업비트·빗썸 매크로는 빠른 실행으로 실행기에 직접 연결해 주세요."
 
 
 def _require_supported_exchange(macro: Macro, runner_version: str) -> None:

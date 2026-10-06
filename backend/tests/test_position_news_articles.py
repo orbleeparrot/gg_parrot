@@ -76,7 +76,7 @@ def test_position_get_is_db_only_and_projects_ready_articles_by_identity(engine,
 def test_source_article_is_visible_before_other_source_and_translation_finish(engine, monkeypatch):
     source_waiting, release_source = Event(), Event()
     translation_waiting, release_translation = Event(), Event()
-    raw = item("Bitcoin ETF approved")
+    raw = item("Bitcoin ETF approved", url="https://example.test/english-story")
     payload = {"symbol": "BTC", "items": [item(), raw]}
     def fetcher(symbol, *, on_progress):
         on_progress(payload)
@@ -163,7 +163,7 @@ def test_pending_titles_retry_without_refetching_and_clear_pending_counter(engin
 
 
 def test_article_pruning_updates_pending_counts_without_resetting_cursor(engine):
-    articles.upsert_articles("BTC", [item("Bitcoin ETF approved")], now_ms=1000)
+    articles.upsert_articles("BTC", [item("Bitcoin ETF approved", url="https://example.test/old-story")], now_ms=1000)
     articles.upsert_articles("BTC", [item()], now_ms=40 * 86_400_000)
     before = articles.read_article_feed("BTC")
     assert before["translation"]["pending_count"] == 1

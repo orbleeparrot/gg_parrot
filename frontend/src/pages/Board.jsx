@@ -151,7 +151,7 @@ export default function Board() {
   const field = searchParams.get("field") || "all";
   const q = searchParams.get("q") || "";
   const [sentinel, pageSize] = useFittedPageSize();
-  const { data, busy, err, now } = useBoardList(page, pageSize, { sort, q, field });
+  const { data, busy, err, now, retry } = useBoardList(page, pageSize, { sort, q, field });
 
   // 주소가 곧 상태 — 기본값(1쪽·최신순·검색 없음)은 주소에서 뺀다.
   function update(next) {
@@ -190,7 +190,7 @@ export default function Board() {
         <SearchBar q={q} field={field} onSearch={update} />
       </PageHeader>
 
-      {err && <ErrorNote>글 목록을 불러오지 못했어요: {err}</ErrorNote>}
+      {err && <ErrorNote>글 목록을 불러오지 못했어요: {err} <button type="button" className="btn btn-sm" disabled={busy} onClick={retry}>글 목록 다시 불러오기</button></ErrorNote>}
       <div ref={sentinel} aria-hidden="true" />
       {(busy || !pageSize) && !data && !err ? <SkeletonRows count={pageSize || MIN_ROWS} /> : null}
 

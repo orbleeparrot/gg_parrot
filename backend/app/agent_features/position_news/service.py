@@ -27,21 +27,8 @@ _DISCLAIMER = (
 
 
 def _article_id(item: dict) -> str:
-    if item.get("content_type") == "community":
-        identity = "|".join((
-            "community", str(item.get("source") or "Binance Square"),
-            str(item.get("community_post_id") or item.get("url") or ""),
-        ))
-        return hashlib.sha256(identity.encode("utf-8")).hexdigest()[:20]
-    identity = "|".join(
-        (
-            str(item.get("original_title") or item.get("title") or ""),
-            str(item.get("source") or ""),
-        )
-    ).strip("|")
-    if not identity:
-        identity = str(item.get("url") or "")
-    return hashlib.sha256(identity.encode("utf-8")).hexdigest()[:20]
+    from .articles import article_id
+    return article_id(item)
 
 
 def _snapshot_id(asset_symbol: str, items: list[dict]) -> str:

@@ -125,7 +125,8 @@ def _public_payload(scope: str, feed: dict | None) -> dict:
              for item in feed.get("items", [])
              if within_window(item) and news._prepared_news_item_is_relevant(item, scope)]
     # Sorting a bounded prepared article list does not fetch or analyze news.
-    result["items"] = news._sort_news_items_newest_first(items)
+    from .news_identity import dedupe_news_items
+    result["items"] = dedupe_news_items(news._sort_news_items_newest_first(items))
     result["data_source"] = "prepared_db"
     pending = (result.get("translation") or {}).get("status") == "partial"
     summary_pending = sum(item.get("content_type") == "community"

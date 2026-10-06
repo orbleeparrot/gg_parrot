@@ -1079,6 +1079,7 @@ def _prepared_news_item_is_relevant(item: dict, scope: str | None = None) -> boo
 
 
 def _merge_news_items(*sources: list[dict]) -> list[dict]:
+    from .news_identity import news_identity
     merged: list[dict] = []
     seen: set[str] = set()
     positions = [0 for _items in sources]
@@ -1089,12 +1090,8 @@ def _merge_news_items(*sources: list[dict]) -> list[dict]:
                 item = items[positions[source_index]]
                 positions[source_index] += 1
                 advanced = True
-                key = re.sub(
-                    r"\s+",
-                    " ",
-                    str(item.get("title") or "").strip().casefold(),
-                )
-                if not key or key in seen:
+                key = news_identity(item)
+                if not item.get("title") or not key or key in seen:
                     continue
                 seen.add(key)
                 merged.append(item)
@@ -4226,22 +4223,20 @@ def _fetch_shared_publisher_rss(source_name: str, *, strict: bool = True) -> lis
 
 
 def _public_news_candidates(items: list[dict], *, limit: int, include_archive: bool = False) -> list[dict]:
+    from .news_identity import news_identity
     within_window = _within_coin_news_window if include_archive else _within_live_news_window
     current = [item for item in items if within_window(item) and _is_news_article_candidate(item)]
-    unique, titles, urls = [], set(), set()
+    unique, identities = [], set()
     counts = Counter()
     for item in _sort_news_items_newest_first(current):
         kind = "community" if item.get("content_type") == "community" else "article"
         cap = binance_square.configuration()["max_items"] if kind == "community" else limit
         if counts[kind] >= cap:
             continue
-        title = re.sub(r"\s+", " ", str(item.get("title") or "")).strip().casefold()
-        url = str(item.get("url") or "").split("?")[0].split("#")[0].rstrip("/")
-        if not title or (kind, title) in titles or (url and url in urls):
+        identity = news_identity(item)
+        if not item.get("title") or identity in identities:
             continue
-        titles.add((kind, title))
-        if url:
-            urls.add(url)
+        identities.add(identity)
         unique.append(dict(item))
         counts[kind] += 1
     return unique

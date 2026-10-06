@@ -27,6 +27,7 @@ const HERO_SLIDE_DWELL_MS = 15_000;
 const HERO_SLIDE_EXIT_MS = 560;
 
 function HomeEntryHero({ onLeaderboard, onAsk, staticLayout = false }) {
+  const { token } = useAuth();
   const mobileDevice = getRunnerDevice().isMobile;
   return (
     <section
@@ -61,7 +62,7 @@ function HomeEntryHero({ onLeaderboard, onAsk, staticLayout = false }) {
           <span className="home-entry-choice-art" aria-hidden="true">
             <img src="/brand/agent/ggparrot-agent-curious-v1.svg" alt="" width="88" height="88" draggable="false" />
           </span>
-          <span className="home-entry-choice-copy"><strong>껄무새에게 물어볼까?</strong><small>뭘 고를지 모르겠다면 — 성향·종목만 고르면 후보 조합 3개를 보여 줘요.</small></span>
+          <span className="home-entry-choice-copy"><strong>껄무새에게 물어볼까?</strong><small>{!token ? "로그인 후 이용할 수 있어요. 로그인하면 질문 화면으로 이어져요. " : ""}뭘 고를지 모르겠다면 — 성향·종목만 고르면 후보 조합 3개를 보여 줘요.</small></span>
           <span className="home-entry-choice-arrow" aria-hidden="true"><Icon name="arrowRight" size={18} /></span>
         </button>
         <button

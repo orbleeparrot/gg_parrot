@@ -91,6 +91,11 @@ def test_rejected_status_asks_domestic_macro_for_v10_and_binance_for_the_general
     assert binance["min_runner_version"] == "6"
 
 
+def test_download_info_tells_the_web_the_domestic_minimum():
+    info = client.get("/api/runner/download/info").json()
+    assert info["domestic_min_runner_version"] == runner_mod.DOMESTIC_MIN_VERSION == "10"
+
+
 def test_claim_still_refuses_unsupported_rule_for_domestic_even_on_new_runner():
     macro = {**DCA, "exchange": "upbit", "symbol": "KRW-BTC", "market": "spot", "candle_interval": "1d",
              "params": {"amount_per_buy": 10000, "interval_days": 1, "initial_capital": 100000}}

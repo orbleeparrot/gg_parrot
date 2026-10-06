@@ -1,6 +1,7 @@
 // 실행 종료 결과와 종료 확인 문구 — 화면 컴포넌트가 아니라 순수 함수로 두어 테스트한다.
 import { exitRules } from "../../lib/positionExits.js";
 import { formatQuoteAmount, practiceModeLabel } from "../../lib/exchanges.js";
+import { quoteOf } from "../../lib/format.js";
 
 const PRICE = new Intl.NumberFormat("en-US", { maximumFractionDigits: 6 });
 const QTY = new Intl.NumberFormat("en-US", { maximumFractionDigits: 6 });
@@ -164,6 +165,10 @@ export function describeRunOutcome(session) {
 
   return {
     eyebrow, title, detail, tone, avatar, pending: stopping,
+    // 결과 화면 맨 아래 안내. 단위는 세션 종목의 통화.
+    note: stopping
+      ? "실행기가 확정 보고를 보내면 이 화면이 결과로 바뀝니다."
+      : `실현손익은 실행기가 보고한 누적값(${quoteOf(s.symbol)})이에요. 거래소 체결 내역과 대조해 확인하세요.`,
     // 처리 중에는 확정 수치를 주장하지 않는다.
     // 큰 숫자는 '투입금 대비 총수익률'(서버 return_pct) — 시작 자금이 아니라 실제로 들어간 최대 금액이 분모.
     // 투입금이 없는 옛 세션은 예전처럼 실현손익 절대값만.

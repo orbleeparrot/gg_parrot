@@ -6,7 +6,10 @@ import { formatQuoteAmount, practiceModeLabel } from "../src/lib/exchanges.js";
 import { fmtSignedMoney, headlineReturn } from "../src/lib/positionExits.js";
 import { describeRunOutcome, formatSignedMoney } from "../src/features/agents/runOutcome.js";
 import { environmentLabel } from "../src/features/agents/history.js";
-import { runnerKeyGuide } from "../src/lib/runnerGuide.js";
+import { launchMinVersionFor, runnerKeyGuide } from "../src/lib/runnerGuide.js";
+import { resolveRunnerDownload } from "../src/lib/runnerDownload.js";
+import { api } from "../src/api.js";
+import { renderComponent, textOf } from "./renderHelper.js";
 
 // 국내 거래소를 켠 뒤 사용자가 보는 면: 통화 · 연습 환경 이름 · 설치 안내가 거래소에 맞는 말을 하는가.
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8").replace(/\r\n/g, "\n");
@@ -58,13 +61,59 @@ test("포지션 스트립의 큰 숫자 보조 문구도 세션 통화를 따른
   assert.equal(usdt.note, "실현 +0.80 USDT · 투입 40 USDT");
 });
 
-test("통화를 글자로 박아 둔 화면이 남지 않았다", () => {
-  for (const path of ["../src/components/PositionStrip.jsx", "../src/components/AgentHistory.jsx", "../src/components/RunnerSessions.jsx", "../src/components/RunResultScreen.jsx"]) {
-    const source = read(path);
-    assert.doesNotMatch(source.replace(/\/\/.*$/gm, ""), /USDT/, `${path} 에 USDT 글자가 박혀 있다`);
-  }
+// 소스에 글자가 있느냐가 아니라 화면에 나오는 글을 본다 — 컴포넌트를 실제로 그려서 확인한다.
+const live = {
+  session_id: 7, symbol: "KRW-BTC", market: "spot", leverage: 1, position_side: "long", testnet: true,
+  status: "running", connected: true, realized_pnl: 4200, invested_usdt: 100000, return_pct: 4.2,
+  unrealized_pct: 0, in_position: false, started_at: new Date().toISOString(),
+};
+const done = { ...live, status: "stopped", stop_mode: "close_and_stop", started_kst: "10/06 09:00:00", stopped_kst: "10/06 10:00:00",
+  started_at: "2026-10-06T00:00:00Z", stopped_at: "2026-10-06T01:00:00Z", macro: null };
+
+test("포지션 스트립이 그린 글 — 원화 세션은 KRW, USDT 세션은 USDT", async () => {
+  const krwText = textOf(await renderComponent("src/components/PositionStrip.jsx", { session: live, macro: null }));
+  assert.match(krwText, /투입금 100,000 KRW/);
+  assert.match(krwText, /실현손익 · 누적 \+4,200 KRW/);
+  assert.doesNotMatch(krwText, /USDT/);
+  const usdt = { ...live, symbol: "BTCUSDT", realized_pnl: 4.2, invested_usdt: 100 };
+  const usdtText = textOf(await renderComponent("src/components/PositionStrip.jsx", { session: usdt, macro: null }));
+  assert.match(usdtText, /투입금 100 USDT/);
+  assert.match(usdtText, /실현손익 · 누적 \+4.20 USDT/);
+  assert.doesNotMatch(usdtText, /KRW/);
 });
 
+test("종료 결과 화면이 그린 글 — 마지막 안내의 단위가 실제 통화로 나오고 코드가 새지 않는다", async () => {
+  const krwText = textOf(await renderComponent("src/components/RunResultScreen.jsx", { session: done }));
+  assert.match(krwText, /누적값\(KRW\)이에요\. 거래소 체결 내역과 대조해 확인하세요\./);
+  assert.match(krwText, /투입금 100,000 KRW/);
+  const usdtText = textOf(await renderComponent("src/components/RunResultScreen.jsx", { session: { ...done, symbol: "BTCUSDT", realized_pnl: 4.2, invested_usdt: 100 } }));
+  assert.match(usdtText, /누적값\(USDT\)이에요\./);
+  for (const text of [krwText, usdtText]) assert.doesNotMatch(text, /[{}]|quoteOf|undefined/);
+  const pending = textOf(await renderComponent("src/components/RunResultScreen.jsx", { session: { ...done, status: "running", stopping: true } }));
+  assert.match(pending, /확정 보고를 보내면/);
+});
+
+test("결과 안내문은 종료 처리 중과 끝난 뒤가 다르고 단위가 통화를 따른다", () => {
+  assert.equal(describeRunOutcome(krw).note, "실현손익은 실행기가 보고한 누적값(KRW)이에요. 거래소 체결 내역과 대조해 확인하세요.");
+  assert.match(describeRunOutcome({ ...krw, symbol: "BTCUSDT" }).note, /누적값\(USDT\)/);
+  assert.match(describeRunOutcome({ ...krw, status: "running", stopping: true }).note, /확정 보고/);
+});
+
+test("에이전트 기록 목록이 그린 글 — 코인 옆 단위와 손익이 원화다", async () => {
+  const html = await renderComponent("src/components/AgentHistory.jsx", { sessions: [done], policy: {}, onOpen() {}, onTogglePin() {} }, { router: true, exportName: "AgentHistoryList" });
+  const text = textOf(html);
+  assert.match(text, /BTC KRW/);
+  assert.match(text, /\+4,200 KRW/);
+  assert.match(text, /모의 · 현물/);
+  assert.doesNotMatch(text, /USDT|KRW-BTC/);
+});
+
+// 그릴 수 없는 파일(RunnerSessions 는 훅·네트워크가 얽혀 있다)에는 안전망으로 헬퍼를 쓰는지만 본다.
+test("RunnerSessions 는 통화 헬퍼를 쓴다", () => {
+  const source = read("../src/components/RunnerSessions.jsx");
+  assert.match(source, /formatQuoteAmount\(s\.realized_pnl \?\? 0, s\.symbol/);
+  assert.match(source, /practiceModeLabel\(s\.symbol\)/);
+});
 // --- 연습 환경 이름: 국내에는 테스트넷이 없다 ---------------------------------------
 test("국내 세션의 연습 표시는 모의, 바이낸스는 테스트넷", () => {
   assert.equal(practiceModeLabel("KRW-BTC"), "모의");
@@ -115,13 +164,44 @@ test("거래소마다 '키 준비했어요' 확인이 따로 저장된다", () =
   assert.equal(new Set(keys).size, 3);
 });
 
-test("마법사는 안내 모듈의 글만 쓰고 바이낸스 문구를 박아 두지 않는다", () => {
+test("마법사가 읽는 안내 칸은 모든 거래소 안내에 실제 글로 채워져 있다", () => {
   const wizard = read("../src/pages/RunnerDownload.jsx");
   assert.match(wizard, /runnerKeyGuide\(selected\?\.macro\)/);
+  const fields = [...new Set([...wizard.matchAll(/keyGuide\.(\w+)/g)].map((m) => m[1]))];
+  assert.ok(fields.length >= 15, "마법사가 안내 객체를 거의 읽지 않는다");
+  for (const exchange of ["binance", "upbit", "bithumb"]) {
+    const guide = runnerKeyGuide({ exchange });
+    for (const field of fields) {
+      const value = guide[field];
+      assert.notEqual(value, undefined, `${exchange} 안내에 ${field} 칸이 없다 — 화면에 undefined 가 나온다`);
+      if (typeof value === "string") assert.ok(value.length > 0 && !/[{}]|undefined/.test(value), `${exchange}.${field}: ${value}`);
+    }
+  }
+  // 바이낸스 문구를 화면에 다시 박아 두지 않았는지(위의 거래소별 안내가 유일한 출처).
   assert.doesNotMatch(wizard, /BINANCE_TESTNET_GUIDES|바이낸스 키를|테스트넷 기본|테스트넷 · 가짜 자금|테스트넷 키/);
   const install = read("../src/pages/RunnerInstall.jsx");
   assert.match(install, /업비트·빗썸[\s\S]{0,60}모의 모드/);
   assert.match(install, /허용 IP/);
+});
+
+test("'자동 연결 최소 버전' 칸 — 국내 매크로는 국내 요구 버전, 모르면 비운다", () => {
+  const binance = runnerKeyGuide({ exchange: "binance" });
+  const upbit = runnerKeyGuide({ exchange: "upbit" });
+  const versions = { general: "6", domestic: "10" };
+  assert.equal(launchMinVersionFor(binance, versions), "6");
+  assert.equal(launchMinVersionFor(upbit, versions), "10");
+  assert.equal(launchMinVersionFor(upbit, { general: "6" }), "", "국내인데 바이낸스 숫자를 보이면 안 된다");
+  assert.equal(resolveRunnerDownload({ available: true, domestic_min_runner_version: "10", min_runner_version: "6" }, null).domesticMinVersion, "10");
+  assert.equal(resolveRunnerDownload({ available: true, min_runner_version: "6" }, null).domesticMinVersion, "");
+  assert.match(read("../src/pages/RunnerDownload.jsx"), /launchMinVersionFor\(keyGuide/);
+});
+
+test("매크로 파일 내려받기 실패는 서버가 말한 이유를 그대로 던진다", async (t) => {
+  const reason = "매크로 파일은 바이낸스 전용입니다. 업비트·빗썸 매크로는 빠른 실행으로 실행기에 직접 연결해 주세요.";
+  t.mock.method(globalThis, "fetch", async () => Response.json({ detail: reason }, { status: 422 }));
+  await assert.rejects(api.downloadMacroFile({ exchange: "upbit", rule_type: "A", position_side: "long" }), { message: reason });
+  t.mock.method(globalThis, "fetch", async () => new Response("<html>oops</html>", { status: 500 }));
+  await assert.rejects(api.downloadMacroFile({ rule_type: "A", position_side: "long" }), { message: "매크로 파일 생성 실패" });
 });
 
 test("PaperPanel 의 사용법 링크는 국내에서도 열려 있다", () => {

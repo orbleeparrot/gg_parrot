@@ -69,6 +69,8 @@ export function resolveRunnerDownload(downloadInfo, downloadError) {
         ? Math.max(Number(MIN_SUPPORTED_RUNNER_VERSION), Number(downloadInfo?.min_runner_version) || 0)
         : downloadInfo?.min_runner_version || MIN_SUPPORTED_RUNNER_VERSION,
     ),
+    // 국내 거래소 매크로가 요구하는 실행기 버전(서버가 내려 준다). 모르면 빈 문자열.
+    domesticMinVersion: String(downloadInfo?.domestic_min_runner_version || ""),
     size: downloadInfo?.size || 0,
     state: !checked
       ? "loading"

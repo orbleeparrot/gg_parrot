@@ -9,7 +9,7 @@ import { getUserId } from "../lib/user.js";
 import { fmtSize, isRunnerOpened, markRunnerOpened, useRunnerDownload } from "../lib/runnerDownload.js";
 import { findLaunchedSession, launchPhaseFromTicketStatus } from "../lib/runnerLaunch.js";
 import { getRunnerDevice } from "../lib/runnerDevice.js";
-import { runnerExecutionMarket, runnerKeyGuide } from "../lib/runnerGuide.js";
+import { launchMinVersionFor, runnerExecutionMarket, runnerKeyGuide } from "../lib/runnerGuide.js";
 import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 import { Icon } from "../components/icons.jsx";
 
@@ -419,8 +419,10 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
     supportsLaunch,
     version: displayedRunnerVersion,
     minVersion: requiredRunnerVersion,
+    domesticMinVersion,
     state: runnerDownloadState,
   } = runnerDownload;
+  const launchMinVersion = launchMinVersionFor(keyGuide, { general: requiredRunnerVersion, domestic: domesticMinVersion });
 
   useEffect(() => {
     const acknowledged = window.localStorage.getItem(apiKeyGuideStorageKey) === "acknowledged";
@@ -938,7 +940,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
             </dd>
           </div>
           {runnerAvailable && displayedRunnerVersion ? <div><dt>다운로드 버전</dt><dd className="num">v{displayedRunnerVersion}</dd></div> : null}
-          {supportsLaunch ? <div><dt>자동 연결 최소 버전</dt><dd className="num">v{requiredRunnerVersion}</dd></div> : null}
+          {supportsLaunch && launchMinVersion ? <div><dt>자동 연결 최소 버전</dt><dd className="num">v{launchMinVersion}</dd></div> : null}
           {runnerAvailable && downloadInfo?.size ? <div><dt>파일 크기</dt><dd className="num">{fmtSize(downloadInfo.size)}</dd></div> : null}
         </dl>
         {downloadStarted && !runnerReady ? (

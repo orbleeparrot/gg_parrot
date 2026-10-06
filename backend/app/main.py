@@ -2574,6 +2574,8 @@ def _runner_launch_capabilities() -> dict:
         "supports_launch": _RUNNER_SUPPORTS_LAUNCH,
         "launch_scheme": _RUNNER_LAUNCH_SCHEME,
         "min_runner_version": _RUNNER_MIN_VERSION,
+        # 국내 거래소 매크로는 일반 최소 버전이 아니라 이 버전부터 열린다(웹 안내가 같은 숫자를 말하도록 내려 준다).
+        "domestic_min_runner_version": runner_mod.DOMESTIC_MIN_VERSION,
     }
 
 

@@ -123,6 +123,11 @@ function domesticGuide(exchange) {
   };
 }
 
+// '자동 연결 최소 버전' 칸에 보일 숫자. 국내 매크로는 국내 요구 버전이고, 모르면 칸을 비운다(바이낸스 숫자를 대신 보이지 않는다).
+export function launchMinVersionFor(guide, { general = "", domestic = "" } = {}) {
+  return guide?.domestic ? String(domestic || "") : String(general || "");
+}
+
 export function runnerKeyGuide(macro) {
   const exchange = safeExchange(macro);
   return isDomestic(exchange) ? domesticGuide(exchange) : binanceGuide(macro);

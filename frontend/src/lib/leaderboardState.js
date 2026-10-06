@@ -85,3 +85,10 @@ export function stateHelp(entry, now = Date.now()) {
   return entry.trade_count > 0 ? `${head}
 ${TRADES_HELP}` : head;
 }
+
+// 리더보드는 매일 자정(KST)에 초기화된다 — 서버 leaderboard.seconds_to_reset 과 같은 기준.
+const KST_OFFSET_MS = 9 * 3600 * 1000;
+const DAY_MS = 24 * 3600 * 1000;
+export function nextKstMidnight(now = Date.now()) {
+  return (Math.floor((now + KST_OFFSET_MS) / DAY_MS) + 1) * DAY_MS - KST_OFFSET_MS;
+}

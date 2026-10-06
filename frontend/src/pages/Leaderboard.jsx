@@ -15,7 +15,7 @@ import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 import { applyVote, settleVote } from "../lib/leaderboardVotes.js";
 import StrategyDetails from "../components/StrategyDetails.jsx";
 import { impressionKey } from "../lib/visit.js";
-import { isLive, liveReturn, stateHelp, stateLine, symbolsOf } from "../lib/leaderboardState.js";
+import { isLive, liveReturn, nextKstMidnight, stateHelp, stateLine, symbolsOf } from "../lib/leaderboardState.js";
 import { LIVE_TITLE, REWARD_HELP, REWARD_NOTE, STATE_LEGEND } from "../lib/leaderboardCopy.js";
 import { EXCHANGES, exchangeLabel, exchangeLogo, marketKey } from "../lib/exchanges.js";
 import { baseOf } from "../lib/format.js";
@@ -195,7 +195,8 @@ function AccountLeaderboard() {
   const [items, setItems] = useState([]);
   const [unlocking, setUnlocking] = useState(0); // entry id being unlocked
   const [deleting, setDeleting] = useState(0); // entry id being deleted
-  const [resetAt, setResetAt] = useState(Date.now());
+  // 서버 값을 받기 전이나 못 받았을 때도 '00:00:00' 대신 다음 자정(KST)까지를 센다.
+  const [resetAt, setResetAt] = useState(() => nextKstMidnight());
   const [page, setPage] = useState(1);
   const [board, setBoard] = useState({ total: 0, has_more: false, preparing: false, stale: false });
   const [busy, setBusy] = useState(true);

@@ -516,8 +516,9 @@ RULES = {
     "K": {"drop_trigger_pct": 5, "short_take_profit_pct": 3, "short_stop_loss_pct": 2,
           "initial_capital": 1000},
 }
-# 필터가 절대 통과하지 못하는 조건: 종가가 3봉 평균 "아래" 여야 하는데 계속 오르는 봉을 준다.
-NEVER = {"kind": "ma", "params": {"period": 3, "side": "below"}}
+# 절대 통과하지 못하는 필터: 400봉 이평은 40봉만 주면 영원히 안 데워지고, 안 데워진 필터는
+# 막는다(원칙 2). 가격 열과 무관하게 결정적이라 일곱 규칙을 같은 필터로 쓸 수 있다.
+BLOCKS = {"kind": "ma", "params": {"period": 400, "side": "above"}}
 
 
 def _macro(rule_type, entry_filter=None):
@@ -539,12 +540,21 @@ def _run(macro, closes):
 
 
 RISING = [100.0 + i * 5 for i in range(40)]
+# 삼각파 — 올랐다 내린다. F(RSI)·G(볼린저 역추세) 는 계속 오르는 열에서는 필터가 없어도
+# 진입하지 않는다(RSI 가 100 에 붙고, 역추세는 하단을 뚫을 일이 없다). 그래서 따로 준다.
+TRIANGLE = ([80.0, 100.0, 120.0, 140.0, 120.0, 100.0] * 7)[:40]
+SERIES = {"F": TRIANGLE, "G": TRIANGLE}
+
+
+def _series(rule_type):
+    return SERIES.get(rule_type, RISING)
 
 
 @pytest.mark.parametrize("rule_type", sorted(RULES))
 def test_filter_blocks_every_entry_on_each_filterable_rule(rule_type):
-    bare = _run(_macro(rule_type), RISING)
-    filtered = _run(_macro(rule_type, NEVER), RISING)
+    closes = _series(rule_type)
+    bare = _run(_macro(rule_type), closes)
+    filtered = _run(_macro(rule_type, BLOCKS), closes)
     assert not [f for f in filtered if f.side in ("buy", "short")], rule_type
     # 필터 없이는 뭔가 사야 한다 — 아니면 이 시험은 아무것도 증명하지 않는다.
     assert [f for f in bare if f.side in ("buy", "short")], rule_type
@@ -552,8 +562,9 @@ def test_filter_blocks_every_entry_on_each_filterable_rule(rule_type):
 
 @pytest.mark.parametrize("rule_type", sorted(RULES))
 def test_macro_without_filter_is_byte_for_byte_unchanged(rule_type):
-    before = [(f.side, round(f.price, 6), round(f.qty, 8)) for f in _run(_macro(rule_type), RISING)]
-    again = [(f.side, round(f.price, 6), round(f.qty, 8)) for f in _run(_macro(rule_type), RISING)]
+    closes = _series(rule_type)
+    before = [(f.side, round(f.price, 6), round(f.qty, 8)) for f in _run(_macro(rule_type), closes)]
+    again = [(f.side, round(f.price, 6), round(f.qty, 8)) for f in _run(_macro(rule_type), closes)]
     assert before == again and before  # 결정적이고, 비어 있지 않다
 
 
@@ -580,7 +591,7 @@ def test_filter_does_not_block_safety_orders():
 def test_rule_local_filter_and_entry_filter_both_apply():
     """I 의 ma_filter_period 와 entry_filter 가 각각 독립적으로 막는다."""
     # entry_filter 만 거짓 -> 안 산다
-    only_new = _macro("I", NEVER)
+    only_new = _macro("I", {"kind": "ma", "params": {"period": 3, "side": "below"}})
     assert not [f for f in _run(only_new, RISING) if f.side == "buy"]
     # ma_filter_period 만 거짓(내리는 봉) -> 안 산다
     falling = [200.0 - i * 5 for i in range(40)]
@@ -593,6 +604,8 @@ def test_rule_local_filter_and_entry_filter_both_apply():
 def test_unwarmed_filter_blocks_until_the_period_is_reached():
     macro = _macro("I", {"kind": "ma", "params": {"period": 30, "side": "above"}})
     assert not [f for f in _run(macro, RISING[:12]) if f.side == "buy"]
+    # 같은 필터, 충분한 봉 -> 데워지고 통과한다. 이 줄이 없으면 위 단정은 "필터가 아예 망가져도 통과" 다.
+    assert [f for f in _run(macro, RISING) if f.side == "buy"]
 ```
 
 - [ ] **Step 2: 실패 확인**
@@ -601,6 +614,11 @@ def test_unwarmed_filter_blocks_until_the_period_is_reached():
 cd backend && .venv/Scripts/python.exe -m pytest tests/test_entry_filter_sims.py -q
 ```
 기대: `test_filter_blocks_every_entry_on_each_filterable_rule` 이 일곱 규칙 전부 실패 (필터가 아직 배선되지 않았으므로 매수가 그대로 일어난다).
+
+**봉 열이 안 맞아 실패하면:** `assert [f for f in bare ...]` 가 어느 규칙에서 터지면 그 규칙은
+주어진 봉 열에서 필터 없이도 진입하지 않는 것이다. `SERIES` 에 그 규칙의 열을 추가해 진입이
+일어나게 만든다. **단정을 약화시키거나 그 규칙을 `RULES` 에서 빼지 말 것** — 그러면 이 시험이
+아무것도 증명하지 않는다.
 
 - [ ] **Step 3: 구현 — `CandleSim.__init__` 끝에 한 줄**
 

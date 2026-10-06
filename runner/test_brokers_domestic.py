@@ -476,6 +476,18 @@ class RehearsalTests(unittest.TestCase):
         self.assertFalse(ok)
         self.session.post.assert_not_called()
 
+    def test_signature_mismatch_is_our_bug_not_an_allowed_ip_problem(self):
+        for exchange in ("upbit", "bithumb"):
+            with self.subTest(exchange=exchange):
+                broker = self.broker(exchange)
+                self.session.post.return_value = exchange_error("invalid_query_payload", "JWT 페이로드 오류")
+                self.session.get.return_value = exchange_error("invalid_query_payload", "JWT 페이로드 오류")
+                ok, reason = broker.rehearse(notional=10_000.0)
+                self.assertFalse(ok)
+                self.assertIn("서명", reason)
+                self.assertNotIn("집 IP 는 바뀝니다", reason)
+                self.assertNotIn("다시 복사", reason)
+
     # --- 빗썸: 검증 경로가 없어 읽기 호출로 갈음 --------------------------------
     def bithumb_reads(self, accounts=ACCOUNTS, chance=CHANCE):
         def get(url, **_kwargs):
@@ -570,6 +582,56 @@ class BinanceRehearsalTests(unittest.TestCase):
 
     def test_below_the_minimum_notional_fails(self):
         broker = self.broker(min_notional="5")
+        ok, reason = broker.rehearse(notional=1.0)
+        self.assertFalse(ok)
+        self.assertIn("최소 주문 금액", reason)
+
+    # --- 선물: 예외를 삼키는 준비 단계에 기대면 나쁜 키로도 통과한다 ----------------
+    def futures_broker(self, min_notional="5"):
+        self.raw = Mock()
+        self.raw.futures_account_balance.return_value = [{"asset": "USDT", "balance": "100"}]
+        self.raw.futures_exchange_info.return_value = {"symbols": [
+            {"symbol": "BTCUSDT", "filters": [{"filterType": "LOT_SIZE", "stepSize": "0.001"},
+                                              {"filterType": "MIN_NOTIONAL", "notional": min_notional}]}]}
+        return brokers.BinanceBroker(self.raw, market="futures", symbol="BTCUSDT",
+                                     side="long", testnet=True, log=Mock())
+
+    def test_futures_passes_on_a_signed_read_and_touches_nothing_else(self):
+        broker = self.futures_broker()
+        ok, reason = broker.rehearse(notional=10.0)
+        self.assertTrue(ok, reason)
+        self.raw.futures_create_order.assert_not_called()
+        self.raw.futures_change_leverage.assert_not_called()
+        self.raw.futures_change_margin_type.assert_not_called()
+
+    def test_futures_bad_key_fails_even_though_check_account_would_swallow_it(self):
+        broker = self.futures_broker()
+        error = RuntimeError("APIError(code=-2015): Invalid API-key, IP, or permissions for action")
+        error.code = -2015
+        self.raw.futures_account_balance.side_effect = error
+        ok, reason = broker.rehearse(notional=10.0)
+        self.assertFalse(ok)
+        self.assertIn("허용 IP", reason)
+
+    def test_futures_other_balance_failure_fails_too(self):
+        broker = self.futures_broker()
+        self.raw.futures_account_balance.side_effect = RuntimeError("boom")
+        ok, reason = broker.rehearse(notional=10.0)
+        self.assertFalse(ok)
+        self.assertIn("boom", reason)
+
+    def test_futures_symbol_info_failure_or_missing_symbol_fails(self):
+        broker = self.futures_broker()
+        self.raw.futures_exchange_info.side_effect = RuntimeError("down")
+        self.assertFalse(broker.rehearse(notional=10.0)[0])
+        self.raw.futures_exchange_info.side_effect = None
+        self.raw.futures_exchange_info.return_value = {"symbols": [{"symbol": "ETHUSDT", "filters": []}]}
+        ok, reason = broker.rehearse(notional=10.0)
+        self.assertFalse(ok)
+        self.assertIn("BTCUSDT", reason)
+
+    def test_futures_below_the_minimum_notional_fails(self):
+        broker = self.futures_broker(min_notional="5")
         ok, reason = broker.rehearse(notional=1.0)
         self.assertFalse(ok)
         self.assertIn("최소 주문 금액", reason)

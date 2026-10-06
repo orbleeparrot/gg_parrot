@@ -148,10 +148,13 @@ class BinanceBroker:
         통과 못 했을 때 세션을 멈출지는 부르는 쪽이 정한다 — 이 메서드는 결과만 돌려준다.
         """
         try:
-            self.check_account()
-            if not self.ensure_ready():
-                return False, f"{self.symbol} 심볼을 바이낸스에서 찾지 못했어요. 심볼 이름을 확인하세요."
-            minimum = self.order_rules().min_notional
+            if self.market == "futures":
+                minimum = self._rehearse_futures_reads()
+            else:
+                self.check_account()
+                if not self.ensure_ready():
+                    return False, f"{self.symbol} 심볼을 바이낸스에서 찾지 못했어요. 심볼 이름을 확인하세요."
+                minimum = self.order_rules().min_notional
         except Exception as exc:
             # -2015 는 '키 · 허용 IP · 권한' 중 무엇인지 거래소가 가르지 않고 한 코드로 돌려준다.
             if getattr(exc, "code", None) in (-2014, -2015):
@@ -160,6 +163,17 @@ class BinanceBroker:
         if minimum and _positive_number(notional) < minimum:
             return False, f"최소 주문 금액보다 적어요. 바이낸스 최소 주문 금액은 {minimum:g} 인데 이번 주문은 {_positive_number(notional):g} 입니다."
         return True, "바이낸스 계정 확인과 주문 규격 읽기에 성공했습니다. 주문 권한은 첫 주문에서야 드러납니다"
+
+    def _rehearse_futures_reads(self) -> float:
+        """선물은 check_account · ensure_ready 를 쓰지 않는다 — 둘 다 예외를 삼켜서(잔고 조회 실패는 None,
+        심볼 조회 실패는 로그만) 잘못된 키 · 막힌 IP 로도 '성공' 처럼 지나간다.
+        리허설은 그걸 잡으려는 것이므로 서명이 필요한 잔고 조회를 직접 불러 실패하면 예외가 그대로 나가게 한다.
+        마진 · 레버리지도 건드리지 않는다. 돌려주는 값은 최소 주문 금액."""
+        self.raw.futures_account_balance()
+        for symbol in self.raw.futures_exchange_info().get("symbols", []):
+            if symbol.get("symbol") == self.symbol:
+                return _parse_filters(symbol)[1]
+        raise LookupError(f"{self.symbol} 심볼을 바이낸스에서 찾지 못했어요. 심볼 이름을 확인하세요")
 
     def _futures_symbol_info(self):
         try:
@@ -337,7 +351,7 @@ class DomesticApiError(RuntimeError):
 # 그런데 "키가 틀렸다" 로만 알리면 사용자가 키를 다시 발급하며 헛수고를 한다.
 # 이름은 거래소마다 다르다 — 업비트 no_authorization_ip, 빗썸 NotAllowIP (각 공식 문서의 오류 표).
 _IP_FIRST_ERRORS = frozenset({"no_authorization_ip", "NotAllowIP", "invalid_access_key", "jwt_verification",
-                              "invalid_query_payload", "no_authorization_token"})
+                              "no_authorization_token"})
 _EXPIRED_KEY_ERRORS = frozenset({"expired_access_key", "expired_jwt"})
 _NO_FUNDS_ERRORS = frozenset({"insufficient_funds_bid", "insufficient_funds_ask"})
 _MARKET_ERRORS = frozenset({"notfoundmarket", "invalid_market", "market_offline"})
@@ -350,6 +364,10 @@ def _explain_domestic_error(exchange: str, status: int, name: str, message: str)
         return (f"{label} 가 요청을 받아주지 않았어요({name}). 먼저 이 컴퓨터의 현재 IP 가 {label} 의 "
                 f"허용 IP 에 등록돼 있는지 확인하세요 — 집 IP 는 바뀝니다. IP 가 맞다면 "
                 f"API 키(액세스 키·시크릿 키)를 다시 복사해 넣으세요.")
+    if name == "invalid_query_payload":
+        # 서명·본문 해시가 어긋났다는 뜻이라 우리 쪽 요청 조립 오류다. 허용 IP 를 먼저 말하면 사용자가 엉뚱한 곳을 뒤진다.
+        return (f"{label} 가 요청 서명을 검증하지 못했어요({name}). API 키나 허용 IP 설정으로 "
+                f"고쳐지는 문제가 아니라 프로그램이 만든 요청의 문제입니다. 개발팀에 알려주세요.")
     if name == "out_of_scope":
         return f"이 API 키에 주문 권한이 없어요({name}). {label} API 관리에서 주문하기 권한을 켠 키를 쓰세요."
     if name in _EXPIRED_KEY_ERRORS:

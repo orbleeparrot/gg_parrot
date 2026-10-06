@@ -307,6 +307,36 @@ FILTERABLE_TYPES = frozenset({
     RuleType.E, RuleType.F, RuleType.G, RuleType.H, RuleType.I, RuleType.J, RuleType.K,
 })
 
+# 진입 관문(진입 필터 · 묶음 한도)을 안전하게 끼울 수 있는 규칙. 같은 집합을 두 뜻으로
+# 쓰므로 이름을 따로 둔다 — D(그리드)는 사다리 한 칸을 막으면 짝 없는 매수가 남고,
+# A·B(틱 구동)·C(적립식)는 봉 관문을 지나지 않는다.
+GATEABLE_TYPES = FILTERABLE_TYPES
+
+
+class PortfolioLeg(BaseModel):
+    """묶음의 한 다리. 규칙 관련 칸이 None 이면 묶음의 기본값을 쓴다."""
+
+    symbol: str
+    weight: float = Field(gt=0, le=100)      # 묶음 초기자금 중 이 레그의 몫(%)
+    rule_type: Optional[RuleType] = None
+    params: Optional[dict] = None            # rule_type 을 바꿨으면 반드시 같이 준다
+    entry_filter: Optional[EntryFilter] = None
+
+
+class BundleRisk(BaseModel):
+    """묶음 전체에 거는 한도. 레그 자금 분배(비중)와는 다른 것이다."""
+
+    # 동시에 포지션을 들고 있을 수 있는 종목 수.
+    max_positions: Optional[int] = Field(default=None, ge=1, le=5)
+    # 진입 기준 명목금액 합이 묶음 초기자금의 몇 %까지 갈 수 있는가.
+    max_exposure_pct: Optional[float] = Field(default=None, gt=0, le=100)
+
+    @model_validator(mode="after")
+    def _check(self) -> "BundleRisk":
+        if self.max_positions is None and self.max_exposure_pct is None:
+            raise ValueError("묶음 한도는 최소 하나를 정해야 합니다")
+        return self
+
 
 def required_param_names(rule_type: "RuleType") -> tuple[str, ...]:
     """Params that must be present for this rule type — the schema is the source.
@@ -347,6 +377,9 @@ class Macro(BaseModel):
     period: Period = Field(default_factory=Period)
     fees: Fees = Field(default_factory=Fees)
     entry_filter: Optional[EntryFilter] = None
+    # 묶음(포트폴리오) — 종목별 비중과 규칙 덮어쓰기. symbols 와 함께 쓸 수 없다.
+    legs: Optional[list[PortfolioLeg]] = None
+    bundle_risk: Optional[BundleRisk] = None
     created_at: Optional[str] = None
 
     # Demo cap on how many symbols one portfolio macro may span.
@@ -378,6 +411,28 @@ class Macro(BaseModel):
                 self.symbols = seen if len(seen) > 1 else None
             else:
                 self.symbols = None
+
+        if self.legs is not None:
+            if self.symbols:
+                raise ValueError("symbols 와 legs 는 함께 쓸 수 없습니다")
+            if len(self.legs) < 2:
+                raise ValueError("묶음은 종목 2개 이상이어야 합니다")
+            if len(self.legs) > self.MAX_SYMBOLS:
+                raise ValueError(f"묶음은 종목 최대 {self.MAX_SYMBOLS}개까지예요")
+            seen_legs: list[str] = []
+            for leg in self.legs:
+                leg.symbol = validate_symbol(leg.symbol, self.exchange)
+                if leg.symbol in seen_legs:
+                    raise ValueError(f"같은 종목을 두 번 넣었어요: {leg.symbol}")
+                seen_legs.append(leg.symbol)
+            total = sum(leg.weight for leg in self.legs)
+            if abs(total - 100.0) > 0.01:
+                raise ValueError(f"비중의 합이 100% 여야 합니다 (지금 {total:g}%)")
+            # 첫 레그가 대표 종목 — 슬러그 · 요약 · 단일 종목 경로가 그대로 돈다.
+            self.symbol = self.legs[0].symbol
+
+        if self.bundle_risk is not None and not self.is_portfolio():
+            raise ValueError("묶음 한도는 종목 2개 이상에서만 쓸 수 있습니다")
 
         if is_domestic(self.exchange):
             if self.position_side is not PositionSide.LONG or self.leverage != 1:
@@ -412,6 +467,30 @@ class Macro(BaseModel):
             raise ValueError(
                 f"rule_type {self.rule_type.value} does not support entry_filter"
             )
+
+        if self.is_portfolio():
+            specs = self.leg_specs()
+            if self.bundle_risk is not None:
+                for leg in specs:
+                    rule = self.leg_rule(leg)
+                    if rule not in GATEABLE_TYPES:
+                        raise ValueError(
+                            f"묶음 한도는 규칙 {rule.value} 에 쓸 수 없습니다 — E~K 만 지원해요"
+                        )
+                cap = self.bundle_risk.max_positions
+                if cap is not None and cap >= len(specs):
+                    raise ValueError("동시 보유 상한이 종목 수보다 작아야 의미가 있어요")
+            for leg in specs:
+                if leg.rule_type is not None and leg.rule_type is not self.rule_type \
+                        and leg.params is None:
+                    raise ValueError(f"레그 {leg.symbol}: 규칙을 바꾸면 세부값도 함께 주세요")
+                # 레그를 실제로 펼쳐 Macro 검증기를 통째로 돌린다 — 규칙별 params, 진입 조건
+                # 적용 가능 여부, 국내 거래소 제약, 레버리지까지 한 번에 본다. 레그 검증
+                # 로직을 두 벌로 베끼면 둘이 어긋나는 날이 온다.
+                try:
+                    self.for_leg(leg)
+                except ValueError as exc:
+                    raise ValueError(f"레그 {leg.symbol} 설정을 확인해 주세요") from exc
 
         if self.rule_type in _PARAMS_MODEL:
             self._validate_new_type()
@@ -474,10 +553,12 @@ class Macro(BaseModel):
 
     def all_symbols(self) -> list[str]:
         """Every symbol this macro runs on (>=1). Portfolio when len > 1."""
+        if self.legs:
+            return [leg.symbol for leg in self.legs]
         return self.symbols if self.symbols else [self.symbol]
 
     def is_portfolio(self) -> bool:
-        return bool(self.symbols) and len(self.symbols) > 1
+        return bool(self.legs) or (bool(self.symbols) and len(self.symbols) > 1)
 
     def for_symbol(self, symbol: str, initial_capital: Optional[float] = None) -> "Macro":
         """A single-symbol copy for one leg of a portfolio (optionally re-capitalized)."""
@@ -486,6 +567,53 @@ class Macro(BaseModel):
         data["symbols"] = None
         if initial_capital is not None and data.get("params", {}).get("initial_capital") is not None:
             data["params"] = {**data["params"], "initial_capital": initial_capital}
+        return Macro(**data)
+
+    def leg_specs(self) -> list["PortfolioLeg"]:
+        """묶음을 레그 목록으로 정규화한다. symbols 형태는 균등 비중으로 바꿔 돌려준다.
+
+        단일 종목 매크로는 빈 목록 — 호출부가 "묶음이 아니다" 로 읽는다.
+        """
+        if self.legs:
+            return list(self.legs)
+        syms = self.all_symbols()
+        if len(syms) < 2:
+            return []
+        weight = 100.0 / len(syms)
+        return [PortfolioLeg(symbol=s, weight=weight) for s in syms]
+
+    def leg_rule(self, leg: "PortfolioLeg") -> RuleType:
+        return leg.rule_type if leg.rule_type is not None else self.rule_type
+
+    def leg_filter(self, leg: "PortfolioLeg") -> Optional[EntryFilter]:
+        """레그의 실효 진입 조건.
+
+        레그가 규칙을 바꿨으면 묶음의 조건은 물려받지 않는다 — 그 조건은 다른 규칙을 위해
+        쓴 것이고, 조용히 엉뚱한 관문이 붙는 것이 사용자에게 가장 설명하기 어려운 결과다.
+        """
+        if leg.entry_filter is not None:
+            return leg.entry_filter
+        if leg.rule_type is not None and leg.rule_type is not self.rule_type:
+            return None
+        return self.entry_filter
+
+    def for_leg(self, leg: "PortfolioLeg", initial_capital: Optional[float] = None) -> "Macro":
+        """레그 하나를 단일 종목 매크로로 펼친다. 묶음 칸은 지워서 돌려준다."""
+        data = self.model_dump()
+        data["symbol"] = leg.symbol
+        data["symbols"] = None
+        data["legs"] = None
+        data["bundle_risk"] = None
+        data["rule_type"] = self.leg_rule(leg)
+        if leg.params is not None:
+            data["params"] = dict(leg.params)
+        eff_filter = self.leg_filter(leg)
+        data["entry_filter"] = eff_filter.model_dump() if eff_filter is not None else None
+        if initial_capital is not None:
+            params = dict(data.get("params") or {})
+            if params.get("initial_capital") is not None:
+                params["initial_capital"] = initial_capital
+                data["params"] = params
         return Macro(**data)
 
     def resolved_market(self) -> str:

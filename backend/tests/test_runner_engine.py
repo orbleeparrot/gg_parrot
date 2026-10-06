@@ -191,7 +191,7 @@ def test_shutdown_drivers_stops_every_live_driver(monkeypatch):
     a, b = _session(), _session()
     fake = _RsiFeed()
     monkeypatch.setattr(eng, "feed", fake)
-    monkeypatch.setattr(eng, "get_ticker_price_cached", lambda s: 50.0)
+    monkeypatch.setattr(eng, "get_ticker_price_cached", lambda s, **kw: 50.0)
     monkeypatch.setattr(eng, "POLL_SECONDS", 0.01)
 
     async def scenario():
@@ -320,7 +320,7 @@ def test_start_driver_warms_up_subscribes_and_writes_commands_on_fill(monkeypatc
 
     fake = FakeFeed()
     monkeypatch.setattr(eng, "feed", fake)
-    monkeypatch.setattr(eng, "get_ticker_price_cached", lambda s: 91.0)
+    monkeypatch.setattr(eng, "get_ticker_price_cached", lambda s, **kw: 91.0)
     monkeypatch.setattr(eng, "_run", _no_loop)
 
     async def scenario():
@@ -432,7 +432,7 @@ def test_persist_failure_keeps_fill_and_retries_next_tick(monkeypatch):
     sid = _session()
     fake = _RsiFeed()
     monkeypatch.setattr(eng, "feed", fake)
-    monkeypatch.setattr(eng, "get_ticker_price_cached", lambda s: 50.0)
+    monkeypatch.setattr(eng, "get_ticker_price_cached", lambda s, **kw: 50.0)
     monkeypatch.setattr(eng, "_run", _no_loop)
     real_persist = eng._persist_fill
     calls = []
@@ -533,7 +533,7 @@ def test_loop_cleans_up_when_session_stops_in_db(monkeypatch):
 
     fake = FakeFeed()
     monkeypatch.setattr(eng, "feed", fake)
-    monkeypatch.setattr(eng, "get_ticker_price_cached", lambda s: 50.0)
+    monkeypatch.setattr(eng, "get_ticker_price_cached", lambda s, **kw: 50.0)
     monkeypatch.setattr(eng, "POLL_SECONDS", 0)
 
     async def scenario():

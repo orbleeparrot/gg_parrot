@@ -37,6 +37,7 @@ from . import notifications as notifications_mod
 from . import runner_engine  # runner_engine 은 runner 를 함수 안에서 늦게 import 한다 — 순환 없음
 from .db import RunnerCommand, RunnerKey, RunnerLaunchTicket, RunSession, RunSessionEvent, User, UserMacro, get_session
 from .engine import Macro, RuleType
+from .exchanges import is_domestic, normalize_exchange, validate_symbol
 
 _KST = timezone(timedelta(hours=9))
 
@@ -75,6 +76,18 @@ def supports_signals(version: str) -> bool:
     """실행기가 서버 신호 프로토콜(v8+)을 쓰는가. 숫자 아닌 값·빈 값은 미지원."""
     v = (version or "").strip()
     return v.isascii() and v.isdigit() and len(v) <= 6 and int(v) >= int(SIGNAL_MIN_VERSION)
+
+
+# 국내 거래소(업비트·빗썸) 주문은 v10 실행기부터 낼 줄 안다. 지표형 신호(v8)와는 다른 능력이라 따로 센다 —
+# v8·v9 는 신호는 받아도 원화 마켓 주문 어댑터가 없어, 열어 두면 바이낸스 키로 KRW 종목을 주문하려 든다.
+DOMESTIC_MIN_VERSION = os.environ.get("RUNNER_DOMESTIC_MIN_VERSION", "10").strip() or "10"
+DOMESTIC_REQUIRED_DETAIL = "국내 거래소 매크로는 실행기 v10 이상이 필요해요. 실행기를 업데이트해 주세요."
+
+
+def supports_domestic(version: str) -> bool:
+    """실행기가 업비트·빗썸 주문을 낼 줄 아는가. 숫자 아닌 값·빈 값은 미지원."""
+    v = (version or "").strip()
+    return v.isascii() and v.isdigit() and len(v) <= 6 and int(v) >= int(DOMESTIC_MIN_VERSION)
 
 
 SIGNAL_REQUIRED_DETAIL = "지표형 매크로는 실행기 v8 이상이 필요해요. 실행기를 업데이트해 주세요."
@@ -255,9 +268,13 @@ def _ticket_error(status_code: int, detail: str) -> HTTPException:
 DOMESTIC_RUNNER_DETAIL = "업비트·빗썸은 종목·차트·백테스트만 지원하며, 실행기 직접 연결은 지원하지 않습니다."
 
 
-def _require_binance_macro(macro: Macro) -> None:
-    if macro.exchange != "binance":
-        raise _ticket_error(422, DOMESTIC_RUNNER_DETAIL)
+def _require_supported_exchange(macro: Macro, runner_version: str) -> None:
+    """국내 거래소 매크로는 국내 주문을 낼 줄 아는 실행기(v10+)에만 내준다. 바이낸스는 버전을 묻지 않는다.
+
+    실행기 버전을 아는 자리(세션 시작·티켓 청구)에서만 부른다 — 티켓 발급 때는 실행기가 아직 말하지 않았다.
+    """
+    if is_domestic(macro.exchange) and not supports_domestic(runner_version):
+        raise _ticket_error(426, DOMESTIC_REQUIRED_DETAIL)
 
 
 def create_launch_ticket(
@@ -285,7 +302,8 @@ def create_launch_ticket(
             macro = Macro.model_validate_json(macro_row.macro_json)
         except (TypeError, ValueError):
             raise _ticket_error(422, "저장된 매크로 형식이 올바르지 않아요.")
-        _require_binance_macro(macro)
+        # 거래소는 여기서 막지 않는다 — 발급 시점엔 실행기 버전을 모른다(실행기는 청구할 때 처음 자기 버전을 말한다).
+        # 구버전 실행기에는 청구 시점에 426 으로 돌려준다(claim_launch_ticket).
 
         row = RunnerLaunchTicket(
             user_id=user_id,
@@ -406,12 +424,18 @@ def claim_launch_ticket(ticket: str, runner_version: str = "") -> dict:
             macro = Macro.model_validate_json(macro_row.macro_json)
         except (TypeError, ValueError):
             raise _ticket_error(422, "저장된 매크로 형식이 올바르지 않아요.")
-        _require_binance_macro(macro)
         if macro.rule_type in RUNNER_UNSUPPORTED_RULES:
             # 실행기가 못 돌리는 유형은 버전과 무관하게 거절 — 업데이트로 풀리는 문제가 아니므로 버전 게이트(426)보다
             # 먼저 보고, '거절(업데이트 필요)' 표시도 하지 않고 티켓도 소비하지 않는다(잠금만 푼다).
             db.rollback()
             raise _ticket_error(422, UNSUPPORTED_RULE_DETAIL)
+        try:
+            _require_supported_exchange(macro, runner_version)
+        except HTTPException:
+            # 구버전 실행기 + 국내 매크로: 지표형과 같은 취급 — 거절만 남기고 티켓은 소비하지 않는다(업데이트하면 청구 가능).
+            db.rollback()
+            mark_launch_ticket_rejected(raw_ticket, runner_version)
+            raise
         if not supports_signals(runner_version) and needs_signals(macro):
             # 구버전 실행기 + 지표형 매크로: 거절 사실만 남기고(웹이 상태 조회로 알아챔) 티켓은 소비하지 않는다.
             # mark_launch_ticket_rejected 는 자기 세션을 여니 BEGIN IMMEDIATE 잠금을 먼저 푼다.
@@ -456,10 +480,18 @@ def claim_launch_ticket(ticket: str, runner_version: str = "") -> dict:
 def start_session(user: User, payload: dict) -> dict:
     """실행기가 매크로 구동을 시작할 때 세션을 만든다. session_id 를 돌려준다."""
     symbol = str(payload.get("symbol", "")).upper()
+    # 거래소는 이 요청이 처음으로 실어 오는 값이다 — 예전엔 아무도 보내지 않아 모든 세션이 바이낸스로 기록됐다.
+    # 세션 행에는 거래소 칸이 없고 매크로 원문(macro_json)이 그 역할을 한다. 여기서는 말이 서로 맞는지만 본다:
+    # 모르는 이름 · 종목과 안 맞는 거래소 · 매크로와 다른 거래소는 버전과 무관하게 잘못된 요청(422)이다.
     raw_macro = payload.get("macro")
-    if (payload.get("exchange", "binance") != "binance" or symbol.startswith("KRW-")
-            or (isinstance(raw_macro, dict) and raw_macro.get("exchange", "binance") != "binance")):
-        raise _ticket_error(422, DOMESTIC_RUNNER_DETAIL)
+    try:
+        payload_exchange = normalize_exchange(payload.get("exchange") or "binance")
+        if symbol:
+            validate_symbol(symbol, payload_exchange)
+    except ValueError as exc:
+        raise _ticket_error(422, str(exc))
+    if isinstance(raw_macro, dict) and str(raw_macro.get("exchange") or "binance").strip().lower() != payload_exchange:
+        raise _ticket_error(422, "시작 요청의 거래소가 매크로의 거래소와 달라요.")
     side = str(payload.get("position_side", "long")).lower()
     leverage = max(1, int(payload.get("leverage", 1) or 1))
     market = str(payload.get("market", "")).lower()
@@ -476,7 +508,6 @@ def start_session(user: User, payload: dict) -> dict:
     if isinstance(macro, dict):
         try:
             normalized_macro = Macro.model_validate(macro)
-            _require_binance_macro(normalized_macro)
             dumped = normalized_macro.model_dump_json()
             if len(dumped) <= 20000:  # 방어적 상한(정상 매크로는 ~1KB)
                 macro_json = dumped
@@ -487,11 +518,19 @@ def start_session(user: User, payload: dict) -> dict:
     # 버전 게이트(2026-09-22 결정): v8+ 는 서버가 전략을 돌리므로 매크로가 필수(422).
     # v8 미만은 A/B 만 로컬 판단으로 돌릴 수 있고, 지표형이거나 매크로를 안 보내 판별 불가면 426.
     signal_runner = supports_signals(runner_version)
+    if normalized_macro is None and is_domestic(payload_exchange) and not supports_domestic(runner_version):
+        # 매크로를 못 읽었어도(보내지 않았거나 깨짐) 요청이 국내 거래소를 말하면 구버전에는 열지 않는다 —
+        # 아래 '매크로를 함께 보내라(422)' 보다 먼저여야 v8·v9 실행기가 해야 할 일(업데이트)을 듣는다.
+        raise _ticket_error(426, DOMESTIC_REQUIRED_DETAIL)
     if signal_runner and normalized_macro is None:
         raise HTTPException(status_code=422, detail=MACRO_REQUIRED_DETAIL)
     if normalized_macro is not None and normalized_macro.rule_type in RUNNER_UNSUPPORTED_RULES:
         # 적립식(C)·SAR(K)는 어느 실행기 버전으로도 돌리지 않는다(위 주석 참고) — 업데이트 안내(426)보다 먼저 알린다.
         raise HTTPException(status_code=422, detail=UNSUPPORTED_RULE_DETAIL)
+    # 매크로를 읽은 경우의 국내 거래소 게이트 — 업데이트로 풀리는 문제라 위 '못 돌리는 유형(422)' 뒤, 지표형 게이트 앞에 둔다
+    # (청구 경로와 같은 순서).
+    if normalized_macro is not None:
+        _require_supported_exchange(normalized_macro, runner_version)
     if not signal_runner and needs_signals(normalized_macro):
         raise HTTPException(status_code=426, detail=SIGNAL_REQUIRED_DETAIL)
 

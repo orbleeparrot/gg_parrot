@@ -38,8 +38,8 @@ def test_domestic_cannot_download_binance_runner_file(path):
         assert client.post(path, json={"macro": DOMESTIC}).status_code == 422
 
 
-def test_domestic_save_round_trip_and_runner_block(monkeypatch):
-    # No runner key, ticket or session can bypass the public-market-only scope.
+def test_domestic_save_round_trip_and_inconsistent_start_blocked(monkeypatch):
+    # 거래소·종목·매크로가 서로 맞지 않는 시작 요청은 실행기 버전과 무관하게 거절한다.
     with TestClient(app) as client:
         name = "exchange_" + secrets.token_hex(5)
         response = client.post("/api/auth/signup", json={"email": f"{name}@example.invalid", "username": name, "password": "password123"})
@@ -49,17 +49,18 @@ def test_domestic_save_round_trip_and_runner_block(monkeypatch):
         assert saved["macro"]["exchange"] == "upbit"
         assert saved["macro"]["quote_currency"] == "KRW"
         assert client.get(f"/api/me/macros/{saved['id']}", headers=headers).json()["macro"]["exchange"] == "upbit"
+        # 티켓 발급은 열려 있다 — 실행기 버전은 청구할 때 가려진다(test_runner_domestic 참고).
         ticket = client.post("/api/me/runner/launch-tickets", headers=headers, json={"user_macro_id": saved["id"], "testnet": True})
-        assert ticket.status_code == 422, ticket.text
+        assert ticket.status_code == 200, ticket.text
         key = client.get("/api/me/runner/key", headers=headers).json()["key"]
         for payload in ({"symbol": "KRW-BTC"}, {"symbol": "BTCUSDT", "exchange": "upbit"}, {"symbol": "BTCUSDT", "macro": DOMESTIC}):
             result = client.post("/api/runner/start", headers={"X-Runner-Key": key}, json=payload)
             assert result.status_code == 422, result.text
 
 
-def test_runner_guard_rejects_domestic_before_database_work():
+def test_runner_guard_rejects_domestic_for_old_runner_before_database_work():
     from app.engine import Macro
     from fastapi import HTTPException
     with pytest.raises(HTTPException) as exc:
-        runner._require_binance_macro(Macro.model_validate(DOMESTIC))
-    assert exc.value.status_code == 422
+        runner._require_supported_exchange(Macro.model_validate(DOMESTIC), "9")
+    assert exc.value.status_code == 426

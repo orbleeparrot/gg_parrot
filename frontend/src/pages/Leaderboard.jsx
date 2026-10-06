@@ -16,7 +16,7 @@ import StrategyDetails from "../components/StrategyDetails.jsx";
 import { impressionKey } from "../lib/visit.js";
 import { isLive, liveReturn, stateHelp, stateLine, symbolsOf } from "../lib/leaderboardState.js";
 import { LIVE_TITLE, REWARD_HELP, REWARD_NOTE, STATE_LEGEND } from "../lib/leaderboardCopy.js";
-import { EXCHANGES, exchangeLabel, exchangeLogo, isDomestic, marketKey } from "../lib/exchanges.js";
+import { EXCHANGES, exchangeLabel, exchangeLogo, marketKey } from "../lib/exchanges.js";
 import { baseOf } from "../lib/format.js";
 import "./LeaderboardMobile.css";
 
@@ -451,7 +451,7 @@ function AccountLeaderboard() {
       if (d.points_balance != null) {
         updateAuthUser({ ...getAuthUser(), points_balance: d.points_balance });
       }
-      if (quickRunMode && d.user_macro?.id && !isDomestic(entry.exchange)) {
+      if (quickRunMode && d.user_macro?.id) {
         navigate("/?run=1&step=1", { state: { selectedMacroId: d.user_macro.id } });
         return;
       }
@@ -466,10 +466,6 @@ function AccountLeaderboard() {
 
   async function useForQuickRun(entry) {
     if (!isCurrentAccount()) return;
-    if (isDomestic(entry.exchange)) {
-      setError("국내 거래소 매크로는 백테스트·저장만 지원합니다. 실행기 직접 연결은 지원하지 않아요.");
-      return;
-    }
     if (!isLoggedIn()) {
       navigate("/login?next=%2Fleaderboard%3Ffrom%3Dquick-run");
       return;
@@ -665,11 +661,11 @@ function AccountLeaderboard() {
                   ) : quickRunMode ? (
                     <button
                       onClick={() => { sendOpen(e.id); useForQuickRun(e); }}
-                      disabled={unlocking === e.id || isDomestic(e.exchange)}
+                      disabled={unlocking === e.id}
                       className="btn btn-s btn-secondary"
-                      title={isDomestic(e.exchange) ? "국내 거래소 실행기 직접 연결 미지원" : "이 매크로를 빠른 실행에 연결"}
+                      title="이 매크로를 빠른 실행에 연결"
                     >
-                      {isDomestic(e.exchange) ? "실행기 미지원" : unlocking === e.id ? "저장 중…" : "이 매크로 사용"}
+                      {unlocking === e.id ? "저장 중…" : "이 매크로 사용"}
                     </button>
                   ) : null}
                   </div>

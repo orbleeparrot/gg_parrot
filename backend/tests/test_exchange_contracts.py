@@ -106,3 +106,11 @@ def test_new_signature_binds_exchange_and_legacy_signature_still_verifies(symbol
     domestic = make_macro(exchange="upbit", symbol="KRW-BTC")
     assert not macro_signing.verify(domestic, sig)
     assert not macro_signing.verify(domestic, signed)
+
+
+def test_every_exchange_reports_runner_support():
+    # 실행기 v10 은 업비트 · 빗썸 원화 현물에 주문을 낸다. 국내를 거짓으로 두면 API 가 거짓말을 하고,
+    # 다음에 이 값을 읽는 화면이 국내 실행을 막게 된다.
+    from app.exchanges import capabilities
+    for exchange in ("binance", "upbit", "bithumb"):
+        assert capabilities(exchange)["runner_supported"] is True, exchange

@@ -38,10 +38,6 @@ export function useMacroActions(macro) {
   // 빠른 실행 — 지금 만든 매크로를 내 라이브러리에 저장하고 실행기 연결 플로우로 바로 간다.
   // 리더보드의 '빠른 실행에 사용'과 같은 길이라 실행 화면은 하나만 유지한다.
   async function quickRun() {
-    if (isDomestic(macro.exchange)) {
-      setError("국내 거래소 실행기 직접 연결은 아직 지원하지 않아요.");
-      return;
-    }
     if (!isLoggedIn()) {
       navigate("/login?next=%2Fbuilder&notice=%EB%A1%9C%EA%B7%B8%EC%9D%B8%20%ED%9B%84%20%EC%9D%B4%EC%9A%A9%ED%95%A0%20%EC%88%98%20%EC%9E%88%EC%96%B4%EC%9A%94.");
       return;
@@ -59,7 +55,7 @@ export function useMacroActions(macro) {
 
   async function downloadMacro() {
     if (isDomestic(macro.exchange)) {
-      setError("국내 거래소 실거래 실행기 파일은 아직 지원하지 않아요.");
+      setError("매크로 파일(.ggm.json)은 바이낸스 전용이에요. 업비트·빗썸은 빠른 실행으로 매크로 실행기에 연결해 주세요.");
       return;
     }
     setError("");
@@ -115,8 +111,8 @@ export function PaperNextSteps({ macro, valErr, primary = "quickRun", onRegister
       {/* real-trade: 매크로 파일(.ggm.json)만 내려받아 '껄무새 매크로 실행기'에 넣는다.
           실행기가 실제 주문을 실행하므로(기본 테스트넷) 아래 문구는 그 위험을 축소하지 않는다. */}
       <div className="alert alert-warn space-y-3">
-        <div className="t-title">{domestic ? "국내 거래소 매크로 저장" : "동작 검증 완료 → 매크로 실행기로 실거래"}</div>
-        {domestic ? <p className="t-small">{exchangeLabel(macro.exchange)} 원화 시세·백테스트·모의매매와 저장을 지원해요. 실행기 직접 연결·실거래 주문은 아직 지원하지 않아요.</p> : <><p className="t-small">
+        <div className="t-title">{domestic ? "국내 거래소 매크로 → 빠른 실행으로 실행기 연결" : "동작 검증 완료 → 매크로 실행기로 실거래"}</div>
+        {domestic ? <p className="t-small">{exchangeLabel(macro.exchange)} 원화 현물 · 롱 · 1배 매크로는 <b>빠른 실행</b>으로 내 PC의 매크로 실행기에 바로 연결해요. 매크로 파일(.ggm.json) 내려받기는 바이낸스 전용이라 업비트·빗썸에서는 쓸 수 없어요.</p> : <><p className="t-small">
           터미널·파이썬 설치 없이 <b>껄무새 매크로 실행기</b>(프로그램)에 이 매크로 파일을 넣고 돌려요.
           실행 현황과 원격 종료는 <b>마이페이지</b>에서 확인해요.
         </p>
@@ -143,15 +139,15 @@ export function PaperNextSteps({ macro, valErr, primary = "quickRun", onRegister
         </div></>}
         {error && <div className="t-small text-red-600" role="alert">오류: {error}</div>}
         <div className="flex items-center gap-3 flex-wrap">
-          <button onClick={quickRun} disabled={!!valErr || launching || domestic} title={domestic ? "국내 거래소 실행기 직접 연결 미지원" : undefined} className={"btn btn-l " + (registerFirst || domestic ? "btn-secondary" : "btn-primary")}>
+          <button onClick={quickRun} disabled={!!valErr || launching} className={"btn btn-l " + (registerFirst ? "btn-secondary" : "btn-primary")}>
             {launching ? "실행 준비 중…" : "빠른 실행"}
           </button>
-          <button onClick={downloadMacro} disabled={!!valErr || domestic} title={domestic ? "국내 거래소 실거래 실행기 파일 미지원" : undefined} className="btn btn-l btn-secondary">
+          <button onClick={downloadMacro} disabled={!!valErr || domestic} title={domestic ? "매크로 파일은 바이낸스 전용이에요. 업비트·빗썸은 빠른 실행을 쓰세요." : undefined} className="btn btn-l btn-secondary">
             매크로 파일 내려받기 (.ggm.json)
           </button>
-          {!domestic && <Link to="/?run=1&step=1" className="t-small font-semibold text-slate-900 underline underline-offset-4 decoration-slate-300 hover:decoration-slate-900">
+          <Link to="/?run=1&step=1" className="t-small font-semibold text-slate-900 underline underline-offset-4 decoration-slate-300 hover:decoration-slate-900">
             사용법 →
-          </Link>}
+          </Link>
         </div>
       </div>
     </div>

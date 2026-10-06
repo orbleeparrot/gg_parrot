@@ -15,6 +15,7 @@ def _app() -> RunnerApp:
     app.user_macro_id = None
     app.macro_sig = None
     app.macro_source = ""
+    app.key_vars = {}  # 거래소별 키 칸 — 이 시험들은 키를 쓰지 않는다
     app.macro_path = Mock()
     app.macro_summary = Mock()
     app._log = Mock()
@@ -28,7 +29,7 @@ class FileSignatureTests(unittest.TestCase):
         app._apply_local_macro({"symbol": "btcusdt", "leverage": 1, "_sig": sig}, "C:/macro.ggm.json")
 
         self.assertNotIn("_sig", app.macro)  # 서버로 가는 매크로 본문엔 서명이 섞이지 않는다
-        payload = app._build_start_payload(True)
+        payload = app._build_start_payload(True, "mock")
         self.assertEqual(payload["macro_sig"], sig)
         self.assertEqual(payload["macro_source"], "file")
         self.assertNotIn("_sig", payload["macro"])
@@ -36,7 +37,7 @@ class FileSignatureTests(unittest.TestCase):
     def test_unsigned_file_sends_no_signature_and_logs_it(self) -> None:
         app = _app()
         app._apply_local_macro({"symbol": "btcusdt", "leverage": 1}, "old.json")
-        payload = app._build_start_payload(True)
+        payload = app._build_start_payload(True, "mock")
         self.assertNotIn("macro_sig", payload)
         self.assertEqual(payload["macro_source"], "file")
         self.assertTrue(any("서명이 없어요" in str(c.args[0]) for c in app._log.call_args_list))
@@ -45,7 +46,7 @@ class FileSignatureTests(unittest.TestCase):
         app = _app()
         app._apply_local_macro({"symbol": "btcusdt", "leverage": 1, "_sig": {"v": 1, "hmac": "x"}}, "f")
         app._apply_claimed_macro({"symbol": "ethusdt", "leverage": 1}, "웹", 5)
-        payload = app._build_start_payload(True)
+        payload = app._build_start_payload(True, "mock")
         self.assertNotIn("macro_sig", payload)
         self.assertEqual(payload["macro_source"], "web")
         self.assertEqual(payload["user_macro_id"], 5)
@@ -115,8 +116,8 @@ class ModifiedFileWarningTests(unittest.TestCase):
             var = Mock()
             var.get.return_value = "value"
             setattr(app, name, var)
-        app.live = Mock()
-        app.live.get.return_value = False
+        app.mode = Mock()
+        app.mode.get.return_value = "mock"  # 실행 모드 — 기본값(모의)
         app.server_base = "https://example.invalid"
         app._set_running = Mock()
         app._log_threadsafe = app._status_threadsafe = app._finish_threadsafe = Mock()

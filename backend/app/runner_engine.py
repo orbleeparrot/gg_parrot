@@ -59,11 +59,14 @@ def _now_ms() -> int:
 class _Live:
     """돌고 있는 세션 하나 — 드라이버·틱 태스크·마감봉 구독."""
 
-    __slots__ = ("session_id", "driver", "task", "subs", "stop_flag", "last_checkpoint", "unsaved")
+    __slots__ = ("session_id", "driver", "task", "subs", "stop_flag", "last_checkpoint", "unsaved", "exchange")
 
-    def __init__(self, session_id: int, driver: StrategyDriver) -> None:
+    def __init__(self, session_id: int, driver: StrategyDriver, exchange: str = "binance") -> None:
         self.session_id = session_id
         self.driver = driver
+        # 시세·봉을 어느 거래소에서 읽을지. 세션 행에는 거래소 칸이 없어 매크로에서 가져온다 —
+        # 안 넘기면 KRW 종목을 바이낸스에서 찾게 된다.
+        self.exchange = exchange
         self.task: Optional[asyncio.Task] = None
         self.subs: list = []
         self.stop_flag = False
@@ -172,12 +175,14 @@ async def _start_driver(session_id: int) -> bool:
         except Exception:
             log.exception("runner engine: session %s could not record start failure", session_id)
         return False
-    live = _Live(session_id, driver)
+    live = _Live(session_id, driver, macro.exchange)
+    # 국내 거래소는 거래소 인자를 실어 보낸다. 바이낸스는 인자 없이 부르는 옛 호출 모양을 그대로 둔다(candle_feed 와 같은 규칙).
+    feed_kwargs = {} if live.exchange == "binance" else {"exchange": live.exchange}
     keys = driver.candle_keys()
     history: Dict[str, list] = {}
     for symbol, interval, market in keys:
         try:
-            history[symbol] = await feed.history(symbol, interval, market, WARMUP_CANDLES)
+            history[symbol] = await feed.history(symbol, interval, market, WARMUP_CANDLES, **feed_kwargs)
         except Exception:
             log.exception("runner engine: warmup failed for %s — starting cold", symbol)
     driver.warmup(history)
@@ -196,7 +201,7 @@ async def _start_driver(session_id: int) -> bool:
     for symbol, interval, market in keys:
         hist = history.get(symbol)
         since_t = hist[-1][0] if hist else None  # Candle.t — 인덱스로 읽어 테스트 더미(tuple)도 받는다
-        subs.append(feed.subscribe(symbol, interval, market, on_candle, since_t=since_t))
+        subs.append(feed.subscribe(symbol, interval, market, on_candle, since_t=since_t, **feed_kwargs))
     live.subs = subs
     _drivers[session_id] = live
     live.task = asyncio.get_running_loop().create_task(_run(live))
@@ -298,7 +303,8 @@ async def _tick_once(live: _Live) -> None:
             return
         live.last_checkpoint = time.monotonic()
     try:
-        price = await asyncio.to_thread(get_ticker_price_cached, live.driver.symbol)
+        price = await asyncio.to_thread(
+            get_ticker_price_cached, live.driver.symbol, exchange=live.exchange)
     except Exception:
         price = None
     if not price:

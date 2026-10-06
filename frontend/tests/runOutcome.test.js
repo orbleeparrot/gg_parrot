@@ -6,7 +6,7 @@ import {
   describeRunOutcome,
   describeStopConfirm,
   elapsedLabel,
-  formatSignedUsdt,
+  formatSignedMoney,
 } from "../src/features/agents/runOutcome.js";
 
 const base = {
@@ -52,7 +52,7 @@ test("elapsed time survives a year rollover and unknown labels", () => {
   assert.equal(elapsedLabel("12/31 23:50:00", "01/01 00:20:00"), "30분");
   assert.equal(elapsedLabel("09/01 10:00:00", "09/03 12:30:00"), "2일 2시간");
   assert.equal(elapsedLabel("", "09/03 12:30:00"), "");
-  assert.equal(formatSignedUsdt(0), "0.00 USDT");
+  assert.equal(formatSignedMoney(0, "ZECUSDT"), "0.00 USDT");
 });
 
 test("the close-and-stop confirmation warns about mainnet and adapts to a flat session", () => {

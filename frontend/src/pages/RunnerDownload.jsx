@@ -9,10 +9,9 @@ import { getUserId } from "../lib/user.js";
 import { fmtSize, isRunnerOpened, markRunnerOpened, useRunnerDownload } from "../lib/runnerDownload.js";
 import { findLaunchedSession, launchPhaseFromTicketStatus } from "../lib/runnerLaunch.js";
 import { getRunnerDevice } from "../lib/runnerDevice.js";
+import { launchMinVersionFor, runnerExecutionMarket, runnerKeyGuide } from "../lib/runnerGuide.js";
 import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 import { Icon } from "../components/icons.jsx";
-
-const BINANCE_KEY_GUIDE_STORAGE_PREFIX = "ggparrot:binance-testnet-key-ready:v1";
 
 const STEP_MACRO = 0;
 const STEP_API_KEY = 1;
@@ -38,57 +37,31 @@ const BUILD_FLOW_CHAPTERS = [
 // STEP_API_KEY(1) → 8단계 중 6번째(index 5)에 대응한다.
 const BUILD_FLOW_OFFSET = 4;
 
-const BINANCE_TESTNET_GUIDES = {
-  spot: {
-    market: "현물",
-    environment: "Spot Testnet",
-    url: "https://testnet.binance.vision/",
-    domain: "testnet.binance.vision",
-    linkLabel: "Spot Testnet 열기",
-    steps: [
-      ["GitHub 계정으로 로그인", "Log In with GitHub을 누르고 binance-exchange 접근을 허용해요."],
-      ["HMAC 키 만들기", "Generate HMAC_SHA256 Key를 선택해 API Key와 Secret Key를 만들어요."],
-      ["거래 권한 확인", "TRADE 권한이 켜져 있는지 확인해요. 출금 권한은 빠른 실행에 필요하지 않아요."],
-      ["두 키를 바로 보관", "Secret Key는 다시 보이지 않으니 비밀번호 관리자에 임시 보관해요. 메신저나 스크린샷에는 남기지 않아요."],
-    ],
-  },
-  futures: {
-    market: "선물",
-    environment: "Futures Demo",
-    url: "https://demo.binance.com/en/my/settings/api-management",
-    domain: "demo.binance.com",
-    linkLabel: "Futures Demo API 만들기",
-    steps: [
-      ["데모 계정으로 로그인", "로그인 뒤 Futures Demo의 API Management 화면으로 돌아와요."],
-      ["API Management에서 키 만들기", "API Management → Create API를 누르고 알아보기 쉬운 이름을 입력해요."],
-      ["선물 거래 권한 확인", "Demo Futures 거래 권한이 켜져 있는지 확인해요. 출금 권한은 필요하지 않아요."],
-      ["두 키를 바로 보관", "API Key와 Secret Key는 비밀번호 관리자에 임시 보관해요. 메신저나 스크린샷에는 남기지 않아요."],
-    ],
-  },
-};
-
-const COPY = [
-  {
-    eyebrow: "비트코인 매크로 실행",
-    title: <>비트코인 매크로,<br /><span>고르고 바로 실행해요.</span></>,
-    description: "내 계정의 매크로나 리더보드 전략을 고르면 테스트넷 준비부터 실행기 연결과 실행 확인까지 한 화면씩 이어져요.",
-  },
-  {
-    eyebrow: "실행 전에 한 번만",
-    title: <>바이낸스 키를<br /><span>먼저 준비해요.</span></>,
-    description: "처음이라면 실제 돈이 들지 않는 테스트넷부터 시작해요. 선택한 매크로에 맞는 공식 발급 화면과 순서를 바로 안내해 드려요.",
-  },
-  {
-    eyebrow: "내 PC에 한 번만",
-    title: <>실행기를 준비하면<br /><span>다음부터 더 빨라져요.</span></>,
-    description: "껄무새 실행기는 내 PC에서 주문을 처리해요. 바이낸스 키는 웹이나 껄무새 서버로 보내지 않아요.",
-  },
-  {
-    eyebrow: "실행기에 직접 연결",
-    title: <>매크로 파일과 회원 키를<br /><span>실행기에 넣어요.</span></>,
-    description: "매크로 파일을 내려받아 실행기에서 열고, 껄무새 회원 키를 복사해 붙여넣은 뒤 실행기에서 매크로를 시작해요. 연결되면 아래 실행 현황이 자동으로 갱신돼요.",
-  },
-];
+// 단계별 머리글. 거래소마다 다른 두 곳(키 준비·실행기 준비 설명)은 안내 모듈의 글을 쓴다.
+function buildCopy(guide) {
+  return [
+    {
+      eyebrow: "비트코인 매크로 실행",
+      title: <>비트코인 매크로,<br /><span>고르고 바로 실행해요.</span></>,
+      description: guide.pickDescription,
+    },
+    {
+      eyebrow: "실행 전에 한 번만",
+      title: <>{guide.exchangeName} 키를<br /><span>먼저 준비해요.</span></>,
+      description: guide.keyDescription,
+    },
+    {
+      eyebrow: "내 PC에 한 번만",
+      title: <>실행기를 준비하면<br /><span>다음부터 더 빨라져요.</span></>,
+      description: guide.runnerDescription,
+    },
+    {
+      eyebrow: "실행기에 직접 연결",
+      title: <>매크로 파일과 회원 키를<br /><span>실행기에 넣어요.</span></>,
+      description: "매크로 파일을 내려받아 실행기에서 열고, 껄무새 회원 키를 복사해 붙여넣은 뒤 실행기에서 매크로를 시작해요. 연결되면 아래 실행 현황이 자동으로 갱신돼요.",
+    },
+  ];
+}
 
 const SOURCE_LABEL = {
   created: "내가 등록",
@@ -124,11 +97,6 @@ function legacyDashboardMacros(data) {
 
 function macroMarket(macro) {
   return runnerExecutionMarket(macro) === "futures" ? "선물" : "현물";
-}
-
-function runnerExecutionMarket(macro = {}) {
-  const leverage = Number(macro.leverage || 1);
-  return macro.position_side === "short" || leverage > 1 ? "futures" : "spot";
 }
 
 function performanceView(item) {
@@ -432,12 +400,11 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
     || library[0]
     || null
   ), [library, preferredSourceRef, selectedId]);
-  const executionMarket = runnerExecutionMarket(selected?.macro);
-  const keyGuide = BINANCE_TESTNET_GUIDES[executionMarket];
-  const apiKeyGuideStorageKey = `${BINANCE_KEY_GUIDE_STORAGE_PREFIX}:${executionMarket}`;
+  const keyGuide = useMemo(() => runnerKeyGuide(selected?.macro), [selected?.macro]);
+  const apiKeyGuideStorageKey = keyGuide.storageKey;
   const gatedStep = requestedStep > STEP_API_KEY && !apiKeyPrepared ? STEP_API_KEY : requestedStep;
   const step = signedIn && selected ? gatedStep : STEP_MACRO;
-  const copy = COPY[step];
+  const copy = buildCopy(keyGuide)[step];
   // 직접 만들기 가이드에서 이어진 경우(flow=build) 8단계 통합 진행바를 쓴다.
   const buildFlow = searchParams.get("flow") === "build";
   const progressChapters = buildFlow ? BUILD_FLOW_CHAPTERS : CHAPTERS;
@@ -452,8 +419,10 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
     supportsLaunch,
     version: displayedRunnerVersion,
     minVersion: requiredRunnerVersion,
+    domesticMinVersion,
     state: runnerDownloadState,
   } = runnerDownload;
+  const launchMinVersion = launchMinVersionFor(keyGuide, { general: requiredRunnerVersion, domestic: domesticMinVersion });
 
   useEffect(() => {
     const acknowledged = window.localStorage.getItem(apiKeyGuideStorageKey) === "acknowledged";
@@ -971,7 +940,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
             </dd>
           </div>
           {runnerAvailable && displayedRunnerVersion ? <div><dt>다운로드 버전</dt><dd className="num">v{displayedRunnerVersion}</dd></div> : null}
-          {supportsLaunch ? <div><dt>자동 연결 최소 버전</dt><dd className="num">v{requiredRunnerVersion}</dd></div> : null}
+          {supportsLaunch && launchMinVersion ? <div><dt>자동 연결 최소 버전</dt><dd className="num">v{launchMinVersion}</dd></div> : null}
           {runnerAvailable && downloadInfo?.size ? <div><dt>파일 크기</dt><dd className="num">{fmtSize(downloadInfo.size)}</dd></div> : null}
         </dl>
         {downloadStarted && !runnerReady ? (
@@ -1005,13 +974,13 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
 
   function renderApiKeyScene() {
     return (
-      <Workspace title={`Binance ${keyGuide.environment}`} status="테스트넷 · 가짜 자금">
+      <Workspace title={keyGuide.workspaceTitle} status={keyGuide.workspaceStatus}>
         <div className="runner-wizard-api-intro">
           <div className="runner-wizard-api-market" aria-hidden="true">API</div>
           <div>
             <small>선택한 매크로 · {selected?.symbol}</small>
-            <h2>{keyGuide.market} 테스트넷 키가 필요해요.</h2>
-            <p>실거래 키가 아니라 연습용 키를 만들어요. 현물과 선물 키는 서로 바꿔 쓸 수 없어요.</p>
+            <h2>{keyGuide.introTitle}</h2>
+            <p>{keyGuide.introBody}</p>
           </div>
           <a
             href={keyGuide.url}
@@ -1024,7 +993,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
           <span className="runner-wizard-api-domain">공식 페이지 · {keyGuide.domain} · 새 탭</span>
         </div>
 
-        <ol className="runner-wizard-api-steps" aria-label={`${keyGuide.market} 테스트넷 API 키 발급 순서`}>
+        <ol className="runner-wizard-api-steps" aria-label={keyGuide.stepsLabel}>
           {keyGuide.steps.map(([title, description], index) => (
             <li key={title}>
               <span className="num">{String(index + 1).padStart(2, "0")}</span>
@@ -1055,8 +1024,8 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
             }}
           />
           <span>
-            <strong>{keyGuide.market} 테스트넷의 API Key와 Secret Key를 준비했어요.</strong>
-            <small>실제 키 유효성은 실행기에서 연결할 때 확인해요.</small>
+            <strong>{keyGuide.checkTitle}</strong>
+            <small>{keyGuide.checkNote}</small>
           </span>
         </label>
       </Workspace>
@@ -1113,7 +1082,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
           {/* ③ 실행기에서 시작 */}
           <div className="pt-4 border-t border-slate-200">
             <strong className="t-label text-slate-900">③ 실행기에서 시작</strong>
-            <p className="mt-1 t-small text-slate-700">실행기에 바이낸스 <b>테스트넷 API 키/시크릿</b>을 입력하고 <b>매크로 시작</b>을 눌러요. 거래소 키는 내 PC 실행기에서만 쓰고 웹·서버로 보내지 않아요.</p>
+            <p className="mt-1 t-small text-slate-700">{keyGuide.accountStartText} 거래소 키는 내 PC 실행기에서만 쓰고 웹·서버로 보내지 않아요.</p>
           </div>
         </div>
         <p className="runner-wizard-security-note">껄무새 회원 키는 서버 상태 확인·원격 종료에만 쓰여요. 실행 현황은 <b>{user?.username}</b> 계정에 기록돼요.</p>
@@ -1266,12 +1235,12 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
             <span className="runner-wizard-launch-mark" aria-hidden="true"><Icon name="check" size={18} strokeWidth={2.5} /></span>
             <div>
               <h2>계정과 매크로가 실행기에 전달됐어요.</h2>
-              <p>{selected?.name} · {selected?.symbol} · 테스트넷 기본</p>
+              <p>{selected?.name} · {selected?.symbol} · {keyGuide.modeShort}</p>
             </div>
           </div>
           <div className="runner-wizard-launch-callout">
             <span className="num">01</span>
-            <div><strong>앞에서 준비한 {keyGuide.market} 테스트넷 키를 실행기에 입력해요.</strong><p>실행기 로그에 ‘연결 성공’이 나타나야 거래소 인증까지 끝난 거예요.</p></div>
+            <div><strong>{keyGuide.launchKeyTitle}</strong><p>{keyGuide.launchKeyNote}</p></div>
           </div>
           <div className="runner-wizard-launch-callout">
             <span className="num">02</span>
@@ -1285,7 +1254,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
     }
 
     return (
-      <Workspace title="실행기에서 시작" status="테스트넷 기본">
+      <Workspace title="실행기에서 시작" status={keyGuide.modeShort}>
         <MacroSummary item={selected} compact />
         <div className="runner-wizard-launch-panel is-ready">
           <span className="runner-wizard-launch-mark" aria-hidden="true"><Icon name="arrowUpRight" size={18} /></span>
@@ -1296,7 +1265,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
         </div>
         <div className="runner-wizard-review">
           <div><span>실행 계정</span><strong>{user?.username}</strong></div>
-          <div><span>거래 환경</span><strong>테스트넷 · 가짜 자금</strong></div>
+          <div><span>거래 환경</span><strong>{keyGuide.modeLong}</strong></div>
           <div><span>API 키 위치</span><strong>내 PC의 실행기</strong></div>
         </div>
         <button type="button" onClick={() => void downloadManualMacroFile()} disabled={manualDownloadBusy} className="runner-wizard-manual-link">

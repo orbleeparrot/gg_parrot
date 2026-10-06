@@ -222,6 +222,6 @@ Prefect는 원자적인 ‘예약 상태일 때만 취소’를 제공하지 않
 
 - 마이그레이션: `supabase/migrations/20260922120000_runner_commands.sql` (runsession.state_json, runnercommand).
 - 배포 순서: ① 서버(main) — 구버전 실행기는 A/B 만 시작 가능, 지표형은 426. ② 실행기 v8 exe 빌드·서명·태그. ③ `RUNNER_EXE_VERSION=8` 과 다운로드 URL 갱신.
-- 환경변수(기본값으로 충분): `RUNNER_SIGNAL_MIN_VERSION=8`, `COMMAND_TTL_SECONDS=90`, `CANDLE_GRACE_SECONDS=2`, `CANDLE_RETRY_SECONDS=30`.
+- 환경변수(기본값으로 충분): `RUNNER_SIGNAL_MIN_VERSION=8`, `RUNNER_DOMESTIC_MIN_VERSION=10`(업비트·빗썸 매크로는 이 버전 이상 실행기에만 열림), `COMMAND_TTL_SECONDS=90`, `CANDLE_GRACE_SECONDS=2`, `CANDLE_RETRY_SECONDS=30`.
 - 동작: 실행기 세션마다 서버가 StrategyDriver 를 돌려(페이퍼와 같은 엔진·같은 마감봉) Fill 을 runnercommand 로 남기고 heartbeat 응답 `commands` 로 내려 준다. 실행기는 주문만 넣고 `acks` 로 보고. 만료(90s) 명령은 실행되지 않는다. 재배포 시 running v8 세션은 state_json 으로 복구된다.
 - 주의: v6 실행기는 매크로를 보내지 않아 규칙을 알 수 없으므로 전부 426 이 난다(업데이트 유도).

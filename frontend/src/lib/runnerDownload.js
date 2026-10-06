@@ -7,10 +7,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api.js";
 
-export const OFFICIAL_RUNNER_VERSION = "9";
+export const OFFICIAL_RUNNER_VERSION = "10";
 const MIN_SUPPORTED_RUNNER_VERSION = "6";
 export const OFFICIAL_RUNNER_DOWNLOAD_URL =
-  "https://github.com/orbleeparrot/gg_parrot/releases/download/runner-v9/ggparrot-runner.exe";
+  "https://github.com/orbleeparrot/gg_parrot/releases/download/runner-v10/ggparrot-runner.exe";
 
 const officialVersion = (url) => String(url || "").match(
   /^https:\/\/github\.com\/orbleeparrot\/gg_parrot\/releases\/download\/runner-v([0-9]{1,6})\/ggparrot-runner\.exe$/,
@@ -69,6 +69,8 @@ export function resolveRunnerDownload(downloadInfo, downloadError) {
         ? Math.max(Number(MIN_SUPPORTED_RUNNER_VERSION), Number(downloadInfo?.min_runner_version) || 0)
         : downloadInfo?.min_runner_version || MIN_SUPPORTED_RUNNER_VERSION,
     ),
+    // 국내 거래소 매크로가 요구하는 실행기 버전(서버가 내려 준다). 모르면 빈 문자열.
+    domesticMinVersion: String(downloadInfo?.domestic_min_runner_version || ""),
     size: downloadInfo?.size || 0,
     state: !checked
       ? "loading"

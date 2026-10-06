@@ -3,6 +3,16 @@
 .pro { display: grid; gap: 16px; max-width: 960px; margin: 0 auto; color: rgb(var(--c-slate-900)); }
 .pro-title { margin: 0; font-size: 20px; font-weight: 700; }
 .pro-build { display: grid; gap: 12px; }
+
+/* 차트 — 기본 빌더는 조건 옆 칸을 채우지만 프로는 한 열이라 높이를 정해 준다.
+   CandleChart(variant="studio") 는 높이가 정해진 세로 플렉스 부모를 기대한다. */
+.pro-chart { border: 1px solid rgb(var(--c-slate-200)); border-radius: 12px; background: rgb(var(--c-surface)); overflow: hidden; }
+.pro-chart-body { height: 420px; display: flex; flex-direction: column; overflow: hidden; }
+.pro-chart-body .candle-chart.is-studio { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; padding: 0 12px 6px; }
+/* 여러 종목이면 각 차트에 높이를 주고 판 안에서 굴린다 — 눌려서 못 읽게 되지 않도록. */
+.pro-chart-body.is-multi { height: 520px; overflow: auto; }
+.pro-chart-body.is-multi .candle-chart.is-studio { flex: none; height: 360px; }
+.pro-chart-body.is-multi .candle-chart.is-studio + .candle-chart.is-studio { border-top: 1px solid rgb(var(--c-slate-200)); }
 .pro-run { justify-self: start; min-height: 44px; padding: 10px 20px; border: 0; border-radius: 10px;
            background: rgb(var(--c-brand)); color: rgb(var(--c-brand-ink)); font-weight: 700; cursor: pointer; }
 .pro-run:hover:not(:disabled) { background: rgb(var(--c-brand-hover)); }

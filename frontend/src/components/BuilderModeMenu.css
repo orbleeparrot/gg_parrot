@@ -1,0 +1,19 @@
+/* 빌더 종류 드롭다운 — 기본 빌더와 프로 빌더의 제목이 곧 이 메뉴다.
+   색은 index.css 의 --c-* 토큰(rgb 삼중값)만 쓴다.
+   매크로 출처 배지(MacroSourceMenu)가 이 메뉴 틀(.studio-mode-menu · -item · -hint · -sep)을
+   그대로 쓰므로, 그 화면의 색·간격 덧칠은 Studio.css 에 남아 있다. */
+.studio-mode { position: relative; min-width: 0; }
+.studio-mode-btn { display: inline-flex; align-items: center; gap: 8px; height: 36px; margin-left: -6px; padding: 0 8px 0 6px; border-radius: 8px; color: rgb(var(--c-slate-900)); font-size: 20px; font-weight: 800; letter-spacing: -.02em; white-space: nowrap; }
+.studio-mode-btn:hover { background: rgb(var(--c-slate-100)); }
+.studio-mode-btn[aria-expanded="true"] { background: rgb(var(--c-slate-100)); }
+.studio-mode-btn:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 1px; }
+.studio-mode-chev { width: 7px; height: 7px; margin-top: -4px; border-right: 2px solid rgb(var(--c-slate-500)); border-bottom: 2px solid rgb(var(--c-slate-500)); transform: rotate(45deg); }
+.studio-mode-menu { position: absolute; left: -6px; top: calc(100% + 4px); z-index: 40; min-width: 220px; padding: 4px; border: 1px solid rgb(var(--c-slate-300)); border-radius: 10px; background: rgb(var(--c-surface)); box-shadow: 0 12px 28px rgb(var(--c-scrim) / .18); }
+.studio-mode-item { width: 100%; height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 10px 0 8px; border-radius: 8px; color: rgb(var(--c-slate-900)); font-size: 13px; font-weight: 700; text-align: left; white-space: nowrap; }
+.studio-mode-item:hover:not(:disabled) { background: rgb(var(--c-slate-100)); }
+.studio-mode-item.is-on { background: rgb(var(--c-slate-100)); }
+.studio-mode-item:disabled { color: rgb(var(--c-slate-500)); cursor: not-allowed; }
+a.studio-mode-item { text-decoration: none; }
+.studio-mode-check { width: 14px; flex: none; color: rgb(var(--c-slate-900)); font-size: 12px; }
+.studio-mode-sep { margin: 4px 6px; border: 0; border-top: 1px solid rgb(var(--c-slate-200)); }
+.studio-mode-hint { margin-left: auto; padding-left: 10px; color: rgb(var(--c-slate-500)); font-size: 11px; font-weight: 600; }

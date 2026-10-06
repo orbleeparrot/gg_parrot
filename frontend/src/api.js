@@ -517,7 +517,11 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ macro }),
     });
-    if (!res.ok) throw new Error("매크로 파일 생성 실패");
+    if (!res.ok) {
+      // 서버가 이유를 말했으면 그대로 보인다 — 국내 매크로는 "바이낸스 전용" 이라는 이유와 갈 길(빠른 실행)을 담아 보낸다.
+      const body = await res.json().catch(() => null);
+      throw new Error(typeof body?.detail === "string" && body.detail ? body.detail : "매크로 파일 생성 실패");
+    }
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");

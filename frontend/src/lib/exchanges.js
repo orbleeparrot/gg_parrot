@@ -1,3 +1,5 @@
+import { quoteOf } from "./format.js";
+
 // Exchange identity is separate from spot/futures. Symbols retain their native
 // exchange format; equal KRW pairs on two exchanges are not the same market.
 export const EXCHANGES = Object.freeze([
@@ -17,6 +19,34 @@ export const quoteForExchange = (value) => EXCHANGES.find((item) => item.value =
 export const exchangeLogo = (value) => { const exchange = normalizeExchange(value); return `/exchanges/${exchange}.${exchange === "binance" ? "svg" : "png"}`; };
 export const isDomestic = (value) => normalizeExchange(value) !== "binance";
 export const marketKey = (exchange, symbol) => `${normalizeExchange(exchange)}:${String(symbol || "").trim().toUpperCase()}`;
+
+// A run session has no exchange column, only its symbol — and a domestic symbol is always `KRW-<COIN>`.
+// The session's money is therefore in KRW when the symbol says so, and in the Binance quote otherwise.
+// `quoteOf` (lib/format.js) already reads that prefix, so there is one rule for it; these helpers are the
+// session-facing side: the amount with its unit, and the practice-mode name that exists on that exchange.
+export const isDomesticSymbol = (symbol) => quoteOf(symbol) === "KRW";
+
+// Won has no minor unit worth showing; a quote-asset amount keeps two decimals.
+export const quoteDigits = (quote) => (quote === "KRW" ? 0 : 2);
+
+// "100,000 KRW" · "12.5 USDT". `fixed` pads to the unit's digits (profit columns); without it trailing zeros drop.
+export function formatQuoteAmount(value, symbol, { fixed = false } = {}) {
+  const quote = quoteOf(symbol);
+  const digits = quoteDigits(quote);
+  const body = (Number(value) || 0).toLocaleString("en-US", { minimumFractionDigits: fixed ? digits : 0, maximumFractionDigits: digits });
+  return `${body} ${quote}`;
+}
+
+// The runner reports `testnet: true` for every practice session, so that flag alone cannot tell mock from
+// testnet: Binance has all three modes and a mock run sends no order to any exchange. The runner therefore
+// records its `mode` on the session, and that word wins when it is there. Sessions from runners that never
+// sent a mode keep the old reading: Upbit and Bithumb have no testnet, so a KRW symbol means mock.
+export function practiceModeLabel(symbol, mode) {
+  const run = String(mode || "").trim().toLowerCase();
+  if (run === "mock") return "모의";
+  if (run === "testnet") return "테스트넷";
+  return isDomesticSymbol(symbol) ? "모의" : "테스트넷";
+}
 
 // This convenience normalization is for a typed base ticker, not for validating
 // uploaded macro JSON. Actual market existence is always checked by the server.

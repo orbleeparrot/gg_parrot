@@ -1,10 +1,10 @@
 // 실행 종료 결과와 종료 확인 문구 — 화면 컴포넌트가 아니라 순수 함수로 두어 테스트한다.
 import { exitRules } from "../../lib/positionExits.js";
+import { formatQuoteAmount, practiceModeLabel } from "../../lib/exchanges.js";
+import { quoteOf } from "../../lib/format.js";
 
-const USDT = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const PRICE = new Intl.NumberFormat("en-US", { maximumFractionDigits: 6 });
 const QTY = new Intl.NumberFormat("en-US", { maximumFractionDigits: 6 });
-const MONEY = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 });
 
 function signOf(value) {
   const n = Number(value) || 0;
@@ -14,6 +14,7 @@ function signOf(value) {
 const QUOTE_ASSETS = ["USDT", "BUSD", "USDC", "FDUSD", "TUSD", "USD"];
 function baseAsset(symbol) {
   const value = String(symbol || "").toUpperCase();
+  if (value.startsWith("KRW-")) return value.slice(4);
   const quote = QUOTE_ASSETS.find((q) => value.endsWith(q));
   return quote ? value.slice(0, -quote.length) : value;
 }
@@ -23,9 +24,10 @@ export function toneOf(value) {
   return n > 0 ? "up" : n < 0 ? "down" : "flat";
 }
 
-export function formatSignedUsdt(value) {
+// 금액은 세션 종목의 통화로 쓴다 — 원화 종목(KRW-)이면 원화, 아니면 USDT.
+export function formatSignedMoney(value, symbol) {
   const n = Number(value) || 0;
-  return `${signOf(n)}${USDT.format(Math.abs(n))} USDT`;
+  return `${signOf(n)}${formatQuoteAmount(Math.abs(n), symbol, { fixed: true })}`;
 }
 
 export function formatSignedPct(value) {
@@ -142,11 +144,11 @@ export function describeRunOutcome(session) {
   const hasReturn = Number(s.invested_usdt) > 0 && s.return_pct !== null && s.return_pct !== undefined;
   const rows = [
     { label: "실행 시간", value: elapsed ? `${elapsed} · ${span}` : span || "—", numeric: true },
-    { label: "투입금", value: hasReturn ? `${MONEY.format(Number(s.invested_usdt))} USDT` : "—", numeric: true },
+    { label: "투입금", value: hasReturn ? formatQuoteAmount(s.invested_usdt, s.symbol) : "—", numeric: true },
     { label: `평단${positionLabel}`, value: positionEntry > 0 ? PRICE.format(positionEntry) : "—", numeric: true },
     { label: `수량${positionLabel}`, value: positionQty > 0 ? `${QTY.format(positionQty)} ${baseAsset(s.symbol)}`.trim() : "—", numeric: true },
     { label: "마지막 평가손익", value: resultPct !== null ? formatSignedPct(resultPct) : "—", numeric: true, tone: resultPct !== null ? toneOf(resultPct) : "" },
-    { label: "종목·환경", value: `${s.symbol || "—"} · ${marketLabel(s)} · ${s.testnet ? "테스트넷" : "메인넷(실거래)"}` },
+    { label: "종목·환경", value: `${s.symbol || "—"} · ${marketLabel(s)} · ${s.testnet ? practiceModeLabel(s.symbol, s.mode) : "메인넷(실거래)"}` },
     { label: "종료 방식", value: stopModeLabel(s.stop_mode) },
     { label: "마지막 가격", value: Number(s.last_price) ? PRICE.format(Number(s.last_price)) : "—", numeric: true },
     // 포지션 블록이 보여 주던 실행기 버전·출처와 청산 기준 — 결과 화면에서도 같은 자리에 남긴다.
@@ -163,15 +165,19 @@ export function describeRunOutcome(session) {
 
   return {
     eyebrow, title, detail, tone, avatar, pending: stopping,
+    // 결과 화면 맨 아래 안내. 단위는 세션 종목의 통화.
+    note: stopping
+      ? "실행기가 확정 보고를 보내면 이 화면이 결과로 바뀝니다."
+      : `실현손익은 실행기가 보고한 누적값(${quoteOf(s.symbol)})이에요. 거래소 체결 내역과 대조해 확인하세요.`,
     // 처리 중에는 확정 수치를 주장하지 않는다.
     // 큰 숫자는 '투입금 대비 총수익률'(서버 return_pct) — 시작 자금이 아니라 실제로 들어간 최대 금액이 분모.
-    // 투입금이 없는 옛 세션은 예전처럼 USDT 절대값만.
+    // 투입금이 없는 옛 세션은 예전처럼 실현손익 절대값만.
     pnl: stopping
       ? { value: null, text: "집계 중", tone: "flat", sub: "" }
       : hasReturn
         ? { value: Number(s.return_pct), text: formatSignedPct(s.return_pct), tone: toneOf(s.return_pct),
-            sub: `${formatSignedUsdt(s.realized_pnl)} · 투입 ${MONEY.format(Number(s.invested_usdt))} USDT` }
-        : { value: Number(s.realized_pnl) || 0, text: formatSignedUsdt(s.realized_pnl), tone: toneOf(s.realized_pnl), sub: "" },
+            sub: `${formatSignedMoney(s.realized_pnl, s.symbol)} · 투입 ${formatQuoteAmount(s.invested_usdt, s.symbol)}` }
+        : { value: Number(s.realized_pnl) || 0, text: formatSignedMoney(s.realized_pnl, s.symbol), tone: toneOf(s.realized_pnl), sub: "" },
     rows,
   };
 }

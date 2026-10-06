@@ -3,13 +3,11 @@
 import { Link } from "react-router-dom";
 import CoinIcon from "./CoinIcon.jsx";
 import { RULE_TYPES } from "../lib/macro.js";
-import { formatSignedUsdt, toneOf } from "../features/agents/runOutcome.js";
+import { baseOf, quoteOf } from "../lib/format.js";
+import { formatSignedMoney, toneOf } from "../features/agents/runOutcome.js";
 import { endLabel, environmentLabel, runDurationLabel, runPeriodLabel } from "../features/agents/history.js";
 import "./AgentHistory.css";
 
-function baseOf(symbol) {
-  return String(symbol || "").replace(/(USDT|USDC|FDUSD|BUSD)$/, "") || symbol;
-}
 
 function strategyLine(session) {
   const summary = String(session.human_summary || "").trim();
@@ -103,7 +101,7 @@ export function AgentHistoryList({ sessions, policy, pinBusy, onOpen, onTogglePi
               >
                 <CoinIcon symbol={session.symbol} size={32} className="agent-history-coin" alt="" />
                 <span className="agent-history-symbol" role="cell">
-                  <b className="num">{baseOf(session.symbol)}</b><small className="num">USDT</small>
+                  <b className="num">{baseOf(session.symbol)}</b><small className="num">{quoteOf(session.symbol)}</small>
                   <span className="agent-history-env">{environmentLabel(session)}</span>
                 </span>
                 <span className="agent-history-strategy" role="cell" title={strategyLine(session)}>{strategyLine(session)}</span>
@@ -112,7 +110,7 @@ export function AgentHistoryList({ sessions, policy, pinBusy, onOpen, onTogglePi
                   <span>{runPeriodLabel(session.started_at, session.stopped_at)}</span>
                 </span>
                 <span className={`agent-history-end is-${end.tone}`} role="cell"><i aria-hidden="true" />{end.text}</span>
-                <span className={`agent-history-pnl num is-${tone}`} role="cell">{formatSignedUsdt(session.realized_pnl)}</span>
+                <span className={`agent-history-pnl num is-${tone}`} role="cell">{formatSignedMoney(session.realized_pnl, session.symbol)}</span>
                 <span className="agent-history-pin-cell" role="cell">
                   <button
                     type="button"

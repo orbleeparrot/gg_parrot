@@ -7,11 +7,11 @@ release URLs must never be silently replaced.
 import re
 from collections.abc import Mapping
 
-OFFICIAL_RUNNER_VERSION = "9"
+OFFICIAL_RUNNER_VERSION = "10"
 # Download version is not the compatibility floor. Existing rule-A/B runners
 # remain supported; indicator macros separately require the v8 signal protocol.
 MIN_SUPPORTED_RUNNER_VERSION = "6"
-OFFICIAL_RUNNER_URL = "https://github.com/orbleeparrot/gg_parrot/releases/download/runner-v9/ggparrot-runner.exe"
+OFFICIAL_RUNNER_URL = "https://github.com/orbleeparrot/gg_parrot/releases/download/runner-v10/ggparrot-runner.exe"
 _OFFICIAL_URL = re.compile(r"https://github\.com/orbleeparrot/gg_parrot/releases/download/runner-v([0-9]{1,6})/ggparrot-runner\.exe")
 
 

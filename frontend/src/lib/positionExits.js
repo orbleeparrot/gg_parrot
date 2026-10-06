@@ -2,7 +2,7 @@
 // '청산 기준' 글과 게이지 모양을 정하고, 평가손익 금액·실행 시간을 만든다.
 // 손절은 모든 유형 공통(risk.stop_loss_pct), 익절은 유형별 값이며 없는 쪽은 "없다"고 말한다
 // (차트의 익절선·손절선을 그리는 indicators.js 와 같은 값을 읽는다). node --test 로 검증한다.
-import { quoteOf } from "./format.js";
+import { formatQuoteAmount } from "./exchanges.js";
 
 function positive(value) {
   const n = Number(value);
@@ -22,8 +22,7 @@ export function fmtSignedPct(pct) {
 
 export function fmtSignedMoney(value, symbol) {
   const v = Number(value) || 0;
-  const body = Math.abs(v).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  return `${v > 0 ? "+" : v < 0 ? "-" : ""}${body} ${quoteOf(symbol)}`;
+  return `${v > 0 ? "+" : v < 0 ? "-" : ""}${formatQuoteAmount(Math.abs(v), symbol, { fixed: true })}`;
 }
 
 // 청산 규칙: { sl, tp, trailing, kind, summary }
@@ -131,7 +130,7 @@ export function headlineReturn(session) {
   const invested = Number(session?.invested_usdt) || 0;
   const total = session?.return_pct;
   if (invested > 0 && total !== null && total !== undefined && Number.isFinite(Number(total))) {
-    const investedText = `투입 ${invested.toLocaleString("en-US", { maximumFractionDigits: 2 })} USDT`;
+    const investedText = `투입 ${formatQuoteAmount(invested, session?.symbol)}`;
     const note = session?.in_position
       ? `진입가 대비 ${fmtSignedPct(session.unrealized_pct)} · ${investedText}`
       : `실현 ${fmtSignedMoney(session?.realized_pnl, session?.symbol)} · ${investedText}`;

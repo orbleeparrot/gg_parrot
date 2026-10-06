@@ -3,6 +3,8 @@ import { Link } from "react-router-dom";
 import { macroSourceBadge } from "../lib/macroSource.js";
 import CheckIcon from "./CheckIcon.jsx";
 import { Icon } from "./icons.jsx";
+// 드롭다운 틀(.studio-mode-menu · -item · -hint · -sep)을 빌더 종류 메뉴와 나눴다.
+import "./BuilderModeMenu.css";
 
 // 조건 판 머리의 매크로 출처 배지 + 드롭다운 (2026-09-23).
 // 배지 하나가 '지금 조건이 어디서 왔는지'를 색·아이콘으로, '무슨 종목인지'를 티커 + 종목명으로 보여 준다.

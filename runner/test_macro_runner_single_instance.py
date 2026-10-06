@@ -47,6 +47,7 @@ class RunnerActivationSafetyTests(unittest.TestCase):
         app.macro_sig = None
         app.macro_source = ""
         app._protocol_claim_busy = False
+        app.key_vars = {}  # 거래소별 키 칸 — 이 시험들은 키를 쓰지 않는다
         app._log = Mock()
         app._begin_protocol_claim = Mock()
         return app
@@ -113,7 +114,7 @@ class RunnerActivationSafetyTests(unittest.TestCase):
             app._claim_protocol_ticket(self.launch)
 
         sent = fake_requests.post.call_args.kwargs["json"]
-        self.assertEqual(sent["runner_version"], "9")
+        self.assertEqual(sent["runner_version"], "10")
         self.assertEqual(sent["ticket"], self.launch.ticket)
         self.assertNotIn("api_key", sent)
         self.assertNotIn("api_secret", sent)
@@ -153,7 +154,7 @@ class RunnerActivationSafetyTests(unittest.TestCase):
 
         self.assertIsNone(app.user_macro_id)
         self.assertEqual(app.macro, macro)
-        payload = app._build_start_payload(True)
+        payload = app._build_start_payload(True, "mock")
         self.assertNotIn("user_macro_id", payload)
 
     def test_claimed_macro_identity_is_added_to_start_payload(self) -> None:
@@ -167,12 +168,12 @@ class RunnerActivationSafetyTests(unittest.TestCase):
         }
 
         app._apply_claimed_macro(macro, "웹에서 연결한 내 매크로", 73)
-        payload = app._build_start_payload(True)
+        payload = app._build_start_payload(True, "mock")
 
         self.assertEqual(app.user_macro_id, 73)
         self.assertEqual(payload["user_macro_id"], 73)
         self.assertEqual(payload["symbol"], "BTCUSDT")
-        self.assertEqual(payload["runner_version"], "9")
+        self.assertEqual(payload["runner_version"], "10")
         self.assertNotIn("api_key", payload)
         self.assertNotIn("api_secret", payload)
 
@@ -190,8 +191,8 @@ class RunnerActivationSafetyTests(unittest.TestCase):
         app.api_secret.get.return_value = "exchange-secret"
         app.member_key = Mock()
         app.member_key.get.return_value = "member-key"
-        app.live = Mock()
-        app.live.get.return_value = False
+        app.mode = Mock()
+        app.mode.get.return_value = "mock"  # 실행 모드 — 기본값(모의)
         app.server_base = "https://example.invalid"
         app._set_running = Mock()
         app._log_threadsafe = Mock()

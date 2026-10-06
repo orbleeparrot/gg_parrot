@@ -125,6 +125,10 @@ RUN_MODES = (MODE_MOCK, MODE_TESTNET, MODE_LIVE)
 MODE_LABELS = {MODE_MOCK: "모의", MODE_TESTNET: "테스트넷", MODE_LIVE: "실전"}
 # 테스트넷은 바이낸스 전용이다 — 국내는 모의·실전 둘뿐.
 TESTNET_EXCHANGES = ("binance",)
+# 국내 원화 현물 거래소는 brokers 가 아는 목록을 그대로 쓴다 — 어댑터가 있는 곳과 어긋나면 안 된다.
+DOMESTIC_EXCHANGES = tuple(brokers.DOMESTIC_LABELS)
+# 이 실행기가 주문을 낼 수 있는 거래소 전부. 자격증명 파일이 칸을 가진 목록과 같아야 한다.
+KNOWN_EXCHANGES = ("binance",) + DOMESTIC_EXCHANGES
 EXCHANGE_LABELS = {"binance": "바이낸스", **brokers.DOMESTIC_LABELS}
 
 
@@ -141,6 +145,17 @@ def exchange_of(macro: dict) -> str:
 
 def exchange_label(exchange: str) -> str:
     return EXCHANGE_LABELS.get(str(exchange).lower(), str(exchange))
+
+
+def known_exchange(exchange: str) -> bool:
+    """이 실행기가 주문을 낼 수 있는 거래소인가.
+
+    모르는 이름을 바이낸스로 바꿔치지 않는다 — 오타 난 `upbit` 가 바이낸스 키로 돌면
+    사용자가 의도하지 않은 시장에 주문이 들어간다. 모르면 시작을 막고 이름을 보여 준다.
+    서버 쪽 `exchange` 는 정해진 세 값만 받으므로, 걸러 내지 않으면 사용자는 422 를
+    '서버 연결 실패' 로만 보게 된다.
+    """
+    return str(exchange).lower() in KNOWN_EXCHANGES
 
 
 def credential_pair(credentials: dict, exchange: str) -> dict | None:
@@ -364,6 +379,12 @@ def _install_protocol_handler_for_current_user() -> bool:
 # ==================================================================
 #  거래 엔진 (백엔드 realtrade 봇과 동일한 의미 — 현물/선물 실주문)
 # ==================================================================
+# '팔 수 없는 티끌' 의 기준. 거래소가 수량 단위(step)를 주지 않는 국내 마켓에서 쓴다 —
+# brokers 가 매도 수량을 소수 8자리로 내리므로, 그보다 작은 잔여는 어떤 주문으로도 털 수 없다.
+# 값을 베끼지 않고 brokers 의 한계를 그대로 읽어 둘이 어긋나지 않게 한다.
+DUST_FLOOR = float(brokers._VOLUME_DECIMALS)  # 0.00000001
+
+
 def _round_step(qty: float, step: float) -> float:
     if step <= 0:
         return qty
@@ -605,6 +626,12 @@ class BotThread(threading.Thread):
     두 경우 모두 stop_only(포지션 유지) / close_and_stop(청산 후) 을 지원한다.
     """
 
+    # 거래소와 실행 모드는 __init__ 이 늘 채운다. 클래스 기본값은 가장 안전한 쪽 —
+    # 바이낸스(= 수량 주문)와 모의(= 주문 없음)다. 둘 중 하나를 못 채운 경로가 생겨도
+    # 금액 주문이나 실전 주문으로 새지 않는다.
+    exchange = "binance"
+    mode = MODE_MOCK
+
     def __init__(self, macro: dict, credentials: dict, mode: str,
                  server: ServerClient, on_log, on_status, on_finish) -> None:
         super().__init__(daemon=True)
@@ -645,6 +672,16 @@ class BotThread(threading.Thread):
         self._offline_logged = False
 
     @property
+    def domestic(self) -> bool:
+        """국내 원화 현물 거래소인가.
+
+        브로커와 키를 고른 바로 그 값(exchange) 하나로 판단한다. 호가 통화(KRW)로 가르면
+        '국내' 가 세 곳에서 서로 다르게 정해지고, 원화 호가 바이낸스 심볼 같은 경우에
+        수량 주문이어야 할 것이 금액 주문으로 나간다.
+        """
+        return self.exchange in DOMESTIC_EXCHANGES
+
+    @property
     def testnet(self) -> bool:
         """테스트넷 주소를 쓰는가. 모드에서 나오는 값이라 따로 들고 있지 않는다 —
         둘을 각각 보관하면 국내 매크로에서 '테스트넷인데 실전 주소' 처럼 어긋날 수 있다.
@@ -682,6 +719,10 @@ class BotThread(threading.Thread):
         모의 모드가 키 없이 돌 수 없다.
         """
         label = exchange_label(self.exchange)
+        if not known_exchange(self.exchange):
+            self.log(f"[오류] 이 매크로의 거래소({self.exchange})는 이 실행기가 모르는 거래소예요. "
+                     f"쓸 수 있는 거래소: {' · '.join(exchange_label(name) for name in KNOWN_EXCHANGES)}.")
+            return False
         pair = credential_pair(self.credentials, self.exchange)
         if pair is None:
             if self.mode != MODE_MOCK:
@@ -731,6 +772,8 @@ class BotThread(threading.Thread):
 
         notional 은 원화 금액이다. 업비트·빗썸의 시장가 매수는 수량이 아니라 '얼마치' 로 내는
         주문이라서, 수량으로 보내면 어댑터가 거절해 진입이 통째로 막힌다. 매도는 어느 거래소든 수량이다.
+        금액 주문은 국내 거래소(domestic)의 진입에서만 쓴다 — 거래소로 가르지 않으면 바이낸스
+        주문에 수량이 빠진 채(quantity=None) 나갈 수 있다.
         """
         open_word = "BUY" if self.side == "long" else "SELL"
         closing = reduce_only or (self.in_position and side_word != open_word)
@@ -738,7 +781,7 @@ class BotThread(threading.Thread):
         # step 은 국내에서 0 이다(금액 주문이라 수량 단위가 없다). 0 으로 나누지 않고, 양수라고 가정하지도 않는다.
         partial_close = closing and sellable > 0 and (sellable - qty) >= (self.step or 1e-12)
         client_id = "ggp-" + uuid.uuid4().hex[:28]
-        by_money = not closing and self.quote == "KRW" and notional > 0
+        by_money = self.domestic and not closing and notional > 0
         # 제출 · 재조정 · 평균가 · 수수료는 브로커가 한다. 봇은 그 결과로 장부만 쓴다.
         order = self.broker.submit(side_word, base_qty=None if by_money else qty,
                                    notional=notional if by_money else None,
@@ -759,9 +802,12 @@ class BotThread(threading.Thread):
                 self.held_qty = max(0.0, self.held_qty - executed)
                 if self.held_qty < 1e-12:
                     self.held_qty = 0.0
-                if self.market == "spot" and order.status == "FILLED" and 0 < self.held_qty < self.step and not self.position_uncertain:
+                if (self.market == "spot" and order.status == "FILLED"
+                        and 0 < self.held_qty < (self.step or DUST_FLOOR) and not self.position_uncertain):
                     # LOT_SIZE cannot sell this residue. Keep its amount in the
                     # status note; never use unrelated account holdings to pad it.
+                    # 국내는 step 이 0 이라 이 기준이 없으면 안전망이 꺼진다 — 매도 수량을 8자리로
+                    # 내리면서 남는 1e-8 미만 티끌에 '체결 확인 실패' 로 세션이 오류로 끝난다.
                     self.position_dust_qty = getattr(self, "position_dust_qty", 0.0) + self.held_qty
                     self.log(f"최소 주문 단위 미만 잔여 수량: {self.position_dust_qty:.12g} {self.symbol}")
                     dust_only = True
@@ -874,9 +920,9 @@ class BotThread(threading.Thread):
                 word = "BUY" if action == "buy" else "SELL"
                 self.log(f"[신호] {reason} → {word} {qty} {self.symbol} @ {price}")
                 prev_qty, prev_entry = (self.held_qty, self.entry_price) if self.in_position else (0.0, 0.0)
-                # 원화 진입은 수량이 아니라 방금 구한 금액으로 낸다 — 수량은 로그·장부 계산용이다.
+                # 국내 진입은 수량이 아니라 방금 구한 금액으로 낸다 — 수량은 로그·장부 계산용이다.
                 # 바이낸스 경로는 금액을 넘기지 않는다(수량 주문이고, 넘기면 _place 가 금액 주문으로 갈린다).
-                extra = {"notional": notional} if self.quote == "KRW" else {}
+                extra = {"notional": notional} if self.domestic else {}
                 if not self._place(word, qty, **extra):
                     raise RuntimeError("주문이 체결되지 않았어요.")
                 filled_qty, filled_px = self._last_fill_qty, self._last_fill_price
@@ -1592,6 +1638,15 @@ class RunnerApp:
         mode = self._run_mode()
         exchange = exchange_of(self.macro)
         label = exchange_label(exchange)
+        if not known_exchange(exchange):
+            # 서버에 세션을 만들기 전에 막는다 — 서버는 정해진 세 값만 받아서, 여기서 넘기면
+            # 사용자는 거래소 이름 대신 '서버 연결 실패' 만 보게 된다.
+            messagebox.showwarning(
+                APP_TITLE,
+                f"이 매크로의 거래소({exchange})는 이 실행기가 모르는 거래소예요.\n\n"
+                f"쓸 수 있는 거래소: {' · '.join(exchange_label(name) for name in KNOWN_EXCHANGES)}.\n"
+                "웹에서 매크로를 다시 받아 주세요.")
+            return
         if mode == MODE_TESTNET and exchange not in TESTNET_EXCHANGES:
             # 국내 거래소에는 테스트넷이 없다 — 실전으로 올려 버리지 않고 모의로 접는다.
             mode = MODE_MOCK
@@ -1685,11 +1740,12 @@ class RunnerApp:
             secret_var.set("")
         self._log("저장된 키를 지웠어요.")
 
-    def _build_start_payload(self, testnet: bool, mode: str = MODE_MOCK) -> dict:
+    def _build_start_payload(self, testnet: bool, mode: str) -> dict:
         """Build the server payload without ever including exchange secrets.
 
         세션 부분은 BotThread 와 같은 함수(_session_payload)가 만든다. 여기서는 GUI 만 아는
         매크로 출처(파일 서명 · user_macro_id)를 얹는다.
+        mode 에 기본값을 두지 않는다 — 빼먹은 호출이 실전 세션을 '모의' 로 기록하게 된다.
         """
         payload = _session_payload(self.macro, testnet=testnet, mode=mode)
         if self.user_macro_id is not None:

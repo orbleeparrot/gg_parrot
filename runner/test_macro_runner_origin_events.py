@@ -29,7 +29,7 @@ class FileSignatureTests(unittest.TestCase):
         app._apply_local_macro({"symbol": "btcusdt", "leverage": 1, "_sig": sig}, "C:/macro.ggm.json")
 
         self.assertNotIn("_sig", app.macro)  # 서버로 가는 매크로 본문엔 서명이 섞이지 않는다
-        payload = app._build_start_payload(True)
+        payload = app._build_start_payload(True, "mock")
         self.assertEqual(payload["macro_sig"], sig)
         self.assertEqual(payload["macro_source"], "file")
         self.assertNotIn("_sig", payload["macro"])
@@ -37,7 +37,7 @@ class FileSignatureTests(unittest.TestCase):
     def test_unsigned_file_sends_no_signature_and_logs_it(self) -> None:
         app = _app()
         app._apply_local_macro({"symbol": "btcusdt", "leverage": 1}, "old.json")
-        payload = app._build_start_payload(True)
+        payload = app._build_start_payload(True, "mock")
         self.assertNotIn("macro_sig", payload)
         self.assertEqual(payload["macro_source"], "file")
         self.assertTrue(any("서명이 없어요" in str(c.args[0]) for c in app._log.call_args_list))
@@ -46,7 +46,7 @@ class FileSignatureTests(unittest.TestCase):
         app = _app()
         app._apply_local_macro({"symbol": "btcusdt", "leverage": 1, "_sig": {"v": 1, "hmac": "x"}}, "f")
         app._apply_claimed_macro({"symbol": "ethusdt", "leverage": 1}, "웹", 5)
-        payload = app._build_start_payload(True)
+        payload = app._build_start_payload(True, "mock")
         self.assertNotIn("macro_sig", payload)
         self.assertEqual(payload["macro_source"], "web")
         self.assertEqual(payload["user_macro_id"], 5)

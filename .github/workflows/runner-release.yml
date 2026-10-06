@@ -9,7 +9,7 @@ on:
       tag:
         description: "New immutable release tag matching runner/installation.py (do not rebuild an existing release)"
         required: true
-        default: "runner-v9"
+        default: "runner-v10"
 
 permissions:
   contents: write

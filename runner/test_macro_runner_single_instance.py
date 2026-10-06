@@ -154,7 +154,7 @@ class RunnerActivationSafetyTests(unittest.TestCase):
 
         self.assertIsNone(app.user_macro_id)
         self.assertEqual(app.macro, macro)
-        payload = app._build_start_payload(True)
+        payload = app._build_start_payload(True, "mock")
         self.assertNotIn("user_macro_id", payload)
 
     def test_claimed_macro_identity_is_added_to_start_payload(self) -> None:
@@ -168,7 +168,7 @@ class RunnerActivationSafetyTests(unittest.TestCase):
         }
 
         app._apply_claimed_macro(macro, "웹에서 연결한 내 매크로", 73)
-        payload = app._build_start_payload(True)
+        payload = app._build_start_payload(True, "mock")
 
         self.assertEqual(app.user_macro_id, 73)
         self.assertEqual(payload["user_macro_id"], 73)

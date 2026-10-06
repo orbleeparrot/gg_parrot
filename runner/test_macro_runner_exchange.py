@@ -8,6 +8,7 @@
 """
 import unittest
 from collections import deque
+from decimal import ROUND_DOWN, Decimal
 from unittest.mock import Mock, patch
 
 from runner.test_macro_runner_single_instance import macro_runner
@@ -34,13 +35,15 @@ class _Recorder:
     market, side = "spot", "long"
     fee_from_base_asset = False
 
-    def __init__(self, *, price=15_000_000.0, step=0.0, rehearsal=(True, "ok")):
+    def __init__(self, *, price=15_000_000.0, step=0.0, rehearsal=(True, "ok"), truncate=False):
         self.symbol = "KRW-BTC"
         self.calls = []
         self.rehearsals = []
         self._price = price
         self._rules = brokers.OrderRules(step=step, min_notional=0.0)
         self._rehearsal = rehearsal
+        # 국내 어댑터는 매도 수량을 소수 8자리로 내려 보낸다 — 그래서 체결이 보유보다 조금 적다.
+        self._truncate = truncate
 
     def price(self):
         return self._price
@@ -60,6 +63,8 @@ class _Recorder:
         self.calls.append({"side": side_word, "base_qty": base_qty, "notional": notional,
                            "reduce_only": reduce_only, "closing": closing})
         qty = base_qty if base_qty else (notional or 0.0) / self._price
+        if self._truncate and base_qty:
+            qty = float(Decimal(repr(base_qty)).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN))
         return brokers.Order(status="FILLED", executed_qty=qty, avg_price=self._price,
                              acquired_qty=qty, fees_known=True, order_id="x", raw_status="done")
 
@@ -141,6 +146,29 @@ class ExchangeSelectionTests(unittest.TestCase):
         for raw in ("", None, "LIVE-ish", "mainnet", 7):
             self.assertEqual(macro_runner.run_mode_of(raw), "mock")
         self.assertEqual(macro_runner.run_mode_of(" LIVE "), "live")
+
+    def test_unknown_exchange_is_blocked_in_the_runner_by_name(self):
+        # 서버는 정해진 세 값만 받는다. 걸러 내지 않으면 사용자는 422 를 '서버 연결 실패' 로만 본다.
+        bot = self.bot("upbitt", "KRW-BTC")
+        self.assertFalse(bot._connect())
+        logged = " ".join(str(c) for c in bot.log.call_args_list)
+        self.assertIn("upbitt", logged)
+        # 어댑터가 뒤늦게 낸 ValueError 가 아니라, 주문 경로에 들어가기 전의 관문이 낸 말이어야 한다.
+        self.assertIn("모르는 거래소", logged)
+
+    def test_unknown_exchange_is_not_quietly_treated_as_binance(self):
+        bot = self.bot("upbitt", "KRW-BTC")
+        self.assertFalse(bot.domestic)          # 금액 주문으로 새지 않는다
+        self.assertFalse(macro_runner.known_exchange("upbitt"))
+        self.assertEqual(macro_runner.KNOWN_EXCHANGES, ("binance", "upbit", "bithumb"))
+
+    def test_domestic_is_decided_by_the_exchange_not_the_quote(self):
+        self.assertTrue(self.bot("upbit", "KRW-BTC").domestic)
+        self.assertTrue(self.bot("bithumb", "KRW-ETH").domestic)
+        self.assertFalse(self.bot("binance", "BTCKRW").domestic)  # 원화 호가라도 바이낸스는 수량 주문
+        # 거래소를 못 채운 경로도 바이낸스(수량 주문)로 본다 — 클래스 기본값.
+        self.assertEqual(macro_runner.BotThread.exchange, "binance")
+        self.assertEqual(macro_runner.BotThread.mode, "mock")
 
     def test_payload_tells_the_server_which_exchange_and_mode(self):
         bot = self.bot("upbit", "KRW-BTC", mode="mock")
@@ -225,6 +253,53 @@ class DomesticOrderSizingTests(unittest.TestCase):
         call = bot.broker.calls[-1]
         self.assertAlmostEqual(call["base_qty"], 0.01)
         self.assertIsNone(call["notional"])
+
+    def test_a_krw_quoted_binance_order_is_never_sent_as_money(self):
+        """호가 통화로 갈랐을 때의 구멍 — 원화 호가 바이낸스 주문에서 수량이 빠진다(quantity=None).
+
+        국내 숏은 _connect 가 막지만, 거래소가 binance 면 그 관문을 지나간다. 금액 주문 여부를
+        거래소로 갈라야 이 경로가 닫힌다.
+        """
+        bot = self.bot("KRW", symbol="BTCKRW", step=0.001)
+        bot.exchange, bot.side = "binance", "short"
+        self.assertTrue(bot._place("SELL", 0.5, notional=150_000.0))
+        call = bot.broker.calls[-1]
+        self.assertAlmostEqual(call["base_qty"], 0.5)
+        self.assertIsNone(call["notional"])
+
+    def test_command_entry_passes_money_only_for_a_domestic_exchange(self):
+        """_execute_command 가 _place 에 금액을 넘기는 기준도 거래소다.
+
+        _place 의 분기만 보면 두 자리가 서로를 가려 준다 — 그래서 여기서는 _place 가 받은
+        인자를 직접 본다. 원화 호가 바이낸스 심볼에 금액을 넘기면 수량 주문이 금액 주문이 된다.
+        """
+        for exchange, has_money in (("upbit", True), ("binance", False)):
+            bot = self.bot("KRW", symbol="KRW-BTC" if exchange == "upbit" else "BTCKRW", step=0.001)
+            bot.exchange = exchange
+            bot._place = Mock(return_value=True)
+            bot._last_fill_qty, bot._last_fill_price = 0.01, 15_000_000.0
+            ack = bot._execute_command(self.BUY, price=15_000_000.0)
+            self.assertTrue(ack["ok"], ack)
+            kwargs = bot._place.call_args.kwargs
+            self.assertEqual("notional" in kwargs, has_money, exchange)
+            if has_money:
+                self.assertEqual(kwargs["notional"], macro_runner.MAX_ORDER_KRW)
+
+    def test_domestic_close_dust_below_the_volume_limit_is_not_an_error(self):
+        """국내는 step 이 0 이라 '팔 수 없는 잔여' 안전망이 꺼져 있었다.
+
+        어댑터가 매도 수량을 8자리로 내리면 1e-8 미만이 남는데, 그걸 미처리 보유로 보면
+        세션이 오류로 끝나고 사용자는 티끌 때문에 거래소를 열어 보게 된다.
+        """
+        bot = self.bot("KRW", symbol="KRW-BTC", step=0.0)
+        bot.broker = _Recorder(price=15_000_000.0, step=0.0, truncate=True)
+        bot.in_position, bot.held_qty, bot.entry_price = True, 0.012345675, 15_000_000.0
+        self.assertTrue(bot._close_position())          # 예외 없이 끝난다
+        self.assertFalse(bot.in_position)
+        self.assertGreater(bot.position_dust_qty, 0.0)
+        self.assertLess(bot.position_dust_qty, macro_runner.DUST_FLOOR)
+        self.assertIn("잔여 수량", bot._snapshot()["note"])
+        self.assertEqual(macro_runner.DUST_FLOOR, 1e-8)
 
     def test_zero_step_never_divides_or_blocks_the_order(self):
         # 국내 수량 단위는 0 이다. 0 을 나누거나 '아직 못 읽었다' 로 보면 주문이 막힌다.
@@ -318,6 +393,30 @@ class RunModeGuiTests(unittest.TestCase):
             app._start()
         bot.assert_not_called()
         self.assertIn("업비트", warned.call_args.args[1])
+
+
+class StartPayloadContractTests(unittest.TestCase):
+    def app(self, macro):
+        app = object.__new__(macro_runner.RunnerApp)
+        app.macro = macro
+        app.user_macro_id, app.macro_sig, app.macro_source = None, None, "file"
+        return app
+
+    def test_mode_is_required_so_a_live_session_is_never_recorded_as_mock(self):
+        app = self.app({"symbol": "BTCUSDT", "exchange": "binance"})
+        with self.assertRaises(TypeError):
+            app._build_start_payload(False)
+        self.assertEqual(app._build_start_payload(False, "live")["mode"], "live")
+
+    def test_unknown_exchange_never_reaches_the_server(self):
+        app = self.app({"symbol": "KRW-BTC", "exchange": "upbitt", "position_side": "long", "leverage": 1})
+        app.bot, app._protocol_claim_busy = None, False
+        app.mode = _Var("live")
+        with patch.object(macro_runner.messagebox, "showwarning") as warned,              patch.object(macro_runner, "ServerClient") as server,              patch.object(macro_runner, "BotThread") as bot:
+            app._start()
+        server.assert_not_called()
+        bot.assert_not_called()
+        self.assertIn("upbitt", warned.call_args.args[1])
 
 
 if __name__ == "__main__":

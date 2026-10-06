@@ -40,6 +40,7 @@ class DomesticCapWiringTests(unittest.TestCase):
         bot = object.__new__(macro_runner.BotThread)
         bot.client = Mock()
         bot.market, bot.symbol, bot.side, bot.quote = "spot", "KRW-BTC", "long", "KRW"
+        bot.exchange = "upbit"  # 금액 주문 여부는 거래소로 갈린다
         bot.leverage = 1
         bot.log = Mock()
         bot.in_position, bot.held_qty, bot.entry_price = False, 0.0, 0.0

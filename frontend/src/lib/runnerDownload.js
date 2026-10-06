@@ -7,10 +7,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api.js";
 
-export const OFFICIAL_RUNNER_VERSION = "9";
+export const OFFICIAL_RUNNER_VERSION = "10";
 const MIN_SUPPORTED_RUNNER_VERSION = "6";
 export const OFFICIAL_RUNNER_DOWNLOAD_URL =
-  "https://github.com/orbleeparrot/gg_parrot/releases/download/runner-v9/ggparrot-runner.exe";
+  "https://github.com/orbleeparrot/gg_parrot/releases/download/runner-v10/ggparrot-runner.exe";
 
 const officialVersion = (url) => String(url || "").match(
   /^https:\/\/github\.com\/orbleeparrot\/gg_parrot\/releases\/download\/runner-v([0-9]{1,6})\/ggparrot-runner\.exe$/,

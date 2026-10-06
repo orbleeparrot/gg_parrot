@@ -13,7 +13,11 @@ from .schema import EntryFilter, FilterKind, Macro
 
 
 class _VolumeState:
-    """고정 창 평균 거래량. 창이 안 차면 None."""
+    """직전 ``period`` 봉의 평균 거래량. 이 봉은 기준에 넣지 않는다.
+
+    이 봉을 기준에 넣으면 ``multiple > period`` 일 때 거래량이 아무리 커도 절대 통과하지 못한다.
+    직전 창이 안 차면 None. 거래량을 모르는(None) 봉은 창에 넣지 않는다 — 모르는 값이 기준이 되면 안 된다.
+    """
 
     def __init__(self, period: int) -> None:
         self.period = period
@@ -22,10 +26,9 @@ class _VolumeState:
     def update(self, volume: Optional[float]) -> Optional[float]:
         if volume is None:
             return None
-        self._win.append(float(volume))
-        if len(self._win) < self.period:
-            return None
-        return sum(self._win) / self.period
+        avg = sum(self._win) / self.period if len(self._win) == self.period else None
+        self._win.append(float(volume))     # 평균을 낸 뒤에 넣는다
+        return avg
 
 
 class FilterEval:
@@ -47,9 +50,10 @@ class FilterEval:
     def update(self, close: float, volume: Optional[float] = None) -> None:
         if self.kind is FilterKind.VOLUME:
             avg = self._state.update(volume)
-            # 평균을 못 구했거나 이 봉의 거래량을 모르면 막는다.
+            # 기준은 직전 봉들의 평균이다(이 봉 제외). 직전 창이 안 찼거나, 이 봉의 거래량을 모르거나,
+            # 평균이 0(거래가 없었음 = 급증의 반대)이면 막는다.
             self._allows = (
-                avg is not None and volume is not None
+                avg is not None and volume is not None and avg > 0
                 and float(volume) >= avg * float(self.p["multiple"])
             )
             return

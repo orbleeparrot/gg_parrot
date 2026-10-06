@@ -255,7 +255,7 @@ class CommandExecutionTests(unittest.TestCase):
 def _run_bot(heartbeat_replies, in_position=False, held=0.0, entry=0.0):
     """run() 을 heartbeat 응답 수만큼 돌린다(그 다음 루프에서 stop_only 로 종료)."""
     bot = _bot(in_position=in_position, held=held, entry=entry)
-    bot.testnet = True
+    bot.exchange, bot.mode = "binance", "testnet"  # testnet 여부는 모드에서 나온다
     bot._connect = Mock(return_value=True)
     bot._prepare = Mock(return_value=True)
     bot._price = Mock(return_value=0.01)

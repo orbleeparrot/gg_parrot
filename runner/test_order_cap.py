@@ -64,7 +64,8 @@ class DomesticCapWiringTests(unittest.TestCase):
         self.assertEqual(macro_runner.RiskGuard({}, 5000, cap=150000).base, 5000)
 
     def _new_bot(self, macro):
-        return macro_runner.BotThread(macro, "k", "s", False, Mock(), Mock(), Mock(), Mock())
+        keys = {"exchanges": {"binance": {"api_key": "k", "api_secret": "s"}}}
+        return macro_runner.BotThread(macro, keys, "mock", Mock(), Mock(), Mock(), Mock())
 
     def test_bot_thread_reads_quote_and_default_capital_from_symbol(self):
         krw = self._new_bot({"symbol": "krw-btc"})

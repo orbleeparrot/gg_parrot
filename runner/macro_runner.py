@@ -5,8 +5,9 @@
 
 화면 구성(요청 사양)
   ① 매크로 파일 선택        — 빌더에서 내려받은 .ggm.json
-  ② 바이낸스 실거래 여부     — 체크 시 메인넷(실제 자금), 해제 시 테스트넷(가짜 자금)
-  ③ 바이낸스 API 키 / 시크릿 — 로컬 메모리에서만 사용(서버 전송·저장·로깅 안 함)
+  ② 실행 모드               — 모의(주문 삼킴) / 테스트넷(바이낸스만) / 실전(실제 자금). 기본은 모의
+  ③ 거래소별 API 키/시크릿  — 바이낸스·업비트·빗썸 각각. 쓰는 키는 매크로의 거래소가 고른다
+                             (로컬 메모리·이 PC 저장만, 서버 전송·로깅 안 함)
   ④ 껄무새 회원 키           — 마이페이지에서 발급. 이 키로만 서버에 상태를 올린다.
 
 서버로 나가는 것: 회원 키 + 구동 상태(요약/현재가/포지션/손익)뿐.
@@ -114,6 +115,76 @@ def quote_of(symbol: str) -> str:
 def order_cap(quote: str) -> float:
     """1 회 주문 상한. 상한은 늘 통화와 함께 다닌다 — 떼어 두면 다음에 또 틀린다."""
     return MAX_ORDER_KRW if str(quote).upper() == "KRW" else MAX_ORDER_USDT
+
+
+# --- 실행 모드 ---------------------------------------------------------------
+# 기본값은 늘 모의다. 국내 거래소에는 테스트넷이 없어서(바이낸스만 있다) 모의가 유일한 연습 수단이고,
+# 실수로 실전이 먼저 돌아가는 일을 기본값으로 막는다.
+MODE_MOCK, MODE_TESTNET, MODE_LIVE = "mock", "testnet", "live"
+RUN_MODES = (MODE_MOCK, MODE_TESTNET, MODE_LIVE)
+MODE_LABELS = {MODE_MOCK: "모의", MODE_TESTNET: "테스트넷", MODE_LIVE: "실전"}
+# 테스트넷은 바이낸스 전용이다 — 국내는 모의·실전 둘뿐.
+TESTNET_EXCHANGES = ("binance",)
+EXCHANGE_LABELS = {"binance": "바이낸스", **brokers.DOMESTIC_LABELS}
+
+
+def run_mode_of(raw) -> str:
+    """모르는 값은 모의로 접는다 — 설정이 깨졌을 때 실전으로 떨어지면 안 된다."""
+    mode = str(raw or "").strip().lower()
+    return mode if mode in RUN_MODES else MODE_MOCK
+
+
+def exchange_of(macro: dict) -> str:
+    """매크로가 고른 거래소. 키도 브로커도 이 값 하나로 갈린다."""
+    return str((macro or {}).get("exchange", "binance") or "binance").lower()
+
+
+def exchange_label(exchange: str) -> str:
+    return EXCHANGE_LABELS.get(str(exchange).lower(), str(exchange))
+
+
+def credential_pair(credentials: dict, exchange: str) -> dict | None:
+    """저장된 자격증명(v2)에서 이 거래소의 키 한 쌍. 없으면 None.
+
+    자격증명 파일에는 키를 적은 거래소만 들어 있다 — 그래서 `[name]` 이 아니라 `.get(name)` 이다.
+    시크릿이 비어 있으면 '아직 안 넣었다' 와 같게 본다(한쪽만 적은 칸도 그대로 저장되므로).
+    """
+    pair = ((credentials or {}).get("exchanges") or {}).get(str(exchange).lower())
+    if not isinstance(pair, dict):
+        return None
+    key, secret = str(pair.get("api_key") or "").strip(), str(pair.get("api_secret") or "").strip()
+    return {"api_key": key, "api_secret": secret} if key and secret else None
+
+
+def _session_payload(macro: dict, *, testnet: bool, mode: str) -> dict:
+    """서버에 올리는 세션 시작 payload.
+
+    거래소 키·시크릿은 어떤 경로로도 여기에 들어가지 않는다 — 실행기가 서버에 보내는 것은
+    회원 키와 구동 상태뿐이다. 매크로 출처(서명 · user_macro_id)는 GUI 가 따로 얹는다.
+    """
+    if not macro:
+        raise ValueError("macro is required")
+    side = str(macro.get("position_side", "long")).lower()
+    lev = max(1, int(macro.get("leverage", 1) or 1))
+    exchange = exchange_of(macro)
+    return {
+        "symbol": str(macro.get("symbol", "")).upper(),
+        "exchange": exchange,
+        "position_side": side,
+        "leverage": lev,
+        "market": market_of(exchange, side, lev),
+        "testnet": testnet,
+        # 모의도 '가짜 자금' 이므로 testnet 과 함께 보낸다. 서버가 아직 안 읽는 값이지만
+        # 세션 기록에 연습과 실전이 섞이지 않게 하려면 실행기가 먼저 말해야 한다.
+        "mode": run_mode_of(mode),
+        "human_summary": macro.get("human_summary", ""),
+        # 서버가 세션에 기록하고 오래된 버전을 거절할 수 있게 실어 보낸다.
+        "runner_version": RUNNER_VERSION,
+        # 매크로 원문 — 마이페이지 실시간 차트에 빌더와 동일한 전략 보조지표를
+        # 그리는 데 쓰인다. 거래소 키/시크릿은 여기에 포함되지 않는다.
+        "macro": macro,
+    }
+
 
 POLL_SECONDS = 5.0
 # 실행 로그를 서버에 올리는 버퍼 상한(heartbeat 한 번에 실어 보내는 최대 줄 수).
@@ -302,6 +373,16 @@ def _round_step(qty: float, step: float) -> float:
 
 def _decide_market(side: str, leverage: int) -> str:
     return "futures" if (side == "short" or leverage > 1) else "spot"
+
+
+def market_of(exchange: str, side: str, leverage: int) -> str:
+    """거래소까지 본 시장. 국내(업비트·빗썸)는 원화 현물뿐이라 방향·레버리지로 선물이 되지 않는다.
+
+    섞어 두면 레버리지가 적힌 국내 매크로가 '선물' 로 읽혀 있지도 않은 선물 경로를 탄다.
+    """
+    if str(exchange).lower() != "binance":
+        return "spot"
+    return _decide_market(side, leverage)
 
 
 def _base_asset(symbol: str) -> str:
@@ -524,13 +605,15 @@ class BotThread(threading.Thread):
     두 경우 모두 stop_only(포지션 유지) / close_and_stop(청산 후) 을 지원한다.
     """
 
-    def __init__(self, macro: dict, api_key: str, api_secret: str, testnet: bool,
+    def __init__(self, macro: dict, credentials: dict, mode: str,
                  server: ServerClient, on_log, on_status, on_finish) -> None:
         super().__init__(daemon=True)
         self.macro = macro
-        self.api_key = api_key
-        self.api_secret = api_secret
-        self.testnet = testnet
+        # 자격증명 v2 전체({"exchanges": {거래소: 키 한 쌍}})를 그대로 들고 있는다.
+        # 어느 쌍을 쓸지는 매크로의 거래소가 정한다 — 사용자에게 묻지 않는다.
+        self.credentials = credentials or {}
+        self.exchange = exchange_of(macro)
+        self.mode = run_mode_of(mode)
         self.server = server
         self.on_log = on_log
         self.on_status = on_status
@@ -545,7 +628,7 @@ class BotThread(threading.Thread):
         self.quote = quote_of(self.symbol)  # 주문 상한·자본 기본값이 이 통화를 따른다 — __init__ 시그니처를 바꿔도 이 줄은 symbol 뒤에 반드시 남겨야 한다
         self.side = str(macro.get("position_side", "long")).lower()
         self.leverage = max(1, int(macro.get("leverage", 1) or 1))
-        self.market = _decide_market(self.side, self.leverage)
+        self.market = market_of(self.exchange, self.side, self.leverage)
         self.broker = None
         self.step = 0.0
         self.in_position = False
@@ -560,6 +643,13 @@ class BotThread(threading.Thread):
         self._done_command_ids: deque = deque(maxlen=200)  # ok 로 ack 한 명령 id — 재전송돼도 다시 실행하지 않는다
         self.pending_acks: list[dict] = []
         self._offline_logged = False
+
+    @property
+    def testnet(self) -> bool:
+        """테스트넷 주소를 쓰는가. 모드에서 나오는 값이라 따로 들고 있지 않는다 —
+        둘을 각각 보관하면 국내 매크로에서 '테스트넷인데 실전 주소' 처럼 어긋날 수 있다.
+        테스트넷은 바이낸스에만 있다(국내는 모의·실전 둘뿐)."""
+        return self.mode == MODE_TESTNET and self.exchange in TESTNET_EXCHANGES
 
     # --- GUI → 스레드 명령 --------------------------------------
     def set_command(self, mode: str) -> None:
@@ -585,42 +675,74 @@ class BotThread(threading.Thread):
 
     # --- 시장별 어댑터 (현물/선물 공통 루프) ---------------------
     def _connect(self) -> bool:
+        """매크로의 거래소로 어댑터를 만든다. 모의 모드면 그 어댑터를 MockBroker 로 감싼다.
+
+        계정 확인은 여기서 하지 않는다 — 키 · 허용 IP · 권한 · 최소 금액은 리허설이 한 번에 보고,
+        그 결과로 세션을 멈출지는 모드가 정한다(_rehearse). 연결 단계에서 서명 호출을 하면
+        모의 모드가 키 없이 돌 수 없다.
+        """
+        label = exchange_label(self.exchange)
+        pair = credential_pair(self.credentials, self.exchange)
+        if pair is None:
+            if self.mode != MODE_MOCK:
+                self.log(f"[오류] {label} API 키가 없어요. 이 매크로는 {label} 매크로라 "
+                         f"{label} 키·시크릿을 넣어야 시작할 수 있어요.")
+                return False
+            # 연습은 키 없이도 돌아야 한다 — 주문은 MockBroker 가 삼키고, 시세만 공개 경로로 읽는다.
+            self.log(f"{label} API 키가 없어 모의 모드로만 돌립니다(주문은 보내지 않아요).")
+            pair = {"api_key": "", "api_secret": ""}
+        if self.exchange != "binance" and (self.side != "long" or self.leverage > 1):
+            self.log(f"[오류] {label} 는 원화 현물(롱 · 1배)만 돼요. 선물·숏 매크로는 바이낸스로 만드세요.")
+            return False
         try:
-            from binance.client import Client
+            broker = self._build_broker(pair)
         except ImportError:
             self.log("python-binance 가 없어요. requirements 설치 후 다시 실행하세요.")
             return False
-        try:
-            self.broker = brokers.BinanceBroker(
-                Client(self.api_key, self.api_secret, testnet=self.testnet),
+        except Exception as exc:
+            self.log(f"{label} 연결 준비 실패: {exc}")
+            return False
+        # 모의는 바깥에서 감싼다 — 어느 거래소든 같은 안전망을 쓰게 하려는 것이 MockBroker 의 존재 이유다.
+        self.broker = brokers.MockBroker(broker, log=self.log) if self.mode == MODE_MOCK else broker
+        self.log(f"거래소 {label} · 실행 모드 {MODE_LABELS[self.mode]}"
+                 f"{' (테스트넷 주소)' if self.testnet else ''}")
+        return True
+
+    def _build_broker(self, pair: dict):
+        """거래소별 어댑터 하나. 바이낸스만 python-binance 클라이언트를 쓴다."""
+        if self.exchange == "binance":
+            from binance.client import Client
+            return brokers.BinanceBroker(
+                Client(pair["api_key"], pair["api_secret"], testnet=self.testnet),
                 market=self.market, symbol=self.symbol, side=self.side,
                 testnet=self.testnet, leverage=self.leverage, log=self.log)
-            self.broker.check_account()
-        except Exception as exc:
-            self.log(f"연결/인증 실패: {exc}")
-            if "-2015" in str(exc) or "Invalid API-key" in str(exc):
-                where = ("선물 testnet(binancefuture.com)" if self.market == "futures"
-                         else "현물 testnet(binance.vision)") if self.testnet else "메인넷"
-                self.log(f"  → 이 매크로는 {self.market} 시장이에요. {where} 키인지, IP 제한/권한을 확인하세요.")
-            return False
-        return True
+        return brokers.DomesticBroker(pair["api_key"], pair["api_secret"],
+                                      exchange=self.exchange, symbol=self.symbol, log=self.log)
 
     def _price(self) -> float:
         return self.broker.price()
 
-    def _place(self, side_word: str, qty: float, reduce_only: bool = False) -> bool:
+    def _place(self, side_word: str, qty: float, reduce_only: bool = False,
+               *, notional: float = 0.0) -> bool:
         """시장가 주문 하나를 넣고 체결을 확인한 뒤 보유 상태를 갱신한다.
 
         포지션 방향(롱=BUY, 숏=SELL)과 같은 주문은 보유 중이라도 '추가 진입'(가중평균), 반대 방향 또는
         reduce_only 는 '청산'이다. 보유 수량보다 적게 파는 청산은 부분 청산 — 남는 수량이 있어도 정상.
+
+        notional 은 원화 금액이다. 업비트·빗썸의 시장가 매수는 수량이 아니라 '얼마치' 로 내는
+        주문이라서, 수량으로 보내면 어댑터가 거절해 진입이 통째로 막힌다. 매도는 어느 거래소든 수량이다.
         """
         open_word = "BUY" if self.side == "long" else "SELL"
         closing = reduce_only or (self.in_position and side_word != open_word)
         sellable = _round_step(self.held_qty, self.step) if self.held_qty > 0 else 0.0
+        # step 은 국내에서 0 이다(금액 주문이라 수량 단위가 없다). 0 으로 나누지 않고, 양수라고 가정하지도 않는다.
         partial_close = closing and sellable > 0 and (sellable - qty) >= (self.step or 1e-12)
         client_id = "ggp-" + uuid.uuid4().hex[:28]
+        by_money = not closing and self.quote == "KRW" and notional > 0
         # 제출 · 재조정 · 평균가 · 수수료는 브로커가 한다. 봇은 그 결과로 장부만 쓴다.
-        order = self.broker.submit(side_word, base_qty=qty, reduce_only=reduce_only,
+        order = self.broker.submit(side_word, base_qty=None if by_money else qty,
+                                   notional=notional if by_money else None,
+                                   reduce_only=reduce_only,
                                    closing=closing, client_id=client_id)
         executed, average = order.executed_qty, order.avg_price
         acquired, fees_known = order.acquired_qty, order.fees_known
@@ -662,7 +784,7 @@ class BotThread(threading.Thread):
         return True
 
     def _prepare(self) -> bool:
-        """시장별 심볼정보/레버리지 세팅. 성공 시 True."""
+        """시장별 심볼정보/레버리지 세팅과 주문 전 리허설. 성공 시 True."""
         if self.market != "futures" and self.side == "short":
             self.log("현물은 숏을 지원하지 않아요. 선물 매크로를 쓰세요.")
             return False
@@ -670,8 +792,39 @@ class BotThread(threading.Thread):
             where = "선물" if self.market == "futures" else "현물"
             self.log(f"[오류] '{self.symbol}' 은 (테스트넷) {where}에 없어요. 심볼을 바꾸세요.")
             return False
+        # 국내 원화 마켓은 수량 단위가 0 이다(금액으로 주문한다). 0 을 '아직 못 읽었다' 로 보면 안 된다.
         self.step = self.broker.order_rules().step
-        return True
+        return self._rehearse()
+
+    def _entry_notional(self) -> float:
+        """리허설이 확인할 주문 크기 — notional_frac=1.0 명령이 실제로 쓸 금액과 같은 수."""
+        return min(self.capital, order_cap(self.quote))
+
+    def _rehearse(self) -> bool:
+        """세션 시작에 한 번. 돈을 쓰지 않고 키 · 허용 IP · 권한 · 최소 주문 금액을 확인한다.
+
+        브로커는 결과만 돌려주고, 멈출지 말지는 여기서 정한다:
+          * 실전 · 테스트넷 — 실패하면 주문을 한 건도 내지 않고 세션을 끝낸다.
+          * 모의            — 실패를 기록만 하고 계속한다. 키 없이 돌지 않으면 연습이 아니다.
+        """
+        notional = self._entry_notional()
+        try:
+            ok, reason = self.broker.rehearse(notional=notional)
+        except Exception as exc:
+            ok, reason = False, f"리허설 도중 오류가 났어요: {exc}"
+        if ok:
+            self.log(f"주문 전 확인: {reason}")
+            return True
+        self.log(f"[오류] 주문 전 확인 실패 — {reason}")
+        if self.exchange == "binance" and ("-2015" in reason or "-2014" in reason or "키" in reason):
+            where = ("선물 testnet(binancefuture.com)" if self.market == "futures"
+                     else "현물 testnet(binance.vision)") if self.testnet else "메인넷"
+            self.log(f"  → 이 매크로는 {self.market} 시장이에요. {where} 키인지, IP 제한/권한을 확인하세요.")
+        if self.mode == MODE_MOCK:
+            self.log("모의 모드라 주문 없이 계속합니다. 실전으로 바꾸기 전에 위 이유를 고쳐 주세요.")
+            return True
+        self.log("주문을 보내지 않고 종료합니다. 위 내용을 고친 뒤 다시 시작하세요.")
+        return False
 
     def _close_position(self) -> bool:
         """보유 포지션을 시장가로 정리. 성공 시 True."""
@@ -721,7 +874,10 @@ class BotThread(threading.Thread):
                 word = "BUY" if action == "buy" else "SELL"
                 self.log(f"[신호] {reason} → {word} {qty} {self.symbol} @ {price}")
                 prev_qty, prev_entry = (self.held_qty, self.entry_price) if self.in_position else (0.0, 0.0)
-                if not self._place(word, qty):
+                # 원화 진입은 수량이 아니라 방금 구한 금액으로 낸다 — 수량은 로그·장부 계산용이다.
+                # 바이낸스 경로는 금액을 넘기지 않는다(수량 주문이고, 넘기면 _place 가 금액 주문으로 갈린다).
+                extra = {"notional": notional} if self.quote == "KRW" else {}
+                if not self._place(word, qty, **extra):
                     raise RuntimeError("주문이 체결되지 않았어요.")
                 filled_qty, filled_px = self._last_fill_qty, self._last_fill_price
                 if prev_qty > 0 and filled_qty > 0:
@@ -785,7 +941,7 @@ class BotThread(threading.Thread):
         note = ""
         try:
             if not self._connect() or not self._prepare():
-                status, note = "error", "연결/심볼 준비 실패 — 로그 확인"
+                status, note = "error", "연결 · 심볼 준비 · 주문 전 확인 실패 — 로그 확인"
                 return
             t = _strategy_targets(self.macro)
             guard = RiskGuard(t["risk"], t["capital"] * t["invest_ratio"] if t["capital"] else 0.0,
@@ -882,6 +1038,14 @@ class BotThread(threading.Thread):
                 self.log("서버에 종료 결과를 전송하지 못했어요. 내 에이전트의 상태가 지연될 수 있어요.")
             self.on_finish(status, note)
 
+    def _build_start_payload(self, testnet: bool) -> dict:
+        """이 세션을 서버에 알리는 payload. 거래소 키·시크릿은 들어가지 않는다.
+
+        GUI(RunnerApp)도 같은 함수로 만든다 — 한쪽에만 거래소·모드가 실리면 마이페이지의
+        세션 기록이 실행기와 어긋난다. 매크로 출처(서명 · user_macro_id)는 GUI 만 아는 값이라 거기서 얹는다.
+        """
+        return _session_payload(self.macro, testnet=testnet, mode=self.mode)
+
     def _finish_position(self, mode: str) -> str:
         """종료 시 포지션 처리. 반환값은 서버/화면에 남길 note."""
         if mode == "close_and_stop":
@@ -928,20 +1092,21 @@ class RunnerApp:
         self.macro_sig: dict | None = None
         self.macro_source = ""
         self.macro_path = tk.StringVar(value="")
-        self.live = tk.BooleanVar(value=False)   # 실거래(메인넷) 여부
+        # 실행 모드 — 모의 · 테스트넷 · 실전. 기본은 늘 모의다.
+        self.mode = tk.StringVar(value=MODE_MOCK)
+        # 거래소별 키 칸. 바이낸스 칸은 옛 이름(api_key · api_secret)을 그대로 쓴다.
         self.api_key = tk.StringVar(value="")
         self.api_secret = tk.StringVar(value="")
+        self.key_vars = {"binance": (self.api_key, self.api_secret)}
+        for name in credentials_mod.EXCHANGES:
+            if name not in self.key_vars:
+                self.key_vars[name] = (tk.StringVar(value=""), tk.StringVar(value=""))
         self.member_key = tk.StringVar(value=os.environ.get("GGP_MEMBER_KEY", ""))
-        # 이 PC에 키 기억하기 — DPAPI 파일이 있으면 세 칸을 채우고 체크를 켠다. 못 풀면(다른 PC) 빈 칸.
+        # 이 PC에 키 기억하기 — DPAPI 파일이 있으면 칸을 채우고 체크를 켠다. 못 풀면(다른 PC) 빈 칸.
         self.remember = tk.BooleanVar(value=False)
         self.credentials_path = credentials_mod.default_path()
         self._remembered = credentials_mod.load(self.credentials_path) if credentials_mod.supported() else None
-        if self._remembered:
-            self.api_key.set(self._remembered["api_key"])
-            self.api_secret.set(self._remembered["api_secret"])
-            if self._remembered["member_key"] and not self.member_key.get():
-                self.member_key.set(self._remembered["member_key"])
-            self.remember.set(True)
+        self._apply_remembered_credentials(self._remembered)
         self.server_base = SERVER_BASE
         self._protocol_claim_busy = False
         self._protocol_registration_thread: threading.Thread | None = None
@@ -955,6 +1120,23 @@ class RunnerApp:
             # Let Tk render its first frame before any launch work begins.  The
             # actual HTTP(S) claim runs on a worker thread below.
             self.root.after(0, self._begin_protocol_claim, protocol_launch)
+
+    def _apply_remembered_credentials(self, remembered: dict | None) -> None:
+        """저장된 자격증명(v2)을 거래소별 칸에 채운다.
+
+        파일에는 키를 적어 둔 거래소만 들어 있다 — 없는 이름을 `[...]` 로 꺼내면 창이 아예 열리지 않는다.
+        모르는 거래소 이름은 조용히 버린다(옛·새 형식이 섞여도 창은 열려야 한다).
+        """
+        if not remembered:
+            return
+        for name, pair in (remembered.get("exchanges") or {}).items():
+            target = self.key_vars.get(name)
+            if target and isinstance(pair, dict):
+                target[0].set(str(pair.get("api_key") or ""))
+                target[1].set(str(pair.get("api_secret") or ""))
+        if remembered.get("member_key") and not self.member_key.get():
+            self.member_key.set(remembered["member_key"])
+        self.remember.set(True)
 
     # --- 화면 구성 ----------------------------------------------
     def _apply_theme(self) -> None:
@@ -1022,22 +1204,32 @@ class RunnerApp:
         self.macro_summary = ttk.Label(f1, text="아직 선택 안 됨", style="CardMuted.TLabel")
         self.macro_summary.pack(anchor="w", pady=(6, 0))
 
-        # 실거래 여부
-        f2 = self._card(self.root, "거래 대상", "기본은 테스트넷(가짜 자금)이에요. 실거래는 체크해야만 켜져요.")
-        ttk.Checkbutton(f2, text="실거래(메인넷) 사용 — 체크하면 실제 자금이 움직여요",
-                        variable=self.live, command=self._on_live_toggle).pack(anchor="w")
-        self.live_note = ttk.Label(f2, text="현재: 테스트넷 (가짜 자금)", style="Card.TLabel", foreground=UI["ok"])
+        # 실행 모드
+        f2 = self._card(self.root, "실행 모드", "기본은 모의(주문을 보내지 않고 연습)예요. 실전은 직접 골라야 켜져요.")
+        modes = ttk.Frame(f2, style="Card.TFrame"); modes.pack(fill="x")
+        self.mode_buttons = {}
+        for name in RUN_MODES:
+            button = ttk.Radiobutton(modes, text=MODE_LABELS[name], value=name, variable=self.mode,
+                                     command=self._on_mode_change)
+            button.pack(side="left", padx=(0, 14))
+            self.mode_buttons[name] = button
+        self.live_note = ttk.Label(f2, text="", style="Card.TLabel", foreground=UI["ok"])
         self.live_note.pack(anchor="w", pady=(4, 0))
+        self._on_mode_change()
 
-        # 키
-        f3 = self._card(self.root, "바이낸스 API 키 · 껄무새 회원 키",
-                        "키는 이 PC에서만 쓰이고 서버로 보내지 않아요. 회원 키는 마이페이지에서 발급해요.")
+        # 키 — 거래소별로 한 쌍. 어느 쌍을 쓸지는 매크로의 거래소가 고른다(사용자에게 묻지 않는다).
+        f3 = self._card(self.root, "거래소 API 키 · 껄무새 회원 키",
+                        "키는 이 PC에서만 쓰이고 서버로 보내지 않아요. 매크로의 거래소에 맞는 칸만 채우면 돼요.")
         grid = ttk.Frame(f3, style="Card.TFrame"); grid.pack(fill="x")
         grid.columnconfigure(1, weight=1)
-        for i, (label, var, show) in enumerate((
-            ("API Key", self.api_key, ""), ("API Secret", self.api_secret, "•"), ("회원 키", self.member_key, ""),
-        )):
-            ttk.Label(grid, text=label, style="Card.TLabel", width=11).grid(row=i, column=0, sticky="w", pady=3)
+        rows = []
+        for name in credentials_mod.EXCHANGES:
+            key_var, secret_var = self.key_vars[name]
+            rows.append((f"{exchange_label(name)} 키", key_var, ""))
+            rows.append((f"{exchange_label(name)} 시크릿", secret_var, "•"))
+        rows.append(("껄무새 회원 키", self.member_key, ""))
+        for i, (label, var, show) in enumerate(rows):
+            ttk.Label(grid, text=label, style="Card.TLabel", width=14).grid(row=i, column=0, sticky="w", pady=3)
             ttk.Entry(grid, textvariable=var, show=show).grid(row=i, column=1, sticky="ew", pady=3)
         if credentials_mod.supported():
             remember_row = ttk.Frame(f3, style="Card.TFrame"); remember_row.pack(fill="x", pady=(8, 0))
@@ -1081,11 +1273,39 @@ class RunnerApp:
             self._log("⚠ 'requests' 모듈이 없어요. requirements.txt 를 설치해 주세요.")
 
     # --- 이벤트 -------------------------------------------------
-    def _on_live_toggle(self) -> None:
-        if self.live.get():
-            self.live_note.config(text="현재: ⚠ 메인넷 (실제 자금이 움직여요)", foreground=UI["danger"])
-        else:
-            self.live_note.config(text="현재: 테스트넷 (가짜 자금)", foreground=UI["ok"])
+    def _run_mode(self) -> str:
+        return run_mode_of(self.mode.get())
+
+    def _on_mode_change(self) -> None:
+        """고른 모드를 한 줄로 설명한다. 실전만 빨강 — 돈이 움직이는 모드는 하나뿐이어야 보인다."""
+        mode = self._run_mode()
+        notes = {
+            MODE_MOCK: ("현재: 모의 (주문을 보내지 않고 현재가로 연습해요)", UI["ok"]),
+            MODE_TESTNET: ("현재: 테스트넷 (바이낸스 가짜 자금)", UI["ok"]),
+            MODE_LIVE: ("현재: ⚠ 실전 (실제 자금이 움직여요)", UI["danger"]),
+        }
+        text, color = notes[mode]
+        self.live_note.config(text=text, foreground=color)
+
+    def _sync_mode_choices(self) -> None:
+        """국내 매크로에서는 테스트넷 칸을 숨긴다 — 업비트·빗썸에는 테스트넷이 없다.
+
+        숨기는 것만으로는 모자라서, 이미 테스트넷이 골라져 있었으면 모의로 되돌린다.
+        """
+        button = getattr(self, "mode_buttons", {}).get(MODE_TESTNET)
+        if button is None:
+            return
+        allowed = exchange_of(self.macro) in TESTNET_EXCHANGES if self.macro else True
+        if allowed:
+            # winfo_manager() 가 빈 문자열이면 pack 에서 빠진 상태다. winfo_ismapped() 로 보면
+            # 창이 아직 화면에 뜨지 않았을 때(숨은 창)도 '빠졌다' 로 읽혀 매번 다시 붙인다.
+            if not button.winfo_manager():
+                button.pack(side="left", padx=(0, 14), before=self.mode_buttons[MODE_LIVE])
+            return
+        button.pack_forget()
+        if self._run_mode() == MODE_TESTNET:
+            self.mode.set(MODE_MOCK)
+        self._on_mode_change()
 
     def _pick_file(self) -> None:
         path = filedialog.askopenfilename(
@@ -1152,10 +1372,14 @@ class RunnerApp:
         self.macro = {k: v for k, v in macro.items() if k != "_sig"}
         self.macro_path.set(source_label)
         side = str(macro.get("position_side", "long"))
-        market = _decide_market(side.lower(), lev)
+        exchange = exchange_of(macro)
+        market = market_of(exchange, side.lower(), lev)
         summary = macro.get("human_summary", "") or f"{macro['symbol']} · {side}"
         self.macro_summary.config(
-            text=f"{macro['symbol']} · {market} · {side}{' · '+str(lev)+'배' if lev>1 else ''}\n{summary}")
+            text=f"{exchange_label(exchange)} · {macro['symbol']} · {market} · "
+                 f"{side}{' · '+str(lev)+'배' if lev>1 else ''}\n{summary}")
+        # 거래소가 바뀌면 고를 수 있는 모드도 바뀐다(국내는 테스트넷이 없다).
+        self._sync_mode_choices()
 
     def _begin_protocol_claim(self, launch: ProtocolLaunch) -> None:
         """Claim a browser launch ticket without blocking Tk's event loop."""
@@ -1301,20 +1525,21 @@ class RunnerApp:
             return
 
         # A web launch may only prepare the form.  Exchange credentials never
-        # arrive through the URI/server, testnet is restored explicitly, and
+        # arrive through the URI/server, the run mode is restored explicitly, and
         # _start() is intentionally not called here.
         # 기억해 둔 거래소 키가 있으면 그대로 두고, 없으면 빈 칸(웹 연결은 키를 실어 오지 않는다).
         if not self._remembered:
-            self.api_key.set("")
-            self.api_secret.set("")
+            for key_var, secret_var in self.key_vars.values():
+                key_var.set("")
+                secret_var.set("")
         self.member_key.set(runner_key.strip())
         self.server_base = claim_base
-        self.live.set(False)
-        self._on_live_toggle()
+        self.mode.set(MODE_MOCK)
+        self._on_mode_change()
         self.pick_btn.config(state="normal")
         self.start_btn.config(state="normal")
         self.status_lbl.config(text="● 웹 연결됨 · 시작 전", foreground=UI["ok"])
-        self._log("웹 매크로와 껄무새 계정을 연결했어요. 테스트넷 설정을 확인한 뒤 직접 시작해 주세요.")
+        self._log("웹 매크로와 껄무새 계정을 연결했어요. 실행 모드(기본 모의)를 확인한 뒤 직접 시작해 주세요.")
         _bring_window_to_front(self.root)
 
     def _protocol_claim_failed(self) -> None:
@@ -1364,25 +1589,38 @@ class RunnerApp:
         if not self.macro:
             messagebox.showwarning(APP_TITLE, "먼저 매크로 파일을 선택하세요.")
             return
-        if not self.api_key.get().strip() or not self.api_secret.get().strip():
-            messagebox.showwarning(APP_TITLE, "API Key/Secret 을 입력하세요.")
+        mode = self._run_mode()
+        exchange = exchange_of(self.macro)
+        label = exchange_label(exchange)
+        if mode == MODE_TESTNET and exchange not in TESTNET_EXCHANGES:
+            # 국내 거래소에는 테스트넷이 없다 — 실전으로 올려 버리지 않고 모의로 접는다.
+            mode = MODE_MOCK
+            self.mode.set(mode)
+            self._on_mode_change()
+            self._log(f"{label} 는 테스트넷이 없어요. 모의 모드로 바꿨어요.")
+        # 쓰는 키는 매크로의 거래소가 고른다. 다른 거래소 칸이 비어 있어도 시작을 막지 않는다.
+        # 모의는 키 없이도 돌아야 하므로(주문을 보내지 않는다) 이 관문을 지나간다.
+        if mode != MODE_MOCK and credential_pair(self._credential_values(), exchange) is None:
+            messagebox.showwarning(
+                APP_TITLE,
+                f"이 매크로는 {label} 매크로예요.\n\n{label} API Key/Secret 을 입력하세요.")
             return
         if not self.member_key.get().strip():
             messagebox.showwarning(APP_TITLE, "껄무새 회원 키를 입력하세요.")
             return
 
-        testnet = not self.live.get()
-        if not testnet:  # 메인넷: 실제 자금 확인
+        testnet = mode != MODE_LIVE
+        if mode == MODE_LIVE:  # 실전: 실제 자금 확인
             side = str(self.macro.get("position_side", "long"))
             if not messagebox.askyesno(
                 APP_TITLE,
-                "⚠ 실거래(메인넷)로 실행합니다.\n\n실제 자금으로 주문이 실행돼요. "
+                f"⚠ 실전({label})으로 실행합니다.\n\n실제 자금으로 주문이 실행돼요. "
                 f"({self.macro.get('symbol')} · {side})\n계속할까요?"):
                 return
 
         self._persist_credentials()
         server = ServerClient(self.member_key.get(), base=self.server_base)
-        payload = self._build_start_payload(testnet)
+        payload = self._build_start_payload(testnet, mode)
         try:
             started = server.start(payload)
         except Exception as exc:
@@ -1392,8 +1630,8 @@ class RunnerApp:
             messagebox.showerror(APP_TITLE, f"서버 연결 실패:\n{msg}")
             return
 
-        self._log(f"세션 시작 (id={server.session_id}) · {payload['symbol']} · {payload['market']} · "
-                  f"{'메인넷' if not testnet else '테스트넷'}")
+        self._log(f"세션 시작 (id={server.session_id}) · {label} · {payload['symbol']} · "
+                  f"{payload['market']} · {MODE_LABELS[mode]}")
         origin_label = str((started.get("macro_origin_label") if isinstance(started, dict) else "") or "")
         if origin_label:
             self._log(f"매크로 출처: {origin_label}" + (f" · 지문 {started.get('macro_digest')}" if started.get("macro_digest") else ""))
@@ -1408,8 +1646,7 @@ class RunnerApp:
                 "웹 설정과 다르게 동작해도 껄무새의 오류가 아닐 수 있어요.",
             )
         self.bot = BotThread(
-            self.macro, self.api_key.get().strip(), self.api_secret.get().strip(),
-            testnet, server,
+            self.macro, self._credential_values(), mode, server,
             on_log=self._log_threadsafe,
             on_status=self._status_threadsafe,
             on_finish=self._finish_threadsafe,
@@ -1417,13 +1654,21 @@ class RunnerApp:
         self.bot.start()
         self._set_running(True)
 
+    def _credential_values(self) -> dict:
+        """지금 칸에 적힌 값을 자격증명 v2 모양으로 모은다 — 저장과 봇이 같은 모양을 본다."""
+        exchanges = {}
+        for name, (key_var, secret_var) in self.key_vars.items():
+            key, secret = key_var.get().strip(), secret_var.get().strip()
+            if key or secret:
+                exchanges[name] = {"api_key": key, "api_secret": secret}
+        return {"version": 2, "member_key": self.member_key.get().strip(), "exchanges": exchanges}
+
     def _persist_credentials(self) -> None:
         """'기억하기' 체크대로 저장/삭제. 실패해도 매매를 막지 않는다(로그만)."""
         if not credentials_mod.supported():
             return
-        values = {"api_key": self.api_key.get().strip(), "api_secret": self.api_secret.get().strip(),
-                  "member_key": self.member_key.get().strip()}
         try:
+            values = self._credential_values()
             credentials_mod.apply_choice(self.credentials_path, bool(self.remember.get()), values)
             self._remembered = values if self.remember.get() else None
             if self.remember.get():
@@ -1435,30 +1680,18 @@ class RunnerApp:
         credentials_mod.clear(self.credentials_path)
         self._remembered = None
         self.remember.set(False)
-        self.api_key.set("")
-        self.api_secret.set("")
+        for key_var, secret_var in self.key_vars.values():
+            key_var.set("")
+            secret_var.set("")
         self._log("저장된 키를 지웠어요.")
 
-    def _build_start_payload(self, testnet: bool) -> dict:
-        """Build the server payload without ever including exchange secrets."""
+    def _build_start_payload(self, testnet: bool, mode: str = MODE_MOCK) -> dict:
+        """Build the server payload without ever including exchange secrets.
 
-        if not self.macro:
-            raise ValueError("macro is required")
-        side = str(self.macro.get("position_side", "long")).lower()
-        lev = max(1, int(self.macro.get("leverage", 1) or 1))
-        payload = {
-            "symbol": str(self.macro.get("symbol", "")).upper(),
-            "position_side": side,
-            "leverage": lev,
-            "market": _decide_market(side, lev),
-            "testnet": testnet,
-            "human_summary": self.macro.get("human_summary", ""),
-            # 서버가 세션에 기록하고 오래된 버전을 거절할 수 있게 실어 보낸다.
-            "runner_version": RUNNER_VERSION,
-            # 매크로 원문 — 마이페이지 실시간 차트에 빌더와 동일한 전략 보조지표를
-            # 그리는 데 쓰인다. 거래소 키/시크릿은 여기에 포함되지 않는다.
-            "macro": self.macro,
-        }
+        세션 부분은 BotThread 와 같은 함수(_session_payload)가 만든다. 여기서는 GUI 만 아는
+        매크로 출처(파일 서명 · user_macro_id)를 얹는다.
+        """
+        payload = _session_payload(self.macro, testnet=testnet, mode=mode)
         if self.user_macro_id is not None:
             payload["user_macro_id"] = self.user_macro_id
         # 파일 서명 — 서버가 검증해 세션 출처(원본/수정본)를 남긴다. 티켓 경로엔 없다.

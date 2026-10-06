@@ -15,6 +15,7 @@ def _app() -> RunnerApp:
     app.user_macro_id = None
     app.macro_sig = None
     app.macro_source = ""
+    app.key_vars = {}  # 거래소별 키 칸 — 이 시험들은 키를 쓰지 않는다
     app.macro_path = Mock()
     app.macro_summary = Mock()
     app._log = Mock()
@@ -115,8 +116,8 @@ class ModifiedFileWarningTests(unittest.TestCase):
             var = Mock()
             var.get.return_value = "value"
             setattr(app, name, var)
-        app.live = Mock()
-        app.live.get.return_value = False
+        app.mode = Mock()
+        app.mode.get.return_value = "mock"  # 실행 모드 — 기본값(모의)
         app.server_base = "https://example.invalid"
         app._set_running = Mock()
         app._log_threadsafe = app._status_threadsafe = app._finish_threadsafe = Mock()

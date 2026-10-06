@@ -355,3 +355,221 @@ class JwtTests(unittest.TestCase):
                 broker.check_account()
                 token = session.get.call_args.kwargs["headers"]["Authorization"].removeprefix("Bearer ")
                 self.assertEqual(decode_jwt(token)[0]["alg"], alg)
+
+
+CHANCE = {"bid_fee": "0.0005", "ask_fee": "0.0005", "bid": {"min_total": "5000"}, "ask": {"min_total": "5000"}}
+ACCOUNTS = [{"currency": "KRW", "balance": "250000"}]
+
+
+def exchange_error(name, message="", status=401):
+    return FakeResponse({"error": {"name": name, "message": message}}, status=status)
+
+
+class RehearsalTests(unittest.TestCase):
+    """리허설은 돈 없이 키 · IP · 권한 · 최소 금액을 본다. 무엇보다 진짜 주문을 넣으면 안 된다."""
+
+    def broker(self, exchange="upbit"):
+        self.session = Mock()
+        return brokers.DomesticBroker("acc", "sec", exchange=exchange,
+                                      symbol="KRW-BTC", log=Mock(), session=self.session)
+
+    # --- 업비트: 주문 검증 경로 ---------------------------------------------
+    def test_upbit_uses_the_test_endpoint_never_the_real_one(self):
+        broker = self.broker()
+        self.session.post.return_value = FakeResponse({"uuid": "t1", "state": "wait"}, status=201)
+        ok, reason = broker.rehearse(notional=10_000.0)
+        self.assertTrue(ok, reason)
+        self.assertEqual(self.session.post.call_count, 1)
+        self.assertEqual(self.session.post.call_args.args[0], "https://api.upbit.com/v1/orders/test")
+        self.assertNotIn("https://api.upbit.com/v1/orders", [c.args[0] for c in self.session.post.call_args_list])
+
+    def test_upbit_sends_the_same_body_shape_a_real_buy_would(self):
+        broker = self.broker()
+        self.session.post.return_value = FakeResponse({"uuid": "t1"}, status=201)
+        broker.rehearse(notional=10_000.0)
+        rehearsal_body = self.session.post.call_args.kwargs["json"]
+        self.session.post.reset_mock()
+        self.session.get.return_value = FakeResponse(dict(FILLED))
+        broker.submit("BUY", notional=10_000.0, client_id="ggp-1")
+        real_body = self.session.post.call_args.kwargs["json"]
+        self.assertEqual(list(rehearsal_body), list(real_body))
+        self.assertEqual({k: v for k, v in rehearsal_body.items() if k != "identifier"},
+                         {k: v for k, v in real_body.items() if k != "identifier"})
+        self.assertLessEqual(len(rehearsal_body["identifier"]), 64)
+
+    def test_upbit_signs_the_test_request_over_its_body(self):
+        broker = self.broker()
+        self.session.post.return_value = FakeResponse({"uuid": "t1"}, status=201)
+        broker.rehearse(notional=10_000.0)
+        body = self.session.post.call_args.kwargs["json"]
+        token = self.session.post.call_args.kwargs["headers"]["Authorization"].removeprefix("Bearer ")
+        _header, payload = decode_jwt(token)
+        qs = "&".join(f"{k}={v}" for k, v in body.items())
+        self.assertEqual(payload["query_hash"], hashlib.sha512(qs.encode()).hexdigest())
+
+    def test_upbit_status_other_than_201_is_not_a_pass(self):
+        broker = self.broker()
+        self.session.post.return_value = FakeResponse({"ok": True}, status=200)
+        ok, reason = broker.rehearse(notional=10_000.0)
+        self.assertFalse(ok)
+        self.assertIn("200", reason)
+
+    def test_ip_class_errors_name_the_allowed_ip_before_the_key(self):
+        for exchange, name in (("upbit", "no_authorization_ip"), ("upbit", "invalid_access_key"),
+                               ("upbit", "jwt_verification"), ("bithumb", "NotAllowIP"),
+                               ("bithumb", "jwt_verification")):
+            with self.subTest(exchange=exchange, name=name):
+                broker = self.broker(exchange)
+                self.session.post.return_value = exchange_error(name, "허용되지 않은 IP")
+                self.session.get.return_value = exchange_error(name, "허용되지 않은 IP")
+                ok, reason = broker.rehearse(notional=10_000.0)
+                self.assertFalse(ok)
+                self.assertIn("허용 IP", reason)
+                self.assertLess(reason.index("허용 IP"), reason.index("API 키"))
+
+    def test_minimum_order_amount_is_named(self):
+        broker = self.broker()
+        for name in ("under_min_total_bid", "under_min_total_market_bid"):
+            with self.subTest(name=name):
+                self.session.post.return_value = exchange_error(name, "Order amount is too small", status=400)
+                ok, reason = broker.rehearse(notional=1_000.0)
+                self.assertFalse(ok)
+                self.assertIn("최소 주문 금액", reason)
+                self.assertNotIn("허용 IP", reason)
+
+    def test_missing_order_permission_and_expired_key_are_told_apart_from_ip(self):
+        broker = self.broker()
+        self.session.post.return_value = exchange_error("out_of_scope", "권한이 부족합니다", status=403)
+        ok, reason = broker.rehearse(notional=10_000.0)
+        self.assertFalse(ok)
+        self.assertIn("주문 권한", reason)
+        self.assertNotIn("허용 IP", reason)
+        self.session.post.return_value = exchange_error("expired_access_key")
+        self.assertIn("만료", broker.rehearse(notional=10_000.0)[1])
+
+    def test_unrecognised_error_keeps_the_exchanges_own_words(self):
+        broker = self.broker()
+        self.session.post.return_value = exchange_error("brand_new_error", "거래소가 한 말", status=400)
+        ok, reason = broker.rehearse(notional=10_000.0)
+        self.assertFalse(ok)
+        self.assertIn("brand_new_error", reason)
+        self.assertIn("거래소가 한 말", reason)
+
+    def test_unnamed_error_still_reports_the_status(self):
+        broker = self.broker()
+        self.session.post.return_value = FakeResponse("<html>blocked</html>", status=403)
+        ok, reason = broker.rehearse(notional=10_000.0)
+        self.assertFalse(ok)
+        self.assertIn("403", reason)
+
+    def test_network_failure_is_a_failure_not_an_exception_and_not_blamed_on_the_key(self):
+        broker = self.broker()
+        self.session.post.side_effect = TimeoutError("timed out")
+        ok, reason = broker.rehearse(notional=10_000.0)
+        self.assertFalse(ok)
+        self.assertIn("연결", reason)
+        self.assertNotIn("허용 IP", reason)
+
+    def test_bad_notional_fails_without_sending_anything(self):
+        broker = self.broker()
+        ok, _reason = broker.rehearse(notional=0)
+        self.assertFalse(ok)
+        self.session.post.assert_not_called()
+
+    # --- 빗썸: 검증 경로가 없어 읽기 호출로 갈음 --------------------------------
+    def bithumb_reads(self, accounts=ACCOUNTS, chance=CHANCE):
+        def get(url, **_kwargs):
+            return FakeResponse(accounts if url.endswith("/v1/accounts") else chance)
+        self.session.get.side_effect = get
+
+    def test_bithumb_never_posts_because_it_has_no_test_endpoint(self):
+        broker = self.broker("bithumb")
+        self.bithumb_reads()
+        ok, reason = broker.rehearse(notional=10_000.0)
+        self.assertTrue(ok, reason)
+        self.session.post.assert_not_called()
+        urls = [c.args[0] for c in self.session.get.call_args_list]
+        self.assertEqual(urls, ["https://api.bithumb.com/v1/accounts", "https://api.bithumb.com/v1/orders/chance"])
+
+    def test_bithumb_pass_does_not_claim_the_order_permission_was_checked(self):
+        broker = self.broker("bithumb")
+        self.bithumb_reads()
+        _ok, reason = broker.rehearse(notional=10_000.0)
+        self.assertIn("주문 권한", reason)
+        self.assertIn("첫 주문", reason)
+
+    def test_bithumb_checks_the_minimum_amount_itself(self):
+        broker = self.broker("bithumb")
+        self.bithumb_reads()
+        ok, reason = broker.rehearse(notional=1_000.0)
+        self.assertFalse(ok)
+        self.assertIn("최소 주문 금액", reason)
+        self.assertIn("5000", reason)
+        self.session.post.assert_not_called()
+
+    def test_bithumb_unknown_minimum_does_not_block(self):
+        broker = self.broker("bithumb")
+        self.bithumb_reads(chance={"bid": {}})
+        self.assertTrue(broker.rehearse(notional=1.0)[0])
+
+    def test_bithumb_missing_market_is_reported(self):
+        broker = self.broker("bithumb")
+
+        def get(url, **_kwargs):
+            if url.endswith("/v1/accounts"):
+                return FakeResponse(ACCOUNTS)
+            return exchange_error("invalid_market", status=404)
+        self.session.get.side_effect = get
+        ok, reason = broker.rehearse(notional=10_000.0)
+        self.assertFalse(ok)
+        self.assertIn("마켓", reason)
+
+
+class BinanceRehearsalTests(unittest.TestCase):
+    def broker(self, market="spot", min_notional="5"):
+        self.raw = Mock()
+        self.raw.get_account.return_value = {"balances": [{"asset": "USDT", "free": "100"}]}
+        self.raw.get_symbol_info.return_value = {
+            "baseAsset": "BTC",
+            "filters": [{"filterType": "LOT_SIZE", "stepSize": "0.001"},
+                        {"filterType": "NOTIONAL", "minNotional": min_notional}]}
+        return brokers.BinanceBroker(self.raw, market=market, symbol="BTCUSDT",
+                                     side="long", testnet=True, log=Mock())
+
+    def test_passes_on_account_and_rules_without_placing_any_order(self):
+        broker = self.broker()
+        ok, reason = broker.rehearse(notional=10.0)
+        self.assertTrue(ok, reason)
+        self.raw.get_account.assert_called_once()
+        self.raw.get_symbol_info.assert_called_once()
+        self.raw.create_order.assert_not_called()
+        self.raw.futures_create_order.assert_not_called()
+
+    def test_account_failure_is_a_failure_not_an_exception(self):
+        broker = self.broker()
+        self.raw.get_account.side_effect = RuntimeError("boom")
+        ok, reason = broker.rehearse(notional=10.0)
+        self.assertFalse(ok)
+        self.assertIn("boom", reason)
+
+    def test_invalid_key_ip_or_permission_code_points_at_all_three(self):
+        broker = self.broker()
+        error = RuntimeError("APIError(code=-2015): Invalid API-key, IP, or permissions for action")
+        error.code = -2015
+        self.raw.get_account.side_effect = error
+        ok, reason = broker.rehearse(notional=10.0)
+        self.assertFalse(ok)
+        self.assertIn("허용 IP", reason)
+
+    def test_unknown_symbol_fails(self):
+        broker = self.broker()
+        self.raw.get_symbol_info.return_value = None
+        ok, reason = broker.rehearse(notional=10.0)
+        self.assertFalse(ok)
+        self.assertIn("BTCUSDT", reason)
+
+    def test_below_the_minimum_notional_fails(self):
+        broker = self.broker(min_notional="5")
+        ok, reason = broker.rehearse(notional=1.0)
+        self.assertFalse(ok)
+        self.assertIn("최소 주문 금액", reason)

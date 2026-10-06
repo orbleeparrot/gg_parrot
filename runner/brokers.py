@@ -142,6 +142,25 @@ class BinanceBroker:
     def order_rules(self) -> OrderRules:
         return self._rules
 
+    def rehearse(self, *, notional) -> tuple[bool, str]:
+        """바이낸스에는 주문 없이 검증만 하는 호출이 없다. 계정 확인과 주문 규격 읽기가 되는지로 갈음한다.
+
+        통과 못 했을 때 세션을 멈출지는 부르는 쪽이 정한다 — 이 메서드는 결과만 돌려준다.
+        """
+        try:
+            self.check_account()
+            if not self.ensure_ready():
+                return False, f"{self.symbol} 심볼을 바이낸스에서 찾지 못했어요. 심볼 이름을 확인하세요."
+            minimum = self.order_rules().min_notional
+        except Exception as exc:
+            # -2015 는 '키 · 허용 IP · 권한' 중 무엇인지 거래소가 가르지 않고 한 코드로 돌려준다.
+            if getattr(exc, "code", None) in (-2014, -2015):
+                return False, f"바이낸스가 키를 받아주지 않았어요({exc}). 키 · 허용 IP · 권한 설정을 확인하세요."
+            return False, f"바이낸스 확인에 실패했어요: {exc}"
+        if minimum and _positive_number(notional) < minimum:
+            return False, f"최소 주문 금액보다 적어요. 바이낸스 최소 주문 금액은 {minimum:g} 인데 이번 주문은 {_positive_number(notional):g} 입니다."
+        return True, "바이낸스 계정 확인과 주문 규격 읽기에 성공했습니다. 주문 권한은 첫 주문에서야 드러납니다"
+
     def _futures_symbol_info(self):
         try:
             for s in self.raw.futures_exchange_info().get("symbols", []):
@@ -247,6 +266,7 @@ _DOMESTIC_SPECS = {
     "bithumb": {"alg": "HS256", "timestamp": True, "order_path": "/v2/orders",
                 "type_key": "order_type", "id_key": "client_order_id", "id_max": 36},
 }
+DOMESTIC_LABELS = {"upbit": "업비트", "bithumb": "빗썸"}
 _JWT_HASHES = {"HS512": hashlib.sha512, "HS256": hashlib.sha256}
 
 _DOMESTIC_TIMEOUT = 10  # 초. 이 안에 답이 없어도 주문이 들어갔을 수 있다 — 재주문이 아니라 조회로 확인한다
@@ -310,6 +330,40 @@ class DomesticApiError(RuntimeError):
         super().__init__(f"HTTP {status} {name}: {message}" if name else f"HTTP {status}")
         self.status = status
         self.name = name
+        self.message = message  # 모르는 오류를 사람에게 보일 때 거래소 말을 그대로 쓰려고 남긴다
+
+
+# 허용 IP 를 먼저 말해야 하는 오류들. 두 거래소 모두 호출 IP 를 등록해야 하는데 집 IP 는 바뀐다.
+# 그런데 "키가 틀렸다" 로만 알리면 사용자가 키를 다시 발급하며 헛수고를 한다.
+# 이름은 거래소마다 다르다 — 업비트 no_authorization_ip, 빗썸 NotAllowIP (각 공식 문서의 오류 표).
+_IP_FIRST_ERRORS = frozenset({"no_authorization_ip", "NotAllowIP", "invalid_access_key", "jwt_verification",
+                              "invalid_query_payload", "no_authorization_token"})
+_EXPIRED_KEY_ERRORS = frozenset({"expired_access_key", "expired_jwt"})
+_NO_FUNDS_ERRORS = frozenset({"insufficient_funds_bid", "insufficient_funds_ask"})
+_MARKET_ERRORS = frozenset({"notfoundmarket", "invalid_market", "market_offline"})
+
+
+def _explain_domestic_error(exchange: str, status: int, name: str, message: str) -> str:
+    """거래소 오류를 사람이 다음에 할 일이 보이는 문장으로 옮긴다. 모르는 오류는 거래소 말을 그대로 둔다."""
+    label = DOMESTIC_LABELS.get(exchange, exchange)
+    if name in _IP_FIRST_ERRORS:
+        return (f"{label} 가 요청을 받아주지 않았어요({name}). 먼저 이 컴퓨터의 현재 IP 가 {label} 의 "
+                f"허용 IP 에 등록돼 있는지 확인하세요 — 집 IP 는 바뀝니다. IP 가 맞다면 "
+                f"API 키(액세스 키·시크릿 키)를 다시 복사해 넣으세요.")
+    if name == "out_of_scope":
+        return f"이 API 키에 주문 권한이 없어요({name}). {label} API 관리에서 주문하기 권한을 켠 키를 쓰세요."
+    if name in _EXPIRED_KEY_ERRORS:
+        return f"API 키가 만료됐어요({name}). {label} API 관리에서 키를 연장하거나 새로 발급하세요."
+    if name.startswith("under_min_total"):
+        return f"최소 주문 금액보다 적어요({name}). 주문 금액을 {label} 최소 주문 금액 이상으로 올리세요."
+    if name in _NO_FUNDS_ERRORS:
+        return f"주문할 원화 잔고가 모자라요({name}). 잔고를 채우거나 주문 금액을 줄이세요."
+    if name == "over_krw_funds_bid":
+        return f"1회 최대 주문 금액을 넘었어요({name}). 주문 금액을 줄이세요."
+    if name in _MARKET_ERRORS:
+        return f"이 마켓은 지금 주문할 수 없어요({name}). 마켓 이름이 맞는지, 거래소 점검 중인지 확인하세요."
+    detail = f"{name}: {message}" if name and message else (name or message or f"HTTP {status}")
+    return f"{label} 가 거절했어요({detail})"
 
 
 class DomesticBroker:
@@ -391,6 +445,51 @@ class DomesticBroker:
             self._load_chance()
         return self._rules
 
+    # --- 리허설 -------------------------------------------------
+    def rehearse(self, *, notional) -> tuple[bool, str]:
+        """돈을 쓰지 않고 키 · 허용 IP · 주문 권한 · 최소 주문 금액이 통하는지 본다. (통과, 사람이 읽을 이유).
+
+        업비트에는 주문을 만들지 않고 검증만 하는 POST /v1/orders/test 가 있다(성공 201,
+        돌려준 번호는 조회·취소에 못 쓴다). 빗썸 문서에는 그런 경로가 없다 — 없는 경로를 치면
+        404 가 나서 늘 실패로 읽히므로, 빗썸은 이미 쓰는 읽기 호출로 갈음한다.
+        통과 못 했을 때 세션을 멈출지는 부르는 쪽이 정한다 — 모의 모드는 키 없이도 돌아야 해서
+        여기서 정책을 갖지 않고 결과만 돌려준다.
+        """
+        try:
+            if self.exchange == "upbit":
+                return self._rehearse_by_test_order(notional)
+            return self._rehearse_by_reads(notional)
+        except DomesticApiError as exc:
+            return False, _explain_domestic_error(self.exchange, exc.status, exc.name, exc.message)
+        except ValueError as exc:
+            return False, f"리허설 주문을 만들지 못했어요: {exc}"
+        except Exception as exc:
+            # 네트워크 끊김 · 시간 초과. 거래소 응답이 아니므로 키 탓으로 읽히지 않게 따로 말한다.
+            return False, f"{DOMESTIC_LABELS[self.exchange]} 에 연결하지 못했어요: {exc}"
+
+    def _rehearse_by_test_order(self, notional) -> tuple[bool, str]:
+        # 진짜 주문 경로(order_path)를 쓰지 않는다 — 리허설이 주문을 넣으면 안 된다.
+        body = self._order_body("BUY", base_qty=None, notional=notional, reduce_only=False,
+                                client_id=f"ggp-rehearsal-{uuid.uuid4().hex[:12]}")
+        resp = self.session.post(self._base + self._spec["order_path"] + "/test", json=body,
+                                 headers=self._auth(body), timeout=_DOMESTIC_TIMEOUT)
+        self._raise_for_error(resp)
+        if resp.status_code != 201:
+            return False, f"업비트 주문 검증이 예상 밖 응답을 줬어요(HTTP {resp.status_code})"
+        return True, "업비트 주문 검증 통과 — 키 · 허용 IP · 주문 권한 · 최소 주문 금액이 맞습니다"
+
+    def _rehearse_by_reads(self, notional) -> tuple[bool, str]:
+        # 키와 허용 IP 는 비공개 읽기 두 번(잔고 · 주문 가능 정보)이 서명까지 확인해 준다.
+        # 주문 권한은 주문을 내기 전에는 확인할 방법이 없어, 통과 문구에서 확인했다고 말하지 않는다.
+        self._get("/v1/accounts")
+        self._load_chance()
+        minimum = self._rules.min_notional
+        if minimum and _positive_number(notional) < minimum:
+            return False, (f"최소 주문 금액보다 적어요. 빗썸 최소 주문 금액은 {_plain(Decimal(repr(minimum)))}원인데 "
+                           f"이번 주문은 {_plain(Decimal(repr(_positive_number(notional))))}원입니다.")
+        return True, ("빗썸 키 · 허용 IP · 최소 주문 금액은 확인했습니다. 빗썸에는 주문 검증 경로가 없어 "
+                      "주문 권한은 첫 주문에서야 드러납니다")
+
     # --- 시세 ---------------------------------------------------
     def price(self) -> float:
         rows = self._get("/v1/ticker", {"markets": self.symbol}, private=False)
@@ -400,15 +499,9 @@ class DomesticBroker:
         return value
 
     # --- 주문 ---------------------------------------------------
-    def submit(self, side_word, *, base_qty=None, notional=None, reduce_only=False,
-               closing=None, client_id) -> Order:
-        """시장가 주문 하나를 넣고 끝난 상태까지 확인해서 돌려준다.
-
-        매수는 원화 금액(notional)으로, 매도는 수량(base_qty)으로 낸다. 그 쪽 인자가 없으면
-        잘못된 주문을 보내는 대신 예외를 낸다 — 반대쪽 인자는 쓰지 않는다.
-        closing 은 받기만 한다. 수수료가 원화에서 빠져 acquired_qty 가 늘 executed_qty 이므로
-        청산 여부로 달라지는 것이 없고, 방향에서 끌어내는 대체 계산도 두지 않는다.
-        """
+    def _order_body(self, side_word, *, base_qty, notional, reduce_only, client_id) -> dict:
+        """시장가 주문 본문. submit 과 리허설이 같은 함수로 만든다 — 리허설이 통과했는데
+        실제 주문만 본문 모양 때문에 거절되는 일을 막으려는 것이다."""
         word = str(side_word).upper()
         if word not in ("BUY", "SELL"):
             raise ValueError(f"알 수 없는 주문 방향: {side_word!r}")
@@ -430,6 +523,19 @@ class DomesticBroker:
                 raise ValueError("시장가 매도에는 양수 base_qty(수량)가 필요합니다")
             body.update(side="ask", **{self._spec["type_key"]: "market"}, volume=_plain(volume))
         body[self._spec["id_key"]] = client_id
+        return body
+
+    def submit(self, side_word, *, base_qty=None, notional=None, reduce_only=False,
+               closing=None, client_id) -> Order:
+        """시장가 주문 하나를 넣고 끝난 상태까지 확인해서 돌려준다.
+
+        매수는 원화 금액(notional)으로, 매도는 수량(base_qty)으로 낸다. 그 쪽 인자가 없으면
+        잘못된 주문을 보내는 대신 예외를 낸다 — 반대쪽 인자는 쓰지 않는다.
+        closing 은 받기만 한다. 수수료가 원화에서 빠져 acquired_qty 가 늘 executed_qty 이므로
+        청산 여부로 달라지는 것이 없고, 방향에서 끌어내는 대체 계산도 두지 않는다.
+        """
+        body = self._order_body(side_word, base_qty=base_qty, notional=notional,
+                                reduce_only=reduce_only, client_id=client_id)
 
         rejection = ""
         try:

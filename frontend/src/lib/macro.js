@@ -151,6 +151,9 @@ export function defaultForm() {
     filter_rsi_period: 14, filter_rsi_min: "", filter_rsi_max: 70,
     filter_bb_period: 20, filter_bb_num_std: 2, filter_bb_zone: "inside",
     filter_vol_period: 20, filter_vol_multiple: 2,
+    // 묶음(여러 종목): 비중 · 레그별 규칙 · 묶음 한도. 비워 두면 전과 같이 균등 분배.
+    leg_weights: "", leg_rules: {},
+    use_bundle_risk: false, bundle_max_positions: "", bundle_max_exposure_pct: "",
     // common risk
     invest_ratio_pct: 100,
     stop_loss_pct: 3,
@@ -324,6 +327,32 @@ export function validateDetailed(form) {
       if (!(mult > 0 && mult <= 100)) return fail("filter_vol_multiple", "거래량 배수는 0 보다 크고 100 이하예요.");
     }
   }
+  // 묶음: 비중 · 묶음 한도. 종목 수는 중복을 뺀 개수로 센다(buildMacro 가 같은 식으로 쪼갠다).
+  const uniqSymbols = [...new Set(symbols)];
+  const weightsRaw = splitWeights(form.leg_weights);
+  if (weightsRaw.length) {
+    if (uniqSymbols.length < 2) return fail("leg_weights", "비중은 종목 2개 이상에서만 정해요.");
+    if (weightsRaw.length !== uniqSymbols.length) return fail("leg_weights", `비중을 종목 수(${uniqSymbols.length}개)만큼 적어 주세요.`);
+    const nums = weightsRaw.map(Number);
+    if (nums.some((n) => !Number.isFinite(n) || n <= 0 || n > 100)) return fail("leg_weights", "비중은 0보다 크고 100 이하인 숫자여야 해요.");
+    const total = nums.reduce((a, b) => a + b, 0);
+    if (Math.abs(total - 100) > 0.01) return fail("leg_weights", `비중의 합이 ${Number(total.toFixed(2))}% 예요 · 100% 로 맞춰 주세요.`);
+  }
+  if (form.use_bundle_risk) {
+    if (uniqSymbols.length < 2) return fail("use_bundle_risk", "묶음 한도는 종목 2개 이상에서만 쓸 수 있어요.");
+    const mp = form.bundle_max_positions, ex = form.bundle_max_exposure_pct;
+    const hasMp = mp !== "" && mp != null, hasEx = ex !== "" && ex != null;
+    if (hasMp) {
+      const n = Number(mp);
+      if (!Number.isInteger(n) || n < 1) return fail("bundle_max_positions", "동시 보유 종목 수는 1 이상의 정수예요.");
+      if (n >= uniqSymbols.length) return fail("bundle_max_positions", `동시 보유 상한은 종목 수(${uniqSymbols.length}개)보다 작아야 의미가 있어요.`);
+    }
+    if (hasEx) {
+      const n = Number(ex);
+      if (!Number.isFinite(n) || n <= 0 || n > 100) return fail("bundle_max_exposure_pct", "총 노출 한도는 0보다 크고 100 이하예요.");
+    }
+    if (!hasMp && !hasEx) return fail("use_bundle_risk", "묶음 한도를 켰으면 동시 보유 상한이나 총 노출 한도를 하나는 정해 주세요.");
+  }
   return null;
 }
 
@@ -416,6 +445,72 @@ function buildEntryFilter(form) {
   }
 }
 
+// 균등 비중 — 합이 정확히 100 이 되게 마지막 몫이 나머지를 받는다. 서버 검증이 합을
+// 0.01 오차로 보므로 떠돌이 소수점을 남기지 않는다.
+export function evenWeights(count) {
+  const n = Math.max(1, Math.floor(Number(count)) || 1);
+  const each = Math.round((100 / n) * 100) / 100;
+  const out = Array.from({ length: n - 1 }, () => each);
+  out.push(Math.round((100 - each * (n - 1)) * 100) / 100);
+  return out;
+}
+
+// 쉼표 문자열 → 빈 칸을 뺀 조각들.
+function splitWeights(raw) {
+  return String(raw ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+}
+
+// 중복을 뺀 종목 목록(입력 순서 유지, 최대 5개) — buildMacro 의 symbols 와 같은 규칙.
+function symbolList(form) {
+  const syms = String(form.symbol || "").split(",").map((s) => s.trim().toUpperCase()).filter(Boolean);
+  return [...new Set(syms)].slice(0, 5);
+}
+
+// 레그 목록 — 비중도 레그별 규칙도 손대지 않았으면 null. 그러면 buildMacro 가 옛 `symbols`
+// 모양을 그대로 내서 기존 매크로가 한 바이트도 달라지지 않는다. 서버가 `legs` 와 `symbols`
+// 를 함께 받지 않으므로 "둘 중 하나" 를 여기서 가른다.
+export function buildLegs(form) {
+  const symbols = symbolList(form);
+  if (symbols.length < 2) return null;
+  const weights = splitWeights(form.leg_weights);
+  // 지금 종목에 해당하고 규칙 타입이 정해진 항목만 센다 — 지운 종목의 찌꺼기는 무시.
+  const rules = {};
+  for (const symbol of symbols) {
+    const rule = form.leg_rules?.[symbol];
+    if (rule && rule.rule_type) rules[symbol] = rule;
+  }
+  const touched = weights.length > 0 || Object.keys(rules).length > 0;
+  if (!touched) return null;
+  const even = evenWeights(symbols.length);
+  return symbols.map((symbol, i) => {
+    const leg = { symbol, weight: weights[i] !== undefined ? Number(weights[i]) : even[i] };
+    const rule = rules[symbol];
+    if (rule) {
+      // 일부 칸만 채운 규칙도 NaN 이 되지 않게 기본값 위에 얹는다. 자금은 본 매크로의 것을 따른다.
+      const full = { ...defaultForm(), initial_capital: form.initial_capital, ...rule };
+      leg.rule_type = rule.rule_type;
+      // 규칙을 바꾸면 params 를 반드시 함께 보낸다(서버 규칙).
+      leg.params = buildParams(rule.rule_type, full);
+      const filter = buildEntryFilter(full);
+      if (filter) leg.entry_filter = filter;
+    }
+    return leg;
+  });
+}
+
+// 묶음 한도 — 체크를 켜고 하나라도 정했을 때만. 아니면 null.
+export function buildBundleRisk(form) {
+  if (!form.use_bundle_risk) return null;
+  const out = {};
+  if (form.bundle_max_positions !== "" && form.bundle_max_positions != null) {
+    out.max_positions = Number(form.bundle_max_positions);
+  }
+  if (form.bundle_max_exposure_pct !== "" && form.bundle_max_exposure_pct != null) {
+    out.max_exposure_pct = Number(form.bundle_max_exposure_pct);
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 export function buildMacro(form) {
   const rt = form.rule_type;
   const meta = RULE_TYPES[rt];
@@ -426,11 +521,18 @@ export function buildMacro(form) {
     .map((s) => s.trim().toUpperCase())
     .filter(Boolean);
   const uniq = [...new Set(syms)];
+  const legs = buildLegs(form);
+  // 한도는 종목이 둘 이상일 때만 의미가 있다.
+  const bundleRisk = uniq.length > 1 ? buildBundleRisk(form) : null;
   return {
     exchange: normalizeExchange(form.exchange),
     quote_currency: quoteForExchange(form.exchange),
     symbol: uniq[0] || "BTCUSDT",
-    symbols: uniq.length > 1 ? uniq.slice(0, 5) : null,
+    // legs 를 쓰면 symbols 는 null — 서버가 둘을 함께 받지 않는다.
+    symbols: !legs && uniq.length > 1 ? uniq.slice(0, 5) : null,
+    // legs · bundle_risk 는 있을 때만 키를 둔다 — 기존 매크로 모양(서명)을 바꾸지 않는다.
+    ...(legs ? { legs } : {}),
+    ...(bundleRisk ? { bundle_risk: bundleRisk } : {}),
     rule_type: rt,
     position_side: rt === "C" || !meta.allowShort ? "long" : form.position_side,
     candle_interval: form.candle_interval || "1d",
@@ -464,6 +566,22 @@ export function macroToForm(macro) {
   const f = defaultForm();
   f.exchange = normalizeExchange(macro.exchange);
   f.symbol = macro.symbols && macro.symbols.length > 1 ? macro.symbols.join(", ") : macro.symbol;
+  if (Array.isArray(macro.legs) && macro.legs.length > 1) {
+    f.symbol = macro.legs.map((leg) => leg.symbol).join(", ");
+    const even = evenWeights(macro.legs.length);
+    const isEven = macro.legs.every((leg, i) => Math.abs(leg.weight - even[i]) < 0.02);
+    // 균등이면 비중 입력을 켜지 않는다 — 사용자가 손대지 않은 것을 손댄 것처럼 보이지 않게.
+    f.leg_weights = isEven ? "" : macro.legs.map((leg) => String(leg.weight)).join(", ");
+    f.leg_rules = {};
+    for (const leg of macro.legs) {
+      if (!leg.rule_type) continue;
+      // legs · symbols 를 지워 넘겨야 재귀가 한 번에 끝난다.
+      f.leg_rules[leg.symbol] = macroToForm({
+        ...macro, rule_type: leg.rule_type, params: leg.params || {},
+        entry_filter: leg.entry_filter || null, legs: null, symbols: null, bundle_risk: null,
+      });
+    }
+  }
   f.rule_type = macro.rule_type;
   f.position_side = macro.position_side;
   f.candle_interval = macro.candle_interval ?? "1d";
@@ -484,6 +602,11 @@ export function macroToForm(macro) {
     else if (ef.kind === "rsi") Object.assign(f, { filter_rsi_period: p.period ?? 14, filter_rsi_min: p.min ?? "", filter_rsi_max: p.max ?? "" });
     else if (ef.kind === "bb") Object.assign(f, { filter_bb_period: p.period ?? 20, filter_bb_num_std: p.num_std ?? 2, filter_bb_zone: p.zone ?? "inside" });
     else Object.assign(f, { filter_vol_period: p.period ?? 20, filter_vol_multiple: p.multiple ?? 2 });
+  }
+  if (macro.bundle_risk) {
+    f.use_bundle_risk = true;
+    f.bundle_max_positions = macro.bundle_risk.max_positions ?? "";
+    f.bundle_max_exposure_pct = macro.bundle_risk.max_exposure_pct ?? "";
   }
   const r = macro.risk || {};
   f.invest_ratio_pct = Math.round((r.invest_ratio ?? 1) * 100);

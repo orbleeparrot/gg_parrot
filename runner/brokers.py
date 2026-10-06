@@ -36,6 +36,7 @@ class Order:
     acquired_qty: float
     fees_known: bool
     order_id: object = None  # 사용자 로그에 남기는 거래소 주문 번호. 응답이 없으면 None
+    raw_status: str = ""     # 거래소가 쓴 낱말 그대로. 사람에게 보고할 때는 접은 status 가 아니라 이걸 쓴다
 
 
 @dataclass(frozen=True)
@@ -223,4 +224,5 @@ class BinanceBroker:
                 acquired = max(0.0, executed - base_fee)
         return Order(status=_fold_status(order.get("status")), executed_qty=executed,
                      avg_price=average, acquired_qty=acquired, fees_known=fees_known,
-                     order_id=order.get("orderId"))
+                     order_id=order.get("orderId"),
+                     raw_status=str(order.get("status", "unknown")))

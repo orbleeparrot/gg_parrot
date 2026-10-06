@@ -656,7 +656,8 @@ class BotThread(threading.Thread):
         # query failed. Never turn that uncertainty into a flat snapshot.
         self.in_position = (self.held_qty > 0 and not dust_only) or self.position_uncertain
         if order.status != "FILLED" or self.position_uncertain or (closing and self.in_position and not partial_close):
-            raise RuntimeError(f"주문 상태 {order.status} — 체결 완료를 확인하지 못했습니다. 거래소에서 주문과 포지션을 확인하세요.")
+            # 사람이 거래소에서 직접 확인할 때 쓰는 문구다. 판정은 접은 status 로 하고, 보고는 거래소가 쓴 낱말로 한다.
+            raise RuntimeError(f"주문 상태 {order.raw_status} — 체결 완료를 확인하지 못했습니다. 거래소에서 주문과 포지션을 확인하세요.")
         self.log(f"  ✓ {side_word}{' (청산)' if reduce_only else ''} 체결: id={order.order_id} 수량={executed}")
         return True
 

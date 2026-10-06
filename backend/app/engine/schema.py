@@ -241,6 +241,73 @@ _REQUIRED_PARAMS: dict[RuleType, tuple[str, ...]] = {
 _VALID_INTERVALS = frozenset({"1m", "5m", "15m", "1h", "4h", "1d"})
 
 
+# --- 진입 필터 --------------------------------------------------------
+# 기존 규칙의 새 진입에만 걸리는 관문 하나. 스스로 사거나 팔지 않는다.
+class FilterKind(str, enum.Enum):
+    MA = "ma"            # 종가가 이동평균 위/아래
+    RSI = "rsi"          # RSI 가 구간 안
+    BOLLINGER = "bb"     # 볼린저 밴드 기준 위치
+    VOLUME = "volume"    # 거래량이 평균의 N배 이상
+
+
+class MAFilterParams(BaseModel):
+    ma_type: Literal["SMA", "EMA"] = "SMA"
+    period: int = Field(ge=2, le=400)      # WARMUP_CANDLES=500 이 덮는 상한
+    side: Literal["above", "below"]
+
+
+class RSIFilterParams(BaseModel):
+    period: int = Field(default=14, ge=2, le=200)
+    min: Optional[float] = Field(default=None, ge=0, le=100)
+    max: Optional[float] = Field(default=None, ge=0, le=100)
+
+    @model_validator(mode="after")
+    def _check(self) -> "RSIFilterParams":
+        if self.min is None and self.max is None:
+            raise ValueError("rsi filter requires min or max")
+        if self.min is not None and self.max is not None and self.min > self.max:
+            raise ValueError("rsi filter min must not exceed max")
+        return self
+
+
+class BollingerFilterParams(BaseModel):
+    period: int = Field(default=20, ge=2, le=400)
+    num_std: float = Field(default=2.0, gt=0, le=5)
+    zone: Literal["below_lower", "above_upper", "inside"]
+
+
+class VolumeFilterParams(BaseModel):
+    period: int = Field(default=20, ge=2, le=400)
+    multiple: float = Field(gt=0, le=100)
+
+
+_FILTER_PARAMS_MODEL: dict[FilterKind, type[BaseModel]] = {
+    FilterKind.MA: MAFilterParams,
+    FilterKind.RSI: RSIFilterParams,
+    FilterKind.BOLLINGER: BollingerFilterParams,
+    FilterKind.VOLUME: VolumeFilterParams,
+}
+
+
+class EntryFilter(BaseModel):
+    kind: FilterKind
+    params: dict = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _validate(self) -> "EntryFilter":
+        # Macro._validate_new_type 과 같은 모양 — kind 별 모델로 다시 검증하고
+        # model_dump() 로 정규화해 되담는다(기본값 적용·모르는 키 탈락).
+        self.params = _FILTER_PARAMS_MODEL[self.kind](**self.params).model_dump()
+        return self
+
+
+# 실시간에서 캔들을 받는 규칙만 필터를 걸 수 있다. A·B(PositionSim)·C(DcaSim) 는 틱 기반이라
+# 지표를 계산할 데이터가 없고, D 그리드는 사다리 중간을 막으면 팔 짝 없는 매수가 남는다.
+FILTERABLE_TYPES = frozenset({
+    RuleType.E, RuleType.F, RuleType.G, RuleType.H, RuleType.I, RuleType.J, RuleType.K,
+})
+
+
 def required_param_names(rule_type: "RuleType") -> tuple[str, ...]:
     """Params that must be present for this rule type — the schema is the source.
 
@@ -279,6 +346,7 @@ class Macro(BaseModel):
     risk: Risk = Field(default_factory=Risk)
     period: Period = Field(default_factory=Period)
     fees: Fees = Field(default_factory=Fees)
+    entry_filter: Optional[EntryFilter] = None
     created_at: Optional[str] = None
 
     # Demo cap on how many symbols one portfolio macro may span.
@@ -339,6 +407,11 @@ class Macro(BaseModel):
             raise ValueError(f"leverage must be <= {MAX_LEVERAGE}")
         if self.rule_type is RuleType.C and self.leverage != 1:
             raise ValueError("rule_type C (DCA) does not support leverage (must be 1)")
+
+        if self.entry_filter is not None and self.rule_type not in FILTERABLE_TYPES:
+            raise ValueError(
+                f"rule_type {self.rule_type.value} does not support entry_filter"
+            )
 
         if self.rule_type in _PARAMS_MODEL:
             self._validate_new_type()

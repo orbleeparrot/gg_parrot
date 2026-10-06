@@ -4,6 +4,7 @@ import SimBadge from "../components/SimBadge.jsx";
 import RegisterMacroModal from "../components/RegisterMacroModal.jsx";
 import ChatBox from "../components/ChatBox.jsx";
 import ConfirmDialog from "../components/ConfirmDialog.jsx";
+import { useModalLayer } from "../hooks/useModalLayer.js";
 import AppToast from "../components/AppToast.jsx";
 import { PageHeader, EmptyState, Loading, ErrorNote } from "../components/Page.jsx";
 import { api } from "../api.js";
@@ -358,6 +359,8 @@ function AccountLeaderboard() {
     const height = 8 + 38 * rowMenuItems(entry).length;
     setRowMenu({
       entry,
+      // 메뉴를 닫으면 이 행으로 포커스를 돌려준다(키보드 위치가 문서 처음으로 튀지 않게).
+      anchor: event.currentTarget?.closest?.(".lb-row") || event.currentTarget,
       x: Math.max(8, Math.min(x, window.innerWidth - width - 8)),
       y: Math.max(8, Math.min(y, window.innerHeight - height - 8)),
     });
@@ -388,19 +391,18 @@ function AccountLeaderboard() {
     openRowMenu(event, entry);
   }
 
+  const rowMenuRef = useRef(null);
+  useModalLayer({ open: Boolean(rowMenu), ref: rowMenuRef, onEscape: () => { rowMenu?.anchor?.focus?.({ preventScroll: true }); setRowMenu(null); }, restoreFocus: false });
   useEffect(() => {
     if (!rowMenu) return undefined;
     const close_ = () => setRowMenu(null);
     const onPointer = (event) => { if (!event.target.closest?.(".lb-menu")) close_(); };
-    const onKey = (event) => { if (event.key === "Escape") { event.preventDefault(); close_(); } };
     document.addEventListener("pointerdown", onPointer);
-    document.addEventListener("keydown", onKey);
     window.addEventListener("resize", close_);
     window.addEventListener("scroll", close_, true);
     document.querySelector(".lb-menu button")?.focus();
     return () => {
       document.removeEventListener("pointerdown", onPointer);
-      document.removeEventListener("keydown", onKey);
       window.removeEventListener("resize", close_);
       window.removeEventListener("scroll", close_, true);
     };
@@ -408,6 +410,8 @@ function AccountLeaderboard() {
 
   function runRowMenu(action) {
     const entry = rowMenu?.entry;
+    // 확인창이 '연 요소'로 행을 기억하도록 먼저 행에 포커스를 둔다 — 취소하면 그 행으로 돌아온다.
+    rowMenu?.anchor?.focus?.({ preventScroll: true });
     setRowMenu(null);
     if (!entry) return;
     if (action === "copy") { sendOpen(entry.id); copyToBuilder(entry); }
@@ -528,13 +532,18 @@ function AccountLeaderboard() {
       ) : null}
 
       {busy && <Loading />}
-      {error && <ErrorNote>오류: {error}</ErrorNote>}
+      {error && (
+        <ErrorNote>
+          순위를 불러오지 못했어요: {error}{" "}
+          <button type="button" className="btn btn-s btn-secondary" onClick={() => refreshBoard()}>다시 불러오기</button>
+        </ErrorNote>
+      )}
       {!busy && board.preparing && (
         <p className="notice-good mb-5" role="status">
           {board.stale ? "오늘의 순위를 준비하고 있어요. 마지막으로 완료된 순위를 보여드려요." : "오늘의 순위를 준비하고 있어요. 잠시 후 자동으로 표시돼요."}
         </p>
       )}
-      {!busy && !board.preparing && items.length === 0 && (
+      {!busy && !error && !board.preparing && items.length === 0 && (
         <EmptyState title="아직 등록된 매크로가 없어요">
           위 <b className="text-slate-900">매크로 만들기</b>에서 조건을 정하고 결과를 확인한 뒤 등록할 수 있어요.
         </EmptyState>
@@ -547,7 +556,8 @@ function AccountLeaderboard() {
         <div className={`lb-board${!quickRunMode && !items.some((e) => e.locked) ? " is-lean-actions" : ""}`} role="table" aria-label="오늘의 리더보드">
           <div className="lb-row lb-row-head" role="row">
             <span role="columnheader" className="lb-col-rank">순위</span>
-            <span aria-hidden="true" className="lb-col-coin" />
+            {/* 행마다 로고 칸(cell)이 있으니 머리글도 하나 — 숨기면 칸이 한 칸씩 밀려 읽힌다. */}
+            <span role="columnheader" className="lb-col-coin"><span className="sr-only">종목</span></span>
             <span role="columnheader" className="lb-col-name">매크로</span>
             <span role="columnheader" className="lb-col-summary">전략</span>
             <span role="columnheader" className="lb-col-return">
@@ -686,17 +696,20 @@ function AccountLeaderboard() {
 
       {rowMenu && (
         <div
+          ref={rowMenuRef}
           className="chat-menu lb-menu"
           role="menu"
           aria-label={`${rowMenu.entry.username || rowMenu.entry.nickname} 매크로 메뉴`}
           style={{ "--menu-x": `${rowMenu.x}px`, "--menu-y": `${rowMenu.y}px` }}
           onContextMenu={(event) => event.preventDefault()}
           onKeyDown={(event) => {
-            if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+            if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
             event.preventDefault();
             const buttons = [...event.currentTarget.querySelectorAll("button")];
             const at = buttons.indexOf(document.activeElement);
-            buttons[(at + (event.key === "ArrowDown" ? 1 : buttons.length - 1)) % buttons.length]?.focus();
+            const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1
+              : (at + (event.key === "ArrowDown" ? 1 : buttons.length - 1)) % buttons.length;
+            buttons[next]?.focus();
           }}
         >
           {rowMenuItems(rowMenu.entry).map((action) => (

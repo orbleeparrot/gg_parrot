@@ -84,7 +84,8 @@ for (const status of [401, 429, 503]) {
       calls += 1;
       return Response.json({ detail: "Application response" }, { status });
     });
-    await assert.rejects(api.myDashboard(), { status, message: "Application response" });
+    // 영어 원문은 사용자 문장으로 바꾸고 원문은 detail 에 남긴다(lib/apiError.js).
+    await assert.rejects(api.myDashboard(), (error) => error.status === status && error.detail === "Application response" && /[가-힣]/.test(error.message));
     assert.equal(calls, 1);
   });
 }
@@ -99,7 +100,7 @@ test("unexpected HTML 200 retains NON_JSON_RESPONSE and is not retried", async (
 test("a fetch TypeError is not blanket-retried", async (t) => {
   let calls = 0;
   t.mock.method(globalThis, "fetch", async () => { calls += 1; throw new TypeError("Failed to fetch"); });
-  await assert.rejects(api.symbols(), { name: "TypeError", message: "Failed to fetch" });
+  await assert.rejects(api.symbols(), { code: "NETWORK", message: "인터넷 연결을 확인하고 다시 시도해 주세요.", detail: "Failed to fetch" });
   assert.equal(calls, 1);
 });
 

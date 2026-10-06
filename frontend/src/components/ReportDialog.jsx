@@ -1,4 +1,5 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
+import { useModalLayer } from "../hooks/useModalLayer.js";
 import { createPortal } from "react-dom";
 import { api } from "../api.js";
 import "./ReportDialog.css";
@@ -20,14 +21,13 @@ export default function ReportDialog({ open, targetType, targetId, label, onClos
   const [err, setErr] = useState("");
   const [done, setDone] = useState(false);
 
+  const formRef = useRef(null);
   useEffect(() => {
-    if (!open) return undefined;
+    if (!open) return;
     setReason("spam"); setDetail(""); setErr(""); setDone(false);
-    const onKey = (e) => { if (e.key === "Escape" && !busy) { e.preventDefault(); onClose?.(); } };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+  // Esc·포커스는 공용 겹 — 보내는 중(busy)에는 닫히지 않는다(예전엔 처음 값 false 에 묶여 있었다).
+  useModalLayer({ open, ref: formRef, onEscape: () => onClose?.(), busy, trap: true });
 
   if (!open) return null;
 
@@ -46,7 +46,7 @@ export default function ReportDialog({ open, targetType, targetId, label, onClos
 
   return createPortal(
     <div className="scrim fixed inset-0 z-90 grid place-items-center p-4" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose?.(); }}>
-      <form role="dialog" aria-modal="true" aria-labelledby={titleId} className="dialog confirm-dialog report-dialog" onSubmit={submit}>
+      <form ref={formRef} role="dialog" aria-modal="true" aria-labelledby={titleId} className="dialog confirm-dialog report-dialog" onSubmit={submit}>
         <h2 id={titleId} className="t-h4 text-slate-900">{label} 신고</h2>
         {done ? (
           <>

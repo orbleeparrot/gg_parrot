@@ -1385,7 +1385,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
           <span className="num">{String(progressIndex + 1).padStart(2, "0")} / {String(progressChapters.length).padStart(2, "0")}</span>
           <strong>{progressChapters[progressIndex]}</strong>
         </div>
-        <div className="runner-wizard-progress-track" role="progressbar" aria-valuemin="1" aria-valuemax={progressChapters.length} aria-valuenow={progressIndex + 1}>
+        <div className="runner-wizard-progress-track" role="progressbar" aria-label="빠른 실행 진행률" aria-valuemin="1" aria-valuemax={progressChapters.length} aria-valuenow={progressIndex + 1} aria-valuetext={`${progressChapters[progressIndex]}, ${progressChapters.length}단계 중 ${progressIndex + 1}단계`}>
           <span style={{ "--fill": `${((progressIndex + 1) / progressChapters.length) * 100}%` }} />
         </div>
         <ol aria-hidden="true">

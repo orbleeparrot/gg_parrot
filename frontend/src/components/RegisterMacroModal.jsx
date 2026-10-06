@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useModalLayer } from "../hooks/useModalLayer.js";
 import { useLocation, useNavigate } from "react-router-dom";
 import Builder from "./Builder.jsx";
 import { api } from "../api.js";
@@ -88,6 +89,7 @@ export default function RegisterMacroModal({
   const valErr = validate(form);
   const macro = useMemo(() => buildMacro(form), [form]);
 
+  useModalLayer({ open, ref: dialogRef, onEscape: () => onCloseRef.current(), busy, trap: false, lockScroll: false, restoreFocus: false });
   useEffect(() => {
     if (!open) return;
     previousFocusRef.current = document.activeElement;
@@ -104,11 +106,7 @@ export default function RegisterMacroModal({
     window.setTimeout(() => closeButtonRef.current?.focus(), 0);
 
     const onKeyDown = (event) => {
-      if (event.key === "Escape" && !busyRef.current) {
-        event.preventDefault();
-        onCloseRef.current();
-        return;
-      }
+      // Esc 는 공용 겹(useModalLayer)이 맨 위 한 겹만 받는다 — 안의 ⓘ 말풍선이 열려 있으면 그것부터.
       if (event.key !== "Tab") return;
       const focusable = Array.from(dialogRef.current?.querySelectorAll(FOCUSABLE) || []);
       if (focusable.length === 0) {

@@ -445,6 +445,8 @@ function AccountAgents() {
 
   return (
     <div className="agent-page">
+      {/* 화면 제목은 두지 않는 디자인(DESIGN.md §9) — 문서 구조와 화면 읽기 프로그램을 위한 제목만. */}
+      <h1 className="sr-only">내 에이전트</h1>
       {!streamConnected && sessions ? <p className="t-caption text-slate-500" role="status">실시간 연결 복구 중 · 5초마다 실행 상태 확인</p> : null}
       {error ? (
         <ErrorNote>

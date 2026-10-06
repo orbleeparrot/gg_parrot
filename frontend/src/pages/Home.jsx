@@ -207,6 +207,7 @@ function HomeHeroRotator({ onLeaderboard, onAsk, paused = false }) {
   const [direction, setDirection] = useState(1);
   const [timerCycle, setTimerCycle] = useState(0);
   const [interactionPaused, setInteractionPaused] = useState(false);
+  const [hoverPaused, setHoverPaused] = useState(false);
   const [documentHidden, setDocumentHidden] = useState(false);
   const [reducedMotion, setReducedMotion] = useState(false);
 
@@ -236,6 +237,7 @@ function HomeHeroRotator({ onLeaderboard, onAsk, paused = false }) {
   const autoRotationBlocked = mobile
     || paused
     || interactionPaused
+    || hoverPaused
     || documentHidden
     || reducedMotion;
 
@@ -277,6 +279,9 @@ function HomeHeroRotator({ onLeaderboard, onAsk, paused = false }) {
       aria-roledescription="캐러셀"
       aria-label="껄무새 소개"
       onFocusCapture={() => setInteractionPaused(true)}
+      // 읽는 동안(마우스를 올린 동안)에도 넘기지 않는다 — WCAG 2.2.2.
+      onMouseEnter={() => setHoverPaused(true)}
+      onMouseLeave={() => setHoverPaused(false)}
       onBlurCapture={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget)) setInteractionPaused(false);
       }}
@@ -573,7 +578,7 @@ function AccountHome() {
               >
                 <span id="onboarding-dialog-title" className="t-title text-slate-900">껄무새 가이드라인</span>
               </button>
-              <button type="button" onClick={closeOverlay} className="onboarding-close" aria-label="껄무새 가이드라인 닫기">
+              <button type="button" onClick={closeOverlay} className="onboarding-close" aria-label="나중에 이어보기 · 가이드 닫기">
                 <span className="hidden sm:inline">나중에 이어보기</span>
                 <Icon name="x" size={16} />
               </button>

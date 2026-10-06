@@ -8,7 +8,7 @@ import HotCoinsMarquee from "./components/HotCoinsMarquee.jsx";
 import SiteNavigation from "./components/SiteNavigation.jsx";
 import SiteHeader from "./components/SiteHeader.jsx";
 import DevNoteDialog from "./components/DevNoteDialog.jsx";
-import RouteErrorBoundary from "./components/RouteErrorBoundary.jsx";
+import RouteErrorBoundary, { ShellBoundary } from "./components/RouteErrorBoundary.jsx";
 import { recordVisit } from "./lib/visit.js";
 
 // Keep the first screen small and quick. The builder, charts, guide, and
@@ -62,6 +62,10 @@ function RouteChangeEffects() {
       ? "빠른 실행"
       : pathname.startsWith("/login")
       ? "로그인"
+      : pathname.startsWith("/forgot")
+      ? "비밀번호 찾기"
+      : pathname.startsWith("/reset")
+      ? "비밀번호 재설정"
       : pathname.startsWith("/admin")
       ? "관리자 대시보드"
       : "껄무새";
@@ -150,19 +154,21 @@ export default function App() {
     <div className={`${isStart ? "home-shell" : "min-h-screen"} ${authShell ? "site-auth-layout" : "site-product-layout"}${hasMarquee ? " has-site-marquee" : ""}`}>
       <a href="#main-content" className="skip-link">본문으로 건너뛰기</a>
       {authShell ? null : (
-        <SiteNavigation mobileOpen={mobileNavigationOpen} onClose={closeMobileNavigation} triggerRef={menuButtonRef} />
+        <ShellBoundary name="navigation"><SiteNavigation mobileOpen={mobileNavigationOpen} onClose={closeMobileNavigation} triggerRef={menuButtonRef} /></ShellBoundary>
       )}
       <div
         className={authShell ? "site-frame is-auth" : "site-frame"}
         inert={mobileNavigationOpen ? "" : undefined}
         aria-hidden={mobileNavigationOpen || undefined}
       >
-        <SiteHeader
-          hasSidebar={!authShell}
-          onOpenNavigation={() => setMobileNavigationOpen(true)}
-          menuButtonRef={menuButtonRef}
-          navigationOpen={mobileNavigationOpen}
-        />
+        <ShellBoundary name="header">
+          <SiteHeader
+            hasSidebar={!authShell}
+            onOpenNavigation={() => setMobileNavigationOpen(true)}
+            menuButtonRef={menuButtonRef}
+            navigationOpen={mobileNavigationOpen}
+          />
+        </ShellBoundary>
         {/* [차후 도입] <WhaleBanner /> */}
         <main
           id="main-content"
@@ -182,7 +188,7 @@ export default function App() {
                 : "site-main py-6 sm:py-8"}
         >
           <RouteChangeEffects />
-          <DevNoteDialog />
+          <ShellBoundary name="devnote"><DevNoteDialog /></ShellBoundary>
           <RouteErrorBoundary>
           <Suspense fallback={<RouteLoading />}>
             <Routes>
@@ -213,7 +219,7 @@ export default function App() {
           </Suspense>
           </RouteErrorBoundary>
         </main>
-        {hasMarquee ? <HotCoinsMarquee /> : null}
+        {hasMarquee ? <ShellBoundary name="marquee"><HotCoinsMarquee /></ShellBoundary> : null}
       </div>
     </div>
   );

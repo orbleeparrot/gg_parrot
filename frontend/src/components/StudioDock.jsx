@@ -94,7 +94,7 @@ export function StudioBacktest({ result: r, perSymbol, periodLabel, symbol, leve
       <div className="sd-kpis">
         {kpis.map((kpi) => (
           <div key={kpi.k} className="sd-kpi">
-            <div className="sd-kpi-k"><span className="sd-kpi-cap">{kpi.k}</span>{kpi.term && <InfoTooltip term={kpi.term} />}</div>
+            <div className="sd-kpi-k"><span className="sd-kpi-cap">{kpi.k}</span>{kpi.term && <InfoTooltip term={kpi.term} label={`${kpi.k} 설명`} />}</div>
             <div className={"sd-kpi-v num " + kpi.cls} title={kpi.title}>{kpi.v}</div>
             {kpi.d && <div className="sd-kpi-d">{kpi.d}</div>}
           </div>

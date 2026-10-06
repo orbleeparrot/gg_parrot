@@ -6,7 +6,7 @@ import { ShieldCheckIcon } from "@phosphor-icons/react/dist/csr/ShieldCheck";
 import { api } from "../api.js";
 import { clearAuth, getAuthUser, getToken, mergeFetchedAuthUser, setAuth, updateAuthUser, useAuth } from "../lib/auth.js";
 import ProfileEditor, { DeleteAccountDialog, PasswordChangeDialog } from "../components/ProfileEditor.jsx";
-import { RunnerKeyPanel } from "../components/RunnerSessions.jsx";
+import { RunnerKeyPanel } from "../components/RunnerKeyPanel.jsx";
 import "./ProfileSettings.css";
 
 function hasProfile(user) {

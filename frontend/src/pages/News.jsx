@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api.js";
 import useFitLines from "../hooks/useFitLines.js";
@@ -82,7 +82,7 @@ function useCoinNewsBriefings(coins) {
   return { newsBySymbol, retry };
 }
 
-function BriefingSectionHeader({ id, title, description, count, countLabel, pendingLabel, actions = null }) {
+function BriefingSectionHeader({ id, title, description, count, countLabel, pendingLabel, failed = false, actions = null }) {
   return (
     <header className="news-briefing-section-head">
       <div className="news-briefing-section-title">
@@ -94,7 +94,8 @@ function BriefingSectionHeader({ id, title, description, count, countLabel, pend
         {Number.isFinite(count) && count > 0 ? (
           <><strong className="num">{count}</strong><span>개 {countLabel}</span></>
         ) : (
-          <span>{pendingLabel}</span>
+          // 받아 오기에 실패했으면 '확인 중'으로 남겨 두지 않는다.
+          <span>{failed ? "확인하지 못했어요" : pendingLabel}</span>
         )}
       </span>
     </header>
@@ -129,10 +130,16 @@ function MarketBriefing({ market, loading, error, onRetry }) {
         count={market?.items?.length || 0}
         countLabel="헤드라인"
         pendingLabel="새 소식 확인 중"
+        failed={Boolean(error) && !readerItems.length}
       />
 
       {loading ? <Loading label="시장 브리핑을 준비하는 중…" /> : null}
-      {error && !readerItems.length ? <ErrorNote>시장 뉴스를 불러오지 못했어요: {error}</ErrorNote> : null}
+      {error && !readerItems.length ? (
+        <ErrorNote>
+          시장 뉴스를 불러오지 못했어요: {error}{" "}
+          <button type="button" className="btn btn-s btn-secondary" onClick={onRetry}>다시 불러오기</button>
+        </ErrorNote>
+      ) : null}
       {error && readerItems.length > 0 ? <NewsRefreshRetry onRetry={onRetry} /> : null}
 
       {market ? (
@@ -251,7 +258,7 @@ function TileNews({ base, newsState, tick, onRetry, symbol, lines }) {
 }
 
 // 경주마 트리맵 — 한 직사각형을 상승률 비율로 나눈 벤토. 타일은 유리(§7 상단바와 같은 값), 색면 없음.
-function RacerTreemap({ coins, newsBySymbol, onRetry, tick }) {
+function RacerTreemap({ coins, newsBySymbol, onRetry, tick, onHold }) {
   const ref = useRef(null);
   const size = useElementSize(ref);
   const rects = useMemo(() => layoutTreemap(
@@ -261,7 +268,17 @@ function RacerTreemap({ coins, newsBySymbol, onRetry, tick }) {
   ), [coins, size.width, size.height]);
 
   return (
-    <div ref={ref} className="news-racer-map" role="list" aria-label="경주마 상승률 지도 — 넓을수록 오늘 많이 오른 종목">
+    <div
+      ref={ref}
+      className="news-racer-map"
+      role="list"
+      aria-label="경주마 상승률 지도 — 넓을수록 오늘 많이 오른 종목"
+      // 읽거나 누르려는 동안(마우스·키보드 포커스)에는 헤드라인을 넘기지 않는다 — 포커스한 링크가 5초마다 사라졌다.
+      onMouseEnter={() => onHold?.("pointer", true)}
+      onMouseLeave={() => onHold?.("pointer", false)}
+      onFocus={() => onHold?.("focus", true)}
+      onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) onHold?.("focus", false); }}
+    >
       {size.width > 0 ? rects.map(({ x, y, width, height, item }) => {
         const { coin, rank } = item;
         const base = coinOf(coin.symbol);
@@ -344,11 +361,13 @@ function RacerMobileList({ coins, newsBySymbol, onRetry, selectedSymbol, onSelec
           const changeText = `${change > 0 ? "+" : ""}${change.toFixed(2)}%`;
           return (
             <li key={coin.symbol}>
-              <button type="button" className="news-racer-mobile-row" aria-pressed={selected.symbol === coin.symbol} aria-controls="news-racer-mobile-reader" aria-label={`${index + 1}위 ${symbol}, ${formatPrice(coin.last_price)} USDT, ${changeText}, 뉴스 보기`} onClick={() => choose(coin.symbol)}>
+              <button type="button" className="news-racer-mobile-row" aria-pressed={selected.symbol === coin.symbol} aria-controls="news-racer-mobile-reader" onClick={() => choose(coin.symbol)}>
                 <span className="news-racer-mobile-rank num">{index + 1}</span>
                 <span className="news-racer-mobile-coin"><CoinIcon symbol={coin.symbol} size={24} alt="" /><b className="num">{prefixed ? <>{prefixed[1]}<wbr />{prefixed[2]}</> : symbol}</b></span>
                 <span className="news-racer-mobile-price num">{formatPrice(coin.last_price)}</span>
                 <span className={`news-racer-mobile-change num ${tone}`}>{changeText}</span>
+                {/* 이름은 보이는 글자 그대로(순위·종목·가격·등락) + 무엇을 하는 버튼인지만 덧붙인다 — WCAG 2.5.3 */}
+                <span className="sr-only">, 뉴스 보기</span>
               </button>
             </li>
           );
@@ -413,7 +432,7 @@ function MobileArticleList({ base, items }) {
   );
 }
 
-function RacerBriefing({ coins, loading, error }) {
+function RacerBriefing({ coins, loading, error, onRetry }) {
   const [contentScope, setContentScope] = useState("news");
   const mobile = useSyncExternalStore(subscribeMobileNews, mobileNewsSnapshot, () => false);
   const [selectedSymbol, setSelectedSymbol] = useState(null);
@@ -427,13 +446,20 @@ function RacerBriefing({ coins, loading, error }) {
     newsBySymbol[coin.symbol]?.data?.items || []
   ).map((item) => item.title));
 
-  // 한 박자 — 모든 타일의 헤드라인이 같은 순간에 다음 기사로 넘어간다. 탭이 숨겨지면 멈춘다.
+  // 한 박자 — 모든 타일의 헤드라인이 같은 순간에 다음 기사로 넘어간다. 탭이 숨겨지면 멈추고,
+  // 지도 위에 마우스·포커스가 있는 동안(holdRef)과 '움직임 줄이기' 설정에서는 넘기지 않는다(WCAG 2.2.2).
+  const holdRef = useRef({ pointer: false, focus: false });
+  const hold = useCallback((reason, on) => { holdRef.current[reason] = on; }, []);
   useEffect(() => {
     if (!coins.length || mobile) return undefined;
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return undefined;
     let timer = 0;
     const start = () => {
       window.clearInterval(timer);
-      timer = window.setInterval(() => setTick((value) => value + 1), RACER_NEWS_ROTATE_MS);
+      timer = window.setInterval(() => {
+        if (holdRef.current.pointer || holdRef.current.focus) return;
+        setTick((value) => value + 1);
+      }, RACER_NEWS_ROTATE_MS);
     };
     const onVisibility = () => {
       if (document.hidden) window.clearInterval(timer);
@@ -456,6 +482,7 @@ function RacerBriefing({ coins, loading, error }) {
         count={coins.length}
         countLabel="종목"
         pendingLabel="시장 확인 중"
+        failed={Boolean(error) && coins.length === 0}
         actions={<ContentFilter value={contentScope} onChange={setContentScope} />}
       />
       {contentScope !== "news" ? (
@@ -463,7 +490,12 @@ function RacerBriefing({ coins, loading, error }) {
       ) : null}
 
       {loading ? <Loading label="오늘의 경주마를 확인하는 중…" /> : null}
-      {error ? <ErrorNote>경주마 정보를 불러오지 못했어요: {error}</ErrorNote> : null}
+      {error ? (
+        <ErrorNote>
+          경주마 정보를 불러오지 못했어요: {error}{" "}
+          {onRetry ? <button type="button" className="btn btn-s btn-secondary" onClick={() => onRetry(true)}>다시 불러오기</button> : null}
+        </ErrorNote>
+      ) : null}
 
       {!loading && !error && coins.length === 0 ? (
         <div className="news-reader-empty t-small text-slate-500">지금은 보여줄 경주마가 없어요.</div>
@@ -471,7 +503,7 @@ function RacerBriefing({ coins, loading, error }) {
 
       {coins.length > 0 ? (
         <>
-          <RacerTreemap coins={coins} newsBySymbol={newsBySymbol} onRetry={retry} tick={tick} />
+          <RacerTreemap coins={coins} newsBySymbol={newsBySymbol} onRetry={retry} tick={tick} onHold={hold} />
           <RacerMobileList coins={coins} newsBySymbol={newsBySymbol} onRetry={retry}
             selectedSymbol={selected?.symbol} onSelect={setSelectedSymbol} />
           <TermChips texts={termTexts} />
@@ -497,7 +529,7 @@ export default function News() {
   const market = marketState?.data || null;
   const marketLoading = !marketState || ["queued", "loading"].includes(marketState.status);
   const marketError = marketState?.error || "";
-  const { coins, loading: coinsLoading, error: coinsError } = useHotCoins();
+  const { coins, loading: coinsLoading, error: coinsError, refresh: refreshCoins } = useHotCoins();
 
   const summary = market?.overview ? splitSummary(market.overview) : null;
 
@@ -536,7 +568,7 @@ export default function News() {
       </div>
 
       <div className="news-briefing-grid">
-        <RacerBriefing coins={coins} loading={coinsLoading} error={coinsError} />
+        <RacerBriefing coins={coins} loading={coinsLoading} error={coinsError} onRetry={(force) => refreshCoins(force).catch(() => {})} />
       </div>
     </div>
   );

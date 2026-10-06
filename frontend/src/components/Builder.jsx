@@ -72,7 +72,7 @@ function Field({ label, term, children, hint, anchor, wide = false, name, error 
           ) : (
             <span id={labelId}>{label}</span>
           )}
-          {term && <InfoTooltip term={term} />}
+          {term && <InfoTooltip term={term} label={typeof label === "string" ? `${label} 설명` : undefined} />}
         </div>
         {renderedControl}
         {/* 오류와 설명은 서브그리드의 셋째 줄 한 칸을 같이 쓴다 — 따로 두면 넷째 항목이 칸 밖으로 넘쳐 겹쳤다. */}
@@ -101,7 +101,7 @@ function Field({ label, term, children, hint, anchor, wide = false, name, error 
         ) : (
           <span id={labelId}>{label}</span>
         )}
-        {term && <InfoTooltip term={term} />}
+        {term && <InfoTooltip term={term} label={typeof label === "string" ? `${label} 설명` : undefined} />}
       </div>
       {renderedControl}
       {error && <div id={errorId} className="t-small font-semibold text-amber-700 mt-2" role="alert">{error}</div>}
@@ -119,7 +119,7 @@ function Group({ title, term, children, note, anchor }) {
       <section className="bd-sec" data-tour={anchor}>
         <div className="bd-h">
           <h3>{title}</h3>
-          {term && <InfoTooltip term={term} />}
+          {term && <InfoTooltip term={term} label={typeof title === "string" ? `${title} 설명` : undefined} />}
           {note}
         </div>
         {children}
@@ -130,7 +130,7 @@ function Group({ title, term, children, note, anchor }) {
     <section className="pt-5 border-t border-slate-200" data-tour={anchor}>
       <div className="flex items-center text-slate-700 mb-3">
         <h3 className="t-title">{title}</h3>
-        {term && <InfoTooltip term={term} />}
+        {term && <InfoTooltip term={term} label={typeof title === "string" ? `${title} 설명` : undefined} />}
         {note}
       </div>
       {children}
@@ -363,7 +363,7 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
         <input id={`${instanceId}-${k}`} type="checkbox" checked={!!form[k]} onChange={setChk(k)} />
         {label}
       </label>
-      {opts.term && <InfoTooltip term={opts.term} />}
+      {opts.term && <InfoTooltip term={opts.term} label={typeof label === "string" ? `${label} 설명` : undefined} />}
     </div>
   );
   // 체크박스가 딸린 숫자 칸 — 촘촘한 판에서는 라벨의 "(단위)" 를 칸 안 접미사로 옮긴다.
@@ -700,7 +700,7 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
           {num("invest_ratio_pct", "한 번에 사용할 자금 (%)", { term: "invest_ratio", hint: "시작 자금 중 한 번에 얼마를 쓸지 정해요" })}
           <Field name="stop_loss_pct" error={errOf("stop_loss_pct")} label={unitLabel("손절 기준 (%)")} term="stop_loss" hint={isShort && (rt === "A" || rt === "B") ? "숏은 손절이 필수예요" : "사용하지 않으려면 체크를 풀어요"}>
             <div className="flex items-center gap-2">
-              <input aria-label="손절 기준 사용" type="checkbox" checked={form.use_stop_loss} disabled={isShort && (rt === "A" || rt === "B")} onChange={setChk("use_stop_loss")} />
+              <label className="bd-check-hit"><input aria-label="손절 기준 사용" type="checkbox" checked={form.use_stop_loss} disabled={isShort && (rt === "A" || rt === "B")} onChange={setChk("use_stop_loss")} /></label>
               {unitInput(
                 <input aria-label="손절률 (%)" className={fieldCls("stop_loss_pct", "field num")} type="number" value={form.stop_loss_pct} disabled={!form.use_stop_loss} onChange={set("stop_loss_pct")} aria-invalid={errOf("stop_loss_pct") ? true : undefined} />,
                 "%",
@@ -724,7 +724,7 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
             <div className={g3m}>
               <Field label={unitLabel("하루 최대 손실 (%)")} term="daily_max_loss" hint={isDca ? "도달하면 그날 추가 매수를 멈춰요" : "도달하면 그날 거래를 멈춰요"}>
                 <div className="flex items-center gap-2">
-                  <input aria-label="하루 최대 손실 사용" type="checkbox" checked={form.use_daily_max_loss} onChange={setChk("use_daily_max_loss")} />
+                  <label className="bd-check-hit"><input aria-label="하루 최대 손실 사용" type="checkbox" checked={form.use_daily_max_loss} onChange={setChk("use_daily_max_loss")} /></label>
                   {unitInput(
                     <input aria-label="하루 최대 손실률 (%)" className="field num" type="number" value={form.daily_max_loss_pct} disabled={!form.use_daily_max_loss} onChange={set("daily_max_loss_pct")} />,
                     "%",
@@ -733,7 +733,7 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
               </Field>
               <Field label="가장 오래 보유할 시간" term="max_holding" hint={isDca ? "분할매수에는 사용하지 않아요" : "이 시간을 넘기면 강제로 정리해요"}>
                 <div className="flex items-center gap-2">
-                  <input aria-label="최대 보유시간 사용" type="checkbox" checked={!isDca && form.use_max_holding} disabled={isDca} onChange={setChk("use_max_holding")} />
+                  <label className="bd-check-hit"><input aria-label="최대 보유시간 사용" type="checkbox" checked={!isDca && form.use_max_holding} disabled={isDca} onChange={setChk("use_max_holding")} /></label>
                   {unitInput(
                     <input aria-label="최대 보유시간 (시간)" className="field num" type="number" value={form.max_holding_hours} disabled={isDca || !form.use_max_holding} onChange={set("max_holding_hours")} />,
                     "시간",

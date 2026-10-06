@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useModalLayer } from "../hooks/useModalLayer.js";
 import { Icon } from "./icons.jsx";
 
 // 가벼운 프로덕트 투어(온보딩). steps 의 각 항목이 data-tour="<anchor>" 요소를
@@ -160,12 +161,14 @@ export default function ProductTour({ steps, open, onClose }) {
     setCardPos({ top, left });
   }, [open, rect, index, step]);
 
-  // 키보드: Esc 종료, ←/→ 이동.
+  // 키보드: Esc 종료(공용 겹), ←/→ 이동 — 입력 칸에서 커서를 옮기는 화살표는 건드리지 않는다.
+  useModalLayer({ open: open && Boolean(step), ref: cardRef, onEscape: onClose, trap: true, lockScroll: false });
   useEffect(() => {
     if (!open) return undefined;
     const onKey = (event) => {
-      if (event.key === "Escape") { event.preventDefault(); onClose(); }
-      else if (event.key === "ArrowRight") next();
+      const target = event.target;
+      if (target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))) return;
+      if (event.key === "ArrowRight") next();
       else if (event.key === "ArrowLeft") prev();
     };
     window.addEventListener("keydown", onKey);

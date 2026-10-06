@@ -4,7 +4,7 @@ import { api } from "../api.js";
 import { useAuth } from "../lib/auth.js";
 import BoardBodyEditor from "../components/BoardBodyEditor.jsx";
 import { editPath, writePath } from "../lib/boardPaths.js";
-import { ErrorNote } from "../components/Page.jsx";
+import { ErrorNote, Loading } from "../components/Page.jsx";
 import "./Board.css";
 
 const MAX_IMAGES = 10;
@@ -99,6 +99,10 @@ export default function BoardWrite() {
     if (!token) navigate(editing ? `/login?next=${encodeURIComponent(editPath(id))}` : writePath(null), { replace: true });
   }, [editing, id, navigate, token]);
 
+  // 글은 글 번호·계정이 바뀔 때만 다시 받는다. 예전엔 user '객체'에 걸려 있어서, 다른 탭의 포인트 갱신처럼
+  // 같은 계정의 정보만 바뀌어도 다시 받아 편집기를 새로 만들었고 — 쓰던 제목·본문·사진이 사라졌다.
+  const userId = user?.id ?? null;
+  const [reloadKey, setReloadKey] = useState(0);
   useEffect(() => {
     if (!editing || !token) return undefined;
     let alive = true;
@@ -106,14 +110,16 @@ export default function BoardWrite() {
     setLoadError("");
     api.boardGet(id).then((post) => {
       if (!alive) return;
-      if (!user || post.author_user_id !== user.id) {
+      if (userId == null || post.author_user_id !== userId) {
         navigate(`/board/${id}`, { replace: true }); // 남의 글은 보기로
         return;
       }
       setInitial({ id: post.id, title: post.title, bodyHtml: post.body_html || "", isNotice: !!post.is_notice });
     }).catch((e) => { if (alive) setLoadError(String(e.message || e)); });
     return () => { alive = false; };
-  }, [editing, id, navigate, token, user]);
+    // token 은 같은 계정의 갱신에도 바뀔 수 있어 넣지 않는다(로그아웃은 위 효과가 로그인으로 보낸다).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editing, id, navigate, userId, reloadKey]);
 
   if (!token) return null;
   const backTo = editing ? `/board/${id}` : "/board";
@@ -121,7 +127,13 @@ export default function BoardWrite() {
     <div className="board-post-page board-write">
       <div className="board-post">
         <h1 className="board-post-title">{editing ? "글 수정" : "새 글 쓰기"}</h1>
-        {loadError ? <ErrorNote>글을 불러오지 못했어요: {loadError}</ErrorNote> : null}
+        {loadError ? (
+          <ErrorNote>
+            글을 불러오지 못했어요: {loadError}{" "}
+            <button type="button" className="btn btn-s btn-secondary" onClick={() => setReloadKey((n) => n + 1)}>다시 불러오기</button>
+          </ErrorNote>
+        ) : null}
+        {editing && !initial && !loadError ? <Loading /> : null}
         {!editing || initial ? (
           <Composer
             key={initial?.id || "new"}

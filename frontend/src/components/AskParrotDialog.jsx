@@ -4,6 +4,7 @@
 // 움직임은 토스 모션 값(120 눌림 · 200 전환 · 320 등장, 튕김 없음)만 쓴다 — AskParrotDialog.css.
 import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useReducer, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useModalLayer } from "../hooks/useModalLayer.js";
 import { api } from "../api.js";
 import CoinIcon from "./CoinIcon.jsx";
 import CheckIcon from "./CheckIcon.jsx";
@@ -335,6 +336,7 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
   const narrow = useMedia(NARROW_QUERY);
   const reducedMotion = useMedia("(prefers-reduced-motion: reduce)");
   const titleId = useId();
+  const dialogRef = useRef(null);
   const bodyRef = useRef(null);
   const timers = useRef([]);
   const trackRef = useRef(null);
@@ -408,11 +410,16 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
     if (best !== active) setActive(best);
   };
 
+  // 요청이 도는 중에는 Esc 로도 닫지 못한다(중간 취소 금지). 열려 있는 동안 뒤의 앱은 누를 수 없다 —
+  // 헤더의 종·회원 키를 누르면 스크림이 받아 창이 닫히며 답이 초기화되던 문제.
+  useModalLayer({ open, ref: dialogRef, onEscape: onClose, busy, trap: true, inertRoot: true });
+
   useEffect(() => {
     if (!open) return undefined;
     const onKey = (e) => {
-      // 요청이 도는 중에는 Esc 로도 닫지 못한다(중간 취소 금지).
-      if (e.key === "Escape" && !busy) { onClose(); return; }
+      // Esc 는 공용 겹(useModalLayer)이 받는다. 숫자·화살표는 이 창 안에 포커스가 있을 때만 —
+      // 위에 확인창이 떠 있을 때 아래 선택지가 눌리지 않게.
+      if (!dialogRef.current?.contains(e.target)) return;
       if (e.target instanceof HTMLElement && (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA")) return;
       if (options.length && /^[1-9]$/.test(e.key)) {
         const idx = Number(e.key) - 1;
@@ -649,7 +656,7 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
 
   return createPortal(
     <div className="ask-scrim" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
-      <div role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} className={"ask-dlg" + (wide ? " is-wide" : "")}>
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} className={"ask-dlg" + (wide ? " is-wide" : "")}>
         <header className="ask-head">
           <img src={ASK_MASCOT} alt="" width="28" height="28" className="ask-head-face" aria-hidden="true" />
           <h2 id={titleId} className="ask-title">껄무새에게 물어볼까?</h2>

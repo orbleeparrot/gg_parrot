@@ -730,6 +730,7 @@ function AccountStart({ onNestedDialogChange }) {
         <div
           className="hero-tour-progress-track"
           role="progressbar"
+          aria-label="시작 가이드 진행률"
           aria-valuemin="1"
           aria-valuemax={CHAPTERS.length}
           aria-valuenow={screen.chapter}

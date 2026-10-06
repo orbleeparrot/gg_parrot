@@ -40,6 +40,9 @@
 .builder-dense .bd-details .notice { margin-top: 10px; }
 .builder-dense .bd-check { grid-column: 1 / -1; display: inline-flex; align-items: center; gap: 6px; min-height: 32px; color: rgb(var(--c-slate-700)); font-size: 13px; font-weight: 500; line-height: 1.5; word-break: keep-all; }
 .builder-dense input[type="checkbox"] { flex-shrink: 0; }
+/* 입력칸 옆 사용 체크박스 — 13px 상자는 그대로 두고 누르는 칸만 위아래 12px·좌우 8px(입력칸과의 간격) 넓힌다. */
+.bd-check-hit { position: relative; display: inline-flex; flex: none; }
+.bd-check-hit::before { content: ""; position: absolute; inset: -12px -8px; }
 /* 레버리지 — 슬라이더 · 숫자 · 배 */
 .builder-dense .bd-range { display: flex; align-items: center; gap: 10px; }
 .builder-dense .bd-range input[type="range"] { flex: 1; min-width: 0; }

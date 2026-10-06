@@ -103,3 +103,18 @@ export const GLOSSARY = {
   strat_K:
     "롱을 들고 있다가 정한 만큼 내리면 일부를 정리하고 숏으로 전환해 하락을 방어해요. 선물과 숏을 사용하므로 손절과 청산 위험을 함께 확인해야 해요.",
 };
+
+// 용어 말풍선(ⓘ)의 접근 이름 — "설명 보기"가 화면에 수십 개 반복되면 화면 읽기 사용자는 무엇의 설명인지 모른다.
+export const TERM_NAMES = {
+  symbols: "종목", position: "포지션", long: "롱", short: "숏", take_profit: "익절", stop_loss: "손절",
+  avg_price: "평단", limit_order: "지정가", dca: "정기 분할매수", invest_ratio: "투입 비율", commission: "수수료",
+  slippage: "슬리피지", mdd: "MDD", win_rate: "승률", buy_hold: "그냥 들고 있기", sharpe: "샤프지수",
+  profit_factor: "손익비", max_consecutive_losses: "최대 연속손절", optimize: "익·손절 최적화", backtest: "백테스트",
+  paper_trading: "페이퍼 트레이딩", candle_interval: "봉 간격", grid: "그리드", grid_count: "격자 수",
+  grid_mode: "격자 방식", trailing_stop: "트레일링 스탑", activation_profit: "발동 수익률", trail_percent: "추적 폭",
+  rsi: "RSI", bollinger: "볼린저밴드", squeeze: "스퀴즈", martingale: "마틴게일", safety_order: "세이프티 주문",
+  volatility_breakout: "변동성 돌파", ma_cross: "이동평균 교차", daily_max_loss: "일일 최대손실",
+  max_holding: "최대 보유시간", cooldown: "재진입 금지", leverage: "레버리지", liquidation: "청산",
+  margin_mode: "마진 방식", hangang_temp: "한강 수온", kimchi_premium: "김치 프리미엄", fear_greed: "공포·탐욕 지수",
+  whale_activity: "고래 활동",
+};

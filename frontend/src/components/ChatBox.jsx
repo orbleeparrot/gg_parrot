@@ -1,5 +1,6 @@
 import { Fragment, memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
+import { useModalLayer } from "../hooks/useModalLayer.js";
 import { api } from "../api.js";
 import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 import { getAuthUser, getToken, updateAuthUser, useAuth } from "../lib/auth.js";
@@ -19,6 +20,7 @@ import CoinIcon from "./CoinIcon.jsx";
 import { chatUnseenCount, getChatFeed, markChatSeen, observeChat, receiveChat, receiveChatPost, setChatLoadError, visibleChatReadId } from "../lib/chatStore.js";
 import { CHAT_WINDOW_SIZE, chatWindow } from "../lib/chatFeed.js";
 import UserAvatar, { AuthorAvatar } from "./UserAvatar.jsx";
+import { copyText } from "../lib/clipboard.js";
 import "./ChatBox.css";
 import { Icon } from "./icons.jsx";
 
@@ -453,9 +455,15 @@ function MemberChatBox({ member, scope, open, setOpen, roomId = 0, room = null, 
     setOpen(false);
   }, [setOpen]);
 
+  // 열릴 때 한 번만 입력 칸으로 — 스티커·도움말을 열고 닫을 때마다 포커스를 끌어오지 않게.
   useEffect(() => {
     if (!open) return undefined;
     const frame = window.requestAnimationFrame(() => inputRef.current?.focus({ preventScroll: true }));
+    return () => window.cancelAnimationFrame(frame);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return undefined;
     const onKeyDown = (event) => {
       if (event.key !== "Escape") return;
       // 위에 뜬 것부터 닫는다 — 도움말·신고 창이 열려 있으면 채팅은 그대로 둔다.
@@ -472,7 +480,6 @@ function MemberChatBox({ member, scope, open, setOpen, roomId = 0, room = null, 
     document.addEventListener("keydown", onKeyDown);
     document.addEventListener("pointerdown", onPointerDown);
     return () => {
-      window.cancelAnimationFrame(frame);
       document.removeEventListener("keydown", onKeyDown);
       document.removeEventListener("pointerdown", onPointerDown);
     };
@@ -728,26 +735,31 @@ function MemberChatBox({ member, scope, open, setOpen, roomId = 0, room = null, 
   }
 
   async function copyMessage(message) {
-    const body = stripReplyToken(message.text);
-    try {
-      await navigator.clipboard.writeText(body);
-      setCopiedId(message.id);
-      window.setTimeout(() => setCopiedId((current) => (current === message.id ? 0 : current)), 1400);
-    } catch {
-      window.prompt("메시지 내용이에요. 복사해 주세요.", body);
+    const copied = await copyText(stripReplyToken(message.text));
+    if (!copied) {
+      setError("복사하지 못했어요. 메시지를 직접 골라 복사해 주세요.");
+      return false;
     }
+    setCopiedId(message.id);
+    window.setTimeout(() => setCopiedId((current) => (current === message.id ? 0 : current)), 1400);
+    return true;
   }
 
+  // 메시지 메뉴의 Esc 는 메뉴만 닫는다(시트는 그대로) — 공용 겹.
+  const menuRef = useRef(null);
+  useModalLayer({ open: Boolean(menu), ref: menuRef, onEscape: () => setMenu(null), restoreFocus: false });
+  useEffect(() => {
+    if (!menu) return undefined;
+    const frame = window.requestAnimationFrame(() => menuRef.current?.querySelector("button")?.focus({ preventScroll: true }));
+    return () => window.cancelAnimationFrame(frame);
+  }, [menu]);
   useEffect(() => {
     if (!menu) return undefined;
     const close_ = () => setMenu(null);
-    const onKey = (event) => { if (event.key === "Escape") { event.preventDefault(); close_(); } };
     document.addEventListener("pointerdown", close_);
-    document.addEventListener("keydown", onKey);
     window.addEventListener("resize", close_);
     return () => {
       document.removeEventListener("pointerdown", close_);
-      document.removeEventListener("keydown", onKey);
       window.removeEventListener("resize", close_);
     };
   }, [menu]);
@@ -952,11 +964,25 @@ function MemberChatBox({ member, scope, open, setOpen, roomId = 0, room = null, 
           </>)}
           {/* 메뉴는 body 에 띄운다 — 채팅 시트 안에 두면 시트의 스크롤·변형에 잘린다. */}
           {menu ? createPortal(
-            <div className="chat-menu" style={{ "--menu-x": `${menu.x}px`, "--menu-y": `${menu.y}px` }} role="menu" aria-label="메시지 메뉴" onPointerDown={(event) => event.stopPropagation()}>
+            <div ref={menuRef} className="chat-menu" style={{ "--menu-x": `${menu.x}px`, "--menu-y": `${menu.y}px` }}
+              onKeyDown={(event) => {
+                if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+                event.preventDefault();
+                const items = [...event.currentTarget.querySelectorAll("button")];
+                const at = items.indexOf(document.activeElement);
+                const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1
+                  : (at + (event.key === "ArrowDown" ? 1 : items.length - 1)) % items.length;
+                items[next]?.focus();
+              }} role="menu" aria-label="메시지 메뉴" onPointerDown={(event) => event.stopPropagation()}>
               {member ? (
                 <button type="button" role="menuitem" onClick={() => { setReplyTo(menu.message); setMenu(null); inputRef.current?.focus(); }}>답장</button>
               ) : null}
-              <button type="button" role="menuitem" onClick={() => { copyMessage(menu.message); setMenu(null); }}>
+              {/* '복사했어요' 를 잠깐 보여 주고 닫는다 — 바로 닫으면 복사됐는지 알 수 없었다. */}
+              <button type="button" role="menuitem" onClick={async () => {
+                const { id } = menu.message;
+                const copied = await copyMessage(menu.message);
+                window.setTimeout(() => setMenu((current) => (current?.message.id === id ? null : current)), copied ? 700 : 0);
+              }}>
                 {copiedId === menu.message.id ? "복사했어요" : "복사"}
               </button>
               {member && menu.message.user_id !== member.id ? (
@@ -990,7 +1016,7 @@ function MemberChatBox({ member, scope, open, setOpen, roomId = 0, room = null, 
           <ConfirmDialog open={leaving} title="전략방 나가기" description={LEAVE_CONFIRM} confirmLabel="나가기" busy={roomBusy} onConfirm={leaveRoom} onCancel={() => setLeaving(false)} />
         </section>
       ) : null}
-      <button type="button" className={`chat-fab${open ? " is-open" : ""}${unseen ? " has-news" : ""}${dragging ? " is-dragging" : ""}`} onClick={onFabClick} onPointerDown={mobilePlacement ? undefined : onFabPointerDown} onPointerMove={mobilePlacement ? undefined : onFabPointerMove} onPointerUp={mobilePlacement ? undefined : onFabPointerEnd} onPointerCancel={mobilePlacement ? undefined : onFabPointerEnd} title={mobilePlacement ? undefined : "끌어서 옮길 수 있어요"} aria-expanded={open} aria-controls={open ? panelId : undefined} aria-label={open ? "채팅 닫기" : badge ? `채팅 열기, 새 메시지 ${unseen}개` : "채팅 열기"}>
+      <button type="button" className={`chat-fab${open ? " is-open" : ""}${unseen ? " has-news" : ""}${dragging ? " is-dragging" : ""}`} onClick={onFabClick} onPointerDown={mobilePlacement ? undefined : onFabPointerDown} onPointerMove={mobilePlacement ? undefined : onFabPointerMove} onPointerUp={mobilePlacement ? undefined : onFabPointerEnd} onPointerCancel={mobilePlacement ? undefined : onFabPointerEnd} title={mobilePlacement ? undefined : "끌어서 옮길 수 있어요"} aria-expanded={open} aria-controls={open ? panelId : undefined} aria-label={open ? "Chat 채팅 닫기" : badge ? `Chat 채팅 열기, 새 메시지 ${unseen}개` : "Chat 채팅 열기"}>
         <img src={FAB_ICON} alt="" width="44" height="44" draggable="false" decoding="async" /><span className="chat-fab-label" aria-hidden="true">Chat</span>{badge ? <span className="chat-fab-badge num" aria-hidden="true">{badge}</span> : null}
       </button>
     </div>

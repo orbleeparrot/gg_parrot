@@ -1,6 +1,7 @@
 // Thin API client. Relative URLs work in dev (Vite proxy) and in prod
 // (FastAPI serves the built SPA and the /api routes from one origin).
-import { getToken } from "./lib/auth.js";
+import { clearAuth, getToken } from "./lib/auth.js";
+import { friendlyMessage, networkError, nonJsonMessage } from "./lib/apiError.js";
 import { createRequestCoordinator } from "./lib/requestCoordinator.js";
 import { withRequestTimeout } from "./lib/requestTimeout.js";
 import { withGatewayRetry } from "./lib/requestRetry.js";
@@ -95,14 +96,34 @@ async function jsonBody(res) {
   try {
     return JSON.parse(text);
   } catch (_) {
+    // 500 대 평문 오류와 2xx HTML(프록시·배포 중 페이지)을 가른다 — 예전엔 둘 다 "페이지를 반환했어요"였다(GG-011).
     const error = new Error(gatewayError
       ? "서버에 일시적으로 연결하지 못했어요. 잠시 후 다시 시도해 주세요."
-      : "서버가 API 대신 페이지를 반환했어요.");
+      : nonJsonMessage(res.status));
     error.status = res.status;
-    error.code = gatewayError ? "TEMPORARY_SERVER_ERROR" : "NON_JSON_RESPONSE";
+    error.code = gatewayError ? "TEMPORARY_SERVER_ERROR" : res.status >= 500 ? "SERVER_ERROR" : "NON_JSON_RESPONSE";
+    error.detail = `${res.status} ${res.headers?.get?.("content-type") || ""}`.trim();
     throw error;
   }
 }
+
+function responseError(res, body, token) {
+  const raw = typeof body.detail === "string" ? body.detail : body.detail != null ? JSON.stringify(body.detail) : res.statusText;
+  const error = new Error(friendlyMessage(res.status, raw));
+  error.status = res.status;
+  error.detail = raw;
+  // 토큰을 실어 보냈는데 401 — 만료(7일)거나 비밀번호 변경·탈퇴로 무효가 됐다. 로그인 상태를 지워
+  // 헤더와 보호된 화면이 로그인으로 돌아가게 한다(다른 계정으로 바뀐 경우는 건드리지 않는다).
+  if (res.status === 401 && token && token === getToken()) clearAuth({ preserveRegistrationDraft: true });
+  return error;
+}
+
+// 조회는 기본 25초 — 서버가 멈추면 '불러오는 중'이 끝없이 남던 것. 쓰기 요청은 호출부가 정한다.
+const DEFAULT_GET_TIMEOUT_MS = 25_000;
+
+// 토큰이 아니라 입력한 비밀번호·구글 재인증이 틀려도 401 이 오는 경로(로그인, 탈퇴 확인) — 로그인 상태는 그대로 둔다.
+const REAUTH_PATHS = ["/api/auth/", "/api/me/account"];
+const sessionToken = (path, token) => (token && !REAUTH_PATHS.some((prefix) => path.startsWith(prefix)) ? token : "");
 
 async function req(path, opts = {}) {
   const method = String(opts.method || "GET").toUpperCase();
@@ -110,20 +131,17 @@ async function req(path, opts = {}) {
   const token = shared ? "" : getToken();
   const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
   if (token) headers["Authorization"] = `Bearer ${token}`;
-  const { signal: callerSignal, timeoutMs, requestKey = "", ...fetchOptions } = opts;
+  const { signal: callerSignal, timeoutMs: requestedTimeout, requestKey = "", ...fetchOptions } = opts;
+  const timeoutMs = requestedTimeout ?? (method === "GET" ? DEFAULT_GET_TIMEOUT_MS : undefined);
   const execute = (signal) => withRequestTimeout((requestSignal) => withGatewayRetry(async () => {
-    const res = await fetch(BASE + path, { ...fetchOptions, cache: shared ? (fetchOptions.cache || "default") : "no-store", credentials: shared ? "omit" : "same-origin", method, headers, signal: requestSignal });
-    const body = await jsonBody(res);
-    if (!res.ok) {
-      const detail = typeof body.detail === "string"
-        ? body.detail
-        : body.detail != null
-          ? JSON.stringify(body.detail)
-          : res.statusText;
-      const error = new Error(detail);
-      error.status = res.status;
-      throw error;
+    let res;
+    try {
+      res = await fetch(BASE + path, { ...fetchOptions, cache: shared ? (fetchOptions.cache || "default") : "no-store", credentials: shared ? "omit" : "same-origin", method, headers, signal: requestSignal });
+    } catch (reason) {
+      throw networkError(reason);
     }
+    const body = await jsonBody(res);
+    if (!res.ok) throw responseError(res, body, sessionToken(path, token));
     if (token && shouldSignalActivity(method, path)) signalActivity(path, method);
     return body;
   }, { method, signal: requestSignal }), { signal, timeoutMs });
@@ -140,18 +158,14 @@ async function reqForm(path, formData, options = {}) {
   const headers = {};
   if (token) headers["Authorization"] = `Bearer ${token}`;
   return withRequestTimeout(async (signal) => {
-    const res = await fetch(BASE + path, { method, headers, body: formData, signal, cache: "no-store" });
-    const body = await jsonBody(res);
-    if (!res.ok) {
-      const detail = typeof body.detail === "string"
-        ? body.detail
-        : body.detail != null
-          ? JSON.stringify(body.detail)
-          : res.statusText;
-      const error = new Error(detail);
-      error.status = res.status;
-      throw error;
+    let res;
+    try {
+      res = await fetch(BASE + path, { method, headers, body: formData, signal, cache: "no-store" });
+    } catch (reason) {
+      throw networkError(reason);
     }
+    const body = await jsonBody(res);
+    if (!res.ok) throw responseError(res, body, sessionToken(path, token));
     return body;
   }, requestOptions);
 }

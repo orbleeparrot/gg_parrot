@@ -103,15 +103,14 @@ export default function MarketCarousel({ items, ariaLabel = "시장·규제 헤�
         </button>
       </div>
       <div className="news-carousel-foot">
-        <div className="news-carousel-dots" role="tablist" aria-label="기사 순서">
+        <div className="news-carousel-dots" role="group" aria-label="기사 순서">
           {visibleDotIndexes(wrap(active, length), length).map((index) => {
             const item = items[index];
             return (
             <button
               key={item.id || index}
               type="button"
-              role="tab"
-              aria-selected={index === wrap(active, length)}
+              aria-current={index === wrap(active, length) ? "true" : undefined}
               aria-label={`${index + 1}번째 기사`}
               className={`news-carousel-dot ${index === wrap(active, length) ? "is-on" : ""}`}
               onClick={() => setActive(index)}

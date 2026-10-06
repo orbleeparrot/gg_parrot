@@ -17,7 +17,7 @@
 .board-composer textarea.field { min-height: 200px; resize: vertical; }
 /* ── 본문 편집기(TipTap) — 도구 줄 + textarea 와 같은 면(.field). 사진은 본문 안에서 끌어 옮기고 모서리로 크기를 바꾼다. ── */
 .board-editor-wrap { display: grid; gap: 6px; }
-.board-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 4px; border: 1px solid rgb(var(--c-slate-200)); border-radius: 12px; background: rgb(var(--c-surface)); }
+.board-toolbar { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 4px; border: 1px solid rgb(var(--c-slate-200)); border-radius: 12px; background: rgb(var(--c-surface)); }
 .board-tool { width: 32px; height: 32px; display: inline-grid; place-items: center; border-radius: 8px; color: rgb(var(--c-slate-700)); background: transparent; cursor: pointer; }
 .board-tool:hover:not(:disabled) { background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-900)); }
 .board-tool.is-on { background: rgb(var(--c-slate-200)); color: rgb(var(--c-slate-900)); }
@@ -34,6 +34,9 @@
 .board-color-dot { width: 22px; height: 22px; border-radius: 999px; border: 2px solid rgb(var(--c-surface)); box-shadow: 0 0 0 1px rgb(var(--c-slate-300)); cursor: pointer; }
 .board-color-reset { height: 24px; padding: 0 8px; border-radius: 6px; color: rgb(var(--c-slate-700)); font-size: 12px; font-weight: 600; white-space: nowrap; }
 .board-color-reset:hover { background: rgb(var(--c-slate-100)); }
+/* 링크 칸 — 도구 줄 바로 아래, 글자색 판과 같은 판. 좁은 화면에서도 도구 줄 폭 안에 들어간다. */
+.board-link-tray { position: absolute; top: calc(100% + 6px); left: 4px; right: 4px; z-index: 5; display: flex; align-items: center; gap: 6px; max-width: 520px; padding: 8px; border: 1px solid rgb(var(--c-slate-300)); border-radius: 10px; background: rgb(var(--c-surface)); box-shadow: 0 8px 24px rgb(5 12 22 / .16); }
+.board-link-tray .field { flex: 1; min-width: 0; }
 .board-editor { height: auto; min-height: 260px; padding: 12px 16px; outline: none; }
 .board-editor p.is-editor-empty:first-child::before { content: attr(data-placeholder); float: left; height: 0; color: rgb(var(--c-slate-500)); pointer-events: none; }
 .board-editor:focus-within { border-color: rgb(var(--c-brand-line)); }

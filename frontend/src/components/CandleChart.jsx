@@ -139,7 +139,7 @@ function SourceStatus({ feed, now, inline = false }) {
       : `${exchangeLabel(source.exchange)} ${market} · 시세 정보`;
   return (
     <details className={"candle-source t-caption text-slate-500" + (inline ? " is-inline" : "")}>
-      <summary className="cursor-pointer" aria-label="시세 출처와 갱신 상태" title={inline ? [label, source?.fallback && "선물 요청 → 현물 대체", warning].filter(Boolean).join(" · ") : undefined}>
+      <summary className="cursor-pointer" title={inline ? [label, source?.fallback && "선물 요청 → 현물 대체", warning].filter(Boolean).join(" · ") : undefined}>
         {label}
         {source?.fallback && <span className="text-amber-700"> · 선물 요청 → 현물 대체</span>}
         {warning && <span className="text-amber-700" role="status" aria-live="polite"> · {warning}</span>}

@@ -889,7 +889,9 @@ export default function Guide({ embedded = false, initialSection = "start" }) {
     if (embedded || !changed || !articleRef.current) return;
     const article = articleRef.current;
     const top = article.getBoundingClientRect().top;
-    const margin = parseFloat(getComputedStyle(article).scrollMarginTop) || 0;
+    // 헤더에 가려지는 높이 — 문서의 scroll-padding(헤더 + 8px) + 글의 scroll-margin.
+    const margin = (parseFloat(getComputedStyle(document.documentElement).scrollPaddingTop) || 0)
+      + (parseFloat(getComputedStyle(article).scrollMarginTop) || 0);
     if (top < margin || top > window.innerHeight / 2) {
       article.scrollIntoView({ block: "start", behavior: "auto" });
     }
@@ -927,7 +929,7 @@ export default function Guide({ embedded = false, initialSection = "start" }) {
 
   return (
     <div className={embedded ? "guide-page guide-embedded" : "guide-page"}>
-      {!embedded && <h1 className="sr-only">사용법</h1>}
+      {!embedded && <h1 className="sr-only">FAQ</h1>}
       <div className="guide-search-area">
         {!embedded && (
           <img className="guide-search-mascot" src="/brand/navigation/ggparrot-nav-builder.svg" alt="" width="112" height="112" draggable="false" />

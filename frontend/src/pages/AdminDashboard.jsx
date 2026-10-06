@@ -17,7 +17,7 @@ import {
   MEMBER_PAGE_SIZES, MEMBER_STATUSES, MEMBER_Q_MAX, blockActionKind, clampPage, memberActionError, memberEmail,
   memberQueryString, memberResultLine, memberSearchParams, memberSignup, memberState, memberTier, pageCount, parseMemberQuery,
 } from "../lib/memberList.js";
-import { AdminBlock, AdminKpis, AdminTable, AdminTerms, ErrorBlock, RangePicker, Skeleton, StatusPill, TabNav } from "../components/admin/AdminBlocks.jsx";
+import { AdminBlock, AdminKpis, AdminScroll, AdminTable, AdminTerms, ErrorBlock, RangePicker, Skeleton, StatusPill, TabNav } from "../components/admin/AdminBlocks.jsx";
 import { MemberActionDialogs, MemberRowActions } from "../components/admin/MemberActions.jsx";
 import {
   BarChart, Donut, FunnelChart, HBarChart, HeatCell, Legend, LineChart, SERIES, StackedChart, bucketHours,
@@ -378,7 +378,7 @@ function SignupsTab({ data, days }) {
       </div>
       <div className="adm-cols2">
         <AdminBlock title="가입 코호트 리텐션" caption="가입 주 기준 · 진할수록 높음 · — 는 아직 지나지 않았거나 측정 불가 · 잴 수 있는 회원만 분모">
-          <div className="adm-tbl">
+          <AdminScroll>
             <table>
               <thead>
                 <tr>
@@ -399,7 +399,7 @@ function SignupsTab({ data, days }) {
                 ))}
               </tbody>
             </table>
-          </div>
+          </AdminScroll>
         </AdminBlock>
         <AdminBlock title="가입 방법" caption={`${days}일 · 탈퇴 제외`}>
           <AdminTable rows={methods} total={methodTotal} rowKey={(r) => r.method} columns={[

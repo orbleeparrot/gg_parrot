@@ -140,13 +140,13 @@ def test_leg_rule_override_requires_params():
 def test_leg_rule_override_expands():
     m = macro(legs=[
         {"symbol": "BTCUSDT", "weight": 70, "rule_type": "E",
-         "params": {"trail_pct": 3.0, "dip_pct": 2.0, "initial_capital": 1000}},
+         "params": {"trail_percent": 3.0, "initial_capital": 1000}},
         {"symbol": "ETHUSDT", "weight": 30},
     ])
     btc = m.for_leg(m.legs[0], 700.0)
     eth = m.for_leg(m.legs[1], 300.0)
     assert btc.rule_type is RuleType.E and btc.symbol == "BTCUSDT"
-    assert btc.params["trail_pct"] == 3.0 and btc.params["initial_capital"] == 700.0
+    assert btc.params["trail_percent"] == 3.0 and btc.params["initial_capital"] == 700.0
     assert eth.rule_type is RuleType.I and eth.params["k"] == 0.5
     assert eth.params["initial_capital"] == 300.0
     for leg_macro in (btc, eth):
@@ -158,7 +158,7 @@ def test_leg_bad_params_names_the_leg():
     with pytest.raises(ValidationError, match="레그 ETHUSDT"):
         macro(legs=[{"symbol": "BTCUSDT", "weight": 50},
                     {"symbol": "ETHUSDT", "weight": 50, "rule_type": "E",
-                     "params": {"trail_pct": -5.0, "initial_capital": 1000}}])
+                     "params": {"trail_percent": -5.0, "initial_capital": 1000}}])
 
 
 # --- 진입 조건 물려받기 ------------------------------------------------
@@ -175,7 +175,7 @@ def test_leg_that_changes_rule_does_not_inherit_bundle_filter():
     """다른 규칙을 위해 쓴 조건을 물려받지 않는다 — 조용히 엉뚱한 관문이 붙는 것을 막는다."""
     m = macro(entry_filter=MA_FILTER, legs=[
         {"symbol": "BTCUSDT", "weight": 50, "rule_type": "E",
-         "params": {"trail_pct": 3.0, "dip_pct": 2.0, "initial_capital": 1000}},
+         "params": {"trail_percent": 3.0, "initial_capital": 1000}},
         {"symbol": "ETHUSDT", "weight": 50},
     ])
     assert m.leg_filter(m.legs[0]) is None
@@ -1004,14 +1004,20 @@ RISING = [100, 101, 102, 103, 104, 105, 106, 107]
 
 
 def bundle(legs, **over):
+    """BASE 위에 legs 와 덮어쓸 칸(risk · bundle_risk 등)을 얹는다."""
     return Macro(**{**BASE, "legs": legs, **over})
 
 
 # --- 한도가 없을 때 두 경로가 같은 답을 낸다 (§6) ----------------------
 def test_lockstep_matches_per_leg_path_when_limit_never_binds():
-    """노출 한도 100% 는 사실상 한도가 없다. 동기 루프가 기존 경로와 같은 답을 내야 한다."""
+    """한도가 **닿을 수 없을 때** 동기 루프가 기존 경로와 같은 답을 내야 한다.
+
+    주의: 노출 한도 100% 는 "한도 없음" 이 아니다. 투자비율 1.0 인 두 레그가 다 들어가면
+    노출이 정확히 100% 가 되어 그 뒤의 진입이 막힌다. 그래서 투자비율을 0.4 로 낮춰
+    최대 노출을 40% 로 묶는다 — 이러면 한도가 구조적으로 닿지 않는다.
+    """
     legs = [{"symbol": "BTCUSDT", "weight": 50}, {"symbol": "ETHUSDT", "weight": 50}]
-    m = bundle(legs, bundle_risk={"max_exposure_pct": 100.0})
+    m = bundle(legs, risk={"invest_ratio": 0.4}, bundle_risk={"max_exposure_pct": 100.0})
     frames = {"BTCUSDT": frame(RISING), "ETHUSDT": frame(RISING)}
 
     got = dict(run_bundle(m, frames))
@@ -1094,7 +1100,7 @@ def test_leg_with_no_rows_fails_that_leg_only():
 def test_legs_can_run_different_rules():
     legs = [
         {"symbol": "BTCUSDT", "weight": 50, "rule_type": "E",
-         "params": {"trail_pct": 3.0, "dip_pct": 1.0, "initial_capital": 1000}},
+         "params": {"trail_percent": 3.0, "initial_capital": 1000}},
         {"symbol": "ETHUSDT", "weight": 50},
     ]
     got = dict(run_bundle(bundle(legs, bundle_risk={"max_exposure_pct": 100.0}),
@@ -1351,24 +1357,26 @@ def patched(monkeypatch):
 
 # --- Review Focus 1: 비중이 균등이 아닐 때 자금이 비중대로 갈라진다 ----
 def test_uneven_weights_split_capital_on_the_plain_path(patched):
-    """한도가 없는(기존) 경로에도 비중이 들어야 한다 — 균등 분배 코드가 남으면 여기서 걸린다."""
-    main, _ = patched
+    """한도가 없는(기존) 경로에도 비중이 들어야 한다 — 균등 분배 코드가 남으면 여기서 걸린다.
+
+    레그에 실제로 넘어간 자금을 직접 본다. 최종 자산의 비로 보면 수수료 · 반올림에 기대는
+    약한 시험이 된다.
+    """
+    main, calls = patched
     m = Macro(**{**BASE, "legs": [{"symbol": "BTCUSDT", "weight": 70},
                                   {"symbol": "ETHUSDT", "weight": 30}]})
-    _agg, per_symbol, _src, _label = main._run_portfolio_backtest(m, 0, 1)
-    caps = {row["symbol"]: row["final_equity"] for row in per_symbol}
-    assert set(caps) == {"BTCUSDT", "ETHUSDT"}
-    # 두 레그가 같은 가격 데이터를 받았으므로 최종 자산의 비는 자금의 비와 같다.
-    assert caps["BTCUSDT"] / caps["ETHUSDT"] == pytest.approx(70 / 30, rel=1e-6)
+    main._run_portfolio_backtest(m, 0, 1)
+    caps = {c.symbol: c.params["initial_capital"] for c in calls}
+    assert caps == {"BTCUSDT": 700.0, "ETHUSDT": 300.0}
 
 
 def test_even_symbols_form_unchanged(patched):
     """symbols 형태(옛 모양)는 균등 분배 그대로."""
-    main, _ = patched
+    main, calls = patched
     m = Macro(**{**BASE, "symbols": ["BTCUSDT", "ETHUSDT"]})
-    _agg, per_symbol, _src, _label = main._run_portfolio_backtest(m, 0, 1)
-    caps = {row["symbol"]: row["final_equity"] for row in per_symbol}
-    assert caps["BTCUSDT"] == pytest.approx(caps["ETHUSDT"], rel=1e-9)
+    main._run_portfolio_backtest(m, 0, 1)
+    caps = {c.symbol: c.params["initial_capital"] for c in calls}
+    assert caps == {"BTCUSDT": 500.0, "ETHUSDT": 500.0}
 
 
 def test_bundle_risk_takes_the_lockstep_path(patched, monkeypatch):
@@ -1404,7 +1412,7 @@ def test_each_leg_is_fetched_with_its_own_rule(patched):
     main, calls = patched
     m = Macro(**{**BASE, "legs": [
         {"symbol": "BTCUSDT", "weight": 50, "rule_type": "E",
-         "params": {"trail_pct": 3.0, "dip_pct": 1.0, "initial_capital": 1000}},
+         "params": {"trail_percent": 3.0, "initial_capital": 1000}},
         {"symbol": "ETHUSDT", "weight": 50},
     ]})
     main._run_portfolio_backtest(m, 0, 1)
@@ -1774,7 +1782,7 @@ def test_build_legs_uses_each_leg_rule():
 
     m = Macro(**{**BASE, "legs": [
         {"symbol": "BTCUSDT", "weight": 50, "rule_type": "E",
-         "params": {"trail_pct": 3.0, "dip_pct": 1.0, "initial_capital": 1000}},
+         "params": {"trail_percent": 3.0, "initial_capital": 1000}},
         {"symbol": "ETHUSDT", "weight": 50},
     ]})
     legs, _gate = build_bundle_legs(m, 1000.0)
@@ -1940,7 +1948,7 @@ def test_single_symbol_summary_unchanged():
 def test_leg_rules_are_named_when_they_differ():
     s = human_summary(Macro(**{**BASE, "legs": [
         {"symbol": "BTCUSDT", "weight": 50, "rule_type": "E",
-         "params": {"trail_pct": 3.0, "dip_pct": 1.0, "initial_capital": 1000}},
+         "params": {"trail_percent": 3.0, "initial_capital": 1000}},
         {"symbol": "ETHUSDT", "weight": 50},
     ]}))
     assert "종목별 규칙" in s
@@ -2062,10 +2070,10 @@ test("비중을 건드리면 legs 를 만든다", () => {
 test("레그 규칙을 바꾸면 rule_type 과 params 가 함께 들어간다", () => {
   const legs = buildLegs({
     ...FORM, leg_weights: "50, 50",
-    leg_rules: { BTCUSDT: { rule_type: "E", trail_pct: "3", dip_pct: "1", initial_capital: "1000" } },
+    leg_rules: { BTCUSDT: { rule_type: "E", trail_percent: "3", initial_capital: "1000" } },
   });
   assert.equal(legs[0].rule_type, "E");
-  assert.equal(legs[0].params.trail_pct, 3);
+  assert.equal(legs[0].params.trail_percent, 3);
   assert.equal(legs[1].rule_type, undefined);
 });
 
@@ -2562,7 +2570,7 @@ test("종목이 하나면 규칙 바꾸기가 없다", async () => {
 
 test("레그 규칙이 정해져 있으면 그 규칙 이름이 보인다", async () => {
   const text = textOf(await renderComponent("src/components/Builder.jsx", {
-    form: { ...FORM, leg_rules: { BTCUSDT: { rule_type: "E", trail_pct: "3", dip_pct: "1", initial_capital: "1000" } } },
+    form: { ...FORM, leg_rules: { BTCUSDT: { rule_type: "E", trail_percent: "3", initial_capital: "1000" } } },
     setForm: () => {}, variant: "dense",
   }));
   assert.match(text, /BTC/);
@@ -2572,7 +2580,7 @@ test("레그 규칙이 정해져 있으면 그 규칙 이름이 보인다", asyn
 test("LegRuleEditor 는 규칙 선택과 되돌리기를 그린다", async () => {
   const text = textOf(await renderComponent("src/components/LegRuleEditor.jsx", {
     symbol: "BTCUSDT",
-    rule: { rule_type: "E", trail_pct: "3", dip_pct: "1", initial_capital: "1000" },
+    rule: { rule_type: "E", trail_percent: "3", initial_capital: "1000" },
     onChange: () => {}, onClear: () => {},
   }));
   assert.match(text, /묶음 기본 규칙으로/);

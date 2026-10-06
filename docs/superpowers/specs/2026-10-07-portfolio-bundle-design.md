@@ -120,7 +120,25 @@ GATEABLE_TYPES = FILTERABLE_TYPES   # 진입 관문을 안전하게 끼울 수 �
 - 레그의 `rule_type` 이 묶음과 다르면 `params` 가 반드시 있어야 한다:
   `"레그 {종목}: 규칙을 바꾸면 세부값도 함께 주세요"`. 그 `params` 는 해당 규칙의
   params 모델로 검사하고 `model_dump()` 로 정규화한다 — 묶음 본체와 같은 처리.
-- 레그의 `entry_filter` 가 있으면 그 레그의 실효 `rule_type` 이 `FILTERABLE_TYPES` 여야 한다.
+- **레그를 펼쳐서 검사한다.** 레그마다 `for_leg` 로 단일 종목 매크로를 만들어 보는 것으로
+  검증을 끝낸다 — 규칙별 params·필터 적용 가능 여부·국내 거래소 제약·레버리지까지 `Macro`
+  검증기가 이미 다 본다. 레그 검증 로직을 두 벌로 베끼지 않는다. 실패하면 어느 레그인지
+  붙여서 올린다: `"레그 {종목} 설정을 확인해 주세요"`.
+- **레그가 규칙을 바꾸면 묶음의 `entry_filter` 는 물려받지 않는다** — 그 조건은 다른 규칙을
+  위해 쓴 것이다. 그 레그는 자기 `entry_filter` 만 쓴다. 두 곳(`for_leg`·검증)이 같은 답을
+  내도록 해석을 한 곳에 둔다:
+
+```python
+    def leg_rule(self, leg: "PortfolioLeg") -> RuleType:
+        return leg.rule_type if leg.rule_type is not None else self.rule_type
+
+    def leg_filter(self, leg: "PortfolioLeg") -> Optional[EntryFilter]:
+        if leg.entry_filter is not None:
+            return leg.entry_filter
+        if leg.rule_type is not None and leg.rule_type is not self.rule_type:
+            return None          # 다른 규칙을 위해 쓴 조건을 물려받지 않는다
+        return self.entry_filter
+```
 - `bundle_risk` 가 있으면 묶음이어야 한다(`"묶음 한도는 종목 2개 이상에서만 쓸 수 있습니다"`),
   그리고 **모든 레그의 실효 규칙이 `GATEABLE_TYPES`** 여야 한다:
   `"묶음 한도는 규칙 {X} 에 쓸 수 없습니다 — E~K 만 지원해요"`.

@@ -1,5 +1,6 @@
 // 내 에이전트 종료 기록 표기 — 실행 시간(길이 + 날짜 범위)과 종료 방식.
 // 시각은 서버의 ISO(UTC)를 받아 한국 시간으로 쓴다.
+import { practiceModeLabel } from "../../lib/exchanges.js";
 
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
 const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
@@ -61,7 +62,7 @@ export function endLabel(session) {
 
 export function environmentLabel(session) {
   const s = session || {};
-  const net = s.testnet ? "테스트넷" : "실거래";
+  const net = s.testnet ? practiceModeLabel(s.symbol) : "실거래";
   const market = s.market === "futures"
     ? `선물 ${Number(s.leverage) || 1}배`
     : "현물";

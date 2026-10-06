@@ -145,9 +145,9 @@ export function PaperNextSteps({ macro, valErr, primary = "quickRun", onRegister
           <button onClick={downloadMacro} disabled={!!valErr || domestic} title={domestic ? "매크로 파일은 바이낸스 전용이에요. 업비트·빗썸은 빠른 실행을 쓰세요." : undefined} className="btn btn-l btn-secondary">
             매크로 파일 내려받기 (.ggm.json)
           </button>
-          {!domestic && <Link to="/?run=1&step=1" className="t-small font-semibold text-slate-900 underline underline-offset-4 decoration-slate-300 hover:decoration-slate-900">
+          <Link to="/?run=1&step=1" className="t-small font-semibold text-slate-900 underline underline-offset-4 decoration-slate-300 hover:decoration-slate-900">
             사용법 →
-          </Link>}
+          </Link>
         </div>
       </div>
     </div>

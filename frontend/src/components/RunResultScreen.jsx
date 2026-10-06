@@ -1,4 +1,5 @@
 import { describeRunOutcome } from "../features/agents/runOutcome.js";
+import { quoteOf } from "../lib/format.js";
 
 const AVATARS = {
   calm: "/brand/agent/ggparrot-agent-calm-v1.svg",
@@ -43,7 +44,7 @@ export default function RunResultScreen({ session, onShowLog }) {
       <p className="agent-result-note">
         {outcome.pending
           ? "실행기가 확정 보고를 보내면 이 화면이 결과로 바뀝니다."
-          : "실현손익은 실행기가 보고한 누적값(USDT)이에요. 거래소 체결 내역과 대조해 확인하세요."}
+          : "실현손익은 실행기가 보고한 누적값({quoteOf(session?.symbol)})이에요. 거래소 체결 내역과 대조해 확인하세요."}
       </p>
       {onShowLog ? (
         <div className="agent-result-actions">

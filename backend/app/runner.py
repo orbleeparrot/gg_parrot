@@ -356,8 +356,24 @@ def launch_ticket_status(user_id: int, launch_id: int, *, min_runner_version: st
         }
         if status == "rejected":
             payload["runner_version"] = rejected_version
-            payload["min_runner_version"] = min_runner_version
+            payload["min_runner_version"] = _required_version_for(db, row.user_macro_id, min_runner_version)
         return payload
+
+
+def _required_version_for(db, user_macro_id: int, general_min: str) -> str:
+    """이 티켓의 매크로가 요구하는 실행기 버전. 국내 거래소 매크로는 일반 최소 버전이 아니라 v10 이다.
+
+    웹이 "v9이에요. 웹 연결은 v6부터 돼요" 처럼 스스로 모순된 안내를 하지 않게, 숫자는 서버가 매크로를 보고 정한다.
+    매크로를 못 읽으면 일반 최소 버전으로 둔다(상태 조회가 그 이유로 실패하면 안 된다).
+    """
+    macro_row = db.get(UserMacro, user_macro_id)
+    if macro_row is None:
+        return general_min
+    try:
+        macro = Macro.model_validate_json(macro_row.macro_json)
+    except (TypeError, ValueError):
+        return general_min
+    return DOMESTIC_MIN_VERSION if is_domestic(macro.exchange) else general_min
 
 
 def mark_launch_ticket_rejected(ticket: str, runner_version: str) -> None:

@@ -76,6 +76,21 @@ def test_claim_rejects_old_runner_for_domestic_macro_and_keeps_the_ticket():
     assert ok.json()["macro"]["exchange"] == "upbit" and ok.json()["symbol"] == "KRW-BTC"
 
 
+def test_rejected_status_asks_domestic_macro_for_v10_and_binance_for_the_general_minimum():
+    # v9 실행기 사용자가 "v9이에요. 웹 연결은 v6부터 돼요" 를 보면 안 된다 — 국내는 v10 이 필요하다.
+    token = _signup()
+    domestic_id, domestic_ticket = _ticket(token, DOMESTIC)
+    binance_id, binance_ticket = _ticket(token, A)
+    for ticket in (domestic_ticket, binance_ticket):
+        r = client.post("/api/runner/launch-tickets/claim", json={"ticket": ticket, "runner_version": "5"})
+        assert r.status_code == 426
+    domestic = client.get(f"/api/me/runner/launch-tickets/{domestic_id}", headers=_auth(token)).json()
+    binance = client.get(f"/api/me/runner/launch-tickets/{binance_id}", headers=_auth(token)).json()
+    assert domestic["status"] == binance["status"] == "rejected"
+    assert domestic["min_runner_version"] == runner_mod.DOMESTIC_MIN_VERSION == "10"
+    assert binance["min_runner_version"] == "6"
+
+
 def test_claim_still_refuses_unsupported_rule_for_domestic_even_on_new_runner():
     macro = {**DCA, "exchange": "upbit", "symbol": "KRW-BTC", "market": "spot", "candle_interval": "1d",
              "params": {"amount_per_buy": 10000, "interval_days": 1, "initial_capital": 100000}}

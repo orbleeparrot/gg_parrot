@@ -8,6 +8,7 @@ import CandleChart from "./CandleChart.jsx";
 import { computeSessionOverlay } from "../lib/indicators.js";
 import { RULE_TYPES } from "../lib/macro.js";
 import { macroOriginBadge } from "../lib/macroOrigin.js";
+import { formatQuoteAmount, practiceModeLabel } from "../lib/exchanges.js";
 import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 import ConfirmDialog from "./ConfirmDialog.jsx";
 import { describeDeleteConfirm, describeStopConfirm } from "../features/agents/runOutcome.js";
@@ -157,7 +158,7 @@ function SessionCard({ s, onStop, onDelete, busy }) {
           <span className="badge badge-flat">{s.market === "futures" ? `선물 ${s.leverage}배` : "현물"}</span>
           <span className="badge badge-flat">{s.position_side === "short" ? "숏" : "롱"}</span>
           <span className={"badge " + (s.testnet ? "badge-flat" : "badge-risk")}>
-            {s.testnet ? "테스트넷" : "메인넷(실거래)"}
+            {s.testnet ? practiceModeLabel(s.symbol) : "메인넷(실거래)"}
           </span>
           {!stopped && (
             <span className={"badge " + (s.connected ? "badge-mine" : "badge-flat")}>
@@ -207,7 +208,7 @@ function SessionCard({ s, onStop, onDelete, busy }) {
           <div className="min-w-0">
             <div className="stat-label">누적 실현손익</div>
             <div className={"t-label font-bold num " + (realUp ? "text-green-600" : "text-red-600")}>
-              {realUp ? "+" : ""}{(s.realized_pnl ?? 0).toFixed(2)} USDT
+              {realUp ? "+" : ""}{formatQuoteAmount(s.realized_pnl ?? 0, s.symbol, { fixed: true })}
             </div>
           </div>
         </div>

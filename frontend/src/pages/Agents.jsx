@@ -4,6 +4,7 @@ import { api } from "../api.js";
 import { useAuth, useAccountGuard } from "../lib/auth.js";
 import { RULE_TYPES } from "../lib/macro.js";
 import { computeSessionOverlay } from "../lib/indicators.js";
+import { practiceModeLabel } from "../lib/exchanges.js";
 import { usePositionNewsFeature } from "../features/agents/positionNews/index.js";
 import { useWhaleActivity } from "../features/agents/useWhaleActivity.js";
 import { useRunnerLog } from "../features/agents/useRunnerLog.js";
@@ -38,7 +39,7 @@ function sessionOptionLabel(session) {
     : session.connected
       ? ""
       : "응답대기 · ";
-  const net = session.testnet ? " · 테스트넷" : "";
+  const net = session.testnet ? ` · ${practiceModeLabel(session.symbol)}` : "";
   return `${prefix}${session.symbol} · ${ruleLabel(session.macro)}${net}`;
 }
 

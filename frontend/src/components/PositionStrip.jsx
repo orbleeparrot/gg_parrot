@@ -4,6 +4,7 @@
 // 없는 쪽은 없다고 표시하며, 규칙이 아예 없으면 게이지 대신 글 한 줄. 열 너비에 맞춰 게이지가 아래로 접힌다.
 import { useEffect, useState } from "react";
 import { fmtPrice, fmtQty } from "../lib/format.js";
+import { formatQuoteAmount } from "../lib/exchanges.js";
 import {
   exitRules, fmtSignedMoney, fmtSignedPct, gaugeModel, headlineReturn, runningFor, toneOf, unrealizedMoney,
 } from "../lib/positionExits.js";
@@ -98,7 +99,7 @@ export default function PositionStrip({ session, macro }) {
         <div><dt>현재가</dt><dd className="num">{Number(session.last_price) > 0 ? fmtPrice(session.last_price) : "—"}</dd></div>
         <div><dt>{running ? "실행 시간" : "실행했던 시간"}</dt><dd className="num">{elapsed || "—"}</dd></div>
         <div><dt>실현손익 · 누적</dt><dd className={"num " + toneOf(realized)}>{fmtSignedMoney(realized, session.symbol)}</dd></div>
-        <div><dt>투입금</dt><dd className="num">{Number(session.invested_usdt) > 0 ? `${Number(session.invested_usdt).toLocaleString("en-US", { maximumFractionDigits: 2 })} USDT` : "—"}</dd></div>
+        <div><dt>투입금</dt><dd className="num">{Number(session.invested_usdt) > 0 ? formatQuoteAmount(session.invested_usdt, session.symbol) : "—"}</dd></div>
         <div><dt>실행기</dt><dd className="num">{runner || "—"}</dd></div>
         <div className="is-wide"><dt>청산 기준</dt><dd>{rules.summary}</dd></div>
       </dl>

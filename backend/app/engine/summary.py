@@ -71,6 +71,10 @@ def human_summary(macro: Macro) -> str:
         mode_ko = "격리" if macro.margin_mode == "isolated" else macro.margin_mode
         parts.append(f"{macro.leverage}배 레버리지({mode_ko})")
 
+    if macro.entry_filter is not None:
+        from .entry_filter import make_filter
+        parts.append(f"진입 조건: {make_filter(macro).note()}")
+
     if macro.exchange != "binance":
         from ..exchanges import capabilities
         parts.insert(0, f"{capabilities(macro.exchange)['label']} · KRW 현물")

@@ -608,3 +608,110 @@ class DomesticBroker:
 
     def set_margin_type(self, *_args, **_kwargs):
         raise RuntimeError("국내 현물에는 선물 설정이 없습니다")
+
+
+# --- 모의 모드 ---------------------------------------------------------
+# 바이낸스에는 테스트넷이 있지만 업비트 · 빗썸에는 없다. 모의가 없으면 국내 매크로의 첫 실행이
+# 곧 실전 주문이다. 세 거래소가 같은 방식으로 연습되게 하는 것이 이 클래스의 존재 이유 —
+# 안전망이 거래소마다 다르면 사용자는 자기가 어디서 안전한지 알 수 없다.
+_MOCK_DEFAULT_FEE = 0.0005
+_MOCK_FALLBACK_RULES = OrderRules(step=0.0, min_notional=0.0)
+
+
+class MockBroker:
+    """어댑터를 감싸 시세는 진짜로 읽고 주문만 삼킨다. 안쪽 어댑터와 같은 메서드 이름을 낸다.
+
+    속성을 통째로 안쪽에 넘기는 __getattr__ 은 일부러 두지 않는다 — 그러면 raw.create_order 같은
+    주문 입구가 이 객체를 통해 열린다. 읽기 전용 이름표(market · side · symbol)만 따로 내보낸다.
+    가상 자본은 봇이 매크로의 initial_capital 에서 들고 있고, 실제 잔고는 읽지 않는다.
+    """
+
+    def __init__(self, inner, *, log):
+        self._inner = inner
+        self.log = log
+        self._rules_fallback_logged = False
+
+    # --- 이름표 (봇이 거래소를 구분하지 않고 읽는 값) --------------
+    @property
+    def market(self):
+        return getattr(self._inner, "market", "spot")
+
+    @property
+    def side(self):
+        return getattr(self._inner, "side", "long")
+
+    @property
+    def symbol(self):
+        return getattr(self._inner, "symbol", "")
+
+    # --- 읽기는 진짜로 ------------------------------------------
+    def check_account(self) -> None:
+        self._inner.check_account()
+
+    def ensure_ready(self) -> bool:
+        return self._inner.ensure_ready()
+
+    def price(self) -> float:
+        return self._inner.price()
+
+    def order_rules(self) -> OrderRules:
+        """국내 거래소는 주문 규격 읽기도 키가 필요하다. 키 없이 돌아야 연습이므로 기본값으로 물러난다.
+
+        기본값은 '제한 없음'(수량 단위 0 · 최소 금액 0)이다 — 모의가 실전보다 깐깐해서 연습이
+        막히는 것보다, 실전의 최소 금액 거절을 연습에서 못 보는 쪽이 덜 해롭다.
+        물러났다는 사실은 한 번만 남긴다 — 봇이 주문마다 부르므로 매번 남기면 기록이 묻힌다.
+        """
+        try:
+            return self._inner.order_rules()
+        except Exception as exc:
+            if not self._rules_fallback_logged:
+                self._rules_fallback_logged = True
+                self.log(f"모의 모드: 주문 규격을 읽지 못해 제한 없음으로 진행합니다({exc})")
+            return _MOCK_FALLBACK_RULES
+
+    def rehearse(self, *, notional) -> tuple[bool, str]:
+        """안쪽 리허설을 해 보되, 통과 못 해도 모의는 멈추지 않는다. 이유는 기록해서 실전 전환 때 보이게 한다."""
+        try:
+            ok, reason = self._inner.rehearse(notional=notional)
+        except Exception as exc:
+            ok, reason = False, f"리허설 도중 오류가 났어요: {exc}"
+        if ok:
+            return True, reason
+        self.log(f"모의 모드: 실전이라면 여기서 막힙니다 — {reason}")
+        return True, f"모의 모드라 그대로 진행합니다. 실전에서는 막힐 이유: {reason}"
+
+    # --- 주문은 삼킨다 ------------------------------------------
+    def submit(self, side_word, *, base_qty=None, notional=None, reduce_only=False,
+               closing=None, client_id) -> Order:
+        """현재가로 즉시 전부 체결된 것으로 돌려준다. 안쪽 submit 은 어떤 경우에도 부르지 않는다.
+
+        매수는 금액(notional)이 있으면 금액 / 현재가, 없으면 base_qty — 바이낸스식 호출도 받는다.
+        매도는 base_qty. 필요한 쪽 인자가 없으면 아무것도 체결하지 않은 채 FILLED 를 돌려주는 대신 예외를 낸다.
+        """
+        buying = side_word == "BUY"
+        price = _positive_number(self._inner.price())
+        if not price:
+            raise RuntimeError("모의 체결에 쓸 현재가를 받지 못했습니다")
+        if buying and _positive_number(notional):
+            executed = _positive_number(notional) / price
+        else:
+            executed = _positive_number(base_qty)
+        if not executed:
+            raise ValueError("모의 주문에 쓸 양수 금액(notional) 또는 수량(base_qty)이 없습니다")
+
+        # 현물 매수만 수수료를 받은 수량에서 뗀다 — 실제 어댑터와 같은 규칙이다. 청산 · 매도 · 선물은 그대로.
+        if closing is None:
+            closing = bool(reduce_only) or not buying
+        acquired = executed
+        if buying and not closing and self.market != "futures":
+            acquired = executed * (1.0 - self._fee_rate())
+        return Order(status="FILLED", executed_qty=executed, avg_price=price, acquired_qty=acquired,
+                     fees_known=True, order_id=f"mock-{client_id}", raw_status="MOCK_FILLED")
+
+    def _fee_rate(self) -> float:
+        # 바이낸스 어댑터에는 fees 가 없고, 국내 어댑터는 키 없이 규격을 못 읽으면 0 인 채라서 둘 다 기본값으로 대신한다.
+        try:
+            rate = _positive_number(self._inner.fees["bid"])
+        except Exception:
+            rate = 0.0
+        return rate or _MOCK_DEFAULT_FEE

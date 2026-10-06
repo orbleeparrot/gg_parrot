@@ -13,7 +13,7 @@ class RunnerExecutionTests(unittest.TestCase):
 
     def bot(self):
         bot = object.__new__(macro_runner.BotThread)
-        bot.client = Mock()
+        bot.client = Mock()  # 기존 시험 본문이 쓰는 이름 — 날 python-binance 클라이언트
         bot.market, bot.symbol, bot.side = "futures", "BTCUSDT", "long"
         bot.quote = "USDT"
         bot.leverage = 1
@@ -21,6 +21,15 @@ class RunnerExecutionTests(unittest.TestCase):
         bot.in_position, bot.held_qty, bot.entry_price = True, 2.0, 100.0
         bot.realized, bot.step = 0.0, 0.001
         bot._price = Mock(return_value=105.0)
+
+        # 시험 본문이 bot.market 을 현물로 바꾼다. 브로커가 봇의 설정을 그대로 따라보게 한다.
+        class _FollowsBot(macro_runner.brokers.BinanceBroker):
+            market = property(lambda self: bot.market, lambda self, _value: None)
+            symbol = property(lambda self: bot.symbol, lambda self, _value: None)
+            side = property(lambda self: bot.side, lambda self, _value: None)
+
+        bot.broker = _FollowsBot(bot.client, market=bot.market, symbol=bot.symbol,
+                                 side=bot.side, testnet=True, log=bot.log)
         return bot
 
     def prepare_run(self, bot):

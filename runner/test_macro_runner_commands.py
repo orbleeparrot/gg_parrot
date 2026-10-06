@@ -8,7 +8,7 @@ from runner.test_macro_runner_single_instance import macro_runner
 
 def _bot(in_position=False, held=0.0, entry=0.0):
     bot = object.__new__(macro_runner.BotThread)
-    bot.client = Mock()
+    bot.client = Mock()  # 기존 시험 본문이 쓰는 이름 — 날 python-binance 클라이언트
     bot.market, bot.symbol, bot.side = "spot", "ONEUSDT", "long"
     bot.quote = "USDT"
     bot.leverage = 1
@@ -20,6 +20,15 @@ def _bot(in_position=False, held=0.0, entry=0.0):
     bot.capital = 32.0
     bot._done_command_ids = deque(maxlen=200)
     bot.pending_acks = []
+
+    # 시험 본문이 bot.market·side 를 선물 숏으로 바꾼다. 브로커가 봇의 설정을 따라보게 한다.
+    class _FollowsBot(macro_runner.brokers.BinanceBroker):
+        market = property(lambda self: bot.market, lambda self, _value: None)
+        symbol = property(lambda self: bot.symbol, lambda self, _value: None)
+        side = property(lambda self: bot.side, lambda self, _value: None)
+
+    bot.broker = _FollowsBot(bot.client, market=bot.market, symbol=bot.symbol,
+                             side=bot.side, testnet=True, log=bot.log)
     return bot
 
 

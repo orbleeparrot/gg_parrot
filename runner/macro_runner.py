@@ -29,7 +29,6 @@
 from __future__ import annotations
 
 import json
-import math
 import os
 import queue
 import shutil
@@ -48,6 +47,11 @@ try:  # package import (tests) / direct script import (PyInstaller build)
     from . import credentials as credentials_mod
 except ImportError:
     import credentials as credentials_mod
+
+try:  # package import (tests) / direct script import (PyInstaller build)
+    from . import brokers
+except ImportError:
+    import brokers
 
 try:
     import requests
@@ -296,16 +300,6 @@ def _round_step(qty: float, step: float) -> float:
     return float((Decimal(str(qty)) / d).to_integral_value(rounding=ROUND_DOWN) * d)
 
 
-def _parse_filters(info: dict) -> tuple[float, float]:
-    step, min_notional = 0.0, 0.0
-    for f in (info or {}).get("filters", []):
-        if f["filterType"] in ("LOT_SIZE", "MARKET_LOT_SIZE") and not step:
-            step = float(f["stepSize"])
-        elif f["filterType"] in ("MIN_NOTIONAL", "NOTIONAL"):
-            min_notional = float(f.get("minNotional", f.get("notional", 0)) or 0)
-    return step, min_notional
-
-
 def _decide_market(side: str, leverage: int) -> str:
     return "futures" if (side == "short" or leverage > 1) else "spot"
 
@@ -552,7 +546,7 @@ class BotThread(threading.Thread):
         self.side = str(macro.get("position_side", "long")).lower()
         self.leverage = max(1, int(macro.get("leverage", 1) or 1))
         self.market = _decide_market(self.side, self.leverage)
-        self.client = None
+        self.broker = None
         self.step = 0.0
         self.in_position = False
         self.entry_price = 0.0
@@ -597,14 +591,11 @@ class BotThread(threading.Thread):
             self.log("python-binance 가 없어요. requirements 설치 후 다시 실행하세요.")
             return False
         try:
-            self.client = Client(self.api_key, self.api_secret, testnet=self.testnet)
-            if self.market == "futures":
-                bal = self._fut_usdt_balance()
-                self.log(f"연결 성공 · 선물 USDT 증거금: {bal if bal is not None else '조회 실패'}")
-            else:
-                acc = self.client.get_account()
-                usdt = next((b for b in acc["balances"] if b["asset"] == "USDT"), None)
-                self.log(f"연결 성공 · 현물 USDT 잔고: {usdt['free'] if usdt else '조회 실패'}")
+            self.broker = brokers.BinanceBroker(
+                Client(self.api_key, self.api_secret, testnet=self.testnet),
+                market=self.market, symbol=self.symbol, side=self.side,
+                testnet=self.testnet, leverage=self.leverage, log=self.log)
+            self.broker.check_account()
         except Exception as exc:
             self.log(f"연결/인증 실패: {exc}")
             if "-2015" in str(exc) or "Invalid API-key" in str(exc):
@@ -614,28 +605,8 @@ class BotThread(threading.Thread):
             return False
         return True
 
-    def _fut_symbol_info(self):
-        try:
-            for s in self.client.futures_exchange_info().get("symbols", []):
-                if s.get("symbol") == self.symbol:
-                    return s
-        except Exception as exc:
-            self.log(f"선물 심볼정보 조회 실패: {exc}")
-        return None
-
-    def _fut_usdt_balance(self):
-        try:
-            for b in self.client.futures_account_balance():
-                if b.get("asset") == "USDT":
-                    return float(b.get("balance", 0))
-        except Exception:
-            return None
-        return 0.0
-
     def _price(self) -> float:
-        if self.market == "futures":
-            return float(self.client.futures_symbol_ticker(symbol=self.symbol)["price"])
-        return float(self.client.get_symbol_ticker(symbol=self.symbol)["price"])
+        return self.broker.price()
 
     def _place(self, side_word: str, qty: float, reduce_only: bool = False) -> bool:
         """시장가 주문 하나를 넣고 체결을 확인한 뒤 보유 상태를 갱신한다.
@@ -648,66 +619,14 @@ class BotThread(threading.Thread):
         sellable = _round_step(self.held_qty, self.step) if self.held_qty > 0 else 0.0
         partial_close = closing and sellable > 0 and (sellable - qty) >= (self.step or 1e-12)
         client_id = "ggp-" + uuid.uuid4().hex[:28]
-        kwargs = dict(symbol=self.symbol, side=side_word, type="MARKET",
-                      quantity=qty, newClientOrderId=client_id,
-                      newOrderRespType="RESULT" if self.market == "futures" else "FULL")
-        if reduce_only:
-            kwargs["reduceOnly"] = "true"
-        try:
-            create = self.client.futures_create_order if self.market == "futures" else self.client.create_order
-            order = create(**kwargs)
-        except Exception:
-            # A timeout does not prove rejection. Reconcile the same client ID
-            # before any further decision; never send a second market order.
-            order = {}
-        terminal = {"FILLED", "CANCELED", "REJECTED", "EXPIRED", "EXPIRED_IN_MATCH"}
-        for attempt in range(MAX_RETRIES):
-            if order.get("status") in terminal:
-                break
-            try:
-                query = self.client.futures_get_order if self.market == "futures" else self.client.get_order
-                order = query(symbol=self.symbol, origClientOrderId=client_id)
-            except Exception:
-                # Keep any confirmed partial fill from the previous response.
-                pass
-            if order.get("status") not in terminal and attempt + 1 < MAX_RETRIES:
-                time.sleep(0.25 * (attempt + 1))
-
-        def positive_number(value):
-            try:
-                number = float(value or 0)
-                return number if math.isfinite(number) and number > 0 else 0.0
-            except (ValueError, TypeError):
-                return 0.0
-
-        executed = positive_number(order.get("executedQty"))
-        average = positive_number(order.get("avgPrice"))
-        if not average and executed:
-            average = positive_number(order.get("cummulativeQuoteQty") or order.get("cumQuote")) / executed
-        if not average and executed:
-            fills = order.get("fills") or []
-            quote = sum(positive_number(fill.get("price")) * positive_number(fill.get("qty")) for fill in fills)
-            average = quote / executed
-
+        # 제출 · 재조정 · 평균가 · 수수료는 브로커가 한다. 봇은 그 결과로 장부만 쓴다.
+        order = self.broker.submit(side_word, base_qty=qty, reduce_only=reduce_only,
+                                   closing=closing, client_id=client_id)
+        executed, average = order.executed_qty, order.avg_price
+        acquired, fees_known = order.acquired_qty, order.fees_known
         self._last_fill_qty, self._last_fill_price = executed, average
-        acquired = executed
-        fees_known = True
-        if self.market == "spot" and not closing and executed:
-            base_asset = getattr(self, "base_asset", "") or (self.symbol[:-4] if self.symbol.endswith(("USDT", "USDC")) else "")
-            fills = order.get("fills") or []
-            if not fills and order.get("orderId") is not None:
-                try:
-                    trades = self.client.get_my_trades(symbol=self.symbol, orderId=order["orderId"], limit=1000)
-                    fills = [trade for trade in trades if str(trade.get("orderId")) == str(order["orderId"])]
-                except Exception:
-                    fills = []
-            fees_known = bool(base_asset and fills) and all("commissionAsset" in fill and "commission" in fill for fill in fills)
-            fees_known = fees_known and math.isclose(sum(positive_number(fill.get("qty")) for fill in fills), executed, rel_tol=1e-9, abs_tol=1e-12)
-            if fees_known:
-                base_fee = sum(positive_number(fill.get("commission")) for fill in fills if fill["commissionAsset"] == base_asset)
-                acquired = max(0.0, executed - base_fee)
-        self.position_uncertain = order.get("status") not in terminal or (
-            order.get("status") == "FILLED" and not (executed and average)
+        self.position_uncertain = order.status not in brokers.TERMINAL_STATUSES or (
+            order.status == "FILLED" and not (executed and average)
         ) or bool(executed and not average) or not fees_known
         dust_only = False
         if executed:
@@ -718,7 +637,7 @@ class BotThread(threading.Thread):
                 self.held_qty = max(0.0, self.held_qty - executed)
                 if self.held_qty < 1e-12:
                     self.held_qty = 0.0
-                if self.market == "spot" and order.get("status") == "FILLED" and 0 < self.held_qty < self.step and not self.position_uncertain:
+                if self.market == "spot" and order.status == "FILLED" and 0 < self.held_qty < self.step and not self.position_uncertain:
                     # LOT_SIZE cannot sell this residue. Keep its amount in the
                     # status note; never use unrelated account holdings to pad it.
                     self.position_dust_qty = getattr(self, "position_dust_qty", 0.0) + self.held_qty
@@ -736,37 +655,21 @@ class BotThread(threading.Thread):
         # Unknown submission may have opened a real position even if the order
         # query failed. Never turn that uncertainty into a flat snapshot.
         self.in_position = (self.held_qty > 0 and not dust_only) or self.position_uncertain
-        if order.get("status") != "FILLED" or self.position_uncertain or (closing and self.in_position and not partial_close):
-            raise RuntimeError(f"주문 상태 {order.get('status', 'unknown')} — 체결 완료를 확인하지 못했습니다. 거래소에서 주문과 포지션을 확인하세요.")
-        self.log(f"  ✓ {side_word}{' (청산)' if reduce_only else ''} 체결: id={order.get('orderId')} 수량={executed}")
+        if order.status != "FILLED" or self.position_uncertain or (closing and self.in_position and not partial_close):
+            raise RuntimeError(f"주문 상태 {order.status} — 체결 완료를 확인하지 못했습니다. 거래소에서 주문과 포지션을 확인하세요.")
+        self.log(f"  ✓ {side_word}{' (청산)' if reduce_only else ''} 체결: id={order.order_id} 수량={executed}")
         return True
 
     def _prepare(self) -> bool:
         """시장별 심볼정보/레버리지 세팅. 성공 시 True."""
-        if self.market == "futures":
-            info = self._fut_symbol_info()
-            if not info:
-                self.log(f"[오류] '{self.symbol}' 은 (테스트넷) 선물에 없어요. 심볼을 바꾸세요.")
-                return False
-            self.step, _ = _parse_filters(info)
-            try:
-                self.client.futures_change_margin_type(symbol=self.symbol, marginType="ISOLATED")
-            except Exception:
-                pass
-            try:
-                self.client.futures_change_leverage(symbol=self.symbol, leverage=self.leverage)
-            except Exception as exc:
-                self.log(f"⚠ 레버리지 {self.leverage}배 설정 실패({exc}). 계정 기본값으로 진행.")
-        else:
-            if self.side == "short":
-                self.log("현물은 숏을 지원하지 않아요. 선물 매크로를 쓰세요.")
-                return False
-            info = self.client.get_symbol_info(self.symbol)
-            if not info:
-                self.log(f"[오류] '{self.symbol}' 은 (테스트넷) 현물에 없어요. 심볼을 바꾸세요.")
-                return False
-            self.base_asset = info.get("baseAsset", "")
-            self.step, _ = _parse_filters(info)
+        if self.market != "futures" and self.side == "short":
+            self.log("현물은 숏을 지원하지 않아요. 선물 매크로를 쓰세요.")
+            return False
+        if not self.broker.ensure_ready():
+            where = "선물" if self.market == "futures" else "현물"
+            self.log(f"[오류] '{self.symbol}' 은 (테스트넷) {where}에 없어요. 심볼을 바꾸세요.")
+            return False
+        self.step = self.broker.order_rules().step
         return True
 
     def _close_position(self) -> bool:

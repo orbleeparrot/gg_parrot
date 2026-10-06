@@ -98,6 +98,8 @@ def test_new_signature_binds_exchange_and_legacy_signature_still_verifies(symbol
     old.pop("exchange", None)
     old.pop("quote_currency", None)
     old.pop("entry_filter", None)  # v1 서명에는 이 필드도 없다
+    old.pop("legs", None)  # v1 에는 묶음 칸도 없었다
+    old.pop("bundle_risk", None)
     payload = json.dumps(old, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
     sig = {"v": 1, "hmac": hmac.new(macro_signing._key(), payload, hashlib.sha256).hexdigest()}
     assert macro_signing.verify(macro, sig)

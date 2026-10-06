@@ -468,6 +468,14 @@ class Macro(BaseModel):
                 f"rule_type {self.rule_type.value} does not support entry_filter"
             )
 
+        if self.rule_type in _PARAMS_MODEL:
+            self._validate_new_type()
+        else:
+            self._validate_legacy_type()
+
+        # 레그 검증은 묶음 본체의 params 검증 **뒤**다. 앞에 두면 본체 params 가 잘못됐을 때
+        # 오류가 "레그 X 설정을 확인해 주세요" 로 나와 엉뚱한 곳을 가리킨다. 또 레그는
+        # 정규화를 마친 본체 params 를 물려받는 편이 맞다.
         if self.is_portfolio():
             specs = self.leg_specs()
             if self.bundle_risk is not None:
@@ -491,11 +499,6 @@ class Macro(BaseModel):
                     self.for_leg(leg)
                 except ValueError as exc:
                     raise ValueError(f"레그 {leg.symbol} 설정을 확인해 주세요") from exc
-
-        if self.rule_type in _PARAMS_MODEL:
-            self._validate_new_type()
-        else:
-            self._validate_legacy_type()
 
         return self
 

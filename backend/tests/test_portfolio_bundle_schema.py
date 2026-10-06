@@ -207,3 +207,11 @@ def test_gateable_types_matches_filterable():
     from app.engine.schema import FILTERABLE_TYPES
     assert GATEABLE_TYPES == FILTERABLE_TYPES
     assert RuleType.D not in GATEABLE_TYPES and RuleType.E in GATEABLE_TYPES
+
+
+def test_bad_bundle_params_points_at_the_bundle_not_a_leg():
+    """본체 params 가 잘못됐으면 레그 탓으로 돌리지 않는다 — 사용자가 엉뚱한 칸을 본다."""
+    with pytest.raises(ValidationError) as exc:
+        macro(params={"k": -1.0, "initial_capital": 1000},
+              legs=legs(("BTCUSDT", 50), ("ETHUSDT", 50)))
+    assert "레그" not in str(exc.value), str(exc.value)

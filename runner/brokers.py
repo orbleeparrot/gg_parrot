@@ -116,28 +116,46 @@ class BinanceBroker:
             usdt = next((b for b in acc["balances"] if b["asset"] == "USDT"), None)
             self.log(f"연결 성공 · 현물 USDT 잔고: {usdt['free'] if usdt else '조회 실패'}")
 
+    @property
+    def fee_from_base_asset(self) -> bool:
+        """현물 매수 수수료는 받은 기초자산에서 빠진다. 선물은 증거금에서 빠져 수량이 그대로다."""
+        return self.market == "spot"
+
     def ensure_ready(self) -> bool:
         """심볼 규격을 읽고 선물이면 마진·레버리지를 맞춘다. 심볼이 없으면 거짓."""
+        if not self.load_market():
+            return False
+        if self.market == "futures":
+            self._configure_futures()
+        return True
+
+    def load_market(self) -> bool:
+        """읽기만 한다 — 심볼 규격과 기초자산. 계정 설정은 건드리지 않는다. 심볼이 없으면 거짓.
+
+        ensure_ready 에서 떼어 낸 이유: 모의 모드는 규격은 읽어야 하지만, 레버리지 변경은 실계정에
+        쓰는 일이라 열려 있는 실제 포지션의 청산가를 움직인다. 연습이 실계정을 건드리면 안 된다.
+        """
         if self.market == "futures":
             info = self._futures_symbol_info()
             if not info:
                 return False
-            self._rules = OrderRules(*_parse_filters(info))
-            try:
-                self.raw.futures_change_margin_type(symbol=self.symbol, marginType="ISOLATED")
-            except Exception:
-                pass  # 이미 ISOLATED 면 거래소가 거절한다 — 원하는 상태라 넘어간다
-            try:
-                self.raw.futures_change_leverage(symbol=self.symbol, leverage=self.leverage)
-            except Exception as exc:
-                self.log(f"⚠ 레버리지 {self.leverage}배 설정 실패({exc}). 계정 기본값으로 진행.")
         else:
             info = self.raw.get_symbol_info(self.symbol)
             if not info:
                 return False
             self.base_asset = info.get("baseAsset", "")
-            self._rules = OrderRules(*_parse_filters(info))
+        self._rules = OrderRules(*_parse_filters(info))
         return True
+
+    def _configure_futures(self) -> None:
+        try:
+            self.raw.futures_change_margin_type(symbol=self.symbol, marginType="ISOLATED")
+        except Exception:
+            pass  # 이미 ISOLATED 면 거래소가 거절한다 — 원하는 상태라 넘어간다
+        try:
+            self.raw.futures_change_leverage(symbol=self.symbol, leverage=self.leverage)
+        except Exception as exc:
+            self.log(f"⚠ 레버리지 {self.leverage}배 설정 실패({exc}). 계정 기본값으로 진행.")
 
     def order_rules(self) -> OrderRules:
         return self._rules
@@ -441,8 +459,15 @@ class DomesticBroker:
         krw = next((a for a in accounts if a.get("currency") == "KRW"), None)
         self.log(f"연결 성공 · 원화 잔고: {krw['balance'] if krw else '조회 실패'}")
 
+    # 수수료가 원화에서 빠지므로 받은 수량은 체결 수량 그대로다 — _normalize 가 그렇게 채운다.
+    fee_from_base_asset = False
+
     def ensure_ready(self) -> bool:
         """주문 규격과 수수료율을 읽는다. 마켓이 없으면 거짓, 인증·네트워크 문제는 예외."""
+        return self.load_market()
+
+    def load_market(self) -> bool:
+        """읽기뿐인 준비. 국내 현물은 계정에 쓰는 설정이 없어 ensure_ready 와 같다 — 모의가 두 어댑터에 같은 이름으로 부르게 둔다."""
         try:
             self._load_chance()
         except DomesticApiError as exc:
@@ -623,13 +648,23 @@ class MockBroker:
 
     속성을 통째로 안쪽에 넘기는 __getattr__ 은 일부러 두지 않는다 — 그러면 raw.create_order 같은
     주문 입구가 이 객체를 통해 열린다. 읽기 전용 이름표(market · side · symbol)만 따로 내보낸다.
-    가상 자본은 봇이 매크로의 initial_capital 에서 들고 있고, 실제 잔고는 읽지 않는다.
+
+    연습은 키 없이도 돌아야 하고 실계정에 쓰지 않아야 한다. 그래서 읽기(시세 · 규격)는 진짜로 하되
+    서명이 필요한 읽기(계정 확인)가 막히면 한 번만 알리고 넘어가며, 계정 설정 쓰기(레버리지 등)는 아예 부르지 않는다.
+    가상 자본은 봇이 매크로의 initial_capital 에서 들고 있다. 실제 잔고는 크기를 정하는 데 쓰지 않는다 —
+    키가 있을 때 check_account 가 연결 확인으로 잔고를 기록에 남기는 것이 전부다.
     """
 
     def __init__(self, inner, *, log):
         self._inner = inner
         self.log = log
-        self._rules_fallback_logged = False
+        self._noted = set()
+
+    def _note_once(self, key, message):
+        # 봇이 주문마다 부르는 메서드도 있어, 매번 남기면 기록이 묻힌다.
+        if key not in self._noted:
+            self._noted.add(key)
+            self.log(message)
 
     # --- 이름표 (봇이 거래소를 구분하지 않고 읽는 값) --------------
     @property
@@ -644,12 +679,25 @@ class MockBroker:
     def symbol(self):
         return getattr(self._inner, "symbol", "")
 
-    # --- 읽기는 진짜로 ------------------------------------------
+    # --- 읽기는 진짜로, 막히면 알리고 넘어간다 --------------------
     def check_account(self) -> None:
-        self._inner.check_account()
+        """키가 없거나 허용 IP 가 막혀 실패해도 연습은 계속한다 — 실전에서 막힐 이유는 기록에 남긴다."""
+        try:
+            self._inner.check_account()
+        except Exception as exc:
+            self._note_once("check_account", f"모의 모드: 계정 확인에 실패했지만 계속합니다. 실전에서는 막힐 수 있어요({exc})")
 
     def ensure_ready(self) -> bool:
-        return self._inner.ensure_ready()
+        """규격만 읽는다(load_market). 안쪽 ensure_ready 는 부르지 않는다 — 선물에서는 실계정의 마진 · 레버리지를 바꾼다.
+
+        심볼이 없다는 답(거짓)은 그대로 돌려준다. 인증 · 네트워크 때문에 읽지 못한 것은 심볼이 없는 것과
+        다르므로 알리고 넘어간다 — 규격은 order_rules 의 기본값으로 대신한다.
+        """
+        try:
+            return self._inner.load_market()
+        except Exception as exc:
+            self._note_once("ensure_ready", f"모의 모드: 거래소 규격을 읽지 못했지만 계속합니다({exc})")
+            return True
 
     def price(self) -> float:
         return self._inner.price()
@@ -659,14 +707,11 @@ class MockBroker:
 
         기본값은 '제한 없음'(수량 단위 0 · 최소 금액 0)이다 — 모의가 실전보다 깐깐해서 연습이
         막히는 것보다, 실전의 최소 금액 거절을 연습에서 못 보는 쪽이 덜 해롭다.
-        물러났다는 사실은 한 번만 남긴다 — 봇이 주문마다 부르므로 매번 남기면 기록이 묻힌다.
         """
         try:
             return self._inner.order_rules()
         except Exception as exc:
-            if not self._rules_fallback_logged:
-                self._rules_fallback_logged = True
-                self.log(f"모의 모드: 주문 규격을 읽지 못해 제한 없음으로 진행합니다({exc})")
+            self._note_once("order_rules", f"모의 모드: 주문 규격을 읽지 못해 제한 없음으로 진행합니다({exc})")
             return _MOCK_FALLBACK_RULES
 
     def rehearse(self, *, notional) -> tuple[bool, str]:
@@ -699,17 +744,18 @@ class MockBroker:
         if not executed:
             raise ValueError("모의 주문에 쓸 양수 금액(notional) 또는 수량(base_qty)이 없습니다")
 
-        # 현물 매수만 수수료를 받은 수량에서 뗀다 — 실제 어댑터와 같은 규칙이다. 청산 · 매도 · 선물은 그대로.
+        # 어댑터마다 수수료를 떼는 곳이 다르다. 바이낸스 현물은 받은 기초자산에서 떼고, 국내는 원화에서 떼서
+        # 수량이 그대로다. 연습이 실전과 같은 보유 수량을 보여 주려면 어댑터의 규칙을 그대로 따라야 한다.
         if closing is None:
             closing = bool(reduce_only) or not buying
         acquired = executed
-        if buying and not closing and self.market != "futures":
+        if buying and not closing and getattr(self._inner, "fee_from_base_asset", False) is True:
             acquired = executed * (1.0 - self._fee_rate())
         return Order(status="FILLED", executed_qty=executed, avg_price=price, acquired_qty=acquired,
                      fees_known=True, order_id=f"mock-{client_id}", raw_status="MOCK_FILLED")
 
     def _fee_rate(self) -> float:
-        # 바이낸스 어댑터에는 fees 가 없고, 국내 어댑터는 키 없이 규격을 못 읽으면 0 인 채라서 둘 다 기본값으로 대신한다.
+        # 바이낸스 어댑터에는 fees 가 없다. 읽지 못했거나 0 이면 기본값으로 대신한다.
         try:
             rate = _positive_number(self._inner.fees["bid"])
         except Exception:

@@ -12,6 +12,8 @@ class MockBrokerTests(unittest.TestCase):
         inner.order_rules.return_value = brokers.OrderRules(step=0.001, min_notional=0.0)
         inner.fees = {"bid": 0.0005, "ask": 0.0005}
         inner.rehearse.return_value = (True, "")
+        inner.load_market.return_value = True
+        inner.fee_from_base_asset = True  # 바이낸스 현물처럼 수수료를 받은 수량에서 뗀다
         return inner
 
     def test_mock_never_submits_to_the_exchange(self):
@@ -54,7 +56,7 @@ class MockBrokerTests(unittest.TestCase):
 
     def test_mock_futures_buy_is_not_fee_haircut(self):
         inner = self.inner()
-        inner.market = "futures"  # 선물은 수수료를 수량에서 떼지 않는다
+        inner.fee_from_base_asset = False  # 선물 · 국내는 수수료를 수량에서 떼지 않는다
         order = brokers.MockBroker(inner, log=Mock()).submit("BUY", base_qty=3.0, client_id="ggp-7")
         self.assertEqual(order.acquired_qty, 3.0)
 
@@ -90,14 +92,40 @@ class MockBrokerTests(unittest.TestCase):
         brokers.MockBroker(inner, log=Mock()).price()
         inner.price.assert_called_once()
 
-    def test_mock_delegates_ensure_ready_and_check_account(self):
+    def test_mock_reads_the_market_without_the_inner_account_writes(self):
         inner = self.inner()
-        inner.ensure_ready.return_value = True
         broker = brokers.MockBroker(inner, log=Mock())
         self.assertTrue(broker.ensure_ready())
         broker.check_account()
-        inner.ensure_ready.assert_called_once()
+        inner.load_market.assert_called_once()
         inner.check_account.assert_called_once()
+        # 안쪽 ensure_ready 는 선물에서 실계정의 레버리지를 바꾼다 — 모의는 읽기 쪽만 부른다.
+        inner.ensure_ready.assert_not_called()
+
+    def test_mock_keeps_symbol_not_found_as_false(self):
+        inner = self.inner()
+        inner.load_market.return_value = False
+        self.assertFalse(brokers.MockBroker(inner, log=Mock()).ensure_ready())
+
+    def test_mock_ensure_ready_swallows_auth_failures_once(self):
+        inner = self.inner()
+        inner.load_market.side_effect = RuntimeError("HTTP 401 no_authorization_ip")
+        log = Mock()
+        broker = brokers.MockBroker(inner, log=log)
+        self.assertTrue(broker.ensure_ready())
+        self.assertTrue(broker.ensure_ready())
+        self.assertEqual(log.call_count, 1)
+        self.assertIn("no_authorization_ip", log.call_args.args[0])
+
+    def test_mock_check_account_swallows_auth_failures_once(self):
+        inner = self.inner()
+        inner.check_account.side_effect = RuntimeError("HTTP 401 invalid_access_key")
+        log = Mock()
+        broker = brokers.MockBroker(inner, log=log)
+        broker.check_account()
+        broker.check_account()
+        self.assertEqual(log.call_count, 1)
+        self.assertIn("invalid_access_key", log.call_args.args[0])
 
     def test_mock_tolerates_a_failed_rehearsal(self):
         inner = self.inner()
@@ -167,7 +195,7 @@ class MockBrokerTests(unittest.TestCase):
         self.assertFalse(hasattr(broker, "session"))
 
 
-def binance_inner(market):
+def binance_inner(market, *, keys=True):
     raw = Mock()
     raw.futures_symbol_ticker.return_value = {"price": "100"}
     raw.get_symbol_ticker.return_value = {"price": "100"}
@@ -177,6 +205,9 @@ def binance_inner(market):
         {"filterType": "LOT_SIZE", "stepSize": "0.001"}, {"filterType": "NOTIONAL", "minNotional": "5"}]}
     raw.futures_account_balance.return_value = [{"asset": "USDT", "balance": "1000"}]
     raw.get_account.return_value = {"balances": [{"asset": "USDT", "free": "1000"}]}
+    if not keys:  # 서명이 필요한 읽기만 막힌다 — 시세 · 거래소 정보는 공개다
+        raw.get_account.side_effect = RuntimeError("APIError(code=-2015): Invalid API-key, IP, or permissions")
+        raw.futures_account_balance.side_effect = RuntimeError("APIError(code=-2015)")
     inner = brokers.BinanceBroker(raw, market=market, symbol="BTCUSDT", side="long",
                                   testnet=False, log=Mock())
     return inner, raw
@@ -230,6 +261,9 @@ class MockNeverReachesTheOrderEndpointTests(unittest.TestCase):
         self.assertTrue({"futures_symbol_ticker", "get_symbol_ticker"} & called, "시세 읽기는 진짜로 나가야 한다")
         for name in self.BINANCE_ORDER_CALLS:
             getattr(raw, name).assert_not_called()
+        # 연습이 실계정 설정을 바꾸면 안 된다 — 레버리지는 열린 실제 포지션의 청산가를 움직인다.
+        raw.futures_change_margin_type.assert_not_called()
+        raw.futures_change_leverage.assert_not_called()
 
     def assert_domestic_never_ordered(self, session, exchange):
         posted = [call.args[0] for call in session.post.call_args_list]
@@ -246,6 +280,21 @@ class MockNeverReachesTheOrderEndpointTests(unittest.TestCase):
         raw.create_order.return_value = {"status": "FILLED", "executedQty": "1"}
         binance.submit("BUY", base_qty=1.0, client_id="ggp-ctrl2")
         raw.create_order.assert_called()
+
+    def test_harness_detects_account_writes_when_the_inner_is_configured_directly(self):
+        # 대조군 — 안쪽 ensure_ready 는 실제로 쓴다. 위 단언이 그걸 잡아내야 모의의 무쓰기 증명이 성립한다.
+        inner, raw = binance_inner("futures")
+        self.assertTrue(inner.ensure_ready())
+        raw.futures_change_margin_type.assert_called_once()
+        raw.futures_change_leverage.assert_called_once()
+
+    def test_mock_wrapped_futures_never_changes_margin_or_leverage(self):
+        inner, raw = binance_inner("futures")
+        broker = brokers.MockBroker(inner, log=Mock())
+        self.assertTrue(broker.ensure_ready())
+        self.assertEqual(broker.order_rules().step, 0.001)  # 쓰기는 빼도 규격 읽기는 남는다
+        raw.futures_change_margin_type.assert_not_called()
+        raw.futures_change_leverage.assert_not_called()
 
     def test_binance_spot(self):
         inner, raw = binance_inner("spot")
@@ -277,6 +326,26 @@ class MockNeverReachesTheOrderEndpointTests(unittest.TestCase):
             spy.assert_not_called()
 
 
+class MockFollowsEachAdaptersFeeModelTests(unittest.TestCase):
+    def test_binance_spot_takes_the_fee_from_the_base_asset(self):
+        inner, _raw = binance_inner("spot")
+        order = brokers.MockBroker(inner, log=Mock()).submit("BUY", base_qty=3.0, client_id="ggp-f1")
+        self.assertAlmostEqual(order.acquired_qty, 3.0 * (1 - 0.0005))
+
+    def test_binance_futures_keeps_the_quantity(self):
+        inner, _raw = binance_inner("futures")
+        order = brokers.MockBroker(inner, log=Mock()).submit("BUY", base_qty=3.0, client_id="ggp-f2")
+        self.assertEqual(order.acquired_qty, 3.0)
+
+    def test_domestic_takes_the_fee_from_krw_so_quantity_is_unchanged(self):
+        for exchange in ("upbit", "bithumb"):
+            inner, _session = domestic_inner(exchange)
+            inner.ensure_ready()  # 수수료율 0.0005 가 읽힌 상태에서도 수량은 깎이지 않는다
+            order = brokers.MockBroker(inner, log=Mock()).submit("BUY", notional=1000.0, client_id="ggp-f3")
+            self.assertEqual(order.executed_qty, 10.0)
+            self.assertEqual(order.acquired_qty, order.executed_qty, exchange)
+
+
 class MockRunsWithoutKeysTests(unittest.TestCase):
     """키가 없어도(국내는 비공개 읽기가 전부 401) 연습은 돌아야 한다 — 그래서 모의가 연습 모드다."""
 
@@ -284,6 +353,12 @@ class MockRunsWithoutKeysTests(unittest.TestCase):
         for exchange in ("upbit", "bithumb"):
             inner, session = domestic_inner(exchange, keys=False)
             broker = brokers.MockBroker(inner, log=Mock())
+            with self.assertRaises(Exception):  # 대조 — 안쪽은 정말 키 없이는 실패한다
+                inner.check_account()
+            with self.assertRaises(Exception):
+                inner.ensure_ready()
+            broker.check_account()
+            self.assertTrue(broker.ensure_ready(), exchange)
             ok, reason = broker.rehearse(notional=1000.0)
             self.assertTrue(ok, exchange)
             self.assertTrue(reason, exchange)
@@ -292,6 +367,26 @@ class MockRunsWithoutKeysTests(unittest.TestCase):
             order = broker.submit("BUY", notional=1000.0, client_id="ggp-k1")
             self.assertEqual((order.status, order.executed_qty), ("FILLED", 10.0))
             self.assertNotIn(order_url(exchange), [call.args[0] for call in session.post.call_args_list])
+
+
+    def test_keyless_binance_mainnet_still_practises(self):
+        for market in ("spot", "futures"):
+            inner, raw = binance_inner(market, keys=False)
+            broker = brokers.MockBroker(inner, log=Mock())
+            if market == "spot":
+                with self.assertRaises(Exception):  # 대조 — 현물 계정 확인은 서명이 필요해 실패한다
+                    inner.check_account()
+            broker.check_account()
+            self.assertTrue(broker.ensure_ready(), market)
+            ok, reason = broker.rehearse(notional=1000.0)
+            self.assertTrue(ok, market)
+            self.assertTrue(reason, market)
+            self.assertEqual(broker.price(), 100.0)
+            order = broker.submit("BUY", base_qty=1.0, client_id="ggp-k2")
+            self.assertEqual(order.status, "FILLED", market)
+            raw.create_order.assert_not_called()
+            raw.futures_create_order.assert_not_called()
+            raw.futures_change_leverage.assert_not_called()
 
 
 if __name__ == "__main__":

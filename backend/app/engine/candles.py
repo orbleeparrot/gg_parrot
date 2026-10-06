@@ -159,6 +159,9 @@ class CandleSim:
         self._cooldown_until: Optional[datetime] = None
         self._entry_time: Optional[datetime] = None
         self.stopped = False  # hard stop (band exit / reenter disabled)
+        # 진입 필터 — 없으면 None. on_candle 이 봉이 끝난 뒤 갱신하고 _entry_blocked 가 묻는다.
+        from .entry_filter import make_filter  # 늦은 import: entry_filter -> candles 순환 방지
+        self.entry_filter = make_filter(macro)
 
     # -- position helpers (long book) ------------------------------------
     def total_qty(self) -> float:
@@ -372,6 +375,8 @@ class CandleSim:
             return True
         if self._cooldown_until is not None and ts < self._cooldown_until:
             return True
+        if self.entry_filter is not None and not self.entry_filter.allows():
+            return True
         return False
 
     def _common_risk(self, o: float, h: float, l: float, c: float, ts: datetime, fills: List[Fill]) -> bool:
@@ -448,6 +453,10 @@ class CandleSim:
         if self.side is PositionSide.SHORT and self.in_position() and self.funding > 0:
             self.cash -= self.total_qty() * c * self.funding / 100.0
         self._strategy(o, h, l, c, ts, fills)
+        # 전략 '뒤' 에 갱신한다 — 그래야 이 봉의 진입 판단은 직전 마감봉의 필터 값을 본다.
+        # 순서를 바꾸면 진행 중인 봉으로 자기 자신을 판정하는 미래 참조가 된다.
+        if self.entry_filter is not None:
+            self.entry_filter.update(c)
         return fills
 
     def _strategy(self, o, h, l, c, ts, fills):  # pragma: no cover - overridden

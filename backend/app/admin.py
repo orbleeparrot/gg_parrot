@@ -582,6 +582,8 @@ def _users_report(db, days: int, *, include_internal: bool = False) -> dict:
             "day": day, "active": active, "new": len(new_visitors), "returning": max(0, active - len(new_visitors)),
             "sessions": count, "pageviews": views, "pv_per_session": _ratio(views, count),
             "avg_session_sec": _avg_seconds(todays), "bounce_pct": _pct(sum(1 for s in todays if s.views == 1), count),
+            "measured_sessions": sum(s.dwell_known for s in todays),
+            "session_dwell_ms": sum(s.dwell_ms for s in todays if s.dwell_known),
         })
     today_row = daily[-1]
 

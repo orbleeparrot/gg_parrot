@@ -18,6 +18,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlmodel import Field, Session, SQLModel, select
 
 from ...db import get_session
+from ...news_identity import news_identity
 
 
 class NewsArticleFeed(SQLModel, table=True):
@@ -99,13 +100,7 @@ class NewsMaintenanceLease(SQLModel, table=True):
 
 
 def article_id(item: dict) -> str:
-    if item.get("content_type") == "community":
-        identity = "|".join(("community", str(item.get("source") or "Binance Square"),
-                             str(item.get("community_post_id") or item.get("url") or "")))
-    else:
-        identity = "|".join((str(item.get("original_title") or item.get("title") or ""),
-                             str(item.get("source") or ""))).strip("|")
-        identity = identity or str(item.get("url") or "")
+    identity = news_identity(item)
     return hashlib.sha256(identity.encode("utf-8")).hexdigest()[:20]
 
 
@@ -176,8 +171,13 @@ def upsert_articles(asset_symbol: str, items: list[dict], *, analysis: dict | No
     for index, item in enumerate(items):
         if not item.get("title") or not _prepared_news_item_is_relevant(item, scope):
             continue
-        key = article_id(item)
-        incoming[key] = (dict(item), assessments[index] if index < len(assessments) else None)
+        # Already claimed legacy enrichment must update its original row, not
+        # create a URL-identity sibling during this rolling deployment.
+        key = str(item.get("id") or article_id(item)) if enrichment_only else article_id(item)
+        assessment = assessments[index] if index < len(assessments) else None
+        prior = incoming.get(key)
+        incoming[key] = (_merge_item(prior[0], item) if prior else dict(item),
+                         assessment if assessment is not None else prior[1] if prior else None)
     # 1단계: 해시만 가볍게 읽어 같은 항목이 다시 온 행을 고른다 — 본문(item_json)은 내려받지 않는다.
     digests = {key: item_hash(item) for key, (item, _assessment) in incoming.items()}
     known = {row.article_id: (row.source_hash, row.content_hash) for row in db.exec(
@@ -317,9 +317,19 @@ def read_article_feed(asset_symbol: str, *, after_revision: int | None = None,
     # Revalidate old ready flags too. Keep cursor progression based on raw rows,
     # and filter assessments with the same rows so sentiment never shifts.
     from ...news import _prepared_news_item_is_relevant
-    rows = [row for row in rows if _ready(json.loads(row.item_json))
-            and _prepared_news_item_is_relevant(json.loads(row.item_json), state.asset_symbol)]
-    items = [json.loads(row.item_json) for row in rows]
+    projections = [(row, json.loads(row.item_json)) for row in rows]
+    projections = [(row, item) for row, item in projections if _ready(item)
+                   and _prepared_news_item_is_relevant(item, state.asset_symbol)]
+    # Old source aliases remain in storage until normal retention. Projection
+    # dedupe never changes raw cursor progression or assessment alignment.
+    winners = {}
+    for row, item in projections:
+        identity = news_identity(item)
+        if not reset or identity not in winners:
+            winners[identity] = row
+    projections = [(row, item) for row, item in projections if winners[news_identity(item)] is row]
+    rows = [row for row, _item in projections]
+    items = [item for _row, item in projections]
     pending = max(0, state.item_count - state.ready_count)
     result = {**json.loads(state.metadata_json), "items": items, "cursor": cursor,
             "reset": reset, "has_more": has_more,
@@ -349,7 +359,7 @@ def update_article_image(asset_symbol: str, article_id: str, image_fields: dict,
     item = json.loads(current.item_json)
     item.update({key: value for key, value in image_fields.items()
                  if key in {"image", "article_url", "image_resolved"}})
-    return upsert_articles(scope, [item], now_ms=now_ms, db=db)
+    return upsert_articles(scope, [item], now_ms=now_ms, enrichment_only=True, db=db)
 
 
 def claim_maintenance(name: str = "news-cache-prune", *, interval_seconds: int = 3600,

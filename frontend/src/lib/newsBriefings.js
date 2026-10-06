@@ -1,3 +1,5 @@
+import { dedupeNewsItems } from "./newsIdentity.js";
+
 const RETRY_MS = 30_000;
 const MAX_RETRY_MS = 300_000;
 const REQUEST_TIMEOUT_MS = 45_000;
@@ -51,10 +53,11 @@ export function prepareNewsResponse(payload = {}) {
   const sourceItems = Array.isArray(payload.items) ? payload.items : [];
   // The API validates full translations. This also protects mixed-version
   // deployments where an old response can still contain an English headline.
-  const items = sourceItems.filter((item) => item && hasKoreanText(item.title));
+  const translated = sourceItems.filter((item) => item && hasKoreanText(item.title));
+  const items = dedupeNewsItems(translated);
   const pendingCount = Math.max(
     Number(payload.translation?.pending_count) || 0,
-    sourceItems.length - items.length,
+    sourceItems.length - translated.length,
   );
   const partial = payload.translation?.status === "partial" || pendingCount > 0;
   return {

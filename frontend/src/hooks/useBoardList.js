@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { api } from "../api.js";
 import { useAuth } from "../lib/auth.js";
 
@@ -6,6 +6,8 @@ export default function useBoardList(page, size, { sort = "new", q = "", field =
   const { token } = useAuth();
   const version = useSyncExternalStore(api.subscribeBoardList, api.boardListVersion, api.boardListVersion);
   const [state, setState] = useState({ data: null, busy: true, err: "", now: Date.now() });
+  const [attempt, setAttempt] = useState(0);
+  const retry = useCallback(() => setAttempt(value => value + 1), []);
   useEffect(() => {
     if (!size) return undefined;
     const controller = new AbortController();
@@ -18,6 +20,6 @@ export default function useBoardList(page, size, { sort = "new", q = "", field =
       if (active && error.name !== "AbortError") setState(s => ({ ...s, busy: false, err: String(error.message || error) }));
     });
     return () => { active = false; controller.abort(); };
-  }, [page, size, sort, q, field, token, version]);
-  return state;
+  }, [page, size, sort, q, field, token, version, attempt]);
+  return { ...state, retry };
 }

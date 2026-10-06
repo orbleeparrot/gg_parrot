@@ -10,8 +10,8 @@ import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 import {
   AGGREGATION_START, BOARD_STATUS, CHANNEL_DETAIL, CHANNEL_LABELS, COST_METHOD_LABELS, DEVICE_LABELS, ENGINE_STATUS,
   METHOD_LABELS, PAGE_LABELS, PURPOSE_LABELS, fmtDayTimeKst, fmtDuration, fmtInt, fmtKst, fmtLimit, fmtMonthLabel, fmtNum, fmtPct,
-  fmtRelative, fmtSignedPct, fmtStamp, fmtTimeKst, fmtTokens, fmtUntil, fmtUsd, labelOf, meanBy, ratioPct, sinceNote, sumBy, sumOrNull,
-  weightedMean,
+  fmtRelative, fmtSignedPct, fmtStamp, fmtTimeKst, fmtTokens, fmtUntil, fmtUsd, labelOf, ratioPct, sinceNote, sumBy, sumOrNull,
+  weightedMean, measuredSessionAverage,
 } from "../lib/adminFormat.js";
 import {
   MEMBER_PAGE_SIZES, MEMBER_STATUSES, MEMBER_Q_MAX, blockActionKind, clampPage, memberActionError, memberEmail,
@@ -210,9 +210,8 @@ function UsersTab({ data, days }) {
     active: windowActive, new: wholeWindow ? (k.new_visitors ?? null) : null, returning: null,
     sessions: sessionSum, pageviews: sumBy(visible, "pageviews"),
     pv_per_session: sessionSum ? sumBy(visible, "pageviews") / sessionSum : null,
-    // 일별 평균 세션 시간은 '체류가 측정된 세션'만의 평균인데 서버는 그 측정 세션 수를 주지 않는다 — sessions 로
-    // 가중하면 측정 안 된 세션까지 분모에 넣는 가짜 가중이라, 값이 있는 날들의 단순 평균(일별 평균의 평균)으로 둔다.
-    avg_session_sec: meanBy(visible, "avg_session_sec"),
+    // 측정된 세션 수와 반올림 전 체류 합을 사용한다. 측정 불가는 분모에서 제외한다.
+    avg_session_sec: measuredSessionAverage(visible),
     bounce_pct: weightedMean(visible, "bounce_pct", "sessions"),
   };
   const channelTotal = {

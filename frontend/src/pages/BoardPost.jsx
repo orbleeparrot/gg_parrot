@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import useBoardList from "../hooks/useBoardList.js";
 import { api } from "../api.js";
@@ -194,8 +194,21 @@ const PURIFY = { ALLOWED_TAGS: ["p", "br", "strong", "b", "em", "i", "u", "s", "
   // DOMPurify 는 이 정규식으로 href·src 뿐 아니라 width 같은 일반 속성값도 거른다 — 스킴 없는 값(상대 주소·숫자)은 통과, `javascript:` 류는 차단.
   ALLOWED_URI_REGEXP: /^(?:https?:|mailto:|[^a-z]|[a-z+.-]+(?:[^a-z+.:-]|$))/i };
 function PostBody({ html }) {
+  const safeHtml = useMemo(() => {
+    const fragment = DOMPurify.sanitize(html || "", { ...PURIFY, RETURN_DOM_FRAGMENT: true });
+    // Pasted dark-theme colors must not override the reader's theme. Keep
+    // alignment, emphasis, links and image dimensions; never rewrite the post.
+    for (const element of fragment.querySelectorAll("[style]")) {
+      for (const property of ["color", "background", "background-color", "-webkit-text-fill-color"]) {
+        element.style.removeProperty(property);
+      }
+    }
+    const holder = document.createElement("div");
+    holder.append(fragment);
+    return holder.innerHTML;
+  }, [html]);
   if (!html) return null;
-  return <div className="board-post-body board-rich" dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(html, PURIFY) }} />;
+  return <div className="board-post-body board-rich" dangerouslySetInnerHTML={{ __html: safeHtml }} />;
 }
 
 function PostSkeleton() {

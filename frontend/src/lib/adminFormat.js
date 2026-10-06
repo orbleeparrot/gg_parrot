@@ -195,6 +195,24 @@ export function weightedMean(rows, key, weightKey) {
   return den ? num / den : null;
 }
 
+// 반올림된 일별 평균 대신 측정된 세션의 원본 체류 합으로 한 번만 계산한다.
+export function measuredSessionAverage(rows) {
+  let ms = 0;
+  let count = 0;
+  for (const row of rows || []) {
+    const dwell = finite(row?.session_dwell_ms);
+    const measured = finite(row?.measured_sessions);
+    if (dwell == null || dwell < 0 || measured == null || !Number.isInteger(measured) || measured < 0) return null;
+    ms += dwell;
+    count += measured;
+  }
+  if (!count) return null;
+  const seconds = ms / count / 1000;
+  const floor = Math.floor(seconds);
+  // Python round와 동일한 half-to-even; 날짜별/기기별/기간 합계가 같은 기준을 쓴다.
+  return seconds - floor === 0.5 ? floor + (floor % 2) : Math.round(seconds);
+}
+
 export function isAllZero(values) {
   if (!Array.isArray(values) || values.length === 0) return true;
   return values.every((v) => !(finite(v) > 0));

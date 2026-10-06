@@ -301,7 +301,7 @@ def test_admin_report_shapes_follow_contract():
     assert set(users["kpis"]) == {"dau", "wau", "mau", "stickiness_pct", "online_5m", "bounce_pct_today", "avg_session_sec_today", "new_visitors", "logged_in_accounts"}
     assert set(users["series"]) == {"days", "dau", "wau", "mau"} and all(len(users["series"][k]) == 7 for k in users["series"])
     assert len(users["daily"]) == 7 and users["daily"][-1]["day"] == users["series"]["days"][-1] == admin_mod._today_kst()
-    assert set(users["daily"][0]) == {"day", "active", "new", "returning", "sessions", "pageviews", "pv_per_session", "avg_session_sec", "bounce_pct"}
+    assert set(users["daily"][0]) == {"day", "active", "new", "returning", "sessions", "pageviews", "pv_per_session", "avg_session_sec", "bounce_pct", "measured_sessions", "session_dwell_ms"}
     assert [c["channel"] for c in users["channels"]] == ["direct", "search", "referral", "social", "campaign", "internal"]
     assert set(users["channels"][0]) == {"channel", "label", "sessions", "share_pct", "new_visitors", "bounce_pct", "signup_rate_pct"}
     assert [d["device"] for d in users["devices"]] == ["mobile", "desktop", "tablet", "unknown"]
@@ -429,6 +429,21 @@ def _by_day(rows, day):
     return next(row for row in rows if row["day"] == day)
 
 
+def test_users_period_raw_dwell_matches_single_device_average(scenario):
+    db = scenario["db"]
+    old = db.exec(select(Visit).where(Visit.view_key == "k6")).one()
+    old.dwell_ms = 100000
+    db.add(old)
+    db.commit()
+    report = admin_mod._users_report(db, 7)
+    measured = sum(row["measured_sessions"] for row in report["daily"])
+    total_ms = sum(row["session_dwell_ms"] for row in report["daily"])
+    assert (measured, total_ms) == (2, 115000)
+    desktop = next(row for row in report["devices"] if row["device"] == "desktop")
+    assert round(total_ms / measured / 1000) == desktop["avg_session_sec"] == 58
+    assert sum(row["sessions"] for row in report["daily"]) > measured
+
+
 def test_users_scenario(scenario):
     db, day, d2, d10 = scenario["db"], scenario["day"], scenario["d2"], scenario["d10"]
     report = admin_mod._users_report(db, 7)
@@ -436,10 +451,11 @@ def test_users_scenario(scenario):
     today = _by_day(report["daily"], day)
     # 세션 시간 = 체류 합: s1 은 5초 + 10초, s2 는 마지막 뷰의 체류를 몰라 제외 → 평균 15초(첫·끝 시각 차 35초가 아니다)
     assert today == {"day": day, "active": 2, "new": 2, "returning": 0, "sessions": 2, "pageviews": 3, "pv_per_session": 1.5,
-                     "avg_session_sec": 15, "bounce_pct": 50.0}
+                     "avg_session_sec": 15, "bounce_pct": 50.0, "measured_sessions": 1, "session_dwell_ms": 15000}
     two_days_ago = _by_day(report["daily"], d2)
     assert (two_days_ago["active"], two_days_ago["new"], two_days_ago["returning"], two_days_ago["sessions"], two_days_ago["bounce_pct"]) == (1, 0, 1, 1, 100.0)
     assert two_days_ago["avg_session_sec"] is None  # 유일한 뷰의 체류를 모른다 — 0초가 아니라 측정 불가
+    assert (two_days_ago["measured_sessions"], two_days_ago["session_dwell_ms"]) == (0, 0)
     assert report["kpis"]["online_5m"] == 2 and report["kpis"]["wau"] == 3 and report["kpis"]["mau"] == 3 and report["kpis"]["new_visitors"] == 2
     if report["series"]["days"][-1] == day:
         assert report["kpis"]["dau"] == 2 and report["kpis"]["stickiness_pct"] == 66.7

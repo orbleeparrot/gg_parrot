@@ -227,9 +227,12 @@ class CandleSim:
 
         _IndicatorSim 의 ``_pending`` 은 남긴다 — 백테스트가 다음 봉 시가에 실행하는 의도와 같다.
         """
-        for t_ms, o, h, l, c in candles:
+        for row in candles:
+            # (t, o, h, l, c) 또는 (t, o, h, l, c, v) — 거래량 없는 옛 봉 모양도 받는다.
+            t_ms, o, h, l, c = row[0], row[1], row[2], row[3], row[4]
+            volume = float(row[5]) if len(row) > 5 and row[5] is not None else None
             ts = datetime.fromtimestamp(int(t_ms) / 1000, timezone.utc)
-            self.on_candle(float(o), float(h), float(l), float(c), ts)
+            self.on_candle(float(o), float(h), float(l), float(c), ts, volume=volume)
         self.reset_book()
 
     def restore(self, equity: float, *, in_position: bool, qty: float, entry_price: float,
@@ -447,7 +450,8 @@ class CandleSim:
         return forced
 
     # -- driver entry point ----------------------------------------------
-    def on_candle(self, o: float, h: float, l: float, c: float, ts: datetime) -> List[Fill]:
+    def on_candle(self, o: float, h: float, l: float, c: float, ts: datetime,
+                  volume: Optional[float] = None) -> List[Fill]:
         fills: List[Fill] = []
         # Funding on held shorts (per bar, prorated only for 1d; kept simple).
         if self.side is PositionSide.SHORT and self.in_position() and self.funding > 0:
@@ -456,7 +460,7 @@ class CandleSim:
         # 전략 '뒤' 에 갱신한다 — 그래야 이 봉의 진입 판단은 직전 마감봉의 필터 값을 본다.
         # 순서를 바꾸면 진행 중인 봉으로 자기 자신을 판정하는 미래 참조가 된다.
         if self.entry_filter is not None:
-            self.entry_filter.update(c)
+            self.entry_filter.update(c, volume=volume)
         return fills
 
     def _strategy(self, o, h, l, c, ts, fills):  # pragma: no cover - overridden
@@ -1106,8 +1110,9 @@ class LiveCandleSim:
                 self._queue.extend(execute(float(price), ts or datetime.now(timezone.utc)))
         return self._queue.popleft() if self._queue else None
 
-    def on_candle(self, o: float, h: float, l: float, c: float, ts: datetime) -> int:
-        fills = self.inner.on_candle(o, h, l, c, ts)
+    def on_candle(self, o: float, h: float, l: float, c: float, ts: datetime,
+                  volume: Optional[float] = None) -> int:
+        fills = self.inner.on_candle(o, h, l, c, ts, volume=volume)
         self._queue.extend(fills)
         return len(fills)
 

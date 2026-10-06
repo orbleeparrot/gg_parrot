@@ -352,13 +352,16 @@ def _run_candle_engine(macro: Macro, df: pd.DataFrame) -> BacktestResult:
     highs = df["high"].to_numpy(dtype=float)
     lows = df["low"].to_numpy(dtype=float)
     closes = df["close"].to_numpy(dtype=float)
+    # 거래량 필터만 쓰는 열. 없으면 None 으로 넘겨 필터가 막게 한다(원칙 2).
+    volumes = df["volume"].to_numpy(dtype=float) if "volume" in df.columns else None
     times = df["timestamp"].tolist()
 
     sim = make_candle_sim(macro)
     equity_curve: List[EquityPoint] = []
     for i in range(len(closes)):
         ts = pd.Timestamp(times[i]).to_pydatetime()
-        sim.on_candle(opens[i], highs[i], lows[i], closes[i], ts)
+        sim.on_candle(opens[i], highs[i], lows[i], closes[i], ts,
+                      volume=None if volumes is None else float(volumes[i]))
         equity_curve.append(EquityPoint(t=_iso(times[i]), equity=round(sim.equity(closes[i]), 4)))
 
     return _metrics(

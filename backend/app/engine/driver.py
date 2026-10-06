@@ -139,9 +139,12 @@ class StrategyDriver:
         on_candle = getattr(leg.sim, "on_candle", None)
         if on_candle is None:
             return 0
-        t_ms, o, h, l, c = candle
+        # (t, o, h, l, c) 와 (t, o, h, l, c, v) 를 모두 받는다 — 테스트 더미가 튜플이고,
+        # 거래량을 싣지 않는 옛 호출이 남아 있다.
+        t_ms, o, h, l, c = candle[0], candle[1], candle[2], candle[3], candle[4]
+        volume = float(candle[5]) if len(candle) > 5 and candle[5] is not None else None
         ts = datetime.fromtimestamp(int(t_ms) / 1000, timezone.utc) if t_ms else datetime.now(timezone.utc)
-        return int(on_candle(float(o), float(h), float(l), float(c), ts))
+        return int(on_candle(float(o), float(h), float(l), float(c), ts, volume=volume))
 
     def warmup(self, candles_by_symbol: Dict[str, list]) -> None:
         for leg in self.legs:

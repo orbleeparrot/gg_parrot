@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { FILTERABLE_RULE_TYPES, FILTER_KINDS, buildMacro, defaultForm, macroToForm, validateDetailed, withTypeDefaults }
+import { FILTERABLE_RULE_TYPES, FILTER_KINDS, buildMacro, defaultForm, macroToForm, validateDetailed, withExchangeDefaults, withTypeDefaults }
   from "../src/lib/macro.js";
 
 const breakout = () => withTypeDefaults({ ...defaultForm(), symbol: "BTCUSDT" }, "I");
@@ -61,6 +61,21 @@ test("켜 둔 채 못 쓰는 규칙이 된 폼도 매크로에는 필터를 싣�
   const stale = { ...breakout(), use_entry_filter: true, filter_kind: "ma", rule_type: "A" };
   assert.equal(buildMacro(stale).entry_filter, null);
   assert.equal(validateDetailed({ ...stale, filter_ma_period: 1 })?.field?.startsWith("filter_") ?? false, false);
+});
+
+test("거래소를 바꿔 K 가 A 로 내려가면 필터도 버려서, 다음에 필터 규칙을 골라도 되살아나지 않는다", () => {
+  // K 는 국내 거래소에서 못 쓰므로 거래소 전환이 규칙을 A 로 내린다. 그 길은 withTypeDefaults 를 거치지 않는다.
+  const k = { ...withTypeDefaults({ ...defaultForm(), symbol: "BTCUSDT" }, "K"),
+    use_entry_filter: true, filter_kind: "volume", filter_vol_period: 30, filter_vol_multiple: 4 };
+  assert.equal(buildMacro(k).entry_filter.kind, "volume", "출발점: K 에 거래량 필터");
+
+  const domestic = withExchangeDefaults(k, "upbit", []);
+  assert.equal(domestic.rule_type, "A", "업비트로 바꾸면 K 는 A 로 내려간다");
+  assert.equal(domestic.use_entry_filter, false, "A 에서는 필터 체크가 꺼져 있어야 한다");
+
+  const back = withTypeDefaults(domestic, "F");
+  assert.equal(back.use_entry_filter, false, "버린 필터가 F 를 고르자 체크된 채 되살아났다");
+  assert.equal(buildMacro(back).entry_filter, null);
 });
 
 test("필터를 쓰는 규칙끼리 바꾸면 필터가 남는다", () => {

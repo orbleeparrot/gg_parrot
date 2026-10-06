@@ -181,7 +181,9 @@ export function withExchangeDefaults(form, value, items = []) {
   for (const key of EXCHANGE_MONEY_FIELDS) next[key] = "";
   if (isDomestic(exchange)) {
     Object.assign(next, { position_side: "long", leverage: 1, market: "spot", flip_to_short: false });
-    if (next.rule_type === "K") next.rule_type = "A";
+    // K 는 국내에서 못 쓴다 — A 로 내리면서 필터도 버린다(A 는 필터를 못 쓴다). withTypeDefaults 를 거치지 않는 길이라
+    // 여기서 안 끄면, 다음에 필터 규칙을 골랐을 때 버린 필터가 체크된 채 되살아난다.
+    if (next.rule_type === "K") { next.rule_type = "A"; next.use_entry_filter = false; }
     if (next.rule_type === "C") next.candle_interval = "1d";
   } else next.market = "auto";
   return next;

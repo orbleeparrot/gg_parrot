@@ -11,6 +11,7 @@ import atexit
 import copy
 import hashlib
 import json
+import logging
 import os
 import threading
 import time
@@ -26,6 +27,7 @@ from .api_usage import record_openai_usage
 from .observability import timed_operation
 
 T = TypeVar("T")
+logger = logging.getLogger(__name__)
 
 # All features share this target; no old-provider fallback.
 DEFAULT_MODEL = "gpt-6-luna"
@@ -69,6 +71,10 @@ class AiRateLimitError(AiProviderError):
     """Provider asked us to slow down (429) — transient."""
 
 
+class AiQuotaError(AiProviderError):
+    """Billing/quota rejection; immediate retries cannot repair it."""
+
+
 class AiConnectionError(AiProviderError):
     """Network failure or timeout before a response arrived — transient."""
 
@@ -87,6 +93,8 @@ def _translate_error(error: BaseException) -> AiProviderError:
         if code in (401, 403):
             return AiAuthError(message, status_code=code)
         if code == 429:
+            if getattr(error, "code", None) in {"insufficient_quota", "billing_hard_limit_reached"}:
+                return AiQuotaError("OpenAI quota unavailable", status_code=code)
             return AiRateLimitError(message, status_code=code)
         return AiStatusError(message, status_code=code)
     if isinstance(error, (httpx.TimeoutException, httpx.TransportError)):
@@ -164,7 +172,17 @@ class _Messages:
         except (openai.APIError, httpx.HTTPError) as error:
             # 실패도 요청 한 건이다 — 여기서 세야 재시도·캐시 히트와 무관하게 과금 단위와 맞는다.
             record_openai_usage(model=model, purpose=purpose, usage=None, ok=False)
-            raise _translate_error(error) from error
+            mapped = _translate_error(error)
+            # Fixed diagnostics only: never emit provider bodies, prompts or keys.
+            logger.warning("AI provider failure: provider=openai model=%s purpose=%s release=%s category=%s http_status=%s",
+                           model, purpose, os.environ.get("RENDER_GIT_COMMIT", "local")[:12],
+                           type(mapped).__name__, mapped.status_code)
+            try:
+                from .ai_provider_health import pause
+                pause(mapped)
+            except Exception as storage_error:
+                logger.warning("AI provider cooldown storage unavailable: reason=%s", type(storage_error).__name__)
+            raise mapped from error
         except Exception:
             record_openai_usage(model=model, purpose=purpose, usage=None, ok=False)
             raise
@@ -326,6 +344,10 @@ class AiCallRuntime:
                 attempt = 0
                 while True:
                     try:
+                        # Before entering loaders that reserve source-item budgets.
+                        # A paused/failed health read cannot burn a slot or call AI.
+                        from .ai_provider_health import ensure_available
+                        ensure_available()
                         value = loader()
                         break
                     except BaseException as error:

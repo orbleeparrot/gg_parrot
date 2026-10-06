@@ -372,7 +372,8 @@
 .board-table, .board-post-title, .board-composer { --board-notice: var(--c-red-600); }
 .board-notice-tag {
   display: inline-flex; align-items: center; flex: none; height: 20px; padding: 0 7px; margin-right: 8px; border-radius: 6px;
-  background: rgb(var(--board-notice) / .12); color: rgb(var(--board-notice)); font-size: 12px; font-weight: 800; letter-spacing: .02em;
+  /* 바탕 9% — 12% 였을 때 글쓰기 화면(페이지 바닥 위)에서 글자 대비가 4.4:1 로 4.5:1 에 못 미쳤다. */
+  background: rgb(var(--board-notice) / .09); color: rgb(var(--board-notice)); font-size: 12px; font-weight: 800; letter-spacing: .02em;
 }
 .board-row.is-notice { background: rgb(var(--board-notice) / .05); }
 .board-row.is-notice .board-title-text,

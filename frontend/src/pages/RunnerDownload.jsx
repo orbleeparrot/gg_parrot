@@ -1070,7 +1070,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
               <p className="mt-2 t-small text-red-600" role="alert">키를 불러오지 못했어요: {memberKeyError}</p>
             ) : memberKey ? (
               <div className="mt-2 flex items-center gap-2 flex-wrap">
-                <code className="num text-slate-900 bg-slate-100 px-2 py-1 rounded break-all">{memberKeyRevealed ? memberKey : masked}</code>
+                <code className="num text-slate-900 bg-slate-100 px-2 py-1 rounded-sm break-all">{memberKeyRevealed ? memberKey : masked}</code>
                 <button type="button" onClick={() => setMemberKeyRevealed((v) => !v)} className="btn btn-s btn-secondary">{memberKeyRevealed ? "숨기기" : "보기"}</button>
                 <button type="button" onClick={copyMemberKey} className="btn btn-s btn-primary">{memberKeyCopied ? "복사됨!" : "회원 키 복사"}</button>
               </div>

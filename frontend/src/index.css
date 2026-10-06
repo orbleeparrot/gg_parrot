@@ -1,9 +1,118 @@
 /* Hallmark · macrostructure: sidebar system-shell + split entry hero · genre: modern-minimal · tone: direct product utility · palette: cool slate / Binance yellow · DESIGN.md locked */
 /* Hallmark · pre-emit critique: P4 H5 E4 S5 R5 V4 · contrast: pass (40–41) · nav: N2 · footer: Ft1 · honest/chrome/tokens/icons: pass (30, 46–48) · responsive/mobile: pass (34, 49–57) */
-@tailwind base;
+@import "tailwindcss";
 /* GGparrot(껄무새) — 코인 매크로 백테스트/페이퍼 데모 */
-@tailwind components;
-@tailwind utilities;
+
+/* --- Tailwind v4 설정 (옛 tailwind.config.js) ------------------------------
+   다크 모드는 <html class="dark"> 로 켠다 — v3 의 darkMode: "class" 와 같은 선택자.
+   색은 팔레트 자체를 바꿔 끼운다: 아래 테마 색은 모두 --c-* 런타임 변수를 가리키고,
+   .dark 가 그 변수를 다시 정의한다(아래 theme palette). 런타임 변수를 가리키므로
+   공식 문서대로 @theme inline 을 쓴다 — 유틸리티가 쓰이는 자리에서 변수를 푼다.
+   surface·danger·brand 는 일부러 Tailwind 의 white/red 와 따로 둔다(text-white 는
+   늘 흰색이어야 하고, 노랑 위 글자는 늘 brand-ink). 단계별 역할: 50/100/200 옅은 판,
+   300/400 테두리, 500/600 채운 버튼, 700/800 옅은 판 위 글자. */
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --font-sans: "Pretendard", system-ui, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* v3 처럼 text-* 의 줄 높이를 고정값으로 — v4 기본은 글자 크기에 대한 비율이라, CSS 에서
+     글자 크기만 덮어쓴 자리(.chip-sm 등)에서 줄 높이가 같이 줄어든다. */
+  --text-xs--line-height: 1rem;
+  --text-sm--line-height: 1.25rem;
+  --text-base--line-height: 1.5rem;
+  --text-lg--line-height: 1.75rem;
+  --text-xl--line-height: 1.75rem;
+  --text-2xl--line-height: 2rem;
+  --text-3xl--line-height: 2.25rem;
+  --text-4xl--line-height: 2.5rem;
+
+  --color-surface: rgb(var(--c-surface));
+  --color-danger: rgb(var(--c-danger));
+  --color-danger-hover: rgb(var(--c-danger-hover));
+  --color-brand: rgb(var(--c-brand));
+  --color-brand-hover: rgb(var(--c-brand-hover));
+  --color-brand-ink: rgb(var(--c-brand-ink));
+  --color-brand-line: rgb(var(--c-brand-line));
+
+  --color-slate-50: rgb(var(--c-slate-50));
+  --color-slate-100: rgb(var(--c-slate-100));
+  --color-slate-200: rgb(var(--c-slate-200));
+  --color-slate-300: rgb(var(--c-slate-300));
+  --color-slate-400: rgb(var(--c-slate-400));
+  --color-slate-500: rgb(var(--c-slate-500));
+  --color-slate-600: rgb(var(--c-slate-600));
+  --color-slate-700: rgb(var(--c-slate-700));
+  --color-slate-800: rgb(var(--c-slate-800));
+  --color-slate-900: rgb(var(--c-slate-900));
+  --color-indigo-50: rgb(var(--c-indigo-50));
+  --color-indigo-100: rgb(var(--c-indigo-100));
+  --color-indigo-200: rgb(var(--c-indigo-200));
+  --color-indigo-300: rgb(var(--c-indigo-300));
+  --color-indigo-400: rgb(var(--c-indigo-400));
+  --color-indigo-500: rgb(var(--c-indigo-500));
+  --color-indigo-600: rgb(var(--c-indigo-600));
+  --color-indigo-700: rgb(var(--c-indigo-700));
+  --color-indigo-800: rgb(var(--c-indigo-800));
+  --color-indigo-900: rgb(var(--c-indigo-900));
+  --color-red-50: rgb(var(--c-red-50));
+  --color-red-100: rgb(var(--c-red-100));
+  --color-red-300: rgb(var(--c-red-300));
+  --color-red-400: rgb(var(--c-red-400));
+  --color-red-500: rgb(var(--c-red-500));
+  --color-red-600: rgb(var(--c-red-600));
+  --color-red-700: rgb(var(--c-red-700));
+  --color-red-800: rgb(var(--c-red-800));
+  --color-green-50: rgb(var(--c-green-50));
+  --color-green-300: rgb(var(--c-green-300));
+  --color-green-600: rgb(var(--c-green-600));
+  --color-green-700: rgb(var(--c-green-700));
+  --color-amber-50: rgb(var(--c-amber-50));
+  --color-amber-100: rgb(var(--c-amber-100));
+  --color-amber-200: rgb(var(--c-amber-200));
+  --color-amber-300: rgb(var(--c-amber-300));
+  --color-amber-500: rgb(var(--c-amber-500));
+  --color-amber-600: rgb(var(--c-amber-600));
+  --color-amber-700: rgb(var(--c-amber-700));
+  --color-amber-800: rgb(var(--c-amber-800));
+  --color-blue-50: rgb(var(--c-blue-50));
+  --color-blue-300: rgb(var(--c-blue-300));
+  --color-blue-500: rgb(var(--c-blue-500));
+  --color-blue-600: rgb(var(--c-blue-600));
+  --color-blue-800: rgb(var(--c-blue-800));
+  --color-cyan-50: rgb(var(--c-cyan-50));
+  --color-cyan-100: rgb(var(--c-cyan-100));
+  --color-cyan-200: rgb(var(--c-cyan-200));
+  --color-cyan-700: rgb(var(--c-cyan-700));
+  --color-cyan-800: rgb(var(--c-cyan-800));
+  --color-sky-50: rgb(var(--c-sky-50));
+  --color-sky-100: rgb(var(--c-sky-100));
+  --color-sky-700: rgb(var(--c-sky-700));
+  --color-sky-800: rgb(var(--c-sky-800));
+}
+
+/* v3 기본값 유지 — v4 의 preflight 가 바꾼 것들(공식 업그레이드 가이드의 호환 규칙). */
+@layer base {
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: var(--color-gray-200, currentColor);
+  }
+  input::placeholder,
+  textarea::placeholder {
+    color: var(--color-gray-400);
+  }
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+  dialog {
+    margin: auto;
+  }
+}
 
 /* --- fonts -------------------------------------------------------------
    Pretendard: 토스가 자체 서체(TPS) 대체로 공식 권장하는 한글 서체.
@@ -290,6 +399,9 @@
   }
 }
 
+/* v4 는 @layer 를 진짜 캐스케이드 레이어로 만든다 — 레이어 밖 규칙은 선택자 우선순위와 상관없이
+   유틸리티·컴포넌트를 이긴다. 태그만으로 된 기본값은 base 레이어에 둬야 v3 처럼 클래스에 진다. */
+@layer base {
 html,
 body {
   overflow-x: clip;
@@ -310,6 +422,7 @@ body {
   word-break: keep-all;
   overflow-wrap: break-word;
 }
+}
 
 /* 수치 전용. binance 가 본문(Nova)과 숫자(Plex)를 서체째로 가르는 규칙을
    오픈소스 서체로 옮긴 것. tabular 라 자릿수가 세로로 맞는다. */
@@ -321,7 +434,9 @@ body {
 
 /* 제목은 자간을 조여 덩어리로 읽히게 한다 — 토스 램프가 제목에만
    강한 음수 자간을 주는 이유. 본문은 풀어서 한 글자씩 읽히게 둔다. */
+@layer base {
 h1, h2, h3, h4 { letter-spacing: -0.02em; }
+}
 
 /* 13px 이하에 weight 400 을 쓰지 않는다. 어두운 바닥에서 가는 획이
    번져 보여 수치상 통과하는 대비도 실제로는 흐리게 느껴진다. */
@@ -337,9 +452,11 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 /* §9 상태 — 포커스는 어느 테마에서든 보이는 brand-line 아웃라인.
    입력은 예외: .field 가 테두리 자체를 brand-line 으로 바꾸므로 아웃라인까지
    그리면 선이 두 겹으로 보인다. */
+@layer base {
 :focus-visible {
   outline: 2px solid rgb(var(--c-brand-line));
   outline-offset: 2px;
+}
 }
 .field:focus-visible {
   outline: none;
@@ -373,6 +490,7 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 }
 
 /* §7 모션 — 상호작용 요소의 색 전환 200ms. reduced-motion 이면 없음. */
+@layer base {
 @media (prefers-reduced-motion: no-preference) {
   button, a, input, select {
     transition-property: background-color, border-color, color, opacity, filter;
@@ -380,21 +498,26 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
     transition-timing-function: cubic-bezier(0.22, 0.61, 0.36, 1);
   }
 }
+}
 
 /* Native controls (checkboxes, date inputs, select arrows, scrollbars) follow
    the OS light/dark rendering; without this they stay white-on-white in dark. */
+@layer base {
 :root { color-scheme: light; }
+}
 .dark { color-scheme: dark; }
 
 /* iOS zooms the whole page when a focused control's text is under 16px, and it
    never zooms back out — the page just ends up wider than the screen. Most of
    our inputs are `text-sm` (14px), so lift them to 16px on phones. */
+@layer base {
 @media (max-width: 639px) {
   input,
   select,
   textarea {
     font-size: 16px;
   }
+}
 }
 
 /* Standalone controls get 44px targets. Inline help keeps a round glyph and
@@ -1443,9 +1566,9 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   /* table-row / stat — 스탯을 회색 상자 그리드로 만들지 않기 위한 대체 구조. */
   .table-row  { @apply flex items-baseline justify-between gap-4 py-3 border-b border-slate-200 last:border-0; }
   .row-label  { @apply text-[15px] font-medium text-slate-700; }
-  .row-value  { @apply text-[17px] font-bold num text-slate-900; }
+  .row-value  { @apply text-[17px] font-bold text-slate-900; font-family: "JetBrains Mono", "Pretendard", ui-monospace, SFMono-Regular, Menlo, monospace; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
   .stat-label { @apply text-[13px] font-semibold text-slate-700; }
-  .stat-value { @apply text-xl font-bold num text-slate-900; }
+  .stat-value { @apply text-xl font-bold text-slate-900; font-family: "JetBrains Mono", "Pretendard", ui-monospace, SFMono-Regular, Menlo, monospace; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
 
   /* First-run progress. The nodes follow DESIGN §6: 26px, brand for current
      and completed, neutral surface for steps that have not been reached. */

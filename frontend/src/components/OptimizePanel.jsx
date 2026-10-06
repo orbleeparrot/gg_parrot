@@ -37,7 +37,7 @@ export function HeatLegend({ extent }) {
   return (
     <div className="flex items-center gap-2 t-caption text-slate-500">
       <span className="num">-{extent.toFixed(1)}%</span>
-      <span className="flex rounded overflow-hidden" aria-hidden>
+      <span className="flex rounded-sm overflow-hidden" aria-hidden>
         {stops.map((t) => (
           <span key={t} className="w-7 h-3" style={heatStyle(t * extent, extent)} />
         ))}
@@ -222,7 +222,7 @@ export default function OptimizePanel({ form, setForm, valErr, onResult }) {
                             className={
                               "w-full min-w-[64px] rounded-md px-2 py-2 text-center font-bold num text-slate-800 transition " +
                               "hover:ring-2 hover:ring-slate-400 " +
-                              (best ? "outline outline-2 outline-green-600 " : "") +
+                              (best ? "outline-2 outline-green-600 " : "") +
                               (cur ? "ring-2 ring-brand-line " : "")
                             }
                           >

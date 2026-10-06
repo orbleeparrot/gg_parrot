@@ -823,7 +823,7 @@ function AccountStudio({ scope, allowRouterMacro }) {
                 자동 실행
               </label>
               <span>
-                <kbd className="num rounded border border-slate-300 bg-slate-100 px-1">Ctrl</kbd>+<kbd className="num rounded border border-slate-300 bg-slate-100 px-1">Enter</kbd>
+                <kbd className="num rounded-sm border border-slate-300 bg-slate-100 px-1">Ctrl</kbd>+<kbd className="num rounded-sm border border-slate-300 bg-slate-100 px-1">Enter</kbd>
               </span>
             </div>
           </div>

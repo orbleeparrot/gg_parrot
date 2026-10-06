@@ -1,11 +1,12 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
 import { offlineCache } from "./build/offlineCache.js";
 
 // Dev: proxy /api to the FastAPI backend so the SPA can use relative URLs
 // (the same relative URLs also work in production when FastAPI serves dist/).
 export default defineConfig({
-  plugins: [react(), offlineCache()],
+  plugins: [react(), tailwindcss(), offlineCache()],
   server: {
     port: 5173,
     proxy: {

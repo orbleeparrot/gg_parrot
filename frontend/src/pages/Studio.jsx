@@ -185,10 +185,11 @@ function AccountStudio({ scope, allowRouterMacro }) {
   const savedRef = useRef(undefined);
   if (savedRef.current === undefined) savedRef.current = slug ? null : readStudioSession(scope);
   const saved = savedRef.current;
-  const [form, setForm] = useState(() => saved?.form || defaultForm());
+  // 이 탭에 남은 작업은 배포 전 형식일 수 있다 — 새로 생긴 칸은 기본값으로 채운다(없는 칸이 undefined 로 남지 않게).
+  const [form, setForm] = useState(() => (saved?.form && typeof saved.form === "object" ? { ...defaultForm(), ...saved.form } : defaultForm()));
   const [result, setResult] = useState(() => saved?.result || null);
   const [testedMacro, setTestedMacro] = useState(() => saved?.testedMacro || null);
-  const [perSymbol, setPerSymbol] = useState(() => saved?.perSymbol || []);
+  const [perSymbol, setPerSymbol] = useState(() => (Array.isArray(saved?.perSymbol) ? saved.perSymbol : []));
   const [explanation, setExplanation] = useState(() => saved?.explanation || null);
   const [aiBusy, setAiBusy] = useState(false);
   const [aiError, setAiError] = useState("");

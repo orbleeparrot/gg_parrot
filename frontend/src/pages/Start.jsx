@@ -442,6 +442,8 @@ function AccountStart({ onNestedDialogChange }) {
   useEffect(() => {
     if (screen.kind !== "register" || !registrationReady || !registeredEntry?.id) return undefined;
     const timer = window.setInterval(() => {
+      // 숨은 탭에서는 쉰다 — 다른 탭을 보는 동안에도 5초마다 리더보드 전체를 받아 오던 것.
+      if (document.hidden) return;
       syncRegisteredBoard(registeredEntry, currentKey, registered.mode);
     }, 5000);
     return () => window.clearInterval(timer);

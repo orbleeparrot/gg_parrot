@@ -425,7 +425,8 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
   const launchMinVersion = launchMinVersionFor(keyGuide, { general: requiredRunnerVersion, domestic: domesticMinVersion });
 
   useEffect(() => {
-    const acknowledged = window.localStorage.getItem(apiKeyGuideStorageKey) === "acknowledged";
+    let acknowledged = false;
+    try { acknowledged = window.localStorage.getItem(apiKeyGuideStorageKey) === "acknowledged"; } catch { /* 막힌 저장소 */ }
     setApiKeyChecked(acknowledged);
     setApiKeyPrepared(acknowledged);
   }, [apiKeyGuideStorageKey]);
@@ -686,7 +687,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
 
   function completeApiKeyGuide() {
     if (!apiKeyChecked) return;
-    window.localStorage.setItem(apiKeyGuideStorageKey, "acknowledged");
+    try { window.localStorage.setItem(apiKeyGuideStorageKey, "acknowledged"); } catch { /* 막힌 저장소 — 이번 방문에만 기억 */ }
     setApiKeyPrepared(true);
     moveTo(STEP_RUNNER);
   }
@@ -1018,7 +1019,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
               const checked = event.target.checked;
               setApiKeyChecked(checked);
               if (!checked) {
-                window.localStorage.removeItem(apiKeyGuideStorageKey);
+                try { window.localStorage.removeItem(apiKeyGuideStorageKey); } catch { /* 막힌 저장소 */ }
                 setApiKeyPrepared(false);
               }
             }}

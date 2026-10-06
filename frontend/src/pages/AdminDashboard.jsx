@@ -117,7 +117,8 @@ export default function AdminDashboard() {
     setParams(memberSearchParams(merged), { replace: true });
   }, [memberQuery, setParams]);
 
-  if (!user) return <Navigate to="/login" replace />;
+  // 로그인 뒤 보던 탭으로 돌아오게 — 예전엔 리더보드로 떨어졌다.
+  if (!user) return <Navigate to={`/login?next=${encodeURIComponent(`/admin${params.toString() ? `?${params}` : ""}`)}`} replace />;
   if (!user.is_admin) return <Navigate to="/mypage" replace />;
 
   const badgeLabels = {

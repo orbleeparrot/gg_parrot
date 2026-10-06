@@ -41,4 +41,6 @@ def capabilities(exchange: str = "binance") -> dict:
             "quote_currency": quote_currency(exchange), "spot": True,
             "futures": not domestic, "short": not domestic,
             "max_leverage": 1 if domestic else 20,
-            "runner_supported": not domestic}
+            # 실행기(v10+)는 업비트·빗썸 원화 현물에 주문을 낸다. 국내를 거짓으로 두면
+            # API 가 거짓말을 하고, 다음에 이 값을 읽는 화면이 국내 실행을 막게 된다.
+            "runner_supported": True}

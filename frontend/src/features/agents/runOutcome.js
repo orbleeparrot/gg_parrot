@@ -148,7 +148,7 @@ export function describeRunOutcome(session) {
     { label: `평단${positionLabel}`, value: positionEntry > 0 ? PRICE.format(positionEntry) : "—", numeric: true },
     { label: `수량${positionLabel}`, value: positionQty > 0 ? `${QTY.format(positionQty)} ${baseAsset(s.symbol)}`.trim() : "—", numeric: true },
     { label: "마지막 평가손익", value: resultPct !== null ? formatSignedPct(resultPct) : "—", numeric: true, tone: resultPct !== null ? toneOf(resultPct) : "" },
-    { label: "종목·환경", value: `${s.symbol || "—"} · ${marketLabel(s)} · ${s.testnet ? practiceModeLabel(s.symbol) : "메인넷(실거래)"}` },
+    { label: "종목·환경", value: `${s.symbol || "—"} · ${marketLabel(s)} · ${s.testnet ? practiceModeLabel(s.symbol, s.mode) : "메인넷(실거래)"}` },
     { label: "종료 방식", value: stopModeLabel(s.stop_mode) },
     { label: "마지막 가격", value: Number(s.last_price) ? PRICE.format(Number(s.last_price)) : "—", numeric: true },
     // 포지션 블록이 보여 주던 실행기 버전·출처와 청산 기준 — 결과 화면에서도 같은 자리에 남긴다.

@@ -635,3 +635,141 @@ class BinanceRehearsalTests(unittest.TestCase):
         ok, reason = broker.rehearse(notional=1.0)
         self.assertFalse(ok)
         self.assertIn("최소 주문 금액", reason)
+
+
+class PostOrderLookupNeverRaisesTests(unittest.TestCase):
+    """submit 에서 나간 예외는 '주문을 보내지 않았다' 는 뜻이다(바이낸스 어댑터가 지키는 약속).
+
+    POST 뒤에 터지는 예외는 그 약속을 깨뜨린다 — 봇은 포지션을 불확실로 잡지도 않고 명령을 계속 받는데
+    실제로는 원화 시장가 주문이 체결돼 있을 수 있다. 그래서 POST 뒤의 모든 실패는 UNKNOWN 으로 나온다.
+    """
+
+    def broker(self, exchange="upbit"):
+        self.session = Mock()
+        return brokers.DomesticBroker("acc", "sec", exchange=exchange,
+                                      symbol="KRW-BTC", log=Mock(), session=self.session)
+
+    @patch("runner.brokers.time.sleep")
+    def test_a_non_object_lookup_body_is_unknown_not_an_exception(self, _sleep):
+        # HTTP 200 에 객체가 아닌 몸통(목록 · 게이트웨이 안내문)이 실려 온 경우.
+        for body in ([{"state": "done"}], "maintenance", 7, None):
+            with self.subTest(body=body):
+                broker = self.broker()
+                self.session.post.return_value = FakeResponse({"uuid": "u"})
+                self.session.get.return_value = FakeResponse(body)
+                order = broker.submit("BUY", notional=5000.0, client_id="ggp-shape")
+                self.assertEqual(order.status, "UNKNOWN")  # 봇은 끝 상태가 아닌 주문을 불확실로 잡는다
+                self.assertEqual(self.session.post.call_count, 1)  # 두 번째 시장가 주문은 없다
+                # 모양이 틀린 답은 '답이 없다' 로 본다 — 조회는 끝까지 다시 해 본다(한 번에 포기하지 않는다).
+                self.assertEqual(self.session.get.call_count, brokers.MAX_RETRIES)
+
+    @patch("runner.brokers.time.sleep")
+    def test_trades_that_are_not_objects_do_not_raise_and_stay_uncertain(self, _sleep):
+        broker = self.broker()
+        self.session.post.return_value = FakeResponse({"uuid": "u"})
+        self.session.get.return_value = FakeResponse({"state": "done", "executed_volume": "0.01",
+                                                      "trades": ["0.01"]})
+        order = broker.submit("BUY", notional=5000.0, client_id="ggp-trades")
+        self.assertEqual(order.status, "FILLED")
+        self.assertFalse(order.fees_known)  # 체결 내역이 체결 수량을 덮지 못했다 → 봇이 불확실로 본다
+
+    @patch("runner.brokers.time.sleep")
+    def test_any_other_failure_after_the_post_is_unknown_never_an_exception(self, _sleep):
+        broker = self.broker()
+        self.session.post.return_value = FakeResponse({"uuid": "u"})
+        self.session.get.return_value = FakeResponse(FILLED)
+        broker._normalize = Mock(side_effect=AttributeError("boom"))
+        order = broker.submit("BUY", notional=5000.0, client_id="ggp-guard")
+        self.assertEqual((order.status, order.raw_status), ("UNKNOWN", "unknown"))
+        self.assertTrue(any("확인하지 못했습니다" in str(c) for c in broker.log.call_args_list))
+
+    def test_the_lookup_and_the_normaliser_each_hold_the_shape_on_their_own(self):
+        # 바깥 덮개 하나에 기대지 않는다 — 두 자리가 각각 모양을 확인해야 한번에 무너지지 않는다.
+        broker = self.broker()
+        self.session.get.return_value = FakeResponse([{"state": "done"}])
+        self.assertEqual(broker._lookup_order("ggp-x"), {})
+        for body in ([{"state": "done"}], "maintenance", None, 7):
+            with self.subTest(body=body):
+                order = broker._normalize(body)
+                self.assertEqual((order.status, order.raw_status), ("UNKNOWN", "unknown"))
+
+    def test_the_pre_post_value_errors_still_raise_and_send_nothing(self):
+        # 주문을 보내기 전의 거절은 예외가 맞다 — 그게 '주문이 나가지 않았다' 는 뜻이다.
+        broker = self.broker()
+        with self.assertRaises(ValueError):
+            broker.submit("BUY", notional=0, client_id="ggp-pre")
+        with self.assertRaises(ValueError):
+            broker.submit("SELL", base_qty=0, client_id="ggp-pre2")
+        self.session.post.assert_not_called()
+
+
+class KrwAmountIsWholeWonTests(unittest.TestCase):
+    """원화 금액은 1원 단위로 보낸다. 정수만 받는 거래소라면 소수점이 붙은 금액은 전부 거절된다 —
+    서명은 우리가 보낸 글자로 맞춰져 있어 다른 증상이 없고, 모든 국내 진입이 조용히 막힌다."""
+
+    def broker(self, exchange="upbit"):
+        self.session = Mock()
+        return brokers.DomesticBroker("acc", "sec", exchange=exchange,
+                                      symbol="KRW-BTC", log=Mock(), session=self.session)
+
+    def test_a_fractional_won_amount_is_floored_to_an_integer(self):
+        broker = self.broker()
+        self.session.post.return_value = FakeResponse({"uuid": "u"})
+        self.session.get.return_value = FakeResponse(FILLED)
+        broker.submit("BUY", notional=100_000 / 3, client_id="ggp-won")  # 33333.333333333336
+        self.assertEqual(self.session.post.call_args.kwargs["json"]["price"], "33333")
+
+    def test_the_rehearsal_order_uses_the_same_integer_amount(self):
+        broker = self.broker()
+        self.session.post.return_value = FakeResponse({"uuid": "t"}, status=201)
+        self.assertTrue(broker.rehearse(notional=100_000 / 3)[0])
+        self.assertEqual(self.session.post.call_args.kwargs["json"]["price"], "33333")
+
+    def test_an_amount_under_one_won_is_refused_before_the_post(self):
+        broker = self.broker()
+        with self.assertRaises(ValueError):
+            broker.submit("BUY", notional=0.4, client_id="ggp-dust")
+        self.session.post.assert_not_called()
+
+
+class AccessFailureIsNotAMissingMarketTests(unittest.TestCase):
+    """준비 단계(load_market)는 서명이 필요한 조회다 — 세션에서 키 · 허용 IP 에 가장 먼저 걸리는 곳이다.
+
+    그 실패를 '마켓 없음'(거짓)으로 접으면 봇이 '심볼을 바꾸세요' 로 보고하고, 정작 고쳐야 할
+    허용 IP 안내는 사용자에게 닿지 않는다.
+    """
+
+    def broker(self, exchange="upbit"):
+        self.session = Mock()
+        return brokers.DomesticBroker("acc", "sec", exchange=exchange,
+                                      symbol="KRW-BTC", log=Mock(), session=self.session)
+
+    def test_an_ip_error_raises_with_the_ip_first_explanation_even_as_a_400(self):
+        for status in (400, 401, 403):
+            with self.subTest(status=status):
+                broker = self.broker()
+                self.session.get.return_value = exchange_error("no_authorization_ip", status=status)
+                with self.assertRaises(brokers.DomesticAccessError) as caught:
+                    broker.load_market()
+                self.assertIn("허용 IP", str(caught.exception))
+                self.assertNotIn("심볼", str(caught.exception))
+
+    def test_every_access_class_error_is_told_apart_from_the_market(self):
+        for name in ("invalid_access_key", "expired_access_key", "out_of_scope", "jwt_verification"):
+            with self.subTest(name=name):
+                broker = self.broker()
+                self.session.get.return_value = exchange_error(name, status=400)
+                with self.assertRaises(brokers.DomesticAccessError):
+                    broker.load_market()
+
+    def test_a_real_missing_market_is_still_just_false(self):
+        broker = self.broker()
+        self.session.get.return_value = exchange_error("invalid_market", status=404)
+        self.assertFalse(broker.load_market())
+        self.assertFalse(broker.ensure_ready())
+
+    def test_the_access_error_is_still_an_api_error_so_old_callers_keep_working(self):
+        broker = self.broker()
+        self.session.get.return_value = exchange_error("invalid_access_key", status=401)
+        with self.assertRaises(brokers.DomesticApiError):
+            broker.ensure_ready()

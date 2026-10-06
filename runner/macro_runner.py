@@ -413,12 +413,62 @@ def _base_asset(symbol: str) -> str:
     return symbol
 
 
-def _order_qty(price, step, min_notional, budget, leverage, market, *, quote="USDT") -> tuple[float, float]:
+def _positive(value) -> float:
+    """숫자로 읽히지 않거나 0 이하면 0. 매크로 params 는 사용자 JSON 이라 무엇이든 들어올 수 있다."""
+    try:
+        number = float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    return number if number > 0 and number == number and number != float("inf") else 0.0
+
+
+def _money(amount: float, quote: str) -> str:
+    """돈은 통화와 함께 쓴다. 원화에는 보여 줄 만한 소수부가 없다 — 1원 아래는 거래소에도 없다."""
+    unit = str(quote or "USDT").upper()
+    return f"{amount:+,.0f} {unit}" if unit == "KRW" else f"{amount:+,.2f} {unit}"
+
+
+def _notional_for(budget, leverage, market, *, quote="USDT") -> float:
+    """진입 예산에서 실제로 거래소에 나가는 주문 금액. 상한을 먼저 씌우고, 선물·증거금 기준이면 레버리지를 곱한다.
+
+    _order_qty 에서 떼어 낸 이유: 리허설도 같은 금액을 알아야 한다. 두 곳에서 따로 세면
+    '연습은 통과했는데 실제 주문은 거절' 또는 그 반대가 생긴다.
+    """
     cap = min(budget, order_cap(quote))
-    if market == "futures" and ORDER_CAP_BASIS == "margin":
-        notional = cap * leverage
-    else:
-        notional = cap
+    return cap * leverage if (market == "futures" and ORDER_CAP_BASIS == "margin") else cap
+
+
+def _smallest_entry_notional(macro: dict, leverage, market, *, quote="USDT") -> float:
+    """이 매크로의 진입 한 건이 쓸 수 있는 가장 작은 주문 금액.
+
+    명령의 notional_frac 은 서버가 신호마다 정하므로 세션 시작에는 알 수 없다. 대신 매크로 자신의
+    설정에서 '가장 작은 진입' 을 읽는다 — 리허설이 실제보다 큰 금액을 보면(업비트 검증 주문은 잔고까지
+    본다) 잘 돌아갈 세션을 시작도 못 하게 막고, 큰 금액으로 최소 주문 금액을 통과시키면 정작 모든
+    신호가 under_min_total 로 거절된다. 가장 작은 쪽을 보면 두 방향 다 막힌다.
+    """
+    params = (macro or {}).get("params") or {}
+    risk = (macro or {}).get("risk") or {}
+    capital = _positive(params.get("initial_capital")) or order_cap(quote)
+    budget = capital * (_positive(risk.get("invest_ratio")) or 1.0)
+    rule = str((macro or {}).get("rule_type") or "A").upper()
+    if rule == "D":  # 그리드는 한 칸씩 산다 — 한 칸 금액이 진입 한 건이다
+        per_grid = _positive(params.get("per_grid_invest"))
+        grids = int(_positive(params.get("grid_count")))
+        budget = per_grid or (budget / grids if grids else budget)
+    elif rule == "H":  # 마틴게일: 기본 주문과 (배수가 1 미만이면 더 작아지는) 추가 주문 중 작은 쪽
+        base = _positive(params.get("base_order_size")) or budget
+        safety = _positive(params.get("safety_order_size"))
+        scale = _positive(params.get("safety_order_volume_scale")) or 1.0
+        steps = int(_positive(params.get("max_safety_orders")))
+        if safety and steps:
+            safety *= min(1.0, scale) ** max(0, steps - 1)
+            base = min(base, safety)
+        budget = base
+    return _notional_for(budget, leverage, market, quote=quote)
+
+
+def _order_qty(price, step, min_notional, budget, leverage, market, *, quote="USDT") -> tuple[float, float]:
+    notional = _notional_for(budget, leverage, market, quote=quote)
     qty = _round_step(notional / price, step)
     return qty, qty * price
 
@@ -834,17 +884,32 @@ class BotThread(threading.Thread):
         if self.market != "futures" and self.side == "short":
             self.log("현물은 숏을 지원하지 않아요. 선물 매크로를 쓰세요.")
             return False
-        if not self.broker.ensure_ready():
+        try:
+            ready = self.broker.ensure_ready()
+        except brokers.DomesticAccessError as exc:
+            # 국내 준비는 서명이 필요한 조회다 — 여기서 가장 먼저 키 · 허용 IP 에 걸린다. '심볼이 없다' 가
+            # 아니라 리허설과 같은 문장 · 같은 정책(실전은 멈추고 모의는 계속)으로 보고한다.
+            return self._rehearsal_failed(str(exc))
+        if not ready:
             where = "선물" if self.market == "futures" else "현물"
-            self.log(f"[오류] '{self.symbol}' 은 (테스트넷) {where}에 없어요. 심볼을 바꾸세요.")
+            # 테스트넷이 있는 거래소는 바이낸스뿐이다. 국내 매크로에 '(테스트넷)' 을 붙이면
+            # 있지도 않은 환경을 가리키게 된다.
+            net = "(테스트넷) " if self.testnet else ""
+            self.log(f"[오류] '{self.symbol}' 은 {net}{exchange_label(self.exchange)} {where}에 없어요. 심볼을 바꾸세요.")
             return False
         # 국내 원화 마켓은 수량 단위가 0 이다(금액으로 주문한다). 0 을 '아직 못 읽었다' 로 보면 안 된다.
         self.step = self.broker.order_rules().step
         return self._rehearse()
 
     def _entry_notional(self) -> float:
-        """리허설이 확인할 주문 크기 — notional_frac=1.0 명령이 실제로 쓸 금액과 같은 수."""
-        return min(self.capital, order_cap(self.quote))
+        """리허설이 확인할 주문 크기 — 이 매크로의 진입 한 건이 실제로 쓸 가장 작은 금액.
+
+        self.capital(= 초기자본) 을 그대로 쓰지 않는다. 실제 주문은 투입비율 · 그리드 한 칸 ·
+        마틴게일 기본 주문으로 더 작아지므로, 초기자본으로 연습하면 최소 주문 금액 미달을 못 잡고
+        (모든 신호가 under_min_total 로 거절된다), 업비트 검증 주문은 잔고까지 보므로 돌아갈
+        세션을 시작도 못 하게 막는다.
+        """
+        return _smallest_entry_notional(self.macro, self.leverage, self.market, quote=self.quote)
 
     def _rehearse(self) -> bool:
         """세션 시작에 한 번. 돈을 쓰지 않고 키 · 허용 IP · 권한 · 최소 주문 금액을 확인한다.
@@ -861,6 +926,11 @@ class BotThread(threading.Thread):
         if ok:
             self.log(f"주문 전 확인: {reason}")
             return True
+        return self._rehearsal_failed(reason)
+
+    def _rehearsal_failed(self, reason: str) -> bool:
+        """주문 전 확인이 통과하지 못했을 때의 보고와 정책. 준비 단계의 키 · IP 실패도 여기로 온다 —
+        사용자에게는 같은 사정이고, 멈출지 말지의 기준도 같다."""
         self.log(f"[오류] 주문 전 확인 실패 — {reason}")
         if self.exchange == "binance" and ("-2015" in reason or "-2014" in reason or "키" in reason):
             where = ("선물 testnet(binancefuture.com)" if self.market == "futures"
@@ -1029,8 +1099,10 @@ class BotThread(threading.Thread):
                         entry_price, realized_before = self.entry_price, self.realized
                         if self._close_position():
                             pnl = self.realized - realized_before
+                            # 돈은 이 세션의 호가 통화로 쓴다 — 실행기 창은 국내 실전 사용자가
+                            # 실제로 보고 있는 화면이고, 원화 손익을 USDT 로 읽히게 두면 안 된다.
                             self.log(f"  손익 {_pnl_pct(entry_price, self._last_fill_price, self.side):+.2f}% "
-                                     f"({pnl:+.2f} USDT) · 누적 {self.realized:+.2f} USDT")
+                                     f"({_money(pnl, self.quote)}) · 누적 {_money(self.realized, self.quote)}")
                             guard.on_exit(pnl, was_stop=stop)
 
                 # 4) 하트비트 — 상태·ack 를 올리고 명령을 받아 순서대로 실행
@@ -1793,8 +1865,16 @@ class RunnerApp:
         pos = "보유" if snap.get("in_position") else "무포지션"
         self.status_lbl.config(
             text=f"● 실행 중 · {snap.get('last_price', 0):g} · {pos} · "
-                 f"누적 {snap.get('realized_pnl', 0):+.2f} USDT",
+                 f"누적 {_money(snap.get('realized_pnl', 0) or 0.0, self._quote())}",
             foreground=UI["ok"])
+
+    def _quote(self) -> str:
+        """화면에 쓰는 호가 통화. 돌고 있는 봇이 정한 값을 먼저 쓰고, 없으면 고른 매크로의 심볼에서 읽는다.
+
+        봇과 따로 계산하지 않는다 — 두 곳에서 세면 원화 세션의 창에 USDT 가 남는다.
+        """
+        bot_quote = getattr(getattr(self, "bot", None), "quote", "")
+        return bot_quote or quote_of(str((self.macro or {}).get("symbol") or ""))
 
     def _on_finish(self, status: str, note: str) -> None:
         self._log(f"종료됨 ({status}){' · ' + note if note else ''}")

@@ -335,6 +335,10 @@ class RunnerStartRequest(BaseModel):
     leverage: int = 1
     market: str = ""  # spot | futures | "" (서버가 방향/레버리지로 결정)
     testnet: bool = True
+    # 실행 모드: mock | testnet | live. testnet 플래그만으로는 모의와 테스트넷이 구분되지 않는다 —
+    # 국내 거래소에는 테스트넷이 없고, 바이낸스 모의도 어느 거래소에도 주문을 보내지 않는데
+    # 둘 다 testnet=True 로 올라온다. 실행기 v10 이 보내는 값이고, 모르는 낱말은 서버가 버린다.
+    mode: str = ""
     human_summary: str = ""
     # 실행 중인 매크로 원문(선택) — 마이페이지 실시간 차트에 전략 보조지표를 그리는
     # 데 쓴다. 거래소 키/시크릿은 포함되지 않는다. 예전 실행기는 보내지 않는다.

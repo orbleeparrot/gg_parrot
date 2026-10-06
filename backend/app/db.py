@@ -411,6 +411,10 @@ class RunSession(SQLModel, table=True):
     leverage: int = 1
     market: str = ""  # spot | futures
     testnet: bool = True  # 실거래 여부: False = 메인넷(실제 자금)
+    # 실행기가 고른 실행 모드: mock | testnet | live. testnet 플래그만으로는 모의와 테스트넷이
+    # 구분되지 않는다 — 국내 거래소에는 테스트넷이 없고 바이낸스 모의도 주문을 아예 보내지 않는데,
+    # 둘 다 testnet=True 로 올라온다. 모드를 보내지 않던 실행기의 세션은 빈 문자열로 남는다.
+    mode: str = ""
     human_summary: str = ""
     # 실행 중인 매크로 원문(JSON 문자열). 마이페이지 실시간 차트에 전략 보조지표
     # (볼린저·이동평균·RSI 등)를 빌더와 동일하게 그리기 위해 실행기가 함께 올린다.
@@ -1241,9 +1245,11 @@ def _migrate() -> None:
         "rejected_at": "ALTER TABLE runnerlaunchticket ADD COLUMN rejected_at TEXT DEFAULT ''",
         "rejected_version": "ALTER TABLE runnerlaunchticket ADD COLUMN rejected_version TEXT DEFAULT ''",
     })
-    added.setdefault("runsession", {})["runner_version"] = (
-        "ALTER TABLE runsession ADD COLUMN runner_version TEXT DEFAULT ''"
-    )
+    added.setdefault("runsession", {}).update({
+        "runner_version": "ALTER TABLE runsession ADD COLUMN runner_version TEXT DEFAULT ''",
+        # 옛 행은 빈 값으로 남는다 — 그 세션은 testnet 플래그로만 읽는다(모드를 아무도 보내지 않았다).
+        "mode": "ALTER TABLE runsession ADD COLUMN mode TEXT DEFAULT ''",
+    })
     added["collectorrun"] = {
         "run_count": "ALTER TABLE collectorrun ADD COLUMN run_count INTEGER NOT NULL DEFAULT 1",
         "empty_bucket_ms": "ALTER TABLE collectorrun ADD COLUMN empty_bucket_ms BIGINT",
@@ -1353,6 +1359,7 @@ _PG_ADDED_COLUMNS = {
         "macro_json": "TEXT DEFAULT ''", "position_uncertain": "BOOLEAN DEFAULT FALSE",
         "user_macro_id": "INTEGER",
         "runner_version": "TEXT DEFAULT ''",
+        "mode": "TEXT DEFAULT ''",
         "macro_origin": "TEXT DEFAULT ''",
         "macro_digest": "TEXT DEFAULT ''",
         "pnl_alert_pct": "DOUBLE PRECISION NOT NULL DEFAULT 0",

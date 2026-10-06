@@ -303,6 +303,7 @@ _JWT_HASHES = {"HS512": hashlib.sha512, "HS256": hashlib.sha256}
 
 _DOMESTIC_TIMEOUT = 10  # 초. 이 안에 답이 없어도 주문이 들어갔을 수 있다 — 재주문이 아니라 조회로 확인한다
 _VOLUME_DECIMALS = Decimal("0.00000001")  # 국내 수량 소수 한계(8자리). 넘으면 거래소가 매도를 거절한다
+_KRW_UNIT = Decimal("1")  # 원화 주문 금액의 단위. 원에는 보여 줄 만한 소수부가 없다
 
 
 def _b64(raw: bytes) -> str:
@@ -355,6 +356,12 @@ def _fold_domestic_status(state, executed_volume) -> str:
     return "OPEN"
 
 
+# 주문을 보냈는데 그 뒤로 아무것도 확인하지 못한 상태. 봇은 이걸 받으면 포지션을 불확실로 잡고
+# 더 주문하지 않는다 — 예외로 알리면 '주문이 나가지 않았다' 로 읽혀 그대로 다음 명령을 받는다.
+_UNKNOWN_ORDER = Order(status="UNKNOWN", executed_qty=0.0, avg_price=0.0, acquired_qty=0.0,
+                       fees_known=False, order_id=None, raw_status="unknown")
+
+
 class DomesticApiError(RuntimeError):
     """거래소가 HTTP 오류로 답했다. name 은 거래소가 쓴 오류 낱말(예: insufficient_funds_bid)."""
 
@@ -400,6 +407,36 @@ def _explain_domestic_error(exchange: str, status: int, name: str, message: str)
         return f"이 마켓은 지금 주문할 수 없어요({name}). 마켓 이름이 맞는지, 거래소 점검 중인지 확인하세요."
     detail = f"{name}: {message}" if name and message else (name or message or f"HTTP {status}")
     return f"{label} 가 거절했어요({detail})"
+
+
+# 키 · 허용 IP · 권한 · 서명 때문에 막힌 오류들. '마켓이 없다' 와 같은 칸에 넣으면 안 된다 —
+# 사람이 고쳐야 할 곳이 (심볼 이름이 아니라) 허용 IP 와 키라서 안내가 완전히 달라진다.
+_ACCESS_ERRORS = _IP_FIRST_ERRORS | _EXPIRED_KEY_ERRORS | frozenset({"out_of_scope", "invalid_query_payload"})
+
+
+def _is_access_error(exc: "DomesticApiError") -> bool:
+    """키 · 허용 IP · 권한 때문에 거절된 것인가.
+
+    두 거래소는 같은 사정을 400 으로도 401 로도 돌려준다 — 상태 코드만 보고 가르면
+    400 짜리 허용 IP 오류가 '마켓 없음' 으로 접힌다.
+    """
+    return exc.status in (401, 403) or exc.name in _ACCESS_ERRORS
+
+
+class DomesticAccessError(DomesticApiError):
+    """키 · 허용 IP · 권한에 막혔다. 마켓이 없는 것과 섞이지 않게 따로 올라간다.
+
+    준비 단계(load_market)가 이걸 '마켓 없음'(거짓)으로 접으면 봇은 사용자에게 '심볼을 바꾸세요' 로
+    보고하고, 정작 필요한 허용 IP 안내는 영원히 닿지 않는다. 그래서 사람이 읽을 설명을 들고 다닌다.
+    """
+
+    def __init__(self, exchange: str, source: DomesticApiError):
+        super().__init__(source.status, source.name, source.message)
+        self.exchange = exchange
+        self.explanation = _explain_domestic_error(exchange, source.status, source.name, source.message)
+
+    def __str__(self) -> str:
+        return self.explanation
 
 
 class DomesticBroker:
@@ -467,10 +504,16 @@ class DomesticBroker:
         return self.load_market()
 
     def load_market(self) -> bool:
-        """읽기뿐인 준비. 국내 현물은 계정에 쓰는 설정이 없어 ensure_ready 와 같다 — 모의가 두 어댑터에 같은 이름으로 부르게 둔다."""
+        """읽기뿐인 준비. 국내 현물은 계정에 쓰는 설정이 없어 ensure_ready 와 같다 — 모의가 두 어댑터에 같은 이름으로 부르게 둔다.
+
+        주문 가능 정보 조회는 서명이 필요한 호출이라, 세션에서 가장 먼저 키 · 허용 IP 에 걸리는 곳이기도 하다.
+        그 실패를 거짓(= 마켓 없음)으로 접지 않는다 — 접으면 잘못된 키가 '없는 심볼' 로 보고된다.
+        """
         try:
             self._load_chance()
         except DomesticApiError as exc:
+            if _is_access_error(exc):
+                raise DomesticAccessError(self.exchange, exc) from exc
             if exc.status in (400, 404):
                 return False
             raise
@@ -557,7 +600,13 @@ class DomesticBroker:
             total = _positive_number(notional)
             if not total:
                 raise ValueError("시장가 매수에는 양수 notional(원화 금액)이 필요합니다")
-            body.update(side="bid", **{self._spec["type_key"]: "price"}, price=_plain(Decimal(repr(total))))
+            # 1원 아래로 내림. 봇이 넘기는 금액은 float 이라 그대로 보내면 33333.333333333336 이 나가고,
+            # 거래소가 정수 원만 받으면 국내 진입이 통째로 거절된다 — 서명은 우리 글자로 맞춰져 있어
+            # 다른 증상이 없다. 올림이 아니라 내림인 이유는 주문 상한을 넘지 않아야 하기 때문.
+            won = Decimal(repr(total)).quantize(_KRW_UNIT, rounding=ROUND_DOWN)
+            if not won:
+                raise ValueError("시장가 매수 금액이 1원 미만입니다")
+            body.update(side="bid", **{self._spec["type_key"]: "price"}, price=_plain(won))
         else:
             qty = _positive_number(base_qty)
             # 8자리 아래로 내림 — 올리면 가진 것보다 많이 팔려는 주문이 된다.
@@ -596,26 +645,47 @@ class DomesticBroker:
             # 타임아웃은 거절의 증거가 아니다. 같은 client_id 로 조회할 뿐, 두 번째 시장가 주문은 없다.
             pass
 
-        order = {}
-        for attempt in range(1 if rejection else MAX_RETRIES):
-            try:
-                order = self._get("/v1/order", {self._spec["id_key"]: client_id})
-            except Exception:
-                pass  # 직전 응답에서 확인된 부분 체결을 유지한다
-            if _fold_domestic_status(order.get("state"), order.get("executed_volume")) in TERMINAL_STATUSES:
-                break
-            if attempt + 1 < MAX_RETRIES and not rejection:
-                time.sleep(0.25 * (attempt + 1))
-        if rejection and not order:
-            return Order(status="REJECTED", executed_qty=0.0, avg_price=0.0, acquired_qty=0.0,
-                         fees_known=True, order_id=None, raw_status=rejection)
-        return self._normalize(order)
+        # POST 뒤에는 어떤 일이 있어도 예외를 내보내지 않는다. submit 에서 나간 예외는 봇에게
+        # '주문을 보내지 않았다' 는 뜻이고(BinanceBroker 가 지키는 약속), 봇은 그 말을 믿고 명령을
+        # 계속 받는다 — 실제로는 원화 시장가 주문이 체결돼 있을 수 있다. 모르면 모른다고 돌려준다.
+        try:
+            order = {}
+            for attempt in range(1 if rejection else MAX_RETRIES):
+                found = self._lookup_order(client_id)
+                if found:
+                    order = found  # 빈 답은 덮지 않는다 — 직전 응답에서 확인된 부분 체결을 유지한다
+                if _fold_domestic_status(order.get("state"), order.get("executed_volume")) in TERMINAL_STATUSES:
+                    break
+                if attempt + 1 < MAX_RETRIES and not rejection:
+                    time.sleep(0.25 * (attempt + 1))
+            if rejection and not order:
+                return Order(status="REJECTED", executed_qty=0.0, avg_price=0.0, acquired_qty=0.0,
+                             fees_known=True, order_id=None, raw_status=rejection)
+            return self._normalize(order)
+        except Exception as exc:
+            self.log(f"주문을 보낸 뒤 상태를 확인하지 못했습니다({exc}). 거래소에서 주문과 포지션을 확인하세요.")
+            return _UNKNOWN_ORDER
+
+    def _lookup_order(self, client_id) -> dict:
+        """client_id 로 주문 하나를 조회한다. 객체가 아닌 답은 '답이 없다' 로 본다.
+
+        HTTP 200 에 객체가 아닌 몸통(목록, 게이트웨이 · 점검 안내문)이 실려 오면 `.get` 이 터진다.
+        그 예외가 submit 을 뚫고 나가면 봇은 주문이 나가지 않았다고 읽는다 — 가장 비싼 거짓말이다.
+        """
+        try:
+            found = self._get("/v1/order", {self._spec["id_key"]: client_id})
+        except Exception:
+            return {}
+        return found if isinstance(found, dict) else {}
 
     def _normalize(self, order) -> Order:
         """거래소 응답에서 체결 수량 · 평균가를 뽑는다. 수수료는 원화에서 빠지므로 보유 수량은 체결 수량이다."""
+        if not isinstance(order, dict):
+            order = {}  # 객체가 아닌 응답은 상태를 모르는 주문으로 접는다(아래에서 UNKNOWN 이 된다)
         executed = _positive_number(order.get("executed_volume"))
         funds = volume = 0.0
-        for trade in order.get("trades") or []:
+        # 체결 내역의 한 줄이 객체가 아니면 그 줄은 없는 것으로 본다 — 아래 덮개 검사가 불확실로 접는다.
+        for trade in [row for row in (order.get("trades") or []) if isinstance(row, dict)]:
             qty = _positive_number(trade.get("volume"))
             volume += qty
             funds += _positive_number(trade.get("funds")) or _positive_number(trade.get("price")) * qty

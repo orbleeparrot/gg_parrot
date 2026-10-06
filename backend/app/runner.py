@@ -492,6 +492,29 @@ def claim_launch_ticket(ticket: str, runner_version: str = "") -> dict:
         }
 
 
+# --- 실행 모드 ---------------------------------------------------------
+# 실행기가 고른 모드. 모르는 값은 빈 문자열로 둔다 — 억지로 어느 모드라고 적으면 연습과 실전이
+# 기록에서 뒤섞인다. 빈 값은 '모드를 말하지 않은 실행기' 이고, 그 세션은 testnet 플래그로만 읽는다.
+RUN_MODES = ("mock", "testnet", "live")
+_MODE_LABELS = {"mock": "모의", "testnet": "테스트넷", "live": "메인넷(실거래)"}
+
+
+def _run_mode(raw) -> str:
+    mode = str(raw or "").strip().lower()
+    return mode if mode in RUN_MODES else ""
+
+
+def environment_label(row: RunSession) -> str:
+    """세션 기록 · 알림에 쓰는 실행 환경 이름.
+
+    실전 여부는 testnet 플래그가 정한다(언제나 그랬다). 연습 세션의 이름만 모드가 가른다 —
+    바이낸스 모의는 테스트넷에도 주문을 보내지 않으므로 '테스트넷' 이 아니다.
+    """
+    if not row.testnet:
+        return "메인넷(실거래)"
+    return _MODE_LABELS.get(_run_mode(getattr(row, "mode", "")), "테스트넷")
+
+
 # --- 실행기용: 세션 시작/하트비트/종료확정 -----------------------------
 def start_session(user: User, payload: dict) -> dict:
     """실행기가 매크로 구동을 시작할 때 세션을 만든다. session_id 를 돌려준다."""
@@ -605,6 +628,7 @@ def start_session(user: User, payload: dict) -> dict:
             leverage=leverage,
             market=market,
             testnet=bool(payload.get("testnet", True)),
+            mode=_run_mode(payload.get("mode")),
             human_summary=summary,
             macro_json=macro_json,
             status="running",
@@ -623,7 +647,7 @@ def start_session(user: User, payload: dict) -> dict:
             "ts": now,
             "kind": "start",
             "message": (
-                f"실행 시작 · 실행기 v{runner_version or '?'} · {'테스트넷' if row.testnet else '메인넷(실거래)'}"
+                f"실행 시작 · 실행기 v{runner_version or '?'} · {environment_label(row)}"
                 f" · 매크로 {macro_signing.ORIGIN_LABELS.get(macro_origin, macro_origin)}"
                 + (f" · 지문 {macro_digest}" if macro_digest else "")
             ),
@@ -631,9 +655,9 @@ def start_session(user: User, payload: dict) -> dict:
         # 헤더 알림(에이전트) — 어느 매크로가 어디서 돌기 시작했는지.
         notifications_mod.notify(
             db, user.id, "agent", f"{symbol} 매크로 실행 시작",
-            ("테스트넷" if row.testnet else "메인넷(실거래)") + (f" · {summary}" if summary else ""),
+            environment_label(row) + (f" · {summary}" if summary else ""),
             "/agents", session_id=row.id,
-            data={"event": "start", "symbol": symbol, "testnet": row.testnet},
+            data={"event": "start", "symbol": symbol, "testnet": row.testnet, "mode": row.mode},
         )
         db.commit()
         result = {
@@ -982,6 +1006,8 @@ def _session_view(row: RunSession) -> dict:
         "leverage": row.leverage,
         "market": row.market,
         "testnet": row.testnet,
+        # 연습 세션의 이름은 모드가 가른다(모의 ≠ 테스트넷). 모드를 보내지 않은 옛 세션은 빈 문자열.
+        "mode": _run_mode(getattr(row, "mode", "")),
         "human_summary": row.human_summary,
         "macro": macro,
         "status": row.status,

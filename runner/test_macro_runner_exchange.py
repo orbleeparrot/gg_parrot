@@ -181,11 +181,14 @@ class ExchangeSelectionTests(unittest.TestCase):
 class RehearsalPolicyTests(unittest.TestCase):
     """리허설은 브로커가 보고하고 멈출지는 봇이 정한다."""
 
-    def bot(self, mode, rehearsal):
+    def bot(self, mode, rehearsal, macro=None):
         bot = object.__new__(macro_runner.BotThread)
         bot.exchange, bot.mode = "upbit", mode
         bot.market, bot.symbol, bot.side, bot.quote = "spot", "KRW-BTC", "long", "KRW"
         bot.leverage, bot.capital = 1, 1_000_000.0
+        # 리허설 금액은 매크로 자신의 설정에서 나온다 — 진입 한 건이 실제로 쓸 가장 작은 금액이다.
+        bot.macro = macro if macro is not None else {
+            "rule_type": "A", "params": {"initial_capital": 1_000_000}, "risk": {}}
         bot.log = Mock()
         bot.broker = _Recorder(rehearsal=rehearsal)
         return bot
@@ -421,3 +424,178 @@ class StartPayloadContractTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _runner_source():
+    import pathlib
+    return pathlib.Path(macro_runner.__file__).read_text(encoding="utf-8")
+
+
+class RehearsedAmountIsTheAmountAnEntryUsesTests(unittest.TestCase):
+    """리허설이 실제 진입과 다른 금액을 보면 두 방향으로 다 틀린다.
+
+      * 너무 크면 — 업비트 검증 주문은 잔고까지 보므로, 잘 돌아갈 세션을 시작도 못 하게 막는다.
+      * 너무 크면 — 최소 주문 금액 미달을 못 잡아, 정작 모든 신호가 under_min_total 로 거절된다.
+    그래서 매크로가 낼 수 있는 가장 작은 진입 금액을 본다.
+    """
+
+    def bot(self, macro, *, quote="KRW", market="spot", leverage=1):
+        bot = object.__new__(macro_runner.BotThread)
+        bot.macro, bot.quote, bot.market, bot.leverage = macro, quote, market, leverage
+        bot.capital = float((macro.get("params") or {}).get("initial_capital") or 0) or macro_runner.order_cap(quote)
+        return bot
+
+    def test_the_invest_ratio_shrinks_the_rehearsed_amount(self):
+        # 초기자본 100,000 에 투입비율 50% → 실제 진입은 50,000 원이다. 150,000 으로 연습하면
+        # 10만 원만 입금한 사용자가 돌아갈 세션을 시작조차 못 한다.
+        bot = self.bot({"rule_type": "A", "params": {"initial_capital": 100_000},
+                        "risk": {"invest_ratio": 0.5}})
+        self.assertEqual(bot._entry_notional(), 50_000.0)
+
+    def test_a_grid_macro_is_rehearsed_at_one_grid_not_the_whole_budget(self):
+        # 그리드는 한 칸씩 산다. 한 칸이 최소 주문 금액 미만이면 모든 신호가 거절되는데,
+        # 예산 전체로 연습하면 리허설은 통과해 버린다.
+        bot = self.bot({"rule_type": "D", "params": {"initial_capital": 100_000, "grid_count": 50},
+                        "risk": {}})
+        self.assertEqual(bot._entry_notional(), 2_000.0)
+        per_grid = self.bot({"rule_type": "D", "params": {"initial_capital": 100_000, "grid_count": 50,
+                                                          "per_grid_invest": 3_000}, "risk": {}})
+        self.assertEqual(per_grid._entry_notional(), 3_000.0)
+
+    def test_a_martingale_macro_is_rehearsed_at_its_smallest_order(self):
+        bot = self.bot({"rule_type": "H", "params": {"initial_capital": 1_000_000, "base_order_size": 6_000,
+                                                     "safety_order_size": 6_000, "max_safety_orders": 3,
+                                                     "safety_order_volume_scale": 0.5}, "risk": {}})
+        self.assertEqual(bot._entry_notional(), 1_500.0)  # 6,000 × 0.5² — 마지막 추가 주문이 가장 작다
+
+    def test_a_volume_scale_above_one_keeps_the_base_order_as_the_smallest(self):
+        bot = self.bot({"rule_type": "H", "params": {"initial_capital": 1_000_000, "base_order_size": 10_000,
+                                                     "safety_order_size": 20_000, "max_safety_orders": 3,
+                                                     "safety_order_volume_scale": 2.0}, "risk": {}})
+        self.assertEqual(bot._entry_notional(), 10_000.0)
+
+    def test_the_order_cap_still_applies(self):
+        bot = self.bot({"rule_type": "A", "params": {"initial_capital": 10_000_000}, "risk": {}})
+        self.assertEqual(bot._entry_notional(), macro_runner.MAX_ORDER_KRW)
+
+    def test_binance_is_rehearsed_at_its_real_entry_amount_too(self):
+        # 이 분기 전에는 바이낸스에 시작 시점 거절이 없었다. 거절이 생겼으니 금액은 정확해야 한다.
+        bot = self.bot({"rule_type": "A", "params": {"initial_capital": 100.0}, "risk": {"invest_ratio": 0.1}},
+                       quote="USDT")
+        self.assertEqual(bot._entry_notional(), 10.0)
+
+    def test_a_macro_without_parameters_falls_back_to_the_order_cap(self):
+        bot = self.bot({"rule_type": "A", "params": {}, "risk": {}})
+        self.assertEqual(bot._entry_notional(), macro_runner.MAX_ORDER_KRW)
+
+    def test_broken_parameter_values_do_not_crash_the_session_start(self):
+        bot = self.bot({"rule_type": "D", "params": {"initial_capital": "100000", "grid_count": None,
+                                                     "per_grid_invest": "oops"}, "risk": {"invest_ratio": "x"}})
+        # 숫자로 읽히는 값("100000")은 쓰고, 읽히지 않는 값은 없는 것으로 본다 — 터지지 않는 것이 요점이다.
+        self.assertEqual(bot._entry_notional(), 100_000.0)
+
+    def test_the_rehearsed_amount_is_what_an_entry_command_actually_orders(self):
+        # 같은 계산을 두 곳에서 하지 않는다는 증명 — notional_frac=1.0 명령과 리허설이 같은 수를 쓴다.
+        macro = {"rule_type": "A", "params": {"initial_capital": 100_000}, "risk": {}}
+        bot = self.bot(macro)
+        ordered = min(bot.capital * 1.0, macro_runner.order_cap("KRW"))
+        self.assertEqual(bot._entry_notional(), ordered)
+
+
+class DomesticAccessFailureIsExplainedNotCalledAMissingSymbolTests(unittest.TestCase):
+    """키 · 허용 IP 는 국내 매크로가 가장 자주 걸리는 곳이고, 가장 먼저 걸리는 자리는 준비 단계다.
+
+    그걸 '없는 심볼' 로 보고하면 사용자는 심볼을 고치며 헛수고하고, 이 기능이 더한 가장 쓸모 있는
+    안내(허용 IP 먼저)는 영원히 닿지 않는다. 그리고 국내 거래소에는 테스트넷이 없다.
+    """
+
+    def bot(self, mode="live", *, failure=None, ready=True, symbol="KRW-BTC", exchange="upbit"):
+        bot = object.__new__(macro_runner.BotThread)
+        bot.exchange, bot.mode = exchange, mode
+        bot.market, bot.symbol, bot.side = "spot", symbol, "long"
+        bot.quote = macro_runner.quote_of(symbol)
+        bot.leverage, bot.capital = 1, 1_000_000.0
+        bot.macro = {"rule_type": "A", "params": {"initial_capital": 1_000_000}, "risk": {}}
+        bot.log = Mock()
+        bot.broker = _Recorder()
+        bot.broker.ensure_ready = Mock(side_effect=failure) if failure else Mock(return_value=ready)
+        return bot
+
+    def access_error(self, name="no_authorization_ip", status=401):
+        return brokers.DomesticAccessError("upbit", brokers.DomesticApiError(status, name, ""))
+
+    def logged(self, bot):
+        return " | ".join(str(call) for call in bot.log.call_args_list)
+
+    def test_a_key_or_ip_failure_in_the_preparation_gets_the_ip_first_text(self):
+        bot = self.bot(failure=self.access_error())
+        self.assertFalse(bot._prepare())
+        text = self.logged(bot)
+        self.assertIn("허용 IP", text)
+        self.assertNotIn("심볼을 바꾸세요", text)
+        self.assertNotIn("테스트넷", text)
+        self.assertEqual(bot.broker.rehearsals, [])  # 리허설까지 가지 않는다 — 이미 이유를 안다
+
+    def test_it_stops_the_live_session_and_lets_the_mock_one_continue(self):
+        self.assertFalse(self.bot("live", failure=self.access_error())._prepare())
+        mock_bot = self.bot("mock", failure=self.access_error())
+        self.assertTrue(mock_bot._prepare())
+        self.assertIn("모의 모드라", self.logged(mock_bot))
+
+    def test_a_missing_domestic_market_never_mentions_a_testnet(self):
+        bot = self.bot(ready=False)
+        self.assertFalse(bot._prepare())
+        text = self.logged(bot)
+        self.assertIn("심볼을 바꾸세요", text)
+        self.assertNotIn("테스트넷", text)
+        self.assertIn("업비트", text)
+
+    def test_a_binance_testnet_macro_still_says_testnet(self):
+        bot = self.bot("testnet", ready=False, symbol="BTCUSDT", exchange="binance")
+        self.assertFalse(bot._prepare())
+        self.assertIn("테스트넷", self.logged(bot))
+
+
+class RunnerWindowSpeaksTheSessionsCurrencyTests(unittest.TestCase):
+    """실행기 창은 국내 실전 사용자가 실제로 보고 있는 화면이다. 원화 손익을 USDT 로 적으면 안 된다."""
+
+    def test_money_is_written_with_the_sessions_quote_and_no_won_decimals(self):
+        self.assertEqual(macro_runner._money(4200.0, "KRW"), "+4,200 KRW")
+        self.assertEqual(macro_runner._money(-4200.4, "KRW"), "-4,200 KRW")
+        self.assertEqual(macro_runner._money(12.5, "USDT"), "+12.50 USDT")
+
+    def test_no_money_line_has_a_hard_coded_currency_any_more(self):
+        for line in _runner_source().splitlines():
+            if "누적 " in line:
+                self.assertIn("_money(", line, f"통화를 박아 둔 줄이 남아 있다: {line.strip()}")
+
+    def test_the_window_reads_the_quote_from_the_running_bot_then_the_macro(self):
+        app = object.__new__(macro_runner.RunnerApp)
+        app.bot, app.macro = None, {"symbol": "KRW-BTC"}
+        self.assertEqual(app._quote(), "KRW")
+        app.macro = {"symbol": "BTCUSDT"}
+        self.assertEqual(app._quote(), "USDT")
+        running = _Recorder()
+        running.quote = "KRW"
+        app.bot = running
+        self.assertEqual(app._quote(), "KRW")  # 돌고 있는 봇이 정한 값이 먼저다
+
+
+class ReadmeNamesTheDeployedVersionTests(unittest.TestCase):
+    """실행기 README 는 404 위험을 다루는 운영 문서다. 여기가 낡으면 가장 비싸게 틀린다."""
+
+    def readme(self):
+        import pathlib
+        return pathlib.Path(macro_runner.__file__).with_name("README.md").read_text(encoding="utf-8")
+
+    def test_the_current_release_heading_matches_the_runner_version(self):
+        from runner import installation
+        self.assertIn(f"## 현재 배포: {installation.RUNNER_RELEASE}", self.readme())
+
+    def test_no_older_release_tag_is_still_named_as_a_download_or_install_path(self):
+        from runner import installation
+        text = self.readme()
+        # 지난 버전 이력(## v9 — …)은 남겨도 되지만, 다운로드 · 설치 경로에 옛 태그가 남으면 404 다.
+        for older in range(1, int(installation.RUNNER_VERSION)):
+            self.assertNotIn(f"releases/download/runner-v{older}/", text)
+            self.assertNotIn(f"runner-v{older}\\ggparrot-runner.exe", text)

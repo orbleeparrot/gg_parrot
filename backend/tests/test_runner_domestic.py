@@ -215,3 +215,81 @@ def test_start_driver_reads_candles_from_the_macro_exchange(monkeypatch):
             db.commit()
     assert seen["history"] == [("KRW-BTC", {"exchange": "upbit"})]
     assert seen["subscribe"] == [("KRW-BTC", {"since_t": 19, "exchange": "upbit"})]
+
+
+# --- 실행 모드가 세션 기록에 남는다 -------------------------------------------
+# testnet 플래그 하나로는 모의와 테스트넷이 구분되지 않는다. 국내 거래소에는 테스트넷이 아예 없고,
+# 바이낸스 모의도 어느 거래소에도 주문을 보내지 않는데 둘 다 testnet=True 로 올라온다.
+# 실행기는 처음부터 mode 를 보내 왔지만 서버가 읽지 않아, 바이낸스 모의 세션이 '테스트넷' 으로 남았다.
+def _start_with_mode(key, macro, version, mode=None, testnet=True):
+    body = {"symbol": macro["symbol"], "position_side": "long", "leverage": 1, "market": "spot",
+            "testnet": testnet, "human_summary": "t", "macro": macro, "runner_version": version}
+    if mode is not None:
+        body["mode"] = mode
+    return client.post("/api/runner/start", json=body, headers={"X-Runner-Key": key})
+
+
+def test_a_binance_mock_session_is_recorded_as_mock_not_testnet():
+    token = _signup()
+    key = _key(token)
+    started = _start_with_mode(key, A, "10", mode="mock")
+    assert started.status_code == 200, started.text
+    sid = started.json()["session_id"]
+    with get_session() as db:
+        row = db.get(RunSession, sid)
+        assert row.mode == "mock"
+        assert row.testnet is True  # testnet 의 뜻은 바뀌지 않는다 — 가짜 자금 여부다
+        assert runner_mod.environment_label(row) == "모의"
+    _stop(key, sid)
+
+
+def test_the_mode_reaches_the_session_view_the_web_reads():
+    token = _signup()
+    key = _key(token)
+    sid = _start_with_mode(key, A, "10", mode="testnet").json()["session_id"]
+    with get_session() as db:
+        view = runner_mod._session_view(db.get(RunSession, sid))
+    assert view["mode"] == "testnet" and view["testnet"] is True
+    _stop(key, sid)
+
+
+def test_a_session_from_a_runner_that_sends_no_mode_still_works():
+    token = _signup()
+    key = _key(token)
+    sid = _start_with_mode(key, A, "10").json()["session_id"]
+    with get_session() as db:
+        row = db.get(RunSession, sid)
+        assert row.mode == ""
+        assert runner_mod.environment_label(row) == "테스트넷"  # 옛 세션은 플래그로만 읽는다
+        assert runner_mod._session_view(row)["mode"] == ""
+    _stop(key, sid)
+
+
+def test_an_unknown_mode_word_is_not_recorded_as_any_mode():
+    token = _signup()
+    key = _key(token)
+    sid = _start_with_mode(key, A, "10", mode="definitely-not-a-mode").json()["session_id"]
+    with get_session() as db:
+        assert db.get(RunSession, sid).mode == ""
+    _stop(key, sid)
+
+
+def test_a_live_session_is_still_mainnet_whatever_the_mode_says():
+    # 실전 여부는 testnet 플래그가 정한다(언제나 그랬다). 모드는 연습 세션의 이름만 가른다.
+    token = _signup()
+    key = _key(token)
+    sid = _start_with_mode(key, A, "10", mode="live", testnet=False).json()["session_id"]
+    with get_session() as db:
+        row = db.get(RunSession, sid)
+        assert runner_mod.environment_label(row) == "메인넷(실거래)"
+    _stop(key, sid)
+
+
+def test_the_start_event_names_the_mode_instead_of_a_testnet_that_does_not_exist():
+    token = _signup()
+    key = _key(token)
+    sid = _start_with_mode(key, A, "10", mode="mock").json()["session_id"]
+    log = client.get(f"/api/me/runner/sessions/{sid}/events", headers=_auth(token)).json()
+    start = log["events"][-1]["message"]
+    assert "모의" in start and "테스트넷" not in start
+    _stop(key, sid)

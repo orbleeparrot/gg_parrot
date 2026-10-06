@@ -37,9 +37,14 @@ export function formatQuoteAmount(value, symbol, { fixed = false } = {}) {
   return `${body} ${quote}`;
 }
 
-// The runner reports `testnet: true` for every practice session. On Binance that is the testnet; Upbit and
-// Bithumb have no testnet, so the same flag means the runner's mock mode (no orders are placed).
-export function practiceModeLabel(symbol) {
+// The runner reports `testnet: true` for every practice session, so that flag alone cannot tell mock from
+// testnet: Binance has all three modes and a mock run sends no order to any exchange. The runner therefore
+// records its `mode` on the session, and that word wins when it is there. Sessions from runners that never
+// sent a mode keep the old reading: Upbit and Bithumb have no testnet, so a KRW symbol means mock.
+export function practiceModeLabel(symbol, mode) {
+  const run = String(mode || "").trim().toLowerCase();
+  if (run === "mock") return "모의";
+  if (run === "testnet") return "테스트넷";
   return isDomesticSymbol(symbol) ? "모의" : "테스트넷";
 }
 

@@ -62,7 +62,7 @@ export function endLabel(session) {
 
 export function environmentLabel(session) {
   const s = session || {};
-  const net = s.testnet ? practiceModeLabel(s.symbol) : "실거래";
+  const net = s.testnet ? practiceModeLabel(s.symbol, s.mode) : "실거래";
   const market = s.market === "futures"
     ? `선물 ${Number(s.leverage) || 1}배`
     : "현물";

@@ -112,7 +112,7 @@ test("에이전트 기록 목록이 그린 글 — 코인 옆 단위와 손익�
 test("RunnerSessions 는 통화 헬퍼를 쓴다", () => {
   const source = read("../src/components/RunnerSessions.jsx");
   assert.match(source, /formatQuoteAmount\(s\.realized_pnl \?\? 0, s\.symbol/);
-  assert.match(source, /practiceModeLabel\(s\.symbol\)/);
+  assert.match(source, /practiceModeLabel\(s\.symbol, s\.mode\)/);
 });
 // --- 연습 환경 이름: 국내에는 테스트넷이 없다 ---------------------------------------
 test("국내 세션의 연습 표시는 모의, 바이낸스는 테스트넷", () => {
@@ -122,6 +122,32 @@ test("국내 세션의 연습 표시는 모의, 바이낸스는 테스트넷", (
   assert.equal(environmentLabel({ symbol: "BTCUSDT", testnet: true, market: "spot" }), "테스트넷 · 현물");
   assert.equal(environmentLabel({ symbol: "KRW-BTC", testnet: false, market: "spot" }), "실거래 · 현물");
   assert.match(describeRunOutcome({ ...krw, testnet: true }).rows.find((row) => row.label === "종목·환경").value, /모의$/);
+});
+
+// 바이낸스 모의는 테스트넷이 아니다 — 주문이 어느 거래소에도 닿지 않는다. testnet 플래그 하나로는
+// 그 셋째 모드를 말할 수 없어서 실행기가 세션에 mode 를 남긴다. 그 값이 있으면 그 말을 쓴다.
+test("실행 모드를 보낸 세션은 모드가 연습 이름을 정한다", () => {
+  assert.equal(practiceModeLabel("BTCUSDT", "mock"), "모의");
+  assert.equal(practiceModeLabel("BTCUSDT", "testnet"), "테스트넷");
+  assert.equal(practiceModeLabel("KRW-BTC", "mock"), "모의");
+  assert.equal(environmentLabel({ symbol: "BTCUSDT", testnet: true, mode: "mock", market: "futures", leverage: 5 }),
+    "모의 · 선물 5배");
+  assert.match(describeRunOutcome({ ...krw, symbol: "BTCUSDT", testnet: true, mode: "mock" })
+    .rows.find((row) => row.label === "종목·환경").value, /모의$/);
+});
+
+test("모드를 보내지 않은 옛 세션은 종목으로 가른다", () => {
+  for (const mode of [undefined, "", null, "nonsense"]) {
+    assert.equal(practiceModeLabel("BTCUSDT", mode), "테스트넷");
+    assert.equal(practiceModeLabel("KRW-BTC", mode), "모의");
+  }
+  assert.equal(environmentLabel({ symbol: "BTCUSDT", testnet: true, market: "spot" }), "테스트넷 · 현물");
+});
+
+test("실거래 세션은 모드가 무엇이라 적혀 있어도 실거래다", () => {
+  assert.equal(environmentLabel({ symbol: "BTCUSDT", testnet: false, mode: "mock", market: "spot" }), "실거래 · 현물");
+  assert.match(describeRunOutcome({ ...krw, testnet: false, mode: "mock" })
+    .rows.find((row) => row.label === "종목·환경").value, /메인넷\(실거래\)$/);
 });
 
 // --- 설치·연결 안내 ----------------------------------------------------------------

@@ -39,7 +39,7 @@ function sessionOptionLabel(session) {
     : session.connected
       ? ""
       : "응답대기 · ";
-  const net = session.testnet ? ` · ${practiceModeLabel(session.symbol)}` : "";
+  const net = session.testnet ? ` · ${practiceModeLabel(session.symbol, session.mode)}` : "";
   return `${prefix}${session.symbol} · ${ruleLabel(session.macro)}${net}`;
 }
 

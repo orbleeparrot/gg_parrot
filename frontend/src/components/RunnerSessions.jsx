@@ -158,7 +158,7 @@ function SessionCard({ s, onStop, onDelete, busy }) {
           <span className="badge badge-flat">{s.market === "futures" ? `선물 ${s.leverage}배` : "현물"}</span>
           <span className="badge badge-flat">{s.position_side === "short" ? "숏" : "롱"}</span>
           <span className={"badge " + (s.testnet ? "badge-flat" : "badge-risk")}>
-            {s.testnet ? practiceModeLabel(s.symbol) : "메인넷(실거래)"}
+            {s.testnet ? practiceModeLabel(s.symbol, s.mode) : "메인넷(실거래)"}
           </span>
           {!stopped && (
             <span className={"badge " + (s.connected ? "badge-mine" : "badge-flat")}>

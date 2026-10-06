@@ -7,9 +7,15 @@
 """
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
 import math
 import time
+import uuid
 from dataclasses import dataclass
+from decimal import ROUND_DOWN, Decimal
 
 # 더 기다려도 바뀌지 않는 상태. OPEN 은 아직 끝나지 않은 주문이다.
 TERMINAL_STATUSES = frozenset({"FILLED", "CANCELED", "REJECTED"})
@@ -226,3 +232,248 @@ class BinanceBroker:
                      avg_price=average, acquired_qty=acquired, fees_known=fees_known,
                      order_id=order.get("orderId"),
                      raw_status=str(order.get("status", "unknown")))
+
+
+# --- 국내 거래소 (업비트 · 빗썸 원화 현물) ------------------------------
+DOMESTIC_BASES = {"upbit": "https://api.upbit.com", "bithumb": "https://api.bithumb.com"}
+
+# 두 거래소는 읽기 경로(/v1/...)가 같지만 쓰기·인증은 다르다 — 공식 문서를 거래소별로 확인한 값이다.
+#  - 업비트: JWT HS512, 주문은 POST /v1/orders, 종류는 ord_type, 클라이언트 주문번호는 identifier(최대 64자)
+#  - 빗썸:  JWT HS256 + payload 에 timestamp(ms), 주문은 POST /v2/orders, 종류는 order_type,
+#           클라이언트 주문번호는 client_order_id(최대 36자). 조회 GET /v1/order 는 client_order_id 로 찾는다.
+_DOMESTIC_SPECS = {
+    "upbit": {"alg": "HS512", "timestamp": False, "order_path": "/v1/orders",
+              "type_key": "ord_type", "id_key": "identifier", "id_max": 64},
+    "bithumb": {"alg": "HS256", "timestamp": True, "order_path": "/v2/orders",
+                "type_key": "order_type", "id_key": "client_order_id", "id_max": 36},
+}
+_JWT_HASHES = {"HS512": hashlib.sha512, "HS256": hashlib.sha256}
+
+_DOMESTIC_TIMEOUT = 10  # 초. 이 안에 답이 없어도 주문이 들어갔을 수 있다 — 재주문이 아니라 조회로 확인한다
+_VOLUME_DECIMALS = Decimal("0.00000001")  # 국내 수량 소수 한계(8자리). 넘으면 거래소가 매도를 거절한다
+
+
+def _b64(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def jwt_token(access_key: str, secret_key: str, query: dict | None = None, *,
+              alg: str = "HS512", timestamp: bool = False) -> str:
+    """HMAC JWT — PyJWT 를 넣지 않는다. 실행기는 exe 라 의존성 하나가 빌드·서명에 걸린다.
+
+    alg 와 timestamp 는 거래소마다 다르다(업비트 HS512, 빗썸 HS256 + timestamp). 기본값이 업비트다.
+    """
+    digest = _JWT_HASHES[alg]
+    header = _b64(json.dumps({"alg": alg, "typ": "JWT"}, separators=(",", ":")).encode())
+    payload = {"access_key": access_key, "nonce": str(uuid.uuid4())}
+    if timestamp:
+        payload["timestamp"] = int(time.time() * 1000)
+    if query:
+        # 쿼리 스트링(정렬 없이 보낸 순서, URL 인코딩 없이)의 SHA512. POST 는 본문의 키=값을 같은 방식으로 잇는다.
+        qs = "&".join(f"{k}={v}" for k, v in query.items())
+        payload["query_hash"] = hashlib.sha512(qs.encode()).hexdigest()
+        payload["query_hash_alg"] = "SHA512"
+    body = _b64(json.dumps(payload, separators=(",", ":")).encode())
+    signing_input = f"{header}.{body}".encode()
+    signature = hmac.new(secret_key.encode(), signing_input, digest).digest()
+    return f"{header}.{body}.{_b64(signature)}"
+
+
+def _plain(number: Decimal) -> str:
+    """지수 표기 없이 쓴 십진수 문자열. 본문 값과 query_hash 가 같은 글자여야 서명이 맞는다."""
+    text = format(number, "f")
+    return text.rstrip("0").rstrip(".") if "." in text else text
+
+
+def _fold_domestic_status(state) -> str:
+    """업비트·빗썸 state 를 봇이 아는 상태로 접는다. 답이 없으면 열렸는지조차 모르므로 UNKNOWN."""
+    word = str(state or "")
+    if not word:
+        return "UNKNOWN"
+    if word == "done":
+        return "FILLED"
+    if word == "cancel":
+        return "CANCELED"
+    return "OPEN"
+
+
+class DomesticApiError(RuntimeError):
+    """거래소가 HTTP 오류로 답했다. name 은 거래소가 쓴 오류 낱말(예: insufficient_funds_bid)."""
+
+    def __init__(self, status: int, name: str, message: str):
+        super().__init__(f"HTTP {status} {name}: {message}" if name else f"HTTP {status}")
+        self.status = status
+        self.name = name
+
+
+class DomesticBroker:
+    """업비트 · 빗썸 원화 현물. BinanceBroker 와 같은 메서드 이름으로 봇이 거래소를 구분하지 않게 한다.
+
+    현물 · 롱 · 1배만 있다. 수수료는 원화에서 빠지므로 체결 수량이 곧 보유 수량이다.
+    """
+
+    market = "spot"
+    side = "long"
+
+    def __init__(self, access_key, secret_key, *, exchange, symbol, log, session=None):
+        if exchange not in _DOMESTIC_SPECS:
+            raise ValueError(f"지원하지 않는 국내 거래소입니다: {exchange}")
+        self.access_key = access_key
+        self.secret_key = secret_key
+        self.exchange = exchange
+        self.symbol = symbol
+        self.log = log
+        if session is None:
+            import requests
+            session = requests.Session()
+        self.session = session
+        self._spec = _DOMESTIC_SPECS[exchange]
+        self._base = DOMESTIC_BASES[exchange]
+        self.base_asset = symbol.split("-", 1)[1] if "-" in symbol else ""
+        self.fees = {"bid": 0.0, "ask": 0.0}
+        self._rules = None
+
+    # --- 호출 ---------------------------------------------------
+    def _auth(self, query):
+        token = jwt_token(self.access_key, self.secret_key, query,
+                          alg=self._spec["alg"], timestamp=self._spec["timestamp"])
+        return {"Authorization": f"Bearer {token}"}
+
+    @staticmethod
+    def _raise_for_error(resp):
+        if resp.status_code < 400:
+            return
+        try:
+            error = (resp.json() or {}).get("error") or {}
+        except Exception:
+            error = {}
+        raise DomesticApiError(resp.status_code, str(error.get("name", "")), str(error.get("message", "")))
+
+    def _get(self, path, params=None, *, private=True):
+        resp = self.session.get(self._base + path, params=params,
+                                headers=self._auth(params) if private else None,
+                                timeout=_DOMESTIC_TIMEOUT)
+        self._raise_for_error(resp)
+        return resp.json()
+
+    # --- 준비 ---------------------------------------------------
+    def check_account(self) -> None:
+        """키가 유효한지 원화 잔고 조회로 확인한다. 실패하면 예외 — 호출자가 키 안내를 붙인다."""
+        accounts = self._get("/v1/accounts")
+        krw = next((a for a in accounts if a.get("currency") == "KRW"), None)
+        self.log(f"연결 성공 · 원화 잔고: {krw['balance'] if krw else '조회 실패'}")
+
+    def ensure_ready(self) -> bool:
+        """주문 규격과 수수료율을 읽는다. 마켓이 없으면 거짓, 인증·네트워크 문제는 예외."""
+        try:
+            self._load_chance()
+        except DomesticApiError as exc:
+            if exc.status in (400, 404):
+                return False
+            raise
+        return True
+
+    def _load_chance(self):
+        chance = self._get("/v1/orders/chance", {"market": self.symbol})
+        self.fees = {"bid": _positive_number(chance.get("bid_fee")),
+                     "ask": _positive_number(chance.get("ask_fee"))}
+        # step 이 0 인 이유: 시장가 매수는 원화 금액으로 내므로 수량 단위가 필요 없다.
+        self._rules = OrderRules(step=0.0, min_notional=_positive_number((chance.get("bid") or {}).get("min_total")))
+
+    def order_rules(self) -> OrderRules:
+        if self._rules is None:
+            self._load_chance()
+        return self._rules
+
+    # --- 시세 ---------------------------------------------------
+    def price(self) -> float:
+        rows = self._get("/v1/ticker", {"markets": self.symbol}, private=False)
+        value = _positive_number(rows[0].get("trade_price")) if rows else 0.0
+        if not value:
+            raise RuntimeError(f"{self.symbol} 현재가를 받지 못했습니다")
+        return value
+
+    # --- 주문 ---------------------------------------------------
+    def submit(self, side_word, *, base_qty=None, notional=None, reduce_only=False,
+               closing=None, client_id) -> Order:
+        """시장가 주문 하나를 넣고 끝난 상태까지 확인해서 돌려준다.
+
+        매수는 원화 금액(notional)으로, 매도는 수량(base_qty)으로 낸다. 그 쪽 인자가 없으면
+        잘못된 주문을 보내는 대신 예외를 낸다 — 반대쪽 인자는 쓰지 않는다.
+        closing 은 받기만 한다. 수수료가 원화에서 빠져 acquired_qty 가 늘 executed_qty 이므로
+        청산 여부로 달라지는 것이 없고, 방향에서 끌어내는 대체 계산도 두지 않는다.
+        """
+        word = str(side_word).upper()
+        if word not in ("BUY", "SELL"):
+            raise ValueError(f"알 수 없는 주문 방향: {side_word!r}")
+        if reduce_only and word == "BUY":
+            raise ValueError("국내 현물은 롱만 있어 reduce_only 매수가 없습니다")
+        if not client_id or len(client_id) > self._spec["id_max"]:
+            raise ValueError(f"client_id 는 1~{self._spec['id_max']}자여야 합니다")
+        body = {"market": self.symbol}
+        if word == "BUY":
+            total = _positive_number(notional)
+            if not total:
+                raise ValueError("시장가 매수에는 양수 notional(원화 금액)이 필요합니다")
+            body.update(side="bid", **{self._spec["type_key"]: "price"}, price=_plain(Decimal(repr(total))))
+        else:
+            qty = _positive_number(base_qty)
+            # 8자리 아래로 내림 — 올리면 가진 것보다 많이 팔려는 주문이 된다.
+            volume = Decimal(repr(qty)).quantize(_VOLUME_DECIMALS, rounding=ROUND_DOWN)
+            if not volume:
+                raise ValueError("시장가 매도에는 양수 base_qty(수량)가 필요합니다")
+            body.update(side="ask", **{self._spec["type_key"]: "market"}, volume=_plain(volume))
+        body[self._spec["id_key"]] = client_id
+
+        rejection = ""
+        try:
+            resp = self.session.post(self._base + self._spec["order_path"], json=body,
+                                     headers=self._auth(body), timeout=_DOMESTIC_TIMEOUT)
+            if 400 <= resp.status_code < 500:
+                # 4xx 는 거래소가 받지 않았다는 답이다. 5xx · 타임아웃은 들어갔는지 모르므로 아래에서 조회로 확인한다.
+                try:
+                    rejection = str(((resp.json() or {}).get("error") or {}).get("name") or "")
+                except Exception:
+                    pass
+                rejection = rejection or f"http_{resp.status_code}"
+        except Exception:
+            # 타임아웃은 거절의 증거가 아니다. 같은 client_id 로 조회할 뿐, 두 번째 시장가 주문은 없다.
+            pass
+
+        order = {}
+        for attempt in range(1 if rejection else MAX_RETRIES):
+            try:
+                order = self._get("/v1/order", {self._spec["id_key"]: client_id})
+            except Exception:
+                pass  # 직전 응답에서 확인된 부분 체결을 유지한다
+            if _fold_domestic_status(order.get("state")) in TERMINAL_STATUSES:
+                break
+            if attempt + 1 < MAX_RETRIES and not rejection:
+                time.sleep(0.25 * (attempt + 1))
+        if rejection and not order:
+            return Order(status="REJECTED", executed_qty=0.0, avg_price=0.0, acquired_qty=0.0,
+                         fees_known=True, order_id=None, raw_status=rejection)
+        return self._normalize(order)
+
+    def _normalize(self, order) -> Order:
+        """거래소 응답에서 체결 수량 · 평균가를 뽑는다. 수수료는 원화에서 빠지므로 보유 수량은 체결 수량이다."""
+        executed = _positive_number(order.get("executed_volume"))
+        funds = volume = 0.0
+        for trade in order.get("trades") or []:
+            qty = _positive_number(trade.get("volume"))
+            volume += qty
+            funds += _positive_number(trade.get("funds")) or _positive_number(trade.get("price")) * qty
+        average = funds / volume if volume else 0.0
+        # 체결 내역이 체결 수량을 다 덮지 못하면 평균가를 믿을 수 없다 — 봇이 포지션을 불확실로 본다.
+        fees_known = math.isclose(volume, executed, rel_tol=1e-9, abs_tol=1e-12)
+        return Order(status=_fold_domestic_status(order.get("state")), executed_qty=executed,
+                     avg_price=average, acquired_qty=executed, fees_known=fees_known,
+                     order_id=order.get("uuid") or order.get("order_id"),
+                     raw_status=str(order.get("state") or "unknown"))
+
+    # --- 선물 전용: 국내 현물에는 없다 ---------------------------
+    def set_leverage(self, *_args, **_kwargs):
+        raise RuntimeError("국내 현물에는 선물 설정이 없습니다")
+
+    def set_margin_type(self, *_args, **_kwargs):
+        raise RuntimeError("국내 현물에는 선물 설정이 없습니다")

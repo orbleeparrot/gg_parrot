@@ -37,7 +37,7 @@
   .news-racer-mobile-row { width: 100%; min-height: 52px; border: 0; background: transparent; text-align: left; color: rgb(var(--c-slate-900)); cursor: pointer; }
   .news-racer-mobile-row[aria-pressed="true"] { background: rgb(var(--c-slate-100)); box-shadow: inset 2px 0 rgb(var(--c-brand-line)); }
   .news-racer-mobile-row:hover { background: rgb(var(--c-slate-100)); }
-  .news-racer-mobile-rank { color: rgb(var(--c-slate-500)); font-size: 12px; }
+  .news-racer-mobile-rank { color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 500; }
   .news-racer-mobile-coin { display: flex; align-items: center; gap: 7px; min-width: 0; }
   .news-racer-mobile-coin .coin-icon { flex: 0 0 auto; }
   .news-racer-mobile-coin b { min-width: 0; font-size: 14px; line-height: 1.25; font-weight: 650; overflow-wrap: anywhere; }

@@ -63,16 +63,26 @@ def test_bollinger_warmup_blocks_until_period_closes():
 
 
 def test_volume_warmup_blocks_until_preceding_window_is_full():
-    # 기준은 '직전 period 봉' 이라 period 개를 먹인 봉까지는 기준이 없다.
+    """직전 창이 **다 차기** 전에는 판정을 내지 않는다 — 덜 찬 창으로 평균을 내면 안 된다.
+
+    덜 찬 창을 받으면 period=3 필터가 봉 2 를 **직전 한 봉**과 비교한다. 데이터가 가장 얇은 순간에
+    문턱이 가장 느슨해지는 것이고, "모르면 막는다"(원칙 2)의 정반대다. 그래서 창이 차는 동안
+    거래량을 일부러 **다르게** 먹인다 — 같은 값만 먹이면 덜 찬 창의 평균도 같아서 판정이 갈라지지 않는다.
+    """
     f = _eval("volume", {"period": 3, "multiple": 2.0})
+    assert f.allows() is False            # 봉을 하나도 안 먹였다
+    f.update(100.0, volume=10.0)
+    assert f.allows() is False            # 봉 1 — 직전 창이 비었다
+    f.update(100.0, volume=100.0)
+    # 봉 2 — 직전 한 봉(10)의 10배지만 창이 1/3 이므로 판정 자체가 없다.
+    # 덜 찬 창을 받으면 평균 10 · 문턱 20 으로 여기서 통과해 버린다.
     assert f.allows() is False
-    for _ in range(3):
-        f.update(100.0, volume=1000.0)    # 거래량이 아무리 커도 기준이 없으면 막는다
-        assert f.allows() is False
-    f.update(100.0, volume=1000.0)        # 직전 3봉 평균 1000, 1000 >= 2000 아님
-    assert f.allows() is False
-    f.update(100.0, volume=2000.0)        # 직전 3봉 평균 1000, 2000 >= 2000
-    assert f.allows() is True
+    f.update(100.0, volume=100.0)
+    assert f.allows() is False            # 봉 3 — 창이 2/3, 아직 기준이 없다
+    f.update(100.0, volume=100.0)
+    assert f.allows() is False            # 봉 4 — 직전 3봉(10·100·100) 평균 70, 100 >= 140 아님
+    f.update(100.0, volume=1000.0)
+    assert f.allows() is True             # 봉 5 — 직전 3봉 평균 100, 1000 >= 200
 
 
 # --- 이동평균 -------------------------------------------------------------

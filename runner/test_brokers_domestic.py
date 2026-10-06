@@ -186,7 +186,9 @@ class DomesticBrokerTests(unittest.TestCase):
         cases = [({"state": "done", "executed_volume": "0"}, "FILLED", "done"),
                  ({"state": "cancel", "executed_volume": "0"}, "CANCELED", "cancel"),
                  ({"state": "wait", "executed_volume": "0"}, "OPEN", "wait"),
-                 ({"state": "watch", "executed_volume": "0"}, "OPEN", "watch")]
+                 ({"state": "watch", "executed_volume": "0"}, "OPEN", "watch"),
+                 # 시장가 매수에서 쓰지 못한 원화만 취소돼도 거래소는 cancel 로 끝낼 수 있다 — 체결은 체결이다.
+                 (dict(FILLED, state="cancel"), "FILLED", "cancel")]
         for payload, status, raw in cases:
             with self.subTest(raw=raw):
                 broker = self.broker()
@@ -223,6 +225,28 @@ class DomesticBrokerTests(unittest.TestCase):
         self.assertEqual((order.status, order.raw_status), ("REJECTED", "insufficient_funds_bid"))
         self.assertEqual(order.executed_qty, 0.0)
         self.assertEqual(self.session.post.call_count, 1)
+
+    @patch("runner.brokers.time.sleep")
+    def test_unnamed_client_error_gets_the_full_reconcile_not_a_rejection(self, _sleep):
+        # 이름 없는 4xx 는 게이트웨이가 거래소의 접수 뒤에 낸 것일 수 있다 — 타임아웃과 같이 끝까지 조회한다.
+        broker = self.broker()
+        self.session.post.return_value = FakeResponse("<html>Forbidden</html>", status=403)
+        self.session.get.side_effect = [FakeResponse({"error": {"name": "order_not_found"}}, status=404),
+                                        FakeResponse({"state": "wait", "executed_volume": "0"}),
+                                        FakeResponse(FILLED)]
+        order = broker.submit("BUY", notional=1_000_000.0, client_id="ggp-17")
+        self.assertEqual(order.status, "FILLED")
+        self.assertEqual(self.session.get.call_count, 3)
+        self.assertEqual(self.session.post.call_count, 1)
+
+    @patch("runner.brokers.time.sleep")
+    def test_unnamed_client_error_with_nothing_found_is_unknown_not_rejected(self, _sleep):
+        broker = self.broker()
+        self.session.post.return_value = FakeResponse(None, status=403)
+        self.session.get.return_value = FakeResponse({"error": {"name": "order_not_found"}}, status=404)
+        order = broker.submit("BUY", notional=1_000_000.0, client_id="ggp-18")
+        self.assertEqual(order.status, "UNKNOWN")
+        self.assertEqual(self.session.get.call_count, brokers.MAX_RETRIES)
 
     def test_client_error_but_order_found_trusts_the_lookup(self):
         broker = self.broker()

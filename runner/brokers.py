@@ -285,15 +285,21 @@ def _plain(number: Decimal) -> str:
     return text.rstrip("0").rstrip(".") if "." in text else text
 
 
-def _fold_domestic_status(state) -> str:
-    """업비트·빗썸 state 를 봇이 아는 상태로 접는다. 답이 없으면 열렸는지조차 모르므로 UNKNOWN."""
+def _fold_domestic_status(state, executed_volume) -> str:
+    """업비트·빗썸 state 를 봇이 아는 상태로 접는다. 답이 없으면 열렸는지조차 모르므로 UNKNOWN.
+
+    cancel 은 체결량으로 가른다. 체결이 있었다면 남은 주문(예: 시장가 매수에서 쓰지 못한 원화)만
+    취소된 것이라 주문은 체결된 것이다 — 이걸 CANCELED 로 접으면 정상 체결에 봇이 멈춘다.
+    체결이 없으면 말 그대로 취소다. 문서가 정하지 않은 거래소 동작을 사실로 적지 않으려고,
+    '체결량이 있는 cancel' 이 실제로 오는지와 무관하게 안전한 쪽으로 접는다.
+    """
     word = str(state or "")
     if not word:
         return "UNKNOWN"
     if word == "done":
         return "FILLED"
     if word == "cancel":
-        return "CANCELED"
+        return "FILLED" if _positive_number(executed_volume) > 0 else "CANCELED"
     return "OPEN"
 
 
@@ -430,12 +436,13 @@ class DomesticBroker:
             resp = self.session.post(self._base + self._spec["order_path"], json=body,
                                      headers=self._auth(body), timeout=_DOMESTIC_TIMEOUT)
             if 400 <= resp.status_code < 500:
-                # 4xx 는 거래소가 받지 않았다는 답이다. 5xx · 타임아웃은 들어갔는지 모르므로 아래에서 조회로 확인한다.
+                # 거래소가 오류 이름을 달아 돌려준 4xx 만 '받지 않았다' 로 본다. 이름이 없는 4xx 는
+                # 중간 장비(게이트웨이 · WAF)가 거래소가 주문을 받은 뒤에 낸 것일 수 있어, 타임아웃이나
+                # 5xx 와 같이 아래에서 끝까지 조회로 확인한다.
                 try:
                     rejection = str(((resp.json() or {}).get("error") or {}).get("name") or "")
                 except Exception:
                     pass
-                rejection = rejection or f"http_{resp.status_code}"
         except Exception:
             # 타임아웃은 거절의 증거가 아니다. 같은 client_id 로 조회할 뿐, 두 번째 시장가 주문은 없다.
             pass
@@ -446,7 +453,7 @@ class DomesticBroker:
                 order = self._get("/v1/order", {self._spec["id_key"]: client_id})
             except Exception:
                 pass  # 직전 응답에서 확인된 부분 체결을 유지한다
-            if _fold_domestic_status(order.get("state")) in TERMINAL_STATUSES:
+            if _fold_domestic_status(order.get("state"), order.get("executed_volume")) in TERMINAL_STATUSES:
                 break
             if attempt + 1 < MAX_RETRIES and not rejection:
                 time.sleep(0.25 * (attempt + 1))
@@ -466,7 +473,7 @@ class DomesticBroker:
         average = funds / volume if volume else 0.0
         # 체결 내역이 체결 수량을 다 덮지 못하면 평균가를 믿을 수 없다 — 봇이 포지션을 불확실로 본다.
         fees_known = math.isclose(volume, executed, rel_tol=1e-9, abs_tol=1e-12)
-        return Order(status=_fold_domestic_status(order.get("state")), executed_qty=executed,
+        return Order(status=_fold_domestic_status(order.get("state"), executed), executed_qty=executed,
                      avg_price=average, acquired_qty=executed, fees_known=fees_known,
                      order_id=order.get("uuid") or order.get("order_id"),
                      raw_status=str(order.get("state") or "unknown"))

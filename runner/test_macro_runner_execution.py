@@ -15,6 +15,7 @@ class RunnerExecutionTests(unittest.TestCase):
         bot = object.__new__(macro_runner.BotThread)
         bot.client = Mock()
         bot.market, bot.symbol, bot.side = "futures", "BTCUSDT", "long"
+        bot.quote = "USDT"
         bot.leverage = 1
         bot.log = Mock()
         bot.in_position, bot.held_qty, bot.entry_price = True, 2.0, 100.0

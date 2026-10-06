@@ -10,6 +10,7 @@ def _bot(in_position=False, held=0.0, entry=0.0):
     bot = object.__new__(macro_runner.BotThread)
     bot.client = Mock()
     bot.market, bot.symbol, bot.side = "spot", "ONEUSDT", "long"
+    bot.quote = "USDT"
     bot.leverage = 1
     bot.log = Mock()
     bot.in_position, bot.held_qty, bot.entry_price = in_position, held, entry

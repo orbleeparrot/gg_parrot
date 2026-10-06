@@ -97,8 +97,20 @@ except ImportError:
 SERVER_BASE = os.environ.get("GGP_SERVER_BASE", "https://gg-parrot.onrender.com").rstrip("/")
 LOCAL_SERVER_BASE = "http://127.0.0.1:8000"
 MAX_ORDER_USDT = float(os.environ.get("MAX_ORDER_USDT", "100"))   # 1회 주문 상한(USDT)
+MAX_ORDER_KRW = float(os.environ.get("MAX_ORDER_KRW", "150000"))  # 1회 주문 상한(KRW) — 100 USDT 와 비슷한 자리수
 ORDER_CAP_BASIS = os.environ.get("ORDER_CAP_BASIS", "notional").lower()  # notional | margin
 MAX_RETRIES = 3
+
+
+def quote_of(symbol: str) -> str:
+    """호가 통화 — 국내는 `KRW-BTC`, 바이낸스는 `BTCUSDT`."""
+    return "KRW" if str(symbol).upper().startswith("KRW-") else "USDT"
+
+
+def order_cap(quote: str) -> float:
+    """1 회 주문 상한. 상한은 늘 통화와 함께 다닌다 — 떼어 두면 다음에 또 틀린다."""
+    return MAX_ORDER_KRW if str(quote).upper() == "KRW" else MAX_ORDER_USDT
+
 POLL_SECONDS = 5.0
 # 실행 로그를 서버에 올리는 버퍼 상한(heartbeat 한 번에 실어 보내는 최대 줄 수).
 EVENT_BUFFER_MAX = 100
@@ -305,8 +317,8 @@ def _base_asset(symbol: str) -> str:
     return symbol
 
 
-def _order_qty(price, step, min_notional, budget, leverage, market) -> tuple[float, float]:
-    cap = min(budget, MAX_ORDER_USDT)
+def _order_qty(price, step, min_notional, budget, leverage, market, *, quote="USDT") -> tuple[float, float]:
+    cap = min(budget, order_cap(quote))
     if market == "futures" and ORDER_CAP_BASIS == "margin":
         notional = cap * leverage
     else:
@@ -331,11 +343,11 @@ def _strategy_targets(macro: dict) -> dict:
 class RiskGuard:
     """공통 리스크 3종: 일일 최대손실 / 최대 보유시간 / 재진입 금지."""
 
-    def __init__(self, risk: dict, base_capital: float) -> None:
+    def __init__(self, risk: dict, base_capital: float, *, cap: float = MAX_ORDER_USDT) -> None:
         self.daily_max_loss = risk.get("daily_max_loss_pct")
         self.max_holding_hours = risk.get("max_holding_hours")
         self.cooldown_minutes = float(risk.get("cooldown_minutes") or 0)
-        self.base = base_capital if base_capital > 0 else MAX_ORDER_USDT
+        self.base = base_capital if base_capital > 0 else cap
         self._day = None
         self._day_pnl = 0.0
         self._halted_day = None
@@ -536,6 +548,7 @@ class BotThread(threading.Thread):
 
         # 매매 상태
         self.symbol = str(macro.get("symbol", "BTCUSDT")).upper()
+        self.quote = quote_of(self.symbol)  # 주문 상한·자본 기본값이 이 통화를 따른다 — __init__ 시그니처를 바꿔도 이 줄은 symbol 뒤에 반드시 남겨야 한다
         self.side = str(macro.get("position_side", "long")).lower()
         self.leverage = max(1, int(macro.get("leverage", 1) or 1))
         self.market = _decide_market(self.side, self.leverage)
@@ -549,7 +562,7 @@ class BotThread(threading.Thread):
         self.position_dust_qty = 0.0
 
         # v8 서버 신호: 명령의 notional_frac 은 매크로 초기자본 기준. 실행 결과는 다음 heartbeat 의 acks 로 보고.
-        self.capital = float((macro.get("params") or {}).get("initial_capital") or 0) or MAX_ORDER_USDT
+        self.capital = float((macro.get("params") or {}).get("initial_capital") or 0) or order_cap(self.quote)
         self._done_command_ids: deque = deque(maxlen=200)  # ok 로 ack 한 명령 id — 재전송돼도 다시 실행하지 않는다
         self.pending_acks: list[dict] = []
         self._offline_logged = False
@@ -797,8 +810,8 @@ class BotThread(threading.Thread):
             if uncertain_before:
                 raise RuntimeError("포지션을 확인하지 못해 추가 주문을 보내지 않습니다. 거래소에서 주문과 포지션을 확인하세요.")
             if action in ("buy", "short"):
-                notional = min(self.capital * float(cmd.get("notional_frac") or 0.0), MAX_ORDER_USDT)
-                qty, _ = _order_qty(price, self.step, 0, notional, self.leverage, self.market)
+                notional = min(self.capital * float(cmd.get("notional_frac") or 0.0), order_cap(self.quote))
+                qty, _ = _order_qty(price, self.step, 0, notional, self.leverage, self.market, quote=self.quote)
                 if qty <= 0:
                     raise RuntimeError("주문 수량이 최소 단위보다 작아요.")
                 word = "BUY" if action == "buy" else "SELL"
@@ -871,8 +884,9 @@ class BotThread(threading.Thread):
                 status, note = "error", "연결/심볼 준비 실패 — 로그 확인"
                 return
             t = _strategy_targets(self.macro)
-            guard = RiskGuard(t["risk"], t["capital"] * t["invest_ratio"] if t["capital"] else 0.0)
-            self.log(f"공통 리스크: {guard.describe()} · 주문 상한 {MAX_ORDER_USDT} USDT · "
+            guard = RiskGuard(t["risk"], t["capital"] * t["invest_ratio"] if t["capital"] else 0.0,
+                              cap=order_cap(self.quote))
+            self.log(f"공통 리스크: {guard.describe()} · 주문 상한 {order_cap(self.quote):,.0f} {self.quote} · "
                      f"{POLL_SECONDS:.0f}초마다 평가")
 
             while True:

@@ -25,6 +25,41 @@ export const RULE_TYPES = {
   K: { label: "K · 하락 방어 전환 (SAR, 선물)", allowShort: false },
 };
 
+// 서버 FILTERABLE_TYPES 와 같아야 한다 — A·B·C 는 실시간에서 캔들을 안 받고, D 그리드는
+// 사다리 중간을 막으면 팔 짝 없는 매수가 남는다.
+export const FILTERABLE_RULE_TYPES = Object.freeze(["E", "F", "G", "H", "I", "J", "K"]);
+export const FILTER_KINDS = Object.freeze([
+  { value: "ma", label: "이동평균 위/아래" },
+  { value: "rsi", label: "RSI 구간" },
+  { value: "bb", label: "볼린저 위치" },
+  { value: "volume", label: "거래량 배수" },
+]);
+
+// 진입 필터를 사람 말 한 구로 — 서버 요약의 "진입 조건: …" 뒤 문구(backend entry_filter.py note())와 같은 말이다.
+// 요약 한 줄은 맨 끝에 붙어 말줄임에 잘리므로, 카드 사양표 · 리더보드 전략 칸은 이 구를 따로 그린다. 필터가 없거나 모르는 종류면 null.
+export function entryFilterPhrase(filter) {
+  if (!filter || typeof filter !== "object") return null;
+  const p = filter.params || {};
+  const has = (v) => v !== null && v !== undefined && v !== "";
+  switch (filter.kind) {
+    case "ma":
+      return `${p.period}봉 ${p.ma_type ?? "SMA"} 이동평균 ${p.side === "below" ? "아래" : "위"}`;
+    case "rsi":
+      if (has(p.min) && has(p.max)) return `RSI(${p.period}) ${Number(p.min)}~${Number(p.max)}`;
+      if (has(p.max)) return `RSI(${p.period}) ${Number(p.max)} 이하`;
+      if (has(p.min)) return `RSI(${p.period}) ${Number(p.min)} 이상`;
+      return null;
+    case "bb": {
+      const zone = { below_lower: "하단 밖", above_upper: "상단 밖", inside: "밴드 안" }[p.zone ?? "inside"];
+      return zone ? `볼린저(${p.period}, ${Number(p.num_std)}σ) ${zone}` : null;
+    }
+    case "volume":
+      return `거래량이 ${p.period}봉 평균의 ${Number(p.multiple)}배 이상`;
+    default:
+      return null;
+  }
+}
+
 export const PERIOD_PRESETS = [
   { value: "1y", label: "최근 1년" },
   { value: "6m", label: "최근 6개월" },
@@ -110,6 +145,12 @@ export function defaultForm() {
     ...TYPE_DEFAULTS.I,
     ...TYPE_DEFAULTS.J,
     ...TYPE_DEFAULTS.K,
+    // 진입 필터 (E~K 만): 켜면 이 조건일 때만 새로 산다
+    use_entry_filter: false, filter_kind: "ma",
+    filter_ma_type: "SMA", filter_ma_period: 20, filter_ma_side: "above",
+    filter_rsi_period: 14, filter_rsi_min: "", filter_rsi_max: 70,
+    filter_bb_period: 20, filter_bb_num_std: 2, filter_bb_zone: "inside",
+    filter_vol_period: 20, filter_vol_multiple: 2,
     // common risk
     invest_ratio_pct: 100,
     stop_loss_pct: 3,
@@ -136,6 +177,9 @@ export function withTypeDefaults(form, rt) {
   if (TYPE_DEFAULTS[rt]) Object.assign(next, TYPE_DEFAULTS[rt]);
   if (!RULE_TYPES[rt].allowShort) next.position_side = "long";
   if (rt === "C") next.leverage = 1; // DCA is leverage-excluded (1x fixed)
+  // 필터를 못 쓰는 규칙으로 옮기면 필터를 버린다. 남겨 두면 서버가 거부하고
+  // 사용자는 왜 안 되는지 알 수 없다.
+  if (!FILTERABLE_RULE_TYPES.includes(rt)) next.use_entry_filter = false;
   if (isDomestic(form.exchange)) {
     next.position_side = "long";
     next.leverage = 1;
@@ -162,7 +206,9 @@ export function withExchangeDefaults(form, value, items = []) {
   for (const key of EXCHANGE_MONEY_FIELDS) next[key] = "";
   if (isDomestic(exchange)) {
     Object.assign(next, { position_side: "long", leverage: 1, market: "spot", flip_to_short: false });
-    if (next.rule_type === "K") next.rule_type = "A";
+    // K 는 국내에서 못 쓴다 — A 로 내리면서 필터도 버린다(A 는 필터를 못 쓴다). withTypeDefaults 를 거치지 않는 길이라
+    // 여기서 안 끄면, 다음에 필터 규칙을 골랐을 때 버린 필터가 체크된 채 되살아난다.
+    if (next.rule_type === "K") { next.rule_type = "A"; next.use_entry_filter = false; }
     if (next.rule_type === "C") next.candle_interval = "1d";
   } else next.market = "auto";
   return next;
@@ -252,6 +298,32 @@ export function validateDetailed(form) {
     if (!(num(form.short_take_profit_pct) > 0)) return fail("short_take_profit_pct", "K 전략의 숏 익절 기준을 입력해요.");
     if (!(num(form.short_stop_loss_pct) > 0)) return fail("short_stop_loss_pct", "K 전략에서 숏으로 전환하려면 손절 기준이 필요해요.");
   }
+  if (form.use_entry_filter && FILTERABLE_RULE_TYPES.includes(rt)) {
+    const k = form.filter_kind;
+    if (k === "ma") {
+      const period = num(form.filter_ma_period);
+      if (!(period >= 2 && period <= 400)) return fail("filter_ma_period", "이동평균 기간은 2~400 봉이에요.");
+    } else if (k === "rsi") {
+      const period = num(form.filter_rsi_period);
+      if (!(period >= 2 && period <= 200)) return fail("filter_rsi_period", "RSI 기간은 2~200 봉이에요.");
+      const lo = optNum(form.filter_rsi_min), hi = optNum(form.filter_rsi_max);
+      if (lo === null && hi === null) return fail("filter_rsi_max", "RSI 위 또는 아래 한쪽은 정해 주세요.");
+      for (const [key, v] of [["filter_rsi_min", lo], ["filter_rsi_max", hi]]) {
+        if (v !== null && !(v >= 0 && v <= 100)) return fail(key, "RSI 는 0~100 사이예요.");
+      }
+      if (lo !== null && hi !== null && lo > hi) return fail("filter_rsi_min", "RSI 아래 값이 위 값보다 클 수 없어요.");
+    } else if (k === "bb") {
+      const period = num(form.filter_bb_period);
+      if (!(period >= 2 && period <= 400)) return fail("filter_bb_period", "볼린저 기간은 2~400 봉이에요.");
+      const sd = num(form.filter_bb_num_std);
+      if (!(sd > 0 && sd <= 5)) return fail("filter_bb_num_std", "표준편차 배수는 0 보다 크고 5 이하예요.");
+    } else {
+      const period = num(form.filter_vol_period);
+      if (!(period >= 2 && period <= 400)) return fail("filter_vol_period", "거래량 평균 기간은 2~400 봉이에요.");
+      const mult = num(form.filter_vol_multiple);
+      if (!(mult > 0 && mult <= 100)) return fail("filter_vol_multiple", "거래량 배수는 0 보다 크고 100 이하예요.");
+    }
+  }
   return null;
 }
 
@@ -324,6 +396,26 @@ function buildParams(rt, form) {
   }
 }
 
+// 진입 필터 조립 — 필터를 못 쓰는 규칙이거나 꺼져 있으면 null.
+function buildEntryFilter(form) {
+  if (!form.use_entry_filter || !FILTERABLE_RULE_TYPES.includes(form.rule_type)) return null;
+  switch (form.filter_kind) {
+    case "ma":
+      return { kind: "ma", params: { ma_type: form.filter_ma_type, period: num(form.filter_ma_period), side: form.filter_ma_side } };
+    case "rsi": {
+      const params = { period: num(form.filter_rsi_period) };
+      // 비워 둔 쪽은 보내지 않는다 — 서버가 null 과 '없음' 을 다르게 읽는다.
+      if (optNum(form.filter_rsi_min) !== null) params.min = num(form.filter_rsi_min);
+      if (optNum(form.filter_rsi_max) !== null) params.max = num(form.filter_rsi_max);
+      return { kind: "rsi", params };
+    }
+    case "bb":
+      return { kind: "bb", params: { period: num(form.filter_bb_period), num_std: num(form.filter_bb_num_std), zone: form.filter_bb_zone } };
+    default:
+      return { kind: "volume", params: { period: num(form.filter_vol_period), multiple: num(form.filter_vol_multiple) } };
+  }
+}
+
 export function buildMacro(form) {
   const rt = form.rule_type;
   const meta = RULE_TYPES[rt];
@@ -346,6 +438,7 @@ export function buildMacro(form) {
     margin_mode: "isolated",
     market: form.market || "auto",
     params: buildParams(rt, form),
+    entry_filter: buildEntryFilter(form),
     risk: {
       invest_ratio: num(form.invest_ratio_pct) / 100,
       stop_loss_pct: useSL ? num(form.stop_loss_pct) : null,
@@ -382,6 +475,16 @@ export function macroToForm(macro) {
   ["per_grid_invest", "take_profit", "ma_filter_period", "long_take_profit_pct"].forEach((k) => {
     if (f[k] == null) f[k] = "";
   });
+  const ef = macro.entry_filter;
+  f.use_entry_filter = !!ef;
+  if (ef) {
+    f.filter_kind = ef.kind;
+    const p = ef.params || {};
+    if (ef.kind === "ma") Object.assign(f, { filter_ma_type: p.ma_type ?? "SMA", filter_ma_period: p.period ?? 20, filter_ma_side: p.side ?? "above" });
+    else if (ef.kind === "rsi") Object.assign(f, { filter_rsi_period: p.period ?? 14, filter_rsi_min: p.min ?? "", filter_rsi_max: p.max ?? "" });
+    else if (ef.kind === "bb") Object.assign(f, { filter_bb_period: p.period ?? 20, filter_bb_num_std: p.num_std ?? 2, filter_bb_zone: p.zone ?? "inside" });
+    else Object.assign(f, { filter_vol_period: p.period ?? 20, filter_vol_multiple: p.multiple ?? 2 });
+  }
   const r = macro.risk || {};
   f.invest_ratio_pct = Math.round((r.invest_ratio ?? 1) * 100);
   f.use_stop_loss = r.stop_loss_pct != null;

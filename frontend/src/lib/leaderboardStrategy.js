@@ -1,5 +1,5 @@
 import { baseOf, quoteOf } from "./format.js";
-import { RULE_TYPES } from "./macro.js";
+import { RULE_TYPES, entryFilterPhrase } from "./macro.js";
 import { EXCHANGES } from "./exchanges.js";
 
 const EXCHANGE_LABELS = new Set(EXCHANGES.map((item) => item.label));
@@ -32,9 +32,12 @@ export function leaderboardStrategy(entry) {
       ? { value: number(macro.params.amount_per_buy), unit: quoteOf(entry.symbol), label: "회당 자금" } : null)
     : (positive(macro.risk?.invest_ratio)
       ? { value: `${number(Number(macro.risk.invest_ratio) * 100)}%`, unit: "투입", label: "자금" } : null);
+  // 서버 요약은 필터 구를 맨 끝에 붙이는데 그 끝이 말줄임에 가장 먼저 잘린다. 구조화된 값으로 따로 내보낸다(필터가 있을 때만).
+  const entryCondition = entryFilterPhrase(macro.entry_filter);
   return {
     description: description || RULE_TYPES[macro.rule_type]?.label.replace(/^[A-Z] · /, "") || "상세 정보 없음",
     side,
     capital,
+    ...(entryCondition ? { entryCondition } : {}),
   };
 }

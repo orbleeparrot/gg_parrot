@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import os
 import time
 from collections import namedtuple
@@ -18,7 +19,8 @@ from ..exchanges import normalize_exchange
 
 log = logging.getLogger(__name__)
 
-Candle = namedtuple("Candle", "t o h l c")
+# v = 거래량. 모르면 None — 0.0 과 섞지 않는다(필터는 0 을 "거래 없음" 으로 읽어 막는다).
+Candle = namedtuple("Candle", "t o h l c v", defaults=(None,))
 Key = tuple  # Binance legacy (symbol, interval, market); KRW adds exchange
 Callback = Callable[[str, Candle], Awaitable[None]]
 
@@ -47,8 +49,17 @@ def _unpack(key):
     return (*key, "binance") if len(key) == 3 else key
 
 
+def _volume(row: dict) -> Optional[float]:
+    """원시 봉의 ``"v"`` 를 float 로. 없거나 숫자가 아니면 None(0.0 이 아니다)."""
+    try:
+        v = float(row.get("v"))
+    except (TypeError, ValueError):
+        return None
+    return v if math.isfinite(v) else None
+
+
 def _to_candle(row: dict) -> Candle:
-    return Candle(int(row["t"]), float(row["o"]), float(row["h"]), float(row["l"]), float(row["c"]))
+    return Candle(int(row["t"]), float(row["o"]), float(row["h"]), float(row["l"]), float(row["c"]), _volume(row))
 
 
 class CandleFeed:

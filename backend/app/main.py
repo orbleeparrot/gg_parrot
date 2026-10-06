@@ -2310,6 +2310,10 @@ def realtrade_macro_file(req: BundleRequest) -> Response:
     macro = req.macro
     if is_domestic(macro.exchange):
         raise HTTPException(422, runner_mod.DOMESTIC_RUNNER_DETAIL)
+    if macro.is_portfolio():
+        # 여러 종목은 어느 실행기 버전으로도 못 돌린다(runner.PORTFOLIO_UNSUPPORTED_DETAIL 주석 참고).
+        # 세션 시작이 어차피 거절하지만, 그때는 사용자가 파일을 받아 실행기에 넣은 뒤다 — 내려받기에서 말해 준다.
+        raise HTTPException(422, runner_mod.PORTFOLIO_UNSUPPORTED_DETAIL)
     payload = macro.model_dump(mode="json")
     payload["human_summary"] = human_summary(macro)
     # 서명 동봉 — 실행기가 시작할 때 같이 올리면 서버가 "원본 그대로인지" 판별한다.

@@ -9,7 +9,7 @@ export default function StrategyDetails({ entry, extra = [] }) {
   const sideLabel = { long: "롱", short: "숏", switch: "롱 → 숏" }[details?.side] || "—";
   const extraText = extra.map((item) => `${item.label} ${item.value}`).join(" | ");
   const fullText = (details
-    ? `${entry.symbol} | ${sideLabel} | ${details.description} | ${details.capital ? `${details.capital.label} ${details.capital.value} ${details.capital.unit}` : "자금 —"}`
+    ? `${entry.symbol} | ${sideLabel} | ${details.entryCondition ? `진입 조건 ${details.entryCondition} | ` : ""}${details.description} | ${details.capital ? `${details.capital.label} ${details.capital.value} ${details.capital.unit}` : "자금 —"}`
     : `${entry.symbol} | 잠긴 전략`) + (extraText ? ` | ${extraText}` : "");
   return (
     <dl className="lb-strategy-facts" title={fullText}>
@@ -24,6 +24,12 @@ export default function StrategyDetails({ entry, extra = [] }) {
             {sideLabel}
           </dd>
         </div>
+        {details.entryCondition && (
+          <div className="lb-fact lb-fact-entry">
+            <dt>진입 조건</dt>
+            <dd>{details.entryCondition}</dd>
+          </div>
+        )}
         <div className="lb-fact lb-fact-strategy">
           <dt className="sr-only">전략</dt>
           <dd className="lb-summary-text">{details.description}</dd>

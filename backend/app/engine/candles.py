@@ -159,6 +159,9 @@ class CandleSim:
         self._cooldown_until: Optional[datetime] = None
         self._entry_time: Optional[datetime] = None
         self.stopped = False  # hard stop (band exit / reenter disabled)
+        # 진입 필터 — 없으면 None. on_candle 이 봉이 끝난 뒤 갱신하고 _entry_blocked 가 묻는다.
+        from .entry_filter import make_filter  # 늦은 import: entry_filter -> candles 순환 방지
+        self.entry_filter = make_filter(macro)
 
     # -- position helpers (long book) ------------------------------------
     def total_qty(self) -> float:
@@ -224,9 +227,12 @@ class CandleSim:
 
         _IndicatorSim 의 ``_pending`` 은 남긴다 — 백테스트가 다음 봉 시가에 실행하는 의도와 같다.
         """
-        for t_ms, o, h, l, c in candles:
+        for row in candles:
+            # (t, o, h, l, c) 또는 (t, o, h, l, c, v) — 거래량 없는 옛 봉 모양도 받는다.
+            t_ms, o, h, l, c = row[0], row[1], row[2], row[3], row[4]
+            volume = float(row[5]) if len(row) > 5 and row[5] is not None else None
             ts = datetime.fromtimestamp(int(t_ms) / 1000, timezone.utc)
-            self.on_candle(float(o), float(h), float(l), float(c), ts)
+            self.on_candle(float(o), float(h), float(l), float(c), ts, volume=volume)
         self.reset_book()
 
     def restore(self, equity: float, *, in_position: bool, qty: float, entry_price: float,
@@ -372,6 +378,8 @@ class CandleSim:
             return True
         if self._cooldown_until is not None and ts < self._cooldown_until:
             return True
+        if self.entry_filter is not None and not self.entry_filter.allows():
+            return True
         return False
 
     def _common_risk(self, o: float, h: float, l: float, c: float, ts: datetime, fills: List[Fill]) -> bool:
@@ -442,12 +450,17 @@ class CandleSim:
         return forced
 
     # -- driver entry point ----------------------------------------------
-    def on_candle(self, o: float, h: float, l: float, c: float, ts: datetime) -> List[Fill]:
+    def on_candle(self, o: float, h: float, l: float, c: float, ts: datetime,
+                  volume: Optional[float] = None) -> List[Fill]:
         fills: List[Fill] = []
         # Funding on held shorts (per bar, prorated only for 1d; kept simple).
         if self.side is PositionSide.SHORT and self.in_position() and self.funding > 0:
             self.cash -= self.total_qty() * c * self.funding / 100.0
         self._strategy(o, h, l, c, ts, fills)
+        # 전략 '뒤' 에 갱신한다 — 그래야 이 봉의 진입 판단은 직전 마감봉의 필터 값을 본다.
+        # 순서를 바꾸면 진행 중인 봉으로 자기 자신을 판정하는 미래 참조가 된다.
+        if self.entry_filter is not None:
+            self.entry_filter.update(c, volume=volume)
         return fills
 
     def _strategy(self, o, h, l, c, ts, fills):  # pragma: no cover - overridden
@@ -493,11 +506,14 @@ class TrailingSim(CandleSim):
                     self._ref = c
             return
         # flat -> maybe enter
+        # 눌림목 기준가는 관문 **앞**에서 잡는다 — 관문 뒤에 두면 필터가 막는 동안 기준가가 비어 있다가
+        # "필터가 처음 허락한 봉" 의 시가로 잡히고, 오르는 구간에서는 문턱이 함께 올라가 필터를 켠 쪽이
+        # 끄면 없던 매수를 한다(필터는 거래를 줄이는 쪽으로만 작동한다 — 설계 원칙 1).
+        if self.entry_mode == "dip" and self._ref is None:
+            self._ref = o
         if self._entry_blocked(ts):
             return
         if self.entry_mode == "dip":
-            if self._ref is None:
-                self._ref = o
             if l <= self._ref * (1 - self.entry_dip / 100.0):
                 px = self._ref * (1 - self.entry_dip / 100.0)
                 f = self._open_long(self.invest_ratio * self.cash, px, ts, c)
@@ -1097,8 +1113,9 @@ class LiveCandleSim:
                 self._queue.extend(execute(float(price), ts or datetime.now(timezone.utc)))
         return self._queue.popleft() if self._queue else None
 
-    def on_candle(self, o: float, h: float, l: float, c: float, ts: datetime) -> int:
-        fills = self.inner.on_candle(o, h, l, c, ts)
+    def on_candle(self, o: float, h: float, l: float, c: float, ts: datetime,
+                  volume: Optional[float] = None) -> int:
+        fills = self.inner.on_candle(o, h, l, c, ts, volume=volume)
         self._queue.extend(fills)
         return len(fills)
 

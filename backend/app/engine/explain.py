@@ -131,6 +131,14 @@ def _points(macro: Macro, r: BacktestResult) -> List[str]:
         elif r.sharpe < 0:
             pts.append(f"샤프지수 {r.sharpe:.2f} — 위험을 감안하면 손해 보는 장사였어.")
 
+    # 필터는 '왜 안 샀나' 의 근거다 — 수익률 이야기 뒤에 붙인다.
+    if macro.entry_filter is not None:
+        from .entry_filter import make_filter
+        pts.append(
+            f"진입 조건을 하나 더 걸었어 — {make_filter(macro).note()}. "
+            "조건이 아닐 때는 사지 않아."
+        )
+
     return pts
 
 

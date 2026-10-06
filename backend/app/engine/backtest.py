@@ -352,13 +352,27 @@ def _run_candle_engine(macro: Macro, df: pd.DataFrame) -> BacktestResult:
     highs = df["high"].to_numpy(dtype=float)
     lows = df["low"].to_numpy(dtype=float)
     closes = df["close"].to_numpy(dtype=float)
+    # 거래량 필터만 쓰는 열. 없으면 None 으로 넘겨 필터가 막게 한다(원칙 2).
+    volumes = df["volume"].to_numpy(dtype=float) if "volume" in df.columns else None
+
+    def volume_at(i: int) -> Optional[float]:
+        """NaN·inf 는 '모른다(None)' 로 — 0.0("거래가 없었다") 과 다른 값이다.
+
+        아는 값으로 받으면 그 봉이 기준선 창에 들어가 평균을 NaN 으로 오염시키고, 한 봉이 아니라
+        ``period`` 봉을 막는다. 실시간 피드는 ``candle_feed._volume`` 이 같은 가드를 갖고 있다 —
+        백테스트와 실거래가 같은 판정을 내야 한다(원칙 4).
+        """
+        if volumes is None:
+            return None
+        v = float(volumes[i])
+        return v if math.isfinite(v) else None
     times = df["timestamp"].tolist()
 
     sim = make_candle_sim(macro)
     equity_curve: List[EquityPoint] = []
     for i in range(len(closes)):
         ts = pd.Timestamp(times[i]).to_pydatetime()
-        sim.on_candle(opens[i], highs[i], lows[i], closes[i], ts)
+        sim.on_candle(opens[i], highs[i], lows[i], closes[i], ts, volume=volume_at(i))
         equity_curve.append(EquityPoint(t=_iso(times[i]), equity=round(sim.equity(closes[i]), 4)))
 
     return _metrics(

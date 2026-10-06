@@ -113,6 +113,7 @@ from .db import MacroRow, get_session, init_db, request_session
 from .engine import BacktestResult, Macro, Period, compact_backtest_result, human_summary
 from .engine.backtest import run_backtest
 from .engine import portfolio as portfolio_mod
+from .engine import portfolio_backtest as portfolio_backtest_mod
 from .engine import validation as validation_mod
 from .engine import walkforward as walkforward_mod
 from .engine.explain import explain_result
@@ -219,28 +220,51 @@ def _make_slug(macro: Macro) -> str:
     return f"{coin}-{desc}-{side}-{uuid.uuid4().hex[:4]}"
 
 
+def _run_portfolio_backtest(
+    macro: Macro, start_ms: int, end_ms: int, label: str = ""
+) -> tuple[BacktestResult, list, str, str]:
+    """묶음 매크로의 백테스트. 반환은 (집계 결과, 종목별, 데이터 출처, 기간 라벨).
+
+    한도(``bundle_risk``)가 있으면 레그를 봉 단위로 나란히 돌린다 — 그래야 "한 번에 몇
+    종목" 을 물을 시점이 생기고, 실시간과 같은 답이 나온다. 한도가 없으면 기존 경로를
+    그대로 쓴다(기존 묶음 매크로의 결과를 한 바이트도 바꾸지 않는다).
+
+    ``source`` 는 지금처럼 마지막 레그의 값이다 — 레그가 서로 다른 출처를 쓰는 일은
+    없으므로(같은 거래소 · 같은 시장) 뜻이 같다.
+    """
+    specs = macro.leg_specs()
+    base = macro.initial_capital
+    source = ""
+    frames: dict = {}
+    leg_macros: list = []
+    for spec in specs:
+        cap = (base * spec.weight / 100.0) if base else None
+        leg = macro.for_leg(spec, cap)
+        df, source = fetch_klines_for_macro(leg, start_ms, end_ms)
+        frames[spec.symbol] = df
+        leg_macros.append((spec.symbol, leg))
+
+    if macro.bundle_risk is not None:
+        results = portfolio_backtest_mod.run_bundle(macro, frames)
+    else:
+        results = [(sym, run_backtest(leg, frames[sym])) for sym, leg in leg_macros]
+
+    agg, per_symbol = portfolio_mod.aggregate(results, candle_interval=macro.candle_interval)
+    return agg, per_symbol, source, label
+
+
 def _run_any(macro: Macro) -> tuple[BacktestResult, list, str, str]:
     """Run a macro; returns (result, per_symbol, source, period_label).
 
-    Single-symbol => per_symbol == []. Portfolio (macro.symbols len>1) => the
-    same rule runs on each symbol with capital split evenly, and the aggregated
-    portfolio result is returned alongside a per-symbol breakdown.
+    Single-symbol => per_symbol == []. Portfolio => each leg runs its own rule with
+    capital split by weight, and the aggregated portfolio result is returned
+    alongside a per-symbol breakdown.
     """
     start_ms, end_ms = resolve_period(macro.period.preset, macro.period.start, macro.period.end)
     label = _period_label(macro.period)
 
     if macro.is_portfolio():
-        syms = macro.all_symbols()
-        base = macro.initial_capital
-        per_cap = (base / len(syms)) if base else None
-        results: list = []
-        source = ""
-        for sym in syms:
-            leg = macro.for_symbol(sym, per_cap)
-            df, source = fetch_klines_for_macro(leg, start_ms, end_ms)
-            results.append((sym, run_backtest(leg, df)))
-        agg, per_symbol = portfolio_mod.aggregate(results, candle_interval=macro.candle_interval)
-        return agg, per_symbol, source, label
+        return _run_portfolio_backtest(macro, start_ms, end_ms, label)
 
     # Single symbol: no synthetic fallback; missing data raises NoSpotDataError.
     df, source = fetch_klines_for_macro(macro, start_ms, end_ms)

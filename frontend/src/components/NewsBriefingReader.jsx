@@ -206,14 +206,11 @@ export default function NewsBriefingReader({
           </header>
         )}
         <span className="sr-only">전체 {total}개 중 {activeIndex + 1}번째 뉴스</span>
-        <div className="news-reader-queue-window" style={{ height: `${hasCommunity && measuredRows ? measuredRows.window : visibleCount * rowHeight}px` }}>
+        <div className="news-reader-queue-window" style={{ "--queue-h": `${hasCommunity && measuredRows ? measuredRows.window : visibleCount * rowHeight}px` }}>
           <div
             ref={trackRef}
-            className="news-reader-queue-track"
-            style={{
-              transform: `translateY(${moving ? -(hasCommunity && measuredRows ? measuredRows.step : rowHeight) : 0}px)`,
-              transition: moving ? `transform ${TICK_MS}ms cubic-bezier(0.22, 0.61, 0.36, 1)` : "none",
-            }}
+            className={"news-reader-queue-track" + (moving ? " is-moving" : "")}
+            style={{ "--queue-shift": `${moving ? -(hasCommunity && measuredRows ? measuredRows.step : rowHeight) : 0}px`, "--queue-tick": `${TICK_MS}ms` }}
             onTransitionEnd={(event) => {
               if (event.target === event.currentTarget && event.propertyName === "transform") finishMove();
             }}

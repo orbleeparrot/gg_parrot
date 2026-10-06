@@ -274,11 +274,12 @@ function RacerTreemap({ coins, newsBySymbol, onRetry, tick }) {
             role="listitem"
             className={`news-map-tile ${fit.tiny ? "is-tiny" : ""} ${fit.stackedHead ? "is-stacked" : ""}`}
             style={{
-              left: `calc(${x * 100}% + 4px)`,
-              top: `calc(${y * 100}% + 4px)`,
-              width: `calc(${width * 100}% - 8px)`,
-              height: `calc(${height * 100}% - 8px)`,
-              padding: `${fit.padY}px ${fit.padX}px`,
+              "--tile-x": x,
+              "--tile-y": y,
+              "--tile-w": width,
+              "--tile-h": height,
+              "--tile-pad-y": `${fit.padY}px`,
+              "--tile-pad-x": `${fit.padX}px`,
               "--tile-ticker": `${fit.ticker}px`,
               "--tile-change": `${fit.change}px`,
               "--tile-icon": `${fit.icon}px`,

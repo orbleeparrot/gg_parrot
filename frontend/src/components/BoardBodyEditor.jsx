@@ -22,13 +22,13 @@ import { EraserIcon } from "@phosphor-icons/react/dist/csr/Eraser";
 import { ArrowCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowCounterClockwise";
 import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
 import { prepareHtmlForSave } from "../lib/boardHtml.js";
+import { BOARD_INKS, inkKeyOf, stripForeignColors } from "../lib/boardInk.js";
 
 // 글 본문 편집기 — TipTap(ProseMirror). 굵게·기울임·밑줄·취소선·제목·글자 크기·글자색·정렬·목록·인용·링크,
 // 사진은 커서 자리에 들어가고 끌어서 옮기며 모서리를 끌어 크기를 바꾼다. 저장은 정제된 HTML(서버 nh3).
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
 const FONT_SIZES = [["13px", "작게"], ["", "보통"], ["17px", "조금 크게"], ["20px", "크게"], ["24px", "아주 크게"]];
-// 글자색 — 시맨틱 색(상승·하락·경고·링크)과 흐림. 본문 기본색은 '지우기'.
-const COLORS = [["#f6465d", "빨강"], ["#0ecb81", "초록"], ["#3b82f6", "파랑"], ["#f59e0b", "주황"], ["#a68000", "금색"], ["#8b95a5", "회색"]];
+// 글자색 — lib/boardInk.js 의 6색(저장은 hex, 화면은 테마별 색). 본문 기본색은 '기본색'.
 
 function isImageFile(file) {
   return file && ["image/jpeg", "image/png"].includes(file.type);
@@ -91,7 +91,9 @@ const BoardBodyEditor = forwardRef(function BoardBodyEditor({ initialHtml = "", 
     ],
     content: initialHtml || "",
     editorProps: {
-      attributes: { class: "board-editor field", "aria-label": "내용", "data-placeholder": "내용을 적어요. 사진은 원하는 자리에 커서를 두고 붙여요." },
+      attributes: { class: "board-editor field", role: "textbox", "aria-multiline": "true", "aria-label": "내용", "data-placeholder": "내용을 적어요. 사진은 원하는 자리에 커서를 두고 붙여요." },
+      // 다른 테마·사이트에서 복사한 글자색·배경색은 떼고 붙인다(팔레트 6색만 남긴다).
+      transformPastedHTML: (html) => stripForeignColors(html),
       handlePaste: (_view, event) => {
         const items = Array.from(event.clipboardData?.items || []);
         const images = items.filter((it) => it.kind === "file" && isImageFile(it.getAsFile())).map((it) => it.getAsFile());
@@ -191,12 +193,12 @@ const BoardBodyEditor = forwardRef(function BoardBodyEditor({ initialHtml = "", 
         </label>
         <span className="board-tool-color">
           <ToolButton label="글자색" active={colorOpen || Boolean(state.color)} onClick={() => setColorOpen((v) => !v)}>
-            <span className="board-tool-swatch" style={{ background: state.color || "currentColor" }} aria-hidden="true" />
+            <span className="board-tool-swatch" data-ink={inkKeyOf(state.color) || undefined} aria-hidden="true" />
           </ToolButton>
           {colorOpen ? (
             <span className="board-color-tray" role="group" aria-label="글자색 고르기">
-              {COLORS.map(([hex, label]) => (
-                <button key={hex} type="button" title={label} aria-label={label} className="board-color-dot" style={{ background: hex }} onMouseDown={(e) => e.preventDefault()} onClick={() => { editor.chain().focus().setColor(hex).run(); setColorOpen(false); }} />
+              {BOARD_INKS.map(({ key, hex, label }) => (
+                <button key={hex} type="button" title={label} aria-label={label} className="board-color-dot" data-ink={key} onMouseDown={(e) => e.preventDefault()} onClick={() => { editor.chain().focus().setColor(hex).run(); setColorOpen(false); }} />
               ))}
               <button type="button" className="board-color-reset" onMouseDown={(e) => e.preventDefault()} onClick={() => { editor.chain().focus().unsetColor().run(); setColorOpen(false); }}>기본색</button>
             </span>

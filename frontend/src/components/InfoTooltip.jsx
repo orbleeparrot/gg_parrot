@@ -115,9 +115,9 @@ export default function InfoTooltip({ term, text, placement = "top", label = "ì„
           ref={tipRef}
           id={tipId}
           role="tooltip"
-          style={{ transform: `translateX(calc(-50% + ${shift}px))` }}
+          style={{ "--shift": `${shift}px` }}
           className={
-            "absolute left-1/2 w-56 max-w-[calc(100vw-1rem)] z-[75] " +
+            "info-tip " +
             posCls +
             " rounded-xl bg-surface border border-slate-300 px-3 py-3" +
             " t-caption leading-relaxed text-slate-700 shadow-xl"

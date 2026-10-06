@@ -213,7 +213,7 @@ export default function MarketContext() {
             <div className="market-detail-main">
               <strong className={`t-title num ${fear.text}`}>{fearValue ?? "—"}</strong>
               <span className={`font-bold ${fear.text}`}>{fearLabel || fearGreed.error || "불러오는 중…"}</span>
-              <span className="market-fear-track"><span className={fear.bar} style={{ width: `${fearValue == null ? 0 : Math.max(2, Math.min(fearValue, 100))}%` }} /></span>
+              <span className="market-fear-track"><span className={fear.bar} style={{ "--fill": `${fearValue == null ? 0 : Math.max(2, Math.min(fearValue, 100))}%` }} /></span>
             </div>
             <p className="market-detail-note"><span>시장 전체 기준 · 종목별 지표 아님</span><span><span className="num">0</span> 공포 ↔ <span className="num">100</span> 탐욕</span></p>
           </div>

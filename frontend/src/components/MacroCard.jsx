@@ -31,6 +31,7 @@ function CardSpark({ curve, up }) {
     <svg className={"sd-card-spark " + (up ? "is-up" : "is-down")} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" aria-hidden="true">
       {/* 색·선 두께는 속성으로 직접 준다 — 카드를 이미지로 뜰 때(html-to-image) SVG 자식에는 CSS 가 실리지 않아 검은 상자가 됐다. currentColor 는 svg 의 color(등락색)를 따른다. */}
       <path className="sd-card-spark-area" d={`${line} L${W} ${H} L0 ${H} Z`} fill="currentColor" opacity="0.12" />
+      {/* oxlint-disable-next-line shadcn/no-inline-styles -- 카드 이미지 내보내기(html-to-image)는 SVG 속성 안의 CSS 변수를 못 푼다. 테마 토큰을 인라인 style 로만 실을 수 있다. */}
       <path className="sd-card-spark-base" d={`M0 ${y(start)} H${W}`} fill="none" strokeWidth="1" strokeDasharray="3 3" opacity="0.7" vectorEffect="non-scaling-stroke" style={{ stroke: "rgb(var(--c-slate-400))" }} />
       <path className="sd-card-spark-line" d={line} fill="none" stroke="currentColor" strokeWidth="2" vectorEffect="non-scaling-stroke" />
     </svg>

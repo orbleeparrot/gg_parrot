@@ -294,13 +294,6 @@
     --badge-streak-bg: #d9f0ee;
     --badge-streak-fg: #0a5c56;
 
-    /* Optimizer heat-map swatches (red→green). The cell label is slate-800,
-       so the swatch must sit opposite it in each theme. */
-    /* 발산 히트맵: 채도는 크기에 비례(0이면 회색), 명도는 여기서 shift 만큼 이동한다.
-       라이트는 어두워지는 방향, 다크는 밝아지는 방향이라 부호가 반대다. */
-    --heat-s: 70%;
-    --heat-l: 92%;
-    --heat-l-shift: -20%;
   }
 
   .dark {
@@ -387,10 +380,6 @@
     --chart-up: 14 203 129;
     --chart-down: 246 70 93;
 
-    --heat-s: 42%;
-    --heat-l: 26%;
-    --heat-l-shift: 12%;
-
     --glass-bg: 11 14 17;   /* §7: rgba(11,14,17,.68) */
     --glass-alpha: 0.68;
 
@@ -445,6 +434,24 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 /* 13px 이하에 weight 400 을 쓰지 않는다. 어두운 바닥에서 가는 획이
    번져 보여 수치상 통과하는 대비도 실제로는 흐리게 느껴진다. */
 .text-xs { font-weight: 500; }
+
+/* 열 지도 칸(lib/heat.js) — --heat(-1…+1)만큼 초록·빨강을 면 색에 섞는다. 0 은 섞지 않아 무채색. */
+.heat-cell {
+  --heat-up: clamp(0%, calc(var(--heat, 0) * 64%), 64%);
+  --heat-down: clamp(0%, calc(var(--heat, 0) * -64%), 64%);
+  background-color: color-mix(in srgb, rgb(var(--c-green-600)) var(--heat-up),
+    color-mix(in srgb, rgb(var(--c-red-600)) var(--heat-down), rgb(var(--c-slate-100))));
+}
+
+/* 도움말 말풍선(InfoTooltip) — 화면 끝에서 밀어 넣은 만큼(--shift) 가운데에서 비킨다. */
+.info-tip {
+  position: absolute;
+  left: 50%;
+  width: 14rem;
+  max-width: calc(100vw - 1rem);
+  z-index: 75;
+  transform: translateX(calc(-50% + var(--shift, 0px)));
+}
 
 /* §7 유리 — 스티키 상단바·하단 고정 띠 전용. */
 .glass {
@@ -705,6 +712,7 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 .agent-gauge-bar.is-one-sided { background: linear-gradient(90deg, rgb(var(--c-red-600) / .38), rgb(var(--c-slate-200)) 45%, rgb(var(--c-slate-200))); }
 .agent-gauge-bar > i {
   position: absolute;
+  left: var(--at, 50%);
   top: 50%;
   width: 14px;
   height: 14px;
@@ -2248,6 +2256,7 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 }
 
 .market-fear-track > span {
+  width: var(--fill, 0%);
   height: 100%;
   display: block;
   border-radius: inherit;
@@ -2980,6 +2989,8 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
    테두리를 깔아 어떤 로고든 캔버스에서 떠 보이게 한다. */
 .coin-icon {
   flex: none;
+  width: var(--coin-size, 36px);
+  height: var(--coin-size, 36px);
   border-radius: 999px;
   background: rgb(var(--c-slate-100));
   object-fit: contain;
@@ -2988,6 +2999,7 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 /* 로고를 못 받은 종목은 티커 글자로 대신한다 — 깨진 이미지 아이콘보다 낫다. */
 .coin-icon.is-fallback {
   display: inline-grid;
+  font-size: max(11px, calc(var(--coin-size, 36px) * 0.34));
   place-items: center;
   color: rgb(var(--c-slate-700));
   font-weight: 800;
@@ -4375,6 +4387,7 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 }
 
 .hero-tour-progress-track > span {
+  width: var(--fill, 0%);
   display: block;
   height: 100%;
   background: rgb(var(--c-brand));
@@ -5028,7 +5041,8 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   display: flex;
   align-items: flex-end;
   color: #fff;
-  background: rgb(var(--c-slate-800)) center / cover no-repeat;
+  /* 기사 사진(og:image)은 --card-image 로 받는다 — 없으면 아래 .is-plain 의 어두운 면. */
+  background: rgb(var(--c-slate-800)) var(--card-image, none) center / cover no-repeat;
   text-align: left;
   text-decoration: none;
   font: inherit;
@@ -5169,6 +5183,12 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 }
 .news-map-tile {
   position: absolute;
+  /* 스퀘어리파이드 배치(lib/treemap.js)가 준 비율 — 타일 사이 8px 은 여기서 뺀다. */
+  left: calc(var(--tile-x) * 100% + 4px);
+  top: calc(var(--tile-y) * 100% + 4px);
+  width: calc(var(--tile-w) * 100% - 8px);
+  height: calc(var(--tile-h) * 100% - 8px);
+  padding: var(--tile-pad-y) var(--tile-pad-x);
   box-sizing: border-box;
   margin: 0;
   border: 1px solid rgb(var(--c-slate-300));
@@ -5591,11 +5611,17 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 }
 
 .news-reader-queue-window {
+  height: var(--queue-h);
   overflow: hidden;
 }
 
 .news-reader-queue-track {
   will-change: transform;
+  transform: translateY(var(--queue-shift, 0px));
+}
+/* 한 칸 올라가는 동안만 전환 — 움직임 줄이기 설정이면 JS 가 아예 넘기지 않는다. */
+.news-reader-queue-track.is-moving {
+  transition: transform var(--queue-tick, 520ms) cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 
 .news-reader-row {
@@ -6689,6 +6715,7 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 }
 
 .runner-wizard-progress-track > span {
+  width: var(--fill, 0%);
   height: 100%;
   display: block;
   background: rgb(var(--c-brand));
@@ -8456,6 +8483,10 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 .tour-dim { position: fixed; inset: 0; background: rgb(2 6 12 / 0.55); }
 .tour-spotlight {
   position: fixed;
+  top: var(--spot-y);
+  left: var(--spot-x);
+  width: var(--spot-w);
+  height: var(--spot-h);
   border-radius: 12px;
   box-shadow: 0 0 0 9999px rgb(2 6 12 / 0.55);
   outline: 2px solid rgb(var(--c-brand-line));
@@ -8463,6 +8494,8 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 }
 .tour-card {
   position: fixed;
+  top: var(--card-y, 0);
+  left: var(--card-x, 0);
   z-index: 201;
   width: min(340px, calc(100vw - 24px));
   padding: 16px 16px 14px;
@@ -8472,6 +8505,8 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   box-shadow: 0 18px 48px rgb(5 12 22 / 0.28);
   pointer-events: auto;
 }
+/* 자리를 재기 전에는 숨긴다 — 왼쪽 위 0,0 에서 깜박이지 않게. */
+.tour-card[data-placed="false"] { visibility: hidden; }
 .tour-card-top { display: flex; align-items: center; justify-content: space-between; }
 .tour-card-step { color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 700; }
 .tour-card-close {
@@ -8608,8 +8643,8 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   --chat-dur: 180ms;
   --chat-bar-h: 45px;                         /* 하단 '오늘의 경주마' 바: 44px + 위 괘선 */
   position: fixed;
-  right: var(--site-gutter, 22px);
-  bottom: calc(var(--chat-bar-h) + 14px + env(safe-area-inset-bottom));
+  right: var(--chat-right, var(--site-gutter, 22px));
+  bottom: var(--chat-bottom, calc(var(--chat-bar-h) + 14px + env(safe-area-inset-bottom)));
   z-index: 30;                                /* 하단 바(z-20) 위, 모달(80+) 아래 */
   display: flex;
   align-items: center;
@@ -9149,7 +9184,7 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 .chat-picker-summary { color: rgb(var(--c-slate-700)); font-size: 12px; line-height: 1.4; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ── 메시지 오른쪽 클릭 메뉴 — 답장·복사·신고. 시트 위에 뜨는 작은 판. ── */
-.chat-menu { position: fixed; z-index: 95; min-width: 132px; padding: 6px; display: grid; gap: 2px; border: 1px solid rgb(var(--c-slate-300)); border-radius: 12px; background: rgb(var(--c-surface)); box-shadow: 0 10px 28px rgb(5 12 22 / .24); }
+.chat-menu { position: fixed; left: var(--menu-x, 0); top: var(--menu-y, 0); z-index: 95; min-width: 132px; padding: 6px; display: grid; gap: 2px; border: 1px solid rgb(var(--c-slate-300)); border-radius: 12px; background: rgb(var(--c-surface)); box-shadow: 0 10px 28px rgb(5 12 22 / .24); }
 .chat-menu button { height: 36px; padding: 0 10px; display: flex; align-items: center; border-radius: 8px; color: rgb(var(--c-slate-800)); font-size: 14px; font-weight: 600; text-align: left; cursor: pointer; }
 .chat-menu button:hover { background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-900)); }
 .chat-menu button.is-danger:hover { color: rgb(var(--c-red-600)); }

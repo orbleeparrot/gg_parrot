@@ -186,6 +186,7 @@
    오른쪽에서 스르륵 들어와 5초 뒤 스르륵 나간다. 아래 막대가 남은 시간만큼 줄고 마우스를 올리면 멈춘다. */
 .ggp-toasts {
   position: fixed;
+  top: var(--toast-top, 64px);
   right: 12px;
   z-index: 58;
   width: min(360px, calc(100vw - 24px));

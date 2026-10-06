@@ -176,10 +176,10 @@ export default function ProductTour({ steps, open, onClose }) {
 
   const spot = rect
     ? {
-        top: rect.top - HOLE_PADDING,
-        left: rect.left - HOLE_PADDING,
-        width: rect.width + HOLE_PADDING * 2,
-        height: rect.height + HOLE_PADDING * 2,
+        "--spot-x": `${rect.left - HOLE_PADDING}px`,
+        "--spot-y": `${rect.top - HOLE_PADDING}px`,
+        "--spot-w": `${rect.width + HOLE_PADDING * 2}px`,
+        "--spot-h": `${rect.height + HOLE_PADDING * 2}px`,
       }
     : null;
 
@@ -196,11 +196,8 @@ export default function ProductTour({ steps, open, onClose }) {
         role="dialog"
         aria-modal="true"
         aria-labelledby="tour-card-title"
-        style={{
-          top: cardPos?.top ?? 0,
-          left: cardPos?.left ?? 0,
-          visibility: cardPos ? "visible" : "hidden",
-        }}
+        data-placed={cardPos ? "true" : "false"}
+        style={{ "--card-x": `${cardPos?.left ?? 0}px`, "--card-y": `${cardPos?.top ?? 0}px` }}
       >
         <div className="tour-card-top">
           <span className="tour-card-step num">{index + 1} / {steps.length}</span>

@@ -1386,7 +1386,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
           <strong>{progressChapters[progressIndex]}</strong>
         </div>
         <div className="runner-wizard-progress-track" role="progressbar" aria-valuemin="1" aria-valuemax={progressChapters.length} aria-valuenow={progressIndex + 1}>
-          <span style={{ width: `${((progressIndex + 1) / progressChapters.length) * 100}%` }} />
+          <span style={{ "--fill": `${((progressIndex + 1) / progressChapters.length) * 100}%` }} />
         </div>
         <ol aria-hidden="true">
           {progressChapters.map((chapter, index) => (

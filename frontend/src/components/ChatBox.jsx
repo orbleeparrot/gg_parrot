@@ -776,7 +776,7 @@ function MemberChatBox({ member, scope, open, setOpen, roomId = 0, room = null, 
   }
 
   return (
-    <div className={`chat-float${dragging ? " is-dragging" : ""}${mobilePlacement ? " is-mobile-fixed" : ""}`} ref={rootRef} style={!mobilePlacement && placement ? { right: placement.right, bottom: placement.bottom } : undefined}>
+    <div className={`chat-float${dragging ? " is-dragging" : ""}${mobilePlacement ? " is-mobile-fixed" : ""}`} ref={rootRef} style={!mobilePlacement && placement ? { "--chat-right": `${placement.right}px`, "--chat-bottom": `${placement.bottom}px` } : undefined}>
       {open ? (
         <section id={panelId} className="chat-sheet" role="dialog" aria-label="리더보드 채팅" style={opacity < 1 ? { "--chat-sheet-opacity": opacity } : undefined}>
           <header className="chat-head">
@@ -952,7 +952,7 @@ function MemberChatBox({ member, scope, open, setOpen, roomId = 0, room = null, 
           </>)}
           {/* 메뉴는 body 에 띄운다 — 채팅 시트 안에 두면 시트의 스크롤·변형에 잘린다. */}
           {menu ? createPortal(
-            <div className="chat-menu" style={{ left: menu.x, top: menu.y }} role="menu" aria-label="메시지 메뉴" onPointerDown={(event) => event.stopPropagation()}>
+            <div className="chat-menu" style={{ "--menu-x": `${menu.x}px`, "--menu-y": `${menu.y}px` }} role="menu" aria-label="메시지 메뉴" onPointerDown={(event) => event.stopPropagation()}>
               {member ? (
                 <button type="button" role="menuitem" onClick={() => { setReplyTo(menu.message); setMenu(null); inputRef.current?.focus(); }}>답장</button>
               ) : null}

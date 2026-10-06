@@ -98,7 +98,7 @@
 .adm-tbl td.adm-muted, .adm-muted { color: var(--adm-muted); }
 .adm-tbl td.adm-wrap { white-space: normal; min-width: 180px; }
 .adm-tbl .adm-err { display: inline-block; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
-.adm-swatch { display: inline-block; width: 10px; height: 10px; margin-right: 8px; border-radius: 2px; vertical-align: -1px; }
+.adm-swatch { display: inline-block; width: 10px; height: 10px; background: var(--swatch, currentColor); margin-right: 8px; border-radius: 2px; vertical-align: -1px; }
 .adm-up { color: var(--adm-up); }
 .adm-down { color: var(--adm-down); }
 .adm-warn { color: var(--adm-warn); }
@@ -126,6 +126,9 @@
 .adm-chart text { font-family: "JetBrains Mono", "Pretendard", ui-monospace, monospace; font-size: 11px; font-weight: 500; fill: var(--adm-muted); font-variant-numeric: tabular-nums; }
 .adm-chart .adm-lab { font-family: "Pretendard", system-ui, sans-serif; font-weight: 600; fill: var(--adm-ink-2); }
 .adm-chart .adm-axis-title { font-family: "Pretendard", system-ui, sans-serif; font-weight: 700; fill: var(--adm-muted); }
+/* 계열 색을 따르는 글자 — 끝값·오른쪽 축 눈금·축 제목·호버 줄(--series 는 AdminCharts 가 넘긴다). */
+.adm-chart .adm-end-label { fill: var(--series); font-weight: 700; }
+.adm-chart .adm-series-tick, .adm-chart .adm-axis-title.is-series { fill: var(--series); }
 .adm-chart .adm-strong { font-weight: 700; fill: var(--adm-ink); }
 .adm-chart .adm-on-bar { font-weight: 700; fill: rgb(var(--c-slate-50)); }
 .dark .adm-chart .adm-on-bar { fill: rgb(var(--c-brand-ink)); }
@@ -133,9 +136,10 @@
 .adm-chart .adm-axis { stroke: var(--adm-line-strong); stroke-width: 1; }
 .adm-chart .adm-endpoint { stroke: rgb(var(--c-slate-50)); stroke-width: 2; }
 .adm-chart .adm-hover-line { stroke: var(--adm-line-strong); stroke-width: 1; stroke-dasharray: 3 3; }
+.adm-chart .adm-hover-text.is-series { fill: var(--series); font-weight: 700; }
 .adm-chart .adm-hover-text { font-weight: 600; fill: var(--adm-ink); paint-order: stroke; stroke: rgb(var(--c-slate-50)); stroke-width: 3px; stroke-linejoin: round; }
 .adm-legend { display: flex; gap: 16px; flex-wrap: wrap; margin: 0 0 4px; font-size: 12px; font-weight: 700; color: var(--adm-muted); }
-.adm-legend b { display: inline-block; width: 12px; height: 12px; margin-right: 6px; border-radius: 3px; vertical-align: -2px; }
+.adm-legend b { display: inline-block; width: 12px; height: 12px; background: var(--swatch, currentColor); margin-right: 6px; border-radius: 3px; vertical-align: -2px; }
 .adm-legend b.is-line { height: 3px; vertical-align: 3px; }
 .adm-donut { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 20px; align-items: center; }
 .adm-donut svg { display: block; }

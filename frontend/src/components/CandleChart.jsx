@@ -83,8 +83,8 @@ function LegendItem({ item }) {
         </svg>
       ) : (
         <span
-          className="inline-block w-3.5 h-0"
-          style={{ borderTop: `2px ${item.dash ? "dashed" : "solid"} ${item.color}` }}
+          className={"candle-legend-line" + (item.dash ? " is-dashed" : "")}
+          style={{ "--swatch": item.color }}
         />
       )}
       {item.label}

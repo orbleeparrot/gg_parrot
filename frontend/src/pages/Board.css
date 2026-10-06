@@ -29,7 +29,7 @@
 .board-tool-select select { height: 32px; padding: 0 8px; border-radius: 8px; border: 0; background: transparent; color: rgb(var(--c-slate-700)); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
 .board-tool-select select:hover { background: rgb(var(--c-slate-100)); }
 .board-tool-color { position: relative; }
-.board-tool-swatch { width: 16px; height: 16px; border-radius: 999px; border: 2px solid rgb(var(--c-slate-300)); box-sizing: border-box; }
+.board-tool-swatch { width: 16px; height: 16px; border-radius: 999px; border: 2px solid rgb(var(--c-slate-300)); box-sizing: border-box; background: currentColor; }
 .board-color-tray { position: absolute; top: calc(100% + 6px); left: 0; z-index: 5; display: flex; align-items: center; gap: 6px; padding: 8px; border: 1px solid rgb(var(--c-slate-300)); border-radius: 10px; background: rgb(var(--c-surface)); box-shadow: 0 8px 24px rgb(5 12 22 / .16); }
 .board-color-dot { width: 22px; height: 22px; border-radius: 999px; border: 2px solid rgb(var(--c-surface)); box-shadow: 0 0 0 1px rgb(var(--c-slate-300)); cursor: pointer; }
 .board-color-reset { height: 24px; padding: 0 8px; border-radius: 6px; color: rgb(var(--c-slate-700)); font-size: 12px; font-weight: 600; white-space: nowrap; }
@@ -195,6 +195,13 @@
 .board-skeleton.is-title { width: 52%; height: 13px; }
 .board-skeleton.is-author { width: 64px; }
 .board-skeleton.is-time { width: 40px; margin-left: auto; }
+/* 글 보기 뼈대 — 제목 · 글쓴이 띠 · 본문 세 줄 */
+.board-skeleton.is-post-title { width: 58%; height: 22px; }
+.board-skeleton.is-post-meta { width: 220px; }
+.board-skeleton.is-post-line { width: 92%; }
+.board-skeleton.is-post-line.is-first { margin-top: 12px; }
+.board-skeleton.is-post-line.is-mid { width: 84%; }
+.board-skeleton.is-post-line.is-last { width: 48%; }
 @media (prefers-reduced-motion: no-preference) {
   .board-skeleton { animation: board-skeleton 1.2s ease-in-out infinite; }
   .board-table { transition: opacity 150ms ease-out; }
@@ -372,3 +379,23 @@
 .board-notice-toggle { display: flex; align-items: center; gap: 8px; padding: 10px 12px; margin-bottom: 4px; border: 1px solid rgb(var(--c-slate-200)); border-radius: 10px; color: rgb(var(--c-slate-700)); font-size: 14px; font-weight: 600; cursor: pointer; }
 .board-notice-toggle input { width: 18px; height: 18px; accent-color: rgb(var(--board-notice)); }
 .board-notice-toggle .board-notice-tag { margin-right: 0; }
+
+/* 글자색 6색(lib/boardInk.js) — 저장은 고른 hex 그대로, 화면은 테마마다 읽히는 색(4.5:1 이상)으로.
+   한 가지 색으로는 흰 바탕과 검은 바탕 모두에서 읽힐 수 없다. 주황만 토큰이 없어 여기서 정한다. */
+:root { --board-ink-orange: 194 65 12; }
+.dark { --board-ink-orange: 251 146 60; }
+.board-rich [data-ink="red"], .board-tool-swatch[data-ink="red"], .board-color-dot[data-ink="red"] { --ink: var(--c-red-600); }
+.board-rich [data-ink="green"], .board-tool-swatch[data-ink="green"], .board-color-dot[data-ink="green"] { --ink: var(--c-green-600); }
+.board-rich [data-ink="blue"], .board-tool-swatch[data-ink="blue"], .board-color-dot[data-ink="blue"] { --ink: var(--c-blue-800); }
+.board-rich [data-ink="orange"], .board-tool-swatch[data-ink="orange"], .board-color-dot[data-ink="orange"] { --ink: var(--board-ink-orange); }
+.board-rich [data-ink="gold"], .board-tool-swatch[data-ink="gold"], .board-color-dot[data-ink="gold"] { --ink: var(--c-amber-700); }
+.board-rich [data-ink="gray"], .board-tool-swatch[data-ink="gray"], .board-color-dot[data-ink="gray"] { --ink: var(--c-slate-500); }
+.board-rich [data-ink] { color: rgb(var(--ink)); }
+.board-tool-swatch[data-ink], .board-color-dot[data-ink] { background: rgb(var(--ink)); }
+/* 편집기 안은 ProseMirror 가 적은 style 값으로 고른다 — 쓰는 사람도 읽는 사람과 같은 색을 본다. */
+.board-editor [style*="#f6465d" i], .board-editor [style*="rgb(246, 70, 93)"] { color: rgb(var(--c-red-600)) !important; }
+.board-editor [style*="#0ecb81" i], .board-editor [style*="rgb(14, 203, 129)"] { color: rgb(var(--c-green-600)) !important; }
+.board-editor [style*="#3b82f6" i], .board-editor [style*="rgb(59, 130, 246)"] { color: rgb(var(--c-blue-800)) !important; }
+.board-editor [style*="#f59e0b" i], .board-editor [style*="rgb(245, 158, 11)"] { color: rgb(var(--board-ink-orange)) !important; }
+.board-editor [style*="#a68000" i], .board-editor [style*="rgb(166, 128, 0)"] { color: rgb(var(--c-amber-700)) !important; }
+.board-editor [style*="#8b95a5" i], .board-editor [style*="rgb(139, 149, 165)"] { color: rgb(var(--c-slate-500)) !important; }

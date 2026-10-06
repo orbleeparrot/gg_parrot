@@ -14,7 +14,7 @@ export default function AppToast({ title, body = "", label = "완료", onClose }
     else if (event.animationName === "ggp-toast-out") onClose?.();
   };
   return createPortal(
-    <div className="ggp-toasts" style={{ top }} role="status" aria-live="polite">
+    <div className="ggp-toasts" style={{ "--toast-top": `${top}px` }} role="status" aria-live="polite">
       <div className={"ggp-toast" + (leaving ? " is-leaving" : "")} onAnimationEnd={onAnimationEnd}>
         <span className="ggp-toast-icon is-done" aria-hidden="true"><Icon name="check" size={20} /></span>
         <span className="ggp-toast-text">

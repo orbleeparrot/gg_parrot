@@ -78,7 +78,7 @@ export default function MarketCarousel({ items, ariaLabel = "시장·규제 헤�
             <Tag
               key={item.id || index}
               className={`news-carousel-card ${isActive ? "is-active" : ""} ${item.image ? "" : "is-plain"}`}
-              style={{ "--offset": offset, ...(item.image ? { backgroundImage: `url("${item.image}")` } : null) }}
+              style={{ "--offset": offset, "--card-image": item.image ? `url(${JSON.stringify(item.image)})` : undefined }}
               aria-hidden={isActive ? undefined : true}
               {...props}
             >

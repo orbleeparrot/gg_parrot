@@ -4,6 +4,7 @@ import useBoardList from "../hooks/useBoardList.js";
 import { api } from "../api.js";
 import { useAuth } from "../lib/auth.js";
 import DOMPurify from "dompurify";
+import { applyBoardInks } from "../lib/boardInk.js";
 import { boardFullTime, boardTime, kstDateTime } from "../lib/boardText.js";
 import { ErrorNote } from "../components/Page.jsx";
 import ConfirmDialog from "../components/ConfirmDialog.jsx";
@@ -196,13 +197,9 @@ const PURIFY = { ALLOWED_TAGS: ["p", "br", "strong", "b", "em", "i", "u", "s", "
 function PostBody({ html }) {
   const safeHtml = useMemo(() => {
     const fragment = DOMPurify.sanitize(html || "", { ...PURIFY, RETURN_DOM_FRAGMENT: true });
-    // Pasted dark-theme colors must not override the reader's theme. Keep
-    // alignment, emphasis, links and image dimensions; never rewrite the post.
-    for (const element of fragment.querySelectorAll("[style]")) {
-      for (const property of ["color", "background", "background-color", "-webkit-text-fill-color"]) {
-        element.style.removeProperty(property);
-      }
-    }
+    // 편집기 팔레트 6색은 읽는 사람의 테마에서 읽히는 색으로(data-ink), 다른 색·배경색은 뗀다.
+    // 정렬·강조·링크·사진 크기는 그대로, 글 자체는 고치지 않는다.
+    applyBoardInks(fragment);
     const holder = document.createElement("div");
     holder.append(fragment);
     return holder.innerHTML;
@@ -214,11 +211,11 @@ function PostBody({ html }) {
 function PostSkeleton() {
   return (
     <div className="board-post-skeleton" aria-hidden="true">
-      <span className="board-skeleton" style={{ width: "58%", height: 22 }} />
-      <span className="board-skeleton" style={{ width: 220 }} />
-      <span className="board-skeleton" style={{ width: "92%", marginTop: 12 }} />
-      <span className="board-skeleton" style={{ width: "84%" }} />
-      <span className="board-skeleton" style={{ width: "48%" }} />
+      <span className="board-skeleton is-post-title" />
+      <span className="board-skeleton is-post-meta" />
+      <span className="board-skeleton is-post-line is-first" />
+      <span className="board-skeleton is-post-line is-mid" />
+      <span className="board-skeleton is-post-line is-last" />
     </div>
   );
 }

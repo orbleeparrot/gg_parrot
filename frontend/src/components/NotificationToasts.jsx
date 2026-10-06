@@ -29,7 +29,7 @@ export default function NotificationToasts({ toasts, onDismiss, onOpen }) {
   const top = useHeaderBottom();
   if (typeof document === "undefined") return null;
   return createPortal(
-    <div className="ggp-toasts" style={{ top }} role="status" aria-live="polite" aria-label="새 알림">
+    <div className="ggp-toasts" style={{ "--toast-top": `${top}px` }} role="status" aria-live="polite" aria-label="새 알림">
       {toasts.map((toast) => (
         <Toast key={toast.id} toast={toast} onDismiss={onDismiss} onOpen={onOpen} />
       ))}

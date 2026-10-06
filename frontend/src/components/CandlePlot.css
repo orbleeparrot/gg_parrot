@@ -63,3 +63,7 @@
   .candle-readout-row:has(.candle-source.is-inline) .candle-ohlc { flex: 1 1 0; }
   .candle-readout-row .candle-source.is-inline { flex: none; min-width: 0; max-width: 40%; }
 }
+
+/* 범례 선 견본 — 보조지표 선 색(--swatch)을 그대로, 임계선은 파선. */
+.candle-legend-line { display: inline-block; width: 14px; height: 0; border-top: 2px solid var(--swatch, currentColor); }
+.candle-legend-line.is-dashed { border-top-style: dashed; }

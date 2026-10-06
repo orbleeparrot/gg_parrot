@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "lint": "node scripts/lint-css-classes.mjs --check && oxlint --max-warnings 99 src",
+    "lint": "node scripts/lint-css-classes.mjs --check && oxlint --max-warnings 0 src",
     "lint:classes": "node scripts/lint-css-classes.mjs --write"
   },
   "dependencies": {

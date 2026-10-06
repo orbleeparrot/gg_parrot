@@ -735,12 +735,11 @@ function AccountStart({ onNestedDialogChange }) {
           aria-valuenow={screen.chapter}
           aria-valuetext={`${chapterName}, ${CHAPTERS.length}단계 중 ${screen.chapter}단계`}
         >
-          <span style={{ width: `${progress}%` }} />
+          <span style={{ "--fill": `${progress}%` }} />
         </div>
         <ol
           className="hero-progress-chapters"
           aria-label="가이드 단계 바로가기"
-          style={{ gridTemplateColumns: `repeat(${CHAPTERS.length}, minmax(0, 1fr))` }}
         >
           {CHAPTERS.map((chapter, index) => (
             <li key={chapter} className={index + 1 === screen.chapter ? "is-current" : index + 1 < screen.chapter ? "is-done" : ""}>

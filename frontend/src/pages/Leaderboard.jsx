@@ -689,7 +689,7 @@ function AccountLeaderboard() {
           className="chat-menu lb-menu"
           role="menu"
           aria-label={`${rowMenu.entry.username || rowMenu.entry.nickname} 매크로 메뉴`}
-          style={{ left: rowMenu.x, top: rowMenu.y }}
+          style={{ "--menu-x": `${rowMenu.x}px`, "--menu-y": `${rowMenu.y}px` }}
           onContextMenu={(event) => event.preventDefault()}
           onKeyDown={(event) => {
             if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;

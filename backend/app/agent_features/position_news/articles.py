@@ -172,8 +172,9 @@ def upsert_articles(asset_symbol: str, items: list[dict], *, analysis: dict | No
                     .with_for_update().execution_options(populate_existing=True)).one()
     incoming = {}
     assessments = list((analysis or {}).get("items") or [])
+    from ...news import _prepared_news_item_is_relevant
     for index, item in enumerate(items):
-        if not item.get("title"):
+        if not item.get("title") or not _prepared_news_item_is_relevant(item, scope):
             continue
         key = article_id(item)
         incoming[key] = (dict(item), assessments[index] if index < len(assessments) else None)
@@ -315,7 +316,9 @@ def read_article_feed(asset_symbol: str, *, after_revision: int | None = None,
         cursor = rows[-1].revision
     # Revalidate old ready flags too. Keep cursor progression based on raw rows,
     # and filter assessments with the same rows so sentiment never shifts.
-    rows = [row for row in rows if _ready(json.loads(row.item_json))]
+    from ...news import _prepared_news_item_is_relevant
+    rows = [row for row in rows if _ready(json.loads(row.item_json))
+            and _prepared_news_item_is_relevant(json.loads(row.item_json), state.asset_symbol)]
     items = [json.loads(row.item_json) for row in rows]
     pending = max(0, state.item_count - state.ready_count)
     result = {**json.loads(state.metadata_json), "items": items, "cursor": cursor,

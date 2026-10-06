@@ -122,7 +122,8 @@ def _public_payload(scope: str, feed: dict | None) -> dict:
                    if key not in {"analysis", "items", "has_more", "reset"}})
     within_window = news._within_live_news_window if market else news._within_coin_news_window
     items = [{key: value for key, value in item.items() if key not in _INTERNAL}
-             for item in feed.get("items", []) if within_window(item)]
+             for item in feed.get("items", [])
+             if within_window(item) and news._prepared_news_item_is_relevant(item, scope)]
     # Sorting a bounded prepared article list does not fetch or analyze news.
     result["items"] = news._sort_news_items_newest_first(items)
     result["data_source"] = "prepared_db"

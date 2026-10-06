@@ -235,6 +235,22 @@ _AMBIGUOUS_BARE_TICKERS = frozenset({
 _CONTEXT_REQUIRED_TICKERS = frozenset({"CFG", "MUBARAK", "SC", "T"})
 _DYNAMIC_CONTEXT_TICKERS = frozenset({"ENA", "TAO", "TON", "TIA", "ZRO"})
 
+# Exchange project labels can also name cookies, medical plasma, virtual games
+# or a ticket seller. These observed collisions require headline evidence, not
+# a matching Google query/category or the mere spelling of the ticker.
+_CONTEXT_VERIFIED_ASSETS = {
+    "NIGHT": ("midnight", "미드나이트", "나이트"),
+    "XPL": ("plasma", "플라즈마"),
+    "VIRTUAL": ("virtuals", "virtuals protocol", "버추얼스", "버추얼프로토콜"),
+    "AXS": ("axie infinity", "엑시인피니티"),
+}
+_CRYPTO_NEWS_CONTEXT = (
+    r"\b(?:crypto(?:currenc(?:y|ies))?|blockchain|tokens?|altcoins?|defi|nfts?|"
+    r"staking|mainnet|airdrops?|tokenomics|stablecoins?|web3|on[ -]?chain|"
+    r"bitcoin|ethereum|cardano|usdt|tether|evm)\b|"
+    r"암호화폐|가상자산|가상화폐|블록체인|토큰|온체인|디파이|스테이킹|코인"
+)
+
 # These project names also occur as ordinary English words. Preserve the
 # publisher's capitalization and reject common non-project phrases instead of
 # matching their case-folded form across every CoinDesk section article.
@@ -752,6 +768,24 @@ def _has_dynamic_ticker_context(title: str, asset_symbol: str) -> bool:
 def _matches_asset(item: dict, asset_symbol: str, coin_name: str) -> bool:
     categories = item.get("categories") or []
     title = str(item.get("title") or "")
+    if asset_symbol in _CONTEXT_VERIFIED_ASSETS:
+        aliases = _CONTEXT_VERIFIED_ASSETS[asset_symbol]
+        named = any(re.search(rf"(?<![A-Za-z0-9]){re.escape(alias)}(?![A-Za-z0-9])",
+                              title, re.IGNORECASE) for alias in aliases)
+        # Axie Infinity is a distinctive full project name, unlike AXS itself.
+        if asset_symbol == "AXS" and named:
+            return True
+        # Price reporting can omit the word "crypto". Require both a market
+        # measurement and trading language; ordinary ticket/product prices do
+        # not establish a coin identity.
+        market_context = bool(re.search(r"\d+(?:\.\d+)?%|\$\s*\d|\d+\s*만달러", title)
+                              and re.search(r"\b(?:support|resistance|overbought|oversold|"
+                                            r"liquidation|unrealized|staking)\b|"
+                                            r"지지선|저항선|과매수|과매도|미실현|청산", title, re.IGNORECASE))
+        explicit_ticker = bool(re.search(rf"(?<![A-Za-z0-9]){re.escape(asset_symbol)}(?![A-Za-z0-9])", title))
+        return _has_dynamic_ticker_context(title, asset_symbol) or bool(
+            (named or explicit_ticker) and (re.search(_CRYPTO_NEWS_CONTEXT, title, re.IGNORECASE)
+                                           or market_context))
     searchable = " ".join([
         title,
         *[str(category or "") for category in categories],
@@ -902,8 +936,12 @@ def _is_news_article_candidate(item: dict) -> bool:
         r"/(?:[a-z]{2}(?:-[a-z]{2})?/)?(?:prices?|convert|converter)/", path
     ):
         return False
-    title = str(item.get("title") or "")
+    title = str(item.get("original_title") or item.get("title") or "")
     source = str(item.get("source") or "").strip().casefold()
+    gambling = re.search(r"\b(?:casino|gambling|free spins|promo code|sweepstakes)\b|"
+                         r"카지노|토토|마작|쇼미더벳", title, re.IGNORECASE)
+    if gambling and not re.search(_CRYPTO_NEWS_CONTEXT, title, re.IGNORECASE):
+        return False
     # Centrifuge's token shares its name with industrial/laboratory equipment.
     # Apply this before localization too, so saved Google results are repaired.
     if re.search(r"\bcentrifuges?\b", title, re.IGNORECASE) and re.search(
@@ -1022,8 +1060,22 @@ def _relevant_items(
             continue
         item = dict(raw)
         item["feed_source"] = feed_source
+        item["asset_match"] = {"asset": asset_symbol,
+                               "rule": "identity-context-v1" if asset_symbol in _CONTEXT_VERIFIED_ASSETS
+                               else "headline-alias-v1"}
         relevant.append(item)
     return relevant
+
+
+def _prepared_news_item_is_relevant(item: dict, scope: str | None = None) -> bool:
+    """Recheck old rows against source text; no discovery, AI or DB writes."""
+    original = {**item, "title": item.get("original_title") or item.get("title")}
+    # Community identity/body validation belongs to the Square collector. A
+    # prepared reader has already stripped private body fields and must not
+    # mistake that public projection for an invalid source post.
+    if item.get("content_type") != "community" and not _is_news_article_candidate(original):
+        return False
+    return scope not in _CONTEXT_VERIFIED_ASSETS or _matches_asset(original, scope, scope)
 
 
 def _merge_news_items(*sources: list[dict]) -> list[dict]:
@@ -3232,7 +3284,7 @@ def _localize_news_payload(payload: dict, *, wait_for_translation=True, on_progr
     within_window = _within_coin_news_window if ticker_payload else _within_live_news_window
     candidates = [item for item in payload.get("items") or []
                   if within_window(item)
-                  and _is_news_article_candidate({**item, "title": item.get("original_title") or item.get("title")})]
+                  and _prepared_news_item_is_relevant(item, payload.get("symbol"))]
     options = {}
     if not wait_for_translation:
         options["wait_for_translation"] = False

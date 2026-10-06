@@ -243,6 +243,7 @@ _CONTEXT_VERIFIED_ASSETS = {
     "XPL": ("plasma", "플라즈마"),
     "VIRTUAL": ("virtuals", "virtuals protocol", "버추얼스", "버추얼프로토콜"),
     "AXS": ("axie infinity", "엑시인피니티"),
+    "ICP": ("internet computer", "internetcomputer", "dfinity", "인터넷컴퓨터", "인터넷 컴퓨터", "디피니티"),
 }
 _CRYPTO_NEWS_CONTEXT = (
     r"\b(?:crypto(?:currenc(?:y|ies))?|blockchain|tokens?|altcoins?|defi|nfts?|"
@@ -772,9 +773,15 @@ def _matches_asset(item: dict, asset_symbol: str, coin_name: str) -> bool:
         aliases = _CONTEXT_VERIFIED_ASSETS[asset_symbol]
         named = any(re.search(rf"(?<![A-Za-z0-9]){re.escape(alias)}(?![A-Za-z0-9])",
                               title, re.IGNORECASE) for alias in aliases)
-        # Axie Infinity is a distinctive full project name, unlike AXS itself.
-        if asset_symbol == "AXS" and named:
+        # These full project names are distinctive, unlike their ticker alone.
+        if asset_symbol in {"AXS", "ICP"} and named:
             return True
+        if asset_symbol == "ICP" and re.search(
+            r"\bcrm\b|\bideal\s+customer\s+profiles?\b|\bintracranial\s+pressure\b|"
+            r"\binductively\s+coupled\s+plasma\b|고객\s*프로필|두개\s*내압", title, re.IGNORECASE,
+        ):
+            # Even a crypto business can discuss its customer-profile ICP.
+            return False
         # Price reporting can omit the word "crypto". Require both a market
         # measurement and trading language; ordinary ticket/product prices do
         # not establish a coin identity.
@@ -783,6 +790,13 @@ def _matches_asset(item: dict, asset_symbol: str, coin_name: str) -> bool:
                                             r"liquidation|unrealized|staking)\b|"
                                             r"지지선|저항선|과매수|과매도|미실현|청산", title, re.IGNORECASE))
         explicit_ticker = bool(re.search(rf"(?<![A-Za-z0-9]){re.escape(asset_symbol)}(?![A-Za-z0-9])", title))
+        if asset_symbol == "ICP" and explicit_ticker and re.search(
+            r"\b(?:deflation(?:ary)?|canisters?|chain[ -]?key|tokenomics)\b|"
+            r"\bprice\b.{0,80}\b(?:rall(?:y|ies)|support|resistance|up|down|"
+            r"surges?|gains?|drops?|jumps?|falls?)\b|(?:가격|시세).{0,40}(?:상승|하락|지지|저항)",
+            title, re.IGNORECASE,
+        ):
+            return True  # Genuine price reporting need not include a number.
         return _has_dynamic_ticker_context(title, asset_symbol) or bool(
             (named or explicit_ticker) and (re.search(_CRYPTO_NEWS_CONTEXT, title, re.IGNORECASE)
                                            or market_context))
@@ -1075,6 +1089,8 @@ def _prepared_news_item_is_relevant(item: dict, scope: str | None = None) -> boo
     # mistake that public projection for an invalid source post.
     if item.get("content_type") != "community" and not _is_news_article_candidate(original):
         return False
+    if scope == "ICP" and item.get("content_type") == "community":
+        return True  # Preserve collector-validated bodies behind opaque titles.
     return scope not in _CONTEXT_VERIFIED_ASSETS or _matches_asset(original, scope, scope)
 
 

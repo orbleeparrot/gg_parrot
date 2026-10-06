@@ -8,7 +8,8 @@ from app.agent_features.position_news import articles
 from sqlmodel import Session, SQLModel, create_engine, select
 
 
-PROJECTS = {"NIGHT": "Midnight", "XPL": "Plasma", "VIRTUAL": "Virtuals Protocol", "AXS": "Axie Infinity"}
+PROJECTS = {"NIGHT": "Midnight", "XPL": "Plasma", "VIRTUAL": "Virtuals Protocol", "AXS": "Axie Infinity",
+            "ICP": "Internet Computer"}
 NOISE = [
     ("NIGHT", "Target’s ACOTAR Midnight Party Comes With Free Merch"),
     ("NIGHT", "Midnight cookie review: chocolate taste test"),
@@ -21,6 +22,10 @@ NOISE = [
     ("AXS", "Beyond AXS Opens Doors to Music and Live Entertainment for Denver Youth"),
     ("NIGHT", "Nike Caitlin 1 Midnight Fever PHOTOS"),
     ("XPL", "KDE Plasma 6.8 Now Makes Tiled Windows Fit Together More Nicely"),
+    ("ICP", "Why CRM Implementations Underperform Even With a Strong ICP"),
+    ("ICP", "강력한 ICP가 있어도 CRM 도입이 기대에 못 미치는 이유"),
+    ("ICP", "Ideal customer profiles (ICP) help crypto businesses improve CRM adoption"),
+    ("ICP", "ICP monitoring after traumatic brain injury"),
 ]
 POSITIVE = [
     ("NIGHT", "Midnight blockchain introduces privacy-preserving transactions"),
@@ -34,6 +39,16 @@ POSITIVE = [
     ("XPL", "과매수 상태가 조정을 유발하면서 Plasma가 $0.0854 지지선 아래로 하락"),
     ("VIRTUAL", "VIRTUAL 롱 17개월 보유한 고래, 미실현 손실 240만달러"),
     ("AXS", "AXS price jumps 13% but volume drops, signaling weak momentum"),
+    ("ICP", "Internet Computer (ICP) Gains 3.05% Amid Broader Uptrend"),
+    ("ICP", "DFINITY unveils new canister developer tools"),
+    ("ICP", "인터넷컴퓨터 새 기능 공개"),
+    ("ICP", "ICP Price Rally Close to Key Resistance — Is the Next Move Up or Down?"),
+    ("ICP", "ICP price falls 3.05% as the market retreats"),
+    ("ICP", "ICP token holders approve staking upgrade"),
+    ("ICP", "$ICP holds the breakout level"),
+    ("ICP", "ICP/USDT technical analysis"),
+    ("ICP", "Internet Computer brings CRM tools onto the blockchain"),
+    ("ICP", "ICP Quarterly Report: The path towards Deflation & Profitability"),
 ]
 
 
@@ -103,34 +118,40 @@ def article_db(tmp_path, monkeypatch):
     engine.dispose()
 
 
-def test_storage_filters_noise_and_keeps_assessment_alignment(article_db):
-    bad = item("기존 번역 제목", original_title=NOISE[0][1])
-    good = item("미드나이트 블록체인 기능 출시", original_title=POSITIVE[0][1],
+@pytest.mark.parametrize("symbol", ["NIGHT", "ICP"])
+def test_storage_filters_noise_and_keeps_assessment_alignment(article_db, symbol):
+    bad_title = next(title for asset, title in NOISE if asset == symbol)
+    good_title = next(title for asset, title in POSITIVE if asset == symbol)
+    bad = item("기존 번역 제목", original_title=bad_title)
+    good = item("정상 코인 소식", original_title=good_title,
                 url="https://news.example/good")
-    articles.upsert_articles("NIGHT", [bad, good], analysis={"items": [{"tag": "bad"}, {"tag": "good"}]})
-    feed = articles.read_article_feed("NIGHT")
+    articles.upsert_articles(symbol, [bad, good], analysis={"items": [{"tag": "bad"}, {"tag": "good"}]})
+    feed = articles.read_article_feed(symbol)
     assert [row["title"] for row in feed["items"]] == [good["title"]]
     assert feed["analysis"]["items"] == [{"tag": "good"}]
     with Session(article_db) as db:
         assert len(db.exec(select(articles.NewsArticle)).all()) == 1
 
 
-def test_legacy_rows_filter_without_losing_cursor_or_sentiment(article_db, monkeypatch):
+@pytest.mark.parametrize("symbol", ["NIGHT", "ICP"])
+def test_legacy_rows_filter_without_losing_cursor_or_sentiment(article_db, monkeypatch, symbol):
     import json
     monkeypatch.setattr(news, "_ensure_title_translations", lambda *_: pytest.fail("reader called AI"))
-    bad = item("기존 번역 제목", original_title=NOISE[0][1])
-    good = item("미드나이트 블록체인 기능 출시", original_title=POSITIVE[0][1])
+    bad_title = next(title for asset, title in NOISE if asset == symbol)
+    good_title = next(title for asset, title in POSITIVE if asset == symbol)
+    bad = item("기존 번역 제목", original_title=bad_title)
+    good = item("정상 코인 소식", original_title=good_title)
     with Session(article_db) as db:
-        db.add(articles.NewsArticleFeed(asset_symbol="NIGHT", revision=2, item_count=2, ready_count=2))
+        db.add(articles.NewsArticleFeed(asset_symbol=symbol, revision=2, item_count=2, ready_count=2))
         for revision, raw in enumerate([bad, good], 1):
-            db.add(articles.NewsArticle(asset_symbol="NIGHT", article_id=str(revision), revision=revision,
+            db.add(articles.NewsArticle(asset_symbol=symbol, article_id=str(revision), revision=revision,
                 ready=True, item_json=json.dumps(raw), assessment_json=json.dumps({"revision": revision}),
                 first_seen_ms=1, last_seen_ms=1))
         db.commit()
-    first = articles.read_article_feed("NIGHT", after_revision=0, limit=1)
+    first = articles.read_article_feed(symbol, after_revision=0, limit=1)
     assert first["items"] == [] and first["analysis"]["items"] == []
     assert first["cursor"] == 1 and first["has_more"]
-    second = articles.read_article_feed("NIGHT", after_revision=first["cursor"], limit=1)
+    second = articles.read_article_feed(symbol, after_revision=first["cursor"], limit=1)
     assert [row["title"] for row in second["items"]] == [good["title"]]
     assert second["analysis"]["items"] == [{"revision": 2}]
     assert second["cursor"] == 2 and not second["has_more"]
@@ -143,3 +164,32 @@ def test_enrichment_never_translates_old_unrelated_items(monkeypatch, symbol, ti
     result = news._localize_news_payload({"symbol": symbol, "items": [item(title)]})
     assert result["items"] == []
     assert result["translation"]["pending_count"] == 0
+
+
+def test_icp_search_category_and_crypto_source_do_not_prove_asset_identity():
+    raw = item("Why CRM Implementations Underperform Even With a Strong ICP",
+               categories=["ICP", "Internet Computer", "crypto"], source="CoinDesk")
+    assert news._relevant_items([raw], asset_symbol="ICP", coin_name="Internet Computer",
+                                feed_source="google_news_rss") == []
+
+
+def test_icp_rechecking_uses_source_title_not_a_misleading_translation():
+    stored = item("인터넷컴퓨터 코인 소식",
+                  original_title="Why CRM Implementations Underperform Even With a Strong ICP")
+    assert public_news._public_payload("ICP", {"items": [stored]})["items"] == []
+
+
+@pytest.mark.parametrize("symbol,title", [row for row in POSITIVE if row[0] == "ICP"])
+def test_valid_icp_ready_articles_survive_rechecking(symbol, title):
+    stored = item("정상 코인 소식", original_title=title)
+    assert public_news._public_payload(symbol, {"items": [stored]})["items"] == [stored]
+
+
+def test_icp_community_projection_keeps_collector_validated_posts():
+    # Square identity is checked against the body during collection; readers
+    # must not reject an opaque headline after that private body is stripped.
+    stored = item("갈레온 브레인 결과", original_title="Galeon Brain Result",
+                  content_type="community", categories=["ICP"], source="Binance Square",
+                  community_post_id="icp-result", community_summary="작성자의 ICP 거래 결과입니다.",
+                  community_summary_status="ready")
+    assert public_news._public_payload("ICP", {"items": [stored]})["items"] == [stored]

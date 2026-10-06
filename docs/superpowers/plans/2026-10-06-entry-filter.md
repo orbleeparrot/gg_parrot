@@ -137,7 +137,7 @@ cd backend && .venv/Scripts/python.exe -m pytest tests/test_entry_filter_schema.
 ```python
 # --- 진입 필터 --------------------------------------------------------
 # 기존 규칙의 새 진입에만 걸리는 관문 하나. 스스로 사거나 팔지 않는다.
-class FilterKind(str, Enum):
+class FilterKind(str, enum.Enum):   # 이 파일은 `enum` 을 import 한다 — `Enum` 은 NameError
     MA = "ma"            # 종가가 이동평균 위/아래
     RSI = "rsi"          # RSI 가 구간 안
     BOLLINGER = "bb"     # 볼린저 밴드 기준 위치

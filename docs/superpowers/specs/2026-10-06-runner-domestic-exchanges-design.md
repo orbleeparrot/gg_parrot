@@ -108,26 +108,55 @@ exe 를 만들므로 의존성 하나가 빌드 · 서명 · 배포에 전부 �
 
 ### 4.6 국내 구현 — 하나가 둘을 덮는다
 
-`DomesticBroker` 하나가 업비트와 빗썸을 베이스 URL 로 가른다. 근거: `data/krw.py`
-가 이미 두 거래소에 **같은 `/v1/...` 경로**를 쓰고 있고, 빗썸 2.0 은 업비트와 같은
-JWT 인증을 쓴다. 차이는 베이스 URL 과 문서화된 몇 가지뿐이다.
+`DomesticBroker` 하나가 업비트와 빗썸을 덮되, **베이스 URL 만 다른 것이 아니다.**
 
-| 하는 일 | 경로 |
-| --- | --- |
-| 계정 확인 · 잔고 | `GET /v1/accounts` |
-| 주문 규격 · 최소 금액 · 수수료율 | `GET /v1/orders/chance?market=` |
-| 시장가 매수 | `POST /v1/orders` · `side=bid` · `ord_type=price` · `price=<원화 총액>` |
-| 시장가 매도 | `POST /v1/orders` · `side=ask` · `ord_type=market` · `volume=<수량>` |
-| 주문 · 체결 조회 | `GET /v1/order?identifier=` (응답의 `trades[]`) |
-| 리허설 | `POST /v1/orders/test` |
+이 설계의 초고는 `data/krw.py` 가 두 거래소의 **공개 시세**에 같은 `/v1/...` 경로를
+쓴다는 데서 사설 API 도 같으리라 추론했다. 그 추론은 틀렸다. 두 거래소의 공식
+문서를 직접 확인한 결과는 아래와 같다 — 모양은 닮았지만 경로 · 서명 알고리즘 ·
+필드 이름이 제각기 다르다. 그래서 어댑터는 **거래소별 사양 표**를 들고 이름만
+갈아 끼운다.
 
-인증은 JWT(HS512)이고 페이로드는 `access_key` · `nonce`(요청마다 새 UUID) ·
-`query_hash`(SHA512) 다.
+| | 업비트 | 빗썸 |
+| --- | --- | --- |
+| 베이스 | `https://api.upbit.com` | `https://api.bithumb.com` |
+| 주문 생성 | `POST /v1/orders` | `POST /v2/orders` |
+| 주문 유형 필드 | `ord_type` | `order_type` |
+| 클라이언트 주문 ID | `identifier` (최대 64 자) | `client_order_id` (1–36 자, 영숫자 · `-` · `_`) |
+| 응답의 주문 ID | `uuid` | `order_id` |
+| JWT 서명 | HS512 | **HS256** |
+| JWT 페이로드 | `access_key` · `nonce` | `access_key` · `nonce` · **`timestamp`**(ms) |
+
+같은 것: `market` · `side`(`bid`/`ask`) · 시장가 매수는 `price`(원화 총액) · 시장가
+매도는 `volume` · `query_hash`(쿼리 스트링의 SHA512) + `query_hash_alg: "SHA512"` ·
+`Authorization: Bearer <JWT>`. 토큰은 요청마다 새로 만든다(재사용하면 인증 실패).
+
+클라이언트 주문 ID 가 36 자로 좁은 쪽(빗썸)에 맞춘다. 지금 쓰는
+`"ggp-" + uuid4().hex[:28]` 은 32 자라 양쪽에 들어간다.
+
+리허설(`POST /v1/orders/test`)은 업비트에만 있다 — §5.3.
 
 체결 값은 `trades[]` 에서 만든다 — `avg_price = Σ funds / Σ volume`,
 `acquired_qty = executed_volume`(수수료가 원화에서 빠지므로 차감 없음),
 `fees_known = (Σ trades.volume == executed_volume)`. 바이낸스 쪽 계산과 모양이 같아
 봇에서 보면 구분되지 않는다.
+
+**상태는 체결량을 먼저 보고 접는다.** 시장가 주문은 쓰고 남은 잔액이 취소되면서
+`state=cancel` 로 끝날 수 있다 — 빗썸 문서가 `ioc` 에 대해 "일부 체결(잔량 즉시
+취소) → done", "체결 없음 → cancel" 로 적고, 업비트 문서는 시장가 매수의 최종
+상태를 명시하지 않는다. 명시되지 않은 것을 사실로 적을 수는 없으므로, 양쪽 어느
+쪽이든 안전한 규칙을 쓴다:
+
+| 거래소가 준 것 | 접은 `status` |
+| --- | --- |
+| `done` | `FILLED` |
+| `cancel` 인데 체결량 > 0 | `FILLED` — 더 일어날 일이 없고 그만큼 샀다 |
+| `cancel` 인데 체결량 0 | `CANCELED` |
+| `wait` · `watch` | `OPEN` |
+| 응답 없음 | `UNKNOWN` |
+
+체결량을 먼저 보지 않으면 **정상 체결된 매수마다 봇이 "체결 완료를 확인하지
+못했습니다" 로 멈춘다.** 거래소가 쓴 낱말은 `raw_status` 로 그대로 보존해 사람에게
+보고한다.
 
 선물 메서드는 호출되면 예외를 던진다. 스키마가 국내 선물 매크로를 거부하므로
 도달할 수 없는 경로이고, 조용히 성공하는 것보다 터지는 편이 낫다.

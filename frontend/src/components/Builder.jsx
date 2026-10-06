@@ -656,26 +656,27 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
           <div className={g2full + (dense ? "" : " mt-4")}>
             {/* chk 는 opts.term 만 받는다 — 설명은 종류 칸의 hint 로 붙인다. */}
             {chk("use_entry_filter", "진입 조건 더 달기")}
+            {/* 변동성 돌파(I)에는 따로 이동평균 필터가 있다 — 둘 다 따로 작동하므로 화면이 둘 다 맞아야 진입한다고 말해 준다. */}
             {form.use_entry_filter && sel("filter_kind", "진입 조건 종류", FILTER_KINDS,
-              { hint: "이 조건이 아닐 때는 사지 않아요. 청산은 그대로예요" })}
+              { hint: "이 조건이 아닐 때는 사지 않아요. 청산은 그대로예요" + (rt === "I" ? ". 이 전략에는 따로 '이동평균 필터 기간' 칸이 있어요. 거기에 값을 넣었다면 둘 다 맞아야 진입해요" : "") })}
             {form.use_entry_filter && form.filter_kind === "ma" && (
               <>
-                {sel("filter_ma_type", "이동평균 종류", [{ value: "SMA", label: "단순(SMA)" }, { value: "EMA", label: "지수(EMA)" }])}
-                {num("filter_ma_period", "이동평균 기간 (봉)", { step: "1" })}
+                {sel("filter_ma_type", "조건 이동평균 종류", [{ value: "SMA", label: "단순(SMA)" }, { value: "EMA", label: "지수(EMA)" }])}
+                {num("filter_ma_period", "조건 이동평균 기간 (봉)", { step: "1", hint: rt === "I" ? "위 '이동평균 필터 기간'과는 별개예요. 둘 다 맞아야 진입해요" : undefined })}
                 {sel("filter_ma_side", "어느 쪽일 때 살까", [{ value: "above", label: "이평선 위" }, { value: "below", label: "이평선 아래" }])}
               </>
             )}
             {form.use_entry_filter && form.filter_kind === "rsi" && (
               <>
-                {num("filter_rsi_period", "RSI 기간 (봉)", { step: "1" })}
-                {num("filter_rsi_min", "RSI 아래 한도", { hint: "비워두면 아래 한도 없음" })}
-                {num("filter_rsi_max", "RSI 위 한도", { hint: "비워두면 위 한도 없음" })}
+                {num("filter_rsi_period", "조건 RSI 기간 (봉)", { step: "1" })}
+                {num("filter_rsi_min", "조건 RSI 아래 한도", { hint: "비워두면 아래 한도 없음" })}
+                {num("filter_rsi_max", "조건 RSI 위 한도", { hint: "비워두면 위 한도 없음" })}
               </>
             )}
             {form.use_entry_filter && form.filter_kind === "bb" && (
               <>
-                {num("filter_bb_period", "볼린저 기간 (봉)", { step: "1" })}
-                {num("filter_bb_num_std", "표준편차 배수")}
+                {num("filter_bb_period", "조건 볼린저 기간 (봉)", { step: "1" })}
+                {num("filter_bb_num_std", "조건 표준편차 배수")}
                 {sel("filter_bb_zone", "어느 자리일 때 살까", [
                   { value: "inside", label: "밴드 안" },
                   { value: "below_lower", label: "하단 밖" },
@@ -685,7 +686,7 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
             )}
             {form.use_entry_filter && form.filter_kind === "volume" && (
               <>
-                {num("filter_vol_period", "거래량 평균 기간 (봉)", { step: "1" })}
+                {num("filter_vol_period", "조건 거래량 평균 기간 (봉)", { step: "1" })}
                 {num("filter_vol_multiple", "평균의 몇 배 이상")}
               </>
             )}

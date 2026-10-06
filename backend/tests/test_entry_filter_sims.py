@@ -110,3 +110,25 @@ def test_unwarmed_filter_blocks_until_the_period_is_reached():
     assert not [f for f in _run(macro, RISING[:12]) if f.side == "buy"]
     # 같은 필터, 충분한 봉 -> 데워지고 통과한다. 이 줄이 없으면 위 단정은 "필터가 아예 망가져도 통과" 다.
     assert [f for f in _run(macro, RISING) if f.side == "buy"]
+
+
+def test_filter_judges_with_the_previous_closed_bar_not_this_one():
+    """필터는 '직전 마감봉' 으로 판정한다 — 진행 중인 봉으로 자기 자신을 판정하면 미래 참조다.
+
+    3봉 이평 '위' 필터에 100·100·100·200·200 을 준다.
+      - 봉 4 종가 200 에서 비로소 200 > 평균(133.3) 이 되어 필터가 참이 된다
+      - 그러므로 가장 빠른 진입은 **봉 5** 다. 봉 4 의 진입 판단은 봉 3 기준(100 > 100 거짓)
+    on_candle 이 _strategy '뒤' 가 아니라 '앞' 에서 필터를 갱신하면 봉 4 에 들어가고,
+    백테스트가 실거래로 재현할 수 없는 숫자를 내기 시작한다.
+    """
+    macro = Macro(**{**BASE, "rule_type": "E", "params": RULES["E"],
+                     "entry_filter": {"kind": "ma", "params": {"period": 3, "side": "above"}}})
+    sim = make_candle_sim(macro)
+    closes = [100.0, 100.0, 100.0, 200.0, 200.0]
+    first_buy = None
+    for i, c in enumerate(closes):
+        o = closes[i - 1] if i else c
+        for f in sim.on_candle(o, max(o, c) * 1.01, min(o, c) * 0.99, c, START + timedelta(hours=i)):
+            if f.side == "buy" and first_buy is None:
+                first_buy = i
+    assert first_buy == 4, f"봉 {None if first_buy is None else first_buy + 1} 에 들어갔다 — 봉 5 여야 한다"

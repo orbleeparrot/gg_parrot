@@ -4,6 +4,7 @@ import { fmtPrice, quoteOf } from "../lib/format.js";
 import { exchangeLabel, isDomestic, normalizeExchange } from "../lib/exchanges.js";
 import { applyChartHistory, applyChartLive, chartTimeKst, createChartStream, isChartFresh, isChartLive } from "../lib/chartSource.js";
 import CandlePlot from "./CandlePlot.jsx";
+import "./CandleChartStudio.css";
 
 // Market-data orchestration and chart controls. CandlePlot owns the renderer.
 //

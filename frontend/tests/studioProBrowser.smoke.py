@@ -116,8 +116,12 @@ def main():
             expect(value).to_have_text('—')
         expect(report.locator('.pro-metric', has_text='샤프').locator('dd')).to_have_text('1.70')
         expect(report.locator('.pro-metric', has_text='회복').locator('small')).to_contain_text('아직')
-        expect(report.locator('.pro-warnings li')).to_have_count(1)
-        checks.append('0% 구간은 0.00% + 막대, 실패 구간은 데이터 없음(막대·null·0.00% 없음), 소르티노·칼마는 —, 모르는 경고 코드는 숨김')
+        warnings = report.locator('.pro-warnings li')
+        expect(warnings).to_have_count(2)
+        expect(warnings.nth(0)).to_have_text('수익 대부분이 한 구간에서 나왔어요')
+        expect(warnings.nth(1)).to_have_text('서버가 새 경고를 표시했어요')
+        assert '모르는_코드' not in report_text, '코드 이름을 그대로 내보이지 않는다'
+        checks.append('0% 구간은 0.00% + 막대, 실패 구간은 데이터 없음(막대·null·0.00% 없음), 소르티노·칼마는 —, 모르는 경고 코드는 일반 문장으로 표시')
 
         # 3. 라벨 — 폴백은 자동 요약, 정확히 ai 일 때만 AI 분석.
         expect(page.locator('.pro-analysis h3')).to_have_text('자동 요약')
@@ -172,17 +176,43 @@ def main():
         assert len(validate_calls) == before, '포트폴리오 매크로는 요청을 보내지 않는다'
         checks.append('여러 종목은 요청 없이 안내 문구')
 
-        # 7. 기본 빌더의 프로로 열기 — 지금 조건이 따라온다.
+        # 7. 빌더 전환 — 양방향이고, 어느 쪽으로 가든 지금 조건이 따라온다.
+        interval_select = lambda: page.locator('[data-field="candle_interval"] select, select').filter(
+            has=page.locator('option[value="1h"]')).first
         page.goto(BASE + '/builder')
         dismiss_note()
         page.locator('[data-tour="interval"] select').select_option('1h')
         page.locator('.studio-mode-btn').click()
-        page.get_by_role('menuitem', name=re.compile('프로로 열기')).click()
+        page.get_by_role('menuitemradio', name=re.compile('프로 빌더')).click()
         page.wait_for_url('**/builder/pro')
-        expect(page.locator('[data-field="candle_interval"] select, select').filter(has=page.locator('option[value="1h"]')).first).to_have_value('1h')
+        expect(interval_select()).to_have_value('1h')
         run_validation()
         expect(page.locator('.pro-report')).to_be_visible()
         assert validate_calls[-1]['macro']['candle_interval'] == '1h', validate_calls[-1]['macro']
+
+        # 프로에만 들어가고 나올 수 없으면 막힌 방이다 — 같은 메뉴로 되돌아온다.
+        page.locator('.studio-mode-btn').click()
+        page.get_by_role('menuitemradio', name=re.compile('기본 빌더')).click()
+        page.wait_for_url(re.compile(r'/builder$'))
+        expect(interval_select()).to_have_value('1h')
+        checks.append('프로 → 기본 전환도 같은 메뉴로 되고 봉 간격(1h)이 따라온다')
+
+        # 차트 — 조건만 있고 그림이 없으면 무엇을 만드는지 볼 수 없다.
+        # 그림 칸의 높이가 0 이면 캔버스가 화면 전체로 퍼져 제목 · 메뉴를 덮는다(실제로 그랬다).
+        page.goto(BASE + '/builder/pro')
+        dismiss_note()
+        plot = page.locator('.pro-chart .candle-chart-plot').first
+        expect(plot).to_be_visible()
+        page.wait_for_function('''() => {
+            const plot = document.querySelector('.pro-chart .candle-chart-plot');
+            return plot && plot.getBoundingClientRect().height > 100;
+        }''')
+        assert page.evaluate('''() => {
+            const btn = document.querySelector('.studio-mode-btn');
+            const r = btn.getBoundingClientRect();
+            return document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2) === btn;
+        }'''), '차트 캔버스가 빌더 종류 메뉴를 덮었다'
+        checks.append('프로 빌더에 차트가 서고, 캔버스가 제목 · 메뉴를 덮지 않는다')
 
         # 8. 손댄 · 낡은 history.state 로 열어도 화면이 비지 않는다(새로고침해도 state 가 남는다).
         for bad in ({}, [], {'rule_type': 'Z'}):
@@ -194,7 +224,7 @@ def main():
             assert not errors, (bad, errors)
         checks.append('손댄 history.state({} · [] · rule_type Z) 로 새로고침해도 프로 빌더가 그려지고 기본 조건으로 시작')
         browser.close()
-        checks.append('/builder 의 프로로 열기 → /builder/pro, 고른 봉 간격(1h)이 따라와 검증 요청에 실린다')
+        checks.append('기본 → 프로 전환으로 고른 봉 간격(1h)이 따라와 검증 요청에 실린다')
     assert not errors, errors
     print('\n'.join('OK ' + c for c in checks))
 

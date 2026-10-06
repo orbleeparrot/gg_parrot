@@ -26,6 +26,7 @@ test("폴백 라벨을 직접 쓰지 않고 공용 함수를 쓴다", () => {
 
 const indexCss = readFileSync(new URL("../src/index.css", import.meta.url), "utf8");
 const studioJsx = readFileSync(new URL("../src/pages/Studio.jsx", import.meta.url), "utf8");
+const modeMenu = readFileSync(new URL("../src/components/BuilderModeMenu.jsx", import.meta.url), "utf8");
 const NAMED_COLORS = "white|black|red|green|blue|gray|grey|yellow|orange|purple|pink|brown|cyan|magenta|silver|gold|navy|teal|lime|maroon|olive|aqua|fuchsia|indigo|violet|crimson|coral|salmon|tomato";
 const COLOR_PROPS = "color|background(?:-color)?|border(?:-[a-z]+)*|outline(?:-color)?|fill|stroke|box-shadow|text-shadow";
 
@@ -67,20 +68,14 @@ test("지난 결과 표시는 setForm 호출 횟수가 아니라 조건의 값 �
   const code = stripComments(page);
   assert.match(code, /sameForm\(form, reportForm\)/, "지금 조건과 결과를 만든 조건을 값으로 견준다");
   assert.match(code, /setReportForm\(startedWith\)/, "결과와 함께 그 결과를 만든 조건을 담는다");
-  assert.match(code, /<Builder form=\{form\} setForm=\{setForm\} \/>/, "setForm 을 감싸 호출마다 고침으로 세지 않는다");
+  assert.match(code, /<Builder form=\{form\} setForm=\{setForm\}[^>]*\/>/, "setForm 을 감싸 호출마다 고침으로 세지 않는다");
+  assert.doesNotMatch(code, /setForm=\{\s*\(/, "setForm 자리에 새 함수를 넣지 않는다");
   assert.doesNotMatch(code, /setStale\(|formVersion/, "별도 stale 상태나 호출 횟수 세기를 두지 않는다");
 });
 
 test("두 검증 요청에는 시간 상한이 있다", () => {
   assert.match(apiJs, /"\/api\/validate",\s*\{\s*method: "POST", timeoutMs: \d/);
   assert.match(apiJs, /"\/api\/validate\/explain",\s*\{\s*method: "POST", timeoutMs: \d/);
-});
-
-test("기본 빌더에서 프로로 열 수 있고 지금 조건이 따라간다", () => {
-  assert.match(studioJsx, /프로로 열기/);
-  assert.match(studioJsx, /navigate\("\/builder\/pro", \{ state: \{ macro: currentMacro \} \}\)/);
-  assert.match(page, /location\.state/);
-  assert.match(page, /seedForm\(location\.state\)/);
 });
 
 test("금지한 권유 표현을 화면 · 스타일에 쓰지 않는다", () => {
@@ -100,4 +95,51 @@ test("빌더 패널을 재사용하고 검증 요청 전에 입력 검증을 거
 test("실패한 구간은 pct 를 읽기 전에 거른다", () => {
   assert.doesNotMatch(page, /Math\.(max|min)\(\.\.\.[^)]*\.pct/, "null 이 0 으로 바뀌는 축 계산 금지");
   assert.match(page, /bar\.failed/);
+});
+
+// 들어갈 길만 있고 나올 길이 없으면 프로 빌더는 막힌 방이다. 두 화면이 같은 메뉴를 쓰는지 본다.
+test("빌더 전환은 양방향이고, 어느 쪽으로 가든 지금 조건을 들고 간다", () => {
+  assert.match(modeMenu, /value: "basic", label: "기본 빌더", path: "\/builder"/);
+  assert.match(modeMenu, /value: "pro", label: "프로 빌더", path: "\/builder\/pro"/);
+  for (const [name, code] of [["기본", studioJsx], ["프로", page]]) {
+    assert.match(code, /import BuilderModeMenu from "\.\.\/components\/BuilderModeMenu\.jsx"/, `${name} 빌더가 공용 메뉴를 쓴다`);
+    assert.match(code, /<BuilderModeMenu/, `${name} 빌더가 메뉴를 그린다`);
+    assert.match(code, /onSwitch=\{/, `${name} 빌더가 전환을 받는다`);
+  }
+  assert.match(studioJsx, /mode="basic"/);
+  assert.match(page, /mode="pro"/);
+  // 경로는 메뉴가 고른 것을 쓴다 — 화면마다 따로 적으면 한쪽만 고쳐져 어긋난다.
+  assert.match(studioJsx, /navigate\(target\.path, \{ state: \{ macro: currentMacro, source: "builder-mode" \} \}\)/);
+  assert.match(page, /navigate\(target\.path, macro \? \{ state: \{ macro, source: "builder-mode" \} \} : undefined\)/);
+  assert.match(page, /seedForm\(location\.state\)/);
+  assert.doesNotMatch(studioJsx, /function BuilderModeMenu/, "지역 사본을 두지 않는다");
+});
+
+// 조건만 있고 차트가 없으면 무엇을 만드는지 볼 수 없다 — 기본 빌더와 같은 조각, 같은 연결.
+test("프로 빌더에 차트가 있고 조건을 그대로 따라온다", () => {
+  const code = stripComments(page);
+  assert.match(code, /import CandleChart from "\.\.\/components\/CandleChart\.jsx"/);
+  assert.match(code, /<CandleChart/);
+  assert.match(code, /variant="studio"/);
+  // 종목 · 봉 간격 · 시장 · 보조지표가 모두 지금 조건에서 나온다.
+  assert.match(code, /symbol=\{symbol\}/);
+  assert.match(code, /exchange=\{form\.exchange \|\| "binance"\}/);
+  assert.match(code, /market=\{chartMarket\}/);
+  assert.match(code, /interval=\{form\.candle_interval/);
+  assert.match(code, /overlay=\{overlay\}/);
+  assert.match(code, /computeStrategyOverlay\(form, candles\)/);
+  // 차트 도구줄에서 봉 간격을 바꾸면 조건도 함께 바뀐다(한 곳만 고친다).
+  assert.match(code, /onIntervalChange=\{\(value\) => setForm\(\(previous\) => \(\{ \.\.\.previous, candle_interval: value \}\)\)\}/);
+  // 국내 현물에는 선물 봉이 없다.
+  assert.match(code, /isDomestic\(form\.exchange\)\s*\?\s*"spot"/);
+  // 종목이 없을 때 빈 판을 그린다 — 차트 자리가 소리 없이 사라지지 않게.
+  assert.match(code, /chartSymbols\.length > 0 \?/);
+  assert.match(code, /<EmptyState/);
+  // 높이를 정해 주지 않으면 studio 차트는 0px 로 접힌다.
+  assert.match(stripComments(css), /\.pro-chart-body \{[^}]*height:/);
+});
+
+// 빌더끼리 오간 조건은 어느 출처도 아니다 — 리더보드 복사로 적으면 배지가 거짓말을 한다.
+test("빌더 전환으로 들어온 조건에 출처 배지를 붙이지 않는다", () => {
+  assert.match(studioJsx, /source === "builder-mode"\s*\n?\s*\?\s*null/);
 });

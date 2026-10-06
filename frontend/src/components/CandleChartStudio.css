@@ -1,0 +1,24 @@
+/* variant="studio" 차트의 뼈대 — 도구줄 · 그림 칸 · 읽은 값 겹침.
+   이 규칙은 차트 조각의 것이지 어느 한 화면의 것이 아니다. 페이지 스타일시트에 두면
+   그 화면에서만 차트가 서고, 다른 화면에서는 그림 칸이 높이 0 으로 접혀 캔버스가
+   화면 전체로 퍼진다(프로 빌더에서 실제로 그랬다). 그래서 CandleChart 가 직접 들여온다.
+   바깥 틀(차트 판의 높이·여백)은 쓰는 화면이 정한다 — .studio-chart-body · .pro-chart-body. */
+/* 도구줄 — 구간 등락의 글자 기준선에 봉 간격·확대/축소·범례를 맞춘다. 좁으면 다음 줄로 보낸다. */
+.candle-chart.is-studio .candle-chart-toolbar { min-height: 44px; display: flex; flex-wrap: wrap; align-items: flex-end; align-items: last baseline; gap: 6px 28px; padding: 4px 0; border-bottom: 1px solid rgb(var(--c-slate-200)); }
+.candle-chart.is-studio .candle-chart-controls { display: flex; align-items: center; gap: 6px; }
+.candle-chart.is-studio .candle-chart-controls .seg { padding: 3px; }
+.candle-chart.is-studio .candle-chart-controls .seg-item { height: 24px; padding: 0 9px; font-size: 12px; }
+/* 봉 간격 표시 — 누르는 것이 아니다. 조건 판의 값을 비출 뿐. */
+.candle-chart.is-studio .candle-chart-intervals { cursor: default; }
+.candle-chart.is-studio .candle-chart-intervals .seg-item { cursor: default; }
+.candle-chart.is-studio .candle-chart-intervals .seg-item:not(.seg-item-on):hover { color: rgb(var(--c-slate-500)); }
+.candle-chart.is-studio .candle-chart-intervals .seg-item.is-unavailable { opacity: .38; }
+.candle-chart.is-studio .candle-chart-controls .btn-s { height: 28px; }
+.candle-chart.is-studio .candle-chart-zoom { min-width: 34px; text-align: center; }
+.candle-chart.is-studio .candle-chart-legend { margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
+/* 그림 — 남는 높이를 전부 쓴다. SVG 는 이 칸의 픽셀 크기로 그려진다(CandleChart 가 잰다). */
+.candle-chart.is-studio .candle-chart-stage { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.candle-chart.is-studio .candle-chart-plot { position: relative; flex: 1 1 auto; min-height: 120px; }
+.candle-chart.is-studio .candle-chart-plot > svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.candle-chart.is-studio .candle-chart-readout-overlay { position: absolute; left: 4px; top: 6px; z-index: 1; pointer-events: none; }
+.candle-chart.is-studio .candle-chart-readout-overlay .candle-ohlc { font-size: 11px; column-gap: 10px; }

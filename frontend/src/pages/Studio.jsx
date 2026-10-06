@@ -12,6 +12,7 @@ import RegisterMacroModal from "../components/RegisterMacroModal.jsx";
 import AskParrotDialog from "../components/AskParrotDialog.jsx";
 import ConfirmDialog from "../components/ConfirmDialog.jsx";
 import MacroSourceMenu from "../components/MacroSourceMenu.jsx";
+import BuilderModeMenu from "../components/BuilderModeMenu.jsx";
 import { readMacroSource } from "../lib/macroSource.js";
 // 물어볼까? 버튼의 껄무새 — 에이전트 표정 중 '호기심'(brand/README.md).
 const ASK_MASCOT = "/brand/agent/ggparrot-agent-curious-v1.svg";
@@ -77,46 +78,6 @@ const TOUR_STEPS = [
   { anchor: "fees", title: "거래 비용과 펀딩비", body: "실제에 가깝게 수수료·체결 가격 차이(슬리피지)·펀딩비를 반영해요. ‘실제 펀딩비 가져오기’로 해당 기간 평균값을 자동으로 채울 수 있어요." },
   { anchor: "leverage", title: "레버리지", body: "배수를 올리면 수익도 손실도 그만큼 커지고 청산 위험이 생겨요. 1배는 현물과 같아 청산이 없어요. 백테스트·모의에서만 적용돼요." },
 ];
-
-function BuilderModeMenu({ onTour, onOpenPro }) {
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef(null);
-  useEffect(() => {
-    if (!open) return undefined;
-    const onDown = (event) => { if (!rootRef.current?.contains(event.target)) setOpen(false); };
-    const onKey = (event) => { if (event.key === "Escape") setOpen(false); };
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey);
-    return () => { document.removeEventListener("mousedown", onDown); document.removeEventListener("keydown", onKey); };
-  }, [open]);
-  return (
-    <div className="studio-mode" ref={rootRef}>
-      <button type="button" className="studio-mode-btn" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
-        기본 빌더<i className="studio-mode-chev" aria-hidden="true" />
-      </button>
-      {open && (
-        <div className="studio-mode-menu" role="menu" aria-label="빌더 종류">
-          <button type="button" role="menuitemradio" aria-checked="true" className="studio-mode-item is-on" onClick={() => setOpen(false)}>
-            <span className="studio-mode-check" aria-hidden="true"><Icon name="check" size={14} strokeWidth={2.5} /></span>기본 빌더
-          </button>
-          {/* 지금 만든 조건을 그대로 들고 프로 빌더(/builder/pro)로 간다. */}
-          <button type="button" role="menuitem" className="studio-mode-item" onClick={() => { setOpen(false); onOpenPro?.(); }}>
-            <span className="studio-mode-check" aria-hidden="true" />프로로 열기<small className="studio-mode-hint">지금 조건 그대로</small>
-          </button>
-          {onTour ? (
-            <>
-              <hr className="studio-mode-sep" aria-hidden="true" />
-              {/* 항목별 설명 투어 — 화면 순서대로 각 칸을 비추며 설명한다. */}
-              <button type="button" role="menuitem" className="studio-mode-item" onClick={() => { setOpen(false); onTour(); }}>
-                <span className="studio-mode-check" aria-hidden="true"><Icon name="circleHelp" size={15} /></span>사용법 안내<small className="studio-mode-hint">화면 순서대로</small>
-              </button>
-            </>
-          ) : null}
-        </div>
-      )}
-    </div>
-  );
-}
 
 // 저장·공유 — 매크로 등록 탭에서 여는 다이얼로그. 링크·인증 카드는 본문이 아니라 부속 결과라 화면에 늘 두지 않는다.
 function ShareDialog({ share, stale, busy, card, onClose, onRenew }) {
@@ -409,7 +370,10 @@ function AccountStudio({ scope, allowRouterMacro }) {
     const macro = location.state?.macro;
     if (!macro || !allowRouterMacro) return;
     setForm(macroToForm(macro));
-    setMacroSource({ kind: location.state?.source === "hero-guide" ? "guide" : "board", label: "" });
+    // 빌더끼리 오간 조건은 어느 출처도 아니다 — 리더보드 복사로 적으면 배지가 거짓말을 한다.
+    setMacroSource(location.state?.source === "builder-mode"
+      ? null
+      : { kind: location.state?.source === "hero-guide" ? "guide" : "board", label: "" });
     navigate(location.pathname + location.search, { replace: true, state: null });
   }, [allowRouterMacro, location.pathname, location.search, location.state, navigate]);
 
@@ -813,7 +777,11 @@ function AccountStudio({ scope, allowRouterMacro }) {
         {/* ── 조건 ── */}
         <aside id="studio-conditions" className="studio-cond" aria-label="조건" {...split.panelProps}>
           <div className="studio-panel-head">
-            <BuilderModeMenu onTour={() => setTourOpen(true)} onOpenPro={() => navigate("/builder/pro", { state: { macro: currentMacro } })} />
+            <BuilderModeMenu
+              mode="basic"
+              onTour={() => setTourOpen(true)}
+              onSwitch={(target) => navigate(target.path, { state: { macro: currentMacro, source: "builder-mode" } })}
+            />
             {/* 매크로 출처 배지 — 껄무새 후보·리더보드·업로드·가이드 중 어디서 온 조건인지 색으로, 종목은 티커+이름으로. 누르면 다른 출처를 고르는 드롭다운. */}
             <MacroSourceMenu
               source={macroSource}

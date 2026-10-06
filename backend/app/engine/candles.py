@@ -506,11 +506,14 @@ class TrailingSim(CandleSim):
                     self._ref = c
             return
         # flat -> maybe enter
+        # 눌림목 기준가는 관문 **앞**에서 잡는다 — 관문 뒤에 두면 필터가 막는 동안 기준가가 비어 있다가
+        # "필터가 처음 허락한 봉" 의 시가로 잡히고, 오르는 구간에서는 문턱이 함께 올라가 필터를 켠 쪽이
+        # 끄면 없던 매수를 한다(필터는 거래를 줄이는 쪽으로만 작동한다 — 설계 원칙 1).
+        if self.entry_mode == "dip" and self._ref is None:
+            self._ref = o
         if self._entry_blocked(ts):
             return
         if self.entry_mode == "dip":
-            if self._ref is None:
-                self._ref = o
             if l <= self._ref * (1 - self.entry_dip / 100.0):
                 px = self._ref * (1 - self.entry_dip / 100.0)
                 f = self._open_long(self.invest_ratio * self.cash, px, ts, c)

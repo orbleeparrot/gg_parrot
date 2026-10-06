@@ -162,6 +162,9 @@ class CandleSim:
         # 진입 필터 — 없으면 None. on_candle 이 봉이 끝난 뒤 갱신하고 _entry_blocked 가 묻는다.
         from .entry_filter import make_filter  # 늦은 import: entry_filter -> candles 순환 방지
         self.entry_filter = make_filter(macro)
+        # 묶음 한도 — 묶음을 조립하는 쪽(백테스트 루프 · paper.start_session)이 밖에서 꽂는다.
+        # 심은 자기가 묶음의 일부인지 모른다.
+        self.bundle_gate = None
 
     # -- position helpers (long book) ------------------------------------
     def total_qty(self) -> float:
@@ -379,6 +382,8 @@ class CandleSim:
         if self._cooldown_until is not None and ts < self._cooldown_until:
             return True
         if self.entry_filter is not None and not self.entry_filter.allows():
+            return True
+        if self.bundle_gate is not None and self.bundle_gate.blocks(self):
             return True
         return False
 

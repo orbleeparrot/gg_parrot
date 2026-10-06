@@ -1,5 +1,5 @@
 import { cloneElement, createContext, isValidElement, useContext, useEffect, useId, useRef, useState } from "react";
-import { RULE_TYPES, PERIOD_PRESETS, CANDLE_INTERVALS, MAX_LEVERAGE, withTypeDefaults } from "../lib/macro.js";
+import { RULE_TYPES, PERIOD_PRESETS, CANDLE_INTERVALS, MAX_LEVERAGE, FILTERABLE_RULE_TYPES, FILTER_KINDS, withTypeDefaults } from "../lib/macro.js";
 import { EXCHANGES, isDomestic, normalizeExchange, quoteForExchange } from "../lib/exchanges.js";
 import InfoTooltip from "./InfoTooltip.jsx";
 import { api } from "../api.js";
@@ -649,6 +649,46 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
             {chk("reenter_long_after", "숏을 끝낸 뒤 롱으로 다시 진입")}
             {cap}
             <div className="col-span-full t-caption text-amber-700">숏 전환이 포함돼 선물(USDT-M)로 실행돼요. 숏 손절 기준은 필수예요.</div>
+          </div>
+        )}
+        {/* 진입 조건 — 필터를 쓰는 일곱 규칙에서만 그린다. 못 쓰는 규칙(A~D)은 아무것도 그리지 않는다. */}
+        {FILTERABLE_RULE_TYPES.includes(rt) && (
+          <div className={g2full + (dense ? "" : " mt-4")}>
+            {/* chk 는 opts.term 만 받는다 — 설명은 종류 칸의 hint 로 붙인다. */}
+            {chk("use_entry_filter", "진입 조건 더 달기")}
+            {form.use_entry_filter && sel("filter_kind", "진입 조건 종류", FILTER_KINDS,
+              { hint: "이 조건이 아닐 때는 사지 않아요. 청산은 그대로예요" })}
+            {form.use_entry_filter && form.filter_kind === "ma" && (
+              <>
+                {sel("filter_ma_type", "이동평균 종류", [{ value: "SMA", label: "단순(SMA)" }, { value: "EMA", label: "지수(EMA)" }])}
+                {num("filter_ma_period", "이동평균 기간 (봉)", { step: "1" })}
+                {sel("filter_ma_side", "어느 쪽일 때 살까", [{ value: "above", label: "이평선 위" }, { value: "below", label: "이평선 아래" }])}
+              </>
+            )}
+            {form.use_entry_filter && form.filter_kind === "rsi" && (
+              <>
+                {num("filter_rsi_period", "RSI 기간 (봉)", { step: "1" })}
+                {num("filter_rsi_min", "RSI 아래 한도", { hint: "비워두면 아래 한도 없음" })}
+                {num("filter_rsi_max", "RSI 위 한도", { hint: "비워두면 위 한도 없음" })}
+              </>
+            )}
+            {form.use_entry_filter && form.filter_kind === "bb" && (
+              <>
+                {num("filter_bb_period", "볼린저 기간 (봉)", { step: "1" })}
+                {num("filter_bb_num_std", "표준편차 배수")}
+                {sel("filter_bb_zone", "어느 자리일 때 살까", [
+                  { value: "inside", label: "밴드 안" },
+                  { value: "below_lower", label: "하단 밖" },
+                  { value: "above_upper", label: "상단 밖" },
+                ])}
+              </>
+            )}
+            {form.use_entry_filter && form.filter_kind === "volume" && (
+              <>
+                {num("filter_vol_period", "거래량 평균 기간 (봉)", { step: "1" })}
+                {num("filter_vol_multiple", "평균의 몇 배 이상")}
+              </>
+            )}
           </div>
         )}
       </Group>

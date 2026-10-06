@@ -23,6 +23,10 @@ from .engine import Macro
 # v1: exchange·quote_currency 가 없던 시절. v2: 그 둘을 포함. v3: entry_filter 를 포함.
 # Macro 에 필드가 늘 때마다 서명 대상 JSON 이 바뀌므로, 올리고 옛 버전에서는 그 필드를 뺀다.
 SIG_VERSION = 3
+# 받아들이는 서명 버전 — SIG_VERSION 이하 전부. 손으로 적은 목록(`(1, 2, SIG_VERSION)`)은 올릴 때마다
+# 직전 버전을 빠뜨리는 함정이었다(v1→v2 때 `(1, SIG_VERSION)` 이라 v2 파일이 전부 '수정된 파일' 이 될 참이었다).
+# 범위로 만들어 두면 다음 bump 가 옛 파일을 떨어뜨리지 않는다.
+ACCEPTED_SIG_VERSIONS = tuple(range(1, SIG_VERSION + 1))
 
 # 세션에 남는 출처 값과 화면 표기.
 ORIGIN_WEB = "web"  # 웹 '빠른 실행' 티켓 — 서버가 매크로를 직접 넘김
@@ -86,7 +90,7 @@ def verify(macro: Macro, sig: Optional[dict]) -> bool:
     # contain any JSON value; classify malformed signatures without a 500.
     if (not isinstance(given, str) or len(given) != 64
             or any(char not in "0123456789abcdef" for char in given)
-            or sig.get("v") not in (1, 2, SIG_VERSION)):
+            or sig.get("v") not in ACCEPTED_SIG_VERSIONS):
         return False
     version = sig["v"]
     if version == 1 and (macro.exchange != "binance" or macro.quote_currency != "USDT"):

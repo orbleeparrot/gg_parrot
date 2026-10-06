@@ -97,3 +97,21 @@ def test_v3_signature_binds_the_filter():
     stripped = Macro(**BREAKOUT)
     assert macro_signing.verify(edited, signed) is False
     assert macro_signing.verify(stripped, signed) is False
+
+
+def test_every_version_up_to_sig_version_is_accepted():
+    """SIG_VERSION 이하 **모든** 버전의 서명이 받아들여진다 — 다음 bump 가 직전 버전을 떨어뜨리지 않게.
+
+    손으로 적은 목록은 올릴 때마다 한 칸씩 빠뜨린다(v1→v2 때 `(1, SIG_VERSION)` 이라 v2 가 떨어질 참이었다).
+    이 시험은 `range(1, SIG_VERSION + 1)` 로 돌므로 SIG_VERSION 이 4·5 가 되어도 새 줄을 더할 필요가 없다 —
+    그때 v3·v4 를 떨어뜨리면 여기서 빨개진다.
+    """
+    macro = plain_macro()  # 바이낸스·USDT·필터 없음 — v1 의 거래소 제약과 v3 미만의 필터 제약을 둘 다 비껴간다
+    versions = list(range(1, macro_signing.SIG_VERSION + 1))
+    assert len(versions) >= 3  # 지금 v3 — 범위가 조용히 비면 이 시험이 아무것도 증명하지 않는다
+    for version in versions:
+        payload = macro_signing.canonical_bytes(macro, version=version)
+        assert macro_signing.verify(macro, old_sig(version, payload)) is True, version
+    # 미래 버전은 그대로 거절한다(아직 그 바이트 모양을 모른다).
+    future = macro_signing.SIG_VERSION + 1
+    assert macro_signing.verify(macro, old_sig(future, macro_signing.canonical_bytes(macro))) is False

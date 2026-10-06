@@ -97,11 +97,12 @@ def test_new_signature_binds_exchange_and_legacy_signature_still_verifies(symbol
     old = macro.model_dump(mode="json")
     old.pop("exchange", None)
     old.pop("quote_currency", None)
+    old.pop("entry_filter", None)  # v1 서명에는 이 필드도 없다
     payload = json.dumps(old, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
     sig = {"v": 1, "hmac": hmac.new(macro_signing._key(), payload, hashlib.sha256).hexdigest()}
     assert macro_signing.verify(macro, sig)
     signed = macro_signing.sign(macro)
-    assert signed["v"] == 2
+    assert signed["v"] == macro_signing.SIG_VERSION
     assert macro_signing.verify(macro, signed)
     domestic = make_macro(exchange="upbit", symbol="KRW-BTC")
     assert not macro_signing.verify(domestic, sig)

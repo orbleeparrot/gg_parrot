@@ -20,7 +20,9 @@ from typing import Optional
 
 from .engine import Macro
 
-SIG_VERSION = 2
+# v1: exchange·quote_currency 가 없던 시절. v2: 그 둘을 포함. v3: entry_filter 를 포함.
+# Macro 에 필드가 늘 때마다 서명 대상 JSON 이 바뀌므로, 올리고 옛 버전에서는 그 필드를 뺀다.
+SIG_VERSION = 3
 
 # 세션에 남는 출처 값과 화면 표기.
 ORIGIN_WEB = "web"  # 웹 '빠른 실행' 티켓 — 서버가 매크로를 직접 넘김
@@ -50,6 +52,8 @@ def canonical_bytes(macro: Macro, *, version: int = SIG_VERSION) -> bytes:
     if version == 1:
         data.pop("exchange", None)
         data.pop("quote_currency", None)
+    if version < 3:
+        data.pop("entry_filter", None)
     return json.dumps(
         data, sort_keys=True, separators=(",", ":"), ensure_ascii=False
     ).encode("utf-8")
@@ -82,10 +86,14 @@ def verify(macro: Macro, sig: Optional[dict]) -> bool:
     # contain any JSON value; classify malformed signatures without a 500.
     if (not isinstance(given, str) or len(given) != 64
             or any(char not in "0123456789abcdef" for char in given)
-            or sig.get("v") not in (1, SIG_VERSION)):
+            or sig.get("v") not in (1, 2, SIG_VERSION)):
         return False
     version = sig["v"]
     if version == 1 and (macro.exchange != "binance" or macro.quote_currency != "USDT"):
+        return False
+    # 옛 서명은 entry_filter 를 모른다. 필터가 붙은 매크로가 옛 서명으로 "원본" 이 되면
+    # 파일에 필터를 손으로 끼워 넣고도 검증을 통과하므로 거절한다.
+    if version < 3 and macro.entry_filter is not None:
         return False
     return hmac.compare_digest(given, _mac(macro, version=version))
 

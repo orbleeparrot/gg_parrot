@@ -10,6 +10,8 @@ from app.main import app
 
 DOMESTIC = {"exchange": "upbit", "symbol": "KRW-BTC", "rule_type": "A",
             "params": {"initial_capital": 100000, "take_profit_pct": 3}}
+SINGLE = {"symbol": "BTCUSDT", "rule_type": "A", "params": {"initial_capital": 1000, "take_profit_pct": 3}}
+PORTFOLIO = {**SINGLE, "symbols": ["BTCUSDT", "ETHUSDT"]}
 
 
 def test_public_market_routes_preserve_exchange(monkeypatch):
@@ -40,6 +42,17 @@ def test_domestic_cannot_download_binance_runner_file(path):
         # 파일은 바이낸스 전용이라고 범위로 말한다 — 실행기 직접 연결이 안 된다고 거짓말하지 않는다.
         assert "바이낸스 전용" in res.json()["detail"]
         assert "지원하지 않" not in res.json()["detail"]
+
+
+def test_portfolio_cannot_download_the_macro_file():
+    """여러 종목 매크로는 내려받기에서 거절한다 — 받아서 실행기에 넣은 뒤 시작할 때 알면 늦다."""
+    with TestClient(app) as client:
+        res = client.post("/api/realtrade/macro-file", json={"macro": PORTFOLIO})
+        assert res.status_code == 422, res.text
+        assert res.json()["detail"] == runner.PORTFOLIO_UNSUPPORTED_DETAIL
+        # 같은 매크로의 단일 종목은 그대로 내려받는다 — 관문이 전부를 막는 게 아니다.
+        ok = client.post("/api/realtrade/macro-file", json={"macro": SINGLE})
+        assert ok.status_code == 200 and ok.json()["symbol"] == "BTCUSDT"
 
 
 def test_domestic_save_round_trip_and_inconsistent_start_blocked(monkeypatch):

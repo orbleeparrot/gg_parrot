@@ -39,7 +39,7 @@ export default function ConfirmDialog({
 
   return createPortal(
     <div
-      className="scrim fixed inset-0 z-[90] grid place-items-center p-4"
+      className="scrim fixed inset-0 z-90 grid place-items-center p-4"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget && !busy) onCancel?.();
       }}

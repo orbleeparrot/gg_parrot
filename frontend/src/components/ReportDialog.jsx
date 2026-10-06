@@ -45,7 +45,7 @@ export default function ReportDialog({ open, targetType, targetId, label, onClos
   }
 
   return createPortal(
-    <div className="scrim fixed inset-0 z-[90] grid place-items-center p-4" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose?.(); }}>
+    <div className="scrim fixed inset-0 z-90 grid place-items-center p-4" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose?.(); }}>
       <form role="dialog" aria-modal="true" aria-labelledby={titleId} className="dialog confirm-dialog report-dialog" onSubmit={submit}>
         <h2 id={titleId} className="t-h4 text-slate-900">{label} 신고</h2>
         {done ? (

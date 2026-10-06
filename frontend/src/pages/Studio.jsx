@@ -120,7 +120,7 @@ function ShareDialog({ share, stale, busy, card, onClose, onRenew }) {
     }
   }
   return createPortal(
-    <div className="scrim fixed inset-0 z-[90] grid place-items-center p-4" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <div className="scrim fixed inset-0 z-90 grid place-items-center p-4" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <div role="dialog" aria-modal="true" aria-labelledby="studio-share-title" className="dialog confirm-dialog studio-share">
         <h2 id="studio-share-title" className="t-h4 text-slate-900">저장·공유</h2>
         {stale ? (

@@ -350,7 +350,7 @@ export function PaperPanelView({ macro: currentMacro, valErr, onRegister, contro
               rather than stretching the page. 스크롤 컨테이너일 뿐 카드가 아니라
               테두리는 두지 않고, 행 구분은 괘선만 쓴다(§6 table-row). */}
           <div className="max-h-72 overflow-auto border-t border-slate-200">
-            <div className="min-w-[460px] divide-y divide-slate-200">
+            <div className="min-w-115 divide-y divide-slate-200">
               <div className="flex items-center px-1 py-2 t-caption text-slate-700 bg-slate-50 sticky top-0">
                 <span className="w-20">시각</span>
                 <span className="w-16">구분</span>

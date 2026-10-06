@@ -28,6 +28,10 @@
   --text-3xl--line-height: 2.25rem;
   --text-4xl--line-height: 2.5rem;
 
+  /* 눈금에 없는 두 값에 이름을 붙인다 — 대화상자 모서리(20px)와 조밀한 표 칸의 11px 글자. */
+  --radius-dialog: 20px;
+  --text-2xs: 11px;
+
   --color-surface: rgb(var(--c-surface));
   --color-danger: rgb(var(--c-danger));
   --color-danger-hover: rgb(var(--c-danger-hover));
@@ -1551,11 +1555,11 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 
   /* dialog — 면이 아니라 surface 를 쓴다: 안에 놓인 .field(면)가 묻히지 않게. */
   .dialog {
-    @apply rounded-[20px] bg-surface;
+    @apply rounded-dialog bg-surface;
     box-shadow: 0 12px 32px rgba(0, 0, 0, 0.32);
   }
   .form-surface {
-    @apply rounded-[20px] bg-surface;
+    @apply rounded-dialog bg-surface;
   }
   .scrim {
     background: rgba(0, 0, 0, 0.56);

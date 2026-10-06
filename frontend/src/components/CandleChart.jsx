@@ -505,7 +505,7 @@ export default function CandleChart({
       )}
 
       {!error && (!candles || !candles.length) && (
-        <div className="h-[200px] flex items-center justify-center t-small text-slate-500">
+        <div className="h-50 flex items-center justify-center t-small text-slate-500">
           {loading ? "차트 불러오는 중…" : candles ? "표시할 시세가 없어요." : "—"}
         </div>
       )}

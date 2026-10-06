@@ -122,7 +122,7 @@ export function MemberActionDialogs({ action, busy = false, error = "", onSubmit
   const canSend = form.title.trim().length > 0 && !busy;
   return createPortal(
     <div
-      className="scrim fixed inset-0 z-[90] grid place-items-center p-4"
+      className="scrim fixed inset-0 z-90 grid place-items-center p-4"
       onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onCancel?.(); }}
     >
       <form
@@ -209,7 +209,7 @@ function ResetLinkDialog({ name, link, expires, busy, error, onSubmit, onCancel 
   }
 
   return createPortal(
-    <div className="scrim fixed inset-0 z-[90] grid place-items-center p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) onCancel?.(); }}>
+    <div className="scrim fixed inset-0 z-90 grid place-items-center p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) onCancel?.(); }}>
       <div role="dialog" aria-modal="true" aria-labelledby={titleId} className="dialog confirm-dialog adm-msg-dialog">
         <h2 id={titleId} className="t-h4 text-slate-900">{name} 님 재설정 링크</h2>
         <p className="mt-3 t-small text-slate-700">본인에게 이 링크를 전해 주세요. {minutes}분 안에 열어 새 비밀번호를 정하면 돼요. 한 번 쓰면 무효가 됩니다.</p>

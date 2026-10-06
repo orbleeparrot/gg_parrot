@@ -231,13 +231,13 @@ export default function OptimizePanel({ form, setForm, valErr, onResult }) {
                             {/* Held-out result under the fitted one: a cell that
                                 only worked because it was fitted shows it here. */}
                             {c.oos_return_pct != null && (
-                              <span className="block text-[11px] font-semibold opacity-80">
+                              <span className="block text-2xs font-semibold opacity-80">
                                 검증 {c.oos_return_pct >= 0 ? "+" : ""}
                                 {c.oos_return_pct.toFixed(1)}%
                               </span>
                             )}
-                            {best && <span className="block text-[11px] font-bold"><Icon name="star" size={11} fill="currentColor" strokeWidth={1.5} className="ui-icon-inline" /> 최적</span>}
-                            {cur && !best && <span className="block text-[11px] font-semibold">현재</span>}
+                            {best && <span className="block text-2xs font-bold"><Icon name="star" size={11} fill="currentColor" strokeWidth={1.5} className="ui-icon-inline" /> 최적</span>}
+                            {cur && !best && <span className="block text-2xs font-semibold">현재</span>}
                           </button>
                         </td>
                       );

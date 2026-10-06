@@ -190,7 +190,7 @@ export default function Board() {
         <SearchBar q={q} field={field} onSearch={update} />
       </PageHeader>
 
-      {err && <ErrorNote>글 목록을 불러오지 못했어요: {err} <button type="button" className="btn btn-sm" disabled={busy} onClick={retry}>글 목록 다시 불러오기</button></ErrorNote>}
+      {err && <ErrorNote>글 목록을 불러오지 못했어요: {err} <button type="button" className="btn btn-s" disabled={busy} onClick={retry}>글 목록 다시 불러오기</button></ErrorNote>}
       <div ref={sentinel} aria-hidden="true" />
       {(busy || !pageSize) && !data && !err ? <SkeletonRows count={pageSize || MIN_ROWS} /> : null}
 

@@ -36,7 +36,7 @@ function Steps({ items }) {
 function Params({ rows }) {
   return (
     <div className="my-4 overflow-x-auto">
-      <table className="w-full min-w-[360px]">
+      <table className="w-full min-w-90">
         <thead>
           <tr className="border-b border-slate-200 t-caption text-slate-700">
             <th className="text-left py-2 pr-3">파라미터</th>
@@ -95,7 +95,7 @@ const C = {
 // 차트를 상자에 담지 않는다(§6 bar-chart) — 캡션은 13/600.
 function Fig({ caption, legend, children }) {
   return (
-    <figure className="my-5 max-w-[560px]">
+    <figure className="my-5 max-w-140">
       <svg viewBox={`0 0 ${FIG_W} ${FIG_H}`} className="w-full h-auto" role="img" aria-label={caption}>
         {children}
       </svg>
@@ -135,7 +135,7 @@ function Dot({ x, y, color, r = 4 }) {
   // 다크에서 흰 테두리가 되어 오히려 튀었다.
   return (
     <circle cx={fx(x)} cy={fy(y)} r={r * 1.4} fill={color}
-      stroke="rgb(var(--c-slate-50))" strokeWidth="1.5" />
+      stroke="currentColor" strokeWidth="1.5" className="text-slate-50" />
   );
 }
 function Tag({ x, y, text, color, dy = -9, anchor = "middle" }) {

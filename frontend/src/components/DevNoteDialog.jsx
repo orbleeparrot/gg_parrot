@@ -24,7 +24,7 @@ export function DevNoteBanner({ note, onClose, onHideToday }) {
   }, [onClose]);
   const headline = String(note.title || "껄무새가 이렇게 바뀌었어요");
   return createPortal(
-    <div className="scrim fixed inset-0 z-[95] grid place-items-center p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <div className="scrim fixed inset-0 z-95 grid place-items-center p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div role="dialog" aria-modal="true" aria-labelledby={titleId} className="devnote">
         <button type="button" className="devnote-x" aria-label="닫기" onClick={onClose}><Icon name="x" size={20} /></button>
         <div className="devnote-hero">

@@ -215,7 +215,7 @@ export default function RegisterMacroModal({
   const title = isEdit ? "매크로 수정" : reviewOnly ? "이 설정으로 등록" : "리더보드에 등록";
 
   return createPortal(
-    <div className="scrim fixed inset-x-0 bottom-0 top-16 z-[80] flex items-start justify-center p-2 sm:p-4 overflow-y-auto">
+    <div className="scrim fixed inset-x-0 bottom-0 top-16 z-80 flex items-start justify-center p-2 sm:p-4 overflow-y-auto">
       <div
         ref={dialogRef}
         role="dialog"
@@ -224,7 +224,7 @@ export default function RegisterMacroModal({
         tabIndex={-1}
         className="dialog w-full max-w-2xl my-4 sm:my-8"
       >
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 sticky top-0 bg-surface rounded-t-[20px] z-10">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 sticky top-0 bg-surface rounded-t-dialog z-10">
           <h2 id={titleId} className="t-h4 text-slate-900">{title}</h2>
           <button ref={closeButtonRef} onClick={onClose} disabled={busy}
             className="btn btn-s btn-ghost leading-none" aria-label="닫기"><Icon name="x" size={20} /></button>
@@ -282,7 +282,7 @@ export default function RegisterMacroModal({
           {error ? <div className="t-small text-red-600" role="alert">오류: {error}</div> : null}
         </div>
 
-        <div className="flex flex-col gap-2 px-6 py-4 border-t border-slate-200 sticky bottom-0 bg-surface rounded-b-[20px]">
+        <div className="flex flex-col gap-2 px-6 py-4 border-t border-slate-200 sticky bottom-0 bg-surface rounded-b-dialog">
           {!needsLogin ? (
             <button onClick={save} disabled={busy || !!valErr} className="btn btn-l btn-primary w-full">
               {busy ? "처리 중…" : isEdit ? "수정 저장" : "이 설정으로 등록"}

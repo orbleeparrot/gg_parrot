@@ -16,6 +16,7 @@ import ConfirmDialog from "../components/ConfirmDialog.jsx";
 import { describeDeleteConfirm, describeStopConfirm } from "../features/agents/runOutcome.js";
 import { AgentHistoryList, AgentIdle, AgentViewTabs } from "../components/AgentHistory.jsx";
 import { runPeriodLabel } from "../features/agents/history.js";
+import { activeSessionChart, requireSessionSnapshot } from "../features/agents/sessionSnapshot.js";
 
 const SESSION_STREAM_PROTOCOL = "ggparrot.sessions.v1";
 const SESSION_RECONNECT_MAX_MS = 30000;
@@ -140,6 +141,7 @@ function AccountAgents() {
   const [chartSnapshot, setChartSnapshot] = useState(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [retrying, setRetrying] = useState(false);
   // 확인 모달이 기다리는 동작: { type: "stop", mode } | { type: "delete" }
   const [pending, setPending] = useState(null);
   // 종료 요청을 서버 왕복 전에 화면에 먼저 반영한다: { id, mode }
@@ -156,8 +158,9 @@ function AccountAgents() {
     try {
       const data = await api.runnerSessions({ signal });
       if (!isCurrentAccount() || signal?.aborted || sessionSnapshotRevision.current !== revision) return;
+      const snapshot = requireSessionSnapshot(data);
       sessionSnapshotRevision.current += 1;
-      setSessions(data);
+      setSessions(snapshot);
       setError("");
     } catch (reason) {
       if (!isCurrentAccount() || signal?.aborted || sessionSnapshotRevision.current !== revision) return;
@@ -186,8 +189,9 @@ function AccountAgents() {
       .then((data) => {
         if (!alive || !isCurrentAccount()) return;
         if (sessionSnapshotRevision.current === sessionRevision) {
+          const snapshot = requireSessionSnapshot(data);
           sessionSnapshotRevision.current += 1;
-          setSessions(data);
+          setSessions(snapshot);
         }
         setError("");
       })
@@ -238,6 +242,12 @@ function AccountAgents() {
             return;
           }
           if (stopped || !isCurrentAccount() || socket !== nextSocket || message?.type !== "sessions.snapshot" || !message.data) return;
+          try {
+            requireSessionSnapshot(message.data);
+          } catch (reason) {
+            setError(reason.message);
+            return;
+          }
           lastStreamMessageAt.current = Date.now();
           setStreamConnected(true);
           setError("");
@@ -325,7 +335,7 @@ function AccountAgents() {
   const interval = macro?.candle_interval || "1d";
   const market = executionMarket(macro, selected);
   const exchange = macro?.exchange || "binance";
-  const activeChart = chartSnapshot?.symbol === selected?.symbol && (chartSnapshot.exchange || "binance") === exchange ? chartSnapshot : null;
+  const activeChart = activeSessionChart(chartSnapshot, selected, exchange);
   const featureStates = useMemo(
     () => ({ position_news: activePositionNews, whale_activity: whaleActivity, runner_log: runnerLog }),
     [activePositionNews, whaleActivity, runnerLog],
@@ -429,13 +439,22 @@ function AccountAgents() {
     ? (pending.type === "stop" ? describeStopConfirm(pending.mode, selected) : describeDeleteConfirm(selected))
     : null;
 
-  if (!token) return null;
+  if (!token) return <Loading label="로그인 화면으로 이동하는 중…" />;
   if (!sessions && !error) return <Loading label="실행 중인 매크로를 불러오는 중…" />;
 
   return (
     <div className="agent-page">
       {!streamConnected && sessions ? <p className="t-caption text-slate-500" role="status">실시간 연결 복구 중 · 5초마다 실행 상태 확인</p> : null}
-      {error ? <ErrorNote>실행 상태 오류: {error}</ErrorNote> : null}
+      {error ? (
+        <ErrorNote>
+          실행 상태 오류: {error}
+          <button type="button" className="btn btn-m btn-secondary ml-3" disabled={retrying} onClick={async () => {
+            setRetrying(true);
+            try { await loadSessions(); }
+            finally { if (isCurrentAccount()) setRetrying(false); }
+          }}>{retrying ? "불러오는 중…" : "다시 불러오기"}</button>
+        </ErrorNote>
+      ) : null}
       {sessions && mode === "overview" ? (
         <div className="agent-overview">
           <AgentIdle last={recentSessions[0] || null} />

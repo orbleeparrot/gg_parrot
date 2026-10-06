@@ -321,12 +321,29 @@ def test_bollinger_zones():
 
 
 def test_volume_multiple():
+    # 기준선은 '직전 period 봉' 의 평균이다 — 현재 봉은 자기 기준선에 들어가지 않는다.
     f = _eval("volume", {"period": 3, "multiple": 2.0})
     for close in (100.0, 100.0, 100.0):
         f.update(close, volume=10.0)
-    assert f.allows() is False            # 평균과 같다
-    f.update(100.0, volume=100.0)
+    assert f.allows() is False            # 직전 평균 10 의 2배(20)에 못 미친다
+    f.update(100.0, volume=20.0)
+    assert f.allows() is True             # 정확히 2배 -> 통과(>=)
+
+
+def test_volume_passes_even_when_multiple_exceeds_period():
+    # 현재 봉을 평균에 넣으면 이 설정은 영원히 통과하지 못한다 — 기준선이 직전 봉들이라는 증거.
+    f = _eval("volume", {"period": 2, "multiple": 5.0})
+    f.update(100.0, volume=10.0)
+    f.update(100.0, volume=10.0)
+    f.update(100.0, volume=1_000_000.0)
     assert f.allows() is True
+
+
+def test_zero_volume_window_blocks():
+    f = _eval("volume", {"period": 2, "multiple": 2.0})
+    for _ in range(4):
+        f.update(100.0, volume=0.0)
+    assert f.allows() is False            # 거래량 0 은 급증의 반대다
 
 
 def test_volume_filter_blocks_without_volume():

@@ -92,7 +92,7 @@ class BollingerFilterParams(BaseModel):
 
 class VolumeFilterParams(BaseModel):
     period: int = Field(default=20, ge=2, le=400)
-    multiple: float = Field(gt=0, le=100)  # 평균 거래량의 N배 이상일 때 통과
+    multiple: float = Field(gt=0, le=100)  # 직전 period 봉 평균의 N배 이상일 때 통과
 
 class EntryFilter(BaseModel):
     kind: FilterKind
@@ -121,6 +121,13 @@ FILTERABLE_TYPES = frozenset({RuleType.E, RuleType.F, RuleType.G,
 ```
 
 거래량 필터는 **봉의 거래량**이 필요하다. 지금 `on_candle` 은 `(o, h, l, c)` 만 받는다 — §5.4 를 볼 것.
+
+거래량 기준선은 **현재 봉을 제외한 직전 `period` 봉의 평균**이다. 현재 봉을 평균에 넣으면 큰
+거래량이 자기 기준선을 끌어올려서, `multiple > period` 인 설정은 거래량이 아무리 터져도
+영원히 통과하지 못한다 (기준선이 대략 `V/period` 가 되므로 `V >= multiple·V/period` 가
+`period >= multiple` 로 줄어든다). 스키마가 `period=3`·`multiple=5` 를 허용하므로 사용자가
+닿을 수 있는 함정이다. 기준선이 0 이면 막는다 — 거래량 0 은 거래가 없었다는 뜻이고 급증의
+반대다.
 
 ### 규칙 안에 이미 있는 조건과 겹칠 때
 
@@ -268,6 +275,8 @@ A·B·C 에 필터를 넣으려면 세 규칙에 캔들 심을 만들고 실시�
 | 규칙 안의 조건과 **둘 다** 걸린다 | I + `ma_filter_period=50` + 20봉 이평 `entry_filter` → 둘 중 하나만 거짓인 봉에서 진입이 없다 (양쪽 방향 각각) |
 | 백테스트와 실시간이 같다 | 같은 봉 열을 `warmup`/`on_candle` 로 먹인 두 경로의 체결이 같다 |
 | 거래량을 못 받으면 막는다 | `volume=None` 로 봉을 먹인 거래량 필터가 진입을 막는다 |
+| 거래량 기준선이 직전 봉들이다 | `period=2`·`multiple=5` 로도 큰 거래량 봉이 통과한다 (현재 봉을 평균에 넣으면 불가능) |
+| 거래량 0 은 막는다 | 거래량이 전부 0 인 창에서 진입이 없다 |
 | 기존 규칙이 안 바뀐다 | `entry_filter=None` 인 기존 테스트 전부 그대로 통과 |
 
 마지막 줄이 제일 중요하다. 기존 심 테스트가 한 줄도 바뀌지 않아야 한다 — 바뀌면 필터가 기존 동작을 건드린 것이다.

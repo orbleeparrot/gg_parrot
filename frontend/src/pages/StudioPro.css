@@ -36,6 +36,13 @@
 .pro-run:hover:not(:disabled) { background: rgb(var(--c-brand-hover)); }
 .pro-run:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
 .pro-run:disabled { opacity: .5; cursor: default; }
+/* 검증하기 · 매크로 파일 내려받기 — 한 줄에 나란히, 좁으면 접힌다. */
+.pro-acts { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.pro-file { min-height: 44px; padding: 10px 20px; border-radius: 10px; cursor: pointer; font-weight: 700;
+            border: 1px solid rgb(var(--c-slate-300)); background: rgb(var(--c-slate-50)); color: rgb(var(--c-slate-900)); }
+.pro-file:hover:not(:disabled) { background: rgb(var(--c-slate-100)); }
+.pro-file:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
+.pro-file:disabled { opacity: .5; cursor: default; }
 .pro-note { margin: 0; color: rgb(var(--c-slate-500)); font-size: 13px; }
 .pro-error { margin: 0; padding: 10px 12px; border-radius: 10px; font-size: 13px;
              border: 1px solid rgb(var(--c-red-300)); background: rgb(var(--c-red-50)); color: rgb(var(--c-red-700)); }

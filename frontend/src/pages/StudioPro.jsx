@@ -143,6 +143,8 @@ export default function StudioPro() {
   const [runError, setRunError] = useState("");
   const [explainError, setExplainError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [fileBusy, setFileBusy] = useState(false);
+  const [fileError, setFileError] = useState(""); // 매크로 파일 내려받기가 실패한 이유(서버 문구 그대로)
   const [explaining, setExplaining] = useState(false);
   const [coachChanged, setCoachChanged] = useState([]); // 코치가 방금 바꾼 칸 묶음 이름
   const [coachDone, setCoachDone] = useState(false);
@@ -211,6 +213,28 @@ export default function StudioPro() {
     return problem && FIELDLESS_ERROR_FIELDS.includes(problem.field) ? problem : null;
   })();
   const formProblem = shownFormError || fieldlessError;
+
+  // 매크로 파일 내려받기 — 지금 조건을 매크로로 싸서 .ggm.json 으로 받는다(실행기에 넣어 돌린다).
+  // 누르기 전에 조건 검증을 한 번 거친다: 틀린 조건으로 파일을 받아 가면 실행기에서야 막힌다.
+  // 여러 종목 묶음 매크로는 서버가 422 로 거절한다(실행기가 한 종목만 돌린다) — 그 문구를 그대로 보인다.
+  async function downloadFile() {
+    const problem = validateDetailed(form);
+    if (problem) {
+      setFormError({ ...problem, form });
+      setFileError("");
+      return;
+    }
+    setFormError(null);
+    setFileError("");
+    setFileBusy(true);
+    try {
+      await api.downloadMacroFile(buildMacro(form));
+    } catch (err) {
+      setFileError(errorText(err, "매크로 파일을 내려받지 못했어요. 잠시 뒤 다시 시도해 주세요."));
+    } finally {
+      setFileBusy(false);
+    }
+  }
 
   async function runValidation() {
     // 조건 판이 이미 보여 주는 입력 검증을 요청 전에도 한 번 거친다 — 서버까지 보낼 필요 없는 오류를 여기서 막는다.
@@ -300,9 +324,19 @@ export default function StudioPro() {
             "dense" 를 넘기면 좁은 판용 격자로 판 전체가 다시 조판되므로 변형을 따로 둔다. */}
         <Builder form={form} setForm={setForm} variant="pro" intervalOptions={intervalOptions} />
         {formProblem ? <p className="pro-error" role="alert">{formProblem.message}</p> : null}
-        <button type="button" className="pro-run" onClick={runValidation} disabled={busy}>
-          {busy ? "검증 중…" : "검증하기"}
-        </button>
+        <div className="pro-acts">
+          <button type="button" className="pro-run" onClick={runValidation} disabled={busy}>
+            {busy ? "검증 중…" : "검증하기"}
+          </button>
+          {/* 매크로 실행기로 가는 길 — 기본 빌더와 같은 끝점을 쓴다(저장 없이 파일만 내준다). */}
+          <button type="button" className="pro-file" onClick={downloadFile} disabled={fileBusy}>
+            {fileBusy ? "파일 만드는 중…" : "매크로 파일 내려받기"}
+          </button>
+        </div>
+        <p className="pro-note">.ggm.json 을 실행기에 넣어 실행해요</p>
+        {/* 서버는 내려줄 때 실행기 버전을 모른다 — v9 이하에 넣으면 세션 시작에서 426 이 난다. 그래서 여기서 미리 말한다. */}
+        {isDomestic(form.exchange) ? <p className="pro-note">업비트·빗썸은 실행기 v10 이상이 필요해요.</p> : null}
+        {fileError ? <p className="pro-error" role="alert">{fileError}</p> : null}
         {runError ? <p className="pro-error" role="alert">{runError}</p> : null}
       </section>
 

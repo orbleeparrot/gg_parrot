@@ -1,5 +1,5 @@
 import { cloneElement, createContext, isValidElement, useContext, useEffect, useId, useRef, useState } from "react";
-import { RULE_TYPES, PERIOD_PRESETS, CANDLE_INTERVALS, MAX_LEVERAGE, FILTERABLE_RULE_TYPES, FILTER_KINDS, withTypeDefaults, evenWeights } from "../lib/macro.js";
+import { RULE_TYPES, PERIOD_PRESETS, CANDLE_INTERVALS, MAX_LEVERAGE, FILTERABLE_RULE_TYPES, FILTER_KINDS, withTypeDefaults, evenWeights, defaultForm } from "../lib/macro.js";
 import { EXCHANGES, isDomestic, normalizeExchange, quoteForExchange } from "../lib/exchanges.js";
 import InfoTooltip from "./InfoTooltip.jsx";
 import { api } from "../api.js";
@@ -12,6 +12,7 @@ import { useSymbolList } from "../hooks/useSymbolList.js";
 import { useExchangeSwitch } from "../hooks/useExchangeSwitch.js";
 import { searchSymbols, resolveSymbol, marketTags } from "../lib/symbolSearch.js";
 import { Icon } from "./icons.jsx";
+import LegRuleEditor from "./LegRuleEditor.jsx";
 
 // 촘촘한 판(variant="dense") — 직접 만들기의 좁은 조건 판용. Field·Group 이 이 값을 보고 규격을 바꾼다.
 const DenseContext = createContext(false);
@@ -144,8 +145,9 @@ const inputCls = "field";
 // 종목 고르기 — 위는 검색창, 아래는 고른 종목의 행 목록(로고 · 티커 · 시장 · 비중 · 빼기). 실제 거래 가능한 종목(/api/symbols)만 들어간다.
 // 글자를 치면 관련 종목이 검색창 아래 목록으로 뜨고 Enter·클릭으로 고른다. `CHIP` 처럼 base 만 쳐도 CHIPUSDT 로 맞춘다.
 const MAX_SYMBOLS = 5;
-function SymbolPicker({ value, onChange, weights = "", onWeights = () => {}, exchange = "binance" }) {
+function SymbolPicker({ value, onChange, weights = "", onWeights = () => {}, exchange = "binance", showLegRules = false, legRules = {}, onLegRule = () => {} }) {
   const [draft, setDraft] = useState("");
+  const [openRule, setOpenRule] = useState("");
   const [open, setOpen] = useState(false);
   const [cursor, setCursor] = useState(0);
   const [note, setNote] = useState("");
@@ -167,6 +169,8 @@ function SymbolPicker({ value, onChange, weights = "", onWeights = () => {}, exc
   const weightTotal = symbols.map((_, i) => Number(weightAt(i))).reduce((a, b) => a + (Number.isFinite(b) ? b : 0), 0);
   const weightsOff = symbols.length > 1 && Math.abs(weightTotal - 100) > 0.01;
   const infoOf = (symbol) => (items ? items.find((item) => item.symbol === symbol) : null);
+  // 종목마다 규칙 바꾸기 — 프로 판 · 종목이 둘 이상일 때만. 종목 하나는 묶음이 아니다.
+  const legRulesOn = showLegRules && symbols.length > 1;
 
   const add = (symbol) => {
     if (!symbol) return;
@@ -186,6 +190,9 @@ function SymbolPicker({ value, onChange, weights = "", onWeights = () => {}, exc
   const remove = (symbol) => {
     // 비중을 손댔다면 빠진 종목의 몫도 같이 뺀다 — 안 그러면 남은 종목에 엉뚱한 비중이 붙는다.
     if (weightList.length) onWeights(weightList.filter((_, i) => symbols[i] !== symbol).join(", "));
+    // 빠진 종목의 레그 규칙도 같이 지운다 — 같은 종목을 다시 넣었을 때 옛 규칙이 되살아나지 않게.
+    if (legRules[symbol]) onLegRule(symbol, null);
+    if (openRule === symbol) setOpenRule("");
     onChange(symbols.filter((item) => item !== symbol).join(", "));
     setNote("");
   };
@@ -270,6 +277,7 @@ function SymbolPicker({ value, onChange, weights = "", onWeights = () => {}, exc
             const tags = info ? marketTags(info) : [];
             return (
               <li key={symbol} className="bd-symrow">
+                <div className="bd-symrow-main">
                 <CoinIcon symbol={symbol} size={20} alt="" />
                 <span className="bd-symrow-sym num"><b>{baseOf(symbol)}</b><small>{quoteOf(symbol)}</small></span>
                 {tags.length > 0 && <span className="bd-symrow-tag">{tags.join("·")}</span>}
@@ -288,7 +296,29 @@ function SymbolPicker({ value, onChange, weights = "", onWeights = () => {}, exc
                 ) : (
                   <span className="bd-symrow-w num" title="자금 비중">{weight.fraction} · {weight.percent}</span>
                 )}
+                {legRulesOn && (
+                  <button
+                    type="button"
+                    className={"bd-symrow-rule" + (legRules[symbol] ? " is-on" : "")}
+                    onClick={() => setOpenRule(openRule === symbol ? "" : symbol)}
+                    aria-expanded={openRule === symbol}
+                    aria-label={`${baseOf(symbol)} ${legRules[symbol] ? RULE_TYPES[legRules[symbol].rule_type]?.label || "규칙 바뀜" : "규칙 바꾸기"}`}
+                    title={legRules[symbol] ? "이 종목만 다른 규칙으로 돌리는 중" : "이 종목만 다른 규칙으로 돌리기"}
+                  >
+                    {legRules[symbol] ? RULE_TYPES[legRules[symbol].rule_type]?.label || "규칙 바뀜" : "규칙 바꾸기"}
+                  </button>
+                )}
                 <button type="button" className="bd-symrow-x" onClick={() => remove(symbol)} aria-label={`${symbol} 빼기`}><Icon name="x" size={14} strokeWidth={2.25} /></button>
+                </div>
+                {legRulesOn && openRule === symbol && (
+                  <LegRuleEditor
+                    symbol={symbol}
+                    exchange={exchange}
+                    rule={legRules[symbol] || withTypeDefaults({ ...defaultForm(), exchange }, "E")}
+                    onChange={(next) => onLegRule(symbol, next)}
+                    onClear={() => { onLegRule(symbol, null); setOpenRule(""); }}
+                  />
+                )}
               </li>
             );
           })}
@@ -319,8 +349,11 @@ function SymbolPicker({ value, onChange, weights = "", onWeights = () => {}, exc
 // 래퍼다. Studio 가 넘겨준다 — 폼 컴포넌트가 차트·시세 폴링까지 끌어안지 않도록
 // 자리만 비워 둔다. 넘어오지 않으면 기본 설정만 그대로 그린다.
 // intervalOptions — 봉 간격 선택지를 밖에서 준다(예: 테스트 기간에서 봉 수 한도를 넘는 간격은 disabled + title).
-export default function Builder({ form, setForm, chartSlot = null, variant = "default", intervalOptions = null, fieldError = null }) {
+// scope="leg" — 묶음 안 종목 하나의 규칙 판(LegRuleEditor 가 쓴다). 매매 방식 · 전략 조건 · 진입 조건만 그린다.
+//   종목 고르기를 그리지 않으므로 종목 행의 '규칙 바꾸기'(= LegRuleEditor)도 없다 — 둘이 서로를 부르는 고리를 여기서 끊는다.
+export default function Builder({ form, setForm, chartSlot = null, variant = "default", intervalOptions = null, fieldError = null, scope = "bundle" }) {
   const dense = variant === "dense";
+  const leg = scope === "leg";
   // 격자 — 기본은 sm 에서 2·3열, 조건 판은 컨테이너 너비에 따라 1·2열.
   const g2 = dense ? "bd-grid" : "grid grid-cols-1 sm:grid-cols-2 gap-4";
   const g3 = dense ? "bd-grid" : "grid grid-cols-1 sm:grid-cols-3 gap-4";
@@ -418,7 +451,8 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
     ) : (
       input
     );
-  const cap = num("initial_capital", `시작 자금 (${quote})`, {
+  // 레그 판에는 시작 자금 칸이 없다 — 서버가 종목 비중대로 나눠 덮어쓴다(Macro.for_leg).
+  const cap = leg ? null : num("initial_capital", `시작 자금 (${quote})`, {
     hint: money(form.initial_capital, moneySymbol, krwRate),
   });
 
@@ -428,7 +462,15 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
     // 촘촘한 판은 도움말 문장 대신 라벨 옆 ⓘ 하나(용어 'symbols').
     <Field label="종목" anchor="symbol" term={dense ? "symbols" : undefined} hint={dense ? undefined : "여러 종목은 쉼표로 나눠 써요. 자금을 종목 수만큼 균등하게 나눠 종목마다 따로 돌리고, 결과는 총합이에요."}>
       {dense ? (
-        <SymbolPicker key={exchange} exchange={exchange} value={form.symbol} weights={form.leg_weights || ""} onWeights={(value) => setForm((current) => ({ ...current, leg_weights: value }))} onChange={(value) => setForm((current) => normalizeExchange(current.exchange) === exchange ? { ...current, symbol: value } : current)} />
+        <SymbolPicker key={exchange} exchange={exchange} value={form.symbol} weights={form.leg_weights || ""} onWeights={(value) => setForm((current) => ({ ...current, leg_weights: value }))}
+          showLegRules={!leg}
+          legRules={form.leg_rules || {}}
+          onLegRule={(symbol, next) => setForm((current) => {
+            const rules = { ...(current.leg_rules || {}) };
+            if (next === null) delete rules[symbol]; else rules[symbol] = next;
+            return { ...current, leg_rules: rules };
+          })}
+          onChange={(value) => setForm((current) => normalizeExchange(current.exchange) === exchange ? { ...current, symbol: value } : current)} />
       ) : (
         <input className={inputCls} value={form.symbol} onChange={set("symbol")} placeholder={domestic ? "KRW-BTC 또는 KRW-BTC, KRW-ETH" : "BTCUSDT 또는 BTCUSDT, ETHUSDT"} />
       )}
@@ -527,7 +569,10 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
 
   // 차트를 정하는 값들 — 종목·매매 방식·포지션·봉 간격·기간. 차트 섹션 안으로
   // 들어가 "무엇을 볼지 정하고 바로 아래에서 본다"가 한 덩어리로 읽힌다.
-  const basicSettings = dense ? (
+  const basicSettings = leg ? (
+    // 레그 판 — 거래소 · 종목 · 포지션 · 봉 간격 · 기간은 묶음이 정한다. 규칙 고르기만 둔다.
+    dense ? <section className="bd-sec"><div className="bd-grid">{strategyField}</div></section> : <div>{strategyField}</div>
+  ) : dense ? (
     <section className="bd-sec">
       <div className="bd-grid">{exchangeField}</div>
       {domesticWarning}
@@ -549,7 +594,7 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
     <div className={dense ? "builder-dense" : "space-y-5"}>
       {/* 차트를 움직이는 설정과 차트를 한 블록으로 묶어 맨 위에 고정한다.
           Studio 가 스티키 섹션으로 감싸므로 여기서는 자리만 만든다. */}
-      {chartSlot ? chartSlot(basicSettings) : basicSettings}
+      {chartSlot && !leg ? chartSlot(basicSettings) : basicSettings}
 
       {/* rule-specific params */}
       <Group title={<>전략 조건 · <span className="text-slate-900">{meta.label}</span></>} anchor="strategy-params">
@@ -736,6 +781,7 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
       </Group>
 
       {/* common risk */}
+      {!leg && (
       <Group title="손실 제한" anchor="risk">
         <div className={g2y}>
           {num("invest_ratio_pct", "한 번에 사용할 자금 (%)", { term: "invest_ratio", hint: "시작 자금 중 한 번에 얼마를 쓸지 정해요" })}
@@ -768,11 +814,12 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
           </div>
         )}
       </Group>
+      )}
 
       {/* advanced common risk. For DCA (rule C) the time-based holding/cooldown
           controls don't apply (buy-and-accumulate, no round-trip exits), so they
           are disabled with a note; 일일 최대손실 still works (halts buys for the day). */}
-      {(() => {
+      {!leg && (() => {
         const isDca = rt === "C";
         return (
           <details className={dense ? "bd-sec bd-details" : "pt-5 border-t border-slate-200"} data-tour="advanced-risk">
@@ -817,6 +864,7 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
       })()}
 
       {/* fees */}
+      {!leg && (
       <details className={dense ? "bd-sec bd-details" : "pt-5 border-t border-slate-200"} data-tour="fees">
         <summary className={dense ? "bd-sum" : "t-label text-slate-700 cursor-pointer"}>
           {domestic ? "거래 비용" : "거래 비용과 펀딩비"}
@@ -841,9 +889,10 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
           </span>
         </div>}
       </details>
+      )}
 
       {/* leverage — a macro condition (backtest/paper only; C is excluded) */}
-      {!domestic && rt !== "C" && (() => {
+      {!leg && !domestic && rt !== "C" && (() => {
         const lev = Math.max(1, Math.round(Number(form.leverage) || 1));
         const risk = leverageRisk(lev);
         return (

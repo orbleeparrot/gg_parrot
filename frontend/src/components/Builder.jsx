@@ -1,5 +1,5 @@
 import { cloneElement, createContext, isValidElement, useContext, useEffect, useId, useRef, useState } from "react";
-import { RULE_TYPES, PERIOD_PRESETS, CANDLE_INTERVALS, MAX_LEVERAGE, FILTERABLE_RULE_TYPES, FILTER_KINDS, withTypeDefaults, evenWeights, defaultForm } from "../lib/macro.js";
+import { RULE_TYPES, PERIOD_PRESETS, CANDLE_INTERVALS, MAX_LEVERAGE, FILTERABLE_RULE_TYPES, FILTER_KINDS, withTypeDefaults, evenWeights, splitWeights, weightsAfterAdd, defaultForm } from "../lib/macro.js";
 import { EXCHANGES, isDomestic, normalizeExchange, quoteForExchange } from "../lib/exchanges.js";
 import InfoTooltip from "./InfoTooltip.jsx";
 import { api } from "../api.js";
@@ -145,7 +145,9 @@ const inputCls = "field";
 // 종목 고르기 — 위는 검색창, 아래는 고른 종목의 행 목록(로고 · 티커 · 시장 · 비중 · 빼기). 실제 거래 가능한 종목(/api/symbols)만 들어간다.
 // 글자를 치면 관련 종목이 검색창 아래 목록으로 뜨고 Enter·클릭으로 고른다. `CHIP` 처럼 base 만 쳐도 CHIPUSDT 로 맞춘다.
 const MAX_SYMBOLS = 5;
-function SymbolPicker({ value, onChange, weights = "", onWeights = () => {}, exchange = "binance", showLegRules = false, legRules = {}, onLegRule = () => {} }) {
+// onWeights 를 주지 않으면 비중은 **읽기 전용 표시**(1/N · NN%)다 — 기본 빌더는 스펙대로 균등이고,
+// 비중 입력은 프로 빌더(variant="pro")에서만 켠다.
+function SymbolPicker({ value, onChange, weights = "", onWeights = null, exchange = "binance", showLegRules = false, legRules = {}, onLegRule = () => {} }) {
   const [draft, setDraft] = useState("");
   const [openRule, setOpenRule] = useState("");
   const [open, setOpen] = useState(false);
@@ -161,11 +163,17 @@ function SymbolPicker({ value, onChange, weights = "", onWeights = () => {}, exc
   const showList = open && query.length > 0;
   const full = symbols.length >= MAX_SYMBOLS;
   const weight = portfolioWeight(symbols.length);
+  // 비중을 고칠 수 있는 판인지 — onWeights 가 있을 때만. 없으면 예전처럼 읽기 전용으로 1/N 을 보여 준다.
+  const canEditWeights = typeof onWeights === "function";
   // 비중 문자열이 비어 있으면 균등값을 보여 준다 — 사용자가 손대기 전에는 '균등' 이 사실이다.
-  const weightList = String(weights || "").split(",").map((part) => part.trim()).filter(Boolean);
+  // 빈 칸은 걸러내지 않고 자리를 지킨다 — 한 칸을 비우는 사이에 뒤 칸 숫자가 그 자리로 밀려오면
+  // 타이핑하는 중에 다른 종목의 비중이 바뀐다.
+  const weightList = splitWeights(weights);
   const even = evenWeights(symbols.length);
+  // 빈 칸은 빈 칸으로 돌려준다 — 균등값으로 되돌리면 지우는 동작 자체가 불가능해진다.
   const weightAt = (i) => (weightList[i] !== undefined ? weightList[i] : String(even[i] ?? ""));
   const setWeightAt = (i, next) => onWeights(symbols.map((_, idx) => (idx === i ? next : weightAt(idx))).join(", "));
+  // 합 계산에서만 빈 칸을 0 으로 센다 — 비운 칸이 있으면 합이 100 이 아니라고 알려 준다.
   const weightTotal = symbols.map((_, i) => Number(weightAt(i))).reduce((a, b) => a + (Number.isFinite(b) ? b : 0), 0);
   const weightsOff = symbols.length > 1 && Math.abs(weightTotal - 100) > 0.01;
   const infoOf = (symbol) => (items ? items.find((item) => item.symbol === symbol) : null);
@@ -178,6 +186,8 @@ function SymbolPicker({ value, onChange, weights = "", onWeights = () => {}, exc
     if (full) { setNote(`종목은 최대 ${MAX_SYMBOLS}개까지예요.`); return; }
     if (!canChoose(symbol)) { setNote("종목 목록이 변경되었거나 오래되었어요. 다시 확인한 뒤 선택해 주세요."); reload(); return; }
     onChange([...symbols, symbol].join(", "));
+    // 비중을 손댔다면 새 종목에도 몫을 준다 — 셈은 weightsAfterAdd 한 자리에서 한다.
+    if (canEditWeights && weightList.length) onWeights(weightsAfterAdd(symbols.map((_, i) => weightAt(i)).join(", ")));
     setDraft(""); setNote(""); setCursor(0);
   };
   const commit = () => {
@@ -189,7 +199,7 @@ function SymbolPicker({ value, onChange, weights = "", onWeights = () => {}, exc
   };
   const remove = (symbol) => {
     // 비중을 손댔다면 빠진 종목의 몫도 같이 뺀다 — 안 그러면 남은 종목에 엉뚱한 비중이 붙는다.
-    if (weightList.length) onWeights(weightList.filter((_, i) => symbols[i] !== symbol).join(", "));
+    if (canEditWeights && weightList.length) onWeights(weightList.filter((_, i) => symbols[i] !== symbol).join(", "));
     // 빠진 종목의 레그 규칙도 같이 지운다 — 같은 종목을 다시 넣었을 때 옛 규칙이 되살아나지 않게.
     if (legRules[symbol]) onLegRule(symbol, null);
     if (openRule === symbol) setOpenRule("");
@@ -281,7 +291,7 @@ function SymbolPicker({ value, onChange, weights = "", onWeights = () => {}, exc
                 <CoinIcon symbol={symbol} size={20} alt="" />
                 <span className="bd-symrow-sym num"><b>{baseOf(symbol)}</b><small>{quoteOf(symbol)}</small></span>
                 {tags.length > 0 && <span className="bd-symrow-tag">{tags.join("·")}</span>}
-                {symbols.length > 1 ? (
+                {symbols.length > 1 && canEditWeights ? (
                   <>
                     <input
                       className="bd-symrow-w num"
@@ -324,7 +334,7 @@ function SymbolPicker({ value, onChange, weights = "", onWeights = () => {}, exc
           })}
         </ul>
       )}
-      {symbols.length > 1 && (
+      {symbols.length > 1 && canEditWeights && (
         <div className="bd-weights-foot">
           {weightsOff && (
             <div className="bd-error" role="alert">
@@ -338,7 +348,7 @@ function SymbolPicker({ value, onChange, weights = "", onWeights = () => {}, exc
       )}
       <div className="bd-hint">
         {symbols.length > 1
-          ? `${symbols.length}종목 · ${weightList.length ? "종목마다 비중을 정했어요" : "자금을 종목 수만큼 균등하게 나눠요"} · 최대 ${MAX_SYMBOLS}개`
+          ? `${symbols.length}종목 · ${canEditWeights && weightList.length ? "종목마다 비중을 정했어요" : "자금을 종목 수만큼 똑같이 나눠요"} · 최대 ${MAX_SYMBOLS}개`
           : `여러 종목을 넣으면 자금을 나눠요 · 최대 ${MAX_SYMBOLS}개`}
       </div>
     </div>
@@ -353,6 +363,11 @@ function SymbolPicker({ value, onChange, weights = "", onWeights = () => {}, exc
 //   종목 고르기를 그리지 않으므로 종목 행의 '규칙 바꾸기'(= LegRuleEditor)도 없다 — 둘이 서로를 부르는 고리를 여기서 끊는다.
 export default function Builder({ form, setForm, chartSlot = null, variant = "default", intervalOptions = null, fieldError = null, scope = "bundle" }) {
   const dense = variant === "dense";
+  // 프로 판(variant="pro") — 넉넉한 격자를 그대로 쓰면서 묶음 기능(비중 입력 · 레그 규칙 · 묶음 한도)을 켠다.
+  // dense 는 "촘촘한 판" 이라는 레이아웃 이름이고 "프로" 가 아니다 — 그 둘을 섞으면 프로 빌더 전체가 다시 조판된다.
+  const pro = variant === "pro";
+  // 종목 고르기(검색 + 종목 행)를 쓰는 판 — 촘촘한 판과 프로 판. 기본 변형은 평문 입력칸이다.
+  const picker = dense || pro;
   const leg = scope === "leg";
   // 격자 — 기본은 sm 에서 2·3열, 조건 판은 컨테이너 너비에 따라 1·2열.
   const g2 = dense ? "bd-grid" : "grid grid-cols-1 sm:grid-cols-2 gap-4";
@@ -459,11 +474,13 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
   // 차트를 정하는 값들 — 종목·매매 방식·포지션·봉 간격·기간. 차트 섹션 안으로
   // 들어가 "무엇을 볼지 정하고 바로 아래에서 본다"가 한 덩어리로 읽힌다.
   const symbolField = (
-    // 촘촘한 판은 도움말 문장 대신 라벨 옆 ⓘ 하나(용어 'symbols').
-    <Field label="종목" anchor="symbol" term={dense ? "symbols" : undefined} hint={dense ? undefined : "여러 종목은 쉼표로 나눠 써요. 자금을 종목 수만큼 균등하게 나눠 종목마다 따로 돌리고, 결과는 총합이에요."}>
-      {dense ? (
-        <SymbolPicker key={exchange} exchange={exchange} value={form.symbol} weights={form.leg_weights || ""} onWeights={(value) => setForm((current) => ({ ...current, leg_weights: value }))}
-          showLegRules={!leg}
+    // 종목 고르기를 쓰는 판은 도움말 문장 대신 라벨 옆 ⓘ 하나(용어 'symbols').
+    <Field label="종목" anchor="symbol" term={picker ? "symbols" : undefined} hint={picker ? undefined : "여러 종목은 쉼표로 나눠 써요. 자금을 종목 수만큼 똑같이 나눠 종목마다 따로 돌리고, 결과는 총합이에요."}>
+      {picker ? (
+        // 비중 입력은 프로 판에서만 — onWeights 를 안 넘기면 SymbolPicker 가 읽기 전용 비중(1/N)을 그린다.
+        <SymbolPicker key={exchange} exchange={exchange} value={form.symbol}
+          {...(pro ? { weights: form.leg_weights || "", onWeights: (value) => setForm((current) => ({ ...current, leg_weights: value })) } : {})}
+          showLegRules={pro && !leg}
           legRules={form.leg_rules || {}}
           onLegRule={(symbol, next) => setForm((current) => {
             const rules = { ...(current.leg_rules || {}) };
@@ -591,7 +608,7 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
 
   return (
     <DenseContext.Provider value={dense}>
-    <div className={dense ? "builder-dense" : "space-y-5"}>
+    <div className={dense ? "builder-dense" : pro ? "builder-pro space-y-5" : "space-y-5"}>
       {/* 차트를 움직이는 설정과 차트를 한 블록으로 묶어 맨 위에 고정한다.
           Studio 가 스티키 섹션으로 감싸므로 여기서는 자리만 만든다. */}
       {chartSlot && !leg ? chartSlot(basicSettings) : basicSettings}
@@ -795,10 +812,10 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
             </div>
           </Field>
         </div>
-        {/* 묶음 한도 — 종목이 둘 이상일 때만. 레그(종목) 하나의 위험 관리와 섞이지 않게 라벨마다 '묶음' 을 붙인다. */}
-        {symbolCount > 1 && (
-          <div className={dense ? "bd-bundle-risk" : "mt-4"}>
-            {chk("use_bundle_risk", "묶음 한도 쓰기")}
+        {/* 묶음 한도 — 프로 판 · 종목이 둘 이상일 때만. 레그(종목) 하나의 위험 관리와 섞이지 않게 라벨마다 '묶음' 을 붙인다. */}
+        {pro && symbolCount > 1 && (
+          <div className="bd-bundle-risk">
+            {chk("use_bundle_risk", "묶음 한도 쓰기", { term: "bundle_risk" })}
             {form.use_bundle_risk && (
               <div className={g2y}>
                 {num("bundle_max_positions", "묶음 동시 보유 종목 수", {

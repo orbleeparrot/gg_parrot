@@ -8,7 +8,7 @@ import { EmptyState } from "../components/Page.jsx";
 import { api } from "../api.js";
 import { computeStrategyOverlay } from "../lib/indicators.js";
 import { isDomestic, normalizeExchange } from "../lib/exchanges.js";
-import { CANDLE_INTERVALS, buildMacro, validateDetailed } from "../lib/macro.js";
+import { CANDLE_INTERVALS, FIELDLESS_ERROR_FIELDS, buildMacro, validateDetailed } from "../lib/macro.js";
 import { seedForm } from "../lib/studioProSeed.js";
 import { analysisLabel, sameForm, warningText, windowBars } from "../lib/validationView.js";
 import { barScale, headlineNote, metricText } from "../lib/validationFormat.js";
@@ -167,6 +167,13 @@ export default function StudioPro() {
   // 그래서 따로 상태를 두지 않고 매 그림마다 '결과를 만든 조건' 과 '지금 조건' 을 견줘 낸다.
   const stale = report !== null && reportForm !== null && !sameForm(form, reportForm);
   const shownFormError = formError && sameForm(formError.form, form) ? formError : null;
+  // 비중 · 묶음 한도 · 레그 규칙 오류는 칸에 띄울 자리가 없다(종목 행 안의 생 입력 · 체크박스 · 펼치는 판).
+  // 검증을 누르기 전에도 바로 보여 준다 — 안 그러면 비중 합이 틀려 검증이 막히는 걸 누르고 나서야 안다.
+  const fieldlessError = (() => {
+    const problem = validateDetailed(form);
+    return problem && FIELDLESS_ERROR_FIELDS.includes(problem.field) ? problem : null;
+  })();
+  const formProblem = shownFormError || fieldlessError;
 
   async function runValidation() {
     // 조건 판이 이미 보여 주는 입력 검증을 요청 전에도 한 번 거친다 — 서버까지 보낼 필요 없는 오류를 여기서 막는다.
@@ -249,8 +256,10 @@ export default function StudioPro() {
       </section>
 
       <section className="pro-build" aria-label="조건">
-        <Builder form={form} setForm={setForm} intervalOptions={intervalOptions} />
-        {shownFormError ? <p className="pro-error" role="alert">{shownFormError.message}</p> : null}
+        {/* 프로 판 — 비중 입력 · 종목마다 규칙 바꾸기 · 묶음 한도가 여기서 켜진다(스펙 §10).
+            "dense" 를 넘기면 좁은 판용 격자로 판 전체가 다시 조판되므로 변형을 따로 둔다. */}
+        <Builder form={form} setForm={setForm} variant="pro" intervalOptions={intervalOptions} />
+        {formProblem ? <p className="pro-error" role="alert">{formProblem.message}</p> : null}
         <button type="button" className="pro-run" onClick={runValidation} disabled={busy}>
           {busy ? "검증 중…" : "검증하기"}
         </button>

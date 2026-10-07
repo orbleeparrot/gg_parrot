@@ -122,7 +122,7 @@
 @media (min-width: 768px) and (max-width: 1099px) and (pointer: fine) {
   .leaderboard-page .lb-board {
     --lb-return-gap: 0px;
-    --lb-columns: 32px 36px minmax(0, 1fr) minmax(112px, auto) 120px;
+    --lb-columns: 32px 36px minmax(0, 1fr) minmax(112px, auto) var(--lb-actions-w); /* 반응 칸은 '⋯'·언락 유무에 맞춘 board 값 — 120px 고정이면 버튼이 수익률 위로 넘쳤다 */
     --lb-areas: "rank coin name return actions" "rank coin summary return actions" "rank coin state return actions";
   }
   .leaderboard-page .lb-row { column-gap: 16px; row-gap: 4px; padding-block: 18px; align-items: center; }

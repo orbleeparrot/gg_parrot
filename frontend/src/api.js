@@ -197,6 +197,12 @@ export const api = {
   // 카드 네 장의 답으로 종목 후보를 받는다 — 하루 횟수는 이 호출에서 차감된다.
   askCandidates: (body) => req("/api/ask/candidates", { method: "POST", body: JSON.stringify(body), timeoutMs: 90_000 }),
   askMacros: (body, options = {}) => req("/api/ask/macros", { method: "POST", body: JSON.stringify(body), timeoutMs: 90_000, ...options }),
+  // 프로 빌더 코치 — 좁혀 가는 대화. start 만 하루 횟수를 깎고(동의 없으면 403, 한도 없으면 429), 나머지는 깎지 않는다.
+  // 네 끝점이 같은 모양을 돌려준다: { session_id, turn, max_turns, question, form_patch, form, done, wrapped_up, remaining_today }.
+  coachStart: (body = {}) => req("/api/coach/start", { method: "POST", body: JSON.stringify(body), timeoutMs: 30_000 }),
+  coachAnswer: ({ session_id, key, value }) => req("/api/coach/answer", { method: "POST", body: JSON.stringify({ session_id, key, value }), timeoutMs: 30_000 }),
+  coachMore: ({ session_id, key }) => req("/api/coach/more", { method: "POST", body: JSON.stringify({ session_id, key }), timeoutMs: 30_000 }),
+  coachBack: ({ session_id }) => req("/api/coach/back", { method: "POST", body: JSON.stringify({ session_id }), timeoutMs: 30_000 }),
   // 알림(헤더 종): 목록 · 안 읽은 수 · 읽음 처리
   myNotifications: ({ after, ...options } = {}) =>
     req(`/api/me/notifications${Number.isFinite(Number(after)) && after !== undefined ? `?after=${Number(after)}` : ""}`, { timeoutMs: 10_000, ...options }),

@@ -75,6 +75,23 @@ def human_summary(macro: Macro) -> str:
         from .entry_filter import make_filter
         parts.append(f"진입 조건: {make_filter(macro).note()}")
 
+    if macro.is_portfolio():
+        specs = macro.leg_specs()
+        weights = [spec.weight for spec in specs]
+        if max(weights) - min(weights) < 0.02:
+            parts.append(f"종목 {len(specs)}개 · 자금 균등")
+        else:
+            # 부동소수 찌꺼기는 소수 둘째 자리에서 자른다(프런트 weightPhrase 와 같은 결과).
+            shares = " · ".join(f"{_coin(spec.symbol)} {round(spec.weight, 2):g}%" for spec in specs)
+            parts.append(f"종목 비중: {shares}")
+        if any(spec.rule_type is not None for spec in specs):
+            parts.append("종목별 규칙을 따로 정했어요")
+        if macro.bundle_risk is not None:
+            # 문구는 집행자가 낸다 — 요약이 따로 만들면 두 벌이 어긋난다.
+            from .bundle import BundleGate
+            note = BundleGate(macro.bundle_risk, macro.initial_capital or 1.0).note()
+            parts.append(f"묶음 한도: {note}")
+
     if macro.exchange != "binance":
         from ..exchanges import capabilities
         parts.insert(0, f"{capabilities(macro.exchange)['label']} · KRW 현물")

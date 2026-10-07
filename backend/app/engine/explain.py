@@ -139,6 +139,11 @@ def _points(macro: Macro, r: BacktestResult) -> List[str]:
             "조건이 아닐 때는 사지 않아."
         )
 
+    if macro.bundle_risk is not None:
+        from .bundle import BundleGate
+        note = BundleGate(macro.bundle_risk, macro.initial_capital or 1.0).note()
+        pts.append(f"묶음 한도를 걸어서 {note} 만 들어가. 한도에 닿으면 새로 안 사고, 들고 있는 건 그대로 팔아.")
+
     return pts
 
 

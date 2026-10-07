@@ -13,11 +13,13 @@ import hashlib
 import json
 import logging
 import os
+import re
 import threading
 import time
 from collections import OrderedDict
 from concurrent.futures import Future
 from dataclasses import dataclass, field
+from email.utils import format_datetime, parsedate_to_datetime
 from typing import Callable, TypeVar
 
 import httpx
@@ -102,6 +104,49 @@ def _translate_error(error: BaseException) -> AiProviderError:
     return AiStatusError(str(error))
 
 
+def _provider_failure_diagnostics(error: BaseException) -> dict:
+    """Bounded provider metadata only; never serialize error bodies or requests."""
+    def label(value):
+        if (isinstance(value, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", value)
+                and not value.startswith(("sk_", "rnd_", "pnu_", "gho_"))):
+            return value
+        return None
+
+    response = getattr(error, "response", None)
+    headers = getattr(response, "headers", None) or {}
+    request_id = headers.get("x-request-id") or getattr(error, "request_id", None)
+    if not isinstance(request_id, str) or not re.fullmatch(
+        r"(?:req_[a-zA-Z0-9]{16,96}|[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12})", request_id,
+    ):
+        request_id = None
+    safe_headers = {}
+    number = r"[0-9]{1,12}(?:\.[0-9]{1,6})?"
+    duration = r"(?:[0-9]{1,8}(?:\.[0-9]{1,6})?(?:ms|s|m|h|d)){1,6}"
+    names = ["retry-after", "retry-after-ms"] + [
+        f"x-ratelimit-{kind}-{dimension}"
+        for kind in ("limit", "remaining", "reset")
+        for dimension in ("requests", "tokens", "project-tokens")
+    ]
+    for name in names:
+        value = headers.get(name)
+        if not isinstance(value, str) or len(value) > 96:
+            continue
+        pattern = duration if "-reset-" in name else number
+        if re.fullmatch(pattern, value):
+            safe_headers[name] = value
+        elif name == "retry-after":
+            try:
+                # Canonicalize dates instead of logging arbitrary header text.
+                date = parsedate_to_datetime(value)
+                if date.utcoffset() is not None and date.utcoffset().total_seconds() == 0:
+                    safe_headers[name] = format_datetime(date, usegmt=True)
+            except (TypeError, ValueError, OverflowError):
+                pass
+    return {"error_code": label(getattr(error, "code", None)),
+            "error_type": label(getattr(error, "type", None)),
+            "request_id": request_id, "headers": safe_headers}
+
+
 # --- the one contract every call site uses --------------------------------
 @dataclass(frozen=True)
 class TextBlock:
@@ -173,10 +218,11 @@ class _Messages:
             # 실패도 요청 한 건이다 — 여기서 세야 재시도·캐시 히트와 무관하게 과금 단위와 맞는다.
             record_openai_usage(model=model, purpose=purpose, usage=None, ok=False)
             mapped = _translate_error(error)
-            # Fixed diagnostics only: never emit provider bodies, prompts or keys.
-            logger.warning("AI provider failure: provider=openai model=%s purpose=%s release=%s category=%s http_status=%s",
+            # Allowlisted metadata only: never emit provider bodies, prompts or keys.
+            logger.warning("AI provider failure: provider=openai model=%s purpose=%s release=%s category=%s http_status=%s diagnostics=%s",
                            model, purpose, os.environ.get("RENDER_GIT_COMMIT", "local")[:12],
-                           type(mapped).__name__, mapped.status_code)
+                           type(mapped).__name__, mapped.status_code,
+                           json.dumps(_provider_failure_diagnostics(error), sort_keys=True, separators=(",", ":")))
             try:
                 from .ai_provider_health import pause
                 pause(mapped)

@@ -2906,10 +2906,10 @@ def test_browser_enrichment_preserves_rss_on_all_source_failures(monkeypatch):
     assert result["browser_enrichment"]["status"] == "error"
 
 
-def test_browser_enrichment_old_archive_does_not_displace_recent_rss(monkeypatch):
+def test_browser_enrichment_old_archive_does_not_displace_recent_rss(monkeypatch, fixed_news_clock):
     monkeypatch.setenv("POSITION_NEWS_BROWSER_ENRICHMENT_ENABLED", "true")
     recent = [{"title": f"Bitcoin news item {index}", "url": f"https://example.com/{index}",
-               "published": "2026-09-07T00:00:00Z"} for index in range(10)]
+               "published": fixed_news_clock.isoformat()} for index in range(10)]
     old = {"title": "Bitcoin archive news", "url": "https://example.com/old", "published": "2020-01-01T00:00:00Z"}
     monkeypatch.setattr(news, "_cached_browser_pages", lambda pages:
                         _browser_batch(pages, {"coindesk_asset_search_0": [old]}))

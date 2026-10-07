@@ -8,7 +8,7 @@ import { Icon } from "./icons.jsx";
 
 // 규칙 객체는 폼 모양(defaultForm 바탕)이다 — buildLegs 가 buildParams 로 읽는다.
 // 종목 · 거래소는 묶음이 정하므로 판에는 넘기되 저장하는 규칙에는 남기지 않는다.
-export default function LegRuleEditor({ symbol, rule, exchange = "binance", onChange, onClear }) {
+export default function LegRuleEditor({ id, symbol, rule, exchange = "binance", onChange, onClear }) {
   const form = { ...rule, symbol, exchange };
   const setForm = (next) => {
     const value = typeof next === "function" ? next(form) : next;
@@ -16,7 +16,7 @@ export default function LegRuleEditor({ symbol, rule, exchange = "binance", onCh
     onChange(saved);
   };
   return (
-    <div className="bd-legrule" aria-label={`${symbol} 규칙`}>
+    <div className="bd-legrule" id={id} aria-label={`${symbol} 규칙`}>
       <Builder form={form} setForm={setForm} variant="dense" scope="leg" />
       <p className="bd-hint bd-legrule-note">시작 자금은 위 종목 비중대로 나뉘어요. 포지션 · 기간 · 위험 관리는 묶음 설정을 따라요.</p>
       <button type="button" className="bd-legrule-clear" onClick={onClear}>

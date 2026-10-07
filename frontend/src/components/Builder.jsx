@@ -304,7 +304,11 @@ function SymbolPicker({ value, onChange, weights = "", onWeights = null, exchang
                     <span className="bd-symrow-pct" aria-hidden="true">%</span>
                   </>
                 ) : (
-                  <span className="bd-symrow-w num" title="자금 비중">{weight.fraction} · {weight.percent}</span>
+                  // 읽기 전용 — 비중을 정한 매크로(프로 빌더에서 만든 것)를 들고 왔으면 그 비중을 적는다.
+                  // 손대지 않았으면 전과 같이 1/N 이다. 여기서 1/N 을 고집하면 70/30 묶음이 50% 로 보인다.
+                  <span className="bd-symrow-w num" title="자금 비중">
+                    {weightList.length && weightAt(index) !== "" ? `${weightAt(index)}%` : `${weight.fraction} · ${weight.percent}`}
+                  </span>
                 )}
                 {legRulesOn && (
                   <button
@@ -312,6 +316,7 @@ function SymbolPicker({ value, onChange, weights = "", onWeights = null, exchang
                     className={"bd-symrow-rule" + (legRules[symbol] ? " is-on" : "")}
                     onClick={() => setOpenRule(openRule === symbol ? "" : symbol)}
                     aria-expanded={openRule === symbol}
+                    aria-controls={`${listId}-rule-${symbol}`}
                     aria-label={`${baseOf(symbol)} ${legRules[symbol] ? RULE_TYPES[legRules[symbol].rule_type]?.label || "규칙 바뀜" : "규칙 바꾸기"}`}
                     title={legRules[symbol] ? "이 종목만 다른 규칙으로 돌리는 중" : "이 종목만 다른 규칙으로 돌리기"}
                   >
@@ -322,6 +327,7 @@ function SymbolPicker({ value, onChange, weights = "", onWeights = null, exchang
                 </div>
                 {legRulesOn && openRule === symbol && (
                   <LegRuleEditor
+                    id={`${listId}-rule-${symbol}`}
                     symbol={symbol}
                     exchange={exchange}
                     rule={legRules[symbol] || withTypeDefaults({ ...defaultForm(), exchange }, "E")}
@@ -348,7 +354,7 @@ function SymbolPicker({ value, onChange, weights = "", onWeights = null, exchang
       )}
       <div className="bd-hint">
         {symbols.length > 1
-          ? `${symbols.length}종목 · ${canEditWeights && weightList.length ? "종목마다 비중을 정했어요" : "자금을 종목 수만큼 똑같이 나눠요"} · 최대 ${MAX_SYMBOLS}개`
+          ? `${symbols.length}종목 · ${weightList.length ? "종목마다 비중을 정했어요" : "자금을 종목 수만큼 똑같이 나눠요"} · 최대 ${MAX_SYMBOLS}개`
           : `여러 종목을 넣으면 자금을 나눠요 · 최대 ${MAX_SYMBOLS}개`}
       </div>
     </div>
@@ -477,9 +483,11 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
     // 종목 고르기를 쓰는 판은 도움말 문장 대신 라벨 옆 ⓘ 하나(용어 'symbols').
     <Field label="종목" anchor="symbol" term={picker ? "symbols" : undefined} hint={picker ? undefined : "여러 종목은 쉼표로 나눠 써요. 자금을 종목 수만큼 똑같이 나눠 종목마다 따로 돌리고, 결과는 총합이에요."}>
       {picker ? (
-        // 비중 입력은 프로 판에서만 — onWeights 를 안 넘기면 SymbolPicker 가 읽기 전용 비중(1/N)을 그린다.
-        <SymbolPicker key={exchange} exchange={exchange} value={form.symbol}
-          {...(pro ? { weights: form.leg_weights || "", onWeights: (value) => setForm((current) => ({ ...current, leg_weights: value })) } : {})}
+        // 비중을 **고치는** 것은 프로 판에서만 — onWeights 를 안 넘기면 SymbolPicker 가 읽기 전용으로 그린다.
+        // weights 는 두 판에 다 넘긴다: 비중을 정한 매크로를 기본 빌더로 들고 왔을 때 70/30 을 1/N 으로
+        // 적으면 거짓이 되므로, 고칠 수 없어도 사실은 보여 준다.
+        <SymbolPicker key={exchange} exchange={exchange} value={form.symbol} weights={form.leg_weights || ""}
+          {...(pro ? { onWeights: (value) => setForm((current) => ({ ...current, leg_weights: value })) } : {})}
           showLegRules={pro && !leg}
           legRules={form.leg_rules || {}}
           onLegRule={(symbol, next) => setForm((current) => {

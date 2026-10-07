@@ -148,3 +148,14 @@ test("기본 빌더의 종목 행은 읽기 전용 비중을 그대로 보여 �
   assert.match(textOf(html), /1\/2 · 50%/);
   assert.match(textOf(html), /자금을 종목 수만큼 똑같이 나눠요/);
 });
+
+test("비중을 정한 매크로를 기본 빌더에 들고 오면 그 비중을 읽기 전용으로 보여 준다", async () => {
+  // 고칠 수는 없지만 1/N 이라고 적으면 거짓이다 — 70/30 묶음이 50% 로 보인다.
+  const html = await renderBasic(form({ symbol: "BTCUSDT, ETHUSDT", leg_weights: "70, 30" }));
+  const text = textOf(html);
+  assert.match(text, /70%/);
+  assert.match(text, /30%/);
+  assert.doesNotMatch(text, /1\/2 · 50%/);
+  assert.match(text, /종목마다 비중을 정했어요/);
+  assert.equal(weightInputs(html).length, 0, "그래도 고칠 수는 없다 — 비중 입력은 프로 빌더의 것이다");
+});

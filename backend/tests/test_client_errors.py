@@ -60,7 +60,7 @@ def test_same_error_on_the_same_day_is_one_row_with_a_count():
 
 def test_rows_older_than_thirty_days_are_pruned(monkeypatch):
     client_errors.record("unhandled", "/news", "old error", now_ms=NOON_KST - 31 * DAY_MS)
-    monkeypatch.setattr(client_errors, "_last_prune", 0.0)
+    monkeypatch.setattr(client_errors, "_last_prune", float("-inf"))  # 갓 켠 머신은 monotonic 이 1시간보다 작다
     client_errors.record("unhandled", "/news", "new error", now_ms=NOON_KST)
     assert [row.message for row in _rows()] == ["new error"]
 

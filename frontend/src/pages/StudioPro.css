@@ -4,6 +4,24 @@
 .pro-title { margin: 0; font-size: 20px; font-weight: 700; }
 .pro-build { display: grid; gap: 12px; }
 
+/* 넓은 화면에서 두 열 — 코치는 스크롤을 따라온다. 좁은 화면에서는 위로 올라간다. */
+.pro-cols { display: grid; gap: 16px; }
+.pro-main { display: grid; gap: 16px; min-width: 0; }
+.pro-side { display: grid; gap: 10px; align-content: start; }
+.pro-coach-changed { margin: 0; padding: 8px 10px; border-radius: 10px; background: rgb(var(--c-indigo-50));
+                     color: rgb(var(--c-indigo-700)); font-size: 13px; }
+@media (min-width: 1100px) {
+  .pro { max-width: 1320px; }
+  .pro-cols { grid-template-columns: minmax(0, 1fr) 340px; align-items: start; }
+  .pro-side { position: sticky; top: 16px; }
+  /* 좁은 화면에서는 코치가 조건 판 위로 올라간다(order). 두 열에서는 제자리. */
+  .pro-side { order: 0; }
+}
+@media (max-width: 1099px) {
+  .pro-cols { grid-template-columns: minmax(0, 1fr); }
+  .pro-side { order: -1; }
+}
+
 /* 차트 — 기본 빌더는 조건 옆 칸을 채우지만 프로는 한 열이라 높이를 정해 준다.
    CandleChart(variant="studio") 는 높이가 정해진 세로 플렉스 부모를 기대한다. */
 .pro-chart { border: 1px solid rgb(var(--c-slate-200)); border-radius: 12px; background: rgb(var(--c-surface)); overflow: hidden; }

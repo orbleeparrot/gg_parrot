@@ -1,9 +1,10 @@
-// 프로 빌더 — 기존 조건 판(Builder) + 검증 결과 + 근거. 코치 패널 자리는 별도 계획에서 채운다.
+// 프로 빌더 — 왼쪽은 기존 조건 판(Builder) + 검증 결과 + 근거, 오른쪽은 코치 패널(좁혀 가는 대화로 판을 채운다).
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import Builder from "../components/Builder.jsx";
 import BuilderModeMenu from "../components/BuilderModeMenu.jsx";
 import CandleChart from "../components/CandleChart.jsx";
+import CoachPanel from "../components/CoachPanel.jsx";
 import { EmptyState } from "../components/Page.jsx";
 import { api } from "../api.js";
 import { computeStrategyOverlay } from "../lib/indicators.js";
@@ -15,6 +16,32 @@ import { barScale, headlineNote, metricText } from "../lib/validationFormat.js";
 import "./StudioPro.css";
 
 const WINDOW_COUNT = 4;
+const COACH_DONE_TEXT = "코치가 판을 다 채웠어요 · 아래에서 검증해 보세요.";
+
+// 코치가 방금 바꾼 칸을 한 줄로 알려 준다. 조건 판(Builder) 안의 칸을 직접 깜빡이게 하려면 Builder 에
+// 새 prop 을 달고 내부 격자까지 손대야 하므로, 코치 패널 쪽에 "방금 바꾼 것" 한 줄을 두는 쪽을 골랐다.
+// 패치 키는 여러 개가 한꺼번에 오므로(규칙 하나가 기본값 열 칸을 함께 바꾼다) 묶음 이름으로 줄인다.
+const PATCH_GROUPS = [
+  ["규칙", (key) => key === "rule_type"],
+  ["봉 간격", (key) => key === "candle_interval"],
+  ["종목", (key) => key === "symbol"],
+  ["비중", (key) => key === "leg_weights"],
+  ["기간", (key) => key === "preset" || key === "start" || key === "end"],
+  ["시작 자금", (key) => ["initial_capital", "amount_per_buy", "base_order_size", "safety_order_size"].includes(key)],
+  ["손절 · 투입 비율", (key) => ["use_stop_loss", "stop_loss_pct", "invest_ratio_pct"].includes(key)],
+  ["진입 조건", (key) => key === "use_entry_filter" || key.startsWith("filter_")],
+  ["묶음 한도", (key) => key === "use_bundle_risk" || key.startsWith("bundle_")],
+];
+
+// 바뀐 칸 묶음의 이름들. 어느 묶음에도 안 드는 키(규칙마다 딸려 오는 세부 값)는 '규칙' 으로 셈한다.
+export function patchGroups(patch) {
+  const keys = Object.keys(patch || {});
+  if (!keys.length) return [];
+  const names = PATCH_GROUPS.filter(([, match]) => keys.some(match)).map(([name]) => name);
+  const matched = new Set(keys.filter((key) => PATCH_GROUPS.some(([, match]) => match(key))));
+  if (keys.length > matched.size && !names.includes("규칙")) names.unshift("규칙");
+  return names;
+}
 
 const errorText = (err, fallback) => (err && typeof err.message === "string" && err.message ? err.message : fallback);
 const dayOf = (stamp) => (typeof stamp === "string" && stamp ? stamp.slice(0, 10) : "");
@@ -117,6 +144,8 @@ export default function StudioPro() {
   const [explainError, setExplainError] = useState("");
   const [busy, setBusy] = useState(false);
   const [explaining, setExplaining] = useState(false);
+  const [coachChanged, setCoachChanged] = useState([]); // 코치가 방금 바꾼 칸 묶음 이름
+  const [coachDone, setCoachDone] = useState(false);
   const runId = useRef(0);
   const navigate = useNavigate();
 
@@ -159,6 +188,14 @@ export default function StudioPro() {
     let macro = null;
     try { macro = buildMacro(form); } catch (_) { macro = null; }
     navigate(target.path, macro ? { state: { macro, source: "builder-mode" } } : undefined);
+  };
+
+  // 코치가 올린 패치 — 이번 턴의 몫만 오므로 지금 조건에 **병합**한다(되돌리기는 쌓인 전부를 보낸다).
+  // 조건이 바뀌면 아래 '지난 결과' 표시는 form 과 reportForm 을 견주어 저절로 뜬다 — 따로 켤 것이 없다.
+  const applyCoachPatch = (patch) => {
+    setForm((previous) => ({ ...previous, ...patch }));
+    setCoachChanged(patchGroups(patch));
+    setCoachDone(false);
   };
 
   // 조건을 고치면 화면의 결과는 이전 설정의 것이다 — 지우지 않고 '지난 결과' 로 표시한다.
@@ -230,6 +267,9 @@ export default function StudioPro() {
       <h1 className="pro-title">
         <BuilderModeMenu mode="pro" onSwitch={switchMode} />
       </h1>
+      {/* 두 열 — 왼쪽은 차트 · 조건 판 · 결과, 오른쪽은 코치. 좁은 화면에서는 코치가 위로 올라간다(CSS). */}
+      <div className="pro-cols">
+      <div className="pro-main">
       {/* 차트 — 조건을 고치면 종목·봉 간격·보조지표가 바로 따라온다. 봉 간격은 차트 도구줄에서도 바뀐다.
           판 머리는 따로 두지 않는다: CandleChart(studio) 의 도구줄이 곧 머리다(기본 빌더와 같다). */}
       <section className="pro-chart" aria-label="차트 · 보조지표">
@@ -326,6 +366,20 @@ export default function StudioPro() {
           </div>
         </section>
       ) : null}
+      </div>
+
+      <aside className="pro-side" aria-label="코치">
+        <CoachPanel
+          exchange={form.exchange}
+          onPatch={applyCoachPatch}
+          onDone={() => setCoachDone(true)}
+        />
+        {coachChanged.length > 0 ? (
+          <p className="pro-coach-changed" role="status">방금 {coachChanged.join(" · ")}을 바꿨어요</p>
+        ) : null}
+        {coachDone ? <p className="pro-note">{COACH_DONE_TEXT}</p> : null}
+      </aside>
+      </div>
     </div>
   );
 }

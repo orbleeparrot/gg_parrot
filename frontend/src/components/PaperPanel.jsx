@@ -4,6 +4,8 @@ import { api } from "../api.js";
 import { isLoggedIn } from "../lib/auth.js";
 import InfoTooltip from "./InfoTooltip.jsx";
 import { baseOf, fmtMoney, fmtMoneyCompact, fmtKrw, fmtPrice, fmtQty, quoteOf } from "../lib/format.js";
+import { isEvenWeights } from "../lib/portfolio.js";
+import { macroSymbols } from "../lib/portfolio.js";
 import { useUsdKrw } from "../lib/usdkrw.js";
 import usePaperSession from "../hooks/usePaperSession.js";
 import { exchangeLabel, isDomestic } from "../lib/exchanges.js";
@@ -231,7 +233,7 @@ export function PaperPanelView({ macro: currentMacro, valErr, onRegister, contro
           </button>
         )}
         <span className="t-caption text-slate-500">
-          <span className="num">{macro.symbols && macro.symbols.length > 1 ? macro.symbols.map(baseOf).join(" · ") : macro.symbol}</span> · {(running ? startedMode : mode) === "replay" ? "리플레이" : "실시간"}
+          <span className="num">{macroSymbols(macro).length > 1 ? macroSymbols(macro).map(baseOf).join(" · ") : macro.symbol}</span> · {(running ? startedMode : mode) === "replay" ? "리플레이" : "실시간"}
           {status && !(status.legs || []).length && status.last_price > 0 && (
             <> · 현재가 <span className="num">{fmtPrice(status.last_price)}</span> {quoteOf(macro.symbol)}</>
           )}
@@ -296,7 +298,7 @@ export function PaperPanelView({ macro: currentMacro, valErr, onRegister, contro
         </div>
       )}
 
-      {/* 멀티종목: 종목별 수익률 — 위 수익률은 총합, 자본은 종목 수로 나눠 각각 돌아간다 */}
+      {/* 멀티종목: 종목별 수익률 — 위 수익률은 총합, 자본은 종목 비중(없으면 종목 수)대로 나눠 각각 돌아간다 */}
       {status && (status.legs || []).length > 1 && (
         <div className="flex flex-wrap gap-x-4 gap-y-1 t-small" aria-label="종목별 현황">
           {status.legs.map((leg) => (
@@ -307,7 +309,8 @@ export function PaperPanelView({ macro: currentMacro, valErr, onRegister, contro
               </span>
             </span>
           ))}
-          <span className="t-caption text-slate-500">자본을 종목 수로 나눠 각각 돌리고, 수익률은 총합이에요.</span>
+          {/* 세션은 비중을 정한 묶음이면 그 비중대로 돈다 — 화면이 '균등' 이라고 말하면 거짓이 된다. */}
+          <span className="t-caption text-slate-500">자본을 종목 {isEvenWeights(macro.legs) ? "수로 똑같이" : "비중대로"} 나눠 각각 돌리고, 수익률은 총합이에요.</span>
         </div>
       )}
 

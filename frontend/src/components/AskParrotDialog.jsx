@@ -27,6 +27,7 @@ import {
 } from "../lib/askView.js";
 import { coinName } from "../lib/macroSource.js";
 import { baseOf, quoteOf } from "../lib/format.js";
+import { macroSymbols } from "../lib/portfolio.js";
 import { RULE_TYPES } from "../lib/macro.js";
 import { EXCHANGES, exchangeLabel, isDomestic, quoteForExchange } from "../lib/exchanges.js";
 import "./AskParrotDialog.css";
@@ -168,7 +169,7 @@ function Why({ item, compact = false }) {
 // 매크로 후보 카드 — 머리 한 줄(순위 · 종목 · 매매 방식 · 시장 · 불러오기) + [성과·조건 | 왜 이 조합?].
 function ResultCard({ item, rank, best, compact = false, onLoad }) {
   const macro = item.macro || {};
-  const symbols = Array.isArray(macro.symbols) && macro.symbols.length > 1 ? macro.symbols : [macro.symbol].filter(Boolean);
+  const symbols = macroSymbols(macro);
   const first = symbols[0] || "";
   const { name, by } = splitRuleLabel(RULE_TYPES[item.rule_type]?.label ?? item.label);
   const m = item.metrics || {};

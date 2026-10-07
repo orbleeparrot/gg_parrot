@@ -59,3 +59,22 @@ test("국내 거래소 요약 앞의 '업비트 · KRW 현물' 은 전략 칸에
   const bithumb = leaderboardStrategy({ ...entry, exchange: "bithumb", human_summary: entry.human_summary.replace("업비트", "빗썸") });
   assert.equal(bithumb.description, "변동성 돌파 (k=0.6)");
 });
+
+test("묶음 요약의 비중 · 한도는 머리말과 함께 한 조각으로 남는다", () => {
+  // 서버 요약은 묶음 줄 안쪽 구분자로 ", " 를 쓴다 — 이 함수는 " · " 로 쪼개 머리말(BTC · 롱)을 걷어내므로,
+  // 안쪽에 " · " 가 있으면 "ETH 30%" 가 머리말 없는 조각으로 설명에 떠돈다.
+  const data = leaderboardStrategy(entry({
+    human_summary: "BTC · 롱 · 평단 대비 +5% 익절 · 자금 37.5% 투입 · 종목 비중: BTC 70%, ETH 30%"
+      + " · 묶음 한도: 한 번에 1종목까지, 총 노출 60% 까지",
+    macro: { rule_type: "A", position_side: "long", risk: { invest_ratio: .375 },
+      legs: [{ symbol: "BTCUSDT", weight: 70 }, { symbol: "ETHUSDT", weight: 30 }],
+      bundle_risk: { max_positions: 1, max_exposure_pct: 60 } },
+  }));
+  const pieces = data.description.split(" · ");
+  assert.ok(pieces.includes("종목 비중: BTC 70%, ETH 30%"), data.description);
+  assert.ok(pieces.includes("묶음 한도: 한 번에 1종목까지, 총 노출 60% 까지"), data.description);
+  for (const piece of pieces) {
+    assert.doesNotMatch(piece, /^[A-Z]+ \d+(\.\d+)?%$/, `머리말 없는 비중 조각: ${piece}`);
+    assert.doesNotMatch(piece, /^총 노출/, `머리말 없는 한도 조각: ${piece}`);
+  }
+});

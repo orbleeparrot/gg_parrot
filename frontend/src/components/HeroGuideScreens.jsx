@@ -501,6 +501,7 @@ export function BacktestScene({ form, backtest }) {
               dataSource={backtest.dataSource}
               periodLabel={backtest.periodLabel}
               symbol={backtest.testedMacro?.symbol || form.symbol}
+              legs={backtest.testedMacro?.legs || null}
               leverage={backtest.testedMacro?.leverage || 1}
               /* 안내 흐름에서는 배치 편집 버튼을 감춘다 — 저장된 배치는 그대로 반영된다. */
               customizable={false}

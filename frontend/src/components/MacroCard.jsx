@@ -8,7 +8,7 @@ import { RULE_TYPES, CANDLE_INTERVALS, entryFilterPhrase } from "../lib/macro.js
 import { exchangeLabel } from "../lib/exchanges.js";
 import { leaderboardStrategy } from "../lib/leaderboardStrategy.js";
 import { strategyPhrases } from "../lib/strategyText.js";
-import { bundleLimitPhrase, portfolioTitle, portfolioWeight, weightPhrase } from "../lib/portfolio.js";
+import { bundleLimitPhrase, isEvenWeights, portfolioTitle, portfolioWeight, weightPhrase } from "../lib/portfolio.js";
 import "./MacroCard.css";
 
 const pct = (v, digits = 2) => `${v >= 0 ? "+" : ""}${Number(v).toFixed(digits)}%`;
@@ -50,7 +50,8 @@ function macroFacts({ macro, symbol, symbols, result, futures }) {
   const interval = CANDLE_INTERVALS.find((i) => i.value === macro.candle_interval)?.label || "";
   const facts = [];
   // 종목마다 비중을 따로 준 묶음(legs)은 균등이 아니다 — "자금 균등" 이라 쓰면 거짓이 되므로 비중을 그대로 적는다.
-  const legs = Array.isArray(macro.legs) && macro.legs.length > 1 ? macro.legs : null;
+  // 균등이냐 아니냐는 서버 요약과 같은 자리(isEvenWeights)로 가린다 — 한쪽만 고치면 카드와 요약이 갈린다.
+  const legs = Array.isArray(macro.legs) && macro.legs.length > 1 && !isEvenWeights(macro.legs) ? macro.legs : null;
   if (legs) {
     facts.push({ k: `종목 비중 ${legs.length}개`, v: weightPhrase(legs), num: true, wide: true });
   } else if (symbols.length > 1) {
@@ -175,7 +176,7 @@ export default function MacroCard({ macro, result, perSymbol = [], strategyEntry
           )}
           <div className="sd-card-id">
             <div className="sd-card-ticker num"><strong>{multi ? portfolioTitle(symbols) : baseOf(symbol)}</strong><small>{quoteOf(symbol)}</small></div>
-            <div className="sd-card-rule" title="매매 방식">{ruleLabel}{multi ? ` · ${symbols.length}종목 ${Array.isArray(macro.legs) && macro.legs.length > 1 ? "비중 지정" : "자금 균등"}` : ""}</div>
+            <div className="sd-card-rule" title="매매 방식">{ruleLabel}{multi ? ` · ${symbols.length}종목 ${isEvenWeights(macro.legs) ? "자금 균등" : "비중 지정"}` : ""}</div>
           </div>
           <div className="sd-card-tags">
             <span className="sd-card-tag">{exchangeLabel(macro.exchange)}</span>

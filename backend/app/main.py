@@ -77,6 +77,7 @@ from . import profile as profile_mod
 from . import points as points_mod
 from . import quests as quests_mod
 from . import ask as ask_mod
+from . import coach as coach_mod
 from . import notifications as notifications_mod
 from . import notification_stream
 from . import admin as admin_mod
@@ -696,6 +697,80 @@ def ask_candidates_route(
         raise HTTPException(status_code=exc.status, detail=exc.message)
 
 
+# ── 프로 빌더 코치 패널 — 좁혀 가는 대화로 조건 판을 채운다. 로그인 · 고지 동의 필수, 한도는 /start 에서만 깎인다. ──
+class CoachStartBody(BaseModel):
+    exchange: str = "binance"  # 프런트가 지금 보고 있는 거래소 — 국내면 그래프가 규칙 K 를 뺀다.
+
+
+class CoachAnswerBody(BaseModel):
+    session_id: int
+    key: str
+    value: str
+
+
+class CoachMoreBody(BaseModel):
+    session_id: int
+    key: str
+
+
+class CoachBackBody(BaseModel):
+    session_id: int
+
+
+@app.post("/api/coach/start")
+def coach_start(
+    request: Request,
+    body: Optional[CoachStartBody] = None,
+    account: User = Depends(auth_mod.current_user_in_session),
+    db: Session = Depends(request_session),
+) -> dict:
+    """대화를 열고 첫 질문을 낸다 — 하루 횟수는 여기서만 차감된다(/answer · /more · /back 은 차감 없음)."""
+    _enforce_beacon_rate_limit(_coach_limiter, request)
+    # coach.start 는 동의를 막지 않는다 — 기존 ask 끝점과 같은 문구로 여기서 막는다.
+    if not ask_mod.consented(account):
+        raise HTTPException(status_code=403, detail="먼저 안내에 동의해 주세요.")
+    try:
+        return coach_mod.start(db, account, (body.exchange if body else "binance"))
+    except ask_mod.AskError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message)
+
+
+@app.post("/api/coach/answer")
+def coach_answer(
+    body: CoachAnswerBody,
+    account: User = Depends(auth_mod.current_user_in_session),
+    db: Session = Depends(request_session),
+) -> dict:
+    try:
+        return coach_mod.answer(db, account, body.session_id, body.key, body.value)
+    except ask_mod.AskError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message)
+
+
+@app.post("/api/coach/more")
+def coach_more(
+    body: CoachMoreBody,
+    account: User = Depends(auth_mod.current_user_in_session),
+    db: Session = Depends(request_session),
+) -> dict:
+    try:
+        return coach_mod.more(db, account, body.session_id, body.key)
+    except ask_mod.AskError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message)
+
+
+@app.post("/api/coach/back")
+def coach_back(
+    body: CoachBackBody,
+    account: User = Depends(auth_mod.current_user_in_session),
+    db: Session = Depends(request_session),
+) -> dict:
+    try:
+        return coach_mod.back(db, account, body.session_id)
+    except ask_mod.AskError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message)
+
+
 @app.get("/api/me/quests")
 def me_quests(
     user: User = Depends(auth_mod.current_user_in_session),
@@ -800,6 +875,7 @@ _visit_limiter = observability.SlidingWindowRateLimiter(limit=240, window_second
 _leave_limiter = observability.SlidingWindowRateLimiter(limit=240, window_seconds=60.0, max_keys=5000)
 _impressions_limiter = observability.SlidingWindowRateLimiter(limit=60, window_seconds=60.0, max_keys=5000)
 _open_limiter = observability.SlidingWindowRateLimiter(limit=120, window_seconds=60.0, max_keys=5000)
+_coach_limiter = observability.SlidingWindowRateLimiter(limit=30, window_seconds=60.0, max_keys=5000)
 
 
 def _client_ip(request: Request) -> str:

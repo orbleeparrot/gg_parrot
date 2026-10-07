@@ -425,3 +425,61 @@ def test_defaults_for_remaining_after_each_early_stop_is_complete():
         merged.update(defaults_for_remaining(answers))
         for need in ("rule_type", "symbol", "preset", "initial_capital", "use_stop_loss", "candle_interval"):
             assert need in merged, (stop, need)
+
+
+# --- 거래소 (2026-10-07) ------------------------------------------------
+# 국내(업비트 · 빗썸)에서 서버는 규칙 K 와 일봉 아닌 C 를 거절한다(schema.py 의 국내 검사).
+# 그래프가 그 둘을 내면 코치가 채운 폼이 저장도 안 된다 — 여기서 막는다.
+def test_domestic_exchanges_never_offer_the_short_flip_rule():
+    for exchange in ("upbit", "bithumb"):
+        for goal in _FIRSTS["goal"]:
+            for risk in _FIRSTS["risk"]:
+                for watch in _FIRSTS["watch"]:
+                    answers = {"goal": goal, "risk": risk, "watch": watch, "exchange": exchange}
+                    got = [c.value for c in choices_for("rule", answers)]
+                    assert "K" not in got, (exchange, answers, got)
+                    assert 3 <= len(got) <= 5, (exchange, answers, got)
+
+
+def test_binance_still_offers_the_short_flip_rule():
+    got = {c.value for c in choices_for(
+        "rule", {"goal": "trend", "risk": "wide", "watch": "daily", "exchange": "binance"})}
+    assert "K" in got
+    # 거래소를 안 실으면 바이낸스로 본다 — 기존 호출부(to_json 의 by)가 그대로 돈다.
+    assert "K" in {c.value for c in choices_for(
+        "rule", {"goal": "trend", "risk": "wide", "watch": "daily"})}
+
+
+def test_an_unknown_exchange_narrows_to_the_safe_side():
+    got = {c.value for c in choices_for(
+        "rule", {"goal": "trend", "risk": "wide", "watch": "daily", "exchange": "코인가게"})}
+    assert "K" not in got
+
+
+def test_dca_is_always_offered_with_a_daily_candle():
+    """국내 적립식은 일봉이어야 한다 — 어떤 조합에서 C 가 나와도 패치가 1d 를 싣는다."""
+    seen = 0
+    for exchange in ("binance", "upbit", "bithumb"):
+        for goal in _FIRSTS["goal"]:
+            for risk in _FIRSTS["risk"]:
+                for watch in _FIRSTS["watch"]:
+                    answers = {"goal": goal, "risk": risk, "watch": watch, "exchange": exchange}
+                    for c in choices_for("rule", answers):
+                        if c.value == "C":
+                            assert c.patch["candle_interval"] == "1d", answers
+                            seen += 1
+    assert seen, "C 가 한 번도 후보에 안 들었다 — 시험이 아무것도 보지 않는다"
+
+
+def test_to_json_keeps_the_rule_by_key_format_and_adds_a_domestic_table():
+    """by 의 키 형식(goal|risk|watch)은 바꾸지 않는다 — 프런트 전수 시험이 그 형식에 의존한다."""
+    node = to_json()["nodes"]["rule"]
+    assert len(node["by"]) == 5 * 4 * 3
+    assert set(node["by_domestic"]) == set(node["by"])
+    for combo, rows in node["by_domestic"].items():
+        assert "K" not in [r["value"] for r in rows], combo
+        goal, risk, watch = combo.split("|")
+        want = choices_for("rule", {"goal": goal, "risk": risk, "watch": watch,
+                                    "exchange": "upbit"})
+        assert [r["value"] for r in rows] == [c.value for c in want]
+    assert to_json()["domestic_banned_rules"] == ["K"]

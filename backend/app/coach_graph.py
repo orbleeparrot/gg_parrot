@@ -17,6 +17,10 @@ import re
 from dataclasses import dataclass
 from typing import Callable, Literal, Optional
 
+# exchanges.py 는 re · typing 만 쓰는 순수 파일이다 — DB · HTTP · 설정을 끌어오지 않으므로
+# 이 파일의 '순수함' 을 깨지 않는다(import 가 무거워지면 전수 시험이 비싸진다).
+from .exchanges import is_domestic
+
 PAGE_SIZE = 5          # 한 번에 보여 주는 선택지 수. 더 있으면 "다른 선택지 보기".
 MAX_SYMBOLS = 5        # buildMacro 의 symbols 상한과 같다.
 
@@ -166,13 +170,33 @@ def _pick(answers: dict, key: str, table: tuple[Choice, ...]) -> str:
     return got
 
 
-def _rule_values(goal: str, risk: str, watch: str) -> tuple[str, ...]:
-    """goal · risk · watch 에서 규칙 3~5개를 좁힌다."""
+# 국내(업비트 · 빗썸) 현물에서 서버가 거부하는 규칙 — schema.py 의 국내 검사와 같다.
+# K(공매도 전환)는 아예 못 쓰고, C(적립식)는 일봉이어야 한다(_rule_patch 가 늘 1d 로 고정한다).
+_DOMESTIC_BANNED_RULES = frozenset("K")
+
+
+def _is_domestic_answer(answers: dict) -> bool:
+    """답 꾸러미에 실린 거래소가 국내인가. 모르는 값이면 국내로 본다(좁은 쪽이 안전하다)."""
+    got = answers.get("exchange")
+    if got is None:
+        return False                                  # 안 실렸으면 바이낸스(기본)
+    try:
+        return is_domestic(got)
+    except ValueError:
+        return True
+
+
+def _rule_values(goal: str, risk: str, watch: str, domestic: bool = False) -> tuple[str, ...]:
+    """goal · risk · watch · 거래소에서 규칙 3~5개를 좁힌다."""
     rules = list(_RULES_BY_GOAL[goal])
     if risk not in _RISKY_TIERS:
         rules = [r for r in rules if r not in _ROUGH_RULES]    # 작게 잃고 싶은 사람에게 거친 규칙은 안 낸다
     if watch != "daily":
         rules = [r for r in rules if r != "C"]                  # 적립식은 일봉 전제다
+    if domestic:
+        # 국내 현물에서 K 를 내면 코치가 채운 폼이 저장도 안 된다 — 후보에서 뺀다.
+        # 채워 넣는 _FALLBACK_RULES 에는 K 가 없으므로 뒤에서 다시 들어오지 않는다.
+        rules = [r for r in rules if r not in _DOMESTIC_BANNED_RULES]
     for extra in _FALLBACK_RULES:                                # 3개 미만이면 무난한 규칙으로 채운다
         if len(rules) >= 3:
             break
@@ -185,7 +209,8 @@ def _narrow_rule(answers: dict) -> tuple[Choice, ...]:
     goal = _pick(answers, "goal", _GOAL)
     risk = _pick(answers, "risk", _RISK)
     watch = _pick(answers, "watch", _WATCH)
-    return tuple(_rule_choice(r) for r in _rule_values(goal, risk, watch))
+    return tuple(_rule_choice(r)
+                 for r in _rule_values(goal, risk, watch, _is_domestic_answer(answers)))
 
 
 # --- symbols · weights · period · capital ------------------------------
@@ -469,6 +494,14 @@ def to_json() -> dict:
                         {"goal": g.value, "risk": r.value, "watch": w.value})]
                 for g in _GOAL for r in _RISK for w in _WATCH
             }
+            # 국내(업비트 · 빗썸)는 후보가 다르다 — K 를 내지 않는다. by 의 키 형식은 그대로 두고
+            # 별도 키로 더한다(프런트 전수 시험이 by 의 형식에 의존한다).
+            node["by_domestic"] = {
+                f"{g.value}|{r.value}|{w.value}": [
+                    _choice_json(c) for c in _narrow_rule(
+                        {"goal": g.value, "risk": r.value, "watch": w.value, "exchange": "upbit"})]
+                for g in _GOAL for r in _RISK for w in _WATCH
+            }
         elif key == "weights":
             node["by"] = {str(n): [_choice_json(c) for c in _weights_choices(n)]
                           for n in sorted(_LEAD_WEIGHTS)}
@@ -479,6 +512,8 @@ def to_json() -> dict:
         "page_size": PAGE_SIZE,
         "input_defaults": dict(INPUT_DEFAULTS),
         "filterable": sorted(FILTERABLE),
+        # 국내 현물에서 코치가 내지 않는 규칙(schema.py 의 국내 검사와 같다).
+        "domestic_banned_rules": sorted(_DOMESTIC_BANNED_RULES),
         # 시작 자금을 정할 때 같이 바뀌는 칸: 값 = 자금 x 레그 몫 x [투입 비율] x 계수(소수 6자리 내림).
         # 레그 몫 = min(1/종목 수, 첫 종목에 더 싣기면 가장 작은 비중/100).
         "capital_scaled": {rule: [{"key": k, "coef": coef, "uses_invest_ratio": ratio}

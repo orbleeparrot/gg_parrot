@@ -723,27 +723,15 @@ function MemberChatBox({ member, scope, open, setOpen, roomId = 0, room = null, 
   }
 
   // 오른쪽 클릭 메뉴 — 답장·복사·신고. 메뉴는 화면 안으로 접어 넣는다.
-  function openMenu(event, message, point = null) {
+  function openMenu(event, message) {
     event.preventDefault();
     const width = 168;
     const height = 132;
-    const x = point?.x ?? event.clientX;
-    const y = point?.y ?? event.clientY;
     setMenu({
       message,
-      // '⋯' 로 열었으면 닫을 때 그 버튼으로 포커스를 돌려준다.
-      anchor: point ? event.currentTarget : null,
-      x: Math.max(8, Math.min(x, window.innerWidth - width - 8)),
-      y: Math.max(8, Math.min(y, window.innerHeight - height - 8)),
+      x: Math.min(event.clientX, window.innerWidth - width - 8),
+      y: Math.min(event.clientY, window.innerHeight - height - 8),
     });
-  }
-
-  // 메시지 옆 '⋯' — 오른쪽 클릭만으로는 키보드와 아이폰(길게 눌러도 contextmenu 가 없다)에서 답장·복사·신고에 닿지 못했다.
-  function onMoreClick(event, message) {
-    if (menu?.message.id === message.id) { setMenu(null); return; }
-    const rect = event.currentTarget.getBoundingClientRect();
-    const mine = isOwnMessage(message, member?.id);
-    openMenu(event, message, { x: mine ? rect.left : rect.right - 168, y: rect.bottom + 4 });
   }
 
   async function copyMessage(message) {
@@ -759,7 +747,7 @@ function MemberChatBox({ member, scope, open, setOpen, roomId = 0, room = null, 
 
   // 메시지 메뉴의 Esc 는 메뉴만 닫는다(시트는 그대로) — 공용 겹.
   const menuRef = useRef(null);
-  useModalLayer({ open: Boolean(menu), ref: menuRef, onEscape: () => { menu?.anchor?.focus?.({ preventScroll: true }); setMenu(null); }, restoreFocus: false });
+  useModalLayer({ open: Boolean(menu), ref: menuRef, onEscape: () => setMenu(null), restoreFocus: false });
   useEffect(() => {
     if (!menu) return undefined;
     const frame = window.requestAnimationFrame(() => menuRef.current?.querySelector("button")?.focus({ preventScroll: true }));
@@ -768,12 +756,10 @@ function MemberChatBox({ member, scope, open, setOpen, roomId = 0, room = null, 
   useEffect(() => {
     if (!menu) return undefined;
     const close_ = () => setMenu(null);
-    // '⋯' 를 다시 누르면 닫히게 — 여기서 먼저 닫으면 뒤따르는 click 이 메뉴를 다시 연다.
-    const onPointer = (event) => { if (!event.target.closest?.(".chat-more")) close_(); };
-    document.addEventListener("pointerdown", onPointer);
+    document.addEventListener("pointerdown", close_);
     window.addEventListener("resize", close_);
     return () => {
-      document.removeEventListener("pointerdown", onPointer);
+      document.removeEventListener("pointerdown", close_);
       window.removeEventListener("resize", close_);
     };
   }, [menu]);
@@ -883,9 +869,6 @@ function MemberChatBox({ member, scope, open, setOpen, roomId = 0, room = null, 
                       <div className="chat-bubble-line">
                         <MessageBubble message={message} onClose={close} />
                         <time className="num">{message.created_kst}</time>
-                        <button type="button" className="chat-more" aria-label={`${message.username} 메시지 메뉴`} title="메뉴" aria-haspopup="menu" aria-expanded={menu?.message.id === message.id} onClick={(event) => onMoreClick(event, message)}>
-                          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="5" cy="12" r="1.7" /><circle cx="12" cy="12" r="1.7" /><circle cx="19" cy="12" r="1.7" /></svg>
-                        </button>
                       </div>
                     </div>
                   </article>

@@ -8920,13 +8920,6 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 .chat-row.is-mine .chat-bubble.is-sticker { padding: 0; background: transparent; border-radius: 0; }
 .chat-bubble.is-sticker img { display: block; width: 92px; height: 92px; object-fit: contain; } /* 패널 폭의 약 1/4 */
 .chat-bubble-line time { flex: none; color: rgb(var(--c-slate-500)); font-size: 10.5px; font-weight: 600; padding-bottom: 2px; }
-/* 메시지 메뉴 '⋯' — 시각 옆 작은 글리프(2026-10-07 결정 4: 항상 보임, 줄바꿈 없음). 누르는 칸은 ::after 로 넓힌다. */
-.chat-more { position: relative; flex: none; display: inline-grid; place-items: center; width: 20px; height: 20px; margin-bottom: 1px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: rgb(var(--c-slate-400)); cursor: pointer; }
-.chat-more svg { width: 16px; height: 16px; fill: currentColor; }
-.chat-more::after { content: ""; position: absolute; inset: -6px -4px; }
-.chat-more:hover, .chat-more[aria-expanded="true"] { background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-900)); }
-.chat-more:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 1px; }
-@media (pointer: coarse) { .chat-more::after { inset: -12px -10px; } }
 .chat-divider {
   display: flex;
   align-items: center;

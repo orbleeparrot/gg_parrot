@@ -268,7 +268,10 @@ def _ticket_error(status_code: int, detail: str) -> HTTPException:
     )
 
 
-DOMESTIC_RUNNER_DETAIL = "매크로 파일은 바이낸스 전용입니다. 업비트·빗썸 매크로는 빠른 실행으로 실행기에 직접 연결해 주세요."
+# 독립 봇 압축 묶음(bot.py + run.bat)은 바이낸스 전용이다 — bot.py 에 국내 주문 코드가 없다.
+# 매크로 파일(.ggm.json)은 국내도 내려받을 수 있다(실행기 v10+ 가 돌린다).
+# 같은 문구를 realtrade.build_bundle 도 쓴다(순환 import 를 피해 글자로 둔 사본 — test_domestic_macro_file 이 둘을 견준다).
+DOMESTIC_BUNDLE_DETAIL = "독립 봇 압축파일은 바이낸스 전용이에요. 업비트·빗썸은 매크로 파일(.ggm.json)을 내려받아 매크로 실행기에 넣어 주세요."
 
 
 def _require_supported_exchange(macro: Macro, runner_version: str) -> None:

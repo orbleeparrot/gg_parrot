@@ -77,6 +77,7 @@ from . import profile as profile_mod
 from . import points as points_mod
 from . import quests as quests_mod
 from . import ask as ask_mod
+from . import coach as coach_mod
 from . import notifications as notifications_mod
 from . import notification_stream
 from . import admin as admin_mod
@@ -113,6 +114,7 @@ from .db import MacroRow, get_session, init_db, request_session
 from .engine import BacktestResult, Macro, Period, compact_backtest_result, human_summary
 from .engine.backtest import run_backtest
 from .engine import portfolio as portfolio_mod
+from .engine import portfolio_backtest as portfolio_backtest_mod
 from .engine import validation as validation_mod
 from .engine import walkforward as walkforward_mod
 from .engine.explain import explain_result
@@ -192,6 +194,28 @@ app.add_middleware(GZipMiddleware, minimum_size=500, compresslevel=6)
 
 
 # --- helpers ------------------------------------------------------------
+def _macro_error_detail(exc: ValidationError) -> str:
+    """검증 오류를 한국어 한 줄로. 우리가 쓴 한국어 메시지가 있으면 그것을 보여 준다.
+
+    pydantic 의 영어 원문(`Input should be a valid integer` 등)은 사용자에게 뜻이 없으므로
+    항목 이름만 알린다. 한국어 메시지는 어느 레그 · 어느 칸인지 담고 있어 그것이 더 쓸모 있다 —
+    `loc` 만 모으면 "레그 ETHUSDT: 규칙을 바꾸면 세부값도 함께 주세요" 가
+    "매크로 설정을 확인해 주세요: macro" 로 뭉개진다.
+    """
+    ours = []
+    for err in exc.errors():
+        msg = str(err.get("msg") or "")
+        if msg.startswith("Value error, "):
+            msg = msg[len("Value error, "):]
+        if any("가" <= ch <= "힣" for ch in msg):      # 한글이 있으면 우리 메시지다
+            ours.append(msg)
+    if ours:
+        return " / ".join(dict.fromkeys(ours))
+    fields = ", ".join(dict.fromkeys(
+        ".".join(str(part) for part in err["loc"]) or "macro" for err in exc.errors()))
+    return f"매크로 설정을 확인해 주세요: {fields}"
+
+
 def _period_label(period: Period) -> str:
     labels = {"1y": "최근 1년", "6m": "최근 6개월", "3m": "최근 3개월", "1m": "최근 1개월", "1w": "최근 1주", "1d": "최근 1일"}
     if period.preset and period.preset != "custom":
@@ -219,28 +243,47 @@ def _make_slug(macro: Macro) -> str:
     return f"{coin}-{desc}-{side}-{uuid.uuid4().hex[:4]}"
 
 
+def _run_portfolio_backtest(
+    macro: Macro, start_ms: int, end_ms: int, label: str = ""
+) -> tuple[BacktestResult, list, str, str]:
+    """묶음 매크로의 백테스트. 반환은 (집계 결과, 종목별, 데이터 출처, 기간 라벨).
+
+    경로를 고르는 일은 ``portfolio_backtest.run_legs`` 가 한다 — 여기서 또 갈라 놓으면
+    전체기간과 워크포워드 창이 다른 코드에서 나와 숫자가 어긋난다.
+
+    아래 레그 매크로는 **캔들 조회용**이다. 자본 계산식(``base * weight / 100``)의 정본은
+    ``run_legs`` 안의 것이고, ``for_leg`` 가 순수 함수이므로 두 곳이 같은 레그를 만든다.
+
+    ``source`` 는 지금처럼 마지막 레그의 값이다 — 레그가 서로 다른 출처를 쓰는 일은
+    없으므로(같은 거래소 · 같은 시장) 뜻이 같다.
+    """
+    specs = macro.leg_specs()
+    base = macro.initial_capital
+    source = ""
+    frames: dict = {}
+    for spec in specs:
+        cap = (base * spec.weight / 100.0) if base else None
+        df, source = fetch_klines_for_macro(macro.for_leg(spec, cap), start_ms, end_ms)
+        frames[spec.symbol] = df
+
+    results = portfolio_backtest_mod.run_legs(macro, frames)
+
+    agg, per_symbol = portfolio_mod.aggregate(results, candle_interval=macro.candle_interval)
+    return agg, per_symbol, source, label
+
+
 def _run_any(macro: Macro) -> tuple[BacktestResult, list, str, str]:
     """Run a macro; returns (result, per_symbol, source, period_label).
 
-    Single-symbol => per_symbol == []. Portfolio (macro.symbols len>1) => the
-    same rule runs on each symbol with capital split evenly, and the aggregated
-    portfolio result is returned alongside a per-symbol breakdown.
+    Single-symbol => per_symbol == []. Portfolio => each leg runs its own rule with
+    capital split by weight, and the aggregated portfolio result is returned
+    alongside a per-symbol breakdown.
     """
     start_ms, end_ms = resolve_period(macro.period.preset, macro.period.start, macro.period.end)
     label = _period_label(macro.period)
 
     if macro.is_portfolio():
-        syms = macro.all_symbols()
-        base = macro.initial_capital
-        per_cap = (base / len(syms)) if base else None
-        results: list = []
-        source = ""
-        for sym in syms:
-            leg = macro.for_symbol(sym, per_cap)
-            df, source = fetch_klines_for_macro(leg, start_ms, end_ms)
-            results.append((sym, run_backtest(leg, df)))
-        agg, per_symbol = portfolio_mod.aggregate(results, candle_interval=macro.candle_interval)
-        return agg, per_symbol, source, label
+        return _run_portfolio_backtest(macro, start_ms, end_ms, label)
 
     # Single symbol: no synthetic fallback; missing data raises NoSpotDataError.
     df, source = fetch_klines_for_macro(macro, start_ms, end_ms)
@@ -654,6 +697,80 @@ def ask_candidates_route(
         raise HTTPException(status_code=exc.status, detail=exc.message)
 
 
+# ── 프로 빌더 코치 패널 — 좁혀 가는 대화로 조건 판을 채운다. 로그인 · 고지 동의 필수, 한도는 /start 에서만 깎인다. ──
+class CoachStartBody(BaseModel):
+    exchange: str = "binance"  # 프런트가 지금 보고 있는 거래소 — 국내면 그래프가 규칙 K 를 뺀다.
+
+
+class CoachAnswerBody(BaseModel):
+    session_id: int
+    key: str
+    value: str
+
+
+class CoachMoreBody(BaseModel):
+    session_id: int
+    key: str
+
+
+class CoachBackBody(BaseModel):
+    session_id: int
+
+
+@app.post("/api/coach/start")
+def coach_start(
+    request: Request,
+    body: Optional[CoachStartBody] = None,
+    account: User = Depends(auth_mod.current_user_in_session),
+    db: Session = Depends(request_session),
+) -> dict:
+    """대화를 열고 첫 질문을 낸다 — 하루 횟수는 여기서만 차감된다(/answer · /more · /back 은 차감 없음)."""
+    _enforce_beacon_rate_limit(_coach_limiter, request)
+    # coach.start 는 동의를 막지 않는다 — 기존 ask 끝점과 같은 문구로 여기서 막는다.
+    if not ask_mod.consented(account):
+        raise HTTPException(status_code=403, detail="먼저 안내에 동의해 주세요.")
+    try:
+        return coach_mod.start(db, account, (body.exchange if body else "binance"))
+    except ask_mod.AskError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message)
+
+
+@app.post("/api/coach/answer")
+def coach_answer(
+    body: CoachAnswerBody,
+    account: User = Depends(auth_mod.current_user_in_session),
+    db: Session = Depends(request_session),
+) -> dict:
+    try:
+        return coach_mod.answer(db, account, body.session_id, body.key, body.value)
+    except ask_mod.AskError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message)
+
+
+@app.post("/api/coach/more")
+def coach_more(
+    body: CoachMoreBody,
+    account: User = Depends(auth_mod.current_user_in_session),
+    db: Session = Depends(request_session),
+) -> dict:
+    try:
+        return coach_mod.more(db, account, body.session_id, body.key)
+    except ask_mod.AskError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message)
+
+
+@app.post("/api/coach/back")
+def coach_back(
+    body: CoachBackBody,
+    account: User = Depends(auth_mod.current_user_in_session),
+    db: Session = Depends(request_session),
+) -> dict:
+    try:
+        return coach_mod.back(db, account, body.session_id)
+    except ask_mod.AskError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message)
+
+
 @app.get("/api/me/quests")
 def me_quests(
     user: User = Depends(auth_mod.current_user_in_session),
@@ -758,6 +875,7 @@ _visit_limiter = observability.SlidingWindowRateLimiter(limit=240, window_second
 _leave_limiter = observability.SlidingWindowRateLimiter(limit=240, window_seconds=60.0, max_keys=5000)
 _impressions_limiter = observability.SlidingWindowRateLimiter(limit=60, window_seconds=60.0, max_keys=5000)
 _open_limiter = observability.SlidingWindowRateLimiter(limit=120, window_seconds=60.0, max_keys=5000)
+_coach_limiter = observability.SlidingWindowRateLimiter(limit=30, window_seconds=60.0, max_keys=5000)
 
 
 def _client_ip(request: Request) -> str:
@@ -1210,12 +1328,8 @@ def validate_macro(body: ValidateIn, request: Request) -> dict:
     try:
         macro = Macro.model_validate(body.macro)
     except ValidationError as exc:
-        # 영어 검증 문구 대신 어느 항목이 문제인지만 한국어로 알린다.
-        fields = ", ".join(dict.fromkeys(
-            ".".join(str(part) for part in err["loc"]) or "macro" for err in exc.errors()))
-        raise HTTPException(status_code=422, detail=f"매크로 설정을 확인해 주세요: {fields}") from exc
-    if macro.is_portfolio():
-        raise HTTPException(status_code=422, detail="여러 종목 포트폴리오 매크로는 아직 검증할 수 없어요. 종목 하나로 나눠 검증해 주세요.")
+        # 영어 검증 문구 대신 우리가 쓴 한국어 문구를, 없으면 어느 항목이 문제인지만 알린다.
+        raise HTTPException(status_code=422, detail=_macro_error_detail(exc)) from exc
 
     try:
         start_ms, end_ms = resolve_period(macro.period.preset, macro.period.start, macro.period.end)
@@ -1223,14 +1337,28 @@ def validate_macro(body: ValidateIn, request: Request) -> dict:
         # 상태는 /api/backtest 와 같은 400 이되, 영어 원문 대신 한국어로 알린다.
         raise HTTPException(status_code=400, detail="기간 설정을 확인해 주세요. 프리셋 이름이나 시작 · 끝 날짜가 올바르지 않아요.") from exc
     try:
-        df, _source = fetch_klines_for_macro(macro, start_ms, end_ms)
-        result = run_backtest(macro, df)
+        if macro.is_portfolio():
+            # 묶음은 레그마다 캔들을 받아 합산한다. 창도 같은 프레임으로 자른다 —
+            # 백테스트와 검증이 같은 답을 내야 한다.
+            # 캔들을 두 번 받는다(_run_portfolio_backtest 안에서 한 번, 창을 위해 또 한 번).
+            # 한 번으로 줄이려면 그 함수의 반환을 바꿔야 해서 이번 범위 밖이다.
+            result, _per_symbol, _source, _period = _run_portfolio_backtest(macro, start_ms, end_ms)
+            frames = {}
+            base = macro.initial_capital
+            for spec in macro.leg_specs():
+                cap = (base * spec.weight / 100.0) if base else None
+                leg_df, _s = fetch_klines_for_macro(macro.for_leg(spec, cap), start_ms, end_ms)
+                frames[spec.symbol] = leg_df
+            windows = walkforward_mod.run_bundle_windows(macro, frames, body.windows)
+        else:
+            df, _source = fetch_klines_for_macro(macro, start_ms, end_ms)
+            result = run_backtest(macro, df)
+            windows = walkforward_mod.run_windows(macro, df, body.windows)
     except NoSpotDataError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     except Exception as exc:  # noqa: BLE001 — /api/backtest 와 같이 실패 사유를 400 으로 돌려준다
         raise HTTPException(status_code=400, detail=str(exc))
 
-    windows = walkforward_mod.run_windows(macro, df, body.windows)
     # 검증 지표는 줄이기 전 전체 곡선으로 센다(compact 는 응답의 result 에만 쓴다).
     curve = result.equity_curve
     return {
@@ -1362,11 +1490,7 @@ def validate_explain_route(body: ExplainIn, request: Request) -> dict:
     try:
         macro = Macro.model_validate(body.macro)
     except ValidationError as exc:
-        fields = ", ".join(dict.fromkeys(
-            ".".join(str(part) for part in err["loc"]) or "macro" for err in exc.errors()))
-        raise HTTPException(status_code=422, detail=f"매크로 설정을 확인해 주세요: {fields}") from exc
-    if macro.is_portfolio():
-        raise HTTPException(status_code=422, detail="여러 종목 포트폴리오 매크로는 아직 검증할 수 없어요. 종목 하나로 나눠 검증해 주세요.")
+        raise HTTPException(status_code=422, detail=_macro_error_detail(exc)) from exc
 
     try:
         start_ms, end_ms = resolve_period(macro.period.preset, macro.period.start, macro.period.end)
@@ -1374,7 +1498,13 @@ def validate_explain_route(body: ExplainIn, request: Request) -> dict:
         raise HTTPException(status_code=400, detail="기간 설정을 확인해 주세요. 프리셋 이름이나 시작 · 끝 날짜가 올바르지 않아요.") from exc
 
     # 근거는 일간 변동 기준이라 일봉으로 받는다(시간봉을 넣으면 같은 날짜가 여러 번 나온다).
-    daily = macro if macro.candle_interval == "1d" else macro.model_copy(update={"candle_interval": "1d"})
+    # 묶음은 대표 종목(첫 레그)의 일봉으로 근거를 만든다. 근거는 가격 흐름 해설이라
+    # 레그별로 나누면 읽을 수 없게 길어진다.
+    base_macro = macro
+    if macro.is_portfolio():
+        base_macro = macro.for_leg(macro.leg_specs()[0], macro.initial_capital)
+    daily = base_macro if base_macro.candle_interval == "1d" \
+        else base_macro.model_copy(update={"candle_interval": "1d"})
     try:
         df, _source = fetch_klines_for_macro(daily, start_ms, end_ms)
     except NoSpotDataError as exc:
@@ -1402,12 +1532,20 @@ def validate_explain_route(body: ExplainIn, request: Request) -> dict:
     rows = _plain_json(evidence_mod.market_evidence(
         df, benchmark_df, tz=tz, limit=EXPLAIN_EVIDENCE_LIMIT))
     # 아카이브 키는 코인이다 — KRW-BTC 와 BTCUSDT 가 같은 근거를 보려면 같은 규칙으로 줄여야 한다.
-    asset = news_mod.asset_from_market_symbol(macro.symbol)
+    asset = news_mod.asset_from_market_symbol(base_macro.symbol)
     for row in rows:
         row["headlines"] = _plain_json(evidence_mod.headlines(asset, row["date"]))
 
     out = validate_explain_mod.explain({**_explain_facts(body.summary), "evidence": rows})
-    return {"text": out["text"], "source": out["source"], "evidence": rows}
+    body_out = {"text": out["text"], "source": out["source"], "evidence": rows}
+    if macro.is_portfolio():
+        # 근거는 **대표 종목 하나**의 일봉 · 뉴스로 만든다. 응답이 그 사실을 말하지 않으면
+        # 비중 70/30 묶음에서 BTC 이야기가 묶음 전체의 근거로 읽힌다.
+        coin = _coin(base_macro.symbol)
+        legs = len(macro.all_symbols())
+        body_out["basis_symbol"] = base_macro.symbol
+        body_out["basis_note"] = f"근거는 대표 종목 {coin} 기준이에요 (묶음 {legs}종목)"
+    return body_out
 
 
 @app.post("/api/explain/ai")
@@ -2300,7 +2438,8 @@ def paper_trades(session_id: int) -> dict:
 @app.post("/api/realtrade/bundle")
 def realtrade_bundle(req: BundleRequest) -> Response:
     if is_domestic(req.macro.exchange):
-        raise HTTPException(422, runner_mod.DOMESTIC_RUNNER_DETAIL)
+        # 압축 묶음 안의 bot.py 에 업비트·빗썸 주문 코드가 없다 — 받아도 돌지 않으므로 계속 막는다.
+        raise HTTPException(422, runner_mod.DOMESTIC_BUNDLE_DETAIL)
     data = build_bundle(req.macro)
     filename = f"realtrade-bot-{req.macro.rule_type.value}-{req.macro.position_side.value}.zip"
     return Response(
@@ -2317,10 +2456,13 @@ def realtrade_macro_file(req: BundleRequest) -> Response:
 
     실행기가 엔진을 내장하므로 bot.py/run.bat 없이 이 설정 파일 하나만 내려받아
     실행기에 넣으면 된다(human_summary 동봉).
+
+    업비트·빗썸 매크로도 내준다 — 실행기 v10 이상이 국내 주문을 낼 줄 안다. 여기서는 실행기 버전을
+    알 수 없으므로 버전을 묻지 않는다. v9 이하에 넣으면 세션 시작이 426 으로 거절한다
+    (runner._require_supported_exchange — 버전을 아는 유일한 자리다). 화면은 내려받기 옆에서
+    'v10 이상이 필요하다' 를 미리 말해 준다.
     """
     macro = req.macro
-    if is_domestic(macro.exchange):
-        raise HTTPException(422, runner_mod.DOMESTIC_RUNNER_DETAIL)
     if macro.is_portfolio():
         # 여러 종목은 어느 실행기 버전으로도 못 돌린다(runner.PORTFOLIO_UNSUPPORTED_DETAIL 주석 참고).
         # 세션 시작이 어차피 거절하지만, 그때는 사용자가 파일을 받아 실행기에 넣은 뒤다 — 내려받기에서 말해 준다.

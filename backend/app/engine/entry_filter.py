@@ -44,8 +44,12 @@ class FilterEval:
             self._state = RSIState(int(self.p["period"]))
         elif self.kind is FilterKind.BOLLINGER:
             self._state = BollingerState(int(self.p["period"]), float(self.p["num_std"]))
-        else:
+        elif self.kind is FilterKind.VOLUME:
             self._state = _VolumeState(int(self.p["period"]))
+        else:
+            # 새 FilterKind 를 더하고 여기를 안 고치면 바로 터진다 -- 조용히 다른 필터로
+            # 동작하는 것보다 낫다. 스키마가 모르는 kind 를 막으므로 API 로는 닿지 않는다.
+            raise ValueError(f"unsupported filter kind: {self.kind}")
 
     def update(self, close: float, volume: Optional[float] = None) -> None:
         if self.kind is FilterKind.VOLUME:
@@ -68,7 +72,7 @@ class FilterEval:
         elif self.kind is FilterKind.RSI:
             low, high = self.p.get("min"), self.p.get("max")
             self._allows = (low is None or value >= low) and (high is None or value <= high)
-        else:
+        elif self.kind is FilterKind.BOLLINGER:
             _mid, upper, lower = value
             zone = self.p["zone"]
             if zone == "below_lower":
@@ -77,6 +81,8 @@ class FilterEval:
                 self._allows = close > upper
             else:
                 self._allows = lower <= close <= upper
+        else:
+            raise ValueError(f"unsupported filter kind: {self.kind}")
 
     def allows(self) -> bool:
         return self._allows
@@ -96,7 +102,9 @@ class FilterEval:
         if self.kind is FilterKind.BOLLINGER:
             zones = {"below_lower": "하단 밖", "above_upper": "상단 밖", "inside": "밴드 안"}
             return f"볼린저({p['period']}, {p['num_std']:g}σ) {zones[p['zone']]}"
-        return f"거래량이 {p['period']}봉 평균의 {p['multiple']:g}배 이상"
+        if self.kind is FilterKind.VOLUME:
+            return f"거래량이 {p['period']}봉 평균의 {p['multiple']:g}배 이상"
+        raise ValueError(f"unsupported filter kind: {self.kind}")
 
 
 def make_filter(macro: Macro) -> Optional[FilterEval]:

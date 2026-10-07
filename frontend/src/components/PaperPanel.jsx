@@ -4,6 +4,8 @@ import { api } from "../api.js";
 import { isLoggedIn } from "../lib/auth.js";
 import InfoTooltip from "./InfoTooltip.jsx";
 import { baseOf, fmtMoney, fmtMoneyCompact, fmtKrw, fmtPrice, fmtQty, quoteOf } from "../lib/format.js";
+import { isEvenWeights } from "../lib/portfolio.js";
+import { macroSymbols } from "../lib/portfolio.js";
 import { useUsdKrw } from "../lib/usdkrw.js";
 import usePaperSession from "../hooks/usePaperSession.js";
 import { exchangeLabel, isDomestic } from "../lib/exchanges.js";
@@ -54,10 +56,8 @@ export function useMacroActions(macro) {
   }
 
   async function downloadMacro() {
-    if (isDomestic(macro.exchange)) {
-      setError("매크로 파일(.ggm.json)은 바이낸스 전용이에요. 업비트·빗썸은 빠른 실행으로 매크로 실행기에 연결해 주세요.");
-      return;
-    }
+    // 거래소를 가리지 않는다 — 업비트·빗썸 매크로 파일도 실행기 v10+ 가 돌린다.
+    // 서버는 내려줄 때 실행기 버전을 모르니, v10 안내는 버튼 옆 안내 문구가 맡는다.
     setError("");
     try {
       await api.downloadMacroFile(macro);
@@ -111,8 +111,8 @@ export function PaperNextSteps({ macro, valErr, primary = "quickRun", onRegister
       {/* real-trade: 매크로 파일(.ggm.json)만 내려받아 '껄무새 매크로 실행기'에 넣는다.
           실행기가 실제 주문을 실행하므로(기본 테스트넷) 아래 문구는 그 위험을 축소하지 않는다. */}
       <div className="alert alert-warn space-y-3">
-        <div className="t-title">{domestic ? "국내 거래소 매크로 → 빠른 실행으로 실행기 연결" : "동작 검증 완료 → 매크로 실행기로 실거래"}</div>
-        {domestic ? <p className="t-small">{exchangeLabel(macro.exchange)} 원화 현물 · 롱 · 1배 매크로는 <b>빠른 실행</b>으로 내 PC의 매크로 실행기에 바로 연결해요. 매크로 파일(.ggm.json) 내려받기는 바이낸스 전용이라 업비트·빗썸에서는 쓸 수 없어요.</p> : <><p className="t-small">
+        <div className="t-title">{domestic ? "국내 거래소 매크로 → 매크로 파일 또는 빠른 실행으로 실행기 연결" : "동작 검증 완료 → 매크로 실행기로 실거래"}</div>
+        {domestic ? <p className="t-small">{exchangeLabel(macro.exchange)} 원화 현물 · 롱 · 1배 매크로는 <b>매크로 파일(.ggm.json)</b>을 내려받아 실행기에 넣어도 되고, <b>빠른 실행</b>으로 바로 연결해도 돼요. (국내 거래소는 실행기 v10 이상이 필요해요.)</p> : <><p className="t-small">
           터미널·파이썬 설치 없이 <b>껄무새 매크로 실행기</b>(프로그램)에 이 매크로 파일을 넣고 돌려요.
           실행 현황과 원격 종료는 <b>내 에이전트</b>에서 확인해요.
         </p>
@@ -142,7 +142,7 @@ export function PaperNextSteps({ macro, valErr, primary = "quickRun", onRegister
           <button onClick={quickRun} disabled={!!valErr || launching} className={"btn btn-l " + (registerFirst ? "btn-secondary" : "btn-primary")}>
             {launching ? "실행 준비 중…" : "빠른 실행"}
           </button>
-          <button onClick={downloadMacro} disabled={!!valErr || domestic} title={domestic ? "매크로 파일은 바이낸스 전용이에요. 업비트·빗썸은 빠른 실행을 쓰세요." : undefined} className="btn btn-l btn-secondary">
+          <button onClick={downloadMacro} disabled={!!valErr} title={domestic ? "업비트·빗썸 매크로 파일은 실행기 v10 이상에서 돌아요." : undefined} className="btn btn-l btn-secondary">
             매크로 파일 내려받기 (.ggm.json)
           </button>
           <Link to="/?run=1&step=1" className="t-small font-semibold text-slate-900 underline underline-offset-4 decoration-slate-300 hover:decoration-slate-900">
@@ -231,7 +231,7 @@ export function PaperPanelView({ macro: currentMacro, valErr, onRegister, contro
           </button>
         )}
         <span className="t-caption text-slate-500">
-          <span className="num">{macro.symbols && macro.symbols.length > 1 ? macro.symbols.map(baseOf).join(" · ") : macro.symbol}</span> · {(running ? startedMode : mode) === "replay" ? "리플레이" : "실시간"}
+          <span className="num">{macroSymbols(macro).length > 1 ? macroSymbols(macro).map(baseOf).join(" · ") : macro.symbol}</span> · {(running ? startedMode : mode) === "replay" ? "리플레이" : "실시간"}
           {status && !(status.legs || []).length && status.last_price > 0 && (
             <> · 현재가 <span className="num">{fmtPrice(status.last_price)}</span> {quoteOf(macro.symbol)}</>
           )}
@@ -296,7 +296,7 @@ export function PaperPanelView({ macro: currentMacro, valErr, onRegister, contro
         </div>
       )}
 
-      {/* 멀티종목: 종목별 수익률 — 위 수익률은 총합, 자본은 종목 수로 나눠 각각 돌아간다 */}
+      {/* 멀티종목: 종목별 수익률 — 위 수익률은 총합, 자본은 종목 비중(없으면 종목 수)대로 나눠 각각 돌아간다 */}
       {status && (status.legs || []).length > 1 && (
         <div className="flex flex-wrap gap-x-4 gap-y-1 t-small" aria-label="종목별 현황">
           {status.legs.map((leg) => (
@@ -307,7 +307,8 @@ export function PaperPanelView({ macro: currentMacro, valErr, onRegister, contro
               </span>
             </span>
           ))}
-          <span className="t-caption text-slate-500">자본을 종목 수로 나눠 각각 돌리고, 수익률은 총합이에요.</span>
+          {/* 세션은 비중을 정한 묶음이면 그 비중대로 돈다 — 화면이 '균등' 이라고 말하면 거짓이 된다. */}
+          <span className="t-caption text-slate-500">자본을 종목 {isEvenWeights(macro.legs) ? "수로 똑같이" : "비중대로"} 나눠 각각 돌리고, 수익률은 총합이에요.</span>
         </div>
       )}
 

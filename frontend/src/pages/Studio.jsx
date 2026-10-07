@@ -30,8 +30,10 @@ import {
   validate,
   withTypeDefaults,
   validateDetailed,
+  FIELDLESS_ERROR_FIELDS,
 } from "../lib/macro.js";
 import { computeStrategyOverlay } from "../lib/indicators.js";
+import { macroSymbols } from "../lib/portfolio.js";
 import { isDomestic, normalizeExchange } from "../lib/exchanges.js";
 import {
   completeJourney,
@@ -290,9 +292,11 @@ function AccountStudio({ scope, allowRouterMacro }) {
   }, [testBudget]);
 
   // 입력 검증 — 걸린 칸(fieldError.field)은 조건 판에서 노랗게 띄우고 라벨 아래 문구를 적는다. 바닥 경고 상자에는 올리지 않는다.
+  // 다만 칸이 없는 오류(비중 · 묶음 한도 · 레그 규칙)는 띄울 자리가 없으니 바닥 경고로 올린다 —
+  // "칸이 있는 오류는 칸에, 없는 오류는 바닥에". 안 그러면 비중 합이 틀려 실행이 막혀도 화면에 아무 말이 없다.
   const fieldError = validateDetailed(form);
   const valErr = fieldError?.message ?? null;
-  const fieldErrorKey = fieldError?.field || "";
+  const fieldErrorKey = fieldError && !FIELDLESS_ERROR_FIELDS.includes(fieldError.field) ? fieldError.field : "";
   useEffect(() => {
     if (!fieldErrorKey) return;
     const host = document.querySelector(`.studio-cond-body [data-field="${fieldErrorKey}"]`);
@@ -724,7 +728,9 @@ function AccountStudio({ scope, allowRouterMacro }) {
   // 매크로 카드 재료 — 매크로 등록 탭과 공유 다이얼로그가 같은 카드를 그린다.
   // 카드는 결과와 짝인 '테스트한 매크로'를 보여 준다. 종목도 그 매크로에서 읽는다 — 조건 판에서 종목을 빼도 다시 테스트하기 전엔 카드가 바뀌지 않는다.
   const cardMacro = testedMacro || currentMacro;
-  const cardSymbols = Array.isArray(cardMacro.symbols) && cardMacro.symbols.length > 1 ? cardMacro.symbols : [cardMacro.symbol].filter(Boolean);
+  // 종목은 공용 macroSymbols 로 읽는다 — legs(비중 묶음)를 모르면 비중 묶음 카드가 단일 종목으로 그려져
+  // 같은 카드 안의 "종목 비중" 행과 모순된다.
+  const cardSymbols = macroSymbols(cardMacro);
   const cardProps = {
     macro: cardMacro,
     result,
@@ -743,7 +749,8 @@ function AccountStudio({ scope, allowRouterMacro }) {
     }
     if (limitsError && (!error || error === limitsError)) return { tone: "risk", text: limitsError, actions: limitsRetry };
     if (error) return { tone: "risk", text: `오류: ${error}`, actions: error === limitsError ? limitsRetry : null };
-    if (valErr && !fieldErrorKey) return { tone: "warn", text: valErr, actions: null }; // 칸이 정해진 오류는 그 칸에 표시된다
+    // 칸이 정해진 오류는 그 칸에 표시된다. 칸이 없는 오류(비중 · 묶음 한도 · 레그 규칙)는 fieldErrorKey 가 비어 여기로 온다.
+    if (valErr && !fieldErrorKey) return { tone: "warn", text: valErr, actions: null };
     if (budgetBlocked) {
       const text = testBudget.error || `테스트 범위를 넘어요 · ${testBudget.bars.toLocaleString()}봉 / 최대 ${testBudget.maxBars.toLocaleString()}봉`;
       const actions = testBudget.suggestions.length > 0 ? (

@@ -9,6 +9,7 @@ import { getUserId } from "../lib/user.js";
 import { captureAccountGuard, clearAuth, getToken, useAuth } from "../lib/auth.js";
 import { lockBodyScroll } from "../lib/bodyScrollLock.js";
 import { saveRegistrationDraft } from "../lib/journey.js";
+import { isEvenWeights, macroSymbols, weightPhrase } from "../lib/portfolio.js";
 import { Icon } from "./icons.jsx";
 
 const FOCUSABLE =
@@ -21,8 +22,14 @@ function MacroReview({ macro }) {
   ) : (
     PERIOD_PRESETS.find((item) => item.value === macro.period?.preset)?.label || macro.period?.preset
   );
+  const bundle = macroSymbols(macro);
   const rows = [
-    ["종목", <span className="num">{macro.symbols?.length ? macro.symbols.join(", ") : macro.symbol}</span>],
+    // 비중 묶음(legs)도 종목을 전부 적는다 — macro.symbols 만 보면 등록 확인표가 단일 종목으로 보인다.
+    ["종목", <span className="num">{bundle.join(", ") || macro.symbol}</span>],
+    // 비중을 정한 묶음은 그 비중을 확인표에 적는다 — 등록 직전이 비중을 마지막으로 볼 자리다.
+    ...(bundle.length > 1 && !isEvenWeights(macro.legs)
+      ? [["종목 비중", <span className="num">{weightPhrase(macro.legs)}</span>]]
+      : []),
     ["매매 방식", strategy],
     ["포지션", <>{macro.position_side === "short" ? "숏" : "롱"} · <span className="num">{macro.leverage || 1}배</span></>],
     ["테스트 기간", period],

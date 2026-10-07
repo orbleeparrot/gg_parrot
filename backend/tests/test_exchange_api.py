@@ -34,14 +34,22 @@ def test_public_market_routes_preserve_exchange(monkeypatch):
         assert client.get("/api/funding-rate?symbol=KRW-BTC&exchange=upbit").json()["available"] is False
 
 
-@pytest.mark.parametrize("path", ["/api/realtrade/bundle", "/api/realtrade/macro-file"])
-def test_domestic_cannot_download_binance_runner_file(path):
+def test_domestic_cannot_download_the_standalone_bot_bundle():
+    """독립 봇 압축파일(bot.py + run.bat)만 바이낸스 전용이다 — 그 안에 국내 주문 코드가 없다.
+
+    매크로 파일(.ggm.json)은 국내도 내려받는다(test_domestic_macro_file 참고) — 실행기 v10+ 가 돌린다.
+    """
     with TestClient(app) as client:
-        res = client.post(path, json={"macro": DOMESTIC})
+        res = client.post("/api/realtrade/bundle", json={"macro": DOMESTIC})
         assert res.status_code == 422
-        # 파일은 바이낸스 전용이라고 범위로 말한다 — 실행기 직접 연결이 안 된다고 거짓말하지 않는다.
+        # 범위로 말한다 — 실행기 직접 연결도, 매크로 파일도 안 된다고 거짓말하지 않는다.
         assert "바이낸스 전용" in res.json()["detail"]
         assert "지원하지 않" not in res.json()["detail"]
+        assert "매크로 파일은 바이낸스 전용" not in res.json()["detail"]
+        # 같은 매크로의 매크로 파일은 그대로 내려받는다.
+        ok = client.post("/api/realtrade/macro-file", json={"macro": DOMESTIC})
+        assert ok.status_code == 200, ok.text
+        assert ok.json()["exchange"] == "upbit"
 
 
 def test_portfolio_cannot_download_the_macro_file():

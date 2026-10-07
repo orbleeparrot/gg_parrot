@@ -193,7 +193,7 @@ export function AssetScene({ form, setForm, error, searchError = "", busy = fals
       <select id="hero-exchange" className="field mb-4" value={exchange} disabled={busy} onChange={(event) => switchExchange(event.target.value)}>
         {EXCHANGES.map((item) => <option key={item.value} value={item.value}>{item.label} · {item.quote}</option>)}
       </select>
-      {domestic && <p className="mb-4 t-small text-amber-700">원화 현물 전용이에요. 숏·선물·레버리지는 사용할 수 없어요. 매크로 파일(.ggm.json) 내려받기는 바이낸스 전용이고, 업비트·빗썸은 빠른 실행으로 실행기에 연결해요.</p>}
+      {domestic && <p className="mb-4 t-small text-amber-700">원화 현물 전용이에요. 숏·선물·레버리지는 사용할 수 없어요. 매크로 파일(.ggm.json) 내려받기와 빠른 실행 둘 다 돼요(실행기 v10 이상).</p>}
       {exchangeNotice && <p className="mb-4 t-small text-amber-700" role="status">{exchangeNotice}</p>}
       <label htmlFor="hero-capital" className="block t-small font-semibold text-slate-700 mb-2">시작 자금 ({quote})</label>
       <input id="hero-capital" className="field num mb-5" type="number" min="0.0001" step="any" value={form.initial_capital} disabled={busy} onChange={(event) => setForm((current) => ({ ...current, initial_capital: event.target.value }))} />
@@ -501,6 +501,7 @@ export function BacktestScene({ form, backtest }) {
               dataSource={backtest.dataSource}
               periodLabel={backtest.periodLabel}
               symbol={backtest.testedMacro?.symbol || form.symbol}
+              legs={backtest.testedMacro?.legs || null}
               leverage={backtest.testedMacro?.leverage || 1}
               /* 안내 흐름에서는 배치 편집 버튼을 감춘다 — 저장된 배치는 그대로 반영된다. */
               customizable={false}

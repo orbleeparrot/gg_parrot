@@ -1,0 +1,34 @@
+/* 코치 패널 — 넓은 화면에서 오른쪽 고정 폭. 선택지 라벨은 28자 상한이라 두 줄을 넘지 않는다.
+   색은 index.css 의 --c-* 토큰만 쓴다(다크는 토큰이 뒤집힌다). */
+.coach { display: grid; gap: 10px; }
+.coach-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.coach-title { font-size: 14px; font-weight: 800; color: rgb(var(--c-slate-900)); }
+.coach-meta { display: flex; gap: 8px; font-size: 12px; color: rgb(var(--c-slate-500)); white-space: nowrap; }
+.coach-turn { font-variant-numeric: tabular-nums; }
+.coach-idle, .coach-question { display: grid; gap: 10px; }
+.coach-ask { margin: 0; font-size: 14px; line-height: 1.5; }
+.coach-note { margin: 0; font-size: 13px; line-height: 1.5; color: rgb(var(--c-slate-700)); }
+.coach-error { margin: 0; font-size: 12px; line-height: 1.5; color: rgb(var(--c-slate-900)); }
+.coach-choices { display: grid; gap: 6px; }
+.coach-choice { display: grid; gap: 2px; text-align: left; padding: 9px 11px; border-radius: 9px;
+                border: 1px solid rgb(var(--c-slate-200)); background: rgb(var(--c-surface)); cursor: pointer; }
+.coach-choice:hover:not(:disabled) { border-color: rgb(var(--c-brand-line)); }
+.coach-choice:disabled { opacity: .5; cursor: not-allowed; }
+.coach-choice b { font-size: 13px; font-weight: 600; }
+.coach-choice small { color: rgb(var(--c-slate-500)); font-size: 11px; line-height: 1.4;
+                      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.coach-more, .coach-back { font-size: 12px; text-decoration: underline; opacity: .75; justify-self: start;
+                           background: transparent; border: 0; padding: 0; cursor: pointer; color: inherit; }
+.coach-more:disabled, .coach-back:disabled { opacity: .4; cursor: not-allowed; }
+.coach-typed { display: flex; gap: 6px; }
+.coach-input { flex: 1 1 auto; min-width: 0; padding: 8px 10px; border-radius: 9px; font-size: 13px;
+               border: 1px solid rgb(var(--c-slate-200)); background: rgb(var(--c-surface)); color: inherit; }
+.coach-input:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 1px; }
+.coach-submit, .coach-start { padding: 8px 14px; border-radius: 9px; border: 0; font-size: 13px; font-weight: 700;
+                              background: rgb(var(--c-brand)); color: rgb(var(--c-brand-ink)); cursor: pointer; }
+.coach-start { justify-self: start; }
+.coach-submit:disabled, .coach-start:disabled { opacity: .5; cursor: not-allowed; }
+.coach-log { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.coach-log li { display: flex; justify-content: space-between; gap: 6px; font-size: 12px;
+                color: rgb(var(--c-slate-500)); }
+.coach-foot { display: flex; gap: 10px; }

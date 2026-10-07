@@ -85,7 +85,7 @@ def test_old_signature_is_refused_when_the_macro_carries_a_filter(version):
 def test_v3_signature_round_trips_with_and_without_a_filter(entry_filter):
     macro = Macro(**{**BREAKOUT, **({"entry_filter": entry_filter} if entry_filter else {})})
     signed = macro_signing.sign(macro)
-    assert signed["v"] == 3
+    assert signed["v"] == macro_signing.SIG_VERSION  # 지금 쓰는 버전으로 서명한다(v4 부터 legs·bundle_risk 포함)
     assert macro_signing.verify(macro, signed) is True
 
 

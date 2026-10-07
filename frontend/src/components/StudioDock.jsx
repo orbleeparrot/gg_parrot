@@ -11,6 +11,8 @@ import { verdict } from "./OptimizePanel.jsx";
 import { useMacroActions } from "./PaperPanel.jsx";
 import MacroCard from "./MacroCard.jsx";
 import { fmtMoney, fmtMoneyCompact, fmtKrw, fmtPrice, fmtQty, quoteOf, baseOf } from "../lib/format.js";
+import { macroSymbols } from "../lib/portfolio.js";
+import { isEvenWeights } from "../lib/portfolio.js";
 import { buildMacro, RULE_TYPES, CANDLE_INTERVALS } from "../lib/macro.js";
 import { paperMainButton } from "../lib/paperMain.js";
 import { useUsdKrw } from "../lib/usdkrw.js";
@@ -313,7 +315,8 @@ export function StudioOptimize({ form, setForm, valErr, onResult }) {
 function macroLine(macro) {
   if (!macro) return "";
   const interval = CANDLE_INTERVALS.find((i) => i.value === macro.candle_interval)?.label || macro.candle_interval;
-  const symbolLabel = macro.symbols && macro.symbols.length > 1 ? macro.symbols.map(baseOf).join("·") : macro.symbol;
+  const bundle = macroSymbols(macro);
+  const symbolLabel = bundle.length > 1 ? bundle.map(baseOf).join("·") : macro.symbol;
   const parts = [exchangeLabel(macro.exchange), symbolLabel, RULE_TYPES[macro.rule_type]?.label, macro.position_side === "short" ? "숏" : "롱", interval ? `${interval}봉` : "", `${macro.leverage || 1}배`];
   return parts.filter(Boolean).join(" · ");
 }
@@ -331,7 +334,8 @@ export function StudioPaper({ macro: currentMacro, valErr, controller }) {
   // 로그의 각 체결에는 어느 종목인지 표시한다(예전 체결 행은 symbol 이 비어 세션 종목).
   const legs = status?.legs || [];
   const portfolio = legs.length > 1;
-  const symbolsLabel = macro.symbols && macro.symbols.length > 1 ? macro.symbols.map(baseOf).join(" · ") : macro.symbol;
+  const bundleSymbols = macroSymbols(macro);
+  const symbolsLabel = bundleSymbols.length > 1 ? bundleSymbols.map(baseOf).join(" · ") : macro.symbol;
   const macroChanged = running && startedMacro && JSON.stringify(startedMacro) !== JSON.stringify(currentMacro);
   const modeLabel = (value) => (value === "replay" ? "데모 리플레이" : "실시간");
   // 주 버튼 하나 — 시작 → 중지 → 다시 시작. 자리(왼쪽 아래 동작 줄)와 폭은 그대로, 문구와 색만 바뀐다.
@@ -393,7 +397,8 @@ export function StudioPaper({ macro: currentMacro, valErr, controller }) {
                     {leg.last_price > 0 && <span className="sd-leg-px num">{fmtPrice(leg.last_price)}</span>}
                   </div>
                 ))}
-                <div className="sd-leg-note">자본을 종목 수로 나눠 각각 돌리고, 위 수익률은 총합이에요.</div>
+                {/* 비중을 정한 묶음은 그 비중대로 돈다 — 한 문구로 못 박으면 화면이 거짓말을 한다. */}
+                <div className="sd-leg-note">자본을 종목 {isEvenWeights(macro.legs) ? "수로 똑같이" : "비중대로"} 나눠 각각 돌리고, 위 수익률은 총합이에요.</div>
               </div>
             )}
             <div className={"sd-lock" + (macroChanged ? " is-warn" : "")}>
@@ -482,9 +487,11 @@ export function StudioOutcomes({ macro, result, perSymbol = [], valErr, strategy
           <button type="button" onClick={quickRun} disabled={!!valErr || launching} className="sd-act-row">
             <ActIcon name="run" /><span className="sd-act-t"><b>{launching ? "실행 준비 중…" : "빠른 실행"}</b><small>내 PC 실행기로 바로 넘겨요</small></span><i className="sd-act-chev" aria-hidden="true" />
           </button>
-          <button type="button" onClick={downloadMacro} disabled={!!valErr || domestic} title={domestic ? "매크로 파일은 바이낸스 전용이에요. 업비트·빗썸은 빠른 실행을 쓰세요." : undefined} className="sd-act-row">
-            <ActIcon name="download" /><span className="sd-act-t"><b>매크로 파일 내려받기</b><small>{domestic ? "바이낸스 전용 · 업비트·빗썸은 빠른 실행" : ".ggm.json 파일로 저장해요"}</small></span><i className="sd-act-chev" aria-hidden="true" />
+          <button type="button" onClick={downloadMacro} disabled={!!valErr} title={domestic ? "업비트·빗썸 매크로 파일은 실행기 v10 이상에서 돌아요." : undefined} className="sd-act-row">
+            <ActIcon name="download" /><span className="sd-act-t"><b>매크로 파일 내려받기</b><small>.ggm.json 파일로 저장해요</small></span><i className="sd-act-chev" aria-hidden="true" />
           </button>
+          {/* 서버는 내려줄 때 실행기 버전을 모른다 — v9 이하에 넣으면 세션 시작에서 426 이 난다. 그래서 버튼 옆에서 미리 말한다. */}
+          {domestic ? <p className="sd-note">업비트·빗썸 매크로 파일은 실행기 v10 이상이 필요해요.</p> : null}
           <button type="button" onClick={onShare} disabled={!!valErr || shareBusy} className="sd-act-row">
             <ActIcon name="link" /><span className="sd-act-t"><b>{shareBusy ? "저장 중…" : "공유 링크 보기"}</b><small>링크와 인증 카드 이미지를 받아요</small></span><i className="sd-act-chev" aria-hidden="true" />
           </button>
@@ -496,7 +503,7 @@ export function StudioOutcomes({ macro, result, perSymbol = [], valErr, strategy
           흐름은 지금 프로젝트 기준: 빠른 실행 마법사(테스트넷 · 웹이 실행기를 열어 줌) → 실거래는 파일을 실행기에서 직접 → 상태·종료는 내 에이전트. */}
       {domestic ? <section className="alert alert-warn sd-runner" aria-labelledby="sd-runner-title">
         <h3 id="sd-runner-title" className="sd-runner-title">국내 거래소 지원 범위</h3>
-        <p className="sd-runner-foot">{exchangeLabel(macro.exchange)} 원화 시세·백테스트·모의매매·리더보드 등록·매크로 저장과 빠른 실행(내 PC 실행기 직접 연결)을 지원해요. 매크로 파일(.ggm.json) 내려받기는 바이낸스 전용이에요. 국내 원화 현물에서는 숏·선물·레버리지를 사용할 수 없어요.</p>
+        <p className="sd-runner-foot">{exchangeLabel(macro.exchange)} 원화 시세·백테스트·모의매매·리더보드 등록·매크로 저장을 지원해요. 매크로 파일(.ggm.json) 내려받기와 빠른 실행 둘 다 돼요(실행기 v10 이상). 국내 원화 현물에서는 숏·선물·레버리지를 사용할 수 없어요.</p>
       </section> : <section className="alert alert-warn sd-runner" aria-labelledby="sd-runner-title">
         <div className="sd-runner-head">
           <h3 id="sd-runner-title" className="sd-runner-title">실거래 실행법</h3>

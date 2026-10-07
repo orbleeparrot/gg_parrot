@@ -80,8 +80,17 @@ _HEADLINES = {
 }
 
 
+def _hold_subject(macro: Macro) -> str:
+    """"… 들고 있었으면" 의 주어. 묶음은 대표 종목이 아니라 **묶음 전체**다.
+
+    묶음의 홀딩 수익률은 비중대로 섞은 바스켓이다. 70/30 묶음에서 그 숫자를
+    "그냥 BTC 들고 있었으면" 으로 서술하면 거짓말이 된다.
+    """
+    return "이 묶음을 그냥" if macro.is_portfolio() else f"그냥 {_coin(macro.symbol)}"
+
+
 def _points(macro: Macro, r: BacktestResult) -> List[str]:
-    coin = _coin(macro.symbol)
+    hold = _hold_subject(macro)
     pts: List[str] = []
 
     # 1) vs 그냥 홀딩(HODL) — the single most important framing.
@@ -90,12 +99,12 @@ def _points(macro: Macro, r: BacktestResult) -> List[str]:
         diff = r.final_return_pct - bh
         if diff >= 0:
             pts.append(
-                f"이 전략은 {_signed(r.final_return_pct)}, 그냥 {coin} 들고 있었으면 "
+                f"이 전략은 {_signed(r.final_return_pct)}, {hold} 들고 있었으면 "
                 f"{_signed(bh)} — 홀딩보다 {abs(diff):.1f}%p 앞섰어."
             )
         else:
             pts.append(
-                f"이 전략은 {_signed(r.final_return_pct)}인데 그냥 {coin} 들고 있었으면 "
+                f"이 전략은 {_signed(r.final_return_pct)}인데 {hold} 들고 있었으면 "
                 f"{_signed(bh)}였어 — 홀딩에 {abs(diff):.1f}%p 뒤졌어."
             )
     else:
@@ -138,6 +147,12 @@ def _points(macro: Macro, r: BacktestResult) -> List[str]:
             f"진입 조건을 하나 더 걸었어 — {make_filter(macro).note()}. "
             "조건이 아닐 때는 사지 않아."
         )
+
+    if macro.bundle_risk is not None:
+        # 문구만 필요하므로 집행자를 더미 자본으로 만들지 않는다 — `limit_note` 가 정본이다.
+        from .bundle import limit_note
+        note = limit_note(macro.bundle_risk)
+        pts.append(f"묶음 한도를 걸어서 {note} 만 들어가. 한도에 닿으면 새로 안 사고, 들고 있는 건 그대로 팔아.")
 
     return pts
 

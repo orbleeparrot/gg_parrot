@@ -75,6 +75,26 @@ def human_summary(macro: Macro) -> str:
         from .entry_filter import make_filter
         parts.append(f"진입 조건: {make_filter(macro).note()}")
 
+    if macro.is_portfolio():
+        specs = macro.leg_specs()
+        weights = [spec.weight for spec in specs]
+        if max(weights) - min(weights) < 0.02:
+            parts.append(f"종목 {len(specs)}개 · 자금 균등")
+        else:
+            # 부동소수 찌꺼기는 소수 둘째 자리에서 자른다(프런트 weightPhrase 와 같은 결과).
+            # 안쪽 구분자는 `", "` 다 — 요약을 `" · "` 로 쪼개 조판하는 화면이 있어서,
+            # `" · "` 를 안에 품으면 `ETH 30%` 가 머리말 없는 조각으로 떠돈다.
+            shares = ", ".join(f"{_coin(spec.symbol)} {round(spec.weight, 2):g}%" for spec in specs)
+            parts.append(f"종목 비중: {shares}")
+        if any(spec.rule_type is not None for spec in specs):
+            parts.append("종목별 규칙을 따로 정했어요")
+        if macro.bundle_risk is not None:
+            # 문구는 `bundle` 이 낸다 — 요약이 따로 만들면 두 벌이 어긋난다.
+            # 요약에 넣을 때만 안쪽 구분자를 `", "` 로 바꾼다. 카드(`bundleLimitPhrase`)와
+            # 문구가 같아야 하므로 `limit_note` 자체는 `" · "` 를 그대로 쓴다.
+            from .bundle import limit_note
+            parts.append("묶음 한도: " + limit_note(macro.bundle_risk).replace(" · ", ", "))
+
     if macro.exchange != "binance":
         from ..exchanges import capabilities
         parts.insert(0, f"{capabilities(macro.exchange)['label']} · KRW 현물")

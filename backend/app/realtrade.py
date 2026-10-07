@@ -856,7 +856,8 @@ def build_bundle(macro: Macro) -> bytes:
     macro.json, README. Windows launchers use CRLF; the macOS launcher is written
     with LF and a 0o755 mode so Finder can double-click it."""
     if macro.exchange != "binance":
-        raise ValueError("매크로 파일은 바이낸스 전용입니다. 업비트·빗썸 매크로는 빠른 실행으로 실행기에 직접 연결해 주세요.")
+        # runner.DOMESTIC_BUNDLE_DETAIL 과 같은 문구다(순환 import 를 피해 글자로 둔다).
+        raise ValueError("독립 봇 압축파일은 바이낸스 전용이에요. 업비트·빗썸은 매크로 파일(.ggm.json)을 내려받아 매크로 실행기에 넣어 주세요.")
     summary = human_summary(macro)
     macro_payload = macro.model_dump(mode="json")
     macro_payload["human_summary"] = summary

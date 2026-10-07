@@ -1,22 +1,47 @@
-// 프로 빌더 — 기존 조건 판(Builder) + 검증 결과 + 근거. 코치 패널 자리는 별도 계획에서 채운다.
+// 프로 빌더 — 왼쪽은 기존 조건 판(Builder) + 검증 결과 + 근거, 오른쪽은 코치 패널(좁혀 가는 대화로 판을 채운다).
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import Builder from "../components/Builder.jsx";
 import BuilderModeMenu from "../components/BuilderModeMenu.jsx";
 import CandleChart from "../components/CandleChart.jsx";
+import CoachPanel from "../components/CoachPanel.jsx";
 import { EmptyState } from "../components/Page.jsx";
 import { api } from "../api.js";
 import { computeStrategyOverlay } from "../lib/indicators.js";
 import { isDomestic, normalizeExchange } from "../lib/exchanges.js";
-import { CANDLE_INTERVALS, buildMacro, validateDetailed } from "../lib/macro.js";
+import { CANDLE_INTERVALS, FIELDLESS_ERROR_FIELDS, buildMacro, validateDetailed } from "../lib/macro.js";
 import { seedForm } from "../lib/studioProSeed.js";
 import { analysisLabel, sameForm, warningText, windowBars } from "../lib/validationView.js";
 import { barScale, headlineNote, metricText } from "../lib/validationFormat.js";
 import "./StudioPro.css";
 
 const WINDOW_COUNT = 4;
-// 서버(/api/validate)가 여러 종목 매크로에 내는 문구와 같다 — 요청 한 번과 분당 한도를 아낀다.
-const PORTFOLIO_MESSAGE = "여러 종목 포트폴리오 매크로는 아직 검증할 수 없어요. 종목 하나로 나눠 검증해 주세요.";
+const COACH_DONE_TEXT = "코치가 판을 다 채웠어요 · 아래에서 검증해 보세요.";
+
+// 코치가 방금 바꾼 칸을 한 줄로 알려 준다. 조건 판(Builder) 안의 칸을 직접 깜빡이게 하려면 Builder 에
+// 새 prop 을 달고 내부 격자까지 손대야 하므로, 코치 패널 쪽에 "방금 바꾼 것" 한 줄을 두는 쪽을 골랐다.
+// 패치 키는 여러 개가 한꺼번에 오므로(규칙 하나가 기본값 열 칸을 함께 바꾼다) 묶음 이름으로 줄인다.
+const PATCH_GROUPS = [
+  ["규칙", (key) => key === "rule_type"],
+  ["봉 간격", (key) => key === "candle_interval"],
+  ["종목", (key) => key === "symbol"],
+  ["비중", (key) => key === "leg_weights"],
+  ["기간", (key) => key === "preset" || key === "start" || key === "end"],
+  ["시작 자금", (key) => ["initial_capital", "amount_per_buy", "base_order_size", "safety_order_size"].includes(key)],
+  ["손절 · 투입 비율", (key) => ["use_stop_loss", "stop_loss_pct", "invest_ratio_pct"].includes(key)],
+  ["진입 조건", (key) => key === "use_entry_filter" || key.startsWith("filter_")],
+  ["묶음 한도", (key) => key === "use_bundle_risk" || key.startsWith("bundle_")],
+];
+
+// 바뀐 칸 묶음의 이름들. 어느 묶음에도 안 드는 키(규칙마다 딸려 오는 세부 값)는 '규칙' 으로 셈한다.
+export function patchGroups(patch) {
+  const keys = Object.keys(patch || {});
+  if (!keys.length) return [];
+  const names = PATCH_GROUPS.filter(([, match]) => keys.some(match)).map(([name]) => name);
+  const matched = new Set(keys.filter((key) => PATCH_GROUPS.some(([, match]) => match(key))));
+  if (keys.length > matched.size && !names.includes("규칙")) names.unshift("규칙");
+  return names;
+}
 
 const errorText = (err, fallback) => (err && typeof err.message === "string" && err.message ? err.message : fallback);
 const dayOf = (stamp) => (typeof stamp === "string" && stamp ? stamp.slice(0, 10) : "");
@@ -118,7 +143,11 @@ export default function StudioPro() {
   const [runError, setRunError] = useState("");
   const [explainError, setExplainError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [fileBusy, setFileBusy] = useState(false);
+  const [fileError, setFileError] = useState(""); // 매크로 파일 내려받기가 실패한 이유(서버 문구 그대로)
   const [explaining, setExplaining] = useState(false);
+  const [coachChanged, setCoachChanged] = useState([]); // 코치가 방금 바꾼 칸 묶음 이름
+  const [coachDone, setCoachDone] = useState(false);
   const runId = useRef(0);
   const navigate = useNavigate();
 
@@ -163,12 +192,49 @@ export default function StudioPro() {
     navigate(target.path, macro ? { state: { macro, source: "builder-mode" } } : undefined);
   };
 
+  // 코치가 올린 패치 — 이번 턴의 몫만 오므로 지금 조건에 **병합**한다(되돌리기는 쌓인 전부를 보낸다).
+  // 조건이 바뀌면 아래 '지난 결과' 표시는 form 과 reportForm 을 견주어 저절로 뜬다 — 따로 켤 것이 없다.
+  const applyCoachPatch = (patch) => {
+    setForm((previous) => ({ ...previous, ...patch }));
+    setCoachChanged(patchGroups(patch));
+    setCoachDone(false);
+  };
+
   // 조건을 고치면 화면의 결과는 이전 설정의 것이다 — 지우지 않고 '지난 결과' 로 표시한다.
   // 고쳤는지는 setForm 이 불린 횟수가 아니라 값으로 가린다. 공용 조건 판은 값이 그대로인 갱신도
   // (때로는 await 뒤에 늦게) 보내므로, 호출마다 '바뀜' 으로 치면 방금 나온 결과가 지난 결과로 둔갑한다.
   // 그래서 따로 상태를 두지 않고 매 그림마다 '결과를 만든 조건' 과 '지금 조건' 을 견줘 낸다.
   const stale = report !== null && reportForm !== null && !sameForm(form, reportForm);
   const shownFormError = formError && sameForm(formError.form, form) ? formError : null;
+  // 비중 · 묶음 한도 · 레그 규칙 오류는 칸에 띄울 자리가 없다(종목 행 안의 생 입력 · 체크박스 · 펼치는 판).
+  // 검증을 누르기 전에도 바로 보여 준다 — 안 그러면 비중 합이 틀려 검증이 막히는 걸 누르고 나서야 안다.
+  const fieldlessError = (() => {
+    const problem = validateDetailed(form);
+    return problem && FIELDLESS_ERROR_FIELDS.includes(problem.field) ? problem : null;
+  })();
+  const formProblem = shownFormError || fieldlessError;
+
+  // 매크로 파일 내려받기 — 지금 조건을 매크로로 싸서 .ggm.json 으로 받는다(실행기에 넣어 돌린다).
+  // 누르기 전에 조건 검증을 한 번 거친다: 틀린 조건으로 파일을 받아 가면 실행기에서야 막힌다.
+  // 여러 종목 묶음 매크로는 서버가 422 로 거절한다(실행기가 한 종목만 돌린다) — 그 문구를 그대로 보인다.
+  async function downloadFile() {
+    const problem = validateDetailed(form);
+    if (problem) {
+      setFormError({ ...problem, form });
+      setFileError("");
+      return;
+    }
+    setFormError(null);
+    setFileError("");
+    setFileBusy(true);
+    try {
+      await api.downloadMacroFile(buildMacro(form));
+    } catch (err) {
+      setFileError(errorText(err, "매크로 파일을 내려받지 못했어요. 잠시 뒤 다시 시도해 주세요."));
+    } finally {
+      setFileBusy(false);
+    }
+  }
 
   async function runValidation() {
     // 조건 판이 이미 보여 주는 입력 검증을 요청 전에도 한 번 거친다 — 서버까지 보낼 필요 없는 오류를 여기서 막는다.
@@ -178,10 +244,6 @@ export default function StudioPro() {
       return;
     }
     const macro = buildMacro(form);
-    if (macro.symbols) {
-      setFormError({ message: PORTFOLIO_MESSAGE, form });
-      return;
-    }
     const mine = ++runId.current;
     const startedWith = form; // 이 요청이 보낸 조건 — 요청 중에 고치면 도착한 결과는 이 값과 달라진다
     setFormError(null);
@@ -229,6 +291,9 @@ export default function StudioPro() {
       <h1 className="pro-title">
         <BuilderModeMenu mode="pro" onSwitch={switchMode} />
       </h1>
+      {/* 두 열 — 왼쪽은 차트 · 조건 판 · 결과, 오른쪽은 코치. 좁은 화면에서는 코치가 위로 올라간다(CSS). */}
+      <div className="pro-cols">
+      <div className="pro-main">
       {/* 차트 — 조건을 고치면 종목·봉 간격·보조지표가 바로 따라온다. 봉 간격은 차트 도구줄에서도 바뀐다.
           판 머리는 따로 두지 않는다: CandleChart(studio) 의 도구줄이 곧 머리다(기본 빌더와 같다). */}
       <section className="pro-chart" aria-label="차트 · 보조지표">
@@ -255,11 +320,23 @@ export default function StudioPro() {
       </section>
 
       <section className="pro-build" aria-label="조건">
-        <Builder form={form} setForm={setForm} intervalOptions={intervalOptions} />
-        {shownFormError ? <p className="pro-error" role="alert">{shownFormError.message}</p> : null}
-        <button type="button" className="pro-run" onClick={runValidation} disabled={busy}>
-          {busy ? "검증 중…" : "검증하기"}
-        </button>
+        {/* 프로 판 — 비중 입력 · 종목마다 규칙 바꾸기 · 묶음 한도가 여기서 켜진다(스펙 §10).
+            "dense" 를 넘기면 좁은 판용 격자로 판 전체가 다시 조판되므로 변형을 따로 둔다. */}
+        <Builder form={form} setForm={setForm} variant="pro" intervalOptions={intervalOptions} />
+        {formProblem ? <p className="pro-error" role="alert">{formProblem.message}</p> : null}
+        <div className="pro-acts">
+          <button type="button" className="pro-run" onClick={runValidation} disabled={busy}>
+            {busy ? "검증 중…" : "검증하기"}
+          </button>
+          {/* 매크로 실행기로 가는 길 — 기본 빌더와 같은 끝점을 쓴다(저장 없이 파일만 내준다). */}
+          <button type="button" className="pro-file" onClick={downloadFile} disabled={fileBusy}>
+            {fileBusy ? "파일 만드는 중…" : "매크로 파일 내려받기"}
+          </button>
+        </div>
+        <p className="pro-note">.ggm.json 을 실행기에 넣어 실행해요</p>
+        {/* 서버는 내려줄 때 실행기 버전을 모른다 — v9 이하에 넣으면 세션 시작에서 426 이 난다. 그래서 여기서 미리 말한다. */}
+        {isDomestic(form.exchange) ? <p className="pro-note">업비트·빗썸은 실행기 v10 이상이 필요해요.</p> : null}
+        {fileError ? <p className="pro-error" role="alert">{fileError}</p> : null}
         {runError ? <p className="pro-error" role="alert">{runError}</p> : null}
       </section>
 
@@ -323,6 +400,20 @@ export default function StudioPro() {
           </div>
         </section>
       ) : null}
+      </div>
+
+      <aside className="pro-side" aria-label="코치">
+        <CoachPanel
+          exchange={form.exchange}
+          onPatch={applyCoachPatch}
+          onDone={() => setCoachDone(true)}
+        />
+        {coachChanged.length > 0 ? (
+          <p className="pro-coach-changed" role="status">방금 {coachChanged.join(" · ")}을 바꿨어요</p>
+        ) : null}
+        {coachDone ? <p className="pro-note">{COACH_DONE_TEXT}</p> : null}
+      </aside>
+      </div>
     </div>
   );
 }

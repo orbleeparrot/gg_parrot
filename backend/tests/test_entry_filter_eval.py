@@ -2,7 +2,7 @@
 
 기대값은 구현 출력을 베낀 것이 아니라 손으로 계산한 값이다. 계산 근거는 각 테스트 위 주석에 있다.
 """
-from app.engine.entry_filter import make_filter
+from app.engine.entry_filter import FilterEval, make_filter
 from app.engine.schema import Macro
 
 BREAKOUT = {"symbol": "BTCUSDT", "rule_type": "I", "candle_interval": "1h", "period": {"preset": "3m"},
@@ -325,3 +325,31 @@ def test_note_bollinger_text():
 def test_note_volume_text():
     assert _eval("volume", {"period": 20, "multiple": 2.0}).note() == "거래량이 20봉 평균의 2배 이상"
     assert _eval("volume", {"period": 10, "multiple": 2.5}).note() == "거래량이 10봉 평균의 2.5배 이상"
+
+
+# --- 모르는 kind 는 조용히 다른 필터로 동작하지 않는다 (스펙 §12: FilterKind 추가만으로 끝나야 한다) ---
+
+class _Unknown:
+    """스키마를 우회해 '아직 구현 안 된 FilterKind' 를 흉내낸다."""
+    kind = "reference_symbol"
+    params: dict = {"period": 20, "multiple": 2.0, "ma_type": "SMA", "side": "above",
+                    "num_std": 2.0, "zone": "inside"}
+
+
+def test_unknown_kind_refused_at_construction():
+    import pytest
+    with pytest.raises(ValueError, match="unsupported filter kind"):
+        FilterEval(_Unknown())
+
+
+def test_unknown_kind_refused_in_update_and_note():
+    """생성을 통과한 뒤 kind 가 바뀌어도(미래의 부분 구현) 조용히 거래량으로 읽지 않는다."""
+    import pytest
+    ev = _eval("ma", {"period": 3, "side": "above"})
+    for c in (100.0, 101.0, 102.0):       # 지표를 채운다 - 값이 없으면 분기 전에 막고 끝난다
+        ev.update(c)
+    ev.kind = _Unknown.kind
+    with pytest.raises(ValueError, match="unsupported filter kind"):
+        ev.update(100.0)
+    with pytest.raises(ValueError, match="unsupported filter kind"):
+        ev.note()

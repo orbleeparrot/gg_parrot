@@ -3,6 +3,7 @@ import EquityChart from "./EquityChart.jsx";
 import SimBadge from "./SimBadge.jsx";
 import InfoTooltip from "./InfoTooltip.jsx";
 import { fmtMoney, fmtMoneyCompact, fmtKrw, baseOf } from "../lib/format.js";
+import { isEvenWeights } from "../lib/portfolio.js";
 import { useUsdKrw } from "../lib/usdkrw.js";
 import {
   RESULT_BLOCKS,
@@ -240,12 +241,13 @@ function Stat({
   );
 }
 
-function PerSymbolTable({ rows }) {
+// legs 를 받으면 비중이 균등한지 보고 머리말을 고른다 — 비중을 정한 묶음에 "자금 균등 분할" 은 거짓이다.
+function PerSymbolTable({ rows, legs = null }) {
   if (!rows || rows.length === 0) return null;
   return (
     <div className="pt-2">
       <div className="t-title text-slate-900 mb-3">
-        종목별 성과 (포트폴리오 · 자금 균등 분할)
+        종목별 성과 (포트폴리오 · {isEvenWeights(legs) ? "자금 균등 분할" : "종목마다 비중 지정"})
       </div>
       {/* 표는 캔버스 위 괘선만 — 감싸는 상자를 두지 않는다(§6 table-row). */}
       <div className="overflow-x-auto">
@@ -293,6 +295,8 @@ export default function ResultView({
   dataSource,
   periodLabel,
   symbol,
+  // 묶음의 레그 목록(있으면) — 종목별 성과 머리말이 '균등' 이냐 '비중 지정' 이냐를 가른다.
+  legs = null,
   leverage = 1,
   customizable = true,
   // 바깥(Studio)에서 넣어주는 블록 — 실시간 차트처럼 결과 계산과 무관하게
@@ -452,7 +456,7 @@ export default function ResultView({
         ))}
       </div>
     ),
-    symbols: <PerSymbolTable rows={perSymbol} />,
+    symbols: <PerSymbolTable rows={perSymbol} legs={legs} />,
     ai: (
       <ParrotExplain
         explanation={explanation}

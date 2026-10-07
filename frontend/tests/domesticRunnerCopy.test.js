@@ -223,7 +223,8 @@ test("'자동 연결 최소 버전' 칸 — 국내 매크로는 국내 요구 �
 });
 
 test("매크로 파일 내려받기 실패는 서버가 말한 이유를 그대로 던진다", async (t) => {
-  const reason = "매크로 파일은 바이낸스 전용입니다. 업비트·빗썸 매크로는 빠른 실행으로 실행기에 직접 연결해 주세요.";
+  // 지금 남은 422 는 여러 종목 묶음 매크로다(국내는 더 이상 거절하지 않는다 — domesticMacroFile.test.js 참고).
+  const reason = "실행기는 아직 여러 종목 포트폴리오 매크로를 지원하지 않아요. 종목 하나로 나눠 실행해 주세요.";
   t.mock.method(globalThis, "fetch", async () => Response.json({ detail: reason }, { status: 422 }));
   await assert.rejects(api.downloadMacroFile({ exchange: "upbit", rule_type: "A", position_side: "long" }), { message: reason });
   t.mock.method(globalThis, "fetch", async () => new Response("<html>oops</html>", { status: 500 }));

@@ -2427,7 +2427,8 @@ def paper_trades(session_id: int) -> dict:
 @app.post("/api/realtrade/bundle")
 def realtrade_bundle(req: BundleRequest) -> Response:
     if is_domestic(req.macro.exchange):
-        raise HTTPException(422, runner_mod.DOMESTIC_RUNNER_DETAIL)
+        # 압축 묶음 안의 bot.py 에 업비트·빗썸 주문 코드가 없다 — 받아도 돌지 않으므로 계속 막는다.
+        raise HTTPException(422, runner_mod.DOMESTIC_BUNDLE_DETAIL)
     data = build_bundle(req.macro)
     filename = f"realtrade-bot-{req.macro.rule_type.value}-{req.macro.position_side.value}.zip"
     return Response(
@@ -2444,10 +2445,13 @@ def realtrade_macro_file(req: BundleRequest) -> Response:
 
     실행기가 엔진을 내장하므로 bot.py/run.bat 없이 이 설정 파일 하나만 내려받아
     실행기에 넣으면 된다(human_summary 동봉).
+
+    업비트·빗썸 매크로도 내준다 — 실행기 v10 이상이 국내 주문을 낼 줄 안다. 여기서는 실행기 버전을
+    알 수 없으므로 버전을 묻지 않는다. v9 이하에 넣으면 세션 시작이 426 으로 거절한다
+    (runner._require_supported_exchange — 버전을 아는 유일한 자리다). 화면은 내려받기 옆에서
+    'v10 이상이 필요하다' 를 미리 말해 준다.
     """
     macro = req.macro
-    if is_domestic(macro.exchange):
-        raise HTTPException(422, runner_mod.DOMESTIC_RUNNER_DETAIL)
     if macro.is_portfolio():
         # 여러 종목은 어느 실행기 버전으로도 못 돌린다(runner.PORTFOLIO_UNSUPPORTED_DETAIL 주석 참고).
         # 세션 시작이 어차피 거절하지만, 그때는 사용자가 파일을 받아 실행기에 넣은 뒤다 — 내려받기에서 말해 준다.

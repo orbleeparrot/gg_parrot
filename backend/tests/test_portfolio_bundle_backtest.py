@@ -235,3 +235,14 @@ def test_empty_frames_are_not_shared_between_windows():
         {"BTCUSDT": frame(list(range(100, 108))), "ETHUSDT": pd.DataFrame()}, 2)
     assert len(parts) == 2
     assert parts[0]["ETHUSDT"] is not parts[1]["ETHUSDT"]
+
+
+def test_curve_timestamps_match_the_shared_iso_format():
+    """곡선의 t 는 backtest._iso 와 같은 글자여야 한다 — 서식을 두 벌 들고 있어서 못 박는다."""
+    from app.engine.backtest import _iso
+
+    f = frame(RISING)
+    legs = [{"symbol": "BTCUSDT", "weight": 50}, {"symbol": "ETHUSDT", "weight": 50}]
+    got = dict(run_bundle(bundle(legs, bundle_risk={"max_exposure_pct": 100.0}),
+                          {"BTCUSDT": f, "ETHUSDT": f}))
+    assert [p.t for p in got["BTCUSDT"].equity_curve] == [_iso(t) for t in f["timestamp"]]

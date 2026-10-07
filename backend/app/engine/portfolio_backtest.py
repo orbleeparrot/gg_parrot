@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 
 from .backtest import (
-    _PERIODS_PER_YEAR, BacktestResult, EquityPoint, _buy_hold_return_pct, _iso, _metrics,
+    _PERIODS_PER_YEAR, BacktestResult, EquityPoint, _buy_hold_return_pct, _metrics,
 )
 from .bundle import BundleGate
 from .candles import make_candle_sim
@@ -28,30 +28,82 @@ MIN_ROWS_PER_WINDOW = 2
 
 
 class _Leg:
-    """동기 루프가 레그 하나에 대해 들고 있는 것 전부."""
+    """동기 루프가 레그 하나에 대해 들고 있는 것 전부.
 
-    __slots__ = ("symbol", "sim", "rows", "cursor", "curve", "closes", "ts_ns")
+    봉마다 ``pd.Timestamp`` 를 새로 만들고 ``.iloc`` 로 여섯 번 긁으면 레그 수 × 봉 수만큼
+    느려진다 — 5레그 × 20,000봉이 요청 안에서 십여 초였다. ``backtest._run_candle_engine``
+    처럼 레그마다 **한 번만** 배열로 뽑아 두고 루프에서는 인덱싱만 한다.
+
+    시각은 두 벌 들고 있다. 비교 · 정렬은 UTC 나노초 정수(``ts_ns``)로 — tz 가 있는 레그와
+    없는 레그를 섞어도 된다. 심에 **먹이는** 시각(``times``)과 자산곡선의 ``t``
+    문자열(``iso``)은 레그 자기 행의 **원래 값** 그대로다. 그래서 기존 결과가 한 바이트도
+    바뀌지 않고, 레그가 자기 봉에서만 판정하는 성질도 그대로다.
+    """
+
+    __slots__ = ("symbol", "sim", "n", "cursor", "curve", "ts_ns", "times", "iso",
+                 "opens", "highs", "lows", "closes", "volumes")
 
     def __init__(self, symbol: str, sim, df: pd.DataFrame) -> None:
         self.symbol = symbol
         self.sim = sim
-        self.rows = df
         self.cursor = 0
         self.curve: List[EquityPoint] = []
-        self.closes = df["close"].to_numpy(dtype=float) if len(df) else None
-        self.ts_ns = _utc_ns(df)
+        if not len(df):
+            # 열이 아예 없는 빈 프레임도 여기로 온다 — 이 레그는 한 봉도 받지 않는다.
+            self.n = 0
+            self.ts_ns = self.times = self.iso = None
+            self.opens = self.highs = self.lows = self.closes = self.volumes = None
+            return
+        if TIME_COLUMN not in df.columns:
+            # 행은 있는데 시각이 없다 — 조용히 건너뛰면 그 레그가 통째로 사라진다.
+            raise ValueError(f"레그 {symbol} 의 캔들에 {TIME_COLUMN} 열이 없습니다")
+        self.n = len(df)
+        idx = pd.DatetimeIndex(pd.to_datetime(df[TIME_COLUMN]))
+        self.ts_ns = _as_utc_ns(idx)
+        self.times = idx.to_pydatetime()
+        self.iso = list(idx.strftime(_ISO_FORMAT))      # backtest._iso 와 같은 글자
+        self.opens = df["open"].to_numpy(dtype=float)
+        self.highs = df["high"].to_numpy(dtype=float)
+        self.lows = df["low"].to_numpy(dtype=float)
+        self.closes = df["close"].to_numpy(dtype=float)
+        # 거래량 필터만 쓰는 열. 없으면 None 으로 넘겨 필터가 막게 한다(원칙 2).
+        self.volumes = df["volume"].to_numpy(dtype=float) if "volume" in df.columns else None
+
+    def volume_at(self, i: int) -> Optional[float]:
+        """NaN · inf 는 '모른다(None)' 로 — 0.0("거래가 없었다")과 다른 값이다.
+
+        ``backtest._run_candle_engine.volume_at`` 과 ``candle_feed._volume`` 이 같은 가드를
+        갖고 있다. 세 곳이 각자 들고 있는 이유는 보는 자료 모양이 다르기 때문이다(여기는
+        레그 배열, 저기는 봉 배열, 피드는 소켓 메시지). 한 곳으로 올리면 호출부가 자료를
+        서로 맞춰 주는 비용이 더 크다 — 대신 뜻이 어긋나지 않게 주석이 서로를 가리킨다.
+        """
+        if self.volumes is None:
+            return None
+        v = float(self.volumes[i])
+        return v if math.isfinite(v) else None
+
+
+# ``backtest._iso`` 와 **같은 글자**를 내야 한다. 봉마다 부르는 대신 레그마다 한 번
+# 벡터로 찍으려고 서식만 여기 들고 있다 — 두 벌이 어긋나면
+# ``test_curve_timestamps_match_the_shared_iso_format`` 이 잡는다.
+_ISO_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+
+
+def _as_utc_ns(idx: pd.DatetimeIndex) -> np.ndarray:
+    """시각을 UTC 나노초 정수로. naive 는 UTC 로 읽는다.
+
+    정수로 모으면 tz 가 있는 레그와 없는 레그를 섞어도 정렬 · 동등비교가 되고, 단위가
+    프레임마다 달라도(ns · us) 같은 저울에 올라간다.
+    """
+    aware = idx.tz_localize("UTC") if idx.tz is None else idx.tz_convert("UTC")
+    return aware.as_unit("ns").asi8
 
 
 def _utc_ns(df: pd.DataFrame) -> Optional[np.ndarray]:
-    """프레임 시각을 UTC 나노초 정수로. 시각 열이 없거나 행이 없으면 None.
-
-    정수로 모으면 tz 가 있는 레그와 없는 레그를 섞어도 정렬 · 동등비교가 된다(naive 는 UTC 로
-    읽는다). 레그에 **먹이는** 시각은 그대로 자기 행의 원래 값을 쓴다 — 심이 보는 시각과
-    자산곡선의 ``t`` 문자열이 바뀌면 안 되고, 레그가 자기 봉에서만 판정하는 성질도 그대로다.
-    """
+    """프레임 시각을 UTC 나노초 정수로. 시각 열이 없거나 행이 없으면 None."""
     if TIME_COLUMN not in getattr(df, "columns", ()) or not len(df):
         return None
-    return pd.DatetimeIndex(pd.to_datetime(df[TIME_COLUMN], utc=True)).as_unit("ns").asi8
+    return _as_utc_ns(pd.DatetimeIndex(pd.to_datetime(df[TIME_COLUMN])))
 
 
 def _timeline(legs: List["_Leg"]) -> np.ndarray:
@@ -60,20 +112,6 @@ def _timeline(legs: List["_Leg"]) -> np.ndarray:
     if not parts:
         return np.empty(0, dtype="int64")
     return np.unique(np.concatenate(parts))
-
-
-def _volume_at(df: pd.DataFrame, i: int) -> Optional[float]:
-    """NaN · inf 는 '모른다(None)' 로 — 0.0("거래가 없었다")과 다른 값이다.
-
-    ``backtest._run_candle_engine`` 과 ``candle_feed._volume`` 이 같은 가드를 갖고 있다.
-    세 곳이 같은 뜻을 각자 들고 있는 이유는 보는 자료 모양이 다르기 때문이다(여기는 레그
-    프레임, 저기는 봉 배열, 피드는 소켓 메시지). 한 곳으로 올리면 호출부가 자료를 서로
-    맞춰 주는 비용이 더 크다 — 대신 뜻이 어긋나지 않게 주석을 서로 가리키게 둔다.
-    """
-    if "volume" not in df.columns:
-        return None
-    v = float(df["volume"].iloc[i])
-    return v if math.isfinite(v) else None
 
 
 def run_bundle(macro: Macro, frames: Dict[str, pd.DataFrame]) -> List[Tuple[str, BacktestResult]]:
@@ -108,18 +146,16 @@ def run_bundle(macro: Macro, frames: Dict[str, pd.DataFrame]) -> List[Tuple[str,
 
     for t in timeline:
         for leg in legs:
-            i = leg.cursor
-            rows = leg.rows
+            i, n, ts_ns = leg.cursor, leg.n, leg.ts_ns
             # 같은 시각 행이 둘 이상이면 **전부** 먹인다. 한 칸만 전진하면 커서가 중복 행에
             # 걸려 그 뒤 모든 봉을 조용히 버린다(예외도 경고도 없이 수익률이 틀린 값이 된다).
-            while i < len(rows) and leg.ts_ns[i] == t:
-                ts = pd.Timestamp(rows[TIME_COLUMN].iloc[i]).to_pydatetime()
-                close = float(rows["close"].iloc[i])
+            while i < n and ts_ns[i] == t:
+                close = float(leg.closes[i])
                 leg.sim.on_candle(
-                    float(rows["open"].iloc[i]), float(rows["high"].iloc[i]),
-                    float(rows["low"].iloc[i]), close, ts, volume=_volume_at(rows, i),
+                    float(leg.opens[i]), float(leg.highs[i]), float(leg.lows[i]),
+                    close, leg.times[i], volume=leg.volume_at(i),
                 )
-                leg.curve.append(EquityPoint(t=_iso(rows[TIME_COLUMN].iloc[i]),
+                leg.curve.append(EquityPoint(t=leg.iso[i],
                                              equity=round(leg.sim.equity(close), 4)))
                 i += 1
             leg.cursor = i

@@ -255,3 +255,90 @@ def test_leveraged_leg_does_not_eat_the_whole_exposure_cap():
     flat = _Sim()
     g.register(held); g.register(flat)
     assert g.blocks(flat) is False
+
+
+# --- 정리성 주문은 포화된 관문에서도 나간다 (설계 원칙 5) ----------------
+def _ohlc(sim, bars, hour0=0):
+    """(o, h, l, c) 봉을 그대로 먹인다 — 정리성 주문은 봉 안 저가 · 고가로 판정된다."""
+    out = []
+    for i, (o, h, l, c) in enumerate(bars):
+        ts = datetime(2026, 1, 1, hour0 + i, tzinfo=timezone.utc)
+        out.extend(sim.on_candle(o, h, l, c, ts, volume=1000.0))
+    return out
+
+
+def _saturated_gate(sim):
+    """이 심이 **새로** 들어가려 하면 반드시 막는 관문. 이미 들고 있어도 노출로 막는다."""
+    g = BundleGate(BundleRisk(max_positions=1, max_exposure_pct=1.0), 1000.0)
+    g.register(_Sim(qty=100.0, entry=100.0))     # 다른 레그가 자리와 노출을 다 먹었다
+    g.register(sim)
+    sim.bundle_gate = g
+    return g
+
+
+MARTINGALE = {
+    "symbol": "BTCUSDT", "rule_type": "H", "candle_interval": "1h",
+    "period": {"preset": "3m"},
+    # 익절 50% 는 이 봉 계열에서 닿지 않는다 — 안전주문만 보려고 멀리 둔다.
+    "params": {"base_order_size": 100.0, "safety_order_size": 100.0, "price_deviation": 5.0,
+               "max_safety_orders": 2, "take_profit": 50.0, "initial_capital": 1000},
+    "risk": {"invest_ratio": 1.0},
+}
+
+# 1봉: 기본 주문(종가 100). 2봉: 저가 94 가 안전주문 가격 95 를 지난다.
+MARTINGALE_BARS = [(100.0, 101.0, 99.0, 100.0), (100.0, 100.0, 94.0, 96.0)]
+
+SAR = {
+    "symbol": "BTCUSDT", "rule_type": "K", "candle_interval": "1h",
+    "period": {"preset": "3m"}, "market": "futures",
+    "params": {"drop_trigger_pct": 5.0, "partial_exit_pct": 50.0, "flip_to_short": True,
+               "short_take_profit_pct": 50.0, "short_stop_loss_pct": 50.0,
+               "initial_capital": 1000},
+    "risk": {"invest_ratio": 1.0},
+}
+
+# 1봉: 롱 진입(종가 100). 2봉: 저가 94 가 방어 발동선 95 를 지난다 → 부분청산 + 숏 전환.
+SAR_BARS = [(100.0, 101.0, 99.0, 100.0), (100.0, 100.0, 94.0, 96.0)]
+
+
+def test_saturated_gate_does_not_block_a_martingale_safety_order():
+    """H 안전주문은 '정리성 주문' 이다 — 한도가 포화돼도 평단을 받칠 수 있어야 한다.
+
+    원칙 5 가 깨지면 한도가 '못 사게' 가 아니라 '못 받치게' 가 되어 열린 손실을 키운다.
+    """
+    # 대조군: 관문 없이는 안전주문이 나간다.
+    free = make_candle_sim(Macro(**MARTINGALE))
+    free_fills = _ohlc(free, MARTINGALE_BARS)
+    assert len([f for f in free_fills if f.side == "buy"]) == 2, \
+        f"대조군이 기본 주문 + 안전주문을 내지 않았다 — 봉 계열을 고쳐라: {free_fills}"
+
+    # 기본 주문까지 가고 나서 관문을 포화시킨다.
+    sim = make_candle_sim(Macro(**MARTINGALE))
+    first = _ohlc(sim, MARTINGALE_BARS[:1])
+    assert len([f for f in first if f.side == "buy"]) == 1 and sim.in_position()
+    _saturated_gate(sim)
+    assert sim.bundle_gate.blocks(sim) is True, "관문이 포화되지 않았다 — 시험이 무의미하다"
+
+    rest = _ohlc(sim, MARTINGALE_BARS[1:], hour0=1)
+    assert [f.side for f in rest] == ["buy"], f"관문이 안전주문을 막았다 — 원칙 5 위반: {rest}"
+    assert sim.total_qty() > first[0].qty
+
+
+def test_saturated_gate_does_not_block_the_sar_defense_short():
+    """K 방어 숏 전환도 정리성 주문이다 — 한도가 포화돼도 롱을 받치는 숏이 나가야 한다."""
+    # 대조군: 관문 없이는 부분청산 + 숏 전환이 일어난다.
+    free = make_candle_sim(Macro(**SAR))
+    free_fills = _ohlc(free, SAR_BARS)
+    assert [f.side for f in free_fills] == ["buy", "sell", "sell", "short"], \
+        f"대조군이 방어 전환을 하지 않았다 — 봉 계열을 고쳐라: {[f.side for f in free_fills]}"
+
+    sim = make_candle_sim(Macro(**SAR))
+    first = _ohlc(sim, SAR_BARS[:1])
+    assert [f.side for f in first] == ["buy"] and sim.in_position()
+    _saturated_gate(sim)
+    assert sim.bundle_gate.blocks(sim) is True, "관문이 포화되지 않았다 — 시험이 무의미하다"
+
+    rest = _ohlc(sim, SAR_BARS[1:], hour0=1)
+    assert [f.side for f in rest] == ["sell", "sell", "short"], \
+        f"관문이 방어 전환을 막았다 — 원칙 5 위반: {[f.side for f in rest]}"
+    assert sim.in_position()

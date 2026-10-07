@@ -1,6 +1,5 @@
 """레그 동기 백테스트 — 한도가 레그를 가로질러 듣는가, 그리고 한도가 없을 때 기존 경로와 같은가."""
 import pandas as pd
-import pytest
 
 from app.engine.backtest import run_backtest
 from app.engine.portfolio_backtest import run_bundle, split_frames_by_time
@@ -14,11 +13,18 @@ BASE = {
 
 
 def frame(closes, start="2026-01-01"):
+    """시가는 **직전 종가**다 — 종가와 같게 두면 시가 · 종가를 혼동하는 결함이 전부 통과한다.
+
+    F · G · J 와 I 의 next_open 은 다음 봉 **시가**에 체결하는 규칙이고, 자산곡선은 **종가**로
+    평가한다. 두 값이 같은 픽스처에서는 그 축의 결함이 보이지 않는다(자산곡선 평가가를 시가로
+    바꾸거나 on_candle 에 시가 · 종가를 뒤집어 넣어도 수트가 초록이었다).
+    """
     ts = pd.date_range(start, periods=len(closes), freq="1h")
+    opens = [closes[0]] + list(closes[:-1]) if len(closes) else []
     return pd.DataFrame({
         "timestamp": ts,
-        "open": closes, "high": [c * 1.03 for c in closes],
-        "low": [c * 0.99 for c in closes], "close": closes,
+        "open": opens, "high": [max(c, o) * 1.03 for c, o in zip(closes, opens)],
+        "low": [min(c, o) * 0.99 for c, o in zip(closes, opens)], "close": closes,
         "volume": [1000.0] * len(closes),
     })
 
@@ -97,10 +103,11 @@ def test_weights_decide_leg_capital():
 
 # --- 레그 길이가 다를 때 (Review Focus 2) -----------------------------
 def test_shorter_leg_only_steps_on_its_own_bars():
-    """상장이 늦은 종목이 없는 가격으로 거래하면 안 된다.
+    """레그별 자산곡선이 **자기 봉 수와 자기 시각**을 따른다.
 
-    짧은 레그의 자산곡선 점 수가 자기 봉 수와 같아야 한다 — 긴 레그의 시각에 끌려가면
-    없는 봉에서 판정을 내렸다는 뜻이다.
+    이 시험은 곡선의 모양만 본다 — 자기 봉 가드 자체는 증명하지 않는다(가드를 없애도 점은
+    어차피 레그 자기 행 시각으로 찍히고 커서는 자기 봉 수에서 멈춘다).
+    가드는 ``test_shorter_leg_does_not_compete_for_slots_before_it_exists`` 가 본다.
     """
     long_f = frame(RISING)                                   # 8봉, 2026-01-01 00:00~
     short_f = frame(RISING[:4], start="2026-01-01 04:00")    # 4봉, 04:00~
@@ -117,21 +124,75 @@ def test_leg_with_no_rows_fails_that_leg_only():
     legs = [{"symbol": "BTCUSDT", "weight": 50}, {"symbol": "ETHUSDT", "weight": 50}]
     got = dict(run_bundle(bundle(legs, bundle_risk={"max_exposure_pct": 100.0}),
                           {"BTCUSDT": frame(RISING), "ETHUSDT": frame([])}))
-    assert got["BTCUSDT"].total_trades >= 0
+    assert got["BTCUSDT"].total_trades > 0, "빈 레그가 성한 레그의 봉까지 삼켰다"
+    assert len(got["BTCUSDT"].equity_curve) == len(RISING)
     assert got["ETHUSDT"].total_trades == 0
     assert got["ETHUSDT"].initial_capital == 500.0
 
 
 # --- 레그별 규칙 ------------------------------------------------------
 def test_legs_can_run_different_rules():
+    """레그가 정한 규칙으로 **실제로** 돌아야 한다 — 묶음 본체 규칙으로 조용히 돌면 안 된다.
+
+    BTC 레그는 50% 하락을 기다리는 E 다. 이 데이터에서는 한 번도 들어가지 않는다. 묶음 본체
+    규칙(I, 돌파)으로 조용히 돌면 BTC 에도 거래가 생겨 이 단정이 깨진다.
+    """
     legs = [
         {"symbol": "BTCUSDT", "weight": 50, "rule_type": "E",
-         "params": {"trail_percent": 3.0, "initial_capital": 1000}},
+         "params": {"entry_mode": "dip", "entry_dip": 50.0, "trail_percent": 3.0,
+                    "initial_capital": 1000}},
         {"symbol": "ETHUSDT", "weight": 50},
     ]
-    got = dict(run_bundle(bundle(legs, bundle_risk={"max_exposure_pct": 100.0}),
-                          {"BTCUSDT": frame(RISING), "ETHUSDT": frame(RISING)}))
+    frames = {"BTCUSDT": frame(RISING), "ETHUSDT": frame(RISING)}
+    got = dict(run_bundle(bundle(legs, bundle_risk={"max_exposure_pct": 100.0}), frames))
     assert set(got) == {"BTCUSDT", "ETHUSDT"}
+    # 대조군: 같은 데이터 · 같은 자본에 묶음 본체 규칙을 돌리면 거래가 생긴다.
+    as_bundle_rule = run_backtest(
+        Macro(**{**BASE, "symbol": "BTCUSDT",
+                 "params": {**BREAKOUT_PARAMS, "initial_capital": 500}}), frames["BTCUSDT"])
+    assert as_bundle_rule.total_trades > 0, "대조군에 거래가 없으면 이 시험이 무의미하다"
+    assert got["BTCUSDT"].total_trades == 0, "레그 규칙(E, 50% 하락 대기)이 무시됐다"
+    assert got["ETHUSDT"].total_trades > 0
+
+
+def test_leg_result_matches_running_that_legs_rule_alone():
+    """레그 규칙 · 세부값이 적용됐을 뿐 아니라 **그 설정 그대로** 돌았음을 본다."""
+    legs = [
+        {"symbol": "BTCUSDT", "weight": 50, "rule_type": "E",
+         "params": {"trail_percent": 1.0, "activation_profit": 0.5, "initial_capital": 1000}},
+        {"symbol": "ETHUSDT", "weight": 50},
+    ]
+    m = bundle(legs, risk={"invest_ratio": 0.4}, bundle_risk={"max_exposure_pct": 100.0})
+    frames = {"BTCUSDT": frame(RISING), "ETHUSDT": frame(RISING)}
+    got = dict(run_bundle(m, frames))
+
+    alone = run_backtest(m.for_leg(m.legs[0], 500.0), frames["BTCUSDT"])
+    assert alone.total_trades > 0, "대조 경로에 거래가 없어 비교가 무의미하다"
+    assert got["BTCUSDT"].total_trades == alone.total_trades
+    assert got["BTCUSDT"].final_return_pct == alone.final_return_pct
+    # 두 레그가 같은 규칙으로 돌았다면 같은 데이터에서 결과가 같다 — 다르다는 것이
+    # 레그 규칙이 실제로 들었다는 뜻이다.
+    assert got["ETHUSDT"].final_return_pct != got["BTCUSDT"].final_return_pct
+
+
+# --- 한도가 없는 묶음 -------------------------------------------------
+def test_bundle_without_limits_runs_with_no_gate_attached():
+    """한도를 주지 않으면 관문을 꽂지 않는다 — 그래도 결과는 나온다.
+
+    이 모듈의 본 쓰임은 한도가 있는 묶음이지만 분기 자체가 시험되지 않아 조용히 썩을 자리였다.
+    """
+    legs = [{"symbol": "BTCUSDT", "weight": 50}, {"symbol": "ETHUSDT", "weight": 50}]
+    m = bundle(legs)
+    assert m.bundle_risk is None
+    frames = {"BTCUSDT": frame(RISING), "ETHUSDT": frame(RISING)}
+    got = dict(run_bundle(m, frames))
+    # 두 레그가 서로를 막지 않는다 — 기존 per-leg 경로와 같은 답이다.
+    for sym in ("BTCUSDT", "ETHUSDT"):
+        alone = run_backtest(m.for_leg(next(l for l in m.legs if l.symbol == sym), 500.0),
+                             frames[sym])
+        assert alone.total_trades > 0
+        assert got[sym].total_trades == alone.total_trades
+        assert [p.equity for p in got[sym].equity_curve] == [p.equity for p in alone.equity_curve]
 
 
 # --- 시간 기준 창 자르기 ----------------------------------------------
@@ -157,6 +218,9 @@ def test_shorter_leg_does_not_compete_for_slots_before_it_exists():
 
     ETH 를 앞에 둔다. ETH 가 자기 봉이 없는 00:00~03:00 에 판정을 내리면 BTC 보다 먼저
     자리를 잡아, 혼자 돌린 BTC 와 결과가 달라진다.
+
+    자기 봉 가드를 실제로 무는 시험은 이쪽이다 — 곡선 모양만 보는
+    ``test_shorter_leg_only_steps_on_its_own_bars`` 와 짝이다.
     """
     btc = frame(RISING[:4])                                  # 00:00~03:00
     eth = frame(RISING[:4], start="2026-01-01 04:00")        # 04:00~07:00
@@ -246,3 +310,25 @@ def test_curve_timestamps_match_the_shared_iso_format():
     got = dict(run_bundle(bundle(legs, bundle_risk={"max_exposure_pct": 100.0}),
                           {"BTCUSDT": f, "ETHUSDT": f}))
     assert [p.t for p in got["BTCUSDT"].equity_curve] == [_iso(t) for t in f["timestamp"]]
+
+
+def test_no_gate_object_is_created_without_bundle_limits(monkeypatch):
+    """한도가 없으면 관문을 아예 만들지 않는다(심의 bundle_gate 가 None 으로 남는다)."""
+    import app.engine.portfolio_backtest as pb
+
+    seen = []
+
+    class _Spy(pb.BundleGate):
+        def __init__(self, risk, total):
+            seen.append(total)
+            super().__init__(risk, total)
+
+    monkeypatch.setattr(pb, "BundleGate", _Spy)
+    legs = [{"symbol": "BTCUSDT", "weight": 50}, {"symbol": "ETHUSDT", "weight": 50}]
+    frames = {"BTCUSDT": frame(RISING), "ETHUSDT": frame(RISING)}
+
+    run_bundle(bundle(legs), frames)
+    assert seen == [], "한도가 없는데 관문을 만들었다"
+    # 대조: 한도를 주면 묶음 자본으로 관문이 하나 생기고 심에 꽂힌다.
+    run_bundle(bundle(legs, bundle_risk={"max_exposure_pct": 100.0}), frames)
+    assert seen == [1000.0]

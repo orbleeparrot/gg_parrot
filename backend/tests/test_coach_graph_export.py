@@ -4,7 +4,7 @@ import pathlib
 
 from app.coach_graph import to_json
 
-EXPORT = pathlib.Path(__file__).resolve().parents[2] / "frontend" / "src" / "lib" / "coachGraph.generated.json"
+EXPORT = pathlib.Path(__file__).resolve().parents[2] / "frontend" / "tests" / "fixtures" / "coachGraph.generated.json"
 
 
 def test_export_exists():

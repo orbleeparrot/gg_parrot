@@ -4,6 +4,9 @@
 파이썬에 폼 빌더를 한 벌 더 베끼는 대신 이 길을 택했다 — 두 벌은 어긋나는 날이 온다.
 
 쓰기: cd backend && .venv/Scripts/python.exe scripts/dump_coach_graph.py
+
+파일은 `frontend/tests/fixtures/` 에 둔다 — 시험 전용 자료다. `src/` 에 두면 300KB 가
+번들에 실릴 길이 생긴다(실행 시에는 서버가 질문을 하나씩 보내므로 프런트는 그래프가 필요 없다).
 """
 import json
 import pathlib
@@ -13,7 +16,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from app.coach_graph import to_json   # noqa: E402
 
-OUT = pathlib.Path(__file__).resolve().parents[2] / "frontend" / "src" / "lib" / "coachGraph.generated.json"
+OUT = pathlib.Path(__file__).resolve().parents[2] / "frontend" / "tests" / "fixtures" / "coachGraph.generated.json"
 
 
 def main() -> None:

@@ -4,33 +4,35 @@
 // 저장은 브라우저 안에서만(개인 편의) — 서버는 모른다.
 
 export const CURRENT_NOTE = {
-  id: "2026-10-02",
-  date: "10.02",
+  id: "2026-10-07",
+  date: "10.07",
   eyebrow: "이번 업데이트",
   title: "껄무새가 이렇게 바뀌었어요",
   // icon 은 components/icons.jsx 의 이름(Lucide). 이모지는 쓰지 않는다.
   items: [
     {
-      icon: "mousePointerClick",
-      title: "리더보드는 오른쪽 클릭으로",
-      text: "복사·수정·삭제를 오른쪽 클릭(휴대폰은 길게 누르기)으로 해요. 내 매크로는 테두리로 보여요.",
-    },
-    {
-      icon: "messageSquare",
-      title: "채팅 카드에 수익률",
-      text: "채팅에서 / 로 언급한 매크로 카드에 지금 수익률이 크게 보여요.",
-    },
-    {
-      icon: "bookmark",
-      title: "종료 기록 · 보관",
-      text: "내 에이전트에서 끝난 실행은 종료 기록으로 모여요. 보관한 기록은 30일이 지나도 남아요.",
-      link: "/agents",
-      link_label: "내 에이전트 보기",
+      icon: "star",
+      title: "코치가 판을 채워 줘요",
+      text: "프로 빌더 옆에서 몇 가지만 물어보고 조건을 채워 줘요. 고르기만 하면 돼요.",
+      link: "/builder/pro",
+      link_label: "프로 빌더 열기",
     },
     {
       icon: "trendingUp",
-      title: "업비트·빗썸 원화 종목",
-      text: "원화(KRW) 종목으로 차트를 보고 백테스트할 수 있어요.",
+      title: "종목마다 비중과 방식",
+      text: "여러 종목을 담을 때 비중을 따로 정하고, 종목마다 다른 매매 방식을 쓸 수 있어요.",
+    },
+    {
+      icon: "triangleAlert",
+      title: "묶음 한도",
+      text: "한 번에 몇 종목까지, 자금을 몇 %까지 넣을지 묶음 전체에 걸 수 있어요.",
+    },
+    {
+      icon: "download",
+      title: "업비트·빗썸도 파일로",
+      text: "매크로 파일(.ggm.json)을 내려받아 실행기에 넣어 돌릴 수 있어요. 실행기 v10 이상이 필요해요.",
+      link: "/runner/install",
+      link_label: "실행기 받기",
     },
   ],
 };

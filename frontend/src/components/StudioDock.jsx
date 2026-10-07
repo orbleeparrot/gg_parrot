@@ -493,9 +493,11 @@ export function StudioOutcomes({ macro, result, perSymbol = [], valErr, strategy
           <button type="button" onClick={quickRun} disabled={!!valErr || launching} className="sd-act-row">
             <ActIcon name="run" /><span className="sd-act-t"><b>{launching ? "실행 준비 중…" : "빠른 실행"}</b><small>내 PC 실행기로 바로 넘겨요</small></span><i className="sd-act-chev" aria-hidden="true" />
           </button>
-          <button type="button" onClick={downloadMacro} disabled={!!valErr || domestic} title={domestic ? "매크로 파일은 바이낸스 전용이에요. 업비트·빗썸은 빠른 실행을 쓰세요." : undefined} className="sd-act-row">
-            <ActIcon name="download" /><span className="sd-act-t"><b>매크로 파일 내려받기</b><small>{domestic ? "바이낸스 전용 · 업비트·빗썸은 빠른 실행" : ".ggm.json 파일로 저장해요"}</small></span><i className="sd-act-chev" aria-hidden="true" />
+          <button type="button" onClick={downloadMacro} disabled={!!valErr} title={domestic ? "업비트·빗썸 매크로 파일은 실행기 v10 이상에서 돌아요." : undefined} className="sd-act-row">
+            <ActIcon name="download" /><span className="sd-act-t"><b>매크로 파일 내려받기</b><small>.ggm.json 파일로 저장해요</small></span><i className="sd-act-chev" aria-hidden="true" />
           </button>
+          {/* 서버는 내려줄 때 실행기 버전을 모른다 — v9 이하에 넣으면 세션 시작에서 426 이 난다. 그래서 버튼 옆에서 미리 말한다. */}
+          {domestic ? <p className="sd-note">업비트·빗썸 매크로 파일은 실행기 v10 이상이 필요해요.</p> : null}
           <button type="button" onClick={onShare} disabled={!!valErr || shareBusy} className="sd-act-row">
             <ActIcon name="link" /><span className="sd-act-t"><b>{shareBusy ? "저장 중…" : "공유 링크 보기"}</b><small>링크와 인증 카드 이미지를 받아요</small></span><i className="sd-act-chev" aria-hidden="true" />
           </button>
@@ -507,7 +509,7 @@ export function StudioOutcomes({ macro, result, perSymbol = [], valErr, strategy
           흐름은 지금 프로젝트 기준: 빠른 실행 마법사(테스트넷 · 웹이 실행기를 열어 줌) → 실거래는 파일을 실행기에서 직접 → 상태·종료는 내 에이전트. */}
       {domestic ? <section className="alert alert-warn sd-runner" aria-labelledby="sd-runner-title">
         <h3 id="sd-runner-title" className="sd-runner-title">국내 거래소 지원 범위</h3>
-        <p className="sd-runner-foot">{exchangeLabel(macro.exchange)} 원화 시세·백테스트·모의매매·리더보드 등록·매크로 저장과 빠른 실행(내 PC 실행기 직접 연결)을 지원해요. 매크로 파일(.ggm.json) 내려받기는 바이낸스 전용이에요. 국내 원화 현물에서는 숏·선물·레버리지를 사용할 수 없어요.</p>
+        <p className="sd-runner-foot">{exchangeLabel(macro.exchange)} 원화 시세·백테스트·모의매매·리더보드 등록·매크로 저장을 지원해요. 매크로 파일(.ggm.json) 내려받기와 빠른 실행 둘 다 돼요(실행기 v10 이상). 국내 원화 현물에서는 숏·선물·레버리지를 사용할 수 없어요.</p>
       </section> : <section className="alert alert-warn sd-runner" aria-labelledby="sd-runner-title">
         <div className="sd-runner-head">
           <h3 id="sd-runner-title" className="sd-runner-title">실거래 실행법</h3>

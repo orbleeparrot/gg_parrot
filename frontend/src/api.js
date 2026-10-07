@@ -197,6 +197,12 @@ export const api = {
   // 카드 네 장의 답으로 종목 후보를 받는다 — 하루 횟수는 이 호출에서 차감된다.
   askCandidates: (body) => req("/api/ask/candidates", { method: "POST", body: JSON.stringify(body), timeoutMs: 90_000 }),
   askMacros: (body, options = {}) => req("/api/ask/macros", { method: "POST", body: JSON.stringify(body), timeoutMs: 90_000, ...options }),
+  // 프로 빌더 코치 — 좁혀 가는 대화. start 만 하루 횟수를 깎고(동의 없으면 403, 한도 없으면 429), 나머지는 깎지 않는다.
+  // 네 끝점이 같은 모양을 돌려준다: { session_id, turn, max_turns, question, form_patch, form, done, wrapped_up, remaining_today }.
+  coachStart: (body = {}) => req("/api/coach/start", { method: "POST", body: JSON.stringify(body), timeoutMs: 30_000 }),
+  coachAnswer: ({ session_id, key, value }) => req("/api/coach/answer", { method: "POST", body: JSON.stringify({ session_id, key, value }), timeoutMs: 30_000 }),
+  coachMore: ({ session_id, key }) => req("/api/coach/more", { method: "POST", body: JSON.stringify({ session_id, key }), timeoutMs: 30_000 }),
+  coachBack: ({ session_id }) => req("/api/coach/back", { method: "POST", body: JSON.stringify({ session_id }), timeoutMs: 30_000 }),
   // 알림(헤더 종): 목록 · 안 읽은 수 · 읽음 처리
   myNotifications: ({ after, ...options } = {}) =>
     req(`/api/me/notifications${Number.isFinite(Number(after)) && after !== undefined ? `?after=${Number(after)}` : ""}`, { timeoutMs: 10_000, ...options }),
@@ -518,7 +524,8 @@ export const api = {
       body: JSON.stringify({ macro }),
     });
     if (!res.ok) {
-      // 서버가 이유를 말했으면 그대로 보인다 — 국내 매크로는 "바이낸스 전용" 이라는 이유와 갈 길(빠른 실행)을 담아 보낸다.
+      // 서버가 이유를 말했으면 그대로 보인다 — 거절 이유(예: 여러 종목 묶음 매크로)는 한국어로 온다.
+      // 국내(업비트·빗썸) 매크로는 거절하지 않는다. 실행기 v10 이상이 필요하다는 안내는 화면이 버튼 옆에서 미리 말한다.
       const body = await res.json().catch(() => null);
       throw new Error(typeof body?.detail === "string" && body.detail ? body.detail : "매크로 파일 생성 실패");
     }

@@ -8,15 +8,17 @@ import { pathToFileURL, fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 
-export async function renderComponent(componentPath, props, { router = false, exportName = "default" } = {}) {
+// routerState: 라우터 state 로 여는 화면(useLocation().state 를 읽는 쪽)을 그릴 때 쓴다 — 넘기지 않으면 전과 같다.
+export async function renderComponent(componentPath, props, { router = false, exportName = "default", routerState = null } = {}) {
   const entry = `
     import React from "react";
     import { renderToStaticMarkup } from "react-dom/server";
     import { MemoryRouter } from "react-router-dom";
     import { ${exportName} as Component } from ${JSON.stringify(join(root, componentPath).split(sep).join("/"))};
-    export const render = (props, router) => {
+    export const render = (props, router, routerState) => {
       const element = React.createElement(Component, props);
-      return renderToStaticMarkup(router ? React.createElement(MemoryRouter, null, element) : element);
+      const entries = routerState ? [{ pathname: "/", state: routerState }] : undefined;
+      return renderToStaticMarkup(router ? React.createElement(MemoryRouter, entries ? { initialEntries: entries } : null, element) : element);
     };
   `;
   const result = await build({
@@ -31,7 +33,7 @@ export async function renderComponent(componentPath, props, { router = false, ex
   const file = join(dir, "bundle.mjs");
   writeFileSync(file, result.outputFiles[0].text);
   const mod = await import(pathToFileURL(file).href);
-  return mod.render(props, router).replace(/<!-- -->/g, "");
+  return mod.render(props, router, routerState).replace(/<!-- -->/g, "");
 }
 
 export const textOf = (html) => html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();

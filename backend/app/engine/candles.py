@@ -162,6 +162,9 @@ class CandleSim:
         # 진입 필터 — 없으면 None. on_candle 이 봉이 끝난 뒤 갱신하고 _entry_blocked 가 묻는다.
         from .entry_filter import make_filter  # 늦은 import: entry_filter -> candles 순환 방지
         self.entry_filter = make_filter(macro)
+        # 묶음 한도 — 묶음을 조립하는 쪽(백테스트 루프 · paper.start_session)이 밖에서 꽂는다.
+        # 심은 자기가 묶음의 일부인지 모른다.
+        self.bundle_gate = None
 
     # -- position helpers (long book) ------------------------------------
     def total_qty(self) -> float:
@@ -175,6 +178,15 @@ class CandleSim:
         if q <= 1e-12:
             return 0.0
         return sum(l.qty * l.fill for l in self.lots) / q
+
+    def committed_margin(self) -> float:
+        """이 포지션에 묶인 자본. 레버리지 걸린 명목금액이 아니라 실제로 넣은 돈이다.
+
+        1배에서는 ``수량 × 진입가`` 와 같다. 묶음 노출 한도가 이 값을 센다 — "내 자금의 몇
+        퍼센트까지 시장에 넣을까" 가 사용자가 뜻하는 것이고, 명목으로 세면 3배에서 한도를
+        100% 로 열어 둬도 레그가 사라진다.
+        """
+        return sum(l.margin for l in self.lots)
 
     def equity(self, price: float) -> float:
         if self.side is PositionSide.SHORT:
@@ -379,6 +391,8 @@ class CandleSim:
         if self._cooldown_until is not None and ts < self._cooldown_until:
             return True
         if self.entry_filter is not None and not self.entry_filter.allows():
+            return True
+        if self.bundle_gate is not None and self.bundle_gate.blocks(self):
             return True
         return False
 
@@ -1144,3 +1158,17 @@ class LiveCandleSim:
     @property
     def liquidated_loss(self) -> float:
         return self.inner.liquidated_loss
+
+    @property
+    def bundle_gate(self):
+        """묶음 한도는 안쪽 심이 집행한다 — 래퍼에 꽂아도 같은 곳에 닿아야 한다.
+
+        위임이 없으면 래퍼에 꽂은 관문이 조용히 무시되고, 그 레그만 한도를 벗어난다.
+        게다가 ``BundleGate.register`` 는 ``.inner`` 를 벗겨 담으므로 그 레그의 장부는
+        여전히 합계에 들어간다 — 다른 레그는 막히니 한도가 작동하는 듯 보인다.
+        """
+        return self.inner.bundle_gate
+
+    @bundle_gate.setter
+    def bundle_gate(self, gate) -> None:
+        self.inner.bundle_gate = gate

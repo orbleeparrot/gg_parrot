@@ -186,11 +186,15 @@ def test_a_period_without_candles_is_a_clean_422(client, monkeypatch):
     assert response.json()["detail"]
 
 
-def test_a_portfolio_macro_is_refused_in_korean(client):
+def test_a_portfolio_macro_is_validated_not_refused(client):
+    """묶음도 검증한다 — 레그마다 캔들을 받고, 창은 묶음 합산으로 나온다."""
     portfolio = {**MACRO, "symbols": ["BTCUSDT", "ETHUSDT"]}
     response = client.post("/api/validate", json={"macro": portfolio, "windows": 4})
-    assert response.status_code == 422
-    assert "포트폴리오" in response.json()["detail"]
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) == BODY_KEYS
+    assert len(body["windows"]) == 4
+    assert {m.symbol for m in client.calls} == {"BTCUSDT", "ETHUSDT"}
 
 
 def test_a_bad_period_preset_is_a_korean_400(client):

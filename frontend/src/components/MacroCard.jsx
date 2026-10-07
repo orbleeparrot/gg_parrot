@@ -8,7 +8,7 @@ import { RULE_TYPES, CANDLE_INTERVALS, entryFilterPhrase } from "../lib/macro.js
 import { exchangeLabel } from "../lib/exchanges.js";
 import { leaderboardStrategy } from "../lib/leaderboardStrategy.js";
 import { strategyPhrases } from "../lib/strategyText.js";
-import { portfolioTitle, portfolioWeight } from "../lib/portfolio.js";
+import { bundleLimitPhrase, isEvenWeights, portfolioTitle, portfolioWeight, weightPhrase } from "../lib/portfolio.js";
 import "./MacroCard.css";
 
 const pct = (v, digits = 2) => `${v >= 0 ? "+" : ""}${Number(v).toFixed(digits)}%`;
@@ -49,7 +49,19 @@ function macroFacts({ macro, symbol, symbols, result, futures }) {
   const quote = quoteOf(symbol);
   const interval = CANDLE_INTERVALS.find((i) => i.value === macro.candle_interval)?.label || "";
   const facts = [];
-  if (symbols.length > 1) facts.push({ k: `종목 ${symbols.length}개 · 자금 균등`, v: symbols.join(" · "), num: true, wide: true });
+  // 종목마다 비중을 따로 준 묶음(legs)은 균등이 아니다 — "자금 균등" 이라 쓰면 거짓이 되므로 비중을 그대로 적는다.
+  // 균등이냐 아니냐는 서버 요약과 같은 자리(isEvenWeights)로 가린다 — 한쪽만 고치면 카드와 요약이 갈린다.
+  const legs = Array.isArray(macro.legs) && macro.legs.length > 1 && !isEvenWeights(macro.legs) ? macro.legs : null;
+  if (legs) {
+    facts.push({ k: `종목 비중 ${legs.length}개`, v: weightPhrase(legs), num: true, wide: true });
+  } else if (symbols.length > 1) {
+    facts.push({ k: `종목 ${symbols.length}개 · 자금 균등`, v: symbols.join(" · "), num: true, wide: true });
+  }
+  // 묶음 한도는 구조화된 칸이 본진이다 — 서버 요약 끝에 붙은 문구는 화면에서 가장 먼저 잘린다.
+  if (macro.bundle_risk) {
+    const limit = bundleLimitPhrase(macro.bundle_risk);
+    if (limit) facts.push({ k: "묶음 한도", v: limit, wide: true });
+  }
   facts.push({ k: "봉 간격", v: interval ? `${interval}봉` : "—" });
   // 진입 필터가 걸린 매크로만 — 조건 문장은 한 줄 맞춤에 잘릴 수 있고, 필터는 그 끝에 붙는다. 이 칸은 줄바꿈으로 끝까지 보인다.
   const entryCondition = entryFilterPhrase(macro.entry_filter);
@@ -59,7 +71,7 @@ function macroFacts({ macro, symbol, symbols, result, futures }) {
   } else {
     const capital = p.initial_capital ?? result?.initial_capital;
     const ratio = risk.invest_ratio != null ? `${fmtN(Number(risk.invest_ratio) * 100)}% 투입` : "";
-    const per = symbols.length > 1 ? `종목당 ${portfolioWeight(symbols.length).fraction}` : "";
+    const per = symbols.length > 1 && !legs ? `종목당 ${portfolioWeight(symbols.length).fraction}` : "";
     facts.push({ k: "자금", v: [capital != null ? `${fmtN(capital, 2)} ${quote}` : "", ratio, per].filter(Boolean).join(" · ") || "—" });
   }
   const riskParts = [
@@ -164,7 +176,7 @@ export default function MacroCard({ macro, result, perSymbol = [], strategyEntry
           )}
           <div className="sd-card-id">
             <div className="sd-card-ticker num"><strong>{multi ? portfolioTitle(symbols) : baseOf(symbol)}</strong><small>{quoteOf(symbol)}</small></div>
-            <div className="sd-card-rule" title="매매 방식">{ruleLabel}{multi ? ` · ${symbols.length}종목 자금 균등` : ""}</div>
+            <div className="sd-card-rule" title="매매 방식">{ruleLabel}{multi ? ` · ${symbols.length}종목 ${isEvenWeights(macro.legs) ? "자금 균등" : "비중 지정"}` : ""}</div>
           </div>
           <div className="sd-card-tags">
             <span className="sd-card-tag">{exchangeLabel(macro.exchange)}</span>

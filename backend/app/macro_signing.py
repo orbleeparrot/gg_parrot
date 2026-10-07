@@ -21,8 +21,9 @@ from typing import Optional
 from .engine import Macro
 
 # v1: exchange·quote_currency 가 없던 시절. v2: 그 둘을 포함. v3: entry_filter 를 포함.
+# v4: legs·bundle_risk(묶음)를 포함.
 # Macro 에 필드가 늘 때마다 서명 대상 JSON 이 바뀌므로, 올리고 옛 버전에서는 그 필드를 뺀다.
-SIG_VERSION = 3
+SIG_VERSION = 4
 # 받아들이는 서명 버전 — SIG_VERSION 이하 전부. 손으로 적은 목록(`(1, 2, SIG_VERSION)`)은 올릴 때마다
 # 직전 버전을 빠뜨리는 함정이었다(v1→v2 때 `(1, SIG_VERSION)` 이라 v2 파일이 전부 '수정된 파일' 이 될 참이었다).
 # 범위로 만들어 두면 다음 bump 가 옛 파일을 떨어뜨리지 않는다.
@@ -58,6 +59,9 @@ def canonical_bytes(macro: Macro, *, version: int = SIG_VERSION) -> bytes:
         data.pop("quote_currency", None)
     if version < 3:
         data.pop("entry_filter", None)
+    if version < 4:
+        data.pop("legs", None)
+        data.pop("bundle_risk", None)
     return json.dumps(
         data, sort_keys=True, separators=(",", ":"), ensure_ascii=False
     ).encode("utf-8")
@@ -98,6 +102,10 @@ def verify(macro: Macro, sig: Optional[dict]) -> bool:
     # 옛 서명은 entry_filter 를 모른다. 필터가 붙은 매크로가 옛 서명으로 "원본" 이 되면
     # 파일에 필터를 손으로 끼워 넣고도 검증을 통과하므로 거절한다.
     if version < 3 and macro.entry_filter is not None:
+        return False
+    # 옛 서명은 legs·bundle_risk 도 모른다. 묶음 매크로가 v3 이하 서명으로 "원본" 이 되면
+    # 파일에 레그를 손으로 끼워 넣고도 통과하므로 거절한다.
+    if version < 4 and (macro.legs is not None or macro.bundle_risk is not None):
         return False
     return hmac.compare_digest(given, _mac(macro, version=version))
 

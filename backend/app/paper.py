@@ -34,6 +34,7 @@ from .data import NoSpotDataError, ensure_spot_available, get_klines, get_ticker
 from .exchanges import normalize_exchange, quote_currency
 from .db import PaperSession, PaperTrade, get_session
 from .engine import Macro, RuleType
+from .engine.bundle import BundleGate
 from .engine.candle_feed import feed  # 모듈 이름으로 참조 — 테스트가 monkeypatch 한다
 from .engine.driver import Leg, StrategyDriver, sim_state  # noqa: F401 (sim_state 재export)
 from .engine.stepper import make_sim
@@ -188,6 +189,38 @@ async def _attach_feed_for_resume(runner: _Runner, info: dict) -> None:
         )
 
 
+def build_bundle_legs(macro: Macro, initial: float) -> tuple[List[Leg], Optional[BundleGate]]:
+    """묶음 매크로의 레그와(필요하면) 공유 관문을 만든다.
+
+    자금은 비중대로 나눈다. 한도가 있으면 관문 **하나**를 만들어 모든 레그 심에 꽂는다 —
+    레그마다 따로 만들면 서로를 못 보고 한도가 레그별 한도가 되어 버린다.
+
+    관문은 심의 현재 장부를 그때그때 읽으므로 복구할 상태가 없다. 재기동 뒤
+    ``driver.restore`` 가 장부를 되살리면 관문은 그 즉시 올바른 답을 낸다.
+    묶음 전용이다 — 단일 종목 매크로는 ``leg_specs()`` 가 비어 레그가 0개가 된다.
+    """
+    specs = macro.leg_specs()
+    gate = BundleGate(macro.bundle_risk, initial) if macro.bundle_risk is not None else None
+    legs: List[Leg] = []
+    for spec in specs:
+        cap = initial * spec.weight / 100.0
+        sim = make_sim(macro.for_leg(spec, cap), initial_capital=cap)
+        if gate is not None:
+            gate.register(sim)
+            inner = getattr(sim, "inner", sim)
+            inner.bundle_gate = gate
+        legs.append(Leg(spec.symbol, sim, cap))
+    return legs, gate
+
+
+def _make_legs(macro: Macro, symbol: str, initial: float) -> List[Leg]:
+    """세션 시작과 재기동 복구가 같은 길로 레그를 만든다 — 한쪽만 고치면 복구한 세션이 비중과 한도를 잃는다."""
+    if macro.is_portfolio():
+        legs, _gate = build_bundle_legs(macro, initial)
+        return legs
+    return [Leg(symbol, make_sim(macro, initial_capital=initial), initial)]
+
+
 # --- lifecycle ----------------------------------------------------------
 async def start_session(macro: Macro, symbol: Optional[str], mode: str) -> dict:
     # A portfolio macro runs every symbol (like the backtest); a single-symbol
@@ -203,11 +236,8 @@ async def start_session(macro: Macro, symbol: Optional[str], mode: str) -> dict:
         exchange_args = {} if macro.exchange == "binance" else {"exchange": macro.exchange}
         await asyncio.to_thread(ensure_spot_available, sym, **exchange_args)
     initial = _session_initial(macro)
-    per_leg = initial / len(symbols)
-    legs: List[Leg] = []
-    for sym in symbols:
-        leg_macro = macro.for_symbol(sym, per_leg) if len(symbols) > 1 else macro
-        legs.append(Leg(sym, make_sim(leg_macro, initial_capital=per_leg), per_leg))
+    legs = _make_legs(macro, symbols[0], initial)
+    symbols = [leg.symbol for leg in legs]  # 레그 순서가 곧 자리 우선순위다
 
     replay_prices = {}
     if mode == "replay":
@@ -291,12 +321,9 @@ def _rebuild_runner(info: dict) -> _Runner:
     macro = Macro.model_validate_json(info["macro_json"])
     symbols = macro.all_symbols() if macro.is_portfolio() else [str(info["symbol"] or macro.symbol).upper()]
     initial = info["virtual_balance"] or _session_initial(macro)
-    per_leg = initial / len(symbols)
     leg_equity = {leg.get("symbol"): float(leg.get("current_equity") or 0.0) for leg in info["legs"]}
-    legs: List[Leg] = []
-    for sym in symbols:
-        leg_macro = macro.for_symbol(sym, per_leg) if len(symbols) > 1 else macro
-        legs.append(Leg(sym, make_sim(leg_macro, initial_capital=per_leg), per_leg))
+    legs = _make_legs(macro, symbols[0], initial)
+    symbols = [leg.symbol for leg in legs]
     runner = _Runner(info["id"], legs[0].sim, symbols[0], "live", initial, legs=legs)
     runner.driver.macro = macro
     # 자산·포지션은 체크포인트 상태로, 체결 요약은 DB 체결 행으로 되살린다.

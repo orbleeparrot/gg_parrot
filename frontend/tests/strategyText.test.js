@@ -74,3 +74,19 @@ test("빈 문장은 빈 배열", () => {
   assert.deepEqual(strategyPhrases(""), []);
   assert.deepEqual(strategyPhrases(null), []);
 });
+
+// 서버 요약(engine/summary.py)이 묶음 줄 **안쪽** 구분자로 ", " 를 쓰는 성질을 프런트에서도 못 박는다.
+// 안쪽에 " · " 를 쓰면 여기서 쪼갤 때 "ETH 30%" · "총 노출 60% 까지" 가 머리말 없는 조각으로 떠돈다.
+test("묶음 요약을 구로 쪼개도 머리말 없는 조각이 생기지 않는다", () => {
+  const summary = "BTC · 롱 · 변동성 돌파 (k=0.5) · 자금 100% 투입 · 종목 비중: BTC 70%, ETH 30%"
+    + " · 종목별 규칙을 따로 정했어요 · 묶음 한도: 한 번에 1종목까지, 총 노출 60% 까지";
+  const phrases = flat(strategyPhrases(summary));
+  // 비중 · 한도 조각은 머리말을 달고 통째로 한 구다.
+  assert.ok(phrases.includes("종목 비중: BTC [70%], ETH [30%]"), JSON.stringify(phrases));
+  assert.ok(phrases.includes("묶음 한도: 한 번에 [1]종목까지, 총 노출 [60%] 까지"), JSON.stringify(phrases));
+  // 머리말 없이 떠도는 조각이 없다.
+  for (const phrase of phrases) {
+    assert.doesNotMatch(phrase, /^[A-Z]+ \[\d/, `머리말 없는 비중 조각: ${phrase}`);
+    assert.doesNotMatch(phrase, /^총 노출/, `머리말 없는 한도 조각: ${phrase}`);
+  }
+});

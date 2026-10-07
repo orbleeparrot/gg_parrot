@@ -10,6 +10,8 @@ import { verdict } from "./OptimizePanel.jsx";
 import { useMacroActions } from "./PaperPanel.jsx";
 import MacroCard from "./MacroCard.jsx";
 import { fmtMoney, fmtMoneyCompact, fmtKrw, fmtPrice, fmtQty, quoteOf, baseOf } from "../lib/format.js";
+import { macroSymbols } from "../lib/portfolio.js";
+import { isEvenWeights } from "../lib/portfolio.js";
 import { buildMacro, RULE_TYPES, CANDLE_INTERVALS } from "../lib/macro.js";
 import { paperMainButton } from "../lib/paperMain.js";
 import { useUsdKrw } from "../lib/usdkrw.js";
@@ -319,7 +321,8 @@ export function StudioOptimize({ form, setForm, valErr, onResult }) {
 function macroLine(macro) {
   if (!macro) return "";
   const interval = CANDLE_INTERVALS.find((i) => i.value === macro.candle_interval)?.label || macro.candle_interval;
-  const symbolLabel = macro.symbols && macro.symbols.length > 1 ? macro.symbols.map(baseOf).join("·") : macro.symbol;
+  const bundle = macroSymbols(macro);
+  const symbolLabel = bundle.length > 1 ? bundle.map(baseOf).join("·") : macro.symbol;
   const parts = [exchangeLabel(macro.exchange), symbolLabel, RULE_TYPES[macro.rule_type]?.label, macro.position_side === "short" ? "숏" : "롱", interval ? `${interval}봉` : "", `${macro.leverage || 1}배`];
   return parts.filter(Boolean).join(" · ");
 }
@@ -337,7 +340,8 @@ export function StudioPaper({ macro: currentMacro, valErr, controller }) {
   // 로그의 각 체결에는 어느 종목인지 표시한다(예전 체결 행은 symbol 이 비어 세션 종목).
   const legs = status?.legs || [];
   const portfolio = legs.length > 1;
-  const symbolsLabel = macro.symbols && macro.symbols.length > 1 ? macro.symbols.map(baseOf).join(" · ") : macro.symbol;
+  const bundleSymbols = macroSymbols(macro);
+  const symbolsLabel = bundleSymbols.length > 1 ? bundleSymbols.map(baseOf).join(" · ") : macro.symbol;
   const macroChanged = running && startedMacro && JSON.stringify(startedMacro) !== JSON.stringify(currentMacro);
   const modeLabel = (value) => (value === "replay" ? "데모 리플레이" : "실시간");
   // 주 버튼 하나 — 시작 → 중지 → 다시 시작. 자리(왼쪽 아래 동작 줄)와 폭은 그대로, 문구와 색만 바뀐다.
@@ -399,7 +403,8 @@ export function StudioPaper({ macro: currentMacro, valErr, controller }) {
                     {leg.last_price > 0 && <span className="sd-leg-px num">{fmtPrice(leg.last_price)}</span>}
                   </div>
                 ))}
-                <div className="sd-leg-note">자본을 종목 수로 나눠 각각 돌리고, 위 수익률은 총합이에요.</div>
+                {/* 비중을 정한 묶음은 그 비중대로 돈다 — 한 문구로 못 박으면 화면이 거짓말을 한다. */}
+                <div className="sd-leg-note">자본을 종목 {isEvenWeights(macro.legs) ? "수로 똑같이" : "비중대로"} 나눠 각각 돌리고, 위 수익률은 총합이에요.</div>
               </div>
             )}
             <div className={"sd-lock" + (macroChanged ? " is-warn" : "")}>

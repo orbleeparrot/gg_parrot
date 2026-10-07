@@ -162,6 +162,23 @@ def test_a_portfolio_macro_explains_from_its_first_leg(client):
     assert client.state_["fetched"][0][2] == "1d"
 
 
+def test_a_portfolio_response_says_the_basis_is_one_symbol(client):
+    """근거가 **대표 종목 하나**로 만들어졌다는 사실을 응답이 말해야 한다.
+
+    말하지 않으면 비중 70/30 묶음에서 ETH 이야기가 묶음 전체의 근거로 읽힌다.
+    """
+    response = post(client, macro=macro_body(symbols=["ETHUSDT", "BTCUSDT"]))
+    body = response.json()
+    assert body["basis_symbol"] == "ETHUSDT"
+    assert "ETH" in body["basis_note"] and "2종목" in body["basis_note"]
+
+
+def test_a_single_symbol_response_has_no_basis_note(client):
+    """단일 종목은 근거가 곧 그 종목이다 — 설명할 것이 없다."""
+    body = post(client).json()
+    assert "basis_symbol" not in body and "basis_note" not in body
+
+
 def test_a_bad_period_is_a_400_in_korean(client):
     response = post(client, macro=macro_body(period={"preset": "no-such-preset"}))
     assert response.status_code == 400

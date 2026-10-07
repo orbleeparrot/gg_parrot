@@ -19,10 +19,25 @@ def _inner(sim):
     return getattr(sim, "inner", sim)
 
 
+def limit_note(risk: BundleRisk) -> str:
+    """한도 문구만 필요할 때 — 자본 없이. ``BundleGate.note()`` 가 이것을 쓴다.
+
+    요약 · 해설은 문구 한 줄이 필요할 뿐인데, 전에는 집행자를 더미 자본(``or 1.0``)으로
+    만들어 불렀다. 문구는 한 곳에서만 나와야 하므로 모듈 함수로 내리고 집행자가 위임한다.
+    """
+    parts = []
+    if risk.max_positions is not None:
+        parts.append(f"한 번에 {risk.max_positions}종목까지")
+    if risk.max_exposure_pct is not None:
+        parts.append(f"총 노출 {risk.max_exposure_pct:g}% 까지")
+    return " · ".join(parts)
+
+
 class BundleGate:
     """묶음 한도의 집행자. 백테스트 루프와 ``paper.start_session`` 이 만들어 심에 꽂는다."""
 
     def __init__(self, risk: BundleRisk, total_capital: float) -> None:
+        self._risk = risk
         self.max_positions = risk.max_positions
         self.max_exposure_pct = risk.max_exposure_pct
         self.total_capital = float(total_capital)
@@ -51,9 +66,5 @@ class BundleGate:
         return False
 
     def note(self) -> str:
-        parts = []
-        if self.max_positions is not None:
-            parts.append(f"한 번에 {self.max_positions}종목까지")
-        if self.max_exposure_pct is not None:
-            parts.append(f"총 노출 {self.max_exposure_pct:g}% 까지")
-        return " · ".join(parts)
+        """문구는 ``limit_note`` 한 곳에서만 만든다 — 두 벌이면 어긋나는 날이 온다."""
+        return limit_note(self._risk)

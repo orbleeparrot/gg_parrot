@@ -332,3 +332,68 @@ def test_no_gate_object_is_created_without_bundle_limits(monkeypatch):
     # 대조: 한도를 주면 묶음 자본으로 관문이 하나 생기고 심에 꽂힌다.
     run_bundle(bundle(legs, bundle_risk={"max_exposure_pct": 100.0}), frames)
     assert seen == [1000.0]
+
+
+# --- S4. 거래량 가드와 시각 정렬이 묶음 경로에서도 물린다 ----------------
+# 톱니 — 돌파(I)가 매 봉 성립해 필터가 없으면 쉬지 않고 거래한다
+# (`test_entry_filter_backtest.py` 의 CLOSES 와 같은 모양).
+SAW = [100.0 + (5.0 if i % 2 else 0.0) for i in range(24)]
+VOLUME_SURGE = {"kind": "volume", "params": {"period": 3, "multiple": 2.0}}
+
+
+def _volume_frame(closes, volumes, start="2026-01-01"):
+    df = frame(closes, start=start)
+    df["volume"] = volumes
+    return df
+
+
+def _bundle_leg_trades(volumes, entry_filter=VOLUME_SURGE):
+    """거래량 필터를 켠 2종목 묶음에서 첫 레그의 거래 수. 둘째 레그는 평범한 거래량이다."""
+    m = bundle([{"symbol": "BTCUSDT", "weight": 50}, {"symbol": "ETHUSDT", "weight": 50}],
+               params={"k": 0.1, "initial_capital": 1000},
+               fees={"commission_pct": 0, "slippage_pct": 0},
+               entry_filter=entry_filter)
+    frames = {"BTCUSDT": _volume_frame(SAW, volumes),
+              "ETHUSDT": _volume_frame(SAW, [1000.0] * len(SAW))}
+    results = dict(run_bundle(m, frames))
+    return results["BTCUSDT"].total_trades
+
+
+def test_bundle_treats_a_nan_volume_as_unknown_not_as_a_number():
+    """NaN 거래량은 '모른다(None)' 다 — 아는 값으로 받으면 기준선 창을 period 봉 동안 오염시킨다.
+
+    쌍둥이 가드는 `test_entry_filter_backtest.py` 가 단일 종목 경로에서 물고 있다. 묶음은
+    레그 배열에서 거래량을 뽑으므로(`_Leg.volume_at`) 자기 가드를 따로 들고 있고, 그것이
+    깨지면 **묶음 경로에서만** 원칙 2 가 깨진다. NaN 봉 하나는 **그 봉만** 막아야 하므로,
+    그 봉의 거래량이 평범했을 때와 거래 수가 같아야 한다.
+    """
+    nan_at_bar_4 = [10.0, 10.0, 10.0, float("nan")] + [1000.0] * 20
+    ordinary_at_bar_4 = [10.0, 10.0, 10.0, 10.0] + [1000.0] * 20
+    with_nan = _bundle_leg_trades(nan_at_bar_4)
+    with_ordinary = _bundle_leg_trades(ordinary_at_bar_4)
+    assert with_ordinary > 0, with_ordinary   # 비교 대상이 거래를 해야 이 시험이 뭔가를 증명한다
+    assert with_nan == with_ordinary, (with_nan, with_ordinary)
+
+
+def test_bundle_treats_an_inf_volume_as_unknown_too():
+    """inf 도 '모른다' 다 — 가드가 NaN 만 거르면 inf 가 기준선을 무한대로 끌어올린다."""
+    inf_at_bar_4 = [10.0, 10.0, 10.0, float("inf")] + [1000.0] * 20
+    ordinary_at_bar_4 = [10.0, 10.0, 10.0, 10.0] + [1000.0] * 20
+    assert _bundle_leg_trades(inf_at_bar_4) == _bundle_leg_trades(ordinary_at_bar_4)
+
+
+def test_bundle_sorts_each_leg_by_time_before_stepping():
+    """시각이 뒤섞인 프레임이 와도 결과가 정렬된 프레임과 같아야 한다.
+
+    정렬을 빼면 레그 커서가 합친 시간선과 어긋나 봉을 조용히 버린다 — 예외도 경고도 없이
+    수익률이 틀린 값이 된다.
+    """
+    ordered = frame(RISING)
+    shuffled = ordered.iloc[[3, 0, 6, 1, 7, 2, 5, 4]].reset_index(drop=True)
+    eth = frame(RISING)
+    m = bundle([{"symbol": "BTCUSDT", "weight": 50}, {"symbol": "ETHUSDT", "weight": 50}])
+    want = dict(run_bundle(m, {"BTCUSDT": ordered, "ETHUSDT": eth}))["BTCUSDT"]
+    got = dict(run_bundle(m, {"BTCUSDT": shuffled, "ETHUSDT": eth}))["BTCUSDT"]
+    assert want.total_trades > 0, "비교 대상이 거래를 해야 이 시험이 뭔가를 증명한다"
+    assert (got.total_trades, round(got.final_return_pct, 6)) == \
+        (want.total_trades, round(want.final_return_pct, 6))

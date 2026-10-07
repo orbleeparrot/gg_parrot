@@ -46,6 +46,17 @@ def test_v3_byte_length_frozen():
     assert len(canonical_bytes(m, version=1)) == 620
 
 
+def test_v1_v2_v3_bytes_are_frozen():
+    """길이만 보면 `sort_keys=True` 제거처럼 길이가 같고 바이트가 다른 변경을 놓친다.
+
+    길이 685 는 그대로인데 바이트가 달라지면 수트는 초록이고 세상의 모든 서명이 깨진다.
+    아래 지문은 분기점 83373ea 의 코드가 낸 값과 대조해 확인했다(v1 620B · v2 665B · v3 685B).
+    """
+    m = Macro(**BASE)
+    got = {v: hashlib.sha256(canonical_bytes(m, version=v)).hexdigest()[:12] for v in (1, 2, 3)}
+    assert got == {1: "c4b6409bc1da", 2: "c57db5416d59", 3: "992e3112c97c"}
+
+
 def test_v4_bytes_include_bundle_keys():
     m = Macro(**BASE)
     v4 = json.loads(canonical_bytes(m, version=4).decode("utf-8"))

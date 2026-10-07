@@ -96,3 +96,28 @@ def test_each_leg_is_fetched_with_its_own_rule(patched):
     main._run_portfolio_backtest(m, 0, 1)
     got = {c.symbol: c.rule_type.value for c in calls}
     assert got == {"BTCUSDT": "E", "ETHUSDT": "I"}
+
+
+# --- S1. 레그 오류 문구가 422 에서 뭉개지지 않는다 ----------------------
+def test_leg_error_reaches_the_validate_response(patched):
+    """레그 규칙만 바꾸고 세부값을 빼면, 응답이 어느 레그인지 말해야 한다.
+
+    전에는 `loc` 만 모아 "매크로 설정을 확인해 주세요: macro" 였다 — 사용자가 고칠 곳을
+    찾을 수 없는 문구다.
+    """
+    from fastapi.testclient import TestClient
+
+    main, _ = patched
+    bad = {**BASE, "symbol": "BTCUSDT",
+           "legs": [{"symbol": "BTCUSDT", "weight": 50},
+                    {"symbol": "ETHUSDT", "weight": 50, "rule_type": "E"}]}
+    main._validate_limiter._events.clear()
+    try:
+        response = TestClient(main.app).post("/api/validate",
+                                             json={"macro": bad, "windows": 4})
+    finally:
+        main._validate_limiter._events.clear()
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert "레그" in detail and "ETHUSDT" in detail, detail
+    assert "Value error" not in detail and "Input should" not in detail

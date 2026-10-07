@@ -193,6 +193,28 @@ app.add_middleware(GZipMiddleware, minimum_size=500, compresslevel=6)
 
 
 # --- helpers ------------------------------------------------------------
+def _macro_error_detail(exc: ValidationError) -> str:
+    """검증 오류를 한국어 한 줄로. 우리가 쓴 한국어 메시지가 있으면 그것을 보여 준다.
+
+    pydantic 의 영어 원문(`Input should be a valid integer` 등)은 사용자에게 뜻이 없으므로
+    항목 이름만 알린다. 한국어 메시지는 어느 레그 · 어느 칸인지 담고 있어 그것이 더 쓸모 있다 —
+    `loc` 만 모으면 "레그 ETHUSDT: 규칙을 바꾸면 세부값도 함께 주세요" 가
+    "매크로 설정을 확인해 주세요: macro" 로 뭉개진다.
+    """
+    ours = []
+    for err in exc.errors():
+        msg = str(err.get("msg") or "")
+        if msg.startswith("Value error, "):
+            msg = msg[len("Value error, "):]
+        if any("가" <= ch <= "힣" for ch in msg):      # 한글이 있으면 우리 메시지다
+            ours.append(msg)
+    if ours:
+        return " / ".join(dict.fromkeys(ours))
+    fields = ", ".join(dict.fromkeys(
+        ".".join(str(part) for part in err["loc"]) or "macro" for err in exc.errors()))
+    return f"매크로 설정을 확인해 주세요: {fields}"
+
+
 def _period_label(period: Period) -> str:
     labels = {"1y": "최근 1년", "6m": "최근 6개월", "3m": "최근 3개월", "1m": "최근 1개월", "1w": "최근 1주", "1d": "최근 1일"}
     if period.preset and period.preset != "custom":
@@ -1219,10 +1241,8 @@ def validate_macro(body: ValidateIn, request: Request) -> dict:
     try:
         macro = Macro.model_validate(body.macro)
     except ValidationError as exc:
-        # 영어 검증 문구 대신 어느 항목이 문제인지만 한국어로 알린다.
-        fields = ", ".join(dict.fromkeys(
-            ".".join(str(part) for part in err["loc"]) or "macro" for err in exc.errors()))
-        raise HTTPException(status_code=422, detail=f"매크로 설정을 확인해 주세요: {fields}") from exc
+        # 영어 검증 문구 대신 우리가 쓴 한국어 문구를, 없으면 어느 항목이 문제인지만 알린다.
+        raise HTTPException(status_code=422, detail=_macro_error_detail(exc)) from exc
 
     try:
         start_ms, end_ms = resolve_period(macro.period.preset, macro.period.start, macro.period.end)
@@ -1383,9 +1403,7 @@ def validate_explain_route(body: ExplainIn, request: Request) -> dict:
     try:
         macro = Macro.model_validate(body.macro)
     except ValidationError as exc:
-        fields = ", ".join(dict.fromkeys(
-            ".".join(str(part) for part in err["loc"]) or "macro" for err in exc.errors()))
-        raise HTTPException(status_code=422, detail=f"매크로 설정을 확인해 주세요: {fields}") from exc
+        raise HTTPException(status_code=422, detail=_macro_error_detail(exc)) from exc
 
     try:
         start_ms, end_ms = resolve_period(macro.period.preset, macro.period.start, macro.period.end)
@@ -1432,7 +1450,15 @@ def validate_explain_route(body: ExplainIn, request: Request) -> dict:
         row["headlines"] = _plain_json(evidence_mod.headlines(asset, row["date"]))
 
     out = validate_explain_mod.explain({**_explain_facts(body.summary), "evidence": rows})
-    return {"text": out["text"], "source": out["source"], "evidence": rows}
+    body_out = {"text": out["text"], "source": out["source"], "evidence": rows}
+    if macro.is_portfolio():
+        # 근거는 **대표 종목 하나**의 일봉 · 뉴스로 만든다. 응답이 그 사실을 말하지 않으면
+        # 비중 70/30 묶음에서 BTC 이야기가 묶음 전체의 근거로 읽힌다.
+        coin = _coin(base_macro.symbol)
+        legs = len(macro.all_symbols())
+        body_out["basis_symbol"] = base_macro.symbol
+        body_out["basis_note"] = f"근거는 대표 종목 {coin} 기준이에요 (묶음 {legs}종목)"
+    return body_out
 
 
 @app.post("/api/explain/ai")

@@ -2,7 +2,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { renderComponent, textOf } from "./renderHelper.js";
-import { weightPhrase, bundleLimitPhrase, baseTicker } from "../src/lib/portfolio.js";
+import { weightPhrase, bundleLimitPhrase } from "../src/lib/portfolio.js";
+import { baseOf } from "../src/lib/format.js";
 
 const MACRO = {
   exchange: "binance", symbol: "BTCUSDT", rule_type: "I", candle_interval: "1h",
@@ -24,11 +25,14 @@ test("weightPhrase 는 base 티커와 비중을 잇는다", () => {
   assert.equal(weightPhrase(null), "");
 });
 
-test("baseTicker 는 원화 · 달러 마켓 꼬리를 뗀다", () => {
-  assert.equal(baseTicker("BTCUSDT"), "BTC");
-  assert.equal(baseTicker("XRPKRW"), "XRP");
-  assert.equal(baseTicker("ETHBUSD"), "ETH");
-  assert.equal(baseTicker("btcusdt"), "BTC");
+test("티커 축약이 서버 summary._coin 과 같은 규칙이다", () => {
+  // 전용 헬퍼를 또 만들지 않고 기존 baseOf 를 쓴다 — 국내 `KRW-BTC` 접두사까지 떼야
+  // 카드와 서버 요약이 같은 문구를 낸다.
+  assert.equal(baseOf("BTCUSDT"), "BTC");
+  assert.equal(baseOf("XRPKRW"), "XRP");
+  assert.equal(baseOf("ETHBUSD"), "ETH");
+  assert.equal(baseOf("btcusdt"), "BTC");
+  assert.equal(baseOf("KRW-BTC"), "BTC", "국내 접두사를 못 떼면 카드가 'KRW-BTC 70%' 로 나온다");
 });
 
 test("bundleLimitPhrase 는 서버 BundleGate.note() 와 같은 문구를 낸다", () => {
@@ -87,4 +91,12 @@ test("묶음 한도는 비중 없는 균등 묶음에도 보인다", async () =>
 test("단일 종목 카드에는 묶음 행이 없다", async () => {
   const text = await card(MACRO, ["BTCUSDT"]);
   assert.doesNotMatch(text, /묶음 한도|종목 비중/);
+});
+
+test("국내 묶음의 비중 문구가 서버 요약과 같은 티커를 쓴다", () => {
+  // KRW-BTC 를 그대로 쓰면 카드는 "KRW-BTC 70%", 서버 요약은 "BTC 70%" 로 갈린다.
+  assert.equal(
+    weightPhrase([{ symbol: "KRW-BTC", weight: 70 }, { symbol: "KRW-ETH", weight: 30 }]),
+    "BTC 70% · ETH 30%",
+  );
 });

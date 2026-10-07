@@ -17,19 +17,12 @@ export function portfolioWeight(count) {
   return { fraction: `1/${n}`, percent: `${shown}%` };
 }
 
-// 서버의 summary._base_of 와 같은 규칙으로 티커를 짧게 부른다.
-const QUOTES = ["USDT", "KRW", "BUSD"];
-
-export function baseTicker(symbol) {
-  const s = String(symbol || "").toUpperCase();
-  for (const q of QUOTES) if (s.endsWith(q)) return s.slice(0, -q.length);
-  return s;
-}
-
-// "BTC 50% · ETH 30%" — 비중이 균등하지 않은 묶음을 한 줄로 보여 준다. 부동소수 찌꺼기는 소수 둘째 자리에서 자른다.
+// "BTC 50% · ETH 30%" — 비중이 균등하지 않은 묶음을 한 줄로 보여 준다.
+// 티커 축약은 기존 `baseOf`(format.js)를 쓴다 — 서버 `summary._coin` 과 같은 규칙이고,
+// 국내 `KRW-BTC` 접두사도 떼므로 카드와 서버 요약이 어긋나지 않는다. 부동소수 찌꺼기는 소수 둘째 자리에서 자른다.
 export function weightPhrase(legs) {
   if (!Array.isArray(legs) || legs.length === 0) return "";
-  return legs.map((leg) => `${baseTicker(leg.symbol)} ${Number(Number(leg.weight).toFixed(2))}%`).join(" · ");
+  return legs.map((leg) => `${baseOf(leg.symbol)} ${Number(Number(leg.weight).toFixed(2))}%`).join(" · ");
 }
 
 // 서버 bundle.BundleGate.note() 와 같은 문구를 낸다. 한쪽만 고치면 두 화면이 달라진다.

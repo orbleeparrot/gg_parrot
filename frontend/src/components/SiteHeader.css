@@ -79,7 +79,7 @@
   position: absolute;
   top: calc(100% + 8px);
   right: 0;
-  z-index: 40;
+  z-index: var(--z-dropdown);
   width: min(360px, calc(100vw - 24px));
   display: grid;
   gap: 10px;
@@ -125,7 +125,7 @@
   position: absolute;
   top: calc(100% + 8px);
   right: 0;
-  z-index: 40;
+  z-index: var(--z-dropdown);
   width: min(380px, calc(100vw - 24px));
   max-height: min(72vh, 600px);
   display: flex;
@@ -188,7 +188,7 @@
   position: fixed;
   top: var(--toast-top, 64px);
   right: 12px;
-  z-index: 58;
+  z-index: var(--z-toast);
   width: min(360px, calc(100vw - 24px));
   display: grid;
   gap: 8px;
@@ -266,7 +266,7 @@
 }
 
 /* 좁은 화면: 종 아래가 아니라 헤더 아래에 화면 너비로 고정한다(종은 오른쪽 끝이 아니라서 오른쪽 정렬이 화면을 벗어난다). */
-@media (max-width: 640px) {
+@media (max-width: 639px) {
   .header-bell-popover {
     position: fixed;
     top: var(--header-bell-top, 64px);

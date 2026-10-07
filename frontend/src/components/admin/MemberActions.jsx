@@ -73,8 +73,8 @@ export function MemberActionDialogs({ action, busy = false, error = "", onSubmit
           <>
             <span className="adm-dlg-text">
               {unblocking
-                ? "다시 채팅·게시글·댓글을 쓸 수 있게 됩니다."
-                : "채팅·게시글·댓글을 쓸 수 없게 됩니다. 로그인·열람·백테스트는 그대로이고, 언제든 되돌릴 수 있어요."}
+                ? "다시 채팅·게시글·댓글을 쓸 수 있게 돼요."
+                : "채팅·게시글·댓글을 쓸 수 없게 돼요. 로그인·열람·백테스트는 그대로이고, 언제든 되돌릴 수 있어요."}
             </span>
             <ReasonField value={form.reason} onChange={(reason) => set({ reason })} hint={unblocking ? "해제 사유" : "차단 사유"} />
           </>
@@ -96,12 +96,12 @@ export function MemberActionDialogs({ action, busy = false, error = "", onSubmit
         description={(
           <>
             <span className="adm-dlg-text">
-              계정을 지우고 남긴 글·댓글은 ‘탈퇴한 회원’ 으로 익명화하며 포인트를 회수합니다.
+              계정을 지우고 남긴 글·댓글은 ‘탈퇴한 회원’ 으로 익명화하고 포인트를 회수해요.
             </span>
             <ReasonField value={form.reason} onChange={(reason) => set({ reason })} hint="탈퇴 처리 사유" />
           </>
         )}
-        warning="되돌릴 수 없어요. 같은 이메일로는 다시 가입할 수 없습니다(본인 탈퇴와 달라요)."
+        warning="되돌릴 수 없어요. 같은 이메일로는 다시 가입할 수 없어요(본인 탈퇴와 달라요)."
         confirmLabel="탈퇴 처리"
         tone="danger"
         busy={busy}
@@ -128,7 +128,7 @@ export function MemberActionDialogs({ action, busy = false, error = "", onSubmit
         onSubmit={(e) => { e.preventDefault(); if (canSend) onSubmit({ title: form.title.trim(), body: form.body, link: form.link.trim() }); }}
       >
         <h2 id={titleId} className="t-h4 text-slate-900">{name} 님에게 메시지</h2>
-        <p className="mt-3 t-small text-slate-700">회원의 알림창으로 관리자 메시지를 보냅니다. 접속 중이면 실시간 알림까지 그대로 떠요.</p>
+        <p className="mt-3 t-small text-slate-700">회원의 알림창으로 관리자 메시지를 보내요. 접속 중이면 실시간 알림까지 그대로 떠요.</p>
         <label className="adm-msg-field">
           <span>제목 (필수 · 최대 {MEMBER_TITLE_MAX}자)</span>
           <input
@@ -140,7 +140,7 @@ export function MemberActionDialogs({ action, busy = false, error = "", onSubmit
           <span>내용 (최대 {MEMBER_BODY_MAX}자)</span>
           <textarea
             className="field adm-msg-body" value={form.body} maxLength={MEMBER_BODY_MAX} rows={4}
-            placeholder="알림창에 그대로 보입니다." onChange={(e) => set({ body: e.target.value })}
+            placeholder="알림창에 그대로 보여요." onChange={(e) => set({ body: e.target.value })}
           />
         </label>
         <label className="adm-msg-field">
@@ -211,7 +211,7 @@ function ResetLinkDialog({ name, link, expires, busy, error, onSubmit, onCancel 
     <div className="scrim fixed inset-0 z-90 grid place-items-center p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) onCancel?.(); }}>
       <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId} className="dialog confirm-dialog adm-msg-dialog">
         <h2 id={titleId} className="t-h4 text-slate-900">{name} 님 재설정 링크</h2>
-        <p className="mt-3 t-small text-slate-700">본인에게 이 링크를 전해 주세요. {minutes}분 안에 열어 새 비밀번호를 정하면 돼요. 한 번 쓰면 무효가 됩니다.</p>
+        <p className="mt-3 t-small text-slate-700">본인에게 이 링크를 전해 주세요. {minutes}분 안에 열어 새 비밀번호를 정하면 돼요. 한 번 쓰면 무효가 돼요.</p>
         <label className="adm-msg-field">
           <span>링크</span>
           <input ref={linkRef} type="text" className="field field-sm num" value={absolute} readOnly onFocus={(e) => e.target.select()} />

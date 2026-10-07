@@ -529,7 +529,7 @@ function AccountAgents() {
             </div>
           </div>
 
-          {activePositionNews.error ? <div className="agent-inline-error" role="status">포지션 맞춤 뉴스를 불러오지 못했어요. 다른 작업은 계속 갱신됩니다.</div> : null}
+          {activePositionNews.error ? <div className="agent-inline-error" role="status">포지션 맞춤 뉴스를 불러오지 못했어요. 다른 작업은 계속 갱신돼요.</div> : null}
         </div>
       ) : null}
 

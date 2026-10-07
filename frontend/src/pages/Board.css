@@ -147,7 +147,9 @@
 /* 추천수는 왼쪽 첫 열(퀘이사존식) — 0 은 흐리게, 1 이상은 브랜드 금색 굵게. */
 .board-likes, .board-col-likes { grid-area: likes; text-align: left; }
 .board-views, .board-likes { color: rgb(var(--c-slate-500)); font-size: 13px; font-weight: 500; }
-.board-likes.is-hot { color: rgb(var(--c-brand-line)); font-weight: 700; }
+/* 작은 금색 숫자는 라이트에서 짙은 호박(6.4:1), 다크에서 노랑 — 같은 줄의 댓글 수와 같은 규칙(2026-10-07 결정 1). */
+.board-likes.is-hot { color: rgb(var(--c-amber-700)); font-weight: 700; }
+.dark .board-likes.is-hot { color: rgb(var(--c-brand-line)); }
 /* 내 활동의 글 탭은 번호 | 제목 | 시각 세 열을 그대로 쓴다. */
 .me-posts .board-head, .me-posts .board-row { grid-template-areas: "no title time"; }
 @media (max-width: 639px) {
@@ -295,7 +297,7 @@
 .board-react-btn.is-down svg { fill: rgb(var(--c-red-600) / .2); }
 .board-react-btn:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
 .board-react-btn:disabled { opacity: .6; cursor: wait; }
-.board-lightbox { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; background: rgb(0 0 0 / .72); cursor: zoom-out; }
+.board-lightbox { position: fixed; inset: 0; z-index: var(--z-modal); display: grid; place-items: center; background: rgb(0 0 0 / .72); cursor: zoom-out; }
 .board-lightbox img { width: min(360px, 80vw); height: min(360px, 80vw); object-fit: cover; border-radius: 999px; box-shadow: 0 12px 40px rgb(0 0 0 / .45); cursor: default; }
 .board-post-strip .board-text-btn { margin-left: 4px; }
 .board-post-actions { display: inline-flex; gap: 2px; margin-left: 6px; }

@@ -649,7 +649,7 @@ export function RegisterScene({ macro, summary, canRegister, registeredEntry, re
       </ol>
 
       <footer className="hero-register-confirm-footer">
-        <p className="t-caption text-slate-500">로그인 전이라면 설정을 보관한 뒤 이 화면으로 돌아옵니다.</p>
+        <p className="t-caption text-slate-500">로그인 전이라면 설정을 보관한 뒤 이 화면으로 돌아와요.</p>
         <button type="button" onClick={onOpen} disabled={!canRegister} className="btn btn-l btn-primary">
           리더보드 등록 시작
         </button>
@@ -813,7 +813,7 @@ export function NewsScene() {
 export function GuideScene() {
   return (
     <section className="hero-product-screen hero-guide-live" aria-label="실제 사용 가이드 첫 화면">
-      <div className="hero-mock-disclosure"><span className="badge badge-flat">실제 화면</span><span>좌측 사이드바의 ‘사용 가이드’를 누르면 아래 문서로 이동해요. 검색과 목차도 직접 눌러볼 수 있어요.</span></div>
+      <div className="hero-mock-disclosure"><span className="badge badge-flat">실제 화면</span><span>오른쪽 위 ‘FAQ’(휴대폰은 메뉴 안 ‘FAQ’)를 누르면 아래 문서로 이동해요. 검색과 목차도 직접 눌러볼 수 있어요.</span></div>
       <Suspense fallback={<SceneLoading label="실제 가이드 첫 화면 불러오는 중…" />}>
         <GuidePage embedded initialSection="start" />
       </Suspense>

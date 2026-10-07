@@ -30,6 +30,7 @@ const TABS = [
   { key: "macros", label: "매크로 지표" },
   { key: "news", label: "뉴스 수집 현황" },
   { key: "costs", label: "API 비용" },
+  { key: "errors", label: "화면 오류" },
   { key: "members", label: "회원 관리" },
 ];
 const RANGED = new Set(["users", "signups", "macros"]);
@@ -44,6 +45,7 @@ const FETCHERS = {
   macros: (days, o) => api.adminMacros(days, o),
   news: (_days, o) => api.adminNews(o),
   costs: (_days, o) => api.adminCosts(COST_MONTHS, o),
+  errors: (_days, o) => api.adminClientErrors(7, o),
   members: (_days, o, query) => api.adminMembers(query || {}, o),
 };
 
@@ -72,6 +74,7 @@ function useAdminData(tab, days, enabled, query = null, includeInternal = false)
       setView({ key, data, error: "", loading: false });
       if (tab === "macros") setBadges((b) => ({ ...b, macros: sumBy(data?.sessions, "error") || 0 }));
       if (tab === "news") setBadges((b) => ({ ...b, news: Number(data?.kpis?.tickers_failing) || 0 }));
+      if (tab === "errors") setBadges((b) => ({ ...b, errors: Number(data?.total) || 0 }));
     } catch (e) {
       if (e?.name === "AbortError") throw e;
       // 실패해도 이 키로 받아 둔 값이 있으면 그대로 보여 준다(다른 키의 응답은 절대 섞지 않는다).
@@ -124,6 +127,7 @@ export default function AdminDashboard() {
   const badgeLabels = {
     macros: badges.macros ? `오류 ${fmtInt(badges.macros)}` : "",
     news: badges.news ? `실패 ${fmtInt(badges.news)}` : "",
+    errors: badges.errors ? fmtInt(badges.errors) : "",
   };
   const stale = Boolean(error && data);
 
@@ -148,8 +152,8 @@ export default function AdminDashboard() {
           if (event.target.checked) next.set('include_internal', 'true'); else next.delete('include_internal');
           setParams(next, { replace: true });
         }} /> 관리자·QA 방문 포함</label>
-        <p>기본값은 내부 방문 제외입니다. QA 브라우저는 주소에 ?qa=1을 붙여 표시하고 ?qa=0으로 해제하세요.
-          과거에 표시하지 않은 익명 점검 방문은 구분할 수 없습니다.</p>
+        <p>기본값은 내부 방문 제외예요. QA 브라우저는 주소에 ?qa=1을 붙여 표시하고 ?qa=0으로 해제하세요.
+          과거에 표시하지 않은 익명 점검 방문은 구분할 수 없어요.</p>
       </div> : null}
       {/* 회원 관리는 검색칸이 살아 있어야 해서(조회마다 화면이 사라지면 포커스를 잃는다) 스켈레톤·오류를 탭 안에서 다룬다. */}
       {!data && loading && tab !== "members" ? <Skeleton /> : null}
@@ -159,6 +163,7 @@ export default function AdminDashboard() {
       {data && tab === "macros" ? <MacrosTab data={data} days={days} /> : null}
       {data && tab === "news" ? <NewsTab data={data} /> : null}
       {data && tab === "costs" ? <CostsTab data={data} /> : null}
+      {data && tab === "errors" ? <ErrorsTab data={data} /> : null}
       {tab === "members" ? (
         <MembersTab
           data={data} loading={loading} error={error} query={memberQuery}
@@ -234,7 +239,7 @@ function UsersTab({ data, days }) {
         <h2>사용자 지표</h2>
         <AdminTerms items={[
           ["집계 시작", `${sinceNote(since, "방문 기록")} · 그 전 날짜는 측정 불가(—)`],
-          ["활성 브라우저", "익명 브라우저 ID 기준이며 사람 수가 아닙니다. 한 사람이 여러 기기를 쓰면 여러 개로 집계됩니다."], ["로그인 계정", "조회 기간에 방문한 서로 다른 로그인 계정 수. 실제 사람 수를 추정하지 않습니다."], ["DAU · WAU · MAU", "하루 · 7일 · 30일 활성 브라우저"],
+          ["활성 브라우저", "익명 브라우저 ID 기준이고 사람 수가 아니에요. 한 사람이 여러 기기를 쓰면 여러 개로 집계돼요."], ["로그인 계정", "조회 기간에 방문한 서로 다른 로그인 계정 수. 실제 사람 수를 추정하지 않아요."], ["DAU · WAU · MAU", "하루 · 7일 · 30일 활성 브라우저"],
           ["고착도", "DAU ÷ MAU. 매일 오는 비율"], ["세션", "한 방문 묶음. 30분 이상 쉬면 새 세션"], ["페이지뷰", "화면 진입 횟수(즉시 리다이렉트는 제외)"],
           ["세션 시간", "체류 합(탭을 숨긴 시간 제외). 마지막 화면의 체류를 모르면 그 화면은 빼고, 전부 모르면 그 세션은 평균에서 뺀다"],
           ["이탈률", "페이지 하나만 보고 떠난 세션 비율"], ["신규 · 재방문", "그 브라우저의 첫 방문인지. 합계 행의 신규는 기간 전체의 서로 다른 브라우저 수"],
@@ -502,6 +507,43 @@ function MacrosTab({ data, days }) {
 }
 
 // ── 탭 4 · 뉴스 수집 현황 ────────────────────────────────────────────────────
+// 화면 오류 — 브라우저의 오류 경계·전역 오류가 보낸 것을 서버가 하루·지문별로 모은다(client_errors.py, 2026-10-07).
+const ERROR_KIND_LABELS = { render: "화면 그리기", chunk: "새 버전 파일", unhandled: "처리 안 된 오류", rejection: "처리 안 된 비동기 오류" };
+
+function ErrorsTab({ data }) {
+  const kinds = data.kinds || {};
+  return (
+    <>
+      <div className="adm-tabhead">
+        <h2>화면 오류</h2>
+        <AdminTerms items={[
+          ["화면 그리기", "화면을 그리다 난 오류 — 사용자는 ‘화면을 불러오지 못했어요’를 봐요"],
+          ["새 버전 파일", "배포 직후 옛 화면 파일을 못 받음 — 한 번 자동으로 새로고침해요"],
+          ["처리 안 된 오류", "누르기·불러오기 처리 중 난 오류(우리 파일에서 난 것만)"],
+          ["모으는 것", "오류 문장 · 화면 경로 · 빌드만. 계정 · IP · 기기는 저장하지 않아요 · 30일 보관"],
+        ]} />
+      </div>
+      <AdminKpis items={[
+        { label: "최근 7일 오류", value: fmtInt(data.total), tone: Number(data.total) > 0 ? "down" : undefined },
+        { label: "화면 그리기", value: fmtInt(kinds.render) },
+        { label: "새 버전 파일", value: fmtInt(kinds.chunk) },
+        { label: "처리 안 된 오류", value: fmtInt((Number(kinds.unhandled) || 0) + (Number(kinds.rejection) || 0)) },
+      ]} />
+      <AdminBlock title="오류 종류별" caption={`${data.since || ""} 이후 · 같은 날 같은 오류는 한 줄로 모아 횟수만 · 최근 순`}>
+        <AdminTable rows={data.items || []} rowKey={(r) => `${r.kind}:${r.route}:${r.message}`} empty="최근 7일 동안 모인 화면 오류가 없어요." columns={[
+          { key: "last_ms", label: "마지막", render: (r) => fmtDayTimeKst(r.last_ms) },
+          { key: "kind", label: "종류", render: (r) => ERROR_KIND_LABELS[r.kind] || r.kind },
+          { key: "route", label: "화면" },
+          { key: "message", label: "오류 문장", render: (r) => <span className="adm-err-msg">{r.message}</span> },
+          { key: "count", label: "횟수", num: true, render: (r) => fmtInt(r.count) },
+          { key: "days", label: "일수", num: true, render: (r) => fmtInt(r.days) },
+          { key: "build", label: "빌드", render: (r) => r.build || "—" },
+        ]} />
+      </AdminBlock>
+    </>
+  );
+}
+
 function NewsTab({ data }) {
   const k = data.kpis || {};
   const now = Date.now();
@@ -537,7 +579,7 @@ function NewsTab({ data }) {
         { label: "보강 대기 기사", value: fmtInt(k.pending), tone: Number(k.pending) > 0 ? "warn" : undefined },
         { label: "뉴스 AI 예산 (오늘)", value: fmtInt(k.ai_budget_used), unit: `/ ${fmtInt(k.ai_budget_limit)}` },
       ]} />
-      <AdminBlock title="수집 · 번역 · 요약 단계" caption="번역·본문 요약은 현재 모델 기준, 시장 요약은 일별 공유 결과입니다. 오류 작업은 재시도 대기·한도 소진을 포함합니다. 처리 중은 유효한 작업 점유, 대기는 저장된 대기 상태이며 —는 미측정입니다. 실패는 오늘 누적 호출·수집 실패입니다.">
+      <AdminBlock title="수집 · 번역 · 요약 단계" caption="번역·본문 요약은 현재 모델 기준, 시장 요약은 일별 공유 결과예요. 오류 작업은 재시도 대기·한도 소진을 포함해요. 처리 중은 유효한 작업 점유, 대기는 저장된 대기 상태이고 —는 미측정이에요. 실패는 오늘 누적 호출·수집 실패예요.">
         <AdminTable rows={data.pipeline || []} rowKey={(r) => r.key} columns={[
           { key: 'label', label: '단계' },
           { key: 'status_label', label: '상태' },
@@ -641,7 +683,7 @@ function CostsTab({ data }) {
         <AdminTerms items={[
           ["추정 비용", "응답 토큰 수 × 모델 단가 (서버 설정값, 1M 토큰 기준)"], ["실제 청구액", "청구 API 로 받은 값(제공하는 곳만, 1~2일 지연)"],
           ["구독형", "월 고정액을 설정값으로 넣은 항목 · 이번 달은 경과일로 안분(*) · 시작 월 이전은 0"], ["용도", "AI API 호출 기능별 집계"], ["통화", "USD"],
-          ["실패", "오류·미완성 응답도 호출로 집계. 사용량을 못 받은 요청의 실제 청구액은 확인할 수 없습니다."],
+          ["실패", "오류·미완성 응답도 호출로 집계. 사용량을 못 받은 요청의 실제 청구액은 확인할 수 없어요."],
           [monthLabel, `1일 ~ ${fmtInt(data.month_days_elapsed)}일까지`],
         ]} />
       </div>

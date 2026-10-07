@@ -70,7 +70,7 @@
 .pro-evidence-body { display: grid; gap: 4px; padding: 6px 0 2px 8px; font-size: 13px; }
 .pro-evidence-body a { color: rgb(var(--c-indigo-700)); }
 
-@media (max-width: 480px) {
+@media (max-width: 479px) {
   .pro-window { grid-template-columns: 1fr 84px; }
   .pro-window-track { grid-column: 1 / -1; grid-row: 2; }
 }

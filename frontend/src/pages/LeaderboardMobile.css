@@ -85,6 +85,8 @@
   .leaderboard-page .lb-reactions,
   .leaderboard-page .lb-command-actions { display: flex; align-items: center; flex-wrap: nowrap; gap: 8px; min-width: 0; max-width: 100%; }
   .leaderboard-page .lb-command-actions { justify-content: flex-end; margin-left: auto; }
+  /* 빈 이용 칸(언락·사용 버튼이 없는 행)은 자리를 차지하지 않는다 — '⋯' 앞 간격이 두 배로 벌어지지 않게. */
+  .leaderboard-page .lb-command-actions:empty { display: none; }
   .leaderboard-page .lb-actions button {
     position: relative;
     display: inline-flex;

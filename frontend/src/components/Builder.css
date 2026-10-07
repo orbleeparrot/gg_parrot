@@ -77,12 +77,14 @@
 @media (prefers-reduced-motion: reduce) { .builder-dense .is-invalid .field, .builder-dense .is-invalid .bd-seg { animation: none; } }
 /* 종목 고르기 — 검색창(위) + 고른 종목 행 목록(아래). 실제 거래 가능한 종목만 뜨고, 그중에서만 고른다. */
 .builder-dense .bd-symbols { position: relative; min-width: 0; container-type: inline-size; }
-.builder-dense .bd-search { position: relative; }
-.builder-dense .bd-search > svg { position: absolute; left: 10px; top: 50%; width: 14px; height: 14px; transform: translateY(-50%); fill: none; stroke: rgb(var(--c-slate-500)); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
-.builder-dense .bd-search input { width: 100%; height: 32px; padding: 0 9px 0 30px; border: 1px solid rgb(var(--c-slate-300)); border-radius: 8px; background: transparent; color: rgb(var(--c-slate-900)); font-size: 13px; font-weight: 600; }
-.builder-dense .bd-search input::placeholder { color: rgb(var(--c-slate-500)); font-weight: 500; }
-.builder-dense .bd-search input:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 1px; }
-.builder-dense .bd-search input:disabled { opacity: .6; cursor: not-allowed; }
+/* 종목 검색 — 다른 입력칸과 같은 .field(면 + field-line 테두리). 예전엔 흰 바탕 + 옅은 테두리로 혼자 달랐고,
+   프로 빌더·등록 창(촘촘하지 않은 판)에서는 모양이 아예 없었다. 돋보기 자리만 왼쪽을 띄운다. */
+.bd-search { position: relative; }
+.bd-search > svg { position: absolute; left: 14px; top: 50%; width: 14px; height: 14px; transform: translateY(-50%); fill: none; stroke: rgb(var(--c-slate-500)); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
+.bd-search input.field { padding-left: 36px; }
+.bd-search input.field:disabled { opacity: .6; cursor: not-allowed; }
+.builder-dense .bd-search > svg { left: 10px; }
+.builder-dense .bd-search input.field { padding-left: 30px; }
 .builder-dense .bd-suggest { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 30; padding: 4px; border: 1px solid rgb(var(--c-slate-300)); border-radius: 10px; background: rgb(var(--c-surface)); box-shadow: 0 12px 28px rgb(var(--c-scrim) / .18); }
 .builder-dense .bd-suggest-item { width: 100%; height: 36px; display: flex; align-items: center; gap: 10px; padding: 0 8px; border-radius: 8px; text-align: left; color: rgb(var(--c-slate-900)); }
 .builder-dense .bd-suggest-item.is-on { background: rgb(var(--c-slate-100)); }

@@ -75,7 +75,7 @@ const TOUR_STEPS = [
   { anchor: "chart", title: "실시간 차트 · 보조지표", body: "지금 고른 종목의 실시간 시세를 보여줘요. 선택한 매매 방식의 보조지표(예: 이동평균·볼린저 밴드)가 함께 그려지고, 설정값을 바꾸면 보조지표도 즉시 따라 바뀌는 걸 확인할 수 있어요." },
   { anchor: "strategy-params", title: "전략 조건", body: "고른 매매 방식에만 필요한 세부 값을 정해요. 익절 기준·이동평균 기간·밴드 폭처럼 전략마다 항목이 달라져요." },
   { anchor: "risk", title: "손실 제한", body: "한 번에 쓸 자금 비율과 손절 기준(%)을 정해요. 손절을 켜면 정해진 손실에서 자동으로 정리해 위험을 제한해요." },
-  { anchor: "advanced-risk", title: "고급 위험 관리", body: "하루 최대 손실·최대 보유 시간·손절 뒤 쉬는 시간 같은 추가 안전장치예요. 필요할 때만 설정하면 돼요." },
+  { anchor: "advanced-risk", title: "고급 위험 관리", body: "일일 최대손실·최대 보유시간·손절 뒤 쉬는 시간 같은 추가 안전장치예요. 필요할 때만 설정하면 돼요." },
   { anchor: "fees", title: "거래 비용과 펀딩비", body: "실제에 가깝게 수수료·체결 가격 차이(슬리피지)·펀딩비를 반영해요. ‘실제 펀딩비 가져오기’로 해당 기간 평균값을 자동으로 채울 수 있어요." },
   { anchor: "leverage", title: "레버리지", body: "배수를 올리면 수익도 손실도 그만큼 커지고 청산 위험이 생겨요. 1배는 현물과 같아 청산이 없어요. 백테스트·모의에서만 적용돼요." },
 ];
@@ -707,7 +707,7 @@ function AccountStudio({ scope, allowRouterMacro }) {
     : !testedMacro
       ? "이 조건으로 백테스트"
       : resultIsFresh
-        ? "자동 실행 완료"
+        ? "테스트 완료"
         : "바뀐 조건으로 다시 테스트";
   const tabs = [
     { id: "bt", label: "백테스트", enabled: true, dot: busy ? "run" : !result ? "" : resultIsFresh ? "ok" : "warn" },
@@ -827,7 +827,7 @@ function AccountStudio({ scope, allowRouterMacro }) {
             <div className="studio-foot-note t-caption text-slate-500">
               <label className="flex items-center gap-2 t-caption text-slate-700 cursor-pointer select-none whitespace-nowrap">
                 <input type="checkbox" checked={autoRun} onChange={(event) => setAutoRun(event.target.checked)} />
-                자동 실행
+                변경 뒤 자동 테스트
               </label>
               <span>
                 <kbd className="num rounded-sm border border-slate-300 bg-slate-100 px-1">Ctrl</kbd>+<kbd className="num rounded-sm border border-slate-300 bg-slate-100 px-1">Enter</kbd>

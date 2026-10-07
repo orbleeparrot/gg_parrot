@@ -193,6 +193,7 @@ function SymbolPicker({ value, onChange, exchange = "binance" }) {
       <div className={"bd-search" + (full ? " is-full" : "")}>
         <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="9" cy="9" r="5.5" /><path d="M13.5 13.5 17 17" /></svg>
         <input
+          className="field"
           value={draft}
           placeholder={full ? `종목 ${MAX_SYMBOLS}개 · 더 넣으려면 하나를 빼요` : symbols.length ? "종목 검색 · 더 넣기" : "종목 검색 · BTC, ETH…"}
           aria-label="종목 검색"
@@ -722,16 +723,16 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
               {dense && <small>{form.use_daily_max_loss || (!isDca && form.use_max_holding) ? "사용 중" : "미사용"}</small>}
             </summary>
             <div className={g3m}>
-              <Field label={unitLabel("하루 최대 손실 (%)")} term="daily_max_loss" hint={isDca ? "도달하면 그날 추가 매수를 멈춰요" : "도달하면 그날 거래를 멈춰요"}>
+              <Field label={unitLabel("일일 최대손실 (%)")} term="daily_max_loss" hint={isDca ? "도달하면 그날 추가 매수를 멈춰요" : "도달하면 그날 거래를 멈춰요"}>
                 <div className="flex items-center gap-2">
-                  <label className="bd-check-hit"><input aria-label="하루 최대 손실 사용" type="checkbox" checked={form.use_daily_max_loss} onChange={setChk("use_daily_max_loss")} /></label>
+                  <label className="bd-check-hit"><input aria-label="일일 최대손실 사용" type="checkbox" checked={form.use_daily_max_loss} onChange={setChk("use_daily_max_loss")} /></label>
                   {unitInput(
-                    <input aria-label="하루 최대 손실률 (%)" className="field num" type="number" value={form.daily_max_loss_pct} disabled={!form.use_daily_max_loss} onChange={set("daily_max_loss_pct")} />,
+                    <input aria-label="일일 최대손실률 (%)" className="field num" type="number" value={form.daily_max_loss_pct} disabled={!form.use_daily_max_loss} onChange={set("daily_max_loss_pct")} />,
                     "%",
                   )}
                 </div>
               </Field>
-              <Field label="가장 오래 보유할 시간" term="max_holding" hint={isDca ? "분할매수에는 사용하지 않아요" : "이 시간을 넘기면 강제로 정리해요"}>
+              <Field label="최대 보유시간" term="max_holding" hint={isDca ? "분할매수에는 사용하지 않아요" : "이 시간을 넘기면 강제로 정리해요"}>
                 <div className="flex items-center gap-2">
                   <label className="bd-check-hit"><input aria-label="최대 보유시간 사용" type="checkbox" checked={!isDca && form.use_max_holding} disabled={isDca} onChange={setChk("use_max_holding")} /></label>
                   {unitInput(

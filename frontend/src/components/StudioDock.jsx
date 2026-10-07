@@ -427,7 +427,7 @@ export function StudioPaper({ macro: currentMacro, valErr, controller }) {
           {status && portfolio && <span>종목 <b className="num">{legs.length}</b>개 · 총합 기준</span>}
         </div>
         {!status ? (
-          <div className="sd-log-empty"><b>백테스트가 괜찮으면 여기서 실제 시세로 돌려 봐요</b>결과가 쌓이는 동안 페이지를 닫아도 마이페이지에서 이어 볼 수 있어요.</div>
+          <div className="sd-log-empty"><b>백테스트가 괜찮으면 여기서 실제 시세로 돌려 봐요</b>결과가 쌓이는 동안 다른 화면에 다녀와도 이 탭에서 이어 볼 수 있어요.</div>
         ) : (status.trades || []).length === 0 ? (
           <div className="sd-log-empty">아직 체결이 없어요. 조건을 낮추거나(익절·손절 0.3~1%) 변동성 큰 종목·리플레이를 써 봐요.</div>
         ) : (

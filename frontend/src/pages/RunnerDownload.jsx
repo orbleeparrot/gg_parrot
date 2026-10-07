@@ -296,7 +296,7 @@ export function OutdatedRunnerPanel({ version, minVersion, downloadUrl, download
         <span className="runner-wizard-launch-mark" aria-hidden="true">!</span>
         <div>
           <h2>이 PC에서 열린 실행기는 {shown}이에요. 웹 연결은 v{minVersion}부터 돼요.</h2>
-          <p>‘실행기 열기’는 Windows에 등록된 실행기를 여는데, 마지막으로 직접 실행한 파일이 {shown}이라 그게 열렸어요. 새 파일을 받아 한 번 직접 실행하면 등록이 바뀝니다.</p>
+          <p>‘실행기 열기’는 Windows에 등록된 실행기를 여는데, 마지막으로 직접 실행한 파일이 {shown}이라 그게 열렸어요. 새 파일을 받아 한 번 직접 실행하면 등록이 바뀌어요.</p>
         </div>
       </div>
       <div className="runner-wizard-launch-callout">

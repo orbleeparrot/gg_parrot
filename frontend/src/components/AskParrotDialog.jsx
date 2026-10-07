@@ -35,7 +35,7 @@ import { Icon } from "./icons.jsx";
 
 // 껄무새 얼굴 — 에이전트 표정 중 '호기심'(brand/README.md).
 const ASK_MASCOT = "/brand/agent/ggparrot-agent-curious-v1.svg";
-const NARROW_QUERY = "(max-width: 640px)";
+const NARROW_QUERY = "(max-width: 639px)"; // CSS 와 같은 휴대폰 경계(Tailwind sm 640 의 바로 아래)
 
 function useMedia(query) {
   const get = () => (typeof window !== "undefined" && window.matchMedia ? window.matchMedia(query).matches : false);

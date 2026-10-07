@@ -91,6 +91,14 @@ function ThumbDownIcon() {
     </svg>
   );
 }
+// 행 메뉴(빌더로 복사·수정·삭제) — 오른쪽 클릭·길게 누르기만으로는 키보드와 아이폰에서 열 수 없어 보이는 버튼을 둔다.
+function MoreIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" className="lb-more-icon">
+      <circle cx="5" cy="12" r="1.7" /><circle cx="12" cy="12" r="1.7" /><circle cx="19" cy="12" r="1.7" />
+    </svg>
+  );
+}
 // 잠긴 매크로 — 자물쇠. 언락 버튼은 좋아요·싫어요와 같은 알약이고 글자는 가격(100P)만.
 function LockIcon() {
   return (
@@ -360,11 +368,21 @@ function AccountLeaderboard() {
     const height = 8 + 38 * rowMenuItems(entry).length;
     setRowMenu({
       entry,
-      // 메뉴를 닫으면 이 행으로 포커스를 돌려준다(키보드 위치가 문서 처음으로 튀지 않게).
-      anchor: event.currentTarget?.closest?.(".lb-row") || event.currentTarget,
+      // 메뉴를 닫으면 연 자리로 포커스를 돌려준다 — '⋯' 버튼이면 그 버튼, 오른쪽 클릭·길게 누르기면 그 행.
+      anchor: event.currentTarget?.classList?.contains("lb-more") ? event.currentTarget : event.currentTarget?.closest?.(".lb-row") || event.currentTarget,
       x: Math.max(8, Math.min(x, window.innerWidth - width - 8)),
       y: Math.max(8, Math.min(y, window.innerHeight - height - 8)),
     });
+  }
+
+  // 메뉴가 있는 행이 하나라도 있으면 반응 칸을 '⋯' 폭만큼 넓히고, 메뉴가 없는 행엔 같은 폭의 빈 자리를 둔다(줄 맞춤).
+  const hasRowMenus = items.some((entry) => rowMenuItems(entry).length > 0);
+
+  // '⋯' 버튼 — 버튼 바로 아래 오른쪽 끝에 맞춰 연다. 같은 행 메뉴가 열려 있으면 닫는다.
+  function onMoreClick(event, entry) {
+    if (rowMenu?.entry.id === entry.id) { setRowMenu(null); return; }
+    const rect = event.currentTarget.getBoundingClientRect();
+    openRowMenu(event, entry, { x: rect.right - 176, y: rect.bottom + 6 });
   }
 
   function startLongPress(event, entry) {
@@ -397,7 +415,7 @@ function AccountLeaderboard() {
   useEffect(() => {
     if (!rowMenu) return undefined;
     const close_ = () => setRowMenu(null);
-    const onPointer = (event) => { if (!event.target.closest?.(".lb-menu")) close_(); };
+    const onPointer = (event) => { if (!event.target.closest?.(".lb-menu, .lb-more")) close_(); };
     document.addEventListener("pointerdown", onPointer);
     window.addEventListener("resize", close_);
     window.addEventListener("scroll", close_, true);
@@ -554,7 +572,7 @@ function AccountLeaderboard() {
           순위 | 로고 | 매크로(이름·배지·등록) | 전략 | 수익률 | 반응. 넓은 화면에선 전략이
           자기 열을 갖고, 좁아지면 이름 아래로 내려온다. 1·2·3위는 금·은·동 + '방어전' 배지. */}
       {!busy && items.length > 0 ? (
-        <div className={`lb-board${!quickRunMode && !items.some((e) => e.locked) ? " is-lean-actions" : ""}`} role="table" aria-label="오늘의 리더보드">
+        <div className={`lb-board${!quickRunMode && !items.some((e) => e.locked) ? " is-lean-actions" : ""}${hasRowMenus ? " has-row-menus" : ""}`} role="table" aria-label="오늘의 리더보드">
           <div className="lb-row lb-row-head" role="row">
             <span role="columnheader" className="lb-col-rank">순위</span>
             {/* 행마다 로고 칸(cell)이 있으니 머리글도 하나 — 숨기면 칸이 한 칸씩 밀려 읽힌다. */}
@@ -680,6 +698,19 @@ function AccountLeaderboard() {
                     </button>
                   ) : null}
                   </div>
+                  {rowMenuItems(e).length ? (
+                    <button
+                      type="button"
+                      className="lb-vote lb-more"
+                      aria-label={`${e.username || e.nickname} 매크로 메뉴`}
+                      title="메뉴"
+                      aria-haspopup="menu"
+                      aria-expanded={rowMenu?.entry.id === e.id}
+                      onClick={(event) => onMoreClick(event, e)}
+                    >
+                      <MoreIcon />
+                    </button>
+                  ) : hasRowMenus ? <span className="lb-more-slot" aria-hidden="true" /> : null}
                 </div>
               </div>
             );

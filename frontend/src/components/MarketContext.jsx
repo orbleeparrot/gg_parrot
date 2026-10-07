@@ -21,7 +21,7 @@ const krw = (value) => value == null ? "-" : `${fixed2(value)} 원`;
 function waterComment(value) {
   if (value == null) return "";
   if (value >= 20) return "물이 미지근하네요";
-  if (value >= 10) return "슬슬 차가워집니다";
+  if (value >= 10) return "슬슬 차가워져요";
   return "오늘은 집이 최고";
 }
 

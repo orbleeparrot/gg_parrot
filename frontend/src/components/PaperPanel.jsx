@@ -114,13 +114,13 @@ export function PaperNextSteps({ macro, valErr, primary = "quickRun", onRegister
         <div className="t-title">{domestic ? "국내 거래소 매크로 → 빠른 실행으로 실행기 연결" : "동작 검증 완료 → 매크로 실행기로 실거래"}</div>
         {domestic ? <p className="t-small">{exchangeLabel(macro.exchange)} 원화 현물 · 롱 · 1배 매크로는 <b>빠른 실행</b>으로 내 PC의 매크로 실행기에 바로 연결해요. 매크로 파일(.ggm.json) 내려받기는 바이낸스 전용이라 업비트·빗썸에서는 쓸 수 없어요.</p> : <><p className="t-small">
           터미널·파이썬 설치 없이 <b>껄무새 매크로 실행기</b>(프로그램)에 이 매크로 파일을 넣고 돌려요.
-          실행 현황과 원격 종료는 <b>마이페이지</b>에서 확인해요.
+          실행 현황과 원격 종료는 <b>내 에이전트</b>에서 확인해요.
         </p>
         <div className="pt-3 border-t border-amber-700/30 space-y-2">
           <p className="t-small font-bold">진행 방법</p>
           <ol className="t-small list-decimal pl-4 space-y-1">
             <li>아래 버튼으로 <b>매크로 파일(.ggm.json)</b>을 내려받아요.</li>
-            <li>마이페이지에서 <b>껄무새 회원 키</b>를 복사해요(계정당 1개).</li>
+            <li><b>실행기 설치</b> 화면에서 <b>껄무새 회원 키</b>를 복사해요(계정당 1개).</li>
             <li>매크로 실행기를 열어 ①파일 ②실거래 여부 ③API 키 ④회원 키를 넣고 시작해요.</li>
           </ol>
           <p className="t-small font-bold pt-1">

@@ -982,6 +982,17 @@ def admin_member_remove(
     return members_mod.remove_member(db, admin, user_id, reason=req.reason)
 
 
+@app.get("/api/admin/client-errors")
+def admin_client_errors(
+    days: int = 7,
+    admin: User = Depends(auth_mod.require_admin),
+    db: Session = Depends(request_session),
+) -> dict:
+    """관리자 대시보드 — 화면 오류(브라우저가 보낸 오류를 지문별로 합친 것, 최근 순)."""
+    from . import client_errors
+    return client_errors.report(db, days)
+
+
 @app.get("/api/admin/news")
 def admin_news(
     admin: User = Depends(auth_mod.require_admin),
@@ -1204,13 +1215,13 @@ def validate_macro(body: ValidateIn, request: Request) -> dict:
             ".".join(str(part) for part in err["loc"]) or "macro" for err in exc.errors()))
         raise HTTPException(status_code=422, detail=f"매크로 설정을 확인해 주세요: {fields}") from exc
     if macro.is_portfolio():
-        raise HTTPException(status_code=422, detail="여러 종목 포트폴리오 매크로는 아직 검증할 수 없습니다. 종목 하나로 나눠 검증해 주세요.")
+        raise HTTPException(status_code=422, detail="여러 종목 포트폴리오 매크로는 아직 검증할 수 없어요. 종목 하나로 나눠 검증해 주세요.")
 
     try:
         start_ms, end_ms = resolve_period(macro.period.preset, macro.period.start, macro.period.end)
     except ValueError as exc:
         # 상태는 /api/backtest 와 같은 400 이되, 영어 원문 대신 한국어로 알린다.
-        raise HTTPException(status_code=400, detail="기간 설정을 확인해 주세요. 프리셋 이름이나 시작 · 끝 날짜가 올바르지 않습니다.") from exc
+        raise HTTPException(status_code=400, detail="기간 설정을 확인해 주세요. 프리셋 이름이나 시작 · 끝 날짜가 올바르지 않아요.") from exc
     try:
         df, _source = fetch_klines_for_macro(macro, start_ms, end_ms)
         result = run_backtest(macro, df)
@@ -1355,12 +1366,12 @@ def validate_explain_route(body: ExplainIn, request: Request) -> dict:
             ".".join(str(part) for part in err["loc"]) or "macro" for err in exc.errors()))
         raise HTTPException(status_code=422, detail=f"매크로 설정을 확인해 주세요: {fields}") from exc
     if macro.is_portfolio():
-        raise HTTPException(status_code=422, detail="여러 종목 포트폴리오 매크로는 아직 검증할 수 없습니다. 종목 하나로 나눠 검증해 주세요.")
+        raise HTTPException(status_code=422, detail="여러 종목 포트폴리오 매크로는 아직 검증할 수 없어요. 종목 하나로 나눠 검증해 주세요.")
 
     try:
         start_ms, end_ms = resolve_period(macro.period.preset, macro.period.start, macro.period.end)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail="기간 설정을 확인해 주세요. 프리셋 이름이나 시작 · 끝 날짜가 올바르지 않습니다.") from exc
+        raise HTTPException(status_code=400, detail="기간 설정을 확인해 주세요. 프리셋 이름이나 시작 · 끝 날짜가 올바르지 않아요.") from exc
 
     # 근거는 일간 변동 기준이라 일봉으로 받는다(시간봉을 넣으면 같은 날짜가 여러 번 나온다).
     daily = macro if macro.candle_interval == "1d" else macro.model_copy(update={"candle_interval": "1d"})
@@ -1680,7 +1691,7 @@ def _edit_rate_check(entry_id: int, ip: str) -> None:
     now = time.time()
     hist = [t for t in _edit_fails.get(key, []) if now - t < _EDIT_WINDOW]
     if len(hist) >= _EDIT_MAX_FAILS:
-        raise HTTPException(status_code=429, detail="비밀번호 시도가 너무 많습니다. 잠시 후 다시 시도하세요.")
+        raise HTTPException(status_code=429, detail="비밀번호 시도가 너무 많아요. 잠시 후 다시 시도해 주세요.")
     _edit_fails[key] = hist
 
 
@@ -1815,7 +1826,7 @@ async def leaderboard_edit(
     (rate-limited per entry+IP). Restarts the paper session on success."""
     old = leaderboard_mod.get_entry(entry_id)
     if old is None:
-        raise HTTPException(status_code=404, detail="엔트리를 찾을 수 없습니다.")
+        raise HTTPException(status_code=404, detail="엔트리를 찾을 수 없어요.")
 
     is_account_owner = (
         old.owner_user_id is not None and account is not None and account.id == old.owner_user_id
@@ -1827,7 +1838,7 @@ async def leaderboard_edit(
         _edit_rate_check(entry_id, ip)
         if not leaderboard_mod.verify_owner(entry_id, req.password):
             _edit_rate_fail(entry_id, ip)
-            raise HTTPException(status_code=403, detail="비밀번호가 일치하지 않습니다.")
+            raise HTTPException(status_code=403, detail="비밀번호가 일치하지 않아요.")
 
     macro = req.macro
     mode = "replay" if req.mode == "replay" else "live"
@@ -1852,7 +1863,7 @@ async def leaderboard_delete(entry_id: int, account: User = Depends(auth_mod.cur
     """Delete one of my own (account-owned) leaderboard entries."""
     entry = leaderboard_mod.get_entry(entry_id)
     if entry is None:
-        raise HTTPException(status_code=404, detail="엔트리를 찾을 수 없습니다.")
+        raise HTTPException(status_code=404, detail="엔트리를 찾을 수 없어요.")
     if entry.owner_user_id != account.id:
         raise HTTPException(status_code=403, detail="내가 등록한 매크로만 삭제할 수 있어요.")
     sid = leaderboard_mod.delete_entry(entry_id)

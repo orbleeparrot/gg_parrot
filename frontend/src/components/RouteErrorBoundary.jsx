@@ -2,6 +2,7 @@ import { Component } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { useAuth } from "../lib/auth.js";
 import { isChunkLoadError, reloadOnceForNewBuild } from "../lib/chunkReload.js";
+import { reportClientError } from "../lib/errorReport.js";
 
 // Keep the shell outside this boundary so a page exception cannot remove navigation.
 export class PageErrorBoundary extends Component {
@@ -13,9 +14,11 @@ export class PageErrorBoundary extends Component {
 
   componentDidCatch(error, info) {
     // 화면 코드 파일을 못 받은 경우(배포 직후)는 한 번 자동으로 새로고침한다.
-    if (isChunkLoadError(error)) reloadOnceForNewBuild();
-    // 잡힌 오류도 콘솔에는 남긴다 — QA·사용자 제보 때 원인을 찾을 수 있게.
+    const chunk = isChunkLoadError(error);
+    if (chunk) reloadOnceForNewBuild();
+    // 잡힌 오류는 콘솔과 서버(화면 오류 모으기)에 남긴다 — 사용자가 알려 주기 전에 알 수 있게.
     console.error("[page-error]", error, info?.componentStack);
+    reportClientError(chunk ? "chunk" : "render", error);
   }
 
   componentDidUpdate(previous) {
@@ -68,6 +71,7 @@ export class ShellBoundary extends Component {
 
   componentDidCatch(error, info) {
     console.error(`[shell-error:${this.props.name || "part"}]`, error, info?.componentStack);
+    reportClientError(isChunkLoadError(error) ? "chunk" : "render", error);
   }
 
   render() {
@@ -84,8 +88,10 @@ export class RootErrorBoundary extends Component {
   }
 
   componentDidCatch(error, info) {
-    if (isChunkLoadError(error)) reloadOnceForNewBuild();
+    const chunk = isChunkLoadError(error);
+    if (chunk) reloadOnceForNewBuild();
     console.error("[app-error]", error, info?.componentStack);
+    reportClientError(chunk ? "chunk" : "render", error);
   }
 
   render() {

@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  buildBundleRisk, buildLegs, buildMacro, defaultForm, evenWeights, macroToForm, validateDetailed, withTypeDefaults,
+  FIELDLESS_ERROR_FIELDS, buildBundleRisk, buildLegs, buildMacro, defaultForm, evenWeights, macroToForm,
+  splitWeights, validateDetailed, weightsAfterAdd, withExchangeDefaults, withTypeDefaults,
 } from "../src/lib/macro.js";
 
 // 돌파(I) 규칙 + 종목 셋. defaultForm 위에 얹어야 buildMacro 가 제대로 돈다.
@@ -195,4 +196,169 @@ test("레그 규칙까지 든 매크로가 왕복해도 같은 매크로가 나�
     leg_rules: { ETHUSDT: { ...defaultForm(), rule_type: "E", trail_percent: 4 } },
   }));
   assert.deepEqual(buildMacro(macroToForm(macro)), macro);
+});
+
+// ── W1. 거래소를 바꾸면 묶음 칸이 저절로 422 조합을 만들지 않는다 ──
+test("거래소를 바꾸면 비중 · 레그 규칙 · 묶음 한도가 초기값으로 돌아간다", () => {
+  const listed = [{ symbol: "KRW-BTC" }, { symbol: "KRW-ETH" }];
+  const before = form({
+    rule_type: "K", symbol: "BTCUSDT, ETHUSDT",
+    leg_weights: "70, 30",
+    leg_rules: { BTCUSDT: { ...defaultForm(), rule_type: "E" } },
+    use_bundle_risk: true, bundle_max_positions: "1", bundle_max_exposure_pct: "60",
+  });
+  // K 는 국내에서 못 쓰므로 규칙이 A 로 내려간다 — 서버는 한도를 E~K 에서만 받으므로
+  // 칸이 그대로 남으면 사용자가 아무것도 안 해도 422 조합이 만들어진다.
+  const after = withExchangeDefaults(before, "upbit", listed);
+  assert.equal(after.rule_type, "A");
+  assert.equal(after.leg_weights, "");
+  assert.deepEqual(after.leg_rules, {});
+  assert.equal(after.leg_shape, "");
+  assert.equal(after.use_bundle_risk, false);
+  assert.equal(after.bundle_max_positions, "");
+  assert.equal(after.bundle_max_exposure_pct, "");
+  // 되돌린 폼에는 묶음 오류가 남지 않고(거래소를 바꾸면 자금 칸을 다시 받으므로 그 오류는 남는다)
+  // 매크로도 묶음 키를 싣지 않는다.
+  const err = validateDetailed(after);
+  assert.ok(!err || !FIELDLESS_ERROR_FIELDS.includes(err.field), JSON.stringify(err));
+  const macro = buildMacro(after);
+  assert.ok(!("bundle_risk" in macro));
+  assert.ok(!("legs" in macro));
+});
+
+test("같은 거래소를 다시 고르면 폼이 그대로다(묶음 칸도 안 지운다)", () => {
+  const before = form({ leg_weights: "70, 30", use_bundle_risk: true, bundle_max_positions: "1" });
+  assert.equal(withExchangeDefaults(before, "binance", []), before);
+});
+
+// ── W2. 묶음 한도는 진입 조건을 달 수 있는 규칙(E~K)에서만 ──
+test("E~K 가 아닌 규칙에 묶음 한도를 걸면 검증이 잡는다", () => {
+  // 서버가 422 로 거절하고 그 422 는 detail 이 리스트로 와서 영어 날 JSON 이 뜬다.
+  expectError(validateDetailed(form({ rule_type: "A", use_bundle_risk: true, bundle_max_positions: "1" })),
+    "use_bundle_risk", /묶음 한도는 .*쓸 수 없어요/);
+  for (const rt of ["A", "B", "C", "D"]) {
+    const err = validateDetailed(form({ rule_type: rt, use_bundle_risk: true, bundle_max_exposure_pct: "60" }));
+    assert.ok(err, `규칙 ${rt} 에 한도를 걸면 막아야 한다`);
+    assert.equal(err.field, "use_bundle_risk");
+  }
+  // H 는 세이프티오더 자금 규칙이 따로 있어 기본 폼으로는 다른 오류가 먼저 난다 — 한도 쪽만 본다.
+  for (const rt of ["E", "F", "G", "I", "J", "K"]) {
+    assert.equal(validateDetailed(form({ rule_type: rt, use_bundle_risk: true, bundle_max_exposure_pct: "60" })), null, `규칙 ${rt}`);
+  }
+  const h = validateDetailed(form({ rule_type: "H", use_bundle_risk: true, bundle_max_exposure_pct: "60" }));
+  assert.ok(!h || h.field !== "use_bundle_risk", "H 는 한도를 쓸 수 있는 규칙이다");
+});
+
+test("레그마다 덮어쓴 규칙이 E~K 가 아니면 묶음 한도를 막는다", () => {
+  const err = validateDetailed(form({
+    use_bundle_risk: true, bundle_max_positions: "1",
+    leg_rules: { ETHUSDT: { ...defaultForm(), rule_type: "A" } },
+  }));
+  expectError(err, "use_bundle_risk", /쓸 수 없어요/);
+  // 문구는 RULE_TYPES 의 라벨을 쓴다 — 규칙 글자 하나만 적으면 사용자가 모른다.
+  assert.match(err.message, /익절\/손절 후 재진입/);
+});
+
+test("지운 종목에 남은 레그 규칙은 묶음 한도를 막지 않는다", () => {
+  assert.equal(validateDetailed(form({
+    use_bundle_risk: true, bundle_max_positions: "1",
+    leg_rules: { XRPUSDT: { ...defaultForm(), rule_type: "A" } },
+  })), null);
+});
+
+// ── W3. 칸이 없는 오류 목록 ──
+test("비중 · 묶음 한도 · 레그 규칙 오류는 '칸 없는 오류' 로 분류된다", () => {
+  // 이 목록에 없으면 화면이 그 오류를 어디에도 띄우지 않는다(칸도 없고 바닥 경고도 건너뛴다).
+  for (const broken of [
+    form({ leg_weights: "0, 100, 0".split(",").slice(0, 2).join(",") }),
+    form({ leg_weights: "50, 30" }),
+    form({ use_bundle_risk: true }),
+    form({ rule_type: "A", use_bundle_risk: true, bundle_max_positions: "1" }),
+    // 묶음 규칙은 숏을 할 수 있고(J) 레그 규칙만 못 하는 경우.
+    form({ rule_type: "J", position_side: "short", leg_rules: { BTCUSDT: { ...defaultForm(), rule_type: "E" } } }),
+  ]) {
+    const err = validateDetailed(broken);
+    assert.ok(err, JSON.stringify(broken.leg_weights));
+    assert.ok(FIELDLESS_ERROR_FIELDS.includes(err.field), `${err.field} 는 칸이 없다 — 목록에 있어야 바닥 경고가 보여 준다`);
+  }
+});
+
+// ── W4. 비중 쪼개기는 자리를 지킨다 ──
+test("splitWeights 는 빈 칸의 자리를 지킨다", () => {
+  assert.deepEqual(splitWeights("50, , 33.34"), ["50", "", "33.34"]);
+  assert.deepEqual(splitWeights("33., 33.33, 33.34"), ["33.", "33.33", "33.34"]);
+  // 통째로 비었으면 '손대지 않음' — buildLegs 가 옛 symbols 모양을 지킨다.
+  assert.deepEqual(splitWeights(""), []);
+  assert.deepEqual(splitWeights("   "), []);
+  assert.deepEqual(splitWeights(null), []);
+  // 빈 칸만 남은 상태는 '지우는 중' 이고 검증이 막는다.
+  assert.deepEqual(splitWeights(", "), ["", ""]);
+});
+
+test("비중 한 칸을 비우면 검증이 막는다 — 뒤 칸 숫자가 그 자리로 밀려오지 않는다", () => {
+  const err = validateDetailed(form({ symbol: "BTCUSDT, ETHUSDT, SOLUSDT", leg_weights: "50, , 33.34" }));
+  expectError(err, "leg_weights", /0보다 크고/);
+  // 걸러내던 옛 코드에서는 개수가 맞아 떨어져 '밀려온 숫자' 로 통과했다.
+  assert.equal(splitWeights("50, , 33.34").length, 3);
+});
+
+// ── W9. 숏 묶음에 숏을 못 쓰는 레그 규칙을 막는다 ──
+test("묶음이 숏이면 숏을 못 쓰는 레그 규칙을 막는다", () => {
+  // J(이동평균 크로스)는 숏을 할 수 있고 E(트레일링 스탑)는 못 한다 — 서버도 레그 쪽은 안 본다.
+  const err = validateDetailed(form({
+    rule_type: "J", position_side: "short",
+    leg_rules: { ETHUSDT: { ...defaultForm(), rule_type: "E" } },
+  }));
+  expectError(err, "leg_rules", /숏을 지원하지 않아요/);
+  assert.match(err.message, /ETH/);
+  // 롱 묶음이면 막지 않는다.
+  assert.equal(validateDetailed(form({
+    rule_type: "J", position_side: "long",
+    leg_rules: { ETHUSDT: { ...defaultForm(), rule_type: "E" } },
+  })), null);
+});
+
+// ── W9. legs 였으면 legs 로 되돌린다(복제가 손실 없게) ──
+test("균등 legs 묶음을 복제해도 legs 모양이 유지된다", () => {
+  const macro = { ...buildMacro(form({ leg_weights: "50, 50" })) };
+  const back = macroToForm(macro);
+  assert.ok(!back.leg_weights, "균등이면 비중 입력은 켜지 않는다");
+  assert.equal(back.leg_shape, "legs");
+  const again = buildMacro(back);
+  assert.deepEqual(again.legs, macro.legs, "legs 가 symbols 로 바뀌지 않는다");
+  assert.equal(again.symbols, null);
+});
+
+test("근사균등 legs(49.99/50.01)를 복제해도 비중이 그대로다", () => {
+  const macro = {
+    ...buildMacro(form({ leg_weights: "50, 50" })),
+    legs: [{ symbol: "BTCUSDT", weight: 49.99 }, { symbol: "ETHUSDT", weight: 50.01 }],
+  };
+  const back = macroToForm(macro);
+  assert.deepEqual(buildMacro(back).legs, macro.legs);
+});
+
+test("symbols 묶음을 복제하면 symbols 그대로다 — 모양을 바꾸지 않는다", () => {
+  const macro = buildMacro(form());
+  const back = macroToForm(macro);
+  assert.equal(back.leg_shape, "");
+  assert.deepEqual(buildMacro(back), macro);
+});
+
+// ── W8. 종목을 더하면 남은 몫을 나눠 준다 ──
+test("종목을 더하면 새 종목이 남은 몫을 받는다", () => {
+  assert.equal(weightsAfterAdd("50, 20"), "50, 20, 30");
+  assert.equal(weightsAfterAdd("40, 40"), "40, 40, 20");
+  // 합이 100 으로 꽉 찼으면 남은 몫이 없으니 전체를 균등으로 다시 나눈다 — 합 125% 로 깨진 채 두지 않는다.
+  assert.equal(weightsAfterAdd("70, 30"), "33.33, 33.33, 33.34");
+  assert.equal(weightsAfterAdd("50, 50, 10"), "25, 25, 25, 25");
+  // 손대지 않은 비중은 그대로 — 균등은 종목 수가 바뀌면 저절로 다시 나뉜다.
+  assert.equal(weightsAfterAdd(""), "");
+});
+
+test("종목을 더한 뒤의 비중은 검증을 통과한다", () => {
+  const next = weightsAfterAdd("50, 20");
+  assert.equal(validateDetailed(form({ symbol: "BTCUSDT, ETHUSDT, SOLUSDT", leg_weights: next })), null);
+  const even = weightsAfterAdd("70, 30");
+  assert.equal(validateDetailed(form({ symbol: "BTCUSDT, ETHUSDT, SOLUSDT", leg_weights: even })), null);
 });

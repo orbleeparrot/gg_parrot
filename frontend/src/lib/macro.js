@@ -6,6 +6,7 @@
 // backend pydantic models exactly so clone (macroToForm) is a direct Object.assign.
 import { isDomestic, normalizeExchange, normalizeSymbolForExchange, quoteForExchange } from "./exchanges.js";
 import { baseOf } from "./format.js";
+import { isEvenWeights } from "./portfolio.js";
 
 // Demo safety cap on leverage (mirrors backend MAX_LEVERAGE default). Leverage is
 // a backtest/paper-only condition — C (DCA) is excluded and forced to 1x.
@@ -152,7 +153,8 @@ export function defaultForm() {
     filter_bb_period: 20, filter_bb_num_std: 2, filter_bb_zone: "inside",
     filter_vol_period: 20, filter_vol_multiple: 2,
     // 묶음(여러 종목): 비중 · 레그별 규칙 · 묶음 한도. 비워 두면 전과 같이 균등 분배.
-    leg_weights: "", leg_rules: {},
+    // leg_shape 는 불러온 매크로의 모양 기억이다 — "legs" 면 비중을 손대지 않아도 legs 로 되돌린다(복제가 손실 없게).
+    leg_weights: "", leg_rules: {}, leg_shape: "",
     use_bundle_risk: false, bundle_max_positions: "", bundle_max_exposure_pct: "",
     // common risk
     invest_ratio_pct: 100,
@@ -207,6 +209,13 @@ export function withExchangeDefaults(form, value, items = []) {
     .filter((value) => listed.has(value)))].join(",");
   const next = { ...form, exchange, symbol, funding_pct: 0 };
   for (const key of EXCHANGE_MONEY_FIELDS) next[key] = "";
+  // 묶음 칸도 초기값으로 되돌린다. 거래소를 바꾸면 종목이 다시 짜이므로 비중 개수와 레그 규칙의
+  // 종목 키가 어긋나고, K→A 로 내려가는 길에서는 "한도를 못 쓰는 규칙 + 묶음 한도"(서버가 422 로
+  // 거절하는 조합)가 사용자가 아무것도 안 해도 저절로 만들어진다. 진입 조건을 지우는 것과 같은 이유다.
+  Object.assign(next, {
+    leg_weights: "", leg_rules: {}, leg_shape: "",
+    use_bundle_risk: false, bundle_max_positions: "", bundle_max_exposure_pct: "",
+  });
   if (isDomestic(exchange)) {
     Object.assign(next, { position_side: "long", leverage: 1, market: "spot", flip_to_short: false });
     // K 는 국내에서 못 쓴다 — A 로 내리면서 필터도 버린다(A 는 필터를 못 쓴다). withTypeDefaults 를 거치지 않는 길이라
@@ -230,6 +239,11 @@ function martingaleRequiredFunds(form) {
   }
   return total;
 }
+
+// 칸(Field)이 없는 오류 — 비중은 종목 행 안의 생 입력, 묶음 한도는 체크박스, 레그 규칙은 펼쳐야 보이는
+// 판이라 `data-field` 가 없다. 그래서 "칸이 있는 오류는 칸에, 없는 오류는 바닥에" 로 가른다. 이 목록에
+// 없으면 바닥 경고가 건너뛰므로, 비중 합이 틀려 실행이 막혀도 화면에 아무 말이 없게 된다.
+export const FIELDLESS_ERROR_FIELDS = Object.freeze(["leg_weights", "use_bundle_risk", "leg_rules"]);
 
 // 입력 검증 — 걸린 항목(form 의 키)과 문구를 함께 돌려준다. 화면은 그 칸을 노랗게 띄우고 라벨 아래에 문구를 적는다.
 export function validateDetailed(form) {
@@ -338,8 +352,28 @@ export function validateDetailed(form) {
     const total = nums.reduce((a, b) => a + b, 0);
     if (Math.abs(total - 100) > 0.01) return fail("leg_weights", `비중의 합이 ${Number(total.toFixed(2))}% 예요 · 100% 로 맞춰 주세요.`);
   }
+  // 묶음이 숏이면 레그 규칙도 숏을 할 수 있어야 한다 — 서버는 레그 규칙의 숏 지원을 보지 않으므로
+  // 여기서 막지 않으면 롱만 되는 규칙이 숏 묶음 안에서 조용히 돈다.
+  if (isShort) {
+    const shortBad = uniqSymbols.find((symbol) => {
+      const lrt = form.leg_rules?.[symbol]?.rule_type;
+      return lrt && RULE_TYPES[lrt] && !RULE_TYPES[lrt].allowShort;
+    });
+    if (shortBad) {
+      const label = RULE_TYPES[form.leg_rules[shortBad].rule_type].label;
+      return fail("leg_rules", `${baseOf(shortBad)} 의 규칙 '${label}' 은 숏을 지원하지 않아요. 묶음이 숏이니 그 종목의 규칙을 바꿔 주세요.`);
+    }
+  }
   if (form.use_bundle_risk) {
     if (uniqSymbols.length < 2) return fail("use_bundle_risk", "묶음 한도는 종목 2개 이상에서만 쓸 수 있어요.");
+    // 한도는 진입 관문을 안전하게 끼울 수 있는 규칙(E~K)에서만 쓸 수 있다. 서버가 거절하므로
+    // 여기서 막지 않으면 영어 날 JSON 이 뜬다. 묶음 규칙과 레그마다 덮어쓴 규칙을 둘 다 본다.
+    const ruleOf = (symbol) => (form.leg_rules?.[symbol]?.rule_type) || form.rule_type;
+    const bad = uniqSymbols.find((s) => !FILTERABLE_RULE_TYPES.includes(ruleOf(s)));
+    if (bad) {
+      const label = RULE_TYPES[ruleOf(bad)]?.label || ruleOf(bad);
+      return fail("use_bundle_risk", `묶음 한도는 '${label}' 규칙에는 쓸 수 없어요. 진입 조건을 달 수 있는 규칙에서만 쓸 수 있어요.`);
+    }
     const mp = form.bundle_max_positions, ex = form.bundle_max_exposure_pct;
     const hasMp = mp !== "" && mp != null, hasEx = ex !== "" && ex != null;
     if (hasMp) {
@@ -455,9 +489,29 @@ export function evenWeights(count) {
   return out;
 }
 
-// 쉼표 문자열 → 빈 칸을 뺀 조각들.
-function splitWeights(raw) {
-  return String(raw ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+// 쉼표 문자열 → 조각들. 빈 칸은 **자리를 지킨다** — 걸러내면 한 칸을 비우는 사이에 뒤 칸의 숫자가
+// 그 자리로 밀려와 다른 종목의 비중이 저절로 바뀐다. 통째로 비었으면(= 손대지 않음) 빈 배열이라
+// buildLegs 가 옛 symbols 모양을 그대로 지킨다. 빈 칸만 남은 상태는 '지우는 중' 이고 validateDetailed 가 막는다.
+export function splitWeights(raw) {
+  const text = String(raw ?? "").trim();
+  if (text === "") return [];
+  return text.split(",").map((s) => s.trim());
+}
+
+// 종목을 더했을 때의 비중 문자열(스펙 §10 "종목을 넣으면 남은 몫을 다시 나눈다").
+// 손댄 비중은 뒤엎지 않는다 — 새 종목에 남은 몫(100 − 기존 합)을 주고, 남은 몫이 0 이하면 전체를
+// 균등으로 다시 나눈다. 사용자가 정한 숫자를 말없이 바꾸는 것이 합 125% 로 깨진 채 두는 것보다 낫다.
+// 손대지 않은 비중("")은 그대로 둔다 — 균등은 종목 수가 바뀌면 저절로 다시 나뉜다.
+export function weightsAfterAdd(raw) {
+  const list = splitWeights(raw);
+  if (!list.length) return "";
+  const used = list.reduce((sum, part) => {
+    const n = Number(part);
+    return sum + (Number.isFinite(n) ? n : 0);
+  }, 0);
+  const left = Math.round((100 - used) * 100) / 100;
+  if (left > 0) return [...list, String(left)].join(", ");
+  return evenWeights(list.length + 1).map(String).join(", ");
 }
 
 // 중복을 뺀 종목 목록(입력 순서 유지, 최대 5개) — buildMacro 의 symbols 와 같은 규칙.
@@ -479,7 +533,8 @@ export function buildLegs(form) {
     const rule = form.leg_rules?.[symbol];
     if (rule && rule.rule_type) rules[symbol] = rule;
   }
-  const touched = weights.length > 0 || Object.keys(rules).length > 0;
+  // 불러온 매크로가 legs 였으면(leg_shape) 비중을 손대지 않아도 legs 로 되돌린다 — 복제가 모양을 잃지 않게.
+  const touched = weights.length > 0 || Object.keys(rules).length > 0 || form.leg_shape === "legs";
   if (!touched) return null;
   const even = evenWeights(symbols.length);
   return symbols.map((symbol, i) => {
@@ -568,10 +623,14 @@ export function macroToForm(macro) {
   f.symbol = macro.symbols && macro.symbols.length > 1 ? macro.symbols.join(", ") : macro.symbol;
   if (Array.isArray(macro.legs) && macro.legs.length > 1) {
     f.symbol = macro.legs.map((leg) => leg.symbol).join(", ");
+    // legs 였다는 사실을 남긴다 — 균등 묶음을 복제해도 symbols 로 모양이 바뀌지 않게.
+    f.leg_shape = "legs";
     const even = evenWeights(macro.legs.length);
-    const isEven = macro.legs.every((leg, i) => Math.abs(leg.weight - even[i]) < 0.02);
+    // 균등 판정은 카드·서버 요약과 같은 자리(isEvenWeights)를 쓴다. 다만 균등이라도 숫자가
+    // evenWeights 와 다르면(49.99/50.01) 그 값을 그대로 지킨다 — 복제가 비중을 반올림해 버리지 않게.
+    const exact = macro.legs.every((leg, i) => Number(leg.weight) === even[i]);
     // 균등이면 비중 입력을 켜지 않는다 — 사용자가 손대지 않은 것을 손댄 것처럼 보이지 않게.
-    f.leg_weights = isEven ? "" : macro.legs.map((leg) => String(leg.weight)).join(", ");
+    f.leg_weights = isEvenWeights(macro.legs) && exact ? "" : macro.legs.map((leg) => String(leg.weight)).join(", ");
     f.leg_rules = {};
     for (const leg of macro.legs) {
       if (!leg.rule_type) continue;

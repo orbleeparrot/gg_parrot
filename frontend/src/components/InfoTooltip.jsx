@@ -1,11 +1,14 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { GLOSSARY } from "../lib/glossary.js";
+import { GLOSSARY, TERM_NAMES } from "../lib/glossary.js";
+import { useModalLayer } from "../hooks/useModalLayer.js";
 
 // ⓘ help icon that reveals a plain-language explanation.
 // Desktop: hover. Mobile/touch: tap toggles (and tap-outside closes).
 // placement: "top" (default) or "bottom" — use "bottom" near the page top where
 // an upward tooltip would be clipped (e.g. the kimchi banner).
-export default function InfoTooltip({ term, text, placement = "top", label = "설명 보기" }) {
+export default function InfoTooltip({ term, text, placement = "top", label: labelProp }) {
+  // 이름 — 넘겨받은 것 > 용어 이름표 > "설명 보기"(무엇의 설명인지 모를 때만).
+  const label = labelProp || (TERM_NAMES[term] ? `${TERM_NAMES[term]} 설명` : "설명 보기");
   const [open, setOpen] = useState(false);
   const [shift, setShift] = useState(0); // px nudge to keep the bubble on screen
   const [flipped, setFlipped] = useState(false); // 위쪽이 스크롤 상자에 막히면 아래로 편다
@@ -25,16 +28,11 @@ export default function InfoTooltip({ term, text, placement = "top", label = "�
     const onDocClick = (e) => {
       if (ref.current && !ref.current.contains(e.target)) setOpen(false);
     };
-    const onKeyDown = (e) => {
-      if (e.key === "Escape") setOpen(false);
-    };
     document.addEventListener("click", onDocClick);
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("click", onDocClick);
-      document.removeEventListener("keydown", onKeyDown);
-    };
+    return () => document.removeEventListener("click", onDocClick);
   }, [open]);
+  // Esc 는 맨 위 겹 하나만 — 등록 모달 안의 ⓘ 를 닫으려던 Esc 가 모달까지 닫던 문제.
+  useModalLayer({ open, ref, onEscape: () => setOpen(false), restoreFocus: false });
 
   // The bubble is centred on a 16px icon, so near either edge it would hang off
   // and give the whole page a horizontal scrollbar. Measure once per open and
@@ -115,9 +113,9 @@ export default function InfoTooltip({ term, text, placement = "top", label = "�
           ref={tipRef}
           id={tipId}
           role="tooltip"
-          style={{ transform: `translateX(calc(-50% + ${shift}px))` }}
+          style={{ "--shift": `${shift}px` }}
           className={
-            "absolute left-1/2 w-56 max-w-[calc(100vw-1rem)] z-[75] " +
+            "info-tip " +
             posCls +
             " rounded-xl bg-surface border border-slate-300 px-3 py-3" +
             " t-caption leading-relaxed text-slate-700 shadow-xl"

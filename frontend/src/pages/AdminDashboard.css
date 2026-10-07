@@ -91,6 +91,8 @@
 .adm-tbl th { padding: 7px 10px 7px 0; border-bottom: 2px solid var(--adm-line-strong); text-align: left; font-size: 11.5px; font-weight: 700; letter-spacing: 0.02em; color: var(--adm-muted); white-space: nowrap; }
 .adm-tbl td { padding: 8px 10px 8px 0; border-bottom: 1px solid var(--adm-line); color: var(--adm-ink-2); font-weight: 500; white-space: nowrap; }
 .adm-tbl td.num, .adm-tbl th.num { text-align: right; }
+/* 화면 오류 문장은 길어서 칸 안에서 줄을 바꾼다(다른 칸은 한 줄). */
+.adm-tbl td .adm-err-msg { display: block; min-width: 240px; max-width: 520px; white-space: normal; overflow-wrap: anywhere; }
 .adm-tbl th:last-child, .adm-tbl td:last-child { padding-right: 0; }
 .adm-tbl tr.adm-total td { border-top: 2px solid var(--adm-line-strong); font-weight: 700; color: var(--adm-ink); }
 .adm-tbl tr.adm-empty td { padding: 14px 0; text-align: center; color: var(--adm-muted); font-size: 12.5px; font-weight: 600; white-space: normal; }
@@ -98,7 +100,7 @@
 .adm-tbl td.adm-muted, .adm-muted { color: var(--adm-muted); }
 .adm-tbl td.adm-wrap { white-space: normal; min-width: 180px; }
 .adm-tbl .adm-err { display: inline-block; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
-.adm-swatch { display: inline-block; width: 10px; height: 10px; margin-right: 8px; border-radius: 2px; vertical-align: -1px; }
+.adm-swatch { display: inline-block; width: 10px; height: 10px; background: var(--swatch, currentColor); margin-right: 8px; border-radius: 2px; vertical-align: -1px; }
 .adm-up { color: var(--adm-up); }
 .adm-down { color: var(--adm-down); }
 .adm-warn { color: var(--adm-warn); }
@@ -126,6 +128,9 @@
 .adm-chart text { font-family: "JetBrains Mono", "Pretendard", ui-monospace, monospace; font-size: 11px; font-weight: 500; fill: var(--adm-muted); font-variant-numeric: tabular-nums; }
 .adm-chart .adm-lab { font-family: "Pretendard", system-ui, sans-serif; font-weight: 600; fill: var(--adm-ink-2); }
 .adm-chart .adm-axis-title { font-family: "Pretendard", system-ui, sans-serif; font-weight: 700; fill: var(--adm-muted); }
+/* 계열 색을 따르는 글자 — 끝값·오른쪽 축 눈금·축 제목·호버 줄(--series 는 AdminCharts 가 넘긴다). */
+.adm-chart .adm-end-label { fill: var(--series); font-weight: 700; }
+.adm-chart .adm-series-tick, .adm-chart .adm-axis-title.is-series { fill: var(--series); }
 .adm-chart .adm-strong { font-weight: 700; fill: var(--adm-ink); }
 .adm-chart .adm-on-bar { font-weight: 700; fill: rgb(var(--c-slate-50)); }
 .dark .adm-chart .adm-on-bar { fill: rgb(var(--c-brand-ink)); }
@@ -133,9 +138,10 @@
 .adm-chart .adm-axis { stroke: var(--adm-line-strong); stroke-width: 1; }
 .adm-chart .adm-endpoint { stroke: rgb(var(--c-slate-50)); stroke-width: 2; }
 .adm-chart .adm-hover-line { stroke: var(--adm-line-strong); stroke-width: 1; stroke-dasharray: 3 3; }
+.adm-chart .adm-hover-text.is-series { fill: var(--series); font-weight: 700; }
 .adm-chart .adm-hover-text { font-weight: 600; fill: var(--adm-ink); paint-order: stroke; stroke: rgb(var(--c-slate-50)); stroke-width: 3px; stroke-linejoin: round; }
 .adm-legend { display: flex; gap: 16px; flex-wrap: wrap; margin: 0 0 4px; font-size: 12px; font-weight: 700; color: var(--adm-muted); }
-.adm-legend b { display: inline-block; width: 12px; height: 12px; margin-right: 6px; border-radius: 3px; vertical-align: -2px; }
+.adm-legend b { display: inline-block; width: 12px; height: 12px; background: var(--swatch, currentColor); margin-right: 6px; border-radius: 3px; vertical-align: -2px; }
 .adm-legend b.is-line { height: 3px; vertical-align: 3px; }
 .adm-donut { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 20px; align-items: center; }
 .adm-donut svg { display: block; }
@@ -159,7 +165,7 @@
   .adm-cols2, .adm-cols3 { grid-template-columns: minmax(0, 1fr); }
   .adm-kpis dd { font-size: 22px; }
 }
-@media (max-width: 640px) {
+@media (max-width: 639px) {
   .adm-terms div { grid-template-columns: 84px minmax(0, 1fr); }
   .adm-donut { grid-template-columns: minmax(0, 1fr); justify-items: center; }
   .adm-donut .adm-tbl { justify-self: stretch; }
@@ -210,7 +216,7 @@
 .adm-msg-error { margin: 12px 0 0; color: rgb(var(--c-red-600)); font-size: 13px; font-weight: 600; }
 
 /* 390px — 표는 가로로 스크롤하고(공용 .adm-tbl) 조치 칸만 오른쪽에 붙여 둔다(스크롤 없이도 누를 수 있게). */
-@media (max-width: 640px) {
+@media (max-width: 639px) {
   .adm-mem-bar { flex-direction: column; align-items: stretch; }
   .adm-mem-search input { width: 100%; }
   .adm-mem-wrap .adm-tbl th:last-child, .adm-mem-wrap .adm-tbl tr:not(.adm-empty) td:last-child {

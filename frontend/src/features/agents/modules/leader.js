@@ -36,7 +36,7 @@ function holderEvents(onchain) {
     return [{
       id: item.id, module: "whale_activity", severity: "info",
       title: `${coin} 지갑 잔고 변화`,
-      summary: `동일 지갑 ${compared}개 비교 · 잔고 증가 ${increased}개 · 감소 ${decreased}개. ${scope}.${daily ? " 일 단위로 갱신되는 잔고 자료입니다." : ""}`,
+      summary: `동일 지갑 ${compared}개 비교 · 잔고 증가 ${increased}개 · 감소 ${decreased}개. ${scope}.${daily ? " 일 단위로 갱신되는 잔고 자료예요." : ""}`,
       detailLabel: "비교 기간",
       detail: `${holderTimeFormat.format(previousAt)} ~ ${holderTimeFormat.format(observedAt)} (한국 시간)`,
       occurredAt: observedAt,

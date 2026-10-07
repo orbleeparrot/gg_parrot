@@ -83,7 +83,7 @@ function WindowBars({ windows }) {
           <li key={bar.index} className="pro-window">
             <span className="pro-window-label">구간 {bar.index}{span ? <small>{span}</small> : null}</span>
             <span className="pro-window-track" aria-hidden="true">
-              <i className={bar.pct < 0 ? "is-down" : "is-up"} style={{ width: `${width}%` }} />
+              <i className={bar.pct < 0 ? "is-down" : "is-up"} style={{ "--fill": `${width}%` }} />
             </span>
             <b>{metricText(bar.pct, { suffix: "%" })}</b>
           </li>

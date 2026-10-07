@@ -1,3 +1,4 @@
+import { heatLevel } from "../lib/heat.js";
 import { useState } from "react";
 import { api } from "../api.js";
 import { buildMacro } from "../lib/macro.js";
@@ -14,22 +15,11 @@ import { Icon } from "./icons.jsx";
 // 지금은 두 축을 바로잡았다:
 //   · 기준점은 데이터 중앙이 아니라 **0%(본전)** — 발산 측정값의 진짜 피벗이다.
 //   · 양극은 서로 반대로 읽히는 두 색(하락 빨강 ↔ 상승 초록), 가운데는 **무채색**.
-//     채도를 크기에 비례시키므로 0 근처는 자동으로 회색이 된다.
+//     섞는 양을 크기에 비례시키므로 0 은 면 색 그대로(무채색)다.
 //   · 좌우를 같은 배율로 재서(대칭 extent) 손실 쪽이 과장되지 않게 한다.
 //
-// 채도·명도는 CSS 변수라 테마가 바뀌면 스케일이 통째로 뒤집힌다. 셀 글자는
-// `text-slate-800` — 이 변수도 테마에 따라 뒤집혀 늘 반대편 명도에 놓인다.
-export function heatStyle(value, extent) {
-  if (!(extent > 0)) return { background: "rgb(var(--c-slate-100))" };
-  const t = Math.max(-1, Math.min(1, value / extent)); // -1 = 최대손실, +1 = 최대이익
-  const mag = Math.abs(t);
-  const hue = t >= 0 ? 145 : 5; // 상승 초록 ↔ 하락 빨강 (따뜻함/차가움이 반대)
-  return {
-    background:
-      `hsl(${hue} calc(var(--heat-s) * ${mag.toFixed(3)})` +
-      ` calc(var(--heat-l) + var(--heat-l-shift) * ${mag.toFixed(3)}))`,
-  };
-}
+// 계산은 lib/heat.js(--heat) + index.css .heat-cell 하나로 — 빌더 결과 독(StudioDock)과 같은 색.
+// 섞는 바탕이 테마의 면 색이라 테마가 바뀌면 스케일도 같이 뒤집힌다.
 
 // 연속 색 스케일은 범례 없이는 읽을 수 없다.
 export function HeatLegend({ extent }) {
@@ -37,9 +27,9 @@ export function HeatLegend({ extent }) {
   return (
     <div className="flex items-center gap-2 t-caption text-slate-500">
       <span className="num">-{extent.toFixed(1)}%</span>
-      <span className="flex rounded overflow-hidden" aria-hidden>
+      <span className="flex rounded-sm overflow-hidden" aria-hidden>
         {stops.map((t) => (
-          <span key={t} className="w-7 h-3" style={heatStyle(t * extent, extent)} />
+          <span key={t} className="w-7 h-3 heat-cell" style={{ "--heat": heatLevel(t * extent, extent) }} />
         ))}
       </span>
       <span className="num">+{extent.toFixed(1)}%</span>
@@ -218,11 +208,11 @@ export default function OptimizePanel({ form, setForm, valErr, onResult }) {
                                 : "검증 구간 없음 (기간이 짧아요)\n") +
                               "클릭하면 빌더에 적용"
                             }
-                            style={heatStyle(c.final_return_pct, extent)}
+                            style={{ "--heat": heatLevel(c.final_return_pct, extent) }}
                             className={
-                              "w-full min-w-[64px] rounded-md px-2 py-2 text-center font-bold num text-slate-800 transition " +
+                              "heat-cell w-full min-w-16 rounded-md px-2 py-2 text-center font-bold num text-slate-800 transition " +
                               "hover:ring-2 hover:ring-slate-400 " +
-                              (best ? "outline outline-2 outline-green-600 " : "") +
+                              (best ? "outline-2 outline-green-600 " : "") +
                               (cur ? "ring-2 ring-brand-line " : "")
                             }
                           >
@@ -231,13 +221,13 @@ export default function OptimizePanel({ form, setForm, valErr, onResult }) {
                             {/* Held-out result under the fitted one: a cell that
                                 only worked because it was fitted shows it here. */}
                             {c.oos_return_pct != null && (
-                              <span className="block text-[11px] font-semibold opacity-80">
+                              <span className="block text-2xs font-semibold opacity-80">
                                 검증 {c.oos_return_pct >= 0 ? "+" : ""}
                                 {c.oos_return_pct.toFixed(1)}%
                               </span>
                             )}
-                            {best && <span className="block text-[11px] font-bold"><Icon name="star" size={11} fill="currentColor" strokeWidth={1.5} className="ui-icon-inline" /> 최적</span>}
-                            {cur && !best && <span className="block text-[11px] font-semibold">현재</span>}
+                            {best && <span className="block text-2xs font-bold"><Icon name="star" size={11} fill="currentColor" strokeWidth={1.5} className="ui-icon-inline" /> 최적</span>}
+                            {cur && !best && <span className="block text-2xs font-semibold">현재</span>}
                           </button>
                         </td>
                       );

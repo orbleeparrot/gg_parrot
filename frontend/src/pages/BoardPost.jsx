@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import useBoardList from "../hooks/useBoardList.js";
 import { api } from "../api.js";
 import { useAuth } from "../lib/auth.js";
 import DOMPurify from "dompurify";
+import { applyBoardInks } from "../lib/boardInk.js";
+import { useModalLayer } from "../hooks/useModalLayer.js";
 import { boardFullTime, boardTime, kstDateTime } from "../lib/boardText.js";
 import { ErrorNote } from "../components/Page.jsx";
 import ConfirmDialog from "../components/ConfirmDialog.jsx";
@@ -196,13 +198,9 @@ const PURIFY = { ALLOWED_TAGS: ["p", "br", "strong", "b", "em", "i", "u", "s", "
 function PostBody({ html }) {
   const safeHtml = useMemo(() => {
     const fragment = DOMPurify.sanitize(html || "", { ...PURIFY, RETURN_DOM_FRAGMENT: true });
-    // Pasted dark-theme colors must not override the reader's theme. Keep
-    // alignment, emphasis, links and image dimensions; never rewrite the post.
-    for (const element of fragment.querySelectorAll("[style]")) {
-      for (const property of ["color", "background", "background-color", "-webkit-text-fill-color"]) {
-        element.style.removeProperty(property);
-      }
-    }
+    // 편집기 팔레트 6색은 읽는 사람의 테마에서 읽히는 색으로(data-ink), 다른 색·배경색은 뗀다.
+    // 정렬·강조·링크·사진 크기는 그대로, 글 자체는 고치지 않는다.
+    applyBoardInks(fragment);
     const holder = document.createElement("div");
     holder.append(fragment);
     return holder.innerHTML;
@@ -214,11 +212,11 @@ function PostBody({ html }) {
 function PostSkeleton() {
   return (
     <div className="board-post-skeleton" aria-hidden="true">
-      <span className="board-skeleton" style={{ width: "58%", height: 22 }} />
-      <span className="board-skeleton" style={{ width: 220 }} />
-      <span className="board-skeleton" style={{ width: "92%", marginTop: 12 }} />
-      <span className="board-skeleton" style={{ width: "84%" }} />
-      <span className="board-skeleton" style={{ width: "48%" }} />
+      <span className="board-skeleton is-post-title" />
+      <span className="board-skeleton is-post-meta" />
+      <span className="board-skeleton is-post-line is-first" />
+      <span className="board-skeleton is-post-line is-mid" />
+      <span className="board-skeleton is-post-line is-last" />
     </div>
   );
 }
@@ -229,6 +227,9 @@ export default function BoardPost() {
   const { user, token } = useAuth();
   const [post, setPost] = useState(null);
   const [err, setErr] = useState("");
+  const [errStatus, setErrStatus] = useState(0);
+  const [deleteErr, setDeleteErr] = useState("");
+  const [reloadKey, setReloadKey] = useState(0);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   // 개발자 노트 — 글쓰기에서 '개발자 노트에 적용하기'로 올렸으면 결과를 토스트로 한 번 알리고, 관리자는 배너를 미리 본다.
@@ -254,11 +255,16 @@ export default function BoardPost() {
     let active = true;
     setPost(null);
     setErr("");
+    setErrStatus(0);
     api.boardGet(id, { signal: controller.signal })
       .then(data => { if (active) setPost(data); })
-      .catch(error => { if (active && error.name !== "AbortError") setErr(String(error.message || error)); });
+      .catch(error => {
+        if (!active || error.name === "AbortError") return;
+        setErr(String(error.message || error));
+        setErrStatus(error.status || 0);
+      });
     return () => { active = false; controller.abort(); };
-  }, [id, token]);
+  }, [id, token, reloadKey]);
 
   async function removePost() {
     setDeleting(true);
@@ -266,7 +272,8 @@ export default function BoardPost() {
       await api.boardDelete(id);
       navigate("/board");
     } catch (e) {
-      setErr(String(e.message || e));
+      // 지우지 못한 것을 '불러오지 못했어요'로 보이게 하지 않는다 — 글은 그대로 두고 따로 알린다.
+      setDeleteErr(String(e.message || e));
       setDeleting(false);
       setConfirmDelete(false);
     }
@@ -294,19 +301,27 @@ export default function BoardPost() {
       setVoting(false);
     }
   }
-  useEffect(() => {
-    if (!avatarOpen) return undefined;
-    const onKey = (e) => { if (e.key === "Escape") setAvatarOpen(false); };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [avatarOpen]);
+  const lightboxRef = useRef(null);
+  useModalLayer({ open: avatarOpen, ref: lightboxRef, onEscape: () => setAvatarOpen(false), trap: true });
 
   const write = () => navigate(writePath(token));
 
   return (
     <div className="board-post-page">
     <div className="board-post">
-      {err ? <div className="mt-4"><ErrorNote>글을 불러오지 못했어요: {err}</ErrorNote></div> : null}
+      {err ? (
+        <div className="mt-4">
+          {errStatus === 404 ? (
+            <ErrorNote>삭제됐거나 없는 글이에요. <Link to="/board" className="underline">목록으로</Link></ErrorNote>
+          ) : (
+            <ErrorNote>
+              글을 불러오지 못했어요: {err}{" "}
+              <button type="button" className="btn btn-s btn-secondary" onClick={() => setReloadKey((n) => n + 1)}>다시 불러오기</button>
+            </ErrorNote>
+          )}
+        </div>
+      ) : null}
+      {deleteErr ? <div className="mt-4"><ErrorNote>글을 지우지 못했어요: {deleteErr}</ErrorNote></div> : null}
       {!post && !err ? <PostSkeleton /> : null}
 
       {post ? (
@@ -364,7 +379,7 @@ export default function BoardPost() {
           </article>
 
           {avatarOpen && avatarSrc ? (
-            <div className="board-lightbox" onClick={() => setAvatarOpen(false)} role="dialog" aria-label={`${post.author_name} 프로필 사진`}>
+            <div ref={lightboxRef} className="board-lightbox" onClick={() => setAvatarOpen(false)} role="dialog" aria-modal="true" aria-label={`${post.author_name} 프로필 사진`}>
               <img src={avatarSrc} alt={`${post.author_name} 프로필 사진`} onClick={(e) => e.stopPropagation()} />
             </div>
           ) : null}

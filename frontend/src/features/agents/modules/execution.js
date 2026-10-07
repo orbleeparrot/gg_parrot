@@ -30,7 +30,7 @@ export const executionModule = {
       summary = session.note || "종료된 실행";
     } else if (session.stopping) {
       title = session.stop_mode === "close_and_stop" ? "청산 후 종료 요청" : "매크로 종료 요청";
-      summary = "실행기의 처리 결과를 확인하고 있어요. 완료 보고가 도착하면 갱신됩니다.";
+      summary = "실행기의 처리 결과를 확인하고 있어요. 완료 보고가 도착하면 갱신돼요.";
     } else if (previous && !!previous.in_position !== !!session.in_position) {
       title = session.in_position ? "포지션 진입" : "포지션 청산";
       summary = session.in_position

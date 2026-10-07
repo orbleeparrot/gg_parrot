@@ -88,8 +88,8 @@ export function describeRunOutcome(session) {
     eyebrow = "종료 처리 중";
     title = s.stop_mode === "close_and_stop" ? "청산하고 종료하는 중이에요" : "매크로를 멈추는 중이에요";
     detail = s.stop_mode === "close_and_stop"
-      ? "실행기가 다음 확인에서 포지션을 정리해요. 완료 보고가 오면 결과가 채워집니다."
-      : "실행기가 다음 확인에서 매크로를 멈춰요. 포지션은 그대로 남습니다.";
+      ? "실행기가 다음 확인에서 포지션을 정리해요. 완료 보고가 오면 결과가 채워져요."
+      : "실행기가 다음 확인에서 매크로를 멈춰요. 포지션은 그대로 남아요.";
     tone = "pending";
     avatar = "focused";
   } else if (uncertain) {
@@ -167,7 +167,7 @@ export function describeRunOutcome(session) {
     eyebrow, title, detail, tone, avatar, pending: stopping,
     // 결과 화면 맨 아래 안내. 단위는 세션 종목의 통화.
     note: stopping
-      ? "실행기가 확정 보고를 보내면 이 화면이 결과로 바뀝니다."
+      ? "실행기가 확정 보고를 보내면 이 화면이 결과로 바뀌어요."
       : `실현손익은 실행기가 보고한 누적값(${quoteOf(s.symbol)})이에요. 거래소 체결 내역과 대조해 확인하세요.`,
     // 처리 중에는 확정 수치를 주장하지 않는다.
     // 큰 숫자는 '투입금 대비 총수익률'(서버 return_pct) — 시작 자금이 아니라 실제로 들어간 최대 금액이 분모.

@@ -1,7 +1,10 @@
 // 관리자 대시보드의 조각들 — 탭 줄 · 기간 선택 · 용어 표 · KPI 줄 · 블록 · 상태 알약 · 표 · 로딩/오류.
 // 상자 없이 괘선과 크기로만 위계를 세운다(DESIGN §1-3). 숫자는 전부 `.num`.
+import { createContext, useContext, useEffect, useId, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { EMPTY_NOTE } from "../../lib/adminFormat.js";
+
+const BlockTitleId = createContext(undefined);
 
 export function TabNav({ tabs, active, hrefFor, badges = {} }) {
   return (
@@ -58,15 +61,45 @@ export function AdminKpis({ items }) {
 }
 
 export function AdminBlock({ title, caption, actions, children }) {
+  const titleId = useId();
   return (
     <section className="adm-blk">
       <div className="adm-blk-head">
-        <h3>{title}</h3>
+        <h3 id={titleId}>{title}</h3>
         {caption ? <span className="adm-cap">{caption}</span> : null}
         {actions ? <div className="adm-blk-actions">{actions}</div> : null}
       </div>
-      {children}
+      <BlockTitleId.Provider value={titleId}>{children}</BlockTitleId.Provider>
     </section>
+  );
+}
+
+// 가로로 넘치는 표 상자 — 넘칠 때만 Tab 으로 들어와 화살표로 밀 수 있게 한다(키보드만 쓰면 잘린 열을 못 봤다).
+// 이름은 블록 제목.
+export function AdminScroll({ children }) {
+  const ref = useRef(null);
+  const titleId = useContext(BlockTitleId);
+  const [overflows, setOverflows] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === "undefined") return undefined;
+    const check = () => setOverflows(el.scrollWidth > el.clientWidth + 1);
+    check();
+    const observer = new ResizeObserver(check);
+    observer.observe(el);
+    if (el.firstElementChild) observer.observe(el.firstElementChild);
+    return () => observer.disconnect();
+  }, []);
+  return (
+    <div
+      ref={ref}
+      className="adm-tbl"
+      tabIndex={overflows ? 0 : undefined}
+      role={overflows ? "region" : undefined}
+      aria-labelledby={overflows ? titleId : undefined}
+    >
+      {children}
+    </div>
   );
 }
 
@@ -80,7 +113,7 @@ export function StatusPill({ tone = "off", children }) {
 export function AdminTable({ columns, rows, total = null, empty = EMPTY_NOTE, rowKey }) {
   const cell = (col, row, i) => (col.render ? col.render(row, i) : row?.[col.key]);
   return (
-    <div className="adm-tbl">
+    <AdminScroll>
       <table>
         <thead>
           <tr>{columns.map((col) => <th key={col.key} className={col.num ? "num" : undefined} scope="col">{col.label}</th>)}</tr>
@@ -100,7 +133,7 @@ export function AdminTable({ columns, rows, total = null, empty = EMPTY_NOTE, ro
           ) : null}
         </tbody>
       </table>
-    </div>
+    </AdminScroll>
   );
 }
 

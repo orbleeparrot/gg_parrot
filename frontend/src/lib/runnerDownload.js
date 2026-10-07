@@ -22,12 +22,20 @@ export const RUNNER_OPENED_STORAGE_KEY = "ggparrot:runner-opened-version";
 export const LEGACY_RUNNER_OPENED_STORAGE_KEY = "ggparrot:runner-opened";
 
 export function isRunnerOpened() {
-  return window.localStorage.getItem(RUNNER_OPENED_STORAGE_KEY) === OFFICIAL_RUNNER_VERSION;
+  try {
+    return window.localStorage.getItem(RUNNER_OPENED_STORAGE_KEY) === OFFICIAL_RUNNER_VERSION;
+  } catch {
+    return false;
+  }
 }
 
 export function markRunnerOpened() {
-  window.localStorage.removeItem(LEGACY_RUNNER_OPENED_STORAGE_KEY);
-  window.localStorage.setItem(RUNNER_OPENED_STORAGE_KEY, OFFICIAL_RUNNER_VERSION);
+  try {
+    window.localStorage.removeItem(LEGACY_RUNNER_OPENED_STORAGE_KEY);
+    window.localStorage.setItem(RUNNER_OPENED_STORAGE_KEY, OFFICIAL_RUNNER_VERSION);
+  } catch {
+    /* 막힌 저장소 — 다음 방문에 다시 안내할 뿐이다 */
+  }
 }
 
 export function fmtSize(bytes) {

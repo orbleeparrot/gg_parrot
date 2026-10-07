@@ -73,5 +73,5 @@ export default function GoogleSignInButton({ clientId, onCredential, text = "sig
       </div>
     );
   }
-  return <div ref={holder} className="flex justify-center min-h-[44px]" />;
+  return <div ref={holder} className="flex justify-center min-h-11" />;
 }

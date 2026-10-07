@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { cooldownLabel, isLive, liveReturn, stateHelp, stateLine, symbolsOf } from "../src/lib/leaderboardState.js";
+import { cooldownLabel, isLive, liveReturn, nextKstMidnight, stateHelp, stateLine, symbolsOf } from "../src/lib/leaderboardState.js";
 
 const holding = { state: "holding", return_pct: 1.5, equity: 1015, virtual_balance: 1000, checkpoint_ms: 1_700_000_000_000,
   legs: [{ symbol: "BTCUSDT", qty: 2, dir: 1, last_price: 100, in_position: true }] };
@@ -73,4 +73,13 @@ test("stateHelp explains the state and, when there are trades, the trade count",
   assert.match(withTrades, /^청산/);
   assert.match(withTrades, /거래 N회: 등록 이후 체결 횟수/);
   assert.equal(stateHelp({ state: "waiting", trade_count: 3 }, now), "복구 중: 서버 재시작 직후예요. 잠시 뒤 상태가 채워져요.");
+});
+
+test("초기화 시각은 다음 자정(KST) — 서버 값을 못 받아도 00:00:00 으로 보이지 않는다", () => {
+  // 2026-10-07 03:00 UTC = 12:00 KST → 다음 자정은 10-08 00:00 KST = 10-07 15:00 UTC
+  assert.equal(nextKstMidnight(Date.UTC(2026, 9, 7, 3, 0, 0)), Date.UTC(2026, 9, 7, 15, 0, 0));
+  // 자정 정각(KST)이면 하루 뒤
+  assert.equal(nextKstMidnight(Date.UTC(2026, 9, 7, 15, 0, 0)), Date.UTC(2026, 9, 8, 15, 0, 0));
+  // 14:59:59 UTC(= 23:59:59 KST)는 1초 뒤
+  assert.equal(nextKstMidnight(Date.UTC(2026, 9, 7, 14, 59, 59)) - Date.UTC(2026, 9, 7, 14, 59, 59), 1000);
 });

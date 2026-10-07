@@ -114,13 +114,13 @@ export function PaperNextSteps({ macro, valErr, primary = "quickRun", onRegister
         <div className="t-title">{domestic ? "국내 거래소 매크로 → 매크로 파일 또는 빠른 실행으로 실행기 연결" : "동작 검증 완료 → 매크로 실행기로 실거래"}</div>
         {domestic ? <p className="t-small">{exchangeLabel(macro.exchange)} 원화 현물 · 롱 · 1배 매크로는 <b>매크로 파일(.ggm.json)</b>을 내려받아 실행기에 넣어도 되고, <b>빠른 실행</b>으로 바로 연결해도 돼요. (국내 거래소는 실행기 v10 이상이 필요해요.)</p> : <><p className="t-small">
           터미널·파이썬 설치 없이 <b>껄무새 매크로 실행기</b>(프로그램)에 이 매크로 파일을 넣고 돌려요.
-          실행 현황과 원격 종료는 <b>마이페이지</b>에서 확인해요.
+          실행 현황과 원격 종료는 <b>내 에이전트</b>에서 확인해요.
         </p>
         <div className="pt-3 border-t border-amber-700/30 space-y-2">
           <p className="t-small font-bold">진행 방법</p>
           <ol className="t-small list-decimal pl-4 space-y-1">
             <li>아래 버튼으로 <b>매크로 파일(.ggm.json)</b>을 내려받아요.</li>
-            <li>마이페이지에서 <b>껄무새 회원 키</b>를 복사해요(계정당 1개).</li>
+            <li><b>실행기 설치</b> 화면에서 <b>껄무새 회원 키</b>를 복사해요(계정당 1개).</li>
             <li>매크로 실행기를 열어 ①파일 ②실거래 여부 ③API 키 ④회원 키를 넣고 시작해요.</li>
           </ol>
           <p className="t-small font-bold pt-1">
@@ -351,7 +351,7 @@ export function PaperPanelView({ macro: currentMacro, valErr, onRegister, contro
               rather than stretching the page. 스크롤 컨테이너일 뿐 카드가 아니라
               테두리는 두지 않고, 행 구분은 괘선만 쓴다(§6 table-row). */}
           <div className="max-h-72 overflow-auto border-t border-slate-200">
-            <div className="min-w-[460px] divide-y divide-slate-200">
+            <div className="min-w-115 divide-y divide-slate-200">
               <div className="flex items-center px-1 py-2 t-caption text-slate-700 bg-slate-50 sticky top-0">
                 <span className="w-20">시각</span>
                 <span className="w-16">구분</span>

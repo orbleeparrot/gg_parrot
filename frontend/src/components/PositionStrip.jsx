@@ -22,7 +22,7 @@ function Gauge({ model, pct }) {
   return (
     <div className="agent-gauge" role="img" aria-label={`평가손익 ${fmtSignedPct(pct)} · ${model.left.label} 에서 ${model.right.label} 사이`}>
       <div className={"agent-gauge-bar" + (model.oneSided ? " is-one-sided" : "")}>
-        <i style={{ left: `${Math.round(model.position * 1000) / 10}%` }} />
+        <i style={{ "--at": `${Math.round(model.position * 1000) / 10}%` }} />
       </div>
       <div className="agent-gauge-ends">
         <span className={model.left.tone}>{model.left.label}</span>

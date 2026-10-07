@@ -922,6 +922,26 @@ class DevNote(SQLModel, table=True):
     created_ms: int = Field(default=0, index=True, sa_type=BigInteger)
 
 
+class ClientError(SQLModel, table=True):
+    """화면 오류 한 종류의 하루치 — 같은 날 같은 오류(종류·화면·문장)는 한 행에 횟수만 올린다. 30일 보관.
+
+    브라우저의 오류 경계·전역 오류가 보낸 문장·익명 화면 경로·프론트 빌드만 둔다 — 계정·IP·UA·쿼리는 받지도
+    저장하지도 않는다(client_errors.py, 관리자 '화면 오류' 탭). 2026-10-07
+    """
+
+    __table_args__ = (Index("ux_clienterror_day_fingerprint", "day_kst", "fingerprint", unique=True),)
+    id: Optional[int] = Field(default=None, primary_key=True, sa_type=BigInteger().with_variant(Integer, "sqlite"))
+    day_kst: str = Field(index=True)
+    fingerprint: str = ""  # sha1(종류|화면|문장) 앞 16자
+    kind: str = ""  # render | chunk | unhandled | rejection
+    route: str = ""  # /board/:id 처럼 익명 경로 틀
+    message: str = ""  # 300자까지
+    build: str = ""  # 프론트 빌드(커밋 앞 7자리)
+    count: int = 0
+    first_ms: int = Field(default=0, sa_type=BigInteger)
+    last_ms: int = Field(default=0, sa_type=BigInteger, index=True)
+
+
 class BoardImage(SQLModel, table=True):
     """게시글에 붙은 사진 — 글 하나에 여러 장(순서 유지). 바이트를 DB에 두는 이유는 BoardPost 와 같다.
 
@@ -1423,7 +1443,7 @@ _PG_PRIVATE_CACHE_TABLES = (
     # 게시판 사진·추천·신고와 브라우저 뉴스 캐시 — create_all 로만 생겨 RLS 없이 anon 권한이 열려 있었다(2026-09-15).
     "boardimage", "boardpostvote", "boardreport", "browsernewspagecache",
     "visit", "macroeventdaily", "collectorrun", "collectorsourcedaily", "apiusagedaily",
-    "devnote", "newsheadlinearchive",
+    "devnote", "newsheadlinearchive", "clienterror",
 )
 _PG_MIGRATION_LOCK = 0x6767706172726F74  # Stable across web/worker processes and deployments.
 _PG_MIGRATION_ATTEMPTS = 3

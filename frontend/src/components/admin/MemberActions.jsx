@@ -1,8 +1,9 @@
 // 회원 관리 탭의 조치 — 행의 버튼 세 개(메시지 · 차단/해제 · 탈퇴)와 그 버튼들이 여는 창.
 // 차단·탈퇴는 프로젝트 규칙대로 브라우저 기본 confirm 이 아니라 ConfirmDialog 를 쓰고, 메시지만 작은 폼 모달이다.
 // 조치의 뜻(무엇을 못 하게 되는지)은 창 본문에도 그대로 적는다 — 목록의 용어 표를 다시 보러 가지 않게.
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useModalLayer } from "../../hooks/useModalLayer.js";
 import ConfirmDialog from "../ConfirmDialog.jsx";
 import { MEMBER_BODY_MAX, MEMBER_LINK_MAX, MEMBER_REASON_MAX, MEMBER_TITLE_MAX, memberActions } from "../../lib/memberList.js";
 
@@ -55,12 +56,8 @@ export function MemberActionDialogs({ action, busy = false, error = "", onSubmit
   // 창을 새로 열 때마다 비운다 — 앞 회원에게 쓴 사유·메시지가 다음 회원에게 남으면 안 된다.
   useEffect(() => { setForm(EMPTY_FORM); }, [kind, memberId]);
 
-  useEffect(() => {
-    if (kind !== "message") return undefined;
-    const onKey = (e) => { if (e.key === "Escape" && !busy) { e.preventDefault(); onCancel?.(); } };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [busy, kind, onCancel]);
+  const formRef = useRef(null);
+  useModalLayer({ open: kind === "message" && Boolean(member), ref: formRef, onEscape: () => onCancel?.(), busy, trap: true });
 
   if (!member) return null;
   const name = member.username || "회원";
@@ -76,8 +73,8 @@ export function MemberActionDialogs({ action, busy = false, error = "", onSubmit
           <>
             <span className="adm-dlg-text">
               {unblocking
-                ? "다시 채팅·게시글·댓글을 쓸 수 있게 됩니다."
-                : "채팅·게시글·댓글을 쓸 수 없게 됩니다. 로그인·열람·백테스트는 그대로이고, 언제든 되돌릴 수 있어요."}
+                ? "다시 채팅·게시글·댓글을 쓸 수 있게 돼요."
+                : "채팅·게시글·댓글을 쓸 수 없게 돼요. 로그인·열람·백테스트는 그대로이고, 언제든 되돌릴 수 있어요."}
             </span>
             <ReasonField value={form.reason} onChange={(reason) => set({ reason })} hint={unblocking ? "해제 사유" : "차단 사유"} />
           </>
@@ -99,12 +96,12 @@ export function MemberActionDialogs({ action, busy = false, error = "", onSubmit
         description={(
           <>
             <span className="adm-dlg-text">
-              계정을 지우고 남긴 글·댓글은 ‘탈퇴한 회원’ 으로 익명화하며 포인트를 회수합니다.
+              계정을 지우고 남긴 글·댓글은 ‘탈퇴한 회원’ 으로 익명화하고 포인트를 회수해요.
             </span>
             <ReasonField value={form.reason} onChange={(reason) => set({ reason })} hint="탈퇴 처리 사유" />
           </>
         )}
-        warning="되돌릴 수 없어요. 같은 이메일로는 다시 가입할 수 없습니다(본인 탈퇴와 달라요)."
+        warning="되돌릴 수 없어요. 같은 이메일로는 다시 가입할 수 없어요(본인 탈퇴와 달라요)."
         confirmLabel="탈퇴 처리"
         tone="danger"
         busy={busy}
@@ -122,15 +119,16 @@ export function MemberActionDialogs({ action, busy = false, error = "", onSubmit
   const canSend = form.title.trim().length > 0 && !busy;
   return createPortal(
     <div
-      className="scrim fixed inset-0 z-[90] grid place-items-center p-4"
+      className="scrim fixed inset-0 z-90 grid place-items-center p-4"
       onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onCancel?.(); }}
     >
       <form
+        ref={formRef}
         role="dialog" aria-modal="true" aria-labelledby={titleId} className="dialog confirm-dialog adm-msg-dialog"
         onSubmit={(e) => { e.preventDefault(); if (canSend) onSubmit({ title: form.title.trim(), body: form.body, link: form.link.trim() }); }}
       >
         <h2 id={titleId} className="t-h4 text-slate-900">{name} 님에게 메시지</h2>
-        <p className="mt-3 t-small text-slate-700">회원의 알림창으로 관리자 메시지를 보냅니다. 접속 중이면 실시간 알림까지 그대로 떠요.</p>
+        <p className="mt-3 t-small text-slate-700">회원의 알림창으로 관리자 메시지를 보내요. 접속 중이면 실시간 알림까지 그대로 떠요.</p>
         <label className="adm-msg-field">
           <span>제목 (필수 · 최대 {MEMBER_TITLE_MAX}자)</span>
           <input
@@ -142,7 +140,7 @@ export function MemberActionDialogs({ action, busy = false, error = "", onSubmit
           <span>내용 (최대 {MEMBER_BODY_MAX}자)</span>
           <textarea
             className="field adm-msg-body" value={form.body} maxLength={MEMBER_BODY_MAX} rows={4}
-            placeholder="알림창에 그대로 보입니다." onChange={(e) => set({ body: e.target.value })}
+            placeholder="알림창에 그대로 보여요." onChange={(e) => set({ body: e.target.value })}
           />
         </label>
         <label className="adm-msg-field">
@@ -169,12 +167,10 @@ function ResetLinkDialog({ name, link, expires, busy, error, onSubmit, onCancel 
   const [copied, setCopied] = useState(false);
   const titleId = useId();
   useEffect(() => { setCopied(false); }, [link]);
-  useEffect(() => {
-    if (!link) return undefined;
-    const onKey = (e) => { if (e.key === "Escape") { e.preventDefault(); onCancel?.(); } };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [link, onCancel]);
+  const dialogRef = useRef(null);
+  const linkRef = useRef(null);
+  const [copyFailed, setCopyFailed] = useState(false);
+  useModalLayer({ open: Boolean(link), ref: dialogRef, onEscape: () => onCancel?.(), busy, trap: true });
   const absolute = link && !/^https?:/i.test(link) && typeof window !== "undefined" ? `${window.location.origin}${link}` : link;
   const minutes = expires || 30;
 
@@ -204,19 +200,23 @@ function ResetLinkDialog({ name, link, expires, busy, error, onSubmit, onCancel 
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1600);
     } catch {
-      window.prompt("링크를 복사해 주세요.", absolute);
+      // 브라우저 기본 prompt 대신 링크 칸을 골라 둔다.
+      setCopyFailed(true);
+      linkRef.current?.focus();
+      linkRef.current?.select();
     }
   }
 
   return createPortal(
-    <div className="scrim fixed inset-0 z-[90] grid place-items-center p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) onCancel?.(); }}>
-      <div role="dialog" aria-modal="true" aria-labelledby={titleId} className="dialog confirm-dialog adm-msg-dialog">
+    <div className="scrim fixed inset-0 z-90 grid place-items-center p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) onCancel?.(); }}>
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId} className="dialog confirm-dialog adm-msg-dialog">
         <h2 id={titleId} className="t-h4 text-slate-900">{name} 님 재설정 링크</h2>
-        <p className="mt-3 t-small text-slate-700">본인에게 이 링크를 전해 주세요. {minutes}분 안에 열어 새 비밀번호를 정하면 돼요. 한 번 쓰면 무효가 됩니다.</p>
+        <p className="mt-3 t-small text-slate-700">본인에게 이 링크를 전해 주세요. {minutes}분 안에 열어 새 비밀번호를 정하면 돼요. 한 번 쓰면 무효가 돼요.</p>
         <label className="adm-msg-field">
           <span>링크</span>
-          <input type="text" className="field field-sm num" value={absolute} readOnly onFocus={(e) => e.target.select()} />
+          <input ref={linkRef} type="text" className="field field-sm num" value={absolute} readOnly onFocus={(e) => e.target.select()} />
         </label>
+        {copyFailed ? <p className="mt-2 t-small text-amber-700" role="status">자동으로 복사하지 못했어요. 골라 둔 링크를 직접 복사해 주세요.</p> : null}
         <div className="confirm-dialog-actions">
           <button type="button" className="btn btn-l w-full btn-primary" onClick={copy}>{copied ? "복사했어요" : "링크 복사"}</button>
           <button type="button" className="btn btn-l w-full btn-ghost" onClick={onCancel}>닫기</button>

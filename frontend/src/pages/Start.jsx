@@ -144,7 +144,7 @@ function copyFor(screen) {
       return {
         eyebrow: "둘러보기 완료",
         title: title("더 자세한 내용은 ", "가이드 페이지", "에서 확인해요."),
-        description: "좌측 사이드바에서 ‘사용 가이드’를 누르면 전략별 작동 방식, 결과 읽기, 롱·숏과 레버리지 위험을 문서로 이어서 볼 수 있어요.",
+        description: "오른쪽 위 ‘FAQ’(휴대폰은 메뉴 안 ‘FAQ’)를 누르면 전략별 작동 방식, 결과 읽기, 롱·숏과 레버리지 위험을 문서로 이어서 볼 수 있어요.",
       };
   }
 }
@@ -442,6 +442,8 @@ function AccountStart({ onNestedDialogChange }) {
   useEffect(() => {
     if (screen.kind !== "register" || !registrationReady || !registeredEntry?.id) return undefined;
     const timer = window.setInterval(() => {
+      // 숨은 탭에서는 쉰다 — 다른 탭을 보는 동안에도 5초마다 리더보드 전체를 받아 오던 것.
+      if (document.hidden) return;
       syncRegisteredBoard(registeredEntry, currentKey, registered.mode);
     }, 5000);
     return () => window.clearInterval(timer);
@@ -730,17 +732,17 @@ function AccountStart({ onNestedDialogChange }) {
         <div
           className="hero-tour-progress-track"
           role="progressbar"
+          aria-label="시작 가이드 진행률"
           aria-valuemin="1"
           aria-valuemax={CHAPTERS.length}
           aria-valuenow={screen.chapter}
           aria-valuetext={`${chapterName}, ${CHAPTERS.length}단계 중 ${screen.chapter}단계`}
         >
-          <span style={{ width: `${progress}%` }} />
+          <span style={{ "--fill": `${progress}%` }} />
         </div>
         <ol
           className="hero-progress-chapters"
           aria-label="가이드 단계 바로가기"
-          style={{ gridTemplateColumns: `repeat(${CHAPTERS.length}, minmax(0, 1fr))` }}
         >
           {CHAPTERS.map((chapter, index) => (
             <li key={chapter} className={index + 1 === screen.chapter ? "is-current" : index + 1 < screen.chapter ? "is-done" : ""}>

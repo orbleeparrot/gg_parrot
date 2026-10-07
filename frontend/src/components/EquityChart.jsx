@@ -186,7 +186,7 @@ function EquityPlot({ curve, height, stretch }) {
     <div className={"equity-chart w-full relative" + (stretch ? " equity-fill" : "")}>
       <div
         className={"equity-chart-plot touch-pan-y" + (stretch ? " equity-fill-svg" : "")}
-        style={stretch ? undefined : { aspectRatio: `720 / ${height}` }}
+        style={stretch ? undefined : { "--plot-ratio": `720 / ${height}` }}
         role="img"
         aria-label={`자산곡선. 시작 ${compact(start)}, 최종 ${compact(end)}. 좌우 화살표로 날짜별 금액 확인`}
         tabIndex={0}
@@ -198,8 +198,8 @@ function EquityPlot({ curve, height, stretch }) {
         <div ref={hostRef} className="equity-chart-canvas" />
         {at && (
           <div
-            className="equity-chart-tooltip t-caption num text-slate-900 bg-surface border border-slate-200 rounded-lg px-2 py-1 shadow-lg"
-            style={{ left: hover.x, transform: `translateX(${hover.index >= curve.length / 2 ? "-100%" : "0"})` }}
+            className={"equity-chart-tooltip t-caption num text-slate-900 bg-surface border border-slate-200 rounded-lg px-2 py-1 shadow-lg" + (hover.index >= curve.length / 2 ? " is-flipped" : "")}
+            style={{ "--tip-x": `${hover.x}px` }}
           >
             {at.t.slice(0, 10)} · {compact(at.equity)}
           </div>

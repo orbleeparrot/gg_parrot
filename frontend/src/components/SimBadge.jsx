@@ -3,7 +3,7 @@ export default function SimBadge({ className = "" }) {
   return (
     <span
       className={"badge badge-ai " + className}
-      title="백테스트와 페이퍼 결과는 시뮬레이션이며 실제 거래가 아닙니다."
+      title="백테스트와 페이퍼 결과는 시뮬레이션이고 실제 거래가 아니에요."
     >
       모의 결과 · 실거래 아님
     </span>

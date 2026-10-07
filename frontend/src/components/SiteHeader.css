@@ -79,7 +79,7 @@
   position: absolute;
   top: calc(100% + 8px);
   right: 0;
-  z-index: 40;
+  z-index: var(--z-dropdown);
   width: min(360px, calc(100vw - 24px));
   display: grid;
   gap: 10px;
@@ -125,7 +125,7 @@
   position: absolute;
   top: calc(100% + 8px);
   right: 0;
-  z-index: 40;
+  z-index: var(--z-dropdown);
   width: min(380px, calc(100vw - 24px));
   max-height: min(72vh, 600px);
   display: flex;
@@ -186,8 +186,9 @@
    오른쪽에서 스르륵 들어와 5초 뒤 스르륵 나간다. 아래 막대가 남은 시간만큼 줄고 마우스를 올리면 멈춘다. */
 .ggp-toasts {
   position: fixed;
+  top: var(--toast-top, 64px);
   right: 12px;
-  z-index: 58;
+  z-index: var(--z-toast);
   width: min(360px, calc(100vw - 24px));
   display: grid;
   gap: 8px;
@@ -208,13 +209,17 @@
   color: rgb(var(--c-slate-900));
   text-align: left;
   white-space: normal;
-  cursor: pointer;
   pointer-events: auto;
   animation: ggp-toast-in 260ms cubic-bezier(.2, .8, .2, 1) both;
 }
 .dark .ggp-toast { box-shadow: 0 12px 32px rgba(0, 0, 0, .5); }
 .ggp-toast.is-leaving { animation: ggp-toast-out 220ms cubic-bezier(.4, 0, 1, 1) both; pointer-events: none; }
-.ggp-toast:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
+/* 알림 토스트는 제목 버튼의 ::after 가 판 전체를 덮어 어디를 눌러도 열린다. 포커스 테두리는 판에 그린다. */
+.ggp-toast.is-link { cursor: pointer; }
+.ggp-toast-open { display: block; width: 100%; text-align: left; }
+.ggp-toast-open::after { content: ""; position: absolute; inset: 0; }
+.ggp-toast-open:focus-visible { outline: none; }
+.ggp-toast:has(.ggp-toast-open:focus-visible) { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
 .ggp-toast-icon { display: inline-grid; place-items: center; width: 20px; height: 20px; margin-top: 2px; color: rgb(var(--c-slate-500)); }
 .ggp-toast-icon > svg { width: 20px; height: 20px; }
 .ggp-toast-icon.is-done { color: rgb(var(--c-green-600)); } /* 앱 토스트(AppToast) — 방금 한 일이 끝났다 */
@@ -232,7 +237,7 @@
   overflow: hidden;
   overflow-wrap: anywhere;
 }
-.ggp-toast-side { display: grid; justify-items: end; gap: 4px; }
+.ggp-toast-side { position: relative; z-index: 1; display: grid; justify-items: end; gap: 4px; }
 .ggp-toast-close {
   width: 24px;
   height: 24px;
@@ -249,7 +254,7 @@
 .ggp-toast-close:hover { background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-900)); }
 .ggp-toast-close:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 1px; }
 .ggp-toast-points { font-size: 13px; font-weight: 800; color: rgb(var(--c-amber-700)); white-space: nowrap; }
-.ggp-toast-bar { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: rgb(var(--c-slate-200)); }
+.ggp-toast-bar { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: rgb(var(--c-slate-200)); pointer-events: none; }
 .ggp-toast-bar > i { display: block; height: 100%; background: rgb(var(--c-slate-400)); transform-origin: left; animation: ggp-toast-drain 5s linear forwards; }
 .ggp-toast:hover .ggp-toast-bar > i, .ggp-toast:focus-within .ggp-toast-bar > i { animation-play-state: paused; }
 @keyframes ggp-toast-in { from { opacity: 0; transform: translateX(28px); } to { opacity: 1; transform: none; } }
@@ -261,7 +266,7 @@
 }
 
 /* 좁은 화면: 종 아래가 아니라 헤더 아래에 화면 너비로 고정한다(종은 오른쪽 끝이 아니라서 오른쪽 정렬이 화면을 벗어난다). */
-@media (max-width: 640px) {
+@media (max-width: 639px) {
   .header-bell-popover {
     position: fixed;
     top: var(--header-bell-top, 64px);

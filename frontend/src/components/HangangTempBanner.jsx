@@ -11,7 +11,7 @@ const POLL_MS = Number(import.meta.env?.VITE_HANGANG_POLL_MS) || 300000;
 function comment(t) {
   if (t == null) return "";
   if (t >= 20) return "물이 미지근하네요";
-  if (t >= 10) return "슬슬 차가워집니다";
+  if (t >= 10) return "슬슬 차가워져요";
   return "오늘은 집이 최고";
 }
 

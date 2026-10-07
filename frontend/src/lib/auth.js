@@ -7,11 +7,39 @@ const TOKEN_KEY = "ggp_token";
 const USER_KEY = "ggp_user";
 const listeners = new Set();
 
+// 저장소가 막힌 브라우저(사이트 데이터 차단·일부 앱 안 브라우저)나 용량 초과 — 쓰기가 예외를 던져 로그인·로그아웃이
+// 화면 오류로 끝나던 것. 그때는 이 탭 동안만 메모리에 둔다.
+const memory = new Map();
+function load(key) {
+  if (memory.has(key)) return memory.get(key);
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+function save(key, value) {
+  try {
+    localStorage.setItem(key, value);
+    memory.delete(key);
+  } catch {
+    memory.set(key, value);
+  }
+}
+function drop(key) {
+  memory.delete(key);
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    /* 막힌 저장소 */
+  }
+}
+
 function read() {
   try {
     return {
-      token: localStorage.getItem(TOKEN_KEY) || "",
-      user: JSON.parse(localStorage.getItem(USER_KEY) || "null"),
+      token: load(TOKEN_KEY) || "",
+      user: JSON.parse(load(USER_KEY) || "null"),
     };
   } catch {
     return { token: "", user: null };
@@ -71,12 +99,12 @@ export function isLoggedIn() {
   return !!state.token;
 }
 export function setAuth(token, user) {
-  localStorage.setItem(TOKEN_KEY, token);
-  localStorage.setItem(USER_KEY, JSON.stringify(user));
+  save(TOKEN_KEY, token);
+  save(USER_KEY, JSON.stringify(user));
   emit();
 }
 export function updateAuthUser(user) {
-  localStorage.setItem(USER_KEY, JSON.stringify(user));
+  save(USER_KEY, JSON.stringify(user));
   emit();
 }
 
@@ -91,8 +119,8 @@ export function mergeFetchedAuthUser(fetched, requested) {
   return merged;
 }
 export function clearAuth(options = {}) {
-  localStorage.removeItem(TOKEN_KEY);
-  localStorage.removeItem(USER_KEY);
+  drop(TOKEN_KEY);
+  drop(USER_KEY);
   emit(options);
 }
 

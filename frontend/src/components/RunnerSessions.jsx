@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { Link } from "react-router-dom";
 import { api } from "../api.js";
 import { captureAccountGuard, useAuth } from "../lib/auth.js";
-import { createRunnerKeyStore } from "../lib/runnerKeyStore.js";
 import { SectionTitle, EmptyRow } from "./Page.jsx";
 import CandleChart from "./CandleChart.jsx";
 import { computeSessionOverlay } from "../lib/indicators.js";
@@ -12,121 +11,12 @@ import { formatQuoteAmount, practiceModeLabel } from "../lib/exchanges.js";
 import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 import ConfirmDialog from "./ConfirmDialog.jsx";
 import { describeDeleteConfirm, describeStopConfirm } from "../features/agents/runOutcome.js";
-import "./RunnerKeyPanel.css";
+import { RunnerKeyPanel } from "./RunnerKeyPanel.jsx";
 import { Icon } from "./icons.jsx";
 
 // 내 매크로 실행 현황 — 실행기(exe)가 올리는 세션을 실시간으로 보여주고,
 // 원격 종료(매크로만 / 청산 후)를 요청한다.
 
-const runnerKeys = createRunnerKeyStore({
-  read: (generation) => api.runnerKey({ requestKey: `runner-key-${generation}` }),
-  regenerate: () => api.runnerKeyRegenerate(),
-});
-
-export function RunnerKeyPanel({ enabled = true, compact = false, menu = false }) {
-  const { accountVersion } = useAuth();
-  const isCurrent = useMemo(() => captureAccountGuard({ accountOnly: true }), [accountVersion]);
-  const getSnapshot = useCallback(() => runnerKeys.getSnapshot(accountVersion), [accountVersion]);
-  const { data, error: err, regenerating } = useSyncExternalStore(runnerKeys.subscribe, getSnapshot, getSnapshot);
-  const [revealed, setRevealed] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const [copyFailed, setCopyFailed] = useState(false);
-
-  useEffect(() => {
-    setRevealed(false);
-    setCopied(false);
-    setCopyFailed(false);
-    if (enabled) void runnerKeys.load(accountVersion, isCurrent);
-  }, [enabled, accountVersion, isCurrent]);
-
-  if (!enabled) return null;
-
-  async function regen() {
-    if (!isCurrent() || regenerating) return;
-    if (!window.confirm("새 키를 발급하면 기존 키는 즉시 무효화돼요. 실행기에 새 키를 다시 입력해야 해요. 계속할까요?"))
-      return;
-    const updated = await runnerKeys.rotate(accountVersion, isCurrent);
-    if (updated && isCurrent()) {
-      setRevealed(true);
-      setCopied(false);
-      setCopyFailed(false);
-    }
-  }
-
-  async function copy() {
-    if (!isCurrent() || !data?.key || regenerating) return;
-    setCopyFailed(false);
-    try {
-      await navigator.clipboard.writeText(data.key);
-      if (!isCurrent()) return;
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch (_) { if (isCurrent()) setCopyFailed(true); }
-  }
-
-  if (menu) {
-    if (err && !data) return <p className="t-small text-red-600" role="alert">회원 키를 불러오지 못했어요. 닫았다가 다시 열어 주세요.</p>;
-    if (!data) return <p className="t-small text-slate-700" role="status">회원 키 불러오는 중…</p>;
-    return (
-      <div className="runner-key-menu">
-        <div className="runner-key-menu-field">
-          <input className="num" aria-label="회원 키" type={revealed || copyFailed ? "text" : "password"} readOnly value={data.key} onFocus={(event) => event.target.select()} />
-          <button type="button" className="t-small" onClick={() => { setRevealed(!(revealed || copyFailed)); setCopyFailed(false); }}>{revealed || copyFailed ? "숨기기" : "보기"}</button>
-        </div>
-        <div className="runner-key-menu-actions">
-          <button type="button" className="t-small" onClick={copy} disabled={regenerating}>{copied ? "복사됨" : "복사"}</button>
-          <button type="button" className="t-small" onClick={regen} disabled={regenerating}>재발급</button>
-        </div>
-        <span className="sr-only" role="status">{copied ? "회원 키를 복사했어요." : ""}</span>
-        {err ? <p className="t-small" role="alert">재발급하지 못했어요. 다시 시도해 주세요.</p> : null}
-        {copyFailed ? <p className="t-small" role="alert">복사하지 못했어요. 키를 직접 복사해 주세요.</p> : null}
-      </div>
-    );
-  }
-
-  if (compact) {
-    return (
-      <div className="space-y-2">
-        <button type="button" onClick={copy} disabled={!data?.key || !!err || regenerating} className="btn btn-l btn-secondary w-full">
-          {err ? "회원 키를 불러오지 못했어요" : !data ? "회원 키 불러오는 중…" : copied ? "복사했어요" : "회원 키 복사"}
-        </button>
-        <span className="sr-only" role="status">{copied ? "회원 키를 복사했어요." : ""}</span>
-        {err ? <p className="t-small text-red-600" role="alert">키 조회 오류: {err}</p> : null}
-        {copyFailed ? (
-          <div className="space-y-2">
-            <p className="t-small text-red-600" role="alert">자동 복사를 하지 못했어요. 아래 키를 직접 복사해 주세요.</p>
-            <input aria-label="직접 복사할 회원 키" readOnly value={data.key} onFocus={(event) => event.target.select()} className="field w-full min-w-0 num" />
-          </div>
-        ) : null}
-      </div>
-    );
-  }
-
-  if (err) return <div className="t-small text-red-600">키 조회 오류: {err}</div>;
-  if (!data) return <div className="t-small text-slate-500">키 불러오는 중…</div>;
-
-  const masked = data.key.slice(0, 8) + "•".repeat(Math.max(0, data.key.length - 12)) + data.key.slice(-4);
-  return (
-    <div className="notice space-y-2">
-      <div className="t-small text-slate-700">
-        아래 <b className="text-slate-900">껄무새 회원 키</b>를 매크로 실행기의 ④번 칸에 입력하세요. 계정당 1개예요.
-      </div>
-      <div className="flex items-center gap-2 flex-wrap">
-        <code className="num text-slate-900 bg-slate-100 px-2 py-1 rounded break-all">
-          {revealed ? data.key : masked}
-        </code>
-        <button onClick={() => setRevealed((v) => !v)} className="btn btn-s btn-secondary">
-          {revealed ? "숨기기" : "보기"}
-        </button>
-        <button onClick={copy} disabled={regenerating} className="btn btn-s btn-secondary">{copied ? "복사됨!" : "복사"}</button>
-        <button onClick={regen} disabled={regenerating} className="btn btn-s btn-secondary">키 재발급</button>
-      </div>
-      <div className="t-caption text-slate-500">
-        이 키는 서버 상태 확인·원격 종료에만 쓰여요. 거래소 API 키는 실행기에서 로컬로만 쓰고 서버로 보내지 않아요.
-      </div>
-    </div>
-  );
-}
 
 const P = (n) => `${(n ?? 0).toLocaleString()}`;
 

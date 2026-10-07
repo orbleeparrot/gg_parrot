@@ -96,7 +96,7 @@ function RestrictedModule({ module, state, onUpgrade }) {
       <strong>{module.label} · {plan}</strong>
       <p>
         {state === "planned"
-          ? "곧 제공할 기능입니다."
+          ? "곧 제공할 기능이에요."
           : `${plan} 구독에서 사용할 수 있어요.`}
       </p>
       {state === "locked" && onUpgrade ? (

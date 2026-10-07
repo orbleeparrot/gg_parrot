@@ -36,7 +36,7 @@ function Steps({ items }) {
 function Params({ rows }) {
   return (
     <div className="my-4 overflow-x-auto">
-      <table className="w-full min-w-[360px]">
+      <table className="w-full min-w-90">
         <thead>
           <tr className="border-b border-slate-200 t-caption text-slate-700">
             <th className="text-left py-2 pr-3">파라미터</th>
@@ -95,7 +95,7 @@ const C = {
 // 차트를 상자에 담지 않는다(§6 bar-chart) — 캡션은 13/600.
 function Fig({ caption, legend, children }) {
   return (
-    <figure className="my-5 max-w-[560px]">
+    <figure className="my-5 max-w-140">
       <svg viewBox={`0 0 ${FIG_W} ${FIG_H}`} className="w-full h-auto" role="img" aria-label={caption}>
         {children}
       </svg>
@@ -135,7 +135,7 @@ function Dot({ x, y, color, r = 4 }) {
   // 다크에서 흰 테두리가 되어 오히려 튀었다.
   return (
     <circle cx={fx(x)} cy={fy(y)} r={r * 1.4} fill={color}
-      stroke="rgb(var(--c-slate-50))" strokeWidth="1.5" />
+      stroke="currentColor" strokeWidth="1.5" className="text-slate-50" />
   );
 }
 function Tag({ x, y, text, color, dy = -9, anchor = "middle" }) {
@@ -592,7 +592,7 @@ const BASE_SECTIONS = [
       <>
         <P>
           한국 거래소(업비트·빗썸)에서는 <b>원화로 코인</b>을 사고, 해외 거래소(바이낸스)에서는 보통
-          <b> USDT</b>로 매매해요. 그래서 "원화 → 코인 → 바이낸스로 전송 → USDT" 흐름을 많이 씁니다.
+          <b> USDT</b>로 매매해요. 그래서 "원화 → 코인 → 바이낸스로 전송 → USDT" 흐름을 많이 써요.
         </P>
         <H>보통의 흐름</H>
         <Steps
@@ -601,7 +601,7 @@ const BASE_SECTIONS = [
             "바이낸스에서 그 코인의 '입금(Deposit)' 주소 + 네트워크를 확인해요. (예: TRX는 TRON 네트워크)",
             "업비트/빗썸의 '출금'에서 바이낸스 입금 주소로 보내요. 네트워크가 양쪽 동일한지 꼭 확인!",
             "몇 분~하루 안에 바이낸스 지갑에 코인이 들어오면, 그 코인을 팔아 USDT로 바꿔요.",
-            "이제 그 USDT로 원하는 코인을 매매하면 됩니다.",
+            "이제 그 USDT로 원하는 코인을 매매하면 돼요.",
           ]}
         />
         <Note>
@@ -694,7 +694,7 @@ const BASE_SECTIONS = [
         />
         <Tip>
           <b>키는 내 PC에만 있어요.</b> 실행기는 API 키를 껄무새 웹이나 서버로 보내지도, 저장하지도
-          않아요. 서버에는 실행 상태(수익률·종료 요청)만 오갑니다.
+          않아요. 서버에는 실행 상태(수익률·종료 요청)만 오가요.
         </Tip>
         <Note>
           <b>주의:</b> 실거래는 진짜 돈이 움직이고, 손실은 전부 본인 몫이에요. 매크로 버그·네트워크 끊김·
@@ -889,7 +889,9 @@ export default function Guide({ embedded = false, initialSection = "start" }) {
     if (embedded || !changed || !articleRef.current) return;
     const article = articleRef.current;
     const top = article.getBoundingClientRect().top;
-    const margin = parseFloat(getComputedStyle(article).scrollMarginTop) || 0;
+    // 헤더에 가려지는 높이 — 문서의 scroll-padding(헤더 + 8px) + 글의 scroll-margin.
+    const margin = (parseFloat(getComputedStyle(document.documentElement).scrollPaddingTop) || 0)
+      + (parseFloat(getComputedStyle(article).scrollMarginTop) || 0);
     if (top < margin || top > window.innerHeight / 2) {
       article.scrollIntoView({ block: "start", behavior: "auto" });
     }
@@ -927,7 +929,7 @@ export default function Guide({ embedded = false, initialSection = "start" }) {
 
   return (
     <div className={embedded ? "guide-page guide-embedded" : "guide-page"}>
-      {!embedded && <h1 className="sr-only">사용법</h1>}
+      {!embedded && <h1 className="sr-only">FAQ</h1>}
       <div className="guide-search-area">
         {!embedded && (
           <img className="guide-search-mascot" src="/brand/navigation/ggparrot-nav-builder.svg" alt="" width="112" height="112" draggable="false" />

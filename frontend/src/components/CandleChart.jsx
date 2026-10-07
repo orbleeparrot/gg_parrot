@@ -83,8 +83,8 @@ function LegendItem({ item }) {
         </svg>
       ) : (
         <span
-          className="inline-block w-3.5 h-0"
-          style={{ borderTop: `2px ${item.dash ? "dashed" : "solid"} ${item.color}` }}
+          className={"candle-legend-line" + (item.dash ? " is-dashed" : "")}
+          style={{ "--swatch": item.color }}
         />
       )}
       {item.label}
@@ -139,7 +139,7 @@ function SourceStatus({ feed, now, inline = false }) {
       : `${exchangeLabel(source.exchange)} ${market} · 시세 정보`;
   return (
     <details className={"candle-source t-caption text-slate-500" + (inline ? " is-inline" : "")}>
-      <summary className="cursor-pointer" aria-label="시세 출처와 갱신 상태" title={inline ? [label, source?.fallback && "선물 요청 → 현물 대체", warning].filter(Boolean).join(" · ") : undefined}>
+      <summary className="cursor-pointer" title={inline ? [label, source?.fallback && "선물 요청 → 현물 대체", warning].filter(Boolean).join(" · ") : undefined}>
         {label}
         {source?.fallback && <span className="text-amber-700"> · 선물 요청 → 현물 대체</span>}
         {warning && <span className="text-amber-700" role="status" aria-live="polite"> · {warning}</span>}
@@ -505,7 +505,7 @@ export default function CandleChart({
       )}
 
       {!error && (!candles || !candles.length) && (
-        <div className="h-[200px] flex items-center justify-center t-small text-slate-500">
+        <div className="h-50 flex items-center justify-center t-small text-slate-500">
           {loading ? "차트 불러오는 중…" : candles ? "표시할 시세가 없어요." : "—"}
         </div>
       )}

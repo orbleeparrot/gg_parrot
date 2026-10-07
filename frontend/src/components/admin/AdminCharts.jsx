@@ -60,7 +60,7 @@ export function Legend({ items }) {
   return (
     <div className="adm-legend" aria-hidden="true">
       {items.map((it) => (
-        <span key={it.label}><b className={it.line ? "is-line" : ""} style={{ background: it.color }} />{it.label}</span>
+        <span key={it.label}><b className={it.line ? "is-line" : ""} style={{ "--swatch": it.color }} />{it.label}</span>
       ))}
     </div>
   );
@@ -99,7 +99,7 @@ function HoverLabel({ W, T, bottom, x, lines }) {
     <g className="adm-hover" pointerEvents="none">
       <line className="adm-hover-line" x1={x} x2={x} y1={T} y2={bottom} />
       {lines.map((line, i) => (
-        <text key={i} x={anchorEnd ? x - 8 : x + 8} y={T + 12 + i * 14} textAnchor={anchorEnd ? "end" : "start"} className="adm-hover-text" style={line.color ? { fill: line.color, fontWeight: 700 } : undefined}>
+        <text key={i} x={anchorEnd ? x - 8 : x + 8} y={T + 12 + i * 14} textAnchor={anchorEnd ? "end" : "start"} className={"adm-hover-text" + (line.color ? " is-series" : "")} style={line.color ? { "--series": line.color } : undefined}>
           {line.text}
         </text>
       ))}
@@ -148,7 +148,7 @@ export function LineChart({ series, days, yTitle, xTitle = "날짜 (KST)", unit 
               {end >= 0 ? (
                 <>
                   <circle className="adm-endpoint" cx={x(end)} cy={y(s.data[end])} r="4" fill={s.color} />
-                  <text x={x(end) - 7} y={y(s.data[end]) - 8} textAnchor="end" style={{ fill: s.color, fontWeight: 700 }}>{fmt(s.data[end])}{unit}</text>
+                  <text x={x(end) - 7} y={y(s.data[end]) - 8} textAnchor="end" className="adm-end-label" style={{ "--series": s.color }}>{fmt(s.data[end])}{unit}</text>
                 </>
               ) : null}
             </g>
@@ -203,16 +203,16 @@ export function BarChart({ bars, line = null, days, yTitle, xTitle = "날짜 (KS
         {lineData ? (
           <g>
             {gridValues(lineScale.yMax, lineScale.step).map((v) => (
-              <text key={v} x={W - R + 8} y={ly(v) + 4} textAnchor="start" style={{ fill: line.color }}>{fmtNum(v, 1)}{lineUnit}</text>
+              <text key={v} x={W - R + 8} y={ly(v) + 4} textAnchor="start" className="adm-series-tick" style={{ "--series": line.color }}>{fmtNum(v, 1)}{lineUnit}</text>
             ))}
-            <text className="adm-axis-title" transform={`translate(${W - 8} ${T + innerH / 2}) rotate(90)`} textAnchor="middle" style={{ fill: line.color }}>{lineTitle}</text>
+            <text className="adm-axis-title is-series" transform={`translate(${W - 8} ${T + innerH / 2}) rotate(90)`} textAnchor="middle" style={{ "--series": line.color }}>{lineTitle}</text>
             {polylineSegments(lineData, cx, ly).map((seg) => (seg.single
               ? <circle key={`p${seg.first.i}`} cx={cx(seg.first.i)} cy={ly(seg.first.v)} r="3" fill={line.color} />
               : <polyline key={`s${seg.first.i}`} points={seg.points} fill="none" stroke={line.color} strokeWidth="2.2" strokeDasharray="5 4" />))}
             {lineEnd >= 0 ? (
               <>
                 <circle className="adm-endpoint" cx={cx(lineEnd)} cy={ly(lineData[lineEnd])} r="4" fill={line.color} />
-                <text x={cx(lineEnd) - 7} y={ly(lineData[lineEnd]) - 8} textAnchor="end" style={{ fill: line.color, fontWeight: 700 }}>{fmtNum(lineData[lineEnd], 1)}{lineUnit}</text>
+                <text x={cx(lineEnd) - 7} y={ly(lineData[lineEnd]) - 8} textAnchor="end" className="adm-end-label" style={{ "--series": line.color }}>{fmtNum(lineData[lineEnd], 1)}{lineUnit}</text>
               </>
             ) : null}
           </g>
@@ -342,7 +342,7 @@ export function Donut({ parts, size = 180, unit = "", prefix = "", digits = 0, e
   if (!(grand > 0)) return <EmptyNote>{empty}</EmptyNote>;
   const fmtValue = (v) => `${prefix}${fmtNum(v, digits)}${unit}`;
   const columns = [
-    { key: "label", label: "구분", render: (row) => <><b className="adm-swatch" style={{ background: row.color }} />{row.label}</> },
+    { key: "label", label: "구분", render: (row) => <><b className="adm-swatch" style={{ "--swatch": row.color }} />{row.label}</> },
     { key: "value", label: "값", num: true, render: (row) => fmtValue(row.value) },
     { key: "share_pct", label: "비율", num: true, render: (row) => fmtPct(row.share_pct) },
     ...extraColumns,

@@ -296,7 +296,7 @@ export function OutdatedRunnerPanel({ version, minVersion, downloadUrl, download
         <span className="runner-wizard-launch-mark" aria-hidden="true">!</span>
         <div>
           <h2>이 PC에서 열린 실행기는 {shown}이에요. 웹 연결은 v{minVersion}부터 돼요.</h2>
-          <p>‘실행기 열기’는 Windows에 등록된 실행기를 여는데, 마지막으로 직접 실행한 파일이 {shown}이라 그게 열렸어요. 새 파일을 받아 한 번 직접 실행하면 등록이 바뀝니다.</p>
+          <p>‘실행기 열기’는 Windows에 등록된 실행기를 여는데, 마지막으로 직접 실행한 파일이 {shown}이라 그게 열렸어요. 새 파일을 받아 한 번 직접 실행하면 등록이 바뀌어요.</p>
         </div>
       </div>
       <div className="runner-wizard-launch-callout">
@@ -425,7 +425,8 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
   const launchMinVersion = launchMinVersionFor(keyGuide, { general: requiredRunnerVersion, domestic: domesticMinVersion });
 
   useEffect(() => {
-    const acknowledged = window.localStorage.getItem(apiKeyGuideStorageKey) === "acknowledged";
+    let acknowledged = false;
+    try { acknowledged = window.localStorage.getItem(apiKeyGuideStorageKey) === "acknowledged"; } catch { /* 막힌 저장소 */ }
     setApiKeyChecked(acknowledged);
     setApiKeyPrepared(acknowledged);
   }, [apiKeyGuideStorageKey]);
@@ -686,7 +687,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
 
   function completeApiKeyGuide() {
     if (!apiKeyChecked) return;
-    window.localStorage.setItem(apiKeyGuideStorageKey, "acknowledged");
+    try { window.localStorage.setItem(apiKeyGuideStorageKey, "acknowledged"); } catch { /* 막힌 저장소 — 이번 방문에만 기억 */ }
     setApiKeyPrepared(true);
     moveTo(STEP_RUNNER);
   }
@@ -1018,7 +1019,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
               const checked = event.target.checked;
               setApiKeyChecked(checked);
               if (!checked) {
-                window.localStorage.removeItem(apiKeyGuideStorageKey);
+                try { window.localStorage.removeItem(apiKeyGuideStorageKey); } catch { /* 막힌 저장소 */ }
                 setApiKeyPrepared(false);
               }
             }}
@@ -1070,7 +1071,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
               <p className="mt-2 t-small text-red-600" role="alert">키를 불러오지 못했어요: {memberKeyError}</p>
             ) : memberKey ? (
               <div className="mt-2 flex items-center gap-2 flex-wrap">
-                <code className="num text-slate-900 bg-slate-100 px-2 py-1 rounded break-all">{memberKeyRevealed ? memberKey : masked}</code>
+                <code className="num text-slate-900 bg-slate-100 px-2 py-1 rounded-sm break-all">{memberKeyRevealed ? memberKey : masked}</code>
                 <button type="button" onClick={() => setMemberKeyRevealed((v) => !v)} className="btn btn-s btn-secondary">{memberKeyRevealed ? "숨기기" : "보기"}</button>
                 <button type="button" onClick={copyMemberKey} className="btn btn-s btn-primary">{memberKeyCopied ? "복사됨!" : "회원 키 복사"}</button>
               </div>
@@ -1385,8 +1386,8 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
           <span className="num">{String(progressIndex + 1).padStart(2, "0")} / {String(progressChapters.length).padStart(2, "0")}</span>
           <strong>{progressChapters[progressIndex]}</strong>
         </div>
-        <div className="runner-wizard-progress-track" role="progressbar" aria-valuemin="1" aria-valuemax={progressChapters.length} aria-valuenow={progressIndex + 1}>
-          <span style={{ width: `${((progressIndex + 1) / progressChapters.length) * 100}%` }} />
+        <div className="runner-wizard-progress-track" role="progressbar" aria-label="빠른 실행 진행률" aria-valuemin="1" aria-valuemax={progressChapters.length} aria-valuenow={progressIndex + 1} aria-valuetext={`${progressChapters[progressIndex]}, ${progressChapters.length}단계 중 ${progressIndex + 1}단계`}>
+          <span style={{ "--fill": `${((progressIndex + 1) / progressChapters.length) * 100}%` }} />
         </div>
         <ol aria-hidden="true">
           {progressChapters.map((chapter, index) => (

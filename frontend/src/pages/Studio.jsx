@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useModalLayer } from "../hooks/useModalLayer.js";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import Builder from "../components/Builder.jsx";
 import SimBadge from "../components/SimBadge.jsx";
@@ -76,7 +77,7 @@ const TOUR_STEPS = [
   { anchor: "chart", title: "실시간 차트 · 보조지표", body: "지금 고른 종목의 실시간 시세를 보여줘요. 선택한 매매 방식의 보조지표(예: 이동평균·볼린저 밴드)가 함께 그려지고, 설정값을 바꾸면 보조지표도 즉시 따라 바뀌는 걸 확인할 수 있어요." },
   { anchor: "strategy-params", title: "전략 조건", body: "고른 매매 방식에만 필요한 세부 값을 정해요. 익절 기준·이동평균 기간·밴드 폭처럼 전략마다 항목이 달라져요." },
   { anchor: "risk", title: "손실 제한", body: "한 번에 쓸 자금 비율과 손절 기준(%)을 정해요. 손절을 켜면 정해진 손실에서 자동으로 정리해 위험을 제한해요." },
-  { anchor: "advanced-risk", title: "고급 위험 관리", body: "하루 최대 손실·최대 보유 시간·손절 뒤 쉬는 시간 같은 추가 안전장치예요. 필요할 때만 설정하면 돼요." },
+  { anchor: "advanced-risk", title: "고급 위험 관리", body: "일일 최대손실·최대 보유시간·손절 뒤 쉬는 시간 같은 추가 안전장치예요. 필요할 때만 설정하면 돼요." },
   { anchor: "fees", title: "거래 비용과 펀딩비", body: "실제에 가깝게 수수료·체결 가격 차이(슬리피지)·펀딩비를 반영해요. ‘실제 펀딩비 가져오기’로 해당 기간 평균값을 자동으로 채울 수 있어요." },
   { anchor: "leverage", title: "레버리지", body: "배수를 올리면 수익도 손실도 그만큼 커지고 청산 위험이 생겨요. 1배는 현물과 같아 청산이 없어요. 백테스트·모의에서만 적용돼요." },
 ];
@@ -107,23 +108,26 @@ function ShareDialog({ share, stale, busy, card, onClose, onRenew }) {
       setSaving(false);
     }
   }
-  useEffect(() => {
-    const onKey = (event) => { if (event.key === "Escape") onClose(); };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  const dialogRef = useRef(null);
+  const linkRef = useRef(null);
+  const [copyFailed, setCopyFailed] = useState(false);
+  // 새 링크를 저장하거나 이미지를 만드는 중에는 Esc·바깥 클릭으로 닫히지 않는다.
+  useModalLayer({ open: true, ref: dialogRef, onEscape: onClose, busy: busy || saving, trap: true });
   async function copy() {
     try {
       await navigator.clipboard.writeText(share.url);
-      setCopied(true);
+      setCopied(true); setCopyFailed(false);
       window.setTimeout(() => setCopied(false), 1400);
     } catch {
-      window.prompt("공유 링크예요. 복사해 주세요.", share.url);
+      // 브라우저 기본 prompt 대신 링크 칸을 골라 둔다 — 길게 눌러(⌘C) 복사하면 된다.
+      setCopyFailed(true);
+      linkRef.current?.focus();
+      linkRef.current?.select();
     }
   }
   return createPortal(
-    <div className="scrim fixed inset-0 z-[90] grid place-items-center p-4" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-      <div role="dialog" aria-modal="true" aria-labelledby="studio-share-title" className="dialog confirm-dialog studio-share">
+    <div className="scrim fixed inset-0 z-90 grid place-items-center p-4" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy && !saving) onClose(); }}>
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="studio-share-title" className="dialog confirm-dialog studio-share">
         <h2 id="studio-share-title" className="t-h4 text-slate-900">저장·공유</h2>
         {stale ? (
           <div className="notice-warn mt-3 t-small text-slate-700">이 링크는 저장 당시 설정을 가리켜요. 지금 바꾼 조건을 공유하려면 새 링크를 만들어 주세요.</div>
@@ -131,9 +135,10 @@ function ShareDialog({ share, stale, busy, card, onClose, onRenew }) {
           <p className="mt-3 t-small text-slate-700">지금 조건과 백테스트 결과가 저장됐어요. 링크를 받은 사람은 같은 설정을 불러와 이어서 볼 수 있어요.</p>
         )}
         <div className="mt-4 flex gap-2">
-          <input readOnly value={share.url} aria-label="공유 링크" className="field field-sm flex-1" onFocus={(event) => event.target.select()} />
+          <input ref={linkRef} readOnly value={share.url} aria-label="공유 링크" className="field field-sm flex-1" onFocus={(event) => event.target.select()} />
           <button type="button" onClick={copy} className="btn btn-m btn-secondary shrink-0">{copied ? "복사했어요" : "링크 복사"}</button>
         </div>
+        {copyFailed ? <p className="mt-2 t-small text-amber-700" role="status">자동으로 복사하지 못했어요. 골라 둔 링크를 직접 복사해 주세요.</p> : null}
         {card && (
           <div ref={cardRef} className="studio-share-card">
             <MacroCard {...card} logoProxy />
@@ -182,10 +187,11 @@ function AccountStudio({ scope, allowRouterMacro }) {
   const savedRef = useRef(undefined);
   if (savedRef.current === undefined) savedRef.current = slug ? null : readStudioSession(scope);
   const saved = savedRef.current;
-  const [form, setForm] = useState(() => saved?.form || defaultForm());
+  // 이 탭에 남은 작업은 배포 전 형식일 수 있다 — 새로 생긴 칸은 기본값으로 채운다(없는 칸이 undefined 로 남지 않게).
+  const [form, setForm] = useState(() => (saved?.form && typeof saved.form === "object" ? { ...defaultForm(), ...saved.form } : defaultForm()));
   const [result, setResult] = useState(() => saved?.result || null);
   const [testedMacro, setTestedMacro] = useState(() => saved?.testedMacro || null);
-  const [perSymbol, setPerSymbol] = useState(() => saved?.perSymbol || []);
+  const [perSymbol, setPerSymbol] = useState(() => (Array.isArray(saved?.perSymbol) ? saved.perSymbol : []));
   const [explanation, setExplanation] = useState(() => saved?.explanation || null);
   const [aiBusy, setAiBusy] = useState(false);
   const [aiError, setAiError] = useState("");
@@ -705,7 +711,7 @@ function AccountStudio({ scope, allowRouterMacro }) {
     : !testedMacro
       ? "이 조건으로 백테스트"
       : resultIsFresh
-        ? "자동 실행 완료"
+        ? "테스트 완료"
         : "바뀐 조건으로 다시 테스트";
   const tabs = [
     { id: "bt", label: "백테스트", enabled: true, dot: busy ? "run" : !result ? "" : resultIsFresh ? "ok" : "warn" },
@@ -780,6 +786,7 @@ function AccountStudio({ scope, allowRouterMacro }) {
         aria-label="껄무새 매크로 파일 등록"
       />
 
+      <h1 className="sr-only">직접 만들기</h1>
       <div ref={split.workRef} className="studio-work" data-conditions-collapsed={split.collapsed} style={{ "--studio-condition-width": `${split.width}px` }}>
         {/* ── 조건 ── */}
         <aside id="studio-conditions" className="studio-cond" aria-label="조건" {...split.panelProps}>
@@ -827,10 +834,10 @@ function AccountStudio({ scope, allowRouterMacro }) {
             <div className="studio-foot-note t-caption text-slate-500">
               <label className="flex items-center gap-2 t-caption text-slate-700 cursor-pointer select-none whitespace-nowrap">
                 <input type="checkbox" checked={autoRun} onChange={(event) => setAutoRun(event.target.checked)} />
-                자동 실행
+                변경 뒤 자동 테스트
               </label>
               <span>
-                <kbd className="num rounded border border-slate-300 bg-slate-100 px-1">Ctrl</kbd>+<kbd className="num rounded border border-slate-300 bg-slate-100 px-1">Enter</kbd>
+                <kbd className="num rounded-sm border border-slate-300 bg-slate-100 px-1">Ctrl</kbd>+<kbd className="num rounded-sm border border-slate-300 bg-slate-100 px-1">Enter</kbd>
               </span>
             </div>
           </div>

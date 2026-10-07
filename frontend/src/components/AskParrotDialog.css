@@ -3,7 +3,7 @@
    카드 안 글자는 여섯 단계만: 20 수익률 · 16 티커 · 15 껄무새 한마디 · 14 값 · 13 본문 · 11 이름표.
    움직임은 토스 모션 값만: 120 눌림 · 200 전환·퇴장 · 320 등장, ease-out 곡선, 튕김·320ms 넘는 페이드 없음. */
 .ask-scrim {
-  position: fixed; inset: var(--site-topbar-h, 64px) 0 0; z-index: 80;
+  position: fixed; inset: var(--site-topbar-h, 64px) 0 0; z-index: var(--z-sheet);
   display: flex; align-items: flex-start; justify-content: center; padding: 16px;
   background: rgb(var(--c-scrim) / .56); overflow: hidden;
 }
@@ -36,7 +36,7 @@
 .ask-stage { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
 .ask-prog { display: flex; align-items: center; gap: 12px; font-size: 12px; color: rgb(var(--c-slate-500)); }
 .ask-prog-bar { flex: 1; height: 4px; border-radius: 2px; background: rgb(var(--c-slate-200)); overflow: hidden; }
-.ask-prog-bar i { display: block; height: 100%; border-radius: 2px; background: rgb(var(--c-slate-900)); transition: width 320ms var(--ask-ease-out); }
+.ask-prog-bar i { display: block; width: var(--fill, 0%); height: 100%; border-radius: 2px; background: rgb(var(--c-slate-900)); transition: width 320ms var(--ask-ease-out); }
 
 /* 고른 답 — 누르면 그 질문으로 돌아간다(뒤 답은 지워짐) */
 .ask-pills { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -287,7 +287,7 @@
 /* 휴대폰 — 머리 아래 전체를 채우는 시트, 아래에 보고 있는 카드의 불러오기 + 다시 물어보기 */
 .ask-foot { flex: none; display: grid; gap: 8px; padding: 10px 16px calc(14px + env(safe-area-inset-bottom, 0px)); border-top: 1px solid rgb(var(--c-slate-200)); background: rgb(var(--c-surface)); }
 .ask-foot-load { width: 100%; }
-@media (max-width: 640px) {
+@media (max-width: 639px) {
   .ask-scrim { padding: 0; }
   .ask-dlg, .ask-dlg.is-wide { width: 100%; height: 100%; max-height: none; border-radius: 0; }
   .ask-head { padding: 12px 12px 12px 16px; }
@@ -313,8 +313,8 @@
 .ask-search .btn { height: 40px; }
 /* 휴대폰 결과 머리 — 한 줄로 작게 */
 .ask-rh.is-compact .ask-say { font-size: 13px; gap: 8px; }
-.ask-rh.is-compact .ask-face { width: 24px !important; height: 24px !important; }
-@media (max-width: 640px) { .ask-hold { padding: 8px 12px; font-size: 12.5px; } }
+.ask-rh.is-compact .ask-face { width: 24px; height: 24px; }
+@media (max-width: 639px) { .ask-hold { padding: 8px 12px; font-size: 12.5px; } }
 .ask-balance { display: grid; gap: 14px; width: min(100%, 440px); margin: 0 auto; }
 .ask-balance-field { display: flex; align-items: center; gap: 12px; }
 .ask-balance-field input { flex: 1; min-width: 0; }

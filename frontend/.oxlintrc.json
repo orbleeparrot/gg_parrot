@@ -281,6 +281,7 @@
           "ask-spark-b",
           "ask-spark-l",
           "ask-stage",
+          "ask-stale",
           "ask-stat",
           "ask-stat-v",
           "ask-stats",

@@ -134,7 +134,7 @@
 }
 
 /* 직접 고를래요 */
-.ask-manual { display: grid; gap: 8px; padding-top: 12px; border-top: 1px solid rgb(var(--c-slate-200)); }
+.ask-manual { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; padding-top: 12px; border-top: 1px solid rgb(var(--c-slate-200)); }
 .ask-manual-t { margin: 0; font-size: 13px; font-weight: 700; color: rgb(var(--c-slate-900)); }
 .ask-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .ask-chip { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px 0 7px; border: 1px solid rgb(var(--c-slate-300)); border-radius: 999px; background: rgb(var(--c-surface)); color: rgb(var(--c-slate-900)); font-size: 12px; font-weight: 700; cursor: pointer; }
@@ -311,11 +311,27 @@
 .ask-search .input::placeholder { color: rgb(var(--c-slate-400)); }
 .ask-search .input:focus { outline: none; background: rgb(var(--c-surface)); border-color: rgb(var(--c-brand-line)); box-shadow: 0 0 0 1px rgb(var(--c-brand-line)); }
 .ask-search .btn { height: 40px; }
+/* 터치 기기는 버튼이 44px 로 커진다(index.css) — 검색칸도 같이 키워 아래 끝선을 맞춘다 */
+@media (pointer: coarse) { .ask-search .input, .ask-search .btn { height: 44px; } }
+/* 목록이 낡았을 때 — 문장과 '다시 확인'을 한 띠로. 버튼이 문장 줄 안에 끼면 그 줄만 부푼다 */
+.ask-stale { display: flex; align-items: center; gap: 12px; }
+.ask-stale .ask-miss { flex: 1; min-width: 0; line-height: 1.5; }
+.ask-stale .btn { flex: none; }
 /* 휴대폰 결과 머리 — 한 줄로 작게 */
 .ask-rh.is-compact .ask-say { font-size: 13px; gap: 8px; }
 .ask-rh.is-compact .ask-face { width: 24px; height: 24px; }
 @media (max-width: 639px) { .ask-hold { padding: 8px 12px; font-size: 12.5px; } }
 .ask-balance { display: grid; gap: 14px; width: min(100%, 440px); margin: 0 auto; }
-.ask-balance-field { display: flex; align-items: center; gap: 12px; }
-.ask-balance-field input { flex: 1; min-width: 0; }
-.ask-balance-field > span { font-weight: 700; }
+/* 금액 칸 — 검색 칸과 같은 text-field 규격(면 배경 · radius 12 · 포커스 때 흰 바탕 + 강조 테두리), 단위는 칸 안 오른쪽 */
+.ask-balance-field {
+  display: flex; align-items: center; gap: 8px; height: 48px; padding: 0 14px;
+  border: 1px solid rgb(var(--c-slate-200)); border-radius: 12px; background: rgb(var(--c-slate-100));
+  transition: background-color 200ms var(--ask-ease), border-color 200ms var(--ask-ease);
+}
+.ask-balance-field:focus-within { background: rgb(var(--c-surface)); border-color: rgb(var(--c-brand-line)); box-shadow: 0 0 0 1px rgb(var(--c-brand-line)); }
+.ask-balance-field:has(input[aria-invalid="true"]) { border-color: rgb(var(--c-red-600)); box-shadow: 0 0 0 1px rgb(var(--c-red-600)); }
+.ask-balance-field:has(input:disabled) { opacity: .6; }
+/* 글자 16px 이상 — iOS 가 포커스 때 화면을 확대하지 않게 */
+.ask-balance-field input { flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; background: transparent; color: rgb(var(--c-slate-900)); font-size: 18px; font-weight: 600; outline: none; }
+.ask-balance-field input::placeholder { color: rgb(var(--c-slate-400)); font-family: var(--font-sans); font-weight: 500; }
+.ask-balance-field > span { flex: none; color: rgb(var(--c-slate-600)); font-size: 15px; font-weight: 700; }

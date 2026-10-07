@@ -259,7 +259,12 @@ function ManualPick({ chips, onPick, disabled, i, exchange }) {
   return (
     <section className="ask-manual ask-in" style={{ "--i": i }} aria-label={MANUAL_PICK_LABEL}>
       <h4 className="ask-manual-t">{MANUAL_PICK_LABEL}</h4>
-      {stale || error ? <p className="ask-miss" role="status">{items ? "마지막 확인한 목록이에요. 새 상장·거래 종료가 아직 반영되지 않았을 수 있어요." : error || "종목 목록을 확인하고 있어요."} <button type="button" className="btn btn-s btn-secondary" onClick={reload}>다시 확인</button></p> : null}
+      {stale || error ? (
+        <div className="ask-stale">
+          <p className="ask-miss" role="status">{items ? "마지막 확인한 목록이에요. 새 상장·거래 종료가 아직 반영되지 않았을 수 있어요." : error || "종목 목록을 확인하고 있어요."}</p>
+          <button type="button" className="btn btn-s btn-secondary" onClick={reload}>다시 확인</button>
+        </div>
+      ) : null}
       {chips.length ? (
         <div className="ask-chips">
           {chips.map((sym) => (

@@ -245,3 +245,22 @@ def test_leg_capital_precheck_passes_when_the_share_is_enough():
     m = macro(rule_type="H", params={**H_PARAMS, "initial_capital": 2000},
               legs=legs(("BTCUSDT", 50), ("ETHUSDT", 50)))
     assert m.for_leg(m.legs[0], 1000.0).initial_capital == 1000.0
+
+
+# --- symbols 형태는 분기점과 똑같이 동작한다 (B1 회귀) ------------------
+def test_existing_symbols_portfolio_is_not_validated_per_leg():
+    """분기점에서 받아들였던 매크로를 거절하면 저장된 매크로의 조회가 500 이 된다.
+
+    규칙 H 는 묶음 자금 1000 으로는 자금 선검사를 통과하고 1/2 몫 500 으로는 통과하지 못한다.
+    `symbols` 형태는 비중을 명시한 적이 없으므로 레그 단위로 검사하지 않는다 — 거절하면
+    공유 링크가 열리지 않고, "레그" 라는 말을 쓴 적 없는 사용자에게 레그 오류가 나간다.
+    """
+    m = macro(rule_type="H", params=dict(H_PARAMS), symbols=["BTCUSDT", "ETHUSDT"])
+    assert m.is_portfolio() and m.legs is None
+
+
+def test_explicit_legs_are_still_validated_per_leg():
+    """반대로 비중을 명시한 묶음은 레그 몫으로 검사한다 — 그쪽은 사용자가 비중을 정했다."""
+    with pytest.raises(ValidationError, match="레그"):
+        macro(rule_type="H", params=dict(H_PARAMS),
+              legs=legs(("BTCUSDT", 50), ("ETHUSDT", 50)))

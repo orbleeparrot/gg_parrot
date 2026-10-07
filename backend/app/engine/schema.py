@@ -473,12 +473,10 @@ class Macro(BaseModel):
         else:
             self._validate_legacy_type()
 
-        # 레그 검증은 묶음 본체의 params 검증 **뒤**다. 앞에 두면 본체 params 가 잘못됐을 때
-        # 오류가 "레그 X 설정을 확인해 주세요" 로 나와 엉뚱한 곳을 가리킨다. 또 레그는
-        # 정규화를 마친 본체 params 를 물려받는 편이 맞다.
+        # 묶음 한도 검사는 `is_portfolio()` 로 그대로 둔다 — `bundle_risk` 는 이 브랜치가
+        # 만든 새 칸이라 기존 매크로에는 없다. 거절이 늘어날 일이 없다.
         if self.is_portfolio():
             specs = self.leg_specs()
-            base = self.initial_capital
             if self.bundle_risk is not None:
                 for leg in specs:
                     rule = self.leg_rule(leg)
@@ -489,6 +487,20 @@ class Macro(BaseModel):
                 cap = self.bundle_risk.max_positions
                 if cap is not None and cap >= len(specs):
                     raise ValueError("동시 보유 상한이 종목 수보다 작아야 의미가 있어요")
+
+        # 레그 검증은 묶음 본체의 params 검증 **뒤**다. 앞에 두면 본체 params 가 잘못됐을 때
+        # 오류가 "레그 X 설정을 확인해 주세요" 로 나와 엉뚱한 곳을 가리킨다. 또 레그는
+        # 정규화를 마친 본체 params 를 물려받는 편이 맞다.
+        #
+        # 레그 펼치기 검증은 비중을 **명시한** 묶음(`legs`)에만 걸린다. `symbols` 형태는
+        # 비중을 적은 적이 없으므로 레그 몫 자금으로 검사하면, 분기점에서 저장을 통과했던
+        # 매크로가 이제 거절된다 — 이미 저장된 그런 매크로는 조회가 터져 공유 링크가 열리지
+        # 않고 사용자가 고칠 길도 없다. `symbols` 형태에서 레그 몫 자금이 모자란 것은
+        # 백테스트 때 드러난다(분기점과 같은 동작이다). 문구도 거짓이 된다 — "레그" 라는
+        # 말을 쓴 적 없는 사용자에게 "레그 BTCUSDT 설정을 확인해 주세요" 가 나간다.
+        if self.legs:
+            specs = self.leg_specs()
+            base = self.initial_capital
             for leg in specs:
                 if leg.rule_type is not None and leg.rule_type is not self.rule_type \
                         and leg.params is None:

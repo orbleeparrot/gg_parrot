@@ -179,6 +179,36 @@ def run_bundle(macro: Macro, frames: Dict[str, pd.DataFrame]) -> List[Tuple[str,
     return out
 
 
+def run_legs(macro: Macro, frames: Dict[str, pd.DataFrame]) -> List[Tuple[str, BacktestResult]]:
+    """묶음의 레그별 결과. **경로를 고르는 자리는 여기 하나뿐이다.**
+
+    한도가 있으면 레그를 봉 단위로 나란히 돌리고(``run_bundle``), 없으면 레그마다 끝까지
+    돌린다. 전체기간과 구간(워크포워드)이 같은 함수를 지나므로 같은 매크로의 두 숫자가
+    다른 코드에서 나올 수 없다 — 전에 그렇게 갈려 A·B·C 묶음의 창이 전부 깨졌다
+    (동기 루프는 봉 기반 심만 다루므로 창 네 개가 모두 ``KeyError`` 였다).
+
+    레그 자본 계산식(``base * weight / 100``)의 정본은 여기다. ``main`` 도 같은 식을
+    쓰지만 그쪽은 캔들 조회용 레그 매크로를 만들 뿐이다.
+    """
+    from .backtest import run_backtest
+
+    if macro.bundle_risk is not None:
+        return run_bundle(macro, frames)
+    specs = macro.leg_specs()
+    if not specs:
+        raise ValueError("묶음이 아닌 매크로입니다")
+    base = macro.initial_capital
+    out: List[Tuple[str, BacktestResult]] = []
+    for spec in specs:
+        cap = (base * spec.weight / 100.0) if base else None
+        leg = macro.for_leg(spec, cap)
+        df = frames.get(spec.symbol)
+        if df is None:
+            raise ValueError(f"레그 {spec.symbol} 의 캔들이 없습니다")
+        out.append((spec.symbol, run_backtest(leg, df)))
+    return out
+
+
 def split_frames_by_time(frames: Dict[str, pd.DataFrame], windows: int) -> List[Dict[str, pd.DataFrame]]:
     """레그 프레임들을 **같은 시각 경계**로 자른다.
 

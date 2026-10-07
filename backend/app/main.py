@@ -225,9 +225,11 @@ def _run_portfolio_backtest(
 ) -> tuple[BacktestResult, list, str, str]:
     """묶음 매크로의 백테스트. 반환은 (집계 결과, 종목별, 데이터 출처, 기간 라벨).
 
-    한도(``bundle_risk``)가 있으면 레그를 봉 단위로 나란히 돌린다 — 그래야 "한 번에 몇
-    종목" 을 물을 시점이 생기고, 실시간과 같은 답이 나온다. 한도가 없으면 기존 경로를
-    그대로 쓴다(기존 묶음 매크로의 결과를 한 바이트도 바꾸지 않는다).
+    경로를 고르는 일은 ``portfolio_backtest.run_legs`` 가 한다 — 여기서 또 갈라 놓으면
+    전체기간과 워크포워드 창이 다른 코드에서 나와 숫자가 어긋난다.
+
+    아래 레그 매크로는 **캔들 조회용**이다. 자본 계산식(``base * weight / 100``)의 정본은
+    ``run_legs`` 안의 것이고, ``for_leg`` 가 순수 함수이므로 두 곳이 같은 레그를 만든다.
 
     ``source`` 는 지금처럼 마지막 레그의 값이다 — 레그가 서로 다른 출처를 쓰는 일은
     없으므로(같은 거래소 · 같은 시장) 뜻이 같다.
@@ -236,18 +238,12 @@ def _run_portfolio_backtest(
     base = macro.initial_capital
     source = ""
     frames: dict = {}
-    leg_macros: list = []
     for spec in specs:
         cap = (base * spec.weight / 100.0) if base else None
-        leg = macro.for_leg(spec, cap)
-        df, source = fetch_klines_for_macro(leg, start_ms, end_ms)
+        df, source = fetch_klines_for_macro(macro.for_leg(spec, cap), start_ms, end_ms)
         frames[spec.symbol] = df
-        leg_macros.append((spec.symbol, leg))
 
-    if macro.bundle_risk is not None:
-        results = portfolio_backtest_mod.run_bundle(macro, frames)
-    else:
-        results = [(sym, run_backtest(leg, frames[sym])) for sym, leg in leg_macros]
+    results = portfolio_backtest_mod.run_legs(macro, frames)
 
     agg, per_symbol = portfolio_mod.aggregate(results, candle_interval=macro.candle_interval)
     return agg, per_symbol, source, label

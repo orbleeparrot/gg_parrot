@@ -66,6 +66,43 @@ def _edge(part) -> tuple[str, str]:
     return _label(part[TIME_COLUMN].iloc[0]), _label(part[TIME_COLUMN].iloc[-1])
 
 
+def _bundle_edge(part: dict) -> tuple[str, str]:
+    """묶음 창의 첫 · 마지막 시각. 고르는 저울은 UTC 나노초, 표기는 **원래 값** 그대로.
+
+    ``pd.Timestamp`` 끼리 ``min``/``max`` 를 하면 시간대가 있는 레그와 없는 레그가 섞인
+    순간 ``TypeError`` 가 난다. 이 계산은 창별 ``try`` **밖**이라 그 예외가 요청 전체를
+    400 으로 만든다 — 바로 옆 ``split_frames_by_time`` 은 같은 경우를 UTC 나노초로
+    막으므로 같은 헬퍼(``_as_utc_ns``)를 쓴다. 표기는 레그 자기 행의 원래 값이라
+    기존 라벨이 한 글자도 바뀌지 않는다.
+    """
+    # 함수 안에서 불러온다 — walkforward <- portfolio_backtest <- backtest 순환을 피한다.
+    from .portfolio_backtest import _utc_ns
+
+    _NAT = -(2 ** 63)       # pandas 가 NaT 를 나타내는 정수. 끝점으로 고르면 안 된다.
+    lo: tuple[int, object] | None = None
+    hi: tuple[int, object] | None = None
+    for df in part.values():
+        col = _utc_ns(df)
+        if col is None or not len(col):
+            continue
+        # 레그마다 **두 행**만 본다 — 봉 수 × 레그 수만큼 파이썬 루프를 돌면 큰 요청에서
+        # 라벨 계산이 백테스트보다 비싸진다.
+        good = (col != _NAT).nonzero()[0]
+        if not len(good):
+            continue
+        values = df[TIME_COLUMN]
+        kept = col[good]
+        i = int(good[int(kept.argmin())])
+        j = int(good[int(kept.argmax())])
+        if lo is None or int(col[i]) < lo[0]:
+            lo = (int(col[i]), values.iloc[i])
+        if hi is None or int(col[j]) > hi[0]:
+            hi = (int(col[j]), values.iloc[j])
+    if lo is None or hi is None:
+        return "", ""
+    return _label(lo[1]), _label(hi[1])
+
+
 def _failed(index: int, start: str, end: str, reason: str) -> dict:
     return {"index": index, "start": start, "end": end,
             "return_pct": None, "trades": 0, "error": reason}
@@ -102,19 +139,19 @@ def run_bundle_windows(macro: Macro, frames: dict, windows: int = DEFAULT_WINDOW
 
     행 수로 자르면 레그마다 봉 수가 달라 경계가 어긋난다 — 묶음에서는 모든 레그가 같은
     기간을 보아야 한도가 뜻을 가진다. 수익률은 레그 합산(``portfolio.aggregate``)이다.
+
+    경로(동기 루프 · 레그별 완주)는 ``run_legs`` 가 고른다. 전체기간과 같은 함수를 지나야
+    같은 매크로의 두 숫자가 어긋나지 않는다.
     """
     # 함수 안에서 불러온다 — walkforward <- portfolio_backtest <- backtest 순환을 피한다.
     from . import portfolio as portfolio_mod
-    from .portfolio_backtest import run_bundle, split_frames_by_time
+    from .portfolio_backtest import run_legs, split_frames_by_time
 
     rows = []
     for index, part in enumerate(split_frames_by_time(frames, windows), start=1):
-        times = [pd.Timestamp(t) for df in part.values()
-                 for t in (df[TIME_COLUMN] if TIME_COLUMN in df.columns else [])]
-        start = _label(min(times)) if times else ""
-        end = _label(max(times)) if times else ""
+        start, end = _bundle_edge(part)
         try:
-            results = run_bundle(macro, part)
+            results = run_legs(macro, part)
             agg, _per = portfolio_mod.aggregate(results, candle_interval=macro.candle_interval)
         except Exception as exc:  # noqa: BLE001 — 한 구간 실패가 전체를 막지 않는다
             logger.warning("bundle walk-forward window failed: index=%d reason=%s",

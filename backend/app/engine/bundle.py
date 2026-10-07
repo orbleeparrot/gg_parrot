@@ -40,9 +40,12 @@ class BundleGate:
             if held >= self.max_positions:
                 return True
         if self.max_exposure_pct is not None:
-            # 진입 기준 명목금액(수량 × 평균 진입가). 시세를 끌어오지 않으므로 백테스트와
-            # 실시간이 같은 값을 본다(원칙 4). 보유 중인 레그도 금액은 더 늘어나니 막는다.
-            used = sum(s.total_qty() * s.avg_entry() for s in self._sims)
+            # 투입 자본(margin). 레버리지 걸린 명목금액이 아니다 — "총 노출 60%" 는 "내 자금의
+            # 60% 까지 시장에 넣는다" 로 읽히고, 명목으로 세면 3배에서 한도를 100% 로 열어 둬도
+            # 둘째 레그가 아예 거래하지 못한다. 1배에서는 ``수량 × 진입가`` 와 같은 값이다.
+            # 시세를 끌어오지 않으므로 백테스트와 실시간이 같은 값을 본다(원칙 4).
+            # 보유 중인 레그도 자본은 더 늘어나니 막는다.
+            used = sum(s.committed_margin() for s in self._sims)
             if used >= self.total_capital * self.max_exposure_pct / 100.0:
                 return True
         return False

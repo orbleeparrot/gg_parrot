@@ -1,12 +1,13 @@
 """묶음 관문 — 한도에 닿으면 새 진입을 막고, 청산은 건드리지 않는다."""
-import pytest
+from datetime import datetime, timezone
 
 from app.engine.bundle import BundleGate
-from app.engine.schema import BundleRisk
+from app.engine.candles import LiveCandleSim, make_candle_sim
+from app.engine.schema import BundleRisk, Macro
 
 
 class _Sim:
-    """심의 관문이 쓰는 면만 흉내낸다 — 수량과 평균 진입가."""
+    """심의 관문이 쓰는 면만 흉내낸다 — 수량 · 평균 진입가 · 투입 자본."""
 
     def __init__(self, qty=0.0, entry=0.0):
         self.qty, self.entry = qty, entry
@@ -19,6 +20,10 @@ class _Sim:
 
     def avg_entry(self):
         return self.entry
+
+    def committed_margin(self):
+        """1배 등가 — 실제 심은 margin 을 들고 있고 1배에서 수량 × 진입가와 같다."""
+        return self.qty * self.entry
 
 
 def gate(total=1000.0, **limits):
@@ -136,11 +141,6 @@ def test_register_unwraps_live_sim():
 
 
 # --- 심에 꽂았을 때 ---------------------------------------------------
-from datetime import datetime, timezone
-
-from app.engine.candles import make_candle_sim
-from app.engine.schema import Macro
-
 BREAKOUT = {
     "symbol": "BTCUSDT", "rule_type": "I", "candle_interval": "1h",
     "period": {"preset": "3m"}, "params": {"k": 0.5, "initial_capital": 1000},
@@ -192,3 +192,66 @@ def test_gate_does_not_block_the_exit():
     out = sim.on_candle(106, 106, 80, 82, ts, volume=1000.0)
     assert any(f.side == "sell" for f in out), "관문이 청산을 막았다 — 원칙 1 위반"
     assert not sim.in_position()
+
+
+def test_live_wrapper_forwards_the_gate_to_the_inner_sim():
+    """래퍼에 꽂아도 안쪽 심이 받아야 한다 — 위임이 없으면 그 레그만 조용히 한도를 무시한다.
+
+    ``register`` 는 ``.inner`` 를 벗겨 담으므로 그 레그의 장부는 여전히 합계에 들어간다.
+    그래서 다른 레그는 제대로 막히고 한도가 작동하는 듯 보인다 — 가장 찾기 어려운 모양이다.
+    """
+    live = LiveCandleSim(Macro(**BREAKOUT))
+    g = BundleGate(BundleRisk(max_positions=1), 1000.0)
+    live.bundle_gate = g
+    assert live.inner.bundle_gate is g
+    assert live.bundle_gate is g
+
+
+def test_gate_blocks_a_live_wrapped_leg():
+    """래퍼를 쓰는 실시간 레그도 실제로 막혀야 한다 — 위임이 죽으면 이 레그만 계속 들어간다."""
+    closes = [100, 101, 102, 103, 104, 105, 106]
+
+    def feed(live):
+        """LiveCandleSim.on_candle 은 체결 수를 돌려준다 — Fill 목록이 아니다."""
+        for i, c in enumerate(closes):
+            live.on_candle(c, c * 1.03, c * 0.99, c, datetime(2026, 1, 1, i, tzinfo=timezone.utc),
+                           volume=1000.0)
+
+    free = LiveCandleSim(Macro(**BREAKOUT))
+    feed(free)
+    assert free.inner.in_position(), "대조군이 안 샀다 — 시험이 무의미하다"
+
+    blocked = LiveCandleSim(Macro(**BREAKOUT))
+    g = BundleGate(BundleRisk(max_positions=1), 1000.0)
+    g.register(_Sim(qty=1.0, entry=100.0))      # 다른 레그가 자리를 차지했다
+    g.register(blocked)
+    blocked.bundle_gate = g
+    feed(blocked)
+    assert not blocked.inner.in_position()
+
+
+# --- 노출은 투입 자본으로 센다 -----------------------------------------
+def test_exposure_counts_capital_not_leveraged_notional():
+    """3배로 500 을 넣으면 투입 자본은 500 이고 명목은 1500 이다. 한도는 자본을 센다 —
+    아니면 한도를 100% 로 열어 둔 사용자가 레그를 잃는다."""
+    m = Macro(**{**BREAKOUT, "leverage": 3, "market": "futures"})
+    sim = make_candle_sim(m)
+    _bars(sim, [100, 101, 102, 103, 104, 105, 106])
+    assert sim.in_position()
+    # 투입 자본은 초기자금 이하, 명목은 그보다 크다.
+    assert sim.committed_margin() <= sim.initial_capital
+    assert sim.total_qty() * sim.avg_entry() > sim.committed_margin()
+
+
+def test_leveraged_leg_does_not_eat_the_whole_exposure_cap():
+    """3배 레그 하나가 한도 100% 를 다 먹으면 안 된다 — 명목으로 세던 시절의 결함."""
+    m = Macro(**{**BREAKOUT, "leverage": 3, "market": "futures"})
+    held = make_candle_sim(m, initial_capital=500.0)
+    _bars(held, [100, 101, 102, 103, 104, 105, 106])
+    assert held.in_position()
+    assert held.total_qty() * held.avg_entry() > 1000.0, "명목이 묶음 자금을 넘지 않으면 시험이 무의미하다"
+
+    g = BundleGate(BundleRisk(max_exposure_pct=100.0), 1000.0)
+    flat = _Sim()
+    g.register(held); g.register(flat)
+    assert g.blocks(flat) is False

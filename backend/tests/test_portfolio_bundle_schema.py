@@ -215,3 +215,33 @@ def test_bad_bundle_params_points_at_the_bundle_not_a_leg():
         macro(params={"k": -1.0, "initial_capital": 1000},
               legs=legs(("BTCUSDT", 50), ("ETHUSDT", 50)))
     assert "레그" not in str(exc.value), str(exc.value)
+
+
+# --- 레그 자금 선검사는 레그 몫으로 ------------------------------------
+H_PARAMS = {
+    # 최악의 경우 필요한 자금 = 300 + 200 + 200 = 700.
+    # 묶음 전체 1000 으로는 넉넉하지만 50% 레그 몫 500 으로는 모자란다.
+    "base_order_size": 300.0, "safety_order_size": 200.0, "max_safety_orders": 2,
+    "price_deviation": 3.0, "take_profit": 2.0, "initial_capital": 1000,
+}
+
+
+def test_leg_capital_precheck_uses_the_leg_share_not_the_bundle():
+    """레그 몫으로는 자금이 모자란 설정이 저장되면 백테스트에서 터진다 — 검증에서 잡는다.
+
+    같은 params 가 묶음 전체 자금(1000)으로는 통과하는 것을 함께 단정한다. 그래야 이 시험이
+    '자금이 틀렸다' 가 아니라 **자본 차이**를 본다는 것이 증명된다.
+    """
+    # 단일 종목(= 1000 전액)으로는 통과한다.
+    assert macro(rule_type="H", params=dict(H_PARAMS)).initial_capital == 1000
+    # 같은 설정을 50/50 묶음으로 두면 레그 몫은 500 — 700 이 들어갈 자리가 없다.
+    with pytest.raises(ValidationError, match="레그"):
+        macro(rule_type="H", params=dict(H_PARAMS),
+              legs=legs(("BTCUSDT", 50), ("ETHUSDT", 50)))
+
+
+def test_leg_capital_precheck_passes_when_the_share_is_enough():
+    """묶음 자금을 키워 레그 몫이 필요 자금을 넘기면 통과한다 — 막는 것은 규칙이 아니라 몫이다."""
+    m = macro(rule_type="H", params={**H_PARAMS, "initial_capital": 2000},
+              legs=legs(("BTCUSDT", 50), ("ETHUSDT", 50)))
+    assert m.for_leg(m.legs[0], 1000.0).initial_capital == 1000.0

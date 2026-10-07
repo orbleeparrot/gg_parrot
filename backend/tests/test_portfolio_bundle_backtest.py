@@ -167,3 +167,71 @@ def test_shorter_leg_does_not_compete_for_slots_before_it_exists():
     assert alone.total_trades > 0, "혼자 돌린 BTC 에 거래가 없으면 이 시험은 무의미하다"
     assert got["BTCUSDT"].total_trades == alone.total_trades
     assert [p.equity for p in got["BTCUSDT"].equity_curve] == [p.equity for p in alone.equity_curve]
+
+
+# --- 조용히 봉을 버리던 자리 (A2) --------------------------------------
+def test_duplicate_timestamps_do_not_swallow_the_rest_of_the_leg():
+    """같은 시각 행이 둘이면 커서가 멈춰 남은 봉을 다 버리던 결함."""
+    f = frame(RISING)
+    dup = pd.concat([f.iloc[:3], f.iloc[2:3], f.iloc[3:]], ignore_index=True)   # 3번째 시각이 두 번
+    legs = [{"symbol": "BTCUSDT", "weight": 50}, {"symbol": "ETHUSDT", "weight": 50}]
+    got = dict(run_bundle(bundle(legs, risk={"invest_ratio": 0.4},
+                                 bundle_risk={"max_exposure_pct": 100.0}),
+                          {"BTCUSDT": dup, "ETHUSDT": frame(RISING)}))
+    # 중복 행까지 포함해 모든 봉이 처리된다 — 점 수가 행 수와 같다.
+    assert len(got["BTCUSDT"].equity_curve) == len(dup)
+    assert len(got["ETHUSDT"].equity_curve) == len(RISING)
+    # 중복이 없는 레그는 영향을 받지 않는다.
+    assert got["ETHUSDT"].total_trades > 0
+
+
+# --- 빈 프레임 · 시간대 혼용 (A5) --------------------------------------
+def test_leg_with_a_column_less_empty_frame_does_not_crash():
+    """데이터 계층이 열 없는 빈 프레임을 주더라도 타임라인 조립이 터지지 않는다."""
+    legs = [{"symbol": "BTCUSDT", "weight": 50}, {"symbol": "ETHUSDT", "weight": 50}]
+    got = dict(run_bundle(bundle(legs, bundle_risk={"max_exposure_pct": 100.0}),
+                          {"BTCUSDT": frame(RISING), "ETHUSDT": pd.DataFrame()}))
+    assert got["BTCUSDT"].total_trades > 0            # 성한 레그는 자기 봉을 다 본다
+    assert len(got["BTCUSDT"].equity_curve) == len(RISING)
+    assert got["ETHUSDT"].total_trades == 0
+
+
+def test_mixed_timezones_do_not_crash_and_each_leg_keeps_its_own_bars():
+    """한 레그는 tz 가 있고 하나는 없을 때 — 정렬이 터지지 않고 레그는 자기 봉만 본다.
+
+    운영 데이터는 전부 ``utc=True`` 지만 시험 픽스처는 naive 다. 둘이 섞이는 순간
+    ``sorted()`` 가 TypeError 로 죽었다.
+    """
+    naive = frame(RISING)
+    aware = frame(RISING)
+    aware["timestamp"] = aware["timestamp"].dt.tz_localize("UTC")
+    legs = [{"symbol": "BTCUSDT", "weight": 50}, {"symbol": "ETHUSDT", "weight": 50}]
+    m = bundle(legs, risk={"invest_ratio": 0.4}, bundle_risk={"max_exposure_pct": 100.0})
+    got = dict(run_bundle(m, {"BTCUSDT": naive, "ETHUSDT": aware}))
+    # 두 레그가 같은 시각을 가리키므로 봉 수 · 결과가 모두 같아야 한다 — 합집합이 두 배로
+    # 늘거나 한쪽이 상대 봉에서 판정했다면 여기서 어긋난다.
+    assert len(got["BTCUSDT"].equity_curve) == len(RISING)
+    assert len(got["ETHUSDT"].equity_curve) == len(RISING)
+    assert got["BTCUSDT"].total_trades > 0
+    assert got["ETHUSDT"].total_trades == got["BTCUSDT"].total_trades
+    assert [p.equity for p in got["ETHUSDT"].equity_curve] == \
+        [p.equity for p in got["BTCUSDT"].equity_curve]
+
+
+def test_mixed_timezones_in_window_split_do_not_crash():
+    """창 자르기도 같은 자리에서 죽었다 — 경계는 UTC 로 비교한다."""
+    naive = frame(list(range(100, 108)))
+    aware = frame(list(range(100, 108)))
+    aware["timestamp"] = aware["timestamp"].dt.tz_localize("UTC")
+    parts = split_frames_by_time({"BTCUSDT": naive, "ETHUSDT": aware}, 2)
+    assert len(parts) == 2
+    for p in parts:
+        assert len(p["BTCUSDT"]) == 4 and len(p["ETHUSDT"]) == 4
+
+
+def test_empty_frames_are_not_shared_between_windows():
+    """빈 레그가 모든 창에 같은 객체로 들어가면 호출부가 한 창을 손대면 다 번진다."""
+    parts = split_frames_by_time(
+        {"BTCUSDT": frame(list(range(100, 108))), "ETHUSDT": pd.DataFrame()}, 2)
+    assert len(parts) == 2
+    assert parts[0]["ETHUSDT"] is not parts[1]["ETHUSDT"]

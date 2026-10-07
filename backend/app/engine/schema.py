@@ -328,7 +328,7 @@ class BundleRisk(BaseModel):
 
     # 동시에 포지션을 들고 있을 수 있는 종목 수.
     max_positions: Optional[int] = Field(default=None, ge=1, le=5)
-    # 진입 기준 명목금액 합이 묶음 초기자금의 몇 %까지 갈 수 있는가.
+    # 투입 자본(margin — 레버리지 걸린 명목금액이 아니다) 합이 묶음 초기자금의 몇 %까지 갈 수 있는가.
     max_exposure_pct: Optional[float] = Field(default=None, gt=0, le=100)
 
     @model_validator(mode="after")
@@ -478,6 +478,7 @@ class Macro(BaseModel):
         # 정규화를 마친 본체 params 를 물려받는 편이 맞다.
         if self.is_portfolio():
             specs = self.leg_specs()
+            base = self.initial_capital
             if self.bundle_risk is not None:
                 for leg in specs:
                     rule = self.leg_rule(leg)
@@ -495,8 +496,13 @@ class Macro(BaseModel):
                 # 레그를 실제로 펼쳐 Macro 검증기를 통째로 돌린다 — 규칙별 params, 진입 조건
                 # 적용 가능 여부, 국내 거래소 제약, 레버리지까지 한 번에 본다. 레그 검증
                 # 로직을 두 벌로 베끼면 둘이 어긋나는 날이 온다.
+                #
+                # 자본은 **레그가 실제로 받는 몫**(묶음 자금 × 비중)으로 준다. 묶음 전체 자금으로
+                # 검증하면 자금 사전검사(_validate_new_type)를 넉넉히 넘기는 설정이 저장되고,
+                # 백테스트가 레그 몫으로 펼칠 때 pydantic 예외가 그대로 올라간다.
+                per_cap = (base * leg.weight / 100.0) if base else None
                 try:
-                    self.for_leg(leg)
+                    self.for_leg(leg, per_cap)
                 except ValueError as exc:
                     raise ValueError(f"레그 {leg.symbol} 설정을 확인해 주세요") from exc
 

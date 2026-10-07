@@ -39,6 +39,7 @@ from .ask import (
     free_remaining_today,
     remaining_today,
 )
+from .coach_ai import default_ask_ai, voice
 from .coach_graph import (
     FIRST_KEY,
     GRAPH,
@@ -119,9 +120,12 @@ def _question_view(key: str, answers: dict, page: int = 0) -> dict:
     pages = _page_count(len(everything))
     page = page % pages if pages else 0
     shown = everything[page * PAGE_SIZE:(page + 1) * PAGE_SIZE]
+    # 말투 — 보이는 한 페이지의 문구 · 라벨 · 순서만 AI 가 손댄다(값 · 집합 · 패치는 못 바꾼다).
+    ask, shown, ai_used = voice(key, question.ask, shown, answers, ask_ai=default_ask_ai())
     return {
         "key": key,
-        "ask": question.ask,
+        "ask": ask,
+        "ai": ai_used,
         "kind": question.kind,
         "field": question.field,
         "choices": [{"value": c.value, "label": c.label, "patch": dict(c.patch), "why": c.why}
@@ -142,6 +146,10 @@ def _first_question(answers: dict) -> dict:
 
 def _reply(db: Session, user: User, row: AskMacroSession, state: dict, *,
            question: Optional[dict], form_patch: dict, done: bool, wrapped_up: bool) -> dict:
+    if question and question.get("ai") and not row.ai_used:
+        row.ai_used = True      # 말투에 AI 를 한 번이라도 썼으면 감사 기록에 남긴다(ask.py 와 같은 칸)
+        db.add(row)
+        db.commit()
     return {
         "session_id": row.id,
         "turn": len(state["turns"]),

@@ -106,13 +106,14 @@ def main():
                         expect(results.get_by_role("option", name="KRW-BTC", exact=True)).to_have_count(0)
                         results.get_by_role("button", name="다시 시도", exact=True).click()
                     else:
-                        expect(page.get_by_text("마지막 확인한 종목 목록이에요.", exact=False)).to_be_visible()
+                        # 낡은 목록 안내는 보여 주지 않는다(2026-10-08) — 검색칸 아래가 늦게 밀리는 레이아웃 이동.
+                        expect(page.get_by_text("마지막 확인한 종목 목록이에요.", exact=False)).to_have_count(0)
                         expect(page.get_by_role("button", name="KRW-BTC 빼기", exact=True)).to_be_visible()
                         search.press("Escape")
                         page.get_by_role("button", name="KRW-BTC 빼기", exact=True).click()
                         search.fill("BTC")
                         expect(results.get_by_role("option", name="KRW-BTC", exact=True)).to_be_visible()
-                        page.get_by_role("button", name="다시 확인", exact=True).click()
+                    # 낡은 목록에 없는 새 종목을 검색하면 조용히 목록을 다시 받아 찾는다('다시 확인' 버튼 대신).
                     search.fill("NEW")
                     choice = results.get_by_role("option", name="KRW-NEW", exact=True)
                     expect(choice).to_be_visible()
@@ -126,7 +127,7 @@ def main():
                     search.fill("ETH")
                     expect(results.get_by_role("option", name="KRW-ETH", exact=True)).to_be_visible()
                     checks.append({"width": width, "expired": expired, "passed": True,
-                                   "scenario": "stale/expired catalogue -> explicit refresh -> newly listed ticker selectable -> exchange isolation"})
+                                   "scenario": "stale/expired catalogue -> refresh (silent on a stale miss, explicit after an error) -> newly listed ticker selectable -> exchange isolation"})
                     context.close()
             assert not errors, errors
             browser.close()

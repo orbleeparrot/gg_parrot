@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { whaleActivityPollDelay } from "../src/features/agents/useWhaleActivity.js";
+import { whaleActivityPollDelay, supportsWhaleActivity } from "../src/features/agents/useWhaleActivity.js";
 
 const consumers = [
   "../src/components/ChatBox.jsx",
@@ -37,6 +37,16 @@ test("position news retries only preflight AI capacity responses promptly", () =
   assert.match(source, /POSITION_NEWS_BUSY_RETRY_DELAYS_MS/);
   assert.match(source, /reason\?\.status !== 429/);
   assert.match(source, /requestPositionNewsWithBusyRetry/);
+});
+
+test("unsupported domestic sessions do not enable Binance whale collection requests", () => {
+  for (const exchange of ["upbit", "bithumb"]) {
+    assert.equal(supportsWhaleActivity({ session_id: 8, symbol: "KRW-ORCA", macro: { exchange } }), false);
+    assert.equal(supportsWhaleActivity({ session_id: 8, symbol: "KRW-BTC", exchange }), false);
+  }
+  assert.equal(supportsWhaleActivity({ symbol: "KRW-ORCA" }), false);
+  assert.equal(supportsWhaleActivity({ symbol: "BTCUSDT", macro: { exchange: "binance" } }), true);
+  assert.equal(supportsWhaleActivity({ symbol: "BTCUSDC" }), true);
 });
 
 test("whale snapshot polling follows the server refresh cadence within safe bounds", () => {

@@ -25,9 +25,26 @@ export function advanceActivityTimeline(previous, context) {
   let events = state.events;
   let sequence = state.sequence;
   for (const candidate of candidates) {
+    if (candidate.resolvesCondition) {
+      delete conditions[candidate.resolvesCondition];
+      events = events.map((event) => event.connectionIncident
+        && event.conditionKey === candidate.resolvesCondition && !event.resolvedAt ? {
+          ...event, originalTitle: event.title, title: candidate.title, summary: candidate.summary,
+          severity: "info", expression: "calm", resolvedAt: receivedAt, notify: false,
+        } : event);
+      continue;
+    }
     if (candidate.conditionKey) {
       conditions[candidate.conditionKey] = candidate.conditionValue;
       if (state.conditions[candidate.conditionKey] === candidate.conditionValue) continue;
+      if (candidate.connectionIncident && state.conditions[candidate.conditionKey]) {
+        events = events.map((event) => event.connectionIncident
+          && event.conditionKey === candidate.conditionKey && !event.resolvedAt ? {
+            ...event, originalTitle: event.title, title: "이전 연결 경고 · 상태 변경",
+            summary: "최근 확인 결과는 새 상태 안내를 확인해 주세요.",
+            severity: "info", expression: "calm", resolvedAt: receivedAt, notify: false,
+          } : event);
+      }
     }
     if (candidate.silent || !candidate.id) continue;
     const repeatable = candidate.repeatable || (candidate.conditionKey && candidate.repeatable !== false);

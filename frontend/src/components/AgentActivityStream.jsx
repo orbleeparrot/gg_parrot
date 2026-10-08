@@ -6,6 +6,7 @@ import {
 } from "../features/agents/registry.js";
 import { advanceActivityTimeline, emptyActivityTimeline } from "../features/agents/activityTimeline.js";
 import { countNewObservations, positionNewsNotice, publicationLabel, publicationTime } from "../features/agents/positionNews/presentation.js";
+import { whaleActivityNotice } from "../features/agents/modules/leader.js";
 import RunResultScreen from "./RunResultScreen.jsx";
 import CommunityBodySummary from "./CommunityBodySummary.jsx";
 import { Icon } from "./icons.jsx";
@@ -158,6 +159,9 @@ export default function AgentActivityStream({
     ? positionNewsNotice(featureStates.position_news, {
       hasArticles: events.some((event) => event.isNewsArticle),
     }) : "";
+  const whaleNotice = (filter === "all" || filter === "whale_activity")
+    && accessFor(AGENT_MODULE_MAP.get("whale_activity"), entitlements) === "enabled"
+    ? whaleActivityNotice(featureStates.whale_activity) : "";
   const hasRelativeTime = visible.some((event) => {
     if (event.isNewsArticle) return false;
     const occurredAt = eventTime(event.occurredAt);
@@ -247,6 +251,7 @@ export default function AgentActivityStream({
 
       <div className="agent-chat-stream flex flex-col">
         {newsNotice ? <div className="agent-checking" role="status" data-news-status>{newsNotice}</div> : null}
+        {whaleNotice ? <div className="agent-checking" role="status" data-whale-status>{whaleNotice}</div> : null}
         <div
           ref={logRef}
           className="agent-chat-log flex-1"

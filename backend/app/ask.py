@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from typing import Callable, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
-from sqlalchemy import func
+from sqlalchemy import func, inspect
 from sqlmodel import Session, select
 
 from .ai_runtime import ai_available, ai_cache_key, default_model, get_ai_client, get_ai_runtime
@@ -817,6 +817,59 @@ _IN_FLIGHT: set[int] = set()
 _IN_FLIGHT_LOCK = threading.Lock()
 
 
+def release_read_session(db: Session, *snapshots) -> None:
+    """Return a read/committed-reservation checkout before HTTP, AI or CPU work.
+
+    Rollback expires attached ORM objects. Detach loaded snapshots first so an
+    innocent ``user.id`` access during external work cannot reacquire the pool.
+    Callers reload and validate authoritative rows before subsequent writes.
+    """
+    if db.new or db.dirty or db.deleted:
+        raise RuntimeError("External work requires committed database changes")
+    for snapshot in snapshots:
+        if snapshot is not None and snapshot in db:
+            if inspect(snapshot).expired_attributes:
+                db.refresh(snapshot)
+            db.expunge(snapshot)
+    db.rollback()
+
+
+def resume_external_user(db: Session, user: User, *, identity=None) -> User:
+    """Fence writes after external work against withdrawal/auth invalidation."""
+    from .auth import _check_token_account
+
+    user_id, version = identity if identity is not None else (user.id, user.auth_version)
+    current = db.exec(select(User).where(User.id == user_id).with_for_update()
+                      .execution_options(populate_existing=True)).first()
+    return _check_token_account({"ver": version}, current)
+
+
+def refund_external_reservation(db: Session, reservation_id: int, credit_id: int | None) -> None:
+    """Refund a committed reservation without replacing its original error.
+
+    Revalidation can fail with an aborted PostgreSQL transaction. Roll it back
+    before querying authoritative rows; detached snapshots may already have
+    been deleted by withdrawal and must never be reinserted.
+    """
+    try:
+        db.rollback()
+        credit = db.get(AskExtraCredit, credit_id) if credit_id is not None else None
+        if credit is not None and credit.used_session_id == reservation_id:
+            credit.used_session_id = None
+            db.add(credit)
+        current = db.get(AskMacroSession, reservation_id)
+        if current is not None:
+            db.delete(current)
+        db.commit()
+    except Exception as error:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        # Do not log SQL, parameters, user identifiers or raw error messages.
+        log.warning("External reservation refund failed: reason=%s", type(error).__name__)
+
+
 def _load_flow(db: Session, user: User, session_id: int) -> tuple[AskMacroSession, CandidatesRequest]:
     """세션 행을 찾아 만료·상한·소유자를 검사하고 저장된 카드 답변을 돌려준다."""
     row = db.get(AskMacroSession, session_id)
@@ -891,6 +944,7 @@ def run_ask(db: Session, user: User, req: AskRequest, run_backtest: Callable[[Ma
     if not consented(user):
         raise AskError(403, "먼저 안내에 동의해 주세요.")
     row, answers = _load_flow(db, user, req.session_id)
+    release_read_session(db, user, row)
     native = req.symbol.startswith("KRW-") if is_domestic(answers.exchange) else req.symbol.endswith("USDT")
     if not native or req.symbol not in _allowed_symbols(row, answers.market, answers.exchange):
         raise AskError(422, "이번 질문에서 살펴볼 수 있는 종목이 아니에요.")
@@ -930,6 +984,8 @@ def run_ask(db: Session, user: User, req: AskRequest, run_backtest: Callable[[Ma
         elapsed_ms = int((time.monotonic() - started) * 1000)
 
         # 성공했을 때만 호출 수를 센다 — 실패한 시도로 예산을 깎지 않는다.
+        user = resume_external_user(db, user)
+        row, _answers = _load_flow(db, user, req.session_id)
         row.ask_count += 1
         row.chosen_symbol = req.symbol
         row.candidate_count = len(evaluated)
@@ -1007,6 +1063,7 @@ def run_candidates(db: Session, user: User, req: CandidatesRequest) -> dict:
 
 def _run_candidates(db: Session, user: User, req: CandidatesRequest) -> dict:
     """run_candidates 의 알맹이 — 락을 잡은 채로 한도 검사·차감·후보 생성을 한다."""
+    identity = (user.id, user.auth_version)
     if remaining_today(db, user) <= 0:
         raise AskError(429, f"오늘은 {daily_limit()}번 다 물어봤어요. 내일 다시 물어봐 주세요.")
 
@@ -1030,6 +1087,9 @@ def _run_candidates(db: Session, user: User, req: CandidatesRequest) -> dict:
         db.add(credit)
         db.commit()
 
+    release_read_session(db, user, row, credit)
+    reservation_id = row.id
+    credit_id = credit.id if credit is not None else None
     try:
         if is_domestic(req.exchange):
             from .data.krw import get_all_tickers
@@ -1048,13 +1108,11 @@ def _run_candidates(db: Session, user: User, req: CandidatesRequest) -> dict:
             pool, profile=req.risk_profile, horizon=req.invest_horizon,
             watch=req.watch_frequency, ask_ai=_candidate_ai(),
             exchange=req.exchange, account_balance=req.account_balance)
+        user = resume_external_user(db, user, identity=identity)
+        row, _answers = _load_flow(db, user, reservation_id)
     except Exception:
         # 후보를 못 냈으면 횟수를 돌려준다 — 행을 지우고 추가권은 다시 '안 씀'으로.
-        if credit is not None:
-            credit.used_session_id = None
-            db.add(credit)
-        db.delete(row)
-        db.commit()
+        refund_external_reservation(db, reservation_id, credit_id)
         raise
 
     # 후보 단계의 ai_used 는 후보와 한 묶음으로 남긴다 — 매크로 단계가 row.ai_used 를 덮어써도

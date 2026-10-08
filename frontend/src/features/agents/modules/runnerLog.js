@@ -11,6 +11,12 @@ const KIND_LABEL = {
   stop: "종료",
   warn: "주의",
 };
+const SERVER_RETRY_MESSAGE = "서버 연결 재시도 중 — 신호 대기(진입 없음, 손절만 로컬에서 봅니다)";
+
+function timestamp(value) {
+  const parsed = typeof value === "number" ? value : Date.parse(value || "");
+  return Number.isFinite(parsed) && parsed > 0 && parsed <= 8.64e15 ? parsed : null;
+}
 
 function severityFor(kind) {
   if (kind === "error") return "critical";
@@ -40,13 +46,18 @@ export const runnerLogModule = {
     // 서버는 최신순으로 주고, 타임라인은 시간순으로 붙인다.
     return [...rows].reverse().map((row) => {
       const kind = KIND_LABEL[row.kind] ? row.kind : "info";
+      const heartbeatAt = timestamp(session.last_heartbeat_at);
+      const loggedAt = timestamp(row.ts);
+      const recovered = row.message === SERVER_RETRY_MESSAGE && heartbeatAt !== null
+        && loggedAt !== null && heartbeatAt > loggedAt;
       return {
         id: `runner-log-${session.session_id}-${row.id}`,
         module: "runner_log",
-        severity: severityFor(kind),
-        expression: expressionFor(kind),
-        title: row.message,
-        summary: "",
+        severity: recovered ? "info" : severityFor(kind),
+        expression: recovered ? "calm" : expressionFor(kind),
+        title: recovered ? "서버 연결 복구 · 이전 신호 대기 기록" : row.message,
+        summary: recovered ? "이 경고 이후 실행기의 상태 보고가 서버에 도착했어요. 과거 연결 지연 기록이며 현재 진입 여부를 뜻하지 않아요." : "",
+        ...(recovered ? { originalTitle: row.message, resolvedAt: heartbeatAt } : {}),
         occurredAt: row.ts,
         sourceLabel: `실행기 로그 · ${KIND_LABEL[kind]}`,
         // 화면을 열 때 한꺼번에 들어오는 옛 줄까지 알림으로 읽지 않게.

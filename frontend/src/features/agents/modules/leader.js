@@ -46,6 +46,26 @@ function holderEvents(onchain) {
   });
 }
 
+// These are current feature states, not new observations. In particular,
+// unsupported exchange pairs must never become a new retry incident on remount.
+export function whaleActivityNotice(state) {
+  const data = state?.data;
+  if (data?.error === "unsupported_pair") {
+    return "이 거래소·거래쌍의 대규모 체결은 아직 지원하지 않아요. 현재 바이낸스 USDT·USDC 거래쌍만 지원해요.";
+  }
+  if (state?.error) return "대규모 체결 서버 연결이 지연되고 있어요. 마지막 확인 자료가 있으면 유지해요.";
+  if (data?.error === "storage_unavailable") return "대규모 체결 저장소 조회가 지연되고 있어요. 다시 확인하고 있어요.";
+  if (data?.status === "unavailable" || ["error", "rate_limited"].includes(data?.collection?.status)) {
+    return "대규모 체결 수집 소스를 확인하지 못했어요. 마지막 확인 자료가 있으면 유지해요.";
+  }
+  if (data?.stale || data?.collection?.freshness === "stale") return "대규모 체결 자료 갱신이 지연되고 있어요. 이전 확인 자료예요.";
+  if (!data) return "대규모 체결 자료를 불러오고 있어요.";
+  if (["pending", "collecting"].includes(data.status)
+      || ["pending", "collecting"].includes(data.collection?.status)) return "대규모 체결 첫 수집 결과를 기다리고 있어요.";
+  if (data.status === "empty") return "최근 확인 구간에 기준 금액 이상의 대규모 체결이 없어요.";
+  return "";
+}
+
 export const leaderModule = {
   key: "whale_activity",
   label: "고래 동향",
@@ -56,6 +76,10 @@ export const leaderModule = {
     const state = featureStates?.whale_activity;
     const data = state?.data;
     if (data?.status === "stopped") return [];
+    if (data?.error === "unsupported_pair") return alertConditions["whale-connection"] ? [{
+      resolvesCondition: "whale-connection", title: "대규모 체결 지원 여부 확인 완료",
+      summary: whaleActivityNotice(state),
+    }] : [];
     const threshold = Number(data?.threshold_quote) || 0;
     const trades = (Array.isArray(data?.items) ? data.items : []).filter((item) => (
       item && ["buy", "sell"].includes(item.side)
@@ -72,20 +96,27 @@ export const leaderModule = {
       occurredAt: item.occurred_at || 0, sourceLabel: `바이낸스 ${data.market === "futures" ? "선물" : "현물"} 공개 체결 표본`,
     }));
     events.push(...holderEvents(data?.onchain));
-    const failed = state?.error || data?.status === "unavailable" || data?.collection?.status === "error";
+    const failed = state?.error || data?.status === "unavailable"
+      || ["error", "rate_limited"].includes(data?.collection?.status);
     const stale = data?.stale || data?.collection?.freshness === "stale";
     const pending = !data || ["pending", "collecting"].includes(data.status)
       || ["pending", "collecting"].includes(data.collection?.status);
     if (failed || stale) {
       events.unshift({id: "large-trades-unavailable", module: "whale_activity", severity: "warning",
-        conditionKey: "whale-connection", conditionValue: "unavailable",
-        title: "대규모 체결 연결 확인 중", summary: "데이터 소스를 다시 확인하고 있어요.",
+        conditionKey: "whale-connection", conditionValue: "unavailable", connectionIncident: true,
+        title: state?.error ? "대규모 체결 서버 연결 지연"
+          : data?.error === "storage_unavailable" ? "대규모 체결 저장소 조회 지연"
+            : stale && !failed ? "대규모 체결 갱신 지연" : "대규모 체결 수집 소스 확인 실패",
+        summary: whaleActivityNotice(state),
         occurredAt: data?.collection?.last_attempt_at || data?.observed_at || 0});
     } else if (pending && alertConditions["whale-connection"]) {
       // A collector retry is not a recovered source. Keep one incident until
       // a successful snapshot arrives, even while the shared cache is pending.
       events.unshift({conditionKey: "whale-connection",
         conditionValue: alertConditions["whale-connection"], silent: true});
+    } else if (data && alertConditions["whale-connection"]) {
+      events.unshift({ resolvesCondition: "whale-connection", title: "대규모 체결 연결 복구",
+        summary: "새 체결 자료 조회에 성공했어요. 이전 연결 경고는 종료됐어요." });
     }
     return events;
   },

@@ -18,6 +18,17 @@ services:
       mountPath: /var/data/market-cache
       sizeGB: 1
     envVars:
+      # 웹: 일반 요청 2 + heartbeat 예약 1 + LISTEN 1 = 최대 4.
+      - key: DATABASE_POOL_SIZE
+        value: "2"
+      - key: DATABASE_RUNNER_POOL_SIZE
+        value: "1"
+      - key: DATABASE_POOL_TIMEOUT_SECONDS
+        value: "2"
+      - key: DATABASE_RUNNER_POOL_TIMEOUT_SECONDS
+        value: "1"
+      - key: DATABASE_CONNECT_TIMEOUT_SECONDS
+        value: "3"
       - key: MARKET_CACHE_DIR
         value: /var/data/market-cache
       - key: POSITION_NEWS_EMBEDDED_ENABLED
@@ -100,6 +111,14 @@ services:
     dockerCommand: python -m app.workflows.position_news serve
     maxShutdownDelaySeconds: 300
     envVars:
+      # supervisor 1 + 격리 뉴스 자식 프로세스 1 = 최대 2.
+      # steady 합계 6, 구/신 프로세스 동시 존재 시 12 (15 중 3 여유).
+      - key: DATABASE_POOL_SIZE
+        value: "1"
+      - key: DATABASE_CONNECT_TIMEOUT_SECONDS
+        value: "3"
+      - key: DATABASE_POOL_TIMEOUT_SECONDS
+        value: "2"
       - key: POSITION_NEWS_REQUIRE_POSTGRES
         value: "true"
       - key: POSITION_NEWS_COLLECTION_SECONDS

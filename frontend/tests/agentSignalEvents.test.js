@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { leaderModule } from "../src/features/agents/modules/leader.js";
+import { leaderModule, whaleActivityNotice } from "../src/features/agents/modules/leader.js";
 import { strategyModule } from "../src/features/agents/modules/strategy.js";
 import { positionNewsModule } from "../src/features/agents/positionNews/events.js";
 
@@ -21,6 +21,31 @@ const strategyContext = {
   session: { session_id: 7, position_side: "long" },
   interval: "1m", candles,
 };
+
+test("unsupported domestic whale pairs are a current support notice, never a retry incident", () => {
+  const data = { status: "unavailable", error: "unsupported_pair", symbol: "KRW-ORCA", items: [] };
+  for (let visit = 0; visit < 3; visit++) {
+    assert.deepEqual(whaleEvents(data), []);
+    assert.match(whaleActivityNotice({ data }), /아직 지원하지 않/);
+    assert.doesNotMatch(whaleActivityNotice({ data }), /재시도|연결 확인/);
+  }
+});
+
+test("whale loading, successful empty, storage failure and transport failure are distinct", () => {
+  assert.deepEqual(whaleEvents(null), []);
+  assert.match(whaleActivityNotice({ data: null, error: "" }), /불러오/);
+  assert.match(whaleActivityNotice({ data: { status: "empty", items: [] } }), /대규모 체결이 없/);
+  assert.match(whaleActivityNotice({ data: { status: "unavailable", error: "storage_unavailable" } }), /저장소/);
+  assert.match(whaleActivityNotice({ data: null, error: "offline" }), /서버/);
+});
+
+test("news transport and collector errors do not imply the same failed connection", () => {
+  const [transport] = newsEvents(null, { status: "error" });
+  const [source] = newsEvents({ items: [], collection: { status: "error" } }, { status: "ready" });
+  assert.match(transport.title, /서버 연결/);
+  assert.match(source.title, /수집 소스/);
+  assert.notEqual(transport.conditionValue, source.conditionValue);
+});
 
 test("ordinary strategy scans and waiting or empty whale snapshots do not create chat entries", () => {
   assert.deepEqual(strategyModule.buildEvents({ ...strategyContext, candles: candles.slice(0, 2) }), []);

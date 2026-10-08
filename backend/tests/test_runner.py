@@ -349,21 +349,21 @@ def test_runner_download_info_advertises_launch_capability_safely():
     if info["supports_launch"]:
         assert info["launch_scheme"] == "ggparrot"
         assert info["min_runner_version"]
-        if "/runner-v10/" in info["url"]:
+        if "/runner-v12/" in info["url"]:
             assert int(info["min_runner_version"]) >= 6
-            assert int(info["version"]) >= 10
+            assert int(info["version"]) >= 12
     else:
         assert info["launch_scheme"] == ""
         assert info["min_runner_version"] == ""
 
 
-def test_runner_download_redirect_matches_advertised_v10():
+def test_runner_download_redirect_matches_advertised_v12():
     info = client.get("/api/runner/download/info").json()
     response = client.get("/api/runner/download", follow_redirects=False)
     assert response.status_code == 307
     assert response.headers["location"] == info["url"]
-    assert "/runner-v10/" in info["url"]
-    assert info["version"] == "10"
+    assert "/runner-v12/" in info["url"]
+    assert info["version"] == "12"
     assert response.headers["cache-control"] == "no-store"
 
 

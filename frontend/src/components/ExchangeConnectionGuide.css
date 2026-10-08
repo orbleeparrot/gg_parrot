@@ -1,0 +1,36 @@
+.exchange-connect { min-width: 0; color: rgb(var(--c-slate-900)); }
+.exchange-connect-heading { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 20px; }
+.exchange-connect-heading img { object-fit: contain; flex-shrink: 0; }
+.exchange-connect-heading p { margin-top: 6px; color: rgb(var(--c-slate-700)); }
+.exchange-connect-key-mode { display: flex; flex-wrap: wrap; gap: 12px; }
+.exchange-connect-key-mode button { border: 1px solid transparent; }
+.exchange-connect-key-mode button[aria-pressed="true"] { border-color: rgb(var(--c-brand-line)); color: rgb(var(--c-slate-900)); }
+.exchange-connect-mode-note { margin: 12px 0 20px; color: rgb(var(--c-slate-700)); }
+.exchange-connect-nav { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-bottom: 1px solid rgb(var(--c-slate-300)); gap: 4px; }
+.exchange-connect-nav button { display: flex; align-items: center; gap: 8px; min-height: 48px; padding: 10px 8px; color: rgb(var(--c-slate-700)); text-align: left; border-bottom: 3px solid transparent; overflow-wrap: anywhere; }
+.exchange-connect-nav button[aria-current] { color: rgb(var(--c-slate-900)); border-color: rgb(var(--c-brand-line)); font-weight: 700; }
+.exchange-connect-panel { padding: 24px 0; }
+.exchange-connect-copy > p { color: rgb(var(--c-slate-700)); margin-bottom: 12px; }
+.exchange-connect-copy h3 { margin-bottom: 16px; }
+.exchange-connect-copy h3:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 4px; }
+.exchange-connect-checklist { margin: 16px 0; padding-left: 20px; list-style: disc; color: rgb(var(--c-slate-700)); }
+.exchange-connect-checklist li + li { margin-top: 8px; }
+.exchange-connect-footer { border-top: 1px solid rgb(var(--c-slate-300)); padding-top: 16px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.exchange-connect-source { color: rgb(var(--c-slate-700)); margin-top: 20px; line-height: 1.6; }
+.exchange-connect-source a { text-decoration: underline; }
+.exchange-connect :is(button, a):focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 3px; }
+.exchange-connect .btn, .exchange-connect-exchanges .btn { min-width: 44px; min-height: 44px; }
+.exchange-connect-page { max-width: 980px; margin: 0 auto; padding: 0 20px; }
+.exchange-connect-page > header { margin-bottom: 28px; }
+.exchange-connect-page > header p { color: rgb(var(--c-slate-700)); margin-top: 12px; }
+.exchange-connect-exchanges { display: flex; gap: 12px; margin: 20px 0; }
+.exchange-connect-exchanges a { display: flex; align-items: center; gap: 8px; }
+.exchange-connect-exchanges a[aria-current] { border-color: rgb(var(--c-slate-700)); }
+.exchange-connect-exchanges img { width: 20px; height: 20px; object-fit: contain; }
+@media (max-width: 680px) {
+  .exchange-connect-nav button { gap: 4px; padding-inline: 4px; }
+  .exchange-connect-page { padding: 0 12px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .exchange-connect * { animation: none !important; transition: none !important; }
+}

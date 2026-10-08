@@ -375,9 +375,9 @@ class DomesticApiError(RuntimeError):
 # 허용 IP 를 먼저 말해야 하는 오류들. 두 거래소 모두 호출 IP 를 등록해야 하는데 집 IP 는 바뀐다.
 # 그런데 "키가 틀렸다" 로만 알리면 사용자가 키를 다시 발급하며 헛수고를 한다.
 # 이름은 거래소마다 다르다 — 업비트 no_authorization_ip, 빗썸 NotAllowIP (각 공식 문서의 오류 표).
-_IP_FIRST_ERRORS = frozenset({"no_authorization_ip", "NotAllowIP", "invalid_access_key", "jwt_verification",
+_IP_FIRST_ERRORS = frozenset({"no_authorization_ip", "NotAllowIP", "invalid_access_key",
                               "no_authorization_token"})
-_EXPIRED_KEY_ERRORS = frozenset({"expired_access_key", "expired_jwt"})
+_EXPIRED_KEY_ERRORS = frozenset({"expired_access_key"})
 _NO_FUNDS_ERRORS = frozenset({"insufficient_funds_bid", "insufficient_funds_ask"})
 _MARKET_ERRORS = frozenset({"notfoundmarket", "invalid_market", "market_offline"})
 
@@ -393,10 +393,18 @@ def _explain_domestic_error(exchange: str, status: int, name: str, message: str)
         # 서명·본문 해시가 어긋났다는 뜻이라 우리 쪽 요청 조립 오류다. 허용 IP 를 먼저 말하면 사용자가 엉뚱한 곳을 뒤진다.
         return (f"{label} 가 요청 서명을 검증하지 못했어요({name}). API 키나 허용 IP 설정으로 "
                 f"고쳐지는 문제가 아니라 프로그램이 만든 요청의 문제입니다. 개발팀에 알려주세요.")
+    if name == "jwt_verification":
+        return (f"{label}가 인증 토큰(JWT) 서명을 검증하지 못했어요({name}). "
+                "API 키와 시크릿이 같은 발급 건인지, 시크릿을 빠짐없이 붙여 넣었는지 확인하고 "
+                "다시 연결 검사하세요. 계속 실패하면 요청 서명을 개발팀이 확인해야 합니다.")
     if name == "out_of_scope":
         return f"이 API 키에 주문 권한이 없어요({name}). {label} API 관리에서 주문하기 권한을 켠 키를 쓰세요."
+    if name == "expired_jwt":
+        return (f"요청 인증 토큰(JWT)이 만료됐어요({name}). API 키 만료를 뜻하지는 않습니다. "
+                "PC 시각을 동기화한 뒤 다시 연결 검사하세요. 요청마다 새 nonce와 timestamp로 "
+                "인증 토큰을 만들어야 하며, 계속 실패하면 개발팀에 알려주세요.")
     if name in _EXPIRED_KEY_ERRORS:
-        return f"API 키가 만료됐어요({name}). {label} API 관리에서 키를 연장하거나 새로 발급하세요."
+        return f"API 키가 만료됐어요({name}). {label} API 관리에서 만료된 키를 삭제하고 새 키를 발급하세요."
     if name.startswith("under_min_total"):
         return f"최소 주문 금액보다 적어요({name}). 주문 금액을 {label} 최소 주문 금액 이상으로 올리세요."
     if name in _NO_FUNDS_ERRORS:
@@ -411,7 +419,7 @@ def _explain_domestic_error(exchange: str, status: int, name: str, message: str)
 
 # 키 · 허용 IP · 권한 · 서명 때문에 막힌 오류들. '마켓이 없다' 와 같은 칸에 넣으면 안 된다 —
 # 사람이 고쳐야 할 곳이 (심볼 이름이 아니라) 허용 IP 와 키라서 안내가 완전히 달라진다.
-_ACCESS_ERRORS = _IP_FIRST_ERRORS | _EXPIRED_KEY_ERRORS | frozenset({"out_of_scope", "invalid_query_payload"})
+_ACCESS_ERRORS = _IP_FIRST_ERRORS | _EXPIRED_KEY_ERRORS | frozenset({"out_of_scope", "invalid_query_payload", "expired_jwt", "jwt_verification"})
 
 
 def _is_access_error(exc: "DomesticApiError") -> bool:

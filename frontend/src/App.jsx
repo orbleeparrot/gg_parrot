@@ -10,11 +10,13 @@ import SiteHeader from "./components/SiteHeader.jsx";
 import DevNoteDialog from "./components/DevNoteDialog.jsx";
 import RouteErrorBoundary from "./components/RouteErrorBoundary.jsx";
 import { recordVisit } from "./lib/visit.js";
+import { PRO_BUILDER_OPEN } from "./lib/proBuilder.js";
 
 // Keep the first screen small and quick. The builder, charts, guide, and
 // community screens are fetched only when their route is opened.
 const Studio = lazy(() => import("./pages/Studio.jsx"));
 const StudioPro = lazy(() => import("./pages/StudioPro.jsx"));
+const ProBuilderClosed = lazy(() => import("./pages/ProBuilderClosed.jsx"));
 const Leaderboard = lazy(() => import("./pages/Leaderboard.jsx"));
 const Auth = lazy(() => import("./pages/Auth.jsx"));
 const MyPage = lazy(() => import("./pages/MyPage.jsx"));
@@ -188,7 +190,8 @@ export default function App() {
             <Routes>
               <Route path="/" element={<HomeRoute />} />
               <Route path="/builder" element={<Studio />} />
-              <Route path="/builder/pro" element={<StudioPro />} />
+              {/* 프로 빌더 잠금 — lib/proBuilder.js 의 한 줄로 열고 닫는다. StudioPro 는 그대로 둔다. */}
+              <Route path="/builder/pro" element={PRO_BUILDER_OPEN ? <StudioPro /> : <ProBuilderClosed />} />
               <Route path="/s/:slug" element={<Studio />} />
               <Route path="/mypage" element={<MyPage />} />
               <Route path="/mypage/settings" element={<ProfileSettings />} />

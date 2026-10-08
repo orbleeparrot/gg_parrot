@@ -1,6 +1,6 @@
 import { forwardRef, useImperativeHandle, useLayoutEffect, useRef } from "react";
 import { CandlestickSeries, LineSeries, createChart, CrosshairMode, LineStyle, PriceLineSource } from "lightweight-charts";
-import { fmtPrice } from "../lib/format.js";
+import { fmtPrice, quoteOf } from "../lib/format.js";
 import { StrategyPrimitive, resolveChartColor, RSI_SCALE_MARGINS } from "../lib/chartStrategyPrimitive.js";
 import { candleData, canUpdateCandleData, sameCandleData, constrainCandleRange, restoreCandleRange, overlayPriceRange, priceMinMove } from "../lib/candleChartData.js";
 import { chartClockKst, chartDateKst, chartTimeKst } from "../lib/chartSource.js";
@@ -207,7 +207,14 @@ const CandlePlot = forwardRef(function CandlePlot({ candles, overlay, symbol, ex
     state.changing = true;
     state.rows = candles;
     state.overlay = overlay;
-    series.applyOptions({ priceFormat: { type: "custom", formatter: (value) => fmtPrice(value, symbol), minMove: priceMinMove(candles.at(-1).c) } });
+    // 원화 1,000원 이상은 호가 단위가 정수다. 라이브러리는 가격축 폭을 '110,000,000.11' 같은 소수 붙은 값으로 재므로,
+    // 그대로 두면 원화 차트만 '.11' 세 글자만큼 축이 넓어져 오른쪽이 비었다(휴대폰에서 약 30px). 축·십자선만 정수로.
+    const wonInt = quoteOf(symbol) === "KRW" && Math.abs(candles.at(-1).c) >= 1000;
+    series.applyOptions({ priceFormat: {
+      type: "custom",
+      formatter: wonInt ? (value) => fmtPrice(Math.round(value), symbol) : (value) => fmtPrice(value, symbol),
+      minMove: wonInt ? 1 : priceMinMove(candles.at(-1).c),
+    } });
     if (canUpdate) {
       for (let i = Math.max(0, state.data.length - 2); i < next.length; i++) {
         if (!sameCandleData(state.data[i], next[i])) series.update(next[i], i < state.data.length - 1);

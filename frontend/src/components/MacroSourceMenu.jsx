@@ -19,8 +19,9 @@ function SrcIcon({ kind }) {
   return name ? <Icon name={name} size={16} strokeWidth={2} className="studio-src-ic" /> : null;
 }
 
+// floating — 휴대폰 직접 만들기의 화면 아래 떠 있는 '껄무새에게 물어볼까?' 버튼(2026-10-08). 같은 메뉴가 위로 열린다.
 export default function MacroSourceMenu({
-  source, symbol, token, disabled = false, busy = false, flash = null, shared = false,
+  source, symbol, token, disabled = false, busy = false, flash = null, shared = false, floating = false,
   onAsk, onUpload, onReset, onBoard,
 }) {
   const [open, setOpen] = useState(false);
@@ -60,20 +61,25 @@ export default function MacroSourceMenu({
   );
 
   return (
-    <div className="studio-src" ref={rootRef}>
+    <div className={"studio-src" + (floating ? " studio-fab" : "") + (prompt ? " is-prompt" : "")} ref={rootRef}>
       <button
         ref={btnRef}
         type="button"
-        className={`studio-src-badge is-${tone}`}
+        className={floating ? "studio-fab-btn" : `studio-src-badge is-${tone}`}
         onClick={() => setOpen((v) => !v)}
         disabled={disabled}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={menuId}
-        aria-label={aria}
-        title={badge.title}
+        aria-label={floating ? "껄무새에게 물어볼까? · 매크로 출처 고르기" : aria}
+        title={floating ? undefined : badge.title}
       >
-        {inner}
+        {floating ? (
+          <>
+            <img src={ASK_MASCOT} alt="" width="100" height="100" className="studio-fab-face" aria-hidden="true" />
+            <span>{busy ? "파일 읽는 중" : "껄무새에게 물어볼까?"}</span>
+          </>
+        ) : inner}
         <span className="studio-src-chev" aria-hidden="true" />
       </button>
       {open && (

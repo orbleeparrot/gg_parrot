@@ -242,6 +242,16 @@ function ManualPick({ chips, onPick, disabled, i, exchange }) {
   const { items, loading, error, reload, stale, canChoose } = useSymbolList(exchange);
   const q = query.trim();
   const matches = items && q ? searchSymbols(items, q, { limit: 8 }) : [];
+  // 낡은 목록 안내는 보여 주지 않는다(2026-10-08, 빌더 종목 칸과 같은 결정). 대신 낡은 목록에서 검색이 빗나가면
+  // 검색어마다 한 번 조용히 다시 받는다 — 막 상장된 종목을 찾을 수 있게(안내의 '다시 확인'이 하던 일).
+  const staleMissRef = useRef("");
+  useEffect(() => {
+    if (!stale || loading || !items || !q || matches.length) return;
+    const key = `${exchange}|${q.toUpperCase()}`;
+    if (staleMissRef.current === key) return;
+    staleMissRef.current = key;
+    reload();
+  }, [exchange, items, loading, matches.length, q, reload, stale]);
   const pick = (symbol, resolved = false) => {
     if (disabled) return;
     if (!canChoose(symbol)) { setNote("종목 목록이 변경되었거나 오래되었어요. 다시 확인한 뒤 선택해 주세요."); reload(); return; }
@@ -259,7 +269,12 @@ function ManualPick({ chips, onPick, disabled, i, exchange }) {
   return (
     <section className="ask-manual ask-in" style={{ "--i": i }} aria-label={MANUAL_PICK_LABEL}>
       <h4 className="ask-manual-t">{MANUAL_PICK_LABEL}</h4>
-      {stale || error ? <p className="ask-miss" role="status">{items ? "마지막 확인한 목록이에요. 새 상장·거래 종료가 아직 반영되지 않았을 수 있어요." : error || "종목 목록을 확인하고 있어요."} <button type="button" className="btn btn-s btn-secondary" onClick={reload}>다시 확인</button></p> : null}
+      {!items && error ? (
+        <div className="ask-stale">
+          <p className="ask-miss" role="status">{error}</p>
+          <button type="button" className="btn btn-s btn-secondary" onClick={reload}>다시 확인</button>
+        </div>
+      ) : null}
       {chips.length ? (
         <div className="ask-chips">
           {chips.map((sym) => (
@@ -411,9 +426,10 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
     if (best !== active) setActive(best);
   };
 
-  // 요청이 도는 중에는 Esc 로도 닫지 못한다(중간 취소 금지). 열려 있는 동안 뒤의 앱은 누를 수 없다 —
-  // 헤더의 종·회원 키를 누르면 스크림이 받아 창이 닫히며 답이 초기화되던 문제.
-  useModalLayer({ open, ref: dialogRef, onEscape: onClose, busy, trap: true, inertRoot: true });
+  // 요청이 도는 중에는 Esc 로도 닫지 못한다(중간 취소 금지). 스크림은 헤더 아래에서 시작한다 — 헤더는 열려 있는
+  // 동안에도 누를 수 있어야 한다(휴대폰에서 메뉴·종·회원 키). 그래서 #root 를 inert 로 잠그지 않고, 헤더의 종·회원
+  // 판이 스크림 밑에 깔려 그 판을 누르면 창이 닫히던 문제는 헤더를 스크림 위로 올려 막는다(AskParrotDialog.css).
+  useModalLayer({ open, ref: dialogRef, onEscape: onClose, busy, trap: true });
 
   useEffect(() => {
     if (!open) return undefined;

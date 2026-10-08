@@ -62,7 +62,10 @@ export const NO_RESULTS_TEXT = "이 조건으론 살아남은 후보가 없었�
 export const LOADED_TEXT = "조건 판에 불러왔어요. 숫자 한 번 보고 백테스트부터 돌려 보세요";
 
 // 보여 준 조합이 전부 '그냥 들고 있기' 에 졌을 때 (2026-09-23) — 매크로가 늘 답은 아니라고 먼저 말한다.
-export const LOST_TO_HOLD_TEXT = "이번엔 그냥 사서 들고 있는 게 더 나았어요. 아래는 그래도 나은 편이었던 조합이에요.";
+// 2026-10-08: "그래도 나은 편이었던 조합" 을 보여 주던 문구를 뺐다. 홀딩을 못 넘긴 조합은
+// 이제 아예 올라오지 않으므로(ask.worth_the_macro), 그럴 땐 추천 대신 이렇게 말한다.
+export const NO_EDGE_TEXT = "이번 조건에선 그냥 들고 있는 게 나았어요.";
+export const NO_EDGE_NOTE = "과거 데이터로 돌려 보니 '그냥 사서 들고 있기' 를 뚜렷하게 넘긴 조합이 없었어요. 기간이나 종목, 보는 빈도를 바꿔 다시 물어봐 주세요.";
 
 // 직접 고를래요 — 거래 가능한 종목을 검색해서 고른다.
 export const MANUAL_SEARCH_PLACEHOLDER = "종목 검색 (예: AVAX)";

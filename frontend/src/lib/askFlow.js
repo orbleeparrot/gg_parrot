@@ -36,7 +36,7 @@ export function initialState() {
   return {
     step: "exchange", answers: emptyAnswers(), phase: "cards",
     session: null, candidates: [], manualSymbols: [],
-    results: null, lostToHold: false, remaining: null, error: "",
+    results: null, noEdge: false, remaining: null, error: "",
   };
 }
 
@@ -132,7 +132,7 @@ export function reduce(state, action) {
       return { ...state, phase: "loadingResults", error: "" };
     case "results":
       return { ...state, phase: "results", results: action.results || [],
-               lostToHold: !!action.lostToHold,
+               noEdge: !!action.noEdge,
                remaining: action.remaining ?? state.remaining, error: "" };
     case "error":
       return { ...state, phase: "error", error: String(action.message || "잠시 뒤 다시 물어봐 주세요.") };

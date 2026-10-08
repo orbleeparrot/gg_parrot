@@ -1,6 +1,6 @@
 // 껄무새에게 물어볼까? 결과·후보 카드가 보여 줄 값을 만드는 순수 함수들 (2026-09-30 재설계).
 // 숫자는 전부 서버가 계산한 값이고, 여기서는 모양만 바꾼다 — 없는 값을 만들어 내지 않는다.
-import { FEW_RESULTS_TEXT, NO_RESULTS_TEXT, TOP_RESULTS_TEXT } from "./askCopy.js";
+import { FEW_RESULTS_TEXT, NO_EDGE_TEXT, NO_RESULTS_TEXT, TOP_RESULTS_TEXT } from "./askCopy.js";
 import { quoteForExchange } from "./exchanges.js";
 
 const num = (v) => (v == null || v === "" || Number.isNaN(Number(v)) ? null : Number(v));
@@ -30,8 +30,10 @@ export function holdOf(results = []) {
   return found ? Number(found.hold_return_pct) : null;
 }
 
-export function resultsHeadline(count) {
-  if (!count) return NO_RESULTS_TEXT;
+// 빈 결과의 이유가 둘이다. 돌렸는데 홀딩을 못 넘긴 것(noEdge)과, 애초에 살아남은 후보가
+// 없던 것(시세 부족 · MDD 상한 · 거래 수). 하는 말이 달라야 한다.
+export function resultsHeadline(count, noEdge = false) {
+  if (!count) return noEdge ? NO_EDGE_TEXT : NO_RESULTS_TEXT;
   return count < 3 ? FEW_RESULTS_TEXT : TOP_RESULTS_TEXT;
 }
 

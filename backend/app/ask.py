@@ -40,9 +40,23 @@ log = logging.getLogger(__name__)
 
 DISCLAIMER_VERSION = "ask-v2"
 DISCLAIMER = "AI 가 과거 데이터로 고른 후보예요 · 투자 권유가 아니에요 · 과거 성과는 미래 수익을 보장하지 않아요"
-MAX_CANDIDATES = 24
+# 후보 상한과 시간 예산 — 2026-10-08 에 넓혔다(프리셋이 유형당 4~5개가 되었다).
+# 실제로 몇 개가 평가되는지를 정하는 것은 이 상한이 아니라 time_budget_sec() 다:
+# evaluate() 가 후보마다 예산을 확인하고 넘으면 거기서 멈춘다.
+MAX_CANDIDATES = 90
 TOP_N = 3
 MIN_TRADES = 3
+# 한 추천이 "그냥 들고 있기" 를 넘었다고 인정할 최소 초과 수익(%p). worth_the_macro 가 쓴다.
+# 환경변수 ASK_MIN_EXCESS_PCT 로 바꿀 수 있다(0 이면 문턱 없음).
+MIN_EXCESS_PCT = 3.0
+# 같은 매매 방식을 최대 몇 칸까지 보여 줄지.
+#
+# 1 로 둔다. 2 로 올리면 같은 유형의 다른 프리셋이 나란히 올 수 있는데, `_label` 이
+# "<방식> · <봉> · <종목>" 이라 **제목이 똑같아지고** 화면의 카드 키도 label + rule_type 이라
+# 겹친다. 올리려면 레이블에 설정을 드러내는 일이 먼저다.
+# 예전에 "다양성이 품질을 밀어낸다" 던 문제는 홀딩 문턱(worth_the_macro)이 대신 막는다 —
+# 이제 둘째·셋째 칸도 홀딩을 MIN_EXCESS_PCT 만큼 넘긴 것만 올라온다.
+MAX_PER_TYPE = 1
 CAPITAL = 1_000_000
 SESSION_TTL_MS = 30 * 60 * 1000
 MAX_ASKS_PER_SESSION = 6
@@ -163,38 +177,74 @@ class Candidate:
 
 
 # 유형별 파라미터 프리셋. 절대 가격이 필요한 B·D 는 없다. C 는 initial_capital 을 스스로 계산한다.
+#
+# 2026-10-08: 유형당 1~2개 → 4~5개로 넓혔다. 이유는 "홀딩이나 다름없는 결과" 였다 —
+# 프리셋이 종목·기간에 안 맞으면 그 유형에서 건질 게 없는데도 그중 제일 나은 것이 추천으로
+# 올라왔다. 넓힌 축은 손절·익절 폭과 지표 기간이다(결과를 가장 크게 바꾸는 둘).
+# 뒤쪽 프리셋은 시간 예산에 잘릴 수 있다 — build_templates 가 프리셋 번호 순으로 내보내므로
+# 잘려도 유형별 첫 프리셋은 전부 평가된다.
 _PRESETS: dict[str, list[dict]] = {
+    # C 는 _make_macro 가 기간에서 amount_per_buy 를 다시 계산하므로 interval_days 만 의미가 있다.
     "C": [
         {"params": {"amount_per_buy": 50_000, "interval_days": 1}},
+        {"params": {"amount_per_buy": 50_000, "interval_days": 3}},
         {"params": {"amount_per_buy": 100_000, "interval_days": 7}},
+        {"params": {"amount_per_buy": 100_000, "interval_days": 14}},
     ],
     "A": [
         {"params": {"take_profit_pct": 3, "initial_capital": CAPITAL}, "risk": {"stop_loss_pct": 2}},
         {"params": {"take_profit_pct": 5, "initial_capital": CAPITAL}, "risk": {"stop_loss_pct": 3}},
+        {"params": {"take_profit_pct": 2, "initial_capital": CAPITAL}, "risk": {"stop_loss_pct": 1.5}},
+        {"params": {"take_profit_pct": 8, "initial_capital": CAPITAL}, "risk": {"stop_loss_pct": 4}},
+        {"params": {"take_profit_pct": 12, "initial_capital": CAPITAL}, "risk": {"stop_loss_pct": 6}},
     ],
     "J": [
         {"params": {"ma_type": "SMA", "fast_period": 20, "slow_period": 60, "initial_capital": CAPITAL}},
         {"params": {"ma_type": "EMA", "fast_period": 10, "slow_period": 30, "initial_capital": CAPITAL}},
+        {"params": {"ma_type": "EMA", "fast_period": 5, "slow_period": 20, "initial_capital": CAPITAL}},
+        {"params": {"ma_type": "SMA", "fast_period": 50, "slow_period": 200, "initial_capital": CAPITAL}},
+        {"params": {"ma_type": "EMA", "fast_period": 12, "slow_period": 26, "exit_signal": "both",
+                    "take_profit": 8, "initial_capital": CAPITAL}},
     ],
     "G": [
         {"params": {"bb_period": 20, "bb_std": 2.0, "strategy": "reversion", "exit_target": "mid", "initial_capital": CAPITAL}},
         {"params": {"bb_period": 20, "bb_std": 2.5, "strategy": "reversion", "exit_target": "opposite", "initial_capital": CAPITAL}},
+        {"params": {"bb_period": 10, "bb_std": 1.8, "strategy": "reversion", "exit_target": "mid", "initial_capital": CAPITAL}},
+        {"params": {"bb_period": 20, "bb_std": 2.0, "strategy": "breakout", "exit_target": "mid", "initial_capital": CAPITAL}},
+        {"params": {"bb_period": 50, "bb_std": 2.5, "strategy": "reversion", "exit_target": "mid", "initial_capital": CAPITAL}},
     ],
     "F": [
         {"params": {"rsi_period": 14, "entry_threshold": 30, "exit_threshold": 70, "initial_capital": CAPITAL}},
         {"params": {"rsi_period": 14, "entry_threshold": 25, "exit_threshold": 65, "exit_mode": "both", "take_profit": 5, "initial_capital": CAPITAL}},
+        {"params": {"rsi_period": 7, "entry_threshold": 20, "exit_threshold": 80, "initial_capital": CAPITAL}},
+        {"params": {"rsi_period": 21, "entry_threshold": 35, "exit_threshold": 65, "initial_capital": CAPITAL}},
+        {"params": {"rsi_period": 14, "entry_threshold": 30, "exit_threshold": 70, "exit_mode": "both", "take_profit": 3, "initial_capital": CAPITAL}},
     ],
     "E": [
         {"params": {"entry_mode": "immediate", "activation_profit": 5, "trail_percent": 3, "initial_capital": CAPITAL}},
         {"params": {"entry_mode": "dip", "entry_dip": 3, "activation_profit": 4, "trail_percent": 2, "initial_capital": CAPITAL}},
+        {"params": {"entry_mode": "immediate", "activation_profit": 2, "trail_percent": 1.5, "initial_capital": CAPITAL}},
+        {"params": {"entry_mode": "dip", "entry_dip": 5, "activation_profit": 8, "trail_percent": 4, "initial_capital": CAPITAL}},
+        {"params": {"entry_mode": "immediate", "activation_profit": 10, "trail_percent": 5, "initial_capital": CAPITAL}},
     ],
     "I": [
         {"params": {"k": 0.5, "exit_mode": "next_open", "initial_capital": CAPITAL}},
         {"params": {"k": 0.6, "exit_mode": "trailing", "trail_percent": 2, "ma_filter_period": 20, "initial_capital": CAPITAL}},
+        {"params": {"k": 0.3, "exit_mode": "next_open", "initial_capital": CAPITAL}},
+        {"params": {"k": 0.8, "exit_mode": "trailing", "trail_percent": 3, "initial_capital": CAPITAL}},
+        {"params": {"k": 0.5, "exit_mode": "take_profit", "take_profit": 5, "initial_capital": CAPITAL}},
     ],
+    # H 는 최악의 경우(기본 주문 + 세이프티 전부 체결)가 자금을 넘으면 스키마가 거절한다.
+    # 아래 넷은 모두 100만원 예산의 60% 안에 든다.
     "H": [
         {"params": {"base_order_size": 100_000, "safety_order_size": 100_000, "price_deviation": 2,
                     "max_safety_orders": 5, "take_profit": 2, "initial_capital": CAPITAL}},
+        {"params": {"base_order_size": 80_000, "safety_order_size": 80_000, "price_deviation": 3,
+                    "max_safety_orders": 6, "take_profit": 3, "initial_capital": CAPITAL}},
+        {"params": {"base_order_size": 60_000, "safety_order_size": 60_000, "price_deviation": 1.5,
+                    "max_safety_orders": 8, "take_profit": 1.5, "initial_capital": CAPITAL}},
+        {"params": {"base_order_size": 150_000, "safety_order_size": 100_000, "price_deviation": 4,
+                    "max_safety_orders": 4, "take_profit": 5, "initial_capital": CAPITAL}},
     ],
 }
 
@@ -203,24 +253,36 @@ _SCALPER_PRESETS: dict[str, list[dict]] = {
     "A": [
         {"params": {"take_profit_pct": 1.0, "initial_capital": CAPITAL}, "risk": {"stop_loss_pct": 0.7}},
         {"params": {"take_profit_pct": 1.5, "initial_capital": CAPITAL}, "risk": {"stop_loss_pct": 1.0}},
+        {"params": {"take_profit_pct": 0.8, "initial_capital": CAPITAL}, "risk": {"stop_loss_pct": 0.5}},
+        {"params": {"take_profit_pct": 2.0, "initial_capital": CAPITAL}, "risk": {"stop_loss_pct": 1.2}},
     ],
     "E": [
         {"params": {"entry_mode": "immediate", "activation_profit": 1.5, "trail_percent": 0.8, "initial_capital": CAPITAL},
          "risk": {"stop_loss_pct": 0.7}},
         {"params": {"entry_mode": "dip", "entry_dip": 1.0, "activation_profit": 1.2, "trail_percent": 0.6, "initial_capital": CAPITAL},
          "risk": {"stop_loss_pct": 0.5}},
+        {"params": {"entry_mode": "immediate", "activation_profit": 0.8, "trail_percent": 0.4, "initial_capital": CAPITAL},
+         "risk": {"stop_loss_pct": 0.4}},
+        {"params": {"entry_mode": "dip", "entry_dip": 2.0, "activation_profit": 2.5, "trail_percent": 1.2, "initial_capital": CAPITAL},
+         "risk": {"stop_loss_pct": 1.0}},
     ],
     "F": [
         {"params": {"rsi_period": 7, "entry_threshold": 25, "exit_threshold": 75, "initial_capital": CAPITAL}},
         {"params": {"rsi_period": 14, "entry_threshold": 30, "exit_threshold": 70, "exit_mode": "both", "take_profit": 1.5, "initial_capital": CAPITAL}},
+        {"params": {"rsi_period": 5, "entry_threshold": 20, "exit_threshold": 80, "initial_capital": CAPITAL}},
+        {"params": {"rsi_period": 9, "entry_threshold": 28, "exit_threshold": 72, "exit_mode": "both", "take_profit": 1.0, "initial_capital": CAPITAL}},
     ],
     "G": [
         {"params": {"bb_period": 20, "bb_std": 2.0, "strategy": "reversion", "exit_target": "mid", "initial_capital": CAPITAL}},
         {"params": {"bb_period": 20, "bb_std": 2.5, "strategy": "reversion", "exit_target": "opposite", "initial_capital": CAPITAL}},
+        {"params": {"bb_period": 10, "bb_std": 1.8, "strategy": "reversion", "exit_target": "mid", "initial_capital": CAPITAL}},
+        {"params": {"bb_period": 30, "bb_std": 2.2, "strategy": "reversion", "exit_target": "mid", "initial_capital": CAPITAL}},
     ],
     "J": [
         {"params": {"ma_type": "EMA", "fast_period": 5, "slow_period": 13, "initial_capital": CAPITAL}},
         {"params": {"ma_type": "EMA", "fast_period": 9, "slow_period": 21, "initial_capital": CAPITAL}},
+        {"params": {"ma_type": "EMA", "fast_period": 3, "slow_period": 10, "initial_capital": CAPITAL}},
+        {"params": {"ma_type": "SMA", "fast_period": 10, "slow_period": 30, "initial_capital": CAPITAL}},
     ],
 }
 
@@ -393,34 +455,58 @@ def score(profile: str, result: BacktestResult) -> float:
     return ret
 
 
-def all_lost_to_hold(picked: list["Evaluated"]) -> bool:
-    """보여 줄 조합이 하나도 홀딩을 못 이겼는가 — 그러면 화면 맨 위에서 먼저 알린다.
+def min_excess_pct() -> float:
+    """매크로를 쓴 값어치로 인정할 최소 초과 수익(%p). 0 이면 문턱이 없다."""
+    try:
+        return max(0.0, float(os.environ.get("ASK_MIN_EXCESS_PCT", str(MIN_EXCESS_PCT))))
+    except ValueError:
+        return MIN_EXCESS_PCT
 
-    홀딩 기준을 못 구한 결과가 섞여 있으면 '졌다' 고 단정하지 않는다(빈 목록도 마찬가지).
+
+def worth_the_macro(result: BacktestResult) -> bool:
+    """추천으로 내보낼 값어치가 있는가.
+
+    2026-10-08 사용자 결정: "가만히 홀딩만 해도 괜찮았다" 는 결과는 추천이 아니다. 두 조건을
+    **둘 다** 넘겨야 한다.
+
+    1) 그 자체로 벌었다 — 홀딩이 -30% 일 때 -10% 는 초과 수익 +20%p 지만 여전히 손실이다.
+    2) 홀딩을 문턱(MIN_EXCESS_PCT, %p)만큼 넘었다 — 초과 수익이 0 근처면 그냥 들고 있는 것과
+       구분되지 않는다. 분할매수(C)가 바로 이 경우다(backtest 주석: "DCA is buy-and-hold").
+
+    홀딩 기준을 못 구한 결과는 **떨어뜨린다.** 기준을 모르면 "홀딩보다 낫다" 고 말할 수 없다.
+    묶음도 기준이 있다(portfolio.aggregate 가 비중으로 가중한 홀딩을 낸다).
     """
-    if not picked:
+    hold = result.buy_hold_return_pct
+    if hold is None:
         return False
-    return all(e.result.buy_hold_return_pct is not None
-               and float(e.result.final_return_pct) < float(e.result.buy_hold_return_pct)
-               for e in picked)
+    if float(result.final_return_pct) <= 0:
+        return False
+    return float(result.final_return_pct) - float(hold) >= min_excess_pct()
 
 
 def select_top(evaluated: list[Evaluated], profile: str, n: int = TOP_N) -> list[Evaluated]:
-    """MDD 상한·최소 거래 수로 거르고 성향 점수로 정렬해 상위 n개 — 같은 rule_type 은 하나만."""
+    """MDD 상한 · 최소 거래 수 · 홀딩 문턱으로 거르고 성향 점수로 정렬해 상위 n개.
+
+    같은 rule_type 은 MAX_PER_TYPE 개까지. **넘긴 후보가 적으면 적게 돌려준다** — 세 칸을
+    채우려고 홀딩만큼도 못 한 후보를 끼워 넣지 않는다. 하나도 없으면 빈 목록이고, 그때
+    화면은 추천 대신 "이번 조건에서는 그냥 들고 있는 게 나았다" 고 말한다.
+    """
     cap = PROFILES[profile]["mdd_cap"]
     min_trades = PROFILES[profile]["min_trades"]
     pool = [
         e for e in evaluated
-        if e.result.total_trades >= min_trades and (cap is None or float(e.result.mdd_pct) <= cap)
+        if e.result.total_trades >= min_trades
+        and (cap is None or float(e.result.mdd_pct) <= cap)
+        and worth_the_macro(e.result)
     ]
     pool.sort(key=lambda e: (score(profile, e.result), e.result.total_trades), reverse=True)
     picked: list[Evaluated] = []
-    seen_types: set[str] = set()
+    per_type: dict[str, int] = {}
     for e in pool:
         rt = e.candidate.macro.rule_type.value
-        if rt in seen_types:
+        if per_type.get(rt, 0) >= MAX_PER_TYPE:
             continue
-        seen_types.add(rt)
+        per_type[rt] = per_type.get(rt, 0) + 1
         picked.append(e)
         if len(picked) >= n:
             break
@@ -559,10 +645,12 @@ def daily_limit() -> int:
 
 
 def time_budget_sec() -> float:
+    # 2026-10-08: 20 → 40초. 프리셋을 유형당 4~5개로 넓혔으므로 예산을 그대로 두면 뒤쪽
+    # 프리셋이 아예 평가되지 않아 넓힌 효과가 없다. 하루 횟수 제한(기본 5회)이 있어 감당된다.
     try:
-        return float(os.environ.get("ASK_TIME_BUDGET_SEC", "20"))
+        return float(os.environ.get("ASK_TIME_BUDGET_SEC", "40"))
     except ValueError:
-        return 20.0
+        return 40.0
 
 
 def _now() -> tuple[str, int]:
@@ -809,7 +897,13 @@ def run_ask(db: Session, user: User, req: AskRequest, run_backtest: Callable[[Ma
             raise AskError(422, "이 종목의 시세 데이터를 찾지 못했어요. 다른 종목을 골라 주세요.")
         top = select_top(evaluated, plan.risk_profile)
         results = [_result_view(e) for e in top]
-        lost_to_hold = all_lost_to_hold(top)
+        # 돌려는 봤는데 홀딩 문턱을 넘은 게 하나도 없었는가.
+        #
+        # `not top` 으로 세면 안 된다. 성향 조건(MDD 상한 · 최소 거래 수)에 걸려 빈 경우까지
+        # "홀딩이 나았다" 고 말하게 되고, 그건 거짓이다 — 실측: 안정형 · BTC 1년은 홀딩이
+        # -31.5% 인데 문턱을 넘은 후보가 7개였고 전부 MDD 상한(10%)에서 떨어졌다.
+        # 그 경우의 올바른 말은 "이 조건으론 살아남은 후보가 없었다" 다.
+        no_edge = bool(evaluated) and not any(worth_the_macro(e.result) for e in evaluated)
         elapsed_ms = int((time.monotonic() - started) * 1000)
 
         # 성공했을 때만 호출 수를 센다 — 실패한 시도로 예산을 깎지 않는다.
@@ -829,8 +923,10 @@ def run_ask(db: Session, user: User, req: AskRequest, run_backtest: Callable[[Ma
 
     return {
         "results": results,
-        # 보여 준 조합이 전부 '그냥 들고 있기' 에 졌으면 화면 맨 위에서 먼저 알린다.
-        "all_lost_to_hold": lost_to_hold,
+        # 후보는 돌렸지만 "그냥 들고 있기" 를 의미 있게 넘은 게 없었다 — 화면이 추천 대신
+        # 그렇게 말한다. results 가 비어도 이유가 둘(데이터 없음 / 넘은 게 없음)이라 따로 싣는다.
+        "no_edge": no_edge,
+        "min_excess_pct": min_excess_pct(),
         "remaining_today": remaining_today(db, user),
         "disclaimer": DISCLAIMER,
         "disclaimer_version": DISCLAIMER_VERSION,

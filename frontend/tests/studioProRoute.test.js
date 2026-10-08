@@ -8,7 +8,9 @@ const appJsx = readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
 const apiJs = readFileSync(new URL("../src/api.js", import.meta.url), "utf8");
 
 test("라우트가 형제 화면(/builder) 아래에 등록돼 있다", () => {
-  assert.match(appJsx, /path="\/builder\/pro"\s+element=\{<StudioPro \/>\}/);
+  // 2026-10-08: 프로 빌더를 지금 버전에서 멈추고 잠갔다. 길은 그대로 있고 깃발을 보고 갈라진다 —
+  // 잠금 자체는 proBuilderLocked.test.js 가 본다. 이 파일은 StudioPro 가 성한지를 본다.
+  assert.match(appJsx, /path="\/builder\/pro"\s+element=\{PRO_BUILDER_OPEN \? <StudioPro \/> : <ProBuilderClosed \/>\}/);
   assert.doesNotMatch(appJsx, /\/studio\/pro/, "앱에 /studio 경로는 없다");
 });
 

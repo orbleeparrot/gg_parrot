@@ -94,15 +94,21 @@ def test_templates_cover_every_symbol_first_and_add_a_portfolio():
 
 
 def test_templates_cover_every_type_before_portfolios():
-    # 공격형 × 종목 3개: 유형 8개 × 종목 3개 = 24 로 단일 후보만으로 상한이 찬다 — 포트폴리오는 못 들어간다.
+    # 2026-10-08: 프리셋이 유형당 4~5개가 되고 상한이 90 으로 올라가, 3종목 공격형에서도
+    # 첫 프리셋 24개 뒤에 포트폴리오 8개가 들어간다(예전에는 24에서 잘려 못 들어갔다).
+    # 순서는 그대로다 — 모든 유형의 단일 후보가 먼저, 포트폴리오가 그다음, 뒤 프리셋이 마지막.
     req3 = _mkplan(risk_profile="aggressive", symbols=["BTCUSDT", "ETHUSDT", "SOLUSDT"])
     cands3 = ask.build_templates(req3)
     assert len(cands3) == ask.MAX_CANDIDATES
     types3 = {c.macro.rule_type.value for c in cands3}
     assert {"I", "H"} <= types3
-    assert [c for c in cands3 if c.macro.symbols] == []
+    singles3 = [c for c in cands3 if not c.macro.symbols]
+    first_portfolio = next(i for i, c in enumerate(cands3) if c.macro.symbols)
+    assert first_portfolio == 24, "유형 8개 × 종목 3개의 첫 프리셋이 먼저 와야 한다"
+    assert all(not c.macro.symbols for c in cands3[:24])
+    assert len(singles3) > 24, "뒤 프리셋의 단일 후보도 들어와야 한다 — 넓힌 보람"
 
-    # 공격형 × 종목 2개: 유형 8개 × 종목 2개(16) + 포트폴리오 8개 = 24 — 포트폴리오가 남고 모든 유형이 단일에 있다.
+    # 공격형 × 종목 2개: 유형 8개 × 종목 2개(16) + 포트폴리오 8개 — 포트폴리오가 남고 모든 유형이 단일에 있다.
     req2 = _mkplan(risk_profile="aggressive", symbols=["BTCUSDT", "ETHUSDT"])
     cands2 = ask.build_templates(req2)
     portfolios2 = [c for c in cands2 if c.macro.symbols]
@@ -141,16 +147,20 @@ def test_evaluate_skips_failures_and_respects_time_budget(monkeypatch):
 
 
 def test_select_top_filters_scores_and_keeps_rule_types_distinct():
+    # 같은 유형은 MAX_PER_TYPE(1) 칸까지. 2 로 올리면 같은 유형의 다른 프리셋이 **같은 제목**으로
+    # 나란히 오고 화면 카드 키까지 겹친다 — 레이블에 설정을 드러내는 일이 먼저다.
+    # 모든 후보에 홀딩 기준(bh)이 있어야 한다 — 없으면 worth_the_macro 가 떨어뜨린다.
     ev = [
-        ask.Evaluated(_cand("A"), _result(30, 25)),   # 균형형 MDD 상한(20) 초과 → 탈락
-        ask.Evaluated(_cand("J"), _result(12, 4)),
-        ask.Evaluated(_cand("J", "ETHUSDT"), _result(11, 3)),  # 같은 유형 두 번째 → 다양성으로 탈락
-        ask.Evaluated(_cand("G"), _result(8, 2)),
-        ask.Evaluated(_cand("E"), _result(9, 2, trades=2)),    # 거래 2회 → 탈락
-        ask.Evaluated(_cand("F"), _result(3, 1)),
+        ask.Evaluated(_cand("A"), _result(30, 25, bh=0)),   # 균형형 MDD 상한(20) 초과 → 탈락
+        ask.Evaluated(_cand("J"), _result(12, 4, bh=0)),
+        ask.Evaluated(_cand("J", "ETHUSDT"), _result(11, 3, bh=0)),  # 같은 유형 두 번째 → 다양성으로 탈락
+        ask.Evaluated(_cand("G"), _result(8, 2, bh=0)),
+        ask.Evaluated(_cand("E"), _result(9, 2, trades=2, bh=0)),    # 거래 2회 → 탈락
+        ask.Evaluated(_cand("F"), _result(3, 1, bh=0)),
     ]
     top = ask.select_top(ev, "balanced")
     assert [e.candidate.macro.rule_type.value for e in top] == ["J", "G", "F"]
+    assert ask.MAX_PER_TYPE == 1, "올리려면 _label 이 설정을 드러내야 한다(제목·카드 키가 겹친다)"
 
     # 안정형은 수익률 ÷ MDD, 공격형은 수익률만 본다.
     assert ask.score("stable", _result(10, 5)) == pytest.approx(2.0)
@@ -216,15 +226,20 @@ def test_ai_proposals_are_validated_and_filtered(monkeypatch):
     assert ask.propose_with_ai(req) == []
 
 
-_RETURNS = {"A": (4, 3, 8), "C": (2, 1, 12), "J": (9, 4, 6), "G": (6, 2, 5), "F": (7, 3, 2), "E": (5, 2, 4)}
+# (수익률, MDD, 거래 수, 홀딩 수익률). 홀딩 기준이 없으면 worth_the_macro 가 전부 떨어뜨리므로
+# 가짜도 기준을 실어야 한다 — 그래야 이 시험이 실제 선별 경로를 지나간다.
+# C 는 일부러 홀딩과 0.5%p 차이로 둔다: 분할매수가 "홀딩이나 다름없는 추천" 으로 올라오던
+# 바로 그 경우이고, 이제 문턱(3%p)에서 떨어져야 한다.
+_RETURNS = {"A": (4, 3, 8, 0), "C": (2, 1, 12, 1.5), "J": (9, 4, 6, 0),
+            "G": (6, 2, 5, 0), "F": (7, 3, 2, 0), "E": (5, 2, 4, 0)}
 
 
 @pytest.fixture
 def _fake_backtest(monkeypatch):
     """유형별로 정해진 수치를 돌려주는 가짜 백테스트 — 네트워크 없이 선별 결과를 예측할 수 있다."""
     def fake_run_any(macro):
-        ret, mdd, trades = _RETURNS.get(macro.rule_type.value, (1, 1, 5))
-        return _result(ret, mdd, trades=trades), [], "test", macro.period.preset
+        ret, mdd, trades, bh = _RETURNS.get(macro.rule_type.value, (1, 1, 5, 0))
+        return _result(ret, mdd, trades=trades, bh=bh), [], "test", macro.period.preset
 
     monkeypatch.setattr("app.main._run_any", fake_run_any)
     monkeypatch.setattr(ask, "ai_available", lambda: False)
@@ -259,8 +274,11 @@ def test_ask_returns_top3_distinct_types_and_records(_fake_backtest, monkeypatch
                       headers=_auth(token))
     assert res.status_code == 200, res.text
     data = res.json()
-    # 균형형 점수 = 수익률 - 0.5·MDD: J 7 > G 5 > E 4 > A 2.5 > C 1.5 ; F 는 거래 2회라 탈락
+    # 균형형 점수 = 초과 수익 - 0.5·MDD: J 7 > G 5 > E 4 > A 2.5 ; F 는 거래 2회라 탈락.
+    # C 는 홀딩과 0.5%p 차이라 문턱(3%p)에서 떨어진다 — 점수가 아니라 문턱이 막는다.
     assert [r["rule_type"] for r in data["results"]] == ["J", "G", "E"]
+    assert "C" not in [r["rule_type"] for r in data["results"]]
+    assert data["no_edge"] is False and data["min_excess_pct"] == ask.MIN_EXCESS_PCT
     first = data["results"][0]
     assert first["metrics"] == {"final_return_pct": 9, "mdd_pct": 4, "win_rate_pct": 50.0, "total_trades": 6}
     assert first["macro"]["symbol"] == "BTCUSDT" and first["macro"]["rule_type"] == "J"
@@ -379,7 +397,8 @@ def test_select_top_uses_profile_min_trades():
     def cand(rule_type):
         req = _mkplan(risk_profile="scalper", symbols=["BTCUSDT"], period_preset="1w", interval="5m")
         return ask.Candidate(f"{rule_type}", ask._make_macro(req, rule_type, ask._SCALPER_PRESETS[rule_type][0], ["BTCUSDT"]), "template")
-    ev = [ask.Evaluated(cand("A"), _result(5, 2, trades=9)), ask.Evaluated(cand("J"), _result(3, 2, trades=10))]
+    ev = [ask.Evaluated(cand("A"), _result(5, 2, trades=9, bh=0)),
+          ask.Evaluated(cand("J"), _result(3, 2, trades=10, bh=0))]
     assert [e.candidate.macro.rule_type.value for e in ask.select_top(ev, "scalper")] == ["J"]
     assert [e.candidate.macro.rule_type.value for e in ask.select_top(ev, "aggressive")] == ["A", "J"]
 
@@ -409,7 +428,8 @@ def test_scalper_ask_returns_short_macros_when_trades_suffice(_fake_backtest, mo
     monkeypatch.setattr(ask, "_candidate_ai", lambda: None)
 
     def fake_run_any(macro):
-        return _result(4, 2, trades=12), [], "test", macro.period.preset
+        # bh=0 — 홀딩 기준이 없으면 worth_the_macro 가 전부 떨어뜨린다. +4%p 로 문턱(3%p)을 넘긴다.
+        return _result(4, 2, trades=12, bh=0), [], "test", macro.period.preset
 
     monkeypatch.setattr("app.main._run_any", fake_run_any)
     token, _ = _signup()
@@ -855,23 +875,64 @@ def test_score_falls_back_to_absolute_return_without_holding_data():
     assert ask.score("balanced", _result(10, 4)) == pytest.approx(8.0)
 
 
-def test_select_top_prefers_beating_holding_over_bigger_absolute_return():
+def test_select_top_shows_fewer_rather_than_padding_with_weak_candidates():
+    # 문턱을 넘긴 게 하나뿐이면 하나만 보여 준다. 예전에는 세 칸을 채우려고 홀딩만큼도 못 한
+    # 후보를 함께 올렸고, 그래서 "가만히 홀딩만 해도 괜찮았다" 는 카드가 섞였다.
+    ev = [
+        ask.Evaluated(_cand("J"), _result(20, 4, bh=1)),    # +19%p — 통과
+        ask.Evaluated(_cand("G"), _result(8, 2, bh=7)),     # +1%p — 문턱 아래
+        ask.Evaluated(_cand("A"), _result(6, 3, bh=5)),     # +1%p — 문턱 아래
+        ask.Evaluated(_cand("E"), _result(5, 2, bh=4)),     # +1%p — 문턱 아래
+    ]
+    top = ask.select_top(ev, "balanced")
+    assert [e.candidate.macro.rule_type.value for e in top] == ["J"]
+    assert len(top) == 1, "빈 칸을 약한 후보로 메우면 안 된다"
+
+
+def test_select_top_drops_candidates_that_lost_to_holding():
+    # 2026-10-08: 홀딩에 진 후보는 순위를 낮추는 게 아니라 **아예 내보내지 않는다.**
+    # 예전에는 뒤로 밀어 두고도 세 칸을 채우려고 함께 보여 줬다.
     ev = [
         ask.Evaluated(_cand("A"), _result(30, 5, bh=90)),   # 커 보이지만 홀딩에 60%p 뒤짐
         ask.Evaluated(_cand("J"), _result(8, 5, bh=1)),     # 작아도 홀딩을 7%p 이김
     ]
     top = ask.select_top(ev, "aggressive")
-    assert [e.candidate.macro.rule_type.value for e in top] == ["J", "A"]
+    assert [e.candidate.macro.rule_type.value for e in top] == ["J"]
 
 
-def test_lost_to_hold_is_true_only_when_every_result_lost():
-    beat = ask.Evaluated(_cand("J"), _result(8, 5, bh=1))
-    lost = ask.Evaluated(_cand("A"), _result(30, 5, bh=90))
-    assert ask.all_lost_to_hold([lost]) is True
-    assert ask.all_lost_to_hold([lost, beat]) is False
-    assert ask.all_lost_to_hold([]) is False
-    # 홀딩 기준이 없으면 "졌다" 고 말하지 않는다.
-    assert ask.all_lost_to_hold([ask.Evaluated(_cand("G"), _result(5, 2))]) is False
+def test_worth_the_macro_needs_profit_and_a_real_margin_over_holding():
+    # 1) 홀딩을 문턱(3%p)만큼 넘어야 한다 — 0 근처면 "그냥 들고 있기" 와 구분되지 않는다.
+    assert ask.worth_the_macro(_result(8, 5, bh=1)) is True       # +7%p
+    assert ask.worth_the_macro(_result(8, 5, bh=6)) is False      # +2%p — 문턱 아래
+    assert ask.worth_the_macro(_result(8, 5, bh=5)) is True       # +3%p — 문턱에 닿으면 통과
+    # 2) 그 자체로 벌어야 한다 — 홀딩이 더 크게 잃었다고 손실이 추천이 되지는 않는다.
+    assert ask.worth_the_macro(_result(-10, 20, bh=-40)) is False
+    assert ask.worth_the_macro(_result(0, 5, bh=-40)) is False
+    # 3) 홀딩 기준을 모르면 "홀딩보다 낫다" 고 말할 수 없다.
+    assert ask.worth_the_macro(_result(50, 5, bh=None)) is False
+
+
+def test_min_excess_pct_is_tunable(monkeypatch):
+    monkeypatch.setenv("ASK_MIN_EXCESS_PCT", "10")
+    assert ask.min_excess_pct() == pytest.approx(10.0)
+    assert ask.worth_the_macro(_result(8, 5, bh=1)) is False   # +7%p 는 10%p 문턱 아래
+    monkeypatch.setenv("ASK_MIN_EXCESS_PCT", "0")
+    assert ask.worth_the_macro(_result(8, 5, bh=8)) is True    # 문턱 0 이면 조금만 넘어도 된다
+    monkeypatch.setenv("ASK_MIN_EXCESS_PCT", "뭐라고")
+    assert ask.min_excess_pct() == pytest.approx(ask.MIN_EXCESS_PCT)
+
+
+def test_dca_is_holding_in_disguise_and_never_recommended_near_zero_excess():
+    """분할매수(C)는 백테스트가 스스로 "DCA is buy-and-hold" 라고 적어 둔 규칙이다.
+
+    매수 횟수를 거래 수로 보고하므로 최소 거래 수 필터를 180회로 가볍게 통과한다.
+    그래서 "가만히 홀딩만 해도 괜찮았다" 는 추천이 나왔다 — 막는 것은 홀딩 문턱뿐이다.
+    """
+    dca = ask.Evaluated(_cand("C"), _result(12, 8, trades=180, bh=11))  # 홀딩과 1%p 차이
+    assert ask.select_top([dca], "balanced") == []
+    # 반대로 하락장에서 평균매수가 홀딩을 크게 이기면 그것은 진짜 값어치다.
+    good = ask.Evaluated(_cand("C"), _result(12, 8, trades=180, bh=2))
+    assert [e.candidate.macro.rule_type.value for e in ask.select_top([good], "balanced")] == ["C"]
 
 
 # --- 직접 고를래요: 거래 가능한 종목이면 받는다 (2026-09-23) ----------------
@@ -948,3 +1009,102 @@ def test_result_view_carries_hold_return_and_a_small_curve():
 
     empty = ask._result_view(ask.Evaluated(_cand("A"), _result(3, 1, bh=None)))
     assert empty["curve"] == [] and empty["hold_return_pct"] is None
+
+
+# --- 프리셋을 유형당 4~5개로 넓혔다 (2026-10-08) ---------------------------
+# "홀딩이나 다름없는 결과" 의 다른 절반은 탐색이 좁았던 것이다. 프리셋이 종목·기간에 안 맞으면
+# 그 유형에서 건질 게 없는데도 그중 제일 나은 것이 추천으로 올라왔다.
+
+def test_every_preset_actually_builds_a_macro():
+    """프리셋 하나라도 스키마에 걸리면 _make_macro 가 None 을 돌려주고 **조용히** 사라진다.
+
+    그러면 넓힌 줄 알고 안 넓어진 상태로 돈다. H 의 자금 상한(기본+세이프티 전부 체결)과
+    J 의 fast < slow 처럼 모델 검증이 걸리는 자리가 있어 실제로 쉽게 일어난다.
+    """
+    dropped = []
+    for table, profile, period, interval in (
+        (ask._PRESETS, "aggressive", "6m", "4h"),
+        (ask._SCALPER_PRESETS, "scalper", "1w", "5m"),
+    ):
+        for rule_type, presets in table.items():
+            req = _mkplan(risk_profile=profile, symbols=["BTCUSDT"],
+                          period_preset=period, interval=interval)
+            for index, preset in enumerate(presets):
+                if ask._make_macro(req, rule_type, preset, ["BTCUSDT"]) is None:
+                    dropped.append(f"{rule_type}[{index}]")
+    assert dropped == [], f"스키마에 걸려 사라지는 프리셋: {dropped}"
+
+
+def test_presets_are_wide_enough_to_be_worth_the_budget():
+    # 예산을 20 → 40초로 올린 근거가 이것이다. 좁아지면 되돌려야 한다.
+    for rule_type, presets in ask._PRESETS.items():
+        assert len(presets) >= 4, f"{rule_type} 프리셋이 {len(presets)}개"
+    for rule_type, presets in ask._SCALPER_PRESETS.items():
+        assert len(presets) >= 4, f"단타 {rule_type} 프리셋이 {len(presets)}개"
+    # 같은 유형 안에서 설정이 실제로 달라야 한다 — 복사된 프리셋은 백테스트만 낭비한다.
+    for table in (ask._PRESETS, ask._SCALPER_PRESETS):
+        for rule_type, presets in table.items():
+            seen = {json.dumps(p, sort_keys=True) for p in presets}
+            assert len(seen) == len(presets), f"{rule_type} 에 똑같은 프리셋이 있다"
+    assert ask.time_budget_sec() == pytest.approx(40.0)
+
+
+def test_widened_presets_reach_the_backtest():
+    # 넓힌 프리셋이 후보 목록에 실제로 들어오는지. 상한에서 잘리면 넓힌 보람이 없다.
+    req = _mkplan(risk_profile="aggressive", symbols=["BTCUSDT"], period_preset="6m", interval="4h")
+    cands = ask.build_templates(req)
+    per_type: dict[str, int] = {}
+    for c in cands:
+        rt = c.macro.rule_type.value
+        per_type[rt] = per_type.get(rt, 0) + 1
+    for rule_type in ask._allowed_types(req):
+        assert per_type.get(rule_type, 0) >= 4, f"{rule_type} 후보가 {per_type.get(rule_type, 0)}개뿐"
+
+
+def test_no_edge_is_reported_when_nothing_beats_holding(_fake_backtest, monkeypatch):
+    """돌려는 봤는데 문턱을 넘은 게 없는 경우 — 사용자 결정대로 추천하지 않고 그렇게 말한다.
+
+    데이터가 없어 빈 것과 구분되어야 한다(화면이 하는 말이 다르다).
+    """
+    monkeypatch.setattr(ask.hotcoins, "get_cached_tickers", lambda: _fake_tickers())
+    monkeypatch.setattr(ask, "_candidate_ai", lambda: None)
+
+    def fake_run_any(macro):
+        # 전부 벌긴 벌었지만 홀딩을 1%p 밖에 못 넘었다 — "가만히 있어도 괜찮았다" 는 그 경우.
+        return _result(11, 3, trades=20, bh=10), [], "test", macro.period.preset
+
+    monkeypatch.setattr("app.main._run_any", fake_run_any)
+    token, _ = _signup()
+    client.post("/api/ask/consent", headers=_auth(token))
+    flow = client.post("/api/ask/candidates", json=_candidates_body(), headers=_auth(token)).json()
+    data = client.post("/api/ask/macros", json={"session_id": flow["session_id"], "symbol": "BTCUSDT"},
+                       headers=_auth(token)).json()
+    assert data["results"] == []
+    assert data["no_edge"] is True, "돌렸는데 넘은 게 없음을 화면에 알려야 한다"
+    with get_session() as db:
+        assert db.get(AskMacroSession, flow["session_id"]).candidate_count > 0, "후보는 돌았다"
+
+
+def test_no_edge_is_not_claimed_when_the_profile_filters_blocked_them(_fake_backtest, monkeypatch):
+    """성향 조건에 걸려 빈 것을 "홀딩이 나았다" 고 말하면 거짓이다.
+
+    실측(캐시된 BTC 일봉 1년): 홀딩 -31.5% 인데 문턱을 넘은 후보가 7개였고 전부 안정형
+    MDD 상한(10%)에서 떨어졌다. 그때 화면은 "홀딩이 나았다" 가 아니라 "이 조건으론 살아남은
+    후보가 없었다" 고 말해야 한다.
+    """
+    monkeypatch.setattr(ask.hotcoins, "get_cached_tickers", lambda: _fake_tickers())
+    monkeypatch.setattr(ask, "_candidate_ai", lambda: None)
+
+    def fake_run_any(macro):
+        # 홀딩(-30%)을 40%p 넘겼지만 MDD 55% — 안정형 상한(10%)에 전부 걸린다.
+        return _result(10, 55, trades=20, bh=-30), [], "test", macro.period.preset
+
+    monkeypatch.setattr("app.main._run_any", fake_run_any)
+    token, _ = _signup()
+    client.post("/api/ask/consent", headers=_auth(token))
+    flow = client.post("/api/ask/candidates", json=_candidates_body(risk_profile="stable"),
+                       headers=_auth(token)).json()
+    data = client.post("/api/ask/macros", json={"session_id": flow["session_id"], "symbol": "BTCUSDT"},
+                       headers=_auth(token)).json()
+    assert data["results"] == [], "MDD 상한에 전부 걸렸다"
+    assert data["no_edge"] is False, "홀딩은 못 이긴 게 아니다 — 성향 조건이 막은 것이다"

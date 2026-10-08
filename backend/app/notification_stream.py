@@ -95,8 +95,22 @@ def _after_rollback(session) -> None:
 
 # --- 다른 프로세스에서 온 변경: LISTEN ------------------------------------------
 def _dsn() -> str:
-    url = db_mod._DATABASE_URL
+    # LISTEN 은 연결을 계속 붙잡아야 해서 세션 모드(또는 직접 연결)여야 한다. 일반 조회는 트랜잭션 모드
+    # 풀러(:6543)를 쓰므로(2026-10-09, GG-011) LISTEN 만 DATABASE_SESSION_URL(:5432)로 따로 붙는다.
+    # 비워 두면 예전처럼 DATABASE_URL 하나를 쓴다.
+    url = os.environ.get("DATABASE_SESSION_URL", "").strip() or db_mod._DATABASE_URL
     return url.replace("postgresql+psycopg://", "postgresql://", 1)
+
+
+def _transaction_pooler(dsn: str) -> bool:
+    """Supavisor 트랜잭션 모드 주소인가 — 거기서 LISTEN 은 오류 없이 붙지만 알림이 끝내 오지 않는다."""
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(dsn)
+        return parts.port == 6543 and (parts.hostname or "").endswith(".pooler.supabase.com")
+    except ValueError:
+        return False
 
 
 async def _connect(dsn: str):
@@ -142,7 +156,12 @@ def start() -> Optional[asyncio.Task]:
     global _listener_task
     if db_mod.database_dialect() != "postgresql" or _listener_task is not None:
         return None
-    _listener_task = asyncio.get_running_loop().create_task(listen_forever(_dsn()), name="notification-listener")
+    dsn = _dsn()
+    if _transaction_pooler(dsn):
+        # 조용히 붙어 알림을 영영 못 받느니 건너뛴다 — 알림은 적응형 폴링이 받친다.
+        log.warning("notification listener skipped: DATABASE_SESSION_URL is not set and DATABASE_URL is a transaction pooler (:6543)")
+        return None
+    _listener_task = asyncio.get_running_loop().create_task(listen_forever(dsn), name="notification-listener")
     return _listener_task
 
 

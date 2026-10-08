@@ -49,7 +49,8 @@
 .ccp-round:disabled { opacity: .4; cursor: default; }
 .ccp-round:focus-visible, .ccp-live-btn:focus-visible, .ccp-tab:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
 .candle-chart.is-phone .candle-chart-stage { margin-top: 8px; }
-.candle-chart.is-phone .candle-chart-plot { flex: 1 1 auto; min-height: 280px; }
+/* 불러오는 중·빈 시세 — 그림 칸과 같은 높이 규칙(.candle-chart-plot)을 그대로 받고 글자만 가운데 */
+.candle-chart.is-studio .candle-chart-wait { display: grid; place-items: center; }
 .ccp-readout { right: 4px; padding: 2px 6px; border-radius: 6px; background: rgb(var(--c-surface) / .9); }
 /* 봉 간격 — 여섯 칸을 똑같이 나눈 한 줄. 고른 칸만 회색 알약, 나머지는 글자뿐(토스 '일·주·월·년'). */
 .ccp-tabs { margin-top: 8px; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px; padding-block: 8px; border-top: 1px solid rgb(var(--c-slate-200)); }

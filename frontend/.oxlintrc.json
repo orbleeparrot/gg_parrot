@@ -477,6 +477,7 @@
           "candle-chart-stage",
           "candle-chart-symbol",
           "candle-chart-toolbar",
+          "candle-chart-wait",
           "candle-chart-zoom",
           "candle-legend-line",
           "candle-ohlc",

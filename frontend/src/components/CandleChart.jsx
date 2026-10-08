@@ -53,7 +53,9 @@ function useMedia(query) {
 }
 
 // --- inspector panel: OHLC of the hovered (or latest) bar ---------------
-function BarReadout({ bar, live, quote, extra = null }) {
+// reserveLive — LIVE 가 늦게 붙어도 줄 폭이 바뀌지 않게 자리를 미리 잡는다(직접 만들기 도구줄: 붙는 순간 OHLC 가
+// 두 줄로 꺾여 차트가 22px 줄던 레이아웃 이동, 2026-10-08).
+function BarReadout({ bar, live, quote, extra = null, reserveLive = false }) {
   if (!bar) return null;
   const rise = bar.c >= bar.o;
   const pct = bar.o ? ((bar.c - bar.o) / bar.o) * 100 : 0;
@@ -77,8 +79,8 @@ function BarReadout({ bar, live, quote, extra = null }) {
         </span>
       </div>
       {extra}
-      {live && (
-        <span className="candle-chart-live inline-flex items-center gap-1.5 t-caption font-bold text-red-600">
+      {(live || reserveLive) && (
+        <span className="candle-chart-live inline-flex items-center gap-1.5 t-caption font-bold text-red-600" style={live ? undefined : { visibility: "hidden" }} aria-hidden={live ? undefined : true}>
           <span aria-hidden="true" className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse motion-reduce:animate-none" />
           LIVE
         </span>
@@ -126,7 +128,12 @@ function RangeChange({ percent }) {
 }
 
 function MarketPrice({ bar, quote, changePct }) {
-  if (!bar) return null;
+  // 시세가 오기 전에도 같은 높이를 잡아 둔다 — 늦게 생기면 아래 화면 전체가 밀린다(레이아웃 이동).
+  if (!bar) return (
+    <div className="candle-chart-price-row" aria-hidden="true" style={{ visibility: "hidden" }}>
+      <span className="candle-chart-price"><strong className="candle-chart-current num">0</strong></span>
+    </div>
+  );
   return (
     <div className="candle-chart-price-row">
       <span className="candle-chart-price">
@@ -442,10 +449,12 @@ export default function CandleChart({
           </div>
         </div>
 
-        {view.length === 0 && <SourceStatus feed={feed} now={now} />}
+        {/* 시세 출처는 머리의 출처 줄(.ccp-meta)에 이미 있다 — 여기 따로 두면 시세가 올 때 사라지며 화면이 밀린다 */}
         {error && <div className="notice-warn py-6 t-small text-slate-700">차트를 불러오지 못했어요: {error}</div>}
         {!error && (!candles || !candles.length) && (
-          <div className="candle-chart-stage flex items-center justify-center t-small text-slate-500">{loading ? "차트 불러오는 중…" : candles ? "표시할 시세가 없어요." : "—"}</div>
+          <div className="candle-chart-stage">
+            <div className="candle-chart-plot candle-chart-wait t-small text-slate-500">{loading ? "차트 불러오는 중…" : candles ? "표시할 시세가 없어요." : "—"}</div>
+          </div>
         )}
         {view.length > 0 && (
           <div className="candle-chart-stage">
@@ -514,15 +523,18 @@ export default function CandleChart({
           )}
         </div>
 
-        {view.length === 0 && <SourceStatus feed={feed} now={now} />}
-
         {error && <div className="notice-warn py-6 t-small text-slate-700">차트를 불러오지 못했어요: {error}</div>}
         {!error && (!candles || !candles.length) && (
-          <div className="candle-chart-stage flex items-center justify-center t-small text-slate-500">{loading ? "차트 불러오는 중…" : candles ? "표시할 시세가 없어요." : "—"}</div>
+          <div className="candle-chart-stage">
+            {/* 시세가 오면 생길 OHLC 줄·그림 칸과 같은 높이를 미리 잡는다 — 펴지는 순간 아래 판이 밀리지 않게.
+                시세 출처도 시세가 온 뒤와 같은 자리(OHLC 줄 끝)에 둔다. 전에는 차트 아래 따로 붙었다 사라지며 18px 밀었다. */}
+            <div className="candle-chart-readout"><div className="candle-readout-row"><SourceStatus feed={feed} now={now} inline /></div></div>
+            <div className="candle-chart-plot candle-chart-wait t-small text-slate-500">{loading ? "차트 불러오는 중…" : candles ? "표시할 시세가 없어요." : "—"}</div>
+          </div>
         )}
         {view.length > 0 && (
           <div className="candle-chart-stage">
-            <div className="candle-chart-readout"><BarReadout bar={inspected} quote={quote} live={live && fresh && !last.closed} extra={<SourceStatus feed={feed} now={now} inline />} /></div>
+            <div className="candle-chart-readout"><BarReadout bar={inspected} quote={quote} live={live && fresh && !last.closed} reserveLive extra={<SourceStatus feed={feed} now={now} inline />} /></div>
             <div className="candle-chart-plot">
               {plot}
             </div>

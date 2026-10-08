@@ -18,9 +18,11 @@ services:
       mountPath: /var/data/market-cache
       sizeGB: 1
     envVars:
-      # 웹: 일반 요청 2 + heartbeat 예약 1 + LISTEN 1 = 최대 4.
+      # DATABASE_URL 은 Supabase 트랜잭션 모드 풀러(:6543) — 연결을 트랜잭션 동안만 빌려 써서 접속자 수 15 제한을
+      # 받지 않는다(2026-10-09, GG-011: 세션 모드에선 프로세스가 연결을 평생 쥐어 웹 풀 2개가 몰릴 때 바닥났다).
+      # 웹: 일반 요청 4 + heartbeat 예약 1 (트랜잭션 모드) + LISTEN 1 (세션 모드, DATABASE_SESSION_URL).
       - key: DATABASE_POOL_SIZE
-        value: "2"
+        value: "4"
       - key: DATABASE_RUNNER_POOL_SIZE
         value: "1"
       - key: DATABASE_POOL_TIMEOUT_SECONDS
@@ -67,7 +69,11 @@ services:
       - key: RUNNER_MIN_VERSION
         value: "6"
       # 대시보드에서 실제 값을 입력합니다. 비밀값은 Blueprint에 커밋하지 않습니다.
+      # DATABASE_URL = 트랜잭션 모드 풀러(…pooler.supabase.com:6543), DATABASE_SESSION_URL = 같은 주소의 세션 모드(:5432) —
+      # LISTEN 연결 하나만 세션 모드를 쓴다. 세션 주소를 비우고 DATABASE_URL 이 :6543 이면 LISTEN 은 건너뛰고 폴링만 남는다.
       - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_SESSION_URL
         sync: false
       - key: SECRET_KEY
         generateValue: true
@@ -111,8 +117,8 @@ services:
     dockerCommand: python -m app.workflows.position_news serve
     maxShutdownDelaySeconds: 300
     envVars:
-      # supervisor 1 + 격리 뉴스 자식 프로세스 1 = 최대 2.
-      # steady 합계 6, 구/신 프로세스 동시 존재 시 12 (15 중 3 여유).
+      # supervisor 1 + 격리 뉴스 자식 프로세스 1 = 최대 2 (트랜잭션 모드라 접속자 수 한도 15를 차지하지 않는다 —
+      # 실제 Postgres 연결은 트랜잭션이 도는 동안만 쓴다. 세션 모드로 남는 건 웹의 LISTEN 1개뿐).
       - key: DATABASE_POOL_SIZE
         value: "1"
       - key: DATABASE_CONNECT_TIMEOUT_SECONDS
@@ -158,7 +164,7 @@ services:
         value: "false"
       - key: POSITION_NEWS_ARTICLE_TIMEOUT_MS
         value: "12000"
-      # 웹 서비스와 정확히 같은 Supabase Session Pooler URL을 입력합니다.
+      # 웹 서비스와 정확히 같은 Supabase 트랜잭션 모드 풀러 URL(:6543)을 입력합니다. 이 워커는 LISTEN 을 하지 않는다.
       - key: DATABASE_URL
         sync: false
       - key: PREFECT_API_URL

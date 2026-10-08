@@ -28,7 +28,8 @@ export const CURRENT_NOTE = {
       icon: "bookOpen",
       title: "업비트·빗썸 키 발급 안내",
       text: "국내 거래소 API 키를 어디서 어떤 권한으로 만드는지 사용 설명에 정리했어요.",
-      link: "/guide",
+      // 사용 설명은 ?section=<id> 로 바로 그 항목을 연다(Guide.jsx 가 searchParams 를 읽는다).
+      link: "/guide?section=domestic-api",
       link_label: "설명 보기",
     },
     {

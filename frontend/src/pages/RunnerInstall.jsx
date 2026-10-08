@@ -71,7 +71,7 @@ function WindowsRunnerInstall() {
                   download={download.isExternal ? undefined : true}
                   target={download.isExternal ? "_blank" : undefined}
                   rel={download.isExternal ? "noopener noreferrer" : undefined}
-                  className="btn btn-l btn-primary runner-install-button"
+                  className={`btn btn-l ${opened ? "btn-secondary" : "btn-primary"} runner-install-button`}
                 >
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                     <path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5" />
@@ -118,11 +118,12 @@ function WindowsRunnerInstall() {
               <Link
                 to="/?run=1&step=1"
                 onClick={() => { if (!opened) markRunnerOpened(); }}
-                className="btn btn-l btn-secondary runner-install-button"
+                className={`btn btn-l ${opened ? "btn-primary" : "btn-secondary"} runner-install-button`}
               >
-                {opened ? "매크로 선택하기" : "실행했어요 · 매크로 선택"}
+                {opened ? "준비한 실행기로 빠른 연결" : "실행했어요 · 매크로 선택"}
                 <Icon name="arrowRight" size={16} className="ui-icon-inline" />
               </Link>
+              {opened ? <p className="t-caption text-slate-700">이 브라우저에서 준비를 확인한 기록이에요. 실제 설치나 실행 중 여부를 감지한 것은 아니에요.</p> : null}
               <p className="t-small text-slate-700">
                 실행 후에는 <Link to="/agents" className="runner-install-inline-link">내 에이전트</Link>에서 실시간 차트와 손익을 확인하고 원격으로 종료할 수 있어요.
               </p>
@@ -133,10 +134,11 @@ function WindowsRunnerInstall() {
             <h2 id="runner-security" className="t-title text-slate-900">거래소 키는 실행기에서만</h2>
             <div className="runner-install-security-copy t-small text-slate-700">
               <p>
-                거래소(바이낸스·업비트·빗썸) API 키와 시크릿은 실행기 창에만 입력하세요. 껄무새 웹·서버로 보내지 않아요. ‘이 PC에 키 기억하기’를 선택한 경우에만 Windows 계정으로 암호화해 로컬에 저장해요. 기본은 꺼져 있으며, 기억하지 않으면 실행기를 다시 켤 때 입력해요.
+                거래소(바이낸스·업비트·빗썸) API 키와 시크릿은 실행기 창에만 입력하세요. 껄무새 웹·서버로 보내지 않아요. 새 실행기의 ‘선택 거래소 키만 기억하기’를 선택한 경우에만 Windows 계정으로 암호화해 거래소별로 로컬 저장해요. 기본은 꺼져 있으며, 기억하지 않으면 실행기를 다시 켤 때 입력해요. 불러옴 · 변경됨 · 저장 필요 · 저장됨 · 삭제됨 · 복원 실패 표시를 확인하세요. 변경됨 · 저장 필요는 아직 저장하지 않은 새 값이에요. 거래소·모드 변경만으로 저장값을 지우지 않아요. 기존 v10의 저장 선택은 ‘이 PC에 키 기억하기’예요.
               </p>
               <p>처음에는 실제 자금이 들지 않는 연습으로 시작하는 걸 권해요. 바이낸스는 <strong className="text-slate-900">테스트넷 키</strong>를 쓰고, 업비트·빗썸은 테스트넷이 없으니 키 없이 돌아가는 <strong className="text-slate-900">모의 모드</strong>를 써요.</p>
               <p>업비트·빗썸 실거래에는 API 키마다 이 PC의 IP를 허용 IP로 등록해야 해요.</p>
+              <p>다른 PC에서는 암호화 저장 파일을 옮기지 말고 두 키를 다시 입력하세요. Secret Key를 잃어버렸다면 거래소에서 기존 키를 삭제하고 새 키를 발급해야 해요. 키가 있다면 <Link to="/exchange-connect?exchange=upbit&step=keys" className="underline">업비트 기존 키 안내</Link> 또는 <Link to="/exchange-connect?exchange=bithumb&step=keys" className="underline">빗썸 기존 키 안내</Link>를 확인하세요.</p>
             </div>
           </aside>
         </div>

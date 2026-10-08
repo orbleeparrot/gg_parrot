@@ -695,7 +695,8 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
     if (!apiKeyChecked) return;
     try { window.localStorage.setItem(apiKeyGuideStorageKey, "acknowledged"); } catch { /* 막힌 저장소 — 이번 방문에만 기억 */ }
     setApiKeyPrepared(true);
-    moveTo(STEP_RUNNER);
+    if (runnerReady) void openRunnerAndContinue();
+    else moveTo(STEP_RUNNER);
   }
 
   // '연결·실행으로 계속'을 누르면 실행기(exe)를 바로 열고 다음 화면으로 넘어간다.
@@ -893,7 +894,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
 
   function renderRunnerScene() {
     const status = runnerReady
-      ? "준비됨"
+      ? "준비 확인 기록 있음"
       : downloadStarted
         ? "첫 실행 확인"
         : runnerDownloadState === "loading"
@@ -905,7 +906,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
               : "배포 정보 없음";
     const mark = runnerReady ? <Icon name="check" size={18} strokeWidth={2.5} /> : runnerDownloadState === "loading" ? "…" : runnerAvailable ? <Icon name="download" size={18} /> : "—";
     const heading = runnerReady
-      ? "실행기 받기를 눌렀어요. 받은 파일을 한 번 직접 실행했다면 준비된 거예요."
+      ? "이 브라우저에서 실행기를 준비했다고 확인한 기록이 있어요."
       : downloadStarted
         ? "다운로드한 실행기를 한 번 열어 주세요."
         : runnerDownloadState === "loading"
@@ -936,7 +937,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
             <dt>배포 상태</dt>
             <dd>
               {runnerReady
-                ? "받기를 눌렀음 · 실제 버전은 실행기 창 제목에서 확인"
+                ? "사용자가 준비했다고 확인함 · 실제 설치·실행 여부를 감지한 것은 아님"
                 : runnerDownloadState === "loading"
                   ? "확인 중"
                   : runnerDownloadState === "available"
@@ -973,7 +974,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
             ) : null}
           </div>
         ) : runnerReady ? (
-          <p className="runner-wizard-runner-ready-note">실행기를 한 번 열어 웹에서 바로 연결할 준비가 됐어요.</p>
+          <p className="runner-wizard-runner-ready-note">기록만으로 실제 실행기 상태를 확인하지 않아요. 창 제목의 버전을 확인한 뒤 계속하세요.</p>
         ) : null}
       </Workspace>
     );
@@ -1305,6 +1306,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
     }
     if (step === STEP_API_KEY) {
       if (keyGuide.domestic) {
+        if (runnerReady) return <button type="button" onClick={() => void openRunnerAndContinue()} className="btn btn-l btn-primary runner-wizard-next">실행기 연결로 바로가기</button>;
         return <button type="button" onClick={() => moveTo(STEP_RUNNER)} className="btn btn-l btn-primary runner-wizard-next">실행기부터 준비하기</button>;
       }
       return (
@@ -1314,7 +1316,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
           disabled={!apiKeyChecked}
           className="btn btn-l btn-primary runner-wizard-next"
         >
-          {apiKeyChecked ? "키 준비 완료 · 실행기 준비로 계속" : "키를 준비한 뒤 확인해 주세요"}
+          {apiKeyChecked ? runnerReady ? "키 준비 확인 · 실행기 연결로 바로가기" : "키 준비 완료 · 실행기 준비로 계속" : "키를 준비한 뒤 확인해 주세요"}
         </button>
       );
     }

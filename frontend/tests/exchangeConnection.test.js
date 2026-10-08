@@ -50,3 +50,21 @@ test("key step keeps local opt-in storage and native verification distinct from 
   assert.match(text, /출금/);
   assert.doesNotMatch(html, /<input/);
 });
+
+test("existing keys enter verification instructions directly and manage IP without mandatory reissue", async () => {
+  const html = await renderComponent("src/components/ExchangeConnectionGuide.jsx", { exchange: "upbit", initialKeyMode: "existing" });
+  const text = textOf(html);
+  assert.match(text, /새 키 발급/);
+  assert.match(text, /기존 키 사용/);
+  assert.match(text, /기존 키로 실행기에서 검사하기/);
+  assert.match(text, /재발급[\s\S]*필요(?:는)? 없/);
+  assert.match(text, /허용 IP[\s\S]*변경/);
+  assert.match(text, /Secret Key[\s\S]*분실/);
+  assert.match(text, /다른 PC|새 PC/);
+  assert.doesNotMatch(html, /<input/);
+});
+
+test("Bithumb recovery distinguishes key expiry from request JWT expiry and keeps per-exchange storage truthful", async () => {
+  const text = textOf(await renderComponent("src/components/ExchangeConnectionGuide.jsx", { exchange: "bithumb", initialKeyMode: "existing" }));
+  for (const pattern of [/JWT/, /API 키[\s\S]*1년/, /연장[\s\S]*안/, /거래소별/, /선택 거래소 키만 기억하기/, /불러옴/, /변경됨 · 저장 필요/, /삭제됨/, /복원 실패/]) assert.match(text, pattern);
+});

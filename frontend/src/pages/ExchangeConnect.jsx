@@ -19,7 +19,7 @@ export default function ExchangeConnect() {
           {[['upbit', '업비트'], ['bithumb', '빗썸']].map(([value, label]) => <Link key={value} to={connectionGuidePath({ exchange: value })} aria-current={exchange === value ? "page" : undefined} className="btn btn-m btn-secondary"><img src={`/exchanges/${value}.png`} alt="" />{label}</Link>)}
         </nav>
       </header>
-      <ExchangeConnectionGuide key={exchange} exchange={exchange} initialStep={step} onStepChange={(next) => setParams({ exchange, step: next }, { replace: true })} />
+      <ExchangeConnectionGuide key={exchange} exchange={exchange} initialStep={step} initialKeyMode={step === "keys" ? "existing" : "new"} onStepChange={(next) => setParams({ exchange, step: next }, { replace: true })} />
       <p className="t-small mt-6"><Link to="/runner/install" className="underline">Windows 실행기 설치 안내</Link> · <Link to="/guide?section=domestic-api" className="underline">API 연결 FAQ</Link></p>
     </div>
   );

@@ -2,6 +2,10 @@
 .exchange-connect-heading { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 20px; }
 .exchange-connect-heading img { object-fit: contain; flex-shrink: 0; }
 .exchange-connect-heading p { margin-top: 6px; color: rgb(var(--c-slate-700)); }
+.exchange-connect-key-mode { display: flex; flex-wrap: wrap; gap: 12px; }
+.exchange-connect-key-mode button { border: 1px solid transparent; }
+.exchange-connect-key-mode button[aria-pressed="true"] { border-color: rgb(var(--c-brand-line)); color: rgb(var(--c-slate-900)); }
+.exchange-connect-mode-note { margin: 12px 0 20px; color: rgb(var(--c-slate-700)); }
 .exchange-connect-nav { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-bottom: 1px solid rgb(var(--c-slate-300)); gap: 4px; }
 .exchange-connect-nav button { display: flex; align-items: center; gap: 8px; min-height: 48px; padding: 10px 8px; color: rgb(var(--c-slate-700)); text-align: left; border-bottom: 3px solid transparent; overflow-wrap: anywhere; }
 .exchange-connect-nav button[aria-current] { color: rgb(var(--c-slate-900)); border-color: rgb(var(--c-brand-line)); font-weight: 700; }

@@ -135,6 +135,13 @@ test("단계 데이터는 소비자가 고쳐도 다른 세션 안내에 새지 
   assert.equal(fresh[1].action.href, DOMESTIC_KEY_PAGES.upbit.url);
 });
 
+test("기존 키 안내는 재발급 대신 권한·IP 변경과 Secret 복구를 설명한다", () => {
+  const steps = runnerGuide.domesticConnectionSteps("upbit", { existingKey: true });
+  assert.match(steps[1].title, /기존 키/);
+  assert.match(JSON.stringify(steps), /변경[\s\S]*재발급[\s\S]*필요 없/);
+  assert.match(steps[2].title, /기존 키/);
+});
+
 test("거래소 주소를 두 벌로 두지 않는다", () => {
   // 주소가 Guide 와 runnerGuide 두 곳에 글자로 있으면 한쪽만 바뀐다.
   assert.match(guideSource, /DOMESTIC_KEY_PAGES\.upbit\.url/);

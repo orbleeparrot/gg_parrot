@@ -627,6 +627,8 @@
           "exchange-connect-exchanges",
           "exchange-connect-footer",
           "exchange-connect-heading",
+          "exchange-connect-key-mode",
+          "exchange-connect-mode-note",
           "exchange-connect-nav",
           "exchange-connect-page",
           "exchange-connect-panel",

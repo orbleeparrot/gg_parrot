@@ -7,6 +7,8 @@
   display: flex; align-items: flex-start; justify-content: center; padding: 16px;
   background: rgb(var(--c-scrim) / .56); overflow: hidden;
 }
+/* 창이 열려 있어도 헤더는 살아 있다 — 종·회원 키 판이 스크림 아래로 깔리지 않게 헤더를 스크림 위로. 메뉴 서랍(85)은 그대로 위. */
+body:has(.ask-scrim) .site-header { z-index: calc(var(--z-sheet) + 1); }
 .ask-dlg {
   /* 순위 금·은·동 — 리더보드(.lb-board)와 같은 상수 */
   --ask-gold: 212 160 23; --ask-silver: 154 165 177; --ask-bronze: 184 115 51;

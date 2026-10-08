@@ -416,9 +416,10 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
     if (best !== active) setActive(best);
   };
 
-  // 요청이 도는 중에는 Esc 로도 닫지 못한다(중간 취소 금지). 열려 있는 동안 뒤의 앱은 누를 수 없다 —
-  // 헤더의 종·회원 키를 누르면 스크림이 받아 창이 닫히며 답이 초기화되던 문제.
-  useModalLayer({ open, ref: dialogRef, onEscape: onClose, busy, trap: true, inertRoot: true });
+  // 요청이 도는 중에는 Esc 로도 닫지 못한다(중간 취소 금지). 스크림은 헤더 아래에서 시작한다 — 헤더는 열려 있는
+  // 동안에도 누를 수 있어야 한다(휴대폰에서 메뉴·종·회원 키). 그래서 #root 를 inert 로 잠그지 않고, 헤더의 종·회원
+  // 판이 스크림 밑에 깔려 그 판을 누르면 창이 닫히던 문제는 헤더를 스크림 위로 올려 막는다(AskParrotDialog.css).
+  useModalLayer({ open, ref: dialogRef, onEscape: onClose, busy, trap: true });
 
   useEffect(() => {
     if (!open) return undefined;

@@ -3,6 +3,7 @@ import os
 import threading
 import time
 import unittest
+from copy import deepcopy
 from unittest.mock import patch
 
 try:
@@ -24,8 +25,16 @@ class ConnectionTkTests(unittest.TestCase):
         self._tk_errors = []
         self.root.report_callback_exception = lambda _kind, exc, _tb: self._tk_errors.append(exc)
         self.support = patch("runner.macro_runner.credentials_mod.supported", return_value=True)
-        self.load = patch("runner.macro_runner.credentials_mod.load", return_value=None)
-        self.save = patch("runner.macro_runner.credentials_mod.apply_choice")
+        from runner.credentials import CredentialsLoadResult
+        self.load = patch("runner.macro_runner.credentials_mod.load_result", return_value=CredentialsLoadResult(None, "missing"))
+        def save_exchange(_path, exchange, remember, values, *, previous=None):
+            saved = deepcopy(previous or {"version": 2, "member_key": values.get("member_key", ""), "exchanges": {}})
+            if remember:
+                saved["exchanges"][exchange] = deepcopy(values["exchanges"][exchange])
+            else:
+                saved["exchanges"].pop(exchange, None)
+            return saved
+        self.save = patch("runner.macro_runner.credentials_mod.apply_exchange_choice", side_effect=save_exchange)
         self.save_mock = self.save.start()
         self.support.start(); self.load.start()
         self.addCleanup(self.support.stop); self.addCleanup(self.load.stop); self.addCleanup(self.save.stop)
@@ -120,9 +129,12 @@ class ConnectionTkTests(unittest.TestCase):
                         self.assertLessEqual(bottom, wizard.window.winfo_height())
                     self.assertTrue(wizard.next_btn.winfo_viewable())
                 self.assertTrue(hasattr(wizard, "save_btn"))
-                wizard.canvas.yview_moveto(1)
+                wizard.canvas.yview_moveto(0)
                 self.root.update()
                 button = wizard.save_btn
+                y = button.winfo_rooty() - wizard.body.winfo_rooty()
+                wizard.canvas.yview_moveto(y / max(1, wizard.body.winfo_height()))
+                self.root.update()
                 bottom = button.winfo_rooty() - wizard.canvas.winfo_rooty() + button.winfo_height()
                 self.assertLessEqual(bottom, wizard.canvas.winfo_height())
                 self.assertGreater(button.winfo_rooty(), wizard.canvas.winfo_rooty())
@@ -135,7 +147,7 @@ class ConnectionTkTests(unittest.TestCase):
             wizard.window.geometry("560x610")
             wizard.go(2); self.root.update()
             modes = [widget for widget in wizard.frames[2].winfo_children()
-                     if isinstance(widget, tk.ttk.Frame)][0]
+                     if isinstance(widget, tk.ttk.Frame) and any(isinstance(child, tk.ttk.Radiobutton) for child in widget.winfo_children())][0]
             choices = modes.winfo_children()
             self.assertEqual(len(choices), 2)
             for choice in choices:
@@ -246,12 +258,86 @@ class ConnectionTkTests(unittest.TestCase):
             self.save_mock.assert_not_called()
             wizard.save_btn.invoke()
             self.save_mock.assert_called_once()
-            values = self.save_mock.call_args.args[2]
+            values = self.save_mock.call_args.args[3]
             self.assertEqual(values["version"], 2)
             self.assertEqual(values["exchanges"]["bithumb"]["api_key"], "dummy-key")
             with patch("runner.macro_runner.webbrowser.open", return_value=True) as open_page:
                 self.app._open_exchange_api_page()
             open_page.assert_called_once_with("https://www.bithumb.com/react/api-support/management-api", new=2)
+
+    def test_existing_keys_open_check_step_without_any_issuance_steps(self):
+        self.app.key_vars["upbit"][0].set("fixture-key")
+        self.app.key_vars["upbit"][1].set("fixture-secret")
+        with patch("runner.connection.detect_public_ipv4", return_value="8.8.8.8"):
+            wizard = self.open_wizard(); self.pump_until_idle()
+        self.assertEqual(wizard.step, 2)
+        self.assertIn("기존 키", wizard.reuse_status.cget("text"))
+        self.assertEqual(self.app._run_mode(), "mock")
+
+    def test_no_key_panel_offers_existing_key_input_without_issuance(self):
+        with patch("runner.connection.detect_public_ipv4", return_value="8.8.8.8"):
+            wizard = self.open_wizard(); self.pump_until_idle()
+            self.assertEqual(wizard.step, 0)
+            wizard.existing_key_btn.invoke(); self.root.update()
+            self.assertEqual(wizard.step, 2)
+
+    def test_saved_key_dirty_state_and_selected_remember_choice_are_actual_widgets(self):
+        saved = {"version": 2, "member_key": "fixture-member", "exchanges": {"upbit": {"api_key": "fixture-key", "api_secret": "fixture-secret"}}}
+        self.app._apply_remembered_credentials(saved)
+        with patch("runner.connection.detect_public_ipv4", return_value="8.8.8.8"):
+            wizard = self.open_wizard(); self.pump_until_idle()
+            self.assertEqual(wizard.step, 2)
+            self.assertTrue(self.app.remember.get())
+            self.assertIn("저장된 키", wizard.reuse_status.cget("text"))
+            self.app.key_vars["upbit"][1].set("fixture-edited")
+            self.assertIn("저장 필요", wizard.reuse_status.cget("text"))
+            self.assertNotIn("저장 완료", wizard.storage_status.cget("text"))
+            self.select("bithumb", "KRW-BTC")
+            self.assertFalse(self.app.remember.get())
+            self.select("upbit", "KRW-BTC")
+            self.assertTrue(self.app.remember.get())
+
+    def test_main_start_stop_controls_are_visible_at_minimum_window_size(self):
+        self.select("upbit", "KRW-BTC")
+        self.root.deiconify(); self.root.geometry("600x620"); self.root.update()
+        for button in (self.app.start_btn, self.app.stop_btn, self.app.close_btn):
+            self.assertTrue(button.winfo_viewable())
+            bottom = button.winfo_rooty() - self.root.winfo_rooty() + button.winfo_height()
+            self.assertLessEqual(bottom, self.root.winfo_height())
+
+    def assert_control_inside_canvas(self, control, canvas):
+        top = control.winfo_rooty() - canvas.winfo_rooty()
+        self.assertGreaterEqual(top, 0)
+        self.assertLessEqual(top + control.winfo_height(), canvas.winfo_height())
+
+    def tab_until(self, first, target):
+        first.focus_force(); self.root.update()
+        for _ in range(30):
+            if first.winfo_toplevel().focus_get() is target:
+                return
+            first.winfo_toplevel().focus_get().event_generate("<Tab>")
+            self.root.update()
+        self.fail("Tab did not reach the selected exchange input")
+
+    def test_main_tab_reveals_selected_key_input_in_small_scroll_area(self):
+        self.select("upbit", "KRW-BTC")
+        self.root.deiconify(); self.root.geometry("600x620"); self.root.update()
+        self.app.form_canvas.yview_moveto(0); self.root.update()
+        target = self.app.key_rows["upbit"][1]
+        self.tab_until(self.app.pick_btn, target)
+        self.assert_control_inside_canvas(target, self.app.form_canvas)
+
+    def test_wizard_tab_reveals_key_input_without_scrolling_main_window(self):
+        with patch("runner.connection.detect_public_ipv4", return_value="8.8.8.8"):
+            wizard = self.open_wizard(); self.pump_until_idle()
+            self.app.mode.set("live"); wizard.go(2)
+            wizard.window.geometry("560x610"); self.root.update()
+            wizard.canvas.yview_moveto(0); self.root.update()
+            main_view = self.app.form_canvas.yview()
+            target = [w for w in wizard.key_frame.winfo_children() if isinstance(w, tk.ttk.Entry)][0]
+            self.tab_until(wizard.key_ip_retry, target)
+            self.assert_control_inside_canvas(target, wizard.canvas)
+            self.assertEqual(self.app.form_canvas.yview(), main_view)
 
 
 if __name__ == "__main__":

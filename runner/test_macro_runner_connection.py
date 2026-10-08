@@ -3,6 +3,8 @@ import queue
 import threading
 import time
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from runner.test_macro_runner_single_instance import macro_runner
@@ -416,6 +418,164 @@ class FinalStartSnapshotTests(unittest.TestCase):
             app._start()
         bot.assert_not_called()
         server.stopped.assert_called_once()
+
+
+class CredentialReuseUiTests(unittest.TestCase):
+    def app(self):
+        app = ConnectionGuiTests().app()
+        app.key_vars["binance"] = (_Var("fixture-binance"), _Var("fixture-bs"))
+        app.key_vars["bithumb"] = (_Var("fixture-bithumb"), _Var("fixture-bhs"))
+        app.remember = _Var(True)
+        app.credentials_path = Path("/tmp/not-written-fixture.dat")
+        app._remembered = {"version": 2, "member_key": "member-example", "exchanges": {
+            name: {"api_key": pair[0].get(), "api_secret": pair[1].get()} for name, pair in app.key_vars.items()}}
+        app._remember_choices = {name: True for name in app.key_vars}
+        app._storage_dirty = {name: False for name in app.key_vars}
+        app._credentials_load_status = "loaded"
+        app._applying_credentials = False
+        app._storage_note = ""
+        return app
+
+    def test_saved_existing_and_new_key_states_are_distinct_and_no_keys_are_shown(self):
+        app = self.app()
+        state = app._connection_setup_state()
+        self.assertEqual(state["kind"], "saved")
+        app.key_vars["upbit"][1].set("fixture-changed")
+        app._on_credentials_changed("upbit")
+        self.assertEqual(app._connection_setup_state()["kind"], "existing")
+        self.assertTrue(app._storage_dirty["upbit"])
+        app.key_vars["upbit"][0].set(""); app.key_vars["upbit"][1].set("")
+        self.assertEqual(app._connection_setup_state()["kind"], "new")
+        for value in ("key-example", "secret-example", "fixture-changed"):
+            self.assertNotIn(value, str(app._connection_setup_state()))
+
+    def test_selected_exchange_save_uses_new_api_and_clears_only_its_dirty_flag(self):
+        app = self.app()
+        app._storage_dirty.update(upbit=True, bithumb=True)
+        saved = app._credential_values()
+        with patch.object(macro_runner.credentials_mod, "supported", return_value=True), patch.object(macro_runner.credentials_mod, "apply_exchange_choice", return_value=saved) as apply:
+            self.assertTrue(app._persist_credentials())
+        self.assertEqual(apply.call_args.args[1:3], ("upbit", True))
+        self.assertFalse(app._storage_dirty["upbit"])
+        self.assertTrue(app._storage_dirty["bithumb"])
+
+    def test_delete_is_selected_only_and_failure_never_clears_any_inputs(self):
+        app = self.app()
+        with patch.object(macro_runner.credentials_mod, "apply_exchange_choice", side_effect=OSError("SECRET transport")), patch.object(macro_runner.messagebox, "showerror") as error:
+            app._forget_credentials()
+        self.assertEqual(app.key_vars["upbit"][0].get(), "key-example")
+        self.assertNotIn("SECRET", str(error.call_args))
+        saved = {"version": 2, "member_key": "member-example", "exchanges": {name: pair for name, pair in app._remembered["exchanges"].items() if name != "upbit"}}
+        with patch.object(macro_runner.credentials_mod, "apply_exchange_choice", return_value=saved) as apply:
+            app._forget_credentials()
+        self.assertEqual(apply.call_args.args[1:3], ("upbit", False))
+        self.assertEqual(app.key_vars["upbit"][0].get(), "")
+        self.assertEqual(app.key_vars["bithumb"][0].get(), "fixture-bithumb")
+        self.assertEqual(app.member_key.get(), "member-example")
+
+    def test_reload_failure_preserves_edited_inputs_and_has_fixed_safe_guidance(self):
+        app = self.app()
+        with patch.object(macro_runner.credentials_mod, "load_result", return_value=SimpleNamespace(status="decrypt_error", values=None)):
+            app._reload_credentials()
+        self.assertEqual(app.key_vars["upbit"][0].get(), "key-example")
+        self.assertEqual(app._credentials_load_status, "decrypt_error")
+        self.assertIn("Windows", app._storage_note)
+
+    def test_reload_while_running_is_never_allowed(self):
+        app = self.app(); app.bot = Mock()
+        with patch.object(macro_runner.credentials_mod, "load_result") as load, patch.object(macro_runner.messagebox, "showwarning"):
+            app._reload_credentials()
+        load.assert_not_called()
+
+    def test_restore_dirty_confirmation_decline_preserves_inputs(self):
+        app = self.app(); app._storage_dirty["upbit"] = True
+        with patch.object(macro_runner.messagebox, "askyesno", return_value=False), patch.object(macro_runner.credentials_mod, "load_result") as load:
+            app._reload_credentials()
+        load.assert_not_called()
+        self.assertEqual(app.key_vars["upbit"][0].get(), "key-example")
+
+    def test_confirmed_reload_replaces_member_input_even_when_saved_member_is_empty(self):
+        app = self.app()
+        saved = {"version": 2, "member_key": "", "exchanges": {}}
+        with patch.object(macro_runner.messagebox, "askyesno", return_value=True), patch.object(macro_runner.credentials_mod, "load_result", return_value=SimpleNamespace(status="loaded", values=saved)):
+            app._reload_credentials()
+        self.assertEqual(app.member_key.get(), "")
+
+    def test_initial_load_preserves_an_existing_member_key(self):
+        app = self.app()
+        app._apply_remembered_credentials({"version": 2, "member_key": "saved-other-member", "exchanges": {}})
+        self.assertEqual(app.member_key.get(), "member-example")
+
+    def test_recovery_backup_failure_does_not_save_or_clear_inputs(self):
+        app = self.app()
+        with patch.object(macro_runner.messagebox, "askyesno", return_value=True), patch.object(macro_runner.credentials_mod, "backup_unreadable", side_effect=OSError("SECRET")), patch.object(macro_runner.credentials_mod, "apply_exchange_choice") as save:
+            app._recover_credentials_storage()
+        save.assert_not_called()
+        self.assertEqual(app.key_vars["upbit"][0].get(), "key-example")
+        self.assertNotIn("SECRET", app._storage_note)
+
+    def test_recovery_changed_form_in_confirmation_never_moves_previous_file(self):
+        app = self.app()
+        def confirm(*_args):
+            app.macro["exchange"] = "bithumb"
+            app._invalidate_preflight()
+            return True
+        with patch.object(macro_runner.messagebox, "askyesno", side_effect=confirm), patch.object(macro_runner.credentials_mod, "backup_unreadable") as backup, patch.object(macro_runner.credentials_mod, "apply_exchange_choice") as save:
+            app._recover_credentials_storage()
+        backup.assert_not_called()
+        save.assert_not_called()
+
+    def test_recovery_remember_choice_change_in_modal_performs_no_file_io(self):
+        app = self.app()
+        def confirm(*_args):
+            app.remember.set(False); app._on_remember_choice()
+            return True
+        with patch.object(macro_runner.messagebox, "askyesno", side_effect=confirm), patch.object(macro_runner.credentials_mod, "backup_unreadable") as backup, patch.object(macro_runner.credentials_mod, "apply_exchange_choice") as save:
+            app._recover_credentials_storage()
+        backup.assert_not_called()
+        save.assert_not_called()
+
+    def test_reload_remember_choice_change_in_modal_performs_no_file_io(self):
+        app = self.app(); app._storage_dirty["upbit"] = True
+        def confirm(*_args):
+            app.remember.set(False); app._on_remember_choice()
+            return True
+        with patch.object(macro_runner.messagebox, "askyesno", side_effect=confirm), patch.object(macro_runner.credentials_mod, "load_result") as load:
+            app._reload_credentials()
+        load.assert_not_called()
+
+    def test_recovery_save_failure_keeps_backup_and_input_and_reports_failure(self):
+        app = self.app()
+        with patch.object(macro_runner.messagebox, "askyesno", return_value=True), patch.object(macro_runner.credentials_mod, "supported", return_value=True), patch.object(macro_runner.credentials_mod, "backup_unreadable", return_value=Path("/tmp/credentials.backup-fixture.dat")), patch.object(macro_runner.credentials_mod, "apply_exchange_choice", side_effect=OSError("SECRET")):
+            app._recover_credentials_storage()
+        self.assertEqual(app.key_vars["upbit"][0].get(), "key-example")
+        self.assertIn("백업", app._storage_note)
+        self.assertIn("실패", app._storage_note)
+        self.assertNotIn("SECRET", app._storage_note)
+
+    def test_successful_history_saves_authoritative_disk_values_not_stale_cache(self):
+        app = self.app()
+        app._public_ip_cache.result = connection.PublicIPResult(True, "8.8.8.8", "fixture")
+        app._preflight = ConnectionGuiTests().checked(app)
+        disk = app._credential_values()
+        disk["exchanges"]["bithumb"]["api_key"] = "disk-newer-fixture"
+        with patch.object(macro_runner.credentials_mod, "supported", return_value=True), patch.object(macro_runner.credentials_mod, "load_result", return_value=SimpleNamespace(status="loaded", values=disk)), patch.object(macro_runner.credentials_mod, "save") as save:
+            app._record_successful_ip_history()
+        self.assertEqual(save.call_args.args[1]["exchanges"]["bithumb"]["api_key"], "disk-newer-fixture")
+
+    def test_missing_disk_never_resurrects_cached_keys_when_recording_ip_history(self):
+        app = self.app()
+        app._public_ip_cache.result = connection.PublicIPResult(True, "8.8.8.8", "fixture")
+        app._preflight = ConnectionGuiTests().checked(app)
+        with patch.object(macro_runner.credentials_mod, "supported", return_value=True), patch.object(macro_runner.credentials_mod, "load_result", return_value=SimpleNamespace(status="missing", values=None)), patch.object(macro_runner.credentials_mod, "save") as save:
+            app._record_successful_ip_history()
+        save.assert_not_called()
+
+    def test_expired_check_state_is_not_displayed_as_current_success(self):
+        app = self.app()
+        checked = ConnectionGuiTests().checked(app)
+        object.__setattr__(checked, "checked_at", time.monotonic() - 121)
+        self.assertIn("만료", app._connection_check_note())
 
 
 if __name__ == "__main__":

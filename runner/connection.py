@@ -1,9 +1,11 @@
 """Local connection preparation, independent of Tk and server/member sessions."""
 from dataclasses import dataclass, field
+import copy
 import hashlib
 import hmac
 import ipaddress
 import json
+import math
 import re
 import secrets
 import time
@@ -56,6 +58,14 @@ class PublicIPCache:
         self._sequence = 0
         self._active = None
         self._previous_address = ""
+
+    def seed_previous(self, history) -> bool:
+        """Restore an observation only, never a current or registered address."""
+        observation = valid_ip_observation(history)
+        if observation is None:
+            return False
+        self._previous_address = observation["public_ipv4"]
+        return True
 
     @property
     def busy(self):
@@ -128,6 +138,50 @@ def detect_public_ipv4(http) -> str:
     except Exception:
         # Never echo network errors: proxy URLs may contain passwords.
         raise PublicIPError("공인 IPv4 확인에 실패했어요. VPN·인터넷 연결을 확인하고 다시 눌러 주세요.") from None
+
+
+def valid_ip_observation(history):
+    """Untrusted local metadata cannot smuggle private IPs or non-finite times."""
+    if not isinstance(history, dict):
+        return None
+    observed_at = history.get("observed_at")
+    if isinstance(observed_at, bool) or not isinstance(observed_at, (int, float)):
+        return None
+    if not 0 < observed_at <= time.time() + 300 or not math.isfinite(observed_at):
+        return None
+    try:
+        address = validate_public_ipv4(history.get("public_ipv4"))
+    except PublicIPError:
+        return None
+    return {"public_ipv4": address, "observed_at": observed_at}
+
+
+def with_successful_ip_history(remembered, macro, mode, current_credentials, ip_result, preflight):
+    """Prepare encrypted metadata without saving changed/unsaved keys implicitly.
+
+    The IP is an ipify observation at a successful check, not the exchange's
+    registered IP or proof that both requests followed the same route.
+    """
+    if mode != "live" or not remembered or not ip_result or not preflight:
+        return None
+    exchange = str(macro.get("exchange") or "binance").lower()
+    if exchange not in API_MANAGEMENT_PAGES:
+        return None
+    saved_pair = (remembered.get("exchanges") or {}).get(exchange)
+    current_pair = (current_credentials.get("exchanges") or {}).get(exchange)
+    if not saved_pair or saved_pair != current_pair or not all(saved_pair.get(key) for key in ("api_key", "api_secret")):
+        return None
+    if not ip_result.ok or not ip_result.fresh() or not preflight.matches(preflight_fingerprint(macro, mode, current_credentials)):
+        return None
+    observation = valid_ip_observation({"public_ipv4": ip_result.address, "observed_at": ip_result.observed_at})
+    if observation is None:
+        return None
+    previous_history = remembered.get("connection_history") or {}
+    if previous_history.get(exchange) == observation:
+        return None
+    updated = copy.deepcopy(remembered)
+    updated.setdefault("connection_history", {})[exchange] = observation
+    return updated
 
 
 def preflight_fingerprint(macro: dict, mode: str, credentials: dict) -> str:

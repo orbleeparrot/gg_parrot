@@ -1,6 +1,6 @@
 """Local onboarding contracts: no credentials leave the runner, no real orders."""
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from runner import connection
 
@@ -86,6 +86,30 @@ class PreflightStateTests(unittest.TestCase):
 
 
 class PublicIPCacheTests(unittest.TestCase):
+    def test_restarted_cache_compares_a_saved_observation_without_claiming_registration(self):
+        cache = connection.PublicIPCache()
+        self.assertTrue(cache.seed_previous({"public_ipv4": "8.8.8.8", "observed_at": 1710000000}))
+        _kind, token = cache.begin(now=100)
+        result = cache.finish(token, True, "1.1.1.1", now=101)
+        self.assertTrue(result.changed)
+        self.assertIn("이전", connection.public_ip_status(result, now=102))
+        self.assertNotIn("등록 완료", connection.public_ip_status(result, now=102))
+
+    def test_invalid_saved_observations_do_not_replace_the_process_baseline(self):
+        cache = connection.PublicIPCache()
+        cache.seed_previous({"public_ipv4": "8.8.8.8", "observed_at": 1710000000})
+        for history in (None, {}, {"public_ipv4": "192.168.1.2", "observed_at": 1710000000},
+                        {"public_ipv4": "1.1.1.1", "observed_at": float("nan")},
+                        {"public_ipv4": "1.1.1.1", "observed_at": float("inf")},
+                        {"public_ipv4": "1.1.1.1", "observed_at": "invalid"},
+                        {"public_ipv4": "1.1.1.1", "observed_at": True},
+                        {"public_ipv4": "1.1.1.1", "observed_at": 1e15},
+                        {"public_ipv4": "1.1.1.1", "observed_at": 10**1000}):
+            with self.subTest(history=history):
+                self.assertFalse(cache.seed_previous(history))
+        _kind, token = cache.begin(now=100)
+        self.assertFalse(cache.finish(token, True, "8.8.8.8", now=101).changed)
+
     def test_duplicate_requests_share_one_inflight_token(self):
         cache = connection.PublicIPCache()
         first, token = cache.begin(now=100)
@@ -161,6 +185,53 @@ class PublicIPCacheTests(unittest.TestCase):
         for exchange in ("binance", "https://evil.test", "upbit?key=secret"):
             with self.assertRaises(ValueError):
                 connection.api_management_url(exchange)
+
+
+class ConnectionHistoryTests(unittest.TestCase):
+    def setUp(self):
+        self.macro = {"exchange": "upbit", "symbol": "KRW-BTC"}
+        self.saved = {"version": 2, "member_key": "fixture-member", "exchanges": {
+            "upbit": {"api_key": "fixture-key", "api_secret": "fixture-secret"},
+            "bithumb": {"api_key": "other-key", "api_secret": "other-secret"},
+        }, "connection_history": {"bithumb": {"public_ipv4": "9.9.9.9", "observed_at": 1700000000}}}
+        self.ip = connection.PublicIPResult(True, "8.8.8.8", "조회", checked_at=100, observed_at=1710000000)
+        self.check = connection.PreflightResult(True, "검사", connection.preflight_fingerprint(self.macro, "live", self.saved), checked_at=100)
+
+    def updated(self, *, saved=None, current=None, ip=None, check=None, mode="live"):
+        with patch.object(connection.time, "monotonic", return_value=101):
+            return connection.with_successful_ip_history(
+                self.saved if saved is None else saved, self.macro, mode,
+                self.saved if current is None else current, self.ip if ip is None else ip,
+                self.check if check is None else check,
+            )
+
+    def test_success_adds_only_an_observation_preserving_all_saved_keys_and_other_history(self):
+        updated = self.updated()
+        self.assertEqual(updated["exchanges"], self.saved["exchanges"])
+        self.assertEqual(updated["member_key"], "fixture-member")
+        self.assertEqual(updated["connection_history"]["bithumb"], self.saved["connection_history"]["bithumb"])
+        self.assertEqual(updated["connection_history"]["upbit"], {"public_ipv4": "8.8.8.8", "observed_at": 1710000000})
+        self.assertNotIn("upbit", self.saved["connection_history"])
+        self.assertNotIn("registered", updated["connection_history"]["upbit"])
+
+    def test_unsaved_edited_mock_failed_or_stale_checks_cannot_create_history(self):
+        cases = [
+            {"saved": {}}, {"current": {"exchanges": {"upbit": {"api_key": "new", "api_secret": "new"}}}},
+            {"mode": "mock"},
+            {"check": connection.PreflightResult(False, "실패", self.check.fingerprint, checked_at=100)},
+            {"check": connection.PreflightResult(True, "이전", self.check.fingerprint, checked_at=-100)},
+            {"ip": connection.PublicIPResult(True, "8.8.8.8", "이전", checked_at=-100)},
+            {"ip": connection.PublicIPResult(False, "", "실패", checked_at=100)},
+            {"ip": connection.PublicIPResult(True, "192.168.1.2", "private", checked_at=100)},
+            {"ip": connection.PublicIPResult(True, "8.8.8.8", "invalid", checked_at=100, observed_at=float("nan"))},
+        ]
+        for case in cases:
+            with self.subTest(case=case):
+                self.assertIsNone(self.updated(**case))
+
+    def test_absent_ip_or_preflight_does_not_persist_an_assumed_success(self):
+        self.assertIsNone(connection.with_successful_ip_history(self.saved, self.macro, "live", self.saved, None, self.check))
+        self.assertIsNone(connection.with_successful_ip_history(self.saved, self.macro, "live", self.saved, self.ip, None))
 
 
 if __name__ == "__main__":

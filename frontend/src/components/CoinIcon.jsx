@@ -15,13 +15,14 @@ export default function CoinIcon({ symbol, size = 36, className = "", alt, proxy
   const [failed, setFailed] = useState(false);
   const base = baseOf(symbol || "");
   const label = base || "?";
-  const style = { width: size, height: size };
+  // 크기는 CSS 가 --coin-size 로 정한다 — 감싸는 칸이 줄면(.lb-coin 휴대폰 32px) CSS 가 맞춘다.
+  const style = { "--coin-size": `${size}px` };
 
   if (!base || failed) {
     return (
       <span
         className={`coin-icon is-fallback ${className}`}
-        style={{ ...style, fontSize: Math.max(11, Math.round(size * 0.34)) }}
+        style={style}
         aria-hidden={alt === "" ? "true" : undefined}
         title={label}
       >

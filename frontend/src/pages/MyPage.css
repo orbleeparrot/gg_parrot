@@ -56,7 +56,8 @@
 .me-quest-main p { margin: 0; color: rgb(var(--c-slate-900)); font-size: 15px; font-weight: 600; line-height: 1.4; }
 .me-quest.is-done .me-quest-main p { color: rgb(var(--c-slate-500)); text-decoration: line-through; text-decoration-color: rgb(var(--c-slate-300)); }
 .me-quest-main span { display: block; color: rgb(var(--c-slate-500)); font-size: 12px; line-height: 1.5; }
-.me-quest-reward { color: rgb(var(--c-brand-line)); font-size: 15px; font-weight: 700; white-space: nowrap; }
+.me-quest-reward { color: rgb(var(--c-amber-700)); font-size: 15px; font-weight: 700; white-space: nowrap; } /* 라이트 짙은 호박 · 다크 노랑(결정 1) */
+.dark .me-quest-reward { color: rgb(var(--c-brand-line)); }
 .me-quest.is-done .me-quest-reward { color: rgb(var(--c-slate-500)); font-weight: 600; }
 .me-quest-go { display: inline-grid; place-items: center; width: 36px; height: 36px; border-radius: 50%; color: rgb(var(--c-slate-700)); }
 .me-quest-go:hover { background: rgb(var(--c-slate-200)); }

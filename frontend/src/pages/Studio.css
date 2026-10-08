@@ -225,13 +225,13 @@
 .sd-opt-head .btn { margin-left: auto; flex: none; }
 .sd-opt-head b { color: rgb(var(--c-slate-700)); display: inline-flex; align-items: center; gap: 2px; }
 .sd-opt-head span { color: rgb(var(--c-slate-500)); }
-.sd-heat { display: grid; gap: 3px; font-size: 12px; }
+.sd-heat { display: grid; grid-template-columns: 52px repeat(var(--heat-cols, 5), minmax(0, 1fr)); gap: 3px; font-size: 12px; }
 .sd-heat-h { height: 24px; display: grid; place-items: center; color: rgb(var(--c-slate-500)); font-weight: 600; }
 .sd-heat-c { height: 30px; display: flex; align-items: center; justify-content: center; gap: 3px; border-radius: 6px; color: rgb(var(--c-slate-900)); font-weight: 700; cursor: pointer; }
 .sd-heat-c:hover { box-shadow: inset 0 0 0 2px rgb(var(--c-slate-400)); }
 .sd-heat-c.is-current { box-shadow: inset 0 0 0 1px rgb(var(--c-slate-400)); }
 .sd-heat-c.is-best { box-shadow: inset 0 0 0 2px rgb(var(--c-brand)); }
-.sd-heat-c.is-best::before { content: "★ "; color: rgb(var(--c-amber-600)); }
+.sd-heat-star { flex: none; color: rgb(var(--c-amber-700)); }
 .sd-opt-side { display: grid; gap: 6px; align-content: start; }
 .sd-box { padding: 8px 12px; border: 1px solid rgb(var(--c-slate-200)); border-radius: 10px; min-width: 0; }
 .sd-box-k { color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 600; }

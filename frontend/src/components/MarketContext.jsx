@@ -21,7 +21,7 @@ const krw = (value) => value == null ? "-" : `${fixed2(value)} 원`;
 function waterComment(value) {
   if (value == null) return "";
   if (value >= 20) return "물이 미지근하네요";
-  if (value >= 10) return "슬슬 차가워집니다";
+  if (value >= 10) return "슬슬 차가워져요";
   return "오늘은 집이 최고";
 }
 
@@ -111,6 +111,13 @@ function MetricChip({ type, label, value, tone = "text-slate-900", stale }) {
   );
 }
 
+// 갱신 시각은 앱의 다른 시각과 같이 KST 로(서버는 UTC ISO 를 준다).
+const KST_CLOCK = new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+function kstClock(iso) {
+  const at = new Date(iso);
+  return Number.isNaN(at.getTime()) ? String(iso).slice(11, 19) : KST_CLOCK.format(at);
+}
+
 export default function MarketContext() {
   const [symbol, setSymbol] = useState("BTC");
   const [open, setOpen] = useState(false);
@@ -156,7 +163,7 @@ export default function MarketContext() {
         className="market-pulse-trigger"
         aria-expanded={open}
         aria-controls="market-context-panel"
-        aria-label={`시장 참고 지표 상세 ${open ? "닫기" : "열기"}`}
+        // 이름은 보이는 글자(시장 브리핑 보기 + 김프·공포탐욕·한강 값) 그대로 — aria-label 이 값을 가리던 것(WCAG 2.5.3).
       >
         <span className="market-pulse-title">
           <strong>{open ? "시장 브리핑 닫기" : "시장 브리핑 보기"}</strong>
@@ -169,7 +176,7 @@ export default function MarketContext() {
           <MetricChip type="fear" label="공포·탐욕" value={fearValue == null ? (fearGreed.loading ? "…" : "—") : `${fearValue} ${fearLabel}`} tone={fear.text} stale={fearGreed.data?.stale} />
           <MetricChip type="water" label="한강" value={waterValue} tone="text-sky-800" stale={hangang.data?.stale} />
           <span className="market-updated-at">
-            {kimchi.data?.updated_at ? <>갱신 <span className="num">{kimchi.data.updated_at.slice(11, 19)}</span> UTC</> : "갱신 확인 중"}
+            {kimchi.data?.updated_at ? <>갱신 <span className="num">{kstClock(kimchi.data.updated_at)}</span> KST</> : kimchi.error ? "갱신하지 못했어요" : "갱신 확인 중"}
           </span>
         </span>
       </button>
@@ -184,7 +191,7 @@ export default function MarketContext() {
           <div className="market-detail-row is-kimchi">
             <div className="market-detail-label">
               <span className="market-indicator-icon is-kimchi" aria-hidden="true"><MetricGlyph type="kimchi" /></span>
-              <strong>김치 프리미엄</strong><InfoTooltip text={MARKET_HELP.kimchi} placement="top" />
+              <strong>김치 프리미엄</strong><InfoTooltip text={MARKET_HELP.kimchi} placement="top" label="김치 프리미엄 설명" />
             </div>
             <div className="market-detail-main">
               <select value={symbol} onChange={(event) => setSymbol(event.target.value)} className="field field-sm h-8 w-auto py-0 t-caption" aria-label="김치 프리미엄 기준 종목">
@@ -208,12 +215,12 @@ export default function MarketContext() {
           <div className="market-detail-row is-fear">
             <div className="market-detail-label">
               <span className="market-indicator-icon is-fear" aria-hidden="true"><MetricGlyph type="fear" /></span>
-              <strong>공포·탐욕 지수</strong><InfoTooltip text={MARKET_HELP.fear} placement="top" />
+              <strong>공포·탐욕 지수</strong><InfoTooltip text={MARKET_HELP.fear} placement="top" label="공포·탐욕 지수 설명" />
             </div>
             <div className="market-detail-main">
               <strong className={`t-title num ${fear.text}`}>{fearValue ?? "—"}</strong>
               <span className={`font-bold ${fear.text}`}>{fearLabel || fearGreed.error || "불러오는 중…"}</span>
-              <span className="market-fear-track"><span className={fear.bar} style={{ width: `${fearValue == null ? 0 : Math.max(2, Math.min(fearValue, 100))}%` }} /></span>
+              <span className="market-fear-track"><span className={fear.bar} style={{ "--fill": `${fearValue == null ? 0 : Math.max(2, Math.min(fearValue, 100))}%` }} /></span>
             </div>
             <p className="market-detail-note"><span>시장 전체 기준 · 종목별 지표 아님</span><span><span className="num">0</span> 공포 ↔ <span className="num">100</span> 탐욕</span></p>
           </div>
@@ -221,7 +228,7 @@ export default function MarketContext() {
           <div className="market-detail-row is-water">
             <div className="market-detail-label">
               <span className="market-indicator-icon is-water" aria-hidden="true"><MetricGlyph type="water" /></span>
-              <strong>한강 수온</strong><InfoTooltip text={MARKET_HELP.water} placement="top" />
+              <strong>한강 수온</strong><InfoTooltip text={MARKET_HELP.water} placement="top" label="한강 수온 설명" />
             </div>
             <div className="market-detail-main">
               <strong className="t-title num text-sky-800">{waterValue}</strong>

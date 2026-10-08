@@ -19,12 +19,9 @@ export default function ProBuilderClosed() {
         </p>
         <h1 className="t-h2 mt-2 font-extrabold text-slate-900">{PRO_BUILDER_CLOSED.title}</h1>
         <p className="t-body mt-3 text-slate-700">{PRO_BUILDER_CLOSED.lead}</p>
-        <ul className="t-body mt-5 space-y-2 text-slate-700">
+        <ul className="t-body mt-5 list-disc space-y-2 pl-5 text-slate-700">
           {PRO_BUILDER_CLOSED.points.map((point) => (
-            <li key={point} className="flex gap-2">
-              <span aria-hidden="true" className="mt-[0.45em] h-1.5 w-1.5 shrink-0 rounded-full bg-slate-400" />
-              <span>{point}</span>
-            </li>
+            <li key={point}>{point}</li>
           ))}
         </ul>
         <div className="mt-7 flex flex-wrap gap-2">

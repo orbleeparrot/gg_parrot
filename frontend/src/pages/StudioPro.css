@@ -69,7 +69,7 @@
 .pro-window-label { display: grid; font-size: 13px; }
 .pro-window-label small { color: rgb(var(--c-slate-500)); font-size: 11px; }
 .pro-window-track { display: block; height: 10px; border-radius: 5px; background: rgb(var(--c-slate-100)); overflow: hidden; }
-.pro-window-track i { display: block; height: 100%; border-radius: 5px; }
+.pro-window-track i { display: block; width: var(--fill, 0%); height: 100%; border-radius: 5px; }
 .pro-window-track .is-up { background: rgb(var(--c-green-600)); }
 .pro-window-track .is-down { background: rgb(var(--c-red-600)); }
 .pro-window b { text-align: right; font-size: 13px; }
@@ -95,7 +95,7 @@
 .pro-evidence-body { display: grid; gap: 4px; padding: 6px 0 2px 8px; font-size: 13px; }
 .pro-evidence-body a { color: rgb(var(--c-indigo-700)); }
 
-@media (max-width: 480px) {
+@media (max-width: 479px) {
   .pro-window { grid-template-columns: 1fr 84px; }
   .pro-window-track { grid-column: 1 / -1; grid-row: 2; }
 }

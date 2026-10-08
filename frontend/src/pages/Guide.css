@@ -42,7 +42,7 @@
 .guide-layout { display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 40px; align-items: start; }
 .guide-sidebar { min-width: 0; position: sticky; top: calc(var(--site-topbar-h, 64px) + 24px); }
 .guide-toc { max-height: calc(100dvh - var(--site-topbar-h, 64px) - 100px); overflow-y: auto; scrollbar-width: thin; padding: 4px; }
-.guide-article { min-width: 0; max-width: 960px; padding-top: 4px; scroll-margin-top: calc(var(--site-topbar-h, 64px) + 24px); }
+.guide-article { min-width: 0; max-width: 960px; padding-top: 4px; scroll-margin-top: 16px; /* + html scroll-padding(헤더 + 8px) */ }
 
 /* The onboarding preview shares the articles but keeps its own local search state. */
 .guide-embedded .guide-search-area { margin-top: 0; }

@@ -1,7 +1,7 @@
 // 설치 안내는 애니메이션을 먼저 보여 주고, 필요한 행동만 옆에 모은다.
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { RunnerKeyPanel } from "../components/RunnerSessions.jsx";
+import { RunnerKeyPanel } from "../components/RunnerKeyPanel.jsx";
 import RunnerLaunchGuide from "../components/RunnerLaunchGuide.jsx";
 import RunnerDeviceHandoff from "../components/RunnerDeviceHandoff.jsx";
 import { PageHeader } from "../components/Page.jsx";

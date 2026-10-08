@@ -107,9 +107,9 @@ export default function Auth() {
 
         <form onSubmit={submit} className="space-y-3">
           <label className="block">
-            <span className="sr-only">{isSignup ? "이메일" : "아이디"}</span>
+            <span className="sr-only">이메일</span>
             <input className={inputCls} type="email" value={email} onChange={(e) => setEmail(e.target.value)}
-              placeholder={isSignup ? "이메일" : "아이디"} autoComplete="email" required />
+              placeholder="이메일" autoComplete="email" required />
           </label>
           {isSignup && (
             <label className="block">

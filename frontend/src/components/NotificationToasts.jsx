@@ -2,10 +2,11 @@
 // 모양은 알림 패널의 행과 같고(아이콘 · 종류/시각 · 제목 · 본문 · 포인트), 아래의 가는 막대가
 // 남은 시간만큼 줄어든다. 마우스를 올리면 막대와 시간이 멈추고, 떼면 이어진다.
 // 최신이 위에 오고 3개까지만 쌓인다. 누르면 알림이 가리키는 화면으로, ✕ 로 바로 닫는다.
-// 헤더는 backdrop-filter 를 쓰므로 그 안의 fixed 요소는 헤더에 갇힌다 — body 로 포털한다.
+// 헤더는 backdrop-filter 를 쓰므로 그 안의 fixed 요소는 헤더에 갇힌다 — body 의 토스트 자리로 포털한다.
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { kindLabel, pointsOf } from "../lib/notifications.js";
+import { toastHost } from "../lib/toastHost.js";
 import NotificationKindIcon from "./notificationKindIcon.jsx";
 import { Icon } from "./icons.jsx";
 
@@ -25,16 +26,22 @@ export function useHeaderBottom() {
   return top;
 }
 
-export default function NotificationToasts({ toasts, onDismiss, onOpen }) {
+// 공용 토스트 자리를 돌려주고, 헤더 바로 아래로 내려 둔다.
+export function useToastHost() {
   const top = useHeaderBottom();
-  if (typeof document === "undefined") return null;
+  const host = toastHost();
+  useEffect(() => {
+    host?.style.setProperty("--toast-top", `${top}px`);
+  }, [host, top]);
+  return host;
+}
+
+export default function NotificationToasts({ toasts, onDismiss, onOpen }) {
+  const host = useToastHost();
+  if (!host) return null;
   return createPortal(
-    <div className="ggp-toasts" style={{ top }} role="status" aria-live="polite" aria-label="새 알림">
-      {toasts.map((toast) => (
-        <Toast key={toast.id} toast={toast} onDismiss={onDismiss} onOpen={onOpen} />
-      ))}
-    </div>,
-    document.body,
+    toasts.map((toast) => <Toast key={toast.id} toast={toast} onDismiss={onDismiss} onOpen={onOpen} />),
+    host,
   );
 }
 
@@ -48,31 +55,21 @@ function Toast({ toast, onDismiss, onOpen }) {
     if (event.animationName === "ggp-toast-drain") leave();
     else if (event.animationName === "ggp-toast-out") onDismiss(toast.id);
   };
+  // 판 전체가 버튼이고 그 안에 닫기 버튼이 있던 구조(버튼 속 버튼)는 화면 읽기 프로그램이 닫기를 찾지 못한다.
+  // 제목을 버튼으로 두고, 그 ::after 가 판 전체를 덮어 어디를 눌러도 열리게 한다(닫기만 그 위).
   return (
-    <div
-      className={"ggp-toast" + (leaving ? " is-leaving" : "")}
-      onAnimationEnd={onAnimationEnd}
-      onClick={() => { onOpen(item); leave(); }}
-      role="button"
-      tabIndex={0}
-      onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onOpen(item); leave(); } }}
-    >
+    <div className={"ggp-toast is-link" + (leaving ? " is-leaving" : "")} onAnimationEnd={onAnimationEnd}>
       <span className="ggp-toast-icon" aria-hidden="true"><NotificationKindIcon kind={item.kind} /></span>
       <span className="ggp-toast-text">
         <span className="ggp-toast-meta t-caption">
           <span>{kindLabel(item.kind)}</span>
           <span>방금 전</span>
         </span>
-        <span className="ggp-toast-title">{item.title}</span>
+        <button type="button" className="ggp-toast-title ggp-toast-open" onClick={() => { onOpen(item); leave(); }}>{item.title}</button>
         {item.body ? <span className="ggp-toast-body">{item.body}</span> : null}
       </span>
       <span className="ggp-toast-side">
-        <button
-          type="button"
-          className="ggp-toast-close"
-          aria-label="알림 닫기"
-          onClick={(event) => { event.stopPropagation(); leave(); }}
-        >
+        <button type="button" className="ggp-toast-close" aria-label="알림 닫기" onClick={leave}>
           <Icon name="x" size={16} />
         </button>
         {points ? <b className="ggp-toast-points num">+{points.toLocaleString("ko-KR")} P</b> : null}

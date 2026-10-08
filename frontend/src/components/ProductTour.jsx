@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useModalLayer } from "../hooks/useModalLayer.js";
 import { Icon } from "./icons.jsx";
 
 // 가벼운 프로덕트 투어(온보딩). steps 의 각 항목이 data-tour="<anchor>" 요소를
@@ -160,12 +161,14 @@ export default function ProductTour({ steps, open, onClose }) {
     setCardPos({ top, left });
   }, [open, rect, index, step]);
 
-  // 키보드: Esc 종료, ←/→ 이동.
+  // 키보드: Esc 종료(공용 겹), ←/→ 이동 — 입력 칸에서 커서를 옮기는 화살표는 건드리지 않는다.
+  useModalLayer({ open: open && Boolean(step), ref: cardRef, onEscape: onClose, trap: true, lockScroll: false });
   useEffect(() => {
     if (!open) return undefined;
     const onKey = (event) => {
-      if (event.key === "Escape") { event.preventDefault(); onClose(); }
-      else if (event.key === "ArrowRight") next();
+      const target = event.target;
+      if (target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))) return;
+      if (event.key === "ArrowRight") next();
       else if (event.key === "ArrowLeft") prev();
     };
     window.addEventListener("keydown", onKey);
@@ -176,10 +179,10 @@ export default function ProductTour({ steps, open, onClose }) {
 
   const spot = rect
     ? {
-        top: rect.top - HOLE_PADDING,
-        left: rect.left - HOLE_PADDING,
-        width: rect.width + HOLE_PADDING * 2,
-        height: rect.height + HOLE_PADDING * 2,
+        "--spot-x": `${rect.left - HOLE_PADDING}px`,
+        "--spot-y": `${rect.top - HOLE_PADDING}px`,
+        "--spot-w": `${rect.width + HOLE_PADDING * 2}px`,
+        "--spot-h": `${rect.height + HOLE_PADDING * 2}px`,
       }
     : null;
 
@@ -196,11 +199,8 @@ export default function ProductTour({ steps, open, onClose }) {
         role="dialog"
         aria-modal="true"
         aria-labelledby="tour-card-title"
-        style={{
-          top: cardPos?.top ?? 0,
-          left: cardPos?.left ?? 0,
-          visibility: cardPos ? "visible" : "hidden",
-        }}
+        data-placed={cardPos ? "true" : "false"}
+        style={{ "--card-x": `${cardPos?.left ?? 0}px`, "--card-y": `${cardPos?.top ?? 0}px` }}
       >
         <div className="tour-card-top">
           <span className="tour-card-step num">{index + 1} / {steps.length}</span>

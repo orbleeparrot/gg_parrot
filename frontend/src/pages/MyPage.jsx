@@ -256,7 +256,7 @@ export default function MyPage() {
       </div>
     </aside>
     {error ? <div className="me-content"><ErrorNote><p>내 활동을 불러오지 못했어요: {error}</p><button type="button" className="me-card-action mt-3" onClick={() => setReload(value => value + 1)}>다시 시도</button></ErrorNote></div> : !data ? <ActivitySkeleton /> : <div className="me-content">
-      <dl className={"me-stats" + (longStats ? " has-long-values" : "")}>{metrics.map(({ label, value, Icon, target, points }) => <div className={"me-stat" + (points ? " is-points" : "")} key={label}><dt><Icon size={20} aria-hidden="true" />{label}</dt><dd className="num">{value}</dd><button type="button" className="me-stat-link" aria-label={label + " 내역 보기"} onClick={() => pickTab(target)} /></div>)}</dl>
+      <dl className={"me-stats" + (longStats ? " has-long-values" : "")}>{metrics.map(({ label, value, Icon, target, points }) => <div className={"me-stat" + (points ? " is-points" : "")} key={label}><dt><Icon size={20} aria-hidden="true" />{label}</dt><dd className="num">{value}<button type="button" className="me-stat-link" aria-label={label + " 내역 보기"} onClick={() => pickTab(target)} /></dd></div>)}</dl>
       <DailyQuests board={quests} />
       <nav className="me-section-nav" aria-label="프로필 메뉴">{SECTIONS.map(({ key, label, first, Icon }) => <button key={key} type="button" aria-pressed={section === key} onClick={() => pickTab(first)}><Icon size={22} aria-hidden="true" /><span>{label}</span></button>)}</nav>
       <section className={"me-workspace is-" + section} aria-labelledby="me-workspace-title">

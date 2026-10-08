@@ -84,7 +84,7 @@ def add_message(account: User, text: str, *, room_id: int | None = None, db: Ses
     user_id = int(account.id)
     text = (text or "").strip()
     if not text:
-        raise ValueError("빈 메시지는 보낼 수 없습니다.")
+        raise ValueError("빈 메시지는 보낼 수 없어요.")
     text = text[:MAX_LEN]
     require_clean_text(text, "메시지")
     with nullcontext(db) if db is not None else get_session() as db:

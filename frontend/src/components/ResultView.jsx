@@ -251,7 +251,7 @@ function PerSymbolTable({ rows, legs = null }) {
       </div>
       {/* 표는 캔버스 위 괘선만 — 감싸는 상자를 두지 않는다(§6 table-row). */}
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[420px]">
+        <table className="w-full min-w-105">
           <thead>
             <tr className="border-b border-slate-200 t-caption text-slate-700">
               <th className="text-left py-2">종목</th>

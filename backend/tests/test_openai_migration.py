@@ -31,7 +31,7 @@ def test_no_old_provider_sdk_or_key_gates_remain():
         "ai_explain.py": 1, "ai_challenge.py": 1, "news.py": 2,
         "community_summaries.py": 1, "ask.py": 2,
         "agent_features/position_news/classifier.py": 1, "devnotes.py": 1,
-        "validate_explain.py": 1,
+        "validate_explain.py": 1, "coach_ai.py": 1,
     }
 
 

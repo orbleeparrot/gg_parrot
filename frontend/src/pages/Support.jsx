@@ -35,9 +35,9 @@ export default function Support() {
     <div className="support-page">
       <PageHeader title="고객센터" />
       <p className="support-copy">
-        죄송합니다. 고객센터는 현재 개발 중입니다.
+        죄송해요. 고객센터는 지금 개발 중이에요.
         <br />
-        아래의 이메일로 문의를 보내주시길 바랍니다.
+        아래 이메일로 문의를 보내 주세요.
       </p>
       <p className="support-contact">
         담당자

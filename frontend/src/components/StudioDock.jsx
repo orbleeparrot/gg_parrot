@@ -2,6 +2,7 @@
 // 것과 같고, 화면만 워크벤치 시안대로 그린다: 수치 띠 · 자산곡선 · 열 지도 · 상태 상자 · 세 갈래 결과.
 // 스타일은 pages/Studio.css 의 .sd-* .
 import { Fragment, useState } from "react";
+import { heatLevel } from "../lib/heat.js";
 import { Link } from "react-router-dom";
 import { api } from "../api.js";
 import EquityChart from "./EquityChart.jsx";
@@ -95,7 +96,7 @@ export function StudioBacktest({ result: r, perSymbol, periodLabel, symbol, leve
       <div className="sd-kpis">
         {kpis.map((kpi) => (
           <div key={kpi.k} className="sd-kpi">
-            <div className="sd-kpi-k"><span className="sd-kpi-cap">{kpi.k}</span>{kpi.term && <InfoTooltip term={kpi.term} />}</div>
+            <div className="sd-kpi-k"><span className="sd-kpi-cap">{kpi.k}</span>{kpi.term && <InfoTooltip term={kpi.term} label={`${kpi.k} 설명`} />}</div>
             <div className={"sd-kpi-v num " + kpi.cls} title={kpi.title}>{kpi.v}</div>
             {kpi.d && <div className="sd-kpi-d">{kpi.d}</div>}
           </div>
@@ -193,14 +194,6 @@ export function StudioAiExplain({ explanation, onAiExplain, aiBusy, aiError }) {
 }
 
 // ── 익·손절 최적화 — 열 지도(왼쪽) + 최적·검증·주의·적용(오른쪽). 시안대로 셀은 한 줄, 색은 은은한 초록/빨강. ──
-// 셀 색 — 본전(0)이 회색, |수익률|/최대 에 비례해 초록·빨강을 섞는다(시안의 color-mix).
-function heatBg(value, extent) {
-  if (!(extent > 0)) return {};
-  const mag = Math.min(1, Math.abs(value) / extent);
-  const p = Math.round(8 + 56 * mag);
-  const color = value >= 0 ? "rgb(var(--c-green-600))" : "rgb(var(--c-red-600))";
-  return { background: `color-mix(in srgb, ${color} ${p}%, rgb(var(--c-slate-100)))` };
-}
 
 export function StudioOptimize({ form, setForm, valErr, onResult }) {
   const [busy, setBusy] = useState(false);
@@ -255,7 +248,7 @@ export function StudioOptimize({ form, setForm, valErr, onResult }) {
           <span className="sd-opt-hint">회색이 본전 · 칸을 누르면 적용</span>
           <button type="button" onClick={run} disabled={busy || !!valErr} className="btn btn-s btn-secondary">{busy ? "최적화 중…" : "다시 최적화"}</button>
         </div>
-        <div className="sd-heat" style={{ gridTemplateColumns: `52px repeat(${data.tp_values.length}, minmax(0, 1fr))` }}>
+        <div className="sd-heat" style={{ "--heat-cols": data.tp_values.length }}>
           <div className="sd-heat-h" />
           {data.tp_values.map((tp) => <div key={`h-${tp}`} className="sd-heat-h num">{tp}%</div>)}
           {data.sl_values.map((sl) => (
@@ -269,8 +262,8 @@ export function StudioOptimize({ form, setForm, valErr, onResult }) {
                     key={`${tp}-${sl}`}
                     type="button"
                     onClick={() => apply(tp, sl)}
-                    style={heatBg(c.final_return_pct, extent)}
-                    className={"sd-heat-c num" + (isBest(tp, sl) ? " is-best" : "") + (isCurrent(tp, sl) ? " is-current" : "")}
+                    style={{ "--heat": heatLevel(c.final_return_pct, extent) }}
+                    className={"sd-heat-c heat-cell num" + (isBest(tp, sl) ? " is-best" : "") + (isCurrent(tp, sl) ? " is-current" : "")}
                     aria-label={`익절 ${tp}% 손절 ${sl}% · 학습 ${pct(c.final_return_pct, 1)}${c.oos_return_pct != null ? ` · 검증 ${pct(c.oos_return_pct, 1)}` : ""}`}
                     title={
                       `익절 ${tp}% · 손절 ${sl}%\n학습 ${pct(c.final_return_pct)} · MDD -${c.mdd_pct.toFixed(1)}% · 샤프 ${c.sharpe ?? "—"} · 매매 ${c.total_trades}회\n` +
@@ -278,6 +271,7 @@ export function StudioOptimize({ form, setForm, valErr, onResult }) {
                       "누르면 조건에 적용"
                     }
                   >
+                    {isBest(tp, sl) ? <Icon name="star" size={11} fill="currentColor" strokeWidth={1.5} className="sd-heat-star" /> : null}
                     {pct(c.final_return_pct, 1).replace("%", "")}
                   </button>
                 );
@@ -438,7 +432,7 @@ export function StudioPaper({ macro: currentMacro, valErr, controller }) {
           {status && portfolio && <span>종목 <b className="num">{legs.length}</b>개 · 총합 기준</span>}
         </div>
         {!status ? (
-          <div className="sd-log-empty"><b>백테스트가 괜찮으면 여기서 실제 시세로 돌려 봐요</b>결과가 쌓이는 동안 페이지를 닫아도 마이페이지에서 이어 볼 수 있어요.</div>
+          <div className="sd-log-empty"><b>백테스트가 괜찮으면 여기서 실제 시세로 돌려 봐요</b>결과가 쌓이는 동안 다른 화면에 다녀와도 이 탭에서 이어 볼 수 있어요.</div>
         ) : (status.trades || []).length === 0 ? (
           <div className="sd-log-empty">아직 체결이 없어요. 조건을 낮추거나(익절·손절 0.3~1%) 변동성 큰 종목·리플레이를 써 봐요.</div>
         ) : (

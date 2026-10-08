@@ -16,6 +16,6 @@
   pointer-events: none;
 }
 
-@media (max-width: 480px) {
+@media (max-width: 479px) {
   .runner-launch-guide-frame { border-radius: 12px; }
 }

@@ -4,6 +4,7 @@
 // 움직임은 토스 모션 값(120 눌림 · 200 전환 · 320 등장, 튕김 없음)만 쓴다 — AskParrotDialog.css.
 import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useReducer, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useModalLayer } from "../hooks/useModalLayer.js";
 import { api } from "../api.js";
 import CoinIcon from "./CoinIcon.jsx";
 import CheckIcon from "./CheckIcon.jsx";
@@ -35,7 +36,7 @@ import { Icon } from "./icons.jsx";
 
 // 껄무새 얼굴 — 에이전트 표정 중 '호기심'(brand/README.md).
 const ASK_MASCOT = "/brand/agent/ggparrot-agent-curious-v1.svg";
-const NARROW_QUERY = "(max-width: 640px)";
+const NARROW_QUERY = "(max-width: 639px)"; // CSS 와 같은 휴대폰 경계(Tailwind sm 640 의 바로 아래)
 
 function useMedia(query) {
   const get = () => (typeof window !== "undefined" && window.matchMedia ? window.matchMedia(query).matches : false);
@@ -57,14 +58,12 @@ function Nums({ text }) {
 }
 
 function Face({ size = 56 }) {
-  return <img src={ASK_MASCOT} alt="" width={size} height={size} className="ask-face" style={{ width: size, height: size }} aria-hidden="true" />;
+  return <img src={ASK_MASCOT} alt="" width={size} height={size} className="ask-face" aria-hidden="true" />;
 }
 
 function Dots() {
   return <span className="ask-dots3" aria-hidden="true"><i /><i /><i /></span>;
 }
-
-const inStyle = (i, extra) => ({ "--i": i, ...extra });
 
 // 질문 한 장의 선택지.
 function stepOptions(step, answers) {
@@ -99,7 +98,7 @@ function BalanceInput({ exchange, disabled, onSubmit }) {
     caret.current = null;
   }, [value]);
   return (
-    <form className="ask-balance ask-in" style={inStyle(1)} onSubmit={(event) => {
+    <form className="ask-balance ask-in" style={{ "--i": 1 }} onSubmit={(event) => {
       event.preventDefault();
       if (disabled) return;
       if (!validBalance(amount)) { setError(BALANCE_ERROR); return; }
@@ -222,7 +221,7 @@ function ResultCard({ item, rank, best, compact = false, onLoad }) {
 function CandidateRow({ c, marketText, onPick, disabled, i }) {
   const kr = coinName(c.symbol);
   return (
-    <button type="button" className="ask-cand ask-in" style={inStyle(i, { "--coin": coinTint(c.base) || "transparent" })} onClick={() => onPick(c.symbol)} disabled={disabled}>
+    <button type="button" className="ask-cand ask-in" style={{ "--i": i, "--coin": coinTint(c.base) || "transparent" }} onClick={() => onPick(c.symbol)} disabled={disabled}>
       <CoinIcon symbol={c.symbol} size={32} alt="" className="ask-logo" />
       <span className="ask-cand-name">
         <span className="ask-tk num"><strong>{c.base}</strong><small>{quoteOf(c.symbol)}</small></span>
@@ -258,7 +257,7 @@ function ManualPick({ chips, onPick, disabled, i, exchange }) {
     pick(resolved, true);
   };
   return (
-    <section className="ask-manual ask-in" style={inStyle(i)} aria-label={MANUAL_PICK_LABEL}>
+    <section className="ask-manual ask-in" style={{ "--i": i }} aria-label={MANUAL_PICK_LABEL}>
       <h4 className="ask-manual-t">{MANUAL_PICK_LABEL}</h4>
       {stale || error ? <p className="ask-miss" role="status">{items ? "마지막 확인한 목록이에요. 새 상장·거래 종료가 아직 반영되지 않았을 수 있어요." : error || "종목 목록을 확인하고 있어요."} <button type="button" className="btn btn-s btn-secondary" onClick={reload}>다시 확인</button></p> : null}
       {chips.length ? (
@@ -299,7 +298,7 @@ function ManualPick({ chips, onPick, disabled, i, exchange }) {
 
 function CompareTable({ results, hold }) {
   return (
-    <div className="ask-sum ask-in" style={inStyle(2)}>
+    <div className="ask-sum ask-in" style={{ "--i": 2 }}>
       <p className="ask-sum-t">{COMPARE_TITLE}</p>
       <table>
         <thead><tr><th scope="col">순위</th><th scope="col">조합</th><th scope="col">수익률</th><th scope="col" className="is-mdd">MDD</th><th scope="col">{VS_HOLD_LABEL}</th></tr></thead>
@@ -338,6 +337,7 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
   const narrow = useMedia(NARROW_QUERY);
   const reducedMotion = useMedia("(prefers-reduced-motion: reduce)");
   const titleId = useId();
+  const dialogRef = useRef(null);
   const bodyRef = useRef(null);
   const timers = useRef([]);
   const trackRef = useRef(null);
@@ -411,11 +411,16 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
     if (best !== active) setActive(best);
   };
 
+  // 요청이 도는 중에는 Esc 로도 닫지 못한다(중간 취소 금지). 열려 있는 동안 뒤의 앱은 누를 수 없다 —
+  // 헤더의 종·회원 키를 누르면 스크림이 받아 창이 닫히며 답이 초기화되던 문제.
+  useModalLayer({ open, ref: dialogRef, onEscape: onClose, busy, trap: true, inertRoot: true });
+
   useEffect(() => {
     if (!open) return undefined;
     const onKey = (e) => {
-      // 요청이 도는 중에는 Esc 로도 닫지 못한다(중간 취소 금지).
-      if (e.key === "Escape" && !busy) { onClose(); return; }
+      // Esc 는 공용 겹(useModalLayer)이 받는다. 숫자·화살표는 이 창 안에 포커스가 있을 때만 —
+      // 위에 확인창이 떠 있을 때 아래 선택지가 눌리지 않게.
+      if (!dialogRef.current?.contains(e.target)) return;
       if (e.target instanceof HTMLElement && (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA")) return;
       if (options.length && /^[1-9]$/.test(e.key)) {
         const idx = Number(e.key) - 1;
@@ -488,7 +493,7 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
 
   const offer = extraOffer(status);
   const extraBlock = (i) => (offer.show ? (
-    <div className="ask-extra ask-in" style={inStyle(i)} role="group" aria-label="포인트로 횟수 추가">
+    <div className="ask-extra ask-in" style={{ "--i": i }} role="group" aria-label="포인트로 횟수 추가">
       <button type="button" className={"btn btn-s " + (offer.canBuy ? "btn-primary" : "btn-secondary")} disabled={!offer.canBuy || extraBusy} onClick={buyExtra}>
         {extraBusy ? "추가하는 중…" : offer.label}
       </button>
@@ -503,7 +508,7 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
     return f.label;
   };
   const followUps = (i, className = "") => (
-    <div className={"ask-fups ask-in " + className} style={inStyle(i)} role="group" aria-label={FOLLOW_UPS_TITLE}>
+    <div className={"ask-fups ask-in " + className} style={{ "--i": i }} role="group" aria-label={FOLLOW_UPS_TITLE}>
       <span className="ask-fups-t">{FOLLOW_UPS_TITLE}</span>
       {FOLLOW_UPS.map((f) => {
         const quotaBlocked = noQuota && (f.kind === "safer" || f.kind === "riskier");
@@ -525,22 +530,22 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
 
   let stage;
   if (status == null) {
-    stage = <div className="ask-center ask-in" style={inStyle(0)}><Dots /><p className="ask-lead">{OPENING_TEXT}</p></div>;
+    stage = <div className="ask-center ask-in" style={{ "--i": 0 }}><Dots /><p className="ask-lead">{OPENING_TEXT}</p></div>;
   } else if (status.error) {
-    stage = <div className="ask-center ask-in" style={inStyle(0)}><Face size={48} /><p className="ask-lead is-strong">{UNAVAILABLE_TEXT}</p></div>;
+    stage = <div className="ask-center ask-in" style={{ "--i": 0 }}><Face size={48} /><p className="ask-lead is-strong">{UNAVAILABLE_TEXT}</p></div>;
   } else if (!status.consented) {
     stage = (
       <div className="ask-center">
-        <span className="ask-in" style={inStyle(0)}><Face size={64} /></span>
-        <p className="ask-lead is-strong ask-in" style={inStyle(1)}>{CONSENT_TEXT}</p>
-        <button type="button" className="btn btn-m btn-primary ask-in" style={inStyle(2)} disabled={consentBusy} onClick={consent}>{CONSENT_BUTTON}</button>
+        <span className="ask-in" style={{ "--i": 0 }}><Face size={64} /></span>
+        <p className="ask-lead is-strong ask-in" style={{ "--i": 1 }}>{CONSENT_TEXT}</p>
+        <button type="button" className="btn btn-m btn-primary ask-in" style={{ "--i": 2 }} disabled={consentBusy} onClick={consent}>{CONSENT_BUTTON}</button>
       </div>
     );
   } else if (state.phase === "cards" && noQuota && answeredSteps.length === 0) {
     stage = (
       <div className="ask-center">
-        <span className="ask-in" style={inStyle(0)}><Face /></span>
-        <p className="ask-lead is-strong ask-in" style={inStyle(1)} role="status">{NO_QUOTA_TEXT}</p>
+        <span className="ask-in" style={{ "--i": 0 }}><Face /></span>
+        <p className="ask-lead is-strong ask-in" style={{ "--i": 1 }} role="status">{NO_QUOTA_TEXT}</p>
         {extraBlock(2)}
       </div>
     );
@@ -548,14 +553,14 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
     const two = options.length === 4 && state.step !== "profile";
     stage = (
       <>
-        <h3 className="ask-q ask-in" style={inStyle(0)}>{STEP_PROMPTS[state.step]}</h3>
+        <h3 className="ask-q ask-in" style={{ "--i": 0 }}>{STEP_PROMPTS[state.step]}</h3>
         {state.step === "balance" ? <BalanceInput exchange={state.answers.exchange} disabled={lock}
           onSubmit={(value) => leaveThen(() => dispatch({ type: "choose", step: "balance", value }))} /> : (
         <div className={"ask-opts" + (two ? " is-two" : "")} role="group" aria-label={STEP_PROMPTS[state.step]}>
           {options.map((opt, idx) => (
             <button key={opt.key} type="button" disabled={opt.disabled} title={opt.title}
               className={"ask-opt ask-in" + (picked === idx ? " is-picked" : picked != null ? " is-dim" : "")}
-              style={inStyle(idx + 1)} aria-pressed={picked === idx} onClick={() => choose(opt, idx)}>
+              style={{ "--i": idx + 1 }} aria-pressed={picked === idx} onClick={() => choose(opt, idx)}>
               <span className="ask-opt-l"><span className="ask-key num" aria-hidden="true">{idx + 1}</span>
                 {state.step === "exchange" && <img className="ask-exchange-logo" src={`/exchanges/${opt.value}.${opt.value === "binance" ? "svg" : "png"}`} width="16" height="16" alt="" aria-hidden="true" draggable="false" />}
                 {opt.label}</span>
@@ -563,61 +568,61 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
             </button>
           ))}
         </div>)}
-        {state.step === "market" && !canChooseFutures(state.answers) ? <p className="ask-note ask-in" style={inStyle(options.length + 1)}>{isDomestic(state.answers.exchange) ? DOMESTIC_SPOT_ONLY : STABLE_NO_FUTURES}</p> : null}
+        {state.step === "market" && !canChooseFutures(state.answers) ? <p className="ask-note ask-in" style={{ "--i": options.length + 1 }}>{isDomestic(state.answers.exchange) ? DOMESTIC_SPOT_ONLY : STABLE_NO_FUTURES}</p> : null}
       </>
     );
   } else if (state.phase === "ready") {
     stage = (
       <div className="ask-center">
-        <p className="ask-say ask-in" style={inStyle(0)}><Face size={32} /><span>{READY_TEXT}</span></p>
-        <button type="button" className="btn btn-m btn-primary ask-in" style={inStyle(1)} disabled={lock} onClick={() => leaveThen(submitCards)}>{READY_BUTTON}</button>
-        <span className="ask-caption ask-in" style={inStyle(2)}>{readyCostNote(status.remaining_today)}</span>
+        <p className="ask-say ask-in" style={{ "--i": 0 }}><Face size={32} /><span>{READY_TEXT}</span></p>
+        <button type="button" className="btn btn-m btn-primary ask-in" style={{ "--i": 1 }} disabled={lock} onClick={() => leaveThen(submitCards)}>{READY_BUTTON}</button>
+        <span className="ask-caption ask-in" style={{ "--i": 2 }}>{readyCostNote(status.remaining_today)}</span>
       </div>
     );
   } else if (busy) {
-    stage = <div className="ask-center ask-in" style={inStyle(0)} role="status"><Dots /><p className="ask-lead is-strong">{RUNNING_TEXT}</p></div>;
+    stage = <div className="ask-center ask-in" style={{ "--i": 0 }} role="status"><Dots /><p className="ask-lead is-strong">{RUNNING_TEXT}</p></div>;
   } else if (state.phase === "error") {
     stage = (
       <div className="ask-center">
-        <span className="ask-in" style={inStyle(0)}><Face size={48} /></span>
-        <p className="ask-lead is-strong ask-in" style={inStyle(1)} role="alert">{state.error}</p>
-        <button type="button" className="btn btn-s btn-secondary ask-in" style={inStyle(2)} onClick={() => leaveThen(() => dispatch({ type: "followUp", kind: "restart" }))}>{RESTART_LABEL}</button>
+        <span className="ask-in" style={{ "--i": 0 }}><Face size={48} /></span>
+        <p className="ask-lead is-strong ask-in" style={{ "--i": 1 }} role="alert">{state.error}</p>
+        <button type="button" className="btn btn-s btn-secondary ask-in" style={{ "--i": 2 }} onClick={() => leaveThen(() => dispatch({ type: "followUp", kind: "restart" }))}>{RESTART_LABEL}</button>
       </div>
     );
   } else if (state.phase === "candidates") {
     const n = state.candidates.length;
     stage = (
       <>
-        <p className="ask-say ask-in" style={inStyle(0)}><Face size={32} /><span>{CANDIDATES_PROMPT}</span></p>
+        <p className="ask-say ask-in" style={{ "--i": 0 }}><Face size={32} /><span>{CANDIDATES_PROMPT}</span></p>
         {n ? (
           <div className="ask-cands">
             {state.candidates.map((c, idx) => <CandidateRow key={c.symbol} c={c} i={idx + 1} marketText={marketText} disabled={lock} onPick={(sym) => leaveThen(() => pickSymbol(sym))} />)}
           </div>
         ) : null}
         <ManualPick chips={state.manualSymbols} i={n + 1} exchange={state.answers.exchange} disabled={lock} onPick={(sym, resolved) => leaveThen(() => pickSymbol(sym, resolved))} />
-        <p className="ask-disc ask-in" style={inStyle(n + 2)} role="note">{DISCLAIMER}</p>
+        <p className="ask-disc ask-in" style={{ "--i": n + 2 }} role="note">{DISCLAIMER}</p>
       </>
     );
   } else if (state.phase === "results") {
     stage = (
       <>
-        <div className={"ask-rh ask-in" + (carousel ? " is-compact" : "")} style={inStyle(0)}>
+        <div className={"ask-rh ask-in" + (carousel ? " is-compact" : "")} style={{ "--i": 0 }}>
           <p className="ask-say"><Face size={32} /><span>{resultsHeadline(results.length, state.noEdge)}</span></p>
           {results.length > 0 && !carousel ? <span className="ask-legend"><span><i />{LEGEND_EQUITY}</span><span><i className="is-base" />{LEGEND_BASE}</span></span> : null}
         </div>
-        {state.noEdge ? <p className="ask-hold ask-in" style={inStyle(1)} role="note">{NO_EDGE_NOTE}</p> : null}
+        {state.noEdge ? <p className="ask-hold ask-in" style={{ "--i": 1 }} role="note">{NO_EDGE_NOTE}</p> : null}
         {results.length > 1 && !carousel ? <CompareTable results={results} hold={hold} /> : null}
         {results.length > 0 && !carousel ? (
           <div className="ask-mcs">
             {results.map((item, idx) => (
-              <div key={item.label + item.rule_type} className="ask-in" style={inStyle(idx + 3)}>
+              <div key={item.label + item.rule_type} className="ask-in" style={{ "--i": idx + 3 }}>
                 <ResultCard item={item} rank={idx + 1} best={idx === 0} onLoad={onLoad} />
               </div>
             ))}
           </div>
         ) : null}
         {carousel ? (
-          <div className="ask-car ask-in" style={inStyle(2)}>
+          <div className="ask-car ask-in" style={{ "--i": 2 }}>
             <div className="ask-car-track" ref={trackRef} onScroll={onTrackScroll} aria-roledescription="carousel" aria-label="매크로 후보">
               {results.map((item, idx) => (
                 <div key={item.label + item.rule_type} className={"ask-car-slide" + (idx === active ? " is-on" : "")}
@@ -637,8 +642,8 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
             </div>
           </div>
         ) : null}
-        <p className="ask-disc ask-in" style={inStyle(results.length + 3)} role="note">{DISCLAIMER}</p>
-        {state.answers.profile === "scalper" ? <p className="ask-note ask-in" style={inStyle(results.length + 4)} role="note">{SCALPER_NOTE}</p> : null}
+        <p className="ask-disc ask-in" style={{ "--i": results.length + 3 }} role="note">{DISCLAIMER}</p>
+        {state.answers.profile === "scalper" ? <p className="ask-note ask-in" style={{ "--i": results.length + 4 }} role="note">{SCALPER_NOTE}</p> : null}
         {extraBlock(results.length + 5)}
         {carousel ? null : followUps(results.length + 6)}
       </>
@@ -652,7 +657,7 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
 
   return createPortal(
     <div className="ask-scrim" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
-      <div role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} className={"ask-dlg" + (wide ? " is-wide" : "")}>
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} className={"ask-dlg" + (wide ? " is-wide" : "")}>
         <header className="ask-head">
           <img src={ASK_MASCOT} alt="" width="28" height="28" className="ask-head-face" aria-hidden="true" />
           <h2 id={titleId} className="ask-title">껄무새에게 물어볼까?</h2>
@@ -662,7 +667,7 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
         <div className="ask-body" ref={bodyRef}>
           {showProgress ? (
             <div className="ask-prog" aria-hidden="true">
-              <span className="ask-prog-bar"><i style={{ width: `${(answered / STEPS.length) * 100}%` }} /></span>
+              <span className="ask-prog-bar"><i style={{ "--fill": `${(answered / STEPS.length) * 100}%` }} /></span>
               <span className="num">{Math.min(answered + 1, STEPS.length)} / {STEPS.length}</span>
             </div>
           ) : null}

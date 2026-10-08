@@ -4,7 +4,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { useAuth } from "../lib/auth.js";
-import { RunnerKeyPanel } from "./RunnerSessions.jsx";
+import { RunnerKeyPanel } from "./RunnerKeyPanel.jsx";
 import { KeyIcon } from "./utilityIcons.jsx";
 
 export default function HeaderMemberKey() {
@@ -18,7 +18,8 @@ export default function HeaderMemberKey() {
   useEffect(() => { setOpen(false); }, [pathname]);
   useEffect(() => {
     if (!open) return undefined;
-    const onPointer = (event) => { if (!rootRef.current?.contains(event.target)) setOpen(false); };
+    // body 로 띄운 확인창(키 재발급)에서의 클릭은 '바깥'이 아니다 — 누르는 순간 팝오버째 닫히던 것.
+    const onPointer = (event) => { if (event.target.closest?.(".scrim")) return; if (!rootRef.current?.contains(event.target)) setOpen(false); };
     const onKey = (event) => {
       if (event.key === "Escape") { setOpen(false); buttonRef.current?.focus(); }
     };

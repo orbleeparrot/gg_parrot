@@ -4,6 +4,7 @@ import SimBadge from "../components/SimBadge.jsx";
 import RegisterMacroModal from "../components/RegisterMacroModal.jsx";
 import ChatBox from "../components/ChatBox.jsx";
 import ConfirmDialog from "../components/ConfirmDialog.jsx";
+import { useModalLayer } from "../hooks/useModalLayer.js";
 import AppToast from "../components/AppToast.jsx";
 import { PageHeader, EmptyState, Loading, ErrorNote } from "../components/Page.jsx";
 import { api } from "../api.js";
@@ -14,7 +15,7 @@ import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 import { applyVote, settleVote } from "../lib/leaderboardVotes.js";
 import StrategyDetails from "../components/StrategyDetails.jsx";
 import { impressionKey } from "../lib/visit.js";
-import { isLive, liveReturn, stateHelp, stateLine, symbolsOf } from "../lib/leaderboardState.js";
+import { isLive, liveReturn, nextKstMidnight, stateHelp, stateLine, symbolsOf } from "../lib/leaderboardState.js";
 import { LIVE_TITLE, REWARD_HELP, REWARD_NOTE, STATE_LEGEND } from "../lib/leaderboardCopy.js";
 import { EXCHANGES, exchangeLabel, exchangeLogo, marketKey } from "../lib/exchanges.js";
 import { baseOf } from "../lib/format.js";
@@ -87,6 +88,14 @@ function ThumbDownIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
       <path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.7a2 2 0 0 0-2 1.7l-1.4 9a2 2 0 0 0 2 2.3H10zM17 2h2.7a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H17" />
+    </svg>
+  );
+}
+// 행 메뉴(빌더로 복사·수정·삭제) — 오른쪽 클릭·길게 누르기만으로는 키보드와 아이폰에서 열 수 없어 보이는 버튼을 둔다.
+function MoreIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" className="lb-more-icon">
+      <circle cx="5" cy="12" r="1.7" /><circle cx="12" cy="12" r="1.7" /><circle cx="19" cy="12" r="1.7" />
     </svg>
   );
 }
@@ -194,7 +203,8 @@ function AccountLeaderboard() {
   const [items, setItems] = useState([]);
   const [unlocking, setUnlocking] = useState(0); // entry id being unlocked
   const [deleting, setDeleting] = useState(0); // entry id being deleted
-  const [resetAt, setResetAt] = useState(Date.now());
+  // 서버 값을 받기 전이나 못 받았을 때도 '00:00:00' 대신 다음 자정(KST)까지를 센다.
+  const [resetAt, setResetAt] = useState(() => nextKstMidnight());
   const [page, setPage] = useState(1);
   const [board, setBoard] = useState({ total: 0, has_more: false, preparing: false, stale: false });
   const [busy, setBusy] = useState(true);
@@ -358,9 +368,21 @@ function AccountLeaderboard() {
     const height = 8 + 38 * rowMenuItems(entry).length;
     setRowMenu({
       entry,
+      // 메뉴를 닫으면 연 자리로 포커스를 돌려준다 — '⋯' 버튼이면 그 버튼, 오른쪽 클릭·길게 누르기면 그 행.
+      anchor: event.currentTarget?.classList?.contains("lb-more") ? event.currentTarget : event.currentTarget?.closest?.(".lb-row") || event.currentTarget,
       x: Math.max(8, Math.min(x, window.innerWidth - width - 8)),
       y: Math.max(8, Math.min(y, window.innerHeight - height - 8)),
     });
+  }
+
+  // 메뉴가 있는 행이 하나라도 있으면 반응 칸을 '⋯' 폭만큼 넓히고, 메뉴가 없는 행엔 같은 폭의 빈 자리를 둔다(줄 맞춤).
+  const hasRowMenus = items.some((entry) => rowMenuItems(entry).length > 0);
+
+  // '⋯' 버튼 — 버튼 바로 아래 오른쪽 끝에 맞춰 연다. 같은 행 메뉴가 열려 있으면 닫는다.
+  function onMoreClick(event, entry) {
+    if (rowMenu?.entry.id === entry.id) { setRowMenu(null); return; }
+    const rect = event.currentTarget.getBoundingClientRect();
+    openRowMenu(event, entry, { x: rect.right - 176, y: rect.bottom + 6 });
   }
 
   function startLongPress(event, entry) {
@@ -388,19 +410,18 @@ function AccountLeaderboard() {
     openRowMenu(event, entry);
   }
 
+  const rowMenuRef = useRef(null);
+  useModalLayer({ open: Boolean(rowMenu), ref: rowMenuRef, onEscape: () => { rowMenu?.anchor?.focus?.({ preventScroll: true }); setRowMenu(null); }, restoreFocus: false });
   useEffect(() => {
     if (!rowMenu) return undefined;
     const close_ = () => setRowMenu(null);
-    const onPointer = (event) => { if (!event.target.closest?.(".lb-menu")) close_(); };
-    const onKey = (event) => { if (event.key === "Escape") { event.preventDefault(); close_(); } };
+    const onPointer = (event) => { if (!event.target.closest?.(".lb-menu, .lb-more")) close_(); };
     document.addEventListener("pointerdown", onPointer);
-    document.addEventListener("keydown", onKey);
     window.addEventListener("resize", close_);
     window.addEventListener("scroll", close_, true);
     document.querySelector(".lb-menu button")?.focus();
     return () => {
       document.removeEventListener("pointerdown", onPointer);
-      document.removeEventListener("keydown", onKey);
       window.removeEventListener("resize", close_);
       window.removeEventListener("scroll", close_, true);
     };
@@ -408,6 +429,8 @@ function AccountLeaderboard() {
 
   function runRowMenu(action) {
     const entry = rowMenu?.entry;
+    // 확인창이 '연 요소'로 행을 기억하도록 먼저 행에 포커스를 둔다 — 취소하면 그 행으로 돌아온다.
+    rowMenu?.anchor?.focus?.({ preventScroll: true });
     setRowMenu(null);
     if (!entry) return;
     if (action === "copy") { sendOpen(entry.id); copyToBuilder(entry); }
@@ -528,13 +551,18 @@ function AccountLeaderboard() {
       ) : null}
 
       {busy && <Loading />}
-      {error && <ErrorNote>오류: {error}</ErrorNote>}
+      {error && (
+        <ErrorNote>
+          순위를 불러오지 못했어요: {error}{" "}
+          <button type="button" className="btn btn-s btn-secondary" onClick={() => refreshBoard()}>다시 불러오기</button>
+        </ErrorNote>
+      )}
       {!busy && board.preparing && (
         <p className="notice-good mb-5" role="status">
           {board.stale ? "오늘의 순위를 준비하고 있어요. 마지막으로 완료된 순위를 보여드려요." : "오늘의 순위를 준비하고 있어요. 잠시 후 자동으로 표시돼요."}
         </p>
       )}
-      {!busy && !board.preparing && items.length === 0 && (
+      {!busy && !error && !board.preparing && items.length === 0 && (
         <EmptyState title="아직 등록된 매크로가 없어요">
           위 <b className="text-slate-900">매크로 만들기</b>에서 조건을 정하고 결과를 확인한 뒤 등록할 수 있어요.
         </EmptyState>
@@ -544,10 +572,11 @@ function AccountLeaderboard() {
           순위 | 로고 | 매크로(이름·배지·등록) | 전략 | 수익률 | 반응. 넓은 화면에선 전략이
           자기 열을 갖고, 좁아지면 이름 아래로 내려온다. 1·2·3위는 금·은·동 + '방어전' 배지. */}
       {!busy && items.length > 0 ? (
-        <div className={`lb-board${!quickRunMode && !items.some((e) => e.locked) ? " is-lean-actions" : ""}`} role="table" aria-label="오늘의 리더보드">
+        <div className={`lb-board${!quickRunMode && !items.some((e) => e.locked) ? " is-lean-actions" : ""}${hasRowMenus ? " has-row-menus" : ""}`} role="table" aria-label="오늘의 리더보드">
           <div className="lb-row lb-row-head" role="row">
             <span role="columnheader" className="lb-col-rank">순위</span>
-            <span aria-hidden="true" className="lb-col-coin" />
+            {/* 행마다 로고 칸(cell)이 있으니 머리글도 하나 — 숨기면 칸이 한 칸씩 밀려 읽힌다. */}
+            <span role="columnheader" className="lb-col-coin"><span className="sr-only">종목</span></span>
             <span role="columnheader" className="lb-col-name">매크로</span>
             <span role="columnheader" className="lb-col-summary">전략</span>
             <span role="columnheader" className="lb-col-return">
@@ -669,6 +698,19 @@ function AccountLeaderboard() {
                     </button>
                   ) : null}
                   </div>
+                  {rowMenuItems(e).length ? (
+                    <button
+                      type="button"
+                      className="lb-vote lb-more"
+                      aria-label={`${e.username || e.nickname} 매크로 메뉴`}
+                      title="메뉴"
+                      aria-haspopup="menu"
+                      aria-expanded={rowMenu?.entry.id === e.id}
+                      onClick={(event) => onMoreClick(event, e)}
+                    >
+                      <MoreIcon />
+                    </button>
+                  ) : hasRowMenus ? <span className="lb-more-slot" aria-hidden="true" /> : null}
                 </div>
               </div>
             );
@@ -686,17 +728,20 @@ function AccountLeaderboard() {
 
       {rowMenu && (
         <div
+          ref={rowMenuRef}
           className="chat-menu lb-menu"
           role="menu"
           aria-label={`${rowMenu.entry.username || rowMenu.entry.nickname} 매크로 메뉴`}
-          style={{ left: rowMenu.x, top: rowMenu.y }}
+          style={{ "--menu-x": `${rowMenu.x}px`, "--menu-y": `${rowMenu.y}px` }}
           onContextMenu={(event) => event.preventDefault()}
           onKeyDown={(event) => {
-            if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+            if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
             event.preventDefault();
             const buttons = [...event.currentTarget.querySelectorAll("button")];
             const at = buttons.indexOf(document.activeElement);
-            buttons[(at + (event.key === "ArrowDown" ? 1 : buttons.length - 1)) % buttons.length]?.focus();
+            const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1
+              : (at + (event.key === "ArrowDown" ? 1 : buttons.length - 1)) % buttons.length;
+            buttons[next]?.focus();
           }}
         >
           {rowMenuItems(rowMenu.entry).map((action) => (

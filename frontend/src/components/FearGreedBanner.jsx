@@ -72,7 +72,7 @@ export default function FearGreedBanner() {
 
         {/* 0~100 mini gauge */}
         <span className="hidden sm:inline-block w-28 h-1.5 rounded-full bg-slate-200 overflow-hidden align-middle">
-          <span className={"block h-full " + t.bar} style={{ width: `${Math.max(2, Math.min(v, 100))}%` }} />
+          <span className={"block h-full w-(--fill) " + t.bar} style={{ "--fill": `${Math.max(2, Math.min(v, 100))}%` }} />
         </span>
 
         <span className="text-slate-500">시장 전체 기준 (종목별 아님)</span>

@@ -40,4 +40,5 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
       - run: node --test --test-isolation=none tests/*.test.js
+      - run: npm run lint
       - run: npm run build

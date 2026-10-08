@@ -137,6 +137,9 @@ _rum_global_limiter = SlidingWindowRateLimiter(
     window_seconds=60,
     max_keys=1,
 )
+# 화면 오류 — 한 브라우저가 같은 오류를 반복해 보내도 탭마다 한 번이라 낮게 잡는다(client_errors.py).
+_error_client_limiter = SlidingWindowRateLimiter(limit=10, window_seconds=60, max_keys=4_096)
+_error_global_limiter = SlidingWindowRateLimiter(limit=300, window_seconds=60, max_keys=1)
 
 
 @dataclass
@@ -366,6 +369,40 @@ async def _read_bounded_body(request: Request) -> bytes:
             raise HTTPException(status_code=413, detail="RUM payload too large")
         body.extend(chunk)
     return bytes(body)
+
+
+class ClientErrorReport(BaseModel):
+    """화면 오류 한 줄 — 문장·화면 경로·빌드만. 계정·IP·UA 는 받지 않는다."""
+
+    kind: Literal["render", "chunk", "unhandled", "rejection"]
+    route: str = Field(min_length=1, max_length=200)
+    message: str = Field(min_length=1, max_length=1_000)
+    build: str = Field(default="", max_length=40, pattern=r"^[A-Za-z0-9._-]*$")
+
+    @field_validator("route")
+    @classmethod
+    def route_is_a_path(cls, value: str) -> str:
+        if not value.startswith("/") or "?" in value or "#" in value:
+            raise ValueError("route must be a path without query or fragment")
+        return value
+
+
+@router.post("/errors", status_code=204)
+async def ingest_client_error(request: Request) -> Response:
+    client = request.client.host if request.client is not None else "unknown"
+    for limiter, key in ((_error_client_limiter, client), (_error_global_limiter, "global")):
+        retry_after = limiter.retry_after(key)
+        if retry_after:
+            raise HTTPException(status_code=429, detail="error report rate limit exceeded",
+                                headers={"Retry-After": str(retry_after)})
+    raw_body = await _read_bounded_body(request)
+    try:
+        report = ClientErrorReport.model_validate_json(raw_body)
+    except ValidationError as error:
+        raise HTTPException(status_code=422, detail="Invalid error report") from error
+    from . import client_errors  # db 가 이 모듈을 불러오므로 여기서 늦게 부른다(순환 import 방지)
+    await asyncio.to_thread(client_errors.record, report.kind, report.route, report.message, report.build)
+    return Response(status_code=204)
 
 
 @router.post("/rum", status_code=204)

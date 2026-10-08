@@ -154,15 +154,23 @@ export default function Board() {
   const { data, busy, err, now, retry } = useBoardList(page, pageSize, { sort, q, field });
 
   // 주소가 곧 상태 — 기본값(1쪽·최신순·검색 없음)은 주소에서 뺀다.
-  function update(next) {
+  function update(next, options) {
     const merged = { page, sort, field, q, ...next };
     if (!("page" in next)) merged.page = 1;
     const params = {};
     if (merged.page > 1) params.page = String(merged.page);
     if (merged.sort !== "new") params.sort = merged.sort;
     if (merged.q) { params.q = merged.q; if (merged.field !== "all") params.field = merged.field; }
-    setSearchParams(params);
+    setSearchParams(params, options);
   }
+
+  // 없는 쪽(주소를 고쳤거나 글이 지워져 쪽 수가 줄었다)이면 마지막 쪽으로 — '아직 글이 없어요'로 보이던 것.
+  const lastPage = data?.pages || 0;
+  useEffect(() => {
+    if (busy || lastPage < 1 || page <= lastPage) return;
+    update({ page: lastPage }, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [busy, lastPage, page]);
   function go(p) {
     update({ page: p });
     window.scrollTo({ top: 0 });
@@ -190,7 +198,7 @@ export default function Board() {
         <SearchBar q={q} field={field} onSearch={update} />
       </PageHeader>
 
-      {err && <ErrorNote>글 목록을 불러오지 못했어요: {err} <button type="button" className="btn btn-sm" disabled={busy} onClick={retry}>글 목록 다시 불러오기</button></ErrorNote>}
+      {err && <ErrorNote>글 목록을 불러오지 못했어요: {err} <button type="button" className="btn btn-s" disabled={busy} onClick={retry}>글 목록 다시 불러오기</button></ErrorNote>}
       <div ref={sentinel} aria-hidden="true" />
       {(busy || !pageSize) && !data && !err ? <SkeletonRows count={pageSize || MIN_ROWS} /> : null}
 

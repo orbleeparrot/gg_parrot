@@ -125,8 +125,9 @@ def _build_engine(*, purpose: str = "ordinary"):
         scheme = _DATABASE_URL.split("://", 1)[0]
         print(
             f"[db] DATABASE_URL scheme '{scheme}' is not Postgres; falling back to "
-            "SQLite (ephemeral). Set it to the Supabase Session-pooler connection "
-            "string (postgresql://...).",
+            "SQLite (ephemeral). Set it to the Supabase Transaction-pooler connection "
+            "string (postgresql://...:6543/...), and DATABASE_SESSION_URL to the "
+            "Session-pooler one (:5432) for LISTEN.",
             flush=True,
         )
     return _sqlite_engine()

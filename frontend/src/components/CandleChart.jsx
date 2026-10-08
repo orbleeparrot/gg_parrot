@@ -206,6 +206,7 @@ export default function CandleChart({
   const [hover, setHover] = useState(null);
   const timer = useRef(null);
   const liveTimer = useRef(null);
+  const marketKeyRef = useRef(""); // 마지막으로 그린 거래소·종목·시장 — 봉 간격만 바뀌었는지 가린다
   const loadStateRef = useRef(onLoadState);
   loadStateRef.current = onLoadState;
   const dataRef = useRef(onData);
@@ -276,6 +277,7 @@ export default function CandleChart({
           if (alive) {
             historyError = String(e.message || e);
             setError(historyError);
+            if (!stream.candles.length) setCandles(null); // 봉 간격을 바꾼 뒤 첫 요청이 실패하면 이전 간격의 차트를 남기지 않는다
             report();
             loadStateRef.current?.({ status: "error", exchange, symbol, interval, error: historyError });
           }
@@ -323,7 +325,11 @@ export default function CandleChart({
     }
     setError("");
     report();
-    setCandles(null);
+    // 같은 종목에서 봉 간격만 바꾸면 새 봉이 올 때까지 이전 차트를 둔다 — 비우면 그림 칸이 '불러오는 중' 한 줄로
+    // 접혔다가(483 → 230px) 다시 펴지며 아래 화면 전체가 들썩였다(2026-10-08 휴대폰 봉 간격 탭).
+    const marketKey = `${exchange}|${symbol}|${market}`;
+    if (marketKeyRef.current !== marketKey) setCandles(null);
+    marketKeyRef.current = marketKey;
     setAnchor(null); // a new symbol/interval always starts at the live edge
     setHover(null);
     void loadHistory(true);

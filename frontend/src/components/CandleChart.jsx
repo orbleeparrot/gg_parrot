@@ -3,7 +3,9 @@ import { api } from "../api.js";
 import { fmtPrice, quoteOf } from "../lib/format.js";
 import { exchangeLabel, isDomestic, normalizeExchange } from "../lib/exchanges.js";
 import { applyChartHistory, applyChartLive, chartTimeKst, createChartStream, isChartFresh, isChartLive } from "../lib/chartSource.js";
+import { coinName } from "../lib/macroSource.js";
 import CandlePlot from "./CandlePlot.jsx";
+import CoinIcon from "./CoinIcon.jsx";
 import "./CandleChartStudio.css";
 
 // Market-data orchestration and chart controls. CandlePlot owns the renderer.
@@ -33,6 +35,22 @@ const INTERVALS = [
   { value: "4h", label: "4시간" },
   { value: "1d", label: "1일" },
 ];
+
+// 휴대폰 폭 — 직접 만들기 차트 머리를 토스 증권처럼(이름·가격 → 차트 → 봉 간격 한 줄) 다시 짠다.
+const PHONE_QUERY = "(max-width: 767px)";
+function useMedia(query) {
+  const get = () => (typeof window !== "undefined" && window.matchMedia ? window.matchMedia(query).matches : false);
+  const [matches, setMatches] = useState(get);
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return undefined;
+    const mq = window.matchMedia(query);
+    const on = () => setMatches(mq.matches);
+    on();
+    mq.addEventListener?.("change", on);
+    return () => mq.removeEventListener?.("change", on);
+  }, [query]);
+  return matches;
+}
 
 // --- inspector panel: OHLC of the hovered (or latest) bar ---------------
 function BarReadout({ bar, live, quote, extra = null }) {
@@ -175,6 +193,7 @@ export default function CandleChart({
 }) {
   const exchange = normalizeExchange(exchangeValue);
   const studio = variant === "studio";
+  const phone = useMedia(PHONE_QUERY);
   const disabledIntervalMap = Object.fromEntries((disabledIntervals || []).map((item) => [item.value, item.title || "이 테스트 기간에서는 고를 수 없어요"]));
   const [localInterval, setLocalInterval] = useState(defaultInterval);
   const [candles, setCandles] = useState(null);
@@ -386,6 +405,72 @@ export default function CandleChart({
     !feed.history?.awaiting && isChartLive(feed.live || feed.history, current, now);
 
   const btn = "btn btn-s btn-secondary w-9 px-0";
+
+  if (studio && phone) {
+    const base = (title || symbol || "").replace(/(USDT|KRW|BTC)$/, "") || symbol;
+    const name = coinName(symbol);
+    return (
+      <div className="candle-chart is-studio is-phone">
+        <div className="ccp-head">
+          <div className="ccp-id">
+            <CoinIcon symbol={symbol} size={24} alt="" className="ccp-logo" />
+            <h3 className="ccp-name">{name || base}</h3>
+            <span className="ccp-tk num">{title || symbol}</span>
+          </div>
+          <div className="ccp-meta">
+            <span>{exchangeLabel(exchange)}</span>
+            <span aria-hidden="true">·</span>
+            <SourceStatus feed={feed} now={now} inline />
+            {live && fresh && last && !last.closed ? <span className="ccp-live">LIVE</span> : null}
+          </div>
+          <MarketPrice bar={current} quote={quote} changePct={changePct} />
+          <div className="ccp-tools">
+            {overlayFull?.legend?.length > 0 ? (
+              <div className="ccp-legend">{overlayFull.legend.map((item, i) => <LegendItem key={i} item={item} />)}</div>
+            ) : <span />}
+            <div className="ccp-zoom">
+              {!live && <button type="button" onClick={goLive} className="ccp-live-btn" title="최신 봉으로 이동">최신</button>}
+              <button type="button" onClick={() => applyZoom(zoom * 1.35)} disabled={zoom >= maxZoom} className="ccp-round" aria-label="차트 축소">−</button>
+              <button type="button" onClick={() => applyZoom(zoom * 0.7)} disabled={zoom <= MIN_ZOOM} className="ccp-round" aria-label="차트 확대">+</button>
+            </div>
+          </div>
+        </div>
+
+        {view.length === 0 && <SourceStatus feed={feed} now={now} />}
+        {error && <div className="notice-warn py-6 t-small text-slate-700">차트를 불러오지 못했어요: {error}</div>}
+        {!error && (!candles || !candles.length) && (
+          <div className="candle-chart-stage flex items-center justify-center t-small text-slate-500">{loading ? "차트 불러오는 중…" : candles ? "표시할 시세가 없어요." : "—"}</div>
+        )}
+        {view.length > 0 && (
+          <div className="candle-chart-stage">
+            <div className="candle-chart-plot">
+              {plot}
+              {/* 시가·고가·저가·종가는 차트를 누르고 있을 때만 위에 한 줄로 */}
+              {hover != null && candles?.[hover] ? (
+                <div className="candle-chart-readout-overlay ccp-readout"><BarReadout bar={candles[hover]} quote={quote} live={false} /></div>
+              ) : null}
+            </div>
+          </div>
+        )}
+
+        <div className="ccp-tabs" role="group" aria-label="봉 간격">
+          {INTERVALS.map((o) => (
+            <button
+              key={o.value}
+              type="button"
+              className={"ccp-tab" + (interval === o.value ? " is-on" : "")}
+              aria-pressed={interval === o.value}
+              disabled={!!disabledIntervalMap[o.value]}
+              title={disabledIntervalMap[o.value] || undefined}
+              onClick={() => changeInterval(o.value)}
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   if (studio) {
     const zoomBtn = "btn btn-s btn-secondary w-8 px-0";

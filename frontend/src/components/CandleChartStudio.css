@@ -22,3 +22,39 @@
 .candle-chart.is-studio .candle-chart-plot > svg { position: absolute; inset: 0; width: 100%; height: 100%; }
 .candle-chart.is-studio .candle-chart-readout-overlay { position: absolute; left: 4px; top: 6px; z-index: 1; pointer-events: none; }
 .candle-chart.is-studio .candle-chart-readout-overlay .candle-ohlc { font-size: 11px; column-gap: 10px; }
+
+/* ── 휴대폰(767px 이하) — 토스 증권 종목 화면처럼: 이름·가격 → 차트 → 봉 간격 한 줄 (2026-10-08).
+   세로 간격은 4 의 배수만 쓴다: 이름 줄 ─4─ 출처 줄 ─12─ 가격 ─12─ 범례·확대 줄 ─8─ 차트 ─8─ 봉 간격. ── */
+.candle-chart.is-phone .ccp-head { display: grid; padding-top: 16px; }
+.ccp-id { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ccp-logo { flex: none; }
+.ccp-name { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: rgb(var(--c-slate-900)); font-size: 20px; line-height: 28px; font-weight: 800; letter-spacing: -.02em; }
+.ccp-tk { flex: none; height: 22px; display: inline-flex; align-items: center; padding: 0 6px; border-radius: 6px; background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-600)); font-size: 12px; font-weight: 700; }
+.ccp-meta { margin-top: 4px; display: flex; align-items: center; gap: 6px; min-width: 0; color: rgb(var(--c-slate-500)); font-size: 13px; line-height: 20px; }
+.ccp-meta .candle-source.is-inline { position: relative; min-width: 0; font-size: 13px; }
+.ccp-meta .candle-source.is-inline > div { left: 0; right: auto; }
+.ccp-meta .candle-source.is-inline summary { list-style: none; }
+.ccp-meta .candle-source.is-inline summary::-webkit-details-marker { display: none; }
+.ccp-live { flex: none; display: inline-flex; align-items: center; gap: 4px; color: rgb(var(--c-red-600)); font-size: 12px; font-weight: 800; }
+.ccp-live::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.candle-chart.is-phone .candle-chart-price-row { margin-top: 12px; column-gap: 8px; row-gap: 0; }
+.candle-chart.is-phone .candle-chart-current { font-size: 32px; line-height: 40px; }
+.ccp-tools { margin-top: 12px; min-height: 32px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.ccp-legend { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
+.ccp-zoom { flex: none; display: flex; align-items: center; gap: 8px; }
+.ccp-round, .ccp-live-btn { position: relative; height: 32px; display: grid; place-items: center; border: 0; border-radius: 999px; background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-700)); cursor: pointer; }
+.ccp-round { width: 32px; font-size: 18px; line-height: 1; }
+.ccp-live-btn { padding: 0 12px; font-size: 13px; font-weight: 700; }
+.ccp-round::before, .ccp-live-btn::before { content: ""; position: absolute; inset: -6px; } /* 누르는 영역 44px */
+.ccp-round:disabled { opacity: .4; cursor: default; }
+.ccp-round:focus-visible, .ccp-live-btn:focus-visible, .ccp-tab:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
+.candle-chart.is-phone .candle-chart-stage { margin-top: 8px; }
+.candle-chart.is-phone .candle-chart-plot { flex: 1 1 auto; min-height: 280px; }
+.ccp-readout { right: 4px; padding: 2px 6px; border-radius: 6px; background: rgb(var(--c-surface) / .9); }
+/* 봉 간격 — 여섯 칸을 똑같이 나눈 한 줄. 고른 칸만 회색 알약, 나머지는 글자뿐(토스 '일·주·월·년'). */
+.ccp-tabs { margin-top: 8px; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px; padding-block: 8px; border-top: 1px solid rgb(var(--c-slate-200)); }
+.ccp-tab { height: 40px; border: 0; border-radius: 10px; background: transparent; color: rgb(var(--c-slate-600)); font-size: 15px; font-weight: 600; white-space: nowrap; cursor: pointer; transition: background-color 120ms ease, color 120ms ease; }
+.ccp-tab.is-on { background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-900)); font-weight: 800; }
+.ccp-tab:disabled { color: rgb(var(--c-slate-400)); cursor: default; }
+/* 여러 종목을 겹쳐 볼 때 차트마다 고정 높이(380·360px)를 주는데, 휴대폰 머리가 들어가면 모자라 봉 간격 줄이 잘린다 */
+.is-multi .candle-chart.is-phone { height: auto; }

@@ -984,6 +984,21 @@ function AccountStudio({ scope, allowRouterMacro }) {
 
       <ProductTour steps={TOUR_STEPS} open={tourOpen} onClose={() => setTourOpen(false)} />
 
+      {/* 휴대폰 — 조건 판 머리의 출처 배지 대신 화면 아래 떠 있는 입구. 같은 메뉴(물어볼까·리더보드·직접 설정·업로드)가 위로 열린다. */}
+      {!slug && (
+        <MacroSourceMenu
+          floating
+          source={macroSource}
+          symbol={form.symbol}
+          token={token}
+          disabled={busy && !fileImportBusy}
+          busy={fileImportBusy}
+          onAsk={() => { setAskOpen(true); recordEvent("ask_open"); }}
+          onUpload={() => macroFileInputRef.current?.click()}
+          onBoard={() => navigate("/leaderboard")}
+          onReset={() => setMacroSource(null)}
+        />
+      )}
       {token ? <AskParrotDialog open={askOpen} onClose={() => setAskOpen(false)} onLoad={onAskLoad} /> : null}
       <ConfirmDialog
         open={askPending != null}

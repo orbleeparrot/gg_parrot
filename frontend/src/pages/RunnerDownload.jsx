@@ -47,8 +47,8 @@ function buildCopy(guide) {
       description: guide.pickDescription,
     },
     {
-      eyebrow: "실행 전에 한 번만",
-      title: <>{guide.exchangeName} 키를<br /><span>먼저 준비해요.</span></>,
+      eyebrow: guide.domestic ? "키 연결은 실행기에서" : "실행 전에 한 번만",
+      title: guide.domestic ? <>실행기부터 준비하고<br /><span>키 연결을 마쳐요.</span></> : <>{guide.exchangeName} 키를<br /><span>먼저 준비해요.</span></>,
       description: guide.keyDescription,
     },
     {
@@ -403,7 +403,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
   ), [library, preferredSourceRef, selectedId]);
   const keyGuide = useMemo(() => runnerKeyGuide(selected?.macro), [selected?.macro]);
   const apiKeyGuideStorageKey = keyGuide.storageKey;
-  const gatedStep = requestedStep > STEP_API_KEY && !apiKeyPrepared ? STEP_API_KEY : requestedStep;
+  const gatedStep = !keyGuide.domestic && requestedStep > STEP_API_KEY && !apiKeyPrepared ? STEP_API_KEY : requestedStep;
   const step = signedIn && selected ? gatedStep : STEP_MACRO;
   const copy = buildCopy(keyGuide)[step];
   // 직접 만들기 가이드에서 이어진 경우(flow=build) 8단계 통합 진행바를 쓴다.
@@ -426,11 +426,16 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
   const launchMinVersion = launchMinVersionFor(keyGuide, { general: requiredRunnerVersion, domestic: domesticMinVersion });
 
   useEffect(() => {
+    if (keyGuide.domestic) {
+      setApiKeyChecked(false);
+      setApiKeyPrepared(false);
+      return;
+    }
     let acknowledged = false;
     try { acknowledged = window.localStorage.getItem(apiKeyGuideStorageKey) === "acknowledged"; } catch { /* 막힌 저장소 */ }
     setApiKeyChecked(acknowledged);
     setApiKeyPrepared(acknowledged);
-  }, [apiKeyGuideStorageKey]);
+  }, [apiKeyGuideStorageKey, keyGuide.domestic]);
 
   const mergePerformanceHints = useCallback((items) => {
     return items.map((item) => {
@@ -1012,7 +1017,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
           <p>{RUNNER_KEY_STORAGE_NOTE} 출금 권한은 필요하지 않지만, 주문 권한만으로도 거래 손실이 발생할 수 있어요.</p>
         </div>
 
-        <label className={`runner-wizard-api-check ${apiKeyChecked ? "is-checked" : ""}`}>
+        {!keyGuide.domestic ? <label className={`runner-wizard-api-check ${apiKeyChecked ? "is-checked" : ""}`}>
           <input
             type="checkbox"
             checked={apiKeyChecked}
@@ -1029,7 +1034,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
             <strong>{keyGuide.checkTitle}</strong>
             <small>{keyGuide.checkNote}</small>
           </span>
-        </label>
+        </label> : <p className="t-small text-slate-700 mt-4">아직 키가 없어도 계속할 수 있어요. 실행기부터 준비하고 실거래 연결은 그 실행기에서 마쳐요.</p>}
       </Workspace>
     );
   }
@@ -1299,6 +1304,9 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
       return <button type="button" onClick={() => moveTo(STEP_API_KEY)} className="btn btn-l btn-primary runner-wizard-next">이 매크로 연결하기</button>;
     }
     if (step === STEP_API_KEY) {
+      if (keyGuide.domestic) {
+        return <button type="button" onClick={() => moveTo(STEP_RUNNER)} className="btn btn-l btn-primary runner-wizard-next">실행기부터 준비하기</button>;
+      }
       return (
         <button
           type="button"

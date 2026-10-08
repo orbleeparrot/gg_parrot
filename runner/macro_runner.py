@@ -38,6 +38,7 @@ import sys
 import threading
 import time
 import uuid
+import webbrowser
 from collections import deque
 from decimal import Decimal, ROUND_DOWN
 from pathlib import Path
@@ -53,9 +54,11 @@ except ImportError:
 try:  # package import (tests) / direct script import (PyInstaller build)
     from . import brokers
     from . import connection
+    from .connection_wizard import ExchangeConnectionWizard
 except ImportError:
     import brokers
     import connection
+    from connection_wizard import ExchangeConnectionWizard
 
 try:
     import requests
@@ -1281,6 +1284,8 @@ def close_connection_broker(broker) -> None:
 
 
 class RunnerApp:
+    _exchange_name = staticmethod(exchange_label)
+
     def __init__(
         self,
         root: tk.Tk,
@@ -1323,9 +1328,16 @@ class RunnerApp:
         self._connection_queue = queue.Queue()
         self._connection_delivery_lock = threading.Lock()
         self._connection_polling = False
+        self._connection_poll_id = None
         self._connection_closed = False
         self._public_ip = ""
         self._public_ip_busy = False
+        self._public_ip_cache = connection.PublicIPCache()
+        self._public_ip_waiters = set()
+        self._public_ip_expiry_id = None
+        self._connection_wizard = None
+        self._wizard_generation = 0
+        self._wizard_auto_ip_id = None
         self._build()
         for key_var, secret_var in self.key_vars.values():
             for variable in (key_var, secret_var):
@@ -1466,6 +1478,8 @@ class RunnerApp:
         self.ip_btn.pack(side="left")
         self.ip_copy_btn = ttk.Button(ip_controls, text="IPv4 복사", style="Ghost.TButton", state="disabled", command=self._copy_public_ip)
         self.ip_copy_btn.pack(side="left", padx=(8, 0))
+        self.wizard_btn = ttk.Button(f3, text="거래소 연결 도우미", style="Ghost.TButton", command=self._open_connection_wizard, state="disabled")
+        self.wizard_btn.pack(anchor="w", pady=(8, 0))
         self.connection_btn = ttk.Button(f3, text="연결 검사", style="Ghost.TButton", command=self._begin_connection_check)
         self.connection_btn.pack(anchor="w", pady=(8, 0))
         self.connection_note = ttk.Label(f3, text="매크로 시작 전에 연결을 확인합니다. 검사만으로 매매를 시작하지 않아요.", style="CardMuted.TLabel", wraplength=530)
@@ -1473,6 +1487,7 @@ class RunnerApp:
         self._sync_key_fields()
         if credentials_mod.supported():
             remember_row = ttk.Frame(f3, style="Card.TFrame"); remember_row.pack(fill="x", pady=(8, 0))
+            self.remember_row = remember_row
             ttk.Checkbutton(remember_row, text="이 PC에 키 기억하기 (Windows 계정으로 암호화)",
                             variable=self.remember).pack(side="left")
             ttk.Button(remember_row, text="저장된 키 지우기", style="Ghost.TButton",
@@ -1530,18 +1545,109 @@ class RunnerApp:
 
     def _sync_key_fields(self) -> None:
         selected = exchange_of(self.macro) if self.macro else None
+        wizard_open = getattr(self, "_connection_wizard", None) is not None
         for name, widgets in getattr(self, "key_rows", {}).items():
             for widget in widgets:
-                widget.grid() if name == selected else widget.grid_remove()
+                widget.grid() if name == selected and not wizard_open else widget.grid_remove()
         note = getattr(self, "key_selection_note", None)
         if note is not None:
             note.grid_remove() if selected in KNOWN_EXCHANGES else note.grid()
         ip_row = getattr(self, "ip_row", None)
         if ip_row is not None:
-            if selected in DOMESTIC_EXCHANGES:
+            if selected in DOMESTIC_EXCHANGES and not wizard_open:
                 ip_row.pack(fill="x", pady=(8, 0), before=self.connection_btn)
             else:
                 ip_row.pack_forget()
+        wizard_btn = getattr(self, "wizard_btn", None)
+        if wizard_btn is not None:
+            wizard_btn.config(state="normal" if selected in DOMESTIC_EXCHANGES and self.bot is None else "disabled")
+
+    def _open_connection_wizard(self) -> None:
+        if self.bot is not None or self._protocol_claim_busy:
+            messagebox.showwarning(APP_TITLE, "실행 중이거나 웹 연결 중에는 거래소 도우미를 열지 않습니다.")
+            return
+        selected = exchange_of(self.macro) if self.macro else ""
+        if selected not in DOMESTIC_EXCHANGES:
+            messagebox.showwarning(APP_TITLE, "먼저 업비트 또는 빗썸 매크로를 선택하세요. 바이낸스는 기존 키 입력과 연결 검사를 사용합니다.")
+            return
+        existing = getattr(self, "_connection_wizard", None)
+        if existing is not None and not existing.closed:
+            existing.window.lift()
+            existing.window.focus_set()
+            return
+        if self._connection_busy:
+            # A pending "start after check" intent is superseded by opening
+            # setup. Closing the guide must never resurrect that old start.
+            self._invalidate_preflight()
+        self._wizard_generation += 1
+        self._connection_wizard = ExchangeConnectionWizard(self, selected, self._wizard_generation)
+        self._sync_key_fields()
+        self.connection_btn.pack_forget()
+        row = getattr(self, "remember_row", None)
+        if row is not None:
+            row.pack_forget()
+        self.start_btn.config(state="disabled")
+        # Opening this user-requested wizard is the ONLY automatic IP trigger.
+        # Selection/startup itself never contacts the IP service.
+        self._wizard_auto_ip_id = self.root.after(0, self._auto_public_ip_for_wizard, self._wizard_generation)
+
+    def _auto_public_ip_for_wizard(self, generation: int) -> None:
+        self._wizard_auto_ip_id = None
+        wizard = getattr(self, "_connection_wizard", None)
+        if (wizard is not None and not wizard.closed and wizard.generation == generation
+                and wizard.exchange == exchange_of(self.macro) and not self._connection_closed):
+            self._begin_public_ip(force=False)
+
+    def _close_connection_wizard(self) -> None:
+        wizard = getattr(self, "_connection_wizard", None)
+        if wizard is None:
+            return
+        self._wizard_generation += 1
+        self._connection_wizard = None
+        timer = getattr(self, "_wizard_auto_ip_id", None)
+        if timer is not None:
+            try:
+                self.root.after_cancel(timer)
+            except tk.TclError:
+                pass
+            self._wizard_auto_ip_id = None
+        wizard.closed = True
+        wizard.window.destroy()
+        self.connection_btn.pack(anchor="w", pady=(8, 0), before=self.connection_note)
+        self._sync_key_fields()
+        row = getattr(self, "remember_row", None)
+        if row is not None:
+            row.pack(fill="x", pady=(8, 0))
+        self.start_btn.config(state="disabled" if self.bot is not None or self._connection_busy or self._protocol_claim_busy else "normal")
+        self.root.focus_set()
+
+    def _refresh_connection_wizard(self, *, ip_context=None) -> None:
+        wizard = getattr(self, "_connection_wizard", None)
+        if (wizard is not None and not wizard.closed and wizard.generation == self._wizard_generation
+                and wizard.exchange == exchange_of(self.macro)
+                and (ip_context is None or ip_context in self._public_ip_waiters)):
+            wizard.refresh()
+
+    def _open_exchange_api_page(self) -> None:
+        selected = exchange_of(self.macro) if self.macro else ""
+        wizard = getattr(self, "_connection_wizard", None)
+        if wizard is None or wizard.closed or wizard.exchange != selected:
+            return
+        try:
+            opened = webbrowser.open(connection.api_management_url(selected), new=2)
+        except Exception:
+            opened = False
+        if not opened:
+            messagebox.showwarning(APP_TITLE, "기본 브라우저를 열지 못했어요. 거래소 공식 홈페이지의 API 관리 메뉴에서 직접 진행하세요.")
+
+    def _apply_wizard_storage(self) -> None:
+        wizard = getattr(self, "_connection_wizard", None)
+        if wizard is None or wizard.closed or wizard.exchange != exchange_of(self.macro):
+            return
+        if self._persist_credentials():
+            wizard.storage_status.config(text="이 PC의 Windows 계정 암호화 저장을 적용했어요. 서버 전송 없음." if self.remember.get() else "이 PC의 기존 암호화 키 저장 파일을 지웠어요. 현재 입력은 창을 닫을 때까지 남습니다.")
+        else:
+            wizard.storage_status.config(text="로컬 키 저장을 적용하지 못했어요. 연결 검사나 매매 시작 성공을 의미하지 않습니다.")
 
     def _invalidate_preflight(self, *_args) -> None:
         self._connection_generation = getattr(self, "_connection_generation", 0) + 1
@@ -1552,6 +1658,7 @@ class RunnerApp:
         note = getattr(self, "connection_note", None)
         if note is not None:
             note.config(text="설정이 바뀌었어요. 현재 매크로·모드·키로 다시 연결을 확인하세요.")
+        self._refresh_connection_wizard()
 
     def _snapshot_for_connection(self):
         # Capture Tk variables on the MAIN thread; worker functions never read widgets.
@@ -1573,6 +1680,7 @@ class RunnerApp:
         if mode == MODE_MOCK:
             self._preflight = perform_connection_check(macro, credentials, mode)
             self.connection_note.config(text=self._preflight.reason)
+            self._refresh_connection_wizard()
             return
         if requests is None:
             self.connection_note.config(text="requests 모듈이 필요해요. requirements를 설치해 주세요.")
@@ -1582,6 +1690,7 @@ class RunnerApp:
         self.connection_btn.config(state="disabled")
         self.start_btn.config(state="disabled")
         self.connection_note.config(text="키·허용 IP·주문 조건을 확인 중이에요. 실제 주문은 보내지 않습니다.")
+        self._refresh_connection_wizard()
         # Queue delivery only: no root.after / Tcl calls from a network worker.
         def check():
             result = perform_connection_check(macro, credentials, mode)
@@ -1593,37 +1702,91 @@ class RunnerApp:
         threading.Thread(target=check, daemon=True).start()
         self._schedule_connection_poll()
 
-    def _begin_public_ip(self) -> None:
-        if getattr(self, "_public_ip_busy", False):
+    def _public_ip_context(self):
+        wizard = getattr(self, "_connection_wizard", None)
+        return (self._public_ip_cache.generation, wizard.generation if wizard is not None else 0)
+
+    def _begin_public_ip(self, *, force=True) -> None:
+        if self.bot is not None or getattr(self, "_connection_closed", False):
             return
+        cache = self._public_ip_cache
+        kind, token = cache.begin(force=force)
+        context = self._public_ip_context()
+        if kind == "cached":
+            self._public_ip_waiters = {context}
+            self._render_public_ip_result(cache.result)
+            self._refresh_connection_wizard(ip_context=context)
+            return
+        if kind == "request":
+            self._public_ip_waiters = {context}
+            self._invalidate_preflight()
+        else:
+            self._public_ip_waiters.add(context)
         self._public_ip_busy = True
         self._public_ip = ""
         self.ip_btn.config(state="disabled")
         self.ip_copy_btn.config(state="disabled")
-        self.ip_note.config(text="ipify에 인증 없이 이 PC의 IPv4를 한 번 확인합니다…")
+        self.ip_note.config(text="api4.ipify.org에 인증·키 없이 조회 중 — 진행 중인 요청은 공유합니다.")
+        self._refresh_connection_wizard(ip_context=context)
+        if kind == "shared":
+            return
         def detect():
             try:
                 address = connection.detect_public_ipv4(requests)
-                self._connection_queue.put(("ip", True, address))
-            except connection.PublicIPError as exc:
-                self._connection_queue.put(("ip", False, str(exc)))
+                ok, value = True, address
+            except connection.PublicIPError:
+                ok, value = False, ""
+            with self._connection_delivery_lock:
+                if not self._connection_closed:
+                    self._connection_queue.put(("ip", token, ok, value))
         threading.Thread(target=detect, daemon=True).start()
         self._schedule_connection_poll()
 
+    def _render_public_ip_result(self, result) -> None:
+        self._public_ip_busy = self._public_ip_cache.busy
+        copyable = bool(result is not None and result.ok and result.fresh())
+        self._public_ip = result.address if copyable else ""
+        self.ip_btn.config(state="disabled" if self._public_ip_busy or self.bot is not None else "normal")
+        self.ip_copy_btn.config(state="normal" if copyable and not self._public_ip_busy else "disabled")
+        self.ip_note.config(text=connection.public_ip_status(result))
+        old_timer = getattr(self, "_public_ip_expiry_id", None)
+        if old_timer is not None:
+            try:
+                self.root.after_cancel(old_timer)
+            except tk.TclError:
+                pass
+            self._public_ip_expiry_id = None
+        if result is not None and result.fresh():
+            remaining = max(1, int((connection.PUBLIC_IP_MAX_AGE - (time.monotonic() - result.checked_at)) * 1000) + 1)
+            self._public_ip_expiry_id = self.root.after(remaining, self._expire_public_ip_result, result)
+
+    def _expire_public_ip_result(self, result) -> None:
+        if self._connection_closed or self._public_ip_cache.result is not result:
+            return
+        if not result.fresh():
+            self._public_ip_expiry_id = None
+            self._render_public_ip_result(result)
+            self._refresh_connection_wizard()
+
     def _copy_public_ip(self) -> None:
-        if not getattr(self, "_public_ip", ""):
+        result = self._public_ip_cache.result
+        if not result or not result.ok or not result.fresh() or self._public_ip_busy:
+            self._render_public_ip_result(result)
+            self._refresh_connection_wizard()
             return
         self.root.clipboard_clear()
-        self.root.clipboard_append(self._public_ip)
-        self.ip_note.config(text=f"{self._public_ip} 복사됨 · 고정 IP가 아니에요. VPN·네트워크가 바뀌면 다시 확인하세요.")
+        self.root.clipboard_append(result.address)
+        self.ip_note.config(text=f"{result.address} 복사됨 · 조회 당시 주소예요. 고정 여부·허용 등록·거래소 경로는 확인하지 않았습니다.")
+        self._refresh_connection_wizard()
 
     def _schedule_connection_poll(self) -> None:
         if not self._connection_polling and not self._connection_closed:
             self._connection_polling = True
-            self.root.after(100, self._poll_connection_tasks)
+            self._connection_poll_id = self.root.after(100, self._poll_connection_tasks)
 
     def _poll_connection_tasks(self) -> None:
         self._connection_polling = False
+        self._connection_poll_id = None
         if self._connection_closed:
             return
         while True:
@@ -1632,27 +1795,36 @@ class RunnerApp:
             except queue.Empty:
                 break
             if task[0] == "ip":
-                _tag, ok, value = task
-                self._public_ip_busy = False
-                self._public_ip = value if ok else ""
-                self.ip_btn.config(state="normal")
-                self.ip_copy_btn.config(state="normal" if ok else "disabled")
-                self.ip_note.config(text=(f"{value} · 고정 IP는 아니에요. 네트워크 변경 시 다시 확인하세요." if ok else value))
+                _tag, token, ok, value = task
+                result = self._public_ip_cache.finish(token, ok, value)
+                self._public_ip_busy = self._public_ip_cache.busy
+                if result is None:
+                    if not self._public_ip_busy:
+                        self._render_public_ip_result(None)
+                        self.ip_note.config(text="조회 중 거래소·매크로가 바뀌어 이전 응답을 적용하지 않았어요. 다시 확인하세요.")
+                        self._refresh_connection_wizard()
+                    continue
+                self._render_public_ip_result(result)
+                if result.changed or not result.ok:
+                    self._invalidate_preflight()
+                self._refresh_connection_wizard(ip_context=self._public_ip_context())
                 continue
             _tag, generation, result, start_after = task
             self._connection_busy = False
             running = self.bot is not None
             self.connection_btn.config(state="disabled" if running else "normal")
-            self.start_btn.config(state="disabled" if running else "normal")
+            self.start_btn.config(state="disabled" if running or getattr(self, "_connection_wizard", None) is not None else "normal")
             _macro, _mode, _credentials, fingerprint = self._snapshot_for_connection()
             if generation != self._connection_generation or result.fingerprint != fingerprint or running:
                 close_connection_broker(result.broker)
                 self.connection_note.config(text="검사 중 설정이 바뀌었어요. 다시 확인하세요. 매매는 시작하지 않았습니다.")
+                self._refresh_connection_wizard()
                 continue
             self._preflight = result
             self.connection_note.config(text=result.reason)
+            self._refresh_connection_wizard()
             # Checkboxes/clicking the guide never count as this verified result.
-            if result.ok and start_after:
+            if result.ok and start_after and getattr(self, "_connection_wizard", None) is None:
                 self._start()
         if self._connection_busy or self._public_ip_busy:
             self._schedule_connection_poll()
@@ -1739,6 +1911,12 @@ class RunnerApp:
             lev = max(1, int(macro.get("leverage", 1) or 1))
         except (TypeError, ValueError) as exc:
             raise ValueError("invalid macro leverage") from exc
+        self._close_connection_wizard()
+        cache = getattr(self, "_public_ip_cache", None)
+        if cache is not None:
+            cache.invalidate()
+            self._public_ip_waiters = set()
+            self._render_public_ip_result(None)
         self.macro = {k: v for k, v in macro.items() if k != "_sig"}
         self.macro_path.set(source_label)
         side = str(macro.get("position_side", "long"))
@@ -1948,6 +2126,15 @@ class RunnerApp:
             return
         with getattr(self, "_connection_delivery_lock", threading.Lock()):
             self._connection_closed = True
+        for name in ("_connection_poll_id", "_public_ip_expiry_id", "_wizard_auto_ip_id"):
+            timer = getattr(self, name, None)
+            if timer is not None:
+                try:
+                    self.root.after_cancel(timer)
+                except tk.TclError:
+                    pass
+                setattr(self, name, None)
+        self._close_connection_wizard()
         self._invalidate_preflight()
         tasks = getattr(self, "_connection_queue", None)
         while tasks is not None:
@@ -1960,6 +2147,13 @@ class RunnerApp:
         self.root.destroy()
 
     def _start(self) -> None:
+        if getattr(self, "_connection_closed", False):
+            return
+        if getattr(self, "_start_pending", False):
+            return
+        if getattr(self, "_connection_wizard", None) is not None:
+            messagebox.showwarning(APP_TITLE, "연결 도우미를 닫고 메인 화면의 모드·매크로를 확인한 뒤 직접 시작하세요.")
+            return
         if self.bot is not None:
             messagebox.showwarning(APP_TITLE, "이미 매크로가 실행 중이에요.")
             return
@@ -2026,9 +2220,10 @@ class RunnerApp:
 
         # Tk modal dialogs keep processing events. A long confirmation or new web
         # claim can expire/replace the checked form while the dialog is open.
-        _current_macro, _current_mode, _current_credentials, current_fingerprint = self._snapshot_for_connection()
-        if self._protocol_claim_busy or self.bot is not None:
+        if (getattr(self, "_connection_closed", False) or self._protocol_claim_busy or self.bot is not None
+                or getattr(self, "_connection_wizard", None) is not None):
             return
+        _current_macro, _current_mode, _current_credentials, current_fingerprint = self._snapshot_for_connection()
         if (self._preflight is not checked
                 or getattr(self, "_connection_generation", 0) != checked_generation
                 or not checked.matches(current_fingerprint)):
@@ -2038,13 +2233,24 @@ class RunnerApp:
                 note.config(text="확인 중 설정이 바뀌었거나 검사 유효 시간이 지났어요. 다시 연결 검사 후 시작하세요.")
             return
 
+        # Freeze the inputs handed to both server and bot before any later modal.
+        start_macro = json.loads(json.dumps(_current_macro))
+        start_credentials = json.loads(json.dumps(_current_credentials))
+        payload = json.loads(json.dumps(self._build_start_payload(testnet, mode)))
+        self._start_pending = True
+        try:
+            self._launch_checked_run(checked, checked_generation, start_macro, start_credentials, mode, payload, self.server_base)
+        finally:
+            self._start_pending = False
+
+    def _launch_checked_run(self, checked, checked_generation, start_macro, start_credentials, mode, payload, server_base):
+        label = exchange_label(exchange_of(start_macro))
         self._persist_credentials()
-        server = ServerClient(self.member_key.get(), base=self.server_base)
-        payload = self._build_start_payload(testnet, mode)
+        server = ServerClient(start_credentials["member_key"], base=server_base)
         try:
             started = server.start(payload)
         except Exception as exc:
-            msg = str(exc)
+            msg = connection.safe_preflight_reason(str(exc), start_credentials)
             if "401" in msg:
                 msg = "회원 키가 유효하지 않아요. 마이페이지에서 키를 확인하세요."
             messagebox.showerror(APP_TITLE, f"서버 연결 실패:\n{msg}")
@@ -2065,8 +2271,34 @@ class RunnerApp:
                 "로컬에서 수정한 설정 그대로 실행되며, 내 에이전트 화면에 '수정된 파일'로 표시돼요.\n"
                 "웹 설정과 다르게 동작해도 껄무새의 오류가 아닐 수 있어요.",
             )
+        cancelled = (getattr(self, "_connection_closed", False) or self._protocol_claim_busy or self.bot is not None
+                     or getattr(self, "_connection_wizard", None) is not None)
+        if not cancelled:
+            _macro, _mode, _credentials, fingerprint = self._snapshot_for_connection()
+            cancelled = (self._preflight is not checked
+                         or getattr(self, "_connection_generation", 0) != checked_generation
+                         or not checked.matches(fingerprint)
+                         or _credentials.get("member_key") != start_credentials.get("member_key"))
+        if cancelled:
+            # A source-warning modal can process a new macro/claim/key edit.
+            # Cancel only the session we just created, before constructing any bot.
+            try:
+                notified = bool(server.stopped("error", "시작 중 설정이 바뀌거나 검사가 만료되어 실제 주문 없이 취소했습니다."))
+            except Exception:
+                notified = False
+            if self._preflight is checked:
+                if not getattr(self, "_connection_closed", False):
+                    self._invalidate_preflight()
+                else:
+                    self._preflight = None
+                    close_connection_broker(checked.broker)
+            if not getattr(self, "_connection_closed", False):
+                self._log("시작 설정이 바뀌어 매매를 시작하지 않았어요. 다시 연결 검사 후 시작하세요.")
+                if not notified:
+                    self._log("⚠ 실제 매매는 시작하지 않았지만 서버 취소 통보에 실패했어요. 연결 복구 후 내 에이전트의 세션 상태를 확인하세요.")
+            return
         self.bot = BotThread(
-            self.macro, self._credential_values(), mode, server,
+            start_macro, start_credentials, mode, server,
             on_log=self._log_threadsafe,
             on_status=self._status_threadsafe,
             on_finish=self._finish_threadsafe,
@@ -2086,18 +2318,20 @@ class RunnerApp:
                 exchanges[name] = {"api_key": key, "api_secret": secret}
         return {"version": 2, "member_key": self.member_key.get().strip(), "exchanges": exchanges}
 
-    def _persist_credentials(self) -> None:
+    def _persist_credentials(self) -> bool:
         """'기억하기' 체크대로 저장/삭제. 실패해도 매매를 막지 않는다(로그만)."""
         if not credentials_mod.supported():
-            return
+            return False
         try:
             values = self._credential_values()
             credentials_mod.apply_choice(self.credentials_path, bool(self.remember.get()), values)
             self._remembered = values if self.remember.get() else None
             if self.remember.get():
                 self._log("키를 이 PC에 저장했어요 (Windows 계정으로 암호화 · 서버 전송 없음).")
-        except Exception as exc:
-            self._log(f"⚠ 키 저장에 실패했어요: {exc}")
+            return True
+        except Exception:
+            self._log("⚠ 로컬 키 저장에 실패했어요. Windows 계정·파일 접근 권한을 확인하세요.")
+            return False
 
     def _forget_credentials(self) -> None:
         credentials_mod.clear(self.credentials_path)
@@ -2183,7 +2417,7 @@ class RunnerApp:
         self.pick_btn.config(state="disabled" if running else "normal")
         self.stop_btn.config(state="normal" if running else "disabled")
         self.close_btn.config(state="normal" if running else "disabled")
-        for name in ("connection_btn", "ip_btn"):
+        for name in ("connection_btn", "ip_btn", "wizard_btn"):
             button = getattr(self, name, None)
             if button is not None:
                 button.config(state="disabled" if running else "normal")

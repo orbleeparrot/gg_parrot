@@ -92,6 +92,13 @@ class ConnectionGuiTests(unittest.TestCase):
         app._connection_polling = False
         app._connection_busy = False
         app._public_ip_busy = False
+        app._public_ip_cache = connection.PublicIPCache()
+        app._public_ip_waiters = set()
+        app._public_ip_expiry_id = None
+        app._public_ip = ""
+        app._connection_wizard = None
+        app._wizard_generation = 0
+        app.ip_btn, app.ip_copy_btn, app.ip_note = Mock(), Mock(), Mock()
         app._preflight = None
         app.connection_note = Mock()
         app.connection_btn = Mock()
@@ -233,6 +240,182 @@ class ConnectionGuiTests(unittest.TestCase):
         self.assertTrue(app._connection_closed)
         close.assert_called_once_with(result.broker)
         app.root.destroy.assert_called_once_with()
+
+    def test_wizard_is_not_permission_to_start_a_macro(self):
+        app = self.app()
+        app._connection_wizard = Mock()
+        with patch.object(macro_runner.messagebox, "showwarning"), patch.object(macro_runner, "ServerClient") as server, patch.object(macro_runner, "BotThread") as bot:
+            app._start()
+        server.assert_not_called()
+        bot.assert_not_called()
+
+    def test_closing_application_during_confirmation_does_not_read_destroyed_tk_variables(self):
+        app = self.app()
+        self.checked(app)
+        def approve(*_args):
+            app._connection_closed = True
+            app._snapshot_for_connection = Mock(side_effect=AssertionError("destroyed Tk variables"))
+            return True
+        with patch.object(macro_runner.messagebox, "askyesno", side_effect=approve), patch.object(macro_runner, "ServerClient") as server, patch.object(macro_runner, "BotThread") as bot:
+            app._start()
+        app._snapshot_for_connection.assert_not_called()
+        server.assert_not_called()
+        bot.assert_not_called()
+
+    def test_opening_wizard_during_confirmation_never_creates_a_run(self):
+        app = self.app()
+        self.checked(app)
+        def approve(*_args):
+            app._connection_wizard = Mock()
+            return True
+        with patch.object(macro_runner.messagebox, "askyesno", side_effect=approve), patch.object(macro_runner, "ServerClient") as server, patch.object(macro_runner, "BotThread") as bot:
+            app._start()
+        server.assert_not_called()
+        bot.assert_not_called()
+
+    def test_preflight_finishing_while_wizard_is_open_never_resumes_start(self):
+        app = self.app()
+        result = self.checked(app)
+        app._connection_wizard = Mock(closed=False, generation=0, exchange="upbit")
+        app._start = Mock()
+        app._connection_queue.put(("preflight", 0, result, True))
+        app._poll_connection_tasks()
+        app._start.assert_not_called()
+        self.assertEqual(app.start_btn.config.call_args.kwargs["state"], "disabled")
+
+    def test_public_ip_duplicate_clicks_share_a_worker_and_failures_clear_copy(self):
+        app = self.app()
+        with patch.object(macro_runner.threading, "Thread") as thread:
+            app._begin_public_ip()
+            app._begin_public_ip()
+        self.assertEqual(thread.call_count, 1)
+        token = app._public_ip_cache._active
+        app._connection_queue.put(("ip", token, True, "8.8.8.8"))
+        app._poll_connection_tasks()
+        self.assertEqual(app._public_ip, "8.8.8.8")
+        self.assertFalse(app._public_ip_busy)
+        with patch.object(macro_runner.threading, "Thread"):
+            app._begin_public_ip(force=True)
+        self.assertEqual(app._public_ip, "")
+        token = app._public_ip_cache._active
+        app._connection_queue.put(("ip", token, False, "ProxyError SECRET"))
+        app._poll_connection_tasks()
+        self.assertEqual(app._public_ip, "")
+        self.assertEqual(app.ip_copy_btn.config.call_args.kwargs["state"], "disabled")
+        self.assertNotIn("SECRET", app.ip_note.config.call_args.kwargs["text"])
+
+    def test_cached_automatic_success_or_failure_never_starts_a_worker(self):
+        app = self.app()
+        for ok, address in ((True, "8.8.8.8"), (False, "")):
+            app._public_ip_cache.result = connection.PublicIPResult(ok, address, "fixture")
+            with patch.object(macro_runner.threading, "Thread") as thread:
+                app._begin_public_ip(force=False)
+            thread.assert_not_called()
+            self.assertEqual(bool(app._public_ip), ok)
+
+    def test_stale_macro_response_cannot_be_copied_or_stick_busy(self):
+        app = self.app()
+        with patch.object(macro_runner.threading, "Thread"):
+            app._begin_public_ip()
+        token = app._public_ip_cache._active
+        app._public_ip_cache.invalidate()
+        app._connection_queue.put(("ip", token, True, "8.8.8.8"))
+        app._poll_connection_tasks()
+        self.assertFalse(app._public_ip_busy)
+        self.assertEqual(app._public_ip, "")
+        self.assertEqual(app.ip_copy_btn.config.call_args.kwargs["state"], "disabled")
+
+    def test_copy_checks_expiry_before_touching_clipboard(self):
+        app = self.app()
+        app._public_ip_cache.result = connection.PublicIPResult(True, "8.8.8.8", "fixture", checked_at=time.monotonic() - 121)
+        app._public_ip = "8.8.8.8"
+        app._copy_public_ip()
+        app.root.clipboard_append.assert_not_called()
+        self.assertEqual(app._public_ip, "")
+
+    def test_only_current_wizard_generation_can_start_its_automatic_ip_request(self):
+        app = self.app()
+        app._wizard_generation = 2
+        app._connection_wizard = Mock(closed=False, exchange="upbit", generation=2)
+        app._begin_public_ip = Mock()
+        app._auto_public_ip_for_wizard(1)
+        app._begin_public_ip.assert_not_called()
+        app._auto_public_ip_for_wizard(2)
+        app._begin_public_ip.assert_called_once_with(force=False)
+
+
+class FinalStartSnapshotTests(unittest.TestCase):
+    app = ConnectionGuiTests.app
+    checked = ConnectionGuiTests.checked
+
+    def ready(self):
+        app = self.app()
+        app.server_base = "https://example.invalid"
+        app.user_macro_id, app.macro_sig, app.macro_source = None, None, "file"
+        app._log_threadsafe = app._status_threadsafe = app._finish_threadsafe = Mock()
+        app._set_running = Mock()
+        result = self.checked(app)
+        server = Mock(session_id=1, macro_origin="file_modified")
+        server.start.return_value = {"session_id": 1}
+        return app, result, server
+
+    def test_changed_macro_in_source_warning_cancels_created_run_before_any_bot(self):
+        app, _checked, server = self.ready()
+        def warning(*_args):
+            app.macro["symbol"] = "KRW-ETH"
+            app._invalidate_preflight()
+        with patch.object(macro_runner.messagebox, "askyesno", return_value=True), patch.object(macro_runner.messagebox, "showwarning", side_effect=warning), patch.object(macro_runner, "ServerClient", return_value=server), patch.object(macro_runner, "BotThread") as bot:
+            app._start()
+        bot.assert_not_called()
+        server.stopped.assert_called_once()
+        self.assertEqual(server.stopped.call_args.args[0], "error")
+        self.assertEqual(server.start.call_args.args[0]["symbol"], "KRW-BTC")
+
+    def test_member_change_in_source_warning_cancels_even_without_a_variable_trace(self):
+        app, _checked, server = self.ready()
+        def warning(*_args):
+            app.member_key.set("new-member")
+        with patch.object(macro_runner.messagebox, "askyesno", return_value=True), patch.object(macro_runner.messagebox, "showwarning", side_effect=warning), patch.object(macro_runner, "ServerClient", return_value=server), patch.object(macro_runner, "BotThread") as bot:
+            app._start()
+        bot.assert_not_called()
+        server.stopped.assert_called_once()
+
+    def test_expiry_in_source_warning_cancels_created_run(self):
+        app, checked, server = self.ready()
+        def warning(*_args):
+            object.__setattr__(checked, "checked_at", time.monotonic() - 121)
+        with patch.object(macro_runner.messagebox, "askyesno", return_value=True), patch.object(macro_runner.messagebox, "showwarning", side_effect=warning), patch.object(macro_runner, "ServerClient", return_value=server), patch.object(macro_runner, "BotThread") as bot:
+            app._start()
+        bot.assert_not_called()
+        server.stopped.assert_called_once()
+
+    def test_nested_start_during_warning_cannot_create_a_second_run(self):
+        app, _checked, server = self.ready()
+        with patch.object(macro_runner.messagebox, "askyesno", return_value=True), patch.object(macro_runner.messagebox, "showwarning", side_effect=lambda *_args: app._start()), patch.object(macro_runner, "ServerClient", return_value=server), patch.object(macro_runner, "BotThread") as bot:
+            app._start()
+        server.start.assert_called_once()
+        server.stopped.assert_not_called()
+        bot.assert_called_once()
+        macro = bot.call_args.args[0]
+        self.assertEqual(macro["symbol"], "KRW-BTC")
+        self.assertIsNot(macro, app.macro)
+
+    def test_cancel_notification_failure_is_visible_but_never_starts_a_bot(self):
+        app, _checked, server = self.ready()
+        server.stopped.return_value = False
+        with patch.object(macro_runner.messagebox, "askyesno", return_value=True), patch.object(macro_runner.messagebox, "showwarning", side_effect=lambda *_args: app._invalidate_preflight()), patch.object(macro_runner, "ServerClient", return_value=server), patch.object(macro_runner, "BotThread") as bot:
+            app._start()
+        bot.assert_not_called()
+        self.assertTrue(any("서버 취소 통보에 실패" in call.args[0] for call in app._log.call_args_list))
+
+    def test_opening_wizard_during_source_warning_cancels_run_without_starting(self):
+        app, _checked, server = self.ready()
+        def warning(*_args):
+            app._connection_wizard = Mock(closed=False, generation=0, exchange="upbit")
+        with patch.object(macro_runner.messagebox, "askyesno", return_value=True), patch.object(macro_runner.messagebox, "showwarning", side_effect=warning), patch.object(macro_runner, "ServerClient", return_value=server), patch.object(macro_runner, "BotThread") as bot:
+            app._start()
+        bot.assert_not_called()
+        server.stopped.assert_called_once()
 
 
 if __name__ == "__main__":

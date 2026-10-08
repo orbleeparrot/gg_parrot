@@ -85,5 +85,83 @@ class PreflightStateTests(unittest.TestCase):
                 self.assertNotIn(forbidden, safe)
 
 
+class PublicIPCacheTests(unittest.TestCase):
+    def test_duplicate_requests_share_one_inflight_token(self):
+        cache = connection.PublicIPCache()
+        first, token = cache.begin(now=100)
+        second, shared = cache.begin(now=101)
+        self.assertEqual((first, second), ("request", "shared"))
+        self.assertEqual(token, shared)
+        self.assertTrue(cache.busy)
+
+    def test_success_is_reused_for_120_seconds_then_rechecked(self):
+        cache = connection.PublicIPCache()
+        _kind, token = cache.begin(now=100)
+        result = cache.finish(token, True, "8.8.8.8", now=100)
+        self.assertTrue(result.ok)
+        self.assertEqual(cache.begin(now=219)[0], "cached")
+        self.assertEqual(cache.begin(now=220)[0], "request")
+        self.assertIsNone(cache.result)
+
+    def test_failure_is_cached_without_retaining_a_previous_copyable_ip(self):
+        cache = connection.PublicIPCache()
+        _kind, token = cache.begin(now=100)
+        cache.finish(token, True, "8.8.8.8", now=100)
+        _kind, token = cache.begin(force=True, now=110)
+        self.assertIsNone(cache.result)
+        result = cache.finish(token, False, "ProxyError secret", now=111)
+        self.assertFalse(result.ok)
+        self.assertEqual(result.address, "")
+        self.assertNotIn("secret", result.reason)
+        self.assertEqual(cache.begin(now=112)[0], "cached")
+        self.assertEqual(cache.begin(force=True, now=113)[0], "request")
+
+    def test_stale_exchange_generation_response_is_discarded(self):
+        cache = connection.PublicIPCache()
+        _kind, token = cache.begin(now=100)
+        cache.invalidate()
+        self.assertEqual(cache.begin(now=101)[0], "shared")
+        self.assertIsNone(cache.finish(token, True, "8.8.8.8", now=102))
+        self.assertIsNone(cache.result)
+        self.assertFalse(cache.busy)
+
+    def test_old_duplicate_response_cannot_overwrite_a_new_request(self):
+        cache = connection.PublicIPCache()
+        _kind, old = cache.begin(now=100)
+        cache.finish(old, True, "8.8.8.8", now=101)
+        _kind, current = cache.begin(force=True, now=102)
+        self.assertIsNone(cache.finish(old, True, "1.1.1.1", now=103))
+        self.assertTrue(cache.busy)
+        self.assertEqual(cache.finish(current, True, "9.9.9.9", now=104).address, "9.9.9.9")
+
+    def test_changed_ip_compares_observations_without_claiming_registration(self):
+        cache = connection.PublicIPCache()
+        _kind, token = cache.begin(now=100)
+        self.assertFalse(cache.finish(token, True, "8.8.8.8", now=100).changed)
+        cache.invalidate()
+        _kind, token = cache.begin(now=101)
+        result = cache.finish(token, True, "1.1.1.1", now=102)
+        self.assertTrue(result.changed)
+        self.assertEqual(result.address, "1.1.1.1")
+        self.assertNotIn("등록 완료", connection.public_ip_status(result, now=102))
+        self.assertIn("달라", connection.public_ip_status(result, now=102))
+
+    def test_cached_expiry_and_routing_caveats_are_truthful(self):
+        result = connection.PublicIPResult(True, "8.8.8.8", "확인", checked_at=100)
+        self.assertIn("조회 당시", connection.public_ip_status(result, now=101))
+        self.assertIn("등록", connection.PUBLIC_IP_CAVEAT)
+        self.assertIn("VPN", connection.PUBLIC_IP_CAVEAT)
+        self.assertIn("프록시", connection.PUBLIC_IP_CAVEAT)
+        self.assertIn("다를", connection.PUBLIC_IP_CAVEAT)
+        self.assertIn("만료", connection.public_ip_status(result, now=220))
+
+    def test_official_api_management_pages_are_a_static_domestic_allowlist(self):
+        self.assertEqual(connection.api_management_url("upbit"), "https://www.upbit.com/mypage/open_api_management")
+        self.assertEqual(connection.api_management_url("bithumb"), "https://www.bithumb.com/react/api-support/management-api")
+        for exchange in ("binance", "https://evil.test", "upbit?key=secret"):
+            with self.assertRaises(ValueError):
+                connection.api_management_url(exchange)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -9,12 +9,103 @@ import secrets
 import time
 
 PUBLIC_IPV4_URL = "https://api4.ipify.org?format=json"
+PUBLIC_IP_MAX_AGE = 120.0
+PUBLIC_IP_CAVEAT = (
+    "이 주소는 ipify 조회 당시의 공인 IPv4예요. 고정 IP 여부와 거래소 허용 IP 등록 여부는 확인하지 않습니다. "
+    "VPN·프록시·분할 라우팅을 사용하면 조회 서비스와 거래소 API의 외부 주소가 다를 수 있어요. "
+    "주소가 바뀌었거나 네트워크를 바꿨으면 다시 확인·등록하고 연결 검사를 진행하세요."
+)
+API_MANAGEMENT_PAGES = {
+    "upbit": "https://www.upbit.com/mypage/open_api_management",
+    "bithumb": "https://www.bithumb.com/react/api-support/management-api",
+}
 PREFLIGHT_MAX_AGE = 120.0
 _FINGERPRINT_SALT = secrets.token_bytes(32)
 
 
 class PublicIPError(ValueError):
     pass
+
+
+def api_management_url(exchange: str) -> str:
+    try:
+        return API_MANAGEMENT_PAGES[exchange]
+    except (KeyError, TypeError):
+        raise ValueError("이 거래소의 공식 API 관리 페이지를 확인하지 못했어요.") from None
+
+
+@dataclass(frozen=True)
+class PublicIPResult:
+    ok: bool
+    address: str
+    reason: str
+    checked_at: float = field(default_factory=time.monotonic)
+    observed_at: float = field(default_factory=time.time)
+    changed: bool = False
+
+    def fresh(self, *, now=None) -> bool:
+        elapsed = (time.monotonic() if now is None else now) - self.checked_at
+        return 0 <= elapsed < PUBLIC_IP_MAX_AGE
+
+
+class PublicIPCache:
+    """Main-thread-owned, PC-scoped short cache and singleflight request generation."""
+    def __init__(self):
+        self.result = None
+        self.generation = 0
+        self._sequence = 0
+        self._active = None
+        self._previous_address = ""
+
+    @property
+    def busy(self):
+        return self._active is not None
+
+    def begin(self, *, force=False, now=None):
+        if self.busy:
+            return "shared", self._active
+        if not force and self.result is not None and self.result.fresh(now=now):
+            return "cached", None
+        self.result = None
+        self._sequence += 1
+        self._active = (self.generation, self._sequence)
+        return "request", self._active
+
+    def finish(self, token, ok, value, *, now=None):
+        if token != self._active:
+            return None
+        self._active = None
+        if token[0] != self.generation:
+            return None
+        try:
+            address = validate_public_ipv4(value) if ok else ""
+        except PublicIPError:
+            ok, address = False, ""
+        changed = bool(ok and self._previous_address and address != self._previous_address)
+        if ok:
+            self._previous_address = address
+        # Failure strings from transports/proxies are never cached or rendered.
+        reason = "조회 당시 공인 IPv4를 확인했어요." if ok else "공인 IPv4 확인에 실패했어요. VPN·인터넷 연결을 확인한 뒤 다시 눌러 주세요."
+        self.result = PublicIPResult(bool(ok), address, reason, checked_at=time.monotonic() if now is None else now, changed=changed)
+        return self.result
+
+    def invalidate(self):
+        self.generation += 1
+        self.result = None
+        # Keep singleflight locked until the old request returns. Its generation
+        # will be rejected by finish; no parallel external requests are spawned.
+
+
+def public_ip_status(result, *, now=None) -> str:
+    if result is None:
+        return "공인 IPv4 확인 전 — 허용 IP 등록은 거래소 공식 페이지에서 직접 합니다."
+    if not result.fresh(now=now):
+        return "공인 IPv4 조회 결과가 만료됐어요. 다시 확인한 현재 주소만 복사할 수 있습니다."
+    if not result.ok:
+        return result.reason
+    observed = time.strftime("%H:%M:%S", time.localtime(result.observed_at))
+    changed = " · 이전 조회 주소와 달라요. 거래소 허용 IP를 확인하고 연결 검사를 다시 진행하세요." if result.changed else ""
+    return f"{result.address} · {observed} 조회 당시 주소 (120초 유효). 고정 여부·허용 등록은 확인하지 않았어요.{changed}"
 
 
 def validate_public_ipv4(value) -> str:

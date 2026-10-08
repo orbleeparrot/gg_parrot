@@ -1,4 +1,4 @@
-const STEPS = new Set(["prepare", "permissions", "ip", "keys"]);
+const STEPS = new Set(["prepare", "permissions", "keys"]);
 
 export function parseConnectionGuide(params) {
   return {
@@ -12,8 +12,4 @@ export function parseConnectionGuide(params) {
 export function connectionGuidePath({ exchange, step } = {}) {
   const safe = parseConnectionGuide(new URLSearchParams({ exchange: exchange || "", step: step || "" }));
   return `/exchange-connect?${new URLSearchParams(safe)}`;
-}
-
-export function publicConnectionGuideUrl(options) {
-  return `https://gg-parrot.vercel.app${connectionGuidePath(options)}`;
 }

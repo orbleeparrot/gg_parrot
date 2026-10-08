@@ -98,25 +98,25 @@ test("FAQ는 거래소별 단계별 연결 도우미로 바로 연결한다", as
   assert.match(textOf(html), /단계별 연결 도우미/);
 });
 
-test("국내 연결 단계는 발급 전에 권한과 IPv4를 준비하는 순서이다", () => {
+test("국내 연결은 실행기 IP 확인 → 공식 발급 → 실행기 검사 세 단계다", () => {
   assert.equal(typeof runnerGuide.domesticConnectionSteps, "function");
   for (const exchange of ["upbit", "bithumb"]) {
     const steps = runnerGuide.domesticConnectionSteps(exchange);
-    assert.deepEqual(steps.map((step) => step.id), ["prepare", "permissions", "ip", "keys"]);
-    assert.equal(steps.length, 4);
+    assert.deepEqual(steps.map((step) => step.id), ["prepare", "permissions", "keys"]);
+    assert.equal(steps.length, 3);
     for (const step of steps) {
       assert.ok(step.title && step.description);
       assert.ok(Array.isArray(step.checklist) && step.checklist.length > 0);
     }
     assert.match(JSON.stringify(steps[1]), /자산조회[\s\S]*주문조회[\s\S]*주문하기/);
     assert.match(JSON.stringify(steps[1]), /출금[\s\S]*(끄|꺼)/);
-    assert.match(JSON.stringify(steps[2]), /실행기[\s\S]*PC[\s\S]*IPv4/);
-    assert.match(JSON.stringify(steps[2]), new RegExp(`${exchange === "upbit" ? 10 : 5}개`));
-    assert.match(JSON.stringify(steps[3]), /웹[\s\S]*확인[\s\S]*인증/);
-    assert.match(JSON.stringify(steps[3]), /Secret Key[\s\S]*최초/);
-    assert.match(JSON.stringify(steps[2]), /기존 실행기[\s\S]*직접 확인/);
-    assert.match(JSON.stringify(steps[3]), /기존 실행기[\s\S]*검사 전용 버튼이 아니므로/);
-    assert.equal(steps[0].action.href, DOMESTIC_KEY_PAGES[exchange].url);
+    assert.match(JSON.stringify(steps[0]), /실행기[\s\S]*PC[\s\S]*IPv4/);
+    assert.match(JSON.stringify(steps[1]), new RegExp(`${exchange === "upbit" ? 10 : 5}개`));
+    assert.match(JSON.stringify(steps[2]), /웹[\s\S]*확인[\s\S]*인증/);
+    assert.match(JSON.stringify(steps[2]), /Secret Key[\s\S]*최초/);
+    assert.match(JSON.stringify(steps[0]), /기존 실행기[\s\S]*직접 확인/);
+    assert.match(JSON.stringify(steps[2]), /기존 실행기[\s\S]*검사 전용 버튼이 아니므로/);
+    assert.equal(steps[1].action.href, DOMESTIC_KEY_PAGES[exchange].url);
   }
   assert.deepEqual(runnerGuide.domesticConnectionSteps("binance"), []);
   assert.deepEqual(runnerGuide.domesticConnectionSteps("unknown"), []);
@@ -128,11 +128,11 @@ test("단계 데이터는 소비자가 고쳐도 다른 세션 안내에 새지 
   const originalTitle = steps[0].title;
   steps[0].title = "changed";
   steps[0].checklist.length = 0;
-  steps[0].action.href = "https://untrusted.example/";
+  steps[1].action.href = "https://untrusted.example/";
   const fresh = runnerGuide.domesticConnectionSteps("upbit");
   assert.equal(fresh[0].title, originalTitle);
   assert.ok(fresh[0].checklist.length > 0);
-  assert.equal(fresh[0].action.href, DOMESTIC_KEY_PAGES.upbit.url);
+  assert.equal(fresh[1].action.href, DOMESTIC_KEY_PAGES.upbit.url);
 });
 
 test("거래소 주소를 두 벌로 두지 않는다", () => {

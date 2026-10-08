@@ -716,6 +716,9 @@ class AskMacroSession(SQLModel, table=True):
     chosen_symbol: str = ""      # 사용자가 고른 종목
     expires_ms: int = Field(default=0, sa_type=BigInteger)  # 세션 유효 시한
     ask_count: int = 0           # 이 세션으로 매크로를 만든 횟수(상한)
+    # 추천이 0개였으면 횟수를 돌려준다(2026-10-08). 행은 지우지 않는다 — '다른 종목으로' 가
+    # 이 세션을 다시 쓰고, 무엇을 돌렸는지도 문의 대응에 남아야 한다. used_today 가 제외한다.
+    refunded: bool = False
 
 
 class AskExtraCredit(SQLModel, table=True):
@@ -1198,6 +1201,7 @@ def _migrate() -> None:
             "chosen_symbol": "ALTER TABLE askmacrosession ADD COLUMN chosen_symbol TEXT NOT NULL DEFAULT ''",
             "expires_ms": "ALTER TABLE askmacrosession ADD COLUMN expires_ms BIGINT NOT NULL DEFAULT 0",
             "ask_count": "ALTER TABLE askmacrosession ADD COLUMN ask_count INTEGER NOT NULL DEFAULT 0",
+            "refunded": "ALTER TABLE askmacrosession ADD COLUMN refunded BOOLEAN NOT NULL DEFAULT FALSE",
         },
         "boardpost": {
             "is_notice": "ALTER TABLE boardpost ADD COLUMN is_notice BOOLEAN DEFAULT FALSE",
@@ -1371,6 +1375,7 @@ _PG_ADDED_COLUMNS = {
         "chosen_symbol": "TEXT NOT NULL DEFAULT ''",
         "expires_ms": "BIGINT NOT NULL DEFAULT 0",
         "ask_count": "INTEGER NOT NULL DEFAULT 0",
+        "refunded": "BOOLEAN NOT NULL DEFAULT FALSE",
     },
     "boardpost": {
         "is_notice": "BOOLEAN NOT NULL DEFAULT FALSE",

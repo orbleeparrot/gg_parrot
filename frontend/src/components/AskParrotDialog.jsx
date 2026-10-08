@@ -11,8 +11,8 @@ import CheckIcon from "./CheckIcon.jsx";
 import {
   BACK_TO_STEP, BALANCE_ERROR, BALANCE_NOTE, CANDIDATES_PROMPT, COMPARE_TITLE, CONDITION_LABEL, CONSENT_BUTTON, CONSENT_TEXT, DISCLAIMER, DOMESTIC_SPOT_ONLY,
   FOLLOW_UPS, FOLLOW_UPS_TITLE, HOLD_LABEL, HORIZONS, LEGEND_BASE, LEGEND_EQUITY, LEVERAGES, LOAD_BUTTON,
-  LOST_TO_HOLD_TEXT, MANUAL_PICK_LABEL, MANUAL_SEARCH_MISS, MANUAL_SEARCH_PLACEHOLDER, MARKETS, NEXT_LABEL,
-  NO_QUOTA_TEXT, OPENING_TEXT, PREV_LABEL, PROFILES, READY_BUTTON, READY_TEXT, RESTART_LABEL, RETURN_LABEL,
+  MANUAL_PICK_LABEL, MANUAL_SEARCH_MISS, MANUAL_SEARCH_PLACEHOLDER, MARKETS, NEXT_LABEL,
+  NO_EDGE_NOTE, NO_QUOTA_TEXT, OPENING_TEXT, REFUNDED_TEXT, SCALPER_PICK_WARN, PREV_LABEL, PROFILES, READY_BUTTON, READY_TEXT, RESTART_LABEL, RETURN_LABEL,
   RUNNING_TEXT, SCALPER_NOTE, SPOT_HINT, STABLE_NO_FUTURES, STEP_PROMPTS, UNAVAILABLE_TEXT, VS_HOLD_LABEL,
   WATCH_LEVELS, WHY_TITLE, feesNote, readyCostNote,
 } from "../lib/askCopy.js";
@@ -501,7 +501,8 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
     dispatch({ type: "loadingResults" });
     try {
       const data = await api.askMacros(toAskRequest(next));
-      dispatch({ type: "results", results: data.results, lostToHold: data.all_lost_to_hold, remaining: data.remaining_today });
+      dispatch({ type: "results", results: data.results, noEdge: data.no_edge,
+                 refunded: data.refunded, remaining: data.remaining_today });
     } catch (e) {
       dispatch({ type: "error", message: e.message });
     }
@@ -585,6 +586,7 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
           ))}
         </div>)}
         {state.step === "market" && !canChooseFutures(state.answers) ? <p className="ask-note ask-in" style={{ "--i": options.length + 1 }}>{isDomestic(state.answers.exchange) ? DOMESTIC_SPOT_ONLY : STABLE_NO_FUTURES}</p> : null}
+        {state.step === "profile" ? <p className="ask-note ask-in" style={{ "--i": options.length + 1 }} role="note">{SCALPER_PICK_WARN}</p> : null}
       </>
     );
   } else if (state.phase === "ready") {
@@ -623,12 +625,13 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
     stage = (
       <>
         <div className={"ask-rh ask-in" + (carousel ? " is-compact" : "")} style={{ "--i": 0 }}>
-          <p className="ask-say"><Face size={32} /><span>{resultsHeadline(results.length)}</span></p>
-          {results.length && !carousel ? <span className="ask-legend"><span><i />{LEGEND_EQUITY}</span><span><i className="is-base" />{LEGEND_BASE}</span></span> : null}
+          <p className="ask-say"><Face size={32} /><span>{resultsHeadline(results.length, state.noEdge)}</span></p>
+          {results.length > 0 && !carousel ? <span className="ask-legend"><span><i />{LEGEND_EQUITY}</span><span><i className="is-base" />{LEGEND_BASE}</span></span> : null}
         </div>
-        {state.lostToHold ? <p className="ask-hold ask-in" style={{ "--i": 1 }} role="note">{LOST_TO_HOLD_TEXT}</p> : null}
+        {state.noEdge ? <p className="ask-hold ask-in" style={{ "--i": 1 }} role="note">{NO_EDGE_NOTE}</p> : null}
+        {state.refunded ? <p className="ask-note ask-in" style={{ "--i": 2 }} role="status">{REFUNDED_TEXT}</p> : null}
         {results.length > 1 && !carousel ? <CompareTable results={results} hold={hold} /> : null}
-        {results.length && !carousel ? (
+        {results.length > 0 && !carousel ? (
           <div className="ask-mcs">
             {results.map((item, idx) => (
               <div key={item.label + item.rule_type} className="ask-in" style={{ "--i": idx + 3 }}>

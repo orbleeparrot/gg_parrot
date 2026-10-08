@@ -114,8 +114,11 @@ def test_domestic_flow_uses_actual_listings_and_immutable_saved_budget(monkeypat
 
         def backtest(macro):
             seen.append(macro)
+            # buy_hold_return_pct 가 있어야 추천으로 올라온다 — ask.worth_the_macro 는 홀딩
+            # 기준을 모르는 결과를 떨어뜨리고, 홀딩을 MIN_EXCESS_PCT 만큼 넘기길 요구한다.
             return BacktestResult(initial_capital=75_000, final_equity=80_000, final_return_pct=6,
-                                  mdd_pct=1, win_rate_pct=60, total_trades=10, trades=[], equity_curve=[])
+                                  mdd_pct=1, win_rate_pct=60, total_trades=10, trades=[], equity_curve=[],
+                                  buy_hold_return_pct=0)
 
         # Extra caller fields cannot override the immutable session answers.
         request = ask.AskRequest(session_id=session.id, symbol="KRW-BTC", exchange="binance", account_balance=999)
@@ -180,8 +183,10 @@ def test_one_letter_binance_candidate_pool_and_server_listing_revalidation(monke
 
         def backtest(macro):
             seen.append(macro)
+            # 위와 같은 이유로 홀딩 기준을 싣는다(+6%p 로 문턱을 넘긴다).
             return BacktestResult(initial_capital=250, final_equity=265, final_return_pct=6,
-                                  mdd_pct=1, win_rate_pct=60, total_trades=10, trades=[], equity_curve=[])
+                                  mdd_pct=1, win_rate_pct=60, total_trades=10, trades=[], equity_curve=[],
+                                  buy_hold_return_pct=0)
 
         result = ask.run_ask(db, user, ask.AskRequest(session_id=response["session_id"], symbol=" tusdt ", resolved=source == "resolved"), backtest)
         assert result["results"] and seen

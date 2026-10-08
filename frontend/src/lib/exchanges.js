@@ -2,10 +2,13 @@ import { quoteOf } from "./format.js";
 
 // Exchange identity is separate from spot/futures. Symbols retain their native
 // exchange format; equal KRW pairs on two exchanges are not the same market.
+// commission: 현물 한쪽 수수료(%). **backend/app/exchanges.py 의 _COMMISSION_PCT 와 같아야 한다**
+// (exchangeFees.test.js 가 그 파일을 읽어 대조한다). 예전에는 양쪽 모두 거래소와 무관하게
+// 0.1%(바이낸스 요율)를 썼고, 그래서 국내 백테스트가 실제보다 나쁘게 나왔다.
 export const EXCHANGES = Object.freeze([
-  { value: "binance", label: "바이낸스", quote: "USDT" },
-  { value: "upbit", label: "업비트", quote: "KRW" },
-  { value: "bithumb", label: "빗썸", quote: "KRW" },
+  { value: "binance", label: "바이낸스", quote: "USDT", commission: 0.1 },
+  { value: "upbit", label: "업비트", quote: "KRW", commission: 0.05 },
+  { value: "bithumb", label: "빗썸", quote: "KRW", commission: 0.04 },
 ]);
 
 export function normalizeExchange(value) {
@@ -18,6 +21,7 @@ export const exchangeLabel = (value) => EXCHANGES.find((item) => item.value === 
 export const quoteForExchange = (value) => EXCHANGES.find((item) => item.value === normalizeExchange(value)).quote;
 export const exchangeLogo = (value) => { const exchange = normalizeExchange(value); return `/exchanges/${exchange}.${exchange === "binance" ? "svg" : "png"}`; };
 export const isDomestic = (value) => normalizeExchange(value) !== "binance";
+export const commissionForExchange = (value) => EXCHANGES.find((item) => item.value === normalizeExchange(value)).commission;
 export const marketKey = (exchange, symbol) => `${normalizeExchange(exchange)}:${String(symbol || "").trim().toUpperCase()}`;
 
 // A run session has no exchange column, only its symbol — and a domestic symbol is always `KRW-<COIN>`.

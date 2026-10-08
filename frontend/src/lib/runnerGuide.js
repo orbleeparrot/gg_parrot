@@ -37,7 +37,8 @@ export const BINANCE_TESTNET_GUIDES = {
 };
 
 // 업비트·빗썸 공식 키 발급 화면. 두 곳 모두 호출하는 IP 를 키에 등록해야 주문이 통과한다.
-const DOMESTIC_KEY_PAGES = {
+// 사용 설명(Guide.jsx 의 domestic-api 쪽)도 같은 주소를 쓴다 — 두 벌로 두면 한쪽만 바뀐다.
+export const DOMESTIC_KEY_PAGES = {
   upbit: { url: "https://upbit.com/mypage/open_api_management", domain: "upbit.com", linkLabel: "업비트 Open API 관리 열기" },
   bithumb: { url: "https://www.bithumb.com/react/api-support/management-api", domain: "bithumb.com", linkLabel: "빗썸 API 관리 열기" },
 };

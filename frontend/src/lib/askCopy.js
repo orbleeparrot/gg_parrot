@@ -53,6 +53,12 @@ export const FOLLOW_UPS = [
 ];
 
 export const SCALPER_NOTE = "짧은 봉은 수수료·슬리피지 영향이 커요 · 실행기보다 페이퍼 트레이딩으로 먼저 확인해요";
+// 고르는 자리에서 미리 말한다(2026-10-08). 실측: 1주 창에서 익절폭을 1%~8% 로 넓혀 봐도
+// 거래 조건을 채운 후보가 하나도 돈을 벌지 못했다 — 거래 수와 손실이 같이 늘었다(마찰).
+// 고르고 나서 빈 화면을 보는 것보다 고를 때 아는 쪽이 낫다.
+export const SCALPER_PICK_WARN = "단타형은 짧은 봉이라 수수료·슬리피지가 커요 — 과거 데이터에서 '그냥 들고 있기' 를 넘기기 어려운 편이에요.";
+// 결과가 0개면 서버가 횟수를 돌려준다. 말하지 않으면 "결과도 없는데 횟수만 깎였다" 로 보인다.
+export const REFUNDED_TEXT = "보여 드릴 조합이 없었으니 횟수는 돌려드렸어요.";
 export const feesNote = (commission, slippage) => `수수료 ${commission}% · 슬리피지 ${slippage}% 포함`;
 
 export const NO_QUOTA_TEXT = "오늘은 다 물어봤어요. 내일 다시 물어봐 주세요.";
@@ -62,7 +68,10 @@ export const NO_RESULTS_TEXT = "이 조건으론 살아남은 후보가 없었�
 export const LOADED_TEXT = "조건 판에 불러왔어요. 숫자 한 번 보고 백테스트부터 돌려 보세요";
 
 // 보여 준 조합이 전부 '그냥 들고 있기' 에 졌을 때 (2026-09-23) — 매크로가 늘 답은 아니라고 먼저 말한다.
-export const LOST_TO_HOLD_TEXT = "이번엔 그냥 사서 들고 있는 게 더 나았어요. 아래는 그래도 나은 편이었던 조합이에요.";
+// 2026-10-08: "그래도 나은 편이었던 조합" 을 보여 주던 문구를 뺐다. 홀딩을 못 넘긴 조합은
+// 이제 아예 올라오지 않으므로(ask.worth_the_macro), 그럴 땐 추천 대신 이렇게 말한다.
+export const NO_EDGE_TEXT = "이번 조건에선 그냥 들고 있는 게 나았어요.";
+export const NO_EDGE_NOTE = "과거 데이터로 돌려 보니 '그냥 사서 들고 있기' 를 뚜렷하게 넘긴 조합이 없었어요. 기간이나 종목, 보는 빈도를 바꿔 다시 물어봐 주세요.";
 
 // 직접 고를래요 — 거래 가능한 종목을 검색해서 고른다.
 export const MANUAL_SEARCH_PLACEHOLDER = "종목 검색 (예: AVAX)";

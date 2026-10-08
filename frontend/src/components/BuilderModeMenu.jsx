@@ -3,11 +3,14 @@
 // 어느 쪽으로 가든 지금 조건을 매크로로 싸서 들고 간다(onSwitch 가 라우팅한다).
 import { useEffect, useRef, useState } from "react";
 import { Icon } from "./icons.jsx";
+import { PRO_BUILDER_LOCK_HINT, PRO_BUILDER_OPEN } from "../lib/proBuilder.js";
 import "./BuilderModeMenu.css";
 
+// locked 는 메뉴에 남겨 두되 들어가지 못하게 한다 — 항목을 지우면 "프로 빌더가 없어졌다" 가 되고,
+// 지금 상황은 없어진 게 아니라 손보는 중이다.
 export const BUILDER_MODES = Object.freeze([
   { value: "basic", label: "기본 빌더", path: "/builder" },
-  { value: "pro", label: "프로 빌더", path: "/builder/pro" },
+  { value: "pro", label: "프로 빌더", path: "/builder/pro", locked: !PRO_BUILDER_OPEN },
 ]);
 
 export default function BuilderModeMenu({ mode = "basic", onSwitch, onTour = null, hint = "지금 조건 그대로" }) {
@@ -31,20 +34,23 @@ export default function BuilderModeMenu({ mode = "basic", onSwitch, onTour = nul
         <div className="studio-mode-menu" role="menu" aria-label="빌더 종류">
           {BUILDER_MODES.map((item) => {
             const on = item.value === current.value;
+            const locked = Boolean(item.locked) && !on;
             return (
               <button
                 key={item.value}
                 type="button"
                 role="menuitemradio"
                 aria-checked={on}
-                className={"studio-mode-item" + (on ? " is-on" : "")}
-                onClick={() => { setOpen(false); if (!on) onSwitch?.(item); }}
+                disabled={locked}
+                aria-disabled={locked || undefined}
+                className={"studio-mode-item" + (on ? " is-on" : "") + (locked ? " is-locked" : "")}
+                onClick={() => { if (locked) return; setOpen(false); if (!on) onSwitch?.(item); }}
               >
                 <span className="studio-mode-check" aria-hidden="true">
                   {on ? <Icon name="check" size={14} strokeWidth={2.5} /> : null}
                 </span>
                 {item.label}
-                {on ? null : <small className="studio-mode-hint">{hint}</small>}
+                {on ? null : <small className="studio-mode-hint">{locked ? PRO_BUILDER_LOCK_HINT : hint}</small>}
               </button>
             );
           })}

@@ -17,3 +17,6 @@ a.studio-mode-item { text-decoration: none; }
 .studio-mode-check { width: 14px; flex: none; color: rgb(var(--c-slate-900)); font-size: 12px; }
 .studio-mode-sep { margin: 4px 6px; border: 0; border-top: 1px solid rgb(var(--c-slate-200)); }
 .studio-mode-hint { margin-left: auto; padding-left: 10px; color: rgb(var(--c-slate-500)); font-size: 11px; font-weight: 600; }
+/* 프로 빌더 잠금 — 항목은 보이되 들어가지 못한다(lib/proBuilder.js 의 PRO_BUILDER_OPEN).
+   색만 바꾼다: 비활성 자체는 위의 :disabled 규칙이 이미 처리한다. */
+.studio-mode-item.is-locked .studio-mode-hint { color: rgb(var(--c-amber-700)); font-weight: 700; }

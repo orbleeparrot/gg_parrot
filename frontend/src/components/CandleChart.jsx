@@ -80,7 +80,7 @@ function BarReadout({ bar, live, quote, extra = null, reserveLive = false }) {
       </div>
       {extra}
       {(live || reserveLive) && (
-        <span className="candle-chart-live inline-flex items-center gap-1.5 t-caption font-bold text-red-600" style={live ? undefined : { visibility: "hidden" }} aria-hidden={live ? undefined : true}>
+        <span className={"candle-chart-live inline-flex items-center gap-1.5 t-caption font-bold text-red-600" + (live ? "" : " invisible")} aria-hidden={live ? undefined : true}>
           <span aria-hidden="true" className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse motion-reduce:animate-none" />
           LIVE
         </span>
@@ -130,7 +130,7 @@ function RangeChange({ percent }) {
 function MarketPrice({ bar, quote, changePct }) {
   // 시세가 오기 전에도 같은 높이를 잡아 둔다 — 늦게 생기면 아래 화면 전체가 밀린다(레이아웃 이동).
   if (!bar) return (
-    <div className="candle-chart-price-row" aria-hidden="true" style={{ visibility: "hidden" }}>
+    <div className="candle-chart-price-row invisible" aria-hidden="true">
       <span className="candle-chart-price"><strong className="candle-chart-current num">0</strong></span>
     </div>
   );

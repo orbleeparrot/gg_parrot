@@ -278,7 +278,10 @@ def test_ask_returns_top3_distinct_types_and_records(_fake_backtest, monkeypatch
     # C 는 홀딩과 0.5%p 차이라 문턱(3%p)에서 떨어진다 — 점수가 아니라 문턱이 막는다.
     assert [r["rule_type"] for r in data["results"]] == ["J", "G", "E"]
     assert "C" not in [r["rule_type"] for r in data["results"]]
-    assert data["no_edge"] is False and data["min_excess_pct"] == ask.MIN_EXCESS_PCT
+    # 문턱은 기간마다 다르다 — 균형형 'weeks' 는 3개월 창이라 2%p 다.
+    assert data["no_edge"] is False
+    assert data["min_excess_pct"] == ask.MIN_EXCESS_PCT_BY_PERIOD["3m"]
+    assert data["refunded"] is False, "추천이 나왔으면 횟수를 쓴 것이다"
     first = data["results"][0]
     assert first["metrics"] == {"final_return_pct": 9, "mdd_pct": 4, "win_rate_pct": 50.0, "total_trades": 6}
     assert first["macro"]["symbol"] == "BTCUSDT" and first["macro"]["rule_type"] == "J"
@@ -327,7 +330,9 @@ def test_ask_with_no_candidates_returns_empty_results(_fake_backtest, monkeypatc
     monkeypatch.setattr("app.main._run_any", boom)
     data = client.post("/api/ask/macros", json={"session_id": flow["session_id"], "symbol": "BTCUSDT"},
                        headers=_auth(token)).json()
-    assert data["results"] == [] and data["remaining_today"] == 4
+    # 2026-10-08: 보여 줄 게 없으면 횟수를 돌려준다 — 차감 전으로 돌아가 5회가 남는다.
+    assert data["results"] == [] and data["remaining_today"] == 5
+    assert data["refunded"] is True
 
 
 def test_in_flight_guard_rejects_concurrent_ask(_fake_backtest, monkeypatch):
@@ -1108,3 +1113,129 @@ def test_no_edge_is_not_claimed_when_the_profile_filters_blocked_them(_fake_back
                        headers=_auth(token)).json()
     assert data["results"] == [], "MDD 상한에 전부 걸렸다"
     assert data["no_edge"] is False, "홀딩은 못 이긴 게 아니다 — 성향 조건이 막은 것이다"
+
+
+# --- 수수료 · 기간별 문턱 · 횟수 환불 (2026-10-08) --------------------------
+# 단타형이 늘 빈 화면을 주는 것을 조사하다 셋을 찾았다. 수수료가 거래소를 안 보고,
+# 문턱이 기간을 안 보고, 결과가 0개인데 횟수가 깎였다.
+
+def test_macro_fees_follow_the_exchange():
+    """예전에는 전부 0.1%(바이낸스 요율)였다 — 국내가 실제보다 나쁘게 나왔다.
+
+    실측: 1주 · 5m 단타 후보가 0.1% 에서 -6.08%, 0.05% 에서 -4.75%.
+    """
+    from app.exchanges import spot_commission_pct
+    seen = {}
+    for exchange, symbol in (("binance", "BTCUSDT"), ("upbit", "KRW-BTC"), ("bithumb", "KRW-ETH")):
+        req = ask._Plan(risk_profile="balanced", market="spot", leverage=1, symbols=[symbol],
+                        period_preset="3m", interval="4h", exchange=exchange)
+        macro = ask._make_macro(req, "A", ask._PRESETS["A"][0], [symbol])
+        assert macro is not None
+        seen[exchange] = macro.fees.commission_pct
+        assert macro.fees.commission_pct == spot_commission_pct(exchange)
+    assert seen["upbit"] < seen["binance"], "업비트 원화마켓은 바이낸스보다 싸다"
+    assert seen["bithumb"] < seen["binance"]
+    # 0 으로 두지 않는다 — 이벤트가 끝나면 조용히 거짓이 되고 "마찰 없음" 으로 읽힌다.
+    assert all(value > 0 for value in seen.values())
+
+
+def test_commission_can_be_overridden_by_env(monkeypatch):
+    from app.exchanges import spot_commission_pct
+    monkeypatch.setenv("EXCHANGE_COMMISSION_JSON", '{"upbit": 0.139}')
+    assert spot_commission_pct("upbit") == pytest.approx(0.139)
+    assert spot_commission_pct("binance") == pytest.approx(0.1), "안 적은 거래소는 그대로"
+    monkeypatch.setenv("EXCHANGE_COMMISSION_JSON", "깨진 값")
+    assert spot_commission_pct("upbit") == pytest.approx(0.05), "못 읽으면 기본값"
+
+
+def test_min_excess_scales_with_the_window():
+    """1주에 3%p 를 요구하면 1년과 같은 난이도다 — 짧은 창의 진짜 승자까지 숨긴다."""
+    assert ask.min_excess_pct("1y") == pytest.approx(3.0)
+    assert ask.min_excess_pct("1w") == pytest.approx(0.5)
+    periods = ["1w", "1m", "3m", "6m", "1y"]
+    values = [ask.min_excess_pct(p) for p in periods]
+    assert values == sorted(values), "기간이 길수록 문턱이 낮아지면 안 된다"
+    assert len(set(values)) == len(values), "전부 다른 값이어야 눈금이 의미가 있다"
+    # 모르는 기간은 가장 엄한 값으로 — 새 기간을 더하고 표를 안 고쳤을 때 느슨해지면 안 된다.
+    assert ask.min_excess_pct("2y") == pytest.approx(ask.MIN_EXCESS_PCT)
+    assert ask.min_excess_pct("") == pytest.approx(ask.MIN_EXCESS_PCT)
+    # 같은 결과가 1주에선 통과, 1년에선 탈락할 수 있다.
+    close = _result(8, 3, bh=7)  # +1%p
+    assert ask.worth_the_macro(close, "1w") is True
+    assert ask.worth_the_macro(close, "1y") is False
+
+
+def test_env_threshold_still_wins_over_the_period_table(monkeypatch):
+    monkeypatch.setenv("ASK_MIN_EXCESS_PCT", "9")
+    assert ask.min_excess_pct("1w") == pytest.approx(9.0)
+    assert ask.min_excess_pct("1y") == pytest.approx(9.0)
+
+
+def test_select_top_uses_the_period_threshold():
+    ev = [ask.Evaluated(_cand("J"), _result(8, 3, bh=7))]  # +1%p
+    assert [e.candidate.macro.rule_type.value for e in ask.select_top(ev, "balanced", period="1w")] == ["J"]
+    assert ask.select_top(ev, "balanced", period="1y") == []
+
+
+def test_refund_is_returned_when_a_later_symbol_does_produce_results(_fake_backtest, monkeypatch):
+    """환불이 '한 번 주면 끝' 이면 세션이 공짜가 된다.
+
+    안 나올 종목으로 환불받고 '다른 종목으로' 눌러 결과를 받는 길이 있다(세션당 6회).
+    마지막 시도 기준으로 매긴다 — 결과가 나오면 다시 차감한다.
+    """
+    monkeypatch.setattr(ask.hotcoins, "get_cached_tickers", lambda: _fake_tickers())
+    monkeypatch.setattr(ask, "_candidate_ai", lambda: None)
+    token, _ = _signup()
+    client.post("/api/ask/consent", headers=_auth(token))
+    flow = client.post("/api/ask/candidates", json=_candidates_body(), headers=_auth(token)).json()
+    session_id = flow["session_id"]
+
+    def nothing(macro):
+        return _result(11, 3, trades=20, bh=10), [], "test", macro.period.preset  # +1%p, 3m 문턱 2%p
+
+    monkeypatch.setattr("app.main._run_any", nothing)
+    first = client.post("/api/ask/macros", json={"session_id": session_id, "symbol": "BTCUSDT"},
+                        headers=_auth(token)).json()
+    assert first["results"] == [] and first["refunded"] is True
+    assert first["remaining_today"] == 5, "돌려받았다"
+
+    # '다른 종목으로' — 같은 세션, 이번엔 결과가 나온다.
+    monkeypatch.setattr("app.main._run_any", _fake_run_any_for_test())
+    second = client.post("/api/ask/macros", json={"session_id": session_id, "symbol": "AAAUSDT"},
+                         headers=_auth(token)).json()
+    assert second["results"], "이번엔 추천이 나와야 한다"
+    assert second["refunded"] is False
+    assert second["remaining_today"] == 4, "값을 받았으면 다시 차감한다 — 세션이 공짜가 되면 안 된다"
+
+
+def _fake_run_any_for_test():
+    def run(macro):
+        ret, mdd, trades, bh = _RETURNS.get(macro.rule_type.value, (1, 1, 5, 0))
+        return _result(ret, mdd, trades=trades, bh=bh), [], "test", macro.period.preset
+    return run
+
+
+def test_endpoint_uses_the_window_threshold_not_the_strictest_one(_fake_backtest, monkeypatch):
+    """끝점이 기간을 select_top 에 넘기는지 — 안 넘기면 기본값(가장 엄한 3%p)이 쓰인다.
+
+    균형형 'weeks' 는 3개월 창이라 문턱이 2%p 다. 초과 수익 +2.5%p 는 그 창에서는 추천이고
+    1년 창에서는 아니다. 기간을 안 넘기면 이 추천이 조용히 사라진다.
+    """
+    monkeypatch.setattr(ask.hotcoins, "get_cached_tickers", lambda: _fake_tickers())
+    monkeypatch.setattr(ask, "_candidate_ai", lambda: None)
+
+    def fake_run_any(macro):
+        return _result(12.5, 2, trades=20, bh=10), [], "test", macro.period.preset
+
+    monkeypatch.setattr("app.main._run_any", fake_run_any)
+    token, _ = _signup()
+    client.post("/api/ask/consent", headers=_auth(token))
+    flow = client.post("/api/ask/candidates", json=_candidates_body(invest_horizon="weeks"),
+                       headers=_auth(token)).json()
+    data = client.post("/api/ask/macros", json={"session_id": flow["session_id"], "symbol": "BTCUSDT"},
+                       headers=_auth(token)).json()
+    assert data["min_excess_pct"] == pytest.approx(2.0), "3개월 창의 문턱"
+    assert data["results"], "+2.5%p 는 3개월 창에서 추천이다 — 기간을 안 넘기면 빈다"
+    assert data["no_edge"] is False
+    # 같은 숫자가 1년 창에서는 탈락한다는 것도 함께 못 박는다.
+    assert ask.worth_the_macro(_result(12.5, 2, trades=20, bh=10), "1y") is False

@@ -33,7 +33,7 @@ from .db import AskExtraCredit, AskMacroSession, User
 from .engine.backtest import BacktestResult, _lttb_equity_points
 from .engine.explain import explain_result
 from .engine.schema import Macro
-from .exchanges import is_domestic, normalize_exchange, quote_currency
+from .exchanges import is_domestic, normalize_exchange, quote_currency, spot_commission_pct
 from .quests import today_kst
 
 log = logging.getLogger(__name__)
@@ -48,7 +48,12 @@ TOP_N = 3
 MIN_TRADES = 3
 # 한 추천이 "그냥 들고 있기" 를 넘었다고 인정할 최소 초과 수익(%p). worth_the_macro 가 쓴다.
 # 환경변수 ASK_MIN_EXCESS_PCT 로 바꿀 수 있다(0 이면 문턱 없음).
+#
+# **기간마다 다르다.** 처음에는 3%p 하나로 뒀는데, 그러면 1주 창에 1년과 같은 난이도를
+# 요구한다 — 단타형 '며칠' 은 기간이 1주다. 수익은 대체로 시간에 비례하므로 문턱도 같이
+# 줄인다. 1년을 기준점(3%p)으로 두고 짧은 창을 낮춰 잡았다.
 MIN_EXCESS_PCT = 3.0
+MIN_EXCESS_PCT_BY_PERIOD = {"1w": 0.5, "1m": 1.0, "3m": 2.0, "6m": 2.5, "1y": 3.0}
 # 같은 매매 방식을 최대 몇 칸까지 보여 줄지.
 #
 # 1 로 둔다. 2 로 올리면 같은 유형의 다른 프리셋이 나란히 올 수 있는데, `_label` 이
@@ -355,6 +360,9 @@ def _make_macro(req: _Plan, rule_type: str, preset: dict, symbols: list[str]) ->
         "leverage": req.leverage if rule_type != "C" else 1,
         "params": params,
         "risk": dict(preset.get("risk", {})),
+        # 거래소 실제 요율을 쓴다 — 예전에는 전부 0.1%(바이낸스) 라 국내 결과가 실제보다
+        # 나쁘게 나왔다. 거래가 잦은 설정에서 차이가 커진다.
+        "fees": {"commission_pct": spot_commission_pct(req.exchange)},
         "period": {"preset": req.period_preset},
     }
     try:
@@ -455,23 +463,31 @@ def score(profile: str, result: BacktestResult) -> float:
     return ret
 
 
-def min_excess_pct() -> float:
-    """매크로를 쓴 값어치로 인정할 최소 초과 수익(%p). 0 이면 문턱이 없다."""
-    try:
-        return max(0.0, float(os.environ.get("ASK_MIN_EXCESS_PCT", str(MIN_EXCESS_PCT))))
-    except ValueError:
-        return MIN_EXCESS_PCT
+def min_excess_pct(period: str = "") -> float:
+    """이 기간에서 매크로를 쓴 값어치로 인정할 최소 초과 수익(%p). 0 이면 문턱이 없다.
+
+    환경변수 ASK_MIN_EXCESS_PCT 를 주면 기간과 무관하게 그 값을 쓴다(비상용 손잡이).
+    """
+    raw = str(os.environ.get("ASK_MIN_EXCESS_PCT") or "").strip()
+    if raw:
+        try:
+            return max(0.0, float(raw))
+        except ValueError:
+            pass
+    return MIN_EXCESS_PCT_BY_PERIOD.get(str(period), MIN_EXCESS_PCT)
 
 
-def worth_the_macro(result: BacktestResult) -> bool:
+def worth_the_macro(result: BacktestResult, period: str = "") -> bool:
     """추천으로 내보낼 값어치가 있는가.
 
     2026-10-08 사용자 결정: "가만히 홀딩만 해도 괜찮았다" 는 결과는 추천이 아니다. 두 조건을
     **둘 다** 넘겨야 한다.
 
     1) 그 자체로 벌었다 — 홀딩이 -30% 일 때 -10% 는 초과 수익 +20%p 지만 여전히 손실이다.
-    2) 홀딩을 문턱(MIN_EXCESS_PCT, %p)만큼 넘었다 — 초과 수익이 0 근처면 그냥 들고 있는 것과
-       구분되지 않는다. 분할매수(C)가 바로 이 경우다(backtest 주석: "DCA is buy-and-hold").
+    2) 홀딩을 문턱(%p)만큼 넘었다 — 초과 수익이 0 근처면 그냥 들고 있는 것과 구분되지
+       않는다. 분할매수(C)가 바로 이 경우다(backtest 주석: "DCA is buy-and-hold").
+       문턱은 **기간에 따라 다르다**(MIN_EXCESS_PCT_BY_PERIOD): 1주에 3%p 를 요구하면
+       1년과 같은 난이도가 되어, 짧은 창의 진짜 승자까지 숨긴다.
 
     홀딩 기준을 못 구한 결과는 **떨어뜨린다.** 기준을 모르면 "홀딩보다 낫다" 고 말할 수 없다.
     묶음도 기준이 있다(portfolio.aggregate 가 비중으로 가중한 홀딩을 낸다).
@@ -481,10 +497,11 @@ def worth_the_macro(result: BacktestResult) -> bool:
         return False
     if float(result.final_return_pct) <= 0:
         return False
-    return float(result.final_return_pct) - float(hold) >= min_excess_pct()
+    return float(result.final_return_pct) - float(hold) >= min_excess_pct(period)
 
 
-def select_top(evaluated: list[Evaluated], profile: str, n: int = TOP_N) -> list[Evaluated]:
+def select_top(evaluated: list[Evaluated], profile: str, n: int = TOP_N,
+               period: str = "") -> list[Evaluated]:
     """MDD 상한 · 최소 거래 수 · 홀딩 문턱으로 거르고 성향 점수로 정렬해 상위 n개.
 
     같은 rule_type 은 MAX_PER_TYPE 개까지. **넘긴 후보가 적으면 적게 돌려준다** — 세 칸을
@@ -497,7 +514,7 @@ def select_top(evaluated: list[Evaluated], profile: str, n: int = TOP_N) -> list
         e for e in evaluated
         if e.result.total_trades >= min_trades
         and (cap is None or float(e.result.mdd_pct) <= cap)
-        and worth_the_macro(e.result)
+        and worth_the_macro(e.result, period)
     ]
     pool.sort(key=lambda e: (score(profile, e.result), e.result.total_trades), reverse=True)
     picked: list[Evaluated] = []
@@ -664,11 +681,16 @@ EXTRA_DAILY_CAP = 5
 
 
 def used_today(db: Session, user: User) -> int:
-    """오늘 무료 한도에서 쓴 횟수 — 추가권으로 물어본 세션(paid)은 세지 않는다."""
+    """오늘 무료 한도에서 쓴 횟수.
+
+    빼는 것 둘: 추가권으로 물어본 세션(paid), 그리고 추천이 0개여서 돌려준 세션(refunded).
+    돌려준 세션의 행은 지우지 않는다 — '다른 종목으로' 가 그 세션을 다시 쓴다.
+    """
     return int(db.exec(
         select(func.count()).select_from(AskMacroSession)
         .where(AskMacroSession.user_id == user.id, AskMacroSession.day_kst == today_kst(),
-               AskMacroSession.paid == False)  # noqa: E712 — SQL 비교
+               AskMacroSession.paid == False,  # noqa: E712 — SQL 비교
+               AskMacroSession.refunded == False)  # noqa: E712
     ).one())
 
 
@@ -895,7 +917,7 @@ def run_ask(db: Session, user: User, req: AskRequest, run_backtest: Callable[[Ma
         evaluated = evaluate(candidates, guarded, time_budget_sec())
         if not evaluated and failures and all(isinstance(f, NoSpotDataError) for f in failures):
             raise AskError(422, "이 종목의 시세 데이터를 찾지 못했어요. 다른 종목을 골라 주세요.")
-        top = select_top(evaluated, plan.risk_profile)
+        top = select_top(evaluated, plan.risk_profile, period=plan.period_preset)
         results = [_result_view(e) for e in top]
         # 돌려는 봤는데 홀딩 문턱을 넘은 게 하나도 없었는가.
         #
@@ -903,7 +925,8 @@ def run_ask(db: Session, user: User, req: AskRequest, run_backtest: Callable[[Ma
         # "홀딩이 나았다" 고 말하게 되고, 그건 거짓이다 — 실측: 안정형 · BTC 1년은 홀딩이
         # -31.5% 인데 문턱을 넘은 후보가 7개였고 전부 MDD 상한(10%)에서 떨어졌다.
         # 그 경우의 올바른 말은 "이 조건으론 살아남은 후보가 없었다" 다.
-        no_edge = bool(evaluated) and not any(worth_the_macro(e.result) for e in evaluated)
+        no_edge = bool(evaluated) and not any(
+            worth_the_macro(e.result, plan.period_preset) for e in evaluated)
         elapsed_ms = int((time.monotonic() - started) * 1000)
 
         # 성공했을 때만 호출 수를 센다 — 실패한 시도로 예산을 깎지 않는다.
@@ -915,6 +938,31 @@ def run_ask(db: Session, user: User, req: AskRequest, run_backtest: Callable[[Ma
               "metrics": r["metrics"]} for r in results], ensure_ascii=False)
         row.ai_used = bool(ai_candidates)  # 매크로 단계 기록(후보 단계 것은 candidates_json 안에 있다)
         row.elapsed_ms = elapsed_ms
+        # 보여 줄 게 하나도 없으면 횟수를 돌려준다(2026-10-08 사용자 결정).
+        #
+        # "한 번 돌려주면 끝" 이 아니라 **마지막 시도 기준**이다. 그러지 않으면 구멍이 생긴다:
+        # 안 나올 종목으로 한 번 받아 환불시키고 '다른 종목으로' 눌러 결과를 받으면 그 세션이
+        # 공짜가 된다(세션당 6회까지 되므로 작지 않다). 결과가 나오면 다시 차감한다.
+        want_refund = not results
+        if want_refund != bool(row.refunded):
+            row.refunded = want_refund
+            if row.paid:
+                # 추가권 세션이면 추가권도 같이 풀고 되묶는다. 추가권은 그날 안에서 서로
+                # 바꿔 쓸 수 있으므로(같은 값·같은 날) 아무 미사용 추가권이나 되묶어도 된다.
+                mine = [c for c in _credits_today(db, user) if c.used_session_id == row.id]
+                if want_refund:
+                    for credit in mine:
+                        credit.used_session_id = None
+                        db.add(credit)
+                elif not mine:
+                    spare = _unused_credit(db, user)
+                    if spare is not None:
+                        spare.used_session_id = row.id
+                        db.add(spare)
+                    else:
+                        # 되묶을 추가권이 없다(다른 세션이 썼다). 횟수를 두 번 받아 가는 것보다
+                        # 한 번 못 받는 쪽이 낫다 — 무료 한도로 센다.
+                        row.paid = False
         db.add(row)
         db.commit()
     finally:
@@ -926,7 +974,9 @@ def run_ask(db: Session, user: User, req: AskRequest, run_backtest: Callable[[Ma
         # 후보는 돌렸지만 "그냥 들고 있기" 를 의미 있게 넘은 게 없었다 — 화면이 추천 대신
         # 그렇게 말한다. results 가 비어도 이유가 둘(데이터 없음 / 넘은 게 없음)이라 따로 싣는다.
         "no_edge": no_edge,
-        "min_excess_pct": min_excess_pct(),
+        # 돌려줬음을 화면이 말해야 한다 — 안 그러면 "결과도 없는데 횟수만 깎였다" 로 보인다.
+        "refunded": bool(row.refunded),
+        "min_excess_pct": min_excess_pct(plan.period_preset),
         "remaining_today": remaining_today(db, user),
         "disclaimer": DISCLAIMER,
         "disclaimer_version": DISCLAIMER_VERSION,

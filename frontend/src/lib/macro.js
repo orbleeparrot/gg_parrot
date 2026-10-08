@@ -4,7 +4,7 @@
 // carries its own params block (see TYPE_DEFAULTS / buildParams) and shares the
 // common envelope (candle_interval + advanced risk). Field names match the
 // backend pydantic models exactly so clone (macroToForm) is a direct Object.assign.
-import { isDomestic, normalizeExchange, normalizeSymbolForExchange, quoteForExchange } from "./exchanges.js";
+import { commissionForExchange, isDomestic, normalizeExchange, normalizeSymbolForExchange, quoteForExchange } from "./exchanges.js";
 import { baseOf } from "./format.js";
 import { isEvenWeights } from "./portfolio.js";
 
@@ -207,7 +207,10 @@ export function withExchangeDefaults(form, value, items = []) {
   const symbol = [...new Set(String(form.symbol || "").split(",")
     .map((value) => normalizeSymbolForExchange(baseOf(value.trim()), exchange))
     .filter((value) => listed.has(value)))].join(",");
-  const next = { ...form, exchange, symbol, funding_pct: 0 };
+  // 수수료도 거래소를 따라간다 — 업비트 원화마켓은 바이낸스의 절반이다. 안 바꾸면 국내
+  // 백테스트가 실제보다 나쁘게 나온다(서버의 '물어볼까' 는 이미 거래소 요율을 쓴다).
+  const next = { ...form, exchange, symbol, funding_pct: 0,
+                 commission_pct: commissionForExchange(exchange) };
   for (const key of EXCHANGE_MONEY_FIELDS) next[key] = "";
   // 묶음 칸도 초기값으로 되돌린다. 거래소를 바꾸면 종목이 다시 짜이므로 비중 개수와 레그 규칙의
   // 종목 키가 어긋나고, K→A 로 내려가는 길에서는 "한도를 못 쓰는 규칙 + 묶음 한도"(서버가 422 로

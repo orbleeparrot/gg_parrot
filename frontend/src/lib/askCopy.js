@@ -53,6 +53,12 @@ export const FOLLOW_UPS = [
 ];
 
 export const SCALPER_NOTE = "짧은 봉은 수수료·슬리피지 영향이 커요 · 실행기보다 페이퍼 트레이딩으로 먼저 확인해요";
+// 고르는 자리에서 미리 말한다(2026-10-08). 실측: 1주 창에서 익절폭을 1%~8% 로 넓혀 봐도
+// 거래 조건을 채운 후보가 하나도 돈을 벌지 못했다 — 거래 수와 손실이 같이 늘었다(마찰).
+// 고르고 나서 빈 화면을 보는 것보다 고를 때 아는 쪽이 낫다.
+export const SCALPER_PICK_WARN = "단타형은 짧은 봉이라 수수료·슬리피지가 커요 — 과거 데이터에서 '그냥 들고 있기' 를 넘기기 어려운 편이에요.";
+// 결과가 0개면 서버가 횟수를 돌려준다. 말하지 않으면 "결과도 없는데 횟수만 깎였다" 로 보인다.
+export const REFUNDED_TEXT = "보여 드릴 조합이 없었으니 횟수는 돌려드렸어요.";
 export const feesNote = (commission, slippage) => `수수료 ${commission}% · 슬리피지 ${slippage}% 포함`;
 
 export const NO_QUOTA_TEXT = "오늘은 다 물어봤어요. 내일 다시 물어봐 주세요.";

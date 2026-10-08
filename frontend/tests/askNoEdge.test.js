@@ -7,7 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resultsHeadline } from "../src/lib/askView.js";
-import { NO_EDGE_NOTE, NO_EDGE_TEXT, NO_RESULTS_TEXT } from "../src/lib/askCopy.js";
+import { NO_EDGE_NOTE, NO_EDGE_TEXT, NO_RESULTS_TEXT, REFUNDED_TEXT, SCALPER_PICK_WARN } from "../src/lib/askCopy.js";
 import { initialState, reduce } from "../src/lib/askFlow.js";
 
 const dialog = readFileSync(new URL("../src/components/AskParrotDialog.jsx", import.meta.url), "utf8");
@@ -51,4 +51,31 @@ test("빈 결과에서 0 이 글자로 새지 않는다", () => {
   const bare = [...dialog.matchAll(/\{\s*results\.length\s*&&/g)];
   assert.deepEqual(bare.map((m) => m[0]), [],
     "results.length 를 그대로 && 왼쪽에 두면 0 이 화면에 찍힌다 — results.length > 0 으로");
+});
+
+// --- 횟수 환불 · 단타형 사전 안내 (2026-10-08) -----------------------------
+// 조사 결과 단타형은 마찰 때문에 구조적으로 홀딩을 넘기 어려웠다. 그런데 하루 횟수는
+// 백테스트 전에 깎여서, 결과 0개를 받아도 1회가 사라졌다.
+
+test("흐름 상태가 환불 여부를 싣고 다닌다", () => {
+  const start = initialState();
+  assert.equal(start.refunded, false);
+  const empty = reduce(start, { type: "results", results: [], noEdge: true, refunded: true, remaining: 5 });
+  assert.equal(empty.refunded, true);
+  const some = reduce(start, { type: "results", results: [{ rule_type: "J" }], remaining: 4 });
+  assert.equal(some.refunded, false, "추천이 나왔으면 횟수를 쓴 것이다");
+});
+
+test("화면이 환불을 받아 말한다", () => {
+  assert.match(dialog, /refunded: data\.refunded/, "서버 칸을 그대로 받아야 한다");
+  assert.match(dialog, /state\.refunded \?.*REFUNDED_TEXT/s, "돌려줬음을 말해야 한다");
+  assert.ok(REFUNDED_TEXT.includes("횟수"), "무엇을 돌려줬는지 말해야 한다");
+});
+
+test("단타형을 고르는 자리에서 미리 알린다", () => {
+  // 고르고 나서 빈 화면을 보는 것보다 고를 때 아는 쪽이 낫다.
+  assert.match(dialog, /state\.step === "profile" \?.*SCALPER_PICK_WARN/s,
+    "성향 고르는 단계에 안내가 없다");
+  assert.match(SCALPER_PICK_WARN, /수수료|슬리피지/, "왜 어려운지 말해야 한다");
+  assert.match(SCALPER_PICK_WARN, /들고 있기|홀딩/, "무엇을 넘기 어려운지 말해야 한다");
 });

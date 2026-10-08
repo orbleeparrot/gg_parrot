@@ -33,11 +33,9 @@ export const CURRENT_NOTE = {
       link_label: "설명 보기",
     },
     {
-      icon: "download",
-      title: "업비트·빗썸도 파일로",
-      text: "매크로 파일(.ggm.json)을 내려받아 실행기에 넣어 돌릴 수 있어요. 실행기 v10 이상이 필요해요.",
-      link: "/runner/install",
-      link_label: "실행기 받기",
+      icon: "check",
+      title: "국내 수수료를 제대로",
+      text: "업비트·빗썸 실제 요율로 계산해요. 보여 줄 게 없으면 횟수도 돌려드려요.",
     },
   ],
 };

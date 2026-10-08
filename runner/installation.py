@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-RUNNER_VERSION = "11"
+RUNNER_VERSION = "12"
 RUNNER_RELEASE = f"runner-v{RUNNER_VERSION}"
 
 _VERSIONED_EXE_PARTS = ("GGParrot", RUNNER_RELEASE, "ggparrot-runner.exe")

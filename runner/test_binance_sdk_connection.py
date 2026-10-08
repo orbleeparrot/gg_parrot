@@ -1,4 +1,5 @@
 """Run against actual minimum/latest SDKs with every HTTP transport mocked."""
+import asyncio
 import unittest
 from unittest.mock import Mock, patch
 
@@ -14,6 +15,20 @@ except ImportError:
 @unittest.skipIf(Client is None, "optional Binance SDK is not installed in this test environment")
 class ActualBinanceSDKTests(unittest.TestCase):
     def setUp(self):
+        # Windows creates a loopback socket pair for its event-loop self-pipe.
+        # Initialize that internal machinery before forbidding all network I/O.
+        try:
+            previous_loop = asyncio.get_event_loop()
+        except RuntimeError:
+            previous_loop = None
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        def restore_loop():
+            loop.close()
+            asyncio.set_event_loop(previous_loop)
+
+        self.addCleanup(restore_loop)
         self.transport = patch("requests.sessions.Session.request", side_effect=AssertionError("HTTP is forbidden"))
         self.sockets = patch("socket.socket.connect", side_effect=AssertionError("socket I/O is forbidden"))
         self.transport.start()

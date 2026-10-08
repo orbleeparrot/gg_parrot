@@ -13,16 +13,17 @@ from runner.installation import (
 
 
 class ProtocolInstallPathTests(unittest.TestCase):
-    def test_v10_uses_release_specific_path_instead_of_locked_legacy_path(self) -> None:
+    def test_v11_uses_release_specific_path_instead_of_locked_legacy_path(self) -> None:
         local_app_data = Path("C:/Users/test/AppData/Local")
         target = protocol_install_target(str(local_app_data))
 
-        self.assertEqual(RUNNER_VERSION, "10")
-        self.assertEqual(RUNNER_RELEASE, "runner-v10")
+        self.assertEqual(RUNNER_VERSION, "11")
+        self.assertEqual(RUNNER_RELEASE, "runner-v11")
         self.assertEqual(
             target,
-            local_app_data / "GGParrot" / "runner-v10" / "ggparrot-runner.exe",
+            local_app_data / "GGParrot" / "runner-v11" / "ggparrot-runner.exe",
         )
+        self.assertNotEqual(target, local_app_data / "GGParrot" / "runner-v10" / "ggparrot-runner.exe")
         self.assertNotEqual(
             target,
             local_app_data / "GGParrot" / "ggparrot-runner.exe",

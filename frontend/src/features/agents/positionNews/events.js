@@ -47,17 +47,28 @@ export const positionNewsModule = {
   buildEvents({ featureStates, alertConditions = {} }) {
     const state = featureStates?.position_news;
     const data = featureStates?.position_news?.data;
-    const failed = state?.status === "error" || data?.collection?.status === "error";
+    const transportFailed = state?.status === "error";
+    const sourceFailed = ["error", "rate_limited", "unavailable"].includes(data?.collection?.status);
+    const failed = transportFailed || sourceFailed;
     const stale = data?.collection?.freshness === "stale";
-    const retrying = ["loading", "idle"].includes(state?.status) && alertConditions["news-connection"];
+    const sourcePending = ["pending", "collecting"].includes(data?.collection?.status)
+      && ["source_error", "stale"].includes(alertConditions["news-connection"]);
+    const retrying = (["loading", "idle"].includes(state?.status) || !state?.status && !data)
+      && alertConditions["news-connection"] || sourcePending && !failed && !stale;
     const statusEvents = retrying ? [{
       conditionKey: "news-connection", conditionValue: alertConditions["news-connection"], silent: true,
     }] : failed || stale ? [{
       id: "position-news-connection", module: "position_news", severity: "warning",
-      conditionKey: "news-connection", conditionValue: failed ? "error" : "stale",
-      title: failed ? "뉴스 연결 재시도 중" : "뉴스 갱신 지연",
-      summary: "마지막 수집 결과를 유지하며 새 기사를 다시 확인하고 있어요.",
+      conditionKey: "news-connection", conditionValue: transportFailed ? "error" : sourceFailed ? "source_error" : "stale",
+      connectionIncident: true,
+      title: transportFailed ? "뉴스 서버 연결 지연" : sourceFailed ? "뉴스 수집 소스 확인 실패" : "뉴스 갱신 지연",
+      summary: transportFailed ? "뉴스 조회 요청이 실패했어요. 마지막 확인 기사는 유지해요."
+        : sourceFailed ? "수집 소스 확인에 실패했어요. 서버 연결 및 AI 번역 상태와는 별개예요."
+          : "마지막 수집 결과를 유지하며 새 기사를 다시 확인하고 있어요.",
       occurredAt: data?.collection?.last_attempt_at || 0, sourceLabel: "뉴스 수집 상태",
+    }] : data && alertConditions["news-connection"] ? [{
+      resolvesCondition: "news-connection", title: "뉴스 연결 복구",
+      summary: "뉴스 조회 응답이 다시 도착했어요. 수집·번역 진행 상태는 별도 안내를 확인해 주세요.",
     }] : [];
     if (!data) return statusEvents;
 

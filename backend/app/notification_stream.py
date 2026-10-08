@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from typing import Optional
 
 from fastapi import HTTPException
@@ -102,7 +103,9 @@ async def _connect(dsn: str):
     import psycopg
 
     return await psycopg.AsyncConnection.connect(
-        dsn, autocommit=True, connect_timeout=10,
+        dsn, autocommit=True,
+        connect_timeout=db_mod._bounded_int("DATABASE_CONNECT_TIMEOUT_SECONDS", 3, 1, 10),
+        application_name=f"gg-parrot-listener-{os.getpid()}",
         keepalives=1, keepalives_idle=30, keepalives_interval=10, keepalives_count=3,
     )
 

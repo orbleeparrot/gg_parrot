@@ -18,11 +18,26 @@ test("searching, translating, no articles and archived results have distinct fix
   const empty = positionNewsNotice({ status: "ready", data: { analysis_status: "empty", items: [] } });
   const archive = positionNewsNotice({ status: "ready", data: { content_scope: "archive", items: [{ title: "과거 소식" }] } });
   assert.match(searching, /찾고 있어요/);
-  assert.match(translating, /2건.*번역 중/);
+  assert.match(translating, /2건.*번역·요약.*대기/);
+  assert.doesNotMatch(translating, /번역 중/);
   assert.match(empty, /수집한 관련 기사가 없어요/);
   assert.match(archive, /과거 관련 기사/);
   assert.equal(new Set([searching, translating, empty, archive]).size, 4);
   assert.equal(positionNewsNotice({ status: "loading", data: { items: [{ title: "새 소식" }] } }), "");
+});
+
+test("news collection, transport and AI processing failures have different notices", () => {
+  assert.match(positionNewsNotice({ status: "error", data: null }), /서버/);
+  assert.match(positionNewsNotice({ status: "ready", data: { collection: { status: "error" } } }), /수집 소스/);
+  const paused = positionNewsNotice({ status: "ready", data: {
+    translation: { status: "paused", pending_count: 673, pause_reason: "insufficient_quota" }, items: [],
+  } });
+  assert.match(paused, /크레딧|한도/);
+  assert.doesNotMatch(paused, /번역 중|연결 재시도/);
+  const failed = positionNewsNotice({ status: "ready", data: {
+    translation: { status: "failed", failed_count: 2 }, items: [],
+  } });
+  assert.match(failed, /2건.*실패/);
 });
 
 test("stale and failed collection never claim there are no matching articles", () => {

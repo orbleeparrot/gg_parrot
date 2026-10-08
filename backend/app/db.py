@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import time
 from contextlib import contextmanager
+from functools import partial
 from typing import Iterator, Optional
 
 from sqlalchemy import BigInteger, event, Index, Integer
@@ -26,6 +28,8 @@ logger = logging.getLogger(__name__)
 # without any code change — only the env var differs. Accounts, points and the
 # point ledger MUST live on the durable store (Render's free disk is ephemeral).
 _DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+_pool_hold_log_lock = threading.Lock()
+_pool_hold_last_log: dict[str, float] = {}
 
 
 def _sqlite_engine():
@@ -36,7 +40,48 @@ def _sqlite_engine():
     return create_engine(f"sqlite:///{path}", echo=False)
 
 
-def _build_engine():
+def _bounded_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except ValueError:
+        raise ValueError(f"{name} must be an integer between {minimum} and {maximum}") from None
+    if not minimum <= value <= maximum:
+        raise ValueError(f"{name} must be between {minimum} and {maximum}")
+    return value
+
+
+def set_transaction_timeout(connection) -> None:
+    # Supavisor may ignore libpq startup `options`. A transaction-local setting
+    # actually reaches Postgres and cannot leak to the next pooled transaction.
+    connection.exec_driver_sql(
+        "SELECT set_config('statement_timeout', %s, true)",
+        (f"{connection.engine._ggp_statement_timeout_ms}ms",),
+    )
+
+
+def _connection_checkout(_connection, record, _proxy) -> None:
+    record.info["ggp_checkout_started"] = time.perf_counter()
+
+
+def _connection_checkin(_connection, record, *, purpose: str = "ordinary") -> None:
+    started = record.info.pop("ggp_checkout_started", None)
+    if started is not None:
+        now = time.perf_counter()
+        elapsed_ms = (now - started) * 1000.0
+        record_timing("db_connection_hold", elapsed_ms)
+        # Background collectors have no HTTP trace. Log only long holds, at
+        # most once/minute/role/process, without SQL, credentials or user data.
+        if elapsed_ms >= 2000:
+            with _pool_hold_log_lock:
+                last = _pool_hold_last_log.get(purpose)
+                emit = last is None or now - last >= 60
+                if emit:
+                    _pool_hold_last_log[purpose] = now
+            if emit:
+                logger.warning("DB connection held role=%s pid=%d duration_ms=%.1f", purpose, os.getpid(), elapsed_ms)
+
+
+def _build_engine(*, purpose: str = "ordinary"):
     url = _DATABASE_URL
     if url:
         # Normalize to the psycopg (v3) driver SQLAlchemy expects.
@@ -45,24 +90,35 @@ def _build_engine():
         elif url.startswith("postgresql://"):
             url = "postgresql+psycopg://" + url[len("postgresql://"):]
         if url.startswith("postgresql+psycopg://"):
-            # pool_pre_ping recycles connections Supabase drops when idle.
-            connect_timeout = max(
-                1,
-                int(os.environ.get("DATABASE_CONNECT_TIMEOUT_SECONDS", "10")),
-            )
-            statement_timeout_ms = max(
-                1_000,
-                int(os.environ.get("DATABASE_STATEMENT_TIMEOUT_MS", "30000")),
-            )
-            return create_engine(
+            runner = purpose == "runner"
+            # Safe before a Blueprint sync too: omitted configuration is one
+            # connection; the web Blueprint explicitly opts into two.
+            size = _bounded_int("DATABASE_RUNNER_POOL_SIZE" if runner else "DATABASE_POOL_SIZE", 1, 1, 4)
+            wait = _bounded_int("DATABASE_RUNNER_POOL_TIMEOUT_SECONDS" if runner else "DATABASE_POOL_TIMEOUT_SECONDS", 1 if runner else 2, 1, 10)
+            timeout = _bounded_int("DATABASE_CONNECT_TIMEOUT_SECONDS", 3, 1, 10)
+            statement_timeout = _bounded_int("DATABASE_RUNNER_STATEMENT_TIMEOUT_MS" if runner else "DATABASE_STATEMENT_TIMEOUT_MS", 3000 if runner else 30000, 1000, 120000)
+            engine = create_engine(
                 url,
                 echo=False,
                 pool_pre_ping=True,
+                pool_size=size,
+                # Deliberately fixed: SQLAlchemy's -1 overflow / size=0 would
+                # defeat the service's global connection budget.
+                max_overflow=0,
+                pool_timeout=wait,
+                pool_use_lifo=True,
                 connect_args={
-                    "connect_timeout": connect_timeout,
-                    "options": f"-c statement_timeout={statement_timeout_ms}",
+                    "connect_timeout": timeout,
+                    "prepare_threshold": None,
+                    "application_name": f"gg-parrot-{purpose}-{os.getpid()}",
                 },
             )
+            engine._ggp_statement_timeout_ms = statement_timeout
+            event.listen(engine, "begin", set_transaction_timeout)
+            event.listen(engine, "checkout", _connection_checkout)
+            event.listen(engine, "checkin", partial(_connection_checkin, purpose=purpose))
+            logger.info("DB pool role=%s size=%d overflow=0 wait_seconds=%d connect_seconds=%d statement_ms=%d", purpose, size, wait, timeout, statement_timeout)
+            return engine
         # Wrong value (e.g. the https project URL was pasted instead of the
         # Postgres connection string). Don't crash the whole app — fall back to
         # SQLite and warn loudly so the misconfig is obvious in the logs.
@@ -77,6 +133,9 @@ def _build_engine():
 
 
 _engine = _build_engine()
+# Construction is lazy (no connection until used). Workers never use this pool;
+# one reserved web heartbeat slot cannot be consumed by news or ordinary APIs.
+_runner_engine = _build_engine(purpose="runner") if _engine.dialect.name == "postgresql" else _engine
 
 
 def before_cursor_execute(conn, _cursor, _statement, _parameters, _context, _executemany):
@@ -99,9 +158,10 @@ def handle_query_error(exception_context):
         record_timing("sql", (time.perf_counter() - started) * 1000.0)
 
 
-event.listen(_engine, "before_cursor_execute", before_cursor_execute)
-event.listen(_engine, "after_cursor_execute", after_cursor_execute)
-event.listen(_engine, "handle_error", handle_query_error)
+for _traced_engine in dict.fromkeys((_engine, _runner_engine)):
+    event.listen(_traced_engine, "before_cursor_execute", before_cursor_execute)
+    event.listen(_traced_engine, "after_cursor_execute", after_cursor_execute)
+    event.listen(_traced_engine, "handle_error", handle_query_error)
 
 
 class TracedSession(Session):
@@ -1591,6 +1651,17 @@ def request_session() -> Iterator[Session]:
     """FastAPI dependency: one SQLAlchemy Session shared within one request."""
     with get_session() as session:
         yield session
+
+
+def request_runner_session() -> Iterator[Session]:
+    """Reserved heartbeat admission; FastAPI shares it for auth and the write."""
+    with TracedSession(_runner_engine) as session:
+        yield session
+
+
+def dispose_engines() -> None:
+    for engine in dict.fromkeys((_engine, _runner_engine)):
+        engine.dispose()
 
 
 def database_dialect() -> str:

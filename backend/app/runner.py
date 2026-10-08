@@ -30,7 +30,7 @@ from typing import Optional
 
 from fastapi import HTTPException
 from sqlalchemy import func, or_, update
-from sqlmodel import select
+from sqlmodel import Session, select
 
 from . import macro_signing
 from . import notifications as notifications_mod
@@ -240,12 +240,12 @@ def regenerate_key(user_id: int) -> dict:
         return {"key": row.key, "created_at": row.created_at}
 
 
-def user_for_key(key: str) -> User:
+def user_for_key(key: str, *, db: Session | None = None) -> User:
     """실행기가 보낸 회원 키를 계정으로 해석한다(실패 시 401)."""
     key = (key or "").strip()
     if not key:
         raise HTTPException(status_code=401, detail="회원 키가 없어요. 마이페이지에서 키를 확인하세요.")
-    with get_session() as db:
+    with (nullcontext(db) if db is not None else get_session()) as db:
         row = db.exec(select(RunnerKey).where(RunnerKey.key == key)).first()
         if row is None:
             raise HTTPException(status_code=401, detail="유효하지 않은 회원 키예요. 마이페이지에서 다시 확인하세요.")
@@ -696,7 +696,7 @@ def start_session(user: User, payload: dict) -> dict:
     return result
 
 
-def heartbeat(user: User, session_id: int, snapshot: dict) -> dict:
+def heartbeat(user: User, session_id: int, snapshot: dict, *, db: Session | None = None) -> dict:
     """실시간 스냅샷을 저장하고, 마이페이지가 요청한 종료 명령을 돌려준다.
 
     응답 ``action`` : "continue" | "stop_only" | "close_and_stop".
@@ -707,9 +707,12 @@ def heartbeat(user: User, session_id: int, snapshot: dict) -> dict:
     """
     events = snapshot.pop("events", None)
     acks = snapshot.pop("acks", None)
-    with get_session() as db:
+    # Capture before commit: a shared authenticated User expires on commit;
+    # reading user.id afterwards would start a second transaction/checkout.
+    user_id = user.id
+    with (nullcontext(db) if db is not None else get_session()) as db:
         row = db.get(RunSession, session_id)
-        if row is None or row.user_id != user.id:
+        if row is None or row.user_id != user_id:
             # 세션이 없어졌으면 실행기가 안전하게 멈추도록 종료 지시.
             return {"action": "stop_only", "reason": "세션을 찾을 수 없어요.", "commands": []}
         if row.status != "running":
@@ -747,7 +750,7 @@ def heartbeat(user: User, session_id: int, snapshot: dict) -> dict:
                 commands = []
         db.add(row)
         db.commit()
-    notify_sessions_changed(user.id)
+    notify_sessions_changed(user_id)
     return {"action": action, "commands": commands}
 
 
@@ -1055,6 +1058,9 @@ def _session_view(row: RunSession) -> dict:
         "pinned": bool(getattr(row, "pinned", False)),
         "started_kst": _kst_label(row.started_at),
         "heartbeat_kst": _kst_label(row.last_heartbeat_at),
+        # UTC instant lets the UI prove a retry log was followed by a successful
+        # report; never substitute the browser's mount/render timestamp.
+        "last_heartbeat_at": row.last_heartbeat_at,
         "stopped_kst": _kst_label(row.stopped_at or ""),
     }
 

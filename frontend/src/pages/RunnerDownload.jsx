@@ -3,13 +3,14 @@ import { Link, useLocation, useNavigate, useSearchParams } from "react-router-do
 import { api } from "../api.js";
 import RunnerSessions from "../components/RunnerSessions.jsx";
 import RunnerDeviceHandoff from "../components/RunnerDeviceHandoff.jsx";
+import ExchangeConnectionGuide from "../components/ExchangeConnectionGuide.jsx";
 import { getAuthUser, updateAuthUser, useAuth } from "../lib/auth.js";
 import { RULE_TYPES } from "../lib/macro.js";
 import { getUserId } from "../lib/user.js";
 import { fmtSize, isRunnerOpened, markRunnerOpened, useRunnerDownload } from "../lib/runnerDownload.js";
 import { findLaunchedSession, launchPhaseFromTicketStatus } from "../lib/runnerLaunch.js";
 import { getRunnerDevice } from "../lib/runnerDevice.js";
-import { launchMinVersionFor, runnerExecutionMarket, runnerKeyGuide } from "../lib/runnerGuide.js";
+import { launchMinVersionFor, runnerExecutionMarket, runnerKeyGuide, RUNNER_KEY_STORAGE_NOTE } from "../lib/runnerGuide.js";
 import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 import { Icon } from "../components/icons.jsx";
 
@@ -994,7 +995,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
           <span className="runner-wizard-api-domain">공식 페이지 · {keyGuide.domain} · 새 탭</span>
         </div>
 
-        <ol className="runner-wizard-api-steps" aria-label={keyGuide.stepsLabel}>
+        {keyGuide.domestic ? <ExchangeConnectionGuide key={keyGuide.exchange} exchange={keyGuide.exchange} /> : <ol className="runner-wizard-api-steps" aria-label={keyGuide.stepsLabel}>
           {keyGuide.steps.map(([title, description], index) => (
             <li key={title}>
               <span className="num">{String(index + 1).padStart(2, "0")}</span>
@@ -1004,11 +1005,11 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
               </div>
             </li>
           ))}
-        </ol>
+        </ol>}
 
         <div className="runner-wizard-api-security" role="note">
           <strong>이 웹에는 키를 붙여넣지 마세요.</strong>
-          <p>API Key와 Secret Key는 다음에 열리는 내 PC의 실행기 창에만 직접 입력해요. 빠른 실행에는 출금 권한도 필요하지 않아요. 실행기를 닫으면 키 입력값도 저장되지 않아요.</p>
+          <p>{RUNNER_KEY_STORAGE_NOTE} 출금 권한은 필요하지 않지만, 주문 권한만으로도 거래 손실이 발생할 수 있어요.</p>
         </div>
 
         <label className={`runner-wizard-api-check ${apiKeyChecked ? "is-checked" : ""}`}>

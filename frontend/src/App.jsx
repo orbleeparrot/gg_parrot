@@ -30,6 +30,7 @@ const ForgotPassword = lazy(() => import("./pages/ForgotPassword.jsx"));
 const ResetPassword = lazy(() => import("./pages/ResetPassword.jsx"));
 const RunnerInstall = lazy(() => import("./pages/RunnerInstall.jsx"));
 const Guide = lazy(() => import("./pages/Guide.jsx"));
+const ExchangeConnect = lazy(() => import("./pages/ExchangeConnect.jsx"));
 const Support = lazy(() => import("./pages/Support.jsx"));
 const AdminDashboard = lazy(() => import("./pages/AdminDashboard.jsx"));
 
@@ -62,6 +63,8 @@ function RouteChangeEffects() {
       ? "실행기 설치"
       : pathname.startsWith("/runner")
       ? "빠른 실행"
+      : pathname.startsWith("/exchange-connect")
+      ? "거래소 연결 도우미"
       : pathname.startsWith("/login")
       ? "로그인"
       : pathname.startsWith("/forgot")
@@ -133,10 +136,11 @@ export default function App() {
   const isNews = pathname === "/news";
   const isAgents = pathname === "/agents";
   const isBuilder = pathname === "/builder" || pathname.startsWith("/s/");
+  const isExchangeConnect = pathname === "/exchange-connect";
   const authShell = ["/login", "/forgot", "/reset"].includes(pathname);
   // '오늘의 경주마' 마퀴는 화면 아래에 고정으로 떠 있다. 띄우는 화면에서는 본문
   // 마지막 줄이 그 밑에 깔리므로, 마퀴 높이만큼 바닥 여백을 더 준다.
-  const hasMarquee = !(isStart || authShell || isAgents);
+  const hasMarquee = !(isStart || authShell || isAgents || isExchangeConnect);
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const menuButtonRef = useRef(null);
   const closeMobileNavigation = useCallback(() => setMobileNavigationOpen(false), []);
@@ -190,7 +194,8 @@ export default function App() {
                 : "site-main py-6 sm:py-8"}
         >
           <RouteChangeEffects />
-          <ShellBoundary name="devnote"><DevNoteDialog /></ShellBoundary>
+          {/* QR continuation opens the task itself, without an unrelated popup. */}
+          {!isExchangeConnect ? <ShellBoundary name="devnote"><DevNoteDialog /></ShellBoundary> : null}
           <RouteErrorBoundary>
           <Suspense fallback={<RouteLoading />}>
             <Routes>
@@ -205,6 +210,7 @@ export default function App() {
               <Route path="/runner/install" element={<RunnerInstall />} />
               <Route path="/runner" element={<LegacyRunnerRedirect />} />
               <Route path="/guide" element={<Guide />} />
+              <Route path="/exchange-connect" element={<ExchangeConnect />} />
               <Route path="/support" element={<Support />} />
               <Route path="/admin" element={<AdminDashboard />} />
               <Route path="/news" element={<News />} />

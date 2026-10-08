@@ -30,6 +30,7 @@
 from __future__ import annotations
 
 import json
+import inspect
 import os
 import queue
 import shutil
@@ -51,8 +52,10 @@ except ImportError:
 
 try:  # package import (tests) / direct script import (PyInstaller build)
     from . import brokers
+    from . import connection
 except ImportError:
     import brokers
+    import connection
 
 try:
     import requests
@@ -720,6 +723,7 @@ class BotThread(threading.Thread):
         self._done_command_ids: deque = deque(maxlen=200)  # ok 로 ack 한 명령 id — 재전송돼도 다시 실행하지 않는다
         self.pending_acks: list[dict] = []
         self._offline_logged = False
+        self._preflight = None
 
     @property
     def domestic(self) -> bool:
@@ -786,12 +790,19 @@ class BotThread(threading.Thread):
             self.log(f"[오류] {label} 는 원화 현물(롱 · 1배)만 돼요. 선물·숏 매크로는 바이낸스로 만드세요.")
             return False
         try:
-            broker = self._build_broker(pair)
+            prepared = getattr(self, "_preflight", None)
+            broker = prepared.broker if prepared and prepared.broker is not None else self._build_broker(pair)
+            if prepared and prepared.broker is not None:
+                broker.log = self.log
+                if isinstance(broker, brokers.BinanceBroker):
+                    # The bounded check timeout must not change live-order HTTP behavior.
+                    broker.raw._requests_params = None
         except ImportError:
             self.log("python-binance 가 없어요. requirements 설치 후 다시 실행하세요.")
             return False
         except Exception as exc:
-            self.log(f"{label} 연결 준비 실패: {exc}")
+            reason = connection.safe_preflight_reason(str(exc), self.credentials)
+            self.log(f"{label} 연결 준비 실패: {reason}")
             return False
         # 모의는 바깥에서 감싼다 — 어느 거래소든 같은 안전망을 쓰게 하려는 것이 MockBroker 의 존재 이유다.
         self.broker = brokers.MockBroker(broker, log=self.log) if self.mode == MODE_MOCK else broker
@@ -799,12 +810,34 @@ class BotThread(threading.Thread):
                  f"{' (테스트넷 주소)' if self.testnet else ''}")
         return True
 
-    def _build_broker(self, pair: dict):
+    def _build_broker(self, pair: dict, *, preflight_only=False):
         """거래소별 어댑터 하나. 바이낸스만 python-binance 클라이언트를 쓴다."""
         if self.exchange == "binance":
             from binance.client import Client
+            client_class, options = Client, {}
+            if preflight_only:
+                options["requests_params"] = {"timeout": (3, 8)}
+                if "ping" in inspect.signature(Client.__init__).parameters:
+                    options["ping"] = False
+                else:
+                    # Supported old SDKs (including 1.0.19) unconditionally call
+                    # self.ping() in __init__. Override on this LOCAL subclass,
+                    # never monkeypatch the shared class used by live clients.
+                    class ConnectionCheckClient(Client):
+                        def __init__(self, *args, **kwargs):
+                            self._ggp_constructing = True
+                            try:
+                                super().__init__(*args, **kwargs)
+                            finally:
+                                self._ggp_constructing = False
+
+                        def ping(self):
+                            if self._ggp_constructing:
+                                return {}
+                            return super().ping()
+                    client_class = ConnectionCheckClient
             return brokers.BinanceBroker(
-                Client(pair["api_key"], pair["api_secret"], testnet=self.testnet),
+                client_class(pair["api_key"], pair["api_secret"], testnet=self.testnet, **options),
                 market=self.market, symbol=self.symbol, side=self.side,
                 testnet=self.testnet, leverage=self.leverage, log=self.log)
         return brokers.DomesticBroker(pair["api_key"], pair["api_secret"],
@@ -918,11 +951,18 @@ class BotThread(threading.Thread):
           * 실전 · 테스트넷 — 실패하면 주문을 한 건도 내지 않고 세션을 끝낸다.
           * 모의            — 실패를 기록만 하고 계속한다. 키 없이 돌지 않으면 연습이 아니다.
         """
+        prepared = getattr(self, "_preflight", None)
+        if prepared and prepared.matches(connection.preflight_fingerprint(self.macro, self.mode, self.credentials)):
+            self._preflight = None
+            self.log(f"주문 전 확인: {prepared.reason}")
+            return True
         notional = self._entry_notional()
+        credentials = getattr(self, "credentials", {})
         try:
             ok, reason = self.broker.rehearse(notional=notional)
         except Exception as exc:
-            ok, reason = False, f"리허설 도중 오류가 났어요: {exc}"
+            ok, reason = False, f"리허설 도중 오류가 났어요: {connection.safe_preflight_reason(str(exc), credentials)}"
+        reason = connection.safe_preflight_reason(reason, credentials)
         if ok:
             self.log(f"주문 전 확인: {reason}")
             return True
@@ -1191,6 +1231,55 @@ class BotThread(threading.Thread):
 # ==================================================================
 #  GUI
 # ==================================================================
+def perform_connection_check(macro: dict, credentials: dict, mode: str) -> connection.PreflightResult:
+    """Safe standalone check: never create a server run, configure futures or submit an order."""
+    fingerprint = connection.preflight_fingerprint(macro, mode, credentials)
+    broker = None
+    try:
+        exchange = exchange_of(macro)
+        if not known_exchange(exchange):
+            raise ValueError("지원하지 않는 거래소예요. 웹에서 매크로를 다시 받아 주세요.")
+        if not str(macro.get("symbol") or "").strip():
+            raise ValueError("먼저 매크로 파일을 선택하세요.")
+        side, leverage = str(macro.get("position_side", "long")).lower(), max(1, int(macro.get("leverage", 1) or 1))
+        if exchange in DOMESTIC_EXCHANGES and (side != "long" or leverage > 1):
+            raise ValueError("국내 거래소는 원화 현물 롱 · 1배만 사용할 수 있어요.")
+        if mode == MODE_TESTNET and exchange not in TESTNET_EXCHANGES:
+            raise ValueError("국내 거래소에는 테스트넷이 없어요. 모의를 선택하세요.")
+        if mode == MODE_MOCK:
+            return connection.PreflightResult(True, "모의 준비 완료 — 키 없이 연습하며 실제 주문은 보내지 않습니다. 실거래 연결은 검사하지 않았어요.", fingerprint)
+        pair = credential_pair(credentials, exchange)
+        if pair is None:
+            raise ValueError(f"{exchange_label(exchange)} API 키와 시크릿을 모두 입력하세요.")
+        probe = BotThread(macro, credentials, mode, None, lambda _msg: None, lambda _snap: None, lambda *_args: None)
+        broker = probe._build_broker(pair, preflight_only=True)
+        ok, reason = broker.rehearse(notional=probe._entry_notional())
+        safe_reason = connection.safe_preflight_reason(reason, credentials)
+        if not ok:
+            close_connection_broker(broker)
+            broker = None
+        return connection.PreflightResult(bool(ok), safe_reason, fingerprint, broker=broker)
+    except ValueError as exc:
+        reason = connection.safe_preflight_reason(str(exc), credentials)
+    except Exception:
+        # Library/proxy exceptions may contain signed URLs or credentials.
+        reason = "연결 검사에 실패했어요. 인터넷 연결·거래소 키·허용 IP를 확인하고 다시 눌러 주세요."
+    close_connection_broker(broker)
+    return connection.PreflightResult(False, reason, fingerprint)
+
+
+def close_connection_broker(broker) -> None:
+    if broker is None:
+        return
+    try:
+        if isinstance(broker, brokers.BinanceBroker):
+            broker.raw.close_connection()
+        elif isinstance(broker, brokers.DomesticBroker):
+            broker.session.close()
+    except Exception:
+        pass
+
+
 class RunnerApp:
     def __init__(
         self,
@@ -1228,7 +1317,21 @@ class RunnerApp:
         self.server_base = SERVER_BASE
         self._protocol_claim_busy = False
         self._protocol_registration_thread: threading.Thread | None = None
+        self._preflight = None
+        self._connection_busy = False
+        self._connection_generation = 0
+        self._connection_queue = queue.Queue()
+        self._connection_delivery_lock = threading.Lock()
+        self._connection_polling = False
+        self._connection_closed = False
+        self._public_ip = ""
+        self._public_ip_busy = False
         self._build()
+        for key_var, secret_var in self.key_vars.values():
+            for variable in (key_var, secret_var):
+                variable.trace_add("write", self._invalidate_preflight)
+        self.mode.trace_add("write", self._invalidate_preflight)
+        self.member_key.trace_add("write", self._invalidate_preflight)
         self.root.protocol("WM_DELETE_WINDOW", self._on_window_close)
         if startup_warning:
             self._log(startup_warning)
@@ -1340,15 +1443,34 @@ class RunnerApp:
                         "키는 이 PC에서만 쓰이고 서버로 보내지 않아요. 매크로의 거래소에 맞는 칸만 채우면 돼요.")
         grid = ttk.Frame(f3, style="Card.TFrame"); grid.pack(fill="x")
         grid.columnconfigure(1, weight=1)
-        rows = []
+        self.key_rows = {}
         for name in credentials_mod.EXCHANGES:
             key_var, secret_var = self.key_vars[name]
-            rows.append((f"{exchange_label(name)} 키", key_var, ""))
-            rows.append((f"{exchange_label(name)} 시크릿", secret_var, "•"))
-        rows.append(("껄무새 회원 키", self.member_key, ""))
-        for i, (label, var, show) in enumerate(rows):
-            ttk.Label(grid, text=label, style="Card.TLabel", width=14).grid(row=i, column=0, sticky="w", pady=3)
-            ttk.Entry(grid, textvariable=var, show=show).grid(row=i, column=1, sticky="ew", pady=3)
+            widgets = []
+            for i, (label, var) in enumerate((("키", key_var), ("시크릿", secret_var))):
+                caption = ttk.Label(grid, text=f"{exchange_label(name)} {label}", style="Card.TLabel", width=14)
+                entry = ttk.Entry(grid, textvariable=var, show="•")
+                caption.grid(row=i, column=0, sticky="w", pady=3)
+                entry.grid(row=i, column=1, sticky="ew", pady=3)
+                widgets.extend((caption, entry))
+            self.key_rows[name] = widgets
+        self.key_selection_note = ttk.Label(grid, text="먼저 매크로를 선택하면 해당 거래소의 키 칸만 표시돼요.", style="CardMuted.TLabel")
+        self.key_selection_note.grid(row=0, column=0, columnspan=2, sticky="w", pady=3)
+        ttk.Label(grid, text="껄무새 회원 키", style="Card.TLabel", width=14).grid(row=2, column=0, sticky="w", pady=3)
+        ttk.Entry(grid, textvariable=self.member_key, show="•").grid(row=2, column=1, sticky="ew", pady=3)
+        self.ip_row = ttk.Frame(f3, style="Card.TFrame")
+        self.ip_note = ttk.Label(self.ip_row, text="실행기 PC의 공인 IPv4를 허용 IP에 등록하세요.", style="CardMuted.TLabel", wraplength=530)
+        self.ip_note.pack(anchor="w")
+        ip_controls = ttk.Frame(self.ip_row, style="Card.TFrame"); ip_controls.pack(fill="x", pady=(4, 0))
+        self.ip_btn = ttk.Button(ip_controls, text="공인 IPv4 확인", style="Ghost.TButton", command=self._begin_public_ip)
+        self.ip_btn.pack(side="left")
+        self.ip_copy_btn = ttk.Button(ip_controls, text="IPv4 복사", style="Ghost.TButton", state="disabled", command=self._copy_public_ip)
+        self.ip_copy_btn.pack(side="left", padx=(8, 0))
+        self.connection_btn = ttk.Button(f3, text="연결 검사", style="Ghost.TButton", command=self._begin_connection_check)
+        self.connection_btn.pack(anchor="w", pady=(8, 0))
+        self.connection_note = ttk.Label(f3, text="매크로 시작 전에 연결을 확인합니다. 검사만으로 매매를 시작하지 않아요.", style="CardMuted.TLabel", wraplength=530)
+        self.connection_note.pack(anchor="w", pady=(4, 0))
+        self._sync_key_fields()
         if credentials_mod.supported():
             remember_row = ttk.Frame(f3, style="Card.TFrame"); remember_row.pack(fill="x", pady=(8, 0))
             ttk.Checkbutton(remember_row, text="이 PC에 키 기억하기 (Windows 계정으로 암호화)",
@@ -1404,6 +1526,136 @@ class RunnerApp:
         }
         text, color = notes[mode]
         self.live_note.config(text=text, foreground=color)
+        self._invalidate_preflight()
+
+    def _sync_key_fields(self) -> None:
+        selected = exchange_of(self.macro) if self.macro else None
+        for name, widgets in getattr(self, "key_rows", {}).items():
+            for widget in widgets:
+                widget.grid() if name == selected else widget.grid_remove()
+        note = getattr(self, "key_selection_note", None)
+        if note is not None:
+            note.grid_remove() if selected in KNOWN_EXCHANGES else note.grid()
+        ip_row = getattr(self, "ip_row", None)
+        if ip_row is not None:
+            if selected in DOMESTIC_EXCHANGES:
+                ip_row.pack(fill="x", pady=(8, 0), before=self.connection_btn)
+            else:
+                ip_row.pack_forget()
+
+    def _invalidate_preflight(self, *_args) -> None:
+        self._connection_generation = getattr(self, "_connection_generation", 0) + 1
+        previous = getattr(self, "_preflight", None)
+        self._preflight = None
+        if previous:
+            close_connection_broker(previous.broker)
+        note = getattr(self, "connection_note", None)
+        if note is not None:
+            note.config(text="설정이 바뀌었어요. 현재 매크로·모드·키로 다시 연결을 확인하세요.")
+
+    def _snapshot_for_connection(self):
+        # Capture Tk variables on the MAIN thread; worker functions never read widgets.
+        macro = json.loads(json.dumps(self.macro or {}))
+        mode, credentials = self._run_mode(), self._credential_values()
+        return macro, mode, credentials, connection.preflight_fingerprint(macro, mode, credentials)
+
+    def _begin_connection_check(self, *, start_after=False) -> None:
+        if self.bot is not None or getattr(self, "_connection_busy", False):
+            return
+        if self._protocol_claim_busy:
+            messagebox.showwarning(APP_TITLE, "웹 매크로 연결이 끝난 뒤 확인해 주세요.")
+            return
+        if not self.macro:
+            messagebox.showwarning(APP_TITLE, "먼저 매크로 파일을 선택하세요.")
+            return
+        self._invalidate_preflight()
+        macro, mode, credentials, _fingerprint = self._snapshot_for_connection()
+        if mode == MODE_MOCK:
+            self._preflight = perform_connection_check(macro, credentials, mode)
+            self.connection_note.config(text=self._preflight.reason)
+            return
+        if requests is None:
+            self.connection_note.config(text="requests 모듈이 필요해요. requirements를 설치해 주세요.")
+            return
+        self._connection_busy = True
+        generation = self._connection_generation
+        self.connection_btn.config(state="disabled")
+        self.start_btn.config(state="disabled")
+        self.connection_note.config(text="키·허용 IP·주문 조건을 확인 중이에요. 실제 주문은 보내지 않습니다.")
+        # Queue delivery only: no root.after / Tcl calls from a network worker.
+        def check():
+            result = perform_connection_check(macro, credentials, mode)
+            with self._connection_delivery_lock:
+                if self._connection_closed:
+                    close_connection_broker(result.broker)
+                else:
+                    self._connection_queue.put(("preflight", generation, result, start_after))
+        threading.Thread(target=check, daemon=True).start()
+        self._schedule_connection_poll()
+
+    def _begin_public_ip(self) -> None:
+        if getattr(self, "_public_ip_busy", False):
+            return
+        self._public_ip_busy = True
+        self._public_ip = ""
+        self.ip_btn.config(state="disabled")
+        self.ip_copy_btn.config(state="disabled")
+        self.ip_note.config(text="ipify에 인증 없이 이 PC의 IPv4를 한 번 확인합니다…")
+        def detect():
+            try:
+                address = connection.detect_public_ipv4(requests)
+                self._connection_queue.put(("ip", True, address))
+            except connection.PublicIPError as exc:
+                self._connection_queue.put(("ip", False, str(exc)))
+        threading.Thread(target=detect, daemon=True).start()
+        self._schedule_connection_poll()
+
+    def _copy_public_ip(self) -> None:
+        if not getattr(self, "_public_ip", ""):
+            return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(self._public_ip)
+        self.ip_note.config(text=f"{self._public_ip} 복사됨 · 고정 IP가 아니에요. VPN·네트워크가 바뀌면 다시 확인하세요.")
+
+    def _schedule_connection_poll(self) -> None:
+        if not self._connection_polling and not self._connection_closed:
+            self._connection_polling = True
+            self.root.after(100, self._poll_connection_tasks)
+
+    def _poll_connection_tasks(self) -> None:
+        self._connection_polling = False
+        if self._connection_closed:
+            return
+        while True:
+            try:
+                task = self._connection_queue.get_nowait()
+            except queue.Empty:
+                break
+            if task[0] == "ip":
+                _tag, ok, value = task
+                self._public_ip_busy = False
+                self._public_ip = value if ok else ""
+                self.ip_btn.config(state="normal")
+                self.ip_copy_btn.config(state="normal" if ok else "disabled")
+                self.ip_note.config(text=(f"{value} · 고정 IP는 아니에요. 네트워크 변경 시 다시 확인하세요." if ok else value))
+                continue
+            _tag, generation, result, start_after = task
+            self._connection_busy = False
+            running = self.bot is not None
+            self.connection_btn.config(state="disabled" if running else "normal")
+            self.start_btn.config(state="disabled" if running else "normal")
+            _macro, _mode, _credentials, fingerprint = self._snapshot_for_connection()
+            if generation != self._connection_generation or result.fingerprint != fingerprint or running:
+                close_connection_broker(result.broker)
+                self.connection_note.config(text="검사 중 설정이 바뀌었어요. 다시 확인하세요. 매매는 시작하지 않았습니다.")
+                continue
+            self._preflight = result
+            self.connection_note.config(text=result.reason)
+            # Checkboxes/clicking the guide never count as this verified result.
+            if result.ok and start_after:
+                self._start()
+        if self._connection_busy or self._public_ip_busy:
+            self._schedule_connection_poll()
 
     def _sync_mode_choices(self) -> None:
         """국내 매크로에서는 테스트넷 칸을 숨긴다 — 업비트·빗썸에는 테스트넷이 없다.
@@ -1498,6 +1750,8 @@ class RunnerApp:
                  f"{side}{' · '+str(lev)+'배' if lev>1 else ''}\n{summary}")
         # 거래소가 바뀌면 고를 수 있는 모드도 바뀐다(국내는 테스트넷이 없다).
         self._sync_mode_choices()
+        self._sync_key_fields()
+        self._invalidate_preflight()
 
     def _begin_protocol_claim(self, launch: ProtocolLaunch) -> None:
         """Claim a browser launch ticket without blocking Tk's event loop."""
@@ -1692,6 +1946,17 @@ class RunnerApp:
                 "매크로가 실행 중이에요.\n'매크로만 종료' 또는 '청산 후 종료'를 먼저 눌러 주세요.",
             )
             return
+        with getattr(self, "_connection_delivery_lock", threading.Lock()):
+            self._connection_closed = True
+        self._invalidate_preflight()
+        tasks = getattr(self, "_connection_queue", None)
+        while tasks is not None:
+            try:
+                task = tasks.get_nowait()
+            except queue.Empty:
+                break
+            if task[0] == "preflight":
+                close_connection_broker(task[2].broker)
         self.root.destroy()
 
     def _start(self) -> None:
@@ -1736,6 +2001,20 @@ class RunnerApp:
             messagebox.showwarning(APP_TITLE, "껄무새 회원 키를 입력하세요.")
             return
 
+        _macro, _mode, _credentials, fingerprint = self._snapshot_for_connection()
+        checked = getattr(self, "_preflight", None)
+        if mode == MODE_MOCK:
+            # This is deliberately synchronous: mock performs NO authenticated request.
+            checked = perform_connection_check(_macro, _credentials, mode)
+            self._preflight = checked
+            if not checked.ok:
+                messagebox.showwarning(APP_TITLE, checked.reason)
+                return
+        elif not checked or not checked.matches(fingerprint):
+            self._begin_connection_check(start_after=True)
+            return
+        checked_generation = getattr(self, "_connection_generation", 0)
+
         testnet = mode != MODE_LIVE
         if mode == MODE_LIVE:  # 실전: 실제 자금 확인
             side = str(self.macro.get("position_side", "long"))
@@ -1744,6 +2023,20 @@ class RunnerApp:
                 f"⚠ 실전({label})으로 실행합니다.\n\n실제 자금으로 주문이 실행돼요. "
                 f"({self.macro.get('symbol')} · {side})\n계속할까요?"):
                 return
+
+        # Tk modal dialogs keep processing events. A long confirmation or new web
+        # claim can expire/replace the checked form while the dialog is open.
+        _current_macro, _current_mode, _current_credentials, current_fingerprint = self._snapshot_for_connection()
+        if self._protocol_claim_busy or self.bot is not None:
+            return
+        if (self._preflight is not checked
+                or getattr(self, "_connection_generation", 0) != checked_generation
+                or not checked.matches(current_fingerprint)):
+            self._invalidate_preflight()
+            note = getattr(self, "connection_note", None)
+            if note is not None:
+                note.config(text="확인 중 설정이 바뀌었거나 검사 유효 시간이 지났어요. 다시 연결 검사 후 시작하세요.")
+            return
 
         self._persist_credentials()
         server = ServerClient(self.member_key.get(), base=self.server_base)
@@ -1778,6 +2071,9 @@ class RunnerApp:
             on_status=self._status_threadsafe,
             on_finish=self._finish_threadsafe,
         )
+        self.bot._preflight = checked
+        # The bot now owns the prepared connection. Input edits must not close it.
+        self._preflight = None
         self.bot.start()
         self._set_running(True)
 
@@ -1887,6 +2183,10 @@ class RunnerApp:
         self.pick_btn.config(state="disabled" if running else "normal")
         self.stop_btn.config(state="normal" if running else "disabled")
         self.close_btn.config(state="normal" if running else "disabled")
+        for name in ("connection_btn", "ip_btn"):
+            button = getattr(self, name, None)
+            if button is not None:
+                button.config(state="disabled" if running else "normal")
 
 
 def main() -> None:

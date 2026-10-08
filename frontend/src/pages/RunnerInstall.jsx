@@ -133,7 +133,7 @@ function WindowsRunnerInstall() {
             <h2 id="runner-security" className="t-title text-slate-900">거래소 키는 실행기에서만</h2>
             <div className="runner-install-security-copy t-small text-slate-700">
               <p>
-                거래소(바이낸스·업비트·빗썸) API 키와 시크릿은 실행기 창에만 입력하세요. 껄무새 웹·서버로 전송하거나 파일에 저장하지 않으며, 실행기를 다시 켜면 새로 입력해요.
+                거래소(바이낸스·업비트·빗썸) API 키와 시크릿은 실행기 창에만 입력하세요. 껄무새 웹·서버로 보내지 않아요. ‘이 PC에 키 기억하기’를 선택한 경우에만 Windows 계정으로 암호화해 로컬에 저장해요. 기본은 꺼져 있으며, 기억하지 않으면 실행기를 다시 켤 때 입력해요.
               </p>
               <p>처음에는 실제 자금이 들지 않는 연습으로 시작하는 걸 권해요. 바이낸스는 <strong className="text-slate-900">테스트넷 키</strong>를 쓰고, 업비트·빗썸은 테스트넷이 없으니 키 없이 돌아가는 <strong className="text-slate-900">모의 모드</strong>를 써요.</p>
               <p>업비트·빗썸 실거래에는 API 키마다 이 PC의 IP를 허용 IP로 등록해야 해요.</p>

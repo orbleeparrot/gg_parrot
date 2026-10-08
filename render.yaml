@@ -117,10 +117,11 @@ services:
     dockerCommand: python -m app.workflows.position_news serve
     maxShutdownDelaySeconds: 300
     envVars:
-      # supervisor 1 + 격리 뉴스 자식 프로세스 1 = 최대 2 (트랜잭션 모드라 접속자 수 한도 15를 차지하지 않는다 —
-      # 실제 Postgres 연결은 트랜잭션이 도는 동안만 쓴다. 세션 모드로 남는 건 웹의 LISTEN 1개뿐).
+      # 프로세스마다 2 — supervisor 2 + 격리 뉴스 자식 프로세스 2 = 최대 4 (트랜잭션 모드라 접속자 수 한도 15를
+      # 차지하지 않는다 — 실제 Postgres 연결은 트랜잭션이 도는 동안만 쓴다. 세션 모드로 남는 건 웹의 LISTEN 1개뿐).
+      # 1개일 때는 한 프로세스 안의 수집기끼리 2초 대기에 걸려 시간당 1~3건 실패했다(2026-10-09).
       - key: DATABASE_POOL_SIZE
-        value: "1"
+        value: "2"
       - key: DATABASE_CONNECT_TIMEOUT_SECONDS
         value: "3"
       - key: DATABASE_POOL_TIMEOUT_SECONDS

@@ -165,3 +165,39 @@ for (const [method, defaultMs] of [["symbols", 25_000], ["myDashboard", 15_000]]
     await overrideRequest;
   });
 }
+
+// GG-011 — 서버 연결 풀이 잠깐 찼을 때의 JSON 503(code database_busy, Retry-After 1).
+// 조회는 잠깐 기다렸다 다시 하고, 쓰기는 되풀이하지 않는다.
+const busy = () => Response.json({ detail: "서버 저장소가 혼잡해요. 잠시 후 다시 연결합니다.", code: "database_busy" }, { status: 503, headers: { "Retry-After": "1" } });
+
+test("GET recovers from a database_busy 503 after one bounded wait", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async () => (++calls === 1 ? busy() : Response.json({ items: ["BTCUSDT"] })));
+  const pending = api.symbols();
+  await flush();
+  assert.equal(calls, 1);
+  t.mock.timers.tick(500);
+  assert.deepEqual(await pending, { items: ["BTCUSDT"] });
+  assert.equal(calls, 2);
+});
+
+test("exhausted database_busy retries keep the status and the server's code", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async () => { calls += 1; return busy(); });
+  const rejected = assert.rejects(api.myDashboard(), (error) => error.status === 503 && error.code === "database_busy");
+  await flush();
+  t.mock.timers.tick(500);
+  await flush();
+  t.mock.timers.tick(1500);
+  await rejected;
+  assert.equal(calls, 3);
+});
+
+test("a database_busy 503 on a mutation is reported without replaying it", async (t) => {
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async () => { calls += 1; return busy(); });
+  await assert.rejects(api.chatRead(1), { status: 503, code: "database_busy" });
+  assert.equal(calls, 1);
+});

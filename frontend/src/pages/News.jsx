@@ -433,7 +433,7 @@ function MobileArticleList({ base, items }) {
 }
 
 function RacerBriefing({ coins, loading, error, onRetry }) {
-  const [contentScope, setContentScope] = useState("news");
+  const [contentScope, setContentScope] = useState("all"); // 들어오면 전체(보도 기사 + 커뮤니티) — 2026-10-08 사용자 결정
   const mobile = useSyncExternalStore(subscribeMobileNews, mobileNewsSnapshot, () => false);
   const [selectedSymbol, setSelectedSymbol] = useState(null);
   const selected = coins.find((coin) => coin.symbol === selectedSymbol) || coins[0];

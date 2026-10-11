@@ -851,6 +851,9 @@ function MemberChatBox({ member, scope, open, setOpen, roomId = 0, room = null, 
             {loaded && (feed.hasMore || visibleWindow.hasOlder) ? <button type="button" className="chat-history" onClick={loadOlder} disabled={loadingOlder}>{loadingOlder ? "불러오는 중…" : "이전 메시지 더 보기"}</button> : null}
             {!loaded ? (
               loadError ? <p className="chat-helper">대화를 불러오면 여기에 표시돼요.</p> : <div className="chat-skeleton" aria-hidden="true"><i /><i /><i /></div>
+            ) : items.length === 0 && loadError ? (
+              // 갱신이 실패한 채 0건이면 '조용해요'가 아니다 — 위 오류 줄과 함께 빈 채팅 안내가 뜨던 것(GG-011)
+              <p className="chat-helper">대화를 불러오면 여기에 표시돼요.</p>
             ) : items.length === 0 ? (
               <div className="chat-empty"><img src={EMPTY_FACE} alt="" width="56" height="56" draggable="false" />{roomId ? <strong>{ROOM_EMPTY}</strong> : <><strong>아직 조용해요.</strong><span>오늘 첫 채팅을 남겨봐요.</span></>}</div>
             ) : visibleWindow.items.map((message, index) => {

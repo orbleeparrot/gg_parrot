@@ -99,3 +99,5 @@
   .pro-window { grid-template-columns: 1fr 84px; }
   .pro-window-track { grid-column: 1 / -1; grid-row: 2; }
 }
+/* 휴대폰 차트 머리(이름·가격·봉 간격 줄)가 들어가면 고정 420px 안에서 봉 간격 줄이 잘린다 — 높이는 내용대로 */
+@media (max-width: 767px) { .pro-chart-body:not(.is-multi) { height: auto; } }

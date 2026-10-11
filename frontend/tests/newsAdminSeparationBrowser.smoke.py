@@ -79,10 +79,13 @@ with sync_playwright() as p:
         market = page.locator('section.is-market')
         expect(market.get_by_text(ARTICLE['title'], exact=True).first).to_be_attached()
         expect(market.get_by_text(OPINION['title'], exact=True).first).to_be_attached()
-        # 콘텐츠 유형은 '경주마 동향' 제목 오른쪽 segmented 버튼으로만 거른다(기본 보도 기사).
+        # 콘텐츠 유형은 '경주마 동향' 제목 오른쪽 segmented 버튼으로만 거른다(기본 전체 — 2026-10-08).
         racers = page.locator('section.is-racers')
         filters = racers.get_by_role('group', name='경주마 뉴스 콘텐츠 유형')
-        expect(filters.get_by_role('button', name='보도 기사', exact=True)).to_have_attribute('aria-pressed', 'true')
+        expect(filters.get_by_role('button', name='전체', exact=True)).to_have_attribute('aria-pressed', 'true')
+        expect(racers.get_by_text(ARTICLE['title'], exact=True).first).to_be_attached()
+        expect(racers.get_by_text(OPINION['title'], exact=True).first).to_be_attached()
+        filters.get_by_role('button', name='보도 기사', exact=True).click()
         expect(racers.get_by_text(ARTICLE['title'], exact=True).first).to_be_attached()
         expect(racers.get_by_text(OPINION['title'], exact=True)).to_have_count(0)
         filters.get_by_role('button', name='커뮤니티', exact=True).click()

@@ -38,6 +38,9 @@ from .ask import (
     daily_limit,
     free_remaining_today,
     remaining_today,
+    release_read_session,
+    resume_external_user,
+    refund_external_reservation,
 )
 from .coach_ai import default_ask_ai, voice
 from .coach_graph import (
@@ -174,6 +177,7 @@ def _reply(db: Session, user: User, row: AskMacroSession, state: dict, *,
 # --- 시작 -------------------------------------------------------------
 def start(db: Session, user: User, exchange: str = "binance") -> dict:
     """대화를 열고 첫 질문을 낸다 — **한도는 여기서 한 번만** 깎인다."""
+    identity = (user.id, user.auth_version)
     try:
         exchange = normalize_exchange(exchange)
     except ValueError:
@@ -204,15 +208,15 @@ def start(db: Session, user: User, exchange: str = "binance") -> dict:
         db.commit()
 
     state = _empty_state(exchange)
+    release_read_session(db, user, row, credit)
+    reservation_id = row.id
+    credit_id = credit.id if credit is not None else None
     try:
-        question = _first_question(_answers(state))
+        user, row, question = _external_question(
+            db, user, row, lambda: _first_question(_answers(state)), identity=identity)
     except Exception:
         # 첫 질문을 못 만들었으면 횟수를 돌려준다 — 행을 지우고 추가권은 다시 '안 씀' 으로.
-        if credit is not None:
-            credit.used_session_id = None
-            db.add(credit)
-        db.delete(row)
-        db.commit()
+        refund_external_reservation(db, reservation_id, credit_id)
         raise
 
     return _reply(db, user, row, state, question=question, form_patch={},
@@ -239,9 +243,22 @@ def _load(db: Session, user: User, session_id: int) -> tuple[AskMacroSession, di
     return row, _load_state(row, normalize_exchange(request.get("exchange") or "binance"))
 
 
+def _external_question(db, user, row, generate, *, identity):
+    """Voice generation never holds a checkout; reload before recording it."""
+    release_read_session(db, user, row)
+    expected = row.candidates_json
+    question = generate()
+    current_user = resume_external_user(db, user, identity=identity)
+    current, _state = _load(db, current_user, row.id)
+    if current.candidates_json != expected:
+        raise AskError(409, "대화가 다른 요청으로 바뀌었어요. 다시 불러와 주세요.")
+    return current_user, current, question
+
+
 # --- 답하기 -----------------------------------------------------------
 def answer(db: Session, user: User, session_id: int, key: str, value) -> dict:
     """답 하나를 쌓고 다음 질문을 낸다. **한도를 깎지 않는다.**"""
+    identity = (user.id, user.auth_version)
     row, state = _load(db, user, session_id)
     answers = _answers(state)
 
@@ -274,14 +291,18 @@ def answer(db: Session, user: User, session_id: int, key: str, value) -> dict:
                       done=True, wrapped_up=nxt is not None)
 
     _save_state(db, row, state)
+    user, row, question = _external_question(
+        db, user, row, lambda: _question_view(nxt, answers, int(state["pages"].get(nxt, 0) or 0)),
+        identity=identity)
     return _reply(db, user, row, state,
-                  question=_question_view(nxt, answers, int(state["pages"].get(nxt, 0) or 0)),
+                  question=question,
                   form_patch=patch, done=False, wrapped_up=False)
 
 
 # --- 다른 선택지 보기 --------------------------------------------------
 def more(db: Session, user: User, session_id: int, key: str) -> dict:
     """그 질문의 다음 선택지 묶음. **한도를 깎지 않는다.** 마지막 페이지에서 더 부르면 첫 페이지로."""
+    identity = (user.id, user.auth_version)
     row, state = _load(db, user, session_id)
     answers = _answers(state)
     want = next_key(answers)
@@ -291,7 +312,8 @@ def more(db: Session, user: User, session_id: int, key: str) -> dict:
         raise AskError(400, "지금 물어본 질문이 아니에요. 화면을 새로 고쳐 주세요.")
 
     page = int(state["pages"].get(key, 0) or 0) + 1
-    view = _question_view(key, answers, page)
+    user, row, view = _external_question(
+        db, user, row, lambda: _question_view(key, answers, page), identity=identity)
     state["pages"][key] = view["page"]
     _save_state(db, row, state)
     return _reply(db, user, row, state, question=view, form_patch={},
@@ -301,6 +323,7 @@ def more(db: Session, user: User, session_id: int, key: str) -> dict:
 # --- 되돌아가기 -------------------------------------------------------
 def back(db: Session, user: User, session_id: int) -> dict:
     """마지막 턴을 버리고 그 질문을 다시 낸다. 비어 있으면 첫 질문(아무 일도 안 한다)."""
+    identity = (user.id, user.auth_version)
     row, state = _load(db, user, session_id)
     if state["turns"]:
         dropped = state["turns"].pop()
@@ -311,7 +334,9 @@ def back(db: Session, user: User, session_id: int) -> dict:
 
     answers = _answers(state)
     key = next_key(answers) or FIRST_KEY
-    view = _question_view(key, answers, int(state["pages"].get(key, 0) or 0))
+    user, row, view = _external_question(
+        db, user, row, lambda: _question_view(key, answers, int(state["pages"].get(key, 0) or 0)),
+        identity=identity)
     # 되돌아가면 그 턴의 패치는 무효다 — 프런트는 form(쌓인 전부)으로 폼을 다시 맞춘다.
     return _reply(db, user, row, state, question=view, form_patch={},
                   done=False, wrapped_up=False)

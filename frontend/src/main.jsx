@@ -22,8 +22,11 @@ ReactDOM.createRoot(document.getElementById("root")).render(
 );
 
 // 배포 직후 옛 화면 파일을 미리 받다 실패하면(Vite preload) 한 번 새로고침해 새 빌드를 받는다.
-window.addEventListener("vite:preloadError", (event) => {
-  if (reloadOnceForNewBuild()) event.preventDefault();
+// preventDefault 는 부르지 않는다 — 부르면 Vite 가 오류 대신 undefined 를 돌려줘 React.lazy 가 '.default' 를 읽다
+// "Cannot read properties of undefined (reading 'default')" 로 터지고, 새 버전 파일 오류가 '화면 그리기'로
+// 잘못 모였다(2026-10-08 /leaderboard·/admin). 오류를 그대로 올리면 경계가 새 버전 파일 오류로 알아본다.
+window.addEventListener("vite:preloadError", () => {
+  reloadOnceForNewBuild();
 });
 
 // 경계 밖에서 난 오류(이벤트 처리기·비동기)도 화면 오류로 모은다 — 우리 파일에서 난 것만(확장 프로그램·외부 위젯 제외).

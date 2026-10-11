@@ -3,7 +3,9 @@ import { api } from "../api.js";
 import { fmtPrice, quoteOf } from "../lib/format.js";
 import { exchangeLabel, isDomestic, normalizeExchange } from "../lib/exchanges.js";
 import { applyChartHistory, applyChartLive, chartTimeKst, createChartStream, isChartFresh, isChartLive } from "../lib/chartSource.js";
+import { coinName } from "../lib/macroSource.js";
 import CandlePlot from "./CandlePlot.jsx";
+import CoinIcon from "./CoinIcon.jsx";
 import "./CandleChartStudio.css";
 
 // Market-data orchestration and chart controls. CandlePlot owns the renderer.
@@ -34,8 +36,26 @@ const INTERVALS = [
   { value: "1d", label: "1일" },
 ];
 
+// 휴대폰 폭 — 직접 만들기 차트 머리를 토스 증권처럼(이름·가격 → 차트 → 봉 간격 한 줄) 다시 짠다.
+const PHONE_QUERY = "(max-width: 767px)";
+function useMedia(query) {
+  const get = () => (typeof window !== "undefined" && window.matchMedia ? window.matchMedia(query).matches : false);
+  const [matches, setMatches] = useState(get);
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return undefined;
+    const mq = window.matchMedia(query);
+    const on = () => setMatches(mq.matches);
+    on();
+    mq.addEventListener?.("change", on);
+    return () => mq.removeEventListener?.("change", on);
+  }, [query]);
+  return matches;
+}
+
 // --- inspector panel: OHLC of the hovered (or latest) bar ---------------
-function BarReadout({ bar, live, quote, extra = null }) {
+// reserveLive — LIVE 가 늦게 붙어도 줄 폭이 바뀌지 않게 자리를 미리 잡는다(직접 만들기 도구줄: 붙는 순간 OHLC 가
+// 두 줄로 꺾여 차트가 22px 줄던 레이아웃 이동, 2026-10-08).
+function BarReadout({ bar, live, quote, extra = null, reserveLive = false }) {
   if (!bar) return null;
   const rise = bar.c >= bar.o;
   const pct = bar.o ? ((bar.c - bar.o) / bar.o) * 100 : 0;
@@ -59,8 +79,8 @@ function BarReadout({ bar, live, quote, extra = null }) {
         </span>
       </div>
       {extra}
-      {live && (
-        <span className="candle-chart-live inline-flex items-center gap-1.5 t-caption font-bold text-red-600">
+      {(live || reserveLive) && (
+        <span className={"candle-chart-live inline-flex items-center gap-1.5 t-caption font-bold text-red-600" + (live ? "" : " invisible")} aria-hidden={live ? undefined : true}>
           <span aria-hidden="true" className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse motion-reduce:animate-none" />
           LIVE
         </span>
@@ -108,7 +128,12 @@ function RangeChange({ percent }) {
 }
 
 function MarketPrice({ bar, quote, changePct }) {
-  if (!bar) return null;
+  // 시세가 오기 전에도 같은 높이를 잡아 둔다 — 늦게 생기면 아래 화면 전체가 밀린다(레이아웃 이동).
+  if (!bar) return (
+    <div className="candle-chart-price-row invisible" aria-hidden="true">
+      <span className="candle-chart-price"><strong className="candle-chart-current num">0</strong></span>
+    </div>
+  );
   return (
     <div className="candle-chart-price-row">
       <span className="candle-chart-price">
@@ -175,6 +200,7 @@ export default function CandleChart({
 }) {
   const exchange = normalizeExchange(exchangeValue);
   const studio = variant === "studio";
+  const phone = useMedia(PHONE_QUERY);
   const disabledIntervalMap = Object.fromEntries((disabledIntervals || []).map((item) => [item.value, item.title || "이 테스트 기간에서는 고를 수 없어요"]));
   const [localInterval, setLocalInterval] = useState(defaultInterval);
   const [candles, setCandles] = useState(null);
@@ -187,6 +213,7 @@ export default function CandleChart({
   const [hover, setHover] = useState(null);
   const timer = useRef(null);
   const liveTimer = useRef(null);
+  const marketKeyRef = useRef(""); // 마지막으로 그린 거래소·종목·시장 — 봉 간격만 바뀌었는지 가린다
   const loadStateRef = useRef(onLoadState);
   loadStateRef.current = onLoadState;
   const dataRef = useRef(onData);
@@ -257,6 +284,7 @@ export default function CandleChart({
           if (alive) {
             historyError = String(e.message || e);
             setError(historyError);
+            if (!stream.candles.length) setCandles(null); // 봉 간격을 바꾼 뒤 첫 요청이 실패하면 이전 간격의 차트를 남기지 않는다
             report();
             loadStateRef.current?.({ status: "error", exchange, symbol, interval, error: historyError });
           }
@@ -304,7 +332,11 @@ export default function CandleChart({
     }
     setError("");
     report();
-    setCandles(null);
+    // 같은 종목에서 봉 간격만 바꾸면 새 봉이 올 때까지 이전 차트를 둔다 — 비우면 그림 칸이 '불러오는 중' 한 줄로
+    // 접혔다가(483 → 230px) 다시 펴지며 아래 화면 전체가 들썩였다(2026-10-08 휴대폰 봉 간격 탭).
+    const marketKey = `${exchange}|${symbol}|${market}`;
+    if (marketKeyRef.current !== marketKey) setCandles(null);
+    marketKeyRef.current = marketKey;
     setAnchor(null); // a new symbol/interval always starts at the live edge
     setHover(null);
     void loadHistory(true);
@@ -387,6 +419,74 @@ export default function CandleChart({
 
   const btn = "btn btn-s btn-secondary w-9 px-0";
 
+  if (studio && phone) {
+    const base = (title || symbol || "").replace(/(USDT|KRW|BTC)$/, "") || symbol;
+    const name = coinName(symbol);
+    return (
+      <div className="candle-chart is-studio is-phone">
+        <div className="ccp-head">
+          <div className="ccp-id">
+            <CoinIcon symbol={symbol} size={24} alt="" className="ccp-logo" />
+            <h3 className="ccp-name">{name || base}</h3>
+            <span className="ccp-tk num">{title || symbol}</span>
+          </div>
+          <div className="ccp-meta">
+            <span>{exchangeLabel(exchange)}</span>
+            <span aria-hidden="true">·</span>
+            <SourceStatus feed={feed} now={now} inline />
+            {live && fresh && last && !last.closed ? <span className="ccp-live">LIVE</span> : null}
+          </div>
+          <MarketPrice bar={current} quote={quote} changePct={changePct} />
+          <div className="ccp-tools">
+            {overlayFull?.legend?.length > 0 ? (
+              <div className="ccp-legend">{overlayFull.legend.map((item, i) => <LegendItem key={i} item={item} />)}</div>
+            ) : <span />}
+            <div className="ccp-zoom">
+              {!live && <button type="button" onClick={goLive} className="ccp-live-btn" title="최신 봉으로 이동">최신</button>}
+              <button type="button" onClick={() => applyZoom(zoom * 1.35)} disabled={zoom >= maxZoom} className="ccp-round" aria-label="차트 축소">−</button>
+              <button type="button" onClick={() => applyZoom(zoom * 0.7)} disabled={zoom <= MIN_ZOOM} className="ccp-round" aria-label="차트 확대">+</button>
+            </div>
+          </div>
+        </div>
+
+        {/* 시세 출처는 머리의 출처 줄(.ccp-meta)에 이미 있다 — 여기 따로 두면 시세가 올 때 사라지며 화면이 밀린다 */}
+        {error && <div className="notice-warn py-6 t-small text-slate-700">차트를 불러오지 못했어요: {error}</div>}
+        {!error && (!candles || !candles.length) && (
+          <div className="candle-chart-stage">
+            <div className="candle-chart-plot candle-chart-wait t-small text-slate-500">{loading ? "차트 불러오는 중…" : candles ? "표시할 시세가 없어요." : "—"}</div>
+          </div>
+        )}
+        {view.length > 0 && (
+          <div className="candle-chart-stage">
+            <div className="candle-chart-plot">
+              {plot}
+              {/* 시가·고가·저가·종가는 차트를 누르고 있을 때만 위에 한 줄로 */}
+              {hover != null && candles?.[hover] ? (
+                <div className="candle-chart-readout-overlay ccp-readout"><BarReadout bar={candles[hover]} quote={quote} live={false} /></div>
+              ) : null}
+            </div>
+          </div>
+        )}
+
+        <div className="ccp-tabs" role="group" aria-label="봉 간격">
+          {INTERVALS.map((o) => (
+            <button
+              key={o.value}
+              type="button"
+              className={"ccp-tab" + (interval === o.value ? " is-on" : "")}
+              aria-pressed={interval === o.value}
+              disabled={!!disabledIntervalMap[o.value]}
+              title={disabledIntervalMap[o.value] || undefined}
+              onClick={() => changeInterval(o.value)}
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   if (studio) {
     const zoomBtn = "btn btn-s btn-secondary w-8 px-0";
     return (
@@ -423,15 +523,18 @@ export default function CandleChart({
           )}
         </div>
 
-        {view.length === 0 && <SourceStatus feed={feed} now={now} />}
-
         {error && <div className="notice-warn py-6 t-small text-slate-700">차트를 불러오지 못했어요: {error}</div>}
         {!error && (!candles || !candles.length) && (
-          <div className="candle-chart-stage flex items-center justify-center t-small text-slate-500">{loading ? "차트 불러오는 중…" : candles ? "표시할 시세가 없어요." : "—"}</div>
+          <div className="candle-chart-stage">
+            {/* 시세가 오면 생길 OHLC 줄·그림 칸과 같은 높이를 미리 잡는다 — 펴지는 순간 아래 판이 밀리지 않게.
+                시세 출처도 시세가 온 뒤와 같은 자리(OHLC 줄 끝)에 둔다. 전에는 차트 아래 따로 붙었다 사라지며 18px 밀었다. */}
+            <div className="candle-chart-readout"><div className="candle-readout-row"><SourceStatus feed={feed} now={now} inline /></div></div>
+            <div className="candle-chart-plot candle-chart-wait t-small text-slate-500">{loading ? "차트 불러오는 중…" : candles ? "표시할 시세가 없어요." : "—"}</div>
+          </div>
         )}
         {view.length > 0 && (
           <div className="candle-chart-stage">
-            <div className="candle-chart-readout"><BarReadout bar={inspected} quote={quote} live={live && fresh && !last.closed} extra={<SourceStatus feed={feed} now={now} inline />} /></div>
+            <div className="candle-chart-readout"><BarReadout bar={inspected} quote={quote} live={live && fresh && !last.closed} reserveLive extra={<SourceStatus feed={feed} now={now} inline />} /></div>
             <div className="candle-chart-plot">
               {plot}
             </div>

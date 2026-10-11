@@ -6,7 +6,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { renderComponent, textOf } from "./renderHelper.js";
-import { DOMESTIC_KEY_PAGES } from "../src/lib/runnerGuide.js";
+import * as runnerGuide from "../src/lib/runnerGuide.js";
+const { DOMESTIC_KEY_PAGES } = runnerGuide;
 
 const guideSource = readFileSync(new URL("../src/pages/Guide.jsx", import.meta.url), "utf8");
 
@@ -37,7 +38,7 @@ test("두 거래소의 발급 경로와 서로 다른 제약을 적는다", asyn
   assert.match(text, /모바일 앱에서는 만들 수 없어요/, "업비트는 PC 웹에서만 발급된다");
   assert.match(text, /10개까지/, "업비트 허용 IP 한도");
   // 빗썸: API 관리 · IP 5개 · 유효기간 1년 · 권한 변경 불가
-  assert.match(text, /마이페이지 → API 관리/);
+  assert.match(text, /메뉴 → 계정관리 → API 관리/);
   assert.match(text, /최대 5개/, "빗썸 허용 IP 한도");
   assert.match(text, /1년이고 연장이 안 돼요/, "빗썸 키는 1년 뒤 재발급해야 한다");
   assert.match(text, /권한을 나중에 바꿀 수 없어요/, "빗썸은 활성 항목 변경이 안 된다");
@@ -61,6 +62,84 @@ test("허용 IP 가 바뀐다는 것을 말한다", async () => {
   assert.match(text, /공인 IP/);
   assert.match(text, /사설 IP/, "192.168 을 넣고 안 된다고 하는 일이 흔하다");
   assert.match(text, /바뀔 수 있어요/, "집 인터넷 IP 변경이 '갑자기 주문이 안 나감' 의 첫 용의자다");
+  assert.match(text, /실행기를 돌릴 PC/, "폰이나 Render 주소가 아닌 주문을 보내는 PC의 주소여야 한다");
+  assert.match(text, /휴대폰|스마트폰/);
+  assert.match(text, /Render/);
+  assert.doesNotMatch(text, /10개까지 미리 넣어/, "미래 유동 IP를 예측해서 등록할 수 없다");
+});
+
+test("웹 확인은 수동 확인이고 거래소 인증은 실행기에서 한다", async () => {
+  const text = textOf(await section("domestic-api"));
+  assert.match(text, /연결 검사/);
+  assert.match(text, /실제 주문을 보내지 않/);
+  assert.match(text, /빗썸[\s\S]*주문 권한[\s\S]*확인되지 않/);
+  assert.match(text, /웹[\s\S]*확인[\s\S]*인증 성공/);
+  assert.match(text, /새 실행기[\s\S]*버튼이 보이면/);
+  assert.match(text, /기존 실행기[\s\S]*검사 전용이 아니며[\s\S]*실제 주문/);
+});
+
+test("암호화한 로컬 키 저장은 선택이고 출금 차단도 거래 손실을 막지는 못한다", async () => {
+  for (const id of ["domestic-api", "binance-api"]) {
+    const text = textOf(await section(id));
+    assert.match(text, /이 PC에 키 기억하기/);
+    assert.match(text, /Windows[\s\S]*암호화/);
+    assert.match(text, /기본[\s\S]*꺼져/);
+    assert.match(text, /거래소 키[\s\S]*웹[\s\S]*서버[\s\S]*보내지 않/);
+    assert.match(text, /출금[\s\S]*꺼[\s\S]*매매[\s\S]*손실/);
+    assert.doesNotMatch(text, /유출돼도 자산을 빼갈 수 없/);
+  }
+});
+
+test("FAQ는 거래소별 단계별 연결 도우미로 바로 연결한다", async () => {
+  const html = await section("domestic-api");
+  for (const exchange of ["upbit", "bithumb"]) {
+    assert.ok(html.includes(`href="/exchange-connect?exchange=${exchange}"`));
+  }
+  assert.match(textOf(html), /단계별 연결 도우미/);
+});
+
+test("국내 연결은 실행기 IP 확인 → 공식 발급 → 실행기 검사 세 단계다", () => {
+  assert.equal(typeof runnerGuide.domesticConnectionSteps, "function");
+  for (const exchange of ["upbit", "bithumb"]) {
+    const steps = runnerGuide.domesticConnectionSteps(exchange);
+    assert.deepEqual(steps.map((step) => step.id), ["prepare", "permissions", "keys"]);
+    assert.equal(steps.length, 3);
+    for (const step of steps) {
+      assert.ok(step.title && step.description);
+      assert.ok(Array.isArray(step.checklist) && step.checklist.length > 0);
+    }
+    assert.match(JSON.stringify(steps[1]), /자산조회[\s\S]*주문조회[\s\S]*주문하기/);
+    assert.match(JSON.stringify(steps[1]), /출금[\s\S]*(끄|꺼)/);
+    assert.match(JSON.stringify(steps[0]), /실행기[\s\S]*PC[\s\S]*IPv4/);
+    assert.match(JSON.stringify(steps[1]), new RegExp(`${exchange === "upbit" ? 10 : 5}개`));
+    assert.match(JSON.stringify(steps[2]), /웹[\s\S]*확인[\s\S]*인증/);
+    assert.match(JSON.stringify(steps[2]), /Secret Key[\s\S]*최초/);
+    assert.match(JSON.stringify(steps[0]), /기존 실행기[\s\S]*직접 확인/);
+    assert.match(JSON.stringify(steps[2]), /기존 실행기[\s\S]*검사 전용 버튼이 아니므로/);
+    assert.equal(steps[1].action.href, DOMESTIC_KEY_PAGES[exchange].url);
+  }
+  assert.deepEqual(runnerGuide.domesticConnectionSteps("binance"), []);
+  assert.deepEqual(runnerGuide.domesticConnectionSteps("unknown"), []);
+});
+
+test("단계 데이터는 소비자가 고쳐도 다른 세션 안내에 새지 않는다", () => {
+  assert.equal(typeof runnerGuide.domesticConnectionSteps, "function");
+  const steps = runnerGuide.domesticConnectionSteps("upbit");
+  const originalTitle = steps[0].title;
+  steps[0].title = "changed";
+  steps[0].checklist.length = 0;
+  steps[1].action.href = "https://untrusted.example/";
+  const fresh = runnerGuide.domesticConnectionSteps("upbit");
+  assert.equal(fresh[0].title, originalTitle);
+  assert.ok(fresh[0].checklist.length > 0);
+  assert.equal(fresh[1].action.href, DOMESTIC_KEY_PAGES.upbit.url);
+});
+
+test("기존 키 안내는 재발급 대신 권한·IP 변경과 Secret 복구를 설명한다", () => {
+  const steps = runnerGuide.domesticConnectionSteps("upbit", { existingKey: true });
+  assert.match(steps[1].title, /기존 키/);
+  assert.match(JSON.stringify(steps), /변경[\s\S]*재발급[\s\S]*필요 없/);
+  assert.match(steps[2].title, /기존 키/);
 });
 
 test("거래소 주소를 두 벌로 두지 않는다", () => {

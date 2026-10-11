@@ -16,12 +16,27 @@ export function publicationLabel(value) {
 export function positionNewsNotice(state, { hasArticles = false } = {}) {
   if (!state) return "";
   const data = state.data;
-  if (state.status === "error" || data?.collection?.status === "error") {
-    return "뉴스 검색이 지연되고 있어요. 수집 연결을 다시 확인하고 있어요.";
+  if (state.status === "error") {
+    return "뉴스 서버 연결이 지연되고 있어요. 마지막 확인 기사는 유지하며 조회를 다시 시도해요.";
   }
-  if (data?.translation?.status === "partial") {
-    const count = Number(data.translation.pending_count) || 0;
-    return `${count > 0 ? `뉴스 ${count}건을` : "뉴스를"} 한국어로 번역 중이에요. 완료되면 표시해요.`;
+  if (["error", "rate_limited", "unavailable"].includes(data?.collection?.status)) {
+    return "뉴스 수집 소스 확인에 실패했어요. 서버 연결 및 번역 상태와는 별개예요.";
+  }
+  const translation = data?.translation;
+  if (translation?.status === "paused") {
+    return ["insufficient_quota", "credit_balance_exhausted"].includes(translation.pause_reason)
+      ? "AI 크레딧·사용 한도로 번역·요약 처리가 중단됐어요. 기사 수집 및 서버 연결과는 별개예요."
+      : "AI 번역·요약 처리가 일시 중단됐어요. 기사 수집 및 서버 연결과는 별개예요.";
+  }
+  if (translation?.status === "failed") {
+    const count = Number(translation.failed_count) || 0;
+    return `${count > 0 ? `뉴스 ${count}건의` : "뉴스"} 번역·요약에 실패했어요. 수집한 기사와 처리 실패를 구분해 표시해요.`;
+  }
+  if (["partial", "pending", "waiting"].includes(translation?.status)) {
+    const count = Number(translation.waiting_count ?? translation.pending_count) || 0;
+    const failed = Number(translation.failed_count) || 0;
+    return `${count > 0 ? `뉴스 ${count}건의` : "뉴스"} 번역·요약 처리 대기 상태예요.${failed > 0 ? ` 처리 실패 ${failed}건이 있어요.`
+      : " 실제 처리 중인 건수는 아니며 실패한 항목이 포함될 수 있어요."}`;
   }
   if ((!data && ["idle", "loading"].includes(state.status))
       || data?.analysis_status === "pending" || data?.collection?.status === "pending") {

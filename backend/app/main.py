@@ -110,7 +110,8 @@ from .data.binance import backtest_limits
 from .marketdata import fetch_klines_for_macro
 from . import marketdata as marketdata_mod
 from .exchanges import Exchange, capabilities, is_domestic, validate_symbol
-from .db import MacroRow, get_session, init_db, request_session
+from .db import MacroRow, dispose_engines, get_session, init_db, request_session, request_runner_session
+from .db_errors import register_capacity_handlers
 from .engine import BacktestResult, Macro, Period, compact_backtest_result, human_summary
 from .engine.backtest import run_backtest
 from .engine import portfolio as portfolio_mod
@@ -174,9 +175,11 @@ async def lifespan(app: FastAPI):
                         from .cache_runtime import close_cache_runtime
                         await asyncio.to_thread(close_cache_runtime)
                         http_runtime_mod.close_http_runtime()
+                        dispose_engines()
 
 
 app = FastAPI(title="Coin Macro Backtest & Share (Simulation only)", lifespan=lifespan)
+register_capacity_handlers(app)
 app.include_router(position_news_router)
 app.include_router(observability_router)
 
@@ -1284,6 +1287,7 @@ def backtest(
     macro = req.macro
     if req.period_override is not None:
         macro = macro.model_copy(update={"period": req.period_override})
+    ask_mod.release_read_session(db, account)
     try:
         result, per_symbol, source, period_label = _run_any(macro)
     except NoSpotDataError as exc:
@@ -2405,6 +2409,7 @@ async def paper_start(
     db: Session = Depends(request_session),
 ) -> dict:
     mode = "replay" if req.mode == "replay" else "live"
+    ask_mod.release_read_session(db, account)
     try:
         info = await paper_mod.start_session(req.macro, req.symbol, mode)
     except NoSpotDataError as exc:
@@ -2491,6 +2496,13 @@ def _runner_user(x_runner_key: Optional[str] = Header(default=None)) -> User:
     return runner_mod.user_for_key(x_runner_key or "")
 
 
+def _heartbeat_user(
+    x_runner_key: Optional[str] = Header(default=None),
+    db: Session = Depends(request_runner_session),
+) -> User:
+    return runner_mod.user_for_key(x_runner_key or "", db=db)
+
+
 # 실행기용 -------------------------------------------------------------
 @app.post("/api/runner/launch-tickets/claim")
 def runner_launch_ticket_claim(
@@ -2541,9 +2553,13 @@ def runner_start(req: RunnerStartRequest, user: User = Depends(_runner_user)) ->
 
 
 @app.post("/api/runner/heartbeat")
-def runner_heartbeat(req: RunnerHeartbeatRequest, user: User = Depends(_runner_user)) -> dict:
+def runner_heartbeat(
+    req: RunnerHeartbeatRequest,
+    user: User = Depends(_heartbeat_user),
+    db: Session = Depends(request_runner_session),
+) -> dict:
     snap = req.model_dump()
-    return runner_mod.heartbeat(user, snap.pop("session_id"), snap)
+    return runner_mod.heartbeat(user, snap.pop("session_id"), snap, db=db)
 
 
 @app.post("/api/runner/stopped")

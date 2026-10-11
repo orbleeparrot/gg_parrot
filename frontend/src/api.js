@@ -112,6 +112,8 @@ function responseError(res, body, token) {
   const error = new Error(friendlyMessage(res.status, raw));
   error.status = res.status;
   error.detail = raw;
+  // 서버가 붙인 기계용 코드(예: 503 database_busy — 서버 연결 풀이 잠깐 찼다)를 싣는다. 재시도가 이걸 보고 가른다.
+  if (typeof body.code === "string") error.code = body.code;
   // 토큰을 실어 보냈는데 401 — 만료(7일)거나 비밀번호 변경·탈퇴로 무효가 됐다. 로그인 상태를 지워
   // 헤더와 보호된 화면이 로그인으로 돌아가게 한다(다른 계정으로 바뀐 경우는 건드리지 않는다).
   if (res.status === 401 && token && token === getToken()) clearAuth({ preserveRegistrationDraft: true });

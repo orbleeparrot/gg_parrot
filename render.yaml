@@ -18,6 +18,19 @@ services:
       mountPath: /var/data/market-cache
       sizeGB: 1
     envVars:
+      # DATABASE_URL 은 Supabase 트랜잭션 모드 풀러(:6543) — 연결을 트랜잭션 동안만 빌려 써서 접속자 수 15 제한을
+      # 받지 않는다(2026-10-09, GG-011: 세션 모드에선 프로세스가 연결을 평생 쥐어 웹 풀 2개가 몰릴 때 바닥났다).
+      # 웹: 일반 요청 4 + heartbeat 예약 1 (트랜잭션 모드) + LISTEN 1 (세션 모드, DATABASE_SESSION_URL).
+      - key: DATABASE_POOL_SIZE
+        value: "4"
+      - key: DATABASE_RUNNER_POOL_SIZE
+        value: "1"
+      - key: DATABASE_POOL_TIMEOUT_SECONDS
+        value: "2"
+      - key: DATABASE_RUNNER_POOL_TIMEOUT_SECONDS
+        value: "1"
+      - key: DATABASE_CONNECT_TIMEOUT_SECONDS
+        value: "3"
       - key: MARKET_CACHE_DIR
         value: /var/data/market-cache
       - key: POSITION_NEWS_EMBEDDED_ENABLED
@@ -48,15 +61,19 @@ services:
       - key: BINANCE_API_BASE
         value: "https://data-api.binance.vision"
       - key: RUNNER_DOWNLOAD_URL
-        value: "https://github.com/orbleeparrot/gg_parrot/releases/download/runner-v10/ggparrot-runner.exe"
+        value: "https://github.com/orbleeparrot/gg_parrot/releases/download/runner-v12/ggparrot-runner.exe"
       - key: RUNNER_EXE_VERSION
-        value: "10"
+        value: "12"
       - key: RUNNER_SUPPORTS_LAUNCH
         value: "true"
       - key: RUNNER_MIN_VERSION
         value: "6"
       # 대시보드에서 실제 값을 입력합니다. 비밀값은 Blueprint에 커밋하지 않습니다.
+      # DATABASE_URL = 트랜잭션 모드 풀러(…pooler.supabase.com:6543), DATABASE_SESSION_URL = 같은 주소의 세션 모드(:5432) —
+      # LISTEN 연결 하나만 세션 모드를 쓴다. 세션 주소를 비우고 DATABASE_URL 이 :6543 이면 LISTEN 은 건너뛰고 폴링만 남는다.
       - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_SESSION_URL
         sync: false
       - key: SECRET_KEY
         generateValue: true
@@ -100,6 +117,15 @@ services:
     dockerCommand: python -m app.workflows.position_news serve
     maxShutdownDelaySeconds: 300
     envVars:
+      # 프로세스마다 2 — supervisor 2 + 격리 뉴스 자식 프로세스 2 = 최대 4 (트랜잭션 모드라 접속자 수 한도 15를
+      # 차지하지 않는다 — 실제 Postgres 연결은 트랜잭션이 도는 동안만 쓴다. 세션 모드로 남는 건 웹의 LISTEN 1개뿐).
+      # 1개일 때는 한 프로세스 안의 수집기끼리 2초 대기에 걸려 시간당 1~3건 실패했다(2026-10-09).
+      - key: DATABASE_POOL_SIZE
+        value: "2"
+      - key: DATABASE_CONNECT_TIMEOUT_SECONDS
+        value: "3"
+      - key: DATABASE_POOL_TIMEOUT_SECONDS
+        value: "2"
       - key: POSITION_NEWS_REQUIRE_POSTGRES
         value: "true"
       - key: POSITION_NEWS_COLLECTION_SECONDS
@@ -139,7 +165,7 @@ services:
         value: "false"
       - key: POSITION_NEWS_ARTICLE_TIMEOUT_MS
         value: "12000"
-      # 웹 서비스와 정확히 같은 Supabase Session Pooler URL을 입력합니다.
+      # 웹 서비스와 정확히 같은 Supabase 트랜잭션 모드 풀러 URL(:6543)을 입력합니다. 이 워커는 LISTEN 을 하지 않는다.
       - key: DATABASE_URL
         sync: false
       - key: PREFECT_API_URL

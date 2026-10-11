@@ -366,3 +366,37 @@
 .studio-src-check { margin-left: auto; flex: none; color: rgb(var(--c-slate-900)); } /* Lucide check 18px — 원·배경 없이 선 하나 */
 /* 처음 들어왔을 때(출처 없음) — 배지가 '껄무새에게 물어볼까?' 입구: 껄무새 얼굴 + AI 뱃지 색 */
 .studio-src-badge.is-prompt { background: var(--badge-ai-bg); color: var(--badge-ai-fg); }
+
+/* ── 휴대폰(767px 이하) — '껄무새에게 물어볼까?' 입구를 화면 아래 떠 있는 버튼으로 (2026-10-08).
+   누르면 PC 출처 배지와 같은 메뉴가 버튼 위로 올라온다. 휴대폰에선 시세 띠가 없어 바닥에서 16px. 출처가 없을 때의 머리 배지는 같은 입구라 숨긴다. ── */
+.studio-fab { display: none; }
+@media (max-width: 767px) {
+  .studio-fab {
+    display: block; position: fixed; z-index: var(--z-fab); left: 16px; right: 16px; max-width: none; margin: 0;
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 16px); /* 휴대폰은 아래 시세 띠가 숨는다(index.css) */
+  }
+  .studio-fab-btn {
+    width: 100%; height: 52px; display: flex; align-items: center; justify-content: center; gap: 8px;
+    border: 0; border-radius: 14px; background: rgb(var(--c-brand)); color: rgb(var(--c-brand-ink));
+    font-size: 16px; font-weight: 800; cursor: pointer; box-shadow: 0 6px 16px rgb(var(--c-scrim) / .2);
+    transition: background-color 120ms ease, transform 120ms ease;
+  }
+  .studio-fab-btn:active:not(:disabled) { transform: scale(.98); }
+  .studio-fab-btn:disabled { opacity: .6; cursor: not-allowed; }
+  .studio-fab-btn:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
+  .studio-fab-face { width: 30px; height: 30px; flex: none; }
+  .studio-fab-btn .studio-src-chev { width: 7px; height: 7px; margin: 4px 0 0 2px; border-width: 0 2px 2px 0; transform: rotate(-135deg); }
+  .studio-fab-btn[aria-expanded="true"] .studio-src-chev { margin-top: -4px; transform: rotate(45deg); }
+  .studio-fab .studio-src-menu {
+    top: auto; bottom: calc(100% + 8px); left: 0; right: 0; min-width: 0; padding: 6px; border-radius: 14px;
+    animation: studio-fab-up 160ms cubic-bezier(.16, 1, .3, 1);
+  }
+  .studio-fab .studio-src-menu .studio-mode-item { height: 48px; gap: 10px; padding: 0 12px; font-size: 15px; }
+  .studio-fab .studio-src-menu .studio-mode-hint { font-size: 12.5px; }
+  .studio-fab .studio-src-menu .studio-src-lead { width: 28px; height: 28px; }
+  .studio-fab .studio-src-menu .studio-src-lead .studio-src-face { width: 28px; height: 28px; }
+  .studio-panel-head .studio-src.is-prompt { display: none; }
+  .site-main.studio-main { padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 84px); } /* 버튼 52 + 위아래 16 — 마지막 줄이 버튼에 가리지 않게 */
+}
+@keyframes studio-fab-up { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .studio-fab .studio-src-menu { animation: none; } }

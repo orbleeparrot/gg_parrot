@@ -153,6 +153,9 @@ function SymbolPicker({ value, onChange, weights = "", onWeights = null, exchang
   const [open, setOpen] = useState(false);
   const [cursor, setCursor] = useState(0);
   const [note, setNote] = useState("");
+  // 목록이 낡았다는 안내(stale)는 보여 주지 않는다 — 응답이 늦게 와 생기는 순간 검색칸 아래가 52px 밀렸다(레이아웃 이동,
+  // 2026-10-08 사용자 결정). 대신 낡은 목록에서 검색 결과가 없으면 조용히 목록을 다시 받는다 — 안내의 '다시 확인'
+  // 버튼이 하던 일이고, 없으면 막 상장된 종목을 찾을 길이 없다. 잘못된 종목은 고를 때 canChoose 가 막는다.
   const { items, loading, error, reload, stale, canChoose } = useSymbolList(exchange);
   const rootRef = useRef(null);
   const blurTimer = useRef(null);
@@ -161,6 +164,14 @@ function SymbolPicker({ value, onChange, weights = "", onWeights = null, exchang
   const query = draft.trim();
   const matches = items && query ? searchSymbols(items, query, { limit: 8, exclude: symbols }) : [];
   const showList = open && query.length > 0;
+  const staleMissRef = useRef("");
+  useEffect(() => {
+    if (!stale || loading || !items || !query || matches.length) return;
+    const key = `${exchange}|${query.toUpperCase()}`;
+    if (staleMissRef.current === key) return; // 같은 검색어로는 한 번만 — 서버 목록이 계속 낡아도 되풀이하지 않는다
+    staleMissRef.current = key;
+    reload();
+  }, [exchange, items, loading, matches.length, query, reload, stale]);
   const full = symbols.length >= MAX_SYMBOLS;
   const weight = portfolioWeight(symbols.length);
   // 비중을 고칠 수 있는 판인지 — onWeights 가 있을 때만. 없으면 예전처럼 읽기 전용으로 1/N 을 보여 준다.
@@ -218,7 +229,6 @@ function SymbolPicker({ value, onChange, weights = "", onWeights = null, exchang
 
   return (
     <div className="bd-symbols" ref={rootRef}>
-      {items && stale && <div className="bd-suggest-note" role="status">마지막 확인한 종목 목록이에요. 새 상장·거래 종료가 아직 반영되지 않았을 수 있어요. <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={reload}>다시 확인</button></div>}
       <div className={"bd-search" + (full ? " is-full" : "")}>
         <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="9" cy="9" r="5.5" /><path d="M13.5 13.5 17 17" /></svg>
         <input

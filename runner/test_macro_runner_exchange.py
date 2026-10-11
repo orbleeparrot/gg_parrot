@@ -110,9 +110,9 @@ class ExchangeSelectionTests(unittest.TestCase):
                 self.assertNotIn(f"SECRET-{name}", blob)
                 self.assertNotIn(f"KEY-{name}", blob)
 
-    def test_runner_version_is_ten(self):
+    def test_runner_version_is_twelve(self):
         from runner import installation
-        self.assertEqual(installation.RUNNER_VERSION, "10")
+        self.assertEqual(installation.RUNNER_VERSION, "12")
 
     # --- 위 다섯은 과제 사양. 아래는 같은 배선의 나머지 ----------------
     def test_binance_macro_builds_the_binance_broker_with_its_own_keys(self):

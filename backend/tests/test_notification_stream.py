@@ -288,3 +288,38 @@ def test_stream_endpoint_streams_events_with_sse_headers(monkeypatch):
     assert "no-store" in cache_control or "no-cache" in cache_control  # 회원 응답 미들웨어가 private, no-store 로 바꾼다
     assert response.headers.get("x-accel-buffering") == "no"
     assert response.text == "retry: 3000\n\n" + notification_stream.unread_event(5)
+
+
+# --- LISTEN 주소: 트랜잭션 모드 풀러 전환(2026-10-09, GG-011) -----------------------
+TX = "postgresql://u:p@aws-1-us-east-1.pooler.supabase.com:6543/postgres"
+SESSION = "postgresql://u:p@aws-1-us-east-1.pooler.supabase.com:5432/postgres"
+
+
+def test_listen_prefers_the_session_url_over_the_transaction_pooler(monkeypatch):
+    monkeypatch.setattr(notification_stream.db_mod, "_DATABASE_URL", "postgresql+psycopg" + TX[len("postgresql"):])
+    monkeypatch.setenv("DATABASE_SESSION_URL", SESSION)
+    assert notification_stream._dsn() == SESSION
+    monkeypatch.delenv("DATABASE_SESSION_URL")
+    assert notification_stream._dsn() == TX  # 비우면 예전처럼 DATABASE_URL 하나
+
+
+def test_transaction_pooler_detection_is_port_and_host_specific():
+    assert notification_stream._transaction_pooler(TX)
+    assert not notification_stream._transaction_pooler(SESSION)
+    assert not notification_stream._transaction_pooler("postgresql://u:p@db.example.com:6543/postgres")
+    assert not notification_stream._transaction_pooler("not a url")
+
+
+def test_listener_is_skipped_rather_than_silently_deaf_on_the_transaction_pooler(monkeypatch, caplog):
+    monkeypatch.setattr(notification_stream.db_mod, "database_dialect", lambda: "postgresql")
+    monkeypatch.setattr(notification_stream.db_mod, "_DATABASE_URL", TX)
+    monkeypatch.delenv("DATABASE_SESSION_URL", raising=False)
+    monkeypatch.setattr(notification_stream, "_listener_task", None)
+
+    async def run():
+        return notification_stream.start()
+
+    with caplog.at_level("WARNING", logger=notification_stream.__name__):
+        assert asyncio.run(run()) is None
+    assert "notification listener skipped" in caplog.text
+    assert notification_stream._listener_task is None

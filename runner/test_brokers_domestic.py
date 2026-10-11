@@ -416,8 +416,7 @@ class RehearsalTests(unittest.TestCase):
 
     def test_ip_class_errors_name_the_allowed_ip_before_the_key(self):
         for exchange, name in (("upbit", "no_authorization_ip"), ("upbit", "invalid_access_key"),
-                               ("upbit", "jwt_verification"), ("bithumb", "NotAllowIP"),
-                               ("bithumb", "jwt_verification")):
+                               ("bithumb", "NotAllowIP")):
             with self.subTest(exchange=exchange, name=name):
                 broker = self.broker(exchange)
                 self.session.post.return_value = exchange_error(name, "허용되지 않은 IP")
@@ -426,6 +425,21 @@ class RehearsalTests(unittest.TestCase):
                 self.assertFalse(ok)
                 self.assertIn("허용 IP", reason)
                 self.assertLess(reason.index("허용 IP"), reason.index("API 키"))
+
+    def test_jwt_verification_names_secret_signature_not_ip_or_key_expiration(self):
+        for exchange in ("upbit", "bithumb"):
+            with self.subTest(exchange=exchange):
+                broker = self.broker(exchange)
+                self.session.post.return_value = exchange_error("jwt_verification", status=400)
+                self.session.get.return_value = exchange_error("jwt_verification", status=400)
+                ok, reason = broker.rehearse(notional=10_000.0)
+                self.assertFalse(ok)
+                self.assertIn("JWT", reason)
+                self.assertIn("시크릿", reason)
+                self.assertIn("서명", reason)
+                self.assertNotIn("허용 IP", reason)
+                self.assertNotIn("만료", reason)
+                self.assertTrue(brokers._is_access_error(brokers.DomesticApiError(400, "jwt_verification", "fixture")))
 
     def test_minimum_order_amount_is_named(self):
         broker = self.broker()
@@ -446,6 +460,28 @@ class RehearsalTests(unittest.TestCase):
         self.assertNotIn("허용 IP", reason)
         self.session.post.return_value = exchange_error("expired_access_key")
         self.assertIn("만료", broker.rehearse(notional=10_000.0)[1])
+
+    def test_bithumb_expired_jwt_is_not_an_expired_api_key_or_reissue_instruction(self):
+        broker = self.broker("bithumb")
+        self.session.get.return_value = exchange_error("expired_jwt")
+        ok, reason = broker.rehearse(notional=10_000.0)
+        self.assertFalse(ok)
+        self.assertIn("JWT", reason)
+        self.assertIn("timestamp", reason)
+        self.assertIn("시각", reason)
+        self.assertNotIn("API 키가 만료", reason)
+        self.assertNotIn("재발급", reason)
+        self.assertNotIn("연장", reason)
+        self.session.post.assert_not_called()
+
+    def test_expired_access_key_requires_reissue_not_an_unsupported_extension(self):
+        for exchange in ("upbit", "bithumb"):
+            with self.subTest(exchange=exchange):
+                reason = brokers._explain_domestic_error(exchange, 401, "expired_access_key", "fixture")
+                self.assertIn("API 키가 만료", reason)
+                self.assertIn("삭제", reason)
+                self.assertIn("발급", reason)
+                self.assertNotIn("연장", reason)
 
     def test_unrecognised_error_keeps_the_exchanges_own_words(self):
         broker = self.broker()

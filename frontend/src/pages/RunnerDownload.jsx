@@ -3,13 +3,14 @@ import { Link, useLocation, useNavigate, useSearchParams } from "react-router-do
 import { api } from "../api.js";
 import RunnerSessions from "../components/RunnerSessions.jsx";
 import RunnerDeviceHandoff from "../components/RunnerDeviceHandoff.jsx";
+import ExchangeConnectionGuide from "../components/ExchangeConnectionGuide.jsx";
 import { getAuthUser, updateAuthUser, useAuth } from "../lib/auth.js";
 import { RULE_TYPES } from "../lib/macro.js";
 import { getUserId } from "../lib/user.js";
 import { fmtSize, isRunnerOpened, markRunnerOpened, useRunnerDownload } from "../lib/runnerDownload.js";
 import { findLaunchedSession, launchPhaseFromTicketStatus } from "../lib/runnerLaunch.js";
 import { getRunnerDevice } from "../lib/runnerDevice.js";
-import { launchMinVersionFor, runnerExecutionMarket, runnerKeyGuide } from "../lib/runnerGuide.js";
+import { launchMinVersionFor, runnerExecutionMarket, runnerKeyGuide, RUNNER_KEY_STORAGE_NOTE } from "../lib/runnerGuide.js";
 import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 import { Icon } from "../components/icons.jsx";
 
@@ -46,8 +47,8 @@ function buildCopy(guide) {
       description: guide.pickDescription,
     },
     {
-      eyebrow: "실행 전에 한 번만",
-      title: <>{guide.exchangeName} 키를<br /><span>먼저 준비해요.</span></>,
+      eyebrow: guide.domestic ? "키 연결은 실행기에서" : "실행 전에 한 번만",
+      title: guide.domestic ? <>실행기부터 준비하고<br /><span>키 연결을 마쳐요.</span></> : <>{guide.exchangeName} 키를<br /><span>먼저 준비해요.</span></>,
       description: guide.keyDescription,
     },
     {
@@ -402,7 +403,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
   ), [library, preferredSourceRef, selectedId]);
   const keyGuide = useMemo(() => runnerKeyGuide(selected?.macro), [selected?.macro]);
   const apiKeyGuideStorageKey = keyGuide.storageKey;
-  const gatedStep = requestedStep > STEP_API_KEY && !apiKeyPrepared ? STEP_API_KEY : requestedStep;
+  const gatedStep = !keyGuide.domestic && requestedStep > STEP_API_KEY && !apiKeyPrepared ? STEP_API_KEY : requestedStep;
   const step = signedIn && selected ? gatedStep : STEP_MACRO;
   const copy = buildCopy(keyGuide)[step];
   // 직접 만들기 가이드에서 이어진 경우(flow=build) 8단계 통합 진행바를 쓴다.
@@ -425,11 +426,16 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
   const launchMinVersion = launchMinVersionFor(keyGuide, { general: requiredRunnerVersion, domestic: domesticMinVersion });
 
   useEffect(() => {
+    if (keyGuide.domestic) {
+      setApiKeyChecked(false);
+      setApiKeyPrepared(false);
+      return;
+    }
     let acknowledged = false;
     try { acknowledged = window.localStorage.getItem(apiKeyGuideStorageKey) === "acknowledged"; } catch { /* 막힌 저장소 */ }
     setApiKeyChecked(acknowledged);
     setApiKeyPrepared(acknowledged);
-  }, [apiKeyGuideStorageKey]);
+  }, [apiKeyGuideStorageKey, keyGuide.domestic]);
 
   const mergePerformanceHints = useCallback((items) => {
     return items.map((item) => {
@@ -689,7 +695,8 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
     if (!apiKeyChecked) return;
     try { window.localStorage.setItem(apiKeyGuideStorageKey, "acknowledged"); } catch { /* 막힌 저장소 — 이번 방문에만 기억 */ }
     setApiKeyPrepared(true);
-    moveTo(STEP_RUNNER);
+    if (runnerReady) void openRunnerAndContinue();
+    else moveTo(STEP_RUNNER);
   }
 
   // '연결·실행으로 계속'을 누르면 실행기(exe)를 바로 열고 다음 화면으로 넘어간다.
@@ -887,7 +894,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
 
   function renderRunnerScene() {
     const status = runnerReady
-      ? "준비됨"
+      ? "준비 확인 기록 있음"
       : downloadStarted
         ? "첫 실행 확인"
         : runnerDownloadState === "loading"
@@ -899,7 +906,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
               : "배포 정보 없음";
     const mark = runnerReady ? <Icon name="check" size={18} strokeWidth={2.5} /> : runnerDownloadState === "loading" ? "…" : runnerAvailable ? <Icon name="download" size={18} /> : "—";
     const heading = runnerReady
-      ? "실행기 받기를 눌렀어요. 받은 파일을 한 번 직접 실행했다면 준비된 거예요."
+      ? "이 브라우저에서 실행기를 준비했다고 확인한 기록이 있어요."
       : downloadStarted
         ? "다운로드한 실행기를 한 번 열어 주세요."
         : runnerDownloadState === "loading"
@@ -930,7 +937,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
             <dt>배포 상태</dt>
             <dd>
               {runnerReady
-                ? "받기를 눌렀음 · 실제 버전은 실행기 창 제목에서 확인"
+                ? "사용자가 준비했다고 확인함 · 실제 설치·실행 여부를 감지한 것은 아님"
                 : runnerDownloadState === "loading"
                   ? "확인 중"
                   : runnerDownloadState === "available"
@@ -967,7 +974,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
             ) : null}
           </div>
         ) : runnerReady ? (
-          <p className="runner-wizard-runner-ready-note">실행기를 한 번 열어 웹에서 바로 연결할 준비가 됐어요.</p>
+          <p className="runner-wizard-runner-ready-note">기록만으로 실제 실행기 상태를 확인하지 않아요. 창 제목의 버전을 확인한 뒤 계속하세요.</p>
         ) : null}
       </Workspace>
     );
@@ -994,7 +1001,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
           <span className="runner-wizard-api-domain">공식 페이지 · {keyGuide.domain} · 새 탭</span>
         </div>
 
-        <ol className="runner-wizard-api-steps" aria-label={keyGuide.stepsLabel}>
+        {keyGuide.domestic ? <ExchangeConnectionGuide key={keyGuide.exchange} exchange={keyGuide.exchange} /> : <ol className="runner-wizard-api-steps" aria-label={keyGuide.stepsLabel}>
           {keyGuide.steps.map(([title, description], index) => (
             <li key={title}>
               <span className="num">{String(index + 1).padStart(2, "0")}</span>
@@ -1004,14 +1011,14 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
               </div>
             </li>
           ))}
-        </ol>
+        </ol>}
 
         <div className="runner-wizard-api-security" role="note">
           <strong>이 웹에는 키를 붙여넣지 마세요.</strong>
-          <p>API Key와 Secret Key는 다음에 열리는 내 PC의 실행기 창에만 직접 입력해요. 빠른 실행에는 출금 권한도 필요하지 않아요. 실행기를 닫으면 키 입력값도 저장되지 않아요.</p>
+          <p>{RUNNER_KEY_STORAGE_NOTE} 출금 권한은 필요하지 않지만, 주문 권한만으로도 거래 손실이 발생할 수 있어요.</p>
         </div>
 
-        <label className={`runner-wizard-api-check ${apiKeyChecked ? "is-checked" : ""}`}>
+        {!keyGuide.domestic ? <label className={`runner-wizard-api-check ${apiKeyChecked ? "is-checked" : ""}`}>
           <input
             type="checkbox"
             checked={apiKeyChecked}
@@ -1028,7 +1035,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
             <strong>{keyGuide.checkTitle}</strong>
             <small>{keyGuide.checkNote}</small>
           </span>
-        </label>
+        </label> : <p className="t-small text-slate-700 mt-4">아직 키가 없어도 계속할 수 있어요. 실행기부터 준비하고 실거래 연결은 그 실행기에서 마쳐요.</p>}
       </Workspace>
     );
   }
@@ -1298,6 +1305,10 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
       return <button type="button" onClick={() => moveTo(STEP_API_KEY)} className="btn btn-l btn-primary runner-wizard-next">이 매크로 연결하기</button>;
     }
     if (step === STEP_API_KEY) {
+      if (keyGuide.domestic) {
+        if (runnerReady) return <button type="button" onClick={() => void openRunnerAndContinue()} className="btn btn-l btn-primary runner-wizard-next">실행기 연결로 바로가기</button>;
+        return <button type="button" onClick={() => moveTo(STEP_RUNNER)} className="btn btn-l btn-primary runner-wizard-next">실행기부터 준비하기</button>;
+      }
       return (
         <button
           type="button"
@@ -1305,7 +1316,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
           disabled={!apiKeyChecked}
           className="btn btn-l btn-primary runner-wizard-next"
         >
-          {apiKeyChecked ? "키 준비 완료 · 실행기 준비로 계속" : "키를 준비한 뒤 확인해 주세요"}
+          {apiKeyChecked ? runnerReady ? "키 준비 확인 · 실행기 연결로 바로가기" : "키 준비 완료 · 실행기 준비로 계속" : "키를 준비한 뒤 확인해 주세요"}
         </button>
       );
     }

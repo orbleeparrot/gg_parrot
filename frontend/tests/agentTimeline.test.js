@@ -132,6 +132,62 @@ test("a repeated source failure is one incident until the source recovers", () =
   assert.equal(state.events.length, 2);
 });
 
+test("a recovered whale incident is marked complete without leaving a current retry warning", () => {
+  let state = advance(null, { featureStates: { whale_activity: { error: "offline", data: null } } });
+  state = advance(state, { receivedAt: 2000, featureStates: { whale_activity: { data: { status: "empty", items: [] } } } });
+  assert.equal(state.events.length, 1);
+  assert.equal(state.events[0].resolvedAt, 2000);
+  assert.equal(state.events[0].severity, "info");
+  assert.match(state.events[0].title, /복구/);
+  assert.doesNotMatch(state.events[0].title, /확인 중|재시도/);
+  assert.equal(state.events[0].occurredAt, 1000);
+  assert.equal(state.conditions["whale-connection"], undefined);
+  state = advance(state, { receivedAt: 3000, featureStates: { whale_activity: { error: "offline", data: null } } });
+  assert.equal(state.events.length, 2);
+  assert.equal(state.events[0].resolvedAt, 2000);
+  assert.equal(state.events[1].resolvedAt, undefined);
+  assert.equal(state.events[1].severity, "warning");
+  assert.equal(state.conditions["whale-connection"], "unavailable");
+});
+
+test("unsupported response closes an old whale transport incident honestly", () => {
+  let state = advance(null, { featureStates: { whale_activity: { error: "offline" } } });
+  state = advance(state, { featureStates: { whale_activity: { data: {
+    status: "unavailable", error: "unsupported_pair", symbol: "KRW-ORCA", items: [],
+  } } } });
+  assert.equal(state.events.length, 1);
+  assert.match(state.events[0].summary, /지원하지 않/);
+  assert.doesNotMatch(state.events[0].title, /연결 복구|확인 중/);
+  assert.ok(state.events[0].resolvedAt);
+});
+
+test("news recovery marks the old warning complete and keeps its original timestamp", () => {
+  let state = advance(null, { featureStates: { position_news: { status: "error" } } });
+  state = advance(state, { receivedAt: 3000, featureStates: { position_news: {
+    status: "ready", data: { items: [], collection: { status: "empty", freshness: "fresh" } },
+  } } });
+  assert.equal(state.events.length, 1);
+  assert.match(state.events[0].title, /복구/);
+  assert.equal(state.events[0].resolvedAt, 3000);
+  assert.equal(state.events[0].occurredAt, 1000);
+});
+
+test("a pending collector is not proof that the failed news source recovered", () => {
+  let state = advance(null, { featureStates: { position_news: { status: "ready",
+    data: { items: [], collection: { status: "error" } },
+  } } });
+  state = advance(state, { featureStates: { position_news: { status: "ready",
+    data: { items: [], collection: { status: "pending" } },
+  } } });
+  assert.equal(state.events.length, 1);
+  assert.equal(state.events[0].resolvedAt, undefined);
+  assert.equal(state.conditions["news-connection"], "source_error");
+  state = advance(state, { featureStates: { position_news: { status: "ready",
+    data: { items: [], collection: { status: "empty", freshness: "fresh" } },
+  } } });
+  assert.ok(state.events[0].resolvedAt);
+});
+
 test("whale collection retries and stale reads remain one incident until a successful snapshot", () => {
   const response = (data, error = "") => ({ whale_activity: { data, error } });
   let state = advance(null, { featureStates: response(null, "offline") });

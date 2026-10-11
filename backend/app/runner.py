@@ -841,14 +841,14 @@ def mark_stopped(
                 "kind": "stop",
                 "message": ("오류 종료" if row.status == "error" else "종료")
                 + (f" · {row.note}" if row.note else "")
-                + f" · 누적 실현손익 {row.realized_pnl:+.2f} USDT"
+                + f" · 누적 실현손익 {realized_pnl_text(row)}"
                 + (" · 포지션 보유 중" if row.in_position else ""),
             }])
             notifications_mod.notify(
                 db, user.id, "agent",
                 f"{row.symbol} 매크로 {'오류 종료' if row.status == 'error' else '실행 종료'}",
                 (f"{row.note} · " if row.note else "")
-                + f"누적 실현손익 {row.realized_pnl:+.2f} USDT"
+                + f"누적 실현손익 {realized_pnl_text(row)}"
                 + (" · 포지션 보유 중" if row.in_position else ""),
                 "/agents", session_id=row.id,
                 data={"event": "error" if row.status == "error" else "stop",
@@ -1007,6 +1007,21 @@ def total_return_pct(row: RunSession) -> Optional[float]:
     if row.in_position and row.position_qty > 0 and row.entry_price > 0:
         unrealized = row.position_qty * row.entry_price * float(row.unrealized_pct or 0.0) / 100.0
     return round((float(row.realized_pnl or 0.0) + unrealized) / invested * 100.0, 4)
+
+
+def realized_pnl_text(row: RunSession) -> str:
+    """누적 실현손익을 **그 세션의 돈 단위**로 적는다.
+
+    2026-10-12: 거래소를 안 보고 "USDT" 를 글자로 박아 두어, 업비트·빗썸 세션의 알림과 실행
+    로그가 원화 손익을 달러로 찍었다(화면 본문은 처음부터 맞았다 — 틀린 건 이 두 자리뿐).
+
+    RunSession 에는 거래소 칸이 없다. 국내 매크로는 스키마(validate_symbol)가 ``KRW-*`` 형식만
+    허용하고 바이낸스 종목은 그 접두사를 쓸 수 없으므로, 종목명으로 가르는 것이 거래소로
+    가르는 것과 같다. 자릿수는 화면과 맞춘다(원화 0자리 · USDT 2자리).
+    """
+    if str(row.symbol or "").upper().startswith("KRW-"):
+        return f"{row.realized_pnl:+,.0f} KRW"
+    return f"{row.realized_pnl:+.2f} USDT"
 
 
 def _strategy_levels(row: RunSession, macro: Optional[dict]) -> dict:

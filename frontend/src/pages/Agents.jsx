@@ -342,12 +342,17 @@ function AccountAgents() {
     [activePositionNews, whaleActivity, runnerLog],
   );
 
+  // strategy_levels 는 서버가 체크포인트의 전략 상태로 계산한 **실제** 가격선이다.
+  // 넘기지 않으면 화면이 '지금 가격에 진입한다고 가정한' 미리보기 선을 실행 화면에 그린다 —
+  // E 눌림목에서 그 선이 가격을 따라 내려와 "곧 살 것처럼" 보였다.
   const chartOverlay = useCallback((candles) => computeSessionOverlay(
     macro,
     selected?.in_position ? selected.entry_price : null,
     selected?.position_side || macro?.position_side,
     candles,
-  ), [macro, selected?.entry_price, selected?.in_position, selected?.position_side]);
+    selected?.strategy_levels || null,
+  ), [macro, selected?.entry_price, selected?.in_position, selected?.position_side,
+      selected?.strategy_levels]);
 
   function changeSession(id) {
     const next = new URLSearchParams(searchParams);

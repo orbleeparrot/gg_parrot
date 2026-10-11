@@ -15,6 +15,12 @@ def _now_ms() -> int:
     return int(datetime.now(timezone.utc).timestamp() * 1000)
 
 
+def sim_strategy_state(sim) -> dict:
+    """봉에서 다시 못 구하는 전략 상태(E 의 기준가·고점·발동). 없는 sim 은 빈 칸."""
+    getter = getattr(sim, "strategy_state", None)
+    return dict(getter() or {}) if getter is not None else {}
+
+
 def sim_state(sim) -> dict:
     """state() 가 없는 시뮬레이터(테스트 더미 등)에는 '포지션 없음' 기본값."""
     getter = getattr(sim, "state", None)
@@ -163,6 +169,10 @@ class StrategyDriver:
             if "dca_next_buy_ms" in st:
                 legs[-1]["dca_next_buy_ms"] = st["dca_next_buy_ms"]
                 legs[-1]["dca_stopped"] = bool(st.get("dca_stopped"))
+            strategy = sim_strategy_state(leg.sim)
+            if strategy:
+                # 비어 있으면 아예 안 싣는다 — 쓰지 않는 규칙의 state_json 을 바꾸지 않는다.
+                legs[-1]["strategy"] = strategy
             if st["cooldown_until_ms"] is not None:
                 cooldowns.append(int(st["cooldown_until_ms"]))
         last = self.last_fill or {}
@@ -189,6 +199,11 @@ class StrategyDriver:
                 restore(equity, in_position=bool(st.get("in_position")), qty=float(st.get("qty") or 0.0),
                         entry_price=float(st.get("entry_price") or 0.0), last_price=float(st.get("last_price") or 0.0),
                         cooldown_until_ms=state.get("cooldown_until_ms"))
+            # 전략 상태는 **장부 복구 뒤**에 — 웜업이 재생으로 덮어 둔 값을 체크포인트로 되돌린다.
+            # 옛 state_json 에는 이 칸이 없고, 그때는 예전처럼 웜업이 남긴 값을 쓴다.
+            restore_strategy = getattr(leg.sim, "restore_strategy", None)
+            if restore_strategy is not None:
+                restore_strategy(st.get("strategy"))
             restore_schedule = getattr(leg.sim, "restore_dca_schedule", None)
             if restore_schedule is not None and "dca_next_buy_ms" in st:
                 restore_schedule(st["dca_next_buy_ms"], stopped=bool(st.get("dca_stopped")))

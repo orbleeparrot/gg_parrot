@@ -160,6 +160,38 @@ function crossSignals(a, b, isShort, upCond, downCond) {
 const priceLine = (price, color, label, dash) =>
   ok(price) && price > 0 ? { price, color, label, dash } : null;
 
+// --- 돌고 있는 전략이 지금 보는 선 (2026-10-12) -------------------------
+// 서버(engine/live_levels.py)가 체크포인트의 전략 상태로 계산해 보낸 값만 그린다.
+// 예전에는 화면이 `마지막 종가 × (1 - dip/100)` 으로 '진입 목표' 를 그렸다. 엔진은 평평해진
+// 순간 잡힌 **고정 기준가**를 보는데 선은 현재가를 따라 내려가서, 떨어지는 장에서는 영원히
+// 안 닿는 선이 "곧 살 것처럼" 보였다. 그래서 여기서는 계산하지 않고 받은 값만 쓴다.
+export function liveLevelsOverlay(levels) {
+  if (!levels) return null;
+  const entry = num(levels.entry_target);
+  const stop = num(levels.trail_stop);
+  const activation = num(levels.trail_activation);
+  const legend = [];
+  const priceLines = [];
+  const notes = [];
+  if (ok(entry) && entry > 0) {
+    legend.push({ label: "진입 목표", color: UP, dash: "5 3" });
+    priceLines.push({ price: entry, color: UP, dash: "5 3", label: `진입 목표 ${fmtPrice(entry)}` });
+    notes.push("가격이 이 선까지 내려오면 사요. 이 선은 기준가에 묶여 있어 가격을 따라 내려오지 않아요.");
+  }
+  if (ok(stop) && stop > 0) {
+    legend.push({ label: "트레일링 스탑", color: DOWN, dash: "5 3" });
+    priceLines.push({ price: stop, color: DOWN, dash: "5 3", label: `트레일링 스탑 ${fmtPrice(stop)}` });
+    notes.push("이익을 지키는 선이에요. 고점이 올라가면 이 선도 따라 올라가요.");
+  }
+  if (ok(activation) && activation > 0) {
+    legend.push({ label: "트레일 발동", color: UP, dash: "2 3" });
+    priceLines.push({ price: activation, color: UP, dash: "2 3", label: `트레일 발동 ${fmtPrice(activation)}` });
+    notes.push("여기까지 오르면 트레일링 스탑이 켜져요. 그 전에는 켜지지 않아요.");
+  }
+  if (priceLines.length === 0) return null;
+  return { legend, priceLines, note: notes.join(" ") };
+}
+
 // --- 내 평단(마이페이지 실행 세션용) -----------------------------------
 export function entryPriceOverlay(entryPrice, side) {
   const p = num(entryPrice);
@@ -190,20 +222,30 @@ function flattenMacro(macro, sideFallback) {
 
 // 마이페이지 실행 세션용 — 빌더와 똑같은 전략 보조지표에 내 평단선을 얹어 합친다.
 // macro 가 없으면(옛 실행기 세션) 평단선만, 포지션이 없으면 전략 보조지표만 그린다.
-export function computeSessionOverlay(macro, entryPrice, side, candles) {
+export function computeSessionOverlay(macro, entryPrice, side, candles, levels = null) {
   const form = flattenMacro(macro, side);
   const base = form ? computeStrategyOverlay(form, candles) : null;
   const entry = entryPriceOverlay(entryPrice, side || macro?.position_side);
-  if (!base && !entry) return null;
+  const live = liveLevelsOverlay(levels);
+  if (!base && !entry && !live) return null;
+  // 서버가 실제 선을 보내 줬으면 미리보기(가정)로 그린 선·띠는 버린다 — 둘을 같이 그리면
+  // 같은 이름의 선이 두 개가 되고, 그중 하나는 거짓이다. 지표(series·rsi)는 그대로 둔다.
   return {
-    legend: [...(base?.legend || []), ...(entry?.legend || [])],
-    priceLines: [...(base?.priceLines || []), ...(entry?.priceLines || [])],
-    series: base?.series || [],
-    bands: base?.bands || [],
-    markers: base?.markers || [],
+    legend: [...(live ? [] : base?.legend || []), ...(live?.legend || []), ...(entry?.legend || [])],
+    priceLines: [...(live ? [] : base?.priceLines || []), ...(live?.priceLines || []), ...(entry?.priceLines || [])],
+    series: live ? strippedSeries(base) : base?.series || [],
+    bands: live ? [] : base?.bands || [],
+    markers: live ? [] : base?.markers || [],
     rsi: base?.rsi || null,
-    note: [base?.note, entry?.note].filter(Boolean).join(" "),
+    note: [live ? null : base?.note, live?.note, entry?.note].filter(Boolean).join(" "),
   };
+}
+
+// 미리보기 전용 보조선(E 의 '가정된' 트레일링 스탑선처럼 가격에서 되짚어 만든 것)은 버리고,
+// 조건을 그대로 보여 주는 지표선(이동평균·볼린저 등)만 남긴다.
+const PREVIEW_ONLY_SERIES = new Set(["trail"]);
+function strippedSeries(base) {
+  return (base?.series || []).filter((item) => !PREVIEW_ONLY_SERIES.has(item.id));
 }
 
 // --- 매매 방식별 보조지표 ----------------------------------------------

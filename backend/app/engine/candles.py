@@ -214,6 +214,24 @@ class CandleSim:
             "halted_today": self._halted_day is not None and self._halted_day == self._day,
         }
 
+    # -- 전략 상태 체크포인트 ---------------------------------------------
+    # 2026-10-12: 장부(수량·평단·현금)만 저장하던 것을 고친다. 지표는 웜업이 과거 봉으로
+    # 다시 채우지만, **봉에서 다시 못 구하는 전략 상태**는 웜업으로 복원되지 않는다 —
+    # E 의 눌림목 기준가·고점·트레일 발동이 그렇다. 그래서 재배포 뒤 트레일링이 고점을
+    # 잊고 발동 전으로 돌아가, 복원된 평단 기준으로 다시 활성화%를 찍어야 켜졌다.
+    #
+    # 기본은 빈 칸이다 — 쓰는 규칙만 덮어쓴다(지금은 E). 다른 규칙의 상태는 후속 작업.
+    def strategy_state(self) -> dict:
+        return {}
+
+    def restore_strategy(self, state: Optional[dict]) -> None:
+        """체크포인트의 전략 상태로 되돌린다. **warmup() 뒤에 불러야 한다**(웜업이 재생으로 덮는다).
+
+        없는 칸과 ``None`` 은 '모름' 으로 보고 지금 값(웜업이 남긴 값)을 그대로 둔다 —
+        옛 state_json 으로 복구할 때 예전 동작과 같아야 하기 때문이다.
+        """
+        return None
+
     # -- 실봉 웜업 ---------------------------------------------------------
     def reset_book(self) -> None:
         """장부·포지션·공통 리스크 상태를 시작값으로. 지표 상태는 건드리지 않는다(웜업용)."""
@@ -498,6 +516,20 @@ class TrailingSim(CandleSim):
         self._peak = 0.0
         self._armed = False
         self._ref = None
+
+    # 봉에서 다시 구할 수 없는 셋 — 체크포인트가 실어 보내야 재기동에서 살아남는다.
+    def strategy_state(self) -> dict:
+        return {"dip_ref": self._ref, "peak": float(self._peak), "armed": bool(self._armed)}
+
+    def restore_strategy(self, state: Optional[dict]) -> None:
+        if not state:
+            return
+        if state.get("dip_ref") is not None:
+            self._ref = float(state["dip_ref"])
+        if state.get("peak") is not None:
+            self._peak = float(state["peak"])
+        if state.get("armed") is not None:
+            self._armed = bool(state["armed"])
 
     def _strategy(self, o, h, l, c, ts, fills):
         if self._common_risk(o, h, l, c, ts, fills):
@@ -1145,6 +1177,13 @@ class LiveCandleSim:
 
     def state(self) -> dict:
         return self.inner.state()
+
+    # 래퍼에 안 달면 실시간 세션에서 전략 상태가 조용히 빈 칸이 된다(bundle_gate 와 같은 자리).
+    def strategy_state(self) -> dict:
+        return self.inner.strategy_state()
+
+    def restore_strategy(self, state: Optional[dict]) -> None:
+        self.inner.restore_strategy(state)
 
     def restore(self, equity: float, *, in_position: bool, qty: float, entry_price: float,
                 last_price: float, cooldown_until_ms: Optional[int] = None) -> None:

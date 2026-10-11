@@ -1006,6 +1006,29 @@ def total_return_pct(row: RunSession) -> Optional[float]:
     return round((float(row.realized_pnl or 0.0) + unrealized) / invested * 100.0, 4)
 
 
+def _strategy_levels(row: RunSession, macro: Optional[dict]) -> dict:
+    """화면이 그릴 가격선 — 체크포인트의 전략 상태에서만 낸다(engine.live_levels 가 한 곳).
+
+    화면이 직접 계산하면 규칙 산수가 두 벌이 된다. 실제로 그 일이 있었다: E 눌림목의
+    '진입 목표 -3%' 를 화면이 **현재가** 기준으로 그려 가격을 따라 영원히 내려왔다.
+    모르면 전부 None 이다 — 추측해서 그리면 거짓이 된다.
+    """
+    from .engine.live_levels import EMPTY, strategy_levels
+    if not macro:
+        return dict(EMPTY)
+    try:
+        parsed = Macro.model_validate(macro)
+    except Exception:
+        return dict(EMPTY)
+    from .paper import parse_state  # 늦은 import: paper ↔ runner 순환 방지
+    legs = (parse_state(getattr(row, "state_json", "")) or {}).get("legs") or []
+    leg = next((item for item in legs if item.get("symbol") == row.symbol), None) or (legs[0] if legs else {})
+    try:
+        return strategy_levels(parsed, leg.get("strategy"), float(row.entry_price or 0.0))
+    except Exception:
+        return dict(EMPTY)
+
+
 def _session_view(row: RunSession) -> dict:
     connected = _is_connected(row)
     # 실행기가 종료 명령을 받아 정리 중인 상태(플래그는 섰지만 아직 확정 보고 전).
@@ -1055,6 +1078,8 @@ def _session_view(row: RunSession) -> dict:
         "pinned": bool(getattr(row, "pinned", False)),
         "started_kst": _kst_label(row.started_at),
         "heartbeat_kst": _kst_label(row.last_heartbeat_at),
+        # 돌고 있는 전략이 지금 보는 가격선(E 의 진입 목표 · 트레일 발동 · 스탑선).
+        "strategy_levels": _strategy_levels(row, macro),
         "stopped_kst": _kst_label(row.stopped_at or ""),
     }
 

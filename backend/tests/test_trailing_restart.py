@@ -403,3 +403,106 @@ def test_partial_strategy_block_keeps_the_current_values(rule, params):
         partial = {k: v for k, v in before.items() if k != key}
         sim.restore_strategy(partial)
         assert sim.strategy_state() == before, f"'{key}' 가 없을 때 다른 칸이 지워졌다"
+
+
+# ===========================================================================
+#  F · G · J 의 '다음 봉 시가 실행' 의도 (2026-10-12)
+# ===========================================================================
+# 지표형 셋은 마감봉에서 의도(_pending)를 정하고 다음 봉 시가에 실행한다. 지표 자체는
+# 웜업이 과거 봉으로 다시 만들지만, **의도는 포지션 여부로 갈린다**(보유 중이면 "exit",
+# 비었으면 "enter"). 그래서 재생의 포지션이 실제와 다르면 의도가 통째로 뒤바뀐다.
+#
+# execute_pending 이 양쪽을 막아 주므로(exit 는 보유 중일 때만, enter 는 무포지션일 때만)
+# 중복 매수나 없는 물량 매도는 안 난다. 대신 **정해 둔 청산이 조용히 사라진다.**
+
+_INDICATOR_RULES = [
+    ("F", {"rsi_period": 2, "entry_threshold": 30, "exit_threshold": 70}),
+    ("G", {"bb_period": 2, "bb_std": 0.5, "strategy": "reversion", "exit_target": "mid"}),
+    ("J", {"ma_type": "SMA", "fast_period": 2, "slow_period": 3}),
+]
+
+
+@pytest.mark.parametrize("rule,params", _INDICATOR_RULES)
+def test_indicator_sims_carry_the_pending_intent(rule, params):
+    macro = _m(rule, params)
+    live = _drive(macro, [(0, 100, 100, 100, 100), (3_600_000, 100, 101, 99, 101)])
+    sim = live.legs[0].sim
+    # 의도를 직접 세운다 — 어떤 지표 조합이든 "마감봉에서 정하고 아직 실행 안 한" 상태다.
+    sim.inner._pending = "exit"
+    sim.inner._signal_note = "시험용 근거"
+    saved = live.state()
+    assert saved["legs"][0]["strategy"]["pending"] == "exit", f"{rule} 이 의도를 안 싣는다"
+
+    reborn = _drive(macro, [(0, 100, 100, 100, 100)])
+    reborn.legs[0].sim.inner._pending = "enter"        # 재생이 남긴 반대 의도
+    reborn.restore(saved, leg_equity={}, total_equity=live.equity)
+    assert reborn.legs[0].sim.inner._pending == "exit", "재생의 의도가 실제 의도를 덮었다"
+    assert reborn.legs[0].sim.inner._signal_note == "시험용 근거"
+
+
+@pytest.mark.parametrize("rule,params", _INDICATOR_RULES)
+def test_pending_none_is_carried_too(rule, params):
+    """'의도 없음' 도 상태다 — 재생이 남긴 의도를 그대로 두면 없던 주문이 생긴다."""
+    macro = _m(rule, params)
+    live = _drive(macro, [(0, 100, 100, 100, 100), (3_600_000, 100, 101, 99, 101)])
+    live.legs[0].sim.inner._pending = None
+    saved = live.state()
+    assert saved["legs"][0]["strategy"]["pending"] is None
+
+    reborn = _drive(macro, [(0, 100, 100, 100, 100)])
+    reborn.legs[0].sim.inner._pending = "enter"
+    reborn.restore(saved, leg_equity={}, total_equity=live.equity)
+    assert reborn.legs[0].sim.inner._pending is None, "없던 의도가 재생에서 살아났다"
+
+
+def test_a_decided_exit_survives_the_restart_and_actually_fires():
+    """핵심 회귀 — 보유 중에 정해 둔 청산이 재기동에서 사라지면 안 된다."""
+    macro = _m("J", {"ma_type": "SMA", "fast_period": 2, "slow_period": 3})
+    live = _drive(macro, [(0, 100, 100, 100, 100), (3_600_000, 101, 102, 101, 103),
+                          (7_200_000, 104, 106, 104, 106), (10_800_000, 107, 108, 106, 107)])
+    sim = live.legs[0].sim
+    assert sim.state()["in_position"] is True, "진입이 안 됐으면 이 시험이 공허하다"
+    sim.inner._pending = "exit"          # 마감봉에서 정했고 아직 시가 실행 전
+    saved = live.state()
+
+    reborn = _drive(macro, [(0, 100, 100, 100, 100)])   # 재생은 평평하게 끝났다
+    assert reborn.legs[0].sim.state()["in_position"] is False
+    reborn.restore(saved, leg_equity={}, total_equity=live.equity)
+    after = reborn.legs[0].sim
+    assert after.state()["in_position"] is True
+    assert after.inner._pending == "exit"
+    # 다음 봉이 오면 시가에 청산된다 — 의도를 잊었으면 그대로 들고 간다.
+    assert reborn.push_candle(macro.symbol, (14_400_000, 107, 107, 106, 106)) >= 1
+    assert after.state()["in_position"] is False, "정해 둔 청산이 사라졌다"
+
+
+@pytest.mark.parametrize("rule,params", _INDICATOR_RULES)
+def test_indicator_old_checkpoints_still_restore(rule, params):
+    macro = _m(rule, params)
+    live = _drive(macro, [(0, 100, 100, 100, 100), (3_600_000, 100, 101, 99, 101)])
+    saved = live.state()
+    assert saved["legs"][0].get("strategy"), f"{rule} 이 전략 상태를 안 싣는다"
+    for leg in saved["legs"]:
+        leg.pop("strategy", None)
+    reborn = _drive(macro, [(0, 100, 100, 100, 100)])
+    reborn.legs[0].sim.inner._pending = "enter"
+    reborn.restore(saved, leg_equity={}, total_equity=live.equity)
+    assert reborn.legs[0].sim.inner._pending == "enter", "옛 체크포인트는 예전처럼 웜업 값을 쓴다"
+
+
+@pytest.mark.parametrize("rule,params", _INDICATOR_RULES)
+def test_unknown_pending_value_becomes_no_intent(rule, params):
+    """state_json 은 버전을 넘어 살아남는 데이터다 — 모르는 의도는 '없음' 으로 읽는다.
+
+    그대로 담아 두면 다음에 의도가 하나 더 생겼을 때 옛 서버가 모르는 값을 들고 돈다.
+    """
+    macro = _m(rule, params)
+    sim = _drive(macro, [(0, 100, 100, 100, 100), (3_600_000, 100, 101, 99, 101)]).legs[0].sim
+    for junk in ("sell_everything", "", 0, [], {"a": 1}):
+        sim.inner._pending = "exit"
+        sim.restore_strategy({"pending": junk})
+        assert sim.inner._pending is None, f"{junk!r} 를 의도로 들고 있다"
+    # 아는 값 둘은 그대로 들어간다.
+    for good in ("enter", "exit"):
+        sim.restore_strategy({"pending": good})
+        assert sim.inner._pending == good

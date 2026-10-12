@@ -885,6 +885,25 @@ class _IndicatorSim(CandleSim):
         self.tp = self.p.get("take_profit")
         self._signal_note = ""  # 마지막 판정의 한 줄 근거 — Fill.reason 에 실린다
 
+    # 지표(연속 횟수 · 직전 차이 · 밴드폭)는 웜업이 과거 봉으로 다시 만든다. 못 만드는 것은
+    # **의도** 하나다: _pending 은 보유 여부로 갈리므로(보유 중이면 exit, 비었으면 enter)
+    # 재생의 포지션이 실제와 다르면 통째로 뒤바뀐다. execute_pending 이 양쪽을 막아 주어
+    # 중복 매수·없는 물량 매도는 안 나지만, **정해 둔 청산이 조용히 사라진다.**
+    #
+    # "의도 없음"(None)도 상태다. 그래서 pending 은 칸이 있으면 그대로 쓴다 — 다른 칸들의
+    # "None 은 모름" 규칙과 다르고, 그래서 키의 유무로 가른다.
+    def strategy_state(self) -> dict:
+        return {"pending": self._pending, "signal_note": str(self._signal_note or "")}
+
+    def restore_strategy(self, state: Optional[dict]) -> None:
+        if not state:
+            return
+        if "pending" in state:
+            value = state["pending"]
+            self._pending = value if value in ("enter", "exit") else None
+        if state.get("signal_note") is not None:
+            self._signal_note = str(state["signal_note"])
+
     def execute_pending(self, price: float, ts: datetime, mark: Optional[float] = None) -> List[Fill]:
         """직전 마감봉에서 정한 ``_pending`` 의도를 ``price`` 에 실행하고 의도를 지운다.
 

@@ -67,9 +67,12 @@ def _mkplan(risk_profile="balanced", symbols=("BTCUSDT",), market="spot", levera
 
 
 def test_templates_follow_profile_rules():
+    # 2026-10-12: 매매 방식 화이트리스트를 없앴다. 안정형이 8가지 중 4가지만 보던 탓에
+    # 후보가 57개(공격형 114개)였고, 그 좁은 풀이 "전무" 의 원인 하나였다. 성향은 이제
+    # 상한·점수로만 갈린다 — 남은 성향 제약은 선물 금지뿐이다.
     stable = ask.build_templates(_mkplan(risk_profile="stable", symbols=["BTCUSDT"], interval="4h"))
     types = {c.macro.rule_type.value for c in stable}
-    assert types == {"C", "J", "G", "A"}
+    assert types == set(ask.ALL_RULE_TYPES)
     assert all(c.macro.market == "spot" and c.macro.leverage == 1 for c in stable)
     assert all(c.macro.candle_interval == ("1d" if c.macro.rule_type.value == "C" else "4h")
                and c.macro.period.preset == "3m" for c in stable)
@@ -208,7 +211,7 @@ def test_ai_proposals_are_validated_and_filtered(monkeypatch):
 
     text = json.dumps({"macros": [
         {"rule_type": "J", "params": {"ma_type": "EMA", "fast_period": 12, "slow_period": 26, "initial_capital": 1000000}},
-        {"rule_type": "H", "params": {"base_order_size": 1, "safety_order_size": 1, "price_deviation": 1, "take_profit": 1, "initial_capital": 1000000}},  # 안정형 밖 → 폐기
+        {"rule_type": "B", "params": {"entry_price": 1, "take_profit_price": 2, "initial_capital": 1000000}},  # 물어볼까가 안 쓰는 방식 → 폐기
         {"rule_type": "J", "symbol": "SOLUSDT", "params": {"ma_type": "SMA", "fast_period": 5, "slow_period": 20, "initial_capital": 1000000}},  # 종목 바꿔치기 → 요청 종목으로 고정
         {"rule_type": "F", "params": {"rsi_period": "x"}},  # 스키마 불량 → 폐기
     ]})
@@ -221,7 +224,15 @@ def test_ai_proposals_are_validated_and_filtered(monkeypatch):
     assert all(c.macro.symbol == "BTCUSDT" and c.macro.candle_interval == "1d" and c.source == "ai" for c in out)
     assert all(c.macro.market == "spot" and c.macro.leverage == 1 for c in out)
     system = client_ok.messages.calls[0]["system"]
-    assert "추천" not in system and "C, J, G, A" in system
+    assert "추천" not in system and ", ".join(ask.ALL_RULE_TYPES) in system
+
+    # 방식 제한은 시장에만 남는다 — 선물 요청에 C(적립식)를 제안하면 폐기한다.
+    futures_req = _mkplan(risk_profile="aggressive", market="futures", leverage=2, symbols=["BTCUSDT"])
+    dca = _FakeClient(json.dumps({"macros": [
+        {"rule_type": "C", "params": {"amount_per_buy": 50_000, "interval_days": 3}},
+    ]}))
+    monkeypatch.setattr(ask, "get_ai_client", lambda: dca)
+    assert ask.propose_with_ai(futures_req) == []
 
     client_bad = _FakeClient("not json")
     monkeypatch.setattr(ask, "get_ai_client", lambda: client_bad)
@@ -376,30 +387,6 @@ def test_failed_ask_does_not_consume_session_budget(_fake_backtest, monkeypatch)
         assert row is not None and row.ask_count == 0
 
 
-def test_scalper_profile_candidates_use_short_presets_and_skip_slow_types():
-    req = _mkplan(risk_profile="scalper", symbols=["BTCUSDT"], period_preset="1w", interval="5m")
-    cands = ask.build_templates(req)
-    types = {c.macro.rule_type.value for c in cands}
-    assert types == {"A", "E", "F", "G", "J"}
-    a_first = next(c for c in cands if c.macro.rule_type.value == "A")
-    assert a_first.macro.params["take_profit_pct"] == 1.0 and a_first.macro.risk.stop_loss_pct == 0.7
-    e_first = next(c for c in cands if c.macro.rule_type.value == "E")
-    assert e_first.macro.risk.stop_loss_pct == 0.7
-    j_first = next(c for c in cands if c.macro.rule_type.value == "J")
-    assert (j_first.macro.params["ma_type"], j_first.macro.params["fast_period"], j_first.macro.params["slow_period"]) == ("EMA", 5, 13)
-    assert all(c.macro.candle_interval == "5m" and c.macro.period.preset == "1w" for c in cands)
-    # 기존 성향은 그대로 긴 프리셋
-    slow = ask.build_templates(_mkplan(risk_profile="aggressive", symbols=["BTCUSDT"]))
-    assert next(c for c in slow if c.macro.rule_type.value == "A").macro.params["take_profit_pct"] == 3
-
-
-# 예전엔 AskRequest 자체가 성향별 interval·period_preset 짝을 검증했지만(예: 단타형은 1분·5분·15분
-# 봉만), v2 에서 그 값은 클라이언트가 보내지 않고 to_period·to_interval 이 답변에서 계산해 늘 유효한
-# 짝만 만든다. 그 불변식은 test_horizon_maps_to_backtest_period·test_watch_maps_to_interval·
-# test_scalper_period_is_clamped_to_short_presets·test_scalper_watch_maps_to_short_intervals ·
-# test_every_reachable_pair_fits_backtest_bar_cap 가 대신 지킨다.
-
-
 def test_select_top_counts_trades_against_the_window_not_the_profile():
     # 2026-10-12: 성향마다 고정 거래 수를 요구하던 것을 봉 수 비례로 바꿨다. 같은 후보가
     # 짧은 창에서는 통과하고 긴 창에서는 모자란다 — 성향이 아니라 창이 가른다.
@@ -412,70 +399,18 @@ def test_select_top_counts_trades_against_the_window_not_the_profile():
             for e in ask.select_top(ev, "balanced", period="6m", interval="4h")] == ["J"]
 
 
-def test_scalper_ask_end_to_end(_fake_backtest, monkeypatch):
-    monkeypatch.setattr(ask.hotcoins, "get_cached_tickers", lambda: _fake_tickers())
-    monkeypatch.setattr(ask, "_candidate_ai", lambda: None)
-    token, _ = _signup()
-    client.post("/api/ask/consent", headers=_auth(token))
-    # invest_horizon="days" + watch_frequency="often" → to_period="1w", to_interval="1m"(1주에서만 허용) — v1 과 같은 조합.
-    flow = client.post("/api/ask/candidates",
-                       json=_candidates_body(risk_profile="scalper", invest_horizon="days", watch_frequency="often"),
-                       headers=_auth(token)).json()
-    res = client.post("/api/ask/macros", json={"session_id": flow["session_id"], "symbol": "BTCUSDT"},
-                      headers=_auth(token))
-    assert res.status_code == 200, res.text
-    data = res.json()
-    # _RETURNS: 거래 수 A 8·J 6·G 5·F 2·E 4 → 전부 10 미만이라 단타형 최소 거래 수에 걸려 결과 없음
-    assert data["results"] == []
-    with get_session() as db:
-        row = db.get(AskMacroSession, flow["session_id"])
-        assert row.candidate_count > 0
-
-
-def test_scalper_ask_returns_short_macros_when_trades_suffice(_fake_backtest, monkeypatch):
-    monkeypatch.setattr(ask.hotcoins, "get_cached_tickers", lambda: _fake_tickers())
-    monkeypatch.setattr(ask, "_candidate_ai", lambda: None)
-
-    def fake_run_any(macro):
-        # bh=0 — 홀딩 기준이 없으면 worth_the_macro 가 전부 떨어뜨린다. +4%p 로 문턱(3%p)을 넘긴다.
-        return _result(4, 2, trades=12, bh=0), [], "test", macro.period.preset
-
-    monkeypatch.setattr("app.main._run_any", fake_run_any)
-    token, _ = _signup()
-    client.post("/api/ask/consent", headers=_auth(token))
-    flow = client.post("/api/ask/candidates",
-                       json=_candidates_body(risk_profile="scalper", invest_horizon="days", watch_frequency="often"),
-                       headers=_auth(token)).json()
-    res = client.post("/api/ask/macros", json={"session_id": flow["session_id"], "symbol": "BTCUSDT"},
-                      headers=_auth(token))
-    assert res.status_code == 200, res.text
-    data = res.json()
-    results = data["results"]
-    assert len(results) == 3
-    rule_types = [r["rule_type"] for r in results]
-    assert len(set(rule_types)) == len(rule_types)
-    assert set(rule_types) <= {"A", "E", "F", "G", "J"}
-    for r in results:
-        macro = r["macro"]
-        assert macro["candle_interval"] == "1m"
-        assert macro["period"]["preset"] == "1w"
-        assert "fees" in macro and macro["fees"].get("commission_pct") is not None
-    assert data["remaining_today"] == 4
-
-
 def test_every_reachable_pair_fits_backtest_bar_cap():
     # v2 — 봉×기간 짝을 사람이 직접 보내지 않고 to_period·to_interval 이 답변(투자 기간·볼 빈도)에서
     # 계산한다. 그 계산이 만들 수 있는 모든 조합이 이 상한(MAX_BACKTEST_BARS)을 넘지 않는지 본다.
     now_ms = int(time.time() * 1000)
-    for profile in ask.PROFILES:
-        for horizon in ask.HORIZONS:
-            period = ask.to_period(profile, horizon)
-            for watch in ask.WATCH_LEVELS:
-                interval = ask.to_interval(profile, watch, period)
-                days = PERIOD_PRESET_DAYS[period]
-                start_ms = now_ms - days * 86_400_000
-                bars = _expected_bar_count(interval, start_ms, now_ms)
-                assert bars <= MAX_BACKTEST_BARS
+    for horizon in ask.HORIZONS:
+        period = ask.to_period(horizon)
+        for watch in ask.WATCH_LEVELS:
+            interval = ask.to_interval(watch, period)
+            days = PERIOD_PRESET_DAYS[period]
+            start_ms = now_ms - days * 86_400_000
+            bars = _expected_bar_count(interval, start_ms, now_ms)
+            assert bars <= MAX_BACKTEST_BARS, f"{horizon}·{watch} → {interval}×{period} = {bars}"
 
 
 # --- 포인트로 횟수 추가 (2026-09-22): 무료 5회 소진 후 1회 30P, 하루 추가 상한 5회 ---------------
@@ -566,32 +501,16 @@ def test_failed_candidates_returns_the_extra_credit(_fake_backtest, monkeypatch)
 
 
 def test_horizon_maps_to_backtest_period():
-    assert ask.to_period("balanced", "days") == "1w"
-    assert ask.to_period("balanced", "weeks") == "3m"
-    assert ask.to_period("balanced", "months") == "6m"
-    assert ask.to_period("balanced", "long") == "1y"
-
-
-def test_scalper_period_is_clamped_to_short_presets():
-    # 단타형은 짧은 구간만 — 1m 은 1개월이다(봉의 1분이 아니다)
-    assert ask.to_period("scalper", "days") == "1w"
-    assert ask.to_period("scalper", "weeks") == "1m"
-    assert ask.to_period("scalper", "months") == "1m"
-    assert ask.to_period("scalper", "long") == "1m"
+    assert ask.to_period("days") == "1w"
+    assert ask.to_period("weeks") == "3m"
+    assert ask.to_period("months") == "6m"
+    assert ask.to_period("long") == "1y"
 
 
 def test_watch_maps_to_interval():
-    assert ask.to_interval("balanced", "rarely", "6m") == "1d"
-    assert ask.to_interval("balanced", "sometimes", "6m") == "4h"
-    assert ask.to_interval("balanced", "often", "6m") == "1h"
-
-
-def test_scalper_watch_maps_to_short_intervals():
-    assert ask.to_interval("scalper", "rarely", "1m") == "15m"
-    assert ask.to_interval("scalper", "sometimes", "1m") == "5m"
-    # 1분 봉은 구간이 1주일 때만 — 아니면 5분으로 낮춘다
-    assert ask.to_interval("scalper", "often", "1w") == "1m"
-    assert ask.to_interval("scalper", "often", "1m") == "5m"
+    assert ask.to_interval("rarely", "6m") == "1d"
+    assert ask.to_interval("sometimes", "6m") == "4h"
+    assert ask.to_interval("often", "6m") == "1h"
 
 
 def _consent(tok):
@@ -1033,7 +952,7 @@ def test_every_preset_actually_builds_a_macro():
     dropped = []
     for table, profile, period, interval in (
         (ask._PRESETS, "aggressive", "6m", "4h"),
-        (ask._SCALPER_PRESETS, "scalper", "1w", "5m"),
+        (ask._SHORT_BAR_PRESETS, "balanced", "1m", "15m"),
     ):
         for rule_type, presets in table.items():
             req = _mkplan(risk_profile=profile, symbols=["BTCUSDT"],
@@ -1048,10 +967,10 @@ def test_presets_are_wide_enough_to_be_worth_the_budget():
     # 예산을 20 → 40초로 올린 근거가 이것이다. 좁아지면 되돌려야 한다.
     for rule_type, presets in ask._PRESETS.items():
         assert len(presets) >= 4, f"{rule_type} 프리셋이 {len(presets)}개"
-    for rule_type, presets in ask._SCALPER_PRESETS.items():
-        assert len(presets) >= 4, f"단타 {rule_type} 프리셋이 {len(presets)}개"
+    for rule_type, presets in ask._SHORT_BAR_PRESETS.items():
+        assert len(presets) >= 4, f"짧은 봉 {rule_type} 프리셋이 {len(presets)}개"
     # 같은 유형 안에서 설정이 실제로 달라야 한다 — 복사된 프리셋은 백테스트만 낭비한다.
-    for table in (ask._PRESETS, ask._SCALPER_PRESETS):
+    for table in (ask._PRESETS, ask._SHORT_BAR_PRESETS):
         for rule_type, presets in table.items():
             seen = {json.dumps(p, sort_keys=True) for p in presets}
             assert len(seen) == len(presets), f"{rule_type} 에 똑같은 프리셋이 있다"
@@ -1205,7 +1124,10 @@ def test_refund_is_returned_when_a_later_symbol_does_produce_results(_fake_backt
 
     # '다른 종목으로' — 같은 세션, 이번엔 결과가 나온다.
     monkeypatch.setattr("app.main._run_any", _fake_run_any_for_test())
-    second = client.post("/api/ask/macros", json={"session_id": session_id, "symbol": "AAAUSDT"},
+    # 종목은 세션이 낸 후보에서 고른다 — 이름을 박아 두면 풀 정렬이 바뀔 때마다 깨진다
+    # (2026-10-12 에 왕복 여지 순으로 바뀌면서 실제로 깨졌다).
+    other = next(c["symbol"] for c in flow["candidates"] if c["symbol"] != "BTCUSDT")
+    second = client.post("/api/ask/macros", json={"session_id": session_id, "symbol": other},
                          headers=_auth(token)).json()
     assert second["results"], "이번엔 추천이 나와야 한다"
     assert second["refunded"] is False

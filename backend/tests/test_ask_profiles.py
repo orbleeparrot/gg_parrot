@@ -127,3 +127,71 @@ def test_balanced_score_orders_differently_from_aggressive():
     assert ask.score("aggressive", wild) > ask.score("aggressive", calm), "공격형은 수익만 본다"
     assert ask.score("balanced", calm) > ask.score("balanced", wild), "균형형은 낙폭을 나눈다"
     assert ask.score("stable", calm) > ask.score("stable", wild)
+
+
+def test_three_profiles_and_four_watch_levels():
+    assert tuple(ask.PROFILES) == ("stable", "balanced", "aggressive")
+    assert ask.WATCH_LEVELS == ("rarely", "sometimes", "often", "constantly")
+    # 성향 표에 남는 칸은 화면 이름과 선물 허용 여부뿐이다 — 종목·방식·상한은 다른 데서 온다.
+    for rules in ask.PROFILES.values():
+        assert set(rules) == {"label", "futures"}
+
+
+def test_watch_frequency_alone_decides_the_candle():
+    assert ask.to_interval("rarely", "6m") == "1d"
+    assert ask.to_interval("sometimes", "6m") == "4h"
+    assert ask.to_interval("often", "6m") == "1h"
+    assert ask.to_interval("constantly", "6m") == "15m"
+    # 15분봉 × 1년 = 35,040봉으로 봉 상한(20,000)을 넘는 유일한 조합이다. 거절이 아니라
+    # 한 칸 넓힌다 — 사용자는 '아주 자주 봐요' 를 고른 것이지 1년을 포기한 게 아니다.
+    assert ask.to_interval("constantly", "1y") == "1h"
+    # 모르는 값은 가운데로 — 조용히 가장 짧은 봉을 주면 안 된다.
+    assert ask.to_interval("뭐라고요", "6m") == "4h"
+
+
+def test_horizon_alone_decides_the_period():
+    assert ask.to_period("days") == "1w"
+    assert ask.to_period("weeks") == "3m"
+    assert ask.to_period("months") == "6m"
+    assert ask.to_period("long") == "1y"
+
+
+def test_every_profile_sees_all_eight_rule_types():
+    # 안정형이 8가지 중 4가지만 보던 탓에 후보가 57개(공격형 114개)였다.
+    for profile in ask.PROFILES:
+        plan = ask._Plan(risk_profile=profile, market="spot", leverage=1, symbols=["KRW-BTC"],
+                         period_preset="3m", interval="4h", exchange="upbit")
+        assert set(ask._allowed_types(plan)) == set(ask.ALL_RULE_TYPES)
+    # C(적립식)는 레버리지·선물을 못 쓴다 — 이 제약만 남는다.
+    futures = ask._Plan(risk_profile="aggressive", market="futures", leverage=2,
+                        symbols=["BTCUSDT"], period_preset="3m", interval="4h")
+    assert "C" not in ask._allowed_types(futures)
+
+
+def test_short_bar_presets_layer_over_the_normal_table():
+    # 짧은 봉 표는 A·E·F·G·J 다섯뿐이다. 그것만 쓰면 15분봉을 고른 순간 방식이 다섯으로
+    # 줄어 화이트리스트를 없앤 효과가 사라지고, build_templates 가 C 를 찾다 KeyError 로 터진다.
+    short = ask._Plan(risk_profile="balanced", market="spot", leverage=1, symbols=["KRW-BTC"],
+                      period_preset="1m", interval="15m", exchange="upbit")
+    presets = ask._presets_for(short)
+    assert set(ask.ALL_RULE_TYPES) <= set(presets), "여덟 방식이 다 살아 있어야 한다"
+    assert presets["A"] is ask._SHORT_BAR_PRESETS["A"], "짧은 봉 표가 있는 방식은 그 값을"
+    assert presets["C"] is ask._PRESETS["C"], "없는 방식(C·H·I)은 일반 표의 값을"
+
+    long_bars = ask._Plan(risk_profile="balanced", market="spot", leverage=1, symbols=["KRW-BTC"],
+                          period_preset="3m", interval="4h", exchange="upbit")
+    assert ask._presets_for(long_bars) is ask._PRESETS
+
+
+def test_short_bar_templates_build_for_all_eight_types():
+    short = ask._Plan(risk_profile="balanced", market="spot", leverage=1, symbols=["KRW-BTC"],
+                      period_preset="1m", interval="15m", exchange="upbit",
+                      account_balance=1_000_000.0)
+    kinds = {c.macro.rule_type.value for c in ask.build_templates(short)}
+    assert kinds == set(ask.ALL_RULE_TYPES)
+
+
+def test_no_scalper_left_in_the_module():
+    assert "scalper" not in str(ask.RiskProfile)
+    for name in ("_SCALPER_PRESETS", "_HORIZON_PERIOD_SHORT", "_WATCH_INTERVAL_SHORT"):
+        assert not hasattr(ask, name), f"{name} 이 남아 있다"

@@ -173,7 +173,8 @@ def validate_picks(raw: object, pool: list[dict], profile: str) -> list[dict]:
 
 
 _HORIZON_WORDS = {"days": "며칠", "weeks": "몇 주", "months": "몇 달", "long": "길게"}
-_WATCH_WORDS = {"rarely": "거의 못 봐요", "sometimes": "가끔 봐요", "often": "수시로 봐요"}
+_WATCH_WORDS = {"rarely": "거의 못 봐요", "sometimes": "가끔 봐요", "often": "수시로 봐요",
+                "constantly": "아주 자주 봐요"}
 
 
 def build_prompt(pool: list[dict], *, profile: str, horizon: str, watch: str,

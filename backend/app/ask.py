@@ -46,7 +46,6 @@ DISCLAIMER = "AI 가 과거 데이터로 고른 후보예요 · 투자 권유가
 # evaluate() 가 후보마다 예산을 확인하고 넘으면 거기서 멈춘다.
 MAX_CANDIDATES = 90
 TOP_N = 3
-MIN_TRADES = 3
 # 한 추천이 "그냥 들고 있기" 를 넘었다고 인정할 최소 초과 수익(%p). worth_the_macro 가 쓴다.
 # 환경변수 ASK_MIN_EXCESS_PCT 로 바꿀 수 있다(0 이면 문턱 없음).
 #
@@ -86,20 +85,23 @@ SESSION_TTL_MS = 30 * 60 * 1000
 MAX_ASKS_PER_SESSION = 6
 MANUAL_SYMBOLS = ("BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT")
 
-RiskProfile = Literal["stable", "balanced", "aggressive", "scalper"]
+RiskProfile = Literal["stable", "balanced", "aggressive"]
 
-# 성향별 규칙 — 후보에 넣는 유형, MDD 상한, 선물 허용, 짧은 봉 여부(short), 종목 상한, 최소 거래 수.
-# 순서는 템플릿 우선순위. 단타형은 짧은 봉 전용이라 I(일봉 논리)·C·H(짧은 봉에 의미 없음)를 뺀다.
+# 성향별 규칙 — 화면 이름과 선물 허용 여부만 남는다.
+#
+# 2026-10-12: rule_types(매매 방식 화이트리스트) · mdd_cap(기간과 무관한 고정 상한) ·
+# short(단타형 전용 봉) · min_trades(봉 수와 무관한 고정값) · max_symbols(쓰이지 않던 칸)를
+# 모두 뺐다. 성향은 "어떤 종목 · 어떤 방식을 보는가" 가 아니라 "얼마나 흔들려도 되는가" 로만
+# 갈린다 — 상한은 mdd_cap, 순서는 score 가 맡는다. 사람이 '안정형' 을 고르는 이유는 내 돈이
+# 덜 흔들렸으면 하는 것이지 비트코인을 사고 싶어서가 아니다.
 PROFILES: dict[str, dict] = {
-    "stable": {"label": "안정형", "mdd_cap": 10.0, "rule_types": ("C", "J", "G", "A"), "futures": False,
-               "short": False, "max_symbols": 3, "min_trades": 3},
-    "balanced": {"label": "균형형", "mdd_cap": 20.0, "rule_types": ("C", "J", "G", "A", "F", "E"), "futures": True,
-                 "short": False, "max_symbols": 3, "min_trades": 3},
-    "aggressive": {"label": "공격형", "mdd_cap": None, "rule_types": ("C", "J", "G", "A", "F", "E", "I", "H"), "futures": True,
-                   "short": False, "max_symbols": 3, "min_trades": 3},
-    "scalper": {"label": "단타형", "mdd_cap": None, "rule_types": ("A", "E", "F", "G", "J"), "futures": True,
-                "short": True, "max_symbols": 2, "min_trades": 10},
+    "stable": {"label": "안정형", "futures": False},
+    "balanced": {"label": "균형형", "futures": True},
+    "aggressive": {"label": "공격형", "futures": True},
 }
+
+# 세 성향이 여덟 방식을 다 본다. 순서는 템플릿 우선순위(앞쪽이 시간 예산에서 먼저 평가된다).
+ALL_RULE_TYPES = ("C", "J", "G", "A", "F", "E", "I", "H")
 
 # 봉 × 기간 짝 — 백테스트 봉 상한(MAX_BACKTEST_BARS=20,000)을 넘지 않는 조합만.
 LONG_INTERVALS = ("1h", "4h", "1d")
@@ -109,26 +111,23 @@ SHORT_PERIODS = ("1w", "1m")
 
 # v2(2026-09-23) — 카드가 사람 말을 받고 서버가 기술 값으로 바꾼다.
 HORIZONS = ("days", "weeks", "months", "long")
-WATCH_LEVELS = ("rarely", "sometimes", "often")
+WATCH_LEVELS = ("rarely", "sometimes", "often", "constantly")
 
 _HORIZON_PERIOD = {"days": "1w", "weeks": "3m", "months": "6m", "long": "1y"}
-# 단타형은 짧은 구간만 — SHORT_PERIODS = ("1w", "1m"). 여기의 1m 은 1개월이다.
-_HORIZON_PERIOD_SHORT = {"days": "1w", "weeks": "1m", "months": "1m", "long": "1m"}
-_WATCH_INTERVAL = {"rarely": "1d", "sometimes": "4h", "often": "1h"}
-_WATCH_INTERVAL_SHORT = {"rarely": "15m", "sometimes": "5m", "often": "1m"}
+# 확인 빈도가 곧 봉 간격이다. 'constantly'(15분)는 2026-10-12 에 더했다 — 단타형을 없애는
+# 대신, 짧게 보고 싶은 사람이 성향을 포기하지 않아도 되게 하려고.
+_WATCH_INTERVAL = {"rarely": "1d", "sometimes": "4h", "often": "1h", "constantly": "15m"}
 
 
-def to_period(profile: str, horizon: str) -> str:
-    table = _HORIZON_PERIOD_SHORT if PROFILES[profile]["short"] else _HORIZON_PERIOD
-    return table.get(horizon, table["weeks"])
+def to_period(horizon: str) -> str:
+    return _HORIZON_PERIOD.get(horizon, _HORIZON_PERIOD["weeks"])
 
 
-def to_interval(profile: str, watch: str, period: str) -> str:
-    if not PROFILES[profile]["short"]:
-        return _WATCH_INTERVAL.get(watch, _WATCH_INTERVAL["sometimes"])
-    interval = _WATCH_INTERVAL_SHORT.get(watch, _WATCH_INTERVAL_SHORT["sometimes"])
-    # 1분 봉은 최근 1주 구간에서만 쓸 수 있다(백테스트 봉 상한).
-    return "5m" if interval == "1m" and period != "1w" else interval
+def to_interval(watch: str, period: str) -> str:
+    interval = _WATCH_INTERVAL.get(watch, _WATCH_INTERVAL["sometimes"])
+    # 15분봉 × 1년 = 35,040봉으로 백테스트 봉 상한(20,000)을 넘는 **유일한** 조합이다.
+    # 거절하지 않고 봉을 한 칸 넓힌다 — 사용자는 자주 보겠다고 한 것이지 1년을 포기한 게 아니다.
+    return "1h" if interval == "15m" and period == "1y" else interval
 
 RULE_LABELS = {
     "A": "익절/손절 후 재진입", "C": "정기 분할매수", "E": "트레일링 스탑", "F": "RSI 조건",
@@ -162,7 +161,7 @@ class CandidatesRequest(BaseModel):
     market: Literal["spot", "futures"]
     leverage: int = Field(default=1, ge=1, le=3)
     invest_horizon: Literal["days", "weeks", "months", "long"]
-    watch_frequency: Literal["rarely", "sometimes", "often"]
+    watch_frequency: Literal["rarely", "sometimes", "often", "constantly"]
 
     @field_validator("exchange", mode="before")
     @classmethod
@@ -272,8 +271,10 @@ _PRESETS: dict[str, list[dict]] = {
     ],
 }
 
-# 단타형 전용 프리셋 — 짧은 봉에 맞춘 좁은 익절·손절·지표 기간.
-_SCALPER_PRESETS: dict[str, list[dict]] = {
+# 짧은 봉 전용 프리셋 — 좁은 익절·손절과 짧은 지표 기간. 성향이 아니라 **봉의 성질**에
+# 딸린 표다(그래서 이름이 SHORT_BAR 다). 담긴 방식은 A·E·F·G·J 다섯이고, 나머지
+# (C·H·I)는 일반 표에서 가져와 겹쳐 쓴다 — _presets_for 참고.
+_SHORT_BAR_PRESETS: dict[str, list[dict]] = {
     "A": [
         {"params": {"take_profit_pct": 1.0, "initial_capital": CAPITAL}, "risk": {"stop_loss_pct": 0.7}},
         {"params": {"take_profit_pct": 1.5, "initial_capital": CAPITAL}, "risk": {"stop_loss_pct": 1.0}},
@@ -325,22 +326,32 @@ class _Plan:
 
 
 def _plan(answers: CandidatesRequest, symbol: str) -> _Plan:
-    period = to_period(answers.risk_profile, answers.invest_horizon)
+    period = to_period(answers.invest_horizon)
     return _Plan(
         risk_profile=answers.risk_profile, market=answers.market, leverage=answers.leverage,
         symbols=[symbol], period_preset=period,
-        interval=to_interval(answers.risk_profile, answers.watch_frequency, period),
+        interval=to_interval(answers.watch_frequency, period),
         exchange=answers.exchange, account_balance=answers.account_balance,
     )
 
 
 def _presets_for(req: _Plan) -> dict[str, list[dict]]:
-    return _SCALPER_PRESETS if PROFILES[req.risk_profile]["short"] else _PRESETS
+    """프리셋은 성향이 아니라 **봉 간격**으로 고른다.
+
+    예전에는 PROFILES[성향]["short"] 로 갈랐는데 단타형이 없어지면서 기준이 사라졌다.
+    짧은 봉 표는 다섯 방식뿐이라 그것만 쓰면 15분봉을 고른 순간 방식이 여덟 → 다섯으로
+    줄어 화이트리스트를 없앤 효과가 사라지고, build_templates 가 C 를 찾다 터진다.
+    그래서 **겹쳐 쓴다** — 짧은 봉 표에 있는 방식은 그 값을, 없는 방식은 일반 표의 값을.
+    """
+    if req.interval not in SHORT_INTERVALS:
+        return _PRESETS
+    return {**_PRESETS, **_SHORT_BAR_PRESETS}
 
 
 def _allowed_types(req: _Plan) -> tuple[str, ...]:
-    types = PROFILES[req.risk_profile]["rule_types"]
-    # C(DCA) 는 레버리지·선물을 못 쓴다.
+    """세 성향 모두 여덟 방식을 본다(2026-10-12). 남은 제약은 시장뿐이다."""
+    types = ALL_RULE_TYPES
+    # C(적립식) 는 레버리지·선물을 못 쓴다.
     if req.market == "futures":
         types = tuple(t for t in types if t != "C")
     return types

@@ -43,11 +43,39 @@ test("보유 중에는 발동 전·후를 다르게 그린다", () => {
   assert.equal(priceOf(after, "트레일링 스탑"), 103.88);
 });
 
-test("선이 하나도 없으면 아무것도 그리지 않는다", () => {
-  // 옛 세션(전략 상태 없음)에 추측해서 그리면 거짓이 된다.
+test("선이 하나도 없고 서버가 맡은 것도 없으면 아무것도 그리지 않는다", () => {
+  // E 가 아닌 규칙 — 서버는 이 선을 맡지 않는다. 미리보기가 그려도 된다.
   assert.equal(liveLevelsOverlay(null), null);
   assert.equal(liveLevelsOverlay({}), null);
   assert.equal(liveLevelsOverlay({ entry_target: 0, trail_stop: null, trail_activation: null }), null);
+});
+
+test("서버가 '아직 값이 없다' 고 하면 미리보기로 메우지 않는다", () => {
+  // 바로 이 구멍이 버그였다: 서버는 entry_target: null 로 정직했는데 화면이 null 을
+  // "관심 없음" 으로 읽고 '현재가 -3%' 미리보기를 그렸다. 가격이 내려가면 선도 내려왔다.
+  const pending = { entry_target: null, trail_stop: null, trail_activation: null,
+                    armed: false, pending: true };
+  const live = liveLevelsOverlay(pending);
+  assert.equal(live.priceLines.length, 0, "값이 없으면 선을 하나도 그리지 않는다");
+  assert.equal(live.pending, true);
+  assert.ok(live.legend.length > 0, "실행 화면은 minimal 이라 note 를 안 그린다 — 범례로 말해야 한다");
+  assert.match(live.legend[0].label, /준비 중/);
+  assert.match(live.note, /첫 봉/, "언제 나오는지 말해야 기다릴 수 있다");
+
+  const overlay = computeSessionOverlay(macro, null, "long", candles, pending);
+  assert.equal(labels(overlay).filter((l) => l.includes("진입 목표")).length, 0,
+    "미리보기 진입 목표선이 되살아나면 안 된다 — 그게 가격을 따라 내려오던 그 선이다");
+  assert.ok(!(overlay.series || []).some((item) => item.id === "trail"),
+    "가정으로 만든 트레일링 스탑선도 같이 빠진다");
+  assert.ok(overlay.legend.some((item) => /준비 중/.test(item.label)));
+});
+
+test("기다리는 중에도 내 평단은 그린다", () => {
+  // 보유 중인데 고점을 잃은 옛 체크포인트 — 스탑선은 못 그려도 평단은 사실이다.
+  const overlay = computeSessionOverlay(macro, 97, "long", candles,
+    { entry_target: null, trail_stop: null, trail_activation: null, armed: true, pending: true });
+  assert.ok(labels(overlay).some((l) => l.includes("내 평단")));
+  assert.equal(labels(overlay).filter((l) => l.includes("진입 목표")).length, 0);
 });
 
 test("서버 선이 있으면 미리보기 선을 함께 그리지 않는다", () => {

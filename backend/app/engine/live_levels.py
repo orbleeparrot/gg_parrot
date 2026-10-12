@@ -5,6 +5,10 @@ E 눌림목의 '진입 목표 -3%' 선을 화면이 **현재가** 기준으로 �
 내려왔고(엔진은 평평해진 순간 잡힌 고정 기준가를 본다), 사용자는 "안 사진다" 로 읽었다.
 그래서 선은 엔진 상태에서만 나온다. 모르면 ``None`` — 추측해서 그리면 거짓이 된다.
 
+``None`` 만으로는 모자랐다: 화면은 "서버가 이 규칙에 관심 없음" 과 "맡고 있는데 아직 값이
+없음" 을 구분할 수 없어 둘 다 미리보기로 메웠다. ``pending`` 이 그 둘을 가른다 — 참이면
+화면은 아무 가격선도 그리지 않고 "첫 봉 마감 뒤에 나온다" 고만 말한다.
+
 입력은 체크포인트의 전략 상태(driver.state() 의 legs[].strategy)와 평단뿐이다.
 이 모듈은 DB·HTTP·시세를 모른다.
 """
@@ -14,7 +18,8 @@ from typing import Optional
 
 from .schema import Macro, RuleType
 
-EMPTY = {"entry_target": None, "trail_stop": None, "trail_activation": None, "armed": False}
+EMPTY = {"entry_target": None, "trail_stop": None, "trail_activation": None,
+         "armed": False, "pending": False}
 
 
 def _num(value) -> Optional[float]:
@@ -32,10 +37,15 @@ def strategy_levels(macro: Macro, state: Optional[dict], entry_price: float) -> 
     - ``trail_activation`` 보유 중 · 발동 전일 때 평단의 +activation_profit%
     - ``trail_stop``     보유 중 · 발동 뒤일 때 고점의 -trail_percent%
     """
-    if macro.rule_type is not RuleType.E or not state:
+    if macro.rule_type is not RuleType.E:
         return dict(EMPTY)
 
+    # 상태가 없어도(첫 봉 마감 전 · 옛 체크포인트) 여기서 돌린다. 그래야 "선이 있어야 하는데
+    # 아직 값이 없다" 를 ``pending`` 으로 말해 줄 수 있다. 예전에는 EMPTY 를 돌려줬고,
+    # 화면은 그걸 "서버가 관심 없음" 으로 읽어 미리보기(현재가 -3%)로 메웠다 — 그 선이
+    # 가격을 따라 내려오며 실제 진입 목표인 척했다. 같은 거짓의 두 번째 입구였다.
     params = macro.params or {}
+    state = state or {}
     held = _num(entry_price) is not None
     out = dict(EMPTY)
     # armed·peak 는 포지션이 있어야 뜻이 있다. 청산 뒤에도 심에 남아 있지만(_reset_position_state
@@ -50,6 +60,8 @@ def strategy_levels(macro: Macro, state: Optional[dict], entry_price: float) -> 
         dip = params.get("entry_dip")
         if ref is not None and dip is not None:
             out["entry_target"] = ref * (1 - float(dip) / 100.0)
+        else:
+            out["pending"] = True
         return out
 
     if out["armed"]:
@@ -57,8 +69,12 @@ def strategy_levels(macro: Macro, state: Optional[dict], entry_price: float) -> 
         trail = params.get("trail_percent")
         if peak is not None and trail is not None:
             out["trail_stop"] = peak * (1 - float(trail) / 100.0)
+        else:
+            out["pending"] = True
     else:
         activation = params.get("activation_profit")
         if activation is not None:
             out["trail_activation"] = float(entry_price) * (1 + float(activation) / 100.0)
+        else:
+            out["pending"] = True
     return out

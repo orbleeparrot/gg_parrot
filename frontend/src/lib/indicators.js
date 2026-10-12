@@ -165,6 +165,10 @@ const priceLine = (price, color, label, dash) =>
 // 예전에는 화면이 `마지막 종가 × (1 - dip/100)` 으로 '진입 목표' 를 그렸다. 엔진은 평평해진
 // 순간 잡힌 **고정 기준가**를 보는데 선은 현재가를 따라 내려가서, 떨어지는 장에서는 영원히
 // 안 닿는 선이 "곧 살 것처럼" 보였다. 그래서 여기서는 계산하지 않고 받은 값만 쓴다.
+export const PENDING_NOTE =
+  "실제 가격선은 첫 봉이 마감된 뒤에 나와요. 그때까지는 추측해서 그리지 않아요 — " +
+  "지금 가격 기준으로 그으면 선이 가격을 따라 내려와 곧 살 것처럼 보여요.";
+
 export function liveLevelsOverlay(levels) {
   if (!levels) return null;
   const entry = num(levels.entry_target);
@@ -188,9 +192,22 @@ export function liveLevelsOverlay(levels) {
     priceLines.push({ price: activation, color: UP, dash: "2 3", label: `트레일 발동 ${fmtPrice(activation)}` });
     notes.push("여기까지 오르면 트레일링 스탑이 켜져요. 그 전에는 켜지지 않아요.");
   }
-  if (priceLines.length === 0) return null;
+  if (priceLines.length === 0) {
+    // 서버가 이 선을 **맡고 있는데** 아직 값이 없는 상태(첫 봉 마감 전, 또는 옛 체크포인트).
+    // null 을 돌려주면 computeSessionOverlay 가 미리보기로 메우고, 그 미리보기는 '현재가 -3%'
+    // 라 가격을 따라 내려오며 실제 진입 목표인 척한다 — 서버에서 막은 거짓이 여기로 다시 들어왔다.
+    // 그래서 선은 그리지 않고, 범례로 "아직 없다" 만 말한다(실행 화면은 minimal 이라 note 를 안 그린다).
+    if (!levels.pending) return null;
+    return {
+      legend: [{ label: "가격선 준비 중", color: NEUTRAL, dash: "2 3" }],
+      priceLines: [],
+      pending: true,
+      note: PENDING_NOTE,
+    };
+  }
   return { legend, priceLines, note: notes.join(" ") };
 }
+
 
 // --- 내 평단(마이페이지 실행 세션용) -----------------------------------
 export function entryPriceOverlay(entryPrice, side) {

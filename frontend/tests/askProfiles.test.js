@@ -90,9 +90,16 @@ test("안내 문구가 단정하거나 권유하지 않는다", () => {
   assert.ok(TUNE_NOTE.length <= 200, `코린이가 읽기엔 길다(${TUNE_NOTE.length}자)`);
 });
 
-test("조합이 있을 때만 그 안내를 띄운다", () => {
-  // 빈 화면에는 조정할 매크로가 없다 — 거기서 "조금씩 바꿔 보세요" 는 말이 안 된다.
+test("불러오기 확인 팝업에서 그 안내를 띄운다", () => {
+  // 결과 화면 맨 아래는 고지 문구와 붙어 있어 잘 안 읽힌다. 불러오기를 누른 순간이
+  // 가장 잘 보이는 자리다 — 조건 판에 넣기 직전이라 '조금씩 바꿔 보세요' 가 바로 다음 행동이다.
+  const studio = source("../src/pages/Studio.jsx");
+  assert.match(studio, /warning=\{TUNE_NOTE\}/, "확인 팝업의 경고 칸에 실어야 한다");
+  // 조건 판이 비어 있다고 팝업을 건너뛰면, 처음 쓰는 사람이 이 안내를 한 번도 못 본다 —
+  // 그 사람이 바로 이 안내가 필요한 사람이다.
+  assert.ok(!/if \(untouched\) applyAskMacro/.test(studio),
+    "비어 있을 때도 확인을 거쳐야 한다");
   const dialog = source("../src/components/AskParrotDialog.jsx");
-  assert.match(dialog, /results\.length > 0[\s\S]{0,160}TUNE_NOTE/,
-    "결과가 있을 때만 보여야 한다");
+  assert.ok(!dialog.includes("TUNE_NOTE"),
+    "결과 화면에서는 뺀다 — 같은 말을 두 군데서 하지 않는다");
 });

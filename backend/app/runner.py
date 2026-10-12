@@ -365,6 +365,13 @@ def launch_ticket_status(user_id: int, launch_id: int, *, min_runner_version: st
             "expires_at": row.expires_at,
             "status": status,
         }
+        progress = getattr(row, "setup_progress", "")
+        if status == "claimed" and progress:
+            try:
+                payload["progress"] = json.loads(progress)
+                payload["progress_at"] = getattr(row, "setup_progress_at", "")
+            except ValueError:
+                pass
         if status == "rejected":
             payload["runner_version"] = rejected_version
             payload["min_runner_version"] = _required_version_for(db, row.user_macro_id, min_runner_version)
@@ -385,6 +392,38 @@ def _required_version_for(db, user_macro_id: int, general_min: str) -> str:
     except (TypeError, ValueError):
         return general_min
     return DOMESTIC_MIN_VERSION if is_domestic(macro.exchange) else general_min
+
+
+# 실행기 → 웹 가이드 진행 단계. 청구된 티켓에, 그 계정의 회원 키로만, 청구 뒤 이 시간 안에만 쓴다.
+SETUP_PROGRESS_WINDOW_SECONDS = 2 * 60 * 60
+
+
+def record_setup_progress(user: User, launch_id: int, progress: dict) -> dict:
+    """실행기가 알린 연결 도우미 단계를 티켓에 덮어쓴다(가장 최근 한 건만). 모양은 요청 모델이 이미 걸렀다."""
+    now = datetime.now(timezone.utc)
+    with get_session() as db:
+        row = db.get(RunnerLaunchTicket, launch_id)
+        if row is None or row.user_id != user.id or not row.claimed_at:
+            raise _ticket_error(404, "실행 연결 요청을 찾을 수 없어요.")
+        try:
+            claimed = datetime.strptime(row.claimed_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        except ValueError:
+            raise _ticket_error(410, "이 실행 연결은 끝났어요.")
+        if now - claimed > timedelta(seconds=SETUP_PROGRESS_WINDOW_SECONDS):
+            raise _ticket_error(410, "이 실행 연결은 끝났어요.")
+        macro_row = db.get(UserMacro, row.user_macro_id)
+        try:
+            exchange = Macro.model_validate_json(macro_row.macro_json).exchange if macro_row else ""
+        except (TypeError, ValueError):
+            exchange = ""
+        if exchange and normalize_exchange(exchange) != progress.get("exchange"):
+            # 실행기에서 다른 매크로 파일을 열었다 — 웹 가이드가 엉뚱한 거래소 화면을 그리지 않게 받지 않는다.
+            raise _ticket_error(409, "이 실행 연결의 매크로와 거래소가 달라요.")
+        row.setup_progress = json.dumps(progress, ensure_ascii=False, separators=(",", ":"))
+        row.setup_progress_at = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+        db.add(row)
+        db.commit()
+    return {"ok": True}
 
 
 def mark_launch_ticket_rejected(ticket: str, runner_version: str) -> None:

@@ -429,6 +429,33 @@ class RunnerLaunchTicketClaimRequest(BaseModel):
     runner_version: str = ""
 
 
+# 실행기(v13+)가 웹 가이드에 알리는 연결 도우미 단계. 정해진 값만 받고 다른 칸은 422 —
+# 거래소 키 · IP · 오류 문장이 실수로라도 실려 오면 저장하지 않는다.
+class RunnerSetupSlots(BaseModel):
+    model_config = {"extra": "forbid"}
+    access: bool = False
+    secret: bool = False
+
+
+class RunnerSetupChecks(BaseModel):
+    model_config = {"extra": "forbid"}
+    auth: Literal["ok", "bad", "wait", "na"] = "wait"
+    ip: Literal["ok", "bad", "wait", "na"] = "wait"
+    order: Literal["ok", "bad", "wait", "na"] = "wait"
+
+
+class RunnerSetupProgressRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    stage: Literal["ready", "ask", "ip", "perm", "keys", "existing", "manual", "checking",
+                   "result_ok", "result_fail", "started"]
+    exchange: Literal["binance", "upbit", "bithumb"]
+    path: Literal["", "new", "existing"] = ""
+    slots: RunnerSetupSlots = Field(default_factory=RunnerSetupSlots)
+    checks: RunnerSetupChecks = Field(default_factory=RunnerSetupChecks)
+    problem: Literal["", "ip", "auth", "order", "order_size", "network", "other"] = ""
+    connected: bool = False
+
+
 class LeaderboardRegisterRequest(BaseModel):
     macro: Macro
     username: str  # display id (required)
@@ -2475,6 +2502,18 @@ def runner_launch_ticket_claim(
             headers={"Cache-Control": "no-store"},
         )
     return runner_mod.claim_launch_ticket(req.ticket, runner_version=current)
+
+
+@app.post("/api/runner/launch-tickets/{launch_id}/progress")
+def runner_launch_ticket_progress(
+    launch_id: int,
+    req: RunnerSetupProgressRequest,
+    response: Response,
+    user: User = Depends(_runner_user),
+) -> dict:
+    """실행기 연결 도우미의 지금 단계 — 웹 '매크로 만들기 가이드' 가 같은 화면을 따라 보여 준다."""
+    response.headers["Cache-Control"] = "no-store"
+    return runner_mod.record_setup_progress(user, launch_id, req.model_dump())
 
 
 def _runner_version_supported(current: str) -> bool:

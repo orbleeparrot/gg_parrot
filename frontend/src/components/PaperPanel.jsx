@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api.js";
 import { isLoggedIn } from "../lib/auth.js";
+import { rememberQuickRunCard } from "../lib/quickRunCard.js";
 import InfoTooltip from "./InfoTooltip.jsx";
 import { baseOf, fmtMoney, fmtMoneyCompact, fmtKrw, fmtPrice, fmtQty, quoteOf } from "../lib/format.js";
 import { isEvenWeights } from "../lib/portfolio.js";
@@ -30,7 +31,8 @@ function PaperBadge() {
 // 페이퍼 다음 단계 — 실행기 실거래 안내 + 빠른 실행 · 매크로 파일 내려받기.
 // primary="register" 면 리더보드 등록이 노란 버튼이고 빠른 실행은 2차가 된다(노랑은 한 번에 하나).
 // 빠른 실행 · 매크로 파일 내려받기 — 페이퍼 다음 단계와 직접 만들기의 '등록·실행' 탭이 같이 쓴다.
-export function useMacroActions(macro) {
+// card — 직접 만들기의 매크로 카드 내용(백테스트 결과 포함). 넘기면 실행 가이드가 같은 카드를 보인다.
+export function useMacroActions(macro, card = null) {
   const navigate = useNavigate();
   const [launching, setLaunching] = useState(false);
   const [error, setError] = useState("");
@@ -48,6 +50,7 @@ export function useMacroActions(macro) {
     setLaunching(true);
     try {
       const saved = await api.saveMyMacro(macro, `직접 만들기 · ${macro.symbol || "매크로"}`);
+      if (card) rememberQuickRunCard(saved.item.id, card);
       navigate("/?run=1&step=1", { state: { selectedMacroId: saved.item.id } });
     } catch (e) {
       setError(String(e.message || e));

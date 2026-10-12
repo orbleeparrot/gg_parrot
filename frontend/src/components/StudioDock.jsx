@@ -459,7 +459,8 @@ function ActIcon({ name }) {
 }
 
 export function StudioOutcomes({ macro, result, perSymbol = [], valErr, strategyEntry, periodLabel, dataSource = "", symbols = [], canRegister, onRegister, onShare, shareBusy = false }) {
-  const { quickRun, downloadMacro, launching, error } = useMacroActions(macro);
+  // 빠른 실행으로 넘어가도 실행 가이드가 이 카드를 그대로 보이게 카드 내용을 같이 넘긴다.
+  const { quickRun, downloadMacro, launching, error } = useMacroActions(macro, { macro, result, perSymbol, strategyEntry, periodLabel, dataSource, symbols });
   const futures = macro.position_side === "short" || macro.leverage > 1;
   const domestic = isDomestic(macro.exchange);
   return (

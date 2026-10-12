@@ -4,11 +4,16 @@ import { api } from "../api.js";
 import RunnerSessions from "../components/RunnerSessions.jsx";
 import RunnerDeviceHandoff from "../components/RunnerDeviceHandoff.jsx";
 import ExchangeConnectionGuide from "../components/ExchangeConnectionGuide.jsx";
+import MacroCard from "../components/MacroCard.jsx";
+import RunnerHelperMirror from "../components/RunnerHelperMirror.jsx";
+import "../components/RunnerHelper.css";
 import { getAuthUser, updateAuthUser, useAuth } from "../lib/auth.js";
 import { RULE_TYPES } from "../lib/macro.js";
 import { getUserId } from "../lib/user.js";
 import { fmtSize, isRunnerOpened, markRunnerOpened, useRunnerDownload } from "../lib/runnerDownload.js";
 import { findLaunchedSession, launchPhaseFromTicketStatus } from "../lib/runnerLaunch.js";
+import { parseHelperProgress } from "../lib/runnerHelperProgress.js";
+import { quickRunCard } from "../lib/quickRunCard.js";
 import { getRunnerDevice } from "../lib/runnerDevice.js";
 import { launchMinVersionFor, runnerExecutionMarket, runnerKeyGuide, RUNNER_KEY_STORAGE_NOTE } from "../lib/runnerGuide.js";
 import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
@@ -22,6 +27,10 @@ const STEP_LAUNCH = 4;
 
 const CHAPTERS = ["매크로 연결", "API 키 준비", "실행기 준비", "연결·실행"];
 const LAST_STEP = CHAPTERS.length - 1;
+// 국내(업비트 · 빗썸) 매크로는 두 칸 — API 키 준비 · 실행기 준비 · 연결은 실행기 연결 도우미 하나가 맡는다.
+const HELPER_CHAPTERS = ["매크로 연결", "실행기에서 연결·실행"];
+// 실행기 연결 도우미 진행을 따라 읽는 간격(실행기가 바뀔 때만 알리므로 짧아도 요청은 적다).
+const HELPER_POLL_MS = 1500;
 
 // '직접 만들기' 가이드(flow=build)로 넘어오면 실행 마법사도 빌드~연결·실행 8단계
 // 진행바로 이어서 보여준다. 앞 5단계(빌드~페이퍼)는 이미 마친 상태로 표시된다.
@@ -424,6 +433,13 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
     state: runnerDownloadState,
   } = runnerDownload;
   const launchMinVersion = launchMinVersionFor(keyGuide, { general: requiredRunnerVersion, domestic: domesticMinVersion });
+  // 국내 매크로는 웹에서 키를 준비하지 않는다 — 실행기 연결 도우미가 키 준비부터 실행까지 맡고, 웹은 그 화면을 따라 본다.
+  const helperFlow = signedIn && !!selected && keyGuide.domestic;
+  const helperStep = helperFlow && step >= STEP_API_KEY;
+  const [helperProgress, setHelperProgress] = useState(null);
+  const quickRunMacroId = location.state?.selectedMacroId ?? null;
+  const quickRunSkippedRef = useRef(false);
+  const helperCardRef = useRef(null);
 
   useEffect(() => {
     if (keyGuide.domestic) {
@@ -579,7 +595,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
     launchBaselineRef.current = null;
   }, [selected?.id, step]);
   const watchLaunchedSession = useCallback(async () => {
-    if (step < STEP_ACCOUNT || !selected?.id || !signedIn) return;
+    if ((!helperStep && step < STEP_ACCOUNT) || !selected?.id || !signedIn) return;
     let data;
     try {
       data = await api.runnerSessions();
@@ -593,17 +609,17 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
     }
     const launched = findLaunchedSession(active, launchBaselineRef.current, selected);
     if (launched) navigate(`/agents?session=${launched.session_id}`, { state: { launchedFromQuickRun: true, launchedAtStep: step } });
-  }, [navigate, selected, signedIn, step]);
+  }, [helperStep, navigate, selected, signedIn, step]);
   useAdaptivePolling(watchLaunchedSession, {
     intervalMs: 3000,
     maxIntervalMs: 6000,
-    enabled: step >= STEP_ACCOUNT && !!selected?.id && signedIn,
+    enabled: (helperStep || step >= STEP_ACCOUNT) && !!selected?.id && signedIn,
     immediate: true,
     pollKey: `${selected?.id ?? ""}:${step}`,
   });
 
   useEffect(() => {
-    if (step !== STEP_LAUNCH || launchPhase !== "opening" || !launchTicket?.launch_id) return undefined;
+    if (!(step === STEP_LAUNCH || helperStep) || launchPhase !== "opening" || !launchTicket?.launch_id) return undefined;
     let alive = true;
     let pollTimer = 0;
     let pollFailures = 0;
@@ -615,6 +631,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
         pollFailures = 0;
         const next = launchPhaseFromTicketStatus(data);
         if (next.phase === "claimed") {
+          setHelperProgress(parseHelperProgress(data?.progress));
           setLaunchPhase("claimed");
           return;
         }
@@ -646,7 +663,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
       alive = false;
       window.clearTimeout(pollTimer);
     };
-  }, [launchPhase, launchTicket?.launch_id, step]);
+  }, [helperStep, launchPhase, launchTicket?.launch_id, step]);
 
   useEffect(() => {
     if (launchPhase !== "opening") {
@@ -661,6 +678,57 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
     const frame = window.requestAnimationFrame(() => headingRef.current?.focus({ preventScroll: true }));
     return () => window.cancelAnimationFrame(frame);
   }, [step]);
+
+  // 직접 만들기 → 빠른 실행으로 들어오면 '매크로 연결' 은 이미 끝났다. 국내 매크로는 바로 '실행기에서 연결·실행' 으로.
+  useEffect(() => {
+    if (quickRunSkippedRef.current || quickRunMacroId == null || !selected) return;
+    if (String(selected.id) !== String(quickRunMacroId)) return;
+    quickRunSkippedRef.current = true;
+    if (keyGuide.domestic && step === STEP_MACRO) moveTo(STEP_API_KEY);
+  }, [keyGuide.domestic, quickRunMacroId, selected, step]);
+
+  // 실행기 단계에 들어서거나 매크로를 바꾸면 연결을 처음부터 — 지난 티켓 · 진행은 다른 매크로의 것이다.
+  useEffect(() => {
+    if (!helperStep) return;
+    setLaunchTicket(null);
+    setLaunchError("");
+    setOutdatedRunner(null);
+    setShowLaunchRecovery(false);
+    setHelperProgress(null);
+    setLaunchPhase("idle");
+  }, [helperStep, selected?.id]);
+
+  // 실행기 단계가 바뀔 때마다 진행 카드를 화면 위로 — 매크로 카드 아래에 묻혀 있으면 따라 보는 화면이 안 보인다.
+  const helperStage = helperProgress?.stage || "";
+  useEffect(() => {
+    if (!helperStep || launchPhase !== "claimed") return undefined;
+    const frame = window.requestAnimationFrame(() => {
+      const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+      helperCardRef.current?.scrollIntoView({ block: "start", behavior: reduce ? "auto" : "smooth" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [helperStage, helperStep, launchPhase]);
+
+  // 실행기가 열린 뒤 — 실행기 연결 도우미가 알린 단계를 따라 읽는다(웹은 그 화면을 그대로 그린다).
+  useEffect(() => {
+    if (!helperStep || launchPhase !== "claimed" || !launchTicket?.launch_id) return undefined;
+    let alive = true;
+    let timer = 0;
+    async function pollProgress() {
+      try {
+        const data = await api.runnerLaunchTicketStatus(launchTicket.launch_id);
+        if (alive) setHelperProgress(parseHelperProgress(data?.progress));
+      } catch (_) {
+        /* 잠깐의 오류는 다음 차례에 다시 읽는다 */
+      }
+      if (alive) timer = window.setTimeout(pollProgress, HELPER_POLL_MS);
+    }
+    timer = window.setTimeout(pollProgress, HELPER_POLL_MS);
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+    };
+  }, [helperStep, launchPhase, launchTicket?.launch_id]);
 
   function moveTo(nextStep) {
     const next = new URLSearchParams(searchParams);
@@ -683,6 +751,39 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
     setLaunchError("");
     setOutdatedRunner(null);
     setLaunchAttempt((current) => current + 1);
+  }
+
+  // [실행기 열기] — 누를 때 일회용 연결 티켓(120초)을 받아 바로 연다. 미리 받아 두면 오래 머문 뒤 만료된 티켓이 열린다.
+  // 실행기는 매크로와 회원 키를 받아 첫 화면을 띄우고, 키 연결은 실행기의 연결 도우미가 맡는다.
+  async function openHelperRunner() {
+    if (!selected?.id || launchPhase === "preparing") return;
+    setLaunchError("");
+    setOutdatedRunner(null);
+    setHelperProgress(null);
+    setLaunchPhase("preparing");
+    try {
+      const data = await api.runnerLaunchTicketIssue(selected.id, true);
+      const launchId = data?.launch_id ?? data?.id;
+      if (!launchId || typeof data?.launch_url !== "string" || !data.launch_url) {
+        throw new Error("실행기 연결 주소가 비어 있어요.");
+      }
+      setLaunchTicket({ ...data, launch_id: launchId });
+      // 커스텀 프로토콜은 앵커 클릭으로 여는 편이 안정적이다.
+      const opener = document.createElement("a");
+      opener.href = data.launch_url;
+      document.body.appendChild(opener);
+      opener.click();
+      opener.remove();
+      beginLaunchWait();
+    } catch (error) {
+      if (missingRunnerLaunchRoute(error)) {
+        setLaunchError("현재 연결된 백엔드가 실행기 열기 API를 아직 지원하지 않아요.");
+        setLaunchPhase("unsupported");
+        return;
+      }
+      setLaunchError(String(error.message || error));
+      setLaunchPhase("error");
+    }
   }
 
   function confirmRunnerReady({ advance = false } = {}) {
@@ -1284,6 +1385,91 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
     );
   }
 
+  // 국내 매크로 — '실행기에서 연결·실행' 한 화면. 연결된 매크로 카드 · [실행기 열기] · [실행기 설치], 열린 뒤에는 실행기 화면을 따라 본다.
+  function renderHelperScene() {
+    const card = quickRunCard(selected?.id);
+    const installLink = (className, iconSize) => (
+      <a
+        href={downloadUrl}
+        download={downloadIsExternal ? undefined : true}
+        target={downloadIsExternal ? "_blank" : undefined}
+        rel={downloadIsExternal ? "noopener noreferrer" : undefined}
+        onClick={() => setDownloadStarted(true)}
+        className={className}
+      >
+        <Icon name="download" size={iconSize} />실행기 설치
+      </a>
+    );
+    let body;
+    if (launchPhase === "claimed") {
+      body = <RunnerHelperMirror progress={helperProgress} exchange={keyGuide.exchange} logo="/exchanges/bithumb.png" />;
+    } else if (launchPhase === "outdated") {
+      body = (
+        <OutdatedRunnerPanel
+          version={outdatedRunner?.runnerVersion || ""}
+          minVersion={outdatedRunner?.minVersion || requiredRunnerVersion}
+          downloadUrl={downloadUrl}
+          downloadIsExternal={downloadIsExternal}
+          onRetry={() => void openHelperRunner()}
+          onManual={() => void downloadManualMacroFile()}
+          manualBusy={manualDownloadBusy}
+        />
+      );
+    } else if (launchPhase === "preparing" || launchPhase === "opening") {
+      body = (
+        <>
+          <h2>실행기에서 연결·실행</h2>
+          <div className="runner-helper-wait" role="status"><span className="rhm-spin" aria-hidden="true" />실행기를 여는 중</div>
+          {showLaunchRecovery ? (
+            <div className="runner-helper-acts">
+              <button type="button" onClick={() => void openHelperRunner()} className="runner-helper-act">다시 열기</button>
+              {installLink("runner-helper-act", 16)}
+            </div>
+          ) : null}
+        </>
+      );
+    } else if (launchPhase === "unsupported") {
+      body = (
+        <>
+          <h2>실행기에서 연결·실행</h2>
+          <div className="runner-helper-bigs">{installLink("runner-helper-big is-install", 22)}</div>
+          <div className="runner-helper-acts">
+            <button type="button" onClick={() => void downloadManualMacroFile()} disabled={manualDownloadBusy} className="runner-helper-act">
+              {manualDownloadBusy ? "파일 준비 중…" : "매크로 파일 받기"}
+            </button>
+          </div>
+          {launchError ? <p className="runner-helper-error" role="alert">{launchError}</p> : null}
+        </>
+      );
+    } else {
+      body = (
+        <>
+          <h2>실행기에서 연결·실행</h2>
+          <div className="runner-helper-bigs">
+            <button type="button" onClick={() => void openHelperRunner()} className="runner-helper-big is-open">
+              <Icon name="monitor" size={22} />실행기 열기
+            </button>
+            {installLink("runner-helper-big is-install", 22)}
+          </div>
+          {launchError ? <p className="runner-helper-error" role="alert">{launchError}</p> : null}
+        </>
+      );
+    }
+    return (
+      <section className="runner-helper-stage" aria-label="실행기에서 연결·실행">
+        <div className="runner-helper-col">
+          <div className="runner-helper-row">
+            <span>연결된 매크로</span>
+            <button type="button" onClick={() => moveTo(STEP_MACRO)} className="runner-helper-link">다른 매크로</button>
+          </div>
+          {card ? <MacroCard {...card} /> : <MacroSummary item={selected} />}
+          <section ref={helperCardRef} className="runner-helper-card" aria-live="polite">{body}</section>
+          {manualDownloadError ? <p className="runner-helper-error" role="alert">파일을 준비하지 못했어요: {manualDownloadError}</p> : null}
+        </div>
+      </section>
+    );
+  }
+
   const scene = step === STEP_MACRO
     ? renderMacroScene()
     : step === STEP_API_KEY
@@ -1393,21 +1579,38 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
             <button type="button" onClick={onExit}>시작 화면으로</button>
           </div>
         ) : null}
-        <div className="runner-wizard-progress-meta">
-          <span className="num">{String(progressIndex + 1).padStart(2, "0")} / {String(progressChapters.length).padStart(2, "0")}</span>
-          <strong>{progressChapters[progressIndex]}</strong>
-        </div>
-        <div className="runner-wizard-progress-track" role="progressbar" aria-label="빠른 실행 진행률" aria-valuemin="1" aria-valuemax={progressChapters.length} aria-valuenow={progressIndex + 1} aria-valuetext={`${progressChapters[progressIndex]}, ${progressChapters.length}단계 중 ${progressIndex + 1}단계`}>
-          <span style={{ "--fill": `${((progressIndex + 1) / progressChapters.length) * 100}%` }} />
-        </div>
-        <ol aria-hidden="true">
-          {progressChapters.map((chapter, index) => (
-            <li key={chapter} className={index === progressIndex ? "is-current" : index < progressIndex ? "is-done" : ""}>{chapter}</li>
-          ))}
-        </ol>
+        {helperFlow ? (
+          <ol className={helperStep ? "runner-helper-chapters" : "runner-helper-chapters is-wide"} aria-label={`빠른 실행 진행률, ${HELPER_CHAPTERS.length}단계 중 ${helperStep ? 2 : 1}단계`}>
+            {HELPER_CHAPTERS.map((chapter, index) => {
+              const done = index === 0 && helperStep;
+              const current = index === (helperStep ? 1 : 0);
+              return (
+                <li key={chapter} className={done ? "is-done" : current ? "is-current" : undefined} aria-current={current ? "step" : undefined}>
+                  {done ? <span className="runner-helper-ok" aria-hidden="true"><Icon name="check" size={12} strokeWidth={3} /></span> : <span className="runner-helper-n num" aria-hidden="true">{index + 1}</span>}
+                  {chapter}
+                </li>
+              );
+            })}
+          </ol>
+        ) : (
+          <>
+            <div className="runner-wizard-progress-meta">
+              <span className="num">{String(progressIndex + 1).padStart(2, "0")} / {String(progressChapters.length).padStart(2, "0")}</span>
+              <strong>{progressChapters[progressIndex]}</strong>
+            </div>
+            <div className="runner-wizard-progress-track" role="progressbar" aria-label="빠른 실행 진행률" aria-valuemin="1" aria-valuemax={progressChapters.length} aria-valuenow={progressIndex + 1} aria-valuetext={`${progressChapters[progressIndex]}, ${progressChapters.length}단계 중 ${progressIndex + 1}단계`}>
+              <span style={{ "--fill": `${((progressIndex + 1) / progressChapters.length) * 100}%` }} />
+            </div>
+            <ol aria-hidden="true">
+              {progressChapters.map((chapter, index) => (
+                <li key={chapter} className={index === progressIndex ? "is-current" : index < progressIndex ? "is-done" : ""}>{chapter}</li>
+              ))}
+            </ol>
+          </>
+        )}
       </section>
 
-      <section key={step} className="runner-wizard-stage runner-wizard-stage-enter" aria-labelledby="runner-wizard-title">
+      {helperStep ? renderHelperScene() : <section key={step} className="runner-wizard-stage runner-wizard-stage-enter" aria-labelledby="runner-wizard-title">
         <div className="runner-wizard-copy">
           <p>{copy.eyebrow}</p>
           <h1 id="runner-wizard-title" ref={headingRef} tabIndex={-1}>{copy.title}</h1>
@@ -1419,16 +1622,16 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
         >
           {scene}
         </div>
-      </section>
+      </section>}
 
-      <footer className="runner-wizard-footer">
+      {helperStep ? null : <footer className="runner-wizard-footer">
         <div>
           {step > 0 ? (
             <button type="button" onClick={previous} className="btn btn-l btn-ghost">이전 화면</button>
           ) : <span />}
           <div>{renderPrimaryAction()}</div>
         </div>
-      </footer>
+      </footer>}
     </div>
   );
 }

@@ -494,9 +494,6 @@ export function BacktestScene({ form, backtest }) {
               result={backtest.result}
               perSymbol={backtest.perSymbol}
               explanation={backtest.explanation}
-              onAiExplain={backtest.explain}
-              aiBusy={backtest.aiBusy}
-              aiError={backtest.aiError}
               summary={backtest.summary}
               dataSource={backtest.dataSource}
               periodLabel={backtest.periodLabel}

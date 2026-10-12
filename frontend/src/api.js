@@ -285,13 +285,6 @@ export const api = {
       method: "POST", timeoutMs: 60_000,
       body: JSON.stringify({ macro, summary }),
     }),
-  // 껄무새 AI 원인 분석 (온디맨드). 서버 Gemini 키 사용. 키 없거나 실패 시
-  // 규칙기반 해설 + ai_error 로 폴백해 응답.
-  explainAi: (macro, periodOverride) =>
-    req("/api/explain/ai", {
-      method: "POST",
-      body: JSON.stringify({ macro, period_override: periodOverride || null }),
-    }),
   // parameter sweep (익절/손절 자동 최적화). tpValues/slValues optional (server defaults).
   optimize: (macro, tpValues, slValues) =>
     req("/api/optimize", {

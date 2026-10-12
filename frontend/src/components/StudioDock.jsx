@@ -153,18 +153,19 @@ export function StudioBacktest({ result: r, perSymbol, periodLabel, symbol, leve
   );
 }
 
-// ── 껄무새 AI 해설 — 얼굴 + 머리말 + 요점 + 이 매크로를 쓴다면. 규칙 기반 문장은 보이지 않는다(분석하기를 누르면 AI). ──
-export function StudioAiExplain({ explanation, onAiExplain, aiBusy, aiError }) {
-  const isAi = explanation && explanation.source === "ai";
+// ── 껄무새 해설 — 얼굴 + 머리말 + 요점 + 이 매크로를 쓴다면. 백테스트 응답의 규칙 기반
+// 해설을 그대로 그린다(2026-10-12 에 AI 층을 걷어냈다 — 하루 한도 때문에 같은 화면이
+// 때에 따라 다른 말투였다).
+export function StudioExplain({ explanation }) {
   return (
     <div className="sd-ai">
       <img src={AI_MASCOT} alt="" width="256" height="256" className="sd-ai-face" aria-hidden="true" draggable="false" />
       <div className="sd-ai-body">
         <div className="sd-ai-who">
-          껄무새 AI 해설
-          <small>{isAi ? "이 결과가 왜 이렇게 나왔는지 · 5줄 안으로" : "이 결과가 왜 이렇게 나왔는지 쉽게 정리해 드려요"}</small>
+          껄무새 해설
+          <small>이 결과가 왜 이렇게 나왔는지</small>
         </div>
-        {isAi ? (
+        {explanation?.headline ? (
           <>
             <p className="sd-ai-head">{explanation.headline}</p>
             {explanation.points?.length > 0 && (
@@ -178,16 +179,8 @@ export function StudioAiExplain({ explanation, onAiExplain, aiBusy, aiError }) {
             {explanation.disclaimer && <p className="sd-note">{explanation.disclaimer}</p>}
           </>
         ) : (
-          <p className="sd-ai-empty">
-            버튼을 누르면 서버의 AI 가 백테스트 결과의 원인을 짚어요 — 어디서 벌고 어디서 잃었는지, 무엇을 조심할지, 어떤 값을 바꿔 볼지.
-          </p>
+          <p className="sd-ai-empty">백테스트를 돌리면 결과를 짚어 드려요.</p>
         )}
-        {aiError && <p className="sd-note text-amber-700" role="alert">{aiError}</p>}
-        <div className="sd-ai-actions">
-          <button type="button" onClick={onAiExplain} disabled={aiBusy} className="btn btn-m btn-secondary">
-            {aiBusy ? "분석 중…" : isAi ? "다시 분석" : "AI 로 분석하기"}
-          </button>
-        </div>
       </div>
     </div>
   );

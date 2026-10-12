@@ -4,7 +4,7 @@ import { useModalLayer } from "../hooks/useModalLayer.js";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import Builder from "../components/Builder.jsx";
 import SimBadge from "../components/SimBadge.jsx";
-import { StudioTabs, StudioBacktest, StudioAiExplain, StudioOptimize, StudioPaper, StudioOutcomes } from "../components/StudioDock.jsx";
+import { StudioTabs, StudioBacktest, StudioExplain, StudioOptimize, StudioPaper, StudioOutcomes } from "../components/StudioDock.jsx";
 import MacroCard from "../components/MacroCard.jsx";
 import usePaperSession from "../hooks/usePaperSession.js";
 import useStudioSplit from "../hooks/useStudioSplit.js";
@@ -193,8 +193,6 @@ function AccountStudio({ scope, allowRouterMacro }) {
   const [testedMacro, setTestedMacro] = useState(() => saved?.testedMacro || null);
   const [perSymbol, setPerSymbol] = useState(() => (Array.isArray(saved?.perSymbol) ? saved.perSymbol : []));
   const [explanation, setExplanation] = useState(() => saved?.explanation || null);
-  const [aiBusy, setAiBusy] = useState(false);
-  const [aiError, setAiError] = useState("");
   const [summary, setSummary] = useState(() => saved?.summary || "");
   const [dataSource, setDataSource] = useState(() => saved?.dataSource || "");
   const [periodLabel, setPeriodLabel] = useState(() => saved?.periodLabel || "");
@@ -213,7 +211,7 @@ function AccountStudio({ scope, allowRouterMacro }) {
       return !!draft && draft.context?.origin !== "hero";
     }
   );
-  const [dockTab, setDockTab] = useState(() => saved?.dockTab || "bt"); // 결과 독의 탭 — 백테스트 → AI 해설 → 최적화 → 페이퍼 → 매크로 등록
+  const [dockTab, setDockTab] = useState(() => saved?.dockTab || "bt"); // 결과 독의 탭 — 백테스트 → 껄무새 해설 → 최적화 → 페이퍼 → 매크로 등록
   const [shareOpen, setShareOpen] = useState(false); // 저장·공유 다이얼로그
   const [tourOpen, setTourOpen] = useState(false); // '사용법 안내' 항목별 설명 투어
   // 껄무새에게 물어볼까? — 모달, 덮어쓰기 확인. 불러온 뒤 안내 줄은 없다 — 머리의 출처 배지가 곧 안내다(2026-09-23).
@@ -249,7 +247,6 @@ function AccountStudio({ scope, allowRouterMacro }) {
   const requestIdRef = useRef(0);
   // 복원한 결과가 지금 조건과 같으면 자동 테스트가 바로 다시 돌지 않게 마지막 시도 키를 맞춰 둔다.
   const lastAttemptKeyRef = useRef(saved?.testedMacro ? macroKey(saved.testedMacro) : "");
-  const aiRequestIdRef = useRef(0);
   const latestTestedKeyRef = useRef("");
   const resumeRequestIdRef = useRef(0);
   const processedEntryQueryRef = useRef("");
@@ -403,8 +400,6 @@ function AccountStudio({ scope, allowRouterMacro }) {
     // wait for an edit or an explicit retry instead of hammering the API every
     // 700ms with the same invalid/unavailable input.
     lastAttemptKeyRef.current = key;
-    aiRequestIdRef.current += 1;
-    setAiBusy(false);
     setBusy(true);
     try {
       const budget = backtestBudget(snapshot, await loadTestLimits());
@@ -421,7 +416,6 @@ function AccountStudio({ scope, allowRouterMacro }) {
       setResult(data.result);
       setPerSymbol(data.per_symbol || []);
       setExplanation(data.explanation || null);
-      setAiError("");
       setSummary(data.human_summary);
       setDataSource(data.data_source);
       setPeriodLabel(data.period_label);
@@ -543,8 +537,6 @@ function AccountStudio({ scope, allowRouterMacro }) {
     const requestId = ++requestIdRef.current;
     const key = currentMacroKey;
     lastAttemptKeyRef.current = key;
-    aiRequestIdRef.current += 1;
-    setAiBusy(false);
     setBusy(true);
     try {
       const budget = backtestBudget(form, await loadTestLimits());
@@ -563,7 +555,6 @@ function AccountStudio({ scope, allowRouterMacro }) {
       // the newly saved result, and derive the period label from the snapshot.
       setPerSymbol((previous) => (testedMacroKey === key ? previous : []));
       setExplanation(data.explanation || null);
-      setAiError("");
       setSummary(data.human_summary);
       setDataSource(data.data_source);
       setPeriodLabel(periodLabelOf(macro));
@@ -613,15 +604,12 @@ function AccountStudio({ scope, allowRouterMacro }) {
       const savedMacro = data?.item?.macro || macro;
 
       requestIdRef.current += 1;
-      aiRequestIdRef.current += 1;
       lastAttemptKeyRef.current = "";
       setForm(macroToForm(savedMacro));
       setTestedMacro(null);
       setResult(null);
       setPerSymbol([]);
       setExplanation(null);
-      setAiBusy(false);
-      setAiError("");
       setSummary("");
       setDataSource("");
       setPeriodLabel("");
@@ -658,28 +646,6 @@ function AccountStudio({ scope, allowRouterMacro }) {
     event.target.value = "";
   }
 
-  async function enrichExplanation() {
-    if (aiBusy || !result || !testedMacro) return;
-    const macro = testedMacro;
-    const key = macroKey(macro);
-    const requestId = ++aiRequestIdRef.current;
-    setAiBusy(true);
-    setAiError("");
-    try {
-      const data = await api.explainAi(macro);
-      if (!isCurrentAccount() || requestId !== aiRequestIdRef.current || latestTestedKeyRef.current !== key) return;
-      if (data.explanation) setExplanation(data.explanation);
-      if (data.ai_available === false) setAiError("AI 해설이 아직 준비되지 않았어요 (서버 설정 필요).");
-      else if (data.ai_error) setAiError(data.ai_error);
-    } catch (reason) {
-      if (isCurrentAccount() && requestId === aiRequestIdRef.current && latestTestedKeyRef.current === key) {
-        setAiError("AI 호출 실패: " + String(reason.message || reason));
-      }
-    } finally {
-      if (isCurrentAccount() && requestId === aiRequestIdRef.current) setAiBusy(false);
-    }
-  }
-
   function finishRegistration(entry) {
     if (!isCurrentAccount()) return;
     completeJourney();
@@ -697,7 +663,7 @@ function AccountStudio({ scope, allowRouterMacro }) {
 
   // ── 워크벤치 ──────────────────────────────────────────────────────────
   // 페이지는 스크롤하지 않는다. 조건(왼쪽) · 차트(오른쪽 위) · 결과 독(오른쪽 아래)이 각자 스크롤한다.
-  // 결과 독의 탭 순서가 곧 검증 순서다: 백테스트 → AI 해설 → 익·손절 최적화 → 페이퍼 트레이딩 → 등록·실행.
+  // 결과 독의 탭 순서가 곧 검증 순서다: 백테스트 → 껄무새 해설 → 익·손절 최적화 → 페이퍼 트레이딩 → 등록·실행.
   const shareStale = !!share && !!share.macroKey && share.macroKey !== currentMacroKey;
   // 공유 링크 — 있으면 다이얼로그를 열고, 없거나 조건이 바뀌었으면 저장해서 만든 뒤 연다.
   async function openShare() {
@@ -715,7 +681,7 @@ function AccountStudio({ scope, allowRouterMacro }) {
         : "바뀐 조건으로 다시 테스트";
   const tabs = [
     { id: "bt", label: "백테스트", enabled: true, dot: busy ? "run" : !result ? "" : resultIsFresh ? "ok" : "warn" },
-    { id: "ai", label: "껄무새 AI 해설", enabled: !!result, dot: aiBusy ? "run" : explanation?.source === "ai" ? "ok" : "" },
+    { id: "ai", label: "껄무새 해설", enabled: !!result, dot: explanation ? "ok" : "" },
     { id: "opt", label: "익·손절 최적화", enabled: !!result, dot: optimized ? "ok" : "" },
     { id: "paper", label: "페이퍼 트레이딩", enabled: !!result, dot: paper.running ? "run" : paper.status ? "ok" : "" },
     { id: "done", label: "매크로 등록", enabled: !!result, dot: "" },
@@ -925,7 +891,7 @@ function AccountStudio({ scope, allowRouterMacro }) {
             )}
 
             {dockTab === "ai" && result && (
-              <StudioAiExplain explanation={explanation} onAiExplain={enrichExplanation} aiBusy={aiBusy} aiError={aiError} />
+              <StudioExplain explanation={explanation} />
             )}
 
             {dockTab === "opt" && result && (

@@ -43,3 +43,22 @@ test("단타형 흔적이 화면에 남지 않았다", () => {
     assert.ok(!text.includes("단타형"), `${path} 에 단타형이 남았다`);
   }
 });
+
+test("AI 해설 호출이 화면에서 사라졌다", () => {
+  // AI 층만 벗긴 것이다 — 해설은 백테스트 응답에 실려 그대로 보인다.
+  for (const path of ["../src/api.js", "../src/pages/Studio.jsx",
+                      "../src/hooks/useHeroBacktest.js",
+                      "../src/components/ResultView.jsx",
+                      "../src/components/StudioDock.jsx",
+                      "../src/components/HeroGuideScreens.jsx"]) {
+    const text = source(path);
+    assert.ok(!/explainAi|explain\/ai/.test(text), `${path} 에 AI 해설 호출이 남았다`);
+    // 대문자 변형(setAiBusy)과 요청 번호 ref 까지 본다 — 선언만 지우고 호출이 남으면
+    // 화면이 ReferenceError 로 죽는다(실제로 한 번 그랬다).
+    assert.ok(!/[aA]iBusy|[aA]iError|onAiExplain|aiRequestIdRef|aiPendingRef/.test(text),
+      `${path} 에 AI 전용 상태가 남았다`);
+  }
+  const view = source("../src/components/ResultView.jsx");
+  assert.match(view, /explanation\.headline/, "해설은 그대로 보여 줘야 한다");
+  assert.ok(!view.includes("AI 해설"), "라벨에서 'AI' 가 빠져야 한다");
+});

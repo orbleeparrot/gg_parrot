@@ -90,6 +90,8 @@ def _fold_status(raw) -> str:
 class BinanceBroker:
     """지금 봇이 하던 바이낸스 호출을 그대로 감싼다. 로직 이동이지 변경이 아니다."""
 
+    last_error_name = ""
+
     def __init__(self, raw, *, market, symbol, side, testnet, log, leverage=1):
         self.raw = raw
         self.market = market
@@ -165,6 +167,7 @@ class BinanceBroker:
 
         통과 못 했을 때 세션을 멈출지는 부르는 쪽이 정한다 — 이 메서드는 결과만 돌려준다.
         """
+        self.last_error_name = ""
         try:
             if self.market == "futures":
                 minimum = self._rehearse_futures_reads()
@@ -176,9 +179,11 @@ class BinanceBroker:
         except Exception as exc:
             # -2015 는 '키 · 허용 IP · 권한' 중 무엇인지 거래소가 가르지 않고 한 코드로 돌려준다.
             if getattr(exc, "code", None) in (-2014, -2015):
+                self.last_error_name = "binance_access"
                 return False, f"바이낸스가 키를 받아주지 않았어요({exc}). 키 · 허용 IP · 권한 설정을 확인하세요."
             return False, f"바이낸스 확인에 실패했어요: {exc}"
         if minimum and _positive_number(notional) < minimum:
+            self.last_error_name = "under_min_total"
             return False, f"최소 주문 금액보다 적어요. 바이낸스 최소 주문 금액은 {minimum:g} 인데 이번 주문은 {_positive_number(notional):g} 입니다."
         return True, "바이낸스 계정 확인과 주문 규격 읽기에 성공했습니다. 주문 권한은 첫 주문에서야 드러납니다"
 
@@ -455,6 +460,7 @@ class DomesticBroker:
 
     market = "spot"
     side = "long"
+    last_error_name = ""
 
     def __init__(self, access_key, secret_key, *, exchange, symbol, log, session=None):
         if exchange not in _DOMESTIC_SPECS:
@@ -549,16 +555,20 @@ class DomesticBroker:
         통과 못 했을 때 세션을 멈출지는 부르는 쪽이 정한다 — 모의 모드는 키 없이도 돌아야 해서
         여기서 정책을 갖지 않고 결과만 돌려준다.
         """
+        # 연결 도우미가 '키 인증 · 허용 IP · 주문 권한' 중 어디서 막혔는지 가르려고 거래소 오류 낱말만 남긴다.
+        self.last_error_name = ""
         try:
             if self.exchange == "upbit":
                 return self._rehearse_by_test_order(notional)
             return self._rehearse_by_reads(notional)
         except DomesticApiError as exc:
+            self.last_error_name = exc.name
             return False, _explain_domestic_error(self.exchange, exc.status, exc.name, exc.message)
         except ValueError as exc:
             return False, f"리허설 주문을 만들지 못했어요: {exc}"
         except Exception as exc:
             # 네트워크 끊김 · 시간 초과. 거래소 응답이 아니므로 키 탓으로 읽히지 않게 따로 말한다.
+            self.last_error_name = "network"
             return False, f"{DOMESTIC_LABELS[self.exchange]} 에 연결하지 못했어요: {exc}"
 
     def _rehearse_by_test_order(self, notional) -> tuple[bool, str]:
@@ -579,6 +589,7 @@ class DomesticBroker:
         self._load_chance()
         minimum = self._rules.min_notional
         if minimum and _positive_number(notional) < minimum:
+            self.last_error_name = "under_min_total"
             return False, (f"최소 주문 금액보다 적어요. 빗썸 최소 주문 금액은 {_plain(Decimal(repr(minimum)))}원인데 "
                            f"이번 주문은 {_plain(Decimal(repr(_positive_number(notional))))}원입니다.")
         return True, ("빗썸 키 · 허용 IP · 최소 주문 금액은 확인했습니다. 빗썸에는 주문 검증 경로가 없어 "

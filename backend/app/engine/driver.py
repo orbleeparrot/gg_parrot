@@ -194,16 +194,22 @@ class StrategyDriver:
             if not equity or equity <= 0:
                 equity = leg.initial
             st = leg_state.get(leg.symbol) or {}
+            # 전략 상태는 **장부 앞**에서 되돌린다 — restore() 가 현금을 되짚을 때 side 로
+            # 분기하므로(숏은 식이 다르다), K 의 방어 전환 단계를 먼저 바로잡아야 한다.
+            # 옛 state_json 에는 이 칸이 없고, 그때는 예전처럼 웜업이 남긴 값을 쓴다.
+            restore_strategy = getattr(leg.sim, "restore_strategy", None)
+            if restore_strategy is not None:
+                restore_strategy(st.get("strategy"))
             restore = getattr(leg.sim, "restore", None)
             if restore is not None:
                 restore(equity, in_position=bool(st.get("in_position")), qty=float(st.get("qty") or 0.0),
                         entry_price=float(st.get("entry_price") or 0.0), last_price=float(st.get("last_price") or 0.0),
                         cooldown_until_ms=state.get("cooldown_until_ms"))
-            # 전략 상태는 **장부 복구 뒤**에 — 웜업이 재생으로 덮어 둔 값을 체크포인트로 되돌린다.
-            # 옛 state_json 에는 이 칸이 없고, 그때는 예전처럼 웜업이 남긴 값을 쓴다.
-            restore_strategy = getattr(leg.sim, "restore_strategy", None)
-            if restore_strategy is not None:
-                restore_strategy(st.get("strategy"))
+            # 롯을 참조하는 전략 상태(D 의 칸별 롯)는 장부 **뒤**에 — restore() 가 여러 롯을
+            # 평단 하나로 합치므로, 합친 뒤에 칸별로 다시 깔아야 한다.
+            restore_lots = getattr(leg.sim, "restore_strategy_lots", None)
+            if restore_lots is not None:
+                restore_lots(st.get("strategy"))
             restore_schedule = getattr(leg.sim, "restore_dca_schedule", None)
             if restore_schedule is not None and "dca_next_buy_ms" in st:
                 restore_schedule(st["dca_next_buy_ms"], stopped=bool(st.get("dca_stopped")))

@@ -225,10 +225,23 @@ class CandleSim:
         return {}
 
     def restore_strategy(self, state: Optional[dict]) -> None:
-        """체크포인트의 전략 상태로 되돌린다. **warmup() 뒤에 불러야 한다**(웜업이 재생으로 덮는다).
+        """체크포인트의 전략 상태로 되돌린다 — **장부 복구 앞**에서 부른다.
+
+        왜 앞인가: ``restore()`` 가 현금을 되짚을 때 ``self.side`` 로 분기한다(숏은 식이
+        다르다). K(하락 방어)는 방어 전환으로 side 가 SHORT 로 바뀌는데, 웜업 재생이
+        평평하게 끝나면 LONG 으로 돌아와 있다. 그 상태로 장부를 복구하면 **현금이 틀린
+        식으로** 되살아난다. 그래서 방향부터 바로잡고 장부를 복구한다.
 
         없는 칸과 ``None`` 은 '모름' 으로 보고 지금 값(웜업이 남긴 값)을 그대로 둔다 —
         옛 state_json 으로 복구할 때 예전 동작과 같아야 하기 때문이다.
+        """
+        return None
+
+    def restore_strategy_lots(self, state: Optional[dict]) -> None:
+        """롯을 참조하는 전략 상태 — **장부 복구 뒤**에 부른다.
+
+        D(그리드)만 쓴다. ``restore()`` 가 여러 롯을 평단 하나로 합치므로 칸별 롯은
+        그때 사라진다. 합친 뒤에 칸별로 다시 깔아야 한다(앞에서 하면 restore 가 덮는다).
         """
         return None
 
@@ -600,6 +613,33 @@ class GridSim(CandleSim):
     def _reset_position_state(self) -> None:
         self.holdings = {}
 
+    # holdings 는 self.lots 와 **같은 롯 객체를 공유**한다(_remove_lot 가 둘을 함께 뺀다).
+    # 그래서 칸별 롯을 통째로 싣고, 장부 복구 뒤에 다시 깐다. 안 그러면 재기동 뒤
+    # "어느 칸을 사 뒀는지" 를 잊어 같은 칸을 다시 사거나 팔 칸을 모른다.
+    def strategy_state(self) -> dict:
+        return {"grid": [{"level": int(i), "qty": float(lot.qty), "fill": float(lot.fill),
+                          "margin": float(lot.margin)}
+                         for i, lot in sorted(self.holdings.items())],
+                "stopped": bool(self.stopped)}
+
+    def restore_strategy(self, state: Optional[dict]) -> None:
+        if state and state.get("stopped") is not None:
+            # 밴드를 벗어나 멈춘 그리드가 재기동으로 되살아나면 안 된다.
+            self.stopped = bool(state["stopped"])
+
+    def restore_strategy_lots(self, state: Optional[dict]) -> None:
+        rows = (state or {}).get("grid")
+        if rows is None:
+            return
+        # 합쳐 둔 롯을 칸별 롯으로 바꿔 깐다. 자산은 유지된다 — 체크포인트의 평단이 이
+        # 롯들의 수량가중 평균이라 sum(qty_i·fill_i) == qty·평단 이고 margin 합도 같다.
+        self.lots = []
+        self.holdings = {}
+        for row in rows:
+            lot = _Lot(qty=float(row["qty"]), fill=float(row["fill"]), margin=float(row["margin"]))
+            self.lots.append(lot)
+            self.holdings[int(row["level"])] = lot
+
     def _strategy(self, o, h, l, c, ts, fills):
         # Stop-loss / daily / holding first (may liquidate whole book).
         if self._common_risk(o, h, l, c, ts, fills):
@@ -676,6 +716,18 @@ class MartingaleSim(CandleSim):
         self._so_done = 0
         self._base_price = 0.0
 
+    # 봉에서 다시 못 구한다 — 잊으면 추가매수 차수가 0 으로 돌아가 이미 채운 단계를 다시 산다.
+    def strategy_state(self) -> dict:
+        return {"so_done": int(self._so_done), "base_price": float(self._base_price)}
+
+    def restore_strategy(self, state: Optional[dict]) -> None:
+        if not state:
+            return
+        if state.get("so_done") is not None:
+            self._so_done = 0
+        if state.get("base_price") is not None:
+            self._base_price = float(state["base_price"])
+
     def _next_so_price(self) -> float:
         # cumulative deviation with step scaling
         cum = 0.0
@@ -749,6 +801,19 @@ class BreakoutSim(CandleSim):
     def _reset_position_state(self) -> None:
         self._peak = 0.0
         self._exit_next_open = False
+
+    # _prev_range · 이동평균은 웜업이 과거 봉에서 다시 만든다. 못 만드는 둘만 싣는다:
+    # 고점(트레일링 기준)과 "다음 봉 시가에 청산" 예약 — 예약을 잊으면 청산이 사라진다.
+    def strategy_state(self) -> dict:
+        return {"peak": float(self._peak), "exit_next_open": bool(self._exit_next_open)}
+
+    def restore_strategy(self, state: Optional[dict]) -> None:
+        if not state:
+            return
+        if state.get("peak") is not None:
+            self._peak = float(state["peak"])
+        if state.get("exit_next_open") is not None:
+            self._exit_next_open = bool(state["exit_next_open"])
 
     def execute_pending(self, price: float, ts: datetime) -> List[Fill]:
         """어제 돌파 진입의 '다음 봉 시가 청산' 을 ``price`` 에 실행하고 플래그를 지운다.
@@ -1030,6 +1095,22 @@ class SarSim(CandleSim):
     def _reset_position_state(self) -> None:
         self._reset_after_flat()
 
+    # side 가 가장 중요하다 — restore() 가 현금을 되짚을 때 숏/롱으로 분기하므로,
+    # 숏 단계였던 세션을 LONG 으로 복구하면 현금이 틀린 식으로 되살아난다.
+    def strategy_state(self) -> dict:
+        return {"side": "short" if self.side is PositionSide.SHORT else "long",
+                "phase": str(self._phase), "defended": bool(self._defended)}
+
+    def restore_strategy(self, state: Optional[dict]) -> None:
+        if not state:
+            return
+        if state.get("side") is not None:
+            self.side = PositionSide.SHORT if str(state["side"]) == "short" else PositionSide.LONG
+        if state.get("phase") is not None:
+            self._phase = str(state["phase"])
+        if state.get("defended") is not None:
+            self._defended = bool(state["defended"])
+
     def _reset_after_flat(self) -> None:
         self.side = PositionSide.LONG
         self._phase = "long"
@@ -1184,6 +1265,9 @@ class LiveCandleSim:
 
     def restore_strategy(self, state: Optional[dict]) -> None:
         self.inner.restore_strategy(state)
+
+    def restore_strategy_lots(self, state: Optional[dict]) -> None:
+        self.inner.restore_strategy_lots(state)
 
     def restore(self, equity: float, *, in_position: bool, qty: float, entry_price: float,
                 last_price: float, cooldown_until_ms: Optional[int] = None) -> None:

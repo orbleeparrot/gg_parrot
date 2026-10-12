@@ -222,3 +222,184 @@ def test_session_view_carries_the_real_entry_target():
     row.macro_json = "{깨짐"
     assert _session_view(row)["strategy_levels"] == {"entry_target": None, "trail_stop": None,
                                                      "trail_activation": None, "armed": False}
+
+
+# ===========================================================================
+#  D · H · I · K 도 같은 보호를 받는다 (2026-10-12)
+# ===========================================================================
+# E 와 같은 결함이 네 규칙에 더 있었다. 각 규칙이 "봉에서 다시 못 구하는" 상태를 들고 있고,
+# 체크포인트에 없으면 재기동이 500봉 웜업 재생의 잔재에서 다시 시작한다.
+
+def _m(rule, params, risk=None):
+    body = {
+        "symbol": "BTCUSDT", "rule_type": rule, "position_side": "long", "market": "spot",
+        "leverage": 1, "candle_interval": "1h", "period": {"preset": "3m"},
+        "params": {**params, "initial_capital": 1_000_000}, "risk": risk or {},
+        "fees": {"commission_pct": 0, "slippage_pct": 0},
+    }
+    return Macro.model_validate(body)
+
+
+def _drive(macro, bars, initial=1_000_000.0, tick=None):
+    """봉을 밀어 넣고 마지막에 틱 한 번 — 실제 세션이 3초마다 하는 일이다.
+
+    틱을 빼면 leg.last_price 와 driver.equity 가 초기값으로 남고, 그 0 으로 현금을
+    되짚게 되어 복구 자산이 틀어진다(체크포인트는 틱이 채운 값을 싣는다).
+    """
+    driver = StrategyDriver([Leg(macro.symbol, make_sim(macro, initial_capital=initial), initial)],
+                            initial, macro=macro)
+    for bar in bars:
+        driver.push_candle(macro.symbol, bar)
+    driver.tick(float(tick if tick is not None else bars[-1][4]), T)
+    return driver
+
+
+# --- D 그리드: 어느 칸을 사 뒀는지 ----------------------------------------
+
+def test_grid_remembers_which_levels_it_holds():
+    macro = _m("D", {"lower_price": 90, "upper_price": 110, "grid_count": 4,
+                     "per_grid_invest": 100_000})
+    live = _drive(macro, [(0, 100, 100, 95, 96), (3_600_000, 96, 97, 92, 93)])
+    sim = live.legs[0].sim
+    held = dict(sim.inner.holdings)
+    assert held, "칸을 하나도 안 샀으면 이 시험이 아무것도 안 본다"
+    saved = live.state()
+    assert saved["legs"][0]["strategy"]["grid"], "칸별 롯을 실어야 한다"
+    equity_before = live.legs[0].sim.equity(93.0)
+
+    reborn = _drive(macro, [(0, 105, 106, 104, 105)])     # 웜업 재생의 잔재
+    reborn.restore(saved, leg_equity={}, total_equity=live.equity)
+    after = reborn.legs[0].sim
+    assert set(after.inner.holdings.keys()) == set(held.keys()), "어느 칸을 사 뒀는지 잊었다"
+    for level, lot in held.items():
+        assert after.inner.holdings[level].qty == pytest.approx(lot.qty)
+        assert after.inner.holdings[level].fill == pytest.approx(lot.fill)
+    # 칸별 롯으로 다시 깔아도 자산은 그대로여야 한다(체크포인트 평단이 수량가중 평균이므로).
+    assert after.equity(93.0) == pytest.approx(equity_before, rel=1e-9)
+
+
+def test_grid_that_stopped_outside_the_band_stays_stopped():
+    macro = _m("D", {"lower_price": 90, "upper_price": 110, "grid_count": 4,
+                     "per_grid_invest": 100_000})
+    live = _drive(macro, [(0, 100, 100, 95, 96), (3_600_000, 96, 120, 96, 120)])  # 밴드 위로 이탈
+    assert live.legs[0].sim.inner.stopped is True
+    saved = live.state()
+    reborn = _drive(macro, [(0, 100, 100, 100, 100)])
+    reborn.restore(saved, leg_equity={}, total_equity=live.equity)
+    assert reborn.legs[0].sim.inner.stopped is True, "멈춘 그리드가 재기동으로 되살아나면 안 된다"
+
+
+# --- H 마틴게일: 추가매수 차수 --------------------------------------------
+
+def test_martingale_remembers_how_many_safety_orders_are_done():
+    macro = _m("H", {"base_order_size": 100_000, "safety_order_size": 100_000,
+                     "price_deviation": 2, "max_safety_orders": 5, "take_profit": 2})
+    live = _drive(macro, [(0, 100, 100, 100, 100), (3_600_000, 100, 100, 94, 95)])
+    sim = live.legs[0].sim
+    done = sim.inner._so_done
+    assert done >= 1, "추가매수가 하나도 안 들어갔으면 이 시험이 공허하다"
+    saved = live.state()
+    assert saved["legs"][0]["strategy"]["so_done"] == done
+
+    reborn = _drive(macro, [(0, 200, 200, 200, 200)])
+    reborn.restore(saved, leg_equity={}, total_equity=live.equity)
+    assert reborn.legs[0].sim.inner._so_done == done, "차수를 잊으면 채운 단계를 다시 산다"
+    assert reborn.legs[0].sim.inner._base_price == pytest.approx(sim.inner._base_price)
+
+
+# --- I 변동성 돌파: 다음 봉 시가 청산 예약 --------------------------------
+
+def test_breakout_remembers_the_pending_next_open_exit():
+    macro = _m("I", {"k": 0.5, "exit_mode": "next_open"})
+    live = _drive(macro, [(0, 100, 104, 96, 100), (3_600_000, 100, 110, 99, 109)])
+    sim = live.legs[0].sim
+    assert sim.inner._exit_next_open is True, "돌파 진입 뒤 다음 봉 시가 청산이 예약돼야 한다"
+    saved = live.state()
+    assert saved["legs"][0]["strategy"]["exit_next_open"] is True
+
+    reborn = _drive(macro, [(0, 100, 104, 96, 100)])
+    reborn.restore(saved, leg_equity={}, total_equity=live.equity)
+    assert reborn.legs[0].sim.inner._exit_next_open is True, "예약을 잊으면 청산이 사라진다"
+    assert reborn.legs[0].sim.inner._peak == pytest.approx(sim.inner._peak)
+
+
+# --- K 하락 방어: 방향이 현금 계산을 가른다 -------------------------------
+
+def test_sar_restores_the_short_leg_and_its_cash():
+    """restore() 는 self.side 로 현금을 되짚는다(숏은 식이 다르다).
+
+    방어 전환으로 숏이 된 세션을 LONG 으로 복구하면 **현금이 틀린 식으로** 되살아난다.
+    그래서 전략 상태를 장부보다 **먼저** 돌려놓는다.
+    """
+    from app.engine.schema import PositionSide
+    macro = _m("K", {"drop_trigger_pct": 5, "partial_exit_pct": 50, "flip_to_short": True,
+                     "short_take_profit_pct": 5, "short_stop_loss_pct": 5})
+    live = _drive(macro, [(0, 100, 100, 100, 100), (3_600_000, 100, 100, 94, 94)])
+    sim = live.legs[0].sim
+    assert sim.inner.side is PositionSide.SHORT, "방어 전환이 안 일어났으면 이 시험이 공허하다"
+    assert sim.state()["in_position"] is True
+    saved = live.state()
+    assert saved["legs"][0]["strategy"]["side"] == "short"
+    equity_before = sim.equity(94.0)
+
+    reborn = _drive(macro, [(0, 100, 100, 100, 100)])   # 웜업 재생은 LONG 으로 끝났다
+    assert reborn.legs[0].sim.inner.side is PositionSide.LONG
+    reborn.restore(saved, leg_equity={}, total_equity=live.equity)
+    after = reborn.legs[0].sim
+    assert after.inner.side is PositionSide.SHORT, "방향을 잊으면 숏을 롱으로 들고 간다"
+    assert after.inner._phase == sim.inner._phase
+    assert after.inner._defended == sim.inner._defended
+    # 방향이 맞아야 현금이 같은 식으로 되짚어진다.
+    assert after.equity(94.0) == pytest.approx(equity_before, rel=1e-9)
+
+
+# --- 네 규칙 모두: 옛 체크포인트는 예전과 같다 -----------------------------
+
+@pytest.mark.parametrize("rule,params", [
+    ("D", {"lower_price": 90, "upper_price": 110, "grid_count": 4, "per_grid_invest": 100_000}),
+    ("H", {"base_order_size": 100_000, "safety_order_size": 100_000, "price_deviation": 2,
+           "max_safety_orders": 5, "take_profit": 2}),
+    ("I", {"k": 0.5, "exit_mode": "next_open"}),
+    ("K", {"drop_trigger_pct": 5, "partial_exit_pct": 50, "flip_to_short": True,
+           "short_take_profit_pct": 5, "short_stop_loss_pct": 5}),
+])
+def test_old_checkpoints_still_restore(rule, params):
+    macro = _m(rule, params)
+    live = _drive(macro, [(0, 100, 100, 100, 100), (3_600_000, 100, 100, 94, 95)])
+    saved = live.state()
+    assert saved["legs"][0].get("strategy"), f"{rule} 이 전략 상태를 안 싣는다"
+    for leg in saved["legs"]:
+        leg.pop("strategy", None)        # v12 이전 state_json 모양
+    reborn = _drive(macro, [(0, 100, 100, 100, 100)])
+    reborn.restore(saved, leg_equity={}, total_equity=live.equity)   # 터지지 않아야 한다
+    assert reborn.legs[0].sim.state()["in_position"] == saved["legs"][0]["in_position"]
+
+
+@pytest.mark.parametrize("rule,params", [
+    ("D", {"lower_price": 90, "upper_price": 110, "grid_count": 4, "per_grid_invest": 100_000}),
+    ("E", {"entry_mode": "dip", "entry_dip": 3, "activation_profit": 4, "trail_percent": 2}),
+    ("H", {"base_order_size": 100_000, "safety_order_size": 100_000, "price_deviation": 2,
+           "max_safety_orders": 5, "take_profit": 2}),
+    ("I", {"k": 0.5, "exit_mode": "next_open"}),
+    ("K", {"drop_trigger_pct": 5, "partial_exit_pct": 50, "flip_to_short": True,
+           "short_take_profit_pct": 5, "short_stop_loss_pct": 5}),
+])
+def test_partial_strategy_block_keeps_the_current_values(rule, params):
+    """칸이 일부만 있거나 ``None`` 인 체크포인트는 '모름' 이다 — 0 으로 지우면 안 된다.
+
+    훅의 약속이 그것이고(옛 state_json 호환), 지우면 잊는 것과 같아진다.
+    앞 버전이 쓴 전략 블록에 새로 더한 칸이 없을 때가 이 경우다.
+    """
+    macro = _m(rule, params)
+    sim = _drive(macro, [(0, 100, 100, 100, 100), (3_600_000, 100, 100, 94, 95)]).legs[0].sim
+    before = sim.strategy_state()
+    assert before, f"{rule} 이 전략 상태를 안 낸다"
+
+    sim.restore_strategy({})                                   # 빈 블록
+    assert sim.strategy_state() == before, "빈 블록이 값을 지웠다"
+    sim.restore_strategy({key: None for key in before})        # 전부 모름
+    assert sim.strategy_state() == before, "None 이 값을 지웠다"
+    for key in before:                                         # 한 칸씩 빠진 블록
+        partial = {k: v for k, v in before.items() if k != key}
+        sim.restore_strategy(partial)
+        assert sim.strategy_state() == before, f"'{key}' 가 없을 때 다른 칸이 지워졌다"

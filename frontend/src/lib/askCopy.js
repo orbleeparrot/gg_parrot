@@ -12,11 +12,12 @@ export const STEP_PROMPTS = {
   watch: "하루에 얼마나 자주 볼 수 있어요?",
 };
 
+// 성향은 종목이 아니라 '얼마나 흔들려도 되는가' 다(2026-10-12). 힌트에 고정 숫자를 쓰지
+// 않는다 — 허용 낙폭이 기간마다 다르다(1주 8% ~ 1년 30%).
 export const PROFILES = [
-  { value: "stable", label: "안정형", hint: "-10%까지" },
-  { value: "balanced", label: "균형형", hint: "-20%까지" },
-  { value: "aggressive", label: "공격형", hint: "제한 없음" },
-  { value: "scalper", label: "단타형", hint: "짧은 봉, 빠르게 · 제한 없음" },
+  { value: "stable", label: "안정형", hint: "낙폭을 가장 좁게" },
+  { value: "balanced", label: "균형형", hint: "그 사이에서" },
+  { value: "aggressive", label: "공격형", hint: "낙폭 제한 없음" },
 ];
 
 export const MARKETS = [
@@ -39,7 +40,8 @@ export const HORIZONS = [
 export const WATCH_LEVELS = [
   { value: "rarely", label: "거의 못 봐요", hint: "하루 한 번쯤" },
   { value: "sometimes", label: "가끔 봐요", hint: "몇 시간에 한 번" },
-  { value: "often", label: "수시로 봐요", hint: "자주 확인" },
+  { value: "often", label: "수시로 봐요", hint: "한 시간에 한 번" },
+  { value: "constantly", label: "아주 자주 봐요", hint: "15분에 한 번" },
 ];
 
 export const CANDIDATES_PROMPT = "성향에 맞는 종목을 골라 봤어요. 하나를 고르면 매크로 후보를 보여 드릴게요.";
@@ -52,11 +54,10 @@ export const FOLLOW_UPS = [
   { kind: "restart", label: "처음부터" },
 ];
 
-export const SCALPER_NOTE = "짧은 봉은 수수료·슬리피지 영향이 커요 · 실행기보다 페이퍼 트레이딩으로 먼저 확인해요";
-// 고르는 자리에서 미리 말한다(2026-10-08). 실측: 1주 창에서 익절폭을 1%~8% 로 넓혀 봐도
-// 거래 조건을 채운 후보가 하나도 돈을 벌지 못했다 — 거래 수와 손실이 같이 늘었다(마찰).
-// 고르고 나서 빈 화면을 보는 것보다 고를 때 아는 쪽이 낫다.
-export const SCALPER_PICK_WARN = "단타형은 짧은 봉이라 수수료·슬리피지가 커요 — 과거 데이터에서 '그냥 들고 있기' 를 넘기기 어려운 편이에요.";
+// 15분봉을 세 성향 모두에 연 뒤(2026-10-12) 고르는 자리에서 미리 말한다. 실측: 짧은 봉
+// 후보의 손실 비율이 1분봉 89% · 5분봉 78% · 15분봉 64% 였다. 왕복 마찰(수수료+슬리피지)을
+// 짧은 봉에서 넘기기 어렵다. 고르고 나서 빈 화면을 보는 것보다 고를 때 아는 쪽이 낫다.
+export const SHORT_BAR_WARN = "'아주 자주 봐요' 는 15분봉이에요 — 과거 데이터에서 15분봉 후보의 64%가 손실이었어요. 사고팔 때마다 수수료·슬리피지가 붙기 때문이에요.";
 // 결과가 0개면 서버가 횟수를 돌려준다. 말하지 않으면 "결과도 없는데 횟수만 깎였다" 로 보인다.
 export const REFUNDED_TEXT = "보여 드릴 조합이 없었으니 횟수는 돌려드렸어요.";
 export const feesNote = (commission, slippage) => `수수료 ${commission}% · 슬리피지 ${slippage}% 포함`;

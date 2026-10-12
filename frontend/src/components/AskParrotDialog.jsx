@@ -12,8 +12,8 @@ import {
   BACK_TO_STEP, BALANCE_ERROR, BALANCE_NOTE, CANDIDATES_PROMPT, COMPARE_TITLE, CONDITION_LABEL, CONSENT_BUTTON, CONSENT_TEXT, DISCLAIMER, DOMESTIC_SPOT_ONLY,
   FOLLOW_UPS, FOLLOW_UPS_TITLE, HOLD_LABEL, HORIZONS, LEGEND_BASE, LEGEND_EQUITY, LEVERAGES, LOAD_BUTTON,
   MANUAL_PICK_LABEL, MANUAL_SEARCH_MISS, MANUAL_SEARCH_PLACEHOLDER, MARKETS, NEXT_LABEL,
-  NO_EDGE_NOTE, NO_QUOTA_TEXT, OPENING_TEXT, REFUNDED_TEXT, SCALPER_PICK_WARN, PREV_LABEL, PROFILES, READY_BUTTON, READY_TEXT, RESTART_LABEL, RETURN_LABEL,
-  RUNNING_TEXT, SCALPER_NOTE, SPOT_HINT, STABLE_NO_FUTURES, STEP_PROMPTS, UNAVAILABLE_TEXT, VS_HOLD_LABEL,
+  NO_EDGE_NOTE, NO_QUOTA_TEXT, OPENING_TEXT, REFUNDED_TEXT, SHORT_BAR_WARN, PREV_LABEL, PROFILES, READY_BUTTON, READY_TEXT, RESTART_LABEL, RETURN_LABEL,
+  RUNNING_TEXT, SPOT_HINT, STABLE_NO_FUTURES, STEP_PROMPTS, UNAVAILABLE_TEXT, VS_HOLD_LABEL,
   WATCH_LEVELS, WHY_TITLE, feesNote, readyCostNote,
 } from "../lib/askCopy.js";
 import { useSymbolList } from "../hooks/useSymbolList.js";
@@ -529,7 +529,7 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
       <span className="ask-fups-t">{FOLLOW_UPS_TITLE}</span>
       {FOLLOW_UPS.map((f) => {
         const quotaBlocked = noQuota && (f.kind === "safer" || f.kind === "riskier");
-        // PROFILE_ORDER 양쪽 끝(안정형 "안전하게", 단타형 "공격적으로")은 갈 곳이 없다.
+        // PROFILE_ORDER 양쪽 끝(안정형 "더 안정적으로", 공격형 "더 공격적으로")은 갈 곳이 없다.
         const idx = PROFILE_ORDER.indexOf(state.answers.profile);
         const edgeBlocked = (f.kind === "safer" && idx <= 0) || (f.kind === "riskier" && idx >= PROFILE_ORDER.length - 1);
         const disabled = quotaBlocked || edgeBlocked || lock;
@@ -586,7 +586,7 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
           ))}
         </div>)}
         {state.step === "market" && !canChooseFutures(state.answers) ? <p className="ask-note ask-in" style={{ "--i": options.length + 1 }}>{isDomestic(state.answers.exchange) ? DOMESTIC_SPOT_ONLY : STABLE_NO_FUTURES}</p> : null}
-        {state.step === "profile" ? <p className="ask-note ask-in" style={{ "--i": options.length + 1 }} role="note">{SCALPER_PICK_WARN}</p> : null}
+        {state.step === "watch" ? <p className="ask-note ask-in" style={{ "--i": options.length + 1 }} role="note">{SHORT_BAR_WARN}</p> : null}
       </>
     );
   } else if (state.phase === "ready") {
@@ -662,7 +662,6 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
           </div>
         ) : null}
         <p className="ask-disc ask-in" style={{ "--i": results.length + 3 }} role="note">{DISCLAIMER}</p>
-        {state.answers.profile === "scalper" ? <p className="ask-note ask-in" style={{ "--i": results.length + 4 }} role="note">{SCALPER_NOTE}</p> : null}
         {extraBlock(results.length + 5)}
         {carousel ? null : followUps(results.length + 6)}
       </>

@@ -7,7 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resultsHeadline } from "../src/lib/askView.js";
-import { NO_EDGE_NOTE, NO_EDGE_TEXT, NO_RESULTS_TEXT, REFUNDED_TEXT, SCALPER_PICK_WARN } from "../src/lib/askCopy.js";
+import { NO_EDGE_NOTE, NO_EDGE_TEXT, NO_RESULTS_TEXT, REFUNDED_TEXT } from "../src/lib/askCopy.js";
 import { initialState, reduce } from "../src/lib/askFlow.js";
 
 const dialog = readFileSync(new URL("../src/components/AskParrotDialog.jsx", import.meta.url), "utf8");
@@ -70,12 +70,4 @@ test("화면이 환불을 받아 말한다", () => {
   assert.match(dialog, /refunded: data\.refunded/, "서버 칸을 그대로 받아야 한다");
   assert.match(dialog, /state\.refunded \?.*REFUNDED_TEXT/s, "돌려줬음을 말해야 한다");
   assert.ok(REFUNDED_TEXT.includes("횟수"), "무엇을 돌려줬는지 말해야 한다");
-});
-
-test("단타형을 고르는 자리에서 미리 알린다", () => {
-  // 고르고 나서 빈 화면을 보는 것보다 고를 때 아는 쪽이 낫다.
-  assert.match(dialog, /state\.step === "profile" \?.*SCALPER_PICK_WARN/s,
-    "성향 고르는 단계에 안내가 없다");
-  assert.match(SCALPER_PICK_WARN, /수수료|슬리피지/, "왜 어려운지 말해야 한다");
-  assert.match(SCALPER_PICK_WARN, /들고 있기|홀딩/, "무엇을 넘기 어려운지 말해야 한다");
 });

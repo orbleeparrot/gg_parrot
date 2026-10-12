@@ -4,7 +4,7 @@ import { HORIZONS, LEVERAGES, MARKETS, PROFILES, WATCH_LEVELS } from "./askCopy.
 import { EXCHANGES, exchangeLabel, isDomestic, quoteForExchange } from "./exchanges.js";
 
 export const STEPS = ["exchange", "balance", "profile", "market", "horizon", "watch"];
-export const PROFILE_ORDER = ["stable", "balanced", "aggressive", "scalper"];
+export const PROFILE_ORDER = ["stable", "balanced", "aggressive"];
 // 바이낸스 USDT 짝 모양 — 서버의 _SYMBOL_RE 와 같은 규칙.
 const SYMBOL_RE = /^[A-Z0-9]{1,20}USDT$/;
 

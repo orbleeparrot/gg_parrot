@@ -7,6 +7,8 @@ backend/app.db
 backend/cache/
 backend/supabase/.temp/
 .pytest_cache/
+# 시험 출력을 파일로 받아 둔 것 — `git add -A` 가 끌어가 커밋에 섞인 적이 있다.
+*_test_output.txt
 
 # Secrets — API keys go in env vars / a local .env (NEVER commit real keys).
 .env
@@ -24,6 +26,9 @@ frontend/dist/
 runner/build/
 runner/dist/
 runner/*.spec
+
+# Claude Code 의 미리보기 서버 설정 — 기계마다 다른 로컬 설정이다(.claude/settings.json 은 커밋한다).
+.claude/launch.json
 
 # OS / editor
 .DS_Store

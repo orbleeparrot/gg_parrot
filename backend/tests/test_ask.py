@@ -150,22 +150,24 @@ def test_select_top_filters_scores_and_keeps_rule_types_distinct():
     # 같은 유형은 MAX_PER_TYPE(1) 칸까지. 2 로 올리면 같은 유형의 다른 프리셋이 **같은 제목**으로
     # 나란히 오고 화면 카드 키까지 겹친다 — 레이블에 설정을 드러내는 일이 먼저다.
     # 모든 후보에 홀딩 기준(bh)이 있어야 한다 — 없으면 worth_the_macro 가 떨어뜨린다.
+    # 2026-10-12: 상한과 거래 수가 기간·봉에서 나오므로 둘을 넘겨야 관문이 뜻을 갖는다.
+    # 3개월 × 4시간봉 = 546봉 → 최소 거래 3회, 균형형 절대 상한 32%.
     ev = [
-        ask.Evaluated(_cand("A"), _result(30, 25, bh=0)),   # 균형형 MDD 상한(20) 초과 → 탈락
+        ask.Evaluated(_cand("A"), _result(30, 40, bh=0)),   # 균형형 MDD 상한(32) 초과 → 탈락
         ask.Evaluated(_cand("J"), _result(12, 4, bh=0)),
         ask.Evaluated(_cand("J", "ETHUSDT"), _result(11, 3, bh=0)),  # 같은 유형 두 번째 → 다양성으로 탈락
         ask.Evaluated(_cand("G"), _result(8, 2, bh=0)),
         ask.Evaluated(_cand("E"), _result(9, 2, trades=2, bh=0)),    # 거래 2회 → 탈락
         ask.Evaluated(_cand("F"), _result(3, 1, bh=0)),
     ]
-    top = ask.select_top(ev, "balanced")
+    top = ask.select_top(ev, "balanced", period="3m", interval="4h")
     assert [e.candidate.macro.rule_type.value for e in top] == ["J", "G", "F"]
     assert ask.MAX_PER_TYPE == 1, "올리려면 _label 이 설정을 드러내야 한다(제목·카드 키가 겹친다)"
 
     # 안정형은 수익률 ÷ MDD, 공격형은 수익률만 본다.
     assert ask.score("stable", _result(10, 5)) == pytest.approx(2.0)
     assert ask.score("stable", _result(10, 0.2)) == pytest.approx(10.0)  # MDD 는 1 아래로 나누지 않는다
-    assert ask.score("balanced", _result(10, 4)) == pytest.approx(8.0)
+    assert ask.score("balanced", _result(10, 4)) == pytest.approx(5.0)   # 10 / √4
     assert ask.score("aggressive", _result(10, 40)) == pytest.approx(10.0)
     assert ask.select_top([], "stable") == []
 
@@ -398,14 +400,16 @@ def test_scalper_profile_candidates_use_short_presets_and_skip_slow_types():
 # test_every_reachable_pair_fits_backtest_bar_cap 가 대신 지킨다.
 
 
-def test_select_top_uses_profile_min_trades():
-    def cand(rule_type):
-        req = _mkplan(risk_profile="scalper", symbols=["BTCUSDT"], period_preset="1w", interval="5m")
-        return ask.Candidate(f"{rule_type}", ask._make_macro(req, rule_type, ask._SCALPER_PRESETS[rule_type][0], ["BTCUSDT"]), "template")
-    ev = [ask.Evaluated(cand("A"), _result(5, 2, trades=9, bh=0)),
-          ask.Evaluated(cand("J"), _result(3, 2, trades=10, bh=0))]
-    assert [e.candidate.macro.rule_type.value for e in ask.select_top(ev, "scalper")] == ["J"]
-    assert [e.candidate.macro.rule_type.value for e in ask.select_top(ev, "aggressive")] == ["A", "J"]
+def test_select_top_counts_trades_against_the_window_not_the_profile():
+    # 2026-10-12: 성향마다 고정 거래 수를 요구하던 것을 봉 수 비례로 바꿨다. 같은 후보가
+    # 짧은 창에서는 통과하고 긴 창에서는 모자란다 — 성향이 아니라 창이 가른다.
+    ev = [ask.Evaluated(_cand("A"), _result(30, 4, trades=2, bh=0)),
+          ask.Evaluated(_cand("J"), _result(30, 4, trades=9, bh=0))]
+    # 점수가 같으면 거래 수가 많은 쪽이 앞이라 순서는 뜻이 없다 — 둘 다 통과했는지만 본다.
+    assert sorted(e.candidate.macro.rule_type.value
+                  for e in ask.select_top(ev, "balanced", period="1w", interval="4h")) == ["A", "J"]
+    assert [e.candidate.macro.rule_type.value
+            for e in ask.select_top(ev, "balanced", period="6m", interval="4h")] == ["J"]
 
 
 def test_scalper_ask_end_to_end(_fake_backtest, monkeypatch):
@@ -869,7 +873,7 @@ def test_score_uses_excess_over_holding():
     # 같은 +10% 라도 홀딩이 +30% 였으면 -20, +3% 였으면 +7.
     assert ask.score("aggressive", _result(10, 5, bh=30)) == pytest.approx(-20.0)
     assert ask.score("aggressive", _result(10, 5, bh=3)) == pytest.approx(7.0)
-    assert ask.score("balanced", _result(10, 4, bh=2)) == pytest.approx(6.0)   # 8 - 0.5*4
+    assert ask.score("balanced", _result(10, 4, bh=2)) == pytest.approx(4.0)   # 8 / √4
     assert ask.score("stable", _result(10, 5, bh=5)) == pytest.approx(1.0)     # 5 / 5
 
 
@@ -877,7 +881,7 @@ def test_score_falls_back_to_absolute_return_without_holding_data():
     # 시세가 모자라 홀딩 기준을 못 구한 경우엔 예전처럼 절대 수익률로 본다.
     assert ask.score("aggressive", _result(10, 40)) == pytest.approx(10.0)
     assert ask.score("stable", _result(10, 5)) == pytest.approx(2.0)
-    assert ask.score("balanced", _result(10, 4)) == pytest.approx(8.0)
+    assert ask.score("balanced", _result(10, 4)) == pytest.approx(5.0)   # 10 / √4
 
 
 def test_select_top_shows_fewer_rather_than_padding_with_weak_candidates():

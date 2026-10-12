@@ -26,6 +26,7 @@ from sqlmodel import Session, select
 from .ai_runtime import ai_available, ai_cache_key, default_model, get_ai_client, get_ai_runtime
 from .data import NoSpotDataError
 from .data import symbols as symbols_mod
+from .data.binance import PERIOD_PRESET_DAYS
 from . import ask_candidates, hotcoins
 from .ask_candidates import MAX_PICKS, MIN_PICKS
 from . import points as points_mod
@@ -54,6 +55,24 @@ MIN_TRADES = 3
 # 줄인다. 1년을 기준점(3%p)으로 두고 짧은 창을 낮춰 잡았다.
 MIN_EXCESS_PCT = 3.0
 MIN_EXCESS_PCT_BY_PERIOD = {"1w": 0.5, "1m": 1.0, "3m": 2.0, "6m": 2.5, "1y": 3.0}
+# 성향별 MDD 상한 — **기간마다 다르다.** 고정 10% · 20% 를 1주든 6개월이든 똑같이 쓰다가
+# 긴 기간이 전멸했다(균형형 6개월 72/87 · 안정형 6개월 43/57 이 여기서 죽었다). 같은 결함을
+# min_excess_pct 에서는 2026-10-08 에 기간별 스케일로 고쳤는데 MDD 쪽에 그대로 남아 있었다.
+# 공격형은 표에 없다 = 상한 없음.
+MDD_CAP_BY_PERIOD: dict[str, dict[str, float]] = {
+    "stable": {"1w": 8.0, "1m": 12.0, "3m": 18.0, "6m": 25.0, "1y": 30.0},
+    "balanced": {"1w": 15.0, "1m": 22.0, "3m": 32.0, "6m": 40.0, "1y": 50.0},
+}
+# 절대 상한만으로는 "시장이 10% 밖에 안 흔들린 구간에서 18% 를 허용" 하게 된다. 같은 구간
+# 홀딩이 흔들린 만큼에도 곱해 보고 **둘 중 엄한 쪽**을 쓴다.
+MDD_HOLD_FACTOR: dict[str, float] = {"stable": 0.6, "balanced": 1.0}
+# 홀딩이 거의 안 흔들린 구간에서 상대 상한이 0 으로 수렴해 전부 탈락하는 것을 막는다.
+MDD_CAP_FLOOR = 5.0
+# 최소 거래 수를 봉 수에 비례시킨다. 150봉에 1회 = "쉬지 않고 일했다" 의 기준.
+# 고정 3회였을 때 4시간봉 1주(42봉)에서 안정형 후보 57개 중 50개(88%)가 여기서 죽었다.
+MIN_TRADES_FLOOR = 2
+BARS_PER_TRADE = 150
+_BARS_PER_DAY = {"1m": 1440, "5m": 288, "15m": 96, "1h": 24, "4h": 6, "1d": 1}
 # 같은 매매 방식을 최대 몇 칸까지 보여 줄지.
 #
 # 1 로 둔다. 2 로 올리면 같은 유형의 다른 프리셋이 나란히 올 수 있는데, `_label` 이
@@ -454,13 +473,62 @@ def excess_over_hold(result: BacktestResult) -> float:
 
 
 def score(profile: str, result: BacktestResult) -> float:
+    """성향이 순서를 가르는 유일한 자리.
+
+    상한이 아니라 **점수**가 성향을 갈라야 한다. 측정: 후보 풀이 같을 때 균형형
+    `수익 − 0.5×MDD` 는 공격형 `수익` 과 상위 3장이 똑같았다 — 초과 수익이 +25~+128%p 로
+    벌어진 자리에서 10~20 을 빼도 순서가 안 바뀐다. 나누기로 바꾸면 낙폭이 비율로 작용해
+    순서가 실제로 달라진다. √ 를 쓰는 이유는 안정형(`수익/MDD`)과도 달라야 하기 때문이다.
+    """
     ret = excess_over_hold(result)
     mdd = float(result.mdd_pct)
     if profile == "stable":
         return ret / max(mdd, 1.0)
     if profile == "balanced":
-        return ret - 0.5 * mdd
+        return ret / math.sqrt(max(mdd, 1.0))
     return ret
+
+
+def expected_bars(period: str, interval: str) -> int:
+    """이 기간 × 봉에서 백테스트가 보게 될 봉 수(대략).
+
+    equity_curve 길이로 세면 안 된다 — 긴 창은 BACKTEST_EQUITY_MAX_POINTS(1,000)로
+    줄어든 뒤라 1,092봉이 1,000 으로 보인다.
+    """
+    days = PERIOD_PRESET_DAYS.get(str(period), PERIOD_PRESET_DAYS["3m"])
+    return max(1, int(days * _BARS_PER_DAY.get(str(interval), 24)))
+
+
+def min_trades_for(bars: int) -> int:
+    """이 창에서 '한 번이라도 일한 매크로' 로 인정할 최소 거래 수."""
+    try:
+        count = int(bars)
+    except (TypeError, ValueError):
+        count = 0
+    return max(MIN_TRADES_FLOOR, count // BARS_PER_TRADE)
+
+
+def mdd_cap(profile: str, period: str, hold_mdd_pct: Optional[float] = None) -> Optional[float]:
+    """이 성향 · 이 기간에서 허용할 최대 낙폭(%). None 이면 상한이 없다(공격형).
+
+    적용식은 ``min(절대 상한, max(MDD_CAP_FLOOR, 홀딩MDD × 계수))`` 다. 홀딩 MDD 를 못
+    구한 결과(묶음 집계 · 봉 2개 미만)는 절대 상한만 쓴다 — 모른다고 상한을 풀면
+    "안정형" 이 뜻을 잃는다.
+    """
+    table = MDD_CAP_BY_PERIOD.get(profile)
+    if table is None:
+        return None
+    absolute = table.get(str(period), table["3m"])
+    factor = MDD_HOLD_FACTOR.get(profile)
+    if factor is None or hold_mdd_pct is None:
+        return absolute
+    try:
+        hold = float(hold_mdd_pct)
+    except (TypeError, ValueError):
+        return absolute
+    if not math.isfinite(hold):
+        return absolute
+    return min(absolute, max(MDD_CAP_FLOOR, hold * factor))
 
 
 def min_excess_pct(period: str = "") -> float:
@@ -500,20 +568,27 @@ def worth_the_macro(result: BacktestResult, period: str = "") -> bool:
     return float(result.final_return_pct) - float(hold) >= min_excess_pct(period)
 
 
+def _within_mdd_cap(profile: str, period: str, result: BacktestResult) -> bool:
+    cap = mdd_cap(profile, period, result.buy_hold_mdd_pct)
+    return cap is None or float(result.mdd_pct) <= cap
+
+
 def select_top(evaluated: list[Evaluated], profile: str, n: int = TOP_N,
-               period: str = "") -> list[Evaluated]:
+               period: str = "", interval: str = "") -> list[Evaluated]:
     """MDD 상한 · 최소 거래 수 · 홀딩 문턱으로 거르고 성향 점수로 정렬해 상위 n개.
 
     같은 rule_type 은 MAX_PER_TYPE 개까지. **넘긴 후보가 적으면 적게 돌려준다** — 세 칸을
     채우려고 홀딩만큼도 못 한 후보를 끼워 넣지 않는다. 하나도 없으면 빈 목록이고, 그때
-    화면은 추천 대신 "이번 조건에서는 그냥 들고 있는 게 나았다" 고 말한다.
+    화면은 추천 대신 "보여 드릴 만큼 이득이 난 조합이 없었다" 고 말한다.
+
+    상한과 거래 수는 성향 표의 고정값이 아니라 **기간 · 봉 · 그 구간의 홀딩**에서 나온다
+    (mdd_cap · min_trades_for). 봉을 안 받으면 거래 수 바닥(MIN_TRADES_FLOOR)만 쓴다.
     """
-    cap = PROFILES[profile]["mdd_cap"]
-    min_trades = PROFILES[profile]["min_trades"]
+    min_trades = min_trades_for(expected_bars(period, interval)) if interval else MIN_TRADES_FLOOR
     pool = [
         e for e in evaluated
         if e.result.total_trades >= min_trades
-        and (cap is None or float(e.result.mdd_pct) <= cap)
+        and _within_mdd_cap(profile, period, e.result)
         and worth_the_macro(e.result, period)
     ]
     pool.sort(key=lambda e: (score(profile, e.result), e.result.total_trades), reverse=True)
@@ -971,7 +1046,8 @@ def run_ask(db: Session, user: User, req: AskRequest, run_backtest: Callable[[Ma
         evaluated = evaluate(candidates, guarded, time_budget_sec())
         if not evaluated and failures and all(isinstance(f, NoSpotDataError) for f in failures):
             raise AskError(422, "이 종목의 시세 데이터를 찾지 못했어요. 다른 종목을 골라 주세요.")
-        top = select_top(evaluated, plan.risk_profile, period=plan.period_preset)
+        top = select_top(evaluated, plan.risk_profile, period=plan.period_preset,
+                         interval=plan.interval)
         results = [_result_view(e) for e in top]
         # 돌려는 봤는데 홀딩 문턱을 넘은 게 하나도 없었는가.
         #

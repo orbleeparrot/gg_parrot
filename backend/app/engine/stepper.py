@@ -359,9 +359,15 @@ class DcaSim:
         self.amount_per_buy = float(p["amount_per_buy"])
         self.interval = max(1, int(p["interval_days"]))
         self.max_buys = max_buys
-        # Existing Binance macros retain their original bar-count semantics.
-        # Domestic DCA must not turn a 3-second live poll into a daily buy.
-        self.calendar_interval = getattr(macro, "exchange", "binance") != "binance"
+        # ``interval_days`` 는 **날**이다. 예전에는 바이낸스만 '봉 수'(``_step % interval``)로
+        # 셌다 — 백테스트는 C 가 일봉 전용이라(schema 가 강제) 한 봉 = 하루여서 맞았지만,
+        # 실시간에서 한 스텝은 **3초 틱**이라 interval_days=1 이 '3초마다 매수' 가 됐다
+        # (실측: 모의 1분에 20회 매수). 그래서 거래소를 가르지 않고 달력으로 통일한다.
+        # 일봉 위에서는 두 셈이 같은 봉을 짚으므로 백테스트 결과는 그대로다.
+        # 시각이 없으면 **사지 않는다.** 적립식에서는 안 사는 쪽이 잘못 사는 쪽보다 안전하고,
+        # 실제 경로는 전부 시각을 준다(모의 _tick_and_checkpoint 는 필수 인자, 실행기는 now(),
+        # 백테스트는 봉 시각). 국내가 이미 그렇게 두고 있었고 시험이 그 성질을 못 박고 있다.
+        self.calendar_interval = True
         self._next_dca_buy: Optional[datetime] = None
 
         self.initial_capital = float(initial_capital)

@@ -87,24 +87,36 @@ def test_a_long_daily_max_loss_halts_and_closes():
 
 # --- DCA daily max loss stops further buys (rule C) --------------------
 def test_dca_daily_max_loss_stops_buys():
+    """그날 손실이 한도를 넘으면 그날 예정된 매수를 건너뛴다.
+
+    2026-10-12: 예전에는 시간당 시각 다섯 개로 '세 번 예정된 매수 중 셋째가 막힌다' 를 봤다.
+    그때는 바이낸스 적립식이 **스텝 수**로 주기를 셌기 때문인데, 실시간에서 한 스텝은
+    3초 틱이라 그게 '3초마다 매수' 가 됐다(실측: 1분에 20회). 이제 거래소와 무관하게
+    주기는 '날' 이다. 그래서 실제 모습으로 바꾼다 — 하루에 매수는 한 번이고, 그 한 번이
+    오기 **전에** 그날 손실이 한도를 넘으면 건너뛴다.
+
+    C 는 스키마가 일봉을 강제하므로 시간당 봉 자체가 만들 수 없는 조합이기도 했다.
+    """
     params = {"amount_per_buy": 100.0, "interval_days": 1}
     risk = Risk(invest_ratio=1.0, daily_max_loss_pct=5.0)
-    macro = _macro("C", "long", params, risk)
-    ts = pd.date_range("2024-01-01", periods=5, freq="h")
-    prices = [100, 100, 80, 80, 80]  # -13% by the 3rd hour
+    # 첫 매수를 한낮에 — 그래야 다음 날 '매수 예정 시각' 앞에 그날의 틱이 먼저 온다.
+    noon = pd.Timestamp("2024-01-01 12:00", tz="UTC").to_pydatetime()
+    day2_open = pd.Timestamp("2024-01-02 00:00", tz="UTC").to_pydatetime()
+    day2_drop = pd.Timestamp("2024-01-02 06:00", tz="UTC").to_pydatetime()
+    day2_due = pd.Timestamp("2024-01-02 12:00", tz="UTC").to_pydatetime()
 
-    sim = make_sim(macro)  # DcaSim, initial 1e6 by default -> use a small budget
-    sim.cash = sim.initial_capital = sim._day_start_equity = 300.0
-    for p, t in zip(prices, ts):
-        sim.step(float(p), t.to_pydatetime())
-    assert sim.buys_done == 2  # 3rd buy blocked by the daily halt
+    def run(macro):
+        sim = make_sim(macro)
+        sim.cash = sim.initial_capital = sim._day_start_equity = 300.0
+        sim.step(100.0, noon)        # 1일차 매수
+        sim.step(100.0, day2_open)   # 2일차 첫 틱 — 그날 기준선이 여기서 잡힌다
+        sim.step(80.0, day2_drop)    # -20% → 한도 초과
+        sim.step(80.0, day2_due)     # 매수 예정 시각
+        return sim
 
-    # Baseline: without the cap all three scheduled buys go through.
-    sim2 = make_sim(_macro("C", "long", params, Risk(invest_ratio=1.0)))
-    sim2.cash = sim2.initial_capital = sim2._day_start_equity = 300.0
-    for p, t in zip(prices, ts):
-        sim2.step(float(p), t.to_pydatetime())
-    assert sim2.buys_done == 3
+    assert run(_macro("C", "long", params, risk)).buys_done == 1, "그날 매수가 막혀야 한다"
+    # 한도가 없으면 2일차 예정 매수가 그대로 들어간다.
+    assert run(_macro("C", "long", params, Risk(invest_ratio=1.0))).buys_done == 2
 
 
 # --- the shared-execution contract still holds when no time rules are set

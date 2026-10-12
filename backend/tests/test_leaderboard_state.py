@@ -55,10 +55,14 @@ def test_position_sim_short_dir_and_daily_halt():
 
 
 def test_dca_sim_state_tracks_average_cost():
+    # 2026-10-12: 적립식 주기는 '날' 이고, 시각이 없으면 사지 않는다(잘못 사는 쪽보다 안전).
+    # 그래서 매수 두 번을 하루 간격의 시각으로 만든다 — 보는 것은 평단 보고다.
+    from datetime import datetime, timedelta, timezone
+    start = datetime(2026, 10, 12, tzinfo=timezone.utc)
     sim = make_sim(_macro("C"), 1_000.0)
     assert sim.state()["in_position"] is False
-    sim.step(100.0, None)
-    sim.step(200.0, None)
+    sim.step(100.0, start)
+    sim.step(200.0, start + timedelta(days=1))
     st = sim.state()
     assert st["in_position"] is True and st["dir"] == 1
     assert abs(st["entry_price"] - (sim.cost_basis / sim.qty)) < 1e-9

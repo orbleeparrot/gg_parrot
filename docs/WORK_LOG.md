@@ -5,11 +5,11 @@
 설계·운영 안내 문서와 재현용 검증 스크립트는 별도로 유지한다.
 아래 수치와 상태는 각 작업 당시 관찰이며 현재 운영 상태를 새로 측정한 결과가 아니다.
 
-## 2026-10-13 — 실행기 v13 게시 · 병합
+## 2026-10-13 — 실행기 v13 게시 · 운영 마이그레이션 · 병합
 
 - 웹 가이드의 진행 두 칸('매크로 연결 → 실행기에서 연결·실행')이 아래 매크로 카드와 폭이 달라 보이던 것을 고쳤다. 기존 네 칸 진행 줄의 다섯 칸 격자 규칙(`.runner-wizard-progress ol`)이 두 칸 목록에도 걸렸고, 머리줄과 본문의 스크롤바 자리 폭도 달랐다. 실행기 단계에서는 두 칸을 카드와 같은 칸(`.runner-helper-col`) 안에 두고, 1920 · 1440 · 1280 · 1024 · 820 · 683 폭에서 좌우 끝이 같음을 측정했다.
 - `runner-v13` 태그(`320bda6e`) → Windows 릴리스 [38323029352](https://github.com/orbleeparrot/gg_parrot/actions/runs/38323029352) 성공(unittest 452개, Tk 화면 25개 skip) → `ggparrot-runner.exe` 20,440,567 bytes, SHA-256 `4b499fd8224dfa70ded55b451c0c9d26b6af6c011717194955961f2eea458fdd`(SHA256SUMS.txt 일치, 내려받아 대조만 하고 실행하지 않음) → [PR #115](https://github.com/orbleeparrot/gg_parrot/pull/115) 병합. main 을 합친 뒤 웹 887개 · 백엔드 3,610개 통과.
-- 병합 뒤 남은 것: 운영 DB 에 `20261012120000_runner_launch_setup_progress` 정식 적용(컬럼은 앱 기동 보정이 먼저 만든다). 적용 결과는 PR #115 댓글에 남긴다.
+- 운영 DB 에 `20261012120000_runner_launch_setup_progress` 를 **병합 전에** 적용했다. 앱 기동 보정(`_PG_ADDED_COLUMNS`)은 `TEXT DEFAULT ''`(null 허용)로 컬럼을 만들어서, 배포가 먼저면 마이그레이션의 `add column if not exists … varchar not null default ''` 가 아무것도 하지 않고 이력만 남아 정의가 파일과 달라진다(9/8 `rejected_*` 도 마이그레이션 정의로 들어가 있다). 적용 전 migration list 미적용은 이 한 건 · 표 잠금 0 · dry-run 1건, 적용 뒤 두 컬럼 `character varying NOT NULL DEFAULT ''` · 이력 49 → 50 · RLS 유지. 컬럼만 더하는 변경이라 당시 운영 코드(웹 `f4db1fc8` · 워커 `99f1c251`)의 읽기 · 쓰기에는 영향이 없다.
 
 ## 2026-10-12 — 실행기 v13: 연결 도우미를 실행기 창 안으로 · 웹 가이드가 따라 보기
 

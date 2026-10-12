@@ -1,22 +1,21 @@
 /* 웹 '매크로 만들기 가이드' — 국내 매크로는 '매크로 연결 → 실행기에서 연결·실행' 두 칸이다.
    API 키 준비 · 실행기 준비 · 연결은 실행기 연결 도우미 하나가 맡고, 웹은 그 화면을 따라 보여 준다.
    글자 크기는 둘(20 제목 · 14 나머지), 굵기 둘. */
-/* 진행 칸과 본문을 같은 폭(760)으로 가운데에 — 위아래가 한 줄로 맞는다. */
-.runner-helper-chapters {
-  max-width: 760px;
-  margin: 4px auto 0;
+/* 진행 두 칸. 가이드 머리의 '.runner-wizard-progress ol'(다섯 칸 격자)에 덮이지 않게 한 단계 더 구체적으로 쓴다.
+   실행기 단계에서는 아래 매크로 카드 · 실행기 카드와 같은 칸(.runner-helper-col) 안에 있어 폭이 정확히 같다. */
+.runner-wizard .runner-helper-chapters {
+  margin: 0;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
 }
 
-/* 매크로를 고르는 동안은 아래 화면이 넓은 두 열이라 진행 칸도 그 폭에 맞춘다. */
-.runner-helper-chapters.is-wide {
-  max-width: none;
-  margin: 4px 0 0;
+/* 매크로를 고르는 동안은 아래 화면이 넓은 두 열이라 머리 쪽 전체 폭에 둔다. */
+.runner-wizard .runner-helper-chapters.is-wide {
+  margin-top: 4px;
 }
 
-.runner-helper-chapters > li {
+.runner-wizard .runner-helper-chapters > li {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -28,14 +27,15 @@
   font-weight: 700;
 }
 
-.runner-helper-chapters > li.is-done {
+.runner-wizard .runner-helper-chapters > li.is-done {
   border-color: rgb(var(--c-green-600));
   color: rgb(var(--c-green-700));
 }
 
-.runner-helper-chapters > li.is-current {
+.runner-wizard .runner-helper-chapters > li.is-current {
   border-color: rgb(var(--c-brand));
   color: rgb(var(--c-slate-900));
+  font-weight: 700;
 }
 
 .runner-helper-n {
@@ -52,7 +52,7 @@
   font-weight: 700;
 }
 
-.runner-helper-chapters > li.is-current .runner-helper-n {
+.runner-wizard .runner-helper-chapters > li.is-current .runner-helper-n {
   background: rgb(var(--c-brand));
   color: rgb(var(--c-brand-ink));
 }

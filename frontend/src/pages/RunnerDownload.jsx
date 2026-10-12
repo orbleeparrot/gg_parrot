@@ -1385,6 +1385,25 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
     );
   }
 
+  // 국내 매크로의 진행 두 칸 — 매크로 연결 · 실행기에서 연결·실행.
+  // wide: 매크로를 고르는 동안(넓은 두 열 화면)은 머리 쪽 전체 폭에, 실행기 단계에서는 카드들과 같은 칸에 둔다.
+  function renderHelperChapters(wide) {
+    return (
+      <ol className={wide ? "runner-helper-chapters is-wide" : "runner-helper-chapters"} aria-label={`빠른 실행 진행률, ${HELPER_CHAPTERS.length}단계 중 ${helperStep ? 2 : 1}단계`}>
+        {HELPER_CHAPTERS.map((chapter, index) => {
+          const done = index === 0 && helperStep;
+          const current = index === (helperStep ? 1 : 0);
+          return (
+            <li key={chapter} className={done ? "is-done" : current ? "is-current" : undefined} aria-current={current ? "step" : undefined}>
+              {done ? <span className="runner-helper-ok" aria-hidden="true"><Icon name="check" size={12} strokeWidth={3} /></span> : <span className="runner-helper-n num" aria-hidden="true">{index + 1}</span>}
+              {chapter}
+            </li>
+          );
+        })}
+      </ol>
+    );
+  }
+
   // 국내 매크로 — '실행기에서 연결·실행' 한 화면. 연결된 매크로 카드 · [실행기 열기] · [실행기 설치], 열린 뒤에는 실행기 화면을 따라 본다.
   function renderHelperScene() {
     const card = quickRunCard(selected?.id);
@@ -1458,6 +1477,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
     return (
       <section className="runner-helper-stage" aria-label="실행기에서 연결·실행">
         <div className="runner-helper-col">
+          {renderHelperChapters(false)}
           <div className="runner-helper-row">
             <span>연결된 매크로</span>
             <button type="button" onClick={() => moveTo(STEP_MACRO)} className="runner-helper-link">다른 매크로</button>
@@ -1580,18 +1600,8 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
           </div>
         ) : null}
         {helperFlow ? (
-          <ol className={helperStep ? "runner-helper-chapters" : "runner-helper-chapters is-wide"} aria-label={`빠른 실행 진행률, ${HELPER_CHAPTERS.length}단계 중 ${helperStep ? 2 : 1}단계`}>
-            {HELPER_CHAPTERS.map((chapter, index) => {
-              const done = index === 0 && helperStep;
-              const current = index === (helperStep ? 1 : 0);
-              return (
-                <li key={chapter} className={done ? "is-done" : current ? "is-current" : undefined} aria-current={current ? "step" : undefined}>
-                  {done ? <span className="runner-helper-ok" aria-hidden="true"><Icon name="check" size={12} strokeWidth={3} /></span> : <span className="runner-helper-n num" aria-hidden="true">{index + 1}</span>}
-                  {chapter}
-                </li>
-              );
-            })}
-          </ol>
+          // 실행기 단계에서는 진행 두 칸을 아래 매크로 카드와 같은 칸에 둔다(renderHelperScene) — 폭이 정확히 같다.
+          helperStep ? null : renderHelperChapters(true)
         ) : (
           <>
             <div className="runner-wizard-progress-meta">

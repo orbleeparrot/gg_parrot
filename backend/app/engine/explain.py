@@ -74,14 +74,14 @@ _HEADLINES = {
     "liquidated": "🦜 껄……. 청산당했어. 레버리지가 널 잡아먹었다.",
     "crash": "🦜 이건 좀 아팠겠다. 크게 물렸어.",
     "loss": "🦜 아쉽! 이번 판은 마이너스로 끝났어.",
-    "lost_to_hold": "🦜 벌긴 벌었는데… 그냥 들고 있는 게 나았어",
+    "lost_to_hold": "🦜 벌긴 벌었는데… 첫날 사서 그냥 뒀을 때가 나았어",
     "win": "🦜 오, 좀 하는데? 플러스로 마감했어.",
     "big_win": "🦜 대박! 이번 기간엔 아주 잘 먹혔어.",
 }
 
 
 def _hold_subject(macro: Macro) -> str:
-    """"… 들고 있었으면" 의 주어. 묶음은 대표 종목이 아니라 **묶음 전체**다.
+    """"… 첫날 사서 뒀으면" 의 주어. 묶음은 대표 종목이 아니라 **묶음 전체**다.
 
     묶음의 홀딩 수익률은 비중대로 섞은 바스켓이다. 70/30 묶음에서 그 숫자를
     "그냥 BTC 들고 있었으면" 으로 서술하면 거짓말이 된다.
@@ -99,12 +99,12 @@ def _points(macro: Macro, r: BacktestResult) -> List[str]:
         diff = r.final_return_pct - bh
         if diff >= 0:
             pts.append(
-                f"이 전략은 {_signed(r.final_return_pct)}, {hold} 들고 있었으면 "
+                f"이 전략은 {_signed(r.final_return_pct)}, {hold} 첫날 사서 뒀으면 "
                 f"{_signed(bh)} — 홀딩보다 {abs(diff):.1f}%p 앞섰어."
             )
         else:
             pts.append(
-                f"이 전략은 {_signed(r.final_return_pct)}인데 {hold} 들고 있었으면 "
+                f"이 전략은 {_signed(r.final_return_pct)}인데 {hold} 첫날 사서 뒀으면 "
                 f"{_signed(bh)}였어 — 홀딩에 {abs(diff):.1f}%p 뒤졌어."
             )
     else:
@@ -171,7 +171,9 @@ def _lesson(macro: Macro, r: BacktestResult, mood: str) -> str:
     if mood == "lost_to_hold":
         return (
             "매매를 자주 할수록 수수료와 타이밍 손해가 쌓여. 가끔은 '안 파는 것'도 "
-            "전략이야 — 홀딩을 못 이긴 이유를 매매 횟수에서 찾아봐."
+            "전략이야 — 못 이긴 이유를 매매 횟수에서 찾아봐. 다만 그 기준은 기간 첫날에 "
+            "샀다고 치고 잰 값이야. 매크로는 살 날을 스스로 찾아야 하니 완전히 공평한 "
+            "비교는 아니야."
         )
     if r.mdd_pct >= 30:
         return (

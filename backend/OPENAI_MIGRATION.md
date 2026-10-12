@@ -13,7 +13,6 @@
 | 시장 브리핑 | `app/news.py` | `market_news_summary` |
 | 커뮤니티 본문 요약 | `app/community_summaries.py` | `community_summaries` |
 | 에이전트 뉴스 분류·본문 요약 | `app/agent_features/position_news/classifier.py` | `position_news` |
-| 백테스트 해설 | `app/ai_explain.py` | `ai_explain` |
 | 일일 챌린지 | `app/ai_challenge.py` | `ai_challenge` |
 | 매크로 제안 | `app/ask.py` | `ask` |
 | 매크로 후보 제안 | `app/ask.py` | `ask-candidates` |

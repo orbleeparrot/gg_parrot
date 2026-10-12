@@ -4,7 +4,9 @@
 * 종목은 요청에 온 것만 쓴다(AI 가 종목을 고르는 경로 없음).
 * AI 는 매크로 '뼈대'(rule_type·params)만 제안하고 성과 숫자는 전부 백테스트가 계산한다.
 * 어디에도 '추천' 이라 쓰지 않는다 — 후보, 상위 조합.
-* 성향이 안정형이면 선물·H(세이프티 주문) 후보를 만들지 않는다.
+* 성향이 안정형이면 선물 후보를 만들지 않는다.
+  (2026-10-12: 성향별 매매 방식 제한은 없앴다 — 세 성향이 여덟 방식을 다 본다. 남은
+   방식 제약은 시장뿐이다: 선물에서는 C(적립식)를 뺀다.)
 """
 from __future__ import annotations
 
@@ -26,7 +28,7 @@ from sqlmodel import Session, select
 from .ai_runtime import ai_available, ai_cache_key, default_model, get_ai_client, get_ai_runtime
 from .data import NoSpotDataError
 from .data import symbols as symbols_mod
-from .data.binance import PERIOD_PRESET_DAYS
+from .data.binance import MAX_BACKTEST_BARS, PERIOD_PRESET_DAYS
 from . import ask_candidates, hotcoins
 from .ask_candidates import MAX_PICKS, MIN_PICKS
 from . import points as points_mod
@@ -123,11 +125,28 @@ def to_period(horizon: str) -> str:
     return _HORIZON_PERIOD.get(horizon, _HORIZON_PERIOD["weeks"])
 
 
+# 넓은 쪽으로 가는 순서. 봉 상한에 걸리면 이 순서로 한 칸씩 넓힌다.
+_WIDER_INTERVALS = ("15m", "1h", "4h", "1d")
+
+
 def to_interval(watch: str, period: str) -> str:
+    """확인 빈도 → 봉. 봉 상한을 넘는 조합은 **거절하지 않고 봉을 넓힌다.**
+
+    기본 상한(20,000봉)에서는 15분 × 1년(35,040봉)이 유일한 초과 조합이다. 그 하나만
+    특별히 다루지 않는 이유: MAX_BACKTEST_BARS 는 환경변수로 낮출 수 있고(웹 프로세스를
+    지키는 정상 조치다), 낮추면 15분 × 6개월(17,472봉)부터 넘는다. 그때 후보 전부가
+    TooManyBarsError 로 죽는데 그 예외는 NoSpotDataError 가 아니라서, 사용자는 이유도
+    안 적힌 빈 화면을 본다. 넓히는 쪽이 늘 낫다 — 사용자는 자주 보겠다고 한 것이지
+    기간을 포기한 게 아니다.
+    """
     interval = _WATCH_INTERVAL.get(watch, _WATCH_INTERVAL["sometimes"])
-    # 15분봉 × 1년 = 35,040봉으로 백테스트 봉 상한(20,000)을 넘는 **유일한** 조합이다.
-    # 거절하지 않고 봉을 한 칸 넓힌다 — 사용자는 자주 보겠다고 한 것이지 1년을 포기한 게 아니다.
-    return "1h" if interval == "15m" and period == "1y" else interval
+    if interval not in _WIDER_INTERVALS:
+        return interval
+    for wider in _WIDER_INTERVALS[_WIDER_INTERVALS.index(interval):]:
+        if expected_bars(period, wider) <= MAX_BACKTEST_BARS:
+            return wider
+    # 어느 봉으로도 못 맞추면 가장 넓은 봉. 거절보다 낫다(백테스트가 자기 말로 거절한다).
+    return _WIDER_INTERVALS[-1]
 
 RULE_LABELS = {
     "A": "익절/손절 후 재진입", "C": "정기 분할매수", "E": "트레일링 스탑", "F": "RSI 조건",
@@ -881,15 +900,21 @@ def _no_edge_best(evaluated: list[Evaluated]) -> Optional[dict]:
     왜 싣나: 지금 빈 화면은 "넘긴 조합이 없었어요" 한 줄로 끝난다. 그 사이에 매크로가
     +34.82% 를 벌었고 같은 기간 보유가 +38.67% 였다는 사실이 사라진다 — 사용자는
     "아무것도 안 됐다" 로 읽는다. 둘을 나란히 보여 주면 '왜 안 보여 주는지' 가 보인다.
+
+    ``made_money`` 는 **어느 관문에서 떨어졌는지**를 가른다. worth_the_macro 는 둘을 본다
+    — 그 자체로 벌었나, 홀딩을 문턱만큼 넘었나. 둘째만 설명하면 "홀딩보다 15%p 앞선 -5%"
+    같은 결과에서 화면이 스스로 어긋난다(숫자는 이겼다고 말하고 글은 못 넘었다고 말한다).
     """
     if not evaluated:
         return None
     best = max(evaluated, key=lambda e: float(e.result.final_return_pct))
     hold = best.result.buy_hold_return_pct
+    ret = round(float(best.result.final_return_pct), 2)
     return {
-        "return_pct": round(float(best.result.final_return_pct), 2),
+        "return_pct": ret,
         "hold_return_pct": (round(float(hold), 2) if hold is not None else None),
         "rule_label": RULE_LABELS.get(best.candidate.macro.rule_type.value, ""),
+        "made_money": ret > 0,
     }
 
 

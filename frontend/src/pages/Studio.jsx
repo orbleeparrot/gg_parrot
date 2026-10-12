@@ -247,7 +247,6 @@ function AccountStudio({ scope, allowRouterMacro }) {
   const requestIdRef = useRef(0);
   // 복원한 결과가 지금 조건과 같으면 자동 테스트가 바로 다시 돌지 않게 마지막 시도 키를 맞춰 둔다.
   const lastAttemptKeyRef = useRef(saved?.testedMacro ? macroKey(saved.testedMacro) : "");
-  const latestTestedKeyRef = useRef("");
   const resumeRequestIdRef = useRef(0);
   const processedEntryQueryRef = useRef("");
   const [testLimits, setTestLimits] = useState(null);
@@ -309,7 +308,6 @@ function AccountStudio({ scope, allowRouterMacro }) {
   const currentMacro = useMemo(() => buildMacro(form), [form]);
   const currentMacroKey = useMemo(() => macroKey(currentMacro), [currentMacro]);
   const testedMacroKey = testedMacro ? macroKey(testedMacro) : "";
-  latestTestedKeyRef.current = testedMacroKey;
   const resultIsFresh = !!testedMacro && testedMacroKey === currentMacroKey;
 
   const chartSymbols = useMemo(() => {

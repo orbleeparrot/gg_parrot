@@ -40,7 +40,9 @@ test("흐름 상태가 no_edge 를 싣고 다닌다", () => {
 test("화면이 서버의 no_edge 를 받아 안내로 바꾼다", () => {
   assert.match(dialog, /noEdge: data\.no_edge/, "서버 칸을 그대로 받아야 한다");
   assert.doesNotMatch(dialog, /all_lost_to_hold/, "없어진 칸을 읽으면 늘 undefined 다");
-  assert.match(dialog, /state\.noEdge \?.*NO_EDGE_NOTE/s, "못 넘겼을 때 이유를 적어 준다");
+  // 문단 전체를 noEdgeDetail 이 만든다(2026-10-12) — 어느 관문에서 떨어졌는지에 따라
+  // 설명이 달라야 해서 화면이 두 조각을 이어 붙이던 방식을 버렸다.
+  assert.match(dialog, /state\.noEdge \?.*noEdgeDetail\(state\.noEdgeBest\)/s, "못 넘겼을 때 이유를 적어 준다");
   assert.match(dialog, /resultsHeadline\(results\.length, state\.noEdge\)/, "머리글도 이유를 봐야 한다");
   assert.ok(NO_EDGE_NOTE.includes("다시"), "다음에 뭘 하면 되는지 말해야 한다");
 });
@@ -81,14 +83,18 @@ test("빈 화면이 숫자를 싣는다", () => {
 });
 
 test("없는 홀딩 숫자를 지어내지 않는다", () => {
-  const line = noEdgeDetail({ return_pct: 5.0, hold_return_pct: null, rule_label: "RSI 조건" });
+  const line = noEdgeDetail({ return_pct: 5.0, hold_return_pct: null, rule_label: "RSI 조건",
+                              made_money: true });
   assert.match(line, /5\.0/);
   assert.ok(!/null|NaN/.test(line), `지어낸 값이 섞였다: ${line}`);
   // signedPct(null) 은 "—" 를 돌려준다. 그 자리를 비워 둔 문장("… 뒀을 때 — 였어요")은
   // 숫자를 지어내지 않지만 고장 난 화면처럼 읽힌다 — 못 구했다고 **말해야** 한다.
-  assert.ok(!line.includes("—"), `빈 자리를 그대로 내보냈다: ${line}`);
+  // (설명 문구 자체에는 줄표가 들어 있으므로 홀딩 숫자 자리만 본다.)
+  assert.ok(!line.includes("뒀을 때 —"), `빈 자리를 그대로 내보냈다: ${line}`);
   assert.match(line, /구하지 못했어요/, "왜 홀딩 숫자가 없는지 말해야 한다");
-  assert.equal(noEdgeDetail(null), "");
+  // 서버가 숫자를 못 보낸 경우(후보가 아예 없었다)에도 할 말은 있어야 한다 — 빈 문단을
+  // 내보내면 화면에 이유가 한 줄도 안 남는다.
+  assert.equal(noEdgeDetail(null), NO_EDGE_NOTE);
 });
 
 test("홀딩 라벨이 전제를 드러낸다", () => {
@@ -102,4 +108,23 @@ test("실행 화면이 서버의 빈 화면 숫자를 받아 그린다", () => {
   // 안 받으면 숫자는 서버에만 있고 사용자는 한 줄만 본다 — 바로 그 문제였다.
   assert.match(dialog, /noEdgeBest: data\.no_edge_best/, "응답 칸을 그대로 받아야 한다");
   assert.match(dialog, /noEdgeDetail\(state\.noEdgeBest\)/, "빈 화면에 그려야 한다");
+});
+
+test("홀딩을 이겼는데도 손실이면 홀딩 이야기를 하지 않는다", () => {
+  // 관문이 둘인데 화면이 둘째만 설명해서, 홀딩보다 15%p 앞선 -5% 짜리에 "홀딩을 못
+  // 넘겼다" 는 글이 붙었다 — 숫자와 글이 서로 어긋났다.
+  const line = noEdgeDetail({ return_pct: -5.0, hold_return_pct: -20.0,
+                              rule_label: "이동평균 크로스", made_money: false });
+  assert.match(line, /-5\.0/, "얼마를 잃었는지는 말한다");
+  assert.ok(!line.includes("-20.0"), `홀딩 숫자를 들이밀면 이긴 것처럼 읽힌다: ${line}`);
+  assert.match(line, /잃|손실/, "왜 안 보여 주는지가 '돈을 잃었다' 여야 한다");
+  assert.ok(!/첫날 사서 그냥 뒀을 때/.test(line), "적용되지 않은 기준을 설명하면 안 된다");
+});
+
+test("벌었지만 홀딩을 못 넘긴 경우는 홀딩으로 설명한다", () => {
+  const line = noEdgeDetail({ return_pct: 34.82, hold_return_pct: 38.67,
+                              rule_label: "트레일링 스탑", made_money: true });
+  assert.match(line, /34\.8/);
+  assert.match(line, /38\.7/);
+  assert.match(line, /첫날/);
 });

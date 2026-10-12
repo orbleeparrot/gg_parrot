@@ -12,7 +12,7 @@ import {
   BACK_TO_STEP, BALANCE_ERROR, BALANCE_NOTE, CANDIDATES_PROMPT, COMPARE_TITLE, CONDITION_LABEL, CONSENT_BUTTON, CONSENT_TEXT, DISCLAIMER, DOMESTIC_SPOT_ONLY,
   FOLLOW_UPS, FOLLOW_UPS_TITLE, HOLD_LABEL, HORIZONS, LEGEND_BASE, LEGEND_EQUITY, LEVERAGES, LOAD_BUTTON,
   MANUAL_PICK_LABEL, MANUAL_SEARCH_MISS, MANUAL_SEARCH_PLACEHOLDER, MARKETS, NEXT_LABEL,
-  NO_EDGE_NOTE, NO_QUOTA_TEXT, OPENING_TEXT, REFUNDED_TEXT, SHORT_BAR_WARN, PREV_LABEL, PROFILES, READY_BUTTON, READY_TEXT, RESTART_LABEL, RETURN_LABEL,
+  NO_QUOTA_TEXT, OPENING_TEXT, REFUNDED_TEXT, SHORT_BAR_WARN, PREV_LABEL, PROFILES, READY_BUTTON, READY_TEXT, RESTART_LABEL, RETURN_LABEL,
   RUNNING_TEXT, SPOT_HINT, STABLE_NO_FUTURES, STEP_PROMPTS, UNAVAILABLE_TEXT, VS_HOLD_LABEL,
   WATCH_LEVELS, WHY_TITLE, feesNote, readyCostNote,
 } from "../lib/askCopy.js";
@@ -588,7 +588,8 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
           ))}
         </div>)}
         {state.step === "market" && !canChooseFutures(state.answers) ? <p className="ask-note ask-in" style={{ "--i": options.length + 1 }}>{isDomestic(state.answers.exchange) ? DOMESTIC_SPOT_ONLY : STABLE_NO_FUTURES}</p> : null}
-        {state.step === "watch" ? <p className="ask-note ask-in" style={{ "--i": options.length + 1 }} role="note">{SHORT_BAR_WARN}</p> : null}
+        {state.step === "watch" && state.answers.horizon !== "long"
+          ? <p className="ask-note ask-in" style={{ "--i": options.length + 1 }} role="note">{SHORT_BAR_WARN}</p> : null}
       </>
     );
   } else if (state.phase === "ready") {
@@ -630,7 +631,7 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
           <p className="ask-say"><Face size={32} /><span>{resultsHeadline(results.length, state.noEdge)}</span></p>
           {results.length > 0 && !carousel ? <span className="ask-legend"><span><i />{LEGEND_EQUITY}</span><span><i className="is-base" />{LEGEND_BASE}</span></span> : null}
         </div>
-        {state.noEdge ? <p className="ask-hold ask-in" style={{ "--i": 1 }} role="note">{[noEdgeDetail(state.noEdgeBest), NO_EDGE_NOTE].filter(Boolean).join(" ")}</p> : null}
+        {state.noEdge ? <p className="ask-hold ask-in" style={{ "--i": 1 }} role="note">{noEdgeDetail(state.noEdgeBest)}</p> : null}
         {state.refunded ? <p className="ask-note ask-in" style={{ "--i": 2 }} role="status">{REFUNDED_TEXT}</p> : null}
         {results.length > 1 && !carousel ? <CompareTable results={results} hold={hold} /> : null}
         {results.length > 0 && !carousel ? (

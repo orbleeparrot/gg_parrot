@@ -41,7 +41,9 @@ export const WATCH_LEVELS = [
   { value: "rarely", label: "거의 못 봐요", hint: "하루 한 번쯤" },
   { value: "sometimes", label: "가끔 봐요", hint: "몇 시간에 한 번" },
   { value: "often", label: "수시로 봐요", hint: "한 시간에 한 번" },
-  { value: "constantly", label: "아주 자주 봐요", hint: "15분에 한 번" },
+  // 힌트에 "15분" 을 박지 않는다 — 기간이 '길게'(1년)면 서버가 봉 상한 때문에 1시간봉으로
+  // 내린다(ask.to_interval). 고르는 자리에서 거짓을 말하지 않으려면 봉 수를 쓰지 않는다.
+  { value: "constantly", label: "아주 자주 봐요", hint: "가장 짧은 봉으로" },
 ];
 
 export const CANDIDATES_PROMPT = "성향에 맞는 종목을 골라 봤어요. 하나를 고르면 매크로 후보를 보여 드릴게요.";
@@ -75,6 +77,9 @@ export const LOADED_TEXT = "조건 판에 불러왔어요. 숫자 한 번 보고
 // 순간 자동으로 정해진 날(구간 첫 봉)이고, 매크로는 살 날을 스스로 찾는다 — 그 비대칭을
 // 숨기는 말이었다. 그리고 빈 화면이 숫자를 싣는다(askView.noEdgeDetail).
 export const NO_EDGE_TEXT = "이번 조건에선 보여 드릴 만큼 이득이 난 조합이 없었어요.";
+// 홀딩 문턱이 아니라 **첫째 관문**(그 자체로 벌었나)에서 떨어진 경우. 홀딩보다 앞섰어도
+// 돈을 잃은 조합은 보여 주지 않는다 — 그때 홀딩 숫자를 들이밀면 이긴 것처럼 읽힌다.
+export const NO_EDGE_LOST_NOTE = "홀딩보다 나았든 아니든, 돈을 잃은 조합은 보여 드리지 않아요. 기간이나 종목, 보는 빈도를 바꿔 다시 물어봐 주세요.";
 export const NO_EDGE_NOTE = "기준은 같은 기간을 '첫날 사서 그냥 두기' 예요 — 그 날짜는 기간을 고르면 자동으로 정해지고, 매크로는 살 날을 스스로 찾아야 해요. 기간이나 종목, 보는 빈도를 바꿔 다시 물어봐 주세요.";
 
 // 직접 고를래요 — 거래 가능한 종목을 검색해서 고른다.

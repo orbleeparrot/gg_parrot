@@ -245,3 +245,36 @@ def test_the_ai_explanation_layer_is_gone_but_the_explanation_is_not():
     for key in ("mood", "headline", "points", "lesson", "source", "disclaimer"):
         assert key in out
     assert out["source"] == "rule"
+
+
+def test_no_edge_best_says_which_gate_rejected_it():
+    """홀딩을 넘었는데도 **손실**이어서 떨어진 경우를 구분해야 한다.
+
+    worth_the_macro 는 관문이 둘이다 — 그 자체로 벌었나, 홀딩을 문턱만큼 넘었나.
+    둘 중 아무거나 못 넘기면 no_edge 가 뜨는데, 화면은 둘째 관문만 설명했다. 6개월에
+    20% 빠진 종목에서 -5%(홀딩 -20%)짜리가 1등이면, 화면은 "홀딩이 기준인데 15%p
+    앞섰다" 는 숫자를 보여 주며 "넘긴 게 없다" 고 말하게 된다 — 서로 어긋난다.
+    """
+    lost = ask._no_edge_best([_evaluated("J", trades=8, mdd=12.0, ret=-5.0, hold=-20.0)])
+    assert lost["made_money"] is False, "손실이면 홀딩 비교로 설명하면 안 된다"
+    won = ask._no_edge_best([_evaluated("J", trades=8, mdd=12.0, ret=34.82, hold=38.67)])
+    assert won["made_money"] is True
+
+
+def test_interval_widens_whenever_the_bar_cap_would_be_exceeded(monkeypatch):
+    """봉 상한은 환경변수로 낮출 수 있다 — 15분×1년만 특별히 다루면 그때 조용히 깨진다.
+
+    BACKTEST_MAX_BARS 를 낮추는 것은 웹 프로세스를 지키려는 정상 조치다. 그때 15분×6개월
+    (17,472봉)이 상한을 넘으면 후보 전부가 TooManyBarsError 로 죽고, 그 예외는
+    NoSpotDataError 가 아니라서 사용자는 이유 없는 빈 화면을 본다.
+    """
+    monkeypatch.setattr(ask, "MAX_BACKTEST_BARS", 5_000)
+    # 15분×6개월 17,472봉 → 넘는다. 1시간×6개월 4,368봉 → 든다. 한 칸만 넓히면 충분하다.
+    assert ask.to_interval("constantly", "6m") == "1h"
+    # 1시간×1년 8,760봉 → 넘는다. 4시간×1년 2,190봉 → 든다.
+    assert ask.to_interval("often", "1y") == "4h"
+    # 상한 안에 드는 조합은 그대로 둔다.
+    assert ask.to_interval("constantly", "1w") == "15m"
+    # 어떤 봉으로도 못 맞추면 가장 넓은 봉을 준다 — 거절하지 않는다.
+    monkeypatch.setattr(ask, "MAX_BACKTEST_BARS", 10)
+    assert ask.to_interval("constantly", "1y") == "1d"

@@ -31,7 +31,7 @@ test("짧은 봉 경고는 봉을 고르는 자리에 있고 숫자를 댄다", 
   assert.match(SHORT_BAR_WARN, /64/, "얼마나 어려운지 숫자로 말해야 한다");
   assert.match(SHORT_BAR_WARN, /수수료|슬리피지/, "왜 어려운지 말해야 한다");
   const dialog = source("../src/components/AskParrotDialog.jsx");
-  assert.match(dialog, /state\.step === "watch" \?[\s\S]{0,200}SHORT_BAR_WARN/,
+  assert.match(dialog, /state\.step === "watch"[\s\S]{0,200}SHORT_BAR_WARN/,
     "성향 단계가 아니라 빈도 단계에서 보여야 한다 — 짧은 봉은 빈도가 정한다");
 });
 
@@ -61,4 +61,15 @@ test("AI 해설 호출이 화면에서 사라졌다", () => {
   const view = source("../src/components/ResultView.jsx");
   assert.match(view, /explanation\.headline/, "해설은 그대로 보여 줘야 한다");
   assert.ok(!view.includes("AI 해설"), "라벨에서 'AI' 가 빠져야 한다");
+});
+
+test("'길게' 를 고른 사람에게는 15분봉 경고를 보이지 않는다", () => {
+  // STEPS 가 horizon → watch 순서라 빈도 카드를 볼 때 기간은 이미 정해져 있다. 그리고
+  // 서버는 15분 × 1년을 1시간봉으로 내린다(봉 상한) — 그 사람에게 "15분봉이에요 · 64%가
+  // 손실" 은 사실이 아니고, 고르는 순간에 거짓을 말하는 셈이다.
+  const dialog = source("../src/components/AskParrotDialog.jsx");
+  assert.match(dialog, /answers\.horizon !== "long"/,
+    "기간이 '길게' 면 짧은 봉 경고가 뜨지 않아야 한다");
+  assert.ok(!/15분/.test(WATCH_LEVELS[3].hint),
+    `힌트도 기간에 따라 달라지므로 고정 숫자를 쓰면 안 된다: ${WATCH_LEVELS[3].hint}`);
 });

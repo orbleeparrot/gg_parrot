@@ -956,6 +956,35 @@ def refund_external_reservation(db: Session, reservation_id: int, credit_id: int
         log.warning("External reservation refund failed: reason=%s", type(error).__name__)
 
 
+# 2026-10-12 단타형 삭제 — 저장된 세션에 남은 성향을 만났을 때 하는 말.
+PROFILE_GONE_MESSAGE = "성향 구성이 바뀌었어요. 처음부터 다시 물어봐 주세요."
+# 더 쓸 수 없게 된 성향들. 이 목록이 비면 이 경로는 아무 일도 하지 않는다.
+RETIRED_PROFILES = frozenset({"scalper"})
+
+
+def _retire_flow(db: Session, user: User, row: AskMacroSession) -> None:
+    """옛 성향으로 만든 세션을 거두고 횟수를 돌려준다.
+
+    받을 이유가 없는 차감이다 — 사용자가 잘못한 것이 없고, 그 세션으로는 아무것도 못 본다.
+    추가권으로 물어본 세션이면 추가권도 같이 풀어 준다(run_ask 의 환불과 같은 방식).
+    """
+    if row.refunded:
+        return
+    row.refunded = True
+    db.add(row)
+    if row.paid:
+        for credit in _credits_today(db, user):
+            if credit.used_session_id == row.id:
+                credit.used_session_id = None
+                db.add(credit)
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        # 환불에 실패해도 세션은 못 쓴다 — 부르는 쪽이 410 을 던진다. 조용히 삼키지 않는다.
+        log.warning("ask: 옛 성향 세션 환불 실패")
+
+
 def _load_flow(db: Session, user: User, session_id: int) -> tuple[AskMacroSession, CandidatesRequest]:
     """세션 행을 찾아 만료·상한·소유자를 검사하고 저장된 카드 답변을 돌려준다."""
     row = db.get(AskMacroSession, session_id)
@@ -968,7 +997,16 @@ def _load_flow(db: Session, user: User, session_id: int) -> tuple[AskMacroSessio
     if row.ask_count >= MAX_ASKS_PER_SESSION:
         raise AskError(409, "이번 질문에서 살펴볼 수 있는 종목을 다 봤어요. 다시 물어봐 주세요.")
     try:
-        answers = CandidatesRequest(**json.loads(row.request_json))
+        saved = json.loads(row.request_json)
+    except Exception:
+        raise AskError(410, "질문 기록이 오래된 형식이에요. 처음부터 다시 물어봐 주세요.")
+    # 없어진 성향으로 만든 세션은 검증에서 터져 화면이 500 으로 죽는다. 왜 못 쓰는지
+    # 말해 주고 횟수를 돌려준다 — "오래된 형식" 으로 뭉개면 사용자는 자기 잘못인 줄 안다.
+    if isinstance(saved, dict) and saved.get("risk_profile") in RETIRED_PROFILES:
+        _retire_flow(db, user, row)
+        raise AskError(410, PROFILE_GONE_MESSAGE)
+    try:
+        answers = CandidatesRequest(**saved)
     except Exception:
         raise AskError(410, "질문 기록이 오래된 형식이에요. 처음부터 다시 물어봐 주세요.")
     return row, answers

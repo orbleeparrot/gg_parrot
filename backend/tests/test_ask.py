@@ -1165,3 +1165,36 @@ def test_endpoint_uses_the_window_threshold_not_the_strictest_one(_fake_backtest
     assert data["no_edge"] is False
     # 같은 숫자가 1년 창에서는 탈락한다는 것도 함께 못 박는다.
     assert ask.worth_the_macro(_result(12.5, 2, trades=20, bh=10), "1y") is False
+
+
+def test_a_stored_scalper_session_refunds_instead_of_crashing(monkeypatch):
+    """단타형으로 만들어 둔 세션이 성향 삭제 뒤에 열리면 — 500 이 아니라 안내 + 환불.
+
+    세션 수명이 30분(SESSION_TTL_MS)이라 창은 짧지만 0 은 아니다. 배포 순간에 물어보던
+    사람이 '종목 고르기' 를 누르면 저장된 scalper 가 CandidatesRequest 검증에서 터진다.
+    예전에는 포괄 except 가 "오래된 형식" 으로 뭉갰고, 횟수는 돌아오지 않았다.
+    """
+    monkeypatch.setattr(ask.hotcoins, "get_cached_tickers", lambda: _fake_tickers())
+    monkeypatch.setattr(ask, "_candidate_ai", lambda: None)
+    token, _ = _signup()
+    _consent(token)
+    flow = client.post("/api/ask/candidates", json=_candidates_body(), headers=_auth(token)).json()
+    session_id = flow["session_id"]
+
+    with get_session() as db:
+        row = db.get(AskMacroSession, session_id)
+        saved = json.loads(row.request_json)
+        saved["risk_profile"] = "scalper"
+        row.request_json = json.dumps(saved, ensure_ascii=False)
+        db.add(row)
+        db.commit()
+
+    res = client.post("/api/ask/macros", json={"session_id": session_id, "symbol": "BTCUSDT"},
+                      headers=_auth(token))
+    assert res.status_code == 410
+    assert "성향" in res.json()["detail"], "왜 못 쓰는지 말해야 한다"
+
+    with get_session() as db:
+        assert db.get(AskMacroSession, session_id).refunded is True, "횟수를 돌려줘야 한다"
+    status = client.get("/api/ask/status", headers=_auth(token)).json()
+    assert status["remaining_today"] == ask.daily_limit(), "안 쓴 것으로 세야 한다"

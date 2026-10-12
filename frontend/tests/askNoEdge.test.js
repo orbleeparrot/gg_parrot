@@ -83,7 +83,11 @@ test("빈 화면이 숫자를 싣는다", () => {
 test("없는 홀딩 숫자를 지어내지 않는다", () => {
   const line = noEdgeDetail({ return_pct: 5.0, hold_return_pct: null, rule_label: "RSI 조건" });
   assert.match(line, /5\.0/);
-  assert.ok(!/null|NaN|—%/.test(line), `지어낸 값이 섞였다: ${line}`);
+  assert.ok(!/null|NaN/.test(line), `지어낸 값이 섞였다: ${line}`);
+  // signedPct(null) 은 "—" 를 돌려준다. 그 자리를 비워 둔 문장("… 뒀을 때 — 였어요")은
+  // 숫자를 지어내지 않지만 고장 난 화면처럼 읽힌다 — 못 구했다고 **말해야** 한다.
+  assert.ok(!line.includes("—"), `빈 자리를 그대로 내보냈다: ${line}`);
+  assert.match(line, /구하지 못했어요/, "왜 홀딩 숫자가 없는지 말해야 한다");
   assert.equal(noEdgeDetail(null), "");
 });
 

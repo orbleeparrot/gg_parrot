@@ -55,6 +55,12 @@ class BacktestResult(BaseModel):
     # first close, hold to the last). Lets the UI show strategy vs HODL. None
     # when there are too few bars to define it.
     buy_hold_return_pct: Optional[float] = None
+    # 같은 구간 '첫 종가에 사서 끝까지 보유' 의 최대 낙폭(양수 %). 봉이 2개 미만이면 None.
+    #
+    # 왜 필요한가: 성향별 MDD 상한을 고정 숫자로 두면 기간이 길어질수록 전부 탈락한다
+    # (측정: 균형형 6개월에서 후보 87개 중 72개가 상한에서 죽었다). 시장이 얼마나
+    # 흔들렸는지를 같이 알아야 "홀딩보다 덜 흔들렸다" 를 말할 수 있다.
+    buy_hold_mdd_pct: Optional[float] = None
     # Annualized Sharpe ratio from the equity curve's per-bar returns (risk-free
     # rate assumed 0). None when the curve is flat or too short to be meaningful.
     sharpe: Optional[float] = None
@@ -218,6 +224,7 @@ def _metrics(
     liquidation_count: int = 0,
     liquidated_loss: float = 0.0,
     buy_hold_return_pct: Optional[float] = None,
+    buy_hold_mdd_pct: Optional[float] = None,
     periods_per_year: float = 365.0,
 ) -> BacktestResult:
     final_equity = equity_curve[-1].equity if equity_curve else initial_capital
@@ -255,6 +262,7 @@ def _metrics(
         liquidation_count=liquidation_count,
         liquidated_loss=round(liquidated_loss, 2),
         buy_hold_return_pct=(round(buy_hold_return_pct, 4) if buy_hold_return_pct is not None else None),
+        buy_hold_mdd_pct=(round(buy_hold_mdd_pct, 4) if buy_hold_mdd_pct is not None else None),
         sharpe=_sharpe(equity_curve, periods_per_year),
         profit_factor=_profit_factor(closed_trades),
         max_consecutive_losses=_max_consecutive_losses(closed_trades),
@@ -270,6 +278,27 @@ def _buy_hold_return_pct(closes) -> Optional[float]:
     if first <= 0:
         return None
     return (last - first) / first * 100.0
+
+
+def _buy_hold_mdd_pct(closes) -> Optional[float]:
+    """첫 종가에 사서 보유했을 때의 최대 낙폭(양수 %).
+
+    전략 MDD 와 같은 방식(고점 갱신 → 고점 대비 하락의 최악)으로 재야 두 숫자를 나란히
+    비교할 수 있다. 다만 여기 '자산' 은 가격 자체다 — 수수료도 거래도 없다.
+    """
+    if len(closes) < 2:
+        return None
+    peak = float("-inf")
+    worst = 0.0
+    for value in closes:
+        price = float(value)
+        if price > peak:
+            peak = price
+        if peak > 0:
+            drop = (price - peak) / peak
+            if drop < worst:
+                worst = drop
+    return -worst * 100.0
 
 
 def _iso(ts) -> str:
@@ -297,6 +326,7 @@ def _run_single_position(macro: Macro, df: pd.DataFrame) -> BacktestResult:
         liquidation_count=sim.liquidations,
         liquidated_loss=sim.liquidated_loss,
         buy_hold_return_pct=_buy_hold_return_pct(closes),
+        buy_hold_mdd_pct=_buy_hold_mdd_pct(closes),
         periods_per_year=_PERIODS_PER_YEAR.get(macro.candle_interval, 365.0),
     )
 
@@ -337,6 +367,7 @@ def _run_dca(macro: Macro, df: pd.DataFrame) -> BacktestResult:
         initial_capital=initial_capital,
         win_rate_override=win_rate,
         buy_hold_return_pct=_buy_hold_return_pct(closes),
+        buy_hold_mdd_pct=_buy_hold_mdd_pct(closes),
         periods_per_year=_PERIODS_PER_YEAR.get(macro.candle_interval, 365.0),
     )
 
@@ -384,6 +415,7 @@ def _run_candle_engine(macro: Macro, df: pd.DataFrame) -> BacktestResult:
         liquidation_count=sim.liquidations,
         liquidated_loss=sim.liquidated_loss,
         buy_hold_return_pct=_buy_hold_return_pct(closes),
+        buy_hold_mdd_pct=_buy_hold_mdd_pct(closes),
         periods_per_year=_PERIODS_PER_YEAR.get(macro.candle_interval, 365.0),
     )
 

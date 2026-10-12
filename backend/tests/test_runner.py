@@ -171,6 +171,104 @@ def test_launch_ticket_create_claim_and_status_contract():
     assert replay.headers["cache-control"] == "no-store"
 
 
+def _claimed_launch(token: str, macro: dict | None = None) -> tuple[int, str]:
+    """웹에서 티켓을 만들고 v13 실행기로 청구한다. (launch_id, 회원 키)."""
+    if macro is None:
+        saved = _save_macro(token)
+    else:
+        response = client.post("/api/me/macros", json={"macro": macro, "name": "국내 빠른 실행"}, headers=_auth(token))
+        assert response.status_code == 200, response.text
+        saved = response.json()["item"]
+    created = client.post("/api/me/runner/launch-tickets", json={"user_macro_id": saved["id"], "testnet": True},
+                          headers=_auth(token)).json()
+    ticket = parse_qs(urlsplit(created["launch_url"]).query)["ticket"][0]
+    claimed = client.post("/api/runner/launch-tickets/claim", json={"ticket": ticket, "runner_version": "13"})
+    assert claimed.status_code == 200, claimed.text
+    return created["launch_id"], claimed.json()["runner_key"]
+
+
+def _progress(stage="keys", exchange="binance", **extra) -> dict:
+    body = {"stage": stage, "exchange": exchange, "path": "new", "slots": {"access": True, "secret": False},
+            "checks": {"auth": "wait", "ip": "wait", "order": "wait"}, "problem": "", "connected": False}
+    body.update(extra)
+    return body
+
+
+def test_runner_setup_progress_reaches_the_web_launch_status():
+    token = _signup()
+    launch_id, runner_key = _claimed_launch(token)
+    sent = client.post(f"/api/runner/launch-tickets/{launch_id}/progress", json=_progress(),
+                       headers={"X-Runner-Key": runner_key})
+    assert sent.status_code == 200, sent.text
+    assert sent.headers["cache-control"] == "no-store"
+    status = client.get(f"/api/me/runner/launch-tickets/{launch_id}", headers=_auth(token)).json()
+    assert status["status"] == "claimed"
+    assert status["progress"] == _progress()
+    assert status["progress_at"]
+    # 가장 최근 단계 하나만 남는다.
+    done = _progress("result_ok", checks={"auth": "ok", "ip": "ok", "order": "na"}, connected=True)
+    client.post(f"/api/runner/launch-tickets/{launch_id}/progress", json=done, headers={"X-Runner-Key": runner_key})
+    assert client.get(f"/api/me/runner/launch-tickets/{launch_id}", headers=_auth(token)).json()["progress"] == done
+
+
+def test_runner_setup_progress_never_accepts_keys_addresses_or_free_text():
+    token = _signup()
+    launch_id, runner_key = _claimed_launch(token)
+    for bad in (_progress(api_key="K" * 40), _progress(slots={"access": True, "secret": "S" * 40}),
+                _progress(checks={"auth": "ok", "ip": "121.134.55.20", "order": "wait"}),
+                _progress(stage="업비트 키를 넣는 중"), _progress(problem="no_authorization_ip 121.134.55.20"),
+                _progress(exchange="kraken")):
+        response = client.post(f"/api/runner/launch-tickets/{launch_id}/progress", json=bad,
+                               headers={"X-Runner-Key": runner_key})
+        assert response.status_code == 422, (bad, response.text)
+    status = client.get(f"/api/me/runner/launch-tickets/{launch_id}", headers=_auth(token)).json()
+    assert "progress" not in status
+
+
+def test_runner_setup_progress_is_bound_to_the_claiming_account_and_macro():
+    owner, other = _signup(), _signup()
+    launch_id, runner_key = _claimed_launch(owner)
+    other_key = client.get("/api/me/runner/key", headers=_auth(other)).json()["key"]
+    stranger = client.post(f"/api/runner/launch-tickets/{launch_id}/progress", json=_progress(),
+                           headers={"X-Runner-Key": other_key})
+    assert stranger.status_code == 404
+    assert client.post(f"/api/runner/launch-tickets/{launch_id}/progress", json=_progress()).status_code == 401
+    mismatch = client.post(f"/api/runner/launch-tickets/{launch_id}/progress", json=_progress(exchange="upbit"),
+                           headers={"X-Runner-Key": runner_key})
+    assert mismatch.status_code == 409
+    # 청구 전 티켓에는 쓸 수 없다.
+    saved = _save_macro(owner)
+    ready = client.post("/api/me/runner/launch-tickets", json={"user_macro_id": saved["id"], "testnet": True},
+                        headers=_auth(owner)).json()
+    unclaimed = client.post(f"/api/runner/launch-tickets/{ready['launch_id']}/progress", json=_progress(),
+                            headers={"X-Runner-Key": runner_key})
+    assert unclaimed.status_code == 404
+
+
+def test_runner_setup_progress_window_closes_two_hours_after_the_claim():
+    token = _signup()
+    launch_id, runner_key = _claimed_launch(token)
+    with get_session() as db:
+        row = db.get(RunnerLaunchTicket, launch_id)
+        row.claimed_at = "2026-01-01T00:00:00Z"
+        db.add(row)
+        db.commit()
+    late = client.post(f"/api/runner/launch-tickets/{launch_id}/progress", json=_progress(),
+                       headers={"X-Runner-Key": runner_key})
+    assert late.status_code == 410
+
+
+def test_domestic_launch_progress_uses_the_macro_exchange():
+    token = _signup()
+    macro = {"exchange": "upbit", "quote_currency": "KRW", "symbol": "KRW-BTC", "rule_type": "A",
+             "position_side": "long", "leverage": 1, "params": {"take_profit_pct": 3.0, "initial_capital": 1000000},
+             "risk": {"invest_ratio": 0.5, "stop_loss_pct": 2.0}, "period": {"preset": "3m"}}
+    launch_id, runner_key = _claimed_launch(token, macro)
+    ok = client.post(f"/api/runner/launch-tickets/{launch_id}/progress", json=_progress("ask", "upbit", path=""),
+                     headers={"X-Runner-Key": runner_key})
+    assert ok.status_code == 200, ok.text
+
+
 def test_launch_ticket_uses_fixed_local_environment_for_loopback_web():
     token = _signup()
     saved = _save_macro(token)
@@ -349,21 +447,21 @@ def test_runner_download_info_advertises_launch_capability_safely():
     if info["supports_launch"]:
         assert info["launch_scheme"] == "ggparrot"
         assert info["min_runner_version"]
-        if "/runner-v12/" in info["url"]:
+        if "/runner-v13/" in info["url"]:
             assert int(info["min_runner_version"]) >= 6
-            assert int(info["version"]) >= 12
+            assert int(info["version"]) >= 13
     else:
         assert info["launch_scheme"] == ""
         assert info["min_runner_version"] == ""
 
 
-def test_runner_download_redirect_matches_advertised_v12():
+def test_runner_download_redirect_matches_advertised_v13():
     info = client.get("/api/runner/download/info").json()
     response = client.get("/api/runner/download", follow_redirects=False)
     assert response.status_code == 307
     assert response.headers["location"] == info["url"]
-    assert "/runner-v12/" in info["url"]
-    assert info["version"] == "12"
+    assert "/runner-v13/" in info["url"]
+    assert info["version"] == "13"
     assert response.headers["cache-control"] == "no-store"
 
 

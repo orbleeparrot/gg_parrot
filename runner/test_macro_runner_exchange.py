@@ -110,9 +110,9 @@ class ExchangeSelectionTests(unittest.TestCase):
                 self.assertNotIn(f"SECRET-{name}", blob)
                 self.assertNotIn(f"KEY-{name}", blob)
 
-    def test_runner_version_is_twelve(self):
+    def test_runner_version_is_thirteen(self):
         from runner import installation
-        self.assertEqual(installation.RUNNER_VERSION, "12")
+        self.assertEqual(installation.RUNNER_VERSION, "13")
 
     # --- 위 다섯은 과제 사양. 아래는 같은 배선의 나머지 ----------------
     def test_binance_macro_builds_the_binance_broker_with_its_own_keys(self):
@@ -373,13 +373,19 @@ class RunModeGuiTests(unittest.TestCase):
     def test_testnet_is_hidden_and_unselected_for_a_domestic_macro(self):
         app = self.app({"symbol": "KRW-BTC", "exchange": "upbit"})
         app._sync_mode_choices()
-        app.mode_buttons["testnet"].pack_forget.assert_called_once_with()
+        app.mode_buttons["testnet"].grid_remove.assert_called_once_with()
+        app.mode_buttons["testnet"].grid.assert_not_called()
+        # 남은 두 칸(모의 · 실전)이 0 · 1 번째 칸을 같은 폭으로 나눠 쓴다.
+        self.assertEqual(app.mode_buttons["mock"].grid.call_args.kwargs["column"], 0)
+        self.assertEqual(app.mode_buttons["live"].grid.call_args.kwargs["column"], 1)
         self.assertEqual(app.mode.get(), "mock")  # 국내엔 테스트넷이 없다 — 실전으로 떨어지지 않는다
 
     def test_testnet_stays_for_a_binance_macro(self):
         app = self.app({"symbol": "BTCUSDT", "exchange": "binance"})
         app._sync_mode_choices()
-        app.mode_buttons["testnet"].pack_forget.assert_not_called()
+        app.mode_buttons["testnet"].grid_remove.assert_not_called()
+        self.assertEqual([app.mode_buttons[name].grid.call_args.kwargs["column"] for name in ("mock", "testnet", "live")],
+                         [0, 1, 2])
         self.assertEqual(app.mode.get(), "testnet")
 
     def test_live_start_without_that_exchange_key_is_blocked_by_name(self):

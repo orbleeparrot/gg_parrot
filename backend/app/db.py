@@ -448,6 +448,10 @@ class RunnerLaunchTicket(SQLModel, table=True):
     # 426 응답은 실행기 창에만 가고 브라우저는 알 길이 없었다.
     rejected_at: str = ""
     rejected_version: str = ""
+    # 청구한 실행기(v13+)가 알려 온 연결 도우미 진행 단계(JSON). 웹 가이드가 실행기 화면을 따라 보여 준다.
+    # 단계 이름 · 키 칸이 찼는지 · 검사 세 줄의 상태뿐 — 거래소 키 · IP · 오류 문장은 들어오지 않는다(요청 모델이 거른다).
+    setup_progress: str = ""
+    setup_progress_at: str = ""
 
 
 class RunSession(SQLModel, table=True):
@@ -1329,6 +1333,8 @@ def _migrate() -> None:
     added.setdefault("runnerlaunchticket", {}).update({
         "rejected_at": "ALTER TABLE runnerlaunchticket ADD COLUMN rejected_at TEXT DEFAULT ''",
         "rejected_version": "ALTER TABLE runnerlaunchticket ADD COLUMN rejected_version TEXT DEFAULT ''",
+        "setup_progress": "ALTER TABLE runnerlaunchticket ADD COLUMN setup_progress TEXT DEFAULT ''",
+        "setup_progress_at": "ALTER TABLE runnerlaunchticket ADD COLUMN setup_progress_at TEXT DEFAULT ''",
     })
     added.setdefault("runsession", {}).update({
         "runner_version": "ALTER TABLE runsession ADD COLUMN runner_version TEXT DEFAULT ''",
@@ -1469,6 +1475,8 @@ _PG_ADDED_COLUMNS = {
     "runnerlaunchticket": {
         "rejected_at": "TEXT DEFAULT ''",
         "rejected_version": "TEXT DEFAULT ''",
+        "setup_progress": "TEXT DEFAULT ''",
+        "setup_progress_at": "TEXT DEFAULT ''",
     },
 }
 _PG_INDEXES = {

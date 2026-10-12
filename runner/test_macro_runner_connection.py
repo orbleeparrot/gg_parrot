@@ -1,4 +1,5 @@
 """Startup gate, safe standalone checks, and Tk-free worker delivery."""
+import json
 import queue
 import threading
 import time
@@ -100,10 +101,7 @@ class ConnectionGuiTests(unittest.TestCase):
         app._public_ip = ""
         app._connection_wizard = None
         app._wizard_generation = 0
-        app.ip_btn, app.ip_copy_btn, app.ip_note = Mock(), Mock(), Mock()
         app._preflight = None
-        app.connection_note = Mock()
-        app.connection_btn = Mock()
         app.start_btn = Mock()
         app._log = Mock()
         return app
@@ -181,7 +179,22 @@ class ConnectionGuiTests(unittest.TestCase):
         app._connection_queue.put(("preflight", 0, connection.PreflightResult(False, "키 확인 실패", fingerprint), True))
         app._poll_connection_tasks()
         app._start.assert_not_called()
-        self.assertIn("키 확인 실패", app.connection_note.config.call_args.kwargs["text"])
+        self.assertTrue(any("키 확인 실패" in call.args[0] for call in app._log.call_args_list))
+        # 같은 키 · 같은 거래소를 본 결과라 키 카드 상태로도 남는다(연결 안 됨).
+        self.assertFalse(app._key_check["view"]["connected"])
+
+    def test_failed_domestic_start_check_opens_the_helper_result_instead_of_an_error(self):
+        app = self.app()
+        app.main_view = Mock()
+        app._open_connection_wizard = Mock()
+        _macro, _mode, _credentials, fingerprint = app._snapshot_for_connection()
+        app._start = Mock()
+        failed = connection.PreflightResult(False, "막힘", fingerprint, error_name="no_authorization_ip")
+        app._connection_queue.put(("preflight", 0, failed, True))
+        app._poll_connection_tasks()
+        app._open_connection_wizard.assert_called_once_with(stage="result_fail")
+        app._start.assert_not_called()
+        self.assertEqual(app._wizard_check()["view"]["problem"], "ip")
 
     def test_current_async_result_resumes_exactly_once(self):
         app = self.app()
@@ -227,10 +240,11 @@ class ConnectionGuiTests(unittest.TestCase):
         app._connection_queue.put(item)
         self.assertNotEqual(seen[0], main_thread)
         app.root.after.assert_called_once_with(100, app._poll_connection_tasks)
-        # Widget text does not change until the MAIN thread drains the worker queue.
-        self.assertIn("확인 중", app.connection_note.config.call_args.kwargs["text"])
+        # Nothing is applied until the MAIN thread drains the worker queue.
+        self.assertIsNone(app._preflight)
+        self.assertIn("확인하고 있어요", app._log.call_args.args[0])
         app._poll_connection_tasks()
-        self.assertEqual(app.connection_note.config.call_args.kwargs["text"], "검증")
+        self.assertEqual(app._preflight.reason, "검증")
 
     def test_close_disposes_an_already_queued_broker(self):
         app = self.app()
@@ -303,8 +317,9 @@ class ConnectionGuiTests(unittest.TestCase):
         app._connection_queue.put(("ip", token, False, "ProxyError SECRET"))
         app._poll_connection_tasks()
         self.assertEqual(app._public_ip, "")
-        self.assertEqual(app.ip_copy_btn.config.call_args.kwargs["state"], "disabled")
-        self.assertNotIn("SECRET", app.ip_note.config.call_args.kwargs["text"])
+        self.assertFalse(app._copy_public_ip())
+        app.root.clipboard_append.assert_not_called()
+        self.assertNotIn("SECRET", app._public_ip_cache.result.reason)
 
     def test_cached_automatic_success_or_failure_never_starts_a_worker(self):
         app = self.app()
@@ -325,7 +340,7 @@ class ConnectionGuiTests(unittest.TestCase):
         app._poll_connection_tasks()
         self.assertFalse(app._public_ip_busy)
         self.assertEqual(app._public_ip, "")
-        self.assertEqual(app.ip_copy_btn.config.call_args.kwargs["state"], "disabled")
+        self.assertFalse(app._copy_public_ip())
 
     def test_copy_checks_expiry_before_touching_clipboard(self):
         app = self.app()
@@ -571,11 +586,187 @@ class CredentialReuseUiTests(unittest.TestCase):
             app._record_successful_ip_history()
         save.assert_not_called()
 
-    def test_expired_check_state_is_not_displayed_as_current_success(self):
+    def test_a_check_of_other_keys_is_never_shown_as_the_current_connection(self):
         app = self.app()
-        checked = ConnectionGuiTests().checked(app)
-        object.__setattr__(checked, "checked_at", time.monotonic() - 121)
-        self.assertIn("만료", app._connection_check_note())
+        _macro, _mode, _credentials, fingerprint = app._key_check_snapshot()
+        app._store_key_check(fingerprint, connection.PreflightResult(True, "통과", fingerprint))
+        self.assertEqual(app._key_state()[0], "ok")
+        app.key_vars["upbit"][1].set("fixture-other-secret")
+        self.assertNotEqual(app._key_state()[0], "ok")
+
+
+
+class KeyStatusTests(unittest.TestCase):
+    """키 카드의 연결 상태 — 다 찬 키만 잠시 뒤 저절로 확인하고, 지금 칸과 같은 키의 결과만 보인다."""
+    app = ConnectionGuiTests.app
+
+    def setUp(self):
+        # Windows(릴리스 빌드의 테스트)에서도 같은 결과 — 이 시험들은 저장 파일을 건드리지 않는다.
+        supported = patch.object(macro_runner.credentials_mod, "supported", return_value=False)
+        supported.start()
+        self.addCleanup(supported.stop)
+
+    def test_states_follow_the_current_keys(self):
+        app = self.app()
+        app.key_vars["upbit"][1].set("")
+        self.assertEqual(app._key_state()[:2], ("missing", "● 연결 안 됨"))
+        app.key_vars["upbit"][1].set("secret-example")
+        self.assertEqual(app._key_state()[0], "unknown")
+        _macro, _mode, _credentials, fingerprint = app._key_check_snapshot()
+        app._key_check_busy_fp = fingerprint
+        self.assertEqual(app._key_state()[:2], ("checking", "● 확인 중"))
+        app._key_check_busy_fp = None
+        app._store_key_check(fingerprint, connection.PreflightResult(False, "막힘", fingerprint, error_name="no_authorization_ip"))
+        self.assertEqual(app._key_state()[:2], ("bad", "● 허용 IP 확인 필요"))
+        app._store_key_check(fingerprint, connection.PreflightResult(True, "통과", fingerprint))
+        self.assertEqual(app._key_state()[:2], ("ok", "✓ 연결됨"))
+
+    def test_binance_failure_shows_the_reason_because_it_has_no_helper(self):
+        app = self.app()
+        app.macro = {"exchange": "binance", "symbol": "BTCUSDT", "position_side": "long", "leverage": 1}
+        app.key_vars["binance"] = (_Var("bk"), _Var("bs"))
+        fingerprint = app._key_check_snapshot()[3]
+        app._store_key_check(fingerprint, connection.PreflightResult(False, "바이낸스가 키를 받아주지 않았어요", fingerprint,
+                                                                     error_name="binance_access"))
+        kind, text, _color, note = app._key_state()
+        self.assertEqual((kind, text), ("bad", "● 연결 안 됨"))
+        self.assertIn("바이낸스가 키를 받아주지 않았어요", note)
+
+    def test_binance_practice_modes_check_against_the_testnet(self):
+        app = self.app()
+        app.macro = {"exchange": "binance", "symbol": "BTCUSDT", "position_side": "long", "leverage": 1}
+        for mode, expected in (("mock", "testnet"), ("testnet", "testnet"), ("live", "live")):
+            app.mode.set(mode)
+            self.assertEqual(app._key_check_mode(), expected)
+        app.macro = {"exchange": "upbit", "symbol": "KRW-BTC"}
+        app.mode.set("mock")
+        self.assertEqual(app._key_check_mode(), "live")  # 국내 키 확인은 주문 없는 실거래 쪽
+
+    def test_incomplete_keys_running_bot_or_no_requests_never_schedule_a_check(self):
+        app = self.app()
+        app.key_vars["upbit"][0].set("")
+        app._schedule_key_check()
+        app.root.after.assert_not_called()
+        app.key_vars["upbit"][0].set("key-example")
+        app.bot = Mock()
+        app._schedule_key_check()
+        app.root.after.assert_not_called()
+        app.bot = None
+        with patch.object(macro_runner, "requests", None):
+            app._schedule_key_check()
+        app.root.after.assert_not_called()
+        app._schedule_key_check()
+        app.root.after.assert_called_once_with(700, app._begin_key_check)
+
+    def test_the_same_keys_are_not_checked_twice(self):
+        app = self.app()
+        fingerprint = app._key_check_snapshot()[3]
+        app._store_key_check(fingerprint, connection.PreflightResult(True, "통과", fingerprint))
+        app._schedule_key_check()
+        app.root.after.assert_not_called()
+        with patch.object(macro_runner.threading, "Thread") as thread:
+            self.assertTrue(app._begin_key_check())
+        thread.assert_not_called()
+
+    def test_worker_closes_its_broker_and_stale_or_changed_results_are_dropped(self):
+        app = self.app()
+        broker = Mock()
+        finished = threading.Event()
+        def perform(macro, credentials, mode):
+            finished.set()
+            self.assertEqual(credentials["member_key"], "")  # 회원 키는 거래소 확인에 쓰지 않는다
+            return connection.PreflightResult(True, "통과", connection.preflight_fingerprint(macro, mode, credentials), broker=broker)
+        with patch.object(macro_runner, "perform_connection_check", side_effect=perform), \
+             patch.object(macro_runner, "close_connection_broker") as close:
+            self.assertTrue(app._begin_key_check())
+            self.assertTrue(finished.wait(2))
+            tag, generation, fingerprint, result = app._connection_queue.get(timeout=2)
+        close.assert_called_with(broker)
+        self.assertEqual(tag, "keycheck")
+        self.assertIsNone(result.broker)
+        app._accept_key_check(generation - 1, fingerprint, result)  # 지난 세대
+        self.assertIsNone(getattr(app, "_key_check", None))
+        app.key_vars["upbit"][1].set("changed-secret")
+        app._schedule_key_check = Mock()
+        app._accept_key_check(generation, fingerprint, result)  # 그 사이 키가 바뀌었다
+        self.assertIsNone(getattr(app, "_key_check", None))
+        app._schedule_key_check.assert_called_once_with()
+
+    def test_perform_check_passes_the_exchange_word_and_ignores_test_doubles(self):
+        macro = {"exchange": "upbit", "symbol": "KRW-BTC", "position_side": "long", "leverage": 1, "params": {"initial_capital": 10000}}
+        credentials = {"exchanges": {"upbit": {"api_key": "k", "api_secret": "s"}}}
+        broker = Mock()
+        broker.rehearse.return_value = (False, "막힘")
+        broker.last_error_name = "no_authorization_ip"
+        with patch.object(macro_runner.BotThread, "_build_broker", return_value=broker):
+            result = macro_runner.perform_connection_check(macro, credentials, "live")
+        self.assertEqual(result.error_name, "no_authorization_ip")
+        plain = Mock()
+        plain.rehearse.return_value = (False, "막힘")
+        with patch.object(macro_runner.BotThread, "_build_broker", return_value=plain):
+            self.assertEqual(macro_runner.perform_connection_check(macro, credentials, "live").error_name, "")
+
+    def test_remember_toggle_with_incomplete_keys_does_no_file_io(self):
+        app = CredentialReuseUiTests().app()
+        app.key_vars["upbit"][1].set("")
+        app.remember.set(True)
+        with patch.object(macro_runner.credentials_mod, "supported", return_value=True), \
+             patch.object(macro_runner.credentials_mod, "apply_exchange_choice") as save:
+            app._on_remember_toggled()
+        save.assert_not_called()
+
+
+class SetupProgressTests(unittest.TestCase):
+    """웹 [실행기 열기] 로 들어오면 웹 가이드가 따라 보도록 단계를 알린다(키는 보내지 않는다)."""
+
+    def claim_app(self):
+        from runner.test_macro_runner_single_instance import RunnerActivationSafetyTests
+        return RunnerActivationSafetyTests().app()
+
+    def test_claim_passes_launch_id_and_name_only_when_the_server_sent_them(self):
+        app = self.claim_app()
+        response = Mock()
+        response.json.return_value = {"macro": {"symbol": "KRW-BTC", "exchange": "upbit"}, "runner_key": "ggp_member",
+                                      "user_macro_id": 73, "launch_id": 41, "name": "비트코인 매크로"}
+        fake_requests = Mock()
+        fake_requests.post.return_value = response
+        launch = Mock(ticket="A" * 43, environment="production")
+        with patch.object(macro_runner, "requests", fake_requests):
+            app._claim_protocol_ticket(launch)
+        scheduled = app.root.after.call_args.args
+        self.assertEqual(scheduled[1], app._apply_protocol_claim)
+        self.assertEqual(scheduled[5], 73)
+        self.assertEqual(scheduled[6], {"launch_id": 41, "name": "비트코인 매크로"})
+
+    def test_web_claim_starts_reporting_and_the_title_is_the_macro_name(self):
+        app = ConnectionGuiTests().app()
+        app.macro_path, app.macro_summary = Mock(), Mock()
+        app.user_macro_id, app.macro_sig, app.macro_source = None, None, ""
+        app._remembered = {"version": 2, "exchanges": {}}
+        app.pick_btn, app.status_lbl, app.live_note = Mock(), Mock(), Mock()
+        with patch.object(macro_runner.setup_progress, "SetupProgressReporter") as reporter_class, \
+             patch.object(macro_runner, "_bring_window_to_front"):
+            app._apply_protocol_claim({"symbol": "KRW-BTC", "exchange": "upbit"}, "ggp_member", "https://api.example", 73,
+                                      {"launch_id": 41, "name": "비트코인 매크로"})
+        reporter_class.assert_called_once_with("https://api.example", "ggp_member", 41)
+        app.macro_path.set.assert_called_with("비트코인 매크로")
+        reporter = reporter_class.return_value
+        stages = [call.args[0]["stage"] for call in reporter.report.call_args_list]
+        self.assertIn("ready", stages)
+        for call in reporter.report.call_args_list:
+            self.assertNotIn("member", json.dumps(call.args[0]))
+
+    def test_started_run_is_reported_once_and_reporting_stops(self):
+        app, _checked, server = FinalStartSnapshotTests().ready()
+        server.macro_origin = "web"
+        reporter = Mock()
+        app._progress_reporter = reporter
+        with patch.object(macro_runner.messagebox, "askyesno", return_value=True), \
+             patch.object(macro_runner, "ServerClient", return_value=server), patch.object(macro_runner, "BotThread"):
+            app._start()
+        self.assertEqual(reporter.report.call_args.args[0]["stage"], "started")
+        reporter.close.assert_called_once_with()
+        self.assertIsNone(app._progress_reporter)
 
 
 if __name__ == "__main__":

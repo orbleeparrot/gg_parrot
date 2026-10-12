@@ -21,6 +21,11 @@ API_MANAGEMENT_PAGES = {
     "upbit": "https://www.upbit.com/mypage/open_api_management",
     "bithumb": "https://www.bithumb.com/react/api-support/management-api",
 }
+# 연결 도우미의 모든 단계 맨 위에 두는 '거래소 열기' 바로가기. 정적 허용 목록 — 다른 주소는 열지 않는다.
+EXCHANGE_HOME_PAGES = {
+    "upbit": "https://upbit.com/",
+    "bithumb": "https://www.bithumb.com/",
+}
 PREFLIGHT_MAX_AGE = 120.0
 _FINGERPRINT_SALT = secrets.token_bytes(32)
 
@@ -34,6 +39,61 @@ def api_management_url(exchange: str) -> str:
         return API_MANAGEMENT_PAGES[exchange]
     except (KeyError, TypeError):
         raise ValueError("이 거래소의 공식 API 관리 페이지를 확인하지 못했어요.") from None
+
+
+def exchange_home_url(exchange: str) -> str:
+    try:
+        return EXCHANGE_HOME_PAGES[exchange]
+    except (KeyError, TypeError):
+        raise ValueError("이 거래소의 공식 홈페이지를 확인하지 못했어요.") from None
+
+
+# --- 연결 검사 결과를 세 줄로 -----------------------------------------------
+# 도우미는 '키 인증 · 허용 IP · 주문 권한' 을 따로 보여 준다. 거래소는 한 번의 검사에서 막힌 곳 하나만
+# 오류 낱말로 알려 주므로, 그 낱말로 어디까지 통과했는지를 거꾸로 읽는다(모르는 낱말은 지어내지 않는다).
+CHECK_OK, CHECK_BAD, CHECK_WAIT, CHECK_NA = "ok", "bad", "wait", "na"
+# 키는 받아들였지만 호출한 IP 가 허용 목록에 없다 — 업비트 no_authorization_ip, 빗썸 NotAllowIP.
+_IP_REJECTED = frozenset({"no_authorization_ip", "NotAllowIP"})
+# 키 자체를 받아들이지 않았다(틀린 키 · 시크릿 짝 불일치 · 만료).
+_KEY_REJECTED = frozenset({"invalid_access_key", "jwt_verification", "no_authorization_token", "expired_access_key"})
+# 키와 IP 는 통과했고 주문하기 권한이 없다.
+_SCOPE_REJECTED = frozenset({"out_of_scope"})
+# 거래소가 주문 내용(잔고 · 최소 금액)까지 따져 본 오류 — 키 · IP · 주문 권한은 이미 통과했다는 뜻이다.
+_ORDER_EVALUATED = frozenset({"insufficient_funds_bid", "insufficient_funds_ask", "over_krw_funds_bid", "under_min_total"})
+
+
+def check_view(exchange: str, ok: bool, error_name: str = "") -> dict:
+    """검사 결과 하나를 도우미의 세 줄(키 인증 · 허용 IP · 주문 권한)과 제목으로 옮긴다.
+
+    connected 는 '키 · IP · 권한이 통하는가' 다 — 잔고 부족처럼 주문 내용 때문에 실패한 검사도 연결은 된 것이다.
+    빗썸 · 바이낸스는 주문 없이 주문 권한을 확인할 길이 없어 성공해도 그 줄은 '확인 불가'(na)로 둔다.
+    """
+    name = str(error_name or "")
+    order_ok = CHECK_OK if exchange == "upbit" else CHECK_NA
+    if ok or name in _ORDER_EVALUATED or name.startswith("under_min_total"):
+        rows = {"auth": CHECK_OK, "ip": CHECK_OK, "order": order_ok}
+        return {**rows, "connected": True, "problem": "" if ok else "order_size", "headline": "연결 완료"}
+    if name in _IP_REJECTED:
+        return {"auth": CHECK_OK, "ip": CHECK_BAD, "order": CHECK_WAIT, "connected": False,
+                "problem": "ip", "headline": "허용 IP 확인 필요"}
+    if name in _KEY_REJECTED:
+        return {"auth": CHECK_BAD, "ip": CHECK_WAIT, "order": CHECK_WAIT, "connected": False,
+                "problem": "auth", "headline": "키 확인 필요"}
+    if name in _SCOPE_REJECTED:
+        return {"auth": CHECK_OK, "ip": CHECK_OK, "order": CHECK_BAD, "connected": False,
+                "problem": "order", "headline": "주문 권한 확인 필요"}
+    return {"auth": CHECK_WAIT, "ip": CHECK_WAIT, "order": CHECK_WAIT, "connected": False,
+            "problem": "network" if name == "network" else "other", "headline": "연결 확인 필요"}
+
+
+# 거래소 발급 창의 [복사] 로 클립보드에 들어온 값이 키처럼 생겼는가. 공백 · 점 · 콜론이 없고 길다 —
+# IP 주소 · 주소창 URL · 문장은 걸리지 않는다. 키 한 쌍이 같은 모양이라 어느 칸인지는 들어온 순서로 정한다.
+_KEY_TEXT = re.compile(r"[A-Za-z0-9+/=_-]{20,200}")
+
+
+def clipboard_key(text) -> str:
+    value = str(text or "").strip()
+    return value if _KEY_TEXT.fullmatch(value) else ""
 
 
 @dataclass(frozen=True)
@@ -213,6 +273,8 @@ class PreflightResult:
     fingerprint: str
     checked_at: float = field(default_factory=time.monotonic)
     broker: object = field(default=None, repr=False, compare=False)
+    # 거래소가 돌려준 오류 낱말(예: no_authorization_ip). 사람에게 보일 문장은 reason 이고, 이건 check_view 가 읽는다.
+    error_name: str = ""
 
     def matches(self, fingerprint: str, *, now=None) -> bool:
         elapsed = (time.monotonic() if now is None else now) - self.checked_at

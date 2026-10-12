@@ -68,7 +68,6 @@ from . import optimize as optimize_mod
 from . import optimize_runtime as optimize_runtime_mod
 from . import paper as paper_mod
 from . import runner_engine as runner_engine_mod
-from . import ai_explain as ai_explain_mod
 from . import ai_runtime as ai_runtime_mod
 from . import community_summaries as community_summaries_mod
 from . import auth as auth_mod
@@ -353,11 +352,6 @@ class DeleteAccountRequest(BaseModel):
     confirmation: str
     password: str = ""
     credential: str = ""
-
-
-class ExplainAiRequest(BaseModel):
-    macro: Macro
-    period_override: Optional[Period] = None
 
 
 class BundleRequest(BaseModel):
@@ -1550,45 +1544,6 @@ def validate_explain_route(body: ExplainIn, request: Request) -> dict:
         body_out["basis_symbol"] = base_macro.symbol
         body_out["basis_note"] = f"근거는 대표 종목 {coin} 기준이에요 (묶음 {legs}종목)"
     return body_out
-
-
-@app.post("/api/explain/ai")
-def explain_ai(req: ExplainAiRequest) -> dict:
-    """On-demand AI 원인 분석 using the server OpenAI key. Always returns a valid
-    ``explanation``: on any AI failure it falls back to the rule-based one (same
-    schema) and reports ``ai_error`` so the UI can hint why."""
-    macro = req.macro
-    if req.period_override is not None:
-        macro = macro.model_copy(update={"period": req.period_override})
-
-    try:
-        result, per_symbol, _, _ = _run_any(macro)
-    except NoSpotDataError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-
-    if not ai_explain_mod.ai_available():
-        return {"explanation": explain_result(macro, result).model_dump(), "ai_available": False}
-
-    try:
-        enriched, runtime_state = ai_explain_mod.generate_with_cache_status(
-            macro,
-            result,
-            per_symbol=per_symbol or None,
-        )
-    except ai_explain_mod.AiError as exc:
-        base = explain_result(macro, result).model_dump()
-        return {"explanation": base, "ai_available": True, "ai_error": exc.user_message}
-    except Exception:
-        base = explain_result(macro, result).model_dump()
-        return {"explanation": base, "ai_available": True, "ai_error": "AI 호출에 실패했어요."}
-
-    payload = enriched.model_dump()
-    response = {"explanation": payload, "ai_available": True}
-    if runtime_state != "loaded":
-        response["cached"] = True
-    return response
 
 
 @app.post("/api/optimize")

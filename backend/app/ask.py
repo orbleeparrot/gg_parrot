@@ -895,9 +895,8 @@ def _no_edge_best(evaluated: list[Evaluated]) -> Optional[dict]:
 
 def _result_view(e: Evaluated) -> dict:
     macro = e.candidate.macro
-    # v1 은 규칙 기반 explain_result 만 쓴다 — AI 해설(ai_explain.enrich)은 사이트 전체
-    # 일일 예산(AI_EXPLAIN_MAX_CALLS_PER_DAY)을 공유하는데, 여기선 한 번의 질문에 최대
-    # 3개 결과가 순차로 OpenAI 를 부르게 되어 예산을 빠르게 갉아먹는다. 그래서 뺀다.
+    # 해설은 규칙 기반 explain_result 만 쓴다 — 2026-10-12 에 AI 해설 층을 걷어냈다
+    # (하루 한도 때문에 같은 화면이 때에 따라 다른 말투였다).
     explanation = explain_result(macro, e.result)
     return {
         "label": e.candidate.label,

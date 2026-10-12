@@ -215,3 +215,33 @@ def test_no_edge_best_omits_a_hold_figure_it_does_not_have():
     assert best["return_pct"] == 5.0
     assert best["hold_return_pct"] is None
     assert ask._no_edge_best([]) is None
+
+
+def test_the_ai_explanation_layer_is_gone_but_the_explanation_is_not():
+    """AI 층만 벗긴다 — 해설은 규칙 기반으로 그대로 나온다.
+
+    왜 빼나: 하루 20회 한도가 걸려 같은 화면이 아침엔 AI 말투, 오후엔 규칙 말투였다.
+    한쪽으로 고정하는 편이 낫다. 2026-10-08 대시보드는 677/677 실패였다.
+    """
+    import importlib
+
+    import pytest
+
+    from app import main as main_mod
+    from app.engine.explain import explain_result
+
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("app.ai_explain")
+    assert not hasattr(main_mod, "ai_explain_mod")
+    # main.app 은 관측 미들웨어로 한 번 감싸인 뒤라 routes 를 들고 있지 않다. 끝점이
+    # 사라졌는지는 실제로 불러 본다. 405 도 "이 경로에 POST 처리기가 없다" 는 뜻이다
+    # (다른 경로 규칙이 같은 길에 GET 만 달고 있다) — 남아 있었다면 200/422 가 온다.
+    from fastapi.testclient import TestClient
+    assert TestClient(main_mod.app).post("/api/explain/ai", json={}).status_code in (404, 405)
+
+    # 해설은 여전히 같은 스키마로 나온다.
+    result = run_backtest(_macro(), _df([100.0, 101.0, 99.0, 103.0, 102.0]))
+    out = explain_result(_macro(), result).model_dump()
+    for key in ("mood", "headline", "points", "lesson", "source", "disclaimer"):
+        assert key in out
+    assert out["source"] == "rule"

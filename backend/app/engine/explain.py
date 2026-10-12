@@ -5,10 +5,10 @@ explanation, so it ships inline with the backtest response for free and can be
 cached trivially. It NEVER predicts the future or gives advice — it only narrates
 what THIS past simulation did and draws one teaching point from it.
 
-This is the always-on baseline AND the fallback for the optional AI layer: the AI
-enrichment (see the ``/api/explain/ai`` follow-up) produces the SAME
-``Explanation`` shape, so the frontend renders both identically and can degrade
-to this module whenever the model is unavailable.
+This is the only explanation path. An optional AI layer used to sit on top of it
+(``/api/explain/ai``), removed 2026-10-12: a 20-call daily budget meant the same
+screen spoke in the AI's voice in the morning and this module's in the afternoon,
+and the measured failure rate had made the fallback the usual answer anyway.
 """
 from __future__ import annotations
 

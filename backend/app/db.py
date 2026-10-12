@@ -1138,7 +1138,7 @@ class ApiUsageDaily(SQLModel, table=True):
     day_kst: str = Field(primary_key=True)
     provider: str = Field(primary_key=True)  # gemini | coindesk
     model: str = Field(primary_key=True, default="")
-    purpose: str = Field(primary_key=True, default="")  # position_news | title_translation | community_summaries | ai_explain | market_news_summary | ai_challenge
+    purpose: str = Field(primary_key=True, default="")  # position_news | title_translation | community_summaries | market_news_summary | ai_challenge
     calls: int = 0
     failures: int = 0
     input_tokens: int = Field(default=0, sa_type=BigInteger)

@@ -6,7 +6,7 @@ from inspect import getsource, signature
 
 import pytest
 
-from app import ai_challenge, ai_explain, news
+from app import ai_challenge, news
 from app import ai_runtime
 from app.agent_features.position_news import classifier
 
@@ -213,7 +213,7 @@ def test_shared_ai_client_has_no_explicit_key_override():
 
 def test_all_ai_callers_use_the_guarded_runtime():
     # 호출 지점은 SDK 를 모른다 — 공급자를 바꿀 때 ai_runtime 한 곳만 손대기 위해서다.
-    for module in (ai_explain, ai_challenge, news, classifier):
+    for module in (ai_challenge, news, classifier):
         source = getsource(module)
         assert "get_ai_runtime" in source, module.__name__
         assert "genai." not in source and "anthropic" not in source, module.__name__

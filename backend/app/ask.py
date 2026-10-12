@@ -875,6 +875,24 @@ def _curve(result: BacktestResult) -> list[float]:
     return [round(float(p.equity), 4) for p in _lttb_equity_points(result.equity_curve, CURVE_POINTS)]
 
 
+def _no_edge_best(evaluated: list[Evaluated]) -> Optional[dict]:
+    """홀딩 문턱을 넘은 게 없어 빈 화면이 될 때, 가장 나았던 조합의 숫자.
+
+    왜 싣나: 지금 빈 화면은 "넘긴 조합이 없었어요" 한 줄로 끝난다. 그 사이에 매크로가
+    +34.82% 를 벌었고 같은 기간 보유가 +38.67% 였다는 사실이 사라진다 — 사용자는
+    "아무것도 안 됐다" 로 읽는다. 둘을 나란히 보여 주면 '왜 안 보여 주는지' 가 보인다.
+    """
+    if not evaluated:
+        return None
+    best = max(evaluated, key=lambda e: float(e.result.final_return_pct))
+    hold = best.result.buy_hold_return_pct
+    return {
+        "return_pct": round(float(best.result.final_return_pct), 2),
+        "hold_return_pct": (round(float(hold), 2) if hold is not None else None),
+        "rule_label": RULE_LABELS.get(best.candidate.macro.rule_type.value, ""),
+    }
+
+
 def _result_view(e: Evaluated) -> dict:
     macro = e.candidate.macro
     # v1 은 규칙 기반 explain_result 만 쓴다 — AI 해설(ai_explain.enrich)은 사이트 전체
@@ -1106,6 +1124,7 @@ def run_ask(db: Session, user: User, req: AskRequest, run_backtest: Callable[[Ma
         # 그 경우의 올바른 말은 "이 조건으론 살아남은 후보가 없었다" 다.
         no_edge = bool(evaluated) and not any(
             worth_the_macro(e.result, plan.period_preset) for e in evaluated)
+        no_edge_best = _no_edge_best(evaluated) if no_edge else None
         elapsed_ms = int((time.monotonic() - started) * 1000)
 
         # 성공했을 때만 호출 수를 센다 — 실패한 시도로 예산을 깎지 않는다.
@@ -1155,6 +1174,8 @@ def run_ask(db: Session, user: User, req: AskRequest, run_backtest: Callable[[Ma
         # 후보는 돌렸지만 "그냥 들고 있기" 를 의미 있게 넘은 게 없었다 — 화면이 추천 대신
         # 그렇게 말한다. results 가 비어도 이유가 둘(데이터 없음 / 넘은 게 없음)이라 따로 싣는다.
         "no_edge": no_edge,
+        # 빈 화면이 숫자를 싣는다 — 가장 나았던 조합과 같은 기간 '첫날 사서 보유'.
+        "no_edge_best": no_edge_best,
         # 돌려줬음을 화면이 말해야 한다 — 안 그러면 "결과도 없는데 횟수만 깎였다" 로 보인다.
         "refunded": bool(row.refunded),
         "min_excess_pct": min_excess_pct(plan.period_preset),

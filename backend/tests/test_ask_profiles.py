@@ -195,3 +195,23 @@ def test_no_scalper_left_in_the_module():
     assert "scalper" not in str(ask.RiskProfile)
     for name in ("_SCALPER_PRESETS", "_HORIZON_PERIOD_SHORT", "_WATCH_INTERVAL_SHORT"):
         assert not hasattr(ask, name), f"{name} 이 남아 있다"
+
+
+def test_no_edge_best_carries_the_numbers_that_would_be_lost():
+    # 빈 화면이 한 줄로 끝나면 "매크로가 +34.82% 를 벌었다" 는 사실이 사라진다.
+    evaluated = [
+        _evaluated("A", trades=5, mdd=10.0, ret=34.82, hold=38.67),
+        _evaluated("J", trades=5, mdd=8.0, ret=12.0, hold=38.67),
+    ]
+    best = ask._no_edge_best(evaluated)
+    assert best["return_pct"] == 34.82
+    assert best["hold_return_pct"] == 38.67
+    assert best["rule_label"], "어떤 방식이었는지도 말해 준다"
+
+
+def test_no_edge_best_omits_a_hold_figure_it_does_not_have():
+    # 홀딩 기준을 못 구한 결과가 1등일 수 있다. 화면이 "null%" 를 찍으면 안 된다.
+    best = ask._no_edge_best([_evaluated("A", trades=5, mdd=10.0, ret=5.0, hold=None)])
+    assert best["return_pct"] == 5.0
+    assert best["hold_return_pct"] is None
+    assert ask._no_edge_best([]) is None

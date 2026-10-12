@@ -68,11 +68,14 @@ export const FEW_RESULTS_TEXT = "이 조건에선 후보가 적었어요 — 기
 export const NO_RESULTS_TEXT = "이 조건으론 살아남은 후보가 없었어요. 조건을 바꿔 다시 물어봐요.";
 export const LOADED_TEXT = "조건 판에 불러왔어요. 숫자 한 번 보고 백테스트부터 돌려 보세요";
 
-// 보여 준 조합이 전부 '그냥 들고 있기' 에 졌을 때 (2026-09-23) — 매크로가 늘 답은 아니라고 먼저 말한다.
+// 보여 준 조합이 전부 '첫날 사서 보유' 에 졌을 때 (2026-09-23) — 매크로가 늘 답은 아니라고 먼저 말한다.
 // 2026-10-08: "그래도 나은 편이었던 조합" 을 보여 주던 문구를 뺐다. 홀딩을 못 넘긴 조합은
 // 이제 아예 올라오지 않으므로(ask.worth_the_macro), 그럴 땐 추천 대신 이렇게 말한다.
-export const NO_EDGE_TEXT = "이번 조건에선 그냥 들고 있는 게 나았어요.";
-export const NO_EDGE_NOTE = "과거 데이터로 돌려 보니 '그냥 사서 들고 있기' 를 뚜렷하게 넘긴 조합이 없었어요. 기간이나 종목, 보는 빈도를 바꿔 다시 물어봐 주세요.";
+// 2026-10-12: "그냥 들고 있는 게 나았어요" 를 버렸다. 홀딩의 매수일은 사용자가 기간을 고른
+// 순간 자동으로 정해진 날(구간 첫 봉)이고, 매크로는 살 날을 스스로 찾는다 — 그 비대칭을
+// 숨기는 말이었다. 그리고 빈 화면이 숫자를 싣는다(askView.noEdgeDetail).
+export const NO_EDGE_TEXT = "이번 조건에선 보여 드릴 만큼 이득이 난 조합이 없었어요.";
+export const NO_EDGE_NOTE = "기준은 같은 기간을 '첫날 사서 그냥 두기' 예요 — 그 날짜는 기간을 고르면 자동으로 정해지고, 매크로는 살 날을 스스로 찾아야 해요. 기간이나 종목, 보는 빈도를 바꿔 다시 물어봐 주세요.";
 
 // 직접 고를래요 — 거래 가능한 종목을 검색해서 고른다.
 export const MANUAL_SEARCH_PLACEHOLDER = "종목 검색 (예: AVAX)";
@@ -90,8 +93,8 @@ export const RESTART_LABEL = "처음부터";
 export const LOAD_BUTTON = "조건 판에 불러오기";
 export const WHY_TITLE = "왜 이 조합?";
 export const COMPARE_TITLE = "한눈에 비교";
-export const HOLD_LABEL = "그냥 들고 있기";
-export const VS_HOLD_LABEL = "들고 있기 대비";
+export const HOLD_LABEL = "첫날 사서 보유";
+export const VS_HOLD_LABEL = "첫날 보유 대비";
 export const FOLLOW_UPS_TITLE = "다시 물어보기";
 export const SPOT_HINT = "레버리지 없음";
 export const LEGEND_EQUITY = "매크로 자산";

@@ -37,6 +37,17 @@ export function resultsHeadline(count, noEdge = false) {
   return count < 3 ? FEW_RESULTS_TEXT : TOP_RESULTS_TEXT;
 }
 
+// 빈 화면에 싣는 숫자 — 가장 나았던 조합과 같은 기간 '첫날 사서 보유'.
+// 서버가 준 값만 쓴다. 홀딩 기준을 못 구한 결과가 1등일 수 있어 그때는 그 쪽만 뺀다.
+export function noEdgeDetail(best) {
+  const ret = num(best?.return_pct);
+  if (ret == null) return "";
+  const hold = num(best?.hold_return_pct);
+  const what = best?.rule_label ? `가장 나았던 조합(${best.rule_label})이` : "가장 나았던 조합이";
+  if (hold == null) return `${what} ${signedPct(ret, 1)} 였어요. 같은 기간 보유 수익률은 구하지 못했어요.`;
+  return `${what} ${signedPct(ret, 1)} 였는데, 같은 기간 그 종목을 첫날 사서 그냥 뒀을 때 ${signedPct(hold, 1)} 였어요.`;
+}
+
 // 조건 한 줄 — 매매 방식의 핵심 설정(최대 2구) + 봉 간격.
 export function conditionLines(macro) {
   const p = macro?.params || {};

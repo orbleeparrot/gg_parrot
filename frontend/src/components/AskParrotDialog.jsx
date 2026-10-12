@@ -23,7 +23,8 @@ import {
   toCandidatesRequest, validBalance, formatAmountInput, parseAmountInput,
 } from "../lib/askFlow.js";
 import {
-  coinTint, conditionLines, holdDiff, holdOf, intervalLabel, marketLabel, numberParts, resultsHeadline,
+  coinTint, conditionLines, holdDiff, holdOf, intervalLabel, marketLabel, noEdgeDetail, numberParts,
+  resultsHeadline,
   signedPct, signedPoints, sparkPaths, splitRuleLabel, whyHeadline, whyPoints,
 } from "../lib/askView.js";
 import { coinName } from "../lib/macroSource.js";
@@ -502,6 +503,7 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
     try {
       const data = await api.askMacros(toAskRequest(next));
       dispatch({ type: "results", results: data.results, noEdge: data.no_edge,
+                 noEdgeBest: data.no_edge_best,
                  refunded: data.refunded, remaining: data.remaining_today });
     } catch (e) {
       dispatch({ type: "error", message: e.message });
@@ -628,7 +630,7 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
           <p className="ask-say"><Face size={32} /><span>{resultsHeadline(results.length, state.noEdge)}</span></p>
           {results.length > 0 && !carousel ? <span className="ask-legend"><span><i />{LEGEND_EQUITY}</span><span><i className="is-base" />{LEGEND_BASE}</span></span> : null}
         </div>
-        {state.noEdge ? <p className="ask-hold ask-in" style={{ "--i": 1 }} role="note">{NO_EDGE_NOTE}</p> : null}
+        {state.noEdge ? <p className="ask-hold ask-in" style={{ "--i": 1 }} role="note">{[noEdgeDetail(state.noEdgeBest), NO_EDGE_NOTE].filter(Boolean).join(" ")}</p> : null}
         {state.refunded ? <p className="ask-note ask-in" style={{ "--i": 2 }} role="status">{REFUNDED_TEXT}</p> : null}
         {results.length > 1 && !carousel ? <CompareTable results={results} hold={hold} /> : null}
         {results.length > 0 && !carousel ? (

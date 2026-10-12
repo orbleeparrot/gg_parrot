@@ -6,8 +6,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { resultsHeadline } from "../src/lib/askView.js";
-import { NO_EDGE_NOTE, NO_EDGE_TEXT, NO_RESULTS_TEXT, REFUNDED_TEXT } from "../src/lib/askCopy.js";
+import { noEdgeDetail, resultsHeadline } from "../src/lib/askView.js";
+import { HOLD_LABEL, NO_EDGE_NOTE, NO_EDGE_TEXT, NO_RESULTS_TEXT, REFUNDED_TEXT } from "../src/lib/askCopy.js";
 import { initialState, reduce } from "../src/lib/askFlow.js";
 
 const dialog = readFileSync(new URL("../src/components/AskParrotDialog.jsx", import.meta.url), "utf8");
@@ -70,4 +70,32 @@ test("화면이 환불을 받아 말한다", () => {
   assert.match(dialog, /refunded: data\.refunded/, "서버 칸을 그대로 받아야 한다");
   assert.match(dialog, /state\.refunded \?.*REFUNDED_TEXT/s, "돌려줬음을 말해야 한다");
   assert.ok(REFUNDED_TEXT.includes("횟수"), "무엇을 돌려줬는지 말해야 한다");
+});
+
+test("빈 화면이 숫자를 싣는다", () => {
+  // 한 줄로 끝나면 매크로가 벌었던 사실이 사라진다.
+  const line = noEdgeDetail({ return_pct: 34.82, hold_return_pct: 38.67, rule_label: "트레일링 스탑" });
+  assert.match(line, /34\.8/, "매크로가 얼마 벌었는지");
+  assert.match(line, /38\.7/, "같은 기간 보유는 얼마였는지");
+  assert.match(line, /첫날/, "그 기준이 첫날 매수라는 전제를 드러내야 한다");
+});
+
+test("없는 홀딩 숫자를 지어내지 않는다", () => {
+  const line = noEdgeDetail({ return_pct: 5.0, hold_return_pct: null, rule_label: "RSI 조건" });
+  assert.match(line, /5\.0/);
+  assert.ok(!/null|NaN|—%/.test(line), `지어낸 값이 섞였다: ${line}`);
+  assert.equal(noEdgeDetail(null), "");
+});
+
+test("홀딩 라벨이 전제를 드러낸다", () => {
+  // '그냥 들고 있기' 는 매수일이 공짜로 주어진 것을 숨긴다 — 구간 첫 봉이 그 날이다.
+  assert.match(HOLD_LABEL, /첫날/);
+  assert.ok(!NO_EDGE_TEXT.includes("그냥 들고 있는 게 나았"),
+    "매수지점도 같은 기준으로 정해진 날이라 '들고 있는 게 나았다' 는 헷갈린다");
+});
+
+test("실행 화면이 서버의 빈 화면 숫자를 받아 그린다", () => {
+  // 안 받으면 숫자는 서버에만 있고 사용자는 한 줄만 본다 — 바로 그 문제였다.
+  assert.match(dialog, /noEdgeBest: data\.no_edge_best/, "응답 칸을 그대로 받아야 한다");
+  assert.match(dialog, /noEdgeDetail\(state\.noEdgeBest\)/, "빈 화면에 그려야 한다");
 });

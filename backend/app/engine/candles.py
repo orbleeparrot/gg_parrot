@@ -724,7 +724,7 @@ class MartingaleSim(CandleSim):
         if not state:
             return
         if state.get("so_done") is not None:
-            self._so_done = 0
+            self._so_done = int(state["so_done"])
         if state.get("base_price") is not None:
             self._base_price = float(state["base_price"])
 

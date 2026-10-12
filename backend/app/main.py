@@ -86,6 +86,7 @@ from . import macro_events
 from . import account as account_mod
 from . import challenge as challenge_mod
 from . import runner as runner_mod
+from .agent_logs import NewsReceiptBodyLimit
 from . import devnotes as devnotes_mod
 from .runner_release import MIN_SUPPORTED_RUNNER_VERSION, resolve_runner_release
 from . import macro_signing as macro_signing_mod
@@ -942,6 +943,7 @@ class _BeaconBodyLimit:
 
 
 app.add_middleware(_BeaconBodyLimit)
+app.add_middleware(NewsReceiptBodyLimit)
 
 
 @app.post("/api/visit", status_code=204)

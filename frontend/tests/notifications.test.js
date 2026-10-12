@@ -63,6 +63,7 @@ test("활동 신호 — 쓰기 요청만, 알림 자체·인증 요청은 제외
   assert.equal(shouldSignalActivity("GET", "/api/backtest"), false);
   assert.equal(shouldSignalActivity("POST", "/api/me/notifications/read"), false);
   assert.equal(shouldSignalActivity("POST", "/api/me/notifications/stream-token"), false);
+  assert.equal(shouldSignalActivity("POST", "/api/me/agents/sessions/12/news-receipts"), false);
   assert.equal(shouldSignalActivity("POST", "/api/auth/login"), false);
   assert.equal(ACTIVITY_EVENT, "ggp:activity");
 });

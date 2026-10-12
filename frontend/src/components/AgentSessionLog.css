@@ -1,0 +1,57 @@
+/* A restrained receipt ledger: existing product typography and theme tokens,
+   no new font, imagery, trade controls or decorative card surfaces. */
+.agent-chat.agent-session-log {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.agent-session-log-head { padding: 12px 14px 10px; border-bottom: 1px solid rgb(var(--c-slate-300)); }
+.agent-session-log-title-row { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 12px; }
+.agent-session-log-title-row h2 { margin: 0; color: rgb(var(--c-slate-900)); }
+.agent-session-log-title-row p { margin: 4px 0 0; color: rgb(var(--c-slate-700)); }
+.agent-session-log-title-row .btn { flex: none; min-height: 40px; }
+
+.agent-session-log-filters { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0; margin-top: 12px; border-bottom: 1px solid rgb(var(--c-slate-300)); }
+.agent-session-log-filters button { min-width: 0; min-height: 44px; padding: 6px 4px; border-bottom: 2px solid transparent; background: transparent; color: rgb(var(--c-slate-700)); font: inherit; font-size: 13px; font-weight: 600; }
+.agent-session-log-filters button.is-active { border-bottom-color: rgb(var(--c-brand-line)); color: rgb(var(--c-slate-900)); font-weight: 760; }
+.agent-session-log-filters button:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: -3px; }
+
+.agent-session-log-body { min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.agent-session-log-body:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: -3px; }
+.agent-session-log-list { margin: 0; padding: 0; list-style: none; }
+.agent-session-log-entry { min-width: 0; padding: 14px 16px; border-bottom: 1px solid rgb(var(--c-slate-200)); overflow-wrap: anywhere; }
+.agent-session-log-entry-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-bottom: 6px; }
+.agent-session-log-kind { color: rgb(var(--c-slate-900)); font-size: 13px; font-weight: 760; }
+.agent-session-log-source { color: rgb(var(--c-slate-700)); font-size: 13px; font-weight: 600; }
+.agent-session-log-entry.is-error .agent-session-log-kind { color: rgb(var(--c-red-600)); }
+.agent-session-log-time { display: block; color: rgb(var(--c-slate-700)); font-size: 13px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
+.agent-session-log-time .num { font-size: inherit; }
+.agent-session-log-message { margin: 8px 0 0; color: rgb(var(--c-slate-900)); font-size: 15px; font-weight: 560; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.agent-session-log-news-details { margin-top: 10px; color: rgb(var(--c-slate-700)); }
+.agent-session-log-news-details summary { width: fit-content; max-width: 100%; min-height: 32px; padding-block: 6px; font-size: 13px; font-weight: 650; cursor: pointer; }
+.agent-session-log-news-details summary:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
+.agent-session-log-news-details ol { margin: 3px 0 0; padding-left: 18px; }
+.agent-session-log-news-details li { padding-block: 7px; }
+.agent-session-log-news-details a, .agent-session-log-article-title { color: rgb(var(--c-slate-900)); font-size: 14px; font-weight: 600; line-height: 1.45; overflow-wrap: anywhere; }
+.agent-session-log-news-details a { text-decoration: underline; text-underline-offset: 3px; }
+.agent-session-log-news-details a .ui-icon { display: inline; margin-left: 3px; vertical-align: -.15em; }
+.agent-session-log-article-meta { display: block; margin-top: 4px; color: rgb(var(--c-slate-700)); font-size: 13px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
+
+.agent-session-log-empty { padding: 26px 16px; color: rgb(var(--c-slate-700)); font-size: 14px; font-weight: 600; line-height: 1.6; }
+.agent-session-log-empty p + p { margin-top: 6px; }
+.agent-session-log-error { display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: start; gap: 8px 10px; padding: 14px 16px; border-bottom: 1px solid rgb(var(--c-slate-300)); color: rgb(var(--c-slate-900)); font-size: 13px; font-weight: 600; line-height: 1.5; }
+.agent-session-log-error > .ui-icon { margin-top: 2px; color: rgb(var(--c-red-600)); }
+.agent-session-log-error .btn { grid-column: 2; justify-self: start; min-height: 36px; }
+.agent-session-log-more { display: block; width: calc(100% - 32px); margin: 16px; }
+.agent-session-log-foot { min-width: 0; padding: 10px 14px; border-top: 1px solid rgb(var(--c-slate-300)); color: rgb(var(--c-slate-700)); font-size: 13px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
+.agent-session-log-foot p { margin: 0; }
+.agent-session-log-foot p + p { margin-top: 4px; }
+
+@media (max-width: 400px) {
+  .agent-session-log-head { padding-inline: 10px; }
+  .agent-session-log-entry, .agent-session-log-empty, .agent-session-log-error { padding-inline: 12px; }
+  .agent-session-log-foot { padding-inline: 10px; }
+}

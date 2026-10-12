@@ -528,6 +528,10 @@ class RunSessionEvent(SQLModel, table=True):
     확인할 수 있게 한다. 세션당 상한(runner.EVENT_CAP)을 넘으면 오래된 것부터 지운다.
     """
 
+    __table_args__ = (
+        Index("ux_runsessionevent_session_key", "session_id", "event_key", unique=True),
+        Index("ix_runsessionevent_session_id_id", "session_id", "id"),
+    )
     id: Optional[int] = Field(default=None, primary_key=True)
     session_id: int = Field(index=True)
     user_id: int = Field(index=True)
@@ -535,6 +539,10 @@ class RunSessionEvent(SQLModel, table=True):
     kind: str = "info"  # start | info | signal | order | fill | error | stop
     message: str = ""
     created_ms: int = Field(default=0, sa_type=BigInteger)
+    # NULL preserves every legacy/runner-upload event; only server receipts use
+    # a stable key. The unique index makes concurrent/retried receipts atomic.
+    event_key: Optional[str] = None
+    details_json: str = Field(default="", sa_column_kwargs={"server_default": ""})
 
 
 class RunnerCommand(SQLModel, table=True):
@@ -1281,6 +1289,10 @@ def _migrate() -> None:
             "invested_usdt": "ALTER TABLE runsession ADD COLUMN invested_usdt REAL DEFAULT 0",
             "pinned": "ALTER TABLE runsession ADD COLUMN pinned BOOLEAN DEFAULT FALSE",
         },
+        "runsessionevent": {
+            "event_key": "ALTER TABLE runsessionevent ADD COLUMN event_key TEXT",
+            "details_json": "ALTER TABLE runsessionevent ADD COLUMN details_json TEXT NOT NULL DEFAULT ''",
+        },
         "tickernewssnapshot": {
             "claim_token": "ALTER TABLE tickernewssnapshot ADD COLUMN claim_token TEXT DEFAULT ''",
             "last_observed_at": "ALTER TABLE tickernewssnapshot ADD COLUMN last_observed_at TEXT DEFAULT ''",
@@ -1358,6 +1370,14 @@ def _migrate() -> None:
             "CREATE INDEX IF NOT EXISTS ix_runsession_user_macro_id "
             "ON runsession (user_macro_id)"
         )
+        conn.exec_driver_sql(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_runsessionevent_session_key "
+            "ON runsessionevent (session_id, event_key)"
+        )
+        conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_runsessionevent_session_id_id "
+            "ON runsessionevent (session_id, id)"
+        )
         conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_runsession_active_heartbeat ON runsession (status, last_heartbeat_at)")
         conn.exec_driver_sql(
             "CREATE UNIQUE INDEX IF NOT EXISTS ux_collectorrun_empty_bucket "
@@ -1389,6 +1409,7 @@ def _migrate() -> None:
 
 
 _PG_ADDED_COLUMNS = {
+    "runsessionevent": {"event_key": "TEXT", "details_json": "TEXT NOT NULL DEFAULT ''"},
     "collectorrun": {"run_count": "INTEGER NOT NULL DEFAULT 1", "empty_bucket_ms": "BIGINT"},
     "visit": {
         "kind": "VARCHAR NOT NULL DEFAULT 'view'", "session_key": "VARCHAR NOT NULL DEFAULT ''", "view_key": "VARCHAR NOT NULL DEFAULT ''",
@@ -1472,6 +1493,7 @@ _PG_ADDED_COLUMNS = {
     },
 }
 _PG_INDEXES = {
+    "ix_runsessionevent_session_id_id": ("runsessionevent", "session_id, id"),
     "ix_newsarticle_enrichment": ("newsarticle", "enrichment_pending, last_seen_ms"),
     "ix_newsarticle_enrichment_due": ("newsarticle", "enrichment_pending, enrichment_next_ms"),
     "ix_chatmessage_user_created_ms": ("chatmessage", "user_id, created_ms"),
@@ -1482,6 +1504,7 @@ _PG_INDEXES = {
     "ix_newstitletranslation_claimed_ms": ("newstitletranslation", "claimed_ms"),
 }
 _PG_UNIQUE_INDEXES = {
+    "ux_runsessionevent_session_key": ("runsessionevent", "session_id, event_key"),
     "ux_collectorrun_empty_bucket": ("collectorrun", "engine, status, empty_bucket_ms"),
 }
 _PG_BIGINT_COLUMNS = {

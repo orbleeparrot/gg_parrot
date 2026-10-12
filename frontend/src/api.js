@@ -336,6 +336,15 @@ export const api = {
     const query = Number.isSafeInteger(cursor) ? `?cursor=${cursor}` : "";
     return req(`/api/me/agents/sessions/${encodeURIComponent(sessionId)}/position-news${query}`, options);
   },
+  agentSessionLogs: (sessionId, { category = "all", beforeId, ...options } = {}) => {
+    const query = new URLSearchParams({ category, limit: "50" });
+    if (Number.isSafeInteger(beforeId) && beforeId > 0) query.set("before_id", String(beforeId));
+    return req(`/api/me/agents/sessions/${encodeURIComponent(sessionId)}/logs?${query}`, options);
+  },
+  agentNewsReceipt: (sessionId, receiptToken, options = {}) =>
+    req(`/api/me/agents/sessions/${encodeURIComponent(sessionId)}/news-receipts`, {
+      ...options, method: "POST", body: JSON.stringify({ receipt_token: receiptToken }),
+    }),
   // 저장 매크로도 실행 세션 없이 같은 공용 snapshot을 조회한다.
   agentMacroPositionNews: (macroId, symbol = "") => {
     const path = `/api/me/agents/macros/${encodeURIComponent(macroId)}/position-news`;

@@ -80,6 +80,8 @@ export function shouldSignalActivity(method, path) {
   const verb = String(method || "GET").toUpperCase();
   if (verb === "GET" || verb === "HEAD" || verb === "OPTIONS") return false;
   const pathname = String(path || "").split("?")[0];
+  // A news receipt creates no notification; do not refresh notification RPCs.
+  if (/^\/api\/me\/agents\/sessions\/\d+\/news-receipts$/.test(pathname)) return false;
   return !pathname.startsWith("/api/me/notifications") && !pathname.startsWith("/api/auth/");
 }
 

@@ -8,7 +8,11 @@ import { practiceModeLabel } from "../lib/exchanges.js";
 import { usePositionNewsFeature } from "../features/agents/positionNews/index.js";
 import { useWhaleActivity } from "../features/agents/useWhaleActivity.js";
 import { useRunnerLog } from "../features/agents/useRunnerLog.js";
+import { useSessionLogs } from "../features/agents/useSessionLogs.js";
+import { useNewsReceipt } from "../features/agents/useNewsReceipt.js";
 import AgentActivityStream from "../components/AgentActivityStream.jsx";
+import AgentSessionLog from "../components/AgentSessionLog.jsx";
+import "../components/AgentSessionPanel.css";
 import CandleChart from "../components/CandleChart.jsx";
 import PositionStrip from "../components/PositionStrip.jsx";
 import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
@@ -147,8 +151,9 @@ function AccountAgents() {
   const [pending, setPending] = useState(null);
   // 종료 요청을 서버 왕복 전에 화면에 먼저 반영한다: { id, mode }
   const [pendingStop, setPendingStop] = useState(null);
-  const [mobilePane, setMobilePane] = useState("chart");
+  const [mobilePane, setMobilePane] = useState(() => searchParams.get("panel") === "logs" ? "chat" : "chart");
   const [pinBusy, setPinBusy] = useState(0);
+  const [logCategory, setLogCategory] = useState("all");
   const sessionSnapshotRevision = useRef(0);
   const lastStreamMessageAt = useRef(0);
   const [streamConnected, setStreamConnected] = useState(false);
@@ -326,7 +331,10 @@ function AccountAgents() {
 
   const activePositionNews = usePositionNewsFeature(selected?.session_id, selected?.status === "running");
   const whaleActivity = useWhaleActivity(selected);
-  const runnerLog = useRunnerLog(selected);
+  const logsOpen = searchParams.get("panel") === "logs";
+  const runnerLog = useRunnerLog(selected, !logsOpen);
+  const sessionLogs = useSessionLogs(selected, { enabled: logsOpen, category: logCategory });
+  const newsReceipt = useNewsReceipt(selected, activePositionNews.data);
 
   useEffect(() => {
     setChartSnapshot(null);
@@ -358,7 +366,14 @@ function AccountAgents() {
     const next = new URLSearchParams(searchParams);
     next.set("session", String(id));
     setSearchParams(next);
-    setMobilePane("chart");
+    setMobilePane(logsOpen ? "chat" : "chart");
+  }
+
+  function showPanel(panel) {
+    const next = new URLSearchParams(searchParams);
+    if (panel === "logs") next.set("panel", "logs");
+    else next.delete("panel");
+    setSearchParams(next, { replace: true });
   }
 
   function showView(nextView) {
@@ -374,7 +389,7 @@ function AccountAgents() {
     next.delete("view");
     next.set("session", String(session.session_id));
     setSearchParams(next);
-    setMobilePane("chart");
+    setMobilePane(logsOpen ? "chat" : "chart");
   }
 
   function backToHistory() {
@@ -521,16 +536,30 @@ function AccountAgents() {
             <div className="agent-side">
               {/* 종료됐거나 종료 처리 중이면 오른쪽 열은 결과 화면이 맡는다 — 블록을 겹쳐 두지 않는다. */}
               {selected.status === "running" && !selected.stopping ? <PositionStrip session={selected} macro={macro} /> : null}
-              <AgentActivityStream
-                key={selected.session_id}
-                symbol={selected.symbol}
-                macro={macro}
-                session={selected}
-                candles={activeChart?.candles || []}
-                interval={activeChart?.interval || interval}
-                observedAt={activeChart?.serverTime || 0}
-                featureStates={featureStates}
-              />
+              <section className="agent-chat agent-session-content" aria-label="매크로 활동 화면">
+                <div className="agent-session-menu" role="group" aria-label="매크로 화면 선택">
+                  <button type="button" aria-pressed={!logsOpen} onClick={() => showPanel("agent")}>에이전트</button>
+                  <button type="button" aria-pressed={logsOpen} onClick={() => showPanel("logs")}>활동 로그</button>
+                </div>
+                <div className="agent-session-panel">
+                  {logsOpen && newsReceipt.state?.status === "error" ? <div className="agent-receipt-error" role="status">
+                    <p>뉴스 수신 기록을 저장하지 못했어요. 뉴스 표시와 매크로 실행은 계속됩니다.</p>
+                    <button type="button" className="btn btn-s btn-secondary" onClick={newsReceipt.retry}>기록 다시 저장</button>
+                  </div> : null}
+                  {logsOpen ? <AgentSessionLog session={selected} state={sessionLogs.state} category={logCategory}
+                    onCategoryChange={setLogCategory} onRefresh={sessionLogs.refresh} onLoadMore={sessionLogs.loadMore} />
+                    : <AgentActivityStream
+                      key={selected.session_id}
+                      symbol={selected.symbol}
+                      macro={macro}
+                      session={selected}
+                      candles={activeChart?.candles || []}
+                      interval={activeChart?.interval || interval}
+                      observedAt={activeChart?.serverTime || 0}
+                      featureStates={featureStates}
+                    />}
+                </div>
+              </section>
             </div>
           </div>
 

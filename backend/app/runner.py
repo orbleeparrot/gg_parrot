@@ -912,6 +912,18 @@ def _append_events(db, row: RunSession, events) -> int:
 def _trim_events(db, session_id: int) -> None:
     from sqlalchemy import func
 
+    # Auxiliary news cannot displace the entire trade history. Apply its smaller
+    # cap first; runner-only legacy semantics and the combined cap stay intact.
+    news_filter = (RunSessionEvent.session_id == session_id,
+                   RunSessionEvent.kind.in_(("news", "news_error")))
+    news_total = int(db.exec(select(func.count(RunSessionEvent.id)).where(*news_filter)).one())
+    news_overflow = news_total - news_event_cap()
+    if news_overflow > 0:
+        old_news = db.exec(select(RunSessionEvent).where(*news_filter)
+                          .order_by(RunSessionEvent.id.asc()).limit(news_overflow)).all()
+        for event in old_news:
+            db.delete(event)
+        db.flush()
     total = int(db.exec(
         select(func.count(RunSessionEvent.id)).where(RunSessionEvent.session_id == session_id)
     ).one())
@@ -926,6 +938,10 @@ def _trim_events(db, session_id: int) -> None:
     ).all()
     for event in oldest:
         db.delete(event)
+
+
+def news_event_cap() -> int:
+    return max(1, min(100, EVENT_CAP // 5))
 
 
 def _event_view(e: RunSessionEvent) -> dict:
@@ -946,7 +962,8 @@ def list_events(user_id: int, session_id: int, limit: int = 300) -> dict:
             raise HTTPException(status_code=404, detail="세션을 찾을 수 없어요.")
         rows = db.exec(
             select(RunSessionEvent)
-            .where(RunSessionEvent.session_id == session_id)
+            .where(RunSessionEvent.session_id == session_id,
+                   RunSessionEvent.kind.not_in(("news", "news_error")))
             .order_by(RunSessionEvent.id.desc())
             .limit(max(1, min(int(limit), EVENT_CAP)))
         ).all()

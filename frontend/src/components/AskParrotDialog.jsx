@@ -13,7 +13,7 @@ import {
   FOLLOW_UPS, FOLLOW_UPS_TITLE, HOLD_LABEL, HORIZONS, LEGEND_BASE, LEGEND_EQUITY, LEVERAGES, LOAD_BUTTON,
   MANUAL_PICK_LABEL, MANUAL_SEARCH_MISS, MANUAL_SEARCH_PLACEHOLDER, MARKETS, NEXT_LABEL,
   NO_QUOTA_TEXT, OPENING_TEXT, REFUNDED_TEXT, SHORT_BAR_WARN, PREV_LABEL, PROFILES, READY_BUTTON, READY_TEXT, RESTART_LABEL, RETURN_LABEL,
-  RUNNING_TEXT, SPOT_HINT, STABLE_NO_FUTURES, STEP_PROMPTS, UNAVAILABLE_TEXT, VS_HOLD_LABEL,
+  RUNNING_TEXT, SPOT_HINT, STABLE_NO_FUTURES, STEP_PROMPTS, TUNE_NOTE, UNAVAILABLE_TEXT, VS_HOLD_LABEL,
   WATCH_LEVELS, WHY_TITLE, feesNote, readyCostNote,
 } from "../lib/askCopy.js";
 import { useSymbolList } from "../hooks/useSymbolList.js";
@@ -664,7 +664,8 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
             </div>
           </div>
         ) : null}
-        <p className="ask-disc ask-in" style={{ "--i": results.length + 3 }} role="note">{DISCLAIMER}</p>
+        {results.length > 0 ? <p className="ask-note ask-in" style={{ "--i": results.length + 3 }} role="note">{TUNE_NOTE}</p> : null}
+        <p className="ask-disc ask-in" style={{ "--i": results.length + 4 }} role="note">{DISCLAIMER}</p>
         {extraBlock(results.length + 5)}
         {carousel ? null : followUps(results.length + 6)}
       </>

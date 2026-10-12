@@ -17,9 +17,8 @@ from .hotcoins import MIN_QUOTE_VOLUME, select_hot_coins
 from .exchanges import is_domestic, normalize_exchange, quote_currency
 
 POOL_SIZE = 10
-# 거래대금 상위 몇 개 안에서 성향별 정렬을 할지 — 유동성 없는 코인이 후보에 오르지 않게 한다.
+# 거래대금 상위 몇 개 안에서 고를지 — 유동성 없는 코인이 후보에 오르지 않게 한다.
 LIQUID_TOP = 40
-SCALPER_LIQUID_TOP = 15
 MIN_KRW_QUOTE_VOLUME = 1_000_000_000  # Separate KRW liquidity floor; never compare it with USDT.
 _STABLE_BASES = frozenset({"USDT", "USDC", "TUSD", "DAI", "USDD", "FDUSD", "BUSD", "USDP", "USD1"})
 
@@ -45,8 +44,28 @@ def _krw_coins(tickers: list[dict]) -> list[dict]:
     return coins
 
 
+def headroom_pct(coin: dict) -> float:
+    """왕복 여지 — 하루 변동폭에서 한 방향으로 간 몫을 뺀 나머지(%).
+
+    왜 이걸로 고르나: 변동폭만 보면 "한 방향으로 크게 간 것" 이 1등으로 올라오는데,
+    급등주는 홀딩이 이긴다(측정: 매크로 +32.89% vs 홀딩 +91.41%, 통과 0장). 오르고
+    내리기를 되풀이한 종목에서만 매크로가 홀딩을 넘을 여지가 생긴다.
+
+    한계: 두 숫자 모두 거래소 티커의 24시간 값이라 백테스트 구간(1주~1년)과 시간 축이
+    다르다. 워크포워드에서 이 지표가 실제로 카드 산출률을 올리는지 확인한다.
+    """
+    try:
+        return float(coin.get("range_pct") or 0.0) - abs(float(coin.get("change_pct") or 0.0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def build_pool(tickers: list[dict], *, profile: str, size: int = POOL_SIZE, exchange: str = "binance") -> list[dict]:
-    """성향에 맞는 후보 풀. AI 는 이 목록 밖으로 나갈 수 없다."""
+    """거래가 활발하고 왕복 여지가 큰 순서의 후보 풀. AI 는 이 목록 밖으로 나갈 수 없다.
+
+    ``profile`` 은 정렬에 쓰지 않는다(2026-10-12) — 문구(fallback_reason·build_prompt)에만
+    쓴다. 성향은 '어떤 종목' 이 아니라 '얼마나 흔들려도 되는가' 로 갈린다(ask.mdd_cap·score).
+    """
     exchange = normalize_exchange(exchange)
     coins = _krw_coins(tickers) if is_domestic(exchange) else select_hot_coins(
         tickers, limit=500, min_quote_volume=MIN_QUOTE_VOLUME, candidate_pool=500)
@@ -56,19 +75,13 @@ def build_pool(tickers: list[dict], *, profile: str, size: int = POOL_SIZE, exch
         coin["exchange"] = exchange
         coin["quote_currency"] = quote_currency(exchange)
 
-    top = SCALPER_LIQUID_TOP if profile == "scalper" else LIQUID_TOP
-    pool = coins[:top]
+    pool = coins[:LIQUID_TOP]
     if not pool:
         return []
 
-    if profile == "stable":
-        pool.sort(key=lambda c: c["range_pct"])
-    elif profile in ("aggressive", "scalper"):
-        pool.sort(key=lambda c: c["range_pct"], reverse=True)
-    else:  # balanced — 변동폭 중앙값에 가까운 순
-        ordered = sorted(c["range_pct"] for c in pool)
-        median = ordered[len(ordered) // 2]
-        pool.sort(key=lambda c: abs(c["range_pct"] - median))
+    # 2026-10-12: 성향별 정렬을 없앴다. 세 성향이 같은 목록을 본다 — 저변동 대형주도
+    # 급등주도 홀딩이 이기는 자산이라, 거기서 "홀딩을 넘어라" 를 요구하는 것은 모순이었다.
+    pool.sort(key=headroom_pct, reverse=True)
     return pool[: max(1, size)]
 
 

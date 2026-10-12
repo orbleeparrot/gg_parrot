@@ -38,24 +38,33 @@ def test_pool_carries_volume_rank_by_quote_volume():
     assert ranks["WILDUSDT"] == 3
 
 
-def test_stable_profile_prefers_calm_coins():
-    pool = ac.build_pool(_tickers(), profile="stable", size=3)
-    assert pool[0]["symbol"] == "CALMUSDT"
+def _krw(symbol, *, volume, change, high, low):
+    return {"symbol": symbol, "priceChangePercent": str(change), "lastPrice": str((high + low) / 2),
+            "quoteVolume": str(volume), "highPrice": str(high), "lowPrice": str(low)}
 
 
-def test_aggressive_profile_prefers_wild_coins():
-    pool = ac.build_pool(_tickers(), profile="aggressive", size=3)
-    assert pool[0]["symbol"] == "WILDUSDT"
+def test_pool_order_is_the_same_for_every_profile():
+    # 2026-10-12: 성향별 정렬을 없앴다. 안정형엔 저변동 대형주(홀딩이 가장 잘 먹히는 자산)가,
+    # 공격형엔 급등주(홀딩이 이기는 자산)가 올라와 둘 다 "홀딩을 넘어라" 와 모순이었다.
+    orders = [[c["symbol"] for c in ac.build_pool(_tickers(), profile=p, size=10)]
+              for p in ("stable", "balanced", "aggressive")]
+    assert orders[0] == orders[1] == orders[2]
 
 
-def test_balanced_profile_prefers_middle_volatility():
-    pool = ac.build_pool(_tickers(), profile="balanced", size=3)
-    assert pool[0]["symbol"] == "MIDUSDT"
+def test_pool_prefers_oscillation_headroom_over_raw_range():
+    # 한 방향으로 크게 간 종목(변동폭 30% · 순변동 +27%)은 매크로가 +33% 를 벌어도
+    # 홀딩 +91% 에 진다. 왕복 여지 = 변동폭 − |순변동| 로 재서 뒤로 보낸다.
+    pumped = _krw("KRW-PUMP", volume=9e11, change=27.0, high=130.0, low=100.0)
+    swinging = _krw("KRW-SWING", volume=8e11, change=1.0, high=112.0, low=100.0)
+    pool = ac.build_pool([pumped, swinging], profile="balanced", exchange="upbit", size=10)
+    assert [c["symbol"] for c in pool] == ["KRW-SWING", "KRW-PUMP"]
+    assert ac.headroom_pct(pool[0]) > ac.headroom_pct(pool[1])
 
 
-def test_scalper_profile_prefers_wild_among_most_traded():
-    pool = ac.build_pool(_tickers(), profile="scalper", size=3)
-    assert pool[0]["symbol"] == "WILDUSDT"
+def test_pool_still_cuts_to_the_most_traded_forty():
+    # 유동성 없는 코인이 후보에 오르면 안 된다 — 거래대금 상위 LIQUID_TOP 안에서만 고른다.
+    assert ac.LIQUID_TOP == 40
+    assert not hasattr(ac, "SCALPER_LIQUID_TOP"), "단타형 전용 상한은 사라졌다"
 
 
 def test_pool_size_is_capped():
@@ -220,7 +229,7 @@ def _usde():
 
 def test_pegged_asset_is_never_a_candidate_for_any_profile():
     tickers = _tickers() + [_usde()]
-    for profile in ("stable", "balanced", "aggressive", "scalper"):
+    for profile in ("stable", "balanced", "aggressive"):
         pool = ac.build_pool(tickers, profile=profile, size=10)
         assert "USDEUSDT" not in [c["symbol"] for c in pool], profile
 
@@ -269,9 +278,10 @@ def test_rule_only_candidates_do_not_all_share_one_sentence():
     assert len({p["reason"] for p in picks}) > 1
 
 
-def test_stable_profile_never_ranks_a_one_sided_pump_ahead_of_a_calm_coin():
-    # 안정형은 range_pct 오름차순이라, 한쪽으로만 쭉 간 날의 코인이 '가장 잔잔한' 자리에
-    # 올라오면 가장 위험을 피하려는 사람에게 그날의 최대 급등주를 첫 카드로 내미는 셈이 된다.
+def test_pool_never_ranks_a_one_sided_pump_ahead_of_a_calm_coin():
+    # 2026-10-12 전에는 안정형이 range_pct 오름차순이라 한쪽으로만 쭉 간 날의 코인이 '가장
+    # 잔잔한' 자리에 올라올 수 있었다. 이제는 왕복 여지로 재므로 순변동이 큰 종목이 스스로
+    # 뒤로 간다 — 급등주는 어느 성향에서도 첫 카드가 되지 않는다.
     def full(symbol, change, high, low, weighted, qvol):
         return {"symbol": symbol, "priceChangePercent": str(change), "lastPrice": str(weighted),
                 "quoteVolume": str(qvol), "highPrice": str(high), "lowPrice": str(low),

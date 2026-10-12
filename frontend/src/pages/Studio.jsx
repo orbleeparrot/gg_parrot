@@ -11,6 +11,7 @@ import useStudioSplit from "../hooks/useStudioSplit.js";
 import CandleChart from "../components/CandleChart.jsx";
 import RegisterMacroModal from "../components/RegisterMacroModal.jsx";
 import AskParrotDialog from "../components/AskParrotDialog.jsx";
+import { TUNE_NOTE } from "../lib/askCopy.js";
 import ConfirmDialog from "../components/ConfirmDialog.jsx";
 import MacroSourceMenu from "../components/MacroSourceMenu.jsx";
 import BuilderModeMenu from "../components/BuilderModeMenu.jsx";
@@ -217,7 +218,7 @@ function AccountStudio({ scope, allowRouterMacro }) {
   // 껄무새에게 물어볼까? — 모달, 덮어쓰기 확인. 불러온 뒤 안내 줄은 없다 — 머리의 출처 배지가 곧 안내다(2026-09-23).
   // 로그아웃 상태로 ?ask=1 이 와도 파라미터는 남겨 둔다 — 로그인 버튼의 next=/builder?ask=1 왕복이 그대로 통하도록.
   const [askOpen, setAskOpen] = useState(() => Boolean(token) && searchParams.get("ask") === "1");
-  const [askPending, setAskPending] = useState(null); // {macro, label} — 조건 판에 입력이 있을 때 확인 대기
+  const [askPending, setAskPending] = useState(null); // {macro, label, untouched} — 불러오기 확인 대기
 
   const applyAskMacro = useCallback((macro, label) => {
     setForm(macroToForm(macro));
@@ -232,11 +233,13 @@ function AccountStudio({ scope, allowRouterMacro }) {
     }
   }, [searchParams, setSearchParams]);
 
+  // 불러오기는 **언제나** 확인을 한 번 거친다. 예전에는 조건 판이 비어 있으면 그냥
+  // 넣었는데, 그러면 처음 쓰는 사람이 "그대로 믿지 말라"(TUNE_NOTE)를 한 번도 못 본다 —
+  // 그 사람이 바로 그 안내가 필요한 사람이다. 덮어쓸 게 있는지에 따라 말만 달라진다.
   const onAskLoad = useCallback((macro, label) => {
     const untouched = JSON.stringify(form) === JSON.stringify(defaultForm());
-    if (untouched) applyAskMacro(macro, label);
-    else setAskPending({ macro, label });
-  }, [form, applyAskMacro]);
+    setAskPending({ macro, label, untouched });
+  }, [form]);
 
   const [optimized, setOptimized] = useState(() => !!saved?.optimized); // 최적화를 한 번이라도 돌렸는지(탭 앞 점)
   const [fileImportBusy, setFileImportBusy] = useState(false);
@@ -966,8 +969,11 @@ function AccountStudio({ scope, allowRouterMacro }) {
       {token ? <AskParrotDialog open={askOpen} onClose={() => setAskOpen(false)} onLoad={onAskLoad} /> : null}
       <ConfirmDialog
         open={askPending != null}
-        title="지금 조건이 바뀌어요"
-        description="조건 판에 입력한 값을 껄무새가 고른 후보로 덮어써요. 계속할까요?"
+        title={askPending?.untouched ? "불러오기 전에 알아 두세요" : "지금 조건이 바뀌어요"}
+        description={askPending?.untouched
+          ? "껄무새가 고른 후보를 조건 판에 넣을게요. 계속할까요?"
+          : "조건 판에 입력한 값을 껄무새가 고른 후보로 덮어써요. 계속할까요?"}
+        warning={TUNE_NOTE}
         confirmLabel="불러오기"
         onConfirm={() => askPending && applyAskMacro(askPending.macro, askPending.label)}
         onCancel={() => setAskPending(null)}

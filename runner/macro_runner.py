@@ -591,13 +591,40 @@ class ServerClient:
         # 명령 실행 결과(ack). 전송에 실패하면 다음 heartbeat 앞머리에 다시 실어 보낸다.
         self.unsent_acks: list[dict] = []
 
-    def push_event(self, kind: str, message: str) -> None:
+    def push_event(self, kind: str, message: str, *, severity: str = "UNKNOWN",
+                   event_name: str = "runner.message", operation_id: str = "", details: dict | None = None) -> None:
+        # Snapshot only public scalar order/command facts. Never retain a mutable
+        # broker response, credentials, authentication headers, or a signed URL.
+        allowed = {"command_id", "action", "reason", "status", "raw_status", "command_seq",
+                   "signal_price", "notional_frac", "qty_frac", "executed_qty", "fill_price",
+                   "client_order_id", "exchange_order_id", "acquired_qty", "fees_known",
+                   "error", "mode", "exchange", "symbol", "verification", "ack_source",
+                   "outcome", "position_uncertain"}
+        allowed.update({"requested_qty", "requested_notional", "quote_currency", "reduce_only", "closing"})
+        snapshot = {key: value[:600] if isinstance(value, str) else value
+                    for key, value in (details or {}).items()
+                    if key in allowed and isinstance(value, (str, int, float, bool))}
+        # Serialization both copies the facts and rejects NaN/unsupported types
+        # before they can poison an otherwise valid heartbeat JSON body.
+        try:
+            snapshot = json.loads(json.dumps(snapshot, allow_nan=False))
+        except (ValueError, TypeError, OverflowError):
+            snapshot = {}
+        message = str(message)
+        if self.key:
+            message = message.replace(self.key, "[키 숨김]")
+        event = {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "kind": kind, "message": message[:300],
+            # Created once at emission; _requeue_events and stopped retries reuse
+            # this exact identity, not a hash of possibly identical messages.
+            "event_key": "runner:" + uuid.uuid4().hex,
+            "severity": severity if severity in {"DEBUG", "INFO", "WARN", "ERROR", "UNKNOWN"} else "UNKNOWN",
+            "component": "runner", "event_name": str(event_name)[:80],
+            "operation_id": str(operation_id)[:120], "details": snapshot,
+        }
         with self._events_lock:
-            self._events.append({
-                "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                "kind": kind,
-                "message": str(message)[:300],
-            })
+            self._events.append(event)
             if len(self._events) > EVENT_BUFFER_MAX:
                 del self._events[:-EVENT_BUFFER_MAX]
 
@@ -756,12 +783,33 @@ class BotThread(threading.Thread):
         with self._lock:
             return self._command
 
-    def log(self, msg: str) -> None:
+    def log(self, msg: str, *, kind: str | None = None, severity: str = "UNKNOWN",
+            event_name: str = "runner.message", operation_id: str = "", details: dict | None = None) -> None:
         self.on_log(msg)
         try:
-            self.server.push_event(_event_kind(msg), msg)
+            # The Windows text is unchanged. The upload additionally masks actual
+            # local secrets before they ever leave this PC.
+            credentials = getattr(self, "credentials", {})
+            safe_message = connection.safe_preflight_reason(msg, credentials)
+            safe_details = {key: connection.safe_preflight_reason(value, credentials)
+                            if isinstance(value, str) else value for key, value in (details or {}).items()}
+            self.server.push_event(kind or _event_kind(msg), safe_message, severity=severity,
+                                   event_name=event_name, operation_id=operation_id, details=safe_details)
         except Exception:
             pass  # 로그 전송은 매매를 막지 않는다
+
+    def _telemetry(self, kind: str, message: str, *, event_name: str, severity: str,
+                   operation_id: str = "", details: dict | None = None) -> None:
+        """Extra structured stages go to the web only, not the Windows GUI."""
+        try:
+            credentials = getattr(self, "credentials", {})
+            safe_details = {key: connection.safe_preflight_reason(value, credentials)
+                            if isinstance(value, str) else value for key, value in (details or {}).items()}
+            self.server.push_event(kind, connection.safe_preflight_reason(message, credentials),
+                                   severity=severity, event_name=event_name, operation_id=operation_id,
+                                   details=safe_details)
+        except Exception:
+            pass
 
     def _sleep(self, seconds: float) -> None:
         # 종료 명령이 오면 즉시 깨어나도록 이벤트 기반 대기.
@@ -868,13 +916,39 @@ class BotThread(threading.Thread):
         partial_close = closing and sellable > 0 and (sellable - qty) >= (self.step or 1e-12)
         client_id = "ggp-" + uuid.uuid4().hex[:28]
         by_money = self.domestic and not closing and notional > 0
+        operation_id = getattr(self, "_active_log_operation_id", "") or f"order:{client_id}"
+        request_details = {"action": side_word, "client_order_id": client_id,
+                           "requested_notional": notional if by_money else None,
+                           "requested_qty": None if by_money else qty, "quote_currency": self.quote,
+                           "reduce_only": reduce_only, "closing": closing,
+                           "mode": self.mode, "exchange": self.exchange, "symbol": self.symbol}
+        self._telemetry("order", "주문 요청을 거래소 어댑터에 전달합니다.",
+                        event_name="runner.order_requested", severity="INFO", operation_id=operation_id,
+                        details=request_details)
         # 제출 · 재조정 · 평균가 · 수수료는 브로커가 한다. 봇은 그 결과로 장부만 쓴다.
-        order = self.broker.submit(side_word, base_qty=None if by_money else qty,
-                                   notional=notional if by_money else None,
-                                   reduce_only=reduce_only,
-                                   closing=closing, client_id=client_id)
+        try:
+            order = self.broker.submit(side_word, base_qty=None if by_money else qty,
+                                       notional=notional if by_money else None,
+                                       reduce_only=reduce_only,
+                                       closing=closing, client_id=client_id)
+        except Exception as exc:
+            self._telemetry("error", "거래소 어댑터가 주문 처리 오류를 보고했습니다.",
+                            event_name="runner.order_failed", severity="ERROR", operation_id=operation_id,
+                            details={**request_details, "error": str(exc)})
+            raise
         executed, average = order.executed_qty, order.avg_price
         acquired, fees_known = order.acquired_qty, order.fees_known
+        self._telemetry(
+            "fill" if order.status == "FILLED" else "warn", "거래소 어댑터의 주문 결과를 실행기가 보고합니다.",
+            severity="INFO" if order.status == "FILLED" else "WARN", event_name="runner.order_result",
+            operation_id=operation_id,
+            details={"action": side_word, "status": order.status, "raw_status": order.raw_status,
+                     "client_order_id": client_id, "exchange_order_id": order.order_id,
+                     "executed_qty": executed, "fill_price": average, "acquired_qty": acquired,
+                     "fees_known": fees_known, "mode": getattr(self, "mode", ""),
+                     "exchange": self.exchange, "symbol": self.symbol,
+                     "verification": "runner_reported_not_exchange_verified", "ack_source": "runner"},
+        )
         self._last_fill_qty, self._last_fill_price = executed, average
         self.position_uncertain = order.status not in brokers.TERMINAL_STATUSES or (
             order.status == "FILLED" and not (executed and average)
@@ -1016,6 +1090,13 @@ class BotThread(threading.Thread):
             return ack
         action = str(cmd.get("action", "")).lower()
         reason = str(cmd.get("reason") or "")
+        operation_id = f"command:{cid}"
+        self._active_log_operation_id = operation_id
+        context = {"command_id": cid, "action": action, "command_seq": cmd.get("seq"),
+                   "signal_price": cmd.get("signal_price"), "notional_frac": cmd.get("notional_frac"),
+                   "qty_frac": cmd.get("qty_frac"), "reason": reason}
+        self._telemetry("info", "서버 주문 명령을 실행기가 수신했습니다.", event_name="runner.command_received",
+                        severity="INFO", operation_id=operation_id, details=context)
         uncertain_before = getattr(self, "position_uncertain", False)
         try:
             if action not in ("buy", "short", "sell", "cover"):
@@ -1052,6 +1133,10 @@ class BotThread(threading.Thread):
                 if not self.in_position or self.held_qty <= 0:
                     self.log(f"[신호] {reason} → 보유 없음, 건너뜀")
                     self._done_command_ids.append(cid)
+                    self._telemetry("info", "보유 포지션이 없어 청산 주문을 보내지 않았습니다.",
+                                    event_name="runner.command_reported", severity="INFO", operation_id=operation_id,
+                                    details={**context, "outcome": "no_position_no_order", "executed_qty": 0})
+                    self._active_log_operation_id = ""
                     return ack
                 frac = float(cmd.get("qty_frac") or 1.0)
                 self.log(f"[신호] {reason} → {'전량' if frac >= 0.999 else f'{frac:.0%}'} 청산 @ {price}")
@@ -1070,11 +1155,24 @@ class BotThread(threading.Thread):
             if getattr(self, "position_uncertain", False) and not uncertain_before:
                 # 이 주문으로 포지션이 불확실해졌다 — 명령을 계속 받을 상태가 아니다. 루프를 끝내고
                 # 오류 상태로 종료 보고한다(사용자가 거래소에서 확인). 서버 명령은 만료로 정리된다.
+                self._telemetry("error", "주문 결과가 불확실해 추가 명령 실행을 중단합니다.",
+                                event_name="runner.command_failed", severity="ERROR", operation_id=operation_id,
+                                details={**context, "error": str(exc), "position_uncertain": True})
+                self._active_log_operation_id = ""
                 raise
             ack.update(ok=False, error=str(exc)[:200])
             self.log(f"  ⚠ 명령 실행 실패: {exc}")
         if ack["ok"]:
             self._done_command_ids.append(cid)
+        self._telemetry(
+            "order" if ack["ok"] else "error", "서버 명령 실행 결과를 실행기가 보고합니다.",
+            event_name="runner.command_reported" if ack["ok"] else "runner.command_failed",
+            severity="INFO" if ack["ok"] else "ERROR", operation_id=operation_id,
+            details={**context, "status": "reported_ok" if ack["ok"] else "reported_failed",
+                     "executed_qty": ack["executed_qty"], "fill_price": ack["fill_price"],
+                     "error": ack["error"], "verification": "runner_reported_not_exchange_verified"},
+        )
+        self._active_log_operation_id = ""
         return ack
 
     def _snapshot(self) -> dict:
@@ -1155,9 +1253,13 @@ class BotThread(threading.Thread):
                 self.pending_acks = []
                 if reply.get("offline"):
                     if not self._offline_logged:
-                        self.log("서버 연결 재시도 중 — 신호 대기(진입 없음, 손절만 로컬에서 봅니다)")
+                        self.log("서버 연결 재시도 중 — 신호 대기(진입 없음, 손절만 로컬에서 봅니다)",
+                                 kind="warn", severity="WARN", event_name="runner.connection_lost")
                         self._offline_logged = True
                 else:
+                    if self._offline_logged:
+                        self._telemetry("info", "서버 heartbeat 응답 수신이 복구됐습니다.",
+                                        event_name="runner.connection_restored", severity="INFO")
                     self._offline_logged = False
                 action = reply.get("action", "continue")
                 if action in ("stop_only", "close_and_stop"):
@@ -1169,7 +1271,9 @@ class BotThread(threading.Thread):
                         is_entry = kind in ("buy", "short")
                         blocked, why = guard.entry_blocked()
                         if blocked and is_entry:
-                            self.log(f"  ⏸ 진입 보류: {why}")
+                            self.log(f"  ⏸ 진입 보류: {why}", kind="signal", severity="WARN",
+                                     event_name="runner.entry_blocked", operation_id=f"command:{cmd.get('id')}",
+                                     details={"command_id": cmd.get("id"), "action": kind, "reason": why})
                             self.pending_acks.append({"command_id": cmd.get("id"), "ok": False, "executed_qty": 0.0,
                                                       "fill_price": 0.0, "error": f"로컬 리스크 보류: {why}"})
                             continue

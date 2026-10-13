@@ -33,12 +33,22 @@ def session_logs(
     category: Literal["all", "trade", "execution", "news", "error"] = "all",
     before_id: int | None = Query(default=None, ge=1, le=2**63 - 1),
     limit: int = Query(default=50, ge=1),
+    q: str = Query(default="", max_length=200),
+    severity: Literal["", "DEBUG", "INFO", "WARN", "ERROR", "UNKNOWN"] = "",
+    component: str = Query(default="", max_length=48),
+    event_name: str = Query(default="", max_length=80),
+    operation_id: str = Query(default="", max_length=120),
+    since_ms: int | None = Query(default=None, ge=0, le=2**63 - 1),
+    until_ms: int | None = Query(default=None, ge=0, le=2**63 - 1),
+    context_id: int | None = Query(default=None, ge=1, le=2**63 - 1),
     user: User = Depends(auth_mod.current_user_in_session),
     db: Session = Depends(request_session),
 ) -> dict:
     response.headers["Cache-Control"] = "private, no-store"
     return agent_logs.list_logs(user.id, session_id, category=category,
-                                before_id=before_id, limit=limit, db=db)
+                                before_id=before_id, limit=limit, q=q, severity=severity,
+                                component=component, event_name=event_name, operation_id=operation_id,
+                                since_ms=since_ms, until_ms=until_ms, context_id=context_id, db=db)
 
 
 @router.post("/sessions/{session_id}/news-receipts")

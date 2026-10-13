@@ -12,12 +12,55 @@ import {
   sessionLogSourceLabel,
   sessionLogTimestamp,
   validateSessionLogResponse,
+  normalizeSessionLogQuery,
+  sessionLogQueryParams,
+  sessionLogSeverity,
+  sessionLogComponent,
+  safeSessionLogData,
 } from "../src/features/agents/sessionLogs.js";
 
 const row = (id, changes = {}) => ({
   id, kind: "info", category: "execution", source: "runner",
   ts: "2026-10-12T01:02:03Z", received_at: "2026-10-12T01:02:04Z",
   message: `기록 ${id}`, ...changes,
+});
+
+test("stored log filters and related-context links reuse one stable existing query contract", () => {
+  const options = { category: "news", q: "  체인링크  ", severity: "ERROR", component: "news_collection",
+    eventName: "news.collect.failed", operationId: "batch:abc", sinceMs: 1760000000000,
+    untilMs: 1760003600000, contextId: 92, beforeId: 87, limit: 100 };
+  const params = sessionLogQueryParams(options);
+  assert.deepEqual(Object.fromEntries(params), { category: "news", limit: "100", q: "체인링크", severity: "ERROR",
+    component: "news_collection", event_name: "news.collect.failed", operation_id: "batch:abc",
+    since_ms: "1760000000000", until_ms: "1760003600000", context_id: "92", before_id: "87" });
+  assert.equal(sessionLogQueryParams({ limit: 999, category: "bogus", contextId: -1, beforeId: "41" }).toString(), "category=all&limit=100");
+  assert.equal(normalizeSessionLogQuery({ q: "x".repeat(201) }).q.length, 200);
+  assert.equal(normalizeSessionLogQuery({ component: "unsafe space", severity: "not-real", eventName: "<html>" }).component, "");
+});
+
+test("legacy severity/component remain explicitly unspecified without message classification", () => {
+  assert.equal(sessionLogSeverity(row(1, { kind: "error", message: "ERROR BUY fill" })), "UNKNOWN");
+  assert.equal(sessionLogSeverity(row(1, { severity: "ERROR" })), "ERROR");
+  assert.equal(sessionLogSeverity(row(1, { severity: "fake" })), "UNKNOWN");
+  assert.equal(sessionLogComponent(row(1)), "legacy");
+  assert.equal(sessionLogComponent(row(1, { component: "engine" })), "engine");
+});
+
+test("timestamp display preserves real fractional precision instead of synthesizing milliseconds", () => {
+  assert.equal(formatSessionLogTime("2026-10-13T01:02:03.123Z"), "2026.10.13 10:02:03.123 KST");
+  assert.equal(formatSessionLogTime("2026-10-13T01:02:03.123456Z"), "2026.10.13 10:02:03.123456 KST");
+  assert.equal(formatSessionLogTime("2026-10-13T01:02:03Z"), "2026.10.13 10:02:03 KST");
+});
+
+test("copy/export defense strips nested credentials but preserves structured outcomes and provenance", () => {
+  const safe = safeSessionLogData({ message: "Bearer opaque-secret", request: { symbol: "LINKUSDT", api_key: "secret" },
+    result: { status: "confirmed", provenance: "exchange_response", database_url: "secret", details: { password: "hidden", count: 2 } },
+    token: "hidden", authorization: "hidden", uri: "postgres://user:password@db.example/database" });
+  assert.deepEqual(safe.request, { symbol: "LINKUSDT" });
+  assert.deepEqual(safe.result, { status: "confirmed", provenance: "exchange_response", details: { count: 2 } });
+  assert.equal(safe.message, "Bearer [비밀값 제외]");
+  assert.equal(safe.uri, "[인증 포함 주소 제외]");
+  assert.equal("token" in safe, false);
 });
 
 test("session log categories keep all, trading, execution, news and errors distinct", () => {

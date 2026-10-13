@@ -5,6 +5,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -22,6 +23,8 @@ from prefect.types.entrypoint import EntrypointType
 
 from .. import coindesk_api, news as news_mod
 from ..agent_features.position_news import collector, repository
+from ..agent_features.position_news.log_telemetry import attach_collection_trace, collection_trace
+from ..agent_event_schema import safe_text
 from ..collector_runs import RunRecorder
 from ..db import init_db
 
@@ -43,6 +46,25 @@ class BrowserEnrichmentUnavailable(RuntimeError):
         self.payload = payload or {}
 
 
+def _collector_event(event: str, fields: dict, *, status: str = "") -> dict:
+    """Technical diagnostics go to existing stdout/Prefect, not per-user DB rows."""
+    def clean(value, key=""):
+        if isinstance(value, dict):
+            return {str(k): clean(v, str(k)) for k, v in value.items()
+                    if not re.search(r"authorization|cookie|api.?key|runner.?key|secret|password|token|dsn|database.?url|raw.?body",
+                                     str(k), re.I)}
+        if isinstance(value, list):
+            return [clean(item) for item in value[:100]]
+        if isinstance(value, str):
+            return safe_text(value, 1500)
+        return value
+    trace = collection_trace()
+    return {**clean(fields), "event": event, "event_name": f"collector.{event}",
+            "component": "position_news_collector", "severity": "ERROR" if status == "error" else "INFO",
+            "observed_at": datetime.now(timezone.utc).isoformat(), **trace,
+            **({"operation_id": f"collection:{trace['collection_run_id']}"} if trace.get("collection_run_id") else {})}
+
+
 def _schedule_lag_seconds() -> float:
     scheduled = flow_run.scheduled_start_time
     if scheduled.tzinfo is None:
@@ -60,16 +82,16 @@ def fetch_ticker_news_task(asset_symbol: str) -> dict:
     """Read shared RSS/API caches; paid model calls are a separate task."""
     publisher = collector.ArticlePublisher(asset_symbol, repository)
     try:
-        payload = collector._call_with_progress(news_mod.fetch_coin_news_for_collector, asset_symbol,
-                                                on_progress=publisher)
+        payload = attach_collection_trace(collector._call_with_progress(news_mod.fetch_coin_news_for_collector, asset_symbol,
+                                                on_progress=lambda value: publisher(attach_collection_trace(value))))
         publisher(payload)
     finally:
         publisher.finish()
     for source in payload.get("sources") or []:
-        print(json.dumps({"event": "news_source", "asset_symbol": asset_symbol, **source},
+        print(json.dumps(_collector_event("news_source", {"asset_symbol": asset_symbol, **source}, status=source.get("status", "")),
                          ensure_ascii=False))
-    print(json.dumps({"event": "community_content", "asset_symbol": asset_symbol,
-                      "stage": "fetched", **collector.community_progress(payload)}, ensure_ascii=False))
+    print(json.dumps(_collector_event("community_content", {"asset_symbol": asset_symbol,
+                      "stage": "fetched", **collector.community_progress(payload)}), ensure_ascii=False))
     return payload
 
 
@@ -94,8 +116,8 @@ def _log_browser_sources(sources: list[dict], *, asset_symbol: str | None = None
     for source in sources:
         if not str(source.get("source_type") or "").endswith("_playwright"):
             continue
-        print(json.dumps({"event": "browser_source", "asset_symbol": asset_symbol,
-                          **{key: source[key] for key in source_fields if key in source}},
+        print(json.dumps(_collector_event("browser_source", {"asset_symbol": asset_symbol,
+                          **{key: source[key] for key in source_fields if key in source}}, status=source.get("status", "")),
                          ensure_ascii=False))
 
 
@@ -133,12 +155,13 @@ def enrich_ticker_news_task(asset_symbol: str, news_payload: dict,
                 enricher=lambda symbol, payload, on_progress=None: collector._call_with_progress(
                     news_mod.enrich_coin_news_for_collector, symbol, payload,
                     browser_budget_seconds=budget, on_progress=on_progress))
+        result = attach_collection_trace(result)
         publisher(result)
     finally:
         publisher.finish()
-    print(json.dumps({"asset_symbol": asset_symbol,
+    print(json.dumps(_collector_event("browser_batch", {"asset_symbol": asset_symbol,
                       "browser_enrichment": result.get("browser_enrichment", {}),
-                      "sources": result.get("sources", [])}, ensure_ascii=False))
+                      "sources": result.get("sources", [])}), ensure_ascii=False))
     _log_browser_sources(result.get("sources", []), asset_symbol=asset_symbol)
     browser = result.get("browser_enrichment") or {}
     status = browser.get("status")
@@ -175,9 +198,9 @@ def process_ticker_news_task(
     )
     if news_payload.get("browser_enrichment"):
         result["browser_status"] = news_payload["browser_enrichment"].get("status")
-    print(json.dumps({"event": "community_content", "asset_symbol": asset_symbol,
+    print(json.dumps(_collector_event("community_content", {"asset_symbol": asset_symbol,
                       "stage": "processed", "community_bodies": result.get("community_bodies", {}),
-                      "community_summaries": result.get("community_summaries", {})}, ensure_ascii=False))
+                      "community_summaries": result.get("community_summaries", {})}), ensure_ascii=False))
     print(json.dumps(result, ensure_ascii=False))
     return result
 

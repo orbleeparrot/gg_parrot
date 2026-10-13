@@ -129,8 +129,9 @@ def test_ok_ack_on_expired_command_is_accepted_but_failure_is_ignored():
             db.refresh(a); db.refresh(b)
             assert a.status == "acked" and a.executed_qty == 30.0 and a.fill_price == 1.01 and a.attempts == 1
             assert b.status == "expired" and b.attempts == 0 and b.error == ""
-            kinds = [e.kind for e in db.exec(select(RunSessionEvent).where(RunSessionEvent.session_id == sid)).all()]
-            assert kinds == ["order"]
+            events = db.exec(select(RunSessionEvent).where(RunSessionEvent.session_id == sid)).all()
+            assert [e.kind for e in events if e.event_name != "command.expired"] == ["order"]
+            assert sum(e.event_name == "command.expired" for e in events) == 2
     finally:
         _cleanup(sid)
 

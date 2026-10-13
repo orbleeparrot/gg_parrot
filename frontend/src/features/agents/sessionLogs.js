@@ -17,6 +17,64 @@ const KIND_LABELS = {
   news_delivered: "뉴스 제공", news_received: "뉴스 제공",
 };
 
+export const SESSION_LOG_SEVERITIES = ["DEBUG", "INFO", "WARN", "ERROR", "UNKNOWN"];
+export const SESSION_LOG_COMPONENTS = ["runner", "server", "engine", "news_delivery"];
+
+// One canonical query defines both the request and its cursor/result identity.
+// Filters describe server reception time, not a possibly delayed runner clock.
+export function normalizeSessionLogQuery(value = {}) {
+  const bounded = (input, limit) => typeof input === "string" ? input.trim().slice(0, limit) : "";
+  const integer = (input) => Number.isSafeInteger(input) && input > 0 ? input : null;
+  return {
+    q: bounded(value.q, 200),
+    severity: SESSION_LOG_SEVERITIES.includes(value.severity) ? value.severity : "",
+    component: /^[a-z][a-z0-9_.-]{0,47}$/.test(value.component || "") ? value.component : "",
+    eventName: /^[a-z][a-z0-9_.-]{0,79}$/.test(value.eventName || "") ? value.eventName : "",
+    operationId: bounded(value.operationId, 120),
+    sinceMs: integer(value.sinceMs), untilMs: integer(value.untilMs),
+    contextId: integer(value.contextId),
+  };
+}
+
+export function sessionLogQueryParams({ category = "all", beforeId, limit = 50, ...filters } = {}) {
+  const normalized = normalizeSessionLogQuery(filters);
+  const query = new URLSearchParams({ category: category === "all" || CATEGORIES.has(category) ? category : "all",
+    limit: String(Number.isSafeInteger(limit) && limit > 0 ? Math.min(limit, 100) : 50) });
+  for (const [field, parameter] of [["q", "q"], ["severity", "severity"], ["component", "component"],
+    ["eventName", "event_name"], ["operationId", "operation_id"], ["sinceMs", "since_ms"],
+    ["untilMs", "until_ms"], ["contextId", "context_id"]]) {
+    if (normalized[field]) query.set(parameter, String(normalized[field]));
+  }
+  if (Number.isSafeInteger(beforeId) && beforeId > 0) query.set("before_id", String(beforeId));
+  return query;
+}
+
+export function sessionLogSeverity(item) {
+  return SESSION_LOG_SEVERITIES.includes(item?.severity) ? item.severity : "UNKNOWN";
+}
+
+export function sessionLogComponent(item) {
+  return typeof item?.component === "string" && item.component.trim()
+    ? item.component.trim().slice(0, 64) : "legacy";
+}
+
+// Defense in depth for copy/export. The owner API already sanitizes its payload;
+// never copy a newly introduced secret field merely because it is JSON-shaped.
+export function safeSessionLogData(value, depth = 0) {
+  if (depth > 7) return "[깊이 제한]";
+  if (value === null || typeof value === "boolean") return value;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value === "string") return value.slice(0, 4000)
+    .replace(/\b(?:sk-(?:proj-)?[A-Za-z0-9_-]{10,}|AIza[A-Za-z0-9_-]{20,})\b/g, "[비밀값 제외]")
+    .replace(/\bBearer\s+\S+/gi, "Bearer [비밀값 제외]")
+    .replace(/(?:postgres(?:ql)?|https?):\/\/[^\s/]+:[^\s@]+@[^\s]+/gi, "[인증 포함 주소 제외]");
+  if (Array.isArray(value)) return value.slice(0, 100).map((item) => safeSessionLogData(item, depth + 1));
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).slice(0, 80)
+    .filter(([key]) => !/api[_-]?key|secret|password|authorization|token|cookie|database[_-]?url|private[_-]?key/i.test(key))
+    .map(([key, item]) => [key.slice(0, 120), safeSessionLogData(item, depth + 1)]));
+  return null;
+}
+
 function serverId(value) {
   if (typeof value !== "number" && (typeof value !== "string" || !/^\d+$/.test(value))) return null;
   const id = Number(value);
@@ -91,7 +149,10 @@ export function formatSessionLogTime(value) {
   const date = new Date(parsed + 9 * 60 * 60 * 1000);
   if (!Number.isFinite(date.getTime())) return "시각 확인 불가";
   const pad = (number) => String(number).padStart(2, "0");
-  return `${date.getUTCFullYear()}.${pad(date.getUTCMonth() + 1)}.${pad(date.getUTCDate())} ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())} KST`;
+  const recordedFraction = typeof value === "string" ? value.match(/\.(\d{1,6})/)?.[1] : null;
+  const fraction = recordedFraction ? `.${recordedFraction}` : typeof value === "number" && parsed % 1000 !== 0
+    ? `.${String(date.getUTCMilliseconds()).padStart(3, "0")}` : "";
+  return `${date.getUTCFullYear()}.${pad(date.getUTCMonth() + 1)}.${pad(date.getUTCDate())} ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}${fraction} KST`;
 }
 
 export function safeSessionLogUrl(value) {

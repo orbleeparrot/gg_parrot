@@ -9,6 +9,7 @@ import { createBoardListCache } from "./lib/boardListCache.js";
 import { memberQueryString } from "./lib/memberList.js";
 import { invalidateLeaderboardCache } from "./lib/cacheEvents.js";
 import { ACTIVITY_EVENT, shouldSignalActivity } from "./lib/notifications.js";
+import { sessionLogQueryParams } from "./features/agents/sessionLogs.js";
 
 const BASE = "";
 const RUNNER_SESSIONS_STREAM_PATH = "/api/me/runner/sessions/stream";
@@ -336,9 +337,10 @@ export const api = {
     const query = Number.isSafeInteger(cursor) ? `?cursor=${cursor}` : "";
     return req(`/api/me/agents/sessions/${encodeURIComponent(sessionId)}/position-news${query}`, options);
   },
-  agentSessionLogs: (sessionId, { category = "all", beforeId, ...options } = {}) => {
-    const query = new URLSearchParams({ category, limit: "50" });
-    if (Number.isSafeInteger(beforeId) && beforeId > 0) query.set("before_id", String(beforeId));
+  agentSessionLogs: (sessionId, { category = "all", beforeId, limit = 50, q, severity, component, eventName,
+    operationId, sinceMs, untilMs, contextId, ...options } = {}) => {
+    const query = sessionLogQueryParams({ category, beforeId, limit, q, severity, component, eventName,
+      operationId, sinceMs, untilMs, contextId });
     return req(`/api/me/agents/sessions/${encodeURIComponent(sessionId)}/logs?${query}`, options);
   },
   agentNewsReceipt: (sessionId, receiptToken, options = {}) =>

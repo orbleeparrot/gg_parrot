@@ -271,7 +271,7 @@ def upsert_articles(asset_symbol: str, items: list[dict], *, analysis: dict | No
         metadata = json.loads(state.metadata_json)
         metadata.update({key: payload[key] for key in (
             "symbol", "coin_name", "label", "query", "sources", "browser_enrichment", "refresh_seconds",
-            "as_of", "overview", "ai", "image_status", "collection_status", "disclaimer",
+            "as_of", "overview", "ai", "image_status", "collection_status", "disclaimer", "collection_trace",
         ) if key in payload})
         state.metadata_json = json.dumps(metadata, ensure_ascii=False)
     state.updated_ms = max(state.updated_ms, millis)

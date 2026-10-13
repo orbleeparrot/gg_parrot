@@ -154,6 +154,9 @@ function AccountAgents() {
   const [mobilePane, setMobilePane] = useState(() => searchParams.get("panel") === "logs" ? "chat" : "chart");
   const [pinBusy, setPinBusy] = useState(0);
   const [logCategory, setLogCategory] = useState("all");
+  const [logQuery, setLogQuery] = useState({});
+  const [logsPaused, setLogsPaused] = useState(false);
+  const [agentFilter, setAgentFilter] = useState("all");
   const sessionSnapshotRevision = useRef(0);
   const lastStreamMessageAt = useRef(0);
   const [streamConnected, setStreamConnected] = useState(false);
@@ -333,11 +336,14 @@ function AccountAgents() {
   const whaleActivity = useWhaleActivity(selected);
   const logsOpen = searchParams.get("panel") === "logs";
   const runnerLog = useRunnerLog(selected, !logsOpen);
-  const sessionLogs = useSessionLogs(selected, { enabled: logsOpen, category: logCategory });
+  const sessionLogs = useSessionLogs(selected, { enabled: logsOpen, category: logCategory, query: logQuery, paused: logsPaused });
   const newsReceipt = useNewsReceipt(selected, activePositionNews.data);
 
   useEffect(() => {
     setChartSnapshot(null);
+    setLogCategory("all");
+    setLogQuery({});
+    setLogsPaused(false);
   }, [selected?.session_id]);
 
   const macro = selected?.macro || null;
@@ -536,30 +542,31 @@ function AccountAgents() {
             <div className="agent-side">
               {/* 종료됐거나 종료 처리 중이면 오른쪽 열은 결과 화면이 맡는다 — 블록을 겹쳐 두지 않는다. */}
               {selected.status === "running" && !selected.stopping ? <PositionStrip session={selected} macro={macro} /> : null}
-              <section className="agent-chat agent-session-content" aria-label="매크로 활동 화면">
-                <div className="agent-session-menu" role="group" aria-label="매크로 화면 선택">
-                  <button type="button" aria-pressed={!logsOpen} onClick={() => showPanel("agent")}>에이전트</button>
-                  <button type="button" aria-pressed={logsOpen} onClick={() => showPanel("logs")}>활동 로그</button>
-                </div>
-                <div className="agent-session-panel">
+              <AgentActivityStream
+                key={selected.session_id}
+                symbol={selected.symbol}
+                macro={macro}
+                session={selected}
+                candles={activeChart?.candles || []}
+                interval={activeChart?.interval || interval}
+                observedAt={activeChart?.serverTime || 0}
+                featureStates={featureStates}
+                selectedView={logsOpen ? "activity_logs" : agentFilter}
+                onSelectView={(next) => {
+                  if (next !== "activity_logs") setAgentFilter(next);
+                  showPanel(next === "activity_logs" ? "logs" : "agent");
+                }}
+                activityLog={<div className="agent-session-panel">
                   {logsOpen && newsReceipt.state?.status === "error" ? <div className="agent-receipt-error" role="status">
                     <p>뉴스 수신 기록을 저장하지 못했어요. 뉴스 표시와 매크로 실행은 계속됩니다.</p>
                     <button type="button" className="btn btn-s btn-secondary" onClick={newsReceipt.retry}>기록 다시 저장</button>
                   </div> : null}
-                  {logsOpen ? <AgentSessionLog session={selected} state={sessionLogs.state} category={logCategory}
-                    onCategoryChange={setLogCategory} onRefresh={sessionLogs.refresh} onLoadMore={sessionLogs.loadMore} />
-                    : <AgentActivityStream
-                      key={selected.session_id}
-                      symbol={selected.symbol}
-                      macro={macro}
-                      session={selected}
-                      candles={activeChart?.candles || []}
-                      interval={activeChart?.interval || interval}
-                      observedAt={activeChart?.serverTime || 0}
-                      featureStates={featureStates}
-                    />}
-                </div>
-              </section>
+                  <AgentSessionLog session={selected} state={sessionLogs.state} category={logCategory}
+                    onCategoryChange={setLogCategory} query={logQuery} onQueryChange={setLogQuery}
+                    paused={logsPaused} onPauseChange={setLogsPaused}
+                    onRefresh={sessionLogs.refresh} onLoadMore={sessionLogs.loadMore} />
+                </div>}
+              />
             </div>
           </div>
 

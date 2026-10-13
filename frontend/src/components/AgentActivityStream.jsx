@@ -62,12 +62,13 @@ function activityTime(value, now, fallback = "방금 확인") {
   return absoluteActivityTime(parsed, fallback);
 }
 
-function ModuleTabs({ selected, onSelect, entitlements }) {
-  const items = [{ key: "all", label: "전체" }, ...AGENT_MODULES];
+function ModuleTabs({ selected, onSelect, entitlements, hasActivityLog }) {
+  const items = [{ key: "all", label: "전체" }, ...AGENT_MODULES,
+    ...(hasActivityLog ? [{ key: "activity_logs", label: "활동 로그" }] : [])];
   return (
     <div className="agent-chat-tabs" role="group" aria-label="에이전트 대화 종류">
       {items.map((item) => {
-        const access = item.key === "all" ? "enabled" : accessFor(item, entitlements);
+        const access = item.key === "all" || item.key === "activity_logs" ? "enabled" : accessFor(item, entitlements);
         const plan = item.minimumPlan && item.minimumPlan !== "free"
           ? `, ${PLAN_LABELS[item.minimumPlan]} 구독 기능`
           : "";
@@ -117,8 +118,12 @@ export default function AgentActivityStream({
   observedAt,
   entitlements = null,
   onUpgrade,
+  selectedView,
+  onSelectView,
+  activityLog,
 }) {
-  const [filter, setFilter] = useState("all");
+  const [localFilter, setFilter] = useState("all");
+  const filter = selectedView ?? localFilter;
   // 실행이 끝나면 결과 화면이 기본이고, 기록은 원할 때만 연다.
   const [showLog, setShowLog] = useState(false);
   const [newMessageCount, setNewMessageCount] = useState(0);
@@ -210,6 +215,7 @@ export default function AgentActivityStream({
     scrollRequestedRef.current = true;
     setNewMessageCount(0);
     setFilter(nextFilter);
+    onSelectView?.(nextFilter);
   }
 
   function scrollToLatest() {
@@ -227,7 +233,7 @@ export default function AgentActivityStream({
   useEffect(() => {
     if (ended) setShowLog(false);
   }, [ended]);
-  if (ended && !showLog) {
+  if (ended && !showLog && filter !== "activity_logs") {
     return (
       <aside className="agent-chat" aria-label={`${symbol} 실행 결과`}>
         <RunResultScreen session={session} onShowLog={() => setShowLog(true)} />
@@ -239,17 +245,17 @@ export default function AgentActivityStream({
     <aside className="agent-chat" aria-label={`${symbol} 껄무새 에이전트 기록`}>
       <header className="agent-chat-head">
         <div className={`agent-chat-controls${ended ? " has-result" : ""}`}>
-          <ModuleTabs selected={filter} onSelect={selectFilter} entitlements={entitlements} />
+          <ModuleTabs selected={filter} onSelect={selectFilter} entitlements={entitlements} hasActivityLog={!!activityLog} />
           {ended ? (
             // 왼쪽 분기 탭과 같은 트랙·글자로 — 다른 부품처럼 보이지 않게.
             <div className="agent-chat-tabs agent-chat-result-toggle" role="group" aria-label="결과 화면">
-              <button type="button" onClick={() => setShowLog(false)}>결과 보기</button>
+              <button type="button" onClick={() => { setShowLog(false); selectFilter("all"); }}>결과 보기</button>
             </div>
           ) : null}
         </div>
       </header>
 
-      <div className="agent-chat-stream flex flex-col">
+      {filter === "activity_logs" && activityLog ? activityLog : <div className="agent-chat-stream flex flex-col">
         {newsNotice ? <div className="agent-checking" role="status" data-news-status>{newsNotice}</div> : null}
         {whaleNotice ? <div className="agent-checking" role="status" data-whale-status>{whaleNotice}</div> : null}
         <div
@@ -346,7 +352,7 @@ export default function AgentActivityStream({
             새 관측 {newMessageCount}개 <Icon name="arrowDown" size={14} className="ui-icon-inline" />
           </button>
         ) : null}
-      </div>
+      </div>}
 
       <span className="sr-only" aria-live="polite" aria-atomic="true">{announcement}</span>
     </aside>

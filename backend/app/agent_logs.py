@@ -11,22 +11,25 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
-import ipaddress
 import json
 import logging
 import re
 import time
-from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import HTTPException
 from starlette.datastructures import Headers
 from starlette.responses import JSONResponse
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy import func, or_
 from sqlmodel import Session, select
 
 from . import auth, runner
 from .db import RunSession, RunSessionEvent, get_session
+from .agent_event_schema import (
+    SEVERITIES, safe_details as _safe_details, safe_identifier,
+    safe_text as _safe_text, safe_url as _safe_url,
+)
 
 logger = logging.getLogger(__name__)
 RECEIPT_TTL_SECONDS = 600
@@ -42,14 +45,6 @@ _CATEGORIES = {
     "error": ("error", "news_error"),
 }
 _STATUSES = frozenset({"ready", "pending", "empty", "error", "partial", "processing", "collecting", "stopped"})
-_SECRET = re.compile(
-    r"(?i)((?:authorization|x-runner-key|api[_-]?key|secret|password|access[_-]?token|receipt[_-]?token|token)"
-    r"[\"']?\s*[:=]\s*)(?:[\"']?(?:bearer\s+)?)[^\s,;\"']+"
-)
-_URL = re.compile(r"https?://[^\s<>\"']+", re.I)
-_PROVIDER_KEY = re.compile(r"\b(?:sk-[A-Za-z0-9_-]{12,}|AIza[A-Za-z0-9_-]{20,})\b")
-_BEARER = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._-]+")
-_DSN = re.compile(r"\b(?:postgres(?:ql)?|mysql|redis)(?:\+[A-Za-z0-9_-]+)?://[^\s\"']+", re.I)
 
 
 class NewsReceiptBodyLimit:
@@ -99,34 +94,6 @@ def _iso(ms: int) -> str:
         return ""
 
 
-def _safe_url(value: str) -> str:
-    try:
-        parts = urlsplit(str(value or "")[:1500])
-        if parts.scheme not in {"http", "https"} or not parts.hostname or parts.username or parts.password:
-            return ""
-        host = parts.hostname.lower()
-        if host in {"localhost", "localhost.localdomain"} or host.endswith(".localhost"):
-            return ""
-        try:
-            if not ipaddress.ip_address(host).is_global:
-                return ""
-        except ValueError:
-            pass  # Ordinary public host names, never fetched by the log service.
-        return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))[:500]
-    except (TypeError, ValueError):
-        return ""
-
-
-def _safe_text(value, maximum: int = 300) -> str:
-    text = " ".join(str(value or "").split())
-    text = _SECRET.sub(r"\1[redacted]", text)
-    text = _PROVIDER_KEY.sub("[redacted]", text)
-    text = _BEARER.sub("Bearer [redacted]", text)
-    text = _DSN.sub("[connection]", text)
-    text = _URL.sub(lambda match: _safe_url(match.group()), text)
-    return text[:maximum]
-
-
 def _count(value, maximum: int = 10000) -> int:
     try:
         return max(0, min(maximum, int(value or 0)))
@@ -145,31 +112,13 @@ def _timestamp(value) -> str:
         return ""
 
 
-def _safe_details(raw: dict) -> dict:
-    if not isinstance(raw, dict):
-        return {}
-    details = {key: _safe_text(raw[key], 40) for key in ("asset_symbol", "collection_status", "translation_status")
-               if key in raw}
-    for key in ("count", "pending_count", "cursor"):
-        if key in raw:
-            details[key] = _count(raw[key], 2**63 - 1 if key == "cursor" else 10000)
-    if isinstance(raw.get("source_counts"), dict):
-        details["source_counts"] = {_safe_text(source, 40): _count(count) for source, count
-                                    in list(raw["source_counts"].items())[:6] if _safe_text(source, 40)}
-    if isinstance(raw.get("examples"), list):
-        details["examples"] = [
-            {"title": _safe_text(item.get("title"), 120), "source": _safe_text(item.get("source"), 40),
-             "url": _safe_url(item.get("url"))}
-            for item in raw["examples"][:3] if isinstance(item, dict)
-        ]
-    return details
-
-
 def _event_view(row: RunSessionEvent) -> dict:
     received_at = _iso(row.created_ms) if row.created_ms > 0 else ""
-    occurrence = _timestamp(row.ts) or received_at
+    occurred_at = _timestamp(row.ts)
+    occurrence = occurred_at or received_at
     try:
-        details = _safe_details(json.loads(row.details_json or "{}"))
+        serialized = row.details_json or "{}"
+        details = _safe_details(json.loads(serialized)) if len(serialized) <= 16384 else {}
     except (TypeError, ValueError):
         details = {}
     category = "news" if row.kind in _NEWS_KINDS else "trade" if row.kind in _CATEGORIES["trade"] else (
@@ -182,35 +131,120 @@ def _event_view(row: RunSessionEvent) -> dict:
         "ts_kst": datetime.fromisoformat(occurrence).astimezone(timezone(timedelta(hours=9))).strftime("%m/%d %H:%M:%S")
                   if occurrence else "",
         "received_at": received_at,
+        "occurred_at": occurred_at,
+        "time_basis": "event" if occurred_at else "server_reception",
         "message": _safe_text(row.message), "details": details,
+        "severity": row.severity if row.severity in SEVERITIES else "UNKNOWN",
+        "component": safe_identifier(row.component, 48),
+        "event_name": safe_identifier(row.event_name, 80),
+        "operation_id": safe_identifier(row.operation_id, 120),
+        "event_key": safe_identifier(row.event_key, 120) or None,
     }
 
 
+def _session_context(session: RunSession) -> dict:
+    exchange = ""
+    try:
+        macro = json.loads(session.macro_json or "{}")
+        if isinstance(macro, dict) and macro.get("exchange") in {"binance", "upbit", "bithumb"}:
+            exchange = macro["exchange"]
+    except (ValueError, TypeError):
+        pass
+    return {"session_id": session.id, "symbol": _safe_text(session.symbol, 40), "exchange": exchange,
+            "mode": session.mode if session.mode in {"mock", "testnet", "live"} else "",
+            "market": _safe_text(session.market, 24), "runner_version": _safe_text(session.runner_version, 24),
+            "macro_digest": _safe_text(session.macro_digest, 64)}
+
+
 def list_logs(user_id: int, session_id: int, *, category: str = "all",
-              before_id: int | None = None, limit: int = 50, db: Session | None = None) -> dict:
+              before_id: int | None = None, limit: int = 50, q: str = "", severity: str = "",
+              component: str = "", event_name: str = "", operation_id: str = "",
+              since_ms: int | None = None, until_ms: int | None = None,
+              context_id: int | None = None, db: Session | None = None) -> dict:
     if db is None:
         with get_session() as owned:
-            return list_logs(user_id, session_id, category=category, before_id=before_id, limit=limit, db=owned)
+            return list_logs(user_id, session_id, category=category, before_id=before_id, limit=limit,
+                q=q, severity=severity, component=component, event_name=event_name, operation_id=operation_id,
+                since_ms=since_ms, until_ms=until_ms, context_id=context_id, db=owned)
     if not 1 <= session_id <= 2**63 - 1:
-        raise HTTPException(404, "세션을 찾을 수 없어요.")
+        raise HTTPException(404, "세션을 찾을 수 없어요.", headers={"Cache-Control": "private, no-store"})
     session = db.get(RunSession, session_id)
     if session is None or session.user_id != user_id:
-        raise HTTPException(404, "세션을 찾을 수 없어요.")
-    if category not in {"all", *_CATEGORIES} or limit < 1 or (before_id is not None and before_id < 1):
-        raise HTTPException(422, "로그 조회 조건이 올바르지 않아요.")
+        raise HTTPException(404, "세션을 찾을 수 없어요.", headers={"Cache-Control": "private, no-store"})
+    if (category not in {"all", *_CATEGORIES} or not isinstance(limit, int) or limit < 1
+            or not isinstance(q, str) or len(q) > 200 or severity not in {"", *SEVERITIES}
+            or any(value and value != safe_identifier(value, bound)
+                   for value, bound in ((component, 48), (event_name, 80), (operation_id, 120)))
+            or any(value is not None and (not isinstance(value, int) or not 1 <= value <= 2**63 - 1)
+                   for value in (before_id, context_id))
+            or any(value is not None and (not isinstance(value, int) or not 0 <= value <= 2**63 - 1)
+                   for value in (since_ms, until_ms))
+            or (since_ms is not None and until_ms is not None and since_ms > until_ms)):
+        raise HTTPException(422, "로그 조회 조건이 올바르지 않아요.", headers={"Cache-Control": "private, no-store"})
     bound = min(100, int(limit))
     statement = select(RunSessionEvent).where(RunSessionEvent.session_id == session_id,
                                              RunSessionEvent.user_id == user_id)
-    if category != "all":
-        statement = statement.where(RunSessionEvent.kind.in_(_CATEGORIES[category]))
-    if before_id is not None:
-        statement = statement.where(RunSessionEvent.id < before_id)
-    rows = db.exec(statement.order_by(RunSessionEvent.id.desc()).limit(bound + 1)).all()
-    has_more = len(rows) > bound
-    rows = rows[:bound]
+    context_window = None
+    if context_id is not None:
+        # An anchor must itself belong to this owner/session. Neighbors ignore
+        # filters, otherwise the failure's preceding cause could disappear.
+        anchor = db.exec(statement.where(RunSessionEvent.id == context_id).limit(1)).first()
+        if anchor is None:
+            raise HTTPException(404, "로그를 찾을 수 없어요.", headers={"Cache-Control": "private, no-store"})
+        older_bound = (bound - 1) // 2
+        older = db.exec(statement.where(RunSessionEvent.id < context_id)
+                        .order_by(RunSessionEvent.id.desc()).limit(older_bound)).all() if older_bound else []
+        newer = db.exec(statement.where(RunSessionEvent.id > context_id)
+                        .order_by(RunSessionEvent.id.asc()).limit(bound - len(older) - 1)).all()
+        # At a window edge, fill the remainder from the other side. Still at
+        # most four bounded index/keyset queries, never a full history scan.
+        remaining = bound - len(older) - len(newer) - 1
+        if remaining:
+            edge = older[-1].id if older else context_id
+            older += db.exec(statement.where(RunSessionEvent.id < edge)
+                             .order_by(RunSessionEvent.id.desc()).limit(remaining)).all()
+        rows = list(reversed(newer)) + [anchor] + older
+        has_more = False
+        context_window = {"anchor_id": context_id, "oldest_id": rows[-1].id,
+                          "newest_id": rows[0].id, "filters_ignored": True}
+    else:
+        if category != "all":
+            statement = statement.where(RunSessionEvent.kind.in_(_CATEGORIES[category]))
+        if before_id is not None:
+            statement = statement.where(RunSessionEvent.id < before_id)
+        if severity:
+            statement = statement.where(or_(RunSessionEvent.severity.not_in(SEVERITIES - {"UNKNOWN"}),
+                                            RunSessionEvent.severity.is_(None))) if severity == "UNKNOWN" else (
+                statement.where(RunSessionEvent.severity == severity))
+        for column, value in ((RunSessionEvent.component, component), (RunSessionEvent.event_name, event_name),
+                              (RunSessionEvent.operation_id, operation_id)):
+            if value:
+                statement = statement.where(column == value)
+        if since_ms is not None:
+            statement = statement.where(RunSessionEvent.created_ms >= since_ms)
+        if until_ms is not None:
+            statement = statement.where(RunSessionEvent.created_ms <= until_ms)
+        if q:
+            # %/_/backslash are literal user input, never SQL wildcards. Bind
+            # parameters prevent injection; the session event cap bounds scan.
+            pattern = "%" + q.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+            statement = statement.where(or_(*(func.lower(column).like(pattern, escape="\\")
+                for column in (RunSessionEvent.message, RunSessionEvent.kind,
+                               RunSessionEvent.event_name, RunSessionEvent.operation_id))))
+        rows = db.exec(statement.order_by(RunSessionEvent.id.desc()).limit(bound + 1)).all()
+        has_more = len(rows) > bound
+        rows = rows[:bound]
+    items = [_event_view(row) for row in rows]
+    if context_id is not None:
+        for item in items:
+            item["context_anchor"] = item["id"] == context_id
     return {
-        "session_id": session_id, "status": session.status, "items": [_event_view(row) for row in rows],
+        "session_id": session_id, "status": session.status, "items": items,
         "has_more": has_more, "next_before_id": rows[-1].id if has_more else None,
+        "context": _session_context(session), "context_window": context_window,
+        "query": {"q": _safe_text(q, 200), "severity": severity, "component": component,
+                  "event_name": event_name, "operation_id": operation_id, "since_ms": since_ms,
+                  "until_ms": until_ms, "context_id": context_id},
         "retention": {"event_cap": runner.EVENT_CAP, "news_cap": runner.news_event_cap(),
                       "history_days": runner.HISTORY_DAYS, "history_keep": runner.HISTORY_KEEP,
                       "pin_limit": runner.PIN_LIMIT},
@@ -229,6 +263,8 @@ def make_news_receipt(user_id: int, session: dict, payload: dict) -> dict:
     items = [item for item in (payload.get("items") or [])[:100] if isinstance(item, dict)]
     collection = payload.get("collection") or {}
     translation = payload.get("translation") or {}
+    collection = collection if isinstance(collection, dict) else {}
+    translation = translation if isinstance(translation, dict) else {}
     status = str(collection.get("status") or "pending")
     status = status if status in _STATUSES else "pending"
     translation_status = str(translation.get("status") or "ready")
@@ -242,6 +278,13 @@ def make_news_receipt(user_id: int, session: dict, payload: dict) -> dict:
         "translation_status": translation_status, "pending_count": pending_count,
         "source_counts": dict(Counter(_safe_text(item.get("source"), 40) or "출처 미상" for item in items)),
         "examples": items[:3], **({"cursor": payload["cursor"]} if payload.get("cursor") is not None else {}),
+        **({"snapshot_id": payload["snapshot_id"]} if payload.get("snapshot_id") is not None else {}),
+        **{key: collection[key] for key in (
+            "collection_run_id", "flow_run_id", "task_run_id", "cache_hit", "reused", "collected_at",
+            "source_results",
+            "last_success_at", "next_collection_ms", "duration_ms", "attempt", "max_attempts", "retry_at", "retryable", "terminal",
+            "fetched_count", "deduped_count", "filtered_count", "stored_count", "error_code", "error_type",
+            "http_status", "request_id") if key in collection},
     })
     failed = status == "error" or translation_status == "error"
     if items:
@@ -249,11 +292,11 @@ def make_news_receipt(user_id: int, session: dict, payload: dict) -> dict:
         if failed:
             message += " · 최근 뉴스 처리 실패, 기존 기사 유지"
     elif failed:
-        message = "뉴스 처리 실패 상태 수신 · 기존 기사 유지 · 자동 재확인"
+        message = "뉴스 처리 실패 상태 수신 · 기존 기사 유지"
     elif pending_count:
         message = f"뉴스 번역 대기 {pending_count}건 상태 수신 · 완료된 기사부터 제공"
     elif status == "empty":
-        message = "관련 기사를 아직 찾지 못한 상태 수신 · 자동 재확인"
+        message = "관련 기사를 아직 찾지 못한 상태 수신"
     else:
         message = "뉴스 수집 대기·처리 상태 수신"
     identity = {
@@ -266,10 +309,15 @@ def make_news_receipt(user_id: int, session: dict, payload: dict) -> dict:
                    if status in {"error", "empty"} else "",
     }
     key = "news:" + hashlib.sha256(json.dumps(identity, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    reference = collection.get("collection_run_id")
+    operation_id = safe_identifier(f"collection:{reference}") if reference is not None else (
+        safe_identifier(f"snapshot:{payload['snapshot_id']}") if payload.get("snapshot_id") is not None else "")
+    level = "ERROR" if failed else "WARN" if (pending_count or status != "ready" or translation_status != "ready") else "INFO"
     now = _now_ms()
     claim = {"v": 1, "uid": user_id, "sid": session["session_id"], "iat": now,
              "exp": now + RECEIPT_TTL_SECONDS * 1000, "key": key,
-             "kind": "news_error" if failed else "news", "message": _safe_text(message), "details": details}
+             "kind": "news_error" if failed else "news", "message": _safe_text(message), "details": details,
+             "severity": level, "operation_id": operation_id}
     raw = json.dumps(claim, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()
     encoded = base64.urlsafe_b64encode(raw).decode().rstrip("=")
     signature = hmac.new(auth.SECRET_KEY.encode(), _DOMAIN + encoded.encode(), hashlib.sha256).hexdigest()
@@ -321,9 +369,16 @@ def record_news_receipt(user_id: int, session_id: int, token: str, *, db: Sessio
     insert = pg_insert if db.get_bind().dialect.name == "postgresql" else sqlite_insert
     try:
         statement = insert(RunSessionEvent).values(
-            session_id=session_id, user_id=user_id, ts=_iso(claim["iat"]), kind=claim["kind"],
+            # The server observes receipt arrival, not the client's actual
+            # network receive time. Claim iat is response issuance, kept apart.
+            session_id=session_id, user_id=user_id, ts=_iso(now), kind=claim["kind"],
             message=_safe_text(claim["message"]), created_ms=now, event_key=claim["key"],
-            details_json=json.dumps(_safe_details(claim.get("details")), ensure_ascii=False, sort_keys=True),
+            details_json=json.dumps(_safe_details({**(claim.get("details") if isinstance(claim.get("details"), dict) else {}),
+                                                   "response_issued_at": _iso(claim["iat"])}),
+                                    ensure_ascii=False, sort_keys=True),
+            severity=claim.get("severity") if claim.get("severity") in SEVERITIES else "UNKNOWN",
+            component="news_delivery", event_name="news.response_received",
+            operation_id=safe_identifier(claim.get("operation_id"), 120),
         ).on_conflict_do_nothing(index_elements=[RunSessionEvent.session_id, RunSessionEvent.event_key]).returning(RunSessionEvent.id)
         event_id = db.exec(statement).scalar_one_or_none()
         recorded = event_id is not None

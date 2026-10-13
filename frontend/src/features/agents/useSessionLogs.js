@@ -2,16 +2,18 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../api.js";
 import { useAccountGuard } from "../../lib/auth.js";
 import useAdaptivePolling from "../../hooks/useAdaptivePolling.js";
-import { mergeSessionLogItems, validateSessionLogResponse } from "./sessionLogs.js";
+import { mergeSessionLogItems, normalizeSessionLogQuery, validateSessionLogResponse } from "./sessionLogs.js";
 
 const empty = (key) => ({ key, items: [], status: "loading", error: "", hasMore: false,
-  nextBeforeId: null, retention: null, loadingMore: false, olderLoaded: false });
+  nextBeforeId: null, retention: null, context: null, query: null, contextWindow: null,
+  updatedAt: null, loadingMore: false, olderLoaded: false });
 
 // Fetch only while this menu is open. A completed run is immutable here and
 // needs one read, not a permanent poll. Every update is account/session scoped.
-export function useSessionLogs(session, { enabled = false, category = "all" } = {}) {
+export function useSessionLogs(session, { enabled = false, category = "all", query = {}, paused = false } = {}) {
   const sessionId = session?.session_id;
-  const key = sessionId ? `${sessionId}:${category}` : "";
+  const queryKey = JSON.stringify(normalizeSessionLogQuery(query));
+  const key = sessionId ? `${sessionId}:${category}:${queryKey}` : "";
   const activeKey = enabled ? key : "";
   const running = session?.status === "running";
   const isCurrentAccount = useAccountGuard();
@@ -20,6 +22,7 @@ export function useSessionLogs(session, { enabled = false, category = "all" } = 
   const currentKey = useRef(activeKey);
   const stateRef = useRef(state);
   const olderController = useRef(null);
+  const lastManualRead = useRef({ key: "", version: -1 });
   currentKey.current = activeKey;
   stateRef.current = state;
 
@@ -30,7 +33,7 @@ export function useSessionLogs(session, { enabled = false, category = "all" } = 
       status: previous.items.length ? "ready" : "loading" } : empty(key));
     try {
       const response = validateSessionLogResponse(
-        await api.agentSessionLogs(sessionId, { category, signal }), sessionId);
+        await api.agentSessionLogs(sessionId, { ...JSON.parse(queryKey), category, signal }), sessionId);
       if (!valid()) return;
       setState((previous) => {
         const same = previous.key === key;
@@ -43,7 +46,8 @@ export function useSessionLogs(session, { enabled = false, category = "all" } = 
         const retainCursor = same && previous.olderLoaded && !gap;
         const items = mergeSessionLogItems(gap ? [] : existing, response.items);
         return { key, items, status: "ready", error: "", loadingMore: !!olderController.current && same && previous.loadingMore,
-          retention: response.retention, olderLoaded: retainCursor,
+          retention: response.retention, context: response.context, query: response.query,
+          contextWindow: response.context_window, updatedAt: Date.now(), olderLoaded: retainCursor,
           hasMore: items.length < 500 && (retainCursor ? previous.hasMore : !!response.has_more),
           nextBeforeId: retainCursor ? previous.nextBeforeId : response.next_before_id };
       });
@@ -54,17 +58,26 @@ export function useSessionLogs(session, { enabled = false, category = "all" } = 
         status: "error", error: String(reason.message || reason) }));
       throw reason;
     }
-  }, [category, isCurrentAccount, key, sessionId]);
+  }, [category, isCurrentAccount, key, queryKey, sessionId]);
 
-  const trigger = useAdaptivePolling(readHead, { enabled: !!activeKey && running,
+  const trigger = useAdaptivePolling(readHead, { enabled: !!activeKey && running && !paused,
     intervalMs: 10000, maxIntervalMs: 30000, pollKey: activeKey });
 
   useEffect(() => {
-    if (!activeKey || running) return undefined;
+    if (!activeKey) return undefined;
+    if (running && !paused) {
+      lastManualRead.current = { key, version: refreshVersion };
+      return undefined;
+    }
+    // Pausing stops automatic reads, not the macro. A newly selected filter
+    // can still load once, and explicit Refresh works while paused.
+    if (paused && stateRef.current.key === key && lastManualRead.current.key === key
+      && lastManualRead.current.version === refreshVersion) return undefined;
+    lastManualRead.current = { key, version: refreshVersion };
     const controller = new AbortController();
     readHead(controller.signal).catch(() => {});
     return () => controller.abort();
-  }, [activeKey, readHead, refreshVersion, running]);
+  }, [activeKey, key, paused, readHead, refreshVersion, running]);
 
   useEffect(() => () => {
     olderController.current?.abort();
@@ -73,9 +86,9 @@ export function useSessionLogs(session, { enabled = false, category = "all" } = 
 
   const refresh = useCallback(() => {
     if (!activeKey) return;
-    if (running) trigger();
+    if (running && !paused) trigger();
     else setRefreshVersion((value) => value + 1);
-  }, [activeKey, running, trigger]);
+  }, [activeKey, paused, running, trigger]);
 
   const loadMore = useCallback(async () => {
     const previous = stateRef.current;
@@ -87,7 +100,7 @@ export function useSessionLogs(session, { enabled = false, category = "all" } = 
     setState((value) => ({ ...value, loadingMore: true }));
     try {
       const response = validateSessionLogResponse(await api.agentSessionLogs(sessionId,
-        { category, beforeId: previous.nextBeforeId, signal: controller.signal }), sessionId);
+        { ...JSON.parse(queryKey), category, beforeId: previous.nextBeforeId, signal: controller.signal }), sessionId);
       if (!valid()) return;
       setState((value) => {
         if (value.key !== key || value.nextBeforeId !== previous.nextBeforeId) return { ...value, loadingMore: false };
@@ -101,7 +114,7 @@ export function useSessionLogs(session, { enabled = false, category = "all" } = 
     } finally {
       if (olderController.current === controller) olderController.current = null;
     }
-  }, [activeKey, category, isCurrentAccount, key, sessionId]);
+  }, [activeKey, category, isCurrentAccount, key, queryKey, sessionId]);
 
   return { state: state.key === key ? state : empty(key), refresh, loadMore };
 }

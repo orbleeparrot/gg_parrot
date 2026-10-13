@@ -6,6 +6,7 @@ clock advances polling without wall-clock waits. No screenshots are retained.
 import importlib.util
 import json
 import os
+import re
 import threading
 from datetime import datetime, timezone
 from functools import partial
@@ -37,6 +38,7 @@ class LogsFixture(notifications.Fixtures):
         self.clear_receipt_after_first = False
         self.hold_session = None
         self.hold_before = False
+        self.hold_query = None
         self.held = []
         self.rows = {41: [self.event(10, "news", "첫 뉴스 응답 수신", "news"),
                           self.event(9, "fill", "매수 2 LINK 체결", "trade"),
@@ -52,6 +54,10 @@ class LogsFixture(notifications.Fixtures):
                 "source_label": "뉴스 응답 수신 확인" if news else "실행 기록",
                 "ts": notifications.iso(notifications.BASE_MS - 60_000),
                 "received_at": notifications.iso(notifications.BASE_MS),
+                "severity": "ERROR" if kind == "news_error" else "INFO",
+                "component": "news_delivery" if news else "engine", "event_name": "news.received" if news else f"execution.{kind}",
+                "operation_id": "order:fixture-one" if kind in {"order", "fill"} else "",
+                "occurred_at": notifications.iso(notifications.BASE_MS - 60_000), "time_basis": "event",
                 "details": {"count": 1 if kind == "news" else 0,
                             "collection_status": "error" if kind == "news_error" else "ready",
                             "examples": [{"title": "체인링크 네트워크 업데이트 발표", "source": "검증 뉴스",
@@ -67,12 +73,25 @@ class LogsFixture(notifications.Fixtures):
     def log_response(self, sid, query):
         category = query.get("category", ["all"])[0]
         before = int(query.get("before_id", ["999999"])[0])
+        context_id = int(query.get("context_id", ["0"])[0])
+        q = query.get("q", [""])[0].lower()
+        severity = query.get("severity", [""])[0]
+        component = query.get("component", [""])[0]
+        operation_id = query.get("operation_id", [""])[0]
+        since_ms = int(query.get("since_ms", ["0"])[0])
         rows = [row for row in self.rows[sid] if row["id"] < before and
-                (category == "all" or row["category"] == category or category == "error" and row["kind"] == "news_error")]
+                (context_id or ((category == "all" or row["category"] == category or category == "error" and row["kind"] == "news_error")
+                 and (not q or q in " ".join(str(row.get(key, "")) for key in ["message", "kind", "event_name", "operation_id"]).lower())
+                 and (not severity or row.get("severity", "UNKNOWN") == severity)
+                 and (not component or row.get("component", "") == component)
+                 and (not operation_id or row.get("operation_id", "") == operation_id)
+                 and (not since_ms or datetime.fromisoformat(row["received_at"].replace("Z", "+00:00")).timestamp() * 1000 >= since_ms)))]
         rows = sorted(rows, key=lambda row: row["id"], reverse=True)
-        page = rows[:2]
+        page = [{**row, "context_anchor": row["id"] == context_id} for row in rows] if context_id else rows[:2]
         return {"session_id": sid, "status": "stopped" if sid == 43 else "running", "items": page,
-                "has_more": len(rows) > 2, "next_before_id": page[-1]["id"] if len(rows) > 2 else None,
+                "context": {"session_id": sid, "exchange": "binance", "symbol": "LINKUSDT", "mode": "testnet"},
+                "query": query, "has_more": not context_id and len(rows) > 2,
+                "next_before_id": page[-1]["id"] if not context_id and len(rows) > 2 else None,
                 "retention": {"event_cap": 500, "news_cap": 100, "history_days": 30, "history_keep": 30, "pin_limit": 10}}
 
     def route(self, route):
@@ -86,7 +105,7 @@ class LogsFixture(notifications.Fixtures):
             if path.endswith("/logs"):
                 query = parse_qs(parsed.query)
                 self.log_requests.append((sid, query))
-                if self.hold_session == sid or self.hold_before and query.get("before_id"):
+                if self.hold_session == sid or self.hold_before and query.get("before_id") or self.hold_query == query.get("q", [""])[0]:
                     self.held.append((route, self.log_response(sid, query)))
                     return
                 if self.fail_logs:
@@ -144,7 +163,8 @@ def open_page(browser, origin, width=1440, theme="dark", fixture=None, path="/ag
 
 
 def open_logs(page):
-    page.get_by_role("group", name="매크로 화면 선택").get_by_role("button", name="활동 로그", exact=True).click()
+    expect(page.get_by_role("group", name="매크로 화면 선택")).to_have_count(0)
+    page.get_by_role("group", name="에이전트 대화 종류").get_by_role("button", name="활동 로그", exact=True).click()
     settle(page)
     expect(page.get_by_role("heading", name="활동 로그", exact=True)).to_be_visible()
 
@@ -175,8 +195,31 @@ def main():
                 advance(page, fixture, 15)
                 assert len(fixture.receipts) == 1, fixture.receipts
                 open_logs(page)
+                assert page.locator(".agent-session-log-body").bounding_box()["height"] >= 200
+                if width <= 600:
+                    page.get_by_role("button", name="상세 필터", exact=True).click()
+                    expect(page.get_by_role("combobox", name="활동 로그 수준", exact=True)).to_be_visible()
+                    page.get_by_role("button", name="상세 필터", exact=True).click()
                 expect(page.get_by_text("새 뉴스 응답 수신 저장", exact=True)).to_be_visible()
-                expect(page.get_by_text("2026.09.07 11:59:00 KST", exact=True).first).to_be_visible()
+                expect(page.locator("time[title='2026.09.07 11:59:00 KST']").first).to_be_visible()
+                expect(page.locator(".agent-session-log-level").first).to_have_text("INFO")
+                requests_before_search = len(fixture.log_requests)
+                search = page.get_by_role("searchbox", name="활동 로그 검색")
+                search.fill("일치하지않는검색어")
+                settle(page)
+                advance(page, fixture, 1)
+                expect(page.get_by_text("검색 조건과 일치하는 로그가 없어요.", exact=True)).to_be_visible()
+                expect(page.locator("[data-log-id]")).to_have_count(0)
+                search.fill("")
+                settle(page)
+                advance(page, fixture, 1)
+                expect(page.get_by_text("새 뉴스 응답 수신 저장", exact=True)).to_be_visible()
+                assert len(fixture.log_requests) > requests_before_search
+                assert any(query.get("q") == ["일치하지않는검색어"] for _, query in fixture.log_requests)
+                page.get_by_role("button", name="줄바꿈", exact=True).click()
+                expect(page.locator(".agent-session-log")).not_to_have_class(re.compile(r".*is-wrapped.*"))
+                assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+                page.get_by_role("button", name="줄바꿈", exact=True).click()
                 page.get_by_role("button", name="이전 기록 더 보기", exact=True).click()
                 expect(page.get_by_text("매수 2 LINK 체결", exact=True)).to_be_visible()
                 ids = page.locator("[data-log-id]").evaluate_all("nodes => nodes.map(node => node.dataset.logId)")
@@ -190,6 +233,7 @@ def main():
                 settle(page)
                 expect(page.get_by_text("뉴스 수집 연결 오류", exact=True)).to_be_visible()
                 expect(page.get_by_text("뉴스 수집 오류", exact=True)).to_be_visible()
+                expect(page.locator(".agent-session-log-level").first).to_have_text("ERROR")
                 assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
                 fixture.fail_logs = True
                 page.get_by_role("button", name="새로고침", exact=True).click()
@@ -201,13 +245,108 @@ def main():
                 settle(page)
                 expect(page.locator(".agent-session-log-error")).to_have_count(0)
                 before = len(fixture.log_requests)
-                page.get_by_role("group", name="매크로 화면 선택").get_by_role("button", name="에이전트", exact=True).click()
+                page.get_by_role("group", name="에이전트 대화 종류").get_by_role("button", name="전체", exact=True).click()
                 advance(page, fixture, 12)
                 assert len(fixture.log_requests) == before
                 assert len(fixture.receipts) == 1, fixture.receipts
                 assert not errors, errors
                 context.close()
                 checks += 1
+
+            # Server-backed filters search ALL retained rows, including rows
+            # outside the loaded first page. Related views reuse the same GET.
+            context, page, fixture, errors = open_page(browser, origin)
+            open_logs(page)
+            page.get_by_role("combobox", name="활동 로그 수준", exact=True).select_option("ERROR")
+            settle(page)
+            expect(page.get_by_text("뉴스 수집 연결 오류", exact=True)).to_be_visible()
+            assert fixture.log_requests[-1][1]["severity"] == ["ERROR"]
+            page.get_by_role("combobox", name="활동 로그 수준", exact=True).select_option("")
+            page.get_by_role("combobox", name="활동 로그 주체", exact=True).select_option("engine")
+            settle(page)
+            expect(page.get_by_text("매수 2 LINK 체결", exact=True)).to_be_visible()
+            assert fixture.log_requests[-1][1]["component"] == ["engine"]
+            page.get_by_role("combobox", name="활동 로그 주체", exact=True).select_option("")
+            selected_at = page.evaluate("Date.now()")
+            page.get_by_role("combobox", name="활동 로그 서버 수신 기간", exact=True).select_option("24")
+            settle(page)
+            assert int(fixture.log_requests[-1][1]["since_ms"][0]) == int(selected_at - 86_400_000)
+            page.get_by_role("combobox", name="활동 로그 서버 수신 기간", exact=True).select_option("all")
+            settle(page)
+            search = page.get_by_role("searchbox", name="활동 로그 검색")
+            search.fill("매수")
+            advance(page, fixture, 1)
+            expect(page.get_by_text("매수 2 LINK 체결", exact=True)).to_be_visible()
+            assert len(page.locator("[data-log-id]").all()) == 1
+            row = page.locator("[data-log-id='9']")
+            row.locator("summary.agent-session-log-line").click()
+            row.get_by_role("button", name="같은 작업 보기", exact=True).click()
+            settle(page)
+            assert fixture.log_requests[-1][1]["operation_id"] == ["order:fixture-one"]
+            assert "q" not in fixture.log_requests[-1][1]
+            expect(page.get_by_text("같은 작업: order:fixture-one", exact=True)).to_be_visible()
+            row = page.locator("[data-log-id='9']")
+            if not row.locator("details.agent-session-log-row").get_attribute("open") == "":
+                row.locator("summary.agent-session-log-line").click()
+            row.get_by_role("button", name="전후 기록 보기", exact=True).click()
+            settle(page)
+            assert fixture.log_requests[-1][1]["context_id"] == ["9"]
+            assert "operation_id" not in fixture.log_requests[-1][1]
+            expect(page.locator("[data-log-id='9']")).to_have_class(re.compile(r".*is-anchor.*"))
+            expect(page.get_by_text("뉴스 수집 연결 오류", exact=True)).to_be_visible()
+            page.get_by_role("button", name="조회 조건 해제", exact=True).click()
+            settle(page)
+            page.get_by_role("button", name="화면 일시정지", exact=True).click()
+            expect(page.get_by_text("화면만 일시정지 · 매크로 계속 실행", exact=True)).to_be_visible()
+            before = len(fixture.log_requests)
+            fixture.rows[41].append(fixture.event(32, "fill", "일시정지 이후 새 체결", "trade"))
+            advance(page, fixture, 25)
+            assert len(fixture.log_requests) == before, fixture.log_requests
+            expect(page.get_by_text("일시정지 이후 새 체결", exact=True)).to_have_count(0)
+            page.get_by_role("button", name="자동 갱신 재개", exact=True).click()
+            settle(page)
+            expect(page.get_by_text("일시정지 이후 새 체결", exact=True)).to_be_visible()
+            assert not errors, errors
+            context.close()
+            checks += 1
+
+            # Changing filters invalidates an already in-flight response just
+            # like switching sessions; old search results cannot leak through.
+            fixture = LogsFixture()
+            fixture.hold_query = "지연"
+            context, page, fixture, errors = open_page(browser, origin, fixture=fixture)
+            open_logs(page)
+            search = page.get_by_role("searchbox", name="활동 로그 검색")
+            search.fill("지연")
+            advance(page, fixture, 1)
+            assert fixture.held
+            search.fill("매수")
+            advance(page, fixture, 1)
+            expect(page.get_by_text("매수 2 LINK 체결", exact=True)).to_be_visible()
+            release_held(fixture)
+            settle(page)
+            expect(page.get_by_text("매수 2 LINK 체결", exact=True)).to_be_visible()
+            expect(page.get_by_text("검색 조건과 일치하는 로그가 없어요.", exact=True)).to_have_count(0)
+            assert not errors, errors
+            context.close()
+            checks += 1
+
+            # Legacy rows never synthesize INFO or occurrence timestamps from
+            # missing fields. Server-reception fallback is explicitly labeled.
+            fixture = LogsFixture()
+            old = fixture.event(39, "error", "구 형식 진단 기록", "error")
+            old.update(severity="UNKNOWN", component="", event_name="", occurred_at="", time_basis="server_reception")
+            fixture.rows[41].append(old)
+            context, page, fixture, errors = open_page(browser, origin, fixture=fixture)
+            open_logs(page)
+            row = page.locator("[data-log-id='39']")
+            expect(row.locator(".agent-session-log-level")).to_have_text("UNKNOWN")
+            expect(row.locator(".agent-session-log-time").first).to_contain_text("수신")
+            row.locator("summary.agent-session-log-line").click()
+            expect(row.get_by_text("기록되지 않음 · 서버 수신 시각으로 표시", exact=True)).to_be_visible()
+            assert not errors, errors
+            context.close()
+            checks += 1
 
             # A delayed old-session response must not leak into the next run.
             fixture = LogsFixture()
@@ -234,7 +373,7 @@ def main():
             fixture.hold_before = True
             page.get_by_role("button", name="이전 기록 더 보기", exact=True).click()
             expect(page.get_by_role("button", name="이전 기록 확인 중…", exact=True)).to_be_disabled()
-            page.get_by_role("group", name="매크로 화면 선택").get_by_role("button", name="에이전트", exact=True).click()
+            page.get_by_role("group", name="에이전트 대화 종류").get_by_role("button", name="전체", exact=True).click()
             fixture.fail_logs = True
             open_logs(page)
             expect(page.get_by_role("button", name="다시 시도", exact=True)).to_be_enabled()

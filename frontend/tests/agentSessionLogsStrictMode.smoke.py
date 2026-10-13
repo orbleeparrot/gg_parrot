@@ -1,6 +1,6 @@
 """Real development React StrictMode receipt-hook lifecycle regression.
 
-Build the adjacent JSX with esbuild and NODE_ENV=development, then run this
+Build the adjacent JSX with esbuild --jsx=automatic and NODE_ENV=development, then run this
 script in the Playwright image. All API requests are local intercepted fixtures;
 there is no backend, production account, AI call, exchange order or screenshot.
 """

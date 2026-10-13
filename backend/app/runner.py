@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import math
 import os
 import re
@@ -40,6 +41,7 @@ from .engine import Macro, RuleType
 from .exchanges import is_domestic, normalize_exchange, validate_symbol
 
 _KST = timezone(timedelta(hours=9))
+_log = logging.getLogger(__name__)
 
 # heartbeat 주기(실행기가 서버에 상태를 올리고 종료명령을 받아가는 간격, 초).
 POLL_SECONDS = 5
@@ -664,12 +666,16 @@ def start_session(user: User, payload: dict) -> dict:
         _append_events(db, row, [{
             "ts": now,
             "kind": "start",
+            "severity": "INFO", "event_name": "session.started",
+            "event_key": f"session:{row.id}:started", "operation_id": f"session:{row.id}",
+            "details": {"status": row.status, "runner_version": row.runner_version,
+                        "macro_origin": row.macro_origin, "macro_digest": row.macro_digest},
             "message": (
                 f"실행 시작 · 실행기 v{runner_version or '?'} · {environment_label(row)}"
                 f" · 매크로 {macro_signing.ORIGIN_LABELS.get(macro_origin, macro_origin)}"
                 + (f" · 지문 {macro_digest}" if macro_digest else "")
             ),
-        }])
+        }], component="server")
         # 헤더 알림(에이전트) — 어느 매크로가 어디서 돌기 시작했는지.
         notifications_mod.notify(
             db, user.id, "agent", f"{symbol} 매크로 실행 시작",
@@ -839,11 +845,18 @@ def mark_stopped(
             _append_events(db, row, [{
                 "ts": row.stopped_at,
                 "kind": "stop",
+                "severity": "ERROR" if row.status == "error" else "INFO",
+                "event_name": "session.stopped", "event_key": f"session:{row.id}:stopped",
+                "operation_id": f"session:{row.id}",
+                "details": {"status": row.status, "reason": row.note,
+                            "in_position": row.in_position, "position_uncertain": row.position_uncertain,
+                            "realized_pnl": row.realized_pnl, "ack_source": "runner",
+                            "verification": "runner_reported_not_exchange_verified"},
                 "message": ("오류 종료" if row.status == "error" else "종료")
                 + (f" · {row.note}" if row.note else "")
                 + f" · 누적 실현손익 {realized_pnl_text(row)}"
                 + (" · 포지션 보유 중" if row.in_position else ""),
-            }])
+            }], component="server")
             notifications_mod.notify(
                 db, user.id, "agent",
                 f"{row.symbol} 매크로 {'오류 종료' if row.status == 'error' else '실행 종료'}",
@@ -868,36 +881,105 @@ def mark_stopped(
 
 
 # --- 실행 이벤트 로그 ------------------------------------------------------
-def _append_events(db, row: RunSession, events) -> int:
-    """실행기가 보낸 이벤트를 세션에 붙인다(정제·상한 적용). 커밋은 호출자가 한다."""
+def _append_events(db, row: RunSession, events, *, component: str = "runner") -> int:
+    """Persist safe immutable events, without making telemetry a trading prerequisite.
+
+    The default is an unverified runner report. Only server-controlled call sites
+    may pass ``engine``/``server``. Stable keys deduplicate upload retries in the
+    database; old clients omitting a key still retain every emitted row.
+    """
     if not isinstance(events, list) or not events:
         return 0
+    # begin_nested flushes already-pending trading/session changes first. If that
+    # primary write fails, the error must still reach its caller. A subsequent
+    # telemetry failure rolls back ONLY this savepoint, never a command ack.
+    savepoint = db.begin_nested()
+    try:
+        with savepoint:
+            return _append_event_batch(db, row, events, component=component)
+    except Exception:
+        # Do not log the rejected payload, exception text, or credentials.
+        _log.warning("Runner activity log storage unavailable (session=%s)", row.id)
+        return 0
+
+
+def _append_event_batch(db, row: RunSession, events, *, component: str) -> int:
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+    from .agent_event_schema import normalize_event, safe_details
+
+    trusted = component in {"engine", "server"}
+    component = component if trusted else "runner"
+    batch = [dict(item) for item in events[:EVENT_BATCH_MAX] if isinstance(item, dict)]
+    operation_ids = set()
+    if not trusted:
+        for item in batch:
+            operation = str(item.get("operation_id") or "")[:121]
+            if re.fullmatch(r"command:[1-9][0-9]{0,18}", operation):
+                operation_ids.add(int(operation.split(":")[1]))
+    allowed_commands = set(db.exec(select(RunnerCommand.id).where(
+        RunnerCommand.session_id == row.id, RunnerCommand.id.in_(operation_ids),
+    )).all()) if operation_ids else set()
+    insert = pg_insert if db.get_bind().dialect.name == "postgresql" else sqlite_insert
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
     added = 0
     notified = False
-    for item in events[:EVENT_BATCH_MAX]:
-        if not isinstance(item, dict):
-            continue
+    runner_names = {"runner.message", "runner.order_result", "runner.command_received",
+                    "runner.order_requested", "runner.order_failed",
+                    "runner.command_reported", "runner.command_failed", "runner.connection_lost",
+                    "runner.connection_restored", "runner.entry_blocked"}
+    for item in batch:
         message = str(item.get("message") or "").strip()
         if not message:
             continue
         kind = str(item.get("kind") or "info").strip().lower()
         if kind not in _EVENT_KINDS:
             kind = "info"
-        ts = str(item.get("ts") or "").strip()[:32] or _now_iso()
-        db.add(RunSessionEvent(
-            session_id=row.id,
-            user_id=row.user_id,
-            ts=ts,
-            kind=kind,
-            message=message[:EVENT_MESSAGE_MAX],
-            created_ms=now_ms + added,  # 같은 배치 안 순서 보존
-        ))
+        item["kind"] = kind
+        # Missing/invalid event time is unknown; created_ms independently records
+        # reception. Do not fabricate an occurrence timestamp for old clients.
+        item["ts"] = str(item.get("ts") or "").strip()[:32]
+        if not trusted:
+            # Client-controlled fields must not impersonate a verified exchange
+            # fill or collide with signed server news-receipt identifiers.
+            if item.get("event_name") not in runner_names:
+                item["event_name"] = "runner.message"
+            key = str(item.get("event_key") or "")
+            if key and not key.startswith("runner:"):
+                item["event_key"] = "runner:" + key
+            operation = str(item.get("operation_id") or "")
+            # Local risk exits have no server command. Their locally generated
+            # request ID can still correlate request/result inside THIS session;
+            # it is explicitly a runner report, never an exchange verification.
+            local_order = re.fullmatch(r"order:ggp-[a-f0-9]{28}", operation)
+            if not local_order and not any(operation == f"command:{cid}" for cid in allowed_commands):
+                item["operation_id"] = ""
+        normalized = normalize_event(item, component=component)
+        if not normalized["message"]:
+            continue
+        if not trusted:
+            details = json.loads(normalized["details_json"] or "{}")
+            details.update(ack_source="runner", verification="runner_reported_not_exchange_verified")
+            normalized["details_json"] = json.dumps(safe_details(details), ensure_ascii=False, sort_keys=True)
+        statement = insert(RunSessionEvent).values(
+            session_id=row.id, user_id=row.user_id, created_ms=now_ms, **normalized,
+        ).on_conflict_do_nothing(
+            index_elements=[RunSessionEvent.session_id, RunSessionEvent.event_key],
+        ).returning(RunSessionEvent.id)
+        event_id = db.exec(statement).scalar_one_or_none()
+        if event_id is None:
+            continue
         added += 1
-        if kind in _NOTIFY_EVENT_LABELS:
+        # Web-only structured stages accompany the original Windows message.
+        # Preserve its notification, without notifying twice for the same order.
+        extra_runner_stage = normalized["event_name"] in {
+            "runner.order_requested", "runner.order_result", "runner.order_failed",
+            "runner.command_reported", "runner.command_failed",
+        }
+        if kind in _NOTIFY_EVENT_LABELS and not extra_runner_stage:
             notifications_mod.notify(
                 db, row.user_id, "agent", f"{row.symbol} 매크로 · {_NOTIFY_EVENT_LABELS[kind]}",
-                message, "/agents", session_id=row.id,
+                normalized["message"], "/agents", session_id=row.id,
                 data={"event": kind, "symbol": row.symbol}, trim=False,
             )
             notified = True

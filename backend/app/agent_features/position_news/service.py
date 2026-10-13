@@ -10,6 +10,7 @@ from sqlmodel import Session
 
 from ... import news as news_mod
 from . import classifier
+from .log_telemetry import delivery_metadata
 
 FEATURE_KEY = "position_news"
 _STALE_SECONDS = max(
@@ -237,7 +238,8 @@ def get_position_news(session: dict, db: Session | None = None, *, cursor: int |
         payload = build_position_news(session, feed, feed["analysis"], snapshot_id=f"articles:{asset}")
         payload.update({key: feed[key] for key in ("cursor", "reset", "has_more", "translation")})
         collection = get_collection_state(asset, db)
-        payload["collection"] = collection or {"status": "ready", "freshness": "fresh"}
+        payload["collection"] = {**(collection or {"status": "ready", "freshness": "fresh"}),
+                                 **delivery_metadata(feed)}
         observed_ms = max(int((collection or {}).get("last_success_ms") or 0),
                           int((collection or {}).get("last_attempt_ms") or 0))
         if observed_ms:
@@ -303,7 +305,7 @@ def get_position_news(session: dict, db: Session | None = None, *, cursor: int |
                 if payload.get("translation", {}).get("pending_count") else
                 "관련 최신 뉴스를 확인하고 있어요.")
         payload["overview"] = {"text": text, "scope": "headlines_only"}
-    collection = dict(stored.get("collection") or {})
+    collection = {**(stored.get("collection") or {}), **delivery_metadata(stored["news_payload"])}
     last_success_ms = int(collection.get("last_success_ms") or 0)
     last_observed_ms = max(last_success_ms, int(collection.get("last_attempt_ms") or 0)
                            if collection.get("status") == "empty" else 0)

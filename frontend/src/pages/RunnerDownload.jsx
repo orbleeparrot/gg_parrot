@@ -445,6 +445,11 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
   const helperFlow = signedIn && !!selected && keyGuide.domestic;
   const helperStep = helperFlow && step >= STEP_API_KEY;
   const [helperProgress, setHelperProgress] = useState(null);
+  // '매크로 연결' 이 끝났다 = 이 매크로가 계정에 있음을 서버가 확인했다(계정 목록 또는 단건 조회). 그 전에는 실행기를 열지 않는다.
+  const [confirmedMacroId, setConfirmedMacroId] = useState(null);
+  const macroConnected = !!selected && (
+    library.some((item) => String(item.id) === String(selected.id)) || confirmedMacroId === String(selected.id)
+  );
   const helperCardRef = useRef(null);
 
   useEffect(() => {
@@ -692,6 +697,16 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
     setQuickRunEntered(true);
     if (keyGuide.domestic && requestedStep === STEP_MACRO) moveTo(STEP_API_KEY);
   }, [keyGuide.domestic, quickRunEntered, quickRunMacroId, requestedStep, selected]);
+
+  // 빠른 실행으로 들고 온 매크로는 계정 목록(느릴 수 있다)보다 단건 조회로 먼저 확인한다.
+  useEffect(() => {
+    if (!helperStep || !selected?.id || macroConnected) return undefined;
+    let cancelled = false;
+    api.myMacro(selected.id)
+      .then((item) => { if (!cancelled && item?.id != null) setConfirmedMacroId(String(item.id)); })
+      .catch(() => {}); // 실패하면 계정 목록이 오면서 확인된다.
+    return () => { cancelled = true; };
+  }, [helperStep, macroConnected, selected?.id]);
 
   // 실행기 단계에 들어서거나 매크로를 바꾸면 연결을 처음부터 — 지난 티켓 · 진행은 다른 매크로의 것이다.
   useEffect(() => {
@@ -1396,10 +1411,11 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
   // wide: 매크로를 고르는 동안(넓은 두 열 화면)은 머리 쪽 전체 폭에, 실행기 단계에서는 카드들과 같은 칸에 둔다.
   function renderHelperChapters(wide) {
     return (
-      <ol className={wide ? "runner-helper-chapters is-wide" : "runner-helper-chapters"} aria-label={`빠른 실행 진행률, ${HELPER_CHAPTERS.length}단계 중 ${helperStep ? 2 : 1}단계`}>
+      <ol className={wide ? "runner-helper-chapters is-wide" : "runner-helper-chapters"} aria-label={`빠른 실행 진행률, ${HELPER_CHAPTERS.length}단계 중 ${helperStep && macroConnected ? 2 : 1}단계`}>
         {HELPER_CHAPTERS.map((chapter, index) => {
-          const done = index === 0 && helperStep;
-          const current = index === (helperStep ? 1 : 0);
+          const reached = helperStep && macroConnected;
+          const done = index === 0 && reached;
+          const current = index === (reached ? 1 : 0);
           return (
             <li key={chapter} className={done ? "is-done" : current ? "is-current" : undefined} aria-current={current ? "step" : undefined}>
               {done ? <span className="runner-helper-ok" aria-hidden="true"><Icon name="check" size={12} strokeWidth={3} /></span> : <span className="runner-helper-n num" aria-hidden="true">{index + 1}</span>}
@@ -1472,8 +1488,8 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
         <>
           <h2>실행기에서 연결·실행</h2>
           <div className="runner-helper-bigs">
-            <button type="button" onClick={() => void openHelperRunner()} className="runner-helper-big is-open">
-              <Icon name="monitor" size={22} />실행기 열기
+            <button type="button" onClick={() => void openHelperRunner()} disabled={!macroConnected} className="runner-helper-big is-open">
+              <Icon name="monitor" size={22} />{macroConnected ? "실행기 열기" : "매크로 연결 중…"}
             </button>
             {installLink("runner-helper-big is-install", 22)}
           </div>

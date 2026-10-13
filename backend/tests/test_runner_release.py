@@ -6,21 +6,21 @@ import pytest
 from app.runner_release import resolve_runner_release, OFFICIAL_RUNNER_VERSION, OFFICIAL_RUNNER_URL, MIN_SUPPORTED_RUNNER_VERSION
 
 
-def test_default_is_published_v15():
+def test_default_is_published_v16():
     assert resolve_runner_release({}) == {
-        'url': OFFICIAL_RUNNER_URL, 'version': '15',
+        'url': OFFICIAL_RUNNER_URL, 'version': '16',
         'supports_launch': True, 'min_runner_version': '6',
     }
 
 
-@pytest.mark.parametrize('version', range(1, 15))
+@pytest.mark.parametrize('version', range(1, 16))
 def test_stale_official_env_cannot_downgrade_download(version):
     result = resolve_runner_release({
-        'RUNNER_DOWNLOAD_URL': OFFICIAL_RUNNER_URL.replace('runner-v15', f'runner-v{version}'),
+        'RUNNER_DOWNLOAD_URL': OFFICIAL_RUNNER_URL.replace('runner-v16', f'runner-v{version}'),
         'RUNNER_EXE_VERSION': str(version), 'RUNNER_MIN_VERSION': str(version),
     })
     assert result['url'] == OFFICIAL_RUNNER_URL
-    assert result['version'] == '15'
+    assert result['version'] == '16'
     assert result['min_runner_version'] == str(max(6, version))
     assert result['supports_launch']
 
@@ -28,15 +28,15 @@ def test_stale_official_env_cannot_downgrade_download(version):
 def test_current_url_overrides_stale_display_metadata():
     result = resolve_runner_release({'RUNNER_DOWNLOAD_URL': OFFICIAL_RUNNER_URL,
         'RUNNER_EXE_VERSION': '6', 'RUNNER_MIN_VERSION': '6'})
-    assert result['version'] == '15'
+    assert result['version'] == '16'
     assert result['min_runner_version'] == '6'
 
 
 def test_future_release_is_not_downgraded():
-    url = OFFICIAL_RUNNER_URL.replace('runner-v15', 'runner-v16')
-    result = resolve_runner_release({'RUNNER_DOWNLOAD_URL': url, 'RUNNER_EXE_VERSION': '6', 'RUNNER_MIN_VERSION': '16'})
+    url = OFFICIAL_RUNNER_URL.replace('runner-v16', 'runner-v17')
+    result = resolve_runner_release({'RUNNER_DOWNLOAD_URL': url, 'RUNNER_EXE_VERSION': '6', 'RUNNER_MIN_VERSION': '17'})
     assert result['url'] == url
-    assert result['version'] == result['min_runner_version'] == '16'
+    assert result['version'] == result['min_runner_version'] == '17'
 
 
 def test_custom_download_is_preserved():

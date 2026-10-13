@@ -404,16 +404,24 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
   const stepParam = Number(searchParams.get("step") || 1);
   const requestedStep = Number.isFinite(stepParam) ? Math.min(LAST_STEP, Math.max(0, stepParam - 1)) : STEP_MACRO;
   const preferredSourceRef = location.state?.selectedSourceRef ? String(location.state.selectedSourceRef) : "";
+  const quickRunMacroId = location.state?.selectedMacroId ?? null;
+  // 빠른 실행은 방금 저장한 매크로를 들고 온다 — 계정 목록(느릴 수 있다)을 기다리지 않고 바로 그 매크로로 그린다.
+  const quickRunItem = location.state?.quickRunItem?.macro ? location.state.quickRunItem : null;
   const selected = useMemo(() => (
     library.find((item) => item.id === selectedId)
     || library.find((item) => preferredSourceRef && item.source_ref === preferredSourceRef)
+    || (quickRunItem && String(quickRunItem.id) === String(selectedId) ? quickRunItem : null)
     || library[0]
     || null
-  ), [library, preferredSourceRef, selectedId]);
+  ), [library, preferredSourceRef, quickRunItem, selectedId]);
   const keyGuide = useMemo(() => runnerKeyGuide(selected?.macro), [selected?.macro]);
   const apiKeyGuideStorageKey = keyGuide.storageKey;
   const gatedStep = !keyGuide.domestic && requestedStep > STEP_API_KEY && !apiKeyPrepared ? STEP_API_KEY : requestedStep;
-  const step = signedIn && selected ? gatedStep : STEP_MACRO;
+  // 직접 만들기 → 빠른 실행으로 들어오면 '매크로 연결' 은 이미 끝났다. 국내 매크로는 첫 화면부터 '실행기에서 연결·실행'.
+  const [quickRunEntered, setQuickRunEntered] = useState(false);
+  const quickRunJump = !quickRunEntered && quickRunMacroId != null && !!selected
+    && String(selected.id) === String(quickRunMacroId) && keyGuide.domestic && requestedStep === STEP_MACRO;
+  const step = signedIn && selected ? (quickRunJump ? STEP_API_KEY : gatedStep) : STEP_MACRO;
   const copy = buildCopy(keyGuide)[step];
   // 직접 만들기 가이드에서 이어진 경우(flow=build) 8단계 통합 진행바를 쓴다.
   const buildFlow = searchParams.get("flow") === "build";
@@ -437,8 +445,6 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
   const helperFlow = signedIn && !!selected && keyGuide.domestic;
   const helperStep = helperFlow && step >= STEP_API_KEY;
   const [helperProgress, setHelperProgress] = useState(null);
-  const quickRunMacroId = location.state?.selectedMacroId ?? null;
-  const quickRunSkippedRef = useRef(false);
   const helperCardRef = useRef(null);
 
   useEffect(() => {
@@ -679,13 +685,13 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
     return () => window.cancelAnimationFrame(frame);
   }, [step]);
 
-  // 직접 만들기 → 빠른 실행으로 들어오면 '매크로 연결' 은 이미 끝났다. 국내 매크로는 바로 '실행기에서 연결·실행' 으로.
+  // 주소의 step 도 맞춰 둔다 — 새로 고침 · 뒤로 가기가 같은 화면을 연다.
   useEffect(() => {
-    if (quickRunSkippedRef.current || quickRunMacroId == null || !selected) return;
+    if (quickRunEntered || quickRunMacroId == null || !selected) return;
     if (String(selected.id) !== String(quickRunMacroId)) return;
-    quickRunSkippedRef.current = true;
-    if (keyGuide.domestic && step === STEP_MACRO) moveTo(STEP_API_KEY);
-  }, [keyGuide.domestic, quickRunMacroId, selected, step]);
+    setQuickRunEntered(true);
+    if (keyGuide.domestic && requestedStep === STEP_MACRO) moveTo(STEP_API_KEY);
+  }, [keyGuide.domestic, quickRunEntered, quickRunMacroId, requestedStep, selected]);
 
   // 실행기 단계에 들어서거나 매크로를 바꾸면 연결을 처음부터 — 지난 티켓 · 진행은 다른 매크로의 것이다.
   useEffect(() => {
@@ -733,7 +739,8 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
   function moveTo(nextStep) {
     const next = new URLSearchParams(searchParams);
     next.set("step", String(nextStep + 1));
-    setSearchParams(next, { replace: true });
+    // 들고 온 매크로(location.state)를 지우지 않는다 — 목록이 오기 전에 지우면 첫 화면으로 되돌아간다.
+    setSearchParams(next, { replace: true, state: location.state });
   }
 
   function previous() {

@@ -51,7 +51,7 @@ export function useMacroActions(macro, card = null) {
     try {
       const saved = await api.saveMyMacro(macro, `직접 만들기 · ${macro.symbol || "매크로"}`);
       if (card) rememberQuickRunCard(saved.item.id, card);
-      navigate("/?run=1&step=1", { state: { selectedMacroId: saved.item.id } });
+      navigate("/?run=1&step=1", { state: { selectedMacroId: saved.item.id, quickRunItem: saved.item } });
     } catch (e) {
       setError(String(e.message || e));
       setLaunching(false);

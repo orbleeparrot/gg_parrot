@@ -107,11 +107,6 @@ const LADDER_FALLBACK = [
 export function tierSteps(tier) {
   const ladder = Array.isArray(tier?.ladder) && tier.ladder.length ? tier.ladder : LADDER_FALLBACK;
   const sales = Number(tier?.sales) || 0;
-  if (tier?.admin) {
-    // 관리자 계정 — 판매 사다리 위의 전용 칸이 지금 등급이다.
-    return [...ladder.map((step) => ({ name: step.name, at: step.at, state: "done" })),
-      { name: "관리자", at: null, state: "current" }];
-  }
   let currentIndex = 0;
   ladder.forEach((step, i) => { if (sales >= step.at) currentIndex = i; });
   return ladder.map((step, i) => ({
@@ -123,7 +118,6 @@ export function tierSteps(tier) {
 
 /** 사다리 아래 한 줄 — `실버까지 판매 2건 남았어요` / `가장 높은 등급이에요`. */
 export function tierNextLabel(tier) {
-  if (tier?.admin) return "관리자 전용 등급이에요";
   if (!tier?.next_name) return "가장 높은 등급이에요";
   const left = Math.max(0, Number(tier.to_next) || 0);
   return `${tier.next_name}까지 판매 ${left.toLocaleString("ko-KR")}건 남았어요`;
@@ -131,6 +125,5 @@ export function tierNextLabel(tier) {
 
 /** 사다리 칸의 조건 글자 — 시작 칸은 `시작`, 나머지는 `판매 n건`. */
 export function tierStepAt(at) {
-  if (at == null) return "관리자 계정";
   return at > 0 ? `판매 ${at}건` : "시작";
 }

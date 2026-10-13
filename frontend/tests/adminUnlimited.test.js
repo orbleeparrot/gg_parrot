@@ -1,16 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { tierNextLabel, tierStepAt, tierSteps } from "../src/lib/profileText.js";
+import { tierNextLabel, tierSteps } from "../src/lib/profileText.js";
 import { canJoin } from "../src/lib/roomFlow.js";
 
-test("관리자 등급은 다이아 위 전용 칸이 지금 등급이다", () => {
-  const steps = tierSteps({ admin: true, name: "관리자", sales: 0 });
-  assert.equal(steps.at(-1).name, "관리자");
-  assert.equal(steps.at(-1).state, "current");
-  assert.ok(steps.slice(0, -1).every((step) => step.state === "done"));
-  assert.equal(tierNextLabel({ admin: true }), "관리자 전용 등급이에요");
-  assert.equal(tierStepAt(null), "관리자 계정");
+test("판매 등급 안내(사다리)에는 관리자 칸이 없다 — 관리자도 실제 판매 수로 위치를 본다", () => {
+  const steps = tierSteps({ admin: true, name: "관리자", sales: 6, ladder: [
+    { name: "새싹", at: 0 }, { name: "브론즈", at: 1 }, { name: "실버", at: 5 }, { name: "골드", at: 15 }, { name: "다이아", at: 40 }] });
+  assert.ok(steps.every((step) => step.name !== "관리자"));
+  assert.equal(steps.find((step) => step.state === "current").name, "실버");
+  assert.equal(tierNextLabel({ admin: true, next_name: "골드", to_next: 9 }), "골드까지 판매 9건 남았어요");
 });
 
 test("관리자는 포인트가 없어도 유료방에 들어갈 수 있다(입장료를 내지 않는다)", () => {

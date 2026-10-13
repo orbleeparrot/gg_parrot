@@ -38,9 +38,9 @@ ADMIN_TIER = "관리자"
 
 
 def _admin_tier(total_sales: int) -> dict:
-    """관리자 계정 전용 등급 — 다이아보다 위, 판매 수와 상관없다(사다리에는 없다)."""
-    return {"name": ADMIN_TIER, "icon": "", "sales": total_sales, "next_name": None, "next_at": None, "to_next": 0,
-            "ladder": [{"name": tname, "at": threshold} for threshold, tname, _ in _TIERS], "admin": True}
+    """관리자 계정 전용 등급 — 프로필 칩 · 닉네임 옆에만 보인다. 판매 등급 안내(사다리)에는 넣지 않고,
+    다음 등급까지 남은 판매 · 사다리 위치는 다른 회원처럼 실제 판매 수 그대로다."""
+    return {**_tier(total_sales), "name": ADMIN_TIER, "admin": True}
 
 
 def _tier(total_sales: int) -> dict:

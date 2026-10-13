@@ -397,6 +397,16 @@ class RehearsalTests(unittest.TestCase):
                          {k: v for k, v in real_body.items() if k != "identifier"})
         self.assertLessEqual(len(rehearsal_body["identifier"]), 64)
 
+    def test_upbit_test_order_uses_the_real_order_amount_when_given_the_spend(self):
+        """업비트 검증 주문은 잔고까지 본다 — 실제 수수료율로 줄인 실제 주문 금액으로 내야 같은 판정을 받는다."""
+        broker = self.broker()
+        self.session.get.return_value = FakeResponse({**CHANCE, "bid_fee": "0.0005"})
+        self.session.post.return_value = FakeResponse({"uuid": "t1"}, status=201)
+        ok, reason = broker.rehearse(notional=brokers.fee_inclusive(20_000, brokers.DOMESTIC_BID_FEE_FALLBACK), spend=20_000)
+        self.assertTrue(ok, reason)
+        self.assertEqual(self.session.get.call_args.args[0], "https://api.upbit.com/v1/orders/chance")
+        self.assertEqual(self.session.post.call_args.kwargs["json"]["price"], "19990")  # 20,000 / 1.0005 → 1원 아래 내림
+
     def test_upbit_signs_the_test_request_over_its_body(self):
         broker = self.broker()
         self.session.post.return_value = FakeResponse({"uuid": "t1"}, status=201)
@@ -554,6 +564,41 @@ class RehearsalTests(unittest.TestCase):
         self.assertIn("최소 주문 금액", reason)
         self.assertIn("5000", reason)
         self.session.post.assert_not_called()
+
+    def test_bithumb_checks_the_krw_balance_including_the_fee(self):
+        """빗썸에는 잔고까지 보는 검증 주문이 없다 — 주문 금액 + 매수 수수료가 주문 가능 원화 안에 드는지 직접 본다."""
+        broker = self.broker("bithumb")
+        self.bithumb_reads(accounts=[{"currency": "KRW", "balance": "10004", "locked": "50000"}])  # 10,000 + 0.05% = 10,005
+        ok, reason = broker.rehearse(notional=10_000.0)
+        self.assertFalse(ok)
+        self.assertEqual(broker.last_error_name, "insufficient_funds")
+        self.assertIn("10,005원", reason)
+        self.assertIn("10,004원", reason)  # 주문에 묶인 원화(locked)는 쓸 수 없다
+        self.session.post.assert_not_called()
+        self.bithumb_reads(accounts=[{"currency": "KRW", "balance": "10005"}])
+        ok, reason = broker.rehearse(notional=10_000.0)
+        self.assertTrue(ok, reason)
+        self.assertIn("원화 잔고", reason)
+
+    def test_bithumb_balance_check_uses_the_accounts_real_fee_when_given_the_spend(self):
+        """부르는 쪽은 수수료율을 몰라 보수적인 0.25%로 줄인 금액만 안다 — 그 금액으로 보면 0.2% 모자란 계정도 통과한다.
+        설정 금액(spend)을 주면 실제 수수료율(0.04%)로 실제 주문 금액을 다시 재고, 필요한 원화는 설정 금액 그대로다."""
+        broker = self.broker("bithumb")
+        chance = {**CHANCE, "bid_fee": "0.0004"}
+        guessed = brokers.fee_inclusive(20_000, brokers.DOMESTIC_BID_FEE_FALLBACK)
+        self.bithumb_reads(accounts=[{"currency": "KRW", "balance": "19970"}], chance=chance)
+        ok, reason = broker.rehearse(notional=guessed, spend=20_000)
+        self.assertFalse(ok)  # 첫 주문은 19,992원 + 8원 = 20,000원 — 19,970원으로는 거절된다
+        self.assertIn("20,000원", reason)
+        self.bithumb_reads(accounts=[{"currency": "KRW", "balance": "20000"}], chance=chance)
+        self.assertTrue(broker.rehearse(notional=guessed, spend=20_000)[0])  # 딱 20,000원이면 된다
+
+    def test_bithumb_without_a_krw_row_has_no_krw_to_spend(self):
+        broker = self.broker("bithumb")
+        self.bithumb_reads(accounts=[{"currency": "BTC", "balance": "0.1"}])
+        ok, _reason = broker.rehearse(notional=10_000.0)
+        self.assertFalse(ok)
+        self.assertEqual(broker.last_error_name, "insufficient_funds")
 
     def test_bithumb_unknown_minimum_does_not_block(self):
         broker = self.broker("bithumb")

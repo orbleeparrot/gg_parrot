@@ -2,36 +2,36 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { resolveRunnerDownload, OFFICIAL_RUNNER_DOWNLOAD_URL } from "../src/lib/runnerDownload.js";
 
-for (let version = 1; version < 16; version += 1) {
-  test(`stale v${version} deployment upgrades to published v16`, () => {
+for (let version = 1; version < 17; version += 1) {
+  test(`stale v${version} deployment upgrades to published v17`, () => {
     const resolved = resolveRunnerDownload({ available: true, version: String(version), min_runner_version: String(version),
-      url: OFFICIAL_RUNNER_DOWNLOAD_URL.replace("runner-v16", `runner-v${version}`), supports_launch: false }, "");
+      url: OFFICIAL_RUNNER_DOWNLOAD_URL.replace("runner-v17", `runner-v${version}`), supports_launch: false }, "");
     assert.equal(resolved.url, OFFICIAL_RUNNER_DOWNLOAD_URL);
-    assert.equal(resolved.version, "16");
+    assert.equal(resolved.version, "17");
     assert.equal(resolved.minVersion, String(Math.max(6, version)));
     assert.equal(resolved.supportsLaunch, true);
   });
 }
 
 test("a later configured release remains usable", () => {
-  const url = OFFICIAL_RUNNER_DOWNLOAD_URL.replace("runner-v16", "runner-v17");
-  const resolved = resolveRunnerDownload({ available: true, version: "17", min_runner_version: "17",
+  const url = OFFICIAL_RUNNER_DOWNLOAD_URL.replace("runner-v17", "runner-v18");
+  const resolved = resolveRunnerDownload({ available: true, version: "18", min_runner_version: "18",
     url, supports_launch: true }, "");
   assert.equal(resolved.url, url);
-  assert.equal(resolved.version, "17");
+  assert.equal(resolved.version, "18");
 });
 
-test("v16 official URL wins over stale display metadata", () => {
+test("v17 official URL wins over stale display metadata", () => {
   const resolved = resolveRunnerDownload({ available: true, url: OFFICIAL_RUNNER_DOWNLOAD_URL, version: "6", min_runner_version: "6" }, "");
-  assert.equal(resolved.version, "16");
+  assert.equal(resolved.version, "17");
   assert.equal(resolved.minVersion, "6");
   assert.equal(resolved.supportsLaunch, true);
 });
 
-test("API failure falls back to published v16", () => {
+test("API failure falls back to published v17", () => {
   const resolved = resolveRunnerDownload(null, "unavailable");
   assert.equal(resolved.url, OFFICIAL_RUNNER_DOWNLOAD_URL);
-  assert.equal(resolved.version, "16");
+  assert.equal(resolved.version, "17");
   assert.equal(resolved.supportsLaunch, true);
 });
 

@@ -39,6 +39,7 @@ class _Recorder:
         self.symbol = "KRW-BTC"
         self.calls = []
         self.rehearsals = []
+        self.spends = []
         self._price = price
         self._rules = brokers.OrderRules(step=step, min_notional=0.0)
         self._rehearsal = rehearsal
@@ -54,8 +55,9 @@ class _Recorder:
     def ensure_ready(self):
         return True
 
-    def rehearse(self, *, notional):
+    def rehearse(self, *, notional, spend=None):
         self.rehearsals.append(notional)
+        self.spends.append(spend)
         return self._rehearsal
 
     def submit(self, side_word, *, base_qty=None, notional=None, reduce_only=False,
@@ -112,7 +114,7 @@ class ExchangeSelectionTests(unittest.TestCase):
 
     def test_runner_version_is_thirteen(self):
         from runner import installation
-        self.assertEqual(installation.RUNNER_VERSION, "16")
+        self.assertEqual(installation.RUNNER_VERSION, "17")
 
     # --- 위 다섯은 과제 사양. 아래는 같은 배선의 나머지 ----------------
     def test_binance_macro_builds_the_binance_broker_with_its_own_keys(self):
@@ -209,6 +211,8 @@ class RehearsalPolicyTests(unittest.TestCase):
         self.assertTrue(bot._prepare())
         self.assertEqual(len(bot.broker.rehearsals), 1)
         self.assertAlmostEqual(bot.broker.rehearsals[0], macro_runner.MAX_ORDER_KRW / (1 + macro_runner._bid_fee_rate(bot.broker)))
+        # 국내는 수수료 포함 설정 금액도 준다 — 브로커가 실제 수수료율로 주문 금액 · 필요한 원화를 다시 잰다.
+        self.assertEqual(bot.broker.spends, [macro_runner.MAX_ORDER_KRW])
 
     def test_broker_exception_is_a_failure_not_a_crash(self):
         bot = self.bot("live", (True, "통과"))

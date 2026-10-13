@@ -162,8 +162,10 @@ class BinanceBroker:
     def order_rules(self) -> OrderRules:
         return self._rules
 
-    def rehearse(self, *, notional) -> tuple[bool, str]:
+    def rehearse(self, *, notional, spend=None) -> tuple[bool, str]:
         """바이낸스에는 주문 없이 검증만 하는 호출이 없다. 계정 확인과 주문 규격 읽기가 되는지로 갈음한다.
+
+        ``spend`` 는 국내 어댑터와 같은 모양으로 부르게 받기만 한다 — 바이낸스 수수료는 받은 코인에서 빠진다.
 
         통과 못 했을 때 세션을 멈출지는 부르는 쪽이 정한다 — 이 메서드는 결과만 돌려준다.
         """
@@ -309,6 +311,14 @@ _JWT_HASHES = {"HS512": hashlib.sha512, "HS256": hashlib.sha256}
 _DOMESTIC_TIMEOUT = 10  # 초. 이 안에 답이 없어도 주문이 들어갔을 수 있다 — 재주문이 아니라 조회로 확인한다
 _VOLUME_DECIMALS = Decimal("0.00000001")  # 국내 수량 소수 한계(8자리). 넘으면 거래소가 매도를 거절한다
 _KRW_UNIT = Decimal("1")  # 원화 주문 금액의 단위. 원에는 보여 줄 만한 소수부가 없다
+# 업비트 · 빗썸 매수 수수료는 주문 금액과 따로 원화에서 빠진다. 계정의 실제 수수료율(/v1/orders/chance)을 못 읽었을 때
+# 쓰는 보수적인 값 — 실제보다 크게 잡아야 '설정 금액 안에서' 가 지켜진다. macro_runner 도 이 값을 쓴다.
+DOMESTIC_BID_FEE_FALLBACK = 0.0025
+
+
+def fee_inclusive(budget: float, rate: float) -> float:
+    """수수료까지 합쳐 budget 안에 들도록 줄인 주문 금액 — 20,000원 · 0.04% 면 19,992원(+8원 = 20,000원)."""
+    return budget / (1.0 + rate) if budget > 0 else 0.0
 
 
 def _b64(raw: bytes) -> str:
@@ -547,8 +557,12 @@ class DomesticBroker:
         return self._rules
 
     # --- 리허설 -------------------------------------------------
-    def rehearse(self, *, notional) -> tuple[bool, str]:
+    def rehearse(self, *, notional, spend=None) -> tuple[bool, str]:
         """돈을 쓰지 않고 키 · 허용 IP · 주문 권한 · 최소 주문 금액이 통하는지 본다. (통과, 사람이 읽을 이유).
+
+        ``spend`` (원, 수수료 포함 설정 금액)를 주면 계정의 실제 매수 수수료율을 먼저 읽어 실제 주문 금액
+        (``fee_inclusive``)으로 확인한다 — 부르는 쪽은 수수료율을 아직 모르므로 보수적인 기본값으로 줄인 ``notional`` 만
+        알고, 그 금액으로 보면 잔고가 0.2% 모자란 계정도 통과했다가 첫 주문에서 거절된다.
 
         업비트에는 주문을 만들지 않고 검증만 하는 POST /v1/orders/test 가 있다(성공 201,
         돌려준 번호는 조회·취소에 못 쓴다). 빗썸 문서에는 그런 경로가 없다 — 없는 경로를 치면
@@ -560,8 +574,11 @@ class DomesticBroker:
         self.last_error_name = ""
         try:
             if self.exchange == "upbit":
+                if spend:
+                    self._load_chance()  # 수수료율 — 검증 주문도 실제 주문 금액으로 낸다(업비트 검증은 잔고까지 본다)
+                    notional = fee_inclusive(_positive_number(spend), self.fees.get("bid") or DOMESTIC_BID_FEE_FALLBACK)
                 return self._rehearse_by_test_order(notional)
-            return self._rehearse_by_reads(notional)
+            return self._rehearse_by_reads(notional, spend)
         except DomesticApiError as exc:
             self.last_error_name = exc.name
             return False, _explain_domestic_error(self.exchange, exc.status, exc.name, exc.message)
@@ -583,17 +600,30 @@ class DomesticBroker:
             return False, f"업비트 주문 검증이 예상 밖 응답을 줬어요(HTTP {resp.status_code})"
         return True, "업비트 주문 검증 통과 — 키 · 허용 IP · 주문 권한 · 최소 주문 금액이 맞습니다"
 
-    def _rehearse_by_reads(self, notional) -> tuple[bool, str]:
+    def _rehearse_by_reads(self, notional, spend=None) -> tuple[bool, str]:
         # 키와 허용 IP 는 비공개 읽기 두 번(잔고 · 주문 가능 정보)이 서명까지 확인해 준다.
         # 주문 권한은 주문을 내기 전에는 확인할 방법이 없어, 통과 문구에서 확인했다고 말하지 않는다.
-        self._get("/v1/accounts")
+        accounts = self._get("/v1/accounts")
         self._load_chance()
+        rate = self.fees.get("bid") or DOMESTIC_BID_FEE_FALLBACK
+        if spend:
+            notional = fee_inclusive(_positive_number(spend), rate)  # 실제 주문과 같은 금액
         minimum = self._rules.min_notional
         if minimum and _positive_number(notional) < minimum:
             self.last_error_name = "under_min_total"
             return False, (f"최소 주문 금액보다 적어요. 빗썸 최소 주문 금액은 {_plain(Decimal(repr(minimum)))}원인데 "
                            f"이번 주문은 {_plain(Decimal(repr(_positive_number(notional))))}원입니다.")
-        return True, ("빗썸 키 · 허용 IP · 최소 주문 금액은 확인했습니다. 빗썸에는 주문 검증 경로가 없어 "
+        # 업비트 검증 주문은 잔고까지 보지만 빗썸에는 그 경로가 없다 — 잔고는 방금 읽은 값으로 직접 본다.
+        # 안 보면 '연결 완료' 로 시작한 세션의 첫 진입이 insufficient_funds 로 거절된다(2026-10-13 SKL).
+        # 매수 수수료는 원화에서 따로 빠지므로 주문 금액 + 수수료가 주문 가능 원화 안에 들어야 한다.
+        krw = next((a for a in accounts or [] if isinstance(a, dict) and a.get("currency") == "KRW"), None)
+        available = _positive_number((krw or {}).get("balance"))
+        need = _positive_number(notional) * (1.0 + rate)
+        if need > available:
+            self.last_error_name = "insufficient_funds"
+            return False, (f"주문할 원화 잔고가 모자라요. 첫 주문에 수수료까지 {math.ceil(need):,}원이 필요한데 "
+                           f"주문 가능한 원화는 {math.floor(available):,}원입니다. 빗썸에 원화를 채우거나 매크로 금액을 줄이세요.")
+        return True, ("빗썸 키 · 허용 IP · 최소 주문 금액 · 원화 잔고는 확인했습니다. 빗썸에는 주문 검증 경로가 없어 "
                       "주문 권한은 첫 주문에서야 드러납니다")
 
     # --- 시세 ---------------------------------------------------
@@ -804,10 +834,11 @@ class MockBroker:
             self._note_once("order_rules", f"모의 모드: 주문 규격을 읽지 못해 제한 없음으로 진행합니다({exc})")
             return _MOCK_FALLBACK_RULES
 
-    def rehearse(self, *, notional) -> tuple[bool, str]:
+    def rehearse(self, *, notional, spend=None) -> tuple[bool, str]:
         """안쪽 리허설을 해 보되, 통과 못 해도 모의는 멈추지 않는다. 이유는 기록해서 실전 전환 때 보이게 한다."""
         try:
-            ok, reason = self._inner.rehearse(notional=notional)
+            extra = {"spend": spend} if spend else {}
+            ok, reason = self._inner.rehearse(notional=notional, **extra)
         except Exception as exc:
             ok, reason = False, f"리허설 도중 오류가 났어요: {exc}"
         if ok:

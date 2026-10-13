@@ -451,9 +451,8 @@ def _notional_for(budget, leverage, market, *, quote="USDT") -> float:
     return cap * leverage if (market == "futures" and ORDER_CAP_BASIS == "margin") else cap
 
 
-# 업비트 · 빗썸 매수 수수료는 주문 금액과 따로 원화에서 빠진다. 계정의 실제 수수료율(/v1/orders/chance)을 못 읽었을 때
-# 쓰는 보수적인 값 — 실제보다 크게 잡아야 '설정 금액 안에서' 가 지켜진다.
-DOMESTIC_BID_FEE_FALLBACK = 0.0025
+# 업비트 · 빗썸 매수 수수료를 못 읽었을 때의 보수적인 값 — 브로커의 잔고 확인과 같은 값이어야 한다.
+DOMESTIC_BID_FEE_FALLBACK = brokers.DOMESTIC_BID_FEE_FALLBACK
 
 
 def _bid_fee_rate(broker) -> float:
@@ -467,9 +466,7 @@ def _bid_fee_rate(broker) -> float:
     return DOMESTIC_BID_FEE_FALLBACK
 
 
-def _fee_inclusive(budget: float, rate: float) -> float:
-    """수수료까지 합쳐 budget 안에 들도록 줄인 주문 금액 — 20,000원 · 0.04% 면 19,992원(+8원 = 20,000원)."""
-    return budget / (1.0 + rate) if budget > 0 else 0.0
+_fee_inclusive = brokers.fee_inclusive  # 리허설(브로커)과 실제 주문이 같은 식을 쓴다
 
 
 def _smallest_entry_notional(macro: dict, leverage, market, *, quote="USDT") -> float:
@@ -1044,9 +1041,21 @@ class BotThread(threading.Thread):
         (모든 신호가 under_min_total 로 거절된다), 업비트 검증 주문은 잔고까지 보므로 돌아갈
         세션을 시작도 못 하게 막는다.
         """
-        notional = _smallest_entry_notional(self.macro, self.leverage, self.market, quote=self.quote)
+        notional = self._entry_budget()
         # 국내는 실제 주문과 같은 금액(수수료를 뺀 금액)으로 최소 주문 금액을 확인한다.
         return _fee_inclusive(notional, _bid_fee_rate(getattr(self, "broker", None))) if self.domestic else notional
+
+    def _rehearsal_kwargs(self) -> dict:
+        """리허설 인자. 국내는 수수료 포함 설정 금액(spend)도 준다 — 브로커가 실제 수수료율을 읽고 실제 주문 금액 ·
+        필요한 원화를 계산한다(여기서는 아직 수수료율을 모를 수 있어 보수적인 기본값으로 줄인 금액만 안다)."""
+        kwargs = {"notional": self._entry_notional()}
+        if self.domestic:
+            kwargs["spend"] = self._entry_budget()
+        return kwargs
+
+    def _entry_budget(self) -> float:
+        """진입 한 건에 쓸 설정 금액(국내는 수수료 포함) — 가장 작은 진입. 아래 _entry_notional 의 수수료 전 금액."""
+        return _smallest_entry_notional(self.macro, self.leverage, self.market, quote=self.quote)
 
     def _rehearse(self) -> bool:
         """세션 시작에 한 번. 돈을 쓰지 않고 키 · 허용 IP · 권한 · 최소 주문 금액을 확인한다.
@@ -1060,10 +1069,9 @@ class BotThread(threading.Thread):
             self._preflight = None
             self.log(f"주문 전 확인: {prepared.reason}")
             return True
-        notional = self._entry_notional()
         credentials = getattr(self, "credentials", {})
         try:
-            ok, reason = self.broker.rehearse(notional=notional)
+            ok, reason = self.broker.rehearse(**self._rehearsal_kwargs())
         except Exception as exc:
             ok, reason = False, f"리허설 도중 오류가 났어요: {connection.safe_preflight_reason(str(exc), credentials)}"
         reason = connection.safe_preflight_reason(reason, credentials)
@@ -1361,7 +1369,7 @@ def perform_connection_check(macro: dict, credentials: dict, mode: str) -> conne
             raise ValueError(f"{exchange_label(exchange)} API 키와 시크릿을 모두 입력하세요.")
         probe = BotThread(macro, credentials, mode, None, lambda _msg: None, lambda _snap: None, lambda *_args: None)
         broker = probe._build_broker(pair, preflight_only=True)
-        ok, reason = broker.rehearse(notional=probe._entry_notional())
+        ok, reason = broker.rehearse(**probe._rehearsal_kwargs())
         safe_reason = connection.safe_preflight_reason(reason, credentials)
         name = getattr(broker, "last_error_name", "")
         error_name = name if isinstance(name, str) else ""
@@ -2537,7 +2545,12 @@ class RunnerApp:
                 self._record_successful_ip_history()
             else:
                 self._log(result.reason)
-                if (start_after and exchange_of(self.macro) in DOMESTIC_EXCHANGES and getattr(self, "main_view", None) is not None
+                view = connection.check_view(exchange_of(self.macro), False, getattr(result, "error_name", ""))
+                if start_after and view["problem"] == "order_size":
+                    # 키 · 허용 IP 는 통과했다 — 잔고 · 주문 금액 문제다. 연결 도우미(키 발급 안내)를 열면
+                    # '연결 완료' 에 빨간 표시가 붙은 화면이 떠 무엇을 고칠지 알 수 없다. 이유를 그대로 보인다.
+                    messagebox.showwarning(APP_TITLE, f"{result.reason}\n\n매매는 시작하지 않았어요.")
+                elif (start_after and exchange_of(self.macro) in DOMESTIC_EXCHANGES and getattr(self, "main_view", None) is not None
                         and getattr(self, "_connection_wizard", None) is None):
                     # 오류 창 대신 연결 도우미의 결과 화면으로 — 무엇이 막혔고 어떻게 고치는지가 거기 있다.
                     self._open_connection_wizard(stage="result_fail")

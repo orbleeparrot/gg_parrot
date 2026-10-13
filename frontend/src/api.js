@@ -1,5 +1,6 @@
 // Thin API client. Relative URLs work in dev (Vite proxy) and in prod
 // (FastAPI serves the built SPA and the /api routes from one origin).
+import { macroFileName } from "./lib/macroFileName.js";
 import { clearAuth, getToken } from "./lib/auth.js";
 import { friendlyMessage, networkError, nonJsonMessage } from "./lib/apiError.js";
 import { createRequestCoordinator } from "./lib/requestCoordinator.js";
@@ -543,7 +544,7 @@ export const api = {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `macro-${macro.rule_type}-${macro.position_side}.ggm.json`;
+    a.download = macroFileName(macro);  // 영문 · 매크로마다 다른 이름(거래소_종목_전략_방향_날짜)
     document.body.appendChild(a);
     a.click();
     a.remove();

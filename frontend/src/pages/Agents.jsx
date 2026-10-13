@@ -18,7 +18,7 @@ import AppToast from "../components/AppToast.jsx";
 import { describeDeleteConfirm, describeStopConfirm } from "../features/agents/runOutcome.js";
 import { AgentHistoryList, AgentIdle, AgentViewTabs } from "../components/AgentHistory.jsx";
 import { runPeriodLabel } from "../features/agents/history.js";
-import { activeSessionChart, requireSessionSnapshot } from "../features/agents/sessionSnapshot.js";
+import { activeSessionChart, newlyStartedSession, requireSessionSnapshot } from "../features/agents/sessionSnapshot.js";
 
 const SESSION_STREAM_PROTOCOL = "ggparrot.sessions.v1";
 const SESSION_RECONNECT_MAX_MS = 30000;
@@ -323,6 +323,24 @@ function AccountAgents() {
     next.set("session", String(selected.session_id));
     setSearchParams(next, { replace: true });
   }, [searchParams, selected, selectedId, setSearchParams]);
+
+  // 끝난 세션의 결과 화면을 보는 중 실행기에서 새로 매크로를 시작하면 그 세션으로 넘어간다
+  // (예: 모의로 잘못 시작 → 청산 후 종료 → 실전으로 다시 시작). 이미 실행 중이던 세션은 '새로' 가 아니다.
+  const knownActiveRef = useRef(null);
+  useEffect(() => {
+    if (!sessions) return;
+    if (knownActiveRef.current === null) {
+      knownActiveRef.current = new Set(activeSessions.map((session) => session.session_id));
+      return;
+    }
+    const started = mode === "detail" ? newlyStartedSession(knownActiveRef.current, activeSessions, historySession) : null;
+    for (const session of activeSessions) knownActiveRef.current.add(session.session_id);
+    if (!started) return;
+    const next = new URLSearchParams(searchParams);
+    next.set("session", String(started.session_id));
+    next.delete("view");
+    setSearchParams(next, { replace: true });
+  }, [activeSessions, historySession, mode, searchParams, sessions, setSearchParams]);
 
   const activePositionNews = usePositionNewsFeature(selected?.session_id, selected?.status === "running");
   const whaleActivity = useWhaleActivity(selected);

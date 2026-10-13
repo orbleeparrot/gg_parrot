@@ -16,12 +16,14 @@ from tkinter import ttk
 try:
     from . import assets, connection, credentials
     from .exchange_screens import ExchangeScreen
+    from .secret_entry import secret_entry
     from .theme import FONT, UI
 except ImportError:
     import assets
     import connection
     import credentials
     from exchange_screens import ExchangeScreen
+    from secret_entry import secret_entry
     from theme import FONT, UI
 
 FIELD_LABELS = {"upbit": ("Access Key", "Secret Key"), "bithumb": ("API Key", "Secret Key")}
@@ -464,7 +466,7 @@ class ExchangeConnectionWizard:
         self.manual_entries = []
         for index, (label, variable) in enumerate(zip(labels, self.app.key_vars[self.exchange])):
             ttk.Label(grid, text=label, style="Card.TLabel").grid(row=index, column=0, sticky="w", pady=(0, 8))
-            entry = ttk.Entry(grid, textvariable=variable, show="•", font=(FONT, 10))
+            entry = secret_entry(grid, variable, font=(FONT, 10), scale=self.scale)
             entry.grid(row=index, column=1, sticky="ew", pady=(0, 8))
             self.manual_entries.append(entry)
         back = "existing" if self.path == "existing" else "keys"

@@ -214,6 +214,23 @@ class ConnectionTkTests(unittest.TestCase):
         self.assertGreaterEqual(top, 0)
         self.assertLessEqual(top + target.winfo_height(), self.app.form_canvas.winfo_height())
 
+    def test_key_inputs_show_text_while_eye_is_on(self):
+        self.select("upbit")
+        self.app._toggle_key_body(True)
+        entries = [w for w in self.app.key_rows["upbit"] if hasattr(w, "eye")] + [self.app.member_entry]
+        self.assertEqual(len(entries), 3)
+        for entry in entries:
+            self.assertEqual(str(entry.cget("show")), "•")
+            entry.eye.toggle()
+            self.assertEqual(str(entry.cget("show")), "")
+            entry.eye.toggle()
+            self.assertEqual(str(entry.cget("show")), "•")
+
+    def test_live_mode_is_green_not_red(self):
+        self.select("upbit")
+        self.app.mode.set("live"); self.app._on_mode_change()
+        self.assertEqual(str(self.app.mode_buttons["live"].cget("selectcolor")).upper(), "#15803D")
+
     def test_start_without_domestic_keys_opens_the_helper_instead_of_an_error(self):
         self.select("upbit")
         self.app.mode.set("live")

@@ -56,6 +56,7 @@ try:  # package import (tests) / direct script import (PyInstaller build)
     from . import assets
     from . import brokers
     from . import connection
+    from . import secret_entry
     from . import setup_progress
     from .connection_wizard import ExchangeConnectionWizard
     from .theme import FONT, UI
@@ -63,6 +64,7 @@ except ImportError:
     import assets
     import brokers
     import connection
+    import secret_entry
     import setup_progress
     from connection_wizard import ExchangeConnectionWizard
     from theme import FONT, UI
@@ -134,6 +136,8 @@ def order_cap(quote: str) -> float:
 # 기본값은 늘 모의다. 국내 거래소에는 테스트넷이 없어서(바이낸스만 있다) 모의가 유일한 연습 수단이고,
 # 실수로 실전이 먼저 돌아가는 일을 기본값으로 막는다.
 MODE_MOCK, MODE_TESTNET, MODE_LIVE = "mock", "testnet", "live"
+# 실전 선택 칸 — 빨강은 삭제 버튼처럼 보여 초록(흰 글자 대비 5:1)으로 둔다.
+LIVE_SELECTED = "#15803D"
 RUN_MODES = (MODE_MOCK, MODE_TESTNET, MODE_LIVE)
 MODE_LABELS = {MODE_MOCK: "모의", MODE_TESTNET: "테스트넷", MODE_LIVE: "실전"}
 # 테스트넷은 바이낸스 전용이다 — 국내는 모의·실전 둘뿐.
@@ -1563,6 +1567,7 @@ class RunnerApp:
     def _build(self) -> None:
         self.root.title(APP_TITLE)
         s = self._ui_scale = self._scale()
+        secret_entry.configure_style(ttk.Style(self.root), s)
         width, height = round(680 * s), round(840 * s)
         try:
             # 작은 화면에서는 작업 표시줄을 가리지 않게 줄인다 — 넘치는 칸은 스크롤로 본다.
@@ -1666,7 +1671,7 @@ class RunnerApp:
         member.pack(fill="x")
         member.columnconfigure(1, weight=1)
         ttk.Label(member, text="껄무새 회원 키", style="CardTitle.TLabel").grid(row=0, column=0, sticky="w", padx=(0, 16))
-        self.member_entry = ttk.Entry(member, textvariable=self.member_key, show="•", font=(FONT, 10))
+        self.member_entry = secret_entry.secret_entry(member, self.member_key, font=(FONT, 10), scale=s)
         self.member_entry.grid(row=0, column=1, sticky="ew")
 
         # 실행/종료 버튼
@@ -1734,7 +1739,7 @@ class RunnerApp:
             widgets = []
             for index, (label, variable) in enumerate(zip(labels, self.key_vars[name])):
                 caption = ttk.Label(body, text=label, style="Card.TLabel")
-                entry = ttk.Entry(body, textvariable=variable, show="•", font=(FONT, 10))
+                entry = secret_entry.secret_entry(body, variable, font=(FONT, 10), scale=s)
                 caption.grid(row=1 + index, column=0, sticky="w", pady=(0, 8))
                 entry.grid(row=1 + index, column=1, sticky="ew", pady=(0, 8))
                 widgets.extend((caption, entry))
@@ -1807,7 +1812,7 @@ class RunnerApp:
             selected = name == mode
             try:
                 button.config(fg=("#FFFFFF" if name == MODE_LIVE else UI["brand_ink"]) if selected else UI["muted"],
-                              selectcolor=UI["danger"] if name == MODE_LIVE else UI["brand"])
+                              selectcolor=LIVE_SELECTED if name == MODE_LIVE else UI["brand"])
             except tk.TclError:
                 pass
         self._invalidate_preflight()

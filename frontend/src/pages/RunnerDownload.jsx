@@ -11,7 +11,7 @@ import { getAuthUser, updateAuthUser, useAuth } from "../lib/auth.js";
 import { RULE_TYPES } from "../lib/macro.js";
 import { getUserId } from "../lib/user.js";
 import { fmtSize, isRunnerOpened, markRunnerOpened, useRunnerDownload } from "../lib/runnerDownload.js";
-import { findLaunchedSession, launchPhaseFromTicketStatus } from "../lib/runnerLaunch.js";
+import { findLaunchedSession, findSessionStartedSince, launchPhaseFromTicketStatus, ticketIssuedAtMs } from "../lib/runnerLaunch.js";
 import { parseHelperProgress } from "../lib/runnerHelperProgress.js";
 import { quickRunCard } from "../lib/quickRunCard.js";
 import { getRunnerDevice } from "../lib/runnerDevice.js";
@@ -492,6 +492,14 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
       setLibraryError("");
     } catch (primaryError) {
       if (primaryError?.name === "AbortError") throw primaryError;
+      if (!missingRunnerLaunchRoute(primaryError)) {
+        // 서버가 잠깐 바쁘거나(503) 끊긴 것 — 옛 백엔드가 아니다. 대시보드 목록으로 바꿔 끼우면 방금 저장한 매크로가
+        // 빠져 선택이 바뀌고 실행기 연결이 처음으로 돌아간다. 갖고 있던 목록을 그대로 두고 다음 차례에 다시 읽는다.
+        setLibraryError(primaryError?.status === 401
+          ? "로그인이 만료됐을 수 있어요. 다시 로그인하거나 아래 방법으로 매크로를 선택해 주세요."
+          : "서버가 잠깐 바빠 매크로 목록을 다시 불러오고 있어요.");
+        throw primaryError;
+      }
       try {
         // Compatibility path while an older backend is still running. Its
         // dashboard already contains registered and unlocked macro JSON.
@@ -602,6 +610,9 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
   // 기준선으로 잡아, 원래 돌던 세션은 새 시작으로 보지 않는다. 수동 연결 파일에는 매크로 id 가
   // 없어 실행기가 id 를 못 보내므로, 그 경우 같은 종목의 새 세션으로 판별한다.
   const launchBaselineRef = useRef(null);
+  // [실행기 열기] 를 누른 서버 시각(티켓 발급). 그 뒤 이 매크로로 시작된 세션은 기준선과 상관없이 '방금 시작' 이다
+  // — 서버 혼잡 · 화면 전환으로 기준선이 다시 잡혀도 실행기에서 누른 시작을 놓치지 않는다.
+  const launchOpenedAtRef = useRef(0);
   useEffect(() => {
     launchBaselineRef.current = null;
   }, [selected?.id, step]);
@@ -618,7 +629,8 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
       launchBaselineRef.current = new Set(active.map((session) => session.session_id));
       return;
     }
-    const launched = findLaunchedSession(active, launchBaselineRef.current, selected);
+    const launched = findLaunchedSession(active, launchBaselineRef.current, selected)
+      || findSessionStartedSince(active, selected, launchOpenedAtRef.current);
     if (launched) navigate(`/agents?session=${launched.session_id}`, { state: { launchedFromQuickRun: true, launchedAtStep: step } });
   }, [helperStep, navigate, selected, signedIn, step]);
   useAdaptivePolling(watchLaunchedSession, {
@@ -790,6 +802,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
         throw new Error("실행기 연결 주소가 비어 있어요.");
       }
       setLaunchTicket({ ...data, launch_id: launchId });
+      launchOpenedAtRef.current = ticketIssuedAtMs(data);
       // 커스텀 프로토콜은 앵커 클릭으로 여는 편이 안정적이다.
       const opener = document.createElement("a");
       opener.href = data.launch_url;

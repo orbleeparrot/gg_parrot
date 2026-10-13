@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { findLaunchedSession, launchPhaseFromTicketStatus } from "../src/lib/runnerLaunch.js";
+import { findLaunchedSession, findSessionStartedSince, launchPhaseFromTicketStatus, ticketIssuedAtMs } from "../src/lib/runnerLaunch.js";
 
 const selected = { id: 42, symbol: "ZECUSDT" };
 
@@ -42,4 +42,21 @@ test("a rejected launch ticket becomes an 'outdated runner' phase with both vers
   assert.deepEqual(launchPhaseFromTicketStatus({ status: "expired" }), { phase: "expired" });
   assert.deepEqual(launchPhaseFromTicketStatus({ status: "ready" }), { phase: null });
   assert.deepEqual(launchPhaseFromTicketStatus(null), { phase: null });
+});
+
+test("ticket issue time is the server expiry minus the 120 s lifetime", () => {
+  assert.equal(ticketIssuedAtMs({ expires_at: "2026-10-13T01:02:00Z" }), Date.parse("2026-10-13T01:00:00Z"));
+  assert.equal(ticketIssuedAtMs({}), 0);
+});
+
+test("a session of this macro started after the runner was opened counts even if it is in the baseline", () => {
+  const since = Date.parse("2026-10-13T01:00:00Z");
+  const active = [
+    { session_id: 7, status: "running", user_macro_id: 42, started_at: "2026-10-12T23:00:00Z" },
+    { session_id: 8, status: "running", user_macro_id: 99, started_at: "2026-10-13T01:05:00Z" },
+    { session_id: 9, status: "running", user_macro_id: 42, started_at: "2026-10-13T01:06:00Z" },
+  ];
+  assert.equal(findSessionStartedSince(active, selected, since)?.session_id, 9);
+  assert.equal(findSessionStartedSince(active.slice(0, 2), selected, since), null);
+  assert.equal(findSessionStartedSince(active, selected, 0), null);
 });

@@ -209,6 +209,11 @@ def test_runner_setup_progress_reaches_the_web_launch_status():
     done = _progress("result_ok", checks={"auth": "ok", "ip": "ok", "order": "na"}, connected=True)
     client.post(f"/api/runner/launch-tickets/{launch_id}/progress", json=done, headers={"X-Runner-Key": runner_key})
     assert client.get(f"/api/me/runner/launch-tickets/{launch_id}", headers=_auth(token)).json()["progress"] == done
+    # 실행기 창을 닫으면(v16+) 'closed' — 웹은 처음의 [실행기 열기] 화면으로 돌아간다.
+    closed = _progress("closed")
+    assert client.post(f"/api/runner/launch-tickets/{launch_id}/progress", json=closed,
+                       headers={"X-Runner-Key": runner_key}).status_code == 200
+    assert client.get(f"/api/me/runner/launch-tickets/{launch_id}", headers=_auth(token)).json()["progress"]["stage"] == "closed"
 
 
 def test_runner_setup_progress_never_accepts_keys_addresses_or_free_text():

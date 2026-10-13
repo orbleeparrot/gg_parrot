@@ -1,7 +1,7 @@
 // 실행기 연결 도우미(v13+)가 알린 진행 단계 → 웹 '매크로 만들기 가이드'가 따라 그릴 화면.
 // 서버는 정해진 값만 받아 두지만, 웹도 모르는 값은 버린다 — 키 · 주소 · 문장은 애초에 오지 않는다.
 
-const STAGES = new Set(["ready", "ask", "ip", "perm", "keys", "existing", "manual", "checking", "result_ok", "result_fail", "started"]);
+const STAGES = new Set(["ready", "ask", "ip", "perm", "keys", "existing", "manual", "checking", "result_ok", "result_fail", "started", "closed"]);
 const PATHS = new Set(["", "new", "existing"]);
 const CHECK_STATES = new Set(["ok", "bad", "wait", "na"]);
 const PROBLEMS = new Set(["", "ip", "auth", "order", "order_size", "network", "other"]);

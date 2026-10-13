@@ -475,7 +475,7 @@ function AccountLeaderboard() {
         updateAuthUser({ ...getAuthUser(), points_balance: d.points_balance });
       }
       if (quickRunMode && d.user_macro?.id) {
-        navigate("/?run=1&step=1", { state: { selectedMacroId: d.user_macro.id } });
+        navigate("/?run=1&step=1", { state: { selectedMacroId: d.user_macro.id, quickRunItem: d.user_macro } });
         return;
       }
       await load(); // reveal the now-unlocked macro
@@ -499,7 +499,7 @@ function AccountLeaderboard() {
       if (!entry.for_sale) {
         const saved = await api.saveMyMacro(entry.macro, `리더보드 · ${entry.symbol}`);
         if (!isCurrentAccount()) return;
-        navigate("/?run=1&step=1", { state: { selectedMacroId: saved.item.id } });
+        navigate("/?run=1&step=1", { state: { selectedMacroId: saved.item.id, quickRunItem: saved.item } });
         return;
       }
       navigate("/?run=1&step=1", { state: { selectedSourceRef: entry.id } });

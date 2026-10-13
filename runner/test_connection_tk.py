@@ -214,6 +214,41 @@ class ConnectionTkTests(unittest.TestCase):
         self.assertGreaterEqual(top, 0)
         self.assertLessEqual(top + target.winfo_height(), self.app.form_canvas.winfo_height())
 
+    def test_key_inputs_show_text_while_eye_is_on(self):
+        self.select("upbit")
+        self.app._toggle_key_body(True)
+        entries = [w for w in self.app.key_rows["upbit"] if hasattr(w, "eye")] + [self.app.member_entry]
+        self.assertEqual(len(entries), 3)
+        for entry in entries:
+            self.assertEqual(str(entry.cget("show")), "•")
+            entry.eye.toggle()
+            self.assertEqual(str(entry.cget("show")), "")
+            entry.eye.toggle()
+            self.assertEqual(str(entry.cget("show")), "•")
+
+    def test_log_takes_the_spare_height_and_scrolls_with_the_wheel(self):
+        self.select("bithumb")
+        self.root.deiconify(); self.root.update()
+        box = self.app.log_box
+        self.assertGreater(box.winfo_height(), self.app.form_canvas.winfo_height() // 3)
+        self.assertFalse(self.app.log_scroll.winfo_manager())  # 몇 줄뿐이면 스크롤바 없음
+        for index in range(60):
+            self.app._log(f"줄 {index}")
+        self.root.update()
+        self.assertTrue(self.app.log_scroll.winfo_manager())
+        self.assertEqual(box.yview()[1], 1.0)  # 새 줄이 보이도록 맨 아래
+        x = box.winfo_rootx() + box.winfo_width() // 2
+        y = box.winfo_rooty() + box.winfo_height() // 2
+        box.event_generate("<MouseWheel>", delta=120, x=box.winfo_width() // 2, y=box.winfo_height() // 2,
+                           rootx=x, rooty=y)
+        self.root.update()
+        self.assertLess(box.yview()[1], 1.0)
+
+    def test_live_mode_is_green_not_red(self):
+        self.select("upbit")
+        self.app.mode.set("live"); self.app._on_mode_change()
+        self.assertEqual(str(self.app.mode_buttons["live"].cget("selectcolor")).upper(), "#15803D")
+
     def test_start_without_domestic_keys_opens_the_helper_instead_of_an_error(self):
         self.select("upbit")
         self.app.mode.set("live")

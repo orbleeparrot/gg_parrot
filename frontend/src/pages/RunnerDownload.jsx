@@ -11,7 +11,7 @@ import { getAuthUser, updateAuthUser, useAuth } from "../lib/auth.js";
 import { RULE_TYPES } from "../lib/macro.js";
 import { getUserId } from "../lib/user.js";
 import { fmtSize, isRunnerOpened, markRunnerOpened, useRunnerDownload } from "../lib/runnerDownload.js";
-import { findLaunchedSession, launchPhaseFromTicketStatus } from "../lib/runnerLaunch.js";
+import { findLaunchedSession, findSessionStartedSince, launchPhaseFromTicketStatus, ticketIssuedAtMs } from "../lib/runnerLaunch.js";
 import { parseHelperProgress } from "../lib/runnerHelperProgress.js";
 import { quickRunCard } from "../lib/quickRunCard.js";
 import { getRunnerDevice } from "../lib/runnerDevice.js";
@@ -404,16 +404,24 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
   const stepParam = Number(searchParams.get("step") || 1);
   const requestedStep = Number.isFinite(stepParam) ? Math.min(LAST_STEP, Math.max(0, stepParam - 1)) : STEP_MACRO;
   const preferredSourceRef = location.state?.selectedSourceRef ? String(location.state.selectedSourceRef) : "";
+  const quickRunMacroId = location.state?.selectedMacroId ?? null;
+  // 빠른 실행은 방금 저장한 매크로를 들고 온다 — 계정 목록(느릴 수 있다)을 기다리지 않고 바로 그 매크로로 그린다.
+  const quickRunItem = location.state?.quickRunItem?.macro ? location.state.quickRunItem : null;
   const selected = useMemo(() => (
     library.find((item) => item.id === selectedId)
     || library.find((item) => preferredSourceRef && item.source_ref === preferredSourceRef)
+    || (quickRunItem && String(quickRunItem.id) === String(selectedId) ? quickRunItem : null)
     || library[0]
     || null
-  ), [library, preferredSourceRef, selectedId]);
+  ), [library, preferredSourceRef, quickRunItem, selectedId]);
   const keyGuide = useMemo(() => runnerKeyGuide(selected?.macro), [selected?.macro]);
   const apiKeyGuideStorageKey = keyGuide.storageKey;
   const gatedStep = !keyGuide.domestic && requestedStep > STEP_API_KEY && !apiKeyPrepared ? STEP_API_KEY : requestedStep;
-  const step = signedIn && selected ? gatedStep : STEP_MACRO;
+  // 직접 만들기 → 빠른 실행으로 들어오면 '매크로 연결' 은 이미 끝났다. 국내 매크로는 첫 화면부터 '실행기에서 연결·실행'.
+  const [quickRunEntered, setQuickRunEntered] = useState(false);
+  const quickRunJump = !quickRunEntered && quickRunMacroId != null && !!selected
+    && String(selected.id) === String(quickRunMacroId) && keyGuide.domestic && requestedStep === STEP_MACRO;
+  const step = signedIn && selected ? (quickRunJump ? STEP_API_KEY : gatedStep) : STEP_MACRO;
   const copy = buildCopy(keyGuide)[step];
   // 직접 만들기 가이드에서 이어진 경우(flow=build) 8단계 통합 진행바를 쓴다.
   const buildFlow = searchParams.get("flow") === "build";
@@ -437,8 +445,11 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
   const helperFlow = signedIn && !!selected && keyGuide.domestic;
   const helperStep = helperFlow && step >= STEP_API_KEY;
   const [helperProgress, setHelperProgress] = useState(null);
-  const quickRunMacroId = location.state?.selectedMacroId ?? null;
-  const quickRunSkippedRef = useRef(false);
+  // '매크로 연결' 이 끝났다 = 이 매크로가 계정에 있음을 서버가 확인했다(계정 목록 또는 단건 조회). 그 전에는 실행기를 열지 않는다.
+  const [confirmedMacroId, setConfirmedMacroId] = useState(null);
+  const macroConnected = !!selected && (
+    library.some((item) => String(item.id) === String(selected.id)) || confirmedMacroId === String(selected.id)
+  );
   const helperCardRef = useRef(null);
 
   useEffect(() => {
@@ -481,6 +492,14 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
       setLibraryError("");
     } catch (primaryError) {
       if (primaryError?.name === "AbortError") throw primaryError;
+      if (!missingRunnerLaunchRoute(primaryError)) {
+        // 서버가 잠깐 바쁘거나(503) 끊긴 것 — 옛 백엔드가 아니다. 대시보드 목록으로 바꿔 끼우면 방금 저장한 매크로가
+        // 빠져 선택이 바뀌고 실행기 연결이 처음으로 돌아간다. 갖고 있던 목록을 그대로 두고 다음 차례에 다시 읽는다.
+        setLibraryError(primaryError?.status === 401
+          ? "로그인이 만료됐을 수 있어요. 다시 로그인하거나 아래 방법으로 매크로를 선택해 주세요."
+          : "서버가 잠깐 바빠 매크로 목록을 다시 불러오고 있어요.");
+        throw primaryError;
+      }
       try {
         // Compatibility path while an older backend is still running. Its
         // dashboard already contains registered and unlocked macro JSON.
@@ -591,6 +610,9 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
   // 기준선으로 잡아, 원래 돌던 세션은 새 시작으로 보지 않는다. 수동 연결 파일에는 매크로 id 가
   // 없어 실행기가 id 를 못 보내므로, 그 경우 같은 종목의 새 세션으로 판별한다.
   const launchBaselineRef = useRef(null);
+  // [실행기 열기] 를 누른 서버 시각(티켓 발급). 그 뒤 이 매크로로 시작된 세션은 기준선과 상관없이 '방금 시작' 이다
+  // — 서버 혼잡 · 화면 전환으로 기준선이 다시 잡혀도 실행기에서 누른 시작을 놓치지 않는다.
+  const launchOpenedAtRef = useRef(0);
   useEffect(() => {
     launchBaselineRef.current = null;
   }, [selected?.id, step]);
@@ -607,7 +629,8 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
       launchBaselineRef.current = new Set(active.map((session) => session.session_id));
       return;
     }
-    const launched = findLaunchedSession(active, launchBaselineRef.current, selected);
+    const launched = findLaunchedSession(active, launchBaselineRef.current, selected)
+      || findSessionStartedSince(active, selected, launchOpenedAtRef.current);
     if (launched) navigate(`/agents?session=${launched.session_id}`, { state: { launchedFromQuickRun: true, launchedAtStep: step } });
   }, [helperStep, navigate, selected, signedIn, step]);
   useAdaptivePolling(watchLaunchedSession, {
@@ -679,13 +702,23 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
     return () => window.cancelAnimationFrame(frame);
   }, [step]);
 
-  // 직접 만들기 → 빠른 실행으로 들어오면 '매크로 연결' 은 이미 끝났다. 국내 매크로는 바로 '실행기에서 연결·실행' 으로.
+  // 주소의 step 도 맞춰 둔다 — 새로 고침 · 뒤로 가기가 같은 화면을 연다.
   useEffect(() => {
-    if (quickRunSkippedRef.current || quickRunMacroId == null || !selected) return;
+    if (quickRunEntered || quickRunMacroId == null || !selected) return;
     if (String(selected.id) !== String(quickRunMacroId)) return;
-    quickRunSkippedRef.current = true;
-    if (keyGuide.domestic && step === STEP_MACRO) moveTo(STEP_API_KEY);
-  }, [keyGuide.domestic, quickRunMacroId, selected, step]);
+    setQuickRunEntered(true);
+    if (keyGuide.domestic && requestedStep === STEP_MACRO) moveTo(STEP_API_KEY);
+  }, [keyGuide.domestic, quickRunEntered, quickRunMacroId, requestedStep, selected]);
+
+  // 빠른 실행으로 들고 온 매크로는 계정 목록(느릴 수 있다)보다 단건 조회로 먼저 확인한다.
+  useEffect(() => {
+    if (!helperStep || !selected?.id || macroConnected) return undefined;
+    let cancelled = false;
+    api.myMacro(selected.id)
+      .then((item) => { if (!cancelled && item?.id != null) setConfirmedMacroId(String(item.id)); })
+      .catch(() => {}); // 실패하면 계정 목록이 오면서 확인된다.
+    return () => { cancelled = true; };
+  }, [helperStep, macroConnected, selected?.id]);
 
   // 실행기 단계에 들어서거나 매크로를 바꾸면 연결을 처음부터 — 지난 티켓 · 진행은 다른 매크로의 것이다.
   useEffect(() => {
@@ -733,7 +766,8 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
   function moveTo(nextStep) {
     const next = new URLSearchParams(searchParams);
     next.set("step", String(nextStep + 1));
-    setSearchParams(next, { replace: true });
+    // 들고 온 매크로(location.state)를 지우지 않는다 — 목록이 오기 전에 지우면 첫 화면으로 되돌아간다.
+    setSearchParams(next, { replace: true, state: location.state });
   }
 
   function previous() {
@@ -768,6 +802,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
         throw new Error("실행기 연결 주소가 비어 있어요.");
       }
       setLaunchTicket({ ...data, launch_id: launchId });
+      launchOpenedAtRef.current = ticketIssuedAtMs(data);
       // 커스텀 프로토콜은 앵커 클릭으로 여는 편이 안정적이다.
       const opener = document.createElement("a");
       opener.href = data.launch_url;
@@ -1389,10 +1424,11 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
   // wide: 매크로를 고르는 동안(넓은 두 열 화면)은 머리 쪽 전체 폭에, 실행기 단계에서는 카드들과 같은 칸에 둔다.
   function renderHelperChapters(wide) {
     return (
-      <ol className={wide ? "runner-helper-chapters is-wide" : "runner-helper-chapters"} aria-label={`빠른 실행 진행률, ${HELPER_CHAPTERS.length}단계 중 ${helperStep ? 2 : 1}단계`}>
+      <ol className={wide ? "runner-helper-chapters is-wide" : "runner-helper-chapters"} aria-label={`빠른 실행 진행률, ${HELPER_CHAPTERS.length}단계 중 ${helperStep && macroConnected ? 2 : 1}단계`}>
         {HELPER_CHAPTERS.map((chapter, index) => {
-          const done = index === 0 && helperStep;
-          const current = index === (helperStep ? 1 : 0);
+          const reached = helperStep && macroConnected;
+          const done = index === 0 && reached;
+          const current = index === (reached ? 1 : 0);
           return (
             <li key={chapter} className={done ? "is-done" : current ? "is-current" : undefined} aria-current={current ? "step" : undefined}>
               {done ? <span className="runner-helper-ok" aria-hidden="true"><Icon name="check" size={12} strokeWidth={3} /></span> : <span className="runner-helper-n num" aria-hidden="true">{index + 1}</span>}
@@ -1465,8 +1501,8 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
         <>
           <h2>실행기에서 연결·실행</h2>
           <div className="runner-helper-bigs">
-            <button type="button" onClick={() => void openHelperRunner()} className="runner-helper-big is-open">
-              <Icon name="monitor" size={22} />실행기 열기
+            <button type="button" onClick={() => void openHelperRunner()} disabled={!macroConnected} className="runner-helper-big is-open">
+              <Icon name="monitor" size={22} />{macroConnected ? "실행기 열기" : "매크로 연결 중…"}
             </button>
             {installLink("runner-helper-big is-install", 22)}
           </div>

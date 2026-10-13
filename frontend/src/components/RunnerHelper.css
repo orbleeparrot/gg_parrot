@@ -183,6 +183,15 @@
   opacity: 0.6;
 }
 
+/* 매크로 연결 확인 전 — 노랑이 남아 있으면 눌러도 되는 버튼처럼 보인다. */
+.runner-helper-big.is-open:disabled,
+.runner-helper-big.is-open:disabled:hover {
+  background: rgb(var(--c-slate-200));
+  color: rgb(var(--c-slate-500));
+  box-shadow: none;
+  opacity: 1;
+}
+
 .runner-helper-wait {
   display: flex;
   align-items: center;

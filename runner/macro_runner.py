@@ -56,6 +56,7 @@ try:  # package import (tests) / direct script import (PyInstaller build)
     from . import assets
     from . import brokers
     from . import connection
+    from . import secret_entry
     from . import setup_progress
     from .connection_wizard import ExchangeConnectionWizard
     from .theme import FONT, UI
@@ -63,6 +64,7 @@ except ImportError:
     import assets
     import brokers
     import connection
+    import secret_entry
     import setup_progress
     from connection_wizard import ExchangeConnectionWizard
     from theme import FONT, UI
@@ -134,6 +136,8 @@ def order_cap(quote: str) -> float:
 # 기본값은 늘 모의다. 국내 거래소에는 테스트넷이 없어서(바이낸스만 있다) 모의가 유일한 연습 수단이고,
 # 실수로 실전이 먼저 돌아가는 일을 기본값으로 막는다.
 MODE_MOCK, MODE_TESTNET, MODE_LIVE = "mock", "testnet", "live"
+# 실전 선택 칸 — 빨강은 삭제 버튼처럼 보여 초록(흰 글자 대비 5:1)으로 둔다.
+LIVE_SELECTED = "#15803D"
 RUN_MODES = (MODE_MOCK, MODE_TESTNET, MODE_LIVE)
 MODE_LABELS = {MODE_MOCK: "모의", MODE_TESTNET: "테스트넷", MODE_LIVE: "실전"}
 # 테스트넷은 바이낸스 전용이다 — 국내는 모의·실전 둘뿐.
@@ -581,6 +585,34 @@ def _pnl_pct(entry, price, side) -> float:
 # ==================================================================
 #  서버 연동 클라이언트 (회원 키로 인증; API 키는 절대 안 보냄)
 # ==================================================================
+START_ATTEMPTS = 4
+LOG_MIN_LINES = 5
+
+
+class ServerRequestError(Exception):
+    """서버가 거절한 요청 — 화면에는 서버가 준 이유(detail)만 보인다(주소 · 헤더는 싣지 않는다)."""
+
+    def __init__(self, status: int, detail: str) -> None:
+        self.status = status
+        super().__init__(f"{detail} ({status})" if detail else f"서버가 요청을 받지 않았어요 ({status})")
+
+
+def _server_detail(response) -> str:
+    try:
+        detail = response.json().get("detail")
+    except Exception:
+        return ""
+    return detail.strip()[:200] if isinstance(detail, str) else ""
+
+
+def _retry_after_seconds(response) -> float:
+    try:
+        value = float((getattr(response, "headers", None) or {}).get("Retry-After", 1))
+    except (TypeError, ValueError):
+        value = 1.0
+    return min(max(value, 0.5), 3.0)
+
+
 class ServerClient:
     def __init__(self, runner_key: str, *, base: str = SERVER_BASE) -> None:
         self.base = base.rstrip("/")
@@ -616,8 +648,18 @@ class ServerClient:
             self._events = (batch + self._events)[-EVENT_BUFFER_MAX:]
 
     def start(self, payload: dict) -> dict:
-        r = requests.post(f"{self.base}/api/runner/start", json=payload,
-                          headers=self._headers, timeout=15)
+        # 서버가 '혼잡'(503 database_busy · 429)이면 Retry-After 만큼 쉬고 다시 보낸다. 서버의 시작은 한 트랜잭션이고
+        # 혼잡 503 은 DB 연결을 받기 전에 나므로 다시 보내도 세션이 두 번 생기지 않는다.
+        for attempt in range(START_ATTEMPTS):
+            r = requests.post(f"{self.base}/api/runner/start", json=payload,
+                              headers=self._headers, timeout=15)
+            status = getattr(r, "status_code", 200)
+            if not isinstance(status, int) or status < 400:
+                break
+            if status in (429, 503) and attempt + 1 < START_ATTEMPTS:
+                time.sleep(_retry_after_seconds(r))
+                continue
+            raise ServerRequestError(status, _server_detail(r))
         r.raise_for_status()
         data = r.json()
         self.session_id = data.get("session_id")
@@ -1563,6 +1605,7 @@ class RunnerApp:
     def _build(self) -> None:
         self.root.title(APP_TITLE)
         s = self._ui_scale = self._scale()
+        secret_entry.configure_style(ttk.Style(self.root), s)
         width, height = round(680 * s), round(840 * s)
         try:
             # 작은 화면에서는 작업 표시줄을 가리지 않게 줄인다 — 넘치는 칸은 스크롤로 본다.
@@ -1584,8 +1627,9 @@ class RunnerApp:
         # 메인 화면. 연결 도우미가 열리면 이 판만 도우미로 바뀐다(창 크기 · 머리줄은 그대로).
         self.main_view = ttk.Frame(self.root)
         self.main_view.pack(fill="both", expand=True)
+        # 입력 카드는 내용 높이만큼만 차지하고, 남는 높이는 실행 로그가 갖는다(창이 작으면 카드가 스크롤).
         form_area = ttk.Frame(self.main_view)
-        form_area.pack(fill="both", expand=True)
+        form_area.pack(fill="x")
         self.form_canvas = tk.Canvas(form_area, height=240, bg=UI["bg"], highlightthickness=0)
         form_scroll = ttk.Scrollbar(form_area, orient="vertical", command=self.form_canvas.yview)
         self.form_canvas.pack(side="left", fill="both", expand=True)
@@ -1593,7 +1637,21 @@ class RunnerApp:
         self.form_body = ttk.Frame(self.form_canvas)
         form_window = self.form_canvas.create_window((0, 0), window=self.form_body, anchor="nw")
 
+        def fit_form_height():
+            # 카드 영역 높이 = 내용 높이. 다만 버튼 줄과 로그 최소 높이(LOG_MIN_LINES 줄)는 남긴다.
+            try:
+                available = self.main_view.winfo_height()
+                if available <= 1:
+                    return
+                reserved = btns.winfo_reqheight() + log_card.winfo_reqheight()
+                want = max(round(120 * s), min(self.form_body.winfo_reqheight(), available - reserved))
+                if abs(int(self.form_canvas.cget("height")) - want) > 1:
+                    self.form_canvas.configure(height=want)
+            except (tk.TclError, NameError):
+                pass
+
         def fit_scroll():
+            fit_form_height()
             # 스크롤바는 내용이 넘칠 때만 — 다 보이는데 막대가 서 있으면 칸이 잘린 것처럼 읽힌다.
             need = self.form_body.winfo_reqheight() > self.form_canvas.winfo_height() + 1
             if need and not form_scroll.winfo_manager():
@@ -1612,6 +1670,14 @@ class RunnerApp:
             if wizard is not None and not wizard.closed:
                 wizard.scroll_wheel(event)  # 도우미가 열려 있으면 도우미 본문을 굴린다
                 return
+            # Windows Tk 는 휠을 포인터 아래가 아니라 포커스 위젯으로 보낸다 — 포인터 위치로 굴릴 곳을 고른다.
+            steps = -1 if event.delta > 0 else 1
+            box = getattr(self, "log_box", None)
+            if box is not None and box.winfo_ismapped():
+                lx, ly = box.winfo_rootx(), box.winfo_rooty()
+                if lx <= event.x_root < lx + box.winfo_width() + round(20 * s) and ly <= event.y_root < ly + box.winfo_height():
+                    box.yview_scroll(steps * 3, "units")
+                    return "break"
             if not self.form_canvas.winfo_ismapped() or not form_scroll.winfo_manager():
                 return
             x, y = self.form_canvas.winfo_rootx(), self.form_canvas.winfo_rooty()
@@ -1666,7 +1732,7 @@ class RunnerApp:
         member.pack(fill="x")
         member.columnconfigure(1, weight=1)
         ttk.Label(member, text="껄무새 회원 키", style="CardTitle.TLabel").grid(row=0, column=0, sticky="w", padx=(0, 16))
-        self.member_entry = ttk.Entry(member, textvariable=self.member_key, show="•", font=(FONT, 10))
+        self.member_entry = secret_entry.secret_entry(member, self.member_key, font=(FONT, 10), scale=s)
         self.member_entry.grid(row=0, column=1, sticky="ew")
 
         # 실행/종료 버튼
@@ -1683,15 +1749,29 @@ class RunnerApp:
 
         # 로그
         log_card = tk.Frame(self.main_view, bg=UI["border"], padx=1, pady=1)
-        log_card.pack(fill="both", padx=16, pady=(0, 16))
+        log_card.pack(fill="both", expand=True, padx=16, pady=(0, 16))
         log_head = tk.Frame(log_card, bg=UI["log_bg"])
         log_head.pack(fill="x")
         tk.Label(log_head, text="실행 로그", bg=UI["log_bg"], fg="#94A3B8", font=(FONT, 10, "bold"),
                  padx=16, pady=8).pack(side="left")
-        self.log_box = tk.Text(log_card, height=3, wrap="word", state="disabled", bd=0, highlightthickness=0,
+        log_body = tk.Frame(log_card, bg=UI["log_bg"])
+        log_body.pack(fill="both", expand=True)
+        self.log_box = tk.Text(log_body, height=LOG_MIN_LINES, wrap="word", state="disabled", bd=0, highlightthickness=0,
                                bg=UI["log_bg"], fg=UI["log_fg"], font=(FONT, 10), padx=16, pady=4,
                                spacing1=1, spacing3=1)
-        self.log_box.pack(fill="both", expand=True)
+        self.log_scroll = ttk.Scrollbar(log_body, orient="vertical", command=self.log_box.yview)
+        self.log_box.pack(side="left", fill="both", expand=True)
+
+        def log_yscroll(first, last):
+            # 스크롤바는 로그가 넘칠 때만 — 몇 줄뿐인데 밝은 막대가 서 있으면 어색하다.
+            self.log_scroll.set(first, last)
+            need = float(first) > 0.0 or float(last) < 1.0
+            if need and not self.log_scroll.winfo_manager():
+                self.log_scroll.pack(side="right", fill="y", before=self.log_box)
+            elif not need and self.log_scroll.winfo_manager():
+                self.log_scroll.pack_forget()
+        self.log_box.configure(yscrollcommand=log_yscroll)
+        self.main_view.bind("<Configure>", lambda _event: fit_scroll(), add="+")
         self.log_box.tag_configure("time", foreground="#64748B")
         self.log_box.tag_configure("signal", foreground="#93C5FD")
         self.log_box.tag_configure("order", foreground=UI["brand"])
@@ -1734,7 +1814,7 @@ class RunnerApp:
             widgets = []
             for index, (label, variable) in enumerate(zip(labels, self.key_vars[name])):
                 caption = ttk.Label(body, text=label, style="Card.TLabel")
-                entry = ttk.Entry(body, textvariable=variable, show="•", font=(FONT, 10))
+                entry = secret_entry.secret_entry(body, variable, font=(FONT, 10), scale=s)
                 caption.grid(row=1 + index, column=0, sticky="w", pady=(0, 8))
                 entry.grid(row=1 + index, column=1, sticky="ew", pady=(0, 8))
                 widgets.extend((caption, entry))
@@ -1807,7 +1887,7 @@ class RunnerApp:
             selected = name == mode
             try:
                 button.config(fg=("#FFFFFF" if name == MODE_LIVE else UI["brand_ink"]) if selected else UI["muted"],
-                              selectcolor=UI["danger"] if name == MODE_LIVE else UI["brand"])
+                              selectcolor=LIVE_SELECTED if name == MODE_LIVE else UI["brand"])
             except tk.TclError:
                 pass
         self._invalidate_preflight()
@@ -2842,6 +2922,15 @@ class RunnerApp:
         server = ServerClient(start_credentials["member_key"], base=server_base)
         try:
             started = server.start(payload)
+        except ServerRequestError as exc:
+            # 서버가 받고서 거절했다 — 연결 문제가 아니므로 서버가 준 이유를 그대로 보인다.
+            msg = connection.safe_preflight_reason(str(exc), start_credentials)
+            if exc.status == 401:
+                msg = "회원 키가 유효하지 않아요. 마이페이지에서 키를 확인하세요."
+            elif exc.status in (429, 503):
+                msg = f"{msg}\n\n몇 번 다시 보냈지만 서버가 계속 바빠요. 잠시 뒤 다시 [매크로 시작]을 눌러 주세요."
+            messagebox.showerror(APP_TITLE, f"매크로를 시작하지 못했어요:\n{msg}")
+            return
         except Exception as exc:
             msg = connection.safe_preflight_reason(str(exc), start_credentials)
             if "401" in msg:

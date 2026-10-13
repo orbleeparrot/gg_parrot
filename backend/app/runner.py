@@ -759,12 +759,12 @@ def heartbeat(user: User, session_id: int, snapshot: dict, *, db: Session | None
         _append_events(db, row, events)
 
         previous_pct, previously_in_position = row.unrealized_pct, row.in_position
+        previous_qty = float(row.position_qty or 0.0)  # 이번 명령을 실행하기 전 보유 수량 — 되돌리기 판단에 쓴다
         row.last_price = float(snapshot.get("last_price", row.last_price) or 0.0)
         row.in_position = bool(snapshot.get("in_position", False))
         row.position_uncertain = bool(snapshot.get("position_uncertain", row.position_uncertain))
         row.entry_price = float(snapshot.get("entry_price", 0.0) or 0.0)
         row.position_qty = float(snapshot.get("position_qty", 0.0) or 0.0)
-        _track_invested(row)
         _track_invested(row)
         row.realized_pnl = float(snapshot.get("realized_pnl", 0.0) or 0.0)
         row.unrealized_pct = float(snapshot.get("unrealized_pct", 0.0) or 0.0)
@@ -777,10 +777,9 @@ def heartbeat(user: User, session_id: int, snapshot: dict, *, db: Session | None
         action = row.stop_mode if row.stop_mode in _STOP_MODES else "continue"
         commands: list = []
         if supports_signals(row.runner_version):
-            # ack 반영 → 만료 정리 후 남은 명령 → 서버 전략과 실행기 포지션 유무 대조(경고만).
+            # ack 반영 → 만료 → 주문이 안 나간 진입은 서버 전략도 되돌림 → 보낼 명령 → 포지션 유무 대조(경고만).
             now_ms = runner_engine._now_ms()
-            runner_engine.apply_acks(db, row, acks or [], now_ms)
-            commands = runner_engine.pending_commands(db, row, now_ms)
+            commands = runner_engine.exchange_commands(db, row, acks or [], now_ms, previous_qty=previous_qty)
             if not row.position_uncertain:
                 # 실행기 스스로 포지션을 모르는 상태면 대조할 근거가 없다.
                 runner_engine.check_position_mismatch(db, row, row.in_position)
@@ -1006,13 +1005,6 @@ def _is_connected(row: RunSession) -> bool:
     if hb is None:
         return False
     return (datetime.now(timezone.utc) - hb).total_seconds() <= STALE_SECONDS
-
-
-def _track_invested(row: RunSession) -> None:
-    """투입금 = 세션 동안 실제로 들어간 최대 금액(수량×진입가). 줄어들지 않는다(부분 청산해도 분모는 그대로)."""
-    notional = float(row.position_qty or 0.0) * float(row.entry_price or 0.0)
-    if notional > float(getattr(row, "invested_usdt", 0.0) or 0.0):
-        row.invested_usdt = notional
 
 
 def session_returns(row: RunSession) -> dict:

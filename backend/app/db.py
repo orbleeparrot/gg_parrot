@@ -557,7 +557,7 @@ class RunnerCommand(SQLModel, table=True):
     qty_frac: float = 0.0
     signal_price: float = 0.0
     reason: str = ""
-    status: str = Field(default="pending", index=True)  # pending | acked | failed | expired
+    status: str = Field(default="pending", index=True)  # pending | acked | failed | expired | cancelled
     attempts: int = 0
     created_at: str = ""
     created_ms: int = Field(default=0, sa_type=BigInteger)
@@ -566,6 +566,9 @@ class RunnerCommand(SQLModel, table=True):
     executed_qty: float = 0.0
     fill_price: float = 0.0
     error: str = ""
+    # 진입 명령만: 이 신호 직전의 서버 전략 상태(JSON). 주문이 나가지 않으면(실패 · 만료) 이걸로 서버 전략을
+    # '사기 전' 으로 되돌린다. 되돌린 뒤에는 ROLLED_BACK 표시로 바뀐다(연속 실패 횟수를 센다).
+    rollback_state: str = ""
 
 
 class TickerNewsSnapshot(SQLModel, table=True):
@@ -1336,6 +1339,9 @@ def _migrate() -> None:
         "setup_progress": "ALTER TABLE runnerlaunchticket ADD COLUMN setup_progress TEXT DEFAULT ''",
         "setup_progress_at": "ALTER TABLE runnerlaunchticket ADD COLUMN setup_progress_at TEXT DEFAULT ''",
     })
+    added.setdefault("runnercommand", {}).update({
+        "rollback_state": "ALTER TABLE runnercommand ADD COLUMN rollback_state TEXT NOT NULL DEFAULT ''",
+    })
     added.setdefault("runsession", {}).update({
         "runner_version": "ALTER TABLE runsession ADD COLUMN runner_version TEXT DEFAULT ''",
         # 옛 행은 빈 값으로 남는다 — 그 세션은 testnet 플래그로만 읽는다(모드를 아무도 보내지 않았다).
@@ -1472,6 +1478,7 @@ _PG_ADDED_COLUMNS = {
         "next_collection_ms": "BIGINT DEFAULT 0", "observation_seq": "BIGINT DEFAULT 0",
         "latest_observation_seq": "BIGINT DEFAULT 0", "latest_observed_ms": "BIGINT DEFAULT 0",
     },
+    "runnercommand": {"rollback_state": "TEXT NOT NULL DEFAULT ''"},
     "runnerlaunchticket": {
         "rejected_at": "TEXT DEFAULT ''",
         "rejected_version": "TEXT DEFAULT ''",

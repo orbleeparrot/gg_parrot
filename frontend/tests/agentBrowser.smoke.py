@@ -57,7 +57,8 @@ with sync_playwright() as p:
     expect(page.get_by_text('체인링크 네트워크 업데이트 발표',exact=True)).to_be_visible(timeout=10000)
     expect(page.get_by_text('평가손실 주의',exact=True)).to_be_visible()
     expect(page.get_by_text('LINKUSDT 대규모 매수 체결',exact=True)).to_be_visible()
-    expect(page.get_by_text('실시간 연결 복구 중 · 5초마다 실행 상태 확인',exact=True)).to_be_visible()
+    # 실시간 연결이 끊겨도 화면 위에 연결 상태 문구를 띄우지 않는다(조용히 5초 폴링으로 이어 간다).
+    expect(page.get_by_text('실시간 연결 복구 중',exact=False)).to_have_count(0)
     page.screenshot(path='/tmp/gg-parrot-agent-running.png',full_page=True)
     # Let fallback polling run with the websocket unavailable.
     page.wait_for_timeout(5200)

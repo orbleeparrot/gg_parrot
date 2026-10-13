@@ -112,7 +112,7 @@ class ExchangeSelectionTests(unittest.TestCase):
 
     def test_runner_version_is_thirteen(self):
         from runner import installation
-        self.assertEqual(installation.RUNNER_VERSION, "13")
+        self.assertEqual(installation.RUNNER_VERSION, "14")
 
     # --- 위 다섯은 과제 사양. 아래는 같은 배선의 나머지 ----------------
     def test_binance_macro_builds_the_binance_broker_with_its_own_keys(self):

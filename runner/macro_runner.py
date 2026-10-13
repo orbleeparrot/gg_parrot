@@ -586,6 +586,7 @@ def _pnl_pct(entry, price, side) -> float:
 #  서버 연동 클라이언트 (회원 키로 인증; API 키는 절대 안 보냄)
 # ==================================================================
 START_ATTEMPTS = 4
+LOG_MIN_LINES = 5
 
 
 class ServerRequestError(Exception):
@@ -1626,8 +1627,9 @@ class RunnerApp:
         # 메인 화면. 연결 도우미가 열리면 이 판만 도우미로 바뀐다(창 크기 · 머리줄은 그대로).
         self.main_view = ttk.Frame(self.root)
         self.main_view.pack(fill="both", expand=True)
+        # 입력 카드는 내용 높이만큼만 차지하고, 남는 높이는 실행 로그가 갖는다(창이 작으면 카드가 스크롤).
         form_area = ttk.Frame(self.main_view)
-        form_area.pack(fill="both", expand=True)
+        form_area.pack(fill="x")
         self.form_canvas = tk.Canvas(form_area, height=240, bg=UI["bg"], highlightthickness=0)
         form_scroll = ttk.Scrollbar(form_area, orient="vertical", command=self.form_canvas.yview)
         self.form_canvas.pack(side="left", fill="both", expand=True)
@@ -1635,7 +1637,21 @@ class RunnerApp:
         self.form_body = ttk.Frame(self.form_canvas)
         form_window = self.form_canvas.create_window((0, 0), window=self.form_body, anchor="nw")
 
+        def fit_form_height():
+            # 카드 영역 높이 = 내용 높이. 다만 버튼 줄과 로그 최소 높이(LOG_MIN_LINES 줄)는 남긴다.
+            try:
+                available = self.main_view.winfo_height()
+                if available <= 1:
+                    return
+                reserved = btns.winfo_reqheight() + log_card.winfo_reqheight()
+                want = max(round(120 * s), min(self.form_body.winfo_reqheight(), available - reserved))
+                if abs(int(self.form_canvas.cget("height")) - want) > 1:
+                    self.form_canvas.configure(height=want)
+            except (tk.TclError, NameError):
+                pass
+
         def fit_scroll():
+            fit_form_height()
             # 스크롤바는 내용이 넘칠 때만 — 다 보이는데 막대가 서 있으면 칸이 잘린 것처럼 읽힌다.
             need = self.form_body.winfo_reqheight() > self.form_canvas.winfo_height() + 1
             if need and not form_scroll.winfo_manager():
@@ -1654,6 +1670,14 @@ class RunnerApp:
             if wizard is not None and not wizard.closed:
                 wizard.scroll_wheel(event)  # 도우미가 열려 있으면 도우미 본문을 굴린다
                 return
+            # Windows Tk 는 휠을 포인터 아래가 아니라 포커스 위젯으로 보낸다 — 포인터 위치로 굴릴 곳을 고른다.
+            steps = -1 if event.delta > 0 else 1
+            box = getattr(self, "log_box", None)
+            if box is not None and box.winfo_ismapped():
+                lx, ly = box.winfo_rootx(), box.winfo_rooty()
+                if lx <= event.x_root < lx + box.winfo_width() + round(20 * s) and ly <= event.y_root < ly + box.winfo_height():
+                    box.yview_scroll(steps * 3, "units")
+                    return "break"
             if not self.form_canvas.winfo_ismapped() or not form_scroll.winfo_manager():
                 return
             x, y = self.form_canvas.winfo_rootx(), self.form_canvas.winfo_rooty()
@@ -1725,15 +1749,29 @@ class RunnerApp:
 
         # 로그
         log_card = tk.Frame(self.main_view, bg=UI["border"], padx=1, pady=1)
-        log_card.pack(fill="both", padx=16, pady=(0, 16))
+        log_card.pack(fill="both", expand=True, padx=16, pady=(0, 16))
         log_head = tk.Frame(log_card, bg=UI["log_bg"])
         log_head.pack(fill="x")
         tk.Label(log_head, text="실행 로그", bg=UI["log_bg"], fg="#94A3B8", font=(FONT, 10, "bold"),
                  padx=16, pady=8).pack(side="left")
-        self.log_box = tk.Text(log_card, height=3, wrap="word", state="disabled", bd=0, highlightthickness=0,
+        log_body = tk.Frame(log_card, bg=UI["log_bg"])
+        log_body.pack(fill="both", expand=True)
+        self.log_box = tk.Text(log_body, height=LOG_MIN_LINES, wrap="word", state="disabled", bd=0, highlightthickness=0,
                                bg=UI["log_bg"], fg=UI["log_fg"], font=(FONT, 10), padx=16, pady=4,
                                spacing1=1, spacing3=1)
-        self.log_box.pack(fill="both", expand=True)
+        self.log_scroll = ttk.Scrollbar(log_body, orient="vertical", command=self.log_box.yview)
+        self.log_box.pack(side="left", fill="both", expand=True)
+
+        def log_yscroll(first, last):
+            # 스크롤바는 로그가 넘칠 때만 — 몇 줄뿐인데 밝은 막대가 서 있으면 어색하다.
+            self.log_scroll.set(first, last)
+            need = float(first) > 0.0 or float(last) < 1.0
+            if need and not self.log_scroll.winfo_manager():
+                self.log_scroll.pack(side="right", fill="y", before=self.log_box)
+            elif not need and self.log_scroll.winfo_manager():
+                self.log_scroll.pack_forget()
+        self.log_box.configure(yscrollcommand=log_yscroll)
+        self.main_view.bind("<Configure>", lambda _event: fit_scroll(), add="+")
         self.log_box.tag_configure("time", foreground="#64748B")
         self.log_box.tag_configure("signal", foreground="#93C5FD")
         self.log_box.tag_configure("order", foreground=UI["brand"])

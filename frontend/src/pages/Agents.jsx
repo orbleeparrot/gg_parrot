@@ -149,6 +149,7 @@ function AccountAgents() {
   const [pendingStop, setPendingStop] = useState(null);
   const [mobilePane, setMobilePane] = useState("chart");
   const [pinBusy, setPinBusy] = useState(0);
+  const [fileBusy, setFileBusy] = useState(0);
   const sessionSnapshotRevision = useRef(0);
   const lastStreamMessageAt = useRef(0);
 
@@ -392,6 +393,20 @@ function AccountAgents() {
     }
   }
 
+  // 종료 기록의 매크로를 파일(.ggm.json)로 다시 받는다 — 직접 만들기의 '매크로 파일 내려받기' 와 같은 서명 파일.
+  async function downloadSessionMacro(session) {
+    if (fileBusy || !session?.macro || !isCurrentAccount()) return;
+    setFileBusy(session.session_id);
+    try {
+      await api.downloadMacroFile(session.macro);
+      if (isCurrentAccount()) setError("");
+    } catch (reason) {
+      if (isCurrentAccount()) setError(String(reason.message || reason));
+    } finally {
+      if (isCurrentAccount()) setFileBusy(0);
+    }
+  }
+
   function stopSession(mode) {
     if (!selected) return;
     setPending({ type: "stop", mode });
@@ -461,14 +476,14 @@ function AccountAgents() {
       {sessions && mode === "overview" ? (
         <div className="agent-overview">
           <AgentIdle last={recentSessions[0] || null} />
-          <AgentHistoryList sessions={recentSessions} policy={sessions.history_policy} pinBusy={pinBusy} onOpen={openHistory} onTogglePin={togglePin} />
+          <AgentHistoryList sessions={recentSessions} policy={sessions.history_policy} pinBusy={pinBusy} onOpen={openHistory} onTogglePin={togglePin} fileBusy={fileBusy} onDownload={downloadSessionMacro} />
         </div>
       ) : null}
 
       {sessions && mode === "history" ? (
         <div className="agent-overview">
           <AgentViewTabs view="history" activeCount={activeSessions.length} historyCount={recentSessions.length} onSelect={showView} />
-          <AgentHistoryList sessions={recentSessions} policy={sessions.history_policy} pinBusy={pinBusy} onOpen={openHistory} onTogglePin={togglePin} />
+          <AgentHistoryList sessions={recentSessions} policy={sessions.history_policy} pinBusy={pinBusy} onOpen={openHistory} onTogglePin={togglePin} fileBusy={fileBusy} onDownload={downloadSessionMacro} />
         </div>
       ) : null}
 

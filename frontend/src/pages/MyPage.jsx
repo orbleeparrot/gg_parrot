@@ -17,9 +17,8 @@ import { ArrowUpRightIcon } from "@phosphor-icons/react/dist/csr/ArrowUpRight";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
-import { PlantIcon } from "@phosphor-icons/react/dist/csr/Plant";
-import { MedalIcon } from "@phosphor-icons/react/dist/csr/Medal";
-import { DiamondIcon } from "@phosphor-icons/react/dist/csr/Diamond";
+import TierIcon from "../components/TierIcon.jsx";
+import { DownloadSimpleIcon } from "@phosphor-icons/react/dist/csr/DownloadSimple";
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { ImageIcon } from "@phosphor-icons/react/dist/csr/Image";
 import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
@@ -46,12 +45,6 @@ const TAB_KEYS = new Set(["created", "purchased", "sales", "ledger", "posts"]);
 function Stamp({ value, now, className = "" }) {
   const ms = toMs(value);
   return <time className={"me-time num " + className} dateTime={ms == null ? undefined : new Date(ms).toISOString()} title={fullKst(value) || undefined}>{stampKst(value, now)}</time>;
-}
-
-function TierIcon({ name, size = 24 }) {
-  const Icon = name === "새싹" ? PlantIcon : name === "다이아" ? DiamondIcon : MedalIcon;
-  const tone = { 새싹: "seed", 브론즈: "bronze", 실버: "silver", 골드: "gold", 다이아: "diamond" }[name] || "silver";
-  return <Icon className={"me-tier-icon is-" + tone} size={size} weight="duotone" aria-hidden="true" />;
 }
 
 function TierDialog({ tier, onClose }) {
@@ -96,8 +89,25 @@ function EmptyActivity({ kind }) {
 }
 
 function MacroCards({ rows, purchased, now, onOpen }) {
+  const [fileBusy, setFileBusy] = useState(-1);
+  const [fileError, setFileError] = useState("");
   if (!rows.length) return <EmptyActivity kind={purchased ? "purchased" : "created"} />;
+  // 매크로 파일(.ggm.json)을 다시 받는다 — 직접 만들기의 '매크로 파일 내려받기' 와 같은 서명 파일.
+  async function download(macro, index) {
+    if (fileBusy >= 0 || !macro) return;
+    setFileBusy(index);
+    setFileError("");
+    try {
+      await api.downloadMacroFile(macro);
+    } catch (reason) {
+      setFileError(String(reason.message || reason));
+    } finally {
+      setFileBusy(-1);
+    }
+  }
   return (
+    <>
+    {fileError ? <p className="me-file-error" role="alert">{fileError}</p> : null}
     <ul className="me-macro-grid" aria-label={purchased ? "구매한 매크로" : "만든 매크로"}>
       {rows.map((macro, index) => (
         <li className="me-macro-card" key={String(macro.entry_id) + "-" + index}>
@@ -109,10 +119,14 @@ function MacroCards({ rows, purchased, now, onOpen }) {
           <dl className="me-macro-metrics">
             {purchased ? <><div><dt>구매 금액</dt><dd className="num">{formatPoints(macro.price)}</dd></div><div><dt>구매일</dt><dd><Stamp value={macro.unlocked_at} now={now} /></dd></div></> : <><div><dt>판매</dt><dd className="num">{macro.sales}건</dd></div><div><dt>판매 수익</dt><dd className={"num " + (macro.earned > 0 ? "me-credit" : "")}>{macro.earned > 0 ? signedPoints(macro.earned) : formatPoints(0)}</dd></div></>}
           </dl>
-          <footer><button type="button" className="me-card-action" onClick={() => onOpen(macro.macro)} disabled={!macro.macro}>{macro.macro ? (purchased ? "빌더로 복사" : "빌더에서 열기") : "불러오기 불가"}<ArrowUpRightIcon size={18} aria-hidden="true" /></button></footer>
+          <footer>
+            <button type="button" className="me-card-action" onClick={() => onOpen(macro.macro)} disabled={!macro.macro}>{macro.macro ? (purchased ? "빌더로 복사" : "빌더에서 열기") : "불러오기 불가"}<ArrowUpRightIcon size={18} aria-hidden="true" /></button>
+            <button type="button" className="me-card-action" onClick={() => void download(macro.macro, index)} disabled={!macro.macro || fileBusy >= 0}>{fileBusy === index ? "받는 중…" : "파일 받기"}<DownloadSimpleIcon size={18} aria-hidden="true" /></button>
+          </footer>
         </li>
       ))}
     </ul>
+    </>
   );
 }
 

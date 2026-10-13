@@ -11,7 +11,7 @@ from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from sqlmodel import Session, select
+from sqlmodel import Session, func, select
 
 from . import points as points_mod
 from .auth import user_view
@@ -51,6 +51,27 @@ def _tier(total_sales: int) -> dict:
         # 사다리 전체 — 화면이 현재 칸과 남은 칸을 그릴 수 있게 임계값을 그대로 준다.
         "ladder": [{"name": tname, "at": threshold} for threshold, tname, _ in _TIERS],
     }
+
+
+def sales_count_of(owner_column):
+    """글쓴이 판매 수(내 리더보드 매크로가 팔린 수) — 내 활동 등급과 같은 기준.
+
+    게시판 · 채팅이 이미 하는 질의에 열 하나로 붙인다(상관 하위질의). 따로 묻지 않아 질의 수가 늘지 않는다.
+    """
+    return (
+        select(func.count(MacroUnlock.id))
+        .select_from(MacroUnlock)
+        .join(LeaderboardEntry, LeaderboardEntry.id == MacroUnlock.entry_id)
+        .where(LeaderboardEntry.owner_user_id == owner_column)
+        .scalar_subquery()
+    )
+
+
+def tier_name_for(user_id, sales) -> str | None:
+    """회원 글쓴이의 등급 이름. 익명(회원 아님) 글은 등급이 없다."""
+    if user_id is None:
+        return None
+    return _tier(int(sales or 0))["name"]
 
 
 def dashboard(user: User, db: Optional[Session] = None) -> dict:

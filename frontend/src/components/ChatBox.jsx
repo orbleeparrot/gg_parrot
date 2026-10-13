@@ -1,5 +1,6 @@
 import { Fragment, memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
+import TierIcon from "./TierIcon.jsx";
 import { useModalLayer } from "../hooks/useModalLayer.js";
 import { api } from "../api.js";
 import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
@@ -868,7 +869,7 @@ function MemberChatBox({ member, scope, open, setOpen, roomId = 0, room = null, 
                   <article className={`chat-row${mine ? " is-mine" : ""}${continued ? " is-continued" : ""}`} aria-label={`${message.username}${legacy ? ", 이전 익명 메시지" : ""}, ${message.created_kst}`} onContextMenu={(event) => openMenu(event, message)}>
                     {!mine ? (continued ? <span className="chat-avatar" aria-hidden="true" /> : <AuthorAvatar userId={message.user_id} src={message.avatar_url} name={message.username} size={32} className="chat-avatar" />) : null}
                     <div className={`chat-row-body${message.reply_to ? " has-reply" : ""}`}>
-                      {!mine && !continued ? <span className="chat-row-name">{message.username}{legacy ? <small className="chat-legacy">이전 익명</small> : null}</span> : null}
+                      {!mine && !continued ? <span className="chat-row-name">{message.username}<TierIcon name={message.author_tier} size={16} labelled />{legacy ? <small className="chat-legacy">이전 익명</small> : null}</span> : null}
                       <div className="chat-bubble-line">
                         <MessageBubble message={message} onClose={close} />
                         <time className="num">{message.created_kst}</time>

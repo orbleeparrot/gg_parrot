@@ -7,5 +7,7 @@
 .tier-icon.is-silver { color: rgb(var(--c-slate-500)); }
 .tier-icon.is-gold { color: rgb(var(--c-brand-line)); }
 .tier-icon.is-diamond { color: rgb(var(--c-sky-700)); }
+.tier-icon.is-admin { color: rgb(var(--c-indigo-600)); }
+.dark .tier-icon.is-admin { color: rgb(var(--c-indigo-300)); }
 .tier-mark { display: inline-flex; align-items: center; flex: none; }
 .chat-row-name .tier-mark { margin-left: 4px; vertical-align: -3px; }

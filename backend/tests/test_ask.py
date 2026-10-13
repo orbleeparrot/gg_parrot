@@ -261,7 +261,7 @@ def _fake_backtest(monkeypatch):
 def test_status_and_consent_flow(_fake_backtest):
     token, _ = _signup()
     st = client.get("/api/ask/status", headers=_auth(token)).json()
-    assert st == {"consented": False, "remaining_today": 5, "daily_limit": 5, "disclaimer_version": "ask-v2",
+    assert st == {"consented": False, "remaining_today": 5, "daily_limit": 5, "unlimited": False, "disclaimer_version": "ask-v2",
                   "extra_price": 30, "extra_left_today": 5, "points_balance": 1000}
 
     # 동의 전엔 세션이 있든 없든(여기선 없는 session_id) 종목 선택 자체가 막힌다 — consented() 가 먼저 걸린다.

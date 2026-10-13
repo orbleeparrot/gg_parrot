@@ -34,6 +34,15 @@ def _macro_of(row: LeaderboardEntry):
         return None
 
 
+ADMIN_TIER = "관리자"
+
+
+def _admin_tier(total_sales: int) -> dict:
+    """관리자 계정 전용 등급 — 다이아보다 위, 판매 수와 상관없다(사다리에는 없다)."""
+    return {"name": ADMIN_TIER, "icon": "", "sales": total_sales, "next_name": None, "next_at": None, "to_next": 0,
+            "ladder": [{"name": tname, "at": threshold} for threshold, tname, _ in _TIERS], "admin": True}
+
+
 def _tier(total_sales: int) -> dict:
     name, icon, base = "새싹", "🌱", 0
     for threshold, tname, ticon in _TIERS:
@@ -67,10 +76,17 @@ def sales_count_of(owner_column):
     )
 
 
-def tier_name_for(user_id, sales) -> str | None:
-    """회원 글쓴이의 등급 이름. 익명(회원 아님) 글은 등급이 없다."""
+def is_admin_of(user_column):
+    """글쓴이가 관리자인가 — sales_count_of 처럼 기존 질의에 열 하나로 붙인다."""
+    return select(User.is_admin).where(User.id == user_column).scalar_subquery()
+
+
+def tier_name_for(user_id, sales, is_admin=False) -> str | None:
+    """회원 글쓴이의 등급 이름. 익명(회원 아님) 글은 등급이 없고, 관리자는 다이아 위 '관리자'."""
     if user_id is None:
         return None
+    if is_admin:
+        return ADMIN_TIER
     return _tier(int(sales or 0))["name"]
 
 
@@ -166,7 +182,7 @@ def dashboard(user: User, db: Optional[Session] = None) -> dict:
 
     return {
         "user": profile,
-        "tier": _tier(total_sales),
+        "tier": _admin_tier(total_sales) if fresh.is_admin else _tier(total_sales),
         "totals": {
             "created": len(my_entries), "sales": total_sales,
             "earned": total_earned, "purchased": len(purchased),

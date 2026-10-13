@@ -176,7 +176,10 @@ export function describeRunOutcome(session) {
       ? { value: null, text: "집계 중", tone: "flat", sub: "" }
       : hasReturn
         ? { value: Number(s.return_pct), text: formatSignedPct(s.return_pct), tone: toneOf(s.return_pct),
-            sub: `${formatSignedMoney(s.realized_pnl, s.symbol)} · 투입 ${formatQuoteAmount(s.invested_usdt, s.symbol)}` }
+            sub: `${formatSignedMoney(s.realized_pnl, s.symbol)} · 투입 ${formatQuoteAmount(s.invested_usdt, s.symbol)}`,
+            // 결과 화면이 번 돈 · 투입금을 따로 크게 그린다.
+            money: formatSignedMoney(s.realized_pnl, s.symbol), moneyTone: toneOf(s.realized_pnl),
+            invested: formatQuoteAmount(s.invested_usdt, s.symbol) }
         : { value: Number(s.realized_pnl) || 0, text: formatSignedMoney(s.realized_pnl, s.symbol), tone: toneOf(s.realized_pnl), sub: "" },
     rows,
   };

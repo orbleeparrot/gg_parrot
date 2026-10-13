@@ -182,7 +182,7 @@ def _claimed_launch(token: str, macro: dict | None = None) -> tuple[int, str]:
     created = client.post("/api/me/runner/launch-tickets", json={"user_macro_id": saved["id"], "testnet": True},
                           headers=_auth(token)).json()
     ticket = parse_qs(urlsplit(created["launch_url"]).query)["ticket"][0]
-    claimed = client.post("/api/runner/launch-tickets/claim", json={"ticket": ticket, "runner_version": "15"})
+    claimed = client.post("/api/runner/launch-tickets/claim", json={"ticket": ticket, "runner_version": "16"})
     assert claimed.status_code == 200, claimed.text
     return created["launch_id"], claimed.json()["runner_key"]
 
@@ -209,6 +209,11 @@ def test_runner_setup_progress_reaches_the_web_launch_status():
     done = _progress("result_ok", checks={"auth": "ok", "ip": "ok", "order": "na"}, connected=True)
     client.post(f"/api/runner/launch-tickets/{launch_id}/progress", json=done, headers={"X-Runner-Key": runner_key})
     assert client.get(f"/api/me/runner/launch-tickets/{launch_id}", headers=_auth(token)).json()["progress"] == done
+    # 실행기 창을 닫으면(v16+) 'closed' — 웹은 처음의 [실행기 열기] 화면으로 돌아간다.
+    closed = _progress("closed")
+    assert client.post(f"/api/runner/launch-tickets/{launch_id}/progress", json=closed,
+                       headers={"X-Runner-Key": runner_key}).status_code == 200
+    assert client.get(f"/api/me/runner/launch-tickets/{launch_id}", headers=_auth(token)).json()["progress"]["stage"] == "closed"
 
 
 def test_runner_setup_progress_never_accepts_keys_addresses_or_free_text():
@@ -447,21 +452,21 @@ def test_runner_download_info_advertises_launch_capability_safely():
     if info["supports_launch"]:
         assert info["launch_scheme"] == "ggparrot"
         assert info["min_runner_version"]
-        if "/runner-v15/" in info["url"]:
+        if "/runner-v16/" in info["url"]:
             assert int(info["min_runner_version"]) >= 6
-            assert int(info["version"]) >= 15
+            assert int(info["version"]) >= 16
     else:
         assert info["launch_scheme"] == ""
         assert info["min_runner_version"] == ""
 
 
-def test_runner_download_redirect_matches_advertised_v15():
+def test_runner_download_redirect_matches_advertised_v16():
     info = client.get("/api/runner/download/info").json()
     response = client.get("/api/runner/download", follow_redirects=False)
     assert response.status_code == 307
     assert response.headers["location"] == info["url"]
-    assert "/runner-v15/" in info["url"]
-    assert info["version"] == "15"
+    assert "/runner-v16/" in info["url"]
+    assert info["version"] == "16"
     assert response.headers["cache-control"] == "no-store"
 
 

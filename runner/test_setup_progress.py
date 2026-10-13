@@ -67,6 +67,16 @@ class ReporterTests(unittest.TestCase):
         reporter.report(setup_progress.progress_payload("ip", "bithumb"))
         self.assertLessEqual(len(calls), 1)
 
+    def test_finish_sends_the_closed_stage_before_the_window_goes(self):
+        sent = []
+        post = lambda url, json, headers, timeout: (sent.append(json["stage"]), type("R", (), {"status_code": 200})())[1]
+        reporter = setup_progress.SetupProgressReporter("https://api.example", "k", 7, post=post)
+        reporter.report(setup_progress.progress_payload("ready", "bithumb"))
+        reporter.finish(setup_progress.progress_payload("closed", "bithumb"), wait=2)
+        self.assertEqual(sent[-1], "closed")
+        reporter.report(setup_progress.progress_payload("ask", "bithumb"))  # 닫힌 뒤에는 보내지 않는다
+        self.assertEqual(sent[-1], "closed")
+
     def test_reports_stop_after_the_window(self):
         now = [0.0]
         post = Mock(return_value=Mock(status_code=200))

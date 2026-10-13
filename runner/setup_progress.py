@@ -12,6 +12,7 @@ import time
 
 STAGES = (
     "ready",        # 실행기 첫 화면(매크로 실린 상태)
+    "closed",       # 실행기 창을 닫았다 — 웹은 처음의 [실행기 열기] 화면으로 돌아간다(v16+)
     "ask",          # '키를 발급 받은 적 있나요?'
     "ip",           # 1 · 허용 IP 등록
     "perm",         # 2 · 권한 선택 · 키 발급
@@ -83,6 +84,15 @@ class SetupProgressReporter:
                 return
             self._pending = dict(payload)
         self._wake.set()
+
+    def finish(self, payload: dict, wait: float = 1.5) -> None:
+        """마지막 상태(창 닫힘)를 보내고 닫는다. 창이 닫히기 전 잠깐(wait 초)만 기다린다 — 못 보내도 닫힌다."""
+        with self._lock:
+            if not self._closed and self._clock() <= self._deadline:
+                self._pending = dict(payload)
+            self._closed = True
+        self._wake.set()
+        self._thread.join(wait)
 
     def close(self) -> None:
         with self._lock:

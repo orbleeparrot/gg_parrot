@@ -586,6 +586,21 @@ def _pnl_pct(entry, price, side) -> float:
 #  서버 연동 클라이언트 (회원 키로 인증; API 키는 절대 안 보냄)
 # ==================================================================
 START_ATTEMPTS = 4
+UPDATE_BG = "#FEF3C7"
+# 새 버전 받기는 공식 릴리스 주소로만 연다 — 서버 응답에 다른 주소가 와도 따라가지 않는다.
+OFFICIAL_RELEASE_PREFIX = "https://github.com/orbleeparrot/gg_parrot/releases/download/runner-v"
+
+
+def newer_release(info: dict | None, current: str) -> tuple[str, str] | None:
+    """다운로드 정보가 이 실행기보다 새 공식 릴리스를 가리키면 (버전, 주소). 아니면 None."""
+    if not isinstance(info, dict) or not info.get("available"):
+        return None
+    version, url = str(info.get("version") or ""), str(info.get("url") or "")
+    if not (version.isdigit() and str(current).isdigit()) or int(version) <= int(current):
+        return None
+    if not url.startswith(OFFICIAL_RELEASE_PREFIX + version + "/"):
+        return None
+    return version, url
 LOG_LINE = "#1E293B"
 LOG_SCROLL_STYLE = "Log.Vertical.TScrollbar"
 
@@ -1446,10 +1461,46 @@ class RunnerApp:
             self._log(startup_warning)
         if register_protocol:
             self.root.after(0, self._begin_protocol_registration)
+            # 실제 실행에서만 새 버전을 물어본다(테스트 대역은 네트워크를 쓰지 않는다).
+            self.root.after(1500, self._begin_update_check)
         if protocol_launch:
             # Let Tk render its first frame before any launch work begins.  The
             # actual HTTP(S) claim runs on a worker thread below.
             self.root.after(0, self._begin_protocol_claim, protocol_launch)
+
+    def _begin_update_check(self) -> None:
+        """공개 다운로드 정보(키 없이 읽는다)를 한 번 읽어 더 새 공식 버전이 있으면 머리줄 아래에 알린다. 실패는 조용히."""
+        result: dict = {}
+
+        def work() -> None:
+            try:
+                response = requests.get(f"{SERVER_BASE}/api/runner/download/info", timeout=8)
+                result["info"] = response.json() if response.ok else None
+            except Exception:
+                result["info"] = None
+
+        threading.Thread(target=work, daemon=True).start()
+
+        def wait(tries: int = 0) -> None:
+            if "info" not in result:
+                if tries < 40:
+                    self.root.after(250, wait, tries + 1)
+                return
+            self._show_update(newer_release(result["info"], RUNNER_VERSION))
+
+        self.root.after(250, wait)
+
+    def _show_update(self, newer: tuple[str, str] | None) -> None:
+        bar = getattr(self, "update_bar", None)
+        if bar is None or newer is None:
+            return
+        version, url = newer
+        try:
+            self.update_label.config(text=f"새 실행기 v{version}이 나왔어요")
+            self.update_btn.config(command=lambda: webbrowser.open(url))
+            bar.pack(fill="x", padx=16, pady=(0, 12), before=self.main_view)
+        except tk.TclError:
+            pass
 
     def _apply_remembered_credentials(self, remembered: dict | None, *, replace=False) -> None:
         """저장된 자격증명(v2)을 거래소별 칸에 채운다.
@@ -1638,6 +1689,13 @@ class RunnerApp:
         ttk.Label(head, text=f"v{RUNNER_VERSION}", style="Badge.TLabel").pack(side="left", padx=(8, 0), pady=(2, 0))
         self.status_lbl = ttk.Label(head, text="● 대기 중", style="Status.TLabel", foreground=UI["muted"])
         self.status_lbl.pack(side="right")
+
+        # 새 버전 알림 줄 — 서버가 알려 준 공식 버전이 이 실행기보다 높을 때만 머리줄 아래에 보인다.
+        self.update_bar = tk.Frame(self.root, bg=UPDATE_BG, padx=round(16 * s), pady=round(8 * s))
+        self.update_label = tk.Label(self.update_bar, text="", bg=UPDATE_BG, fg=UI["ink"], font=(FONT, 10, "bold"))
+        self.update_label.pack(side="left")
+        self.update_btn = ttk.Button(self.update_bar, text="받기 ↗", style="Primary.TButton")
+        self.update_btn.pack(side="right")
 
         # 메인 화면. 연결 도우미가 열리면 이 판만 도우미로 바뀐다(창 크기 · 머리줄은 그대로).
         self.main_view = ttk.Frame(self.root)
@@ -2819,7 +2877,16 @@ class RunnerApp:
         self._invalidate_preflight()
         reporter, self._progress_reporter = getattr(self, "_progress_reporter", None), None
         if reporter is not None:
-            reporter.close()
+            # 웹 가이드가 '진행 중' 에 멈춰 있지 않게 닫힘을 알린다 — 웹은 처음의 [실행기 열기] 화면으로 돌아간다.
+            macro = getattr(self, "macro", None)
+            try:
+                payload = setup_progress.progress_payload("closed", exchange_of(macro)) if macro else None
+            except ValueError:
+                payload = None
+            if payload is not None:
+                reporter.finish(payload)
+            else:
+                reporter.close()
         tasks = getattr(self, "_connection_queue", None)
         while tasks is not None:
             try:

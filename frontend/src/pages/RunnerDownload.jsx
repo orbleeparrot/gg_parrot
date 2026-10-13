@@ -750,7 +750,15 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
     async function pollProgress() {
       try {
         const data = await api.runnerLaunchTicketStatus(launchTicket.launch_id);
-        if (alive) setHelperProgress(parseHelperProgress(data?.progress));
+        const progress = parseHelperProgress(data?.progress);
+        if (alive && progress?.stage === "closed") {
+          // 실행기 창을 닫았다(v16+) — 처음의 [실행기 열기] · [실행기 설치] 화면으로.
+          setLaunchTicket(null);
+          setHelperProgress(null);
+          setLaunchPhase("idle");
+          return;
+        }
+        if (alive) setHelperProgress(progress);
       } catch (_) {
         /* 잠깐의 오류는 다음 차례에 다시 읽는다 */
       }
@@ -1443,7 +1451,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
   // 국내 매크로 — '실행기에서 연결·실행' 한 화면. 연결된 매크로 카드 · [실행기 열기] · [실행기 설치], 열린 뒤에는 실행기 화면을 따라 본다.
   function renderHelperScene() {
     const card = quickRunCard(selected?.id);
-    const installLink = (className, iconSize) => (
+    const installLink = (className, iconSize, label = "실행기 설치") => (
       <a
         href={downloadUrl}
         download={downloadIsExternal ? undefined : true}
@@ -1452,12 +1460,23 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
         onClick={() => setDownloadStarted(true)}
         className={className}
       >
-        <Icon name="download" size={iconSize} />실행기 설치
+        <Icon name="download" size={iconSize} />{label}
       </a>
     );
     let body;
     if (launchPhase === "claimed") {
-      body = <RunnerHelperMirror progress={helperProgress} exchange={keyGuide.exchange} logo="/exchanges/bithumb.png" />;
+      body = (
+        <>
+          <RunnerHelperMirror progress={helperProgress} exchange={keyGuide.exchange} logo="/exchanges/bithumb.png" />
+          {/* 실행기를 닫았거나 안 보일 때 — 따라 보는 중에도 다시 열 길을 늘 둔다. */}
+          <div className="runner-helper-acts runner-helper-reopen">
+            <button type="button" onClick={() => void openHelperRunner()} className="runner-helper-act">
+              <Icon name="monitor" size={16} />실행기 다시 열기
+            </button>
+            {installLink("runner-helper-act", 16)}
+          </div>
+        </>
+      );
     } else if (launchPhase === "outdated") {
       body = (
         <OutdatedRunnerPanel
@@ -1500,12 +1519,23 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
       body = (
         <>
           <h2>실행기에서 연결·실행</h2>
-          <div className="runner-helper-bigs">
-            <button type="button" onClick={() => void openHelperRunner()} disabled={!macroConnected} className="runner-helper-big is-open">
-              <Icon name="monitor" size={22} />{macroConnected ? "실행기 열기" : "매크로 연결 중…"}
-            </button>
-            {installLink("runner-helper-big is-install", 22)}
-          </div>
+          {downloadStarted ? (
+            // 설치 파일을 받은 뒤 — 방금 누른 자리(오른쪽)가 [설치한 실행기 열기]가 된다. 새로 설치한 실행기는
+            // 이 웹 연결을 모르므로 여기서 한 번 더 열어야 매크로가 실린다.
+            <div className="runner-helper-bigs">
+              {installLink("runner-helper-big is-install", 22, "실행기 다시 받기")}
+              <button type="button" onClick={() => void openHelperRunner()} disabled={!macroConnected} className="runner-helper-big is-open">
+                <Icon name="monitor" size={22} />{macroConnected ? "설치한 실행기 열기" : "매크로 연결 중…"}
+              </button>
+            </div>
+          ) : (
+            <div className="runner-helper-bigs">
+              <button type="button" onClick={() => void openHelperRunner()} disabled={!macroConnected} className="runner-helper-big is-open">
+                <Icon name="monitor" size={22} />{macroConnected ? "실행기 열기" : "매크로 연결 중…"}
+              </button>
+              {installLink("runner-helper-big is-install", 22)}
+            </div>
+          )}
           {launchError ? <p className="runner-helper-error" role="alert">{launchError}</p> : null}
         </>
       );

@@ -484,8 +484,6 @@ export function StudioOutcomes({ macro, result, perSymbol = [], valErr, strategy
           <button type="button" onClick={downloadMacro} disabled={!!valErr} title={domestic ? "업비트·빗썸 매크로 파일은 실행기 v10 이상에서 돌아요." : undefined} className="sd-act-row">
             <ActIcon name="download" /><span className="sd-act-t"><b>매크로 파일 내려받기</b><small>.ggm.json 파일로 저장해요</small></span><i className="sd-act-chev" aria-hidden="true" />
           </button>
-          {/* 서버는 내려줄 때 실행기 버전을 모른다 — v9 이하에 넣으면 세션 시작에서 426 이 난다. 그래서 버튼 옆에서 미리 말한다. */}
-          {domestic ? <p className="sd-note">업비트·빗썸 매크로 파일은 실행기 v10 이상이 필요해요.</p> : null}
           <button type="button" onClick={onShare} disabled={!!valErr || shareBusy} className="sd-act-row">
             <ActIcon name="link" /><span className="sd-act-t"><b>{shareBusy ? "저장 중…" : "공유 링크 보기"}</b><small>링크와 인증 카드 이미지를 받아요</small></span><i className="sd-act-chev" aria-hidden="true" />
           </button>

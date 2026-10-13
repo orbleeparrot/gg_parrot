@@ -154,14 +154,17 @@ export default function AgentActivityStream({
     const filtered = filter === "all" ? events : events.filter((event) => event.module === filter);
     return filtered.slice(0, 24).reverse();
   }, [events, filter]);
-  const newsNotice = (filter === "all" || filter === "position_news")
+  // 기능 상태 안내는 그 기능 탭에서만, 보일 소식이 없을 때 빈 화면 문구로 — '전체' 피드 맨 위에 띠로 띄우지 않는다.
+  const newsNotice = filter === "position_news"
     && accessFor(AGENT_MODULE_MAP.get("position_news"), entitlements) === "enabled"
     ? positionNewsNotice(featureStates.position_news, {
       hasArticles: events.some((event) => event.isNewsArticle),
     }) : "";
-  const whaleNotice = (filter === "all" || filter === "whale_activity")
+  const whaleNotice = filter === "whale_activity"
     && accessFor(AGENT_MODULE_MAP.get("whale_activity"), entitlements) === "enabled"
     ? whaleActivityNotice(featureStates.whale_activity) : "";
+  const featureNotice = newsNotice || whaleNotice;
+  const featureStatusAttr = newsNotice ? { "data-news-status": "" } : whaleNotice ? { "data-whale-status": "" } : {};
   const hasRelativeTime = visible.some((event) => {
     if (event.isNewsArticle) return false;
     const occurredAt = eventTime(event.occurredAt);
@@ -250,8 +253,6 @@ export default function AgentActivityStream({
       </header>
 
       <div className="agent-chat-stream flex flex-col">
-        {newsNotice ? <div className="agent-checking" role="status" data-news-status>{newsNotice}</div> : null}
-        {whaleNotice ? <div className="agent-checking" role="status" data-whale-status>{whaleNotice}</div> : null}
         <div
           ref={logRef}
           className="agent-chat-log flex-1"
@@ -328,11 +329,15 @@ export default function AgentActivityStream({
                 </article>
               );
             })
-          ) : newsNotice ? null : (
-            <div className="agent-stream-empty">
-              <strong>새 소식이 없어요.</strong>
+          ) : (
+            <div className="agent-stream-empty" role="status" {...featureStatusAttr}>
+              <strong>{featureNotice || "새 소식이 없어요."}</strong>
             </div>
           )}
+          {visible.length > 0 && featureNotice ? (
+            // 소식이 있으면 안내는 맨 아래(새 소식 자리) 조용한 한 줄로.
+            <div className="agent-checking" role="status" {...featureStatusAttr}>{featureNotice}</div>
+          ) : null}
 
           {isFeatureLoading && selectedAccess === "enabled" && !newsNotice ? (
             <div className="agent-checking" role="status">

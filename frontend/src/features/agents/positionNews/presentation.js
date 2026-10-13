@@ -32,12 +32,7 @@ export function positionNewsNotice(state, { hasArticles = false } = {}) {
     const count = Number(translation.failed_count) || 0;
     return `${count > 0 ? `뉴스 ${count}건의` : "뉴스"} 번역·요약에 실패했어요. 수집한 기사와 처리 실패를 구분해 표시해요.`;
   }
-  if (["partial", "pending", "waiting"].includes(translation?.status)) {
-    const count = Number(translation.waiting_count ?? translation.pending_count) || 0;
-    const failed = Number(translation.failed_count) || 0;
-    return `${count > 0 ? `뉴스 ${count}건의` : "뉴스"} 번역·요약 처리 대기 상태예요.${failed > 0 ? ` 처리 실패 ${failed}건이 있어요.`
-      : " 실제 처리 중인 건수는 아니며 실패한 항목이 포함될 수 있어요."}`;
-  }
+  // 번역 · 요약 대기(partial · pending · waiting)는 서버 안쪽 처리 상태라 사용자에게 알리지 않는다.
   if ((!data && ["idle", "loading"].includes(state.status))
       || data?.analysis_status === "pending" || data?.collection?.status === "pending") {
     return "관련 기사를 찾고 있어요.";

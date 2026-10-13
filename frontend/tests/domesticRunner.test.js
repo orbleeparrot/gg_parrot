@@ -69,7 +69,9 @@ test("StudioDock — 빠른 실행 행도 파일 행도 국내에서 막지 않�
   assert.doesNotMatch(fileButton, /disabled=\{[^}]*domestic[^}]*\}/, "파일 행이 국내로 잠겼다");
   const fileRow = between(dock, "onClick={downloadMacro}", "onClick={onShare}");
   assert.doesNotMatch(fileRow, /바이낸스 전용/);
-  assert.match(fileRow, /실행기 v10 이상이 필요해요/, "내려받기 옆에서 실행기 버전을 말해야 한다");
+  // 버튼 사이에 안내 문단을 끼우지 않는다(사용자 지적, 2026-10-13) — 버전 안내는 버튼 설명과 아래 '국내 거래소 지원 범위' 가 한다.
+  assert.doesNotMatch(fileRow, /<p /, "버튼 줄 사이에 안내 문단이 끼었다");
+  assert.match(fileButton, /실행기 v10 이상/, "내려받기 버튼 설명(title)이 실행기 버전을 말해야 한다");
   assert.doesNotMatch(fileRow, NOT_YET);
 });
 

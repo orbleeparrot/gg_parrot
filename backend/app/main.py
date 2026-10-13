@@ -447,7 +447,7 @@ class RunnerSetupChecks(BaseModel):
 class RunnerSetupProgressRequest(BaseModel):
     model_config = {"extra": "forbid"}
     stage: Literal["ready", "ask", "ip", "perm", "keys", "existing", "manual", "checking",
-                   "result_ok", "result_fail", "started"]
+                   "result_ok", "result_fail", "started", "closed"]
     exchange: Literal["binance", "upbit", "bithumb"]
     path: Literal["", "new", "existing"] = ""
     slots: RunnerSetupSlots = Field(default_factory=RunnerSetupSlots)

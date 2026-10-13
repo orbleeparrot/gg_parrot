@@ -56,9 +56,12 @@ class DomesticFixtures(Fixtures):
 
 
 def assert_domestic_status(page, fixture):
+    # '전체' 탭 맨 위에는 기능 상태 띠를 띄우지 않는다 — 그 기능 탭의 빈 화면 · 맨 아래 한 줄로만 말한다.
+    expect(page.locator("[data-whale-status]")).to_have_count(0)
+    expect(page.locator("[data-news-status]")).to_have_count(0)
+    page.get_by_role("tab", name="고래 동향").click()
     expect(page.locator("[data-whale-status]")).to_contain_text("아직 지원하지 않")
-    expect(page.locator("[data-news-status]")).to_contain_text("673건의 번역·요약 처리 대기")
-    assert "번역 중" not in page.locator("[data-news-status]").inner_text()
+    page.get_by_role("tab", name="전체").click()
     titles = [item["title"] for item in messages(page)]
     assert "대규모 체결 연결 확인 중" not in titles, titles
     assert "서버 연결 복구 · 이전 신호 대기 기록" in titles, titles

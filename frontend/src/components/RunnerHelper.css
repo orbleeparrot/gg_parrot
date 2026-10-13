@@ -207,6 +207,12 @@
   gap: 8px;
 }
 
+.runner-helper-reopen {
+  margin-top: 4px;
+  padding-top: 16px;
+  border-top: 1px solid rgb(var(--c-slate-200));
+}
+
 .runner-helper-act {
   min-height: 40px;
   display: inline-flex;

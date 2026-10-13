@@ -93,6 +93,21 @@ class StartRetryTests(unittest.TestCase):
         self.assertEqual(caught.exception.status, 503)
 
 
+class UpdateNoticeTests(unittest.TestCase):
+    URL = "https://github.com/orbleeparrot/gg_parrot/releases/download/runner-v{0}/ggparrot-runner.exe"
+
+    def test_only_a_newer_official_release_is_announced(self) -> None:
+        newer = macro_runner.newer_release
+        self.assertEqual(newer({"available": True, "version": "17", "url": self.URL.format(17)}, "16"), ("17", self.URL.format(17)))
+        self.assertIsNone(newer({"available": True, "version": "16", "url": self.URL.format(16)}, "16"))
+        self.assertIsNone(newer({"available": True, "version": "15", "url": self.URL.format(15)}, "16"))
+        # 공식 릴리스 주소가 아니면(버전이 달라도) 따라가지 않는다.
+        self.assertIsNone(newer({"available": True, "version": "17", "url": "https://evil.example/runner-v17/x.exe"}, "16"))
+        self.assertIsNone(newer({"available": True, "version": "17", "url": self.URL.format(16)}, "16"))
+        self.assertIsNone(newer({"available": False, "version": "17", "url": self.URL.format(17)}, "16"))
+        self.assertIsNone(newer(None, "16"))
+
+
 class EventUploadTests(unittest.TestCase):
     def test_heartbeat_carries_buffered_events_and_requeues_on_failure(self) -> None:
         client = ServerClient("key", base="https://example.invalid")

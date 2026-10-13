@@ -4,8 +4,10 @@ DB·리더보드·주문 명령은 모른다. 레그(종목별 sim)·틱·봉·�
 """
 from __future__ import annotations
 
+import copy
+from collections import deque
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Deque, Dict, List, Optional
 
 from .schema import Macro
 from .stepper import EXIT_SIDES, Fill
@@ -27,6 +29,11 @@ def sim_state(sim) -> dict:
     if getter is None:
         return {"in_position": False, "dir": 1, "qty": 0.0, "entry_price": 0.0, "cooldown_until_ms": None, "halted_today": False}
     return getter()
+
+
+def _inner_sim(sim):
+    """실시간 봉 래퍼(LiveCandleSim)면 안쪽 sim. 아니면 그대로."""
+    return getattr(sim, "inner", sim)
 
 
 class Leg:
@@ -74,6 +81,18 @@ class StrategyDriver:
         self.last_fill: Optional[dict] = None
         # 종목별 진입 시점 누적 수익률 — 포트폴리오에서 다른 레그와 섞이지 않게 심볼로 나눈다.
         self.entry_returns: Dict[str, float] = {}
+        # 체결 직전 상태(되돌리기용). 실행기 세션에서 진입 주문이 실제로 나가지 않았을 때 서버 전략을
+        # '사기 전' 으로 되돌린다 — 그러지 않으면 서버만 보유 중이 되어 다시 사지 않고 없는 물량을 팔려 한다.
+        # 봉에서 나온 체결은 봉을 넣기 직전 상태가, 틱에서 나온 체결은 틱 직전 상태가 그 체결의 직전 상태다.
+        # 한 봉이 체결을 여럿 낸 경우 둘째부터는 '직전 상태' 가 없다(None — 되돌리지 않는다).
+        # 실행기 드라이버만 켠다(runner_engine) — 모의 세션은 틱마다 상태를 복사할 이유가 없다.
+        self.track_fill_snapshots = False
+        self._queued_snapshots: Dict[str, Deque[Optional[dict]]] = {}
+        self.last_fill_snapshot: Optional[dict] = None
+        # 되돌린 뒤 다시 진입하기 전까지 기다리는 시각(ms). 체크포인트에 실려 재기동에도 이어진다.
+        self.entry_hold_until_ms: Optional[int] = None
+        # 되돌린 횟수 — 저장 중에 되돌리기가 끼어들었는지 저장하는 쪽이 알아보게 한다(runner_engine._tick_once).
+        self.rollbacks = 0
 
     # -- 접근자 -----------------------------------------------------------
     @property
@@ -99,11 +118,77 @@ class StrategyDriver:
                 return leg
         raise KeyError(symbol)
 
+    # -- 체결 직전 상태 -----------------------------------------------------
+    def snapshot(self) -> dict:
+        """되돌리기에 쓰는 지금 상태 — 장부 · 전략 상태(state) 와 자산 · 체결 요약.
+
+        state() 는 화면용으로 반올림한다(진입가 소수 4자리 — 아주 싼 코인은 0 이 된다). 되돌리기는 정확한
+        값이어야 해서 수량 · 진입가 · 기준가를 원래 값으로 덮고, 자산도 그 기준가로 다시 잰다 — restore() 가
+        현금을 ``자산 - 포지션 평가액`` 으로 되짚으므로 둘이 같은 가격이어야 현금이 그대로 돌아온다.
+        """
+        state = self.state()
+        leg_equity = {}
+        for leg, row in zip(self.legs, state["legs"]):
+            exact = sim_state(leg.sim)
+            row["qty"] = float(exact["qty"])
+            row["entry_price"] = float(exact["entry_price"])
+            row["last_price"] = float(leg.last_price)
+            equity = getattr(leg.sim, "equity", None)
+            leg_equity[leg.symbol] = float(equity(leg.last_price)) if equity is not None else float(leg.equity)
+        return {"state": state, "equity": float(sum(leg_equity.values())), "leg_equity": leg_equity,
+                "trade_count": int(self.trade_count), "last_fill": copy.deepcopy(self.last_fill),
+                "entry_returns": dict(self.entry_returns)}
+
+    def rollback(self, snapshot: dict, *, retry_at_ms: Optional[int] = None) -> None:
+        """체결 직전 상태로 되돌린다. ``retry_at_ms`` 전에는 새 진입 · 추가매수를 하지 않는다(재시도 대기).
+
+        봉 큐에 남은 체결(같은 봉에서 나온 뒤엣것)은 되돌린 시간선의 것이라 버린다. 웜업이 채운 지표는
+        그대로 둔다 — restore() 는 장부와 전략 상태만 바꾼다.
+        """
+        state = copy.deepcopy(snapshot.get("state") or {})
+        if retry_at_ms:
+            state["entry_hold_until_ms"] = int(retry_at_ms)
+        # restore() 는 보유 중이면 진입 시각을 '지금' 으로 둔다(재기동용). 추가매수만 되돌리는 경우 처음 진입한 시각은
+        # 그대로여야 한다 — 아니면 최대 보유 시간이 다시 세어져 실행기(원래 시각 기준)와 다른 때에 강제 청산한다.
+        clocks = [getattr(_inner_sim(leg.sim), "_entry_time", None) for leg in self.legs]
+        self.restore(state, leg_equity=dict(snapshot.get("leg_equity") or {}),
+                     total_equity=float(snapshot.get("equity") or self.initial))
+        for leg, clock in zip(self.legs, clocks):
+            inner = _inner_sim(leg.sim)
+            if clock is not None and hasattr(inner, "_entry_time") and sim_state(leg.sim)["in_position"]:
+                inner._entry_time = clock
+        for leg in self.legs:
+            discard = getattr(leg.sim, "discard_queued", None)
+            if discard is not None:
+                discard()
+        self._queued_snapshots.clear()
+        self.trade_count = int(snapshot.get("trade_count") or 0)
+        self.last_fill = copy.deepcopy(snapshot.get("last_fill"))
+        self.entry_returns = dict(snapshot.get("entry_returns") or {})
+        self.last_fill_snapshot = None
+        self.rollbacks += 1
+
     # -- 틱 --------------------------------------------------------------
     def tick(self, price: float, ts: Optional[datetime] = None, symbol: Optional[str] = None) -> Optional[Fill]:
         leg = self.leg_for(symbol)
         leg.last_price = price
+        track = self.track_fill_snapshots
+        pending = getattr(leg.sim, "pending", None) if track else None
+        queued_before = int(pending()) if pending is not None else 0
+        # 큐가 비어 있으면 이 틱에서 새 체결이 날 수 있다 — 그 직전 상태를 잡아 둔다.
+        before = self.snapshot() if track and queued_before == 0 else None
         fill = leg.sim.step(price, ts)
+        if track:
+            markers = self._queued_snapshots.setdefault(leg.symbol, deque())
+            if fill is None:
+                self.last_fill_snapshot = None
+            elif queued_before > 0:
+                # 봉이 낸 체결을 꺼냈다 — 봉을 넣기 직전에 잡은 상태가 이 체결의 것이다.
+                self.last_fill_snapshot = markers.popleft() if markers else None
+            else:
+                self.last_fill_snapshot = before
+                # 이 틱이 체결을 여럿 냈으면(큐에 남음) 뒤엣것에는 직전 상태가 없다.
+                markers.extend([None] * (int(pending()) if pending is not None else 0))
         leg.equity = leg.sim.equity(price)
         leg.ret = (leg.equity - leg.initial) / leg.initial * 100.0
         leg.liquidations = getattr(leg.sim, "liquidations", 0)
@@ -145,12 +230,23 @@ class StrategyDriver:
         on_candle = getattr(leg.sim, "on_candle", None)
         if on_candle is None:
             return 0
+        pending = getattr(leg.sim, "pending", None)
+        # 앞 봉의 체결이 아직 큐에 남아 있으면(봉이 몰려 들어온 경우) 체결 수 · 마지막 체결이 아직 그 체결들을 모른다 —
+        # 그 직전 상태로는 정확히 되돌릴 수 없으니 이 봉의 체결에는 직전 상태를 두지 않는다.
+        clean = self.track_fill_snapshots and not (pending is not None and int(pending()) > 0)
+        before = self.snapshot() if clean else None
         # (t, o, h, l, c) 와 (t, o, h, l, c, v) 를 모두 받는다 — 테스트 더미가 튜플이고,
         # 거래량을 싣지 않는 옛 호출이 남아 있다.
         t_ms, o, h, l, c = candle[0], candle[1], candle[2], candle[3], candle[4]
         volume = float(candle[5]) if len(candle) > 5 and candle[5] is not None else None
         ts = datetime.fromtimestamp(int(t_ms) / 1000, timezone.utc) if t_ms else datetime.now(timezone.utc)
-        return int(on_candle(float(o), float(h), float(l), float(c), ts, volume=volume))
+        produced = int(on_candle(float(o), float(h), float(l), float(c), ts, volume=volume))
+        if produced > 0 and self.track_fill_snapshots:
+            # 첫 체결만 '봉 직전 상태' 를 갖는다 — 둘째부터 되돌리면 앞 체결까지 지워진다.
+            markers = self._queued_snapshots.setdefault(leg.symbol, deque())
+            markers.append(before)
+            markers.extend([None] * (produced - 1))
+        return produced
 
     def warmup(self, candles_by_symbol: Dict[str, list]) -> None:
         for leg in self.legs:
@@ -184,6 +280,8 @@ class StrategyDriver:
             "last_fill_ms": last.get("ms"), "last_fill_side": last.get("side", ""),
             "last_fill_return": last.get("return"), "last_fill_kind": last.get("kind", ""),
             "last_price": round(self.last_price, 4), "checkpoint_ms": self._now_ms(), "legs": legs,
+            # 대기가 없으면 칸을 싣지 않는다 — 모의 세션의 state_json 을 바꾸지 않는다.
+            **({"entry_hold_until_ms": int(self.entry_hold_until_ms)} if self.entry_hold_until_ms else {}),
         }
 
     def restore(self, state: dict, *, leg_equity: Dict[str, float], total_equity: float) -> None:
@@ -216,7 +314,16 @@ class StrategyDriver:
             leg.equity = float(equity)
             leg.ret = (leg.equity - leg.initial) / leg.initial * 100.0
             leg.last_price = float(st.get("last_price") or 0.0)
+        self.hold_entries_until(state.get("entry_hold_until_ms"))
         self.aggregate()
+
+    def hold_entries_until(self, until_ms: Optional[int]) -> None:
+        """모든 레그의 새 진입(추가매수 포함)을 ``until_ms`` 전까지 막는다. None 이면 푼다."""
+        self.entry_hold_until_ms = int(until_ms) if until_ms else None
+        for leg in self.legs:
+            hold = getattr(leg.sim, "hold_entries_until", None)
+            if hold is not None:
+                hold(self.entry_hold_until_ms)
 
     def restore_fills(self, trades: List[dict]) -> None:
         """체결 요약을 DB 체결 행으로 다시 센다 — 메모리 카운터는 프로세스와 함께 사라졌다."""

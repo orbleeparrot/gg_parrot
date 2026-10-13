@@ -31,6 +31,15 @@ from .leverage import liquidation_price
 from .schema import Macro, PositionSide, RuleType
 from .stepper import Fill, _fill_meta, buy_fill, sell_fill
 
+_INTERVAL_UNIT_SECONDS = {"m": 60, "h": 3600, "d": 86400, "w": 604800}
+
+
+def _interval_seconds(interval: str) -> int:
+    """'5m' · '1h' · '1d' 같은 봉 간격을 초로. 모르는 모양이면 0."""
+    text = str(interval or "").strip()
+    unit = _INTERVAL_UNIT_SECONDS.get(text[-1:], 0)
+    return int(text[:-1]) * unit if unit and text[:-1].isdigit() else 0
+
 
 # --- incremental indicators (shared by backtest + paper) ----------------
 class RSIState:
@@ -158,6 +167,12 @@ class CandleSim:
         self._halted_day: Optional[str] = None
         self._cooldown_until: Optional[datetime] = None
         self._entry_time: Optional[datetime] = None
+        # 실행기 진입 재시도 대기(stepper.PositionSim 과 같은 뜻) — 백테스트·모의는 쓰지 않는다.
+        self._entry_hold_until: Optional[datetime] = None
+        # 봉의 시각은 '여는' 시각인데 실시간 판단은 봉이 닫힌 뒤에 한다. 대기는 닫힌 시각으로 견줘야
+        # 대기가 끝난 뒤 처음 닫히는 봉에서 다시 판단한다(여는 시각으로 견주면 한 봉을 통째로 더 건너뛴다).
+        self._candle_seconds = _interval_seconds(getattr(macro, "candle_interval", ""))
+        self._decision_at: Optional[datetime] = None
         self.stopped = False  # hard stop (band exit / reenter disabled)
         # 진입 필터 — 없으면 None. on_candle 이 봉이 끝난 뒤 갱신하고 _entry_blocked 가 묻는다.
         from .entry_filter import make_filter  # 늦은 import: entry_filter -> candles 순환 방지
@@ -414,8 +429,21 @@ class CandleSim:
         return self._fill(side, px, qty, mark, "강제 청산")
 
     # -- common risk ------------------------------------------------------
+    def hold_entries_until(self, until_ms: Optional[int]) -> None:
+        self._entry_hold_until = datetime.fromtimestamp(int(until_ms) / 1000, timezone.utc) if until_ms else None
+
+    def _entries_held(self, ts: datetime) -> bool:
+        """진입 재시도 대기 중인가. 추가매수(그리드 칸 · 마틴게일 안전주문)도 이걸 본다 — 쿨다운과 달리
+        '진입이 실제로 나가지 않았다' 는 뜻이라, 잔고가 모자란 채로 같은 주문을 봉마다 다시 내지 않게 한다.
+        봉 안의 판단은 봉이 닫힌 시각으로, 틱의 판단(execute_pending)은 틱 시각으로 견준다."""
+        if self._entry_hold_until is None:
+            return False
+        return (self._decision_at or ts) < self._entry_hold_until
+
     def _entry_blocked(self, ts: datetime) -> bool:
         if self.stopped:
+            return True
+        if self._entries_held(ts):
             return True
         if self._halted_day is not None and self._halted_day == self._day:
             return True
@@ -501,7 +529,12 @@ class CandleSim:
         # Funding on held shorts (per bar, prorated only for 1d; kept simple).
         if self.side is PositionSide.SHORT and self.in_position() and self.funding > 0:
             self.cash -= self.total_qty() * c * self.funding / 100.0
-        self._strategy(o, h, l, c, ts, fills)
+        if self._entry_hold_until is not None and self._candle_seconds:
+            self._decision_at = ts + timedelta(seconds=self._candle_seconds)
+        try:
+            self._strategy(o, h, l, c, ts, fills)
+        finally:
+            self._decision_at = None
         # 전략 '뒤' 에 갱신한다 — 그래야 이 봉의 진입 판단은 직전 마감봉의 필터 값을 본다.
         # 순서를 바꾸면 진행 중인 봉으로 자기 자신을 판정하는 미래 참조가 된다.
         if self.entry_filter is not None:
@@ -673,6 +706,8 @@ class GridSim(CandleSim):
                 fills.append(self._fill("sell", f, lot.qty, c, f"격자 {sell_level:g} 도달 · 매도"))
         # Buys: any buy level reached by low that we don't already hold. ``per_grid``
         # is the committed margin; the lot controls ``per_grid × leverage`` notional.
+        if self._entries_held(ts):
+            return
         for i in range(len(self.levels) - 1):
             if i in self.holdings:
                 continue
@@ -762,7 +797,7 @@ class MartingaleSim(CandleSim):
                 self._so_done = 0
                 return
             # safety orders on the way down
-            while self._so_done < self.max_so:
+            while self._so_done < self.max_so and not self._entries_held(ts):
                 so_px = self._next_so_price()
                 if l <= so_px and self.cash > 1e-9:
                     size = self.so_size * (self.vol_scale ** self._so_done)
@@ -1268,6 +1303,10 @@ class LiveCandleSim:
     def pending(self) -> int:
         return len(self._queue)
 
+    def discard_queued(self) -> None:
+        """서버 전략을 되돌릴 때 — 큐에 남은 체결은 되돌린 시간선의 것이라 버린다."""
+        self._queue.clear()
+
     def warmup(self, candles) -> None:
         self.inner.warmup(candles)
         self._queue.clear()
@@ -1292,6 +1331,9 @@ class LiveCandleSim:
                 last_price: float, cooldown_until_ms: Optional[int] = None) -> None:
         self.inner.restore(equity, in_position=in_position, qty=qty, entry_price=entry_price,
                            last_price=last_price, cooldown_until_ms=cooldown_until_ms)
+
+    def hold_entries_until(self, until_ms: Optional[int]) -> None:
+        self.inner.hold_entries_until(until_ms)
 
     @property
     def liquidations(self) -> int:

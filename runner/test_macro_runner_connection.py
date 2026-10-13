@@ -43,7 +43,11 @@ class StandaloneCheckTests(unittest.TestCase):
         with patch.object(macro_runner.BotThread, "_build_broker", return_value=broker):
             result = macro_runner.perform_connection_check(self.macro(), self.credentials(), "live")
         self.assertTrue(result.ok)
-        broker.rehearse.assert_called_once_with(notional=10000)
+        # 국내는 수수료까지 설정 금액 안에 들도록 줄인 금액으로 확인한다(수수료율을 못 읽으면 보수적인 기본값).
+        broker.rehearse.assert_called_once()
+        self.assertAlmostEqual(broker.rehearse.call_args.kwargs["notional"], 10000 / (1 + macro_runner.DOMESTIC_BID_FEE_FALLBACK))
+        # 연결 검사 때는 아직 수수료율을 모른다 — 수수료 포함 설정 금액(spend)을 같이 줘서 브로커가 실제 수수료율로 다시 잰다.
+        self.assertEqual(broker.rehearse.call_args.kwargs["spend"], 10000)
         broker.submit.assert_not_called()
         broker.ensure_ready.assert_not_called()
         self.assertIs(result.broker, broker)
@@ -195,6 +199,26 @@ class ConnectionGuiTests(unittest.TestCase):
         app._open_connection_wizard.assert_called_once_with(stage="result_fail")
         app._start.assert_not_called()
         self.assertEqual(app._wizard_check()["view"]["problem"], "ip")
+
+    def test_short_balance_at_start_shows_the_reason_instead_of_the_key_helper(self):
+        """키 · 허용 IP 는 통과하고 잔고 · 주문 금액만 걸리면 연결 도우미(키 발급 안내)가 아니라 이유 창을 띄운다.
+
+        도우미의 실패 화면은 이 경우 빨간 표시에 '연결 완료' 제목이 붙어 무엇을 고칠지 알 수 없었다.
+        """
+        app = self.app()
+        app.main_view = Mock()
+        app._open_connection_wizard = Mock()
+        _macro, _mode, _credentials, fingerprint = app._snapshot_for_connection()
+        app._start = Mock()
+        failed = connection.PreflightResult(False, "주문할 원화 잔고가 모자라요.", fingerprint, error_name="insufficient_funds")
+        app._connection_queue.put(("preflight", 0, failed, True))
+        with patch.object(macro_runner.messagebox, "showwarning") as warn:
+            app._poll_connection_tasks()
+        app._open_connection_wizard.assert_not_called()
+        app._start.assert_not_called()
+        warn.assert_called_once()
+        self.assertIn("원화 잔고가 모자라요", warn.call_args.args[1])
+        self.assertIn("매매는 시작하지 않았어요", warn.call_args.args[1])
 
     def test_current_async_result_resumes_exactly_once(self):
         app = self.app()

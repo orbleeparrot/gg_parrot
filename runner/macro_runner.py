@@ -451,6 +451,24 @@ def _notional_for(budget, leverage, market, *, quote="USDT") -> float:
     return cap * leverage if (market == "futures" and ORDER_CAP_BASIS == "margin") else cap
 
 
+# 업비트 · 빗썸 매수 수수료를 못 읽었을 때의 보수적인 값 — 브로커의 잔고 확인과 같은 값이어야 한다.
+DOMESTIC_BID_FEE_FALLBACK = brokers.DOMESTIC_BID_FEE_FALLBACK
+
+
+def _bid_fee_rate(broker) -> float:
+    """매수 수수료율. 모의 래퍼는 안쪽 브로커의 값을 본다. 못 읽었거나 말이 안 되는 값이면 보수적인 기본값."""
+    for holder in (broker, getattr(broker, "_inner", None)):
+        fees = getattr(holder, "fees", None)
+        if isinstance(fees, dict):
+            rate = _positive(fees.get("bid"))
+            if 0 < rate < 0.05:
+                return rate
+    return DOMESTIC_BID_FEE_FALLBACK
+
+
+_fee_inclusive = brokers.fee_inclusive  # 리허설(브로커)과 실제 주문이 같은 식을 쓴다
+
+
 def _smallest_entry_notional(macro: dict, leverage, market, *, quote="USDT") -> float:
     """이 매크로의 진입 한 건이 쓸 수 있는 가장 작은 주문 금액.
 
@@ -983,6 +1001,10 @@ class BotThread(threading.Thread):
         # Unknown submission may have opened a real position even if the order
         # query failed. Never turn that uncertainty into a flat snapshot.
         self.in_position = (self.held_qty > 0 and not dust_only) or self.position_uncertain
+        if order.status == "REJECTED" and not executed and self.domestic:
+            # 거래소가 오류 이름을 달아 거절했다 — 주문은 나가지 않았다. '확인하지 못했다' 가 아니라 이유를 말한다
+            # (예: 빗썸 insufficient_funds → 원화 잔고가 모자라요).
+            raise RuntimeError(brokers._explain_domestic_error(self.exchange, 400, str(order.raw_status or ""), ""))
         if order.status != "FILLED" or self.position_uncertain or (closing and self.in_position and not partial_close):
             # 사람이 거래소에서 직접 확인할 때 쓰는 문구다. 판정은 접은 status 로 하고, 보고는 거래소가 쓴 낱말로 한다.
             raise RuntimeError(f"주문 상태 {order.raw_status} — 체결 완료를 확인하지 못했습니다. 거래소에서 주문과 포지션을 확인하세요.")
@@ -1019,6 +1041,20 @@ class BotThread(threading.Thread):
         (모든 신호가 under_min_total 로 거절된다), 업비트 검증 주문은 잔고까지 보므로 돌아갈
         세션을 시작도 못 하게 막는다.
         """
+        notional = self._entry_budget()
+        # 국내는 실제 주문과 같은 금액(수수료를 뺀 금액)으로 최소 주문 금액을 확인한다.
+        return _fee_inclusive(notional, _bid_fee_rate(getattr(self, "broker", None))) if self.domestic else notional
+
+    def _rehearsal_kwargs(self) -> dict:
+        """리허설 인자. 국내는 수수료 포함 설정 금액(spend)도 준다 — 브로커가 실제 수수료율을 읽고 실제 주문 금액 ·
+        필요한 원화를 계산한다(여기서는 아직 수수료율을 모를 수 있어 보수적인 기본값으로 줄인 금액만 안다)."""
+        kwargs = {"notional": self._entry_notional()}
+        if self.domestic:
+            kwargs["spend"] = self._entry_budget()
+        return kwargs
+
+    def _entry_budget(self) -> float:
+        """진입 한 건에 쓸 설정 금액(국내는 수수료 포함) — 가장 작은 진입. 아래 _entry_notional 의 수수료 전 금액."""
         return _smallest_entry_notional(self.macro, self.leverage, self.market, quote=self.quote)
 
     def _rehearse(self) -> bool:
@@ -1033,10 +1069,9 @@ class BotThread(threading.Thread):
             self._preflight = None
             self.log(f"주문 전 확인: {prepared.reason}")
             return True
-        notional = self._entry_notional()
         credentials = getattr(self, "credentials", {})
         try:
-            ok, reason = self.broker.rehearse(notional=notional)
+            ok, reason = self.broker.rehearse(**self._rehearsal_kwargs())
         except Exception as exc:
             ok, reason = False, f"리허설 도중 오류가 났어요: {connection.safe_preflight_reason(str(exc), credentials)}"
         reason = connection.safe_preflight_reason(reason, credentials)
@@ -1101,6 +1136,10 @@ class BotThread(threading.Thread):
                 raise RuntimeError("포지션을 확인하지 못해 추가 주문을 보내지 않습니다. 거래소에서 주문과 포지션을 확인하세요.")
             if action in ("buy", "short"):
                 notional = min(self.capital * float(cmd.get("notional_frac") or 0.0), order_cap(self.quote))
+                if self.domestic:
+                    # 업비트 · 빗썸은 수수료가 주문 금액과 따로 원화에서 빠진다 — 설정한 금액(예: 20,000원) 안에서
+                    # 수수료까지 끝나도록 주문 금액을 줄인다. 바이낸스는 받은 코인에서 떼므로 그대로다.
+                    notional = _fee_inclusive(notional, _bid_fee_rate(getattr(self, "broker", None)))
                 qty, _ = _order_qty(price, self.step, 0, notional, self.leverage, self.market, quote=self.quote)
                 if qty <= 0:
                     raise RuntimeError("주문 수량이 최소 단위보다 작아요.")
@@ -1330,7 +1369,7 @@ def perform_connection_check(macro: dict, credentials: dict, mode: str) -> conne
             raise ValueError(f"{exchange_label(exchange)} API 키와 시크릿을 모두 입력하세요.")
         probe = BotThread(macro, credentials, mode, None, lambda _msg: None, lambda _snap: None, lambda *_args: None)
         broker = probe._build_broker(pair, preflight_only=True)
-        ok, reason = broker.rehearse(notional=probe._entry_notional())
+        ok, reason = broker.rehearse(**probe._rehearsal_kwargs())
         safe_reason = connection.safe_preflight_reason(reason, credentials)
         name = getattr(broker, "last_error_name", "")
         error_name = name if isinstance(name, str) else ""
@@ -2506,7 +2545,12 @@ class RunnerApp:
                 self._record_successful_ip_history()
             else:
                 self._log(result.reason)
-                if (start_after and exchange_of(self.macro) in DOMESTIC_EXCHANGES and getattr(self, "main_view", None) is not None
+                view = connection.check_view(exchange_of(self.macro), False, getattr(result, "error_name", ""))
+                if start_after and view["problem"] == "order_size":
+                    # 키 · 허용 IP 는 통과했다 — 잔고 · 주문 금액 문제다. 연결 도우미(키 발급 안내)를 열면
+                    # '연결 완료' 에 빨간 표시가 붙은 화면이 떠 무엇을 고칠지 알 수 없다. 이유를 그대로 보인다.
+                    messagebox.showwarning(APP_TITLE, f"{result.reason}\n\n매매는 시작하지 않았어요.")
+                elif (start_after and exchange_of(self.macro) in DOMESTIC_EXCHANGES and getattr(self, "main_view", None) is not None
                         and getattr(self, "_connection_wizard", None) is None):
                     # 오류 창 대신 연결 도우미의 결과 화면으로 — 무엇이 막혔고 어떻게 고치는지가 거기 있다.
                     self._open_connection_wizard(stage="result_fail")

@@ -17,6 +17,12 @@ def _now_ms() -> int:
     return int(datetime.now(timezone.utc).timestamp() * 1000)
 
 
+def _price(value: float) -> float:
+    """체크포인트에 싣는 가격. 소수 자리로 자르면 아주 싼 코인(PEPEUSDT 0.0000089)이 0 이 되고, 재기동 복구가
+    '진입가 0 = 포지션 없음' 으로 읽어 서버 전략이 보유를 잊는다. 유효숫자 10자리로 줄인다."""
+    return float(f"{float(value):.10g}")
+
+
 def sim_strategy_state(sim) -> dict:
     """봉에서 다시 못 구하는 전략 상태(E 의 기준가·고점·발동). 없는 sim 은 빈 칸."""
     getter = getattr(sim, "strategy_state", None)
@@ -260,7 +266,7 @@ class StrategyDriver:
         for leg in self.legs:
             st = sim_state(leg.sim)
             legs.append({"symbol": leg.symbol, "qty": round(st["qty"], 8), "dir": st["dir"],
-                         "entry_price": round(st["entry_price"], 4), "last_price": round(leg.last_price, 4),
+                         "entry_price": _price(st["entry_price"]), "last_price": _price(leg.last_price),
                          "in_position": bool(st["in_position"])})
             if "dca_next_buy_ms" in st:
                 legs[-1]["dca_next_buy_ms"] = st["dca_next_buy_ms"]
@@ -279,7 +285,7 @@ class StrategyDriver:
             "trade_count": self.trade_count,
             "last_fill_ms": last.get("ms"), "last_fill_side": last.get("side", ""),
             "last_fill_return": last.get("return"), "last_fill_kind": last.get("kind", ""),
-            "last_price": round(self.last_price, 4), "checkpoint_ms": self._now_ms(), "legs": legs,
+            "last_price": _price(self.last_price), "checkpoint_ms": self._now_ms(), "legs": legs,
             # 대기가 없으면 칸을 싣지 않는다 — 모의 세션의 state_json 을 바꾸지 않는다.
             **({"entry_hold_until_ms": int(self.entry_hold_until_ms)} if self.entry_hold_until_ms else {}),
         }

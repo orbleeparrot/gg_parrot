@@ -151,7 +151,6 @@ function AccountAgents() {
   const [pinBusy, setPinBusy] = useState(0);
   const sessionSnapshotRevision = useRef(0);
   const lastStreamMessageAt = useRef(0);
-  const [streamConnected, setStreamConnected] = useState(false);
 
   const loadSessions = useCallback(async (signal) => {
     if (!isCurrentAccount()) return;
@@ -172,7 +171,6 @@ function AccountAgents() {
   const pollSessions = useCallback(async (signal) => {
     if (!isCurrentAccount()) return;
     if (Date.now() - lastStreamMessageAt.current < 15000) return;
-    setStreamConnected(false);
     await loadSessions(signal);
   }, [isCurrentAccount, loadSessions]);
   useAdaptivePolling(pollSessions, { intervalMs: 5000, maxIntervalMs: 15000,
@@ -250,7 +248,6 @@ function AccountAgents() {
             return;
           }
           lastStreamMessageAt.current = Date.now();
-          setStreamConnected(true);
           setError("");
           sessionSnapshotRevision.current += 1;
           setSessions(message.data);
@@ -261,7 +258,6 @@ function AccountAgents() {
           if (socket === nextSocket) socket = null;
           if (!stopped && isCurrentAccount()) {
             lastStreamMessageAt.current = 0;
-            setStreamConnected(false);
           }
           scheduleReconnect();
         };
@@ -452,7 +448,6 @@ function AccountAgents() {
     <div className="agent-page">
       {/* 화면 제목은 두지 않는 디자인(DESIGN.md §9) — 문서 구조와 화면 읽기 프로그램을 위한 제목만. */}
       <h1 className="sr-only">내 에이전트</h1>
-      {!streamConnected && sessions ? <p className="t-caption text-slate-500" role="status">실시간 연결 복구 중 · 5초마다 실행 상태 확인</p> : null}
       {error ? (
         <ErrorNote>
           실행 상태 오류: {error}

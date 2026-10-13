@@ -61,9 +61,9 @@ services:
       - key: BINANCE_API_BASE
         value: "https://data-api.binance.vision"
       - key: RUNNER_DOWNLOAD_URL
-        value: "https://github.com/orbleeparrot/gg_parrot/releases/download/runner-v14/ggparrot-runner.exe"
+        value: "https://github.com/orbleeparrot/gg_parrot/releases/download/runner-v15/ggparrot-runner.exe"
       - key: RUNNER_EXE_VERSION
-        value: "14"
+        value: "15"
       - key: RUNNER_SUPPORTS_LAUNCH
         value: "true"
       - key: RUNNER_MIN_VERSION

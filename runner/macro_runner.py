@@ -586,6 +586,20 @@ def _pnl_pct(entry, price, side) -> float:
 #  서버 연동 클라이언트 (회원 키로 인증; API 키는 절대 안 보냄)
 # ==================================================================
 START_ATTEMPTS = 4
+LOG_LINE = "#1E293B"
+LOG_SCROLL_STYLE = "Log.Vertical.TScrollbar"
+
+
+def _style_log_scrollbar(style: ttk.Style, scale: float = 1.0) -> None:
+    """실행 로그 스크롤바 — 화살표 없는 얇은 막대, 바탕은 로그와 같은 남색, 손잡이는 짙은 회색."""
+    style.layout(LOG_SCROLL_STYLE, [("Vertical.Scrollbar.trough", {"sticky": "ns", "children": [
+        ("Vertical.Scrollbar.thumb", {"expand": "1", "sticky": "nswe"})]})])
+    style.configure(LOG_SCROLL_STYLE, troughcolor=UI["log_bg"], background="#334155", bordercolor=UI["log_bg"],
+                    lightcolor="#334155", darkcolor="#334155", gripcount=0, relief="flat",
+                    arrowsize=max(6, round(8 * scale)))  # clam 은 막대 두께를 arrowsize 로 정한다
+    style.map(LOG_SCROLL_STYLE, background=[("pressed", "#64748B"), ("active", "#475569")],
+              lightcolor=[("pressed", "#64748B"), ("active", "#475569")],
+              darkcolor=[("pressed", "#64748B"), ("active", "#475569")])
 LOG_MIN_LINES = 5
 
 
@@ -1615,6 +1629,7 @@ class RunnerApp:
         self.root.geometry(f"{width}x{height}")
         self.root.minsize(round(600 * s), min(round(620 * s), height))
         self._apply_theme()
+        _style_log_scrollbar(ttk.Style(self.root), s)  # 스크롤바 모양은 테마마다 따로 — clam 을 고른 뒤에
 
         # 머리줄: 이름 · 버전 배지 · 상태
         head = ttk.Frame(self.root, padding=(16, 16, 16, 12))
@@ -1754,12 +1769,14 @@ class RunnerApp:
         log_head.pack(fill="x")
         tk.Label(log_head, text="실행 로그", bg=UI["log_bg"], fg="#94A3B8", font=(FONT, 10, "bold"),
                  padx=16, pady=8).pack(side="left")
+        # 제목과 본문 사이 구분선 — 없으면 본문 스크롤바가 중간에서 끊긴 것처럼 보인다.
+        tk.Frame(log_card, bg=LOG_LINE, height=1).pack(fill="x")
         log_body = tk.Frame(log_card, bg=UI["log_bg"])
         log_body.pack(fill="both", expand=True)
         self.log_box = tk.Text(log_body, height=LOG_MIN_LINES, wrap="word", state="disabled", bd=0, highlightthickness=0,
-                               bg=UI["log_bg"], fg=UI["log_fg"], font=(FONT, 10), padx=16, pady=4,
+                               bg=UI["log_bg"], fg=UI["log_fg"], font=(FONT, 10), padx=16, pady=8,
                                spacing1=1, spacing3=1)
-        self.log_scroll = ttk.Scrollbar(log_body, orient="vertical", command=self.log_box.yview)
+        self.log_scroll = ttk.Scrollbar(log_body, orient="vertical", command=self.log_box.yview, style=LOG_SCROLL_STYLE)
         self.log_box.pack(side="left", fill="both", expand=True)
 
         def log_yscroll(first, last):
@@ -1767,7 +1784,7 @@ class RunnerApp:
             self.log_scroll.set(first, last)
             need = float(first) > 0.0 or float(last) < 1.0
             if need and not self.log_scroll.winfo_manager():
-                self.log_scroll.pack(side="right", fill="y", before=self.log_box)
+                self.log_scroll.pack(side="right", fill="y", padx=(0, 6), pady=6, before=self.log_box)
             elif not need and self.log_scroll.winfo_manager():
                 self.log_scroll.pack_forget()
         self.log_box.configure(yscrollcommand=log_yscroll)

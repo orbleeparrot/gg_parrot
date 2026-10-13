@@ -106,3 +106,7 @@
   .agent-history-when { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
   .agent-history-pnl { font-size: 16px; }
 }
+
+/* 내 에이전트 — 처음 불러오기가 실패해 보일 것이 없을 때만, 화면 가운데 빈 화면으로(맨 위 띠로 띄우지 않는다). */
+.agent-load-failed { display: grid; justify-items: center; gap: 16px; margin: 96px auto; padding: 0 16px; text-align: center; color: rgb(var(--c-slate-700)); }
+.agent-load-failed strong { color: rgb(var(--c-slate-900)); font-size: 18px; font-weight: 700; }

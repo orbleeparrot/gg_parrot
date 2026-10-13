@@ -12,8 +12,9 @@ import AgentActivityStream from "../components/AgentActivityStream.jsx";
 import CandleChart from "../components/CandleChart.jsx";
 import PositionStrip from "../components/PositionStrip.jsx";
 import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
-import { ErrorNote, Loading } from "../components/Page.jsx";
+import { Loading } from "../components/Page.jsx";
 import ConfirmDialog from "../components/ConfirmDialog.jsx";
+import AppToast from "../components/AppToast.jsx";
 import { describeDeleteConfirm, describeStopConfirm } from "../features/agents/runOutcome.js";
 import { AgentHistoryList, AgentIdle, AgentViewTabs } from "../components/AgentHistory.jsx";
 import { runPeriodLabel } from "../features/agents/history.js";
@@ -140,7 +141,9 @@ function AccountAgents() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [sessions, setSessions] = useState(null);
   const [chartSnapshot, setChartSnapshot] = useState(null);
+  // 불러오기 오류(화면 위 띠로 띄우지 않는다 — 다음 갱신이 스스로 고친다)와 버튼 행동 오류(토스트)를 나눈다.
   const [error, setError] = useState("");
+  const [actionError, setActionError] = useState("");
   const [busy, setBusy] = useState(false);
   const [retrying, setRetrying] = useState(false);
   // 확인 모달이 기다리는 동작: { type: "stop", mode } | { type: "delete" }
@@ -384,10 +387,10 @@ function AccountAgents() {
     try {
       await api.runnerPinSession(session.session_id, !session.pinned);
       if (!isCurrentAccount()) return;
-      setError("");
+      setActionError("");
       await loadSessions();
     } catch (reason) {
-      if (isCurrentAccount()) setError(String(reason.message || reason));
+      if (isCurrentAccount()) setActionError(String(reason.message || reason));
     } finally {
       if (isCurrentAccount()) setPinBusy(0);
     }
@@ -399,9 +402,9 @@ function AccountAgents() {
     setFileBusy(session.session_id);
     try {
       await api.downloadMacroFile(session.macro);
-      if (isCurrentAccount()) setError("");
+      if (isCurrentAccount()) setActionError("");
     } catch (reason) {
-      if (isCurrentAccount()) setError(String(reason.message || reason));
+      if (isCurrentAccount()) setActionError(String(reason.message || reason));
     } finally {
       if (isCurrentAccount()) setFileBusy(0);
     }
@@ -444,7 +447,7 @@ function AccountAgents() {
       setPending(null);
     } catch (reason) {
       if (!isCurrentAccount()) return;
-      setError(String(reason.message || reason));
+      setActionError(String(reason.message || reason));
       if (action.type === "stop") setPendingStop(null);
       setPending(null);
     } finally {
@@ -463,16 +466,18 @@ function AccountAgents() {
     <div className="agent-page">
       {/* 화면 제목은 두지 않는 디자인(DESIGN.md §9) — 문서 구조와 화면 읽기 프로그램을 위한 제목만. */}
       <h1 className="sr-only">내 에이전트</h1>
-      {error ? (
-        <ErrorNote>
-          실행 상태 오류: {error}
-          <button type="button" className="btn btn-m btn-secondary ml-3" disabled={retrying} onClick={async () => {
+      {!sessions && error ? (
+        // 처음 불러오기가 실패해 보일 것이 없을 때만 — 화면 가운데 빈 화면으로. 이미 보이는 내용이 있으면 아무것도 띄우지 않는다.
+        <div className="agent-load-failed" role="status">
+          <strong>실행 상태를 불러오지 못했어요.</strong>
+          <button type="button" className="btn btn-m btn-secondary" disabled={retrying} onClick={async () => {
             setRetrying(true);
             try { await loadSessions(); }
             finally { if (isCurrentAccount()) setRetrying(false); }
           }}>{retrying ? "불러오는 중…" : "다시 불러오기"}</button>
-        </ErrorNote>
+        </div>
       ) : null}
+      {actionError ? <AppToast key={actionError} tone="error" label="실패" title={actionError} onClose={() => setActionError("")} /> : null}
       {sessions && mode === "overview" ? (
         <div className="agent-overview">
           <AgentIdle last={recentSessions[0] || null} />

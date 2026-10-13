@@ -28,7 +28,13 @@ export default function RunResultScreen({ session, onShowLog }) {
         <strong className={`agent-result-pnl num is-${outcome.pnl.tone}${outcome.pending ? " is-pending" : ""}`}>
           {outcome.pnl.text}
         </strong>
-        {outcome.pnl.sub ? <span className="agent-result-pnl-sub num">{outcome.pnl.sub}</span> : null}
+        {outcome.pnl.money ? (
+          // 번 돈 · 투입금은 수익률 바로 아래 한 문장으로 — 회색 작은 글자가 아니게(번 돈은 수익과 같은 색).
+          <p className="agent-result-money-line num">
+            <b className={`is-${outcome.pnl.moneyTone}`}>{outcome.pnl.money}</b>{{ up: " 벌었어요", down: " 잃었어요" }[outcome.pnl.moneyTone] || ""}
+            <span> · 투입 {outcome.pnl.invested}</span>
+          </p>
+        ) : outcome.pnl.sub ? <span className="agent-result-pnl-sub num">{outcome.pnl.sub}</span> : null}
       </div>
 
       <dl className="agent-result-rows">

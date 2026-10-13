@@ -8640,6 +8640,12 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 }
 .agent-result-pnl-label { color: rgb(var(--c-slate-500)); font-size: 13px; font-weight: 700; }
 .agent-result-pnl-sub { color: rgb(var(--c-slate-500)); font-size: 13px; }
+/* 번 돈 · 투입금 — 수익률 바로 아래 한 문장(18px). 회색 작은 글자가 아니게. */
+.agent-result-money-line { margin: 6px 0 0; color: rgb(var(--c-slate-900)); font-size: 18px; font-weight: 600; }
+.agent-result-money-line b { font-weight: 800; }
+.agent-result-money-line b.is-up { color: rgb(var(--c-green-600)); }
+.agent-result-money-line b.is-down { color: rgb(var(--c-red-600)); }
+.agent-result-money-line span { color: rgb(var(--c-slate-600)); font-weight: 600; }
 .agent-position-note { display: block; color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 500; margin-top: 2px; }
 .lb-reward-note { margin-left: 6px; color: rgb(var(--c-slate-500)); cursor: help; }
 .agent-result-pnl {

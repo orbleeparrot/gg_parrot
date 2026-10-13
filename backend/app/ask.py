@@ -799,7 +799,17 @@ def used_today(db: Session, user: User) -> int:
     ).one())
 
 
+# 관리자 계정은 '껄무새에게 물어볼까?' 횟수 제한이 없다(2026-10-13 운영 요청) — 화면에는 '무제한'.
+ADMIN_REMAINING = 999
+
+
+def unlimited(user: User) -> bool:
+    return bool(getattr(user, "is_admin", False))
+
+
 def free_remaining_today(db: Session, user: User) -> int:
+    if unlimited(user):
+        return ADMIN_REMAINING
     return max(0, daily_limit() - used_today(db, user))
 
 
@@ -824,6 +834,8 @@ def extra_left_today(db: Session, user: User) -> int:
 
 def remaining_today(db: Session, user: User) -> int:
     """오늘 물어볼 수 있는 횟수 = 무료 남은 수 + 아직 안 쓴 추가권 수."""
+    if unlimited(user):
+        return ADMIN_REMAINING
     unused = sum(1 for c in _credits_today(db, user) if c.used_session_id is None)
     return free_remaining_today(db, user) + unused
 
@@ -860,6 +872,7 @@ def status(db: Session, user: User) -> dict:
         "consented": consented(user),
         "remaining_today": remaining_today(db, user),
         "daily_limit": daily_limit(),
+        "unlimited": unlimited(user),
         "disclaimer_version": DISCLAIMER_VERSION,
         "extra_price": EXTRA_PRICE,
         "extra_left_today": extra_left_today(db, user),

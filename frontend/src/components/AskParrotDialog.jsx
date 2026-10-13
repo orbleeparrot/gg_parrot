@@ -393,6 +393,8 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
   useEffect(() => { setActive(0); trackRef.current?.scrollTo?.({ left: 0 }); }, [state.results]);
 
   const noQuota = status && !status.error && status.remaining_today <= 0;
+  // 관리자 계정은 횟수 제한이 없다 — 남은 횟수 · 비용 안내를 보이지 않는다.
+  const unlimited = !!(status && !status.error && status.unlimited);
   const answeredSteps = STEPS.filter((s) => state.answers[s] != null)
     .filter((s) => state.phase !== "cards" || STEPS.indexOf(s) < STEPS.indexOf(state.step));
   const asking = status && !status.error && status.consented && (state.phase === "cards" || state.phase === "ready") && !(noQuota && answeredSteps.length === 0);
@@ -522,6 +524,7 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
 
   // 성향을 바꾸는 두 버튼(안전하게/공격적으로)은 세션을 버리고 새로 후보를 받으므로 하루 횟수가 하나 더 든다.
   const followLabel = (f) => {
+    if (unlimited) return f.kind === "safer" ? "안전하게" : f.kind === "riskier" ? "공격적으로" : f.label;
     if (f.kind === "safer") return `안전하게 (횟수 1회 더 써요 · 남은 ${state.remaining}회)`;
     if (f.kind === "riskier") return `공격적으로 (횟수 1회 더 써요 · 남은 ${state.remaining}회)`;
     return f.label;
@@ -597,7 +600,7 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
       <div className="ask-center">
         <p className="ask-say ask-in" style={{ "--i": 0 }}><Face size={32} /><span>{READY_TEXT}</span></p>
         <button type="button" className="btn btn-m btn-primary ask-in" style={{ "--i": 1 }} disabled={lock} onClick={() => leaveThen(submitCards)}>{READY_BUTTON}</button>
-        <span className="ask-caption ask-in" style={{ "--i": 2 }}>{readyCostNote(status.remaining_today)}</span>
+        {unlimited ? null : <span className="ask-caption ask-in" style={{ "--i": 2 }}>{readyCostNote(status.remaining_today)}</span>}
       </div>
     );
   } else if (busy) {
@@ -682,7 +685,8 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
         <header className="ask-head">
           <img src={ASK_MASCOT} alt="" width="28" height="28" className="ask-head-face" aria-hidden="true" />
           <h2 id={titleId} className="ask-title">껄무새에게 물어볼까?</h2>
-          {status && !status.error && status.daily_limit ? <span className="ask-quota num">오늘 {status.remaining_today}/{status.daily_limit}번 남음</span> : null}
+          {unlimited ? <span className="ask-quota">횟수 무제한</span>
+            : status && !status.error && status.daily_limit ? <span className="ask-quota num">오늘 {status.remaining_today}/{status.daily_limit}번 남음</span> : null}
           <button type="button" onClick={onClose} disabled={busy} className="ask-x" aria-label="닫기"><Icon name="x" size={20} /></button>
         </header>
         <div className="ask-body" ref={bodyRef}>

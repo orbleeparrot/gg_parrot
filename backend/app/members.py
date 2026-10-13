@@ -107,7 +107,7 @@ def member_view(user: User, stats: Optional[dict] = None) -> dict:
         "blocked_at": user.blocked_at or "",
         "blocked_reason": user.blocked_reason or "",
         "points_balance": int(user.points_balance or 0),
-        "tier_name": _tier(sales)["name"],
+        "tier_name": "관리자" if user.is_admin else _tier(sales)["name"],
         "last_seen_ms": stats.get("last_seen_ms"),
         "macros": int(stats.get("macros") or 0),
         "posts": int(stats.get("posts") or 0),

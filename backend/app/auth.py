@@ -173,6 +173,8 @@ def user_view(user: User, db: Session | None = None) -> dict:
         "bio": user.bio,
         "can_change_password": bool(user.password_hash),
         "points_balance": user.points_balance,
+        # 관리자 포인트는 무한 — 화면은 잔액 대신 '무제한' 을 보인다(쓰는 일이 잔액 · 원장을 바꾸지 않는다).
+        "points_unlimited": is_admin(user),
         "created_at": user.created_at,
         "avatar_url": avatars.avatar_url(user.id, db=db),
         "is_admin": is_admin(user),

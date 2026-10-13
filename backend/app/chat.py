@@ -120,7 +120,7 @@ def add_message(account: User, text: str, *, room_id: int | None = None, db: Ses
                        _macro_cards(db, [row.text], user_id), _reply_cards(db, [row.text], room_id))
         # 목록과 같은 모양 — 보낸 메시지에도 닉네임 옆 등급을 싣는다.
         result["author_tier"] = account_mod.tier_name_for(
-            user_id, db.exec(select(account_mod.sales_count_of(user_id))).one())
+            user_id, db.exec(select(account_mod.sales_count_of(user_id))).one(), bool(author.is_admin))
         db.commit()
         return result
 
@@ -214,7 +214,8 @@ def list_messages(
         if not metadata_only and (message_ids is not None or after_id is None or after_id < latest_id):
             # 닉네임 옆 등급(판매 수)은 같은 질의의 열 하나로 — 질의 수가 늘지 않는다.
             query = select(ChatMessage, UserAvatar.version,
-                           account_mod.sales_count_of(ChatMessage.user_id).label("author_sales")).outerjoin(
+                           account_mod.sales_count_of(ChatMessage.user_id).label("author_sales"),
+                           account_mod.is_admin_of(ChatMessage.user_id).label("author_admin")).outerjoin(
                 UserAvatar, UserAvatar.user_id == ChatMessage.user_id,
             ).where(ChatMessage.created_ms >= start_ms, ChatMessage.id <= latest_id, room_filter)
             if message_ids is not None:
@@ -228,12 +229,12 @@ def list_messages(
             has_more_new = after_id is not None and len(rows) > MAX_LIST
             has_more = after_id is None and message_ids is None and len(rows) > MAX_LIST
             page = rows[:MAX_LIST] if ascending else list(reversed(rows[:MAX_LIST]))
-        texts = [row.text for row, _version, _sales in page]
+        texts = [row.text for row, _version, _sales, _admin in page]
         cards = _macro_cards(db, texts, user_id)
         replies = _reply_cards(db, texts, room_id)
         items = [{**_view(row, avatars.public_url(row.user_id, version), cards, replies),
-                  "author_tier": account_mod.tier_name_for(row.user_id, sales)}
-                 for row, version, sales in page]
+                  "author_tier": account_mod.tier_name_for(row.user_id, sales, admin)}
+                 for row, version, sales, admin in page]
         unseen_count = 0
         if effective_seen is not None and effective_seen < latest_id:
             unseen_query = select(func.count(ChatMessage.id)).where(

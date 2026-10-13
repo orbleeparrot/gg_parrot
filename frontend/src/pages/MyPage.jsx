@@ -248,7 +248,7 @@ export default function MyPage() {
   };
   const title = section === "macros" ? "내 매크로" : section === "points" ? "포인트·판매" : "내 게시글";
   const metrics = data ? [
-    { label: "보유 포인트", value: formatPoints(user.points_balance), Icon: CoinsIcon, target: "ledger", points: true },
+    { label: "보유 포인트", value: user.points_unlimited ? "무제한" : formatPoints(user.points_balance), Icon: CoinsIcon, target: "ledger", points: true },
     { label: "판매 수익", value: formatPoints(totals.earned), Icon: TrendUpIcon, target: "sales" },
     { label: "누적 판매", value: totals.sales + "건", Icon: ReceiptIcon, target: "sales" },
   ] : [];

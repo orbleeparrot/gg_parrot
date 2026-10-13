@@ -24,7 +24,8 @@ export function canJoin(room, me, nowMs = Date.now()) {
   if (room.member_count >= room.capacity) return { ok: false, reason: "정원이 다 찼어요" };
   if (room.entry_fee > 0) {
     if (accountAgeMs(me, nowMs) < MIN_ACCOUNT_AGE_MS) return { ok: false, reason: "가입 3일 후부터 유료방에 들어갈 수 있어요" };
-    if ((me.points_balance ?? 0) < room.entry_fee) return { ok: false, reason: "포인트가 부족해요" };
+    // 관리자 포인트는 무한 — 입장료를 내지 않는다(서버도 기록하지 않는다).
+    if (!me.points_unlimited && (me.points_balance ?? 0) < room.entry_fee) return { ok: false, reason: "포인트가 부족해요" };
   }
   return { ok: true, reason: "" };
 }

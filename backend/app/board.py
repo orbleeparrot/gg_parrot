@@ -440,7 +440,8 @@ def list_posts(page: int = 1, size: int = PAGE_SIZE_DEFAULT, sort: str = "new", 
     ).subquery()
     start = (page - 1) * size
     # 글쓴이 등급(판매 수)은 이 쪽에 남은 줄에만 — 바깥 질의의 상관 하위질의라 질의 수는 그대로 하나.
-    final = select(*ranked.c, account_mod.sales_count_of(ranked.c.author_user_id).label("author_sales")).where(or_(
+    final = select(*ranked.c, account_mod.sales_count_of(ranked.c.author_user_id).label("author_sales"),
+                   account_mod.is_admin_of(ranked.c.author_user_id).label("author_admin")).where(or_(
         and_(ranked.c.is_notice == True, ranked.c.rn <= NOTICE_LIMIT),  # noqa: E712
         and_(ranked.c.is_notice == False, ranked.c.rn > start, ranked.c.rn <= start + size),  # noqa: E712
     )).order_by(ranked.c.is_notice.desc(), ranked.c.rn)
@@ -467,7 +468,7 @@ def list_posts(page: int = 1, size: int = PAGE_SIZE_DEFAULT, sort: str = "new", 
                 "author_name": r.author_name,
                 "author_user_id": r.author_user_id,
                 "author_avatar_url": avatars.public_url(r.author_user_id, r.avatar_version),
-                "author_tier": account_mod.tier_name_for(r.author_user_id, r.author_sales),
+                "author_tier": account_mod.tier_name_for(r.author_user_id, r.author_sales, r.author_admin),
                 "has_image": bool(r.has_image),
                 "views": int(r.views or 0),
                 "likes": int(r.likes or 0),
@@ -504,15 +505,15 @@ def _comments(db, post_id: int) -> list[dict]:
     # Join current identities in the existing single query. Historical comments
     # may predate rename propagation; anonymous names must remain untouched.
     rows = db.exec(select(BoardComment, UserAvatar.version, User.username, User.is_deleted,
-                          account_mod.sales_count_of(BoardComment.author_user_id).label("author_sales"))
+                          account_mod.sales_count_of(BoardComment.author_user_id).label("author_sales"), User.is_admin)
                    .outerjoin(User, User.id == BoardComment.author_user_id)
                    .outerjoin(UserAvatar, UserAvatar.user_id == BoardComment.author_user_id)
                    .where(BoardComment.post_id == post_id).order_by(BoardComment.id.asc())).all()
     return _comment_tree([
         {**_comment_view(row, None if deleted else avatars.public_url(row.author_user_id, version),
                          username="탈퇴한 회원" if deleted else username),
-         "author_tier": None if deleted else account_mod.tier_name_for(row.author_user_id, sales)}
-        for row, version, username, deleted, sales in rows
+         "author_tier": None if deleted else account_mod.tier_name_for(row.author_user_id, sales, admin)}
+        for row, version, username, deleted, sales, admin in rows
     ])
 
 
@@ -523,7 +524,8 @@ def get_post(post_id: int, viewer_id: int | None = None, view_key: str | None = 
     statement = select(*[c for c in BoardPost.__table__.c if c.name != "image_data"],
                        (func.coalesce(func.length(BoardPost.image_data), 0) > 0).label("legacy_image"),
                        UserAvatar.version.label("avatar_version"), func.coalesce(vote, 0).label("my_vote"),
-                       account_mod.sales_count_of(BoardPost.author_user_id).label("author_sales"))\
+                       account_mod.sales_count_of(BoardPost.author_user_id).label("author_sales"),
+                       account_mod.is_admin_of(BoardPost.author_user_id).label("author_admin"))\
         .outerjoin(UserAvatar, UserAvatar.user_id == BoardPost.author_user_id).where(BoardPost.id == post_id)
     with (nullcontext(db) if db is not None else get_session()) as db:
         row = db.exec(statement).first()
@@ -533,7 +535,7 @@ def get_post(post_id: int, viewer_id: int | None = None, view_key: str | None = 
         images = db.exec(select(BoardImage.id, BoardImage.position).where(BoardImage.post_id == post_id)).all()
         result = _post_detail_view(row, comments, avatars.public_url(row.author_user_id, row.avatar_version),
                                    images, my_vote=int(row.my_vote), legacy_image=row.legacy_image)
-        result["author_tier"] = account_mod.tier_name_for(row.author_user_id, row.author_sales)
+        result["author_tier"] = account_mod.tier_name_for(row.author_user_id, row.author_sales, row.author_admin)
         if view_key:
             key, now = (view_key, post_id), time.time()
             with _view_lock:

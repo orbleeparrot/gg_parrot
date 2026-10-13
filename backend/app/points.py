@@ -24,6 +24,11 @@ UNLOCK_PRICE = 100  # cost to reveal+copy one leaderboard macro
 UNLOCK_CREATOR_SHARE_PCT = 70  # % of the unlock price returned to the creator
 
 
+def unlimited(user) -> bool:
+    """관리자 계정의 포인트는 무한이다 — 쓰는 일이 잔액도 원장(PointLedger)도 바꾸지 않는다."""
+    return bool(getattr(user, "is_admin", False))
+
+
 class InsufficientPoints(Exception):
     """Raised when a debit would push a balance below zero."""
 
@@ -39,6 +44,9 @@ def apply(db, user: User, delta: int, reason: str, ref: str = "") -> None:
     Does NOT commit — the caller controls the transaction so multi-step transfers
     (spend + credit) are atomic. Raises :class:`InsufficientPoints` on overdraft.
     """
+    if delta < 0 and unlimited(user):
+        # 관리자 사용은 포인트 소비로 기록하지 않는다(2026-10-13 운영 요청). 잔액도 그대로.
+        return
     new_balance = user.points_balance + delta
     if new_balance < 0:
         raise InsufficientPoints(
@@ -96,6 +104,9 @@ def unlock_transfer(db, *, viewer: User, creator: User, entry_id: int, price: in
     Atomic within the caller's transaction. Returns the creator's share. The
     caller must commit. Owners unlocking their own entry never reach here.
     """
+    if unlimited(viewer):
+        # 관리자는 값을 치르지 않고 볼 뿐 — 만든 사람에게 주지도, 판매로 세지도(MacroUnlock) 않는다.
+        return 0
     apply(db, viewer, -price, "unlock_spend", f"entry:{entry_id}")
     share = creator_share(price)
     if creator.id != viewer.id and share > 0:

@@ -842,6 +842,7 @@
           "is-2",
           "is-3",
           "is-active",
+          "is-admin",
           "is-api",
           "is-ask",
           "is-auth",

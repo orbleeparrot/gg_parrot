@@ -15,7 +15,7 @@ from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from sqlalchemy import func, update
+from sqlalchemy import func, literal, union_all, update
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 
@@ -368,11 +368,14 @@ def _unlocked_ids_for(db, viewer_user_id: Optional[int], entry_ids: list[int]) -
     """Entry ids this account has already paid to unlock (so we don't re-charge)."""
     if viewer_user_id is None or not entry_ids:
         return frozenset()
-    rows = db.exec(
-        select(MacroUnlock.entry_id).where(
-            MacroUnlock.user_id == viewer_user_id, MacroUnlock.entry_id.in_(entry_ids)
-        )
-    ).all()
+    # 관리자는 값을 치르지 않고 모든 매크로를 본다 — 이미 산 매크로와 '관리자면 -1' 표시를 한 질의(UNION ALL)로 읽는다.
+    paid = select(MacroUnlock.entry_id).where(
+        MacroUnlock.user_id == viewer_user_id, MacroUnlock.entry_id.in_(entry_ids))
+    admin = select(literal(-1)).where(
+        select(User.id).where(User.id == viewer_user_id, User.is_admin.is_(True)).exists())
+    rows = set(db.execute(union_all(paid, admin)).scalars().all())
+    if -1 in rows:
+        return frozenset(entry_ids)
     return frozenset(rows)
 
 
@@ -686,7 +689,7 @@ def unlock_entry(viewer: User, entry_id: int) -> dict:
         ).first()
 
         viewer_row = db.get(User, viewer.id)
-        if already is None:
+        if already is None and not points_mod.unlimited(viewer_row):
             creator = db.get(User, row.owner_user_id)
             if creator is None:
                 raise UnlockError("작성자 계정을 찾을 수 없어요.", status=404)

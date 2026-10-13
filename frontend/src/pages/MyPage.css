@@ -2,8 +2,7 @@
  * Spacing: 4px detail, 8px label/value, 16px groups, 24px desktop insets.
  * Hallmark · pre-emit critique: P4 H4 E4 S4 R5 V4
  */
-.me-page { --me-tier-bronze: 153 97 53; --me-inset: 24px; --me-section-gap: 24px; --me-group-gap: 16px; --me-label-gap: 8px; display: grid; grid-template-columns: 240px minmax(0, 1fr); align-items: start; gap: 32px; width: 100%; max-width: 1320px; min-width: 0; margin-inline: auto; }
-.dark .me-page, .dark .me-tier-dialog { --me-tier-bronze: 207 150 104; }
+.me-page { --me-inset: 24px; --me-section-gap: 24px; --me-group-gap: 16px; --me-label-gap: 8px; display: grid; grid-template-columns: 240px minmax(0, 1fr); align-items: start; gap: 32px; width: 100%; max-width: 1320px; min-width: 0; margin-inline: auto; }
 .me-profile-rail { position: sticky; top: 88px; min-width: 0; }
 .me-identity { position: relative; display: flex; flex-direction: column; align-items: center; gap: var(--me-group-gap); padding: 48px var(--me-inset) var(--me-inset); border: 1px solid rgb(var(--c-slate-200)); border-radius: 20px; background: rgb(var(--c-slate-100)); text-align: center; }
 .me-icon-button { display: inline-grid; place-items: center; flex: none; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: rgb(var(--c-slate-700)); cursor: pointer; }
@@ -15,12 +14,6 @@
 .me-tier-toggle { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 2px 10px; border: 1px solid rgb(var(--c-slate-300)); border-radius: 999px; background: transparent; color: rgb(var(--c-slate-700)); font-size: 13px; font-weight: 600; cursor: pointer; }
 .me-tier-placeholder { width: 98px; height: 36px; flex: none; border-radius: 999px; background: rgb(var(--c-slate-200)); }
 @media (max-width: 599px) { .me-tier-placeholder { height: 32px; } }
-.me-tier-icon { flex: none; }
-.me-tier-icon.is-seed { color: rgb(var(--c-green-600)); }
-.me-tier-icon.is-bronze { color: rgb(var(--me-tier-bronze)); }
-.me-tier-icon.is-silver { color: rgb(var(--c-slate-500)); }
-.me-tier-icon.is-gold { color: rgb(var(--c-brand-line)); }
-.me-tier-icon.is-diamond { color: rgb(var(--c-sky-700)); }
 .me-bio { max-width: 38ch; margin: 0; color: rgb(var(--c-slate-700)); font-size: 14px; line-height: 24px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .me-identity-footer { width: 100%; }
 .me-profile-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px; width: 100%; }
@@ -94,7 +87,8 @@
 .me-macro-metrics dt { color: rgb(var(--c-slate-500)); font-size: 12px; line-height: 16px; font-weight: 500; }
 .me-macro-metrics dd { margin: 0; color: rgb(var(--c-slate-900)); font-size: 14px; font-weight: 600; line-height: 20px; overflow-wrap: anywhere; }
 .me-macro-metrics dd .me-time { display: block; color: inherit; font-size: inherit; font-weight: inherit; line-height: inherit; }
-.me-macro-card footer { display: flex; justify-content: flex-end; }
+.me-macro-card footer { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.me-file-error { margin: 0 0 12px; color: rgb(var(--c-red-600)); font-size: 13px; }
 .me-card-action { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 36px; padding: 0 12px; border: 1px solid rgb(var(--c-slate-300)); border-radius: 8px; background: transparent; color: rgb(var(--c-slate-900)); font-size: 13px; font-weight: 600; cursor: pointer; }
 .me-card-action:disabled { color: rgb(var(--c-slate-500)); opacity: .55; cursor: default; }
 .me-credit, .me-macro-metrics dd.me-credit { color: rgb(var(--c-green-600)); }
@@ -127,7 +121,7 @@
   .me-create-link:hover { filter: brightness(1.05); }
   .me-stat-link:hover { background: rgb(var(--c-slate-200) / .15); }
 }
-.me-tier-dialog { --me-tier-bronze: 153 97 53; width: min(460px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); margin: auto; padding: 24px; overflow-y: auto; border: 1px solid rgb(var(--c-slate-300)); border-radius: 18px; background: rgb(var(--c-surface)); color: rgb(var(--c-slate-900)); }
+.me-tier-dialog { width: min(460px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); margin: auto; padding: 24px; overflow-y: auto; border: 1px solid rgb(var(--c-slate-300)); border-radius: 18px; background: rgb(var(--c-surface)); color: rgb(var(--c-slate-900)); }
 .me-tier-dialog::backdrop { background: rgb(0 0 0 / .55); }
 .me-tier-dialog header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .me-tier-dialog h2 { margin: 0; font-size: 22px; font-weight: 750; letter-spacing: -.025em; }

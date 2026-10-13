@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
+import TierIcon from "../components/TierIcon.jsx";
 import useBoardList from "../hooks/useBoardList.js";
 import { api } from "../api.js";
 import { useAuth } from "../lib/auth.js";
@@ -110,6 +111,7 @@ function Comment({ c, post, user, token, onChange, onDeleted, isReply = false })
       <div className="board-comment-top">
         <AuthorAvatar userId={c.author_user_id} src={c.author_avatar_url} name={c.username} size={24} />
         <b>{c.username}</b>
+        <TierIcon name={c.author_tier} size={16} labelled />
         <time className={/전$/.test(rel) ? undefined : "num"} dateTime={when || undefined} title={c.created_kst}>{rel}</time>
         {c.edited ? <span className="board-comment-edited">수정됨</span> : null}
         <span className="board-comment-actions">
@@ -340,6 +342,7 @@ export default function BoardPost() {
                   </button>
                 ) : <AuthorAvatar userId={post.author_user_id} src={post.author_avatar_url} name={post.author_name} size={32} />}
                 <b>{post.author_name}</b>
+                <TierIcon name={post.author_tier} size={18} labelled />
               </span>
               <span className="board-post-strip-time">
                 <time className={/전$/.test(rel) ? undefined : "num"} dateTime={when || undefined} title={full}>{rel}</time>

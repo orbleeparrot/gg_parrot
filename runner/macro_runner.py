@@ -585,6 +585,33 @@ def _pnl_pct(entry, price, side) -> float:
 # ==================================================================
 #  서버 연동 클라이언트 (회원 키로 인증; API 키는 절대 안 보냄)
 # ==================================================================
+START_ATTEMPTS = 4
+
+
+class ServerRequestError(Exception):
+    """서버가 거절한 요청 — 화면에는 서버가 준 이유(detail)만 보인다(주소 · 헤더는 싣지 않는다)."""
+
+    def __init__(self, status: int, detail: str) -> None:
+        self.status = status
+        super().__init__(f"{detail} ({status})" if detail else f"서버가 요청을 받지 않았어요 ({status})")
+
+
+def _server_detail(response) -> str:
+    try:
+        detail = response.json().get("detail")
+    except Exception:
+        return ""
+    return detail.strip()[:200] if isinstance(detail, str) else ""
+
+
+def _retry_after_seconds(response) -> float:
+    try:
+        value = float((getattr(response, "headers", None) or {}).get("Retry-After", 1))
+    except (TypeError, ValueError):
+        value = 1.0
+    return min(max(value, 0.5), 3.0)
+
+
 class ServerClient:
     def __init__(self, runner_key: str, *, base: str = SERVER_BASE) -> None:
         self.base = base.rstrip("/")
@@ -620,8 +647,18 @@ class ServerClient:
             self._events = (batch + self._events)[-EVENT_BUFFER_MAX:]
 
     def start(self, payload: dict) -> dict:
-        r = requests.post(f"{self.base}/api/runner/start", json=payload,
-                          headers=self._headers, timeout=15)
+        # 서버가 '혼잡'(503 database_busy · 429)이면 Retry-After 만큼 쉬고 다시 보낸다. 서버의 시작은 한 트랜잭션이고
+        # 혼잡 503 은 DB 연결을 받기 전에 나므로 다시 보내도 세션이 두 번 생기지 않는다.
+        for attempt in range(START_ATTEMPTS):
+            r = requests.post(f"{self.base}/api/runner/start", json=payload,
+                              headers=self._headers, timeout=15)
+            status = getattr(r, "status_code", 200)
+            if not isinstance(status, int) or status < 400:
+                break
+            if status in (429, 503) and attempt + 1 < START_ATTEMPTS:
+                time.sleep(_retry_after_seconds(r))
+                continue
+            raise ServerRequestError(status, _server_detail(r))
         r.raise_for_status()
         data = r.json()
         self.session_id = data.get("session_id")
@@ -2847,6 +2884,15 @@ class RunnerApp:
         server = ServerClient(start_credentials["member_key"], base=server_base)
         try:
             started = server.start(payload)
+        except ServerRequestError as exc:
+            # 서버가 받고서 거절했다 — 연결 문제가 아니므로 서버가 준 이유를 그대로 보인다.
+            msg = connection.safe_preflight_reason(str(exc), start_credentials)
+            if exc.status == 401:
+                msg = "회원 키가 유효하지 않아요. 마이페이지에서 키를 확인하세요."
+            elif exc.status in (429, 503):
+                msg = f"{msg}\n\n몇 번 다시 보냈지만 서버가 계속 바빠요. 잠시 뒤 다시 [매크로 시작]을 눌러 주세요."
+            messagebox.showerror(APP_TITLE, f"매크로를 시작하지 못했어요:\n{msg}")
+            return
         except Exception as exc:
             msg = connection.safe_preflight_reason(str(exc), start_credentials)
             if "401" in msg:

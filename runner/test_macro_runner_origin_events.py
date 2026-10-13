@@ -52,6 +52,47 @@ class FileSignatureTests(unittest.TestCase):
         self.assertEqual(payload["user_macro_id"], 5)
 
 
+class StartRetryTests(unittest.TestCase):
+    @staticmethod
+    def response(status, body=None, retry_after="1"):
+        r = Mock(status_code=status, headers={"Retry-After": retry_after})
+        r.json.return_value = body or {}
+        r.raise_for_status = Mock()
+        return r
+
+    def test_busy_server_is_retried_then_session_starts(self) -> None:
+        client = ServerClient("key", base="https://example.invalid")
+        busy = self.response(503, {"detail": "서버 저장소가 혼잡해요. 잠시 후 다시 연결합니다.", "code": "database_busy"})
+        ok = self.response(200, {"session_id": 42})
+        with patch.object(macro_runner.requests, "post", side_effect=[busy, busy, ok]) as post, \
+                patch.object(macro_runner.time, "sleep") as sleep:
+            data = client.start({"symbol": "KRW-BTC"})
+        self.assertEqual(data["session_id"], 42)
+        self.assertEqual(post.call_count, 3)
+        self.assertEqual(sleep.call_count, 2)
+
+    def test_refusal_shows_server_detail_without_address(self) -> None:
+        client = ServerClient("key", base="https://example.invalid")
+        refused = self.response(426, {"detail": "실행기 v10 이상으로 업데이트해 주세요."})
+        with patch.object(macro_runner.requests, "post", return_value=refused) as post:
+            with self.assertRaises(macro_runner.ServerRequestError) as caught:
+                client.start({})
+        self.assertEqual(post.call_count, 1)
+        self.assertIn("실행기 v10 이상으로 업데이트해 주세요.", str(caught.exception))
+        self.assertNotIn("https://", str(caught.exception))
+
+    def test_busy_until_the_end_gives_up_after_bounded_attempts(self) -> None:
+        client = ServerClient("key", base="https://example.invalid")
+        busy = self.response(503, {"detail": "서버 저장소가 혼잡해요."}, retry_after="30")
+        with patch.object(macro_runner.requests, "post", return_value=busy) as post, \
+                patch.object(macro_runner.time, "sleep") as sleep:
+            with self.assertRaises(macro_runner.ServerRequestError) as caught:
+                client.start({})
+        self.assertEqual(post.call_count, macro_runner.START_ATTEMPTS)
+        self.assertTrue(all(call.args[0] <= 3.0 for call in sleep.call_args_list))
+        self.assertEqual(caught.exception.status, 503)
+
+
 class EventUploadTests(unittest.TestCase):
     def test_heartbeat_carries_buffered_events_and_requeues_on_failure(self) -> None:
         client = ServerClient("key", base="https://example.invalid")

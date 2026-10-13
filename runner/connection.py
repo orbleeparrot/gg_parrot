@@ -59,7 +59,8 @@ _KEY_REJECTED = frozenset({"invalid_access_key", "jwt_verification", "no_authori
 # 키와 IP 는 통과했고 주문하기 권한이 없다.
 _SCOPE_REJECTED = frozenset({"out_of_scope"})
 # 거래소가 주문 내용(잔고 · 최소 금액)까지 따져 본 오류 — 키 · IP · 주문 권한은 이미 통과했다는 뜻이다.
-_ORDER_EVALUATED = frozenset({"insufficient_funds_bid", "insufficient_funds_ask", "over_krw_funds_bid", "under_min_total"})
+_ORDER_EVALUATED = frozenset({"insufficient_funds_bid", "insufficient_funds_ask", "insufficient_funds",
+                              "over_krw_funds_bid", "under_min_total"})
 
 
 def check_view(exchange: str, ok: bool, error_name: str = "") -> dict:

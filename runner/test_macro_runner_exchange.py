@@ -207,7 +207,8 @@ class RehearsalPolicyTests(unittest.TestCase):
     def test_rehearsal_runs_once_with_the_capped_entry_amount(self):
         bot = self.bot("live", (True, "통과"))
         self.assertTrue(bot._prepare())
-        self.assertEqual(bot.broker.rehearsals, [macro_runner.MAX_ORDER_KRW])
+        self.assertEqual(len(bot.broker.rehearsals), 1)
+        self.assertAlmostEqual(bot.broker.rehearsals[0], macro_runner.MAX_ORDER_KRW / (1 + macro_runner._bid_fee_rate(bot.broker)))
 
     def test_broker_exception_is_a_failure_not_a_crash(self):
         bot = self.bot("live", (True, "통과"))
@@ -237,8 +238,38 @@ class DomesticOrderSizingTests(unittest.TestCase):
         ack = bot._execute_command(self.BUY, price=15_000_000.0)
         self.assertTrue(ack["ok"], ack)
         call = bot.broker.calls[-1]
-        self.assertEqual(call["notional"], macro_runner.MAX_ORDER_KRW)
+        # 수수료까지 합쳐 설정 금액(여기서는 원화 상한) 안에 든다.
+        self.assertAlmostEqual(call["notional"], macro_runner.MAX_ORDER_KRW / (1 + macro_runner._bid_fee_rate(bot.broker)))
         self.assertIsNone(call["base_qty"])
+
+    def test_domestic_entry_keeps_the_fee_inside_the_set_amount(self):
+        """설정 20,000원이면 수수료까지 20,000원 — 빗썸 0.04% 면 19,992원어치를 산다(+8원)."""
+        bot = self.bot("KRW", symbol="KRW-SKL", step=0.0)
+        bot.capital = 20_000.0
+        bot.broker.fees = {"bid": 0.0004, "ask": 0.0004}
+        ack = bot._execute_command(self.BUY, price=7.476)
+        self.assertTrue(ack["ok"], ack)
+        ordered = bot.broker.calls[-1]["notional"]
+        self.assertAlmostEqual(ordered * 1.0004, 20_000.0, places=6)
+        self.assertEqual(int(ordered), 19_992)
+
+    def test_bithumb_no_funds_rejection_says_the_balance_is_short(self):
+        """빗썸은 잔고 부족을 insufficient_funds 로 보낸다 — '체결 완료를 확인하지 못했다' 가 아니라 원화 잔고 부족."""
+        bot = self.bot("KRW", symbol="KRW-SKL", step=0.0)
+        bot.exchange = "bithumb"
+        bot.broker.submit = Mock(return_value=macro_runner.brokers.Order(
+            status="REJECTED", executed_qty=0.0, avg_price=0.0, acquired_qty=0.0, fees_known=True,
+            order_id=None, raw_status="insufficient_funds"))
+        ack = bot._execute_command(self.BUY, price=7.476)
+        self.assertFalse(ack["ok"])
+        self.assertIn("원화 잔고가 모자라요", ack["error"])
+        self.assertNotIn("체결 완료를 확인하지 못했습니다", ack["error"])
+        self.assertFalse(bot.in_position)
+
+    def test_unknown_fee_rate_uses_a_conservative_default(self):
+        self.assertEqual(macro_runner._bid_fee_rate(None), macro_runner.DOMESTIC_BID_FEE_FALLBACK)
+        self.assertEqual(macro_runner._bid_fee_rate(Mock(fees={"bid": 0.0005})), 0.0005)
+        self.assertEqual(macro_runner._bid_fee_rate(Mock(fees={"bid": 0.9})), macro_runner.DOMESTIC_BID_FEE_FALLBACK)
 
     def test_binance_entry_is_still_sent_as_quantity(self):
         bot = self.bot("USDT", symbol="BTCUSDT", step=0.001)
@@ -286,7 +317,7 @@ class DomesticOrderSizingTests(unittest.TestCase):
             kwargs = bot._place.call_args.kwargs
             self.assertEqual("notional" in kwargs, has_money, exchange)
             if has_money:
-                self.assertEqual(kwargs["notional"], macro_runner.MAX_ORDER_KRW)
+                self.assertAlmostEqual(kwargs["notional"], macro_runner.MAX_ORDER_KRW / (1 + macro_runner._bid_fee_rate(bot.broker)))
 
     def test_domestic_close_dust_below_the_volume_limit_is_not_an_error(self):
         """국내는 step 이 0 이라 '팔 수 없는 잔여' 안전망이 꺼져 있었다.

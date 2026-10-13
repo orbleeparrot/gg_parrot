@@ -43,7 +43,9 @@ class StandaloneCheckTests(unittest.TestCase):
         with patch.object(macro_runner.BotThread, "_build_broker", return_value=broker):
             result = macro_runner.perform_connection_check(self.macro(), self.credentials(), "live")
         self.assertTrue(result.ok)
-        broker.rehearse.assert_called_once_with(notional=10000)
+        # 국내는 수수료까지 설정 금액 안에 들도록 줄인 금액으로 확인한다(수수료율을 못 읽으면 보수적인 기본값).
+        broker.rehearse.assert_called_once()
+        self.assertAlmostEqual(broker.rehearse.call_args.kwargs["notional"], 10000 / (1 + macro_runner.DOMESTIC_BID_FEE_FALLBACK))
         broker.submit.assert_not_called()
         broker.ensure_ready.assert_not_called()
         self.assertIs(result.broker, broker)

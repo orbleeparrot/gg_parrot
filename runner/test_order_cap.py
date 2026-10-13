@@ -57,7 +57,8 @@ class DomesticCapWiringTests(unittest.TestCase):
         self.assertTrue(ack["ok"], ack)
         side, qty = bot._place.call_args.args[:2]
         self.assertEqual(side, "BUY")
-        self.assertAlmostEqual(qty * 15_000_000.0, 150000.0, places=3)
+        # 국내는 수수료까지 상한 안에 든다 — 주문 금액은 150,000 / (1 + 수수료율).
+        self.assertAlmostEqual(qty * 15_000_000.0, 150000.0 / (1 + macro_runner.DOMESTIC_BID_FEE_FALLBACK), delta=1.0)  # 수량 8자리 내림
 
     def test_risk_guard_base_falls_back_to_the_given_cap(self):
         self.assertEqual(macro_runner.RiskGuard({}, 0, cap=150000).base, 150000)

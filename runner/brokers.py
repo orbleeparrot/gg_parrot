@@ -383,7 +383,8 @@ class DomesticApiError(RuntimeError):
 _IP_FIRST_ERRORS = frozenset({"no_authorization_ip", "NotAllowIP", "invalid_access_key",
                               "no_authorization_token"})
 _EXPIRED_KEY_ERRORS = frozenset({"expired_access_key"})
-_NO_FUNDS_ERRORS = frozenset({"insufficient_funds_bid", "insufficient_funds_ask"})
+# 업비트는 insufficient_funds_bid/ask, 빗썸(API 2.0)은 insufficient_funds 로 같은 뜻을 보낸다.
+_NO_FUNDS_ERRORS = frozenset({"insufficient_funds_bid", "insufficient_funds_ask", "insufficient_funds"})
 _MARKET_ERRORS = frozenset({"notfoundmarket", "invalid_market", "market_offline"})
 
 

@@ -451,6 +451,27 @@ def _notional_for(budget, leverage, market, *, quote="USDT") -> float:
     return cap * leverage if (market == "futures" and ORDER_CAP_BASIS == "margin") else cap
 
 
+# 업비트 · 빗썸 매수 수수료는 주문 금액과 따로 원화에서 빠진다. 계정의 실제 수수료율(/v1/orders/chance)을 못 읽었을 때
+# 쓰는 보수적인 값 — 실제보다 크게 잡아야 '설정 금액 안에서' 가 지켜진다.
+DOMESTIC_BID_FEE_FALLBACK = 0.0025
+
+
+def _bid_fee_rate(broker) -> float:
+    """매수 수수료율. 모의 래퍼는 안쪽 브로커의 값을 본다. 못 읽었거나 말이 안 되는 값이면 보수적인 기본값."""
+    for holder in (broker, getattr(broker, "_inner", None)):
+        fees = getattr(holder, "fees", None)
+        if isinstance(fees, dict):
+            rate = _positive(fees.get("bid"))
+            if 0 < rate < 0.05:
+                return rate
+    return DOMESTIC_BID_FEE_FALLBACK
+
+
+def _fee_inclusive(budget: float, rate: float) -> float:
+    """수수료까지 합쳐 budget 안에 들도록 줄인 주문 금액 — 20,000원 · 0.04% 면 19,992원(+8원 = 20,000원)."""
+    return budget / (1.0 + rate) if budget > 0 else 0.0
+
+
 def _smallest_entry_notional(macro: dict, leverage, market, *, quote="USDT") -> float:
     """이 매크로의 진입 한 건이 쓸 수 있는 가장 작은 주문 금액.
 
@@ -983,6 +1004,10 @@ class BotThread(threading.Thread):
         # Unknown submission may have opened a real position even if the order
         # query failed. Never turn that uncertainty into a flat snapshot.
         self.in_position = (self.held_qty > 0 and not dust_only) or self.position_uncertain
+        if order.status == "REJECTED" and not executed and self.domestic:
+            # 거래소가 오류 이름을 달아 거절했다 — 주문은 나가지 않았다. '확인하지 못했다' 가 아니라 이유를 말한다
+            # (예: 빗썸 insufficient_funds → 원화 잔고가 모자라요).
+            raise RuntimeError(brokers._explain_domestic_error(self.exchange, 400, str(order.raw_status or ""), ""))
         if order.status != "FILLED" or self.position_uncertain or (closing and self.in_position and not partial_close):
             # 사람이 거래소에서 직접 확인할 때 쓰는 문구다. 판정은 접은 status 로 하고, 보고는 거래소가 쓴 낱말로 한다.
             raise RuntimeError(f"주문 상태 {order.raw_status} — 체결 완료를 확인하지 못했습니다. 거래소에서 주문과 포지션을 확인하세요.")
@@ -1019,7 +1044,9 @@ class BotThread(threading.Thread):
         (모든 신호가 under_min_total 로 거절된다), 업비트 검증 주문은 잔고까지 보므로 돌아갈
         세션을 시작도 못 하게 막는다.
         """
-        return _smallest_entry_notional(self.macro, self.leverage, self.market, quote=self.quote)
+        notional = _smallest_entry_notional(self.macro, self.leverage, self.market, quote=self.quote)
+        # 국내는 실제 주문과 같은 금액(수수료를 뺀 금액)으로 최소 주문 금액을 확인한다.
+        return _fee_inclusive(notional, _bid_fee_rate(getattr(self, "broker", None))) if self.domestic else notional
 
     def _rehearse(self) -> bool:
         """세션 시작에 한 번. 돈을 쓰지 않고 키 · 허용 IP · 권한 · 최소 주문 금액을 확인한다.
@@ -1101,6 +1128,10 @@ class BotThread(threading.Thread):
                 raise RuntimeError("포지션을 확인하지 못해 추가 주문을 보내지 않습니다. 거래소에서 주문과 포지션을 확인하세요.")
             if action in ("buy", "short"):
                 notional = min(self.capital * float(cmd.get("notional_frac") or 0.0), order_cap(self.quote))
+                if self.domestic:
+                    # 업비트 · 빗썸은 수수료가 주문 금액과 따로 원화에서 빠진다 — 설정한 금액(예: 20,000원) 안에서
+                    # 수수료까지 끝나도록 주문 금액을 줄인다. 바이낸스는 받은 코인에서 떼므로 그대로다.
+                    notional = _fee_inclusive(notional, _bid_fee_rate(getattr(self, "broker", None)))
                 qty, _ = _order_qty(price, self.step, 0, notional, self.leverage, self.market, quote=self.quote)
                 if qty <= 0:
                     raise RuntimeError("주문 수량이 최소 단위보다 작아요.")

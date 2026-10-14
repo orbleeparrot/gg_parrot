@@ -9360,6 +9360,28 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   .agent-position { grid-row: 1; grid-column: 1; }
   .agent-chart-pane, .agent-chat { grid-row: 2; grid-column: 1; }
   .agent-position-pct { font-size: 28px; }
+  /* 휴대폰은 한 화면 고정을 풀고 페이지가 스크롤한다(2026-10-15) — 고정 높이 안에 매크로 줄 · 포지션 블록이 400px 가까이
+     차지해 차트가 맨 아래 28px, 에이전트 기록이 280px 로 잘렸다. 차트는 화면의 70%(최대 560px), 기록은 한 화면 높이 안에서 스크롤.
+     안 보이는 탭은 높이 0 — 같은 칸에 겹쳐 두므로 높이를 남기면 차트 아래가 빈다. */
+  .site-main.agent-main { height: auto; overflow: visible; }
+  .agent-page { height: auto; }
+  .agent-workspace { grid-template-rows: auto auto auto; }
+  .agent-workspace-tabs { position: sticky; top: var(--site-topbar-h); z-index: 6; }
+  .agent-console { height: auto; overflow: visible; grid-template-rows: auto auto; }
+  .agent-chart-pane { height: min(70svh, 560px); }
+  .agent-chat { height: calc(100svh - var(--site-topbar-h) - 44px); }
+  .agent-console.is-chart .agent-chat,
+  .agent-console.is-chat .agent-chart-pane { height: 0; overflow: hidden; }
+}
+/* 휴대폰 매크로 줄 — 고르는 칸(+ 새 실행)은 한 줄 전체, 그 아래 종료 · 삭제 버튼을 한 줄로. 좌우로 나누면 줄이 어긋났다. */
+@media (max-width: 479px) {
+  .agent-macro-dock, .agent-macro-dock.has-lead { grid-template-columns: minmax(0, 1fr); padding-inline: 12px; }
+  .agent-macro-dock > * { min-height: 0; padding: 8px 0; border-left: 0; }
+  .agent-macro-dock > * + * { border-top: 0; }
+  .agent-macro-dock.has-lead > .agent-macro-dock-lead { min-height: 0; padding-top: 10px; border-bottom: 0; }
+  .agent-macro-select-wrap { width: 100%; }
+  .agent-macro-dock-actions { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; justify-content: stretch; gap: 8px; padding-bottom: 12px; }
+  .agent-macro-dock-actions .btn { width: 100%; min-width: 0; padding-inline: 8px; font-size: 13px; }
 }
 
 /* 공용 선 아이콘(components/icons.jsx, Lucide) — 글 줄 안에 놓일 때는 글자 기준선에 맞춘다. */

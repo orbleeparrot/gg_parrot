@@ -35,7 +35,7 @@ def test_postgres_pools_are_small_finite_and_overflow_cannot_bypass_limits(monke
         critical.dispose()
 
 
-@pytest.mark.parametrize("value", ["0", "-1", "invalid", "500"])
+@pytest.mark.parametrize("value", ["0", "-1", "invalid", "13", "500"])
 def test_invalid_pool_size_fails_closed_instead_of_unlimited(monkeypatch, value):
     monkeypatch.setattr(persistence, "_DATABASE_URL", "postgresql://unused:unused@localhost/unused")
     monkeypatch.setenv("DATABASE_POOL_SIZE", value)
@@ -257,3 +257,25 @@ def test_postgres_two_configured_generations_use_twelve_connections(monkeypatch)
     finally:
         for engine in engines:
             engine.dispose()
+
+
+def test_pilot_pool_sizes_are_accepted(monkeypatch):
+    """파일럿 운영값(일반 8 · heartbeat 4)은 상한 안이다 — 상한을 넘으면 기동이 실패하므로 render.yaml 값과 같이 본다."""
+    monkeypatch.setattr(persistence, "_DATABASE_URL", "postgresql://unused:unused@localhost/unused")
+    monkeypatch.setenv("DATABASE_POOL_SIZE", "8")
+    monkeypatch.setenv("DATABASE_RUNNER_POOL_SIZE", "4")
+    ordinary, runner = persistence._build_engine(), persistence._build_engine(purpose="runner")
+    try:
+        assert ordinary.pool.size() == 8 and runner.pool.size() == 4
+        assert ordinary.pool._max_overflow == runner.pool._max_overflow == 0
+    finally:
+        ordinary.dispose()
+        runner.dispose()
+
+
+def test_render_blueprint_pool_sizes_fit_the_code_limit():
+    import re
+    from pathlib import Path
+    text = (Path(__file__).resolve().parents[2] / "render.yaml").read_text(encoding="utf-8")
+    values = [int(v) for v in re.findall(r'key: DATABASE_(?:RUNNER_)?POOL_SIZE\n\s+value: "(\d+)"', text)]
+    assert values and all(1 <= v <= 12 for v in values)

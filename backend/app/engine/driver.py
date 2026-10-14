@@ -149,6 +149,7 @@ class StrategyDriver:
                 row["strategy"] = copy.deepcopy(mark["strategy"])
         state["in_position"] = any(row["in_position"] for row in state["legs"])
         state["cooldown_until_ms"] = sim.get("cooldown_until_ms")
+        state["halted_today"] = bool(sim.get("halted_today"))
         leg_equity = {other.symbol: (float(mark["equity"]) if other is leg else float(other.sim.equity(other.last_price)))
                       for other in self.legs}
         snap = {"state": state, "equity": float(sum(leg_equity.values())), "leg_equity": leg_equity,
@@ -217,6 +218,10 @@ class StrategyDriver:
             inner = _inner_sim(leg.sim)
             if clock is not None and hasattr(inner, "_entry_time") and sim_state(leg.sim)["in_position"]:
                 inner._entry_time = clock
+            if not state.get("halted_today") and getattr(inner, "_halted_day", None) is not None:
+                # 일일 손실 정지가 되돌린 진입 뒤에 걸렸다(없던 포지션의 평가손실 · 그 강제 청산) — 함께 푼다.
+                # 실제 손실이 그 기준을 넘고 있으면 다음 판단에서 다시 건다.
+                inner._halted_day = None
         for leg in self.legs:
             discard = getattr(leg.sim, "discard_queued", None)
             if discard is not None:

@@ -61,6 +61,18 @@ def test_rule_a_entry_rolls_back_to_flat_and_waits_out_the_hold():
     assert again is not None and again.side == "buy" and again.qty == pytest.approx(fill.qty)  # 현금도 그대로 돌아왔다
 
 
+def test_daily_loss_halt_caused_by_the_rolled_back_entry_is_lifted():
+    """없던 포지션의 평가손실로 일일 손실 정지(와 강제 청산)가 걸렸다면, 진입을 되돌릴 때 정지도 푼다."""
+    d = _driver({**A, "risk": {"invest_ratio": 0.5, "daily_max_loss_pct": 5}})
+    assert d.tick(100.0, T0).side == "buy"
+    snap = d.last_fill_snapshot
+    forced = d.tick(88.0, T0 + timedelta(seconds=3))  # 자산 -6% → 강제 청산 + 오늘 진입 정지
+    assert forced.side == "sell" and d.state()["halted_today"] is True
+    d.rollback(snap, retry_at_ms=_ms(T0 + timedelta(minutes=5)))
+    assert d.state()["halted_today"] is False and d.equity == pytest.approx(1000.0)
+    assert d.tick(88.0, T0 + timedelta(minutes=6)).side == "buy"  # 실제로는 잃은 게 없다 — 대기가 끝나면 다시 산다
+
+
 def test_hold_survives_a_restart_through_state_json():
     d = _driver(A)
     d.tick(100.0, T0)

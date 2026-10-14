@@ -53,6 +53,8 @@ ENTRY_SIDES = ("buy", "short")
 # 실제로 체결된 진입이 한 번 나오면 처음부터 다시 센다.
 RETRY_BACKOFF_MINUTES = (5, 15, 60)
 ROLLED_BACK = "rolled_back"  # RunnerCommand.rollback_state — 이 명령으로 서버 전략을 되돌렸다는 표시
+# 같은 heartbeat 에서 함께 되돌린 둘째 명령부터(그리드 칸 여러 개). 연속 실패 횟수(대기 시간)는 heartbeat 단위로 센다.
+ROLLED_BACK_ALSO = "rolled_back_also"
 # heartbeat 가 루프의 드라이버 되돌리기를 기다리는 최대 시간. 모든 실행기 heartbeat 가 연결 하나(대기 1초)를 나눠 쓰므로
 # 길게 쥐면 다른 회원의 heartbeat 가 '혼잡' 으로 밀린다. 루프는 보통 수 ms 안에 받는다 — 못 받으면 다음 heartbeat 에 다시.
 ROLLBACK_WAIT_SECONDS = 0.5
@@ -130,7 +132,7 @@ def build_driver(macro: Macro, symbol: str) -> StrategyDriver:
     initial = float(macro.initial_capital or FALLBACK_CAPITAL)
     sym = (symbol or macro.symbol).upper()
     driver = StrategyDriver([Leg(sym, make_sim(macro, initial_capital=initial), initial)], initial, macro=macro)
-    driver.track_fill_snapshots = True  # 진입이 실제로 안 나가면 되돌릴 수 있게 체결 직전 상태를 잡는다
+    driver.enable_fill_snapshots()  # 진입이 실제로 안 나가면 되돌릴 수 있게 체결 직전 상태를 잡는다
     return driver
 
 
@@ -441,7 +443,7 @@ def _persist_state(live: _Live, state_json: str) -> None:
 
 
 def _rollback_json(driver: StrategyDriver, fill: Fill) -> str:
-    """진입 체결이면 그 직전 상태(JSON). 청산이거나 직전 상태가 없으면(한 봉의 둘째 체결부터) 빈 값 — 되돌리지 않는다."""
+    """진입 체결이면 그 직전 상태(JSON). 청산이거나 직전 상태를 못 잡았으면 빈 값 — 되돌리지 않는다."""
     if fill.side not in ENTRY_SIDES or driver.last_fill_snapshot is None:
         return ""
     return json.dumps(driver.last_fill_snapshot)
@@ -535,7 +537,7 @@ def _expire_entries(db, rows: List[RunnerCommand], now_ms: int) -> List[RunnerCo
 
 
 def _snapshot_of(c: RunnerCommand) -> Optional[dict]:
-    """진입 명령에 저장한 신호 직전 상태. 없거나(옛 명령 · 한 봉의 둘째 체결) 이미 썼으면 None."""
+    """진입 명령에 저장한 신호 직전 상태. 없거나(옛 명령) 이미 썼으면 None."""
     raw = c.rollback_state or ""
     if not raw.startswith("{"):
         return None
@@ -552,15 +554,25 @@ def _opens_from_flat(c: RunnerCommand) -> bool:
     return snap is not None and not bool(snap["state"].get("in_position"))
 
 
-def _deliverable(row: RunSession, rows: List[RunnerCommand]) -> List[RunnerCommand]:
-    """이번 heartbeat 에 실행기로 보낼 명령. 두 경우의 진입은 붙잡아 둔다(TTL 이 지나면 만료 → 되돌리기 판단).
+def _grid_lot_of(c: RunnerCommand) -> Optional[dict]:
+    """그리드 칸 매수면 그 칸 롯 정보(칸끼리 독립 — 그 칸만 되돌린다). 아니면 None."""
+    snap = _snapshot_of(c)
+    lot = snap.get("grid_lot") if snap else None
+    return lot if isinstance(lot, dict) else None
 
-    1) 앞선 청산이 아직 끝나지 않았다 — 실행기는 받은 명령을 순서대로 실행만 하므로, 청산이 실패해도 뒤의
-       진입은 그대로 나가 남은 포지션 위에 얹힌다. 청산 결과(ack)를 본 다음 heartbeat 에 보낸다(≈3초 늦을 뿐).
-    2) 비어 있는 서버 전략이 여는 진입인데 실행기는 포지션을 들고 있다 — 청산이 끝내 실패했거나 둘이 어긋났다.
-       보내면 같은 방향으로 두 배가 된다.
-    붙잡은 진입 **뒤의 명령도 함께 기다린다** — 뒤의 청산이 먼저 나가면 실행기에서는 순서가 뒤바뀌어(청산 → 진입)
-    서버가 이미 닫은 포지션을 실행기가 새로 연다.
+
+def _deliverable(row: RunSession, rows: List[RunnerCommand]) -> List[RunnerCommand]:
+    """이번 heartbeat 에 실행기로 보낼 명령 — seq 순서 그대로, **진입은 한 번에 하나**(그리드 칸 매수는 예외).
+
+    실행기는 받은 명령을 순서대로 실행만 한다. 그래서 진입 하나를 보내면 그 결과(ack)를 본 다음 heartbeat 에
+    그 뒤 명령을 보낸다(진입마다 ≈3초 늦을 뿐). 앞 진입이 실패했는데 뒤 진입 · 청산이 이미 실행돼 있으면 서버 전략을
+    그 진입 직전으로 되돌릴 수 없기 때문이다(뒤 명령은 앞 진입이 체결된 것으로 보고 만든 신호다).
+    진입은 다음 두 경우에도 붙잡아 둔다(TTL 이 지나면 만료 → 되돌리기 판단):
+      1) 앞선 청산이 아직 끝나지 않았다 — 청산이 실패해도 진입이 나가 남은 포지션 위에 얹힌다.
+      2) 비어 있는 서버 전략이 여는 진입인데 실행기는 포지션을 들고 있다 — 청산이 끝내 실패했거나 둘이 어긋났다.
+    붙잡은 진입 뒤의 명령도 함께 기다린다 — 뒤의 청산이 먼저 나가면 순서가 뒤바뀌어(청산 → 진입) 실행기만 포지션이 남는다.
+    그리드 칸 매수는 서로 독립이라(실패하면 그 칸만 뺀다) 이어서 보낸다 — 큰 봉에 수십 칸을 사야 할 때 하나씩 보내면
+    뒤 칸이 90초 안에 못 나가 만료된다.
     """
     out: List[RunnerCommand] = []
     exit_ahead = False
@@ -570,10 +582,12 @@ def _deliverable(row: RunSession, rows: List[RunnerCommand]) -> List[RunnerComma
         if c.action in EXIT_SIDES:
             out.append(c)
             exit_ahead = True
-        elif exit_ahead or (row.in_position and _opens_from_flat(c)):
+            continue
+        if exit_ahead or (row.in_position and _opens_from_flat(c)):
             break
-        else:
-            out.append(c)
+        out.append(c)
+        if _grid_lot_of(c) is None:
+            break
     return out
 
 
@@ -597,6 +611,10 @@ def exchange_commands(db, row: RunSession, acks: list, now_ms: int, *, previous_
     rows = _pending_rows(db, row)
     expired = _expire_entries(db, rows, now_ms)
     settle_unexecuted_entries(db, row, changed, expired, now_ms, previous_qty=previous_qty, pending=rows)
+    floor = _retry_floor(row.id)
+    if floor is not None:
+        # 되돌리기를 다음 heartbeat 로 미뤘다 — 그 뒤 명령이 그사이 실행되면 되돌릴 수 없게 된다. 끝날 때까지 붙잡는다.
+        rows = [c for c in rows if c.seq < floor]
     return [_view(c) for c in _deliverable(row, rows)]
 
 
@@ -623,7 +641,7 @@ def apply_acks(db, row: RunSession, acks: list, now_ms: int) -> List[RunnerComma
         ok = bool(ack.get("ok"))
         if cmd.status == "expired" and not ok:
             continue  # 만료된 명령의 실패 보고는 의미 없다(이미 버린 신호)
-        late = cmd.status == "cancelled" or cmd.rollback_state == ROLLED_BACK
+        late = cmd.status == "cancelled" or cmd.rollback_state in (ROLLED_BACK, ROLLED_BACK_ALSO)
         if cmd.status not in ("pending", "expired") and not (cmd.status == "cancelled" and ok):
             continue
         # expired + ok: 실행기가 만료 직전에 이미 실행한 경우 — 실제 주문이 나갔으니 acked 로 기록한다.
@@ -670,8 +688,17 @@ def apply_acks(db, row: RunSession, acks: list, now_ms: int) -> List[RunnerComma
 # 키 권한 · 로컬 리스크 보류 = 실패, 실행기가 꺼져 있어 못 가져감 = 만료) 서버만 '보유 중' 이 되어, 다시 사지 않고
 # 언젠가 없는 물량을 팔라고 한다. 그래서 진입 명령마다 신호 직전 상태를 저장해 두고, 주문이 안 나간 게 확실할 때
 # 그 상태로 되돌린다. 확실하지 않으면 되돌리지 않는다 — 틀리게 되돌리면 이번엔 실제 포지션을 서버가 모른다.
-def _same_qty(a: float, b: float) -> bool:
-    return abs(float(a or 0.0) - float(b or 0.0)) <= max(1e-12, abs(float(b or 0.0)) * 1e-9)
+def _qty_accounted(row: RunSession, previous_qty: float, changed: List[RunnerCommand]) -> bool:
+    """이번 보고에 체결됐다고 온 명령만으로 실행기 보유 수량 변화가 설명되는가.
+
+    실행기는 진입 주문이 일부만 체결되고 취소되면 '실패' 로 보고하면서도 보유 수량은 늘려 둔다 — 그 경우 설명되지
+    않는 수량이 남는다. 매수 수수료를 코인에서 떼는 거래소(바이낸스 현물 0.1%)는 체결 수량보다 덜 늘어나므로 그만큼 여유를 둔다.
+    """
+    bought = sum(float(c.executed_qty or 0.0) for c in changed if c.status == "acked" and c.action in ENTRY_SIDES)
+    sold = sum(float(c.executed_qty or 0.0) for c in changed if c.status == "acked" and c.action in EXIT_SIDES)
+    expected = float(previous_qty or 0.0) + bought - sold
+    slack = max(1e-12, abs(expected) * 1e-9, bought * 0.002)
+    return abs(float(row.position_qty or 0.0) - expected) <= slack
 
 
 def _retry_minutes(db, row: RunSession) -> int:
@@ -691,13 +718,21 @@ def _retry_minutes(db, row: RunSession) -> int:
 
 _REFUSAL_MESSAGES = {
     "runner_holds": "실행기가 이미 포지션을 들고 있어 서버 전략을 되돌리지 않았어요",
-    "runner_changed": "추가 진입이 일부라도 체결됐는지 확인할 수 없어 서버 전략을 되돌리지 않았어요",
+    "runner_changed": "실행기 보유 수량이 체결 보고와 맞지 않아(일부 체결됐을 수 있어요) 서버 전략을 되돌리지 않았어요",
     "later_executed": "뒤이은 주문이 이미 체결돼 서버 전략을 되돌리지 않았어요",
     "busy": "서버 전략이 그사이 다음 신호로 넘어가 되돌리지 못했어요",
+    "lot_gone": "그 그리드 칸은 서버 전략에서 이미 팔린 뒤라 되돌리지 못했어요",
 }
-# 일시적으로 못 되돌린 진입(드라이버가 그 순간 다음 체결을 저장하는 중 · 루프가 바쁨) — 세션 id → {명령 id: 시도 횟수}.
-# 다음 heartbeat 들이 다시 시도한다. 프로세스 메모리라 재기동하면 잊는다(그때는 불일치 경고가 남는다).
-_ROLLBACK_RETRY: Dict[int, Dict[int, int]] = {}
+# 일시적으로 못 되돌린 진입(드라이버가 그 순간 다음 체결을 저장하는 중 · 루프가 바쁨) — 세션 id → {명령 id: (시도 횟수, seq)}.
+# 다음 heartbeat 들이 다시 시도하고, 그동안 그 명령 뒤의 명령은 보내지 않는다(_retry_floor). 프로세스 메모리라
+# 재기동하면 잊는다(그때는 불일치 경고가 남는다).
+_ROLLBACK_RETRY: Dict[int, Dict[int, tuple]] = {}
+
+
+def _retry_floor(session_id: int) -> Optional[int]:
+    """다시 시도할 되돌리기 중 가장 이른 명령의 seq — 그보다 뒤의 명령은 되돌리기가 끝날 때까지 보내지 않는다."""
+    retry = _ROLLBACK_RETRY.get(session_id)
+    return min(seq for _attempts, seq in retry.values()) if retry else None
 
 
 def _refusal(cmd: RunnerCommand, reason: str) -> dict:
@@ -705,24 +740,52 @@ def _refusal(cmd: RunnerCommand, reason: str) -> dict:
             "message": f"⚠ 주문 #{cmd.seq} — {_REFUSAL_MESSAGES[reason]}. 거래소 포지션을 확인해 주세요."}
 
 
+def _undo_lot_in_state(state: dict, info: dict) -> Optional[dict]:
+    """드라이버가 없을 때(state_json 만 고친다) 그리드 칸 롯 하나를 뺀다. 그 롯이 없으면 None."""
+    legs = state.get("legs") or []
+    leg = next((item for item in legs if item.get("symbol") == info.get("symbol")), None) or (legs[0] if legs else None)
+    grid = ((leg or {}).get("strategy") or {}).get("grid")
+    if not grid:
+        return None
+
+    def same(row) -> bool:
+        return (int(row.get("level", -1)) == int(info.get("level", -2))
+                and abs(float(row.get("qty") or 0) - float(info.get("qty") or 0)) <= 1e-9 * max(1.0, float(info.get("qty") or 0))
+                and abs(float(row.get("fill") or 0) - float(info.get("fill") or 0)) <= 1e-9 * max(1.0, float(info.get("fill") or 0)))
+
+    keep = [row for row in grid if not same(row)]
+    if len(keep) == len(grid):
+        return None
+    leg["strategy"]["grid"] = keep
+    qty = sum(float(row["qty"]) for row in keep)
+    leg["qty"], leg["in_position"] = qty, qty > 0
+    leg["entry_price"] = sum(float(row["qty"]) * float(row["fill"]) for row in keep) / qty if qty > 0 else 0.0
+    state["in_position"] = any(bool(item.get("in_position")) for item in legs)
+    return state
+
+
 def settle_unexecuted_entries(db, row: RunSession, changed: List[RunnerCommand], expired: List[RunnerCommand],
                               now_ms: int, *, previous_qty: float,
                               pending: Optional[List[RunnerCommand]] = None) -> Optional[RunnerCommand]:
     """주문이 나가지 않은 진입(이번 heartbeat 의 실패 · 만료, 앞서 일시적으로 못 되돌린 것)을 서버 전략에서도 되돌린다.
 
-    되돌릴 수 있는 조건(모두 만족할 때만 — 하나라도 불확실하면 되돌리지 않고 이벤트로 알린다):
-      · 실행기가 포지션을 확신한다(position_uncertain 아님).
-      · 비어 있다가 여는 진입이면 실행기도 비어 있다 — 또는 들고 있는 포지션을 닫을 청산이 그 진입보다 **앞에**
-        아직 실행 전으로 남아 있다(실행기가 꺼졌다 켜진 경우: 익절 청산 → 바로 재진입이 둘 다 밀렸다).
-        추가매수면 실행기 보유 수량이 그대로이고 이번 보고에 체결된 주문이 없다(일부 체결을 가려낼 수 없으므로).
-      · 그 뒤의 명령 중 실제로 체결된 것이 없다. 아직 안 보낸 뒤 명령은 되돌린 시간선의 것이라 취소한다.
-      · 루프의 드라이버가 그 사이 새 체결을 내지 않았다(체결 수가 명령 수와 맞는다). 아니면 다음 heartbeat 에 다시.
-    가장 이른 후보부터 본다 — 앞의 것으로 되돌리면 뒤의 것까지 함께 지워진다. 되돌린 명령을 돌려준다.
+    · 그리드 칸 매수: 칸끼리 독립이라 **그 칸 롯만** 뺀다 — 다른 칸의 매수 · 매도와 뒤 명령은 그대로 둔다.
+      실패 보고면 실행기 보유 수량이 이번 보고의 체결로 다 설명돼야 한다(실패한 주문이 일부라도 체결되지 않았다).
+    · 그 밖의 진입: 그 진입 **직전 상태로** 되돌리고, 아직 안 보낸 뒤 명령은 취소한다(그 진입을 전제로 만든 신호다).
+      조건(모두 만족할 때만 — 하나라도 불확실하면 되돌리지 않고 이벤트로 알린다):
+        - 비어 있다가 여는 진입이면 실행기도 비어 있다 — 또는 들고 있는 포지션을 닫을 청산이 그 진입보다 **앞에**
+          아직 실행 전으로 남아 있다(실행기가 꺼졌다 켜진 경우: 익절 청산 → 바로 재진입이 둘 다 밀렸다).
+          추가매수면 실행기 보유 수량 변화가 이번 보고의 체결로 다 설명된다.
+        - 그 뒤의 명령 중 실제로 체결된 것이 없다.
+        - 루프의 드라이버가 그 사이 새 체결을 내지 않았다(체결 수가 명령 수와 맞는다). 아니면 다음 heartbeat 에 다시.
+      가장 이른 후보부터 본다 — 앞의 것으로 되돌리면 뒤의 것까지 함께 지워진다.
+    실행기가 포지션을 확신하지 못하면(position_uncertain) 아무것도 하지 않는다. 마지막으로 되돌린 명령을 돌려준다.
     ``pending`` 은 이번 heartbeat 가 읽은 pending 행(없으면 읽는다).
     """
+    from .paper import parse_state  # 늦은 import: paper ↔ runner_engine 순환 방지
     from .runner import _append_events  # 늦은 import: runner ↔ runner_engine 순환 방지
 
-    retry = _ROLLBACK_RETRY.get(row.id) or {}
+    retry = dict(_ROLLBACK_RETRY.get(row.id) or {})
     retried = [db.get(RunnerCommand, cid) for cid in list(retry)]
     pool = {c.id: c for c in list(changed) + list(expired) + [c for c in retried if c is not None]
             if c.session_id == row.id and c.action in ENTRY_SIDES and c.status in ("failed", "expired")
@@ -732,33 +795,73 @@ def settle_unexecuted_entries(db, row: RunSession, changed: List[RunnerCommand],
             retry.pop(cid, None)  # 그사이 체결 보고가 왔거나 이미 되돌렸다 — 더 볼 것 없다
     candidates = sorted(pool.values(), key=lambda c: c.seq)
     if not candidates or row.position_uncertain:
+        _keep_retry(row.id, retry)
         return None  # 불확실하면 실행기 스스로 '포지션 확인 필요' 로 멈춘다 — 서버가 짐작으로 고치지 않는다
     if pending is None:
         pending = _pending_rows(db, row)
-    executed_now = any(c.status == "acked" and float(c.executed_qty or 0.0) > 0 for c in changed)
+    accounted = _qty_accounted(row, previous_qty, changed)
     later_rows = list(db.exec(select(RunnerCommand).where(RunnerCommand.session_id == row.id,
                                                           RunnerCommand.seq > candidates[0].seq)
                               .order_by(RunnerCommand.seq.asc())).all())
     events: List[dict] = []
-    refusal = None
+    refusals: List[tuple] = []
+    grid_undone: List[RunnerCommand] = []
     rolled = None
+    minutes = None
+
+    def postpone(cmd: RunnerCommand) -> None:
+        attempts = (retry.get(cmd.id) or (0, cmd.seq))[0] + 1
+        if attempts >= ROLLBACK_RETRY_MAX:
+            retry.pop(cmd.id, None)
+            refusals.append((cmd, "busy"))
+        else:
+            retry[cmd.id] = (attempts, cmd.seq)
+
     for cmd in candidates:
         snap = _snapshot_of(cmd)
+        if minutes is None:
+            minutes = _retry_minutes(db, row)
+        retry_at = now_ms + minutes * 60_000
+        grid_lot = snap.get("grid_lot") if isinstance(snap.get("grid_lot"), dict) else None
+        if grid_lot is not None:
+            if cmd.status == "failed" and not accounted:
+                retry.pop(cmd.id, None)
+                refusals.append((cmd, "runner_changed"))
+                continue
+            outcome = undo_lot_driver(row.id, cmd.id, grid_lot, retry_at_ms=retry_at)
+            if outcome is None:
+                postpone(cmd)
+                continue
+            if outcome is False:
+                retry.pop(cmd.id, None)
+                refusals.append((cmd, "lot_gone"))
+                continue
+            if outcome == "":
+                state = _undo_lot_in_state(parse_state(row.state_json) or {}, grid_lot)
+                if state is None:
+                    retry.pop(cmd.id, None)
+                    refusals.append((cmd, "lot_gone"))
+                    continue
+                state["entry_hold_until_ms"] = max(int(state.get("entry_hold_until_ms") or 0), retry_at)
+                outcome = json.dumps(state)
+            retry.pop(cmd.id, None)
+            row.state_json = outcome
+            cmd.rollback_state = ROLLED_BACK_ALSO if (grid_undone or rolled) else ROLLED_BACK
+            db.add(cmd)
+            grid_undone.append(cmd)
+            continue
         later = [c for c in later_rows if c.seq > cmd.seq]
         if not snap["state"].get("in_position"):
             exit_first = any(c.status == "pending" and c.action in EXIT_SIDES and c.seq < cmd.seq for c in pending)
             reason = "runner_holds" if row.in_position and not exit_first else None
         else:
-            reason = (None if row.in_position and not executed_now and _same_qty(row.position_qty, previous_qty)
-                      else "runner_changed")
+            reason = None if row.in_position and accounted else "runner_changed"
         if reason is None and any(c.status == "acked" and float(c.executed_qty or 0.0) > 0 for c in later):
             reason = "later_executed"
         if reason is not None:
             retry.pop(cmd.id, None)
-            refusal = refusal or (cmd, reason)
+            refusals.append((cmd, reason))
             continue
-        minutes = _retry_minutes(db, row)
-        retry_at = now_ms + minutes * 60_000
         expected = int(snap.get("trade_count") or 0) + 1 + len(later)
         cancel_ids = [c.id for c in later if c.status == "pending"]
         outcome = rollback_driver(row.id, cmd.id, snap, expected_trade_count=expected, retry_at_ms=retry_at,
@@ -766,15 +869,10 @@ def settle_unexecuted_entries(db, row: RunSession, changed: List[RunnerCommand],
         if outcome is None:
             # 드라이버가 앞서 나갔으면 더 이른 상태로도 못 간다(기대 체결 수는 후보마다 같다). 다음 heartbeat 에 다시 —
             # 뒤 후보들도 함께 남긴다(이 후보가 끝내 안 되면 그다음 것을 본다).
-            attempts = retry.get(cmd.id, 0) + 1
-            if attempts >= ROLLBACK_RETRY_MAX:
-                retry.pop(cmd.id, None)
-                refusal = refusal or (cmd, "busy")
-            else:
-                retry[cmd.id] = attempts
+            postpone(cmd)
             for c in candidates:
-                if c.seq > cmd.seq:
-                    retry.setdefault(c.id, 0)
+                if c.seq > cmd.seq and c.id not in retry:
+                    retry[c.id] = (0, c.seq)
             break
         retry.clear()  # 앞 후보는 이미 거절로 빠졌고, 뒤 후보는 이 되돌리기에 함께 지워졌다
         state_json, to_cancel = outcome
@@ -788,32 +886,43 @@ def settle_unexecuted_entries(db, row: RunSession, changed: List[RunnerCommand],
         why = ("진입 주문이 나가지 않아" if cmd.status == "failed"
                else f"진입 신호가 {COMMAND_TTL_SECONDS:g}초 안에 실행기에 전달되지 않아")
         where = "추가 진입 전으로" if snap["state"].get("in_position") else "진입 전으로"
-        db.add(row)
         events.append({"ts": _now_iso(), "kind": "warn",
                        "message": f"{why} 서버 전략도 {where} 되돌렸어요 · {minutes}분 동안은 새로 진입하지 않아요"})
         rolled = cmd
         break
-    if retry:
-        _ROLLBACK_RETRY[row.id] = retry
-    else:
-        _ROLLBACK_RETRY.pop(row.id, None)
-    if refusal is not None:
-        # 앞 후보를 되돌리지 못하고 뒤 후보로 되돌린 경우에도 앞 것의 사정은 알린다.
-        events.insert(0, _refusal(*refusal))
+    if grid_undone:
+        prices = " · ".join(f"{c.signal_price:g}" for c in grid_undone[:5]) + (" …" if len(grid_undone) > 5 else "")
+        events.append({"ts": _now_iso(), "kind": "warn",
+                       "message": f"주문이 나가지 않은 그리드 매수 {len(grid_undone)}건({prices})은 그 칸만 서버 전략에서 뺐어요"
+                                  f" · 다른 칸 체결은 그대로 · {minutes}분 동안은 새로 매수하지 않아요"})
+        rolled = rolled or grid_undone[-1]
+    _keep_retry(row.id, retry)
+    if refusals:
+        # 되돌리지 못한 사정은 모두 알린다 — 다른 후보로 되돌린 경우에도.
+        events[:0] = [_refusal(cmd, reason) for cmd, reason in refusals[:5]]
     if events:
+        db.add(row)
         _append_events(db, row, events)
     return rolled
 
 
+def _keep_retry(session_id: int, retry: Dict[int, tuple]) -> None:
+    if retry:
+        _ROLLBACK_RETRY[session_id] = retry
+    else:
+        _ROLLBACK_RETRY.pop(session_id, None)
+
+
 class _RollbackJob:
-    """heartbeat 스레드가 루프 스레드에 맡기는 되돌리기 한 번.
+    """heartbeat 스레드가 루프 스레드에 맡기는 드라이버 작업 한 번(되돌리기 · 그리드 칸 빼기).
 
     드라이버는 루프 스레드만 만진다(틱 · 마감봉 콜백). 기다리다 시간이 넘으면 '아직 시작 안 했으면 하지 말라' 고
     표시하고 포기한다 — 시작했다면(중간에 await 가 없어 곧 끝난다) 결과를 끝까지 받는다. 그래야 heartbeat 의
     DB 기록(명령 취소 · state_json)과 드라이버가 어긋나지 않는다.
     """
 
-    def __init__(self, args: tuple) -> None:
+    def __init__(self, fn, args: tuple) -> None:
+        self.fn = fn
         self.args = args
         self.done = threading.Event()
         self.lock = threading.Lock()
@@ -827,7 +936,7 @@ class _RollbackJob:
                 return
             self.claimed = True
         try:
-            self.result = _apply_rollback(*self.args)
+            self.result = self.fn(*self.args)
         except Exception:
             log.exception("runner engine: session %s rollback failed", self.args[0])
             self.result = None
@@ -846,6 +955,12 @@ class _RollbackJob:
 
 
 _ROLLED_BACK_MEMORY = 16  # 드라이버마다 기억하는 되돌리기 수 — 저장 실패 뒤 같은 ack 가 다시 오는 짧은 사이만 필요하다
+
+
+def _remember(live: "_Live", command_id: int, cancel_ids: List[int]) -> None:
+    live.rolled_back[command_id] = list(cancel_ids)
+    while len(live.rolled_back) > _ROLLED_BACK_MEMORY:
+        live.rolled_back.pop(next(iter(live.rolled_back)))
 
 
 def _apply_rollback(session_id: int, command_id: int, snapshot: dict, expected: int, retry_at_ms: int,
@@ -868,10 +983,25 @@ def _apply_rollback(session_id: int, command_id: int, snapshot: dict, expected: 
     if live.stop_flag or live.unsaved or live.driver.trade_count != expected:
         return None
     live.driver.rollback(snapshot, retry_at_ms=retry_at_ms)
-    live.rolled_back[command_id] = list(cancel_ids)
-    while len(live.rolled_back) > _ROLLED_BACK_MEMORY:
-        live.rolled_back.pop(next(iter(live.rolled_back)))
+    _remember(live, command_id, cancel_ids)
     return json.dumps(live.driver.state()), list(cancel_ids)
+
+
+def _apply_lot_undo(session_id: int, command_id: int, info: dict, retry_at_ms: int):
+    """(루프 스레드) 그리드 칸 롯 하나를 뺀다. 새 state_json · 드라이버 없음 "" · 그 롯이 없음 False · 지금 못 함 None."""
+    if session_id in _starting:
+        return None
+    live = _drivers.get(session_id)
+    if live is None:
+        return ""
+    if command_id in live.rolled_back:
+        return json.dumps(live.driver.state())  # 앞 heartbeat 의 저장이 실패해 같은 ack 가 다시 왔다
+    if live.stop_flag:
+        return None
+    if not live.driver.undo_grid_lot(info, retry_at_ms=retry_at_ms):
+        return False
+    _remember(live, command_id, [])
+    return json.dumps(live.driver.state())
 
 
 def _in_loop_thread(loop: asyncio.AbstractEventLoop) -> bool:
@@ -881,20 +1011,30 @@ def _in_loop_thread(loop: asyncio.AbstractEventLoop) -> bool:
         return False
 
 
-def rollback_driver(session_id: int, command_id: int, snapshot: dict, *, expected_trade_count: int, retry_at_ms: int,
-                    cancel_ids: List[int]):
-    """드라이버를 체결 직전 상태로 되돌린다(루프 스레드에서). 반환은 ``_apply_rollback`` 과 같다."""
-    args = (session_id, command_id, snapshot, expected_trade_count, retry_at_ms, list(cancel_ids))
+def _run_on_loop(fn, args: tuple):
+    """드라이버 작업을 루프 스레드에서 하고 결과를 돌려준다. 시간 안에 못 하면 None(하지도 않는다)."""
     loop = _loop
     if loop is None or loop.is_closed() or not loop.is_running() or _in_loop_thread(loop):
         # 루프가 없거나(테스트 · 스크립트) 이미 루프 스레드다 — 여기서 바로 해도 경합이 없다.
-        return _apply_rollback(*args)
-    job = _RollbackJob(args)
+        return fn(*args)
+    job = _RollbackJob(fn, args)
     try:
         loop.call_soon_threadsafe(job.run)
     except RuntimeError:  # 루프가 그 사이 닫혔다(종료 중)
         return None
     return job.wait(ROLLBACK_WAIT_SECONDS)
+
+
+def rollback_driver(session_id: int, command_id: int, snapshot: dict, *, expected_trade_count: int, retry_at_ms: int,
+                    cancel_ids: List[int]):
+    """드라이버를 체결 직전 상태로 되돌린다(루프 스레드에서). 반환은 ``_apply_rollback`` 과 같다."""
+    return _run_on_loop(_apply_rollback, (session_id, command_id, snapshot, expected_trade_count, retry_at_ms,
+                                          list(cancel_ids)))
+
+
+def undo_lot_driver(session_id: int, command_id: int, info: dict, *, retry_at_ms: int):
+    """그리드 칸 롯 하나를 뺀다(루프 스레드에서). 반환은 ``_apply_lot_undo`` 와 같다."""
+    return _run_on_loop(_apply_lot_undo, (session_id, command_id, info, retry_at_ms))
 
 
 _MISMATCH_NOTED: set = set()  # session_id — 연속 중복 경고 방지(프로세스 메모리)

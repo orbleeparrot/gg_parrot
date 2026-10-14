@@ -88,21 +88,49 @@ def test_indicator_intent_is_dropped_under_hold_and_needs_a_new_signal():
     assert d.tick(49.0, T0 + timedelta(minutes=10, seconds=3)).side == "buy"
 
 
-def test_grid_candle_with_two_buys_only_the_first_can_roll_back_and_grid_buys_wait():
+def test_grid_candle_with_two_buys_each_buy_rolls_back_on_its_own():
+    """한 봉이 두 칸을 샀다. 둘째 칸만 주문이 안 나가면 둘째 칸만 되돌린다 — 첫 칸(실제로 산 것)은 그대로 둔다."""
     d = _driver(GRID)
     d.tick(124.0, T0)
     assert d.push_candle("BTCUSDT", (_ms(T0), 125, 125, 121, 124)) == 2  # 122 · 126 두 칸
     first = d.tick(124.0, T0 + timedelta(seconds=3))
     first_snap = d.last_fill_snapshot
     second = d.tick(124.0, T0 + timedelta(seconds=6))
+    second_snap = d.last_fill_snapshot
     assert first.side == second.side == "buy"
-    assert first_snap is not None and first_snap["state"]["in_position"] is False and first_snap["trade_count"] == 0
-    assert d.last_fill_snapshot is None  # 둘째부터는 직전 상태가 없다 — 되돌리면 앞 체결까지 지워진다
-    d.rollback(first_snap, retry_at_ms=_ms(T0 + timedelta(hours=3)))
+    assert first_snap["state"]["in_position"] is False and first_snap["trade_count"] == 0
+    assert second_snap["state"]["in_position"] is True and second_snap["trade_count"] == 1
+    assert [row["level"] for row in second_snap["state"]["legs"][0]["strategy"]["grid"]] == [8]  # 122 칸만 든 상태
+    d.rollback(second_snap, retry_at_ms=_ms(T0 + timedelta(hours=3)))
     st = d.state()
-    assert st["in_position"] is False and st["trade_count"] == 0 and st["legs"][0]["strategy"]["grid"] == []
-    assert d.push_candle("BTCUSDT", (_ms(T0 + timedelta(hours=1)), 124, 124, 121, 123)) == 0  # 대기 중엔 칸을 안 산다
-    assert d.push_candle("BTCUSDT", (_ms(T0 + timedelta(hours=4)), 124, 124, 121, 123)) == 2
+    assert st["trade_count"] == 1 and [row["level"] for row in st["legs"][0]["strategy"]["grid"]] == [8]
+    assert d.sim.inner.cash == pytest.approx(900.0)  # 한 칸 100 — 둘째 칸 돈은 돌아왔다
+    # 대기 중엔 칸을 안 산다(126 만 닿고 122 칸의 매도 가격 126 에는 못 닿는 봉).
+    assert d.push_candle("BTCUSDT", (_ms(T0 + timedelta(hours=1)), 125.5, 125.8, 125.0, 125.5)) == 0
+    assert d.push_candle("BTCUSDT", (_ms(T0 + timedelta(hours=4)), 125.5, 125.8, 125.0, 125.5)) == 1
+
+
+def test_grid_sell_then_buys_in_one_candle_roll_back_only_what_failed():
+    """같은 봉에 매도와 매수가 났다(122 칸 매도 → 122 · 126 다시 매수). 매수만 안 나가면 매도는 그대로 두고 매수만 되돌린다."""
+    d = _driver(GRID)
+    d.tick(127.0, T0)
+    assert d.push_candle("BTCUSDT", (_ms(T0), 127, 127, 125.9, 126)) == 1  # 126 칸
+    d.tick(126.0, T0 + timedelta(seconds=3))
+    # 다음 봉: 130 까지 올라 126 칸을 팔고, 121.9 까지 내려 122 · 126 칸을 산다 → [매도, 매수, 매수]
+    assert d.push_candle("BTCUSDT", (_ms(T0 + timedelta(hours=1)), 126, 130.5, 121.9, 129)) == 3
+    sell = d.tick(129.0, T0 + timedelta(hours=1, seconds=3))
+    buy_122 = d.tick(129.0, T0 + timedelta(hours=1, seconds=6))
+    snap_122 = d.last_fill_snapshot
+    buy_126 = d.tick(129.0, T0 + timedelta(hours=1, seconds=9))
+    snap_126 = d.last_fill_snapshot
+    assert (sell.side, buy_122.side, buy_126.side) == ("sell", "buy", "buy")
+    assert snap_122["state"]["in_position"] is False and snap_122["trade_count"] == 2  # 매도 뒤 — 빈 상태
+    assert [row["level"] for row in snap_126["state"]["legs"][0]["strategy"]["grid"]] == [8]
+    cash_after_sell = 1000.0 + (130 - 126) * (100 / 126)  # 수수료 0 — 126 에 사서 130 에 판 차익
+    d.rollback(snap_122, retry_at_ms=_ms(T0 + timedelta(hours=3)))
+    st = d.state()
+    assert st["in_position"] is False and st["trade_count"] == 2 and st["legs"][0]["strategy"]["grid"] == []
+    assert d.sim.inner.cash == pytest.approx(cash_after_sell)  # 매도는 그대로, 매수 두 건만 지워졌다
 
 
 def test_martingale_safety_order_rolls_back_to_the_base_position_exactly():
@@ -128,16 +156,61 @@ def test_martingale_safety_order_rolls_back_to_the_base_position_exactly():
     assert d.push_candle("BTCUSDT", (_ms(T0 + timedelta(hours=3)), dip, dip, dip, dip)) == 1
 
 
-def test_candles_arriving_while_fills_are_still_queued_get_no_snapshot():
-    """봉이 몰려 들어와 앞 봉의 체결이 큐에 남아 있으면, 뒤 봉의 체결은 정확히 되돌릴 기준이 없다 — 되돌리지 않는다."""
+def test_candles_arriving_while_fills_are_still_queued_still_roll_back_exactly():
+    """봉이 몰려 들어와 앞 봉의 체결이 아직 큐에 있어도, 뒤 봉의 진입은 그 진입 직전 상태로 되돌린다."""
     d = _driver(GRID)
     d.tick(127.0, T0)
     assert d.push_candle("BTCUSDT", (_ms(T0), 127, 127, 125.9, 126)) == 1  # 126 칸
     assert d.push_candle("BTCUSDT", (_ms(T0 + timedelta(hours=1)), 126, 126, 121.9, 123)) == 1  # 122 칸 — 앞 체결이 아직 큐에
-    first = d.tick(123.0, T0 + timedelta(hours=1, seconds=3))
-    assert first.side == "buy" and d.last_fill_snapshot is not None  # 첫 봉의 체결 — 그 봉 직전 상태
-    second = d.tick(123.0, T0 + timedelta(hours=1, seconds=6))
-    assert second.side == "buy" and d.last_fill_snapshot is None
+    d.tick(123.0, T0 + timedelta(hours=1, seconds=3))
+    first_snap = d.last_fill_snapshot
+    d.tick(123.0, T0 + timedelta(hours=1, seconds=6))
+    second_snap = d.last_fill_snapshot
+    assert first_snap["trade_count"] == 0 and first_snap["state"]["in_position"] is False
+    assert second_snap["trade_count"] == 1 and [row["level"] for row in second_snap["state"]["legs"][0]["strategy"]["grid"]] == [9]
+    d.rollback(second_snap, retry_at_ms=_ms(T0 + timedelta(hours=3)))
+    assert d.state()["trade_count"] == 1 and [row["level"] for row in d.state()["legs"][0]["strategy"]["grid"]] == [9]
+
+
+def test_martingale_two_safety_orders_in_one_candle_roll_back_one_at_a_time():
+    d = _driver(MARTINGALE)
+    d.tick(100.0, T0)
+    assert d.push_candle("BTCUSDT", (_ms(T0), 100, 100, 100, 100)) == 1
+    d.tick(100.0, T0 + timedelta(seconds=3))  # 기본 주문
+    # 1% · 2% 아래 안전주문 두 건이 한 봉에서 난다.
+    assert d.push_candle("BTCUSDT", (_ms(T0 + timedelta(hours=1)), 100, 100, 97.5, 98)) == 2
+    d.tick(98.0, T0 + timedelta(hours=1, seconds=3))
+    d.tick(98.0, T0 + timedelta(hours=1, seconds=6))
+    snap = d.last_fill_snapshot
+    assert snap["state"]["legs"][0]["strategy"]["so_done"] == 1 and snap["trade_count"] == 2
+    d.rollback(snap, retry_at_ms=_ms(T0 + timedelta(hours=3)))
+    inner = d.sim.inner
+    assert inner._so_done == 1 and d.state()["trade_count"] == 2
+    assert inner.total_qty() == pytest.approx(100 / 100 + 100 / 99)  # 기본 주문 + 첫 안전주문만
+
+
+BREAKOUT = {"symbol": "BTCUSDT", "rule_type": "I", "candle_interval": "1d", "period": {"preset": "3m"},
+            "params": {"k": 0.5, "exit_mode": "next_open", "initial_capital": 1000},
+            "risk": {"invest_ratio": 1.0}, "fees": {"commission_pct": 0, "slippage_pct": 0}}
+
+
+def test_breakout_exit_at_open_and_new_entry_in_one_candle():
+    """'다음 봉 시가 청산' 과 새 돌파 진입이 한 봉에서 났다 — 진입만 되돌리면 청산 뒤(빈 상태)로 돌아간다."""
+    d = _driver(BREAKOUT)
+    d.tick(105.0, T0)
+    assert d.push_candle("BTCUSDT", (_ms(T0), 100, 110, 100, 105)) == 0  # 직전 봉 폭 10
+    assert d.push_candle("BTCUSDT", (_ms(T0 + timedelta(days=1)), 105, 112, 104, 110)) == 1  # 105 + 5 돌파
+    d.tick(110.0, T0 + timedelta(days=2, seconds=3))
+    # 다음 봉: 시가 111 에 청산하고, 111 + 0.5×8 = 115 를 다시 돌파
+    assert d.push_candle("BTCUSDT", (_ms(T0 + timedelta(days=2)), 111, 120, 110, 118)) == 2
+    exit_fill = d.tick(118.0, T0 + timedelta(days=3, seconds=3))
+    entry = d.tick(118.0, T0 + timedelta(days=3, seconds=6))
+    snap = d.last_fill_snapshot
+    assert (exit_fill.side, entry.side) == ("sell", "buy")
+    assert snap["state"]["in_position"] is False and snap["trade_count"] == 2
+    d.rollback(snap, retry_at_ms=_ms(T0 + timedelta(days=4)))
+    assert d.state()["in_position"] is False and d.state()["trade_count"] == 2
+    assert d.sim.inner.cash == pytest.approx(1000 * 111 / 110)  # 청산 손익은 남았다
 
 
 TRAIL_1H = {"symbol": "BTCUSDT", "rule_type": "E", "candle_interval": "1h", "period": {"preset": "3m"},
@@ -174,11 +247,57 @@ def test_add_on_rollback_keeps_the_original_entry_time():
     assert d.state()["in_position"] is True and d.sim.inner._entry_time == entered
 
 
+def test_warmup_does_not_record_entry_marks():
+    """웜업(과거 봉 수백 개)의 가상 체결은 버린다 — 진입 기록도 남기지 않아야 루프를 막지 않는다."""
+    d = _driver(GRID)
+    inner = d.sim.inner
+    calls = []
+    real = inner._entry_mark
+    # 기록을 켠 채로 불린 횟수만 센다(꺼져 있으면 바로 돌아가 상태를 복사하지 않는다).
+    inner._entry_mark = lambda price: (calls.append(price) if inner._entry_marks is not None else None) or real(price)
+    d.warmup({"BTCUSDT": [(i, 125, 125, 117 + (i % 4), 124) for i in range(50)]})
+    assert calls == [] and inner._entry_marks == [] and d.sim.pending() == 0
+    d.tick(124.0, T0)
+    assert d.push_candle("BTCUSDT", (_ms(T0), 125, 125, 121, 124)) >= 1
+    assert calls  # 웜업 뒤에는 다시 남긴다
+
+
+SAR = {"symbol": "BTCUSDT", "rule_type": "K", "position_side": "long", "market": "futures", "leverage": 1,
+       "candle_interval": "1h", "period": {"preset": "3m"},
+       "params": {"drop_trigger_pct": 5, "partial_exit_pct": 50, "flip_to_short": True, "short_take_profit_pct": 3,
+                  "short_stop_loss_pct": 2, "initial_capital": 1000},
+       "risk": {"invest_ratio": 1.0, "stop_loss_pct": 0}, "fees": {"commission_pct": 0, "slippage_pct": 0}}
+
+
+def test_sar_flip_rolled_back_then_reentry_uses_the_long_books():
+    """숏 전환 진입을 되돌리면 방향 값이 숏으로 남는다 — 다시 롱으로 들어갈 때 롱 장부 식을 써야 자산이 맞다."""
+    d = _driver(SAR)
+    d.tick(100.0, T0)
+    assert d.push_candle("BTCUSDT", (_ms(T0), 100, 100, 100, 100)) == 1
+    d.tick(100.0, T0 + timedelta(seconds=3))
+    assert d.push_candle("BTCUSDT", (_ms(T0 + timedelta(hours=1)), 100, 100, 94, 95)) == 3  # 부분 매도 · 나머지 매도 · 숏
+    for k in range(3):
+        last = d.tick(95.0, T0 + timedelta(hours=1, seconds=3 * (k + 1)))
+    assert last.side == "short"
+    d.rollback(d.last_fill_snapshot, retry_at_ms=_ms(T0 + timedelta(hours=1, minutes=30)))
+    assert d.state()["in_position"] is False
+    assert d.push_candle("BTCUSDT", (_ms(T0 + timedelta(hours=2)), 95, 95, 95, 95)) == 1  # 대기가 끝난 뒤 닫히는 봉
+    again = d.tick(95.0, T0 + timedelta(hours=3, seconds=3))
+    assert again.side == "buy" and again.equity_after == pytest.approx(d.sim.inner.equity(95.0))
+    assert again.equity_after > 900  # 숏 식으로 셌다면 거의 0 이 나온다
+
+
 def test_paper_drivers_do_not_track_snapshots_or_change_state_json():
     macro = Macro.model_validate(A)
     d = StrategyDriver([Leg("BTCUSDT", make_sim(macro, initial_capital=1000.0), 1000.0)], 1000.0, macro=macro)
     assert d.tick(100.0, T0).side == "buy"
     assert d.last_fill_snapshot is None and "entry_hold_until_ms" not in d.state()
+    grid = Macro.model_validate(GRID)
+    paper_grid = StrategyDriver([Leg("BTCUSDT", make_sim(grid, initial_capital=1000.0), 1000.0)], 1000.0, macro=grid)
+    paper_grid.tick(124.0, T0)
+    assert paper_grid.push_candle("BTCUSDT", (_ms(T0), 125, 125, 121, 124)) == 2
+    assert paper_grid.sim.inner._entry_marks is None and paper_grid.tick(124.0, T0).side == "buy"
+    assert paper_grid.last_fill_snapshot is None
 
 
 # --- DB · heartbeat ----------------------------------------------------------
@@ -420,12 +539,31 @@ def test_driver_that_moved_on_is_retried_on_later_heartbeats(live_a):
     with get_session() as db:
         assert db.get(RunSession, sid).state_json == state_before
         assert not any("되돌" in m for m in _messages(db, sid))  # 아직 포기하지 않았다 — 알리지 않는다
-    assert eng._ROLLBACK_RETRY[sid] == {cmd_id: 1}
+    assert eng._ROLLBACK_RETRY[sid] == {cmd_id: (1, 1)}  # (시도 횟수, seq)
     live.driver.trade_count -= 1  # 저장이 끝났다(이 테스트에선 체결이 없던 일로)
     _exchange(sid, [])  # 다음 heartbeat — ack 없이도 다시 시도한다
     with get_session() as db:
         assert db.get(RunnerCommand, cmd_id).rollback_state == eng.ROLLED_BACK
     assert sid not in eng._ROLLBACK_RETRY and live.driver.state()["in_position"] is False
+
+
+def test_commands_after_a_postponed_rollback_wait_until_it_is_done(live_a):
+    """되돌리기를 다음 heartbeat 로 미룬 사이 뒤 명령이 나가 실행되면 끝내 되돌릴 수 없다 — 끝날 때까지 붙잡는다."""
+    sid, live, loop, price = live_a
+    loop.run_until_complete(eng._tick_once(live))  # #1 buy
+    price["now"] = 104.0
+    loop.run_until_complete(eng._tick_once(live))  # #2 sell
+    loop.run_until_complete(eng._tick_once(live))  # #3 buy
+    with get_session() as db:
+        ids = [c.id for c in _commands(db, sid)]
+    live.driver.trade_count += 1  # 그 순간 다음 체결을 저장하는 중
+    assert _exchange(sid, [{"command_id": ids[0], "ok": False, "error": "x"}]) == []  # #2 · #3 을 보내지 않는다
+    assert eng._ROLLBACK_RETRY[sid] == {ids[0]: (1, 1)}
+    live.driver.trade_count -= 1
+    assert _exchange(sid, []) == []  # 다음 heartbeat: 되돌리고 #2 · #3 은 취소
+    with get_session() as db:
+        assert [c.status for c in _commands(db, sid)] == ["failed", "cancelled", "cancelled"]
+    assert sid not in eng._ROLLBACK_RETRY
 
 
 def test_retry_gives_up_after_a_few_heartbeats_and_says_so(live_a):
@@ -440,6 +578,100 @@ def test_retry_gives_up_after_a_few_heartbeats_and_says_so(live_a):
     with get_session() as db:
         assert "다음 신호로 넘어가" in _messages(db, sid)[-1]
     assert sid not in eng._ROLLBACK_RETRY
+
+
+class _FlatFeed:
+    """평평한 웜업(그리드가 아무 칸도 안 산다) · 구독만 기록하는 더미."""
+
+    def __init__(self, price):
+        self.price = price
+
+    async def history(self, symbol, interval, market, n, **kwargs):
+        return [(i, self.price, self.price, self.price, self.price) for i in range(20)]
+
+    def subscribe(self, symbol, interval, market, cb, **kwargs):
+        return ("sub", symbol)
+
+    def unsubscribe(self, sub):
+        pass
+
+
+@pytest.fixture
+def live_grid(monkeypatch):
+    price = {"now": 127.0}
+    monkeypatch.setattr(eng, "feed", _FlatFeed(127.0))
+    monkeypatch.setattr(eng, "get_ticker_price_cached", lambda s, **kw: price["now"])
+    monkeypatch.setattr(eng, "_run", _no_loop)
+    sid = _session(GRID)
+    loop = asyncio.new_event_loop()
+    assert loop.run_until_complete(eng.start_driver(sid)) is True
+    try:
+        yield sid, eng._drivers[sid], loop, price
+    finally:
+        loop.run_until_complete(eng.stop_driver(sid))
+        loop.close()
+        _cleanup(sid)
+
+
+def _grid_with_two_more_buys(sid, live, loop, price):
+    """126 칸을 사 둔 뒤(체결 보고까지) 다음 봉이 118 · 122 두 칸을 산다 — 명령 #2 · #3."""
+    live.driver.push_candle("BTCUSDT", (_ms(T0), 127, 127, 125.9, 126))
+    price["now"] = 126.0
+    loop.run_until_complete(eng._tick_once(live))
+    with get_session() as db:
+        first = _commands(db, sid)[0].id
+    _exchange(sid, [{"command_id": first, "ok": True, "executed_qty": 0.79, "fill_price": 126.0}],
+              in_position=True, position_qty=0.79)
+    live.driver.push_candle("BTCUSDT", (_ms(T0 + timedelta(hours=1)), 126, 126, 117.9, 121))
+    price["now"] = 121.0
+    loop.run_until_complete(eng._tick_once(live))
+    loop.run_until_complete(eng._tick_once(live))
+    with get_session() as db:
+        return [c.id for c in _commands(db, sid)]
+
+
+def test_grid_buys_go_out_together_and_a_failed_one_is_removed_alone(live_grid):
+    """그리드 칸 매수는 서로 독립이라 함께 보낸다. 잔고가 모자라 뒤 칸만 실패하면 그 칸 롯만 서버 전략에서 뺀다."""
+    sid, live, loop, price = live_grid
+    ids = _grid_with_two_more_buys(sid, live, loop, price)
+    assert len(ids) == 3
+    out = _exchange(sid, [], in_position=True, position_qty=0.79, previous_qty=0.79)
+    assert [c["id"] for c in out] == [ids[1], ids[2]]  # 칸 매수는 한 번에
+    _exchange(sid, [{"command_id": ids[1], "ok": True, "executed_qty": 0.85, "fill_price": 118.0},
+                    {"command_id": ids[2], "ok": False, "error": "insufficient_funds"}],
+              in_position=True, position_qty=1.64, previous_qty=0.79)
+    with get_session() as db:
+        assert db.get(RunnerCommand, ids[2]).rollback_state == eng.ROLLED_BACK
+        assert "그리드 매수 1건" in _messages(db, sid)[-1] and "그 칸만" in _messages(db, sid)[-1]
+    grid = live.driver.state()["legs"][0]["strategy"]["grid"]
+    assert sorted(row["level"] for row in grid) == [7, 9]  # 118 · 126 칸은 그대로, 122 칸만 빠졌다
+    assert live.driver.state()["entry_hold_until_ms"] > eng._now_ms()
+
+
+def test_grid_buy_that_failed_before_a_later_buy_executed_is_removed_too(live_grid):
+    """앞 칸이 실패(예: 요청 제한)하고 뒤 칸은 체결됐다 — 직전 상태로 되돌리면 뒤 칸까지 지워지니, 그 칸 롯만 뺀다."""
+    sid, live, loop, price = live_grid
+    ids = _grid_with_two_more_buys(sid, live, loop, price)
+    _exchange(sid, [{"command_id": ids[1], "ok": False, "error": "too_many_requests"},
+                    {"command_id": ids[2], "ok": True, "executed_qty": 0.82, "fill_price": 122.0}],
+              in_position=True, position_qty=0.79 + 0.82, previous_qty=0.79)
+    with get_session() as db:
+        assert db.get(RunnerCommand, ids[1]).rollback_state == eng.ROLLED_BACK
+        assert db.get(RunnerCommand, ids[2]).status == "acked"
+    assert sorted(row["level"] for row in live.driver.state()["legs"][0]["strategy"]["grid"]) == [8, 9]
+
+
+def test_failed_buy_that_partly_filled_is_not_rolled_back(live_grid):
+    """실행기는 일부만 체결된 매수도 '실패' 로 보고하면서 보유 수량은 늘린다 — 설명 안 되는 수량이 있으면 되돌리지 않는다."""
+    sid, live, loop, price = live_grid
+    ids = _grid_with_two_more_buys(sid, live, loop, price)
+    _exchange(sid, [{"command_id": ids[1], "ok": True, "executed_qty": 0.85, "fill_price": 118.0},
+                    {"command_id": ids[2], "ok": False, "error": "주문 상태 cancel — 체결 완료를 확인하지 못했습니다"}],
+              in_position=True, position_qty=1.64 + 0.3, previous_qty=0.79)
+    with get_session() as db:
+        assert db.get(RunnerCommand, ids[2]).rollback_state.startswith("{")
+        assert "보유 수량이 체결 보고와 맞지 않아" in _messages(db, sid)[-1]
+    assert sorted(row["level"] for row in live.driver.state()["legs"][0]["strategy"]["grid"]) == [7, 8, 9]
 
 
 def _snapshot_json(in_position: bool, qty: float = 0.0) -> str:
@@ -526,7 +758,10 @@ def test_exit_behind_a_held_entry_never_jumps_ahead_of_it():
         assert [c["id"] for c in out] == [c0]
         out = _exchange(sid, [{"command_id": c0, "ok": True, "executed_qty": 1.0, "fill_price": 100.0}],
                         in_position=False, position_qty=0.0, previous_qty=1.0)
-        assert [c["id"] for c in out] == [c1, c2]  # 서버와 같은 순서 — 실행기도 사고 판 뒤 빈다
+        assert [c["id"] for c in out] == [c1]  # 진입은 하나씩 — 결과를 본 뒤 다음 명령
+        out = _exchange(sid, [{"command_id": c1, "ok": True, "executed_qty": 1.0, "fill_price": 100.0}],
+                        in_position=True, position_qty=1.0, previous_qty=0.0)
+        assert [c["id"] for c in out] == [c2]  # 서버와 같은 순서 — 실행기도 사고 판 뒤 빈다
     finally:
         _cleanup(sid)
 
@@ -570,7 +805,7 @@ def test_add_on_rolls_back_only_when_runner_quantity_did_not_move():
         _exchange(sid, [{"command_id": moved, "ok": False, "error": "x"}], in_position=True, position_qty=2.5, previous_qty=2.0)
         with get_session() as db:
             assert db.get(RunnerCommand, moved).rollback_state.startswith("{")
-            assert "일부라도 체결됐는지 확인할 수 없어" in _messages(db, sid)[-1]
+            assert "보유 수량이 체결 보고와 맞지 않아" in _messages(db, sid)[-1]
         same = _insert(sid, "buy", rollback_state=_snapshot_json(True, qty=2.0), seq_now=2)
         _exchange(sid, [{"command_id": same, "ok": False, "error": "x"}], in_position=True, position_qty=2.0, previous_qty=2.0)
         with get_session() as db:
@@ -608,8 +843,11 @@ def test_delivery_waits_for_exits_and_never_stacks_a_fresh_entry_on_a_held_posit
             assert eng.pending_commands(db, row, eng._now_ms()) == []
             db.get(RunnerCommand, fresh).status = "expired"
             db.flush()
-            # 추가매수 · 직전 상태를 모르는 진입은 실행기가 들고 있어도 그대로 보낸다.
-            assert [c["id"] for c in eng.pending_commands(db, row, eng._now_ms())] == [add_on, legacy]
+            # 추가매수 · 직전 상태를 모르는 진입은 실행기가 들고 있어도 보낸다 — 진입은 하나씩.
+            assert [c["id"] for c in eng.pending_commands(db, row, eng._now_ms())] == [add_on]
+            db.get(RunnerCommand, add_on).status = "acked"
+            db.flush()
+            assert [c["id"] for c in eng.pending_commands(db, row, eng._now_ms())] == [legacy]
             db.rollback()
     finally:
         _cleanup(sid)

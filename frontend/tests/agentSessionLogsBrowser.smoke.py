@@ -174,6 +174,17 @@ def settle(page):
     page.wait_for_timeout(100)
 
 
+def drain_initial_clock_until_visible(page, locator):
+    # Reload retains the paused Playwright clock. React can install the first
+    # setTimeout(0) poll AFTER networkidle, so a wall-clock expect alone never
+    # starts that request. Drain only until the expected row is visible, with a
+    # strict 1s virtual-time budget: no sleeps, manual refresh or 10s poll retry.
+    for _ in range(100):
+        if locator.is_visible():
+            return
+        page.clock.run_for(10)
+
+
 def release_held(fixture):
     for route, payload in fixture.held:
         route.fulfill(json=payload)
@@ -412,6 +423,7 @@ def main():
             release_held(fixture)
             expect(page.get_by_text("매수 2 LINK 체결", exact=True)).to_have_count(0)
             page.reload(wait_until="networkidle")
+            drain_initial_clock_until_visible(page, page.get_by_text("다른 매크로의 주문", exact=True))
             expect(page.get_by_text("다른 매크로의 주문", exact=True)).to_be_visible()
             assert not errors, errors
             context.close()

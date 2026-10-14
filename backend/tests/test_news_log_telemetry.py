@@ -137,3 +137,39 @@ def test_successful_current_collection_keeps_real_trace_without_comparing_public
         "status": "ready", "last_attempt_ms": 2000, "last_success_ms": 2000})
     assert facts["flow_run_id"] == "actual-flow"
     assert facts["source_results"] == [{"source": "coindesk_rss", "status": "ready", "count": 1}]
+
+
+def test_delivery_references_only_an_actual_publication_contained_in_returned_articles():
+    payload = {"items": [{"id": "old-article", "source": "CoinDesk"}, {"id": "new-article", "source": "Decrypt"}],
+        "article_publication": {"event_name": "news.articles_ready", "source_event_id": "news-ready:BTC:24",
+            "occurred_at": "2026-10-14T00:00:00Z", "article_ids": ["new-article"], "count": 1, "cursor": 24}}
+    facts = log_telemetry.delivery_metadata(payload)
+    assert facts["source_event_id"] == "news-ready:BTC:24"
+    assert facts["source_occurred_at"] == "2026-10-14T00:00:00+00:00"
+    assert facts["source_counts"] == {"CoinDesk": 1, "Decrypt": 1}
+    assert "count" not in facts, "A one-article source publication must not claim the entire response was that event"
+    assert "source_event_id" not in log_telemetry.delivery_metadata({**payload, "items": payload["items"][:1]})
+    assert "source_event_id" not in log_telemetry.delivery_metadata({**payload, "items": []})
+
+
+def test_old_publication_reference_is_not_a_new_failed_collection_trace():
+    payload = {"items": [{"id": "retained-article", "source": "CoinDesk"}],
+        "collection_trace": {"flow_run_id": "old-flow"},
+        "article_publication": {"event_name": "news.articles_ready", "source_event_id": "news-ready:BTC:4",
+            "occurred_at": "2026-10-13T00:00:00Z", "article_ids": ["retained-article"]}}
+    facts = log_telemetry.delivery_metadata(payload, collection={
+        "status": "error", "last_attempt_ms": 2000, "last_success_ms": 1000})
+    assert facts == {"source_counts": {"CoinDesk": 1}, "source_event_id": "news-ready:BTC:4",
+                     "source_occurred_at": "2026-10-13T00:00:00+00:00"}
+
+
+@pytest.mark.parametrize("field,value", [
+    ("event_name", "news.response_received"), ("source_event_id", "api_key=secret"),
+    ("occurred_at", "invalid"), ("article_ids", "not-a-list"),
+])
+def test_invalid_publication_metadata_is_not_projected(field, value):
+    publication = {"event_name": "news.articles_ready", "source_event_id": "news-ready:BTC:4",
+        "occurred_at": "2026-10-13T00:00:00Z", "article_ids": ["article"]}
+    facts = log_telemetry.delivery_metadata({"items": [{"id": "article", "source": "CoinDesk"}],
+                                            "article_publication": {**publication, field: value}})
+    assert "source_event_id" not in facts and "source_occurred_at" not in facts

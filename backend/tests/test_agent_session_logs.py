@@ -92,6 +92,8 @@ def test_first_news_response_is_read_only_and_receipt_is_durable_idempotent(acco
     repeated = _receipt(account, token)
     assert repeated.json()["recorded"] is False
     assert repeated.json()["event_id"] == first.json()["event_id"]
+    assert first.json()["receipt_key"] == response.json()["receipt_key"]
+    assert first.json()["article_ids"] == ["btc-a"]
     logs = client.get(f"/api/me/agents/sessions/{sid}/logs", headers=headers)
     assert logs.status_code == 200
     assert logs.headers["cache-control"] == "private, no-store"
@@ -103,6 +105,40 @@ def test_first_news_response_is_read_only_and_receipt_is_durable_idempotent(acco
     assert item["received_at"] and item["ts_kst"]
     assert "do-not-leak" not in json.dumps(item)
     assert "읽" not in item["message"]
+
+
+@pytest.mark.parametrize("bad_name", [[], {}, 123, None, "runner.order_result"])
+def test_observation_endpoint_rejects_malformed_or_impersonated_event_names(account, bad_name):
+    uid, sid, headers = account
+    payload = {"client_event_id": "3e544af7-30fa-42ec-9fbb-4ca2c0635a3f", "event_name": bad_name,
+               "observed_at": _NOW, "details": {"title": "실제 관측"}}
+    response = client.post(f"/api/me/agents/sessions/{sid}/observations", headers=headers, json=payload)
+    assert response.status_code == 422
+    with get_session() as db:
+        assert not db.exec(select(RunSessionEvent).where(RunSessionEvent.session_id == sid)).all()
+
+
+def test_observation_endpoint_saves_exactly_one_source_and_returns_its_owner_scoped_identity(account):
+    uid, sid, headers = account
+    payload = {"client_event_id": "3e544af7-30fa-42ec-9fbb-4ca2c0635a3f",
+               "event_name": "browser.connection_observed", "observed_at": _NOW,
+               "details": {"title": "뉴스 조회 실패 관측", "summary": "HTTP 응답을 확인하지 못했어요.", "state": "transport_error"}}
+    first = client.post(f"/api/me/agents/sessions/{sid}/observations", headers=headers, json=payload)
+    assert first.status_code == 200, first.text
+    second = client.post(f"/api/me/agents/sessions/{sid}/observations", headers=headers, json=payload)
+    assert first.json()["event_id"] == second.json()["event_id"]
+    assert first.json()["event"]["session_id"] == sid
+    assert first.json()["event"]["component"] == "browser_observation"
+    assert second.json()["recorded"] is False
+    stored = client.get(f"/api/me/agents/sessions/{sid}/logs?context_id={first.json()['event_id']}", headers=headers)
+    assert stored.status_code == 200
+    assert stored.json()["items"][0]["id"] == first.json()["event_id"]
+
+
+def test_observation_body_is_bounded_even_for_invalid_session_path(account):
+    _uid, _sid, headers = account
+    response = client.post("/api/me/agents/sessions/-1/observations", headers=headers, content=" " * 8193)
+    assert response.status_code == 413
 
 
 @pytest.mark.parametrize("exception_name,status", [("NewsTranslationBusyError", 429), ("NewsTranslationError", 503)])

@@ -12,11 +12,12 @@ export const STEP_PROMPTS = {
   watch: "하루에 얼마나 자주 볼 수 있어요?",
 };
 
+// 성향은 종목이 아니라 '얼마나 흔들려도 되는가' 다(2026-10-12). 힌트에 고정 숫자를 쓰지
+// 않는다 — 허용 낙폭이 기간마다 다르다(1주 8% ~ 1년 30%).
 export const PROFILES = [
-  { value: "stable", label: "안정형", hint: "-10%까지" },
-  { value: "balanced", label: "균형형", hint: "-20%까지" },
-  { value: "aggressive", label: "공격형", hint: "제한 없음" },
-  { value: "scalper", label: "단타형", hint: "짧은 봉, 빠르게 · 제한 없음" },
+  { value: "stable", label: "안정형", hint: "낙폭을 가장 좁게" },
+  { value: "balanced", label: "균형형", hint: "그 사이에서" },
+  { value: "aggressive", label: "공격형", hint: "낙폭 제한 없음" },
 ];
 
 export const MARKETS = [
@@ -39,7 +40,10 @@ export const HORIZONS = [
 export const WATCH_LEVELS = [
   { value: "rarely", label: "거의 못 봐요", hint: "하루 한 번쯤" },
   { value: "sometimes", label: "가끔 봐요", hint: "몇 시간에 한 번" },
-  { value: "often", label: "수시로 봐요", hint: "자주 확인" },
+  { value: "often", label: "수시로 봐요", hint: "한 시간에 한 번" },
+  // 힌트에 "15분" 을 박지 않는다 — 기간이 '길게'(1년)면 서버가 봉 상한 때문에 1시간봉으로
+  // 내린다(ask.to_interval). 고르는 자리에서 거짓을 말하지 않으려면 봉 수를 쓰지 않는다.
+  { value: "constantly", label: "아주 자주 봐요", hint: "가장 짧은 봉으로" },
 ];
 
 export const CANDIDATES_PROMPT = "성향에 맞는 종목을 골라 봤어요. 하나를 고르면 매크로 후보를 보여 드릴게요.";
@@ -52,12 +56,21 @@ export const FOLLOW_UPS = [
   { kind: "restart", label: "처음부터" },
 ];
 
-export const SCALPER_NOTE = "짧은 봉은 수수료·슬리피지 영향이 커요 · 실행기보다 페이퍼 트레이딩으로 먼저 확인해요";
-// 고르는 자리에서 미리 말한다(2026-10-08). 실측: 1주 창에서 익절폭을 1%~8% 로 넓혀 봐도
-// 거래 조건을 채운 후보가 하나도 돈을 벌지 못했다 — 거래 수와 손실이 같이 늘었다(마찰).
-// 고르고 나서 빈 화면을 보는 것보다 고를 때 아는 쪽이 낫다.
-export const SCALPER_PICK_WARN = "단타형은 짧은 봉이라 수수료·슬리피지가 커요 — 과거 데이터에서 '그냥 들고 있기' 를 넘기기 어려운 편이에요.";
+// 15분봉을 세 성향 모두에 연 뒤(2026-10-12) 고르는 자리에서 미리 말한다. 실측: 짧은 봉
+// 후보의 손실 비율이 1분봉 89% · 5분봉 78% · 15분봉 64% 였다. 왕복 마찰(수수료+슬리피지)을
+// 짧은 봉에서 넘기기 어렵다. 고르고 나서 빈 화면을 보는 것보다 고를 때 아는 쪽이 낫다.
+export const SHORT_BAR_WARN = "'아주 자주 봐요' 는 15분봉이에요 — 과거 데이터에서 15분봉 후보의 64%가 손실이었어요. 사고팔 때마다 수수료·슬리피지가 붙기 때문이에요.";
 // 결과가 0개면 서버가 횟수를 돌려준다. 말하지 않으면 "결과도 없는데 횟수만 깎였다" 로 보인다.
+// 조합을 고르는 자리에서 마지막으로 하는 말 — 그대로 믿지 말라고.
+//
+// 근거는 시장이 아니라 **우리 코드**다. 문구에서 두 사실을 접속사로 붙이지 않는다 —
+// '과거에 맞았다' 와 '남들도 같은 값을 받는다' 는 서로 원인이 아니라 각각 따로인 사실이다. _plan·build_templates·select_top 에 무작위가 없어서
+// 같은 조건으로 물어본 사람은 같은 값을 받고, 그 값은 방식마다 정해진 프리셋 몇 개 중에서
+// 고른 기간에 가장 잘 맞았던 것이다(연속 공간 탐색이 아니다). 자동 최적화 화면은 이미 그걸
+// '과거 적합' 으로 경고하는데, 물어볼까만 같은 성질의 값을 내면서 아무 말도 안 하고 있었다.
+// 과거에 잘 맞았던 조건일수록 앞으로도 드물게 맞으므로 대기가 길어질 수 있다.
+export const TUNE_NOTE = "그대로 쓰기 전에 — 이 값은 지난 기간에 가장 잘 맞았던 설정이에요. 앞으로도 맞는다는 뜻은 아니고, 같은 질문을 한 사람은 모두 똑같은 값을 받아요. 조건이 맞아야만 사니까 한참 아무 일이 없을 수도 있어요. 그러니 그대로 두지 말고, 불러온 뒤 내 기준에 맞게 조금씩 바꿔 보세요.";
+
 export const REFUNDED_TEXT = "보여 드릴 조합이 없었으니 횟수는 돌려드렸어요.";
 export const feesNote = (commission, slippage) => `수수료 ${commission}% · 슬리피지 ${slippage}% 포함`;
 
@@ -67,11 +80,17 @@ export const FEW_RESULTS_TEXT = "이 조건에선 후보가 적었어요 — 기
 export const NO_RESULTS_TEXT = "이 조건으론 살아남은 후보가 없었어요. 조건을 바꿔 다시 물어봐요.";
 export const LOADED_TEXT = "조건 판에 불러왔어요. 숫자 한 번 보고 백테스트부터 돌려 보세요";
 
-// 보여 준 조합이 전부 '그냥 들고 있기' 에 졌을 때 (2026-09-23) — 매크로가 늘 답은 아니라고 먼저 말한다.
+// 보여 준 조합이 전부 '첫날 사서 보유' 에 졌을 때 (2026-09-23) — 매크로가 늘 답은 아니라고 먼저 말한다.
 // 2026-10-08: "그래도 나은 편이었던 조합" 을 보여 주던 문구를 뺐다. 홀딩을 못 넘긴 조합은
 // 이제 아예 올라오지 않으므로(ask.worth_the_macro), 그럴 땐 추천 대신 이렇게 말한다.
-export const NO_EDGE_TEXT = "이번 조건에선 그냥 들고 있는 게 나았어요.";
-export const NO_EDGE_NOTE = "과거 데이터로 돌려 보니 '그냥 사서 들고 있기' 를 뚜렷하게 넘긴 조합이 없었어요. 기간이나 종목, 보는 빈도를 바꿔 다시 물어봐 주세요.";
+// 2026-10-12: "그냥 들고 있는 게 나았어요" 를 버렸다. 홀딩의 매수일은 사용자가 기간을 고른
+// 순간 자동으로 정해진 날(구간 첫 봉)이고, 매크로는 살 날을 스스로 찾는다 — 그 비대칭을
+// 숨기는 말이었다. 그리고 빈 화면이 숫자를 싣는다(askView.noEdgeDetail).
+export const NO_EDGE_TEXT = "이번 조건에선 보여 드릴 만큼 이득이 난 조합이 없었어요.";
+// 홀딩 문턱이 아니라 **첫째 관문**(그 자체로 벌었나)에서 떨어진 경우. 홀딩보다 앞섰어도
+// 돈을 잃은 조합은 보여 주지 않는다 — 그때 홀딩 숫자를 들이밀면 이긴 것처럼 읽힌다.
+export const NO_EDGE_LOST_NOTE = "홀딩보다 나았든 아니든, 돈을 잃은 조합은 보여 드리지 않아요. 기간이나 종목, 보는 빈도를 바꿔 다시 물어봐 주세요.";
+export const NO_EDGE_NOTE = "기준은 같은 기간을 '첫날 사서 그냥 두기' 예요 — 그 날짜는 기간을 고르면 자동으로 정해지고, 매크로는 살 날을 스스로 찾아야 해요. 기간이나 종목, 보는 빈도를 바꿔 다시 물어봐 주세요.";
 
 // 직접 고를래요 — 거래 가능한 종목을 검색해서 고른다.
 export const MANUAL_SEARCH_PLACEHOLDER = "종목 검색 (예: AVAX)";
@@ -89,8 +108,8 @@ export const RESTART_LABEL = "처음부터";
 export const LOAD_BUTTON = "조건 판에 불러오기";
 export const WHY_TITLE = "왜 이 조합?";
 export const COMPARE_TITLE = "한눈에 비교";
-export const HOLD_LABEL = "그냥 들고 있기";
-export const VS_HOLD_LABEL = "들고 있기 대비";
+export const HOLD_LABEL = "첫날 사서 보유";
+export const VS_HOLD_LABEL = "첫날 보유 대비";
 export const FOLLOW_UPS_TITLE = "다시 물어보기";
 export const SPOT_HINT = "레버리지 없음";
 export const LEGEND_EQUITY = "매크로 자산";

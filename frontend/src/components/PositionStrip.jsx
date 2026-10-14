@@ -5,6 +5,7 @@
 import { useEffect, useState } from "react";
 import { fmtPrice, fmtQty } from "../lib/format.js";
 import { formatQuoteAmount } from "../lib/exchanges.js";
+import { useRunnerDownload } from "../lib/runnerDownload.js";
 import {
   exitRules, fmtSignedMoney, fmtSignedPct, gaugeModel, headlineReturn, runningFor, toneOf, unrealizedMoney,
 } from "../lib/positionExits.js";
@@ -47,6 +48,7 @@ export function positionState(session) {
 
 export default function PositionStrip({ session, macro }) {
   const now = useMinuteTick();
+  const download = useRunnerDownload();
   if (!session) return null;
   const running = session.status === "running";
   const inPosition = running && Boolean(session.in_position);
@@ -59,6 +61,9 @@ export default function PositionStrip({ session, macro }) {
   const state = positionState(session);
   const elapsed = runningFor(session.started_at, now);
   const runner = [session.runner_version ? `v${session.runner_version}` : "", session.macro_origin_label || ""].filter(Boolean).join(" · ");
+  // 이 세션을 돌리는 실행기보다 새 공식 버전이 있으면 그 자리에서 받게 한다(실행기는 버전을 보낸 v7+ 만).
+  const newer = /^\d+$/.test(String(session.runner_version || "")) && /^\d+$/.test(String(download.version || ""))
+    && Number(download.version) > Number(session.runner_version) && !!download.url;
 
   return (
     <section className={"agent-position" + (inPosition ? " is-open" : "")} aria-label="포지션 요약">
@@ -101,6 +106,12 @@ export default function PositionStrip({ session, macro }) {
         <div><dt>실현손익 · 누적</dt><dd className={"num " + toneOf(realized)}>{fmtSignedMoney(realized, session.symbol)}</dd></div>
         <div><dt>투입금</dt><dd className="num">{Number(session.invested_usdt) > 0 ? formatQuoteAmount(session.invested_usdt, session.symbol) : "—"}</dd></div>
         <div><dt>실행기</dt><dd className="num">{runner || "—"}</dd></div>
+        {newer ? (
+          <div className="is-wide"><dt>새 실행기</dt><dd>
+            <a className="agent-runner-update num" href={download.url} target={download.isExternal ? "_blank" : undefined}
+              rel={download.isExternal ? "noopener noreferrer" : undefined}>v{download.version} 받기</a>
+          </dd></div>
+        ) : null}
         <div className="is-wide"><dt>청산 기준</dt><dd>{rules.summary}</dd></div>
       </dl>
     </section>

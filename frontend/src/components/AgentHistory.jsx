@@ -55,13 +55,19 @@ export function AgentIdle({ last }) {
   );
 }
 
+function FileIcon() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 2.5v7.5M4.75 7 8 10.25 11.25 7M3 13.5h10" strokeLinecap="round" /></svg>
+  );
+}
+
 function PinIcon() {
   return (
     <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M4 2h8v12l-4-3-4 3z" /></svg>
   );
 }
 
-export function AgentHistoryList({ sessions, policy, pinBusy, onOpen, onTogglePin }) {
+export function AgentHistoryList({ sessions, policy, pinBusy, onOpen, onTogglePin, fileBusy = 0, onDownload }) {
   const keep = policy?.keep ?? 30;
   const days = policy?.days ?? 30;
   const pinLimit = policy?.pin_limit ?? 10;
@@ -83,6 +89,7 @@ export function AgentHistoryList({ sessions, policy, pinBusy, onOpen, onTogglePi
             <span role="columnheader">실행 시간</span>
             <span role="columnheader">종료</span>
             <span role="columnheader" className="is-right">실현손익</span>
+            <span role="columnheader" className="is-center">파일</span>
             <span role="columnheader" className="is-center">보관</span>
           </div>
           {sessions.map((session) => {
@@ -111,6 +118,19 @@ export function AgentHistoryList({ sessions, policy, pinBusy, onOpen, onTogglePi
                 </span>
                 <span className={`agent-history-end is-${end.tone}`} role="cell"><i aria-hidden="true" />{end.text}</span>
                 <span className={`agent-history-pnl num is-${tone}`} role="cell">{formatSignedMoney(session.realized_pnl, session.symbol)}</span>
+                <span className="agent-history-file-cell" role="cell">
+                  {/* 매크로 파일(.ggm.json)을 다시 받는다 — 실행기 ①번 칸에 넣어 같은 매크로를 다시 돌린다. */}
+                  <button
+                    type="button"
+                    className="agent-history-pin"
+                    aria-label={`${baseOf(session.symbol)} 매크로 파일 받기`}
+                    title="매크로 파일(.ggm.json) 받기"
+                    disabled={!session.macro || fileBusy === session.session_id}
+                    onClick={(event) => { event.stopPropagation(); onDownload?.(session); }}
+                  >
+                    <FileIcon />
+                  </button>
+                </span>
                 <span className="agent-history-pin-cell" role="cell">
                   <button
                     type="button"

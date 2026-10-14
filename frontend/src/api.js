@@ -1,5 +1,6 @@
 // Thin API client. Relative URLs work in dev (Vite proxy) and in prod
 // (FastAPI serves the built SPA and the /api routes from one origin).
+import { macroFileName } from "./lib/macroFileName.js";
 import { clearAuth, getToken } from "./lib/auth.js";
 import { friendlyMessage, networkError, nonJsonMessage } from "./lib/apiError.js";
 import { createRequestCoordinator } from "./lib/requestCoordinator.js";
@@ -286,13 +287,6 @@ export const api = {
       method: "POST", timeoutMs: 60_000,
       body: JSON.stringify({ macro, summary }),
     }),
-  // 껄무새 AI 원인 분석 (온디맨드). 서버 Gemini 키 사용. 키 없거나 실패 시
-  // 규칙기반 해설 + ai_error 로 폴백해 응답.
-  explainAi: (macro, periodOverride) =>
-    req("/api/explain/ai", {
-      method: "POST",
-      body: JSON.stringify({ macro, period_override: periodOverride || null }),
-    }),
   // parameter sweep (익절/손절 자동 최적화). tpValues/slValues optional (server defaults).
   optimize: (macro, tpValues, slValues) =>
     req("/api/optimize", {
@@ -346,6 +340,10 @@ export const api = {
   agentNewsReceipt: (sessionId, receiptToken, options = {}) =>
     req(`/api/me/agents/sessions/${encodeURIComponent(sessionId)}/news-receipts`, {
       ...options, method: "POST", body: JSON.stringify({ receipt_token: receiptToken }),
+    }),
+  agentObservation: (sessionId, observation, options = {}) =>
+    req(`/api/me/agents/sessions/${encodeURIComponent(sessionId)}/observations`, {
+      ...options, method: "POST", body: JSON.stringify(observation),
     }),
   // 저장 매크로도 실행 세션 없이 같은 공용 snapshot을 조회한다.
   agentMacroPositionNews: (macroId, symbol = "") => {
@@ -553,7 +551,7 @@ export const api = {
     });
     if (!res.ok) {
       // 서버가 이유를 말했으면 그대로 보인다 — 거절 이유(예: 여러 종목 묶음 매크로)는 한국어로 온다.
-      // 국내(업비트·빗썸) 매크로는 거절하지 않는다. 실행기 v10 이상이 필요하다는 안내는 화면이 버튼 옆에서 미리 말한다.
+      // 국내(업비트·빗썸) 매크로는 거절하지 않는다. 실행기 v10 이상이 필요하다는 안내는 직접 만들기의 '국내 거래소 지원 범위' 와 버튼 설명(title)이 한다.
       const body = await res.json().catch(() => null);
       throw new Error(typeof body?.detail === "string" && body.detail ? body.detail : "매크로 파일 생성 실패");
     }
@@ -561,7 +559,7 @@ export const api = {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `macro-${macro.rule_type}-${macro.position_side}.ggm.json`;
+    a.download = macroFileName(macro);  // 영문 · 매크로마다 다른 이름(거래소_종목_전략_방향_날짜)
     document.body.appendChild(a);
     a.click();
     a.remove();

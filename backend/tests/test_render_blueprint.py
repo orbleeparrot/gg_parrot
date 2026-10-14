@@ -20,7 +20,7 @@ def test_render_blueprint_includes_position_news_background_worker():
     assert 'OPENAI_NEWS_TRANSLATION_MODEL' not in blueprint
     assert 'NEWS_TITLE_TRANSLATION_ENABLED' not in blueprint
     assert 'NEWS_TITLE_TRANSLATION_MAX_CALLS_PER_DAY' not in blueprint
-    assert '- key: AI_EXPLAIN_MAX_CALLS_PER_DAY\n        value: "20"' in web
+    assert 'AI_EXPLAIN_MAX_CALLS_PER_DAY' not in blueprint  # 2026-10-12 백테스트 AI 해설 제거
     assert '- key: AI_ACQUIRE_TIMEOUT_SECONDS\n        value: "1"' in web
     assert (
         '- key: NEWS_MARKET_SUMMARY_MAX_CALLS_PER_DAY\n        value: "2"'

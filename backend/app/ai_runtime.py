@@ -196,7 +196,7 @@ class _Messages:
     ) -> AiResponse:
         """One request → text blocks. ``timeout`` is seconds, like the callers pass.
 
-        ``purpose`` is the call site's code (position_news, ai_explain, …) for the
+        ``purpose`` is the call site's code (position_news, market_news_summary, …) for the
         usage ledger only — it never reaches the model.
         """
         # Responses counts reasoning + visible output together. Keep both bounded.

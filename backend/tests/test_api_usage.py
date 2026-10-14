@@ -30,7 +30,7 @@ def clean_ledger(monkeypatch):
         db.commit()
     for name in ("GEMINI_PRICE_INPUT_USD_PER_M", "GEMINI_PRICE_OUTPUT_USD_PER_M", "GEMINI_PRICE_CACHED_USD_PER_M",
                  "GEMINI_PRICES_JSON", "ADMIN_FIXED_COSTS_JSON", "COINDESK_COST_PER_CALL_USD",
-                 "POSITION_NEWS_MAX_AI_ANALYSES_PER_DAY", "AI_EXPLAIN_MAX_CALLS_PER_DAY",
+                 "POSITION_NEWS_MAX_AI_ANALYSES_PER_DAY",
                  "NEWS_MARKET_SUMMARY_MAX_CALLS_PER_DAY"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(api_usage, "_last_warn_monotonic", None)
@@ -90,14 +90,14 @@ def test_price_env_and_per_model_override(monkeypatch):
 
 # --- 기록 ------------------------------------------------------------------
 def test_record_accumulates_calls_tokens_cost_and_failures_per_day_row():
-    assert api_usage.record_gemini_usage(model="m", purpose="ai_explain", usage=_usage(1000, 200), now_ms=NOW_MS)
-    assert api_usage.record_gemini_usage(model="m", purpose="ai_explain", usage=_usage(500, 100), now_ms=NOW_MS + 1000)
-    assert api_usage.record_gemini_usage(model="m", purpose="ai_explain", usage=None, ok=False, now_ms=NOW_MS + 2000)
+    assert api_usage.record_gemini_usage(model="m", purpose="market_news_summary", usage=_usage(1000, 200), now_ms=NOW_MS)
+    assert api_usage.record_gemini_usage(model="m", purpose="market_news_summary", usage=_usage(500, 100), now_ms=NOW_MS + 1000)
+    assert api_usage.record_gemini_usage(model="m", purpose="market_news_summary", usage=None, ok=False, now_ms=NOW_MS + 2000)
     assert api_usage.record_gemini_usage(model="m", purpose="position_news", usage=_usage(10, 1), now_ms=NOW_MS)
 
     rows = _rows()
     assert [(r["day_kst"], r["provider"], r["model"], r["purpose"]) for r in rows] == [
-        (TODAY, "gemini", "m", "ai_explain"), (TODAY, "gemini", "m", "position_news"),
+        (TODAY, "gemini", "m", "market_news_summary"), (TODAY, "gemini", "m", "position_news"),
     ]
     explain = rows[0]
     assert (explain["calls"], explain["failures"]) == (3, 1)
@@ -138,7 +138,7 @@ def _seed_report_rows():
     august = int(datetime(2026, 8, 20, 12, 0, tzinfo=_KST).timestamp() * 1000)
     assert api_usage.record_gemini_usage(model="gemini-3.5-flash-lite", purpose="position_news", usage=big, now_ms=NOW_MS)
     assert api_usage.record_gemini_usage(model="gemini-3.5-flash-lite", purpose="title_translation", usage=None, ok=False, now_ms=NOW_MS)
-    assert api_usage.record_gemini_usage(model="gemini-3.5-flash-lite", purpose="ai_explain", usage=big, now_ms=august)
+    assert api_usage.record_gemini_usage(model="gemini-3.5-flash-lite", purpose="market_news_summary", usage=big, now_ms=august)
     with get_session() as db:
         db.add(TickerNewsAiBudget(budget_date_kst=f"coindesk_news:{TODAY}", used=12, updated_at=""))
         db.add(TickerNewsAiBudget(budget_date_kst="coindesk_news:2026-08-20", used=4, updated_at=""))
@@ -219,13 +219,13 @@ def test_costs_report_shape_and_totals(monkeypatch):
 
     purposes = report["purposes"]
     assert [p["code"] for p in purposes] == ["position_news", "title_translation", "community_summaries",
-                                             "ai_explain", "market_news_summary", "ai_challenge", "devnote",
+                                             "market_news_summary", "ai_challenge", "devnote",
                                              "validate_explain"]
     assert purposes[0]["label"] == "종목 뉴스 분류 · 요약" and purposes[0]["calls"] == 1 and purposes[0]["cost_usd"] == 5.5
     assert purposes[0]["daily_limit"] == 1000  # env 가 있으면 그 값
     assert purposes[1]["failures"] == 1 and purposes[1]["daily_limit"] == "없음"
     assert purposes[3]["calls"] == 0  # 8월 행은 이번 달 표에 없다
-    assert (purposes[3]["daily_limit"], purposes[4]["daily_limit"]) == (20, 2)  # 시장 요약은 고정 상한
+    assert purposes[3]["daily_limit"] == 2  # 시장 요약은 고정 상한
 
     daily = report["daily"]
     assert len(daily) == 30 and daily[-1]["day"] == TODAY and daily[0]["day"] == "2026-08-19"
@@ -287,12 +287,12 @@ def _messages(outcome, usage=None):
 
 def test_adapter_records_success_with_purpose_tokens_and_model():
     response = _messages("답", {"input_tokens": 1000, "output_tokens": 250, "output_tokens_details": {"reasoning_tokens": 50}}).create(
-        model="gpt-6-luna", max_tokens=10, messages=[{"role": "user", "content": "q"}], purpose="ai_explain",
+        model="gpt-6-luna", max_tokens=10, messages=[{"role": "user", "content": "q"}], purpose="market_news_summary",
     )
     assert response.content[0].text == "답"
     assert not hasattr(response, "usage")  # 캐시로 복사되는 응답에는 싣지 않는다
     (row,) = _rows()
-    assert (row["provider"], row["model"], row["purpose"], row["calls"], row["failures"]) == ("openai", "gpt-6-luna", "ai_explain", 1, 0)
+    assert (row["provider"], row["model"], row["purpose"], row["calls"], row["failures"]) == ("openai", "gpt-6-luna", "market_news_summary", 1, 0)
     assert (row["input_tokens"], row["output_tokens"]) == (1000, 250)
 
 

@@ -50,6 +50,10 @@ def _fill_meta(side: str, qty: float, qty_after: float, reason: str) -> dict:
     return {"reason": reason or _DEFAULT_REASON.get(side, ""), "qty_before": float(before)}
 
 
+def _ms_to_dt(ms: Optional[int]) -> Optional[datetime]:
+    return datetime.fromtimestamp(int(ms) / 1000, timezone.utc) if ms else None
+
+
 class PositionSim:
     """Single-position machine for rule A (TP/SL re-entry) and B (band)."""
 
@@ -100,6 +104,12 @@ class PositionSim:
         self._halted_day: Optional[str] = None
         self._cooldown_until: Optional[datetime] = None
         self._entry_time: Optional[datetime] = None
+        # 실행기 세션에서 진입 주문이 나가지 않아 서버 전략을 되돌린 뒤, 다시 진입하기 전까지 기다리는 시각.
+        # 손절 쿨다운과 따로 둔다 — 백테스트·모의는 이 값을 쓰지 않으므로 결과가 바뀌지 않는다.
+        self._entry_hold_until: Optional[datetime] = None
+
+    def hold_entries_until(self, until_ms: Optional[int]) -> None:
+        self._entry_hold_until = _ms_to_dt(until_ms)
 
     # -- exit / entry conditions (identical to the backtest semantics) --
     # Split into stop vs. profit so a stop-loss exit can trigger the re-entry
@@ -205,6 +215,8 @@ class PositionSim:
         if self._halted_day is not None and self._halted_day == self._day:
             return True
         if self._cooldown_until is not None and ts is not None and ts < self._cooldown_until:
+            return True
+        if self._entry_hold_until is not None and ts is not None and ts < self._entry_hold_until:
             return True
         return False
 
@@ -369,6 +381,7 @@ class DcaSim:
         # 백테스트는 봉 시각). 국내가 이미 그렇게 두고 있었고 시험이 그 성질을 못 박고 있다.
         self.calendar_interval = True
         self._next_dca_buy: Optional[datetime] = None
+        self._entry_hold_until: Optional[datetime] = None  # PositionSim 과 같은 뜻(실행기 진입 재시도 대기)
 
         self.initial_capital = float(initial_capital)
         self.cash = self.initial_capital
@@ -424,9 +437,11 @@ class DcaSim:
         scheduled = self._step % self.interval == 0
         if self.calendar_interval:
             scheduled = ts is not None and (self._next_dca_buy is None or ts >= self._next_dca_buy)
+        held = self._entry_hold_until is not None and ts is not None and ts < self._entry_hold_until
         can_buy = (
             not self.stopped
             and not halted_today
+            and not held
             and scheduled
             and (self.max_buys is None or self.buys_done < self.max_buys)
             and self.cash >= self.amount_per_buy
@@ -479,6 +494,9 @@ class DcaSim:
                 # A legacy/incomplete checkpoint must not immediately repeat a
                 # buy. The exact saved schedule is restored by the driver hook.
                 self._next_dca_buy = datetime.now(timezone.utc) + timedelta(days=self.interval)
+
+    def hold_entries_until(self, until_ms: Optional[int]) -> None:
+        self._entry_hold_until = _ms_to_dt(until_ms)
 
     def restore_dca_schedule(self, next_buy_ms, *, stopped: bool = False) -> None:
         if not self.calendar_interval:

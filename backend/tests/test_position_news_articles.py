@@ -152,6 +152,149 @@ def test_position_source_counts_only_include_articles_actually_returned(engine, 
     assert payload["collection"]["source_counts"] == {"CoinDesk": 1}
 
 
+def test_ready_publication_retains_actual_origin_without_initial_notification_burst(engine, monkeypatch):
+    from app import notifications
+    notifications_sent = []
+    monkeypatch.setattr(notifications, "notify_running_sessions", lambda *args, **kwargs: notifications_sent.append(kwargs))
+    millis = 1_791_936_000_000
+    article = item()
+    revision = articles.upsert_articles("BTC", [article], now_ms=millis)
+    publication = articles.read_article_feed("BTC").get("article_publication")
+    assert publication == {
+        "source_event_id": f"news-ready:BTC:{revision}", "event_name": "news.articles_ready",
+        "occurred_at": "2026-10-14T00:00:00+00:00", "asset_symbol": "BTC",
+        "count": 1, "cursor": revision, "article_ids": [articles.article_id(article)],
+    }
+    assert notifications_sent == [], "An initial prepared feed must not create a burst of notifications"
+
+
+def test_news_notification_activity_is_the_actual_ready_transition_and_not_a_browser_receipt(engine, monkeypatch):
+    from app import notifications
+    calls = []
+    monkeypatch.setattr(notifications, "notify_running_sessions", lambda *args, **kwargs: calls.append(kwargs))
+    millis = 1_791_936_000_000
+    articles.upsert_articles("BTC", [item()], now_ms=millis)
+    newly_ready = [item("비트코인 새 ETF 자금 유입", url="https://example.test/new"),
+                   item("비트코인 채굴 기업 신규 상장", url="https://example.test/second-new")]
+    pending = item("Bitcoin unlocalized headline", url="https://example.test/raw")
+    revision = articles.upsert_articles("BTC", [*newly_ready, pending], payload={
+        "collection_trace": {"flow_run_id": "actual-source-run"}}, now_ms=millis + 1234)
+    assert len(calls) == 1
+    notification = calls[0]
+    publication = articles.read_article_feed("BTC")["article_publication"]
+    activity = notification.get("activity")
+    assert activity is not None, "The notification must reference the same actual article-publication event"
+    assert activity["event_name"] == "news.articles_ready" and activity["component"] == "news_collector"
+    assert activity["kind"] == "news" and activity["severity"] == "INFO"
+    assert activity["source_event_id"] == publication["source_event_id"] == f"news-ready:BTC:{revision}"
+    assert activity["occurred_at"] == publication["occurred_at"] == "2026-10-14T00:00:01.234000+00:00"
+    details = activity["details"]
+    assert details["count"] == publication["count"] == notification["data"]["count"] == 2
+    assert details["cursor"] == publication["cursor"] == revision
+    assert details["asset_symbol"] == "BTC"
+    assert details["article_ids"] == [articles.article_id(row) for row in newly_ready]
+    assert not {"flow_run_id", "task_run_id", "collection_run_id"} & details.keys()
+    assert details["verification"] == "server_article_publication_not_browser_receipt"
+    assert notification["ref"] == f"news:BTC:{revision}"
+    assert "수신" not in notification["title"]
+    # Rediscovery, analysis refresh and reads are not new ready transitions.
+    articles.upsert_articles("BTC", [*newly_ready, pending], now_ms=millis + 2345)
+    articles.upsert_articles("BTC", newly_ready, analysis={"items": [{"sentiment": "neutral"}] * 2}, now_ms=millis + 3456)
+    for _ in range(3):
+        assert articles.read_article_feed("BTC")["article_publication"] == publication
+    assert len(calls) == 1
+
+
+def test_translation_ready_event_is_once_and_late_enrichment_cannot_relink_older_collection(engine, monkeypatch):
+    from app import notifications
+    calls = []
+    monkeypatch.setattr(notifications, "notify_running_sessions", lambda *args, **kwargs: calls.append(kwargs))
+    millis = 1_791_936_000_000
+    raw = item("Bitcoin new market update", url="https://example.test/translation")
+    articles.upsert_articles("BTC", [item(), raw], payload={"collection_trace": {"flow_run_id": "older-fetch"}}, now_ms=millis)
+    localized = {**raw, "original_title": raw["title"], "title": "비트코인 신규 시장 소식"}
+    revision = articles.upsert_articles("BTC", [localized], payload={"collection_trace": {"flow_run_id": "old-translation"}},
+        enrichment_only=True, now_ms=millis + 1000)
+    assert len(calls) == 1
+    publication = articles.read_article_feed("BTC")["article_publication"]
+    assert calls[0]["activity"]["source_event_id"] == f"news-ready:BTC:{revision}" == publication["source_event_id"]
+    assert publication["article_ids"] == [articles.article_id(raw)] and publication["count"] == 1
+    assert "flow_run_id" not in calls[0]["activity"]["details"]
+    articles.upsert_articles("BTC", [localized], payload={"collection_trace": {"flow_run_id": "even-older"}},
+        enrichment_only=True, now_ms=millis + 2000)
+    assert len(calls) == 1 and articles.read_article_feed("BTC")["article_publication"] == publication
+
+
+def test_position_response_does_not_attribute_filtered_articles_to_latest_publication(engine, monkeypatch):
+    from app import notifications
+    monkeypatch.setattr(notifications, "notify_running_sessions", lambda *_args, **_kwargs: 0)
+    millis = 1_791_936_000_000
+    kept = item()
+    latest = item("비트코인 화면에서 제외될 기사", url="https://example.test/filtered")
+    articles.upsert_articles("BTC", [kept], now_ms=millis)
+    revision = articles.upsert_articles("BTC", [latest], now_ms=millis + 1000)
+    session = {"symbol": "BTCUSDT", "position_side": "long"}
+    visible = service.get_position_news(session)
+    assert visible["collection"]["source_event_id"] == f"news-ready:BTC:{revision}"
+    assert visible["collection"]["source_occurred_at"] == "2026-10-14T00:00:01+00:00"
+    monkeypatch.setattr(news, "_within_coin_news_window", lambda row: row["url"] != latest["url"])
+    filtered = service.get_position_news(session)
+    assert [row["title"] for row in filtered["items"]] == [kept["title"]]
+    assert "source_event_id" not in filtered["collection"] and "source_occurred_at" not in filtered["collection"]
+
+
+def test_shared_article_publication_links_each_notification_to_its_own_canonical_session_event(engine):
+    import json
+    from datetime import datetime, timezone
+    from app import agent_logs
+    from app.db import NotificationMessage, RunSession, RunSessionEvent, User
+    now = datetime.now(timezone.utc).isoformat()
+    with Session(engine) as db:
+        sessions = []
+        for index, symbol in enumerate(("BTCUSDT", "KRW-BTC", "ETHUSDT")):
+            user = User(email=f"publication-{index}@example.invalid", username=f"publication_{index}",
+                        password_hash="isolated-fixture-not-a-login", created_at=now)
+            db.add(user)
+            db.flush()
+            session = RunSession(user_id=user.id, symbol=symbol, status="running", mode="mock",
+                                 started_at=now, last_heartbeat_at=now)
+            db.add(session)
+            db.flush()
+            sessions.append((user.id, session.id))
+        db.commit()
+    articles.upsert_articles("BTC", [item()])
+    second = item("비트코인 신규 상장 발표", url="https://example.test/new-publication")
+    revision = articles.upsert_articles("BTC", [second])
+    with Session(engine) as db:
+        notices = list(db.exec(select(NotificationMessage).order_by(NotificationMessage.id)).all())
+        events = list(db.exec(select(RunSessionEvent).order_by(RunSessionEvent.id)).all())
+        assert len(notices) == len(events) == 2
+        assert {event.session_id for event in events} == {sid for _uid, sid in sessions[:2]}
+        assert len({event.id for event in events}) == 2
+        by_id = {event.id: event for event in events}
+        for notice in notices:
+            data = json.loads(notice.data_json)
+            event = by_id[data["activity_event_id"]]
+            details = json.loads(event.details_json)
+            assert notice.session_id == event.session_id and notice.user_id == event.user_id
+            assert data["activity_event_key"] == event.event_key
+            assert details["source_event_id"] == f"news-ready:BTC:{revision}"
+            assert details["article_ids"] == [articles.article_id(second)]
+            assert details["count"] == 1 and details["cursor"] == revision
+            assert event.event_name == "news.articles_ready" and event.component == "news_collector"
+            view = agent_logs._event_view(event)
+            assert view["source"] != "news_receipt" and "수신 확인" not in view["source_label"]
+            assert event.ts == articles.read_article_feed("BTC", db=db)["article_publication"]["occurred_at"]
+            assert notice.link == f"/agents?session={event.session_id}&panel=logs&event={event.id}"
+    # Reads and article rediscovery must not make another source event or alert.
+    for _ in range(3):
+        service.get_position_news({"symbol": "BTCUSDT", "position_side": "long"})
+    articles.upsert_articles("BTC", [second])
+    with Session(engine) as db:
+        assert len(db.exec(select(NotificationMessage)).all()) == 2
+        assert len(db.exec(select(RunSessionEvent)).all()) == 2
+
+
 def test_source_article_is_visible_before_other_source_and_translation_finish(engine, monkeypatch):
     source_waiting, release_source = Event(), Event()
     translation_waiting, release_translation = Event(), Event()

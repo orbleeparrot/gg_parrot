@@ -79,6 +79,15 @@ def news_receipt(
     return agent_logs.record_news_receipt(user.id, session_id, body["receipt_token"], db=db)
 
 
+@router.post("/sessions/{session_id}/observations")
+def browser_observation(
+    session_id: int, response: Response, body: object = Body(default=None),
+    user: User = Depends(auth_mod.current_user_in_session), db: Session = Depends(request_session),
+) -> dict:
+    response.headers["Cache-Control"] = "private, no-store"
+    return agent_logs.record_observation(user.id, session_id, body, db=db)
+
+
 @router.get("/sessions/{session_id}/whale-activity")
 def whale_activity(session_id: int, response: Response,
                    user: User = Depends(auth_mod.current_user_in_session),

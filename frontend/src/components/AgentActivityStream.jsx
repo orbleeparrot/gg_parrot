@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   AGENT_MODULE_MAP,
   AGENT_MODULES,
@@ -7,6 +8,8 @@ import {
 import { advanceActivityTimeline, emptyActivityTimeline } from "../features/agents/activityTimeline.js";
 import { countNewObservations, positionNewsNotice, publicationLabel, publicationTime } from "../features/agents/positionNews/presentation.js";
 import { whaleActivityNotice } from "../features/agents/modules/leader.js";
+import { activityEventId, activityLogLink, observationForEvent } from "../features/agents/activityEvidence.js";
+import { useActivityObservations } from "../features/agents/useActivityObservations.js";
 import RunResultScreen from "./RunResultScreen.jsx";
 import CommunityBodySummary from "./CommunityBodySummary.jsx";
 import { Icon } from "./icons.jsx";
@@ -144,10 +147,12 @@ export default function AgentActivityStream({
   }, [context]);
 
   const events = useMemo(() => {
+    if (timeline.sessionId !== session?.session_id) return [];
     return timeline.events
       .filter((event) => accessFor(AGENT_MODULE_MAP.get(event.module), entitlements) === "enabled")
       .sort((left, right) => eventTime(right.occurredAt) - eventTime(left.occurredAt));
-  }, [entitlements, timeline.events]);
+  }, [entitlements, session?.session_id, timeline.events, timeline.sessionId]);
+  const observations = useActivityObservations(session?.session_id, events);
 
   const selectedModule = filter === "all" ? null : AGENT_MODULE_MAP.get(filter);
   const selectedAccess = selectedModule ? accessFor(selectedModule, entitlements) : "enabled";
@@ -159,14 +164,17 @@ export default function AgentActivityStream({
     const filtered = filter === "all" ? events : events.filter((event) => event.module === filter);
     return filtered.slice(0, 24).reverse();
   }, [events, filter]);
-  const newsNotice = (filter === "all" || filter === "position_news")
+  // 기능 상태 안내는 그 기능 탭에서만, 보일 소식이 없을 때 빈 화면 문구로 — '전체' 피드 맨 위에 띠로 띄우지 않는다.
+  const newsNotice = filter === "position_news"
     && accessFor(AGENT_MODULE_MAP.get("position_news"), entitlements) === "enabled"
     ? positionNewsNotice(featureStates.position_news, {
       hasArticles: events.some((event) => event.isNewsArticle),
     }) : "";
-  const whaleNotice = (filter === "all" || filter === "whale_activity")
+  const whaleNotice = filter === "whale_activity"
     && accessFor(AGENT_MODULE_MAP.get("whale_activity"), entitlements) === "enabled"
     ? whaleActivityNotice(featureStates.whale_activity) : "";
+  const featureNotice = newsNotice || whaleNotice;
+  const featureStatusAttr = newsNotice ? { "data-news-status": "" } : whaleNotice ? { "data-whale-status": "" } : {};
   const hasRelativeTime = visible.some((event) => {
     if (event.isNewsArticle) return false;
     const occurredAt = eventTime(event.occurredAt);
@@ -256,8 +264,6 @@ export default function AgentActivityStream({
       </header>
 
       {filter === "activity_logs" && activityLog ? activityLog : <div className="agent-chat-stream flex flex-col">
-        {newsNotice ? <div className="agent-checking" role="status" data-news-status>{newsNotice}</div> : null}
-        {whaleNotice ? <div className="agent-checking" role="status" data-whale-status>{whaleNotice}</div> : null}
         <div
           ref={logRef}
           className="agent-chat-log flex-1"
@@ -283,6 +289,10 @@ export default function AgentActivityStream({
               const plan = module?.minimumPlan || "free";
               const planLabel = PLAN_LABELS[plan] || String(plan).toUpperCase();
               const hasTierBadge = plan !== "free";
+              const record = observations.records[event.observationId];
+              const eventId = activityEventId(event, session?.session_id) || (record?.status === "ready" ? record.eventId : null);
+              const originalLog = activityLogLink(session?.session_id, eventId);
+              const browserObservation = !!observationForEvent(event);
               return (
                 <article
                   key={event.id}
@@ -309,6 +319,14 @@ export default function AgentActivityStream({
                     <CommunityBodySummary summary={event.communitySummary} />
                     {event.summary ? <p className="agent-message-summary">{event.summary}</p> : null}
                     {event.detail ? <p className="agent-message-detail">{event.detailLabel || "판단 근거"} · {event.detail}</p> : null}
+                    {event.originalTitle && event.module === "runner_log" ? <p className="agent-message-detail">저장된 원문: {event.originalTitle}</p> : null}
+                    <p className="agent-message-detail">
+                      {originalLog ? <Link to={originalLog}>{event.isNewsArticle ? "이 기사 포함 응답 수신 로그" : "해당 로그 보기"} · 사건 #{eventId}</Link>
+                        : browserObservation ? record?.status === "error" ? <>
+                          관측 기록 저장 실패 <button type="button" className="btn btn-s btn-ghost" onClick={() => observations.retry(event)}>기록 다시 저장</button>
+                        </> : "관측 기록 저장 중…" : "원본 연결 없음"}
+                      {browserObservation ? " · 브라우저 관측 · 실제 주문/체결 증거 아님" : ""}
+                    </p>
                     <footer>
                       {event.sourceUrl ? (
                         <a href={event.sourceUrl} target="_blank" rel="noopener noreferrer" aria-label={`${event.sourceLabel} 원문 보기, 새 창`}>
@@ -334,11 +352,15 @@ export default function AgentActivityStream({
                 </article>
               );
             })
-          ) : newsNotice ? null : (
-            <div className="agent-stream-empty">
-              <strong>새 소식이 없어요.</strong>
+          ) : (
+            <div className="agent-stream-empty" role="status" {...featureStatusAttr}>
+              <strong>{featureNotice || "새 소식이 없어요."}</strong>
             </div>
           )}
+          {visible.length > 0 && featureNotice ? (
+            // 소식이 있으면 안내는 맨 아래(새 소식 자리) 조용한 한 줄로.
+            <div className="agent-checking" role="status" {...featureStatusAttr}>{featureNotice}</div>
+          ) : null}
 
           {isFeatureLoading && selectedAccess === "enabled" && !newsNotice ? (
             <div className="agent-checking" role="status">

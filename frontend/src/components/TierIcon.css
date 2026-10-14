@@ -1,0 +1,13 @@
+/* 판매 등급 아이콘 — 내 활동 · 게시판 · 리더보드 채팅이 같은 그림 · 같은 색을 쓴다. */
+:root { --tier-bronze: 153 97 53; }
+.dark { --tier-bronze: 207 150 104; }
+.tier-icon { flex: none; vertical-align: -0.15em; }
+.tier-icon.is-seed { color: rgb(var(--c-green-600)); }
+.tier-icon.is-bronze { color: rgb(var(--tier-bronze)); }
+.tier-icon.is-silver { color: rgb(var(--c-slate-500)); }
+.tier-icon.is-gold { color: rgb(var(--c-brand-line)); }
+.tier-icon.is-diamond { color: rgb(var(--c-sky-700)); }
+.tier-icon.is-admin { color: rgb(var(--c-indigo-600)); }
+.dark .tier-icon.is-admin { color: rgb(var(--c-indigo-300)); }
+.tier-mark { display: inline-flex; align-items: center; flex: none; }
+.chat-row-name .tier-mark { margin-left: 4px; vertical-align: -3px; }

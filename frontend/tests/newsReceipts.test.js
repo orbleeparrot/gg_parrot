@@ -1,8 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createNewsReceiptSender } from "../src/features/agents/newsReceipts.js";
+import { createNewsReceiptSender, newsReceiptLink } from "../src/features/agents/newsReceipts.js";
 
 const receipt = { sessionId: 41, key: "a".repeat(64), token: "signed-observation" };
+
+test("a news log link requires the server's matching signed receipt key and exact covered article identities", () => {
+  assert.deepEqual(newsReceiptLink({ event_id: 123, receipt_key: receipt.key, article_ids: ["a", "a", "b"] }, receipt.key),
+    { eventId: 123, articleIds: ["a", "b"] });
+  assert.equal(newsReceiptLink({ event_id: 123, receipt_key: "wrong", article_ids: ["a"] }, receipt.key), null);
+  assert.equal(newsReceiptLink({ ok: true, event_id: 123 }, receipt.key), null);
+});
 
 test("an unchanged observation and concurrent consumers send one receipt", async () => {
   let count = 0;

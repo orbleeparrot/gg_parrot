@@ -22,7 +22,9 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
+from uuid import uuid4
 from datetime import datetime, timedelta, timezone
 from typing import Iterable, Optional
 
@@ -31,7 +33,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 
 from . import notification_stream
-from .db import NotificationMessage, NotificationReceipt, RunSession, User, get_session
+from .db import NotificationMessage, NotificationReceipt, RunSession, RunSessionEvent, User, get_session
 
 log = logging.getLogger(__name__)
 
@@ -89,6 +91,7 @@ def notify(
     session_id: Optional[int] = None,
     ref: str = "",
     trim: bool = True,
+    activity: Optional[dict] = None,
 ) -> Optional[NotificationMessage]:
     """알림 한 건을 세션에 추가한다(커밋은 호출자). ``user_id`` 가 None 이면 전체 공지.
 
@@ -104,6 +107,17 @@ def notify(
     if ref and _exists(db, user_id, kind, ref):
         return None
     created_at, created_ms = _now()
+    if kind == "agent" and session_id is not None and user_id is not None:
+        canonical = _activity_for_notification(db, user_id, session_id, title, body,
+                                               data=data, activity=activity, ref=ref, occurred_at=created_at)
+        if canonical is None:
+            # Never publish a new agent alert without its corresponding log.
+            # The caller's trading transaction remains independent.
+            log.warning("Agent alert withheld: original activity unavailable (session=%s)", session_id)
+            return None
+        data = {**(data or {}), "session_id": session_id, "activity_event_id": canonical.id,
+                "activity_event_key": canonical.event_key}
+        link = f"/agents?session={session_id}&panel=logs&event={canonical.id}"
     row = NotificationMessage(
         user_id=user_id,
         kind=kind,
@@ -123,6 +137,43 @@ def notify(
     # 커밋되면 이 계정(공지면 모두)의 스트림을 깨운다 — 배지가 폴링을 기다리지 않게.
     notification_stream.mark_changed(db, user_id)
     return row
+
+
+def _activity_for_notification(db, user_id: int, session_id: int, title: str, body: str, *,
+                               data: Optional[dict], activity: Optional[dict], ref: str, occurred_at: str):
+    """A notification is a projection of an immutable event, never its substitute.
+
+    Existing execution writers pass their inserted id. Other server observation
+    sites create that fact here, in the SAME transaction as its notification.
+    Browser-supplied identifiers never enter this internal-only helper.
+    """
+    from . import runner
+    from .agent_event_schema import safe_identifier
+    session = db.get(RunSession, session_id)
+    if session is None or session.user_id != user_id:
+        return None
+    supplied_id = (data or {}).get("activity_event_id")
+    if supplied_id is not None:
+        event = db.get(RunSessionEvent, supplied_id) if isinstance(supplied_id, int) and not isinstance(supplied_id, bool) else None
+        return event if event is not None and event.session_id == session_id and event.user_id == user_id else None
+    activity = activity or {}
+    key = safe_identifier(activity.get("event_key")) or "notice:" + (
+        hashlib.sha256(ref.encode()).hexdigest() if ref else uuid4().hex)
+    event = db.exec(select(RunSessionEvent).where(RunSessionEvent.session_id == session_id,
+                                               RunSessionEvent.event_key == key)).first()
+    if event is not None:
+        return event
+    details = {**(activity.get("details") or {}), "title": title,
+               "source_event_id": activity.get("source_event_id") or key}
+    details.setdefault("verification", "server_observation_not_exchange_fill")
+    runner._append_events(db, session, [{
+        "ts": activity.get("occurred_at") or occurred_at,
+        "kind": activity.get("kind") or "info", "severity": activity.get("severity") or "INFO",
+        "event_name": activity.get("event_name") or "server.notification_observed",
+        "event_key": key, "message": body or title, "details": details, "_notify": False,
+    }], component=activity.get("component") if activity.get("component") in {"engine", "server", "news_collector"} else "server")
+    return db.exec(select(RunSessionEvent).where(RunSessionEvent.session_id == session_id,
+                                               RunSessionEvent.event_key == key)).first()
 
 
 def notify_now(
@@ -191,6 +242,7 @@ def notify_running_sessions(
     market: Optional[str] = None,
     asset: Optional[str] = None,
     kind: str = "agent",
+    activity: Optional[dict] = None,
 ) -> int:
     """실행 중(최근 heartbeat)인 세션의 주인에게 세션마다 한 건씩 보낸다.
 
@@ -223,6 +275,7 @@ def notify_running_sessions(
             db, row.user_id, kind, title, body, link,
             data={**(data or {}), "symbol": row.symbol, "session_id": row.id},
             session_id=row.id, ref=f"{ref}:{row.id}" if ref else "", trim=False,
+            activity=activity,
         )
         if created is not None:
             sent += 1

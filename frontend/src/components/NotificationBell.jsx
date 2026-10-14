@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth.js";
 import useNotifications from "../hooks/useNotifications.js";
-import { badgeText, isInternalLink, kindLabel, pointsOf, relativeTime } from "../lib/notifications.js";
+import { badgeText, notificationActivityLink, notificationTarget, kindLabel, pointsOf, relativeTime } from "../lib/notifications.js";
 import { BellIcon } from "./utilityIcons.jsx";
 import NotificationKindIcon from "./notificationKindIcon.jsx";
 import NotificationToasts from "./NotificationToasts.jsx";
@@ -50,12 +50,14 @@ export default function NotificationBell() {
   };
   const onItem = (item) => {
     setOpen(false);
-    if (isInternalLink(item.link)) navigate(item.link);
+    const target = notificationTarget(item);
+    if (target) navigate(target);
   };
   // 토스트를 누르면 그 알림은 읽음(배지에서 빠진다)이고, 가리키는 화면으로 간다.
   const onToast = (item) => {
     if (!item.read) markRead([item.id]);
-    if (isInternalLink(item.link)) navigate(item.link);
+    const target = notificationTarget(item);
+    if (target) navigate(target);
   };
 
   return (
@@ -104,6 +106,8 @@ export default function NotificationBell() {
                         </span>
                         <span className="header-bell-title">{item.title}</span>
                         {item.body ? <span className="header-bell-body">{item.body}</span> : null}
+                        {item.kind === "agent" ? <span className="header-bell-body">{notificationActivityLink(item)
+                          ? `해당 로그 보기 · 사건 #${item.data.activity_event_id}` : "원본 연결 없음 · 이전 형식 알림"}</span> : null}
                       </span>
                       <span className="header-bell-side">
                         {points ? <b className="header-bell-points num">+{points.toLocaleString("ko-KR")} P</b> : null}

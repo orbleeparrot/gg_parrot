@@ -133,6 +133,48 @@ def test_runner_heartbeat_uses_one_checkout_for_auth_and_snapshot(tmp_path, monk
         critical.dispose()
 
 
+def test_log_recovery_uses_ordinary_pool_without_taking_heartbeat_capacity(tmp_path, monkeypatch):
+    url = f"sqlite:///{tmp_path / 'activity-priority.db'}"
+    ordinary = create_engine(url, pool_size=2, max_overflow=0, pool_timeout=0.02)
+    critical = create_engine(url, pool_size=1, max_overflow=0, pool_timeout=0.02)
+    SQLModel.metadata.create_all(ordinary)
+    monkeypatch.setattr(persistence, "_engine", ordinary)
+    monkeypatch.setattr(persistence, "_runner_engine", critical)
+    with persistence.get_session() as db:
+        user = User(email="recovery@example.invalid", username="recovery_pool", password_hash="not-a-login",
+                    created_at="2026-10-14T00:00:00Z")
+        db.add(user)
+        db.flush()
+        db.add(RunnerKey(user_id=user.id, key="recovery-fixture-key", created_at=user.created_at))
+        row = RunSession(user_id=user.id, symbol="BTCUSDT", status="stopped", in_position=True,
+                         position_qty=2, entry_price=100, started_at=user.created_at, runner_version="17")
+        db.add(row)
+        db.commit()
+        sid = row.id
+    ordinary_checkouts, critical_checkouts = [], []
+    event.listen(ordinary, "checkout", lambda *_a: ordinary_checkouts.append(1))
+    event.listen(critical, "checkout", lambda *_a: critical_checkouts.append(1))
+    from app.main import app
+    key = "runner:" + "a" * 32
+    try:
+        # Saturate reserved heartbeat admission. Logs must neither use nor
+        # wait on it. Auth and the event write share ONE ordinary checkout.
+        with critical.connect():
+            response = TestClient(app).post(f"/api/runner/sessions/{sid}/events",
+                headers={"X-Runner-Key": "recovery-fixture-key"},
+                json={"events": [{"event_key": key, "kind": "info", "message": "종료 전 실행 기록"}],
+                      "snapshot": {"position_qty": 0, "in_position": False}})
+            assert response.status_code == 200, response.text
+            assert response.json()["accepted_event_keys"] == [key]
+        assert len(critical_checkouts) == len(ordinary_checkouts) == 1
+        with ordinary.connect() as conn:
+            values = conn.execute(text("SELECT status, position_qty, entry_price FROM runsession WHERE id=:sid"), {"sid": sid}).one()
+            assert values == ("stopped", 2, 100)
+    finally:
+        ordinary.dispose()
+        critical.dispose()
+
+
 @pytest.mark.parametrize("error", [TimeoutError("pool queue full"), OperationalError("", {}, Exception("EMAXCONNSESSION max clients reached: secret URL"))])
 def test_capacity_errors_are_safe_retryable_503(monkeypatch, error):
     from app.main import app

@@ -171,12 +171,13 @@ def test_strategy_levels_for_the_screen():
     assert armed["trail_stop"] == pytest.approx(106.0 * 0.98)
     assert armed["armed"] is True
 
+    # 값이 다 있는 선에는 pending 이 서지 않는다 — 서면 화면이 멀쩡한 선을 숨긴다.
+    assert flat["pending"] is False and held["pending"] is False and armed["pending"] is False
+
     # 즉시 진입(눌림목 아님)은 진입 목표가 없다.
-    assert strategy_levels(_macro(entry_mode="immediate"), {"dip_ref": 100.0}, 0.0)["entry_target"] is None
-    # 상태가 없으면(옛 세션) 아무 선도 그리지 않는다 — 추측해서 그리면 거짓이 된다.
-    assert strategy_levels(macro, {}, 0.0) == {"entry_target": None, "trail_stop": None,
-                                               "trail_activation": None, "armed": False}
-    assert strategy_levels(macro, None, 0.0)["entry_target"] is None
+    immediate = strategy_levels(_macro(entry_mode="immediate"), {"dip_ref": 100.0}, 0.0)
+    assert immediate["entry_target"] is None
+    assert immediate["pending"] is False, "즉시 진입은 평평할 때 그릴 선이 애초에 없다 — 기다리라고 하면 거짓이다"
     # E 가 아닌 규칙은 이 함수가 선을 내지 않는다.
     #
     # A·B·C 는 필요한 키만 검사하고 **남은 키를 그대로 보관한다** — 그래서 A 매크로가
@@ -188,6 +189,34 @@ def test_strategy_levels_for_the_screen():
     assert a.params["entry_mode"] == "dip", "A 가 남은 키를 버리면 이 시험이 공허하다"
     assert strategy_levels(a, {"dip_ref": 100.0, "peak": 0.0, "armed": False},
                            entry_price=0.0)["entry_target"] is None
+
+
+def test_levels_say_pending_before_the_first_candle_closes():
+    """첫 봉이 마감되기 전에는 "아직 없다" 고 말해야 한다 — 화면이 메우지 않게.
+
+    실측(2026-10-12): 업비트 KRW-ICX · E · 1시간봉 세션을 11:08 에 켰다. 봉 피드는 진행 중
+    봉을 배달하지 않으므로(candle_feed) 12:00 마감까지 엔진은 봉을 하나도 못 받고, 웜업 끝의
+    ``reset_book()`` 이 ``dip_ref`` 를 None 으로 되돌려 둔 상태다. 그 52분 동안 서버는
+    ``entry_target: None`` 을 보냈고 화면은 미리보기 '현재가 -3%' 선을 그렸다 — 가격이
+    내려갈 때마다 선도 같이 내려와 "매수지점이 계속 따라내려간다" 로 읽혔다.
+    """
+    from app.engine.live_levels import strategy_levels
+    macro = _macro()
+
+    # 무포지션 · 눌림목 대기인데 기준가가 아직 없다.
+    for state in ({}, None, {"dip_ref": None, "peak": 0.0, "armed": False}):
+        out = strategy_levels(macro, state, entry_price=0.0)
+        assert out["entry_target"] is None, "없는 기준가를 추측해서 내면 안 된다"
+        assert out["pending"] is True, f"{state!r}: 맡고 있는 선이 없다고 말해야 화면이 안 메운다"
+
+    # 보유 중 · 발동 뒤인데 고점을 잃었다(옛 체크포인트) — 스탑선도 기다려야 한다.
+    lost_peak = strategy_levels(macro, {"armed": True, "peak": None}, entry_price=97.0)
+    assert lost_peak["trail_stop"] is None and lost_peak["pending"] is True
+
+    # E 가 아닌 규칙은 이 모듈이 맡지 않는다 — 기다리라고 하면 영원히 안 오는 선을 기다린다.
+    other = Macro.model_validate({**macro.model_dump(), "rule_type": "A",
+                                  "params": {"take_profit_pct": 3, "initial_capital": 1_000_000}})
+    assert strategy_levels(other, {}, 0.0)["pending"] is False
 
 
 # --- 5. 세션 뷰가 실제 가격선을 실어 보낸다 --------------------------------
@@ -213,15 +242,21 @@ def test_session_view_carries_the_real_entry_target():
     assert levels["entry_target"] == pytest.approx(2.81 * 0.97)
     assert levels["armed"] is False and levels["trail_stop"] is None
 
-    # 전략 상태가 없는 옛 세션은 아무 선도 내지 않는다.
+    assert levels["pending"] is False
+
+    # 전략 상태가 없는 옛 세션은 선을 내지 않지만 **기다리라고 말한다**. pending 이 없으면
+    # 화면이 미리보기(현재가 -3%)로 메워 가격을 따라 내려오는 거짓 선을 그린다.
     row.state_json = json.dumps({"legs": [{"symbol": "KRW-CKB"}]})
-    assert _session_view(row)["strategy_levels"]["entry_target"] is None
+    waiting = _session_view(row)["strategy_levels"]
+    assert waiting["entry_target"] is None and waiting["pending"] is True
     # 깨진 state_json 으로 뷰가 터지면 실행 화면 전체가 안 열린다.
     row.state_json = "{깨짐"
-    assert _session_view(row)["strategy_levels"]["entry_target"] is None
+    assert _session_view(row)["strategy_levels"]["pending"] is True
+    # 매크로를 못 읽으면 규칙을 모른다 — 그때는 기다리라고도 못 한다(E 인지조차 모른다).
     row.macro_json = "{깨짐"
     assert _session_view(row)["strategy_levels"] == {"entry_target": None, "trail_stop": None,
-                                                     "trail_activation": None, "armed": False}
+                                                     "trail_activation": None, "armed": False,
+                                                     "pending": False}
 
 
 # ===========================================================================

@@ -4,7 +4,9 @@
 * 종목은 요청에 온 것만 쓴다(AI 가 종목을 고르는 경로 없음).
 * AI 는 매크로 '뼈대'(rule_type·params)만 제안하고 성과 숫자는 전부 백테스트가 계산한다.
 * 어디에도 '추천' 이라 쓰지 않는다 — 후보, 상위 조합.
-* 성향이 안정형이면 선물·H(세이프티 주문) 후보를 만들지 않는다.
+* 성향이 안정형이면 선물 후보를 만들지 않는다.
+  (2026-10-12: 성향별 매매 방식 제한은 없앴다 — 세 성향이 여덟 방식을 다 본다. 남은
+   방식 제약은 시장뿐이다: 선물에서는 C(적립식)를 뺀다.)
 """
 from __future__ import annotations
 
@@ -26,6 +28,7 @@ from sqlmodel import Session, select
 from .ai_runtime import ai_available, ai_cache_key, default_model, get_ai_client, get_ai_runtime
 from .data import NoSpotDataError
 from .data import symbols as symbols_mod
+from .data.binance import MAX_BACKTEST_BARS, PERIOD_PRESET_DAYS
 from . import ask_candidates, hotcoins
 from .ask_candidates import MAX_PICKS, MIN_PICKS
 from . import points as points_mod
@@ -45,7 +48,6 @@ DISCLAIMER = "AI 가 과거 데이터로 고른 후보예요 · 투자 권유가
 # evaluate() 가 후보마다 예산을 확인하고 넘으면 거기서 멈춘다.
 MAX_CANDIDATES = 90
 TOP_N = 3
-MIN_TRADES = 3
 # 한 추천이 "그냥 들고 있기" 를 넘었다고 인정할 최소 초과 수익(%p). worth_the_macro 가 쓴다.
 # 환경변수 ASK_MIN_EXCESS_PCT 로 바꿀 수 있다(0 이면 문턱 없음).
 #
@@ -54,6 +56,24 @@ MIN_TRADES = 3
 # 줄인다. 1년을 기준점(3%p)으로 두고 짧은 창을 낮춰 잡았다.
 MIN_EXCESS_PCT = 3.0
 MIN_EXCESS_PCT_BY_PERIOD = {"1w": 0.5, "1m": 1.0, "3m": 2.0, "6m": 2.5, "1y": 3.0}
+# 성향별 MDD 상한 — **기간마다 다르다.** 고정 10% · 20% 를 1주든 6개월이든 똑같이 쓰다가
+# 긴 기간이 전멸했다(균형형 6개월 72/87 · 안정형 6개월 43/57 이 여기서 죽었다). 같은 결함을
+# min_excess_pct 에서는 2026-10-08 에 기간별 스케일로 고쳤는데 MDD 쪽에 그대로 남아 있었다.
+# 공격형은 표에 없다 = 상한 없음.
+MDD_CAP_BY_PERIOD: dict[str, dict[str, float]] = {
+    "stable": {"1w": 8.0, "1m": 12.0, "3m": 18.0, "6m": 25.0, "1y": 30.0},
+    "balanced": {"1w": 15.0, "1m": 22.0, "3m": 32.0, "6m": 40.0, "1y": 50.0},
+}
+# 절대 상한만으로는 "시장이 10% 밖에 안 흔들린 구간에서 18% 를 허용" 하게 된다. 같은 구간
+# 홀딩이 흔들린 만큼에도 곱해 보고 **둘 중 엄한 쪽**을 쓴다.
+MDD_HOLD_FACTOR: dict[str, float] = {"stable": 0.6, "balanced": 1.0}
+# 홀딩이 거의 안 흔들린 구간에서 상대 상한이 0 으로 수렴해 전부 탈락하는 것을 막는다.
+MDD_CAP_FLOOR = 5.0
+# 최소 거래 수를 봉 수에 비례시킨다. 150봉에 1회 = "쉬지 않고 일했다" 의 기준.
+# 고정 3회였을 때 4시간봉 1주(42봉)에서 안정형 후보 57개 중 50개(88%)가 여기서 죽었다.
+MIN_TRADES_FLOOR = 2
+BARS_PER_TRADE = 150
+_BARS_PER_DAY = {"1m": 1440, "5m": 288, "15m": 96, "1h": 24, "4h": 6, "1d": 1}
 # 같은 매매 방식을 최대 몇 칸까지 보여 줄지.
 #
 # 1 로 둔다. 2 로 올리면 같은 유형의 다른 프리셋이 나란히 올 수 있는데, `_label` 이
@@ -67,20 +87,23 @@ SESSION_TTL_MS = 30 * 60 * 1000
 MAX_ASKS_PER_SESSION = 6
 MANUAL_SYMBOLS = ("BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT")
 
-RiskProfile = Literal["stable", "balanced", "aggressive", "scalper"]
+RiskProfile = Literal["stable", "balanced", "aggressive"]
 
-# 성향별 규칙 — 후보에 넣는 유형, MDD 상한, 선물 허용, 짧은 봉 여부(short), 종목 상한, 최소 거래 수.
-# 순서는 템플릿 우선순위. 단타형은 짧은 봉 전용이라 I(일봉 논리)·C·H(짧은 봉에 의미 없음)를 뺀다.
+# 성향별 규칙 — 화면 이름과 선물 허용 여부만 남는다.
+#
+# 2026-10-12: rule_types(매매 방식 화이트리스트) · mdd_cap(기간과 무관한 고정 상한) ·
+# short(단타형 전용 봉) · min_trades(봉 수와 무관한 고정값) · max_symbols(쓰이지 않던 칸)를
+# 모두 뺐다. 성향은 "어떤 종목 · 어떤 방식을 보는가" 가 아니라 "얼마나 흔들려도 되는가" 로만
+# 갈린다 — 상한은 mdd_cap, 순서는 score 가 맡는다. 사람이 '안정형' 을 고르는 이유는 내 돈이
+# 덜 흔들렸으면 하는 것이지 비트코인을 사고 싶어서가 아니다.
 PROFILES: dict[str, dict] = {
-    "stable": {"label": "안정형", "mdd_cap": 10.0, "rule_types": ("C", "J", "G", "A"), "futures": False,
-               "short": False, "max_symbols": 3, "min_trades": 3},
-    "balanced": {"label": "균형형", "mdd_cap": 20.0, "rule_types": ("C", "J", "G", "A", "F", "E"), "futures": True,
-                 "short": False, "max_symbols": 3, "min_trades": 3},
-    "aggressive": {"label": "공격형", "mdd_cap": None, "rule_types": ("C", "J", "G", "A", "F", "E", "I", "H"), "futures": True,
-                   "short": False, "max_symbols": 3, "min_trades": 3},
-    "scalper": {"label": "단타형", "mdd_cap": None, "rule_types": ("A", "E", "F", "G", "J"), "futures": True,
-                "short": True, "max_symbols": 2, "min_trades": 10},
+    "stable": {"label": "안정형", "futures": False},
+    "balanced": {"label": "균형형", "futures": True},
+    "aggressive": {"label": "공격형", "futures": True},
 }
+
+# 세 성향이 여덟 방식을 다 본다. 순서는 템플릿 우선순위(앞쪽이 시간 예산에서 먼저 평가된다).
+ALL_RULE_TYPES = ("C", "J", "G", "A", "F", "E", "I", "H")
 
 # 봉 × 기간 짝 — 백테스트 봉 상한(MAX_BACKTEST_BARS=20,000)을 넘지 않는 조합만.
 LONG_INTERVALS = ("1h", "4h", "1d")
@@ -90,26 +113,40 @@ SHORT_PERIODS = ("1w", "1m")
 
 # v2(2026-09-23) — 카드가 사람 말을 받고 서버가 기술 값으로 바꾼다.
 HORIZONS = ("days", "weeks", "months", "long")
-WATCH_LEVELS = ("rarely", "sometimes", "often")
+WATCH_LEVELS = ("rarely", "sometimes", "often", "constantly")
 
 _HORIZON_PERIOD = {"days": "1w", "weeks": "3m", "months": "6m", "long": "1y"}
-# 단타형은 짧은 구간만 — SHORT_PERIODS = ("1w", "1m"). 여기의 1m 은 1개월이다.
-_HORIZON_PERIOD_SHORT = {"days": "1w", "weeks": "1m", "months": "1m", "long": "1m"}
-_WATCH_INTERVAL = {"rarely": "1d", "sometimes": "4h", "often": "1h"}
-_WATCH_INTERVAL_SHORT = {"rarely": "15m", "sometimes": "5m", "often": "1m"}
+# 확인 빈도가 곧 봉 간격이다. 'constantly'(15분)는 2026-10-12 에 더했다 — 단타형을 없애는
+# 대신, 짧게 보고 싶은 사람이 성향을 포기하지 않아도 되게 하려고.
+_WATCH_INTERVAL = {"rarely": "1d", "sometimes": "4h", "often": "1h", "constantly": "15m"}
 
 
-def to_period(profile: str, horizon: str) -> str:
-    table = _HORIZON_PERIOD_SHORT if PROFILES[profile]["short"] else _HORIZON_PERIOD
-    return table.get(horizon, table["weeks"])
+def to_period(horizon: str) -> str:
+    return _HORIZON_PERIOD.get(horizon, _HORIZON_PERIOD["weeks"])
 
 
-def to_interval(profile: str, watch: str, period: str) -> str:
-    if not PROFILES[profile]["short"]:
-        return _WATCH_INTERVAL.get(watch, _WATCH_INTERVAL["sometimes"])
-    interval = _WATCH_INTERVAL_SHORT.get(watch, _WATCH_INTERVAL_SHORT["sometimes"])
-    # 1분 봉은 최근 1주 구간에서만 쓸 수 있다(백테스트 봉 상한).
-    return "5m" if interval == "1m" and period != "1w" else interval
+# 넓은 쪽으로 가는 순서. 봉 상한에 걸리면 이 순서로 한 칸씩 넓힌다.
+_WIDER_INTERVALS = ("15m", "1h", "4h", "1d")
+
+
+def to_interval(watch: str, period: str) -> str:
+    """확인 빈도 → 봉. 봉 상한을 넘는 조합은 **거절하지 않고 봉을 넓힌다.**
+
+    기본 상한(20,000봉)에서는 15분 × 1년(35,040봉)이 유일한 초과 조합이다. 그 하나만
+    특별히 다루지 않는 이유: MAX_BACKTEST_BARS 는 환경변수로 낮출 수 있고(웹 프로세스를
+    지키는 정상 조치다), 낮추면 15분 × 6개월(17,472봉)부터 넘는다. 그때 후보 전부가
+    TooManyBarsError 로 죽는데 그 예외는 NoSpotDataError 가 아니라서, 사용자는 이유도
+    안 적힌 빈 화면을 본다. 넓히는 쪽이 늘 낫다 — 사용자는 자주 보겠다고 한 것이지
+    기간을 포기한 게 아니다.
+    """
+    interval = _WATCH_INTERVAL.get(watch, _WATCH_INTERVAL["sometimes"])
+    if interval not in _WIDER_INTERVALS:
+        return interval
+    for wider in _WIDER_INTERVALS[_WIDER_INTERVALS.index(interval):]:
+        if expected_bars(period, wider) <= MAX_BACKTEST_BARS:
+            return wider
+    # 어느 봉으로도 못 맞추면 가장 넓은 봉. 거절보다 낫다(백테스트가 자기 말로 거절한다).
+    return _WIDER_INTERVALS[-1]
 
 RULE_LABELS = {
     "A": "익절/손절 후 재진입", "C": "정기 분할매수", "E": "트레일링 스탑", "F": "RSI 조건",
@@ -143,7 +180,7 @@ class CandidatesRequest(BaseModel):
     market: Literal["spot", "futures"]
     leverage: int = Field(default=1, ge=1, le=3)
     invest_horizon: Literal["days", "weeks", "months", "long"]
-    watch_frequency: Literal["rarely", "sometimes", "often"]
+    watch_frequency: Literal["rarely", "sometimes", "often", "constantly"]
 
     @field_validator("exchange", mode="before")
     @classmethod
@@ -253,8 +290,10 @@ _PRESETS: dict[str, list[dict]] = {
     ],
 }
 
-# 단타형 전용 프리셋 — 짧은 봉에 맞춘 좁은 익절·손절·지표 기간.
-_SCALPER_PRESETS: dict[str, list[dict]] = {
+# 짧은 봉 전용 프리셋 — 좁은 익절·손절과 짧은 지표 기간. 성향이 아니라 **봉의 성질**에
+# 딸린 표다(그래서 이름이 SHORT_BAR 다). 담긴 방식은 A·E·F·G·J 다섯이고, 나머지
+# (C·H·I)는 일반 표에서 가져와 겹쳐 쓴다 — _presets_for 참고.
+_SHORT_BAR_PRESETS: dict[str, list[dict]] = {
     "A": [
         {"params": {"take_profit_pct": 1.0, "initial_capital": CAPITAL}, "risk": {"stop_loss_pct": 0.7}},
         {"params": {"take_profit_pct": 1.5, "initial_capital": CAPITAL}, "risk": {"stop_loss_pct": 1.0}},
@@ -306,22 +345,32 @@ class _Plan:
 
 
 def _plan(answers: CandidatesRequest, symbol: str) -> _Plan:
-    period = to_period(answers.risk_profile, answers.invest_horizon)
+    period = to_period(answers.invest_horizon)
     return _Plan(
         risk_profile=answers.risk_profile, market=answers.market, leverage=answers.leverage,
         symbols=[symbol], period_preset=period,
-        interval=to_interval(answers.risk_profile, answers.watch_frequency, period),
+        interval=to_interval(answers.watch_frequency, period),
         exchange=answers.exchange, account_balance=answers.account_balance,
     )
 
 
 def _presets_for(req: _Plan) -> dict[str, list[dict]]:
-    return _SCALPER_PRESETS if PROFILES[req.risk_profile]["short"] else _PRESETS
+    """프리셋은 성향이 아니라 **봉 간격**으로 고른다.
+
+    예전에는 PROFILES[성향]["short"] 로 갈랐는데 단타형이 없어지면서 기준이 사라졌다.
+    짧은 봉 표는 다섯 방식뿐이라 그것만 쓰면 15분봉을 고른 순간 방식이 여덟 → 다섯으로
+    줄어 화이트리스트를 없앤 효과가 사라지고, build_templates 가 C 를 찾다 터진다.
+    그래서 **겹쳐 쓴다** — 짧은 봉 표에 있는 방식은 그 값을, 없는 방식은 일반 표의 값을.
+    """
+    if req.interval not in SHORT_INTERVALS:
+        return _PRESETS
+    return {**_PRESETS, **_SHORT_BAR_PRESETS}
 
 
 def _allowed_types(req: _Plan) -> tuple[str, ...]:
-    types = PROFILES[req.risk_profile]["rule_types"]
-    # C(DCA) 는 레버리지·선물을 못 쓴다.
+    """세 성향 모두 여덟 방식을 본다(2026-10-12). 남은 제약은 시장뿐이다."""
+    types = ALL_RULE_TYPES
+    # C(적립식) 는 레버리지·선물을 못 쓴다.
     if req.market == "futures":
         types = tuple(t for t in types if t != "C")
     return types
@@ -454,13 +503,62 @@ def excess_over_hold(result: BacktestResult) -> float:
 
 
 def score(profile: str, result: BacktestResult) -> float:
+    """성향이 순서를 가르는 유일한 자리.
+
+    상한이 아니라 **점수**가 성향을 갈라야 한다. 측정: 후보 풀이 같을 때 균형형
+    `수익 − 0.5×MDD` 는 공격형 `수익` 과 상위 3장이 똑같았다 — 초과 수익이 +25~+128%p 로
+    벌어진 자리에서 10~20 을 빼도 순서가 안 바뀐다. 나누기로 바꾸면 낙폭이 비율로 작용해
+    순서가 실제로 달라진다. √ 를 쓰는 이유는 안정형(`수익/MDD`)과도 달라야 하기 때문이다.
+    """
     ret = excess_over_hold(result)
     mdd = float(result.mdd_pct)
     if profile == "stable":
         return ret / max(mdd, 1.0)
     if profile == "balanced":
-        return ret - 0.5 * mdd
+        return ret / math.sqrt(max(mdd, 1.0))
     return ret
+
+
+def expected_bars(period: str, interval: str) -> int:
+    """이 기간 × 봉에서 백테스트가 보게 될 봉 수(대략).
+
+    equity_curve 길이로 세면 안 된다 — 긴 창은 BACKTEST_EQUITY_MAX_POINTS(1,000)로
+    줄어든 뒤라 1,092봉이 1,000 으로 보인다.
+    """
+    days = PERIOD_PRESET_DAYS.get(str(period), PERIOD_PRESET_DAYS["3m"])
+    return max(1, int(days * _BARS_PER_DAY.get(str(interval), 24)))
+
+
+def min_trades_for(bars: int) -> int:
+    """이 창에서 '한 번이라도 일한 매크로' 로 인정할 최소 거래 수."""
+    try:
+        count = int(bars)
+    except (TypeError, ValueError):
+        count = 0
+    return max(MIN_TRADES_FLOOR, count // BARS_PER_TRADE)
+
+
+def mdd_cap(profile: str, period: str, hold_mdd_pct: Optional[float] = None) -> Optional[float]:
+    """이 성향 · 이 기간에서 허용할 최대 낙폭(%). None 이면 상한이 없다(공격형).
+
+    적용식은 ``min(절대 상한, max(MDD_CAP_FLOOR, 홀딩MDD × 계수))`` 다. 홀딩 MDD 를 못
+    구한 결과(묶음 집계 · 봉 2개 미만)는 절대 상한만 쓴다 — 모른다고 상한을 풀면
+    "안정형" 이 뜻을 잃는다.
+    """
+    table = MDD_CAP_BY_PERIOD.get(profile)
+    if table is None:
+        return None
+    absolute = table.get(str(period), table["3m"])
+    factor = MDD_HOLD_FACTOR.get(profile)
+    if factor is None or hold_mdd_pct is None:
+        return absolute
+    try:
+        hold = float(hold_mdd_pct)
+    except (TypeError, ValueError):
+        return absolute
+    if not math.isfinite(hold):
+        return absolute
+    return min(absolute, max(MDD_CAP_FLOOR, hold * factor))
 
 
 def min_excess_pct(period: str = "") -> float:
@@ -500,20 +598,27 @@ def worth_the_macro(result: BacktestResult, period: str = "") -> bool:
     return float(result.final_return_pct) - float(hold) >= min_excess_pct(period)
 
 
+def _within_mdd_cap(profile: str, period: str, result: BacktestResult) -> bool:
+    cap = mdd_cap(profile, period, result.buy_hold_mdd_pct)
+    return cap is None or float(result.mdd_pct) <= cap
+
+
 def select_top(evaluated: list[Evaluated], profile: str, n: int = TOP_N,
-               period: str = "") -> list[Evaluated]:
+               period: str = "", interval: str = "") -> list[Evaluated]:
     """MDD 상한 · 최소 거래 수 · 홀딩 문턱으로 거르고 성향 점수로 정렬해 상위 n개.
 
     같은 rule_type 은 MAX_PER_TYPE 개까지. **넘긴 후보가 적으면 적게 돌려준다** — 세 칸을
     채우려고 홀딩만큼도 못 한 후보를 끼워 넣지 않는다. 하나도 없으면 빈 목록이고, 그때
-    화면은 추천 대신 "이번 조건에서는 그냥 들고 있는 게 나았다" 고 말한다.
+    화면은 추천 대신 "보여 드릴 만큼 이득이 난 조합이 없었다" 고 말한다.
+
+    상한과 거래 수는 성향 표의 고정값이 아니라 **기간 · 봉 · 그 구간의 홀딩**에서 나온다
+    (mdd_cap · min_trades_for). 봉을 안 받으면 거래 수 바닥(MIN_TRADES_FLOOR)만 쓴다.
     """
-    cap = PROFILES[profile]["mdd_cap"]
-    min_trades = PROFILES[profile]["min_trades"]
+    min_trades = min_trades_for(expected_bars(period, interval)) if interval else MIN_TRADES_FLOOR
     pool = [
         e for e in evaluated
         if e.result.total_trades >= min_trades
-        and (cap is None or float(e.result.mdd_pct) <= cap)
+        and _within_mdd_cap(profile, period, e.result)
         and worth_the_macro(e.result, period)
     ]
     pool.sort(key=lambda e: (score(profile, e.result), e.result.total_trades), reverse=True)
@@ -694,7 +799,17 @@ def used_today(db: Session, user: User) -> int:
     ).one())
 
 
+# 관리자 계정은 '껄무새에게 물어볼까?' 횟수 제한이 없다(2026-10-13 운영 요청) — 화면에는 '무제한'.
+ADMIN_REMAINING = 999
+
+
+def unlimited(user: User) -> bool:
+    return bool(getattr(user, "is_admin", False))
+
+
 def free_remaining_today(db: Session, user: User) -> int:
+    if unlimited(user):
+        return ADMIN_REMAINING
     return max(0, daily_limit() - used_today(db, user))
 
 
@@ -719,6 +834,8 @@ def extra_left_today(db: Session, user: User) -> int:
 
 def remaining_today(db: Session, user: User) -> int:
     """오늘 물어볼 수 있는 횟수 = 무료 남은 수 + 아직 안 쓴 추가권 수."""
+    if unlimited(user):
+        return ADMIN_REMAINING
     unused = sum(1 for c in _credits_today(db, user) if c.used_session_id is None)
     return free_remaining_today(db, user) + unused
 
@@ -755,6 +872,7 @@ def status(db: Session, user: User) -> dict:
         "consented": consented(user),
         "remaining_today": remaining_today(db, user),
         "daily_limit": daily_limit(),
+        "unlimited": unlimited(user),
         "disclaimer_version": DISCLAIMER_VERSION,
         "extra_price": EXTRA_PRICE,
         "extra_left_today": extra_left_today(db, user),
@@ -789,11 +907,34 @@ def _curve(result: BacktestResult) -> list[float]:
     return [round(float(p.equity), 4) for p in _lttb_equity_points(result.equity_curve, CURVE_POINTS)]
 
 
+def _no_edge_best(evaluated: list[Evaluated]) -> Optional[dict]:
+    """홀딩 문턱을 넘은 게 없어 빈 화면이 될 때, 가장 나았던 조합의 숫자.
+
+    왜 싣나: 지금 빈 화면은 "넘긴 조합이 없었어요" 한 줄로 끝난다. 그 사이에 매크로가
+    +34.82% 를 벌었고 같은 기간 보유가 +38.67% 였다는 사실이 사라진다 — 사용자는
+    "아무것도 안 됐다" 로 읽는다. 둘을 나란히 보여 주면 '왜 안 보여 주는지' 가 보인다.
+
+    ``made_money`` 는 **어느 관문에서 떨어졌는지**를 가른다. worth_the_macro 는 둘을 본다
+    — 그 자체로 벌었나, 홀딩을 문턱만큼 넘었나. 둘째만 설명하면 "홀딩보다 15%p 앞선 -5%"
+    같은 결과에서 화면이 스스로 어긋난다(숫자는 이겼다고 말하고 글은 못 넘었다고 말한다).
+    """
+    if not evaluated:
+        return None
+    best = max(evaluated, key=lambda e: float(e.result.final_return_pct))
+    hold = best.result.buy_hold_return_pct
+    ret = round(float(best.result.final_return_pct), 2)
+    return {
+        "return_pct": ret,
+        "hold_return_pct": (round(float(hold), 2) if hold is not None else None),
+        "rule_label": RULE_LABELS.get(best.candidate.macro.rule_type.value, ""),
+        "made_money": ret > 0,
+    }
+
+
 def _result_view(e: Evaluated) -> dict:
     macro = e.candidate.macro
-    # v1 은 규칙 기반 explain_result 만 쓴다 — AI 해설(ai_explain.enrich)은 사이트 전체
-    # 일일 예산(AI_EXPLAIN_MAX_CALLS_PER_DAY)을 공유하는데, 여기선 한 번의 질문에 최대
-    # 3개 결과가 순차로 OpenAI 를 부르게 되어 예산을 빠르게 갉아먹는다. 그래서 뺀다.
+    # 해설은 규칙 기반 explain_result 만 쓴다 — 2026-10-12 에 AI 해설 층을 걷어냈다
+    # (하루 한도 때문에 같은 화면이 때에 따라 다른 말투였다).
     explanation = explain_result(macro, e.result)
     return {
         "label": e.candidate.label,
@@ -870,6 +1011,35 @@ def refund_external_reservation(db: Session, reservation_id: int, credit_id: int
         log.warning("External reservation refund failed: reason=%s", type(error).__name__)
 
 
+# 2026-10-12 단타형 삭제 — 저장된 세션에 남은 성향을 만났을 때 하는 말.
+PROFILE_GONE_MESSAGE = "성향 구성이 바뀌었어요. 처음부터 다시 물어봐 주세요."
+# 더 쓸 수 없게 된 성향들. 이 목록이 비면 이 경로는 아무 일도 하지 않는다.
+RETIRED_PROFILES = frozenset({"scalper"})
+
+
+def _retire_flow(db: Session, user: User, row: AskMacroSession) -> None:
+    """옛 성향으로 만든 세션을 거두고 횟수를 돌려준다.
+
+    받을 이유가 없는 차감이다 — 사용자가 잘못한 것이 없고, 그 세션으로는 아무것도 못 본다.
+    추가권으로 물어본 세션이면 추가권도 같이 풀어 준다(run_ask 의 환불과 같은 방식).
+    """
+    if row.refunded:
+        return
+    row.refunded = True
+    db.add(row)
+    if row.paid:
+        for credit in _credits_today(db, user):
+            if credit.used_session_id == row.id:
+                credit.used_session_id = None
+                db.add(credit)
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        # 환불에 실패해도 세션은 못 쓴다 — 부르는 쪽이 410 을 던진다. 조용히 삼키지 않는다.
+        log.warning("ask: 옛 성향 세션 환불 실패")
+
+
 def _load_flow(db: Session, user: User, session_id: int) -> tuple[AskMacroSession, CandidatesRequest]:
     """세션 행을 찾아 만료·상한·소유자를 검사하고 저장된 카드 답변을 돌려준다."""
     row = db.get(AskMacroSession, session_id)
@@ -882,7 +1052,16 @@ def _load_flow(db: Session, user: User, session_id: int) -> tuple[AskMacroSessio
     if row.ask_count >= MAX_ASKS_PER_SESSION:
         raise AskError(409, "이번 질문에서 살펴볼 수 있는 종목을 다 봤어요. 다시 물어봐 주세요.")
     try:
-        answers = CandidatesRequest(**json.loads(row.request_json))
+        saved = json.loads(row.request_json)
+    except Exception:
+        raise AskError(410, "질문 기록이 오래된 형식이에요. 처음부터 다시 물어봐 주세요.")
+    # 없어진 성향으로 만든 세션은 검증에서 터져 화면이 500 으로 죽는다. 왜 못 쓰는지
+    # 말해 주고 횟수를 돌려준다 — "오래된 형식" 으로 뭉개면 사용자는 자기 잘못인 줄 안다.
+    if isinstance(saved, dict) and saved.get("risk_profile") in RETIRED_PROFILES:
+        _retire_flow(db, user, row)
+        raise AskError(410, PROFILE_GONE_MESSAGE)
+    try:
+        answers = CandidatesRequest(**saved)
     except Exception:
         raise AskError(410, "질문 기록이 오래된 형식이에요. 처음부터 다시 물어봐 주세요.")
     return row, answers
@@ -971,7 +1150,8 @@ def run_ask(db: Session, user: User, req: AskRequest, run_backtest: Callable[[Ma
         evaluated = evaluate(candidates, guarded, time_budget_sec())
         if not evaluated and failures and all(isinstance(f, NoSpotDataError) for f in failures):
             raise AskError(422, "이 종목의 시세 데이터를 찾지 못했어요. 다른 종목을 골라 주세요.")
-        top = select_top(evaluated, plan.risk_profile, period=plan.period_preset)
+        top = select_top(evaluated, plan.risk_profile, period=plan.period_preset,
+                         interval=plan.interval)
         results = [_result_view(e) for e in top]
         # 돌려는 봤는데 홀딩 문턱을 넘은 게 하나도 없었는가.
         #
@@ -981,6 +1161,7 @@ def run_ask(db: Session, user: User, req: AskRequest, run_backtest: Callable[[Ma
         # 그 경우의 올바른 말은 "이 조건으론 살아남은 후보가 없었다" 다.
         no_edge = bool(evaluated) and not any(
             worth_the_macro(e.result, plan.period_preset) for e in evaluated)
+        no_edge_best = _no_edge_best(evaluated) if no_edge else None
         elapsed_ms = int((time.monotonic() - started) * 1000)
 
         # 성공했을 때만 호출 수를 센다 — 실패한 시도로 예산을 깎지 않는다.
@@ -1030,6 +1211,8 @@ def run_ask(db: Session, user: User, req: AskRequest, run_backtest: Callable[[Ma
         # 후보는 돌렸지만 "그냥 들고 있기" 를 의미 있게 넘은 게 없었다 — 화면이 추천 대신
         # 그렇게 말한다. results 가 비어도 이유가 둘(데이터 없음 / 넘은 게 없음)이라 따로 싣는다.
         "no_edge": no_edge,
+        # 빈 화면이 숫자를 싣는다 — 가장 나았던 조합과 같은 기간 '첫날 사서 보유'.
+        "no_edge_best": no_edge_best,
         # 돌려줬음을 화면이 말해야 한다 — 안 그러면 "결과도 없는데 횟수만 깎였다" 로 보인다.
         "refunded": bool(row.refunded),
         "min_excess_pct": min_excess_pct(plan.period_preset),

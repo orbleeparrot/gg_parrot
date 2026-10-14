@@ -61,9 +61,9 @@ services:
       - key: BINANCE_API_BASE
         value: "https://data-api.binance.vision"
       - key: RUNNER_DOWNLOAD_URL
-        value: "https://github.com/orbleeparrot/gg_parrot/releases/download/runner-v12/ggparrot-runner.exe"
+        value: "https://github.com/orbleeparrot/gg_parrot/releases/download/runner-v17/ggparrot-runner.exe"
       - key: RUNNER_EXE_VERSION
-        value: "12"
+        value: "17"
       - key: RUNNER_SUPPORTS_LAUNCH
         value: "true"
       - key: RUNNER_MIN_VERSION
@@ -94,8 +94,6 @@ services:
       # 웹 요청 스레드를 오래 점유하지 않도록 짧게 대기한 뒤 재시도 응답을 줍니다.
       - key: AI_ACQUIRE_TIMEOUT_SECONDS
         value: "1"
-      - key: AI_EXPLAIN_MAX_CALLS_PER_DAY
-        value: "20"
       # 껄무새에게 물어볼까? — 계정당 하루 횟수와 후보 백테스트 시간 예산(초). 넘으면 남은 후보는 건너뜁니다.
       - key: ASK_DAILY_LIMIT
         value: "5"

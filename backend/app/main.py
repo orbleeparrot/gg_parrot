@@ -68,7 +68,6 @@ from . import optimize as optimize_mod
 from . import optimize_runtime as optimize_runtime_mod
 from . import paper as paper_mod
 from . import runner_engine as runner_engine_mod
-from . import ai_explain as ai_explain_mod
 from . import ai_runtime as ai_runtime_mod
 from . import community_summaries as community_summaries_mod
 from . import auth as auth_mod
@@ -356,11 +355,6 @@ class DeleteAccountRequest(BaseModel):
     credential: str = ""
 
 
-class ExplainAiRequest(BaseModel):
-    macro: Macro
-    period_override: Optional[Period] = None
-
-
 class BundleRequest(BaseModel):
     macro: Macro
 
@@ -422,6 +416,10 @@ class RunnerStoppedRequest(BaseModel):
     events: list[dict] = []
 
 
+class RunnerEventBatchRequest(BaseModel):
+    events: list[dict] = Field(default_factory=list, max_length=100)
+
+
 class RunnerStopRequest(BaseModel):
     mode: str  # stop_only | close_and_stop
 
@@ -434,6 +432,33 @@ class RunnerLaunchTicketCreateRequest(BaseModel):
 class RunnerLaunchTicketClaimRequest(BaseModel):
     ticket: str
     runner_version: str = ""
+
+
+# 실행기(v13+)가 웹 가이드에 알리는 연결 도우미 단계. 정해진 값만 받고 다른 칸은 422 —
+# 거래소 키 · IP · 오류 문장이 실수로라도 실려 오면 저장하지 않는다.
+class RunnerSetupSlots(BaseModel):
+    model_config = {"extra": "forbid"}
+    access: bool = False
+    secret: bool = False
+
+
+class RunnerSetupChecks(BaseModel):
+    model_config = {"extra": "forbid"}
+    auth: Literal["ok", "bad", "wait", "na"] = "wait"
+    ip: Literal["ok", "bad", "wait", "na"] = "wait"
+    order: Literal["ok", "bad", "wait", "na"] = "wait"
+
+
+class RunnerSetupProgressRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    stage: Literal["ready", "ask", "ip", "perm", "keys", "existing", "manual", "checking",
+                   "result_ok", "result_fail", "started", "closed"]
+    exchange: Literal["binance", "upbit", "bithumb"]
+    path: Literal["", "new", "existing"] = ""
+    slots: RunnerSetupSlots = Field(default_factory=RunnerSetupSlots)
+    checks: RunnerSetupChecks = Field(default_factory=RunnerSetupChecks)
+    problem: Literal["", "ip", "auth", "order", "order_size", "network", "other"] = ""
+    connected: bool = False
 
 
 class LeaderboardRegisterRequest(BaseModel):
@@ -1554,45 +1579,6 @@ def validate_explain_route(body: ExplainIn, request: Request) -> dict:
     return body_out
 
 
-@app.post("/api/explain/ai")
-def explain_ai(req: ExplainAiRequest) -> dict:
-    """On-demand AI 원인 분석 using the server OpenAI key. Always returns a valid
-    ``explanation``: on any AI failure it falls back to the rule-based one (same
-    schema) and reports ``ai_error`` so the UI can hint why."""
-    macro = req.macro
-    if req.period_override is not None:
-        macro = macro.model_copy(update={"period": req.period_override})
-
-    try:
-        result, per_symbol, _, _ = _run_any(macro)
-    except NoSpotDataError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-
-    if not ai_explain_mod.ai_available():
-        return {"explanation": explain_result(macro, result).model_dump(), "ai_available": False}
-
-    try:
-        enriched, runtime_state = ai_explain_mod.generate_with_cache_status(
-            macro,
-            result,
-            per_symbol=per_symbol or None,
-        )
-    except ai_explain_mod.AiError as exc:
-        base = explain_result(macro, result).model_dump()
-        return {"explanation": base, "ai_available": True, "ai_error": exc.user_message}
-    except Exception:
-        base = explain_result(macro, result).model_dump()
-        return {"explanation": base, "ai_available": True, "ai_error": "AI 호출에 실패했어요."}
-
-    payload = enriched.model_dump()
-    response = {"explanation": payload, "ai_available": True}
-    if runtime_state != "loaded":
-        response["cached"] = True
-    return response
-
-
 @app.post("/api/optimize")
 def optimize(req: OptimizeRequest) -> dict:
     """Sweep take-profit × stop-loss and return a scored grid (자동 최적화).
@@ -2505,6 +2491,14 @@ def _heartbeat_user(
     return runner_mod.user_for_key(x_runner_key or "", db=db)
 
 
+def _runner_activity_user(
+    x_runner_key: Optional[str] = Header(default=None),
+    db: Session = Depends(request_session),
+) -> User:
+    # Recovery is low-priority telemetry. Never occupy heartbeat admission.
+    return runner_mod.user_for_key(x_runner_key or "", db=db)
+
+
 # 실행기용 -------------------------------------------------------------
 @app.post("/api/runner/launch-tickets/claim")
 def runner_launch_ticket_claim(
@@ -2522,6 +2516,18 @@ def runner_launch_ticket_claim(
             headers={"Cache-Control": "no-store"},
         )
     return runner_mod.claim_launch_ticket(req.ticket, runner_version=current)
+
+
+@app.post("/api/runner/launch-tickets/{launch_id}/progress")
+def runner_launch_ticket_progress(
+    launch_id: int,
+    req: RunnerSetupProgressRequest,
+    response: Response,
+    user: User = Depends(_runner_user),
+) -> dict:
+    """실행기 연결 도우미의 지금 단계 — 웹 '매크로 만들기 가이드' 가 같은 화면을 따라 보여 준다."""
+    response.headers["Cache-Control"] = "no-store"
+    return runner_mod.record_setup_progress(user, launch_id, req.model_dump())
 
 
 def _runner_version_supported(current: str) -> bool:
@@ -2569,6 +2575,15 @@ def runner_stopped(req: RunnerStoppedRequest, user: User = Depends(_runner_user)
     return runner_mod.mark_stopped(
         user, req.session_id, req.status, req.note, snapshot=req.snapshot, events=req.events
     )
+
+
+@app.post("/api/runner/sessions/{session_id}/events")
+def runner_event_batch(
+    session_id: int, req: RunnerEventBatchRequest, response: Response,
+    user: User = Depends(_runner_activity_user), db: Session = Depends(request_session),
+) -> dict:
+    response.headers["Cache-Control"] = "private, no-store"
+    return runner_mod.record_runner_events(user, session_id, req.events, db=db)
 
 
 # 마이페이지용 ---------------------------------------------------------

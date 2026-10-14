@@ -53,7 +53,6 @@ PURPOSES: tuple[tuple[str, str, Optional[tuple[str, int]]], ...] = (
     ("position_news", "종목 뉴스 분류 · 요약", ("POSITION_NEWS_MAX_AI_ANALYSES_PER_DAY", 10)),
     ("title_translation", "뉴스 제목 한글 번역", None),
     ("community_summaries", "커뮤니티 글 요약", None),
-    ("ai_explain", "백테스트 AI 해설", ("AI_EXPLAIN_MAX_CALLS_PER_DAY", 20)),
     ("market_news_summary", "시장 브리핑 요약", ("NEWS_MARKET_SUMMARY_MAX_CALLS_PER_DAY", 2)),
     ("ai_challenge", "일일 챌린지 생성", None),
     ("devnote", "개발자 노트 생성", None),

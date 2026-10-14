@@ -2,10 +2,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../api.js";
 import { useAccountGuard } from "../../lib/auth.js";
 import { createNewsReceiptSender } from "./newsReceipts.js";
+const EMPTY_LINKS = Object.freeze({});
 
 export function useNewsReceipt(session, data) {
   const isCurrentAccount = useAccountGuard();
   const [state, setState] = useState(null);
+  const [links, setLinks] = useState({ sessionId: null, values: EMPTY_LINKS });
   const current = useRef(null);
   const lastReceipt = useRef(null);
   const senderRef = useRef(null);
@@ -25,7 +27,11 @@ export function useNewsReceipt(session, data) {
     const sender = createNewsReceiptSender({
       send: (id, token, options) => api.agentNewsReceipt(id, token, options),
       onStatus: (next) => {
-        if (isCurrentAccount() && Number(current.current.sessionId) === next.sessionId && current.current.key === next.key) setState(next);
+        if (!isCurrentAccount() || Number(current.current.sessionId) !== next.sessionId) return;
+        if (next.status === "ready" && next.link) setLinks((previous) => ({ sessionId: next.sessionId,
+          values: Object.fromEntries(Object.entries({ ...(previous.sessionId === next.sessionId ? previous.values : {}),
+            [next.key]: next.link }).slice(-200)) }));
+        if (current.current.key === next.key) setState(next);
       },
     });
     senderRef.current = sender;
@@ -41,5 +47,6 @@ export function useNewsReceipt(session, data) {
     if (current.current.running && isCurrentAccount()) senderRef.current?.submit(current.current, { retry: true });
   }, [isCurrentAccount]);
   return { state: running && Number(state?.sessionId) === Number(sessionId)
-    && state?.key === current.current.key ? state : null, retry };
+    && state?.key === current.current.key ? state : null,
+    links: Number(links.sessionId) === Number(sessionId) ? links.values : EMPTY_LINKS, retry };
 }

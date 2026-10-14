@@ -1,4 +1,11 @@
 // A receipt acknowledges a server response, never an order or a human read.
+import { positiveEventId } from "./activityEvidence.js";
+
+export function newsReceiptLink(result, expectedKey) {
+  const eventId = positiveEventId(result?.event_id);
+  if (!eventId || result?.receipt_key !== expectedKey || !Array.isArray(result?.article_ids)) return null;
+  return { eventId, articleIds: [...new Set(result.article_ids.filter((id) => typeof id === "string" && id.length > 0 && id.length <= 200))].slice(0, 100) };
+}
 function waitForRetry(milliseconds, signal) {
   return new Promise((resolve, reject) => {
     const abort = () => {
@@ -27,9 +34,10 @@ export function createNewsReceiptSender({ send, onStatus = () => {}, wait = wait
     const controller = new AbortController();
     const entry = { status: "saving", controller, promise: null };
     observations.set(identity, entry);
-    const announce = (status, error = "") => {
+    const announce = (status, error = "", result = null) => {
       entry.status = status;
-      if (!stopped && !controller.signal.aborted) onStatus({ sessionId, key, status, error });
+      if (!stopped && !controller.signal.aborted) onStatus({ sessionId, key, status, error,
+        ...(status === "ready" ? { link: newsReceiptLink(result, key) } : {}) });
     };
     announce("saving");
     entry.promise = (async () => {
@@ -37,7 +45,7 @@ export function createNewsReceiptSender({ send, onStatus = () => {}, wait = wait
         try {
           const result = await send(sessionId, token, { signal: controller.signal });
           if (!result?.ok) throw new Error("뉴스 수신 기록을 저장하지 못했어요.");
-          announce("ready");
+          announce("ready", "", result);
           return;
         } catch (error) {
           if (stopped || controller.signal.aborted) return;

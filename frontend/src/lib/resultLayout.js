@@ -20,7 +20,7 @@ export const RESULT_BLOCKS = [
   { id: "returns", label: "수익률 요약" },
   { id: "stats", label: "지표 목록" },
   { id: "symbols", label: "종목별 성과" },
-  { id: "ai", label: "AI 해설" },
+  { id: "ai", label: "껄무새 해설" },
   { id: "equity", label: "자산곡선" },
 ];
 

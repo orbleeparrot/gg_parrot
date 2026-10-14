@@ -209,14 +209,16 @@ def join_room(db: Session, account: User, room_id: int) -> dict:
             locked[uid] = _lock_user(db, uid)
     guest = locked[int(account.id)]
     owner = locked.get(room.owner_id)
-    if room.entry_fee > 0 and _account_age_ms(guest, now_ms) < MIN_ACCOUNT_AGE_FOR_PAID_MS:
+    # 관리자는 입장료 없이 들어간다 — 소비 · 방장 정산 기록을 남기지 않고 낸 금액도 0 으로 둔다.
+    fee = 0 if points.unlimited(guest) else room.entry_fee
+    if fee > 0 and _account_age_ms(guest, now_ms) < MIN_ACCOUNT_AGE_FOR_PAID_MS:
         raise RoomError(403, "가입 3일 후부터 유료 전략방에 들어갈 수 있어요.")
-    if room.entry_fee > 0:
-        points.apply(db, guest, -room.entry_fee, "room_join", f"room:{room.id}")  # 부족하면 InsufficientPoints
-        share = points.creator_share(room.entry_fee)
+    if fee > 0:
+        points.apply(db, guest, -fee, "room_join", f"room:{room.id}")  # 부족하면 InsufficientPoints
+        share = points.creator_share(fee)
         if share > 0 and owner is not None:
             points.apply(db, owner, share, "room_host_earn", f"room:{room.id}")
-    db.add(ChatRoomMember(room_id=room.id, user_id=guest.id, paid=room.entry_fee, joined_at=joined_at, joined_ms=now_ms))
+    db.add(ChatRoomMember(room_id=room.id, user_id=guest.id, paid=fee, joined_at=joined_at, joined_ms=now_ms))
     db.commit()
     db.refresh(room)
     return {"room": room_view(db, room, guest.id, now_ms=now_ms), "points_balance": guest.points_balance}

@@ -35,19 +35,23 @@ _TEXT_FIELDS = {
     "exchange": 24, "symbol": 40,
     "order_status": 40, "raw_status": 40, "quote_currency": 24,
     "reconciliation_scope": 64,
+    "module": 48, "observation_type": 64, "state": 64, "title": 300, "summary": 800,
+    "source_label": 120, "interval": 24, "condition_key": 120,
 }
-_TIMESTAMP_FIELDS = frozenset({"collected_at", "last_success_at", "last_heartbeat_at", "response_issued_at"})
+_TIMESTAMP_FIELDS = frozenset({"collected_at", "last_success_at", "last_heartbeat_at", "response_issued_at",
+                               "source_occurred_at", "original_occurred_at"})
 _ID_FIELDS = frozenset({"command_id", "client_order_id", "exchange_order_id", "request_id",
-    "snapshot_id", "collection_run_id", "flow_run_id", "task_run_id", "article_id", "batch_id"})
+    "snapshot_id", "collection_run_id", "flow_run_id", "task_run_id", "article_id", "batch_id",
+    "reference_id", "source_event_id"})
 _INTEGER_FIELDS = frozenset({"duration_ms", "attempt", "attempts", "max_attempts", "command_seq",
     "expires_ms", "next_collection_ms", "count", "pending_count", "cursor", "fetched_count", "deduped_count",
     "filtered_count", "stored_count", "translated_count", "failed_count"})
 _NUMBER_FIELDS = frozenset({"signal_price", "notional_frac", "qty_frac", "executed_qty", "fill_price",
     "quantity", "price", "fee", "observed_value", "threshold", "realized_pnl", "acquired_qty",
-    "requested_qty", "requested_notional"})
+    "requested_qty", "requested_notional", "metric_value"})
 _BOOL_FIELDS = frozenset({"cache_hit", "reused", "matched", "in_position", "position_uncertain",
     "position_mismatch", "server_in_position", "runner_in_position", "retryable", "terminal", "fees_known",
-    "attempted", "reduce_only", "closing"})
+    "attempted", "reduce_only", "closing", "resolved"})
 _SOURCE_RESULT_FIELDS = frozenset({"source", "status", "stage", "http_status", "count", "fetched_count",
     "duration_ms", "cache_hit", "retry_at", "error", "attempted", "error_code", "error_type", "retryable"})
 
@@ -165,6 +169,9 @@ def safe_details(raw) -> dict:
         for item in result["source_results"]:
             if "error" in item:
                 item["error"] = item["error"][:200]
+    if isinstance(raw.get("article_ids"), list):
+        result["article_ids"] = [safe_text(value, 100) for value in raw["article_ids"][:100]
+                                 if isinstance(value, (str, int)) and not isinstance(value, bool)]
     return result
 
 

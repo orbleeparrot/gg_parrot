@@ -438,11 +438,11 @@ def test_persist_failure_keeps_fill_and_retries_next_tick(monkeypatch):
     real_persist = eng._persist_fill
     calls = []
 
-    def flaky(live, fill, state_json):
+    def flaky(live, fill, state_json, rollback_json=""):
         calls.append(fill)
         if len(calls) == 1:
             raise RuntimeError("db down")
-        real_persist(live, fill, state_json)
+        real_persist(live, fill, state_json, rollback_json)
 
     monkeypatch.setattr(eng, "_persist_fill", flaky)
 
@@ -461,6 +461,8 @@ def test_persist_failure_keeps_fill_and_retries_next_tick(monkeypatch):
             cmds = db.exec(select(RunnerCommand).where(RunnerCommand.session_id == sid)).all()
             assert [c.action for c in cmds] == ["buy"]
             assert json.loads(db.get(RunSession, sid).state_json)["in_position"] is True
+            # 다시 저장할 때도 신호 직전 상태(비어 있음)를 함께 싣는다 — 실패하면 되돌릴 수 있어야 한다.
+            assert json.loads(cmds[0].rollback_state)["state"]["in_position"] is False
         await eng.stop_driver(sid)
 
     try:

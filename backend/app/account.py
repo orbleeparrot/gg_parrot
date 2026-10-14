@@ -11,7 +11,7 @@ from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from sqlmodel import Session, select
+from sqlmodel import Session, func, select
 
 from . import points as points_mod
 from .auth import user_view
@@ -34,6 +34,15 @@ def _macro_of(row: LeaderboardEntry):
         return None
 
 
+ADMIN_TIER = "관리자"
+
+
+def _admin_tier(total_sales: int) -> dict:
+    """관리자 계정 전용 등급 — 프로필 칩 · 닉네임 옆에만 보인다. 판매 등급 안내(사다리)에는 넣지 않고,
+    다음 등급까지 남은 판매 · 사다리 위치는 다른 회원처럼 실제 판매 수 그대로다."""
+    return {**_tier(total_sales), "name": ADMIN_TIER, "admin": True}
+
+
 def _tier(total_sales: int) -> dict:
     name, icon, base = "새싹", "🌱", 0
     for threshold, tname, ticon in _TIERS:
@@ -51,6 +60,34 @@ def _tier(total_sales: int) -> dict:
         # 사다리 전체 — 화면이 현재 칸과 남은 칸을 그릴 수 있게 임계값을 그대로 준다.
         "ladder": [{"name": tname, "at": threshold} for threshold, tname, _ in _TIERS],
     }
+
+
+def sales_count_of(owner_column):
+    """글쓴이 판매 수(내 리더보드 매크로가 팔린 수) — 내 활동 등급과 같은 기준.
+
+    게시판 · 채팅이 이미 하는 질의에 열 하나로 붙인다(상관 하위질의). 따로 묻지 않아 질의 수가 늘지 않는다.
+    """
+    return (
+        select(func.count(MacroUnlock.id))
+        .select_from(MacroUnlock)
+        .join(LeaderboardEntry, LeaderboardEntry.id == MacroUnlock.entry_id)
+        .where(LeaderboardEntry.owner_user_id == owner_column)
+        .scalar_subquery()
+    )
+
+
+def is_admin_of(user_column):
+    """글쓴이가 관리자인가 — sales_count_of 처럼 기존 질의에 열 하나로 붙인다."""
+    return select(User.is_admin).where(User.id == user_column).scalar_subquery()
+
+
+def tier_name_for(user_id, sales, is_admin=False) -> str | None:
+    """회원 글쓴이의 등급 이름. 익명(회원 아님) 글은 등급이 없고, 관리자는 다이아 위 '관리자'."""
+    if user_id is None:
+        return None
+    if is_admin:
+        return ADMIN_TIER
+    return _tier(int(sales or 0))["name"]
 
 
 def dashboard(user: User, db: Optional[Session] = None) -> dict:
@@ -145,7 +182,7 @@ def dashboard(user: User, db: Optional[Session] = None) -> dict:
 
     return {
         "user": profile,
-        "tier": _tier(total_sales),
+        "tier": _admin_tier(total_sales) if fresh.is_admin else _tier(total_sales),
         "totals": {
             "created": len(my_entries), "sales": total_sales,
             "earned": total_earned, "purchased": len(purchased),

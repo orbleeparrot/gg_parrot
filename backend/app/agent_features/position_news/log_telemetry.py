@@ -1,7 +1,7 @@
 """Read-only news provenance and safe Prefect correlation (no new I/O)."""
 from collections import Counter
 
-from ...agent_event_schema import safe_details, safe_identifier
+from ...agent_event_schema import safe_details, safe_identifier, safe_timestamp
 
 
 def collection_trace() -> dict:
@@ -58,4 +58,18 @@ def delivery_metadata(payload: dict, *, collection: dict | None = None) -> dict:
         summaries.append(safe_details(facts))
     if summaries:
         metadata["source_results"] = summaries
+    publication = payload.get("article_publication")
+    if isinstance(publication, dict) and publication.get("event_name") == "news.articles_ready":
+        source_id = safe_identifier(publication.get("source_event_id"))
+        occurred_at = safe_timestamp(publication.get("occurred_at"))
+        article_ids = publication.get("article_ids")
+        if source_id and occurred_at and isinstance(article_ids, list):
+            published = {value for value in article_ids if isinstance(value, str)}
+            # The feed remembers its latest publication, while a reset/page
+            # can also return articles from older publications. Reference the
+            # actual source fact only if this final response includes one of
+            # its articles; never apply its count/time to every delivered item.
+            if any(isinstance(item, dict) and item.get("id") in published
+                   for item in payload.get("items") or []):
+                metadata.update(source_event_id=source_id, source_occurred_at=occurred_at)
     return metadata

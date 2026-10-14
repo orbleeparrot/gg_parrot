@@ -20,6 +20,25 @@ export function findLaunchedSession(activeSessions, baselineIds, selected) {
 }
 
 
+// 런치 티켓을 발급한 서버 시각(ms). 응답에는 만료 시각만 있어 수명(120초)을 뺀다. 모르면 0(쓰지 않음).
+export const LAUNCH_TICKET_TTL_MS = 120_000;
+export function ticketIssuedAtMs(ticket) {
+  const expires = Date.parse(String(ticket?.expires_at || ""));
+  return Number.isFinite(expires) ? expires - LAUNCH_TICKET_TTL_MS : 0;
+}
+
+// 실행기를 연 뒤(서버 시각 sinceMs 이후) 이 매크로로 시작된 실행 중 세션. 서버가 붙인 시각끼리만 비교한다.
+export function findSessionStartedSince(activeSessions, selected, sinceMs) {
+  if (!sinceMs || !selected || selected.id == null || !Array.isArray(activeSessions)) return null;
+  return activeSessions.find((session) => (
+    session
+    && session.status === "running"
+    && session.user_macro_id === selected.id
+    && Date.parse(String(session.started_at || "")) >= sinceMs
+  )) || null;
+}
+
+
 // 런치 티켓 상태 응답 → 마법사 단계. 거절(rejected)은 기다릴 일이 아니라 안내할 일이다.
 export function launchPhaseFromTicketStatus(data) {
   const status = String(data?.status || "").toLowerCase();

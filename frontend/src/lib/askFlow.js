@@ -4,7 +4,7 @@ import { HORIZONS, LEVERAGES, MARKETS, PROFILES, WATCH_LEVELS } from "./askCopy.
 import { EXCHANGES, exchangeLabel, isDomestic, quoteForExchange } from "./exchanges.js";
 
 export const STEPS = ["exchange", "balance", "profile", "market", "horizon", "watch"];
-export const PROFILE_ORDER = ["stable", "balanced", "aggressive", "scalper"];
+export const PROFILE_ORDER = ["stable", "balanced", "aggressive"];
 // 바이낸스 USDT 짝 모양 — 서버의 _SYMBOL_RE 와 같은 규칙.
 const SYMBOL_RE = /^[A-Z0-9]{1,20}USDT$/;
 
@@ -36,7 +36,7 @@ export function initialState() {
   return {
     step: "exchange", answers: emptyAnswers(), phase: "cards",
     session: null, candidates: [], manualSymbols: [],
-    results: null, noEdge: false, refunded: false, remaining: null, error: "",
+    results: null, noEdge: false, noEdgeBest: null, refunded: false, remaining: null, error: "",
   };
 }
 
@@ -132,7 +132,8 @@ export function reduce(state, action) {
       return { ...state, phase: "loadingResults", error: "" };
     case "results":
       return { ...state, phase: "results", results: action.results || [],
-               noEdge: !!action.noEdge, refunded: !!action.refunded,
+               noEdge: !!action.noEdge, noEdgeBest: action.noEdgeBest || null,
+               refunded: !!action.refunded,
                remaining: action.remaining ?? state.remaining, error: "" };
     case "error":
       return { ...state, phase: "error", error: String(action.message || "잠시 뒤 다시 물어봐 주세요.") };

@@ -29,7 +29,7 @@ export const GLOSSARY = {
   win_rate:
     "전체 매매 중 이익을 낸 매매의 비율. 단, 승률이 높다고 꼭 돈을 많이 버는 건 아니에요.",
   buy_hold:
-    "그냥 처음에 사서 끝까지 들고 있었을 때(HODL)의 수익률. 내 전략이 이걸 못 이기면, 복잡한 매매 없이 그냥 사두는 게 나았다는 뜻이에요.",
+    "기간 첫날에 사서 끝까지 들고 있었을 때(HODL)의 수익률. 그 날짜는 기간을 고르면 자동으로 정해져요 — 매크로는 살 날을 스스로 찾아야 하니 완전히 공평한 비교는 아니에요. 그래도 '복잡한 매매가 값을 했는지' 의 기준으로는 쓸 만해요.",
   sharpe:
     "위험(변동성) 대비 수익이 얼마나 좋은지를 나타내는 숫자. 높을수록 '덜 출렁이면서 잘 벌었다'는 뜻이에요. 보통 1 이상이면 괜찮은 편이에요.",
   profit_factor:
@@ -110,7 +110,7 @@ export const GLOSSARY = {
 export const TERM_NAMES = {
   symbols: "종목", position: "포지션", long: "롱", short: "숏", take_profit: "익절", stop_loss: "손절",
   avg_price: "평단", limit_order: "지정가", dca: "정기 분할매수", invest_ratio: "투입 비율", commission: "수수료",
-  slippage: "슬리피지", mdd: "MDD", win_rate: "승률", buy_hold: "그냥 들고 있기", sharpe: "샤프지수",
+  slippage: "슬리피지", mdd: "MDD", win_rate: "승률", buy_hold: "첫날 사서 보유", sharpe: "샤프지수",
   profit_factor: "손익비", max_consecutive_losses: "최대 연속손절", optimize: "익·손절 최적화", backtest: "백테스트",
   paper_trading: "페이퍼 트레이딩", candle_interval: "봉 간격", grid: "그리드", grid_count: "격자 수",
   grid_mode: "격자 방식", trailing_stop: "트레일링 스탑", activation_profit: "발동 수익률", trail_percent: "추적 폭",

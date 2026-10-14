@@ -1,6 +1,7 @@
 // 껄무새에게 물어볼까? 결과·후보 카드가 보여 줄 값을 만드는 순수 함수들 (2026-09-30 재설계).
 // 숫자는 전부 서버가 계산한 값이고, 여기서는 모양만 바꾼다 — 없는 값을 만들어 내지 않는다.
-import { FEW_RESULTS_TEXT, NO_EDGE_TEXT, NO_RESULTS_TEXT, TOP_RESULTS_TEXT } from "./askCopy.js";
+import { FEW_RESULTS_TEXT, NO_EDGE_LOST_NOTE, NO_EDGE_NOTE, NO_EDGE_TEXT, NO_RESULTS_TEXT,
+         TOP_RESULTS_TEXT } from "./askCopy.js";
 import { quoteForExchange } from "./exchanges.js";
 
 const num = (v) => (v == null || v === "" || Number.isNaN(Number(v)) ? null : Number(v));
@@ -35,6 +36,27 @@ export function holdOf(results = []) {
 export function resultsHeadline(count, noEdge = false) {
   if (!count) return noEdge ? NO_EDGE_TEXT : NO_RESULTS_TEXT;
   return count < 3 ? FEW_RESULTS_TEXT : TOP_RESULTS_TEXT;
+}
+
+// 빈 화면이 하는 말 전체 — 가장 나았던 조합의 숫자 + **그것이 떨어진 관문**의 설명.
+//
+// 관문이 둘이다(ask.worth_the_macro): 그 자체로 벌었나, 홀딩을 문턱만큼 넘었나. 둘째만
+// 설명하면 "홀딩보다 15%p 앞선 -5%" 에서 화면이 스스로 어긋난다 — 숫자는 이겼다고 말하고
+// 글은 못 넘었다고 말한다. made_money 로 갈라서 실제로 적용된 이유만 말한다.
+// 서버가 준 값만 쓴다. 홀딩 기준을 못 구한 결과가 1등일 수 있어 그때는 그 쪽만 뺀다.
+export function noEdgeDetail(best) {
+  const ret = num(best?.return_pct);
+  if (ret == null) return NO_EDGE_NOTE;
+  const what = best?.rule_label ? `가장 나았던 조합(${best.rule_label})이` : "가장 나았던 조합이";
+  if (best?.made_money === false) {
+    return `${what} ${signedPct(ret, 1)} 로 손실이었어요. ${NO_EDGE_LOST_NOTE}`;
+  }
+  const hold = num(best?.hold_return_pct);
+  if (hold == null) {
+    return `${what} ${signedPct(ret, 1)} 였어요. 같은 기간 보유 수익률은 구하지 못했어요. ${NO_EDGE_NOTE}`;
+  }
+  return `${what} ${signedPct(ret, 1)} 였는데, 같은 기간 그 종목을 첫날 사서 그냥 뒀을 때 `
+    + `${signedPct(hold, 1)} 였어요. ${NO_EDGE_NOTE}`;
 }
 
 // 조건 한 줄 — 매매 방식의 핵심 설정(최대 2구) + 봉 간격.

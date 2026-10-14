@@ -52,9 +52,65 @@ class FileSignatureTests(unittest.TestCase):
         self.assertEqual(payload["user_macro_id"], 5)
 
 
+class StartRetryTests(unittest.TestCase):
+    @staticmethod
+    def response(status, body=None, retry_after="1"):
+        r = Mock(status_code=status, headers={"Retry-After": retry_after})
+        r.json.return_value = body or {}
+        r.raise_for_status = Mock()
+        return r
+
+    def test_busy_server_is_retried_then_session_starts(self) -> None:
+        client = ServerClient("key", base="https://example.invalid", outbox_path=":memory:", cli_sink=lambda _event: None)
+        busy = self.response(503, {"detail": "서버 저장소가 혼잡해요. 잠시 후 다시 연결합니다.", "code": "database_busy"})
+        ok = self.response(200, {"session_id": 42})
+        with patch.object(macro_runner.requests, "post", side_effect=[busy, busy, ok]) as post, \
+                patch.object(macro_runner.time, "sleep") as sleep:
+            data = client.start({"symbol": "KRW-BTC"})
+        self.assertEqual(data["session_id"], 42)
+        self.assertEqual(post.call_count, 3)
+        self.assertEqual(sleep.call_count, 2)
+
+    def test_refusal_shows_server_detail_without_address(self) -> None:
+        client = ServerClient("key", base="https://example.invalid", outbox_path=":memory:", cli_sink=lambda _event: None)
+        refused = self.response(426, {"detail": "실행기 v10 이상으로 업데이트해 주세요."})
+        with patch.object(macro_runner.requests, "post", return_value=refused) as post:
+            with self.assertRaises(macro_runner.ServerRequestError) as caught:
+                client.start({})
+        self.assertEqual(post.call_count, 1)
+        self.assertIn("실행기 v10 이상으로 업데이트해 주세요.", str(caught.exception))
+        self.assertNotIn("https://", str(caught.exception))
+
+    def test_busy_until_the_end_gives_up_after_bounded_attempts(self) -> None:
+        client = ServerClient("key", base="https://example.invalid", outbox_path=":memory:", cli_sink=lambda _event: None)
+        busy = self.response(503, {"detail": "서버 저장소가 혼잡해요."}, retry_after="30")
+        with patch.object(macro_runner.requests, "post", return_value=busy) as post, \
+                patch.object(macro_runner.time, "sleep") as sleep:
+            with self.assertRaises(macro_runner.ServerRequestError) as caught:
+                client.start({})
+        self.assertEqual(post.call_count, macro_runner.START_ATTEMPTS)
+        self.assertTrue(all(call.args[0] <= 3.0 for call in sleep.call_args_list))
+        self.assertEqual(caught.exception.status, 503)
+
+
+class UpdateNoticeTests(unittest.TestCase):
+    URL = "https://github.com/orbleeparrot/gg_parrot/releases/download/runner-v{0}/ggparrot-runner.exe"
+
+    def test_only_a_newer_official_release_is_announced(self) -> None:
+        newer = macro_runner.newer_release
+        self.assertEqual(newer({"available": True, "version": "17", "url": self.URL.format(17)}, "16"), ("17", self.URL.format(17)))
+        self.assertIsNone(newer({"available": True, "version": "16", "url": self.URL.format(16)}, "16"))
+        self.assertIsNone(newer({"available": True, "version": "15", "url": self.URL.format(15)}, "16"))
+        # 공식 릴리스 주소가 아니면(버전이 달라도) 따라가지 않는다.
+        self.assertIsNone(newer({"available": True, "version": "17", "url": "https://evil.example/runner-v17/x.exe"}, "16"))
+        self.assertIsNone(newer({"available": True, "version": "17", "url": self.URL.format(16)}, "16"))
+        self.assertIsNone(newer({"available": False, "version": "17", "url": self.URL.format(17)}, "16"))
+        self.assertIsNone(newer(None, "16"))
+
+
 class EventUploadTests(unittest.TestCase):
     def test_heartbeat_carries_buffered_events_and_requeues_on_failure(self) -> None:
-        client = ServerClient("key", base="https://example.invalid")
+        client = ServerClient("key", base="https://example.invalid", outbox_path=":memory:", cli_sink=lambda _event: None)
         client.session_id = 1
         client.push_event("order", "[진입] 100 → BUY 0.01 BTCUSDT")
         client.push_event("info", "tick")
@@ -68,6 +124,7 @@ class EventUploadTests(unittest.TestCase):
         self.assertEqual([e["message"] for e in sent["events"]], ["[진입] 100 → BUY 0.01 BTCUSDT", "tick"])
         self.assertEqual(sent["events"][0]["kind"], "order")
         self.assertTrue(sent["events"][0]["ts"].endswith("Z"))
+        client._ack_events(sent["events"], {"accepted_event_keys": [event["event_key"] for event in sent["events"]]})
 
         # 전송 실패면 버렸다가 다음 heartbeat 에 다시 실어 보낸다.
         client.push_event("fill", "손익 +1.00%")
@@ -77,20 +134,25 @@ class EventUploadTests(unittest.TestCase):
             client.heartbeat({})
         self.assertEqual([e["message"] for e in post.call_args.kwargs["json"]["events"]], ["손익 +1.00%"])
 
-    def test_buffer_keeps_only_the_newest_lines(self) -> None:
-        client = ServerClient("key", base="https://example.invalid")
+    def test_buffer_batches_oldest_lines_without_discarding_overflow(self) -> None:
+        client = ServerClient("key", base="https://example.invalid", outbox_path=":memory:", cli_sink=lambda _event: None)
         for i in range(macro_runner.EVENT_BUFFER_MAX + 20):
             client.push_event("info", f"line {i}")
         batch = client._drain_events()
         self.assertEqual(len(batch), macro_runner.EVENT_BUFFER_MAX)
-        self.assertEqual(batch[-1]["message"], f"line {macro_runner.EVENT_BUFFER_MAX + 19}")
+        self.assertEqual(batch[0]["message"], "line 0")
+        self.assertEqual(batch[-1]["message"], "line 99")
+        client._ack_events(batch, {"accepted_event_keys": [event["event_key"] for event in batch]}, session_id=0)
+        self.assertEqual(len(client._drain_events()), 20)
+        self.assertEqual(client._drain_events()[-1]["message"], "line 119")
 
     def test_stopped_report_flushes_remaining_events(self) -> None:
-        client = ServerClient("key", base="https://example.invalid")
+        client = ServerClient("key", base="https://example.invalid", outbox_path=":memory:", cli_sink=lambda _event: None)
         client.session_id = 3
         client.push_event("stop", "종료")
         ok = Mock(status_code=200)
         ok.raise_for_status = Mock()
+        ok.json.return_value = {"accepted_event_keys": [event["event_key"] for event in client._peek_events()]}
         with patch.object(macro_runner.requests, "post", return_value=ok) as post:
             self.assertTrue(client.stopped("stopped", "포지션 없이 종료"))
         self.assertEqual(post.call_args.kwargs["json"]["events"][0]["message"], "종료")

@@ -116,14 +116,16 @@ def test_explain_compares_a_bundle_against_the_bundle_not_one_coin():
     macro = Macro(**{**BASE, "legs": [{"symbol": "BTCUSDT", "weight": 70},
                                       {"symbol": "ETHUSDT", "weight": 30}]})
     pts = explain_result(macro, _result(buy_hold_return_pct=3.0)).points
-    hold = [p for p in pts if "들고 있었으면" in p]
+    # 2026-10-12: 문구가 "들고 있었으면" → "첫날 사서 뒀으면" 으로 바뀌었다(홀딩의 매수일이
+    # 구간 첫 봉이라는 전제를 드러내려고). 주어가 묶음 전체여야 한다는 이 시험의 뜻은 그대로다.
+    hold = [p for p in pts if "첫날 사서 뒀으면" in p]
     assert len(hold) == 1, pts
-    assert "이 묶음을 그냥 들고 있었으면" in hold[0]
+    assert "이 묶음을 그냥 첫날 사서 뒀으면" in hold[0]
     assert "그냥 BTC" not in hold[0]
 
 
 def test_explain_still_names_the_coin_for_a_single_symbol():
     """단일 종목은 그대로 — 바꾼 것은 묶음일 때만이다."""
     pts = explain_result(Macro(**BASE), _result(buy_hold_return_pct=3.0)).points
-    hold = [p for p in pts if "들고 있었으면" in p]
-    assert len(hold) == 1 and "그냥 BTC 들고 있었으면" in hold[0]
+    hold = [p for p in pts if "첫날 사서 뒀으면" in p]
+    assert len(hold) == 1 and "그냥 BTC 첫날 사서 뒀으면" in hold[0]

@@ -6,8 +6,13 @@ from runner.test_macro_runner_single_instance import macro_runner
 
 
 class StructuredLogTests(unittest.TestCase):
+    def take(self, client):
+        events = client._peek_events()
+        client._ack_events(events, {"accepted_event_keys": [event["event_key"] for event in events]})
+        return events
+
     def test_retry_preserves_event_id_and_metadata_snapshot(self):
-        client = macro_runner.ServerClient("test-key", base="https://example.invalid")
+        client = macro_runner.ServerClient("test-key", base="https://example.invalid", outbox_path=":memory:", cli_sink=lambda _event: None)
         client.session_id = 1
         details = {"executed_qty": 2, "fill_price": 12.6}
         client.push_event("fill", "주문 결과 보고", severity="INFO", event_name="runner.order_result",
@@ -27,7 +32,7 @@ class StructuredLogTests(unittest.TestCase):
         self.assertEqual(original["operation_id"], "command:7")
 
     def test_repeated_messages_are_distinct_emissions_not_string_deduplication(self):
-        client = macro_runner.ServerClient("test-key")
+        client = macro_runner.ServerClient("test-key", outbox_path=":memory:", cli_sink=lambda _event: None)
         client.push_event("info", "대기")
         client.push_event("info", "대기")
         first, second = client._drain_events()
@@ -51,7 +56,7 @@ class StructuredLogTests(unittest.TestCase):
         bot.on_log.assert_called_once_with("기존 매매 표시")
 
     def _bot(self):
-        server = macro_runner.ServerClient("test-member-key", base="https://example.invalid")
+        server = macro_runner.ServerClient("test-member-key", base="https://example.invalid", outbox_path=":memory:", cli_sink=lambda _event: None)
         bot = macro_runner.BotThread(
             {"symbol": "BTCUSDT", "exchange": "binance", "position_side": "long", "leverage": 1,
              "params": {"initial_capital": 100}},
@@ -69,7 +74,7 @@ class StructuredLogTests(unittest.TestCase):
     def test_actual_adapter_request_result_are_linked_without_extra_windows_messages(self):
         bot = self._bot()
         self.assertTrue(bot._place("BUY", 2))
-        events = bot.server._drain_events()
+        events = self.take(bot.server)
         request, result = events[:2]
         self.assertEqual(request["event_name"], "runner.order_requested")
         self.assertEqual(result["event_name"], "runner.order_result")
@@ -81,8 +86,25 @@ class StructuredLogTests(unittest.TestCase):
         self.assertEqual(result["details"]["acquired_qty"], 1.99)
         self.assertTrue(result["details"]["fees_known"])
         self.assertNotIn("fee", result["details"])
+        self.assertEqual(len(events), 2)  # Request and one canonical result, not a second legacy fill.
+        self.assertEqual([event["event_name"] for event in events].count("runner.order_result"), 1)
+        self.assertFalse(any(event["event_name"] == "runner.message" and event["kind"] == "fill" for event in events))
+        self.assertIn("mock-order-7", result["message"])
+        self.assertIn("12.6", result["message"])
         bot.broker.submit.assert_called_once()
         bot.on_log.assert_called_once()  # Original successful fill text only.
+        self.assertIn("BUY 체결: id=mock-order-7 수량=2", bot.on_log.call_args.args[0])
+
+    def test_plain_log_reuses_explicit_current_command_context_without_guessing_from_text(self):
+        bot = self._bot()
+        bot._active_log_operation_id = "command:29"
+        bot.log("실제 명령 처리 중 기록")
+        self.assertEqual(self.take(bot.server)[0]["operation_id"], "command:29")
+        bot.log("다른 명시적 작업", operation_id="order:ggp-" + "a" * 28)
+        self.assertEqual(self.take(bot.server)[0]["operation_id"], "order:ggp-" + "a" * 28)
+        bot._active_log_operation_id = ""
+        bot.log("command:999라는 문장만 있는 옛 로그")
+        self.assertEqual(self.take(bot.server)[0]["operation_id"], "")
 
     def test_broken_telemetry_never_causes_second_order_or_changes_fill_state(self):
         bot = self._bot()
@@ -97,7 +119,7 @@ class StructuredLogTests(unittest.TestCase):
         bot.broker.submit.side_effect = RuntimeError("exchange error private-exchange-secret")
         with self.assertRaisesRegex(RuntimeError, "exchange error"):
             bot._place("BUY", 2)
-        request, error = bot.server._drain_events()
+        request, error = self.take(bot.server)
         self.assertEqual(error["event_name"], "runner.order_failed")
         self.assertEqual(request["operation_id"], error["operation_id"])
         self.assertNotIn("private-exchange-secret", error["details"]["error"])
@@ -110,7 +132,7 @@ class StructuredLogTests(unittest.TestCase):
         command = {"id": 7, "seq": 1, "action": "buy", "notional_frac": .25,
                    "qty_frac": 0, "signal_price": 12.5, "reason": "RSI 23 ≤ 25"}
         self.assertTrue(bot._execute_command(command, 12.5)["ok"])
-        events = bot.server._drain_events()
+        events = self.take(bot.server)
         stages = [event for event in events if event["event_name"] != "runner.message"]
         self.assertEqual([event["event_name"] for event in stages],
                          ["runner.command_received", "runner.command_reported"])
@@ -128,7 +150,7 @@ class StructuredLogTests(unittest.TestCase):
         self.assertEqual(first["outcome"], "no_position_no_order")
         self.assertEqual(first["mode"], "mock")
         bot.broker.submit.assert_not_called()
-        bot.server._drain_events()
+        self.take(bot.server)
         repeated = bot._execute_command(command, 12.5)
         self.assertTrue(repeated["ok"])
         self.assertEqual(repeated["outcome"], "duplicate_command_no_reexecution")

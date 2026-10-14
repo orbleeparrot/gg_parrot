@@ -107,8 +107,8 @@ function SessionLogRow({ item, onOperation, onContext, onCopy }) {
   const observation = sessionLogObservationScope({ ...item, details });
   const receivedOnly = item.time_basis === "server_reception";
   const occurredAt = receivedOnly ? null : item.occurred_at ?? item.ts;
-  return <li className={`agent-session-log-entry is-${category}${["ERROR", "FATAL"].includes(level) ? " is-error" : level === "WARN" ? " is-warn" : ""}${item.context_anchor ? " is-anchor" : ""}`} data-log-id={String(item.id)}>
-    <details className="agent-session-log-row">
+  return <li className={`agent-session-log-entry is-${category}${["ERROR", "FATAL"].includes(level) ? " is-error" : level === "WARN" ? " is-warn" : ""}${item.context_anchor ? " is-anchor" : ""}`} data-log-id={String(item.id)} data-context-anchor={item.context_anchor ? "true" : undefined}>
+    <details className="agent-session-log-row" open={item.context_anchor || undefined}>
       <summary className="agent-session-log-line">
         <span className="agent-session-log-chevron" aria-hidden="true">›</span>{" "}
         <LogTime value={receivedOnly ? item.received_at : occurredAt} label={receivedOnly ? "수신" : ""} compact />
@@ -160,6 +160,7 @@ export default function AgentSessionLog({
   const [advanced, setAdvanced] = useState(false);
   const [copyStatus, setCopyStatus] = useState("");
   const body = useRef(null);
+  const anchored = useRef(null);
   const queryRef = useRef(query);
   queryRef.current = query;
   useEffect(() => { setSearch(query.q || ""); }, [query.q]);
@@ -171,6 +172,13 @@ export default function AgentSessionLog({
   useEffect(() => {
     if (!paused && body.current) body.current.scrollTop = 0;
   }, [paused, state.key]);
+  useEffect(() => {
+    const anchor = state.items?.find((item) => item.context_anchor);
+    if (!anchor) { anchored.current = null; return; }
+    if (anchored.current === anchor.id) return;
+    const row = body.current?.querySelector('[data-context-anchor="true"]');
+    if (row) { row.scrollIntoView({ block: "nearest" }); row.querySelector("summary")?.focus({ preventScroll: true }); anchored.current = anchor.id; }
+  }, [state.items]);
   const items = Array.isArray(state.items) ? state.items : [];
   const loading = state.status === "loading" || state.status === "idle";
   const busy = loading || !!state.loadingMore;

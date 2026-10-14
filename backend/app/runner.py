@@ -367,6 +367,13 @@ def launch_ticket_status(user_id: int, launch_id: int, *, min_runner_version: st
             "expires_at": row.expires_at,
             "status": status,
         }
+        progress = getattr(row, "setup_progress", "")
+        if status == "claimed" and progress:
+            try:
+                payload["progress"] = json.loads(progress)
+                payload["progress_at"] = getattr(row, "setup_progress_at", "")
+            except ValueError:
+                pass
         if status == "rejected":
             payload["runner_version"] = rejected_version
             payload["min_runner_version"] = _required_version_for(db, row.user_macro_id, min_runner_version)
@@ -387,6 +394,38 @@ def _required_version_for(db, user_macro_id: int, general_min: str) -> str:
     except (TypeError, ValueError):
         return general_min
     return DOMESTIC_MIN_VERSION if is_domestic(macro.exchange) else general_min
+
+
+# 실행기 → 웹 가이드 진행 단계. 청구된 티켓에, 그 계정의 회원 키로만, 청구 뒤 이 시간 안에만 쓴다.
+SETUP_PROGRESS_WINDOW_SECONDS = 2 * 60 * 60
+
+
+def record_setup_progress(user: User, launch_id: int, progress: dict) -> dict:
+    """실행기가 알린 연결 도우미 단계를 티켓에 덮어쓴다(가장 최근 한 건만). 모양은 요청 모델이 이미 걸렀다."""
+    now = datetime.now(timezone.utc)
+    with get_session() as db:
+        row = db.get(RunnerLaunchTicket, launch_id)
+        if row is None or row.user_id != user.id or not row.claimed_at:
+            raise _ticket_error(404, "실행 연결 요청을 찾을 수 없어요.")
+        try:
+            claimed = datetime.strptime(row.claimed_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        except ValueError:
+            raise _ticket_error(410, "이 실행 연결은 끝났어요.")
+        if now - claimed > timedelta(seconds=SETUP_PROGRESS_WINDOW_SECONDS):
+            raise _ticket_error(410, "이 실행 연결은 끝났어요.")
+        macro_row = db.get(UserMacro, row.user_macro_id)
+        try:
+            exchange = Macro.model_validate_json(macro_row.macro_json).exchange if macro_row else ""
+        except (TypeError, ValueError):
+            exchange = ""
+        if exchange and normalize_exchange(exchange) != progress.get("exchange"):
+            # 실행기에서 다른 매크로 파일을 열었다 — 웹 가이드가 엉뚱한 거래소 화면을 그리지 않게 받지 않는다.
+            raise _ticket_error(409, "이 실행 연결의 매크로와 거래소가 달라요.")
+        row.setup_progress = json.dumps(progress, ensure_ascii=False, separators=(",", ":"))
+        row.setup_progress_at = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+        db.add(row)
+        db.commit()
+    return {"ok": True}
 
 
 def mark_launch_ticket_rejected(ticket: str, runner_version: str) -> None:
@@ -682,6 +721,8 @@ def start_session(user: User, payload: dict) -> dict:
             environment_label(row) + (f" · {summary}" if summary else ""),
             "/agents", session_id=row.id,
             data={"event": "start", "symbol": symbol, "testnet": row.testnet, "mode": row.mode},
+            activity={"event_key": f"session:{row.id}:started", "event_name": "session.started",
+                      "occurred_at": now},
         )
         db.commit()
         result = {
@@ -726,12 +767,12 @@ def heartbeat(user: User, session_id: int, snapshot: dict, *, db: Session | None
         _append_events(db, row, events)
 
         previous_pct, previously_in_position = row.unrealized_pct, row.in_position
+        previous_qty = float(row.position_qty or 0.0)  # 이번 명령을 실행하기 전 보유 수량 — 되돌리기 판단에 쓴다
         row.last_price = float(snapshot.get("last_price", row.last_price) or 0.0)
         row.in_position = bool(snapshot.get("in_position", False))
         row.position_uncertain = bool(snapshot.get("position_uncertain", row.position_uncertain))
         row.entry_price = float(snapshot.get("entry_price", 0.0) or 0.0)
         row.position_qty = float(snapshot.get("position_qty", 0.0) or 0.0)
-        _track_invested(row)
         _track_invested(row)
         row.realized_pnl = float(snapshot.get("realized_pnl", 0.0) or 0.0)
         row.unrealized_pct = float(snapshot.get("unrealized_pct", 0.0) or 0.0)
@@ -744,10 +785,9 @@ def heartbeat(user: User, session_id: int, snapshot: dict, *, db: Session | None
         action = row.stop_mode if row.stop_mode in _STOP_MODES else "continue"
         commands: list = []
         if supports_signals(row.runner_version):
-            # ack 반영 → 만료 정리 후 남은 명령 → 서버 전략과 실행기 포지션 유무 대조(경고만).
+            # ack 반영 → 만료 → 주문이 안 나간 진입은 서버 전략도 되돌림 → 보낼 명령 → 포지션 유무 대조(경고만).
             now_ms = runner_engine._now_ms()
-            runner_engine.apply_acks(db, row, acks or [], now_ms)
-            commands = runner_engine.pending_commands(db, row, now_ms)
+            commands = runner_engine.exchange_commands(db, row, acks or [], now_ms, previous_qty=previous_qty)
             if not row.position_uncertain:
                 # 실행기 스스로 포지션을 모르는 상태면 대조할 근거가 없다.
                 runner_engine.check_position_mismatch(db, row, row.in_position)
@@ -755,9 +795,13 @@ def heartbeat(user: User, session_id: int, snapshot: dict, *, db: Session | None
                 # 종료 중인 세션엔 매매 명령을 주지 않는다(명령 행은 그대로 — 만료로 정리된다).
                 commands = []
         db.add(row)
+        accepted_event_keys = _confirmed_event_keys(db, row, events)
         db.commit()
     notify_sessions_changed(user_id)
-    return {"action": action, "commands": commands}
+    result = {"action": action, "commands": commands}
+    if any(isinstance(event, dict) and event.get("event_key") for event in (events or [])):
+        result["accepted_event_keys"] = accepted_event_keys
+    return result
 
 
 def _alert_pnl_move(db, row: RunSession, previous_pct: float, previously_in_position: bool) -> bool:
@@ -790,6 +834,9 @@ def _alert_pnl_move(db, row: RunSession, previous_pct: float, previously_in_posi
         session_id=row.id,
         data={"event": "pnl", "symbol": row.symbol, "pct": round(pct, 2), "delta": round(delta, 2),
               "direction": direction, "sudden": sudden, "entry_price": row.entry_price, "last_price": row.last_price},
+        activity={"event_name": "session.pnl_observed", "details": {"observed_value": pct,
+                  "threshold": PNL_ALERT_JUMP_PCT if sudden else PNL_ALERT_STEP_PCT,
+                  "price": row.last_price, "verification": "server_observation_not_exchange_fill"}},
     )
     row.pnl_alert_pct = pct
     return True
@@ -866,7 +913,10 @@ def mark_stopped(
                 "/agents", session_id=row.id,
                 data={"event": "error" if row.status == "error" else "stop",
                       "symbol": row.symbol, "realized_pnl": row.realized_pnl},
+                activity={"event_key": f"session:{row.id}:stopped", "event_name": "session.stopped",
+                          "occurred_at": row.stopped_at},
             )
+        accepted_event_keys = _confirmed_event_keys(db, row, events)
         db.commit()
         if not already_final:
             # 기록이 하나 늘어난 순간에만 정리한다 — 몇 초마다 부르는 목록 조회는 쿼리 한 번으로 둔다.
@@ -877,7 +927,10 @@ def mark_stopped(
     notify_sessions_changed(user.id)
     # v8+ 라면 서버 측 드라이버도 내린다(구버전·이미 없는 세션이면 runner_engine 이 무시한다).
     runner_engine.schedule_stop(session_id)
-    return {"ok": True}
+    result = {"ok": True}
+    if any(isinstance(event, dict) and event.get("event_key") for event in (events or [])):
+        result["accepted_event_keys"] = accepted_event_keys
+    return result
 
 
 # --- 실행 이벤트 로그 ------------------------------------------------------
@@ -908,7 +961,7 @@ def _append_event_batch(db, row: RunSession, events, *, component: str) -> int:
     from sqlalchemy.dialects.sqlite import insert as sqlite_insert
     from .agent_event_schema import normalize_event, safe_details
 
-    trusted = component in {"engine", "server"}
+    trusted = component in {"engine", "server", "browser_observation", "news_collector"}
     component = component if trusted else "runner"
     batch = [dict(item) for item in events[:EVENT_BATCH_MAX] if isinstance(item, dict)]
     operation_ids = set()
@@ -933,7 +986,7 @@ def _append_event_batch(db, row: RunSession, events, *, component: str) -> int:
         if not message:
             continue
         kind = str(item.get("kind") or "info").strip().lower()
-        if kind not in _EVENT_KINDS:
+        if kind not in (_EVENT_KINDS | {"news", "news_error"} if trusted else _EVENT_KINDS):
             kind = "info"
         item["kind"] = kind
         # Missing/invalid event time is unknown; created_ms independently records
@@ -977,17 +1030,19 @@ def _append_event_batch(db, row: RunSession, events, *, component: str) -> int:
         if event_id is None:
             continue
         added += 1
-        # Web-only structured stages accompany the original Windows message.
-        # Preserve its notification, without notifying twice for the same order.
+        # The result event itself is the fill notification's origin. The GUI
+        # displays that result without emitting a second legacy fill event.
+        # Request and command-report stages are useful logs, not extra alerts.
         extra_runner_stage = normalized["event_name"] in {
-            "runner.order_requested", "runner.order_result", "runner.order_failed",
+            "runner.order_requested", "runner.order_failed",
             "runner.command_reported", "runner.command_failed",
         }
-        if kind in _NOTIFY_EVENT_LABELS and not extra_runner_stage:
+        if kind in _NOTIFY_EVENT_LABELS and not extra_runner_stage and not (trusted and item.get("_notify") is False):
             notifications_mod.notify(
                 db, row.user_id, "agent", f"{row.symbol} 매크로 · {_NOTIFY_EVENT_LABELS[kind]}",
                 normalized["message"], "/agents", session_id=row.id,
-                data={"event": kind, "symbol": row.symbol}, trim=False,
+                data={"event": kind, "symbol": row.symbol, "activity_event_id": event_id,
+                      "activity_event_key": normalized["event_key"]}, trim=False,
             )
             notified = True
     if added:
@@ -996,6 +1051,41 @@ def _append_event_batch(db, row: RunSession, events, *, component: str) -> int:
         if notified:
             notifications_mod.trim_user(db, row.user_id)
     return added
+
+
+def _confirmed_event_keys(db, row: RunSession, events) -> list[str]:
+    """Read durable candidates in the transaction; return ONLY after its commit.
+
+    An HTTP success or command ACK is not an event-storage acknowledgement.
+    Legacy keyless messages cannot be acknowledged as reliable deliveries.
+    """
+    from .agent_event_schema import safe_identifier
+    keys = [event.get("event_key") for event in (events or [])[:EVENT_BATCH_MAX]
+            if isinstance(event, dict) and isinstance(event.get("event_key"), str)
+            and event["event_key"].startswith("runner:") and safe_identifier(event["event_key"])]
+    if not keys:
+        return []
+    stored = set(db.exec(select(RunSessionEvent.event_key).where(
+        RunSessionEvent.session_id == row.id, RunSessionEvent.user_id == row.user_id,
+        RunSessionEvent.event_key.in_(keys))).all())
+    return list(dict.fromkeys(key for key in keys if key in stored))
+
+
+def record_runner_events(user: User, session_id: int, events: list, *, db: Session | None = None) -> dict:
+    """Replay logs only, even for ended runs; never touch position/commands.
+
+    Kept separate from heartbeat so recovery after process restart cannot send
+    an empty trading snapshot or move old events onto a newly started session.
+    """
+    user_id = user.id
+    with (nullcontext(db) if db is not None else get_session()) as owned:
+        row = owned.get(RunSession, session_id)
+        if row is None or row.user_id != user_id:
+            raise HTTPException(404, "세션을 찾을 수 없어요.")
+        _append_events(owned, row, events)
+        confirmed = _confirmed_event_keys(owned, row, events)
+        owned.commit()
+    return {"ok": True, "accepted_event_keys": confirmed}
 
 
 def _trim_events(db, session_id: int) -> None:
@@ -1073,13 +1163,6 @@ def _is_connected(row: RunSession) -> bool:
     if hb is None:
         return False
     return (datetime.now(timezone.utc) - hb).total_seconds() <= STALE_SECONDS
-
-
-def _track_invested(row: RunSession) -> None:
-    """투입금 = 세션 동안 실제로 들어간 최대 금액(수량×진입가). 줄어들지 않는다(부분 청산해도 분모는 그대로)."""
-    notional = float(row.position_qty or 0.0) * float(row.entry_price or 0.0)
-    if notional > float(getattr(row, "invested_usdt", 0.0) or 0.0):
-        row.invested_usdt = notional
 
 
 def session_returns(row: RunSession) -> dict:

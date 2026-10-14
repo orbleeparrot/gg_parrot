@@ -18,6 +18,8 @@ except ModuleNotFoundError as exc:
     # them run on headless Linux CI images that omit the optional Tk package.
     tkinter_stub = types.ModuleType("tkinter")
     tkinter_stub.Tk = object
+    tkinter_stub.Label = object  # v17's secret-entry widget is only defined, never constructed here.
+    tkinter_stub.Canvas = object
     tkinter_stub.TclError = RuntimeError
     tkinter_stub.filedialog = types.SimpleNamespace(askopenfilename=lambda **_kwargs: "")
     tkinter_stub.messagebox = types.SimpleNamespace(
@@ -27,6 +29,7 @@ except ModuleNotFoundError as exc:
     )
     tkinter_stub.ttk = types.SimpleNamespace()
     sys.modules["tkinter"] = tkinter_stub
+    sys.modules["tkinter.font"] = types.ModuleType("tkinter.font")
     from runner import macro_runner
     from runner.macro_runner import RunnerApp
 
@@ -114,7 +117,7 @@ class RunnerActivationSafetyTests(unittest.TestCase):
             app._claim_protocol_ticket(self.launch)
 
         sent = fake_requests.post.call_args.kwargs["json"]
-        self.assertEqual(sent["runner_version"], "12")
+        self.assertEqual(sent["runner_version"], "17")
         self.assertEqual(sent["ticket"], self.launch.ticket)
         self.assertNotIn("api_key", sent)
         self.assertNotIn("api_secret", sent)
@@ -173,7 +176,7 @@ class RunnerActivationSafetyTests(unittest.TestCase):
         self.assertEqual(app.user_macro_id, 73)
         self.assertEqual(payload["user_macro_id"], 73)
         self.assertEqual(payload["symbol"], "BTCUSDT")
-        self.assertEqual(payload["runner_version"], "12")
+        self.assertEqual(payload["runner_version"], "17")
         self.assertNotIn("api_key", payload)
         self.assertNotIn("api_secret", payload)
 

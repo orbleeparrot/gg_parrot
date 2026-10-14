@@ -18,11 +18,11 @@ test("searching, translating, no articles and archived results have distinct fix
   const empty = positionNewsNotice({ status: "ready", data: { analysis_status: "empty", items: [] } });
   const archive = positionNewsNotice({ status: "ready", data: { content_scope: "archive", items: [{ title: "과거 소식" }] } });
   assert.match(searching, /찾고 있어요/);
-  assert.match(translating, /2건.*번역·요약.*대기/);
-  assert.doesNotMatch(translating, /번역 중/);
+  // 번역 · 요약 대기는 서버 안쪽 처리 상태라 알리지 않는다 — 기사 상태만 말한다.
+  assert.doesNotMatch(translating, /대기|번역/);
   assert.match(empty, /수집한 관련 기사가 없어요/);
   assert.match(archive, /과거 관련 기사/);
-  assert.equal(new Set([searching, translating, empty, archive]).size, 4);
+  assert.equal(new Set([searching, empty, archive]).size, 3);
   assert.equal(positionNewsNotice({ status: "loading", data: { items: [{ title: "새 소식" }] } }), "");
 });
 

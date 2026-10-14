@@ -6,8 +6,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { resultsHeadline } from "../src/lib/askView.js";
-import { NO_EDGE_NOTE, NO_EDGE_TEXT, NO_RESULTS_TEXT, REFUNDED_TEXT, SCALPER_PICK_WARN } from "../src/lib/askCopy.js";
+import { noEdgeDetail, resultsHeadline } from "../src/lib/askView.js";
+import { HOLD_LABEL, NO_EDGE_NOTE, NO_EDGE_TEXT, NO_RESULTS_TEXT, REFUNDED_TEXT } from "../src/lib/askCopy.js";
 import { initialState, reduce } from "../src/lib/askFlow.js";
 
 const dialog = readFileSync(new URL("../src/components/AskParrotDialog.jsx", import.meta.url), "utf8");
@@ -40,7 +40,9 @@ test("흐름 상태가 no_edge 를 싣고 다닌다", () => {
 test("화면이 서버의 no_edge 를 받아 안내로 바꾼다", () => {
   assert.match(dialog, /noEdge: data\.no_edge/, "서버 칸을 그대로 받아야 한다");
   assert.doesNotMatch(dialog, /all_lost_to_hold/, "없어진 칸을 읽으면 늘 undefined 다");
-  assert.match(dialog, /state\.noEdge \?.*NO_EDGE_NOTE/s, "못 넘겼을 때 이유를 적어 준다");
+  // 문단 전체를 noEdgeDetail 이 만든다(2026-10-12) — 어느 관문에서 떨어졌는지에 따라
+  // 설명이 달라야 해서 화면이 두 조각을 이어 붙이던 방식을 버렸다.
+  assert.match(dialog, /state\.noEdge \?.*noEdgeDetail\(state\.noEdgeBest\)/s, "못 넘겼을 때 이유를 적어 준다");
   assert.match(dialog, /resultsHeadline\(results\.length, state\.noEdge\)/, "머리글도 이유를 봐야 한다");
   assert.ok(NO_EDGE_NOTE.includes("다시"), "다음에 뭘 하면 되는지 말해야 한다");
 });
@@ -53,9 +55,9 @@ test("빈 결과에서 0 이 글자로 새지 않는다", () => {
     "results.length 를 그대로 && 왼쪽에 두면 0 이 화면에 찍힌다 — results.length > 0 으로");
 });
 
-// --- 횟수 환불 · 단타형 사전 안내 (2026-10-08) -----------------------------
-// 조사 결과 단타형은 마찰 때문에 구조적으로 홀딩을 넘기 어려웠다. 그런데 하루 횟수는
-// 백테스트 전에 깎여서, 결과 0개를 받아도 1회가 사라졌다.
+// --- 횟수 환불 (2026-10-08) -----------------------------------------------
+// 하루 횟수는 백테스트 전에 깎여서, 결과 0개를 받아도 1회가 사라졌다.
+// 짧은 봉 사전 안내는 2026-10-12 에 성향 단계에서 빈도 단계로 옮겼다(askProfiles.test.js).
 
 test("흐름 상태가 환불 여부를 싣고 다닌다", () => {
   const start = initialState();
@@ -72,10 +74,57 @@ test("화면이 환불을 받아 말한다", () => {
   assert.ok(REFUNDED_TEXT.includes("횟수"), "무엇을 돌려줬는지 말해야 한다");
 });
 
-test("단타형을 고르는 자리에서 미리 알린다", () => {
-  // 고르고 나서 빈 화면을 보는 것보다 고를 때 아는 쪽이 낫다.
-  assert.match(dialog, /state\.step === "profile" \?.*SCALPER_PICK_WARN/s,
-    "성향 고르는 단계에 안내가 없다");
-  assert.match(SCALPER_PICK_WARN, /수수료|슬리피지/, "왜 어려운지 말해야 한다");
-  assert.match(SCALPER_PICK_WARN, /들고 있기|홀딩/, "무엇을 넘기 어려운지 말해야 한다");
+test("빈 화면이 숫자를 싣는다", () => {
+  // 한 줄로 끝나면 매크로가 벌었던 사실이 사라진다.
+  const line = noEdgeDetail({ return_pct: 34.82, hold_return_pct: 38.67, rule_label: "트레일링 스탑" });
+  assert.match(line, /34\.8/, "매크로가 얼마 벌었는지");
+  assert.match(line, /38\.7/, "같은 기간 보유는 얼마였는지");
+  assert.match(line, /첫날/, "그 기준이 첫날 매수라는 전제를 드러내야 한다");
+});
+
+test("없는 홀딩 숫자를 지어내지 않는다", () => {
+  const line = noEdgeDetail({ return_pct: 5.0, hold_return_pct: null, rule_label: "RSI 조건",
+                              made_money: true });
+  assert.match(line, /5\.0/);
+  assert.ok(!/null|NaN/.test(line), `지어낸 값이 섞였다: ${line}`);
+  // signedPct(null) 은 "—" 를 돌려준다. 그 자리를 비워 둔 문장("… 뒀을 때 — 였어요")은
+  // 숫자를 지어내지 않지만 고장 난 화면처럼 읽힌다 — 못 구했다고 **말해야** 한다.
+  // (설명 문구 자체에는 줄표가 들어 있으므로 홀딩 숫자 자리만 본다.)
+  assert.ok(!line.includes("뒀을 때 —"), `빈 자리를 그대로 내보냈다: ${line}`);
+  assert.match(line, /구하지 못했어요/, "왜 홀딩 숫자가 없는지 말해야 한다");
+  // 서버가 숫자를 못 보낸 경우(후보가 아예 없었다)에도 할 말은 있어야 한다 — 빈 문단을
+  // 내보내면 화면에 이유가 한 줄도 안 남는다.
+  assert.equal(noEdgeDetail(null), NO_EDGE_NOTE);
+});
+
+test("홀딩 라벨이 전제를 드러낸다", () => {
+  // '그냥 들고 있기' 는 매수일이 공짜로 주어진 것을 숨긴다 — 구간 첫 봉이 그 날이다.
+  assert.match(HOLD_LABEL, /첫날/);
+  assert.ok(!NO_EDGE_TEXT.includes("그냥 들고 있는 게 나았"),
+    "매수지점도 같은 기준으로 정해진 날이라 '들고 있는 게 나았다' 는 헷갈린다");
+});
+
+test("실행 화면이 서버의 빈 화면 숫자를 받아 그린다", () => {
+  // 안 받으면 숫자는 서버에만 있고 사용자는 한 줄만 본다 — 바로 그 문제였다.
+  assert.match(dialog, /noEdgeBest: data\.no_edge_best/, "응답 칸을 그대로 받아야 한다");
+  assert.match(dialog, /noEdgeDetail\(state\.noEdgeBest\)/, "빈 화면에 그려야 한다");
+});
+
+test("홀딩을 이겼는데도 손실이면 홀딩 이야기를 하지 않는다", () => {
+  // 관문이 둘인데 화면이 둘째만 설명해서, 홀딩보다 15%p 앞선 -5% 짜리에 "홀딩을 못
+  // 넘겼다" 는 글이 붙었다 — 숫자와 글이 서로 어긋났다.
+  const line = noEdgeDetail({ return_pct: -5.0, hold_return_pct: -20.0,
+                              rule_label: "이동평균 크로스", made_money: false });
+  assert.match(line, /-5\.0/, "얼마를 잃었는지는 말한다");
+  assert.ok(!line.includes("-20.0"), `홀딩 숫자를 들이밀면 이긴 것처럼 읽힌다: ${line}`);
+  assert.match(line, /잃|손실/, "왜 안 보여 주는지가 '돈을 잃었다' 여야 한다");
+  assert.ok(!/첫날 사서 그냥 뒀을 때/.test(line), "적용되지 않은 기준을 설명하면 안 된다");
+});
+
+test("벌었지만 홀딩을 못 넘긴 경우는 홀딩으로 설명한다", () => {
+  const line = noEdgeDetail({ return_pct: 34.82, hold_return_pct: 38.67,
+                              rule_label: "트레일링 스탑", made_money: true });
+  assert.match(line, /34\.8/);
+  assert.match(line, /38\.7/);
+  assert.match(line, /첫날/);
 });

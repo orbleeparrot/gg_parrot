@@ -12,8 +12,8 @@ import {
   BACK_TO_STEP, BALANCE_ERROR, BALANCE_NOTE, CANDIDATES_PROMPT, COMPARE_TITLE, CONDITION_LABEL, CONSENT_BUTTON, CONSENT_TEXT, DISCLAIMER, DOMESTIC_SPOT_ONLY,
   FOLLOW_UPS, FOLLOW_UPS_TITLE, HOLD_LABEL, HORIZONS, LEGEND_BASE, LEGEND_EQUITY, LEVERAGES, LOAD_BUTTON,
   MANUAL_PICK_LABEL, MANUAL_SEARCH_MISS, MANUAL_SEARCH_PLACEHOLDER, MARKETS, NEXT_LABEL,
-  NO_EDGE_NOTE, NO_QUOTA_TEXT, OPENING_TEXT, REFUNDED_TEXT, SCALPER_PICK_WARN, PREV_LABEL, PROFILES, READY_BUTTON, READY_TEXT, RESTART_LABEL, RETURN_LABEL,
-  RUNNING_TEXT, SCALPER_NOTE, SPOT_HINT, STABLE_NO_FUTURES, STEP_PROMPTS, UNAVAILABLE_TEXT, VS_HOLD_LABEL,
+  NO_QUOTA_TEXT, OPENING_TEXT, REFUNDED_TEXT, SHORT_BAR_WARN, PREV_LABEL, PROFILES, READY_BUTTON, READY_TEXT, RESTART_LABEL, RETURN_LABEL,
+  RUNNING_TEXT, SPOT_HINT, STABLE_NO_FUTURES, STEP_PROMPTS, UNAVAILABLE_TEXT, VS_HOLD_LABEL,
   WATCH_LEVELS, WHY_TITLE, feesNote, readyCostNote,
 } from "../lib/askCopy.js";
 import { useSymbolList } from "../hooks/useSymbolList.js";
@@ -23,7 +23,8 @@ import {
   toCandidatesRequest, validBalance, formatAmountInput, parseAmountInput,
 } from "../lib/askFlow.js";
 import {
-  coinTint, conditionLines, holdDiff, holdOf, intervalLabel, marketLabel, numberParts, resultsHeadline,
+  coinTint, conditionLines, holdDiff, holdOf, intervalLabel, marketLabel, noEdgeDetail, numberParts,
+  resultsHeadline,
   signedPct, signedPoints, sparkPaths, splitRuleLabel, whyHeadline, whyPoints,
 } from "../lib/askView.js";
 import { coinName } from "../lib/macroSource.js";
@@ -392,6 +393,8 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
   useEffect(() => { setActive(0); trackRef.current?.scrollTo?.({ left: 0 }); }, [state.results]);
 
   const noQuota = status && !status.error && status.remaining_today <= 0;
+  // 관리자 계정은 횟수 제한이 없다 — 남은 횟수 · 비용 안내를 보이지 않는다.
+  const unlimited = !!(status && !status.error && status.unlimited);
   const answeredSteps = STEPS.filter((s) => state.answers[s] != null)
     .filter((s) => state.phase !== "cards" || STEPS.indexOf(s) < STEPS.indexOf(state.step));
   const asking = status && !status.error && status.consented && (state.phase === "cards" || state.phase === "ready") && !(noQuota && answeredSteps.length === 0);
@@ -502,6 +505,7 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
     try {
       const data = await api.askMacros(toAskRequest(next));
       dispatch({ type: "results", results: data.results, noEdge: data.no_edge,
+                 noEdgeBest: data.no_edge_best,
                  refunded: data.refunded, remaining: data.remaining_today });
     } catch (e) {
       dispatch({ type: "error", message: e.message });
@@ -520,6 +524,7 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
 
   // 성향을 바꾸는 두 버튼(안전하게/공격적으로)은 세션을 버리고 새로 후보를 받으므로 하루 횟수가 하나 더 든다.
   const followLabel = (f) => {
+    if (unlimited) return f.kind === "safer" ? "안전하게" : f.kind === "riskier" ? "공격적으로" : f.label;
     if (f.kind === "safer") return `안전하게 (횟수 1회 더 써요 · 남은 ${state.remaining}회)`;
     if (f.kind === "riskier") return `공격적으로 (횟수 1회 더 써요 · 남은 ${state.remaining}회)`;
     return f.label;
@@ -529,7 +534,7 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
       <span className="ask-fups-t">{FOLLOW_UPS_TITLE}</span>
       {FOLLOW_UPS.map((f) => {
         const quotaBlocked = noQuota && (f.kind === "safer" || f.kind === "riskier");
-        // PROFILE_ORDER 양쪽 끝(안정형 "안전하게", 단타형 "공격적으로")은 갈 곳이 없다.
+        // PROFILE_ORDER 양쪽 끝(안정형 "더 안정적으로", 공격형 "더 공격적으로")은 갈 곳이 없다.
         const idx = PROFILE_ORDER.indexOf(state.answers.profile);
         const edgeBlocked = (f.kind === "safer" && idx <= 0) || (f.kind === "riskier" && idx >= PROFILE_ORDER.length - 1);
         const disabled = quotaBlocked || edgeBlocked || lock;
@@ -586,7 +591,8 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
           ))}
         </div>)}
         {state.step === "market" && !canChooseFutures(state.answers) ? <p className="ask-note ask-in" style={{ "--i": options.length + 1 }}>{isDomestic(state.answers.exchange) ? DOMESTIC_SPOT_ONLY : STABLE_NO_FUTURES}</p> : null}
-        {state.step === "profile" ? <p className="ask-note ask-in" style={{ "--i": options.length + 1 }} role="note">{SCALPER_PICK_WARN}</p> : null}
+        {state.step === "watch" && state.answers.horizon !== "long"
+          ? <p className="ask-note ask-in" style={{ "--i": options.length + 1 }} role="note">{SHORT_BAR_WARN}</p> : null}
       </>
     );
   } else if (state.phase === "ready") {
@@ -594,7 +600,7 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
       <div className="ask-center">
         <p className="ask-say ask-in" style={{ "--i": 0 }}><Face size={32} /><span>{READY_TEXT}</span></p>
         <button type="button" className="btn btn-m btn-primary ask-in" style={{ "--i": 1 }} disabled={lock} onClick={() => leaveThen(submitCards)}>{READY_BUTTON}</button>
-        <span className="ask-caption ask-in" style={{ "--i": 2 }}>{readyCostNote(status.remaining_today)}</span>
+        {unlimited ? null : <span className="ask-caption ask-in" style={{ "--i": 2 }}>{readyCostNote(status.remaining_today)}</span>}
       </div>
     );
   } else if (busy) {
@@ -628,7 +634,7 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
           <p className="ask-say"><Face size={32} /><span>{resultsHeadline(results.length, state.noEdge)}</span></p>
           {results.length > 0 && !carousel ? <span className="ask-legend"><span><i />{LEGEND_EQUITY}</span><span><i className="is-base" />{LEGEND_BASE}</span></span> : null}
         </div>
-        {state.noEdge ? <p className="ask-hold ask-in" style={{ "--i": 1 }} role="note">{NO_EDGE_NOTE}</p> : null}
+        {state.noEdge ? <p className="ask-hold ask-in" style={{ "--i": 1 }} role="note">{noEdgeDetail(state.noEdgeBest)}</p> : null}
         {state.refunded ? <p className="ask-note ask-in" style={{ "--i": 2 }} role="status">{REFUNDED_TEXT}</p> : null}
         {results.length > 1 && !carousel ? <CompareTable results={results} hold={hold} /> : null}
         {results.length > 0 && !carousel ? (
@@ -662,7 +668,6 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
           </div>
         ) : null}
         <p className="ask-disc ask-in" style={{ "--i": results.length + 3 }} role="note">{DISCLAIMER}</p>
-        {state.answers.profile === "scalper" ? <p className="ask-note ask-in" style={{ "--i": results.length + 4 }} role="note">{SCALPER_NOTE}</p> : null}
         {extraBlock(results.length + 5)}
         {carousel ? null : followUps(results.length + 6)}
       </>
@@ -680,7 +685,8 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
         <header className="ask-head">
           <img src={ASK_MASCOT} alt="" width="28" height="28" className="ask-head-face" aria-hidden="true" />
           <h2 id={titleId} className="ask-title">껄무새에게 물어볼까?</h2>
-          {status && !status.error && status.daily_limit ? <span className="ask-quota num">오늘 {status.remaining_today}/{status.daily_limit}번 남음</span> : null}
+          {unlimited ? <span className="ask-quota">횟수 무제한</span>
+            : status && !status.error && status.daily_limit ? <span className="ask-quota num">오늘 {status.remaining_today}/{status.daily_limit}번 남음</span> : null}
           <button type="button" onClick={onClose} disabled={busy} className="ask-x" aria-label="닫기"><Icon name="x" size={20} /></button>
         </header>
         <div className="ask-body" ref={bodyRef}>

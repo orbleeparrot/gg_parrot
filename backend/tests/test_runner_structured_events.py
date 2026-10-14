@@ -6,7 +6,7 @@ import pytest
 from sqlmodel import select
 
 from app import runner, runner_engine
-from app.db import RunSession, RunSessionEvent, RunnerCommand, get_session
+from app.db import NotificationMessage, RunSession, RunSessionEvent, RunnerCommand, get_session
 
 
 @pytest.fixture
@@ -22,7 +22,7 @@ def sessions():
         db.commit()
     yield ids
     with get_session() as db:
-        for model in (RunSessionEvent, RunnerCommand):
+        for model in (NotificationMessage, RunSessionEvent, RunnerCommand):
             for row in db.exec(select(model).where(model.session_id.in_(ids))).all():
                 db.delete(row)
         for sid in ids:
@@ -79,11 +79,14 @@ def test_extra_structured_stages_do_not_duplicate_original_notifications(session
     with get_session() as db:
         row = db.get(RunSession, sessions[0])
         runner._append_events(db, row, [
-            {"kind": "fill", "message": "실행기 상세 보고", "event_name": "runner.order_result"},
-            {"kind": "fill", "message": "기존 실행기 체결 메시지"},
+            {"kind": "order", "message": "주문 요청", "event_name": "runner.order_requested"},
+            {"kind": "fill", "message": "실제 실행기 체결 결과", "event_name": "runner.order_result"},
+            {"kind": "info", "message": "명령 처리 보고", "event_name": "runner.command_reported"},
         ])
         db.commit()
-        assert len(_events(db, row.id)) == 2 and len(notifications) == 1
+        assert len(_events(db, row.id)) == 3
+        assert len(notifications) == 1
+        assert notifications[0][4] == "실제 실행기 체결 결과"
 
 
 def test_legacy_events_without_key_are_not_coalesced_or_given_inferred_severity(sessions):

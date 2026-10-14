@@ -303,3 +303,34 @@ def test_pagination_math():
     r = board.list_posts(page=1, size=5)
     assert r["page"] == 1 and r["size"] == 5
     assert r["pages"] == max(1, (r["total"] + 4) // 5)
+
+
+def test_author_tier_follows_sales_on_board_and_chat():
+    """게시판 목록 · 글 · 댓글 · 리더보드 채팅에 글쓴이 판매 등급(내 활동과 같은 기준)이 실린다."""
+    from datetime import datetime, timezone
+    from app.db import LeaderboardEntry, MacroUnlock, get_session
+
+    token, user = _signup()
+    pid = client.post("/api/board/posts", data={"title": "등급 글", "body": "내용"}, headers=_auth(token)).json()["id"]
+    client.post(f"/api/board/posts/{pid}/comments", json={"text": "등급 댓글"}, headers=_auth(token))
+    listed = next(it for it in client.get("/api/board/posts?page=1&size=50").json()["items"] if it["id"] == pid)
+    assert listed["author_tier"] == "새싹"
+
+    # 내 리더보드 매크로가 한 번 팔리면 브론즈 — 내 활동 등급 사다리와 같다.
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with get_session() as db:
+        entry = LeaderboardEntry(user_id="anon", nickname="n", symbol="BTCUSDT", macro_json='{"rule_type": "A"}',
+                                 human_summary="x" * 50, owner_user_id=user["id"], created_at=now, created_ms=0)
+        db.add(entry)
+        db.flush()
+        db.add(MacroUnlock(user_id=user["id"] + 100000, entry_id=entry.id, price=100, created_at=now))
+        db.commit()
+    detail = client.get(f"/api/board/posts/{pid}").json()
+    assert detail["author_tier"] == "브론즈"
+    assert detail["comments"][0]["author_tier"] == "브론즈"
+
+    sent = client.post("/api/chat", json={"text": "등급 채팅"}, headers=_auth(token))
+    assert sent.status_code == 200, sent.text
+    assert sent.json()["message"]["author_tier"] == "브론즈"
+    mine = [m for m in client.get("/api/chat").json()["items"] if m.get("user_id") == user["id"]]
+    assert mine and all(m["author_tier"] == "브론즈" for m in mine)

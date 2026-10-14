@@ -19,6 +19,20 @@ test("repeated heartbeat and snapshot timestamps do not create notifications", (
   assert.deepEqual(state.events, []);
 });
 
+test("browser observations retain their UUID across unchanged renders and use a new UUID only for a real recovery observation", () => {
+  let state = advance(null, { featureStates: { position_news: { status: "error", data: null } } });
+  const firstId = state.events[0].observationId;
+  assert.match(firstId, /^[0-9a-f-]{36}$/);
+  state = advance(state, { receivedAt: 2000, featureStates: { position_news: { status: "error", data: null } } });
+  assert.equal(state.events[0].observationId, firstId);
+  state = advance(state, { receivedAt: 3000, featureStates: { position_news: {
+    status: "ready", data: { items: [], collection: { status: "empty" } },
+  } } });
+  assert.notEqual(state.events[0].observationId, firstId);
+  assert.equal(state.events[0].observedAt, 3000);
+  assert.equal(state.events[0].occurredAt, 1000);
+});
+
 test("position entry, exit, repeated entry and termination each appear exactly once", () => {
   let state = advance(null, { session: { ...session, in_position: false } });
   state = advance(state);

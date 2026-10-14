@@ -18,7 +18,7 @@ import {
 } from "../lib/resultLayout.js";
 import { Icon } from "./icons.jsx";
 
-const AI_EXPLAIN_MASCOT = "/brand/navigation/ggparrot-nav-agent.svg";
+const EXPLAIN_MASCOT = "/brand/navigation/ggparrot-nav-agent.svg";
 
 // mascot mood -> accent color for the AI analysis card (neutral fallback).
 const MOOD_ACCENT = {
@@ -31,89 +31,45 @@ const MOOD_ACCENT = {
   big_win: "text-green-700",
 };
 
-// 껄무새 AI 원인 분석 카드. 규칙기반 장문 멘트는 쓰지 않고, '분석하기'를 누르면
-// 서버(Gemini)가 결과 원인을 5줄 이내로 간결하게 분석한다.
-export function ParrotExplain({ explanation, onAiExplain, aiBusy, aiError }) {
-  const isAi = explanation && explanation.source === "ai";
-
-  // AI 분석 결과가 있을 때: 간결한 원인 분석만 렌더.
-  // 카드가 아니라 왼쪽 규칙(§6 notice) — 해설은 본문이지 끼어드는 알림이 아니다.
-  if (isAi) {
-    const accent = MOOD_ACCENT[explanation.mood] || MOOD_ACCENT.idle;
-    return (
-      <div className="notice py-2">
-        <div className="flex items-start gap-3">
-          <img
-            src={AI_EXPLAIN_MASCOT}
-            alt=""
-            width="256"
-            height="256"
-            className="h-10 w-10 shrink-0 object-contain"
-            aria-hidden="true"
-            draggable="false"
-          />
-          <div className="min-w-0 flex-1">
-            <div className="t-caption text-slate-500 mb-1">껄무새 AI 해설</div>
-            <div className={"t-title " + accent}>{explanation.headline}</div>
-            {explanation.points?.length > 0 && (
-              <ul className="mt-3 space-y-2 t-small text-slate-700 list-disc pl-5">
-                {explanation.points.map((p, i) => (
-                  <li key={i}>{p}</li>
-                ))}
-              </ul>
-            )}
-            {explanation.lesson && (
-              <div className="mt-3 t-small text-slate-700">
-                <span className="font-bold text-slate-900">이 매크로를 쓴다면 · </span>
-                {explanation.lesson}
-              </div>
-            )}
-            <div className="mt-3 flex items-center justify-between gap-2 flex-wrap">
-              <div className="t-caption text-slate-500">{explanation.disclaimer}</div>
-              <button
-                type="button"
-                onClick={onAiExplain}
-                disabled={aiBusy}
-                className="t-caption text-slate-900 underline underline-offset-4 decoration-slate-300 hover:decoration-slate-900 disabled:opacity-40"
-              >
-                {aiBusy ? "분석 중…" : "다시 분석"}
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // 아직 AI 분석 전: 분석 버튼만. 서버 Gemini 키로 동작(입력 불필요).
+// 껄무새 해설 — 머리말 + 요점 + 이 매크로를 쓴다면. 백테스트 응답에 실려 오는 규칙 기반
+// 해설을 그대로 그린다(2026-10-12 에 AI 층을 걷어냈다 — 하루 20회 한도에 따라 같은 화면이
+// 아침엔 AI 말투, 오후엔 규칙 말투였다). 해설이 없으면 자리도 비운다.
+export function ParrotExplain({ explanation }) {
+  if (!explanation?.headline) return null;
+  const accent = MOOD_ACCENT[explanation.mood] || MOOD_ACCENT.idle;
   return (
-    <div className="pt-4 border-t border-slate-200">
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className="flex min-w-0 items-center gap-3">
-          <img
-            src={AI_EXPLAIN_MASCOT}
-            alt=""
-            width="256"
-            height="256"
-            className="h-12 w-12 shrink-0 object-contain"
-            aria-hidden="true"
-            draggable="false"
-          />
-          <div className="min-w-0">
-            <div className="t-title text-slate-900">껄무새 AI 해설</div>
-            <div className="mt-1 t-small text-slate-500">이 결과가 왜 이렇게 나왔는지 쉽게 정리해줘요</div>
-          </div>
+    <div className="notice py-2">
+      <div className="flex items-start gap-3">
+        <img
+          src={EXPLAIN_MASCOT}
+          alt=""
+          width="256"
+          height="256"
+          className="h-10 w-10 shrink-0 object-contain"
+          aria-hidden="true"
+          draggable="false"
+        />
+        <div className="min-w-0 flex-1">
+          <div className="t-caption text-slate-500 mb-1">껄무새 해설</div>
+          <div className={"t-title " + accent}>{explanation.headline}</div>
+          {explanation.points?.length > 0 && (
+            <ul className="mt-3 space-y-2 t-small text-slate-700 list-disc pl-5">
+              {explanation.points.map((p, i) => (
+                <li key={i}>{p}</li>
+              ))}
+            </ul>
+          )}
+          {explanation.lesson && (
+            <div className="mt-3 t-small text-slate-700">
+              <span className="font-bold text-slate-900">이 매크로를 쓴다면 · </span>
+              {explanation.lesson}
+            </div>
+          )}
+          {explanation.disclaimer && (
+            <div className="mt-3 t-caption text-slate-500">{explanation.disclaimer}</div>
+          )}
         </div>
-        <button
-          type="button"
-          onClick={onAiExplain}
-          disabled={aiBusy}
-          className="btn btn-m btn-secondary shrink-0"
-        >
-          {aiBusy ? "분석 중…" : "분석하기"}
-        </button>
       </div>
-      {aiError && <div className="mt-2 t-caption text-red-600">{aiError}</div>}
     </div>
   );
 }
@@ -288,9 +244,6 @@ export default function ResultView({
   result,
   perSymbol,
   explanation,
-  onAiExplain,
-  aiBusy,
-  aiError,
   summary,
   dataSource,
   periodLabel,
@@ -302,7 +255,7 @@ export default function ResultView({
   // 바깥(Studio)에서 넣어주는 블록 — 실시간 차트처럼 결과 계산과 무관하게
   // 이 열에 같이 놓이는 것들. [{ id, label, node }]
   extraBlocks = [],
-  // 여기서는 그리지 않을 블록 id — 직접 만들기는 AI 해설을 결과 독의 다른 탭에 둔다.
+  // 여기서는 그리지 않을 블록 id — 직접 만들기는 껄무새 해설을 결과 독의 다른 탭에 둔다.
   hideBlocks = [],
 }) {
   const { rate: krwRate } = useUsdKrw();
@@ -457,14 +410,7 @@ export default function ResultView({
       </div>
     ),
     symbols: <PerSymbolTable rows={perSymbol} legs={legs} />,
-    ai: (
-      <ParrotExplain
-        explanation={explanation}
-        onAiExplain={onAiExplain}
-        aiBusy={aiBusy}
-        aiError={aiError}
-      />
-    ),
+    ai: <ParrotExplain explanation={explanation} />,
     equity: (
       <div className="pt-2">
         <div className="t-title text-slate-900 mb-3">자산곡선 (equity curve)</div>

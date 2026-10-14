@@ -39,6 +39,7 @@ class _Recorder:
         self.symbol = "KRW-BTC"
         self.calls = []
         self.rehearsals = []
+        self.spends = []
         self._price = price
         self._rules = brokers.OrderRules(step=step, min_notional=0.0)
         self._rehearsal = rehearsal
@@ -54,8 +55,9 @@ class _Recorder:
     def ensure_ready(self):
         return True
 
-    def rehearse(self, *, notional):
+    def rehearse(self, *, notional, spend=None):
         self.rehearsals.append(notional)
+        self.spends.append(spend)
         return self._rehearsal
 
     def submit(self, side_word, *, base_qty=None, notional=None, reduce_only=False,
@@ -80,6 +82,7 @@ class ExchangeSelectionTests(unittest.TestCase):
         bot.credentials = keys if keys is not None else {
             "exchanges": {exchange: {"api_key": "k", "api_secret": "s"}}}
         bot.log = Mock()
+        bot.on_log = Mock()
         return bot
 
     def test_domestic_macro_builds_the_domestic_broker(self):
@@ -110,9 +113,9 @@ class ExchangeSelectionTests(unittest.TestCase):
                 self.assertNotIn(f"SECRET-{name}", blob)
                 self.assertNotIn(f"KEY-{name}", blob)
 
-    def test_runner_version_is_twelve(self):
+    def test_runner_version_is_thirteen(self):
         from runner import installation
-        self.assertEqual(installation.RUNNER_VERSION, "12")
+        self.assertEqual(installation.RUNNER_VERSION, "17")
 
     # --- 위 다섯은 과제 사양. 아래는 같은 배선의 나머지 ----------------
     def test_binance_macro_builds_the_binance_broker_with_its_own_keys(self):
@@ -190,6 +193,7 @@ class RehearsalPolicyTests(unittest.TestCase):
         bot.macro = macro if macro is not None else {
             "rule_type": "A", "params": {"initial_capital": 1_000_000}, "risk": {}}
         bot.log = Mock()
+        bot.on_log = Mock()
         bot.broker = _Recorder(rehearsal=rehearsal)
         return bot
 
@@ -207,7 +211,10 @@ class RehearsalPolicyTests(unittest.TestCase):
     def test_rehearsal_runs_once_with_the_capped_entry_amount(self):
         bot = self.bot("live", (True, "통과"))
         self.assertTrue(bot._prepare())
-        self.assertEqual(bot.broker.rehearsals, [macro_runner.MAX_ORDER_KRW])
+        self.assertEqual(len(bot.broker.rehearsals), 1)
+        self.assertAlmostEqual(bot.broker.rehearsals[0], macro_runner.MAX_ORDER_KRW / (1 + macro_runner._bid_fee_rate(bot.broker)))
+        # 국내는 수수료 포함 설정 금액도 준다 — 브로커가 실제 수수료율로 주문 금액 · 필요한 원화를 다시 잰다.
+        self.assertEqual(bot.broker.spends, [macro_runner.MAX_ORDER_KRW])
 
     def test_broker_exception_is_a_failure_not_a_crash(self):
         bot = self.bot("live", (True, "통과"))
@@ -226,6 +233,7 @@ class DomesticOrderSizingTests(unittest.TestCase):
         bot.in_position, bot.held_qty, bot.entry_price = False, 0.0, 0.0
         bot.realized, bot.step, bot.position_uncertain = 0.0, step, False
         bot.capital, bot.log = 1_000_000.0, Mock()
+        bot.on_log = Mock()
         bot.broker = _Recorder(price=15_000_000.0 if quote == "KRW" else 100.0, step=step)
         bot._done_command_ids, bot.pending_acks = deque(maxlen=200), []
         return bot
@@ -237,8 +245,38 @@ class DomesticOrderSizingTests(unittest.TestCase):
         ack = bot._execute_command(self.BUY, price=15_000_000.0)
         self.assertTrue(ack["ok"], ack)
         call = bot.broker.calls[-1]
-        self.assertEqual(call["notional"], macro_runner.MAX_ORDER_KRW)
+        # 수수료까지 합쳐 설정 금액(여기서는 원화 상한) 안에 든다.
+        self.assertAlmostEqual(call["notional"], macro_runner.MAX_ORDER_KRW / (1 + macro_runner._bid_fee_rate(bot.broker)))
         self.assertIsNone(call["base_qty"])
+
+    def test_domestic_entry_keeps_the_fee_inside_the_set_amount(self):
+        """설정 20,000원이면 수수료까지 20,000원 — 빗썸 0.04% 면 19,992원어치를 산다(+8원)."""
+        bot = self.bot("KRW", symbol="KRW-SKL", step=0.0)
+        bot.capital = 20_000.0
+        bot.broker.fees = {"bid": 0.0004, "ask": 0.0004}
+        ack = bot._execute_command(self.BUY, price=7.476)
+        self.assertTrue(ack["ok"], ack)
+        ordered = bot.broker.calls[-1]["notional"]
+        self.assertAlmostEqual(ordered * 1.0004, 20_000.0, places=6)
+        self.assertEqual(int(ordered), 19_992)
+
+    def test_bithumb_no_funds_rejection_says_the_balance_is_short(self):
+        """빗썸은 잔고 부족을 insufficient_funds 로 보낸다 — '체결 완료를 확인하지 못했다' 가 아니라 원화 잔고 부족."""
+        bot = self.bot("KRW", symbol="KRW-SKL", step=0.0)
+        bot.exchange = "bithumb"
+        bot.broker.submit = Mock(return_value=macro_runner.brokers.Order(
+            status="REJECTED", executed_qty=0.0, avg_price=0.0, acquired_qty=0.0, fees_known=True,
+            order_id=None, raw_status="insufficient_funds"))
+        ack = bot._execute_command(self.BUY, price=7.476)
+        self.assertFalse(ack["ok"])
+        self.assertIn("원화 잔고가 모자라요", ack["error"])
+        self.assertNotIn("체결 완료를 확인하지 못했습니다", ack["error"])
+        self.assertFalse(bot.in_position)
+
+    def test_unknown_fee_rate_uses_a_conservative_default(self):
+        self.assertEqual(macro_runner._bid_fee_rate(None), macro_runner.DOMESTIC_BID_FEE_FALLBACK)
+        self.assertEqual(macro_runner._bid_fee_rate(Mock(fees={"bid": 0.0005})), 0.0005)
+        self.assertEqual(macro_runner._bid_fee_rate(Mock(fees={"bid": 0.9})), macro_runner.DOMESTIC_BID_FEE_FALLBACK)
 
     def test_binance_entry_is_still_sent_as_quantity(self):
         bot = self.bot("USDT", symbol="BTCUSDT", step=0.001)
@@ -286,7 +324,7 @@ class DomesticOrderSizingTests(unittest.TestCase):
             kwargs = bot._place.call_args.kwargs
             self.assertEqual("notional" in kwargs, has_money, exchange)
             if has_money:
-                self.assertEqual(kwargs["notional"], macro_runner.MAX_ORDER_KRW)
+                self.assertAlmostEqual(kwargs["notional"], macro_runner.MAX_ORDER_KRW / (1 + macro_runner._bid_fee_rate(bot.broker)))
 
     def test_domestic_close_dust_below_the_volume_limit_is_not_an_error(self):
         """국내는 step 이 0 이라 '팔 수 없는 잔여' 안전망이 꺼져 있었다.
@@ -373,13 +411,19 @@ class RunModeGuiTests(unittest.TestCase):
     def test_testnet_is_hidden_and_unselected_for_a_domestic_macro(self):
         app = self.app({"symbol": "KRW-BTC", "exchange": "upbit"})
         app._sync_mode_choices()
-        app.mode_buttons["testnet"].pack_forget.assert_called_once_with()
+        app.mode_buttons["testnet"].grid_remove.assert_called_once_with()
+        app.mode_buttons["testnet"].grid.assert_not_called()
+        # 남은 두 칸(모의 · 실전)이 0 · 1 번째 칸을 같은 폭으로 나눠 쓴다.
+        self.assertEqual(app.mode_buttons["mock"].grid.call_args.kwargs["column"], 0)
+        self.assertEqual(app.mode_buttons["live"].grid.call_args.kwargs["column"], 1)
         self.assertEqual(app.mode.get(), "mock")  # 국내엔 테스트넷이 없다 — 실전으로 떨어지지 않는다
 
     def test_testnet_stays_for_a_binance_macro(self):
         app = self.app({"symbol": "BTCUSDT", "exchange": "binance"})
         app._sync_mode_choices()
-        app.mode_buttons["testnet"].pack_forget.assert_not_called()
+        app.mode_buttons["testnet"].grid_remove.assert_not_called()
+        self.assertEqual([app.mode_buttons[name].grid.call_args.kwargs["column"] for name in ("mock", "testnet", "live")],
+                         [0, 1, 2])
         self.assertEqual(app.mode.get(), "testnet")
 
     def test_live_start_without_that_exchange_key_is_blocked_by_name(self):
@@ -517,6 +561,7 @@ class DomesticAccessFailureIsExplainedNotCalledAMissingSymbolTests(unittest.Test
         bot.leverage, bot.capital = 1, 1_000_000.0
         bot.macro = {"rule_type": "A", "params": {"initial_capital": 1_000_000}, "risk": {}}
         bot.log = Mock()
+        bot.on_log = Mock()
         bot.broker = _Recorder()
         bot.broker.ensure_ready = Mock(side_effect=failure) if failure else Mock(return_value=ready)
         return bot

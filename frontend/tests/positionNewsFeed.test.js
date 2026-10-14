@@ -16,3 +16,12 @@ test("server reset discards stale cursor state", () => {
   const incoming = { cursor: 1, reset: true, items: [{ id: "new" }] };
   assert.deepEqual(mergePositionNews({ cursor: 100, items: [{ id: "old" }] }, incoming), incoming);
 });
+
+test("retained articles keep their own signed delta identity instead of borrowing a later receipt", () => {
+  const initial = mergePositionNews(null, { cursor: 1, receipt_key: "receipt-old", items: [{ id: "old", title: "이전 기사" }] });
+  const next = mergePositionNews(initial, { cursor: 2, receipt_key: "receipt-new", items: [{ id: "new", title: "새 기사" }] });
+  assert.equal(next.items.find((item) => item.id === "old")._activity_receipt_key, "receipt-old");
+  assert.equal(next.items.find((item) => item.id === "new")._activity_receipt_key, "receipt-new");
+  const empty = mergePositionNews(next, { cursor: 2, receipt_key: null, items: [] });
+  assert.equal(empty.items.find((item) => item.id === "old")._activity_receipt_key, "receipt-old");
+});

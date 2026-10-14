@@ -17,7 +17,8 @@ from fastapi import HTTPException
 from sqlmodel import select
 
 from . import paper as paper_mod
-from .db import LeaderboardEntry, MacroRow, MacroUnlock, UserMacro, get_session
+from . import points as points_mod
+from .db import LeaderboardEntry, MacroRow, MacroUnlock, User, UserMacro, get_session
 from .engine import Macro, human_summary
 
 _SOURCES = {"created", "leaderboard", "upload", "builder"}
@@ -195,7 +196,8 @@ def save_from_leaderboard(user_id: int, entry_id: int) -> dict:
             raise HTTPException(status_code=404, detail="리더보드 매크로를 찾을 수 없어요.")
 
         source_type = "created" if entry.owner_user_id == user_id else "leaderboard"
-        if entry.owner_user_id not in {None, user_id}:
+        viewer = db.get(User, user_id)
+        if entry.owner_user_id not in {None, user_id} and not points_mod.unlimited(viewer):
             unlocked = db.exec(
                 select(MacroUnlock).where(
                     MacroUnlock.user_id == user_id,

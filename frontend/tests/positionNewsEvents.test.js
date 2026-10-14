@@ -3,6 +3,19 @@ import test from "node:test";
 
 import { positionNewsModule } from "../src/features/agents/positionNews/events.js";
 
+test("article cards link only to the exact signed response that covered their own IDs", () => {
+  const state = { receiptLinks: {
+    first: { eventId: 10, articleIds: ["old"] }, next: { eventId: 20, articleIds: ["new"] },
+  }, data: { context: { session_id: 41 }, items: [
+    { id: "old", title: "이전 기사", _activity_receipt_key: "first" },
+    { id: "new", title: "새 기사", _activity_receipt_key: "next" },
+    { id: "not-signed", title: "서명에 포함되지 않은 기사", _activity_receipt_key: "next" },
+  ] } };
+  const rows = positionNewsModule.buildEvents({ featureStates: { position_news: state } });
+  assert.deepEqual(rows.map((row) => row.activityEventId), [10, 20, null]);
+  assert.deepEqual(rows.map((row) => row.activitySessionId), [41, 41, null]);
+});
+
 test("successful empty collection does not create a chat notification", () => {
   const events = positionNewsModule.buildEvents({ featureStates: { position_news: {
     data: { context: { asset_symbol: "NEW" }, items: [], analysis_status: "empty", collection: { status: "ready" } },

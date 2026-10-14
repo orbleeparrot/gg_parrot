@@ -14,6 +14,7 @@ import hashlib
 import hmac
 import json
 import logging
+from uuid import UUID
 import re
 import time
 
@@ -29,14 +30,16 @@ from . import auth, runner
 from .db import RunSession, RunSessionEvent, get_session
 from .agent_event_schema import (
     SEVERITIES, safe_details as _safe_details, safe_identifier,
-    safe_text as _safe_text, safe_url as _safe_url,
+    safe_text as _safe_text, safe_url as _safe_url, safe_timestamp,
 )
 
 logger = logging.getLogger(__name__)
 RECEIPT_TTL_SECONDS = 600
-TOKEN_MAX_CHARS = 12000
-RECEIPT_MAX_BODY_BYTES = 16_384
-_RECEIPT_PATH = re.compile(r"^/api/me/agents/sessions/\d+/news-receipts/?$")
+TOKEN_MAX_CHARS = 24000
+RECEIPT_MAX_BODY_BYTES = 32_768
+_RECEIPT_PATH = re.compile(r"^/api/me/agents/sessions/[^/]+/news-receipts/?$")
+_OBSERVATION_PATH = re.compile(r"^/api/me/agents/sessions/[^/]+/observations/?$")
+_RUNNER_EVENTS_PATH = re.compile(r"^/api/runner/sessions/[^/]+/events/?$")
 _DOMAIN = b"gg-parrot-agent-news-receipt-v1:"
 _NEWS_KINDS = ("news", "news_error")
 _CATEGORIES = {
@@ -49,13 +52,17 @@ _STATUSES = frozenset({"ready", "pending", "empty", "error", "partial", "process
 
 
 class NewsReceiptBodyLimit:
-    """Bound only receipt JSON before FastAPI parses it or authenticates it."""
+    """Bound activity writes before parsing/authentication, even invalid ids."""
 
     def __init__(self, app) -> None:
         self.app = app
 
     async def __call__(self, scope, receive, send) -> None:
-        if scope["type"] != "http" or not _RECEIPT_PATH.fullmatch(scope.get("path") or ""):
+        path = scope.get("path") or ""
+        maximum = (RECEIPT_MAX_BODY_BYTES if _RECEIPT_PATH.fullmatch(path)
+                   else 8192 if _OBSERVATION_PATH.fullmatch(path)
+                   else 262144 if _RUNNER_EVENTS_PATH.fullmatch(path) else 0)
+        if scope["type"] != "http" or not maximum:
             await self.app(scope, receive, send)
             return
         declared = Headers(scope=scope).get("content-length")
@@ -64,9 +71,9 @@ class NewsReceiptBodyLimit:
                 length = int(declared)
             except ValueError:
                 length = -1
-            if length < 0 or length > RECEIPT_MAX_BODY_BYTES:
-                await JSONResponse({"detail": "뉴스 수신 확인 요청의 크기가 올바르지 않아요."},
-                    status_code=413 if length > RECEIPT_MAX_BODY_BYTES else 400,
+            if length < 0 or length > maximum:
+                await JSONResponse({"detail": "활동 기록 요청의 크기가 올바르지 않아요."},
+                    status_code=413 if length > maximum else 400,
                     headers={"Cache-Control": "private, no-store"})(scope, receive, send)
                 return
         received = 0
@@ -76,8 +83,8 @@ class NewsReceiptBodyLimit:
             message = await receive()
             if message["type"] == "http.request":
                 received += len(message.get("body") or b"")
-                if received > RECEIPT_MAX_BODY_BYTES:
-                    raise HTTPException(413, "뉴스 수신 확인 요청이 너무 커요.",
+                if received > maximum:
+                    raise HTTPException(413, "활동 기록 요청이 너무 커요.",
                                         headers={"Cache-Control": "private, no-store"})
             return message
 
@@ -125,10 +132,12 @@ def _event_view(row: RunSessionEvent) -> dict:
     category = "news" if row.kind in _NEWS_KINDS else "trade" if row.kind in _CATEGORIES["trade"] else (
         "error" if row.kind == "error" else "execution")
     request_failure = row.event_name == "news.request_failed"
+    browser = row.component == "browser_observation"
+    publication = row.component == "news_collector"
     return {
-        "id": row.id, "kind": row.kind, "category": category,
-        "source": "news_request" if request_failure else "news_receipt" if row.kind in _NEWS_KINDS else "execution",
-        "source_label": "서버 뉴스 응답 생성 실패" if request_failure else "뉴스 응답 수신 확인" if row.kind in _NEWS_KINDS else "실행 기록",
+        "id": row.id, "session_id": row.session_id, "kind": row.kind, "category": category,
+        "source": "browser_observation" if browser else "news_collector" if publication else "news_request" if request_failure else "news_receipt" if row.kind in _NEWS_KINDS else "execution",
+        "source_label": "브라우저 관측" if browser else "새 기사 준비 완료" if publication else "서버 뉴스 응답 생성 실패" if request_failure else "뉴스 응답 수신 확인" if row.kind in _NEWS_KINDS else "실행 기록",
         "ts": occurrence,
         "ts_kst": datetime.fromisoformat(occurrence).astimezone(timezone(timedelta(hours=9))).strftime("%m/%d %H:%M:%S")
                   if occurrence else "",
@@ -280,6 +289,57 @@ def record_news_request_failure(user_id: int, session_id: int, status: int,
     return bool(added)
 
 
+_BROWSER_EVENTS = frozenset("browser." + name + "_observed" for name in (
+    "execution_state", "risk", "strategy_reference", "connection", "whale_trade", "onchain_balance"))
+_OBSERVATION_FIELDS = frozenset({"module", "observation_type", "state", "title", "summary", "source_label",
+    "reference_id", "original_occurred_at", "metric_value", "threshold", "interval", "resolved", "condition_key"})
+
+
+def record_observation(user_id: int, session_id: int, payload: dict, *, db: Session) -> dict:
+    """Persist what THIS browser observed, never claim an exchange/server event.
+
+    Immutable client UUID is created at observation, not at retries. An ended
+    run may receive the observation of its end; no trading state is mutated.
+    """
+    row = db.get(RunSession, session_id)
+    if row is None or row.user_id != user_id:
+        raise HTTPException(404, "세션을 찾을 수 없어요.")
+    invalid = HTTPException(422, "브라우저 관측 기록 요청이 올바르지 않아요.")
+    if (not isinstance(payload, dict) or set(payload) != {"client_event_id", "event_name", "observed_at", "details"}
+            or not isinstance(payload.get("event_name"), str)
+            or payload["event_name"] not in _BROWSER_EVENTS or not isinstance(payload.get("details"), dict)):
+        raise invalid
+    try:
+        identity = str(UUID(payload["client_event_id"]))
+    except (TypeError, ValueError, AttributeError):
+        raise invalid from None
+    observed_at = safe_timestamp(payload.get("observed_at"))
+    if not observed_at:
+        raise invalid
+    details = _safe_details({key: value for key, value in payload["details"].items() if key in _OBSERVATION_FIELDS})
+    if not details.get("title"):
+        raise invalid
+    details["verification"] = "browser_observation_not_exchange_event"
+    key = "browser:" + identity
+    previous = db.exec(select(RunSessionEvent).where(RunSessionEvent.session_id == session_id,
+                                                   RunSessionEvent.event_key == key)).first()
+    recorded = False
+    if previous is None:
+        recorded = bool(runner._append_events(db, row, [{
+            "ts": observed_at, "kind": "info", "severity": "INFO",
+            "event_name": payload["event_name"], "event_key": key, "_notify": False,
+            "message": details["title"] + (" · " + details["summary"] if details.get("summary") else ""),
+            "details": details,
+        }], component="browser_observation"))
+    event = previous or db.exec(select(RunSessionEvent).where(RunSessionEvent.session_id == session_id,
+                                                            RunSessionEvent.event_key == key)).first()
+    if event is None:
+        raise HTTPException(503, "관측 내용은 표시됐지만 원본 기록을 저장하지 못했어요.")
+    view = _event_view(event)
+    db.commit()
+    return {"ok": True, "recorded": recorded, "event_id": view["id"], "event": view}
+
+
 def make_news_receipt(user_id: int, session: dict, payload: dict) -> dict:
     """Issue a short-lived bounded capability with a request-time-free identity.
 
@@ -306,14 +366,15 @@ def make_news_receipt(user_id: int, session: dict, payload: dict) -> dict:
         "asset_symbol": asset, "count": len(items), "collection_status": status,
         "translation_status": translation_status, "pending_count": pending_count,
         "source_counts": dict(Counter(_safe_text(item.get("source"), 40) or "출처 미상" for item in items)),
-        "examples": items[:3], **({"cursor": payload["cursor"]} if payload.get("cursor") is not None else {}),
+        "examples": items[:3], "article_ids": [str(item["id"]) for item in items if item.get("id") is not None],
+        **({"cursor": payload["cursor"]} if payload.get("cursor") is not None else {}),
         **({"snapshot_id": payload["snapshot_id"]} if payload.get("snapshot_id") is not None else {}),
         **{key: collection[key] for key in (
             "collection_run_id", "flow_run_id", "task_run_id", "cache_hit", "reused", "collected_at",
             "source_results",
             "last_success_at", "next_collection_ms", "duration_ms", "attempt", "max_attempts", "retry_at", "retryable", "terminal",
             "fetched_count", "deduped_count", "filtered_count", "stored_count", "error_code", "error_type",
-            "http_status", "request_id") if key in collection},
+            "http_status", "request_id", "source_event_id", "source_occurred_at") if key in collection},
     })
     failed = status == "error" or translation_status == "error"
     if items:
@@ -422,4 +483,5 @@ def record_news_receipt(user_id: int, session_id: int, token: str, *, db: Sessio
         # Never include signed tokens, raw provider errors or credentials.
         logger.warning("Agent news receipt storage unavailable (session=%s)", session_id)
         raise HTTPException(503, "뉴스는 표시됐지만 수신 기록 저장을 완료하지 못했어요.") from None
-    return {"ok": True, "recorded": recorded, "event_id": event_id}
+    return {"ok": True, "recorded": recorded, "event_id": event_id, "receipt_key": claim["key"],
+            "article_ids": (claim.get("details") or {}).get("article_ids", [])}

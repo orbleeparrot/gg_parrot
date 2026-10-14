@@ -5,7 +5,8 @@ import { createPortal } from "react-dom";
 import { useToastHost } from "./NotificationToasts.jsx";
 import { Icon } from "./icons.jsx";
 
-export default function AppToast({ title, body = "", label = "완료", onClose }) {
+// tone="error": 방금 누른 일이 실패했다 — 같은 자리 · 같은 모양, 아이콘만 ×(빨강).
+export default function AppToast({ title, body = "", label = "완료", tone = "done", onClose }) {
   const host = useToastHost();
   const [leaving, setLeaving] = useState(false);
   if (!host) return null;
@@ -15,7 +16,7 @@ export default function AppToast({ title, body = "", label = "완료", onClose }
   };
   return createPortal(
     <div className={"ggp-toast" + (leaving ? " is-leaving" : "")} onAnimationEnd={onAnimationEnd}>
-      <span className="ggp-toast-icon is-done" aria-hidden="true"><Icon name="check" size={20} /></span>
+      <span className={"ggp-toast-icon " + (tone === "error" ? "is-error" : "is-done")} aria-hidden="true"><Icon name={tone === "error" ? "x" : "check"} size={20} /></span>
       <span className="ggp-toast-text">
         <span className="ggp-toast-meta t-caption"><span>{label}</span><span>방금 전</span></span>
         <span className="ggp-toast-title">{title}</span>

@@ -18,7 +18,7 @@ const KIND_LABELS = {
 };
 
 export const SESSION_LOG_SEVERITIES = ["DEBUG", "INFO", "WARN", "ERROR", "UNKNOWN"];
-export const SESSION_LOG_COMPONENTS = ["runner", "server", "engine", "news_delivery"];
+export const SESSION_LOG_COMPONENTS = ["runner", "server", "engine", "news_delivery", "browser_observation"];
 
 // One canonical query defines both the request and its cursor/result identity.
 // Filters describe server reception time, not a possibly delayed runner clock.
@@ -67,6 +67,7 @@ const VERIFICATION_NOTES = Object.freeze({
   runner_reported_not_exchange_verified: "실행기 보고 · 거래소 독립 검증 아님",
   server_command_state: "서버 명령 상태 · 거래소 체결 확인 아님",
   server_signal_not_exchange_order: "서버 조건 신호 · 거래소 주문 아님",
+  browser_observation_not_exchange_event: "브라우저 관측 · 서버 명령/거래소 체결 증거 아님",
 });
 const RECONCILIATION_NOTES = Object.freeze({
   simulated_fee_model: "모의 수수료 모델 · 실제 거래소 수수료 아님",

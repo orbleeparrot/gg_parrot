@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import TierIcon from "../components/TierIcon.jsx";
 import useBoardList from "../hooks/useBoardList.js";
 import { useAuth } from "../lib/auth.js";
 import { boardFullTime, boardTime, kstDateTime, pageWindow } from "../lib/boardText.js";
@@ -135,7 +136,7 @@ export function PostRow({ post, now, current = false }) {
           {post.comment_count > 0 ? <span className="board-count num" aria-hidden="true">{post.comment_count}</span> : null}
           {post.has_image ? <span className="board-mark" aria-hidden="true"><ImageIcon /></span> : null}
         </span>
-        <span className="board-author" aria-hidden="true"><AuthorAvatar userId={post.author_user_id} src={post.author_avatar_url} name={post.author_name} size={20} /><span className="board-author-name">{post.author_name}</span></span>
+        <span className="board-author" aria-hidden="true"><AuthorAvatar userId={post.author_user_id} src={post.author_avatar_url} name={post.author_name} size={20} /><span className="board-author-name">{post.author_name}</span><TierIcon name={post.author_tier} size={16} labelled /></span>
         <time className={`board-time${isToday ? " is-today" : " num"}`} dateTime={when || undefined} title={full} aria-hidden="true">{time}</time>
         <span className="board-views num" aria-hidden="true">{post.views || 0}</span>
       </Link>

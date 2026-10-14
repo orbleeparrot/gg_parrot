@@ -298,7 +298,8 @@ class OutboxRetentionTests(unittest.TestCase):
     def test_legacy_schema_upgrade_preserves_payload_and_expires_old_known_timestamp(self):
         old, unknown = self.event(1), self.event(2)
         old["ts"] = "2020-01-01T00:00:00Z"
-        with sqlite3.connect(self.path) as db:
+        # sqlite3 의 with 는 커밋만 하고 연결을 닫지 않는다 — Windows 는 열린 파일을 지우지 못해 임시 폴더 정리가 실패한다.
+        with contextlib.closing(sqlite3.connect(self.path)) as db, db:
             db.execute("CREATE TABLE pending_events(seq INTEGER PRIMARY KEY AUTOINCREMENT, account_scope TEXT NOT NULL, "
                        "session_id INTEGER NOT NULL,event_key TEXT NOT NULL,payload TEXT NOT NULL, UNIQUE(account_scope,session_id,event_key))")
             for event in (old, unknown):

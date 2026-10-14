@@ -1013,3 +1013,31 @@ def test_logged_retry_time_matches_the_hold_after_a_failed_commit_retry(live_a, 
                                                        RunSessionEvent.event_name == "engine.entry_rolled_back")).all()
         assert json.loads(row.details_json)["retry_at"] == hold
         assert json.loads(db.get(RunSession, sid).state_json)["entry_hold_until_ms"] == hold
+
+
+def test_log_does_not_claim_a_wait_that_already_ended(live_a):
+    """같은 ack 가 대기가 끝난 뒤에야 다시 오면 '1분 동안' 이 아니라 이미 지났다고 적는다(대기 시각 자체는 그대로)."""
+    sid, live, loop, _ = live_a
+    loop.run_until_complete(eng._tick_once(live))
+    with get_session() as db:
+        cmd_id = _commands(db, sid)[0].id
+    ack = [{"command_id": cmd_id, "ok": False, "error": "insufficient_funds"}]
+    first = eng._now_ms()
+    with get_session() as db:
+        row = db.get(RunSession, sid)
+        row.in_position = False
+        eng.exchange_commands(db, row, ack, first, previous_qty=0.0)
+        db.rollback()  # 저장 실패
+    hold = live.driver.entry_hold_until_ms
+    _exchange(sid, ack, now_ms=hold + 1_000)
+    with get_session() as db:
+        (row,) = db.exec(select(RunSessionEvent).where(RunSessionEvent.session_id == sid,
+                                                       RunSessionEvent.event_name == "engine.entry_rolled_back")).all()
+        assert "대기 시간은 이미 지났어요" in row.message and "분 동안" not in row.message
+        assert json.loads(row.details_json)["retry_at"] == hold
+
+
+def test_hold_phrase_rounds_up_remaining_minutes():
+    assert eng._hold_phrase(60_001, 0, "진입") == "2분 동안은 새로 진입하지 않아요"
+    assert eng._hold_phrase(60_000, 0, "매수") == "1분 동안은 새로 매수하지 않아요"
+    assert eng._hold_phrase(0, 0, "진입") == "대기 시간은 이미 지났어요"

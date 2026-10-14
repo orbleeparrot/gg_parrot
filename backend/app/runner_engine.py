@@ -856,8 +856,11 @@ def _held_until(state_json: str, fallback: int) -> int:
     return held or fallback
 
 
-def _minutes_left(until_ms: int, now_ms: int) -> int:
-    return max(1, -(-(until_ms - now_ms) // 60_000))
+def _hold_phrase(until_ms: int, now_ms: int, verb: str) -> str:
+    """기록 문구의 대기 안내. 대기가 이미 끝났으면(늦게 온 같은 ack 등) 그렇다고 쓴다 — '1분 동안' 으로 꾸미지 않는다."""
+    if until_ms <= now_ms:
+        return "대기 시간은 이미 지났어요"
+    return f"{-(-(until_ms - now_ms) // 60_000)}분 동안은 새로 {verb}하지 않아요"
 
 
 def _refusal(cmd: RunnerCommand, reason: str) -> dict:
@@ -1017,7 +1020,7 @@ def settle_unexecuted_entries(db, row: RunSession, changed: List[RunnerCommand],
         where = "추가 진입 전으로" if snap["state"].get("in_position") else "진입 전으로"
         events.append(_engine_rollback_event(
             cmd, "engine.entry_rolled_back", "warn", "WARN",
-            f"{why} 서버 전략도 {where} 되돌렸어요 · {_minutes_left(held, now_ms)}분 동안은 새로 진입하지 않아요",
+            f"{why} 서버 전략도 {where} 되돌렸어요 · {_hold_phrase(held, now_ms, '진입')}",
             retry_at=held, count=len(to_cancel)))
         rolled = cmd
         break
@@ -1026,7 +1029,7 @@ def settle_unexecuted_entries(db, row: RunSession, changed: List[RunnerCommand],
         events.append(_engine_rollback_event(
             cmd, "engine.grid_lot_removed", "warn", "WARN",
             f"그리드 {cmd.signal_price:g} 칸 매수가 나가지 않아 그 칸만 서버 전략에서 뺐어요"
-            f" · 다른 칸 체결은 그대로 · {_minutes_left(grid_hold, now_ms)}분 동안은 새로 매수하지 않아요",
+            f" · 다른 칸 체결은 그대로 · {_hold_phrase(grid_hold, now_ms, '매수')}",
             count=len(grid_undone), retry_at=grid_hold))
     if grid_undone:
         rolled = rolled or grid_undone[-1]

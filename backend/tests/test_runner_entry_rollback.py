@@ -654,7 +654,7 @@ def test_grid_buys_go_out_together_and_a_failed_one_is_removed_alone(live_grid):
               in_position=True, position_qty=1.64, previous_qty=0.79)
     with get_session() as db:
         assert db.get(RunnerCommand, ids[2]).rollback_state == eng.ROLLED_BACK
-        assert "그리드 매수 1건" in _messages(db, sid)[-1] and "그 칸만" in _messages(db, sid)[-1]
+        assert "그리드 122 칸 매수가 나가지 않아 그 칸만" in _messages(db, sid)[-1]
     grid = live.driver.state()["legs"][0]["strategy"]["grid"]
     assert sorted(row["level"] for row in grid) == [7, 9]  # 118 · 126 칸은 그대로, 122 칸만 빠졌다
     assert live.driver.state()["entry_hold_until_ms"] > eng._now_ms()
@@ -937,3 +937,107 @@ def test_rollback_gives_up_cleanly_when_the_loop_is_busy(monkeypatch):
         assert live.driver.state()["in_position"] is True
     finally:
         runner.close()
+
+
+def test_rollback_records_are_engine_facts_not_runner_reports(live_a):
+    """되돌리기 · 거절 기록은 서버(엔진)가 정한 사실이다 — 실행기 보고(runner.message)로 표시되면 출처가 틀린다."""
+    sid, live, loop, _ = live_a
+    loop.run_until_complete(eng._tick_once(live))
+    with get_session() as db:
+        cmd_id = _commands(db, sid)[0].id
+    _exchange(sid, [{"command_id": cmd_id, "ok": False, "error": "insufficient_funds"}])
+    with get_session() as db:
+        rows = db.exec(select(RunSessionEvent).where(RunSessionEvent.session_id == sid,
+                                                     RunSessionEvent.event_name == "engine.entry_rolled_back")).all()
+        assert len(rows) == 1
+        row = rows[0]
+        details = json.loads(row.details_json)
+        assert row.component == "engine" and row.operation_id == f"command:{cmd_id}" and row.severity == "WARN"
+        assert details["ack_source"] == "engine" and details["command_id"] == cmd_id
+        assert not db.exec(select(RunSessionEvent).where(RunSessionEvent.session_id == sid,
+                                                         RunSessionEvent.event_name == "runner.message")).all()
+    # 같은 판단이 다시 기록돼도(저장 실패 뒤 재시도) 한 줄이다.
+    with get_session() as db:
+        row_ = db.get(RunSession, sid)
+        from app.runner import _append_events
+        _append_events(db, row_, [eng._engine_rollback_event(db.get(RunnerCommand, cmd_id), "engine.entry_rolled_back",
+                                                             "warn", "WARN", "다시")], component="engine")
+        db.commit()
+        assert len(db.exec(select(RunSessionEvent).where(RunSessionEvent.session_id == sid,
+                                                         RunSessionEvent.event_name == "engine.entry_rolled_back")).all()) == 1
+
+
+def test_rollback_refusal_is_an_engine_record(live_a):
+    sid, live, loop, _ = live_a
+    loop.run_until_complete(eng._tick_once(live))
+    with get_session() as db:
+        cmd_id = _commands(db, sid)[0].id
+    _exchange(sid, [{"command_id": cmd_id, "ok": False, "error": "x"}], in_position=True, position_qty=3.0, previous_qty=3.0)
+    with get_session() as db:
+        (row,) = db.exec(select(RunSessionEvent).where(RunSessionEvent.session_id == sid,
+                                                       RunSessionEvent.event_name == "engine.rollback_refused")).all()
+        assert row.component == "engine" and json.loads(row.details_json)["reason"] == "runner_holds"
+
+
+def test_every_removed_grid_lot_is_logged_against_its_own_command(live_grid):
+    """그리드 칸 여러 개를 함께 뺐으면 칸(명령)마다 기록이 있어야 명령별 검색에 빠지지 않는다."""
+    sid, live, loop, price = live_grid
+    ids = _grid_with_two_more_buys(sid, live, loop, price)
+    _exchange(sid, [{"command_id": ids[1], "ok": False, "error": "insufficient_funds"},
+                    {"command_id": ids[2], "ok": False, "error": "insufficient_funds"}],
+              in_position=True, position_qty=0.79, previous_qty=0.79)
+    with get_session() as db:
+        rows = db.exec(select(RunSessionEvent).where(RunSessionEvent.session_id == sid,
+                                                     RunSessionEvent.event_name == "engine.grid_lot_removed")).all()
+        assert sorted(row.operation_id for row in rows) == sorted(f"command:{cid}" for cid in ids[1:])
+        assert all(row.component == "engine" for row in rows)
+
+
+def test_logged_retry_time_matches_the_hold_after_a_failed_commit_retry(live_a, monkeypatch):
+    """되돌린 뒤 저장이 실패하고 같은 ack 가 1분 뒤 다시 와도, 기록의 retry_at 은 드라이버에 실제로 걸린 대기와 같다."""
+    sid, live, loop, _ = live_a
+    loop.run_until_complete(eng._tick_once(live))
+    with get_session() as db:
+        cmd_id = _commands(db, sid)[0].id
+    ack = [{"command_id": cmd_id, "ok": False, "error": "insufficient_funds"}]
+    first = eng._now_ms()
+    with get_session() as db:
+        row = db.get(RunSession, sid)
+        row.in_position = False
+        eng.exchange_commands(db, row, ack, first, previous_qty=0.0)
+        db.rollback()  # 저장 실패
+    hold = live.driver.entry_hold_until_ms
+    _exchange(sid, ack, now_ms=first + 60_000)
+    with get_session() as db:
+        (row,) = db.exec(select(RunSessionEvent).where(RunSessionEvent.session_id == sid,
+                                                       RunSessionEvent.event_name == "engine.entry_rolled_back")).all()
+        assert json.loads(row.details_json)["retry_at"] == hold
+        assert json.loads(db.get(RunSession, sid).state_json)["entry_hold_until_ms"] == hold
+
+
+def test_log_does_not_claim_a_wait_that_already_ended(live_a):
+    """같은 ack 가 대기가 끝난 뒤에야 다시 오면 '1분 동안' 이 아니라 이미 지났다고 적는다(대기 시각 자체는 그대로)."""
+    sid, live, loop, _ = live_a
+    loop.run_until_complete(eng._tick_once(live))
+    with get_session() as db:
+        cmd_id = _commands(db, sid)[0].id
+    ack = [{"command_id": cmd_id, "ok": False, "error": "insufficient_funds"}]
+    first = eng._now_ms()
+    with get_session() as db:
+        row = db.get(RunSession, sid)
+        row.in_position = False
+        eng.exchange_commands(db, row, ack, first, previous_qty=0.0)
+        db.rollback()  # 저장 실패
+    hold = live.driver.entry_hold_until_ms
+    _exchange(sid, ack, now_ms=hold + 1_000)
+    with get_session() as db:
+        (row,) = db.exec(select(RunSessionEvent).where(RunSessionEvent.session_id == sid,
+                                                       RunSessionEvent.event_name == "engine.entry_rolled_back")).all()
+        assert "대기 시간은 이미 지났어요" in row.message and "분 동안" not in row.message
+        assert json.loads(row.details_json)["retry_at"] == hold
+
+
+def test_hold_phrase_rounds_up_remaining_minutes():
+    assert eng._hold_phrase(60_001, 0, "진입") == "2분 동안은 새로 진입하지 않아요"
+    assert eng._hold_phrase(60_000, 0, "매수") == "1분 동안은 새로 매수하지 않아요"
+    assert eng._hold_phrase(0, 0, "진입") == "대기 시간은 이미 지났어요"

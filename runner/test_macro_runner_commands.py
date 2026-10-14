@@ -13,6 +13,7 @@ def _bot(in_position=False, held=0.0, entry=0.0):
     bot.quote = "USDT"
     bot.leverage = 1
     bot.log = Mock()
+    bot.on_log = Mock()  # Existing GUI projection is separate from canonical event emission.
     bot.in_position, bot.held_qty, bot.entry_price = in_position, held, entry
     bot.realized, bot.step = 0.0, 1.0
     bot.position_uncertain = False
@@ -396,7 +397,7 @@ class HeartbeatProtocolTests(unittest.TestCase):
         self.assertEqual(client.unsent_acks, [{"command_id": 2, "ok": True}])
 
     def test_heartbeat_prepends_unsent_acks_next_time(self):
-        client = macro_runner.ServerClient("key", base="http://x")
+        client = macro_runner.ServerClient("key", base="http://x", outbox_path=":memory:", cli_sink=lambda _event: None)
         client.session_id = 3
         with patch.object(macro_runner.requests, "post", side_effect=OSError("down")):
             client.heartbeat({}, acks=[{"command_id": 2, "ok": True}])
@@ -408,7 +409,7 @@ class HeartbeatProtocolTests(unittest.TestCase):
         self.assertEqual(client.unsent_acks, [])
 
     def test_heartbeat_without_session_is_a_noop(self):
-        client = macro_runner.ServerClient("key", base="http://x")
+        client = macro_runner.ServerClient("key", base="http://x", outbox_path=":memory:", cli_sink=lambda _event: None)
         with patch.object(macro_runner.requests, "post") as post:
             out = client.heartbeat({}, acks=[{"command_id": 1, "ok": True}])
         post.assert_not_called()

@@ -1,4 +1,5 @@
 import { buildAgentEvents } from "./registry.js";
+import { newObservationId } from "./activityEvidence.js";
 
 const MAX_EVENTS = 200;
 const MAX_SEEN = 2000;
@@ -31,6 +32,7 @@ export function advanceActivityTimeline(previous, context) {
         && event.conditionKey === candidate.resolvesCondition && !event.resolvedAt ? {
           ...event, originalTitle: event.title, title: candidate.title, summary: candidate.summary,
           severity: "info", expression: "calm", resolvedAt: receivedAt, notify: false,
+          observationId: newObservationId(), observedAt: receivedAt,
         } : event);
       continue;
     }
@@ -43,6 +45,7 @@ export function advanceActivityTimeline(previous, context) {
             ...event, originalTitle: event.title, title: "이전 연결 경고 · 상태 변경",
             summary: "최근 확인 결과는 새 상태 안내를 확인해 주세요.",
             severity: "info", expression: "calm", resolvedAt: receivedAt, notify: false,
+            observationId: newObservationId(), observedAt: receivedAt,
           } : event);
       }
     }
@@ -54,7 +57,7 @@ export function advanceActivityTimeline(previous, context) {
       // or announcing the same article again.
       const index = events.findIndex((event) => event.id === id);
       if (index >= 0) {
-        const updated = { ...candidate, id, occurredAt: events[index].occurredAt };
+        const updated = { ...events[index], ...candidate, id, occurredAt: events[index].occurredAt };
         if (JSON.stringify(updated) !== JSON.stringify(events[index])) {
           events = events.map((event, i) => i === index ? updated : event);
         }
@@ -62,7 +65,10 @@ export function advanceActivityTimeline(previous, context) {
       continue;
     }
     seen[id] = receivedAt;
-    events = [...events, { ...candidate, id, occurredAt: occurredAt(candidate.occurredAt, receivedAt) }];
+    events = [...events, { ...candidate, id, occurredAt: occurredAt(candidate.occurredAt, receivedAt),
+      ...(!candidate.isNewsArticle && candidate.module !== "runner_log" ? {
+        observationId: newObservationId(), observedAt: receivedAt,
+      } : {}) }];
   }
   const seenIds = Object.keys(seen);
   for (const id of seenIds.slice(0, Math.max(0, seenIds.length - MAX_SEEN))) delete seen[id];

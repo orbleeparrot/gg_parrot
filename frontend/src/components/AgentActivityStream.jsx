@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   AGENT_MODULE_MAP,
   AGENT_MODULES,
@@ -7,6 +8,8 @@ import {
 import { advanceActivityTimeline, emptyActivityTimeline } from "../features/agents/activityTimeline.js";
 import { countNewObservations, positionNewsNotice, publicationLabel, publicationTime } from "../features/agents/positionNews/presentation.js";
 import { whaleActivityNotice } from "../features/agents/modules/leader.js";
+import { activityEventId, activityLogLink, observationForEvent } from "../features/agents/activityEvidence.js";
+import { useActivityObservations } from "../features/agents/useActivityObservations.js";
 import RunResultScreen from "./RunResultScreen.jsx";
 import CommunityBodySummary from "./CommunityBodySummary.jsx";
 import { Icon } from "./icons.jsx";
@@ -62,12 +65,13 @@ function activityTime(value, now, fallback = "방금 확인") {
   return absoluteActivityTime(parsed, fallback);
 }
 
-function ModuleTabs({ selected, onSelect, entitlements }) {
-  const items = [{ key: "all", label: "전체" }, ...AGENT_MODULES];
+function ModuleTabs({ selected, onSelect, entitlements, hasActivityLog }) {
+  const items = [{ key: "all", label: "전체" }, ...AGENT_MODULES,
+    ...(hasActivityLog ? [{ key: "activity_logs", label: "활동 로그" }] : [])];
   return (
     <div className="agent-chat-tabs" role="group" aria-label="에이전트 대화 종류">
       {items.map((item) => {
-        const access = item.key === "all" ? "enabled" : accessFor(item, entitlements);
+        const access = item.key === "all" || item.key === "activity_logs" ? "enabled" : accessFor(item, entitlements);
         const plan = item.minimumPlan && item.minimumPlan !== "free"
           ? `, ${PLAN_LABELS[item.minimumPlan]} 구독 기능`
           : "";
@@ -117,8 +121,12 @@ export default function AgentActivityStream({
   observedAt,
   entitlements = null,
   onUpgrade,
+  selectedView,
+  onSelectView,
+  activityLog,
 }) {
-  const [filter, setFilter] = useState("all");
+  const [localFilter, setFilter] = useState("all");
+  const filter = selectedView ?? localFilter;
   // 실행이 끝나면 결과 화면이 기본이고, 기록은 원할 때만 연다.
   const [showLog, setShowLog] = useState(false);
   const [newMessageCount, setNewMessageCount] = useState(0);
@@ -139,10 +147,12 @@ export default function AgentActivityStream({
   }, [context]);
 
   const events = useMemo(() => {
+    if (timeline.sessionId !== session?.session_id) return [];
     return timeline.events
       .filter((event) => accessFor(AGENT_MODULE_MAP.get(event.module), entitlements) === "enabled")
       .sort((left, right) => eventTime(right.occurredAt) - eventTime(left.occurredAt));
-  }, [entitlements, timeline.events]);
+  }, [entitlements, session?.session_id, timeline.events, timeline.sessionId]);
+  const observations = useActivityObservations(session?.session_id, events);
 
   const selectedModule = filter === "all" ? null : AGENT_MODULE_MAP.get(filter);
   const selectedAccess = selectedModule ? accessFor(selectedModule, entitlements) : "enabled";
@@ -213,6 +223,7 @@ export default function AgentActivityStream({
     scrollRequestedRef.current = true;
     setNewMessageCount(0);
     setFilter(nextFilter);
+    onSelectView?.(nextFilter);
   }
 
   function scrollToLatest() {
@@ -230,7 +241,7 @@ export default function AgentActivityStream({
   useEffect(() => {
     if (ended) setShowLog(false);
   }, [ended]);
-  if (ended && !showLog) {
+  if (ended && !showLog && filter !== "activity_logs") {
     return (
       <aside className="agent-chat" aria-label={`${symbol} 실행 결과`}>
         <RunResultScreen session={session} onShowLog={() => setShowLog(true)} />
@@ -242,17 +253,17 @@ export default function AgentActivityStream({
     <aside className="agent-chat" aria-label={`${symbol} 껄무새 에이전트 기록`}>
       <header className="agent-chat-head">
         <div className={`agent-chat-controls${ended ? " has-result" : ""}`}>
-          <ModuleTabs selected={filter} onSelect={selectFilter} entitlements={entitlements} />
+          <ModuleTabs selected={filter} onSelect={selectFilter} entitlements={entitlements} hasActivityLog={!!activityLog} />
           {ended ? (
             // 왼쪽 분기 탭과 같은 트랙·글자로 — 다른 부품처럼 보이지 않게.
             <div className="agent-chat-tabs agent-chat-result-toggle" role="group" aria-label="결과 화면">
-              <button type="button" onClick={() => setShowLog(false)}>결과 보기</button>
+              <button type="button" onClick={() => { setShowLog(false); selectFilter("all"); }}>결과 보기</button>
             </div>
           ) : null}
         </div>
       </header>
 
-      <div className="agent-chat-stream flex flex-col">
+      {filter === "activity_logs" && activityLog ? activityLog : <div className="agent-chat-stream flex flex-col">
         <div
           ref={logRef}
           className="agent-chat-log flex-1"
@@ -278,6 +289,10 @@ export default function AgentActivityStream({
               const plan = module?.minimumPlan || "free";
               const planLabel = PLAN_LABELS[plan] || String(plan).toUpperCase();
               const hasTierBadge = plan !== "free";
+              const record = observations.records[event.observationId];
+              const eventId = activityEventId(event, session?.session_id) || (record?.status === "ready" ? record.eventId : null);
+              const originalLog = activityLogLink(session?.session_id, eventId);
+              const browserObservation = !!observationForEvent(event);
               return (
                 <article
                   key={event.id}
@@ -304,6 +319,14 @@ export default function AgentActivityStream({
                     <CommunityBodySummary summary={event.communitySummary} />
                     {event.summary ? <p className="agent-message-summary">{event.summary}</p> : null}
                     {event.detail ? <p className="agent-message-detail">{event.detailLabel || "판단 근거"} · {event.detail}</p> : null}
+                    {event.originalTitle && event.module === "runner_log" ? <p className="agent-message-detail">저장된 원문: {event.originalTitle}</p> : null}
+                    <p className="agent-message-detail">
+                      {originalLog ? <Link to={originalLog}>{event.isNewsArticle ? "이 기사 포함 응답 수신 로그" : "해당 로그 보기"} · 사건 #{eventId}</Link>
+                        : browserObservation ? record?.status === "error" ? <>
+                          관측 기록 저장 실패 <button type="button" className="btn btn-s btn-ghost" onClick={() => observations.retry(event)}>기록 다시 저장</button>
+                        </> : "관측 기록 저장 중…" : "원본 연결 없음"}
+                      {browserObservation ? " · 브라우저 관측 · 실제 주문/체결 증거 아님" : ""}
+                    </p>
                     <footer>
                       {event.sourceUrl ? (
                         <a href={event.sourceUrl} target="_blank" rel="noopener noreferrer" aria-label={`${event.sourceLabel} 원문 보기, 새 창`}>
@@ -351,7 +374,7 @@ export default function AgentActivityStream({
             새 관측 {newMessageCount}개 <Icon name="arrowDown" size={14} className="ui-icon-inline" />
           </button>
         ) : null}
-      </div>
+      </div>}
 
       <span className="sr-only" aria-live="polite" aria-atomic="true">{announcement}</span>
     </aside>

@@ -1,0 +1,4 @@
+.agent-session-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+.agent-session-panel > .agent-chat { flex: 1; min-height: 0; height: auto; grid-area: auto; border: 0; }
+.agent-receipt-error { padding: 10px 14px; flex: none; font-size: 13px; line-height: 1.5; color: rgb(var(--c-slate-900)); border-bottom: 1px solid rgb(var(--c-slate-300)); }
+.agent-receipt-error p { margin: 0 0 8px; }

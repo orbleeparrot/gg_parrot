@@ -52,6 +52,7 @@ export const runnerLogModule = {
         && loggedAt !== null && heartbeatAt > loggedAt;
       return {
         id: `runner-log-${session.session_id}-${row.id}`,
+        activityEventId: row.id, activitySessionId: session.session_id,
         module: "runner_log",
         severity: recovered ? "info" : severityFor(kind),
         expression: recovered ? "calm" : expressionFor(kind),

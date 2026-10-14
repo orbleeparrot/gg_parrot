@@ -4,7 +4,18 @@ import {
   ACTIVITY_EVENT, appendToast, badgeText, hasNewerNotifications, isInternalLink, kindLabel, markAllReadLocal, markReadLocal,
   parseNotificationEvent, parseUnreadEvent, pointsOf,
   relativeTime, shouldSignalActivity, streamRetryDelay, unreadAfter,
+  notificationActivityLink, notificationTarget,
 } from "../src/lib/notifications.js";
+
+test("agent notification links use the actual canonical event and never infer old event references", () => {
+  const item = { kind: "agent", session_id: 41, link: "/agents", data: { session_id: 41, activity_event_id: 123 } };
+  assert.equal(notificationActivityLink(item), "/agents?session=41&panel=logs&event=123");
+  assert.equal(notificationTarget(item), notificationActivityLink(item));
+  assert.equal(notificationActivityLink({ ...item, session_id: 42 }), "");
+  assert.equal(notificationActivityLink({ ...item, data: { session_id: 41, event: "fill" } }), "");
+  assert.equal(notificationTarget({ ...item, data: {} }), "/agents");
+  assert.equal(shouldSignalActivity("POST", "/api/me/agents/sessions/41/observations"), false);
+});
 
 test("종류 라벨 — 아는 종류는 한국어, 모르는 종류는 '알림'", () => {
   assert.equal(kindLabel("quest"), "퀘스트");
@@ -63,6 +74,7 @@ test("활동 신호 — 쓰기 요청만, 알림 자체·인증 요청은 제외
   assert.equal(shouldSignalActivity("GET", "/api/backtest"), false);
   assert.equal(shouldSignalActivity("POST", "/api/me/notifications/read"), false);
   assert.equal(shouldSignalActivity("POST", "/api/me/notifications/stream-token"), false);
+  assert.equal(shouldSignalActivity("POST", "/api/me/agents/sessions/12/news-receipts"), false);
   assert.equal(shouldSignalActivity("POST", "/api/auth/login"), false);
   assert.equal(ACTIVITY_EVENT, "ggp:activity");
 });

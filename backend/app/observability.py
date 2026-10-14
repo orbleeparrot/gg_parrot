@@ -57,9 +57,10 @@ def record_request_latency(route: str, duration_ms: float) -> None:
 
 def performance_snapshot() -> dict:
     from .cache_runtime import cache_statistics
+    from .log_retention_runtime import snapshot as retention_snapshot
     with _performance_lock:
         samples = {key: sorted(values) for key, values in _performance_routes.items()}
-    return {"caches": cache_statistics(), "routes": {
+    return {"caches": cache_statistics(), "log_retention": retention_snapshot(), "routes": {
         key: {"samples": len(values), "p50_ms": round(values[math.ceil(len(values) * .5) - 1], 2),
               "p95_ms": round(values[math.ceil(len(values) * .95) - 1], 2)}
         for key, values in samples.items() if values

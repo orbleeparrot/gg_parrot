@@ -2,6 +2,12 @@ import { dedupeNewsItems } from "../../../lib/newsIdentity.js";
 
 // A cursor response carries changed articles, including enrichment updates.
 export function mergePositionNews(current, incoming) {
+  // Tag only this raw delta. Retained earlier articles must never borrow the
+  // newest response receipt, which may cover an entirely different batch.
+  if (incoming && Object.hasOwn(incoming, "receipt_key") && Array.isArray(incoming.items)) {
+    incoming = { ...incoming, items: incoming.items.map((item) => ({ ...item,
+      _activity_receipt_key: typeof incoming.receipt_key === "string" ? incoming.receipt_key : null })) };
+  }
   if (!Number.isSafeInteger(incoming?.cursor) || incoming.reset || !current) {
     return incoming?.items ? { ...incoming, items: dedupeNewsItems(incoming.items) } : incoming;
   }

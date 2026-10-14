@@ -5,7 +5,7 @@
 // 헤더는 backdrop-filter 를 쓰므로 그 안의 fixed 요소는 헤더에 갇힌다 — body 의 토스트 자리로 포털한다.
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { kindLabel, pointsOf } from "../lib/notifications.js";
+import { kindLabel, pointsOf, notificationActivityLink } from "../lib/notifications.js";
 import { toastHost } from "../lib/toastHost.js";
 import NotificationKindIcon from "./notificationKindIcon.jsx";
 import { Icon } from "./icons.jsx";
@@ -67,6 +67,8 @@ function Toast({ toast, onDismiss, onOpen }) {
         </span>
         <button type="button" className="ggp-toast-title ggp-toast-open" onClick={() => { onOpen(item); leave(); }}>{item.title}</button>
         {item.body ? <span className="ggp-toast-body">{item.body}</span> : null}
+        {item.kind === "agent" ? <span className="ggp-toast-body">{notificationActivityLink(item)
+          ? `해당 로그 보기 · 사건 #${item.data.activity_event_id}` : "원본 연결 없음 · 이전 형식 알림"}</span> : null}
       </span>
       <span className="ggp-toast-side">
         <button type="button" className="ggp-toast-close" aria-label="알림 닫기" onClick={leave}>

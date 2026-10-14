@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import math
 import os
 import re
@@ -40,6 +41,7 @@ from .engine import Macro, RuleType
 from .exchanges import is_domestic, normalize_exchange, validate_symbol
 
 _KST = timezone(timedelta(hours=9))
+_log = logging.getLogger(__name__)
 
 # heartbeat 주기(실행기가 서버에 상태를 올리고 종료명령을 받아가는 간격, 초).
 POLL_SECONDS = 5
@@ -703,18 +705,24 @@ def start_session(user: User, payload: dict) -> dict:
         _append_events(db, row, [{
             "ts": now,
             "kind": "start",
+            "severity": "INFO", "event_name": "session.started",
+            "event_key": f"session:{row.id}:started", "operation_id": f"session:{row.id}",
+            "details": {"status": row.status, "runner_version": row.runner_version,
+                        "macro_origin": row.macro_origin, "macro_digest": row.macro_digest},
             "message": (
                 f"실행 시작 · 실행기 v{runner_version or '?'} · {environment_label(row)}"
                 f" · 매크로 {macro_signing.ORIGIN_LABELS.get(macro_origin, macro_origin)}"
                 + (f" · 지문 {macro_digest}" if macro_digest else "")
             ),
-        }])
+        }], component="server")
         # 헤더 알림(에이전트) — 어느 매크로가 어디서 돌기 시작했는지.
         notifications_mod.notify(
             db, user.id, "agent", f"{symbol} 매크로 실행 시작",
             environment_label(row) + (f" · {summary}" if summary else ""),
             "/agents", session_id=row.id,
             data={"event": "start", "symbol": symbol, "testnet": row.testnet, "mode": row.mode},
+            activity={"event_key": f"session:{row.id}:started", "event_name": "session.started",
+                      "occurred_at": now},
         )
         db.commit()
         result = {
@@ -787,9 +795,13 @@ def heartbeat(user: User, session_id: int, snapshot: dict, *, db: Session | None
                 # 종료 중인 세션엔 매매 명령을 주지 않는다(명령 행은 그대로 — 만료로 정리된다).
                 commands = []
         db.add(row)
+        accepted_event_keys = _confirmed_event_keys(db, row, events)
         db.commit()
     notify_sessions_changed(user_id)
-    return {"action": action, "commands": commands}
+    result = {"action": action, "commands": commands}
+    if any(isinstance(event, dict) and event.get("event_key") for event in (events or [])):
+        result["accepted_event_keys"] = accepted_event_keys
+    return result
 
 
 def _alert_pnl_move(db, row: RunSession, previous_pct: float, previously_in_position: bool) -> bool:
@@ -822,6 +834,9 @@ def _alert_pnl_move(db, row: RunSession, previous_pct: float, previously_in_posi
         session_id=row.id,
         data={"event": "pnl", "symbol": row.symbol, "pct": round(pct, 2), "delta": round(delta, 2),
               "direction": direction, "sudden": sudden, "entry_price": row.entry_price, "last_price": row.last_price},
+        activity={"event_name": "session.pnl_observed", "details": {"observed_value": pct,
+                  "threshold": PNL_ALERT_JUMP_PCT if sudden else PNL_ALERT_STEP_PCT,
+                  "price": row.last_price, "verification": "server_observation_not_exchange_fill"}},
     )
     row.pnl_alert_pct = pct
     return True
@@ -877,11 +892,18 @@ def mark_stopped(
             _append_events(db, row, [{
                 "ts": row.stopped_at,
                 "kind": "stop",
+                "severity": "ERROR" if row.status == "error" else "INFO",
+                "event_name": "session.stopped", "event_key": f"session:{row.id}:stopped",
+                "operation_id": f"session:{row.id}",
+                "details": {"status": row.status, "reason": row.note,
+                            "in_position": row.in_position, "position_uncertain": row.position_uncertain,
+                            "realized_pnl": row.realized_pnl, "ack_source": "runner",
+                            "verification": "runner_reported_not_exchange_verified"},
                 "message": ("오류 종료" if row.status == "error" else "종료")
                 + (f" · {row.note}" if row.note else "")
                 + f" · 누적 실현손익 {realized_pnl_text(row)}"
                 + (" · 포지션 보유 중" if row.in_position else ""),
-            }])
+            }], component="server")
             notifications_mod.notify(
                 db, user.id, "agent",
                 f"{row.symbol} 매크로 {'오류 종료' if row.status == 'error' else '실행 종료'}",
@@ -891,7 +913,10 @@ def mark_stopped(
                 "/agents", session_id=row.id,
                 data={"event": "error" if row.status == "error" else "stop",
                       "symbol": row.symbol, "realized_pnl": row.realized_pnl},
+                activity={"event_key": f"session:{row.id}:stopped", "event_name": "session.stopped",
+                          "occurred_at": row.stopped_at},
             )
+        accepted_event_keys = _confirmed_event_keys(db, row, events)
         db.commit()
         if not already_final:
             # 기록이 하나 늘어난 순간에만 정리한다 — 몇 초마다 부르는 목록 조회는 쿼리 한 번으로 둔다.
@@ -902,41 +927,122 @@ def mark_stopped(
     notify_sessions_changed(user.id)
     # v8+ 라면 서버 측 드라이버도 내린다(구버전·이미 없는 세션이면 runner_engine 이 무시한다).
     runner_engine.schedule_stop(session_id)
-    return {"ok": True}
+    result = {"ok": True}
+    if any(isinstance(event, dict) and event.get("event_key") for event in (events or [])):
+        result["accepted_event_keys"] = accepted_event_keys
+    return result
 
 
 # --- 실행 이벤트 로그 ------------------------------------------------------
-def _append_events(db, row: RunSession, events) -> int:
-    """실행기가 보낸 이벤트를 세션에 붙인다(정제·상한 적용). 커밋은 호출자가 한다."""
+def _append_events(db, row: RunSession, events, *, component: str = "runner") -> int:
+    """Persist safe immutable events, without making telemetry a trading prerequisite.
+
+    The default is an unverified runner report. Only server-controlled call sites
+    may pass ``engine``/``server``. Stable keys deduplicate upload retries in the
+    database; old clients omitting a key still retain every emitted row.
+    """
     if not isinstance(events, list) or not events:
         return 0
+    # begin_nested flushes already-pending trading/session changes first. If that
+    # primary write fails, the error must still reach its caller. A subsequent
+    # telemetry failure rolls back ONLY this savepoint, never a command ack.
+    savepoint = db.begin_nested()
+    try:
+        with savepoint:
+            return _append_event_batch(db, row, events, component=component)
+    except Exception:
+        # Do not log the rejected payload, exception text, or credentials.
+        _log.warning("Runner activity log storage unavailable (session=%s)", row.id)
+        return 0
+
+
+def _append_event_batch(db, row: RunSession, events, *, component: str) -> int:
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+    from .agent_event_schema import normalize_event, safe_details
+
+    trusted = component in {"engine", "server", "browser_observation", "news_collector"}
+    component = component if trusted else "runner"
+    batch = [dict(item) for item in events[:EVENT_BATCH_MAX] if isinstance(item, dict)]
+    operation_ids = set()
+    if not trusted:
+        for item in batch:
+            operation = str(item.get("operation_id") or "")[:121]
+            if re.fullmatch(r"command:[1-9][0-9]{0,18}", operation):
+                operation_ids.add(int(operation.split(":")[1]))
+    allowed_commands = set(db.exec(select(RunnerCommand.id).where(
+        RunnerCommand.session_id == row.id, RunnerCommand.id.in_(operation_ids),
+    )).all()) if operation_ids else set()
+    insert = pg_insert if db.get_bind().dialect.name == "postgresql" else sqlite_insert
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
     added = 0
     notified = False
-    for item in events[:EVENT_BATCH_MAX]:
-        if not isinstance(item, dict):
-            continue
+    runner_names = {"runner.message", "runner.order_result", "runner.command_received",
+                    "runner.order_requested", "runner.order_failed",
+                    "runner.command_reported", "runner.command_failed", "runner.connection_lost",
+                    "runner.connection_restored", "runner.entry_blocked"}
+    for item in batch:
         message = str(item.get("message") or "").strip()
         if not message:
             continue
         kind = str(item.get("kind") or "info").strip().lower()
-        if kind not in _EVENT_KINDS:
+        if kind not in (_EVENT_KINDS | {"news", "news_error"} if trusted else _EVENT_KINDS):
             kind = "info"
-        ts = str(item.get("ts") or "").strip()[:32] or _now_iso()
-        db.add(RunSessionEvent(
-            session_id=row.id,
-            user_id=row.user_id,
-            ts=ts,
-            kind=kind,
-            message=message[:EVENT_MESSAGE_MAX],
-            created_ms=now_ms + added,  # 같은 배치 안 순서 보존
-        ))
+        item["kind"] = kind
+        # Missing/invalid event time is unknown; created_ms independently records
+        # reception. Do not fabricate an occurrence timestamp for old clients.
+        item["ts"] = str(item.get("ts") or "").strip()[:32]
+        if not trusted:
+            # Client-controlled fields must not impersonate a verified exchange
+            # fill or collide with signed server news-receipt identifiers.
+            if item.get("event_name") not in runner_names:
+                item["event_name"] = "runner.message"
+            key = str(item.get("event_key") or "")
+            if key and not key.startswith("runner:"):
+                item["event_key"] = "runner:" + key
+            operation = str(item.get("operation_id") or "")
+            # Local risk exits have no server command. Their locally generated
+            # request ID can still correlate request/result inside THIS session;
+            # it is explicitly a runner report, never an exchange verification.
+            local_order = re.fullmatch(r"order:ggp-[a-f0-9]{28}", operation)
+            if not local_order and not any(operation == f"command:{cid}" for cid in allowed_commands):
+                item["operation_id"] = ""
+        normalized = normalize_event(item, component=component)
+        if not normalized["message"]:
+            continue
+        if not trusted:
+            details = json.loads(normalized["details_json"] or "{}")
+            details.update(ack_source="runner", verification="runner_reported_not_exchange_verified")
+            # A client's per-event field must not relabel a mock session as
+            # live. For old sessions with no mode, keep only an explicit valid
+            # runner claim; never infer mock/testnet/live from the testnet flag.
+            if row.mode in {"mock", "testnet", "live"}:
+                details["mode"] = row.mode
+            elif details.get("mode") not in {"mock", "testnet", "live"}:
+                details.pop("mode", None)
+            normalized["details_json"] = json.dumps(safe_details(details), ensure_ascii=False, sort_keys=True)
+        statement = insert(RunSessionEvent).values(
+            session_id=row.id, user_id=row.user_id, created_ms=now_ms, **normalized,
+        ).on_conflict_do_nothing(
+            index_elements=[RunSessionEvent.session_id, RunSessionEvent.event_key],
+        ).returning(RunSessionEvent.id)
+        event_id = db.exec(statement).scalar_one_or_none()
+        if event_id is None:
+            continue
         added += 1
-        if kind in _NOTIFY_EVENT_LABELS:
+        # The result event itself is the fill notification's origin. The GUI
+        # displays that result without emitting a second legacy fill event.
+        # Request and command-report stages are useful logs, not extra alerts.
+        extra_runner_stage = normalized["event_name"] in {
+            "runner.order_requested", "runner.order_failed",
+            "runner.command_reported", "runner.command_failed",
+        }
+        if kind in _NOTIFY_EVENT_LABELS and not extra_runner_stage and not (trusted and item.get("_notify") is False):
             notifications_mod.notify(
                 db, row.user_id, "agent", f"{row.symbol} 매크로 · {_NOTIFY_EVENT_LABELS[kind]}",
-                message, "/agents", session_id=row.id,
-                data={"event": kind, "symbol": row.symbol}, trim=False,
+                normalized["message"], "/agents", session_id=row.id,
+                data={"event": kind, "symbol": row.symbol, "activity_event_id": event_id,
+                      "activity_event_key": normalized["event_key"]}, trim=False,
             )
             notified = True
     if added:
@@ -947,9 +1053,56 @@ def _append_events(db, row: RunSession, events) -> int:
     return added
 
 
+def _confirmed_event_keys(db, row: RunSession, events) -> list[str]:
+    """Read durable candidates in the transaction; return ONLY after its commit.
+
+    An HTTP success or command ACK is not an event-storage acknowledgement.
+    Legacy keyless messages cannot be acknowledged as reliable deliveries.
+    """
+    from .agent_event_schema import safe_identifier
+    keys = [event.get("event_key") for event in (events or [])[:EVENT_BATCH_MAX]
+            if isinstance(event, dict) and isinstance(event.get("event_key"), str)
+            and event["event_key"].startswith("runner:") and safe_identifier(event["event_key"])]
+    if not keys:
+        return []
+    stored = set(db.exec(select(RunSessionEvent.event_key).where(
+        RunSessionEvent.session_id == row.id, RunSessionEvent.user_id == row.user_id,
+        RunSessionEvent.event_key.in_(keys))).all())
+    return list(dict.fromkeys(key for key in keys if key in stored))
+
+
+def record_runner_events(user: User, session_id: int, events: list, *, db: Session | None = None) -> dict:
+    """Replay logs only, even for ended runs; never touch position/commands.
+
+    Kept separate from heartbeat so recovery after process restart cannot send
+    an empty trading snapshot or move old events onto a newly started session.
+    """
+    user_id = user.id
+    with (nullcontext(db) if db is not None else get_session()) as owned:
+        row = owned.get(RunSession, session_id)
+        if row is None or row.user_id != user_id:
+            raise HTTPException(404, "세션을 찾을 수 없어요.")
+        _append_events(owned, row, events)
+        confirmed = _confirmed_event_keys(owned, row, events)
+        owned.commit()
+    return {"ok": True, "accepted_event_keys": confirmed}
+
+
 def _trim_events(db, session_id: int) -> None:
     from sqlalchemy import func
 
+    # Auxiliary news cannot displace the entire trade history. Apply its smaller
+    # cap first; runner-only legacy semantics and the combined cap stay intact.
+    news_filter = (RunSessionEvent.session_id == session_id,
+                   RunSessionEvent.kind.in_(("news", "news_error")))
+    news_total = int(db.exec(select(func.count(RunSessionEvent.id)).where(*news_filter)).one())
+    news_overflow = news_total - news_event_cap()
+    if news_overflow > 0:
+        old_news = db.exec(select(RunSessionEvent).where(*news_filter)
+                          .order_by(RunSessionEvent.id.asc()).limit(news_overflow)).all()
+        for event in old_news:
+            db.delete(event)
+        db.flush()
     total = int(db.exec(
         select(func.count(RunSessionEvent.id)).where(RunSessionEvent.session_id == session_id)
     ).one())
@@ -964,6 +1117,10 @@ def _trim_events(db, session_id: int) -> None:
     ).all()
     for event in oldest:
         db.delete(event)
+
+
+def news_event_cap() -> int:
+    return max(1, min(100, EVENT_CAP // 5))
 
 
 def _event_view(e: RunSessionEvent) -> dict:
@@ -984,7 +1141,8 @@ def list_events(user_id: int, session_id: int, limit: int = 300) -> dict:
             raise HTTPException(status_code=404, detail="세션을 찾을 수 없어요.")
         rows = db.exec(
             select(RunSessionEvent)
-            .where(RunSessionEvent.session_id == session_id)
+            .where(RunSessionEvent.session_id == session_id,
+                   RunSessionEvent.kind.not_in(("news", "news_error")))
             .order_by(RunSessionEvent.id.desc())
             .limit(max(1, min(int(limit), EVENT_CAP)))
         ).all()
@@ -1138,7 +1296,8 @@ def _session_view(row: RunSession) -> dict:
 
 # 종료 기록 보관 — 계정마다 보관하지 않은 종료 세션은 최근 30건·30일까지만 남긴다(2026-10-02).
 # 사용자가 '보관'한 기록은 정리에서 빠지되 10건까지. 정리할 때 세션의 이벤트·실행 명령도 같이 지운다.
-# 정리는 세션이 끝날 때(mark_stopped)·보관을 풀 때, 그리고 하루 한 번 전체 계정(maybe_prune_all_ended_sessions).
+# 정리는 세션이 끝날 때(mark_stopped)·보관을 풀 때와 방문 독립 log_retention_runtime에서 실행한다.
+# runtime은 기본 매시간 전체 계정을 작은 배치로 정리하며, maybe_prune_all_ended_sessions는 호환용이다.
 # 목록은 정리와 무관하게 기간이 지난 기록을 바로 뺀다.
 HISTORY_KEEP = 30
 HISTORY_DAYS = 30
@@ -1188,45 +1347,123 @@ def _iso_utc(dt: datetime) -> str:
 
 
 _DAILY_PRUNE_MS = 24 * 3_600_000
+_DAILY_PRUNE_RETRY_MS = 60_000
 _last_daily_prune_ms = 0
+_next_daily_prune_retry_ms = 0
 _daily_prune_lock = threading.Lock()
 
 
-def prune_all_ended_sessions(db, *, now: Optional[datetime] = None) -> int:
-    """모든 계정의 종료 기록을 정리한다 — 기간(30일)이 지난 것은 한 번에, 30건을 넘긴 계정은 계정별로."""
+def prune_ended_sessions_batch(db, *, now: Optional[datetime] = None, limit: int = 200) -> dict:
+    """Flush one bounded history-maintenance batch; the caller owns commit/rollback.
+
+    Preserve the existing unpinned/non-running 30-record/30-day policy. Select
+    scalar IDs with SQL ranking, not ORM session snapshots. Each child table is
+    drained by at most 1,000 rows; a parent with remaining children waits for the
+    next batch. PostgreSQL row locks exclude concurrent pin/start updates while
+    children are removed. No network work or new retention-history rows occur.
+    """
+    from sqlalchemy import case, delete as sql_delete, exists
+
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+        raise ValueError("history batch limit must be a positive integer")
+    bound = min(limit, 200)
     now = now or datetime.now(timezone.utc)
-    cutoff = _iso_utc(now - timedelta(days=HISTORY_DAYS))
-    expired = db.exec(select(RunSession.id).where(
-        RunSession.status != "running", RunSession.pinned == False,  # noqa: E712
-        func.coalesce(RunSession.stopped_at, RunSession.started_at) < cutoff,
-    )).all()
-    _delete_session_rows(db, list(expired))
-    db.commit()
-    removed = len(expired)
-    over = db.exec(
-        select(RunSession.user_id)
-        .where(RunSession.status != "running", RunSession.pinned == False)  # noqa: E712
-        .group_by(RunSession.user_id)
-        .having(func.count(RunSession.id) > HISTORY_KEEP)
-    ).all()
-    for user_id in over:
-        removed += prune_ended_sessions(user_id, db, now=now)
-    return removed
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    cutoff = now - timedelta(days=HISTORY_DAYS)
+    eligible = (RunSession.status != "running", RunSession.pinned == False)  # noqa: E712
+    ended = func.coalesce(func.nullif(RunSession.stopped_at, ""),
+                          func.nullif(RunSession.last_heartbeat_at, ""), RunSession.started_at)
+    if db.get_bind().dialect.name == "sqlite":
+        # SQLite's date parser handles offsets and invalid strings without a
+        # lexical +00:00-vs-Z boundary error; invalid input evaluates to NULL.
+        expired = func.julianday(ended) < func.julianday(cutoff.isoformat())
+    else:
+        # Server-generated timestamps are UTC ISO strings. Normalize those
+        # without casting arbitrary historical text, including fractional-second
+        # padding so Z/+00:00 and the exact cutoff compare identically. This is
+        # PostgreSQL 15-compatible (no pg_input_is_valid dependency). Unknown or
+        # non-UTC legacy dates are retained by age, but still obey the count cap.
+        date = (
+            r"([0-9]{4}-((0[13578]|1[02])-(0[1-9]|[12][0-9]|3[01])|"
+            r"(0[469]|11)-(0[1-9]|[12][0-9]|30)|02-(0[1-9]|1[0-9]|2[0-8]))|"
+            r"([0-9]{2}(0[48]|[2468][048]|[13579][26])|([02468][048]|[13579][26])00)-02-29)"
+        )
+        pattern = rf"^{date}T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\.[0-9]{{1,6}})?(Z|\+00:00)$"
+        utc = func.replace(ended, "+00:00", "Z")
+        fraction = func.split_part(func.split_part(utc, ".", 2), "Z", 1)
+        normalized = func.concat(func.substr(utc, 1, 19), ".", func.rpad(fraction, 6, "0"), "Z")
+        canonical = case((ended.like("0000-%"), None), (ended.op("~")(pattern), normalized), else_=None)
+        expired = canonical < cutoff.astimezone(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+    ranked = select(
+        RunSession.id.label("session_id"), expired.label("expired"),
+        func.row_number().over(partition_by=RunSession.user_id, order_by=RunSession.id.desc()).label("position"),
+    ).where(*eligible).subquery()
+    candidates = select(RunSession.id).join(ranked, ranked.c.session_id == RunSession.id).where(
+        *eligible, or_(ranked.c.expired, ranked.c.position > HISTORY_KEEP),
+    ).order_by(RunSession.id.asc()).limit(bound + 1).with_for_update(of=RunSession, skip_locked=True)
+    selected = list(db.exec(candidates).all())
+    targets = selected[:bound]
+    if not targets:
+        return {"deleted_sessions": 0, "deleted_events": 0, "deleted_commands": 0, "has_more": False}
+
+    counts = {}
+    for model, key in ((RunSessionEvent, "deleted_events"), (RunnerCommand, "deleted_commands")):
+        child_ids = list(db.exec(select(model.id).where(model.session_id.in_(targets))
+                                 .order_by(model.id.asc()).limit(1000)).all())
+        if child_ids:
+            removed = db.exec(sql_delete(model).where(model.id.in_(child_ids)).returning(model.id)).all()
+            counts[key] = len(removed)
+        else:
+            counts[key] = 0
+    # Recheck pin/status at the actual parent DELETE, and never orphan residual
+    # children. The target row lock also protects these facts on PostgreSQL.
+    without_events = ~exists(select(RunSessionEvent.id).where(RunSessionEvent.session_id == RunSession.id))
+    without_commands = ~exists(select(RunnerCommand.id).where(RunnerCommand.session_id == RunSession.id))
+    removed = db.exec(sql_delete(RunSession).where(
+        RunSession.id.in_(targets), *eligible, without_events, without_commands,
+    ).returning(RunSession.id)).all()
+    db.flush()
+    return {"deleted_sessions": len(removed), **counts,
+            "has_more": len(selected) > bound or len(removed) < len(targets)}
+
+
+def prune_all_ended_sessions(db, *, now: Optional[datetime] = None) -> int:
+    """Legacy completion API; runtime maintenance should call one batch instead."""
+    removed = 0
+    while True:
+        result = prune_ended_sessions_batch(db, now=now)
+        db.commit()
+        removed += result["deleted_sessions"]
+        if not result["has_more"]:
+            return removed
 
 
 def maybe_prune_all_ended_sessions(db) -> int:
-    """하루에 한 번만 전체 정리를 돈다(별도 스케줄러 없이, 방문 비콘 정리와 같은 방식). 실패해도 요청은 성공."""
-    global _last_daily_prune_ms
+    """호환용 일일 정리. 웹 정기 작업은 이 helper 대신 bounded batch를 직접 호출한다."""
+    global _last_daily_prune_ms, _next_daily_prune_retry_ms
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-    with _daily_prune_lock:
-        if now_ms - _last_daily_prune_ms < _DAILY_PRUNE_MS:
-            return 0
-        _last_daily_prune_ms = now_ms
-    try:
-        return prune_all_ended_sessions(db)
-    except Exception:
-        db.rollback()
+    if not _daily_prune_lock.acquire(blocking=False):
         return 0
+    try:
+        if now_ms - _last_daily_prune_ms < _DAILY_PRUNE_MS or now_ms < _next_daily_prune_retry_ms:
+            return 0
+        try:
+            removed = prune_all_ended_sessions(db)
+        except Exception as error:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            _next_daily_prune_retry_ms = int(datetime.now(timezone.utc).timestamp() * 1000) + _DAILY_PRUNE_RETRY_MS
+            # Type only: database exceptions may embed URLs, SQL and secrets.
+            _log.warning("Runner history cleanup failed (%s); retry after 60 seconds", type(error).__name__)
+            return 0
+        _last_daily_prune_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        _next_daily_prune_retry_ms = 0
+        return removed
+    finally:
+        _daily_prune_lock.release()
 
 
 def list_sessions(user_id: int, limit: int = HISTORY_KEEP + PIN_LIMIT, db=None) -> dict:

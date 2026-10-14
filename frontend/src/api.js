@@ -10,6 +10,7 @@ import { createBoardListCache } from "./lib/boardListCache.js";
 import { memberQueryString } from "./lib/memberList.js";
 import { invalidateLeaderboardCache } from "./lib/cacheEvents.js";
 import { ACTIVITY_EVENT, shouldSignalActivity } from "./lib/notifications.js";
+import { sessionLogQueryParams } from "./features/agents/sessionLogs.js";
 
 const BASE = "";
 const RUNNER_SESSIONS_STREAM_PATH = "/api/me/runner/sessions/stream";
@@ -330,6 +331,20 @@ export const api = {
     const query = Number.isSafeInteger(cursor) ? `?cursor=${cursor}` : "";
     return req(`/api/me/agents/sessions/${encodeURIComponent(sessionId)}/position-news${query}`, options);
   },
+  agentSessionLogs: (sessionId, { category = "all", beforeId, limit = 50, q, severity, component, eventName,
+    operationId, sinceMs, untilMs, contextId, ...options } = {}) => {
+    const query = sessionLogQueryParams({ category, beforeId, limit, q, severity, component, eventName,
+      operationId, sinceMs, untilMs, contextId });
+    return req(`/api/me/agents/sessions/${encodeURIComponent(sessionId)}/logs?${query}`, options);
+  },
+  agentNewsReceipt: (sessionId, receiptToken, options = {}) =>
+    req(`/api/me/agents/sessions/${encodeURIComponent(sessionId)}/news-receipts`, {
+      ...options, method: "POST", body: JSON.stringify({ receipt_token: receiptToken }),
+    }),
+  agentObservation: (sessionId, observation, options = {}) =>
+    req(`/api/me/agents/sessions/${encodeURIComponent(sessionId)}/observations`, {
+      ...options, method: "POST", body: JSON.stringify(observation),
+    }),
   // 저장 매크로도 실행 세션 없이 같은 공용 snapshot을 조회한다.
   agentMacroPositionNews: (macroId, symbol = "") => {
     const path = `/api/me/agents/macros/${encodeURIComponent(macroId)}/position-news`;

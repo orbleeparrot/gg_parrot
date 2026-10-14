@@ -8,7 +8,12 @@ import { practiceModeLabel } from "../lib/exchanges.js";
 import { usePositionNewsFeature } from "../features/agents/positionNews/index.js";
 import { useWhaleActivity } from "../features/agents/useWhaleActivity.js";
 import { useRunnerLog } from "../features/agents/useRunnerLog.js";
+import { useSessionLogs } from "../features/agents/useSessionLogs.js";
+import { useNewsReceipt } from "../features/agents/useNewsReceipt.js";
+import { positiveEventId } from "../features/agents/activityEvidence.js";
 import AgentActivityStream from "../components/AgentActivityStream.jsx";
+import AgentSessionLog from "../components/AgentSessionLog.jsx";
+import "../components/AgentSessionPanel.css";
 import CandleChart from "../components/CandleChart.jsx";
 import PositionStrip from "../components/PositionStrip.jsx";
 import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
@@ -150,8 +155,12 @@ function AccountAgents() {
   const [pending, setPending] = useState(null);
   // 종료 요청을 서버 왕복 전에 화면에 먼저 반영한다: { id, mode }
   const [pendingStop, setPendingStop] = useState(null);
-  const [mobilePane, setMobilePane] = useState("chart");
+  const [mobilePane, setMobilePane] = useState(() => searchParams.get("panel") === "logs" ? "chat" : "chart");
   const [pinBusy, setPinBusy] = useState(0);
+  const [logCategory, setLogCategory] = useState("all");
+  const [logQuery, setLogQuery] = useState({});
+  const [logsPaused, setLogsPaused] = useState(false);
+  const [agentFilter, setAgentFilter] = useState("all");
   const [fileBusy, setFileBusy] = useState(0);
   const sessionSnapshotRevision = useRef(0);
   const lastStreamMessageAt = useRef(0);
@@ -304,6 +313,9 @@ function AccountAgents() {
     if (!reported || reported.stopping || reported.status !== "running") setPendingStop(null);
   }, [activeSessions, pendingStop, sessions]);
   const selectedId = searchParams.get("session");
+  const requestedLogEvent = searchParams.get("event");
+  const logEventId = positiveEventId(requestedLogEvent);
+  const anchoredLogs = searchParams.get("panel") === "logs" && requestedLogEvent !== null;
   const view = searchParams.get("view") === "history" ? "history" : "live";
   // 종료 기록에서 연 세션(또는 방금 종료해 기록으로 넘어간 세션)은 결과 화면으로 본다.
   const historySession = useMemo(
@@ -313,9 +325,10 @@ function AccountAgents() {
   const mode = historySession ? "detail" : activeSessions.length ? (view === "history" ? "history" : "live") : "overview";
   const selected = useMemo(() => {
     if (historySession) return historySession;
+    if (anchoredLogs) return sessionOptions.find((session) => String(session.session_id) === selectedId) || null;
     if (mode !== "live" || !sessionOptions.length) return null;
     return sessionOptions.find((session) => String(session.session_id) === selectedId) || sessionOptions[0];
-  }, [historySession, mode, selectedId, sessionOptions]);
+  }, [anchoredLogs, historySession, mode, selectedId, sessionOptions]);
 
   useEffect(() => {
     if (mode !== "live" || !selected || String(selected.session_id) === selectedId) return;
@@ -333,21 +346,31 @@ function AccountAgents() {
       knownActiveRef.current = new Set(activeSessions.map((session) => session.session_id));
       return;
     }
-    const started = mode === "detail" ? newlyStartedSession(knownActiveRef.current, activeSessions, historySession) : null;
+    const started = !anchoredLogs && mode === "detail" ? newlyStartedSession(knownActiveRef.current, activeSessions, historySession) : null;
     for (const session of activeSessions) knownActiveRef.current.add(session.session_id);
     if (!started) return;
     const next = new URLSearchParams(searchParams);
     next.set("session", String(started.session_id));
     next.delete("view");
+    next.delete("event");
     setSearchParams(next, { replace: true });
-  }, [activeSessions, historySession, mode, searchParams, sessions, setSearchParams]);
+  }, [activeSessions, anchoredLogs, historySession, mode, searchParams, sessions, setSearchParams]);
 
   const activePositionNews = usePositionNewsFeature(selected?.session_id, selected?.status === "running");
   const whaleActivity = useWhaleActivity(selected);
-  const runnerLog = useRunnerLog(selected);
+  const logsOpen = searchParams.get("panel") === "logs";
+  const logLinkInvalid = anchoredLogs && (!logEventId || !positiveEventId(selectedId) || !selected);
+  const activeLogQuery = anchoredLogs && logEventId ? { contextId: logEventId } : logQuery;
+  const activeLogCategory = anchoredLogs ? "all" : logCategory;
+  const runnerLog = useRunnerLog(selected, !logsOpen);
+  const sessionLogs = useSessionLogs(selected, { enabled: logsOpen && !logLinkInvalid, category: activeLogCategory, query: activeLogQuery, paused: logsPaused });
+  const newsReceipt = useNewsReceipt(selected, activePositionNews.data);
 
   useEffect(() => {
     setChartSnapshot(null);
+    setLogCategory("all");
+    setLogQuery({});
+    setLogsPaused(false);
   }, [selected?.session_id]);
 
   const macro = selected?.macro || null;
@@ -356,8 +379,8 @@ function AccountAgents() {
   const exchange = macro?.exchange || "binance";
   const activeChart = activeSessionChart(chartSnapshot, selected, exchange);
   const featureStates = useMemo(
-    () => ({ position_news: activePositionNews, whale_activity: whaleActivity, runner_log: runnerLog }),
-    [activePositionNews, whaleActivity, runnerLog],
+    () => ({ position_news: { ...activePositionNews, receiptLinks: newsReceipt.links }, whale_activity: whaleActivity, runner_log: runnerLog }),
+    [activePositionNews, newsReceipt.links, whaleActivity, runnerLog],
   );
 
   // strategy_levels 는 서버가 체크포인트의 전략 상태로 계산한 **실제** 가격선이다.
@@ -375,13 +398,34 @@ function AccountAgents() {
   function changeSession(id) {
     const next = new URLSearchParams(searchParams);
     next.set("session", String(id));
+    next.delete("event");
     setSearchParams(next);
-    setMobilePane("chart");
+    setMobilePane(logsOpen ? "chat" : "chart");
+  }
+
+  function showPanel(panel) {
+    const next = new URLSearchParams(searchParams);
+    if (panel === "logs") next.set("panel", "logs");
+    else { next.delete("panel"); next.delete("event"); }
+    setSearchParams(next, { replace: true });
+  }
+
+  function changeLogQuery(nextQuery) {
+    const next = new URLSearchParams(searchParams);
+    next.delete("event");
+    setLogQuery(nextQuery);
+    setSearchParams(next, { replace: true });
+  }
+
+  function changeLogCategory(category) {
+    if (anchoredLogs) changeLogQuery({});
+    setLogCategory(category);
   }
 
   function showView(nextView) {
     const next = new URLSearchParams(searchParams);
     next.delete("session");
+    next.delete("event");
     if (nextView === "history") next.set("view", "history");
     else next.delete("view");
     setSearchParams(next);
@@ -391,8 +435,9 @@ function AccountAgents() {
     const next = new URLSearchParams(searchParams);
     next.delete("view");
     next.set("session", String(session.session_id));
+    next.delete("event");
     setSearchParams(next);
-    setMobilePane("chart");
+    setMobilePane(logsOpen ? "chat" : "chart");
   }
 
   function backToHistory() {
@@ -496,6 +541,8 @@ function AccountAgents() {
         </div>
       ) : null}
       {actionError ? <AppToast key={actionError} tone="error" label="실패" title={actionError} onClose={() => setActionError("")} /> : null}
+      {sessions && logLinkInvalid ? <div className="agent-inline-error" role="alert">요청한 활동 로그의 세션 또는 사건 ID를 확인하지 못했어요. 다른 세션의 기록으로 대체하지 않습니다.
+        <button type="button" className="btn btn-s btn-secondary" onClick={() => { showPanel("agent"); }}>연결 조회 해제</button></div> : null}
       {sessions && mode === "overview" ? (
         <div className="agent-overview">
           <AgentIdle last={recentSessions[0] || null} />
@@ -510,7 +557,7 @@ function AccountAgents() {
         </div>
       ) : null}
 
-      {selected ? (
+      {selected && !logLinkInvalid ? (
         <div className="agent-workspace">
           {mode === "detail" ? (
             <HistoryDock
@@ -563,6 +610,24 @@ function AccountAgents() {
                 interval={activeChart?.interval || interval}
                 observedAt={activeChart?.serverTime || 0}
                 featureStates={featureStates}
+                selectedView={logsOpen ? "activity_logs" : agentFilter}
+                onSelectView={(next) => {
+                  if (next !== "activity_logs") setAgentFilter(next);
+                  showPanel(next === "activity_logs" ? "logs" : "agent");
+                }}
+                activityLog={<div className="agent-session-panel">
+                  {anchoredLogs && sessionLogs.state.status === "error" ? <div className="agent-receipt-error" role="alert">
+                    <p>사건 #{logEventId} 원본 조회에 실패했어요. 삭제·보관 기한 또는 접근 권한을 확인해 주세요. 다른 사건으로 대체하지 않습니다.</p>
+                  </div> : null}
+                  {logsOpen && newsReceipt.state?.status === "error" ? <div className="agent-receipt-error" role="status">
+                    <p>뉴스 수신 기록을 저장하지 못했어요. 뉴스 표시와 매크로 실행은 계속됩니다.</p>
+                    <button type="button" className="btn btn-s btn-secondary" onClick={newsReceipt.retry}>기록 다시 저장</button>
+                  </div> : null}
+                  <AgentSessionLog session={selected} state={sessionLogs.state} category={activeLogCategory}
+                    onCategoryChange={changeLogCategory} query={activeLogQuery} onQueryChange={changeLogQuery}
+                    paused={logsPaused} onPauseChange={setLogsPaused}
+                    onRefresh={sessionLogs.refresh} onLoadMore={sessionLogs.loadMore} />
+                </div>}
               />
             </div>
           </div>

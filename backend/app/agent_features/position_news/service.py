@@ -10,6 +10,7 @@ from sqlmodel import Session
 
 from ... import news as news_mod
 from . import classifier
+from .log_telemetry import delivery_metadata
 
 FEATURE_KEY = "position_news"
 _STALE_SECONDS = max(
@@ -249,6 +250,7 @@ def get_position_news(session: dict, db: Session | None = None, *, cursor: int |
         # Filtering and side projection are local CPU work. No title cache,
         # provider, source loader or enrichment scheduler is invoked here.
         payload["items"] = [item for item in payload["items"] if news_mod._within_coin_news_window(item)]
+        payload["collection"].update(delivery_metadata({**feed, "items": payload["items"]}, collection=collection))
         payload["community_summaries"] = {
             "status": "partial" if any(item.get("community_summary_status") == "pending" for item in payload["items"]) else "ready",
         }
@@ -303,7 +305,8 @@ def get_position_news(session: dict, db: Session | None = None, *, cursor: int |
                 if payload.get("translation", {}).get("pending_count") else
                 "관련 최신 뉴스를 확인하고 있어요.")
         payload["overview"] = {"text": text, "scope": "headlines_only"}
-    collection = dict(stored.get("collection") or {})
+    collection = {**(stored.get("collection") or {}), **delivery_metadata(
+        {**stored["news_payload"], "items": payload["items"]}, collection=stored.get("collection"))}
     last_success_ms = int(collection.get("last_success_ms") or 0)
     last_observed_ms = max(last_success_ms, int(collection.get("last_attempt_ms") or 0)
                            if collection.get("status") == "empty" else 0)

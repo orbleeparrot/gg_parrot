@@ -83,8 +83,12 @@ export const positionNewsModule = {
       const presentation = impactPresentation(isCommunityPost ? "unclear" : item.position_effect);
       const isHistorical = item.is_historical === true || data.content_scope === "archive";
       const publishedAt = publicationTime(item.published);
+      const receipt = state?.receiptLinks?.[item._activity_receipt_key];
+      const linked = receipt && item.id != null && receipt.articleIds?.includes(String(item.id));
       events.push({
         id: `position-news-${identity}`,
+        activityEventId: linked ? receipt.eventId : null,
+        activitySessionId: linked ? data.context?.session_id : null,
         module: "position_news",
         severity: presentation.severity,
         expression: presentation.expression,

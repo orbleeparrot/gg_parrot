@@ -18,6 +18,7 @@ class RunnerExecutionTests(unittest.TestCase):
         bot.quote = "USDT"
         bot.leverage = 1
         bot.log = Mock()
+        bot.on_log = Mock()
         bot.in_position, bot.held_qty, bot.entry_price = True, 2.0, 100.0
         bot.realized, bot.step = 0.0, 0.001
         bot._price = Mock(return_value=105.0)
@@ -263,7 +264,7 @@ class RunnerExecutionTests(unittest.TestCase):
 
 class RunnerTerminalReportTests(unittest.TestCase):
     def client(self):
-        client = macro_runner.ServerClient("test-key", base="https://example.invalid")
+        client = macro_runner.ServerClient("test-key", base="https://example.invalid", outbox_path=":memory:", cli_sink=lambda _event: None)
         client.session_id = 42
         return client
 
@@ -271,6 +272,7 @@ class RunnerTerminalReportTests(unittest.TestCase):
         failed = Mock(status_code=503)
         failed.raise_for_status.side_effect = RuntimeError("deploy in progress")
         complete = Mock(status_code=200)
+        complete.json.return_value = {}
         snapshot = {"in_position": False, "realized_pnl": 12}
         with patch.object(macro_runner.requests, "post", side_effect=[failed, complete]) as post, patch.object(macro_runner.time, "sleep"):
             self.assertTrue(self.client().stopped(snapshot=snapshot))

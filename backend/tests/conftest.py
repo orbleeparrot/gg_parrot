@@ -20,6 +20,7 @@ os.environ["SQLITE_PATH"] = _TMP.name
 os.environ["POSITION_NEWS_EMBEDDED_ENABLED"] = "false"
 os.environ["PUBLIC_NEWS_EMBEDDED_ENABLED"] = "false"
 os.environ["LEADERBOARD_BACKGROUND_ENABLED"] = "false"
+os.environ["ACTIVITY_LOG_RETENTION_ENABLED"] = "false"
 os.environ["WHALE_TRADE_EMBEDDED_ENABLED"] = "false"
 os.environ["POSITION_NEWS_BROWSER_ENRICHMENT_ENABLED"] = "false"
 os.environ["POSITION_NEWS_EXTRA_RSS_ENABLED"] = "false"

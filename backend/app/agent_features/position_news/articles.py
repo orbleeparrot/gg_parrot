@@ -200,6 +200,7 @@ def upsert_articles(asset_symbol: str, items: list[dict], *, analysis: dict | No
     # 비어 있던 첫 수집은 세지 않는다 — 세션을 켠 직후 30건이 한꺼번에 울리지 않게.
     prior_ready = state.ready_count
     fresh_titles = []
+    fresh_article_ids = []
     inserted = 0
     for key, (item, assessment) in incoming.items():
         if key in skipped:
@@ -242,6 +243,7 @@ def upsert_articles(asset_symbol: str, items: list[dict], *, analysis: dict | No
         state.ready_count += int(ready) - int(bool(old and old.ready))
         if ready and not (old and old.ready):
             fresh_titles.append(str(merged.get("title") or ""))
+            fresh_article_ids.append(key)
         values.append(dict(asset_symbol=scope, article_id=key, revision=state.revision,
                            ready=ready, enrichment_pending=enrichment_pending, item_json=item_json, assessment_json=assessment_json,
                            analysis_source=source, analysis_status=status,
@@ -261,19 +263,47 @@ def upsert_articles(asset_symbol: str, items: list[dict], *, analysis: dict | No
         db.exec(update(NewsArticle).where(NewsArticle.asset_symbol == scope,
                                          NewsArticle.article_id.in_(list(incoming)),
                                          NewsArticle.last_seen_ms < millis).values(last_seen_ms=millis))
+    if payload is not None or fresh_titles:
+        metadata = json.loads(state.metadata_json)
+        metadata.update({key: payload[key] for key in (
+            "symbol", "coin_name", "label", "query", "browser_enrichment", "refresh_seconds",
+            "as_of", "overview", "ai", "image_status", "collection_status", "disclaimer",
+        ) if payload is not None and key in payload})
+        if payload is not None and not enrichment_only:
+            # Provenance is replacement metadata for this publication, not a
+            # merge with the last successful collector. A web bootstrap has no
+            # Prefect context. Late translation/image workers never replace
+            # these collection facts, even if their input carries older IDs.
+            metadata["collection_trace"] = payload.get("collection_trace") or {}
+            metadata["sources"] = payload.get("sources") or []
+        if fresh_titles:
+            # This is the actual ready transition committed below, not a
+            # source HTTP completion, a browser receipt, or a human reading.
+            # A shared feed revision gives all interested sessions the same
+            # public origin without creating one new source event per poll.
+            publication = {
+                "source_event_id": f"news-ready:{scope}:{state.revision}",
+                "event_name": "news.articles_ready",
+                "occurred_at": datetime.fromtimestamp(millis / 1000, timezone.utc).isoformat(),
+                "asset_symbol": scope, "count": len(fresh_titles), "cursor": state.revision,
+                "article_ids": fresh_article_ids,
+            }
+            metadata["article_publication"] = publication
+        state.metadata_json = json.dumps(metadata, ensure_ascii=False)
     if fresh_titles and prior_ready > 0:
         from ... import notifications as notifications_mod
         notifications_mod.notify_running_sessions(
             db, asset=scope, title=f"{scope} 새 기사 {len(fresh_titles)}건", body=fresh_titles[0],
             link="/agents", data={"event": "news", "asset": scope, "count": len(fresh_titles)},
-            ref=f"news:{scope}:{state.revision}")
-    if payload is not None:
-        metadata = json.loads(state.metadata_json)
-        metadata.update({key: payload[key] for key in (
-            "symbol", "coin_name", "label", "query", "sources", "browser_enrichment", "refresh_seconds",
-            "as_of", "overview", "ai", "image_status", "collection_status", "disclaimer",
-        ) if key in payload})
-        state.metadata_json = json.dumps(metadata, ensure_ascii=False)
+            ref=f"news:{scope}:{state.revision}",
+            activity={
+                "event_name": publication["event_name"], "kind": "news", "severity": "INFO",
+                "component": "news_collector", "source_event_id": publication["source_event_id"],
+                "occurred_at": publication["occurred_at"],
+                "details": {"asset_symbol": scope, "count": publication["count"], "cursor": state.revision,
+                            "article_ids": fresh_article_ids,
+                            "verification": "server_article_publication_not_browser_receipt"},
+            })
     state.updated_ms = max(state.updated_ms, millis)
     revision = state.revision
     db.add(state)

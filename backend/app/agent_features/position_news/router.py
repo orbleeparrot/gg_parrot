@@ -1,10 +1,14 @@
 """Authenticated HTTP boundary for the position-news feature."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+import logging
+from typing import Literal
+
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response
 from sqlmodel import Session
 
 from ... import auth as auth_mod
+from ... import agent_logs
 from ... import runner as runner_mod
 from ... import user_macros as user_macros_mod
 from ...db import User, request_session
@@ -19,6 +23,69 @@ from ...news import (
 from . import service
 
 router = APIRouter(prefix="/api/me/agents", tags=["agent-features"])
+logger = logging.getLogger(__name__)
+
+
+def _record_response_failure(user_id: int, session_id: int, status: int,
+                             error: Exception, db: Session) -> None:
+    try:
+        agent_logs.record_news_request_failure(user_id, session_id, status, error, db=db)
+    except Exception:
+        # Telemetry must never retry news or obscure the original HTTP result.
+        # Never print the exception, raw provider payload or credentials.
+        logger.warning("News response failure log unavailable (session=%s)", session_id)
+
+
+@router.get("/sessions/{session_id}/logs")
+def session_logs(
+    session_id: int,
+    response: Response,
+    category: Literal["all", "trade", "execution", "news", "error"] = "all",
+    before_id: int | None = Query(default=None, ge=1, le=2**63 - 1),
+    limit: int = Query(default=50, ge=1),
+    q: str = Query(default="", max_length=200),
+    severity: Literal["", "DEBUG", "INFO", "WARN", "ERROR", "UNKNOWN"] = "",
+    component: str = Query(default="", max_length=48),
+    event_name: str = Query(default="", max_length=80),
+    operation_id: str = Query(default="", max_length=120),
+    since_ms: int | None = Query(default=None, ge=0, le=2**63 - 1),
+    until_ms: int | None = Query(default=None, ge=0, le=2**63 - 1),
+    context_id: int | None = Query(default=None, ge=1, le=2**63 - 1),
+    user: User = Depends(auth_mod.current_user_in_session),
+    db: Session = Depends(request_session),
+) -> dict:
+    response.headers["Cache-Control"] = "private, no-store"
+    return agent_logs.list_logs(user.id, session_id, category=category,
+                                before_id=before_id, limit=limit, q=q, severity=severity,
+                                component=component, event_name=event_name, operation_id=operation_id,
+                                since_ms=since_ms, until_ms=until_ms, context_id=context_id, db=db)
+
+
+@router.post("/sessions/{session_id}/news-receipts")
+def news_receipt(
+    session_id: int,
+    response: Response,
+    body: object = Body(default=None),
+    user: User = Depends(auth_mod.current_user_in_session),
+    db: Session = Depends(request_session),
+) -> dict:
+    response.headers["Cache-Control"] = "private, no-store"
+    # Do not let validation responses reflect a signed token or arbitrary log
+    # content. Only one bounded opaque capability is accepted, never messages.
+    if (not isinstance(body, dict) or set(body) != {"receipt_token"}
+            or not isinstance(body["receipt_token"], str)
+            or not 1 <= len(body["receipt_token"]) <= agent_logs.TOKEN_MAX_CHARS):
+        raise HTTPException(422, "뉴스 수신 확인 요청이 올바르지 않아요.")
+    return agent_logs.record_news_receipt(user.id, session_id, body["receipt_token"], db=db)
+
+
+@router.post("/sessions/{session_id}/observations")
+def browser_observation(
+    session_id: int, response: Response, body: object = Body(default=None),
+    user: User = Depends(auth_mod.current_user_in_session), db: Session = Depends(request_session),
+) -> dict:
+    response.headers["Cache-Control"] = "private, no-store"
+    return agent_logs.record_observation(user.id, session_id, body, db=db)
 
 
 @router.get("/sessions/{session_id}/whale-activity")
@@ -45,13 +112,24 @@ def position_news(
     cursor: int | None = None,
 ) -> dict:
     response.headers["Cache-Control"] = "private, no-store"
-    session = runner_mod.get_owned_session(user.id, session_id, db=db)
+    user_id = user.id  # rollback in the read service may expire ORM instances.
+    session = runner_mod.get_owned_session(user_id, session_id, db=db)
     try:
-        return service.get_position_news(session, db=db, **({"cursor": max(0, cursor)} if cursor is not None else {}))
+        payload = service.get_position_news(session, db=db, **({"cursor": max(0, cursor)} if cursor is not None else {}))
+        # Explicit nulls clear a previous receipt in the browser's delta merge.
+        payload.update(receipt_token=None, receipt_key=None)
+        try:
+            payload.update(agent_logs.make_news_receipt(user_id, session, payload))
+        except Exception:
+            # Audit metadata must not block news or trigger retry/provider work.
+            logger.warning("News receipt unavailable (session=%s)", session_id)
+        return payload
     except NewsTranslationBusyError as exc:
-        raise HTTPException(status_code=429, detail=str(exc)) from exc
+        _record_response_failure(user_id, session_id, 429, exc, db)
+        raise HTTPException(status_code=429, detail=str(exc), headers={"Cache-Control": "private, no-store"}) from exc
     except NewsTranslationError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        _record_response_failure(user_id, session_id, 503, exc, db)
+        raise HTTPException(status_code=503, detail=str(exc), headers={"Cache-Control": "private, no-store"}) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

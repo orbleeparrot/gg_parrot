@@ -9,11 +9,12 @@ export const riskModule = {
   entitlement: "agent.risk",
   minimumPlan: "plus",
   availability: "live",
-  buildEvents({ candles, session, interval, alertConditions = {}, receivedAt }) {
+  buildEvents({ candles, session, macro, interval, alertConditions = {}, receivedAt }) {
     const closed = (candles || []).filter((bar) => bar?.closed !== false && safeNumber(bar?.o) > 0);
     const events = [];
     const volatilityKey = `volatility-${interval}`;
     const previousVolatility = alertConditions[volatilityKey] || 0;
+    const exchangeLabel = { binance: "바이낸스", upbit: "업비트", bithumb: "빗썸" }[macro?.exchange];
     if (closed.length) {
       const recent = closed.slice(-20);
       const latest = recent[recent.length - 1];
@@ -31,7 +32,7 @@ export const riskModule = {
           module: "risk", severity: "warning", expression: "warning",
           title: "변동성 확대 감지",
           summary: `${interval} · 평균 변동폭 ${averageRange.toFixed(2)}% · 최근 봉 ${latestChange >= 0 ? "+" : ""}${latestChange.toFixed(2)}%`,
-          occurredAt: latest.t, sourceLabel: "바이낸스 확정 봉",
+          occurredAt: latest.t, sourceLabel: exchangeLabel ? `${exchangeLabel} 확정 봉` : "공개 확정 봉 · 거래소 미기록",
         });
       }
     } else if (previousVolatility) {

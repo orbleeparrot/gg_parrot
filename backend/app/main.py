@@ -78,6 +78,7 @@ from . import quests as quests_mod
 from . import ask as ask_mod
 from . import coach as coach_mod
 from . import notifications as notifications_mod
+from . import log_retention_runtime
 from . import notification_stream
 from . import admin as admin_mod
 from . import members as members_mod
@@ -85,6 +86,7 @@ from . import macro_events
 from . import account as account_mod
 from . import challenge as challenge_mod
 from . import runner as runner_mod
+from .agent_logs import NewsReceiptBodyLimit
 from . import devnotes as devnotes_mod
 from .runner_release import MIN_SUPPORTED_RUNNER_VERSION, resolve_runner_release
 from . import macro_signing as macro_signing_mod
@@ -142,6 +144,7 @@ async def lifespan(app: FastAPI):
     public_news_mod.start()
     position_news_runtime.start()
     whale_activity_runtime.start()
+    log_retention_runtime.start()
     try:
         yield
     finally:
@@ -149,6 +152,7 @@ async def lifespan(app: FastAPI):
         stopped = await asyncio.gather(
             leaderboard_runtime.stop(), public_news_mod.stop(),
             whale_activity_runtime.stop(), position_news_runtime.stop(),
+            log_retention_runtime.stop(),
             return_exceptions=True,
         )
         for result in stopped:
@@ -413,6 +417,10 @@ class RunnerStoppedRequest(BaseModel):
     note: str = ""
     snapshot: Optional[dict] = None
     events: list[dict] = []
+
+
+class RunnerEventBatchRequest(BaseModel):
+    events: list[dict] = Field(default_factory=list, max_length=100)
 
 
 class RunnerStopRequest(BaseModel):
@@ -963,6 +971,7 @@ class _BeaconBodyLimit:
 
 
 app.add_middleware(_BeaconBodyLimit)
+app.add_middleware(NewsReceiptBodyLimit)
 
 
 @app.post("/api/visit", status_code=204)
@@ -981,7 +990,6 @@ def visit_record(
         is_internal=req.is_internal or bool(account and account.is_admin),
     )
     admin_mod.maybe_prune_visits(db)  # 90일 지난 행은 하루 한 번 정리
-    runner_mod.maybe_prune_all_ended_sessions(db)  # 종료 기록 30건·30일 정리도 하루 한 번(보관 제외)
     return Response(status_code=204)
 
 
@@ -2485,6 +2493,14 @@ def _heartbeat_user(
     return runner_mod.user_for_key(x_runner_key or "", db=db)
 
 
+def _runner_activity_user(
+    x_runner_key: Optional[str] = Header(default=None),
+    db: Session = Depends(request_session),
+) -> User:
+    # Recovery is low-priority telemetry. Never occupy heartbeat admission.
+    return runner_mod.user_for_key(x_runner_key or "", db=db)
+
+
 # 실행기용 -------------------------------------------------------------
 @app.post("/api/runner/launch-tickets/claim")
 def runner_launch_ticket_claim(
@@ -2561,6 +2577,15 @@ def runner_stopped(req: RunnerStoppedRequest, user: User = Depends(_runner_user)
     return runner_mod.mark_stopped(
         user, req.session_id, req.status, req.note, snapshot=req.snapshot, events=req.events
     )
+
+
+@app.post("/api/runner/sessions/{session_id}/events")
+def runner_event_batch(
+    session_id: int, req: RunnerEventBatchRequest, response: Response,
+    user: User = Depends(_runner_activity_user), db: Session = Depends(request_session),
+) -> dict:
+    response.headers["Cache-Control"] = "private, no-store"
+    return runner_mod.record_runner_events(user, session_id, req.events, db=db)
 
 
 # 마이페이지용 ---------------------------------------------------------

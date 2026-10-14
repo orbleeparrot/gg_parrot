@@ -16,6 +16,7 @@ def _bot(market="futures", *, in_position=True, held=2.0, entry=100.0):
     bot.quote = "USDT"
     bot.leverage = 1
     bot.log = Mock()
+    bot.on_log = Mock()
     bot.in_position, bot.held_qty, bot.entry_price = in_position, held, entry
     bot.realized, bot.step = 0.0, 0.001
     bot.broker = macro_runner.brokers.BinanceBroker(

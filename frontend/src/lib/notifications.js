@@ -1,3 +1,5 @@
+import { activityLogLink, positiveEventId } from "../features/agents/activityEvidence.js";
+
 // 알림 패널의 순수 도우미 — 종류 라벨, 상대 시각, 배지 글자, 읽음 처리의 로컬 반영.
 // React 없이 node --test 로 검증한다(tests/notifications.test.js). 데이터 모양은
 // backend/app/notifications.py 의 view() 와 같다: { id, kind, title, body, link, data, created_ms, read }.
@@ -70,6 +72,17 @@ export function isInternalLink(link) {
   return typeof link === "string" && link.startsWith("/") && !link.startsWith("//");
 }
 
+export function notificationActivityLink(item) {
+  const session = positiveEventId(item?.data?.session_id);
+  const topLevel = positiveEventId(item?.session_id);
+  if (!session || topLevel && session !== topLevel) return "";
+  return activityLogLink(session, item?.data?.activity_event_id);
+}
+
+export function notificationTarget(item) {
+  return notificationActivityLink(item) || (isInternalLink(item?.link) ? item.link : "");
+}
+
 // --- 실시간 갱신 -----------------------------------------------------------
 // 로그인 계정의 쓰기 요청(백테스트·댓글·등록·언락…)이 끝나면 api.js 가 이 이벤트를 낸다.
 // 알림 훅은 이를 듣고 안 읽은 수를 바로 다시 묻는다 — 내가 방금 한 일의 결과는 폴링을 기다리지 않는다.
@@ -80,6 +93,9 @@ export function shouldSignalActivity(method, path) {
   const verb = String(method || "GET").toUpperCase();
   if (verb === "GET" || verb === "HEAD" || verb === "OPTIONS") return false;
   const pathname = String(path || "").split("?")[0];
+  // A news receipt creates no notification; do not refresh notification RPCs.
+  if (/^\/api\/me\/agents\/sessions\/\d+\/news-receipts$/.test(pathname)) return false;
+  if (/^\/api\/me\/agents\/sessions\/\d+\/observations$/.test(pathname)) return false;
   return !pathname.startsWith("/api/me/notifications") && !pathname.startsWith("/api/auth/");
 }
 

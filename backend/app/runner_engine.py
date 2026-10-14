@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
 import threading
 import time
@@ -166,7 +167,10 @@ def _note_start_failure(session_id: int) -> None:
         row.note = START_FAIL_NOTE
         db.add(row)
         _append_events(db, row, [{"ts": _now_iso(), "kind": "error",
-                                  "message": "⚠ 서버 전략을 시작하지 못했어요 — 매크로 설정이 비어 있거나 올바르지 않아 실행기는 신호를 받지 못합니다."}])
+                                  "severity": "ERROR", "event_name": "engine.start_failed",
+                                  "event_key": f"session:{row.id}:engine.start_failed",
+                                  "operation_id": f"session:{row.id}", "details": {"reason": START_FAIL_NOTE},
+                                  "message": "⚠ 서버 전략을 시작하지 못했어요 — 매크로 설정이 비어 있거나 올바르지 않아 실행기는 신호를 받지 못합니다."}], component="engine")
         db.commit()
 
 
@@ -197,10 +201,13 @@ def _refuse_portfolio_session(session_id: int) -> None:
         row.note = PORTFOLIO_REFUSED_NOTE
         db.add(row)
         _append_events(db, row, [{"ts": row.stopped_at, "kind": "stop",
+                                  "severity": "WARN", "event_name": "engine.portfolio_refused",
+                                  "event_key": f"session:{row.id}:engine.portfolio_refused",
+                                  "operation_id": f"session:{row.id}", "details": {"reason": PORTFOLIO_REFUSED_NOTE},
                                   "message": f"종료 · {PORTFOLIO_REFUSED_NOTE}"
                                              + " — 실행기는 종목 하나만 읽어 첫 종목에 전액이 들어갑니다."
                                                " 종목 하나로 나눠 다시 시작해 주세요."
-                                             + (" · 포지션 보유 중" if row.in_position else "")}])
+                                             + (" · 포지션 보유 중" if row.in_position else "")}], component="engine")
         db.commit()
     log.warning("runner engine: session %s macro is multi-symbol — refused and stopped", session_id)
 
@@ -348,7 +355,10 @@ def _note_loop_error(session_id: int) -> None:
         row.note = LOOP_ERROR_NOTE
         db.add(row)
         _append_events(db, row, [{"ts": _now_iso(), "kind": "error",
-                                  "message": "⚠ 서버 전략 루프가 오류로 멈췄어요 — 실행기는 새 신호를 받지 못합니다. 세션을 다시 시작해 주세요."}])
+                                  "severity": "ERROR", "event_name": "engine.loop_failed",
+                                  "event_key": f"session:{row.id}:engine.loop_failed",
+                                  "operation_id": f"session:{row.id}", "details": {"reason": LOOP_ERROR_NOTE},
+                                  "message": "⚠ 서버 전략 루프가 오류로 멈췄어요 — 실행기는 새 신호를 받지 못합니다. 세션을 다시 시작해 주세요."}], component="engine")
         db.commit()
 
 
@@ -424,9 +434,14 @@ def _persist_state(live: _Live, state_json: str) -> None:
             row.note = STALE_RUNNER_NOTE
             db.add(row)
             _append_events(db, row, [{"ts": row.stopped_at, "kind": "stop",
+                                      "severity": "WARN", "event_name": "engine.runner_stale",
+                                      "event_key": f"session:{row.id}:engine.runner_stale",
+                                      "operation_id": f"session:{row.id}",
+                                      "details": {"reason": STALE_RUNNER_NOTE, "in_position": row.in_position,
+                                                  "last_heartbeat_at": row.last_heartbeat_at},
                                       "message": f"종료 · {STALE_RUNNER_NOTE}"
                                                  + f" · 마지막 heartbeat {row.last_heartbeat_at or '없음'}"
-                                                 + (" · 포지션 보유 중" if row.in_position else "")}])
+                                                 + (" · 포지션 보유 중" if row.in_position else "")}], component="engine")
             db.commit()
             log.warning("runner engine: session %s runner stale (last heartbeat %s) — stopped session and driver",
                         live.session_id, row.last_heartbeat_at)
@@ -462,8 +477,11 @@ def _persist_fill(live: _Live, fill: Fill, state_json: str, rollback_json: str =
         row.state_json = state_json
         db.add(row)
         if created:  # 중복(다른 프로세스가 이미 같은 명령을 남김)이면 신호 이벤트도 다시 쓰지 않는다
-            _append_events(db, row, [{"ts": _now_iso(), "kind": "signal",
-                                      "message": f"[신호 #{cmd.seq}] {cmd.reason} → {cmd.action.upper()} @ {fill.price:g}"}])
+            _append_events(db, row, [_command_event(
+                cmd, "command.created", "signal", "INFO",
+                f"[신호 #{cmd.seq}] {cmd.reason} → {cmd.action.upper()} @ {fill.price:g}",
+                verification="server_signal_not_exchange_order",
+            )], component="engine")
         db.commit()
 
 
@@ -520,6 +538,64 @@ def _view(c: RunnerCommand) -> dict:
             "signal_price": c.signal_price, "reason": c.reason, "expires_ms": c.expires_ms}
 
 
+def _command_event(cmd: RunnerCommand, event_name: str, kind: str, severity: str,
+                   message: str, *, verification="runner_reported_not_exchange_verified") -> dict:
+    """Capture this stage NOW; later mutations of RunnerCommand cannot rewrite it."""
+    details = {
+        "command_id": cmd.id, "command_seq": cmd.seq, "action": cmd.action,
+        "status": cmd.status, "attempts": cmd.attempts, "signal_price": cmd.signal_price,
+        "notional_frac": cmd.notional_frac, "qty_frac": cmd.qty_frac, "reason": cmd.reason,
+        "expires_ms": cmd.expires_ms,
+        "ack_source": "runner" if event_name in {"command.execution_reported", "command.failed"} else "engine",
+        "verification": verification,
+    }
+    if event_name in {"command.execution_reported", "command.failed", "command.retry_scheduled"}:
+        details.update(executed_qty=cmd.executed_qty, fill_price=cmd.fill_price, error=cmd.error)
+    return {
+        "ts": cmd.created_at if event_name == "command.created" else (cmd.acked_at or _now_iso()),
+        "kind": kind, "severity": severity, "event_name": event_name,
+        "operation_id": f"command:{cmd.id}",
+        "event_key": f"command:{cmd.id}:{event_name}:{cmd.attempts}",
+        "message": message,
+        "details": details,
+    }
+
+
+def _execution_report_event(row: RunSession, cmd: RunnerCommand, ack: dict) -> dict:
+    """An ok acknowledgement means handled, not necessarily a submitted/filled order.
+
+    Old executables send zero/missing quantities for no-position and duplicate
+    commands. Preserve acknowledgement/idempotency, but never invent a zero fill.
+    Even positive facts remain runner reports, not independent exchange checks.
+    """
+    outcome = ack.get("outcome")
+    no_order = outcome in ("no_position_no_order", "duplicate_command_no_reexecution")
+    reported_fill = not no_order and all(math.isfinite(value) and value > 0
+                                         for value in (cmd.executed_qty, cmd.fill_price))
+    mode = row.mode if row.mode in {"mock", "testnet", "live"} else ""
+    mode_label = {"mock": "모의", "testnet": "테스트넷", "live": "실전"}.get(mode, "모드 미확인")
+    if outcome == "no_position_no_order":
+        summary = "명령 처리 확인 · 보유 없음, 주문 없음"
+    elif outcome == "duplicate_command_no_reexecution":
+        summary = "명령 처리 확인 · 이미 처리한 명령, 재실행 없음"
+    elif reported_fill:
+        outcome = "execution_reported"
+        label = "체결 보고" if mode in {"mock", "testnet"} else "체결 수량·가격 보고"
+        summary = f"{label} · {cmd.action.upper()} {cmd.executed_qty:g} @ {cmd.fill_price:g}"
+    else:
+        outcome = "acknowledged_execution_unknown"
+        summary = "명령 처리 확인 · 체결 수량·가격 확인 불가"
+    event = _command_event(cmd, "command.execution_reported", "order" if reported_fill else "info", "INFO",
+                           f"[명령 #{cmd.seq}] 실행기 {mode_label} {summary} · {cmd.reason}")
+    event["details"].update(outcome=outcome, mode=mode)
+    if not reported_fill:
+        for field in ("executed_qty", "fill_price"):
+            value = event["details"][field]
+            if no_order or not math.isfinite(value) or value <= 0:
+                event["details"].pop(field, None)
+    return event
+
+
 def _pending_rows(db, row: RunSession) -> List[RunnerCommand]:
     return list(db.exec(select(RunnerCommand).where(RunnerCommand.session_id == row.id, RunnerCommand.status == "pending")
                         .order_by(RunnerCommand.seq.asc())).all())
@@ -532,6 +608,16 @@ def _expire_entries(db, rows: List[RunnerCommand], now_ms: int) -> List[RunnerCo
         if c.status == "pending" and c.action not in EXIT_SIDES and c.expires_ms <= now_ms:
             c.status = "expired"
             db.add(c)
+            from .runner import _append_events
+            event = _command_event(c, "command.expired", "warn", "WARN",
+                                   f"[명령 #{c.seq}] 유효시간 만료 · {c.action.upper()} 진입 명령을 더 이상 전달하지 않습니다.",
+                                   verification="server_command_state")
+            # Expiry is observed here, not at a previous runner acknowledgement.
+            event["ts"] = _now_iso()
+            event["details"]["ack_source"] = "engine"
+            owner = db.get(RunSession, c.session_id)
+            if owner is not None:
+                _append_events(db, owner, [event], component="engine")
             expired.append(c)
     return expired
 
@@ -654,32 +740,46 @@ def apply_acks(db, row: RunSession, acks: list, now_ms: int) -> List[RunnerComma
             cmd.status = "acked"
             if cmd.action in EXIT_SIDES and row.note == EXIT_FAIL_NOTE:
                 row.note = ""  # 재시도 끝에 청산이 됐다 — 실패 메모는 더 이상 사실이 아니다
-            events.append({"ts": cmd.acked_at, "kind": "order",
-                           "message": f"[주문 #{cmd.seq}] {cmd.action.upper()} 체결 {cmd.executed_qty:g} @ {cmd.fill_price:g} · {cmd.reason}"})
+            events.append(_execution_report_event(row, cmd, ack))
             if late and cmd.executed_qty > 0:
                 # 실행기는 받은 명령을 다음 heartbeat 에 꼭 보고하므로 일어나면 안 되는 일이다 — 그래도 났다면 숨기지 않는다.
-                events.append({"ts": cmd.acked_at, "kind": "error",
-                               "message": f"⚠ 취소한 주문 #{cmd.seq} 이 실제로 체결됐다는 보고가 왔어요 — 서버 전략은 이 주문을 모릅니다."
-                                          " 거래소 포지션을 확인해 주세요."})
+                events.append(_engine_rollback_event(
+                    cmd, "engine.late_execution_reported", "error", "ERROR",
+                    f"⚠ 취소한 주문 #{cmd.seq} 이 실제로 체결됐다는 보고가 왔어요 — 서버 전략은 이 주문을 모릅니다."
+                    " 거래소 포지션을 확인해 주세요.",
+                    executed_qty=cmd.executed_qty, fill_price=cmd.fill_price))
         elif cmd.action in EXIT_SIDES and cmd.attempts < EXIT_RETRY_MAX:
             cmd.status = "pending"
             cmd.expires_ms = now_ms + int(COMMAND_TTL_SECONDS * 1000)
             row.note = EXIT_FAIL_NOTE
-            events.append({"ts": cmd.acked_at, "kind": "error",
-                           "message": f"⚠ 청산 주문 실패({cmd.attempts}/{EXIT_RETRY_MAX}) — 다시 시도합니다 · {cmd.error}"})
+            events.append(_command_event(
+                cmd, "command.failed", "error", "ERROR",
+                f"⚠ 청산 주문 실패({cmd.attempts}/{EXIT_RETRY_MAX}) — 다시 시도합니다 · {cmd.error}",
+            ))
+            events.append(_command_event(
+                cmd, "command.retry_scheduled", "warn", "WARN",
+                f"[명령 #{cmd.seq}] 청산 재시도 예약 · 실패 {cmd.attempts}/{EXIT_RETRY_MAX}회 · 다음 heartbeat에서 전달",
+                verification="server_command_state",
+            ))
+            events[-1]["details"]["ack_source"] = "engine"
         elif cmd.action in EXIT_SIDES:
             cmd.status = "failed"
             row.note = EXIT_FAIL_NOTE
-            events.append({"ts": cmd.acked_at, "kind": "error",
-                           "message": f"⚠ 청산 주문이 {EXIT_RETRY_MAX}회 실패했어요 — 거래소에서 포지션을 확인해 주세요 · {cmd.error}"})
+            events.append(_command_event(
+                cmd, "command.failed", "error", "ERROR",
+                f"⚠ 청산 주문이 {EXIT_RETRY_MAX}회 실패했어요 — 거래소에서 포지션을 확인해 주세요 · {cmd.error}",
+            ))
         else:
             cmd.status = "failed"
-            events.append({"ts": cmd.acked_at, "kind": "error", "message": f"⚠ 진입 실패 · {cmd.error}"})
+            events.append(_command_event(
+                cmd, "command.failed", "error", "ERROR",
+                f"⚠ 진입 실패 · {cmd.error}",
+            ))
         db.add(cmd)
         changed.append(cmd)
     if events:
         db.add(row)
-        _append_events(db, row, events)
+        _append_events(db, row, events, component="engine")
     return changed
 
 
@@ -735,9 +835,38 @@ def _retry_floor(session_id: int) -> Optional[int]:
     return min(seq for _attempts, seq in retry.values()) if retry else None
 
 
+def _engine_rollback_event(cmd: RunnerCommand, event_name: str, kind: str, severity: str, message: str,
+                           **details) -> dict:
+    """되돌리기 판단 기록 — 서버(엔진)가 정한 사실이다. 같은 명령의 같은 판단은 한 줄(저장 실패 뒤 재시도에도)."""
+    return {"ts": _now_iso(), "kind": kind, "severity": severity, "event_name": event_name,
+            "operation_id": f"command:{cmd.id}", "event_key": f"command:{cmd.id}:{event_name}",
+            "message": message,
+            "details": {"command_id": cmd.id, "command_seq": cmd.seq, "action": cmd.action, "status": cmd.status,
+                        "signal_price": cmd.signal_price, "ack_source": "engine",
+                        "verification": "server_command_state", **details}}
+
+
+def _held_until(state_json: str, fallback: int) -> int:
+    """기록에 남길 대기 종료 시각 — 드라이버(state_json)에 실제로 걸린 값. 저장 실패 뒤 같은 ack 가 다시 오면
+    드라이버는 첫 시도 때의 대기를 갖고 있다(지금 시각으로 다시 계산하면 그만큼 늦게 적힌다)."""
+    try:
+        held = int((json.loads(state_json or "{}") or {}).get("entry_hold_until_ms") or 0)
+    except (TypeError, ValueError):
+        held = 0
+    return held or fallback
+
+
+def _hold_phrase(until_ms: int, now_ms: int, verb: str) -> str:
+    """기록 문구의 대기 안내. 대기가 이미 끝났으면(늦게 온 같은 ack 등) 그렇다고 쓴다 — '1분 동안' 으로 꾸미지 않는다."""
+    if until_ms <= now_ms:
+        return "대기 시간은 이미 지났어요"
+    return f"{-(-(until_ms - now_ms) // 60_000)}분 동안은 새로 {verb}하지 않아요"
+
+
 def _refusal(cmd: RunnerCommand, reason: str) -> dict:
-    return {"ts": _now_iso(), "kind": "warn",
-            "message": f"⚠ 주문 #{cmd.seq} — {_REFUSAL_MESSAGES[reason]}. 거래소 포지션을 확인해 주세요."}
+    return _engine_rollback_event(cmd, "engine.rollback_refused", "warn", "WARN",
+                                  f"⚠ 주문 #{cmd.seq} — {_REFUSAL_MESSAGES[reason]}. 거래소 포지션을 확인해 주세요.",
+                                  reason=reason)
 
 
 def _undo_lot_in_state(state: dict, info: dict) -> Optional[dict]:
@@ -808,6 +937,7 @@ def settle_unexecuted_entries(db, row: RunSession, changed: List[RunnerCommand],
     grid_undone: List[RunnerCommand] = []
     rolled = None
     minutes = None
+    grid_hold = 0
 
     def postpone(cmd: RunnerCommand) -> None:
         attempts = (retry.get(cmd.id) or (0, cmd.seq))[0] + 1
@@ -849,6 +979,7 @@ def settle_unexecuted_entries(db, row: RunSession, changed: List[RunnerCommand],
             cmd.rollback_state = ROLLED_BACK_ALSO if (grid_undone or rolled) else ROLLED_BACK
             db.add(cmd)
             grid_undone.append(cmd)
+            grid_hold = _held_until(outcome, retry_at)
             continue
         later = [c for c in later_rows if c.seq > cmd.seq]
         if not snap["state"].get("in_position"):
@@ -877,6 +1008,7 @@ def settle_unexecuted_entries(db, row: RunSession, changed: List[RunnerCommand],
         retry.clear()  # 앞 후보는 이미 거절로 빠졌고, 뒤 후보는 이 되돌리기에 함께 지워졌다
         state_json, to_cancel = outcome
         row.state_json = state_json or json.dumps({**snap["state"], "entry_hold_until_ms": retry_at})
+        held = _held_until(row.state_json, retry_at)
         cmd.rollback_state = ROLLED_BACK
         db.add(cmd)
         for c in later:
@@ -886,15 +1018,20 @@ def settle_unexecuted_entries(db, row: RunSession, changed: List[RunnerCommand],
         why = ("진입 주문이 나가지 않아" if cmd.status == "failed"
                else f"진입 신호가 {COMMAND_TTL_SECONDS:g}초 안에 실행기에 전달되지 않아")
         where = "추가 진입 전으로" if snap["state"].get("in_position") else "진입 전으로"
-        events.append({"ts": _now_iso(), "kind": "warn",
-                       "message": f"{why} 서버 전략도 {where} 되돌렸어요 · {minutes}분 동안은 새로 진입하지 않아요"})
+        events.append(_engine_rollback_event(
+            cmd, "engine.entry_rolled_back", "warn", "WARN",
+            f"{why} 서버 전략도 {where} 되돌렸어요 · {_hold_phrase(held, now_ms, '진입')}",
+            retry_at=held, count=len(to_cancel)))
         rolled = cmd
         break
+    for cmd in grid_undone:
+        # 칸(명령)마다 한 줄 — 명령별 검색(operation_id)에서 빠지지 않게. 알림 종류가 아니라 알림이 쌓이지 않는다.
+        events.append(_engine_rollback_event(
+            cmd, "engine.grid_lot_removed", "warn", "WARN",
+            f"그리드 {cmd.signal_price:g} 칸 매수가 나가지 않아 그 칸만 서버 전략에서 뺐어요"
+            f" · 다른 칸 체결은 그대로 · {_hold_phrase(grid_hold, now_ms, '매수')}",
+            count=len(grid_undone), retry_at=grid_hold))
     if grid_undone:
-        prices = " · ".join(f"{c.signal_price:g}" for c in grid_undone[:5]) + (" …" if len(grid_undone) > 5 else "")
-        events.append({"ts": _now_iso(), "kind": "warn",
-                       "message": f"주문이 나가지 않은 그리드 매수 {len(grid_undone)}건({prices})은 그 칸만 서버 전략에서 뺐어요"
-                                  f" · 다른 칸 체결은 그대로 · {minutes}분 동안은 새로 매수하지 않아요"})
         rolled = rolled or grid_undone[-1]
     _keep_retry(row.id, retry)
     if refusals:
@@ -902,7 +1039,7 @@ def settle_unexecuted_entries(db, row: RunSession, changed: List[RunnerCommand],
         events[:0] = [_refusal(cmd, reason) for cmd, reason in refusals[:5]]
     if events:
         db.add(row)
-        _append_events(db, row, events)
+        _append_events(db, row, events, component="engine")  # 서버 판단 — 실행기 보고로 표시하지 않는다
     return rolled
 
 
@@ -1062,9 +1199,14 @@ def check_position_mismatch(db, row: RunSession, reported_in_position: bool) -> 
         return
     _MISMATCH_NOTED.add(row.id)
     _append_events(db, row, [{"ts": _now_iso(), "kind": "warn",
+                              "severity": "WARN", "event_name": "engine.position_mismatch",
+                              "operation_id": f"session:{row.id}",
+                              "details": {"server_in_position": expected,
+                                          "runner_in_position": bool(reported_in_position),
+                                          "verification": "runner_reported_not_exchange_verified"},
                               "message": ("서버 전략은 포지션 보유 중인데 실행기는 비어 있어요" if expected
                                           else "서버 전략은 비어 있는데 실행기는 포지션을 들고 있어요")
-                                         + " — 거래소 포지션을 확인해 주세요."}])
+                                         + " — 거래소 포지션을 확인해 주세요."}], component="engine")
 
 
 # --- 재기동 복구 -------------------------------------------------------------

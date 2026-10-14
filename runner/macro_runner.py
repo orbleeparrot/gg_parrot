@@ -32,6 +32,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import inspect
+import math
 import os
 import queue
 import shutil
@@ -49,8 +50,10 @@ from tkinter import filedialog, messagebox, ttk
 
 try:  # package import (tests) / direct script import (PyInstaller build)
     from . import credentials as credentials_mod
+    from . import event_outbox
 except ImportError:
     import credentials as credentials_mod
+    import event_outbox
 
 try:  # package import (tests) / direct script import (PyInstaller build)
     from . import assets
@@ -226,19 +229,23 @@ EVENT_BUFFER_MAX = 100
 def _event_kind(msg: str) -> str:
     """로그 한 줄을 서버 이벤트 종류로 분류한다(문의 대응용 색인)."""
     m = msg.strip()
+    # Failure text commonly contains "체결" (e.g. "체결 확인 실패").
+    # A keyword must not make a failed/uncertain order look like a fill.
+    if "오류" in m or "실패" in m:
+        return "error"
+    if any(word in m for word in ("미체결", "불확실", "확인하지 못", "체결되지")):
+        return "warn"
     if m.startswith("[진입]") or m.startswith("[청산") or m.startswith("[강제청산") or m.startswith("[손절]"):
         return "order"
     if "체결" in m or m.lstrip().startswith("손익"):
         return "fill"
-    if "오류" in m or "실패" in m:
-        return "error"
     if "종료" in m:
         return "stop"
     if "진입 보류" in m or "신호" in m:
         return "signal"
     return "info"
 
-_LOG_ICONS = {"signal": "🔔", "order": "▶", "fill": "✓", "error": "⚠", "stop": "■", "info": "·"}
+_LOG_ICONS = {"signal": "🔔", "order": "▶", "fill": "✓", "error": "⚠", "warn": "⚠", "stop": "■", "info": "·"}
 
 
 def _log_style(msg: str) -> tuple[str, str]:
@@ -661,7 +668,8 @@ def _retry_after_seconds(response) -> float:
 
 
 class ServerClient:
-    def __init__(self, runner_key: str, *, base: str = SERVER_BASE) -> None:
+    def __init__(self, runner_key: str, *, base: str = SERVER_BASE, outbox_path=None,
+                 cli_sink=None, on_event_warning=None) -> None:
         self.base = base.rstrip("/")
         self.key = runner_key.strip()
         self.session_id = None
@@ -670,29 +678,280 @@ class ServerClient:
         # 실행 창 로그를 서버에도 남긴다 — heartbeat 에 실어 보내고, 실패하면 다음에 다시.
         self._events: list[dict] = []
         self._events_lock = threading.Lock()
+        self._event_sessions: dict[str, int] = {}
+        self._memory_created_ms: dict[str, int] = {}
+        self._memory_payload_bytes: dict[str, int] = {}
+        self._memory_loss_counts = {"memory_expired": 0, "memory_capacity": 0}
+        self._memory_flushed_loss_counts = dict(self._memory_loss_counts)
+        self._memory_noticed_loss_counts = dict(self._memory_loss_counts)
+        self._last_memory_notice_ms = 0
+        self._unassigned_event_keys: set[str] = set()
+        self._event_outbox = event_outbox.EventOutbox(outbox_path)
+        self._event_namespace = event_outbox.namespace(self.base, self.key)
+        self._cli_sink = cli_sink
+        self.on_event_warning = on_event_warning
+        self._event_warning_emitted = False
+        self._recovery_thread = None
+        self._recovery_cursor = 0
+        self._event_retry_after: dict[int, float] = {}
         # 명령 실행 결과(ack). 전송에 실패하면 다음 heartbeat 앞머리에 다시 실어 보낸다.
         self.unsent_acks: list[dict] = []
 
-    def push_event(self, kind: str, message: str) -> None:
+    def push_event(self, kind: str, message: str, *, severity: str = "UNKNOWN",
+                   event_name: str = "runner.message", operation_id: str = "", details: dict | None = None) -> dict:
+        # Snapshot only public scalar order/command facts. Never retain a mutable
+        # broker response, credentials, authentication headers, or a signed URL.
+        allowed = {"command_id", "action", "reason", "status", "raw_status", "command_seq",
+                   "signal_price", "notional_frac", "qty_frac", "executed_qty", "fill_price",
+                   "client_order_id", "exchange_order_id", "acquired_qty", "fees_known",
+                   "error", "mode", "exchange", "symbol", "verification", "ack_source",
+                   "outcome", "position_uncertain", "reconciliation_scope"}
+        allowed.update({"requested_qty", "requested_notional", "quote_currency", "reduce_only", "closing"})
+        snapshot = {key: event_outbox.redact(value, self.key)[:600] if isinstance(value, str) else value
+                    for key, value in (details or {}).items()
+                    if key in allowed and isinstance(value, (str, int, float, bool))}
+        # Serialization both copies the facts and rejects NaN/unsupported types
+        # before they can poison an otherwise valid heartbeat JSON body.
+        try:
+            snapshot = json.loads(json.dumps(snapshot, allow_nan=False))
+        except (ValueError, TypeError, OverflowError):
+            snapshot = {}
+        message = event_outbox.redact(message, self.key)
+        event = {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "kind": kind, "message": message[:300],
+            # Created once at emission; _requeue_events and stopped retries reuse
+            # this exact identity, not a hash of possibly identical messages.
+            "event_key": "runner:" + uuid.uuid4().hex,
+            "severity": severity if severity in {"DEBUG", "INFO", "WARN", "ERROR", "UNKNOWN"} else "UNKNOWN",
+            "component": "runner", "event_name": event_outbox.redact(event_name, self.key)[:80],
+            "operation_id": event_outbox.redact(operation_id, self.key)[:120], "details": snapshot,
+        }
+        session_id = self.session_id or 0
         with self._events_lock:
-            self._events.append({
-                "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                "kind": kind,
-                "message": str(message)[:300],
-            })
-            if len(self._events) > EVENT_BUFFER_MAX:
-                del self._events[:-EVENT_BUFFER_MAX]
+            if session_id == 0:
+                self._unassigned_event_keys.add(event["event_key"])
+            try:
+                self._event_outbox.append(self._event_namespace, session_id, event)
+            except Exception:
+                # A failed disk must not make the trading process grow without
+                # bound. Any age/cap eviction is explicitly counted, not ACKed.
+                self._events.append(event)
+                key = event["event_key"]
+                self._event_sessions[key] = session_id
+                self._memory_created_ms[key] = self._event_outbox.now_ms()
+                self._memory_payload_bytes[key] = len(json.dumps(event, ensure_ascii=False, allow_nan=False,
+                                                                sort_keys=True).encode("utf-8"))
+                self._event_storage_warning()
+            self._maintain_events_locked()
+        # Exactly the emitted object (same key/time/facts) goes to CLI. Retries
+        # read the journal and never generate a new identity or print it again.
+        try:
+            if self._cli_sink is not None:
+                self._cli_sink(json.loads(json.dumps(event, ensure_ascii=False)))
+            elif sys.stdout is not None:
+                sys.stdout.write(json.dumps(event, ensure_ascii=False, allow_nan=False) + "\n")
+                sys.stdout.flush()
+        except Exception:
+            pass  # A closed console is not a reason to repeat a trading order.
+        return event
+
+    def _event_storage_warning(self):
+        if self._event_warning_emitted:
+            return
+        self._event_warning_emitted = True
+        message = "활동 로그 로컬 저장에 실패했어요. 현재 메모리에 보관 중이며 실행기 종료 시 미전송 기록이 유실될 수 있어요."
+        self._direct_event_warning(message)
+
+    def _direct_event_warning(self, message):
+        # Never call push_event/log here: warning about a full queue must not
+        # enqueue another warning and recursively evict more telemetry.
+        try:
+            if callable(self.on_event_warning):
+                self.on_event_warning(message)
+        except Exception:
+            pass
+        try:
+            if sys.stderr is not None:
+                sys.stderr.write(message + "\n")
+        except Exception:
+            pass
+
+    def _remove_memory_keys_locked(self, keys, *, forget_unassigned=True):
+        keys = set(keys)
+        self._events = [event for event in self._events if event["event_key"] not in keys]
+        for key in keys:
+            self._event_sessions.pop(key, None)
+            self._memory_created_ms.pop(key, None)
+            self._memory_payload_bytes.pop(key, None)
+            if forget_unassigned:
+                self._unassigned_event_keys.discard(key)
+
+    def _maintain_events_locked(self):
+        """Called by emission AND heartbeat/recovery reads, under events_lock."""
+        now = self._event_outbox.now_ms()
+        expired = {event["event_key"] for event in self._events
+                   if self._memory_created_ms[event["event_key"]] <= now - event_outbox.PENDING_TTL_SECONDS * 1000}
+        self._remove_memory_keys_locked(expired)
+        self._memory_loss_counts["memory_expired"] = min(2**63 - 1,
+            self._memory_loss_counts["memory_expired"] + len(expired))
+        size = sum(self._memory_payload_bytes.values())
+        overflow = []
+        for event in self._events:
+            if len(self._events) - len(overflow) <= event_outbox.MEMORY_MAX_ROWS and size <= event_outbox.MEMORY_MAX_BYTES:
+                break
+            key = event["event_key"]
+            overflow.append(key)
+            size -= self._memory_payload_bytes[key]
+        self._remove_memory_keys_locked(overflow)
+        self._memory_loss_counts["memory_capacity"] = min(2**63 - 1,
+            self._memory_loss_counts["memory_capacity"] + len(overflow))
+        try:
+            self._event_outbox.maintain()
+            deltas = {reason: count - self._memory_flushed_loss_counts[reason]
+                      for reason, count in self._memory_loss_counts.items()}
+            if any(deltas.values()):
+                self._event_outbox.record_memory_loss(deltas)
+                self._memory_flushed_loss_counts = dict(self._memory_loss_counts)
+            # Bound bookkeeping too: another process/global retention may have
+            # removed this client's still-unassigned disk records.
+            if self._unassigned_event_keys:
+                disk_keys = self._event_outbox.existing_unassigned_keys(self._event_namespace, self._unassigned_event_keys)
+                self._unassigned_event_keys.intersection_update(disk_keys | set(self._event_sessions))
+            notice = self._event_outbox.take_loss_notice()
+        except Exception:
+            self._event_storage_warning()
+            notice = {}
+            if not 0 <= now - self._last_memory_notice_ms < event_outbox.MAINTENANCE_SECONDS * 1000:
+                notice = {reason: count - self._memory_noticed_loss_counts[reason]
+                          for reason, count in self._memory_loss_counts.items()}
+                if any(notice.values()):
+                    self._last_memory_notice_ms = now
+                    self._memory_noticed_loss_counts = dict(self._memory_loss_counts)
+        if any(notice.values()):
+            count = sum(notice.values())
+            expired_count = notice.get("disk_expired", 0) + notice.get("memory_expired", 0)
+            capacity_count = notice.get("disk_capacity", 0) + notice.get("memory_capacity", 0)
+            self._direct_event_warning(
+                f"활동 로그 누락 주의: 서버 저장 미확인 로컬 기록 {count}건의 보관이 종료됐어요 "
+                f"(7일 만료 {expired_count}건 · 용량 제한 {capacity_count}건). 서버 전달·원본 복구를 보장할 수 없어요.")
+
+    def _peek_events(self, session_id=None) -> list[dict]:
+        session_id = int(self.session_id or 0) if session_id is None else session_id
+        with self._events_lock:
+            self._maintain_events_locked()
+            try:
+                if self.session_id:
+                    self._event_outbox.bind_unassigned(self._event_namespace, self.session_id, self._unassigned_event_keys)
+                    self._unassigned_event_keys.clear()
+                for event in list(self._events):
+                    original_session = self._event_sessions[event["event_key"]] or int(self.session_id or 0)
+                    try:
+                        self._event_outbox.append(self._event_namespace, original_session, event,
+                                                 created_ms=self._memory_created_ms[event["event_key"]])
+                    except Exception:
+                        continue
+                    self._remove_memory_keys_locked([event["event_key"]], forget_unassigned=original_session != 0)
+                durable = self._event_outbox.peek(self._event_namespace, session_id,
+                    event_keys=self._unassigned_event_keys if session_id == 0 else None)
+            except Exception:
+                self._event_storage_warning()
+                durable = []
+            self._maintain_events_locked()
+            keys = {event["event_key"] for event in durable}
+            pending = [event for event in self._events if event["event_key"] not in keys
+                       and (self._event_sessions[event["event_key"]] or int(self.session_id or 0)) == session_id]
+            return event_outbox.wire_batch((durable + pending)[:EVENT_BUFFER_MAX])
+
+    def _ack_events(self, events: list[dict], data: dict, session_id=None):
+        accepted = data.get("accepted_event_keys") if isinstance(data, dict) else None
+        if not isinstance(accepted, list):
+            return  # HTTP 200 is not confirmation that these events persisted.
+        sent = {event["event_key"] for event in events}
+        keys = [key for key in accepted if isinstance(key, str) and key in sent][:EVENT_BUFFER_MAX]
+        if not keys:
+            return
+        session_id = int(self.session_id or 0) if session_id is None else session_id
+        with self._events_lock:
+            try:
+                self._event_outbox.acknowledge(self._event_namespace, session_id, keys)
+            except Exception:
+                self._event_storage_warning()
+            self._remove_memory_keys_locked(keys)
 
     def _drain_events(self) -> list[dict]:
-        with self._events_lock:
-            batch, self._events = self._events, []
-        return batch
+        """Compatibility reader; no dequeue on send (ACK or retention removes)."""
+        return self._peek_events()
 
     def _requeue_events(self, batch: list[dict]) -> None:
-        if not batch:
+        # Pending journal rows were never drained. Do not duplicate/re-identify.
+        return
+
+    def recover_events(self, *, max_batches=1, include_current=False):
+        """Replay only event records, never snapshots or trading command ACKs."""
+        try:
+            sessions = self._event_outbox.sessions(self._event_namespace)
+            self._event_retry_after = {sid: deadline for sid, deadline in self._event_retry_after.items() if sid in sessions}
+        except Exception:
+            self._event_storage_warning()
             return
-        with self._events_lock:
-            self._events = (batch + self._events)[-EVENT_BUFFER_MAX:]
+        attempted = 0
+        if sessions:
+            start = self._recovery_cursor % len(sessions)
+            sessions = sessions[start:] + sessions[:start]
+            self._recovery_cursor += 1  # A deleted/denied old session cannot starve every later session.
+        for session_id in sessions:
+            if not include_current and session_id == self.session_id:
+                continue
+            if self._event_retry_after.get(session_id, 0) > time.monotonic():
+                continue
+            while attempted < max_batches:
+                events = self._peek_events(session_id)
+                if not events:
+                    break
+                attempted += 1
+                response = None
+                try:
+                    response = requests.post(f"{self.base}/api/runner/sessions/{session_id}/events",
+                                             json={"events": events}, headers=self._headers, timeout=3)
+                    response.raise_for_status()
+                    data = response.json() or {}
+                    self._ack_events(events, data, session_id)
+                    if not isinstance(data, dict) or not data.get("accepted_event_keys"):
+                        self._event_retry_after[session_id] = time.monotonic() + 30
+                        break  # Old server/missing confirmation: keep all rows.
+                    if self._peek_events(session_id) == events:
+                        self._event_retry_after[session_id] = time.monotonic() + 30
+                        break
+                    self._event_retry_after.pop(session_id, None)
+                except Exception:
+                    status = getattr(response, "status_code", None)
+                    delay = 300 if status in {401, 403, 404, 410} else 30
+                    self._event_retry_after[session_id] = time.monotonic() + delay
+                    break  # Including deleted/expired sessions: not a success ACK.
+            if attempted >= max_batches:
+                break
+
+    def _schedule_event_recovery(self, *, include_current=False):
+        if not hasattr(self, "_event_outbox"):
+            return
+        if self._recovery_thread is not None and self._recovery_thread.is_alive():
+            return
+        try:
+            pending = self._event_outbox.sessions(self._event_namespace)
+        except Exception:
+            self._event_storage_warning()
+            return
+        if not any((include_current or session_id != self.session_id)
+                   and self._event_retry_after.get(session_id, 0) <= time.monotonic() for session_id in pending):
+            return
+        self._recovery_thread = threading.Thread(target=self.recover_events,
+            kwargs={"max_batches": 3, "include_current": include_current}, daemon=True,
+            name="ggp-activity-recovery")
+        self._recovery_thread.start()
+
+    def close_events(self):
+        self._event_outbox.close()
 
     def start(self, payload: dict) -> dict:
         # 서버가 '혼잡'(503 database_busy · 429)이면 Retry-After 만큼 쉬고 다시 보낸다. 서버의 시작은 한 트랜잭션이고
@@ -711,6 +970,7 @@ class ServerClient:
         data = r.json()
         self.session_id = data.get("session_id")
         self.macro_origin = str(data.get("macro_origin") or "")
+        self._schedule_event_recovery()
         return data
 
     def heartbeat(self, snapshot: dict, acks: list[dict] | None = None) -> dict:
@@ -727,10 +987,14 @@ class ServerClient:
         self.unsent_acks = []
         body["acks"] = pending
         try:
+            events = event_outbox.wire_batch(events, body=body)
+            body["events"] = events
             r = requests.post(f"{self.base}/api/runner/heartbeat", json=body,
                               headers=self._headers, timeout=10)
             r.raise_for_status()
             data = r.json() or {}
+            self._ack_events(events, data)
+            self._schedule_event_recovery()
             return {"action": data.get("action", "continue"), "commands": list(data.get("commands") or [])}
         except Exception:
             self._requeue_events(events)
@@ -748,6 +1012,7 @@ class ServerClient:
         }
         for attempt in range(MAX_RETRIES):
             try:
+                body["events"] = event_outbox.wire_batch(body["events"], body=body)
                 response = requests.post(
                     f"{self.base}/api/runner/stopped", json=body,
                     headers=self._headers, timeout=10,
@@ -755,6 +1020,8 @@ class ServerClient:
                 if 400 <= response.status_code < 500 and response.status_code not in {408, 429}:
                     return False
                 response.raise_for_status()
+                self._ack_events(body["events"], response.json() or {})
+                self._schedule_event_recovery(include_current=True)
                 return True
             except Exception:
                 if attempt + 1 < MAX_RETRIES:
@@ -791,6 +1058,8 @@ class BotThread(threading.Thread):
         self.mode = run_mode_of(mode)
         self.server = server
         self.on_log = on_log
+        if isinstance(server, ServerClient) and server.on_event_warning is None:
+            server.on_event_warning = on_log  # One explicit storage warning, not one GUI line per structured event.
         self.on_status = on_status
         self.on_finish = on_finish
 
@@ -848,12 +1117,35 @@ class BotThread(threading.Thread):
         with self._lock:
             return self._command
 
-    def log(self, msg: str) -> None:
+    def log(self, msg: str, *, kind: str | None = None, severity: str = "UNKNOWN",
+            event_name: str = "runner.message", operation_id: str = "", details: dict | None = None) -> None:
         self.on_log(msg)
         try:
-            self.server.push_event(_event_kind(msg), msg)
+            # The Windows text is unchanged. The upload additionally masks actual
+            # local secrets before they ever leave this PC.
+            credentials = getattr(self, "credentials", {})
+            safe_message = connection.safe_preflight_reason(msg, credentials)
+            safe_details = {key: connection.safe_preflight_reason(value, credentials)
+                            if isinstance(value, str) else value for key, value in (details or {}).items()}
+            self.server.push_event(kind or _event_kind(msg), safe_message, severity=severity,
+                                   event_name=event_name,
+                                   operation_id=operation_id or getattr(self, "_active_log_operation_id", ""),
+                                   details=safe_details)
         except Exception:
             pass  # 로그 전송은 매매를 막지 않는다
+
+    def _telemetry(self, kind: str, message: str, *, event_name: str, severity: str,
+                   operation_id: str = "", details: dict | None = None) -> None:
+        """Extra structured stages go to the web only, not the Windows GUI."""
+        try:
+            credentials = getattr(self, "credentials", {})
+            safe_details = {key: connection.safe_preflight_reason(value, credentials)
+                            if isinstance(value, str) else value for key, value in (details or {}).items()}
+            self.server.push_event(kind, connection.safe_preflight_reason(message, credentials),
+                                   severity=severity, event_name=event_name, operation_id=operation_id,
+                                   details=safe_details)
+        except Exception:
+            pass
 
     def _sleep(self, seconds: float) -> None:
         # 종료 명령이 오면 즉시 깨어나도록 이벤트 기반 대기.
@@ -941,6 +1233,23 @@ class BotThread(threading.Thread):
     def _price(self) -> float:
         return self.broker.price()
 
+    def _log_mode(self) -> str:
+        """Log only an explicit mode, never default missing telemetry to live/mock."""
+        mode = vars(self).get("mode", "")
+        return mode if mode in RUN_MODES else ""
+
+    def _log_reconciliation_scope(self) -> str:
+        """Describe what the legacy fees_known flag actually checks; no risk change."""
+        if self._log_mode() == MODE_MOCK:
+            return "simulated_fee_model"
+        if self.exchange in DOMESTIC_EXCHANGES:
+            return "domestic_trade_quantity_coverage"
+        if self.exchange == "binance" and self.market == "spot":
+            return "binance_spot_fill_fee_coverage"
+        if self.exchange == "binance" and self.market == "futures":
+            return "binance_futures_quantity_only"
+        return "unknown"
+
     def _place(self, side_word: str, qty: float, reduce_only: bool = False,
                *, notional: float = 0.0) -> bool:
         """시장가 주문 하나를 넣고 체결을 확인한 뒤 보유 상태를 갱신한다.
@@ -960,17 +1269,52 @@ class BotThread(threading.Thread):
         partial_close = closing and sellable > 0 and (sellable - qty) >= (self.step or 1e-12)
         client_id = "ggp-" + uuid.uuid4().hex[:28]
         by_money = self.domestic and not closing and notional > 0
+        operation_id = getattr(self, "_active_log_operation_id", "") or f"order:{client_id}"
+        request_details = {"action": side_word, "client_order_id": client_id,
+                           "requested_notional": notional if by_money else None,
+                           "requested_qty": None if by_money else qty, "quote_currency": self.quote,
+                           "reduce_only": reduce_only, "closing": closing,
+                           "mode": self._log_mode(), "exchange": self.exchange, "symbol": self.symbol}
+        mode = self._log_mode()
+        mode_label = MODE_LABELS.get(mode, "모드 미확인")
+        target = "시뮬레이터" if mode == MODE_MOCK else "거래소 어댑터"
+        self._telemetry("order", f"{mode_label} 주문 요청을 {target}에 전달합니다.",
+                        event_name="runner.order_requested", severity="INFO", operation_id=operation_id,
+                        details=request_details)
         # 제출 · 재조정 · 평균가 · 수수료는 브로커가 한다. 봇은 그 결과로 장부만 쓴다.
-        order = self.broker.submit(side_word, base_qty=None if by_money else qty,
-                                   notional=notional if by_money else None,
-                                   reduce_only=reduce_only,
-                                   closing=closing, client_id=client_id)
+        try:
+            order = self.broker.submit(side_word, base_qty=None if by_money else qty,
+                                       notional=notional if by_money else None,
+                                       reduce_only=reduce_only,
+                                       closing=closing, client_id=client_id)
+        except Exception as exc:
+            self._telemetry("error", f"{mode_label} {target}가 주문 처리 오류를 보고했습니다.",
+                            event_name="runner.order_failed", severity="ERROR", operation_id=operation_id,
+                            details={**request_details, "error": str(exc)})
+            raise
         executed, average = order.executed_qty, order.avg_price
         acquired, fees_known = order.acquired_qty, order.fees_known
-        self._last_fill_qty, self._last_fill_price = executed, average
-        self.position_uncertain = order.status not in brokers.TERMINAL_STATUSES or (
+        result_uncertain = order.status not in brokers.TERMINAL_STATUSES or (
             order.status == "FILLED" and not (executed and average)
         ) or bool(executed and not average) or not fees_known
+        reported_fill = order.status == "FILLED" and not result_uncertain and all(
+            math.isfinite(value) and value > 0 for value in (executed, average))
+        self._telemetry(
+            "fill" if reported_fill else "warn",
+            f"{mode_label} {target} 주문 결과 · status={order.raw_status or '미기록'} · "
+            f"id={order.order_id if order.order_id is not None else '미기록'} · 수량={executed:g} · 평균가={average:g}",
+            severity="INFO" if reported_fill else "WARN", event_name="runner.order_result",
+            operation_id=operation_id,
+            details={"action": side_word, "status": order.status, "raw_status": order.raw_status,
+                     "client_order_id": client_id, "exchange_order_id": order.order_id,
+                     "executed_qty": executed, "fill_price": average, "acquired_qty": acquired,
+                     "fees_known": fees_known, "reconciliation_scope": self._log_reconciliation_scope(),
+                     "position_uncertain": bool(result_uncertain), "mode": mode,
+                     "exchange": self.exchange, "symbol": self.symbol,
+                     "verification": "runner_reported_not_exchange_verified", "ack_source": "runner"},
+        )
+        self._last_fill_qty, self._last_fill_price = executed, average
+        self.position_uncertain = result_uncertain
         dust_only = False
         if executed:
             if closing:
@@ -1008,7 +1352,10 @@ class BotThread(threading.Thread):
         if order.status != "FILLED" or self.position_uncertain or (closing and self.in_position and not partial_close):
             # 사람이 거래소에서 직접 확인할 때 쓰는 문구다. 판정은 접은 status 로 하고, 보고는 거래소가 쓴 낱말로 한다.
             raise RuntimeError(f"주문 상태 {order.raw_status} — 체결 완료를 확인하지 못했습니다. 거래소에서 주문과 포지션을 확인하세요.")
-        self.log(f"  ✓ {side_word}{' (청산)' if reduce_only else ''} 체결: id={order.order_id} 수량={executed}")
+        # The canonical order_result above already emitted the one immutable
+        # event for CLI/Web/header correlation. Project only its existing GUI
+        # sentence here; do not mint a second legacy fill identity.
+        self.on_log(f"  ✓ {side_word}{' (청산)' if reduce_only else ''} 체결: id={order.order_id} 수량={executed}")
         return True
 
     def _prepare(self) -> bool:
@@ -1120,11 +1467,20 @@ class BotThread(threading.Thread):
         실패한 명령은 기록하지 않는다 — 서버가 청산 실패를 같은 id 로 재전송하면 다시 실행해야 한다.
         """
         cid = cmd.get("id")
-        ack = {"command_id": cid, "ok": True, "executed_qty": 0.0, "fill_price": 0.0, "error": ""}
+        ack = {"command_id": cid, "ok": True, "executed_qty": 0.0, "fill_price": 0.0, "error": "",
+               "mode": self._log_mode(), "outcome": "execution_not_reported"}
         if cid in self._done_command_ids:
+            ack["outcome"] = "duplicate_command_no_reexecution"
             return ack
         action = str(cmd.get("action", "")).lower()
         reason = str(cmd.get("reason") or "")
+        operation_id = f"command:{cid}"
+        self._active_log_operation_id = operation_id
+        context = {"command_id": cid, "action": action, "command_seq": cmd.get("seq"),
+                   "signal_price": cmd.get("signal_price"), "notional_frac": cmd.get("notional_frac"),
+                   "qty_frac": cmd.get("qty_frac"), "reason": reason, "mode": self._log_mode()}
+        self._telemetry("info", "서버 주문 명령을 실행기가 수신했습니다.", event_name="runner.command_received",
+                        severity="INFO", operation_id=operation_id, details=context)
         uncertain_before = getattr(self, "position_uncertain", False)
         try:
             if action not in ("buy", "short", "sell", "cover"):
@@ -1160,11 +1516,16 @@ class BotThread(threading.Thread):
                         self.held_qty = prev_qty + added
                     self.entry_price = (prev_qty * prev_entry + added * filled_px) / self.held_qty
                     self.in_position = True
-                ack.update(executed_qty=filled_qty, fill_price=filled_px)
+                ack.update(executed_qty=filled_qty, fill_price=filled_px, outcome="execution_reported")
             else:  # sell / cover
                 if not self.in_position or self.held_qty <= 0:
                     self.log(f"[신호] {reason} → 보유 없음, 건너뜀")
                     self._done_command_ids.append(cid)
+                    ack["outcome"] = "no_position_no_order"
+                    self._telemetry("info", "보유 포지션이 없어 청산 주문을 보내지 않았습니다.",
+                                    event_name="runner.command_reported", severity="INFO", operation_id=operation_id,
+                                    details={**context, "outcome": "no_position_no_order", "executed_qty": 0})
+                    self._active_log_operation_id = ""
                     return ack
                 frac = float(cmd.get("qty_frac") or 1.0)
                 self.log(f"[신호] {reason} → {'전량' if frac >= 0.999 else f'{frac:.0%}'} 청산 @ {price}")
@@ -1178,16 +1539,32 @@ class BotThread(threading.Thread):
                     word = "SELL" if self.side == "long" else "BUY"
                     if not self._place(word, qty, reduce_only=(self.market == "futures")):
                         raise RuntimeError("부분 청산 주문이 체결되지 않았어요.")
-                ack.update(executed_qty=self._last_fill_qty, fill_price=self._last_fill_price)
+                ack.update(executed_qty=self._last_fill_qty, fill_price=self._last_fill_price,
+                           outcome="execution_reported")
         except Exception as exc:
             if getattr(self, "position_uncertain", False) and not uncertain_before:
                 # 이 주문으로 포지션이 불확실해졌다 — 명령을 계속 받을 상태가 아니다. 루프를 끝내고
                 # 오류 상태로 종료 보고한다(사용자가 거래소에서 확인). 서버 명령은 만료로 정리된다.
+                self._telemetry("error", "주문 결과가 불확실해 추가 명령 실행을 중단합니다.",
+                                event_name="runner.command_failed", severity="ERROR", operation_id=operation_id,
+                                details={**context, "error": str(exc), "position_uncertain": True})
+                self._active_log_operation_id = ""
                 raise
-            ack.update(ok=False, error=str(exc)[:200])
+            ack.update(ok=False, error=str(exc)[:200], outcome="execution_failed")
             self.log(f"  ⚠ 명령 실행 실패: {exc}")
         if ack["ok"]:
             self._done_command_ids.append(cid)
+        self._telemetry(
+            "order" if ack["ok"] else "error",
+            f"{MODE_LABELS.get(self._log_mode(), '모드 미확인')} 서버 명령 실행 결과를 실행기가 보고합니다.",
+            event_name="runner.command_reported" if ack["ok"] else "runner.command_failed",
+            severity="INFO" if ack["ok"] else "ERROR", operation_id=operation_id,
+            details={**context, "status": "reported_ok" if ack["ok"] else "reported_failed",
+                     "executed_qty": ack["executed_qty"], "fill_price": ack["fill_price"],
+                     "error": ack["error"], "outcome": ack["outcome"],
+                     "verification": "runner_reported_not_exchange_verified"},
+        )
+        self._active_log_operation_id = ""
         return ack
 
     def _snapshot(self) -> dict:
@@ -1268,9 +1645,13 @@ class BotThread(threading.Thread):
                 self.pending_acks = []
                 if reply.get("offline"):
                     if not self._offline_logged:
-                        self.log("서버 연결 재시도 중 — 신호 대기(진입 없음, 손절만 로컬에서 봅니다)")
+                        self.log("서버 연결 재시도 중 — 신호 대기(진입 없음, 손절만 로컬에서 봅니다)",
+                                 kind="warn", severity="WARN", event_name="runner.connection_lost")
                         self._offline_logged = True
                 else:
+                    if self._offline_logged:
+                        self._telemetry("info", "서버 heartbeat 응답 수신이 복구됐습니다.",
+                                        event_name="runner.connection_restored", severity="INFO")
                     self._offline_logged = False
                 action = reply.get("action", "continue")
                 if action in ("stop_only", "close_and_stop"):
@@ -1282,7 +1663,9 @@ class BotThread(threading.Thread):
                         is_entry = kind in ("buy", "short")
                         blocked, why = guard.entry_blocked()
                         if blocked and is_entry:
-                            self.log(f"  ⏸ 진입 보류: {why}")
+                            self.log(f"  ⏸ 진입 보류: {why}", kind="signal", severity="WARN",
+                                     event_name="runner.entry_blocked", operation_id=f"command:{cmd.get('id')}",
+                                     details={"command_id": cmd.get("id"), "action": kind, "reason": why})
                             self.pending_acks.append({"command_id": cmd.get("id"), "ok": False, "executed_qty": 0.0,
                                                       "fill_price": 0.0, "error": f"로컬 리스크 보류: {why}"})
                             continue
@@ -3047,7 +3430,8 @@ class RunnerApp:
     def _launch_checked_run(self, checked, checked_generation, start_macro, start_credentials, mode, payload, server_base):
         label = exchange_label(exchange_of(start_macro))
         self._persist_credentials()
-        server = ServerClient(start_credentials["member_key"], base=server_base)
+        server = ServerClient(start_credentials["member_key"], base=server_base,
+                              on_event_warning=self._log_threadsafe)
         try:
             started = server.start(payload)
         except ServerRequestError as exc:

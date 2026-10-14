@@ -22,16 +22,18 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
+from uuid import uuid4
 from datetime import datetime, timedelta, timezone
 from typing import Iterable, Optional
 
-from sqlalchemy import and_, delete, func, or_, update
+from sqlalchemy import and_, delete, func, or_, tuple_, update
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 
 from . import notification_stream
-from .db import NotificationMessage, NotificationReceipt, RunSession, User, get_session
+from .db import NotificationMessage, NotificationReceipt, RunSession, RunSessionEvent, User, get_session
 
 log = logging.getLogger(__name__)
 
@@ -39,7 +41,9 @@ KINDS = frozenset({
     "quest", "macro_sold", "macro_registered", "comment", "reply", "agent", "admin", "notice",
 })
 KEEP_PER_USER = 300  # 계정당 보관 상한 — 넘치면 오래된 개인 알림부터 지운다(공지는 회원별 행이 아니라 제외)
-NOTICE_WINDOW_MS = 30 * 24 * 3600 * 1000  # 전체 공지는 최근 30일치만 보인다
+NOTICE_WINDOW_MS = 30 * 24 * 3600 * 1000  # 전체 공지는 최근 30일치만 보관한다
+NOTICE_PRUNE_MAX = 500
+RECEIPT_PRUNE_MAX = 1_000
 PAGE_MAX = 50
 TITLE_MAX, BODY_MAX, LINK_MAX, REF_MAX = 120, 300, 200, 120
 # 이 시간 안에 heartbeat 를 보낸 세션만 '실행 중'으로 보고 에이전트 소식을 보낸다.
@@ -89,6 +93,7 @@ def notify(
     session_id: Optional[int] = None,
     ref: str = "",
     trim: bool = True,
+    activity: Optional[dict] = None,
 ) -> Optional[NotificationMessage]:
     """알림 한 건을 세션에 추가한다(커밋은 호출자). ``user_id`` 가 None 이면 전체 공지.
 
@@ -104,6 +109,17 @@ def notify(
     if ref and _exists(db, user_id, kind, ref):
         return None
     created_at, created_ms = _now()
+    if kind == "agent" and session_id is not None and user_id is not None:
+        canonical = _activity_for_notification(db, user_id, session_id, title, body,
+                                               data=data, activity=activity, ref=ref, occurred_at=created_at)
+        if canonical is None:
+            # Never publish a new agent alert without its corresponding log.
+            # The caller's trading transaction remains independent.
+            log.warning("Agent alert withheld: original activity unavailable (session=%s)", session_id)
+            return None
+        data = {**(data or {}), "session_id": session_id, "activity_event_id": canonical.id,
+                "activity_event_key": canonical.event_key}
+        link = f"/agents?session={session_id}&panel=logs&event={canonical.id}"
     row = NotificationMessage(
         user_id=user_id,
         kind=kind,
@@ -123,6 +139,43 @@ def notify(
     # 커밋되면 이 계정(공지면 모두)의 스트림을 깨운다 — 배지가 폴링을 기다리지 않게.
     notification_stream.mark_changed(db, user_id)
     return row
+
+
+def _activity_for_notification(db, user_id: int, session_id: int, title: str, body: str, *,
+                               data: Optional[dict], activity: Optional[dict], ref: str, occurred_at: str):
+    """A notification is a projection of an immutable event, never its substitute.
+
+    Existing execution writers pass their inserted id. Other server observation
+    sites create that fact here, in the SAME transaction as its notification.
+    Browser-supplied identifiers never enter this internal-only helper.
+    """
+    from . import runner
+    from .agent_event_schema import safe_identifier
+    session = db.get(RunSession, session_id)
+    if session is None or session.user_id != user_id:
+        return None
+    supplied_id = (data or {}).get("activity_event_id")
+    if supplied_id is not None:
+        event = db.get(RunSessionEvent, supplied_id) if isinstance(supplied_id, int) and not isinstance(supplied_id, bool) else None
+        return event if event is not None and event.session_id == session_id and event.user_id == user_id else None
+    activity = activity or {}
+    key = safe_identifier(activity.get("event_key")) or "notice:" + (
+        hashlib.sha256(ref.encode()).hexdigest() if ref else uuid4().hex)
+    event = db.exec(select(RunSessionEvent).where(RunSessionEvent.session_id == session_id,
+                                               RunSessionEvent.event_key == key)).first()
+    if event is not None:
+        return event
+    details = {**(activity.get("details") or {}), "title": title,
+               "source_event_id": activity.get("source_event_id") or key}
+    details.setdefault("verification", "server_observation_not_exchange_fill")
+    runner._append_events(db, session, [{
+        "ts": activity.get("occurred_at") or occurred_at,
+        "kind": activity.get("kind") or "info", "severity": activity.get("severity") or "INFO",
+        "event_name": activity.get("event_name") or "server.notification_observed",
+        "event_key": key, "message": body or title, "details": details, "_notify": False,
+    }], component=activity.get("component") if activity.get("component") in {"engine", "server", "news_collector"} else "server")
+    return db.exec(select(RunSessionEvent).where(RunSessionEvent.session_id == session_id,
+                                               RunSessionEvent.event_key == key)).first()
 
 
 def notify_now(
@@ -179,6 +232,81 @@ def trim_user(db, user_id: int) -> int:
     return len(oldest)
 
 
+def prune_expired_notices(db, now_ms: Optional[int] = None, limit: int = 500) -> dict:
+    """Physically prune expired public notices and orphan read receipts, in one batch.
+
+    Personal messages keep their existing per-user cap, not this age policy.
+    ``limit`` is clamped to 1..500 notices; at most 1,000 receipts are deleted
+    across expired children AND orphans. A high-fanout notice stays until all
+    its receipts are gone, so Postgres ON DELETE CASCADE cannot exceed that
+    budget. Explicit child deletion also works without SQLite foreign keys.
+
+    Only flushes: commit/rollback, retry scheduling and transaction timeouts
+    belong to the caller. ``has_more`` means another bounded batch can help.
+    """
+    batch_size = max(1, min(int(limit), NOTICE_PRUNE_MAX))
+    cutoff_ms = (int(now_ms) if now_ms is not None else _now()[1]) - NOTICE_WINDOW_MS
+    expired = and_(NotificationMessage.user_id.is_(None), NotificationMessage.created_ms < cutoff_ms)
+    # A PostgreSQL parent lock also blocks new FK children while its receipts
+    # are removed. SQLite ignores FOR UPDATE but uses the same explicit deletes.
+    notice_ids = db.exec(
+        select(NotificationMessage.id).where(expired)
+        .order_by(NotificationMessage.created_ms, NotificationMessage.id)
+        .limit(batch_size).with_for_update(skip_locked=True)
+    ).all()
+
+    def delete_receipts(keys) -> int:
+        if not keys:
+            return 0
+        deleted = db.exec(
+            delete(NotificationReceipt)
+            .where(tuple_(NotificationReceipt.message_id, NotificationReceipt.user_id).in_(keys))
+            .returning(NotificationReceipt.message_id, NotificationReceipt.user_id)
+            .execution_options(synchronize_session=False)
+        ).all()
+        return len(deleted)
+
+    deleted_receipts = 0
+    deleted_notices = 0
+    if notice_ids:
+        keys = db.exec(
+            select(NotificationReceipt.message_id, NotificationReceipt.user_id)
+            .where(NotificationReceipt.message_id.in_(notice_ids))
+            .order_by(NotificationReceipt.message_id, NotificationReceipt.user_id)
+            .limit(RECEIPT_PRUNE_MAX)
+        ).all()
+        deleted_receipts = delete_receipts(keys)
+        has_children = select(NotificationReceipt.message_id).where(
+            NotificationReceipt.message_id == NotificationMessage.id
+        ).exists()
+        deleted_notices = len(db.exec(
+            delete(NotificationMessage)
+            .where(NotificationMessage.id.in_(notice_ids), expired, ~has_children)
+            .returning(NotificationMessage.id)
+            .execution_options(synchronize_session=False)
+        ).all())
+
+    parent_exists = select(NotificationMessage.id).where(
+        NotificationMessage.id == NotificationReceipt.message_id
+    ).exists()
+    receipt_budget = RECEIPT_PRUNE_MAX - deleted_receipts
+    if receipt_budget:
+        orphan_keys = db.exec(
+            select(NotificationReceipt.message_id, NotificationReceipt.user_id)
+            .where(~parent_exists)
+            .order_by(NotificationReceipt.message_id, NotificationReceipt.user_id)
+            .limit(receipt_budget)
+        ).all()
+        deleted_receipts += delete_receipts(orphan_keys)
+
+    db.flush()
+    has_more = (
+        db.exec(select(NotificationMessage.id).where(expired).limit(1)).first() is not None
+        or db.exec(select(NotificationReceipt.message_id).where(~parent_exists).limit(1)).first() is not None
+    )
+    return {"deleted_notices": deleted_notices, "deleted_receipts": deleted_receipts, "has_more": has_more}
+
+
 def notify_running_sessions(
     db,
     *,
@@ -191,6 +319,7 @@ def notify_running_sessions(
     market: Optional[str] = None,
     asset: Optional[str] = None,
     kind: str = "agent",
+    activity: Optional[dict] = None,
 ) -> int:
     """실행 중(최근 heartbeat)인 세션의 주인에게 세션마다 한 건씩 보낸다.
 
@@ -223,6 +352,7 @@ def notify_running_sessions(
             db, row.user_id, kind, title, body, link,
             data={**(data or {}), "symbol": row.symbol, "session_id": row.id},
             session_id=row.id, ref=f"{ref}:{row.id}" if ref else "", trim=False,
+            activity=activity,
         )
         if created is not None:
             sent += 1

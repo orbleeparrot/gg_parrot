@@ -82,6 +82,7 @@ class ExchangeSelectionTests(unittest.TestCase):
         bot.credentials = keys if keys is not None else {
             "exchanges": {exchange: {"api_key": "k", "api_secret": "s"}}}
         bot.log = Mock()
+        bot.on_log = Mock()
         return bot
 
     def test_domestic_macro_builds_the_domestic_broker(self):
@@ -114,7 +115,7 @@ class ExchangeSelectionTests(unittest.TestCase):
 
     def test_runner_version_is_thirteen(self):
         from runner import installation
-        self.assertEqual(installation.RUNNER_VERSION, "17")
+        self.assertEqual(installation.RUNNER_VERSION, "18")
 
     # --- 위 다섯은 과제 사양. 아래는 같은 배선의 나머지 ----------------
     def test_binance_macro_builds_the_binance_broker_with_its_own_keys(self):
@@ -192,6 +193,7 @@ class RehearsalPolicyTests(unittest.TestCase):
         bot.macro = macro if macro is not None else {
             "rule_type": "A", "params": {"initial_capital": 1_000_000}, "risk": {}}
         bot.log = Mock()
+        bot.on_log = Mock()
         bot.broker = _Recorder(rehearsal=rehearsal)
         return bot
 
@@ -231,6 +233,7 @@ class DomesticOrderSizingTests(unittest.TestCase):
         bot.in_position, bot.held_qty, bot.entry_price = False, 0.0, 0.0
         bot.realized, bot.step, bot.position_uncertain = 0.0, step, False
         bot.capital, bot.log = 1_000_000.0, Mock()
+        bot.on_log = Mock()
         bot.broker = _Recorder(price=15_000_000.0 if quote == "KRW" else 100.0, step=step)
         bot._done_command_ids, bot.pending_acks = deque(maxlen=200), []
         return bot
@@ -558,6 +561,7 @@ class DomesticAccessFailureIsExplainedNotCalledAMissingSymbolTests(unittest.Test
         bot.leverage, bot.capital = 1, 1_000_000.0
         bot.macro = {"rule_type": "A", "params": {"initial_capital": 1_000_000}, "risk": {}}
         bot.log = Mock()
+        bot.on_log = Mock()
         bot.broker = _Recorder()
         bot.broker.ensure_ready = Mock(side_effect=failure) if failure else Mock(return_value=ready)
         return bot

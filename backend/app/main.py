@@ -365,6 +365,8 @@ class BundleRequest(BaseModel):
 class UserMacroSaveRequest(BaseModel):
     macro: Macro
     name: str = ""
+    # 직접 만들기의 '매크로 업로드' — 이미 같은 내용이 있으면 그 행의 이름을 파일 이름으로 바꾼다.
+    from_file: bool = False
 
 
 # --- 매크로 실행기(로컬 exe) 연동 모델 ---------------------------------
@@ -1212,7 +1214,8 @@ def me_macro_get(macro_id: int, user: User = Depends(auth_mod.current_user)) -> 
 @app.post("/api/me/macros")
 def me_macro_save(req: UserMacroSaveRequest, user: User = Depends(auth_mod.current_user)) -> dict:
     """Validate and save an uploaded/builder macro into the account library."""
-    return {"item": user_macros_mod.save_upload(user.id, req.macro, req.name)}
+    item, existed = user_macros_mod.save_upload(user.id, req.macro, req.name, from_file=req.from_file)
+    return {"item": item, "existed": existed}
 
 
 @app.post("/api/me/macros/from-leaderboard/{entry_id}")

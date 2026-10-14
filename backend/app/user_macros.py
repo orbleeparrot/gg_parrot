@@ -176,16 +176,29 @@ def save_snapshot(
         return _view(row)
 
 
-def save_upload(user_id: int, macro: Macro, name: str = "") -> dict:
+def save_upload(user_id: int, macro: Macro, name: str = "", *, from_file: bool = False) -> tuple[dict, bool]:
+    """Save into the library; returns (item, existed).
+
+    Same content → same row (빠른 실행 · 모의매매가 같은 매크로를 몇 번 저장해도 목록이 불지 않게).
+    파일 업로드는 사용자가 고른 파일 이름이 목록에 보여야 하므로, 이미 있던 행이면 이름만 파일 이름으로 바꾼다
+    — 직접 만들기에서 받은 파일을 그대로 올리면 늘 이미 있던 행('직접 만들기 · …')과 같은 내용이다.
+    """
     normalized = macro.model_dump_json()
     digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:24]
-    return save_snapshot(
-        user_id,
-        macro,
-        source_type="upload",
-        source_ref=digest,
-        name=name,
-    )
+    with get_session() as db:
+        existing = _find(db, user_id, "upload", digest)
+        if existing is None:
+            row = _insert_snapshot(db, user_id=user_id, macro=macro, source_type="upload", source_ref=digest, name=name)
+        else:
+            row = existing
+            renamed = _macro_name(macro, name)
+            if from_file and name.strip() and row.name != renamed:
+                row.name = renamed
+                row.updated_at = _now_iso()
+                db.add(row)
+        db.commit()
+        db.refresh(row)
+        return _view(row), existing is not None
 
 
 def save_from_leaderboard(user_id: int, entry_id: int) -> dict:

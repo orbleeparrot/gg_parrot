@@ -22,6 +22,7 @@ All sims expose the same tiny contract used by both drivers::
 """
 from __future__ import annotations
 
+import copy
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -32,6 +33,12 @@ from .schema import Macro, PositionSide, RuleType
 from .stepper import Fill, _fill_meta, buy_fill, sell_fill
 
 _INTERVAL_UNIT_SECONDS = {"m": 60, "h": 3600, "d": 86400, "w": 604800}
+
+
+def _close(a, b) -> bool:
+    """롯 값이 같은가 — 체크포인트(JSON) 를 거쳐도 같은 float 지만 여유를 조금 둔다."""
+    a, b = float(a or 0.0), float(b or 0.0)
+    return abs(a - b) <= 1e-9 * max(1.0, abs(a), abs(b))
 
 
 def _interval_seconds(interval: str) -> int:
@@ -173,6 +180,10 @@ class CandleSim:
         # 대기가 끝난 뒤 처음 닫히는 봉에서 다시 판단한다(여는 시각으로 견주면 한 봉을 통째로 더 건너뛴다).
         self._candle_seconds = _interval_seconds(getattr(macro, "candle_interval", ""))
         self._decision_at: Optional[datetime] = None
+        # 실행기 세션만: 진입마다 '그 진입 직전' 상태를 (체결, 상태) 로 남긴다 — 한 봉이 체결을 여럿 내도 둘째
+        # 진입부터 정확히 되돌릴 수 있게(봉 직전 상태로 되돌리면 앞 체결까지 지워진다). None 이면 끈 상태 —
+        # 백테스트 · 모의는 끄고 돈다. LiveCandleSim 이 체결과 짝지어 꺼내 간다.
+        self._entry_marks: Optional[list] = None
         self.stopped = False  # hard stop (band exit / reenter disabled)
         # 진입 필터 — 없으면 None. on_candle 이 봉이 끝난 뒤 갱신하고 _entry_blocked 가 묻는다.
         from .entry_filter import make_filter  # 늦은 import: entry_filter -> candles 순환 방지
@@ -325,10 +336,27 @@ class CandleSim:
     # ``margin`` is the equity the caller commits; the position controls
     # ``margin × leverage`` of notional. At leverage 1 the two are equal, so the
     # cash math below is byte-for-byte the old spot behaviour.
+    def _entry_mark(self, price: float) -> Optional[dict]:
+        """진입 직전 상태 — 장부(state) · 전략 상태 · 그 가격의 자산. 끈 상태면 None.
+
+        restore() 는 현금을 ``자산 - 포지션 평가액`` 으로 되짚으므로 자산과 기준가를 같은 가격으로 잡는다.
+        지표(RSI · 이평 등)는 싣지 않는다 — 시장 사실이라 되돌리지 않는다(restore 도 건드리지 않는다).
+        """
+        if self._entry_marks is None:
+            return None
+        return {"sim": self.state(), "strategy": copy.deepcopy(self.strategy_state()),
+                "equity": float(self.equity(price)), "last_price": float(price)}
+
+    def _remember_entry(self, fill: Optional[Fill], mark: Optional[dict]) -> Optional[Fill]:
+        if fill is not None and mark is not None and self._entry_marks is not None:
+            self._entry_marks.append((fill, mark))
+        return fill
+
     def _open_long(self, margin: float, close: float, ts: datetime, mark: float, *, reason: str = "진입") -> Optional[Fill]:
         margin = min(margin, self.cash)
         if margin <= 1e-9:
             return None
+        before = self._entry_mark(mark)
         notional = margin * self.leverage
         f = buy_fill(close, self.slip)
         qty = notional / f
@@ -336,19 +364,20 @@ class CandleSim:
         self.lots.append(_Lot(qty=qty, fill=f, margin=margin))
         if self._entry_time is None:
             self._entry_time = ts
-        return self._fill("buy", f, qty, mark, reason)
+        return self._remember_entry(self._fill("buy", f, qty, mark, reason), before)
 
     def _open_short(self, close: float, ts: datetime, mark: float, *, reason: str = "진입") -> Optional[Fill]:
         margin = self.invest_ratio * self.cash
         if margin <= 1e-9:
             return None
+        before = self._entry_mark(mark)
         notional = margin * self.leverage
         f = sell_fill(close, self.slip)
         qty = notional / f
         self.cash -= notional * self.comm / 100.0
         self.lots.append(_Lot(qty=qty, fill=f, margin=margin))
         self._entry_time = ts
-        return self._fill("short", f, qty, mark, reason)
+        return self._remember_entry(self._fill("short", f, qty, mark, reason), before)
 
     def _close_all(self, close: float, mark: float, *, is_stop: bool, ts: datetime, reason: Optional[str] = None) -> Optional[Fill]:
         if not self.in_position():
@@ -713,6 +742,7 @@ class GridSim(CandleSim):
                 continue
             buy_level = self.levels[i]
             if l <= buy_level <= self.upper and self.cash >= self.per_grid:
+                before = self._entry_mark(c)
                 notional = self.per_grid * self.leverage
                 f = buy_fill(buy_level, self.slip)
                 qty = notional / f
@@ -722,7 +752,25 @@ class GridSim(CandleSim):
                 self.lots.append(lot)
                 if self._entry_time is None:
                     self._entry_time = ts
-                fills.append(self._fill("buy", f, qty, c))
+                if before is not None:
+                    # 칸끼리는 서로 독립이다 — 이 칸 매수가 안 나가면 이 롯만 빼면 된다(undo_lot).
+                    before["grid_lot"] = {"level": i, "qty": qty, "fill": f, "margin": self.per_grid,
+                                          "fee": notional * self.comm / 100.0}
+                fills.append(self._remember_entry(self._fill("buy", f, qty, c), before))
+
+    def undo_lot(self, info: dict) -> bool:
+        """주문이 나가지 않은 칸 하나만 되돌린다 — 그 칸의 롯을 빼고 산 돈(증거금 + 수수료)을 현금으로 돌린다.
+
+        다른 칸의 매수 · 매도는 그대로 둔다(칸끼리 독립). 그 롯이 이미 팔렸거나 다른 롯으로 바뀌었으면 False.
+        """
+        level = int(info.get("level", -1))
+        lot = self.holdings.get(level)
+        if lot is None or not (_close(lot.qty, info.get("qty")) and _close(lot.fill, info.get("fill"))):
+            return False
+        del self.holdings[level]
+        self._remove_lot(lot)
+        self.cash += float(info.get("margin") or 0.0) + float(info.get("fee") or 0.0)
+        return True
 
     def _remove_lot(self, lot: _Lot) -> None:
         try:
@@ -1194,6 +1242,9 @@ class SarSim(CandleSim):
         # flat -> (re)enter long
         if self._entry_blocked(ts):
             return
+        # 비어 있으면 늘 롱이다 — 다만 숏 전환 진입을 되돌린 상태(실행기 세션)는 side 가 숏으로 남아 있을 수 있어
+        # 롱 장부 식을 쓰도록 먼저 맞춘다. 백테스트에서는 이미 롱이라 아무것도 바뀌지 않는다.
+        self.side = PositionSide.LONG
         f = self._open_long(self.invest_ratio * self.cash, c, ts, c)
         if f:
             fills.append(f)
@@ -1281,6 +1332,22 @@ class LiveCandleSim:
     def __init__(self, macro: Macro, initial_capital: Optional[float] = None) -> None:
         self.inner = make_candle_sim(macro, initial_capital=initial_capital)
         self._queue: deque[Fill] = deque()
+        # 큐의 체결마다 그 진입 직전 상태(진입이 아니거나 끈 상태면 None). step() 이 꺼낸 체결의 것을 last_mark 에 둔다.
+        self._queue_marks: deque = deque()
+        self.last_mark: Optional[dict] = None
+
+    def track_entry_marks(self) -> None:
+        """진입 직전 상태를 남기기 시작한다(실행기 드라이버만)."""
+        self.inner._entry_marks = []
+
+    def _enqueue(self, fills: List[Fill]) -> None:
+        recorded = self.inner._entry_marks
+        marks = {id(fill): mark for fill, mark in (recorded or [])}
+        for fill in fills:
+            self._queue.append(fill)
+            self._queue_marks.append(marks.get(id(fill)))
+        if recorded is not None:
+            recorded.clear()
 
     def step(self, price: float, ts: Optional[datetime] = None) -> Optional[Fill]:
         """큐의 Fill 하나를 꺼내 준다. 큐가 비었고 sim 에 '다음 시가' 의도가 걸려 있으면 이 틱 가격에 실행한다.
@@ -1291,13 +1358,17 @@ class LiveCandleSim:
         if not self._queue:
             execute = getattr(self.inner, "execute_pending", None)
             if execute is not None:
-                self._queue.extend(execute(float(price), ts or datetime.now(timezone.utc)))
-        return self._queue.popleft() if self._queue else None
+                self._enqueue(execute(float(price), ts or datetime.now(timezone.utc)))
+        if not self._queue:
+            self.last_mark = None
+            return None
+        self.last_mark = self._queue_marks.popleft()
+        return self._queue.popleft()
 
     def on_candle(self, o: float, h: float, l: float, c: float, ts: datetime,
                   volume: Optional[float] = None) -> int:
         fills = self.inner.on_candle(o, h, l, c, ts, volume=volume)
-        self._queue.extend(fills)
+        self._enqueue(fills)
         return len(fills)
 
     def pending(self) -> int:
@@ -1306,10 +1377,19 @@ class LiveCandleSim:
     def discard_queued(self) -> None:
         """서버 전략을 되돌릴 때 — 큐에 남은 체결은 되돌린 시간선의 것이라 버린다."""
         self._queue.clear()
+        self._queue_marks.clear()
+        if self.inner._entry_marks is not None:
+            self.inner._entry_marks.clear()
 
     def warmup(self, candles) -> None:
-        self.inner.warmup(candles)
-        self._queue.clear()
+        # 웜업의 가상 체결은 버린다 — 진입 기록도 끈 채로 돈다(그리드 칸이 많으면 수백 봉 동안 버릴 기록이 쌓여 루프를 막는다).
+        marks = self.inner._entry_marks
+        self.inner._entry_marks = None
+        try:
+            self.inner.warmup(candles)
+        finally:
+            self.inner._entry_marks = [] if marks is not None else None
+        self.discard_queued()
 
     def equity(self, price: float) -> float:
         return self.inner.equity(price)

@@ -8,11 +8,11 @@ CREATE TABLE public.runsessionevent (
 );
 INSERT INTO public.runsessionevent(session_id,user_id,ts,kind,message,created_ms)
   VALUES (1,42,'2026-10-12T01:00:00+00:00','fill','legacy execution retained',1791766800000);
-\ir ../../supabase/migrations/20261012013512_agent_session_logs_receipts.sql
-\ir ../../supabase/migrations/20261013050656_agent_session_log_structured_fields.sql
+\ir ../../supabase/migrations/20261014013000_agent_session_logs_receipts.sql
+\ir ../../supabase/migrations/20261014013100_agent_session_log_structured_fields.sql
 -- Reapplying each additive migration must remain safe.
-\ir ../../supabase/migrations/20261012013512_agent_session_logs_receipts.sql
-\ir ../../supabase/migrations/20261013050656_agent_session_log_structured_fields.sql
+\ir ../../supabase/migrations/20261014013000_agent_session_logs_receipts.sql
+\ir ../../supabase/migrations/20261014013100_agent_session_log_structured_fields.sql
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM public.runsessionevent WHERE id=1 AND user_id=42
     AND message='legacy execution retained' AND event_key IS NULL

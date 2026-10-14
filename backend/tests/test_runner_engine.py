@@ -749,3 +749,20 @@ def test_resume_refuses_multi_symbol_sessions_without_attempting_to_start(monkey
     finally:
         _cleanup(bad)
         _cleanup(good)
+
+
+def test_restart_keeps_a_position_in_a_very_cheap_coin():
+    """체크포인트 가격을 소수 4자리로 자르면 PEPEUSDT(0.0000089) 진입가가 0 이 되어, 재배포 뒤 복구가 '포지션 없음' 으로 읽었다."""
+    from datetime import datetime, timezone
+
+    macro = Macro.model_validate({"symbol": "PEPEUSDT", "rule_type": "A", "position_side": "long",
+                                  "params": {"take_profit_pct": 3.0, "initial_capital": 100},
+                                  "risk": {"invest_ratio": 1.0, "stop_loss_pct": 2.0}, "period": {"preset": "3m"}})
+    driver = eng.build_driver(macro, "PEPEUSDT")
+    assert driver.tick(0.0000089, datetime(2026, 10, 13, tzinfo=timezone.utc)).side == "buy"
+    state = json.loads(json.dumps(driver.state()))
+    assert state["legs"][0]["entry_price"] > 0 and state["last_price"] == 0.0000089
+    revived = eng.build_driver(macro, "PEPEUSDT")
+    revived.restore(state, leg_equity={}, total_equity=revived.initial)
+    assert revived.state()["in_position"] is True
+    assert revived.state()["legs"][0]["entry_price"] == pytest.approx(driver.state()["legs"][0]["entry_price"], rel=1e-9)

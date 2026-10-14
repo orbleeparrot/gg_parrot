@@ -93,7 +93,9 @@ def _build_engine(*, purpose: str = "ordinary"):
             runner = purpose == "runner"
             # Safe before a Blueprint sync too: omitted configuration is one
             # connection; the web Blueprint explicitly opts into two.
-            size = _bounded_int("DATABASE_RUNNER_POOL_SIZE" if runner else "DATABASE_POOL_SIZE", 1, 1, 4)
+            # 상한 12 — 트랜잭션 모드 풀러라 Postgres 연결은 트랜잭션 동안만 쓴다(최대 60, 평소 15 안팎).
+            # 4 로 막혀 있다가 파일럿(실행기 6~8대 동시)에서 heartbeat 연결 1개 · 일반 4개가 줄을 서 503 이 났다(2026-10-14).
+            size = _bounded_int("DATABASE_RUNNER_POOL_SIZE" if runner else "DATABASE_POOL_SIZE", 1, 1, 12)
             wait = _bounded_int("DATABASE_RUNNER_POOL_TIMEOUT_SECONDS" if runner else "DATABASE_POOL_TIMEOUT_SECONDS", 1 if runner else 2, 1, 10)
             timeout = _bounded_int("DATABASE_CONNECT_TIMEOUT_SECONDS", 3, 1, 10)
             statement_timeout = _bounded_int("DATABASE_RUNNER_STATEMENT_TIMEOUT_MS" if runner else "DATABASE_STATEMENT_TIMEOUT_MS", 3000 if runner else 30000, 1000, 120000)

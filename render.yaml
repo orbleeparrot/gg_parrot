@@ -20,11 +20,13 @@ services:
     envVars:
       # DATABASE_URL 은 Supabase 트랜잭션 모드 풀러(:6543) — 연결을 트랜잭션 동안만 빌려 써서 접속자 수 15 제한을
       # 받지 않는다(2026-10-09, GG-011: 세션 모드에선 프로세스가 연결을 평생 쥐어 웹 풀 2개가 몰릴 때 바닥났다).
-      # 웹: 일반 요청 4 + heartbeat 예약 1 (트랜잭션 모드) + LISTEN 1 (세션 모드, DATABASE_SESSION_URL).
+      # 웹: 일반 요청 8 + heartbeat 예약 4 (트랜잭션 모드) + LISTEN 1 (세션 모드, DATABASE_SESSION_URL).
+      # 2026-10-14 파일럿(실행기 6~8대 동시): 4 + 1 에서 일반 · heartbeat 모두 연결 대기 초과(503)가 나 늘렸다.
+      # heartbeat 한 번이 DB 왕복(오리건↔us-east-1 약 80ms) 때문에 0.4~1초라, 실행기 10대 ≈ 동시 2~3개.
       - key: DATABASE_POOL_SIZE
-        value: "4"
+        value: "8"
       - key: DATABASE_RUNNER_POOL_SIZE
-        value: "1"
+        value: "4"
       - key: DATABASE_POOL_TIMEOUT_SECONDS
         value: "2"
       - key: DATABASE_RUNNER_POOL_TIMEOUT_SECONDS

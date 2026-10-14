@@ -120,6 +120,94 @@ class StructuredLogTests(unittest.TestCase):
         self.assertEqual(bot.server._drain_events(), [])
         bot._place.assert_called_once()
 
+    def test_no_position_and_duplicate_acks_report_no_order_instead_of_zero_fill(self):
+        bot = self._bot()
+        command = {"id": 19, "seq": 1, "action": "sell", "qty_frac": 1, "reason": "청산"}
+        first = bot._execute_command(command, 12.5)
+        self.assertTrue(first["ok"])
+        self.assertEqual(first["outcome"], "no_position_no_order")
+        self.assertEqual(first["mode"], "mock")
+        bot.broker.submit.assert_not_called()
+        bot.server._drain_events()
+        repeated = bot._execute_command(command, 12.5)
+        self.assertTrue(repeated["ok"])
+        self.assertEqual(repeated["outcome"], "duplicate_command_no_reexecution")
+        bot.broker.submit.assert_not_called()
+        self.assertEqual(bot.server._drain_events(), [])
+
+    def test_executed_ack_explicitly_carries_mode_and_reported_outcome(self):
+        bot = self._bot()
+        ack = bot._execute_command({"id": 20, "action": "buy", "notional_frac": .25}, 12.5)
+        self.assertTrue(ack["ok"])
+        self.assertEqual(ack["outcome"], "execution_reported")
+        self.assertEqual(ack["mode"], "mock")
+        self.assertEqual(ack["executed_qty"], 2)
+        self.assertEqual(ack["fill_price"], 12.6)
+        report = [event for event in bot.server._drain_events()
+                  if event["event_name"] == "runner.command_reported"][0]
+        self.assertEqual(report["details"]["outcome"], "execution_reported")
+        self.assertEqual(report["details"]["mode"], "mock")
+        self.assertIn("모의", report["message"])
+
+    def test_simulated_testnet_and_live_adapter_logs_are_visibly_distinct(self):
+        for mode, label in (("mock", "모의"), ("testnet", "테스트넷"), ("live", "실전")):
+            with self.subTest(mode=mode):
+                bot = self._bot()
+                bot.mode = mode
+                self.assertTrue(bot._place("BUY", 2))
+                request, result = bot.server._drain_events()[:2]
+                self.assertIn(label, request["message"])
+                self.assertIn(label, result["message"])
+                self.assertEqual(result["details"]["mode"], mode)
+                self.assertEqual(result["details"]["verification"], "runner_reported_not_exchange_verified")
+
+    def test_missing_instance_mode_is_unknown_not_the_class_safety_default(self):
+        bot = self._bot()
+        del bot.mode
+        self.assertEqual(bot._log_mode(), "")
+        bot.mode = "invented_mode"
+        self.assertEqual(bot._log_mode(), "")
+
+    def test_legacy_fee_flag_is_scoped_without_changing_reconciliation_risk_logic(self):
+        cases = (("mock", "binance", "spot", "simulated_fee_model"),
+                 ("live", "upbit", "spot", "domestic_trade_quantity_coverage"),
+                 ("live", "bithumb", "spot", "domestic_trade_quantity_coverage"),
+                 ("testnet", "binance", "spot", "binance_spot_fill_fee_coverage"),
+                 ("live", "binance", "futures", "binance_futures_quantity_only"))
+        for mode, exchange, market, scope in cases:
+            with self.subTest(mode=mode, exchange=exchange, market=market):
+                bot = self._bot()
+                bot.mode, bot.exchange, bot.market = mode, exchange, market
+                self.assertTrue(bot._place("BUY", 2))
+                result = bot.server._drain_events()[1]
+                self.assertEqual(result["details"]["reconciliation_scope"], scope)
+                self.assertTrue(result["details"]["fees_known"])
+                self.assertFalse(bot.position_uncertain)
+
+    def test_adapter_filled_status_without_reconciled_fill_is_not_successful_fill_log(self):
+        for status, qty, price, reconciled in (("FILLED", 0, 0, True), ("FILLED", 2, 12.6, False),
+                                                ("OPEN", 2, 12.6, True)):
+            with self.subTest(status=status, qty=qty, price=price, reconciled=reconciled):
+                bot = self._bot()
+                bot.broker.submit.return_value = macro_runner.brokers.Order(
+                    status=status, executed_qty=qty, avg_price=price, acquired_qty=qty,
+                    fees_known=reconciled, order_id="mock-order", raw_status=status)
+                with self.assertRaises(RuntimeError):
+                    bot._place("BUY", 2)
+                result = bot.server._drain_events()[1]
+                self.assertEqual(result["kind"], "warn")
+                self.assertEqual(result["severity"], "WARN")
+                self.assertTrue(result["details"]["position_uncertain"])
+                bot.broker.submit.assert_called_once()
+
+    def test_failure_and_uncertain_messages_are_not_classified_as_fills(self):
+        for message in ("명령 실행 실패: 체결 완료를 확인하지 못했습니다.",
+                        "[청산] 체결 확인 실패", "체결 오류: 응답 누락"):
+            with self.subTest(message=message):
+                self.assertEqual(macro_runner._event_kind(message), "error")
+        self.assertEqual(macro_runner._event_kind("주문 상태 UNKNOWN — 체결 완료를 확인하지 못했습니다."), "warn")
+        self.assertEqual(macro_runner._event_kind("  ✓ BUY 체결: id=123 수량=2"), "fill")
+
 
 if __name__ == "__main__":
     unittest.main()

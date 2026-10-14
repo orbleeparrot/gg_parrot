@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
 import time
 from datetime import datetime, timezone
@@ -526,6 +527,41 @@ def _command_event(cmd: RunnerCommand, event_name: str, kind: str, severity: str
     }
 
 
+def _execution_report_event(row: RunSession, cmd: RunnerCommand, ack: dict) -> dict:
+    """An ok acknowledgement means handled, not necessarily a submitted/filled order.
+
+    Old executables send zero/missing quantities for no-position and duplicate
+    commands. Preserve acknowledgement/idempotency, but never invent a zero fill.
+    Even positive facts remain runner reports, not independent exchange checks.
+    """
+    outcome = ack.get("outcome")
+    no_order = outcome in ("no_position_no_order", "duplicate_command_no_reexecution")
+    reported_fill = not no_order and all(math.isfinite(value) and value > 0
+                                         for value in (cmd.executed_qty, cmd.fill_price))
+    mode = row.mode if row.mode in {"mock", "testnet", "live"} else ""
+    mode_label = {"mock": "모의", "testnet": "테스트넷", "live": "실전"}.get(mode, "모드 미확인")
+    if outcome == "no_position_no_order":
+        summary = "명령 처리 확인 · 보유 없음, 주문 없음"
+    elif outcome == "duplicate_command_no_reexecution":
+        summary = "명령 처리 확인 · 이미 처리한 명령, 재실행 없음"
+    elif reported_fill:
+        outcome = "execution_reported"
+        label = "체결 보고" if mode in {"mock", "testnet"} else "체결 수량·가격 보고"
+        summary = f"{label} · {cmd.action.upper()} {cmd.executed_qty:g} @ {cmd.fill_price:g}"
+    else:
+        outcome = "acknowledged_execution_unknown"
+        summary = "명령 처리 확인 · 체결 수량·가격 확인 불가"
+    event = _command_event(cmd, "command.execution_reported", "order" if reported_fill else "info", "INFO",
+                           f"[명령 #{cmd.seq}] 실행기 {mode_label} {summary} · {cmd.reason}")
+    event["details"].update(outcome=outcome, mode=mode)
+    if not reported_fill:
+        for field in ("executed_qty", "fill_price"):
+            value = event["details"][field]
+            if no_order or not math.isfinite(value) or value <= 0:
+                event["details"].pop(field, None)
+    return event
+
+
 def pending_commands(db, row: RunSession, now_ms: int) -> List[dict]:
     """TTL 지난 pending **진입** 은 expired 로 바꾸고, 남은 pending 을 seq 순으로 응답용 dict 로 돌려준다.
 
@@ -583,10 +619,7 @@ def apply_acks(db, row: RunSession, acks: list, now_ms: int) -> None:
             cmd.status = "acked"
             if cmd.action in EXIT_SIDES and row.note == EXIT_FAIL_NOTE:
                 row.note = ""  # 재시도 끝에 청산이 됐다 — 실패 메모는 더 이상 사실이 아니다
-            events.append(_command_event(
-                cmd, "command.execution_reported", "order", "INFO",
-                f"[주문 #{cmd.seq}] 실행기 체결 보고 · {cmd.action.upper()} {cmd.executed_qty:g} @ {cmd.fill_price:g} · {cmd.reason}",
-            ))
+            events.append(_execution_report_event(row, cmd, ack))
         elif cmd.action in EXIT_SIDES and cmd.attempts < EXIT_RETRY_MAX:
             cmd.status = "pending"
             cmd.expires_ms = now_ms + int(COMMAND_TTL_SECONDS * 1000)

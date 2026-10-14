@@ -1,7 +1,8 @@
 """Owner-only session history and bounded signed news-response receipts.
 
-News GETs stay read-only. A receipt means the browser received a server response,
-not that a human read it or that news authorized an order. Stable server keys
+Successful news GETs stay read-only. Failed response generation records a bounded
+server diagnostic, never a browser receipt. A receipt means the browser received
+a server response, not that a human read it or that news authorized an order. Stable server keys
 deduplicate multiple tabs/retries; no provider requests are made by this module.
 """
 from __future__ import annotations
@@ -123,10 +124,11 @@ def _event_view(row: RunSessionEvent) -> dict:
         details = {}
     category = "news" if row.kind in _NEWS_KINDS else "trade" if row.kind in _CATEGORIES["trade"] else (
         "error" if row.kind == "error" else "execution")
+    request_failure = row.event_name == "news.request_failed"
     return {
         "id": row.id, "kind": row.kind, "category": category,
-        "source": "news_receipt" if row.kind in _NEWS_KINDS else "execution",
-        "source_label": "뉴스 응답 수신 확인" if row.kind in _NEWS_KINDS else "실행 기록",
+        "source": "news_request" if request_failure else "news_receipt" if row.kind in _NEWS_KINDS else "execution",
+        "source_label": "서버 뉴스 응답 생성 실패" if request_failure else "뉴스 응답 수신 확인" if row.kind in _NEWS_KINDS else "실행 기록",
         "ts": occurrence,
         "ts_kst": datetime.fromisoformat(occurrence).astimezone(timezone(timedelta(hours=9))).strftime("%m/%d %H:%M:%S")
                   if occurrence else "",
@@ -249,6 +251,33 @@ def list_logs(user_id: int, session_id: int, *, category: str = "all",
                       "history_days": runner.HISTORY_DAYS, "history_keep": runner.HISTORY_KEEP,
                       "pin_limit": runner.PIN_LIMIT},
     }
+
+
+def record_news_request_failure(user_id: int, session_id: int, status: int,
+                                error: Exception, *, db: Session) -> bool:
+    """Record an actual server failure, not a fabricated response-receipt event.
+
+    One row per HTTP/error type per retained session bounds repeated polling.
+    There is no request-count claim, collector trace or article count: none was
+    observed here. No additional connection, retry, fetch or paid call is made.
+    """
+    if not isinstance(db, Session) or status not in {429, 503}:
+        return False
+    row = db.get(RunSession, session_id)
+    if row is None or row.user_id != user_id or row.status != "running":
+        return False
+    error_type = safe_identifier(type(error).__name__, 48) or "unknown_error"
+    added = runner._append_events(db, row, [{
+        "ts": _iso(_now_ms()), "kind": "news_error", "severity": "ERROR",
+        "event_name": "news.request_failed",
+        "event_key": f"session:{session_id}:news-request-failed:{status}:{error_type}",
+        "message": f"서버 뉴스 응답 생성 실패 · HTTP {status} · 동일 오류 유형의 반복 요청은 합쳐 기록합니다.",
+        "details": {"http_status": status, "error_type": error_type, "error": str(error),
+                    "stage": "response_generation", "outcome": "response_not_created",
+                    "verification": "server_response_not_browser_receipt"},
+    }], component="server")
+    db.commit()
+    return bool(added)
 
 
 def make_news_receipt(user_id: int, session: dict, payload: dict) -> dict:

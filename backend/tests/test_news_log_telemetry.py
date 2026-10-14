@@ -1,6 +1,8 @@
 """Telemetry is local projection only; never fetch providers for log readers."""
 import json
 
+import pytest
+
 from app.agent_features.position_news import log_telemetry
 from app.workflows import position_news as workflow
 
@@ -86,3 +88,52 @@ def test_trace_reuses_existing_prepared_feed_metadata_storage():
                 "collection_run_id": "flow-real", "task_run_id": "task-real"}
     finally:
         engine.dispose()
+
+
+@pytest.mark.parametrize("base, completed_key, source_name", [
+    ("BTC", "google", "google_news_rss"),
+    ("EDEN", "coindesk", "coindesk_rss"),
+    ("EDEN", "openeden", "openeden_official_rss"),
+])
+def test_partial_collector_never_reports_unfinished_sources_as_failures(monkeypatch, base, completed_key, source_name):
+    from app import news
+    monkeypatch.setattr(news, "_with_news_history", lambda value: value)
+    recorded = []
+    monkeypatch.setattr(news, "_record_collector_sources", lambda rows: recorded.append(rows))
+    completed = {completed_key: ({"items": []}, True) if completed_key == "google" else ([], True)}
+    payload = news._collected_news_envelope(base, base, "actual query", completed, partial=True)
+    assert payload["sources"] == [{"name": source_name, "status": "ready", "item_count": 0, "fetched_count": 0}]
+    assert recorded == [], "Intermediate publications must not increase final source counters"
+
+
+def test_missing_prefect_context_removes_inherited_trace(monkeypatch):
+    from prefect.runtime import flow_run, task_run
+    monkeypatch.setattr(flow_run, "id", None)
+    monkeypatch.setattr(task_run, "id", None)
+    payload = {"items": [], "collection_trace": {"flow_run_id": "old-success"}}
+    assert "collection_trace" not in log_telemetry.attach_collection_trace(payload)
+    assert payload["collection_trace"] == {"flow_run_id": "old-success"}, "Projection must not mutate cached input"
+
+
+@pytest.mark.parametrize("state", [
+    {"status": "error", "last_attempt_ms": 2000, "last_success_ms": 1000},
+    {"status": "empty", "last_attempt_ms": 2000, "last_success_ms": 1000},
+    {"status": "pending", "last_attempt_ms": 2000, "last_success_ms": 1000},
+    # A claimed next attempt retains ready until its result has been written.
+    {"status": "ready", "last_attempt_ms": 2000, "last_success_ms": 1000},
+])
+def test_current_collection_state_never_inherits_old_success_trace(state):
+    payload = {"collection_trace": {"flow_run_id": "old-flow", "collection_run_id": "old-flow"},
+               "items": [{"source": "CoinDesk"}],
+               "sources": [{"name": "coindesk_rss", "status": "ready", "item_count": 1}]}
+    assert log_telemetry.delivery_metadata(payload, collection=state) == {"source_counts": {"CoinDesk": 1}}
+
+
+def test_successful_current_collection_keeps_real_trace_without_comparing_publication_clocks():
+    payload = {"collection_trace": {"flow_run_id": "actual-flow"},
+               "items": [{"source": "CoinDesk"}],
+               "sources": [{"name": "coindesk_rss", "status": "ready", "item_count": 1}]}
+    facts = log_telemetry.delivery_metadata(payload, collection={
+        "status": "ready", "last_attempt_ms": 2000, "last_success_ms": 2000})
+    assert facts["flow_run_id"] == "actual-flow"
+    assert facts["source_results"] == [{"source": "coindesk_rss", "status": "ready", "count": 1}]

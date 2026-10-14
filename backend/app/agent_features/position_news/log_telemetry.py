@@ -18,22 +18,36 @@ def collection_trace() -> dict:
 
 def attach_collection_trace(payload: dict) -> dict:
     trace = collection_trace()
-    return {**payload, "collection_trace": trace} if trace else payload
+    if trace:
+        return {**payload, "collection_trace": trace}
+    # Embedded collection is not a Prefect run. A merged older payload must
+    # not borrow its previous successful flow/task IDs for this publication.
+    return {key: value for key, value in payload.items() if key != "collection_trace"} if "collection_trace" in payload else payload
 
 
-def delivery_metadata(payload: dict) -> dict:
+def delivery_metadata(payload: dict, *, collection: dict | None = None) -> dict:
     """Project existing prepared feed metadata, not a new collection attempt.
 
     Source counts here mean articles in this response. A cached RSS page can
     have more entries and a delta response can have zero; neither is a failure.
     """
-    trace = payload.get("collection_trace") or {}
+    # Prepared articles survive an empty/failed next attempt. Their source
+    # diagnostics and Prefect trace describe their last publication, not that
+    # newer attempt. A ready row can also be claimed while keeping old status;
+    # the repository advances last_attempt_ms before I/O and makes it equal to
+    # last_success_ms on success. These are durable observation counters, not a
+    # guessed comparison against publication/worker wall clocks.
+    current_publication = not collection or (
+        collection.get("status") == "ready"
+        and int(collection.get("last_attempt_ms") or 0) <= int(collection.get("last_success_ms") or 0)
+    )
+    trace = (payload.get("collection_trace") or {}) if current_publication else {}
     trace = trace if isinstance(trace, dict) else {}
     metadata = safe_details({**trace, "source_counts": dict(Counter(
         str(item.get("source") or "unknown") for item in payload.get("items") or []
         if isinstance(item, dict)))})
     summaries = []
-    for source in (payload.get("sources") or [])[:8]:
+    for source in ((payload.get("sources") or [])[:8] if current_publication else []):
         if not isinstance(source, dict):
             continue
         facts = {"source": source.get("name"), "status": source.get("status"), "stage": source.get("phase"),

@@ -105,6 +105,57 @@ def test_first_news_response_is_read_only_and_receipt_is_durable_idempotent(acco
     assert "읽" not in item["message"]
 
 
+@pytest.mark.parametrize("exception_name,status", [("NewsTranslationBusyError", 429), ("NewsTranslationError", 503)])
+def test_news_response_generation_failure_is_not_a_browser_receipt(account, monkeypatch, exception_name, status):
+    from app import news
+    def fail(*_args, **_kwargs):
+        raise getattr(news, exception_name)("뉴스 처리 실패 api_key=private-key Bearer private-token")
+    monkeypatch.setattr(news_router.service, "get_position_news", fail)
+    _uid, sid, headers = account
+    for _ in range(5):
+        response = client.get(f"/api/me/agents/sessions/{sid}/position-news", headers=headers)
+        assert response.status_code == status
+        assert response.headers["cache-control"] == "private, no-store"
+    logs = client.get(f"/api/me/agents/sessions/{sid}/logs", headers=headers).json()["items"]
+    assert len(logs) == 1, "Repeated failed polling must not amplify DB events"
+    item = logs[0]
+    assert item["event_name"] == "news.request_failed" and item["component"] == "server"
+    assert item["source"] == "news_request" and item["severity"] == "ERROR"
+    assert item["details"]["http_status"] == status
+    assert item["details"]["outcome"] == "response_not_created"
+    assert item["details"]["verification"] == "server_response_not_browser_receipt"
+    assert not {"count", "examples", "flow_run_id", "task_run_id"} & item["details"].keys()
+    assert item["operation_id"] == ""
+    assert "private-key" not in json.dumps(item) and "private-token" not in json.dumps(item)
+    assert "수신 확인" not in item["source_label"]
+
+
+def test_news_generation_failure_does_not_write_to_ended_session(account, monkeypatch):
+    from app import news
+    _uid, sid, headers = account
+    with get_session() as db:
+        session = db.get(RunSession, sid)
+        session.status = "stopped"
+        db.add(session)
+        db.commit()
+    monkeypatch.setattr(news_router.service, "get_position_news", lambda *_a, **_kw: (_ for _ in ()).throw(news.NewsTranslationError("실패")))
+    assert client.get(f"/api/me/agents/sessions/{sid}/position-news", headers=headers).status_code == 503
+    assert client.get(f"/api/me/agents/sessions/{sid}/logs", headers=headers).json()["items"] == []
+
+
+def test_news_generation_log_failure_never_changes_http_error_or_retries_service(account, monkeypatch):
+    from app import agent_logs, news
+    called = []
+    def fail(*_a, **_kw):
+        called.append(True)
+        raise news.NewsTranslationBusyError("요청 대기")
+    monkeypatch.setattr(news_router.service, "get_position_news", fail)
+    monkeypatch.setattr(agent_logs, "record_news_request_failure", lambda *_a, **_kw: (_ for _ in ()).throw(RuntimeError("sink unavailable")))
+    _uid, sid, headers = account
+    response = client.get(f"/api/me/agents/sessions/{sid}/position-news", headers=headers)
+    assert response.status_code == 429 and len(called) == 1
+
+
 def test_token_refresh_has_stable_key_and_repeated_poll_does_not_write(account, monkeypatch):
     from app import agent_logs
     monkeypatch.setattr(agent_logs, "_now_ms", lambda: 1791766800000)

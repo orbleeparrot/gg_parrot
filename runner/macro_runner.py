@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 import inspect
+import math
 import os
 import queue
 import shutil
@@ -215,19 +216,23 @@ EVENT_BUFFER_MAX = 100
 def _event_kind(msg: str) -> str:
     """로그 한 줄을 서버 이벤트 종류로 분류한다(문의 대응용 색인)."""
     m = msg.strip()
+    # Failure text commonly contains "체결" (e.g. "체결 확인 실패").
+    # A keyword must not make a failed/uncertain order look like a fill.
+    if "오류" in m or "실패" in m:
+        return "error"
+    if any(word in m for word in ("미체결", "불확실", "확인하지 못", "체결되지")):
+        return "warn"
     if m.startswith("[진입]") or m.startswith("[청산") or m.startswith("[강제청산") or m.startswith("[손절]"):
         return "order"
     if "체결" in m or m.lstrip().startswith("손익"):
         return "fill"
-    if "오류" in m or "실패" in m:
-        return "error"
     if "종료" in m:
         return "stop"
     if "진입 보류" in m or "신호" in m:
         return "signal"
     return "info"
 
-_LOG_ICONS = {"signal": "🔔", "order": "▶", "fill": "✓", "error": "⚠", "stop": "■", "info": "·"}
+_LOG_ICONS = {"signal": "🔔", "order": "▶", "fill": "✓", "error": "⚠", "warn": "⚠", "stop": "■", "info": "·"}
 
 
 def _log_style(msg: str) -> tuple[str, str]:
@@ -599,7 +604,7 @@ class ServerClient:
                    "signal_price", "notional_frac", "qty_frac", "executed_qty", "fill_price",
                    "client_order_id", "exchange_order_id", "acquired_qty", "fees_known",
                    "error", "mode", "exchange", "symbol", "verification", "ack_source",
-                   "outcome", "position_uncertain"}
+                   "outcome", "position_uncertain", "reconciliation_scope"}
         allowed.update({"requested_qty", "requested_notional", "quote_currency", "reduce_only", "closing"})
         snapshot = {key: value[:600] if isinstance(value, str) else value
                     for key, value in (details or {}).items()
@@ -897,6 +902,23 @@ class BotThread(threading.Thread):
     def _price(self) -> float:
         return self.broker.price()
 
+    def _log_mode(self) -> str:
+        """Log only an explicit mode, never default missing telemetry to live/mock."""
+        mode = vars(self).get("mode", "")
+        return mode if mode in RUN_MODES else ""
+
+    def _log_reconciliation_scope(self) -> str:
+        """Describe what the legacy fees_known flag actually checks; no risk change."""
+        if self._log_mode() == MODE_MOCK:
+            return "simulated_fee_model"
+        if self.exchange in DOMESTIC_EXCHANGES:
+            return "domestic_trade_quantity_coverage"
+        if self.exchange == "binance" and self.market == "spot":
+            return "binance_spot_fill_fee_coverage"
+        if self.exchange == "binance" and self.market == "futures":
+            return "binance_futures_quantity_only"
+        return "unknown"
+
     def _place(self, side_word: str, qty: float, reduce_only: bool = False,
                *, notional: float = 0.0) -> bool:
         """시장가 주문 하나를 넣고 체결을 확인한 뒤 보유 상태를 갱신한다.
@@ -921,8 +943,11 @@ class BotThread(threading.Thread):
                            "requested_notional": notional if by_money else None,
                            "requested_qty": None if by_money else qty, "quote_currency": self.quote,
                            "reduce_only": reduce_only, "closing": closing,
-                           "mode": self.mode, "exchange": self.exchange, "symbol": self.symbol}
-        self._telemetry("order", "주문 요청을 거래소 어댑터에 전달합니다.",
+                           "mode": self._log_mode(), "exchange": self.exchange, "symbol": self.symbol}
+        mode = self._log_mode()
+        mode_label = MODE_LABELS.get(mode, "모드 미확인")
+        target = "시뮬레이터" if mode == MODE_MOCK else "거래소 어댑터"
+        self._telemetry("order", f"{mode_label} 주문 요청을 {target}에 전달합니다.",
                         event_name="runner.order_requested", severity="INFO", operation_id=operation_id,
                         details=request_details)
         # 제출 · 재조정 · 평균가 · 수수료는 브로커가 한다. 봇은 그 결과로 장부만 쓴다.
@@ -932,27 +957,31 @@ class BotThread(threading.Thread):
                                        reduce_only=reduce_only,
                                        closing=closing, client_id=client_id)
         except Exception as exc:
-            self._telemetry("error", "거래소 어댑터가 주문 처리 오류를 보고했습니다.",
+            self._telemetry("error", f"{mode_label} {target}가 주문 처리 오류를 보고했습니다.",
                             event_name="runner.order_failed", severity="ERROR", operation_id=operation_id,
                             details={**request_details, "error": str(exc)})
             raise
         executed, average = order.executed_qty, order.avg_price
         acquired, fees_known = order.acquired_qty, order.fees_known
+        result_uncertain = order.status not in brokers.TERMINAL_STATUSES or (
+            order.status == "FILLED" and not (executed and average)
+        ) or bool(executed and not average) or not fees_known
+        reported_fill = order.status == "FILLED" and not result_uncertain and all(
+            math.isfinite(value) and value > 0 for value in (executed, average))
         self._telemetry(
-            "fill" if order.status == "FILLED" else "warn", "거래소 어댑터의 주문 결과를 실행기가 보고합니다.",
-            severity="INFO" if order.status == "FILLED" else "WARN", event_name="runner.order_result",
+            "fill" if reported_fill else "warn", f"{mode_label} {target}의 주문 결과를 실행기가 보고합니다.",
+            severity="INFO" if reported_fill else "WARN", event_name="runner.order_result",
             operation_id=operation_id,
             details={"action": side_word, "status": order.status, "raw_status": order.raw_status,
                      "client_order_id": client_id, "exchange_order_id": order.order_id,
                      "executed_qty": executed, "fill_price": average, "acquired_qty": acquired,
-                     "fees_known": fees_known, "mode": getattr(self, "mode", ""),
+                     "fees_known": fees_known, "reconciliation_scope": self._log_reconciliation_scope(),
+                     "position_uncertain": bool(result_uncertain), "mode": mode,
                      "exchange": self.exchange, "symbol": self.symbol,
                      "verification": "runner_reported_not_exchange_verified", "ack_source": "runner"},
         )
         self._last_fill_qty, self._last_fill_price = executed, average
-        self.position_uncertain = order.status not in brokers.TERMINAL_STATUSES or (
-            order.status == "FILLED" and not (executed and average)
-        ) or bool(executed and not average) or not fees_known
+        self.position_uncertain = result_uncertain
         dust_only = False
         if executed:
             if closing:
@@ -1085,8 +1114,10 @@ class BotThread(threading.Thread):
         실패한 명령은 기록하지 않는다 — 서버가 청산 실패를 같은 id 로 재전송하면 다시 실행해야 한다.
         """
         cid = cmd.get("id")
-        ack = {"command_id": cid, "ok": True, "executed_qty": 0.0, "fill_price": 0.0, "error": ""}
+        ack = {"command_id": cid, "ok": True, "executed_qty": 0.0, "fill_price": 0.0, "error": "",
+               "mode": self._log_mode(), "outcome": "execution_not_reported"}
         if cid in self._done_command_ids:
+            ack["outcome"] = "duplicate_command_no_reexecution"
             return ack
         action = str(cmd.get("action", "")).lower()
         reason = str(cmd.get("reason") or "")
@@ -1094,7 +1125,7 @@ class BotThread(threading.Thread):
         self._active_log_operation_id = operation_id
         context = {"command_id": cid, "action": action, "command_seq": cmd.get("seq"),
                    "signal_price": cmd.get("signal_price"), "notional_frac": cmd.get("notional_frac"),
-                   "qty_frac": cmd.get("qty_frac"), "reason": reason}
+                   "qty_frac": cmd.get("qty_frac"), "reason": reason, "mode": self._log_mode()}
         self._telemetry("info", "서버 주문 명령을 실행기가 수신했습니다.", event_name="runner.command_received",
                         severity="INFO", operation_id=operation_id, details=context)
         uncertain_before = getattr(self, "position_uncertain", False)
@@ -1128,11 +1159,12 @@ class BotThread(threading.Thread):
                         self.held_qty = prev_qty + added
                     self.entry_price = (prev_qty * prev_entry + added * filled_px) / self.held_qty
                     self.in_position = True
-                ack.update(executed_qty=filled_qty, fill_price=filled_px)
+                ack.update(executed_qty=filled_qty, fill_price=filled_px, outcome="execution_reported")
             else:  # sell / cover
                 if not self.in_position or self.held_qty <= 0:
                     self.log(f"[신호] {reason} → 보유 없음, 건너뜀")
                     self._done_command_ids.append(cid)
+                    ack["outcome"] = "no_position_no_order"
                     self._telemetry("info", "보유 포지션이 없어 청산 주문을 보내지 않았습니다.",
                                     event_name="runner.command_reported", severity="INFO", operation_id=operation_id,
                                     details={**context, "outcome": "no_position_no_order", "executed_qty": 0})
@@ -1150,7 +1182,8 @@ class BotThread(threading.Thread):
                     word = "SELL" if self.side == "long" else "BUY"
                     if not self._place(word, qty, reduce_only=(self.market == "futures")):
                         raise RuntimeError("부분 청산 주문이 체결되지 않았어요.")
-                ack.update(executed_qty=self._last_fill_qty, fill_price=self._last_fill_price)
+                ack.update(executed_qty=self._last_fill_qty, fill_price=self._last_fill_price,
+                           outcome="execution_reported")
         except Exception as exc:
             if getattr(self, "position_uncertain", False) and not uncertain_before:
                 # 이 주문으로 포지션이 불확실해졌다 — 명령을 계속 받을 상태가 아니다. 루프를 끝내고
@@ -1160,17 +1193,19 @@ class BotThread(threading.Thread):
                                 details={**context, "error": str(exc), "position_uncertain": True})
                 self._active_log_operation_id = ""
                 raise
-            ack.update(ok=False, error=str(exc)[:200])
+            ack.update(ok=False, error=str(exc)[:200], outcome="execution_failed")
             self.log(f"  ⚠ 명령 실행 실패: {exc}")
         if ack["ok"]:
             self._done_command_ids.append(cid)
         self._telemetry(
-            "order" if ack["ok"] else "error", "서버 명령 실행 결과를 실행기가 보고합니다.",
+            "order" if ack["ok"] else "error",
+            f"{MODE_LABELS.get(self._log_mode(), '모드 미확인')} 서버 명령 실행 결과를 실행기가 보고합니다.",
             event_name="runner.command_reported" if ack["ok"] else "runner.command_failed",
             severity="INFO" if ack["ok"] else "ERROR", operation_id=operation_id,
             details={**context, "status": "reported_ok" if ack["ok"] else "reported_failed",
                      "executed_qty": ack["executed_qty"], "fill_price": ack["fill_price"],
-                     "error": ack["error"], "verification": "runner_reported_not_exchange_verified"},
+                     "error": ack["error"], "outcome": ack["outcome"],
+                     "verification": "runner_reported_not_exchange_verified"},
         )
         self._active_log_operation_id = ""
         return ack

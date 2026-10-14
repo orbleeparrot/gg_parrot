@@ -520,6 +520,7 @@ def publish_initial_payload(symbol: str, payload: dict, *, repo=None, now_ms=Non
             # existing editorial set here so its paid analysis remains reusable;
             # the final enrichment pass still publishes newly discovered news.
             initial = {**stored.get("news_payload", {}), **payload,
+                       "collection_trace": dict(payload.get("collection_trace") or {}),
                        "items": news_mod._sort_news_items_newest_first(
                            [item for item in usable if not classifier.is_community_item(item)]
                            + incoming_community)}

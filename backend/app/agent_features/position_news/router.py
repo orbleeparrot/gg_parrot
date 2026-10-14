@@ -26,6 +26,16 @@ router = APIRouter(prefix="/api/me/agents", tags=["agent-features"])
 logger = logging.getLogger(__name__)
 
 
+def _record_response_failure(user_id: int, session_id: int, status: int,
+                             error: Exception, db: Session) -> None:
+    try:
+        agent_logs.record_news_request_failure(user_id, session_id, status, error, db=db)
+    except Exception:
+        # Telemetry must never retry news or obscure the original HTTP result.
+        # Never print the exception, raw provider payload or credentials.
+        logger.warning("News response failure log unavailable (session=%s)", session_id)
+
+
 @router.get("/sessions/{session_id}/logs")
 def session_logs(
     session_id: int,
@@ -106,9 +116,11 @@ def position_news(
             logger.warning("News receipt unavailable (session=%s)", session_id)
         return payload
     except NewsTranslationBusyError as exc:
-        raise HTTPException(status_code=429, detail=str(exc)) from exc
+        _record_response_failure(user_id, session_id, 429, exc, db)
+        raise HTTPException(status_code=429, detail=str(exc), headers={"Cache-Control": "private, no-store"}) from exc
     except NewsTranslationError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        _record_response_failure(user_id, session_id, 503, exc, db)
+        raise HTTPException(status_code=503, detail=str(exc), headers={"Cache-Control": "private, no-store"}) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

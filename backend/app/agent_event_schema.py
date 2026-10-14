@@ -34,6 +34,7 @@ _TEXT_FIELDS = {
     "indicator": 64, "decision": 100, "mode": 24, "market": 24,
     "exchange": 24, "symbol": 40,
     "order_status": 40, "raw_status": 40, "quote_currency": 24,
+    "reconciliation_scope": 64,
 }
 _TIMESTAMP_FIELDS = frozenset({"collected_at", "last_success_at", "last_heartbeat_at", "response_issued_at"})
 _ID_FIELDS = frozenset({"command_id", "client_order_id", "exchange_order_id", "request_id",

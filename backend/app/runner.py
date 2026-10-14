@@ -960,6 +960,13 @@ def _append_event_batch(db, row: RunSession, events, *, component: str) -> int:
         if not trusted:
             details = json.loads(normalized["details_json"] or "{}")
             details.update(ack_source="runner", verification="runner_reported_not_exchange_verified")
+            # A client's per-event field must not relabel a mock session as
+            # live. For old sessions with no mode, keep only an explicit valid
+            # runner claim; never infer mock/testnet/live from the testnet flag.
+            if row.mode in {"mock", "testnet", "live"}:
+                details["mode"] = row.mode
+            elif details.get("mode") not in {"mock", "testnet", "live"}:
+                details.pop("mode", None)
             normalized["details_json"] = json.dumps(safe_details(details), ensure_ascii=False, sort_keys=True)
         statement = insert(RunSessionEvent).values(
             session_id=row.id, user_id=row.user_id, created_ms=now_ms, **normalized,

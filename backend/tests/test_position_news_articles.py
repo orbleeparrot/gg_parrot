@@ -73,6 +73,85 @@ def test_position_get_is_db_only_and_projects_ready_articles_by_identity(engine,
     assert next_page["items"][0]["id"] == service._article_id(raw[0])
 
 
+def test_new_untraced_publication_clears_old_source_and_prefect_metadata(engine):
+    articles.upsert_articles("BTC", [item()], payload={"collection_trace": {"flow_run_id": "old-flow"},
+        "sources": [{"name": "old-source", "status": "ready"}]}, now_ms=1000)
+    cursor = articles.read_article_feed("BTC")["cursor"]
+    articles.upsert_articles("BTC", [item()], payload={"symbol": "BTC"}, now_ms=2000)
+    feed = articles.read_article_feed("BTC")
+    assert not feed.get("collection_trace") and not feed.get("sources")
+    assert feed["cursor"] == cursor, "Telemetry must not create duplicate article revisions"
+
+
+def test_late_enrichment_cannot_replace_current_publication_provenance(engine):
+    raw = item("Bitcoin ETF approved")
+    articles.upsert_articles("BTC", [raw], payload={"collection_trace": {"flow_run_id": "current-flow"},
+        "sources": [{"name": "current-source", "status": "ready"}]}, now_ms=1000)
+    articles.upsert_articles("BTC", [{**raw, "title": "비트코인 ETF 승인", "original_title": raw["title"]}],
+        payload={"collection_trace": {"flow_run_id": "old-flow"}, "sources": [{"name": "old-source", "status": "error"}]},
+        enrichment_only=True, now_ms=2000)
+    feed = articles.read_article_feed("BTC")
+    assert feed["collection_trace"] == {"flow_run_id": "current-flow"}
+    assert feed["sources"] == [{"name": "current-source", "status": "ready"}]
+
+
+def test_retained_articles_after_failed_attempt_have_no_old_success_operation(engine):
+    collector.collect_payload("BTC", {"symbol": "BTC", "items": [item()],
+        "collection_trace": {"flow_run_id": "old-flow", "collection_run_id": "old-flow"},
+        "sources": [{"name": "coindesk_rss", "status": "ready"}]},
+        allow_ai=False, localize=False, now_ms=1000)
+    repository.mark_collection_outcome("BTC", "error", error="current attempt failed", now_ms=2000)
+    payload = service.get_position_news({"symbol": "BTCUSDT", "position_side": "long"})
+    assert payload["collection"]["status"] == "error" and payload["items"]
+    assert payload["collection"]["source_counts"] == {"CoinDesk": 1}
+    assert "collection_run_id" not in payload["collection"] and "flow_run_id" not in payload["collection"]
+    assert "source_results" not in payload["collection"]
+
+
+def test_success_and_embedded_rediscovery_keep_correct_trace_without_new_revisions(engine):
+    traced = {"symbol": "BTC", "items": [item()],
+        "collection_trace": {"flow_run_id": "actual-flow", "collection_run_id": "actual-flow"},
+        "sources": [{"name": "coindesk_rss", "status": "ready", "item_count": 1}]}
+    collector.collect_payload("BTC", traced, allow_ai=False, localize=False, now_ms=1000)
+    session = {"symbol": "BTCUSDT", "position_side": "long"}
+    published = service.get_position_news(session)
+    assert published["collection"]["flow_run_id"] == "actual-flow"
+    assert published["collection"]["source_results"][0]["status"] == "ready"
+    # Same articles are now observed by an embedded web collector without a
+    # Prefect context. Shared analysis is reused, not called or revised again.
+    collector.collect_payload("BTC", {"symbol": "BTC", "items": [item()],
+        "sources": [{"name": "google_news_rss", "status": "ready", "item_count": 1}]},
+        allow_ai=False, localize=False, now_ms=2000)
+    embedded = service.get_position_news(session)
+    assert embedded["cursor"] == published["cursor"]
+    assert "flow_run_id" not in embedded["collection"] and "collection_run_id" not in embedded["collection"]
+    assert embedded["collection"]["source_results"] == [{"source": "google_news_rss", "status": "ready", "count": 1}]
+
+
+def test_legacy_snapshot_delivery_also_omits_previous_trace_after_current_failure(engine, monkeypatch):
+    collector.collect_payload("BTC", {"symbol": "BTC", "items": [item()],
+        "collection_trace": {"flow_run_id": "legacy-flow"},
+        "sources": [{"name": "coindesk_rss", "status": "ready"}]},
+        allow_ai=False, localize=False, now_ms=1000)
+    monkeypatch.setattr(repository, "read_article_feed", lambda *_args, **_kwargs: None)
+    session = {"symbol": "BTCUSDT", "position_side": "long"}
+    assert service.get_position_news(session)["collection"]["flow_run_id"] == "legacy-flow"
+    repository.mark_collection_outcome("BTC", "error", error="new failure", now_ms=2000)
+    payload = service.get_position_news(session)
+    assert payload["collection"]["status"] == "error"
+    assert payload["collection"]["source_counts"] == {"CoinDesk": 1}
+    assert "flow_run_id" not in payload["collection"] and "source_results" not in payload["collection"]
+
+
+def test_position_source_counts_only_include_articles_actually_returned(engine, monkeypatch):
+    kept, dropped = item(), item("비트코인 오래된 기사", source="Old source", url="https://example.test/old")
+    articles.upsert_articles("BTC", [kept, dropped])
+    monkeypatch.setattr(news, "_within_coin_news_window", lambda row: row["url"] != dropped["url"])
+    payload = service.get_position_news({"symbol": "BTCUSDT", "position_side": "long"})
+    assert [row["title"] for row in payload["items"]] == [kept["title"]]
+    assert payload["collection"]["source_counts"] == {"CoinDesk": 1}
+
+
 def test_source_article_is_visible_before_other_source_and_translation_finish(engine, monkeypatch):
     source_waiting, release_source = Event(), Event()
     translation_waiting, release_translation = Event(), Event()

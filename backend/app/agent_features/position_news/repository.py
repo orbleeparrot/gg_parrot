@@ -1429,6 +1429,7 @@ def get_latest_snapshot(
         "collection": {
             "status": state.collection_status,
             "last_attempt_at": state.last_attempt_at,
+            "last_attempt_ms": state.last_attempt_ms,
             "last_success_at": state.last_success_at,
             "last_success_ms": state.last_success_ms,
             "consecutive_failures": state.consecutive_failures,

@@ -196,10 +196,14 @@ def main():
                 assert len(fixture.receipts) == 1, fixture.receipts
                 open_logs(page)
                 assert page.locator(".agent-session-log-body").bounding_box()["height"] >= 200
-                if width <= 600:
-                    page.get_by_role("button", name="상세 필터", exact=True).click()
-                    expect(page.get_by_role("combobox", name="활동 로그 수준", exact=True)).to_be_visible()
-                    page.get_by_role("button", name="상세 필터", exact=True).click()
+                # Terminal output is the default on every viewport. Search is
+                # always available, while the three advanced controls collapse.
+                expect(page.get_by_role("combobox", name="활동 로그 수준", exact=True)).not_to_be_visible()
+                expect(page.locator(".agent-session-log-columns")).to_have_count(0)
+                assert page.locator(".agent-session-log-line").first.evaluate("node => getComputedStyle(node).display") == "block"
+                page.get_by_role("button", name="상세 필터", exact=True).click()
+                expect(page.get_by_role("combobox", name="활동 로그 수준", exact=True)).to_be_visible()
+                page.get_by_role("button", name="상세 필터", exact=True).click()
                 expect(page.get_by_text("새 뉴스 응답 수신 저장", exact=True)).to_be_visible()
                 expect(page.locator("time[title='2026.09.07 11:59:00 KST']").first).to_be_visible()
                 expect(page.locator(".agent-session-log-level").first).to_have_text("INFO")
@@ -232,7 +236,8 @@ def main():
                 filters.get_by_role("button", name="오류", exact=True).click()
                 settle(page)
                 expect(page.get_by_text("뉴스 수집 연결 오류", exact=True)).to_be_visible()
-                expect(page.get_by_text("뉴스 수집 오류", exact=True)).to_be_visible()
+                expect(page.locator(".agent-session-log-kind").first).to_have_attribute("title", "뉴스 수집 오류")
+                expect(page.locator(".agent-session-log-kind").first).to_have_text("news.received")
                 expect(page.locator(".agent-session-log-level").first).to_have_text("ERROR")
                 assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
                 fixture.fail_logs = True
@@ -257,6 +262,7 @@ def main():
             # outside the loaded first page. Related views reuse the same GET.
             context, page, fixture, errors = open_page(browser, origin)
             open_logs(page)
+            page.get_by_role("button", name="상세 필터", exact=True).click()
             page.get_by_role("combobox", name="활동 로그 수준", exact=True).select_option("ERROR")
             settle(page)
             expect(page.get_by_text("뉴스 수집 연결 오류", exact=True)).to_be_visible()
@@ -347,6 +353,52 @@ def main():
             assert not errors, errors
             context.close()
             checks += 1
+
+            # Provenance stays event-local, not inferred from the testnet
+            # session header. Stored legacy text remains visible with an
+            # explicit evidence caveat; server failures are not receipts.
+            for width in [1440, 390]:
+                fixture = LogsFixture()
+                simulated = fixture.event(61, "fill", "모의 체결 결과", "trade")
+                simulated.update(event_name="runner.order_result", component="runner", details={
+                    "mode": "mock", "executed_qty": 2, "fill_price": 100,
+                    "fees_known": True, "reconciliation_scope": "simulated_fee_model"})
+                legacy = fixture.event(60, "order", "구 실행기 체결 보고 · 0 @ 0", "trade")
+                legacy.update(event_name="command.execution_reported", details={"executed_qty": 0, "fill_price": 0})
+                server_failure = fixture.event(59, "news_error", "서버 뉴스 응답 생성 실패 · HTTP 429", "news")
+                server_failure.update(event_name="news.request_failed", component="server", source="news_request",
+                    source_label="서버 뉴스 응답 생성 실패", details={"http_status": 429,
+                        "verification": "server_response_not_browser_receipt", "outcome": "response_not_created"})
+                receipt = fixture.event(58, "news", "뉴스 브라우저 응답 수신", "news")
+                receipt.update(event_name="news.response_received")
+                fixture.rows[41] = [simulated, legacy, server_failure, receipt]
+                context, page, fixture, errors = open_page(browser, origin, width=width, fixture=fixture)
+                open_logs(page)
+                while page.get_by_role("button", name="이전 기록 더 보기", exact=True).count():
+                    page.get_by_role("button", name="이전 기록 더 보기", exact=True).click()
+                    settle(page)
+                mock_row = page.locator("[data-log-id='61']")
+                expect(mock_row.locator(".agent-session-log-observation")).to_contain_text("모의 · 실제 주문 없음")
+                mock_row.locator("summary.agent-session-log-line").click()
+                expect(mock_row.locator("dt", has_text=re.compile(r"^fees_known$")).locator("..")
+                    .locator("dd")).to_contain_text("true")
+                expect(mock_row.locator("dt", has_text=re.compile(r"^fees_known$")).locator("..")
+                    .locator("dd")).to_contain_text("수수료 금액 확인 아님")
+                expect(mock_row.locator("dt", has_text=re.compile(r"^reconciliation_scope$")).locator("..")
+                    .locator("dd")).to_contain_text("실제 거래소 수수료 아님")
+                old_row = page.locator("[data-log-id='60']")
+                expect(old_row.locator(".agent-session-log-message")).to_have_text("구 실행기 체결 보고 · 0 @ 0")
+                expect(old_row.locator(".agent-session-log-observation")).to_contain_text("체결 수량·가격 확인 정보 없음")
+                expect(old_row.locator(".agent-session-log-observation")).not_to_contain_text("테스트넷")
+                failed_row = page.locator("[data-log-id='59']")
+                expect(failed_row.locator(".agent-session-log-kind")).to_have_attribute("title", "뉴스 요청 실패")
+                expect(failed_row.locator(".agent-session-log-observation")).to_have_text("# 서버 요청 실패 기록 · 브라우저 수신 확인 아님")
+                expect(page.locator("[data-log-id='58'] .agent-session-log-observation")).to_have_text(
+                    "# 브라우저 응답 수신 · 수집 완료/사용자 열람 증명 아님")
+                assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+                assert not errors, errors
+                context.close()
+                checks += 1
 
             # A delayed old-session response must not leak into the next run.
             fixture = LogsFixture()

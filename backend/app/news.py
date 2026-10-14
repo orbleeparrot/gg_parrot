@@ -4461,29 +4461,32 @@ def _collected_news_envelope(base: str, name: str, query: str, fetched_sources: 
     env["coin_name"] = name
     env["refresh_seconds"] = _COIN_CACHE_SECONDS
     sources = []
-    if base == "EDEN":
+    # The progress envelope contains only completed loader results. An absent
+    # Google/CoinDesk/OpenEden result is still running (or was not configured),
+    # not a failed HTTP request; omit it rather than inventing zero counters.
+    if base == "EDEN" and "openeden" in fetched_sources:
         sources.append({
             "name": "openeden_official_rss",
             "status": "ready" if openeden_available else "error",
             "item_count": len(openeden_items),
             "fetched_count": len(openeden_items),
         })
-    sources.extend([
-        {
+    if "coindesk" in fetched_sources:
+        sources.append({
             "name": "coindesk_rss",
             "status": "ready" if coindesk_available else "error",
             "item_count": len(coindesk_items),
             "fetched_count": len(coindesk_raw),
-        },
-        {
+        })
+    if "google" in fetched_sources:
+        sources.append({
             **next(iter(google_payload.get("sources") or []), {}),
             "name": "google_news_rss",
             "status": (next(iter(google_payload.get("sources") or []), {}).get("status")
                        or ("ready" if google_available else "error")),
             "item_count": len(google_items),
             "fetched_count": google_fetched_count,
-        },
-    ])
+        })
     if api_source:
         sources.append(api_source)
     sources.extend(extra_sources)

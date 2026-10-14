@@ -58,6 +58,70 @@ export function sessionLogComponent(item) {
     ? item.component.trim().slice(0, 64) : "legacy";
 }
 
+const RECORDED_MODE_LABELS = Object.freeze({
+  mock: "모의 · 실제 주문 없음",
+  testnet: "테스트넷",
+  live: "실전 모드 · 체결 검증 아님",
+});
+const VERIFICATION_NOTES = Object.freeze({
+  runner_reported_not_exchange_verified: "실행기 보고 · 거래소 독립 검증 아님",
+  server_command_state: "서버 명령 상태 · 거래소 체결 확인 아님",
+  server_signal_not_exchange_order: "서버 조건 신호 · 거래소 주문 아님",
+});
+const RECONCILIATION_NOTES = Object.freeze({
+  simulated_fee_model: "모의 수수료 모델 · 실제 거래소 수수료 아님",
+  domestic_trade_quantity_coverage: "국내 거래소 체결 상세의 수량 정합성 · 수수료 금액 확인 아님",
+  binance_spot_fill_fee_coverage: "Binance 현물 체결·수수료 상세 정합성 · 수수료 금액 별도 확인 필요",
+  binance_futures_quantity_only: "Binance 선물 체결 수량 확인 · 수수료 검증 아님",
+  unknown: "어댑터 정합성 검사 범위 미확인",
+});
+
+// A row must use its own recorded mode. Never infer it from its message, prices,
+// raw exchange status or the currently selected (possibly changed) session mode.
+export function sessionLogModeLabel(mode) {
+  return typeof mode === "string" && Object.hasOwn(RECORDED_MODE_LABELS, mode) ? RECORDED_MODE_LABELS[mode] : "";
+}
+
+function isBrowserNewsReceipt(item) {
+  if (item?.event_name === "news.response_received") return true;
+  if (item?.event_name && item.event_name !== "news.received") return false;
+  return item?.source === "news_receipt" && (!item.source_label || item.source_label === "뉴스 응답 수신 확인");
+}
+
+export function sessionLogFieldNote(field, value) {
+  if (field === "fees_known") return "실행기 어댑터 정합성 플래그 · 수수료 금액 확인 아님";
+  if (field === "reconciliation_scope" && typeof value === "string" && Object.hasOwn(RECONCILIATION_NOTES, value)) return RECONCILIATION_NOTES[value];
+  if (field === "verification" && typeof value === "string" && Object.hasOwn(VERIFICATION_NOTES, value)) return VERIFICATION_NOTES[value];
+  if (field === "mode") return sessionLogModeLabel(value);
+  if (field === "ack_source" && ["runner", "engine"].includes(value)) return value === "runner" ? "실행기 보고" : "서버 엔진";
+  if (field === "action" && ["buy", "sell", "short", "cover"].includes(value)) return { buy: "매수", sell: "매도", short: "공매도", cover: "공매도 청산" }[value];
+  return "";
+}
+
+export function sessionLogObservationScope(item) {
+  const details = item?.details || {};
+  const notes = [sessionLogModeLabel(details.mode), sessionLogFieldNote("verification", details.verification)].filter(Boolean);
+  if (isBrowserNewsReceipt(item)) notes.push("브라우저 응답 수신 · 수집 완료/사용자 열람 증명 아님");
+  if (item?.event_name === "news.request_failed") notes.push("서버 요청 실패 기록 · 브라우저 수신 확인 아님");
+  if (item?.event_name === "news.response_generated") notes.push("서버 응답 생성 · 브라우저 수신 확인 아님");
+  if (item?.kind === "signal" && !details.verification) notes.push("조건 판정 기록 · 거래소 주문/체결 확인 아님");
+  if (typeof details.fees_known === "boolean") notes.push(sessionLogFieldNote("fees_known", details.fees_known));
+  const positive = (value) => typeof value === "number" && Number.isFinite(value) && value > 0;
+  const quantityKnown = positive(details.executed_qty);
+  const priceKnown = positive(details.fill_price);
+  // Keep old stored messages intact. An old command-success record without a
+  // complete fill pair is not evidence that an order was sent (or not sent).
+  if (item?.event_name === "command.execution_reported" && (!quantityKnown || !priceKnown)) {
+    notes.push(!quantityKnown && !priceKnown
+      ? "체결 수량·가격 확인 정보 없음 · 명령 성공 보고만 기록됨"
+      : "체결 수량·가격 확인 정보 불완전 · 명령 성공 보고만 기록됨");
+  }
+  if (item?.event_name === "runner.order_result" && details.raw_status === "FILLED" && details.fees_known === false && !quantityKnown) {
+    notes.push("체결 수량 확인 정보 없음 · FILLED 상태만으로 체결 확정 불가");
+  }
+  return notes;
+}
+
 // Defense in depth for copy/export. The owner API already sanitizes its payload;
 // never copy a newly introduced secret field merely because it is JSON-shaped.
 export function safeSessionLogData(value, depth = 0) {
@@ -167,8 +231,10 @@ export function safeSessionLogUrl(value) {
 
 export function sessionLogKindLabel(item) {
   if (sessionLogCategory(item) === "news") {
+    if (item?.event_name === "news.request_failed") return "뉴스 요청 실패";
     if (NEWS_ERROR_STATES.has(item?.details?.translation_status)) return "뉴스 번역·요약 오류";
     if (isSessionLogError(item)) return "뉴스 수집 오류";
+    if (isBrowserNewsReceipt(item)) return "뉴스 응답 수신 확인";
     const status = item?.details?.collection_status || item?.details?.status;
     if (NEWS_WAIT_STATES.has(status)) return "뉴스 수집 상태";
     const count = item?.details?.article_count ?? item?.details?.count;

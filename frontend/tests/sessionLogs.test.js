@@ -17,6 +17,9 @@ import {
   sessionLogSeverity,
   sessionLogComponent,
   safeSessionLogData,
+  sessionLogModeLabel,
+  sessionLogObservationScope,
+  sessionLogFieldNote,
 } from "../src/features/agents/sessionLogs.js";
 
 const row = (id, changes = {}) => ({
@@ -44,6 +47,47 @@ test("legacy severity/component remain explicitly unspecified without message cl
   assert.equal(sessionLogSeverity(row(1, { severity: "fake" })), "UNKNOWN");
   assert.equal(sessionLogComponent(row(1)), "legacy");
   assert.equal(sessionLogComponent(row(1, { component: "engine" })), "engine");
+});
+
+test("recorded event modes are explicit without guessing from prices, text or current session", () => {
+  assert.equal(sessionLogModeLabel("mock"), "모의 · 실제 주문 없음");
+  assert.equal(sessionLogModeLabel("testnet"), "테스트넷");
+  assert.equal(sessionLogModeLabel("live"), "실전 모드 · 체결 검증 아님");
+  for (const value of [undefined, null, "", "unknown", "MOCK", {}]) assert.equal(sessionLogModeLabel(value), "");
+  assert.deepEqual(sessionLogObservationScope(row(1, { kind: "fill", message: "모의 체결", mode: "mock" })), []);
+  assert.deepEqual(sessionLogObservationScope(row(1, { kind: "fill", details: { mode: "mock" } })), ["모의 · 실제 주문 없음"]);
+});
+
+test("receipt, request failure and server signal describe only their actual observation scope", () => {
+  const received = row(1, { kind: "news", category: "news", source: "news_receipt", event_name: "news.response_received" });
+  assert.equal(sessionLogKindLabel(received), "뉴스 응답 수신 확인");
+  assert.ok(sessionLogObservationScope(received).includes("브라우저 응답 수신 · 수집 완료/사용자 열람 증명 아님"));
+  const requestFailed = { ...received, kind: "news_error", event_name: "news.request_failed", source_label: "뉴스 요청 실패" };
+  assert.equal(sessionLogKindLabel(requestFailed), "뉴스 요청 실패");
+  assert.deepEqual(sessionLogObservationScope(requestFailed), ["서버 요청 실패 기록 · 브라우저 수신 확인 아님"]);
+  assert.ok(sessionLogObservationScope(row(1, { kind: "signal" })).includes("조건 판정 기록 · 거래소 주문/체결 확인 아님"));
+});
+
+test("fees_known remains an adapter flag, not an actual fee or exchange-verification claim", () => {
+  assert.match(sessionLogFieldNote("fees_known", true), /어댑터 정합성 플래그/);
+  assert.match(sessionLogFieldNote("fees_known", false), /수수료 금액 확인 아님/);
+  assert.match(sessionLogFieldNote("reconciliation_scope", "domestic_trade_quantity_coverage"), /체결 상세의 수량 정합성/);
+  assert.match(sessionLogFieldNote("reconciliation_scope", "binance_futures_quantity_only"), /체결 수량 확인 · 수수료 검증 아님/);
+  assert.equal(sessionLogFieldNote("fee", 0), "");
+});
+
+test("historical zero or incomplete fills expose missing evidence without rewriting stored messages or asserting no order", () => {
+  const missing = row(1, { kind: "fill", event_name: "command.execution_reported",
+    message: "체결 보고 · 0 @ 0", details: { executed_qty: 0, fill_price: 0 } });
+  assert.ok(sessionLogObservationScope(missing).includes("체결 수량·가격 확인 정보 없음 · 명령 성공 보고만 기록됨"));
+  assert.equal(missing.message, "체결 보고 · 0 @ 0");
+  assert.doesNotMatch(sessionLogObservationScope(missing).join(" "), /실제 주문 없음/);
+  assert.ok(sessionLogObservationScope({ ...missing, details: { executed_qty: 2 } })
+    .includes("체결 수량·가격 확인 정보 불완전 · 명령 성공 보고만 기록됨"));
+  assert.deepEqual(sessionLogObservationScope({ ...missing, details: { executed_qty: 2, fill_price: 100 } }), []);
+  const uncertain = row(1, { kind: "fill", event_name: "runner.order_result",
+    details: { raw_status: "FILLED", fees_known: false } });
+  assert.ok(sessionLogObservationScope(uncertain).includes("체결 수량 확인 정보 없음 · FILLED 상태만으로 체결 확정 불가"));
 });
 
 test("timestamp display preserves real fractional precision instead of synthesizing milliseconds", () => {
@@ -195,9 +239,9 @@ test("production news receipt fields distinguish collection and translation fail
     kind: "news", category: "news", source: "news_receipt",
     details: { collection_status: "ready", translation_status: "ready", count: 3 }, ...changes,
   });
-  assert.equal(sessionLogKindLabel(news()), "뉴스 제공");
-  assert.equal(sessionLogKindLabel(news({ details: { collection_status: "pending", count: 0 } })), "뉴스 수집 상태");
-  assert.equal(sessionLogKindLabel(news({ details: { collection_status: "empty", count: 0 } })), "뉴스 수집 상태");
+  assert.equal(sessionLogKindLabel(news()), "뉴스 응답 수신 확인");
+  assert.equal(sessionLogKindLabel(news({ details: { collection_status: "pending", count: 0 } })), "뉴스 응답 수신 확인");
+  assert.equal(sessionLogKindLabel(news({ details: { collection_status: "empty", count: 0 } })), "뉴스 응답 수신 확인");
   const failed = news({ kind: "news_error", details: { collection_status: "error", count: 0 } });
   assert.equal(sessionLogKindLabel(failed), "뉴스 수집 오류");
   assert.equal(matchesSessionLogCategory(failed, "error"), true);

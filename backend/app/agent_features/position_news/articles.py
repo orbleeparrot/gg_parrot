@@ -270,9 +270,16 @@ def upsert_articles(asset_symbol: str, items: list[dict], *, analysis: dict | No
     if payload is not None:
         metadata = json.loads(state.metadata_json)
         metadata.update({key: payload[key] for key in (
-            "symbol", "coin_name", "label", "query", "sources", "browser_enrichment", "refresh_seconds",
-            "as_of", "overview", "ai", "image_status", "collection_status", "disclaimer", "collection_trace",
+            "symbol", "coin_name", "label", "query", "browser_enrichment", "refresh_seconds",
+            "as_of", "overview", "ai", "image_status", "collection_status", "disclaimer",
         ) if key in payload})
+        if not enrichment_only:
+            # Provenance is replacement metadata for this publication, not a
+            # merge with the last successful collector. A web bootstrap has no
+            # Prefect context. Late translation/image workers never replace
+            # these collection facts, even if their input carries older IDs.
+            metadata["collection_trace"] = payload.get("collection_trace") or {}
+            metadata["sources"] = payload.get("sources") or []
         state.metadata_json = json.dumps(metadata, ensure_ascii=False)
     state.updated_ms = max(state.updated_ms, millis)
     revision = state.revision

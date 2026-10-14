@@ -846,6 +846,20 @@ def _engine_rollback_event(cmd: RunnerCommand, event_name: str, kind: str, sever
                         "verification": "server_command_state", **details}}
 
 
+def _held_until(state_json: str, fallback: int) -> int:
+    """기록에 남길 대기 종료 시각 — 드라이버(state_json)에 실제로 걸린 값. 저장 실패 뒤 같은 ack 가 다시 오면
+    드라이버는 첫 시도 때의 대기를 갖고 있다(지금 시각으로 다시 계산하면 그만큼 늦게 적힌다)."""
+    try:
+        held = int((json.loads(state_json or "{}") or {}).get("entry_hold_until_ms") or 0)
+    except (TypeError, ValueError):
+        held = 0
+    return held or fallback
+
+
+def _minutes_left(until_ms: int, now_ms: int) -> int:
+    return max(1, -(-(until_ms - now_ms) // 60_000))
+
+
 def _refusal(cmd: RunnerCommand, reason: str) -> dict:
     return _engine_rollback_event(cmd, "engine.rollback_refused", "warn", "WARN",
                                   f"⚠ 주문 #{cmd.seq} — {_REFUSAL_MESSAGES[reason]}. 거래소 포지션을 확인해 주세요.",
@@ -920,6 +934,7 @@ def settle_unexecuted_entries(db, row: RunSession, changed: List[RunnerCommand],
     grid_undone: List[RunnerCommand] = []
     rolled = None
     minutes = None
+    grid_hold = 0
 
     def postpone(cmd: RunnerCommand) -> None:
         attempts = (retry.get(cmd.id) or (0, cmd.seq))[0] + 1
@@ -961,6 +976,7 @@ def settle_unexecuted_entries(db, row: RunSession, changed: List[RunnerCommand],
             cmd.rollback_state = ROLLED_BACK_ALSO if (grid_undone or rolled) else ROLLED_BACK
             db.add(cmd)
             grid_undone.append(cmd)
+            grid_hold = _held_until(outcome, retry_at)
             continue
         later = [c for c in later_rows if c.seq > cmd.seq]
         if not snap["state"].get("in_position"):
@@ -989,6 +1005,7 @@ def settle_unexecuted_entries(db, row: RunSession, changed: List[RunnerCommand],
         retry.clear()  # 앞 후보는 이미 거절로 빠졌고, 뒤 후보는 이 되돌리기에 함께 지워졌다
         state_json, to_cancel = outcome
         row.state_json = state_json or json.dumps({**snap["state"], "entry_hold_until_ms": retry_at})
+        held = _held_until(row.state_json, retry_at)
         cmd.rollback_state = ROLLED_BACK
         db.add(cmd)
         for c in later:
@@ -1000,17 +1017,18 @@ def settle_unexecuted_entries(db, row: RunSession, changed: List[RunnerCommand],
         where = "추가 진입 전으로" if snap["state"].get("in_position") else "진입 전으로"
         events.append(_engine_rollback_event(
             cmd, "engine.entry_rolled_back", "warn", "WARN",
-            f"{why} 서버 전략도 {where} 되돌렸어요 · {minutes}분 동안은 새로 진입하지 않아요",
-            retry_at=retry_at, count=len(to_cancel)))
+            f"{why} 서버 전략도 {where} 되돌렸어요 · {_minutes_left(held, now_ms)}분 동안은 새로 진입하지 않아요",
+            retry_at=held, count=len(to_cancel)))
         rolled = cmd
         break
-    if grid_undone:
-        prices = " · ".join(f"{c.signal_price:g}" for c in grid_undone[:5]) + (" …" if len(grid_undone) > 5 else "")
+    for cmd in grid_undone:
+        # 칸(명령)마다 한 줄 — 명령별 검색(operation_id)에서 빠지지 않게. 알림 종류가 아니라 알림이 쌓이지 않는다.
         events.append(_engine_rollback_event(
-            grid_undone[0], "engine.grid_lot_removed", "warn", "WARN",
-            f"주문이 나가지 않은 그리드 매수 {len(grid_undone)}건({prices})은 그 칸만 서버 전략에서 뺐어요"
-            f" · 다른 칸 체결은 그대로 · {minutes}분 동안은 새로 매수하지 않아요",
-            count=len(grid_undone), retry_at=now_ms + minutes * 60_000))
+            cmd, "engine.grid_lot_removed", "warn", "WARN",
+            f"그리드 {cmd.signal_price:g} 칸 매수가 나가지 않아 그 칸만 서버 전략에서 뺐어요"
+            f" · 다른 칸 체결은 그대로 · {_minutes_left(grid_hold, now_ms)}분 동안은 새로 매수하지 않아요",
+            count=len(grid_undone), retry_at=grid_hold))
+    if grid_undone:
         rolled = rolled or grid_undone[-1]
     _keep_retry(row.id, retry)
     if refusals:

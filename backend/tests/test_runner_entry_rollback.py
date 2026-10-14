@@ -654,7 +654,7 @@ def test_grid_buys_go_out_together_and_a_failed_one_is_removed_alone(live_grid):
               in_position=True, position_qty=1.64, previous_qty=0.79)
     with get_session() as db:
         assert db.get(RunnerCommand, ids[2]).rollback_state == eng.ROLLED_BACK
-        assert "그리드 매수 1건" in _messages(db, sid)[-1] and "그 칸만" in _messages(db, sid)[-1]
+        assert "그리드 122 칸 매수가 나가지 않아 그 칸만" in _messages(db, sid)[-1]
     grid = live.driver.state()["legs"][0]["strategy"]["grid"]
     assert sorted(row["level"] for row in grid) == [7, 9]  # 118 · 126 칸은 그대로, 122 칸만 빠졌다
     assert live.driver.state()["entry_hold_until_ms"] > eng._now_ms()
@@ -977,3 +977,39 @@ def test_rollback_refusal_is_an_engine_record(live_a):
         (row,) = db.exec(select(RunSessionEvent).where(RunSessionEvent.session_id == sid,
                                                        RunSessionEvent.event_name == "engine.rollback_refused")).all()
         assert row.component == "engine" and json.loads(row.details_json)["reason"] == "runner_holds"
+
+
+def test_every_removed_grid_lot_is_logged_against_its_own_command(live_grid):
+    """그리드 칸 여러 개를 함께 뺐으면 칸(명령)마다 기록이 있어야 명령별 검색에 빠지지 않는다."""
+    sid, live, loop, price = live_grid
+    ids = _grid_with_two_more_buys(sid, live, loop, price)
+    _exchange(sid, [{"command_id": ids[1], "ok": False, "error": "insufficient_funds"},
+                    {"command_id": ids[2], "ok": False, "error": "insufficient_funds"}],
+              in_position=True, position_qty=0.79, previous_qty=0.79)
+    with get_session() as db:
+        rows = db.exec(select(RunSessionEvent).where(RunSessionEvent.session_id == sid,
+                                                     RunSessionEvent.event_name == "engine.grid_lot_removed")).all()
+        assert sorted(row.operation_id for row in rows) == sorted(f"command:{cid}" for cid in ids[1:])
+        assert all(row.component == "engine" for row in rows)
+
+
+def test_logged_retry_time_matches_the_hold_after_a_failed_commit_retry(live_a, monkeypatch):
+    """되돌린 뒤 저장이 실패하고 같은 ack 가 1분 뒤 다시 와도, 기록의 retry_at 은 드라이버에 실제로 걸린 대기와 같다."""
+    sid, live, loop, _ = live_a
+    loop.run_until_complete(eng._tick_once(live))
+    with get_session() as db:
+        cmd_id = _commands(db, sid)[0].id
+    ack = [{"command_id": cmd_id, "ok": False, "error": "insufficient_funds"}]
+    first = eng._now_ms()
+    with get_session() as db:
+        row = db.get(RunSession, sid)
+        row.in_position = False
+        eng.exchange_commands(db, row, ack, first, previous_qty=0.0)
+        db.rollback()  # 저장 실패
+    hold = live.driver.entry_hold_until_ms
+    _exchange(sid, ack, now_ms=first + 60_000)
+    with get_session() as db:
+        (row,) = db.exec(select(RunSessionEvent).where(RunSessionEvent.session_id == sid,
+                                                       RunSessionEvent.event_name == "engine.entry_rolled_back")).all()
+        assert json.loads(row.details_json)["retry_at"] == hold
+        assert json.loads(db.get(RunSession, sid).state_json)["entry_hold_until_ms"] == hold

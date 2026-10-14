@@ -1296,7 +1296,8 @@ def _session_view(row: RunSession) -> dict:
 
 # 종료 기록 보관 — 계정마다 보관하지 않은 종료 세션은 최근 30건·30일까지만 남긴다(2026-10-02).
 # 사용자가 '보관'한 기록은 정리에서 빠지되 10건까지. 정리할 때 세션의 이벤트·실행 명령도 같이 지운다.
-# 정리는 세션이 끝날 때(mark_stopped)·보관을 풀 때, 그리고 하루 한 번 전체 계정(maybe_prune_all_ended_sessions).
+# 정리는 세션이 끝날 때(mark_stopped)·보관을 풀 때와 방문 독립 log_retention_runtime에서 실행한다.
+# runtime은 기본 매시간 전체 계정을 작은 배치로 정리하며, maybe_prune_all_ended_sessions는 호환용이다.
 # 목록은 정리와 무관하게 기간이 지난 기록을 바로 뺀다.
 HISTORY_KEEP = 30
 HISTORY_DAYS = 30
@@ -1346,45 +1347,123 @@ def _iso_utc(dt: datetime) -> str:
 
 
 _DAILY_PRUNE_MS = 24 * 3_600_000
+_DAILY_PRUNE_RETRY_MS = 60_000
 _last_daily_prune_ms = 0
+_next_daily_prune_retry_ms = 0
 _daily_prune_lock = threading.Lock()
 
 
-def prune_all_ended_sessions(db, *, now: Optional[datetime] = None) -> int:
-    """모든 계정의 종료 기록을 정리한다 — 기간(30일)이 지난 것은 한 번에, 30건을 넘긴 계정은 계정별로."""
+def prune_ended_sessions_batch(db, *, now: Optional[datetime] = None, limit: int = 200) -> dict:
+    """Flush one bounded history-maintenance batch; the caller owns commit/rollback.
+
+    Preserve the existing unpinned/non-running 30-record/30-day policy. Select
+    scalar IDs with SQL ranking, not ORM session snapshots. Each child table is
+    drained by at most 1,000 rows; a parent with remaining children waits for the
+    next batch. PostgreSQL row locks exclude concurrent pin/start updates while
+    children are removed. No network work or new retention-history rows occur.
+    """
+    from sqlalchemy import case, delete as sql_delete, exists
+
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+        raise ValueError("history batch limit must be a positive integer")
+    bound = min(limit, 200)
     now = now or datetime.now(timezone.utc)
-    cutoff = _iso_utc(now - timedelta(days=HISTORY_DAYS))
-    expired = db.exec(select(RunSession.id).where(
-        RunSession.status != "running", RunSession.pinned == False,  # noqa: E712
-        func.coalesce(RunSession.stopped_at, RunSession.started_at) < cutoff,
-    )).all()
-    _delete_session_rows(db, list(expired))
-    db.commit()
-    removed = len(expired)
-    over = db.exec(
-        select(RunSession.user_id)
-        .where(RunSession.status != "running", RunSession.pinned == False)  # noqa: E712
-        .group_by(RunSession.user_id)
-        .having(func.count(RunSession.id) > HISTORY_KEEP)
-    ).all()
-    for user_id in over:
-        removed += prune_ended_sessions(user_id, db, now=now)
-    return removed
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    cutoff = now - timedelta(days=HISTORY_DAYS)
+    eligible = (RunSession.status != "running", RunSession.pinned == False)  # noqa: E712
+    ended = func.coalesce(func.nullif(RunSession.stopped_at, ""),
+                          func.nullif(RunSession.last_heartbeat_at, ""), RunSession.started_at)
+    if db.get_bind().dialect.name == "sqlite":
+        # SQLite's date parser handles offsets and invalid strings without a
+        # lexical +00:00-vs-Z boundary error; invalid input evaluates to NULL.
+        expired = func.julianday(ended) < func.julianday(cutoff.isoformat())
+    else:
+        # Server-generated timestamps are UTC ISO strings. Normalize those
+        # without casting arbitrary historical text, including fractional-second
+        # padding so Z/+00:00 and the exact cutoff compare identically. This is
+        # PostgreSQL 15-compatible (no pg_input_is_valid dependency). Unknown or
+        # non-UTC legacy dates are retained by age, but still obey the count cap.
+        date = (
+            r"([0-9]{4}-((0[13578]|1[02])-(0[1-9]|[12][0-9]|3[01])|"
+            r"(0[469]|11)-(0[1-9]|[12][0-9]|30)|02-(0[1-9]|1[0-9]|2[0-8]))|"
+            r"([0-9]{2}(0[48]|[2468][048]|[13579][26])|([02468][048]|[13579][26])00)-02-29)"
+        )
+        pattern = rf"^{date}T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\.[0-9]{{1,6}})?(Z|\+00:00)$"
+        utc = func.replace(ended, "+00:00", "Z")
+        fraction = func.split_part(func.split_part(utc, ".", 2), "Z", 1)
+        normalized = func.concat(func.substr(utc, 1, 19), ".", func.rpad(fraction, 6, "0"), "Z")
+        canonical = case((ended.like("0000-%"), None), (ended.op("~")(pattern), normalized), else_=None)
+        expired = canonical < cutoff.astimezone(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+    ranked = select(
+        RunSession.id.label("session_id"), expired.label("expired"),
+        func.row_number().over(partition_by=RunSession.user_id, order_by=RunSession.id.desc()).label("position"),
+    ).where(*eligible).subquery()
+    candidates = select(RunSession.id).join(ranked, ranked.c.session_id == RunSession.id).where(
+        *eligible, or_(ranked.c.expired, ranked.c.position > HISTORY_KEEP),
+    ).order_by(RunSession.id.asc()).limit(bound + 1).with_for_update(of=RunSession, skip_locked=True)
+    selected = list(db.exec(candidates).all())
+    targets = selected[:bound]
+    if not targets:
+        return {"deleted_sessions": 0, "deleted_events": 0, "deleted_commands": 0, "has_more": False}
+
+    counts = {}
+    for model, key in ((RunSessionEvent, "deleted_events"), (RunnerCommand, "deleted_commands")):
+        child_ids = list(db.exec(select(model.id).where(model.session_id.in_(targets))
+                                 .order_by(model.id.asc()).limit(1000)).all())
+        if child_ids:
+            removed = db.exec(sql_delete(model).where(model.id.in_(child_ids)).returning(model.id)).all()
+            counts[key] = len(removed)
+        else:
+            counts[key] = 0
+    # Recheck pin/status at the actual parent DELETE, and never orphan residual
+    # children. The target row lock also protects these facts on PostgreSQL.
+    without_events = ~exists(select(RunSessionEvent.id).where(RunSessionEvent.session_id == RunSession.id))
+    without_commands = ~exists(select(RunnerCommand.id).where(RunnerCommand.session_id == RunSession.id))
+    removed = db.exec(sql_delete(RunSession).where(
+        RunSession.id.in_(targets), *eligible, without_events, without_commands,
+    ).returning(RunSession.id)).all()
+    db.flush()
+    return {"deleted_sessions": len(removed), **counts,
+            "has_more": len(selected) > bound or len(removed) < len(targets)}
+
+
+def prune_all_ended_sessions(db, *, now: Optional[datetime] = None) -> int:
+    """Legacy completion API; runtime maintenance should call one batch instead."""
+    removed = 0
+    while True:
+        result = prune_ended_sessions_batch(db, now=now)
+        db.commit()
+        removed += result["deleted_sessions"]
+        if not result["has_more"]:
+            return removed
 
 
 def maybe_prune_all_ended_sessions(db) -> int:
-    """하루에 한 번만 전체 정리를 돈다(별도 스케줄러 없이, 방문 비콘 정리와 같은 방식). 실패해도 요청은 성공."""
-    global _last_daily_prune_ms
+    """호환용 일일 정리. 웹 정기 작업은 이 helper 대신 bounded batch를 직접 호출한다."""
+    global _last_daily_prune_ms, _next_daily_prune_retry_ms
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-    with _daily_prune_lock:
-        if now_ms - _last_daily_prune_ms < _DAILY_PRUNE_MS:
-            return 0
-        _last_daily_prune_ms = now_ms
-    try:
-        return prune_all_ended_sessions(db)
-    except Exception:
-        db.rollback()
+    if not _daily_prune_lock.acquire(blocking=False):
         return 0
+    try:
+        if now_ms - _last_daily_prune_ms < _DAILY_PRUNE_MS or now_ms < _next_daily_prune_retry_ms:
+            return 0
+        try:
+            removed = prune_all_ended_sessions(db)
+        except Exception as error:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            _next_daily_prune_retry_ms = int(datetime.now(timezone.utc).timestamp() * 1000) + _DAILY_PRUNE_RETRY_MS
+            # Type only: database exceptions may embed URLs, SQL and secrets.
+            _log.warning("Runner history cleanup failed (%s); retry after 60 seconds", type(error).__name__)
+            return 0
+        _last_daily_prune_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        _next_daily_prune_retry_ms = 0
+        return removed
+    finally:
+        _daily_prune_lock.release()
 
 
 def list_sessions(user_id: int, limit: int = HISTORY_KEEP + PIN_LIMIT, db=None) -> dict:

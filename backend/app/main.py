@@ -78,6 +78,7 @@ from . import quests as quests_mod
 from . import ask as ask_mod
 from . import coach as coach_mod
 from . import notifications as notifications_mod
+from . import log_retention_runtime
 from . import notification_stream
 from . import admin as admin_mod
 from . import members as members_mod
@@ -143,6 +144,7 @@ async def lifespan(app: FastAPI):
     public_news_mod.start()
     position_news_runtime.start()
     whale_activity_runtime.start()
+    log_retention_runtime.start()
     try:
         yield
     finally:
@@ -150,6 +152,7 @@ async def lifespan(app: FastAPI):
         stopped = await asyncio.gather(
             leaderboard_runtime.stop(), public_news_mod.stop(),
             whale_activity_runtime.stop(), position_news_runtime.stop(),
+            log_retention_runtime.stop(),
             return_exceptions=True,
         )
         for result in stopped:
@@ -987,7 +990,6 @@ def visit_record(
         is_internal=req.is_internal or bool(account and account.is_admin),
     )
     admin_mod.maybe_prune_visits(db)  # 90일 지난 행은 하루 한 번 정리
-    runner_mod.maybe_prune_all_ended_sessions(db)  # 종료 기록 30건·30일 정리도 하루 한 번(보관 제외)
     return Response(status_code=204)
 
 

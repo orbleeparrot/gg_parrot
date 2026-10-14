@@ -679,6 +679,12 @@ class ServerClient:
         self._events: list[dict] = []
         self._events_lock = threading.Lock()
         self._event_sessions: dict[str, int] = {}
+        self._memory_created_ms: dict[str, int] = {}
+        self._memory_payload_bytes: dict[str, int] = {}
+        self._memory_loss_counts = {"memory_expired": 0, "memory_capacity": 0}
+        self._memory_flushed_loss_counts = dict(self._memory_loss_counts)
+        self._memory_noticed_loss_counts = dict(self._memory_loss_counts)
+        self._last_memory_notice_ms = 0
         self._unassigned_event_keys: set[str] = set()
         self._event_outbox = event_outbox.EventOutbox(outbox_path)
         self._event_namespace = event_outbox.namespace(self.base, self.key)
@@ -728,11 +734,16 @@ class ServerClient:
             try:
                 self._event_outbox.append(self._event_namespace, session_id, event)
             except Exception:
-                # Keep every unsaved event in memory; never trim to the last
-                # 100. A failed journal is visible and never replays an order.
+                # A failed disk must not make the trading process grow without
+                # bound. Any age/cap eviction is explicitly counted, not ACKed.
                 self._events.append(event)
-                self._event_sessions[event["event_key"]] = session_id
+                key = event["event_key"]
+                self._event_sessions[key] = session_id
+                self._memory_created_ms[key] = self._event_outbox.now_ms()
+                self._memory_payload_bytes[key] = len(json.dumps(event, ensure_ascii=False, allow_nan=False,
+                                                                sort_keys=True).encode("utf-8"))
                 self._event_storage_warning()
+            self._maintain_events_locked()
         # Exactly the emitted object (same key/time/facts) goes to CLI. Retries
         # read the journal and never generate a new identity or print it again.
         try:
@@ -750,17 +761,85 @@ class ServerClient:
             return
         self._event_warning_emitted = True
         message = "활동 로그 로컬 저장에 실패했어요. 현재 메모리에 보관 중이며 실행기 종료 시 미전송 기록이 유실될 수 있어요."
+        self._direct_event_warning(message)
+
+    def _direct_event_warning(self, message):
+        # Never call push_event/log here: warning about a full queue must not
+        # enqueue another warning and recursively evict more telemetry.
         try:
             if callable(self.on_event_warning):
                 self.on_event_warning(message)
-            elif sys.stderr is not None:
+        except Exception:
+            pass
+        try:
+            if sys.stderr is not None:
                 sys.stderr.write(message + "\n")
         except Exception:
             pass
 
+    def _remove_memory_keys_locked(self, keys, *, forget_unassigned=True):
+        keys = set(keys)
+        self._events = [event for event in self._events if event["event_key"] not in keys]
+        for key in keys:
+            self._event_sessions.pop(key, None)
+            self._memory_created_ms.pop(key, None)
+            self._memory_payload_bytes.pop(key, None)
+            if forget_unassigned:
+                self._unassigned_event_keys.discard(key)
+
+    def _maintain_events_locked(self):
+        """Called by emission AND heartbeat/recovery reads, under events_lock."""
+        now = self._event_outbox.now_ms()
+        expired = {event["event_key"] for event in self._events
+                   if self._memory_created_ms[event["event_key"]] <= now - event_outbox.PENDING_TTL_SECONDS * 1000}
+        self._remove_memory_keys_locked(expired)
+        self._memory_loss_counts["memory_expired"] = min(2**63 - 1,
+            self._memory_loss_counts["memory_expired"] + len(expired))
+        size = sum(self._memory_payload_bytes.values())
+        overflow = []
+        for event in self._events:
+            if len(self._events) - len(overflow) <= event_outbox.MEMORY_MAX_ROWS and size <= event_outbox.MEMORY_MAX_BYTES:
+                break
+            key = event["event_key"]
+            overflow.append(key)
+            size -= self._memory_payload_bytes[key]
+        self._remove_memory_keys_locked(overflow)
+        self._memory_loss_counts["memory_capacity"] = min(2**63 - 1,
+            self._memory_loss_counts["memory_capacity"] + len(overflow))
+        try:
+            self._event_outbox.maintain()
+            deltas = {reason: count - self._memory_flushed_loss_counts[reason]
+                      for reason, count in self._memory_loss_counts.items()}
+            if any(deltas.values()):
+                self._event_outbox.record_memory_loss(deltas)
+                self._memory_flushed_loss_counts = dict(self._memory_loss_counts)
+            # Bound bookkeeping too: another process/global retention may have
+            # removed this client's still-unassigned disk records.
+            if self._unassigned_event_keys:
+                disk_keys = self._event_outbox.existing_unassigned_keys(self._event_namespace, self._unassigned_event_keys)
+                self._unassigned_event_keys.intersection_update(disk_keys | set(self._event_sessions))
+            notice = self._event_outbox.take_loss_notice()
+        except Exception:
+            self._event_storage_warning()
+            notice = {}
+            if not 0 <= now - self._last_memory_notice_ms < event_outbox.MAINTENANCE_SECONDS * 1000:
+                notice = {reason: count - self._memory_noticed_loss_counts[reason]
+                          for reason, count in self._memory_loss_counts.items()}
+                if any(notice.values()):
+                    self._last_memory_notice_ms = now
+                    self._memory_noticed_loss_counts = dict(self._memory_loss_counts)
+        if any(notice.values()):
+            count = sum(notice.values())
+            expired_count = notice.get("disk_expired", 0) + notice.get("memory_expired", 0)
+            capacity_count = notice.get("disk_capacity", 0) + notice.get("memory_capacity", 0)
+            self._direct_event_warning(
+                f"활동 로그 누락 주의: 서버 저장 미확인 로컬 기록 {count}건의 보관이 종료됐어요 "
+                f"(7일 만료 {expired_count}건 · 용량 제한 {capacity_count}건). 서버 전달·원본 복구를 보장할 수 없어요.")
+
     def _peek_events(self, session_id=None) -> list[dict]:
         session_id = int(self.session_id or 0) if session_id is None else session_id
         with self._events_lock:
+            self._maintain_events_locked()
             try:
                 if self.session_id:
                     self._event_outbox.bind_unassigned(self._event_namespace, self.session_id, self._unassigned_event_keys)
@@ -768,16 +847,17 @@ class ServerClient:
                 for event in list(self._events):
                     original_session = self._event_sessions[event["event_key"]] or int(self.session_id or 0)
                     try:
-                        self._event_outbox.append(self._event_namespace, original_session, event)
+                        self._event_outbox.append(self._event_namespace, original_session, event,
+                                                 created_ms=self._memory_created_ms[event["event_key"]])
                     except Exception:
                         continue
-                    self._events.remove(event)
-                    self._event_sessions.pop(event["event_key"], None)
+                    self._remove_memory_keys_locked([event["event_key"]], forget_unassigned=original_session != 0)
                 durable = self._event_outbox.peek(self._event_namespace, session_id,
                     event_keys=self._unassigned_event_keys if session_id == 0 else None)
             except Exception:
                 self._event_storage_warning()
                 durable = []
+            self._maintain_events_locked()
             keys = {event["event_key"] for event in durable}
             pending = [event for event in self._events if event["event_key"] not in keys
                        and (self._event_sessions[event["event_key"]] or int(self.session_id or 0)) == session_id]
@@ -797,13 +877,10 @@ class ServerClient:
                 self._event_outbox.acknowledge(self._event_namespace, session_id, keys)
             except Exception:
                 self._event_storage_warning()
-            self._events = [event for event in self._events if event["event_key"] not in keys]
-            for key in keys:
-                self._event_sessions.pop(key, None)
-                self._unassigned_event_keys.discard(key)
+            self._remove_memory_keys_locked(keys)
 
     def _drain_events(self) -> list[dict]:
-        """Compatibility reader; events are not removed until a server key ACK."""
+        """Compatibility reader; no dequeue on send (ACK or retention removes)."""
         return self._peek_events()
 
     def _requeue_events(self, batch: list[dict]) -> None:
@@ -814,6 +891,7 @@ class ServerClient:
         """Replay only event records, never snapshots or trading command ACKs."""
         try:
             sessions = self._event_outbox.sessions(self._event_namespace)
+            self._event_retry_after = {sid: deadline for sid, deadline in self._event_retry_after.items() if sid in sessions}
         except Exception:
             self._event_storage_warning()
             return

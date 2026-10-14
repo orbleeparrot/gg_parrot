@@ -2,12 +2,15 @@
 import contextlib
 import io
 import json
+import sqlite3
 from pathlib import Path
 import tempfile
+import threading
 import unittest
 from unittest.mock import Mock, patch
 
 from runner.test_macro_runner_single_instance import macro_runner
+from runner import event_outbox
 
 
 class DurableEventClientTests(unittest.TestCase):
@@ -139,7 +142,7 @@ class DurableEventClientTests(unittest.TestCase):
         self.assertEqual(journal.peek(scope, 8), [event])
         self.assertEqual(journal.peek("different-account", 7), [event])
 
-    def test_disk_write_failure_never_trims_overflow_and_only_warns_once(self):
+    def test_disk_failure_preserves_under_retention_limit_and_only_warns_once(self):
         warnings = []
         client = self.client(cli_sink=lambda _event: None, on_event_warning=warnings.append)
         self.addCleanup(client.close_events)
@@ -246,6 +249,216 @@ class DurableEventClientTests(unittest.TestCase):
         self.assertEqual(event_outbox.wire_batch([event]), [event])
         wire = macro_runner.requests.Request("POST", "https://example.invalid", json={"events": [event]}).prepare().body
         self.assertLess(len(wire), event_outbox.MAX_WIRE_BODY_BYTES)
+
+
+class OutboxRetentionTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.path = Path(self.temporary.name) / "retention.sqlite3"
+        self.now = 1_800_000_000.0
+
+    def journal(self, **kwargs):
+        journal = event_outbox.EventOutbox(self.path, clock=lambda: self.now, **kwargs)
+        self.addCleanup(journal.close)
+        return journal
+
+    def event(self, index, text="실제 기록"):
+        return {"event_key": "runner:" + f"{index:032x}", "message": text}
+
+    def test_disk_ttl_and_row_quota_apply_globally_including_other_keys_and_orphans(self):
+        journal = self.journal(max_rows=3)
+        for index in range(5):
+            journal.append("old-key" if index < 3 else "new-key", 0 if index < 3 else 7, self.event(index))
+            self.now += 1
+        stats = journal.loss_stats()
+        self.assertEqual(stats["pending_rows"], 3)
+        self.assertEqual(stats["disk_capacity"], 2)
+        self.now += 7 * 86400 + 1
+        journal.maintain(force=True)
+        stats = journal.loss_stats()
+        self.assertEqual(stats["pending_rows"], 0)
+        self.assertEqual(stats["disk_expired"], 3)
+        self.assertEqual(stats["disk_capacity"], 2)
+
+    def test_utf8_payload_quota_removes_oldest_rows_without_fake_server_ack(self):
+        journal = self.journal(max_bytes=1024)
+        for index in range(10):
+            journal.append("same-account", 1, self.event(index, "가" * 100))
+        stats = journal.loss_stats()
+        self.assertLessEqual(stats["pending_bytes"], 1024)
+        self.assertEqual(stats["disk_capacity"], 10 - stats["pending_rows"])
+        rows = journal.peek("same-account", 1)
+        self.assertEqual([row["event_key"] for row in rows],
+                         [self.event(index)["event_key"] for index in range(10 - len(rows), 10)])
+        journal.close()
+        reopened = self.journal()
+        self.assertEqual(reopened.loss_stats()["disk_capacity"], stats["disk_capacity"])
+
+    def test_legacy_schema_upgrade_preserves_payload_and_expires_old_known_timestamp(self):
+        old, unknown = self.event(1), self.event(2)
+        old["ts"] = "2020-01-01T00:00:00Z"
+        with sqlite3.connect(self.path) as db:
+            db.execute("CREATE TABLE pending_events(seq INTEGER PRIMARY KEY AUTOINCREMENT, account_scope TEXT NOT NULL, "
+                       "session_id INTEGER NOT NULL,event_key TEXT NOT NULL,payload TEXT NOT NULL, UNIQUE(account_scope,session_id,event_key))")
+            for event in (old, unknown):
+                db.execute("INSERT INTO pending_events(account_scope,session_id,event_key,payload) VALUES(?,?,?,?)",
+                           ("legacy-account", 0, event["event_key"], json.dumps(event)))
+        journal = self.journal()
+        journal.maintain(force=True)
+        self.assertEqual(journal.peek("legacy-account", 0), [unknown])
+        self.assertEqual(journal.loss_stats()["disk_expired"], 1)
+        self.now += 7 * 86400 + 1
+        journal.maintain(force=True)
+        self.assertEqual(journal.peek("legacy-account", 0), [])
+
+    def test_new_database_uses_incremental_compaction_and_fixed_size_loss_metadata(self):
+        journal = self.journal(max_rows=2)
+        for index in range(12):
+            journal.append(f"rotated-account-{index}", 0, self.event(index))
+        journal.maintain(force=True)
+        self.assertEqual(journal._db().execute("PRAGMA auto_vacuum").fetchone()[0], 2)
+        self.assertEqual(journal._db().execute("PRAGMA journal_size_limit").fetchone()[0], 4 * 1024 * 1024)
+        self.assertEqual(journal._db().execute("SELECT COUNT(*) FROM retention_meta").fetchone()[0], 1)
+        self.assertEqual(journal.loss_stats()["disk_capacity"], 10)
+
+    def test_client_periodic_read_prunes_other_namespace_without_new_log_and_warns_without_queueing_warning(self):
+        journal = self.journal()
+        journal.append("abandoned-key", 0, self.event(1))
+        journal.close()
+        self.now += 7 * 86400 + 1
+        warnings, cli = [], []
+        client = macro_runner.ServerClient("current-key", outbox_path=self.path,
+            cli_sink=cli.append, on_event_warning=warnings.append)
+        client.session_id = 3
+        self.addCleanup(client.close_events)
+        client._event_outbox._clock = lambda: self.now
+        self.assertEqual(client._peek_events(), [])
+        self.assertEqual(client._event_outbox.loss_stats()["disk_expired"], 1)
+        self.assertTrue(any("1" in warning and "누락" in warning for warning in warnings))
+        self.assertEqual(cli, [])  # Warnings do not recursively enter the event queue.
+        self.assertEqual(client._event_outbox.loss_stats()["pending_rows"], 0)
+
+    def test_memory_fallback_has_count_byte_and_ttl_bounds_and_keeps_real_loss_counters(self):
+        warnings = []
+        client = macro_runner.ServerClient("test-key", outbox_path=self.path,
+            cli_sink=lambda _event: None, on_event_warning=warnings.append)
+        client.session_id = 7
+        self.addCleanup(client.close_events)
+        with patch.object(client._event_outbox, "append", side_effect=OSError("disk full")):
+            for index in range(1005):
+                client.push_event("info", f"발행 {index}")
+            self.assertLessEqual(len(client._events), 1000)
+            self.assertEqual(client._memory_loss_counts["memory_capacity"], 5)
+        self.assertTrue(any("누락" in warning for warning in warnings))
+        with patch.object(client._event_outbox, "append", side_effect=OSError("disk full")):
+            client._memory_created_ms = {key: 1 for key in client._memory_created_ms}
+            client._peek_events()
+            self.assertEqual(client._events, [])
+            self.assertEqual(client._memory_loss_counts["memory_expired"], 1000)
+
+    def test_memory_utf8_bytes_are_bounded_below_the_count_limit(self):
+        client = macro_runner.ServerClient("test-key", outbox_path=self.path,
+            cli_sink=lambda _event: None, on_event_warning=lambda _message: None)
+        client.session_id = 7
+        self.addCleanup(client.close_events)
+        with contextlib.redirect_stderr(io.StringIO()), \
+                patch.object(client._event_outbox, "append", side_effect=OSError("disk full")):
+            for _index in range(500):
+                client.push_event("error", "가" * 300, details={"error": "가" * 600, "reason": "가" * 600})
+        self.assertLess(len(client._events), 500)
+        self.assertLessEqual(sum(client._memory_payload_bytes.values()), event_outbox.MEMORY_MAX_BYTES)
+        self.assertEqual(client._memory_loss_counts["memory_capacity"], 500 - len(client._events))
+        self.assertEqual(client._event_outbox.loss_stats()["memory_capacity"], client._memory_loss_counts["memory_capacity"])
+
+    def test_memory_to_disk_retry_preserves_original_age_not_retry_time(self):
+        client = macro_runner.ServerClient("test-key", outbox_path=self.path,
+            cli_sink=lambda _event: None, on_event_warning=lambda _message: None)
+        client.session_id = 7
+        client._event_outbox._clock = lambda: self.now
+        self.addCleanup(client.close_events)
+        with contextlib.redirect_stderr(io.StringIO()), \
+                patch.object(client._event_outbox, "append", side_effect=OSError("disk full")):
+            original = client.push_event("info", "처음 발행한 시각이 기준")
+        self.now += 6 * 86400
+        self.assertEqual(client._peek_events(), [original])
+        self.now += 86400 + 1
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(client._peek_events(), [])
+        self.assertEqual(client._event_outbox.loss_stats()["disk_expired"], 1)
+
+    def test_unstarted_memory_event_stays_owned_when_disk_recovers(self):
+        client = macro_runner.ServerClient("test-key", outbox_path=self.path,
+            cli_sink=lambda _event: None, on_event_warning=lambda _message: None)
+        self.addCleanup(client.close_events)
+        with contextlib.redirect_stderr(io.StringIO()), \
+                patch.object(client._event_outbox, "append", side_effect=OSError("disk full")):
+            original = client.push_event("info", "시작 전 디스크 장애")
+        self.assertEqual(client._peek_events(), [original])
+        client.session_id = 42
+        self.assertEqual(client._peek_events(), [original])
+
+    def test_original_uuid_retry_never_renews_age_and_notice_is_a_persisted_bounded_delta(self):
+        journal = self.journal()
+        event = self.event(1)
+        journal.append("scope", 1, event)
+        self.now += 6 * 86400
+        journal.append("scope", 1, event)
+        self.now += 86400 + 1
+        journal.maintain(force=True)
+        self.assertEqual(journal.peek("scope", 1), [])
+        self.assertEqual(journal.take_loss_notice()["disk_expired"], 1)
+        self.assertEqual(journal.take_loss_notice(), {})
+        journal.close()
+        reopened = self.journal()
+        self.assertEqual(reopened.take_loss_notice(), {})
+
+    def test_two_connections_share_one_capacity_limit_and_prune_unassigned_key_tracking(self):
+        first, second = self.journal(max_rows=3), self.journal(max_rows=3)
+        failures = []
+        first.maintain(force=True)
+        second.maintain(force=True)
+        def write(journal, start):
+            try:
+                for index in range(start, start + 20):
+                    journal.append(f"scope-{start}", 0, self.event(index))
+            except Exception as error:
+                failures.append(error)
+        threads = [threading.Thread(target=write, args=(first, 0)), threading.Thread(target=write, args=(second, 20))]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(failures, [])
+        self.assertEqual(first.loss_stats()["pending_rows"], 3)
+        self.assertEqual(first.loss_stats()["disk_capacity"], 37)
+        client = macro_runner.ServerClient("test-key", outbox_path=self.path,
+            cli_sink=lambda _event: None, on_event_warning=lambda _message: None)
+        self.addCleanup(client.close_events)
+        client._event_outbox.max_rows = 3
+        with contextlib.redirect_stderr(io.StringIO()):
+            emitted = [client.push_event("info", f"시작 준비 {index}") for index in range(10)]
+        self.assertEqual(client._peek_events(), emitted[-3:])
+        self.assertEqual(len(client._unassigned_event_keys), 3)
+
+    def test_entire_disk_unavailable_still_bounds_orphans_and_flushes_loss_counters_on_recovery(self):
+        warnings, cli = [], []
+        client = macro_runner.ServerClient("test-key", outbox_path=self.path,
+            cli_sink=cli.append, on_event_warning=warnings.append)
+        self.addCleanup(client.close_events)
+        with contextlib.redirect_stderr(io.StringIO()), \
+                patch.object(client._event_outbox, "_db", side_effect=OSError("disk unavailable")):
+            for index in range(1005):
+                client.push_event("info", f"메모리 시작 준비 {index}")
+            self.assertEqual(len(client._events), 1000)
+            self.assertEqual(len(client._unassigned_event_keys), 1000)
+            self.assertEqual(len(client._event_sessions), 1000)
+        self.assertTrue(any("누락" in warning for warning in warnings))
+        self.assertEqual(len(cli), 1005)  # Only real emissions, never a recursively queued warning.
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(len(client._peek_events()), 100)
+        self.assertEqual(client._event_outbox.loss_stats()["memory_capacity"], 5)
+        self.assertEqual(client._event_outbox.loss_stats()["pending_rows"], 1000)
 
 
 if __name__ == "__main__":

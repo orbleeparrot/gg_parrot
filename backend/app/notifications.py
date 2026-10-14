@@ -28,7 +28,7 @@ from uuid import uuid4
 from datetime import datetime, timedelta, timezone
 from typing import Iterable, Optional
 
-from sqlalchemy import and_, delete, func, or_, update
+from sqlalchemy import and_, delete, func, or_, tuple_, update
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 
@@ -41,7 +41,9 @@ KINDS = frozenset({
     "quest", "macro_sold", "macro_registered", "comment", "reply", "agent", "admin", "notice",
 })
 KEEP_PER_USER = 300  # 계정당 보관 상한 — 넘치면 오래된 개인 알림부터 지운다(공지는 회원별 행이 아니라 제외)
-NOTICE_WINDOW_MS = 30 * 24 * 3600 * 1000  # 전체 공지는 최근 30일치만 보인다
+NOTICE_WINDOW_MS = 30 * 24 * 3600 * 1000  # 전체 공지는 최근 30일치만 보관한다
+NOTICE_PRUNE_MAX = 500
+RECEIPT_PRUNE_MAX = 1_000
 PAGE_MAX = 50
 TITLE_MAX, BODY_MAX, LINK_MAX, REF_MAX = 120, 300, 200, 120
 # 이 시간 안에 heartbeat 를 보낸 세션만 '실행 중'으로 보고 에이전트 소식을 보낸다.
@@ -228,6 +230,81 @@ def trim_user(db, user_id: int) -> int:
     ).all()
     db.exec(delete(NotificationMessage).where(NotificationMessage.id.in_(list(oldest))))
     return len(oldest)
+
+
+def prune_expired_notices(db, now_ms: Optional[int] = None, limit: int = 500) -> dict:
+    """Physically prune expired public notices and orphan read receipts, in one batch.
+
+    Personal messages keep their existing per-user cap, not this age policy.
+    ``limit`` is clamped to 1..500 notices; at most 1,000 receipts are deleted
+    across expired children AND orphans. A high-fanout notice stays until all
+    its receipts are gone, so Postgres ON DELETE CASCADE cannot exceed that
+    budget. Explicit child deletion also works without SQLite foreign keys.
+
+    Only flushes: commit/rollback, retry scheduling and transaction timeouts
+    belong to the caller. ``has_more`` means another bounded batch can help.
+    """
+    batch_size = max(1, min(int(limit), NOTICE_PRUNE_MAX))
+    cutoff_ms = (int(now_ms) if now_ms is not None else _now()[1]) - NOTICE_WINDOW_MS
+    expired = and_(NotificationMessage.user_id.is_(None), NotificationMessage.created_ms < cutoff_ms)
+    # A PostgreSQL parent lock also blocks new FK children while its receipts
+    # are removed. SQLite ignores FOR UPDATE but uses the same explicit deletes.
+    notice_ids = db.exec(
+        select(NotificationMessage.id).where(expired)
+        .order_by(NotificationMessage.created_ms, NotificationMessage.id)
+        .limit(batch_size).with_for_update(skip_locked=True)
+    ).all()
+
+    def delete_receipts(keys) -> int:
+        if not keys:
+            return 0
+        deleted = db.exec(
+            delete(NotificationReceipt)
+            .where(tuple_(NotificationReceipt.message_id, NotificationReceipt.user_id).in_(keys))
+            .returning(NotificationReceipt.message_id, NotificationReceipt.user_id)
+            .execution_options(synchronize_session=False)
+        ).all()
+        return len(deleted)
+
+    deleted_receipts = 0
+    deleted_notices = 0
+    if notice_ids:
+        keys = db.exec(
+            select(NotificationReceipt.message_id, NotificationReceipt.user_id)
+            .where(NotificationReceipt.message_id.in_(notice_ids))
+            .order_by(NotificationReceipt.message_id, NotificationReceipt.user_id)
+            .limit(RECEIPT_PRUNE_MAX)
+        ).all()
+        deleted_receipts = delete_receipts(keys)
+        has_children = select(NotificationReceipt.message_id).where(
+            NotificationReceipt.message_id == NotificationMessage.id
+        ).exists()
+        deleted_notices = len(db.exec(
+            delete(NotificationMessage)
+            .where(NotificationMessage.id.in_(notice_ids), expired, ~has_children)
+            .returning(NotificationMessage.id)
+            .execution_options(synchronize_session=False)
+        ).all())
+
+    parent_exists = select(NotificationMessage.id).where(
+        NotificationMessage.id == NotificationReceipt.message_id
+    ).exists()
+    receipt_budget = RECEIPT_PRUNE_MAX - deleted_receipts
+    if receipt_budget:
+        orphan_keys = db.exec(
+            select(NotificationReceipt.message_id, NotificationReceipt.user_id)
+            .where(~parent_exists)
+            .order_by(NotificationReceipt.message_id, NotificationReceipt.user_id)
+            .limit(receipt_budget)
+        ).all()
+        deleted_receipts += delete_receipts(orphan_keys)
+
+    db.flush()
+    has_more = (
+        db.exec(select(NotificationMessage.id).where(expired).limit(1)).first() is not None
+        or db.exec(select(NotificationReceipt.message_id).where(~parent_exists).limit(1)).first() is not None
+    )
+    return {"deleted_notices": deleted_notices, "deleted_receipts": deleted_receipts, "has_more": has_more}
 
 
 def notify_running_sessions(

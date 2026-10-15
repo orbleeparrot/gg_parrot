@@ -117,6 +117,15 @@ def _ticker_rows(exchange: str, symbols: list[str]) -> list[dict]:
     return rows
 
 
+def _number(value) -> float:
+    """거래소 숫자 칸 — 비었거나(None) 숫자가 아니면 0."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return number if math.isfinite(number) else 0.0
+
+
 def get_all_tickers(exchange: str) -> list[dict]:
     """Candidate selection projection; prices retain their native KRW units."""
     exchange = _domestic(exchange)
@@ -127,11 +136,16 @@ def get_all_tickers(exchange: str) -> list[dict]:
             symbol = str(raw.get("market", ""))
             if symbol not in symbols:
                 continue
+            last = _number(raw.get("trade_price"))
+            if last <= 0:
+                # 막 상장해 아직 체결이 없는 종목은 현재가가 비어(None) 온다(빗썸 KRW-ACU, 2026-10-15).
+                # 한 종목 때문에 목록 전체가 실패하면 물어볼까? 가 그 거래소에서 통째로 막힌다 — 건너뛴다.
+                continue
             rows.append({"symbol": symbol, "base": symbol[4:], "quote": "KRW", "exchange": exchange,
-                         "lastPrice": float(raw["trade_price"]), "highPrice": float(raw["high_price"]),
-                         "lowPrice": float(raw["low_price"]),
-                         "priceChangePercent": 100 * float(raw.get("signed_change_rate", 0)),
-                         "quoteVolume": float(raw.get("acc_trade_price_24h", 0))})
+                         "lastPrice": last, "highPrice": _number(raw.get("high_price")) or last,
+                         "lowPrice": _number(raw.get("low_price")) or last,
+                         "priceChangePercent": 100 * _number(raw.get("signed_change_rate")),
+                         "quoteVolume": _number(raw.get("acc_trade_price_24h"))})
         if not rows:
             raise ValueError("거래소 현재가 목록이 비어 있습니다.")
         return rows
@@ -147,8 +161,8 @@ def batch_prices(symbols: list[str], exchange: str, *, ttl: float = 2.0) -> dict
     def load():
         out = {}
         for row in _ticker_rows(exchange, wanted):
-            price = float(row.get("trade_price", 0))
-            if row.get("market") in wanted and math.isfinite(price) and price > 0:
+            price = _number(row.get("trade_price"))  # 체결 없는 새 종목은 None 으로 온다
+            if row.get("market") in wanted and price > 0:
                 out[row["market"]] = price
         if not out:
             raise binance.NoSpotDataError("KRW 현재가를 불러오지 못했습니다.")

@@ -304,3 +304,21 @@ def test_symbol_catalog_refresh_isolated_by_exchange(monkeypatch):
     assert refreshed["fetched_at"] != upbit["fetched_at"]
     assert stale["stale"] is True and stale["items"] == bithumb["items"]
     assert krw.list_symbols("bithumb")["sources"]["spot"]["status"] == "stale"
+
+
+def test_unlisted_coin_without_a_trade_does_not_break_the_ticker_list(monkeypatch):
+    # 2026-10-15 빗썸 KRW-ACU: 상장 직후 체결이 없어 trade_price 가 None — 목록 전체가 TypeError 로 실패해
+    # 빗썸 '물어볼까?' 가 모두 500 이었다. 그 종목만 빼고 나머지는 그대로 쓴다.
+    monkeypatch.setattr(krw, "list_symbols", lambda exchange: {"items": [{"symbol": "KRW-BTC"}, {"symbol": "KRW-ACU"}]})
+    rows = [
+        {"market": "KRW-BTC", "trade_price": 100.0, "high_price": 110.0, "low_price": 90.0,
+         "signed_change_rate": 0.01, "acc_trade_price_24h": 5.0},
+        {"market": "KRW-ACU", "trade_price": None, "high_price": 0, "low_price": 0,
+         "signed_change_rate": None, "acc_trade_price_24h": None},
+    ]
+    monkeypatch.setattr(krw, "_ticker_rows", lambda exchange, symbols: rows)
+    out = krw.get_all_tickers("bithumb")
+    assert [row["symbol"] for row in out] == ["KRW-BTC"]
+    assert out[0]["lastPrice"] == 100.0
+    prices = krw.batch_prices(["KRW-BTC", "KRW-ACU"], "bithumb", ttl=0)
+    assert prices == {"KRW-BTC": 100.0}

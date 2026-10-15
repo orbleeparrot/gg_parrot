@@ -18,6 +18,8 @@ _TMP = tempfile.NamedTemporaryFile(prefix="ggp-test-", suffix=".db", delete=Fals
 _TMP.close()
 os.environ["SQLITE_PATH"] = _TMP.name
 os.environ["POSITION_NEWS_EMBEDDED_ENABLED"] = "false"
+# 뉴스의 거래소 이름 보강은 업비트 · 빗썸 종목 목록을 부른다 — 테스트는 네트워크를 쓰지 않는다(켜는 테스트는 목록을 가짜로 바꾼다).
+os.environ["NEWS_EXCHANGE_NAMES_ENABLED"] = "false"
 os.environ["PUBLIC_NEWS_EMBEDDED_ENABLED"] = "false"
 os.environ["LEADERBOARD_BACKGROUND_ENABLED"] = "false"
 os.environ["ACTIVITY_LOG_RETENTION_ENABLED"] = "false"

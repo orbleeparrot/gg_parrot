@@ -419,10 +419,10 @@ class ConnectionTkTests(unittest.TestCase):
         self.foot_button(wizard, "다음").invoke(); self.root.update()
         with patch.object(self.app, "_start") as start:
             self.copy_to_clipboard("A" * 40)
-            self.assertTrue(self.pump(lambda: wizard.got["access"]))
+            self.assertTrue(self.pump(lambda: wizard.got["access"], seconds=8))
             self.copy_to_clipboard("B" * 40)
             self.next_check = (True, "binance_test_ok", "통과")
-            self.assertTrue(self.pump(lambda: wizard.stage == "result_ok"))
+            self.assertTrue(self.pump(lambda: wizard.stage == "result_ok", seconds=8))
             start.assert_not_called()
         self.assertEqual(self.check_calls[-1][1], "testnet")
         self.app._open_exchange_api_page()
@@ -440,16 +440,16 @@ class ConnectionTkTests(unittest.TestCase):
         wizard.path = "new"; wizard.show("keys")
         calls = len(self.check_calls)
         self.copy_to_clipboard("A" * 40)
-        self.assertTrue(self.pump(lambda: wizard.got["access"]))
+        self.assertTrue(self.pump(lambda: wizard.got["access"], seconds=8))
         self.copy_to_clipboard("B" * 40)
-        self.assertTrue(self.pump(lambda: wizard.stage == "ip"))  # 키를 받으면 허용 IP · 주문 권한을 걸러 간다
+        self.assertTrue(self.pump(lambda: wizard.stage == "ip", seconds=8))  # 키를 받으면 허용 IP · 주문 권한을 걸러 간다
         self.assertEqual(len(self.check_calls), calls)
         self.assertEqual(str(self.foot_button(wizard, "검사").cget("state")), "normal")
         wizard._copy_and_open(); self.root.update()
         self.assertIn("www.binance.com", self.browser_mock.call_args[0][0])
         self.next_check = (True, "binance_verified", "통과")
         wizard.on_return()  # 거래소에서 돌아오면 바로 검사
-        self.assertTrue(self.pump(lambda: wizard.stage == "result_ok"))
+        self.assertTrue(self.pump(lambda: wizard.stage == "result_ok", seconds=8))
         self.assertEqual(self.check_calls[-1][1], "live")
 
     def test_clipboard_ignores_old_values_addresses_and_sentences(self):

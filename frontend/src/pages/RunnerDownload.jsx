@@ -416,11 +416,15 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
   ), [library, preferredSourceRef, quickRunItem, selectedId]);
   const keyGuide = useMemo(() => runnerKeyGuide(selected?.macro), [selected?.macro]);
   const apiKeyGuideStorageKey = keyGuide.storageKey;
-  const gatedStep = !keyGuide.domestic && requestedStep > STEP_API_KEY && !apiKeyPrepared ? STEP_API_KEY : requestedStep;
+  // 실행기 연결 도우미가 키를 안내하는 매크로 — 국내 전부, 바이낸스는 공개 실행기가 도우미(v19+)를 가졌을 때.
+  // 이때 웹은 키 단계를 따로 두지 않고 '실행기에서 연결 · 실행' 한 화면에서 실행기 진행을 따라 본다.
+  const binanceHelperMinVersion = runnerDownload.binanceHelperMinVersion;
+  const helperExchange = keyGuide.domestic || (keyGuide.exchange === "binance" && !!binanceHelperMinVersion);
+  const gatedStep = !helperExchange && requestedStep > STEP_API_KEY && !apiKeyPrepared ? STEP_API_KEY : requestedStep;
   // 직접 만들기 → 빠른 실행으로 들어오면 '매크로 연결' 은 이미 끝났다. 국내 매크로는 첫 화면부터 '실행기에서 연결·실행'.
   const [quickRunEntered, setQuickRunEntered] = useState(false);
   const quickRunJump = !quickRunEntered && quickRunMacroId != null && !!selected
-    && String(selected.id) === String(quickRunMacroId) && keyGuide.domestic && requestedStep === STEP_MACRO;
+    && String(selected.id) === String(quickRunMacroId) && helperExchange && requestedStep === STEP_MACRO;
   const step = signedIn && selected ? (quickRunJump ? STEP_API_KEY : gatedStep) : STEP_MACRO;
   const copy = buildCopy(keyGuide)[step];
   // 직접 만들기 가이드에서 이어진 경우(flow=build) 8단계 통합 진행바를 쓴다.
@@ -440,9 +444,10 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
     domesticMinVersion,
     state: runnerDownloadState,
   } = runnerDownload;
-  const launchMinVersion = launchMinVersionFor(keyGuide, { general: requiredRunnerVersion, domestic: domesticMinVersion });
+  const launchMinVersion = launchMinVersionFor(keyGuide, { general: requiredRunnerVersion, domestic: domesticMinVersion,
+    binanceHelper: binanceHelperMinVersion });
   // 국내 매크로는 웹에서 키를 준비하지 않는다 — 실행기 연결 도우미가 키 준비부터 실행까지 맡고, 웹은 그 화면을 따라 본다.
-  const helperFlow = signedIn && !!selected && keyGuide.domestic;
+  const helperFlow = signedIn && !!selected && helperExchange;
   const helperStep = helperFlow && step >= STEP_API_KEY;
   const [helperProgress, setHelperProgress] = useState(null);
   // '매크로 연결' 이 끝났다 = 이 매크로가 계정에 있음을 서버가 확인했다(계정 목록 또는 단건 조회). 그 전에는 실행기를 열지 않는다.
@@ -706,9 +711,11 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
   useEffect(() => {
     if (quickRunEntered || quickRunMacroId == null || !selected) return;
     if (String(selected.id) !== String(quickRunMacroId)) return;
+    // 바이낸스가 도우미 화면으로 갈지는 공개 실행기 정보(도우미 버전)를 받아야 안다 — 그 전에 판단을 끝내지 않는다.
+    if (keyGuide.exchange === "binance" && runnerDownloadState === "loading") return;
     setQuickRunEntered(true);
-    if (keyGuide.domestic && requestedStep === STEP_MACRO) moveTo(STEP_API_KEY);
-  }, [keyGuide.domestic, quickRunEntered, quickRunMacroId, requestedStep, selected]);
+    if (helperExchange && requestedStep === STEP_MACRO) moveTo(STEP_API_KEY);
+  }, [helperExchange, keyGuide.exchange, quickRunEntered, quickRunMacroId, requestedStep, runnerDownloadState, selected]);
 
   // 빠른 실행으로 들고 온 매크로는 계정 목록(느릴 수 있다)보다 단건 조회로 먼저 확인한다.
   useEffect(() => {
@@ -1467,7 +1474,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
     if (launchPhase === "claimed") {
       body = (
         <>
-          <RunnerHelperMirror progress={helperProgress} exchange={keyGuide.exchange} logo="/exchanges/bithumb.png" />
+          <RunnerHelperMirror progress={helperProgress} exchange={keyGuide.exchange} logo={`/exchanges/${keyGuide.exchange === "binance" ? "binance.svg" : `${keyGuide.exchange}.png`}`} />
           {/* 실행기를 닫았거나 안 보일 때 — 따라 보는 중에도 다시 열 길을 늘 둔다. */}
           <div className="runner-helper-acts runner-helper-reopen">
             <button type="button" onClick={() => void openHelperRunner()} className="runner-helper-act">
@@ -1577,7 +1584,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
       return <button type="button" onClick={() => moveTo(STEP_API_KEY)} className="btn btn-l btn-primary runner-wizard-next">이 매크로 연결하기</button>;
     }
     if (step === STEP_API_KEY) {
-      if (keyGuide.domestic) {
+      if (helperExchange) {
         if (runnerReady) return <button type="button" onClick={() => void openRunnerAndContinue()} className="btn btn-l btn-primary runner-wizard-next">실행기 연결로 바로가기</button>;
         return <button type="button" onClick={() => moveTo(STEP_RUNNER)} className="btn btn-l btn-primary runner-wizard-next">실행기부터 준비하기</button>;
       }

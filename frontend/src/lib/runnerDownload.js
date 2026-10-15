@@ -79,6 +79,8 @@ export function resolveRunnerDownload(downloadInfo, downloadError) {
     ),
     // 국내 거래소 매크로가 요구하는 실행기 버전(서버가 내려 준다). 모르면 빈 문자열.
     domesticMinVersion: String(downloadInfo?.domestic_min_runner_version || ""),
+    // 바이낸스 연결 도우미가 있는 실행기 버전 — 공개 실행기가 그 버전일 때만 서버가 내려 준다. 비어 있으면 바이낸스는 웹 4단계.
+    binanceHelperMinVersion: String(downloadInfo?.binance_helper_min_runner_version || ""),
     size: downloadInfo?.size || 0,
     state: !checked
       ? "loading"

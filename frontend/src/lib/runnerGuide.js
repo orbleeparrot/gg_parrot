@@ -194,8 +194,11 @@ function domesticGuide(exchange) {
 }
 
 // '자동 연결 최소 버전' 칸에 보일 숫자. 국내 매크로는 국내 요구 버전이고, 모르면 칸을 비운다(바이낸스 숫자를 대신 보이지 않는다).
-export function launchMinVersionFor(guide, { general = "", domestic = "" } = {}) {
-  return guide?.domestic ? String(domestic || "") : String(general || "");
+export function launchMinVersionFor(guide, { general = "", domestic = "", binanceHelper = "" } = {}) {
+  if (guide?.domestic) return String(domestic || "");
+  // 바이낸스도 도우미 화면으로 갈 때는 도우미가 있는 버전이 최소다(서버 티켓 청구도 같은 숫자로 거절한다).
+  if (guide?.exchange === "binance" && binanceHelper) return String(binanceHelper);
+  return String(general || "");
 }
 
 export function runnerKeyGuide(macro) {

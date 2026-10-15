@@ -459,6 +459,8 @@ class RunnerSetupProgressRequest(BaseModel):
     stage: Literal["ready", "ask", "ip", "perm", "keys", "existing", "manual", "checking",
                    "result_ok", "result_fail", "started", "closed"]
     exchange: Literal["binance", "upbit", "bithumb"]
+    # 바이낸스 도우미(v19+)가 안내하는 사이트 — testnet(현물 테스트넷) · demo(선물 데모) · live(실거래). 국내는 비운다.
+    env: Literal["", "testnet", "demo", "live"] = ""
     path: Literal["", "new", "existing"] = ""
     slots: RunnerSetupSlots = Field(default_factory=RunnerSetupSlots)
     checks: RunnerSetupChecks = Field(default_factory=RunnerSetupChecks)
@@ -2532,7 +2534,10 @@ def runner_launch_ticket_progress(
 ) -> dict:
     """실행기 연결 도우미의 지금 단계 — 웹 '매크로 만들기 가이드' 가 같은 화면을 따라 보여 준다."""
     response.headers["Cache-Control"] = "no-store"
-    return runner_mod.record_setup_progress(user, launch_id, req.model_dump())
+    progress = req.model_dump()
+    if not progress["env"]:
+        progress.pop("env")  # 국내 · 옛 실행기 보고는 예전 모양 그대로 저장한다
+    return runner_mod.record_setup_progress(user, launch_id, progress)
 
 
 def _runner_version_supported(current: str) -> bool:
@@ -2775,6 +2780,8 @@ def _runner_launch_capabilities() -> dict:
         "min_runner_version": _RUNNER_MIN_VERSION,
         # 국내 거래소 매크로는 일반 최소 버전이 아니라 이 버전부터 열린다(웹 안내가 같은 숫자를 말하도록 내려 준다).
         "domestic_min_runner_version": runner_mod.DOMESTIC_MIN_VERSION,
+        # 바이낸스 연결 도우미가 있는 실행기 버전 — 공개 실행기가 그 버전에 닿았을 때만 내려 준다(웹이 바이낸스도 새 화면으로 보낸다).
+        "binance_helper_min_runner_version": runner_mod.BINANCE_HELPER_MIN_VERSION if runner_mod.binance_helper_active() else "",
     }
 
 

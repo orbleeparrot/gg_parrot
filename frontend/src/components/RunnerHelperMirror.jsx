@@ -3,13 +3,22 @@
 import ExchangeScreen from "./ExchangeScreen.jsx";
 import { Icon } from "./icons.jsx";
 import { exchangeLabel } from "../lib/exchanges.js";
-import { checkRowNote, helperTrack, PROBLEM_HEADLINES } from "../lib/runnerHelperProgress.js";
+import { checkRowNote, helperTrack, problemHeadline, stageTitle } from "../lib/runnerHelperProgress.js";
 
 const ROWS = [["auth", "키 인증"], ["ip", "허용 IP"], ["order", "주문 권한"]];
-const FIELD_LABELS = { upbit: ["Access Key", "Secret Key"], bithumb: ["API Key", "Secret Key"] };
+const FIELD_LABELS = { upbit: ["Access Key", "Secret Key"], bithumb: ["API Key", "Secret Key"], binance: ["API Key", "Secret Key"] };
 // 웹은 실행기 PC 의 주소를 모른다(보내지 않는다) — 입력칸에는 가린 주소를 친다.
 const MASKED_IP = "•••.•••.•••.•••";
-const STAGE_TITLES = { ip: "허용 IP 등록", perm: "권한 선택 · 키 발급", keys: "키 복사", existing: "기존 키 넣기", manual: "직접 입력" };
+// 바이낸스 도우미가 안내하는 사이트 이름과 '처음이에요' 아래 글 — 실행기 connection_wizard 의 SITE_NAMES · NEW_HINTS.
+const BINANCE_SITES = { testnet: "바이낸스 테스트넷", demo: "바이낸스 데모", live: "바이낸스" };
+const NEW_HINTS = { testnet: "GitHub 로그인 뒤 키 만들기부터", demo: "바이낸스 로그인 뒤 키 만들기부터", live: "키 만들기 · 허용 IP 까지 차례로" };
+
+// 그림 이름 — 바이낸스는 사이트마다 화면이 달라 'binance:testnet' 처럼 고른다. 실거래 3단계(ip)는 키 카드의 Edit restrictions.
+function screenFor(progress, exchange, stage) {
+  if (exchange !== "binance") return { exchange, kind: stage };
+  const env = progress?.env || "testnet";
+  return { exchange: `binance:${env}`, kind: stage === "ip" || stage === "fix" ? "restrict" : stage };
+}
 
 function Mark({ kind }) {
   if (kind === "ok") return <span className="rhm-ic is-ok" aria-hidden="true"><Icon name="check" size={12} strokeWidth={3.2} /></span>;
@@ -34,12 +43,12 @@ function Slots({ exchange, slots }) {
   );
 }
 
-function CheckRows({ checks, checking = false }) {
+function CheckRows({ checks, checking = false, progress = null }) {
   return (
     <ul className="rhm-list" aria-label="연결 확인">
       {ROWS.map(([row, label]) => {
         const state = checks?.[row] || "wait";
-        const note = checking ? "" : checkRowNote(row, state);
+        const note = checking ? "" : checkRowNote(row, state, progress);
         return (
           <li key={row}>
             <Mark kind={checking ? "spin" : state === "ok" ? "ok" : state === "bad" ? "bad" : "na"} />
@@ -53,7 +62,8 @@ function CheckRows({ checks, checking = false }) {
 }
 
 function StageBody({ progress, exchange, logo }) {
-  const name = exchangeLabel(exchange);
+  const binanceEnv = exchange === "binance" ? progress?.env || "testnet" : "";
+  const name = binanceEnv ? BINANCE_SITES[binanceEnv] : exchangeLabel(exchange);
   const stage = progress?.stage || "";
   if (!progress) {
     return <p className="rhm-quiet">실행기 화면에서 이어서 진행해요.</p>;
@@ -63,16 +73,17 @@ function StageBody({ progress, exchange, logo }) {
       <div className="rhm-ask">
         <p className="rhm-title">{name} API 키를 발급 받은 적 있나요?</p>
         <div className="rhm-opts" aria-hidden="true">
-          <span><b>처음이에요</b><small>허용 IP 등록부터 차례로</small></span>
+          <span><b>처음이에요</b><small>{binanceEnv ? NEW_HINTS[binanceEnv] : "허용 IP 등록부터 차례로"}</small></span>
           <span><b>이미 발급 받았어요</b><small>보관해 둔 키를 넣고 바로 검사</small></span>
         </div>
       </div>
     );
   }
   if (["ip", "perm", "keys", "existing"].includes(stage)) {
+    const screen = screenFor(progress, exchange, stage);
     return (
       <>
-        <ExchangeScreen exchange={exchange} kind={stage} typedText={MASKED_IP} logo={logo} label={`${name} ${STAGE_TITLES[stage]} 화면`} />
+        <ExchangeScreen exchange={screen.exchange} kind={screen.kind} typedText={MASKED_IP} logo={logo} label={`${name} ${stageTitle(progress, stage)} 화면`} />
         {stage === "keys" || stage === "existing" ? <Slots exchange={exchange} slots={progress.slots} /> : null}
       </>
     );
@@ -80,7 +91,7 @@ function StageBody({ progress, exchange, logo }) {
   if (stage === "manual") {
     return (
       <>
-        <p className="rhm-title">직접 입력</p>
+        <p className="rhm-title">{stageTitle(progress, "manual")}</p>
         <Slots exchange={exchange} slots={progress.slots} />
       </>
     );
@@ -97,16 +108,17 @@ function StageBody({ progress, exchange, logo }) {
     return (
       <>
         <p className="rhm-title rhm-banner"><Mark kind="ok" />연결 완료</p>
-        <CheckRows checks={progress.checks} />
+        <CheckRows checks={progress.checks} progress={progress} />
       </>
     );
   }
   if (stage === "result_fail") {
+    const fix = screenFor(progress, exchange, "fix");
     return (
       <>
-        <p className="rhm-title rhm-banner"><Mark kind="bad" />{PROBLEM_HEADLINES[progress.problem] || "연결 확인 필요"}</p>
-        <CheckRows checks={progress.checks} />
-        {progress.problem === "ip" ? <ExchangeScreen exchange={exchange} kind="fix" typedText={MASKED_IP} logo={logo} label={`${name} 허용 IP 변경 화면`} /> : null}
+        <p className="rhm-title rhm-banner"><Mark kind="bad" />{problemHeadline(progress)}</p>
+        <CheckRows checks={progress.checks} progress={progress} />
+        {progress.problem === "ip" ? <ExchangeScreen exchange={fix.exchange} kind={fix.kind} typedText={MASKED_IP} logo={logo} label={`${name} 허용 IP 변경 화면`} /> : null}
       </>
     );
   }

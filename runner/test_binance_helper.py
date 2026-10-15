@@ -125,5 +125,17 @@ class BinanceRehearseTests(unittest.TestCase):
         self.assertIn("첫 주문", reason)
 
 
+class ProgressEnvTests(unittest.TestCase):
+    def test_env_is_sent_only_for_binance_and_only_when_set(self):
+        from runner import setup_progress
+        domestic = setup_progress.progress_payload("keys", "upbit")
+        self.assertNotIn("env", domestic)  # env 를 모르는 옛 서버(extra=forbid)에도 그대로 통한다
+        self.assertEqual(setup_progress.progress_payload("perm", "binance", env="demo")["env"], "demo")
+        with self.assertRaises(ValueError):
+            setup_progress.progress_payload("perm", "upbit", env="live")
+        with self.assertRaises(ValueError):
+            setup_progress.progress_payload("perm", "binance", env="mainnet")
+
+
 if __name__ == "__main__":
     unittest.main()

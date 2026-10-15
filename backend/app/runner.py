@@ -92,6 +92,24 @@ def supports_domestic(version: str) -> bool:
     return v.isascii() and v.isdigit() and len(v) <= 6 and int(v) >= int(DOMESTIC_MIN_VERSION)
 
 
+# 바이낸스 연결 도우미(테스트넷 · 데모 · 실거래 키 안내)는 실행기 v19 부터 있다. 웹 빠른 실행은 바이낸스 매크로도
+# '실행기에서 연결 · 실행' 한 화면으로 보내므로, 그 화면을 따라 그릴 도우미가 있는 실행기에만 티켓을 내준다.
+# 운영에 공개된 실행기가 이 버전에 닿기 전에는 켜지 않는다 — 서버를 먼저 배포해도 지금 흐름(웹 4단계)이 그대로다.
+BINANCE_HELPER_MIN_VERSION = os.environ.get("RUNNER_BINANCE_HELPER_MIN_VERSION", "19").strip() or "19"
+BINANCE_HELPER_REQUIRED_DETAIL = "바이낸스 빠른 실행은 실행기 v19 이상이 필요해요(연결 도우미). 실행기를 업데이트해 주세요."
+
+
+def _version_at_least(version: str, minimum: str) -> bool:
+    v, m = (version or "").strip(), (minimum or "").strip()
+    return v.isascii() and v.isdigit() and len(v) <= 6 and m.isdigit() and int(v) >= int(m)
+
+
+def binance_helper_active() -> bool:
+    """운영에 공개된 실행기(RUNNER_DOWNLOAD_URL)가 바이낸스 연결 도우미를 가졌는가."""
+    from .runner_release import resolve_runner_release
+    return _version_at_least(resolve_runner_release(os.environ)["version"], BINANCE_HELPER_MIN_VERSION)
+
+
 SIGNAL_REQUIRED_DETAIL = "지표형 매크로는 실행기 v8 이상이 필요해요. 실행기를 업데이트해 주세요."
 MACRO_REQUIRED_DETAIL = "실행기 v8 은 매크로 설정을 함께 보내야 해요."
 # 실행기로는 아직 돌릴 수 없는 매크로 유형(모든 실행기 버전). C(적립식)는 서버가 3초 틱을 세어 분할 매수하는
@@ -393,7 +411,11 @@ def _required_version_for(db, user_macro_id: int, general_min: str) -> str:
         macro = Macro.model_validate_json(macro_row.macro_json)
     except (TypeError, ValueError):
         return general_min
-    return DOMESTIC_MIN_VERSION if is_domestic(macro.exchange) else general_min
+    if is_domestic(macro.exchange):
+        return DOMESTIC_MIN_VERSION
+    if normalize_exchange(macro.exchange) == "binance" and binance_helper_active():
+        return str(max(int(BINANCE_HELPER_MIN_VERSION), int(general_min) if str(general_min).isdigit() else 0))
+    return general_min
 
 
 # 실행기 → 웹 가이드 진행 단계. 청구된 티켓에, 그 계정의 회원 키로만, 청구 뒤 이 시간 안에만 쓴다.
@@ -418,6 +440,8 @@ def record_setup_progress(user: User, launch_id: int, progress: dict) -> dict:
             exchange = Macro.model_validate_json(macro_row.macro_json).exchange if macro_row else ""
         except (TypeError, ValueError):
             exchange = ""
+        if progress.get("env") and progress.get("exchange") != "binance":
+            raise _ticket_error(422, "국내 거래소 진행 단계에는 바이낸스 환경을 싣지 않아요.")
         if exchange and normalize_exchange(exchange) != progress.get("exchange"):
             # 실행기에서 다른 매크로 파일을 열었다 — 웹 가이드가 엉뚱한 거래소 화면을 그리지 않게 받지 않는다.
             raise _ticket_error(409, "이 실행 연결의 매크로와 거래소가 달라요.")
@@ -508,6 +532,13 @@ def claim_launch_ticket(ticket: str, runner_version: str = "") -> dict:
             db.rollback()
             mark_launch_ticket_rejected(raw_ticket, runner_version)
             raise
+        if (normalize_exchange(macro.exchange) == "binance" and binance_helper_active()
+                and not _version_at_least(runner_version, BINANCE_HELPER_MIN_VERSION)):
+            # 웹 빠른 실행의 바이낸스 화면은 실행기 도우미를 따라 그린다 — 도우미가 없는 실행기는 업데이트를 안내한다.
+            # 국내 매크로와 같은 취급: 거절만 남기고 티켓은 소비하지 않는다. 실행기에서 직접 파일을 여는 길은 막지 않는다.
+            db.rollback()
+            mark_launch_ticket_rejected(raw_ticket, runner_version)
+            raise _ticket_error(426, BINANCE_HELPER_REQUIRED_DETAIL)
         if not supports_signals(runner_version) and needs_signals(macro):
             # 구버전 실행기 + 지표형 매크로: 거절 사실만 남기고(웹이 상태 조회로 알아챔) 티켓은 소비하지 않는다.
             # mark_launch_ticket_rejected 는 자기 세션을 여니 BEGIN IMMEDIATE 잠금을 먼저 푼다.

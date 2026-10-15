@@ -3273,7 +3273,8 @@ class RunnerApp:
             payload = setup_progress.progress_payload(
                 stage, exchange_of(macro), path=path, slots=slots,
                 checks={row: view.get(row, "wait") for row in ("auth", "ip", "order")},
-                problem=view.get("problem", "") if view else "", connected=bool(view.get("connected")))
+                problem=view.get("problem", "") if view else "", connected=bool(view.get("connected")),
+                env=self._wizard_env(exchange_of(macro)))
         except ValueError:
             return
         reporter.report(payload)

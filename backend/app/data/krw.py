@@ -126,6 +126,19 @@ def _number(value) -> float:
     return number if math.isfinite(number) else 0.0
 
 
+def _trading_open(raw: dict) -> bool:
+    """거래가 열려 체결이 한 번이라도 난 종목인가.
+
+    거래소는 상장 공지 뒤 거래 개시 전부터 종목을 목록(market/all · ticker)에 올린다 — 빗썸 KRW-ACU(아큐라스트)는
+    2026-10-15 14:00 거래 개시 전 오전부터 목록에 있었고, 현재가 · 체결 시각이 비어(None) 오고 호가 · 체결 · 캔들이 없었다.
+    이런 종목은 후보 · 가격 계산에 넣지 않는다(넣으면 float(None) 로 목록 전체가 실패해 물어볼까? 가 통째로 막혔다).
+    """
+    if _number(raw.get("trade_price")) <= 0:
+        return False
+    # 체결 시각 칸이 있는데 비었으면 아직 체결이 없다. 칸 자체가 없는 응답은 현재가만으로 본다.
+    return not ("trade_timestamp" in raw and raw["trade_timestamp"] is None)
+
+
 def get_all_tickers(exchange: str) -> list[dict]:
     """Candidate selection projection; prices retain their native KRW units."""
     exchange = _domestic(exchange)
@@ -136,11 +149,9 @@ def get_all_tickers(exchange: str) -> list[dict]:
             symbol = str(raw.get("market", ""))
             if symbol not in symbols:
                 continue
-            last = _number(raw.get("trade_price"))
-            if last <= 0:
-                # 막 상장해 아직 체결이 없는 종목은 현재가가 비어(None) 온다(빗썸 KRW-ACU, 2026-10-15).
-                # 한 종목 때문에 목록 전체가 실패하면 물어볼까? 가 그 거래소에서 통째로 막힌다 — 건너뛴다.
+            if not _trading_open(raw):
                 continue
+            last = _number(raw.get("trade_price"))
             rows.append({"symbol": symbol, "base": symbol[4:], "quote": "KRW", "exchange": exchange,
                          "lastPrice": last, "highPrice": _number(raw.get("high_price")) or last,
                          "lowPrice": _number(raw.get("low_price")) or last,
@@ -161,8 +172,8 @@ def batch_prices(symbols: list[str], exchange: str, *, ttl: float = 2.0) -> dict
     def load():
         out = {}
         for row in _ticker_rows(exchange, wanted):
-            price = _number(row.get("trade_price"))  # 체결 없는 새 종목은 None 으로 온다
-            if row.get("market") in wanted and price > 0:
+            price = _number(row.get("trade_price"))
+            if row.get("market") in wanted and _trading_open(row):
                 out[row["market"]] = price
         if not out:
             raise binance.NoSpotDataError("KRW 현재가를 불러오지 못했습니다.")

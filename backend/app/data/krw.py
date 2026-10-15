@@ -117,6 +117,28 @@ def _ticker_rows(exchange: str, symbols: list[str]) -> list[dict]:
     return rows
 
 
+def _number(value) -> float:
+    """거래소 숫자 칸 — 비었거나(None) 숫자가 아니면 0."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return number if math.isfinite(number) else 0.0
+
+
+def _trading_open(raw: dict) -> bool:
+    """거래가 열려 체결이 한 번이라도 난 종목인가.
+
+    거래소는 상장 공지 뒤 거래 개시 전부터 종목을 목록(market/all · ticker)에 올린다 — 빗썸 KRW-ACU(아큐라스트)는
+    2026-10-15 14:00 거래 개시 전 오전부터 목록에 있었고, 현재가 · 체결 시각이 비어(None) 오고 호가 · 체결 · 캔들이 없었다.
+    이런 종목은 후보 · 가격 계산에 넣지 않는다(넣으면 float(None) 로 목록 전체가 실패해 물어볼까? 가 통째로 막혔다).
+    """
+    if _number(raw.get("trade_price")) <= 0:
+        return False
+    # 체결 시각 칸이 있는데 비었으면 아직 체결이 없다. 칸 자체가 없는 응답은 현재가만으로 본다.
+    return not ("trade_timestamp" in raw and raw["trade_timestamp"] is None)
+
+
 def get_all_tickers(exchange: str) -> list[dict]:
     """Candidate selection projection; prices retain their native KRW units."""
     exchange = _domestic(exchange)
@@ -127,11 +149,14 @@ def get_all_tickers(exchange: str) -> list[dict]:
             symbol = str(raw.get("market", ""))
             if symbol not in symbols:
                 continue
+            if not _trading_open(raw):
+                continue
+            last = _number(raw.get("trade_price"))
             rows.append({"symbol": symbol, "base": symbol[4:], "quote": "KRW", "exchange": exchange,
-                         "lastPrice": float(raw["trade_price"]), "highPrice": float(raw["high_price"]),
-                         "lowPrice": float(raw["low_price"]),
-                         "priceChangePercent": 100 * float(raw.get("signed_change_rate", 0)),
-                         "quoteVolume": float(raw.get("acc_trade_price_24h", 0))})
+                         "lastPrice": last, "highPrice": _number(raw.get("high_price")) or last,
+                         "lowPrice": _number(raw.get("low_price")) or last,
+                         "priceChangePercent": 100 * _number(raw.get("signed_change_rate")),
+                         "quoteVolume": _number(raw.get("acc_trade_price_24h"))})
         if not rows:
             raise ValueError("거래소 현재가 목록이 비어 있습니다.")
         return rows
@@ -147,8 +172,8 @@ def batch_prices(symbols: list[str], exchange: str, *, ttl: float = 2.0) -> dict
     def load():
         out = {}
         for row in _ticker_rows(exchange, wanted):
-            price = float(row.get("trade_price", 0))
-            if row.get("market") in wanted and math.isfinite(price) and price > 0:
+            price = _number(row.get("trade_price"))
+            if row.get("market") in wanted and _trading_open(row):
                 out[row["market"]] = price
         if not out:
             raise binance.NoSpotDataError("KRW 현재가를 불러오지 못했습니다.")

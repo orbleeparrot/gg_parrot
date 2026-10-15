@@ -1326,13 +1326,23 @@ def _session_view(row: RunSession) -> dict:
 
 
 # 종료 기록 보관 — 계정마다 보관하지 않은 종료 세션은 최근 30건·30일까지만 남긴다(2026-10-02).
-# 사용자가 '보관'한 기록은 정리에서 빠지되 10건까지. 정리할 때 세션의 이벤트·실행 명령도 같이 지운다.
+# 사용자가 '보관'한 기록은 정리에서 빠지되 PIN_LIMIT 건까지(기본 10). 정리할 때 세션의 이벤트·실행 명령도 같이 지운다.
 # 정리는 세션이 끝날 때(mark_stopped)·보관을 풀 때와 방문 독립 log_retention_runtime에서 실행한다.
 # runtime은 기본 매시간 전체 계정을 작은 배치로 정리하며, maybe_prune_all_ended_sessions는 호환용이다.
 # 목록은 정리와 무관하게 기간이 지난 기록을 바로 뺀다.
 HISTORY_KEEP = 30
 HISTORY_DAYS = 30
-PIN_LIMIT = 10
+# 보관 상한은 RUNNER_PIN_LIMIT 로 바꾼다 — 2026-10-15 파일럿 동안만 운영 100(render.yaml). 끝나면 그 줄을 지워 10 으로 돌린다.
+# 화면(AgentHistory)은 목록 응답의 history_policy.pin_limit 를 그대로 쓴다.
+def _pin_limit() -> int:
+    try:
+        value = int(os.environ.get("RUNNER_PIN_LIMIT", "10"))
+    except ValueError:
+        return 10
+    return max(1, min(value, 200))
+
+
+PIN_LIMIT = _pin_limit()
 
 
 def _ended_at(row: RunSession) -> Optional[datetime]:
@@ -1498,7 +1508,7 @@ def maybe_prune_all_ended_sessions(db) -> int:
 
 
 def list_sessions(user_id: int, limit: int = HISTORY_KEEP + PIN_LIMIT, db=None) -> dict:
-    """All active sessions plus the retained ended sessions (최근 30건 + 보관 10건까지)."""
+    """All active sessions plus the retained ended sessions (최근 30건 + 보관 PIN_LIMIT 건까지)."""
     recent_limit = max(0, min(int(limit), 100))
     filters = [RunSession.status == "running"]
     if recent_limit:

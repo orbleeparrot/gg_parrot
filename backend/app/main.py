@@ -2742,7 +2742,7 @@ class RunnerPinRequest(BaseModel):
 def runner_pin_session(
     session_id: int, req: RunnerPinRequest, user: User = Depends(auth_mod.current_user)
 ) -> dict:
-    """종료 기록 보관 켜기/끄기 — 보관한 기록은 30건·30일 자동 정리에서 빠진다(10건까지)."""
+    """종료 기록 보관 켜기/끄기 — 보관한 기록은 30건·30일 자동 정리에서 빠진다(runner.PIN_LIMIT 건까지)."""
     return runner_mod.set_pinned(user.id, session_id, req.pinned)
 
 

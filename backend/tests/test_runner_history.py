@@ -157,3 +157,13 @@ def test_daily_cleanup_removes_expired_records_across_accounts(user_id):
         left = db.exec(select(RunSession).where(
             RunSession.user_id == user_id, RunSession.pinned == False)).all()  # noqa: E712
         assert len(left) == 30
+
+
+def test_pin_limit_follows_the_pilot_setting(monkeypatch):
+    # 파일럿 동안 운영은 RUNNER_PIN_LIMIT=100(render.yaml). 비었거나 이상한 값은 기본 10, 과한 값은 200 으로 묶는다.
+    from app import runner as runner_mod
+    for raw, expected in (("100", 100), ("", 10), ("abc", 10), ("0", 1), ("5000", 200)):
+        monkeypatch.setenv("RUNNER_PIN_LIMIT", raw)
+        assert runner_mod._pin_limit() == expected
+    monkeypatch.delenv("RUNNER_PIN_LIMIT")
+    assert runner_mod._pin_limit() == 10

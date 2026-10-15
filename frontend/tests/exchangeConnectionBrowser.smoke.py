@@ -44,7 +44,7 @@ class WizardFixture(Fixture):
                 return
             if parsed.path == "/api/runner/download/info":
                 self.requests.append(parsed.path)
-                route.fulfill(json={"available": True, "url": "https://fixture.invalid/runner.exe", "version": "18", "min_runner_version": "6", "domestic_min_runner_version": "10", "supports_launch": True, "size": 8388608})
+                route.fulfill(json={"available": True, "url": "https://fixture.invalid/runner.exe", "version": "19", "min_runner_version": "6", "domestic_min_runner_version": "10", "supports_launch": True, "size": 8388608})
                 return
         super().route(route)
 
@@ -210,7 +210,7 @@ def main():
                 assert parse_qs(urlsplit(page.url).query)["step"] == ["4"]
                 expect(page.get_by_role("button", name="회원 키 복사", exact=True)).to_be_visible()
                 assert fixture.launch_payloads == [{"user_macro_id": 1, "testnet": True}], fixture.launch_payloads
-                assert page.evaluate("localStorage.getItem('ggparrot:runner-opened-version')") == "18"
+                assert page.evaluate("localStorage.getItem('ggparrot:runner-opened-version')") == "19"
                 assert_no_overflow(page)
                 context.close()
                 checks += 1
@@ -238,7 +238,7 @@ def main():
             expect(page.locator("#runner-wizard-title")).to_contain_text("회원 키를")
             assert parse_qs(urlsplit(page.url).query)["step"] == ["4"]
             assert fixture.launch_payloads == []
-            assert page.evaluate("localStorage.getItem('ggparrot:runner-opened-version')") == "18"
+            assert page.evaluate("localStorage.getItem('ggparrot:runner-opened-version')") == "19"
             page.get_by_role("button", name="이전 화면", exact=True).click()
             expect(page.get_by_text("사용자가 준비했다고 확인함 · 실제 설치·실행 여부를 감지한 것은 아님", exact=True)).to_be_visible()
             context.close()

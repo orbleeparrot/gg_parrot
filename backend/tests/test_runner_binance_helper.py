@@ -12,8 +12,9 @@ V19 = "https://github.com/orbleeparrot/gg_parrot/releases/download/runner-v19/gg
 
 
 def test_gate_is_off_until_the_published_runner_has_the_helper(monkeypatch):
-    monkeypatch.delenv("RUNNER_DOWNLOAD_URL", raising=False)
-    assert runner_mod.binance_helper_active() is False  # 지금 공개본(v18)
+    monkeypatch.setenv("RUNNER_DOWNLOAD_URL", V19)
+    monkeypatch.setattr(runner_mod, "BINANCE_HELPER_MIN_VERSION", "20")  # 공개본이 도우미 버전에 못 미친다
+    assert runner_mod.binance_helper_active() is False
     _launch, ticket = _ticket(_signup(), A)
     r = client.post("/api/runner/launch-tickets/claim", json={"ticket": ticket, "runner_version": "18"})
     assert r.status_code == 200, r.text
@@ -21,6 +22,7 @@ def test_gate_is_off_until_the_published_runner_has_the_helper(monkeypatch):
 
 def test_published_v19_requires_the_helper_for_binance_quick_run(monkeypatch):
     monkeypatch.setenv("RUNNER_DOWNLOAD_URL", V19)
+    monkeypatch.setattr(runner_mod, "BINANCE_HELPER_MIN_VERSION", "19")
     assert runner_mod.binance_helper_active() is True
     token = _signup()
     launch_id, ticket = _ticket(token, A)
@@ -37,9 +39,10 @@ def test_published_v19_requires_the_helper_for_binance_quick_run(monkeypatch):
 
 
 def test_download_info_announces_the_helper_only_when_published(monkeypatch):
-    monkeypatch.delenv("RUNNER_DOWNLOAD_URL", raising=False)
-    assert client.get("/api/runner/download/info").json()["binance_helper_min_runner_version"] == ""
     monkeypatch.setenv("RUNNER_DOWNLOAD_URL", V19)
+    monkeypatch.setattr(runner_mod, "BINANCE_HELPER_MIN_VERSION", "20")
+    assert client.get("/api/runner/download/info").json()["binance_helper_min_runner_version"] == ""
+    monkeypatch.setattr(runner_mod, "BINANCE_HELPER_MIN_VERSION", "19")
     assert client.get("/api/runner/download/info").json()["binance_helper_min_runner_version"] == "19"
 
 

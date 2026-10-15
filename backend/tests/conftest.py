@@ -20,6 +20,9 @@ os.environ["SQLITE_PATH"] = _TMP.name
 os.environ["POSITION_NEWS_EMBEDDED_ENABLED"] = "false"
 # 뉴스의 거래소 이름 보강은 업비트 · 빗썸 종목 목록을 부른다 — 테스트는 네트워크를 쓰지 않는다(켜는 테스트는 목록을 가짜로 바꾼다).
 os.environ["NEWS_EXCHANGE_NAMES_ENABLED"] = "false"
+# 바이낸스 빠른 실행의 v19 도우미 조건은 tests/test_runner_binance_helper.py 가 켜고 끄며 본다. 다른 테스트는
+# 옛 실행기 버전으로 바이낸스 티켓을 청구해 다른 관문(지표형 v8 · 최소 버전)을 검사하므로 기본은 꺼 둔다.
+os.environ["RUNNER_BINANCE_HELPER_MIN_VERSION"] = "999"
 os.environ["PUBLIC_NEWS_EMBEDDED_ENABLED"] = "false"
 os.environ["LEADERBOARD_BACKGROUND_ENABLED"] = "false"
 os.environ["ACTIVITY_LOG_RETENTION_ENABLED"] = "false"

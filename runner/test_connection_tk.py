@@ -119,7 +119,7 @@ class ConnectionTkTests(unittest.TestCase):
         self.assertEqual(self.app.wizard_btn.winfo_manager(), "pack")
         self.select("binance")
         self.assertEqual(self.app.key_title.cget("text"), "바이낸스 API 키")
-        self.assertEqual(self.app.wizard_btn.winfo_manager(), "")  # 바이낸스는 도우미가 없다
+        self.assertEqual(self.app.wizard_btn.winfo_manager(), "pack")  # 바이낸스도 v19 부터 도우미가 있다
         self.select("upbit")
         self.assertEqual(self.app.key_vars["upbit"][0].get(), "dummy-upbit")
 
@@ -166,15 +166,15 @@ class ConnectionTkTests(unittest.TestCase):
         self.assertTrue(self.pump(lambda: self.app.key_status.cget("text") == "● 허용 IP 확인 필요"))
         self.assertEqual(str(self.app.wizard_btn.cget("style")), "Primary.TButton")
 
-    def test_binance_failure_reason_is_shown_under_the_opened_keys(self):
+    def test_binance_failure_shows_the_blocked_row_like_domestic(self):
         self.root.deiconify()
         self.select("binance")
-        self.assertTrue(self.app._key_body_open)  # 키가 없는 바이낸스는 펼쳐 둔다
+        self.assertFalse(self.app._key_body_open)  # 키가 없으면 [연결 도우미]가 안내한다 — 칸은 접어 둔다
         self.next_check = (False, "binance_access", "바이낸스가 키를 받아주지 않았어요")
         self.set_keys("binance")
-        self.assertTrue(self.pump(lambda: self.app.key_status.cget("text") == "● 연결 안 됨" and not self.app._key_check_busy_fp
-                                  and self.app.key_note.winfo_ismapped()))
-        self.assertIn("바이낸스가 키를 받아주지 않았어요", self.app.key_note.cget("text"))
+        self.assertTrue(self.pump(lambda: self.app.key_status.cget("text") == "● 허용 IP 확인 필요"
+                                  and not self.app._key_check_busy_fp))
+        self.assertEqual(str(self.app.wizard_btn.cget("style")), "Primary.TButton")
 
     def test_member_key_has_its_own_card_below_the_exchange_keys(self):
         self.assertEqual(str(self.app.member_entry.cget("textvariable")), str(self.app.member_key))
@@ -405,6 +405,52 @@ class ConnectionTkTests(unittest.TestCase):
         except tk.TclError:
             clipboard = ""
         self.assertNotIn("B" * 40, clipboard)  # 시크릿은 클립보드에 남기지 않는다
+
+    def test_binance_testnet_helper_is_two_steps_without_an_ip(self):
+        self.select("binance")
+        self.app.mode.set("testnet"); self.app._on_mode_change()
+        self.root.deiconify()
+        self.app._open_connection_wizard(); self.root.update()
+        wizard = self.app._connection_wizard
+        self.assertEqual((wizard.env, wizard.flow), ("testnet", ("perm", "keys")))
+        self.assertIsNone(self.app._wizard_auto_ip_id)  # 테스트넷에는 허용 IP 가 없다 — 주소를 묻지 않는다
+        wizard._choose_new(); self.root.update()
+        self.assertEqual(wizard.stage, "perm")
+        self.foot_button(wizard, "다음").invoke(); self.root.update()
+        with patch.object(self.app, "_start") as start:
+            self.copy_to_clipboard("A" * 40)
+            self.assertTrue(self.pump(lambda: wizard.got["access"]))
+            self.copy_to_clipboard("B" * 40)
+            self.next_check = (True, "binance_test_ok", "통과")
+            self.assertTrue(self.pump(lambda: wizard.stage == "result_ok"))
+            start.assert_not_called()
+        self.assertEqual(self.check_calls[-1][1], "testnet")
+        self.app._open_exchange_api_page()
+        self.assertEqual(self.browser_mock.call_args[0][0], "https://testnet.binance.vision/")
+
+    def test_binance_live_keys_lead_to_the_ip_step_before_checking(self):
+        self.select("binance")
+        self.app.mode.set("live"); self.app._on_mode_change()
+        with patch("runner.connection.detect_public_ipv4", return_value="8.8.8.8"):
+            self.root.deiconify()
+            self.app._open_connection_wizard(); self.root.update()
+            wizard = self.app._connection_wizard
+            self.pump_ip()
+        self.assertEqual(wizard.flow, ("perm", "keys", "ip"))
+        wizard.path = "new"; wizard.show("keys")
+        calls = len(self.check_calls)
+        self.copy_to_clipboard("A" * 40)
+        self.assertTrue(self.pump(lambda: wizard.got["access"]))
+        self.copy_to_clipboard("B" * 40)
+        self.assertTrue(self.pump(lambda: wizard.stage == "ip"))  # 키를 받으면 허용 IP · 주문 권한을 걸러 간다
+        self.assertEqual(len(self.check_calls), calls)
+        self.assertEqual(str(self.foot_button(wizard, "검사").cget("state")), "normal")
+        wizard._copy_and_open(); self.root.update()
+        self.assertIn("www.binance.com", self.browser_mock.call_args[0][0])
+        self.next_check = (True, "binance_verified", "통과")
+        wizard.on_return()  # 거래소에서 돌아오면 바로 검사
+        self.assertTrue(self.pump(lambda: wizard.stage == "result_ok"))
+        self.assertEqual(self.check_calls[-1][1], "live")
 
     def test_clipboard_ignores_old_values_addresses_and_sentences(self):
         self.copy_to_clipboard("Z" * 40)  # 도우미를 열기 전부터 있던 값은 받지 않는다

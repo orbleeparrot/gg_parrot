@@ -1,6 +1,7 @@
 """연결 도우미의 거래소 화면 재현 — 업비트 · 빗썸 Open API 관리 화면을 단순화해 그리고 커서가 실제 위치를 누른다.
 
-근거: docs.upbit.com/kr/docs/api-key · 업비트 실제 화면(사용자 캡처 2026-10-12) · 빗썸 API 2.0 실제 화면(사용자 캡처 2026-10-12).
+근거: docs.upbit.com/kr/docs/api-key · 업비트 실제 화면(사용자 캡처 2026-10-12) · 빗썸 API 2.0 실제 화면(사용자 캡처 2026-10-12) ·
+바이낸스 Spot Test Network · Demo Trading · binance.com API Management 실제 화면(사용자 캡처 2026-10-15).
 그림일 뿐이다 — 여기서 무엇을 눌러도 거래소에는 아무것도 가지 않고, 실행기의 키 칸도 바뀌지 않는다.
 좌표는 96 DPI 기준 픽셀로 적고 Painter 가 화면 배율을 곱한다(글꼴은 포인트라 Tk 가 알아서 키운다).
 """
@@ -25,6 +26,8 @@ DIM = "#ADB0B5"  # 거래소 창 위에 뜬 작은 창 뒤를 어둡게 — 캔�
 
 UP_KEYS = ("a8Kq3Zt0" + "*" * 20, "Wm2xP7Lb" + "*" * 20)
 BT_KEYS = ("6b2c78fd" + "*" * 20, "ZDkyNGRk" + "*" * 20)
+BN_KEYS = ("0lOHb8TL" + "•" * 18, "•" * 30)
+TN_KEYS = ("FdiXVmAJ" + "*" * 22, "iRvB4t51" + "*" * 22)
 
 
 class Painter:
@@ -36,6 +39,8 @@ class Painter:
         self.regular = tkfont.Font(root=canvas, family=FONT, size=10)
         self.bold = tkfont.Font(root=canvas, family=FONT, size=10, weight="bold")
         self.mark = tkfont.Font(root=canvas, family=FONT, size=10, weight="bold", slant="italic")
+        self.small = tkfont.Font(root=canvas, family=FONT, size=8)
+        self.heading = tkfont.Font(root=canvas, family=FONT, size=13, weight="bold")
 
     def p(self, value: float) -> float:
         return value * self.s
@@ -487,11 +492,385 @@ def bithumb_existing(scene: Scene, logo=None):
     scene.height = y + 12
 
 
+# ==================================================================
+#  바이낸스 Spot Test Network — 검은 머리줄 · 연회색 바탕 · 파란 글자 링크 · 노란 버튼(사용자 캡처 2026-10-15)
+# ==================================================================
+BN_YELLOW = "#FCD535"
+BN_GOLD = "#F0B90B"
+TN_BAR = "#12161C"
+TN_BG = "#FAFAFA"
+TN_LINK = "#2F8AE6"
+TN_LINE = "#DADADA"
+TN_HEAD = "#F2F2F2"
+TN_CHECK = "#1A73E8"
+TN_SELECT = "#B4D5FE"
+
+
+def _bn_mark(scene: Scene, x, cy, *, ink=BN_GOLD, word=True):
+    """바이낸스 표식 — 마름모 하나와 BINANCE 글자(단순화)."""
+    p = scene.painter
+    r = 6
+    p.c.create_polygon(p.p(x + r), p.p(cy - r), p.p(x + 2 * r), p.p(cy), p.p(x + r), p.p(cy + r), p.p(x), p.p(cy),
+                       fill=ink, outline="")
+    if word:
+        p.text(x + 2 * r + 6, cy, "BINANCE", font=p.bold, fill=ink)
+        return x + 2 * r + 6 + p.width("BINANCE", p.bold)
+    return x + 2 * r
+
+
+def _tn_chrome(scene: Scene) -> float:
+    p, w = scene.painter, scene.width
+    p.rect(0, 0, w, 32, fill=TN_BAR)
+    right = _bn_mark(scene, 12, 16)
+    p.text(right + 14, 16, "Spot Test Network", fill="#FFFFFF")
+    bw = p.width("Log out", p.bold) + 14
+    p.round_rect(w - 12 - bw, 7, w - 12, 25, 3, fill=BN_GOLD)
+    p.text(w - 12 - bw / 2, 16, "Log out", font=p.bold, fill=INK, anchor="center")
+    p.rect(0, 32, w, 400, fill=TN_BG)
+    return 32
+
+
+def _tn_button(scene: Scene, name, x, y, label, *, tags=()):
+    p = scene.painter
+    bw = p.width(label, p.bold) + 14
+    body = p.round_rect(x, y, x + bw, y + 22, 3, fill=BN_GOLD, tags=tags)
+    p.text(x + bw / 2, y + 11, label, font=p.bold, fill=INK, anchor="center", tags=tags)
+    if name:
+        scene.target(name, x + bw / 2, y + 11)
+        scene.toggle(name, lambda: scene.canvas.itemconfigure(body, fill="#D9A40A"),
+                     lambda: scene.canvas.itemconfigure(body, fill=BN_GOLD))
+    return x + bw
+
+
+def _tn_table(scene: Scene, y, *, tags=()) -> float:
+    p, w = scene.painter, scene.width
+    x0, x1 = 14, w - 14
+    cols = (x0, x0 + (x1 - x0) * .2, x0 + (x1 - x0) * .36, x0 + (x1 - x0) * .74, x1)
+    p.rect(x0, y, x1, y + 24, fill=TN_HEAD, outline=TN_LINE, tags=tags)
+    for index, label in enumerate(("Key Type", "Description", "Permissions")):
+        p.text(cols[index] + 8, y + 12, label, font=p.bold, fill="#7A7F87", tags=tags)
+    y += 24
+    p.rect(x0, y, x1, y + 30, fill="#FFFFFF", outline=TN_LINE, tags=tags)
+    for cx in cols[1:-1]:
+        p.line(cx, y, cx, y + 30, fill=TN_LINE, tags=tags)
+    p.text(cols[0] + 8, y + 15, "HMAC-SHA-256", tags=tags)
+    p.text(cols[1] + 8, y + 15, "TEST", tags=tags)
+    p.text(cols[2] + 8, y + 15, p.fit("TRADE, USER_DATA, USER_STREAM", cols[3] - cols[2] - 14, p.small),
+           font=p.small, tags=tags)
+    right = _tn_button(scene, "", cols[3] + 8, y + 4, "Edit", tags=tags)
+    _tn_button(scene, "", right + 4, y + 4, "Revoke", tags=tags)
+    return y + 30
+
+
+def _tn_checkbox(scene: Scene, x, y, label, *, on=True, disabled=False, tags=()):
+    p = scene.painter
+    size = 13
+    if disabled:
+        p.round_rect(x, y, x + size, y + size, 2, fill="#F1F1F1", outline="#C9C9C9", tags=tags)
+    elif on:
+        p.round_rect(x, y, x + size, y + size, 2, fill=TN_CHECK, tags=tags)
+        p.check(x, y, size, fill="#FFFFFF", width=1.6, tags=tags)
+    p.text(x + size + 8, y + size / 2, label, fill="#9AA0A6" if disabled else INK, tags=tags)
+
+
+def binance_testnet_perm(scene: Scene):
+    p, w = scene.painter, scene.width
+    y0 = _tn_chrome(scene) + 12
+    # 첫 화면(바탕): API Keys 목록 아래 'Generate HMAC-SHA-256 Key' 링크. 누르면 위에 양식 층이 덮인다.
+    tags = ()
+    p.text(14, y0 + 12, "API Keys", font=p.heading, tags=tags)
+    y = _tn_table(scene, y0 + 32, tags=tags) + 16
+    link = "Generate HMAC-SHA-256 Key"
+    p.text(14, y + 8, link, fill=TN_LINK, tags=tags)
+    scene.target("gen", 14 + p.width(link) * .5, y + 8)
+    p.text(14, y + 34, "Register Public Key", fill=TN_LINK, tags=tags)
+    list_bottom = y + 46
+    # 링크를 누른 뒤: 설명 · 권한 체크(기본 세 개 켜짐) · Generate.
+    tags = ("form",)
+    p.rect(0, 33, w, max(list_bottom, 330), fill=TN_BG, tags=tags)
+    p.text(14, y0 + 12, "Generate HMAC-SHA-256 key", font=p.heading, tags=tags)
+    y = y0 + 38
+    p.text(14, y, "Description:", font=p.bold, tags=tags)
+    scene.input_box("desc", 14, y + 12, 14 + 200, y + 38, placeholder="", line="#8F8F8F", focus=TN_CHECK, tags=tags)
+    p.text(14, y + 50, "Needs to be a unique name containing between 1 and 20 letters, numbers, dashes or underscores.",
+           font=p.small, fill="#444444", tags=tags)
+    y += 72
+    p.text(14, y, "Key permissions:", font=p.bold, tags=tags)
+    y += 14
+    for label, on, disabled in (("TRADE", True, False), ("USER_DATA", True, False), ("USER_STREAM", True, False),
+                                ("FIX_API", False, True), ("FIX_API_READ_ONLY", False, True)):
+        _tn_checkbox(scene, 14, y, label, on=on, disabled=disabled, tags=tags)
+        y += 22
+    y += 6
+    _tn_button(scene, "go", 14, y, "Generate", tags=tags)
+    p.text(14, y + 40, "Back", fill=TN_LINK, tags=tags)
+    scene.layers = ["form"]
+    scene.height = max(list_bottom, y + 52)
+    scene.sequence = [("wait", 500), ("move", "gen"), ("click",), ("show", "form"),
+                      ("move", "desc"), ("click",), ("focus", "desc"), ("type", "desc", "gg_parrot"),
+                      ("move", "go"), ("click",), ("on", "go"), ("wait", 1400)]
+
+
+def binance_testnet_keys(scene: Scene):
+    p, w = scene.painter, scene.width
+    y = _tn_chrome(scene) + 12
+    p.text(14, y + 12, "HMAC-SHA-256 Key registered", font=p.heading)
+    y += 40
+    lead = "Save these values right now."
+    p.text(14, y, lead, font=p.bold)
+    p.text(14 + p.width(lead, p.bold) + 4, y, "They won't be shown ever again!")
+    y += 30
+    for index, (label, value) in enumerate((("API Key:", TN_KEYS[0]), ("Secret Key:", TN_KEYS[1]))):
+        lx = 14 + p.width(label) + 8
+        value_w = p.width(value)
+        name = f"s{index + 1}"
+        mark = p.rect(lx - 2, y - 9, lx + value_w + 2, y + 9, fill=TN_SELECT)
+        scene.canvas.itemconfigure(mark, state="hidden")
+        p.text(14, y, label)
+        p.text(lx, y, value)
+        scene.target(name, lx + value_w * .55, y)
+        scene.toggle(name, lambda m=mark: scene.canvas.itemconfigure(m, state="normal"),
+                     lambda m=mark: scene.canvas.itemconfigure(m, state="hidden"))
+        # 이 화면에는 [복사] 가 없다 — 값을 골라 Ctrl+C. 커서 옆에 누르는 키를 잠깐 띄운다.
+        tag = f"k{index + 1}"
+        kx = lx + value_w * .55 + 16
+        p.round_rect(kx, y + 6, kx + p.width("Ctrl+C", p.bold) + 14, y + 28, 4, fill=INK, tags=(tag,))
+        p.text(kx + 7, y + 17, "Ctrl+C", font=p.bold, fill="#FFFFFF", tags=(tag,))
+        scene.layers.append(tag)
+        y += 36
+    p.text(14, y + 6, "Back", fill=TN_LINK)
+    scene.height = y + 22
+    scene.sequence = [("move", "s1"), ("click",), ("click",), ("on", "s1"), ("show", "k1"), ("wait", 900), ("hide", "k1"),
+                      ("move", "s2"), ("click",), ("click",), ("on", "s2"), ("show", "k2"), ("wait", 900), ("hide", "k2"),
+                      ("wait", 1400)]
+
+
+def binance_testnet_existing(scene: Scene):
+    p = scene.painter
+    y = _tn_chrome(scene) + 12
+    p.text(14, y + 12, "API Keys", font=p.heading)
+    y = _tn_table(scene, y + 32) + 16
+    p.text(14, y + 8, "Generate HMAC-SHA-256 Key", fill=TN_LINK)
+    scene.height = y + 24
+
+
+# ==================================================================
+#  바이낸스 Demo Trading · binance.com API Management — 어두운 화면 · 노란 버튼(사용자 캡처 2026-10-15)
+# ==================================================================
+BN_BG = "#181A20"
+BN_PANEL = "#1E2329"
+BN_LINE = "#2B3139"
+BN_INK = "#EAECEF"
+BN_MUTE = "#848E9C"
+BN_GRAY = "#2B3139"
+BN_DIM = "#0B0E11"
+BN_NOTE = "#2A2718"
+
+
+def _bn_chrome(scene: Scene, env: str) -> float:
+    p, w = scene.painter, scene.width
+    p.rect(0, 0, w, 400, fill=BN_BG)
+    right = _bn_mark(scene, 12, 16)
+    if env == "demo":
+        label = "DEMO TRADING"
+        bx = right + 8
+        p.rect(bx, 10, bx + p.width(label, p.small) + 8, 22, fill="#B88F09")
+        p.text(bx + 4, 16, label, font=p.small, fill=INK)
+        x = bx + p.width(label, p.small) + 20
+        for item in ("Spot", "Futures"):
+            p.text(x, 16, item, font=p.bold, fill=BN_INK)
+            x += p.width(item, p.bold) + 16
+    else:
+        x = right + 18
+        for item in ("Buy Crypto", "Markets", "Trade", "Futures"):
+            p.text(x, 16, item, font=p.bold, fill=BN_INK)
+            x += p.width(item, p.bold) + 14
+    p.line(0, 32, w, 32, fill=BN_LINE)
+    return 32
+
+
+def _bn_button(scene: Scene, name, x0, y0, x1, y1, label, *, fill=BN_YELLOW, ink=INK, tags=()):
+    p = scene.painter
+    body = p.round_rect(x0, y0, x1, y1, 6, fill=fill, tags=tags)
+    p.text((x0 + x1) / 2, (y0 + y1) / 2, label, font=p.bold, fill=ink, anchor="center", tags=tags)
+    if name:
+        scene.target(name, (x0 + x1) / 2, (y0 + y1) / 2)
+        scene.toggle(name, lambda: scene.canvas.itemconfigure(body, fill="#E5BF22" if fill == BN_YELLOW else "#474D57"),
+                     lambda: scene.canvas.itemconfigure(body, fill=fill))
+
+
+def _bn_page(scene: Scene, env: str) -> float:
+    """API Management 첫 화면 — 제목 · 오른쪽 위 버튼 · 안내 줄 · 노란 갈색 상자."""
+    p, w = scene.painter, scene.width
+    y = _bn_chrome(scene, env) + 14
+    p.text(14, y + 14, "API Management", font=p.heading, fill=BN_INK)
+    labels = ["Create API", "Delete all API"] if env == "demo" else ["Create API", "Create Tax Report API", "Delete all API"]
+    x1 = w - 14
+    for label in reversed(labels):
+        bw = p.width(label, p.small) + 22
+        primary = label == "Create API"
+        _bn_button(scene, "create" if primary else "", x1 - bw, y + 2, x1, y + 28, "", fill=BN_YELLOW if primary else BN_GRAY)
+        p.text(x1 - bw / 2, y + 15, label, font=p.small, fill=INK if primary else BN_INK, anchor="center")
+        x1 -= bw + 8
+    y += 44
+    p.text(14, y, p.fit("1. Each account can create up to 30 API Keys.", w - 28, p.small), font=p.small, fill=BN_MUTE)
+    p.text(14, y + 16, p.fit("2. Do not disclose your API Key, Secret Key (HMAC) or Private Key (Ed25519, RSA) to anyone.",
+                             w - 28, p.small), font=p.small, fill=BN_MUTE)
+    y += 34
+    p.round_rect(14, y, w - 14, y + 40, 6, fill=BN_NOTE)
+    if env == "demo":
+        p.text(26, y + 13, p.fit("Spot Demo API Documentation: https://developers.binance.com/docs/binance-spot-api-docs",
+                                 w - 52, p.small), font=p.small, fill=BN_GOLD)
+        p.text(26, y + 28, p.fit("Futures API Documentation: https://developers.binance.com/docs/derivatives",
+                                 w - 52, p.small), font=p.small, fill=BN_GOLD)
+    else:
+        p.round_rect(24, y + 13, 37, y + 26, 2, fill=BN_INK)
+        p.check(24, y + 13, 13, fill=BN_BG, width=1.6)
+        p.text(44, y + 19, p.fit("By checking this box, all existing API Key(s) on your master account and sub-accounts "
+                                 "will be subject to Default Security Controls.", w - 70, p.small), font=p.small, fill=BN_INK)
+    return y + 40
+
+
+def _bn_dim(scene: Scene, tags):
+    p, w = scene.painter, scene.width
+    p.rect(0, 33, w, 400, fill=BN_DIM, tags=tags)
+
+
+def _bn_key_icon(scene: Scene, x, y, *, tags=()):
+    p = scene.painter
+    p.oval(x, y, x + 18, y + 18, fill=BN_GOLD, tags=tags)
+    p.oval(x + 6, y + 6, x + 12, y + 12, fill=BN_PANEL, tags=tags)
+    p.line(x + 15, y + 15, x + 28, y + 28, fill=BN_GOLD, width=4, tags=tags)
+
+
+def binance_dark_perm(scene: Scene, env: str):
+    p, w = scene.painter, scene.width
+    page_bottom = _bn_page(scene, env)
+    # Choose API Key type — System generated 가 골라져 있다(노란 테두리 · 오른쪽 위 체크).
+    tags = ("type",)
+    _bn_dim(scene, tags)
+    mx0, mx1 = w * .12, w * .88
+    my = 46
+    p.round_rect(mx0, my, mx1, my + 286, 12, fill=BN_PANEL, tags=tags)
+    p.text(mx0 + 18, my + 22, "Choose API Key type", font=p.bold, fill=BN_INK, tags=tags)
+    p.text(mx1 - 20, my + 22, "✕", fill=BN_INK, anchor="center", tags=tags)
+    options = (("System generated", "Works using HMAC symmetric encryption. An API Key and Secret Key will be provided to you.", True),
+               ("Self-generated", "Works using Ed25519 or RSA asymmetric encryption. You create your own key pair.", False))
+    oy = my + 44
+    for title, desc, chosen in options:
+        p.rect(mx0 + 18, oy, mx1 - 18, oy + 84, fill=BN_PANEL if chosen else BN_GRAY,
+               outline=BN_GOLD if chosen else "", tags=tags)
+        if chosen:
+            p.c.create_polygon(p.p(mx1 - 40), p.p(oy), p.p(mx1 - 18), p.p(oy), p.p(mx1 - 18), p.p(oy + 22),
+                               fill=BN_GOLD, outline="", tags=tags)
+        _bn_key_icon(scene, mx0 + 32, oy + 22, tags=tags)
+        tx = mx0 + 78
+        p.text(tx, oy + 18, title, font=p.bold, fill=BN_INK, tags=tags)
+        line1 = p.fit(desc, mx1 - 30 - tx, p.small)
+        p.text(tx, oy + 40, line1, font=p.small, fill=BN_INK, tags=tags)
+        oy += 92
+    _bn_button(scene, "next1", mx0 + 18, oy + 6, mx1 - 18, oy + 40, "Next", tags=tags)
+    # Create API — 'Label API Key to proceed' 에 이름을 넣고 Next.
+    tags = ("label",)
+    _bn_dim(scene, tags)
+    lx0, lx1 = w * .2, w * .8
+    ly = 70
+    p.round_rect(lx0, ly, lx1, ly + 156, 12, fill=BN_PANEL, tags=tags)
+    p.text(lx0 + 18, ly + 24, "Create API", font=p.bold, fill=BN_INK, tags=tags)
+    p.text(lx1 - 20, ly + 24, "✕", fill=BN_INK, anchor="center", tags=tags)
+    p.text(lx0 + 18, ly + 56, "Label API Key to proceed", font=p.small, fill=BN_INK, tags=tags)
+    scene.input_box("label", lx0 + 18, ly + 68, lx1 - 18, ly + 96, placeholder="", line=BN_LINE, focus=BN_YELLOW,
+                    radius=6, tags=tags)
+    scene.canvas.itemconfigure(scene.inputs["label"]["box"], fill=BN_PANEL)
+    scene.canvas.itemconfigure(scene.inputs["label"]["typed"], fill=BN_INK)
+    mid = (lx0 + lx1) / 2
+    _bn_button(scene, "", lx0 + 18, ly + 110, mid - 6, ly + 140, "Cancel", fill="#363C45", ink=BN_INK, tags=tags)
+    _bn_button(scene, "next2", mid + 6, ly + 110, lx1 - 18, ly + 140, "Next", tags=tags)
+    scene.layers = ["type", "label"]
+    scene.height = max(page_bottom + 16, my + 300)
+    scene.sequence = [("move", "create"), ("click",), ("show", "type"), ("wait", 700), ("move", "next1"), ("click",),
+                      ("hide", "type"), ("show", "label"), ("move", "label"), ("click",), ("focus", "label"),
+                      ("type", "label", "gg_parrot"), ("move", "next2"), ("click",), ("on", "next2"), ("wait", 1400)]
+
+
+def _bn_check(scene: Scene, x, y, label, *, on, tags=()):
+    p = scene.painter
+    p.round_rect(x, y, x + 13, y + 13, 2, fill="#9AA0A8" if on else BN_PANEL, outline="" if on else BN_MUTE, tags=tags)
+    if on:
+        p.check(x, y, 13, fill=BN_PANEL, width=1.6, tags=tags)
+    p.text(x + 19, y + 7, label, font=p.small, fill=BN_INK, tags=tags)
+
+
+def _bn_key_card(scene: Scene, env: str, *, copy=True, full=True) -> float:
+    p, w = scene.painter, scene.width
+    y = _bn_chrome(scene, env) + 12
+    x0, x1 = 14, w - 14
+    bottom = y + (208 if full else 130)
+    p.round_rect(x0, y, x1, bottom, 8, fill=BN_BG, outline=BN_LINE)
+    badge = "HMAC"
+    bw = p.width(badge, p.small) + 10
+    p.round_rect(x0 + 14, y + 12, x0 + 14 + bw, y + 28, 3, fill="#12352B")
+    p.text(x0 + 19, y + 20, badge, font=p.small, fill="#2EBD85")
+    p.text(x0 + 22 + bw, y + 20, "gg_parrot", font=p.bold, fill=BN_INK)
+    p.text(x1 - 14, y + 20, "Delete", font=p.bold, fill=BN_GOLD, anchor="e")
+    cy = y + 38
+    if full:
+        p.round_rect(x0 + 14, cy, x1 - 14, cy + 26, 6, fill="#3A3420")
+        p.text(x0 + 24, cy + 13, p.fit("ⓘ  Make sure to copy your API Key and Secret Key now. They will not be shown in full "
+                                       "again after you leave this page.", x1 - x0 - 48, p.small), font=p.small, fill=BN_INK)
+        cy += 38
+    rows = (("API Key", BN_KEYS[0], "c1"), ("Secret Key", BN_KEYS[1] if full else "•" * 30, "c2"))
+    for label, value, name in rows:
+        p.text(x0 + 14, cy + 6, label, font=p.small, fill=BN_INK)
+        p.text(x0 + 14, cy + 24, value, font=p.bold, fill=BN_INK)
+        if copy:
+            cx = x0 + 22 + p.width(value, p.bold)
+            text = p.text(cx, cy + 24, "Copy", font=p.bold, fill=BN_GOLD)
+            scene.target(name, cx + p.width("Copy", p.bold) / 2, cy + 24)
+            scene.toggle(name, lambda t=text: scene.canvas.itemconfigure(t, fill="#FFFFFF"),
+                         lambda t=text: scene.canvas.itemconfigure(t, fill=BN_GOLD))
+        cy += 40
+    if full:
+        p.text(x0 + 14, cy + 4, "API restrictions", font=p.small, fill=BN_INK)
+        # 데모는 세 칸이 모두 켜진 채 만들어진다(캡처). 실거래는 IP 제한 전에는 Enable Reading 만 켤 수 있다.
+        on_trade = env == "demo"
+        col = (x1 - x0 - 28) / 3
+        for index, (label, on) in enumerate((("Enable Reading", True), ("Enable Spot & Margin & Stock Trading", on_trade),
+                                             ("Enable Futures", on_trade))):
+            _bn_check(scene, x0 + 14 + index * col, cy + 18, p.fit(label, col - 26, p.small), on=on)
+    return bottom
+
+
+def binance_dark_keys(scene: Scene, env: str):
+    bottom = _bn_key_card(scene, env)
+    scene.height = bottom + 12
+    scene.sequence = [("move", "c1"), ("click",), ("on", "c1"), ("wait", 900), ("move", "c2"), ("click",),
+                      ("on", "c2"), ("wait", 1800)]
+
+
+def binance_dark_existing(scene: Scene, env: str):
+    bottom = _bn_key_card(scene, env, copy=False, full=False)
+    scene.height = bottom + 12
+
+
 SCENES = {
     "upbit": {"ip": upbit_ip, "perm": upbit_perm, "keys": upbit_keys, "fix": upbit_fix, "existing": upbit_existing},
     "bithumb": {"ip": bithumb_ip, "perm": bithumb_perm, "keys": bithumb_keys, "fix": bithumb_fix,
                 "existing": bithumb_existing},
+    # 바이낸스는 실행 환경마다 키를 만드는 사이트가 다르다(connection.binance_env).
+    # 실거래 'Edit restrictions'(허용 IP · 주문 권한) 화면은 실제 캡처를 받은 뒤 그린다 — 짐작해 그리지 않는다.
+    "binance:testnet": {"perm": binance_testnet_perm, "keys": binance_testnet_keys, "existing": binance_testnet_existing},
+    "binance:demo": {"perm": lambda scene: binance_dark_perm(scene, "demo"),
+                     "keys": lambda scene: binance_dark_keys(scene, "demo"),
+                     "existing": lambda scene: binance_dark_existing(scene, "demo")},
+    "binance:live": {"perm": lambda scene: binance_dark_perm(scene, "live"),
+                     "keys": lambda scene: binance_dark_keys(scene, "live"),
+                     "existing": lambda scene: binance_dark_existing(scene, "live")},
 }
+
+
+def has_scene(exchange: str, kind: str) -> bool:
+    return kind in SCENES.get(exchange, {})
 
 
 # ==================================================================
@@ -620,7 +999,8 @@ class ExchangeScreen(tk.Canvas):
             scene.focus_input(action[1], True)
             self._schedule(160, self._step, index + 1)
         elif kind == "type":
-            self._type(index, action[1], self._ip_value(), 0)
+            # ("type", 칸) 은 이 PC 주소, ("type", 칸, 글자) 는 그 글자(키 이름 등)를 친다.
+            self._type(index, action[1], action[2] if len(action) > 2 else self._ip_value(), 0)
         elif kind == "wait":
             self._schedule(action[1], self._step, index + 1)
         else:

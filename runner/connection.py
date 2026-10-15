@@ -20,12 +20,35 @@ PUBLIC_IP_CAVEAT = (
 API_MANAGEMENT_PAGES = {
     "upbit": "https://www.upbit.com/mypage/open_api_management",
     "bithumb": "https://www.bithumb.com/react/api-support/management-api",
+    # 바이낸스는 실행 환경마다 키를 만드는 곳이 다르다(binance_env). 테스트넷은 첫 화면이 곧 API Keys 목록이다.
+    "binance:testnet": "https://testnet.binance.vision/",
+    "binance:demo": "https://demo.binance.com/en/my/settings/api-management",
+    "binance:live": "https://www.binance.com/en/my/settings/api-management",
 }
 # 연결 도우미의 모든 단계 맨 위에 두는 '거래소 열기' 바로가기. 정적 허용 목록 — 다른 주소는 열지 않는다.
 EXCHANGE_HOME_PAGES = {
     "upbit": "https://upbit.com/",
     "bithumb": "https://www.bithumb.com/",
+    "binance:testnet": "https://testnet.binance.vision/",
+    "binance:demo": "https://demo.binance.com/en/futures/BTCUSDT",
+    "binance:live": "https://www.binance.com/en",
 }
+# 바이낸스 실행 환경 — 키는 환경끼리 통하지 않는다(2026-10-15 조사).
+#   testnet: 현물 테스트넷 testnet.binance.vision(GitHub 로그인, 바이낸스 계정과 무관)
+#   demo:    선물 데모 demo.binance.com(바이낸스 계정 로그인 · demo-fapi). 옛 testnet.binancefuture.com 웹은 여기로 넘어간다.
+#   live:    binance.com 실거래 — IP 제한 없는 키는 'Enable Reading' 만 켤 수 있어 허용 IP 가 꼭 필요하다(2023-01-30 규칙).
+BINANCE_ENVS = ("testnet", "demo", "live")
+
+
+def binance_env(mode: str, market: str) -> str:
+    """실행 모드 · 시장으로 바이낸스 키를 만들 곳을 고른다. 실전이 아니면 연습 환경이다."""
+    if mode == "live":
+        return "live"
+    return "demo" if market == "futures" else "testnet"
+
+
+def _page_key(exchange: str, env: str) -> str:
+    return f"{exchange}:{env}" if exchange == "binance" else exchange
 PREFLIGHT_MAX_AGE = 120.0
 _FINGERPRINT_SALT = secrets.token_bytes(32)
 
@@ -34,16 +57,16 @@ class PublicIPError(ValueError):
     pass
 
 
-def api_management_url(exchange: str) -> str:
+def api_management_url(exchange: str, env: str = "") -> str:
     try:
-        return API_MANAGEMENT_PAGES[exchange]
+        return API_MANAGEMENT_PAGES[_page_key(exchange, env)]
     except (KeyError, TypeError):
         raise ValueError("이 거래소의 공식 API 관리 페이지를 확인하지 못했어요.") from None
 
 
-def exchange_home_url(exchange: str) -> str:
+def exchange_home_url(exchange: str, env: str = "") -> str:
     try:
-        return EXCHANGE_HOME_PAGES[exchange]
+        return EXCHANGE_HOME_PAGES[_page_key(exchange, env)]
     except (KeyError, TypeError):
         raise ValueError("이 거래소의 공식 홈페이지를 확인하지 못했어요.") from None
 
@@ -63,6 +86,25 @@ _ORDER_EVALUATED = frozenset({"insufficient_funds_bid", "insufficient_funds_ask"
                               "over_krw_funds_bid", "under_min_total"})
 
 
+# 바이낸스(BinanceBroker.last_error_name) — 오류 코드는 '키 · IP · 권한' 을 한 코드(-2015)로 뭉쳐 돌려주므로,
+# 실거래는 조회가 통과한 뒤 키 권한 조회(apiRestrictions)로 IP 제한 · 주문 권한을 따로 읽는다(테스트넷 · 데모에는 그 조회가 없다).
+_BINANCE_VIEWS = {
+    # 키 형식 · 서명(시크릿 짝) · 없는 키 — 키를 다시 복사하면 된다.
+    "binance_key": ({"auth": "bad", "ip": "wait", "order": "wait"}, "auth", "키 확인 필요", {}),
+    # 테스트넷 · 데모의 -2015 — IP 제한이 없는 곳이라 키(또는 다른 환경의 키)다.
+    "binance_access_test": ({"auth": "bad", "ip": "na", "order": "wait"}, "auth", "키 확인 필요", {"ip": "필요 없음"}),
+    # 실거래 -2015 — 방금 복사한 키라면 대개 허용 IP 다. 거래소가 둘을 가르지 않아 IP 쪽으로 안내하고 키도 다시 보게 한다.
+    "binance_access": ({"auth": "wait", "ip": "bad", "order": "wait"}, "ip", "허용 IP 확인 필요", {"ip": "IP 또는 키 불일치"}),
+    # 주문 권한이 꺼져 있고 IP 제한도 없다 — IP 를 걸어야 주문 권한을 켤 수 있다.
+    "binance_ip_unrestricted": ({"auth": "ok", "ip": "bad", "order": "bad"}, "ip", "허용 IP 등록 필요",
+                                {"ip": "IP 제한 없음", "order": "주문 권한 꺼짐"}),
+    "binance_no_trade": ({"auth": "ok", "ip": "ok", "order": "bad"}, "order", "주문 권한 확인 필요",
+                         {"order": "Spot & Margin & Stock Trading 꺼짐"}),
+    "binance_no_futures": ({"auth": "ok", "ip": "ok", "order": "bad"}, "order", "주문 권한 확인 필요",
+                           {"order": "Enable Futures 꺼짐"}),
+}
+
+
 def check_view(exchange: str, ok: bool, error_name: str = "") -> dict:
     """검사 결과 하나를 도우미의 세 줄(키 인증 · 허용 IP · 주문 권한)과 제목으로 옮긴다.
 
@@ -71,6 +113,20 @@ def check_view(exchange: str, ok: bool, error_name: str = "") -> dict:
     """
     name = str(error_name or "")
     order_ok = CHECK_OK if exchange == "upbit" else CHECK_NA
+    if exchange == "binance":
+        if ok and name == "binance_verified":
+            # 실거래: 키 권한 조회로 IP 제한 · 주문 권한까지 확인했다.
+            return {"auth": CHECK_OK, "ip": CHECK_OK, "order": CHECK_OK, "connected": True, "problem": "",
+                    "headline": "연결 완료", "notes": {}}
+        if ok and name == "binance_verified_open":
+            return {"auth": CHECK_OK, "ip": CHECK_NA, "order": CHECK_OK, "connected": True, "problem": "",
+                    "headline": "연결 완료", "notes": {"ip": "IP 제한 없음"}}
+        if ok and name == "binance_test_ok":
+            return {"auth": CHECK_OK, "ip": CHECK_NA, "order": CHECK_NA, "connected": True, "problem": "",
+                    "headline": "연결 완료", "notes": {"ip": "필요 없음"}}
+        if name in _BINANCE_VIEWS:
+            rows, problem, headline, notes = _BINANCE_VIEWS[name]
+            return {**rows, "connected": False, "problem": problem, "headline": headline, "notes": dict(notes)}
     if ok or name in _ORDER_EVALUATED or name.startswith("under_min_total"):
         rows = {"auth": CHECK_OK, "ip": CHECK_OK, "order": order_ok}
         return {**rows, "connected": True, "problem": "" if ok else "order_size", "headline": "연결 완료"}

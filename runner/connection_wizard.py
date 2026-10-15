@@ -15,18 +15,30 @@ from tkinter import ttk
 
 try:
     from . import assets, connection, credentials
-    from .exchange_screens import ExchangeScreen
+    from .exchange_screens import ExchangeScreen, has_scene
     from .secret_entry import secret_entry
     from .theme import FONT, UI
 except ImportError:
     import assets
     import connection
     import credentials
-    from exchange_screens import ExchangeScreen
+    from exchange_screens import ExchangeScreen, has_scene
     from secret_entry import secret_entry
     from theme import FONT, UI
 
-FIELD_LABELS = {"upbit": ("Access Key", "Secret Key"), "bithumb": ("API Key", "Secret Key")}
+FIELD_LABELS = {"upbit": ("Access Key", "Secret Key"), "bithumb": ("API Key", "Secret Key"), "binance": ("API Key", "Secret Key")}
+# '처음이에요' 의 단계 순서. 국내는 허용 IP 를 먼저 등록하고 발급한다. 바이낸스는 키를 만든 뒤에야 그 키에 IP · 권한을 건다.
+#   testnet(현물 테스트넷) · demo(선물 데모) 에는 IP 제한이 없어 두 단계로 끝난다.
+FLOWS = {"": ("ip", "perm", "keys"), "testnet": ("perm", "keys"), "demo": ("perm", "keys"), "live": ("perm", "keys", "ip")}
+TITLES = {
+    "": {"ip": "허용 IP 등록", "perm": "권한 선택 · 키 발급", "keys": "키 복사"},
+    "testnet": {"perm": "키 만들기", "keys": "키 복사"},
+    "demo": {"perm": "키 만들기", "keys": "키 복사"},
+    "live": {"perm": "키 만들기", "keys": "키 복사", "ip": "허용 IP · 주문 권한"},
+}
+NEW_HINTS = {"": "허용 IP 등록부터 차례로", "testnet": "GitHub 로그인 뒤 키 만들기부터",
+             "demo": "바이낸스 로그인 뒤 키 만들기부터", "live": "키 만들기 · 허용 IP 까지 차례로"}
+SITE_NAMES = {"testnet": "바이낸스 테스트넷", "demo": "바이낸스 데모", "live": "바이낸스"}
 ROW_LABELS = (("auth", "키 인증"), ("ip", "허용 IP"), ("order", "주문 권한"))
 WATCH_STAGES = ("perm", "keys", "existing")
 CLIPBOARD_MS = 400
@@ -38,7 +50,11 @@ class ExchangeConnectionWizard:
 
     def __init__(self, app, exchange: str, generation: int, parent, *, stage: str = "ask"):
         self.app, self.exchange, self.generation = app, exchange, generation
-        self.name = app._exchange_name(exchange)
+        # 바이낸스는 실행 모드 · 시장에 따라 키를 만드는 사이트(테스트넷 · 데모 · 실거래)가 다르다. 국내는 "".
+        self.env = app._wizard_env(exchange)
+        self.scene_key = f"{exchange}:{self.env}" if self.env else exchange
+        self.flow = FLOWS[self.env]
+        self.name = SITE_NAMES.get(self.env) or app._exchange_name(exchange)
         self.scale = float(getattr(app, "_ui_scale", 1.0) or 1.0)
         self.closed = False
         self.stage = ""
@@ -77,7 +93,8 @@ class ExchangeConnectionWizard:
         # 어느 단계에서든 거래소로 바로 갈 수 있게 머리줄에 고정한다. 폭이 모자라면 제목이 줄고 버튼은 남도록 버튼부터 둔다.
         self.api_btn = ttk.Button(head, text="API 관리 열기 ↗", style="Shortcut.TButton", command=self.app._open_exchange_api_page)
         self.api_btn.pack(side="right")
-        self.home_btn = ttk.Button(head, text=f"{self.name} 열기 ↗", style="Shortcut.TButton", command=self.app._open_exchange_home_page)
+        home = {"testnet": "테스트넷", "demo": "데모"}.get(self.env, self.name)
+        self.home_btn = ttk.Button(head, text=f"{home} 열기 ↗", style="Shortcut.TButton", command=self.app._open_exchange_home_page)
         self.home_btn.pack(side="right", padx=(0, 8))
         self._logo = assets.logo(self.card, self.exchange, 24 * self.scale)
         if self._logo is not None:
@@ -182,6 +199,10 @@ class ExchangeConnectionWizard:
         target, self._advance_on_return = self._advance_on_return, ""
         if self.stage == "result_fail":
             self._recheck()
+        elif target == "check" and self.stage == "ip":
+            # 바이낸스 실거래: 허용 IP · 주문 권한을 걸고 돌아왔다 — 키가 다 있으면 바로 검사한다.
+            if all(variable.get().strip() for variable in self.app.key_vars[self.exchange]):
+                self._start_check()
         elif target and self.stage == "ip":
             self.show(target)
 
@@ -199,13 +220,27 @@ class ExchangeConnectionWizard:
                 row=0, column=index, sticky="ew", padx=(0 if index == 0 else gap, 0))
 
     def _flow_steps(self, current: str) -> tuple:
-        """처음 발급은 3칸(허용 IP · 권한·발급 · 키 복사), 기존 키는 2칸(기존 키 넣기 · 확인)."""
+        """처음 발급은 FLOWS 의 칸 수(국내 3칸: 허용 IP · 권한·발급 · 키 복사), 기존 키는 2칸(기존 키 넣기 · 확인).
+        직접 입력 · 확인 중 · 결과는 마지막 칸에 선다."""
         if self.path == "existing":
             return {"existing": ("on", ""), "manual": ("on", ""), "checking": ("done", "on"),
                     "result_fail": ("done", "on"), "result_ok": ("done", "done")}[current]
-        return {"ip": ("on", "", ""), "perm": ("done", "on", ""), "keys": ("done", "done", "on"),
-                "manual": ("done", "done", "on"), "checking": ("done", "done", "on"),
-                "result_fail": ("done", "done", "on"), "result_ok": ("done", "done", "done")}[current]
+        count = len(self.flow)
+        if current == "result_ok":
+            return ("done",) * count
+        index = self.flow.index(current) if current in self.flow else count - 1
+        return tuple("done" if i < index else "on" if i == index else "" for i in range(count))
+
+    def _title_for(self, stage: str) -> str:
+        return TITLES[self.env][stage]
+
+    def _prev(self, stage: str) -> str:
+        index = self.flow.index(stage)
+        return self.flow[index - 1] if index > 0 else "ask"
+
+    def _next(self, stage: str) -> str:
+        index = self.flow.index(stage)
+        return self.flow[index + 1] if index + 1 < len(self.flow) else ""
 
     def _title(self, parent, text: str, *, icon: str = "") -> None:
         row = tk.Frame(parent, bg=UI["card"])
@@ -267,9 +302,11 @@ class ExchangeConnectionWizard:
             tk.Frame(parent, bg=UI["line"], height=1).pack(fill="x")
         return row, icon_widget, value
 
-    def _demo(self, parent, kind: str) -> ExchangeScreen:
+    def _demo(self, parent, kind: str):
+        if not has_scene(self.scene_key, kind):
+            return None
         small = assets.logo(parent, self.exchange, 18 * self.scale)
-        screen = ExchangeScreen(parent, self.exchange, kind, scale=self.scale, ip_text=self._ip_text, logo=small)
+        screen = ExchangeScreen(parent, self.scene_key, kind, scale=self.scale, ip_text=self._ip_text, logo=small)
         screen._logo_ref = small  # PhotoImage 는 참조가 끊기면 지워진다
         screen.pack(fill="x")
         return screen
@@ -302,7 +339,7 @@ class ExchangeConnectionWizard:
     def _screen_ask(self, body) -> None:
         self.path = ""
         ttk.Label(body, text=f"{self.name} API 키를 발급 받은 적 있나요?", style="CardHeading.TLabel").pack(anchor="w", pady=(8, 24))
-        self._option(body, "처음이에요", "허용 IP 등록부터 차례로", self._choose_new)
+        self._option(body, "처음이에요", NEW_HINTS[self.env], self._choose_new)
         self._option(body, "이미 발급 받았어요", "보관해 둔 키를 넣고 바로 검사", self._choose_existing, top=12)
         self._foot(left=("돌아가기", self.app._close_connection_wizard))
 
@@ -330,7 +367,7 @@ class ExchangeConnectionWizard:
 
     def _choose_new(self) -> None:
         self.path = "new"
-        self.show("ip")
+        self.show(self.flow[0])
 
     def _choose_existing(self) -> None:
         self.path = "existing"
@@ -342,8 +379,9 @@ class ExchangeConnectionWizard:
     def _screen_ip(self, body) -> None:
         self.path = "new"
         self._steps(body, self._flow_steps("ip"))
-        self._title(body, "허용 IP 등록")
-        self._demo(body, "ip")
+        self._title(body, self._title_for("ip"))
+        # 바이낸스 실거래: 이미 만든 키의 Edit restrictions 에서 허용 IP 와 주문 권한을 건다.
+        self._demo(body, "restrict" if self.env else "ip")
         row = tk.Frame(body, bg=UI["card"])
         row.pack(fill="x", pady=(16, 0))
         left = tk.Frame(row, bg=UI["card"])
@@ -355,7 +393,11 @@ class ExchangeConnectionWizard:
         self.ip_retry = self._button(row, "다시 확인", lambda: self.app._begin_public_ip(force=True))
         self.ip_open = self._button(body, "복사하고 API 관리 열기 ↗", self._copy_and_open, primary=True)
         self.ip_open.pack(fill="x", pady=(16, 0), ipady=max(2, round(4 * self.scale)))
-        self._foot(left=("이전", lambda: self.show("ask")), right=("다음", lambda: self.show("perm"), False, True))
+        if self.env:
+            ready = all(variable.get().strip() for variable in self.app.key_vars[self.exchange])
+            self._foot(left=self._back(self._prev("ip")), right=("검사", self._start_check, True, ready))
+        else:
+            self._foot(left=("이전", lambda: self.show("ask")), right=("다음", lambda: self.show("perm"), False, True))
         self._refresh_ip()
         # 들어설 때 주소가 없거나 만료됐으면 바로 다시 본다 — 이 단계는 주소를 쓰는 단계다.
         cache = self.app._public_ip_cache
@@ -400,25 +442,25 @@ class ExchangeConnectionWizard:
     def _copy_and_open(self) -> None:
         if self.app._copy_public_ip():
             self.app._open_exchange_api_page()
-            # 거래소에서 주소를 등록하고 돌아오면 다음 단계로 넘긴다.
-            self._advance_on_return = "perm"
+            # 거래소에서 주소를 등록하고 돌아오면 다음 단계로 넘긴다(바이낸스 실거래는 마지막 단계라 바로 검사).
+            self._advance_on_return = "check" if self.env else "perm"
 
     # --- 2 · 권한 · 발급 ----------------------------------------------
     def _screen_perm(self, body) -> None:
         self.path = "new"
         self._steps(body, self._flow_steps("perm"))
-        self._title(body, "권한 선택 · 키 발급")
+        self._title(body, self._title_for("perm"))
         self._demo(body, "perm")
-        self._foot(left=self._back("ip"), right=("다음", lambda: self.show("keys"), False, True))
+        self._foot(left=self._back(self._prev("perm")), right=("다음", lambda: self.show("keys"), False, True))
 
     # --- 3 · 키 복사 / 기존 키 ---------------------------------------
     def _screen_keys(self, body) -> None:
         self.path = "new"
         self._steps(body, self._flow_steps("keys"))
-        self._title(body, "키 복사")
+        self._title(body, self._title_for("keys"))
         self._demo(body, "keys")
         self._slots(body)
-        self._foot(left=self._back("perm"), right=("직접 입력", lambda: self.show("manual"), False, True))
+        self._foot(left=self._back(self._prev("keys")), right=("직접 입력", lambda: self.show("manual"), False, True))
 
     def _screen_existing(self, body) -> None:
         self.path = "existing"
@@ -496,6 +538,7 @@ class ExchangeConnectionWizard:
         holder = tk.Frame(body, bg=UI["card"])
         holder.pack(fill="x")
         ip = self._ip_text()
+        notes = view.get("notes") or {}
         for index, (key, label) in enumerate(ROW_LABELS):
             state = view.get(key, "wait")
             icon = {"ok": "ok", "bad": "bad", "na": "na"}.get(state, "na")
@@ -503,9 +546,10 @@ class ExchangeConnectionWizard:
             if key == "ip" and state == "ok" and ip:
                 right, color, bold = ip, UI["ink"], True
             elif state == "bad":
-                right, color = {"auth": "키가 맞지 않음", "ip": "등록된 IP와 다름", "order": "주문하기 권한 없음"}[key], UI["danger"]
+                default = {"auth": "키가 맞지 않음", "ip": "등록된 IP와 다름", "order": "주문하기 권한 없음"}[key]
+                right, color = notes.get(key, default), UI["danger"]
             elif state == "na":
-                right = "확인 불가"
+                right = notes.get(key, "확인 불가")
             elif state == "wait":
                 right = "대기"
             self._list_row(holder, icon, label, right=right, right_color=color, bold_right=bold,
@@ -535,7 +579,7 @@ class ExchangeConnectionWizard:
         acts = tk.Frame(body, bg=UI["card"])
         if problem == "ip":
             tk.Frame(body, bg=UI["card"], height=16).pack(fill="x")
-            self._demo(body, "fix")
+            self._demo(body, "restrict" if self.env else "fix")
             self._button(acts, "복사하고 API 관리 열기 ↗", self._copy_and_open_fix, primary=True).pack(side="left")
         elif problem == "auth":
             self._button(acts, "키 다시 복사", self._recopy, primary=True).pack(side="left")
@@ -619,7 +663,12 @@ class ExchangeConnectionWizard:
             except tk.TclError:
                 pass
             self._clip_seen = ""
-            self._start_check()
+            following = self._next("keys") if self.path == "new" and "keys" in self.flow else ""
+            if following:
+                # 바이낸스 실거래: 키를 받았으면 그 키에 허용 IP · 주문 권한을 걸러 간다. 검사는 그 뒤에.
+                self.show(following)
+            else:
+                self._start_check()
 
     # ==============================================================
     #  웹 가이드에 지금 단계 알리기(키 · 주소는 보내지 않는다)

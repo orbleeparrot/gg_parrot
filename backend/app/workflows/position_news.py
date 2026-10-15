@@ -394,7 +394,7 @@ def _collect_position_news_cycle(browser_budget_seconds: float | None, run: RunR
                     if expand:
                         # Browsers are an independent source, so an RSS outage
                         # still gets one chance to recover through public pages.
-                        news_payload = {"symbol": asset_symbol, "coin_name": asset_symbol,
+                        news_payload = {"symbol": asset_symbol, "coin_name": news_mod._coin_ko(asset_symbol),
                                         "items": [], "sources": [{"name": "rss", "status": "error"}]}
                         pending.append((asset_symbol, news_payload, None))
                         continue

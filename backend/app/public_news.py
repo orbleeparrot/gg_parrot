@@ -108,7 +108,7 @@ def request_refresh(scope: str) -> None:
 
 def _public_payload(scope: str, feed: dict | None) -> dict:
     market = scope == "MARKET"
-    name = news._COIN_KO.get(scope, scope)
+    name = news._coin_ko(scope)  # 고정 한글명 → 거래소 한글명 → 티커(메모리만 읽는다)
     result = news._envelope([], overview=None,
                             label="코인 시장·규제" if market else f"{name} 뉴스", query="")
     if not market:

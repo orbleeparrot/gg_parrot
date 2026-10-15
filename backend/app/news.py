@@ -199,7 +199,29 @@ def _project_aliases(asset_symbol: str) -> tuple[str, ...]:
 def _prepare_asset_identity(asset_symbol: str) -> None:
     if asset_symbol not in _COIN_ALIASES and asset_symbol not in _COIN_KO:
         from .news_asset_catalog import get_asset_name
+        from .news_exchange_names import refresh_names
         get_asset_name(asset_symbol)
+        refresh_names()
+
+
+def _exchange_names(asset_symbol: str) -> tuple[str, ...]:
+    """고정 사전(_COIN_KO · _COIN_ALIASES)에 없는 코인의 국내 거래소 한글 · 영문 이름. 메모리만 읽는다.
+
+    거래소 이름은 '스토리' · 'Movement' 처럼 평범한 낱말과 겹칠 수 있어, 기사 거르기에서는 암호화폐 맥락이
+    함께 있을 때만 인정한다(_matches_asset). 검색어 · 화면 이름에는 그대로 쓴다.
+    """
+    if asset_symbol in _COIN_KO or asset_symbol in _COIN_ALIASES:
+        return ()
+    from .news_exchange_names import peek_names
+    return tuple(name for name in dict.fromkeys(peek_names(asset_symbol)) if name)
+
+
+def _coin_ko(asset_symbol: str) -> str:
+    """화면 · 한국어 검색에 쓸 이름 — 고정 한글명, 없으면 거래소 한글명, 그것도 없으면 티커."""
+    if asset_symbol in _COIN_KO:
+        return _COIN_KO[asset_symbol]
+    korean = next((name for name in _exchange_names(asset_symbol) if re.search(r"[가-힣]", name)), "")
+    return korean or asset_symbol
 
 # These symbols are ordinary English words or common abbreviations. Matching
 # their lowercase spelling in a broad CoinDesk section feed creates false
@@ -827,11 +849,15 @@ def _matches_asset(item: dict, asset_symbol: str, coin_name: str) -> bool:
             has_ticker
             and any(term in searchable for term in _EDEN_CRYPTO_CONTEXT)
         )
+    project_aliases = _project_aliases(asset_symbol)
+    known = {str(alias).casefold() for alias in project_aliases}
+    # 거래소 목록에서 온 이름은 맥락이 있을 때만 센다(아래). 고정 별칭 · 바이낸스 카탈로그 이름은 예전 그대로.
+    exchange_only = tuple(name for name in _exchange_names(asset_symbol) if name.casefold() not in known)
     aliases = {
         asset_symbol,
         coin_name,
-        *_project_aliases(asset_symbol),
-    }
+        *project_aliases,
+    } - set(exchange_only)
     ticker = asset_symbol.casefold()
     strict_dynamic_ticker = asset_symbol == "CHIP" or asset_symbol in _DYNAMIC_CONTEXT_TICKERS or (
         asset_symbol not in _COIN_ALIASES and len(asset_symbol) <= 5
@@ -859,6 +885,14 @@ def _matches_asset(item: dict, asset_symbol: str, coin_name: str) -> bool:
                 return True
         elif normalized in searchable:
             return True
+    if exchange_only and re.search(_CRYPTO_NEWS_CONTEXT, searchable, re.IGNORECASE):
+        for name in exchange_only:
+            normalized = name.casefold()
+            if re.search(r"[a-z0-9]", normalized):
+                if re.search(rf"(?<![a-z0-9]){re.escape(normalized)}(?![a-z0-9])", searchable):
+                    return True
+            elif normalized in searchable:
+                return True
     category_values = {
         str(category).strip().casefold() for category in categories
     }
@@ -3421,7 +3455,7 @@ def _coin_news_envelope(
     if not base:
         return _envelope([], overview=None, label="코인 뉴스", query="")
     _prepare_asset_identity(base)
-    name = _COIN_KO.get(base, base)
+    name = _coin_ko(base)
     queries = _COIN_GOOGLE_QUERIES.get(base)
     if queries is None:
         if base in _COIN_KO:
@@ -3430,8 +3464,10 @@ def _coin_news_envelope(
                 (f"{name} 코인 when:7d", "ko"),
                 (f'("{project}" OR {base}) (crypto OR token OR blockchain) when:7d', "en"),
             )
-        elif _project_aliases(base):
-            project_terms = " OR ".join(f'"{alias}"' for alias in _project_aliases(base)[:3])
+        elif _project_aliases(base) or _exchange_names(base):
+            # 바이낸스 카탈로그 이름 + 국내 거래소 한글 · 영문 이름(고정 사전에 없는 코인만).
+            terms = tuple(dict.fromkeys((*_project_aliases(base), *_exchange_names(base))))
+            project_terms = " OR ".join(f'"{alias}"' for alias in terms[:4])
             queries = (
                 (f'({base} 코인 OR {base} 토큰 OR {project_terms}) when:30d', "ko"),
                 (f'({project_terms} OR "{base} token" OR ${base}) when:30d', "en"),
@@ -4105,7 +4141,7 @@ def enrich_coin_news_for_collector(symbol: str, rss_payload: dict, *, browser_bu
     if not base:
         return payload
     _prepare_asset_identity(base)
-    name = _COIN_KO.get(base, base)
+    name = _coin_ko(base)
     descriptors = _browser_news_pages(base, name)
     sources = list(payload.get("sources") or [])
     api_available = any(source.get("name") == "coindesk_news_api"
@@ -4264,7 +4300,7 @@ def _fetch_public_news_fallback(asset_symbol: str | None = None, *, on_progress=
         try:
             raw = loader()
             relevant = (_relevant_items(raw, asset_symbol=asset_symbol,
-                         coin_name=_COIN_KO.get(asset_symbol, asset_symbol), feed_source=source_name)
+                         coin_name=_coin_ko(asset_symbol), feed_source=source_name)
                         if asset_symbol else raw)
             items = _public_news_candidates(relevant, limit=_MAX_COIN_ITEMS if asset_symbol else _MAX_ITEMS,
                                             include_archive=bool(asset_symbol))
@@ -4297,8 +4333,10 @@ def _fetch_public_news_fallback(asset_symbol: str | None = None, *, on_progress=
 
 def _fetch_public_news_payload(asset_symbol: str | None = None, *, on_progress=None) -> dict:
     """Use Google first; add publisher feeds only when no current item survives."""
-    label = f"{_COIN_KO.get(asset_symbol, asset_symbol)} 뉴스" if asset_symbol else "코인 시장·규제 동향"
-    query = f"{_COIN_KO.get(asset_symbol, asset_symbol)} 코인 when:7d" if asset_symbol else _MARKET_QUERY
+    if asset_symbol:
+        _prepare_asset_identity(asset_symbol)
+    label = f"{_coin_ko(asset_symbol)} 뉴스" if asset_symbol else "코인 시장·규제 동향"
+    query = f"{_coin_ko(asset_symbol)} 코인 when:7d" if asset_symbol else _MARKET_QUERY
     try:
         if asset_symbol:
             payload = _coin_news_envelope(asset_symbol, strict=True, relevant_only=True, include_archive=True)
@@ -4333,7 +4371,7 @@ def _fetch_public_news_payload(asset_symbol: str | None = None, *, on_progress=N
     if not payload["items"] and not any(source.get("status") in {"ready", "empty", "partial"} for source in sources):
         raise NewsFetchError("모든 뉴스 RSS 소스 수집에 실패했습니다. 잠시 후 다시 시도해 주세요.", sources=sources)
     if asset_symbol:
-        payload.update(symbol=asset_symbol, coin_name=_COIN_KO.get(asset_symbol, asset_symbol),
+        payload.update(symbol=asset_symbol, coin_name=_coin_ko(asset_symbol),
                        refresh_seconds=_COIN_CACHE_SECONDS)
     return payload
 
@@ -4345,7 +4383,7 @@ def fetch_coin_news_for_collector(symbol: str, *, on_progress=None) -> dict:
     if not base:
         return _envelope([], overview=None, label="코인 뉴스", query="")
     _prepare_asset_identity(base)
-    name = _COIN_KO.get(base, base)
+    name = _coin_ko(base)
     query = f"{name} 코인 when:7d"
 
     def fetch_google():

@@ -940,15 +940,31 @@ def binance_live_restrict(scene: Scene):
     scene.target("save", sx1 - save_w / 2, y + 19)
     p.rect(x0 + 2, cy - 2, x1 - 2, view_bottom + 8, fill=BN_BG, tags=tags)
     _bn_ip_access(scene, x0, x1, cy, enabled=True, tags=tags)
-    bottom = view_bottom + 14
+    # 'Restrict access…' 를 고르면 그 아래 IP 입력 칸이 나온다(사용자 캡처 2026-10-15): 노란 테두리 · 안내 글 · 오른쪽 Confirm.
+    tags = ("ipbox",)
+    bx0, by0 = x0 + 30, view_bottom + 8
+    bx1, by1 = min(x1 - 14, bx0 + 440), view_bottom + 38
+    scene.input_box("in", bx0, by0, bx1, by1, placeholder="When entering more than one IP address, please separate them with spaces.",
+                    line=BN_GOLD, focus=BN_GOLD, radius=6, tags=tags)
+    field = scene.inputs["in"]
+    scene.canvas.itemconfigure(field["box"], fill=BN_BG)
+    scene.canvas.itemconfigure(field["typed"], fill=BN_INK)
+    scene.canvas.itemconfigure(field["hint"], fill=BN_MUTE, font=p.small,
+                               text=p.fit("When entering more than one IP address, please separate them with spaces.",
+                                          bx1 - bx0 - 90, p.small))
+    confirm_x = bx1 - 12
+    p.text(confirm_x, (by0 + by1) / 2, "Confirm", font=p.bold, fill="#5E6673", anchor="e", tags=tags)
+    scene.target("confirm", confirm_x - p.width("Confirm", p.bold) / 2, (by0 + by1) / 2)
+    scene.target("in", bx0 + min(200, (bx1 - bx0) * .45), (by0 + by1) / 2)
+    bottom = by1 + 14
     scene.canvas.coords(card, *scene.canvas.coords(p.round_rect(x0, y, x1, bottom, 8)))
     scene.canvas.delete(scene.canvas.find_all()[-1])
-    scene.layers = ["edit"]
+    scene.layers = ["edit", "ipbox"]
     scene.height = bottom + 12
-    # 허용 IP 를 넣는 칸(라디오를 고른 뒤 나타나는 화면)은 캡처를 받은 뒤 그린다.
     scene.sequence = [("move", "edit"), ("click",), ("show", "edit"), ("wait", 500), ("move", "restrict"), ("click",),
-                      ("on", "restrict"), ("wait", 700), ("move", "trade"), ("click",), ("on", "trade"),
-                      ("move", "save"), ("click",), ("wait", 1600)]
+                      ("on", "restrict"), ("show", "ipbox"), ("wait", 400), ("move", "in"), ("click",), ("focus", "in"),
+                      ("type", "in"), ("move", "confirm"), ("click",), ("wait", 500), ("move", "trade"), ("click",),
+                      ("on", "trade"), ("move", "save"), ("click",), ("wait", 1600)]
 
 
 def binance_dark_existing(scene: Scene, env: str):
@@ -961,7 +977,7 @@ SCENES = {
     "bithumb": {"ip": bithumb_ip, "perm": bithumb_perm, "keys": bithumb_keys, "fix": bithumb_fix,
                 "existing": bithumb_existing},
     # 바이낸스는 실행 환경마다 키를 만드는 사이트가 다르다(connection.binance_env).
-    # 실거래 'Edit restrictions' 는 캡처대로 그렸다. 'Restrict access…' 를 고른 뒤 나오는 IP 입력 칸은 캡처를 받은 뒤 그린다.
+    # 실거래 'Edit restrictions' 와 'Restrict access…' 뒤 IP 입력 칸은 사용자 캡처(2026-10-15)대로 그렸다.
     "binance:testnet": {"perm": binance_testnet_perm, "keys": binance_testnet_keys, "existing": binance_testnet_existing},
     "binance:demo": {"perm": lambda scene: binance_dark_perm(scene, "demo"),
                      "keys": lambda scene: binance_dark_keys(scene, "demo"),

@@ -503,7 +503,7 @@ class RunSession(SQLModel, table=True):
     started_at: str
     last_heartbeat_at: str = ""
     stopped_at: Optional[str] = None
-    # 사용자가 '보관'한 종료 기록 — 30건·30일 자동 정리에서 빠진다(계정당 10건까지, runner.PIN_LIMIT).
+    # 사용자가 '보관'한 종료 기록 — 30건·30일 자동 정리에서 빠진다(계정당 runner.PIN_LIMIT 건까지 — 기본 10, 파일럿 100).
     pinned: bool = False
     # 시작 요청에 실린 실행기 버전. v6 이하 exe 는 보내지 않아 빈 문자열로 남는다.
     runner_version: str = ""

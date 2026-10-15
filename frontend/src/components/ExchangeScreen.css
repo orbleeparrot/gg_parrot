@@ -206,6 +206,12 @@
 .xs-bncard.on .xs-bnradio i { border-color: #fff; }
 .xs-bncard.on .xs-bnradio i::after { background: #fff; }
 .xs-bncard:has(.xs-bnradio.on) .xs-bnradio.is-first i::after { display: none; }
+.xs-bnipin { display: none; align-items: center; gap: 10px; max-width: 440px; height: 30px; margin: 4px 0 0 21px; padding: 0 12px;
+  border: 1px solid #f0b90b; border-radius: 6px; }
+.xs-bnipin.on { display: flex; }
+.xs-bnipfield { flex: 1; min-width: 0; display: flex; align-items: center; }
+.xs-bnipfield .xs-ph { color: #848e9c; font-size: 11px; }
+.xs-bnconfirm { flex: none; color: #5e6673; font-weight: 700; }
 
 @media (prefers-reduced-motion: reduce) {
   .xs-cur { display: none; }

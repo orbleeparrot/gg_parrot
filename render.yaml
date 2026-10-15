@@ -63,13 +63,16 @@ services:
       - key: BINANCE_API_BASE
         value: "https://data-api.binance.vision"
       - key: RUNNER_DOWNLOAD_URL
-        value: "https://github.com/orbleeparrot/gg_parrot/releases/download/runner-v19/ggparrot-runner.exe"
+        value: "https://github.com/orbleeparrot/gg_parrot/releases/download/runner-v20/ggparrot-runner.exe"
       - key: RUNNER_EXE_VERSION
-        value: "19"
+        value: "20"
       - key: RUNNER_SUPPORTS_LAUNCH
         value: "true"
       - key: RUNNER_MIN_VERSION
         value: "6"
+      # 내 에이전트 종료 기록 '보관' 상한 — 2026-10-15 파일럿 테스트 동안만 100(기본 10). 파일럿이 끝나면 이 두 줄을 지운다.
+      - key: RUNNER_PIN_LIMIT
+        value: "100"
       # 대시보드에서 실제 값을 입력합니다. 비밀값은 Blueprint에 커밋하지 않습니다.
       # DATABASE_URL = 트랜잭션 모드 풀러(…pooler.supabase.com:6543), DATABASE_SESSION_URL = 같은 주소의 세션 모드(:5432) —
       # LISTEN 연결 하나만 세션 모드를 쓴다. 세션 주소를 비우고 DATABASE_URL 이 :6543 이면 LISTEN 은 건너뛰고 폴링만 남는다.

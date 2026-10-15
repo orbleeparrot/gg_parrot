@@ -267,13 +267,20 @@ function BnRestrictions({ env }) {
     </>
   );
 }
-function BnIpAccess() {
+function BnIpAccess({ withInput = false }) {
   return (
     <div className="xs-bnip">
       <b>IP access restrictions</b>
       <span className="xs-bnradio is-first"><i /><span>Unrestricted (Less Secure)</span><em>This API Key allows access from any IP address. This is not recommended.</em></span>
       <em className="xs-bnwarn">To protect the safety of your funds, if the IP is unrestricted and any permission other than Reading is enabled, this API key will be deleted.</em>
       <span className="xs-bnradio" data-t="restrict"><i /><span>Restrict access to trusted IPs only (Recommended)</span></span>
+      {/* 'Restrict access…' 를 고르면 나오는 IP 입력 칸(사용자 캡처 2026-10-15) — 노란 테두리 · 안내 글 · 오른쪽 Confirm. */}
+      {withInput ? (
+        <span className="xs-bnipin" data-t="ipbox">
+          <span className="xs-bnipfield" data-field=""><span className="xs-ph">When entering more than one IP address, please separate them with spaces.</span><span className="xs-typed" /></span>
+          <span className="xs-bnconfirm" data-t="confirm">Confirm</span>
+        </span>
+      ) : null}
     </div>
   );
 }
@@ -334,7 +341,7 @@ function DarkScene({ env, kind }) {
       <div className="xs-bncard" data-t="card">
         <BnHead env={env} edit />
         <BnRestrictions env={env} />
-        <BnIpAccess />
+        <BnIpAccess withInput />
       </div>
     </>
   );
@@ -372,7 +379,9 @@ const BN_LIVE_SEQ = {
   perm: BN_PERM_SEQ,
   keys: UPBIT_SEQ.keys,
   restrict: [["move", '[data-t="edit"]'], ["click"], ["on", '[data-t="card"]'], ["wait", 500], ["move", '[data-t="restrict"]'], ["click"],
-    ["on", '[data-t="restrict"]'], ["wait", 700], ["move", '[data-t="trade"]'], ["click"], ["on", '[data-t="trade"]'], ["move", '[data-t="save"]'],
+    ["on", '[data-t="restrict"]'], ["on", '[data-t="ipbox"]'], ["wait", 400], ["move", '[data-t="ipbox"] [data-field]'], ["click"],
+    ["focus", '[data-t="ipbox"] [data-field]'], ["type", '[data-t="ipbox"] [data-field]'], ["move", '[data-t="confirm"]'], ["click"],
+    ["wait", 500], ["move", '[data-t="trade"]'], ["click"], ["on", '[data-t="trade"]'], ["move", '[data-t="save"]'],
     ["click"], ["wait", 1600]],
 };
 export const SCREEN_SEQUENCES = { upbit: UPBIT_SEQ, bithumb: BITHUMB_SEQ, "binance:testnet": TN_SEQ, "binance:demo": BN_DEMO_SEQ, "binance:live": BN_LIVE_SEQ };

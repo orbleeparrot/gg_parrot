@@ -17,11 +17,11 @@ class ProtocolInstallPathTests(unittest.TestCase):
         local_app_data = Path("C:/Users/test/AppData/Local")
         target = protocol_install_target(str(local_app_data))
 
-        self.assertEqual(RUNNER_VERSION, "18")
-        self.assertEqual(RUNNER_RELEASE, "runner-v18")
+        self.assertEqual(RUNNER_VERSION, "19")
+        self.assertEqual(RUNNER_RELEASE, "runner-v19")
         self.assertEqual(
             target,
-            local_app_data / "GGParrot" / "runner-v18" / "ggparrot-runner.exe",
+            local_app_data / "GGParrot" / "runner-v19" / "ggparrot-runner.exe",
         )
         self.assertNotEqual(target, local_app_data / "GGParrot" / "runner-v12" / "ggparrot-runner.exe")
         self.assertNotEqual(target, local_app_data / "GGParrot" / "runner-v10" / "ggparrot-runner.exe")

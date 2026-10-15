@@ -28,16 +28,19 @@ PATHS = ("", "new", "existing")
 CHECK_STATES = ("ok", "bad", "wait", "na")
 PROBLEMS = ("", "ip", "auth", "order", "order_size", "network", "other")
 EXCHANGES = ("binance", "upbit", "bithumb")
+ENVS = ("", "testnet", "demo", "live")  # 바이낸스 도우미가 안내하는 사이트(v19+). 국내는 "" — 보내지 않는다.
 PROGRESS_PATH = "/api/runner/launch-tickets/{launch_id}/progress"
 # 웹 연결 하나에 대해 보고하는 최대 시간. 그 뒤로는 가이드 화면도 이미 닫혔다고 본다.
 REPORT_WINDOW_SECONDS = 2 * 60 * 60
 
 
 def progress_payload(stage: str, exchange: str, *, path: str = "", slots=None, checks=None,
-                     problem: str = "", connected: bool = False) -> dict:
+                     problem: str = "", connected: bool = False, env: str = "") -> dict:
     """서버가 받는 모양 그대로 만든다. 모르는 값은 보내지 않고 ValueError — 호출 쪽 버그를 숨기지 않는다."""
-    if stage not in STAGES or exchange not in EXCHANGES or path not in PATHS or problem not in PROBLEMS:
+    if stage not in STAGES or exchange not in EXCHANGES or path not in PATHS or problem not in PROBLEMS or env not in ENVS:
         raise ValueError("unknown progress field")
+    if env and exchange != "binance":
+        raise ValueError("env is binance-only")
     slots = slots or {}
     checks = checks or {}
     payload = {
@@ -49,6 +52,9 @@ def progress_payload(stage: str, exchange: str, *, path: str = "", slots=None, c
         "problem": problem,
         "connected": bool(connected),
     }
+    if env:
+        # 빈 값은 싣지 않는다 — env 를 모르는 옛 서버(extra=forbid)에도 국내 보고가 그대로 통한다.
+        payload["env"] = env
     for row in ("auth", "ip", "order"):
         value = checks.get(row, "wait")
         if value not in CHECK_STATES:

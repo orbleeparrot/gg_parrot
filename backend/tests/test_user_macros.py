@@ -157,3 +157,23 @@ def test_free_leaderboard_macro_can_be_saved_inline():
     item = copied.json()["item"]
     assert item["source_type"] == "leaderboard"
     assert item["source_ref"] == str(entry_id)
+
+
+def test_file_upload_of_existing_macro_takes_the_file_name():
+    # 직접 만들기에서 받은 파일을 그대로 올리면 늘 이미 있던 행과 같은 내용이다 — 새 행 대신 이름을 파일 이름으로.
+    token = _signup()
+    first = client.post("/api/me/macros", json={"macro": _MACRO, "name": "직접 만들기 · BTCUSDT"}, headers=_auth(token)).json()
+    assert first["existed"] is False
+    plain = client.post("/api/me/macros", json={"macro": _MACRO, "name": "다른 이름"}, headers=_auth(token)).json()
+    assert plain["existed"] is True and plain["item"]["name"] == "직접 만들기 · BTCUSDT"
+
+    uploaded = client.post(
+        "/api/me/macros",
+        json={"macro": _MACRO, "name": "binance_BTCUSDT_tp-sl-reentry_long_20261014", "from_file": True},
+        headers=_auth(token),
+    ).json()
+    assert uploaded["existed"] is True
+    assert uploaded["item"]["id"] == first["item"]["id"]
+    assert uploaded["item"]["name"] == "binance_BTCUSDT_tp-sl-reentry_long_20261014"
+    items = client.get("/api/me/macros", headers=_auth(token)).json()["items"]
+    assert [row["name"] for row in items if row["id"] == first["item"]["id"]] == ["binance_BTCUSDT_tp-sl-reentry_long_20261014"]

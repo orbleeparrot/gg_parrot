@@ -149,6 +149,8 @@ TESTNET_EXCHANGES = ("binance",)
 DOMESTIC_EXCHANGES = tuple(brokers.DOMESTIC_LABELS)
 # 이 실행기가 주문을 낼 수 있는 거래소 전부. 자격증명 파일이 칸을 가진 목록과 같아야 한다.
 KNOWN_EXCHANGES = ("binance",) + DOMESTIC_EXCHANGES
+# 연결 도우미가 있는 거래소. 바이낸스는 v19 부터(테스트넷 · 데모 · 실거래 키를 각 사이트 화면으로 안내).
+WIZARD_EXCHANGES = DOMESTIC_EXCHANGES + ("binance",)
 EXCHANGE_LABELS = {"binance": "바이낸스", **brokers.DOMESTIC_LABELS}
 
 
@@ -1223,8 +1225,13 @@ class BotThread(threading.Thread):
                                 return {}
                             return super().ping()
                     client_class = ConnectionCheckClient
+            network = {"testnet": self.testnet}
+            if self.testnet and self.market == "futures" and "demo" in inspect.signature(Client.__init__).parameters:
+                # 선물 연습 키는 demo.binance.com 에서만 만든다 — 공식 주소 demo-fapi 로 보낸다(2026-10-15).
+                # 옛 testnet.binancefuture.com 도 같은 시스템이지만 문서에서 빠졌다. demo 를 모르는 옛 SDK 는 예전 주소.
+                network = {"testnet": False, "demo": True}
             return brokers.BinanceBroker(
-                client_class(pair["api_key"], pair["api_secret"], testnet=self.testnet, **options),
+                client_class(pair["api_key"], pair["api_secret"], **network, **options),
                 market=self.market, symbol=self.symbol, side=self.side,
                 testnet=self.testnet, leverage=self.leverage, log=self.log)
         return brokers.DomesticBroker(pair["api_key"], pair["api_secret"],
@@ -1432,8 +1439,8 @@ class BotThread(threading.Thread):
         사용자에게는 같은 사정이고, 멈출지 말지의 기준도 같다."""
         self.log(f"[오류] 주문 전 확인 실패 — {reason}")
         if self.exchange == "binance" and ("-2015" in reason or "-2014" in reason or "키" in reason):
-            where = ("선물 testnet(binancefuture.com)" if self.market == "futures"
-                     else "현물 testnet(binance.vision)") if self.testnet else "메인넷"
+            where = ("선물 데모(demo.binance.com)" if self.market == "futures"
+                     else "현물 테스트넷(testnet.binance.vision)") if self.testnet else "실거래(binance.com)"
             self.log(f"  → 이 매크로는 {self.market} 시장이에요. {where} 키인지, IP 제한/권한을 확인하세요.")
         if self.mode == MODE_MOCK:
             self.log("모의 모드라 주문 없이 계속합니다. 실전으로 바꾸기 전에 위 이유를 고쳐 주세요.")
@@ -2434,7 +2441,7 @@ class RunnerApp:
                 self._toggle_key_body(False)
         wizard_btn = getattr(self, "wizard_btn", None)
         if wizard_btn is not None:
-            if selected in DOMESTIC_EXCHANGES:
+            if selected in WIZARD_EXCHANGES:
                 if not wizard_btn.winfo_manager():
                     wizard_btn.pack(side="right", after=self.key_chevron)
                 wizard_btn.config(state="normal" if self.bot is None else "disabled")
@@ -2553,8 +2560,8 @@ class RunnerApp:
         self._key_check = {"fingerprint": fingerprint, "result": result, "view": view}
         if view["connected"]:
             self._after_key_connected(result)
-        elif getattr(self, "_connection_wizard", None) is None and exchange not in DOMESTIC_EXCHANGES:
-            # 바이낸스는 도우미가 없어 막힌 이유를 키 칸 아래에 보인다 — 펼쳐 둔다.
+        elif getattr(self, "_connection_wizard", None) is None and exchange not in WIZARD_EXCHANGES:
+            # 도우미가 없는 거래소는 막힌 이유를 키 칸 아래에 보인다 — 펼쳐 둔다.
             self._toggle_key_body(True)
         self._render_key_status()
         self._refresh_connection_wizard()
@@ -2606,8 +2613,8 @@ class RunnerApp:
             view, reason = check["view"], check["result"].reason
             if view["connected"]:
                 return "ok", "✓ 연결됨", UI["ok"], reason if view["problem"] == "order_size" else ""
-            if exchange in DOMESTIC_EXCHANGES:
-                # 국내는 막힌 곳을 머리줄에 바로 쓴다 — 고치는 길은 [연결 도우미]에 있다.
+            if exchange in WIZARD_EXCHANGES:
+                # 막힌 곳을 머리줄에 바로 쓴다 — 고치는 길은 [연결 도우미]에 있다.
                 return "bad", f"● {view['headline']}", UI["warn"], ""
             return "bad", "● 연결 안 됨", UI["warn"], reason
         return "unknown", "● 확인 전", UI["muted"], ""
@@ -2660,8 +2667,8 @@ class RunnerApp:
             messagebox.showwarning(APP_TITLE, "실행 중이거나 웹 연결 중에는 거래소 도우미를 열지 않습니다.")
             return
         selected = exchange_of(self.macro) if self.macro else ""
-        if selected not in DOMESTIC_EXCHANGES:
-            messagebox.showwarning(APP_TITLE, "먼저 업비트 또는 빗썸 매크로를 선택하세요. 바이낸스는 키 칸에 직접 입력해요.")
+        if selected not in WIZARD_EXCHANGES:
+            messagebox.showwarning(APP_TITLE, "먼저 매크로를 선택하세요.")
             return
         existing = getattr(self, "_connection_wizard", None)
         if existing is not None and not existing.closed:
@@ -2686,7 +2693,9 @@ class RunnerApp:
         self.start_btn.config(state="disabled")
         # Opening this user-requested wizard is the ONLY automatic IP trigger.
         # Selection/startup itself never contacts the IP service.
-        self._wizard_auto_ip_id = self.root.after(0, self._auto_public_ip_for_wizard, self._wizard_generation)
+        # 바이낸스 테스트넷 · 데모에는 허용 IP 가 없다 — 주소를 조회하지 않는다.
+        if self._wizard_env(selected) in ("", "live"):
+            self._wizard_auto_ip_id = self.root.after(0, self._auto_public_ip_for_wizard, self._wizard_generation)
 
     def _auto_public_ip_for_wizard(self, generation: int) -> None:
         self._wizard_auto_ip_id = None
@@ -2737,13 +2746,24 @@ class RunnerApp:
                 and (ip_context is None or ip_context in self._public_ip_waiters)):
             wizard.refresh()
 
+    def _wizard_env(self, exchange: str) -> str:
+        """연결 도우미가 안내할 바이낸스 사이트(testnet · demo · live). 국내는 "" — 사이트가 하나다."""
+        if exchange != "binance" or not getattr(self, "macro", None):
+            return ""
+        side = str(self.macro.get("position_side", "long")).lower()
+        try:
+            leverage = max(1, int(self.macro.get("leverage", 1) or 1))
+        except (TypeError, ValueError):
+            leverage = 1
+        return connection.binance_env(self._run_mode(), market_of(exchange, side, leverage))
+
     def _open_exchange_page(self, url_for) -> None:
         selected = exchange_of(self.macro) if self.macro else ""
         wizard = getattr(self, "_connection_wizard", None)
         if wizard is None or wizard.closed or wizard.exchange != selected:
             return
         try:
-            opened = webbrowser.open(url_for(selected), new=2)
+            opened = webbrowser.open(url_for(selected, wizard.env), new=2)
         except Exception:
             opened = False
         if not opened:
@@ -2933,7 +2953,7 @@ class RunnerApp:
                     # 키 · 허용 IP 는 통과했다 — 잔고 · 주문 금액 문제다. 연결 도우미(키 발급 안내)를 열면
                     # '연결 완료' 에 빨간 표시가 붙은 화면이 떠 무엇을 고칠지 알 수 없다. 이유를 그대로 보인다.
                     messagebox.showwarning(APP_TITLE, f"{result.reason}\n\n매매는 시작하지 않았어요.")
-                elif (start_after and exchange_of(self.macro) in DOMESTIC_EXCHANGES and getattr(self, "main_view", None) is not None
+                elif (start_after and exchange_of(self.macro) in WIZARD_EXCHANGES and getattr(self, "main_view", None) is not None
                         and getattr(self, "_connection_wizard", None) is None):
                     # 오류 창 대신 연결 도우미의 결과 화면으로 — 무엇이 막혔고 어떻게 고치는지가 거기 있다.
                     self._open_connection_wizard(stage="result_fail")
@@ -3049,8 +3069,8 @@ class RunnerApp:
         self._sync_mode_choices()
         self._sync_key_fields()
         self._invalidate_preflight()
-        # 키 칸: 바이낸스인데 키가 없으면 펼쳐 두고(도우미가 없다), 그 밖에는 접어 둔다.
-        self._toggle_key_body(exchange == "binance" and self._selected_pair() is None)
+        # 키 칸은 접어 둔다 — 키가 없으면 [연결 도우미]가 안내한다(바이낸스도 v19 부터).
+        self._toggle_key_body(exchange not in WIZARD_EXCHANGES and self._selected_pair() is None)
         self._render_key_status()
         self._schedule_key_check()
 
@@ -3253,7 +3273,8 @@ class RunnerApp:
             payload = setup_progress.progress_payload(
                 stage, exchange_of(macro), path=path, slots=slots,
                 checks={row: view.get(row, "wait") for row in ("auth", "ip", "order")},
-                problem=view.get("problem", "") if view else "", connected=bool(view.get("connected")))
+                problem=view.get("problem", "") if view else "", connected=bool(view.get("connected")),
+                env=self._wizard_env(exchange_of(macro)))
         except ValueError:
             return
         reporter.report(payload)
@@ -3365,7 +3386,7 @@ class RunnerApp:
         # 쓰는 키는 매크로의 거래소가 고른다. 다른 거래소 칸이 비어 있어도 시작을 막지 않는다.
         # 모의는 키 없이도 돌아야 하므로(주문을 보내지 않는다) 이 관문을 지나간다.
         if mode != MODE_MOCK and credential_pair(self._credential_values(), exchange) is None:
-            if exchange in DOMESTIC_EXCHANGES and getattr(self, "main_view", None) is not None:
+            if exchange in WIZARD_EXCHANGES and getattr(self, "main_view", None) is not None:
                 # 오류 창 대신 연결 도우미 — '키를 발급 받은 적 있나요?' 부터 이어서 마친다.
                 self._open_connection_wizard()
                 return

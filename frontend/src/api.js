@@ -254,10 +254,11 @@ export const api = {
     }),
   myMacros: (options = {}) => req("/api/me/macros", options),
   myMacro: (id) => req(`/api/me/macros/${id}`),
-  saveMyMacro: (macro, name = "") =>
+  // fromFile: 직접 만들기의 '매크로 업로드' — 같은 내용이 이미 있으면 서버가 그 행 이름을 파일 이름으로 바꾸고 existed 를 준다.
+  saveMyMacro: (macro, name = "", { fromFile = false } = {}) =>
     req("/api/me/macros", {
       method: "POST",
-      body: JSON.stringify({ macro, name }),
+      body: JSON.stringify(fromFile ? { macro, name, from_file: true } : { macro, name }),
     }),
   saveLeaderboardMacro: (entryId) =>
     req(`/api/me/macros/from-leaderboard/${entryId}`, { method: "POST" }),

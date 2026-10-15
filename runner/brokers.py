@@ -179,15 +179,54 @@ class BinanceBroker:
                     return False, f"{self.symbol} 심볼을 바이낸스에서 찾지 못했어요. 심볼 이름을 확인하세요."
                 minimum = self.order_rules().min_notional
         except Exception as exc:
-            # -2015 는 '키 · 허용 IP · 권한' 중 무엇인지 거래소가 가르지 않고 한 코드로 돌려준다.
-            if getattr(exc, "code", None) in (-2014, -2015):
-                self.last_error_name = "binance_access"
+            code = getattr(exc, "code", None)
+            if code in (-2014, -1022, -2008):
+                # 키 형식(-2014) · 서명=시크릿 짝(-1022) · 없는 키(-2008) — 키를 다시 복사하면 된다.
+                self.last_error_name = "binance_key"
+                return False, f"바이낸스가 키를 받아주지 않았어요({exc}). API Key · Secret Key 를 다시 복사해 넣으세요."
+            if code == -2015:
+                # -2015 는 '키 · 허용 IP · 권한' 중 무엇인지 거래소가 가르지 않고 한 코드로 돌려준다.
+                # 테스트넷 · 데모에는 IP 제한이 없으니 키(또는 다른 환경에서 만든 키)다.
+                self.last_error_name = "binance_access_test" if self.testnet else "binance_access"
                 return False, f"바이낸스가 키를 받아주지 않았어요({exc}). 키 · 허용 IP · 권한 설정을 확인하세요."
             return False, f"바이낸스 확인에 실패했어요: {exc}"
         if minimum and _positive_number(notional) < minimum:
             self.last_error_name = "under_min_total"
             return False, f"최소 주문 금액보다 적어요. 바이낸스 최소 주문 금액은 {minimum:g} 인데 이번 주문은 {_positive_number(notional):g} 입니다."
-        return True, "바이낸스 계정 확인과 주문 규격 읽기에 성공했습니다. 주문 권한은 첫 주문에서야 드러납니다"
+        if self.testnet:
+            self.last_error_name = "binance_test_ok"
+            return True, "바이낸스 계정 확인과 주문 규격 읽기에 성공했습니다. 주문 권한은 첫 주문에서야 드러납니다"
+        return self._check_live_restrictions()
+
+    def _check_live_restrictions(self) -> tuple[bool, str]:
+        """실거래 키의 IP 제한 · 주문 권한을 키 권한 조회(GET /sapi/v1/account/apiRestrictions)로 읽는다.
+
+        IP 제한이 없는 키는 바이낸스가 'Enable Reading' 만 허락한다(2023-01-30 규칙) — 조회는 통과해도 첫 주문에서 막힌다.
+        조회 자체가 안 되는 경우(옛 SDK · 일시 오류)는 막지 않고 예전처럼 '주문 권한은 첫 주문에서' 로 둔다.
+        """
+        try:
+            perms = self.raw.get_account_api_permissions()
+        except Exception:
+            self.last_error_name = ""
+            return True, "바이낸스 계정 확인과 주문 규격 읽기에 성공했습니다. 주문 권한은 첫 주문에서야 드러납니다"
+        wanted, label = (("enableFutures", "Enable Futures") if self.market == "futures"
+                         else ("enableSpotAndMarginTrading", "Enable Spot & Margin & Stock Trading"))
+        restricted = bool(perms.get("ipRestrict"))
+        if not perms.get(wanted):
+            if not restricted:
+                # 주문 권한이 꺼져 있고 IP 제한도 없다 — Default Security Controls 아래에선 IP 를 걸어야 권한을 켤 수 있다.
+                self.last_error_name = "binance_ip_unrestricted"
+                return False, f"이 키에는 허용 IP 와 주문 권한({label})이 없어요. 허용 IP 를 등록하고 주문 권한을 켜 주세요."
+            if self.market == "futures":
+                # 선물 계정을 열기 전에 만든 키에는 Enable Futures 항목 자체가 없다(실거래 키 카드 캡처 2026-10-15).
+                self.last_error_name = "binance_no_futures"
+                return False, ("이 키에 Enable Futures 가 꺼져 있어요. 키 카드에 그 항목이 없으면 선물 계정을 열기 전에 만든 키예요 — "
+                               "선물 계정을 연 뒤 키를 새로 만들어 주세요.")
+            self.last_error_name = "binance_no_trade"
+            return False, f"이 키에 주문 권한({label})이 꺼져 있어요. API Management 의 Edit restrictions 에서 켜 주세요."
+        # 주문 권한이 켜져 있으면 통과 — IP 제한 없이 켤 수 있는 계정(Default Security Controls 해제)도 있다.
+        self.last_error_name = "binance_verified" if restricted else "binance_verified_open"
+        return True, "바이낸스 키 · 허용 IP · 주문 권한을 확인했습니다" if restricted else "바이낸스 키 · 주문 권한을 확인했습니다(IP 제한 없는 키)"
 
     def _rehearse_futures_reads(self) -> float:
         """선물은 check_account · ensure_ready 를 쓰지 않는다 — 둘 다 예외를 삼켜서(잔고 조회 실패는 None,

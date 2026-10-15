@@ -645,16 +645,15 @@ class KeyStatusTests(unittest.TestCase):
         app._store_key_check(fingerprint, connection.PreflightResult(True, "통과", fingerprint))
         self.assertEqual(app._key_state()[:2], ("ok", "✓ 연결됨"))
 
-    def test_binance_failure_shows_the_reason_because_it_has_no_helper(self):
+    def test_binance_failure_shows_the_blocked_row_in_the_header(self):
         app = self.app()
         app.macro = {"exchange": "binance", "symbol": "BTCUSDT", "position_side": "long", "leverage": 1}
         app.key_vars["binance"] = (_Var("bk"), _Var("bs"))
         fingerprint = app._key_check_snapshot()[3]
         app._store_key_check(fingerprint, connection.PreflightResult(False, "바이낸스가 키를 받아주지 않았어요", fingerprint,
                                                                      error_name="binance_access"))
-        kind, text, _color, note = app._key_state()
-        self.assertEqual((kind, text), ("bad", "● 연결 안 됨"))
-        self.assertIn("바이낸스가 키를 받아주지 않았어요", note)
+        kind, text, _color, _note = app._key_state()
+        self.assertEqual((kind, text), ("bad", "● 허용 IP 확인 필요"))  # 고치는 길은 [연결 도우미]
 
     def test_binance_practice_modes_check_against_the_testnet(self):
         app = self.app()

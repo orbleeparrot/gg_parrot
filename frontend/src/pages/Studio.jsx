@@ -600,7 +600,7 @@ function AccountStudio({ scope, allowRouterMacro }) {
 
       const macro = buildMacro(importedForm);
       const name = file.name.replace(/\.ggm\.json$|\.json$/i, "") || `${macro.symbol} 매크로`;
-      const data = await api.saveMyMacro(macro, name);
+      const data = await api.saveMyMacro(macro, name, { fromFile: true });
       if (!isCurrentAccount()) return;
       const savedMacro = data?.item?.macro || macro;
 
@@ -617,8 +617,10 @@ function AccountStudio({ scope, allowRouterMacro }) {
       setShare(null);
       setMacroSource({ kind: "file", label: data?.item?.name || name });
       setError("");
-      setFileImportSuccess("내 매크로에 등록하고 조건 편집기에 불러왔어요. 백테스트로 설정을 다시 확인해 주세요.");
-      setFileImportFlash({ kind: "success", text: "등록 완료" });
+      setFileImportSuccess(data?.existed
+        ? "내 매크로에 이미 있던 매크로라 새로 만들지 않고 파일 이름으로 바꿔 불러왔어요."
+        : "내 매크로에 등록하고 조건 편집기에 불러왔어요. 백테스트로 설정을 다시 확인해 주세요.");
+      setFileImportFlash({ kind: "success", text: data?.existed ? "이미 있던 매크로" : "등록 완료" });
     } catch (reason) {
       if (!isCurrentAccount()) return;
       const message = String(reason.message || reason);

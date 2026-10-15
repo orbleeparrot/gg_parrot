@@ -217,7 +217,12 @@ class BinanceBroker:
                 # 주문 권한이 꺼져 있고 IP 제한도 없다 — Default Security Controls 아래에선 IP 를 걸어야 권한을 켤 수 있다.
                 self.last_error_name = "binance_ip_unrestricted"
                 return False, f"이 키에는 허용 IP 와 주문 권한({label})이 없어요. 허용 IP 를 등록하고 주문 권한을 켜 주세요."
-            self.last_error_name = "binance_no_futures" if self.market == "futures" else "binance_no_trade"
+            if self.market == "futures":
+                # 선물 계정을 열기 전에 만든 키에는 Enable Futures 항목 자체가 없다(실거래 키 카드 캡처 2026-10-15).
+                self.last_error_name = "binance_no_futures"
+                return False, ("이 키에 Enable Futures 가 꺼져 있어요. 키 카드에 그 항목이 없으면 선물 계정을 열기 전에 만든 키예요 — "
+                               "선물 계정을 연 뒤 키를 새로 만들어 주세요.")
+            self.last_error_name = "binance_no_trade"
             return False, f"이 키에 주문 권한({label})이 꺼져 있어요. API Management 의 Edit restrictions 에서 켜 주세요."
         # 주문 권한이 켜져 있으면 통과 — IP 제한 없이 켤 수 있는 계정(Default Security Controls 해제)도 있다.
         self.last_error_name = "binance_verified" if restricted else "binance_verified_open"

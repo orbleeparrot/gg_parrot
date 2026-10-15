@@ -584,6 +584,10 @@ class ExchangeConnectionWizard:
         elif problem == "auth":
             self._button(acts, "키 다시 복사", self._recopy, primary=True).pack(side="left")
         elif problem == "order":
+            if self.env and check.get("reason"):
+                # 바이낸스는 어느 권한을 켜야 하는지(선물은 키를 새로 만들어야 하는 경우까지) 이유에 있다.
+                ttk.Label(body, text=check["reason"], style="CardMuted.TLabel", wraplength=round(560 * self.scale),
+                          justify="left").pack(anchor="w", pady=(12, 0))
             self._button(acts, "API 관리 열기 ↗", self.app._open_exchange_api_page, primary=True).pack(side="left")
         else:
             reason = check.get("reason") or ""

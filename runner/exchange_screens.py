@@ -793,29 +793,99 @@ def binance_dark_perm(scene: Scene, env: str):
                       ("type", "label", "gg_parrot"), ("move", "next2"), ("click",), ("on", "next2"), ("wait", 1400)]
 
 
-def _bn_check(scene: Scene, x, y, label, *, on, tags=()):
+def _bn_check(scene: Scene, x, y, label, *, on, tags=(), name=""):
+    """바이낸스 권한 체크 — 켜짐은 회색 칸에 체크, 꺼짐은 어두운 칸. 이름은 점선 밑줄(설명 툴팁)."""
     p = scene.painter
-    p.round_rect(x, y, x + 13, y + 13, 2, fill="#9AA0A8" if on else BN_PANEL, outline="" if on else BN_MUTE, tags=tags)
-    if on:
-        p.check(x, y, 13, fill=BN_PANEL, width=1.6, tags=tags)
+    box = p.round_rect(x, y, x + 13, y + 13, 2, fill="#9AA0A8" if on else BN_CHECK_OFF, tags=tags)
+    mark = p.check(x, y, 13, fill=BN_PANEL, width=1.6, tags=tags)
+    if not on:
+        scene.canvas.itemconfigure(mark, state="hidden")
     p.text(x + 19, y + 7, label, font=p.small, fill=BN_INK, tags=tags)
+    if name:
+        scene.target(name, x + 6.5, y + 6.5)
+        scene.toggle(name, lambda: (scene.canvas.itemconfigure(box, fill="#9AA0A8"), scene.canvas.itemconfigure(mark, state="normal")),
+                     lambda: (scene.canvas.itemconfigure(box, fill=BN_CHECK_OFF), scene.canvas.itemconfigure(mark, state="hidden")))
+
+
+# 실거래 키 카드의 API restrictions(사용자 캡처 2026-10-15, 3열). 선물 계정을 열기 전에 만든 키에는 Enable Futures 가 없다.
+LIVE_RESTRICTIONS = ("Enable Reading", "Enable Spot & Margin & Stock Trading", "Enable Margin Loan, Repay & Transfer",
+                     "Permits Universal Transfer", "Enable Withdrawals", "Enable Alpha Withdrawals",
+                     "Enable Prediction Trading", "Enable Symbol Whitelist")
+DEMO_RESTRICTIONS = ("Enable Reading", "Enable Spot & Margin & Stock Trading", "Enable Futures")
+BN_CHECK_OFF = "#333B47"
+BN_RED = "#F6465D"
+
+
+def _bn_card_head(scene: Scene, x0, x1, y, env, *, tags=()):
+    p = scene.painter
+    badge = "HMAC"
+    bw = p.width(badge, p.small) + 10
+    p.round_rect(x0 + 14, y + 12, x0 + 14 + bw, y + 28, 3, fill="#12352B", tags=tags)
+    p.text(x0 + 19, y + 20, badge, font=p.small, fill="#2EBD85", tags=tags)
+    p.text(x0 + 22 + bw, y + 20, "gg_parrot", font=p.bold, fill=BN_INK, tags=tags)
+    p.text(x1 - 14, y + 20, "Delete", font=p.bold, fill=BN_GOLD, anchor="e", tags=tags)
+    if env == "live":
+        right = x1 - 14 - p.width("Delete", p.bold) - 16
+        p.text(right, y + 20, "Edit restrictions", font=p.bold, fill=BN_GOLD, anchor="e", tags=tags)
+        scene.target("edit", right - p.width("Edit restrictions", p.bold) / 2, y + 20)
+
+
+def _bn_restrictions(scene: Scene, x0, x1, y, env) -> float:
+    p = scene.painter
+    p.text(x0 + 14, y + 4, "API restrictions", font=p.small, fill=BN_INK)
+    labels = DEMO_RESTRICTIONS if env == "demo" else LIVE_RESTRICTIONS
+    col = (x1 - x0 - 28) / 3
+    y += 18
+    for index, label in enumerate(labels):
+        # 데모는 세 칸이 모두 켜진 채 만들어진다. 실거래는 새 키에 Enable Reading 만 켜져 있다.
+        on = env == "demo" or index == 0
+        name = "trade" if label == "Enable Spot & Margin & Stock Trading" and env == "live" else ""
+        _bn_check(scene, x0 + 14 + (index % 3) * col, y + (index // 3) * 22, p.fit(label, col - 26, p.small), on=on, name=name)
+    return y + ((len(labels) + 2) // 3) * 22
+
+
+def _bn_radio(scene: Scene, x, y, label, *, selected, enabled, tags=()):
+    p = scene.painter
+    ring = "#FFFFFF" if enabled else "#474D57"
+    p.oval(x, y - 7, x + 14, y + 7, fill=BN_BG, outline=ring, width=1.5, tags=tags)
+    dot = p.oval(x + 4, y - 3, x + 10, y + 3, fill=ring, tags=tags)
+    if not selected:
+        scene.canvas.itemconfigure(dot, state="hidden")
+    p.text(x + 22, y, label, font=p.small, fill=BN_INK if enabled else "#5E6673", tags=tags)
+    return dot
+
+
+def _bn_ip_access(scene: Scene, x0, x1, y, *, enabled, tags=()) -> float:
+    p = scene.painter
+    p.text(x0 + 14, y + 4, "IP access restrictions", font=p.bold, fill=BN_INK, tags=tags)
+    y += 24
+    first = "Unrestricted (Less Secure)"
+    dot1 = _bn_radio(scene, x0 + 14, y, first, selected=True, enabled=enabled, tags=tags)
+    warn_x = x0 + 14 + 22 + p.width(first, p.small) + 6
+    p.text(warn_x, y, p.fit("This API Key allows access from any IP address. This is not recommended.", x1 - 14 - warn_x, p.small),
+           font=p.small, fill=BN_RED, tags=tags)
+    p.text(x0 + 36, y + 16, p.fit("To protect the safety of your funds, if the IP is unrestricted and any permission other than "
+                                  "Reading is enabled, this API key will be deleted.", x1 - x0 - 50, p.small), font=p.small,
+           fill=BN_RED, tags=tags)
+    y += 40
+    dot2 = _bn_radio(scene, x0 + 14, y, "Restrict access to trusted IPs only (Recommended)", selected=False, enabled=enabled,
+                     tags=tags)
+    if enabled:
+        scene.target("restrict", x0 + 21, y)
+        scene.toggle("restrict", lambda: (scene.canvas.itemconfigure(dot1, state="hidden"), scene.canvas.itemconfigure(dot2, state="normal")),
+                     lambda: (scene.canvas.itemconfigure(dot1, state="normal"), scene.canvas.itemconfigure(dot2, state="hidden")))
+    return y + 14
 
 
 def _bn_key_card(scene: Scene, env: str, *, copy=True, full=True) -> float:
     p, w = scene.painter, scene.width
     y = _bn_chrome(scene, env) + 12
     x0, x1 = 14, w - 14
-    bottom = y + (208 if full else 130)
-    p.round_rect(x0, y, x1, bottom, 8, fill=BN_BG, outline=BN_LINE)
-    badge = "HMAC"
-    bw = p.width(badge, p.small) + 10
-    p.round_rect(x0 + 14, y + 12, x0 + 14 + bw, y + 28, 3, fill="#12352B")
-    p.text(x0 + 19, y + 20, badge, font=p.small, fill="#2EBD85")
-    p.text(x0 + 22 + bw, y + 20, "gg_parrot", font=p.bold, fill=BN_INK)
-    p.text(x1 - 14, y + 20, "Delete", font=p.bold, fill=BN_GOLD, anchor="e")
+    card = p.round_rect(x0, y, x1, y + 10, 8, fill=BN_BG, outline=BN_LINE)
+    _bn_card_head(scene, x0, x1, y, env)
     cy = y + 38
     if full:
-        p.round_rect(x0 + 14, cy, x1 - 14, cy + 26, 6, fill="#3A3420")
+        p.round_rect(x0 + 14, cy, x1 - 14, cy + 26, 6, fill="#302D22")
         p.text(x0 + 24, cy + 13, p.fit("ⓘ  Make sure to copy your API Key and Secret Key now. They will not be shown in full "
                                        "again after you leave this page.", x1 - x0 - 48, p.small), font=p.small, fill=BN_INK)
         cy += 38
@@ -831,13 +901,12 @@ def _bn_key_card(scene: Scene, env: str, *, copy=True, full=True) -> float:
                          lambda t=text: scene.canvas.itemconfigure(t, fill=BN_GOLD))
         cy += 40
     if full:
-        p.text(x0 + 14, cy + 4, "API restrictions", font=p.small, fill=BN_INK)
-        # 데모는 세 칸이 모두 켜진 채 만들어진다(캡처). 실거래는 IP 제한 전에는 Enable Reading 만 켤 수 있다.
-        on_trade = env == "demo"
-        col = (x1 - x0 - 28) / 3
-        for index, (label, on) in enumerate((("Enable Reading", True), ("Enable Spot & Margin & Stock Trading", on_trade),
-                                             ("Enable Futures", on_trade))):
-            _bn_check(scene, x0 + 14 + index * col, cy + 18, p.fit(label, col - 26, p.small), on=on)
+        cy = _bn_restrictions(scene, x0, x1, cy, env) + 6
+        if env == "live":
+            cy = _bn_ip_access(scene, x0, x1, cy, enabled=False) + 4
+    bottom = cy + 8
+    scene.canvas.coords(card, *scene.canvas.coords(p.round_rect(x0, y, x1, bottom, 8)))
+    scene.canvas.delete(scene.canvas.find_all()[-1])
     return bottom
 
 
@@ -846,6 +915,40 @@ def binance_dark_keys(scene: Scene, env: str):
     scene.height = bottom + 12
     scene.sequence = [("move", "c1"), ("click",), ("on", "c1"), ("wait", 900), ("move", "c2"), ("click",),
                       ("on", "c2"), ("wait", 1800)]
+
+
+def binance_live_restrict(scene: Scene):
+    """실거래 3단계 — 키 카드의 Edit restrictions → 'Restrict access to trusted IPs only' → 주문 권한 → Save.
+    카드 머리 · API restrictions · IP access restrictions 만 그린다(키 줄은 2단계에서 이미 복사했다)."""
+    p, w = scene.painter, scene.width
+    y = _bn_chrome(scene, "live") + 12
+    x0, x1 = 14, w - 14
+    card = p.round_rect(x0, y, x1, y + 10, 8, fill=BN_BG, outline=BN_LINE)
+    _bn_card_head(scene, x0, x1, y, "live")
+    cy = _bn_restrictions(scene, x0, x1, y + 40, "live") + 6
+    view_bottom = _bn_ip_access(scene, x0, x1, cy, enabled=False)
+    # Edit restrictions 를 누르면: 머리 오른쪽이 Save · Cancel 로 바뀌고 IP 칸이 고를 수 있게 된다.
+    tags = ("edit",)
+    p.rect(x1 - 200, y + 6, x1 - 2, y + 34, fill=BN_BG, tags=tags)
+    cancel_w = p.width("Cancel", p.small) + 20
+    save_w = p.width("Save", p.small) + 24
+    p.round_rect(x1 - 14 - cancel_w, y + 7, x1 - 14, y + 31, 4, fill=BN_CHECK_OFF, tags=tags)
+    p.text(x1 - 14 - cancel_w / 2, y + 19, "Cancel", font=p.small, fill=BN_INK, anchor="center", tags=tags)
+    sx1 = x1 - 14 - cancel_w - 8
+    p.round_rect(sx1 - save_w, y + 7, sx1, y + 31, 4, fill=BN_YELLOW, tags=tags)
+    p.text(sx1 - save_w / 2, y + 19, "Save", font=p.small, fill=INK, anchor="center", tags=tags)
+    scene.target("save", sx1 - save_w / 2, y + 19)
+    p.rect(x0 + 2, cy - 2, x1 - 2, view_bottom + 8, fill=BN_BG, tags=tags)
+    _bn_ip_access(scene, x0, x1, cy, enabled=True, tags=tags)
+    bottom = view_bottom + 14
+    scene.canvas.coords(card, *scene.canvas.coords(p.round_rect(x0, y, x1, bottom, 8)))
+    scene.canvas.delete(scene.canvas.find_all()[-1])
+    scene.layers = ["edit"]
+    scene.height = bottom + 12
+    # 허용 IP 를 넣는 칸(라디오를 고른 뒤 나타나는 화면)은 캡처를 받은 뒤 그린다.
+    scene.sequence = [("move", "edit"), ("click",), ("show", "edit"), ("wait", 500), ("move", "restrict"), ("click",),
+                      ("on", "restrict"), ("wait", 700), ("move", "trade"), ("click",), ("on", "trade"),
+                      ("move", "save"), ("click",), ("wait", 1600)]
 
 
 def binance_dark_existing(scene: Scene, env: str):
@@ -858,13 +961,14 @@ SCENES = {
     "bithumb": {"ip": bithumb_ip, "perm": bithumb_perm, "keys": bithumb_keys, "fix": bithumb_fix,
                 "existing": bithumb_existing},
     # 바이낸스는 실행 환경마다 키를 만드는 사이트가 다르다(connection.binance_env).
-    # 실거래 'Edit restrictions'(허용 IP · 주문 권한) 화면은 실제 캡처를 받은 뒤 그린다 — 짐작해 그리지 않는다.
+    # 실거래 'Edit restrictions' 는 캡처대로 그렸다. 'Restrict access…' 를 고른 뒤 나오는 IP 입력 칸은 캡처를 받은 뒤 그린다.
     "binance:testnet": {"perm": binance_testnet_perm, "keys": binance_testnet_keys, "existing": binance_testnet_existing},
     "binance:demo": {"perm": lambda scene: binance_dark_perm(scene, "demo"),
                      "keys": lambda scene: binance_dark_keys(scene, "demo"),
                      "existing": lambda scene: binance_dark_existing(scene, "demo")},
     "binance:live": {"perm": lambda scene: binance_dark_perm(scene, "live"),
                      "keys": lambda scene: binance_dark_keys(scene, "live"),
+                     "restrict": binance_live_restrict,
                      "existing": lambda scene: binance_dark_existing(scene, "live")},
 }
 

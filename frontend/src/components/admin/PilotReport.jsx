@@ -130,7 +130,7 @@ function AccountBlock({ account: a }) {
     <section className="pilot-acct" id={`pilot-u${a.user_id}`}>
       <h4>
         <span>{a.name}</span>
-        <span className={`pilot-tot ${traded ? pilotTone(a.net) : "is-zero"}`}>{traded ? pilotWon(a.net) : "체결 없음"}</span>
+        <span className={traded ? pilotTone(a.net) : "is-zero"}>{traded ? pilotWon(a.net) : "체결 없음"}</span>
       </h4>
       <p className="pilot-meta">
         <span className="pilot-nw">{a.email}</span>

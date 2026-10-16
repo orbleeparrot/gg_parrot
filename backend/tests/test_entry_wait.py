@@ -39,7 +39,7 @@ def test_breakout_target_is_open_plus_k_times_previous_range():
     macro = {"rule_type": "I", "candle_interval": "1h", "symbol": "QNTUSDT", "params": {"k": 0.5}}
     m = entry_wait.compute(macro, candles=candles, last_price=101.0, started_ms=T0 + 7 * H, now_ms=T0 + 10 * H + H // 2)
     assert m["sentence"] == "가격이 102.00 위로 올라가면 사요."
-    assert m["distance"] == "지금 101.00 · +1.0% 더 오르면"
+    assert m["distance"] == "지금 101.00 · +1.0% 더 오르면" and m["gap"] == "+1.0%"
     assert m["buy_line"]["price"] == 102.0
     assert m["next_check_ms"] == T0 + 11 * H
     assert m["checks"] == 3 and m["last_check_ms"] == T0 + 10 * H
@@ -53,6 +53,7 @@ def test_rsi_uses_engine_state_and_threshold_distance():
     assert m["sentence"] == "RSI(7)가 33 아래로 내려가면 사요."
     assert m["distance"].startswith("지금 RSI ") and m["distance"].endswith("더 내려가면")
     assert m["meter"]["from"]["value"] == "75" and m["meter"]["to"]["value"] == "33"
+    assert m["gap"] == "RSI " + m["meter"]["now"]
 
 
 def test_bollinger_and_ma_cross_and_band_mirrors():
@@ -64,10 +65,13 @@ def test_bollinger_and_ma_cross_and_band_mirrors():
     j = entry_wait.compute({"rule_type": "J", "candle_interval": "1h", "params": {"fast_period": 5, "slow_period": 20}},
                            candles=_bars(down), last_price=down[-1])
     assert j["sentence"] == "5선이 20선 위로 올라가면 사요." and j["distance"].startswith("두 선 간격 ")
+    assert j["gap"].startswith("간격 ") and j["gap"].endswith("%")
     b = entry_wait.compute({"rule_type": "B", "symbol": "KRW-WAL", "params": {"buy_price": 60, "sell_price": 70}},
                            candles=[], last_price=62, symbol="KRW-WAL")
     assert b["sentence"] == "가격이 60 이하로 내려오면 사요." and b["distance"] == "지금 62 · −3.2% 더 내려오면"
-    assert b["realtime"] and b["next_check_ms"] is None
+    assert b["realtime"] and b["next_check_ms"] is None and b["gap"] == "−3.2%"
+    hit = entry_wait.compute({"rule_type": "B", "params": {"buy_price": 60, "sell_price": 70}}, candles=[], last_price=59.5, symbol="KRW-WAL")
+    assert hit["reached"] and hit["gap"] == "곧 사요"
 
 
 def test_dip_entry_reads_only_server_target():

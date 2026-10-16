@@ -212,12 +212,13 @@ def compute(macro: dict, *, candles: list[dict], last_price: Optional[float] = N
         series = _with_confirm(series, confirm)
     model = {
         "rule": rule, "interval": interval, "interval_label": INTERVAL_LABEL.get(interval, interval), "realtime": realtime,
-        "sentence": "", "distance": "", "reached": False, "meter": None, "buy_line": None,
+        "sentence": "", "distance": "", "gap": "", "reached": False, "meter": None, "buy_line": None,
         "next_check_ms": next_check, "checks": None if realtime else len(checked),
         "last_check_ms": (checked[-1]["t"] + step) if checked else None,
         "typical": None if rule == "E" else typical_wait(series, step), "log": [],
     }
 
+    soon = "곧 들어가요" if short else "곧 사요"  # 실행기 목록 칸에 들어가는 짧은 거리(gap)
     if rule == "I":
         bar = forming or last_closed
         prev = last_closed if forming else (closed[-2] if len(closed) > 1 else None)
@@ -231,6 +232,7 @@ def compute(macro: dict, *, candles: list[dict], last_price: Optional[float] = N
         model.update(
             sentence=f"가격이 {fp(target)} 위로 올라가면 사요.",
             distance="사는 선을 넘었어요 · 이 봉이 마감되면 사요" if reached else f"지금 {fp(price)} · {_pct(price, target)} 더 오르면",
+            gap=soon if reached else _pct(price, target),
             reached=bool(reached),
             meter={"from": {"label": "이 봉 시가", "value": fp(bar["o"])}, "to": {"label": "사는 선", "value": fp(target)},
                    "now": fp(price), "progress": _clamp01((price - bar["o"]) / (target - bar["o"])) if target != bar["o"] else 0.0},
@@ -255,6 +257,7 @@ def compute(macro: dict, *, candles: list[dict], last_price: Optional[float] = N
             distance=("RSI를 계산하고 있어요" if now_rsi is None else
                       f"지금 RSI {now_rsi:.1f} · 조건이 맞았어요, 봉이 마감되면 사요" if reached else
                       f"지금 RSI {now_rsi:.1f} · {abs(now_rsi - th):.1f} 더 {'오르면' if short else '내려가면'}"),
+            gap="" if now_rsi is None else soon if reached else f"RSI {now_rsi:.1f}",
             reached=bool(reached),
             meter=None if now_rsi is None else {
                 "from": {"label": "청산 기준", "value": f"{(entry if short else exit_):g}"}, "to": {"label": "사는 선", "value": f"{th:g}"},
@@ -280,6 +283,7 @@ def compute(macro: dict, *, candles: list[dict], last_price: Optional[float] = N
             sentence=f"봉 마감가가 {name} 밴드 {fp(target)} {'위' if use_upper else '아래'}면 {verb}.",
             distance=(f"지금 {fp(price)} · 밴드를 넘었어요, 봉이 마감되면 {verb}" if reached
                       else f"지금 {fp(price)} · {_pct(price, target)} 더 {'오르면' if use_upper else '내려가면'}"),
+            gap=soon if reached else _pct(price, target),
             reached=reached,
             meter={"from": {"label": "중앙선", "value": fp(mid)}, "to": {"label": f"{name} 밴드", "value": fp(target)}, "now": fp(price),
                    "progress": _clamp01((price - mid) / (target - mid)) if target != mid else 0.0},
@@ -306,6 +310,7 @@ def compute(macro: dict, *, candles: list[dict], last_price: Optional[float] = N
             sentence=f"{fpd}선이 {spd}선 {'아래로 내려가면 팔아서 들어가요' if short else '위로 올라가면 사요'}.",
             distance=(f"{fpd}선이 {'아래' if short else '위'}에 있어요 · {max(1, confirm - streak)}봉 더 이어지면 사요" if reached
                       else f"두 선 간격 {abs(gap) * 100:.2f}%" + ("" if narrowing is None else " · 좁혀지는 중" if narrowing else " · 벌어지는 중")),
+            gap=soon if reached else f"간격 {abs(gap) * 100:.2f}%",
             reached=reached,
         )
     elif rule == "B":
@@ -317,6 +322,7 @@ def compute(macro: dict, *, candles: list[dict], last_price: Optional[float] = N
         model.update(
             sentence=f"가격이 {fp(target)} {'이상으로 오르면 팔아서 들어가요' if short else '이하로 내려오면 사요'}.",
             distance="가격이 닿았어요 · 곧 사요" if reached else f"지금 {fp(price)} · {_pct(price, target)} 더 {'오르면' if short else '내려오면'}",
+            gap=soon if reached else _pct(price, target),
             reached=reached,
             meter=None if other is None or other == target else {
                 "from": {"label": "청산가" if short else "매도가", "value": fp(other)}, "to": {"label": "사는 가격", "value": fp(target)},
@@ -335,6 +341,7 @@ def compute(macro: dict, *, candles: list[dict], last_price: Optional[float] = N
         model.update(
             sentence=f"가격이 {fp(target)}까지 내려오면 사요.",
             distance="가격이 닿았어요 · 봉이 마감되면 사요" if reached else f"지금 {fp(price)} · {_pct(price, target)} 더 내려오면",
+            gap=soon if reached else _pct(price, target),
             reached=reached,
             meter={"from": {"label": "기준가", "value": fp(ref)}, "to": {"label": "사는 가격", "value": fp(target)}, "now": fp(price),
                    "progress": _clamp01((ref - price) / (ref - target)) if ref != target else 0.0},

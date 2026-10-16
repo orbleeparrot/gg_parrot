@@ -25,6 +25,6 @@ export function accessFor(module, entitlements) {
   return entitlements?.features?.[module.entitlement]?.allowed ? "enabled" : "locked";
 }
 
-export function buildAgentEvents(context) {
-  return AGENT_MODULES.flatMap((module) => module.buildEvents?.(context) || []);
+export function buildAgentEvents(context, modules = AGENT_MODULES) {
+  return modules.flatMap((module) => module.buildEvents?.(context) || []);
 }

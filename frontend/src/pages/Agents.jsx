@@ -5,11 +5,9 @@ import { useAuth, useAccountGuard } from "../lib/auth.js";
 import { RULE_TYPES } from "../lib/macro.js";
 import { computeSessionOverlay } from "../lib/indicators.js";
 import { practiceModeLabel } from "../lib/exchanges.js";
-import { usePositionNewsFeature } from "../features/agents/positionNews/index.js";
 import { useWhaleActivity } from "../features/agents/useWhaleActivity.js";
-import { useRunnerLog } from "../features/agents/useRunnerLog.js";
+import { useAgentCommentary } from "../features/agents/useAgentCommentary.js";
 import { useSessionLogs } from "../features/agents/useSessionLogs.js";
-import { useNewsReceipt } from "../features/agents/useNewsReceipt.js";
 import { positiveEventId } from "../features/agents/activityEvidence.js";
 import AgentActivityStream from "../components/AgentActivityStream.jsx";
 import AgentSessionLog from "../components/AgentSessionLog.jsx";
@@ -25,7 +23,7 @@ import AppToast from "../components/AppToast.jsx";
 import { describeDeleteConfirm, describeStopConfirm } from "../features/agents/runOutcome.js";
 import { AgentHistoryList, AgentIdle, AgentViewTabs } from "../components/AgentHistory.jsx";
 import { runPeriodLabel } from "../features/agents/history.js";
-import { activeSessionChart, newlyStartedSession, requireSessionSnapshot } from "../features/agents/sessionSnapshot.js";
+import { newlyStartedSession, requireSessionSnapshot } from "../features/agents/sessionSnapshot.js";
 
 const SESSION_STREAM_PROTOCOL = "ggparrot.sessions.v1";
 const SESSION_RECONNECT_MAX_MS = 30000;
@@ -147,7 +145,6 @@ function AccountAgents() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [sessions, setSessions] = useState(null);
-  const [chartSnapshot, setChartSnapshot] = useState(null);
   // 불러오기 오류(화면 위 띠로 띄우지 않는다 — 다음 갱신이 스스로 고친다)와 버튼 행동 오류(토스트)를 나눈다.
   const [error, setError] = useState("");
   const [actionError, setActionError] = useState("");
@@ -358,18 +355,16 @@ function AccountAgents() {
     setSearchParams(next, { replace: true });
   }, [activeSessions, anchoredLogs, historySession, mode, searchParams, sessions, setSearchParams]);
 
-  const activePositionNews = usePositionNewsFeature(selected?.session_id, selected?.status === "running");
   const whaleActivity = useWhaleActivity(selected);
   const logsOpen = searchParams.get("panel") === "logs";
   const logLinkInvalid = anchoredLogs && (!logEventId || !positiveEventId(selectedId) || !selected);
   const activeLogQuery = anchoredLogs && logEventId ? { contextId: logEventId } : logQuery;
   const activeLogCategory = anchoredLogs ? "all" : logCategory;
-  const runnerLog = useRunnerLog(selected, !logsOpen);
+  // 껄무새 중계 — 서버가 만든 말풍선을 이어 받는다(뉴스 · 커뮤니티 글 · 체결 · 손실 구간도 이 안에 있다).
+  const commentary = useAgentCommentary(selected);
   const sessionLogs = useSessionLogs(selected, { enabled: logsOpen && !logLinkInvalid, category: activeLogCategory, query: activeLogQuery, paused: logsPaused });
-  const newsReceipt = useNewsReceipt(selected, activePositionNews.data);
 
   useEffect(() => {
-    setChartSnapshot(null);
     setLogCategory("all");
     setLogQuery({});
     setLogsPaused(false);
@@ -379,10 +374,9 @@ function AccountAgents() {
   const interval = macro?.candle_interval || "1d";
   const market = executionMarket(macro, selected);
   const exchange = macro?.exchange || "binance";
-  const activeChart = activeSessionChart(chartSnapshot, selected, exchange);
   const featureStates = useMemo(
-    () => ({ position_news: { ...activePositionNews, receiptLinks: newsReceipt.links }, whale_activity: whaleActivity, runner_log: runnerLog }),
-    [activePositionNews, newsReceipt.links, whaleActivity, runnerLog],
+    () => ({ whale_activity: whaleActivity }),
+    [whaleActivity],
   );
 
   // 진입을 기다리는 매크로(돌파 · RSI · 볼린저 · 이평선 · 지정가 · 눌림 진입)가 포지션 없이 돌 때의 '무엇을 · 얼마나 · 언제'.
@@ -612,7 +606,6 @@ function AccountAgents() {
                   expanded
                   minimal
                   overlay={chartOverlay}
-                  onData={setChartSnapshot}
                 />
               </div>
             </section>
@@ -624,12 +617,10 @@ function AccountAgents() {
               <AgentActivityStream
                 key={selected.session_id}
                 symbol={selected.symbol}
-                macro={macro}
                 session={selected}
-                candles={activeChart?.candles || []}
-                interval={activeChart?.interval || interval}
-                observedAt={activeChart?.serverTime || 0}
                 featureStates={featureStates}
+                commentary={commentary}
+                onCloseAndStop={() => stopSession("close_and_stop")}
                 selectedView={logsOpen ? "activity_logs" : agentFilter}
                 onSelectView={(next) => {
                   if (next !== "activity_logs") setAgentFilter(next);
@@ -638,10 +629,6 @@ function AccountAgents() {
                 activityLog={<div className="agent-session-panel">
                   {anchoredLogs && sessionLogs.state.status === "error" ? <div className="agent-receipt-error" role="alert">
                     <p>사건 #{logEventId} 원본 조회에 실패했어요. 삭제·보관 기한 또는 접근 권한을 확인해 주세요. 다른 사건으로 대체하지 않습니다.</p>
-                  </div> : null}
-                  {logsOpen && newsReceipt.state?.status === "error" ? <div className="agent-receipt-error" role="status">
-                    <p>뉴스 수신 기록을 저장하지 못했어요. 뉴스 표시와 매크로 실행은 계속됩니다.</p>
-                    <button type="button" className="btn btn-s btn-secondary" onClick={newsReceipt.retry}>기록 다시 저장</button>
                   </div> : null}
                   <AgentSessionLog session={selected} state={sessionLogs.state} category={activeLogCategory}
                     onCategoryChange={changeLogCategory} query={activeLogQuery} onQueryChange={changeLogQuery}
@@ -652,7 +639,6 @@ function AccountAgents() {
             </div>
           </div>
 
-          {activePositionNews.error ? <div className="agent-inline-error" role="status">포지션 맞춤 뉴스를 불러오지 못했어요. 다른 작업은 계속 갱신돼요.</div> : null}
         </div>
       ) : null}
 

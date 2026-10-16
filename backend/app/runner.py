@@ -36,7 +36,8 @@ from sqlmodel import Session, select
 from . import macro_signing
 from . import notifications as notifications_mod
 from . import runner_engine  # runner_engine 은 runner 를 함수 안에서 늦게 import 한다 — 순환 없음
-from .db import RunnerCommand, RunnerKey, RunnerLaunchTicket, RunSession, RunSessionEvent, User, UserMacro, get_session
+from .db import (AgentCommentaryState, AgentUtterance, RunnerCommand, RunnerKey, RunnerLaunchTicket, RunSession,
+                 RunSessionEvent, User, UserMacro, get_session)
 from .engine import Macro, RuleType
 from .exchanges import is_domestic, normalize_exchange, validate_symbol
 
@@ -65,10 +66,13 @@ EVENT_BATCH_MAX = 100
 EVENT_MESSAGE_MAX = 300
 _EVENT_KINDS = {"start", "info", "signal", "order", "fill", "error", "stop", "warn"}
 # 평가손익 알림: 마지막 알림 기준 이만큼 움직였거나(누적), 한 heartbeat 사이 이만큼 급변하면 알린다(%p).
-PNL_ALERT_STEP_PCT = 2.0
-PNL_ALERT_JUMP_PCT = 1.0
+# 평가손익 알림은 구간(±3 · 5 · 10 · 15 · 20 · 30 · 50%)을 같은 쪽으로 처음 넘을 때 한 번 — 2026-10-17 전에는
+# 2%p 이동 · 1%p 급변마다 알려, 한 포지션에서 "급락 · 평단 210 → 현재가 210" 같은 알림이 열 번 넘게 쌓였다.
+PNL_ALERT_BANDS = (3.0, 5.0, 10.0, 15.0, 20.0, 30.0, 50.0)
 # 이 종류의 실행 이벤트는 헤더 알림(에이전트)으로도 간다. start·stop 은 세션 알림이 따로 있고 info 는 로그일 뿐.
-_NOTIFY_EVENT_LABELS = {"signal": "신호", "order": "주문", "fill": "체결", "error": "오류"}
+# 종 알림은 체결과 오류만 — 신호 · 주문 단계까지 알리면 한 번 사는 데 알림이 네 개(서버 신호 · 실행기 신호 ·
+# 주문 · 체결) 쌓였다. 단계 기록은 활동 로그에 그대로 남는다.
+_NOTIFY_EVENT_LABELS = {"fill": "체결", "error": "오류"}
 
 # 서버 신호 프로토콜(v8+): 실행기는 판단하지 않고 heartbeat 응답의 명령만 실행한다.
 SIGNAL_MIN_VERSION = os.environ.get("RUNNER_SIGNAL_MIN_VERSION", "8").strip() or "8"
@@ -771,6 +775,7 @@ def start_session(user: User, payload: dict) -> dict:
     request_collection()
     from .agent_features.whale_activity.runtime import request_collection as request_whale_collection
     request_whale_collection()
+    _wake_commentary()
     return result
 
 
@@ -830,6 +835,8 @@ def heartbeat(user: User, session_id: int, snapshot: dict, *, db: Session | None
         wait_args = _entry_wait_args(row) if action == "continue" else None
         db.commit()
     notify_sessions_changed(user_id)
+    if any(isinstance(event, dict) and str(event.get("kind") or "").lower() in {"fill", "error"} for event in (events or [])):
+        _wake_commentary()  # 체결 · 오류는 껄무새 중계가 바로 말하게
     result = {"action": action, "commands": commands}
     # 진입을 기다리는 매크로가 아직 안 샀으면 '무엇을 · 얼마나 · 언제' 를 함께 보낸다(실행기 화면 · 구버전은 무시).
     # 시세(캐시)는 DB 연결을 붙잡지 않도록 커밋 뒤에 읽는다 — 그래서 필요한 값은 커밋 전에 꺼내 둔다.
@@ -843,12 +850,16 @@ def heartbeat(user: User, session_id: int, snapshot: dict, *, db: Session | None
     return result
 
 
-def _alert_pnl_move(db, row: RunSession, previous_pct: float, previously_in_position: bool) -> bool:
-    """평가손익이 크게 움직이면 에이전트 알림을 남긴다(커밋은 호출자).
+def _pnl_band(pct: float) -> float:
+    hit = max((band for band in PNL_ALERT_BANDS if abs(pct) >= band), default=0.0)
+    return math.copysign(hit, pct) if hit else 0.0
 
-    기준(``pnl_alert_pct``)은 마지막으로 알린 시점의 값이고 포지션이 새로 열리면 0 이다. 기준에서
-    ``PNL_ALERT_STEP_PCT`` 이상 움직였거나 직전 heartbeat 보다 ``PNL_ALERT_JUMP_PCT`` 이상 급변했을 때
-    한 번 알리고 기준을 옮긴다 — 경계에서 왔다 갔다 해도 같은 알림이 반복되지 않는다.
+
+def _alert_pnl_move(db, row: RunSession, previous_pct: float, previously_in_position: bool) -> bool:
+    """평가손익이 새 구간(±3 · 5 · 10 …%)에 처음 들어가면 에이전트 알림을 남긴다(커밋은 호출자).
+
+    ``pnl_alert_pct`` 에는 마지막으로 알린 구간(부호 포함)을 둔다. 같은 쪽 더 깊은 구간이거나 반대쪽 구간일 때만
+    알린다 — 구간 경계에서 왔다 갔다 해도 같은 알림이 반복되지 않는다. 포지션이 새로 열리면 0 부터 다시 센다.
     """
     if not row.in_position:
         row.pnl_alert_pct = 0.0
@@ -856,28 +867,23 @@ def _alert_pnl_move(db, row: RunSession, previous_pct: float, previously_in_posi
     if not previously_in_position:
         row.pnl_alert_pct = 0.0
     pct = float(row.unrealized_pct or 0.0)
-    moved = pct - float(row.pnl_alert_pct or 0.0)
-    jump = pct - float(previous_pct or 0.0) if previously_in_position else 0.0
-    sudden = abs(jump) >= PNL_ALERT_JUMP_PCT
-    if abs(moved) < PNL_ALERT_STEP_PCT and not sudden:
+    band = _pnl_band(pct)
+    last = float(row.pnl_alert_pct or 0.0)
+    if not band or (last and (band > 0) == (last > 0) and abs(band) <= abs(last)):
         return False
-    delta = jump if sudden else moved
-    direction = "up" if delta > 0 else "down"
-    if sudden:
-        change = f"{jump:+.2f}%p 급{'등' if jump > 0 else '락'}"
-    else:
-        change = f"마지막 알림보다 {moved:+.2f}%p {'상승' if moved > 0 else '하락'}"
-    body = f"{change} · 평단 {row.entry_price:,.2f} → 현재가 {row.last_price:,.2f}"
+    direction = "up" if band > 0 else "down"
+    quote_digits = 0 if str(row.symbol or "").upper().startswith("KRW-") else 2
+    body = (f"{'수익' if band > 0 else '손실'}이 {band:+g}%를 넘었어요 · "
+            f"평단 {row.entry_price:,.{quote_digits}f} → 현재가 {row.last_price:,.{quote_digits}f}")
     notifications_mod.notify(
         db, row.user_id, "agent", f"{row.symbol} 평가손익 {pct:+.2f}%", body, "/agents",
         session_id=row.id,
-        data={"event": "pnl", "symbol": row.symbol, "pct": round(pct, 2), "delta": round(delta, 2),
-              "direction": direction, "sudden": sudden, "entry_price": row.entry_price, "last_price": row.last_price},
-        activity={"event_name": "session.pnl_observed", "details": {"observed_value": pct,
-                  "threshold": PNL_ALERT_JUMP_PCT if sudden else PNL_ALERT_STEP_PCT,
+        data={"event": "pnl", "symbol": row.symbol, "pct": round(pct, 2), "band": band,
+              "direction": direction, "entry_price": row.entry_price, "last_price": row.last_price},
+        activity={"event_name": "session.pnl_observed", "details": {"observed_value": pct, "threshold": band,
                   "price": row.last_price, "verification": "server_observation_not_exchange_fill"}},
     )
-    row.pnl_alert_pct = pct
+    row.pnl_alert_pct = band
     return True
 
 
@@ -966,10 +972,19 @@ def mark_stopped(
     notify_sessions_changed(user.id)
     # v8+ 라면 서버 측 드라이버도 내린다(구버전·이미 없는 세션이면 runner_engine 이 무시한다).
     runner_engine.schedule_stop(session_id)
+    _wake_commentary()
     result = {"ok": True}
     if any(isinstance(event, dict) and event.get("event_key") for event in (events or [])):
         result["accepted_event_keys"] = accepted_event_keys
     return result
+
+
+def _wake_commentary() -> None:
+    try:
+        from . import agent_commentary_runtime
+        agent_commentary_runtime.request_cycle()
+    except Exception:
+        _log.debug("agent commentary wake failed", exc_info=True)
 
 
 # --- 실행 이벤트 로그 ------------------------------------------------------
@@ -1398,8 +1413,10 @@ def _delete_session_rows(db, session_ids: list[int]) -> None:
 
     if not session_ids:
         return
+    from . import agent_commentary
     db.exec(sql_delete(RunSessionEvent).where(RunSessionEvent.session_id.in_(session_ids)))
     db.exec(sql_delete(RunnerCommand).where(RunnerCommand.session_id.in_(session_ids)))
+    agent_commentary.delete_for_sessions(db, session_ids)
     db.exec(sql_delete(RunSession).where(RunSession.id.in_(session_ids)))
 
 
@@ -1488,21 +1505,23 @@ def prune_ended_sessions_batch(db, *, now: Optional[datetime] = None, limit: int
     if not targets:
         return {"deleted_sessions": 0, "deleted_events": 0, "deleted_commands": 0, "has_more": False}
 
-    counts = {}
-    for model, key in ((RunSessionEvent, "deleted_events"), (RunnerCommand, "deleted_commands")):
+    counts = {"deleted_events": 0, "deleted_commands": 0}
+    # 껄무새 중계 말풍선도 실행 기록과 같은 세는 칸(deleted_events)에 더한다 — 정리 지표의 칸을 늘리지 않는다.
+    for model, key in ((RunSessionEvent, "deleted_events"), (RunnerCommand, "deleted_commands"),
+                       (AgentUtterance, "deleted_events")):
         child_ids = list(db.exec(select(model.id).where(model.session_id.in_(targets))
                                  .order_by(model.id.asc()).limit(1000)).all())
         if child_ids:
             removed = db.exec(sql_delete(model).where(model.id.in_(child_ids)).returning(model.id)).all()
-            counts[key] = len(removed)
-        else:
-            counts[key] = 0
+            counts[key] += len(removed)
+    db.exec(sql_delete(AgentCommentaryState).where(AgentCommentaryState.session_id.in_(targets)))
     # Recheck pin/status at the actual parent DELETE, and never orphan residual
     # children. The target row lock also protects these facts on PostgreSQL.
     without_events = ~exists(select(RunSessionEvent.id).where(RunSessionEvent.session_id == RunSession.id))
     without_commands = ~exists(select(RunnerCommand.id).where(RunnerCommand.session_id == RunSession.id))
+    without_utterances = ~exists(select(AgentUtterance.id).where(AgentUtterance.session_id == RunSession.id))
     removed = db.exec(sql_delete(RunSession).where(
-        RunSession.id.in_(targets), *eligible, without_events, without_commands,
+        RunSession.id.in_(targets), *eligible, without_events, without_commands, without_utterances,
     ).returning(RunSession.id)).all()
     db.flush()
     return {"deleted_sessions": len(removed), **counts,

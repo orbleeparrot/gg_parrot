@@ -64,6 +64,8 @@ from . import public_news as public_news_mod
 from . import board as board_mod
 from . import leaderboard as leaderboard_mod
 from . import leaderboard_runtime
+from . import agent_commentary as agent_commentary_mod
+from . import agent_commentary_runtime
 from . import optimize as optimize_mod
 from . import optimize_runtime as optimize_runtime_mod
 from . import paper as paper_mod
@@ -145,6 +147,7 @@ async def lifespan(app: FastAPI):
     position_news_runtime.start()
     whale_activity_runtime.start()
     log_retention_runtime.start()
+    agent_commentary_runtime.start()
     try:
         yield
     finally:
@@ -152,7 +155,7 @@ async def lifespan(app: FastAPI):
         stopped = await asyncio.gather(
             leaderboard_runtime.stop(), public_news_mod.stop(),
             whale_activity_runtime.stop(), position_news_runtime.stop(),
-            log_retention_runtime.stop(),
+            log_retention_runtime.stop(), agent_commentary_runtime.stop(),
             return_exceptions=True,
         )
         for result in stopped:
@@ -2754,6 +2757,14 @@ def runner_session_events(
 ) -> dict:
     """세션의 실행 로그(최신순) — 실행기가 heartbeat 로 올린 신호·주문·체결·오류."""
     return runner_mod.list_events(user.id, session_id, limit=limit)
+
+
+@app.get("/api/me/runner/sessions/{session_id}/agent")
+def runner_session_agent(
+    session_id: int, after: int = 0, limit: int = 200, user: User = Depends(auth_mod.current_user)
+) -> dict:
+    """껄무새 중계 말풍선(오래된 것부터). ``after`` 보다 뒤의 것만 — 화면은 받은 마지막 id 를 넘긴다."""
+    return agent_commentary_mod.list_utterances(user.id, session_id, after=after, limit=limit)
 
 
 class RunnerPinRequest(BaseModel):

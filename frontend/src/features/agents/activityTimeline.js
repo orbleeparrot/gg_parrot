@@ -15,12 +15,13 @@ function occurredAt(value, receivedAt) {
 
 // Poll responses are observations, not chat messages. Remember incidents and
 // article/trade identities across missing or reordered responses.
-export function advanceActivityTimeline(previous, context) {
+// modules 를 주면 그 모듈들만 본다(내 에이전트 화면은 고래 동향만 — 나머지는 서버의 껄무새 중계가 맡는다).
+export function advanceActivityTimeline(previous, context, modules) {
   const state = previous?.sessionId === context.session?.session_id
     ? previous : emptyActivityTimeline(context.session?.session_id);
   const receivedAt = context.receivedAt || Date.now();
   const candidates = buildAgentEvents({ ...context, receivedAt,
-    previousSession: state.session, alertConditions: state.conditions });
+    previousSession: state.session, alertConditions: state.conditions }, modules);
   const conditions = {};
   const seen = { ...state.seen };
   let events = state.events;

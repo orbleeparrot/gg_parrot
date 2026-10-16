@@ -587,6 +587,36 @@ class RunnerCommand(SQLModel, table=True):
     rollback_state: str = ""
 
 
+class AgentUtterance(SQLModel, table=True):
+    """껄무새 중계 말풍선 한 개(agent_commentary 가 만든다).
+
+    실행 기록(RunSessionEvent)과 따로 둔다 — 기록 상한(EVENT_CAP)이 오래된 말풍선을 밀어내거나, 말풍선이
+    활동 로그에 원본처럼 섞이지 않게. ``say_key`` 가 같은 일(체결 · 손실 구간 · 글 하나)을 한 번만 남긴다.
+    """
+
+    __table_args__ = (
+        Index("ux_agentutterance_session_key", "session_id", "say_key", unique=True),
+        Index("ix_agentutterance_session_id_id", "session_id", "id"),
+    )
+    id: Optional[int] = Field(default=None, primary_key=True)
+    session_id: int = Field(index=True)
+    user_id: int = Field(index=True)
+    say_key: str
+    kind: str = ""
+    at_ms: int = Field(default=0, sa_type=BigInteger)  # 일이 일어난 시각(체결 · 글 게시 등)
+    created_ms: int = Field(default=0, sa_type=BigInteger)
+    payload_json: str = ""
+
+
+class AgentCommentaryState(SQLModel, table=True):
+    """세션별 중계 상태(읽은 위치 · 이미 말한 손실 구간 · 변동성 단계 등). 세션이 지워지면 같이 지운다."""
+
+    # 세션 번호를 그대로 쓴다 — 자동 번호(시퀀스)를 만들지 않는다.
+    session_id: int = Field(primary_key=True, sa_column_kwargs={"autoincrement": False})
+    state_json: str = "{}"
+    updated_ms: int = Field(default=0, sa_type=BigInteger)
+
+
 class TickerNewsSnapshot(SQLModel, table=True):
     """One immutable, position-independent news analysis for an asset ticker.
 
@@ -1567,6 +1597,7 @@ _PG_PRIVATE_CACHE_TABLES = (
     "boardimage", "boardpostvote", "boardreport", "browsernewspagecache",
     "visit", "macroeventdaily", "collectorrun", "collectorsourcedaily", "apiusagedaily",
     "devnote", "newsheadlinearchive", "clienterror",
+    "agentutterance", "agentcommentarystate",
 )
 _PG_MIGRATION_LOCK = 0x6767706172726F74  # Stable across web/worker processes and deployments.
 _PG_MIGRATION_ATTEMPTS = 3

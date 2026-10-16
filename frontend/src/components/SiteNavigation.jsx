@@ -130,10 +130,10 @@ function NavigationContents({ onNavigate, tabIndex, mobile = false }) {
         {mobile ? (
           <div className="site-drawer-tools">
             <NavLink to="/runner/install" onClick={onNavigate} tabIndex={tabIndex} className="site-drawer-tool">
-              <DownloadIcon /><span>실행기 설치</span><small>Windows PC</small>
+              <DownloadIcon /><span>실행기 설치</span><small>Windows · Mac</small>
             </NavLink>
             <NavLink to="/mypage/settings?tab=security" onClick={onNavigate} tabIndex={tabIndex} className="site-drawer-tool">
-              <KeyIcon /><span>회원 키</span><small>실행기 ④번 칸</small>
+              <KeyIcon /><span>회원 키</span><small>실행기 계정 연결</small>
             </NavLink>
             <NavLink to="/guide" onClick={onNavigate} tabIndex={tabIndex} className="site-drawer-tool">
               <HelpIcon /><span>FAQ</span>

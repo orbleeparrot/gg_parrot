@@ -2764,16 +2764,9 @@ def runner_delete_session(
     return runner_mod.delete_session(user.id, session_id)
 
 
-# 실행기(exe) 배포 파일 다운로드 -----------------------------------------
-# 빌드한 exe 를 RUNNER_EXE_PATH 에 두면 서비스에서 바로 내려받게 한다. 없으면
-# 다운로드 페이지가 '준비 중' 으로 표시된다(available:false).
-_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-_RUNNER_EXE_NAME = "ggparrot-runner.exe"
-_RUNNER_EXE_PATH = os.environ.get("RUNNER_EXE_PATH") or os.path.join(
-    _REPO_ROOT, "runner", "dist", _RUNNER_EXE_NAME
-)
-
-
+# 실행기 배포 파일 다운로드 -----------------------------------------------
+# 실행기는 데스크톱 앱(orbleeparrot/ggparrot-desktop) — Windows 설치 파일과 macOS dmg 를
+# GitHub Releases 에서 내려받는다. 버전은 RUNNER_APP_VERSION(render.yaml) 한 줄이 정한다.
 # Do not let stale Blueprint/env values downgrade a published official runner.
 _RUNNER_RELEASE = resolve_runner_release(os.environ)
 _RUNNER_DOWNLOAD_URL = _RUNNER_RELEASE["url"]
@@ -2797,42 +2790,28 @@ def _runner_launch_capabilities() -> dict:
 
 @app.get("/api/runner/download/info")
 def runner_download_info(response: Response) -> dict:
-    """실행기 파일의 준비 여부/크기/버전/외부링크. 다운로드 페이지가 버튼 상태를 정한다."""
+    """실행기 설치 파일(Windows · macOS)의 주소 · 버전. 다운로드 화면이 방문자 OS 에 맞는 쪽을 고른다."""
     response.headers["Cache-Control"] = "no-store"
-    if _RUNNER_DOWNLOAD_URL:
-        return {
-            "available": True,
-            "filename": _RUNNER_EXE_NAME,
-            "size": 0,  # 외부 링크라 크기 미상
-            "version": _RUNNER_EXE_VERSION,
-            "url": _RUNNER_DOWNLOAD_URL,
-            **_runner_launch_capabilities(),
-        }
-    exists = os.path.isfile(_RUNNER_EXE_PATH)
     return {
-        "available": exists,
-        "filename": _RUNNER_EXE_NAME,
-        "size": os.path.getsize(_RUNNER_EXE_PATH) if exists else 0,
-        "version": _RUNNER_EXE_VERSION,
-        "url": "",
+        "available": True,
+        "filename": _RUNNER_RELEASE["filename"],
+        "size": 0,  # 외부 링크라 크기 미상
+        "version": _RUNNER_EXE_VERSION,  # 서버 연동 레벨(runner_version 과 같은 정수)
+        "app_version": _RUNNER_RELEASE["app_version"],
+        "url": _RUNNER_DOWNLOAD_URL,
+        "mac_url": _RUNNER_RELEASE["mac_url"],
+        "mac_filename": _RUNNER_RELEASE["mac_filename"],
         **_runner_launch_capabilities(),
     }
 
 
 @app.get("/api/runner/download")
-def runner_download():
-    # 외부 링크가 설정돼 있으면 그리로 리다이렉트(GitHub Releases 등).
-    if _RUNNER_DOWNLOAD_URL:
-        from fastapi.responses import RedirectResponse
+def runner_download(platform: str = Query(default="windows", pattern="^(windows|mac)$")):
+    """설치 파일로 리다이렉트(GitHub Releases). ?platform=mac 이면 dmg."""
+    from fastapi.responses import RedirectResponse
 
-        return RedirectResponse(_RUNNER_DOWNLOAD_URL, headers={"Cache-Control": "no-store"})
-    if not os.path.isfile(_RUNNER_EXE_PATH):
-        raise HTTPException(status_code=404, detail="실행기 파일이 아직 준비되지 않았어요.")
-    from fastapi.responses import FileResponse
-
-    return FileResponse(
-        _RUNNER_EXE_PATH, media_type="application/octet-stream", filename=_RUNNER_EXE_NAME
-    )
+    url = _RUNNER_RELEASE["mac_url"] if platform == "mac" and _RUNNER_RELEASE["mac_url"] else _RUNNER_DOWNLOAD_URL
+    return RedirectResponse(url, headers={"Cache-Control": "no-store"})
 
 
 # --- serve built frontend if present (production single-process) --------

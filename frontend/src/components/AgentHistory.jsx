@@ -119,7 +119,7 @@ export function AgentHistoryList({ sessions, policy, pinBusy, onOpen, onTogglePi
                 <span className={`agent-history-end is-${end.tone}`} role="cell"><i aria-hidden="true" />{end.text}</span>
                 <span className={`agent-history-pnl num is-${tone}`} role="cell">{formatSignedMoney(session.realized_pnl, session.symbol)}</span>
                 <span className="agent-history-file-cell" role="cell">
-                  {/* 매크로 파일(.ggm.json)을 다시 받는다 — 실행기 ①번 칸에 넣어 같은 매크로를 다시 돌린다. */}
+                  {/* 매크로 파일(.ggm.json)을 다시 받는다 — 실행기 창에 끌어다 놓아 같은 매크로를 다시 돌린다. */}
                   <button
                     type="button"
                     className="agent-history-pin"

@@ -47,13 +47,13 @@ test("두 거래소의 발급 경로와 서로 다른 제약을 적는다", asyn
   assert.match(text, /이 화면에서만|최초 1회만/);
 });
 
-test("국내만의 제약 — 테스트넷 없음 · 원화 현물 매수만 · 실행기 v10", async () => {
+test("국내만의 제약 — 테스트넷 없음 · 원화 현물 매수만", async () => {
   const text = textOf(await section("domestic-api"));
   assert.match(text, /테스트넷\(가짜 자금\)이 없어요/, "바이낸스와 다른 점이고, 모르면 연습을 못 한다");
   assert.match(text, /모의 모드/, "그럼 어디서 연습하는지 말해야 한다");
   // schema.py: "국내 현물 매크로는 매수(long)·1배만 지원합니다"
   assert.match(text, /원화 현물 매수\(1배\)만/, "숏·레버리지를 기대하고 키를 만들면 헛걸음이다");
-  assert.match(text, /실행기 v10 이상/, "v9 이하는 세션 시작에서 426 으로 거절된다");
+  assert.doesNotMatch(text, /실행기 v10/, "실행기는 데스크톱 앱 하나 — 옛 exe 버전 조건은 안내하지 않는다");
   assert.match(text, /\.ggm\.json/, "무엇을 실행기에 넣는지");
 });
 
@@ -70,20 +70,20 @@ test("허용 IP 가 바뀐다는 것을 말한다", async () => {
 
 test("웹 확인은 수동 확인이고 거래소 인증은 실행기에서 한다", async () => {
   const text = textOf(await section("domestic-api"));
-  assert.match(text, /연결 검사/);
+  assert.match(text, /연결 확인/);
   assert.match(text, /실제 주문을 보내지 않/);
   assert.match(text, /빗썸[\s\S]*주문 권한[\s\S]*확인되지 않/);
   assert.match(text, /웹[\s\S]*확인[\s\S]*인증 성공/);
-  assert.match(text, /새 실행기[\s\S]*버튼이 보이면/);
-  assert.match(text, /기존 실행기[\s\S]*검사 전용이 아니며[\s\S]*실제 주문/);
+  assert.match(text, /연결 도우미/);
+  assert.match(text, /확인 버튼이 아니[\s\S]*실제 주문/);
 });
 
-test("암호화한 로컬 키 저장은 선택이고 출금 차단도 거래 손실을 막지는 못한다", async () => {
+test("이 PC 키체인 저장은 선택이고 출금 차단도 거래 손실을 막지는 못한다", async () => {
   for (const id of ["domestic-api", "binance-api"]) {
     const text = textOf(await section(id));
-    assert.match(text, /이 PC에 키 기억하기/);
-    assert.match(text, /Windows[\s\S]*암호화/);
-    assert.match(text, /기본[\s\S]*꺼져/);
+    assert.match(text, /이 기기에 키 기억하기/);
+    assert.match(text, /키체인[\s\S]*자격 증명 관리자/);
+    assert.match(text, /기억하지 않으면[\s\S]*다시 켤 때/);
     assert.match(text, /거래소 키[\s\S]*웹[\s\S]*서버[\s\S]*보내지 않/);
     assert.match(text, /출금[\s\S]*꺼[\s\S]*매매[\s\S]*손실/);
     assert.doesNotMatch(text, /유출돼도 자산을 빼갈 수 없/);
@@ -114,8 +114,8 @@ test("국내 연결은 실행기 IP 확인 → 공식 발급 → 실행기 검�
     assert.match(JSON.stringify(steps[1]), new RegExp(`${exchange === "upbit" ? 10 : 5}개`));
     assert.match(JSON.stringify(steps[2]), /웹[\s\S]*확인[\s\S]*인증/);
     assert.match(JSON.stringify(steps[2]), /Secret Key[\s\S]*최초/);
-    assert.match(JSON.stringify(steps[0]), /기존 실행기[\s\S]*직접 확인/);
-    assert.match(JSON.stringify(steps[2]), /기존 실행기[\s\S]*검사 전용 버튼이 아니므로/);
+    assert.match(JSON.stringify(steps[0]), /연결 도우미/);
+    assert.match(JSON.stringify(steps[2]), /확인 버튼이 아니[\s\S]*실제 주문/);
     assert.equal(steps[1].action.href, DOMESTIC_KEY_PAGES[exchange].url);
   }
   assert.deepEqual(runnerGuide.domesticConnectionSteps("binance"), []);

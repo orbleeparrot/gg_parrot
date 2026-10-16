@@ -53,7 +53,7 @@ export default function ExchangeConnectionGuide({ exchange = "upbit", initialSte
       </div>
       <div className="exchange-connect-footer">
         <button type="button" className="btn btn-m btn-secondary" disabled={index === 0} onClick={() => selectStep(steps[index - 1].id)}>이전 안내</button>
-        {index < steps.length - 1 ? <button type="button" className="btn btn-m btn-secondary" onClick={() => selectStep(steps[index + 1].id)}>다음 안내</button> : <span className="t-small">새 실행기의 ‘연결 검사’로 확인해요. 시작은 별도예요.</span>}
+        {index < steps.length - 1 ? <button type="button" className="btn btn-m btn-secondary" onClick={() => selectStep(steps[index + 1].id)}>다음 안내</button> : <span className="t-small">실행기의 ‘연결 도우미’에서 연결을 확인해요. 시작은 별도예요.</span>}
       </div>
       <p className="exchange-connect-source t-small">출금 권한은 끄세요. 출금이 차단되어도 주문 권한이 유출되면 매매 손실이 발생할 수 있어요.</p>
       <p className="exchange-connect-source t-caption">공식 안내 확인: <span className="num">{DOMESTIC_KEY_PAGES[exchange].verifiedOn}</span> · <a href={DOMESTIC_KEY_PAGES[exchange].helpUrl} target="_blank" rel="noopener noreferrer">공식 발급 안내</a></p>

@@ -335,7 +335,6 @@ export default function StudioPro() {
         </div>
         <p className="pro-note">.ggm.json 을 실행기에 넣어 실행해요</p>
         {/* 서버는 내려줄 때 실행기 버전을 모른다 — v9 이하에 넣으면 세션 시작에서 426 이 난다. 그래서 여기서 미리 말한다. */}
-        {isDomestic(form.exchange) ? <p className="pro-note">업비트·빗썸은 실행기 v10 이상이 필요해요.</p> : null}
         {fileError ? <p className="pro-error" role="alert">{fileError}</p> : null}
         {runError ? <p className="pro-error" role="alert">{runError}</p> : null}
       </section>

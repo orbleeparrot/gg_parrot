@@ -248,7 +248,7 @@ export function sessionLogKindLabel(item) {
 
 export function sessionLogSourceLabel(item) {
   if (typeof item?.source_label === "string" && item.source_label.trim()) return item.source_label.trim().slice(0, 120);
-  if (item?.source === "runner") return "Windows 실행기";
+  if (item?.source === "runner") return "실행기";
   if (item?.source === "execution") return "실행 기록";
   if (item?.source === "news") return "뉴스 서비스";
   if (item?.source === "news_receipt") return "뉴스 응답 수신 확인";

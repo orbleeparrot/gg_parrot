@@ -481,7 +481,7 @@ export function StudioOutcomes({ macro, result, perSymbol = [], valErr, strategy
           <button type="button" onClick={quickRun} disabled={!!valErr || launching} className="sd-act-row">
             <ActIcon name="run" /><span className="sd-act-t"><b>{launching ? "실행 준비 중…" : "빠른 실행"}</b><small>내 PC 실행기로 바로 넘겨요</small></span><i className="sd-act-chev" aria-hidden="true" />
           </button>
-          <button type="button" onClick={downloadMacro} disabled={!!valErr} title={domestic ? "업비트·빗썸 매크로 파일은 실행기 v10 이상에서 돌아요." : undefined} className="sd-act-row">
+          <button type="button" onClick={downloadMacro} disabled={!!valErr} className="sd-act-row">
             <ActIcon name="download" /><span className="sd-act-t"><b>매크로 파일 내려받기</b><small>.ggm.json 파일로 저장해요</small></span><i className="sd-act-chev" aria-hidden="true" />
           </button>
           <button type="button" onClick={onShare} disabled={!!valErr || shareBusy} className="sd-act-row">
@@ -495,7 +495,7 @@ export function StudioOutcomes({ macro, result, perSymbol = [], valErr, strategy
           흐름은 지금 프로젝트 기준: 빠른 실행 마법사(테스트넷 · 웹이 실행기를 열어 줌) → 실거래는 파일을 실행기에서 직접 → 상태·종료는 내 에이전트. */}
       {domestic ? <section className="alert alert-warn sd-runner" aria-labelledby="sd-runner-title">
         <h3 id="sd-runner-title" className="sd-runner-title">국내 거래소 지원 범위</h3>
-        <p className="sd-runner-foot">{exchangeLabel(macro.exchange)} 원화 시세·백테스트·모의매매·리더보드 등록·매크로 저장을 지원해요. 매크로 파일(.ggm.json) 내려받기와 빠른 실행 둘 다 돼요(실행기 v10 이상). 국내 원화 현물에서는 숏·선물·레버리지를 사용할 수 없어요.</p>
+        <p className="sd-runner-foot">{exchangeLabel(macro.exchange)} 원화 시세·백테스트·모의매매·리더보드 등록·매크로 저장을 지원해요. 매크로 파일(.ggm.json) 내려받기와 빠른 실행 둘 다 돼요. 국내 원화 현물에서는 숏·선물·레버리지를 사용할 수 없어요.</p>
       </section> : <section className="alert alert-warn sd-runner" aria-labelledby="sd-runner-title">
         <div className="sd-runner-head">
           <h3 id="sd-runner-title" className="sd-runner-title">실거래 실행법</h3>
@@ -505,7 +505,7 @@ export function StudioOutcomes({ macro, result, perSymbol = [], valErr, strategy
             <h4 className="sd-runner-h">진행 방법</h4>
             <ol className="sd-runner-steps">
               <li><i>1</i><div><b>테스트넷으로 먼저</b><span>위 목록의 <b>빠른 실행</b>을 누르면 이 매크로가 내 매크로에 저장되고, 테스트넷 키 준비 → 실행기 받기 → 연결이 한 화면씩 이어져요. 웹이 실행기를 열어 주면 실행기에 테스트넷 API 키를 넣고 <b>매크로 시작</b>을 눌러요.</span></div></li>
-              <li><i>2</i><div><b>실거래로 바꾸기</b><span><b>매크로 파일 내려받기</b>로 받은 .ggm.json 을 실행기 ①에서 열고, ② 실거래(메인넷) 체크를 켜고, ③ 실거래 API 키·시크릿과 ④ 회원 키를 넣고 시작해요. 회원 키는 <Link to="/runner/install" className="sd-runner-link">실행기 설치 화면</Link>에서 복사해요.</span></div></li>
+              <li><i>2</i><div><b>실거래로 바꾸기</b><span><b>매크로 파일 내려받기</b>로 받은 .ggm.json 을 실행기 창에 끌어다 놓고, 실행기의 <b>설정 › 거래소 연결</b>에 실거래 API 키를 넣은 뒤 <b>실전</b>으로 시작해요. 회원 키는 <Link to="/runner/install" className="sd-runner-link">실행기 설치 화면</Link>에서 복사해요.</span></div></li>
               <li><i>3</i><div><b>지켜보기 · 멈추기</b><span><b>내 에이전트</b>에서 실시간 차트와 손익을 보고, <b>매크로만 종료</b> 또는 <b>청산 후 종료</b>로 원격 종료해요.</span></div></li>
             </ol>
           </div>
@@ -521,7 +521,7 @@ export function StudioOutcomes({ macro, result, perSymbol = [], valErr, strategy
           </div>
         </div>
         <p className="sd-runner-foot">
-          실행기는 내 Windows PC 에서 주문을 처리하는 프로그램이에요(설치 없이 실행 · Windows 10 이상).
+          실행기는 내 PC에서 주문을 처리하는 프로그램이에요(Windows 10 · macOS 11 이상).
           웹은 주문을 내지 않고, 실행 중 상태와 종료는 <b>내 에이전트</b>에서 봐요.
         </p>
       </section>}

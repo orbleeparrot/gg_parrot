@@ -1,146 +1,118 @@
-// 설치 안내는 애니메이션을 먼저 보여 주고, 필요한 행동만 옆에 모은다.
-import { useState } from "react";
+// 실행기(데스크톱 앱) 설치 안내 — 왼쪽은 실제 앱 화면, 오른쪽은 단계마다 제목과 할 일 한두 줄.
+// 앱 안의 메뉴 이름은 굵게, 보조 정보는 흐리게. 방문자 OS(Windows · Mac)에 맞는 설치 파일을 먼저 준다.
 import { Link } from "react-router-dom";
 import { RunnerKeyPanel } from "../components/RunnerKeyPanel.jsx";
-import RunnerLaunchGuide from "../components/RunnerLaunchGuide.jsx";
 import RunnerDeviceHandoff from "../components/RunnerDeviceHandoff.jsx";
 import { PageHeader } from "../components/Page.jsx";
 import { useAuth } from "../lib/auth.js";
-import { fmtSize, isRunnerOpened, markRunnerOpened, useRunnerDownload } from "../lib/runnerDownload.js";
+import { markRunnerOpened, useRunnerDownload } from "../lib/runnerDownload.js";
 import { getRunnerDevice } from "../lib/runnerDevice.js";
+import appShot from "../assets/runner-app-running.jpg";
 import "./RunnerInstall.css";
-import { Icon } from "../components/icons.jsx";
+
+function AppShot() {
+  return (
+    <figure className="runner-install-shot">
+      <img src={appShot} alt="껄무새 실행기에서 매크로 여러 개를 실행 중인 화면" width="1280" height="886" loading="eager" decoding="async" />
+    </figure>
+  );
+}
+
+function Heading() {
+  return (
+    <div className="runner-install-heading">
+      <PageHeader title="껄무새 매크로 실행기" />
+      <img className="runner-install-mascot" src="/brand/navigation/ggparrot-nav-agent.svg" alt="" width="96" height="96" draggable="false" />
+    </div>
+  );
+}
 
 export default function RunnerInstall() {
   const device = getRunnerDevice();
-  if (device.canRunWindowsRunner) return <WindowsRunnerInstall />;
+  if (device.canRunRunner) return <DesktopRunnerInstall />;
   return (
     <div className="runner-install">
-      <div className="runner-install-heading">
-        <PageHeader title="껄무새 매크로 실행기" />
-        <img className="runner-install-mascot" src="/brand/navigation/ggparrot-nav-agent.svg" alt="" width="96" height="96" draggable="false" />
-      </div>
+      <Heading />
       <div className="runner-install-layout is-device-limited">
         <div className="runner-install-side">
           <RunnerDeviceHandoff installation isMobile={device.isMobile} />
-          <p className="runner-install-device-key t-small text-slate-700">거래소 API 키와 시크릿은 Windows 실행기에만 입력하세요.</p>
         </div>
-        <div className="runner-install-media"><RunnerLaunchGuide /></div>
+        <AppShot />
       </div>
     </div>
   );
 }
 
-function WindowsRunnerInstall() {
+const B = ({ children }) => <b className="runner-install-ui">{children}</b>;
+const Path = ({ items }) => items.map((item, i) => (
+  <span key={item}>{i ? <span className="runner-install-sep" aria-hidden="true"> › </span> : null}<B>{item}</B></span>
+));
+
+function DesktopRunnerInstall() {
   const { token } = useAuth();
   const download = useRunnerDownload();
-  const [opened] = useState(isRunnerOpened);
-  const downloadMeta = [
-    "Windows 10 이상",
-    download.available && download.version ? `v${download.version}` : "",
-    download.available && download.size ? fmtSize(download.size) : "",
-  ].filter(Boolean).join(" · ");
+  const mac = download.platform === "macos";
 
   return (
     <div className="runner-install">
-      {/* 제목 조판은 다른 화면과 같은 규격 — 공용 PageHeader(§9) */}
-      <div className="runner-install-heading">
-        <PageHeader title="껄무새 매크로 실행기" />
-        <img className="runner-install-mascot" src="/brand/navigation/ggparrot-nav-agent.svg" alt="" width="96" height="96" draggable="false" />
-      </div>
-
+      <Heading />
       <div className="runner-install-layout">
-        <div className="runner-install-media">
-          <RunnerLaunchGuide />
-        </div>
-
+        <AppShot />
         <div className="runner-install-side">
-          <div className="runner-install-actions">
-            <section className="runner-install-step" aria-labelledby="runner-get">
-              <h2 id="runner-get" className="runner-install-step-title t-title text-slate-900">
-                <span className="num t-caption text-slate-400" aria-hidden="true">01</span>
-                실행기 다운로드
-              </h2>
-              <p className="t-small text-slate-700">
-                웹에서 만든 매크로를 실제로 돌리는 프로그램이에요. 내 Windows PC에서 실행되고, 매크로 실행 중에는 브라우저를 닫아도 조건 확인과 주문이 이어져요.
-              </p>
-              <p className="t-caption text-slate-700">{downloadMeta}</p>
-              {download.available ? (
-                <a
-                  href={download.url}
-                  download={download.isExternal ? undefined : true}
-                  target={download.isExternal ? "_blank" : undefined}
-                  rel={download.isExternal ? "noopener noreferrer" : undefined}
-                  className={`btn btn-l ${opened ? "btn-secondary" : "btn-primary"} runner-install-button`}
-                >
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5" />
-                  </svg>
-                  실행기 내려받기
+          <ol className="runner-install-steps">
+            <li>
+              <span className="runner-install-n" aria-hidden="true">01</span>
+              <h2>내려받기</h2>
+              <div className="runner-install-act">
+                <a href={download.url} target="_blank" rel="noopener noreferrer" className="btn btn-l btn-primary">
+                  {download.platformLabel}용 내려받기
                 </a>
+                {download.otherUrl ? (
+                  <a href={download.otherUrl} target="_blank" rel="noopener noreferrer" className="runner-install-alt">{download.otherPlatformLabel}용</a>
+                ) : null}
+              </div>
+              <p className="runner-install-hint">{download.requirement}{download.appVersion ? ` · v${download.appVersion}` : ""}</p>
+            </li>
+            <li>
+              <span className="runner-install-n" aria-hidden="true">02</span>
+              <h2>설치</h2>
+              {mac ? (
+                <>
+                  <p>dmg를 열고 <B>껄무새</B>를 Applications로 옮겨요.</p>
+                  <p className="runner-install-hint">경고가 뜨면 <Path items={["시스템 설정", "개인정보 보호 및 보안", "그래도 열기"]} /></p>
+                </>
               ) : (
-                <button
-                  type="button"
-                  disabled={download.state === "loading"}
-                  onClick={() => void download.refresh()}
-                  className="btn btn-l btn-secondary runner-install-button"
-                >
-                  {download.state === "loading" ? "확인 중…" : "다시 확인"}
-                </button>
+                <>
+                  <p>설치 파일을 열어 설치해요.</p>
+                  <p className="runner-install-hint">‘Windows의 PC 보호’ 창이 뜨면 <B>추가 정보</B> → <B>실행</B></p>
+                </>
               )}
-              {download.error && !download.available ? (
-                <p className="t-small text-red-600" role="alert">다운로드를 확인하지 못했어요.</p>
-              ) : null}
-            </section>
-
-            <section className="runner-install-step" aria-labelledby="runner-key">
-              <h2 id="runner-key" className="runner-install-step-title t-title text-slate-900">
-                <span className="num t-caption text-slate-400" aria-hidden="true">02</span>
-                회원 키 연결
-              </h2>
-              <p className="t-small text-slate-700">실행기 창의 ④ 회원 키 칸에 붙여넣으세요.</p>
-              {token ? (
-                <RunnerKeyPanel key={token} compact />
-              ) : (
-                <Link to="/login?next=%2Frunner%2Finstall" className="btn btn-l btn-secondary runner-install-button">
-                  로그인하고 회원 키 복사
-                </Link>
-              )}
-              <p className="t-caption text-slate-700">회원 키는 계정 연결과 상태 확인·원격 종료에 쓰며, 거래소 키와 달라요.</p>
-            </section>
-
-            <section className="runner-install-step" aria-labelledby="runner-next">
-              <h2 id="runner-next" className="runner-install-step-title t-title text-slate-900">
-                <span className="num t-caption text-slate-400" aria-hidden="true">03</span>
-                매크로 선택
-              </h2>
-              {/* 파일을 열었다는 명시적인 확인으로만 현재 버전을 기록한다. */}
-              <Link
-                to="/?run=1&step=1"
-                onClick={() => { if (!opened) markRunnerOpened(); }}
-                className={`btn btn-l ${opened ? "btn-primary" : "btn-secondary"} runner-install-button`}
-              >
-                {opened ? "준비한 실행기로 빠른 연결" : "실행했어요 · 매크로 선택"}
-                <Icon name="arrowRight" size={16} className="ui-icon-inline" />
-              </Link>
-              {opened ? <p className="t-caption text-slate-700">이 브라우저에서 준비를 확인한 기록이에요. 실제 설치나 실행 중 여부를 감지한 것은 아니에요.</p> : null}
-              <p className="t-small text-slate-700">
-                실행 후에는 <Link to="/agents" className="runner-install-inline-link">내 에이전트</Link>에서 실시간 차트와 손익을 확인하고 원격으로 종료할 수 있어요.
-              </p>
-            </section>
-          </div>
-
-          <aside className="runner-install-security" aria-labelledby="runner-security">
-            <h2 id="runner-security" className="t-title text-slate-900">거래소 키는 실행기에서만</h2>
-            <div className="runner-install-security-copy t-small text-slate-700">
-              <p>
-                거래소(바이낸스·업비트·빗썸) API 키와 시크릿은 실행기 창에만 입력하세요. 껄무새 웹·서버로 보내지 않아요. 새 실행기의 ‘선택 거래소 키만 기억하기’를 선택한 경우에만 Windows 계정으로 암호화해 거래소별로 로컬 저장해요. 기본은 꺼져 있으며, 기억하지 않으면 실행기를 다시 켤 때 입력해요. 불러옴 · 변경됨 · 저장 필요 · 저장됨 · 삭제됨 · 복원 실패 표시를 확인하세요. 변경됨 · 저장 필요는 아직 저장하지 않은 새 값이에요. 거래소·모드 변경만으로 저장값을 지우지 않아요. 기존 v10의 저장 선택은 ‘이 PC에 키 기억하기’예요.
-              </p>
-              <p>처음에는 실제 자금이 들지 않는 연습으로 시작하는 걸 권해요. 바이낸스는 <strong className="text-slate-900">테스트넷 키</strong>를 쓰고, 업비트·빗썸은 테스트넷이 없으니 키 없이 돌아가는 <strong className="text-slate-900">모의 모드</strong>를 써요.</p>
-              <p>업비트·빗썸 실거래에는 API 키마다 이 PC의 IP를 허용 IP로 등록해야 해요.</p>
-              <p>다른 PC에서는 암호화 저장 파일을 옮기지 말고 두 키를 다시 입력하세요. Secret Key를 잃어버렸다면 거래소에서 기존 키를 삭제하고 새 키를 발급해야 해요. 키가 있다면 <Link to="/exchange-connect?exchange=upbit&step=keys" className="underline">업비트 기존 키 안내</Link> 또는 <Link to="/exchange-connect?exchange=bithumb&step=keys" className="underline">빗썸 기존 키 안내</Link>를 확인하세요.</p>
-            </div>
-          </aside>
+            </li>
+            <li>
+              <span className="runner-install-n" aria-hidden="true">03</span>
+              <h2>웹과 연결</h2>
+              <p>매크로를 고르고 <B>실행기 열기</B>를 눌러요.</p>
+              <p>앱의 <Path items={["설정", "껄무새 계정"]} />에서 <B>이 키 쓰기</B></p>
+              <div className="runner-install-act">
+                <Link to="/?run=1&step=1" onClick={markRunnerOpened} className="btn btn-l btn-secondary">매크로 고르기</Link>
+                {token ? (
+                  <div className="runner-install-key"><RunnerKeyPanel key={token} compact /></div>
+                ) : (
+                  <Link to="/login?next=%2Frunner%2Finstall" className="runner-install-alt">로그인하고 회원 키 복사</Link>
+                )}
+              </div>
+            </li>
+            <li>
+              <span className="runner-install-n" aria-hidden="true">04</span>
+              <h2>거래소 연결</h2>
+              <p>앱의 <Path items={["설정", "거래소 연결", "연결 도우미"]} /></p>
+              <p className="runner-install-hint">모의 실행은 키 없이 돼요.</p>
+            </li>
+          </ol>
+          <p className="runner-install-foot">
+            거래소 키는 이 PC에만 저장되고 서버로 보내지 않아요.<br />
+            예전 실행기(ggparrot-runner.exe)는 지워 주세요.
+          </p>
         </div>
       </div>
     </div>

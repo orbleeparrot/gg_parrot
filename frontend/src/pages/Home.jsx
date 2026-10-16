@@ -48,8 +48,8 @@ function HomeEntryHero({ onLeaderboard, onAsk, staticLayout = false }) {
         <div className="home-entry-choice-heading">
           <h2 id="home-entry-choice-title">어떻게 시작할까요?</h2>
           <p className="home-entry-choice-platform">
-            <span className="home-entry-choice-platform-badge">Windows</span>
-            매크로 실행기는 윈도우 PC 환경에서 실행할 수 있어요. 아래 두 가지 모두 웹에서 준비하고, 실행은 내 윈도우 PC에서 이어져요.
+            <span className="home-entry-choice-platform-badge">Windows · Mac</span>
+            매크로 실행기는 내 PC(Windows · Mac)에서 실행해요. 아래 두 가지 모두 웹에서 준비하고, 실행은 내 PC에서 이어져요.
           </p>
         </div>
         {/* 뭘 골라야 할지 모르는 사람용 첫 번째 길 — 카드 5장에 답하면 백테스트 상위 3개 조합. 다른 두 카드와 같은 꼴, 노란 테두리로만 구분. */}
@@ -77,7 +77,7 @@ function HomeEntryHero({ onLeaderboard, onAsk, staticLayout = false }) {
           </span>
           <span className="home-entry-choice-copy">
             <strong>{mobileDevice ? "매크로 둘러보기" : "빠른 실행"}</strong>
-            <small>{mobileDevice ? "인기 전략과 성과를 살펴보고, 실행은 Windows PC에서 이어가요." : "커뮤니티 인기 전략을 골라 바로 실행해요. 마음에 드는 매크로를 그대로 실행기로 돌릴 수 있어요."}</small>
+            <small>{mobileDevice ? "인기 전략과 성과를 살펴보고, 실행은 PC에서 이어가요." : "커뮤니티 인기 전략을 골라 바로 실행해요. 마음에 드는 매크로를 그대로 실행기로 돌릴 수 있어요."}</small>
           </span>
           <span className="home-entry-choice-arrow" aria-hidden="true"><Icon name="arrowRight" size={18} /></span>
         </button>

@@ -53,7 +53,7 @@ test("PaperPanel — 국내 안내 상자는 두 길을 다 말하고 '아직' �
   const body = lineWith(paper, "원화 현물 · 롱 · 1배");
   assert.match(body, /빠른 실행/);
   assert.match(body, /매크로 파일\(\.ggm\.json\)/);
-  assert.match(body, /실행기 v10 이상/);
+  assert.doesNotMatch(body, /실행기 v10/);
   assert.doesNotMatch(paper, /실행기 직접 연결·실거래 주문은 아직/);
   assert.doesNotMatch(paper, /국내 거래소 실행기 직접 연결은 아직 지원하지 않아요/);
   assert.doesNotMatch(paper, /국내 거래소 실거래 실행기 파일은 아직 지원하지 않아요/);
@@ -69,16 +69,16 @@ test("StudioDock — 빠른 실행 행도 파일 행도 국내에서 막지 않�
   assert.doesNotMatch(fileButton, /disabled=\{[^}]*domestic[^}]*\}/, "파일 행이 국내로 잠겼다");
   const fileRow = between(dock, "onClick={downloadMacro}", "onClick={onShare}");
   assert.doesNotMatch(fileRow, /바이낸스 전용/);
-  // 버튼 사이에 안내 문단을 끼우지 않는다(사용자 지적, 2026-10-13) — 버전 안내는 버튼 설명과 아래 '국내 거래소 지원 범위' 가 한다.
+  // 버튼 사이에 안내 문단을 끼우지 않는다(사용자 지적, 2026-10-13).
   assert.doesNotMatch(fileRow, /<p /, "버튼 줄 사이에 안내 문단이 끼었다");
-  assert.match(fileButton, /실행기 v10 이상/, "내려받기 버튼 설명(title)이 실행기 버전을 말해야 한다");
+  assert.doesNotMatch(fileButton, /실행기 v10/, "옛 실행기 버전(v10) 조건을 더 말하지 않는다");
   assert.doesNotMatch(fileRow, NOT_YET);
 });
 
 test("StudioDock — '국내 거래소 지원 범위' 는 빠른 실행·파일 범위·현물 제약을 같이 말한다", () => {
   const panel = between(dock, 'id="sd-runner-title" className="sd-runner-title">국내 거래소 지원 범위', "</section>");
   assert.match(panel, /빠른 실행/);
-  assert.match(panel, /매크로 파일\(\.ggm\.json\) 내려받기와 빠른 실행 둘 다 돼요\(실행기 v10 이상\)/);
+  assert.match(panel, /매크로 파일\(\.ggm\.json\) 내려받기와 빠른 실행 둘 다 돼요\./);
   assert.doesNotMatch(panel, /바이낸스 전용/);
   assert.match(panel, /숏·선물·레버리지를 사용할 수 없어요/);
   assert.doesNotMatch(panel, /실행기 주문은 아직|실제 계좌 연결과/);
@@ -101,7 +101,7 @@ test("HeroGuideScreens — 국내 안내는 현물 제약을 남기고 실행기
   const note = lineWith(hero, "원화 현물 전용이에요.");
   assert.match(note, /숏·선물·레버리지는 사용할 수 없어요/);
   assert.doesNotMatch(note, /바이낸스 전용/);
-  assert.match(note, /매크로 파일\(\.ggm\.json\) 내려받기와 빠른 실행 둘 다 돼요\(실행기 v10 이상\)/);
+  assert.match(note, /매크로 파일\(\.ggm\.json\) 내려받기와 빠른 실행 둘 다 돼요\./);
   assert.match(note, /빠른 실행/);
   assert.doesNotMatch(hero, /국내 거래소 실행기 직접 연결은 아직 지원하지 않아요/);
   assert.doesNotMatch(note, NOT_YET);

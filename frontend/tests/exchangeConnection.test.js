@@ -15,7 +15,8 @@ test("runner-first guide explains actual PC IP lookup without fake video, own QR
   for (const exchange of ["upbit", "bithumb"]) {
     const html = await renderComponent("src/components/ExchangeConnectionGuide.jsx", { exchange, initialStep: "prepare" });
     const text = textOf(html);
-    for (const expected of [/거래소 연결 도우미/, /공인 IPv4 확인/, /ipify/, /고정 IP/, /VPN|프록시/, /기존 실행기/, /1 \/ 3/]) assert.match(text, expected);
+    for (const expected of [/연결 도우미/, /공인 IPv4/, /고정 IP/, /VPN|프록시/, /1 \/ 3/]) assert.match(text, expected);
+    assert.doesNotMatch(text, /기존 실행기|v10|Windows PC에/, "옛 exe 실행기 안내가 남았다");
     assert.match(html, new RegExp(`exchanges/${exchange}\\.png`));
     assert.doesNotMatch(html, /<input|<video|<svg|exchange-connect-example/);
     assert.doesNotMatch(text, /203\.0\.113\.10|화면 예시|반복 재생|정지 화면|안내만 이어보기|인증 완료|연결 성공/);
@@ -41,12 +42,12 @@ test("key step keeps local opt-in storage and native verification distinct from 
   const html = await renderComponent("src/components/ExchangeConnectionGuide.jsx", { exchange: "bithumb", initialStep: "keys" });
   const text = textOf(html);
   assert.match(text, /실행기/);
-  assert.match(text, /Windows[\s\S]*암호화/);
-  assert.match(text, /기본[\s\S]*꺼져/);
+  assert.match(text, /이 기기에 키 기억하기[\s\S]*키체인/);
+  assert.match(text, /기억하지 않은 키/);
   assert.match(text, /주문 권한[\s\S]*확인되지 않/);
   assert.match(text, /실제 주문을 보내지 않/);
   assert.match(text, /웹[\s\S]*인증[\s\S]*아니/);
-  assert.match(text, /기존 실행기[\s\S]*검사 전용[\s\S]*실제 주문/);
+  assert.match(text, /확인 버튼이 아니[\s\S]*실제 주문/);
   assert.match(text, /출금/);
   assert.doesNotMatch(html, /<input/);
 });
@@ -66,5 +67,5 @@ test("existing keys enter verification instructions directly and manage IP witho
 
 test("Bithumb recovery distinguishes key expiry from request JWT expiry and keeps per-exchange storage truthful", async () => {
   const text = textOf(await renderComponent("src/components/ExchangeConnectionGuide.jsx", { exchange: "bithumb", initialKeyMode: "existing" }));
-  for (const pattern of [/JWT/, /API 키[\s\S]*1년/, /연장[\s\S]*안/, /거래소별/, /선택 거래소 키만 기억하기/, /불러옴/, /변경됨 · 저장 필요/, /삭제됨/, /복원 실패/]) assert.match(text, pattern);
+  for (const pattern of [/JWT/, /API 키[\s\S]*1년/, /연장[\s\S]*안/, /이 기기에 키 기억하기/]) assert.match(text, pattern);
 });

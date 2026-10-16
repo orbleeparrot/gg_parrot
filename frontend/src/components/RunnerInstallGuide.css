@@ -1,0 +1,96 @@
+/* 설치 안내 애니메이션. 무대는 960×660 기준 좌표를 %로 옮겼다(장면 위치 · 커서 목표).
+   Windows 18초 한 바퀴: 다운로드 0–22% · 추가 정보 22–40% · 실행 40–58% · 설치 마침 58–76% · 실행기 창 76–100%.
+   Mac 14초: dmg 끌어다 놓기 0–62% · 실행기 창 62–100%. transform · opacity 만 움직인다. */
+.rig { margin: 0; min-width: 0; }
+.rig-stage {
+  position: relative;
+  aspect-ratio: 960 / 660;
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid rgb(var(--c-slate-200));
+  border-radius: 12px;
+  background: rgb(var(--c-slate-100));
+}
+.rig-scene {
+  position: absolute;
+  height: auto;
+  max-width: none;
+  opacity: 0;
+  border-radius: 6px;
+  box-shadow: 0 8px 28px rgb(0 0 0 / 0.18);
+  user-select: none;
+  pointer-events: none;
+}
+.rig-w1 { left: 15.625%; top: 5.152%; width: 68.75%; animation: rig-w1 18s linear infinite; }
+.rig-w2 { left: 21.979%; top: 12.273%; width: 56.042%; animation: rig-w2 18s linear infinite; }
+.rig-w3 { left: 22.5%; top: 12.273%; width: 55%; animation: rig-w3 18s linear infinite; }
+.rig-w4 { left: 17.604%; top: 13.182%; width: 64.792%; animation: rig-w4 18s linear infinite; }
+.rig-w5 { left: 4.167%; top: 3.788%; width: 91.667%; animation: rig-w5 18s linear infinite; }
+.rig-m1 { left: 7.8125%; top: 6.818%; width: 84.375%; animation: rig-m1 14s linear infinite; }
+.rig-m2 { left: 4.167%; top: 3.788%; width: 91.667%; animation: rig-m2 14s linear infinite; }
+
+@keyframes rig-w1 { 0%, 20% { opacity: 1; } 23%, 97% { opacity: 0; } 100% { opacity: 1; } }
+@keyframes rig-w2 { 0%, 20% { opacity: 0; } 22%, 39% { opacity: 1; } 40%, 100% { opacity: 0; } }
+@keyframes rig-w3 { 0%, 39% { opacity: 0; } 40%, 56% { opacity: 1; } 59%, 100% { opacity: 0; } }
+@keyframes rig-w4 { 0%, 57% { opacity: 0; } 59%, 74% { opacity: 1; } 77%, 100% { opacity: 0; } }
+@keyframes rig-w5 { 0%, 75% { opacity: 0; } 78%, 96% { opacity: 1; } 99%, 100% { opacity: 0; } }
+@keyframes rig-m1 { 0%, 60% { opacity: 1; } 64%, 97% { opacity: 0; } 100% { opacity: 1; } }
+@keyframes rig-m2 { 0%, 61% { opacity: 0; } 65%, 96% { opacity: 1; } 99%, 100% { opacity: 0; } }
+
+/* 커서 — 무대와 같은 크기의 층을 옮겨(translate % = 무대 크기) 커서 끝을 목표 좌표에 둔다. */
+.rig-track { position: absolute; inset: 0; pointer-events: none; }
+.is-windows .rig-track { animation: rig-w-cursor 18s ease-in-out infinite; }
+.is-mac .rig-track { animation: rig-m-cursor 14s ease-in-out infinite; }
+.rig-cursor { position: absolute; left: 0; top: 0; width: 2.6%; height: auto; filter: drop-shadow(0 1px 1px rgb(0 0 0 / 0.35)); }
+.rig-ring {
+  position: absolute; left: 0; top: 0; width: 4%; aspect-ratio: 1;
+  translate: -50% -50%;
+  border: 2px solid rgb(var(--c-brand));
+  border-radius: 50%;
+  opacity: 0;
+}
+.is-windows .rig-ring { animation: rig-w-ring 18s linear infinite; }
+.is-mac .rig-ring { animation: rig-m-ring 14s linear infinite; }
+.rig-ghost { position: absolute; left: 0; top: 0; width: 16.25%; height: auto; max-width: none; translate: -50% -50%; opacity: 0; border-radius: 22%; animation: rig-m-ghost 14s linear infinite; }
+
+@keyframes rig-w-cursor {
+  0% { transform: translate(78%, 88%); opacity: 0; }
+  3% { opacity: 1; }
+  10%, 20% { transform: translate(45.83%, 35.91%); }
+  30%, 40% { transform: translate(27.71%, 32.27%); }
+  48%, 58% { transform: translate(60%, 81.52%); }
+  66%, 76% { transform: translate(66.46%, 82.27%); opacity: 1; }
+  84% { transform: translate(90%, 92%); opacity: 0; }
+  100% { transform: translate(78%, 88%); opacity: 0; }
+}
+@keyframes rig-w-ring {
+  0%, 13.4% { opacity: 0; scale: 0.4; }
+  14% { opacity: 1; scale: 0.6; } 15% { opacity: 0; scale: 1.4; }
+  15.6% { opacity: 1; scale: 0.6; } 16.6% { opacity: 0; scale: 1.4; }
+  33.4% { opacity: 0; scale: 0.4; } 34% { opacity: 1; scale: 0.6; } 35.2% { opacity: 0; scale: 1.4; }
+  51.4% { opacity: 0; scale: 0.4; } 52% { opacity: 1; scale: 0.6; } 53.2% { opacity: 0; scale: 1.4; }
+  69.4% { opacity: 0; scale: 0.4; } 70% { opacity: 1; scale: 0.6; } 71.2% { opacity: 0; scale: 1.4; }
+  100% { opacity: 0; }
+}
+@keyframes rig-m-cursor {
+  0% { transform: translate(62%, 88%); opacity: 0; }
+  4% { opacity: 1; }
+  15%, 18% { transform: translate(29.69%, 51.48%); }
+  42%, 52% { transform: translate(70.23%, 51.48%); opacity: 1; }
+  60% { transform: translate(86%, 90%); opacity: 0; }
+  100% { transform: translate(62%, 88%); opacity: 0; }
+}
+@keyframes rig-m-ring {
+  0%, 17.2% { opacity: 0; scale: 0.4; } 18% { opacity: 1; scale: 0.6; } 19.4% { opacity: 0; scale: 1.4; }
+  44.2% { opacity: 0; scale: 0.4; } 45% { opacity: 1; scale: 0.6; } 46.4% { opacity: 0; scale: 1.4; }
+  100% { opacity: 0; }
+}
+@keyframes rig-m-ghost { 0%, 18% { opacity: 0; } 20%, 43% { opacity: 0.75; } 45%, 100% { opacity: 0; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .rig-scene, .rig-track, .rig-ring, .rig-ghost { animation: none; }
+  .rig-track { display: none; }
+  .rig-w5, .rig-m2 { opacity: 1; }
+}
+/* 운영체제 커서처럼 테마와 무관하게 흰 바탕 · 검은 테두리. */
+.rig-cursor path { fill: #fff; stroke: #111; stroke-width: 1.4; stroke-linejoin: round; }

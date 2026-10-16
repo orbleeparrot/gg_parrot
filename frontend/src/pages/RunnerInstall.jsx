@@ -1,4 +1,4 @@
-// 실행기(데스크톱 앱) 설치 안내 — 왼쪽은 실제 앱 화면, 오른쪽은 단계마다 제목과 할 일 한두 줄.
+// 실행기(데스크톱 앱) 설치 안내 — 왼쪽은 설치 순서 애니메이션(실제 화면 캡처), 오른쪽은 단계마다 제목과 할 일 한두 줄.
 // 앱 안의 메뉴 이름은 굵게, 보조 정보는 흐리게. 방문자 OS(Windows · Mac)에 맞는 설치 파일을 먼저 준다.
 import { Link } from "react-router-dom";
 import { RunnerKeyPanel } from "../components/RunnerKeyPanel.jsx";
@@ -7,16 +7,8 @@ import { PageHeader } from "../components/Page.jsx";
 import { useAuth } from "../lib/auth.js";
 import { markRunnerOpened, useRunnerDownload } from "../lib/runnerDownload.js";
 import { getRunnerDevice } from "../lib/runnerDevice.js";
-import appShot from "../assets/runner-app-running.jpg";
+import RunnerInstallGuide from "../components/RunnerInstallGuide.jsx";
 import "./RunnerInstall.css";
-
-function AppShot() {
-  return (
-    <figure className="runner-install-shot">
-      <img src={appShot} alt="껄무새 실행기에서 매크로 여러 개를 실행 중인 화면" width="1280" height="886" loading="eager" decoding="async" />
-    </figure>
-  );
-}
 
 function Heading() {
   return (
@@ -37,7 +29,7 @@ export default function RunnerInstall() {
         <div className="runner-install-side">
           <RunnerDeviceHandoff installation isMobile={device.isMobile} />
         </div>
-        <AppShot />
+        <RunnerInstallGuide platform="windows" />
       </div>
     </div>
   );
@@ -57,7 +49,7 @@ function DesktopRunnerInstall() {
     <div className="runner-install">
       <Heading />
       <div className="runner-install-layout">
-        <AppShot />
+        <RunnerInstallGuide platform={download.platform} />
         <div className="runner-install-side">
           <ol className="runner-install-steps">
             <li>

@@ -14,15 +14,6 @@
 }
 .runner-install-layout.is-device-limited { grid-template-columns: minmax(0, 420px) minmax(0, 560px); gap: 48px; }
 
-.runner-install-shot { margin: 0; min-width: 0; }
-.runner-install-shot img {
-  display: block;
-  width: 100%;
-  max-width: 100%;
-  height: auto;
-  border: 1px solid rgb(var(--c-slate-200));
-  border-radius: 12px;
-}
 
 .runner-install-side { min-width: 0; }
 
@@ -87,7 +78,7 @@
 @media (max-width: 1023px) {
   .runner-install-layout,
   .runner-install-layout.is-device-limited { grid-template-columns: minmax(0, 1fr); gap: 28px; }
-  .runner-install-layout:not(.is-device-limited) .runner-install-shot { order: 2; }
+  .runner-install-layout:not(.is-device-limited) .rig { order: 2; }
 }
 @media (max-width: 640px) {
   .runner-install-heading { gap: 8px; }

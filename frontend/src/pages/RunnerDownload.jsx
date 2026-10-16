@@ -11,6 +11,7 @@ import { getAuthUser, updateAuthUser, useAuth } from "../lib/auth.js";
 import { RULE_TYPES } from "../lib/macro.js";
 import { getUserId } from "../lib/user.js";
 import { isRunnerOpened, markRunnerOpened, useRunnerDownload } from "../lib/runnerDownload.js";
+import EntryWaitNotice from "../components/EntryWaitNotice.jsx";
 import { findLaunchedSession, findSessionStartedSince, launchPhaseFromTicketStatus, ticketIssuedAtMs } from "../lib/runnerLaunch.js";
 import { parseHelperProgress } from "../lib/runnerHelperProgress.js";
 import { quickRunCard } from "../lib/quickRunCard.js";
@@ -1413,6 +1414,7 @@ function DesktopRunnerDownload({ embedded = false, onExit }) {
     return (
       <Workspace title="실행기에서 시작" status={keyGuide.modeShort}>
         <MacroSummary item={selected} compact />
+        <EntryWaitNotice macro={selected?.macro} symbol={selected?.symbol} />
         <div className="runner-wizard-launch-panel is-ready">
           <span className="runner-wizard-launch-mark" aria-hidden="true"><Icon name="arrowUpRight" size={18} /></span>
           <div>
@@ -1554,6 +1556,7 @@ function DesktopRunnerDownload({ embedded = false, onExit }) {
             <button type="button" onClick={() => moveTo(STEP_MACRO)} className="runner-helper-link">다른 매크로</button>
           </div>
           {card ? <MacroCard {...card} /> : <MacroSummary item={selected} />}
+          {launchPhase === "claimed" ? null : <EntryWaitNotice macro={selected?.macro} symbol={selected?.symbol} />}
           <section ref={helperCardRef} className="runner-helper-card" aria-live="polite">{body}</section>
           {manualDownloadError ? <p className="runner-helper-error" role="alert">파일을 준비하지 못했어요: {manualDownloadError}</p> : null}
         </div>

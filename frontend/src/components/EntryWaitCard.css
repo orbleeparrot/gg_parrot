@@ -1,0 +1,41 @@
+/* 진입 대기 카드 — 포지션 블록(.agent-position) 안, 게이지 자리. 상자 없이 괘선과 글자 위계로.
+   상태 12/700 → 조건 문장 19/800 → 거리 15/600 → 세 칸 값 17/800(라벨 12/600) → 확인 기록 13. 흐린 글은 라벨에만. */
+.ewc { display: grid; gap: 0; padding: 14px 16px 12px; border-bottom: 1px solid rgb(var(--c-slate-200)); }
+.ewc-state { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 12px; color: rgb(var(--c-slate-700)); white-space: nowrap; }
+.ewc-state b { font-weight: 800; color: rgb(var(--c-amber-700)); letter-spacing: .02em; }
+.ewc-sentence { margin: 8px 0 0; font-size: 19px; font-weight: 800; line-height: 1.4; letter-spacing: -.01em; color: rgb(var(--c-slate-900)); text-wrap: balance; word-break: keep-all; }
+.ewc-distance { margin: 4px 0 0; font-size: 15px; font-weight: 600; color: rgb(var(--c-slate-900)); word-break: keep-all; }
+.ewc.is-reached .ewc-distance { color: rgb(var(--c-green-700)); }
+
+.ewc-meter { margin-top: 14px; }
+.ewc-bar { position: relative; height: 6px; border-radius: 3px; background: rgb(var(--c-slate-200)); }
+.ewc-fill { position: absolute; inset: 0 auto 0 0; width: var(--at, 0%); border-radius: 3px; background: rgb(var(--c-amber-500)); }
+.ewc.is-reached .ewc-fill { background: rgb(var(--c-green-600)); }
+.ewc-pin { position: absolute; left: var(--at, 0%); top: -5px; width: 2px; height: 16px; margin-left: -1px; background: rgb(var(--c-slate-900)); }
+.ewc-ends { display: flex; justify-content: space-between; gap: 12px; margin-top: 6px; font-size: 12px; font-weight: 600; color: rgb(var(--c-slate-700)); }
+.ewc-ends b { font-weight: 700; color: rgb(var(--c-slate-900)); }
+
+.ewc-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 14px 0 0; padding-top: 12px; border-top: 1px solid rgb(var(--c-slate-200)); }
+.ewc-facts > div { min-width: 0; }
+.ewc-facts dt { font-size: 12px; font-weight: 600; color: rgb(var(--c-slate-500)); }
+.ewc-facts dd { margin: 2px 0 0; font-size: 17px; font-weight: 800; color: rgb(var(--c-slate-900)); line-height: 1.3; }
+.ewc-facts dd.ewc-fact-sub { margin-top: 1px; font-size: 12.5px; font-weight: 600; color: rgb(var(--c-slate-700)); line-height: 1.4; word-break: keep-all; }
+
+.ewc-log { margin: 12px 0 0; padding: 0; list-style: none; border-top: 1px solid rgb(var(--c-slate-200)); }
+.ewc-log li { display: grid; grid-template-columns: 56px minmax(0, 1fr) auto; gap: 10px; align-items: baseline; padding: 7px 0; border-bottom: 1px solid rgb(var(--c-slate-100)); font-size: 13px; color: rgb(var(--c-slate-900)); }
+.ewc-log li:last-child { border-bottom: 0; }
+.ewc-log time { font-size: 12px; font-weight: 600; color: rgb(var(--c-slate-500)); }
+.ewc-log b { font-size: 12px; font-weight: 700; color: rgb(var(--c-slate-500)); white-space: nowrap; }
+.ewc-log li.is-hit span, .ewc-log li.is-hit b { color: rgb(var(--c-green-700)); font-weight: 700; }
+.ewc-log li.is-start span { color: rgb(var(--c-slate-700)); }
+
+@media (max-width: 420px) {
+  .ewc-sentence { font-size: 17px; }
+  .ewc-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* 시작 전 안내(빠른 실행) — 매크로 카드 아래 글 한 덩어리. 띠 · 배경 없이 괘선과 글자로만. */
+.ewn { display: grid; gap: 4px; margin: 14px 0 0; padding: 12px 0 0; border-top: 1px solid rgb(var(--c-slate-200)); }
+.ewn-title { margin: 0; font-size: 16px; font-weight: 800; color: rgb(var(--c-slate-900)); }
+.ewn-body { margin: 0; font-size: 14px; font-weight: 500; line-height: 1.55; color: rgb(var(--c-slate-900)); word-break: keep-all; }
+.ewn-body b { font-weight: 800; }

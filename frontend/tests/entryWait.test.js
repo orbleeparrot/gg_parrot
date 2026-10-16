@@ -91,3 +91,22 @@ test("평소 기다린 시간 — 조건이 새로 맞은 횟수로 나눈다", 
   assert.equal(fmtRoughSpan(60 * H), "약 3일");
   assert.equal(fmtSpan(134 * 60_000), "2시간 14분");
 });
+
+test("서버 entry_wait 를 화면 모델로 옮긴다", async () => {
+  const { entryWaitFromServer } = await import("../src/lib/entryWait.js");
+  const now = Date.UTC(2026, 9, 16, 13, 13);
+  const m = entryWaitFromServer({
+    rule: "I", interval: "1h", interval_label: "1시간", realtime: false, sentence: "가격이 209.52 위로 올라가면 사요.",
+    distance: "지금 207.46 · +1.0% 더 오르면", reached: false, meter: { from: { label: "이 봉 시가", value: "207.20" }, to: { label: "사는 선", value: "209.52" }, now: "207.46", progress: 0.1 },
+    buy_line: { price: 209.52, label: "사는 선 209.52" }, next_check_ms: Date.UTC(2026, 9, 16, 14, 0), checks: 3,
+    typical: { episodes: 74, span_ms: 300 * 3_600_000, avg_ms: 4 * 3_600_000, longest_ms: 0 },
+    log: [{ at_ms: Date.UTC(2026, 9, 16, 13, 0), text: "고가 211.42 · 사는 선 212.93", hit: false }],
+  }, { started_at: new Date(now - 135 * 60_000).toISOString(), last_price: 207.46 }, now);
+  assert.equal(m.nextCheck, "23:00");
+  assert.equal(m.nextCheckIn, "47분 뒤");
+  assert.equal(m.waitingFor, "2시간 15분");
+  assert.equal(m.log[0].at, "22:00");
+  assert.match(m.priceLine.label, /사는 선 209\.52 · \+1\.0%/);
+  assert.equal(m.typical.avgMs, 4 * 3_600_000);
+  assert.equal(entryWaitFromServer(null), null);
+});

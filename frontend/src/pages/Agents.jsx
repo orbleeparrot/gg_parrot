@@ -17,7 +17,7 @@ import "../components/AgentSessionPanel.css";
 import CandleChart from "../components/CandleChart.jsx";
 import PositionStrip from "../components/PositionStrip.jsx";
 import useMacroCandles from "../hooks/useMacroCandles.js";
-import { entryWaitModel, isWaitingMacro } from "../lib/entryWait.js";
+import { entryWaitFromServer, entryWaitModel, isWaitingMacro } from "../lib/entryWait.js";
 import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 import { Loading } from "../components/Page.jsx";
 import ConfirmDialog from "../components/ConfirmDialog.jsx";
@@ -387,12 +387,15 @@ function AccountAgents() {
 
   // 진입을 기다리는 매크로(돌파 · RSI · 볼린저 · 이평선 · 지정가 · 눌림 진입)가 포지션 없이 돌 때의 '무엇을 · 얼마나 · 언제'.
   // 차트는 사용자가 간격을 바꿀 수 있어 매크로 간격의 캔들을 따로 받는다.
+  // 서버가 entry_wait 를 보내면(실행기 하트비트와 같은 값) 그것을 쓰고, 옛 서버 응답이면 공개 캔들로 직접 계산한다.
   const waiting = selected?.status === "running" && !selected?.in_position && isWaitingMacro(macro);
-  const waitCandles = useMacroCandles({ symbol: selected?.symbol, interval, market, exchange, enabled: waiting });
-  const waitModel = useMemo(
-    () => (waiting ? entryWaitModel({ macro, session: selected, candles: waitCandles, levels: selected?.strategy_levels || null }) : null),
-    [waiting, macro, selected, waitCandles],
-  );
+  const serverWait = waiting ? selected?.entry_wait || null : null;
+  const waitCandles = useMacroCandles({ symbol: selected?.symbol, interval, market, exchange, enabled: waiting && !serverWait });
+  const waitModel = useMemo(() => {
+    if (!waiting) return null;
+    if (serverWait) return entryWaitFromServer(serverWait, selected);
+    return entryWaitModel({ macro, session: selected, candles: waitCandles, levels: selected?.strategy_levels || null });
+  }, [waiting, serverWait, macro, selected, waitCandles]);
   const waitLine = waitModel?.priceLine || null;
 
   // strategy_levels 는 서버가 체크포인트의 전략 상태로 계산한 **실제** 가격선이다.

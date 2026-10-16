@@ -368,3 +368,36 @@ function describe(rule, row, fp, confirm) {
       return { text: "" };
   }
 }
+
+// 서버가 보낸 진입 대기(세션 응답 entry_wait — 실행기 하트비트와 같은 값)를 이 화면의 모델 모양으로 옮긴다.
+// 서버 값이 있으면 화면 계산 대신 이것을 써서 실행기와 웹이 같은 숫자를 보게 한다.
+export function entryWaitFromServer(wait, session = null, now = Date.now()) {
+  if (!wait || typeof wait !== "object" || !wait.sentence) return null;
+  const startedMs = session?.started_at ? Date.parse(session.started_at) : NaN;
+  const price = Number(session?.last_price);
+  const next = Number(wait.next_check_ms);
+  const typical = wait.typical
+    ? { episodes: wait.typical.episodes, spanMs: wait.typical.span_ms, avgMs: wait.typical.avg_ms ?? null }
+    : null;
+  const line = wait.buy_line && Number.isFinite(Number(wait.buy_line.price))
+    ? { price: Number(wait.buy_line.price), label: `${wait.buy_line.label} · ${pctText(price, Number(wait.buy_line.price)) || "도달"}` }
+    : null;
+  return {
+    rule: wait.rule,
+    interval: wait.interval,
+    intervalLabel: wait.interval_label || intervalLabel(wait.interval),
+    realtime: Boolean(wait.realtime),
+    waitingFor: Number.isFinite(startedMs) ? fmtSpan(now - startedMs) : "",
+    sentence: wait.sentence,
+    distance: wait.distance || "",
+    reached: Boolean(wait.reached),
+    meter: wait.meter || null,
+    priceLine: line,
+    nextCheck: wait.realtime ? "실시간" : Number.isFinite(next) && next > 0 ? kstClock(next) : "—",
+    nextCheckIn: wait.realtime ? "가격이 닿는 순간" : Number.isFinite(next) && next > 0 ? (next > now ? `${fmtSpan(next - now)} 뒤` : "곧") : "",
+    checks: wait.checks ?? null,
+    typical,
+    log: (wait.log || []).map((row) => ({ at: kstDayClock(Number(row.at_ms), now), text: row.text, hit: Boolean(row.hit) })),
+    startedAt: Number.isFinite(startedMs) ? kstDayClock(startedMs, now) : "",
+  };
+}

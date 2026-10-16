@@ -206,11 +206,11 @@ test("마법사가 읽는 안내 칸은 모든 거래소 안내에 실제 글로
   // 바이낸스 문구를 화면에 다시 박아 두지 않았는지(위의 거래소별 안내가 유일한 출처).
   assert.doesNotMatch(wizard, /BINANCE_TESTNET_GUIDES|바이낸스 키를|테스트넷 기본|테스트넷 · 가짜 자금|테스트넷 키/);
   const install = read("../src/pages/RunnerInstall.jsx");
-  assert.match(install, /업비트·빗썸[\s\S]{0,60}모의 모드/);
-  assert.match(install, /허용 IP/);
+  assert.match(install, /모의 실행은 키 없이/);
+  assert.match(install, /연결 도우미/);
 });
 
-test("'자동 연결 최소 버전' 칸 — 국내 매크로는 국내 요구 버전, 모르면 비운다", () => {
+test("필요한 실행기 버전 — 국내 매크로는 국내 요구 버전, 모르면 비운다", () => {
   const binance = runnerKeyGuide({ exchange: "binance" });
   const upbit = runnerKeyGuide({ exchange: "upbit" });
   const versions = { general: "6", domestic: "10" };
@@ -219,7 +219,6 @@ test("'자동 연결 최소 버전' 칸 — 국내 매크로는 국내 요구 �
   assert.equal(launchMinVersionFor(upbit, { general: "6" }), "", "국내인데 바이낸스 숫자를 보이면 안 된다");
   assert.equal(resolveRunnerDownload({ available: true, domestic_min_runner_version: "10", min_runner_version: "6" }, null).domesticMinVersion, "10");
   assert.equal(resolveRunnerDownload({ available: true, min_runner_version: "6" }, null).domesticMinVersion, "");
-  assert.match(read("../src/pages/RunnerDownload.jsx"), /launchMinVersionFor\(keyGuide/);
 });
 
 test("매크로 파일 내려받기 실패는 서버가 말한 이유를 그대로 던진다", async (t) => {

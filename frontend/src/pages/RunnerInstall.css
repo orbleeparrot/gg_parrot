@@ -1,6 +1,5 @@
-.runner-install {
-  width: 100%;
-}
+/* 실행기 설치 안내 — 상자 없이 괘선과 글자 위계로. 단계 제목 18/800 → 할 일 15 → 보조 13.5 흐림. 앱 메뉴 이름은 굵게. */
+.runner-install { width: 100%; }
 
 .runner-install-heading { display: flex; align-items: center; gap: 12px; margin-bottom: 28px; }
 .runner-install-heading .page-head { min-width: 0; margin-bottom: 0; }
@@ -8,204 +7,89 @@
 
 .runner-install-layout {
   display: grid;
-  grid-template-columns: clamp(500px, 36vw, 580px) minmax(440px, 1fr);
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
   align-items: start;
-  gap: 32px;
+  gap: 40px;
+  max-width: 1240px;
+}
+.runner-install-layout.is-device-limited { grid-template-columns: minmax(0, 420px) minmax(0, 560px); gap: 48px; }
+
+.runner-install-shot { margin: 0; min-width: 0; }
+.runner-install-shot img {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  border: 1px solid rgb(var(--c-slate-200));
+  border-radius: 12px;
 }
 
-.runner-install-media {
-  min-width: 0;
-}
+.runner-install-side { min-width: 0; }
 
-.runner-install-media .runner-launch-guide {
-  margin: 0;
-}
-
-.runner-install-side {
-  min-width: 0;
-}
-
-.runner-install-layout.is-device-limited {
-  grid-template-columns: minmax(0, 480px) minmax(0, 420px);
-  gap: 48px;
-}
-.runner-install-device-key {
-  max-width: 480px;
-  margin-top: 24px;
-  padding-top: 20px;
+.runner-install-steps { margin: 0; padding: 0; list-style: none; }
+.runner-install-steps > li {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  column-gap: 8px;
+  padding: 18px 0;
   border-top: 1px solid rgb(var(--c-slate-200));
+}
+.runner-install-steps > li:first-child { padding-top: 0; border-top: 0; }
+.runner-install-steps > li > :not(.runner-install-n) { grid-column: 2; }
+.runner-install-n {
+  grid-row: 1 / span 9;
+  font: 600 13px/26px var(--font-mono);
+  color: rgb(var(--c-slate-500));
+}
+.runner-install-steps h2 {
+  margin: 0 0 4px;
+  font-size: 18px;
+  font-weight: 800;
+  line-height: 26px;
+  letter-spacing: -0.01em;
+  color: rgb(var(--c-slate-900));
+}
+.runner-install-steps p {
+  margin: 2px 0 0;
+  font-size: 15px;
   line-height: 1.6;
+  color: rgb(var(--c-slate-900));
   word-break: keep-all;
 }
+.runner-install-ui { font-weight: 700; color: rgb(var(--c-slate-900)); }
+.runner-install-sep { color: rgb(var(--c-slate-500)); }
+.runner-install-steps p.runner-install-hint { font-size: 13.5px; color: rgb(var(--c-slate-500)); }
+.runner-install-hint .runner-install-ui { font-weight: 600; }
 
-.runner-install-actions {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  align-items: stretch;
-}
-
-.runner-install-step {
-  display: grid;
-  align-content: start;
-  gap: 12px;
-  min-width: 0;
-  padding: 2px 20px;
-  border-left: 1px solid rgb(var(--c-slate-200));
-}
-
-.runner-install-step:first-child {
-  padding-left: 0;
-  border-left: 0;
-}
-
-.runner-install-step-title {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 20px;
-  line-height: 1.35;
-  letter-spacing: -0.015em;
-}
-
-.runner-install-step-title .t-caption {
-  color: rgb(var(--c-slate-700));
+.runner-install-act { display: flex; align-items: flex-start; gap: 16px; flex-wrap: wrap; margin-top: 10px; }
+.runner-install-act > .runner-install-alt { align-self: center; }
+.runner-install-act .btn { white-space: nowrap; }
+.runner-install-key .btn { width: auto; }
+.runner-install-alt {
   font-size: 14px;
-}
-
-.runner-install-step > .t-small {
-  font-size: 16px;
-  line-height: 1.6;
-}
-
-.runner-install-step > .t-caption {
-  font-size: 14px;
-  line-height: 1.5;
-}
-
-.runner-install-button {
-  width: 100%;
-  height: auto;
-  min-height: 48px;
-  padding: 10px 12px;
-  white-space: normal;
-  font-size: 15px;
-  line-height: 1.25;
-}
-
-.runner-install-button svg { flex: 0 0 auto; }
-
-.runner-install-inline-link {
+  font-weight: 600;
   color: rgb(var(--c-slate-900));
-  font-weight: 700;
   text-decoration: underline;
   text-underline-offset: 3px;
+  white-space: nowrap;
 }
+.runner-install-alt:hover { color: rgb(var(--c-slate-700)); }
 
-.runner-install-security {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 12px;
-  margin-top: 24px;
-  padding-top: 22px;
+.runner-install-foot {
+  margin: 20px 0 0;
+  padding-top: 16px;
   border-top: 1px solid rgb(var(--c-slate-200));
+  font-size: 13.5px;
+  line-height: 1.7;
+  color: rgb(var(--c-slate-500));
 }
 
-.runner-install-security > .t-title {
-  font-size: 20px;
-  line-height: 1.35;
+@media (max-width: 1023px) {
+  .runner-install-layout,
+  .runner-install-layout.is-device-limited { grid-template-columns: minmax(0, 1fr); gap: 28px; }
+  .runner-install-layout:not(.is-device-limited) .runner-install-shot { order: 2; }
 }
-
-.runner-install-security-copy {
-  display: grid;
-  gap: 10px;
-  font-size: 16px;
-  line-height: 1.6;
-}
-
-@media (min-width: 1280px) and (max-width: 1399px) {
-  .runner-install-step {
-    padding-inline: 14px;
-  }
-
-  .runner-install-step:first-child {
-    padding-left: 0;
-  }
-
-  .runner-install-step-title,
-  .runner-install-security > .t-title {
-    font-size: 18px;
-  }
-
-  .runner-install-step > .t-small,
-  .runner-install-security-copy {
-    font-size: 15px;
-    line-height: 1.55;
-  }
-}
-
-@media (max-width: 1279px) {
-  .runner-install-layout {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 28px;
-  }
-
-  .runner-install-media {
-    width: 100%;
-    max-width: 720px;
-  }
-
-  .runner-install-side {
-    width: 100%;
-    max-width: 720px;
-  }
-
-  .runner-install-actions {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    align-items: start;
-  }
-
-  .runner-install-step,
-  .runner-install-step:first-child {
-    gap: 12px;
-    padding: 20px 0 0;
-    border-left: 0;
-    border-top: 1px solid rgb(var(--c-slate-200));
-  }
-
-  .runner-install-security {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-
-@media (max-width: 767px) {
+@media (max-width: 640px) {
   .runner-install-heading { gap: 8px; }
   .runner-install-mascot { width: 72px; height: 72px; margin-block: -12px; }
-
-  .runner-install-layout {
-    gap: 24px;
-  }
-
-  .runner-install-layout.is-device-limited {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 24px;
-  }
-
-  .runner-install-layout.is-device-limited .runner-install-media {
-    max-width: 360px;
-  }
-
-  .runner-install-step,
-  .runner-install-step:first-child {
-    padding: 24px 0;
-  }
-
-  .runner-install-step:first-child {
-    border-top: 0;
-    padding-top: 0;
-  }
-
-  .runner-install-step:last-child {
-    padding-bottom: 0;
-  }
 }

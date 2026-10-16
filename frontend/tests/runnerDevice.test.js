@@ -9,6 +9,7 @@ test("Windows desktop and touch PCs support the runner regardless of viewport", 
     { platform: "Win32", maxTouchPoints: 10, userAgent: "Windows NT 10.0" },
   ]) {
     assert.equal(getRunnerDevice(device).canRunWindowsRunner, true);
+    assert.equal(getRunnerDevice(device).canRunRunner, true);
     assert.equal(getRunnerDevice(device).isMobile, false);
   }
 });
@@ -23,16 +24,28 @@ test("phone and tablet operating systems never offer a Windows launch", () => {
     { userAgentData: { platform: "Android", mobile: false } },
     { userAgent: "Mozilla/5.0 (Windows Phone 10.0; Android 6.0; Microsoft) Mobile" },
   ]) {
-    assert.equal(getRunnerDevice(device).canRunWindowsRunner, false);
+    assert.equal(getRunnerDevice(device).canRunRunner, false);
     assert.equal(getRunnerDevice(device).isMobile, true);
   }
 });
 
-test("Mac, Linux, ChromeOS, and unknown platforms use PC handoff", () => {
+test("Mac desktops run the desktop app too, but not as a Windows runner", () => {
   for (const device of [
     { platform: "MacIntel", maxTouchPoints: 0 },
+    { userAgentData: { platform: "macOS", mobile: false } },
+    { userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)" },
+  ]) {
+    const result = getRunnerDevice(device);
+    assert.equal(result.canRunRunner, true);
+    assert.equal(result.canRunWindowsRunner, false);
+    assert.equal(result.platform, "macos");
+  }
+});
+
+test("Linux, ChromeOS, and unknown platforms use PC handoff", () => {
+  for (const device of [
     { platform: "Linux x86_64" },
     { userAgent: "Mozilla/5.0 (X11; CrOS x86_64 15917.0.0)" },
     {}, null,
-  ]) assert.equal(getRunnerDevice(device).canRunWindowsRunner, false);
+  ]) assert.equal(getRunnerDevice(device).canRunRunner, false);
 });

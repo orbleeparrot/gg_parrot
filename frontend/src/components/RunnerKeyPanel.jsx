@@ -115,7 +115,7 @@ export function RunnerKeyPanel({ enabled = true, compact = false, menu = false }
     <div className="notice space-y-2">
       {regenDialog}
       <div className="t-small text-slate-700">
-        아래 <b className="text-slate-900">껄무새 회원 키</b>를 매크로 실행기의 ④번 칸에 입력하세요. 계정당 1개예요.
+        아래 <b className="text-slate-900">껄무새 회원 키</b>를 매크로 실행기의 설정 › 껄무새 계정 › 회원 키에 입력하세요. 계정당 1개예요.
       </div>
       <div className="flex items-center gap-2 flex-wrap">
         <code className="num text-slate-900 bg-slate-100 px-2 py-1 rounded-sm break-all">

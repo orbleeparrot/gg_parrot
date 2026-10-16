@@ -109,7 +109,7 @@ export default function PositionStrip({ session, macro }) {
         {newer ? (
           <div className="is-wide"><dt>새 실행기</dt><dd>
             <a className="agent-runner-update num" href={download.url} target={download.isExternal ? "_blank" : undefined}
-              rel={download.isExternal ? "noopener noreferrer" : undefined}>v{download.version} 받기</a>
+              rel={download.isExternal ? "noopener noreferrer" : undefined}>v{download.appVersion || download.version} 받기</a>
           </dd></div>
         ) : null}
         <div className="is-wide"><dt>청산 기준</dt><dd>{rules.summary}</dd></div>

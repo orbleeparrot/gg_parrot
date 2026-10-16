@@ -10,12 +10,12 @@ import "../components/RunnerHelper.css";
 import { getAuthUser, updateAuthUser, useAuth } from "../lib/auth.js";
 import { RULE_TYPES } from "../lib/macro.js";
 import { getUserId } from "../lib/user.js";
-import { fmtSize, isRunnerOpened, markRunnerOpened, useRunnerDownload } from "../lib/runnerDownload.js";
+import { isRunnerOpened, markRunnerOpened, useRunnerDownload } from "../lib/runnerDownload.js";
 import { findLaunchedSession, findSessionStartedSince, launchPhaseFromTicketStatus, ticketIssuedAtMs } from "../lib/runnerLaunch.js";
 import { parseHelperProgress } from "../lib/runnerHelperProgress.js";
 import { quickRunCard } from "../lib/quickRunCard.js";
 import { getRunnerDevice } from "../lib/runnerDevice.js";
-import { launchMinVersionFor, runnerExecutionMarket, runnerKeyGuide, RUNNER_KEY_STORAGE_NOTE } from "../lib/runnerGuide.js";
+import { runnerExecutionMarket, runnerKeyGuide, RUNNER_KEY_STORAGE_NOTE } from "../lib/runnerGuide.js";
 import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 import { Icon } from "../components/icons.jsx";
 
@@ -296,8 +296,8 @@ function InlineLeaderboard({ items, ownedItems, busy, error, importingId, onImpo
   );
 }
 
-// 구버전 실행기가 웹 연결에 응답했을 때. '실행기 열기'는 Windows 에 등록된 exe 를 여는데,
-// 등록은 마지막으로 직접 실행한 파일이 남긴다 — 새 파일을 받아만 두면 계속 구버전이 열린다.
+// 구버전 실행기(옛 exe)가 웹 연결에 응답했을 때. 'ggparrot://' 등록은 마지막으로 연 실행기가 남긴다 —
+// 새 앱을 설치만 하고 열지 않으면 계속 예전 실행기가 열린다.
 export function OutdatedRunnerPanel({ version, minVersion, downloadUrl, downloadIsExternal, onRetry, onManual, manualBusy }) {
   const shown = version ? `v${version}` : "구버전";
   return (
@@ -306,20 +306,20 @@ export function OutdatedRunnerPanel({ version, minVersion, downloadUrl, download
         <span className="runner-wizard-launch-mark" aria-hidden="true">!</span>
         <div>
           <h2>이 PC에서 열린 실행기는 {shown}이에요. 웹 연결은 v{minVersion}부터 돼요.</h2>
-          <p>‘실행기 열기’는 Windows에 등록된 실행기를 여는데, 마지막으로 직접 실행한 파일이 {shown}이라 그게 열렸어요. 새 파일을 받아 한 번 직접 실행하면 등록이 바뀌어요.</p>
+          <p>‘실행기 열기’는 마지막으로 연 실행기를 열어요. 새 실행기를 설치하고 한 번 열면 바뀌어요.</p>
         </div>
       </div>
       <div className="runner-wizard-launch-callout">
         <span className="num">01</span>
-        <div><strong>최신 실행기(v{minVersion})를 받아요.</strong><p>아래 ‘최신 실행기 받기’로 내려받아요.</p></div>
+        <div><strong>새 실행기를 설치해요.</strong><p>아래 ‘최신 실행기 받기’로 내려받아요.</p></div>
       </div>
       <div className="runner-wizard-launch-callout">
         <span className="num">02</span>
-        <div><strong>받은 파일을 한 번 직접 더블클릭해요.</strong><p>이때 ‘실행기 열기’가 새 버전을 가리키도록 등록돼요. 창 제목이 v{minVersion}인지 확인해요.</p></div>
+        <div><strong>설치한 실행기를 한 번 열어요.</strong><p>이때 ‘실행기 열기’가 새 실행기로 바뀌어요.</p></div>
       </div>
       <div className="runner-wizard-launch-callout">
         <span className="num">03</span>
-        <div><strong>열려 있던 {shown} 창을 닫고 새 연결을 준비해요.</strong><p>구버전은 종료할 때 손익을 보고하지 않아 결과가 0으로 남아요.</p></div>
+        <div><strong>예전 실행기 창을 닫고 파일은 지워요.</strong><p>그다음 새 연결을 준비해요.</p></div>
       </div>
       <div className="runner-wizard-launch-actions">
         <a
@@ -354,13 +354,13 @@ function Workspace({ title, status, bodyClassName = "", children }) {
 
 export default function RunnerDownload({ embedded = false, onExit }) {
   const device = getRunnerDevice();
-  if (!device.canRunWindowsRunner) {
+  if (!device.canRunRunner) {
     return <div className="runner-wizard-device"><RunnerDeviceHandoff isMobile={device.isMobile} onExit={embedded ? onExit : undefined} /></div>;
   }
-  return <WindowsRunnerDownload embedded={embedded} onExit={onExit} />;
+  return <DesktopRunnerDownload embedded={embedded} onExit={onExit} />;
 }
 
-function WindowsRunnerDownload({ embedded = false, onExit }) {
+function DesktopRunnerDownload({ embedded = false, onExit }) {
   const { token, user } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
@@ -394,7 +394,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
   const [outdatedRunner, setOutdatedRunner] = useState(null);
   const [manualDownloadBusy, setManualDownloadBusy] = useState(false);
   const [manualDownloadError, setManualDownloadError] = useState("");
-  // 껄무새 회원 키(계정 연결용) — 실행 마법사에서 복사해 실행기 ④번 칸에 붙여넣는다.
+  // 껄무새 회원 키(계정 연결용) — 직접 연결할 때 복사해 앱의 설정 › 껄무새 계정 › 회원 키에 붙여넣는다.
   const [memberKey, setMemberKey] = useState("");
   const [memberKeyError, setMemberKeyError] = useState("");
   const [memberKeyRevealed, setMemberKeyRevealed] = useState(false);
@@ -432,20 +432,15 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
   const progressChapters = buildFlow ? BUILD_FLOW_CHAPTERS : CHAPTERS;
   const progressIndex = buildFlow ? step + BUILD_FLOW_OFFSET : step;
   const {
-    info: downloadInfo,
     error: downloadError,
     checked: downloadChecked,
     available: runnerAvailable,
     url: downloadUrl,
     isExternal: downloadIsExternal,
     supportsLaunch,
-    version: displayedRunnerVersion,
     minVersion: requiredRunnerVersion,
-    domesticMinVersion,
     state: runnerDownloadState,
   } = runnerDownload;
-  const launchMinVersion = launchMinVersionFor(keyGuide, { general: requiredRunnerVersion, domestic: domesticMinVersion,
-    binanceHelper: binanceHelperMinVersion });
   // 국내 매크로는 웹에서 키를 준비하지 않는다 — 실행기 연결 도우미가 키 준비부터 실행까지 맡고, 웹은 그 화면을 따라 본다.
   const helperFlow = signedIn && !!selected && helperExchange;
   const helperStep = helperFlow && step >= STEP_API_KEY;
@@ -1059,17 +1054,17 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
     const heading = runnerReady
       ? "이 브라우저에서 실행기를 준비했다고 확인한 기록이 있어요."
       : downloadStarted
-        ? "다운로드한 실행기를 한 번 열어 주세요."
+        ? "설치한 실행기를 한 번 열어 주세요."
         : runnerDownloadState === "loading"
           ? "실행기 배포를 확인하고 있어요."
           : runnerDownloadState === "available"
-            ? "Windows 실행기를 내려받아요."
+            ? `${runnerDownload.platformLabel}용 실행기를 설치해요.`
             : runnerDownloadState === "error"
               ? "배포 상태를 확인하지 못했어요."
               : "실행기 배포 정보가 연결되지 않았어요.";
 
     return (
-      <Workspace title="Windows 실행기" status={status}>
+      <Workspace title="실행기" status={status}>
         <div className="runner-wizard-runner">
           <div className={`runner-wizard-runner-mark ${runnerReady ? "is-ready" : ""}`} aria-hidden="true">
             {mark}
@@ -1078,8 +1073,8 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
             <h2>{heading}</h2>
             <p>
               {downloadStarted
-                ? "최초 실행 때 웹의 ‘실행기 열기’ 주소를 등록해요. 실행기 창이 보이면 아래에서 계속해요."
-                : "Windows · 설치 없이 실행 · API 키는 실행기 안에서만 사용"}
+                ? "처음 열 때 웹의 ‘실행기 열기’가 이 앱으로 연결돼요. 앱이 열리면 아래에서 계속해요."
+                : `${runnerDownload.requirement} · API 키는 실행기 안에서만 사용`}
             </p>
           </div>
         </div>
@@ -1098,14 +1093,17 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
                       : "다운로드 정보 없음"}
             </dd>
           </div>
-          {runnerAvailable && displayedRunnerVersion ? <div><dt>다운로드 버전</dt><dd className="num">v{displayedRunnerVersion}</dd></div> : null}
-          {supportsLaunch && launchMinVersion ? <div><dt>자동 연결 최소 버전</dt><dd className="num">v{launchMinVersion}</dd></div> : null}
-          {runnerAvailable && downloadInfo?.size ? <div><dt>파일 크기</dt><dd className="num">{fmtSize(downloadInfo.size)}</dd></div> : null}
+          {runnerAvailable && runnerDownload.appVersion ? <div><dt>버전</dt><dd className="num">v{runnerDownload.appVersion}</dd></div> : null}
+          {runnerDownload.otherUrl ? (
+            <div><dt>다른 OS</dt><dd><a href={runnerDownload.otherUrl} target="_blank" rel="noopener noreferrer" className="underline">{runnerDownload.otherPlatformLabel}용 받기</a></dd></div>
+          ) : null}
         </dl>
         {downloadStarted && !runnerReady ? (
           <div className="runner-wizard-runner-notice" role="status">
-            <strong>다운로드 목록에서 파일을 허용한 뒤 한 번 열어 주세요.</strong>
-            <p>브라우저가 ‘확인되지 않은 다운로드’로 막으면 GitHub의 껄무새 공식 실행기 파일인지 확인한 뒤 유지·다운로드 계속을 선택해요.</p>
+            <strong>설치한 뒤 한 번 열어 주세요.</strong>
+            <p>{runnerDownload.platform === "macos"
+              ? "dmg를 열고 껄무새를 Applications로 옮겨요. 경고가 뜨면 시스템 설정 › 개인정보 보호 및 보안 › 그래도 열기."
+              : "‘Windows의 PC 보호’ 창이 뜨면 추가 정보 → 실행을 눌러요."}</p>
           </div>
         ) : !runnerReady && ["unavailable", "error"].includes(runnerDownloadState) ? (
           <div className="runner-wizard-runner-notice" role={runnerDownloadState === "error" ? "alert" : "status"}>
@@ -1116,7 +1114,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
         {!runnerReady && !downloadStarted ? (
           <div className="runner-wizard-runner-actions">
             <button type="button" onClick={() => confirmRunnerReady({ advance: true })} className="btn btn-m btn-secondary">
-              이 PC에서 실행기를 이미 열었어요
+              이 PC에 실행기를 이미 설치했어요
             </button>
             {runnerDownloadState === "error" || runnerDownloadState === "unavailable" ? (
               <button type="button" onClick={() => void runnerDownload.refresh()} className="btn btn-m btn-ghost">
@@ -1125,7 +1123,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
             ) : null}
           </div>
         ) : runnerReady ? (
-          <p className="runner-wizard-runner-ready-note">기록만으로 실제 실행기 상태를 확인하지 않아요. 창 제목의 버전을 확인한 뒤 계속하세요.</p>
+          <p className="runner-wizard-runner-ready-note">이 브라우저에 남긴 기록이에요. 실제 설치 여부를 확인한 것은 아니에요.</p>
         ) : null}
       </Workspace>
     );
@@ -1213,7 +1211,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
           <div className="flex items-start justify-between gap-3 flex-wrap">
             <div className="min-w-0">
               <strong className="t-label text-slate-900">① 매크로 파일 내려받기</strong>
-              <p className="mt-1 t-small text-slate-700">선택한 매크로를 <span className="num">.ggm.json</span> 파일로 받아 실행기의 <b>①번 칸</b>에서 열어요.</p>
+              <p className="mt-1 t-small text-slate-700">선택한 매크로를 <span className="num">.ggm.json</span> 파일로 받아 앱 창에 끌어다 놓거나 <b>매크로 추가 › 폴더로 가져오기</b>로 넣어요.</p>
             </div>
             <button type="button" onClick={() => void downloadManualMacroFile()} disabled={manualDownloadBusy || !selected?.macro} className="btn btn-m btn-secondary shrink-0">
               {manualDownloadBusy ? "파일 준비 중…" : "매크로 파일 받기"}
@@ -1224,7 +1222,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
           {/* ② 회원 키 복사 */}
           <div className="pt-4 border-t border-slate-200">
             <strong className="t-label text-slate-900">② 껄무새 회원 키 복사</strong>
-            <p className="mt-1 t-small text-slate-700">아래 키를 복사해 실행기 <b>④번 칸</b>에 붙여넣어요. 계정 연결용이고, <b>거래소 API 키가 아니에요.</b></p>
+            <p className="mt-1 t-small text-slate-700">아래 키를 복사해 앱의 <b>설정 › 껄무새 계정 › 회원 키</b>에 붙여넣어요. 계정 연결용이고, <b>거래소 API 키가 아니에요.</b></p>
             {memberKeyError ? (
               <p className="mt-2 t-small text-red-600" role="alert">키를 불러오지 못했어요: {memberKeyError}</p>
             ) : memberKey ? (
@@ -1290,7 +1288,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
               {manualDownloadBusy ? "파일 준비 중…" : "수동으로 연결하기"}
             </button>
           </div>
-          <p className="runner-wizard-launch-help">수동 연결을 선택하면 받은 .ggm.json 파일을 실행기에서 직접 열어요.</p>
+          <p className="runner-wizard-launch-help">수동 연결을 선택하면 받은 .ggm.json 파일을 앱 창에 끌어다 놓아요.</p>
           {downloadError ? <p className="runner-wizard-error" role="alert">배포 확인 응답: {downloadError}</p> : null}
           {manualDownloadError ? <p className="runner-wizard-error" role="alert">파일을 준비하지 못했어요: {manualDownloadError}</p> : null}
         </Workspace>
@@ -1323,12 +1321,12 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
             <span className="runner-wizard-launch-mark" aria-hidden="true">!</span>
             <div>
               <h2>실행기는 열렸지만 자동 연결되지 않았어요.</h2>
-              <p>{launchError || "열려 있는 구버전 실행기를 닫고 최신 실행기를 한 번 실행한 뒤 새 연결을 만들어 주세요."}</p>
+              <p>{launchError || "예전 실행기를 닫고 새 실행기를 한 번 연 뒤 새 연결을 만들어 주세요."}</p>
             </div>
           </div>
           <div className="runner-wizard-launch-diagnostic" role="status">
-            <strong>실행기 로그에 ‘올바르지 않은 웹 연결 요청’이 보이나요?</strong>
-            <p>구버전은 웹 연결마다 새 창을 열 수 있어요. 최신 실행기를 받아 한 번 열면, 다음부터는 이미 열린 실행기가 앞으로 나와요.</p>
+            <strong>예전 실행기(ggparrot-runner.exe)가 열렸나요?</strong>
+            <p>새 실행기를 한 번 열면 다음부터 ‘실행기 열기’가 새 실행기로 열려요. 예전 파일은 지워 주세요.</p>
           </div>
           <div className="runner-wizard-launch-actions">
             <button type="button" onClick={retryLaunchTicket} className="btn btn-m btn-secondary">새 연결 준비하기</button>
@@ -1364,7 +1362,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
           {showLaunchRecovery ? (
             <div className="runner-wizard-launch-recovery">
               <strong>실행기는 열렸는데 매크로가 비어 있나요?</strong>
-              <p>웹에서 열 때 새 실행기가 계속 나오면 열려 있는 구버전을 닫고 최신 실행기를 한 번 실행해 연결 등록을 갱신하세요.</p>
+              <p>예전 실행기가 열렸다면 그 창을 닫고 새 실행기를 한 번 연 뒤 다시 열어 주세요.</p>
               <div className="runner-wizard-launch-actions">
                 <a href={launchTicket?.launch_url} onClick={beginLaunchWait} className="btn btn-m btn-secondary">다시 열기</a>
                 <a
@@ -1374,7 +1372,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
                   rel={downloadIsExternal ? "noopener noreferrer" : undefined}
                   className="btn btn-m btn-ghost"
                 >
-                  {displayedRunnerVersion ? `runner-v${displayedRunnerVersion} 받기` : "최신 실행기 받기"}
+                  최신 실행기 받기
                 </a>
                 <button type="button" onClick={() => void downloadManualMacroFile()} disabled={manualDownloadBusy} className="btn btn-m btn-ghost">
                   {manualDownloadBusy ? "파일 준비 중…" : "수동으로 연결하기"}
@@ -1627,7 +1625,7 @@ function WindowsRunnerDownload({ embedded = false, onExit }) {
           onClick={() => setDownloadStarted(true)}
           className="btn btn-l btn-primary runner-wizard-next"
         >
-          Windows 실행기 내려받기
+          {runnerDownload.platformLabel}용 실행기 내려받기
         </a>
       );
     }

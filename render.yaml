@@ -62,10 +62,10 @@ services:
       # 미러 호스트를 사용(동일한 공개 시세). 로컬은 이 변수 없이 기본 호스트 사용.
       - key: BINANCE_API_BASE
         value: "https://data-api.binance.vision"
-      - key: RUNNER_DOWNLOAD_URL
-        value: "https://github.com/orbleeparrot/gg_parrot/releases/download/runner-v20/ggparrot-runner.exe"
-      - key: RUNNER_EXE_VERSION
-        value: "20"
+      # 실행기 = 데스크톱 앱(orbleeparrot/ggparrot-desktop) 릴리스 버전. 새 릴리스가 나오면 이 한 줄만 올린다
+      # (Windows 설치 파일 · macOS dmg 주소는 서버가 버전으로 만든다). 옛 RUNNER_DOWNLOAD_URL(exe)은 무시된다.
+      - key: RUNNER_APP_VERSION
+        value: "0.20.1"
       - key: RUNNER_SUPPORTS_LAUNCH
         value: "true"
       - key: RUNNER_MIN_VERSION

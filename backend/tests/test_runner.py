@@ -451,23 +451,23 @@ def test_runner_download_info_advertises_launch_capability_safely():
     assert isinstance(info["supports_launch"], bool)
     if info["supports_launch"]:
         assert info["launch_scheme"] == "ggparrot"
-        assert info["min_runner_version"]
-        if "/runner-v20/" in info["url"]:
-            assert int(info["min_runner_version"]) >= 6
-            assert int(info["version"]) >= 20
+        assert int(info["min_runner_version"]) >= 6
+        assert int(info["version"]) >= 20
     else:
         assert info["launch_scheme"] == ""
         assert info["min_runner_version"] == ""
 
 
-def test_runner_download_redirect_matches_advertised_v20():
+def test_runner_download_redirects_to_the_installer_for_each_platform():
     info = client.get("/api/runner/download/info").json()
-    response = client.get("/api/runner/download", follow_redirects=False)
-    assert response.status_code == 307
-    assert response.headers["location"] == info["url"]
-    assert "/runner-v20/" in info["url"]
-    assert info["version"] == "20"
-    assert response.headers["cache-control"] == "no-store"
+    assert info["url"].endswith("_windows_x64-setup.exe") and info["mac_url"].endswith("_darwin_universal.dmg")
+    assert "/ggparrot-desktop/releases/download/" in info["url"]
+    win = client.get("/api/runner/download", follow_redirects=False)
+    assert win.status_code == 307 and win.headers["location"] == info["url"]
+    assert win.headers["cache-control"] == "no-store"
+    mac = client.get("/api/runner/download?platform=mac", follow_redirects=False)
+    assert mac.status_code == 307 and mac.headers["location"] == info["mac_url"]
+    assert client.get("/api/runner/download?platform=linux", follow_redirects=False).status_code == 422
 
 
 # --- 세션 수명주기 + 원격 종료 -----------------------------------------

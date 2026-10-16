@@ -553,7 +553,7 @@ export const api = {
     });
     if (!res.ok) {
       // 서버가 이유를 말했으면 그대로 보인다 — 거절 이유(예: 여러 종목 묶음 매크로)는 한국어로 온다.
-      // 국내(업비트·빗썸) 매크로는 거절하지 않는다. 실행기 v10 이상이 필요하다는 안내는 직접 만들기의 '국내 거래소 지원 범위' 와 버튼 설명(title)이 한다.
+      // 국내(업비트·빗썸) 매크로는 거절하지 않는다(지금 배포된 실행기는 모두 국내 거래소를 돌린다).
       const body = await res.json().catch(() => null);
       throw new Error(typeof body?.detail === "string" && body.detail ? body.detail : "매크로 파일 생성 실패");
     }

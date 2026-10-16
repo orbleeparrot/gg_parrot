@@ -5,6 +5,10 @@
 // 그림일 뿐이라 눌러도 아무 일도 없다. 움직임을 줄인 설정이면 마지막 장면만 보인다.
 import { useEffect, useRef } from "react";
 import "./ExchangeScreen.css";
+import { getRunnerDevice } from "../lib/runnerDevice.js";
+
+// 키 복사 단축키 — Mac 실행기에서는 ⌘C.
+const COPY_KEYCAP = getRunnerDevice().platform === "macos" ? "⌘C" : "Ctrl+C";
 
 const UP_KEYS = ["a8Kq3Zt0" + "*".repeat(20), "Wm2xP7Lb" + "*".repeat(20)];
 const BT_KEYS = ["6b2c78fd" + "*".repeat(20), "ZDkyNGRk" + "*".repeat(20)];
@@ -206,7 +210,7 @@ function TestnetScene({ kind }) {
     );
   }
   if (kind === "keys") {
-    // 이 화면에는 [복사] 가 없다 — 값을 골라 Ctrl+C. 실행기 클립보드 감시가 받는다.
+    // 이 화면에는 [복사] 가 없다 — 값을 골라 Ctrl+C(Mac ⌘C). 실행기 클립보드 감시가 받는다.
     return (
       <>
         <TnChrome />
@@ -214,7 +218,7 @@ function TestnetScene({ kind }) {
           <b className="xs-tnh">HMAC-SHA-256 Key registered</b>
           <span><b>Save these values right now.</b> They won't be shown ever again!</span>
           {[["API Key:", TN_KEYS[0], "s1", "k1"], ["Secret Key:", TN_KEYS[1], "s2", "k2"]].map(([label, value, sel, cap]) => (
-            <span key={sel} className="xs-tnrow">{label} <span className="xs-tnsel" data-t={sel}>{value}</span><span className="xs-keycap" data-t={cap}>Ctrl+C</span></span>
+            <span key={sel} className="xs-tnrow">{label} <span className="xs-tnsel" data-t={sel}>{value}</span><span className="xs-keycap" data-t={cap}>{COPY_KEYCAP}</span></span>
           ))}
           <span className="xs-tnlink">Back</span>
         </div>

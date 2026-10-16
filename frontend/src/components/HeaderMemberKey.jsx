@@ -1,4 +1,4 @@
-// 헤더의 '회원 키' — 실행기 ④번 칸에 넣는 껄무새 회원 키를 어느 화면에서든 바로 꺼내 본다.
+// 헤더의 '회원 키' — 실행기의 설정 › 껄무새 계정에 넣는 껄무새 회원 키를 어느 화면에서든 바로 꺼내 본다.
 // 마이페이지 → 프로필 설정 → 보안까지 들어가야 보이던 걸 헤더 한 번 클릭으로 줄인다.
 // 키 조회·복사·재발급은 기존 RunnerKeyPanel(menu)이 그대로 맡는다.
 import { useEffect, useRef, useState } from "react";
@@ -61,7 +61,7 @@ export default function HeaderMemberKey() {
         <section id="header-member-key" className="header-key-popover" role="dialog" aria-label="껄무새 회원 키">
           <h2 className="t-title">껄무새 회원 키</h2>
           <p className="t-small text-slate-700">
-            매크로 실행기의 <b className="text-slate-900">④ 회원 키</b> 칸에 넣어요. 계정당 1개이고, 거래소 API 키와는 다른 값이에요.
+            매크로 실행기의 <b className="text-slate-900">설정 › 껄무새 계정</b>에 넣어요. 웹에서 <b className="text-slate-900">실행기 열기</b>를 누르면 저절로 채워져요. 계정당 1개이고, 거래소 API 키와는 다른 값이에요.
           </p>
           {/* 로그인 세션이 바뀌면 키도 새로 읽는다 */}
           <RunnerKeyPanel key={token} menu />

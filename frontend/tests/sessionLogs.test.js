@@ -195,11 +195,11 @@ test("visible event labels distinguish order from confirmed fill without inferri
 });
 
 test("source labels use bounded plain text and never synthesize unknown sources", () => {
-  assert.equal(sessionLogSourceLabel(row(1)), "Windows 실행기");
+  assert.equal(sessionLogSourceLabel(row(1)), "실행기");
   assert.equal(sessionLogSourceLabel(row(1, { source: "news" })), "뉴스 서비스");
   assert.equal(sessionLogSourceLabel(row(1, { source_label: "공용 뉴스 응답" })), "공용 뉴스 응답");
   assert.equal(sessionLogSourceLabel(row(1, { source: "unknown" })), "서버 기록");
-  assert.equal(sessionLogSourceLabel(row(1, { source_label: {} })), "Windows 실행기");
+  assert.equal(sessionLogSourceLabel(row(1, { source_label: {} })), "실행기");
 });
 
 test("news collection states never claim an article was successfully provided", () => {

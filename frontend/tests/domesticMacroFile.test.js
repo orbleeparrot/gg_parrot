@@ -30,8 +30,8 @@ test("PaperPanel — 국내에서도 매크로 파일 내려받기가 열려 있
   // 버튼이 국내로 잠기지 않는다 — valErr 만 잠근다.
   const button = buttonWith(html, "매크로 파일 내려받기");
   assert.doesNotMatch(button, /disabled/, "국내 매크로에서 내려받기 버튼이 잠겼다");
-  // 내려받기 옆에서 실행기 버전을 한 번은 말한다.
-  assert.match(text, /실행기 v10 이상/);
+  // 실행기는 데스크톱 앱 하나 — 옛 exe 버전 조건(v10)은 더 말하지 않는다.
+  assert.doesNotMatch(text, /실행기 v10/);
 });
 
 test("PaperPanel — 내려받기 함수에 국내 사전 차단이 없다", () => {
@@ -52,7 +52,7 @@ test("StudioDock — 국내에서도 매크로 파일 내려받기 행이 열려
   assert.match(text, /\.ggm\.json 파일로 저장해요/, "국내에서 부제가 바이낸스와 달라졌다");
   const button = buttonWith(html, "매크로 파일 내려받기");
   assert.doesNotMatch(button, /disabled/, "국내 매크로에서 내려받기 행이 잠겼다");
-  assert.match(text, /실행기 v10 이상/);
+  assert.doesNotMatch(text, /실행기 v10/);
 });
 
 test("HeroGuideScreens·api.js — '매크로 파일은 바이낸스 전용' 이라는 말이 어디에도 없다", () => {
@@ -87,11 +87,9 @@ test("StudioPro 소스 — 버튼이 실제로 그 끝점을 쓰고, 누르기 �
   assert.match(fn, /setFormError\(\{ \.\.\.problem, form \}\);[\s\S]{0,80}return;/);
 });
 
-test("StudioPro — 국내 조건이면 실행기 v10 안내가 버튼 옆에 뜬다", async () => {
+test("StudioPro — 국내 조건에도 옛 실행기 버전(v10) 안내를 붙이지 않는다", async () => {
   const domestic = textOf(await renderComponent("src/pages/StudioPro.jsx", {},
     { router: true, routerState: { macro: DOMESTIC_MACRO, source: "builder-mode" } }));
-  assert.match(domestic, /업비트·빗썸은 실행기 v10 이상이 필요해요/);
-  // 바이낸스 조건으로 열면 그 줄은 없다 — 모든 화면에 붙는 군더더기가 아니다.
-  const binance = textOf(await renderComponent("src/pages/StudioPro.jsx", {}, { router: true }));
-  assert.doesNotMatch(binance, /v10/);
+  assert.doesNotMatch(domestic, /v10/);
+  assert.match(domestic, /매크로 파일 내려받기/);
 });

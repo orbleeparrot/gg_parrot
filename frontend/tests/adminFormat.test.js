@@ -67,6 +67,7 @@ test("KST formatting converts UTC ISO stamps", () => {
   assert.equal(fmtDayTimeKst(Date.UTC(2026, 8, 16, 13, 10)), "09-16 22:10");
   assert.equal(fmtStamp("2026-09-17T01:42:00Z"), "2026-09-17 10:42 KST · 1분마다 갱신");
   assert.equal(fmtStamp(""), "갱신 시각 없음 · 1분마다 갱신");
+  assert.equal(fmtStamp("2026-10-16T01:00:00Z", "15초"), "2026-10-16 10:00 KST · 15초마다 갱신");
 });
 
 test("day and month labels", () => {

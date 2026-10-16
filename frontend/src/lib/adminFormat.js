@@ -112,9 +112,9 @@ export function fmtDayTimeKst(ms) {
   return p ? `${p.mo}-${p.d} ${p.h}:${p.mi}` : DASH;
 }
 
-export function fmtStamp(iso) {
+export function fmtStamp(iso, every = "1분") {
   const stamp = fmtKst(iso);
-  return stamp === DASH ? "갱신 시각 없음 · 1분마다 갱신" : `${stamp} KST · 1분마다 갱신`;
+  return stamp === DASH ? `갱신 시각 없음 · ${every}마다 갱신` : `${stamp} KST · ${every}마다 갱신`;
 }
 
 // "2026-09-01" → "09-01" (표) / "9/1" (차트 눈금).

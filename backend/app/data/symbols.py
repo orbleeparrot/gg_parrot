@@ -153,6 +153,8 @@ def reset_cache() -> None:
 
 # ── coin logo proxy (same-origin copy of Binance's public logo, for the share-card capture) ──
 LOGO_BASE = "https://bin.bnbstatic.com/static/assets/logos"
+# 바이낸스에 없는 원화 마켓 종목(BFC · DEEP · ICNT · POD · TRAC 등)은 업비트 공개 로고로 채운다.
+LOGO_FALLBACK_BASE = "https://static.upbit.com/logos"
 _LOGO_MAX = 400
 _logo_cache: dict[str, bytes] = {}
 _logo_lock = threading.Lock()
@@ -167,14 +169,19 @@ def coin_logo_png(base: str) -> Optional[bytes]:
         if key in _logo_cache:
             return _logo_cache[key]
     client = get_http_client()
-    try:
-        resp = client.get(f"{LOGO_BASE}/{key}.png", timeout=10.0, headers={"Referer": ""})
-    except Exception:
-        return None
-    if resp.status_code != 200 or not resp.content:
+    content = None
+    for base_url in (LOGO_BASE, LOGO_FALLBACK_BASE):
+        try:
+            resp = client.get(f"{base_url}/{key}.png", timeout=10.0, headers={"Referer": ""})
+        except Exception:
+            continue
+        if resp.status_code == 200 and resp.content:
+            content = resp.content
+            break
+    if content is None:
         return None
     with _logo_lock:
         if len(_logo_cache) >= _LOGO_MAX:
             _logo_cache.pop(next(iter(_logo_cache)))
-        _logo_cache[key] = resp.content
-    return resp.content
+        _logo_cache[key] = content
+    return content

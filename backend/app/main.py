@@ -2590,6 +2590,18 @@ def runner_heartbeat(
     return runner_mod.heartbeat(user, snap.pop("session_id"), snap, db=db)
 
 
+class RunnerEntryPreviewRequest(BaseModel):
+    macro: dict
+    market: str = Field(default="spot", pattern="^(spot|futures)$")
+
+
+@app.post("/api/runner/entry-preview")
+def runner_entry_preview(req: RunnerEntryPreviewRequest, user: User = Depends(_runner_user)) -> dict:
+    """실행기가 시작 직전에 묻는다 — 이 매크로가 조건을 기다리는 매크로인지, 조건 문장과 최근 조건이 맞은 횟수 · 간격."""
+    from . import entry_wait
+    return entry_wait.preview(req.macro, market=req.market)
+
+
 @app.post("/api/runner/stopped")
 def runner_stopped(req: RunnerStoppedRequest, user: User = Depends(_runner_user)) -> dict:
     return runner_mod.mark_stopped(

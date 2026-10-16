@@ -16,6 +16,8 @@ import AgentSessionLog from "../components/AgentSessionLog.jsx";
 import "../components/AgentSessionPanel.css";
 import CandleChart from "../components/CandleChart.jsx";
 import PositionStrip from "../components/PositionStrip.jsx";
+import useMacroCandles from "../hooks/useMacroCandles.js";
+import { entryWaitFromServer, entryWaitModel, isWaitingMacro } from "../lib/entryWait.js";
 import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 import { Loading } from "../components/Page.jsx";
 import ConfirmDialog from "../components/ConfirmDialog.jsx";
@@ -383,16 +385,34 @@ function AccountAgents() {
     [activePositionNews, newsReceipt.links, whaleActivity, runnerLog],
   );
 
+  // 진입을 기다리는 매크로(돌파 · RSI · 볼린저 · 이평선 · 지정가 · 눌림 진입)가 포지션 없이 돌 때의 '무엇을 · 얼마나 · 언제'.
+  // 차트는 사용자가 간격을 바꿀 수 있어 매크로 간격의 캔들을 따로 받는다.
+  // 서버가 entry_wait 를 보내면(실행기 하트비트와 같은 값) 그것을 쓰고, 옛 서버 응답이면 공개 캔들로 직접 계산한다.
+  const waiting = selected?.status === "running" && !selected?.in_position && isWaitingMacro(macro);
+  const serverWait = waiting ? selected?.entry_wait || null : null;
+  const waitCandles = useMacroCandles({ symbol: selected?.symbol, interval, market, exchange, enabled: waiting && !serverWait });
+  const waitModel = useMemo(() => {
+    if (!waiting) return null;
+    if (serverWait) return entryWaitFromServer(serverWait, selected);
+    return entryWaitModel({ macro, session: selected, candles: waitCandles, levels: selected?.strategy_levels || null });
+  }, [waiting, serverWait, macro, selected, waitCandles]);
+  const waitLine = waitModel?.priceLine || null;
+
   // strategy_levels 는 서버가 체크포인트의 전략 상태로 계산한 **실제** 가격선이다.
   // 넘기지 않으면 화면이 '지금 가격에 진입한다고 가정한' 미리보기 선을 실행 화면에 그린다 —
   // E 눌림목에서 그 선이 가격을 따라 내려와 "곧 살 것처럼" 보였다.
-  const chartOverlay = useCallback((candles) => computeSessionOverlay(
-    macro,
-    selected?.in_position ? selected.entry_price : null,
-    selected?.position_side || macro?.position_side,
-    candles,
-    selected?.strategy_levels || null,
-  ), [macro, selected?.entry_price, selected?.in_position, selected?.position_side,
+  const chartOverlay = useCallback((candles) => {
+    const overlay = computeSessionOverlay(
+      macro,
+      selected?.in_position ? selected.entry_price : null,
+      selected?.position_side || macro?.position_side,
+      candles,
+      selected?.strategy_levels || null,
+    );
+    // 진입 대기 중이면 '사는 선' 을 굵게, 지금 가격과의 거리를 라벨에 붙여 얹는다.
+    if (!overlay || !waitLine) return overlay;
+    return { ...overlay, priceLines: [...(overlay.priceLines || []), { price: waitLine.price, color: "rgb(var(--chart-up))", label: waitLine.label }] };
+  }, [macro, selected?.entry_price, selected?.in_position, selected?.position_side, waitLine,
       selected?.strategy_levels]);
 
   function changeSession(id) {
@@ -600,7 +620,7 @@ function AccountAgents() {
             {/* 오른쪽 열: 평가손익 블록(제일 중요한 지표)이 위, 에이전트 기록이 아래. 차트는 실행 바 바로 아래부터 전체 높이. */}
             <div className="agent-side">
               {/* 종료됐거나 종료 처리 중이면 오른쪽 열은 결과 화면이 맡는다 — 블록을 겹쳐 두지 않는다. */}
-              {selected.status === "running" && !selected.stopping ? <PositionStrip session={selected} macro={macro} /> : null}
+              {selected.status === "running" && !selected.stopping ? <PositionStrip session={selected} macro={macro} waitModel={waitModel} /> : null}
               <AgentActivityStream
                 key={selected.session_id}
                 symbol={selected.symbol}

@@ -827,9 +827,17 @@ def heartbeat(user: User, session_id: int, snapshot: dict, *, db: Session | None
                 commands = []
         db.add(row)
         accepted_event_keys = _confirmed_event_keys(db, row, events)
+        wait_args = _entry_wait_args(row) if action == "continue" else None
         db.commit()
     notify_sessions_changed(user_id)
     result = {"action": action, "commands": commands}
+    # 진입을 기다리는 매크로가 아직 안 샀으면 '무엇을 · 얼마나 · 언제' 를 함께 보낸다(실행기 화면 · 구버전은 무시).
+    # 시세(캐시)는 DB 연결을 붙잡지 않도록 커밋 뒤에 읽는다 — 그래서 필요한 값은 커밋 전에 꺼내 둔다.
+    if wait_args is not None:
+        from . import entry_wait
+        wait = entry_wait.for_session(**wait_args)
+        if wait:
+            result["entry_wait"] = wait
     if any(isinstance(event, dict) and event.get("event_key") for event in (events or [])):
         result["accepted_event_keys"] = accepted_event_keys
     return result
@@ -1267,6 +1275,35 @@ def _strategy_levels(row: RunSession, macro: Optional[dict]) -> dict:
         return dict(EMPTY)
 
 
+def _entry_wait_args(row: RunSession, macro: Optional[dict] = None, levels: Optional[dict] = None) -> Optional[dict]:
+    """진입 대기 계산에 필요한 값만 꺼낸다(세션이 닫힌 뒤에도 쓸 수 있게). 해당 없으면 None."""
+    if row.status != "running" or row.in_position:
+        return None
+    if macro is None:
+        try:
+            macro = json.loads(row.macro_json) if getattr(row, "macro_json", "") else None
+        except (TypeError, ValueError):
+            return None
+    from . import entry_wait
+    if not entry_wait.is_waiting(macro):
+        return None
+    if levels is None and macro.get("rule_type") == "E":
+        levels = _strategy_levels(row, macro)
+    return dict(
+        session_id=row.id, macro=macro, symbol=row.symbol, market=row.market or "spot", side=row.position_side or "long",
+        last_price=float(row.last_price or 0.0), started_at=row.started_at, in_position=bool(row.in_position), levels=levels,
+    )
+
+
+def _entry_wait(row: RunSession, macro: Optional[dict] = None, levels: Optional[dict] = None) -> Optional[dict]:
+    """진입 대기 모델(entry_wait.py) — 실행 중 · 포지션 없음 · 기다리는 매크로일 때만. 실패하면 None(화면은 예전처럼)."""
+    args = _entry_wait_args(row, macro, levels)
+    if args is None:
+        return None
+    from . import entry_wait
+    return entry_wait.for_session(**args)
+
+
 def _session_view(row: RunSession) -> dict:
     connected = _is_connected(row)
     # 실행기가 종료 명령을 받아 정리 중인 상태(플래그는 섰지만 아직 확정 보고 전).
@@ -1277,6 +1314,7 @@ def _session_view(row: RunSession) -> dict:
             macro = json.loads(row.macro_json)
         except (TypeError, ValueError):
             macro = None
+    levels = _strategy_levels(row, macro)
     return {
         "session_id": row.id,
         "user_macro_id": getattr(row, "user_macro_id", None),
@@ -1320,7 +1358,9 @@ def _session_view(row: RunSession) -> dict:
         # report; never substitute the browser's mount/render timestamp.
         "last_heartbeat_at": row.last_heartbeat_at,
         # 돌고 있는 전략이 지금 보는 가격선(E 의 진입 목표 · 트레일 발동 · 스탑선).
-        "strategy_levels": _strategy_levels(row, macro),
+        "strategy_levels": levels,
+        # 진입을 기다리는 매크로의 '무엇을 · 얼마나 · 언제'(entry_wait.py). 실행기 하트비트 응답과 같은 값.
+        "entry_wait": _entry_wait(row, macro, levels),
         "stopped_kst": _kst_label(row.stopped_at or ""),
     }
 

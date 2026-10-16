@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { fmtPrice, fmtQty } from "../lib/format.js";
 import { formatQuoteAmount } from "../lib/exchanges.js";
 import { useRunnerDownload } from "../lib/runnerDownload.js";
+import EntryWaitCard from "./EntryWaitCard.jsx";
 import {
   exitRules, fmtSignedMoney, fmtSignedPct, gaugeModel, headlineReturn, runningFor, toneOf, unrealizedMoney,
 } from "../lib/positionExits.js";
@@ -46,7 +47,7 @@ export function positionState(session) {
   return { label: "무포지션 · 대기 중", dot: "is-running" };
 }
 
-export default function PositionStrip({ session, macro }) {
+export default function PositionStrip({ session, macro, waitModel = null }) {
   const now = useMinuteTick();
   const download = useRunnerDownload();
   if (!session) return null;
@@ -65,8 +66,12 @@ export default function PositionStrip({ session, macro }) {
   const newer = /^\d+$/.test(String(session.runner_version || "")) && /^\d+$/.test(String(download.version || ""))
     && Number(download.version) > Number(session.runner_version) && !!download.url;
 
+  // 진입을 기다리는 매크로가 아직 안 샀으면 머리 줄(상태 · 실현손익 · 게이지 안내) 대신 진입 대기 카드를 둔다.
+  const waiting = running && !inPosition && Boolean(waitModel);
+
   return (
     <section className={"agent-position" + (inPosition ? " is-open" : "")} aria-label="포지션 요약">
+      {waiting ? <EntryWaitCard model={waitModel} /> : (
       <div className="agent-position-head">
         <div className="agent-position-main">
           <span className="agent-position-label">
@@ -98,6 +103,7 @@ export default function PositionStrip({ session, macro }) {
           )}
         </div>
       </div>
+      )}
       <dl className="agent-position-table">
         <div><dt>평단</dt><dd className="num">{inPosition ? fmtPrice(session.entry_price) : "—"}</dd></div>
         <div><dt>수량</dt><dd className="num">{inPosition ? fmtQty(session.position_qty, session.symbol) : "—"}</dd></div>

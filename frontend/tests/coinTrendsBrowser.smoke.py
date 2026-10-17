@@ -207,9 +207,11 @@ def main():
                     page.locator(".ct-mode-item").nth(1).click()
                     expect(page.locator(".ct-ex-static")).to_contain_text("바이낸스")
                     expect(page.locator("#ct-side-title")).to_have_text("해외 소식")
-                    expect(marquee.locator("img")).to_have_attribute("alt", "바이낸스")
-                    expect(marquee.locator("button").first).to_contain_text("$0.73")
-                    assert any(call.startswith("/api/hot-coins") and "exchange=upbit" in call for call in fixture.calls), fixture.calls
+                    # 하단 띠는 코인동향에서 고른 거래소와 상관없이 업비트 → 빗썸 → 바이낸스를 돌린다(세 거래소 모두 받는다).
+                    expect(marquee.locator("img")).to_have_attribute("alt", "업비트")
+                    hot = [call for call in fixture.calls if call.startswith("/api/hot-coins")]
+                    assert any("exchange=upbit" in call for call in hot) and any("exchange=bithumb" in call for call in hot), hot
+                    assert any("exchange=" not in call for call in hot), hot
                     no_overflow(page)
                     page.screenshot(path=str(OUTPUT / f"global-{width}-{theme}.png"), full_page=True, animations="disabled")
                     checks.append(f"{width}-{theme}")

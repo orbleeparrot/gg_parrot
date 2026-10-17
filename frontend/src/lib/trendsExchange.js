@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react";
 
-// 코인동향에서 고른 거래소 — 사이트 하단 '오늘의 경주마' 띠가 같은 거래소를 따라간다.
-// 다른 화면으로 가도, 다시 들어와도 이어지게 브라우저에 기억한다(못 읽으면 기본값 업비트).
+// 코인동향에서 고른 거래소 — 다시 들어와도 이어지게 브라우저에 기억한다(못 읽으면 기본값 업비트).
+// 하단 '오늘의 경주마' 띠는 2026-10-17 부터 이 값과 상관없이 거래소를 차례로 돌린다(lib/marqueeRotation.js).
 const KEY = "ggp_trends_exchange";
 export const TRENDS_EXCHANGES = ["upbit", "bithumb", "binance"];
 const DEFAULT = "upbit";

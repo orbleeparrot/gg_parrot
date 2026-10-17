@@ -1,574 +1,148 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { Link } from "react-router-dom";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api.js";
-import useFitLines from "../hooks/useFitLines.js";
 import useNewsBriefings from "../hooks/useNewsBriefings.js";
-import useHotCoins from "../hooks/useHotCoins.js";
-import { communityPostIdentity, communitySummaryPresentation, hasPendingTranslation, historicalNewsLabel, newsPublishedLabel, newsSourceLabel } from "../lib/newsBriefings.js";
-import CoinIcon from "../components/CoinIcon.jsx";
-import MarketCarousel from "../components/MarketCarousel.jsx";
-import { AnnotatedText, TermChips } from "../components/NewsTerms.jsx";
-import { PageHeader, Loading, ErrorNote } from "../components/Page.jsx";
-import { splitSummary } from "../lib/summaryText.js";
-import { layoutTreemap, racerWeight } from "../lib/treemap.js";
-import "./NewsMobile.css";
-import InfoTooltip from "../components/InfoTooltip.jsx";
-import { filterNewsContent, newsContentLabel } from "../lib/newsContent.js";
+import CoinBoard from "../features/coinTrends/CoinBoard.jsx";
+import FeedPanel from "../features/coinTrends/FeedPanel.jsx";
+import { MarketSection, SummarySection } from "../features/coinTrends/TopSections.jsx";
+import { useFeedList, useRankings, useUsdKrw } from "../features/coinTrends/useTrendsData.js";
+import { EXCHANGE_META, regionOf } from "../features/coinTrends/trendsFormat.js";
+import { getTrendsExchange, setTrendsExchange } from "../lib/trendsExchange.js";
+import "../features/coinTrends/CoinTrends.css";
 
-function contentSource(item) {
-  return `${newsContentLabel(item)} · ${newsSourceLabel(item)}`;
-}
-
-// 경주마 동향의 콘텐츠 유형 — 드롭다운 대신 segmented 버튼(DESIGN.md §6, 한 가지만 고르는 필터).
-// 시장·규제 헤드라인은 거르지 않는다(커뮤니티 글에는 이미 '사실 확인 안 됨' 표시가 붙는다).
-const CONTENT_SCOPES = [
-  { value: "all", label: "전체" },
-  { value: "news", label: "보도 기사" },
-  { value: "community", label: "커뮤니티" },
+// 코인동향 — 국내(업비트·빗썸 원화) / 해외(바이낸스 USDT) 판으로 페이지 전체가 바뀐다.
+// 위: 오늘의 요약 · 시장·규제 한눈에. 아래: 코인 순위(경주마·거래대금·상승률·하락률·언급, 검색) · 소식(커뮤니티·뉴스).
+// 코인을 고르면 순위 칸은 그 코인 정보로, 소식 칸은 그 코인 글로 바뀐다. 검색창의 X 가 메인으로 돌려보낸다.
+const REGIONS = [
+  { key: "kr", label: "국내", logos: ["upbit", "bithumb"] },
+  { key: "global", label: "해외", logos: ["binance"] },
 ];
+const LOGO_SRC = { upbit: "/exchanges/upbit.png", bithumb: "/exchanges/bithumb.png", binance: "/exchanges/binance.svg" };
 
-function ContentFilter({ value, onChange }) {
+function ModeSwitch({ region, onRegion }) {
   return (
-    <div className="seg news-content-seg" role="group" aria-label="경주마 뉴스 콘텐츠 유형">
-      {CONTENT_SCOPES.map((scope) => (
-        <button key={scope.value} type="button" aria-pressed={value === scope.value}
-          className={"seg-item" + (value === scope.value ? " seg-item-on" : "")} onClick={() => onChange(scope.value)}>
-          {scope.label}
+    <div className="ct-mode" role="tablist" aria-label="시장">
+      {REGIONS.map((item) => (
+        <button key={item.key} type="button" role="tab" aria-selected={region === item.key}
+          className={region === item.key ? "ct-mode-item is-on" : "ct-mode-item"} onClick={() => onRegion(item.key)}>
+          <span className="ct-mode-logos" aria-hidden="true">
+            {item.logos.map((name) => <img key={name} src={LOGO_SRC[name]} alt="" width="22" height="22" />)}
+          </span>
+          {item.label}
         </button>
       ))}
     </div>
   );
 }
 
-const COIN_NEWS_CONCURRENCY = 2;
-const RACER_NEWS_ROTATE_MS = 5_000;
-const MOBILE_NEWS_QUERY = "(max-width: 767px), (max-width: 1099px) and (pointer: coarse)";
-const mobileNewsSnapshot = () => typeof window !== "undefined" && window.matchMedia(MOBILE_NEWS_QUERY).matches;
-const subscribeMobileNews = (notify) => {
-  const query = window.matchMedia(MOBILE_NEWS_QUERY);
-  query.addEventListener("change", notify);
-  return () => query.removeEventListener("change", notify);
-};
-
-function coinOf(symbol) {
-  return (symbol || "").replace(/USDT$|BUSD$|USDC$/, "");
-}
-
-function formatPrice(value) {
-  const number = Number(value);
-  if (!Number.isFinite(number)) return "—";
-  return number.toLocaleString("en-US", {
-    maximumFractionDigits: number >= 1 ? 2 : 6,
-  });
-}
-
-const compactVolumeFormatter = new Intl.NumberFormat("ko-KR", { notation: "compact", maximumFractionDigits: 1 });
-function formatVolume(value) {
-  const number = Number(value);
-  if (!Number.isFinite(number)) return "—";
-  return compactVolumeFormatter.format(number);
-}
-
-function errorMessage(reason) {
-  return reason instanceof Error ? reason.message : String(reason);
-}
-
-function useCoinNewsBriefings(coins) {
-  const { states: newsBySymbol, retry } = useNewsBriefings(
-    coins.map((coin) => coin.symbol),
-    (symbol, signal) => api.newsCoin(symbol, { signal }),
-    COIN_NEWS_CONCURRENCY,
-  );
-  return { newsBySymbol, retry };
-}
-
-function BriefingSectionHeader({ id, title, description, count, countLabel, pendingLabel, failed = false, actions = null }) {
-  return (
-    <header className="news-briefing-section-head">
-      <div className="news-briefing-section-title">
-        <h2 id={id}>{title}</h2>
-        <InfoTooltip text={description} label={`${title} 설명`} placement="bottom" />
-        {actions}
-      </div>
-      <span className="news-briefing-section-status" aria-live="polite">
-        {Number.isFinite(count) && count > 0 ? (
-          <><strong className="num">{count}</strong><span>개 {countLabel}</span></>
-        ) : (
-          // 받아 오기에 실패했으면 '확인 중'으로 남겨 두지 않는다.
-          <span>{failed ? "확인하지 못했어요" : pendingLabel}</span>
-        )}
-      </span>
-    </header>
-  );
-}
-
-function NewsRefreshRetry({ onRetry }) {
-  return <button type="button" className="news-refresh-retry" onClick={onRetry}
-    aria-label="뉴스 새로고침에 실패했어요. 다시 시도">새로고침 재시도</button>;
-}
-
-function MarketBriefing({ market, loading, error, onRetry }) {
-  const translationPending = hasPendingTranslation(market);
-  const readerItems = useMemo(
-    () => (market?.items || []).map((item) => ({
-      id: communityPostIdentity(item) || item.url || item.title,
-      title: item.title,
-      source: contentSource(item),
-      time: historicalNewsLabel(item) || newsPublishedLabel(item),
-      image: item.image || "",
-      url: item.article_url || item.url,
-    })),
-    [market],
-  );
-
-  return (
-    <section className="news-briefing-section is-market" aria-labelledby="market-briefing-title">
-      <BriefingSectionHeader
-        id="market-briefing-title"
-        title="시장·규제 한눈에"
-        description="오늘 시장을 움직이는 정책과 주요 이슈. 화살표로 넘기면 가운데 기사가 선명해져요."
-        count={market?.items?.length || 0}
-        countLabel="헤드라인"
-        pendingLabel="새 소식 확인 중"
-        failed={Boolean(error) && !readerItems.length}
-      />
-
-      {loading ? <Loading label="시장 브리핑을 준비하는 중…" /> : null}
-      {error && !readerItems.length ? (
-        <ErrorNote>
-          시장 뉴스를 불러오지 못했어요: {error}{" "}
-          <button type="button" className="btn btn-s btn-secondary" onClick={onRetry}>다시 불러오기</button>
-        </ErrorNote>
-      ) : null}
-      {error && readerItems.length > 0 ? <NewsRefreshRetry onRetry={onRetry} /> : null}
-
-      {market ? (
-        <>
-          {readerItems.length > 0 ? (
-            <MarketCarousel items={readerItems} />
-          ) : !translationPending ? (
-            <div className="news-reader-empty t-small text-slate-500">지금은 불러올 시장 헤드라인이 없어요.</div>
-          ) : null}
-          {/* AI 요약은 페이지 머리(제목·기준일 아래)로 올라갔다. 여기엔 용어 칩만 남긴다. */}
-          <TermChips texts={[market.overview, ...(market.items || []).map((item) => item.title)]} />
-        </>
-      ) : null}
-    </section>
-  );
-}
-
-// 컨테이너 크기 — 트리맵은 실제 종횡비로 나눠야 타일이 정사각형에 가깝다.
-function useElementSize(ref) {
-  const [size, setSize] = useState({ width: 0, height: 0 });
-  useEffect(() => {
-    const node = ref.current;
-    if (!node || typeof ResizeObserver === "undefined") return undefined;
-    const observer = new ResizeObserver((entries) => {
-      const box = entries[0]?.contentRect;
-      if (box) setSize({ width: Math.round(box.width), height: Math.round(box.height) });
-    });
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, [ref]);
-  return size;
-}
-
-// 타일 맞춤 — 픽셀 크기로 글자 크기·순위 숫자·기사 제목 줄 수를 정한다.
-// 기사는 타일당 한 건. 큰 타일은 글자를 키우고 줄 수를 늘려 채우고, 좁고 긴 타일은 줄 수를 늘려 제목이 잘리지 않게 한다.
-const clampNum = (value, min, max) => Math.min(max, Math.max(min, value));
-function tileFit(width, height) {
-  const area = width * height;
-  const scale = clampNum(Math.sqrt(area / 48_000), 0.6, 2); // 220×220 ≈ 1
-  const ticker = Math.round(clampNum(22 * scale, 15, 40));
-  const change = Math.round(clampNum(13 * scale, 10, 20));
-  const icon = Math.round(clampNum(ticker * 1.15, 18, 44));
-  const title = Math.round(clampNum(14 * scale, 11, 24)); // 작은 타일은 기사 글자도 11px 까지 줄인다
-  const padX = width >= 160 ? 14 : 8;
-  const padY = width >= 160 ? 12 : 8;
-  const innerW = width - padX * 2;
-  const tiny = width < 64 || height < 40; // 티커만
-  const stackedHead = !tiny && innerW < 130; // 순위·로고 한 줄, 그 아래 티커·상승률 — 접지 않고 쌓는다
-  const headH = tiny ? 16 : stackedHead ? icon + 4 + ticker + change * 1.2 + 2 : Math.max(icon, ticker + change * 1.2 + 2);
-  const lineH = title * 1.4;
-  const base = 6 + 14; // 제목 아래 간격 + 메타 한 줄
-  // 기사가 먼저다 — 두 줄이 들어갈 자리를 확보한 뒤, 남으면 지표(한 줄, 줄바꿈 없음)를 넣는다.
-  const metricsH = 30; // 위 선 10 + 글자 20
-  const roomWithoutMetrics = height - padY * 2 - headH - 10 - 11 - 4;
-  const newsPossible = !tiny && innerW >= 80 && Math.floor((roomWithoutMetrics - base) / lineH) >= 2;
-  const showMetrics = !tiny && innerW >= 120 && (newsPossible
-    ? roomWithoutMetrics - (2 * lineH + base) >= metricsH + 10
-    : height >= headH + padY * 2 + 40);
-  const metricsFull = innerW >= 260; // "현재가 n USDT · 거래대금 n만" 이 한 줄에 들어가는 폭
-  const available = roomWithoutMetrics - (showMetrics ? metricsH + 10 : 0);
-  const linesFit = Math.floor((available - base) / lineH);
-  const showNews = newsPossible && linesFit >= 2;
-  const lines = showNews ? clampNum(linesFit, 2, 6) : 0;
-  return { ticker, change, icon, title, lines, showNews, showMetrics, metricsFull, padX, padY, tiny, stackedHead };
-}
-
-// 타일의 기사 한 건 — 모든 타일이 같은 tick 으로 다음 기사로 넘어가므로 화면 전체가 한 번에 바뀐다.
-// key 가 바뀌면 새로 마운트되어 진입 애니메이션이 돌고, 그 시점이 모든 타일에서 같다.
-function TileNews({ base, newsState, tick, onRetry, symbol, lines }) {
-  const status = newsState?.status || "queued";
-  const items = newsState?.data?.items || [];
-  if (status === "queued" || status === "loading") {
-    return <div className="news-map-news is-state">{base} 뉴스 준비 중</div>;
-  }
-  if (status === "error" && !items.length) {
-    return (
-      <div className="news-map-news is-state">
-        뉴스를 불러오지 못했어요.
-        <button type="button" onClick={() => onRetry(symbol)}>다시 시도</button>
-      </div>
-    );
-  }
-  if (!items.length) {
-    return <div className="news-map-news is-state">최근 {base} 뉴스가 없어요.</div>;
-  }
-  const index = tick % items.length;
-  const item = items[index];
-  const time = historicalNewsLabel(item) || newsPublishedLabel(item);
-  // 제목이 짧아 줄이 남으면 커뮤니티 글의 본문 요약으로 채운다(뉴스 기사는 요약이 없어 제목만).
-  const summary = communitySummaryPresentation(item);
-  const excerptLines = summary?.status === "ready" && lines >= 4 ? lines - 2 : 0;
-  return (
-    <div className="news-map-news" style={{ "--tile-excerpt-lines": excerptLines, "--tile-title-lines": excerptLines > 0 ? 2 : lines }}>
-      <div
-        key={`${index}-${item.url || item.title}`}
-        className="news-map-news-item"
-      >
-        <a className="news-map-news-link"
-          href={item.url || undefined}
-          target="_blank"
-          rel="noreferrer noopener"
-          aria-label={`${base} 뉴스 ${index + 1}/${items.length}: ${item.title}`}
-        >
-          <span className="news-map-news-title">{item.title}</span>
-          {excerptLines > 0 ? <span className="news-map-news-excerpt">{summary.text}</span> : null}
-        </a>
-        <span className="news-map-news-meta">
-          <span className="news-map-news-source">{contentSource(item)}</span>
-          {time ? <span className="news-map-news-time">{time}</span> : null}
-          {status === "error" ? <NewsRefreshRetry onRetry={() => onRetry(symbol)} />
-            : <span className="news-map-news-count num" aria-hidden="true">{index + 1}/{items.length}</span>}
-        </span>
-      </div>
-    </div>
-  );
-}
-
-// 경주마 트리맵 — 한 직사각형을 상승률 비율로 나눈 벤토. 타일은 유리(§7 상단바와 같은 값), 색면 없음.
-function RacerTreemap({ coins, newsBySymbol, onRetry, tick, onHold }) {
-  const ref = useRef(null);
-  const size = useElementSize(ref);
-  const rects = useMemo(() => layoutTreemap(
-    coins.map((coin, index) => ({ weight: racerWeight(coin.change_pct), coin, rank: index + 1 })),
-    size.width || 16,
-    size.height || 9,
-  ), [coins, size.width, size.height]);
-
-  return (
-    <div
-      ref={ref}
-      className="news-racer-map"
-      role="list"
-      aria-label="경주마 상승률 지도 — 넓을수록 오늘 많이 오른 종목"
-      // 읽거나 누르려는 동안(마우스·키보드 포커스)에는 헤드라인을 넘기지 않는다 — 포커스한 링크가 5초마다 사라졌다.
-      onMouseEnter={() => onHold?.("pointer", true)}
-      onMouseLeave={() => onHold?.("pointer", false)}
-      onFocus={() => onHold?.("focus", true)}
-      onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) onHold?.("focus", false); }}
-    >
-      {size.width > 0 ? rects.map(({ x, y, width, height, item }) => {
-        const { coin, rank } = item;
-        const base = coinOf(coin.symbol);
-        const change = Number(coin.change_pct) || 0;
-        const changeTone = change > 0 ? "is-up" : change < 0 ? "is-down" : "is-flat";
-        const fit = tileFit(width * size.width - 8, height * size.height - 8);
-        return (
-          <article
-            key={coin.symbol}
-            role="listitem"
-            className={`news-map-tile ${fit.tiny ? "is-tiny" : ""} ${fit.stackedHead ? "is-stacked" : ""}`}
-            style={{
-              "--tile-x": x,
-              "--tile-y": y,
-              "--tile-w": width,
-              "--tile-h": height,
-              "--tile-pad-y": `${fit.padY}px`,
-              "--tile-pad-x": `${fit.padX}px`,
-              "--tile-ticker": `${fit.ticker}px`,
-              "--tile-change": `${fit.change}px`,
-              "--tile-icon": `${fit.icon}px`,
-              "--tile-title": `${fit.title}px`,
-              "--tile-lines": fit.lines,
-            }}
-            aria-label={`${rank}위 ${base} ${change > 0 ? "+" : ""}${change.toFixed(2)}%`}
-          >
-            <header className="news-map-head">
-              <span className="news-map-rank num" aria-hidden="true">{String(rank).padStart(2, "0")}</span>
-              <CoinIcon symbol={coin.symbol} size={fit.icon} className="news-map-logo" alt="" />
-              <Link to={`/builder?symbol=${encodeURIComponent(coin.symbol)}`} className="news-map-ticker num" title={`${base} 매크로 만들기`}>{base}</Link>
-              <span className={`news-map-change num ${changeTone}`}>{change > 0 ? "+" : ""}{change.toFixed(2)}%</span>
-            </header>
-            {fit.showMetrics ? (
-              <p className="news-map-metrics">
-                <span><small>현재가</small><b className="num">{formatPrice(coin.last_price)}</b><em>USDT</em></span>
-                {fit.metricsFull ? (
-                  <span><small>거래대금</small><b className="num">{formatVolume(coin.quote_volume)}</b></span>
-                ) : null}
-              </p>
-            ) : null}
-            {fit.showNews ? (
-              <TileNews base={base} symbol={coin.symbol} newsState={newsBySymbol[coin.symbol]} tick={tick} onRetry={onRetry} lines={fit.lines} />
-            ) : null}
-          </article>
-        );
-      }) : null}
-    </div>
-  );
-}
-
-// Narrow screens use readable market rows; choosing a coin opens its full
-// headlines below the list without changing the desktop treemap's layout.
-function RacerMobileList({ coins, newsBySymbol, onRetry, selectedSymbol, onSelect }) {
-  const reader = useRef(null);
-  const selected = coins.find((coin) => coin.symbol === selectedSymbol) || coins[0];
-  if (!selected) return null;
-  const base = coinOf(selected.symbol);
-  const newsState = newsBySymbol[selected.symbol];
-  const status = newsState?.status || "queued";
-  const items = newsState?.data?.items || [];
-  const pending = hasPendingTranslation(newsState?.data);
-
-  function choose(symbol) {
-    onSelect(symbol);
-    window.requestAnimationFrame(() => reader.current?.scrollIntoView({
-      block: "start",
-      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth",
-    }));
-  }
-
-  return (
-    <div className="news-racer-mobile">
-      <div className="news-racer-mobile-columns" aria-hidden="true"><span>순위</span><span>코인</span><span>가격 · USDT</span><span>24시간</span></div>
-      <ol className="news-racer-mobile-list" aria-label="경주마 상승률 순위">
-        {coins.map((coin, index) => {
-          const symbol = coinOf(coin.symbol);
-          const prefixed = symbol.match(/^(\d+)([A-Z].*)$/);
-          const change = Number(coin.change_pct) || 0;
-          const tone = change > 0 ? "is-up" : change < 0 ? "is-down" : "is-flat";
-          const changeText = `${change > 0 ? "+" : ""}${change.toFixed(2)}%`;
-          return (
-            <li key={coin.symbol}>
-              <button type="button" className="news-racer-mobile-row" aria-pressed={selected.symbol === coin.symbol} aria-controls="news-racer-mobile-reader" onClick={() => choose(coin.symbol)}>
-                <span className="news-racer-mobile-rank num">{index + 1}</span>
-                <span className="news-racer-mobile-coin"><CoinIcon symbol={coin.symbol} size={24} alt="" /><b className="num">{prefixed ? <>{prefixed[1]}<wbr />{prefixed[2]}</> : symbol}</b></span>
-                <span className="news-racer-mobile-price num">{formatPrice(coin.last_price)}</span>
-                <span className={`news-racer-mobile-change num ${tone}`}>{changeText}</span>
-                {/* 이름은 보이는 글자 그대로(순위·종목·가격·등락) + 무엇을 하는 버튼인지만 덧붙인다 — WCAG 2.5.3 */}
-                <span className="sr-only">, 뉴스 보기</span>
-              </button>
-            </li>
-          );
-        })}
-      </ol>
-      <section ref={reader} id="news-racer-mobile-reader" className="news-racer-mobile-reader" aria-labelledby="news-racer-mobile-title">
-        <header className="news-racer-mobile-reader-head">
-          <h3 id="news-racer-mobile-title"><span className="num">{base}</span> 뉴스</h3>
-          <Link to={`/builder?symbol=${encodeURIComponent(selected.symbol)}`}>매크로 만들기</Link>
-        </header>
-        {status === "queued" || status === "loading" ? <p className="news-racer-mobile-state" role="status">{base} 뉴스를 불러오는 중…</p> : null}
-        {status === "error" && !items.length ? <div className="news-racer-mobile-state is-error" role="alert"><p>뉴스를 불러오지 못했어요.</p><button type="button" className="btn btn-s btn-secondary" onClick={() => onRetry(selected.symbol)}>다시 시도</button></div> : null}
-        {status === "error" && items.length > 0 ? <NewsRefreshRetry onRetry={() => onRetry(selected.symbol)} /> : null}
-        {status === "success" && !items.length && !pending ? <p className="news-racer-mobile-state">최근 {base} 뉴스가 없어요.</p> : null}
-        {items.length > 0 ? <MobileArticleList key={selected.symbol} base={base} items={items} /> : null}
-      </section>
-    </div>
-  );
-}
-
-function MobileArticleList({ base, items }) {
-  const listRef = useRef(null);
-
-  useLayoutEffect(() => {
-    const list = listRef.current;
-    if (!list) return undefined;
-
-    const measure = () => {
-      const visibleRows = [...list.children].slice(0, 3);
-      const heights = visibleRows.map((row) => row.getBoundingClientRect().height);
-      const height = (heights[0] || 0) + (heights[1] || 0) + (heights[2] || 0) * 0.5;
-      list.style.setProperty("--news-racer-mobile-articles-height", `${Math.ceil(height)}px`);
-    };
-
-    measure();
-    if (typeof ResizeObserver === "undefined") return undefined;
-    const observer = new ResizeObserver(measure);
-    [...list.children].slice(0, 3).forEach((row) => observer.observe(row));
-    return () => observer.disconnect();
-  }, [items]);
-
-  return (
-    <ul
-      ref={listRef}
-      className="news-racer-mobile-articles"
-      aria-label={`${base} 뉴스 목록`}
-      tabIndex={items.length > 2 ? 0 : undefined}
-    >
-          {items.map((item, index) => {
-            const summary = communitySummaryPresentation(item);
-            return (
-              <li key={communityPostIdentity(item) || item.url || `${item.title}-${index}`}>
-                <a href={item.article_url || item.url || undefined} target="_blank" rel="noreferrer noopener">
-                  <strong>{item.title}</strong>
-                  <span className="news-racer-mobile-article-meta"><span>{contentSource(item)}</span><span>{historicalNewsLabel(item) || newsPublishedLabel(item)}</span></span>
-                </a>
-                {summary ? <div className="news-racer-mobile-summary"><span>{summary.label}</span>{summary.text ? <p>{summary.text}</p> : null}</div> : null}
-              </li>
-            );
-          })}
-    </ul>
-  );
-}
-
-function RacerBriefing({ coins, loading, error, onRetry }) {
-  const [contentScope, setContentScope] = useState("all"); // 들어오면 전체(보도 기사 + 커뮤니티) — 2026-10-08 사용자 결정
-  const mobile = useSyncExternalStore(subscribeMobileNews, mobileNewsSnapshot, () => false);
-  const [selectedSymbol, setSelectedSymbol] = useState(null);
-  const selected = coins.find((coin) => coin.symbol === selectedSymbol) || coins[0];
-  const { newsBySymbol: unfilteredNews, retry } = useCoinNewsBriefings(mobile ? (selected ? [selected] : []) : coins);
-  const newsBySymbol = useMemo(() => Object.fromEntries(Object.entries(unfilteredNews).map(([symbol, state]) => [
-    symbol, state.data ? { ...state, data: { ...state.data, items: filterNewsContent(state.data.items, contentScope) } } : state,
-  ])), [unfilteredNews, contentScope]);
-  const [tick, setTick] = useState(0);
-  const termTexts = coins.flatMap((coin) => (
-    newsBySymbol[coin.symbol]?.data?.items || []
-  ).map((item) => item.title));
-
-  // 한 박자 — 모든 타일의 헤드라인이 같은 순간에 다음 기사로 넘어간다. 탭이 숨겨지면 멈추고,
-  // 지도 위에 마우스·포커스가 있는 동안(holdRef)과 '움직임 줄이기' 설정에서는 넘기지 않는다(WCAG 2.2.2).
-  const holdRef = useRef({ pointer: false, focus: false });
-  const hold = useCallback((reason, on) => { holdRef.current[reason] = on; }, []);
-  useEffect(() => {
-    if (!coins.length || mobile) return undefined;
-    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return undefined;
-    let timer = 0;
-    const start = () => {
-      window.clearInterval(timer);
-      timer = window.setInterval(() => {
-        if (holdRef.current.pointer || holdRef.current.focus) return;
-        setTick((value) => value + 1);
-      }, RACER_NEWS_ROTATE_MS);
-    };
-    const onVisibility = () => {
-      if (document.hidden) window.clearInterval(timer);
-      else start();
-    };
-    if (!document.hidden) start();
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => {
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
-  }, [coins.length, mobile]);
-
-  return (
-    <section className="news-briefing-section is-racers" aria-labelledby="racer-briefing-title">
-      <BriefingSectionHeader
-        id="racer-briefing-title"
-        title="경주마 동향"
-        description="24시간 상승률 순위와 종목별 뉴스를 확인해요."
-        count={coins.length}
-        countLabel="종목"
-        pendingLabel="시장 확인 중"
-        failed={Boolean(error) && coins.length === 0}
-        actions={<ContentFilter value={contentScope} onChange={setContentScope} />}
-      />
-      {contentScope !== "news" ? (
-        <p className="news-content-note">커뮤니티 글은 작성자의 주장·매매 의견이며, 보도 기사나 검증된 투자 정보가 아니에요.</p>
-      ) : null}
-
-      {loading ? <Loading label="오늘의 경주마를 확인하는 중…" /> : null}
-      {error ? (
-        <ErrorNote>
-          경주마 정보를 불러오지 못했어요: {error}{" "}
-          {onRetry ? <button type="button" className="btn btn-s btn-secondary" onClick={() => onRetry(true)}>다시 불러오기</button> : null}
-        </ErrorNote>
-      ) : null}
-
-      {!loading && !error && coins.length === 0 ? (
-        <div className="news-reader-empty t-small text-slate-500">지금은 보여줄 경주마가 없어요.</div>
-      ) : null}
-
-      {coins.length > 0 ? (
-        <>
-          <RacerTreemap coins={coins} newsBySymbol={newsBySymbol} onRetry={retry} tick={tick} onHold={hold} />
-          <RacerMobileList coins={coins} newsBySymbol={newsBySymbol} onRetry={retry}
-            selectedSymbol={selected?.symbol} onSelect={setSelectedSymbol} />
-          <TermChips texts={termTexts} />
-        </>
-      ) : null}
-    </section>
-  );
-}
-
-function FitParagraph({ className, text, maxLines, minPx, children }) {
-  const ref = useRef(null);
-  useFitLines(ref, text, { maxLines, minPx });
-  return <p ref={ref} className={className}>{children}</p>;
-}
+const symbolOf = (exchange, base) => (EXCHANGE_META[exchange].quote === "KRW" ? `KRW-${base}` : `${base}USDT`);
+const reducedMotion = () => typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 export default function News() {
-  // 시장 뉴스는 하루 단위 자료라 10분 안에 돌아오면 다시 받지 않는다.
+  // 마지막으로 고른 거래소에서 시작한다 — 하단 '오늘의 경주마' 띠도 같은 값을 따라간다.
+  const [exchange, setExchange] = useState(getTrendsExchange);
+  const [lastDomestic, setLastDomestic] = useState(() => (regionOf(getTrendsExchange()) === "kr" ? getTrendsExchange() : "upbit"));
+  const [sort, setSort] = useState("race");
+  const [coin, setCoin] = useState(null);
+  const [keyword, setKeyword] = useState("");
+  const [tab, setTab] = useState("community");
+  const [source, setSource] = useState("");
+  const [searching, setSearching] = useState(false);
+  const boardRef = useRef(null);
+  const region = regionOf(exchange);
+
+  // 시장·규제는 하루 단위 자료라 10분 안에 돌아오면 다시 받지 않는다(기존 공유 캐시).
   const { states: marketStates, retry: retryMarket } = useNewsBriefings(
     ["market"], (_key, signal) => api.newsMarket({ signal }), 1, { freshMs: 10 * 60 * 1000 },
   );
-  const marketState = marketStates.market;
-  // Headlines, overview and image updates share one ordered response/cache.
-  const market = marketState?.data || null;
-  const marketLoading = !marketState || ["queued", "loading"].includes(marketState.status);
-  const marketError = marketState?.error || "";
-  const { coins, loading: coinsLoading, error: coinsError, refresh: refreshCoins } = useHotCoins();
 
-  const summary = market?.overview ? splitSummary(market.overview) : null;
+  // 다른 거래소 시세는 검색하거나 코인을 고를 때만 받는다(다른 거래소에만 있는 코인 · 거래소별 가격).
+  const needOthers = searching || !!coin;
+  const rankings = useRankings(exchange);
+  const upbit = useRankings("upbit", exchange === "upbit" || needOthers);
+  const bithumb = useRankings("bithumb", exchange === "bithumb" || needOthers);
+  const binance = useRankings("binance", exchange === "binance" || needOthers);
+  const lists = useMemo(() => ({
+    upbit: upbit.data?.coins || [], bithumb: bithumb.data?.coins || [], binance: binance.data?.coins || [],
+  }), [upbit.data, bithumb.data, binance.data]);
+  const usdkrw = useUsdKrw(!!coin);
+  const coins = rankings.data?.coins;
+  const coinsByBase = useMemo(() => new Map((coins || []).map((row) => [row.base, row])), [coins]);
+
+  const symbol = coin ? symbolOf(exchange, coin) : "";
+  const community = useFeedList("community", { region, exchange, symbol, q: keyword, source: tab === "community" ? source : "" });
+  const news = useFeedList("news", { region, exchange, symbol, q: keyword, source: tab === "news" ? source : "" });
+
+  // 언급 수 · 오늘의 요약은 코인을 골라 목록을 다시 받는 동안에도 마지막 값을 쓴다.
+  const mentionsRef = useRef({});
+  if (community.extra?.mentions) mentionsRef.current[exchange] = community.extra.mentions;
+  const mentions = mentionsRef.current[exchange] || {};
+  const briefRef = useRef({});
+  if (news.extra?.collection) briefRef.current[region] = news;
+  const briefNews = briefRef.current[region] || news;
+
+  // 고른 코인이 다른 거래소에 없으면 메인으로 돌아간다.
+  useEffect(() => {
+    if (coin && coins?.length && !coinsByBase.has(coin)) setCoin(null);
+  }, [coin, coins, coinsByBase]);
+
+  // 고른 코인 · 검색어에 글이 있는 탭을 먼저 연다(커뮤니티 우선).
+  const autoTabRef = useRef("");
+  useEffect(() => {
+    const key = coin || keyword ? `${exchange}|${coin || ""}|${keyword}` : "";
+    if (!key || autoTabRef.current === key || community.loading || news.loading) return;
+    autoTabRef.current = key;
+    setTab(community.total || !news.total ? "community" : "news");
+  }, [coin, keyword, exchange, community.loading, community.total, news.loading, news.total]);
+
+  const revealBoard = useCallback(() => {
+    const node = boardRef.current;
+    if (!node) return;
+    const top = node.getBoundingClientRect().top;
+    if (top > window.innerHeight * 0.4 || top < -120) node.scrollIntoView({ behavior: reducedMotion() ? "auto" : "smooth", block: "start" });
+  }, []);
+
+  const changeExchange = useCallback((next) => {
+    setExchange(next);
+    setTrendsExchange(next);
+    if (regionOf(next) === "kr") setLastDomestic(next);
+    setSource("");
+  }, []);
+  const changeRegion = useCallback((next) => changeExchange(next === "kr" ? lastDomestic : "binance"), [changeExchange, lastDomestic]);
+  const pickCoin = useCallback((base, onExchange) => {
+    if (onExchange && onExchange !== exchange) changeExchange(onExchange);
+    setCoin(base);
+    setKeyword("");
+    setSource("");
+    setSearching(false);
+    revealBoard();
+  }, [changeExchange, exchange, revealBoard]);
+  const pickKeyword = useCallback((query) => {
+    setKeyword(query);
+    setCoin(null);
+    setSource("");
+    setSearching(false);
+    revealBoard();
+  }, [revealBoard]);
+  const clearSelection = useCallback(() => { setCoin(null); setKeyword(""); setSource(""); }, []);
 
   return (
-    <div className="news-briefing-page">
-      {/* 위 줄: 왼쪽은 제목·기준일·AI 요약, 오른쪽은 시장·규제 헤드라인. 아래 줄: 경주마 트리맵. */}
-      <div className="news-top">
-      <div className="news-top-copy">
-      {/* AI 요약이 있으면 그날의 내용이 머리 본문이 된다 — 첫 줄은 굵은 리드, 나머지는 본문.
-          없으면 예전 설명문으로 돌아간다. */}
-      <PageHeader
-        title="오늘의 코인동향"
-        meta={market?.as_of ? <>기준 <span className="num">{market.as_of}</span> · KST</> : null}
-        description={summary ? undefined : "시장·규제와 활발히 움직이는 코인을 두 개의 브리핑으로 나눠 읽어요."}
-      >
-        {summary ? (
-          <div className="page-head-lead">
-            {/* 그날 요약이 길면 리드는 4줄, 본문은 7줄 안에 들어오도록 글자를 살짝 줄인다(최소 21px·15px). */}
-            <FitParagraph className="page-head-lead-first" text={summary.lead} maxLines={4} minPx={21}>
-              <AnnotatedText text={summary.lead} />
-            </FitParagraph>
-            {summary.body.map((line, index) => (
-              <FitParagraph key={index} text={line} maxLines={7} minPx={15}><AnnotatedText text={line} /></FitParagraph>
-            ))}
-          </div>
-        ) : null}
-      </PageHeader>
-      {/* 고지는 요약 바로 뒤가 아니라 왼쪽 열의 맨 아래 — 오른쪽 열 바닥과 줄을 맞춘다. */}
-      <p className="news-top-note">
-        {summary
-          ? "AI가 오늘 헤드라인만 근거로 쓴 요약이에요. 경주마 선정과 뉴스는 참고용이며 투자 권유가 아니에요."
-          : "경주마 선정과 뉴스는 참고용이며 투자 권유가 아니에요."}
-      </p>
+    <div className="ct-page">
+      <div className="ct-head-row">
+        <h1 className="ct-page-title">오늘의 코인동향</h1>
+        <ModeSwitch region={region} onRegion={changeRegion} />
       </div>
-      <MarketBriefing market={market} loading={marketLoading} error={marketError} onRetry={() => retryMarket("market")} />
+      <div className="ct-top">
+        <SummarySection region={region} news={briefNews} />
+        <MarketSection state={marketStates.market} onRetry={() => retryMarket("market")} />
       </div>
-
-      <div className="news-briefing-grid">
-        <RacerBriefing coins={coins} loading={coinsLoading} error={coinsError} onRetry={(force) => refreshCoins(force).catch(() => {})} />
+      <div className="ct-board" ref={boardRef}>
+        <CoinBoard region={region} exchange={exchange} onExchange={changeExchange} rankings={rankings} lists={lists}
+          sort={sort} onSort={setSort} mentions={mentions} coin={coin} onCoin={pickCoin} keyword={keyword}
+          onKeyword={pickKeyword} onClearSelection={clearSelection} usdkrw={usdkrw}
+          onSearchActive={(text) => setSearching(!!String(text).trim())} />
+        <FeedPanel region={region} feeds={{ community, news }} tab={tab} onTab={(name) => { setTab(name); setSource(""); }}
+          source={source} onSource={setSource} coin={coin} keyword={keyword} coinsByBase={coinsByBase}
+          onCoin={pickCoin} onClearCoin={clearSelection} />
       </div>
     </div>
   );

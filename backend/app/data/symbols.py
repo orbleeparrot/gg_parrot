@@ -157,6 +157,10 @@ LOGO_BASE = "https://bin.bnbstatic.com/static/assets/logos"
 LOGO_FALLBACK_BASE = "https://static.upbit.com/logos"
 _LOGO_MAX = 400
 _logo_cache: dict[str, bytes] = {}
+# 두 곳 다 없는 종목도 잠시 기억한다 — 코인동향은 바이낸스 CDN 에 없는 국내 전용 종목마다 이 경로를 부른다.
+# 기억하지 않으면 화면에 보일 때마다 외부 요청이 두 번(각 10초 제한) 나간다.
+_LOGO_MISSING_SECONDS = 6 * 3600
+_logo_missing: dict[str, float] = {}
 _logo_lock = threading.Lock()
 
 
@@ -165,9 +169,12 @@ def coin_logo_png(base: str) -> Optional[bytes]:
     key = "".join(ch for ch in base.upper() if ch.isalnum())[:20]
     if not key:
         return None
+    now = time.monotonic()
     with _logo_lock:
         if key in _logo_cache:
             return _logo_cache[key]
+        if _logo_missing.get(key, 0) > now:
+            return None
     client = get_http_client()
     content = None
     for base_url in (LOGO_BASE, LOGO_FALLBACK_BASE):
@@ -179,6 +186,10 @@ def coin_logo_png(base: str) -> Optional[bytes]:
             content = resp.content
             break
     if content is None:
+        with _logo_lock:
+            if len(_logo_missing) >= _LOGO_MAX:
+                _logo_missing.pop(next(iter(_logo_missing)))
+            _logo_missing[key] = now + _LOGO_MISSING_SECONDS
         return None
     with _logo_lock:
         if len(_logo_cache) >= _LOGO_MAX:

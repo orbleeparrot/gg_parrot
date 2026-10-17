@@ -21,7 +21,7 @@ const PUBLIC_READS = new Set([
   "/api/news/market", "/api/hot-coins", "/api/symbols", "/api/candles", "/api/candles/live",
   "/api/kimchi-premium", "/api/usdkrw", "/api/funding-rate", "/api/fear-greed", "/api/hangang-temp",
   "/api/whale-activity", "/api/runner/download/info", "/api/auth/google/config", "/api/backtest/limits",
-  "/api/challenge/today", "/api/prices",
+  "/api/challenge/today", "/api/prices", "/api/market/trends", "/api/trends",
 ]);
 function publicRead(path, method) {
   const pathname = path.split("?")[0];
@@ -306,7 +306,7 @@ export const api = {
   kimchiPremium: (symbol, options = {}) => req(`/api/kimchi-premium?symbol=${encodeURIComponent(symbol || "BTC")}`, options),
 
   // approximate USD→KRW rate (reference only) for showing 원화 next to USDT amounts
-  usdKrw: () => req("/api/usdkrw"),
+  usdKrw: (options = {}) => req("/api/usdkrw", options),
 
   // average daily USDT-M funding cost (%) for the symbol/period (real futures data)
   fundingRate: (symbol, preset, start, end) => {
@@ -320,10 +320,17 @@ export const api = {
   challengeToday: (options = {}) => req("/api/challenge/today", { timeoutMs: 10_000, ...options }),
 
   // '오늘의 경주마' hot coins (server-cached, shared across clients)
-  hotCoins: (limit, options = {}) => req(`/api/hot-coins?limit=${limit || 10}`, options),
+  hotCoins: (limit, options = {}, exchange = "binance") =>
+    req(`/api/hot-coins?limit=${limit || 10}${exchange === "binance" ? "" : `&exchange=${encodeURIComponent(exchange)}`}`, options),
 
   // '오늘의 코인동향' — 시장·규제 뉴스 헤드라인 + AI 중립 개요 (KST 하루 1회 캐시)
   newsMarket: (options = {}) => req("/api/news/market", { timeoutMs: 10_000, ...options }),
+  // 코인동향 — 거래소별 시세 순위(업비트·빗썸 원화, 바이낸스 USDT) + 경주마(racers). 한 번에 전체를 받는다.
+  marketTrends: (exchange, options = {}) =>
+    req(`/api/market/trends?exchange=${encodeURIComponent(exchange)}&limit=500`, { timeoutMs: 15_000, ...options }),
+  // 코인동향 소식 — sections(news·community)로 필요한 구역만, offset 으로 다음 쪽을 받는다.
+  trendsFeed: (params, options = {}) =>
+    req(`/api/trends?${new URLSearchParams(params).toString()}`, { timeoutMs: 15_000, ...options }),
   // '경주마 동향' — 서버가 Prefect DB 우선, 미수집 티커만 RSS fallback
   newsCoin: (symbol, options = {}) => req(`/api/news/coin/${encodeURIComponent(symbol)}`, { timeoutMs: 10_000, ...options }),
   // 내 에이전트 기능 01 — 서버가 세션 소유권과 등록 매크로 방향을 확인한다.

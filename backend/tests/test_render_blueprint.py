@@ -79,7 +79,13 @@ def test_render_blueprint_includes_position_news_background_worker():
         / "pages"
         / "News.jsx"
     ).read_text(encoding="utf-8")
-    assert "const COIN_NEWS_CONCURRENCY = 2;" in news_page
+    # 코인동향(2026-10-17 개편)은 코인마다 뉴스를 따로 받지 않는다 — 지역 소식을 한 목록당 20개씩 이어 받는다.
+    coin_trends = (
+        Path(__file__).resolve().parents[2]
+        / "frontend" / "src" / "features" / "coinTrends" / "useTrendsData.js"
+    ).read_text(encoding="utf-8")
+    assert "api.newsCoin" not in news_page
+    assert "export const FEED_PAGE = 20;" in coin_trends and "sections: kind" in coin_trends
 
 
 def test_prefect_rolling_deploy_preserves_the_new_workers_schedule():

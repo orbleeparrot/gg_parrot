@@ -45,6 +45,8 @@ def test_invalid_pool_size_fails_closed_instead_of_unlimited(monkeypatch, value)
 
 def test_postgres_does_not_rely_on_ignored_startup_options(monkeypatch):
     monkeypatch.setattr(persistence, "_DATABASE_URL", "postgresql://unused:unused@localhost/unused")
+    # Assert the code default, not an operator's local backend/.env override.
+    monkeypatch.delenv("DATABASE_CONNECT_TIMEOUT_SECONDS", raising=False)
     original = persistence.create_engine
     captured = {}
 

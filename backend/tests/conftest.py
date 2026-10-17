@@ -24,6 +24,8 @@ os.environ["NEWS_EXCHANGE_NAMES_ENABLED"] = "false"
 # 옛 실행기 버전으로 바이낸스 티켓을 청구해 다른 관문(지표형 v8 · 최소 버전)을 검사하므로 기본은 꺼 둔다.
 os.environ["RUNNER_BINANCE_HELPER_MIN_VERSION"] = "999"
 os.environ["PUBLIC_NEWS_EMBEDDED_ENABLED"] = "false"
+os.environ["DOMESTIC_COMMUNITY_ENABLED"] = "false"
+os.environ["REGIONAL_TRENDS_ENABLED"] = "false"
 os.environ["LEADERBOARD_BACKGROUND_ENABLED"] = "false"
 os.environ["ACTIVITY_LOG_RETENTION_ENABLED"] = "false"
 os.environ["WHALE_TRADE_EMBEDDED_ENABLED"] = "false"

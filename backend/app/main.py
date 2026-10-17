@@ -61,6 +61,8 @@ from . import http_runtime as http_runtime_mod
 from . import kimchi as kimchi_mod
 from . import news as news_mod
 from . import public_news as public_news_mod
+from . import domestic_community as domestic_community_mod
+from . import regional_trends as regional_trends_mod
 from . import board as board_mod
 from . import leaderboard as leaderboard_mod
 from . import leaderboard_runtime
@@ -100,6 +102,7 @@ from . import observability
 from . import evidence as evidence_mod
 from . import validate_explain as validate_explain_mod
 from .observability import observe_application, router as observability_router
+from .market_trends import get_racer_coins, router as market_trends_router
 from fastapi import Depends
 from .db import User
 from . import whales as whales_mod
@@ -144,6 +147,8 @@ async def lifespan(app: FastAPI):
     community_summaries_mod.start()
     leaderboard_runtime.start()
     public_news_mod.start()
+    domestic_community_mod.start_runtime()
+    regional_trends_mod.start_runtime()
     position_news_runtime.start()
     whale_activity_runtime.start()
     log_retention_runtime.start()
@@ -156,6 +161,8 @@ async def lifespan(app: FastAPI):
             leaderboard_runtime.stop(), public_news_mod.stop(),
             whale_activity_runtime.stop(), position_news_runtime.stop(),
             log_retention_runtime.stop(), agent_commentary_runtime.stop(),
+            asyncio.to_thread(domestic_community_mod.stop_runtime),
+            asyncio.to_thread(regional_trends_mod.stop_runtime),
             return_exceptions=True,
         )
         for result in stopped:
@@ -188,6 +195,9 @@ app = FastAPI(title="Coin Macro Backtest & Share (Simulation only)", lifespan=li
 register_capacity_handlers(app)
 app.include_router(position_news_router)
 app.include_router(observability_router)
+app.include_router(market_trends_router)
+app.include_router(domestic_community_mod.router)
+app.include_router(regional_trends_mod.router)
 
 # Schema initialization belongs to lifespan, before serving requests. Importing
 # route definitions must not run DDL against a database used by live macros.
@@ -1757,13 +1767,15 @@ def prices(symbols: str = Query(default="", max_length=700), exchange: Exchange 
 
 
 @app.get("/api/hot-coins")
-def hot_coins(limit: int = 10) -> dict:
-    """'오늘의 경주마' — surging + actively-traded USDT coins (Binance 24h).
+def hot_coins(limit: int = 10, exchange: Exchange = "binance") -> dict:
+    """'오늘의 경주마' — surging + actively-traded coins on the chosen exchange.
 
-    Globally cached: the exchange is hit at most once per cache window regardless
-    of client count. Reference indicator only — never a trading signal.
+    Binance: USDT 24h (hotcoins). Upbit/Bithumb: the coin-trends racers (KRW turnover
+    top DOMESTIC_RACER_POOL, gainers only). Globally cached; reference indicator only.
     """
-    return hotcoins_mod.get_hot_coins(limit)
+    if exchange == "binance":
+        return {**hotcoins_mod.get_hot_coins(limit), "exchange": "binance", "quote_currency": "USDT"}
+    return get_racer_coins(exchange, limit)
 
 
 @app.get("/api/news/market")
@@ -2383,7 +2395,8 @@ def coin_logo(base: str) -> Response:
     """Same-origin copy of Binance's public coin logo so the share card can be captured as an image."""
     png = symbols_mod.coin_logo_png(base)
     if png is None:
-        raise HTTPException(status_code=404, detail="logo not found")
+        # 없는 로고도 브라우저가 한동안 다시 묻지 않게 한다(서버도 6시간 기억한다).
+        raise HTTPException(status_code=404, detail="logo not found", headers={"Cache-Control": "public, max-age=3600"})
     return Response(content=png, media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
 
 

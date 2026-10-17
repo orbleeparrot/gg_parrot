@@ -126,6 +126,21 @@ def _number(value) -> float:
     return number if math.isfinite(number) else 0.0
 
 
+def _metric(value) -> float | None:
+    """Rankings distinguish a missing metric from a provider's genuine zero.
+
+    Keep the permissive price/candle fallback in ``_number`` for its existing
+    callers; only optional market statistics preserve the absence as ``None``.
+    """
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
 def _trading_open(raw: dict) -> bool:
     """거래가 열려 체결이 한 번이라도 난 종목인가.
 
@@ -139,28 +154,51 @@ def _trading_open(raw: dict) -> bool:
     return not ("trade_timestamp" in raw and raw["trade_timestamp"] is None)
 
 
-def get_all_tickers(exchange: str) -> list[dict]:
-    """Candidate selection projection; prices retain their native KRW units."""
+def get_ticker_snapshot(exchange: str) -> dict:
+    """Shared KRW tickers with their original fetch time and bounded freshness.
+
+    signed_change_rate compares the price with the previous closing price;
+    accumulated turnover and volume cover the preceding 24 hours.
+    """
     exchange = _domestic(exchange)
     def load():
-        symbols = [row["symbol"] for row in list_symbols(exchange)["items"]]
+        catalogue = list_symbols(exchange)
+        symbols = {row["symbol"]: row for row in catalogue["items"]}
         rows = []
-        for raw in _ticker_rows(exchange, symbols):
+        for raw in _ticker_rows(exchange, list(symbols)):
             symbol = str(raw.get("market", ""))
             if symbol not in symbols:
                 continue
             if not _trading_open(raw):
                 continue
             last = _number(raw.get("trade_price"))
+            info = symbols[symbol]
+            volume = _metric(raw.get("acc_trade_volume_24h"))
+            if volume is not None and volume < 0:
+                volume = None
+            change = _metric(raw.get("signed_change_rate"))
+            change = _metric(100 * change) if change is not None else None
             rows.append({"symbol": symbol, "base": symbol[4:], "quote": "KRW", "exchange": exchange,
+                         "korean_name": info.get("korean_name", ""),
+                         "english_name": info.get("english_name", ""), "warning": bool(info.get("warning")),
                          "lastPrice": last, "highPrice": _number(raw.get("high_price")) or last,
                          "lowPrice": _number(raw.get("low_price")) or last,
-                         "priceChangePercent": 100 * _number(raw.get("signed_change_rate")),
-                         "quoteVolume": _number(raw.get("acc_trade_price_24h"))})
+                         "priceChangePercent": change,
+                         "quoteVolume": _metric(raw.get("acc_trade_price_24h")), "volume": volume})
         if not rows:
             raise ValueError("거래소 현재가 목록이 비어 있습니다.")
-        return rows
-    return _tickers_cache.get_or_load(exchange, load, ttl=30, stale_ttl=120)[0]
+        return {"items": rows, "fetched_at": time.time(),
+                "catalogue_stale": bool(catalogue.get("stale")),
+                "catalogue_fetched_at": catalogue.get("fetched_at")}
+    payload, state = _tickers_cache.get_or_load(exchange, load, ttl=30, stale_ttl=120)
+    return {**payload, "stale": state == "stale" or payload["catalogue_stale"],
+            "cache_age_seconds": max(0, time.time() - payload["fetched_at"]),
+            "refresh_seconds": 30, "max_age_seconds": 150}
+
+
+def get_all_tickers(exchange: str) -> list[dict]:
+    """Candidate selection projection; prices retain their native KRW units."""
+    return get_ticker_snapshot(exchange)["items"]
 
 
 def batch_prices(symbols: list[str], exchange: str, *, ttl: float = 2.0) -> dict[str, float]:

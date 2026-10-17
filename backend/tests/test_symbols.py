@@ -35,10 +35,12 @@ def _fresh_cache(monkeypatch):
     monkeypatch.delenv("BINANCE_FAPI_BASE", raising=False)
     symbols.reset_cache()
     symbols._logo_cache.clear()
+    symbols._logo_missing.clear()
     yield
     close_cache_runtime()
     symbols.reset_cache()
     symbols._logo_cache.clear()
+    symbols._logo_missing.clear()
 
 
 def test_list_symbols_merges_spot_and_perpetual(monkeypatch):
@@ -239,3 +241,16 @@ def test_coin_logo_proxy_caches_and_404s(monkeypatch):
     assert hits == ["/static/assets/logos/BTC.png"]  # second call served from memory
     assert client.get("/api/coin-logo/NOPE.png").status_code == 404
     assert client.get("/api/coin-logo/..%2F..png").status_code == 404
+
+
+def test_missing_logo_is_remembered_so_repeat_views_do_not_refetch(monkeypatch):
+    calls = []
+
+    def handler(request):
+        calls.append(str(request.url))
+        return httpx.Response(404)
+
+    monkeypatch.setattr(symbols, "get_http_client", lambda: _client(handler))
+    assert symbols.coin_logo_png("NOLOGO") is None
+    assert symbols.coin_logo_png("NOLOGO") is None
+    assert len(calls) == 2  # 바이낸스 + 업비트 한 번씩, 두 번째 조회는 기억한 '없음'

@@ -122,6 +122,7 @@
           "agent-chat-log",
           "agent-chat-result-toggle",
           "agent-chat-stream",
+          "agent-chat-tab-count",
           "agent-chat-tabs",
           "agent-checking",
           "agent-console",

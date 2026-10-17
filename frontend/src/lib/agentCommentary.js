@@ -64,3 +64,46 @@ export function subText(sub) {
   if (!sub || typeof sub !== "object") return { b: "", t: "" };
   return { b: typeof sub.b === "string" ? sub.b : "", t: typeof sub.t === "string" ? sub.t : "" };
 }
+
+// 채팅 필터(시안 A, 10/17) — 말풍선 종류(서버 agent_commentary 의 kind)를 셋으로 묶는다.
+export const CHAT_GROUPS = Object.freeze([
+  { key: "trade", label: "거래 관련", kinds: ["start", "fill", "wait", "problem", "end"] },
+  { key: "news", label: "뉴스 소식", kinds: ["post"] },
+  { key: "market", label: "손익 · 시세", kinds: ["loss", "gain", "move", "volatility", "quiet"] },
+]);
+const GROUP_KINDS = new Map(CHAT_GROUPS.map((group) => [group.key, new Set(group.kinds)]));
+
+/** 이 묶음(전체면 "all")에 드는 말풍선인지. 모르는 묶음 이름은 전체로 본다. */
+export function inChatGroup(item, group) {
+  const kinds = GROUP_KINDS.get(group);
+  return !kinds || kinds.has(item?.kind);
+}
+
+/** 탭 옆 숫자 — 오늘(한국 시각) 그 묶음 말풍선 수. */
+export function todayCount(items, group, now = Date.now()) {
+  const today = kstDay(now);
+  return (items || []).filter((item) => inChatGroup(item, group) && kstDay(item.at_ms) === today).length;
+}
+
+/** 고래 동향(대규모 체결)은 바이낸스 USDT · USDC 거래쌍만 지원한다 — 업비트 · 빗썸은 탭 자체를 보이지 않는다. */
+export function supportsWhale(symbol) {
+  const value = String(symbol || "").toUpperCase();
+  return !value.startsWith("KRW-") && !value.endsWith("_KRW") && /(USDT|USDC)$/.test(value);
+}
+
+// 고른 탭은 실행마다 기억한다(이 브라우저만). 저장소를 못 쓰면 그냥 전체.
+const VIEW_KEY = "ggp.agent.chat.view.";
+export function readChatView(sessionId) {
+  try {
+    return (sessionId && window.localStorage.getItem(VIEW_KEY + sessionId)) || "all";
+  } catch {
+    return "all";
+  }
+}
+export function saveChatView(sessionId, view) {
+  try {
+    if (sessionId) window.localStorage.setItem(VIEW_KEY + sessionId, view);
+  } catch {
+    // 저장소를 못 쓰면 이 화면에서만 바뀐다.
+  }
+}

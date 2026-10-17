@@ -5,9 +5,11 @@ import { advanceActivityTimeline, emptyActivityTimeline } from "../features/agen
 import { countNewObservations } from "../features/agents/positionNews/presentation.js";
 import RunResultScreen from "./RunResultScreen.jsx";
 import AgentCommentary from "./AgentCommentary.jsx";
+import { CHAT_GROUPS, supportsWhale, todayCount } from "../lib/agentCommentary.js";
 import { Icon } from "./icons.jsx";
 
-// 오른쪽 '에이전트' 칸 — 중계(껄무새가 서버에서 만든 말풍선) · 고래 동향 · 활동 로그.
+// 오른쪽 '에이전트' 칸 — 껄무새 중계(서버가 만든 말풍선)를 전체 · 거래 관련 · 뉴스 소식 · 손익 · 시세로 걸러 보고,
+// 고래 동향(바이낸스 USDT · USDC 만) · 활동 로그를 따로 둔다.
 // 2026-10-17 전에는 실행 상태 · 실행 로그 · 맞춤 뉴스 · 위험 감시 · 전략 조건을 브라우저가 따로 만들어 쌓았고,
 // 화면을 열 때마다 같은 관측을 새로 저장해 '평가손실 주의'가 열 번 넘게 쌓였다. 이제 그 일은 서버 중계가 한 번만 한다.
 const PLAN_LABELS = { free: "FREE", plus: "PLUS", pro: "PRO" };
@@ -42,20 +44,23 @@ function activityTime(value, now, fallback = "방금 확인") {
   return absoluteActivityTime(parsed, fallback);
 }
 
-function ModuleTabs({ selected, onSelect, entitlements, hasActivityLog }) {
-  const items = [{ key: "all", label: "중계" }, leaderModule,
+function ModuleTabs({ selected, onSelect, entitlements, hasActivityLog, whale, counts }) {
+  // 전체 · 거래 관련 · 뉴스 소식 · 손익 · 시세(시안 A) · 고래 동향(바이낸스 USDT · USDC 만) · 활동 로그.
+  const items = [{ key: "all", label: "전체" }, ...CHAT_GROUPS, ...(whale ? [leaderModule] : []),
     ...(hasActivityLog ? [{ key: "activity_logs", label: "활동 로그" }] : [])];
   return (
     <div className="agent-chat-tabs" role="group" aria-label="에이전트 화면 종류">
       {items.map((item) => {
-        const access = item.key === "all" || item.key === "activity_logs" ? "enabled" : accessFor(item, entitlements);
+        const access = item.key === leaderModule.key ? accessFor(item, entitlements) : "enabled";
+        const count = counts?.[item.key] || 0;
         const plan = item.minimumPlan && item.minimumPlan !== "free" ? `, ${PLAN_LABELS[item.minimumPlan]} 구독 기능` : "";
         const availability = access === "planned" ? ", 준비 중" : "";
         return (
           <button key={item.key} type="button" className={selected === item.key ? "is-active" : ""}
-            aria-pressed={selected === item.key} aria-label={`${item.label}${plan}${availability}`}
+            aria-pressed={selected === item.key} aria-label={`${item.label}${count ? ` ${count}개` : ""}${plan}${availability}`}
             onClick={() => onSelect(item.key)}>
             {item.label}
+            {count ? <span className="agent-chat-tab-count num" aria-hidden="true">{count}</span> : null}
           </button>
         );
       })}
@@ -209,13 +214,18 @@ export default function AgentActivityStream({
     );
   }
 
-  const known = filter === "all" || filter === "activity_logs" || filter === leaderModule.key;
+  const whale = supportsWhale(symbol);
+  const known = filter === "all" || filter === "activity_logs" || (whale && filter === leaderModule.key)
+    || CHAT_GROUPS.some((group) => group.key === filter);
   const view = known ? filter : "all";
+  const sayings = commentary?.items || [];
+  const counts = Object.fromEntries(CHAT_GROUPS.map((group) => [group.key, todayCount(sayings, group.key)]));
   return (
     <aside className="agent-chat" aria-label={`${symbol} 껄무새 에이전트`}>
       <header className="agent-chat-head">
         <div className={`agent-chat-controls${ended ? " has-result" : ""}`}>
-          <ModuleTabs selected={view} onSelect={selectFilter} entitlements={entitlements} hasActivityLog={!!activityLog} />
+          <ModuleTabs selected={view} onSelect={selectFilter} entitlements={entitlements} hasActivityLog={!!activityLog}
+            whale={whale} counts={counts} />
           {ended ? (
             // 왼쪽 분기 탭과 같은 트랙·글자로 — 다른 부품처럼 보이지 않게.
             <div className="agent-chat-tabs agent-chat-result-toggle" role="group" aria-label="결과 화면">
@@ -227,7 +237,7 @@ export default function AgentActivityStream({
       {view === "activity_logs" && activityLog ? activityLog
         : view === leaderModule.key && AGENT_MODULE_MAP.get(leaderModule.key)
           ? <WhaleFeed symbol={symbol} session={session} featureStates={featureStates} entitlements={entitlements} onUpgrade={onUpgrade} />
-          : <AgentCommentary session={session} commentary={commentary} />}
+          : <AgentCommentary key={view} session={session} commentary={commentary} group={view} />}
     </aside>
   );
 }

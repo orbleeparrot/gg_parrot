@@ -18,10 +18,10 @@ import time
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Response
-from sqlalchemy import BigInteger, Index
+from sqlalchemy import BigInteger, Index, func, or_
 from sqlmodel import Field, SQLModel, delete, select
 
-from . import domestic_community, market_trends, news, news_ai_budget
+from . import domestic_community, feed_index, market_trends, news, news_ai_budget
 from .ai_runtime import get_ai_client, get_ai_runtime
 from .cache_runtime import ResponseCache
 from .db import get_session
@@ -35,13 +35,22 @@ logger = logging.getLogger(__name__)
 Region = Literal["kr", "global"]
 SCOPE = "REGIONAL_TRENDS"
 SUMMARY_SCOPE = "REGIONAL_TRENDS_SUMMARY"
-MAX_ARTICLES = 5000
-MAX_READ_CANDIDATES = 1000
-MAX_SNAPSHOT_BYTES = 4_000_000
+MAX_ARTICLES = 3000  # 목록(지역 × 종류)마다 — 해외 커뮤니티 글이 많아도 뉴스를 밀어내지 않게
 RETENTION_MS = 7 * 86400_000
 REFRESH_SECONDS = 300
-_responses = ResponseCache("regional-trends", max_entries=2, max_bytes=10_000_000,
-                           retry_seconds=5, max_retry_seconds=30)
+TREND_FEEDS = (("kr", "article"), ("global", "article"), ("global", "community"))
+SQUARE_SOURCE_ID = "binance_square"
+SQUARE_OVERLAP_MS = 120_000  # 다른 프로세스가 조금 늦게 커밋한 행도 다음 회차에 다시 본다(같은 글은 덮어쓸 뿐)
+SQUARE_BATCHES = 5
+# 쪽 응답 · 목록 정보(출처 상태 · 요약) 캐시 — 10초 뒤엔 읽는 요청이 뒤에서 새로 만들고 그동안(최대 10분) 만들어 둔
+# 것을 바로 준다. 한 쪽은 20개라 작다. '낡음' 표시는 만든 지 2분 기준.
+PAGE_FRESH_SECONDS = 10
+PAGE_STALE_SECONDS = 600
+READ_STALE_AFTER_MS = 2 * 60_000
+_pages = ResponseCache("regional-trend-pages", max_entries=256, max_bytes=8_000_000,
+                       retry_seconds=5, max_retry_seconds=30)
+_meta = ResponseCache("regional-trend-meta", max_entries=4, max_bytes=1_000_000,
+                      retry_seconds=5, max_retry_seconds=30)
 _runtime = None
 _runtime_lock = threading.Lock()
 _SUMMARY_VERSION = "regional-market-summary-v1"
@@ -51,7 +60,9 @@ _PUBLIC_FIELDS = ("title", "original_title", "url", "source", "source_id", "publ
 
 
 class TrendArticle(SQLModel, table=True):
-    __table_args__ = (Index("ix_trendarticle_region_published", "region", "published_ms"),)
+    """코인동향 지역 목록의 글 하나 — 국내 · 해외 뉴스와 해외 커뮤니티(Binance Square)."""
+    __table_args__ = (Index("ix_trendarticle_region_published", "region", "published_ms"),
+                      Index("ix_trendarticle_feed", "region", "content_type", "published_ms", "id"))
     id: str = Field(primary_key=True)
     region: str
     source_id: str
@@ -59,6 +70,8 @@ class TrendArticle(SQLModel, table=True):
     published_ms: int = Field(sa_type=BigInteger)
     collected_ms: int = Field(sa_type=BigInteger)
     item_json: str
+    visible: bool = True  # 번역을 기다리는 글은 목록에 내지 않는다
+    search_text: str = ""  # 제목 · 원제 · 발췌를 소문자로 — 검색어 거르기를 SQL 안에서
 
 
 class TrendSourceState(SQLModel, table=True):
@@ -161,117 +174,260 @@ def store_items(items, *, now_ms, db):
                         item[key] = old[key]
             if not item["excerpt"] and old.get("excerpt"):
                 item.update(excerpt=old["excerpt"], summary_status="source_excerpt")
-        row.item_json = json.dumps(item, ensure_ascii=False)
         row.published_ms = int(stamp)
         row.collected_ms = now_ms
-        db.add(row)
+        _write_row(db, row, item)
     db.flush()
-    db.exec(delete(TrendArticle).where(TrendArticle.published_ms < now_ms - RETENTION_MS))
-    overflow = db.exec(select(TrendArticle.id).order_by(
-        TrendArticle.published_ms.desc(), TrendArticle.id).offset(MAX_ARTICLES)).all()
-    if overflow:
-        db.exec(delete(TrendArticle).where(TrendArticle.id.in_(overflow)))
+    _trim(db, now_ms)
     db.exec(delete(TrendSummary).where(TrendSummary.day < (
         datetime.now(timezone.utc) - timedelta(days=14)).date().isoformat()))
     return inserted
 
 
-# 읽기용 지역 목록 — 10초가 지나면 읽는 사람이 뒤에서 새로 만들게 하고, 그동안(최대 10분) 만들어 둔 목록을 바로 준다.
-# 화면은 첫 20개를 받으려고 최근 7일 기사(최대 1,000건 · 4MB)를 다 읽기를 기다리지 않는다 — 예전엔 30초만 지나도
-# 다음 사람이 전체 읽기를 기다려 첫 쪽이 0.5~0.8초 늦었다(2026-10-18 실측). 목록이 아예 없을 때(재배포 직후 ·
-# 10분 넘게 아무도 안 봄)만 수집 스레드가 미리 만든다 — 매분 다시 읽으면 보는 사람이 없어도 DB 전송량이 쌓인다.
-READ_FRESH_SECONDS = 10
-READ_STALE_SECONDS = 600
-READ_STALE_AFTER_MS = 2 * 60_000
+def _projection(item):
+    visible = item.get("translation_status") != "pending"
+    text = " ".join(str(item.get(key) or "") for key in ("title", "original_title", "excerpt")).casefold()
+    return visible, text[:4000]
 
 
-def _region_snapshot(region):
-    return _responses.get_or_load(region, lambda: _read_region(region),
-                                  ttl=READ_FRESH_SECONDS, stale_ttl=READ_STALE_SECONDS)
+def _write_row(db, row, item):
+    """글 저장 + 보이는 글이면 코인 연결(feed_index)까지 — 읽기는 이 둘만 본다."""
+    row.visible, row.search_text = _projection(item)
+    row.item_json = json.dumps(item, ensure_ascii=False)
+    db.add(row)
+    feed_index.replace_assets(db, feed_index.feed_key(row.region, row.content_type), row.id,
+                              item.get("asset_symbols") if row.visible else [], row.published_ms)
+
+
+def _trim(db, now_ms):
+    cutoff = now_ms - RETENTION_MS
+    db.exec(delete(TrendArticle).where(TrendArticle.published_ms < cutoff))
+    for region, content_type in TREND_FEEDS:
+        feed = feed_index.feed_key(region, content_type)
+        feed_index.prune(db, feed, cutoff)
+        overflow = db.exec(select(TrendArticle.id).where(
+            TrendArticle.region == region, TrendArticle.content_type == content_type).order_by(
+            TrendArticle.published_ms.desc(), TrendArticle.id).offset(MAX_ARTICLES)).all()
+        if overflow:
+            db.exec(delete(TrendArticle).where(TrendArticle.id.in_(overflow)))
+            feed_index.drop_items(db, feed, overflow)
+
+
+def reconcile_projection(db, *, limit=500):
+    """검색 칸이 비어 있는 행(이번 개편 전에 저장된 글)에 보임 여부 · 검색 칸 · 코인 연결을 채운다."""
+    rows = db.exec(select(TrendArticle).where(TrendArticle.search_text == "").limit(limit)).all()
+    for row in rows:
+        try:
+            _write_row(db, row, json.loads(row.item_json))
+        except (ValueError, TypeError):
+            continue
+    return len(rows)
+
+
+def store_square_items(items, *, now_ms, db):
+    """Square 글(prepared_square_feed 가 공개 필드만 고른 것)을 해외 커뮤니티 목록에 넣는다. 코인 범위 별칭은 합친다."""
+    stored = 0
+    for item in items:
+        stamp = item.get("published_ms")
+        if not isinstance(stamp, int) or not now_ms - RETENTION_MS <= stamp <= now_ms + 300_000:
+            continue
+        row = db.get(TrendArticle, item["id"])
+        assets = set(item.get("asset_symbols") or [])
+        if row is None:
+            row = TrendArticle(id=item["id"], region="global", source_id=SQUARE_SOURCE_ID,
+                               content_type="community", published_ms=stamp, collected_ms=now_ms, item_json="{}")
+        else:
+            try:
+                assets |= set(json.loads(row.item_json).get("asset_symbols") or [])
+            except (ValueError, TypeError):
+                pass
+        row.published_ms, row.collected_ms = stamp, now_ms
+        _write_row(db, row, {**item, "asset_symbols": feed_index.clean_assets(assets), "region": "global"})
+        stored += 1
+    db.flush()
+    _trim(db, now_ms)
+    return stored
+
+
+def sync_square(*, token=None, write_lock=None, cancelled=lambda: False):
+    """newsarticle 에서 바뀐 Square 글만(last_seen_ms 인덱스) 옮긴다. 첫 회는 최근 1,000행으로 채운다."""
+    from .prepared_square_feed import load_changed
+    started = int(time.time() * 1000)
+    with get_session() as db:
+        state = db.get(TrendSourceState, SQUARE_SOURCE_ID)
+        meta = json.loads(state.source_json) if state else {}
+    watermark = meta.get("watermark_ms")
+    moved, status, error = 0, "ready", None
+    try:
+        for batch in range(SQUARE_BATCHES):
+            if cancelled():
+                return {"status": "cancelled"}
+            since = None if watermark is None else max(0, watermark - (SQUARE_OVERLAP_MS if batch == 0 else 0))
+            # 첫 채우기는 표를 한 번 훑어 길 수 있다(운영 5~12초) — 그동안 임대를 연장한다.
+            loaded = (_leased_call(SCOPE, token, lambda: load_changed(since), write_lock=write_lock)
+                      if token else load_changed(since))
+            with write_lock or nullcontext(), get_session() as db:
+                if cancelled():
+                    return {"status": "cancelled"}
+                if token:
+                    _fence(db, token)
+                moved += store_square_items(loaded["items"], now_ms=int(time.time() * 1000), db=db)
+                db.commit()
+            if since is None:
+                watermark = started  # 첫 채우기 — 이 뒤에 바뀐 행은 다음 회차가 이어 읽는다
+            elif loaded["max_last_seen_ms"] is not None:
+                watermark = max(watermark, loaded["max_last_seen_ms"])
+            if not loaded["truncated"]:
+                break
+    except Exception as exc:
+        if "lease lost" in str(exc):
+            raise  # 다른 수집기가 임대를 가져갔다 — 상태도 쓰지 않는다
+        status, error = "error", type(exc).__name__
+        logger.warning("square sync deferred type=%s", error)
+    now = int(time.time() * 1000)
+    with write_lock or nullcontext(), get_session() as db:
+        if cancelled():
+            return {"status": "cancelled"}
+        row = db.get(TrendSourceState, SQUARE_SOURCE_ID) or TrendSourceState(source_id=SQUARE_SOURCE_ID, region="global")
+        row.status, row.last_attempt_ms = status, now
+        if status == "ready":
+            row.last_success_ms = now
+        row.next_attempt_ms = now + 60_000
+        row.source_json = json.dumps({"id": SQUARE_SOURCE_ID, "name": "Binance Square", "status": status,
+                                      "watermark_ms": watermark, "moved": moved,
+                                      **({"error": error} if error else {})}, ensure_ascii=False)
+        db.add(row)
+        db.commit()
+    _meta.clear()
+    return {"status": status, "moved": moved}
+
+
+def _filters(region, content_type, *, q, assets, selected, source, now_ms):
+    """목록 · 출처 · 코인 · 검색어를 SQL 조건으로. 예전 _matches 와 같은 규칙(영문 한두 글자는 티커만)."""
+    feed = feed_index.feed_key(region, content_type)
+    conditions = [TrendArticle.region == region, TrendArticle.content_type == content_type,
+                  TrendArticle.visible.is_(True),
+                  TrendArticle.published_ms >= now_ms - RETENTION_MS, TrendArticle.published_ms <= now_ms + 300_000]
+    if source:
+        conditions.append(TrendArticle.source_id == source)
+    if selected:
+        conditions.append(feed_index.mentioning(feed, TrendArticle.id, [selected]))
+    needle = (q or "").strip()
+    if needle:
+        named = set(assets or [])
+        if re.fullmatch(r"[A-Za-z0-9]{1,2}", needle):
+            conditions.append(feed_index.mentioning(feed, TrendArticle.id, named | {needle.upper()}))
+        else:
+            text = TrendArticle.search_text.like(feed_index.like_pattern(needle.casefold()), escape="\\")
+            conditions.append(or_(text, feed_index.mentioning(feed, TrendArticle.id, named)) if named else text)
+    return feed, conditions
+
+
+def _read_page(region, content_type, *, q, assets, selected, source, cursor, limit, offset, with_mentions):
+    """한 쪽만 읽는다 — 첫 쪽(커서 없음)에서만 전체 개수와 코인별 언급 수를 센다."""
+    now_ms = int(time.time() * 1000)
+    feed, conditions = _filters(region, content_type, q=q, assets=assets, selected=selected,
+                                source=source, now_ms=now_ms)
+    with get_session() as db:
+        statement = select(TrendArticle.id, TrendArticle.published_ms, TrendArticle.item_json).where(*conditions)
+        if cursor:
+            statement = statement.where(feed_index.before(TrendArticle.published_ms, TrendArticle.id, tuple(cursor)))
+        rows = db.exec(statement.order_by(TrendArticle.published_ms.desc(), TrendArticle.id.desc())
+                       .offset(offset).limit(limit + 1)).all()
+        total = None if cursor else db.exec(select(func.count()).select_from(TrendArticle).where(*conditions)).one()
+        mentions = (feed_index.mention_counts(db, feed, now_ms - RETENTION_MS)
+                    if with_mentions and not cursor else None)
+    more, rows = len(rows) > limit, rows[:limit]
+    return {"items": [json.loads(row.item_json) for row in rows], "total": total, "mentions": mentions,
+            "next_cursor": feed_index.encode_cursor(rows[-1].published_ms, rows[-1].id) if more and rows else None,
+            "read_ms": now_ms}
+
+
+def _page_args(*, q="", assets=None, selected=None, source=None, cursor=None, limit=20, offset=0, with_mentions=False):
+    return {"q": (q or "").strip(), "assets": sorted(set(assets or [])), "selected": selected, "source": source,
+            "cursor": list(cursor) if cursor else None, "limit": limit, "offset": offset, "with_mentions": with_mentions}
+
+
+def _page_key(region, content_type, args):
+    return json.dumps([region, content_type, args], sort_keys=True, ensure_ascii=False)
+
+
+def _page(region, content_type, **filters):
+    args = _page_args(**filters)
+    return _pages.get_or_load(_page_key(region, content_type, args), lambda: _read_page(region, content_type, **args),
+                              ttl=PAGE_FRESH_SECONDS, stale_ttl=PAGE_STALE_SECONDS)[0]
+
+
+def _read_meta(region):
+    with get_session() as db:
+        states = db.exec(select(TrendSourceState).where(TrendSourceState.region == region)).all()
+        summary = db.get(TrendSummary, day_key())
+        pending = db.exec(select(func.count()).select_from(TrendArticle).where(
+            TrendArticle.region == region, TrendArticle.content_type == "article",
+            TrendArticle.visible.is_(False))).one()
+    sources = [{**json.loads(row.source_json), "id": row.source_id, "status": row.status,
+                "last_attempt_ms": row.last_attempt_ms, "last_success_ms": row.last_success_ms,
+                "next_attempt_ms": row.next_attempt_ms} for row in states]
+    return {"sources": sources, "pending": int(pending), "read_ms": int(time.time() * 1000),
+            "summary": {"status": summary.status, "updated_at": iso(summary.updated_ms),
+                        "overview": json.loads(summary.overviews_json).get(region),
+                        "article_ids": json.loads(summary.references_json).get(region, [])} if summary else
+                       {"status": "pending" if os.environ.get("OPENAI_API_KEY") else "disabled", "overview": None}}
+
+
+def _region_meta(region):
+    return _meta.get_or_load(region, lambda: _read_meta(region), ttl=PAGE_FRESH_SECONDS, stale_ttl=PAGE_STALE_SECONDS)[0]
+
+
+def clear_caches():
+    _pages.clear()
+    _meta.clear()
 
 
 def warm_readers():
-    """읽기용 목록이 없는 지역만 미리 만든다(첫 방문자가 전체 읽기를 기다리지 않게). 있으면 아무것도 읽지 않는다."""
-    for region in ("kr", "global"):
-        if _responses.peek(region) is not None:
+    """첫 화면 쪽(국내 · 해외 뉴스, 해외 커뮤니티)이 캐시에 없을 때만 미리 읽는다 — 있으면 아무것도 읽지 않는다."""
+    for region, content_type in TREND_FEEDS:
+        filters = {"limit": 20, "with_mentions": content_type == "community"}
+        if _pages.peek(_page_key(region, content_type, _page_args(**filters))) is not None:
             continue
         try:
-            _region_snapshot(region)
+            _page(region, content_type, **filters)
+            _region_meta(region)
         except Exception as exc:
-            logger.info("regional reader warm deferred region=%s type=%s", region, type(exc).__name__)
+            logger.info("regional reader warm deferred feed=%s:%s type=%s", region, content_type, type(exc).__name__)
 
 
-def _read_region(region):
-    with get_session() as db:
-        rows = db.exec(select(TrendArticle).where(TrendArticle.region == region)
-                       .order_by(TrendArticle.published_ms.desc(), TrendArticle.id).limit(MAX_READ_CANDIDATES+1)).all()
-        states = db.exec(select(TrendSourceState).where(TrendSourceState.region == region)).all()
-        summary = db.get(TrendSummary, day_key())
-        items, size = [], 0
-        for row in rows[:MAX_READ_CANDIDATES]:
-            item_size = len(row.item_json.encode("utf-8"))
-            if size+item_size > MAX_SNAPSHOT_BYTES:
-                break
-            size += item_size
-            items.append(json.loads(row.item_json))
-        return {"items": items, "read_ms": int(time.time() * 1000),
-                "coverage":{"candidate_limit":MAX_READ_CANDIDATES, "candidate_count":len(items),
-                            "truncated":len(rows)>len(items), "byte_limited":size>=MAX_SNAPSHOT_BYTES or len(items)<min(len(rows),MAX_READ_CANDIDATES),
-                            "basis":"most_recent_prepared_articles"},
-                "sources": [{**json.loads(row.source_json), "id": row.source_id, "status": row.status,
-                             "last_attempt_ms": row.last_attempt_ms, "last_success_ms": row.last_success_ms,
-                             "next_attempt_ms": row.next_attempt_ms} for row in states],
-                "summary": {"status": summary.status, "updated_at": iso(summary.updated_ms),
-                            "overview": json.loads(summary.overviews_json).get(region),
-                            "article_ids": json.loads(summary.references_json).get(region, [])} if summary else
-                           {"status": "pending" if os.environ.get("OPENAI_API_KEY") else "disabled", "overview": None}}
+def _is_stale(read_ms, sources, now):
+    return now - read_ms > READ_STALE_AFTER_MS or any(
+        row.get("last_success_ms", 0) and now - row["last_success_ms"] > 2 * REFRESH_SECONDS * 1000 for row in sources)
 
 
-def _matches(item, q, assets, selected):
-    identities = set(item.get("asset_symbols") or [])
-    if selected and selected not in identities:
-        return False
-    if not q.strip():
-        return True
-    if identities & set(assets or []):
-        return True
-    # A bare one-letter symbol must not match ordinary words in titles.
-    if re.fullmatch(r"[A-Za-z0-9]{1,2}", q.strip()):
-        return q.strip().upper() in identities
-    return q.strip().casefold() in " ".join(str(item.get(k) or "") for k in
-                                            ("title", "original_title", "excerpt")).casefold()
-
-
-def get_news(region, *, q="", assets=None, selected=None, source=None, limit=100, offset=0):
+def get_news(region, *, q="", assets=None, selected=None, source=None, limit=100, offset=0, cursor=None):
+    """지역 뉴스 한 쪽. cursor 는 이전 쪽의 next_cursor(디코드한 값) — 없으면 첫 쪽(total 포함)."""
     if region not in {"kr", "global"}:
         raise ValueError("unsupported region")
-    snapshot, _cache_state = _region_snapshot(region)
+    page = _page(region, "article", q=q, assets=assets, selected=selected, source=source, cursor=cursor,
+                 limit=limit, offset=offset)
+    meta = _region_meta(region)
     now = int(time.time() * 1000)
-    items = [item for item in snapshot["items"] if item.get("translation_status") != "pending"
-             and now-RETENTION_MS <= item.get("published_ms", 0) <= now+300000
-             and (not source or item.get("source_id") == source)
-             and _matches(item, q, assets, selected)]
-    sources = snapshot["sources"]
     expected = {row["id"] for row in source_registry(region)}
-    source_map = {row["id"]: row for row in sources}
-    sources = [source_map.get(key, {"id":key, "status":"pending"}) for key in sorted(expected)]
+    source_map = {row["id"]: row for row in meta["sources"] if row["id"] in expected}
+    sources = [source_map.get(key, {"id": key, "status": "pending"}) for key in sorted(expected)]
     statuses = [row["status"] for row in sources]
     status = "pending" if not source_map else "ready" if all(s == "ready" for s in statuses) else (
         "error" if all(s == "error" for s in statuses) else "partial")
     # 캐시가 뒤에서 새로 만드는 중인 것은 '낡음'이 아니다 — 읽은 지 2분이 넘었을 때만.
-    stale = now - snapshot.get("read_ms", now) > READ_STALE_AFTER_MS or any(row.get("last_success_ms", 0) and
-               now-row["last_success_ms"] > 2*REFRESH_SECONDS*1000 for row in sources)
+    stale = _is_stale(min(page["read_ms"], meta["read_ms"]), sources, now)
     if status == "ready" and stale:
         status = "stale"
-    return {"region": region, "items": items[offset:offset+limit], "total": len(items), "limit":limit, "offset":offset,
-            "collection": {"status":status, "sources":sources}, "stale":stale,
-            "translation":{"status":"partial" if any(i.get("translation_status") == "pending" for i in snapshot["items"]) else "ready",
-                           "pending_count":sum(i.get("translation_status") == "pending" for i in snapshot["items"])},
-            "overview":snapshot["summary"].get("overview"),
-            "summary": {k:v for k,v in snapshot["summary"].items() if k != "overview"},
-            "search_scope":"prepared_recent_candidates_last_7_days", "query":q,
-            "coverage":snapshot["coverage"],
-            "refresh_seconds":30, "data_source":"prepared_db"}
+    return {"region": region, "items": page["items"], "total": page["total"], "next_cursor": page["next_cursor"],
+            "limit": limit, "offset": offset,
+            "collection": {"status": status, "sources": sources}, "stale": stale,
+            "translation": {"status": "partial" if meta["pending"] else "ready", "pending_count": meta["pending"]},
+            "overview": meta["summary"].get("overview"),
+            "summary": {k: v for k, v in meta["summary"].items() if k != "overview"},
+            "search_scope": "prepared_articles_last_7_days", "query": q,
+            "refresh_seconds": 30, "data_source": "prepared_db"}
 
 
 def prepared_listings():
@@ -338,6 +494,12 @@ def collect_once(*, stop_event=None, write_lock=None):
         return {"status":"skipped", "retry_seconds":60}
     inserted, statuses = 0, []
     try:
+        with write_lock or nullcontext(), get_session() as db:
+            if cancelled():
+                return {"status":"cancelled"}
+            _fence(db, token)
+            if reconcile_projection(db):
+                db.commit()
         listings = prepared_listings()
         matchers = domestic_community.asset_matchers(listings)
         for source in source_registry():
@@ -383,7 +545,7 @@ def collect_once(*, stop_event=None, write_lock=None):
                 db.add(state)
                 inserted += store_items(items, now_ms=now, db=db)
                 db.commit()
-            _responses.clear()
+            _meta.clear()
             if items and not cancelled():
                 renew_work(SCOPE, token)
                 try:
@@ -398,8 +560,11 @@ def collect_once(*, stop_event=None, write_lock=None):
                     _fence(db, token)
                     store_items(prepared, now_ms=int(time.time()*1000), db=db)
                     db.commit()
-                _responses.clear()
+                _meta.clear()
             statuses.append(source_status)
+        if not cancelled():
+            renew_work(SCOPE, token)
+            sync_square(token=token, write_lock=write_lock, cancelled=cancelled)
         if not cancelled():
             _leased_call(SCOPE, token,
                 lambda: prepare_overviews(stop_event=stop_event, write_lock=write_lock),
@@ -455,7 +620,7 @@ def prepare_overviews(*, stop_event=None, write_lock=None):
         if row and (row.status == "ready" or row.next_attempt_ms > now):
             return {"status":row.status}
     # No paid requests for an empty region, or before both actual feeds exist.
-    feeds = {region:get_news(region)["items"][:20] for region in ("kr", "global")}
+    feeds = {region:get_news(region, limit=20)["items"] for region in ("kr", "global")}
     if any(not feed for feed in feeds.values()):
         return {"status":"waiting_for_sources"}
     with write_lock or nullcontext():
@@ -491,7 +656,7 @@ def prepare_overviews(*, stop_event=None, write_lock=None):
                 row.references_json = json.dumps({region:[item["id"] for item in items] for region,items in feeds.items()})
             db.add(row)
             db.commit()
-        _responses.clear()
+        _meta.clear()
         if status == "ready":
             # The unchanged legacy page can use the combined stored summary;
             # it must not start another, independently budgeted AI workflow.
@@ -514,20 +679,23 @@ def combined_market_overview():
     return None
 
 
-def _global_community(*, q, assets, selected, source, limit, offset=0):
-    """Search one cached safe projection; source/type are filtered in SQL."""
-    from .prepared_square_feed import read_prepared_square
-    snapshot = read_prepared_square()
-    mentions = {}
-    for item in snapshot["items"]:
-        for asset in set(item.get("asset_symbols") or []):
-            mentions[asset] = mentions.get(asset, 0) + 1
-    items = [item for item in snapshot["items"]
-             if (not source or source == "binance_square") and _matches(item,q,assets,selected)]
-    return {"items":items[offset:offset+limit], "total":len(items), "offset":offset, "mentions":mentions,
-            "collection":{"status":snapshot["status"]}, "coverage":snapshot["coverage"],
-            "stale":snapshot["stale"],
-            "search_scope":"existing_prepared_square_posts", "refresh_seconds":30}
+def get_global_community(*, q="", assets=None, selected=None, source=None, limit=20, offset=0, cursor=None):
+    """해외 커뮤니티(Binance Square) 한 쪽 — 수집기가 옮겨 둔 trendarticle 에서 20개만 읽는다."""
+    if source and source != SQUARE_SOURCE_ID:
+        return {"items": [], "total": 0, "next_cursor": None, "offset": offset, "mentions": {},
+                "collection": {"status": "ready"}, "stale": False, "refresh_seconds": 30}
+    page = _page("global", "community", q=q, assets=assets, selected=selected, cursor=cursor,
+                 limit=limit, offset=offset, with_mentions=True)
+    meta = _region_meta("global")
+    square = next((row for row in meta["sources"] if row["id"] == SQUARE_SOURCE_ID), None)
+    now = int(time.time() * 1000)
+    result = {"items": page["items"], "total": page["total"], "next_cursor": page["next_cursor"], "offset": offset,
+              "collection": {"status": square["status"] if square else "pending"},
+              "stale": _is_stale(min(page["read_ms"], meta["read_ms"]), [square] if square else [], now),
+              "search_scope": "prepared_square_posts_last_7_days", "refresh_seconds": 30}
+    if page["mentions"] is not None:
+        result["mentions"] = page["mentions"]
+    return result
 
 
 @router.get("")
@@ -538,6 +706,7 @@ def trends_feed(response: Response, region: Region = "kr", exchange: str | None 
                 sort: market_trends.Sort = "turnover", direction: market_trends.Direction = "all",
                 min_turnover: float = Query(0, ge=0, allow_inf_nan=False),
                 limit: int = Query(100, ge=1, le=100), offset: int = Query(0, ge=0, le=domestic_community.MAX_READ_OFFSET),
+                cursor: str | None = Query(None, max_length=120),
                 sections: str = Query("rankings,news,community", max_length=40)):
     exchange = exchange or ("upbit" if region == "kr" else "binance")
     wanted = {part.strip() for part in sections.split(",") if part.strip()}
@@ -552,6 +721,8 @@ def trends_feed(response: Response, region: Region = "kr", exchange: str | None 
         raise HTTPException(422, "선택한 지역의 등록된 출처를 선택하세요.")
     try:
         symbol = validate_symbol(symbol, exchange) if symbol else None
+        # 다음 쪽은 이전 쪽의 next_cursor(마지막 글의 시각 · id) — 머리에 새 글이 쌓여도 쪽이 밀리지 않는다.
+        position = feed_index.decode_cursor(cursor)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from None
     selected = (symbol[4:] if region == "kr" else news.asset_from_market_symbol(symbol)) if symbol else None
@@ -575,7 +746,8 @@ def trends_feed(response: Response, region: Region = "kr", exchange: str | None 
     articles = community = None
     if "news" in wanted:
         try:
-            articles = get_news(region,q=q,assets=assets,selected=selected,source=source,limit=limit,offset=offset)
+            articles = get_news(region,q=q,assets=assets,selected=selected,source=source,limit=limit,offset=offset,
+                                cursor=position)
         except Exception:
             articles = {"items":[], "collection":{"status":"error"}, "overview":None,
                         "summary":{"status":"unavailable"}, "message":"저장된 뉴스를 확인하지 못했어요."}
@@ -585,11 +757,13 @@ def trends_feed(response: Response, region: Region = "kr", exchange: str | None 
         try:
             if region == "kr":
                 community = domestic_community.get_domestic_community(exchange, symbol, q=q,
-                    source=source if source in community_sources else None, limit=limit, offset=offset)
+                    source=source if source in community_sources else None, limit=limit, offset=offset,
+                    cursor=position)
                 if source and source not in community_sources:
                     community.update(items=[], total=0)
             else:
-                community = _global_community(q=q,assets=assets,selected=selected,source=source,limit=limit,offset=offset)
+                community = get_global_community(q=q, assets=assets, selected=selected, source=source,
+                                                 limit=limit, offset=offset, cursor=position)
         except Exception:
             community = {"items":[], "collection":{"status":"error"}, "message":"저장된 커뮤니티 글을 확인하지 못했어요."}
         if content_type not in {"all","community"}:

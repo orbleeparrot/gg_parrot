@@ -10,10 +10,10 @@ def test_actual_application_exposes_separate_domestic_community_without_collecti
     def forbidden(*args, **kwargs):
         pytest.fail("a public read must not collect or fetch exchange data")
 
-    domestic_community._responses.clear()
+    domestic_community.clear_caches()
     monkeypatch.setattr(domestic_community, "collect_once", forbidden)
     monkeypatch.setattr(domestic_community.krw, "list_symbols", forbidden)
-    monkeypatch.setattr(domestic_community, "_read_snapshot", lambda: {"state": None, "items": []})
+    monkeypatch.setattr(domestic_community, "_read_state", lambda: {"state": None, "read_ms": 0})
     response = TestClient(app).get("/api/community/domestic?exchange=upbit&symbol=KRW-BTC")
     assert response.status_code == 200
     assert response.json()["exchange"] == "upbit"
@@ -23,7 +23,7 @@ def test_actual_application_exposes_separate_domestic_community_without_collecti
 
 
 def test_actual_application_rejects_non_domestic_community_exchange_before_store(monkeypatch):
-    monkeypatch.setattr(domestic_community, "_read_snapshot", lambda: pytest.fail("store read"))
+    monkeypatch.setattr(domestic_community, "_read_state", lambda: pytest.fail("store read"))
     response = TestClient(app).get("/api/community/domestic?exchange=binance")
     assert response.status_code == 400
 

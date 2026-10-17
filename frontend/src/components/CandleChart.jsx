@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api.js";
-import { fmtPrice, quoteOf } from "../lib/format.js";
+import { baseOf, fmtPrice, quoteOf } from "../lib/format.js";
 import { exchangeLabel, isDomestic, normalizeExchange } from "../lib/exchanges.js";
 import { applyChartHistory, applyChartLive, chartTimeKst, createChartStream, isChartFresh, isChartLive } from "../lib/chartSource.js";
 import { coinName } from "../lib/macroSource.js";
 import CandlePlot from "./CandlePlot.jsx";
 import CoinIcon from "./CoinIcon.jsx";
+import CoinMark from "./CoinMark.jsx";
 import "./CandleChartStudio.css";
 
 // Market-data orchestration and chart controls. CandlePlot owns the renderer.
@@ -191,6 +192,9 @@ export default function CandleChart({
   expanded = false,
   minimal = false,
   overlay = null,
+  // { exchange, note } — 머리를 '거래소 · KRW-B3' 작은 글자 대신 코인 로고(모서리에 거래소 작은 로고) + 큰 티커로(내 에이전트).
+  // note 는 바이낸스 선물의 '선물 3배'처럼 거래소 로고로 알 수 없는 것만. exchange 가 null 이면 작은 로고 없이.
+  coinMark = null,
   title,
   // "studio" — 직접 만들기 워크벤치용. 종목·시세와 차트 조작 아래 OHLC·LIVE를 표시하고,
   // 그림은 판의 남은 공간을 채운다.
@@ -549,7 +553,15 @@ export default function CandleChart({
     <div className={`candle-chart pt-4 border-t border-slate-200 ${minimal ? "is-minimal" : ""}`}>
       <div className="candle-chart-toolbar flex items-center justify-between flex-wrap gap-2">
         <div className="candle-chart-market">
-          <h3 className="candle-chart-symbol t-caption text-slate-500">{exchangeLabel(exchange)} · <span className="num">{title || symbol}</span></h3>
+          {coinMark ? (
+            <h3 className="candle-chart-symbol is-coin">
+              <CoinMark symbol={symbol} exchange={coinMark.exchange} size={40} />
+              <span className="candle-chart-ticker num">{baseOf(symbol) || symbol}</span>
+              {coinMark.note ? <span className="candle-chart-note">{coinMark.note}</span> : null}
+            </h3>
+          ) : (
+            <h3 className="candle-chart-symbol t-caption text-slate-500">{exchangeLabel(exchange)} · <span className="num">{title || symbol}</span></h3>
+          )}
           <MarketPrice bar={current} quote={quote} changePct={changePct} />
         </div>
 

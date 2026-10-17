@@ -6,7 +6,8 @@ import "./SelectMenu.css";
 // 키보드: Enter·Space·↓ 로 열고, ↑↓ 로 옮기고, Enter 로 고르고, Esc 로 닫는다. 바깥을 누르면 닫힌다.
 // 화면 읽기 프로그램에는 '선택 전용 콤보상자'(WAI-ARIA APG)로 알린다 — 이름은 label, 값은 지금 고른 글자,
 // 목록을 옮길 때는 aria-activedescendant 로 어느 항목인지. (예전엔 aria-label 이 값을 가려 지금 고른 범위를 들을 수 없었다.)
-export default function SelectMenu({ value, options, onChange, label, className = "", size = "sm" }) {
+// trigger — 버튼 안을 고른 항목 글자 대신 따로 그릴 때(내 에이전트 실행 바: 코인 로고 + 큰 티커 + 둘째 줄).
+export default function SelectMenu({ value, options, onChange, label, className = "", size = "sm", trigger = null }) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(() => Math.max(0, options.findIndex(([key]) => key === value)));
   const root = useRef(null);
@@ -46,7 +47,7 @@ export default function SelectMenu({ value, options, onChange, label, className 
     <div ref={root} className={`select-menu${open ? " is-open" : ""} ${className}`} onKeyDown={onKeyDown}>
       <button type="button" role="combobox" className={`field field-${size} select-menu-trigger`} aria-haspopup="listbox" aria-expanded={open} aria-controls={listId}
         aria-activedescendant={open ? `${listId}-${active}` : undefined} aria-label={label} onClick={() => setOpen((v) => !v)}>
-        <span>{current?.[1]}</span>
+        {trigger ?? <span>{current?.[1]}</span>}
         <span className="select-menu-caret" aria-hidden="true" />
       </button>
       {open ? (

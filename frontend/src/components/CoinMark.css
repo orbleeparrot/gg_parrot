@@ -1,0 +1,14 @@
+/* CoinMark — 코인 로고 + 모서리의 거래소 작은 로고. 둘레 색은 놓인 바탕을 따라 --coin-mark-ring 으로 바꾼다. */
+.coin-mark { position: relative; flex: none; display: inline-block; width: var(--coin-mark-size); height: var(--coin-mark-size); }
+.coin-mark > .coin-icon { display: block; }
+.coin-mark-ex {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: var(--coin-mark-mini);
+  height: var(--coin-mark-mini);
+  border-radius: 50%;
+  background: rgb(255 255 255);
+  box-shadow: 0 0 0 2px var(--coin-mark-ring, rgb(var(--c-surface)));
+  object-fit: contain;
+}

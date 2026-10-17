@@ -7,6 +7,8 @@ from fastapi.testclient import TestClient
 from sqlmodel import delete, select
 
 from app import regional_trends as trends
+from app import feed_index
+from app.feed_index import FeedAsset
 from app.db import get_session
 from app.public_news import PublicNewsLease
 
@@ -14,11 +16,11 @@ from app.public_news import PublicNewsLease
 @pytest.fixture(autouse=True)
 def empty_trends():
     with get_session() as db:
-        for model in (trends.TrendArticle, trends.TrendSourceState, trends.TrendSummary):
+        for model in (trends.TrendArticle, trends.TrendSourceState, trends.TrendSummary, FeedAsset):
             db.exec(delete(model))
         db.exec(delete(PublicNewsLease).where(PublicNewsLease.scope.in_([trends.SCOPE, trends.SUMMARY_SCOPE])))
         db.commit()
-    trends._responses.clear()
+    trends.clear_caches()
     yield
 
 
@@ -34,7 +36,7 @@ def publish(items):
     with get_session() as db:
         trends.store_items(items, now_ms=int(time.time() * 1000), db=db)
         db.commit()
-    trends._responses.clear()
+    trends.clear_caches()
 
 
 def test_canonical_url_once_across_rediscovery_and_regions():
@@ -299,22 +301,109 @@ def test_provider_pause_does_not_consume_a_summary_attempt(monkeypatch):
         trends.request_region_overviews({"kr":[{"title":"국내"}],"global":[{"title":"해외"}]})
 
 
-def test_read_candidate_cap_is_before_search_and_declared(monkeypatch):
-    monkeypatch.setattr(trends,"MAX_READ_CANDIDATES",2)
-    publish([article(url=f"https://www.blockmedia.co.kr/archives/{n}") for n in range(4)])
-    result = trends.get_news("kr")
-    assert result["coverage"]["candidate_limit"] == 2
-    assert result["coverage"]["truncated"] is True
-    assert len(result["items"]) == 2
+def test_news_page_reads_one_page_in_sql_and_counts_only_on_the_first_page():
+    # 2026-10-18: 예전엔 최근 7일 기사(최대 1,000건 · 4MB)를 다 읽고 잘랐다 — 이제 DB 가 limit+1 행만 준다.
+    now = int(time.time() * 1000)
+    publish([article(title=f"비트코인 기사 {n}", url=f"https://www.blockmedia.co.kr/archives/{300 + n}",
+                     published=trends.iso(now - n * 1000), published_ms=now - n * 1000) for n in range(7)])
+    statements = []
+    with get_session() as db:
+        engine = db.get_bind()
+    def capture(_conn, _cursor, sql, *_args):
+        if "FROM trendarticle" in sql and "count(" not in sql.lower() and sql.lstrip().upper().startswith("SELECT"):
+            statements.append(sql)
+    from sqlalchemy import event
+    event.listen(engine, "before_cursor_execute", capture)
+    try:
+        first = trends.get_news("kr", limit=3)
+    finally:
+        event.remove(engine, "before_cursor_execute", capture)
+    assert [item["title"] for item in first["items"]] == ["비트코인 기사 0", "비트코인 기사 1", "비트코인 기사 2"]
+    assert first["total"] == 7 and first["next_cursor"]
+    assert len(statements) == 1 and "LIMIT" in statements[0].upper()
+    second = trends.get_news("kr", limit=3, cursor=feed_index.decode_cursor(first["next_cursor"]))
+    third = trends.get_news("kr", limit=3, cursor=feed_index.decode_cursor(second["next_cursor"]))
+    assert [item["title"] for item in second["items"] + third["items"]] == [f"비트코인 기사 {n}" for n in range(3, 7)]
+    assert second["total"] is None and third["next_cursor"] is None
 
 
-def test_snapshot_byte_cap_prevents_oversized_cache_refetches(monkeypatch):
-    monkeypatch.setattr(trends,"MAX_SNAPSHOT_BYTES",1000)
-    publish([article(url=f"https://www.blockmedia.co.kr/archives/{n}",excerpt="가"*300) for n in range(4)])
-    result = trends.get_news("kr")
-    assert result["coverage"]["byte_limited"] is True
-    assert result["coverage"]["truncated"] is True
-    assert trends._responses.statistics()["oversized"] == 0
+def test_pending_translation_is_hidden_and_old_rows_are_backfilled():
+    publish([article(title="Bitcoin ETF inflows rise", url="https://www.blockmedia.co.kr/archives/401",
+                     translation_status="pending")])
+    assert trends.get_news("kr")["items"] == []
+    assert trends.get_news("kr")["translation"]["pending_count"] == 1
+    # 개편 전에 저장된 행 — 검색 칸 · 코인 연결이 비어 있다. 수집기 첫 회차가 채운다.
+    with get_session() as db:
+        db.add(trends.TrendArticle(id="legacy1", region="kr", source_id="blockmedia_rss", published_ms=int(time.time() * 1000),
+               collected_ms=0, item_json=json.dumps(article(title="이더리움 옛 기사", asset_symbols=["ETH"]), ensure_ascii=False)))
+        db.commit()
+        assert trends.reconcile_projection(db) == 1
+        db.commit()
+        assert trends.reconcile_projection(db) == 0
+    trends.clear_caches()
+    found = trends.get_news("kr", q="이더리움")
+    assert [item["title"] for item in found["items"]] == ["이더리움 옛 기사"]
+    assert [item["title"] for item in trends.get_news("kr", selected="ETH")["items"]] == ["이더리움 옛 기사"]
+
+
+def square_row(identifier, *, scope="BTC", categories=("BTC",), last_seen=None, title="비트코인 커뮤니티 글"):
+    from app.agent_features.position_news.articles import NewsArticle
+    now = int(time.time() * 1000)
+    item = {"title": title, "source": "Binance Square", "content_type": "community",
+            "community_post_id": identifier, "url": f"https://www.binance.com/en/square/post/{identifier}",
+            "published": trends.iso(now), "categories": list(categories), "community_summary": "요약",
+            "community_summary_status": "ready", "community_body": "PRIVATE"}
+    with get_session() as db:
+        db.merge(NewsArticle(asset_symbol=scope, article_id=f"{scope}-{identifier}", revision=0, ready=True,
+                             item_json=json.dumps(item, ensure_ascii=False), first_seen_ms=now,
+                             last_seen_ms=now if last_seen is None else last_seen))
+        db.commit()
+
+
+def test_square_posts_are_copied_once_then_incrementally_and_read_in_pages(monkeypatch):
+    # 2026-10-18: Square 를 읽을 때마다 newsarticle 전체를 JSON 으로 풀던 것(첫 쪽 최대 12.8초) → 수집기가 옮겨 둔다.
+    from app.agent_features.position_news.articles import NewsArticle
+    from sqlmodel import delete as sql_delete
+    with get_session() as db:
+        db.exec(sql_delete(NewsArticle))
+        db.commit()
+    now = int(time.time() * 1000)
+    square_row("101", scope="BTC", categories=("BTC",), last_seen=now - 5000)
+    square_row("101", scope="ETH", categories=("ETH",), last_seen=now - 4000)  # 같은 글의 다른 코인 범위
+    square_row("102", last_seen=now - 3000, title="두 번째 글")
+    assert trends.sync_square()["moved"] == 2
+    page = trends.get_global_community(limit=1)
+    assert page["total"] == 2 and page["next_cursor"] and page["mentions"] == {"BTC": 2, "ETH": 1}
+    rest = trends.get_global_community(limit=1, cursor=feed_index.decode_cursor(page["next_cursor"]))
+    assert {item["community_post_id"] for item in page["items"] + rest["items"]} == {"101", "102"}
+    assert "PRIVATE" not in json.dumps(page) + json.dumps(rest)
+    merged = next(item for item in page["items"] + rest["items"] if item["community_post_id"] == "101")
+    assert merged["asset_symbols"] == ["BTC", "ETH"]
+    # 이어 읽기: 첫 회 뒤에 바뀐 행만 — 표 전체를 다시 훑지 않는다.
+    loads = []
+    import app.prepared_square_feed as square
+    original = square.load_changed
+    monkeypatch.setattr(square, "load_changed", lambda since=None, **kw: loads.append(since) or original(since, **kw))
+    square_row("103", last_seen=int(time.time() * 1000) + 1000, title="새 글")
+    trends.sync_square()
+    assert loads and loads[0] is not None
+    trends.clear_caches()
+    assert trends.get_global_community(limit=20)["total"] == 3
+    assert [item["title"] for item in trends.get_global_community(q="새 글")["items"]] == ["새 글"]
+
+
+def test_each_feed_has_its_own_storage_cap(monkeypatch):
+    monkeypatch.setattr(trends, "MAX_ARTICLES", 2)
+    now = int(time.time() * 1000)
+    publish([article(url=f"https://www.blockmedia.co.kr/archives/{500 + n}", published_ms=now - n * 1000) for n in range(2)])
+    with get_session() as db:
+        trends.store_square_items([{"id": f"sq{n}", "title": f"스퀘어 {n}", "published_ms": now, "asset_symbols": ["BTC"],
+                                    "published": trends.iso(now), "source": "Binance Square"} for n in range(5)],
+                                  now_ms=now, db=db)
+        db.commit()
+    trends.clear_caches()
+    assert trends.get_news("kr")["total"] == 2  # Square 가 많아도 뉴스를 밀어내지 않는다
+    assert trends.get_global_community()["total"] == 2
 
 
 def test_source_catalog_exposes_news_and_community_without_database_or_fetch(monkeypatch):
@@ -344,24 +433,32 @@ def test_paged_sections_skip_rankings_and_slice_lists(monkeypatch):
     assert data["news"]["total"] == 5 and data["news"]["offset"] == 2 and data["offset"] == 2
     for bad in ("", "rankings,secrets", "everything"):
         assert client.get("/api/trends", params={"region": "kr", "sections": bad}).status_code == 422
+    # 다음 쪽은 next_cursor 로 — 화면이 쓰는 방식.
+    first = client.get("/api/trends", params={"region": "kr", "sections": "news", "limit": 2}).json()["news"]
+    second = client.get("/api/trends", params={"region": "kr", "sections": "news", "limit": 2,
+                                               "cursor": first["next_cursor"]}).json()["news"]
+    assert [item["title"] for item in first["items"] + second["items"]] == [f"비트코인 기사 {n}" for n in range(4)]
+    for bad in ("x", "1.a b", "-1.abc", "1." + "a" * 200):
+        assert client.get("/api/trends", params={"region": "kr", "sections": "news", "cursor": bad}).status_code == 422
 
 
-def test_readers_get_the_prepared_list_without_waiting_for_a_full_reread(monkeypatch):
-    # 2026-10-18: 30초만 지나도 다음 사람이 최근 7일 전체 읽기를 기다려 첫 20개가 0.5~0.8초 늦었다.
+def test_first_pages_are_served_from_cache_without_new_reads(monkeypatch):
     publish([article()])
     clock = [1000.0]
-    monkeypatch.setattr(trends._responses, "clock", lambda: clock[0])
+    monkeypatch.setattr(trends._pages, "clock", lambda: clock[0])
+    monkeypatch.setattr(trends._meta, "clock", lambda: clock[0])
     trends.warm_readers()
     reads = []
-    original = trends._read_region
-    monkeypatch.setattr(trends, "_read_region", lambda region: reads.append(region) or original(region))
+    original = trends._read_page
+    monkeypatch.setattr(trends, "_read_page", lambda *a, **k: reads.append(a) or original(*a, **k))
     import app.cache_runtime as cache_runtime
-    monkeypatch.setattr(cache_runtime, "_submit", lambda job: True)  # 뒤에서 새로 만드는 일은 이 시험에서 멈춰 둔다
-    clock[0] += 5 * 60  # 5분 동안 아무도 안 봄
+    monkeypatch.setattr(cache_runtime, "_submit", lambda job: True)  # 뒤에서 새로 만드는 일은 멈춰 둔다
+    clock[0] += 5 * 60
     page = trends.get_news("kr", limit=20)
-    assert reads == []  # 읽는 사람은 전체 읽기를 기다리지 않는다
-    assert [item["title"] for item in page["items"]] == ["비트코인 현물 거래 증가"]
-    assert page["stale"] is False  # 뒤에서 새로 만드는 중인 것은 '낡음'이 아니다
+    assert reads == [] and [item["title"] for item in page["items"]] == ["비트코인 현물 거래 증가"]
+    assert page["stale"] is False
+    trends.warm_readers()  # 캐시에 있으면 데우기는 DB 를 읽지 않는다
+    assert reads == []
 
 
 def test_reader_list_older_than_two_minutes_is_labelled_stale(monkeypatch):
@@ -380,14 +477,3 @@ def test_collection_loop_warms_both_region_readers(monkeypatch):
     monkeypatch.setattr(runtime.stop, "wait", lambda _seconds: runtime.stop.set())
     runtime.run()
     assert calls == ["warm"]
-
-
-def test_warming_reads_only_when_the_reader_list_is_missing(monkeypatch):
-    # 매분 다시 읽으면 보는 사람이 없어도 DB 전송량이 쌓인다 — 목록이 없을 때만 읽는다.
-    publish([article()])
-    reads = []
-    original = trends._read_region
-    monkeypatch.setattr(trends, "_read_region", lambda region: reads.append(region) or original(region))
-    trends.warm_readers()
-    trends.warm_readers()
-    assert sorted(reads) == ["global", "kr"]

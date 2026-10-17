@@ -10,6 +10,7 @@ import pytest
 from sqlalchemy import event
 from sqlmodel import delete, select
 
+from app import feed_index
 from app import db as database, domestic_community as community, public_news
 
 
@@ -20,9 +21,10 @@ def isolated_domestic(monkeypatch):
     with database.get_session() as db:
         db.exec(delete(community.DomesticCommunityItem))
         db.exec(delete(community.DomesticCommunityState))
+        db.exec(delete(community.FeedAsset))
         db.exec(delete(public_news.PublicNewsLease).where(public_news.PublicNewsLease.scope == community.SCOPE))
         db.commit()
-    community._responses.clear()
+    community.clear_caches()
     monkeypatch.setenv("DOMESTIC_COMMUNITY_ENABLED", "false")
 
 
@@ -51,7 +53,7 @@ def row(title="비트코인 가격 이야기", number="123", date=None, url=None
 def stored(*, status="ready", now_ms=None, sources=None, items=None):
     now_ms = int(time.time() * 1000) if now_ms is None else now_ms
     with database.get_session() as db:
-        db.add(community.DomesticCommunityState(status=status, last_success_ms=now_ms,
+        db.merge(community.DomesticCommunityState(status=status, last_success_ms=now_ms,
                last_attempt_ms=now_ms, listings_json=json.dumps(listings(now_ms)),
                sources_json=json.dumps(sources or [{"id": "dcinside_bitcoin", "status": "ready"}])))
         for item in items or []:
@@ -59,8 +61,10 @@ def stored(*, status="ready", now_ms=None, sources=None, items=None):
                    url="https://gall.dcinside.com/board/view/?id=bitcoins_new1&no=123", source=community.SOURCE,
                    published=community._iso(now_ms), published_ms=now_ms, collected_ms=now_ms,
                    asset_symbols_json=json.dumps(item.get("assets", ["BTC"]))))
+        db.flush()
+        community.reconcile_assets(db)  # 개편 전에 저장된 글처럼 — 수집기가 코인 연결을 채운다
         db.commit()
-    community._responses.clear()
+    community.clear_caches()
 
 
 def forbid(*args, **kwargs):
@@ -167,7 +171,7 @@ def test_source_failure_is_error_and_partial_exchange_failure_is_stale():
         state.sources_json = json.dumps([{"id": "upbit", "status": "error"}])
         db.add(state)
         db.commit()
-    community._responses.clear()
+    community.clear_caches()
     assert community.get_domestic_community("upbit")["collection"]["status"] == "stale"
     assert community.get_domestic_community("bithumb")["collection"]["status"] == "ready"
 
@@ -254,19 +258,28 @@ def test_disabled_runtime_does_not_spawn(monkeypatch):
     assert community._runtime is None
 
 
-def test_all_read_variants_share_one_bounded_db_snapshot(monkeypatch):
-    stored(items=[{}])
-    actual = community._read_snapshot
-    calls = []
-    def read():
-        calls.append(True)
-        return actual()
-    monkeypatch.setattr(community, "_read_snapshot", read)
-    for _ in range(10):
-        community.get_domestic_community("upbit", "KRW-BTC")
-        community.get_domestic_community("bithumb")
-    assert len(calls) == 1
-    assert community._responses.statistics()["entries"] == 1
+def test_reads_select_one_page_in_sql_and_share_the_state(monkeypatch):
+    # 2026-10-18: 예전엔 요청마다 최대 2,000건 전체를 메모리에 만들고 잘랐다 — 이제 DB 가 한 쪽(limit+1)만 준다.
+    stored(items=[{"id": f"p{n}", "title": f"비트코인 이야기 {n}"} for n in range(30)])
+    states = []
+    actual = community._read_state
+    monkeypatch.setattr(community, "_read_state", lambda: states.append(1) or actual())
+    statements = []
+    def capture(_conn, _cursor, sql, *_args):
+        if "domesticcommunityitem" in sql and sql.lstrip().upper().startswith("SELECT"):
+            statements.append(sql)
+    event.listen(database._engine, "before_cursor_execute", capture)
+    try:
+        for _ in range(5):
+            page = community.get_domestic_community("upbit", limit=10)
+            community.get_domestic_community("bithumb", "KRW-BTC", limit=10)
+    finally:
+        event.remove(database._engine, "before_cursor_execute", capture)
+    assert len(page["items"]) == 10 and page["total"] == 30 and page["next_cursor"]
+    assert len(states) == 1  # 수집 상태(상장 목록)는 한 번 읽어 나눠 쓴다
+    item_reads = [sql for sql in statements if "count(" not in sql.lower()]
+    assert len(item_reads) == 2  # 같은 쪽은 캐시 — 거래소 · 코인 조합마다 한 번
+    assert all("LIMIT" in sql.upper() for sql in item_reads)
 
 
 @pytest.mark.parametrize("status,retry,expected", [("ready", 60, 60), ("skipped", 60, 60), ("error", 900, 60)])
@@ -323,22 +336,18 @@ def test_offset_pages_results_and_mentions_ignore_display_filters():
         community.get_domestic_community("upbit", offset=-1)
 
 
-def test_readers_get_the_prepared_community_list_without_a_full_reread(monkeypatch):
-    # 2026-10-18: 20초만 지나도 다음 사람이 최대 2,000건 전체 읽기를 기다렸다. 수집기가 매분 데우므로
-    # 읽기용 목록은 길어야 1분 남짓 묵는다 — 그 사이엔 다시 읽지 않고 바로 준다.
-    stored(items=[{}])
-    clock = [1000.0]
-    monkeypatch.setattr(community._responses, "clock", lambda: clock[0])
-    community.warm_reader()
-    reads = []
-    original = community._read_snapshot
-    monkeypatch.setattr(community, "_read_snapshot", lambda: reads.append(1) or original())
-    import app.cache_runtime as cache_runtime
-    monkeypatch.setattr(cache_runtime, "_submit", lambda job: True)  # 뒤에서 새로 만드는 일은 멈춰 둔다
-    clock[0] += 100
-    result = community.get_domestic_community("upbit")
-    assert reads == [] and len(result["items"]) == 1
-    assert result["collection"]["status"] == "ready" and not result.get("stale")
+def test_cursor_pages_do_not_shift_when_new_posts_arrive_at_the_head():
+    now = int(time.time() * 1000)
+    stored(items=[{"id": f"p{n:02d}", "title": f"비트코인 이야기 {n}"} for n in range(5)], now_ms=now)
+    first = community.get_domestic_community("upbit", limit=2)
+    # 첫 쪽을 본 뒤 새 글 3개가 머리에 붙는다(오프셋이면 다음 쪽이 같은 글을 다시 준다).
+    stored(items=[{"id": f"new{n}", "title": f"이더리움 새 글 {n}", "assets": ["ETH"]} for n in range(3)], now_ms=now + 1000)
+    cursor = feed_index.decode_cursor(first["next_cursor"])
+    second = community.get_domestic_community("upbit", limit=2, cursor=cursor)
+    third = community.get_domestic_community("upbit", limit=2, cursor=feed_index.decode_cursor(second["next_cursor"]))
+    seen = [item["id"] for page in (first, second, third) for item in page["items"]]
+    assert seen == ["p04", "p03", "p02", "p01", "p00"]
+    assert third["next_cursor"] is None and second["total"] is None and "mentions" not in second
 
 
 def test_community_collection_loop_warms_the_reader(monkeypatch):

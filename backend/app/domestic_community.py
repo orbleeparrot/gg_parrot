@@ -19,11 +19,13 @@ from urllib.parse import parse_qs, urljoin, urlsplit
 from urllib.robotparser import RobotFileParser
 
 from fastapi import APIRouter, HTTPException, Query
-from sqlalchemy import BigInteger
+from sqlalchemy import BigInteger, exists, func, or_
 from sqlmodel import Field, SQLModel, delete, select
 
 from .data import krw
+from . import feed_index
 from .cache_runtime import ResponseCache
+from .feed_index import FeedAsset
 from .db import get_session
 from .exchanges import validate_symbol
 from .http_runtime import get_http_client
@@ -57,8 +59,12 @@ _robots_cache: tuple[float, RobotFileParser] | None = None
 _source_robots_cache: dict[str, tuple[float, RobotFileParser]] = {}
 _runtime_lock = threading.Lock()
 _runtime = None
-_responses = ResponseCache("domestic-community", max_entries=1, max_bytes=4_000_000,
+FEED = feed_index.feed_key("kr", "community")
+# 수집 상태(출처 · 상장 목록)와 쪽 응답 캐시 — 글 목록 전체는 더 이상 메모리에 들고 있지 않는다(2026-10-18).
+_responses = ResponseCache("domestic-community", max_entries=1, max_bytes=1_000_000,
                            retry_seconds=5, max_retry_seconds=30)
+_pages = ResponseCache("domestic-community-pages", max_entries=256, max_bytes=4_000_000,
+                       retry_seconds=5, max_retry_seconds=30)
 
 
 class DomesticCommunityItem(SQLModel, table=True):
@@ -479,20 +485,26 @@ def collect_once(*, now_ms=None, stop_event=None, write_lock=None) -> dict:
             for item in items:
                 row = db.get(DomesticCommunityItem, item["id"])
                 if row is None:
-                    db.add(DomesticCommunityItem(**{k: item[k] for k in
-                           ("id", "title", "url", "source", "published", "published_ms")},
-                           collected_ms=observed_ms, asset_symbols_json=json.dumps(item["asset_symbols"])))
+                    row = DomesticCommunityItem(**{k: item[k] for k in
+                          ("id", "title", "url", "source", "published", "published_ms")},
+                          collected_ms=observed_ms, asset_symbols_json=json.dumps(item["asset_symbols"]))
                 else:
                     row.title = item["title"]
                     row.asset_symbols_json = json.dumps(item["asset_symbols"])
-                    db.add(row)
+                db.add(row)
+                # 글–코인 연결 — 읽기는 이걸로 거래소 상장 · 코인 · 검색어를 SQL 안에서 거른다.
+                feed_index.replace_assets(db, FEED, row.id, item["asset_symbols"], row.published_ms)
             db.add(state)
-            db.exec(delete(DomesticCommunityItem).where(DomesticCommunityItem.published_ms < observed_ms - RETENTION_SECONDS * 1000))
+            cutoff = observed_ms - RETENTION_SECONDS * 1000
+            db.exec(delete(DomesticCommunityItem).where(DomesticCommunityItem.published_ms < cutoff))
+            feed_index.prune(db, FEED, cutoff)
             db.flush()
             overflow = db.exec(select(DomesticCommunityItem.id).order_by(
                 DomesticCommunityItem.published_ms.desc(), DomesticCommunityItem.id).offset(MAX_ITEMS)).all()
             if overflow:
                 db.exec(delete(DomesticCommunityItem).where(DomesticCommunityItem.id.in_(overflow)))
+                feed_index.drop_items(db, FEED, overflow)
+            reconcile_assets(db)
             db.commit()
         _responses.clear()
         return {"status": status, "item_count": len(items), "attempted_sources": attempted,
@@ -508,46 +520,102 @@ def collect_once(*, now_ms=None, stop_event=None, write_lock=None) -> dict:
                 finish_work(SCOPE, token, retry_seconds=retry_seconds)
 
 
-# 읽기용 목록(최대 2,000건) — 10초가 지나면 읽는 사람이 뒤에서 새로 만들게 하고 그동안 만들어 둔 것을 바로 준다.
-# 낡은 값 창은 상장 목록 유효기간(LISTING_MAX_AGE_SECONDS 300초)보다 충분히 짧아야 한다 — 목록 안의 상장 목록이
-# 5분을 넘으면 글을 전부 숨긴다(10분으로 두었다가 운영에서 0건이 나옴, 2026-10-18). 목록이 작아(약 13KB)
-# 수집 스레드가 매분 새로 만들어 두어 첫 방문자도 기다리지 않는다.
+def reconcile_assets(db, *, limit=MAX_ITEMS) -> int:
+    """코인 연결이 없는 글(이번 개편 전에 저장된 글)에 연결을 채운다 — 없으면 아무것도 쓰지 않는다."""
+    missing = db.exec(select(DomesticCommunityItem.id, DomesticCommunityItem.published_ms,
+                             DomesticCommunityItem.asset_symbols_json).where(
+        DomesticCommunityItem.asset_symbols_json != "[]",
+        ~exists(select(FeedAsset.item_id).where(FeedAsset.feed == FEED, FeedAsset.item_id == DomesticCommunityItem.id)),
+    ).limit(limit)).all()
+    for item_id, published_ms, assets_json in missing:
+        try:
+            feed_index.replace_assets(db, FEED, item_id, json.loads(assets_json), published_ms)
+        except (ValueError, TypeError):
+            continue
+    return len(missing)
+
+
+# 수집 상태(출처 · 거래소 상장 목록) — 10초가 지나면 읽는 사람이 뒤에서 새로 만들게 하고 그동안 만들어 둔 것을 바로 준다.
+# 낡은 값 창은 상장 목록 유효기간(LISTING_MAX_AGE_SECONDS 300초)보다 충분히 짧아야 한다 — 상장 목록이 5분을 넘으면
+# 글을 전부 숨긴다(10분으로 두었다가 운영에서 0건, 2026-10-18). 쪽 응답도 같은 창을 쓴다.
 READ_FRESH_SECONDS = 10
 READ_STALE_SECONDS = 110
 READ_STALE_AFTER_MS = 2 * 60_000
 
 
-def _snapshot():
-    return _responses.get_or_load("shared", _read_snapshot, ttl=READ_FRESH_SECONDS, stale_ttl=READ_STALE_SECONDS)
-
-
-def warm_reader() -> None:
-    try:
-        _snapshot()
-    except Exception as exc:
-        logger.info("domestic community reader warm deferred type=%s", type(exc).__name__)
-
-
-def _read_snapshot() -> dict:
+def _read_state() -> dict:
     with get_session() as db:
         state = db.get(DomesticCommunityState, SCOPE)
         if state is None:
-            return {"state": None, "items": [], "read_ms": int(time.time() * 1000)}
-        rows = db.exec(select(DomesticCommunityItem).order_by(
-            DomesticCommunityItem.published_ms.desc(), DomesticCommunityItem.id).limit(MAX_ITEMS)).all()
+            return {"state": None, "read_ms": int(time.time() * 1000)}
         return {"read_ms": int(time.time() * 1000),
                 "state": {"status": state.status, "last_success_ms": state.last_success_ms,
-                           "sources": json.loads(state.sources_json), "listings": json.loads(state.listings_json)},
-                "items": [{"id": row.id, "title": row.title, "url": row.url, "source": row.source,
-                           "published": row.published, "published_ms": row.published_ms,
-                           "asset_symbols": json.loads(row.asset_symbols_json)} for row in rows]}
+                          "sources": json.loads(state.sources_json), "listings": json.loads(state.listings_json)}}
+
+
+def _snapshot():
+    return _responses.get_or_load("shared", _read_state, ttl=READ_FRESH_SECONDS, stale_ttl=READ_STALE_SECONDS)
+
+
+def clear_caches() -> None:
+    _responses.clear()
+    _pages.clear()
+
+
+def warm_reader() -> None:
+    """수집 상태와 두 거래소의 첫 쪽을 데운다(목록이 작아 매분). 쪽은 캐시에 없을 때만 읽는다."""
+    try:
+        _snapshot()
+        for exchange in ("upbit", "bithumb"):
+            get_domestic_community(exchange, limit=20)
+    except Exception as exc:
+        logger.info("domestic community reader warm deferred type=%s", type(exc).__name__)
 
 
 MAX_READ_OFFSET = MAX_ITEMS
 
 
+def _read_page(*, allowed, base, source_name, query, query_assets, cursor, limit, offset):
+    now_ms = int(time.time() * 1000)
+    item = DomesticCommunityItem
+    conditions = [item.published_ms >= now_ms - RETENTION_SECONDS * 1000,
+                  feed_index.mentioning(FEED, item.id, allowed)]
+    if base:
+        conditions.append(feed_index.mentioning(FEED, item.id, [base]))
+    if source_name:
+        conditions.append(item.source == source_name)
+    if query:
+        text = func.lower(item.title).like(feed_index.like_pattern(query), escape="\\")
+        conditions.append(or_(text, feed_index.mentioning(FEED, item.id, query_assets)) if query_assets else text)
+    with get_session() as db:
+        statement = select(item.id, item.title, item.url, item.source, item.published, item.published_ms,
+                           item.asset_symbols_json).where(*conditions)
+        if cursor:
+            statement = statement.where(feed_index.before(item.published_ms, item.id, tuple(cursor)))
+        rows = db.exec(statement.order_by(item.published_ms.desc(), item.id.desc())
+                       .offset(offset).limit(limit + 1)).all()
+        total = None if cursor else db.exec(select(func.count()).select_from(item).where(*conditions)).one()
+        mentions = None if cursor else feed_index.mention_counts(db, FEED, now_ms - RETENTION_SECONDS * 1000,
+                                                                 set(allowed))
+    more, rows = len(rows) > limit, rows[:limit]
+    items = []
+    for row in rows:
+        source_id = source_id_for_url(row.url)
+        if source_id is None:
+            continue
+        assets = sorted(set(json.loads(row.asset_symbols_json)) & set(allowed))
+        items.append({"id": row.id, "title": row.title, "url": row.url, "source": row.source,
+                      "published": row.published, "excerpt": "", "content_type": "community", "language": "ko",
+                      "region": "kr", "asset_symbols": assets, "source_id": source_id,
+                      "published_precision": "day" if "T" not in row.published else
+                      "minute" if source_id == "coinpan_free" else "second"})
+    return {"items": items, "total": total, "mentions": mentions, "read_ms": now_ms,
+            "next_cursor": feed_index.encode_cursor(rows[-1].published_ms, rows[-1].id) if more and rows else None}
+
+
 def get_domestic_community(exchange: str, symbol: str | None = None, *, q: str = "", source: str | None = None,
-                           limit: int = MAX_READ_ITEMS, offset: int = 0, now_ms=None) -> dict:
+                           limit: int = MAX_READ_ITEMS, offset: int = 0, cursor=None, now_ms=None) -> dict:
+    """국내 커뮤니티 한 쪽 — DB 에서 최근 순으로 limit 개만 읽는다. cursor 는 이전 쪽 next_cursor(디코드한 값)."""
     if exchange not in {"upbit", "bithumb"}:
         raise ValueError("국내 커뮤니티는 업비트 또는 빗썸을 선택하세요.")
     symbol = validate_symbol(symbol, exchange) if symbol else None
@@ -563,7 +631,7 @@ def get_domestic_community(exchange: str, symbol: str | None = None, *, q: str =
     now_ms = int(time.time() * 1000) if now_ms is None else now_ms
     result = {"exchange": exchange, "items": [], "collection": {"status": "pending", "sources": []},
               "refresh_seconds": REFRESH_SECONDS, "total": 0, "limit": limit, "offset": offset, "mentions": {},
-              "query": _clean(q, 100),
+              "next_cursor": None, "query": _clean(q, 100),
               "source_filter": source, "search_scope": "prepared_headlines_last_7_days",
               "available_sources": [{"id": s["id"], "name": s["name"]} for s in SOURCES],
               "notice": "국내 공개 커뮤니티에서 선택한 거래소의 원화 상장 종목을 언급한 글입니다. 작성자의 이용 거래소와는 무관하며 투자 조언이 아닙니다."}
@@ -590,35 +658,22 @@ def get_domestic_community(exchange: str, symbol: str | None = None, *, q: str =
     if not listing:
         result["notice"] += " 현재 거래소 상장 목록을 확인하지 못해 글을 표시하지 않습니다."
         return result
-    allowed = {row["base"] for row in listing["items"]}
+    allowed = sorted({row["base"] for row in listing["items"]})
     if symbol and symbol[4:] not in allowed:
         raise ValueError("선택한 거래소의 원화 상장 종목이 아닙니다.")
-    query_assets = {item["base"] for item in listing["items"] if query and any(query in str(item.get(key, "")).casefold()
-                    for key in ("base", "symbol", "korean_name", "english_name"))}
-    mentions = result["mentions"]
-    for row in snapshot["items"]:
-        if row["published_ms"] < now_ms - RETENTION_SECONDS * 1000:
-            continue
-        assets = sorted(set(row["asset_symbols"]) & allowed)
-        source_id = source_id_for_url(row["url"])
-        if not assets or source_id is None:
-            continue
-        # 언급 수는 검색·코인·출처 필터와 상관없이 이 거래소에 상장된 코인 전체 기준(최근 7일).
-        for asset in assets:
-            mentions[asset] = mentions.get(asset, 0) + 1
-        if symbol and symbol[4:] not in assets:
-            continue
-        if source and source_id != source:
-            continue
-        if query and query not in row["title"].casefold() and not set(assets) & query_assets:
-            continue
-        result["total"] += 1
-        if result["total"] <= offset or len(result["items"]) >= limit:
-            continue
-        result["items"].append({key: row[key] for key in ("id", "title", "url", "source", "published")})
-        result["items"][-1].update(excerpt="", content_type="community", language="ko", region="kr", asset_symbols=assets,
-            source_id=source_id, published_precision="day" if "T" not in row["published"] else
-            "minute" if source_id == "coinpan_free" else "second")
+    query_assets = sorted({item["base"] for item in listing["items"] if query and any(
+        query in str(item.get(key, "")).casefold() for key in ("base", "symbol", "korean_name", "english_name"))})
+    args = {"allowed": allowed, "base": symbol[4:] if symbol else None,
+            "source_name": _source(source)["name"] if source else None, "query": query,
+            "query_assets": query_assets, "cursor": list(cursor) if cursor else None, "limit": limit, "offset": offset}
+    key = json.dumps([exchange, args], sort_keys=True, ensure_ascii=False)
+    page = _pages.get_or_load(key, lambda: _read_page(**args), ttl=READ_FRESH_SECONDS, stale_ttl=READ_STALE_SECONDS)[0]
+    # total 은 첫 쪽에서만 센다(이어 받는 쪽은 None — 화면은 첫 쪽의 개수를 그대로 쓴다).
+    result.update(items=page["items"], next_cursor=page["next_cursor"], total=page["total"])
+    if page["mentions"] is not None:
+        result["mentions"] = page["mentions"]
+    else:
+        result.pop("mentions")
     return result
 
 
@@ -626,9 +681,11 @@ def get_domestic_community(exchange: str, symbol: str | None = None, *, q: str =
 def domestic_community_feed(exchange: str = Query("upbit"), symbol: str | None = Query(None, max_length=24),
                             q: str = Query("", max_length=100), source: str | None = Query(None, max_length=40),
                             limit: int = Query(MAX_READ_ITEMS, ge=1, le=MAX_READ_ITEMS),
-                            offset: int = Query(0, ge=0, le=MAX_READ_OFFSET)):
+                            offset: int = Query(0, ge=0, le=MAX_READ_OFFSET),
+                            cursor: str | None = Query(None, max_length=120)):
     try:
-        return get_domestic_community(exchange, symbol, q=q, source=source, limit=limit, offset=offset)
+        return get_domestic_community(exchange, symbol, q=q, source=source, limit=limit, offset=offset,
+                                      cursor=feed_index.decode_cursor(cursor))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
 

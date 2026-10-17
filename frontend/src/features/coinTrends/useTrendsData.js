@@ -41,18 +41,19 @@ export const FEED_PAGE = 20;
 // 다음 쪽 요청이 연달아 이만큼 실패하면 자동으로 다시 부르지 않는다(첫 쪽 새로고침이 성공하면 다시 연다).
 const MAX_PAGE_FAILURES = 3;
 
-const blank = (key) => ({ key, items: [], total: 0, cursor: 0, failures: 0, extra: null, loading: true, error: "", more: false });
+const blank = (key) => ({ key, items: [], total: 0, nextCursor: null, failures: 0, extra: null, loading: true, error: "", more: false });
 
-// 소식 목록 하나(커뮤니티 또는 뉴스). 첫 쪽은 60초마다 조용히 다시 받아 위에 붙이고,
-// 목록 끝에 닿으면 다음 쪽을 서버에 요청해 아래에 붙인다.
-// cursor = 서버 목록에서 이미 읽은 개수 — 중복만 온 쪽이 있어도 다음 요청은 앞으로 나아간다.
+// 소식 목록 하나(커뮤니티 또는 뉴스). 서버가 DB 에서 한 쪽(20개)만 읽어 준다(2026-10-18).
+// 첫 쪽은 60초마다 조용히 다시 받아 위에 붙이고, 목록 끝에 닿으면 next_cursor(마지막으로 받은 글)로 다음 쪽을 받는다 —
+// 커서는 마지막 글 자체라 머리에 새 글이 쌓여도 다음 쪽이 밀리거나 겹치지 않는다.
 export function useFeedList(kind, { region, exchange, symbol = "", q = "", source = "" }) {
   const key = [kind, region, exchange, symbol, q, source].join("|");
   const [state, setState] = useState(() => blank(key));
   const keyRef = useRef(key);
   keyRef.current = key;
-  const params = useCallback((offset) => ({
-    region, exchange, sections: kind, limit: FEED_PAGE, offset,
+  const params = useCallback((cursor) => ({
+    region, exchange, sections: kind, limit: FEED_PAGE,
+    ...(cursor ? { cursor } : {}),
     ...(symbol ? { symbol } : {}), ...(q ? { q } : {}), ...(source ? { source } : {}),
   }), [kind, region, exchange, symbol, q, source]);
 
@@ -61,15 +62,16 @@ export function useFeedList(kind, { region, exchange, symbol = "", q = "", sourc
   const loadFirst = useCallback(async (signal) => {
     const requestKey = key;
     try {
-      const data = await api.trendsFeed(params(0), { signal });
+      const data = await api.trendsFeed(params(null), { signal });
       if (keyRef.current !== requestKey) return;
       const section = data?.[kind] || {};
       const page = section.items || [];
       setState((current) => {
         const same = current.key === requestKey;
         const merged = refreshFirstPage(same ? current.items : [], page);
-        const cursor = merged.replaced ? page.length : current.cursor + merged.added;
-        return { key: requestKey, items: merged.items, total: Number(section.total) || 0, cursor, failures: 0,
+        // 겹치면 새 글만 위에 붙이고 이어 받을 자리는 그대로, 안 겹치면 첫 쪽으로 갈아 끼우고 서버의 다음 자리부터.
+        const nextCursor = merged.replaced ? section.next_cursor || null : current.nextCursor;
+        return { key: requestKey, items: merged.items, total: Number(section.total) || 0, nextCursor, failures: 0,
           extra: { ...section, sources: data?.sources || [] }, loading: false, error: "", more: same && current.more };
       });
     } catch (reason) {
@@ -85,21 +87,18 @@ export function useFeedList(kind, { region, exchange, symbol = "", q = "", sourc
   stateRef.current = state;
   const busyRef = useRef("");
   const loadMore = useCallback(async () => {
-    const requestKey = key, current = stateRef.current;
+    const requestKey = key, current = stateRef.current, cursor = current.nextCursor;
     if (busyRef.current === requestKey || current.key !== requestKey || !current.items.length
-      || current.cursor >= current.total || current.failures >= MAX_PAGE_FAILURES) return;
+      || !cursor || current.failures >= MAX_PAGE_FAILURES) return;
     busyRef.current = requestKey;
     setState((now) => (now.key !== requestKey ? now : { ...now, more: true }));
     try {
-      const data = await api.trendsFeed(params(current.cursor));
+      const data = await api.trendsFeed(params(cursor));
       if (keyRef.current !== requestKey) return;
       const section = data?.[kind] || {};
-      const page = section.items || [];
-      setState((now) => (now.key !== requestKey ? now : {
-        ...now, items: mergeById(now.items, page), failures: 0,
-        cursor: now.cursor + page.length,
-        // 빈 쪽이 오면 서버 목록 끝 — 더 부르지 않는다.
-        total: page.length ? Number(section.total) || now.total : now.cursor,
+      // 그사이 새로고침이 목록을 갈아 끼웠으면(자리가 바뀜) 이 쪽은 버린다.
+      setState((now) => (now.key !== requestKey || now.nextCursor !== cursor ? now : {
+        ...now, items: mergeById(now.items, section.items || []), failures: 0, nextCursor: section.next_cursor || null,
       }));
     } catch {
       setState((now) => (now.key !== requestKey ? now : { ...now, failures: now.failures + 1 }));
@@ -111,5 +110,5 @@ export function useFeedList(kind, { region, exchange, symbol = "", q = "", sourc
 
   // 열쇠가 바뀐 직후 한 번은 옛 목록을 그리지 않는다.
   const view = state.key === key ? state : blank(key);
-  return { ...view, hasMore: view.cursor < view.total && view.failures < MAX_PAGE_FAILURES, loadMore };
+  return { ...view, hasMore: !!view.nextCursor && view.failures < MAX_PAGE_FAILURES, loadMore };
 }

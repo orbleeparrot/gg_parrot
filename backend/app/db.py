@@ -1467,6 +1467,8 @@ def _migrate() -> None:
 
 
 _PG_ADDED_COLUMNS = {
+    # 코인동향 소식 목록 SQL 쪽 나누기(2026-10-18) — 번역 대기 글 숨김 · 검색어 거르기. 마이그레이션 20261018000000 과 같은 정의.
+    "trendarticle": {"visible": "BOOLEAN NOT NULL DEFAULT TRUE", "search_text": "VARCHAR NOT NULL DEFAULT ''"},
     "runsessionevent": {"event_key": "TEXT", "details_json": "TEXT NOT NULL DEFAULT ''",
                         "severity": "TEXT NOT NULL DEFAULT ''", "component": "TEXT NOT NULL DEFAULT ''",
                         "event_name": "TEXT NOT NULL DEFAULT ''", "operation_id": "TEXT NOT NULL DEFAULT ''"},
@@ -1556,6 +1558,7 @@ _PG_ADDED_COLUMNS = {
     },
 }
 _PG_INDEXES = {
+    "ix_trendarticle_feed": ("trendarticle", "region, content_type, published_ms, id"),
     "ix_runsessionevent_session_id_id": ("runsessionevent", "session_id, id"),
     "ix_runsessionevent_session_operation_id_id": ("runsessionevent", "session_id, operation_id, id"),
     "ix_newsarticle_enrichment": ("newsarticle", "enrichment_pending, last_seen_ms"),
@@ -1591,7 +1594,7 @@ _PG_PRIVATE_CACHE_TABLES = (
     "chatmessage", "chatreadstate", "useravatar",
     "newsarticlefeed", "newsarticle", "newsmaintenancelease", "publicnewslease",
     "domesticcommunityitem", "domesticcommunitystate",
-    "trendarticle", "trendsourcestate", "trendsummary",
+    "trendarticle", "trendsourcestate", "trendsummary", "feedasset",
     "leaderboardsnapshotcontrol", "leaderboardsnapshotversion", "leaderboardsnapshotitem",
     "leaderboardentrystats", "leaderboardchallengebot",
     "dailyquestclaim", "runsessionevent", "askmacrosession", "askextracredit", "chatroom", "chatroommember", "runnercommand",

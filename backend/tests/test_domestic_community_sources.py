@@ -19,7 +19,7 @@ def isolated_sources(monkeypatch):
         db.exec(delete(community.DomesticCommunityState))
         db.exec(delete(public_news.PublicNewsLease).where(public_news.PublicNewsLease.scope == community.SCOPE))
         db.commit()
-    community._responses.clear()
+    community.clear_caches()
     monkeypatch.setenv("DOMESTIC_COMMUNITY_ENABLED", "false")
 
 

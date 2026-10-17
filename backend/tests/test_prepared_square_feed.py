@@ -19,9 +19,7 @@ def empty_square():
     with get_session() as db:
         db.exec(delete(NewsArticle))
         db.commit()
-    square._responses.clear()
     yield
-    square._responses.clear()
 
 
 def post(identifier='123', **extra):
@@ -53,8 +51,7 @@ def test_1000_newer_normal_articles_cannot_hide_square():
                 ready=True, item_json=json.dumps({'content_type':'article', 'source':'CoinDesk',
                     'title':'비트코인 뉴스'}), first_seen_ms=now, last_seen_ms=now+n+1))
         db.commit()
-    result = square.read_prepared_square()
-    assert result['status'] == 'ready'
+    result = square.load_changed()
     assert len(result['items']) == 1
     assert result['coverage']['candidate_count'] == 1
     assert not result['coverage']['truncated']
@@ -70,7 +67,7 @@ def test_projection_does_not_select_private_body_or_author():
             captured.append(statement)
     event.listen(engine, 'before_cursor_execute', record)
     try:
-        result = square.read_prepared_square()
+        result = square.load_changed()
     finally:
         event.remove(engine, 'before_cursor_execute', record)
     assert len(captured) == 1
@@ -82,28 +79,21 @@ def test_projection_does_not_select_private_body_or_author():
     assert result['items'][0]['community_summary'] == '실제로 저장된 요약'
 
 
-def test_cache_is_shared_copied_and_does_not_query_per_reader(monkeypatch):
-    insert(post())
-    calls = []
-    original = square.get_session
-    @contextmanager
-    def counted():
-        calls.append(1)
-        with original() as db:
-            yield db
-    monkeypatch.setattr(square, 'get_session', counted)
-    first = square.read_prepared_square()
-    first['items'][0]['title'] = 'mutated'
-    second = square.read_prepared_square()
-    assert len(calls) == 1
-    assert second['items'][0]['title'] == '비트코인 커뮤니티의 실제 제목'
-    assert second['cached']
+def test_changed_rows_are_read_after_the_watermark_in_last_seen_order():
+    # 2026-10-18: 표 전체를 훑지 않고 바뀐 행만(last_seen_ms 인덱스) — 수집기가 1분마다 이어 읽는다.
+    now = int(time.time() * 1000)
+    for n in range(3):
+        insert(post(str(n + 1)), key=f'post{n}', last_seen=now + n)
+    changed = square.load_changed(now)
+    assert [item['community_post_id'] for item in changed['items']] == ['3', '2']
+    assert changed['max_last_seen_ms'] == now + 2 and not changed['truncated']
+    assert square.load_changed(now + 2) == {**square.load_changed(now + 2), 'items': [], 'max_last_seen_ms': None}
 
 
 def test_duplicate_scopes_share_one_identity_and_merge_asset_aliases():
     insert(post(categories=['BTC']), scope='BTC', key='one')
     insert(post(categories=['ETH']), scope='ETH', key='two')
-    result = square.read_prepared_square()
+    result = square.load_changed()
     assert len(result['items']) == 1
     assert result['items'][0]['asset_symbols'] == ['BTC', 'ETH']
     assert result['coverage']['deduplicated_count'] == 1
@@ -120,7 +110,7 @@ def test_duplicate_scopes_share_one_identity_and_merge_asset_aliases():
 ])
 def test_invalid_or_expired_rows_are_not_public(changes):
     insert(post(**changes))
-    assert square.read_prepared_square()['items'] == []
+    assert square.load_changed()['items'] == []
 
 
 def test_unready_posts_and_invalid_json_do_not_break_prepared_read():
@@ -130,7 +120,7 @@ def test_unready_posts_and_invalid_json_do_not_break_prepared_read():
         db.add(NewsArticle(asset_symbol='BTC', article_id='invalid', revision=0, ready=True,
                           item_json='{invalid JSON', first_seen_ms=now, last_seen_ms=now))
         db.commit()
-    assert square.read_prepared_square()['status'] == 'pending'
+    assert square.load_changed()['items'] == []
 
 
 def test_candidate_limit_is_after_kind_filter_and_declared(monkeypatch):
@@ -138,7 +128,7 @@ def test_candidate_limit_is_after_kind_filter_and_declared(monkeypatch):
     now = int(time.time() * 1000)
     for n in range(3):
         insert(post(str(n+1)), key=f'post{n}', last_seen=now+n)
-    result = square.read_prepared_square()
+    result = square.load_changed()
     assert len(result['items']) == 2
     assert result['coverage']['candidate_count'] == 2
     assert result['coverage']['truncated']
@@ -148,19 +138,11 @@ def test_candidate_limit_is_after_kind_filter_and_declared(monkeypatch):
 def test_postgresql_query_projects_jsonb_fields_instead_of_selecting_body():
     statement = square._statement('postgresql')
     sql = str(statement.compile(dialect=postgresql.dialect(), compile_kwargs={'literal_binds':True}))
-    assert 'CAST(newsarticle.item_json AS JSONB)' in sql
+    # 깨진 JSON 행 하나가 쿼리 전체를 실패시키지 않게 IS JSON 으로 감싼다(Postgres 16+).
+    assert 'newsarticle.item_json IS JSON' in sql and 'AS JSONB)' in sql
     assert "'content_type'" in sql and "'community'" in sql and "'Binance Square'" in sql
     assert 'community_body' not in sql and 'author' not in sql
     assert not sql.startswith('SELECT newsarticle.item_json')
     sqlite_sql = str(square._statement('sqlite').compile(
         dialect=sqlite.dialect(), compile_kwargs={'literal_binds':True}))
     assert 'json_valid' in sqlite_sql and 'json_extract' in sqlite_sql
-
-
-def test_cached_items_are_rechecked_against_current_date_window(monkeypatch):
-    now = time.time()
-    published = datetime.fromtimestamp(now-7*86400+5,timezone.utc).isoformat()
-    insert(post(published=published))
-    assert square.read_prepared_square()['items']
-    monkeypatch.setattr(square.time, 'time', lambda: now+6)
-    assert square.read_prepared_square()['items'] == []

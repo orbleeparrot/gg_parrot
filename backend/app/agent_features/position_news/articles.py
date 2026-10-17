@@ -304,6 +304,18 @@ def upsert_articles(asset_symbol: str, items: list[dict], *, analysis: dict | No
                             "article_ids": fresh_article_ids,
                             "verification": "server_article_publication_not_browser_receipt"},
             })
+        # 같은 순간 껄무새 중계도 깨운다 — 10초 주기를 기다리면 '새 기사' 알림보다 늦게 올라온다. 커밋 뒤에 깨워야
+        # 중계가 이 기사를 읽는다(커밋 전에 깨우면 못 보고 다음 바퀴로 밀린다).
+        from sqlalchemy import event as _sa_event
+
+        def _wake_commentary(_session):
+            try:
+                from ... import agent_commentary_runtime
+                agent_commentary_runtime.request_cycle()
+            except Exception:
+                pass
+
+        _sa_event.listen(db, "after_commit", _wake_commentary, once=True)
     state.updated_ms = max(state.updated_ms, millis)
     revision = state.revision
     db.add(state)

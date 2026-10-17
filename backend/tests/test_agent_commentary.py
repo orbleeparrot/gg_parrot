@@ -220,6 +220,21 @@ def test_community_post_waits_for_its_summary_then_comes_with_title_and_body():
     assert state["news_rev"] == 50
 
 
+def test_post_without_any_summary_status_yet_also_waits_but_only_briefly():
+    """글이 처음 피드에 들어올 때는 요약 상태 칸이 없다 — 'pending' 만 보면 그런 글을 제목만 말했다(10/17 14:59 GTC)."""
+    state = started_state() | {"news_rev": 40}
+    fresh = post(21, "$GTC 박스권 저항선 돌파", "a", NOW - MIN, summary="")
+    fresh.pop("community_summary")
+    says, state = ac.decide(state, facts(), feed={"cursor": 41, "reset": False, "items": [fresh]}, now_ms=NOW)
+    assert not [s for s in says if s["kind"] == "post"] and state["news_rev"] == 40
+    assert ac.POST_SUMMARY_WAIT_MS == 30_000, "운영 실측 p80 23초 — 알림보다 한참 늦지 않게"
+    says, state = ac.decide(state, facts(), feed={"cursor": 41, "reset": False, "items": [fresh]}, now_ms=NOW + 31_000)
+    assert [s["post"]["title"] for s in says if s["kind"] == "post"] == ["$GTC 박스권 저항선 돌파"]
+    gone = post(22, "요약을 못 만드는 글", "b", NOW, summary="") | {"community_summary_status": "failed"}
+    says, _ = ac.decide(state, facts(), feed={"cursor": 42, "reset": False, "items": [gone]}, now_ms=NOW + 32_000)
+    assert [s["post"]["title"] for s in says if s["kind"] == "post"] == ["요약을 못 만드는 글"], "못 만든다고 정해지면 기다리지 않는다"
+
+
 def test_connection_problems_errors_and_the_end():
     state = started_state()
     says, state = ac.decide(state, facts(last_hb_ms=NOW - 90_000), now_ms=NOW)

@@ -47,9 +47,10 @@ VOL_REPEAT_MS = 2 * 60 * 60_000  # 같은 단계는 2시간에 한 번만 다시
 VOL_MIN_BASE_BARS = 100
 POST_MAX_AGE_MS = 3 * 3_600_000
 POST_BEFORE_START_MS = 30 * 60_000
-# 커뮤니티 글은 AI 요약이 따로 만들어진다(보통 몇 분). 요약이 '만드는 중'이면 이만큼 기다렸다가
-# 제목과 내용을 함께 말한다 — 바로 말하면 83%가 제목만 나갔다(운영 2026-10-17, 81개 중 67개).
-POST_SUMMARY_WAIT_MS = 5 * 60_000
+# 커뮤니티 글은 AI 요약이 따로 만들어진다 — 운영 실측(2026-10-17, 394건) 글이 잡힌 뒤 p50 19초 · p80 23초 · p90 5분.
+# 요약이 아직이면 이만큼 기다렸다가 제목과 내용을 함께 말한다(바로 말하면 81개 중 67개가 제목만 나갔다).
+# 5분을 기다리면 '새 기사' 알림보다 한참 늦게 올라와 30초로 둔다 — 80%는 내용과 함께, 나머지는 제목만이라도 바로.
+POST_SUMMARY_WAIT_MS = 30_000
 SAME_TITLE_WINDOW_MS = 6 * 3_600_000
 SAME_NUMBERS_WINDOW_MS = 2 * 3_600_000  # 같은 숫자를 퍼 나른 글은 거르지 않고 "같은 숫자 글이 또 올라왔어요"로 알린다
 OFFLINE_MS = 60_000
@@ -762,6 +763,19 @@ def _say_quiet(state: dict, facts: dict, candles, wait, now_ms: int) -> list[dic
                  subs=[_sub("크게 바뀌면 바로 말할게요")], chips=[_chip("chart", "차트")])]
 
 
+def _summary_coming(item: dict) -> bool:
+    """커뮤니티 글 요약이 곧 올 수 있는지 — 아직 없고, 만들 수 없다고 정해지지 않았으면.
+
+    글이 처음 피드에 들어올 때는 요약 상태 칸이 아예 없다(나중에 'ready' 와 요약이 함께 붙는다).
+    'pending' 만 보면 그런 글을 기다리지 않고 제목만 말했다(10/17 14:59 GTC 5건).
+    """
+    if isinstance(item.get("community_summary"), str) and item["community_summary"].strip():
+        return False
+    if item.get("community_summary_status") in ("unavailable", "failed", "ready"):
+        return False
+    return item.get("community_body_status") != "missing"
+
+
 def _post_items(feed) -> list[tuple[dict, dict]]:
     if not isinstance(feed, dict):
         return []
@@ -804,7 +818,7 @@ def _say_posts(state: dict, facts: dict, feed, now_ms: int) -> list[dict]:
         community = item.get("content_type") == "community"
         if f"post:{article_id(item)}" in said:
             continue  # 요약을 기다리느라 같은 위치부터 다시 읽은 글 — 이미 말했다
-        if community and item.get("community_summary_status") == "pending":
+        if community and _summary_coming(item):
             first = waiting.setdefault(f"post:{article_id(item)}", now_ms)
             if now_ms - first < POST_SUMMARY_WAIT_MS:
                 hold = True  # 요약이 오면 제목과 함께 말한다 — 읽은 위치를 넘기지 않고 다음 바퀴에 다시 읽는다

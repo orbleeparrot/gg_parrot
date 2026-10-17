@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { chipTarget, faceSrc, kstClock, kstDay, subText, withDayRows } from "../lib/agentCommentary.js";
+import { chipTarget, faceSrc, inChatGroup, kstClock, kstDay, subText, withDayRows } from "../lib/agentCommentary.js";
 import { Icon } from "./icons.jsx";
 import "./AgentCommentary.css";
 
@@ -63,25 +63,37 @@ function Saying({ item, sessionId }) {
   );
 }
 
-export default function AgentCommentary({ session, commentary }) {
+const EMPTY_GROUP = Object.freeze({
+  trade: "아직 거래 관련 말풍선이 없어요. 사거나 팔거나 진입 조건이 움직이면 여기서 말할게요.",
+  news: "아직 뉴스 소식이 없어요. 기사나 커뮤니티 글이 올라오면 여기서 말할게요.",
+  market: "아직 손익 · 시세 말풍선이 없어요. 크게 움직이면 여기서 말할게요.",
+});
+
+// group: 전체("all") · 거래 관련 · 뉴스 소식 · 손익 · 시세 — 탭마다 다시 그린다(key={group}).
+// '새 소식 N개'도 이 탭에 드는 말풍선만 센다.
+export default function AgentCommentary({ session, commentary, group = "all" }) {
   const sessionId = session?.session_id;
-  const items = useMemo(() => commentary?.items || [], [commentary?.items]);
+  const items = useMemo(() => (commentary?.items || []).filter((item) => inChatGroup(item, group)),
+    [commentary?.items, group]);
   const rows = useMemo(() => withDayRows(items), [items]);
   const [newCount, setNewCount] = useState(0);
   const logRef = useRef(null);
   const followRef = useRef(true);
   const seenRef = useRef(0);
 
+  // 맨 아래를 보고 있을 때만 따라 내려간다. 위로 올려 읽는 중이면 새 말풍선은 '새 소식 N개' 단추로만 알린다.
+  // 5초마다 다시 받아 오면 새 말풍선이 없어도 목록이 새로 만들어지는데, 예전엔 그때도 맨 아래로 내려 보냈다(10/17 지적).
   useEffect(() => {
     const node = logRef.current;
     if (!node) return;
+    const first = !seenRef.current;
     const lastId = items.length ? items[items.length - 1].id : 0;
-    const added = seenRef.current ? items.filter((item) => item.id > seenRef.current).length : 0;
+    const added = first ? 0 : items.filter((item) => item.id > seenRef.current).length;
     seenRef.current = Math.max(seenRef.current, lastId);
-    if (followRef.current || !added) {
+    if (first || followRef.current) {
       node.scrollTop = node.scrollHeight;
       setNewCount(0);
-    } else {
+    } else if (added) {
       setNewCount((count) => count + added);
     }
   }, [items]);
@@ -118,7 +130,8 @@ export default function AgentCommentary({ session, commentary }) {
             </div>
           ) : (
             <div className="agent-stream-empty" role="status">
-              <strong>{commentary?.error ? "중계를 불러오지 못했어요. 잠시 뒤 다시 불러올게요." : "껄무새가 지켜보는 중이에요. 일이 생기면 여기서 말할게요."}</strong>
+              <strong>{commentary?.error ? "중계를 불러오지 못했어요. 잠시 뒤 다시 불러올게요."
+                : EMPTY_GROUP[group] || "껄무새가 지켜보는 중이에요. 일이 생기면 여기서 말할게요."}</strong>
             </div>
           )}
       </div>

@@ -7,6 +7,7 @@ import { computeSessionOverlay } from "../lib/indicators.js";
 import { practiceModeLabel } from "../lib/exchanges.js";
 import { useWhaleActivity } from "../features/agents/useWhaleActivity.js";
 import { useAgentCommentary } from "../features/agents/useAgentCommentary.js";
+import { readChatView, saveChatView } from "../lib/agentCommentary.js";
 import { useSessionLogs } from "../features/agents/useSessionLogs.js";
 import { positiveEventId } from "../features/agents/activityEvidence.js";
 import AgentActivityStream from "../components/AgentActivityStream.jsx";
@@ -158,7 +159,7 @@ function AccountAgents() {
   const [logCategory, setLogCategory] = useState("all");
   const [logQuery, setLogQuery] = useState({});
   const [logsPaused, setLogsPaused] = useState(false);
-  const [agentFilter, setAgentFilter] = useState("all");
+  const [agentFilter, setAgentFilter] = useState("all");  // 채팅 탭(전체 · 거래 관련 · 뉴스 소식 · 손익 · 시세 …) — 실행마다 기억
   const [fileBusy, setFileBusy] = useState(0);
   const sessionSnapshotRevision = useRef(0);
   const lastStreamMessageAt = useRef(0);
@@ -361,6 +362,9 @@ function AccountAgents() {
   const activeLogCategory = anchoredLogs ? "all" : logCategory;
   // 껄무새 중계 — 서버가 만든 말풍선을 이어 받는다(뉴스 · 커뮤니티 글 · 체결 · 손실 구간도 이 안에 있다).
   const commentary = useAgentCommentary(selected);
+  // 실행을 바꾸면 그 실행에서 마지막으로 고른 채팅 탭으로.
+  const selectedSessionId = selected?.session_id;
+  useEffect(() => { setAgentFilter(readChatView(selectedSessionId)); }, [selectedSessionId]);
   const sessionLogs = useSessionLogs(selected, { enabled: logsOpen && !logLinkInvalid, category: activeLogCategory, query: activeLogQuery, paused: logsPaused });
 
   useEffect(() => {
@@ -620,7 +624,10 @@ function AccountAgents() {
                 commentary={commentary}
                 selectedView={logsOpen ? "activity_logs" : agentFilter}
                 onSelectView={(next) => {
-                  if (next !== "activity_logs") setAgentFilter(next);
+                  if (next !== "activity_logs") {
+                    setAgentFilter(next);
+                    saveChatView(selected.session_id, next);
+                  }
                   showPanel(next === "activity_logs" ? "logs" : "agent");
                 }}
                 activityLog={<div className="agent-session-panel">

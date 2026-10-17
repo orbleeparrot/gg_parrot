@@ -1223,6 +1223,18 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   font-weight: 760;
 }
 
+/* 탭 옆 숫자 — 오늘 그 묶음 말풍선 수 */
+.agent-chat-tab-count {
+  margin-left: 5px;
+  color: rgb(var(--c-slate-500));
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.agent-chat-tabs button.is-active .agent-chat-tab-count {
+  color: rgb(var(--c-slate-700));
+}
+
 .agent-chat-tabs button:focus-visible {
   outline: 2px solid rgb(var(--c-brand-line));
   outline-offset: -3px;

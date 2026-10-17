@@ -39,3 +39,18 @@ test("한마디는 굵은 앞부분과 나머지로 나뉜다", () => {
   assert.deepEqual(subText("그냥 글"), { b: "", t: "그냥 글" });
   assert.deepEqual(subText({ b: 3 }), { b: "", t: "" });
 });
+
+test("채팅 필터(시안 A) — 거래 관련 · 뉴스 소식 · 손익 · 시세로 묶고, 고래 동향은 바이낸스 USDT · USDC 만", async () => {
+  const { CHAT_GROUPS, inChatGroup, supportsWhale, todayCount } = await import("../src/lib/agentCommentary.js");
+  assert.deepEqual(CHAT_GROUPS.map((group) => group.label), ["거래 관련", "뉴스 소식", "손익 · 시세"]);
+  const say = (kind, at_ms = AT_0849) => ({ id: Math.random(), kind, at_ms });
+  assert.ok(["start", "fill", "wait", "problem", "end"].every((kind) => inChatGroup(say(kind), "trade")));
+  assert.ok(inChatGroup(say("post"), "news") && !inChatGroup(say("post"), "trade"));
+  assert.ok(["loss", "gain", "move", "volatility", "quiet"].every((kind) => inChatGroup(say(kind), "market")));
+  assert.ok(inChatGroup(say("anything"), "all") && inChatGroup(say("post"), "unknown-tab"), "모르는 탭은 전체");
+  const items = [say("post"), say("post"), say("fill"), say("post", AT_0849 - 86_400_000)];
+  assert.equal(todayCount(items, "news", AT_0849), 2, "탭 옆 숫자는 오늘 것만");
+  assert.equal(todayCount(items, "trade", AT_0849), 1);
+  assert.ok(supportsWhale("BTCUSDT") && supportsWhale("ETHUSDC"));
+  assert.ok(!supportsWhale("KRW-GTC") && !supportsWhale("GTC_KRW") && !supportsWhale(""), "업비트 · 빗썸은 고래 동향 탭이 없다");
+});

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 from typing import Literal
@@ -21,6 +22,22 @@ _LABELS = {"binance": "바이낸스", "upbit": "업비트", "bithumb": "빗썸"}
 # 빗썸은 원화마켓 API 거래를 무료로 두고 있지만(실행기가 쓰는 방식) 0 으로 적지 않는다 —
 # 이벤트가 끝나면 조용히 거짓이 되고, 0 은 "마찰이 없다" 로 읽혀 가장 위험한 쪽으로 틀린다.
 _COMMISSION_PCT = {"binance": 0.1, "upbit": 0.05, "bithumb": 0.04}
+
+
+# 현물 한 건 최소 주문 금액(견적 통화). 업비트 · 빗썸 원화마켓 5,000원(2026-10 확인), 바이낸스 현물은
+# 종목마다 NOTIONAL 필터가 다르지만 대부분 5 USDT. 선물은 종목마다 5~100 USDT 로 크게 달라 여기서 다루지 않는다 —
+# 실행기가 거래소 필터로 막는다.
+_MIN_ORDER = {"binance": 5.0, "upbit": 5000.0, "bithumb": 5000.0}
+
+
+def min_order_floor(exchange: str = "binance", market: str = "spot") -> float | None:
+    """매크로가 만드는 한 건 주문이 넘어야 할 금액 — 최소 주문 금액에 2% 여유(수수료 · 값 흔들림)를 두고
+    원화는 100원, USDT 는 0.1 단위로 올린다(5,000원 → 5,100원 · 5 USDT → 5.1). 선물은 None."""
+    if market == "futures":
+        return None
+    exchange = normalize_exchange(exchange)
+    unit = 100.0 if quote_currency(exchange) == "KRW" else 0.1
+    return round(math.ceil(_MIN_ORDER[exchange] * 1.02 / unit - 1e-9) * unit, 8)
 
 
 def spot_commission_pct(exchange: str = "binance") -> float:

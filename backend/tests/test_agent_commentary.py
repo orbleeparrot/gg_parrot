@@ -108,7 +108,7 @@ def test_loss_and_gain_bands_speak_once_per_band_and_rearm_for_a_new_position():
     says, state = ac.decide(state, facts(**holding, last_price=201.0, unrealized_pct=-4.29), now_ms=NOW)
     loss = says[0]
     assert loss["hl"] == "어어? 손절 기준이 없는데, 이대로 괜찮으세요?" and loss["face"] == "warning" and loss["tone"] == "warn"
-    assert loss["nums"] == "-4.3% · -2,035원" and loss["actions"] == ["close_and_stop", "dismiss"]
+    assert loss["nums"] == "-4.3% · -2,035원" and loss["actions"] == [], "말풍선에 청산 버튼을 두지 않는다(실수로 누를 수 있다)"
     assert {"t": "다음엔 -5%에서 말할게요"} in loss["subs"]
     quiet, state = ac.decide(state, facts(**holding, last_price=202.0, unrealized_pct=-3.8), now_ms=NOW + MIN)
     assert [s["kind"] for s in quiet] == []
@@ -192,7 +192,7 @@ def test_community_posts_come_one_by_one_without_repeats_or_floods():
     assert posts[1]["hl"] == "같은 내용 글이 또 올라왔어요"
     flood = {"cursor": 60, "reset": False, "items": [post(100 + i, f"글 {i}", f"u{i}", NOW - 5 * MIN + i) for i in range(10)]}
     says, state = ac.decide(state, facts(), feed=flood, now_ms=NOW + MIN)
-    assert len([s for s in says if s["kind"] == "post"]) == 4, "한 시간에 6개까지"
+    assert len([s for s in says if s["kind"] == "post"]) == 10, "개수로 자르지 않는다 — 걸러내는 건 같은 글 · 퍼 나른 글뿐"
 
 
 def test_connection_problems_errors_and_the_end():

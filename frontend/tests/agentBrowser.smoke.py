@@ -37,7 +37,7 @@ sayings = [
     {'id': 4, 'kind': 'loss', 'at_ms': now - 60000, 'face': 'warning', 'tone': 'warn',
      'hl': '어어? 손절 기준이 없는데, 이대로 괜찮으세요?', 'nums': '-3.2% · -6.40 USDT', 'nums_tone': 'down',
      'subs': [{'t': '손절 기준이 없어 매크로는 계속 들고 있어요'}, {'t': '다음엔 -5%에서 말할게요'}],
-     'chips': [{'kind': 'chart', 'label': '차트'}], 'post': None, 'actions': ['close_and_stop', 'dismiss']},
+     'chips': [{'kind': 'chart', 'label': '차트'}], 'post': None, 'actions': []},
 ]
 
 
@@ -107,8 +107,9 @@ with sync_playwright() as p:
     page.get_by_role('button', name='고래 동향, PRO 구독 기능').click()
     expect(page.get_by_text('LINKUSDT 대규모 매수 체결', exact=True)).to_be_visible(timeout=10000)
     page.get_by_role('button', name='중계', exact=True).click()
-    # 손실 말풍선의 [청산하고 종료] → 종료 확인 창 → 확인하면 청산 후 종료 요청.
-    page.locator('.agent-say-actions').get_by_role('button', name='청산하고 종료', exact=True).click()
+    # 말풍선에는 청산 버튼이 없다(실수로 누르면 실제 포지션이 정리된다) — 종료는 위 실행 바에서만.
+    expect(page.locator('.agent-say').get_by_role('button')).to_have_count(0)
+    page.get_by_role('button', name='청산 후 종료', exact=True).click()
     dialog = page.get_by_role('alertdialog')
     expect(dialog.get_by_text('청산 후 종료할까요?', exact=True)).to_be_visible()
     dialog.get_by_role('button', name='청산하고 종료', exact=True).click()

@@ -46,8 +46,6 @@
 .agent-say-post-summary { margin-top: 2px; color: rgb(var(--c-slate-700)); font-size: 13.5px; line-height: 1.5; }
 .agent-say-post-who { margin-top: 3px; color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 600; }
 
-.agent-say-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
-
 .agent-say-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
 .agent-say-meta time { margin-left: auto; color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 600; white-space: nowrap; }
 .agent-say-chip {

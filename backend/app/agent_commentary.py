@@ -45,7 +45,6 @@ VOL_CALM_RATIO = 1.5
 VOL_CALM_MS = 30 * 60_000
 VOL_REPEAT_MS = 2 * 60 * 60_000  # 같은 단계는 2시간에 한 번만 다시 말한다
 VOL_MIN_BASE_BARS = 100
-POST_CAP_PER_HOUR = 6
 POST_MAX_AGE_MS = 3 * 3_600_000
 POST_BEFORE_START_MS = 30 * 60_000
 SAME_TITLE_WINDOW_MS = 6 * 3_600_000
@@ -521,8 +520,7 @@ def _say_bands(state: dict, facts: dict, now_ms: int) -> list[dict]:
         else:
             face, tone, hl = "critical", "risk", f"-{loss}%까지 내려왔어요"
         says.append(_say(key, "loss", now_ms, face, hl, tone=tone, nums=f"{pct_text(pct)}{money_part}", nums_tone="down",
-                         subs=subs, chips=[_chip("chart", "차트"), _chip("macro", "내 매크로")],
-                         actions=["close_and_stop", "dismiss"]))
+                         subs=subs, chips=[_chip("chart", "차트"), _chip("macro", "내 매크로")]))
     gain = max((band for band in GAIN_BANDS if pct >= band), default=0)
     if gain and gain > int(state.get("gain_band") or 0):
         state["gain_band"] = gain
@@ -763,8 +761,6 @@ def _say_posts(state: dict, facts: dict, feed, now_ms: int) -> list[dict]:
     candidates.sort(key=lambda entry: entry[0])
     says = []
     for published, item, assessed, title in candidates:
-        if len(post_ms) >= POST_CAP_PER_HOUR:
-            break
         community = item.get("content_type") == "community"
         author = str(item.get("author") or "").strip()[:60]
         source = str(item.get("source") or ("바이낸스 스퀘어" if community else "뉴스")).strip()[:60]

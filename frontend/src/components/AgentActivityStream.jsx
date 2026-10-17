@@ -184,7 +184,6 @@ export default function AgentActivityStream({
   onSelectView,
   activityLog,
   commentary,
-  onCloseAndStop,
 }) {
   const [localFilter, setFilter] = useState("all");
   const filter = selectedView ?? localFilter;
@@ -228,7 +227,7 @@ export default function AgentActivityStream({
       {view === "activity_logs" && activityLog ? activityLog
         : view === leaderModule.key && AGENT_MODULE_MAP.get(leaderModule.key)
           ? <WhaleFeed symbol={symbol} session={session} featureStates={featureStates} entitlements={entitlements} onUpgrade={onUpgrade} />
-          : <AgentCommentary session={session} commentary={commentary} onCloseAndStop={ended ? null : onCloseAndStop} />}
+          : <AgentCommentary session={session} commentary={commentary} />}
     </aside>
   );
 }

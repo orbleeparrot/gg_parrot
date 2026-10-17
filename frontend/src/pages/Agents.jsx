@@ -620,7 +620,6 @@ function AccountAgents() {
                 session={selected}
                 featureStates={featureStates}
                 commentary={commentary}
-                onCloseAndStop={() => stopSession("close_and_stop")}
                 selectedView={logsOpen ? "activity_logs" : agentFilter}
                 onSelectView={(next) => {
                   if (next !== "activity_logs") setAgentFilter(next);

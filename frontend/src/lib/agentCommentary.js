@@ -59,17 +59,6 @@ export function chipTarget(chip, sessionId) {
   return log ? { internal: log } : null;
 }
 
-// 손실 말풍선의 [청산하고 종료] · [계속 두기] — 실행 중이고 아직 포지션이 있을 때, 가장 최근 손실 말풍선에만.
-export function actionableId(items, session) {
-  if (!session || session.status !== "running" || session.stopping || !session.in_position) return null;
-  for (let index = (items || []).length - 1; index >= 0; index -= 1) {
-    const item = items[index];
-    if (item.kind === "fill") return null; // 그 뒤로 새로 사고판 일이 있으면 지난 손실 말풍선은 끝난 이야기
-    if (Array.isArray(item.actions) && item.actions.includes("close_and_stop")) return item.id;
-  }
-  return null;
-}
-
 export function subText(sub) {
   if (typeof sub === "string") return { b: "", t: sub };
   if (!sub || typeof sub !== "object") return { b: "", t: "" };

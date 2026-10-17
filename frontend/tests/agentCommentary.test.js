@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { actionableId, chipTarget, faceSrc, kstClock, kstDay, mergeSayings, MAX_ITEMS, subText, withDayRows } from "../src/lib/agentCommentary.js";
+import { chipTarget, faceSrc, kstClock, kstDay, mergeSayings, MAX_ITEMS, subText, withDayRows } from "../src/lib/agentCommentary.js";
 
 // 2026-10-16 08:49 KST = 2026-10-15T23:49Z
 const AT_0849 = Date.UTC(2026, 9, 15, 23, 49);
@@ -32,16 +32,6 @@ test("칩은 원문(https) · 활동 로그 줄로만 연결하고, 표정은 �
   assert.equal(chipTarget({ kind: "chart", label: "차트" }, 7), null);
   assert.equal(faceSrc("critical"), "/brand/agent/ggparrot-agent-critical-v1.svg");
   assert.equal(faceSrc("<script>"), "/brand/agent/ggparrot-agent-calm-v1.svg");
-});
-
-test("손실 말풍선 버튼은 실행 중 · 보유 중일 때 가장 최근 손실 말풍선에만", () => {
-  const items = [{ id: 1, kind: "loss", actions: ["close_and_stop", "dismiss"] }, { id: 2, kind: "volatility" },
-    { id: 3, kind: "loss", actions: ["close_and_stop", "dismiss"] }];
-  const holding = { status: "running", in_position: true };
-  assert.equal(actionableId(items, holding), 3);
-  assert.equal(actionableId(items, { ...holding, in_position: false }), null);
-  assert.equal(actionableId(items, { ...holding, stopping: true }), null);
-  assert.equal(actionableId([...items, { id: 4, kind: "fill" }], holding), null, "그 뒤로 사고판 일이 있으면 지난 이야기");
 });
 
 test("한마디는 굵은 앞부분과 나머지로 나뉜다", () => {

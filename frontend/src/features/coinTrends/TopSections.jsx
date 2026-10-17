@@ -48,19 +48,24 @@ export function SummarySection({ region, news }) {
   );
 }
 
-function MarketRow({ item, now, index, on }) {
+function MarketRow({ item, now }) {
   return (
-    <a className={on ? "mk-row is-on" : "mk-row"} data-index={index} href={item.url} target="_blank" rel="noopener noreferrer">
+    <a className="mk-row" href={item.url} target="_blank" rel="noopener noreferrer">
       <span className="mk-thumb">{item.image ? <img src={item.image} alt="" loading="lazy" /> : <NewspaperIcon size={22} aria-hidden="true" />}</span>
       <span><span className="mk-row-title">{item.title}</span><span className="mk-meta">{item.label} · {item.historical || relativeTime(item.published, { now })}</span></span>
     </a>
   );
 }
 
+// 줄 아래 끝이 칸 위에서 이만큼 안쪽(위쪽 흐림 28px 안)까지 올라가면 그 기사는 큰 박스로 올라간 것으로 본다.
+const PASSED_PX = 24;
+
 // 줄 단위 휠(deltaMode 1)·쪽 단위(2)를 픽셀로.
 const wheelPixels = (event, page) => event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? page : 1);
 
-// 시장·규제 한눈에 — 위 큰 박스는 아래 목록 맨 위에 올라온 기사(스크롤하면 하나씩 바뀐다, 2026-10-17 사용자 요청).
+// 시장·규제 한눈에 — 기사가 목록에서 큰 박스로 하나씩 올라간다(2026-10-17 사용자 요청).
+// 처음엔 첫 기사가 큰 박스, 목록은 두 번째 기사부터. 목록을 내려 맨 위 줄이 위쪽 흐림(28px) 안으로 다 들어가면 그 기사가 큰 박스로
+// 올라가고, 목록 맨 위에는 다음에 올라올 기사가 보인다 — 큰 박스의 기사가 목록에 함께 보이지 않는다.
 // 목록은 고정 높이 안에서 스크롤로 이어 그리고, 큰 박스 위에서 휠을 굴려도 목록이 움직인다.
 export function MarketSection({ state, onRetry }) {
   const scrollRef = useRef(null);
@@ -79,22 +84,23 @@ export function MarketSection({ state, onRetry }) {
     image: item.image || "",
     url: item.article_url || item.url,
   })), [market]);
-  const { shown, more, hasMore } = useChunks(items.length, { first: 8, step: 6, resetKey: items.length });
+  const rest = items.slice(1);
+  const { shown, more, hasMore } = useChunks(rest.length, { first: 8, step: 6, resetKey: rest.length });
   const lead = items[Math.min(active, items.length - 1)];
 
-  // 목록 맨 위(절반 넘게 보이는 첫 줄)의 기사를 큰 박스에 올린다.
+  // 위로 지나간 줄 수 = 큰 박스에 오른 기사 번호(0 이면 첫 기사). 줄 아래 끝이 흐림 구간 안이면 지나간 것으로 본다.
   useEffect(() => {
     const box = scrollRef.current;
     if (!box) return undefined;
     let frame = 0;
     const pick = () => {
       frame = 0;
-      const rows = box.querySelectorAll(".mk-row");
-      let next = 0;
-      for (const row of rows) {
-        if (row.offsetTop + row.offsetHeight / 2 > box.scrollTop) { next = Number(row.dataset.index) || 0; break; }
+      let passed = 0;
+      for (const row of box.querySelectorAll(".mk-row")) {
+        if (row.offsetTop + row.offsetHeight > box.scrollTop + PASSED_PX) break;
+        passed += 1;
       }
-      setActive(next);
+      setActive(passed);
     };
     const onScroll = () => { if (!frame) frame = requestAnimationFrame(pick); };
     box.addEventListener("scroll", onScroll, { passive: true });
@@ -104,13 +110,13 @@ export function MarketSection({ state, onRetry }) {
   const itemsKey = items.map((item) => item.id).join("\n");
   useEffect(() => { setActive(0); if (scrollRef.current) scrollRef.current.scrollTop = 0; }, [itemsKey]);
 
-  // 끝까지 다 그렸으면 마지막 기사도 맨 위로 올라와 큰 박스에 오를 수 있게 아래를 비워 둔다.
+  // 끝까지 다 그렸으면 마지막 기사도 위로 지나가 큰 박스에 오를 수 있게 아래를 비워 둔다.
   useEffect(() => {
     const box = scrollRef.current, spacer = spacerRef.current;
     if (!box || !spacer) return;
     const rows = box.querySelectorAll(".mk-row");
     const last = rows[rows.length - 1];
-    spacer.style.height = !hasMore && last ? `${Math.max(0, box.clientHeight - last.offsetHeight - 8)}px` : "0px";
+    spacer.style.height = !hasMore && last ? `${Math.max(0, box.clientHeight - PASSED_PX + 1)}px` : "0px";
   }, [hasMore, shown]);
 
   // 큰 박스 위에서 굴린 휠은 목록으로 넘긴다. 목록이 그 방향 끝이면 페이지가 스크롤된다.
@@ -151,11 +157,9 @@ export function MarketSection({ state, onRetry }) {
           </a>
           <div className="mk-scroll ct-scroll" ref={scrollRef}>
             <ScrollThumb boxRef={scrollRef} />
-            {items.slice(0, shown).map((item, index) => (
-              <MarketRow key={item.id} item={item} now={now} index={index} on={index === active} />
-            ))}
+            {rest.slice(0, shown).map((item) => <MarketRow key={item.id} item={item} now={now} />)}
             <InfiniteSentinel rootRef={scrollRef} active={hasMore} count={shown} onReach={more} />
-            <div className="mk-end-spacer" ref={spacerRef} aria-hidden="true" />
+            <div className="mk-end-spacer" ref={spacerRef}>{!hasMore && rest.length ? "마지막 헤드라인이에요." : null}</div>
           </div>
         </>
       ) : loading ? (

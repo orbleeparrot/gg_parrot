@@ -1,0 +1,307 @@
+"""Domestic community reads never collect; source and asset boundaries stay narrow."""
+from datetime import datetime, timezone
+import json
+import time
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
+
+import httpx
+import pytest
+from sqlalchemy import event
+from sqlmodel import delete, select
+
+from app import db as database, domestic_community as community, public_news
+
+
+@pytest.fixture(autouse=True)
+def isolated_domestic(monkeypatch):
+    # Legacy DC-specific contracts stay isolated from unrelated source HTTP.
+    monkeypatch.setattr(community, "SOURCES", community.SOURCES[:1])
+    with database.get_session() as db:
+        db.exec(delete(community.DomesticCommunityItem))
+        db.exec(delete(community.DomesticCommunityState))
+        db.exec(delete(public_news.PublicNewsLease).where(public_news.PublicNewsLease.scope == community.SCOPE))
+        db.commit()
+    community._responses.clear()
+    monkeypatch.setenv("DOMESTIC_COMMUNITY_ENABLED", "false")
+
+
+def listings(now_ms=None):
+    now_ms = int(time.time() * 1000) if now_ms is None else now_ms
+    return {exchange: {"fetched_ms": now_ms, "items": [
+        {"symbol": "KRW-BTC", "base": "BTC", "korean_name": "비트코인", "english_name": "Bitcoin"},
+        {"symbol": "KRW-ETH", "base": "ETH", "korean_name": "이더리움", "english_name": "Ethereum"},
+        {"symbol": "KRW-SC", "base": "SC", "korean_name": "시아코인", "english_name": "Siacoin"},
+        {"symbol": "KRW-ICP", "base": "ICP", "korean_name": "인터넷컴퓨터", "english_name": "Internet Computer"},
+        {"symbol": "KRW-S", "base": "S", "korean_name": "소닉", "english_name": "Sonic"},
+    ][:2 if exchange == "upbit" else 5]} for exchange in ("upbit", "bithumb")}
+
+
+def row(title="비트코인 가격 이야기", number="123", date=None, url=None):
+    date = date or datetime.now(community._KST).strftime("%Y-%m-%d %H:%M:%S")
+    url = url or f"/board/view/?id=bitcoins_new1&no={number}&page=1"
+    return f'''<tr class="ub-content us-post" data-no="{number}">
+        <td class="gall_num">{number}</td>
+        <td class="gall_tit ub-word"><a href="{url}"><em></em>{title}</a>
+        <a class="reply_numbox" href="{url}">[234]</a></td>
+        <td class="gall_writer" data-ip="127.0" data-nick="private">private</td>
+        <td class="gall_date" title="{date}">01:12</td></tr>'''
+
+
+def stored(*, status="ready", now_ms=None, sources=None, items=None):
+    now_ms = int(time.time() * 1000) if now_ms is None else now_ms
+    with database.get_session() as db:
+        db.add(community.DomesticCommunityState(status=status, last_success_ms=now_ms,
+               last_attempt_ms=now_ms, listings_json=json.dumps(listings(now_ms)),
+               sources_json=json.dumps(sources or [{"id": "dcinside_bitcoin", "status": "ready"}])))
+        for item in items or []:
+            db.add(community.DomesticCommunityItem(id=item.get("id", "btc"), title=item.get("title", "비트코인"),
+                   url="https://gall.dcinside.com/board/view/?id=bitcoins_new1&no=123", source=community.SOURCE,
+                   published=community._iso(now_ms), published_ms=now_ms, collected_ms=now_ms,
+                   asset_symbols_json=json.dumps(item.get("assets", ["BTC"]))))
+        db.commit()
+    community._responses.clear()
+
+
+def forbid(*args, **kwargs):
+    pytest.fail("HTTP readers must never fetch or schedule collection")
+
+
+def test_cold_and_ready_reads_are_select_only(monkeypatch):
+    monkeypatch.setattr(community, "fetch_listing", forbid)
+    monkeypatch.setattr(community.krw, "list_symbols", forbid)
+    monkeypatch.setattr(community, "collect_once", forbid)
+    cold = community.get_domestic_community("upbit")
+    assert cold["items"] == [] and cold["collection"]["status"] == "pending"
+    stored(items=[{}])
+    statements = []
+    def capture(_conn, _cursor, sql, *_args):
+        statements.append(sql)
+    event.listen(database._engine, "before_cursor_execute", capture)
+    try:
+        result = community.get_domestic_community("upbit", "KRW-BTC")
+    finally:
+        event.remove(database._engine, "before_cursor_execute", capture)
+    assert statements and all(sql.lstrip().upper().startswith("SELECT") for sql in statements)
+    item = result["items"][0]
+    assert item["content_type"] == "community" and item["language"] == "ko" and item["region"] == "kr"
+    assert item["excerpt"] == "" and item["asset_symbols"] == ["BTC"]
+    assert result["symbol"] == "KRW-BTC" and result["refresh_seconds"] == 60
+    assert "author" not in item and "private" not in json.dumps(result)
+
+
+def test_parser_real_source_shape_sanitization_timestamp_and_dedup():
+    html = row("<b>비트코인</b> &amp; 이더리움 가격<script>ignore()</script>") + row("비트코인 중복", url="/board/view/?no=123&id=bitcoins_new1&page=2")
+    html += row("비트코인 공지", number="공지") + row("비트코인 광고", number="AD")
+    items, stats = community.parse_listing(html, listings())
+    assert stats["normal_rows"] == 2 and stats["duplicates"] == 1
+    assert items[0]["title"] == "비트코인 & 이더리움 가격"
+    assert items[0]["asset_symbols"] == ["BTC", "ETH"]
+    assert items[0]["url"].endswith("id=bitcoins_new1&no=123")
+    assert datetime.fromisoformat(items[0]["published"]).utcoffset().total_seconds() == 0
+    assert abs(items[0]["published_ms"] - int(time.time() * 1000)) < 2000
+    assert "private" not in json.dumps(items)
+
+
+@pytest.mark.parametrize("title", ["비트맵 이미지 편집 이야기", "우리 지역 도지사 이야기", "icp sc 클라이언트 이야기", "ICP 검사 결과 이야기", "ICP-OES 측정 장비", "S class 자동차", "SCAM 가격 이야기", "BTCUSDT 봇 오류", "그냥 점심 이야기"])
+def test_conservative_entity_match_drops_noise(title):
+    items, stats = community.parse_listing(row(title), listings())
+    assert items == [] and stats["irrelevant"] == 1
+
+
+@pytest.mark.parametrize("title,asset", [("KRW-SC 가격 이야기", "SC"), ("$S 가격 이야기", "S"), ("ICP 상승 이유", "ICP"), ("시아코인 가격 이야기", "SC"), ("Bitcoin 전망 이야기", "BTC")])
+def test_explicit_entities_are_matched(title, asset):
+    items, _ = community.parse_listing(row(title), listings())
+    assert items[0]["asset_symbols"] == [asset]
+
+
+@pytest.mark.parametrize("url", ["https://evil.test/board/view/?id=bitcoins_new1&no=123", "http://gall.dcinside.com/board/view/?id=bitcoins_new1&no=123", "//127.0.0.1/board/view/?id=bitcoins_new1&no=123", "/board/view/?id=other&no=123", "javascript:alert(1)", "/board/view/?id=bitcoins_new1&no=abc"])
+def test_post_url_allowlist(url):
+    assert community.canonical_post_url(url) is None
+
+
+def test_empty_relevant_feed_is_ready_but_broken_html_errors():
+    items, stats = community.parse_listing(row("오늘 점심 이야기"), listings())
+    assert items == [] and stats["normal_rows"] == 1
+    with pytest.raises(ValueError, match="no recognized"):
+        community.parse_listing("<html>captcha or changed layout</html>", listings())
+
+
+def test_invalid_old_and_future_dates_are_dropped():
+    now = datetime.now(timezone.utc)
+    html = row(date="invalid") + row(number="124", date="2000-01-01 00:00:00") + row(number="125", date="2099-01-01 00:00:00")
+    items, stats = community.parse_listing(html, listings(), now_ms=int(now.timestamp() * 1000))
+    assert items == [] and stats["invalid_date"] == 3
+
+
+def test_exchange_listing_filters_and_unlisted_symbol_validation():
+    stored(items=[{"id": "sc", "assets": ["SC"]}, {"id": "mixed", "assets": ["ETH", "SC"]}])
+    upbit = community.get_domestic_community("upbit")
+    assert [i["id"] for i in upbit["items"]] == ["mixed"]
+    assert upbit["items"][0]["asset_symbols"] == ["ETH"]
+    assert len(community.get_domestic_community("bithumb")["items"]) == 2
+    assert len(community.get_domestic_community("bithumb", "KRW-SC")["items"]) == 2
+    with pytest.raises(ValueError, match="상장"):
+        community.get_domestic_community("upbit", "KRW-SC")
+    with pytest.raises(ValueError):
+        community.get_domestic_community("binance")
+    with pytest.raises(ValueError):
+        community.get_domestic_community("upbit", "BTCUSDT")
+
+
+def test_stale_source_preserves_recent_items_but_expired_listings_hide_them():
+    now = int(time.time() * 1000)
+    stored(now_ms=now, items=[{}])
+    result = community.get_domestic_community("upbit", now_ms=now + 181_000)
+    assert result["items"] and result["stale"] and result["collection"]["status"] == "stale"
+    expired = community.get_domestic_community("upbit", now_ms=now + 301_000)
+    assert expired["items"] == [] and expired["collection"]["status"] == "stale"
+
+
+def test_source_failure_is_error_and_partial_exchange_failure_is_stale():
+    stored(status="error", items=[{}])
+    assert community.get_domestic_community("upbit")["collection"]["status"] == "error"
+    with database.get_session() as db:
+        state = db.get(community.DomesticCommunityState, community.SCOPE)
+        state.status = "ready"
+        state.sources_json = json.dumps([{"id": "upbit", "status": "error"}])
+        db.add(state)
+        db.commit()
+    community._responses.clear()
+    assert community.get_domestic_community("upbit")["collection"]["status"] == "stale"
+    assert community.get_domestic_community("bithumb")["collection"]["status"] == "ready"
+
+
+def mock_collection(monkeypatch, html=None):
+    monkeypatch.setattr(community, "fetch_listing", lambda: row() if html is None else html)
+    monkeypatch.setattr(community.krw, "list_symbols", lambda ex: {
+        "items": listings()[ex]["items"], "fetched_at": time.time()})
+
+
+def unlock():
+    with database.get_session() as db:
+        lease = db.get(public_news.PublicNewsLease, community.SCOPE)
+        lease.next_run_ms = 0
+        db.add(lease)
+        state = db.get(community.DomesticCommunityState, community.SCOPE)
+        if state:
+            sources = json.loads(state.sources_json)
+            for source in sources:
+                source["next_attempt_ms"] = 0
+            state.sources_json = json.dumps(sources)
+            db.add(state)
+        db.commit()
+
+
+def test_collection_shared_lease_idempotence_and_retention(monkeypatch):
+    mock_collection(monkeypatch)
+    assert community.get_domestic_community("upbit")["items"] == []
+    assert community.collect_once()["status"] == "ready"
+    assert len(community.get_domestic_community("upbit")["items"]) == 1
+    monkeypatch.setattr(community, "fetch_listing", forbid)
+    assert community.collect_once()["status"] == "skipped"
+    unlock()
+    mock_collection(monkeypatch)
+    now = int(time.time() * 1000)
+    with database.get_session() as db:
+        db.add(community.DomesticCommunityItem(id="expired", title="비트코인", url="old", published="2000", published_ms=1, collected_ms=1))
+        db.commit()
+    monkeypatch.setattr(community, "MAX_ITEMS", 1)
+    monkeypatch.setattr(community, "fetch_listing", lambda: row() + row(number="124") + row(number="125"))
+    community.collect_once()
+    with database.get_session() as db:
+        rows = db.exec(select(community.DomesticCommunityItem)).all()
+        assert len(rows) == 1 and rows[0].id != "expired"
+        lease = db.get(public_news.PublicNewsLease, community.SCOPE)
+        assert now + 59_000 <= lease.next_run_ms <= int(time.time() * 1000) + 61_000
+
+
+def test_failed_collection_has_bounded_backoff_and_keeps_last_success(monkeypatch):
+    mock_collection(monkeypatch)
+    community.collect_once()
+    before = community.get_domestic_community("upbit")["collection"]["last_success_at"]
+    unlock()
+    def blocked():
+        raise httpx.HTTPStatusError("blocked", request=httpx.Request("GET", community.LIST_URL), response=httpx.Response(403))
+    monkeypatch.setattr(community, "fetch_listing", blocked)
+    result = community.collect_once()
+    assert result["status"] == "error" and result["sources"][-1]["error"] == "HTTPStatusError"
+    result = community.get_domestic_community("upbit")
+    assert result["items"] and result["collection"]["last_success_at"] == before
+    with database.get_session() as db:
+        lease = db.get(public_news.PublicNewsLease, community.SCOPE)
+        assert 59_000 <= lease.next_run_ms - int(time.time() * 1000) <= 61_000
+        state = db.get(community.DomesticCommunityState, community.SCOPE)
+        source = next(s for s in json.loads(state.sources_json) if s["id"] == "dcinside_bitcoin")
+        assert 119_000 <= source["next_attempt_ms"] - int(time.time() * 1000) <= 121_000
+
+
+def test_robots_deny_does_not_fetch_listing(monkeypatch):
+    calls = []
+    def fetch(url, **kwargs):
+        calls.append(url)
+        return "User-agent: *\nDisallow: /board/"
+    monkeypatch.setattr(community, "_robots_cache", None)
+    monkeypatch.setattr(community, "_fetch_text", fetch)
+    with pytest.raises(ValueError, match="robots"):
+        community.fetch_listing()
+    assert calls == [community.ROBOTS_URL]
+
+
+def test_disabled_runtime_does_not_spawn(monkeypatch):
+    monkeypatch.setattr(community, "_runtime", None)
+    community.start_runtime()
+    assert community._runtime is None
+
+
+def test_all_read_variants_share_one_bounded_db_snapshot(monkeypatch):
+    stored(items=[{}])
+    actual = community._read_snapshot
+    calls = []
+    def read():
+        calls.append(True)
+        return actual()
+    monkeypatch.setattr(community, "_read_snapshot", read)
+    for _ in range(10):
+        community.get_domestic_community("upbit", "KRW-BTC")
+        community.get_domestic_community("bithumb")
+    assert len(calls) == 1
+    assert community._responses.statistics()["entries"] == 1
+
+
+@pytest.mark.parametrize("status,retry,expected", [("ready", 60, 60), ("skipped", 60, 60), ("error", 900, 60)])
+def test_runtime_keeps_catalog_cadence_during_source_backoff(monkeypatch, status, retry, expected):
+    runtime = community._Runtime()
+    waits = []
+    def wait(seconds):
+        waits.append(seconds)
+        runtime.stop.set()
+    monkeypatch.setattr(runtime.stop, "wait", wait)
+    monkeypatch.setattr(community, "collect_once", lambda **kw: {"status": status, "retry_seconds": retry})
+    runtime.run()
+    assert waits == [expected]
+
+
+def test_stop_fences_late_collector_publication_and_lease_finish(monkeypatch):
+    mock_collection(monkeypatch)
+    entered, release = Event(), Event()
+    def slow():
+        entered.set()
+        assert release.wait(5)
+        return row()
+    monkeypatch.setattr(community, "fetch_listing", slow)
+    runtime = community._Runtime()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        task = pool.submit(community.collect_once, stop_event=runtime.stop, write_lock=runtime.write_lock)
+        try:
+            assert entered.wait(3)
+            runtime.stop.set()
+            with runtime.write_lock:
+                pass
+            monkeypatch.setattr(community, "finish_work", forbid)
+        finally:
+            release.set()
+        assert task.result(timeout=3)["status"] == "cancelled"
+    with database.get_session() as db:
+        assert db.get(community.DomesticCommunityState, community.SCOPE) is None
+        assert db.exec(select(community.DomesticCommunityItem)).all() == []

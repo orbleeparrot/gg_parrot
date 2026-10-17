@@ -23,7 +23,8 @@ def test_supabase_migrations_have_unique_versions():
 
 
 @pytest.mark.parametrize("table", ["dailyquestclaim", "runsessionevent", "boardimage", "boardpostvote",
-                                   "boardreport", "browsernewspagecache"])
+                                   "boardreport", "browsernewspagecache",
+                                   "domesticcommunityitem", "domesticcommunitystate"])
 def test_new_private_member_tables_are_secured_on_app_boot(table):
     state = current_schema()
     state["tables"][table] = False

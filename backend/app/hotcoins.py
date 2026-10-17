@@ -14,6 +14,7 @@ Selection (spec §1.2):
 from __future__ import annotations
 
 import os
+import math
 import time
 from typing import Optional
 
@@ -160,7 +161,7 @@ def select_hot_coins(
 # 그대로 때린다(weight-80 → 418/차단 위험). 투영을 저장해 "캐시 창마다 한 번" 을 지킨다.
 CACHE_TOP_SYMBOLS = int(os.environ.get("HOTCOINS_CACHE_TOP", "500"))
 # 캐시에 남기는 필드 — 소비자(select_hot_coins·ask_candidates.build_pool)가 읽는 것만.
-_KEEP_FIELDS = ("lastPrice", "priceChangePercent", "highPrice", "lowPrice", "weightedAvgPrice")
+_KEEP_FIELDS = ("lastPrice", "priceChangePercent", "highPrice", "lowPrice", "weightedAvgPrice", "volume")
 
 
 def trim_tickers(tickers: list[dict], *, top: int = CACHE_TOP_SYMBOLS) -> list[dict]:
@@ -170,12 +171,16 @@ def trim_tickers(tickers: list[dict], *, top: int = CACHE_TOP_SYMBOLS) -> list[d
     """
     rows: list[dict] = []
     for t in tickers:
+        if not isinstance(t, dict):
+            continue
         symbol = str(t.get("symbol", ""))
         if not symbol.endswith("USDT"):
             continue
         try:
             quote_volume = float(t["quoteVolume"])
         except (KeyError, ValueError, TypeError):
+            continue
+        if isinstance(t.get("quoteVolume"), bool) or not math.isfinite(quote_volume) or quote_volume < 0:
             continue
         row: dict = {"symbol": symbol, "quoteVolume": round(quote_volume, 2)}
         for field in _KEEP_FIELDS:
@@ -206,10 +211,27 @@ def _load_ticker_payload() -> dict:
     tickers = _fetch_tickers()
     if not tickers:
         raise RuntimeError("hot coin source unavailable")
-    trimmed = trim_tickers(tickers)
+    eligible = trim_tickers(tickers, top=len(tickers))
+    trimmed = eligible[:max(1, CACHE_TOP_SYMBOLS)]
+    source_count = sum(isinstance(row, dict) and str(row.get("symbol", "")).endswith("USDT")
+                       for row in tickers)
     return {"tickers": trimmed,
             "coins": select_hot_coins(trimmed, limit=50),
+            "source_count": source_count,
+            "source_invalid_count": source_count - len(eligible),
+            "source_truncated": len(eligible) > len(trimmed),
+            "fetched_at": time.time(),
             "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+
+
+def get_ticker_snapshot() -> dict:
+    """Expose the existing shared ticker cache without resetting its freshness."""
+    payload, state = _cache.get_or_load("binance:24h", _load_ticker_payload,
+                                      ttl=CACHE_SECONDS, stale_ttl=300)
+    return {**payload, "items": payload["tickers"], "stale": state == "stale",
+            "refresh_seconds": CACHE_SECONDS,
+            "max_age_seconds": CACHE_SECONDS + 300,
+            "cache_age_seconds": max(0, time.time() - payload["fetched_at"])}
 
 
 def get_cached_tickers() -> Optional[list[dict]]:

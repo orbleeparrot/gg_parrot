@@ -22,6 +22,15 @@ export const quoteForExchange = (value) => EXCHANGES.find((item) => item.value =
 export const exchangeLogo = (value) => { const exchange = normalizeExchange(value); return `/exchanges/${exchange}.${exchange === "binance" ? "svg" : "png"}`; };
 export const isDomestic = (value) => normalizeExchange(value) !== "binance";
 export const commissionForExchange = (value) => EXCHANGES.find((item) => item.value === normalizeExchange(value)).commission;
+// 현물 한 건 최소 주문 금액(견적 통화) — 서버 exchanges._MIN_ORDER 와 같은 값. 업비트 · 빗썸 5,000원, 바이낸스 현물은
+// 종목마다 다르지만 대부분 5 USDT. 선물은 종목마다 크게 달라 다루지 않는다(실행기가 거래소 필터로 막는다).
+const MIN_ORDER = Object.freeze({ binance: 5, upbit: 5000, bithumb: 5000 });
+export const minOrderAmount = (value) => MIN_ORDER[normalizeExchange(value)];
+// 맞출 때 쓰는 금액 — 최소에 2% 여유(수수료 · 값 흔들림), 원화 100원 · USDT 0.1 단위로 올림(서버 min_order_floor 와 같다).
+export function minOrderFloor(value) {
+  const unit = quoteForExchange(value) === "KRW" ? 100 : 0.1;
+  return Math.round(Math.ceil((minOrderAmount(value) * 1.02) / unit - 1e-9) * unit * 1e8) / 1e8;
+}
 export const marketKey = (exchange, symbol) => `${normalizeExchange(exchange)}:${String(symbol || "").trim().toUpperCase()}`;
 
 // A run session has no exchange column, only its symbol — and a domestic symbol is always `KRW-<COIN>`.

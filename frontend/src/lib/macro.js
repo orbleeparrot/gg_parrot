@@ -4,7 +4,7 @@
 // carries its own params block (see TYPE_DEFAULTS / buildParams) and shares the
 // common envelope (candle_interval + advanced risk). Field names match the
 // backend pydantic models exactly so clone (macroToForm) is a direct Object.assign.
-import { commissionForExchange, isDomestic, normalizeExchange, normalizeSymbolForExchange, quoteForExchange } from "./exchanges.js";
+import { commissionForExchange, exchangeLabel, isDomestic, minOrderAmount, minOrderFloor, normalizeExchange, normalizeSymbolForExchange, quoteForExchange } from "./exchanges.js";
 import { baseOf } from "./format.js";
 import { isEvenWeights } from "./portfolio.js";
 
@@ -243,6 +243,42 @@ function martingaleRequiredFunds(form) {
   return total;
 }
 
+// 마틴게일 주문 한 건이 거래소 최소 주문 금액을 넘게 맞춘다 — 서버 ask._fit_martingale 과 같은 규칙.
+// 가장 작은 주문이 기준(최소 + 2%)을 넘도록 모든 주문을 같은 배율로 올리고, 예산(시작 자금 × 투입 비율 ÷ 종목 수)을
+// 넘으면 추가매수 횟수를 줄인다. 한 번도 못 넣으면 null.
+export function fitMartingale(form) {
+  const floor = minOrderFloor(form.exchange);
+  const unit = floor >= 1000 ? 100 : 0.1;
+  const base0 = num(form.base_order_size);
+  const safety0 = num(form.safety_order_size);
+  const scale = num(form.safety_order_volume_scale) || 1;
+  const n0 = Math.max(0, Math.trunc(num(form.max_safety_orders)));
+  const symbols = new Set(String(form.symbol || "").split(",").map((v) => v.trim()).filter(Boolean)).size || 1;
+  const budget = (num(form.initial_capital) * (num(form.invest_ratio_pct) / 100)) / symbols;
+  const up = (v) => Math.round(Math.ceil(v / unit - 1e-9) * unit * 1e8) / 1e8;
+  for (let n = n0; n >= 1; n--) {
+    const smallest = Math.min(base0, safety0 * Math.min(scale, 1) ** (n - 1));
+    const k = Math.max(1, floor / smallest);
+    const base = up(base0 * k);
+    const safety = up(safety0 * k);
+    if (martingaleRequiredFunds({ base_order_size: base, safety_order_size: safety, max_safety_orders: n, safety_order_volume_scale: scale }) <= budget + 1e-6) {
+      return { base_order_size: base, safety_order_size: safety, max_safety_orders: n };
+    }
+  }
+  return null;
+}
+
+// 마틴게일이 현물로 나가는지 — 선물은 최소 주문 금액이 종목마다 달라 화면에서 검사하지 않는다.
+function martingaleIsSpot(form) {
+  if (isDomestic(form.exchange)) return true;
+  if (form.market === "futures") return false;
+  return form.market === "spot" || (num(form.leverage) <= 1 && form.position_side !== "short");
+}
+
+function formatQuote(value, exchange) {
+  return quoteForExchange(exchange) === "KRW" ? `${Math.round(value).toLocaleString("ko-KR")}원` : `${value} USDT`;
+}
+
 // 칸(Field)이 없는 오류 — 비중은 종목 행 안의 생 입력, 묶음 한도는 체크박스, 레그 규칙은 펼쳐야 보이는
 // 판이라 `data-field` 가 없다. 그래서 "칸이 있는 오류는 칸에, 없는 오류는 바닥에" 로 가른다. 이 목록에
 // 없으면 바닥 경고가 건너뛰므로, 비중 합이 틀려 실행이 막혀도 화면에 아무 말이 없게 된다.
@@ -292,6 +328,24 @@ export function validateDetailed(form) {
     if (form.grid_mode === "geometric" && !(num(form.lower_price) > 0)) return fail("lower_price", "D 전략에서 같은 비율 간격을 쓰려면 하단 가격이 0보다 커야 해요.");
     if (form.per_grid_invest !== "" && num(form.per_grid_invest) * num(form.grid_count) > num(form.initial_capital) * (num(form.invest_ratio_pct) / 100) + 1e-6) {
       return fail("per_grid_invest", "D 전략의 전체 칸에 필요한 금액이 사용할 수 있는 자금을 넘어요.");
+    }
+  }
+  if (rt === "H" && martingaleIsSpot(form)) {
+    // 한 건이 최소 주문 금액보다 작으면 실행기가 첫 주문(리허설)에서 막힌다(2026-10-17 업비트 4,700원).
+    const min = minOrderAmount(form.exchange);
+    const scale = num(form.safety_order_volume_scale) || 1;
+    const smallestSafety = num(form.safety_order_size) * Math.min(scale, 1) ** Math.max(0, Math.trunc(num(form.max_safety_orders)) - 1);
+    const field = num(form.base_order_size) < min ? "base_order_size" : smallestSafety < min ? "safety_order_size" : null;
+    if (field) {
+      const fix = fitMartingale(form);
+      const what = field === "base_order_size" ? "첫 주문" : "추가매수 주문";
+      const message = `${exchangeLabel(form.exchange)} 최소 주문 금액은 ${formatQuote(min, form.exchange)}이에요. 이대로면 ${what}이 거절돼요.`
+        + (fix ? "" : ` 시작 자금으로는 최소 주문을 두 번 넣을 수 없어요 — 시작 자금을 ${formatQuote(minOrderFloor(form.exchange) * 2, form.exchange)} 이상으로 올리세요.`);
+      return fix
+        ? { field, message, fix: { ...fix, label: fix.base_order_size === fix.safety_order_size
+          ? `1회 ${formatQuote(fix.base_order_size, form.exchange)} · 추가 ${fix.max_safety_orders}번으로 맞추기`
+          : `처음 ${formatQuote(fix.base_order_size, form.exchange)} · 추가 ${formatQuote(fix.safety_order_size, form.exchange)}씩 ${fix.max_safety_orders}번으로 맞추기` } }
+        : fail(field, message);
     }
   }
   if (rt === "H") {

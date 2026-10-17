@@ -26,7 +26,7 @@ export function SummarySection({ region, news }) {
   return (
     <section className="ct-brief" aria-labelledby="ct-brief-title">
       <header className="ct-col-head"><h2 id="ct-brief-title" className="ct-sec-title">오늘의 요약</h2></header>
-      <p className="ct-brief-meta">
+      <p className="ct-sec-sub">
         기준 <span className="num">{kstDate(updated || Date.now())}</span> · KST
         {sourceCount ? <> · {regionName} 뉴스 <span className="num">{sourceCount}</span>곳 헤드라인 요약</> : null}
       </p>
@@ -142,7 +142,7 @@ export function MarketSection({ state, onRetry }) {
         <h2 id="ct-market-title" className="ct-sec-title">시장·규제 한눈에</h2>
         {items.length ? <span className="ct-asof t-caption">헤드라인 <span className="num">{items.length}</span></span> : null}
       </header>
-      <p className="ct-market-sub t-small">오늘 시장을 움직이는 정책과 주요 이슈예요.</p>
+      <p className="ct-sec-sub">오늘 시장을 움직이는 정책과 주요 이슈예요.</p>
       {lead ? (
         <>
           <a className="mk-lead" ref={leadRef} href={lead.url} target="_blank" rel="noopener noreferrer">

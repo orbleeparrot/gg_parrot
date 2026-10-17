@@ -38,8 +38,9 @@
 
 /* ---------- 오늘의 요약 ---------- */
 .ct-brief { display: flex; flex-direction: column; min-width: 0; }
-.ct-brief-meta { margin: 8px 0 0; color: rgb(var(--c-slate-500)); font-size: 15px; line-height: 1.4; font-weight: 600; }
-.ct-brief-meta .num { color: rgb(var(--c-slate-900)); }
+/* 구역 제목 아래 설명 줄 — 오늘의 요약 · 시장·규제가 같은 규칙을 쓴다(따로 두었다가 15px/600 · 14px/500 으로 어긋남, 2026-10-17 지적) */
+.ct-sec-sub { margin: 8px 0 0; color: rgb(var(--c-slate-500)); font-size: 14px; font-weight: 500; line-height: 1.5; letter-spacing: -0.005em; }
+.ct-sec-sub .num { color: rgb(var(--c-slate-900)); }
 .ct-lead { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; margin-top: 18px; }
 .ct-lead p { margin: 0; max-width: 60ch; color: rgb(var(--c-slate-700)); font-size: 18px; line-height: 1.75; font-weight: 500; text-wrap: pretty; }
 .ct-lead p.ct-lead-first { max-width: 40ch; color: rgb(var(--c-brand-line)); font-size: clamp(22px, 18px + .6vw, 27px); line-height: 1.45; font-weight: 700; letter-spacing: -.01em; }
@@ -48,7 +49,6 @@
 
 /* ---------- 시장·규제 한눈에 (대표 기사 + 목록) ---------- */
 .ct-market { min-width: 0; }
-.ct-market-sub { margin-top: 2px; color: rgb(var(--c-slate-500)); }
 .mk-lead { display: grid; grid-template-columns: minmax(0, 46%) minmax(0, 1fr); gap: 14px; align-items: center; margin-top: 14px; }
 .mk-lead-img { position: relative; height: 136px; overflow: hidden; border-radius: 14px; background: linear-gradient(150deg, #2b3139, #0b0e11); }
 .mk-lead-img img { display: block; width: 100%; height: 100%; object-fit: cover; }

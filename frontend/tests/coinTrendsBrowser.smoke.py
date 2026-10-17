@@ -169,6 +169,11 @@ def main():
                     expect(page.get_by_role("heading", name="시장·규제 한눈에")).to_be_visible()
                     expect(page.get_by_text("커뮤니티 의견 · 사실 확인 안 됨", exact=False).first).to_be_visible()
                     expect(page.locator(".ct-lane")).to_have_count(3)
+                    # 구역 제목 아래 설명 줄은 두 구역이 같은 크기 · 굵기 · 색 · 제목과의 간격(2026-10-17 지적).
+                    subs = page.evaluate("""() => [...document.querySelectorAll('.ct-sec-sub')].map(e => {
+                      const s = getComputedStyle(e), title = e.closest('section').querySelector('.ct-sec-title');
+                      return [s.fontSize, s.fontWeight, s.color, Math.round(e.getBoundingClientRect().top - title.getBoundingClientRect().bottom)]; })""")
+                    assert len(subs) == 2 and subs[0] == subs[1], subs
                     marquee = page.locator(".site-marquee")
                     expect(marquee.locator("img")).to_have_attribute("alt", "업비트")
                     expect(marquee.locator("button").first).to_contain_text("3,512원")

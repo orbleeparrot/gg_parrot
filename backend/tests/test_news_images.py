@@ -109,3 +109,17 @@ def test_google_block_starts_a_cooldown_and_is_not_cached_as_failure(monkeypatch
     assert news_images._google_retry_at > 0
     news_images._google_retry_at = 0.0
     assert news_images.resolve_now(items[1:]) == "ready"  # 쿨다운이 끝나면 정상 진행(서명 없음 → 이미지 없음)
+
+
+def test_each_pass_queues_the_next_unresolved_articles_not_just_the_first_twelve(monkeypatch):
+    # 앞 12건은 이미 찾았거나(image_resolved) 캐시에 있다 — 이번 회차는 그 뒤의 기사를 찾아야 한다(2026-10-17).
+    monkeypatch.setattr(news_images.threading, "Thread", lambda **kwargs: type("T", (), {"start": lambda self: None, "is_alive": lambda self: False})())
+    items = [{"url": f"https://news.google.com/rss/articles/A{n}?oc=5"} for n in range(30)]
+    for item in items[:6]:
+        item["image_resolved"] = True
+    for item in items[6:12]:
+        news_images._store(item["url"], {"article_url": "", "image": ""})
+    seen = []
+    news_images.ensure_resolving(items, on_ready=seen.append)
+    assert news_images._pending == [item["url"] for item in items[12:12 + news_images._MAX_ITEMS_PER_PASS]]
+    assert len(seen) == 6  # 캐시에 있던 기사는 바로 저장 콜백으로 넘긴다

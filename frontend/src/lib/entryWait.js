@@ -112,13 +112,20 @@ function barSeries(rule, params, side, bars) {
       const mid = sma(closes, period);
       const sd = rollingStd(closes, period, mid);
       const breakout = params.strategy === "breakout";
+      // '변동성이 줄어든 구간만 사용' — 엔진처럼 이번 봉 밴드 폭이 최근 squeeze_lookback 봉(이번 봉 포함) 중 가장 좁은 폭의 1.05배 이하일 때만
+      const squeeze = Boolean(params.squeeze_filter);
+      const lookback = Math.round(num(params.squeeze_lookback)) || 50;
+      const widths = [];
       return bars.map((b, i) => {
         if (mid[i] == null || sd[i] == null) return null;
         const upper = mid[i] + k * sd[i];
         const lower = mid[i] - k * sd[i];
+        widths.push(mid[i] ? (upper - lower) / mid[i] : 0);
+        if (widths.length > lookback) widths.shift();
+        const squeezed = !squeeze || widths.length < 2 || widths[widths.length - 1] <= Math.min(...widths) * 1.05;
         const useUpper = breakout ? !short : short;
         const target = useUpper ? upper : lower;
-        const hit = useUpper ? b.c >= upper : b.c <= lower;
+        const hit = (useUpper ? b.c >= upper : b.c <= lower) && squeezed;
         return { hit, value: b.c, target, mid: mid[i] };
       });
     }

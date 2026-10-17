@@ -3,9 +3,12 @@
 """
 from __future__ import annotations
 
+import math
+
 from fastapi.testclient import TestClient
 
 from app import entry_wait
+from app.engine.candles import MAState
 from app.main import app
 from tests.test_runner import _auth, _signup
 from tests.test_runner_signals_api import _key, _stop
@@ -64,8 +67,9 @@ def test_bollinger_and_ma_cross_and_band_mirrors():
     down = [200 - i for i in range(80)]
     j = entry_wait.compute({"rule_type": "J", "candle_interval": "1h", "params": {"fast_period": 5, "slow_period": 20}},
                            candles=_bars(down), last_price=down[-1])
-    assert j["sentence"] == "5선이 20선 위로 올라가면 사요." and j["distance"].startswith("두 선 간격 ")
-    assert j["gap"].startswith("간격 ") and j["gap"].endswith("%")
+    assert j["sentence"] == "5선이 20선 위로 올라가면 사요." and j["headline"].endswith(" 위에서 끝나면 사요")
+    assert j["distance"].startswith("지금 121.00 · +") and "더 오르면" in j["distance"]
+    assert j["gap"].startswith("+") and j["gap"].endswith("%")
     b = entry_wait.compute({"rule_type": "B", "symbol": "KRW-WAL", "params": {"buy_price": 60, "sell_price": 70}},
                            candles=[], last_price=62, symbol="KRW-WAL")
     assert b["sentence"] == "가격이 60 이하로 내려오면 사요." and b["distance"] == "지금 62 · −3.2% 더 내려오면"
@@ -234,3 +238,120 @@ def test_down_to_buy_rules_draw_a_value_scale_with_the_buy_zone_below():
     dip = entry_wait.compute({"rule_type": "E", "params": {"entry_mode": "dip", "entry_dip": 3}}, candles=[], last_price=100,
                              levels={"entry_target": 97})["scale"]
     assert dip["zone_side"] == "below" and dip["zone"] < dip["now"]["pos"]
+
+
+def _crossed(ma_type, fast_n, slow_n, closes):
+    """엔진 MAState 로 closes 를 먹인 뒤 마지막 봉에서 단기선 − 장기선."""
+    fast, slow = MAState(ma_type, fast_n), MAState(ma_type, slow_n)
+    for c in closes:
+        f, s = fast.update(c), slow.update(c)
+    return f - s
+
+
+def test_ma_cross_buy_line_is_the_close_where_the_engine_lines_cross():
+    """2026-10-17 B3 — 이동평균 크로스만 막대도, 넘어야 할 숫자도 없었다. 사는 선은 이번 봉이 그 값보다 위에서 끝나면
+    단기선이 장기선을 넘는 마감가이고, 엔진(MAState)의 판정과 정확히 같아야 한다."""
+    closes = [100 + 6 * math.sin(i / 4) - i * 0.15 for i in range(90)]
+    for ma_type in ("SMA", "EMA"):
+        for fast_n, slow_n in ((5, 20), (20, 60)):
+            line = entry_wait._cross_price(ma_type, fast_n, slow_n, closes)
+            assert line and line > 0
+            assert _crossed(ma_type, fast_n, slow_n, closes + [line * (1 + 1e-9)]) > 0
+            assert _crossed(ma_type, fast_n, slow_n, closes + [line * (1 - 1e-9)]) < 0
+    assert entry_wait._cross_price("SMA", 5, 20, closes[:18]) is None, "장기선을 못 구하면 숫자를 지어내지 않는다"
+
+    down = [200 - i for i in range(80)]
+    m = entry_wait.compute({"rule_type": "J", "candle_interval": "1h", "params": {"fast_period": 5, "slow_period": 20}},
+                           candles=_bars(down), last_price=down[-1])
+    line = entry_wait._cross_price("SMA", 5, 20, down[:-1])
+    assert m["headline"] == f"{entry_wait.fmt_price(line)} 위에서 끝나면 사요" and not m["touched"]
+    scale = m["scale"]
+    assert scale["zone_side"] == "above" and m["ladder"] is None
+    assert [(mk["label"], mk["main"]) for mk in scale["marks"]] == [("사는 선", True), ("20선", False)]
+    assert scale["now"]["pos"] < scale["marks"][1]["pos"] < scale["marks"][0]["pos"] == scale["zone"], "지금 · 20선 · 사는 선 순"
+
+    short = entry_wait.compute({"rule_type": "J", "candle_interval": "1h", "position_side": "short",
+                                "params": {"fast_period": 5, "slow_period": 20}},
+                               candles=_bars([100 + i for i in range(80)]), last_price=179)
+    assert short["headline"].endswith(" 아래에서 끝나면 팔아서 들어가요") and "더 내려가면" in short["distance"]
+    assert short["scale"]["zone_side"] == "below" and short["scale"]["marks"][0]["label"] == "들어가는 선"
+    crossed = entry_wait.compute({"rule_type": "J", "candle_interval": "1h", "position_side": "short",
+                                  "params": {"fast_period": 5, "slow_period": 20}}, candles=_bars(down), last_price=down[-1])
+    assert crossed["reached"] and crossed["headline"] == "이대로 끝나면 팔아서 들어가요", "숏이 '사요'라고 하면 안 된다"
+    limit = entry_wait.compute({"rule_type": "B", "position_side": "short", "params": {"buy_price": 60, "sell_price": 70}},
+                               candles=[], last_price=71, symbol="KRW-WAL")
+    assert limit["reached"] and limit["headline"] == "곧 들어가요"
+
+
+def test_ma_cross_waiting_for_confirm_bars_names_the_line_to_hold():
+    turn = [200 - i for i in range(60)] + [141 + 6 * i for i in range(1, 6)]  # 지난 봉에 막 엇갈림
+    m = entry_wait.compute({"rule_type": "J", "candle_interval": "1h",
+                            "params": {"fast_period": 5, "slow_period": 20, "confirm_candles": 10}},
+                           candles=_bars(turn), last_price=turn[-1])
+    assert m["touched"] and not m["reached"]
+    # 사는 선은 이번 봉에만 맞는 값이라 'N봉 더'와 붙이지 않고 이번 봉이 몇 번째인지만 말한다
+    assert m["headline"] == "116.00 위에서 끝나면 2/10봉이에요"
+    assert m["distance"] == "5선이 위에 있어요 · 9봉 더 이어지면 사요"
+    assert m["scale"]["now"]["pos"] > m["scale"]["zone"], "단기선이 이미 위 — 지금 점은 사는 구역 안"
+    filtered = entry_wait.compute({"rule_type": "J", "candle_interval": "1h", "params": {"fast_period": 5, "slow_period": 20},
+                                   "entry_filter": {"kind": "ma", "params": {"ma_type": "SMA", "period": 50, "side": "below"}}},
+                                  candles=_bars(turn), last_price=turn[-1])
+    assert filtered["touched"] and not filtered["reached"] and filtered["headline"] == "116.00 위에서 끝나면 사요", "1/1봉이라고 하지 않는다"
+    assert "진입 필터(" in filtered["distance"]
+
+
+def test_breakout_without_filter_draws_a_value_scale_and_marks_the_high_once_touched():
+    """필터 없는 돌파만 진행 막대(시가 → 사는 선)라 다른 규칙과 모양이 달랐고, 고가가 넘은 뒤 가격이 내려오면
+    '이대로 끝나면 사요'인데 막대는 0% 였다."""
+    macro = {"rule_type": "I", "candle_interval": "1h", "symbol": "QNTUSDT", "params": {"k": 0.5}}
+    waiting = entry_wait.compute(macro, candles=_bars([100.0] * 10 + [101.0], rng=4.0, forming_open=100.0, forming_high=101.0),
+                                 last_price=101.0, now_ms=T0 + 10 * H + H // 2)
+    assert waiting["headline"] == "102.00 넘으면 사요" and waiting["ladder"] is None
+    assert [(mk["label"], mk["value"], mk["main"]) for mk in waiting["scale"]["marks"]] == [("사는 선", "102.00", True), ("이 봉 시가", "100.00", False)]
+    assert waiting["scale"]["zone_side"] == "above" and waiting["scale"]["now"]["pos"] < waiting["scale"]["zone"]
+
+    touched = entry_wait.compute(macro, candles=_bars([100.0] * 10 + [101.0], rng=4.0, forming_open=100.0, forming_high=103.0),
+                                 last_price=101.0, now_ms=T0 + 10 * H + H // 2)
+    assert touched["reached"] and touched["headline"] == "이대로 끝나면 사요"
+    assert touched["distance"] == "이 봉 고가 103.00 · 사는 선을 넘었어요"
+    high = touched["scale"]["marks"][1]
+    assert (high["label"], high["value"]) == ("이 봉 고가", "103.00") and high["pos"] > touched["scale"]["zone"]
+
+
+def test_bollinger_squeeze_filter_is_a_condition_like_the_engine():
+    """빌더 '변동성이 줄어든 구간만 사용'을 진입 대기가 안 봐서, 밴드를 넘으면 엔진은 안 사는데 '이대로 끝나면 사요'라고 했다."""
+    closes = [100 + math.sin(i) * (0.5 + i * 0.08) for i in range(70)] + [90.0]  # 출렁임이 커지는 중 — 밴드 폭이 넓다
+    params = {"bb_period": 20, "bb_std": 2, "squeeze_filter": True, "squeeze_lookback": 50}
+    m = entry_wait.compute({"rule_type": "G", "candle_interval": "1h", "params": params}, candles=_bars(closes), last_price=90.0)
+    assert m["touched"] and not m["reached"], "밴드는 넘었지만 폭이 넓어 엔진은 안 산다"
+    assert [c["key"] for c in m["conditions"]] == ["band", "squeeze"] and m["conditions"][1]["ok"] is False
+    assert m["conditions"][1]["label"].startswith("변동성이 줄어든 구간 · 밴드 폭 ") and m["conditions"][1]["now"].startswith("지금 ")
+    assert "밴드를 넘었어요 · 밴드 폭이 " in m["distance"] and m["distance"].endswith("% 이하로 좁아져야 사요")
+    assert m["gap"] == "밴드 폭 대기" and m["headline"].endswith(" 아래에서 끝나면 사요")
+
+    plain = entry_wait.compute({"rule_type": "G", "candle_interval": "1h", "params": {**params, "squeeze_filter": False}},
+                               candles=_bars(closes), last_price=90.0)
+    assert plain["reached"] and [c["key"] for c in plain["conditions"]] == ["band"]
+
+    bars = _bars(closes[:-1] + [90.0, 90.0])  # 밴드 밖에서 마감했지만 폭이 넓었던 봉
+    last = entry_wait.compute({"rule_type": "G", "candle_interval": "1h", "params": params}, candles=bars, last_price=90.0)
+    assert last["last_bar"]["entered"] is False and last["last_bar"]["why"] == "밴드 폭이 아직 좁아지지 않았어요"
+
+
+def test_headline_is_one_number_to_reach_for_every_waiting_rule():
+    closes = [100 + (0.5 if i % 2 else -0.5) + i * 0.05 for i in range(40)]
+    rsi = entry_wait.compute({"rule_type": "F", "candle_interval": "1h", "params": {"rsi_period": 7, "entry_threshold": 33, "exit_threshold": 75}},
+                             candles=_bars(closes), last_price=closes[-1])
+    assert rsi["headline"] == "RSI 33 아래에서 끝나면 사요"
+    rsi3 = entry_wait.compute({"rule_type": "F", "candle_interval": "1h", "position_side": "short",
+                               "params": {"rsi_period": 7, "entry_threshold": 33, "exit_threshold": 75, "confirm_candles": 3}},
+                              candles=_bars(closes), last_price=closes[-1])
+    assert rsi3["headline"] == "RSI 75 위에서 3봉 연속 끝나면 팔아서 들어가요"
+    band = entry_wait.compute({"rule_type": "G", "candle_interval": "1h", "params": {"bb_period": 20, "bb_std": 2, "strategy": "breakout"}},
+                              candles=_bars([100 + (i % 5) for i in range(40)]), last_price=101)
+    assert band["headline"] == f"{band['scale']['marks'][0]['value']} 위에서 끝나면 사요"
+    limit = entry_wait.compute({"rule_type": "B", "params": {"buy_price": 60, "sell_price": 70}}, candles=[], last_price=62, symbol="KRW-WAL")
+    assert limit["headline"] == "60 이하로 내려오면 사요" and limit["sentence"] == "가격이 60 이하로 내려오면 사요."
+    dip = entry_wait.compute({"rule_type": "E", "params": {"entry_mode": "dip", "entry_dip": 3}}, candles=[], last_price=100,
+                             levels={"entry_target": 97})
+    assert dip["headline"] == "97.00까지 내려오면 사요"

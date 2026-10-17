@@ -224,10 +224,13 @@ def collect_market(*, claim_token=None) -> dict:
     result.update(overview=overview, ai=bool(overview), collection_status="ready")
     result["image_status"] = news_images.attach(result.get("items", []))
     publish(result)
-    if result["image_status"] == "pending":
+    if news_images.enabled():
         # Image resolution stays outside HTTP and independently publishes each
-        # result; article text and the overview are already visible.
-        news_images.ensure_resolving(result["items"], on_ready=lambda item:
+        # result; article text and the overview are already visible. 화면은 저장된 목록(최근 100건)을
+        # 보여 주므로 이번 수집분이 아니라 그 목록에서 아직 사진을 안 찾은 기사를 차례로 찾는다.
+        with get_session() as db:
+            served = articles.read_article_feed("MARKET", limit=100, include_analysis=False, db=db) or {}
+        news_images.ensure_resolving(served.get("items") or result["items"], on_ready=lambda item:
             articles.update_article_image("MARKET", articles.article_id(item), item))
     return {**result, "item_count": stats["inserted"], "served_from_cache": not _any_source_attempted(raw.get("sources"))}
 

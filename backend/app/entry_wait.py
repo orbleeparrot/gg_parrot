@@ -7,9 +7,13 @@ RSI · 볼린저 · 이평선은 엔진의 상태 클래스를 그대로 쓴다.
  - I 변동성 돌파: 봉 고가 ≥ 그 봉 시가 + k × 직전 봉 변동폭 (+ 이평선 필터면 마감가 ≥ 이평선) · 봉 마감 때
  - F RSI: 마감 RSI ≤ 진입 기준(숏은 ≥ 청산 기준)이 확인 봉 수만큼 이어지면
  - G 볼린저: 되돌림은 마감가 ≤ 하단(숏 ≥ 상단), 돌파는 마감가 ≥ 상단(숏 ≤ 하단)
- - J 이평선: 단기 > 장기(숏 <)가 확인 봉 수만큼 이어지면
+   (+ '변동성이 줄어든 구간만 사용'이면 이번 봉 밴드 폭 ≤ 최근 squeeze_lookback 봉 중 가장 좁은 폭 × 1.05)
+ - J 이평선: 단기 > 장기(숏 <)가 확인 봉 수만큼 이어지면 — 사는 선은 '이번 봉이 이 값보다 위에서 끝나면
+   두 선이 엇갈리는 마감가'(_cross_price)
  - B 지정가 밴드: 가격 ≤ 매수가(숏 ≥ 매도가) · 3초마다
  - E 트레일링 스탑 눌림 진입: 체크포인트의 진입 목표(live_levels.entry_target)만 쓴다.
+큰 글씨(headline)는 넘어야 할 숫자 하나("1.133 위에서 끝나면 사요"), 막대는 규칙마다 값 눈금 하나(scale · ladder)다
+— 2026-10-17 J 만 막대도 숫자도 없었다.
 매크로의 진입 필터(entry_filter)도 엔진처럼 직전 마감봉까지의 값으로 다시 판정해 조건 목록(conditions)에 넣는다.
 '사는 선을 넘었다(touched)'와 '이대로 마감되면 산다(reached)'는 다르다 — 이평선 필터 · 연속 봉 · 진입 필터가
 남아 있으면 touched 여도 reached 가 아니다(2026-10-17 KRW-FORT: 고가가 사는 선을 넘었지만 마감가가 20봉 평균
@@ -20,6 +24,7 @@ from __future__ import annotations
 
 import threading
 import time
+from collections import deque
 from typing import Optional
 
 from .engine.candles import BollingerState, MAState, RSIState
@@ -114,14 +119,19 @@ def _series(rule: str, params: dict, short: bool, bars: list[dict]) -> list[Opti
         state = BollingerState(int(_num(params.get("bb_period")) or 20), _num(params.get("bb_std")) or 2.0)
         breakout = params.get("strategy") == "breakout"
         use_upper = (not short) if breakout else short
+        squeeze = bool(params.get("squeeze_filter"))
+        widths: deque = deque(maxlen=int(_num(params.get("squeeze_lookback")) or 50))
         for bar in bars:
             bands = state.update(bar["c"])
             if bands is None:
                 out.append(None)
                 continue
             mid, upper, lower = bands
+            widths.append((upper - lower) / mid if mid else 0.0)
+            squeezed = not squeeze or len(widths) < 2 or widths[-1] <= min(widths) * 1.05
             target = upper if use_upper else lower
-            out.append({"hit": bar["c"] >= upper if use_upper else bar["c"] <= lower, "value": bar["c"], "target": target, "mid": mid,
+            band = bar["c"] >= upper if use_upper else bar["c"] <= lower
+            out.append({"hit": band and squeezed, "band": band, "squeezed": squeezed, "value": bar["c"], "target": target, "mid": mid,
                         "above": use_upper})
         return out
     if rule == "J":
@@ -227,6 +237,30 @@ def _describe(rule: str, row: dict, fp, confirm: int) -> str:
     return ""
 
 
+def _cross_price(ma_type: str, fast_n: int, slow_n: int, closes: list[float]) -> Optional[float]:
+    """이번 봉이 이 값으로 마감되면 단기선 = 장기선이 되는 가격(엔진 MAState 와 같은 식). 못 구하면 None.
+
+    SMA: (S_s/n_s − S_f/n_f) / (1/n_f − 1/n_s), S 는 직전 마감 n−1 개의 합.
+    EMA: ((1−k_s)·E_s − (1−k_f)·E_f) / (k_f − k_s), E 는 직전 마감까지의 값.
+    """
+    if ma_type == "EMA":
+        fs, ss = MAState("EMA", fast_n), MAState("EMA", slow_n)
+        ef = es = None
+        for c in closes:
+            ef, es = fs.update(c), ss.update(c)
+        if ef is None or es is None:
+            return None
+        kf, ks = 2.0 / (fast_n + 1.0), 2.0 / (slow_n + 1.0)
+        p = ((1 - ks) * es - (1 - kf) * ef) / (kf - ks)
+    else:
+        if len(closes) < slow_n - 1:
+            return None
+        sf = sum(closes[len(closes) - (fast_n - 1):]) if fast_n > 1 else 0.0
+        sl = sum(closes[len(closes) - (slow_n - 1):])
+        p = (sl / slow_n - sf / fast_n) / (1.0 / fast_n - 1.0 / slow_n)
+    return p if p > 0 else None
+
+
 def _ladder(marks: list[tuple], now: tuple, zone_at: float, side: str, clamp: Optional[tuple] = None) -> dict:
     """값 눈금 하나(왼쪽이 작은 값)에 선 여럿 · 지금 점 · 사는 구역.
 
@@ -277,8 +311,10 @@ def _why(rule: str, row: dict, fp, confirm: int, short: bool, filter_note: str) 
         if row.get("streak", 1) < confirm:
             return f"{confirm}봉 연속 중 {row['streak']}봉째예요"
     elif rule == "G":
-        if not row.get("hit"):
+        if not row.get("band", row.get("hit")):
             return f"마감가 {_josa(fp(row['value']), '이/가')} 밴드 {fp(row['target'])} 안쪽이었어요"
+        if row.get("squeezed") is False:
+            return "밴드 폭이 아직 좁아지지 않았어요"
     elif rule == "J":
         if not row.get("hit"):
             return "두 선이 아직 엇갈리지 않았어요"
@@ -394,7 +430,7 @@ def compute(macro: dict, *, candles: list[dict], last_price: Optional[float] = N
             }
         both = touched and (ma_prev is None or price >= ma_prev)
         if both:
-            distance = "사는 선과 평균선을 모두 넘었어요" if ma_prev is not None else "사는 선을 넘었어요 · 이대로 끝나면 사요"
+            distance = "사는 선과 평균선을 모두 넘었어요" if ma_prev is not None else f"이 봉 고가 {fp(high)} · 사는 선을 넘었어요"
         elif touched:
             distance = f"지금 {fp(price)} · {_pct(price, ma_prev)} 더 · 사는 선은 넘었고 {ma_period}봉 평균선이 남았어요"
         else:
@@ -409,6 +445,11 @@ def compute(macro: dict, *, candles: list[dict], last_price: Optional[float] = N
                    "now": fp(price), "progress": _clamp01((price - bar["o"]) / (target - bar["o"])) if target != bar["o"] else 0.0},
             buy_line={"price": target, "label": f"사는 선 {fp(target)}"},
         )
+        if ladder is None:
+            # 필터 없는 돌파도 값 눈금 하나(사는 선 · 이 봉 시가 · 지금) — 진행 막대는 다른 규칙과 모양이 달랐다
+            # 고가가 한 번 닿으면 사는 규칙이라 넘은 뒤엔 시가 대신 이 봉 고가를 찍는다 — 지금 점이 선 아래로 돌아와도 왜 사는지 보이게
+            other = ("high", "이 봉 고가", high, fp(high), False) if touched else ("open", "이 봉 시가", bar["o"], fp(bar["o"]), False)
+            model["scale"] = _ladder([("line", "사는 선", target, fp(target), True), other], (price, fp(price)), target, "above")
     elif rule == "F":
         period = int(_num(params.get("rsi_period")) or 14)
         entry = _num(params.get("entry_threshold"))
@@ -442,6 +483,7 @@ def compute(macro: dict, *, candles: list[dict], last_price: Optional[float] = N
                 "now": f"{now_rsi:.1f}",
                 "progress": _clamp01((now_rsi - entry) / (exit_ - entry) if short else (exit_ - now_rsi) / (exit_ - entry)) if exit_ != entry else 0.0},
         )
+        model["headline"] = f"RSI {th:g} {'위' if short else '아래'}에서{confirm_text} 끝나면 {verb}"
         if now_rsi is not None:
             other = entry if short else exit_
             model["scale"] = _ladder([("line", "들어가는 선" if short else "사는 선", th, f"{th:g}", True),
@@ -450,8 +492,11 @@ def compute(macro: dict, *, candles: list[dict], last_price: Optional[float] = N
     elif rule == "G":
         state = BollingerState(int(_num(params.get("bb_period")) or 20), _num(params.get("bb_std")) or 2.0)
         bands = None
+        widths: deque = deque(maxlen=int(_num(params.get("squeeze_lookback")) or 50))
         for c in [b["c"] for b in closed] + ([price] if price is not None else []):
             bands = state.update(c)
+            if bands is not None:
+                widths.append((bands[1] - bands[2]) / bands[0] if bands[0] else 0.0)
         if bands is None or price is None:
             model["sentence"] = "밴드를 계산하고 있어요."
             return model
@@ -463,6 +508,12 @@ def compute(macro: dict, *, candles: list[dict], last_price: Optional[float] = N
         touched = price >= target if use_upper else price <= target
         lead = f"지금 {fp(price)} · 밴드를 넘었어요"
         conds.append(cond("band", f"마감가가 {name} 밴드 {fp(target)} {'위' if use_upper else '아래'}", f"지금 {fp(price)}", touched))
+        if params.get("squeeze_filter") and len(widths) >= 2:
+            # 엔진(BollingerSim): 이번 봉 밴드 폭이 최근 squeeze_lookback 봉(이번 봉 포함) 중 가장 좁은 폭의 1.05배 이하일 때만 산다
+            need = min(widths) * 1.05
+            conds.append(cond("squeeze", f"변동성이 줄어든 구간 · 밴드 폭 {need * 100:.2f}% 이하", f"지금 {widths[-1] * 100:.2f}%",
+                              widths[-1] <= need, wait=f"밴드 폭이 {need * 100:.2f}% 이하로 좁아져야 {verb}", gap="밴드 폭 대기"))
+        model["headline"] = f"{fp(target)} {'위' if use_upper else '아래'}에서 끝나면 {verb}"
         model.update(
             sentence=f"봉 마감가가 {name} 밴드 {fp(target)} {'위' if use_upper else '아래'}면 {verb}.",
             distance=(f"{lead}, 이대로 끝나면 {verb}" if touched
@@ -495,11 +546,24 @@ def compute(macro: dict, *, candles: list[dict], last_price: Optional[float] = N
         if confirm > 1:
             conds.append(cond("streak", f"{confirm}봉 연속", f"지난 봉까지 {streak}봉", streak + 1 >= confirm,
                               wait=f"{max(1, confirm - streak)}봉 더 이어지면 사요", gap=f"{streak + 1}/{confirm}봉"))
+        # 사는 선 — 이번 봉이 이 값보다 위(숏은 아래)에서 끝나면 두 선이 엇갈린다. 봉마다 다시 정해진다(돌파의 사는 선처럼).
+        cross = _cross_price(ma_type, fpd, spd, [b["c"] for b in closed])
+        side_word = "아래" if short else "위"
+        trend = "" if narrowing is None else " · 두 선은 좁혀지는 중" if narrowing else " · 두 선은 벌어지는 중"
+        if cross is None:
+            distance = f"두 선 간격 {abs(gap) * 100:.2f}%" + ("" if narrowing is None else " · 좁혀지는 중" if narrowing else " · 벌어지는 중")
+        else:
+            distance = f"지금 {fp(price)} · {_pct(price, cross)} 더 {'내려가면' if short else '오르면'}{trend}"
+            # 연속 봉을 기다리는 중이면 이 값은 이번 봉에만 맞다 — 'N봉 더'와 붙이면 N봉 내내 같은 값처럼 읽힌다
+            model["headline"] = (f"{fp(cross)} {side_word}에서 끝나면 {streak + 1}/{confirm}봉이에요" if touched and confirm > 1
+                                 else f"{fp(cross)} {side_word}에서 끝나면 {verb}")
+            model["scale"] = _ladder([("line", "들어가는 선" if short else "사는 선", cross, fp(cross), True),
+                                      ("slow", f"{spd}선", s, fp(s), False)],
+                                     (price, fp(price)), cross, "below" if short else "above")
         model.update(
             sentence=f"{fpd}선이 {spd}선 {'아래로 내려가면 팔아서 들어가요' if short else '위로 올라가면 사요'}.",
-            distance=(f"{lead} · 이대로 끝나면 {verb}" if touched
-                      else f"두 선 간격 {abs(gap) * 100:.2f}%" + ("" if narrowing is None else " · 좁혀지는 중" if narrowing else " · 벌어지는 중")),
-            gap=soon if touched else f"간격 {abs(gap) * 100:.2f}%",
+            distance=f"{lead} · 이대로 끝나면 {verb}" if touched else distance,
+            gap=soon if touched else _pct(price, cross) if cross is not None else f"간격 {abs(gap) * 100:.2f}%",
         )
     elif rule == "B":
         target = _num(params.get("sell_price") if short else params.get("buy_price"))
@@ -516,6 +580,7 @@ def compute(macro: dict, *, candles: list[dict], last_price: Optional[float] = N
                 "now": fp(price), "progress": _clamp01((price - other) / (target - other))},
             buy_line={"price": target, "label": f"사는 선 {fp(target)}"},
         )
+        model["headline"] = f"{fp(target)} {'이상으로 오르면' if short else '이하로 내려오면'} {verb}"
         marks = [("line", "들어가는 가격" if short else "사는 가격", target, fp(target), True)]
         if other is not None and other != target:
             marks.append(("other", "청산가" if short else "매도가", other, fp(other), False))
@@ -539,6 +604,7 @@ def compute(macro: dict, *, candles: list[dict], last_price: Optional[float] = N
                    "progress": _clamp01((ref - price) / (ref - target)) if ref != target else 0.0},
             buy_line={"price": target, "label": f"사는 선 {fp(target)}"},
         )
+        model["headline"] = f"{fp(target)}까지 내려오면 사요"
         model["scale"] = _ladder([("line", "사는 가격", target, fp(target), True), ("ref", "기준가", ref, fp(ref), False)],
                                   (price, fp(price)), target, "below")
 
@@ -553,7 +619,7 @@ def compute(macro: dict, *, candles: list[dict], last_price: Optional[float] = N
                  conditions=[{k: v for k, v in c.items() if k != "gap"} for c in conds])
     # 맨 위 큰 글씨 — 지금 상태 한 줄. 긴 조건 문장을 늘어놓지 않는다(조건은 체크 목록 · 막대가 맡는다).
     if reached:
-        model["headline"] = "곧 사요" if realtime else "이대로 끝나면 사요"
+        model["headline"] = soon if realtime else f"이대로 끝나면 {verb}"  # 숏은 '팔아서 들어가요'
     elif not model["headline"]:
         model["headline"] = model["sentence"].rstrip(".")
     if touched and blocked:

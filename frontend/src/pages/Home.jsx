@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
   beginJourney,
@@ -234,6 +234,31 @@ function HomeHeroRotator({ onLeaderboard, onAsk, paused = false }) {
     return () => document.removeEventListener("visibilitychange", syncVisibility);
   }, []);
 
+  // 데스크톱 히어로는 한 화면 높이로 고정돼 있다(index.css .home-hero-rotator) — 슬라이드가 더 길면 비율대로 줄여
+  // 스크롤 없이 다 보이게 한다. transform 은 레이아웃 높이(offsetHeight)를 바꾸지 않아 줄인 뒤 다시 재도 같은 값이다.
+  const stageRef = useRef(null);
+  useLayoutEffect(() => {
+    const stage = stageRef.current;
+    if (mobile || !stage) return undefined;
+    const slides = () => stage.querySelectorAll(".home-hero-slide-frame > .home-entry-hero");
+    const fit = () => {
+      const room = stage.clientHeight;
+      for (const slide of slides()) {
+        const natural = slide.offsetHeight;
+        slide.style.setProperty("--hero-fit", room > 0 && natural > room ? String(room / natural) : "1");
+      }
+    };
+    fit();
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", fit);
+      return () => window.removeEventListener("resize", fit);
+    }
+    const observer = new ResizeObserver(fit);
+    observer.observe(stage);
+    slides().forEach((slide) => observer.observe(slide));
+    return () => observer.disconnect();
+  }, [mobile, activeSlide, outgoingSlide]);
+
   const autoRotationBlocked = mobile
     || paused
     || interactionPaused
@@ -287,7 +312,7 @@ function HomeHeroRotator({ onLeaderboard, onAsk, paused = false }) {
       }}
     >
       <div className="home-hero-rotator">
-        <div className="home-hero-stage" aria-live="off">
+        <div ref={stageRef} className="home-hero-stage" aria-live="off">
           {[0, 1].map((index) => {
             const isActive = index === activeSlide;
             const isOutgoing = index === outgoingSlide && !isActive;

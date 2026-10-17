@@ -100,7 +100,9 @@ export function MarketSection({ state, onRetry }) {
     box.addEventListener("scroll", onScroll, { passive: true });
     return () => { cancelAnimationFrame(frame); box.removeEventListener("scroll", onScroll); };
   }, [items.length]);
-  useEffect(() => { setActive(0); if (scrollRef.current) scrollRef.current.scrollTop = 0; }, [items]);
+  // 같은 기사 목록을 다시 받았을 때(주기 갱신)는 읽던 자리를 지킨다 — 기사가 실제로 바뀔 때만 맨 위로.
+  const itemsKey = items.map((item) => item.id).join("\n");
+  useEffect(() => { setActive(0); if (scrollRef.current) scrollRef.current.scrollTop = 0; }, [itemsKey]);
 
   // 끝까지 다 그렸으면 마지막 기사도 맨 위로 올라와 큰 박스에 오를 수 있게 아래를 비워 둔다.
   useEffect(() => {

@@ -43,7 +43,8 @@ function Conditions({ rows }) {
 const at = (x) => `${Math.round(Math.min(1, Math.max(0, Number(x) || 0)) * 1000) / 10}%`;
 // 위치는 style 의 --at 하나로 — 꼬리표는 끝에 가까울수록 안쪽으로 당겨(left X% · translateX(-X%)) 막대 밖으로 안 나간다.
 
-// 가격 막대 — 사는 선 · 평균선을 같은 가격 축에 놓고 지금 점을 찍는다. 사는 구역(두 선 위)은 초록.
+// 값 막대 — 선들(사는 선 · 평균선 · 청산 기준)을 같은 눈금(왼쪽이 작은 값)에 놓고 지금 점을 찍는다.
+// 사는 구역은 초록 — 올라가야 사면 선 오른쪽, 내려가야 사면(RSI · 지정가 · 눌림) 선 왼쪽.
 function Ladder({ ladder }) {
   const marks = [...ladder.marks].sort((a, b) => a.pos - b.pos);
   const close = marks.length > 1 && marks[1].pos - marks[0].pos < 0.3; // 이름표가 겹치면 둘째 줄로
@@ -51,7 +52,7 @@ function Ladder({ ladder }) {
     <div className="ewc-ladder" role="img" aria-label={`${marks.map((m) => `${m.label} ${m.value}`).join(" · ")} 중 지금 ${ladder.now.value}`}>
       <span className="ewc-ladder-now num" style={{ "--at": at(ladder.now.pos) }}>지금 {ladder.now.value}</span>
       <div className="ewc-ladder-track">
-        <i className="ewc-ladder-zone" style={{ "--at": at(ladder.zone) }} />
+        <i className={"ewc-ladder-zone" + (ladder.zone_side === "below" ? " is-below" : "")} style={{ "--at": at(ladder.zone) }} />
         {marks.map((m) => <i key={m.key} className={"ewc-ladder-mark" + (m.main ? " is-main" : "")} style={{ "--at": at(m.pos) }} />)}
         <i className="ewc-ladder-dot" style={{ "--at": at(ladder.now.pos) }} />
       </div>

@@ -213,3 +213,24 @@ def test_rsi_confirm_and_entry_filter_hold_back_reached():
     assert f["conditions"][-1]["key"] == "filter" and f["conditions"][-1]["ok"] is False
     assert "진입 필터(5봉 SMA 이동평균 위)가 막고 있어요" in f["distance"] and f["gap"] == "필터 대기"
     assert f["last_bar"]["why"] == "진입 필터(5봉 SMA 이동평균 위)가 막았어요"
+
+
+def test_down_to_buy_rules_draw_a_value_scale_with_the_buy_zone_below():
+    """RSI 40 아래로 내려가면 사는데 막대는 '청산 기준 70 → 사는 선 40' 이 오른쪽으로 차서 거꾸로 읽혔다(10/17)."""
+    closes = [100 + (i % 7) - 3 + i * 0.02 for i in range(60)]
+    m = entry_wait.compute({"rule_type": "F", "candle_interval": "15m",
+                            "params": {"rsi_period": 14, "entry_threshold": 40, "exit_threshold": 70}},
+                           candles=_bars(closes), last_price=closes[-1])
+    scale = m["scale"]
+    assert scale["zone_side"] == "below" and m["ladder"] is None, "옛 실행기가 거꾸로 칠하지 않게 ladder 는 비운다"
+    (buy, out) = scale["marks"]
+    assert (buy["label"], buy["value"], buy["main"]) == ("사는 선", "40", True) and (out["label"], out["value"]) == ("청산 기준", "70")
+    assert buy["pos"] == scale["zone"] < scale["now"]["pos"] < out["pos"], "왼쪽이 작은 값 — 사는 구역은 40 아래(왼쪽)"
+
+    band = entry_wait.compute({"rule_type": "B", "params": {"buy_price": 60, "sell_price": 70}}, candles=[], last_price=62,
+                              symbol="KRW-WAL")["scale"]
+    assert band["zone_side"] == "below" and [mk["label"] for mk in band["marks"]] == ["사는 가격", "매도가"]
+    assert band["zone"] < band["now"]["pos"] < band["marks"][1]["pos"]
+    dip = entry_wait.compute({"rule_type": "E", "params": {"entry_mode": "dip", "entry_dip": 3}}, candles=[], last_price=100,
+                             levels={"entry_target": 97})["scale"]
+    assert dip["zone_side"] == "below" and dip["zone"] < dip["now"]["pos"]

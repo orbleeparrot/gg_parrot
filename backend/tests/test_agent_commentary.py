@@ -186,13 +186,38 @@ def test_community_posts_come_one_by_one_without_repeats_or_floods():
     posts = [s for s in says if s["kind"] == "post"]
     assert len(posts) == 3, "글은 거르지 않는다 — 같은 사람이 다시 올린 글도 하나씩(3시간 넘은 옛 글만 새 글이 아니다)"
     assert posts[0]["post"]["title"] == "$ICNT — 선물 매도 | 저항선 거부 설정"
-    assert posts[0]["post"]["summary"] == "ICNT가 0.1519달러에서 막히면 하락에 건다는 의견이다."
+    assert posts[0]["post"]["summary"] == "ICNT가 0.1519달러에서 막히면 하락에 건다는 의견이다. 다만 조건부다.", "제목 + 내용 두 문장"
     assert posts[0]["post"]["author"] == "DecodedCryptoHQ" and posts[0]["face"] == "curious"
     assert posts[0]["chips"][0]["href"].startswith("https://www.binance.com/")
     assert posts[1]["hl"] == posts[2]["hl"] == "같은 내용 글이 또 올라왔어요"
     flood = {"cursor": 60, "reset": False, "items": [post(100 + i, f"글 {i}", f"u{i}", NOW - 5 * MIN + i) for i in range(10)]}
     says, state = ac.decide(state, facts(), feed=flood, now_ms=NOW + MIN)
     assert len([s for s in says if s["kind"] == "post"]) == 10, "개수로 자르지 않는다 — 걸러내는 건 같은 글 · 퍼 나른 글뿐"
+
+
+def test_community_post_waits_for_its_summary_then_comes_with_title_and_body():
+    """10/17 운영: 글을 보자마자 말해 83%가 제목만 나갔다(요약은 몇 분 뒤 준비됨)."""
+    state = started_state() | {"news_rev": 40}
+    pending = post(7, "$GTC 15분 만에 -5.15%!", "派大大", NOW - 2 * MIN, summary="") | {"community_summary_status": "pending"}
+    ready_now = post(8, "GTC 롱 포지션이 근처에서 청산됐다", "S", NOW - MIN)
+    says, state = ac.decide(state, facts(), feed={"cursor": 45, "reset": False, "items": [pending, ready_now]}, now_ms=NOW)
+    assert [s["post"]["title"] for s in says if s["kind"] == "post"] == ["GTC 롱 포지션이 근처에서 청산됐다"]
+    assert state["news_rev"] == 40, "요약을 기다리는 글이 있으면 읽은 위치를 넘기지 않는다"
+
+    ready = pending | {"community_summary": "작성자는 GTC가 15분 동안 5.15% 급락했다고 전한다. 반등보다 하락이 멈추는지가 중요하다고 본다.",
+                       "community_summary_status": "ready"}
+    says, state = ac.decide(state, facts(), feed={"cursor": 46, "reset": False, "items": [ready, ready_now]}, now_ms=NOW + MIN)
+    posts = [s for s in says if s["kind"] == "post"]
+    assert [p["post"]["title"] for p in posts] == ["$GTC 15분 만에 -5.15%!"], "이미 말한 글은 다시 말하지 않는다"
+    assert posts[0]["post"]["summary"] == "GTC가 15분 동안 5.15% 급락했다고 전한다. 반등보다 하락이 멈추는지가 중요하다고 본다."
+    assert state["news_rev"] == 46
+
+    stuck = post(9, "요약이 안 오는 글", "z", NOW, summary="") | {"community_summary_status": "pending"}
+    _, state = ac.decide(state, facts(), feed={"cursor": 50, "reset": False, "items": [stuck]}, now_ms=NOW + 2 * MIN)
+    says, state = ac.decide(state, facts(), feed={"cursor": 50, "reset": False, "items": [stuck]},
+                            now_ms=NOW + 2 * MIN + ac.POST_SUMMARY_WAIT_MS)
+    assert [s["post"]["title"] for s in says if s["kind"] == "post"] == ["요약이 안 오는 글"], "5분이 지나면 제목만이라도 말한다"
+    assert state["news_rev"] == 50
 
 
 def test_connection_problems_errors_and_the_end():

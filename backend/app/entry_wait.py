@@ -227,6 +227,27 @@ def _describe(rule: str, row: dict, fp, confirm: int) -> str:
     return ""
 
 
+def _ladder(marks: list[tuple], now: tuple, zone_at: float, side: str, clamp: Optional[tuple] = None) -> dict:
+    """값 눈금 하나(왼쪽이 작은 값)에 선 여럿 · 지금 점 · 사는 구역.
+
+    marks 는 (key, 이름, 값, 표시, 주 선인지), now 는 (값, 표시). side 는 사는 구역이 선의 위(above, 올라가야 삼)인지
+    아래(below, 내려가야 삼)인지 — RSI 30 아래로 내려가면 사는 매크로를 '오른쪽 끝이 사는 선'인 진행 막대로 그리면
+    값은 내려가는데 막대는 오른쪽으로 차서 거꾸로 읽혔다(2026-10-17).
+    """
+    values = [m[2] for m in marks] + [now[0]]
+    lo, hi = min(values), max(values)
+    pad = (hi - lo) * 0.15 or abs(now[0]) * 0.01 or 1.0
+    lo, hi = lo - pad, hi + pad
+    if clamp:
+        lo, hi = max(clamp[0], lo), min(clamp[1], hi)
+
+    def pos(v):
+        return round(_clamp01((v - lo) / (hi - lo)), 4) if hi > lo else 0.5
+
+    return {"marks": [{"key": k, "label": label, "value": text, "pos": pos(v), "main": main} for k, label, v, text, main in marks],
+            "now": {"label": "지금", "value": now[1], "pos": pos(now[0])}, "zone": pos(zone_at), "zone_side": side}
+
+
 _BATCHIM = {"0": True, "1": True, "3": True, "6": True, "7": True, "8": True}  # 영 · 일 · 삼 · 육 · 칠 · 팔 — 받침 있음
 _RIEUL = {"1", "7", "8"}  # 일 · 칠 · 팔 — ㄹ 받침은 '로'
 
@@ -303,7 +324,9 @@ def compute(macro: dict, *, candles: list[dict], last_price: Optional[float] = N
     model = {
         "rule": rule, "interval": interval, "interval_label": INTERVAL_LABEL.get(interval, interval), "realtime": realtime,
         "sentence": "", "headline": "", "distance": "", "gap": "", "remain": "", "touched": False, "reached": False, "conditions": [],
-        "meter": None, "ladder": None, "buy_line": None,
+        # ladder: 돌파 + 평균선(사는 구역이 선 위). scale: 같은 모양에 zone_side 를 담은 값 눈금(RSI · 밴드 · 지정가 · 눌림) —
+        # 이름을 나눈 건 0.20.4 실행기가 ladder 의 사는 구역을 늘 선 위로 칠해서다(아래 구역을 ladder 로 보내면 거꾸로 칠한다).
+        "meter": None, "ladder": None, "scale": None, "buy_line": None,
         "next_check_ms": next_check, "checks": None if realtime else len(checked),
         "last_check_ms": (checked[-1]["t"] + step) if checked else None,
         "typical": None if rule == "E" else typical_wait(series, step), "log": [],
@@ -367,7 +390,7 @@ def compute(macro: dict, *, candles: list[dict], last_price: Optional[float] = N
                 "marks": [{"key": "line", "label": "사는 선", "value": fp(target), "pos": pos(target), "main": bind == target},
                           {"key": "ma", "label": f"{ma_period}봉 평균", "value": fp(ma_prev), "pos": pos(ma_prev), "main": bind == ma_prev}],
                 "now": {"label": "지금", "value": fp(price), "pos": pos(price)},
-                "zone": pos(max(target, ma_prev)),
+                "zone": pos(max(target, ma_prev)), "zone_side": "above",
             }
         both = touched and (ma_prev is None or price >= ma_prev)
         if both:
@@ -419,6 +442,11 @@ def compute(macro: dict, *, candles: list[dict], last_price: Optional[float] = N
                 "now": f"{now_rsi:.1f}",
                 "progress": _clamp01((now_rsi - entry) / (exit_ - entry) if short else (exit_ - now_rsi) / (exit_ - entry)) if exit_ != entry else 0.0},
         )
+        if now_rsi is not None:
+            other = entry if short else exit_
+            model["scale"] = _ladder([("line", "들어가는 선" if short else "사는 선", th, f"{th:g}", True),
+                                       ("exit", "청산 기준", other, f"{other:g}", False)],
+                                      (now_rsi, f"{now_rsi:.1f}"), th, "above" if short else "below", clamp=(0.0, 100.0))
     elif rule == "G":
         state = BollingerState(int(_num(params.get("bb_period")) or 20), _num(params.get("bb_std")) or 2.0)
         bands = None
@@ -444,6 +472,8 @@ def compute(macro: dict, *, candles: list[dict], last_price: Optional[float] = N
                    "progress": _clamp01((price - mid) / (target - mid)) if target != mid else 0.0},
             buy_line={"price": target, "label": f"사는 선({name} 밴드) {fp(target)}"},
         )
+        model["scale"] = _ladder([("line", f"{name} 밴드", target, fp(target), True), ("mid", "중앙선", mid, fp(mid), False)],
+                                  (price, fp(price)), target, "above" if use_upper else "below")
     elif rule == "J":
         fpd = int(_num(params.get("fast_period")) or 20)
         spd = int(_num(params.get("slow_period")) or 60)
@@ -486,6 +516,10 @@ def compute(macro: dict, *, candles: list[dict], last_price: Optional[float] = N
                 "now": fp(price), "progress": _clamp01((price - other) / (target - other))},
             buy_line={"price": target, "label": f"사는 선 {fp(target)}"},
         )
+        marks = [("line", "들어가는 가격" if short else "사는 가격", target, fp(target), True)]
+        if other is not None and other != target:
+            marks.append(("other", "청산가" if short else "매도가", other, fp(other), False))
+        model["scale"] = _ladder(marks, (price, fp(price)), target, "above" if short else "below")
     elif rule == "E":
         target = _num((levels or {}).get("entry_target"))
         dip = _num(params.get("entry_dip"))
@@ -505,6 +539,8 @@ def compute(macro: dict, *, candles: list[dict], last_price: Optional[float] = N
                    "progress": _clamp01((ref - price) / (ref - target)) if ref != target else 0.0},
             buy_line={"price": target, "label": f"사는 선 {fp(target)}"},
         )
+        model["scale"] = _ladder([("line", "사는 가격", target, fp(target), True), ("ref", "기준가", ref, fp(ref), False)],
+                                  (price, fp(price)), target, "below")
 
     if filter_now is not None:
         conds.append(cond("filter", f"진입 필터 · {filter_note}", "직전 봉 기준 통과" if filter_now else "직전 봉 기준 막힘", filter_now,

@@ -315,13 +315,18 @@ def test_domestic_racers_are_gainers_inside_the_turnover_pool(monkeypatch):
     assert payload["racer_rule"] == {"pool": 3, "min_turnover": 0, "change_basis": "previous_close"}
 
 
-def test_binance_racers_follow_hot_coin_volume_floor_and_peg_rule(monkeypatch):
+def test_binance_racers_use_the_turnover_top_pool_without_a_dollar_floor(monkeypatch):
+    # 1,000만 달러 문턱 없이 거래대금 상위 BINANCE_RACER_POOL 안의 오른 코인 — 500만 달러인 SMALL 도 들어온다.
     rows = [_ticker("TIA", change=20, turnover=4e7, exchange="binance"),
             _ticker("EUR", change=0.1, turnover=9e7, exchange="binance"),
             _ticker("U", change=0.02, turnover=8e7, exchange="binance", lastPrice=1.0006),
             _ticker("SMALL", change=90, turnover=5e6, exchange="binance"),
-            _ticker("WLD", change=6, turnover=5e7, exchange="binance")]
+            _ticker("WLD", change=6, turnover=5e7, exchange="binance"),
+            _ticker("DOWN", change=-3, turnover=6e7, exchange="binance")]
     monkeypatch.setattr(hotcoins, "get_ticker_snapshot", lambda: _snapshot(rows))
     payload = client.get("/api/market/trends?exchange=binance").json()
-    assert payload["racers"] == ["TIA", "WLD"]
-    assert payload["racer_rule"]["min_turnover"] == hotcoins.MIN_QUOTE_VOLUME
+    assert payload["racers"] == ["SMALL", "TIA", "WLD"]
+    assert payload["racer_rule"] == {"pool": 100, "min_turnover": 0, "change_basis": "24h"}
+    # 후보는 거래대금 상위 pool 개까지만 — 그 밖의 급등 코인은 빠진다.
+    monkeypatch.setattr(market_trends, "BINANCE_RACER_POOL", 3)
+    assert client.get("/api/market/trends?exchange=binance").json()["racers"] == ["TIA", "WLD"]

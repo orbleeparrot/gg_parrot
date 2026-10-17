@@ -68,17 +68,19 @@ def _coin(row: dict, exchange: str) -> dict | None:
             "warning": bool(row.get("warning"))}
 
 
-# 경주마 — 거래대금 상위 후보 안에서 오늘 많이 오른 코인. 바이낸스는 기존 '오늘의 경주마'
-# (hotcoins.select_hot_coins)와 같은 규칙, 국내는 원화 거래대금 상위 DOMESTIC_RACER_POOL 개.
+# 경주마 — 거래대금 상위 후보 안에서 오늘 많이 오른 코인. 국내는 원화 거래대금 상위 DOMESTIC_RACER_POOL(50) 개,
+# 바이낸스는 USDT 거래대금 상위 BINANCE_RACER_POOL(100) 개(상장 수가 국내의 약 2배). 금액 문턱은 두지 않는다 —
+# 옛 '1,000만 달러 이상' 문턱은 조용한 날 후보가 40여 개로 줄어 경주마가 4~5마리만 남았다(2026-10-17 사용자 지적).
 DOMESTIC_RACER_POOL = int(os.environ.get("DOMESTIC_RACER_POOL", "50"))
+BINANCE_RACER_POOL = int(os.environ.get("BINANCE_RACER_POOL", "100"))
 RACER_LIMIT = 30
 _RACER_EXCLUDED = hotcoins._STABLE_BASES | {"USDT"}
 
 
 def racer_rule(exchange: str) -> dict:
     binance = exchange == "binance"
-    return {"pool": hotcoins.CANDIDATE_POOL if binance else DOMESTIC_RACER_POOL,
-            "min_turnover": hotcoins.MIN_QUOTE_VOLUME if binance else 0,
+    return {"pool": BINANCE_RACER_POOL if binance else DOMESTIC_RACER_POOL,
+            "min_turnover": 0,
             "change_basis": "24h" if binance else "previous_close"}
 
 
@@ -104,10 +106,7 @@ def select_racers(coins: list[dict], exchange: str, *, limit: int = RACER_LIMIT)
 
 
 def get_racer_coins(exchange: str, limit: int = 10) -> dict:
-    """사이트 하단 '오늘의 경주마' 띠 — 국내 거래소는 코인 순위의 경주마 탭과 같은 목록(같은 시세 캐시).
-
-    바이낸스는 기존 hotcoins.get_hot_coins 를 그대로 쓴다(이 함수는 국내 전용).
-    """
+    """사이트 하단 '오늘의 경주마' 띠 — 코인 순위의 경주마 탭과 같은 목록(같은 시세 캐시), 세 거래소 공통."""
     limit = max(1, min(int(limit), 50))
     exchange = normalize_exchange(exchange)
     try:

@@ -1770,11 +1770,11 @@ def prices(symbols: str = Query(default="", max_length=700), exchange: Exchange 
 def hot_coins(limit: int = 10, exchange: Exchange = "binance") -> dict:
     """'오늘의 경주마' — surging + actively-traded coins on the chosen exchange.
 
-    Binance: USDT 24h (hotcoins). Upbit/Bithumb: the coin-trends racers (KRW turnover
-    top DOMESTIC_RACER_POOL, gainers only). Globally cached; reference indicator only.
+    Same list as the coin-trends racers: turnover top pool (Upbit/Bithumb 50, Binance 100),
+    gainers only. Globally cached; reference indicator only.
     """
-    if exchange == "binance":
-        return {**hotcoins_mod.get_hot_coins(limit), "exchange": "binance", "quote_currency": "USDT"}
+    # 바이낸스도 코인동향 경주마와 같은 목록 — 옛 select_hot_coins(1,000만 달러 문턱)는 조용한 날 자리가 남아
+    # 떨어진 코인까지 채웠다(2026-10-17).
     return get_racer_coins(exchange, limit)
 
 

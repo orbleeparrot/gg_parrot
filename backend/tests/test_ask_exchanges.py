@@ -196,3 +196,36 @@ def test_one_letter_binance_candidate_pool_and_server_listing_revalidation(monke
                 # Client-side resolved flags cannot bypass the server's actual market listing.
                 ask.run_ask(db, user, ask.AskRequest(session_id=response["session_id"], symbol=symbol, resolved=True), backtest)
             assert exc.value.status == 422
+
+
+def test_martingale_orders_meet_exchange_minimum_by_raising_size_then_cutting_count():
+    """2026-10-17 업비트 47,000원 → 기본 · 추가 주문 4,700원(100만 원 기준 10만 원을 비율로 줄인 값)이라
+    업비트 최소 주문 5,000원에 걸려 실행기가 막았다. 주문 크기를 최소 + 2%(5,100원)로 올리고, 예산을 넘으면 횟수를 줄인다."""
+    from app.engine.schema import ParamsH
+
+    plan = ask._plan(answers(exchange="upbit", account_balance=47_000), "KRW-GTC")
+    first = ask._make_macro(plan, "H", ask._PRESETS["H"][0], ["KRW-GTC"])
+    assert (first.params["base_order_size"], first.params["safety_order_size"], first.params["max_safety_orders"]) == (5_100, 5_100, 5)
+    small = ask._make_macro(ask._plan(answers(exchange="upbit", account_balance=20_000), "KRW-GTC"), "H",
+                            ask._PRESETS["H"][0], ["KRW-GTC"])
+    assert (small.params["base_order_size"], small.params["max_safety_orders"]) == (5_100, 2), "예산 안에 들도록 추가 주문 횟수를 줄인다"
+    for macro in (first, small):
+        assert ParamsH(**macro.params).required_funds() <= macro.initial_capital
+    tiny = ask._plan(answers(exchange="bithumb", account_balance=9_000), "KRW-ETH")
+    assert ask._make_macro(tiny, "H", ask._PRESETS["H"][0], ["KRW-ETH"]) is None, "추가 주문을 한 번도 못 넣으면 마틴게일 후보를 내지 않는다"
+    assert "H" not in {c.macro.rule_type.value for c in ask.build_templates(tiny)}
+    big = ask._make_macro(ask._plan(answers(exchange="upbit", account_balance=1_000_000), "KRW-BTC"), "H",
+                          ask._PRESETS["H"][0], ["KRW-BTC"])
+    assert (big.params["base_order_size"], big.params["max_safety_orders"]) == (100_000, 5), "이미 넘으면 그대로"
+
+
+def test_ai_martingale_amounts_are_fitted_too():
+    plan = ask._plan(answers(exchange="upbit", account_balance=47_000), "KRW-GTC")
+    preset = {"params": {"base_order_size": 1_000, "safety_order_size": 2_000, "price_deviation": 2,
+                         "safety_order_volume_scale": 1.0, "max_safety_orders": 8, "take_profit": 2,
+                         "initial_capital": 47_000}}
+    macro = ask._make_macro(plan, "H", preset, ["KRW-GTC"])
+    p = macro.params
+    assert min(p["base_order_size"], p["safety_order_size"]) >= 5_100
+    assert (p["base_order_size"], p["safety_order_size"]) == (5_100, 10_200), "비율(1:2)은 지킨다"
+    assert p["max_safety_orders"] == 4 and 5_100 + 4 * 10_200 <= 47_000

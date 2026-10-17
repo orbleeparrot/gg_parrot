@@ -36,7 +36,7 @@ from .db import AskExtraCredit, AskMacroSession, User
 from .engine.backtest import BacktestResult, _lttb_equity_points
 from .engine.explain import explain_result
 from .engine.schema import Macro
-from .exchanges import is_domestic, normalize_exchange, quote_currency, spot_commission_pct
+from .exchanges import is_domestic, min_order_floor, normalize_exchange, quote_currency, spot_commission_pct
 from .quests import today_kst
 
 log = logging.getLogger(__name__)
@@ -376,6 +376,41 @@ def _allowed_types(req: _Plan) -> tuple[str, ...]:
     return types
 
 
+def _fit_martingale(params: dict, budget: float, floor: Optional[float]) -> Optional[dict]:
+    """마틴게일 주문 크기를 거래소 최소 주문 금액에 맞춘다.
+
+    후보는 100만 원 기준 금액을 사용자 예산 비율로 줄여 쓰므로, 예산이 작으면 한 건이 최소 주문 금액
+    아래로 내려간다(2026-10-17 업비트 47,000원 → 기본 · 추가 주문 4,700원, 실행기 리허설에서 거절).
+    가장 작은 주문이 기준(floor)을 넘도록 모든 주문을 같은 배율로 올리고, 그러면 예산을 넘는 만큼
+    추가 주문 횟수를 줄인다. 추가 주문을 한 번도 못 넣으면 None — 마틴게일로 쓸 수 없는 예산이다.
+    이미 넘으면 그대로 돌려준다.
+    """
+    if not floor:
+        return params
+    base0, safety0 = float(params["base_order_size"]), float(params["safety_order_size"])
+    scale = float(params.get("safety_order_volume_scale", 1.0) or 1.0)
+    n0 = int(params.get("max_safety_orders", 5))
+    unit = 100.0 if floor >= 1000 else 0.1
+
+    def need(base: float, safety: float, n: int) -> float:
+        total, size = base, safety
+        for _ in range(n):
+            total += size
+            size *= scale
+        return total
+
+    for n in range(n0, 0, -1):
+        smallest = min(base0, safety0 * min(scale, 1.0) ** (n - 1))
+        if smallest >= floor and n == n0:
+            return params
+        k = max(1.0, floor / smallest)
+        base = round(math.ceil(base0 * k / unit - 1e-9) * unit, 8)
+        safety = round(math.ceil(safety0 * k / unit - 1e-9) * unit, 8)
+        if need(base, safety, n) <= budget + 1e-9:
+            return {**params, "base_order_size": base, "safety_order_size": safety, "max_safety_orders": n}
+    return None
+
+
 def _make_macro(req: _Plan, rule_type: str, preset: dict, symbols: list[str]) -> Optional[Macro]:
     params = dict(preset["params"])
     capital = float(req.account_balance)
@@ -395,6 +430,14 @@ def _make_macro(req: _Plan, rule_type: str, preset: dict, symbols: list[str]) ->
             buys = PERIOD_PRESET_DAYS[req.period_preset] // interval_days + 1
             params["amount_per_buy"] = capital / buys
         params["initial_capital"] = capital
+        if rule_type == "H":
+            # 한 레그 예산(투입 비율 · 종목 몫) 안에서 주문 한 건이 거래소 최소 주문 금액을 넘게 맞춘다.
+            ratio = float((preset.get("risk") or {}).get("invest_ratio", 1.0) or 1.0)
+            fitted = _fit_martingale(params, capital * ratio / max(1, len(symbols)),
+                                     min_order_floor(req.exchange, req.market))
+            if fitted is None:
+                return None
+            params = fitted
     except (ValueError, TypeError, KeyError, OverflowError):
         return None
     body = {

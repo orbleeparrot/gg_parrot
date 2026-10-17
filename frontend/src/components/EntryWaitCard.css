@@ -19,6 +19,7 @@
 .ewc-ladder-now { position: absolute; top: 0; left: var(--at); transform: translateX(calc(var(--at) * -1)); padding: 1px 6px; border-radius: 4px; background: rgb(var(--c-brand)); color: rgb(var(--c-brand-ink)); font-size: 11px; font-weight: 800; white-space: nowrap; }
 .ewc-ladder-track { position: relative; height: 6px; border-radius: 3px; background: rgb(var(--c-slate-200)); }
 .ewc-ladder-zone { position: absolute; top: 0; bottom: 0; left: var(--at); right: 0; border-radius: 0 3px 3px 0; background: rgb(var(--c-green-600) / .55); }
+.ewc-ladder-zone.is-below { left: 0; right: calc(100% - var(--at)); border-radius: 3px 0 0 3px; }
 .ewc-ladder-mark { position: absolute; left: var(--at); top: -8px; width: 2px; height: 22px; margin-left: -1px; background: rgb(var(--c-slate-500)); }
 .ewc-ladder-mark.is-main { background: rgb(var(--c-slate-900)); }
 .ewc-ladder-dot { position: absolute; left: var(--at); top: -4px; width: 14px; height: 14px; margin-left: -7px; border: 2px solid rgb(var(--c-surface)); border-radius: 50%; background: rgb(var(--c-brand)); }

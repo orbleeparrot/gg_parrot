@@ -721,6 +721,19 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
           <div className={g2}>
             {num("base_order_size", `처음 살 금액 (${quote})`, { term: "martingale" })}
             {num("safety_order_size", `첫 추가매수 금액 (${quote})`, { term: "safety_order" })}
+            {/* 한 건이 최소 주문 금액보다 작을 때 — '물어볼까'와 같은 규칙(크기를 올리고 넘치면 횟수를 줄임)으로 맞추는 단추 */}
+            {fieldError?.fix && (
+              <div className="col-span-full">
+                <button
+                  type="button"
+                  className="btn btn-s btn-secondary"
+                  onClick={() => setForm({ ...form, base_order_size: fieldError.fix.base_order_size,
+                    safety_order_size: fieldError.fix.safety_order_size, max_safety_orders: fieldError.fix.max_safety_orders })}
+                >
+                  {fieldError.fix.label}
+                </button>
+              </div>
+            )}
             {num("price_deviation", "추가매수할 하락 간격 (%)", { hint: "가격이 이만큼 더 내릴 때마다 추가로 사요" })}
             {num("max_safety_orders", "최대 추가매수 횟수", { step: "1" })}
             {num("safety_order_step_scale", "하락 간격 배율")}

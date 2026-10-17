@@ -2828,9 +2828,13 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   background: rgb(var(--c-surface));
 }
 
+/* 데스크톱 히어로(폭 1100px 이상에서만 그려진다 — 모바일은 .home-mobile-stack)는 스크롤이 생기면 안 된다.
+   '최소 한 화면'이던 높이를 정확히 한 화면으로 고정하고 넘치는 높이는 자른다. 슬라이드가 더 길면
+   HomeHeroRotator 가 --hero-fit 으로 비율대로 줄여 다 보이게 한다(2026-10-17 1366×768 에서 87px 넘쳐 페이지가 스크롤됐다). */
 .home-hero-shell,
 .home-hero-rotator {
-  min-height: calc(100dvh - var(--site-topbar-h, 64px));
+  height: calc(100dvh - var(--site-topbar-h, 64px));
+  overflow: clip;
 }
 
 .home-hero-rotator {
@@ -2842,9 +2846,15 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 
 .home-hero-stage {
   position: relative;
+  height: 100%;
   min-width: 0;
   min-height: 0;
   display: grid;
+}
+
+.home-hero-slide-frame > .home-entry-hero {
+  transform: scale(var(--hero-fit, 1));
+  transform-origin: 50% 0;
 }
 
 .home-hero-slide-frame {

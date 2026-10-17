@@ -195,22 +195,34 @@ def attach(items: list[dict]) -> str:
 
 
 def ensure_resolving(items: list[dict], *, on_ready=None) -> None:
-    """Queue unknown URLs and start the single worker if it is not running."""
+    """Queue unknown URLs and start the single worker if it is not running.
+
+    한 회차에 새로 찾는 기사는 _MAX_ITEMS_PER_PASS 건 — 이미 찾은(``image_resolved``) 기사와 캐시에 있는 기사는
+    세지 않는다. 예전엔 목록 앞 12건만 보아서, 이미 찾은 앞 기사들이 자리를 차지해 13번째부터는 영영 차례가
+    오지 않았다(2026-10-17, 코인동향 시장·규제 100건 중 61건이 사진 없음).
+    """
     global _worker
     if not enabled():
         return
     ready = []
+    queued = 0
     with _lock:
-        for item in items[:_MAX_ITEMS_PER_PASS]:
+        for item in items:
+            if queued >= _MAX_ITEMS_PER_PASS:
+                break
             url = str(item.get("url") or "") if isinstance(item, dict) else ""
-            if url and on_ready is not None:
-                if _fresh(_cache.get(url)):
+            if not url or item.get("image_resolved"):
+                continue
+            if _fresh(_cache.get(url)):
+                if on_ready is not None:
                     ready.append(({**item, **_cache[url], "image_resolved": True}, on_ready))
-                else:
-                    # Bounded by one market batch per refresh and URL cache.
-                    _callbacks.setdefault(url, []).append((dict(item), on_ready))
-            if url and not _fresh(_cache.get(url)) and url not in _pending:
+                continue
+            if on_ready is not None:
+                # Bounded by one market batch per refresh and URL cache.
+                _callbacks.setdefault(url, []).append((dict(item), on_ready))
+            if url not in _pending:
                 _pending.append(url)
+            queued += 1
         if _pending and not (_worker and _worker.is_alive()):
             _worker = threading.Thread(target=_drain, name="news-images", daemon=True)
             _worker.start()

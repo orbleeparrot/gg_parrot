@@ -109,6 +109,33 @@ def test_editorial_crypto_reporting_not_dropped_for_gambling_word_alone(title):
     assert news._is_news_article_candidate(item(title))
 
 
+@pytest.mark.parametrize("title,extra", [
+    # 2026-10-17 운영 시장·규제에 섞여 있던 탈취 도메인(calgaryroughnecks.com)의 도박 홍보글 3건
+    ("게임 설명의 별표까지 읽어야 하는 이유, 포커 로우", {"source": "Calgary Roughnecks"}),
+    ("배당표를 펼친 뒤 무엇을 볼까요? 원 엑스 벳 비트코인", {"source": "Calgary Roughnecks"}),
+    ("아직 낯선 기능을 다시 찾아보는 암호 화폐 정부 규제",
+     {"source": "Calgary Roughnecks", "article_url": "https://www.calgaryroughnecks.com/roughnecks-partnership/?ID=6423.html"}),
+    # 같은 글이 다른 출처 이름으로 와도 원문 도메인 · 홍보 신호로 막는다
+    ("아직 낯선 기능을 다시 찾아보는 암호 화폐 정부 규제",
+     {"source": "Roughnecks", "article_url": "https://calgaryroughnecks.com/x/?ID=1.html"}),
+    ("배당표를 펼친 뒤 무엇을 볼까요? 원 엑스 벳 비트코인", {"source": "어느 블로그"}),
+    ("1xBet bitcoin bonus code for new players", {"source": "promo site"}),
+])
+def test_gambling_promotion_sources_are_dropped_even_with_crypto_words(title, extra):
+    assert not news._is_news_article_candidate({**item(title), **extra})
+    stored = {**item("기존 번역 제목", original_title=title), **extra}
+    assert public_news._public_payload("MARKET", {"items": [stored]})["items"] == []
+
+
+@pytest.mark.parametrize("title", [
+    "선거ㆍ금리 등 미래를 사고파는 예측시장⋯성장만큼 커지는 규제 [e가상자산]",
+    "Polymarket betting volume hits record as prediction markets draw regulators",
+    "가상자산은 도박인가… 금융당국, 투자자 보호 기준 마련",
+])
+def test_prediction_markets_and_regulation_news_are_kept(title):
+    assert news._is_news_article_candidate(item(title))
+
+
 @pytest.fixture
 def article_db(tmp_path, monkeypatch):
     engine = create_engine(f"sqlite:///{tmp_path / 'relevance.db'}")

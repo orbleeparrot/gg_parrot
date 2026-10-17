@@ -267,6 +267,16 @@ _CONTEXT_VERIFIED_ASSETS = {
     "AXS": ("axie infinity", "엑시인피니티"),
     "ICP": ("internet computer", "internetcomputer", "dfinity", "인터넷컴퓨터", "인터넷 컴퓨터", "디피니티"),
 }
+# 기사처럼 Google 뉴스에 섞여 들어오는 도박 홍보 출처(탈취된 스포츠팀 도메인 등, 2026-10-17 코인동향 시장·규제에서
+# 발견: '포커 로우' · '원 엑스 벳 비트코인' · 위장한 '암호 화폐 정부 규제'). 출처 이름 · 원문 도메인 둘 다로 막는다.
+_BLOCKED_NEWS_SOURCES = {"calgary roughnecks"}
+_BLOCKED_NEWS_HOSTS = {"calgaryroughnecks.com"}
+_GAMBLING_PROMO = re.compile(
+    r"\b(?:1\s?x\s?bet|bet365|sportsbook|free spins|bonus code|promo code)\b|"
+    r"원\s?엑스\s?벳|배당표|포커\s?로우|보너스\s?코드|프로모\s?코드|입금\s?보너스",
+    re.IGNORECASE,
+)
+
 _CRYPTO_NEWS_CONTEXT = (
     r"\b(?:crypto(?:currenc(?:y|ies))?|blockchain|tokens?|altcoins?|defi|nfts?|"
     r"staking|mainnet|airdrops?|tokenomics|stablecoins?|web3|on[ -]?chain|"
@@ -986,8 +996,14 @@ def _is_news_article_candidate(item: dict) -> bool:
         return False
     title = str(item.get("original_title") or item.get("title") or "")
     source = str(item.get("source") or "").strip().casefold()
-    gambling = re.search(r"\b(?:casino|gambling|free spins|promo code|sweepstakes)\b|"
-                         r"카지노|토토|마작|쇼미더벳", title, re.IGNORECASE)
+    article_host = str(urlsplit(str(item.get("article_url") or "")).hostname or "").removeprefix("www.").casefold()
+    if source in _BLOCKED_NEWS_SOURCES or article_host in _BLOCKED_NEWS_HOSTS:
+        return False
+    # 도박 사이트 홍보 신호 — 코인 단어가 같이 있어도 기사로 보지 않는다('원 엑스 벳 비트코인' 같은 제목).
+    if _GAMBLING_PROMO.search(title):
+        return False
+    gambling = re.search(r"\b(?:casino|gambling|free spins|promo code|sweepstakes|poker|baccarat|roulette|blackjack)\b|"
+                         r"카지노|토토|마작|쇼미더벳|포커|바카라|룰렛|블랙잭", title, re.IGNORECASE)
     if gambling and not re.search(_CRYPTO_NEWS_CONTEXT, title, re.IGNORECASE):
         return False
     # Centrifuge's token shares its name with industrial/laboratory equipment.

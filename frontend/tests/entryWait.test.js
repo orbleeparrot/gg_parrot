@@ -80,6 +80,16 @@ test("지정가 밴드는 실시간, 눌림 진입은 서버 목표만", () => {
   assert.match(pending.distance, /첫 봉이 마감되면/);
 });
 
+test("볼린저 '변동성이 줄어든 구간만 사용'이면 밴드 폭이 좁을 때 맞은 봉만 센다(엔진과 같게)", () => {
+  // 10봉마다 점점 깊어지는 급락 — 밴드 밖으로 나가지만 그때마다 밴드 폭이 최근 최저보다 넓다
+  const closes = Array.from({ length: 90 }, (_, i) => (i % 10 === 9 ? 100 - 2 - i * 0.08 : 100 + Math.sin(i) * 0.3));
+  const params = { bb_period: 20, bb_std: 2, squeeze_lookback: 50 };
+  const plain = entryWaitModel({ macro: { rule_type: "G", candle_interval: "1h", params }, candles: bars(closes) });
+  const squeezed = entryWaitModel({ macro: { rule_type: "G", candle_interval: "1h", params: { ...params, squeeze_filter: true } }, candles: bars(closes) });
+  assert.ok(plain.typical.episodes > 0);
+  assert.ok(squeezed.typical.episodes < plain.typical.episodes, "시작 전 안내가 엔진보다 자주 산다고 말하면 안 된다");
+});
+
 test("평소 기다린 시간 — 조건이 새로 맞은 횟수로 나눈다", () => {
   const rows = [false, true, true, false, false, true, false, false, false, false, true, false].map((hit) => ({ hit }));
   const stat = typicalWait(rows, H);

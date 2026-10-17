@@ -508,10 +508,12 @@ def collect_once(*, now_ms=None, stop_event=None, write_lock=None) -> dict:
                 finish_work(SCOPE, token, retry_seconds=retry_seconds)
 
 
-# 읽기용 목록(최대 2,000건) — 10초가 지나면 읽는 사람이 뒤에서 새로 만들게 하고 그동안(최대 10분) 만들어 둔 것을 바로 준다.
-# 목록이 아예 없을 때만 수집 스레드가 미리 만든다(2026-10-18, regional_trends 와 같은 규칙).
+# 읽기용 목록(최대 2,000건) — 10초가 지나면 읽는 사람이 뒤에서 새로 만들게 하고 그동안 만들어 둔 것을 바로 준다.
+# 낡은 값 창은 상장 목록 유효기간(LISTING_MAX_AGE_SECONDS 300초)보다 충분히 짧아야 한다 — 목록 안의 상장 목록이
+# 5분을 넘으면 글을 전부 숨긴다(10분으로 두었다가 운영에서 0건이 나옴, 2026-10-18). 목록이 작아(약 13KB)
+# 수집 스레드가 매분 새로 만들어 두어 첫 방문자도 기다리지 않는다.
 READ_FRESH_SECONDS = 10
-READ_STALE_SECONDS = 600
+READ_STALE_SECONDS = 110
 READ_STALE_AFTER_MS = 2 * 60_000
 
 
@@ -520,8 +522,6 @@ def _snapshot():
 
 
 def warm_reader() -> None:
-    if _responses.peek("shared") is not None:
-        return
     try:
         _snapshot()
     except Exception as exc:

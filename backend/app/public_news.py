@@ -214,7 +214,11 @@ def collect_market(*, claim_token=None) -> dict:
     result = news._localize_news_payload(raw, on_progress=publish)
     publish(result)
     if overview is None:
-        overview = news._summarize(result.get("items", []), label="코인 시장·규제")
+        from . import regional_trends
+        if regional_trends.enabled():
+            overview = regional_trends.combined_market_overview()
+        else:
+            overview = news._summarize(result.get("items", []), label="코인 시장·규제")
         if overview:
             news._store_durable_market_summary(raw["as_of"], overview)
     result.update(overview=overview, ai=bool(overview), collection_status="ready")

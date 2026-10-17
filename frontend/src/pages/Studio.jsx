@@ -30,12 +30,13 @@ import {
   macroToForm,
   validate,
   withTypeDefaults,
+  withExchangeDefaults,
   validateDetailed,
   FIELDLESS_ERROR_FIELDS,
 } from "../lib/macro.js";
 import { computeStrategyOverlay } from "../lib/indicators.js";
 import { macroSymbols } from "../lib/portfolio.js";
-import { isDomestic, normalizeExchange } from "../lib/exchanges.js";
+import { isDomestic, normalizeExchange, normalizeSymbolForExchange } from "../lib/exchanges.js";
 import {
   completeJourney,
   peekRegistrationDraft,
@@ -438,6 +439,8 @@ function AccountStudio({ scope, allowRouterMacro }) {
     if (slug) return;
     const entryParams = new URLSearchParams(entryQuery);
     const symbol = entryParams.get("symbol");
+    // 코인동향의 '이 코인으로 매크로 만들기' 는 거래소도 넘긴다(업비트 KRW-XRP 등). 거래소를 바꿀 때 쓰는 기본값을 그대로 거친다.
+    const entryExchange = ["binance", "upbit", "bithumb"].includes(entryParams.get("exchange")) ? entryParams.get("exchange") : "";
     const strategy = entryParams.get("strategy");
     const validStrategy = strategy && RULE_TYPES[strategy] ? strategy : "";
     const resumeRegistration = entryParams.get("register") === "1";
@@ -452,6 +455,7 @@ function AccountStudio({ scope, allowRouterMacro }) {
 
     const nextParams = new URLSearchParams(entryParams);
     nextParams.delete("symbol");
+    nextParams.delete("exchange");
     nextParams.delete("strategy");
     nextParams.delete("register");
     nextParams.delete("from");
@@ -506,7 +510,10 @@ function AccountStudio({ scope, allowRouterMacro }) {
     setForm((previous) => {
       let next = previous;
       if (validStrategy) next = withTypeDefaults(next, validStrategy);
-      if (symbol) next = { ...next, symbol: symbol.toUpperCase() };
+      if (symbol && entryExchange) {
+        next = withExchangeDefaults(next, entryExchange);
+        next = { ...next, symbol: normalizeSymbolForExchange(symbol.toUpperCase(), entryExchange) };
+      } else if (symbol) next = { ...next, symbol: symbol.toUpperCase() };
       return next;
     });
   }, [entryQuery, runBacktest, setSearchParams, slug]);

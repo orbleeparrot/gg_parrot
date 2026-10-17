@@ -15,7 +15,7 @@ from urllib.parse import urlsplit
 
 from playwright.sync_api import expect, sync_playwright
 
-spec = importlib.util.spec_from_file_location('news_fixture', Path(__file__).with_name('newsMobileBrowser.smoke.py'))
+spec = importlib.util.spec_from_file_location('news_fixture', Path(__file__).with_name('coinTrendsBrowser.smoke.py'))
 news = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(news)
 OUTPUT = Path(os.environ.get('MOBILE_SHELL_OUTPUT', '/tmp/ggp-mobile-shell-check'))
@@ -60,6 +60,10 @@ def main():
                     page = context.new_page()
                     page.on('pageerror', lambda error: errors.append(str(error)))
                     page.goto(origin + '/guide', wait_until='networkidle')
+                    # 첫 진입 '개발자 노트'(2026-10-02~)가 머리줄을 덮는다 — 이 탭에서 한 번 닫으면 다시 뜨지 않는다.
+                    notice = page.get_by_role('button', name='확인했어요', exact=True)
+                    if notice.count():
+                        notice.first.click()
                     bounds(page)
                     header = page.locator('.site-header')
                     expect(header.locator('.account-trigger')).to_be_visible()
@@ -151,11 +155,13 @@ def main():
                     if path not in ('/', '/builder'):
                         expect(page.locator('.site-marquee')).to_be_hidden()
                     if path == '/news':
-                        expect(page.locator('.news-racer-map')).to_be_hidden()
-                        expect(page.get_by_role('list', name='경주마 상승률 순위')).to_be_visible()
-                        help_buttons = page.locator('.news-briefing-section-title .info-trigger')
-                        expect(help_buttons).to_have_count(2)
+                        # 코인동향(2026-10-17 개편): 국내/해외 스위치 · 경주마 레인 · 열 이름 ⓘ(터치로 열고 닫힘).
+                        expect(page.get_by_role('tablist', name='시장')).to_be_visible()
+                        expect(page.get_by_role('table', name='경주마')).to_be_visible()
+                        help_buttons = page.locator('.ct-head-tip .info-trigger')
+                        expect(help_buttons).to_have_count(1)
                         for button in help_buttons.all():
+                            button.scroll_into_view_if_needed()
                             assert button.locator('svg').bounding_box()['width'] == 16
                             assert button.evaluate('n => getComputedStyle(n).backgroundColor') == 'rgba(0, 0, 0, 0)'
                             button.tap()

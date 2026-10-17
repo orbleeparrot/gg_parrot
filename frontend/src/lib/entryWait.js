@@ -389,8 +389,22 @@ export function entryWaitFromServer(wait, session = null, now = Date.now()) {
     realtime: Boolean(wait.realtime),
     waitingFor: Number.isFinite(startedMs) ? fmtSpan(now - startedMs) : "",
     sentence: wait.sentence,
+    // 맨 위 큰 글씨 — 지금 상태 한 줄(옛 서버엔 없어 조건 문장으로)
+    headline: wait.headline || String(wait.sentence || "").replace(/\.$/, ""),
     distance: wait.distance || "",
+    // 언제 판정되는지 — "11:45 마감까지 5분". 지정가는 3초마다 봐서 '실시간 확인'.
+    closeText: wait.realtime ? "실시간 확인" : Number.isFinite(next) && next > 0
+      ? (next - now >= 60_000 ? `${kstClock(next)} 마감까지 ${fmtSpan(next - now)}` : `${kstClock(next)} 마감 곧`) : "",
+    // 가격 막대 하나에 선 여럿(사는 선 · 20봉 평균) — 두 조건이 다 있는 매크로만
+    ladder: wait.ladder && Array.isArray(wait.ladder.marks) && wait.ladder.now ? wait.ladder : null,
     reached: Boolean(wait.reached),
+    // 함께 맞아야 하는 조건 목록 — 첫 줄은 주 조건. 두 줄 이상일 때만 카드에 체크 목록으로 보인다.
+    conditions: Array.isArray(wait.conditions)
+      ? wait.conditions.filter((row) => row && row.label).map((row) => ({
+        key: String(row.key || row.label), label: String(row.label), now: String(row.now || ""),
+        ok: row.ok === true ? true : row.ok === false ? false : null, atClose: Boolean(row.at_close),
+      }))
+      : [],
     meter: wait.meter || null,
     priceLine: line,
     nextCheck: wait.realtime ? "실시간" : Number.isFinite(next) && next > 0 ? kstClock(next) : "—",

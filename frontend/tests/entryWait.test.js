@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { entryWaitModel, fmtRoughSpan, fmtSpan, isWaitingMacro, typicalWait } from "../src/lib/entryWait.js";
+import { entryWaitFromServer, entryWaitModel, fmtRoughSpan, fmtSpan, isWaitingMacro, typicalWait } from "../src/lib/entryWait.js";
 
 const H = 3_600_000;
 const T0 = Date.UTC(2026, 9, 16, 0, 0); // 09:00 KST
@@ -109,4 +109,20 @@ test("서버 entry_wait 를 화면 모델로 옮긴다", async () => {
   assert.match(m.priceLine.label, /사는 선 209\.52 · \+1\.0%/);
   assert.equal(m.typical.avgMs, 4 * 3_600_000);
   assert.equal(entryWaitFromServer(null), null);
+});
+
+test("서버 조건 목록은 그대로 옮기고, 모르는 값은 null — 체크 목록은 두 줄 이상일 때만 그린다", () => {
+  const m = entryWaitFromServer({
+    rule: "I", interval: "15m", interval_label: "15분", realtime: false,
+    sentence: "가격이 26.118 위로 올라가고, 마감가가 20봉 평균 26.523 위면 사요.", distance: "", gap: "평균선 −1.2%",
+    touched: true, reached: false,
+    conditions: [
+      { key: "line", label: "이번 봉 사는 선 26.118 넘기", now: "고가 26.26", ok: true, at_close: false },
+      { key: "ma", label: "마감가가 20봉 평균 26.523 위", now: "지금 26.2 · −1.2%", ok: false, at_close: true },
+      { key: "x", label: "", ok: true },
+    ],
+  }, { started_at: "2026-10-17T01:37:35Z", last_price: 26.2 });
+  assert.deepEqual(m.conditions.map((row) => [row.key, row.ok, row.atClose]), [["line", true, false], ["ma", false, true]]);
+  assert.equal(m.reached, false);
+  assert.deepEqual(entryWaitFromServer({ rule: "B", sentence: "x" }).conditions, []);
 });

@@ -7,9 +7,33 @@ import { fmtPrice, fmtQty } from "../lib/format.js";
 import { formatQuoteAmount } from "../lib/exchanges.js";
 import { useRunnerDownload } from "../lib/runnerDownload.js";
 import EntryWaitCard from "./EntryWaitCard.jsx";
+import { Icon } from "./icons.jsx";
 import {
   exitRules, fmtSignedMoney, fmtSignedPct, gaugeModel, headlineReturn, runningFor, toneOf, unrealizedMoney,
 } from "../lib/positionExits.js";
+
+// 평단 · 수량 · 실행기 같은 세부 정보는 처음엔 접어 둔다 — 채팅(껄무새 중계)이 오른쪽 열을 넓게 쓰게.
+// 펼친 상태는 이 브라우저에만 기억한다(개인 편의).
+const DETAILS_KEY = "ggp.agent.position.details";
+
+function useDetailsOpen(initial = false) {
+  const [open, setOpen] = useState(() => {
+    try {
+      const stored = window.localStorage.getItem(DETAILS_KEY);
+      return stored ? stored === "open" : initial;
+    } catch {
+      return initial;
+    }
+  });
+  function toggle() {
+    setOpen((current) => {
+      const next = !current;
+      try { window.localStorage.setItem(DETAILS_KEY, next ? "open" : "closed"); } catch { /* 저장소를 못 쓰면 이 화면에서만 */ }
+      return next;
+    });
+  }
+  return [open, toggle];
+}
 
 function useMinuteTick() {
   const [now, setNow] = useState(() => Date.now());
@@ -47,9 +71,10 @@ export function positionState(session) {
   return { label: "무포지션 · 대기 중", dot: "is-running" };
 }
 
-export default function PositionStrip({ session, macro, waitModel = null }) {
+export default function PositionStrip({ session, macro, waitModel = null, defaultDetailsOpen = false }) {
   const now = useMinuteTick();
   const download = useRunnerDownload();
+  const [detailsOpen, toggleDetails] = useDetailsOpen(defaultDetailsOpen);
   if (!session) return null;
   const running = session.status === "running";
   const inPosition = running && Boolean(session.in_position);
@@ -104,7 +129,14 @@ export default function PositionStrip({ session, macro, waitModel = null }) {
         </div>
       </div>
       )}
-      <dl className="agent-position-table">
+      <button type="button" className="agent-position-toggle" aria-expanded={detailsOpen}
+        aria-controls={`agent-position-details-${session.session_id}`} onClick={toggleDetails}>
+        <span>{detailsOpen ? "자세히 접기" : "평단 · 수량 · 실행기 자세히"}</span>
+        {!detailsOpen && newer ? <b className="num">새 실행기 v{download.appVersion || download.version}</b> : null}
+        <Icon name={detailsOpen ? "chevronUp" : "chevronDown"} size={14} className="ui-icon-inline" />
+      </button>
+      {detailsOpen ? (
+      <dl className="agent-position-table" id={`agent-position-details-${session.session_id}`}>
         <div><dt>평단</dt><dd className="num">{inPosition ? fmtPrice(session.entry_price) : "—"}</dd></div>
         <div><dt>수량</dt><dd className="num">{inPosition ? fmtQty(session.position_qty, session.symbol) : "—"}</dd></div>
         <div><dt>현재가</dt><dd className="num">{Number(session.last_price) > 0 ? fmtPrice(session.last_price) : "—"}</dd></div>
@@ -120,6 +152,7 @@ export default function PositionStrip({ session, macro, waitModel = null }) {
         ) : null}
         <div className="is-wide"><dt>청산 기준</dt><dd>{rules.summary}</dd></div>
       </dl>
+      ) : null}
     </section>
   );
 }

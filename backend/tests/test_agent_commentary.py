@@ -368,3 +368,44 @@ def test_no_offline_bubble_while_the_server_itself_just_started():
     assert not [s for s in says if s["kind"] == "problem"] and not state["offline_since"]
     later, _ = ac.decide(state, facts(last_hb_ms=NOW - 90_000, boot_grace_until_ms=NOW - 1), now_ms=NOW)
     assert [s["key"] for s in later] == [f"offline:{NOW - 90_000}"], "서버가 자리 잡은 뒤의 끊김은 그대로 알린다"
+
+
+def _wait(bar_close, *, touched=True, reached=False, last=None):
+    conds = [{"key": "line", "label": "이번 봉 사는 선 26.118 넘기", "now": "고가 26.26", "ok": touched, "at_close": False},
+             {"key": "ma", "label": "20봉 평균 26.523 위에서 끝나기", "now": "−1.2%", "ok": reached, "at_close": True,
+              "wait": "20봉 평균 26.523 위에서 끝나야 사요"}]
+    return {"rule": "I", "realtime": False, "sentence": "26.523 위에서 끝나면 사요", "headline": "26.523 위에서 끝나면 사요",
+            "distance": "", "gap": "", "touched": touched, "reached": reached, "conditions": conds, "meter": None,
+            "next_check_ms": bar_close, "last_bar": last}
+
+
+def test_wait_says_why_it_held_and_then_that_the_bar_closed_without_buying():
+    """FORT 10/17 — '마감되면 사요' 뒤에 말없이 다음 사는 선으로 넘어가 버그처럼 보였다."""
+    state = started_state()
+    bar = NOW + 5 * MIN
+    says, state = ac.decide(state, facts(symbol="KRW-FORT", rule="I", last_price=26.2), wait=_wait(bar), now_ms=NOW)
+    held = [s for s in says if s["kind"] == "wait"]
+    assert [s["key"] for s in held] == [f"wait:held:{bar}"]
+    assert held[0]["hl"] == "사는 선은 넘었는데, 아직 안 사요"
+    assert held[0]["subs"][0] == {"b": "20봉 평균 26.523 위에서 끝나야 사요", "t": " · 지금 26.2원"}
+
+    after = _wait(bar + 15 * MIN, touched=False, last={"at_ms": bar, "entered": False,
+                                                       "why": "26.05로 끝나서 20봉 평균 26.523에 못 미쳤어요"})
+    says, state = ac.decide(state, facts(symbol="KRW-FORT", rule="I", last_price=26.01), wait=after, now_ms=bar + 30_000)
+    miss = [s for s in says if s["kind"] == "wait"]
+    assert [s["key"] for s in miss] == [f"wait:miss:{bar}"]
+    assert miss[0]["hl"] == "이번 봉은 안 샀어요"
+    assert miss[0]["subs"][0] == {"b": "26.05로 끝나서 20봉 평균 26.523에 못 미쳤어요", "t": ""}
+    assert miss[0]["subs"][1]["t"] == "새 봉 · 26.523 위에서 끝나면 사요"
+    again, _ = ac.decide(state, facts(symbol="KRW-FORT", rule="I", last_price=26.01), wait=after, now_ms=bar + 40_000)
+    assert not [s for s in again if s["kind"] == "wait"], "안 샀다는 말은 한 번만"
+
+
+def test_wait_reached_bar_that_entered_says_nothing_more():
+    state = started_state()
+    bar = NOW + 5 * MIN
+    says, state = ac.decide(state, facts(rule="I"), wait=_wait(bar, reached=True), now_ms=NOW)
+    assert [s["hl"] for s in says if s["kind"] == "wait"] == ["사는 선을 넘었어요! 이대로 끝나면 사요"]
+    done = _wait(bar + 15 * MIN, touched=False, last={"at_ms": bar, "entered": True, "why": ""})
+    says, state = ac.decide(state, facts(rule="I"), wait=done, now_ms=bar + 30_000)
+    assert not [s for s in says if s["kind"] == "wait"] and "wait_open" not in state

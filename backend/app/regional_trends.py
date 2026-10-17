@@ -133,6 +133,7 @@ def store_items(items, *, now_ms, db):
     """Upsert a fixed, sanitized canonical projection. Caller owns lease/commit."""
     registry = _registry()
     inserted = 0
+    prepared = []
     for raw in items[:500]:
         source_id = str(raw.get("source_id") or "")
         source = registry.get(source_id)
@@ -158,10 +159,16 @@ def store_items(items, *, now_ms, db):
                                          if re.fullmatch(r"[A-Z0-9]{1,30}", str(asset))})[:30]
         identity = sha256(news_identity(item).encode()).hexdigest()[:20]
         item["id"] = identity
-        row = db.get(TrendArticle, identity)
+        prepared.append((identity, item, source, source_id, stamp))
+    # 기존 행은 한 번에 읽는다(운영 DB 왕복 약 80ms — 글마다 읽으면 수집 한 바퀴가 길어진다).
+    existing = _existing_rows(db, [identity for identity, *_rest in prepared])
+    links = []
+    for identity, item, source, source_id, stamp in prepared:
+        row = existing.get(identity)
         if row is None:
             row = TrendArticle(id=identity, region=source["publisher_region"], source_id=source_id,
                                published_ms=int(stamp), collected_ms=now_ms, item_json="{}")
+            existing[identity] = row
             inserted += 1
         else:
             old = json.loads(row.item_json)
@@ -176,8 +183,9 @@ def store_items(items, *, now_ms, db):
                 item.update(excerpt=old["excerpt"], summary_status="source_excerpt")
         row.published_ms = int(stamp)
         row.collected_ms = now_ms
-        _write_row(db, row, item)
+        links.append(_write_row(db, row, item))
     db.flush()
+    _write_links(db, links)
     _trim(db, now_ms)
     db.exec(delete(TrendSummary).where(TrendSummary.day < (
         datetime.now(timezone.utc) - timedelta(days=14)).date().isoformat()))
@@ -191,12 +199,29 @@ def _projection(item):
 
 
 def _write_row(db, row, item):
-    """글 저장 + 보이는 글이면 코인 연결(feed_index)까지 — 읽기는 이 둘만 본다."""
+    """글 저장. 코인 연결(보이는 글만)은 돌려주고 호출하는 쪽이 _write_links 로 한 번에 쓴다."""
     row.visible, row.search_text = _projection(item)
     row.item_json = json.dumps(item, ensure_ascii=False)
     db.add(row)
-    feed_index.replace_assets(db, feed_index.feed_key(row.region, row.content_type), row.id,
-                              item.get("asset_symbols") if row.visible else [], row.published_ms)
+    return (feed_index.feed_key(row.region, row.content_type),
+            (row.id, item.get("asset_symbols") if row.visible else [], row.published_ms))
+
+
+def _write_links(db, links):
+    by_feed = {}
+    for feed, entry in links:
+        by_feed.setdefault(feed, []).append(entry)
+    for feed, entries in by_feed.items():
+        feed_index.replace_assets_many(db, feed, entries)
+
+
+def _existing_rows(db, ids):
+    rows = {}
+    unique = list(dict.fromkeys(ids))
+    for start in range(0, len(unique), 500):
+        for row in db.exec(select(TrendArticle).where(TrendArticle.id.in_(unique[start:start + 500]))).all():
+            rows[row.id] = row
+    return rows
 
 
 def _trim(db, now_ms):
@@ -216,48 +241,71 @@ def _trim(db, now_ms):
 def reconcile_projection(db, *, limit=500):
     """검색 칸이 비어 있는 행(이번 개편 전에 저장된 글)에 보임 여부 · 검색 칸 · 코인 연결을 채운다."""
     rows = db.exec(select(TrendArticle).where(TrendArticle.search_text == "").limit(limit)).all()
+    links = []
     for row in rows:
         try:
-            _write_row(db, row, json.loads(row.item_json))
+            links.append(_write_row(db, row, json.loads(row.item_json)))
         except (ValueError, TypeError):
             continue
+    db.flush()
+    _write_links(db, links)
     return len(rows)
 
 
 def store_square_items(items, *, now_ms, db):
     """Square 글(prepared_square_feed 가 공개 필드만 고른 것)을 해외 커뮤니티 목록에 넣는다. 코인 범위 별칭은 합친다."""
-    stored = 0
-    for item in items:
-        stamp = item.get("published_ms")
-        if not isinstance(stamp, int) or not now_ms - RETENTION_MS <= stamp <= now_ms + 300_000:
-            continue
-        row = db.get(TrendArticle, item["id"])
+    stored, links = 0, []
+    fresh = [item for item in items if isinstance(item.get("published_ms"), int)
+             and now_ms - RETENTION_MS <= item["published_ms"] <= now_ms + 300_000]
+    existing = _existing_rows(db, [item["id"] for item in fresh])
+    for item in fresh:
+        stamp = item["published_ms"]
+        row = existing.get(item["id"])
         assets = set(item.get("asset_symbols") or [])
         if row is None:
             row = TrendArticle(id=item["id"], region="global", source_id=SQUARE_SOURCE_ID,
                                content_type="community", published_ms=stamp, collected_ms=now_ms, item_json="{}")
+            existing[item["id"]] = row
         else:
             try:
                 assets |= set(json.loads(row.item_json).get("asset_symbols") or [])
             except (ValueError, TypeError):
                 pass
         row.published_ms, row.collected_ms = stamp, now_ms
-        _write_row(db, row, {**item, "asset_symbols": feed_index.clean_assets(assets), "region": "global"})
+        links.append(_write_row(db, row, {**item, "asset_symbols": feed_index.clean_assets(assets), "region": "global"}))
         stored += 1
     db.flush()
+    _write_links(db, links)
     _trim(db, now_ms)
     return stored
 
 
+def _save_square_state(db, *, status, watermark, moved, error=None):
+    now = int(time.time() * 1000)
+    row = db.get(TrendSourceState, SQUARE_SOURCE_ID) or TrendSourceState(source_id=SQUARE_SOURCE_ID, region="global")
+    row.status, row.last_attempt_ms = status, now
+    if status == "ready":
+        row.last_success_ms = now
+    row.next_attempt_ms = now + 60_000
+    row.source_json = json.dumps({"id": SQUARE_SOURCE_ID, "name": "Binance Square", "status": status,
+                                  "watermark_ms": watermark, "moved": moved,
+                                  **({"error": error} if error else {})}, ensure_ascii=False)
+    db.add(row)
+
+
 def sync_square(*, token=None, write_lock=None, cancelled=lambda: False):
-    """newsarticle 에서 바뀐 Square 글만(last_seen_ms 인덱스) 옮긴다. 첫 회는 최근 1,000행으로 채운다."""
+    """newsarticle 에서 바뀐 Square 글만(last_seen_ms 인덱스) 옮긴다. 첫 회는 최근 1,000행으로 채운다.
+
+    묶음마다 옮긴 글과 이어 읽을 자리(watermark)를 **한 트랜잭션**으로 커밋한다 — 2026-10-18 첫 배포에서 글은
+    저장됐는데 임대가 끊겨 자리를 못 써, 다음 회차가 첫 채우기(표 전체 훑기)를 되풀이할 뻔했다.
+    """
     from .prepared_square_feed import load_changed
     started = int(time.time() * 1000)
     with get_session() as db:
         state = db.get(TrendSourceState, SQUARE_SOURCE_ID)
         meta = json.loads(state.source_json) if state else {}
     watermark = meta.get("watermark_ms")
-    moved, status, error = 0, "ready", None
+    moved = 0
     try:
         for batch in range(SQUARE_BATCHES):
             if cancelled():
@@ -266,40 +314,36 @@ def sync_square(*, token=None, write_lock=None, cancelled=lambda: False):
             # 첫 채우기는 표를 한 번 훑어 길 수 있다(운영 5~12초) — 그동안 임대를 연장한다.
             loaded = (_leased_call(SCOPE, token, lambda: load_changed(since), write_lock=write_lock)
                       if token else load_changed(since))
+            if since is None:
+                next_mark = started  # 첫 채우기 — 이 뒤에 바뀐 행은 다음 회차가 이어 읽는다
+            else:
+                next_mark = max(watermark, loaded["max_last_seen_ms"] or watermark)
             with write_lock or nullcontext(), get_session() as db:
                 if cancelled():
                     return {"status": "cancelled"}
                 if token:
+                    renew_work(SCOPE, token)
                     _fence(db, token)
                 moved += store_square_items(loaded["items"], now_ms=int(time.time() * 1000), db=db)
+                _save_square_state(db, status="ready", watermark=next_mark, moved=moved)
                 db.commit()
-            if since is None:
-                watermark = started  # 첫 채우기 — 이 뒤에 바뀐 행은 다음 회차가 이어 읽는다
-            elif loaded["max_last_seen_ms"] is not None:
-                watermark = max(watermark, loaded["max_last_seen_ms"])
+            watermark = next_mark
             if not loaded["truncated"]:
                 break
     except Exception as exc:
         if "lease lost" in str(exc):
             raise  # 다른 수집기가 임대를 가져갔다 — 상태도 쓰지 않는다
-        status, error = "error", type(exc).__name__
+        error = type(exc).__name__
         logger.warning("square sync deferred type=%s", error)
-    now = int(time.time() * 1000)
-    with write_lock or nullcontext(), get_session() as db:
-        if cancelled():
-            return {"status": "cancelled"}
-        row = db.get(TrendSourceState, SQUARE_SOURCE_ID) or TrendSourceState(source_id=SQUARE_SOURCE_ID, region="global")
-        row.status, row.last_attempt_ms = status, now
-        if status == "ready":
-            row.last_success_ms = now
-        row.next_attempt_ms = now + 60_000
-        row.source_json = json.dumps({"id": SQUARE_SOURCE_ID, "name": "Binance Square", "status": status,
-                                      "watermark_ms": watermark, "moved": moved,
-                                      **({"error": error} if error else {})}, ensure_ascii=False)
-        db.add(row)
-        db.commit()
+        with write_lock or nullcontext(), get_session() as db:
+            if cancelled():
+                return {"status": "cancelled"}
+            _save_square_state(db, status="error", watermark=watermark, moved=moved, error=error)
+            db.commit()
+        _meta.clear()
+        return {"status": "error", "moved": moved}
     _meta.clear()
-    return {"status": status, "moved": moved}
+    return {"status": "ready", "moved": moved}
 
 
 def _filters(region, content_type, *, q, assets, selected, source, now_ms):

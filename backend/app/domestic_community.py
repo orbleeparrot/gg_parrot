@@ -482,18 +482,29 @@ def collect_once(*, now_ms=None, stop_event=None, write_lock=None) -> dict:
                 state.failures = 0 if successes else min(state.failures + 1, 10)
             if successes:
                 state.last_success_ms = observed_ms
+            # 기존 글은 한 번에 읽고 코인 연결도 한 번에 쓴다(운영 DB 왕복 약 80ms — 글마다 하면 임대 2분을 넘길 수 있다).
+            ids = list(dict.fromkeys(item["id"] for item in items))
+            existing = {}
+            for start in range(0, len(ids), 500):
+                for found in db.exec(select(DomesticCommunityItem).where(
+                        DomesticCommunityItem.id.in_(ids[start:start + 500]))).all():
+                    existing[found.id] = found
+            links = []
             for item in items:
-                row = db.get(DomesticCommunityItem, item["id"])
+                row = existing.get(item["id"])
                 if row is None:
                     row = DomesticCommunityItem(**{k: item[k] for k in
                           ("id", "title", "url", "source", "published", "published_ms")},
                           collected_ms=observed_ms, asset_symbols_json=json.dumps(item["asset_symbols"]))
+                    existing[row.id] = row
                 else:
                     row.title = item["title"]
                     row.asset_symbols_json = json.dumps(item["asset_symbols"])
                 db.add(row)
-                # 글–코인 연결 — 읽기는 이걸로 거래소 상장 · 코인 · 검색어를 SQL 안에서 거른다.
-                feed_index.replace_assets(db, FEED, row.id, item["asset_symbols"], row.published_ms)
+                links.append((row.id, item["asset_symbols"], row.published_ms))
+            db.flush()
+            # 글–코인 연결 — 읽기는 이걸로 거래소 상장 · 코인 · 검색어를 SQL 안에서 거른다.
+            feed_index.replace_assets_many(db, FEED, links)
             db.add(state)
             cutoff = observed_ms - RETENTION_SECONDS * 1000
             db.exec(delete(DomesticCommunityItem).where(DomesticCommunityItem.published_ms < cutoff))
@@ -527,11 +538,13 @@ def reconcile_assets(db, *, limit=MAX_ITEMS) -> int:
         DomesticCommunityItem.asset_symbols_json != "[]",
         ~exists(select(FeedAsset.item_id).where(FeedAsset.feed == FEED, FeedAsset.item_id == DomesticCommunityItem.id)),
     ).limit(limit)).all()
+    entries = []
     for item_id, published_ms, assets_json in missing:
         try:
-            feed_index.replace_assets(db, FEED, item_id, json.loads(assets_json), published_ms)
+            entries.append((item_id, json.loads(assets_json), published_ms))
         except (ValueError, TypeError):
             continue
+    feed_index.replace_assets_many(db, FEED, entries)
     return len(missing)
 
 

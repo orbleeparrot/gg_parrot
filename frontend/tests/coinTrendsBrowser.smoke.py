@@ -169,6 +169,11 @@ def main():
                     expect(page.get_by_role("heading", name="시장·규제 한눈에")).to_be_visible()
                     expect(page.get_by_text("커뮤니티 의견 · 사실 확인 안 됨", exact=False).first).to_be_visible()
                     expect(page.locator(".ct-lane")).to_have_count(3)
+                    # 구역 제목 아래 설명 줄은 두 구역이 같은 크기 · 굵기 · 색 · 제목과의 간격(2026-10-17 지적).
+                    subs = page.evaluate("""() => [...document.querySelectorAll('.ct-sec-sub')].map(e => {
+                      const s = getComputedStyle(e), title = e.closest('section').querySelector('.ct-sec-title');
+                      return [s.fontSize, s.fontWeight, s.color, Math.round(e.getBoundingClientRect().top - title.getBoundingClientRect().bottom)]; })""")
+                    assert len(subs) == 2 and subs[0] == subs[1], subs
                     marquee = page.locator(".site-marquee")
                     expect(marquee.locator("img")).to_have_attribute("alt", "업비트")
                     expect(marquee.locator("button").first).to_contain_text("3,512원")
@@ -179,8 +184,23 @@ def main():
                         lines = page.evaluate("[...document.querySelectorAll('.ct-market, .ct-side')].map(e => Math.round(e.getBoundingClientRect().left))")
                         assert lines[0] == lines[1], lines
                     race = column_left(page, ".ct-lanes-head")
+                    # 같은 역할은 같은 규칙(2026-10-17 점검): 순위 줄 높이 · 코인 이름 · 칸 맞춤 · 조작 글자 크기.
+                    same = page.evaluate("""() => {
+                      const st = (sel) => { const e = document.querySelector(sel); if (!e) return null; const s = getComputedStyle(e);
+                        return { h: Math.round(e.getBoundingClientRect().height), size: s.fontSize, weight: s.fontWeight, top: Math.round(e.getBoundingClientRect().top) }; };
+                      return { lane: st('.ct-lane'), laneName: st('.ct-lane-name b'), search: st('.ct-search-field'), tabs: st('.ct-side-tabs'),
+                               select: st('.ct-select select'), seg: st('.ct-side-tabs .seg-item'), note: st('.ct-note'), briefNote: st('.ct-brief-note') }; }""")
+                    assert same["lane"]["h"] == 56, same
+                    assert same["search"]["h"] == 48, same  # DESIGN.md text-field 규격
+                    if same["select"]:
+                        assert same["select"]["size"] == same["seg"]["size"], same
+                    if same["note"]:
+                        assert (same["note"]["size"], same["note"]["weight"]) == (same["briefNote"]["size"], same["briefNote"]["weight"]), same
                     page.locator(".ct-sort .seg-item").nth(1).click()
                     expect(page.locator(".ct-row")).to_have_count(20)
+                    row = page.evaluate("""() => { const e = document.querySelector('.ct-row'), b = e.querySelector('.ct-row-name b');
+                      return [Math.round(e.getBoundingClientRect().height), getComputedStyle(b).fontWeight, getComputedStyle(b).fontSize]; }""")
+                    assert row[0] == same["lane"]["h"] and row[1] == same["laneName"]["weight"] and row[2] == same["laneName"]["size"], (row, same)
                     assert column_left(page, ".ct-thead") == race, (race, column_left(page, ".ct-thead"))
                     height = page.evaluate("document.documentElement.scrollHeight")
                     page.evaluate("document.querySelector('.ct-rank-scroll').scrollTop = 1e6")

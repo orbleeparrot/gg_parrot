@@ -324,7 +324,8 @@ def test_offset_pages_results_and_mentions_ignore_display_filters():
 
 
 def test_readers_get_the_prepared_community_list_without_a_full_reread(monkeypatch):
-    # 2026-10-18: 20초만 지나도 다음 사람이 최대 2,000건 전체 읽기를 기다렸다.
+    # 2026-10-18: 20초만 지나도 다음 사람이 최대 2,000건 전체 읽기를 기다렸다. 수집기가 매분 데우므로
+    # 읽기용 목록은 길어야 1분 남짓 묵는다 — 그 사이엔 다시 읽지 않고 바로 준다.
     stored(items=[{}])
     clock = [1000.0]
     monkeypatch.setattr(community._responses, "clock", lambda: clock[0])
@@ -334,7 +335,7 @@ def test_readers_get_the_prepared_community_list_without_a_full_reread(monkeypat
     monkeypatch.setattr(community, "_read_snapshot", lambda: reads.append(1) or original())
     import app.cache_runtime as cache_runtime
     monkeypatch.setattr(cache_runtime, "_submit", lambda job: True)  # 뒤에서 새로 만드는 일은 멈춰 둔다
-    clock[0] += 5 * 60
+    clock[0] += 100
     result = community.get_domestic_community("upbit")
     assert reads == [] and len(result["items"]) == 1
     assert result["collection"]["status"] == "ready" and not result.get("stale")
@@ -348,3 +349,24 @@ def test_community_collection_loop_warms_the_reader(monkeypatch):
     monkeypatch.setattr(runtime.stop, "wait", lambda _seconds: runtime.stop.set())
     runtime.run()
     assert calls == ["warm"]
+
+
+def test_reader_never_serves_a_list_whose_exchange_listings_have_expired(monkeypatch):
+    # 2026-10-18: 낡은 값 창을 10분으로 두자, 5분 넘게 아무도 안 본 뒤 첫 사람에게 상장 목록이 만료된 읽기용 목록이
+    # 나가 글이 0건으로 보였다. 창은 상장 목록 유효기간보다 짧아야 한다.
+    assert community.READ_STALE_SECONDS + community.READ_FRESH_SECONDS + community.REFRESH_SECONDS \
+        < community.LISTING_MAX_AGE_SECONDS
+    real = int(time.time() * 1000)
+    stored(items=[{}], now_ms=real)
+    clock = [1000.0]
+    monkeypatch.setattr(community._responses, "clock", lambda: clock[0])
+    community.warm_reader()
+    later = real + 6 * 60_000
+    with database.get_session() as db:  # 그사이 수집기는 DB 의 상장 목록을 새로 받아 두었다
+        state = db.get(community.DomesticCommunityState, community.SCOPE)
+        state.listings_json = json.dumps(listings(later))
+        db.add(state)
+        db.commit()
+    clock[0] += 6 * 60
+    result = community.get_domestic_community("upbit", now_ms=later)
+    assert len(result["items"]) == 1

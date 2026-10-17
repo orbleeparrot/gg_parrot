@@ -305,3 +305,19 @@ def test_stop_fences_late_collector_publication_and_lease_finish(monkeypatch):
     with database.get_session() as db:
         assert db.get(community.DomesticCommunityState, community.SCOPE) is None
         assert db.exec(select(community.DomesticCommunityItem)).all() == []
+
+
+def test_offset_pages_results_and_mentions_ignore_display_filters():
+    stored(items=[{"id": f"p{n}", "title": f"비트코인 이야기 {n}", "assets": ["BTC"] if n % 2 else ["BTC", "ETH"]}
+                  for n in range(5)])
+    first = community.get_domestic_community("upbit", limit=2)
+    second = community.get_domestic_community("upbit", limit=2, offset=2)
+    assert first["total"] == second["total"] == 5
+    assert len(first["items"]) == len(second["items"]) == 2
+    assert not {i["id"] for i in first["items"]} & {i["id"] for i in second["items"]}
+    filtered = community.get_domestic_community("upbit", "KRW-ETH", limit=1)
+    assert filtered["total"] == 3
+    # 언급 수는 코인·검색 필터와 상관없이 같은 값 — 순위표의 '언급' 열이 쓰는 숫자다.
+    assert filtered["mentions"] == first["mentions"] == {"BTC": 5, "ETH": 3}
+    with pytest.raises(ValueError, match="시작 위치"):
+        community.get_domestic_community("upbit", offset=-1)

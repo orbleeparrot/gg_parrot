@@ -217,7 +217,7 @@ def _matches(item, q, assets, selected):
                                             ("title", "original_title", "excerpt")).casefold()
 
 
-def get_news(region, *, q="", assets=None, selected=None, source=None, limit=100):
+def get_news(region, *, q="", assets=None, selected=None, source=None, limit=100, offset=0):
     if region not in {"kr", "global"}:
         raise ValueError("unsupported region")
     snapshot, cache_state = _responses.get_or_load(region, lambda: _read_region(region), ttl=10, stale_ttl=20)
@@ -237,7 +237,7 @@ def get_news(region, *, q="", assets=None, selected=None, source=None, limit=100
                now-row["last_success_ms"] > 2*REFRESH_SECONDS*1000 for row in sources)
     if status == "ready" and stale:
         status = "stale"
-    return {"region": region, "items": items[:limit], "total": len(items), "limit":limit,
+    return {"region": region, "items": items[offset:offset+limit], "total": len(items), "limit":limit, "offset":offset,
             "collection": {"status":status, "sources":sources}, "stale":stale,
             "translation":{"status":"partial" if any(i.get("translation_status") == "pending" for i in snapshot["items"]) else "ready",
                            "pending_count":sum(i.get("translation_status") == "pending" for i in snapshot["items"])},
@@ -488,13 +488,17 @@ def combined_market_overview():
     return None
 
 
-def _global_community(*, q, assets, selected, source, limit):
+def _global_community(*, q, assets, selected, source, limit, offset=0):
     """Search one cached safe projection; source/type are filtered in SQL."""
     from .prepared_square_feed import read_prepared_square
     snapshot = read_prepared_square()
+    mentions = {}
+    for item in snapshot["items"]:
+        for asset in set(item.get("asset_symbols") or []):
+            mentions[asset] = mentions.get(asset, 0) + 1
     items = [item for item in snapshot["items"]
              if (not source or source == "binance_square") and _matches(item,q,assets,selected)]
-    return {"items":items[:limit], "total":len(items),
+    return {"items":items[offset:offset+limit], "total":len(items), "offset":offset, "mentions":mentions,
             "collection":{"status":snapshot["status"]}, "coverage":snapshot["coverage"],
             "stale":snapshot["stale"],
             "search_scope":"existing_prepared_square_posts", "refresh_seconds":30}
@@ -507,8 +511,12 @@ def trends_feed(response: Response, region: Region = "kr", exchange: str | None 
                 content_type: Literal["all","article","community","official"] = "all",
                 sort: market_trends.Sort = "turnover", direction: market_trends.Direction = "all",
                 min_turnover: float = Query(0, ge=0, allow_inf_nan=False),
-                limit: int = Query(100, ge=1, le=100)):
+                limit: int = Query(100, ge=1, le=100), offset: int = Query(0, ge=0, le=domestic_community.MAX_READ_OFFSET),
+                sections: str = Query("rankings,news,community", max_length=40)):
     exchange = exchange or ("upbit" if region == "kr" else "binance")
+    wanted = {part.strip() for part in sections.split(",") if part.strip()}
+    if not wanted or not wanted <= {"rankings", "news", "community"}:
+        raise HTTPException(422, "sections 는 rankings·news·community 중에서 고르세요.")
     if exchange not in ({"upbit","bithumb"} if region == "kr" else {"binance"}):
         raise HTTPException(422, "국내는 업비트·빗썸, 해외는 바이낸스를 선택하세요.")
     valid_sources = {row["id"] for row in source_registry(region)}
@@ -521,42 +529,50 @@ def trends_feed(response: Response, region: Region = "kr", exchange: str | None 
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from None
     selected = (symbol[4:] if region == "kr" else news.asset_from_market_symbol(symbol)) if symbol else None
-    try:
-        full_rankings = market_trends.get_market_trends(exchange=exchange, sort=sort, limit=500)
-        assets = market_trends.resolve_assets(q, exchange, snapshot=full_rankings)
-        rankings = market_trends.filter_rankings(full_rankings, q=q, min_turnover=min_turnover,
-                                                direction=direction, limit=500)
-    except Exception:
-        assets = []
-        rankings = {"exchange":exchange, "region":region, "quote_currency":"KRW" if region == "kr" else "USDT",
-                    "status":"error", "coins":[], "message":"거래소 시세를 확인하지 못했어요."}
+    # 필요한 구역만 계산한다 — 글 목록을 스크롤로 이어 받을 때(sections=news 등) 시세 500개를 다시 보내지 않는다.
+    # 검색어가 있으면 코인 이름 해석에 순위 자료가 필요하므로 rankings 를 안 받아도 내부에서 읽는다.
+    rankings, assets = None, []
+    if "rankings" in wanted or q.strip():
+        try:
+            full_rankings = market_trends.get_market_trends(exchange=exchange, sort=sort, limit=500)
+            assets = market_trends.resolve_assets(q, exchange, snapshot=full_rankings)
+            rankings = market_trends.filter_rankings(full_rankings, q=q, min_turnover=min_turnover,
+                                                    direction=direction, limit=500)
+        except Exception:
+            rankings = {"exchange":exchange, "region":region, "quote_currency":"KRW" if region == "kr" else "USDT",
+                        "status":"error", "coins":[], "message":"거래소 시세를 확인하지 못했어요."}
     # Alias lookup is local prepared metadata; works even when the ranking filter
     # (e.g. minimum turnover) removes the searched coin from the table.
     for asset, name in news._COIN_KO.items():
         if q.strip() and q.strip().casefold() in {asset.casefold(), name.casefold()}:
             assets.append(asset)
-    try:
-        articles = get_news(region,q=q,assets=assets,selected=selected,source=source,limit=limit)
-    except Exception:
-        articles = {"items":[], "collection":{"status":"error"}, "overview":None,
-                    "summary":{"status":"unavailable"}, "message":"저장된 뉴스를 확인하지 못했어요."}
-    try:
-        if region == "kr":
-            community = domestic_community.get_domestic_community(exchange, symbol, q=q,
-                source=source if source in community_sources else None, limit=limit)
-            if source and source not in community_sources:
-                community.update(items=[], total=0)
-        else:
-            community = _global_community(q=q,assets=assets,selected=selected,source=source,limit=limit)
-    except Exception:
-        community = {"items":[], "collection":{"status":"error"}, "message":"저장된 커뮤니티 글을 확인하지 못했어요."}
-    if content_type not in {"all","article"}:
-        articles.update(items=[], total=0)
-    if content_type not in {"all","community"}:
-        community.update(items=[], total=0)
+    articles = community = None
+    if "news" in wanted:
+        try:
+            articles = get_news(region,q=q,assets=assets,selected=selected,source=source,limit=limit,offset=offset)
+        except Exception:
+            articles = {"items":[], "collection":{"status":"error"}, "overview":None,
+                        "summary":{"status":"unavailable"}, "message":"저장된 뉴스를 확인하지 못했어요."}
+        if content_type not in {"all","article"}:
+            articles.update(items=[], total=0)
+    if "community" in wanted:
+        try:
+            if region == "kr":
+                community = domestic_community.get_domestic_community(exchange, symbol, q=q,
+                    source=source if source in community_sources else None, limit=limit, offset=offset)
+                if source and source not in community_sources:
+                    community.update(items=[], total=0)
+            else:
+                community = _global_community(q=q,assets=assets,selected=selected,source=source,limit=limit,offset=offset)
+        except Exception:
+            community = {"items":[], "collection":{"status":"error"}, "message":"저장된 커뮤니티 글을 확인하지 못했어요."}
+        if content_type not in {"all","community"}:
+            community.update(items=[], total=0)
+    if "rankings" not in wanted:
+        rankings = None
     response.headers["Cache-Control"] = "public, max-age=5"
     return {"region":region, "exchange":exchange, "query":q, "symbol":symbol,
-            "rankings":rankings, "news":articles, "community":community,
+            "rankings":rankings, "news":articles, "community":community, "offset":offset,
             "notices":{"items":[], "collection":{"status":"not_configured"},
                        "message":"공식 공지는 별도 소스 연결 전입니다."},
             "filters":{"source":source, "content_type":content_type},

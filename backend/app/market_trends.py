@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import math
+import os
 import re
 from typing import Literal
 
@@ -53,6 +54,7 @@ def _coin(row: dict, exchange: str) -> dict | None:
     if price is None or price <= 0 or change is None or turnover is None or turnover < 0:
         return None
     volume = _number(row.get("volume"))
+    high, low = _number(row.get("highPrice")), _number(row.get("lowPrice"))
     korean, english = _asset_names(match.group(1))
     return {"symbol": symbol, "base": match.group(1), "exchange": exchange,
             "quote_currency": "KRW" if domestic else "USDT",
@@ -60,7 +62,45 @@ def _coin(row: dict, exchange: str) -> dict | None:
             "english_name": str(row.get("english_name") or english),
             "last_price": price, "change_pct": change, "quote_volume": turnover,
             "volume": volume if volume is not None and volume >= 0 else None,
+            # 오늘 저가·고가 — 둘 다 있고 순서가 맞을 때만. 없으면 화면이 범위 막대를 그리지 않는다.
+            "high": high if high and low and 0 < low <= high else None,
+            "low": low if high and low and 0 < low <= high else None,
             "warning": bool(row.get("warning"))}
+
+
+# 경주마 — 거래대금 상위 후보 안에서 오늘 많이 오른 코인. 바이낸스는 기존 '오늘의 경주마'
+# (hotcoins.select_hot_coins)와 같은 규칙, 국내는 원화 거래대금 상위 DOMESTIC_RACER_POOL 개.
+DOMESTIC_RACER_POOL = int(os.environ.get("DOMESTIC_RACER_POOL", "50"))
+RACER_LIMIT = 30
+_RACER_EXCLUDED = hotcoins._STABLE_BASES | {"USDT"}
+
+
+def racer_rule(exchange: str) -> dict:
+    binance = exchange == "binance"
+    return {"pool": hotcoins.CANDIDATE_POOL if binance else DOMESTIC_RACER_POOL,
+            "min_turnover": hotcoins.MIN_QUOTE_VOLUME if binance else 0,
+            "change_basis": "24h" if binance else "previous_close"}
+
+
+def select_racers(coins: list[dict], exchange: str, *, limit: int = RACER_LIMIT) -> list[str]:
+    """Bases of today's racers from unfiltered ranking rows (pure; no I/O)."""
+    rule = racer_rule(exchange)
+
+    def eligible(coin):
+        if coin["base"] in _RACER_EXCLUDED or hotcoins._is_leverage_token(coin["base"]):
+            return False
+        if coin["quote_volume"] < rule["min_turnover"]:
+            return False
+        # 1.0 에 붙어 있는 페그 자산(EUR·U 등)은 바이낸스에서만 USDT 기준으로 걸러진다.
+        return not (exchange == "binance"
+                    and abs(coin["last_price"] - 1.0) <= hotcoins._PEG_PRICE_TOLERANCE
+                    and abs(coin["change_pct"]) <= hotcoins._PEG_CHANGE_TOLERANCE)
+
+    pool = sorted((coin for coin in coins if eligible(coin)),
+                  key=lambda coin: (-coin["quote_volume"], coin["symbol"]))[:max(1, rule["pool"])]
+    gainers = sorted((coin for coin in pool if coin["change_pct"] > 0),
+                     key=lambda coin: (-coin["change_pct"], -coin["quote_volume"], coin["symbol"]))
+    return [coin["base"] for coin in gainers[:max(1, limit)]]
 
 
 def _matches(coin: dict, needle: str) -> bool:
@@ -148,6 +188,8 @@ def get_market_trends(*, exchange: str = "binance", sort: Sort = "turnover",
             "stale": bool(snapshot["stale"]), "refresh_seconds": snapshot["refresh_seconds"],
             "cache_age_seconds": snapshot["cache_age_seconds"],
             "change_basis": "24h" if exchange == "binance" else "previous_close",
+            # 표시 필터(q·최소 거래대금·등락)와 상관없이 전체 후보에서 고른다.
+            "racers": select_racers(candidates, exchange), "racer_rule": racer_rule(exchange),
             "status": status, "rank_basis": "filtered_results",
             "coverage": {"source_count": source_count, "candidate_count": len(candidates),
                          "truncated": source_truncated,

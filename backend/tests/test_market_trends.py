@@ -291,3 +291,37 @@ def test_explicit_provider_cap_and_invalid_removal_are_distinct(monkeypatch, cap
     assert result["coverage"]["basis"] == expected_basis
     assert result["coverage"]["invalid_count"] == 3
     assert result["status"] == "degraded"
+
+
+def test_today_high_low_are_paired_or_absent(monkeypatch):
+    rows = [_ticker("BTC", highPrice=1100, lowPrice=900), _ticker("ETH", highPrice=900, lowPrice=1100),
+            _ticker("XRP", highPrice="nan", lowPrice=900), _ticker("SOL")]
+    monkeypatch.setattr(krw, "get_ticker_snapshot", lambda exchange: _snapshot(rows))
+    coins = {coin["base"]: coin for coin in client.get("/api/market/trends?exchange=upbit").json()["coins"]}
+    assert (coins["BTC"]["high"], coins["BTC"]["low"]) == (1100, 900)
+    for base in ("ETH", "XRP", "SOL"):
+        assert coins[base]["high"] is None and coins[base]["low"] is None
+
+
+def test_domestic_racers_are_gainers_inside_the_turnover_pool(monkeypatch):
+    monkeypatch.setattr(market_trends, "DOMESTIC_RACER_POOL", 3)
+    rows = [_ticker("BTC", change=1, turnover=900), _ticker("USDT", change=5, turnover=800),
+            _ticker("ETH", change=4, turnover=700), _ticker("XRP", change=-2, turnover=600),
+            _ticker("DOGE", change=30, turnover=500), _ticker("BTCUP", change=50, turnover=950)]
+    monkeypatch.setattr(krw, "get_ticker_snapshot", lambda exchange: _snapshot(rows))
+    payload = client.get("/api/market/trends", params={"exchange": "upbit", "q": "BTC", "min_turnover": 850}).json()
+    # 표시 필터(q·최소 거래대금)와 무관하게, 스테이블·레버리지를 뺀 거래대금 상위 3개 안의 상승 코인만.
+    assert payload["racers"] == ["ETH", "BTC"]
+    assert payload["racer_rule"] == {"pool": 3, "min_turnover": 0, "change_basis": "previous_close"}
+
+
+def test_binance_racers_follow_hot_coin_volume_floor_and_peg_rule(monkeypatch):
+    rows = [_ticker("TIA", change=20, turnover=4e7, exchange="binance"),
+            _ticker("EUR", change=0.1, turnover=9e7, exchange="binance"),
+            _ticker("U", change=0.02, turnover=8e7, exchange="binance", lastPrice=1.0006),
+            _ticker("SMALL", change=90, turnover=5e6, exchange="binance"),
+            _ticker("WLD", change=6, turnover=5e7, exchange="binance")]
+    monkeypatch.setattr(hotcoins, "get_ticker_snapshot", lambda: _snapshot(rows))
+    payload = client.get("/api/market/trends?exchange=binance").json()
+    assert payload["racers"] == ["TIA", "WLD"]
+    assert payload["racer_rule"]["min_turnover"] == hotcoins.MIN_QUOTE_VOLUME

@@ -522,8 +522,11 @@ def _read_snapshot() -> dict:
                            "asset_symbols": json.loads(row.asset_symbols_json)} for row in rows]}
 
 
+MAX_READ_OFFSET = MAX_ITEMS
+
+
 def get_domestic_community(exchange: str, symbol: str | None = None, *, q: str = "", source: str | None = None,
-                           limit: int = MAX_READ_ITEMS, now_ms=None) -> dict:
+                           limit: int = MAX_READ_ITEMS, offset: int = 0, now_ms=None) -> dict:
     if exchange not in {"upbit", "bithumb"}:
         raise ValueError("국내 커뮤니티는 업비트 또는 빗썸을 선택하세요.")
     symbol = validate_symbol(symbol, exchange) if symbol else None
@@ -533,10 +536,13 @@ def get_domestic_community(exchange: str, symbol: str | None = None, *, q: str =
         _source(source)
     if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= MAX_READ_ITEMS:
         raise ValueError("결과 수는 1~100개여야 합니다.")
+    if not isinstance(offset, int) or isinstance(offset, bool) or not 0 <= offset <= MAX_READ_OFFSET:
+        raise ValueError(f"시작 위치는 0~{MAX_READ_OFFSET} 사이여야 합니다.")
     query = _clean(q, 100).casefold()
     now_ms = int(time.time() * 1000) if now_ms is None else now_ms
     result = {"exchange": exchange, "items": [], "collection": {"status": "pending", "sources": []},
-              "refresh_seconds": REFRESH_SECONDS, "total": 0, "limit": limit, "query": _clean(q, 100),
+              "refresh_seconds": REFRESH_SECONDS, "total": 0, "limit": limit, "offset": offset, "mentions": {},
+              "query": _clean(q, 100),
               "source_filter": source, "search_scope": "prepared_headlines_last_7_days",
               "available_sources": [{"id": s["id"], "name": s["name"]} for s in SOURCES],
               "notice": "국내 공개 커뮤니티에서 선택한 거래소의 원화 상장 종목을 언급한 글입니다. 작성자의 이용 거래소와는 무관하며 투자 조언이 아닙니다."}
@@ -566,19 +572,25 @@ def get_domestic_community(exchange: str, symbol: str | None = None, *, q: str =
         raise ValueError("선택한 거래소의 원화 상장 종목이 아닙니다.")
     query_assets = {item["base"] for item in listing["items"] if query and any(query in str(item.get(key, "")).casefold()
                     for key in ("base", "symbol", "korean_name", "english_name"))}
+    mentions = result["mentions"]
     for row in snapshot["items"]:
         if row["published_ms"] < now_ms - RETENTION_SECONDS * 1000:
             continue
         assets = sorted(set(row["asset_symbols"]) & allowed)
-        if not assets or symbol and symbol[4:] not in assets:
-            continue
         source_id = source_id_for_url(row["url"])
-        if source_id is None or source and source_id != source:
+        if not assets or source_id is None:
+            continue
+        # 언급 수는 검색·코인·출처 필터와 상관없이 이 거래소에 상장된 코인 전체 기준(최근 7일).
+        for asset in assets:
+            mentions[asset] = mentions.get(asset, 0) + 1
+        if symbol and symbol[4:] not in assets:
+            continue
+        if source and source_id != source:
             continue
         if query and query not in row["title"].casefold() and not set(assets) & query_assets:
             continue
         result["total"] += 1
-        if len(result["items"]) >= limit:
+        if result["total"] <= offset or len(result["items"]) >= limit:
             continue
         result["items"].append({key: row[key] for key in ("id", "title", "url", "source", "published")})
         result["items"][-1].update(excerpt="", content_type="community", language="ko", region="kr", asset_symbols=assets,
@@ -590,9 +602,10 @@ def get_domestic_community(exchange: str, symbol: str | None = None, *, q: str =
 @router.get("/domestic")
 def domestic_community_feed(exchange: str = Query("upbit"), symbol: str | None = Query(None, max_length=24),
                             q: str = Query("", max_length=100), source: str | None = Query(None, max_length=40),
-                            limit: int = Query(MAX_READ_ITEMS, ge=1, le=MAX_READ_ITEMS)):
+                            limit: int = Query(MAX_READ_ITEMS, ge=1, le=MAX_READ_ITEMS),
+                            offset: int = Query(0, ge=0, le=MAX_READ_OFFSET)):
     try:
-        return get_domestic_community(exchange, symbol, q=q, source=source, limit=limit)
+        return get_domestic_community(exchange, symbol, q=q, source=source, limit=limit, offset=offset)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
 

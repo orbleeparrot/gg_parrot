@@ -329,3 +329,18 @@ def test_source_catalog_exposes_news_and_community_without_database_or_fetch(mon
     global_sources = client.get("/api/trends/sources?region=global").json()
     assert "binance_square" in {row["id"] for row in global_sources["sources"]}
     assert global_sources["quote_currency"] == "USDT"
+
+
+def test_paged_sections_skip_rankings_and_slice_lists(monkeypatch):
+    now = int(time.time() * 1000)
+    publish([article(title=f"비트코인 기사 {n}", url=f"https://www.blockmedia.co.kr/archives/{200 + n}",
+                     published=trends.iso(now - n * 1000), published_ms=now - n * 1000) for n in range(5)])
+    monkeypatch.setattr(trends.market_trends, "get_market_trends", lambda **kw: pytest.fail("rankings not requested"))
+    from app.main import app
+    client = TestClient(app)
+    data = client.get("/api/trends", params={"region": "kr", "sections": "news", "limit": 2, "offset": 2}).json()
+    assert data["rankings"] is None and data["community"] is None
+    assert [item["title"] for item in data["news"]["items"]] == ["비트코인 기사 2", "비트코인 기사 3"]
+    assert data["news"]["total"] == 5 and data["news"]["offset"] == 2 and data["offset"] == 2
+    for bad in ("", "rankings,secrets", "everything"):
+        assert client.get("/api/trends", params={"region": "kr", "sections": bad}).status_code == 422

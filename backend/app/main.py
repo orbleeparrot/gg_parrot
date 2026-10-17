@@ -2393,7 +2393,8 @@ def coin_logo(base: str) -> Response:
     """Same-origin copy of Binance's public coin logo so the share card can be captured as an image."""
     png = symbols_mod.coin_logo_png(base)
     if png is None:
-        raise HTTPException(status_code=404, detail="logo not found")
+        # 없는 로고도 브라우저가 한동안 다시 묻지 않게 한다(서버도 6시간 기억한다).
+        raise HTTPException(status_code=404, detail="logo not found", headers={"Cache-Control": "public, max-age=3600"})
     return Response(content=png, media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
 
 

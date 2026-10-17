@@ -1,13 +1,18 @@
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { fmtPrice } from "../lib/format.js";
 import useHotCoins from "../hooks/useHotCoins.js";
-import { useTrendsExchange } from "../lib/trendsExchange.js";
 import { EXCHANGE_META, formatPrice } from "../features/coinTrends/trendsFormat.js";
+import {
+  MARQUEE_EXCHANGES, MARQUEE_HOLD_MS, MARQUEE_STILL_MS, nextMarqueeExchange, shownMarqueeExchange,
+} from "../lib/marqueeRotation.js";
 
-// 코인동향에서 고른 거래소를 따라간다 — 국내는 코인 순위의 경주마 탭과 같은 목록(원화), 바이낸스는 USDT.
+// 하단 '오늘의 경주마' 띠 — 업비트 → 빗썸 → 바이낸스를 차례로 돌린다. 한 거래소의 TOP10 이 한 바퀴 다 지나가면
+// 5초 뒤 다음 거래소로 넘어간다(마우스를 올려 멈춘 동안은 넘기지 않는다). 국내는 코인동향 경주마와 같은 목록(원화).
 const LOGO_SRC = { upbit: "/exchanges/upbit.png", bithumb: "/exchanges/bithumb.png", binance: "/exchanges/binance.svg" };
 
 const priceText = (coin, krw) => (krw ? `${formatPrice(coin.last_price, "KRW")}원` : `$${fmtPrice(coin.last_price)}`);
+const reducedMotion = () => typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 function Item({ coin, krw, onPick, ariaHidden }) {
   const up = coin.change_pct >= 0;
@@ -31,10 +36,53 @@ function Item({ coin, krw, onPick, ariaHidden }) {
 }
 
 export default function HotCoinsMarquee() {
-  const exchange = useTrendsExchange();
-  const { coins } = useHotCoins(exchange);
+  const lists = {
+    upbit: useHotCoins("upbit").coins,
+    bithumb: useHotCoins("bithumb").coins,
+    binance: useHotCoins("binance").coins,
+  };
   const navigate = useNavigate();
+  const [current, setCurrent] = useState(MARQUEE_EXCHANGES[0]);
+  const exchange = shownMarqueeExchange(current, lists);
+  const coins = exchange ? lists[exchange] : [];
   const krw = EXCHANGE_META[exchange]?.quote === "KRW";
+
+  const listsRef = useRef(lists);
+  listsRef.current = lists;
+  const shownRef = useRef(exchange);
+  shownRef.current = exchange;
+  const holdRef = useRef(0);
+  const pausedRef = useRef(false);
+  const waitingRef = useRef(false);
+
+  const advance = useCallback(() => {
+    waitingRef.current = false;
+    const next = nextMarqueeExchange(shownRef.current, listsRef.current);
+    if (next) setCurrent(next);
+  }, []);
+  // 한 바퀴가 끝났다 → 5초 더 보여 주고 넘긴다. 그때 마우스를 올려 보고 있으면 내려놓을 때 넘긴다.
+  // 5초를 기다리는 동안 다음 바퀴가 끝나도 다시 세지 않는다.
+  const finishPass = useCallback(() => {
+    if (holdRef.current) return;
+    holdRef.current = setTimeout(() => {
+      holdRef.current = 0;
+      if (pausedRef.current) waitingRef.current = true;
+      else advance();
+    }, MARQUEE_HOLD_MS);
+  }, [advance]);
+  const pause = () => { pausedRef.current = true; };
+  const resume = () => {
+    pausedRef.current = false;
+    if (waitingRef.current) advance();
+  };
+
+  // 띠가 흐르지 않는(움직임 줄이기) 환경은 시간으로 넘긴다.
+  useEffect(() => {
+    if (!exchange || !reducedMotion()) return undefined;
+    const id = setTimeout(finishPass, MARQUEE_STILL_MS - MARQUEE_HOLD_MS);
+    return () => clearTimeout(id);
+  }, [exchange, finishPass]);
+  useEffect(() => () => { clearTimeout(holdRef.current); holdRef.current = 0; }, []);
 
   // Nothing to show yet -> hide the strip entirely (spec §1.4).
   if (!coins.length) return null;
@@ -60,8 +108,11 @@ export default function HotCoinsMarquee() {
           <span className="sm:hidden">급등</span>
         </div>
 
-        <div className="ggp-marquee overflow-hidden flex-1">
-          <div className="ggp-marquee-track" style={{ "--ggp-marquee-duration": duration }}>
+        <div className="ggp-marquee overflow-hidden flex-1"
+          onMouseEnter={pause} onMouseLeave={resume} onFocus={pause} onBlur={resume}>
+          {/* 거래소가 바뀌면 처음부터 다시 흐른다(key). 한 바퀴 = 목록 하나가 다 지나감. */}
+          <div key={exchange} className="ggp-marquee-track" style={{ "--ggp-marquee-duration": duration }}
+            onAnimationIteration={(event) => { if (event.target === event.currentTarget) finishPass(); }}>
             {group(false)}
             {group(true)}
           </div>

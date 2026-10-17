@@ -10,6 +10,7 @@ import { TrendUpIcon } from "@phosphor-icons/react/dist/csr/TrendUp";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import CoinIcon from "../../components/CoinIcon.jsx";
 import InfoTooltip from "../../components/InfoTooltip.jsx";
+import ScrollThumb from "./ScrollThumb.jsx";
 import InfiniteSentinel, { useChunks } from "./InfiniteSentinel.jsx";
 import {
   EXCHANGE_META, changeTone, coinName, formatPct, formatPrice, formatTurnover, kstClock, neighborsByTurnover,
@@ -375,7 +376,8 @@ export default function CoinBoard({
           ))}
         </div>
       ) : null}
-      <div className="ct-rank-scroll" ref={scrollRef}>
+      <div className="ct-rank-scroll ct-scroll" ref={scrollRef}>
+        <ScrollThumb boxRef={scrollRef} />
         {rankings.error && !coins.length ? (
           <div className="ct-list-empty">거래소 시세를 불러오지 못했어요. 잠시 뒤 다시 보여 줄게요.</div>
         ) : !coins.length ? (

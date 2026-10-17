@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import CoinIcon from "../../components/CoinIcon.jsx";
 import InfiniteSentinel from "./InfiniteSentinel.jsx";
+import ScrollThumb from "./ScrollThumb.jsx";
 import { changeTone, coinName, formatPct, relativeTime } from "./trendsFormat.js";
 
 const toneClass = (value) => {
@@ -87,7 +88,8 @@ export default function FeedPanel({ region, feeds, tab, onTab, source, onSource,
         ) : null}
       </div>
       {tab === "community" ? <p className="ct-note">커뮤니티 글은 작성자의 주장·매매 의견이며, 보도 기사나 검증된 투자 정보가 아니에요.</p> : null}
-      <div className="ct-side-list" ref={listRef}>
+      <div className="ct-side-list ct-scroll" ref={listRef}>
+        <ScrollThumb boxRef={listRef} />
         {feed.items.length ? (
           <ol key={feed.key}>
             {feed.items.map((item) => (

@@ -185,6 +185,16 @@ export function refreshFirstPage(current, page, key = (item) => item.id || item.
   return { items: [...fresh, ...current], added: fresh.length, replaced: false };
 }
 
+// 안쪽 스크롤 막대 — 칸 위아래 inset 만큼 띄운 길 안에서 막대 길이(최소 28px)와 위치.
+export function thumbGeometry({ clientHeight, scrollHeight, scrollTop }, { inset = 8, min = 28 } = {}) {
+  const track = Math.max(0, clientHeight - inset * 2);
+  const scrollable = scrollHeight > clientHeight + 1;
+  const size = scrollable ? Math.min(track, Math.max(min, (track * clientHeight) / scrollHeight)) : track;
+  const range = Math.max(1, scrollHeight - clientHeight);
+  const offset = scrollable ? Math.max(0, Math.min(track - size, (scrollTop / range) * (track - size))) : 0;
+  return { track, size, offset, scrollable, atTop: scrollTop <= 1, atEnd: scrollTop + clientHeight >= scrollHeight - 1 };
+}
+
 // 서버가 준 글 목록을 같은 글 없이 이어 붙인다(새로고침으로 앞쪽이 밀려도 겹치지 않게).
 export function mergeById(current, incoming, key = (item) => item.id || item.url) {
   const seen = new Set((current || []).map(key));

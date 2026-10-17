@@ -1,4 +1,4 @@
-import { useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { NewspaperIcon } from "@phosphor-icons/react/dist/csr/Newspaper";
 import useFitLines from "../../hooks/useFitLines.js";
 import { AnnotatedText } from "../../components/NewsTerms.jsx";
@@ -6,6 +6,7 @@ import { historicalNewsLabel, newsSourceLabel, prepareNewsResponse } from "../..
 import { newsContentLabel } from "../../lib/newsContent.js";
 import { splitSummary } from "../../lib/summaryText.js";
 import InfiniteSentinel, { useChunks } from "./InfiniteSentinel.jsx";
+import ScrollThumb from "./ScrollThumb.jsx";
 import { kstDate, relativeTime } from "./trendsFormat.js";
 
 function FitParagraph({ className, text, maxLines, minPx, children }) {
@@ -47,18 +48,25 @@ export function SummarySection({ region, news }) {
   );
 }
 
-function MarketRow({ item, now }) {
+function MarketRow({ item, now, index, on }) {
   return (
-    <a className="mk-row" href={item.url} target="_blank" rel="noopener noreferrer">
+    <a className={on ? "mk-row is-on" : "mk-row"} data-index={index} href={item.url} target="_blank" rel="noopener noreferrer">
       <span className="mk-thumb">{item.image ? <img src={item.image} alt="" loading="lazy" /> : <NewspaperIcon size={22} aria-hidden="true" />}</span>
       <span><span className="mk-row-title">{item.title}</span><span className="mk-meta">{item.label} · {item.historical || relativeTime(item.published, { now })}</span></span>
     </a>
   );
 }
 
-// 시장·규제 한눈에 — 사진 있는 대표 기사 1건 + 나머지는 고정 높이 목록 안에서 스크롤로 이어 그린다.
+// 줄 단위 휠(deltaMode 1)·쪽 단위(2)를 픽셀로.
+const wheelPixels = (event, page) => event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? page : 1);
+
+// 시장·규제 한눈에 — 위 큰 박스는 아래 목록 맨 위에 올라온 기사(스크롤하면 하나씩 바뀐다, 2026-10-17 사용자 요청).
+// 목록은 고정 높이 안에서 스크롤로 이어 그리고, 큰 박스 위에서 휠을 굴려도 목록이 움직인다.
 export function MarketSection({ state, onRetry }) {
   const scrollRef = useRef(null);
+  const leadRef = useRef(null);
+  const spacerRef = useRef(null);
+  const [active, setActive] = useState(0);
   const market = useMemo(() => (state?.data ? prepareNewsResponse(state.data) : null), [state?.data]);
   const items = useMemo(() => (market?.items || []).map((item) => ({
     id: item.id || item.url || item.title,
@@ -71,9 +79,53 @@ export function MarketSection({ state, onRetry }) {
     image: item.image || "",
     url: item.article_url || item.url,
   })), [market]);
-  const lead = items.find((item) => item.image) || items[0];
-  const rest = items.filter((item) => item !== lead);
-  const { shown, more, hasMore } = useChunks(rest.length, { first: 4, step: 3, resetKey: rest.length });
+  const { shown, more, hasMore } = useChunks(items.length, { first: 8, step: 6, resetKey: items.length });
+  const lead = items[Math.min(active, items.length - 1)];
+
+  // 목록 맨 위(절반 넘게 보이는 첫 줄)의 기사를 큰 박스에 올린다.
+  useEffect(() => {
+    const box = scrollRef.current;
+    if (!box) return undefined;
+    let frame = 0;
+    const pick = () => {
+      frame = 0;
+      const rows = box.querySelectorAll(".mk-row");
+      let next = 0;
+      for (const row of rows) {
+        if (row.offsetTop + row.offsetHeight / 2 > box.scrollTop) { next = Number(row.dataset.index) || 0; break; }
+      }
+      setActive(next);
+    };
+    const onScroll = () => { if (!frame) frame = requestAnimationFrame(pick); };
+    box.addEventListener("scroll", onScroll, { passive: true });
+    return () => { cancelAnimationFrame(frame); box.removeEventListener("scroll", onScroll); };
+  }, [items.length]);
+  useEffect(() => { setActive(0); if (scrollRef.current) scrollRef.current.scrollTop = 0; }, [items]);
+
+  // 끝까지 다 그렸으면 마지막 기사도 맨 위로 올라와 큰 박스에 오를 수 있게 아래를 비워 둔다.
+  useEffect(() => {
+    const box = scrollRef.current, spacer = spacerRef.current;
+    if (!box || !spacer) return;
+    const rows = box.querySelectorAll(".mk-row");
+    const last = rows[rows.length - 1];
+    spacer.style.height = !hasMore && last ? `${Math.max(0, box.clientHeight - last.offsetHeight - 8)}px` : "0px";
+  }, [hasMore, shown]);
+
+  // 큰 박스 위에서 굴린 휠은 목록으로 넘긴다. 목록이 그 방향 끝이면 페이지가 스크롤된다.
+  useEffect(() => {
+    const node = leadRef.current, box = scrollRef.current;
+    if (!node || !box) return undefined;
+    const onWheel = (event) => {
+      const dy = wheelPixels(event, box.clientHeight);
+      const room = dy > 0 ? box.scrollHeight - box.clientHeight - box.scrollTop : box.scrollTop;
+      if (!dy || Math.abs(event.deltaX) > Math.abs(event.deltaY) || room <= 0) return;
+      event.preventDefault();
+      box.scrollTop += dy;
+    };
+    node.addEventListener("wheel", onWheel, { passive: false });
+    return () => node.removeEventListener("wheel", onWheel);
+  }, [items.length]);
+
   const loading = !state || ["queued", "loading"].includes(state.status);
   const now = Date.now();
   return (
@@ -85,13 +137,23 @@ export function MarketSection({ state, onRetry }) {
       <p className="ct-market-sub t-small">오늘 시장을 움직이는 정책과 주요 이슈예요.</p>
       {lead ? (
         <>
-          <a className="mk-lead" href={lead.url} target="_blank" rel="noopener noreferrer">
-            <div className="mk-lead-img">{lead.image ? <img src={lead.image} alt="" /> : <span className="mk-lead-fallback">{lead.source}</span>}</div>
-            <div><p className="mk-lead-title">{lead.title}</p><span className="mk-meta">{lead.label} · {lead.historical || relativeTime(lead.published, { now })}</span></div>
+          <a className="mk-lead" ref={leadRef} href={lead.url} target="_blank" rel="noopener noreferrer">
+            <div className="mk-lead-img mk-swap" key={`img-${lead.id}`}>
+              {lead.image ? <img src={lead.image} alt="" />
+                : <span className="mk-lead-fallback"><NewspaperIcon size={30} aria-hidden="true" /><span>{lead.source}</span></span>}
+            </div>
+            <div className="mk-swap" key={`text-${lead.id}`}>
+              <p className="mk-lead-title">{lead.title}</p>
+              <span className="mk-meta">{lead.label} · {lead.historical || relativeTime(lead.published, { now })}</span>
+            </div>
           </a>
-          <div className={hasMore ? "mk-scroll" : "mk-scroll is-end"} ref={scrollRef}>
-            {rest.slice(0, shown).map((item) => <MarketRow key={item.id} item={item} now={now} />)}
+          <div className="mk-scroll ct-scroll" ref={scrollRef}>
+            <ScrollThumb boxRef={scrollRef} />
+            {items.slice(0, shown).map((item, index) => (
+              <MarketRow key={item.id} item={item} now={now} index={index} on={index === active} />
+            ))}
             <InfiniteSentinel rootRef={scrollRef} active={hasMore} count={shown} onReach={more} />
+            <div className="mk-end-spacer" ref={spacerRef} aria-hidden="true" />
           </div>
         </>
       ) : loading ? (

@@ -52,12 +52,21 @@
 .mk-lead { display: grid; grid-template-columns: minmax(0, 46%) minmax(0, 1fr); gap: 14px; align-items: center; margin-top: 14px; }
 .mk-lead-img { position: relative; height: 136px; overflow: hidden; border-radius: 14px; background: linear-gradient(150deg, #2b3139, #0b0e11); }
 .mk-lead-img img { display: block; width: 100%; height: 100%; object-fit: cover; }
-.mk-lead-fallback { position: absolute; inset: 0; display: grid; place-items: center; padding: 12px; color: rgb(255 255 255 / .28); font-size: 20px; font-weight: 800; text-align: center; }
+.mk-lead-fallback { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 8px; padding: 12px; color: rgb(255 255 255 / .5); font-size: 17px; font-weight: 800; text-align: center; }
 .mk-lead-title { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 3; color: rgb(var(--c-slate-900)); font-size: 17px; font-weight: 700; line-height: 1.4; letter-spacing: -.015em; }
 .mk-meta { display: block; margin-top: 4px; color: rgb(var(--c-slate-500)); font-size: 13px; font-weight: 600; }
 .mk-lead:hover .mk-lead-title, .mk-row:hover .mk-row-title { text-decoration: underline; text-underline-offset: 3px; }
-.mk-scroll { max-height: 226px; margin-top: 12px; overflow-y: auto; scrollbar-width: thin; -webkit-mask-image: linear-gradient(180deg, #000 82%, transparent); mask-image: linear-gradient(180deg, #000 82%, transparent); }
-.mk-scroll.is-end { -webkit-mask-image: none; mask-image: none; }
+/* 줄 강조 바탕이 왼쪽으로 12px 나가도 잘리지 않게 칸을 그만큼 넓히고 안쪽을 채운다(글은 큰 박스와 같은 선) */
+.mk-scroll { max-height: 226px; margin-top: 12px; margin-left: -12px; padding-left: 12px; }
+/* 큰 박스에 오른 기사 — 목록에서도 같은 기사를 옅은 바탕 + 노란 세로줄로 짚는다 */
+.mk-scroll .mk-row { position: relative; margin-left: -12px; padding-left: 12px; border-radius: 10px; transition: background-color .15s; }
+.mk-row.is-on { border-top-color: transparent; background: rgb(var(--c-slate-100)); }
+.mk-row.is-on + .mk-row { border-top-color: transparent; }
+.mk-row.is-on::before { content: ""; position: absolute; top: 12px; bottom: 12px; left: 0; width: 3px; border-radius: 3px; background: rgb(var(--c-brand-line)); }
+.mk-end-spacer { pointer-events: none; }
+.mk-swap { animation: mk-swap .2s ease both; }
+@keyframes mk-swap { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .mk-swap { animation: none; } .mk-scroll .mk-row { transition: none; } }
 .mk-row { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 12px; align-items: center; padding: 10px 0; border-top: 1px solid rgb(var(--c-slate-200)); }
 .mk-thumb { display: grid; place-items: center; width: 72px; height: 52px; overflow: hidden; border-radius: 8px; background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-400)); }
 .mk-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
@@ -103,8 +112,27 @@
 .ct-sort-icon.is-down { color: rgb(var(--c-red-600)); }
 
 /* 순위·코인 열 — 경주마와 다른 탭이 같은 값을 쓴다(탭을 바꿔도 열 이름이 움직이지 않는다) */
-.ct-rank-scroll { --rk-w: 36px; --rk-gap: 12px; --rk-pad: 8px; height: 560px; margin-top: 12px; overflow-y: auto; scrollbar-width: thin; }
-.ct-side-list { height: 560px; margin-top: 4px; overflow-y: auto; scrollbar-width: thin; padding-bottom: 64px; }
+.ct-rank-scroll { --rk-w: 36px; --rk-gap: 12px; --rk-pad: 8px; height: 560px; margin-top: 12px; }
+.ct-side-list { height: 560px; margin-top: 4px; padding-bottom: 64px; }
+
+/* 안쪽 스크롤 칸(시안 B) — 브라우저 막대는 숨기고 내용과 14px 띄운 자리에 ScrollThumb 가 6px 막대를 그린다.
+   막대는 칸에 마우스를 올리거나 스크롤 · 끌기 중일 때만 보인다. 맨 위 · 맨 끝이 아니면 그쪽 끝을 흐려 더 있다는 걸 알린다. */
+.ct-scroll { --fade-top: 0px; --fade-bottom: 0px; position: relative; overflow-y: auto; overscroll-behavior: contain; padding-right: 14px; scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 var(--fade-top), #000 calc(100% - var(--fade-bottom)), transparent 100%);
+  mask-image: linear-gradient(180deg, transparent 0, #000 var(--fade-top), #000 calc(100% - var(--fade-bottom)), transparent 100%); }
+.ct-scroll::-webkit-scrollbar { display: none; }
+.ct-scroll:not(.at-top) { --fade-top: 28px; }
+.ct-scroll:not(.at-end) { --fade-bottom: 40px; }
+/* 순위표는 머리줄이 위에 붙어 있어 위쪽은 흐리지 않는다 */
+.ct-rank-scroll.ct-scroll { --fade-top: 0px; }
+.ct-thumb-anchor { position: sticky; top: 0; z-index: 4; height: 0; }
+.ct-thumb-rail { position: absolute; top: 8px; right: -10px; width: 6px; opacity: 0; transition: opacity .2s ease; }
+.ct-thumb-rail i { position: absolute; top: 0; left: 0; width: 6px; border-radius: 999px; background: rgb(var(--c-slate-300)); cursor: grab; touch-action: none; transition: background-color .15s; }
+.ct-thumb-rail i:hover, .ct-scroll.is-dragging .ct-thumb-rail i { background: rgb(var(--c-slate-400)); }
+.ct-scroll.is-dragging .ct-thumb-rail i { cursor: grabbing; }
+.ct-scroll:is(:hover, .is-scrolling, .is-dragging) .ct-thumb-rail { opacity: 1; }
+@media (hover: none) { .ct-scroll .ct-thumb-rail { display: none; } }
+@media (prefers-reduced-motion: reduce) { .ct-thumb-rail, .ct-thumb-rail i { transition: none; } }
 .ct-thead, .ct-lanes-head { position: sticky; top: 0; z-index: 3; background: rgb(var(--c-slate-50)); }
 .ct-lanes-head, .ct-lane { display: grid; grid-template-columns: var(--rk-w) 176px minmax(0, 1fr) 128px 112px; column-gap: var(--rk-gap); align-items: center; padding: 0 var(--rk-pad); }
 .ct-lanes-head { height: 40px; border-bottom: 1px solid rgb(var(--c-slate-200)); color: rgb(var(--c-slate-500)); font-size: 13px; font-weight: 600; white-space: nowrap; }

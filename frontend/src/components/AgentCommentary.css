@@ -11,10 +11,10 @@
   font-weight: 700;
 }
 
-/* 껄무새 얼굴이 주인공 — 얼굴 칸을 키우고 말풍선 폭은 줄인다(10/17 "얼굴이 너무 작아"). */
+/* 껄무새 얼굴이 주인공 — 얼굴 칸은 크게(10/17 "얼굴이 너무 작아"), 말풍선은 남은 폭을 다 쓴다(폭을 묶으면 오른쪽이 빈다). */
 .agent-say {
   display: grid;
-  grid-template-columns: 96px minmax(0, 400px);
+  grid-template-columns: 96px minmax(0, 1fr);
   align-items: start;
   gap: 12px;
 }

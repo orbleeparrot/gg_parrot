@@ -119,7 +119,11 @@ class Fixture:
         elif url.path == "/api/news/market":
             data = MARKET
         elif url.path == "/api/hot-coins":
-            data = {"coins": [{"symbol": "TIAUSDT", "last_price": 0.73, "change_pct": 20.4, "quote_volume": 4.4e7}]}
+            # 하단 '오늘의 경주마' 띠 — 코인동향에서 고른 거래소를 따라간다.
+            exchange = query.get("exchange", ["binance"])[0]
+            data = ({"exchange": "binance", "coins": [{"symbol": "TIAUSDT", "base": "TIA", "last_price": 0.73, "change_pct": 20.4, "quote_volume": 4.4e7}]}
+                    if exchange == "binance" else
+                    {"exchange": exchange, "coins": [{"symbol": "KRW-XRP", "base": "XRP", "last_price": 3512, "change_pct": 4.2, "quote_volume": 8.5e10}]})
         elif url.path == "/api/kimchi-premium": data = {"ok": True, "premium_pct": .9}
         elif url.path == "/api/fear-greed": data = {"ok": True, "value": 55}
         elif url.path == "/api/hangang-temp": data = {"ok": True, "temperature": 22}
@@ -165,6 +169,9 @@ def main():
                     expect(page.get_by_role("heading", name="시장·규제 한눈에")).to_be_visible()
                     expect(page.get_by_text("커뮤니티 의견 · 사실 확인 안 됨", exact=False).first).to_be_visible()
                     expect(page.locator(".ct-lane")).to_have_count(3)
+                    marquee = page.locator(".site-marquee")
+                    expect(marquee.locator("img")).to_have_attribute("alt", "업비트")
+                    expect(marquee.locator("button").first).to_contain_text("3,512원")
                     no_overflow(page)
                     two_columns = page.evaluate("getComputedStyle(document.querySelector('.ct-board')).gridTemplateColumns.split(' ').length > 1")
                     if two_columns:
@@ -200,6 +207,9 @@ def main():
                     page.locator(".ct-mode-item").nth(1).click()
                     expect(page.locator(".ct-ex-static")).to_contain_text("바이낸스")
                     expect(page.locator("#ct-side-title")).to_have_text("해외 소식")
+                    expect(marquee.locator("img")).to_have_attribute("alt", "바이낸스")
+                    expect(marquee.locator("button").first).to_contain_text("$0.73")
+                    assert any(call.startswith("/api/hot-coins") and "exchange=upbit" in call for call in fixture.calls), fixture.calls
                     no_overflow(page)
                     page.screenshot(path=str(OUTPUT / f"global-{width}-{theme}.png"), full_page=True, animations="disabled")
                     checks.append(f"{width}-{theme}")

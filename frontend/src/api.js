@@ -320,7 +320,8 @@ export const api = {
   challengeToday: (options = {}) => req("/api/challenge/today", { timeoutMs: 10_000, ...options }),
 
   // '오늘의 경주마' hot coins (server-cached, shared across clients)
-  hotCoins: (limit, options = {}) => req(`/api/hot-coins?limit=${limit || 10}`, options),
+  hotCoins: (limit, options = {}, exchange = "binance") =>
+    req(`/api/hot-coins?limit=${limit || 10}${exchange === "binance" ? "" : `&exchange=${encodeURIComponent(exchange)}`}`, options),
 
   // '오늘의 코인동향' — 시장·규제 뉴스 헤드라인 + AI 중립 개요 (KST 하루 1회 캐시)
   newsMarket: (options = {}) => req("/api/news/market", { timeoutMs: 10_000, ...options }),

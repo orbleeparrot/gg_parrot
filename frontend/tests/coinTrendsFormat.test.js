@@ -109,3 +109,19 @@ test("refreshing the first page prepends only new posts and replaces the list af
   assert.deepEqual(refreshFirstPage([], [post("a")]), { items: [post("a")], added: 1, replaced: true });
   assert.deepEqual(refreshFirstPage(held, [post("c"), post("d")]), { items: held, added: 0, replaced: false });
 });
+
+test("the chosen trends exchange is remembered for the site-wide racer strip", async () => {
+  const store = new Map();
+  globalThis.localStorage = { getItem: (key) => store.get(key) ?? null, setItem: (key, value) => store.set(key, String(value)) };
+  try {
+    const { getTrendsExchange, setTrendsExchange } = await import("../src/lib/trendsExchange.js");
+    assert.equal(getTrendsExchange(), "upbit");
+    setTrendsExchange("binance");
+    assert.equal(getTrendsExchange(), "binance");
+    assert.equal(store.get("ggp_trends_exchange"), "binance");
+    setTrendsExchange("kraken");
+    assert.equal(getTrendsExchange(), "binance");
+  } finally {
+    delete globalThis.localStorage;
+  }
+});

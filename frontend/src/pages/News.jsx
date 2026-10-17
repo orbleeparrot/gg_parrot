@@ -6,6 +6,7 @@ import FeedPanel from "../features/coinTrends/FeedPanel.jsx";
 import { MarketSection, SummarySection } from "../features/coinTrends/TopSections.jsx";
 import { useFeedList, useRankings, useUsdKrw } from "../features/coinTrends/useTrendsData.js";
 import { EXCHANGE_META, regionOf } from "../features/coinTrends/trendsFormat.js";
+import { getTrendsExchange, setTrendsExchange } from "../lib/trendsExchange.js";
 import "../features/coinTrends/CoinTrends.css";
 
 // 코인동향 — 국내(업비트·빗썸 원화) / 해외(바이낸스 USDT) 판으로 페이지 전체가 바뀐다.
@@ -37,8 +38,9 @@ const symbolOf = (exchange, base) => (EXCHANGE_META[exchange].quote === "KRW" ? 
 const reducedMotion = () => typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 export default function News() {
-  const [exchange, setExchange] = useState("upbit");
-  const [lastDomestic, setLastDomestic] = useState("upbit");
+  // 마지막으로 고른 거래소에서 시작한다 — 하단 '오늘의 경주마' 띠도 같은 값을 따라간다.
+  const [exchange, setExchange] = useState(getTrendsExchange);
+  const [lastDomestic, setLastDomestic] = useState(() => (regionOf(getTrendsExchange()) === "kr" ? getTrendsExchange() : "upbit"));
   const [sort, setSort] = useState("race");
   const [coin, setCoin] = useState(null);
   const [keyword, setKeyword] = useState("");
@@ -101,6 +103,7 @@ export default function News() {
 
   const changeExchange = useCallback((next) => {
     setExchange(next);
+    setTrendsExchange(next);
     if (regionOf(next) === "kr") setLastDomestic(next);
     setSource("");
   }, []);

@@ -103,6 +103,24 @@ def select_racers(coins: list[dict], exchange: str, *, limit: int = RACER_LIMIT)
     return [coin["base"] for coin in gainers[:max(1, limit)]]
 
 
+def get_racer_coins(exchange: str, limit: int = 10) -> dict:
+    """사이트 하단 '오늘의 경주마' 띠 — 국내 거래소는 코인 순위의 경주마 탭과 같은 목록(같은 시세 캐시).
+
+    바이낸스는 기존 hotcoins.get_hot_coins 를 그대로 쓴다(이 함수는 국내 전용).
+    """
+    limit = max(1, min(int(limit), 50))
+    exchange = normalize_exchange(exchange)
+    try:
+        payload = get_market_trends(exchange=exchange)
+    except Exception:
+        return {**hotcoins._envelope([], cached=False, error=exchange), "exchange": exchange}
+    by_base = {coin["base"]: coin for coin in payload["coins"]}
+    coins = [by_base[base] for base in payload["racers"] if base in by_base][:limit]
+    return {**hotcoins._envelope(coins, cached=True, stale=payload["stale"]),
+            "updated_at": payload["updated_at"], "exchange": exchange,
+            "quote_currency": payload["quote_currency"]}
+
+
 def _matches(coin: dict, needle: str) -> bool:
     if not needle:
         return True

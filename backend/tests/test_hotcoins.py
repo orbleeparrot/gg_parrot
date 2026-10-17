@@ -77,6 +77,31 @@ def test_endpoint_empty_on_fetch_failure(monkeypatch):
     assert r.get("error") == "binance"
 
 
+def test_domestic_endpoint_returns_the_coin_trends_racers(monkeypatch):
+    from app import market_trends as mt
+
+    payload = {"coins": [{"base": "XRP", "symbol": "KRW-XRP", "change_pct": 3.0},
+                         {"base": "SOL", "symbol": "KRW-SOL", "change_pct": 8.0}],
+               "racers": ["SOL", "XRP", "GONE"], "stale": False, "updated_at": "2026-10-17T00:00:00+00:00",
+               "quote_currency": "KRW"}
+    seen = {}
+
+    def fake(*, exchange="binance", **_):
+        seen["exchange"] = exchange
+        return payload
+
+    monkeypatch.setattr(mt, "get_market_trends", fake)
+    r = client.get("/api/hot-coins?exchange=upbit&limit=1").json()
+    assert seen["exchange"] == "upbit"
+    assert [c["symbol"] for c in r["coins"]] == ["KRW-SOL"]
+    assert r["exchange"] == "upbit" and r["quote_currency"] == "KRW"
+    # 바이낸스는 기존 경로 그대로, 국내 시세가 실패하면 빈 띠(화면이 숨긴다).
+    monkeypatch.setattr(mt, "get_market_trends", lambda **_: (_ for _ in ()).throw(RuntimeError("down")))
+    r = client.get("/api/hot-coins?exchange=bithumb").json()
+    assert r["coins"] == [] and r["error"] == "bithumb"
+    assert client.get("/api/hot-coins?exchange=kraken").status_code == 422
+
+
 def _t2(symbol, change, price, qvol, high, low):
     return {"symbol": symbol, "priceChangePercent": str(change), "lastPrice": str(price),
             "quoteVolume": str(qvol), "highPrice": str(high), "lowPrice": str(low)}

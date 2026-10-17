@@ -102,7 +102,7 @@ from . import observability
 from . import evidence as evidence_mod
 from . import validate_explain as validate_explain_mod
 from .observability import observe_application, router as observability_router
-from .market_trends import router as market_trends_router
+from .market_trends import get_racer_coins, router as market_trends_router
 from fastapi import Depends
 from .db import User
 from . import whales as whales_mod
@@ -1767,13 +1767,15 @@ def prices(symbols: str = Query(default="", max_length=700), exchange: Exchange 
 
 
 @app.get("/api/hot-coins")
-def hot_coins(limit: int = 10) -> dict:
-    """'오늘의 경주마' — surging + actively-traded USDT coins (Binance 24h).
+def hot_coins(limit: int = 10, exchange: Exchange = "binance") -> dict:
+    """'오늘의 경주마' — surging + actively-traded coins on the chosen exchange.
 
-    Globally cached: the exchange is hit at most once per cache window regardless
-    of client count. Reference indicator only — never a trading signal.
+    Binance: USDT 24h (hotcoins). Upbit/Bithumb: the coin-trends racers (KRW turnover
+    top DOMESTIC_RACER_POOL, gainers only). Globally cached; reference indicator only.
     """
-    return hotcoins_mod.get_hot_coins(limit)
+    if exchange == "binance":
+        return {**hotcoins_mod.get_hot_coins(limit), "exchange": "binance", "quote_currency": "USDT"}
+    return get_racer_coins(exchange, limit)
 
 
 @app.get("/api/news/market")

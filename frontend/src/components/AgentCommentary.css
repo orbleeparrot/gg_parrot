@@ -1,0 +1,81 @@
+/* 껄무새 중계 말풍선 — 굵은 한 줄 · 숫자 한 줄 · 짧은 한마디. 주의 · 위험만 바탕색이 바뀐다(띠 · 테두리 강조 없음). */
+.agent-say-log { display: grid; align-content: start; gap: 16px; }
+
+.agent-say-day {
+  justify-self: center;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: rgb(var(--c-slate-100));
+  color: rgb(var(--c-slate-600));
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.agent-say {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+}
+.agent-say-face { display: grid; width: 34px; height: 34px; place-items: center; }
+.agent-say-face img { display: block; width: 34px; height: 34px; object-fit: contain; pointer-events: none; user-select: none; }
+.agent-say-stack { display: grid; gap: 6px; min-width: 0; }
+
+.agent-say-bubble {
+  min-width: 0;
+  padding: 10px 12px 11px;
+  border: 1px solid rgb(var(--c-slate-200));
+  border-radius: 4px 14px 14px 14px;
+  background: rgb(var(--c-surface));
+  overflow-wrap: anywhere;
+}
+.agent-say.is-warn .agent-say-bubble { border-color: transparent; background: rgb(var(--c-amber-50)); }
+.agent-say.is-risk .agent-say-bubble { border-color: transparent; background: rgb(var(--c-red-50)); }
+
+.agent-say-hl { color: rgb(var(--c-slate-900)); font-size: 16px; font-weight: 800; line-height: 1.4; letter-spacing: -.015em; }
+.agent-say-nums { margin-top: 3px; color: rgb(var(--c-slate-900)); font-size: 15.5px; font-weight: 700; line-height: 1.45; }
+.agent-say-nums.is-up { color: rgb(var(--c-green-600)); }
+.agent-say-nums.is-down { color: rgb(var(--c-red-600)); }
+.agent-say-sub { margin-top: 3px; color: rgb(var(--c-slate-600)); font-size: 13.5px; font-weight: 500; line-height: 1.5; }
+.agent-say-sub b { color: rgb(var(--c-slate-900)); font-weight: 800; }
+.agent-say.is-warn .agent-say-sub b { color: rgb(var(--c-amber-800)); }
+
+.agent-say-post { margin: 6px 0 0; padding: 0 0 0 10px; border-left: 3px solid rgb(var(--c-indigo-400)); }
+.agent-say-post.is-news { border-left-color: rgb(var(--c-cyan-700)); }
+.agent-say-post-title { color: rgb(var(--c-slate-900)); font-size: 14.5px; font-weight: 700; line-height: 1.45; }
+.agent-say-post-summary { margin-top: 2px; color: rgb(var(--c-slate-700)); font-size: 13.5px; line-height: 1.5; }
+.agent-say-post-who { margin-top: 3px; color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 600; }
+
+.agent-say-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.agent-say-meta time { margin-left: auto; color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 600; white-space: nowrap; }
+.agent-say-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 24px;
+  padding: 0 8px;
+  border: 1px solid rgb(var(--c-slate-300));
+  border-radius: 999px;
+  background: rgb(var(--c-surface));
+  color: rgb(var(--c-slate-700));
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  text-decoration: none;
+}
+.agent-say-chip::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: rgb(var(--c-slate-400)); }
+.agent-say-chip.is-chart::before { background: rgb(var(--c-blue-600)); }
+.agent-say-chip.is-comm::before { background: rgb(var(--c-indigo-500)); }
+.agent-say-chip.is-news::before { background: rgb(var(--c-cyan-700)); }
+.agent-say-chip.is-macro::before { background: rgb(var(--c-brand-line)); }
+a.agent-say-chip:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
+
+@media (hover: hover) and (pointer: fine) {
+  a.agent-say-chip:hover { border-color: rgb(var(--c-slate-500)); color: rgb(var(--c-slate-900)); }
+}
+
+@container agent-chat (max-width: 430px) {
+  .agent-say { grid-template-columns: 30px minmax(0, 1fr); gap: 7px; }
+  .agent-say-face, .agent-say-face img { width: 30px; height: 30px; }
+  .agent-say-hl { font-size: 15px; }
+}

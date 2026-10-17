@@ -1,42 +1,23 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
-import {
-  AGENT_MODULE_MAP,
-  AGENT_MODULES,
-  accessFor,
-} from "../features/agents/registry.js";
+import { AGENT_MODULE_MAP, accessFor } from "../features/agents/registry.js";
+import { leaderModule, whaleActivityNotice } from "../features/agents/modules/leader.js";
 import { advanceActivityTimeline, emptyActivityTimeline } from "../features/agents/activityTimeline.js";
-import { countNewObservations, positionNewsNotice, publicationLabel, publicationTime } from "../features/agents/positionNews/presentation.js";
-import { whaleActivityNotice } from "../features/agents/modules/leader.js";
-import { activityEventId, activityLogLink, observationForEvent } from "../features/agents/activityEvidence.js";
-import { useActivityObservations } from "../features/agents/useActivityObservations.js";
+import { countNewObservations } from "../features/agents/positionNews/presentation.js";
 import RunResultScreen from "./RunResultScreen.jsx";
-import CommunityBodySummary from "./CommunityBodySummary.jsx";
+import AgentCommentary from "./AgentCommentary.jsx";
 import { Icon } from "./icons.jsx";
+
+// 오른쪽 '에이전트' 칸 — 중계(껄무새가 서버에서 만든 말풍선) · 고래 동향 · 활동 로그.
+// 2026-10-17 전에는 실행 상태 · 실행 로그 · 맞춤 뉴스 · 위험 감시 · 전략 조건을 브라우저가 따로 만들어 쌓았고,
+// 화면을 열 때마다 같은 관측을 새로 저장해 '평가손실 주의'가 열 번 넘게 쌓였다. 이제 그 일은 서버 중계가 한 번만 한다.
 const PLAN_LABELS = { free: "FREE", plus: "PLUS", pro: "PRO" };
 const EMPTY_FEATURE_STATES = {};
+const WHALE_MODULES = [leaderModule];
 const SECOND_MS = 1000;
-const MINUTE_MS = 60 * SECOND_MS;
-const HOUR_MS = 60 * MINUTE_MS;
+const HOUR_MS = 60 * 60 * SECOND_MS;
 const KST_OFFSET_MS = 9 * HOUR_MS;
-const AGENT_AVATAR_SOURCES = {
-  calm: "/brand/agent/ggparrot-agent-calm-v1.svg",
-  curious: "/brand/agent/ggparrot-agent-curious-v1.svg",
-  focused: "/brand/agent/ggparrot-agent-focused-v1.svg",
-  warning: "/brand/agent/ggparrot-agent-warning-v1.svg",
-  critical: "/brand/agent/ggparrot-agent-critical-v1.svg",
-  signal: "/brand/agent/ggparrot-agent-signal-v1.svg",
-};
-
-function avatarForEvent(event) {
-  if (AGENT_AVATAR_SOURCES[event.expression]) return AGENT_AVATAR_SOURCES[event.expression];
-  if (event.severity === "critical") return AGENT_AVATAR_SOURCES.critical;
-  if (event.severity === "warning" || event.severity === "watch") return AGENT_AVATAR_SOURCES.warning;
-  if (event.severity === "signal") return AGENT_AVATAR_SOURCES.signal;
-  if (event.module === "position_news") return AGENT_AVATAR_SOURCES.curious;
-  if (event.module === "risk" || event.module === "strategy") return AGENT_AVATAR_SOURCES.focused;
-  return AGENT_AVATAR_SOURCES.calm;
-}
+const WHALE_AVATAR = "/brand/agent/ggparrot-agent-curious-v1.svg";
+const WARNING_AVATAR = "/brand/agent/ggparrot-agent-warning-v1.svg";
 
 function eventTime(value, fallback = 0) {
   if (typeof value === "number") return value;
@@ -47,7 +28,6 @@ function eventTime(value, fallback = 0) {
 function absoluteActivityTime(value, fallback = "방금 확인") {
   const parsed = eventTime(value);
   if (!parsed) return fallback;
-
   const date = new Date(parsed + KST_OFFSET_MS);
   const twoDigits = (number) => String(number).padStart(2, "0");
   return `${twoDigits(date.getUTCFullYear() % 100)}.${twoDigits(date.getUTCMonth() + 1)}.${twoDigits(date.getUTCDate())}. ${twoDigits(date.getUTCHours())}:${twoDigits(date.getUTCMinutes())}`;
@@ -56,35 +36,25 @@ function absoluteActivityTime(value, fallback = "방금 확인") {
 function activityTime(value, now, fallback = "방금 확인") {
   const parsed = eventTime(value);
   if (!parsed) return fallback;
-
-  const elapsed = Math.max(0, now - parsed);
-  const elapsedSeconds = Math.floor(elapsed / SECOND_MS);
+  const elapsedSeconds = Math.floor(Math.max(0, now - parsed) / SECOND_MS);
   if (elapsedSeconds < 60) return `${Math.max(1, elapsedSeconds)}초 전`;
   if (elapsedSeconds < 60 * 60) return `${Math.floor(elapsedSeconds / 60)}분 전`;
-  if (elapsedSeconds === 60 * 60) return "1시간 전";
   return absoluteActivityTime(parsed, fallback);
 }
 
 function ModuleTabs({ selected, onSelect, entitlements, hasActivityLog }) {
-  const items = [{ key: "all", label: "전체" }, ...AGENT_MODULES,
+  const items = [{ key: "all", label: "중계" }, leaderModule,
     ...(hasActivityLog ? [{ key: "activity_logs", label: "활동 로그" }] : [])];
   return (
-    <div className="agent-chat-tabs" role="group" aria-label="에이전트 대화 종류">
+    <div className="agent-chat-tabs" role="group" aria-label="에이전트 화면 종류">
       {items.map((item) => {
         const access = item.key === "all" || item.key === "activity_logs" ? "enabled" : accessFor(item, entitlements);
-        const plan = item.minimumPlan && item.minimumPlan !== "free"
-          ? `, ${PLAN_LABELS[item.minimumPlan]} 구독 기능`
-          : "";
+        const plan = item.minimumPlan && item.minimumPlan !== "free" ? `, ${PLAN_LABELS[item.minimumPlan]} 구독 기능` : "";
         const availability = access === "planned" ? ", 준비 중" : "";
         return (
-          <button
-            key={item.key}
-            type="button"
-            className={selected === item.key ? "is-active" : ""}
-            aria-pressed={selected === item.key}
-            aria-label={`${item.label}${plan}${availability}`}
-            onClick={() => onSelect(item.key)}
-          >
+          <button key={item.key} type="button" className={selected === item.key ? "is-active" : ""}
+            aria-pressed={selected === item.key} aria-label={`${item.label}${plan}${availability}`}
+            onClick={() => onSelect(item.key)}>
             {item.label}
           </button>
         );
@@ -99,11 +69,7 @@ function RestrictedModule({ module, state, onUpgrade }) {
     <div className="agent-module-restricted">
       <span>{state === "planned" ? "기능 준비 중" : "구독 권한 필요"}</span>
       <strong>{module.label} · {plan}</strong>
-      <p>
-        {state === "planned"
-          ? "곧 제공할 기능이에요."
-          : `${plan} 구독에서 사용할 수 있어요.`}
-      </p>
+      <p>{state === "planned" ? "곧 제공할 기능이에요." : `${plan} 구독에서 사용할 수 있어요.`}</p>
       {state === "locked" && onUpgrade ? (
         <button type="button" onClick={onUpgrade} className="btn btn-s btn-secondary">{plan} 기능 보기</button>
       ) : null}
@@ -111,104 +77,43 @@ function RestrictedModule({ module, state, onUpgrade }) {
   );
 }
 
-export default function AgentActivityStream({
-  symbol,
-  macro,
-  session,
-  candles,
-  interval,
-  featureStates = EMPTY_FEATURE_STATES,
-  observedAt,
-  entitlements = null,
-  onUpgrade,
-  selectedView,
-  onSelectView,
-  activityLog,
-}) {
-  const [localFilter, setFilter] = useState("all");
-  const filter = selectedView ?? localFilter;
-  // 실행이 끝나면 결과 화면이 기본이고, 기록은 원할 때만 연다.
-  const [showLog, setShowLog] = useState(false);
-  const [newMessageCount, setNewMessageCount] = useState(0);
-  const [announcement, setAnnouncement] = useState("");
+// 고래 동향(PRO) — 대규모 체결 · 지갑 잔고 변화. 서버 중계에 아직 넣지 않은 자료라 이 탭에 따로 둔다.
+function WhaleFeed({ symbol, session, featureStates, entitlements, onUpgrade }) {
+  const [timeline, setTimeline] = useState(() => emptyActivityTimeline(session?.session_id));
   const [now, setNow] = useState(() => Date.now());
+  const [newMessageCount, setNewMessageCount] = useState(0);
   const logRef = useRef(null);
   const followLatestRef = useRef(true);
   const previousIdsRef = useRef(new Set());
-  const initialMessagesRef = useRef(true);
-  const scrollRequestedRef = useRef(true);
-  const [timeline, setTimeline] = useState(() => emptyActivityTimeline(session?.session_id));
-  const context = useMemo(() => ({ symbol, macro, session, candles, interval,
-    observedAt, featureStates, receivedAt: Date.now() }),
-  [candles, featureStates, interval, macro, observedAt, session, symbol]);
+  const initialRef = useRef(true);
+  const context = useMemo(() => ({ symbol, session, featureStates, receivedAt: Date.now() }), [featureStates, session, symbol]);
+  useEffect(() => { setTimeline((previous) => advanceActivityTimeline(previous, context, WHALE_MODULES)); }, [context]);
+
+  const access = accessFor(leaderModule, entitlements);
+  const events = useMemo(() => (timeline.sessionId === session?.session_id ? timeline.events : [])
+    .slice().sort((left, right) => eventTime(right.occurredAt) - eventTime(left.occurredAt)), [session?.session_id, timeline]);
+  const visible = useMemo(() => events.slice(0, 24).reverse(), [events]);
+  const notice = whaleActivityNotice(featureStates.whale_activity);
+  const loading = featureStates.whale_activity?.status === "loading" && !featureStates.whale_activity?.data;
 
   useEffect(() => {
-    setTimeline((previous) => advanceActivityTimeline(previous, context));
-  }, [context]);
-
-  const events = useMemo(() => {
-    if (timeline.sessionId !== session?.session_id) return [];
-    return timeline.events
-      .filter((event) => accessFor(AGENT_MODULE_MAP.get(event.module), entitlements) === "enabled")
-      .sort((left, right) => eventTime(right.occurredAt) - eventTime(left.occurredAt));
-  }, [entitlements, session?.session_id, timeline.events, timeline.sessionId]);
-  const observations = useActivityObservations(session?.session_id, events);
-
-  const selectedModule = filter === "all" ? null : AGENT_MODULE_MAP.get(filter);
-  const selectedAccess = selectedModule ? accessFor(selectedModule, entitlements) : "enabled";
-  const selectedFeatureState = selectedModule ? featureStates[selectedModule.key] : null;
-  const isFeatureLoading = selectedModule
-    ? selectedFeatureState?.status === "loading" && !selectedFeatureState.data
-    : Object.values(featureStates).some((state) => state?.status === "loading" && !state.data);
-  const visible = useMemo(() => {
-    const filtered = filter === "all" ? events : events.filter((event) => event.module === filter);
-    return filtered.slice(0, 24).reverse();
-  }, [events, filter]);
-  // 기능 상태 안내는 그 기능 탭에서만, 보일 소식이 없을 때 빈 화면 문구로 — '전체' 피드 맨 위에 띠로 띄우지 않는다.
-  const newsNotice = filter === "position_news"
-    && accessFor(AGENT_MODULE_MAP.get("position_news"), entitlements) === "enabled"
-    ? positionNewsNotice(featureStates.position_news, {
-      hasArticles: events.some((event) => event.isNewsArticle),
-    }) : "";
-  const whaleNotice = filter === "whale_activity"
-    && accessFor(AGENT_MODULE_MAP.get("whale_activity"), entitlements) === "enabled"
-    ? whaleActivityNotice(featureStates.whale_activity) : "";
-  const featureNotice = newsNotice || whaleNotice;
-  const featureStatusAttr = newsNotice ? { "data-news-status": "" } : whaleNotice ? { "data-whale-status": "" } : {};
-  const hasRelativeTime = visible.some((event) => {
-    if (event.isNewsArticle) return false;
-    const occurredAt = eventTime(event.occurredAt);
-    const elapsedSeconds = Math.floor(Math.max(0, now - occurredAt) / SECOND_MS);
-    return occurredAt && elapsedSeconds <= HOUR_MS / SECOND_MS;
-  });
-
-  useEffect(() => {
-    if (!hasRelativeTime) return undefined;
-    const timer = window.setInterval(() => setNow(Date.now()), SECOND_MS);
+    if (!visible.length) return undefined;
+    const timer = window.setInterval(() => setNow(Date.now()), 30 * SECOND_MS);
     return () => window.clearInterval(timer);
-  }, [hasRelativeTime]);
+  }, [visible.length]);
 
   useEffect(() => {
     const node = logRef.current;
     if (!node) return;
-    const previousIds = previousIdsRef.current;
-    const added = initialMessagesRef.current ? 0 : countNewObservations(visible, previousIds);
-    for (const event of events) previousIds.add(event.id);
-    // Filter switches and responses that temporarily omit a message must not
-    // turn previously observed events into new arrivals.
-    while (previousIds.size > 2000) previousIds.delete(previousIds.values().next().value);
-
-    if (scrollRequestedRef.current || (added > 0 && followLatestRef.current)) {
+    const added = initialRef.current ? 0 : countNewObservations(visible, previousIdsRef.current);
+    for (const event of events) previousIdsRef.current.add(event.id);
+    if (initialRef.current || followLatestRef.current) {
       node.scrollTop = node.scrollHeight;
       setNewMessageCount(0);
     } else if (added > 0) {
-      setNewMessageCount((current) => current + added);
+      setNewMessageCount((count) => count + added);
     }
-    if (events.length) {
-      initialMessagesRef.current = false;
-      scrollRequestedRef.current = false;
-    }
-    if (added > 0) setAnnouncement(`새 관측 ${added}개가 도착했어요.`);
+    if (events.length) initialRef.current = false;
   }, [events, visible]);
 
   function trackScroll() {
@@ -218,14 +123,6 @@ export default function AgentActivityStream({
     if (followLatestRef.current) setNewMessageCount(0);
   }
 
-  function selectFilter(nextFilter) {
-    followLatestRef.current = true;
-    scrollRequestedRef.current = true;
-    setNewMessageCount(0);
-    setFilter(nextFilter);
-    onSelectView?.(nextFilter);
-  }
-
   function scrollToLatest() {
     const node = logRef.current;
     if (!node) return;
@@ -233,6 +130,69 @@ export default function AgentActivityStream({
     setNewMessageCount(0);
     node.scrollTop = node.scrollHeight;
     node.focus({ preventScroll: true });
+  }
+
+  return (
+    <div className="agent-chat-stream flex flex-col">
+      <div ref={logRef} className="agent-chat-log flex-1" role="log" aria-relevant="additions" tabIndex={0}
+        aria-label="고래 동향" aria-busy={loading} onScroll={trackScroll}>
+        {access !== "enabled" ? <RestrictedModule module={leaderModule} state={access} onUpgrade={onUpgrade} />
+          : visible.length ? visible.map((event) => (
+            <article key={event.id} className={`agent-message is-${event.severity}`} data-plan="pro">
+              <span className="agent-message-avatar" aria-hidden="true">
+                <img src={event.severity === "warning" ? WARNING_AVATAR : WHALE_AVATAR} alt="" width="80" height="80" draggable="false" decoding="async" />
+              </span>
+              <div className="agent-message-bubble">
+                <p className="agent-message-primary">{event.title}</p>
+                {event.summary ? <p className="agent-message-summary">{event.summary}</p> : null}
+                {event.detail ? <p className="agent-message-detail">{event.detailLabel || "판단 근거"} · {event.detail}</p> : null}
+                <footer>
+                  {event.sourceUrl ? (
+                    <a href={event.sourceUrl} target="_blank" rel="noopener noreferrer" aria-label={`${event.sourceLabel} 원문 보기, 새 창`}>
+                      {event.sourceLabel} · 원문 보기 <Icon name="arrowUpRight" size={14} className="ui-icon-inline" />
+                    </a>
+                  ) : <span>{event.sourceLabel}</span>}
+                  <time className="num" dateTime={eventTime(event.occurredAt) ? new Date(eventTime(event.occurredAt)).toISOString() : undefined}>
+                    {activityTime(event.occurredAt, now, event.fallbackTime)}
+                  </time>
+                </footer>
+              </div>
+            </article>
+          )) : (
+            <div className="agent-stream-empty" role="status" data-whale-status="">
+              <strong>{notice || "새 소식이 없어요."}</strong>
+            </div>
+          )}
+        {visible.length > 0 && notice ? <div className="agent-checking" role="status" data-whale-status="">{notice}</div> : null}
+      </div>
+      {newMessageCount > 0 ? (
+        <button type="button" className="agent-new-message" onClick={scrollToLatest}>
+          새 소식 {newMessageCount}개 <Icon name="arrowDown" size={14} className="ui-icon-inline" />
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+export default function AgentActivityStream({
+  symbol,
+  session,
+  featureStates = EMPTY_FEATURE_STATES,
+  entitlements = null,
+  onUpgrade,
+  selectedView,
+  onSelectView,
+  activityLog,
+  commentary,
+}) {
+  const [localFilter, setFilter] = useState("all");
+  const filter = selectedView ?? localFilter;
+  // 실행이 끝나면 결과 화면이 기본이고, 기록은 원할 때만 연다.
+  const [showLog, setShowLog] = useState(false);
+
+  function selectFilter(nextFilter) {
+    setFilter(nextFilter);
+    onSelectView?.(nextFilter);
   }
 
   // 종료 '요청' 시점부터 결과 화면으로 넘어간다 — 실행기 확정을 기다리는 동안 채팅에
@@ -249,11 +209,13 @@ export default function AgentActivityStream({
     );
   }
 
+  const known = filter === "all" || filter === "activity_logs" || filter === leaderModule.key;
+  const view = known ? filter : "all";
   return (
-    <aside className="agent-chat" aria-label={`${symbol} 껄무새 에이전트 기록`}>
+    <aside className="agent-chat" aria-label={`${symbol} 껄무새 에이전트`}>
       <header className="agent-chat-head">
         <div className={`agent-chat-controls${ended ? " has-result" : ""}`}>
-          <ModuleTabs selected={filter} onSelect={selectFilter} entitlements={entitlements} hasActivityLog={!!activityLog} />
+          <ModuleTabs selected={view} onSelect={selectFilter} entitlements={entitlements} hasActivityLog={!!activityLog} />
           {ended ? (
             // 왼쪽 분기 탭과 같은 트랙·글자로 — 다른 부품처럼 보이지 않게.
             <div className="agent-chat-tabs agent-chat-result-toggle" role="group" aria-label="결과 화면">
@@ -262,121 +224,10 @@ export default function AgentActivityStream({
           ) : null}
         </div>
       </header>
-
-      {filter === "activity_logs" && activityLog ? activityLog : <div className="agent-chat-stream flex flex-col">
-        <div
-          ref={logRef}
-          className="agent-chat-log flex-1"
-          role="log"
-          aria-relevant="additions"
-          tabIndex={0}
-          aria-label="에이전트 관측 기록"
-          aria-busy={isFeatureLoading}
-          onScroll={trackScroll}
-        >
-          {selectedModule && selectedAccess !== "enabled" ? (
-            <RestrictedModule module={selectedModule} state={selectedAccess} onUpgrade={onUpgrade} />
-          ) : visible.length ? (
-            visible.map((event) => {
-              const module = AGENT_MODULE_MAP.get(event.module);
-              const severityLabel = event.severity === "critical"
-                ? "위험"
-                : event.severity === "warning" || event.severity === "watch"
-                  ? "주의"
-                  : event.severity === "signal"
-                    ? "조건"
-                    : "";
-              const plan = module?.minimumPlan || "free";
-              const planLabel = PLAN_LABELS[plan] || String(plan).toUpperCase();
-              const hasTierBadge = plan !== "free";
-              const record = observations.records[event.observationId];
-              const eventId = activityEventId(event, session?.session_id) || (record?.status === "ready" ? record.eventId : null);
-              const originalLog = activityLogLink(session?.session_id, eventId);
-              const browserObservation = !!observationForEvent(event);
-              return (
-                <article
-                  key={event.id}
-                  className={`agent-message is-${event.severity}`}
-                  data-plan={plan}
-                  aria-live={event.notify === false ? "off" : undefined}
-                >
-                  <span className="agent-message-avatar" aria-hidden="true">
-                    <img src={avatarForEvent(event)} alt="" width="80" height="80" draggable="false" decoding="async" />
-                  </span>
-                  <div className="agent-message-bubble">
-                    {hasTierBadge ? (
-                      <span className="agent-tier-badge" data-plan={plan} aria-hidden="true">{planLabel}</span>
-                    ) : null}
-                    <span className="sr-only">
-                      {hasTierBadge ? `${planLabel} 구독 기능. ` : ""}
-                      {module?.label || event.module}{severityLabel ? `. ${severityLabel}` : ""}.
-                    </span>
-                    {event.isCommunityPost || event.isHistorical ? <p className="agent-message-detail">
-                      {[event.isCommunityPost ? "커뮤니티" : "", event.isHistorical
-                        ? event.isCommunityPost ? "과거 게시글" : "과거 기사" : ""].filter(Boolean).join(" · ")}
-                    </p> : null}
-                    <p className="agent-message-primary">{event.title}</p>
-                    <CommunityBodySummary summary={event.communitySummary} />
-                    {event.summary ? <p className="agent-message-summary">{event.summary}</p> : null}
-                    {event.detail ? <p className="agent-message-detail">{event.detailLabel || "판단 근거"} · {event.detail}</p> : null}
-                    {event.originalTitle && event.module === "runner_log" ? <p className="agent-message-detail">저장된 원문: {event.originalTitle}</p> : null}
-                    <p className="agent-message-detail">
-                      {originalLog ? <Link to={originalLog}>{event.isNewsArticle ? "이 기사 포함 응답 수신 로그" : "해당 로그 보기"} · 사건 #{eventId}</Link>
-                        : browserObservation ? record?.status === "error" ? <>
-                          관측 기록 저장 실패 <button type="button" className="btn btn-s btn-ghost" onClick={() => observations.retry(event)}>기록 다시 저장</button>
-                        </> : "관측 기록 저장 중…" : "원본 연결 없음"}
-                      {browserObservation ? " · 브라우저 관측 · 실제 주문/체결 증거 아님" : ""}
-                    </p>
-                    <footer>
-                      {event.sourceUrl ? (
-                        <a href={event.sourceUrl} target="_blank" rel="noopener noreferrer" aria-label={`${event.sourceLabel} 원문 보기, 새 창`}>
-                          {event.sourceLabel} · 원문 보기 <Icon name="arrowUpRight" size={14} className="ui-icon-inline" />
-                        </a>
-                      ) : (
-                        <span>{event.sourceLabel}</span>
-                      )}
-                      <time
-                        className="num"
-                        dateTime={event.isNewsArticle
-                          ? publicationTime(event.publishedAt) === null ? undefined : new Date(event.publishedAt).toISOString()
-                          : eventTime(event.occurredAt) ? new Date(eventTime(event.occurredAt)).toISOString() : undefined}
-                        aria-live="off"
-                      >
-                        {event.isNewsArticle ? publicationLabel(event.publishedAt) : <>
-                          <span aria-hidden="true">{activityTime(event.occurredAt, now, event.fallbackTime)}</span>
-                          <span className="sr-only">발생 시각 {absoluteActivityTime(event.occurredAt, event.fallbackTime)}</span>
-                        </>}
-                      </time>
-                    </footer>
-                  </div>
-                </article>
-              );
-            })
-          ) : (
-            <div className="agent-stream-empty" role="status" {...featureStatusAttr}>
-              <strong>{featureNotice || "새 소식이 없어요."}</strong>
-            </div>
-          )}
-          {visible.length > 0 && featureNotice ? (
-            // 소식이 있으면 안내는 맨 아래(새 소식 자리) 조용한 한 줄로.
-            <div className="agent-checking" role="status" {...featureStatusAttr}>{featureNotice}</div>
-          ) : null}
-
-          {isFeatureLoading && selectedAccess === "enabled" && !newsNotice ? (
-            <div className="agent-checking" role="status">
-              <i className="agent-live-dot is-checking" aria-hidden="true" />
-              새 데이터를 확인하는 중…
-            </div>
-          ) : null}
-        </div>
-        {newMessageCount > 0 ? (
-          <button type="button" className="agent-new-message" onClick={scrollToLatest}>
-            새 관측 {newMessageCount}개 <Icon name="arrowDown" size={14} className="ui-icon-inline" />
-          </button>
-        ) : null}
-      </div>}
-
-      <span className="sr-only" aria-live="polite" aria-atomic="true">{announcement}</span>
+      {view === "activity_logs" && activityLog ? activityLog
+        : view === leaderModule.key && AGENT_MODULE_MAP.get(leaderModule.key)
+          ? <WhaleFeed symbol={symbol} session={session} featureStates={featureStates} entitlements={entitlements} onUpgrade={onUpgrade} />
+          : <AgentCommentary session={session} commentary={commentary} />}
     </aside>
   );
 }

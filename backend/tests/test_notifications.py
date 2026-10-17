@@ -371,7 +371,7 @@ def test_personal_notifications_are_trimmed_and_kinds_validated(monkeypatch):
     assert [it["title"] for it in listing["items"]] == ["메시지 4", "메시지 3", "메시지 2"]
 
 
-def test_pnl_moves_notify_by_step_or_sudden_jump_and_reset_when_the_position_closes():
+def test_pnl_alerts_fire_once_per_band_and_reset_when_the_position_closes():
     from app import runner as runner_mod
 
     token, user = _signup()
@@ -390,24 +390,27 @@ def test_pnl_moves_notify_by_step_or_sudden_jump_and_reset_when_the_position_clo
     def pnl_alerts():
         return [it for it in _personal(token)["items"] if it["kind"] == "agent" and it["data"].get("event") == "pnl"]
 
-    beat(0.4); beat(1.2); beat(1.9)
-    assert pnl_alerts() == [], "기준(0)에서 2%p 미만이고 급변도 아니면 조용하다"
-    beat(2.3)
+    beat(0.4); beat(1.2); beat(2.9); beat(1.1)
+    assert pnl_alerts() == [], "구간(±3%) 안에서 오르내리면 조용하다 — 예전처럼 1%p 급변마다 알리지 않는다"
+    beat(3.2)
     alerts = pnl_alerts()
-    assert len(alerts) == 1 and alerts[0]["title"] == "LTCUSDT 평가손익 +2.30%" and alerts[0]["data"]["direction"] == "up"
-    assert "마지막 알림보다 +2.30%p 상승" in alerts[0]["body"] and alerts[0]["session_id"] == sid
-    beat(2.9); beat(3.6)
-    assert len(pnl_alerts()) == 1, "기준이 2.3 으로 옮겨져 2%p 를 더 움직이기 전엔 조용하다"
-    beat(2.5)  # 3.6 → 2.5: 한 heartbeat 사이 -1.1%p 급락
+    assert len(alerts) == 1 and alerts[0]["title"] == "LTCUSDT 평가손익 +3.20%" and alerts[0]["data"]["direction"] == "up"
+    assert alerts[0]["body"].startswith("수익이 +3%를 넘었어요") and alerts[0]["session_id"] == sid
+    assert alerts[0]["data"]["band"] == 3.0
+    beat(2.8); beat(3.4); beat(4.9)
+    assert len(pnl_alerts()) == 1, "같은 구간을 경계에서 오가도 다시 알리지 않는다"
+    beat(5.1)
+    assert len(pnl_alerts()) == 2 and pnl_alerts()[0]["data"]["band"] == 5.0
+    beat(-3.3)  # 반대쪽 구간은 새로 센다
     alerts = pnl_alerts()
-    assert len(alerts) == 2 and alerts[0]["data"]["sudden"] is True and alerts[0]["data"]["direction"] == "down"
-    assert "-1.10%p 급락" in alerts[0]["body"]
-    beat(0.3)  # 2.5 → 0.3: -2.2%p 이동(기준 2.5)
-    assert len(pnl_alerts()) == 3 and pnl_alerts()[0]["title"] == "LTCUSDT 평가손익 +0.30%"
-    beat(0.0, in_position=False)  # 포지션 닫힘 → 기준 0 으로
-    beat(0.5); assert len(pnl_alerts()) == 3
-    beat(-2.4)  # 새 포지션에서 -2.4 (기준 0 → 2%p 넘음, 급변이기도 하다)
-    assert len(pnl_alerts()) == 4 and pnl_alerts()[0]["data"]["direction"] == "down"
+    assert len(alerts) == 3 and alerts[0]["data"]["direction"] == "down" and "손실이 -3%를 넘었어요" in alerts[0]["body"]
+    beat(-4.0); beat(-3.1)
+    assert len(pnl_alerts()) == 3
+    beat(0.0, in_position=False)  # 포지션 닫힘 → 처음부터 다시
+    beat(-3.5)
+    assert len(pnl_alerts()) == 4 and pnl_alerts()[0]["data"]["band"] == -3.0
+    assert runner_mod._pnl_band(-12.0) == -10.0 and runner_mod._pnl_band(2.99) == 0.0
+    beat(-2.4)
     # 종료 보고 때 마지막 포지션이 결과 화면용으로 남는다
     r = client.post("/api/runner/stopped", json={"session_id": sid, "status": "stopped", "note": "청산 완료 후 종료"}, headers=key)
     assert r.status_code == 200

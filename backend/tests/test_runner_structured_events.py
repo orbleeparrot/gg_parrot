@@ -48,7 +48,8 @@ def test_stable_key_deduplicates_retried_batch_and_notifications(sessions, monke
     notifications = []
     monkeypatch.setattr(runner.notifications_mod, "notify", lambda *args, **kwargs: notifications.append(args))
     monkeypatch.setattr(runner.notifications_mod, "trim_user", lambda *args: None)
-    event = {"ts": "2026-10-13T03:00:00Z", "kind": "order", "message": "실행기 주문 결과 보고",
+    # 종 알림은 체결 · 오류만 낸다(2026-10-17) — 재전송된 체결 보고가 알림을 두 번 만들지 않는지 본다.
+    event = {"ts": "2026-10-13T03:00:00Z", "kind": "fill", "message": "실행기 주문 결과 보고",
              "event_key": "runner:test-order", "severity": "INFO", "event_name": "runner.message",
              "details": {"executed_qty": 2, "fill_price": 12.6}}
     with get_session() as db:
@@ -176,7 +177,10 @@ def test_logging_failure_keeps_command_ack_transaction(sessions, monkeypatch):
         row = db.get(RunSession, sessions[0])
         cmd = _command(db, row.id)
         db.commit()
-        monkeypatch.setattr(runner.notifications_mod, "notify", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("log sink unavailable")))
+        def broken_log(*args, **kwargs):
+            raise RuntimeError("log sink unavailable")
+
+        monkeypatch.setattr(runner, "_append_event_batch", broken_log)
         runner_engine.apply_acks(db, row, [{"command_id": cmd.id, "ok": True,
                                          "executed_qty": 2, "fill_price": 12.6}], now_ms=2_000)
         db.commit()

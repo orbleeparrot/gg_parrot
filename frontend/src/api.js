@@ -517,6 +517,9 @@ export const api = {
   // 세션 실행 로그(최신순) — 실행기가 heartbeat 로 올린 신호·주문·체결·오류.
   runnerSessionEvents: (sessionId, options = {}) =>
     req(`/api/me/runner/sessions/${encodeURIComponent(sessionId)}/events`, options),
+  // 껄무새 중계 말풍선(오래된 것부터) — after 보다 뒤의 것만.
+  runnerSessionAgent: (sessionId, after = 0, options = {}) =>
+    req(`/api/me/runner/sessions/${encodeURIComponent(sessionId)}/agent?after=${Math.max(0, Number(after) || 0)}`, options),
   runnerSessionsStreamToken: () =>
     req("/api/me/runner/sessions/stream-token", { method: "POST" }),
   runnerSessionsStreamUrl: () => websocketUrl(RUNNER_SESSIONS_STREAM_PATH),

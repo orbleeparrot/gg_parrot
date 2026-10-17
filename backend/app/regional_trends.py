@@ -176,6 +176,31 @@ def store_items(items, *, now_ms, db):
     return inserted
 
 
+# 읽기용 지역 목록 — 10초가 지나면 읽는 사람이 뒤에서 새로 만들게 하고, 그동안(최대 10분) 만들어 둔 목록을 바로 준다.
+# 화면은 첫 20개를 받으려고 최근 7일 기사(최대 1,000건 · 4MB)를 다 읽기를 기다리지 않는다 — 예전엔 30초만 지나도
+# 다음 사람이 전체 읽기를 기다려 첫 쪽이 0.5~0.8초 늦었다(2026-10-18 실측). 목록이 아예 없을 때(재배포 직후 ·
+# 10분 넘게 아무도 안 봄)만 수집 스레드가 미리 만든다 — 매분 다시 읽으면 보는 사람이 없어도 DB 전송량이 쌓인다.
+READ_FRESH_SECONDS = 10
+READ_STALE_SECONDS = 600
+READ_STALE_AFTER_MS = 2 * 60_000
+
+
+def _region_snapshot(region):
+    return _responses.get_or_load(region, lambda: _read_region(region),
+                                  ttl=READ_FRESH_SECONDS, stale_ttl=READ_STALE_SECONDS)
+
+
+def warm_readers():
+    """읽기용 목록이 없는 지역만 미리 만든다(첫 방문자가 전체 읽기를 기다리지 않게). 있으면 아무것도 읽지 않는다."""
+    for region in ("kr", "global"):
+        if _responses.peek(region) is not None:
+            continue
+        try:
+            _region_snapshot(region)
+        except Exception as exc:
+            logger.info("regional reader warm deferred region=%s type=%s", region, type(exc).__name__)
+
+
 def _read_region(region):
     with get_session() as db:
         rows = db.exec(select(TrendArticle).where(TrendArticle.region == region)
@@ -189,7 +214,7 @@ def _read_region(region):
                 break
             size += item_size
             items.append(json.loads(row.item_json))
-        return {"items": items,
+        return {"items": items, "read_ms": int(time.time() * 1000),
                 "coverage":{"candidate_limit":MAX_READ_CANDIDATES, "candidate_count":len(items),
                             "truncated":len(rows)>len(items), "byte_limited":size>=MAX_SNAPSHOT_BYTES or len(items)<min(len(rows),MAX_READ_CANDIDATES),
                             "basis":"most_recent_prepared_articles"},
@@ -220,7 +245,7 @@ def _matches(item, q, assets, selected):
 def get_news(region, *, q="", assets=None, selected=None, source=None, limit=100, offset=0):
     if region not in {"kr", "global"}:
         raise ValueError("unsupported region")
-    snapshot, cache_state = _responses.get_or_load(region, lambda: _read_region(region), ttl=10, stale_ttl=20)
+    snapshot, _cache_state = _region_snapshot(region)
     now = int(time.time() * 1000)
     items = [item for item in snapshot["items"] if item.get("translation_status") != "pending"
              and now-RETENTION_MS <= item.get("published_ms", 0) <= now+300000
@@ -233,7 +258,8 @@ def get_news(region, *, q="", assets=None, selected=None, source=None, limit=100
     statuses = [row["status"] for row in sources]
     status = "pending" if not source_map else "ready" if all(s == "ready" for s in statuses) else (
         "error" if all(s == "error" for s in statuses) else "partial")
-    stale = cache_state == "stale" or any(row.get("last_success_ms", 0) and
+    # 캐시가 뒤에서 새로 만드는 중인 것은 '낡음'이 아니다 — 읽은 지 2분이 넘었을 때만.
+    stale = now - snapshot.get("read_ms", now) > READ_STALE_AFTER_MS or any(row.get("last_success_ms", 0) and
                now-row["last_success_ms"] > 2*REFRESH_SECONDS*1000 for row in sources)
     if status == "ready" and stale:
         status = "stale"
@@ -591,6 +617,8 @@ class _Runtime:
                 collect_once(stop_event=self.stop, write_lock=self.write_lock)
             except Exception as exc:
                 logger.warning("regional collection deferred type=%s",type(exc).__name__)
+            if not self.stop.is_set():
+                warm_readers()
             self.stop.wait(60)
 
 

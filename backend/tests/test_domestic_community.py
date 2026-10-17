@@ -321,3 +321,30 @@ def test_offset_pages_results_and_mentions_ignore_display_filters():
     assert filtered["mentions"] == first["mentions"] == {"BTC": 5, "ETH": 3}
     with pytest.raises(ValueError, match="시작 위치"):
         community.get_domestic_community("upbit", offset=-1)
+
+
+def test_readers_get_the_prepared_community_list_without_a_full_reread(monkeypatch):
+    # 2026-10-18: 20초만 지나도 다음 사람이 최대 2,000건 전체 읽기를 기다렸다.
+    stored(items=[{}])
+    clock = [1000.0]
+    monkeypatch.setattr(community._responses, "clock", lambda: clock[0])
+    community.warm_reader()
+    reads = []
+    original = community._read_snapshot
+    monkeypatch.setattr(community, "_read_snapshot", lambda: reads.append(1) or original())
+    import app.cache_runtime as cache_runtime
+    monkeypatch.setattr(cache_runtime, "_submit", lambda job: True)  # 뒤에서 새로 만드는 일은 멈춰 둔다
+    clock[0] += 5 * 60
+    result = community.get_domestic_community("upbit")
+    assert reads == [] and len(result["items"]) == 1
+    assert result["collection"]["status"] == "ready" and not result.get("stale")
+
+
+def test_community_collection_loop_warms_the_reader(monkeypatch):
+    calls = []
+    monkeypatch.setattr(community, "collect_once", lambda **_: None)
+    monkeypatch.setattr(community, "warm_reader", lambda: calls.append("warm"))
+    runtime = community._Runtime()
+    monkeypatch.setattr(runtime.stop, "wait", lambda _seconds: runtime.stop.set())
+    runtime.run()
+    assert calls == ["warm"]

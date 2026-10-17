@@ -344,3 +344,50 @@ def test_paged_sections_skip_rankings_and_slice_lists(monkeypatch):
     assert data["news"]["total"] == 5 and data["news"]["offset"] == 2 and data["offset"] == 2
     for bad in ("", "rankings,secrets", "everything"):
         assert client.get("/api/trends", params={"region": "kr", "sections": bad}).status_code == 422
+
+
+def test_readers_get_the_prepared_list_without_waiting_for_a_full_reread(monkeypatch):
+    # 2026-10-18: 30초만 지나도 다음 사람이 최근 7일 전체 읽기를 기다려 첫 20개가 0.5~0.8초 늦었다.
+    publish([article()])
+    clock = [1000.0]
+    monkeypatch.setattr(trends._responses, "clock", lambda: clock[0])
+    trends.warm_readers()
+    reads = []
+    original = trends._read_region
+    monkeypatch.setattr(trends, "_read_region", lambda region: reads.append(region) or original(region))
+    import app.cache_runtime as cache_runtime
+    monkeypatch.setattr(cache_runtime, "_submit", lambda job: True)  # 뒤에서 새로 만드는 일은 이 시험에서 멈춰 둔다
+    clock[0] += 5 * 60  # 5분 동안 아무도 안 봄
+    page = trends.get_news("kr", limit=20)
+    assert reads == []  # 읽는 사람은 전체 읽기를 기다리지 않는다
+    assert [item["title"] for item in page["items"]] == ["비트코인 현물 거래 증가"]
+    assert page["stale"] is False  # 뒤에서 새로 만드는 중인 것은 '낡음'이 아니다
+
+
+def test_reader_list_older_than_two_minutes_is_labelled_stale(monkeypatch):
+    publish([article()])
+    trends.warm_readers()
+    real = time.time()
+    monkeypatch.setattr(trends.time, "time", lambda: real + 3 * 60)
+    assert trends.get_news("kr", limit=20)["stale"] is True
+
+
+def test_collection_loop_warms_both_region_readers(monkeypatch):
+    calls = []
+    monkeypatch.setattr(trends, "collect_once", lambda **_: None)
+    monkeypatch.setattr(trends, "warm_readers", lambda: calls.append("warm"))
+    runtime = trends._Runtime()
+    monkeypatch.setattr(runtime.stop, "wait", lambda _seconds: runtime.stop.set())
+    runtime.run()
+    assert calls == ["warm"]
+
+
+def test_warming_reads_only_when_the_reader_list_is_missing(monkeypatch):
+    # 매분 다시 읽으면 보는 사람이 없어도 DB 전송량이 쌓인다 — 목록이 없을 때만 읽는다.
+    publish([article()])
+    reads = []
+    original = trends._read_region
+    monkeypatch.setattr(trends, "_read_region", lambda region: reads.append(region) or original(region))
+    trends.warm_readers()
+    trends.warm_readers()
+    assert sorted(reads) == ["global", "kr"]

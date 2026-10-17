@@ -508,14 +508,35 @@ def collect_once(*, now_ms=None, stop_event=None, write_lock=None) -> dict:
                 finish_work(SCOPE, token, retry_seconds=retry_seconds)
 
 
+# 읽기용 목록(최대 2,000건) — 10초가 지나면 읽는 사람이 뒤에서 새로 만들게 하고 그동안(최대 10분) 만들어 둔 것을 바로 준다.
+# 목록이 아예 없을 때만 수집 스레드가 미리 만든다(2026-10-18, regional_trends 와 같은 규칙).
+READ_FRESH_SECONDS = 10
+READ_STALE_SECONDS = 600
+READ_STALE_AFTER_MS = 2 * 60_000
+
+
+def _snapshot():
+    return _responses.get_or_load("shared", _read_snapshot, ttl=READ_FRESH_SECONDS, stale_ttl=READ_STALE_SECONDS)
+
+
+def warm_reader() -> None:
+    if _responses.peek("shared") is not None:
+        return
+    try:
+        _snapshot()
+    except Exception as exc:
+        logger.info("domestic community reader warm deferred type=%s", type(exc).__name__)
+
+
 def _read_snapshot() -> dict:
     with get_session() as db:
         state = db.get(DomesticCommunityState, SCOPE)
         if state is None:
-            return {"state": None, "items": []}
+            return {"state": None, "items": [], "read_ms": int(time.time() * 1000)}
         rows = db.exec(select(DomesticCommunityItem).order_by(
             DomesticCommunityItem.published_ms.desc(), DomesticCommunityItem.id).limit(MAX_ITEMS)).all()
-        return {"state": {"status": state.status, "last_success_ms": state.last_success_ms,
+        return {"read_ms": int(time.time() * 1000),
+                "state": {"status": state.status, "last_success_ms": state.last_success_ms,
                            "sources": json.loads(state.sources_json), "listings": json.loads(state.listings_json)},
                 "items": [{"id": row.id, "title": row.title, "url": row.url, "source": row.source,
                            "published": row.published, "published_ms": row.published_ms,
@@ -548,7 +569,7 @@ def get_domestic_community(exchange: str, symbol: str | None = None, *, q: str =
               "notice": "국내 공개 커뮤니티에서 선택한 거래소의 원화 상장 종목을 언급한 글입니다. 작성자의 이용 거래소와는 무관하며 투자 조언이 아닙니다."}
     if symbol:
         result["symbol"] = symbol
-    snapshot, cache_state = _responses.get_or_load("shared", _read_snapshot, ttl=10, stale_ttl=10)
+    snapshot, _cache_state = _snapshot()
     state = snapshot["state"]
     if state is None:
         return result
@@ -557,7 +578,9 @@ def get_domestic_community(exchange: str, symbol: str | None = None, *, q: str =
     status = state["status"]
     stale = bool(state["last_success_ms"] and now_ms - state["last_success_ms"] > STALE_SECONDS * 1000)
     exchange_failed = any(s.get("id") == exchange and s.get("status") == "error" for s in sources)
-    if status == "ready" and (stale or not listing or exchange_failed or cache_state == "stale"):
+    # 캐시가 뒤에서 새로 만드는 중인 것은 '낡음'이 아니다 — 읽은 지 2분이 넘었을 때만.
+    read_late = now_ms - snapshot.get("read_ms", now_ms) > READ_STALE_AFTER_MS
+    if status == "ready" and (stale or not listing or exchange_failed or read_late):
         status = "stale"
     result["collection"] = {"status": status, "sources": sources}
     if state["last_success_ms"]:
@@ -624,6 +647,8 @@ class _Runtime:
             except Exception as exc:
                 logger.warning("domestic community collection failed type=%s", type(exc).__name__)
                 delay = REFRESH_SECONDS
+            if not self.stop.is_set():
+                warm_reader()
             self.stop.wait(delay)
 
 

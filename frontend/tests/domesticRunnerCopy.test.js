@@ -71,12 +71,16 @@ const done = { ...live, status: "stopped", stop_mode: "close_and_stop", started_
   started_at: "2026-10-06T00:00:00Z", stopped_at: "2026-10-06T01:00:00Z", macro: null };
 
 test("포지션 스트립이 그린 글 — 원화 세션은 KRW, USDT 세션은 USDT", async () => {
-  const krwText = textOf(await renderComponent("src/components/PositionStrip.jsx", { session: live, macro: null }));
+  // 세부 표는 처음엔 접혀 있다(채팅이 오른쪽 열을 넓게 쓰게) — 펼친 상태로 단위를 본다.
+  const folded = textOf(await renderComponent("src/components/PositionStrip.jsx", { session: live, macro: null }));
+  assert.match(folded, /평단 · 수량 · 실행기 자세히/);
+  assert.doesNotMatch(folded, /실현손익 · 누적/);
+  const krwText = textOf(await renderComponent("src/components/PositionStrip.jsx", { session: live, macro: null, defaultDetailsOpen: true }));
   assert.match(krwText, /투입금 100,000 KRW/);
   assert.match(krwText, /실현손익 · 누적 \+4,200 KRW/);
   assert.doesNotMatch(krwText, /USDT/);
   const usdt = { ...live, symbol: "BTCUSDT", realized_pnl: 4.2, invested_usdt: 100 };
-  const usdtText = textOf(await renderComponent("src/components/PositionStrip.jsx", { session: usdt, macro: null }));
+  const usdtText = textOf(await renderComponent("src/components/PositionStrip.jsx", { session: usdt, macro: null, defaultDetailsOpen: true }));
   assert.match(usdtText, /투입금 100 USDT/);
   assert.match(usdtText, /실현손익 · 누적 \+4.20 USDT/);
   assert.doesNotMatch(usdtText, /KRW/);

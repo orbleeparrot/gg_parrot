@@ -691,22 +691,52 @@ def _say_volatility(state: dict, facts: dict, candles, now_ms: int) -> list[dict
     return says
 
 
+def _blocked(wait: dict) -> Optional[dict]:
+    """주 조건 말고 아직 안 맞은 조건(이평선 필터 · 연속 봉 · 진입 필터) 하나."""
+    rows = [row for row in (wait.get("conditions") or [])[1:] if isinstance(row, dict)]
+    return next((row for row in rows if row.get("ok") is False), None)
+
+
 def _say_wait(state: dict, facts: dict, wait, now_ms: int) -> list[dict]:
     if facts["in_position"] or not isinstance(wait, dict) or wait.get("realtime"):
+        state.pop("wait_open", None)
         return []
     bar = wait.get("next_check_ms") or 0
+    says: list[dict] = []
+    # '넘었어요'를 말한 봉이 사지 않고 끝났으면 그렇다고 이유와 함께 말한다 — 말없이 다음 사는 선으로 넘어가면 버그로 보인다.
+    opened = int(state.get("wait_open") or 0)
+    last = wait.get("last_bar") if isinstance(wait.get("last_bar"), dict) else {}
+    last_at = int(last.get("at_ms") or 0)
+    if opened and last_at >= opened:
+        state.pop("wait_open", None)
+        if last_at == opened and not last.get("entered"):
+            subs = [_sub("", str(last["why"]))] if last.get("why") else []
+            if wait.get("headline") or wait.get("sentence"):
+                subs.append(_sub(f"새 봉 · {wait.get('headline') or wait['sentence']}"))
+            says.append(_say(f"wait:miss:{opened}", "wait", now_ms, "curious", "이번 봉은 안 샀어요",
+                             subs=subs, chips=[_chip("chart", "차트")]))
+    nums = price_text(facts["last_price"], facts["symbol"]) if facts["last_price"] > 0 else ""
     if wait.get("reached"):
-        return [_say(f"wait:reached:{bar}", "wait", now_ms, "signal", "사는 선을 넘었어요! 이번 봉 마감만 버텨 주면 사요",
-                     nums=price_text(facts["last_price"], facts["symbol"]) if facts["last_price"] > 0 else "",
-                     subs=[_sub(str(wait["sentence"]))] if wait.get("sentence") else [],
-                     chips=[_chip("chart", "차트")])]
+        state["wait_open"] = bar
+        says.append(_say(f"wait:reached:{bar}", "wait", now_ms, "signal", "사는 선을 넘었어요! 이대로 끝나면 사요",
+                         nums=nums, subs=[_sub(str(wait["sentence"]))] if wait.get("sentence") else [],
+                         chips=[_chip("chart", "차트")]))
+        return says
+    blocked = _blocked(wait)
+    if wait.get("touched") and blocked:
+        state["wait_open"] = bar
+        hl = "사는 선은 넘었는데, 아직 안 사요" if wait.get("rule") == "I" else "조건은 맞았는데, 아직 안 사요"
+        says.append(_say(f"wait:held:{bar}", "wait", now_ms, "focused", hl, nums=nums,
+                         subs=[_sub(f" · 지금 {nums}" if nums else "", str(blocked.get("wait") or blocked.get("label") or ""))],
+                         chips=[_chip("chart", "차트")]))
+        return says
     meter = wait.get("meter") if isinstance(wait.get("meter"), dict) else None
     progress = _num((meter or {}).get("progress"))
     if progress is not None and progress >= 0.9:
         subs = [_sub(str(wait[name])) for name in ("distance", "sentence") if wait.get(name)]
-        return [_say(f"wait:near:{bar}", "wait", now_ms, "focused", "사는 선까지 거의 다 왔어요",
-                     nums=str(wait.get("gap") or ""), subs=subs, chips=[_chip("chart", "차트")])]
-    return []
+        says.append(_say(f"wait:near:{bar}", "wait", now_ms, "focused", "사는 선까지 거의 다 왔어요",
+                         nums=str(wait.get("gap") or ""), subs=subs, chips=[_chip("chart", "차트")]))
+    return says
 
 
 def _say_quiet(state: dict, facts: dict, candles, wait, now_ms: int) -> list[dict]:

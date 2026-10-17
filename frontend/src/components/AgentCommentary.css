@@ -11,14 +11,15 @@
   font-weight: 700;
 }
 
+/* 껄무새 얼굴이 주인공 — 얼굴 칸을 키우고 말풍선 폭은 줄인다(10/17 "얼굴이 너무 작아"). */
 .agent-say {
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
+  grid-template-columns: 96px minmax(0, 400px);
   align-items: start;
-  gap: 8px;
+  gap: 12px;
 }
-.agent-say-face { display: grid; width: 34px; height: 34px; place-items: center; }
-.agent-say-face img { display: block; width: 34px; height: 34px; object-fit: contain; pointer-events: none; user-select: none; }
+.agent-say-face { display: grid; width: 96px; height: 96px; place-items: center; }
+.agent-say-face img { display: block; width: 96px; height: 96px; object-fit: contain; pointer-events: none; user-select: none; }
 .agent-say-stack { display: grid; gap: 6px; min-width: 0; }
 
 .agent-say-bubble {
@@ -32,7 +33,7 @@
 .agent-say.is-warn .agent-say-bubble { border-color: transparent; background: rgb(var(--c-amber-50)); }
 .agent-say.is-risk .agent-say-bubble { border-color: transparent; background: rgb(var(--c-red-50)); }
 
-.agent-say-hl { color: rgb(var(--c-slate-900)); font-size: 16px; font-weight: 800; line-height: 1.4; letter-spacing: -.015em; }
+.agent-say-hl { color: rgb(var(--c-slate-900)); font-size: 17px; font-weight: 800; line-height: 1.4; letter-spacing: -.015em; }
 .agent-say-nums { margin-top: 3px; color: rgb(var(--c-slate-900)); font-size: 15.5px; font-weight: 700; line-height: 1.45; }
 .agent-say-nums.is-up { color: rgb(var(--c-green-600)); }
 .agent-say-nums.is-down { color: rgb(var(--c-red-600)); }
@@ -75,7 +76,7 @@ a.agent-say-chip:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); ou
 }
 
 @container agent-chat (max-width: 430px) {
-  .agent-say { grid-template-columns: 30px minmax(0, 1fr); gap: 7px; }
-  .agent-say-face, .agent-say-face img { width: 30px; height: 30px; }
-  .agent-say-hl { font-size: 15px; }
+  .agent-say { grid-template-columns: 64px minmax(0, 1fr); gap: 10px; }
+  .agent-say-face, .agent-say-face img { width: 64px; height: 64px; }
+  .agent-say-hl { font-size: 16px; }
 }

@@ -50,6 +50,10 @@ POST_BEFORE_START_MS = 30 * 60_000
 SAME_TITLE_WINDOW_MS = 6 * 3_600_000
 SAME_NUMBERS_WINDOW_MS = 2 * 3_600_000  # 같은 숫자를 퍼 나른 글은 거르지 않고 "같은 숫자 글이 또 올라왔어요"로 알린다
 OFFLINE_MS = 60_000
+# 서버가 막 켜진 동안(배포 · 재시작)은 실행기 하트비트가 새 서버에 닿기 전이라 '끊겼다'고 하지 않는다 —
+# 2026-10-17 첫 배포 때 실행 중이던 세션에 가짜 '끊겼어요 → 다시 연결됐어요'가 같은 분에 붙었다.
+BOOT_GRACE_MS = 3 * 60_000
+_PROCESS_STARTED_MS = int(time.time() * 1000)
 ONLINE_MS = 30_000
 QUIET_MS = 45 * 60_000
 ERROR_REPEAT_MS = 10 * 60_000
@@ -241,6 +245,7 @@ def session_facts(row: RunSession) -> dict:
         "position_qty": float(row.position_qty or 0.0), "unrealized_pct": float(row.unrealized_pct or 0.0),
         "realized_pnl": float(row.realized_pnl or 0.0), "note": row.note or "", "stopping": row.stop_mode in {"stop_only", "close_and_stop"},
         "position_uncertain": bool(getattr(row, "position_uncertain", False)),
+        "boot_grace_until_ms": _PROCESS_STARTED_MS + BOOT_GRACE_MS,
     }
 
 
@@ -458,7 +463,7 @@ def _say_uncertain(state: dict, facts: dict, now_ms: int) -> list[dict]:
 
 def _say_connection(state: dict, facts: dict, now_ms: int) -> list[dict]:
     last = int(facts.get("last_hb_ms") or 0)
-    if not last:
+    if not last or now_ms < int(facts.get("boot_grace_until_ms") or 0):
         return []
     gap = now_ms - last
     if not state.get("offline_since") and gap >= OFFLINE_MS:

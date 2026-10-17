@@ -359,3 +359,12 @@ def test_closing_on_stop_and_the_end_comes_last_with_a_clean_note():
     assert says[0]["hl"] == "종료하면서 정리했어요" and says[0]["nums"] == "-4,070원 · -8.57%"
     assert says[1]["at_ms"] >= says[0]["at_ms"] and says[1]["subs"] == [{"t": "청산 완료 후 종료"}]
     assert says[1]["nums"] == "누적 실현 -2,283원"
+
+
+def test_no_offline_bubble_while_the_server_itself_just_started():
+    """배포 직후엔 실행기 하트비트가 새 서버에 아직 안 닿았을 뿐 — '끊겼어요'라고 하지 않는다."""
+    booting = facts(last_hb_ms=NOW - 90_000, boot_grace_until_ms=NOW + 60_000)
+    says, state = ac.decide(started_state(), booting, now_ms=NOW)
+    assert not [s for s in says if s["kind"] == "problem"] and not state["offline_since"]
+    later, _ = ac.decide(state, facts(last_hb_ms=NOW - 90_000, boot_grace_until_ms=NOW - 1), now_ms=NOW)
+    assert [s["key"] for s in later] == [f"offline:{NOW - 90_000}"], "서버가 자리 잡은 뒤의 끊김은 그대로 알린다"

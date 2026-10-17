@@ -48,7 +48,7 @@ VOL_MIN_BASE_BARS = 100
 POST_MAX_AGE_MS = 3 * 3_600_000
 POST_BEFORE_START_MS = 30 * 60_000
 SAME_TITLE_WINDOW_MS = 6 * 3_600_000
-SAME_NUMBERS_WINDOW_MS = 2 * 3_600_000  # 같은 숫자를 퍼 나른 글(미결제약정 6.07% 등)은 두 번째까지만
+SAME_NUMBERS_WINDOW_MS = 2 * 3_600_000  # 같은 숫자를 퍼 나른 글은 거르지 않고 "같은 숫자 글이 또 올라왔어요"로 알린다
 OFFLINE_MS = 60_000
 ONLINE_MS = 30_000
 QUIET_MS = 45 * 60_000
@@ -126,7 +126,6 @@ def tidy_price(value: float) -> float:
 
 
 _PICTOGRAPHS = re.compile("[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\uFE0F\u200D]")
-_SPAM_HEX = re.compile(r"(0x)?[0-9a-fA-F]{24,}")
 
 
 def clean_text(text: str) -> str:
@@ -755,8 +754,8 @@ def _say_posts(state: dict, facts: dict, feed, now_ms: int) -> list[dict]:
         if not published or now_ms - published > POST_MAX_AGE_MS or published < started - POST_BEFORE_START_MS:
             continue
         title = clean_text(item.get("title"))
-        if not title or _SPAM_HEX.search(title):
-            continue  # 계약 주소만 있는 홍보 카드 같은 글
+        if not title:
+            continue
         candidates.append((published, item, assessed, title))
     candidates.sort(key=lambda entry: entry[0])
     says = []
@@ -768,14 +767,8 @@ def _say_posts(state: dict, facts: dict, feed, now_ms: int) -> list[dict]:
             else (assessed.get("summary") or item.get("excerpt") or "")
         norm = _norm_title(title)
         same_title = [entry for entry in titles if entry[0] == norm]
-        if any(entry[1] == author for entry in same_title):
-            continue  # 같은 사람이 같은 글을 다시 올림 — 옮기지 않는다
-        if any(entry[3] for entry in same_title):
-            continue  # 같은 제목은 '또 올라왔어요'까지 한 번만
         found = numbers_of(f"{title} {raw_summary}")
         same_numbers = [entry for entry in numbers if _same_numbers(found, entry[0])]
-        if any(entry[2] for entry in same_numbers):
-            continue  # 같은 숫자를 퍼 나른 글은 두 번째까지만
         key = f"post:{article_id(item)}"
         repeat = bool(same_title or same_numbers)
         if repeat:

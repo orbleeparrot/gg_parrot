@@ -184,12 +184,12 @@ def test_community_posts_come_one_by_one_without_repeats_or_floods():
         post(5, "아주 오래된 글", "x", NOW - 4 * 3_600_000)]}
     says, state = ac.decide(state, facts(), feed=feed, now_ms=NOW)
     posts = [s for s in says if s["kind"] == "post"]
-    assert len(posts) == 2, "같은 사람이 다시 올린 글과 3시간 넘은 글은 옮기지 않는다"
+    assert len(posts) == 3, "글은 거르지 않는다 — 같은 사람이 다시 올린 글도 하나씩(3시간 넘은 옛 글만 새 글이 아니다)"
     assert posts[0]["post"]["title"] == "$ICNT — 선물 매도 | 저항선 거부 설정"
     assert posts[0]["post"]["summary"] == "ICNT가 0.1519달러에서 막히면 하락에 건다는 의견이다."
     assert posts[0]["post"]["author"] == "DecodedCryptoHQ" and posts[0]["face"] == "curious"
     assert posts[0]["chips"][0]["href"].startswith("https://www.binance.com/")
-    assert posts[1]["hl"] == "같은 내용 글이 또 올라왔어요"
+    assert posts[1]["hl"] == posts[2]["hl"] == "같은 내용 글이 또 올라왔어요"
     flood = {"cursor": 60, "reset": False, "items": [post(100 + i, f"글 {i}", f"u{i}", NOW - 5 * MIN + i) for i in range(10)]}
     says, state = ac.decide(state, facts(), feed=flood, now_ms=NOW + MIN)
     assert len([s for s in says if s["kind"] == "post"]) == 10, "개수로 자르지 않는다 — 걸러내는 건 같은 글 · 퍼 나른 글뿐"
@@ -329,7 +329,7 @@ def test_transient_errors_stay_in_the_log_and_uncertain_positions_speak_once():
     assert ac.decide(state, facts(position_uncertain=True), now_ms=NOW + 3000)[0] == []
 
 
-def test_reposted_numbers_spam_and_decoration_are_filtered():
+def test_every_post_is_shown_and_reposts_are_only_labelled():
     state = started_state()
     feed = {"cursor": 20, "reset": False, "items": [
         post(11, "$ICNT 15분간 미결제약정 +6.07%, 가격 3.88% 상승.", "a", NOW - 9 * MIN),
@@ -341,8 +341,10 @@ def test_reposted_numbers_spam_and_decoration_are_filtered():
     says, state = ac.decide(state, facts(), feed=feed, now_ms=NOW)
     titles = [s["post"]["title"] for s in says if s["kind"] == "post"]
     assert titles == ["$ICNT 15분간 미결제약정 +6.07%, 가격 3.88% 상승.", "ICNT 15분 보유량 6.07% 증가",
-                      "$ICNT가 뜨거워지고 있다! 0.1519 돌파?", "0.1519 저항선 재시험"], titles
-    assert [s["hl"] for s in says if s["kind"] == "post"][1] == "같은 숫자 글이 또 올라왔어요"
+                      "ICNT 15분 보유량 6.07% 급증", "{알파}(84530xe0cd4cacddcbf4f36e845407ce53e87717b6601d)",
+                      "$ICNT가 뜨거워지고 있다! 0.1519 돌파?", "0.1519 저항선 재시험"], "글은 하나도 거르지 않는다"
+    hls = [s["hl"] for s in says if s["kind"] == "post"]
+    assert hls[1] == hls[2] == "같은 숫자 글이 또 올라왔어요" and hls[4] != "같은 숫자 글이 또 올라왔어요", hls
     assert ac.numbers_of("1시간 거래량 4.9배, 가격 10.82% 하락") == ["10.82%", "4.9"]
 
 

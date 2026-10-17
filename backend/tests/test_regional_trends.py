@@ -477,3 +477,56 @@ def test_collection_loop_warms_both_region_readers(monkeypatch):
     monkeypatch.setattr(runtime.stop, "wait", lambda _seconds: runtime.stop.set())
     runtime.run()
     assert calls == ["warm"]
+
+
+def test_storing_many_square_posts_uses_a_bounded_number_of_statements():
+    # 2026-10-18 운영: 946개를 글마다 읽고 · 지우고 · 넣어 몇 분이 걸려(왕복 약 80ms) 수집기 임대(2분)가 끊겼다.
+    from sqlalchemy import event
+    now = int(time.time() * 1000)
+    items = [{"id": f"sq{n:04d}", "title": f"스퀘어 {n}", "published_ms": now - n, "asset_symbols": ["BTC", "ETH"],
+              "published": trends.iso(now), "source": "Binance Square"} for n in range(200)]
+    statements = []
+    with get_session() as db:
+        engine = db.get_bind()
+        def count(*_args):
+            statements.append(1)
+        event.listen(engine, "before_cursor_execute", count)
+        try:
+            assert trends.store_square_items(items, now_ms=now, db=db) == 200
+            db.commit()
+        finally:
+            event.remove(engine, "before_cursor_execute", count)
+    assert len(statements) < 30, len(statements)  # 글 수와 상관없이 몇 번
+    trends.clear_caches()
+    assert trends.get_global_community(limit=5)["total"] == 200
+    assert trends.get_global_community(limit=5, selected="ETH")["total"] == 200
+
+
+def test_square_watermark_is_committed_with_each_batch_even_if_the_lease_breaks_later(monkeypatch):
+    import app.prepared_square_feed as square
+    now = int(time.time() * 1000)
+    batches = iter([
+        {"items": [{"id": "sqa", "title": "첫 묶음", "published_ms": now, "asset_symbols": ["BTC"],
+                    "published": trends.iso(now), "source": "Binance Square"}],
+         "max_last_seen_ms": now - 500, "truncated": True},
+        {"items": [], "max_last_seen_ms": None, "truncated": False},
+    ])
+    monkeypatch.setattr(square, "load_changed", lambda since=None, **kw: next(batches))
+    monkeypatch.setattr(trends, "_leased_call", lambda scope, token, operation, **kw: operation())
+    monkeypatch.setattr(trends, "_fence", lambda db, token: None)
+    renewals = []
+    def renew(scope, token):
+        renewals.append(scope)
+        if len(renewals) > 1:
+            raise RuntimeError("public news preparation lease lost")
+    monkeypatch.setattr(trends, "renew_work", renew)
+    with get_session() as db:  # 이미 첫 채우기를 끝낸 상태에서 이어 읽기
+        db.add(trends.TrendSourceState(source_id="binance_square", region="global", status="ready",
+                                       source_json=json.dumps({"watermark_ms": now - 60_000})))
+        db.commit()
+    with pytest.raises(RuntimeError, match="lease lost"):
+        trends.sync_square(token="t")
+    with get_session() as db:
+        state = json.loads(db.get(trends.TrendSourceState, "binance_square").source_json)
+        stored = db.get(trends.TrendArticle, "sqa")
+    assert stored is not None and state["watermark_ms"] == now - 500  # 첫 묶음의 글과 자리가 함께 남았다

@@ -79,13 +79,14 @@ def test_projection_does_not_select_private_body_or_author():
     assert result['items'][0]['community_summary'] == '실제로 저장된 요약'
 
 
-def test_changed_rows_are_read_after_the_watermark_in_last_seen_order():
+def test_changed_rows_are_read_after_the_watermark():
     # 2026-10-18: 표 전체를 훑지 않고 바뀐 행만(last_seen_ms 인덱스) — 수집기가 1분마다 이어 읽는다.
     now = int(time.time() * 1000)
     for n in range(3):
         insert(post(str(n + 1)), key=f'post{n}', last_seen=now + n)
     changed = square.load_changed(now)
-    assert [item['community_post_id'] for item in changed['items']] == ['3', '2']
+    # 같은 밀리초에 만든 글은 순서가 id(해시)로 갈려 무작위 — 어떤 글을 읽었는지만 본다.
+    assert sorted(item['community_post_id'] for item in changed['items']) == ['2', '3']
     assert changed['max_last_seen_ms'] == now + 2 and not changed['truncated']
     assert square.load_changed(now + 2) == {**square.load_changed(now + 2), 'items': [], 'max_last_seen_ms': None}
 

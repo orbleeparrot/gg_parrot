@@ -34,12 +34,25 @@ def clean_assets(values) -> list[str]:
 
 
 def replace_assets(db, feed: str, item_id: str, assets, published_ms: int) -> None:
-    """글의 코인 연결을 새로 쓴다(빈 목록이면 지운다 — 안 보이게 된 글)."""
-    db.exec(delete(FeedAsset).where(FeedAsset.feed == feed, FeedAsset.item_id == item_id))
-    rows = [{"feed": feed, "item_id": item_id, "asset": asset, "published_ms": int(published_ms)}
-            for asset in clean_assets(assets)]
-    if rows:
-        db.exec(insert(FeedAsset).values(rows))
+    """글 하나의 코인 연결을 새로 쓴다(빈 목록이면 지운다 — 안 보이게 된 글)."""
+    replace_assets_many(db, feed, [(item_id, assets, published_ms)])
+
+
+def replace_assets_many(db, feed: str, entries) -> None:
+    """여러 글의 코인 연결을 한 번에 — 지우기 한 번 · 넣기 한 번(묶음당).
+
+    운영 웹 ↔ DB 왕복이 약 80ms 라 글마다 지우고 넣으면 946개에 몇 분이 걸려 수집기 임대(2분)가 끊겼다(2026-10-18).
+    """
+    latest = {}
+    for item_id, assets, published_ms in entries:
+        latest[item_id] = (clean_assets(assets), int(published_ms))
+    ids = list(latest)
+    for start in range(0, len(ids), 500):
+        db.exec(delete(FeedAsset).where(FeedAsset.feed == feed, FeedAsset.item_id.in_(ids[start:start + 500])))
+    rows = [{"feed": feed, "item_id": item_id, "asset": asset, "published_ms": published_ms}
+            for item_id, (assets, published_ms) in latest.items() for asset in assets]
+    for start in range(0, len(rows), 1000):
+        db.exec(insert(FeedAsset).values(rows[start:start + 1000]))
 
 
 def drop_items(db, feed: str, item_ids) -> None:

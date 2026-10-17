@@ -611,3 +611,18 @@ def test_lease_and_budget_claims_decide_by_returning_not_rowcount(engine, monkey
     assert repository.reserve_news_api_budget(total_limit=2, daily_limit=1, now_ms=1000) is False, "하루 한도에 닿으면 진다"
     budget = [s for s in seen if s.startswith("INSERT INTO tickernewsaibudget")]
     assert budget and all("RETURNING" in s for s in budget)
+
+
+def test_new_articles_wake_the_commentary_right_after_commit(engine, monkeypatch):
+    """'새 기사' 알림과 같은 순간 껄무새 중계도 깨운다 — 10초 주기를 기다리면 채팅이 알림보다 늦게 올라왔다(10/17)."""
+    from app import agent_commentary_runtime, notifications
+    monkeypatch.setattr(notifications, "notify_running_sessions", lambda *args, **kwargs: 1)
+    woke = []
+    monkeypatch.setattr(agent_commentary_runtime, "request_cycle", lambda: woke.append(True))
+    millis = 1_791_936_000_000
+    articles.upsert_articles("BTC", [item()], now_ms=millis)
+    assert woke == [], "첫 수집(알림 없음)은 깨우지 않는다"
+    articles.upsert_articles("BTC", [item("비트코인 새 ETF 자금 유입", url="https://example.test/new")], now_ms=millis + 1000)
+    assert woke == [True]
+    articles.upsert_articles("BTC", [item("비트코인 새 ETF 자금 유입", url="https://example.test/new")], now_ms=millis + 2000)
+    assert woke == [True], "같은 기사를 다시 찾아도 깨우지 않는다"

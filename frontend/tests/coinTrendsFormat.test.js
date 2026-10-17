@@ -3,7 +3,7 @@ import test from "node:test";
 
 import {
   formatPct, formatPrice, formatTurnover, matchScore, mergeById, neighborsByTurnover, premiumPct,
-  raceRows, rangePosition, refreshFirstPage, relativeTime, searchCoins, sortCoins, turnoverRank,
+  raceRows, rangePosition, refreshFirstPage, relativeTime, searchCoins, sortCoins, thumbGeometry, turnoverRank,
 } from "../src/features/coinTrends/trendsFormat.js";
 
 const coin = (base, extra = {}) => ({ base, symbol: `KRW-${base}`, korean_name: base, english_name: base,
@@ -124,4 +124,20 @@ test("the chosen trends exchange is remembered for the site-wide racer strip", a
   } finally {
     delete globalThis.localStorage;
   }
+});
+
+test("the inner scroll thumb keeps a minimum size and stays inside its track", () => {
+  // 칸 560 · 내용 5600 → 길 544 안에서 막대 54.4, 맨 끝이면 길 끝에 붙는다.
+  const end = thumbGeometry({ clientHeight: 560, scrollHeight: 5600, scrollTop: 5040 });
+  assert.equal(end.track, 544);
+  assert.ok(Math.abs(end.size - 54.4) < 1e-9);
+  assert.ok(Math.abs(end.offset + end.size - end.track) < 1e-9);
+  assert.equal(end.atEnd, true);
+  assert.equal(end.atTop, false);
+  // 아주 긴 목록도 막대는 28px 아래로 줄지 않는다.
+  assert.equal(thumbGeometry({ clientHeight: 226, scrollHeight: 90_000, scrollTop: 0 }).size, 28);
+  // 넘치지 않으면 막대를 쓰지 않는다.
+  const fits = thumbGeometry({ clientHeight: 560, scrollHeight: 400, scrollTop: 0 });
+  assert.equal(fits.scrollable, false);
+  assert.equal(fits.atTop && fits.atEnd, true);
 });

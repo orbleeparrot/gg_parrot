@@ -26,6 +26,7 @@ from sqlmodel import select
 from .data import get_ticker_price_cached  # 모듈 이름으로 참조 — 테스트가 monkeypatch 한다
 from .db import RunnerCommand, RunSession, get_session
 from .engine import Macro
+from .data.binance import _INTERVAL_MS
 from .engine.candle_feed import feed  # 모듈 이름으로 참조 — 테스트가 monkeypatch 한다
 from .engine.driver import Leg, StrategyDriver
 from .engine.stepper import EXIT_SIDES, Fill, make_sim
@@ -257,13 +258,20 @@ async def _start_driver(session_id: int) -> bool:
             history[symbol] = await feed.history(symbol, interval, market, WARMUP_CANDLES, **feed_kwargs)
         except Exception:
             log.exception("runner engine: warmup failed for %s — starting cold", symbol)
-    driver.warmup(history)
-    # 복구는 웜업 뒤 — 웜업이 장부를 비운다. 자산은 초기자본 기준(실계좌 손익은 실행기가 안다).
     from .paper import parse_state  # 늦은 import: paper ↔ runner_engine 순환 방지
     state = parse_state(info["state_json"])
+    # 되살리기(재기동 · 배포)라면 마지막 저장 뒤에 마감된 봉은 앞 프로세스가 판정하지 못했을 수 있다 — 웜업에 넣으면
+    # 그 봉의 진입 · 청산 의도가 조용히 사라진다(2026-10-18 세션 297: 19:00 마감 직후 배포로 골든크로스 진입을 놓침).
+    replay = _unjudged_last_close(history, state, keys)
+    driver.warmup({s: (rows[:-1] if s in replay else rows) for s, rows in history.items()})
+    # 복구는 웜업 뒤 — 웜업이 장부를 비운다. 자산은 초기자본 기준(실계좌 손익은 실행기가 안다).
     if state:
         driver.restore(state, leg_equity={}, total_equity=driver.initial)
         driver.trade_count = int(state.get("trade_count") or 0)
+    # 그 봉 하나만 실시간 봉처럼 넘긴다 — 의도가 서면 첫 틱(≈ 다음 시가)에 체결된다. 더 오래 끊겼어도 묵은 봉의
+    # 신호로 한꺼번에 사고팔지 않게 가장 최근 봉 하나만.
+    for symbol, candle in replay.items():
+        driver.push_candle(symbol, candle)
 
     async def on_candle(symbol: str, candle) -> None:
         if not live.stop_flag:
@@ -278,6 +286,28 @@ async def _start_driver(session_id: int) -> bool:
     _drivers[session_id] = live
     live.task = asyncio.get_running_loop().create_task(_run(live))
     return True
+
+
+def _unjudged_last_close(history: Dict[str, list], state: Optional[dict], keys: List[tuple]) -> Dict[str, tuple]:
+    """되살릴 때 실시간으로 다시 판정할 봉 — 종목마다 가장 최근 마감봉이 마지막 저장(checkpoint_ms) 뒤에 마감됐으면 그 봉.
+
+    체결이 나면 그 자리에서 상태를 저장하므로(checkpoint_ms = 처리 시각 > 마감 시각) 판정해 체결까지 간 봉은 여기
+    걸리지 않는다. 판정했지만 체결이 없던 봉이 걸리면 같은 봉으로 같은 결정을 다시 내릴 뿐이다(웜업은 그 봉을 빼고 한다).
+    처음 시작(저장 없음)이면 비운다 — 시작하자마자 지난 봉의 신호로 사지 않는다.
+    """
+    checkpoint = (state or {}).get("checkpoint_ms")
+    if not checkpoint:
+        return {}
+    out: Dict[str, tuple] = {}
+    for symbol, interval, _market in keys:
+        rows = history.get(symbol) or []
+        step = _INTERVAL_MS.get(interval)
+        if not rows or not step:
+            continue
+        last = rows[-1]
+        if int(last[0]) + int(step) > int(checkpoint):
+            out[symbol] = last
+    return out
 
 
 async def stop_driver(session_id: int) -> None:

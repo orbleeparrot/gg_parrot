@@ -41,7 +41,9 @@ export const riskModule = {
     }
 
     if (session?.status === "running" && session.in_position) {
-      const unrealized = session.unrealized_pct == null ? null : safeNumber(session.unrealized_pct, null);
+      // 실행기 화면과 같은 수수료 반영 평가손익, 옛 실행기면 평단 대비 가격(수수료 전이라고 밝힘).
+      const net = session.unrealized_net_pct == null ? null : safeNumber(session.unrealized_net_pct, null);
+      const unrealized = net !== null ? net : session.unrealized_pct == null ? null : safeNumber(session.unrealized_pct, null);
       const previousLoss = alertConditions["position-loss"] || 0;
       if (unrealized !== null && (unrealized <= -2 || (previousLoss && unrealized <= -1.5))) {
         const level = Math.max(previousLoss, 1, Math.floor(-unrealized / 2));
@@ -50,7 +52,7 @@ export const riskModule = {
           conditionKey: "position-loss", conditionValue: level,
           module: "risk", severity: "critical", expression: "critical",
           title: "평가손실 주의",
-          summary: `현재 평가손익 ${unrealized.toFixed(2)}%`,
+          summary: `현재 평가손익 ${unrealized.toFixed(2)}%${net === null ? "(수수료 전)" : ""}`,
           occurredAt: receivedAt || Date.now(), sourceLabel: "현재 보유 포지션",
         });
       } else if (unrealized === null && previousLoss) {

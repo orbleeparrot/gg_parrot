@@ -10,8 +10,9 @@ from app.db import RunSession
 from app.runner import realized_pnl_text
 
 
-def _row(symbol, pnl):
-    return RunSession(user_id=1, symbol=symbol, realized_pnl=pnl, started_at="")
+def _row(symbol, pnl, net="same"):
+    # 실행기 0.20.13+ 는 수수료 반영 값(realized_net)도 보낸다 — 단위 시험은 그 값으로 본다.
+    return RunSession(user_id=1, symbol=symbol, realized_pnl=pnl, realized_net=pnl if net == "same" else net, started_at="")
 
 
 @pytest.mark.parametrize("symbol, pnl, expected", [
@@ -48,6 +49,14 @@ def test_symbol_is_a_safe_stand_in_for_the_exchange():
         validate_symbol("BTCUSDT", "upbit")
     with pytest.raises(ValueError):
         validate_symbol("KRW-BTC", "binance")           # 바이낸스는 그 접두사를 못 쓴다
+
+
+def test_fee_inclusive_amount_wins_and_a_gross_one_says_so():
+    """실행기 화면의 실현손익은 수수료를 뺀 값이다(2026-10-18) — 서버 알림도 그 값을, 모르면 수수료 전이라고."""
+    assert realized_pnl_text(_row("KRW-SAND", 1_000.0, net=917.0)) == "+917 KRW"
+    assert realized_pnl_text(_row("KRW-SAND", 1_000.0, net=None)) == "+1,000 KRW(수수료 전)"
+    assert realized_pnl_text(_row("BTCUSDT", -0.5, net=None)) == "-0.50 USDT(수수료 전)"
+    assert realized_pnl_text(_row("BTCUSDT", 0.0, net=None)) == "+0.00 USDT", "0 은 수수료와 상관없다"
 
 
 def test_missing_symbol_falls_back_to_usdt():

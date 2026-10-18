@@ -96,7 +96,7 @@ export function gaugeModel(unrealizedPct, rules) {
   };
 }
 
-// 평가손익 금액(호가 통화) — 가격 차이 × 수량. 숏이면 부호를 뒤집는다. 값이 없으면 null.
+// 평단 대비 가격으로 센 평가손익 금액(호가 통화, 수수료 전) — 가격 차이 × 수량. 숏이면 부호를 뒤집는다. 값이 없으면 null.
 export function unrealizedMoney(session) {
   const entry = Number(session?.entry_price);
   const last = Number(session?.last_price);
@@ -104,6 +104,35 @@ export function unrealizedMoney(session) {
   if (![entry, last, qty].every(Number.isFinite) || entry <= 0 || last <= 0 || qty <= 0) return null;
   const diff = (last - entry) * qty;
   return session?.position_side === "short" ? -diff : diff;
+}
+
+function finiteOrNull(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+// 수수료 반영 값이 없어 평단 대비 가격으로 보일 때 숫자 옆에 붙이는 말.
+export const GROSS_TAG = "수수료 전";
+
+// 실행기 화면과 같은 평가손익 — 실행기(0.20.13+)가 보낸 수수료 반영 값(사고팔 때 수수료를 뺀 '지금 정리하면')을 쓰고,
+// 없으면(옛 실행기 · 진입 수수료를 모름) 평단 대비 가격(수수료 전)으로 되돌린다 — feesIncluded 가 false 면 그렇다고 밝힌다.
+// 2026-10-18: 실행기 +1.23% · 웹 +1.33% (업비트 수수료 0.05% × 2). 손절 · 익절 게이지는 늘 평단 대비 가격(unrealized_pct).
+// final: 종료 보고 때 남긴 청산 직전 포지션의 값.
+export function positionPnl(session, { final = false } = {}) {
+  const netPct = finiteOrNull(final ? session?.final_unrealized_net_pct : session?.unrealized_net_pct);
+  if (netPct !== null) {
+    return { pct: netPct, money: finiteOrNull(final ? session?.final_unrealized_net : session?.unrealized_net), feesIncluded: true };
+  }
+  const pct = Number(final ? session?.final_unrealized_pct : session?.unrealized_pct) || 0;
+  return { pct, money: final ? null : unrealizedMoney(session), feesIncluded: false };
+}
+
+// 누적 실현손익 — 실행기가 보낸 수수료 반영 값, 모르면 수수료 전 값.
+export function realizedPnl(session) {
+  const net = finiteOrNull(session?.realized_net);
+  if (net !== null) return { money: net, feesIncluded: true };
+  return { money: Number(session?.realized_pnl) || 0, feesIncluded: false };
 }
 
 // 실행 시간: "3일 2시간" · "2시간 14분" · "48분" · "1분 미만". 시각이 없으면 "".
@@ -124,17 +153,29 @@ export function toneOf(value) {
   return v > 0 ? "is-up" : v < 0 ? "is-down" : "";
 }
 
-// 포지션 블록의 큰 숫자 — 서버가 투입금(invested_usdt)과 총수익률(return_pct)을 주면 그걸 앞세우고,
-// 진입가 대비 평가손익은 보조 문구로. 투입금이 없는 옛 세션은 예전처럼 진입가 대비 %만.
+// 포지션 블록의 큰 숫자.
+// - 보유 중: 실행기 화면과 같은 '평가손익'(수수료 반영, positionPnl). 평단 대비 가격 · 총수익률(앞서 실현한 손익이 있을 때) ·
+//   투입금은 보조 문구로 — 2026-10-18 까지는 보유 중에도 총수익률(수수료 전)을 앞세워 실행기와 숫자가 달랐다.
+// - 무포지션: 서버가 투입금(invested_usdt)과 총수익률(return_pct)을 주면 그걸 앞세운다. 투입금이 없는 옛 세션은 note 없이.
 export function headlineReturn(session) {
   const invested = Number(session?.invested_usdt) || 0;
-  const total = session?.return_pct;
-  if (invested > 0 && total !== null && total !== undefined && Number.isFinite(Number(total))) {
-    const investedText = `투입 ${formatQuoteAmount(invested, session?.symbol)}`;
-    const note = session?.in_position
-      ? `진입가 대비 ${fmtSignedPct(session.unrealized_pct)} · ${investedText}`
-      : `실현 ${fmtSignedMoney(session?.realized_pnl, session?.symbol)} · ${investedText}`;
-    return { pct: Number(total), label: "투입금 대비 총수익률", note };
+  const total = finiteOrNull(session?.return_pct);
+  const investedText = invested > 0 ? `투입 ${formatQuoteAmount(invested, session?.symbol)}` : "";
+  // 서버가 수수료 반영 여부를 알려 주는데(fees_included) 아니라고 하면 총수익률도 수수료 전이다.
+  const totalTag = session?.fees_included === false ? ` · ${GROSS_TAG}` : "";
+  const realized = realizedPnl(session);
+  if (session?.in_position) {
+    const pnl = positionPnl(session);
+    const note = [
+      `평단 대비 ${fmtSignedPct(session.unrealized_pct)}`,
+      invested > 0 && total !== null && realized.money !== 0 ? `총수익률 ${fmtSignedPct(total)}${totalTag}` : "",
+      investedText,
+    ].filter(Boolean).join(" · ");
+    return { pct: pnl.pct, money: pnl.money, label: pnl.feesIncluded ? "평가손익" : `평가손익 · ${GROSS_TAG}`, note };
   }
-  return { pct: Number(session?.unrealized_pct) || 0, label: "평가손익", note: "" };
+  if (invested > 0 && total !== null) {
+    const note = `실현 ${fmtSignedMoney(realized.money, session?.symbol)} · ${investedText}`;
+    return { pct: total, money: null, label: `투입금 대비 총수익률${totalTag}`, note };
+  }
+  return { pct: Number(session?.unrealized_pct) || 0, money: null, label: "평가손익", note: "" };
 }

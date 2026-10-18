@@ -81,7 +81,7 @@ test("loss warnings require a risk threshold or worsening and resist boundary os
   const loss = (pct) => { state = advance(state, { session: { ...session, unrealized_pct: pct } }); };
   for (const pct of [-2.01, -1.99, -2.03, -2.1, -3.9, -1.8]) loss(pct);
   assert.equal(state.events.length, 1);
-  assert.equal(state.events[0].summary, "현재 평가손익 -2.01%");
+  assert.equal(state.events[0].summary, "현재 평가손익 -2.01%(수수료 전)", "옛 실행기 — 평단 대비 가격이라고 밝힘");
   loss(-4.1);
   loss(-3.99);
   loss(-4.01);
@@ -89,6 +89,13 @@ test("loss warnings require a risk threshold or worsening and resist boundary os
   loss(-1.4); // clear recovery, rather than jitter around -2%
   loss(-2.1);
   assert.equal(state.events.length, 3);
+});
+
+test("loss warnings follow the runner's fee-inclusive pnl when it is reported", () => {
+  // 가격은 -1.95% 지만 수수료를 빼면 -2.05% — 실행기 화면의 숫자로 판단하고 그 숫자를 적는다.
+  const state = advance(null, { session: { ...session, unrealized_pct: -1.95, unrealized_net_pct: -2.05 } });
+  assert.equal(state.events.length, 1);
+  assert.equal(state.events[0].summary, "현재 평가손익 -2.05%");
 });
 
 test("missing position metrics do not rearm an ongoing loss incident", () => {

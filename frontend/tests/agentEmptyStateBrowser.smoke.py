@@ -122,7 +122,9 @@ def run_case(browser, case):
     elif case == "running":
         expect(page.locator(".agent-workspace")).to_be_visible()
         expect(page.locator(".agent-chart-pane")).to_be_visible()
-        expect(page.get_by_role("combobox", name="매크로 세션 선택")).to_have_value("41")
+        # 선택 상자는 코인 로고 + 큰 티커(LINKUSDT → LINK) — 마켓 이름은 보이지 않는다.
+        expect(page.get_by_role("combobox", name="매크로 세션 선택")).to_contain_text("LINK")
+        expect(page.get_by_role("combobox", name="매크로 세션 선택")).not_to_contain_text("LINKUSDT")
     else:
         expect(page.get_by_role("heading", name="지금 돌아가는 에이전트가 없어요", exact=True)).to_be_visible()
 

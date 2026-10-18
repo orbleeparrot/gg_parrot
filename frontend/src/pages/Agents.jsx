@@ -2,9 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api.js";
 import { useAuth, useAccountGuard } from "../lib/auth.js";
-import { RULE_TYPES } from "../lib/macro.js";
 import { computeSessionOverlay } from "../lib/indicators.js";
-import { practiceModeLabel } from "../lib/exchanges.js";
+import { exchangeLabel } from "../lib/exchanges.js";
+import { coinTicker, futuresNote, sessionExchange, sessionStatus, strategyLine } from "../features/agents/sessionCoin.js";
+import CoinMark from "../components/CoinMark.jsx";
+import SelectMenu from "../components/SelectMenu.jsx";
 import { useWhaleActivity } from "../features/agents/useWhaleActivity.js";
 import { useAgentCommentary } from "../features/agents/useAgentCommentary.js";
 import { readChatView, saveChatView } from "../lib/agentCommentary.js";
@@ -35,19 +37,30 @@ function executionMarket(macro, session) {
   return "spot";
 }
 
-function ruleLabel(macro) {
-  return RULE_TYPES[macro?.rule_type]?.label || macro?.rule_type || "매크로";
+// 무슨 코인 · 어느 거래소 · 무슨 전략 — 코인 로고(모서리에 거래소 작은 로고) + 큰 티커 + 둘째 줄(전략 · 실전/모의).
+// 실행 바 선택 상자 · 펼친 목록 · 종료 기록 바가 같이 쓴다. status 가 있으면 오른쪽에 상태(목록에서만).
+function SessionCoin({ session, size, status = null }) {
+  const macro = session.macro;
+  const note = futuresNote(executionMarket(macro, session), macro?.leverage);
+  return (
+    <span className="agent-coin">
+      <CoinMark symbol={session.symbol} exchange={sessionExchange(session, macro)} size={size} />
+      <span className="agent-coin-text">
+        <span className="agent-coin-row">
+          <span className="agent-coin-ticker num">{coinTicker(session.symbol)}</span>
+          {note ? <span className="agent-coin-note">{note}</span> : null}
+        </span>
+        <span className="agent-coin-sub">{strategyLine(session, macro)}</span>
+      </span>
+      {status ? <span className={`agent-coin-status is-${status.tone}`}>{status.text}</span> : null}
+    </span>
+  );
 }
 
-// 셀렉트 옵션 라벨: 실행 중 세션과 마지막 오류를 종목·전략·환경 기준으로 표기한다.
-function sessionOptionLabel(session) {
-  const prefix = session.status === "stopped" ? "종료 · " : session.status === "error"
-    ? "오류 · "
-    : session.connected
-      ? ""
-      : "응답대기 · ";
-  const net = session.testnet ? ` · ${practiceModeLabel(session.symbol, session.mode)}` : "";
-  return `${prefix}${session.symbol} · ${ruleLabel(session.macro)}${net}`;
+// 화면 읽기 프로그램용 이름 — 선택 상자는 그림과 두 줄이라 글자로 한 번 더 말한다.
+function sessionSpeech(session) {
+  const exchange = sessionExchange(session);
+  return `${exchange ? `${exchangeLabel(exchange)} ` : ""}${coinTicker(session.symbol)} · ${strategyLine(session)}`;
 }
 
 function MacroDock({ sessions, selected, busy, onChange, onStop, onDelete, lead = null }) {
@@ -61,25 +74,26 @@ function MacroDock({ sessions, selected, busy, onChange, onStop, onDelete, lead 
   return (
     <section className={`agent-macro-dock${lead ? " has-lead" : ""}`} aria-label="매크로 세션 선택과 제어">
       {lead ? <div className="agent-macro-dock-lead">{lead}</div> : null}
-      <label className="agent-macro-dock-picker">
-        <span className="sr-only">매크로 세션 선택</span>
+      <div className="agent-macro-dock-picker">
         <span className="agent-macro-picker-row">
-          <span className="agent-macro-select-wrap">
-            <select value={String(selected.session_id)} onChange={(event) => onChange(event.target.value)}>
-              {sessions.map((session) => (
-                <option key={session.session_id} value={String(session.session_id)}>
-                  {sessionOptionLabel(session)}
-                </option>
-              ))}
-            </select>
-            <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m4 6 4 4 4-4" /></svg>
-          </span>
+          {/* 브라우저 <select> 는 그림을 못 넣어 코인을 글자로만 보였다 — 공용 드롭다운에 코인 로고 + 큰 티커(2026-10-18). */}
+          <SelectMenu
+            className="agent-macro-select"
+            value={String(selected.session_id)}
+            label={`매크로 세션 선택 — 지금 ${sessionSpeech(selected)}`}
+            onChange={onChange}
+            trigger={<SessionCoin session={selected} size={30} />}
+            options={sessions.map((session) => [
+              String(session.session_id),
+              <SessionCoin key={session.session_id} session={session} size={28} status={sessionStatus(session, { waiting: isWaitingMacro(session.macro) })} />,
+            ])}
+          />
           {/* 새 실행 추가 — 빠른 실행 플로우(라이브러리·리더보드에서 골라 실행기 연결)로 간다. */}
           <Link to="/?run=1&step=1" className="btn btn-m btn-secondary agent-macro-new" aria-label="새 매크로 실행" title="빠른 실행에서 매크로를 골라 새로 시작해요">
             <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 3v10M3 8h10" /></svg>
           </Link>
         </span>
-      </label>
+      </div>
 
       {/* 실행 상태·실행기 버전·매크로 출처는 오른쪽 열 위 포지션 블록(PositionStrip)이 맡는다. */}
       <div className="agent-macro-dock-actions">
@@ -111,7 +125,7 @@ function HistoryDock({ session, busy, pinBusy, onBack, onTogglePin, onDelete }) 
       </div>
       <div className="agent-macro-dock-picker">
         <span className="agent-detail-label">
-          {sessionOptionLabel(session).replace(/^(종료|오류) · /, "")}
+          <SessionCoin session={session} size={28} />
           <small>{runPeriodLabel(session.started_at, session.stopped_at)}</small>
         </span>
       </div>
@@ -608,6 +622,7 @@ function AccountAgents() {
                   expanded
                   minimal
                   overlay={chartOverlay}
+                  coinMark={{ exchange: sessionExchange(selected, macro), note: futuresNote(market, macro?.leverage) }}
                 />
               </div>
             </section>

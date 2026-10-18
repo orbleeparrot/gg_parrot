@@ -2,3 +2,33 @@
 .agent-session-panel > .agent-chat { flex: 1; min-height: 0; height: auto; grid-area: auto; border: 0; }
 .agent-receipt-error { padding: 10px 14px; flex: none; font-size: 13px; line-height: 1.5; color: rgb(var(--c-slate-900)); border-bottom: 1px solid rgb(var(--c-slate-300)); }
 .agent-receipt-error p { margin: 0 0 8px; }
+
+/* 무슨 코인을 돌리는지(SessionCoin) — 코인 로고 + 큰 티커 + 둘째 줄(전략 · 실전/모의). 마켓 이름은 쓰지 않는다(2026-10-18 시안 B). */
+.agent-coin { display: flex; align-items: center; gap: 12px; min-width: 0; width: 100%; }
+.agent-coin-text { display: grid; gap: 1px; min-width: 0; flex: 1; text-align: left; }
+.agent-coin-row { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.agent-coin-ticker { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: rgb(var(--c-slate-900)); font-size: 16px; font-weight: 800; letter-spacing: -0.01em; line-height: 1.25; }
+.agent-coin-note { flex: none; color: rgb(var(--c-slate-600)); font-size: 12px; font-weight: 700; }
+.agent-coin-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: rgb(var(--c-slate-600)); font-size: 12px; font-weight: 600; line-height: 1.35; }
+.agent-coin-status { flex: none; margin-left: auto; padding-left: 10px; font-size: 12px; font-weight: 700; white-space: nowrap; }
+.agent-coin-status.is-up { color: rgb(var(--c-green-600)); }
+.agent-coin-status.is-down { color: rgb(var(--c-red-600)); }
+.agent-coin-status.is-warn { color: rgb(var(--c-amber-700)); }
+.agent-coin-status.is-muted { color: rgb(var(--c-slate-600)); }
+
+/* 실행 바 선택 상자 — 공용 드롭다운(SelectMenu)을 두 줄 높이로. 작은 거래소 로고 둘레는 칸 바탕색을 따라간다. */
+.agent-macro-select { display: flex; }
+.agent-macro-select .select-menu-trigger { height: 52px; padding: 0 12px 0 11px; --coin-mark-ring: rgb(var(--c-slate-100)); }
+.agent-macro-select .select-menu-trigger:hover,
+.agent-macro-select.is-open .select-menu-trigger { --coin-mark-ring: rgb(var(--c-slate-200)); }
+.agent-macro-select .select-menu-trigger:focus { --coin-mark-ring: rgb(var(--c-slate-50)); }
+.agent-macro-select .select-menu-trigger .agent-coin-ticker { font-size: 18px; }
+.agent-macro-select .select-menu-list { min-width: max(100%, 360px); max-height: min(60vh, 420px); overflow-y: auto; }
+.agent-macro-select .select-menu-item { height: auto; min-height: 52px; padding: 8px 10px; white-space: normal; --coin-mark-ring: rgb(var(--c-surface)); }
+.agent-macro-select .select-menu-item.is-active,
+.agent-macro-select .select-menu-item.is-selected { background: rgb(var(--c-slate-100)); --coin-mark-ring: rgb(var(--c-slate-100)); }
+.agent-macro-select .select-menu-item.is-selected::after { display: none; }
+.agent-macro-select .select-menu-item .agent-coin-ticker { font-size: 15px; }
+.agent-detail-label .agent-coin { width: auto; }
+/* 펼친 목록이 휴대폰의 '차트 | 에이전트' 고정 줄(z 6) 밑으로 깔리지 않게 — 목록이 열린 동안만 실행 바를 위로. */
+.agent-macro-dock:has(.agent-macro-select.is-open) { z-index: 7; }

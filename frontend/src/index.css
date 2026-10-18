@@ -668,28 +668,11 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 .agent-macro-dock-lead { display: flex; align-items: center; }
 .agent-macro-dock > * + * { border-left: 1px solid rgb(var(--c-slate-200)); }
 .agent-macro-dock-picker { display: grid; min-width: 0; align-content: center; gap: 5px; color: rgb(var(--c-slate-500)); font-size: 13px; font-weight: 700; }
-/* 셀렉트는 내용에 맞는 폭(최대 320px)으로, 옆에 44px '+' 아이콘 버튼. 줄 전체를 늘리지 않는다. */
+/* 고르는 칸은 내용에 맞는 폭(최대 360px)으로, 옆에 44px '+' 아이콘 버튼. 줄 전체를 늘리지 않는다. */
 .agent-macro-picker-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.agent-macro-picker-row .agent-macro-select-wrap { flex: 0 1 320px; min-width: 0; }
+.agent-macro-picker-row .agent-macro-select { flex: 0 1 360px; min-width: 0; }
 .agent-macro-new { flex: none; width: 44px; min-height: 44px; padding: 0; display: inline-grid; place-items: center; }
 .agent-macro-new svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
-.agent-macro-select-wrap { position: relative; display: block; min-width: 0; }
-.agent-macro-dock-picker select {
-  width: 100%;
-  height: 44px;
-  appearance: none;
-  padding: 0 38px 0 12px;
-  border: 1px solid rgb(var(--c-slate-300));
-  border-radius: 10px;
-  background: rgb(var(--c-surface));
-  color: rgb(var(--c-slate-900));
-  font-size: 14px;
-  font-weight: 700;
-  cursor: pointer;
-}
-.agent-macro-dock-picker select:hover { border-color: rgb(var(--c-slate-500)); }
-.agent-macro-dock-picker select:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }
-.agent-macro-select-wrap svg,
 .agent-chat-filter svg {
   position: absolute;
   top: 50%;
@@ -841,6 +824,14 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   font-weight: 750;
   line-height: 1.3;
 }
+/* 차트 머리 — '거래소 · KRW-B3' 작은 글자 대신 코인 로고(모서리에 거래소 작은 로고) + 큰 티커(CandleChart coinMark, 2026-10-18). */
+/* 왼쪽에 로고, 오른쪽에 티커 · 가격 두 줄(거래소 앱의 종목 머리 배치). 가격(28~32px)이 가장 크고 티커는 그다음 —
+   위 실행 바가 이미 코인을 크게 말하니 여기선 가격이 주인공(처음엔 로고 40 + 티커 26px 줄이 가격 줄과 경쟁해 어색했다). */
+.agent-chart-stage .candle-chart-coinline { display: flex; align-items: center; gap: 12px; min-width: 0; --coin-mark-ring: rgb(var(--c-slate-50)); }
+.agent-chart-stage .candle-chart-coinstack { min-width: 0; }
+.agent-chart-stage .candle-chart-symbol.is-coin { display: flex; align-items: baseline; gap: 6px; min-width: 0; margin-bottom: 1px; color: rgb(var(--c-slate-900)); }
+.agent-chart-stage .candle-chart-ticker { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 18px; font-weight: 800; letter-spacing: -0.01em; line-height: 22px; }
+.agent-chart-stage .candle-chart-note { flex: none; color: rgb(var(--c-slate-600)); font-size: 12px; font-weight: 700; }
 .agent-chart-stage .candle-chart-price-row { display: flex; min-width: 0; align-items: baseline; gap: 8px; }
 .agent-chart-stage .candle-chart-quote { font-size: 13px; font-weight: 650; }
 .agent-chart-stage .candle-chart-change { font-size: 15px; white-space: nowrap; }
@@ -1113,7 +1104,6 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   .agent-macro-dock-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .agent-macro-dock-actions .btn { width: 100%; }
   .agent-macro-dock-actions .btn:only-child { grid-column: 1 / -1; }
-  .agent-macro-dock-picker > span:first-child { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
 }
 
 @media (max-width: 359px) {
@@ -1152,12 +1142,8 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   gap: 0;
 }
 
-.agent-macro-select-wrap {
+.agent-macro-select {
   width: min(100%, 380px);
-}
-
-.agent-macro-dock-picker select {
-  width: 100%;
 }
 
 .agent-console {
@@ -1483,10 +1469,6 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
     font-size: 12px;
   }
 
-  .agent-macro-dock-picker select {
-    padding-inline: 9px 30px;
-    font-size: 13px;
-  }
 }
 
 /* --- §6 컴포넌트 ---------------------------------------------------------
@@ -9421,7 +9403,7 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   .agent-macro-dock > * { min-height: 0; padding: 8px 0; border-left: 0; }
   .agent-macro-dock > * + * { border-top: 0; }
   .agent-macro-dock.has-lead > .agent-macro-dock-lead { min-height: 0; padding-top: 10px; border-bottom: 0; }
-  .agent-macro-select-wrap { width: 100%; }
+  .agent-macro-select { width: 100%; }
   .agent-macro-dock-actions { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; justify-content: stretch; gap: 8px; padding-bottom: 12px; }
   .agent-macro-dock-actions .btn { width: 100%; min-width: 0; padding-inline: 8px; font-size: 13px; }
 }

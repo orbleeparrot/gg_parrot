@@ -8,7 +8,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "../api.js";
 import { getRunnerDevice } from "./runnerDevice.js";
 
-export const OFFICIAL_APP_VERSION = "0.20.10";
+export const OFFICIAL_APP_VERSION = "0.20.11";
 export const OFFICIAL_RUNNER_VERSION = OFFICIAL_APP_VERSION.split(".")[1];
 const MIN_SUPPORTED_RUNNER_VERSION = "6";
 const RELEASE_BASE = "https://github.com/orbleeparrot/ggparrot-desktop/releases/download";

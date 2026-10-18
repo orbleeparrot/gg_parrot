@@ -71,7 +71,9 @@ class Fixture:
 
     def trends(self, query):
         region = query.get("region", ["kr"])[0]
-        offset = int(query.get("offset", ["0"])[0])
+        # 다음 쪽은 서버처럼 next_cursor(여기서는 '0.<시작 위치>')로 받는다.
+        cursor = query.get("cursor", [""])[0]
+        offset = int(cursor.split(".", 1)[1]) if cursor else 0
         limit = int(query.get("limit", ["20"])[0])
         symbol = query.get("symbol", [""])[0]
         sections = query.get("sections", ["rankings,news,community"])[0].split(",")
@@ -89,7 +91,10 @@ class Fixture:
                 items = [item for item in items if base in item["asset_symbols"]]
                 if kind == "community" and base == "XRP":
                     items = []
-            section = {"items": items[offset:offset + limit], "total": len(items), "offset": offset, "collection": {"status": "ready", "sources": [1, 2, 3, 4]}}
+            more = offset + limit < len(items)
+            section = {"items": items[offset:offset + limit], "total": len(items) if not cursor else None,
+                       "next_cursor": f"0.{offset + limit}" if more else None,
+                       "collection": {"status": "ready", "sources": [1, 2, 3, 4]}}
             if kind == "news":
                 section.update(overview="정부가 19일 거래소 대표들과 가상자산 과세 간담회를 열어요. 비트코인은 약세를 보였어요.",
                                summary={"status": "ready", "updated_at": NOW})
@@ -207,7 +212,7 @@ def main():
                     expect(page.locator(".ct-row")).to_have_count(40)
                     page.evaluate("document.querySelector('.ct-side-list').scrollTop = 1e6")
                     page.wait_for_function("() => document.querySelectorAll('.ct-post').length > 20")
-                    assert any("sections=community" in call and "offset=20" in call for call in fixture.calls), fixture.calls[-5:]
+                    assert any("sections=community" in call and "cursor=0.20" in call for call in fixture.calls), fixture.calls[-5:]
                     if two_columns:
                         assert page.evaluate("document.documentElement.scrollHeight") == height
                     page.locator(".ct-search input").fill("리플")

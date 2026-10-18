@@ -196,11 +196,35 @@ def main():
                       return { lane: st('.ct-lane'), laneName: st('.ct-lane-name b'), search: st('.ct-search-field'), tabs: st('.ct-side-tabs'),
                                select: st('.ct-select select'), seg: st('.ct-side-tabs .seg-item'), note: st('.ct-note'), briefNote: st('.ct-brief-note') }; }""")
                     assert same["lane"]["h"] == 56, same
-                    assert same["search"]["h"] == 48, same  # DESIGN.md text-field 규격
                     if same["select"]:
                         assert same["select"]["size"] == same["seg"]["size"], same
                     if same["note"]:
                         assert (same["note"]["size"], same["note"]["weight"]) == (same["briefNote"]["size"], same["briefNote"]["weight"]), same
+                    # 검색은 코인 순위 제목줄 오른쪽(2026-10-18 시안): 거래소 스위치와 같은 40 × 168, 같은 가운데 줄,
+                    # 두 칸 머리(제목줄 · 필터)가 같은 높이, 순위 글자 끝(거래대금)이 필터 끝과 맞음(세로선 양옆 공백 같게).
+                    head = page.evaluate("""() => { const b = (s) => { const e = document.querySelector(s); if (!e) return null; const r = e.getBoundingClientRect();
+                        return { top: Math.round(r.top), h: Math.round(r.height), w: Math.round(r.width), mid: Math.round(r.top + r.height / 2), right: Math.round(r.right) }; };
+                      const text = (s) => { const e = document.querySelector(s); if (!e) return null; const rg = document.createRange(); rg.selectNodeContents(e); return Math.round(rg.getBoundingClientRect().right); };
+                      const side = document.querySelector('.ct-side').getBoundingClientRect(), tabs = document.querySelector('.ct-side-tabs').getBoundingClientRect();
+                      return { search: b('.ct-rank .ct-col-head .ct-search-field'), mini: b('.ct-rank .ct-mini'), title: b('.ct-rank .ct-sec-title'),
+                               rankHead: b('.ct-rank .ct-col-head'), sideHead: b('.ct-side .ct-col-head'), sort: b('.ct-sort'), tabs: b('.ct-side-tabs'),
+                               turn: text('.ct-lane-turn'), divider: Math.round(side.left), sideContent: Math.round(tabs.left),
+                               rank: b('.ct-rank'), titleRow: b('.ct-rank-title'),
+                               placeholder: document.querySelector('.ct-search input').placeholder }; }""")
+                    assert head["search"] and head["placeholder"] == "업비트에서 검색", head
+                    assert head["search"]["h"] == head["mini"]["h"] == 40 and head["mini"]["mid"] == head["title"]["mid"], head
+                    assert head["titleRow"]["right"] <= head["rank"]["right"], head  # 제목 · ⓘ · 거래소가 칸 밖으로 안 나감
+                    if head["rank"]["w"] >= 470:  # 한 줄일 때 — 좁으면 검색칸이 다음 줄에서 칸 너비를 다 쓴다
+                        assert head["search"]["w"] == head["mini"]["w"] and head["search"]["mid"] == head["mini"]["mid"], head
+                    if two_columns:
+                        assert head["rankHead"]["h"] == head["sideHead"]["h"] == 44, head
+                        assert (head["sort"]["top"], head["sort"]["h"]) == (head["tabs"]["top"], head["tabs"]["h"]) and head["sort"]["h"] == 44, head
+                        assert head["turn"] == head["sort"]["right"], head
+                        assert head["divider"] - head["turn"] == head["sideContent"] - head["divider"] - 1, head  # 1 = 세로선
+                        # 소식 글 · 코인 칩 오른쪽 끝도 위 탭 끝과 같다
+                        feed = page.evaluate("""() => [Math.round(document.querySelector('.ct-side-tabs').getBoundingClientRect().right),
+                          Math.round(document.querySelector('.ct-post').getBoundingClientRect().right)]""")
+                        assert feed[0] == feed[1], feed
                     page.locator(".ct-sort .seg-item").nth(1).click()
                     expect(page.locator(".ct-row")).to_have_count(20)
                     row = page.evaluate("""() => { const e = document.querySelector('.ct-row'), b = e.querySelector('.ct-row-name b');
@@ -220,10 +244,18 @@ def main():
                     page.keyboard.press("Enter")
                     expect(page.locator(".ct-coin h3")).to_contain_text("엑스알피(리플)")
                     expect(page.locator("#ct-side-title")).to_contain_text("엑스알피(리플) 소식")
-                    expect(page.locator(".ct-search input")).to_have_value("엑스알피(리플) XRP")
+                    # 고른 코인은 검색칸(168px)에 로고 + 티커 — 전체 이름은 title · aria(잘리지 않게, 2026-10-18).
+                    expect(page.locator(".ct-search input")).to_have_value("XRP")
+                    expect(page.locator(".ct-search-field")).to_have_attribute("title", "엑스알피(리플) XRP")
+                    expect(page.locator(".ct-search input")).to_have_attribute("aria-label", "코인 검색 — 지금: 엑스알피(리플) XRP")
+                    assert page.evaluate("(() => { const i = document.querySelector('.ct-search input'); return i.scrollWidth <= i.clientWidth; })()")
                     # 커뮤니티 글이 없는 코인은 뉴스 탭이 먼저 열린다.
                     expect(page.get_by_role("tab", name="국내 뉴스", exact=False)).to_have_attribute("aria-selected", "true")
                     expect(page.get_by_text("해외 대비")).to_be_visible()
+                    if two_columns:  # 고른 코인 정보도 필터(제목줄 검색칸) 끝에 맞음 — 목록 상자를 넓힌 만큼 안쪽을 채움
+                        edges = page.evaluate("""() => { const r = (s) => document.querySelector(s).getBoundingClientRect();
+                          return [Math.round(r('.ct-coin-top').left), Math.round(r('.ct-kv').right), Math.round(r('.ct-rank .ct-col-head').left), Math.round(r('.ct-rank .ct-col-head').right)]; }""")
+                        assert edges[0] == edges[2] and edges[1] == edges[3], edges
                     no_overflow(page)
                     page.screenshot(path=str(OUTPUT / f"coin-{width}-{theme}.png"), animations="disabled")
                     page.locator(".ct-clear").click()
@@ -231,6 +263,7 @@ def main():
                     expect(page.locator("#ct-side-title")).to_have_text("국내 소식")
                     page.locator(".ct-mode-item").nth(1).click()
                     expect(page.locator(".ct-ex-static")).to_contain_text("바이낸스")
+                    expect(page.locator(".ct-search input")).to_have_attribute("placeholder", "바이낸스에서 검색")
                     expect(page.locator("#ct-side-title")).to_have_text("해외 소식")
                     # 하단 띠는 코인동향에서 고른 거래소와 상관없이 업비트 → 빗썸 → 바이낸스를 돌린다(세 거래소 모두 받는다).
                     expect(marquee.locator("img")).to_have_attribute("alt", "업비트")

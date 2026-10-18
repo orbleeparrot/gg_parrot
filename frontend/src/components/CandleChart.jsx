@@ -192,7 +192,7 @@ export default function CandleChart({
   expanded = false,
   minimal = false,
   overlay = null,
-  // { exchange, note } — 머리를 '거래소 · KRW-B3' 작은 글자 대신 코인 로고(모서리에 거래소 작은 로고) + 큰 티커로(내 에이전트).
+  // { exchange, note } — 머리를 '거래소 · KRW-B3' 작은 글자 대신 왼쪽 코인 로고(모서리에 거래소 작은 로고) + 티커 · 가격으로(내 에이전트).
   // note 는 바이낸스 선물의 '선물 3배'처럼 거래소 로고로 알 수 없는 것만. exchange 가 null 이면 작은 로고 없이.
   coinMark = null,
   title,
@@ -554,15 +554,23 @@ export default function CandleChart({
       <div className="candle-chart-toolbar flex items-center justify-between flex-wrap gap-2">
         <div className="candle-chart-market">
           {coinMark ? (
-            <h3 className="candle-chart-symbol is-coin">
+            // 왼쪽에 로고, 오른쪽에 티커 · 가격 두 줄 — 가격이 가장 크고 티커는 그다음(2026-10-18 후보 2).
+            <div className="candle-chart-coinline">
               <CoinMark symbol={symbol} exchange={coinMark.exchange} size={40} />
-              <span className="candle-chart-ticker num">{baseOf(symbol) || symbol}</span>
-              {coinMark.note ? <span className="candle-chart-note">{coinMark.note}</span> : null}
-            </h3>
+              <div className="candle-chart-coinstack">
+                <h3 className="candle-chart-symbol is-coin">
+                  <span className="candle-chart-ticker num">{baseOf(symbol) || symbol}</span>
+                  {coinMark.note ? <span className="candle-chart-note">{coinMark.note}</span> : null}
+                </h3>
+                <MarketPrice bar={current} quote={quote} changePct={changePct} />
+              </div>
+            </div>
           ) : (
-            <h3 className="candle-chart-symbol t-caption text-slate-500">{exchangeLabel(exchange)} · <span className="num">{title || symbol}</span></h3>
+            <>
+              <h3 className="candle-chart-symbol t-caption text-slate-500">{exchangeLabel(exchange)} · <span className="num">{title || symbol}</span></h3>
+              <MarketPrice bar={current} quote={quote} changePct={changePct} />
+            </>
           )}
-          <MarketPrice bar={current} quote={quote} changePct={changePct} />
         </div>
 
         <div className="candle-chart-controls flex items-center gap-2">

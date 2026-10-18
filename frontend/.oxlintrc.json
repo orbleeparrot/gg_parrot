@@ -536,6 +536,8 @@
           "builder-pro",
           "candle-chart",
           "candle-chart-change",
+          "candle-chart-coinline",
+          "candle-chart-coinstack",
           "candle-chart-controls",
           "candle-chart-current",
           "candle-chart-intervals",

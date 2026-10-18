@@ -825,9 +825,13 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   line-height: 1.3;
 }
 /* 차트 머리 — '거래소 · KRW-B3' 작은 글자 대신 코인 로고(모서리에 거래소 작은 로고) + 큰 티커(CandleChart coinMark, 2026-10-18). */
-.agent-chart-stage .candle-chart-symbol.is-coin { display: flex; align-items: center; gap: 12px; min-width: 0; margin-bottom: 6px; color: rgb(var(--c-slate-900)); --coin-mark-ring: rgb(var(--c-slate-50)); }
-.agent-chart-stage .candle-chart-ticker { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 26px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.15; }
-.agent-chart-stage .candle-chart-note { flex: none; color: rgb(var(--c-slate-600)); font-size: 13px; font-weight: 700; }
+/* 왼쪽에 로고, 오른쪽에 티커 · 가격 두 줄(거래소 앱의 종목 머리 배치). 가격(28~32px)이 가장 크고 티커는 그다음 —
+   위 실행 바가 이미 코인을 크게 말하니 여기선 가격이 주인공(처음엔 로고 40 + 티커 26px 줄이 가격 줄과 경쟁해 어색했다). */
+.agent-chart-stage .candle-chart-coinline { display: flex; align-items: center; gap: 12px; min-width: 0; --coin-mark-ring: rgb(var(--c-slate-50)); }
+.agent-chart-stage .candle-chart-coinstack { min-width: 0; }
+.agent-chart-stage .candle-chart-symbol.is-coin { display: flex; align-items: baseline; gap: 6px; min-width: 0; margin-bottom: 1px; color: rgb(var(--c-slate-900)); }
+.agent-chart-stage .candle-chart-ticker { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 18px; font-weight: 800; letter-spacing: -0.01em; line-height: 22px; }
+.agent-chart-stage .candle-chart-note { flex: none; color: rgb(var(--c-slate-600)); font-size: 12px; font-weight: 700; }
 .agent-chart-stage .candle-chart-price-row { display: flex; min-width: 0; align-items: baseline; gap: 8px; }
 .agent-chart-stage .candle-chart-quote { font-size: 13px; font-weight: 650; }
 .agent-chart-stage .candle-chart-change { font-size: 15px; white-space: nowrap; }

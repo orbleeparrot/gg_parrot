@@ -14,7 +14,7 @@ upgraded to the desktop app. A custom, non-official URL is kept as is.
 import re
 from collections.abc import Mapping
 
-OFFICIAL_APP_VERSION = "0.20.8"
+OFFICIAL_APP_VERSION = "0.20.10"
 # Download version is not the compatibility floor. Existing rule-A/B runners
 # remain supported; indicator macros separately require the v8 signal protocol.
 MIN_SUPPORTED_RUNNER_VERSION = "6"

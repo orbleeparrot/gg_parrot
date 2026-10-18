@@ -28,7 +28,7 @@ def test_old_exe_url_left_on_render_is_upgraded_to_the_desktop_app(version):
     assert result["version"] == "20" and result["supports_launch"]
 
 
-@pytest.mark.parametrize("stale", ["0.19.6", "0.20.0", "0.20.1", "0.20.2", "0.20.3", "0.20.4", "0.20.5", "0.20.6", "0.20.7", "0.20.8", "0.20.9", "0.20.10", "", "1.0", "v0.20.1", "0.20.x"])
+@pytest.mark.parametrize("stale", ["0.19.6", "0.20.0", "0.20.1", "0.20.2", "0.20.3", "0.20.4", "0.20.5", "0.20.6", "0.20.7", "0.20.8", "0.20.9", "0.20.10", "0.20.11", "", "1.0", "v0.20.1", "0.20.x"])
 def test_stale_or_bad_app_version_cannot_downgrade(stale):
     assert resolve_runner_release({"RUNNER_APP_VERSION": stale})["app_version"] == OFFICIAL_APP_VERSION
 

@@ -65,7 +65,7 @@ services:
       # 실행기 = 데스크톱 앱(orbleeparrot/ggparrot-desktop) 릴리스 버전. 새 릴리스가 나오면 이 한 줄만 올린다
       # (Windows 설치 파일 · macOS dmg 주소는 서버가 버전으로 만든다). 옛 RUNNER_DOWNLOAD_URL(exe)은 무시된다.
       - key: RUNNER_APP_VERSION
-        value: "0.20.8"
+        value: "0.20.9"
       - key: RUNNER_SUPPORTS_LAUNCH
         value: "true"
       - key: RUNNER_MIN_VERSION

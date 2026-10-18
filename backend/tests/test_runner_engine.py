@@ -391,6 +391,74 @@ def test_start_driver_restores_checkpoint_after_warmup(monkeypatch):
         _cleanup(sid)
 
 
+STEP_5M = 300_000
+T0 = 1_792_000_000_000  # 5분 격자에 맞는 아무 시각
+
+
+def _crash_then_hold_history():
+    """평탄 → 급락(웜업 속 가상 진입) → 낮은 값 유지 → 마지막 봉도 낮게 마감. 웜업 끝에서 가상 장부는 보유 중이라
+    마지막 봉에 '진입' 의도가 서지 않는다 — 웜업에 그 봉을 넣으면 실제(무포지션) 세션은 진입을 놓친다."""
+    closes = [100.0] * 10 + [80.0] * 9 + [79.0]
+    return [(T0 + i * STEP_5M, c, c, c, c) for i, c in enumerate(closes)]
+
+
+def test_unjudged_last_close_only_for_a_close_after_the_last_checkpoint():
+    hist = {"ONEUSDT": _crash_then_hold_history()}
+    keys = [("ONEUSDT", "5m", "spot")]
+    last = hist["ONEUSDT"][-1]
+    close_ms = last[0] + STEP_5M
+    assert eng._unjudged_last_close(hist, None, keys) == {}  # 처음 시작 — 지난 봉 신호로 사지 않는다
+    assert eng._unjudged_last_close(hist, {"in_position": False}, keys) == {}  # 저장 시각 모름(옛 상태) — 예전처럼
+    assert eng._unjudged_last_close(hist, {"checkpoint_ms": close_ms + 5_000}, keys) == {}  # 마감 뒤에 저장 — 이미 판정
+    assert eng._unjudged_last_close(hist, {"checkpoint_ms": close_ms - 1_000}, keys) == {"ONEUSDT": last}
+    assert eng._unjudged_last_close({"ONEUSDT": []}, {"checkpoint_ms": 1}, keys) == {}
+
+
+def test_resume_judges_the_close_the_previous_process_missed(monkeypatch):
+    """재기동이 봉 마감 직후면(마지막 저장 < 마감) 그 봉을 실시간으로 판정해 진입한다 — 세션 297(2026-10-18)."""
+    hist = _crash_then_hold_history()
+    close_ms = hist[-1][0] + STEP_5M
+    state = {"in_position": False, "trade_count": 0, "cooldown_until_ms": None, "checkpoint_ms": close_ms - 20_000,
+             "legs": [{"symbol": "ONEUSDT", "qty": 0.0, "dir": 1, "entry_price": 0.0, "last_price": 80.0,
+                       "in_position": False, "strategy": {"pending": None, "signal_note": ""}}]}
+
+    class Feed:
+        def __init__(self):
+            self.subs, self.since = [], []
+
+        async def history(self, symbol, interval, market, n):
+            return list(hist)
+
+        def subscribe(self, symbol, interval, market, cb, *, since_t=None):
+            self.subs.append(cb)
+            self.since.append(since_t)
+            return ("sub", symbol)
+
+        def unsubscribe(self, sub):
+            self.subs.clear()
+
+    for checkpoint, expect in ((close_ms - 20_000, ["buy"]), (close_ms + 20_000, [])):
+        sid = _session(state_json=json.dumps({**state, "checkpoint_ms": checkpoint}))
+        feed = Feed()
+        monkeypatch.setattr(eng, "feed", feed)
+        monkeypatch.setattr(eng, "get_ticker_price_cached", lambda s, **kw: 79.5)
+        monkeypatch.setattr(eng, "_run", _no_loop)
+
+        async def scenario():
+            assert await eng.start_driver(sid) is True
+            assert feed.since == [hist[-1][0]]  # 다시 판정한 봉도 피드가 또 배달하지 않는다
+            await eng._tick_once(eng._drivers[sid])  # 첫 틱(≈ 다음 시가)
+            with get_session() as db:
+                cmds = db.exec(select(RunnerCommand).where(RunnerCommand.session_id == sid)).all()
+                assert [c.action for c in cmds] == expect, checkpoint
+            await eng.stop_driver(sid)
+
+        try:
+            asyncio.new_event_loop().run_until_complete(scenario())
+        finally:
+            _cleanup(sid)
+
+
 class _RsiFeed:
     """급락 웜업 + 구독 기록 — start_driver 시나리오 공용 더미."""
 

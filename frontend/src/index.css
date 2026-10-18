@@ -716,7 +716,7 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 .agent-position-main { display: grid; gap: 3px; min-width: 0; }
 .agent-position-label { display: flex; align-items: center; gap: 8px; color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 700; letter-spacing: .04em; white-space: nowrap; }
 .agent-position-label .agent-live-dot.is-off { background: rgb(var(--c-slate-400)); box-shadow: none; }
-.agent-position-pct { display: flex; align-items: baseline; gap: 10px; font-size: 34px; font-weight: 800; line-height: 1; letter-spacing: -.015em; color: rgb(var(--c-slate-900)); white-space: nowrap; }
+.agent-position-pct { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; font-size: 34px; font-weight: 800; line-height: 1; letter-spacing: -.015em; color: rgb(var(--c-slate-900)); white-space: nowrap; }
 .agent-position-pct > small { font-size: 13px; font-weight: 700; }
 .agent-position-idle { font-size: 14px; font-weight: 600; color: rgb(var(--c-slate-700)); white-space: nowrap; }
 .agent-position-idle > b { font-weight: 800; color: rgb(var(--c-slate-900)); }
@@ -8674,7 +8674,8 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 .agent-result-money-line b.is-up { color: rgb(var(--c-green-600)); }
 .agent-result-money-line b.is-down { color: rgb(var(--c-red-600)); }
 .agent-result-money-line span { color: rgb(var(--c-slate-600)); font-weight: 600; }
-.agent-position-note { display: block; color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 500; margin-top: 2px; }
+/* 폭이 모자라면 보조 문구(평단 대비 · 총수익률 · 투입)는 큰 숫자 아래 줄로 — 한 줄로 묶으면 오른쪽이 잘리고 게이지까지 밀렸다(2026-10-18). */
+.agent-position-note { display: block; color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 500; margin-top: 2px; white-space: normal; line-height: 1.4; }
 .lb-reward-note { margin-left: 6px; color: rgb(var(--c-slate-500)); cursor: help; }
 .agent-result-pnl {
   color: rgb(var(--c-slate-900));

@@ -35,7 +35,23 @@ test("stopping the macro while in position keeps the position visible and warns"
   assert.equal(outcome.tone, "warning");
   assert.equal(outcome.pnl.text, "−42.17 USDT");
   assert.equal(outcome.pnl.tone, "down");
-  assert.equal(outcome.rows.find((row) => row.label === "남은 포지션").value, "0.42 @ 951.2 · 평가 +2.31%");
+  assert.equal(outcome.rows.find((row) => row.label === "남은 포지션").value, "0.42 @ 951.2 · 평가 +2.31% · 수수료 전");
+  const net = describeRunOutcome({ ...base, stop_mode: "stop_only", note: "", in_position: true,
+    position_qty: 0.42, entry_price: 951.2, unrealized_pct: 2.31, unrealized_net_pct: 2.11, realized_pnl: -42.17, realized_net: -44.02 });
+  assert.equal(net.rows.find((row) => row.label === "남은 포지션").value, "0.42 @ 951.2 · 평가 +2.11%");
+  assert.equal(net.pnl.text, "−44.02 USDT", "실현손익도 실행기 화면과 같은 수수료 반영 값");
+  assert.equal(net.pnl.label, "총 실현손익");
+  assert.equal(outcome.pnl.label, "총 실현손익 · 수수료 전");
+});
+
+test("투입금 대비 총수익률은 서버가 수수료 반영 여부를 알려 준 대로 이름에 밝힌다", () => {
+  const invested = { ...base, invested_usdt: 1000, return_pct: 12.1, realized_pnl: 128.4, realized_net: 121.0 };
+  const net = describeRunOutcome({ ...invested, fees_included: true });
+  assert.equal(net.pnl.label, "투입금 대비 총수익률");
+  assert.equal(net.pnl.money, "+121.00 USDT");
+  const old = describeRunOutcome({ ...invested, realized_net: null, return_pct: 12.84, fees_included: false });
+  assert.equal(old.pnl.label, "투입금 대비 총수익률 · 수수료 전");
+  assert.equal(old.pnl.money, "+128.40 USDT");
 });
 
 test("an error or uncertain position never reads as a clean finish", () => {
@@ -98,7 +114,11 @@ test("결과 표정은 손익 부호를 따르고, 청산 직전 포지션이 �
   assert.equal(win.tone, "good");
   assert.equal(win.rows.find((row) => row.label === "평단(청산 직전)").value, "74,453.68");
   assert.equal(win.rows.find((row) => row.label === "수량(청산 직전)").value, "0.0129 BTC");
-  assert.deepEqual([win.rows.find((row) => row.label === "마지막 평가손익").value, win.rows.find((row) => row.label === "마지막 평가손익").tone], ["+3.42%", "up"]);
+  // 옛 실행기 — 청산 직전 평가손익은 평단 대비 가격이라 그렇다고 밝힌다
+  assert.deepEqual([win.rows.find((row) => row.label === "마지막 평가손익").value, win.rows.find((row) => row.label === "마지막 평가손익").tone], ["+3.42% · 수수료 전", "up"]);
+  // 실행기 0.20.13+ — 실행기 화면과 같은 수수료 반영 값
+  const winNet = describeRunOutcome({ ...base, final_entry_price: 74453.68, final_position_qty: 0.0129, final_unrealized_pct: 3.42, final_unrealized_net_pct: 3.31 });
+  assert.equal(winNet.rows.find((row) => row.label === "마지막 평가손익").value, "+3.31%");
   const loss = describeRunOutcome({ ...base, realized_pnl: -18.4, final_entry_price: 74453.68, final_position_qty: 0.0129, final_unrealized_pct: -1.87 });
   assert.equal(loss.avatar, "critical", "손실이면 화난 얼굴");
   // 마지막 heartbeat 의 평가손익이 0 이어도 총 실현손익이 마이너스면 손실 얼굴 — 화면의 큰 숫자를 따른다

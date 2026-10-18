@@ -8,6 +8,7 @@ import { computeSessionOverlay } from "../lib/indicators.js";
 import { RULE_TYPES } from "../lib/macro.js";
 import { macroOriginBadge } from "../lib/macroOrigin.js";
 import { formatQuoteAmount, practiceModeLabel } from "../lib/exchanges.js";
+import { GROSS_TAG, positionPnl, realizedPnl } from "../lib/positionExits.js";
 import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 import ConfirmDialog from "./ConfirmDialog.jsx";
 import { describeDeleteConfirm, describeStopConfirm } from "../features/agents/runOutcome.js";
@@ -25,8 +26,11 @@ function SessionCard({ s, onStop, onDelete, busy }) {
   const stopped = s.status !== "running";
   // 응답이 끊긴 실행과 이미 끝난 기록만 목록에서 지운다(서버도 같은 기준).
   const removable = !(!stopped && s.connected);
-  const up = (s.unrealized_pct ?? 0) >= 0;
-  const realUp = (s.realized_pnl ?? 0) >= 0;
+  // 실행기 화면과 같은 수수료 반영 손익 — 옛 실행기면 수수료 전 값에 그렇다고 붙인다.
+  const pnl = positionPnl(s);
+  const realized = realizedPnl(s);
+  const up = pnl.pct >= 0;
+  const realUp = realized.money >= 0;
   // 실행 중인 세션엔 종목 실시간 차트를 붙이고, 빌더와 동일한 전략 보조지표(볼린저·
   // 이동평균·RSI 등)를 실행 중인 매크로 조건 그대로 그린다. 보유 중이면 내 평단도 표시.
   const [chartOpen, setChartOpen] = useState(true);
@@ -90,15 +94,15 @@ function SessionCard({ s, onStop, onDelete, busy }) {
             </div>
           </div>
           <div className="min-w-0">
-            <div className="stat-label">평가손익</div>
+            <div className="stat-label">{s.in_position && !pnl.feesIncluded ? `평가손익 · ${GROSS_TAG}` : "평가손익"}</div>
             <div className={"t-label font-bold num " + (up ? "text-green-600" : "text-red-600")}>
-              {s.in_position ? `${up ? "+" : ""}${(s.unrealized_pct ?? 0).toFixed(2)}%` : "-"}
+              {s.in_position ? `${up ? "+" : ""}${pnl.pct.toFixed(2)}%` : "-"}
             </div>
           </div>
           <div className="min-w-0">
-            <div className="stat-label">누적 실현손익</div>
+            <div className="stat-label">{!realized.feesIncluded && realized.money !== 0 ? `누적 실현손익 · ${GROSS_TAG}` : "누적 실현손익"}</div>
             <div className={"t-label font-bold num " + (realUp ? "text-green-600" : "text-red-600")}>
-              {realUp ? "+" : ""}{formatQuoteAmount(s.realized_pnl ?? 0, s.symbol, { fixed: true })}
+              {realUp ? "+" : ""}{formatQuoteAmount(realized.money, s.symbol, { fixed: true })}
             </div>
           </div>
         </div>

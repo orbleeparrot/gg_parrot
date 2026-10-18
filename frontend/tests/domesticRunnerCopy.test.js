@@ -115,7 +115,7 @@ test("에이전트 기록 목록이 그린 글 — 코인 옆 단위와 손익�
 // 그릴 수 없는 파일(RunnerSessions 는 훅·네트워크가 얽혀 있다)에는 안전망으로 헬퍼를 쓰는지만 본다.
 test("RunnerSessions 는 통화 헬퍼를 쓴다", () => {
   const source = read("../src/components/RunnerSessions.jsx");
-  assert.match(source, /formatQuoteAmount\(s\.realized_pnl \?\? 0, s\.symbol/);
+  assert.match(source, /formatQuoteAmount\(realized\.money, s\.symbol/);
   assert.match(source, /practiceModeLabel\(s\.symbol, s\.mode\)/);
 });
 // --- 연습 환경 이름: 국내에는 테스트넷이 없다 ---------------------------------------

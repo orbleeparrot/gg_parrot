@@ -40,7 +40,8 @@ export function sessionStatus(session, { waiting = false } = {}) {
   if (session?.status === "error") return { text: "오류", tone: "down" };
   if (!session?.connected) return { text: "응답대기", tone: "warn" };
   if (session?.in_position) {
-    const pct = Number(session.unrealized_pct);
+    // 실행기 화면과 같은 수수료 반영 평가손익, 옛 실행기면 평단 대비 가격(positionPnl).
+    const pct = Number(session.unrealized_net_pct ?? session.unrealized_pct);
     if (!Number.isFinite(pct)) return { text: "보유 중", tone: "muted" };
     const sign = pct > 0 ? "+" : pct < 0 ? "−" : "";
     return { text: `${sign}${Math.abs(pct).toFixed(2)}%`, tone: pct > 0 ? "up" : pct < 0 ? "down" : "muted" };

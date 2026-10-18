@@ -9,7 +9,7 @@ import { useRunnerDownload } from "../lib/runnerDownload.js";
 import EntryWaitCard from "./EntryWaitCard.jsx";
 import { Icon } from "./icons.jsx";
 import {
-  exitRules, fmtSignedMoney, fmtSignedPct, gaugeModel, headlineReturn, runningFor, toneOf, unrealizedMoney,
+  GROSS_TAG, exitRules, fmtSignedMoney, fmtSignedPct, gaugeModel, headlineReturn, realizedPnl, runningFor, toneOf,
 } from "../lib/positionExits.js";
 
 // 평단 · 수량 · 실행기 같은 세부 정보는 처음엔 접어 둔다 — 채팅(껄무새 중계)이 오른쪽 열을 넓게 쓰게.
@@ -46,7 +46,7 @@ function useMinuteTick() {
 
 function Gauge({ model, pct }) {
   return (
-    <div className="agent-gauge" role="img" aria-label={`평가손익 ${fmtSignedPct(pct)} · ${model.left.label} 에서 ${model.right.label} 사이`}>
+    <div className="agent-gauge" role="img" aria-label={`평단 대비 ${fmtSignedPct(pct)} · ${model.left.label} 에서 ${model.right.label} 사이`}>
       <div className={"agent-gauge-bar" + (model.oneSided ? " is-one-sided" : "")}>
         <i style={{ "--at": `${Math.round(model.position * 1000) / 10}%` }} />
       </div>
@@ -79,11 +79,14 @@ export default function PositionStrip({ session, macro, waitModel = null, defaul
   const running = session.status === "running";
   const inPosition = running && Boolean(session.in_position);
   const rules = exitRules(macro, session.position_side);
+  // 게이지(손절 · 익절까지의 거리)는 평단 대비 가격, 큰 숫자는 실행기와 같은 수수료 반영 평가손익(headlineReturn).
   const pct = Number(session.unrealized_pct ?? 0);
-  const money = inPosition ? unrealizedMoney(session) : null;
   const gauge = inPosition ? gaugeModel(pct, rules) : { show: false };
-  const realized = Number(session.realized_pnl ?? 0);
+  const realizedView = realizedPnl(session);
+  const realized = realizedView.money;
+  const realizedTag = !realizedView.feesIncluded && realized !== 0 ? ` · ${GROSS_TAG}` : "";
   const headline = headlineReturn(session);
+  const money = inPosition ? headline.money : null;
   const state = positionState(session);
   const elapsed = runningFor(session.started_at, now);
   const runner = [session.runner_version ? `v${session.runner_version}` : "", session.macro_origin_label || ""].filter(Boolean).join(" · ");
@@ -116,7 +119,7 @@ export default function PositionStrip({ session, macro, waitModel = null, defaul
             </span>
           ) : (
             <span className="agent-position-idle">
-              실현손익 누적 <b className={"num " + toneOf(realized)}>{fmtSignedMoney(realized, session.symbol)}</b>
+              실현손익 누적 <b className={"num " + toneOf(realized)}>{fmtSignedMoney(realized, session.symbol)}</b>{realizedTag}
             </span>
           )}
         </div>
@@ -141,7 +144,7 @@ export default function PositionStrip({ session, macro, waitModel = null, defaul
         <div><dt>수량</dt><dd className="num">{inPosition ? fmtQty(session.position_qty, session.symbol) : "—"}</dd></div>
         <div><dt>현재가</dt><dd className="num">{Number(session.last_price) > 0 ? fmtPrice(session.last_price) : "—"}</dd></div>
         <div><dt>{running ? "실행 시간" : "실행했던 시간"}</dt><dd className="num">{elapsed || "—"}</dd></div>
-        <div><dt>실현손익 · 누적</dt><dd className={"num " + toneOf(realized)}>{fmtSignedMoney(realized, session.symbol)}</dd></div>
+        <div><dt>실현손익 · 누적</dt><dd className={"num " + toneOf(realized)}>{fmtSignedMoney(realized, session.symbol)}{realizedTag}</dd></div>
         <div><dt>투입금</dt><dd className="num">{Number(session.invested_usdt) > 0 ? formatQuoteAmount(session.invested_usdt, session.symbol) : "—"}</dd></div>
         <div><dt>실행기</dt><dd className="num">{runner || "—"}</dd></div>
         {newer ? (

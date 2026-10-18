@@ -419,6 +419,10 @@ class RunnerHeartbeatRequest(BaseModel):
     position_qty: float = 0.0
     realized_pnl: float = 0.0
     unrealized_pct: float = 0.0
+    # 0.20.13+: 수수료 반영 손익(실행기 화면과 같은 값). 모르면 null, 옛 실행기는 보내지 않는다.
+    unrealized_net: Optional[float] = None
+    unrealized_net_pct: Optional[float] = None
+    realized_net: Optional[float] = None
     note: str = ""
     # 실행기 창 로그를 서버에 쌓는다(v7+). [{ts, kind, message}] — 한 번에 100개까지.
     events: list[dict] = []

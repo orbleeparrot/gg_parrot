@@ -29,6 +29,7 @@ from .feed_index import FeedAsset
 from .db import get_session
 from .exchanges import validate_symbol
 from .http_runtime import get_http_client
+from .moderation import contains_profanity
 from .public_news import PublicNewsLease, claim_work, finish_work
 
 logger = logging.getLogger(__name__)
@@ -309,13 +310,17 @@ def parse_source_listing(source_id: str, html: str, listings: dict, *, now_ms=No
     if not parser.rows:
         raise ValueError("public listing has no recognized normal rows")
     matchers = asset_matchers(listings)
-    stats = {"normal_rows": len(parser.rows), "irrelevant": 0, "invalid_date": 0, "duplicates": 0}
+    stats = {"normal_rows": len(parser.rows), "irrelevant": 0, "profanity": 0, "invalid_date": 0, "duplicates": 0}
     items, seen = [], set()
     for row in parser.rows[:100]:
         title = _clean(row["title"])
         assets = sorted(asset for asset, patterns in matchers.items() if any(p.search(title) for p in patterns))
         if not title or not re.search(r"[가-힣]", title) or not assets or _PROMOTION.search(title):
             stats["irrelevant"] += 1
+            continue
+        # 욕설이 섞인 제목은 저장하지 않는다 — 채팅 · 게시판 글쓰기와 같은 검사(2026-10-18).
+        if contains_profanity(title):
+            stats["profanity"] += 1
             continue
         try:
             published_ms, published, precision = _published(row["date"], source_id, now_ms)
@@ -516,8 +521,14 @@ def collect_once(*, now_ms=None, stop_event=None, write_lock=None) -> dict:
                 db.exec(delete(DomesticCommunityItem).where(DomesticCommunityItem.id.in_(overflow)))
                 feed_index.drop_items(db, FEED, overflow)
             reconcile_assets(db)
+            sweeping = not _profanity_swept
+            dropped = sweep_profanity(db) if sweeping else []
             db.commit()
+        if sweeping:
+            _mark_profanity_swept()
         _responses.clear()
+        if dropped:
+            _pages.clear()
         return {"status": status, "item_count": len(items), "attempted_sources": attempted,
                 "sources": sources, "retry_seconds": REFRESH_SECONDS}
     except Exception:
@@ -529,6 +540,29 @@ def collect_once(*, now_ms=None, stop_event=None, write_lock=None) -> dict:
             # runtime must not write after the application closes its DB pool.
             if not cancelled():
                 finish_work(SCOPE, token, retry_seconds=retry_seconds)
+
+
+# 욕설 거르기 전에 저장된 글(또는 단어 목록이 바뀐 뒤 남은 글)은 프로세스마다 처음 한 번만 훑어 지운다 — 새 글은 수집에서
+# 이미 걸러지므로 매분 제목 전부를 다시 읽지 않는다(운영 DB 왕복 · 전송량).
+_profanity_swept = False
+
+
+def _mark_profanity_swept() -> None:
+    global _profanity_swept
+    _profanity_swept = True
+
+
+def sweep_profanity(db) -> list[str]:
+    """저장된 글 중 욕설 제목을 지우고 지운 id 를 돌려준다."""
+    rows = db.exec(select(DomesticCommunityItem.id, DomesticCommunityItem.title)).all()
+    dropped = [item_id for item_id, title in rows if contains_profanity(title)]
+    for start in range(0, len(dropped), 500):
+        chunk = dropped[start:start + 500]
+        db.exec(delete(DomesticCommunityItem).where(DomesticCommunityItem.id.in_(chunk)))
+        feed_index.drop_items(db, FEED, chunk)
+    if dropped:
+        logger.info(json.dumps({"event": "community_profanity_sweep", "dropped": len(dropped), "scanned": len(rows)}))
+    return dropped
 
 
 def reconcile_assets(db, *, limit=MAX_ITEMS) -> int:

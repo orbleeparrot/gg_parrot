@@ -25,6 +25,7 @@ def isolated_domestic(monkeypatch):
         db.exec(delete(public_news.PublicNewsLease).where(public_news.PublicNewsLease.scope == community.SCOPE))
         db.commit()
     community.clear_caches()
+    monkeypatch.setattr(community, "_profanity_swept", False)
     monkeypatch.setenv("DOMESTIC_COMMUNITY_ENABLED", "false")
 
 
@@ -379,3 +380,30 @@ def test_reader_never_serves_a_list_whose_exchange_listings_have_expired(monkeyp
     clock[0] += 6 * 60
     result = community.get_domestic_community("upbit", now_ms=later)
     assert len(result["items"]) == 1
+
+
+def test_profane_titles_are_not_collected():
+    # 채팅 · 게시판 글쓰기와 같은 검사(korcen + 자모 · 숫자 끼우기 변형) — 운영 디시 제목 384개 중 51개가 걸렸다(2026-10-18).
+    html = (row("비트코인 반등 가나요", number="1") + row("비트코인 ㅅㅂ 물렸다", number="2")
+            + row("이더리움 씨발 또 빠지네", number="3") + row("비트코인 시1발 진짜", number="4"))
+    items, stats = community.parse_listing(html, listings())
+    assert [item["title"] for item in items] == ["비트코인 반등 가나요"]
+    assert stats["profanity"] == 3 and stats["matched"] == 1
+
+
+def test_stored_profanity_is_swept_once_per_process(monkeypatch):
+    stored(items=[{"id": "clean", "title": "비트코인 반등 가나요"}, {"id": "bad", "title": "비트코인 ㅅㅂ 물렸다"}])
+    assert {item["id"] for item in community.get_domestic_community("upbit")["items"]} == {"clean", "bad"}
+    mock_collection(monkeypatch)
+    assert community.collect_once()["status"] == "ready"
+    # 지운 글은 목록 · 언급 수 어디에도 남지 않는다(쪽 캐시도 비운다).
+    result = community.get_domestic_community("upbit")
+    assert "bad" not in {item["id"] for item in result["items"]} and "clean" in {item["id"] for item in result["items"]}
+    with database.get_session() as db:
+        assert db.get(community.DomesticCommunityItem, "bad") is None
+        assert not db.exec(select(community.FeedAsset).where(community.FeedAsset.item_id == "bad")).all()
+    # 같은 프로세스의 다음 수집은 제목 전부를 다시 훑지 않는다.
+    monkeypatch.setattr(community, "sweep_profanity", lambda db: pytest.fail("swept twice"))
+    unlock()
+    assert community.collect_once()["status"] == "ready"
+

@@ -39,8 +39,17 @@ class _VisibleText(HTMLParser):
 def require_clean_text(text: str, field: str, *, html: bool = False) -> None:
     """Reject without modifying stored text or retaining submitted content.
 
-    HTML callers must pass the sanitized, final body. No member ID is passed
-    to korcen: its optional ID cache can disable detection when unconfigured.
+    HTML callers must pass the sanitized, final body.
+    """
+    if contains_profanity(text, html=html):
+        raise ValueError(f"{field}에 비속어가 포함되어 있어요. 표현을 수정해 주세요.")
+
+
+def contains_profanity(text: str, *, html: bool = False) -> bool:
+    """The same check as member writes — also used to skip collected community headlines.
+
+    No member ID is passed to korcen: its optional ID cache can disable
+    detection when unconfigured.
     """
     if html:
         parser = _VisibleText()
@@ -60,5 +69,4 @@ def require_clean_text(text: str, field: str, *, html: bool = False) -> None:
     # Remove digits only between Korean letters (시1발), keeping prices,
     # percentages and Latin ticker symbols in their original form.
     variants |= {_HANGUL_DIGITS.sub("", value) for value in variants}
-    if any(korcen.check(value) for value in variants if value):
-        raise ValueError(f"{field}에 비속어가 포함되어 있어요. 표현을 수정해 주세요.")
+    return any(korcen.check(value) for value in variants if value)

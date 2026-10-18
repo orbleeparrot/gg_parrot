@@ -473,7 +473,9 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
     color-mix(in srgb, rgb(var(--c-red-600)) var(--heat-down), rgb(var(--c-slate-100))));
 }
 
-/* 도움말 말풍선(InfoTooltip) — 화면 끝에서 밀어 넣은 만큼(--shift) 가운데에서 비킨다. */
+/* 도움말 말풍선(InfoTooltip) — 화면 끝에서 밀어 넣은 만큼(--shift) 가운데에서 비킨다.
+   줄바꿈 · 맞춤은 끼어 있는 자리를 물려받지 않는다 — 한 줄로 고정한 표 머리(nowrap) 안에서 설명이
+   상자 밖으로 한 줄로 튀어나가고, 오른쪽 맞춤 열 머리에서는 글이 오른쪽에 붙었다(코인 순위, 2026-10-18). */
 .info-tip {
   position: absolute;
   left: 50%;
@@ -481,6 +483,8 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
   max-width: calc(100vw - 1rem);
   z-index: var(--z-tooltip);
   transform: translateX(calc(-50% + var(--shift, 0px)));
+  white-space: normal;
+  text-align: left;
 }
 
 /* §7 유리 — 스티키 상단바·하단 고정 띠 전용. */

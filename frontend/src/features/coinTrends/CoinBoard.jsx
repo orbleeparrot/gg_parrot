@@ -83,10 +83,10 @@ function CoinSearch({ exchange, lists, selectedLabel, keyword, onPickCoin, onPic
   return (
     <div className="ct-search" ref={boxRef}>
       <label className="ct-search-field">
-        <MagnifyingGlassIcon size={20} aria-hidden="true" />
+        <MagnifyingGlassIcon size={18} aria-hidden="true" />
         <input type="search" value={value} autoComplete="off" spellCheck={false} role="combobox"
           aria-expanded={open && !!trimmed} aria-controls={listId} aria-autocomplete="list" aria-label="코인 검색"
-          placeholder="코인 이름이나 심볼 검색 (예: 비트코인, XRP)"
+          placeholder={`${EXCHANGE_META[exchange].name}에서 검색`}
           onFocus={(event) => { if (showing && !query) event.target.select(); }}
           onChange={(event) => { setQuery(event.target.value); setOpen(true); setActive(0); onQueryChange?.(event.target.value); }}
           onKeyDown={(event) => {
@@ -98,7 +98,7 @@ function CoinSearch({ exchange, lists, selectedLabel, keyword, onPickCoin, onPic
         {value ? (
           <button type="button" className="ct-clear" onClick={() => { setQuery(""); setOpen(false); onClear(); }}
             aria-label={selectedLabel ? "선택한 코인 닫고 코인 순위로 돌아가기" : "검색어 지우기"}>
-            <XIcon size={16} aria-hidden="true" />
+            <XIcon size={14} aria-hidden="true" />
           </button>
         ) : null}
       </label>
@@ -341,11 +341,15 @@ export default function CoinBoard({
   const selected = coin ? coins.find((row) => row.base === coin) : null;
   useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = 0; }, [coin, sort, exchange]);
   const updated = rankings.data?.updated_at;
+  // 개수 · 기준 시각은 제목 옆 ⓘ — 제목줄 오른쪽 자리는 검색칸이 쓴다(2026-10-18 시안).
+  const basis = `${meta.name} ${meta.market} ${coins.length}개${updated ? ` · ${kstClock(updated)} 기준` : ""} · 30초마다 갱신`;
   return (
     <section className="ct-rank" aria-labelledby="ct-rank-title">
+      {/* 제목줄 — 제목 · 거래소 · 검색. 검색은 순위와 옆 소식 칸을 함께 바꾸지만, 두 칸 머리(제목 → 필터)를 맞추려고 여기 둔다. */}
       <header className="ct-col-head">
         <div className="ct-rank-title">
           <h2 id="ct-rank-title" className="ct-sec-title">코인 순위</h2>
+          <InfoTooltip text={basis} label="코인 순위 기준" placement="bottom" />
           {region === "kr" ? (
             <div className="seg ct-mini" role="tablist" aria-label="거래소">
               {["upbit", "bithumb"].map((name) => (
@@ -359,13 +363,10 @@ export default function CoinBoard({
             <span className="ct-ex-static"><img src="/exchanges/binance.svg" alt="" width="20" height="20" />바이낸스</span>
           )}
         </div>
-        <p className="ct-asof t-caption">
-          {meta.market} <span className="num">{coins.length}</span>개{updated ? <> · <span className="num">{kstClock(updated)}</span> 기준</> : null}
-        </p>
+        <CoinSearch exchange={exchange} lists={lists} keyword={keyword}
+          selectedLabel={selected ? `${coinName(selected)} ${selected.base}` : ""}
+          onPickCoin={onCoin} onPickKeyword={onKeyword} onClear={onClearSelection} onQueryChange={onSearchActive} />
       </header>
-      <CoinSearch exchange={exchange} lists={lists} keyword={keyword}
-        selectedLabel={selected ? `${coinName(selected)} ${selected.base}` : ""}
-        onPickCoin={onCoin} onPickKeyword={onKeyword} onClear={onClearSelection} onQueryChange={onSearchActive} />
       {!coin ? (
         <div className="seg ct-sort" role="tablist" aria-label="순위 기준">
           {SORTS.map((item) => (

@@ -139,6 +139,25 @@ def no_overflow(page):
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
 
 
+def tips_fit(page):
+    """보드의 ⓘ 말풍선을 하나씩 열어 글이 상자 안에서 줄바꿈되고 왼쪽 맞춤인지 본다(2026-10-18 경주마 기준 넘침)."""
+    seen = []
+    triggers = page.locator(".ct-board .info-trigger")
+    for index in range(triggers.count()):
+        trigger = triggers.nth(index)
+        if not trigger.is_visible():
+            continue
+        trigger.focus()
+        box = trigger.evaluate("""(button) => { const e = document.getElementById(button.getAttribute('aria-controls')), s = getComputedStyle(e), r = e.getBoundingClientRect();
+          return { sw: e.scrollWidth, cw: e.clientWidth, align: s.textAlign, left: Math.round(r.left), right: Math.round(r.right) }; }""")
+        label = trigger.get_attribute("aria-label")
+        assert box["sw"] <= box["cw"] and box["align"] in ("left", "start"), (label, box)
+        assert 0 <= box["left"] and box["right"] <= page.viewport_size["width"], (label, box)
+        trigger.blur()
+        seen.append(label)
+    return seen
+
+
 def column_left(page, selector):
     return page.evaluate(f"""() => {{ const row = document.querySelector('{selector}');
       return row ? [...row.children].slice(0, 2).map(cell => Math.round(cell.getBoundingClientRect().left)) : null; }}""")
@@ -189,6 +208,7 @@ def main():
                         lines = page.evaluate("[...document.querySelectorAll('.ct-market, .ct-side')].map(e => Math.round(e.getBoundingClientRect().left))")
                         assert lines[0] == lines[1], lines
                     race = column_left(page, ".ct-lanes-head")
+                    assert "경주마 기준" in tips_fit(page)
                     # 같은 역할은 같은 규칙(2026-10-17 점검): 순위 줄 높이 · 코인 이름 · 칸 맞춤 · 조작 글자 크기.
                     same = page.evaluate("""() => {
                       const st = (sel) => { const e = document.querySelector(sel); if (!e) return null; const s = getComputedStyle(e);
@@ -231,6 +251,7 @@ def main():
                       return [Math.round(e.getBoundingClientRect().height), getComputedStyle(b).fontWeight, getComputedStyle(b).fontSize]; }""")
                     assert row[0] == same["lane"]["h"] and row[1] == same["laneName"]["weight"] and row[2] == same["laneName"]["size"], (row, same)
                     assert column_left(page, ".ct-thead") == race, (race, column_left(page, ".ct-thead"))
+                    assert "언급 설명" in tips_fit(page) or not page.locator(".ct-h-ment").is_visible()
                     height = page.evaluate("document.documentElement.scrollHeight")
                     page.evaluate("document.querySelector('.ct-rank-scroll').scrollTop = 1e6")
                     expect(page.locator(".ct-row")).to_have_count(40)
